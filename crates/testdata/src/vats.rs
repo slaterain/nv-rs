@@ -5,8 +5,6 @@
 //! two form lists V.A.T.S. bans by; `FalloutNV.esm`'s values for the
 //! settings it reads.
 
-use std::fs;
-
 use crate::{f32s, group, placed, record, sub, zstr, TempData};
 
 /// Form IDs in the [`vats`] world.
@@ -88,9 +86,7 @@ fn ctda(comparison: u8, or: bool, value: f32, function: u16, params: [u32; 2]) -
 /// The [`ids`] world in a temporary Data folder.
 pub fn vats(tag: &str) -> TempData {
     use ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
 
     // `FalloutNV.esm`'s values (where it sets one; the rest stay the

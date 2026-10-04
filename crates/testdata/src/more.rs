@@ -68,9 +68,7 @@ pub mod ids {
 /// The world, written as `FalloutNV.esm` into a temporary Data folder.
 pub fn more(tag: &str) -> TempData {
     use ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
     let named = |kind: &[u8; 4], id: u32, name: &str, rest: &[u8]| {
         let mut d = edid(name);

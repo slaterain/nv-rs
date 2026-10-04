@@ -3,8 +3,6 @@
 //! (one inheriting its sounds), body part data with its own impact set, in
 //! one interior. Also an effect model with animation controllers.
 
-use std::fs;
-
 use crate::{f32s, group, placed, record, sub, zstr, NifBuilder, TempData};
 
 /// Form IDs in the [`impacts`] world.
@@ -130,9 +128,7 @@ pub fn animated_effect_nif(times: &[(f32, f32)]) -> Vec<u8> {
 /// (0.01 each).
 pub fn impacts(tag: &str) -> TempData {
     use ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
     let form = |kind: &[u8; 4], id: u32| sub(kind, &id.to_le_bytes());
 

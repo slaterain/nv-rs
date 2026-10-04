@@ -69,13 +69,16 @@ Outstanding M1 gates:
 - SPECIAL's remaining visual/input fidelity and progression comparison
   ([VIGOR.md](VIGOR.md)); general idle callbacks remain partial.
 
-Camera persistence now passes 925 core/85 viewer tests and both workspaces'
+Camera persistence now passes 926 core/85 viewer tests and both workspaces'
 checks/releases, 20 installed-clip continuation cases, live F5/F9 and
 fresh-process camera restoration. NPC animations and dialogue continuation
 are still missing. No camera build published yet.
 
-Next action: submit the verified camera batch on
-`codex/m1-camera-persistence` after appearance PR #6 checks pass. See
+Appearance PR #6 merged as `843926d` and its verified build is in play/app.
+Camera PR #7 exposed a pre-existing parallel fixture collision; unique
+fixture directories and a deterministic regression fix it.
+Next action: pass CI on the amended camera PR #7, then merge and publish.
+See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison
 remain unverified. Do not repeat the established

@@ -2,8 +2,6 @@
 //! weapons, projectiles, a gecko, a giant, people in three factions, all
 //! in one interior.
 
-use std::fs;
-
 use crate::{f32s, group, placed, record, sub, zstr, TempData};
 
 /// Form IDs in the [`fighting`] world.
@@ -70,9 +68,7 @@ pub mod ids {
 /// (0.375).
 pub fn fighting(tag: &str) -> TempData {
     use ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
 
     let mut settings = Vec::new();

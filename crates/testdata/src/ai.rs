@@ -109,9 +109,7 @@ pub mod ids {
 /// (800, 800) and (-800, 800). The greeter carries a piece of food.
 pub fn world(tag: &str) -> TempData {
     use ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
 
     let mut globals = Vec::new();

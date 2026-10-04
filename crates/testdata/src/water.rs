@@ -228,9 +228,7 @@ pub const LOD_WATER_HEIGHT: f32 = 777.0;
 
 /// The lake world (see the module notes).
 pub fn lake(tag: &str) -> TempData {
-    let dir = std::env::temp_dir().join(format!("nv-rs-water-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     data.write("meshes/water/pool.nif", &water_nif(POOL_HALF_SIZE));
     data.write(
         "meshes/landscape/lod/testlake/testlake.level4.x0.y0.nif",

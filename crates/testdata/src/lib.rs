@@ -458,6 +458,32 @@ pub fn placed(id: u32, base: u32, pos: [f32; 3], degrees: [f32; 3], extra: &[u8]
 
 pub struct TempData(PathBuf);
 
+#[cfg(test)]
+mod temporary_tests {
+    #[test]
+    fn same_tag_fixtures_do_not_replace_or_remove_each_other() {
+        let first = super::functions::functions("shared-tag");
+        first.write("owner.txt", b"first fixture");
+        let second = super::functions::functions("shared-tag");
+        second.write("owner.txt", b"second fixture");
+        assert_ne!(first.path(), second.path());
+        assert_eq!(
+            std::fs::read(first.path().join("owner.txt")).unwrap(),
+            b"first fixture"
+        );
+        let second_path = second.path().to_path_buf();
+        drop(second);
+        assert!(!second_path.exists());
+        assert_eq!(
+            std::fs::read(first.path().join("owner.txt")).unwrap(),
+            b"first fixture"
+        );
+        assert!(std::fs::read(first.path().join("FalloutNV.esm"))
+            .unwrap()
+            .starts_with(b"TES4"));
+    }
+}
+
 impl Drop for TempData {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
@@ -465,6 +491,23 @@ impl Drop for TempData {
 }
 
 impl TempData {
+    fn new(tag: &str) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        loop {
+            let dir = std::env::temp_dir().join(format!(
+                "nv-rs-{tag}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match fs::create_dir(&dir) {
+                Ok(()) => return Self(dir),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => panic!("cannot create test fixture {dir:?}: {e}"),
+            }
+        }
+    }
+
     pub fn write(&self, relative: &str, bytes: &[u8]) {
         let path = self.0.join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -496,9 +539,7 @@ pub const LAMP_GLOW_RGB: [u8; 3] = [0, 150, 0];
 /// glow map: one in its own white, and two whose glow can take its color
 /// from the placed object (one set to the warm light, one set to nothing).
 pub fn room(tag: &str) -> TempData {
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
 
     data.write(
         "meshes/test/floor.nif",
@@ -776,9 +817,7 @@ fn land(id: u32, offset: f32, steps: &[i8], colors: &[[u8; 3]], textures: &[u8])
 /// (flat, holding a persistent rock).
 /// Its climate's one weather lights it.
 pub fn outdoors(tag: &str) -> TempData {
-    let dir = std::env::temp_dir().join(format!("nv-rs-out-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     data.write(
         "meshes/test/rock.nif",
         &nif(
@@ -1476,9 +1515,7 @@ pub fn condition_with(
 /// starts with 3.
 pub fn quests(tag: &str) -> TempData {
     use quest_ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
     let script = |id: u32, name: &str, source: &str| {
         let mut d = edid(name);
@@ -2706,9 +2743,7 @@ pub mod sitting_ids {
 /// ignored by sandboxes; the clock at 15:00.
 pub fn sitting(tag: &str) -> TempData {
     use sitting_ids::*;
-    let dir = std::env::temp_dir().join(format!("nv-rs-{tag}-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let edid = |s: &str| sub(b"EDID", &zstr(s));
     // A condition with its comparison byte (0x00 =, 0x40 >, 0x80 <) and
     // OR flag (0x01).

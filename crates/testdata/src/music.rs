@@ -191,9 +191,7 @@ pub const TRACK_MS: u32 = 5224;
 /// silent MP3 for each track ([`TRACK_MS`] long), and two in the folder
 /// `music\explore\` that `TestFolderMusic` names.
 pub fn hall(tag: &str) -> TempData {
-    let dir = std::env::temp_dir().join(format!("nv-rs-music-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     let track = silent_mp3(TRACK_FRAMES);
     let mut files: Vec<&str> = LOCATION_FILES.to_vec();
     files.extend(DUNGEON_FILES);

@@ -118,3 +118,19 @@ click and Return did not drive its DirectInput. The test was closed with
 Alt-F4; no save was loaded or overwritten. Do not invent a phase-specific
 save prohibition from this failed experiment. Native evidence and executable
 hash: `nv-re/work/m1-overnight-2026-10-04/save-gating/RESULT.md`.
+
+## CI fixture collision found during camera PR #7
+
+The first core CI run failed before package-action assertions: parallel
+tests used the same tag/PID temporary directory, so another fixture could
+delete or truncate its generated FalloutNV.esm. `TempData` now exclusively
+creates unique tag/PID/counter directories; every fixture builder uses that
+allocator. A deterministic same-tag regression verifies independent contents
+and that dropping one fixture preserves the other. No check was disabled.
+The amended root suite passes 926 tests/doc tests; viewer remains 85.
+Both workspaces' checks were rerun. This changes test data only; the rebuilt
+release also passed an isolated installed-data opening smoke (situp/bedsit,
+Doc speech, inspected screenshot, normal exit; only known Vulkan warnings).
+Its SHA256 is `1219AD13BC6190B208C76C84B0F29D856A10324DA1AE6C0D1206A4F4FB277560`.
+Private logs/image: `camera-persistence/fixture-smoke` under the overnight
+research directory. CI must pass the amended head before camera publication.

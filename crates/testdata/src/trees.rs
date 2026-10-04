@@ -170,9 +170,7 @@ pub fn spt_file() -> Vec<u8> {
 /// [`TREE_AT`] (`XSED` 0), its `.spt` under `trees\`, its bark, bark normal
 /// map and leaf texture.
 pub fn trees(tag: &str) -> TempData {
-    let dir = std::env::temp_dir().join(format!("nv-rs-trees-{tag}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    let data = TempData(dir);
+    let data = TempData::new(tag);
     data.write("trees/testtree.spt", &spt_file());
     data.write("textures/trees/branches/testbark.dds", &dds([120, 90, 60]));
     data.write(
