@@ -14,6 +14,60 @@ use crate::scripting::GameState;
 
 const HEADER: &str = "nv-rs save 1";
 
+/// Replace a custom nv-rs save only after its complete contents reach disk.
+/// This is file handling for our own format, not the native `.fos` writer.
+/// The temporary file stays beside the destination so rename never crosses
+/// filesystems. A failed write or replacement leaves the previous save alone.
+pub fn save_to_path(
+    path: &std::path::Path,
+    state: &GameState,
+    player: Option<PlayerPlace>,
+) -> std::io::Result<()> {
+    use std::io::Write;
+    let text = save(state, player);
+    replace_file(path, |file| file.write_all(text.as_bytes()))
+}
+
+fn replace_file(
+    path: &std::path::Path,
+    write: impl FnOnce(&mut std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "save path has no filename",
+        )
+    })?;
+    // create_new avoids clobbering another writer or a file left by a crash.
+    let (temporary, mut file) = loop {
+        let mut temporary_name = name.to_os_string();
+        temporary_name.push(format!(
+            ".{}.{}.tmp",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let temporary = path.with_file_name(temporary_name);
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(file) => break (temporary, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = write(&mut file).and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
+}
+
 /// Where the player is in a save: the cell, its worldspace when outdoors,
 /// the feet and the heading (radians clockwise from north).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -631,4 +685,87 @@ pub fn load(text: &str) -> Result<(GameState, Option<PlayerPlace>), String> {
         }
     }
     Ok((state, player))
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn failed_save_write_preserves_the_previous_save_and_cleans_up() {
+        let data = testdata::functions::functions("failed-save-write");
+        let path = data.path().join("save with spaces.txt");
+        let mut state = GameState::default();
+        state.stages.insert(FormId(0x104c1c), 55);
+        save_to_path(&path, &state, None).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let files_before = std::fs::read_dir(data.path()).unwrap().count();
+        let result = replace_file(&path, |file| {
+            file.write_all(b"nv-rs save 1\nstage ")?;
+            Err(std::io::Error::other(
+                "injected failure after partial write",
+            ))
+        });
+        assert!(result.is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            std::fs::read_dir(data.path()).unwrap().count(),
+            files_before
+        );
+        state.stages.insert(FormId(0x104c1c), 60);
+        save_to_path(&path, &state, None).unwrap();
+        let (restored, _) = load(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(restored.stages[&FormId(0x104c1c)], 60);
+        assert_eq!(
+            std::fs::read_dir(data.path()).unwrap().count(),
+            files_before
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_save_stays_readable_when_windows_refuses_replacement() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let data = testdata::functions::functions("locked-save-replace");
+        let path = data.path().join("quicksave.txt");
+        save_to_path(&path, &GameState::default(), None).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        // Share reads but not deletion, as when another process holds a save.
+        let reader = std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&path)
+            .unwrap();
+        let state = GameState {
+            player_level: 8,
+            ..Default::default()
+        };
+        assert!(save_to_path(&path, &state, None).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        drop(reader);
+        save_to_path(&path, &state, None).unwrap();
+        assert_eq!(
+            load(&std::fs::read_to_string(path).unwrap())
+                .unwrap()
+                .0
+                .player_level,
+            8
+        );
+    }
+
+    #[test]
+    fn failed_save_replacement_preserves_destination_and_cleans_up() {
+        let data = testdata::functions::functions("failed-save-replace");
+        let path = data.path().join("occupied");
+        std::fs::create_dir(&path).unwrap();
+        std::fs::write(path.join("keep.txt"), b"untouched").unwrap();
+        let files_before = std::fs::read_dir(data.path()).unwrap().count();
+        assert!(save_to_path(&path, &GameState::default(), None).is_err());
+        assert_eq!(std::fs::read(path.join("keep.txt")).unwrap(), b"untouched");
+        assert_eq!(
+            std::fs::read_dir(data.path()).unwrap().count(),
+            files_before
+        );
+    }
 }

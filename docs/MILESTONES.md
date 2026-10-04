@@ -1,6 +1,6 @@
 # nv-rs milestones
 
-Updated 2026-10-03. Priority tracker and session handoff.
+Updated 2026-10-04. Priority tracker and session handoff.
 
 ## Baseline
 
@@ -33,76 +33,38 @@ reading do not establish them.
 
 ## Active work: M1
 
-**Current blockers (user follow-up, 2026-10-03):** brief persistent camera
-turn during lying-to-sitting, Doc looking away, incorrect interaction HUD
-and a vigor tester that cannot be activated. Earlier clip logs and quest
-progression are not acceptance. Start with executable and game data.
-Scope of the camera report is the opening only.
+The published baseline includes the opening package look lock, Doc's queued
+chair exit, native Info HUD and tester bounds correction, SPECIAL interface,
+and same-cell trigger reset on F9. Live evidence reaches the tester through
+stage55/60 and opens SPECIAL; it is not full-route acceptance.
+Historical checks and play hashes remain in [OPENING.md](OPENING.md).
 
-Doc's queued stage45 chair exit and the native player-package look lock
-are in the published baseline. This follow-up adds a pending-start-stage
-input guard, native Info HUD/masks and geometry bounds for the tester's
-empty OBND. Twelfth batch published: 910 core / 82 viewer tests, both
-clippy/format/release checks. Live stage55 save -> tester trigger -> Doc's
-instruction -> E opened the original SPECIAL interface (OPENING.md).
-Thirteenth batch additionally resets trigger/seat caches on F9; 83 viewer
-tests/checks pass and the same-cell reload-to-tester route passed live.
-Doc's missing head tracking and exact assist timing remain open; no guessed
-pose correction. Next: native gaze solver, exact camera-transition replay,
-full opening acceptance and in-progress animation save restoration.
-The original face-menu reference has now
-been inspected; detailed observations are in FACE_CREATION.md.
+Current batch: failed custom save writes preserve the previous save, and
+failed F9 destinations preserve the running world. Generated regressions
+pass; 913 core and 84 viewer tests, both clippy/format/release checks and an
+isolated installed-data forced-save smoke passed on
+`codex/m1-opening-overnight`. Evidence and process handoff:
+[PERSISTENCE.md](PERSISTENCE.md). No new play build published yet.
 
-Handoff and evidence: [OPENING.md](OPENING.md). Ordered package actions now
-drive the opening's actual first-person skeleton and Camera1st KF tracks.
-The isolated live run played wakeup, situp, bedsit and standup and reached
-Doc's vigor-tester instruction. Walking-mode script/save/report positions
-and headings follow the physical player independently of animated camera
-motion. This is a partial opening, not an acceptance pass: existing code
-still skips the face menu and the movie; the original SPECIAL scene is now
-implemented, with live route verification pending.
+The bounded gamedb evaluation silently missed the central look-lock function
+in a four-export probe. Full indexing is deferred; source snapshots, hashes,
+DB and inventory remain private. Shared query workflow and limitations:
+[RESEARCH_WORKFLOW.md](RESEARCH_WORKFLOW.md).
 
-Latest verification/publication status is recorded at the top of
-OPENING.md. The player path supports unconditional, idle-only package
-actions while holstered; general callback scripts/topics and
-restoring an active camera animation from a save remain unfinished.
+Outstanding M1 gates:
+- Exact opening camera transition replay and Doc/player assistance timing.
+- Native Doc head/eye tracking; final rotation math remains unresolved
+  ([OPENING_LOOK_IK.md](OPENING_LOOK_IK.md)).
+- Original face editor instead of auto-accept, and opening movie playback
+  ([FACE_CREATION.md](FACE_CREATION.md)).
+- In-progress animation save restoration, full character-creation route,
+  exit to Goodsprings and save/restart/reload acceptance.
+- SPECIAL's remaining visual/input fidelity and progression comparison
+  ([VIGOR.md](VIGOR.md)); general idle callbacks remain partial.
 
-Camera and ResetAI batches are checked and installed in nv-rs-play (latest:
-888 core / 73 viewer tests, both clippy/format/release builds). The live
-opening now gets Doc out of his chair and to the vigor tester through
-stage55's ResetAI. An F5/F9 check there preserved player/Doc positions and
-headings and quest stage, including a cold process restart. Mid-animation
-saves remain open. The fifth batch is published too: loaded unconditional
-NPC special idles now play, including stage30's mirror gesture. The live
-opening continued to stage55; original-game visual comparison remains due.
-The sixth published batch also corrects the player's loaded-idle pose blend
-after the request gate; checks and live route passed at the same counts.
-
-Vit-o-matic batch: original XML, animated models, number/bulb callbacks,
-keyboard and triangle picking are connected; the old text substitute is gone.
-900 core /74 viewer tests, clippy, formatting and both releases pass. Installed
-in nv-rs-play; matching hashes are in OPENING.md. Allocation/closing has a viewer regression and the
-clean Strength page render was inspected. Live PC mouse/keyboard allocation,
-page turning and closing now pass; quest progression remains due.
-Original tester inspected: framing corresponds, background blur remains missing.
-Its visible room/bright bulbs exposed a composition bug; explicit transparent
-camera output fixes the black background and dimmed glows (VIGOR.md).
-The isolated stage55 checkpoint remains available.
-Face choice filters now read race, hair and eyes with traced eligibility;
-six regressions and an official-data check pass. Eighth batch is installed
-in nv-rs-play:906 core/74 viewer tests, both clippy/format/release checks pass.
-Original-game input automation failed; user opened its tester manually and
-was asked to open ShowRaceMenu next. Latest publication/check status: OPENING.md.
-Next action: reproduce and diagnose the reported opening animation failures.
-Subsequent face-creation state/preview is traced in
-[FACE_CREATION.md](FACE_CREATION.md);
-[VIGOR.md](VIGOR.md) records the implementation evidence and limits.
-Keep this work on the opening route before expanding coverage elsewhere.
-
-Known blockers: Bink playback, general idle dispatch, face menu,
-vigor-tester menu fidelity and mid-animation persistence. Exit to Goodsprings
-and full-route save/restart/reload remain untested. Acceptance runs must not bypass
-progression or silently accept missing menus.
+Next action: finish persistence PR review/publication, then continue the
+native opening gaze/face trace. Do not repeat the established
+package-look lock or tester activation fixes.
 
 ## Deferred
 

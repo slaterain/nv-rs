@@ -576,6 +576,52 @@ fn restore_script_state(state: &mut GameState, cells: &mut CellScripts, loaded: 
     *cells = CellScripts::default();
 }
 
+/// Prepare the destination before changing the running world. A missing cell
+/// or worldspace must not leave old geometry with a different quest state.
+fn load_saved_world(
+    game: &cellview::Game,
+    state: &mut GameState,
+    cells: &mut CellScripts,
+    idle: &mut crate::player_idle::PlayerIdle,
+    pending: &mut crate::PendingScene,
+    exterior: &mut crate::exterior::PendingExterior,
+    text: &str,
+) -> Result<bool, String> {
+    let (loaded, place) = world::save::load(text)?;
+    let mut scene = None;
+    let mut outside = None;
+    if let Some(place) = place {
+        match place.world {
+            Some(world) => {
+                let grid = world::WorldGrid::load(&game.order, world).map_err(|e| e.to_string())?;
+                outside = Some(crate::exterior::ExteriorStart {
+                    grid,
+                    feet: [place.position[0], place.position[1]],
+                    height: Some(place.position[2]),
+                    heading: place.heading,
+                });
+            }
+            None => {
+                let mut loaded_scene = game
+                    .load_cell_now(place.cell, &loaded.disabled)
+                    .map_err(|e| e.0)?;
+                let [x, y, z] = place.position;
+                loaded_scene.start = cellview::Start {
+                    eye: [x, y, z + cellview::EYE_HEIGHT],
+                    heading: place.heading,
+                    via: "a saved game",
+                };
+                scene = Some(loaded_scene);
+            }
+        }
+    }
+    restore_script_state(state, cells, loaded);
+    *idle = crate::player_idle::PlayerIdle::default();
+    pending.0 = scene;
+    exterior.0 = outside;
+    Ok(place.is_some())
+}
+
 /// F5 saves the game (its state and where the player stands); F9 loads
 /// the last save and puts the player back there.
 #[allow(clippy::too_many_arguments)]
@@ -612,58 +658,29 @@ pub fn save_and_load(
                 },
             })
         });
-        let text = world::save::save(&state.0, place);
-        match std::fs::write(QUICKSAVE, text) {
+        match world::save::save_to_path(std::path::Path::new(QUICKSAVE), &state.0, place) {
             Ok(()) => say(format!("Saved ({QUICKSAVE}).")),
             Err(e) => say(format!("Couldn't save: {e}")),
         }
     }
     if keys.just_pressed(KeyCode::F9) {
-        let loaded = std::fs::read_to_string(QUICKSAVE)
+        let result = std::fs::read_to_string(QUICKSAVE)
             .map_err(|e| e.to_string())
-            .and_then(|text| world::save::load(&text));
-        let (loaded, place) = match loaded {
-            Ok(l) => l,
-            Err(e) => {
-                say(format!("Couldn't load {QUICKSAVE}: {e}"));
-                return;
-            }
-        };
-        restore_script_state(&mut state.0, &mut cell_scripts, loaded);
-        *player_idle = crate::player_idle::PlayerIdle::default();
-        let Some(place) = place else {
-            say("Loaded (the save doesn't say where the player was).".into());
-            return;
-        };
-        let order = &game.0.order;
-        let result = match place.world {
-            Some(world) => world::WorldGrid::load(order, world)
-                .map(|grid| {
-                    pending_exterior.0 = Some(crate::exterior::ExteriorStart {
-                        grid,
-                        feet: [place.position[0], place.position[1]],
-                        height: Some(place.position[2]),
-                        heading: place.heading,
-                    });
-                })
-                .map_err(|e| e.to_string()),
-            None => game
-                .0
-                .load_cell_now(place.cell, &state.0.disabled)
-                .map(|mut scene| {
-                    let [x, y, z] = place.position;
-                    scene.start = cellview::Start {
-                        eye: [x, y, z + cellview::EYE_HEIGHT],
-                        heading: place.heading,
-                        via: "a saved game",
-                    };
-                    pending.0 = Some(scene);
-                })
-                .map_err(|e| e.0),
-        };
+            .and_then(|text| {
+                load_saved_world(
+                    &game.0,
+                    &mut state.0,
+                    &mut cell_scripts,
+                    &mut player_idle,
+                    &mut pending,
+                    &mut pending_exterior,
+                    &text,
+                )
+            });
         match result {
-            Ok(()) => say("Loaded.".into()),
-            Err(e) => say(format!("Loaded, but couldn't go back there: {e}")),
+            Ok(true) => say("Loaded.".into()),
+            Ok(false) => say("Loaded (the save doesn't say where the player was).".into()),
+            Err(e) => say(format!("Couldn't load {QUICKSAVE}: {e}")),
         }
     }
 }
@@ -1245,7 +1262,7 @@ pub fn run_scripts(
                             position: feet,
                             heading,
                         });
-                        match std::fs::write(file, world::save::save(state, place)) {
+                        match world::save::save_to_path(std::path::Path::new(file), state, place) {
                             Ok(()) => println!("Saved ({file})."),
                             Err(e) => println!("Couldn't save {file}: {e}"),
                         }
@@ -1355,6 +1372,75 @@ mod tests {
             [0.0, 1.0, 0.0],
         )
         .is_none());
+    }
+
+    #[test]
+    fn failed_reload_preserves_quests_triggers_camera_requests_and_destination() {
+        let data = testdata::functions::functions("transactional-reload");
+        let game = cellview::Game::open(
+            data.path(),
+            &cellview::Options {
+                official: true,
+                ..default()
+            },
+        )
+        .unwrap();
+        let mut state = GameState::new(&game.order);
+        state.stages.insert(FormId(0x104c1c), 55);
+        let before = world::save::save(&state, None);
+        let mut cells = CellScripts {
+            seat: Some([1.0; 3]),
+            ..default()
+        };
+        let mut idle = crate::player_idle::PlayerIdle::default();
+        idle.requests.push(FormId(42));
+        let mut pending = crate::PendingScene(None);
+        let mut exterior = crate::exterior::PendingExterior::default();
+        for text in [
+            "not a save",
+            "nv-rs save 1\nstage 00104C1C 60\nplayer FFFFFFFF - 1 2 3 0\n",
+            "nv-rs save 1\nstage 00104C1C 60\nplayer FFFFFFFF FFFFFFFF 1 2 3 0\n",
+        ] {
+            assert!(load_saved_world(
+                &game,
+                &mut state,
+                &mut cells,
+                &mut idle,
+                &mut pending,
+                &mut exterior,
+                text
+            )
+            .is_err());
+            assert_eq!(world::save::save(&state, None), before);
+            assert_eq!(cells.seat, Some([1.0; 3]));
+            assert_eq!(idle.requests, [FormId(42)]);
+            assert!(pending.0.is_none());
+            assert!(exterior.0.is_none());
+        }
+        let saved_place = world::save::PlayerPlace {
+            cell: FormId(testdata::functions::ids::HOUSE),
+            world: None,
+            position: [10.0, 20.0, 30.0],
+            heading: 1.25,
+        };
+        let mut loaded = GameState::new(&game.order);
+        loaded.stages.insert(FormId(0x104c1c), 60);
+        assert!(load_saved_world(
+            &game,
+            &mut state,
+            &mut cells,
+            &mut idle,
+            &mut pending,
+            &mut exterior,
+            &world::save::save(&loaded, Some(saved_place))
+        )
+        .unwrap());
+        assert_eq!(state.stages[&FormId(0x104c1c)], 60);
+        assert!(cells.seat.is_none());
+        assert!(idle.requests.is_empty());
+        let start = &pending.0.as_ref().unwrap().start;
+        assert_eq!(start.eye, [10.0, 20.0, 30.0 + cellview::EYE_HEIGHT]);
+        assert_eq!(start.heading, 1.25);
     }
 
     #[test]

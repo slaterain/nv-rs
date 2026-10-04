@@ -1,5 +1,15 @@
 # Opening foundations: shared handoff
 
+2026-10-04 overnight session: clean baseline `647af94`; active branch
+`codex/m1-opening-overnight`. Save failure handling is checked (913 core / 84
+viewer tests, both workspaces' clippy/format/release and installed-data smoke);
+PR/publication pending. See [PERSISTENCE.md](PERSISTENCE.md). The bounded
+gamedb experiment is complete; no full index warranted
+([RESEARCH_WORKFLOW.md](RESEARCH_WORKFLOW.md)). Private read-only gaze and face
+default-selection investigations are active under
+`nv-re/work/m1-overnight-2026-10-04`; no runtime gaze/face change is claimed.
+No test viewer remains running. The older batch evidence below is historical.
+
 2026-10-03. Current owner: Codex; opening camera, attention, HUD and activation fixes.
 Use with MILESTONES.md.
 
