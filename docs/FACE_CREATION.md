@@ -3,20 +3,62 @@
 ## Current research handoff
 
 Active branch `codex/m1-face-menu-research`, based on camera PR #7
-(`00876d6`, local checks/live camera verification complete; CI running).
+(`5b3ec14`, local checks/live camera verification complete; amended CI running).
 Appearance PR #6 merged as `843926d`; its verified binary is in play/app,
 SHA256 `9391A5176CD9A829B99642C9252EE945FC7E6BDB6E255A72E2DAC6750BA9FD98`.
 Saves/reports were preserved. Camera publication waits for its own merge.
 
-Parent reads existing `007adce0`/`007af180` click/page exports and installed
-XML. Bounded private agent trace owns `007b39e0` and immediate control
-construction helpers; no public runtime edits. Do not call the 20 constructed
-objects face sliders without confirming their type: setup also treats these
-as page/category lists. XML confirms separate list-item and slider templates.
-Private sources and forthcoming findings: nv-re/work/m1-overnight-2026-10-04/
-face-menu. No original-game menu comparison has succeeded this session.
-Next: label the exact native page graph, callback branches and initial state;
-then define a complete persistent appearance/preview batch from those facts.
+The bounded native page/control trace below is complete; no public runtime
+edits or agent processes remain for it. Private source snapshots, findings
+and 40 validated hashes: nv-re/work/m1-overnight-2026-10-04/face-menu.
+No original-game menu comparison succeeded this session. Next: trace the
+slider-to-face-field callbacks and preview refresh before implementing edits.
+
+## Native category navigation and slider construction
+
+For the same 1.4.0.525 executable identified below, setup `007acb60` creates
+20 category/header objects through `007b39e0`, not 20 face sliders. Assembly
+uses a label array at EBP-0x5c; inferred decompiler local-array boundaries are
+misleading. Installed XML separately defines list-item and slider templates.
+
+| IDs | Categories in order |
+| --- | --- |
+| 0–4 | Sex, Race, Face, Hair, Customize |
+| 5–9 | Hair Style, Hair Color, Facial Hair, Eye Color, Shape |
+| 10–14 | General, Forehead, Brow, Eyes, Nose |
+| 15–19 | Mouth, Cheeks, Jaw, Chin, Tone |
+
+Normal setup links 0 ↔ 1 ↔ 2 ↔ 3 with `007b4050`; 0 starts and 3 is final.
+Barber mode 2 starts/ends at 3; surgeon mode 3 starts/ends at 2. Their first
+four labels omit the numeric prefixes used by normal setup. Child insertion
+`007b3bb0` records the parent as Back and adds a labeled `>` choice:
+
+- Face 2 → Customize 4 (`007ad0a3`).
+- Hair 3 → Hair Style 5, Hair Color 6, and conditionally Facial Hair 7
+  (`007ad125`, `007ad148`, `007ad180`; the latter requires `005f0cc0()==0`).
+- Customize 4 → Shape 9, Tone 19, Eye Color 8
+  (`007ad1b5`, `007ad1d8`, `007ad1fb`).
+- Shape 9 → categories 10 through 18 (`007ad3ee` loop).
+
+Header previous/next links initially use sentinel 20. Click `007adce0` handles
+Back tile 4 through previous and Next tile 5 through next; on the final page,
+Next enters the confirmation callback `007ada40`. Page activation `007af180`
+updates root user0, refreshes dirty hair/eyes choices on pages 5/8 and hair
+root state on page 3, and derives Back/Next visibility from these links.
+Done replaces Next on the final page. These are native control-flow findings,
+not a reproduced menu or confirmation outcome.
+
+Slider constructor `007b3ca0` uses explicit current/min/max arguments. Helpers
+`007b3890` and `007b3760` set bounds and clamp the current value. Its separate
+float argument is a jump fraction, clamped to [0,1], multiplied by inclusive
+range size and quantized at step 1; it writes user4 (`0x1008`). It is not an
+initial selection fraction. Construction calls supply ranges 1–20 (ID 0x18),
+1–10 (0x1a), and 0–15 (0x1d), jump fraction 0.25, and a signed sentinel current
+value that clamps to each minimum. RGB controls 0x1e–0x20 use ranges 0–255,
+jump fraction 0.125, and bytes from `004169d0`. Later refresh may overwrite
+these constructor values; native field mappings and final visible values
+remain to be traced. XML snapshot SHA256:
+`1C5E9DAA5AA5EB9AE11044718874D0D27CB3665EC994487B2CC77A828805AF98`.
 
 ## Race/sex part reconciliation, 2026-10-04
 
