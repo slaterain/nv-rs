@@ -74,18 +74,20 @@ Outstanding M1 gates:
 Camera persistence now passes 926 core/85 viewer tests and both workspaces'
 checks/releases, 20 installed-clip continuation cases, live F5/F9 and
 fresh-process camera restoration. NPC animations and dialogue continuation
-are still missing. No camera build published yet.
+are still missing. Camera PR #7 merged as `6811c53` after both amended CI
+jobs passed; its verified build is installed in play/app.
 
 Camera PR #7 (`5b3ec14`) exposed a pre-existing parallel fixture collision;
 unique fixture directories and a deterministic regression fix it. Its amended
-CI is running (amended core passed). Active branch
-`codex/m1-reload-dialogue-cleanup` isolates old dialogue/voice state from
+CI passed. PR #8 on `codex/m1-reload-dialogue-cleanup` isolates old dialogue/voice state from
 successful reloads; failed loads preserve playback. Root926/viewer89 tests,
 both workspaces' checks/releases and live success/rejection cases pass.
 It does not restore the saved conversation. Native RaceSexMenu
 navigation is traced; field callbacks and original comparison remain open.
-See [FACE_CREATION.md](FACE_CREATION.md). Next action: finish camera PR #7
-when both amended checks pass, then publish its verified build. See
+See [FACE_CREATION.md](FACE_CREATION.md). PR #8's core CI passed; viewer CI
+is pending. Active branch `codex/m1-look-setup-research` records the native
+head/parent setup; final rotation composition is still being traced privately.
+Next action: finish PR #8 after both checks pass and publish its verified build. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison
 remain unverified. Do not repeat the established

@@ -22,8 +22,8 @@ remain unverified; see the constructor evidence below.
 The second mode0 call uses a temporary transform and changes+0x181 and
 feedback metrics; it is not merely an inert cache update.
 
-Remaining requirements: verify post-INI cap values, identify
-the per-mode+0x110/+0xf6 setup and skeleton transform spaces, establish the
+Remaining requirements: verify post-INI cap values and skeleton transform
+spaces, establish the
 quaternion product convention, then compare a port in the original game.
 Private evidence: `nv-re/work/m1-overnight-2026-10-04/gaze/FINDINGS.md` and
 `hashes.sha256.json` (read-only Ghidra disassembly/helper exports). Analysis
@@ -116,11 +116,39 @@ These are constructor defaults, not verified post-INI runtime values.
 and reciprocal square root refinement, with a zero guard. The mode0 call
 updates `+0x181` and feedback metrics; it is not merely an inert cache.
 Mode1 selects the `+0x144` node and caches quaternion `+0x170..+0x17c`.
-The precise `+0x110`/`+0xf6` setup, transform conventions and original-game
-comparison still block a faithful runtime port. Private evidence and 38-file
+The setup is resolved below; transform conventions and original-game
+comparison still block a faithful runtime port. Private evidence and the
 hash manifest: nv-re/work/m1-overnight-2026-10-04/gaze/. Unpacked executable
 1.4.0.525 SHA256
 `19406942E48724D797300C4EA6BE9AC69A32F670B8C35DB09279A2258422739F`.
+
+## Setup assembly follow-up, 2026-10-04
+
+`00c7de60:00c7dea8` explicitly passes mode1 to `00c79340`; ECX holds the
+controller and there are three stack arguments. Mode record offsets below
+are relative to `controller + mode * 0x50`. `+0xf4` is the name-matched node
+index; `+0xf6` is its parent/link index. The table builder `00c7e3b0` copies
+that short from source-node+0x40; an ancestor walk in `00cea810` corroborates
+its role using the sibling table with the same constructor and layout.
+
+Setup copies a 13-float transform from `*(controller+0x58)+0x68` and calls
+`0043f8d0` with the matrix at controller+0x60 as receiver. Its row-major
+product is receiver times input. The semantic transform spaces remain
+unresolved; the pointer dereference must not be flattened into an offset.
+
+For the matched node and its parent, the fixed basis is `(0,1,0,0)`.
+Given quaternion `(x,y,z,w)`, the written XYZ values are
+`2*(x*y+z*w)`, `2*(y*y+w*w-0.5)`, `2*(y*z-x*w)`. A fourth lane is `2*y*w`.
+The matched-node value at `+0x100` scales all four lanes using an approximate
+reciprocal square root of the **XYZ** squared magnitude; the parent value
+at `+0x110` is not normalized. These are derived direction values, not two
+quaternions. The fourth lane's consumer meaning remains unresolved.
+
+This is research only: no runtime port, generated regression, or original-
+game comparison. Private assembly/decompiler exports and the verified
+66-entry manifest are under `gaze/`; `SETUP_ASSEMBLY.md` records the exact
+calls and constants. Next trace: final mode1 composition in `00c78610`, with
+each source and multiplication order named before wiring actor gaze.
 
 Decompilation and disassembly: `%USERPROFILE%\\nv-re\\decomp\\codex-m1`
 (`008a3100`, `008a3b70`, `00c7f060`, `00c7d630`, `00c7aa60`, `00c78160`,

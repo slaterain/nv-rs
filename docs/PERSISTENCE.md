@@ -137,6 +137,13 @@ Its SHA256 is `1219AD13BC6190B208C76C84B0F29D856A10324DA1AE6C0D1206A4F4FB277560`
 Private logs/image: `camera-persistence/fixture-smoke` under the overnight
 research directory. CI must pass the amended head before camera publication.
 
+Both amended CI jobs passed; PR #7 merged as
+`6811c5380284620e5bf03f2e6e60d50ef9036046`. The remote merged tree matches
+tested head `5b3ec14` exactly. The archived amended executable above was
+installed with the existing play helper and its play/app hash verified.
+The newer cleanup build was restored to target/release afterward; no build
+ran during publication, and saves/reports were untouched.
+
 ## Successful-load dialogue cleanup, 2026-10-04
 
 Branch `codex/m1-reload-dialogue-cleanup`; changed viewer scripts.rs,
@@ -167,7 +174,9 @@ overnight research directory. Verified executable SHA256:
 This is custom-save isolation, not native save behavior or restored dialogue:
 the saved stage8 conversation still cannot continue after reload. Other
 transient menu/procedure state needs its own persistence acceptance. Exact
-next action: checked PR and merge after camera PR #7, then publish.
+next action: merge PR #8 after both CI jobs pass, then publish. Camera PR #7
+is merged/published. PR #8 core passed; its viewer job is pending. No local
+build is active. Current documentation branch is `codex/m1-look-setup-research`.
 
 A private Bevy 0.16.1 / Rodio 0.20.1 probe passed generated source-sample
 cursor continuation. It does not establish an exact audible playback head:

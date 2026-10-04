@@ -2,11 +2,10 @@
 
 ## Current research handoff
 
-Active branch `codex/m1-face-menu-research`, based on camera PR #7
-(`5b3ec14`, local checks/live camera verification complete; amended CI running).
-Appearance PR #6 merged as `843926d`; its verified binary is in play/app,
-SHA256 `9391A5176CD9A829B99642C9252EE945FC7E6BDB6E255A72E2DAC6750BA9FD98`.
-Saves/reports were preserved. Camera publication waits for its own merge.
+Research is recorded on `codex/m1-look-setup-research`. Appearance PR #6
+merged as `843926d`; camera PR #7 then merged as `6811c53` after both CI jobs.
+The verified camera binary is now in play/app; its hash and publication
+evidence are in [PERSISTENCE.md](PERSISTENCE.md). Saves/reports were preserved.
 
 The bounded native page/control trace below is complete; no public runtime
 edits or agent processes remain for it. Private source snapshots, findings
