@@ -151,7 +151,22 @@ Original local vertices and winding are kept independently of renderer
 conversion. Keyboard007927a0 always maps Left/Right to previous/next page,
 including page8; controller special inputs00791cf0 are separate.
 
-Next: verify live allocation/closing and opening progression, then compare
+An isolated 2026-10-04 direct-menu run on verified build `0199E123...AA5`
+used `ShowLoveTesterMenuParams 40` with the base plugin. Five clicks raised
+Strength5 to10 and reduced remaining points5 to0. Right traversed the seven
+attributes and summary; the summary showed [10,5,5,5,5,5,5]. Right from there
+closed the menu and F5 persisted Strength10. Both process exit and startup
+diagnostics were checked (only known Vulkan warnings). This verifies live
+allocation/closing, not natural opening progression or original-game fidelity.
+An older private stage60 save reached the prompt but lacked objective30,
+which the authored tester script also requires. Supplying that objective
+in a separate private fixture allowed E to open SPECIAL, complete objective30
+and reach stage65; allocation/closing and F5 then passed. Its timer-enable
+variable was0, so no subsequent Doc reaction was expected. This prepared
+fixture does not establish a natural route. Detailed private
+evidence: `nv-re/work/m1-overnight-2026-10-04/vigor-acceptance/RESULT.md`.
+
+Next: verify opening progression and compare
 the original game's menu before claiming M1 acceptance. PC controls are
 implemented; controller inputs and replacement models with embedded lights
 remain unsupported.

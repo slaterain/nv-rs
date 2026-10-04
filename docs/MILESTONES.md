@@ -84,9 +84,14 @@ successful reloads; failed loads preserve playback. Root926/viewer89 tests,
 both workspaces' checks/releases and live success/rejection cases pass.
 It does not restore the saved conversation. Native RaceSexMenu
 navigation is traced; field callbacks and original comparison remain open.
-See [FACE_CREATION.md](FACE_CREATION.md). PR #8's core CI passed; viewer CI
-is pending. Active branch `codex/m1-look-setup-research` records the native
-head/parent setup; final rotation composition is still being traced privately.
+See [FACE_CREATION.md](FACE_CREATION.md). PR #8 was rebased onto the camera
+squash merge without changing its tested tree; both CI jobs restarted.
+Active branch `codex/m1-reload-update-order` fixes a separate old-AI/F9
+ordering hazard: root926/viewer90 tests, both workspaces' checks/releases and
+installed-data opening smoke pass. Native head/parent setup and recompute
+product are recorded; the full target-direction solve remains unresolved.
+Isolated SPECIAL allocation/closing passes; a prepared stage60/objective30
+fixture reaches stage65. Neither is full-route or original-game acceptance.
 Next action: finish PR #8 after both checks pass and publish its verified build. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison

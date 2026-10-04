@@ -146,9 +146,25 @@ quaternions. The fourth lane's consumer meaning remains unresolved.
 
 This is research only: no runtime port, generated regression, or original-
 game comparison. Private assembly/decompiler exports and the verified
-66-entry manifest are under `gaze/`; `SETUP_ASSEMBLY.md` records the exact
-calls and constants. Next trace: final mode1 composition in `00c78610`, with
-each source and multiplication order named before wiring actor gaze.
+manifest are under `gaze/`; `SETUP_ASSEMBLY.md` records the exact calls and
+constants. A mode1 override must also be preserved: when the object pointer
+at `*(controller+0x2a4)+0x1c` is nonnull, its four-float values at+0x10 and
++0x20 replace the derived parent and matched-node values respectively.
+The object's meaning remains unresolved.
+
+The selected-node recompute path at `00c78c2a` calls `00c66320` with
+`conjugate(parent) * selected`, in xyzw order. A parent link of -1 instead
+copies the transform. Direct four-lane reads prove mask010c4c00 negates XYZ
+but preserves W; the separate mask010c44d0 negates all four lanes. Inferring
+the full mask from its first dword gives the wrong rotation. The product
+equals inverse-parent multiplication only for a unit parent quaternion.
+Mode-record+0x130 then optionally enables the previously traced limiter.
+This recompute product alone is not the complete target-to-head solver.
+
+`OUTPUT_COMPOSITION.md` and the now 79-entry private manifest include the
+fresh assembly and lane reads. Next: resolve the transform-buffer spaces
+and override object, then follow the target-direction contribution through
+the full solve before implementing or claiming original-game fidelity.
 
 Decompilation and disassembly: `%USERPROFILE%\\nv-re\\decomp\\codex-m1`
 (`008a3100`, `008a3b70`, `00c7f060`, `00c7d630`, `00c7aa60`, `00c78160`,

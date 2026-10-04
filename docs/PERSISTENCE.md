@@ -175,8 +175,34 @@ This is custom-save isolation, not native save behavior or restored dialogue:
 the saved stage8 conversation still cannot continue after reload. Other
 transient menu/procedure state needs its own persistence acceptance. Exact
 next action: merge PR #8 after both CI jobs pass, then publish. Camera PR #7
-is merged/published. PR #8 core passed; its viewer job is pending. No local
-build is active. Current documentation branch is `codex/m1-look-setup-research`.
+is merged/published. PR #8 was rebased onto that squash merge as `15b495d`;
+its tree is identical to tested `a5cb633`. Both CI jobs restarted for the
+new head. No local build is active.
+
+Current branch `codex/m1-reload-update-order`: the next bounded fix orders
+old-world AI updates before F9 commits. The existing unchained inner system
+group permits an old Walker's `place()` to overwrite loaded positions before
+destination installation. The production configuration now chains offstage
+movement, actor spawning, loaded-actor movement, then save/load. A regression
+checks each writer's dependency path in that exact production configuration;
+removing the chain fails it as expected. Only main.rs changes runtime code.
+Root926/viewer90 tests, both clippy/format checks and release builds pass.
+Installed-data new-game smoke reaches situp/bedsit, Doc speech and the name
+menu; screenshot inspected, process exited, only known Vulkan warnings.
+Verified binary SHA256:
+`FDE1E2DF0E16B45E2AB3231D1BF57A2C96D4F3E8032C7A78957220EDBD6F2CB9`.
+Private logs, negative-control result and archived executable are under
+`reload-order/`. No agent, local build or test viewer remains active.
+This addresses our schedule, not a new native behavior claim. Next action:
+submit after PR #8 merges, preserving the exact tested tree.
+
+NPC continuation assessment: an animation snapshot alone misses Sitter's
+entry/exit/root-motion clock and `Life.getting_up`. A future bounded interior
+batch must validate the destination actor skeleton and every active clip,
+then install by reference before AI. Named skeleton slots plus Seats paths
+can identify the existing Arcs without embedding assets. Arbitrary paths,
+sandbox/combat state and streamed exterior actors remain separate. Detailed
+private design: `reload-order/NPC_NEXT.md`; no NPC snapshot implementation yet.
 
 A private Bevy 0.16.1 / Rodio 0.20.1 probe passed generated source-sample
 cursor continuation. It does not establish an exact audible playback head:

@@ -72,8 +72,13 @@ read current R/G/B, pack `R | G<<8 | B<<16`, write preview actor+0x1d8 via
 `FaceGenHair` and `FaceGenAccessory` and updates material/scene state.
 Palette ID 0x1d reads authored `iHairColor%02d` and `sHairColor%d` settings
 and updates RGB controls/label, but its subsequent application path is not
-yet proved. Control 0x1a changes two indexed morph-array values; exact
-constant precision and semantic field names remain under review. Private
+yet proved. Control 0x1a changes two indexed morph-array values. Assembly
+`007b4e08..007b4e14` computes `n * 5.550000190734863 + 9.449999809265137`
+using binary64 constants, then truncates toward zero (`00ec62c0`). The SSE
+path uses CVTTSD2SI; the fallback corrects its FISTP result using the
+fractional difference. At n=10 this gives 64, not 65. The first indexed
+value is clamped to [15,65]; the second preserves its old difference from
+the first before the same clamp. Semantic field names remain unresolved. Private
 `face-menu/CALLBACK_FINDINGS.md` retains the branch/call evidence. No new
 Rust helper is justified solely by the existence of these controls.
 

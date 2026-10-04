@@ -321,11 +321,7 @@ fn main() {
                     .chain(),
                 (
                     map::find_markers,
-                    ai::move_offstage,
-                    bring_in_people,
-                    bring_in_made,
-                    ai::move_actors,
-                    scripts::save_and_load,
+                    world_updates_before_save_load(),
                     report::report_key,
                     sounds::play_sounds,
                 ),
@@ -356,6 +352,21 @@ fn main() {
             ),
         )
         .run();
+}
+
+/// Finish updates that can mutate or spawn from the live world before F9
+/// replaces its state. In particular, old Walker placement must not be
+/// written into the newly loaded GameState later in the same frame.
+fn world_updates_before_save_load(
+) -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (
+        ai::move_offstage,
+        bring_in_people,
+        bring_in_made,
+        ai::move_actors,
+        scripts::save_and_load,
+    )
+        .chain()
 }
 
 /// A piece its model's own animation moves or changes
@@ -2298,6 +2309,54 @@ fn quit_on_escape(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn live_world_state_writers_precede_the_f9_commit_in_the_update_graph() {
+        let mut schedule = Schedule::new(Update);
+        schedule.add_systems(world_updates_before_save_load());
+
+        let systems: Vec<_> = schedule
+            .graph()
+            .systems()
+            .map(|(id, system, _)| (id, system.name().into_owned()))
+            .collect();
+        // Initialization moves systems into the executable schedule, while
+        // the dependency graph retains their node IDs.
+        schedule.initialize(&mut World::new()).unwrap();
+        let id = |fragment: &str| {
+            systems
+                .iter()
+                .find(|(_, name)| name.contains(fragment))
+                .map(|(id, _)| *id)
+                .unwrap_or_else(|| panic!("system {fragment} was absent from production chain"))
+        };
+        let graph = schedule.graph().dependency().graph();
+        let reaches = |from, to| {
+            let mut seen = std::collections::HashSet::new();
+            let mut pending = vec![from];
+            while let Some(node) = pending.pop() {
+                if node == to {
+                    return true;
+                }
+                if seen.insert(node) {
+                    pending.extend(graph.edges(node).map(|(_, target)| target));
+                }
+            }
+            false
+        };
+        let load = id("save_and_load");
+        for writer in [
+            "move_offstage",
+            "bring_in_people",
+            "bring_in_made",
+            "move_actors",
+        ] {
+            assert!(
+                reaches(id(writer), load),
+                "{writer} must finish before save_and_load can replace GameState"
+            );
+        }
+    }
 
     #[test]
     fn mouse_motion_cannot_turn_player_during_script_package_and_releases_afterward() {
