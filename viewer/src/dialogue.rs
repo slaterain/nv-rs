@@ -60,6 +60,64 @@ pub struct TalkTarget(pub Option<(Talker, String)>);
 #[derive(Resource, Default)]
 pub struct Conversation(pub Option<Talk>, Option<Vec<Topic>>);
 
+impl Conversation {
+    /// Forget playback and topic state without running the line's end script.
+    pub fn discard(&mut self) {
+        self.0 = None;
+        self.1 = None;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_active() -> Self {
+        let speaker = Speaker {
+            reference: FormId(10),
+            base: FormId(11),
+            name: Some("Test speaker".into()),
+            voice: None,
+            race: None,
+            female: false,
+            factions: vec![],
+        };
+        let info = Info {
+            form_id: FormId(12),
+            topic: None,
+            quest: None,
+            previous: None,
+            flags: 0,
+            flags2: 0,
+            responses: vec![world::dialogue::Response {
+                emotion: 0,
+                emotion_value: 0,
+                number: 0,
+                text: "pending line".into(),
+            }],
+            conditions: vec![],
+            prompt: None,
+            check: None,
+            choices: vec![],
+            add_topics: vec![],
+            begin_script: Some("BeginScript".into()),
+            end_script: Some("EndScript".into()),
+        };
+        Self(
+            Some(Talk {
+                speaker,
+                name: "Test speaker".into(),
+                info,
+                opening: vec![],
+                response: 0,
+                since: 0.0,
+                voice: None,
+                choices: None,
+                line_only: true,
+                shown_line: None,
+                shown_topics: false,
+            }),
+            Some(vec![]),
+        )
+    }
+}
+
 pub struct Talk {
     speaker: Speaker,
     name: String,

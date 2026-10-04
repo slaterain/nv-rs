@@ -1,23 +1,22 @@
 # Opening foundations: shared handoff
 
-2026-10-04 overnight session: clean baseline `647af94`; active branch
-`codex/m1-native-appearance`, based on persistence commit `94983c0`.
-Save failure handling is checked (913 core / 84 viewer tests, both workspaces'
-clippy/format/release, installed-data smoke and live failed/valid F9 checks).
-[PR #5](https://github.com/slaterain/nv-rs/pull/5) merged as `637b28d` after both
-GitHub checks; its verified build is installed in play/app (hash and evidence
-in [PERSISTENCE.md](PERSISTENCE.md)). The bounded
-gamedb experiment is complete; no full index warranted
-([RESEARCH_WORKFLOW.md](RESEARCH_WORKFLOW.md)). Private read-only gaze and face
-default-selection evidence is under `nv-re/work/m1-overnight-2026-10-04`.
-Core appearance reconciliation is implemented with six new regressions and
-eight official-data cases; 919 core / 84 viewer tests and both workspaces'
-clippy/format/release checks pass. Its opening smoke reached situp/bedsit and
-Doc's speech and exited normally. No runtime
-gaze/face menu change is claimed. The cap initializer
-trace continues privately. Original-game input automation remains blocked at
-the main menu; that test and the isolated viewer have both exited.
-The older batch evidence below is historical.
+2026-10-04 overnight session: PR #5 save-failure isolation merged as
+`637b28d`; PR #6 native appearance reconciliation merged as `843926d`.
+The verified PR #6 binary is in play/app. Camera continuation PR #7 is
+awaiting amended viewer CI; its local checks, installed-clip comparisons and
+live/restart reload evidence are in [PERSISTENCE.md](PERSISTENCE.md).
+Active branch `codex/m1-reload-dialogue-cleanup` addresses old dialogue and
+voices surviving reload; full conversation continuation remains missing.
+Current checks/processes and next action belong to that handoff and
+[MILESTONES.md](MILESTONES.md).
+
+The bounded gamedb experiment is complete; full indexing is deferred
+([RESEARCH_WORKFLOW.md](RESEARCH_WORKFLOW.md)). Native gaze cap constructors
+and face-menu category navigation are traced, but no gaze solver or face
+editor is implemented from them. See [OPENING_LOOK_IK.md](OPENING_LOOK_IK.md)
+and [FACE_CREATION.md](FACE_CREATION.md). Original-game input automation
+remains blocked at the main menu; the original and isolated test viewers
+have exited. The older batch evidence below is historical.
 
 2026-10-03. Current owner: Codex; opening camera, attention, HUD and activation fixes.
 Use with MILESTONES.md.

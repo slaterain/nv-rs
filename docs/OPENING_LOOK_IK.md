@@ -15,12 +15,14 @@ uses SSE approximations, so bit-identical results need separate validation.
 
 The cap selects `01267d24` or `01267d30` using controller+0xb2 and converts
 degrees to radians. No delta-time factor appears in this helper: the cap is
-per invocation. Both globals are zero in the executable image; their runtime
-population, values and names are unresolved. Do not substitute guessed caps.
+per invocation. Although both globals are zero in the executable image,
+constructors `00fbd100`/`00fbd130` register `fAngleMax:LookIK` default 3.5
+and `fAngleMaxEase:LookIK` default 1.0 respectively. Post-INI runtime values
+remain unverified; see the constructor evidence below.
 The second mode0 call uses a temporary transform and changes+0x181 and
 feedback metrics; it is not merely an inert cache update.
 
-Remaining requirements: resolve cap initialization/runtime values, identify
+Remaining requirements: verify post-INI cap values, identify
 the per-mode+0x110/+0xf6 setup and skeleton transform spaces, establish the
 quaternion product convention, then compare a port in the original game.
 Private evidence: `nv-re/work/m1-overnight-2026-10-04/gaze/FINDINGS.md` and

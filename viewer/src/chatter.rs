@@ -62,6 +62,14 @@ impl Lines {
             info,
         });
     }
+
+    /// Discard lines from the world that was just replaced. Their result
+    /// scripts must not run against the restored game state.
+    pub fn discard_pending(&mut self) {
+        self.queue.clear();
+        self.saying.clear();
+        self.done.clear();
+    }
 }
 
 /// How long a response stays without a voice: the dialogue's reading pace

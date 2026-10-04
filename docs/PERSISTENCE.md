@@ -2,8 +2,9 @@
 
 ## Camera continuation, 2026-10-04
 
-Camera branch `codex/m1-camera-persistence`, PR #7 at `00876d6`, rebased on
-merged appearance PR #6 (`843926d`). The rebase tree matches tested `ca32a67`.
+Camera branch `codex/m1-camera-persistence`, PR #7 at `5b3ec14`, based on
+merged appearance PR #6 (`843926d`). Original camera tree `00876d6` matches
+tested `ca32a67`; the amended head adds fixture isolation described below.
 The next bounded batch captures first-person special-idle clocks, frozen
 blend poses, loop counters, package cache, pending requests, hand-follow and
 view pitch in the custom save. It does not infer an animation from quest stage
@@ -135,3 +136,42 @@ Doc speech, inspected screenshot, normal exit; only known Vulkan warnings).
 Its SHA256 is `1219AD13BC6190B208C76C84B0F29D856A10324DA1AE6C0D1206A4F4FB277560`.
 Private logs/image: `camera-persistence/fixture-smoke` under the overnight
 research directory. CI must pass the amended head before camera publication.
+
+## Successful-load dialogue cleanup, 2026-10-04
+
+Branch `codex/m1-reload-dialogue-cleanup`; changed viewer scripts.rs,
+dialogue.rs, chatter.rs, faces.rs and game_menus/dialog.rs. Local work and
+checks are complete; no agent owns further runtime edits. F9 previously left
+old Conversation/ScriptedTalk/chatter/Voice state alive; audio entities are
+not scene entities. Old line completion could run a result script against
+newly loaded quest state. Successful preflight now queues targeted cleanup:
+discard old dialogue/line requests and voice entities, clear stale lip tracks,
+subtitles, target and dialogue input, detach dialogue menu tiles, and respect
+other open menus. Failed loads retain the old playback. Unrelated audio stays.
+
+Four new generated regressions exercise actual load success/failure results,
+unavailable destinations, active conversations, playing/delayed voices,
+unrelated audio and menus, and lip tracks whose voice entity already ended.
+Root926/viewer89 tests, both clippy/format checks and release builds pass.
+Live baseline replay loaded a stage8 save during INFO00104BF6; its old
+result script then selected INFO00104BF1 and advanced the restored state to
+the name prompt. The fixed build immediately cleared that old line; no old
+result script ran over 40+ subsequent seconds, and F5 still recorded stage8.
+A separate invalid-cell F9 preserved current dialogue, which continued to
+standup and the tester instruction (face menu still auto-accepts). Both test
+viewers exited; logs had only known Vulkan present-mode warnings.
+
+Private evidence: `dialogue-cleanup/{before,after,rejected}` under the
+overnight research directory. Verified executable SHA256:
+`0199E123955A47502B860308E62620241B69C03B1001FC8B44A0626691C08AA5`.
+This is custom-save isolation, not native save behavior or restored dialogue:
+the saved stage8 conversation still cannot continue after reload. Other
+transient menu/procedure state needs its own persistence acceptance. Exact
+next action: checked PR and merge after camera PR #7, then publish.
+
+A private Bevy 0.16.1 / Rodio 0.20.1 probe passed generated source-sample
+cursor continuation. It does not establish an exact audible playback head:
+device buffering can run ahead, and Bevy exposes neither sink seek nor
+position. Actual OGG/output scheduling and persistent lip-track state remain
+unverified. Evidence: `dialogue-audio-probe/RESULT.md` under the overnight
+research directory. No runtime dependency changes or audio resume shipped.

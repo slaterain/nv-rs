@@ -10,9 +10,10 @@ Saves/reports were preserved. Camera publication waits for its own merge.
 
 The bounded native page/control trace below is complete; no public runtime
 edits or agent processes remain for it. Private source snapshots, findings
-and 40 validated hashes: nv-re/work/m1-overnight-2026-10-04/face-menu.
+and hash manifests: nv-re/work/m1-overnight-2026-10-04/face-menu.
 No original-game menu comparison succeeded this session. Next: trace the
-slider-to-face-field callbacks and preview refresh before implementing edits.
+remaining preset/morph field meanings and palette application before
+implementing edits. The immediate callback findings follow below.
 
 ## Native category navigation and slider construction
 
@@ -59,6 +60,23 @@ jump fraction 0.125, and bytes from `004169d0`. Later refresh may overwrite
 these constructor values; native field mappings and final visible values
 remain to be traced. XML snapshot SHA256:
 `1C5E9DAA5AA5EB9AE11044718874D0D27CB3665EC994487B2CC77A828805AF98`.
+
+The selected-control dispatcher `007b4b50` applies ID 0x18 through the
+authored preset list at menu+0xdc, indexed by current value minus one;
+`00603790` receives the selected record. It refreshes category callbacks,
+morph rows and preview through `007b25a0`, `007b2b50(1)`, `007b27c0`, then
+resynchronizes color controls. Preset record contents remain untraced.
+
+On hair-color page 6, `007af900` handles IDs 0x1e–0x20 through `007b3660`:
+read current R/G/B, pack `R | G<<8 | B<<16`, write preview actor+0x1d8 via
+`007b3720`, then call `007b2b50(0)`. That path tints geometry named
+`FaceGenHair` and `FaceGenAccessory` and updates material/scene state.
+Palette ID 0x1d reads authored `iHairColor%02d` and `sHairColor%d` settings
+and updates RGB controls/label, but its subsequent application path is not
+yet proved. Control 0x1a changes two indexed morph-array values; exact
+constant precision and semantic field names remain under review. Private
+`face-menu/CALLBACK_FINDINGS.md` retains the branch/call evidence. No new
+Rust helper is justified solely by the existence of these controls.
 
 ## Race/sex part reconciliation, 2026-10-04
 

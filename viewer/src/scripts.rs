@@ -654,6 +654,7 @@ fn save_camera(
 /// F5 saves the game; F9 prepares and restores its state and destination.
 #[allow(clippy::too_many_arguments)]
 pub fn save_and_load(
+    mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
     game: Res<GameFiles>,
@@ -715,12 +716,85 @@ pub fn save_and_load(
                     &text,
                 )
             });
+        queue_reload_cleanup(&mut commands, &result);
         match result {
             Ok(true) => say("Loaded.".into()),
             Ok(false) => say("Loaded (the save doesn't say where the player was).".into()),
             Err(e) => say(format!("Couldn't load {QUICKSAVE}: {e}")),
         }
     }
+}
+
+/// Queue transient dialogue cleanup only after the saved world has passed
+/// every preflight step and its state has been committed.
+fn queue_reload_cleanup(commands: &mut Commands, result: &Result<bool, String>) {
+    if result.is_ok() {
+        commands.queue(discard_reloaded_dialogue);
+    }
+}
+
+fn discard_reloaded_dialogue(world: &mut World) {
+    world.resource_mut::<Conversation>().discard();
+    world.resource_mut::<ScriptedTalk>().0 = None;
+    world
+        .resource_mut::<crate::chatter::Lines>()
+        .discard_pending();
+    world.resource_mut::<DialogueState>().0.speaking.clear();
+    if let Some(mut target) = world.get_resource_mut::<crate::dialogue::TalkTarget>() {
+        target.0 = None;
+    }
+    if let Some(mut keys) = world.get_resource_mut::<ButtonInput<KeyCode>>() {
+        for key in [
+            KeyCode::Escape,
+            KeyCode::Tab,
+            KeyCode::Space,
+            KeyCode::Digit1,
+            KeyCode::Digit2,
+            KeyCode::Digit3,
+            KeyCode::Digit4,
+            KeyCode::Digit5,
+            KeyCode::Digit6,
+            KeyCode::Digit7,
+            KeyCode::Digit8,
+            KeyCode::Digit9,
+        ] {
+            keys.clear_just_pressed(key);
+        }
+    }
+    let remaining_game_menu = world
+        .get_resource_mut::<crate::game_menus::GameMenus>()
+        .and_then(|mut menus| {
+            let dialog_removed = menus
+                .screen()
+                .is_some_and(crate::game_menus::dialog::discard);
+            dialog_removed.then(|| menus.screen().is_some_and(|screen| !screen.open.is_empty()))
+        });
+    if let Some(game_open) = remaining_game_menu {
+        if let Some(mut menu_state) = world.get_resource_mut::<crate::menus::Menus>() {
+            menu_state.game_open = game_open;
+        }
+    }
+    let menu_open = world
+        .get_resource::<crate::menus::Menus>()
+        .is_some_and(crate::menus::Menus::is_open);
+    if let Some(mut player) = world.get_resource_mut::<crate::walk::Player>() {
+        player.ready = !menu_open;
+    }
+    {
+        let mut panel = world
+            .query_filtered::<(&mut Text, &mut Visibility), With<crate::dialogue::DialogueText>>();
+        for (mut text, mut visibility) in panel.iter_mut(world) {
+            text.0.clear();
+            *visibility = Visibility::Hidden;
+        }
+    }
+    {
+        let mut prompt = world.query_filtered::<&mut Text, With<crate::walk::Prompt>>();
+        for mut text in prompt.iter_mut(world) {
+            text.0.clear();
+        }
+    }
+    crate::faces::discard_voices(world);
 }
 
 /// How long a notice stays up, in seconds.
@@ -1359,6 +1433,224 @@ pub fn run_scripts(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Resource)]
+    struct TestLoadResult(Result<bool, String>);
+
+    fn queue_test_reload_cleanup(mut commands: Commands, result: Res<TestLoadResult>) {
+        queue_reload_cleanup(&mut commands, &result.0);
+    }
+
+    fn cleanup_fixture(result: Result<bool, String>) -> World {
+        let mut world = World::new();
+        world.insert_resource(TestLoadResult(result));
+        world.insert_resource(Conversation::test_active());
+        world.insert_resource(ScriptedTalk(Some((FormId(10), None, true))));
+        let mut lines = crate::chatter::Lines::default();
+        lines.say(
+            FormId(11),
+            FormId(1),
+            world::dialogue::Info {
+                form_id: FormId(30),
+                topic: None,
+                quest: None,
+                previous: None,
+                flags: 0,
+                flags2: 0,
+                responses: vec![],
+                conditions: vec![],
+                prompt: None,
+                check: None,
+                choices: vec![],
+                add_topics: vec![],
+                begin_script: Some("SetStage TestQuest 10".into()),
+                end_script: Some("SetStage TestQuest 20".into()),
+            },
+        );
+        lines.done.push((FormId(20), FormId(30)));
+        world.insert_resource(lines);
+        world.insert_resource(DialogueState(GameState {
+            speaking: [FormId(10)].into_iter().collect(),
+            ..Default::default()
+        }));
+        world.insert_resource(crate::walk::Player::new(true));
+        world.insert_resource(crate::dialogue::TalkTarget(Some((
+            crate::dialogue::Talker {
+                reference: FormId(10),
+                base: FormId(11),
+                position: [0.0; 3],
+            },
+            "Test speaker".into(),
+        ))));
+        world.insert_resource(crate::game_menus::GameMenus::default());
+        world.insert_resource(ButtonInput::<KeyCode>::default());
+        world.spawn((Text::new("Talk"), crate::walk::Prompt));
+        world.spawn((
+            AudioPlayer::<AudioSource>::new(Handle::default()),
+            PlaybackSettings::DESPAWN,
+            crate::faces::Voice {
+                speaker: FormId(10),
+                lip: None,
+            },
+        ));
+        world.spawn((
+            AudioPlayer::<AudioSource>::new(Handle::default()),
+            PlaybackSettings::DESPAWN.paused(),
+            crate::faces::Voice {
+                speaker: FormId(11),
+                lip: None,
+            },
+            crate::faces::VoiceDelay(1.0),
+        ));
+        world.spawn((
+            AudioPlayer::<AudioSource>::new(Handle::default()),
+            PlaybackSettings::DESPAWN,
+        ));
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        world
+    }
+
+    #[test]
+    fn failed_load_keeps_live_and_paused_dialogue_audio_and_input() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let data = testdata::functions::functions("dialogue-cleanup-failed");
+        let game = cellview::Game::open(
+            data.path(),
+            &cellview::Options {
+                official: true,
+                ..default()
+            },
+        )
+        .unwrap();
+        let result = attempt_load_saved_world(&game, "not a save");
+        assert!(result.is_err());
+        let mut world = cleanup_fixture(result);
+        world.run_system_once(queue_test_reload_cleanup).unwrap();
+        world.flush();
+        assert_eq!(
+            world.query::<&crate::faces::Voice>().iter(&world).count(),
+            2
+        );
+        assert_eq!(
+            world
+                .query::<&AudioPlayer<AudioSource>>()
+                .iter(&world)
+                .count(),
+            3
+        );
+        assert!(world
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(KeyCode::Space));
+        assert!(world.resource::<ScriptedTalk>().0.is_some());
+        assert!(world.resource::<Conversation>().0.is_some());
+        assert_eq!(world.resource::<DialogueState>().0.speaking.len(), 1);
+        assert_eq!(world.resource::<crate::chatter::Lines>().done.len(), 1);
+        assert_eq!(world.resource::<crate::chatter::Lines>().queue.len(), 1);
+        assert!(world.resource::<crate::dialogue::TalkTarget>().0.is_some());
+
+        let invalid_place = world::save::PlayerPlace {
+            cell: FormId(0xdead_beef),
+            world: None,
+            position: [0.0; 3],
+            heading: 0.0,
+        };
+        let bad_destination = world::save::save(&GameState::default(), Some(invalid_place));
+        let result = attempt_load_saved_world(&game, &bad_destination);
+        assert!(result.is_err());
+        let mut world = cleanup_fixture(result);
+        world.run_system_once(queue_test_reload_cleanup).unwrap();
+        world.flush();
+        assert_eq!(
+            world.query::<&crate::faces::Voice>().iter(&world).count(),
+            2
+        );
+        assert_eq!(world.resource::<crate::chatter::Lines>().queue.len(), 1);
+    }
+
+    #[test]
+    fn successful_load_clears_dialogue_voices_and_preserves_other_audio() {
+        use bevy::ecs::system::RunSystemOnce;
+
+        let data = testdata::functions::functions("dialogue-cleanup-success");
+        let game = cellview::Game::open(
+            data.path(),
+            &cellview::Options {
+                official: true,
+                ..default()
+            },
+        )
+        .unwrap();
+        let destination = world::save::PlayerPlace {
+            cell: FormId(testdata::functions::ids::HOUSE),
+            world: None,
+            position: [10.0, 20.0, 30.0],
+            heading: 1.25,
+        };
+        let text = world::save::save(&GameState::default(), Some(destination));
+        let result = attempt_load_saved_world(&game, &text);
+        assert!(result.is_ok());
+        let mut world = cleanup_fixture(result);
+        world.run_system_once(queue_test_reload_cleanup).unwrap();
+        world.flush();
+        assert_eq!(
+            world.query::<&crate::faces::Voice>().iter(&world).count(),
+            0
+        );
+        assert_eq!(
+            world
+                .query::<&AudioPlayer<AudioSource>>()
+                .iter(&world)
+                .count(),
+            1
+        );
+        assert!(world.resource::<Conversation>().0.is_none());
+        assert!(world.resource::<ScriptedTalk>().0.is_none());
+        assert!(world.resource::<crate::chatter::Lines>().done.is_empty());
+        assert!(world.resource::<crate::chatter::Lines>().queue.is_empty());
+        assert!(world.resource::<DialogueState>().0.speaking.is_empty());
+        assert!(world.resource::<crate::walk::Player>().ready);
+        assert!(world.resource::<crate::dialogue::TalkTarget>().0.is_none());
+        let mut prompt = world.query_filtered::<&Text, With<crate::walk::Prompt>>();
+        assert!(prompt.iter(&world).all(|text| text.0.is_empty()));
+        assert!(!world
+            .resource::<ButtonInput<KeyCode>>()
+            .just_pressed(KeyCode::Space));
+    }
+
+    #[test]
+    fn dialogue_cleanup_does_not_release_movement_from_another_menu() {
+        let mut world = cleanup_fixture(Ok(false));
+        let mut menus = crate::menus::Menus::default();
+        menus.push(crate::menus::Menu::SleepWait { sleep: false });
+        world.insert_resource(menus);
+        discard_reloaded_dialogue(&mut world);
+        assert!(!world.resource::<crate::walk::Player>().ready);
+        assert!(world.resource::<crate::menus::Menus>().is_open());
+    }
+
+    fn attempt_load_saved_world(game: &cellview::Game, text: &str) -> Result<bool, String> {
+        let mut state = GameState::default();
+        let mut cells = CellScripts::default();
+        let mut idle = crate::player_idle::PlayerIdle::default();
+        let mut pending = crate::PendingScene(None);
+        let mut exterior = crate::exterior::PendingExterior::default();
+        let mut seats = crate::sitting::Seats::new(&game.order);
+        let mut pitch = crate::StartPitch(0.0);
+        load_saved_world(
+            game,
+            &mut state,
+            &mut cells,
+            &mut idle,
+            &mut pending,
+            &mut exterior,
+            &mut seats,
+            &mut pitch,
+            text,
+        )
+    }
 
     fn box_collider(lo: [f32; 3], hi: [f32; 3]) -> physics::Collider {
         let [x0, y0, z0] = lo;

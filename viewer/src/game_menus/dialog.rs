@@ -86,6 +86,36 @@ pub fn end(screen: &mut Screen) {
     }
 }
 
+/// Remove the dialogue menu after loading another saved world. This avoids
+/// leaving its buffered answer or keyboard focus attached to the new state.
+pub fn discard(screen: &mut Screen) -> bool {
+    let Screen {
+        ui,
+        interface,
+        open,
+        ..
+    } = screen;
+    let before = open.len();
+    let mut tiles = Vec::new();
+    open.retain(|m| {
+        if let OpenMenu::Dialog(dialog) = m {
+            tiles.push(dialog.menu);
+            false
+        } else {
+            true
+        }
+    });
+    for tile in tiles {
+        ui.detach(tile);
+    }
+    let discarded = open.len() != before;
+    if discarded {
+        interface.focus = None;
+        interface.over = None;
+    }
+    discarded
+}
+
 /// What the player did since last asked.
 pub fn take_answer(screen: &mut Screen) -> Option<Answer> {
     menu(screen).and_then(|d| d.answer.take())

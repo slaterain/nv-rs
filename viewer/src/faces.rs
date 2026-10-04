@@ -78,14 +78,40 @@ pub struct ActorFace {
 
 /// A spoken line's sound: who says it and its lip sync.
 #[derive(Component)]
-pub struct Voice {
-    speaker: FormId,
-    lip: Option<Arc<Lip>>,
+pub(crate) struct Voice {
+    pub(crate) speaker: FormId,
+    pub(crate) lip: Option<Arc<Lip>>,
+}
+
+/// Stop voice entities and their face tracks when a custom save replaces
+/// dialogue state. Other audio entities are deliberately left alone.
+pub(crate) fn discard_voices(world: &mut World) {
+    let voices = {
+        let mut query = world.query::<(Entity, &Voice)>();
+        query
+            .iter(world)
+            .map(|(entity, voice)| (entity, voice.speaker))
+            .collect::<Vec<_>>()
+    };
+    let speakers: std::collections::HashSet<u32> =
+        voices.iter().map(|(_, speaker)| speaker.0).collect();
+    for (entity, _) in voices {
+        let _ = world.despawn(entity);
+    }
+    let mut faces = world.query::<(&PlacedRef, &mut ActorFace)>();
+    for (placed, mut face) in faces.iter_mut(world) {
+        // A saved world has no matching continuation for any old lip track.
+        // Re-seed the face's ordinary animation state for every stale voice
+        // owner, including tracks whose audio entity already ended.
+        if speakers.contains(&placed.0) || face.animation.speaking() {
+            face.animation = FaceAnimation::new(u64::from(placed.0));
+        }
+    }
 }
 
 /// A voice held back until its line's lead-in has gone by: seconds left.
 #[derive(Component)]
-pub struct VoiceDelay(f32);
+pub(crate) struct VoiceDelay(pub(crate) f32);
 
 /// How a line's voice file plays, and its [`Voice`]: with a lip sync file
 /// beside it, paused until [`release_voices`] lets it go; without one, at
@@ -337,5 +363,34 @@ mod tests {
         assert_eq!(positions(meshes, &own)[0], [0.0, 0.0, -2.0]);
         // Other placements sharing the model's mesh keep its rest shape.
         assert_eq!(positions(meshes, &shared), rest);
+    }
+
+    #[test]
+    fn reload_clears_a_lip_track_after_its_voice_entity_has_ended() {
+        let mut animation = FaceAnimation::new(42);
+        animation.speak(
+            &Lip {
+                offset: 0,
+                frames: vec![LipFrame {
+                    phonemes: [0.5; 16],
+                    modifiers: [0.0; 17],
+                }],
+            },
+            &FaceSettings::DEFAULT,
+        );
+        assert!(animation.speaking());
+        let mut world = World::new();
+        let actor = world
+            .spawn((
+                PlacedRef(42),
+                ActorFace {
+                    animation,
+                    shown: Weights::NEUTRAL,
+                    head: None,
+                },
+            ))
+            .id();
+        discard_voices(&mut world);
+        assert!(!world.get::<ActorFace>(actor).unwrap().animation.speaking());
     }
 }

@@ -78,8 +78,12 @@ are still missing. No camera build published yet.
 
 Camera PR #7 (`5b3ec14`) exposed a pre-existing parallel fixture collision;
 unique fixture directories and a deterministic regression fix it. Its amended
-CI is running. Active bounded research on `codex/m1-face-menu-research`
-traces native RaceSexMenu page/slider callbacks before replacing auto-accept.
+CI is running (amended core passed). Active branch
+`codex/m1-reload-dialogue-cleanup` isolates old dialogue/voice state from
+successful reloads; failed loads preserve playback. Root926/viewer89 tests,
+both workspaces' checks/releases and live success/rejection cases pass.
+It does not restore the saved conversation. Native RaceSexMenu
+navigation is traced; field callbacks and original comparison remain open.
 See [FACE_CREATION.md](FACE_CREATION.md). Next action: finish camera PR #7
 when both amended checks pass, then publish its verified build. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
