@@ -84,8 +84,8 @@ successful reloads; failed loads preserve playback. Root926/viewer89 tests,
 both workspaces' checks/releases and live success/rejection cases pass.
 It does not restore the saved conversation. Native RaceSexMenu
 navigation is traced; field callbacks and original comparison remain open.
-See [FACE_CREATION.md](FACE_CREATION.md). PR #8 was rebased onto the camera
-squash merge without changing its tested tree; both CI jobs restarted.
+See [FACE_CREATION.md](FACE_CREATION.md). PR #8 merged as `1d43d4b` after
+both CI jobs passed; the verified cleanup build is installed in play/app.
 Active branch `codex/m1-reload-update-order` fixes a separate old-AI/F9
 ordering hazard: root926/viewer90 tests, both workspaces' checks/releases and
 installed-data opening smoke pass. Native head/parent setup and recompute
@@ -94,7 +94,7 @@ SPECIAL allocation/closing passes. A new opening run with only the saved
 player position relocated at stage55 continued through Doc's reaction to
 stage80 and the couch objective. Full walking route, face UI and original-
 game comparison remain unverified; evidence is in [VIGOR.md](VIGOR.md).
-Next action: finish PR #8 after both checks pass and publish its verified build. See
+Next action: submit the verified ordering fix and finish couch acceptance. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison
 remain unverified. Do not repeat the established

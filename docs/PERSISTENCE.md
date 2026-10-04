@@ -174,10 +174,10 @@ overnight research directory. Verified executable SHA256:
 This is custom-save isolation, not native save behavior or restored dialogue:
 the saved stage8 conversation still cannot continue after reload. Other
 transient menu/procedure state needs its own persistence acceptance. Exact
-next action: merge PR #8 after both CI jobs pass, then publish. Camera PR #7
-is merged/published. PR #8 was rebased onto that squash merge as `15b495d`;
-its tree is identical to tested `a5cb633`. Both CI jobs restarted for the
-new head. No local build is active.
+next action: complete the separately verified ordering batch below. PR #8
+merged as `1d43d4b` after both CI jobs passed at `15b495d`; its tree matches
+the tested build. Verified cleanup executable installed in play/app and its
+SHA256 checked. Camera PR #7 is also merged/published. No local build is active.
 
 Current branch `codex/m1-reload-update-order`: the next bounded fix orders
 old-world AI updates before F9 commits. The existing unchained inner system
@@ -196,7 +196,8 @@ Private logs, negative-control result and archived executable are under
 (PID33100, private `reload-order/live/`) reached stage80 after SPECIAL;
 details and relocation limitation are in [VIGOR.md](VIGOR.md).
 This addresses our schedule, not a new native behavior claim. Next action:
-submit after PR #8 merges, preserving the exact tested tree.
+submit the ordering branch, rebased onto PR #8's squash merge with the exact
+tested tree preserved; only subsequent handoff documentation changed.
 
 NPC continuation assessment: an animation snapshot alone misses Sitter's
 entry/exit/root-motion clock, `Life.idles` and `Life.getting_up`. The current
