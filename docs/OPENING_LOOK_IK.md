@@ -1,5 +1,35 @@
 # Opening Doc look IK trace
 
+## Follow-up output trace, 2026-10-04
+
+No runtime gaze change is implemented. Ghidra assembly confirms mode1's
+active call at `00c7aa8f..00c7aab0`, selected node+0x144, second transform
+selector+0x146 and quaternion cache+0x170..0x17c. `00c78610` rebuilds the
+selected/subtree transforms and passes its selected quaternion through
+`00c755e0`, which caps the relative rotation and writes both node and cache.
+
+The final `005611c0`/`005611e0` correction is now resolved as quaternion
+normalization: sum four squared components, reciprocal square root with one
+Newton refinement, then scale all four components. The native implementation
+uses SSE approximations, so bit-identical results need separate validation.
+
+The cap selects `01267d24` or `01267d30` using controller+0xb2 and converts
+degrees to radians. No delta-time factor appears in this helper: the cap is
+per invocation. Both globals are zero in the executable image; their runtime
+population, values and names are unresolved. Do not substitute guessed caps.
+The second mode0 call uses a temporary transform and changes+0x181 and
+feedback metrics; it is not merely an inert cache update.
+
+Remaining requirements: resolve cap initialization/runtime values, identify
+the per-mode+0x110/+0xf6 setup and skeleton transform spaces, establish the
+quaternion product convention, then compare a port in the original game.
+Private evidence: `nv-re/work/m1-overnight-2026-10-04/gaze/FINDINGS.md` and
+`hashes.sha256.json` (read-only Ghidra disassembly/helper exports). Analysis
+image: FNV1.4.0.525, unpacked SHA256
+`19406942E48724D797300C4EA6BE9AC69A32F670B8C35DB09279A2258422739F`.
+
+## Earlier trace
+
 Research status, 2026-10-03. FNV executable addresses below refer to the
 existing `nv-re/decomp/codex-m1` Ghidra project. No runtime behavior has been
 implemented from this trace.

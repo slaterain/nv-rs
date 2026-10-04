@@ -37,5 +37,33 @@ custom save and exited after its inspected screenshot. Startup diagnostics
 showed only Vulkan present-mode warnings. Private runtime files are in
 `persistence-smoke/`; user play saves and reports were not touched.
 No original-game comparison is claimed for these custom-format I/O changes.
-No play publication yet.
+Merged through [PR #5](https://github.com/slaterain/nv-rs/pull/5) after both
+GitHub checks passed, commit `637b28d28dbe27718d0e2d749f6136798e341b7c`.
+Installed the verified build in `nv-rs-play/app`; SHA256
+`2A42932E91AD206184E1D700120C93188CD4D2BA572E9A2AD4F684B918EAAE7B`.
+The merged tree was verified identical to tested source `94983c0`. The
+prebuilt executable was retained privately while the next batch built;
+publication used that exact artifact and the existing helper. The current
+appearance build was restored afterward. Saves/reports were preserved.
 This does not restore mid-animation state or establish full opening acceptance.
+
+Additional live F5/F9 check: the isolated `persistence-live/` run saved,
+rejected a deliberately nonexistent saved cell, then saved the unchanged
+player position/heading and quest state (the injected stage60 did not leak).
+A subsequent valid F9 load succeeded and restored Doc's seated state. The
+test process exited; `RESULT.txt`, before/after saves and logs stay private.
+
+## Native save gating investigation
+
+The scripted Autosave/ForceSave opcode handlers (`005c5560`, `005c5590`)
+check their INI permission settings; these handlers contain no package,
+dialogue or animation condition. This does not establish manual F5 routing.
+`0070c4a0` has quicksave/quickload refusal feedback via `0070edf0` and the
+current StartMenu's+0x1a8 bit1 (`004a4080`); the quicksave string says the
+game is paused. Exact acceptance during each opening phase remains unresolved.
+
+An original-game launch through Steam reached the main menu, but computer-use
+click and Return did not drive its DirectInput. The test was closed with
+Alt-F4; no save was loaded or overwritten. Do not invent a phase-specific
+save prohibition from this failed experiment. Native evidence and executable
+hash: `nv-re/work/m1-overnight-2026-10-04/save-gating/RESULT.md`.

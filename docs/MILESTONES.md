@@ -39,12 +39,19 @@ and same-cell trigger reset on F9. Live evidence reaches the tester through
 stage55/60 and opens SPECIAL; it is not full-route acceptance.
 Historical checks and play hashes remain in [OPENING.md](OPENING.md).
 
-Current batch: failed custom save writes preserve the previous save, and
+Persistence batch: failed custom save writes preserve the previous save, and
 failed F9 destinations preserve the running world. Generated regressions
 pass; 913 core and 84 viewer tests, both clippy/format/release checks and an
 isolated installed-data forced-save smoke passed on
 `codex/m1-opening-overnight`. Evidence and process handoff:
-[PERSISTENCE.md](PERSISTENCE.md). No new play build published yet.
+[PERSISTENCE.md](PERSISTENCE.md). PR #5 merged as `637b28d` after both GitHub
+checks; live failed/valid F9 also passed. Verified build installed in play/app.
+
+Next bounded batch implements native race/sex hair/eye reconciliation as
+core face-editor groundwork, with six regressions and eight official-data
+cases. 919 core / 84 viewer tests, both workspaces' checks/releases and the
+installed-data opening smoke pass on `codex/m1-native-appearance`. The face
+menu still auto-accepts.
 
 The bounded gamedb evaluation silently missed the central look-lock function
 in a four-export probe. Full indexing is deferred; source snapshots, hashes,
@@ -62,8 +69,9 @@ Outstanding M1 gates:
 - SPECIAL's remaining visual/input fidelity and progression comparison
   ([VIGOR.md](VIGOR.md)); general idle callbacks remain partial.
 
-Next action: finish persistence PR review/publication, then continue the
-native opening gaze/face trace. Do not repeat the established
+Next action: finish appearance PR,
+then connect persistent appearance to the native preview/menu work. Gaze cap
+initialization remains under private investigation. Do not repeat the established
 package-look lock or tester activation fixes.
 
 ## Deferred

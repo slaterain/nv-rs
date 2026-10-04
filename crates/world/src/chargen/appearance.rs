@@ -17,6 +17,7 @@ const DATA: FourCC = FourCC::new(b"DATA");
 const HNAM: FourCC = FourCC::new(b"HNAM");
 const ENAM: FourCC = FourCC::new(b"ENAM");
 const FULL: FourCC = FourCC::new(b"FULL");
+const DNAM: FourCC = FourCC::new(b"DNAM");
 
 /// A selectable race, hairstyle, or eye set. `name` comes only from `FULL`;
 /// it remains `None` when the record has no such subrecord and `Some("")`
@@ -25,6 +26,114 @@ const FULL: FourCC = FourCC::new(b"FULL");
 pub struct Choice {
     pub form: FormId,
     pub name: Option<String>,
+}
+
+/// Hair/eyes retained or replaced when RaceSexMenu changes race or sex.
+/// This does not apply morphs or rebuild an actor's preview.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PartSelection {
+    pub hair: Option<FormId>,
+    pub eyes: Option<FormId>,
+}
+
+/// Reconcile parts through `007b1ca0`, separately from the visible choices.
+/// Existing members need sex compatibility, not the playable bit. Invalid
+/// hair uses the race's sex-specific DNAM, then (only if absent) its ordered
+/// HNAM list. Invalid eyes use the first ENAM entry without flag filtering.
+/// See `docs/FACE_CREATION.md` for addresses and unresolved menu integration.
+/// Invalid list references are omitted as in the loader. An unresolved DNAM
+/// default produces no hair; its native fixup behavior is not claimed here.
+/// Invalid races and malformed DNAM are unsupported and return `None`.
+pub fn reconcile_parts(
+    order: &LoadOrder,
+    race: FormId,
+    female: bool,
+    current: PartSelection,
+) -> Option<PartSelection> {
+    let rr = order
+        .get(race)
+        .filter(|rr| rr.entry.header.kind == RACE && !rr.entry.header.is_deleted())?;
+    let record = rr.record().ok()?;
+    if record.get_all(DNAM).any(|sub| sub.data.len() != 8) {
+        // 00610cd0 requests eight bytes; truncated/oversized subrecords need
+        // the lower-level reader traced before assigning fallback behavior.
+        return None;
+    }
+    let hair_members = ordered_forms(order, rr, &record, HNAM, HAIR);
+    let eye_members = ordered_forms(order, rr, &record, ENAM, EYES);
+    let retained = |part: Option<FormId>, kind, members: &[FormId]| {
+        part.filter(|id| {
+            members.contains(id)
+                && part_flags(order, *id, kind).is_some_and(|flags| sex_allowed(flags, female))
+        })
+    };
+    let hair = retained(current.hair, HAIR, &hair_members).or_else(|| {
+        let offset = usize::from(female) * 4;
+        let default = record
+            .get_all(DNAM)
+            .last()
+            .map(|sub| u32::from_le_bytes(sub.data[offset..offset + 4].try_into().unwrap()))
+            .unwrap_or(0);
+        if default != 0 {
+            // The native DNAM branch does not revalidate membership or flags.
+            return existing_part(order, rr.plugin.to_global(FormId(default)), HAIR);
+        }
+        hair_members.into_iter().find(|id| {
+            part_flags(order, *id, HAIR)
+                .is_some_and(|flags| flags & 1 != 0 && sex_allowed(flags, female))
+        })
+    });
+    let eyes = retained(current.eyes, EYES, &eye_members).or_else(|| {
+        eye_members
+            .first()
+            .and_then(|id| existing_part(order, *id, EYES))
+    });
+    Some(PartSelection { hair, eyes })
+}
+
+fn existing_part(order: &LoadOrder, id: FormId, kind: FourCC) -> Option<FormId> {
+    (id.0 != 0
+        && order
+            .get(id)
+            .is_some_and(|rr| rr.entry.header.kind == kind && !rr.entry.header.is_deleted()))
+    .then_some(id)
+}
+
+fn part_flags(order: &LoadOrder, id: FormId, kind: FourCC) -> Option<u8> {
+    existing_part(order, id, kind)?;
+    let record = order.get(id)?.record().ok()?;
+    record.get(DATA)?.data.first().copied()
+}
+
+fn sex_allowed(flags: u8, female: bool) -> bool {
+    flags & if female { 4 } else { 2 } == 0
+}
+
+fn ordered_forms(
+    order: &LoadOrder,
+    rr: RecordRef<'_>,
+    record: &Record,
+    kind: FourCC,
+    part_type: FourCC,
+) -> Vec<FormId> {
+    let mut seen = HashSet::new();
+    record
+        .get_all(kind)
+        .filter(|sub| !sub.data.is_empty() && sub.data.len() % 4 == 0)
+        .flat_map(|sub| {
+            sub.data.chunks_exact(4).map(|bytes| {
+                let raw = FormId(u32::from_le_bytes(bytes.try_into().unwrap()));
+                if raw.0 == 0 {
+                    raw
+                } else {
+                    rr.plugin.to_global(raw)
+                }
+            })
+        })
+        // 00610cd0 omits unresolved/wrong-type entries; 00613810/00613910
+        // append only the first instance of each resolved form.
+        .filter(|id| existing_part(order, *id, part_type).is_some() && seen.insert(*id))
+        .collect()
 }
 
 /// Races whose `DATA` runtime flags at byte 32 have bit 0 set:
@@ -120,7 +229,7 @@ mod tests {
     use esm::{FormId, LoadOrder, Plugin};
     use testdata::{group, record, sub, zstr};
 
-    use super::{eyes, hair, races};
+    use super::{eyes, hair, races, reconcile_parts, PartSelection};
 
     fn plugin(masters: &[&str], groups: &[(&[u8; 4], Vec<u8>)]) -> Plugin {
         let mut header = 1.34f32.to_le_bytes().to_vec();
@@ -144,6 +253,16 @@ mod tests {
     }
 
     fn race(id: u32, runtime_flags: u32, hair_ids: &[u32], eye_ids: &[u32]) -> Vec<u8> {
+        race_defaults(id, runtime_flags, hair_ids, eye_ids, None)
+    }
+
+    fn race_defaults(
+        id: u32,
+        runtime_flags: u32,
+        hair_ids: &[u32],
+        eye_ids: &[u32],
+        defaults: Option<[u32; 2]>,
+    ) -> Vec<u8> {
         let mut data = vec![0; 36];
         data[32..36].copy_from_slice(&runtime_flags.to_le_bytes());
         let mut fields = sub(b"FULL", &zstr("Race"));
@@ -155,6 +274,15 @@ mod tests {
         if !eye_ids.is_empty() {
             let ids: Vec<u8> = eye_ids.iter().flat_map(|id| id.to_le_bytes()).collect();
             fields.extend(sub(b"ENAM", &ids));
+        }
+        if let Some(defaults) = defaults {
+            fields.extend(sub(
+                b"DNAM",
+                &defaults
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            ));
         }
         record(b"RACE", id, &fields)
     }
@@ -183,6 +311,186 @@ mod tests {
             })
             .collect();
         LoadOrder::single("Test.esm", None, plugin(&[], &groups)).unwrap()
+    }
+
+    #[test]
+    fn reconciliation_retains_nonplayable_members_and_uses_sex_specific_defaults() {
+        let order = one_plugin(&[
+            (
+                b"RACE",
+                race_defaults(0x800, 1, &[0x810], &[0x820, 0x821], Some([0x811, 0x812])),
+            ),
+            (b"HAIR", part(b"HAIR", 0x810, Some(4), None)), // male, not playable
+            (b"HAIR", part(b"HAIR", 0x811, Some(0), None)),
+            (b"HAIR", part(b"HAIR", 0x812, Some(7), None)), // default deliberately not selectable
+            (b"EYES", part(b"EYES", 0x820, Some(7), None)), // first fallback ignores flags
+            (b"EYES", part(b"EYES", 0x821, Some(4), None)), // male, not playable
+        ]);
+        let current = PartSelection {
+            hair: Some(FormId(0x810)),
+            eyes: Some(FormId(0x821)),
+        };
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), false, current),
+            Some(current)
+        );
+        assert!(hair(&order, FormId(0x800), false).is_empty());
+        assert!(eyes(&order, FormId(0x800), false).is_empty());
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), true, current),
+            Some(PartSelection {
+                hair: Some(FormId(0x812)),
+                eyes: Some(FormId(0x820)),
+            })
+        );
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), false, PartSelection::default())
+                .unwrap()
+                .hair,
+            Some(FormId(0x811))
+        );
+    }
+
+    #[test]
+    fn absent_default_scans_race_hair_order_instead_of_global_choice_order() {
+        let order = one_plugin(&[
+            (
+                b"RACE",
+                race(0x800, 1, &[0x812, 0x813, 0x811, 0x810], &[0x821, 0x820]),
+            ),
+            (b"HAIR", part(b"HAIR", 0x810, Some(1), None)),
+            (b"HAIR", part(b"HAIR", 0x811, Some(1), None)),
+            (b"HAIR", part(b"HAIR", 0x812, Some(0), None)),
+            (b"HAIR", part(b"HAIR", 0x813, Some(3), None)),
+            (b"EYES", part(b"EYES", 0x820, Some(1), None)),
+            (b"EYES", part(b"EYES", 0x821, Some(0), None)),
+        ]);
+        assert_eq!(hair(&order, FormId(0x800), false)[0].form, FormId(0x810));
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), false, PartSelection::default()),
+            Some(PartSelection {
+                hair: Some(FormId(0x811)),
+                eyes: Some(FormId(0x821)),
+            })
+        );
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), true, PartSelection::default())
+                .unwrap()
+                .hair,
+            Some(FormId(0x813))
+        );
+    }
+
+    #[test]
+    fn unresolved_list_entries_are_omitted_but_bad_default_does_not_invent_hair() {
+        let order = one_plugin(&[
+            (
+                b"RACE",
+                race_defaults(0x800, 1, &[0x810], &[0x999, 0x820], Some([0x999, 0x999])),
+            ),
+            (b"RACE", race(0x801, 1, &[0, 0x810], &[0, 0x820])),
+            (b"RACE", deleted(race(0x802, 1, &[0x810], &[0x820]))),
+            (b"HAIR", part(b"HAIR", 0x810, Some(1), None)),
+            (b"EYES", part(b"EYES", 0x820, Some(1), None)),
+        ]);
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x800), false, PartSelection::default()),
+            Some(PartSelection {
+                hair: None,
+                eyes: Some(FormId(0x820))
+            })
+        );
+        assert_eq!(
+            reconcile_parts(&order, FormId(0x801), false, PartSelection::default()),
+            Some(PartSelection {
+                hair: Some(FormId(0x810)),
+                eyes: Some(FormId(0x820))
+            })
+        );
+        for race in [0x802, 0x999, 0x810] {
+            assert_eq!(
+                reconcile_parts(&order, FormId(race), false, PartSelection::default()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_valid_default_fields_use_the_last_pair() {
+        let mut fields = sub(
+            b"DNAM",
+            &[0x810u32.to_le_bytes(), 0x810u32.to_le_bytes()].concat(),
+        );
+        fields.extend(sub(
+            b"DNAM",
+            &[0x811u32.to_le_bytes(), 0x812u32.to_le_bytes()].concat(),
+        ));
+        let order = one_plugin(&[
+            (b"RACE", record(b"RACE", 0x800, &fields)),
+            (b"HAIR", part(b"HAIR", 0x810, Some(1), None)),
+            (b"HAIR", part(b"HAIR", 0x811, Some(1), None)),
+            (b"HAIR", part(b"HAIR", 0x812, Some(1), None)),
+        ]);
+        for (female, expected) in [(false, 0x811), (true, 0x812)] {
+            assert_eq!(
+                reconcile_parts(&order, FormId(0x800), female, PartSelection::default())
+                    .unwrap()
+                    .hair,
+                Some(FormId(expected))
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_defaults_are_explicitly_unsupported() {
+        for bytes in [vec![0; 4], vec![0; 9]] {
+            let order = one_plugin(&[(b"RACE", record(b"RACE", 0x800, &sub(b"DNAM", &bytes)))]);
+            assert_eq!(
+                reconcile_parts(&order, FormId(0x800), false, PartSelection::default()),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn reconciled_defaults_and_ordered_lists_use_the_race_owner_mapping() {
+        let a = plugin(&[], &[(b"RACE", race(0x800, 1, &[], &[]))]);
+        let b = plugin(
+            &[],
+            &[
+                (
+                    b"HAIR",
+                    [
+                        part(b"HAIR", 0x810, Some(1), None),
+                        part(b"HAIR", 0x811, Some(1), None),
+                    ]
+                    .concat(),
+                ),
+                (b"EYES", part(b"EYES", 0x820, Some(0), None)),
+            ],
+        );
+        let patch = plugin(
+            &["B.esm", "A.esm"],
+            &[(
+                b"RACE",
+                race_defaults(0x0100_0800, 1, &[0x811, 0x810], &[0x820], Some([0x810, 0])),
+            )],
+        );
+        let order = LoadOrder::from_plugins(vec![
+            ("A.esm".into(), None, a),
+            ("B.esm".into(), None, b),
+            ("Patch.esp".into(), None, patch),
+        ])
+        .unwrap();
+        for (female, hair) in [(false, 0x0100_0810), (true, 0x0100_0811)] {
+            assert_eq!(
+                reconcile_parts(&order, FormId(0x800), female, PartSelection::default()),
+                Some(PartSelection {
+                    hair: Some(FormId(hair)),
+                    eyes: Some(FormId(0x0100_0820))
+                })
+            );
+        }
     }
 
     #[test]

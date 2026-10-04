@@ -1,5 +1,55 @@
 # Face creation: M1 working evidence
 
+## Race/sex part reconciliation, 2026-10-04
+
+Implemented `appearance::reconcile_parts` and `PartSelection`, as core
+groundwork; the viewer face editor remains unimplemented and auto-accepts.
+No gameplay integration or original-game fallback comparison is claimed.
+
+Ghidra `007b1ca0` retains hair/eyes when the selected race contains the part
+and its sex flags permit it (`005fdfa0`, `005fc5f0`). These predicates do not
+require the playable bit. Invalid hair first uses the selected sex's RACE
+DNAM slot (`00613870`, race+0x94+sex*4; loader `00610cd0`, setter `00613890`).
+Only a zero slot scans the race's HNAM list for the first playable,
+sex-compatible hair. This corrects the older note's global-list inference:
+assembly shows `004ac110 -> 0045bb80`, the race's list at+0x8c. A nonzero
+authored default does not recheck membership, playable or sex restrictions.
+Invalid eyes use the first loaded race ENAM entry (`007b1e50`, +0xa8),
+without playable/sex filtering. The visible choices retain their stricter
+filters and independently unresolved display order.
+
+The loader skips malformed non-multiple-of-four lists, omits unresolved or
+wrong-type entries, then deduplicates and appends resolved forms in source
+order (`00613810`/`00613910`). Reconciliation respects owner-plugin FormID
+mapping and winning/deleted records. Malformed DNAM is explicitly unsupported:
+the native fixed-eight-byte reader's malformed-input behavior is not traced.
+Unresolved nonzero default hair fails closed; native fixup semantics for
+that invalid data are not claimed.
+
+Installed official data gives these authored defaults (male/female hair):
+African American `000306BE`/`0005DC78`, Asian `00014B90`/`00022E50`, Hispanic
+`000A9D6F`/`0005DC76`, Caucasian `00014B90`/`0005DC6B`. All four have Blue
+`00004253` first in ENAM. These are data observations, not a native UI replay.
+
+Six generated regressions cover compatible non-playable retention, sex changes,
+unfiltered defaults, HNAM order versus global choice order, first loaded
+ENAM, unresolved list entries/defaults, malformed DNAM, and reordered-master
+mapping, and last-pair-wins duplicate DNAM. Core919/viewer84 tests, both
+clippy and formatting checks, and both release builds pass on
+`codex/m1-native-appearance`. Installed-data new-game smoke reached the
+situp/bedsit camera idles and Doc's opening speech, then exited after its
+inspected screenshot; stderr contained Vulkan present-mode warnings only.
+This is a startup regression check, not face-menu acceptance. A private
+implementation harness passed all eight official race/sex cases and retained
+each returned selection unchanged; `appearance/implementation-check/run.log`.
+Private evidence and hashes:
+`nv-re/work/m1-overnight-2026-10-04/appearance/{FINDINGS.md,provenance.json}`.
+Analysis executable 1.4.0.525 SHA256:
+`19406942E48724D797300C4EA6BE9AC69A32F670B8C35DB09279A2258422739F`.
+Next: persistent editable appearance and native preview/menu callbacks.
+
+## Earlier evidence
+
 Original-game reference inspected 2026-10-03 after the user opened ShowRaceMenu:
 the Reflectron cabinet fills most of the view, oval live head/upper-body preview
 on the left, green sex-selection screen on the right (Male selected, Female,
@@ -39,9 +89,8 @@ Choice rules traced so far:
   same meanings.005fdcb0 (hair) and005fc220 (eyes) each copy the single
   DATA byte into those fields.00610cd0 copies36-byte RACE DATA to+50;
   HNAM and ENAM are mapped form arrays, skipped unless length is divisible4.
-- Changing race/sex validates current hair/eyes in007b1ca0; a race default
-  hair is considered before scanning playable sex-compatible hair. Exact
-  defaults and eye fallback still need tracing.
+- Changing race/sex validates current hair/eyes in007b1ca0; the defaults,
+  ordered race-owned fallback and eye fallback are now traced above.
 
 Existing infrastructure: actor::ActorLook and Face hold assembled models
 and symmetric/asymmetric morphs; Game::actor_scene builds their meshes.
