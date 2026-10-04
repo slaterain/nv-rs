@@ -578,6 +578,7 @@ fn restore_script_state(state: &mut GameState, cells: &mut CellScripts, loaded: 
 
 /// Prepare the destination before changing the running world. A missing cell
 /// or worldspace must not leave old geometry with a different quest state.
+#[allow(clippy::too_many_arguments)]
 fn load_saved_world(
     game: &cellview::Game,
     state: &mut GameState,
@@ -585,9 +586,20 @@ fn load_saved_world(
     idle: &mut crate::player_idle::PlayerIdle,
     pending: &mut crate::PendingScene,
     exterior: &mut crate::exterior::PendingExterior,
+    seats: &mut crate::sitting::Seats,
+    start_pitch: &mut crate::StartPitch,
     text: &str,
 ) -> Result<bool, String> {
     let (loaded, place) = world::save::load(text)?;
+    if loaded.saved_camera.is_some() && place.is_none() {
+        return Err("saved camera has no player location".into());
+    }
+    let restored_idle =
+        crate::player_idle::PlayerIdle::restore(game, seats, loaded.saved_camera.as_ref())?;
+    let pitch = loaded
+        .saved_camera
+        .as_ref()
+        .map_or(0.0, |camera| camera.pitch);
     let mut scene = None;
     let mut outside = None;
     if let Some(place) = place {
@@ -616,14 +628,30 @@ fn load_saved_world(
         }
     }
     restore_script_state(state, cells, loaded);
-    *idle = crate::player_idle::PlayerIdle::default();
+    *idle = restored_idle;
+    if place.is_some() {
+        start_pitch.0 = pitch;
+    }
     pending.0 = scene;
     exterior.0 = outside;
     Ok(place.is_some())
 }
 
-/// F5 saves the game (its state and where the player stands); F9 loads
-/// the last save and puts the player back there.
+/// Serialize current presentation without changing the live state's metadata.
+fn save_camera(
+    path: &str,
+    state: &mut GameState,
+    place: Option<world::save::PlayerPlace>,
+    camera: world::save::camera::Camera,
+) -> Result<(), String> {
+    let previous = std::mem::replace(&mut state.saved_camera, place.map(|_| camera));
+    let result = world::save::save_to_path(std::path::Path::new(path), state, place)
+        .map_err(|e| e.to_string());
+    state.saved_camera = previous;
+    result
+}
+
+/// F5 saves the game; F9 prepares and restores its state and destination.
 #[allow(clippy::too_many_arguments)]
 pub fn save_and_load(
     keys: Res<ButtonInput<KeyCode>>,
@@ -637,6 +665,8 @@ pub fn save_and_load(
     player: Res<crate::walk::Player>,
     mut player_idle: ResMut<crate::player_idle::PlayerIdle>,
     mut cell_scripts: ResMut<CellScripts>,
+    mut seats: ResMut<crate::sitting::Seats>,
+    mut start_pitch: ResMut<crate::StartPitch>,
 ) {
     let now = time.elapsed_secs();
     let mut say = |text: String| {
@@ -658,7 +688,13 @@ pub fn save_and_load(
                 },
             })
         });
-        match world::save::save_to_path(std::path::Path::new(QUICKSAVE), &state.0, place) {
+        let result = player_idle
+            .snapshot(
+                &seats,
+                cameras.single().map_or(0.0, |(_, input)| input.pitch),
+            )
+            .and_then(|camera| save_camera(QUICKSAVE, &mut state.0, place, camera));
+        match result {
             Ok(()) => say(format!("Saved ({QUICKSAVE}).")),
             Err(e) => say(format!("Couldn't save: {e}")),
         }
@@ -674,6 +710,8 @@ pub fn save_and_load(
                     &mut player_idle,
                     &mut pending,
                     &mut pending_exterior,
+                    &mut seats,
+                    &mut start_pitch,
                     &text,
                 )
             });
@@ -737,6 +775,7 @@ pub struct HereNow<'w> {
     /// The game's own menus open (their classes), for `MenuMode` blocks.
     menu_draw: Res<'w, crate::game_menus::MenuDraw>,
     player_idle: ResMut<'w, crate::player_idle::PlayerIdle>,
+    seats: Res<'w, crate::sitting::Seats>,
     object_bounds: Option<Res<'w, ObjectBounds>>,
 }
 
@@ -782,6 +821,7 @@ pub fn run_scripts(
         mut virtual_time,
         menu_draw,
         mut player_idle,
+        seats,
         object_bounds,
     } = here_now;
     let order = &game.0.order;
@@ -961,6 +1001,7 @@ pub fn run_scripts(
     // Menus scripts opened. None are drawn yet: each counts as opened and
     // closed at once, with nothing changed, so its MenuMode blocks run once.
     let mut menus = Vec::new();
+    let mut save_requests = Vec::new();
     for event in std::mem::take(&mut state.events) {
         let name = |id: FormId| {
             order
@@ -1256,16 +1297,7 @@ pub fn run_scripts(
                             world::more_functions::SaveKind::Force => "nv-rs-forcesave.txt",
                             world::more_functions::SaveKind::System => "nv-rs-systemsave.txt",
                         };
-                        let place = state.player_cell.map(|cell| world::save::PlayerPlace {
-                            cell,
-                            world: state.player_world,
-                            position: feet,
-                            heading,
-                        });
-                        match world::save::save_to_path(std::path::Path::new(file), state, place) {
-                            Ok(()) => println!("Saved ({file})."),
-                            Err(e) => println!("Couldn't save {file}: {e}"),
-                        }
+                        save_requests.push(file);
                     }
                     // Everything runs at the multiplier's speed.
                     world::more_functions::Shown::TimeMultiplier(m) => {
@@ -1278,6 +1310,27 @@ pub fn run_scripts(
         };
         if let Some(n) = notice {
             announce(n, &mut notices);
+        }
+    }
+    // Script execution has already mutated GameState. Dispatch every pending
+    // idle request before snapshotting, so its corresponding presentation
+    // queue cannot be lost merely because Save appeared earlier in events.
+    for file in save_requests {
+        let place = state.player_cell.map(|cell| world::save::PlayerPlace {
+            cell,
+            world: state.player_world,
+            position: feet,
+            heading,
+        });
+        let result = player_idle
+            .snapshot(
+                &seats,
+                cameras.single().map_or(0.0, |(_, input)| input.pitch),
+            )
+            .and_then(|camera| save_camera(file, state, place, camera));
+        match result {
+            Ok(()) => println!("Saved ({file})."),
+            Err(e) => println!("Couldn't save {file}: {e}"),
         }
     }
     for menu in menus {
@@ -1396,6 +1449,8 @@ mod tests {
         idle.requests.push(FormId(42));
         let mut pending = crate::PendingScene(None);
         let mut exterior = crate::exterior::PendingExterior::default();
+        let mut seats = crate::sitting::Seats::new(&game.order);
+        let mut pitch = crate::StartPitch(0.5);
         for text in [
             "not a save",
             "nv-rs save 1\nstage 00104C1C 60\nplayer FFFFFFFF - 1 2 3 0\n",
@@ -1408,6 +1463,8 @@ mod tests {
                 &mut idle,
                 &mut pending,
                 &mut exterior,
+                &mut seats,
+                &mut pitch,
                 text
             )
             .is_err());
@@ -1416,6 +1473,7 @@ mod tests {
             assert_eq!(idle.requests, [FormId(42)]);
             assert!(pending.0.is_none());
             assert!(exterior.0.is_none());
+            assert_eq!(pitch.0, 0.5);
         }
         let saved_place = world::save::PlayerPlace {
             cell: FormId(testdata::functions::ids::HOUSE),
@@ -1432,15 +1490,70 @@ mod tests {
             &mut idle,
             &mut pending,
             &mut exterior,
+            &mut seats,
+            &mut pitch,
             &world::save::save(&loaded, Some(saved_place))
         )
         .unwrap());
         assert_eq!(state.stages[&FormId(0x104c1c)], 60);
         assert!(cells.seat.is_none());
         assert!(idle.requests.is_empty());
+        assert_eq!(pitch.0, 0.0);
         let start = &pending.0.as_ref().unwrap().start;
         assert_eq!(start.eye, [10.0, 20.0, 30.0 + cellview::EYE_HEIGHT]);
         assert_eq!(start.heading, 1.25);
+
+        let camera = world::save::camera::Camera {
+            animation: None,
+            requests: vec![FormId(71), FormId(72)],
+            npc_requests: [(FormId(80), FormId(81))].into(),
+            package: Some(FormId(90)),
+            hand_follow: 0.875,
+            pitch: -0.25,
+        };
+        loaded.saved_camera = Some(camera.clone());
+        load_saved_world(
+            &game,
+            &mut state,
+            &mut cells,
+            &mut idle,
+            &mut pending,
+            &mut exterior,
+            &mut seats,
+            &mut pitch,
+            &world::save::save(&loaded, Some(saved_place)),
+        )
+        .unwrap();
+        assert_eq!(pitch.0, camera.pitch);
+        assert_eq!(idle.snapshot(&seats, pitch.0).unwrap(), camera);
+
+        // A save with an unavailable skeleton must not clear the restored
+        // requests, pitch, quest state or already prepared destination.
+        let before = world::save::save(&state, None);
+        loaded.stages.insert(FormId(0x104c1c), 99);
+        loaded.saved_camera.as_mut().unwrap().animation = Some(
+            world::animation::Player::default()
+                .snapshot(&[], |_| None)
+                .unwrap(),
+        );
+        assert!(load_saved_world(
+            &game,
+            &mut state,
+            &mut cells,
+            &mut idle,
+            &mut pending,
+            &mut exterior,
+            &mut seats,
+            &mut pitch,
+            &world::save::save(&loaded, Some(saved_place)),
+        )
+        .is_err());
+        assert_eq!(world::save::save(&state, None), before);
+        assert_eq!(idle.snapshot(&seats, pitch.0).unwrap(), camera);
+        assert_eq!(
+            pending.0.as_ref().unwrap().start.heading,
+            saved_place.heading
+        );
     }
 
     #[test]

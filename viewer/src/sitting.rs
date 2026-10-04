@@ -58,6 +58,17 @@ impl Seats {
         load(game, &mut self.sequences, model)
     }
 
+    /// Keep the same cached Arc on reload: special-idle request rejection
+    /// compares sequence identity, not just its embedded display name.
+    pub fn sequence_path(&self, sequence: &Arc<nif::Sequence>) -> Option<String> {
+        self.sequences.iter().find_map(|(path, cached)| {
+            cached
+                .as_ref()
+                .filter(|other| Arc::ptr_eq(sequence, other))
+                .map(|_| path.clone())
+        })
+    }
+
     /// A piece of furniture's markers (by its base), read once.
     fn markers(&mut self, game: &cellview::Game, base: FormId) -> Arc<Vec<nif::FurnitureMarker>> {
         self.markers

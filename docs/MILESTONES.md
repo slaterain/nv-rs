@@ -69,9 +69,16 @@ Outstanding M1 gates:
 - SPECIAL's remaining visual/input fidelity and progression comparison
   ([VIGOR.md](VIGOR.md)); general idle callbacks remain partial.
 
-Next action: finish appearance PR,
-then connect persistent appearance to the native preview/menu work. Gaze cap
-initialization remains under private investigation. Do not repeat the established
+Camera persistence now passes 925 core/85 viewer tests and both workspaces'
+checks/releases, 20 installed-clip continuation cases, live F5/F9 and
+fresh-process camera restoration. NPC animations and dialogue continuation
+are still missing. No camera build published yet.
+
+Next action: submit the verified camera batch on
+`codex/m1-camera-persistence` after appearance PR #6 checks pass. See
+[PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
+constructors are now identified; runtime configuration and original comparison
+remain unverified. Do not repeat the established
 package-look lock or tester activation fixes.
 
 ## Deferred

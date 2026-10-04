@@ -104,6 +104,22 @@ the seated body-turn guard in `viewer/src/ai.rs` must remain intact.
 
 ## Evidence locations
 
+Follow-up, 2026-10-04: `00c755e0` caps a relative quaternion per invocation
+(no delta time in this helper). Constructors `00fbd100` and `00fbd130`
+register `fAngleMax:LookIK` default 3.5 at `01267d24` and
+`fAngleMaxEase:LookIK` default 1.0 at `01267d30`. Controller byte `+0xb2`
+selects the value; multiplication by 0.0174533 converts degrees to radians.
+These are constructor defaults, not verified post-INI runtime values.
+`005611c0`/`005611e0` normalize the quaternion using four-component norm
+and reciprocal square root refinement, with a zero guard. The mode0 call
+updates `+0x181` and feedback metrics; it is not merely an inert cache.
+Mode1 selects the `+0x144` node and caches quaternion `+0x170..+0x17c`.
+The precise `+0x110`/`+0xf6` setup, transform conventions and original-game
+comparison still block a faithful runtime port. Private evidence and 38-file
+hash manifest: nv-re/work/m1-overnight-2026-10-04/gaze/. Unpacked executable
+1.4.0.525 SHA256
+`19406942E48724D797300C4EA6BE9AC69A32F670B8C35DB09279A2258422739F`.
+
 Decompilation and disassembly: `%USERPROFILE%\\nv-re\\decomp\\codex-m1`
 (`008a3100`, `008a3b70`, `00c7f060`, `00c7d630`, `00c7aa60`, `00c78160`,
 `00c7f840`, `00c78610`). Opening route and package evidence:

@@ -40,6 +40,58 @@ impl Default for PlayerIdle {
 }
 
 impl PlayerIdle {
+    pub fn snapshot(
+        &self,
+        seats: &crate::sitting::Seats,
+        pitch: f32,
+    ) -> Result<world::save::camera::Camera, String> {
+        if !pitch.is_finite() || !self.hand_follow.is_finite() {
+            return Err("non-finite player camera state".into());
+        }
+        let animation = if self.animation.is_empty() {
+            None
+        } else {
+            Some(
+                self.animation
+                    .snapshot(&self.bones, |sequence| seats.sequence_path(sequence))
+                    .map_err(|e| format!("player camera snapshot: {e:?}"))?,
+            )
+        };
+        Ok(world::save::camera::Camera {
+            animation,
+            requests: self.requests.clone(),
+            npc_requests: self.npc_requests.iter().map(|(&a, &b)| (a, b)).collect(),
+            package: self.package,
+            hand_follow: self.hand_follow,
+            pitch,
+        })
+    }
+
+    /// Prepare all assets before F9 commits any running world resources.
+    pub fn restore(
+        game: &cellview::Game,
+        seats: &mut crate::sitting::Seats,
+        saved: Option<&world::save::camera::Camera>,
+    ) -> Result<Self, String> {
+        let Some(saved) = saved else {
+            return Ok(Self::default());
+        };
+        let mut idle = Self::default();
+        if let Some(animation) = &saved.animation {
+            if !idle.load(game) {
+                return Err("saved player camera skeleton is unavailable".into());
+            }
+            idle.animation = animation
+                .restore(&idle.bones, |path| seats.sequence(game, path))
+                .map_err(|e| format!("saved player camera: {e:?}"))?;
+        }
+        idle.requests.clone_from(&saved.requests);
+        idle.npc_requests = saved.npc_requests.iter().map(|(&a, &b)| (a, b)).collect();
+        idle.package = saved.package;
+        idle.hand_follow = saved.hand_follow;
+        Ok(idle)
+    }
+
     fn load(&mut self, game: &cellview::Game) -> bool {
         if self.camera.is_some() && self.looking.is_some() {
             return true;
@@ -97,9 +149,8 @@ pub fn animate(
     mut seats: ResMut<crate::sitting::Seats>,
     mut cameras: Query<(&mut Transform, &FlyCamera)>,
 ) {
-    // Removing the scripted package releases the view. The load path resets
-    // this resource too. Restoring an in-progress animation from a save is
-    // not implemented yet.
+    // Removing the scripted package releases the view. F9 restores the
+    // cached package together with the clocks, including a pending release.
     let package = state.0.script_packages.get(&PLAYER_REF).copied();
     if idle.package.is_some() && package.is_none() {
         idle.animation.free_special_idle();

@@ -35,6 +35,7 @@ use nif::Transform;
 use crate::scripting::{game_setting, Facts, GameState};
 
 pub mod camera;
+pub mod snapshot;
 
 /// The animation settings the rules read: `fAnimationDefaultBlend`
 /// (`[General]` in the INI, 0.2 built in) and `fAnimationMult` (1).
@@ -734,6 +735,14 @@ impl Player {
             .filter(|a| a.seq.is_some())
             .map(|a| (a.group, a.state))
             .collect()
+    }
+
+    /// Whether any sequence or frozen blend source remains active.
+    ///
+    /// Unlike [`Self::all`], this includes the source side of a
+    /// BlendFromPose transition, whose `seq` is intentionally absent.
+    pub fn is_empty(&self) -> bool {
+        self.active.is_empty()
     }
 
     /// Plays a group's sequence in its section as the game does

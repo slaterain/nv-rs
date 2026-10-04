@@ -398,6 +398,7 @@ pub fn skin_joints(data: &MeshData, joints: &[Entity]) -> Vec<Entity> {
 /// Deferred NPC PlayIdle requests (008ba600, process flag 0x80).
 /// Only loaded, unconditional leaf special idles are represented here.
 /// Trees/other groups need their own original dispatch, not a fallback.
+#[allow(clippy::too_many_arguments)]
 pub fn script_idles(
     mut requests: ResMut<crate::player_idle::PlayerIdle>,
     game: Res<crate::GameFiles>,
@@ -405,6 +406,8 @@ pub fn script_idles(
     mut seats: ResMut<crate::sitting::Seats>,
     settings: Res<AnimSettings>,
     menus: Res<crate::menus::Menus>,
+    pending: Res<crate::PendingScene>,
+    pending_exterior: Res<crate::exterior::PendingExterior>,
     mut actors: Query<(
         &crate::ai::Walker,
         &mut crate::sitting::Life,
@@ -412,7 +415,9 @@ pub fn script_idles(
         &Visibility,
     )>,
 ) {
-    if menus.is_open() {
+    // F9 installs its destination next Update. Keep restored requests until
+    // that scene exists, rather than applying them to the source cell.
+    if menus.is_open() || pending.0.is_some() || pending_exterior.0.is_some() {
         return;
     }
     for (who, requested) in std::mem::take(&mut requests.npc_requests) {
@@ -529,6 +534,53 @@ mod tests {
     use super::*;
     use nif::anim::{Motion, Sequence, Track};
 
+    #[test]
+    fn restored_requests_wait_for_the_destination_scene() {
+        let data = testdata::functions::functions("idle-load-order");
+        let game = cellview::Game::open(
+            data.path(),
+            &cellview::Options {
+                official: true,
+                ..default()
+            },
+        )
+        .unwrap();
+        let state = world::scripting::GameState::new(&game.order);
+        let scene = game
+            .load_cell_now(
+                esm::FormId(testdata::functions::ids::HOUSE),
+                &state.disabled,
+            )
+            .unwrap();
+        let mut idle = crate::player_idle::PlayerIdle::default();
+        idle.npc_requests.insert(esm::FormId(42), esm::FormId(43));
+        let mut app = App::new();
+        app.insert_resource(crate::sitting::Seats::new(&game.order));
+        app.insert_resource(crate::GameFiles(Arc::new(game)));
+        app.insert_resource(crate::dialogue::DialogueState(state));
+        app.insert_resource(idle);
+        app.insert_resource(AnimSettings(animation::Settings::default()));
+        app.insert_resource(crate::menus::Menus::default());
+        app.insert_resource(crate::PendingScene(Some(scene)));
+        app.insert_resource(crate::exterior::PendingExterior::default());
+        app.add_systems(Update, script_idles);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<crate::player_idle::PlayerIdle>()
+                .npc_requests
+                .len(),
+            1
+        );
+        // Only after destination installation may dispatch consume the request.
+        app.world_mut().resource_mut::<crate::PendingScene>().0 = None;
+        app.update();
+        assert!(app
+            .world()
+            .resource::<crate::player_idle::PlayerIdle>()
+            .npc_requests
+            .is_empty());
+    }
     #[test]
     fn a_dropped_weapon_shrinks_its_bone_away() {
         let bone = |name: &str, parent| nif::Bone {

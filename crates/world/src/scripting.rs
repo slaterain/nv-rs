@@ -213,6 +213,10 @@ const MAX_DEPTH: u8 = 16;
 /// "start game enabled" ones running, globals at their records' values.
 #[derive(Debug, Clone, Default)]
 pub struct GameState {
+    /// Optional presentation continuation in the custom save format. The
+    /// viewer refreshes this from live state when saving; simulation does
+    /// not use it as the player's physical position or aim.
+    pub saved_camera: Option<crate::save::camera::Camera>,
     /// Each quest's current stage (the highest set so far).
     pub stages: HashMap<FormId, u16>,
     /// Every (quest, stage) set so far.

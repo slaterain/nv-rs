@@ -12,6 +12,8 @@ use script::VarKind;
 
 use crate::scripting::GameState;
 
+pub mod camera;
+
 const HEADER: &str = "nv-rs save 1";
 
 /// Replace a custom nv-rs save only after its complete contents reach disk.
@@ -107,6 +109,9 @@ pub fn save(state: &GameState, player: Option<PlayerPlace>) -> String {
         out.push('\n');
     };
     line(HEADER.to_string());
+    if let Some(camera) = &state.saved_camera {
+        line(format!("camera {}", camera::encode(camera)));
+    }
     if let Some(p) = player {
         line(format!(
             "player {} {} {} {} {} {}",
@@ -410,6 +415,12 @@ pub fn load(text: &str) -> Result<(GameState, Option<PlayerPlace>), String> {
             continue;
         };
         match word {
+            "camera" => {
+                if parts.len() != 2 || state.saved_camera.is_some() {
+                    return Err(bad());
+                }
+                state.saved_camera = Some(camera::decode(parts[1])?);
+            }
             "player" => {
                 player = Some(PlayerPlace {
                     cell: form(1)?,
