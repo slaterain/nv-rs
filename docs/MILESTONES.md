@@ -52,6 +52,8 @@ core face-editor groundwork, with six regressions and eight official-data
 cases. 919 core / 84 viewer tests, both workspaces' checks/releases and the
 installed-data opening smoke pass on `codex/m1-native-appearance`. The face
 menu still auto-accepts.
+Merged as `843926d` through PR #6 after both GitHub checks passed; verified
+appearance build installed in play/app. No new face UI is exposed.
 
 The bounded gamedb evaluation silently missed the central look-lock function
 in a four-export probe. Full indexing is deferred; source snapshots, hashes,
@@ -74,11 +76,12 @@ checks/releases, 20 installed-clip continuation cases, live F5/F9 and
 fresh-process camera restoration. NPC animations and dialogue continuation
 are still missing. No camera build published yet.
 
-Appearance PR #6 merged as `843926d` and its verified build is in play/app.
-Camera PR #7 exposed a pre-existing parallel fixture collision; unique
-fixture directories and a deterministic regression fix it.
-Next action: pass CI on the amended camera PR #7, then merge and publish.
-See
+Camera PR #7 (`5b3ec14`) exposed a pre-existing parallel fixture collision;
+unique fixture directories and a deterministic regression fix it. Its amended
+CI is running. Active bounded research on `codex/m1-face-menu-research`
+traces native RaceSexMenu page/slider callbacks before replacing auto-accept.
+See [FACE_CREATION.md](FACE_CREATION.md). Next action: finish camera PR #7
+when both amended checks pass, then publish its verified build. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison
 remain unverified. Do not repeat the established

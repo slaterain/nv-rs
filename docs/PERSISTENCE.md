@@ -2,7 +2,8 @@
 
 ## Camera continuation, 2026-10-04
 
-Active branch `codex/m1-camera-persistence`, based on appearance PR #6.
+Camera branch `codex/m1-camera-persistence`, PR #7 at `00876d6`, rebased on
+merged appearance PR #6 (`843926d`). The rebase tree matches tested `ca32a67`.
 The next bounded batch captures first-person special-idle clocks, frozen
 blend poses, loop counters, package cache, pending requests, hand-follow and
 view pitch in the custom save. It does not infer an animation from quest stage
@@ -13,10 +14,10 @@ Changed files: animation.rs and animation/snapshot.rs; save.rs and
 save/camera.rs; scripting.rs; viewer player_idle.rs, sitting.rs, scripts.rs
 and actors.rs. Implementation and local checks are complete; no camera
 build is published yet. All test viewer processes have exited.
-Private design and eventual checks: nv-re/work/m1-overnight-2026-10-04/
-camera-persistence. PR #6 checks are running separately; play/app remains
-the verified PR #5 binary. Exact next action: submit the camera batch through
-a checked PR after appearance PR #6, then publish its verified binary.
+Private design and checks: nv-re/work/m1-overnight-2026-10-04/
+camera-persistence. PR #7 checks are running; play/app contains the verified
+PR #6 binary. Exact next action: merge camera PR #7 after its checks pass,
+then publish its verified binary. Face-menu research proceeds independently.
 
 Implemented camera state is a versioned, bounded hex payload on one `camera`
 line. Saves without that line still load; older viewers will reject the new

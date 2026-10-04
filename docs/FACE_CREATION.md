@@ -1,5 +1,23 @@
 # Face creation: M1 working evidence
 
+## Current research handoff
+
+Active branch `codex/m1-face-menu-research`, based on camera PR #7
+(`00876d6`, local checks/live camera verification complete; CI running).
+Appearance PR #6 merged as `843926d`; its verified binary is in play/app,
+SHA256 `9391A5176CD9A829B99642C9252EE945FC7E6BDB6E255A72E2DAC6750BA9FD98`.
+Saves/reports were preserved. Camera publication waits for its own merge.
+
+Parent reads existing `007adce0`/`007af180` click/page exports and installed
+XML. Bounded private agent trace owns `007b39e0` and immediate control
+construction helpers; no public runtime edits. Do not call the 20 constructed
+objects face sliders without confirming their type: setup also treats these
+as page/category lists. XML confirms separate list-item and slider templates.
+Private sources and forthcoming findings: nv-re/work/m1-overnight-2026-10-04/
+face-menu. No original-game menu comparison has succeeded this session.
+Next: label the exact native page graph, callback branches and initial state;
+then define a complete persistent appearance/preview batch from those facts.
+
 ## Race/sex part reconciliation, 2026-10-04
 
 Implemented `appearance::reconcile_parts` and `PartSelection`, as core
