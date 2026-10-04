@@ -90,8 +90,10 @@ Active branch `codex/m1-reload-update-order` fixes a separate old-AI/F9
 ordering hazard: root926/viewer90 tests, both workspaces' checks/releases and
 installed-data opening smoke pass. Native head/parent setup and recompute
 product are recorded; the full target-direction solve remains unresolved.
-Isolated SPECIAL allocation/closing passes; a prepared stage60/objective30
-fixture reaches stage65. Neither is full-route or original-game acceptance.
+SPECIAL allocation/closing passes. A new opening run with only the saved
+player position relocated at stage55 continued through Doc's reaction to
+stage80 and the couch objective. Full walking route, face UI and original-
+game comparison remain unverified; evidence is in [VIGOR.md](VIGOR.md).
 Next action: finish PR #8 after both checks pass and publish its verified build. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison

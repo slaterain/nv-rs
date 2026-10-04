@@ -192,12 +192,17 @@ menu; screenshot inspected, process exited, only known Vulkan warnings.
 Verified binary SHA256:
 `FDE1E2DF0E16B45E2AB3231D1BF57A2C96D4F3E8032C7A78957220EDBD6F2CB9`.
 Private logs, negative-control result and archived executable are under
-`reload-order/`. No agent, local build or test viewer remains active.
+`reload-order/`. No local build is active. A separate live acceptance viewer
+(PID33100, private `reload-order/live/`) reached stage80 after SPECIAL;
+details and relocation limitation are in [VIGOR.md](VIGOR.md).
 This addresses our schedule, not a new native behavior claim. Next action:
 submit after PR #8 merges, preserving the exact tested tree.
 
 NPC continuation assessment: an animation snapshot alone misses Sitter's
-entry/exit/root-motion clock and `Life.getting_up`. A future bounded interior
+entry/exit/root-motion clock, `Life.idles` and `Life.getting_up`. The current
+F5 phase also captures after AI clocks advance but before actor animation;
+coherent capture must address that phase boundary before adding NPC data.
+A future bounded interior
 batch must validate the destination actor skeleton and every active clip,
 then install by reference before AI. Named skeleton slots plus Seats paths
 can identify the existing Arcs without embedding assets. Arbitrary paths,

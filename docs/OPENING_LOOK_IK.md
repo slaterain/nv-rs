@@ -150,7 +150,13 @@ manifest are under `gaze/`; `SETUP_ASSEMBLY.md` records the exact calls and
 constants. A mode1 override must also be preserved: when the object pointer
 at `*(controller+0x2a4)+0x1c` is nonnull, its four-float values at+0x10 and
 +0x20 replace the derived parent and matched-node values respectively.
-The object's meaning remains unresolved.
+`00c7de60` creates that outer 0x30-byte wrapper only after successful setup,
+when controller+0x190 is enabled and the wrapper slot is null. It copies
+mode1's just-derived parent/matched vectors into wrapper+0x10/+0x20. Later
+setup reads those snapshots back. Wrapper+0 points to a separate 0x48-byte
+table object; its arrays are not the source of these two vectors. This is
+a runtime cache in the traced path; no authored data source was found.
+Other writers and actor-facing semantic names remain unresolved.
 
 The selected-node recompute path at `00c78c2a` calls `00c66320` with
 `conjugate(parent) * selected`, in xyzw order. A parent link of -1 instead
@@ -161,9 +167,9 @@ equals inverse-parent multiplication only for a unit parent quaternion.
 Mode-record+0x130 then optionally enables the previously traced limiter.
 This recompute product alone is not the complete target-to-head solver.
 
-`OUTPUT_COMPOSITION.md` and the now 79-entry private manifest include the
-fresh assembly and lane reads. Next: resolve the transform-buffer spaces
-and override object, then follow the target-direction contribution through
+`OUTPUT_COMPOSITION.md`, `OVERRIDE_SOURCE.md` and the now 92-entry private
+manifest include the fresh assembly and lane reads. Next: resolve the
+transform-buffer spaces and follow the target-direction contribution through
 the full solve before implementing or claiming original-game fidelity.
 
 Decompilation and disassembly: `%USERPROFILE%\\nv-re\\decomp\\codex-m1`

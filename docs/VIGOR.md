@@ -166,7 +166,19 @@ variable was0, so no subsequent Doc reaction was expected. This prepared
 fixture does not establish a natural route. Detailed private
 evidence: `nv-re/work/m1-overnight-2026-10-04/vigor-acceptance/RESULT.md`.
 
-Next: verify opening progression and compare
+An additional new-game run on `FDE1E2DF...CB9` reached stage55 through the
+opening scripts, then changed only the saved player position to the tester
+trigger. F9, the stage60 instruction, objective30, E activation, allocation
+and Done all worked. Doc delivered the Strength10 reaction (INFO00104BE4),
+continued the psych introduction, and reached stage80/objective40. F5
+preserved stage80 and Strength10; Doc began his chair-entry animation.
+This verifies continuation with the opening's real timer state, unlike the
+older fixture. The relocated position and auto-accepted face menu mean it
+is still not full-route acceptance. Private evidence: `reload-order/live/`
+under the same overnight directory (`stage55-natural.txt`,
+`stage55-relocated.txt`, `post-special.txt`, stdout/stderr).
+
+Next: continue the couch interaction and compare
 the original game's menu before claiming M1 acceptance. PC controls are
 implemented; controller inputs and replacement models with embedded lights
 remain unsupported.
