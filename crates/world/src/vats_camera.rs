@@ -1,5 +1,5 @@
 //! V.A.T.S.'s camera shots, read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\vats_camera_menu.md`) and records: the
+//! (`%USERPROFILE%\nv-re\findings\vats_camera_menu.md`) and records: the
 //! camera paths (`CPTH`) that pick which shots play for an attack, and the
 //! shots (`CAMS`) themselves.
 //!
@@ -219,7 +219,7 @@ impl CameraPath {
         })
     }
 
-    /// The zoom the path asks for (`009c7240` → `DAT_011f21c8`): 0 default,
+    /// The zoom the path asks for (`009c7240` → `[011f21c8]`): 0 default,
     /// 1 disable, 2 shot list (`0058b4a0`, `0058b4d0`, `0058b4f0`).
     pub fn zoom_mode(&self) -> u8 {
         if self.zoom & zoom::DISABLE != 0 {

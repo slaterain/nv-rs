@@ -412,7 +412,7 @@ impl Ui {
     /// Instances a template of `menu` under `parent` (`00a1ddb0`; the name
     /// as written, case counts). Returns the template's top tile.
     pub fn instantiate(&mut self, menu: TileId, parent: TileId, name: &str) -> Option<TileId> {
-        //  0a1ddb0 walks the menu's templates comparing names (`strcmp`)
+        // 00a1ddb0 walks the menu's templates comparing names (`strcmp`)
         // and, finding none, goes on with the last one it looked at: an
         // unknown name makes the last template. The barter menu's code
         // asks for `CM_list_template`; its file has only

@@ -6,7 +6,7 @@
 //! HUD (`hud_main_menu.xml`) laid out and fed as the game's code does.
 //!
 //! What each rule is and where in the exe it was read is in the doc
-//! comments; `C:\Users\alexa\nv-re\findings\ui_tiles.md` has the findings
+//! comments; `%USERPROFILE%\nv-re\findings\ui_tiles.md` has the findings
 //! with addresses. The menus work in their own units: 960 high, as wide as
 //! the screen's shape makes it (1706.67 at 16:9), drawn at screen height /
 //! 960 pixels per unit.

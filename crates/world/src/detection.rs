@@ -1,6 +1,6 @@
 //! Who notices whom: the game's detection value, read from its code
 //! (`008a0d10` gathers the inputs, `00642ed0` adds them up; see
-//! `C:\Users\alexa\nv-re\findings\combat_ai.md` §1).
+//! `%USERPROFILE%\nv-re\findings\combat_ai.md` §1).
 //!
 //! value = `fSneakBaseValue` (−35) + sound + light + skill, each scaled by
 //! how near the target is, f = max((maxD − d) / maxD, 0) ^

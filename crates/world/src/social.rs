@@ -1,5 +1,5 @@
 //! People talking without the player starting it, read from
-//! `FalloutNV.exe` with Ghidra (`C:\Users\alexa\nv-re\findings\
+//! `FalloutNV.exe` with Ghidra (`%USERPROFILE%\nv-re\findings\
 //! ai_rules.md` §5b and §6):
 //!
 //! - Greetings ([`Social::greets`]): someone who notices the player within

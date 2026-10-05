@@ -11,7 +11,7 @@
 //! the skill (actor value i32) at 104 (41, Guns); `CRDT` critical damage
 //! u16, critical chance multiplier f32.
 //!
-//! A hit, read from the game's code (`C:\Users\alexa\nv-re\findings\
+//! A hit, read from the game's code (`%USERPROFILE%\nv-re\findings\
 //! hits.md`): the weapon's damage ([`weapon_damage`]: skill, arms,
 //! condition curve, melee/unarmed bonus, scale), a critical adding the
 //! weapon's critical damage ([`critical`]), the armour ([`through_armour`]:
@@ -1244,7 +1244,7 @@ pub fn creature_damage(order: &LoadOrder, who: FormId) -> Option<f32> {
 /// `00a24b70`), as the player's code reads it each frame (`009466d0`, the
 /// reload in `00948310`): while the key is down a timer runs (`011e07e0`);
 /// nothing happens while the weapon is still being drawn or put away (the
-/// game waits for its queued weapon action, `FUN_008a7570() == -1`); with
+/// game waits for its queued weapon action, `008a7570() == -1`); with
 /// the weapon holstered the first frame draws it; with it out, a weapon
 /// that can't reload (nothing loaded: fists, melee weapons) is put away at
 /// once, a gun once the key has been held for the game's hold time (a
@@ -1285,7 +1285,7 @@ pub enum ReadyAction {
 impl ReadyKey {
     /// One frame of `seconds` with the key in `key`'s state. `out`: the
     /// weapon is out; `reloadable`: it has ammunition loaded (a gun with
-    /// its ammunition equipped, `FUN_00525980`); `readying`: a drawing or
+    /// its ammunition equipped, `00525980`); `readying`: a drawing or
     /// putting away still plays.
     pub fn update(
         &mut self,

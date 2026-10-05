@@ -1,7 +1,7 @@
 //! Actor animation as the game plays it: which animation group plays for
 //! what an actor does, how one blends into the next, and how fast the
 //! walks and runs are played. Read from the exe
-//! (`C:\Users\alexa\nv-re\findings\animation.md`): the group table at
+//! (`%USERPROFILE%\nv-re\findings\animation.md`): the group table at
 //! `011977d8`, `Actor::PickAnimations` (`00895110`), the `AnimData`'s play
 //! (`004949a0`), stop (`004994f0`) and update (`00491180`), the text-key
 //! parser (`005f3a20`), Gamebryo's `NiControllerSequence::Update`

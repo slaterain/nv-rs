@@ -71,7 +71,7 @@ pub fn strip_triangles(strip: &[u16]) -> Vec<[u16; 3]> {
 }
 
 /// How the game sets up the library (`BSTreeManager`'s constructor,
-/// `00664440`: `FUN_00b0d7b0(1)`): leaf texture coordinates' v turned
+/// `00664440`: `00b0d7b0(1)`): leaf texture coordinates' v turned
 /// round (`00b28720` multiplies them by −1).
 pub const FLIP_V: bool = true;
 

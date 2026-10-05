@@ -1,5 +1,5 @@
-//! The combat AI, read from the game's code (`C:\Users\alexa\nv-re\
-//! findings\combat_ai.md`, decompiled in `C:\Users\alexa\nv-re\decomp\
+//! The combat AI, read from the game's code (`%USERPROFILE%\nv-re\
+//! findings\combat_ai.md`, decompiled in `%USERPROFILE%\nv-re\decomp\
 //! combat`): who starts a fight on noticing whom, combat styles (`CSTY`),
 //! how gunmen keep their distance and when they shoot, how melee fighters
 //! close in and choose between attacking, blocking and waiting, and when a

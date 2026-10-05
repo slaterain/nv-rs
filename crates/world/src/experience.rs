@@ -1,6 +1,6 @@
 //! Experience and levels: the player's actor value 24 (`XP`), and what a
 //! level brings. All read from the game's code (`FalloutNV.exe`; addresses
-//! and details in `C:\Users\alexa\nv-re\findings\levelling.md`). Settings
+//! and details in `%USERPROFILE%\nv-re\findings\levelling.md`). Settings
 //! missing from the data take the exe's built-in defaults, noted below.
 //!
 //! - XP to reach level L (`00648b50`): 0 below 2, else a step of `iXPBase`

@@ -1,5 +1,5 @@
 //! Reputation (`REPU`) and karma, read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\reputation.md`).
+//! (`%USERPROFILE%\nv-re\findings\reputation.md`).
 //!
 //! A reputation's `DATA` f32 is its most (NCR 80, Legion 100, Goodsprings
 //! 15); the game keeps fame and infamy for each, both from 0. Scripts:

@@ -1,7 +1,7 @@
 //! What a hit looks and sounds like: impact effects, blood, and the sounds
 //! people and creatures make when hurt or killed. Read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\hiteffects.md`, decompiled in
-//! `C:\Users\alexa\nv-re\decomp\hiteffects`) and its records.
+//! (`%USERPROFILE%\nv-re\findings\hiteffects.md`, decompiled in
+//! `%USERPROFILE%\nv-re\decomp\hiteffects`) and its records.
 //!
 //! **Records.** An impact (`IPCT`, loader `0058dea0`): `MODL` the effect's
 //! model, `DATA` (24 bytes) its duration, orientation (0 along the

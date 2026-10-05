@@ -4,7 +4,7 @@
 //! "needs a reference" and parameter-count words at +0x10, the parameters
 //! at +0x14, the script handler at +0x18 and the condition version at
 //! +0x20). Every rule below names the handler it was read from; the full
-//! notes are in `C:\Users\alexa\nv-re\findings\functions.md`.
+//! notes are in `%USERPROFILE%\nv-re\findings\functions.md`.
 //!
 //! [`value`] answers the ones that read (for scripts and conditions, through
 //! [`crate::scripting::Facts`]); [`change`] carries out the ones that change
@@ -223,7 +223,7 @@ pub fn handled() -> impl Iterator<Item = &'static str> {
 
 /// Game settings the game's own scripts ask for (`GetGameSetting`) that
 /// `FalloutNV.esm` doesn't define, with the values the exe gives them
-/// (`C:\Users\alexa\nv-re\decomp\combat\all_settings.txt`; the setting
+/// (`%USERPROFILE%\nv-re\decomp\combat\all_settings.txt`; the setting
 /// objects at the addresses given).
 const EXE_SETTINGS: &[(&str, f32)] = &[
     ("iFriendHitCombatAllowed", 3.0),    // 011cd204 (the data has 4)

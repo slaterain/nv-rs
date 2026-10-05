@@ -1,5 +1,5 @@
 //! V.A.T.S., the Vault-Tec Assisted Targeting System, read from the game's
-//! code (`C:\Users\alexa\nv-re\findings\vats.md`; the functions named
+//! code (`%USERPROFILE%\nv-re\findings\vats.md`; the functions named
 //! below). The player stops the world, picks people and their body parts by
 //! the chance to hit each, queues attacks paid for with action points, and
 //! watches them play out.

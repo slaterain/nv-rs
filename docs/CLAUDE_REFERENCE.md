@@ -2408,10 +2408,10 @@ Read from the code (`%USERPROFILE%\nv-re\findings\vats.md`; `world::vats`,
   = R, mouse Attack = button 0: the binds table `00a24b70`, `+0x1b94`;
   key states `00a24180`: 0 down, 1 just pressed, 2 just released) in the
   player's frame code `009466d0`: while down, a timer (`011e07e0`) runs;
-  nothing while a weapon action is queued (`FUN_008a7570() != -1`:
-  drawing or putting away still plays); holstered → `FUN_008a6840(1)`
+  nothing while a weapon action is queued (`008a7570() != -1`:
+  drawing or putting away still plays); holstered → `008a6840(1)`
   draws at once; out and not reloadable (the weapon's anim type 0, or no
-  ammunition equipped: `FUN_00525980`) → put away at once; out and
+  ammunition equipped: `00525980`) → put away at once; out and
   reloadable → put away once the timer passes a settings object at
   `011cdfcc` (its name and value aren't traced: not done here); each
   press acts once (`011e0bec`). Releasing with a gun out before that

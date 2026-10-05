@@ -267,7 +267,7 @@ pub const DEFAULT_HOUR: f32 = 10.0;
 
 /// The game settings the sky's clock uses (`GMST`s, else the engine's own
 /// defaults), as `FalloutNV.exe`'s sky code reads them (see
-/// `C:\Users\alexa\nv-re\findings\sky.md`).
+/// `%USERPROFILE%\nv-re\findings\sky.md`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SkySettings {
     /// `fDaytimeColorExtension` (0.5 h, not in `FalloutNV.esm`): the
@@ -831,7 +831,7 @@ pub fn light_exterior(
 
 // ---------------------------------------------------------------------------
 // Which weather it is: the game's rolls, regions and fades, read from its
-// code (`C:\Users\alexa\nv-re\findings\weather.md`; the weather step
+// code (`%USERPROFILE%\nv-re\findings\weather.md`; the weather step
 // `0063d1d0`, the roll `005827d0`, the player's weather region `0094cae0`).
 
 /// `DefaultWeather` and `DefaultClimate`, fixed forms in every game.

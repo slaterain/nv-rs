@@ -1,7 +1,7 @@
 //! V.A.T.S. in the viewer, run as the game runs it. The rules are
 //! `world::vats` (chances, costs, the queue), the menu's view and the camera
 //! shots `world::vats_camera`, the menu itself `ui::vats` (drawn by `hud`
-//! over the HUD); findings in `C:\Users\alexa\nv-re\findings\vats.md` and
+//! over the HUD); findings in `%USERPROFILE%\nv-re\findings\vats.md` and
 //! `vats_camera_menu.md`.
 //!
 //! - V opens it (`00942800`, `007e9200`) on the target V.A.T.S. picks

@@ -40,7 +40,7 @@ pub type Vec3 = [f32; 3];
 /// a float).
 pub const INVALID_TIME: f32 = -f32::MAX;
 
-/// Most particles one emission step makes (`DAT_011ae75c`, 15, read as a
+/// Most particles one emission step makes (`[011ae75c]`, 15, read as a
 /// u16 by `00c1c3c0`).
 pub const MAX_EMITTED_AT_ONCE: u16 = 15;
 
@@ -79,7 +79,7 @@ impl Rand {
         ((r + r) / 32767.0 - 1.0) as f32
     }
 
-    /// `FUN_006397c0`: `rand() × 2 / 32767 − 1` in floats (gravity's
+    /// `006397c0`: `rand() × 2 / 32767 − 1` in floats (gravity's
     /// turbulence).
     pub fn turbulence(&mut self) -> f32 {
         (self.draw() as f32 * 2.0) / 32767.0 - 1.0
@@ -142,7 +142,7 @@ pub fn round_even(x: f32) -> i32 {
     }
 }
 
-/// `FUN_00c1ced0`: `x × y × (1.5 − 0.5 × x × y²)` with `y` the bit trick
+/// `00c1ced0`: `x × y × (1.5 − 0.5 × x × y²)` with `y` the bit trick
 /// `0x5f3759df − (bits(x) >> 1)`: the square root of `x` (one Newton step).
 pub fn fast_sqrt(x: f32) -> f32 {
     let y = f32::from_bits(0x5f37_59df_u32.wrapping_sub(x.to_bits() >> 1));
@@ -173,7 +173,7 @@ fn cross(a: Vec3, b: Vec3) -> Vec3 {
     ]
 }
 
-/// `FUN_004a0c10`: unit length, or zero when shorter than 1e-6.
+/// `004a0c10`: unit length, or zero when shorter than 1e-6.
 fn unitize(v: Vec3) -> Vec3 {
     let l = dot(v, v).sqrt();
     if l <= 1e-6 {

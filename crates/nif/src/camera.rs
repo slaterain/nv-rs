@@ -2,7 +2,7 @@
 //! record): a node whose transform a controller keys, with an `NiCamera`
 //! as its first child whose field of view a `BSFrustumFOVController` may
 //! key. Read as FalloutNV.exe reads and plays them (addresses in
-//! `C:\Users\alexa\nv-re\findings\vats_camera_menu.md`):
+//! `%USERPROFILE%\nv-re\findings\vats_camera_menu.md`):
 //!
 //! - the controllers' time (`NiTimeController`, `00a6cd60`): frequency ×
 //!   the time + phase, then by the cycle type in the flags (bits 1–2): 0

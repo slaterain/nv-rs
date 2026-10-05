@@ -79,7 +79,7 @@ pub struct PlayerAttack {
     /// Until when the drawing or putting away plays (the first-person view
     /// says, knowing the animation: [`Self::readying_until`]); the key and
     /// attacks wait for it, as the game waits for its queued weapon action
-    /// (`FUN_008a7570() == -1`).
+    /// (`008a7570() == -1`).
     busy_until: f32,
     /// The Ready Item key's press (`world::combat::ReadyKey`).
     ready: combat::ReadyKey,

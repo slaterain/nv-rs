@@ -2,7 +2,7 @@
 //! in FalloutNV.exe (filling its tiles, answering clicks and keys). The
 //! game state they show comes from the caller; what the player chooses goes
 //! back the same way. Findings with addresses:
-//! `C:\Users\alexa\nv-re\findings\menus.md`.
+//! `%USERPROFILE%\nv-re\findings\menus.md`.
 
 pub mod barter;
 pub mod chargen;

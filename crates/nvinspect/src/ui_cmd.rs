@@ -128,7 +128,7 @@ pub fn menu(
         let buttons: Vec<Option<String>> = parts.map(|b| Some(b.to_string())).collect();
         let alpha = ui
             .globals
-            .and_then(|g| ui.names.lookup("_background_fill_alpha").map(|id| (g, id)))
+            .zip(ui.names.lookup("_background_fill_alpha"))
             .map(|(g, id)| ui.number(g, id))
             .unwrap_or(204.0);
         let mut code = ui::menus::message::MessageMenu::new(0);

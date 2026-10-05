@@ -202,7 +202,7 @@ impl Names {
             ("&no_click_past;", 102),
             ("&does_not_stack;", 6008),
             ("&mixed_menu;", 103),
-            // On PC: 0 (`DAT_011d8a84` is the console build's flag).
+            // On PC: 0 (`[011d8a84]` is the console build's flag).
             ("&xenon;", 0),
             ("&console;", 0),
             ("&xbox;", 0),

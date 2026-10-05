@@ -1,7 +1,7 @@
 //! Trading with merchants (`ShowBarterMenu` on the speaker, as Trudy's
 //! "Show me what you have for sale." line does), read from the game's
 //! barter menu code (FalloutNV.exe, `0072d250` and the functions after it;
-//! notes in `C:\Users\alexa\nv-re\findings\menus.md` §6):
+//! notes in `%USERPROFILE%\nv-re\findings\menus.md` §6):
 //!
 //! - The vendor's goods (`0046f310`): their own inventory and their
 //!   merchant container's (the container their placed reference names in

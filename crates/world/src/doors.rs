@@ -1,5 +1,5 @@
 //! Doors and gates that open where they stand, as the game's own code does
-//! them (`C:\Users\alexa\nv-re\findings\doors.md`). Load doors (with a
+//! them (`%USERPROFILE%\nv-re\findings\doors.md`). Load doors (with a
 //! destination, `XTEL`) are different: the game teleports through those
 //! without playing anything (`TESObjectDOOR::Activate`, `005180b0`).
 //!

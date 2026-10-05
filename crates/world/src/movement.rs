@@ -1,5 +1,5 @@
 //! How people turn and walk, and when they stop, read from `FalloutNV.exe`
-//! with Ghidra (`C:\Users\alexa\nv-re\findings\ai_rules.md`; the addresses
+//! with Ghidra (`%USERPROFILE%\nv-re\findings\ai_rules.md`; the addresses
 //! are given with each rule). The viewer measures and moves; the rules are
 //! here.
 //!

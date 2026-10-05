@@ -1,5 +1,5 @@
 //! Doors and gates that swing where they stand, as the game's own code
-//! does them (`world::doors`, `C:\Users\alexa\nv-re\findings\doors.md`).
+//! does them (`world::doors`, `%USERPROFILE%\nv-re\findings\doors.md`).
 //!
 //! The rules live in `world::doors`; this file plays them on screen: a
 //! door activated (E, a script's `Activate` or `SetOpenState`, a person on

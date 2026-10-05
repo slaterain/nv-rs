@@ -1,5 +1,5 @@
 //! Ownership and crime, read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\reputation.md` §3).
+//! (`%USERPROFILE%\nv-re\findings\reputation.md` §3).
 //!
 //! Who owns a reference (`00567790`): its own `XOWN`; for a door, the
 //! door on the other side's; for anything but people, furniture, doors and

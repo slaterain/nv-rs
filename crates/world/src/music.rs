@@ -1,5 +1,5 @@
 //! Music, as `FalloutNV.exe` plays it: read from its code (see
-//! `C:\Users\alexa\nv-re\findings\music.md`; the functions named below are
+//! `%USERPROFILE%\nv-re\findings\music.md`; the functions named below are
 //! the game's).
 //!
 //! New Vegas's music doesn't come from a cell's music type: `XCMO` is read

@@ -1,6 +1,6 @@
 //! V.A.T.S.'s menu (`menus\vats_menu.xml`, class `VATSMenu`, vtable
 //! `010700d4` in FalloutNV.exe), laid out and filled as the game's code
-//! does (`C:\Users\alexa\nv-re\findings\vats_camera_menu.md` §4–§6): the
+//! does (`%USERPROFILE%\nv-re\findings\vats_camera_menu.md` §4–§6): the
 //! setup (`007e9200`) builds its own action point, hit point (with the
 //! compass) and enemy health brackets from `HUDTemplates.xml`, and each
 //! frame (`007ec810`) fills them, places a label by each body part

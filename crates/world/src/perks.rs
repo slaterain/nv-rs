@@ -16,7 +16,7 @@
 //! built at `00f4fa60`).
 //!
 //! **How the game applies an entry point** (`005e58f0(entry, owner,
-//! params…, &value)`, read from the code; `C:\Users\alexa\nv-re\findings\
+//! params…, &value)`, read from the code; `%USERPROFILE%\nv-re\findings\
 //! perks.md`): the owner's perk entries for that entry point are taken from
 //! the player's lists (player `+0x884`, one per entry point, `00963ba0`);
 //! for anyone else the lists are empty (`Character`'s `+0x4ac` is

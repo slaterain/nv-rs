@@ -1,6 +1,6 @@
 //! The lockpicking menu on screen (`world::lockpick` the rules,
 //! `ui::lockpick` the menu file's tiles, `cellview::lockpick` the 3D scene;
-//! read from the game's code, `C:\Users\alexa\nv-re\findings\lockpick.md`).
+//! read from the game's code, `%USERPROFILE%\nv-re\findings\lockpick.md`).
 //!
 //! E on a locked door or container the player can pick (`world::locks::
 //! try_open` says `Pick`) asks for the menu ([`Lockpicking::request`]); it

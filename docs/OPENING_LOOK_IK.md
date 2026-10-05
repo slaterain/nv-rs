@@ -60,13 +60,13 @@ LookIK path, not a generic look-at inference.
 The below-target branch is conditional on state byte `+0xb2`; it uses signed
 clamp values `+5` and `-5` before mapping through selected skeleton
 transforms. It also limits movement of the smoothed point to 5 native units
-per update (`DAT_011b05a8`, `00c78598-00c785f0`). The precise coordinate
+per update (`[011b05a8]`, `00c78598-00c785f0`). The precise coordinate
 meaning and units of those clamps are not yet established.
 
-`00c7aa60` calls `00c78610` with `param_2=1` for the active result, then
-passes a second `param_2=0` call using a temporary matrix. `00c78610` reads the
-same target at controller `+0xd0`, selected skeleton index `+0x144`, and
-per-mode index at `+0xf4`/`+0xf6`. Its body builds and composes quaternion
+`00c7aa60` calls `00c78610` with its second argument 1 for the active result,
+then calls it again with that argument 0, using a temporary matrix. `00c78610`
+reads the same target at controller `+0xd0`, selected skeleton index `+0x144`,
+and per-mode index at `+0xf4`/`+0xf6`. Its body builds and composes quaternion
 transforms and writes node transforms, but the Ghidra output is too large and
 ambiguous to claim the final rotation formula or limits without tracing the
 exact output writes and helpers.
@@ -89,12 +89,12 @@ different (Bip01 Neck1, stored at+4); do not confuse the two. The temporary
 Ghidra project lock cleared. Evidence: look-node-getter.txt,
 look-body-strings.txt and look-body-data.txt in nv-re/work/codex-m1.
 
-For output rotation, continue `00c78610` from its `param_2=1` call in
-`00c7aa60`: label each transform source (`+0x110..+0x11c`, per-node data,
+For output rotation, continue `00c78610` from its call with second argument 1
+in `00c7aa60`: label each transform source (`+0x110..+0x11c`, per-node data,
 target local direction), follow the final writes to the selected node's
 rotation, and decompile only helpers on that dataflow. Separately trace
 `00c755e0` if it contributes the angle or easing value. Confirm whether the
-second (`param_2=0`) call is just a temporary/cache update. These are the
+second call (second argument 0) is just a temporary/cache update. These are the
 minimum gaps before a runtime implementation can reproduce native behavior.
 
 The opening's `SayTo Player` is a scripted talk event, not a dialogue package;

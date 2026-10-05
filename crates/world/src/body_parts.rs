@@ -1,6 +1,6 @@
 //! Body parts: which part of a person or creature a hit lands on, what it
 //! does to that part, and what a crippled part does to them. Read from the
-//! game's code (`C:\Users\alexa\nv-re\findings\hits.md` §3–§5, and the
+//! game's code (`%USERPROFILE%\nv-re\findings\hits.md` §3–§5, and the
 //! functions named below) and its records.
 //!
 //! **Body part data** (`BPTD`): `MODL` the skeleton it's for, then one

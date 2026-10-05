@@ -1,7 +1,7 @@
 //! Trees (`TREE`): SpeedTree models (`.spt`, grown by the `speedtree`
 //! crate) placed like statics. Read from the game's loader (`0051bbc0`) and
 //! its tree setup (`BSTreeModel`, `0066ac40`, `00666940`); the addresses
-//! and the rest are in `C:\Users\alexa\nv-re\findings\trees.md`.
+//! and the rest are in `%USERPROFILE%\nv-re\findings\trees.md`.
 //!
 //! A reference's tree is the base's `.spt` grown with one of its seeds
 //! (`XSED` picks which), at the size `fTreeSizeConversion` makes of the

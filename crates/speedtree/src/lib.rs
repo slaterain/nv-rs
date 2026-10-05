@@ -1,6 +1,6 @@
 //! The game's SpeedTree trees (`TREE` records' `.spt` models), read and
 //! grown as the game's embedded SpeedTreeRT does it, from its code
-//! (`C:\Users\alexa\nv-re\findings\trees.md` has the addresses).
+//! (`%USERPROFILE%\nv-re\findings\trees.md` has the addresses).
 //!
 //! A `.spt` file holds no geometry, only parameters: curves (`spline`)
 //! and numbers for each level of branches, the leaves, fronds, levels of

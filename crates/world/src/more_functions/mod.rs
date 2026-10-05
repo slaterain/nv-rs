@@ -1,6 +1,6 @@
 //! More of the game's script functions (a second round after
 //! [`crate::script_functions`]), each carried out as its own handler in
-//! `FalloutNV.exe` does it; the notes are in `C:\Users\alexa\nv-re\
+//! `FalloutNV.exe` does it; the notes are in `%USERPROFILE%\nv-re\
 //! findings\functions2.md`.
 //!
 //! [`value`] answers the ones that read; [`change`] carries out the ones

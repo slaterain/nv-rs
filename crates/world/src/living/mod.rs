@@ -1,5 +1,5 @@
 //! Living in the Mojave, read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\living.md`, plus the functions named in
+//! (`%USERPROFILE%\nv-re\findings\living.md`, plus the functions named in
 //! each module): sleeping and waiting ([`sleep`]), hardcore mode's needs and
 //! the radiation stages ([`needs`]), pickpocketing ([`pickpocket`]) and
 //! being warned off someone's property ([`trespass`]).

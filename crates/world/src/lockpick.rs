@@ -1,5 +1,5 @@
 //! The lockpicking game, read from the game's code
-//! (`C:\Users\alexa\nv-re\findings\lockpick.md`): the menu `LockPickMenu`
+//! (`%USERPROFILE%\nv-re\findings\lockpick.md`): the menu `LockPickMenu`
 //! (class 1014, vtable `0107439c`), opened on a locked door or container
 //! the player has no key for (`005180b0` → `0078db00`), drawn from
 //! `menus\lockpick_menu.xml` with two models, `meshes\terminals\
@@ -407,7 +407,7 @@ pub struct Frame {
 /// What the menu does as it goes, for the caller to carry out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Effect {
-    /// Play a sound record by editor ID (`FUN_00453a70`).
+    /// Play a sound record by editor ID (`00453a70`).
     Sound(&'static str),
     /// Start the straining sound (`UILockpickingPickTensionLPM`), kept to
     /// be faded out later (`011da2b0`).

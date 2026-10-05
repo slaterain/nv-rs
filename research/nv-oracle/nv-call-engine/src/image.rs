@@ -1,0 +1,444 @@
+//! Mapping a PE32 image at its preferred base, with import trap stubs and
+//! optional memory snapshots.
+
+use crate::call;
+use nv_oracle_core::pe::{Import, ImportName, Pe};
+use nv_oracle_core::sha256;
+use nv_win as win;
+use std::ffi::c_void;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
+
+/// A mapped image and what was done to its import table.
+pub struct MappedImage {
+    pub pe: Pe,
+    pub sha256: String,
+    /// Display names (`dll!name`) indexed by the trap index.
+    pub import_names: Vec<String>,
+    pub imports_resolved: bool,
+    /// Imports that could not be resolved even though resolving was asked for.
+    pub unresolved: usize,
+    /// How the address range was obtained.
+    pub placement: Placement,
+}
+
+/// Where the image's address range came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// The range was the host program's reserved placeholder (see nv-call).
+    HostPlaceholder { base: u32, size: u32 },
+    /// The range was free and was allocated with `VirtualAlloc`.
+    Allocated,
+}
+
+static TOOK_OVER: AtomicBool = AtomicBool::new(false);
+
+/// True once the host program's pages have been replaced by the image. From
+/// then on the host's code no longer exists and the process must be ended
+/// with `TerminateProcess`.
+pub fn took_over_host() -> bool {
+    TOOK_OVER.load(SeqCst)
+}
+
+/// Base and size of the running program's own image (read from its headers
+/// in memory, before anything overwrites them).
+fn host_image() -> Option<(u32, u32)> {
+    // SAFETY: GetModuleHandleW(NULL) is the base of the running exe, whose
+    // headers are mapped and were validated by the loader.
+    unsafe {
+        let base = win::GetModuleHandleW(std::ptr::null()) as usize;
+        if base == 0 {
+            return None;
+        }
+        let read32 = |off: usize| std::ptr::read_unaligned((base + off) as *const u32);
+        if std::ptr::read_unaligned(base as *const u16) != 0x5a4d {
+            return None;
+        }
+        let pe = read32(0x3c) as usize;
+        if read32(pe) != 0x0000_4550 {
+            return None;
+        }
+        let size_of_image = read32(pe + 4 + 20 + 56);
+        Some((base as u32, size_of_image))
+    }
+}
+
+/// Make `[base, base + size)` of the host's placeholder writable and wipe
+/// it, so the image sees the zeroed memory a fresh mapping would have. Only
+/// the part the image needs is touched.
+fn take_over_host(base: u32, size: u32) -> Result<(), String> {
+    let mut cur = u64::from(base) & !0xfff;
+    let end = (u64::from(base) + u64::from(size) + 0xfff) & !0xfff;
+    while cur < end {
+        let mut info = win::MemoryBasicInformation::zeroed();
+        // SAFETY: valid output buffer of the right size.
+        let n = unsafe {
+            win::VirtualQuery(
+                cur as usize as *const c_void,
+                &mut info,
+                std::mem::size_of::<win::MemoryBasicInformation>(),
+            )
+        };
+        if n == 0 {
+            return Err(format!("cannot query the host placeholder at {cur:#010x}"));
+        }
+        if info.state != win::MEM_COMMIT {
+            return Err(format!(
+                "the host placeholder is not committed at {cur:#010x}: {}",
+                describe_region(cur as u32)
+            ));
+        }
+        let region_end = (info.base_address as usize as u64 + info.region_size as u64).min(end);
+        let mut old = 0u32;
+        // SAFETY: changing protection of committed pages of this process.
+        let ok = unsafe {
+            win::VirtualProtect(
+                cur as usize as *mut c_void,
+                (region_end - cur) as usize,
+                win::PAGE_EXECUTE_READWRITE,
+                &mut old,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "cannot make the host placeholder writable at {cur:#010x}"
+            ));
+        }
+        cur = region_end;
+    }
+    // SAFETY: the whole range was made writable above. The host's code in
+    // it is never run again.
+    unsafe { std::ptr::write_bytes(base as usize as *mut u8, 0, size as usize) };
+    TOOK_OVER.store(true, SeqCst);
+    Ok(())
+}
+
+fn describe_region(addr: u32) -> String {
+    let mut info = win::MemoryBasicInformation::zeroed();
+    // SAFETY: valid output buffer of the right size.
+    let n = unsafe {
+        win::VirtualQuery(
+            addr as usize as *const c_void,
+            &mut info,
+            std::mem::size_of::<win::MemoryBasicInformation>(),
+        )
+    };
+    if n == 0 {
+        return "the region could not be queried".into();
+    }
+    let state = match info.state {
+        win::MEM_COMMIT => "committed",
+        win::MEM_RESERVE => "reserved",
+        win::MEM_FREE => "free",
+        _ => "unknown state",
+    };
+    format!(
+        "region at {:#010x}, {:#x} bytes, {} (type {:#x})",
+        info.base_address as usize, info.region_size, state, info.kind
+    )
+}
+
+/// Reserve and commit `[base, base + size)` exactly, as read-write-execute.
+fn alloc_at(base: u32, size: u32) -> Result<(), String> {
+    // SAFETY: asking the OS for a specific address range; the result is checked.
+    let got = unsafe {
+        win::VirtualAlloc(
+            base as usize as *mut c_void,
+            size as usize,
+            win::MEM_RESERVE | win::MEM_COMMIT,
+            win::PAGE_EXECUTE_READWRITE,
+        )
+    };
+    if got as usize == base as usize {
+        return Ok(());
+    }
+    if !got.is_null() {
+        // SAFETY: freeing the block just allocated.
+        unsafe { win::VirtualFree(got, 0, win::MEM_RELEASE) };
+    }
+    // SAFETY: plain query.
+    let code = unsafe { win::GetLastError() };
+    Err(format!(
+        "cannot reserve {size:#x} bytes at {base:#010x}: {} ({}). Another allocation is in the way: {}. \
+         On a normal run nv-call's own placeholder reserves this range; getting here means the image's \
+         base is outside the placeholder (see the README: NV_CALL_RESERVE_MB), or the range is taken by \
+         something else.",
+        win::error_text(code),
+        code,
+        describe_region(base)
+    ))
+}
+
+/// Make `[addr, addr + len)` committed and writable, allocating at that
+/// exact address if nothing is there yet. Used for snapshot regions.
+pub fn ensure_writable(addr: u32, len: usize) -> Result<(), String> {
+    let end = u64::from(addr) + len as u64;
+    if end > 0x1_0000_0000 {
+        return Err(format!(
+            "region {addr:#010x}+{len:#x} runs past the 4 GiB address space"
+        ));
+    }
+    let mut cur = u64::from(addr);
+    while cur < end {
+        let mut info = win::MemoryBasicInformation::zeroed();
+        // SAFETY: valid output buffer of the right size.
+        let n = unsafe {
+            win::VirtualQuery(
+                cur as usize as *const c_void,
+                &mut info,
+                std::mem::size_of::<win::MemoryBasicInformation>(),
+            )
+        };
+        if n == 0 {
+            return Err(format!("VirtualQuery failed at {cur:#010x}"));
+        }
+        let region_end = (info.base_address as usize as u64 + info.region_size as u64).min(end);
+        let page_start = cur & !0xfff;
+        let span = (region_end - page_start + 0xfff) & !0xfff;
+        match info.state {
+            win::MEM_FREE => {
+                let aligned = cur & !0xffff;
+                let span = (region_end - aligned + 0xfff) & !0xfff;
+                // SAFETY: allocating a free range; result is checked.
+                let got = unsafe {
+                    win::VirtualAlloc(
+                        aligned as usize as *mut c_void,
+                        span as usize,
+                        win::MEM_RESERVE | win::MEM_COMMIT,
+                        win::PAGE_EXECUTE_READWRITE,
+                    )
+                };
+                if got.is_null() {
+                    return Err(format!(
+                        "cannot allocate {span:#x} bytes at {aligned:#010x}: {}",
+                        describe_region(aligned as u32)
+                    ));
+                }
+            }
+            win::MEM_RESERVE => {
+                // SAFETY: committing inside an existing reservation.
+                let got = unsafe {
+                    win::VirtualAlloc(
+                        page_start as usize as *mut c_void,
+                        span as usize,
+                        win::MEM_COMMIT,
+                        win::PAGE_EXECUTE_READWRITE,
+                    )
+                };
+                if got.is_null() {
+                    return Err(format!(
+                        "cannot commit {span:#x} bytes at {page_start:#010x}"
+                    ));
+                }
+            }
+            _ => {
+                if info.protect != win::PAGE_EXECUTE_READWRITE {
+                    let mut old = 0u32;
+                    // SAFETY: changing protection on committed pages of this process.
+                    let ok = unsafe {
+                        win::VirtualProtect(
+                            page_start as usize as *mut c_void,
+                            span as usize,
+                            win::PAGE_EXECUTE_READWRITE,
+                            &mut old,
+                        )
+                    };
+                    if ok == 0 {
+                        return Err(format!("cannot make {page_start:#010x} writable"));
+                    }
+                }
+            }
+        }
+        cur = region_end;
+    }
+    Ok(())
+}
+
+fn load_symbol(imp: &Import) -> Option<u32> {
+    let dll: Vec<u8> = imp.dll.bytes().chain(std::iter::once(0)).collect();
+    // SAFETY: NUL-terminated name passed to the loader.
+    let module = unsafe { win::LoadLibraryA(dll.as_ptr()) };
+    if module.is_null() {
+        return None;
+    }
+    let addr = match &imp.name {
+        ImportName::Name(n) => {
+            let name: Vec<u8> = n.bytes().chain(std::iter::once(0)).collect();
+            // SAFETY: valid module handle and NUL-terminated name.
+            unsafe { win::GetProcAddress(module, name.as_ptr()) }
+        }
+        // SAFETY: an ordinal is passed as a pointer-sized integer.
+        ImportName::Ordinal(o) => unsafe {
+            win::GetProcAddress(module, usize::from(*o) as *const u8)
+        },
+    };
+    (!addr.is_null()).then_some(addr as usize as u32)
+}
+
+/// Map the image at `path` at its preferred base.
+///
+/// Imports are left unresolved: every IAT slot points at a trap stub that
+/// ends the current call and reports the import's name. With
+/// `resolve_imports`, slots are filled with the real addresses from the
+/// running system's DLLs instead (those that cannot be found keep a stub).
+pub fn map(path: &Path, resolve_imports: bool) -> Result<MappedImage, String> {
+    let data = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let digest = sha256::hex_digest(&data);
+    let pe = Pe::parse(&data).map_err(|e| format!("{}: {e}", path.display()))?;
+    let base = pe.image_base;
+    let image_end = u64::from(base) + u64::from(pe.size_of_image);
+    let placement = match host_image() {
+        Some((hb, hs)) if base >= hb && image_end <= u64::from(hb) + u64::from(hs) => {
+            take_over_host(base, pe.size_of_image)?;
+            Placement::HostPlaceholder { base: hb, size: hs }
+        }
+        Some((hb, hs))
+            if u64::from(base) < u64::from(hb) + u64::from(hs) && image_end > u64::from(hb) =>
+        {
+            return Err(format!(
+                "the image wants {base:#010x}-{image_end:#010x}, which overlaps the program's own placeholder \
+                 ({hb:#010x}-{:#010x}) without fitting inside it. Rebuild nv-call with a larger \
+                 NV_CALL_RESERVE_MB (it is {} MiB now).",
+                u64::from(hb) + u64::from(hs),
+                hs >> 20
+            ));
+        }
+        _ => {
+            alloc_at(base, pe.size_of_image)?;
+            Placement::Allocated
+        }
+    };
+    let mem = base as usize as *mut u8;
+
+    // SAFETY: the whole range was just committed; every copy is checked
+    // against the image size and the file length by `Pe::parse`.
+    unsafe {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), mem, pe.size_of_headers as usize);
+        for s in &pe.sections {
+            let n = if s.virtual_size == 0 {
+                s.raw_size
+            } else {
+                s.raw_size.min(s.virtual_size)
+            } as usize;
+            if n > 0 {
+                std::ptr::copy_nonoverlapping(
+                    data.as_ptr().add(s.raw_offset as usize),
+                    mem.add(s.virtual_address as usize),
+                    n,
+                );
+            }
+        }
+    }
+
+    let imports = pe.imports(&data)?;
+    let mut import_names = Vec::with_capacity(imports.len());
+    let mut unresolved = 0;
+    if !imports.is_empty() {
+        // One 16-byte stub per import: mov eax, index / mov ecx, trap / jmp ecx.
+        let stub_size = imports.len() * 16;
+        // SAFETY: fresh allocation anywhere.
+        let stubs = unsafe {
+            win::VirtualAlloc(
+                std::ptr::null_mut(),
+                stub_size,
+                win::MEM_RESERVE | win::MEM_COMMIT,
+                win::PAGE_EXECUTE_READWRITE,
+            )
+        } as *mut u8;
+        if stubs.is_null() {
+            return Err("cannot allocate import stubs".into());
+        }
+        let trap = call::trap_address();
+        for (i, imp) in imports.iter().enumerate() {
+            import_names.push(imp.to_string());
+            // SAFETY: `i * 16 + 12 <= stub_size`.
+            let stub = unsafe { stubs.add(i * 16) };
+            let mut code = [0u8; 12];
+            code[0] = 0xb8;
+            code[1..5].copy_from_slice(&(i as u32).to_le_bytes());
+            code[5] = 0xb9;
+            code[6..10].copy_from_slice(&trap.to_le_bytes());
+            code[10] = 0xff;
+            code[11] = 0xe1;
+            // SAFETY: inside the stub allocation.
+            unsafe { std::ptr::copy_nonoverlapping(code.as_ptr(), stub, code.len()) };
+            let target = if resolve_imports {
+                load_symbol(imp).unwrap_or_else(|| {
+                    unresolved += 1;
+                    stub as usize as u32
+                })
+            } else {
+                stub as usize as u32
+            };
+            if imp.iat_rva as u64 + 4 > u64::from(pe.size_of_image) {
+                return Err(format!(
+                    "import {imp} has its address-table slot outside the image"
+                ));
+            }
+            // SAFETY: the slot is inside the committed image.
+            unsafe { std::ptr::write_unaligned(mem.add(imp.iat_rva as usize) as *mut u32, target) };
+        }
+    }
+    Ok(MappedImage {
+        pe,
+        sha256: digest,
+        import_names,
+        imports_resolved: resolve_imports,
+        unresolved,
+        placement,
+    })
+}
+
+/// One applied snapshot region.
+pub struct SnapshotRegion {
+    pub addr: u32,
+    pub size: usize,
+    pub sha256: String,
+}
+
+/// Apply every `<hexaddr>.bin` file in `dir` to memory. Regions outside the
+/// image are allocated at their exact addresses.
+pub fn apply_snapshot(dir: &Path) -> Result<Vec<SnapshotRegion>, String> {
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("cannot read snapshot folder {}: {e}", dir.display()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("bin") {
+            continue;
+        }
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+        let digits = stem
+            .strip_prefix("0x")
+            .or_else(|| stem.strip_prefix("0X"))
+            .unwrap_or(stem);
+        let addr = u32::from_str_radix(digits, 16).map_err(|_| {
+            format!(
+                "snapshot file {} is not named <hexaddr>.bin",
+                path.display()
+            )
+        })?;
+        files.push((addr, path));
+    }
+    files.sort();
+    let mut applied = Vec::new();
+    for (addr, path) in files {
+        let bytes =
+            std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        if bytes.is_empty() {
+            continue;
+        }
+        ensure_writable(addr, bytes.len())?;
+        // SAFETY: the range was just made committed and writable.
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as usize as *mut u8, bytes.len())
+        };
+        applied.push(SnapshotRegion {
+            addr,
+            size: bytes.len(),
+            sha256: sha256::hex_digest(&bytes),
+        });
+    }
+    Ok(applied)
+}
