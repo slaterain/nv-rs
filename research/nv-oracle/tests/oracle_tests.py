@@ -8,7 +8,8 @@ Subcommands:
   decode-crosscheck workdir exe...          ->  length decoder vs objdump
   extra-vectors  nm output                  ->  vectors for faults, imports,
                                                 snapshots and register presets
-  extra-check    results                    ->  check those
+  extra-check    results mode label         ->  check those (mode: nosnap,
+                                                snapshot, resolve or keep)
   snapshot-files nm output + folder         ->  write snapshot region files
   probe-manifest variant nm exe out [k=v..] ->  write nv-probe.txt
   probe-check    variant log out base label ->  check a probe log
@@ -176,6 +177,29 @@ def extra_vectors(syms):
         v("preset_conflict", "fx_this_sum", cc="thiscall", args=["ptr:0x1000", "i32:1"], regs={"ecx": "0x5"}),
         v("buffer_offset", "fx_this_sum", cc="thiscall", args=["ptr:obj+4", "i32:2"],
           buffers={"obj": {"size": 16, "init": "ffffffff" + "05000000" + "03000000" + "00000000"}}),
+        # The image's writable memory is put back between vectors.
+        v("bump_a", "fx_bump"),
+        v("bump_b", "fx_bump"),
+        # An SSE exception that the vector's MXCSR unmasks.
+        v("sse_trap", "fx_quat_normalize", args=["ptr:q"], ret="void", mxcsr="0x1F00",
+          buffers={"q": {"size": 16, "init": ""}}),
+        v("after_sse_trap", "fx_add3", args=["i32:4", "i32:5", "i32:6"]),
+        # Stack overflow twice: the guard page must be armed again.
+        v("overflow_a", "fx_recurse", args=["i32:0"]),
+        v("overflow_b", "fx_recurse", args=["i32:0"]),
+        v("after_overflow", "fx_add3", args=["i32:7", "i32:8", "i32:9"]),
+        # The caller's handler chain must be intact after an abandoned call
+        # that had registered its own handler record.
+        v("seh_next_a", "fx_seh_next", ret="u32"),
+        v("seh_fault", "fx_seh_fault"),
+        v("seh_import", "fx_seh_import"),
+        v("seh_next_b", "fx_seh_next", ret="u32"),
+        # Exceptions that the called code (or the system library it calls)
+        # handles itself are not faults.
+        v("badread_null", "fx_bad_read", args=["ptr:0x10"]),
+        v("badread_ok", "fx_bad_read", args=["ptr:buf"], buffers={"buf": {"size": 16, "init": ""}}),
+        v("raise_noncont", "fx_raise_noncont"),
+        v("after_raise", "fx_add3", args=["i32:1", "i32:1", "i32:1"]),
     ]
 
 
@@ -208,14 +232,25 @@ def cmd_snapshot_files(nm, folder):
     return 0
 
 
-def cmd_extra_check(results, snapshot, label):
+def cmd_extra_check(results, mode, label):
+    """`mode` is nosnap, snapshot, resolve (imports resolved) or keep
+    (--keep-state)."""
+    snapshot = mode == "snapshot"
+    resolve = mode == "resolve"
+    keep = mode == "keep"
     rows = read_jsonl(results)
+    header = rows[0]
     by_id = {r["id"]: r for r in rows if r.get("type") == "result"}
     errors = [r for r in rows if r.get("type") == "error"]
 
     def fault_of(i):
         return by_id[i]["fault"]
 
+    def eax_of(i):
+        r = by_id[i]
+        return int(r["regs"]["eax"], 16) if r["regs"] else None
+
+    check(header["state_restored"] is (not keep), f"header says the state is {'kept' if keep else 'restored'}: {header.get('state_restored')}")
     f = fault_of("fault_null_read")
     check(f and f["name"] == "access_violation" and f["access"] == "read" and f["address"] == "0x00000000", f"null read fault: {f}")
     check(by_id["fault_null_read"]["regs"] is None, "no registers after a fault")
@@ -225,9 +260,10 @@ def cmd_extra_check(results, snapshot, label):
     check(f and f["name"] == "integer_divide_by_zero", f"divide fault: {f}")
     f = fault_of("fault_write")
     check(f and f["access"] == "write" and 0x10 <= int(f["address"], 16) < 0x20, f"write fault: {f}")
-    f = fault_of("import_trap")
-    check(f and f["kind"] == "import" and f["name"] == "KERNEL32.dll!GetCurrentProcessId", f"import trap: {f}")
-    check(f and int(f["caller"], 16) != 0, "import trap reports the caller")
+    if not resolve:
+        f = fault_of("import_trap")
+        check(f and f["kind"] == "import" and f["name"] == "KERNEL32.dll!GetCurrentProcessId", f"import trap: {f}")
+        check(f and int(f["caller"], 16) != 0, "import trap reports the caller")
     r = by_id["after_faults"]
     check(r["fault"] is None and r["regs"]["eax"] == "0x00000002", "the batch survives faults")
     check(r["regs"]["fcw"] == "0x0000027F" and r["regs"]["fpu_depth"] == 0, "FPU is clean after recovery")
@@ -245,6 +281,48 @@ def cmd_extra_check(results, snapshot, label):
     check(by_id["add3_declared_stdcall"]["regs"]["cleanup"] == "caller", "a wrongly declared stdcall is detected as caller-cleaned")
     check(by_id["buffer_offset"]["regs"]["eax"] == "0x0000000B" or by_id["buffer_offset"]["regs"]["eax"] == "0x0000000b",
           f"buffer offset pointer: {by_id['buffer_offset']['regs']['eax']}")
+
+    # A result must not depend on the vectors that ran before it.
+    check(eax_of("bump_a") == 1, f"first bump returns {eax_of('bump_a')}")
+    want = 2 if keep else 1
+    check(eax_of("bump_b") == want, f"second identical bump returns {eax_of('bump_b')}, wanted {want} (keep-state={keep})")
+
+    # An SSE exception raised because the vector unmasked it is a fault, and the
+    # batch goes on.
+    f = fault_of("sse_trap")
+    check(f and f["kind"] == "exception" and f["name"].startswith("float_"), f"unmasked SSE exception is a fault: {f}")
+    check(eax_of("after_sse_trap") == 4 + 10 - 6, "the vector after an SSE trap runs")
+
+    # Two stack overflows in a row, then a normal vector.
+    for i in ("overflow_a", "overflow_b"):
+        f = fault_of(i)
+        check(f and f["name"] == "stack_overflow", f"{i}: {f}")
+    check(eax_of("after_overflow") == 7 + 16 - 9, "the vector after two stack overflows runs")
+
+    # The thread's handler chain is intact after abandoned calls.
+    a, b = eax_of("seh_next_a"), eax_of("seh_next_b")
+    check(a is not None and a != 0 and a == b, f"handler chain after abandoned calls: {a} then {b}")
+    f = fault_of("seh_fault")
+    check(f and f["name"] == "access_violation" and f["address"] == "0x00000000", f"fault under a declining handler: {f}")
+    if resolve:
+        check(fault_of("seh_import") is None, "import under a declining handler runs when resolved")
+    else:
+        f = fault_of("seh_import")
+        check(f and f["kind"] == "import", f"import under a declining handler is trapped: {f}")
+
+    if resolve:
+        # The system library handles the access violation itself, so the answer
+        # is the same as without the harness.
+        check(fault_of("import_trap") is None, "resolved import ran")
+        check(fault_of("badread_null") is None and eax_of("badread_null") == 1, f"IsBadReadPtr(null page) handles its own fault: {by_id['badread_null']['fault']} eax={eax_of('badread_null')}")
+        check(fault_of("badread_ok") is None and eax_of("badread_ok") == 0, "IsBadReadPtr(valid) returns 0")
+        f = fault_of("raise_noncont")
+        check(f and f["kind"] == "exception" and f["name"] == "integer_divide_by_zero",
+              f"a non-continuable software exception is recovered, not escalated: {f}")
+        check(eax_of("after_raise") == 2, "the vector after it runs")
+    else:
+        f = fault_of("badread_null")
+        check(f and f["kind"] == "import" and f["name"] == "KERNEL32.dll!IsBadReadPtr", f"unresolved IsBadReadPtr traps: {f}")
 
     msgs = " | ".join(e["error"] for e in errors)
     check(len(errors) == 6, f"six bad lines reported as errors ({len(errors)}): {msgs}")
@@ -335,6 +413,17 @@ def cmd_probe_manifest(variant, nm, exe, out, *opts):
         ]
     elif variant == "simple":
         lines += [H("add3", "fx_add3", args="i32,i32,i32", ret="i32")]
+    elif variant == "noret":
+        lines += [H("add3", "fx_add3", args="i32,i32,i32")]
+    elif variant == "tail":
+        # A jump thunk and the function it jumps to, both with return capture:
+        # the second entry arrives at the same stack position as the first.
+        lines += [
+            H("thunk", "fx_thunk_sub3", args="i32,i32,i32", ret="i32"),
+            H("sub3", "fx_sub3", args="i32,i32,i32", ret="i32"),
+        ]
+    elif variant == "sleepy":
+        lines += [H("sleepy", "fx_sleepy", args="i32", ret="i32")]
     elif variant == "threads":
         lines += [H("fact", "fx_fact", args="i32", ret="i32")]
     elif variant == "rel8":
@@ -377,14 +466,17 @@ def check_common(header, body, n_expected_tid=1):
     check(all(isinstance(r["tick"], int) for r in body), "every record has a tick count")
 
 
-def cmd_probe_check(variant, log, program_out, baseline_out, label):
+def cmd_probe_check(variant, log, program_out, baseline_out, label, exe=None):
     n = 5
     # Lines about waiting for an injector are not program results.
     prog = [l for l in open(program_out).read().strip().splitlines() if not l.startswith("waiting pid=")]
     base = open(baseline_out).read().strip().splitlines()
-    if variant in ("main", "simple", "auto", "inject-pid", "nosuspend"):
+    if variant in ("main", "simple", "auto", "inject-pid", "nosuspend", "tail", "nosha"):
         check(prog == base or variant == "inject-pid", f"program output unchanged by the probe: {prog} vs {base}")
     header, calls, rets, body = load_log(log)
+    if exe is not None:
+        # The log always says which binary it measured, asked for or not.
+        check(header.get("host_sha256", "").lower() == file_sha256(exe), f"header carries the host exe hash: {header.get('host_sha256')}")
     if variant == "main":
         check_common(header, body)
         check(header["installed"] is True and header["host_sha256_check"] == "match", "installed, host hash matched")
@@ -472,6 +564,33 @@ def cmd_probe_check(variant, log, program_out, baseline_out, label):
             else:
                 ok = ok and stack and stack.pop() == x["call"]
         check(ok and not stack, "every fact return refers to its own call")
+    elif variant == "nosha":
+        check_common(header, body)
+        check(header["host_sha256_check"] == "not_requested", f"hash not requested: {header['host_sha256_check']}")
+        check(header["installed"] is True, "hooks installed without a host hash in the manifest")
+    elif variant == "tail":
+        check_common(header, body)
+        check(header["installed"] is True and all(h["status"] == "installed" for h in header["hooks"]), f"both hooks installed: {header['hooks']}")
+        check(not [x for x in body if x["type"] == "fatal"], f"no fatal record: {[x for x in body if x['type'] == 'fatal']}")
+        got = [(x["type"], x["hook"]) for x in body]
+        want = [("call", "thunk"), ("call", "sub3"), ("ret", "sub3"), ("ret", "thunk")] * n
+        check(got == want, f"calls and returns pair up through the tail jump: {got[:8]}...")
+        by_seq = {x["seq"]: x for x in body}
+        for x in body:
+            if x["type"] == "ret":
+                c = by_seq.get(x["call"])
+                check(c is not None and c["type"] == "call" and c["hook"] == x["hook"], f"{x['hook']} return {x['seq']} refers to its own call")
+        for i, x in enumerate([r for r in rets if r["hook"] == "thunk"]):
+            check(x["ret"] == i - 3, f"thunk[{i}] ret {x['ret']}")
+        for i, x in enumerate([r for r in rets if r["hook"] == "sub3"]):
+            check(x["ret"] == i - 3, f"sub3[{i}] ret {x['ret']}")
+    elif variant == "sleepy":
+        check_common(header, body)
+        check(header["installed"] is True and header.get("pinned") is True, f"installed and pinned in memory: pinned={header.get('pinned')}")
+        text = " ".join(prog)
+        check("unload-inside: freed" in text and "unload-inside: sleepy returned 401" in text,
+              f"the thread returned through the return stub after the unload: {prog}")
+        check(len(calls) == 1 and len(rets) == 1 and rets[0]["ret"] == 401 and rets[0]["call"] == calls[0]["seq"], f"one call and its return were logged: {body}")
     elif variant in ("simple", "auto", "inject-pid", "nosuspend"):
         check_common(header, body)
         check(header["installed"] is True, "hooks installed")
@@ -520,11 +639,20 @@ def cmd_nvse_check(log, program_out, mode, label):
     header = rows[0]
     check(header["origin"] == "nvse" and header["installed"] is True, f"origin {header.get('origin')}")
     calls = [r for r in rows if r["type"] == "call"]
-    # nvse-sim runs the loop 3 times; with "free" the DLL is unloaded and
-    # the second run (2 iterations) must not be logged.
-    check(len(calls) == 3, f"three loop iterations logged ({len(calls)})")
+    # nvse-sim runs the loop 3 times, unloads the DLL (with "free") and runs it
+    # twice more. Without return capture the unload restores the code, so the
+    # second run is not logged. With return capture the module stays pinned in
+    # memory and the hooks keep working.
     if mode == "free":
+        check(header.get("pinned") is False, f"no return capture, so the module is not pinned: {header.get('pinned')}")
+        check(len(calls) == 3, f"unload restored the code: three loop iterations logged ({len(calls)})")
         check("unloaded" in prog and prog.count("loop n=") == 2, f"program ran after unload: {prog.strip()}")
+    elif mode == "free-pinned":
+        check(header.get("pinned") is True, f"return capture pins the module: {header.get('pinned')}")
+        check(len(calls) == 5, f"hooks kept working after FreeLibrary: five loop iterations logged ({len(calls)})")
+        check("unloaded" in prog and prog.count("loop n=") == 2, f"program ran after unload: {prog.strip()}")
+    else:
+        check(len(calls) == 3, f"three loop iterations logged ({len(calls)})")
     return finish(label)
 
 
@@ -592,7 +720,7 @@ def main(argv):
     if cmd == "snapshot-files":
         return cmd_snapshot_files(*args)
     if cmd == "extra-check":
-        return cmd_extra_check(args[0], args[1] == "snapshot", args[2])
+        return cmd_extra_check(*args)
     if cmd == "decode-crosscheck":
         return cmd_decode_crosscheck(*args)
     if cmd == "probe-manifest":

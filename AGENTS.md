@@ -5,7 +5,8 @@ own game installation, with a stable, efficient 64-bit runtime, mod support
 and an architecture that supports VR.
 
 Read `docs/MILESTONES.md` first. Read only relevant source and reference
-sections. `README.md` documents features and commands. Previous instructions
+sections. For research work, `docs/METHODOLOGY.md` describes the method and
+`research/*/README.md` the tools. `README.md` documents features and commands. Previous instructions
 are preserved verbatim in `docs/ENGINE_REFERENCE.md` and
 `docs/CLAUDE_REFERENCE.md`; their relevant rules still apply, but their
 historical next-step lists do not determine current priorities.
@@ -15,6 +16,12 @@ historical next-step lists do not determine current priorities.
 - Derive behavior and values from game files, compiled shaders, Ghidra or
   recordings. No stand-ins or invented behavior; leave unsupported features
   out. Label unresolved guesses in code and topic findings.
+- Since 2026-10-05 (decisions in `docs/adr/`): names, types and layouts from
+  the Xbox 360 prototype symbols may be used, marked `(Xbox PDB)` (ADR-0002),
+  and decompiled logic may be translated into Rust, marked with its address
+  (ADR-0003). This replaces the older reference-doc rule "never copy
+  decompiled code into the project". Raw decompiler exports, databases and
+  executable bytes are still never committed.
 - For behavior investigations, start with FNV's Ghidra decompilation, then
   inspect the associated game data and verify in the original game. The user
   explicitly prefers this order over trial-and-error viewer changes.

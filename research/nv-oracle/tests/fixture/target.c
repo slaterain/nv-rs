@@ -18,6 +18,10 @@
  *                     load a DLL, call NVSEPlugin_Query and NVSEPlugin_Load
  *                     the way a plugin loader would, run the loop, and
  *                     optionally unload the DLL and run it again.
+ *   unload-inside <dll>
+ *                     load a DLL, start a thread that sleeps inside a
+ *                     function, unload the DLL while that thread is still
+ *                     inside, and let the thread return.
  *
  * Build: see run-wine-tests.sh (i686-w64-mingw32-gcc -O1 -fno-omit-frame-pointer -msse2).
  */
@@ -147,6 +151,108 @@ FX int fx_ud2(void) {
 }
 
 FX int fx_divide(int a, int b) { return a / b; }
+
+/* Mutable state in .bss: two identical calls give 1 and then 2 unless the
+ * harness puts the image's writable memory back between vectors. */
+static int fx_counter;
+FX int fx_bump(void) { return ++fx_counter; }
+
+/* Infinite recursion with a real stack frame, to overflow the stack. */
+FX int fx_recurse(int n) {
+    volatile char pad[512];
+    pad[0] = (char)n;
+    return fx_recurse(n + 1) + pad[0];
+}
+
+/* Calls that need an import, to test code that handles its own exceptions
+ * (IsBadReadPtr catches the access violation inside the system library) and
+ * a software-raised exception that is marked non-continuable. */
+FX int fx_bad_read(const void *p) { return IsBadReadPtr(p, 4); }
+
+FX int fx_raise_noncont(void) {
+    RaiseException(0xC0000094u, EXCEPTION_NONCONTINUABLE, 0, NULL); /* integer divide by zero */
+    return 5;
+}
+
+/* Calls Sleep for a while: a thread inside a hooked function with a captured
+ * return while the probe is unloaded. */
+FX int fx_sleepy(int ms) {
+    Sleep((DWORD)ms);
+    return ms + 1;
+}
+
+/* Code that registers its own structured exception handler record, written
+ * as raw assembly so the record layout is explicit:
+ *   fx_seh_catch(p):  reads *p inside a handler that catches the access
+ *                     violation; returns 1 if it was caught, 0 otherwise.
+ *   fx_seh_fault():   registers a handler that declines, then faults.
+ *   fx_seh_import():  registers a handler that declines, then calls an import.
+ *   fx_seh_next():    returns the record that the newest one links to.
+ * The last three let a test see whether the caller's handler chain is intact
+ * after the call was abandoned. */
+__asm__(".text\n"
+        ".globl _fx_decline_handler\n"
+        "_fx_decline_handler:\n"
+        "  mov $1, %eax\n" /* ExceptionContinueSearch */
+        "  ret\n"
+        ".globl _fx_catch_handler\n"
+        "_fx_catch_handler:\n"
+        "  mov 4(%esp), %eax\n"
+        "  testl $6, 4(%eax)\n" /* unwinding: not ours to handle */
+        "  jnz 1f\n"
+        "  mov 8(%esp), %eax\n"  /* the record, which is where ESP was */
+        "  mov 12(%esp), %ecx\n" /* CONTEXT */
+        "  mov %eax, 0xC4(%ecx)\n" /* Esp */
+        "  movl $_fx_catch_resume, 0xB8(%ecx)\n" /* Eip */
+        "  xor %eax, %eax\n" /* ExceptionContinueExecution */
+        "  ret\n"
+        "1:\n"
+        "  mov $1, %eax\n"
+        "  ret\n"
+        ".globl _fx_seh_catch\n"
+        "_fx_seh_catch:\n"
+        "  mov 4(%esp), %ecx\n"
+        "  push $_fx_catch_handler\n"
+        "  pushl %fs:0\n"
+        "  mov %esp, %fs:0\n"
+        "  mov (%ecx), %eax\n"
+        "  popl %fs:0\n"
+        "  add $4, %esp\n"
+        "  xor %eax, %eax\n"
+        "  ret\n"
+        "_fx_catch_resume:\n"
+        "  popl %fs:0\n"
+        "  add $4, %esp\n"
+        "  mov $1, %eax\n"
+        "  ret\n"
+        ".globl _fx_seh_fault\n"
+        "_fx_seh_fault:\n"
+        "  push $_fx_decline_handler\n"
+        "  pushl %fs:0\n"
+        "  mov %esp, %fs:0\n"
+        "  xor %eax, %eax\n"
+        "  mov (%eax), %eax\n"
+        "  popl %fs:0\n"
+        "  add $4, %esp\n"
+        "  ret\n"
+        ".globl _fx_seh_import\n"
+        "_fx_seh_import:\n"
+        "  push $_fx_decline_handler\n"
+        "  pushl %fs:0\n"
+        "  mov %esp, %fs:0\n"
+        "  call *__imp__GetCurrentProcessId@0\n"
+        "  popl %fs:0\n"
+        "  add $4, %esp\n"
+        "  ret\n"
+        ".globl _fx_seh_next\n"
+        "_fx_seh_next:\n"
+        "  mov %fs:0, %eax\n"
+        "  mov (%eax), %eax\n"
+        "  ret\n");
+extern int fx_seh_catch(int *p);
+extern int fx_seh_fault(void);
+extern int fx_seh_import(void);
+extern unsigned fx_seh_next(void);
 
 /* A function whose first bytes hold a short branch (85 C9 74 06 ...), which
  * a hook cannot relocate. Takes its argument in ECX. */
@@ -398,6 +504,16 @@ static void t_fill(const char *id, int seed) {
     end_void();
 }
 
+static void t_seh_catch(const char *id, int use_null) {
+    Obj o = {1, 2, 3.0f, 4};
+    begin(id, "fx_seh_catch", "cdecl", "i32", DEFAULT_CW, use_null ? "ptr:null" : "ptr:obj");
+    buf_in("obj", &o, sizeof o);
+    fpu_set(DEFAULT_CW);
+    int r = fx_seh_catch(use_null ? NULL : &o.a);
+    fpu_set(RESTORE_CW);
+    end_i32(r);
+}
+
 static int selftest(void) {
     t_add3("add3_a", 5, 7, 100);
     t_add3("add3_b", -1, 0x7fffffff, 3);
@@ -443,6 +559,8 @@ static int selftest(void) {
     t_obj_set("objset_b", -3, 70000);
     t_fill("fill_a", 4);
     t_fill("fill_b", -9);
+    t_seh_catch("seh_catch_ok", 0);
+    t_seh_catch("seh_catch_null", 1);
     return 0;
 }
 
@@ -552,6 +670,31 @@ static int nvse_sim(const char *dll, int editor, int unload, int wait_ms) {
     return 0;
 }
 
+/* ---- unload the probe while a thread is inside a hooked function ---- */
+
+static DWORD WINAPI sleepy_thread(LPVOID p) {
+    *(int *)p = fx_sleepy(400);
+    return 0;
+}
+
+static int unload_inside(const char *dll) {
+    HMODULE h = LoadLibraryA(dll);
+    if (!h) {
+        printf("unload-inside: cannot load %s (error %lu)\n", dll, GetLastError());
+        return 1;
+    }
+    int result = 0;
+    HANDLE t = CreateThread(NULL, 0, sleepy_thread, &result, 0, NULL);
+    Sleep(150);
+    FreeLibrary(h);
+    printf("unload-inside: freed\n");
+    fflush(stdout);
+    WaitForSingleObject(t, INFINITE);
+    printf("unload-inside: sleepy returned %d\n", result);
+    fflush(stdout);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && !strcmp(argv[1], "selftest")) return selftest();
     if (argc >= 2 && !strcmp(argv[1], "loop")) {
@@ -575,6 +718,9 @@ int main(int argc, char **argv) {
         }
         return nvse_sim(argv[2], editor, unload, wait_ms);
     }
-    fprintf(stderr, "usage: target selftest | loop [N [ms]] | threads T N [ms] | nvse-sim <dll> [editor] [free] [wait <ms>]\n");
+    if (argc >= 3 && !strcmp(argv[1], "unload-inside")) return unload_inside(argv[2]);
+    fprintf(stderr,
+            "usage: target selftest | loop [N [ms]] | threads T N [ms] | nvse-sim <dll> [editor] [free] [wait <ms>] | "
+            "unload-inside <dll>\n");
     return 2;
 }

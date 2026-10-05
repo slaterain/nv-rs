@@ -1,9 +1,15 @@
 # Shared native research workflow
 
+The overall method, its sources and the order of work are in
+[METHODOLOGY.md](METHODOLOGY.md). The project's own research tools are in
+`research/` (Ghidra scripts in `research/ghidra`, native oracles in
+`research/nv-oracle`); they contain no game content.
+
 Start with the current M1 topic handoff and its executable addresses. Read
 the matching Ghidra export, inspect associated game data, then compare in the
-original game. Keep exports, tools, databases, recordings and manifests in
-the private research tree outside this repository.
+original game. Keep exports, third-party tool snapshots, databases,
+recordings, oracle logs and manifests in the private research tree outside
+this repository.
 
 ## gamedb evaluation, 2026-10-04
 

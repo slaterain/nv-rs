@@ -8,7 +8,7 @@ Start with [docs/MILESTONES.md](docs/MILESTONES.md) and open an issue or discuss
 
 Fork the repository and submit a pull request; contributors do not receive write access to the project. Describe the behavior changed, the evidence behind it, and any unresolved uncertainty. For game behavior, cite the executable build and address, game record or asset, or recording used. Include the relevant branch conditions and a regression case for behavior fixes. Do not present a hypothesis as verified behavior.
 
-Tests should create their inputs from scratch with the existing test fixture tools. Do not commit game assets, executable fragments, decompilation output, recordings, or files copied from a user's installation. The project reads data from a game installation the user owns; it does not redistribute that data.
+Tests should create their inputs from scratch with the existing test fixture tools. Do not commit game assets, executable fragments, raw decompiler exports or databases, recordings, or files copied from a user's installation. Logic translated from the decompiled program and names from the Xbox 360 prototype symbols are allowed when marked as described in [ADR-0003](docs/adr/0003-decompiled-code-in-the-project.md) and [ADR-0002](docs/adr/0002-xbox-prototype-symbols.md). The project reads data from a game installation the user owns; it does not redistribute that data.
 
 ## Code and checks
 
@@ -23,7 +23,7 @@ cargo fmt --all -- --check
 cargo build --release
 ```
 
-The viewer has its own workspace and must be checked from `viewer/`. Include the commands and results in the pull request. Documentation-only changes do not need game publication.
+`cargo test` also runs a repository hygiene check (`crates/nvinspect/tests/repo_hygiene.rs`) that rejects game or binary file types, absolute user-profile paths, control characters and Ghidra's automatic names in code and docs. The tools in `research/` have their own build and test instructions in their READMEs. The viewer has its own workspace and must be checked from `viewer/`. Include the commands and results in the pull request. Documentation-only changes do not need game publication.
 
 ## AI assistance
 

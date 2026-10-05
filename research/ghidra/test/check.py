@@ -119,6 +119,7 @@ def parse_pe(path):
             "size_of_raw_data": rawsz,
             "pointer_to_raw_data": "0x%08x" % rawptr,
             "characteristics": "0x%08x" % schars,
+            "raw_in_file": rawptr + rawsz <= len(d),
             "raw_sha256": hashlib.sha256(d[rawptr:rawptr + rawsz]).hexdigest(),
         })
     info["sections_va"] = secs
@@ -701,6 +702,23 @@ def stage_nodecomp(c):
     check(failed["gate"]["passed"] is True, "the count gate itself passed: the failure is the decompiler gate")
 
 
+def stage_decomp_branches(c):
+    print("decompile outcomes other than ok (the conditions were forced in mutated copies of the script)")
+    for name, status, text in (("export_timeout", "timeout", "no result within 7 s"),
+                               ("export_errmsg", "error", "decompile did not complete")):
+        d = c.path(name)
+        check(not os.path.exists(os.path.join(d, "manifest.json")),
+              name + ": no manifest.json when no function decompiled")
+        failed = load_json(os.path.join(d, "manifest.failed.json"))
+        recs = load_lines(os.path.join(d, "functions.jsonl"))
+        sc = failed["status_counts"]
+        check(len(recs) == failed["records_written"] and sc[status] == len(recs) and sc["ok"] == 0,
+              name + ": every function still has a record, with status %s (%d)" % (status, len(recs)))
+        check(all(r["decompile_status"] == status and r["decompile_error"] == text and r["c"] is None for r in recs),
+              name + ": record has the status, the error text '%s' and no C text" % text)
+        check(failed["gate"]["passed"] is True, name + ": the count gate itself passed")
+
+
 def stage_inspect(c):
     print("program inspection")
     ins = load_json(c.path("inspect.json"))
@@ -968,6 +986,7 @@ STAGES = {
     "gate": stage_gate,
     "tx": stage_tx,
     "nodecomp": stage_nodecomp,
+    "decomp_branches": stage_decomp_branches,
     "inspect": stage_inspect,
     "names_tags": stage_names_tags,
     "cards_crt": stage_cards_crt,

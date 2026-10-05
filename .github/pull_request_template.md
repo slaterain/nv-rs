@@ -16,7 +16,7 @@ Disclose whether AI tools assisted and what they helped with. Confirm that a hum
 
 ## Repository contents
 
-Confirm this change includes no game assets, saves, recordings, executable fragments, or decompilation output. Review logs, reports, and screenshots for personal information such as usernames or local paths before attaching them.
+Confirm this change includes no game assets, saves, recordings, executable fragments, or raw decompiler exports, and that any translated decompiled logic or prototype-symbol names are marked as ADR-0003 and ADR-0002 describe. Review logs, reports, and screenshots for personal information such as usernames or local paths before attaching them.
 
 ## Handoff
 
