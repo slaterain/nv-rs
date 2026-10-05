@@ -237,9 +237,9 @@ fn windows_user_path(b: &[u8]) -> bool {
 }
 
 /// Whether the `/Users/` at `b[i..]` begins an absolute path rather than
-/// ending a longer one (`src/Users/x` is not a profile path). A drive letter
-/// component is accepted only as the first component (`/c/Users`) or right
-/// after `/mnt` or `/cygdrive`.
+/// ending a longer one (a `Users` folder inside a project path is not a profile
+/// path). A drive letter component is accepted only as the first component
+/// (`/c/Users`) or right after `/mnt` or `/cygdrive`.
 fn path_starts_at(b: &[u8], i: usize) -> bool {
     let path_char =
         |c: u8| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'.' | b'-' | b'~' | b'$' | b'%');
@@ -1075,7 +1075,7 @@ mod matchers {
     #[test]
     fn windows_profile_paths_are_found() {
         let backslash = ["C:", r"\Users\alice\nv-re\findings"].concat();
-        let slash = ["d:", "/users/Bob/Desktop"].concat();
+        let slash = ["d:", "/users/", "Bob/Desktop"].concat();
         let doubled = ["C:", r"\\Users\\carol\\x"].concat();
         let in_text = format!("see `{backslash}` for more");
         assert!(has_user_profile_path(&backslash));
