@@ -36,8 +36,14 @@ All scripts live in this directory. Ghidra compiles them when they run.
 `NvCommon.java` is not a script: it holds helper code the others share, so
 keep it next to them. Arguments are `key=value` pairs after the script name.
 Unknown or malformed arguments make the script throw before it writes
-anything. `analyzeHeadless` exits with 0 even when a script throws, so look
-for `REPORT SCRIPT ERROR` in its log (the PowerShell helper below does).
+anything. `analyzeHeadless` exits with 0 even when a script throws, and also
+when it could not open the program at all (a locked project or a full disk;
+then no script runs). So a run only counts when its exit status is 0, its log
+has no `REPORT SCRIPT ERROR`, `Abort due to Headless analyzer error`,
+`Open failed` or `Error during analysis` line, and the log has one
+`INFO  SCRIPT:` line for every `-postScript` that was asked for. The
+PowerShell helper below checks all of that, and `test/run-tests.sh` does the
+same.
 
 Ghidra compiles every `.java` file below a script directory, sub-folders
 included (so `test/` is compiled with the scripts), and when two files define
@@ -81,7 +87,10 @@ the program's header memory:
   (for example a Steam and a GOG exe) needs.
 
 `executable_path` is the path Ghidra recorded at import, with the user-profile
-folder replaced by `%USERPROFILE%`. The raw-section hashes need the file, not
+folder replaced by `%USERPROFILE%`, and so is the PDB path of the CodeView
+record (`pdb_path`; for a module you built it is often under your profile
+folder). Backslashes become forward slashes in both. Ghidra's own `PDB File`
+option holds only the file name. The raw-section hashes need the file, not
 only the program: the script reads it from the recorded path and uses it
 only if its SHA-256 equals the recorded one. `section_hash_status` says what
 happened, and `raw_sha256` is `null` when the file could not be used (moved,
@@ -119,7 +128,8 @@ ranges), `size`, `prototype`, `calling_convention`, `param_count`,
   plain namespaces, so a name such as `Foo::Bar` imported from a CSV shows
   `namespace` `Foo` and an empty `class`.
 - `vtable_slots` lists `{table, table_address, table_class, slot}` for every
-  slot of every `vftable` symbol (see below) that points at the function.
+  slot of every vtable label (see `vtable_checks` below) that points at the
+  function.
 - `data_refs` holds `address`, reference `type`, `label` (only a real name,
   not a Ghidra placeholder) and `provenance`, the source and pin that
   `NvImportNameMap` stored for a label it created at that address (empty
@@ -142,10 +152,19 @@ function is invisible to that walk. The manifest therefore also reports:
   no function. Runs made only of padding (`0x00`, `0x90`, `0xCC` or
   multi-byte x86 NOPs) are counted separately; the other runs are listed
   (`has_instructions` says whether Ghidra disassembled them).
-- `vtable_checks`: for every symbol whose name is or ends with `vftable`
-  (what Ghidra's MSVC RTTI analysis creates), the 4-byte slots are walked
-  while they point into executable memory, and each slot whose target is not
-  the entry of a defined function is listed with the reason.
+- `vtable_checks`: for every vtable label, the 4-byte slots are walked while
+  they point into executable memory (or until the next vtable label), and
+  each slot whose target is not the entry of a defined function is listed
+  with the reason. A label counts as a vtable when its own name (without the
+  namespace) ends with `vftable`, or starts with `vftable` after its first
+  character (the PDB form `` `vftable' ``), or contains `vftable_for_` or
+  `vftable{for`. That is the test Ghidra's own class recovery uses.
+  `RecoverClassesFromRTTIScript` names the only table of a class `vftable`
+  and the other tables of a class with several bases `vftable_for_<Base>`,
+  so a rule that looked only for `vftable` would skip most tables of a game
+  that uses multiple inheritance. `vftable_meta_ptr` is not a table. Two
+  labels at one address give one table, with the second name in
+  `also_named`. The rule is written into the manifest as `symbol_rule`.
 
 The manifest also holds the exe SHA-256, Ghidra version, program name, image
 base, status counts, the SHA-256 of `functions.jsonl`, the options used and
@@ -167,7 +186,11 @@ where the size allows), and:
 - **Float constants, decoded by machine.** Every memory operand read by an
   x87 (`F...`) or SSE float instruction is decoded at the access size the
   instruction uses: 4 bytes as f32, 8 as f64, 10 as 80-bit extended, 16 as
-  four f32 and two f64. A conversion reads the type that comes first in its
+  four f32 and two f64. `MOVQ`, `MOVD`, `MOVDQA`, `MOVDQU`, `PAND`, `PANDN`,
+  `POR` and `PXOR` with an XMM operand count as SSE moves, so a constant
+  loaded with `movq xmm0, [m64]` is decoded too (as f64 for 8 bytes and f32
+  for 4; such a load may really hold an integer, so look at the bytes). A
+  conversion reads the type that comes first in its
   name, not the one it ends with: `CVTSD2SS` reads a double, `CVTSS2SD` a
   float, `CVTPS2PD` two floats, `CVTPD2PS` two doubles, `CVTDQ2PD` two
   32-bit integers. The memory forms of `CVTTSS2SI`, `CVTTSD2SI` and the
@@ -186,8 +209,10 @@ where the size allows), and:
   - B: x87 arithmetic, compares or float-to-int stores.
   - C: SSE reciprocal approximations (`RSQRTSS`, `RSQRTPS`, `RCPSS`, `RCPPS`).
   - D: x87 transcendentals (`FSIN`, `FCOS`, `FSINCOS`, `FPATAN`, `FPTAN`,
-    `F2XM1`, `FYL2X`, `FYL2XP1`, `FSCALE`) or a direct call to a CRT
-    transcendental function recognised by name.
+    `F2XM1`, `FYL2X`, `FYL2XP1`, `FSCALE`) or a call to a CRT
+    transcendental function recognised by name (a direct call, or a call
+    through the import table such as `call dword ptr [__imp__cos]`, which
+    shows as `ext:<library>::cos`).
 
   `tier` counts the function's own code and the names of the routines it
   calls. `tier_with_callees` also walks the direct callees, their callees and
@@ -200,11 +225,18 @@ where the size allows), and:
 
   **The tier can be too low.** `tier_is_lower_bound` is `true`, with the
   reasons in `tier_lower_bound_reasons`, when something that could raise the
-  tier was not looked at: an indirect call (the target is unknown), a direct
+  tier was not looked at: an indirect call whose target is unknown, a direct
   call to an address that has no function, an imported routine with no usable
   name (`Ordinal_<n>`), callees below the depth limit, or more than 5000
-  callees. Writes through pointers and code reached through jump tables are
-  not followed. The tier is a heuristic for choosing how to test a function,
+  callees. A computed call through an absolute address, such as an import
+  table slot, is not unknown: Ghidra links the slot to the function it holds,
+  so the target is added to the callees and the call is counted in
+  `calls_indirect_resolved`. A call through a register, a vtable or an indexed
+  table stays unknown (an indexed table is not resolved to its first entry),
+  and so does a slot in writable memory that holds an internal function (the
+  function is added to the callees, but the program can change the slot).
+  `calls_indirect` counts every computed call. Writes through pointers and
+  code reached through jump tables are not followed. The tier is a heuristic for choosing how to test a function,
   not a proof; a card with `tier_is_lower_bound` set says "a lower bound".
 - **`stateful`**: true when the function writes a global (a write reference
   to non-code memory) or calls another function. Writes through pointers are
@@ -241,13 +273,26 @@ Ghidra default (`SourceType.DEFAULT`), unless `force=1`.
 - A pointer that one entry uses for two roles (the same function as execute
   and eval) is named for the first role and keeps that name; the second role
   is reported as `also used as execute, keeps <name>`, even with `force=1`.
-- Functions the script creates or renames get the tag `src:cmdtable`. When
-  `force=1` replaces a name that was not a Ghidra default, the function's
-  earlier `src:` and `pin:` tags are removed first, so the tags describe the
-  source of the name it has now.
+- A pointer only becomes a function when code can be made there: an
+  instruction already exists at it, or its bytes decode as one (checked with
+  a pseudo-disassembly that changes nothing, so a dry run decides the same as
+  a real run). A pointer into the middle of another function, at defined data
+  or at bytes that do not decode (`FF FF ...`) is reported as `not code (...):
+  skipped`, counted in `not code N` in the summary line, and left alone. Only
+  the first instruction is checked. If Ghidra still cannot create a function
+  after those checks, the script throws and its transaction is aborted, so the
+  table is never left half labeled.
+- Functions the script creates or renames get the tag `src:cmdtable`. A
+  function it only recognizes (a shared stub that already exists, or one that
+  already has the wanted name) is not tagged, so its tags still say where its
+  name came from. When `force=1` replaces a name that was not a Ghidra
+  default, the function's earlier `src:` and `pin:` tags are removed first, so
+  the tags describe the source of the name it has now.
 - `dry=1` changes nothing. It keeps track of the functions it would create
   and the names it would give, so its report and counts match the real run on
-  the same program (the tests compare them row by row).
+  the same program (the tests compare them row by row). It cannot know that
+  a function created earlier in the run will cover a handler address that
+  comes later; the real run then reports that pointer as inside a function.
 
 The report has one row per entry: `index,address,opcode,long,short,params,
 execute,parse,eval,flags,action`. If anything throws, the script aborts its
@@ -265,7 +310,7 @@ Input header: `address,name,source,pin[,kind]`.
 | `name` | The name, optionally qualified as `Class::Method` or `Foo<int>::Bar`. |
 | `source` | Where the name came from (`rtti`, `xnvse`, `jip`, `jg`, `bgs`, `llm`, `own`, ...): 1 to 32 characters of `[A-Za-z0-9_.-]`. |
 | `pin` | Commit hash or other version stamp of that source. Empty becomes `none`. |
-| `kind` | `function` or `label`. Empty means function if one exists or can be created at the address, otherwise label. |
+| `kind` | `function` or `label`. Empty means function if one exists or can be created at the address, otherwise label. An address inside a function but not at its entry is a `conflict` that names the function's entry: it is most likely an address that is slightly off, and a label would hide the name from the export. Give `kind=label` for a label inside the function. |
 
 Sanitization: surrounding whitespace is trimmed and each run of whitespace
 inside becomes one `_`. After that the name may only use
@@ -329,13 +374,22 @@ $sha = (Get-FileHash $Exe -Algorithm SHA256).Hash.ToLower()
 $Out = Join-Path $NvRe "exports\$($sha.Substring(0, 12))"   # private tree, never committed
 New-Item -ItemType Directory -Force $Out | Out-Null
 
-# analyzeHeadless exits with 0 even when a script throws, so look at the log.
+# analyzeHeadless exits with 0 even when a script throws and when it could not
+# open the program (a locked project, a full disk), so check the log too. Any
+# output a run should make is deleted first, so a file left by an earlier run
+# cannot be taken for this one's.
 function Invoke-Nv {
-    param([string]$Log, [string[]]$HeadlessArgs)
+    param([string]$Log, [string[]]$HeadlessArgs, [string[]]$Outputs = @())
+    foreach ($o in $Outputs) { Remove-Item $o -Recurse -Force -ErrorAction SilentlyContinue }
     & $Headless @HeadlessArgs *> $Log
-    if (Select-String -Path $Log -Pattern 'REPORT SCRIPT ERROR' -Quiet) {
+    $code = $LASTEXITCODE
+    $wanted = @($HeadlessArgs | Where-Object { $_ -eq '-postScript' }).Count
+    $started = @(Select-String -Path $Log -Pattern '^INFO  SCRIPT: ').Count
+    if ($code -ne 0 -or
+        (Select-String -Path $Log -Quiet -Pattern 'REPORT SCRIPT ERROR|Abort due to Headless analyzer error|Open failed|Error during analysis') -or
+        $started -ne $wanted) {
         Get-Content $Log -Tail 30
-        throw "A script failed; see $Log"
+        throw "analyzeHeadless failed (exit $code, $started of $wanted scripts started); see $Log"
     }
 }
 ```
@@ -347,7 +401,8 @@ Invoke-Nv "$Out\identity-export.log" @(
     $Project, $ProjName, '-process', $Program, '-noanalysis', '-readOnly',
     '-scriptPath', $Scripts,
     '-postScript', 'NvExeIdentity.java', "out=$Out\identity.json",
-    '-postScript', 'NvExportProgram.java', "out=$Out\export", 'threads=8')
+    '-postScript', 'NvExportProgram.java', "out=$Out\export", 'threads=8') `
+    -Outputs @("$Out\identity.json", "$Out\export")
 
 # The identity hash must equal the file hash, and the section hashes must
 # have been computed from that file.
@@ -364,7 +419,8 @@ $m.uncovered_executable.uncovered_non_padding_bytes; $m.vtable_checks.bad_slots_
 Invoke-Nv "$Out\cards.log" @(
     $Project, $ProjName, '-process', $Program, '-noanalysis', '-readOnly',
     '-scriptPath', $Scripts,
-    '-postScript', 'NvFunctionCard.java', 'addr=005cc4f0,00c755e0', "out=$Out\cards")
+    '-postScript', 'NvFunctionCard.java', 'addr=005cc4f0,00c755e0', "out=$Out\cards") `
+    -Outputs @("$Out\cards")
 ```
 
 The first command also needs the decompiler for every function, so expect a
@@ -389,7 +445,8 @@ foreach ($stride in 40, 48) {
         '-postScript', 'NvLabelCommandTables.java', 'table=0x0118E8E0', 'count=206',
         "stride=$stride", 'dry=1', "report=$Out\console-stride$stride.csv",
         '-postScript', 'NvLabelCommandTables.java', 'table=0x01190910', 'count=640',
-        "stride=$stride", 'dry=1', "report=$Out\script-stride$stride.csv")
+        "stride=$stride", 'dry=1', "report=$Out\script-stride$stride.csv") `
+        -Outputs @("$Out\console-stride$stride.csv", "$Out\script-stride$stride.csv")
     Select-String -Path "$Out\stride$stride.log" -Pattern 'entries,'
 }
 
@@ -400,19 +457,22 @@ Invoke-Nv "$Out\label.log" @(
     '-postScript', 'NvLabelCommandTables.java', 'table=0x0118E8E0', 'count=206',
     "report=$Out\console-labels.csv",
     '-postScript', 'NvLabelCommandTables.java', 'table=0x01190910', 'count=640',
-    "report=$Out\script-labels.csv")
+    "report=$Out\script-labels.csv") `
+    -Outputs @("$Out\console-labels.csv", "$Out\script-labels.csv")
 
 # Name map: dry run first, then apply.
 Invoke-Nv "$Out\names-dry.log" @(
     $Work, $ProjName, '-process', $Program, '-noanalysis', '-readOnly',
     '-scriptPath', $Scripts,
     '-postScript', 'NvImportNameMap.java', "csv=$NvRe\names\names.csv", 'dry=1',
-    "report=$Out\names-dry.csv")
+    "report=$Out\names-dry.csv") `
+    -Outputs @("$Out\names-dry.csv")
 Invoke-Nv "$Out\names.log" @(
     $Work, $ProjName, '-process', $Program, '-noanalysis',
     '-scriptPath', $Scripts,
     '-postScript', 'NvImportNameMap.java', "csv=$NvRe\names\names.csv",
-    "report=$Out\names.csv")
+    "report=$Out\names.csv") `
+    -Outputs @("$Out\names.csv")
 ```
 
 Add `rva=1` when the CSV holds RVAs (the methodology notes that BGS uses

@@ -752,6 +752,33 @@ public class NvCommon {
         return p;
     }
 
+    // ------------------------------------------------------------------
+    // Vtable labels
+    // ------------------------------------------------------------------
+
+    /** What isVtableName accepts, as written into the export manifest. */
+    public static final String VTABLE_NAME_RULE =
+        "label name ends with 'vftable' (Ghidra's 'vftable'), or after its first character starts with " +
+            "'vftable' (the PDB form '`vftable''), or contains 'vftable_for_' (what Ghidra's " +
+            "RecoverClassesFromRTTIScript makes for a base class's table) or 'vftable{for'; " +
+            "'vftable_meta_ptr' is not a table";
+
+    /**
+     * True for the names a vtable label has. Ghidra's RTTI class recovery names
+     * the only table of a class "vftable" and, for a class with several bases,
+     * the others "vftable_for_<Base>". PDB-style names are "`vftable'" and
+     * "`vftable'{for `Base'}". This is the test Ghidra's own class recovery uses to
+     * find its tables, plus any name that ends in "vftable". The argument is the
+     * label's own name, without its namespace.
+     */
+    public static boolean isVtableName(String name) {
+        if (name == null || name.startsWith("vftable_meta_ptr")) {
+            return false;
+        }
+        return name.endsWith("vftable") || (name.length() > 1 && name.substring(1).startsWith("vftable")) ||
+            name.contains("vftable_for_") || name.contains("vftable{for");
+    }
+
     /** The last component of a path written with either kind of separator. */
     public static String fileNameOf(String path) {
         if (path == null) {

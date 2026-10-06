@@ -10,8 +10,9 @@
 // The PE section table is read from the header bytes in the program. The
 // SHA-256 of each section's raw bytes needs the file itself: it is read from
 // the path Ghidra recorded, and only if that file still has the recorded
-// SHA-256. The recorded path is written with the user-profile folder
-// replaced by %USERPROFILE%; the file name is kept.
+// SHA-256. The recorded path and the PDB path of the CodeView record are
+// written with the user-profile folder replaced by %USERPROFILE% (and with
+// forward slashes); the file name is kept.
 //
 // @category NV
 
@@ -111,7 +112,9 @@ public class NvExeIdentity extends GhidraScript {
             { "pdb_version", "PDB Version" } };
         for (String[] k : keys) {
             if (o.contains(k[1])) {
-                m.put(k[0], o.getString(k[1], ""));
+                String v = o.getString(k[1], "");
+                // The PDB path of a module you built is often under your profile folder.
+                m.put(k[0], k[0].equals("pdb_file") ? NvCommon.redactUserPath(v) : v);
                 any = true;
             }
         }
@@ -288,7 +291,8 @@ public class NvExeIdentity extends GhidraScript {
             while (end < cv.length && cv[end] != 0) {
                 end++;
             }
-            out.put("pdb_path", new String(cv, 24, end - 24, java.nio.charset.StandardCharsets.UTF_8));
+            out.put("pdb_path", NvCommon.redactUserPath(
+                new String(cv, 24, end - 24, java.nio.charset.StandardCharsets.UTF_8)));
         }
         else if (cv.length >= 16 && cv[0] == 'N' && cv[1] == 'B' && cv[2] == '1' && cv[3] == '0') {
             out.put("present", true);
@@ -299,7 +303,8 @@ public class NvExeIdentity extends GhidraScript {
             while (end < cv.length && cv[end] != 0) {
                 end++;
             }
-            out.put("pdb_path", new String(cv, 16, end - 16, java.nio.charset.StandardCharsets.UTF_8));
+            out.put("pdb_path", NvCommon.redactUserPath(
+                new String(cv, 16, end - 16, java.nio.charset.StandardCharsets.UTF_8)));
         }
     }
 }

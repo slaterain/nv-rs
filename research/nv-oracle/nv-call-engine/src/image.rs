@@ -20,35 +20,147 @@ pub struct MappedImage {
     pub unresolved: usize,
     /// How the address range was obtained.
     pub placement: Placement,
+    /// The image has a TLS directory, and the copy of its headers in memory
+    /// has that entry zeroed (see [`map`]).
+    pub tls_cleared: bool,
+}
+
+/// The array that `nv-call.exe` reserves for the image, as the host reports
+/// it: address and length. Only this array is free for the image to use; the
+/// host's own sections around it are not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placeholder {
+    pub start: u32,
+    pub len: u32,
 }
 
 /// Where the image's address range came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placement {
-    /// The range was the host program's reserved placeholder (see nv-call).
-    HostPlaceholder { base: u32, size: u32 },
+    /// The range was reserved by the host program: from the host's base to
+    /// the end of its placeholder array (see nv-call). The host's own code in
+    /// front of the array is replaced by the image; `array_start` is where
+    /// the array itself begins.
+    HostPlaceholder {
+        base: u32,
+        size: u32,
+        array_start: u32,
+    },
     /// The range was free and was allocated with `VirtualAlloc`.
     Allocated,
 }
 
+/// The system hands out address space in blocks of this size.
+const GRANULARITY: u64 = 0x1_0000;
+
+fn round_up(v: u64, unit: u64) -> u64 {
+    (v + unit - 1) & !(unit - 1)
+}
+
+/// Sort ranges and join those that touch or overlap.
+fn merge_ranges(mut v: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    v.retain(|(a, b)| b > a);
+    v.sort_unstable();
+    let mut out: Vec<(u64, u64)> = Vec::new();
+    for (a, b) in v {
+        match out.last_mut() {
+            Some(last) if a <= last.1 => last.1 = last.1.max(b),
+            _ => out.push((a, b)),
+        }
+    }
+    out
+}
+
 impl MappedImage {
-    /// The address range that belongs to the mapped program: its own pages,
-    /// plus (with the host placeholder) the rest of the range the placeholder
-    /// reserved. Snapshot regions may be written there.
-    fn owned_range(&self) -> (u64, u64) {
+    /// The address ranges that belong to the mapped program: its own pages
+    /// and, with the host placeholder, the rest of the placeholder array
+    /// (zero pages that nothing else uses). Snapshot regions may be written
+    /// there. The host's other sections (its imports, its TLS template and
+    /// startup tables behind the array, or what is left of its code in front
+    /// of a small image) are the harness's and are not part of it. An image
+    /// that the engine allocated owns the 64 KiB blocks it was given.
+    fn owned_ranges(&self) -> Vec<(u64, u64)> {
+        let image = (
+            u64::from(self.pe.image_base),
+            u64::from(self.pe.image_base) + u64::from(self.pe.size_of_image),
+        );
         match self.placement {
-            Placement::HostPlaceholder { base, size } => {
-                (u64::from(base), u64::from(base) + u64::from(size))
-            }
-            Placement::Allocated => (
-                u64::from(self.pe.image_base),
-                u64::from(self.pe.image_base) + u64::from(self.pe.size_of_image),
-            ),
+            Placement::HostPlaceholder {
+                base,
+                size,
+                array_start,
+            } => merge_ranges(vec![
+                image,
+                (u64::from(array_start), u64::from(base) + u64::from(size)),
+            ]),
+            Placement::Allocated => vec![(image.0, round_up(image.1, GRANULARITY))],
         }
     }
 }
 
 static TOOK_OVER: AtomicBool = AtomicBool::new(false);
+
+/// Exit status of the process when an exception outside the harness's reach
+/// ends it (see [`install_top_level_filter`]).
+pub const EXIT_UNHANDLED: u32 = 4;
+
+fn push_text(buf: &mut [u8], n: &mut usize, text: &[u8]) {
+    let take = text.len().min(buf.len() - *n);
+    buf[*n..*n + take].copy_from_slice(&text[..take]);
+    *n += take;
+}
+
+fn push_hex(buf: &mut [u8], n: &mut usize, v: u32) {
+    let mut digits = *b"0x00000000";
+    for i in 0..8 {
+        digits[2 + i] = b"0123456789ABCDEF"[((v >> (28 - 4 * i)) & 15) as usize];
+    }
+    push_text(buf, n, &digits);
+}
+
+/// The process's top-level exception filter while an image is mapped. It says
+/// what happened and ends the process.
+///
+/// The host program's startup code registers a filter of its own, and that
+/// function lives in pages that the image replaces. Without this one, an
+/// exception that reaches the top level (on a thread that the called code
+/// created, where the harness's handler record is not on the chain) would run
+/// whatever bytes the image has at that address. No allocation and no locks:
+/// the thread that got here may hold either.
+unsafe extern "system" fn top_level_filter(info: *const win::ExceptionPointers) -> i32 {
+    let mut buf = [0u8; 256];
+    let mut n = 0;
+    push_text(&mut buf, &mut n, b"nv-call: unhandled exception ");
+    let rec = (*info).exception_record;
+    if rec.is_null() {
+        push_text(&mut buf, &mut n, b"(no record)");
+    } else {
+        push_hex(&mut buf, &mut n, (*rec).exception_code);
+        push_text(&mut buf, &mut n, b" at ");
+        push_hex(&mut buf, &mut n, (*rec).exception_address as usize as u32);
+    }
+    push_text(
+        &mut buf,
+        &mut n,
+        b" outside the harness's reach (a thread the called code created, or a damaged handler chain); ending the process\r\n",
+    );
+    let mut written = 0u32;
+    win::WriteFile(
+        win::GetStdHandle(win::STD_ERROR_HANDLE),
+        buf.as_ptr().cast(),
+        n as u32,
+        &mut written,
+        std::ptr::null_mut(),
+    );
+    win::TerminateProcess(win::GetCurrentProcess(), EXIT_UNHANDLED);
+    0
+}
+
+/// Replace the process's top-level exception filter with the engine's own.
+fn install_top_level_filter() {
+    // SAFETY: registers a function of this DLL, which stays loaded.
+    unsafe { win::SetUnhandledExceptionFilter(Some(top_level_filter)) };
+}
 
 /// True once the host program's pages have been replaced by the image. From
 /// then on the host's code no longer exists and the process must be ended
@@ -84,6 +196,9 @@ fn host_image() -> Option<(u32, u32)> {
 /// it, so the image sees the zeroed memory a fresh mapping would have. Only
 /// the part the image needs is touched.
 fn take_over_host(base: u32, size: u32) -> Result<(), String> {
+    // Before anything is overwritten: the host registered code in these
+    // pages as the process's exception filter.
+    install_top_level_filter();
     let mut cur = u64::from(base) & !0xfff;
     let end = (u64::from(base) + u64::from(size) + 0xfff) & !0xfff;
     while cur < end {
@@ -156,12 +271,12 @@ fn describe_region(addr: u32) -> String {
 }
 
 /// Reserve and commit `[base, base + size)` exactly, as read-write-execute.
-fn alloc_at(base: u32, size: u32) -> Result<(), String> {
+fn alloc_at(base: u32, size: usize) -> Result<(), String> {
     // SAFETY: asking the OS for a specific address range; the result is checked.
     let got = unsafe {
         win::VirtualAlloc(
             base as usize as *mut c_void,
-            size as usize,
+            size,
             win::MEM_RESERVE | win::MEM_COMMIT,
             win::PAGE_EXECUTE_READWRITE,
         )
@@ -186,8 +301,8 @@ fn alloc_at(base: u32, size: u32) -> Result<(), String> {
     ))
 }
 
-fn inside(range: (u64, u64), start: u64, end: u64) -> bool {
-    range.0 <= start && end <= range.1
+fn inside(ranges: &[(u64, u64)], start: u64, end: u64) -> bool {
+    ranges.iter().any(|r| r.0 <= start && end <= r.1)
 }
 
 /// Make `[addr, addr + len)` committed and writable, allocating at that
@@ -202,7 +317,7 @@ fn inside(range: (u64, u64), start: u64, end: u64) -> bool {
 fn ensure_writable(
     addr: u32,
     len: usize,
-    owned: (u64, u64),
+    owned: &[(u64, u64)],
     made: &mut Vec<(u64, u64)>,
 ) -> Result<(), String> {
     let end = u64::from(addr) + len as u64;
@@ -230,9 +345,7 @@ fn ensure_writable(
         let span = (region_end - page_start + 0xfff) & !0xfff;
         if info.state != win::MEM_FREE
             && !inside(owned, page_start, page_start + span)
-            && !made
-                .iter()
-                .any(|&r| inside(r, page_start, page_start + span))
+            && !inside(made, page_start, page_start + span)
         {
             return Err(format!(
                 "snapshot region {addr:#010x}+{len:#x} overlaps memory that is not part of the mapped image \
@@ -248,9 +361,23 @@ fn ensure_writable(
                 // needed: a later file in the same block then finds it ours,
                 // where a smaller allocation would leave the rest of the
                 // block unusable.
-                let aligned = cur & !0xffff;
-                let free_end = info.base_address as usize as u64 + info.region_size as u64;
-                let span = ((region_end + 0xffff) & !0xffff).min(free_end) - aligned;
+                let aligned = cur & !(GRANULARITY - 1);
+                let free_start = info.base_address as usize as u64;
+                if aligned < free_start {
+                    // The free pages begin partway through a block whose first
+                    // part belongs to something else. The system will not
+                    // allocate there, although the pages are reported free.
+                    return Err(format!(
+                        "snapshot region {addr:#010x}+{len:#x} starts in the unused tail of a 64 KiB block: the pages from \
+                         {free_start:#010x} are free, but address space is handed out in 64 KiB units and the block at \
+                         {aligned:#010x} already belongs to another allocation ({}). Start the region at \
+                         {:#010x} or later.",
+                        describe_region(aligned as u32),
+                        aligned + GRANULARITY
+                    ));
+                }
+                let free_end = free_start + info.region_size as u64;
+                let span = round_up(region_end, GRANULARITY).min(free_end) - aligned;
                 // SAFETY: allocating a free range; result is checked.
                 let got = unsafe {
                     win::VirtualAlloc(
@@ -334,30 +461,54 @@ fn load_symbol(imp: &Import) -> Option<u32> {
 /// ends the current call and reports the import's name. With
 /// `resolve_imports`, slots are filled with the real addresses from the
 /// running system's DLLs instead (those that cannot be found keep a stub).
-pub fn map(path: &Path, resolve_imports: bool) -> Result<MappedImage, String> {
+///
+/// The image's own TLS directory is never given to the loader: the loader reads
+/// an executable's TLS directory from the headers in memory each time a
+/// thread starts or ends, and the image's callbacks would then run inside the
+/// harness whenever the called code (or the system) starts a thread. So the
+/// copy of the headers in memory has that directory entry zeroed
+/// ([`MappedImage::tls_cleared`]); no other byte of the image is changed.
+pub fn map(
+    path: &Path,
+    resolve_imports: bool,
+    placeholder: Placeholder,
+) -> Result<MappedImage, String> {
     let data = std::fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let digest = sha256::hex_digest(&data);
     let pe = Pe::parse(&data).map_err(|e| format!("{}: {e}", path.display()))?;
     let base = pe.image_base;
     let image_end = u64::from(base) + u64::from(pe.size_of_image);
+    let array_end = u64::from(placeholder.start) + u64::from(placeholder.len);
     let placement = match host_image() {
-        Some((hb, hs)) if base >= hb && image_end <= u64::from(hb) + u64::from(hs) => {
+        // The host reserved [its base, the end of its array) for the image.
+        Some((hb, hs))
+            if hb <= placeholder.start
+                && array_end <= u64::from(hb) + u64::from(hs)
+                && base >= hb
+                && image_end <= array_end =>
+        {
             take_over_host(base, pe.size_of_image)?;
-            Placement::HostPlaceholder { base: hb, size: hs }
+            Placement::HostPlaceholder {
+                base: hb,
+                size: (array_end - u64::from(hb)) as u32,
+                array_start: placeholder.start,
+            }
         }
         Some((hb, hs))
             if u64::from(base) < u64::from(hb) + u64::from(hs) && image_end > u64::from(hb) =>
         {
             return Err(format!(
-                "the image wants {base:#010x}-{image_end:#010x}, which overlaps the program's own placeholder \
-                 ({hb:#010x}-{:#010x}) without fitting inside it. Rebuild nv-call with a larger \
-                 NV_CALL_RESERVE_MB (it is {} MiB now).",
+                "the image wants {base:#010x}-{image_end:#010x}, which overlaps the program's own image \
+                 ({hb:#010x}-{:#010x}) without fitting inside the placeholder ({hb:#010x}-{array_end:#010x}). \
+                 Rebuild nv-call with a larger NV_CALL_RESERVE_MB (it is {} MiB now).",
                 u64::from(hb) + u64::from(hs),
-                hs >> 20
+                placeholder.len >> 20
             ));
         }
         _ => {
-            alloc_at(base, pe.size_of_image)?;
+            // Whole 64 KiB blocks, so the pages after the image are not left
+            // as an unusable tail of its block.
+            alloc_at(base, round_up(u64::from(pe.size_of_image), GRANULARITY) as usize)?;
             Placement::Allocated
         }
     };
@@ -365,8 +516,15 @@ pub fn map(path: &Path, resolve_imports: bool) -> Result<MappedImage, String> {
 
     // SAFETY: the whole range was just committed; every copy is checked
     // against the image size and the file length by `Pe::parse`.
+    let mut tls_cleared = false;
     unsafe {
         std::ptr::copy_nonoverlapping(data.as_ptr(), mem, pe.size_of_headers as usize);
+        if let Some(at) = pe.tls_dir_entry {
+            if pe.tls_dir != (0, 0) && at + 8 <= pe.size_of_headers as usize {
+                std::ptr::write_bytes(mem.add(at), 0, 8);
+                tls_cleared = true;
+            }
+        }
         for s in &pe.sections {
             let n = if s.virtual_size == 0 {
                 s.raw_size
@@ -439,6 +597,7 @@ pub fn map(path: &Path, resolve_imports: bool) -> Result<MappedImage, String> {
         imports_resolved: resolve_imports,
         unresolved,
         placement,
+        tls_cleared,
     })
 }
 
@@ -484,7 +643,7 @@ pub fn apply_snapshot(dir: &Path, img: &MappedImage) -> Result<Snapshot, String>
         files.push((addr, path));
     }
     files.sort();
-    let owned = img.owned_range();
+    let owned = img.owned_ranges();
     let mut made: Vec<(u64, u64)> = Vec::new();
     let mut applied: Vec<SnapshotRegion> = Vec::new();
     for (addr, path) in files {
@@ -505,7 +664,7 @@ pub fn apply_snapshot(dir: &Path, img: &MappedImage) -> Result<Snapshot, String>
                 prev.size
             ));
         }
-        ensure_writable(addr, bytes.len(), owned, &mut made)?;
+        ensure_writable(addr, bytes.len(), &owned, &mut made)?;
         // SAFETY: the range was just made committed and writable.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as usize as *mut u8, bytes.len())

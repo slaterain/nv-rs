@@ -517,11 +517,15 @@ pub fn to_file(vectors: &[Vector]) -> String {
     out
 }
 
-/// Exception codes the harness reports by name.
+/// Exception codes the harness reports by name. Any other code is reported
+/// as a fault too, just under the name `exception`.
 pub fn exception_name(code: u32) -> &'static str {
     match code {
         0xC000_0005 => "access_violation",
+        0xC000_0006 => "in_page_error",
         0xC000_001D => "illegal_instruction",
+        0xC000_0025 => "noncontinuable_exception",
+        0xC000_0026 => "invalid_disposition",
         0xC000_0094 => "integer_divide_by_zero",
         0xC000_0095 => "integer_overflow",
         0xC000_0096 => "privileged_instruction",
@@ -536,8 +540,12 @@ pub fn exception_name(code: u32) -> &'static str {
         0xC000_00FD => "stack_overflow",
         0xC000_02B4 => "float_multiple_faults",
         0xC000_02B5 => "float_multiple_traps",
+        0x8000_0001 => "guard_page_violation",
+        0x8000_0002 => "datatype_misalignment",
         0x8000_0003 => "breakpoint",
         0x8000_0004 => "single_step",
+        // What MSVC's `throw` raises (code is the ASCII of "msc" plus 0xE0).
+        0xE06D_7363 => "cpp_exception",
         _ => "exception",
     }
 }
@@ -1147,6 +1155,12 @@ mod tests {
         // What SSE raises when a vector's MXCSR unmasks an exception.
         assert_eq!(exception_name(0xC000_02B5), "float_multiple_traps");
         assert_eq!(exception_name(0xC000_02B4), "float_multiple_faults");
+        // Exceptions the called code raises itself and nothing handled.
+        assert_eq!(exception_name(0xE06D_7363), "cpp_exception");
+        assert_eq!(exception_name(0x8000_0004), "single_step");
+        assert_eq!(exception_name(0xC000_0025), "noncontinuable_exception");
+        assert_eq!(exception_name(0xC000_0026), "invalid_disposition");
+        assert_eq!(exception_name(0xC000_0006), "in_page_error");
         assert_eq!(exception_name(1), "exception");
     }
 }

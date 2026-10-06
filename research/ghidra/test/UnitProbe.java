@@ -4,9 +4,11 @@
 //
 // Args: cases=<file> out=<file>
 // Each line of the cases file is "f80 <20 hex digits>" (ten bytes in memory
-// order) or "redact <text>". The output has one line per case:
+// order), "redact <text>" or "vtname <label name>". The output has one line
+// per case:
 //   f80 <hex> <raw bits of the double, hex> <21-digit decimal string>
 //   redact <text> => <result>
+//   vtname <label name> => true|false
 //
 // @category NV
 
@@ -40,6 +42,10 @@ public class UnitProbe extends GhidraScript {
             else if (line.startsWith("redact ")) {
                 String text = line.substring(7);
                 out.add("redact " + text + " => " + NvCommon.redactUserPath(text));
+            }
+            else if (line.startsWith("vtname ")) {
+                String text = line.substring(7);
+                out.add("vtname " + text + " => " + NvCommon.isVtableName(text));
             }
         }
         Files.write(Paths.get(NvCommon.require("UnitProbe", args, "out")),

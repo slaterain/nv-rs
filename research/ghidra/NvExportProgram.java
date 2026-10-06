@@ -666,20 +666,22 @@ public class NvExportProgram extends GhidraScript {
         Symbol symbol;
         Address at;
         final List<Long> targets = new ArrayList<>();
+        final List<String> otherNames = new ArrayList<>();
     }
 
     /**
-     * For each symbol named "vftable" or ending in "vftable" (the name
-     * Ghidra's MSVC RTTI analysis gives vtables), walks consecutive 4-byte
-     * slots while they point into executable memory.
+     * Finds every vtable label (see NvCommon.isVtableName) and walks its consecutive
+     * 4-byte slots while they point into executable memory. Two labels at one
+     * address give one table, with the second name in "also_named".
      */
     private List<VTable> walkVtables() {
         List<Symbol> found = new ArrayList<>();
         Set<Long> starts = new HashSet<>();
-        SymbolIterator si = symbols.getSymbolIterator("*vftable", true);
+        SymbolIterator si = symbols.getSymbolIterator("*vftable*", true);
         while (si.hasNext()) {
             Symbol s = si.next();
-            if (s.getSymbolType() != SymbolType.LABEL || !s.getAddress().isMemoryAddress()) {
+            if (s.getSymbolType() != SymbolType.LABEL || !s.getAddress().isMemoryAddress() ||
+                !NvCommon.isVtableName(s.getName())) {
                 continue;
             }
             found.add(s);
@@ -692,6 +694,10 @@ public class NvExportProgram extends GhidraScript {
 
         List<VTable> tables = new ArrayList<>();
         for (Symbol s : found) {
+            if (!tables.isEmpty() && tables.get(tables.size() - 1).at.equals(s.getAddress())) {
+                tables.get(tables.size() - 1).otherNames.add(s.getName(true));
+                continue;
+            }
             VTable t = new VTable();
             t.symbol = s;
             t.at = s.getAddress();
@@ -755,6 +761,7 @@ public class NvExportProgram extends GhidraScript {
             totalBad += bad.size();
             Map<String, Object> t = NvCommon.obj();
             t.put("symbol", vt.symbol.getName(true));
+            t.put("also_named", new ArrayList<Object>(vt.otherNames));
             t.put("address", NvCommon.addr(vt.at));
             t.put("slots", vt.targets.size());
             t.put("bad_slot_count", bad.size());
@@ -762,7 +769,7 @@ public class NvExportProgram extends GhidraScript {
             tables.add(t);
         }
         Map<String, Object> v = NvCommon.obj();
-        v.put("symbol_pattern", "*vftable");
+        v.put("symbol_rule", NvCommon.VTABLE_NAME_RULE);
         v.put("vtable_count", tables.size());
         v.put("slots_walked", totalSlots);
         v.put("bad_slots_total", totalBad);

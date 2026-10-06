@@ -450,6 +450,41 @@ def stage_cards(c):
     check(ct["tier"] == "A" and ct["tier_with_callees"] == "A",
           "crt-stub chain without names: integer-only code is tier A all the way down")
 
+    # Calls through the import table have a known target (an external function).
+    ic = card("fx_import_cos")
+    n = ic["instruction_counts"]
+    check(n["calls_indirect"] == 1 and n["calls_indirect_resolved"] == 1,
+          "import card: the call through the import table is a computed call that resolves to a function")
+    check(len(ic["crt_math_callees_transcendental"]) == 1 and
+          re.fullmatch(r"ext:[^:]+::cos", ic["crt_math_callees_transcendental"][0]) and
+          any(x["entry"].startswith("ext:") and x["name"] == "cos" for x in ic["callees"]),
+          "import card: cos is found by name as an external callee (%s)" % ic["crt_math_callees_transcendental"])
+    check(ic["tier"] == "D" and ic["tier_with_callees"] == "D" and ic["tier_is_lower_bound"] is False and
+          ic["tier_lower_bound_reasons"] == [] and not any("targets unknown" in r for r in ic["tier_reasons"]),
+          "import card: CRT math called through the import table is tier D, and not a lower bound")
+    top = card("fx_import_cos_top")
+    check(top["tier"] in ("A", "B") and top["tier_with_callees"] == "D" and top["tier_is_lower_bound"] is False,
+          "import card: the caller of that function is tier D through its callee")
+    tk = card("fx_import_tick")
+    check(tk["instruction_counts"]["calls_indirect_resolved"] == 1 and tk["tier"] == "A" and
+          tk["tier_with_callees"] == "A" and tk["tier_is_lower_bound"] is False and
+          tk["tier_lower_bound_reasons"] == [] and
+          any(x["entry"].startswith("ext:") and x["name"] == "GetTickCount" for x in tk["callees"]),
+          "import card: a function that only calls an imported API (GetTickCount) is tier A and not a lower bound")
+    tc = card("fx_table_call")
+    check(tc["instruction_counts"]["calls_indirect"] == 1 and tc["instruction_counts"]["calls_indirect_resolved"] == 0 and
+          tc["tier_is_lower_bound"] is True and any("1 indirect call(s), targets unknown" in r
+                                                    for r in tc["tier_lower_bound_reasons"]),
+          "table-call card: a call through an indexed table is not resolved to its first entry, and stays a lower bound")
+
+    # MOVQ and MOVD load constants into XMM registers without a float-named instruction.
+    for name, mn, key, val in (("fx_movq_const", "MOVQ", "f64", 6.5), ("fx_movd_const", "MOVD", "f32", 9.25)):
+        k, mv = only_const(name)
+        check(k is not None and k.get(key) == val and mn in mv["fp_mnemonics"] and
+              mv["instruction_counts"]["sse_move_logic"] >= 1,
+              "%s card: the constant %s is decoded (as %s) and the instruction is counted as an SSE move" %
+              (mn, val, key))
+
 
 def action_text(row):
     return row["action"]
@@ -817,6 +852,120 @@ def stage_inject(c):
           "no handler function created by the label script survived")
 
 
+def stage_names_inside(c):
+    print("name import: an address inside a function")
+    rows = load_csv(c.path("names_inside.report.csv"))
+    check(len(rows) == 2, "report has one row per CSV row")
+    inside, label = rows
+    check(inside["action"] == "conflict" and "address is inside function" in inside["detail"] and
+          "at %s, not at its entry" % hx(c.sym("fx_sum")) in inside["detail"] and "kind=label" in inside["detail"],
+          "an address inside fx_sum with no kind is a conflict that names the function's entry (%s)" % inside["detail"])
+    check(label["action"] == "would-apply" and label["kind"] == "label" and label["applied_name"] == "InsideLabel",
+          "the same kind of address with kind=label is accepted as a label inside the function")
+
+
+def stage_vt(c):
+    print("vtable label forms (the export finds vftable_for_<Base>, `vftable' and vftable{for ...})")
+    man, recs = load_export(c, "export_vt")
+    check_export_common(c, "export_vt", man, recs)
+    v = man["vtable_checks"]
+    check("vftable_for_" in v["symbol_rule"] and "vftable_meta_ptr" in v["symbol_rule"],
+          "the manifest records the rule that picks the vtable labels")
+    disp, pdb, brace = (hx(c.sym(n)) for n in ("g_dispatch", "g_vt_pdb", "g_vt_brace"))
+    tabs = {t["address"]: t for t in v["vtables"]}
+    check(v["vtable_count"] == 3 and set(tabs) == {disp, pdb, brace},
+          "three vtables found, one per label form (%s)" % sorted(t["symbol"] for t in v["vtables"]))
+    only, other = hx(c.sym("fp_only_target")), hx(c.sym("fp_other_target"))
+
+    def bad_in(table, nslots):
+        return {b["slot"]: b for b in table["bad_slots"] if b["slot"] < nslots}
+
+    d = tabs[disp]
+    check(d["symbol"] == "Fixture::vftable_for_Base" and d["also_named"] == [] and d["slots"] >= 2,
+          "Fixture::vftable_for_Base (the name Ghidra's RTTI class recovery gives) is walked: %d slots" % d["slots"])
+    bd = bad_in(d, 2)
+    check(list(bd) == [0] and bd[0]["target"] == other and bd[0]["problem"] == "code_without_function",
+          "its slot 0 (code, no function) is listed and slot 1 (a function) is not")
+    p = tabs[pdb]
+    check(p["symbol"] == "Fixture::`vftable'" and p["also_named"] == ["Fixture::vftable"] and p["slots"] >= 3,
+          "the PDB form `vftable' is walked, and a second label at its address is an alias, not a second table (%s, %s)" %
+          (p["symbol"], p["also_named"]))
+    bp = bad_in(p, 3)
+    check(list(bp) == [2] and bp[2]["target"] == other and bp[2]["problem"] == "code_without_function",
+          "its slot 2 is listed")
+    b = tabs[brace]
+    check(b["symbol"] == "Fixture::vftable{for_Base}" and b["slots"] >= 2 and bad_in(b, 2) == {},
+          "the form vftable{for_<Base>} is walked and has no bad slot in its two slots")
+    check(v["bad_slots_total"] == sum(len(t["bad_slots"]) for t in v["vtables"]), "bad slot total adds up")
+    fp = by_entry(recs)[only]
+    got = sorted((s["table_address"], s["slot"], s["table"], s["table_class"]) for s in fp["vtable_slots"])
+    want = sorted([(disp, 1, "Fixture::vftable_for_Base", "Fixture"),
+                   (pdb, 0, "Fixture::`vftable'", "Fixture"), (pdb, 1, "Fixture::`vftable'", "Fixture"),
+                   (brace, 0, "Fixture::vftable{for_Base}", "Fixture"),
+                   (brace, 1, "Fixture::vftable{for_Base}", "Fixture")])
+    check(got == want, "the function in all those slots lists each of them once, with table and class (%s)" % got)
+
+
+def stage_label_tags(c):
+    print("label script: tags only for what it creates or renames")
+    ins = load_json(c.path("inspect_tags.json"))
+    syms = {s["address"]: s for s in ins["symbols"]}
+    sh = syms[hx(c.sym("cmd_shared_parse"))]
+    check(sh["name"] == "SharedStub" and sh["tags"] == ["pin:111111111111", "src:jip"],
+          "a shared stub named by the name import keeps only that import's tags (%s)" % sh["tags"])
+    beta = syms[hx(c.sym("cmd_beta_execute"))]
+    check(beta["name"] == "Cmd_FixtureBeta_Execute" and beta["tags"] == ["pin:2222", "src:own"],
+          "a function that already has the wanted name keeps its own tags (%s)" % beta["tags"])
+    for n, name in (("cmd_alpha_execute", "Cmd_FixtureAlpha_Execute"), ("cmd_gamma_execute", "Cmd_Fixture_Gamma_Odd_Execute")):
+        sy = syms[hx(c.sym(n))]
+        check(sy["name"] == name and sy["tags"] == ["src:cmdtable"],
+              "%s: created and named by the label script, so it carries src:cmdtable" % n)
+    rows = load_csv(c.path("label_tags.csv"))
+    check("already named Cmd_FixtureBeta_Execute" in rows[1]["action"] and
+          "shared by 2 entries, not renamed" in rows[1]["action"] and "created function" not in rows[1]["action"],
+          "the report says which functions were only recognized")
+    names = {r["row"]: r for r in load_csv(c.path("names_tags.report.csv"))}
+    check(names["1"]["action"] == "applied" and "created function" in names["1"]["detail"] and
+          names["2"]["action"] == "applied", "the name import applied both rows")
+
+
+def stage_badcode(c):
+    print("label script: handler pointers that are not code")
+    dry = load_csv(c.path("label_bad_dry.csv"))
+    real = load_csv(c.path("label_bad_real.csv"))
+    check(len(dry) == 9 and len(real) == 9, "report has one row per table entry (9, the last one after the terminator)")
+    r8 = real[8]
+    bad, mid = hx(c.sym("cmd_badcode_execute")), hx(c.sym("cmd_alpha_execute") + 4)
+    check(r8["long"] == "FixtureBadCode" and r8["execute"] == bad and r8["parse"] == mid,
+          "entry 8 is read: execute at the FF FF bytes, parse inside cmd_alpha_execute")
+    check("execute %s: not code (the bytes do not decode as an instruction): skipped" % bad in r8["action"] and
+          "parse %s: not code (inside function " % mid in r8["action"] and
+          "created function" not in r8["action"] and "renamed" not in r8["action"],
+          "real run: both pointers are reported as not code and skipped (%s)" % r8["action"])
+    mismatch = [i for i in range(9) if as_real(dry[i]["action"]) != real[i]["action"]]
+    check(not mismatch, "dry run predicts the real run exactly, row by row (mismatching rows: %s)" % mismatch)
+    ins = load_json(c.path("inspect_badcode.json"))
+    base = load_json(c.path("inspect.json"))
+    syms = {s["address"]: s for s in ins["symbols"]}
+    check(not syms[bad]["is_function"] and not syms[mid]["is_function"] and syms[hx(c.sym("cmd_alpha_execute"))]["is_function"],
+          "no function was created at either pointer, and cmd_alpha_execute is still one function")
+    check(ins["function_count"] == base["function_count"],
+          "the function count did not change (%d)" % ins["function_count"])
+    check(ins["function_tag_counts"] == base["function_tag_counts"], "no tag was added")
+
+
+def stage_nofunc(c):
+    print("label script: a failed createFunction aborts the whole run (mutated copy)")
+    ins = load_json(c.path("inspect_nofunc.json"))
+    ident = load_json(c.path("identity.json"))
+    check(ins["function_count"] == ident["function_count"] and ins["function_tag_counts"] == {} and
+          ins["nv_names_bookmarks"] == [],
+          "the project is unchanged: the function created before the failure was rolled back too (%d functions)" %
+          ins["function_count"])
+    syms = {s["address"]: s for s in ins["symbols"]}
+    check(not syms[hx(c.sym("cmd_alpha_execute"))]["is_function"], "no handler function survived")
+
+
 def rol32(x, n):
     n &= 31
     x &= 0xFFFFFFFF
@@ -824,6 +973,8 @@ def rol32(x, n):
 
 
 RICH_ENTRIES = [(0x00AB, 0x521E, 17), (0x00DD, 0x521E, 3), (0x0105, 0x7809, 42)]
+# A made-up path of the kind a module built by the user would record.
+FAKE_PDB = "/home/dave/build/nvfixture.pdb"
 
 
 def stage_richgen(c):
@@ -848,9 +999,18 @@ def stage_richgen(c):
     blob = b"".join(struct.pack("<I", w ^ key) for w in words) + b"Rich" + struct.pack("<I", key)
     assert start + len(blob) <= lfanew, "fixture DOS stub is too small for the test header"
     d[start:lfanew] = blob + bytes(lfanew - start - len(blob))
+    # The same copy gets a CodeView path under a profile folder, written over the name the linker
+    # was given (which is long enough; the rest of the record's string is zero-filled).
+    old = parse_pe(c.exe)["codeview"]["pdb"].encode()
+    new = FAKE_PDB.encode()
+    assert d.count(old) == 1 and len(new) <= len(old), "cannot patch the CodeView path"
+    d = d.replace(old, new + bytes(len(old) - len(new)))
     with open(c.path("nvrich.exe"), "wb") as f:
         f.write(d)
-    check(True, "wrote nvrich.exe: the fixture with a Rich header of %d entries and key 0x%08x" % (len(comps), key))
+    check(parse_pe(c.path("nvrich.exe"))["codeview"]["pdb"] == FAKE_PDB,
+          "the copy's CodeView record now names a path under a fake profile folder")
+    check(True, "wrote nvrich.exe: the fixture with a Rich header of %d entries (key 0x%08x) and that path" %
+          (len(comps), key))
     return key
 
 
@@ -865,8 +1025,37 @@ def stage_rich(c):
     check(rich.get("checksum_valid") is True, "the XOR key equals the checksum computed over the DOS header and entries")
     check(h["section_hash_status"].startswith("ok") and h["section_table"][0]["raw_sha256"] ==
           parse_pe(c.exe)["sections"][0]["raw_sha256"],
-          "section hashes are those of the original fixture's sections (only the header differs)")
+          "the code section's hash is that of the original fixture's (only the header and the CodeView path differ)")
     check(ident["sha256"] == sha256_file(c.path("nvrich.exe")), "identity SHA-256 equals sha256 of the patched file")
+    # The copy's CodeView path is under a profile folder (see stage_richgen); the identity must not keep it.
+    base = FAKE_PDB.rsplit("/", 1)[1]
+    cvh = h.get("codeview_from_headers", {})
+    check(cvh.get("pdb_path") == "%USERPROFILE%/build/" + base,
+          "the PDB path read from the CodeView record is redacted (%s)" % cvh.get("pdb_path"))
+    check(ident["codeview_from_options"].get("pdb_file") == base,
+          "Ghidra's own PDB File option holds only the file name (%s)" % ident["codeview_from_options"].get("pdb_file"))
+    with open(c.path("identity_rich.json"), encoding="utf-8") as f:
+        raw = f.read()
+    check("/home/dave" not in raw and "dave" not in raw, "no part of the fake profile folder is left in identity_rich.json")
+
+
+# Label names and whether the export treats them as a vtable. The forms are the ones Ghidra's RTTI
+# class recovery (vftable, vftable_for_<Base>) and PDB names (`vftable', `vftable'{for `Base'}) use.
+VTABLE_NAME_CASES = {
+    "vftable": True,
+    "vftable_for_Base": True,
+    "vftable_for_Ns_Base": True,
+    "`vftable'": True,
+    "`vftable'{for_`Base'}": True,
+    "vftable{for_Base}": True,
+    "Foo_vftable": True,
+    "vftable_meta_ptr": False,
+    "vftables": False,
+    "vftab": False,
+    "my_table": False,
+    "FUN_00401000": False,
+    "v": False,
+}
 
 
 def stage_unitgen(c):
@@ -896,7 +1085,10 @@ def stage_unitgen(c):
         "redact /home/dave/nv-re/FalloutNV.exe",
         "redact D:/nv-re/FalloutNV.exe",
         "redact FalloutNV.exe",
+        # A CodeView path of the kind a module built by the user would carry.
+        "redact /home/dave/build/plugin.pdb",
     ]
+    cases += ["vtname " + n for n in VTABLE_NAME_CASES]
     with open(c.path("unit_cases.txt"), "w") as f:
         f.write("\n".join(cases) + "\n")
     check(True, "wrote %d unit cases" % len(cases))
@@ -965,6 +1157,15 @@ def stage_unit(c):
     check(old_wrong > 0,
           "the cases include ones the old round-to-21-digits-then-parse method gets wrong (%d of %d), so they can tell the methods apart" %
           (old_wrong, n80))
+    vt = {}
+    for line in out:
+        if line.startswith("vtname "):
+            name, _, res = line[len("vtname "):].rpartition(" => ")
+            vt[name] = res == "true"
+    check(vt == VTABLE_NAME_CASES,
+          "isVtableName accepts vftable, vftable_for_<Base>, `vftable', `vftable'{for ...}, vftable{for... and names "
+          "ending in vftable, and refuses vftable_meta_ptr and the rest (differences: %s)" %
+          {k: (vt.get(k), v) for k, v in VTABLE_NAME_CASES.items() if vt.get(k) != v})
     redact = [line for line in out if line.startswith("redact ")]
     want = {
         "/" + "C:" + "/Us" + "ers/alice/nv-re/FalloutNV.exe": "%USERPROFILE%/nv-re/FalloutNV.exe",
@@ -973,6 +1174,7 @@ def stage_unit(c):
         "/home/dave/nv-re/FalloutNV.exe": "%USERPROFILE%/nv-re/FalloutNV.exe",
         "D:/nv-re/FalloutNV.exe": "D:/nv-re/FalloutNV.exe",
         "FalloutNV.exe": "FalloutNV.exe",
+        "/home/dave/build/plugin.pdb": "%USERPROFILE%/build/plugin.pdb",
     }
     got = {}
     for line in redact:
@@ -1003,6 +1205,11 @@ STAGES = {
     "cards_crt": stage_cards_crt,
     "dups": stage_dups,
     "inject": stage_inject,
+    "names_inside": stage_names_inside,
+    "vt": stage_vt,
+    "label_tags": stage_label_tags,
+    "badcode": stage_badcode,
+    "nofunc": stage_nofunc,
     "richgen": stage_richgen,
     "rich": stage_rich,
     "unitgen": stage_unitgen,

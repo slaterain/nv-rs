@@ -199,10 +199,21 @@ fn header_line(
     o.hex32("arena_base", arena.base as u32);
     o.bool("state_restored", !opts.keep_state)
         .u64("state_bytes", baseline.size() as u64);
+    // True when the image has a TLS directory whose entry is zeroed in the
+    // copy of the headers in memory (the only change to the image's bytes).
+    o.bool("tls_directory_cleared", img.tls_cleared);
     match img.placement {
-        image::Placement::HostPlaceholder { base, size } => {
+        image::Placement::HostPlaceholder {
+            base,
+            size,
+            array_start,
+        } => {
+            // The range the host reserved for the image: from its own base to
+            // the end of its placeholder array, which begins at `array_start`.
             let mut x = ObjectWriter::new();
-            x.hex32("base", base).u64("size", u64::from(size));
+            x.hex32("base", base)
+                .u64("size", u64::from(size))
+                .hex32("array_start", array_start);
             o.raw("placeholder", &x.finish());
         }
         image::Placement::Allocated => {
@@ -375,7 +386,7 @@ fn execute(
     })
 }
 
-pub fn main() -> i32 {
+pub fn main(placeholder: image::Placeholder) -> i32 {
     let opts = match parse_args() {
         Ok(o) => o,
         Err(e) => {
@@ -383,7 +394,7 @@ pub fn main() -> i32 {
             return 2;
         }
     };
-    let img = match image::map(&opts.image, opts.resolve_imports) {
+    let img = match image::map(&opts.image, opts.resolve_imports, placeholder) {
         Ok(i) => i,
         Err(e) => {
             eprintln!("nv-call: {e}");

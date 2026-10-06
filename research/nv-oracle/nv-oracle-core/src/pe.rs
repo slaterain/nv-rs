@@ -26,6 +26,12 @@ pub struct Pe {
     pub sections: Vec<Section>,
     /// RVA and size of the import directory (zero when absent).
     pub import_dir: (u32, u32),
+    /// RVA and size of the TLS directory (zero when absent).
+    pub tls_dir: (u32, u32),
+    /// Offset in the headers (and so in the file and in a mapped copy) of
+    /// the 8-byte TLS entry of the data directory table, when the table is
+    /// long enough to have one.
+    pub tls_dir_entry: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,6 +60,8 @@ impl fmt::Display for Import {
 
 pub const MACHINE_I386: u16 = 0x14c;
 const MAX_IMAGE_SIZE: u32 = 0x4000_0000;
+/// Index of the TLS entry in the optional header's data directory table.
+const TLS_DIRECTORY: usize = 9;
 const MAX_IMPORTS: usize = 200_000;
 
 fn u16_at(d: &[u8], off: usize) -> Result<u16, String> {
@@ -105,6 +113,13 @@ impl Pe {
         } else {
             (0, 0)
         };
+        // Data directory 9 is the TLS directory.
+        let tls_dir_entry = (dir_count > TLS_DIRECTORY && opt_size >= 96 + (TLS_DIRECTORY + 1) * 8)
+            .then_some(opt + 96 + TLS_DIRECTORY * 8);
+        let tls_dir = match tls_dir_entry {
+            Some(at) => (u32_at(data, at)?, u32_at(data, at + 4)?),
+            None => (0, 0),
+        };
         if size_of_image == 0 || size_of_image > MAX_IMAGE_SIZE {
             return Err(format!("implausible SizeOfImage {size_of_image:#x}"));
         }
@@ -150,6 +165,8 @@ impl Pe {
             entry_rva,
             sections,
             import_dir,
+            tls_dir,
+            tls_dir_entry,
         })
     }
 
@@ -317,6 +334,23 @@ mod tests {
         assert_eq!(pe.rva_to_offset(0x2005), Some(0x405));
         assert_eq!(pe.rva_to_offset(0x2800), None);
         assert_eq!(pe.rva_to_offset(0x0f00), None);
+    }
+
+    #[test]
+    fn finds_the_tls_directory_entry() {
+        let mut data = build();
+        let pe = Pe::parse(&data).unwrap();
+        assert_eq!(pe.tls_dir, (0, 0));
+        // 0x80 + 24 is the optional header, the table starts 96 bytes in.
+        assert_eq!(pe.tls_dir_entry, Some(0x80 + 24 + 96 + 9 * 8));
+        put32(&mut data, 0x80 + 24 + 96 + 9 * 8, 0x2100);
+        put32(&mut data, 0x80 + 24 + 96 + 9 * 8 + 4, 0x18);
+        assert_eq!(Pe::parse(&data).unwrap().tls_dir, (0x2100, 0x18));
+        // A table with fewer than ten entries has none.
+        let mut short = data.clone();
+        put32(&mut short, 0x80 + 24 + 92, 9);
+        let pe = Pe::parse(&short).unwrap();
+        assert_eq!((pe.tls_dir, pe.tls_dir_entry), ((0, 0), None));
     }
 
     #[test]

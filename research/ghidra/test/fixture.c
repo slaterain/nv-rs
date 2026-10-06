@@ -7,7 +7,9 @@
  * reachable only through data pointers, float constants of each width,
  * an x87 transcendental, an SSE reciprocal square root, a thiscall method,
  * SSE conversions that read a constant from memory, call chains of several
- * depths and a function that is only called through a function-pointer table.
+ * depths, a function that is only called through a function-pointer table,
+ * calls through the import table, and pointer tables that the vtable test
+ * gives the label names of a vtable.
  *
  * Build: see run-tests.sh (i686-w64-mingw32-gcc -O1 -msse2).
  */
@@ -91,6 +93,16 @@ static const char s_long_delta[] = "FixtureDelta";
 static const char s_short_delta[] = "FxD";
 static const char s_long_both[] = "FixtureBoth";
 static const char s_bad[] = {'B', 'a', 'd', 0x01, 'N', 'a', 'm', 'e', 0};
+static const char s_long_badcode[] = "FixtureBadCode";
+
+/* A routine whose bytes are no instruction (FF FF ...), reached only through a table entry.
+ * The label script must not turn it into a function. */
+__asm__(".text\n"
+        ".globl _cmd_badcode_execute\n"
+        "_cmd_badcode_execute:\n"
+        ".byte 0xff,0xff,0xff,0xff,0xff,0xff,0xff,0xff\n"
+        ".text\n");
+extern int cmd_badcode_execute(void *a, void *b, void *c, int d);
 
 CmdInfo g_commands[] = {
     {s_long_alpha, s_short_alpha, 0x1000, s_help_alpha, 0, 1, 0,
@@ -110,6 +122,11 @@ CmdInfo g_commands[] = {
      (void *)cmd_both, 0, (void *)cmd_both, 0},
     /* terminator */
     {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    /* After the terminator, so the runs that read eight entries never reach it. The execute
+     * pointer leads to bytes that are no instruction and the parse pointer to the inside of a
+     * function: the label script must leave both alone. */
+    {s_long_badcode, 0, 0x1007, 0, 0, 0, 0,
+     (void *)cmd_badcode_execute, (void *)((char *)cmd_alpha_execute + 4), 0, 0},
 };
 
 /* ---- float constants: x87, SSE, extended ---- */
@@ -320,6 +337,47 @@ NOINLINE unsigned fx_crt_top(unsigned x)
     return fx_crt_wrap(x) + 7u;
 }
 
+/* ---- calls through the import table ----
+ * "call dword ptr [__imp__cos]" has a known target (an external function), unlike a call
+ * through a register or an indexed table. */
+
+extern __declspec(dllimport) double __cdecl fx_imp_cos(double) __asm__("cos");
+__declspec(dllimport) unsigned long __attribute__((stdcall)) GetTickCount(void);
+
+NOINLINE double fx_import_cos(double x)
+{
+    return fx_imp_cos(x) + 1.0;
+}
+
+NOINLINE unsigned long fx_import_tick(unsigned long x)
+{
+    return GetTickCount() ^ x;
+}
+
+NOINLINE double fx_import_cos_top(double x)
+{
+    return fx_import_cos(x) * 2.0;
+}
+
+/* ---- SSE moves that load a constant: MOVQ and MOVD, not a float-named instruction ---- */
+
+const double k_movq_const = 6.5;
+const float k_movd_const = 9.25f;
+
+NOINLINE double fx_movq_const(void)
+{
+    double r;
+    __asm__("movq %1, %0" : "=x"(r) : "m"(k_movq_const));
+    return r;
+}
+
+NOINLINE float fx_movd_const(void)
+{
+    float r;
+    __asm__("movd %1, %0" : "=x"(r) : "m"(k_movd_const));
+    return r;
+}
+
 /* ---- thiscall ---- */
 
 typedef struct Obj {
@@ -345,6 +403,17 @@ NOINLINE int fp_other_target(int v)
 }
 
 static int (*const g_dispatch[])(int) = {fp_other_target, fp_only_target};
+
+/* Call through an indexed table: the target depends on a register, so it stays unknown. */
+NOINLINE int fx_table_call(int i)
+{
+    return g_dispatch[i & 1](i);
+}
+
+/* Two more pointer tables. The vtable test labels them (and g_dispatch) with the names a vtable
+ * gets from Ghidra's class recovery and from PDB symbols. */
+int (*const g_vt_pdb[])(int) __attribute__((used)) = {fp_only_target, fp_only_target, fp_other_target};
+int (*const g_vt_brace[])(int) __attribute__((used)) = {fp_only_target, fp_only_target};
 
 int main(int argc, char **argv)
 {
@@ -383,6 +452,11 @@ int main(int argc, char **argv)
     acc += (int)fx_chain0((unsigned)sel);
     acc += (int)fx_ping((unsigned)sel & 3u);
     acc += (int)fx_crt_top((unsigned)sel);
+    acc += (int)fx_import_cos_top(d);
+    acc += (int)fx_import_tick((unsigned)sel);
+    acc += fx_table_call(sel);
+    acc += (int)fx_movq_const();
+    acc += (int)fx_movd_const();
 
     /* handlers are called through the table only */
     {

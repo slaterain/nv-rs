@@ -174,6 +174,31 @@ FX int fx_raise_noncont(void) {
     return 5;
 }
 
+/* Exceptions that no handler of the called code deals with, so they reach the
+ * harness: a C++-style throw (the code MSVC's throw raises), a continuable
+ * exception with a code of the program's own, and a single step (the code sets
+ * the trap flag itself). The fourth is a thread-name exception, which a
+ * debugger swallows and the harness continues from. */
+FX int fx_raise_cpp(void) {
+    RaiseException(0xE06D7363u, EXCEPTION_NONCONTINUABLE, 0, NULL);
+    return 5;
+}
+
+FX int fx_raise_custom(void) {
+    RaiseException(0xE0000001u, 0, 0, NULL);
+    return 7;
+}
+
+FX int fx_single_step(void) {
+    __asm__ volatile("pushfl\n\torl $0x100, (%%esp)\n\tpopfl\n\tnop\n\tnop" : : : "memory", "cc");
+    return 6;
+}
+
+FX int fx_raise_info(void) {
+    RaiseException(0x406D1388u, 0, 0, NULL);
+    return 8;
+}
+
 /* Calls Sleep for a while: a thread inside a hooked function with a captured
  * return while the probe is unloaded. */
 static volatile LONG fx_inside_sleepy;

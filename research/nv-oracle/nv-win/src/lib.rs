@@ -131,6 +131,13 @@ pub struct ExceptionRecord {
     pub exception_information: [usize; 15],
 }
 
+/// The argument of a top-level exception filter.
+#[repr(C)]
+pub struct ExceptionPointers {
+    pub exception_record: *mut ExceptionRecord,
+    pub context_record: *mut Context,
+}
+
 #[repr(C)]
 pub struct StartupInfoW {
     pub cb: u32,
@@ -195,6 +202,9 @@ const _: () = assert!(size_of::<ProcessInformation>() == 16);
 const _: () = assert!(size_of::<ThreadEntry32>() == 28);
 
 pub type ThreadStart = unsafe extern "system" fn(*mut c_void) -> u32;
+pub type TopLevelFilter = unsafe extern "system" fn(*const ExceptionPointers) -> i32;
+
+pub const STD_ERROR_HANDLE: u32 = -12i32 as u32;
 
 #[link(name = "kernel32")]
 extern "system" {
@@ -291,6 +301,15 @@ extern "system" {
         info: *mut ProcessInformation,
     ) -> Bool;
     pub fn TerminateProcess(process: Handle, code: u32) -> Bool;
+    pub fn SetUnhandledExceptionFilter(filter: Option<TopLevelFilter>) -> Option<TopLevelFilter>;
+    pub fn GetStdHandle(which: u32) -> Handle;
+    pub fn WriteFile(
+        file: Handle,
+        buf: *const c_void,
+        len: u32,
+        written: *mut u32,
+        overlapped: *mut c_void,
+    ) -> Bool;
     pub fn GetFullPathNameW(
         name: *const u16,
         len: u32,

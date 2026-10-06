@@ -206,6 +206,14 @@ def extra_vectors(syms):
         v("badread_ok", "fx_bad_read", args=["ptr:buf"], buffers={"buf": {"size": 16, "init": ""}}),
         v("raise_noncont", "fx_raise_noncont"),
         v("after_raise", "fx_add3", args=["i32:1", "i32:1", "i32:1"]),
+        # Exceptions that nothing in the called code handles are faults, whatever
+        # their code, and the batch goes on. A single step needs no import.
+        v("raise_cpp", "fx_raise_cpp"),
+        v("after_raise_cpp", "fx_add3", args=["i32:2", "i32:3", "i32:4"]),
+        v("raise_custom", "fx_raise_custom"),
+        v("raise_info", "fx_raise_info"),
+        v("single_step", "fx_single_step"),
+        v("after_single_step", "fx_add3", args=["i32:3", "i32:3", "i32:3"]),
     ]
 
 
@@ -346,9 +354,33 @@ def cmd_extra_check(results, mode, label):
         check(f and f["kind"] == "exception" and f["name"] == "integer_divide_by_zero",
               f"a non-continuable software exception is recovered, not escalated: {f}")
         check(eax_of("after_raise") == 2, "the vector after it runs")
+        # No handler of the called code, so the harness records each one. Without
+        # this the system's unhandled-exception path decides, and a vector that
+        # never returned normally could come back with fault null and the value
+        # of the code after the raise.
+        f = fault_of("raise_cpp")
+        check(f and f["kind"] == "exception" and f["name"] == "cpp_exception" and f["code"] == "0xE06D7363",
+              f"an unhandled C++-style exception is a fault: {f}")
+        check(by_id["raise_cpp"]["regs"] is None, "no registers after the C++-style exception")
+        check(eax_of("after_raise_cpp") == 2 + 6 - 4, "the vector after it runs")
+        f = fault_of("raise_custom")
+        check(f and f["kind"] == "exception" and f["name"] == "exception" and f["code"] == "0xE0000001",
+              f"an unhandled exception with a code of its own is a fault: {f}")
+        check(fault_of("raise_info") is None and eax_of("raise_info") == 8,
+              f"a thread-name exception is continued, not a fault: {by_id['raise_info']['fault']} eax={eax_of('raise_info')}")
     else:
+        for name in ("raise_cpp", "raise_custom", "raise_info"):
+            f = fault_of(name)
+            check(f and f["kind"] == "import" and f["name"] == "KERNEL32.dll!RaiseException", f"{name}: unresolved RaiseException traps: {f}")
+        check(eax_of("after_raise_cpp") == 2 + 6 - 4, "the vector after the trapped raise runs")
         f = fault_of("badread_null")
         check(f and f["kind"] == "import" and f["name"] == "KERNEL32.dll!IsBadReadPtr", f"unresolved IsBadReadPtr traps: {f}")
+
+    # A single step (the code set the trap flag itself) is a fault in every mode,
+    # and the trap flag must not follow the harness into its recovery code.
+    f = fault_of("single_step")
+    check(f and f["kind"] == "exception" and f["name"] == "single_step" and f["code"] == "0x80000004", f"a single step is a fault: {f}")
+    check(eax_of("after_single_step") == 3 + 6 - 3, "the vector after a single step runs")
 
     msgs = " | ".join(e["error"] for e in errors)
     check(len(errors) == 6, f"six bad lines reported as errors ({len(errors)}): {msgs}")

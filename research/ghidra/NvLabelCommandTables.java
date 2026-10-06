@@ -29,13 +29,24 @@
 // than one entry is not renamed (a shared stub has no single command name)
 // and is reported. A pointer that one entry uses for two roles is named for
 // the first role and keeps that name. Functions the script creates or
-// renames get the tag "src:cmdtable". When force=1 replaces a name that was
+// renames get the tag "src:cmdtable"; a function it only recognizes (shared
+// or already named as wanted) does not. When force=1 replaces a name that was
 // not a Ghidra default, the function's old src: and pin: tags are removed
 // first, so the tags say where the current name came from.
 //
+// A pointer is only turned into a function when code can be made there: an
+// instruction exists at it or the bytes at it decode as one (checked with a
+// pseudo-disassembly, which changes nothing), it is not inside another
+// function and holds no defined data. Otherwise the pointer is reported as
+// "not code" and skipped, in a dry run and a real run alike. Only the first
+// instruction is checked. If Ghidra still cannot create a function after
+// these checks, the script throws and its transaction is aborted.
+//
 // dry=1 changes nothing and reports what a real run on the same program
 // would do: it keeps track of the functions it would create and the names it
-// would give, so its counts and report match the real run.
+// would give, so its counts and report match the real run. One thing it
+// cannot know is that a function created earlier in the run may cover a
+// later handler address.
 //
 // @category NV
 
@@ -51,7 +62,9 @@ import java.util.Map;
 import java.util.Set;
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.util.PseudoDisassembler;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.listing.Data;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.symbol.SourceType;
@@ -83,6 +96,7 @@ public class NvLabelCommandTables extends GhidraScript {
     private int renamed;
     private int kept;
     private int shared;
+    private int notCode;
     // What this run has already done, so a pointer or name is handled once.
     // The same code runs for a dry run, which changes nothing in the program
     // and so cannot rely on the program to remember.
@@ -90,6 +104,7 @@ public class NvLabelCommandTables extends GhidraScript {
     private final Map<Long, String[]> namedHere = new HashMap<>(); // pointer -> {name, role}
     private final Set<String> namesTakenHere = new HashSet<>();
     private final Set<Long> sharedHere = new HashSet<>();
+    private final Set<Long> notCodeHere = new HashSet<>();
 
     @Override
     public void run() throws Exception {
@@ -167,6 +182,7 @@ public class NvLabelCommandTables extends GhidraScript {
         renamed = 0;
         kept = 0;
         shared = 0;
+        notCode = 0;
         List<String> lines = new ArrayList<>();
         lines.add(NvCommon.csvLine(List.of("index", "address", "opcode", "long", "short", "params",
             "execute", "parse", "eval", "flags", "action")));
@@ -188,11 +204,12 @@ public class NvLabelCommandTables extends GhidraScript {
             " entries, " + valid + " valid, " + (count - valid) + " skipped");
         if (dry) {
             println(ME + ": dry run, nothing changed. Would create " + created + " functions, rename " +
-                renamed + "; names kept " + kept + ", shared pointers " + shared + ". Report: " + report);
+                renamed + "; names kept " + kept + ", shared pointers " + shared + ", not code " + notCode +
+                ". Report: " + report);
         }
         else {
             println(ME + ": functions created " + created + ", renamed " + renamed + ", names kept " +
-                kept + ", shared pointers " + shared + ". Report: " + report);
+                kept + ", shared pointers " + shared + ", not code " + notCode + ". Report: " + report);
         }
     }
 
@@ -291,6 +308,15 @@ public class NvLabelCommandTables extends GhidraScript {
         Address a = toAddr(p);
         Function fn = getFunctionAt(a);
         int sharedBy = users.get(p).size();
+        if (fn == null) {
+            String why = notCodeReason(a);
+            if (why != null) {
+                if (notCodeHere.add(p)) {
+                    notCode++;
+                }
+                return role + " " + NvCommon.hex8(p) + ": not code (" + why + "): skipped";
+            }
+        }
         // A pointer used again later in this run (by another entry or another
         // role) is created once. A dry run never creates, so it remembers.
         boolean willCreate = fn == null && createdHere.add(p);
@@ -299,9 +325,12 @@ public class NvLabelCommandTables extends GhidraScript {
                 disassemble(a);
             }
             fn = createFunction(a, null);
-        }
-        if (fn == null && !dry) {
-            return role + " " + NvCommon.hex8(p) + ": could not create a function";
+            if (fn == null) {
+                // The checks above passed, so this is unexpected. Abort rather than leave a
+                // partly labeled table: the transaction around this script is rolled back.
+                throw new IllegalStateException(ME + ": Ghidra could not create a function at " +
+                    NvCommon.hex8(p) + " (" + role + " pointer); nothing was changed");
+            }
         }
         StringBuilder act = new StringBuilder(role).append(' ').append(NvCommon.hex8(p)).append(": ");
         if (willCreate) {
@@ -313,7 +342,7 @@ public class NvLabelCommandTables extends GhidraScript {
                 shared++;
             }
             act.append("shared by ").append(sharedBy).append(" entries, not renamed");
-            if (!dry) {
+            if (!dry && willCreate) {
                 fn.addTag(TAG);
             }
             return act.toString();
@@ -329,9 +358,6 @@ public class NvLabelCommandTables extends GhidraScript {
             namedHere.put(p, new String[] { wanted, role });
             namesTakenHere.add(wanted);
             act.append("already named ").append(wanted);
-            if (!dry) {
-                fn.addTag(TAG);
-            }
             return act.toString();
         }
         if (!isDefault && !force) {
@@ -361,6 +387,34 @@ public class NvLabelCommandTables extends GhidraScript {
             act.append(" (").append(wanted).append(" was taken)");
         }
         return act.toString();
+    }
+
+    /**
+     * Why code cannot be made at a, or null when it can: an instruction is already
+     * there, or the bytes decode as one. The pseudo-disassembly reads the program and
+     * changes nothing, so a dry run and a real run decide alike.
+     */
+    private String notCodeReason(Address a) {
+        Function in = getFunctionContaining(a);
+        if (in != null) {
+            return "inside function " + in.getName() + " at " + NvCommon.addr(in.getEntryPoint());
+        }
+        if (getInstructionAt(a) != null) {
+            return null;
+        }
+        Data d = getDataAt(a);
+        if (d != null && d.isDefined()) {
+            return "defined data " + d.getDataType().getName();
+        }
+        try {
+            if (new PseudoDisassembler(prog).disassemble(a) != null) {
+                return null;
+            }
+        }
+        catch (Exception e) {
+            // InsufficientBytes, UnknownInstruction or UnknownContext: no valid instruction here
+        }
+        return "the bytes do not decode as an instruction";
     }
 
     /** True when another function in the global namespace already has this name. */

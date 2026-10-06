@@ -13,8 +13,9 @@
 //! called code registers during the call is searched before it, and so are
 //! the handlers inside system libraries it calls (`IsBadReadPtr` has one).
 //! Those see an exception first, exactly as in the original program. Only an
-//! exception that none of them handled reaches the harness's record, and only
-//! then does it become a recorded [`Fault`]: the handler points the resumed
+//! exception that none of them handled reaches the harness's record, and every
+//! such exception then becomes a recorded [`Fault`] (apart from the
+//! informational ones a debugger swallows): the handler points the resumed
 //! context at `nv_call_recover`, which puts the harness's own chain head back,
 //! resets the FPU and returns to the Rust caller as if the call had ended.
 //! Calls to unresolved imports go through a trap that does the same.
@@ -239,27 +240,34 @@ const EXCEPTION_NONCONTINUABLE: u32 = 0x1;
 const EXCEPTION_UNWINDING: u32 = 0x2;
 const EXCEPTION_EXIT_UNWIND: u32 = 0x4;
 
-fn is_fault_code(code: u32) -> bool {
+/// Exceptions a program raises to announce something and then carries on from
+/// (text for `OutputDebugString`, a thread name for the debugger). They are
+/// continuable and a debugger swallows them, so they are not faults.
+fn is_informational(code: u32) -> bool {
     matches!(
         code,
-        0xC000_0005 // access violation
-            | 0xC000_0006 // in-page error
-            | 0xC000_001D // illegal instruction
-            | 0xC000_0094 // integer divide by zero
-            | 0xC000_0095 // integer overflow
-            | 0xC000_0096 // privileged instruction
-            | 0xC000_008C
-            ..=0xC000_0093 // array bounds and FPU exceptions
-            | 0xC000_00FD // stack overflow
-            | 0xC000_02B4 // float multiple faults (SSE exceptions the MXCSR unmasks)
-            | 0xC000_02B5 // float multiple traps
-            | 0x8000_0003 // breakpoint
+        0x4001_0006 // DBG_PRINTEXCEPTION_C
+            | 0x4001_000A // DBG_PRINTEXCEPTION_WIDE_C
+            | 0x406D_1388 // MS_VC_EXCEPTION (thread name)
     )
 }
 
+/// `EFLAGS` bits that must not survive the jump to the recovery code: the
+/// trap flag (a callee that set it would be single-stepped there for ever) and
+/// the alignment check flag.
+const EFLAGS_TF: u32 = 0x0100;
+const EFLAGS_AC: u32 = 0x0004_0000;
+
 /// The handler record's function, called by the system as
 /// `handler(record, frame, context, dispatcher)` with the C convention. It
-/// runs only for exceptions that no handler of the called code accepted.
+/// runs only for exceptions that no handler of the called code accepted, and
+/// every one of those is a fault, whatever its code: a C++ `throw`, a code the
+/// called program raises itself, a single step, an invalid disposition. Left
+/// alone, such an exception goes on to the process's unhandled-exception
+/// path, which on some systems carries on as if nothing happened (a silently
+/// wrong result) and on others ends the harness and the rest of the batch.
+/// The informational exceptions of [`is_informational`] are the only ones
+/// that are continued instead.
 unsafe extern "C" fn seh_handler(
     rec: *mut win::ExceptionRecord,
     _frame: *mut c_void,
@@ -270,12 +278,12 @@ unsafe extern "C" fn seh_handler(
     const CONTINUE_SEARCH: i32 = 1;
     let rec = &mut *rec;
     // Unwinding calls every record being removed; this one has nothing to
-    // clean up. Other exceptions (C++ throws, debug-print and thread-name
-    // exceptions the system continues from) are not faults.
-    if rec.exception_flags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND) != 0
-        || !is_fault_code(rec.exception_code)
-    {
+    // clean up.
+    if rec.exception_flags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND) != 0 {
         return CONTINUE_SEARCH;
+    }
+    if is_informational(rec.exception_code) {
+        return CONTINUE_EXECUTION;
     }
     let ctx = &mut *ctx;
     FAULT_CODE.store(rec.exception_code, Relaxed);
@@ -298,6 +306,7 @@ unsafe extern "C" fn seh_handler(
     // The faulting code is abandoned, not continued, so a record that was
     // raised as non-continuable must not turn this into another exception.
     rec.exception_flags &= !EXCEPTION_NONCONTINUABLE;
+    ctx.eflags &= !(EFLAGS_TF | EFLAGS_AC);
     ctx.eip = nv_call_recover as *const () as usize as u32;
     CONTINUE_EXECUTION
 }

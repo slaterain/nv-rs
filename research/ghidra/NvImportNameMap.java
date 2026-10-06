@@ -9,7 +9,8 @@
 //            (letters, digits, '_', '.', '-'; at most 32 characters)
 //   pin      commit hash (or other version stamp) of that source
 //   kind     function or label. If empty: function when a function exists or
-//            can be created at the address, otherwise label.
+//            can be created at the address, otherwise label. An address inside
+//            a function, not at its entry, is a conflict until kind=label is given.
 // Lines whose first cell starts with '#' are comments.
 //
 // Name sanitization: surrounding whitespace is trimmed and runs of
@@ -365,6 +366,16 @@ public class NvImportNameMap extends GhidraScript {
         Function existing = getFunctionAt(addr);
         String kind = row.kind;
         if (kind.isEmpty()) {
+            // An address inside a function but not at its entry is most likely a source address
+            // that is slightly off, or a function Ghidra merged with another one. Turning it into
+            // a label would hide the name from the export, so the row needs a decision.
+            Function inside = existing == null ? getFunctionContaining(addr) : null;
+            if (inside != null) {
+                conflicts++;
+                return new String[] { addrOut, "", "", "conflict", "address is inside function " +
+                    inside.getName(true) + " at " + NvCommon.addr(inside.getEntryPoint()) +
+                    ", not at its entry; use the entry address, or kind=label for a label inside it" };
+            }
             kind = existing != null || canCreateFunction(addr) ? "function" : "label";
         }
         if (kind.equals("label") && existing != null) {

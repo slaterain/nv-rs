@@ -104,6 +104,10 @@ public class NvFunctionCard extends GhidraScript {
         Pattern.compile("^V?CVTT?(SS|SD)2SI$|^V?CVTT?(PS|PD)2PI$|^V?U?COMIS[SD]$");
     private static final Pattern SSE_APPROX = Pattern.compile("^V?(RSQRT|RCP)(SS|PS)$");
     private static final Pattern SSE_FLOAT_OTHER = Pattern.compile("^V?[A-Z0-9]+(SS|SD|PS|PD)$");
+    // Integer-named moves and bit masks that are often used on float data: a constant loaded with
+    // MOVQ xmm0,[m64] or masked with PAND is a float constant all the same.
+    private static final Pattern SSE_INT_MOVE =
+        Pattern.compile("^V?(MOVQ|MOVD|MOVDQA|MOVDQU|PAND|PANDN|POR|PXOR)$");
 
     // ---- CRT math routines by name ----
     private static final Pattern MATH_TRANSCENDENTAL = Pattern.compile(
@@ -180,9 +184,11 @@ public class NvFunctionCard extends GhidraScript {
         final TreeMap<String, Integer> fpMnemonics = new TreeMap<>();
         int total;
         int callsDirect;
-        int callsIndirect;
+        int callsIndirect; // every computed call
+        int callsIndirectResolved; // computed calls whose target is a known function
         final List<String> unresolvedCalls = new ArrayList<>();
-        final Set<Function> directCallees = new LinkedHashSet<>();
+        // Functions reached by direct calls and by computed calls that resolve to a function.
+        final Set<Function> callees = new LinkedHashSet<>();
         final List<String> writesGlobals = new ArrayList<>();
         final Set<String> transcendentalSeen = new TreeSet<>();
 
@@ -192,6 +198,11 @@ public class NvFunctionCard extends GhidraScript {
 
         void add(String k) {
             classes.merge(k, 1, Integer::sum);
+        }
+
+        /** Computed calls whose target is not known. */
+        int indirectUnresolved() {
+            return callsIndirect - callsIndirectResolved;
         }
     }
 
@@ -216,13 +227,14 @@ public class NvFunctionCard extends GhidraScript {
             if (ins.getFlowType().isCall()) {
                 if (ins.getFlowType().isComputed()) {
                     s.callsIndirect++;
+                    resolveComputedCall(ins, s);
                 }
                 else {
                     s.callsDirect++;
                     for (Address t : ins.getFlows()) {
                         Function callee = fm.getFunctionAt(t);
                         if (callee != null) {
-                            s.directCallees.add(callee);
+                            s.callees.add(callee);
                         }
                         else {
                             s.unresolvedCalls.add(NvCommon.addr(t));
@@ -238,6 +250,48 @@ public class NvFunctionCard extends GhidraScript {
             }
         }
         return s;
+    }
+
+    /**
+     * A computed call through an absolute address, such as the import-table call
+     * "call dword ptr [__imp__cos]", has a known target: Ghidra links the table
+     * slot to the function it holds (an external function for an import). The
+     * target is added to the callees and the call counts as resolved. Calls
+     * through a register or an indexed table have no such target and stay
+     * unresolved. A slot in writable memory can be changed by the program, so an
+     * internal function found there is added to the callees but the call still
+     * counts as unresolved.
+     */
+    private void resolveComputedCall(Instruction ins, Scan s) {
+        for (Object o : ins.getOpObjects(0)) {
+            if (o instanceof Register) {
+                return;
+            }
+        }
+        boolean resolved = false;
+        for (Reference ref : ins.getReferencesFrom()) {
+            if (!ref.isMemoryReference() && !ref.isExternalReference()) {
+                continue;
+            }
+            Address to = ref.getToAddress();
+            Function target = fm.getReferencedFunction(to);
+            if (target == null) {
+                continue;
+            }
+            // The operand holds a pointer to the function. A reference that is the function's
+            // own entry would mean the call reads code bytes as a pointer.
+            if (target.getEntryPoint().equals(to) && !to.isExternalAddress()) {
+                continue;
+            }
+            s.callees.add(target);
+            MemoryBlock slot = prog.getMemory().getBlock(to);
+            if (target.isExternal() || slot == null || !slot.isWrite()) {
+                resolved = true;
+            }
+        }
+        if (resolved) {
+            s.callsIndirectResolved++;
+        }
     }
 
     private static String classify(Instruction ins, String mn) {
@@ -282,7 +336,7 @@ public class NvFunctionCard extends GhidraScript {
         if (SSE_ARITH.matcher(mn).matches()) {
             return "sse_arithmetic";
         }
-        if (SSE_FLOAT_OTHER.matcher(mn).matches()) {
+        if (SSE_FLOAT_OTHER.matcher(mn).matches() || SSE_INT_MOVE.matcher(mn).matches()) {
             return "sse_move_logic";
         }
         return null;
@@ -455,6 +509,7 @@ public class NvFunctionCard extends GhidraScript {
             own.fpMnemonics.getOrDefault("VLDMXCSR", 0));
         counts.put("calls_direct", own.callsDirect);
         counts.put("calls_indirect", own.callsIndirect);
+        counts.put("calls_indirect_resolved", own.callsIndirectResolved);
         c.put("instruction_counts", counts);
         c.put("fp_mnemonics", new TreeMap<>(own.fpMnemonics));
 
@@ -471,8 +526,8 @@ public class NvFunctionCard extends GhidraScript {
 
         // The callees, their callees and so on, down to maxDepth levels.
         CalleeWalk walk = new CalleeWalk(tier);
-        if (own.callsIndirect > 0) {
-            walk.lowerBound.add("own code: " + own.callsIndirect + " indirect call(s), targets unknown");
+        if (own.indirectUnresolved() > 0) {
+            walk.lowerBound.add("own code: " + own.indirectUnresolved() + " indirect call(s), targets unknown");
         }
         if (!own.unresolvedCalls.isEmpty()) {
             walk.lowerBound.add("own code: direct call(s) to " + own.unresolvedCalls +
@@ -509,14 +564,17 @@ public class NvFunctionCard extends GhidraScript {
 
     /** Sorts the direct callees of a scan into CRT transcendental and other math routines, by name. */
     private static void mathCallees(Scan s, List<String> transcendental, List<String> other) {
-        for (Function callee : s.directCallees) {
+        for (Function callee : s.callees) {
             Function target = resolveThunk(callee);
             String name = target == null ? callee.getName() : target.getName();
+            // An import has no address in the image; it is shown as ext:<library>::<name>.
+            String where = callee.isExternal() ? "ext:" + callee.getName(true)
+                : NvCommon.addr(callee.getEntryPoint()) + " " + name;
             if (MATH_TRANSCENDENTAL.matcher(name).matches()) {
-                transcendental.add(NvCommon.addr(callee.getEntryPoint()) + " " + name);
+                transcendental.add(where);
             }
             else if (MATH_OTHER.matcher(name).matches()) {
-                other.add(NvCommon.addr(callee.getEntryPoint()) + " " + name);
+                other.add(where);
             }
         }
     }
@@ -573,7 +631,7 @@ public class NvFunctionCard extends GhidraScript {
                 Object[] item = queue.poll();
                 Scan s = (Scan) item[0];
                 int depth = (Integer) item[1];
-                for (Function callee : s.directCallees) {
+                for (Function callee : s.callees) {
                     Function target = resolveThunk(callee);
                     if (target == null) {
                         addBound("callee " + NvCommon.addr(callee.getEntryPoint()) + " " +
@@ -617,8 +675,8 @@ public class NvFunctionCard extends GhidraScript {
                     if (!t2.equals("A")) {
                         addReasons(r2);
                     }
-                    if (s2.callsIndirect > 0) {
-                        addBound(where + ": " + s2.callsIndirect + " indirect call(s), targets unknown");
+                    if (s2.indirectUnresolved() > 0) {
+                        addBound(where + ": " + s2.indirectUnresolved() + " indirect call(s), targets unknown");
                     }
                     if (!s2.unresolvedCalls.isEmpty()) {
                         addBound(where + ": direct call(s) to " + s2.unresolvedCalls +

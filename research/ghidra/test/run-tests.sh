@@ -12,8 +12,9 @@
 #   4. Runs mutated copies of the scripts (made with test/mutate.py) to show
 #      that the safety nets work: the export gate, the decompile outcomes
 #      (no result, timeout, error) and the rollback when a name script fails
-#      while it is applying. Also runs the duplicate-name cases, the tier
-#      through callees by routine name and unit cases for NvCommon.
+#      while it is applying. Also runs the duplicate-name cases, the vtable
+#      label forms, the label script's handling of pointers that are not code,
+#      the tier through callees by routine name and unit cases for NvCommon.
 #
 # Needs: Ghidra 12.1.x (GHIDRA_INSTALL_DIR; the Linux test container has it in
 # /opt/tools/ghidra_12.1.4_PUBLIC, which is the fallback),
@@ -60,10 +61,18 @@ fail() {
 # run_ghidra <name> <ok|fail> <analyzeHeadless args...>
 # Runs analyzeHeadless, keeps the log, and decides success from the log:
 # analyzeHeadless exits 0 even when a script throws, so the log is the evidence.
+# It also exits 0 when it could not open the program at all (a locked project, a full disk), and
+# then no script runs. So the run only counts when the exit status is 0, the log has none of the
+# open or abort messages, and every -postScript in the arguments was started.
 run_ghidra() {
     local name="$1" expect="$2"
     shift 2
-    local t0 rc=0 script_error=0
+    local t0 rc=0 script_error=0 wanted=0 started a
+    for a in "$@"; do
+        if [ "$a" = -postScript ]; then
+            wanted=$((wanted + 1))
+        fi
+    done
     t0=$(now_ms)
     "$HEADLESS" "$@" >"$LOGS/$name.log" 2>&1 || rc=$?
     note_time "ghidra: $name" "$t0"
@@ -73,6 +82,14 @@ run_ghidra() {
     if [ "$rc" -ne 0 ]; then
         tail -30 "$LOGS/$name.log" >&2
         fail "analyzeHeadless exited with $rc ($name)"
+    fi
+    if grep -Eq "Abort due to Headless analyzer error|Open failed|Error during analysis" "$LOGS/$name.log"; then
+        grep -E "Abort due to Headless analyzer error|Open failed|Error during analysis" "$LOGS/$name.log" | head -5 >&2
+        fail "analyzeHeadless could not open or analyze the program ($name)"
+    fi
+    started=$(grep -c '^INFO  SCRIPT: ' "$LOGS/$name.log" || true)
+    if [ "$started" -ne "$wanted" ]; then
+        fail "$name: $wanted script(s) were requested but $started started"
     fi
     if [ "$expect" = ok ] && [ "$script_error" -eq 1 ]; then
         grep -A6 "REPORT SCRIPT ERROR" "$LOGS/$name.log" | head -20 >&2
@@ -128,10 +145,13 @@ T0=$(now_ms)
     cd "$TARGET"
     # --pdb makes ld write a CodeView record (RSDS) into the exe so the
     # identity script has one to read. The .pdb itself is deleted straight
-    # away: if it sat next to the exe, Ghidra would load names from it.
-    "$CC" -O1 -msse2 -Wall -Wl,--large-address-aware -Wl,--pdb=nvfixture.pdb \
+    # away: if it sat next to the exe, Ghidra would load names from it. The
+    # name is long on purpose: check.py later writes a path under a fake
+    # profile folder over it in a copy of the exe, which needs room.
+    PDB_NAME=nvfixture-pdb-name-with-room-for-a-longer-path.pdb
+    "$CC" -O1 -msse2 -Wall -Wl,--large-address-aware -Wl,--pdb="$PDB_NAME" \
         -o fixture_unstripped.exe "$HERE/fixture.c"
-    rm -f nvfixture.pdb
+    rm -f "$PDB_NAME"
     cp fixture_unstripped.exe nvfixture.exe
     "$STRIP" nvfixture.exe
     "$NM" fixture_unstripped.exe >nm.txt
@@ -161,7 +181,8 @@ CARD_ADDRS=$(
     for n in fx_angle_to_unit fx_double_scale fx_extended fx_possible_float_immediate fx_sse_scalar fx_rsqrt \
         fx_rcp fx_sin fx_set_cw fx_load_cw_const fx_load_mxcsr_const fx_sum fx_gain Obj_Compute main \
         fx_cvt_sd2ss fx_cvt_ss2sd fx_cvt_tss2si fx_cvt_tsd2si fx_cvt_ps2pd fx_cvt_pd2ps fx_cvt_dq2pd fx_cvt_si2sd \
-        fx_sin_top fx_chain0 fx_chain8 fx_ping fx_crt_top; do
+        fx_sin_top fx_chain0 fx_chain8 fx_ping fx_crt_top fx_import_cos fx_import_cos_top fx_import_tick \
+        fx_table_call fx_movq_const fx_movd_const; do
         printf '%s,' "$(sym $n)"
     done
 )
@@ -277,9 +298,20 @@ run_ghidra names_unappliable fail "$TARGET/proj_named" "$PROJ_NAME" "${RW[@]}" "
     -postScript NvImportNameMap.java csv="$OUT/names_unappliable.csv" report="$OUT/names_unappliable.report.csv"
 grep -q "cannot create a function here" "$OUT/names_unappliable.report.csv" || fail "unappliable-row report text missing"
 
+# An address inside a function (not at its entry) with no kind is a conflict, not a silent label.
+# kind=label is the way to ask for a label inside the function. A dry run on the unlabeled project.
+cat >"$OUT/names_inside.csv" <<EOF
+address,name,source,pin,kind
+$(printf '%08x' $((0x$A_SUM + 1))),InsideRow,own,aaaa,
+$(printf '%08x' $((0x$A_GAIN_FN + 1))),InsideLabel,own,bbbb,label
+EOF
+run_ghidra names_inside ok "$TARGET/proj" "$PROJ_NAME" "${RO[@]}" "${SP[@]}" \
+    -postScript NvImportNameMap.java csv="$OUT/names_inside.csv" dry=1 report="$OUT/names_inside.report.csv"
+check names_inside
+
 # After the forced name import the function has the import's tags and no src:cmdtable.
 mkdir -p "$STAGE/testscripts"
-cp "$ROOT/NvCommon.java" "$ROOT"/test/{InspectNv,TxProbe,MakeClass,UnitProbe}.java "$STAGE/testscripts/"
+cp "$ROOT/NvCommon.java" "$ROOT"/test/{InspectNv,TxProbe,MakeClass,UnitProbe,SetLabels}.java "$STAGE/testscripts/"
 run_ghidra inspect_names ok "$TARGET/proj_named" "$PROJ_NAME" "${RO[@]}" -scriptPath "$STAGE/testscripts" \
     -postScript InspectNv.java out="$OUT/inspect_names.json" addr="$A_ALPHA,$A_FP"
 check names_tags
@@ -326,6 +358,62 @@ run_ghidra inspect ok "$TARGET/proj_named" "$PROJ_NAME" "${RO[@]}" -scriptPath "
     -postScript InspectNv.java out="$OUT/inspect.json" addr="$A_DISPATCH,$A_GAIN_VAR,$A_FP,$A_ALPHA"
 check export2 determinism range inspect
 
+# ---------------------------------------------------------------- C2: vtable label forms
+# Ghidra's RTTI class recovery names the tables of a class with several bases vftable_for_<Base>,
+# and PDB-style names carry a backtick. The export must find all of them, not only a label named
+# vftable. On a copy of the labeled project: the label at g_dispatch is renamed to the first form,
+# two more pointer tables get the others, and one table gets a second label.
+cp -a "$TARGET/proj_named" "$TARGET/proj_vt"
+A_VT_PDB=$(sym g_vt_pdb)
+A_VT_BRACE=$(sym g_vt_brace)
+printf '%s Fixture vftable_for_Base\n%s Fixture %s\n+%s Fixture vftable\n%s Fixture %s\n' \
+    "$A_DISPATCH" "$A_VT_PDB" "\`vftable'" "$A_VT_PDB" "$A_VT_BRACE" "vftable{for_Base}" >"$OUT/vt_labels.txt"
+run_ghidra vt_labels ok "$TARGET/proj_vt" "$PROJ_NAME" "${RW[@]}" -scriptPath "$STAGE/testscripts" \
+    -postScript SetLabels.java file="$OUT/vt_labels.txt"
+run_ghidra export_vt ok "$TARGET/proj_vt" "$PROJ_NAME" "${RO[@]}" "${SP[@]}" \
+    -postScript NvExportProgram.java out="$OUT/export_vt" threads=2 decompile=0
+check vt
+
+# ---------------------------------------------------------------- C3: provenance tags of the label script
+# A copy of the unlabeled project in which the name import has already named the shared parse stub
+# (source jip) and cmd_beta_execute (with exactly the name the label script wants). The label
+# script then only recognizes those two, so it must not add src:cmdtable to them, while it does tag
+# the functions it creates and renames.
+cp -a "$TARGET/proj" "$TARGET/proj_tags"
+A_BETA=$(sym cmd_beta_execute)
+A_GAMMA=$(sym cmd_gamma_execute)
+A_SHARED=$(sym cmd_shared_parse)
+cat >"$OUT/names_tags.csv" <<EOF
+address,name,source,pin,kind
+$A_SHARED,SharedStub,jip,1111111111111111,
+$A_BETA,Cmd_FixtureBeta_Execute,own,2222,
+EOF
+run_ghidra label_tags ok "$TARGET/proj_tags" "$PROJ_NAME" "${RW[@]}" "${SP[@]}" \
+    -postScript NvImportNameMap.java csv="$OUT/names_tags.csv" report="$OUT/names_tags.report.csv" \
+    -postScript NvLabelCommandTables.java table="$T" count=8 report="$OUT/label_tags.csv"
+run_ghidra inspect_tags ok "$TARGET/proj_tags" "$PROJ_NAME" "${RO[@]}" -scriptPath "$STAGE/testscripts" \
+    -postScript InspectNv.java out="$OUT/inspect_tags.json" addr="$A_SHARED,$A_BETA,$A_ALPHA,$A_GAMMA"
+check label_tags
+
+# ---------------------------------------------------------------- C4: pointers that are not code
+# The ninth table entry (after the terminator) has an execute pointer that leads to FF FF bytes and
+# a parse pointer into the middle of cmd_alpha_execute. Neither may become a function, in the dry
+# run or the real run, and the two runs must agree. On a copy of the labeled project, where
+# cmd_alpha_execute already is a function.
+cp -a "$TARGET/proj_named" "$TARGET/proj_badcode"
+A_BADCODE=$(sym cmd_badcode_execute)
+A_ALPHA_MID=$(printf '%08x' $((0x$A_ALPHA + 4)))
+run_ghidra badcode ok "$TARGET/proj_badcode" "$PROJ_NAME" "${RW[@]}" "${SP[@]}" \
+    -postScript NvLabelCommandTables.java table="$T" count=9 dry=1 report="$OUT/label_bad_dry.csv" \
+    -postScript NvLabelCommandTables.java table="$T" count=9 report="$OUT/label_bad_real.csv"
+grep -q "dry run, nothing changed. Would create 0 functions, rename 0; names kept [0-9]*, shared pointers [0-9]*, not code 2" \
+    "$LOGS/badcode.log" || fail "dry run summary for the not-code pointers missing"
+grep -q "functions created 0, renamed 0, names kept [0-9]*, shared pointers [0-9]*, not code 2" "$LOGS/badcode.log" ||
+    fail "real run summary for the not-code pointers missing"
+run_ghidra inspect_badcode ok "$TARGET/proj_badcode" "$PROJ_NAME" "${RO[@]}" -scriptPath "$STAGE/testscripts" \
+    -postScript InspectNv.java out="$OUT/inspect_badcode.json" addr="$A_BADCODE,$A_ALPHA_MID,$A_ALPHA"
+check badcode
+
 # Ghidra semantics the scripts rely on: aborting a nested transaction discards the whole run.
 cp -a "$TARGET/proj" "$TARGET/proj_tx"
 cp "$ROOT/test/TxProbe.java" "$STAGE/testscripts/"
@@ -333,6 +421,7 @@ run_ghidra tx_probe ok "$TARGET/proj_tx" "$PROJ_NAME" "${RW[@]}" -scriptPath "$S
     -postScript TxProbe.java addr="$A_GAIN_FN,$A_SUM"
 run_ghidra tx_inspect ok "$TARGET/proj_tx" "$PROJ_NAME" "${RO[@]}" -scriptPath "$STAGE/testscripts" \
     -postScript InspectNv.java out="$OUT/inspect_tx.json" addr="$A_GAIN_FN,$A_SUM"
+grep -q "TxProbe: renamed both, inner transaction aborted" "$LOGS/tx_probe.log" || fail "TxProbe did not run to its end"
 check tx
 
 # The original project must be untouched by the labeling steps.
@@ -466,6 +555,19 @@ run_ghidra inspect_inject ok "$TARGET/proj_inject" "$PROJ_NAME" "${RO[@]}" -scri
     -postScript InspectNv.java out="$OUT/inspect_inject.json" \
     addr="$A_RSQRT,$A_RCP,$A_ALPHA,$(sym cmd_beta_execute)"
 check inject
+
+# If Ghidra cannot create a function although the checks passed, the label script aborts. A copy
+# in which createFunction's result is dropped: the first handler is created, then the script
+# throws, and the saved project must hold no new function and no tag.
+cp -a "$TARGET/proj" "$TARGET/proj_nofunc"
+mutate nofunc_scripts NvLabelCommandTables.java 'fn = createFunction(a, null);' 'createFunction(a, null); fn = null;'
+run_ghidra nofunc fail "$TARGET/proj_nofunc" "$PROJ_NAME" "${RW[@]}" -scriptPath "$STAGE/nofunc_scripts" \
+    -postScript NvLabelCommandTables.java table="$T" count=8 report="$OUT/label_nofunc.csv"
+grep -q "Ghidra could not create a function at" "$LOGS/nofunc.log" || fail "the createFunction failure text is missing"
+[ ! -e "$OUT/label_nofunc.csv" ] || fail "a report was written for the aborted run"
+run_ghidra inspect_nofunc ok "$TARGET/proj_nofunc" "$PROJ_NAME" "${RO[@]}" -scriptPath "$STAGE/testscripts" \
+    -postScript InspectNv.java out="$OUT/inspect_nofunc.json" addr="$A_ALPHA,$A_BETA"
+check nofunc
 
 # ---------------------------------------------------------------- H: unit cases for NvCommon
 # 80-bit float conversion (compared with an exact Python conversion) and the path redaction.

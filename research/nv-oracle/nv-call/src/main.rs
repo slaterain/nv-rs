@@ -58,8 +58,13 @@ mod host {
                 eprintln!("nv-call: {} does not export nv_call_run", engine.display());
                 return 1;
             }
-            let run: extern "C" fn() -> i32 = std::mem::transmute(f);
-            run()
+            // The engine is told where the placeholder is, so it knows which
+            // part of this program's range it may give to the image.
+            let run: extern "C" fn(u32, u32) -> i32 = std::mem::transmute(f);
+            run(
+                std::ptr::addr_of!(PLACEHOLDER) as usize as u32,
+                RESERVE_BYTES as u32,
+            )
         }
     }
 }

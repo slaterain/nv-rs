@@ -9,13 +9,18 @@ mod image;
 mod run;
 
 /// Entry point called by `nv-call.exe`. Reads the command line itself.
+/// `placeholder` and `len` are the address and length of the zero-filled array
+/// that the host reserved for the image.
 ///
 /// Returns only if the target image was not mapped (usage or setup errors).
 /// Once the image has replaced the host's pages the process ends here
 /// instead, because the host's code no longer exists.
 #[no_mangle]
-pub extern "C" fn nv_call_run() -> i32 {
-    let code = run::main();
+pub extern "C" fn nv_call_run(placeholder: u32, len: u32) -> i32 {
+    let code = run::main(image::Placeholder {
+        start: placeholder,
+        len,
+    });
     if image::took_over_host() {
         use std::io::Write;
         let _ = std::io::stdout().flush();
