@@ -1247,6 +1247,61 @@ mod matchers {
     }
 
     #[test]
+    fn hidden_controls_are_found_once_per_line() {
+        assert_eq!(
+            hidden_controls("ok\nbad\u{85}\u{202e}\nfine\n"),
+            vec![(2, '\u{85}')]
+        );
+        // Every C1 control and every bidirectional control.
+        let hidden = (0x80..=0x9f)
+            .chain([0x61c, 0x200e, 0x200f])
+            .chain(0x202a..=0x202e)
+            .chain(0x2066..=0x2069);
+        for code in hidden {
+            let c = char::from_u32(code).unwrap();
+            assert_eq!(hidden_controls(&format!("a{c}b")), vec![(1, c)], "{code:x}");
+        }
+        // The characters next to those ranges, and ordinary non-ASCII text.
+        for c in [
+            '\u{7e}', '\u{a0}', '\u{2029}', '\u{202f}', '\u{2065}', '\u{206a}', '\u{200d}',
+            '\u{e9}', '\u{2014}', '\u{65e5}',
+        ] {
+            assert!(hidden_controls(&format!("a{c}b")).is_empty(), "{c:?}");
+        }
+        // Lines are counted the way the byte check counts them.
+        assert_eq!(hidden_controls("a\r\nb\r\nc\u{85}"), vec![(3, '\u{85}')]);
+    }
+
+    #[test]
+    fn text_that_is_not_utf8_is_reported_with_its_line() {
+        assert_eq!(invalid_utf8_line("fine \u{e9}\n".as_bytes()), None);
+        assert_eq!(invalid_utf8_line(b""), None);
+        assert_eq!(invalid_utf8_line(b"ok\nsecond \xff here\n"), Some(2));
+        assert_eq!(invalid_utf8_line(b"caf\xe9\n"), Some(1));
+        // A sequence cut short at the end.
+        assert_eq!(invalid_utf8_line(b"a\nb\xc3"), Some(2));
+    }
+
+    #[test]
+    fn text_findings_include_hidden_controls_and_bad_utf8() {
+        let found = check_text("docs/a.md", "ok\nx\u{202e}y\n".as_bytes());
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, 2);
+        assert!(found[0].1.contains("U+202E"), "{found:?}");
+        let found = check_text("crates/a.rs", b"ok\ncaf\xe9\n");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].0, 2);
+        assert!(found[0].1.contains("not valid UTF-8"), "{found:?}");
+        // The other rules still run on text that is not valid UTF-8.
+        let profile = ["C:", r"\Users\alice\x"].concat();
+        let mut bytes = format!("{profile}\n").into_bytes();
+        bytes.extend_from_slice(b"\xff\n");
+        let found = check_text("docs/b.md", &bytes);
+        assert_eq!(found.len(), 2, "{found:?}");
+        assert!(check_text("docs/c.md", "plain \u{e9}\u{2014} text\n".as_bytes()).is_empty());
+    }
+
+    #[test]
     fn windows_profile_paths_are_found() {
         let backslash = ["C:", r"\Users\alice\nv-re\findings"].concat();
         let slash = ["d:", "/users/", "Bob/Desktop"].concat();
@@ -1256,6 +1311,30 @@ mod matchers {
         assert!(has_user_profile_path(&slash));
         assert!(has_user_profile_path(&doubled));
         assert!(has_user_profile_path(&in_text));
+    }
+
+    #[test]
+    fn windows_xp_profile_paths_are_found() {
+        let xp = ["C:", r"\Documents and Settings\erin\Desktop"].concat();
+        let lower = ["d:", "/documents and settings/", "Fay/x"].concat();
+        let upper = ["E:", r"\DOCUMENTS AND SETTINGS\Gus"].concat();
+        let doubled = ["C:", r"\\Documents and Settings\\hal\\x"].concat();
+        let quoted = format!("\"{xp}\"");
+        for path in [&xp, &lower, &upper, &doubled, &quoted] {
+            assert!(has_user_profile_path(path), "{path}");
+        }
+        // Placeholders, shared folders and the bare root name nobody.
+        for path in [
+            ["C:", r"\Documents and Settings\<name>\x"].concat(),
+            ["C:", r"\Documents and Settings\%USERNAME%\x"].concat(),
+            ["C:", r"\Documents and Settings\All Users\x"].concat(),
+            ["C:", r"\Documents and Settings\Default User\x"].concat(),
+            ["C:", r"\Documents and Settings"].concat(),
+            ["C:", r"\Documents and Settingsx\y"].concat(),
+            r"in Documents and Settings\alice".to_string(),
+        ] {
+            assert!(!has_user_profile_path(&path), "{path}");
+        }
     }
 
     #[test]
@@ -1407,6 +1486,214 @@ mod matchers {
     }
 
     #[test]
+    fn a_leading_underscore_does_not_hide_a_name() {
+        // The decompiler prints one when an access does not match the type of
+        // the data it reads.
+        let data = format!("_{}", name("DAT", "011d8a84"));
+        let two = format!("__{}", name("DAT", "011d8a84"));
+        let function = format!("_{}", name("FUN", "00401000"));
+        let pointer = format!("_{}", name("PTR", &name("DAT", "011d8a84")));
+        for token in [&data, &two, &function, &pointer] {
+            assert_eq!(
+                ghidra_auto_name(&format!("writes {token};")),
+                Some(token.as_str()),
+                "{token}"
+            );
+        }
+        // Underscores alone, or around ordinary words, are not names.
+        assert!(ghidra_auto_name("_").is_none());
+        assert!(ghidra_auto_name("__init__").is_none());
+        assert!(ghidra_auto_name(&format!("_{}", name("DAT", "0"))).is_none());
+        assert!(ghidra_auto_name(&format!("_my_{}", name("DAT", "011d8a84"))).is_none());
+    }
+
+    #[test]
+    fn string_labels_are_found() {
+        let ascii = name("s", "Hello_world_0040907c");
+        let wide = name("u", "Wide_text_00409068");
+        let empty = name("s", "_00409068");
+        let wrapped = name("PTR", &name("s", "Argument_domain_error__DOMAIN__004091e0"));
+        let thunk = name("thunk", &name("u", "Text_00409068"));
+        for token in [&ascii, &wide, &empty, &wrapped, &thunk] {
+            assert_eq!(
+                ghidra_auto_name(&format!("puts(&{token});")),
+                Some(token.as_str()),
+                "{token}"
+            );
+        }
+        // The label has to start with the prefix, end in an address, and have
+        // something between them or at least the separator.
+        for token in [
+            name("my_s", "x_00401000"),
+            name("us", "x_00401000"),
+            name("s", "x_4010"),
+            name("s", "x_00401000_y"),
+            name("s", "x_0040100g"),
+            name("s", "00401000"),
+            name("s", "x_004010000"),
+            name("u", "name"),
+            name("x", "00401000"),
+        ] {
+            assert!(ghidra_auto_name(&token).is_none(), "{token}");
+        }
+    }
+
+    #[test]
+    fn pointer_labels_name_their_target() {
+        // A pointer to a function the program names, to a thunk, and to a string.
+        let token = |parts: &[&str]| parts.concat();
+        for found in [
+            token(&["PTR", "_tls_callback_0", "_004090a8"]),
+            token(&["PTR", "_thunk", "_FUN", "_00401410", "_00407f64"]),
+            token(&["PTR", "_PTR", "_DAT", "_00401410"]),
+            token(&["PTR", "_Sleep", "_00408050"]),
+        ] {
+            assert_eq!(
+                ghidra_auto_name(&format!("(*{found})();")),
+                Some(found.as_str()),
+                "{found}"
+            );
+        }
+        for other in [
+            token(&["PTR", "_tls_callback_0"]),
+            token(&["PTR", "_x", "_4090a"]),
+            token(&["PTR", "_x", "_00408050", "_y"]),
+            token(&["my", "_PTR", "_x", "_00408050"]),
+            token(&["PTR", "_"]),
+            token(&["PTR_", "SIZE"]),
+            token(&["ptr", "_x", "_00408050"]),
+        ] {
+            assert!(ghidra_auto_name(&other).is_none(), "{other}");
+        }
+    }
+
+    #[test]
+    fn stack_and_register_offsets_have_eight_digits() {
+        for found in [
+            ["stack0x", "00000004"].concat(),
+            ["stack0x", "ffffffb4"].concat(),
+            ["register0x", "00000010"].concat(),
+            ["code_r0x", "00405706"].concat(),
+        ] {
+            assert_eq!(
+                ghidra_auto_name(&format!("f(&{found});")),
+                Some(found.as_str()),
+                "{found}"
+            );
+        }
+        for other in [
+            ["stack0x", "4"].concat(),
+            ["stack0x", "000000004"].concat(),
+            ["stack0x", "0000000g"].concat(),
+            ["register0x", "10"].concat(),
+            ["code_r0x", "4057"].concat(),
+            ["my_stack0x", "00000004"].concat(),
+            "stack0x".to_string(),
+        ] {
+            assert!(ghidra_auto_name(&other).is_none(), "{other}");
+        }
+    }
+
+    #[test]
+    fn switch_labels_carry_the_switch_address() {
+        for found in [
+            ["switchD_", "00404443", "_caseD_", "21"].concat(),
+            ["switchD_", "00404443", "_default"].concat(),
+            ["switchdataD_", "00404450"].concat(),
+            ["switchD_", "004044"].concat(),
+        ] {
+            assert_eq!(
+                ghidra_auto_name(&format!("goto {found};")),
+                Some(found.as_str()),
+                "{found}"
+            );
+        }
+        for other in [
+            ["switchD_", "4044", "_caseD_", "21"].concat(),
+            ["switchD_", "00404443x"].concat(),
+            ["switchD_", "xyz"].concat(),
+            ["switchD_"].concat(),
+            ["my_switchD_", "00404443"].concat(),
+        ] {
+            assert!(ghidra_auto_name(&other).is_none(), "{other}");
+        }
+    }
+
+    #[test]
+    fn imports_by_ordinal_are_found() {
+        for number in ["1", "12", "65535"] {
+            let token = name("Ordinal", number);
+            assert_eq!(ghidra_auto_name(&token), Some(token.as_str()), "{number}");
+        }
+        let thunk = name("thunk", &name("Ordinal", "12"));
+        assert_eq!(ghidra_auto_name(&thunk), Some(thunk.as_str()));
+        for other in [
+            name("Ordinal", ""),
+            name("Ordinal", "x"),
+            name("Ordinal", "123456"),
+            name("ordinal", "12"),
+            name("Ordinals", "12"),
+            name("my_Ordinal", "12"),
+        ] {
+            assert!(ghidra_auto_name(&other).is_none(), "{other}");
+        }
+    }
+
+    /// Shapes that Ghidra 12.1.4 printed for a small synthetic 32-bit
+    /// executable built from a C file written for this project (named
+    /// functions, strings, a table of strings, floating-point constants, a
+    /// switch and the C runtime start-up code). Each is a name this check
+    /// has to flag.
+    #[test]
+    fn shapes_seen_in_ghidra_output_are_found() {
+        let seen: &[&[&str]] = &[
+            &["_", "DAT", "_004094f8"],
+            &["DAT", "_7ffe0010"],
+            &["_", "DAT", "_7ffe0100"],
+            &["PTR", "_DAT", "_0040803c"],
+            &["PTR", "_FUN", "_00408050"],
+            &["PTR", "_tls_callback_0", "_004090a8"],
+            &["PTR", "_thunk", "_FUN", "_00401410", "_00407f64"],
+            &["PTR", "_s", "_Argument_domain_error__DOMAIN__", "004091e0"],
+            &["s", "_Hello_world_", "0040907c"],
+            &["u", "_Wide_text_", "00409068"],
+            &["s", "_a_literal_in_main_", "00409056"],
+            &["stack0x", "00000004"],
+            &["stack0x", "ffffffb4"],
+            &["switchD", "_00404443", "_caseD", "_21"],
+            &["code_r0x", "00405706"],
+            &["joined_r0x", "0040131d"],
+            &["thunk", "_FUN", "_00407e90"],
+            &["extraout", "_EAX", "_00"],
+            &["extraout", "_ECX", "_10"],
+            &["in", "_EAX"],
+            &["unaff", "_ESI"],
+            &["u", "StackY", "_50"],
+            &["u", "Stack", "_44"],
+            &["ac", "Stack", "_3c"],
+            &["ai", "Stack", "_60"],
+            &["pb", "Stack", "_88"],
+            &["p", "F", "Var1"],
+            &["U", "Var1"],
+            &["B", "Var2"],
+            &["puVar", "2"],
+            &["pcVar", "5"],
+            &["local", "_5c"],
+            &["param", "_3"],
+            &["unkuint", "10"],
+            &["undefined", "4"],
+        ];
+        for parts in seen {
+            let token = parts.concat();
+            assert_eq!(
+                ghidra_auto_name(&format!("  x = {token} + 1;")),
+                Some(token.as_str()),
+                "{token}"
+            );
+        }
+    }
+
+    #[test]
     fn address_names_look_through_wrappers() {
         let thunk = name("thunk", &name("FUN", "00401000"));
         let pointer = name("PTR", &name("DAT", "01234567"));
@@ -1524,6 +1811,24 @@ mod matchers {
                 "{prefix}"
             );
         }
+        // Any depth of pointers, and a capital letter for a named type.
+        for prefix in [
+            "pppcVar", "ppppuVar", "pppVar", "UVar", "BVar", "DVar", "SVar", "pFVar", "pIVar",
+            "ppDVar",
+        ] {
+            let token = format!("{prefix}3");
+            assert_eq!(
+                ghidra_auto_name(&format!("{token} = 1;")),
+                Some(token.as_str()),
+                "{prefix}"
+            );
+        }
+        for prefix in ["XYZVar", "UuVar", "ppppppppuVar", "pxVar", "Up", "pUUVar"] {
+            assert!(
+                ghidra_auto_name(&format!("{prefix}3")).is_none(),
+                "{prefix}"
+            );
+        }
         assert!(ghidra_auto_name(&["uVar", "x"].concat()).is_none());
         assert!(ghidra_auto_name("uVar").is_none());
         assert!(ghidra_auto_name(&["uVar", "1a"].concat()).is_none());
@@ -1549,6 +1854,22 @@ mod matchers {
                     "{token}"
                 );
             }
+        }
+        // A capital letter may follow `Stack`.
+        for token in [
+            ["uStack", "Y_50"].concat(),
+            ["auStack", "X_8"].concat(),
+            ["pcStack", "Y_c"].concat(),
+        ] {
+            assert_eq!(ghidra_auto_name(&token), Some(token.as_str()), "{token}");
+        }
+        for token in [
+            ["uStack", "YZ_50"].concat(),
+            ["uStack", "Y50"].concat(),
+            ["uStack", "Y_"].concat(),
+            ["uStack", "y_50"].concat(),
+        ] {
+            assert!(ghidra_auto_name(&token).is_none(), "{token}");
         }
         assert!(ghidra_auto_name(&name("uStack", "")).is_none());
         assert!(ghidra_auto_name(&name("uStack", "xyz")).is_none());
@@ -1620,6 +1941,13 @@ mod matchers {
                 Some(token.as_str())
             );
         }
+        for kind in ["unkbyte", "unkint", "unkuint", "unkfloat"] {
+            let token = format!("{kind}10");
+            assert_eq!(ghidra_auto_name(&token), Some(token.as_str()), "{kind}");
+            assert!(ghidra_auto_name(kind).is_none(), "{kind}");
+            assert!(ghidra_auto_name(&format!("{kind}123")).is_none(), "{kind}");
+        }
+        assert!(ghidra_auto_name("unknown10").is_none());
         assert!(ghidra_auto_name("undefined").is_none());
         assert!(ghidra_auto_name("undefined behaviour").is_none());
         assert!(ghidra_auto_name("undefined123").is_none());
@@ -1657,6 +1985,9 @@ mod matchers {
             "let sub_total = a - b; let ext = 1; let local_add = 2;",
             "const DWORD_SIZE: usize = 4; const BYTE_COUNT: usize = 8;",
             "let var1 = 2; let my_var2 = 3; let new_stack_4 = 4;",
+            "let s_total = 1; let u_len = 2; let s_a_b_c = 3; let PTR_SIZE = 4;",
+            "let ptr_00401000 = 5; let ordinal_3 = 6; let Ordinals_1 = 7;",
+            "// the `stack0x` prefix, `register0x` and `switchD_` are only prefixes",
         ] {
             assert!(ghidra_auto_name(line).is_none(), "{line}");
         }
@@ -1675,6 +2006,71 @@ mod matchers {
             c_fences(md),
             vec![(2, "c".to_string()), (5, "c++".to_string())]
         );
+    }
+
+    #[test]
+    fn every_way_of_naming_a_c_fence_is_found() {
+        // Header and source tags, other spellings of C++, attribute braces
+        // (pandoc), a word followed by more, and `language-` classes.
+        let tags = [
+            ("c", "c"),
+            ("C", "c"),
+            ("h", "h"),
+            ("cc", "cc"),
+            ("cxx", "cxx"),
+            ("c++", "c++"),
+            ("cpp", "cpp"),
+            ("CPP", "cpp"),
+            ("hpp", "hpp"),
+            ("hxx", "hxx"),
+            ("{.c}", "c"),
+            ("{ .cpp }", "cpp"),
+            ("{.c .numberLines}", "c"),
+            ("{#listing .h startFrom=\"10\"}", "h"),
+            ("c,ignore", "c"),
+            ("c{1-3}", "c"),
+            ("c:file.h", "c"),
+            ("c title=\"x\"", "c"),
+            ("language-c", "c"),
+            ("language-cpp", "cpp"),
+        ];
+        for (tag, language) in tags {
+            for fence in ["```", "~~~", "````"] {
+                let md = format!("text\n{fence}{tag}\nint x;\n{fence}\n");
+                assert_eq!(
+                    c_fences(&md),
+                    vec![(2, language.to_string())],
+                    "{fence}{tag}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_languages_are_not_c_fences() {
+        for tag in [
+            "rust",
+            "text",
+            "cs",
+            "csharp",
+            "c#",
+            "ch",
+            "cmake",
+            "cfg",
+            "console",
+            "clojure",
+            "{.rust}",
+            "{.text .c_lines}",
+            "{#c}",
+            "{}",
+            "{",
+            "language-rust",
+            "language-",
+            "toml,c",
+        ] {
+            let md = format!("```{tag}\nx\n```\n");
+            assert!(c_fences(&md).is_empty(), "{tag}");
+        }
     }
 
     #[test]
@@ -1855,6 +2251,25 @@ mod fixtures {
             "viewer/src/clean.rs",
             b"// `00401000` reads `[011d8a84]`.\n",
         );
+        // Hidden control characters, text that is not UTF-8, an older Windows
+        // profile root, a header fence, and names in the shapes Ghidra prints
+        // for strings, pointers and untyped data (one finding per line).
+        let xp_path = ["C:", r"\Documents and Settings\erin\x"].concat();
+        put(root, "docs/hidden.md", "ok\nx\u{202e}y\n".as_bytes());
+        put(root, "crates/a/src/latin1.rs", b"// caf\xe9\n");
+        put(root, "docs/xp.md", format!("{xp_path}\n").as_bytes());
+        put(root, "docs/fence.md", b"```h\nint x;\n```\n");
+        put(
+            root,
+            "docs/shapes.md",
+            format!(
+                "{}\n{}\n{}\nfine\n",
+                ["_", "DAT", "_011d8a84"].concat(),
+                ["s", "_Hello_", "00401000"].concat(),
+                ["PTR", "_tls_callback_0", "_004090a8"].concat(),
+            )
+            .as_bytes(),
+        );
         // Ignored by the nested .gitignore.
         put(
             root,
@@ -1864,6 +2279,7 @@ mod fixtures {
         vec![
             "Cargo.lock:2",
             "crates/a/data.ESM:1",
+            "crates/a/src/latin1.rs:1",
             "crates/a/src/nul.rs:2",
             "crates/x/NOTES:1",
             "crates/x/blob:1",
@@ -1874,7 +2290,13 @@ mod fixtures {
             "docs/decomp.md:5",
             "docs/decomp.md:6",
             "docs/decomp.md:7",
+            "docs/fence.md:1",
+            "docs/hidden.md:2",
             "docs/paths.md:2",
+            "docs/shapes.md:1",
+            "docs/shapes.md:2",
+            "docs/shapes.md:3",
+            "docs/xp.md:1",
             "license-apache-2.0:2",
             "research/sub/tool.exe:1",
             "research/tool.py:2",
@@ -1916,6 +2338,22 @@ mod fixtures {
         )));
         assert!(message("docs/decomp.md:7")
             .contains(&format!("auto-name `{}`", ["SUB", "41"].concat())));
+        assert!(message("docs/hidden.md:2").contains("hidden control character U+202E"));
+        assert!(message("crates/a/src/latin1.rs:1").contains("not valid UTF-8"));
+        assert!(message("docs/xp.md:1").contains("user-profile path"));
+        assert!(message("docs/fence.md:1").contains("fenced `h` block"));
+        assert!(message("docs/shapes.md:1").contains(&format!(
+            "auto-name `{}`",
+            ["_", "DAT", "_011d8a84"].concat()
+        )));
+        assert!(message("docs/shapes.md:2").contains(&format!(
+            "auto-name `{}`",
+            ["s", "_Hello_", "00401000"].concat()
+        )));
+        assert!(message("docs/shapes.md:3").contains(&format!(
+            "auto-name `{}`",
+            ["PTR", "_tls_callback_0", "_004090a8"].concat()
+        )));
         assert!(message("docs/paths.md:2").contains("user-profile path"));
         assert!(message("data/notes.csv:1").contains("user-profile path"));
         assert!(message("crates/a/data.ESM:1").contains("`.esm`"));
@@ -2037,7 +2475,8 @@ mod fixtures {
     /// The listing used on a real checkout: git decides what is ignored, from
     /// nested `.gitignore` files and `.git/info/exclude` as well as the root
     /// one, and a file added with `git add -f` is seen under an ignored
-    /// directory.
+    /// directory. An untracked file in a `.claude` directory is local agent
+    /// state and is left out; a tracked one is checked.
     #[test]
     fn git_listing_honours_every_ignore_source() {
         if !git_available() {
@@ -2046,23 +2485,23 @@ mod fixtures {
         }
         let root = fresh_root("repo_hygiene_git");
         run_git(&root, &["init", "-q"]);
-        let mut expected = plant(
-            &root,
-            "dist/\nreports/\nnv-*.txt\ntarget/\n*.dll\n.claude/\n",
-        );
+        // No entry for `.claude`: the real repository has none either.
+        let mut expected = plant(&root, "dist/\nreports/\nnv-*.txt\ntarget/\n*.dll\n");
         let user_path = ["C:", r"\Users\alice\nv-re"].concat();
-        // Ignored by the root .gitignore, including a settings file that holds
-        // a profile path, and by .git/info/exclude.
-        put(
-            &root,
+        // Local agent state that holds a profile path, untracked and not
+        // ignored: at the top, nested, and a whole scratch worktree.
+        for rel in [
             ".claude/settings.local.json",
-            format!("{{\"allow\": \"Read(//c/{}/x)\"}}\n", "Users/alice").as_bytes(),
-        );
-        put(
-            &root,
             ".claude/worktrees/old/docs/a.md",
-            format!("{user_path}\n").as_bytes(),
-        );
+            "research/tool/.claude/notes.txt",
+        ] {
+            put(
+                &root,
+                rel,
+                format!("{{\"allow\": \"Read(//c/{}/x)\"}}\n", "Users/alice").as_bytes(),
+            );
+        }
+        // Ignored by the root .gitignore, and by .git/info/exclude.
         put(&root, "dist/skip.esm", b"x");
         put(&root, "nv-play.txt", format!("{user_path}\n").as_bytes());
         put(&root, "stray.dll", b"x");
@@ -2089,23 +2528,39 @@ mod fixtures {
         // is checked.
         put(&root, "dist/forced.esm", b"x");
         run_git(&root, &["add", "-f", "dist/forced.esm"]);
-        // Tracked, then removed from the work tree: nothing to check.
+        // Tracked, then removed from the work tree: nothing to read, so a
+        // text file is not reported ...
         put(&root, "gone.md", format!("{user_path}\n").as_bytes());
         run_git(&root, &["add", "gone.md"]);
         fs::remove_file(root.join("gone.md")).unwrap();
-        // Tracked and bad: found without being named in any ignore file.
+        // ... but a name that is never committed still is.
+        put(&root, "gone.esm", b"x");
+        run_git(&root, &["add", "gone.esm"]);
+        fs::remove_file(root.join("gone.esm")).unwrap();
+        // Tracked and bad: found without being named in any ignore file,
+        // including a settings file under `.claude` once it is tracked.
         put(
             &root,
             "viewer/tracked.rs",
             format!("// {user_path}\n").as_bytes(),
         );
         run_git(&root, &["add", "viewer/tracked.rs"]);
+        put(
+            &root,
+            ".claude/settings.json",
+            format!("{{\"allow\": \"Read(//c/{}/x)\"}}\n", "Users/alice").as_bytes(),
+        );
+        run_git(&root, &["add", ".claude/settings.json"]);
 
         let listing = files_from_git(&root).expect("a git checkout");
         assert_eq!(listing.source, "git ls-files");
         let findings = check_listing(listing);
-        expected.push("dist/forced.esm:1");
-        expected.push("viewer/tracked.rs:1");
+        expected.extend([
+            ".claude/settings.json:1",
+            "dist/forced.esm:1",
+            "gone.esm:1",
+            "viewer/tracked.rs:1",
+        ]);
         expected.sort_by_key(|place| place.split_once(':').unwrap().0.to_string());
         assert_eq!(places(&findings), expected, "{findings:#?}");
         assert_messages(&findings);
@@ -2113,15 +2568,44 @@ mod fixtures {
         let _ = fs::remove_file(&excludes);
     }
 
+    #[test]
+    fn agent_state_is_any_path_through_a_claude_directory() {
+        assert!(in_agent_state(".claude/settings.local.json"));
+        assert!(in_agent_state(".claude/worktrees/a/b.md"));
+        assert!(in_agent_state("research/tool/.claude/x"));
+        assert!(!in_agent_state("claude/x"));
+        assert!(!in_agent_state("docs/.claudex/x"));
+        assert!(!in_agent_state("docs/a.claude"));
+        assert!(!in_agent_state("CLAUDE.md"));
+    }
+
     /// A directory that is not the top of a git checkout (a scratch copy made
     /// with `git archive`, say) is walked, even when a parent directory is a
-    /// repository.
+    /// repository. The parent repository is made here, so the guard is
+    /// exercised wherever the test target directory is.
     #[test]
     fn a_directory_inside_another_repository_is_walked() {
-        let root = fresh_root("repo_hygiene_nested");
+        let parent = fresh_root("repo_hygiene_nested");
+        let root = parent.join("inner");
         put(&root, "docs/ok.md", b"fine\n");
+        put(&parent, "outer.md", b"fine\n");
+        if git_available() {
+            run_git(&parent, &["init", "-q"]);
+            // Git itself sees `root` as part of the parent repository: it is
+            // one level down from the top, so the show-prefix guard is what
+            // keeps it from being listed through the parent.
+            let prefix = git(&root)
+                .args(["rev-parse", "--show-prefix"])
+                .output()
+                .expect("run git");
+            assert_eq!(String::from_utf8_lossy(&prefix.stdout).trim(), "inner/");
+            let top = files_from_git(&parent).expect("the parent is a checkout");
+            let names: Vec<&str> = top.files.iter().map(|f| f.rel.as_str()).collect();
+            assert_eq!(names, vec!["inner/docs/ok.md", "outer.md"]);
+        }
         assert!(files_from_git(&root).is_none());
         let listing = list_files(&root);
+        assert_eq!(listing.source, "a directory walk (no git)");
         assert_eq!(
             listing
                 .files
@@ -2130,7 +2614,7 @@ mod fixtures {
                 .collect::<Vec<_>>(),
             vec!["docs/ok.md"]
         );
-        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir_all(&parent);
     }
 
     #[test]
@@ -2151,12 +2635,25 @@ mod fixtures {
         let root = fresh_root("repo_hygiene_missing");
         let mut listing = files_from_walk(&root);
         // A listed file that cannot be examined is reported; one that no
-        // longer exists is not.
+        // longer exists is not, unless its name is one that is never committed.
         listing.files.push(RepoFile {
             rel: "gone.rs".to_string(),
             path: root.join("gone.rs"),
         });
         assert!(check_listing(listing).is_empty());
+        let mut listing = files_from_walk(&root);
+        for rel in ["gone.rs", "gone.ESM", "dir.rep/inner/x.gbf"] {
+            listing.files.push(RepoFile {
+                rel: rel.to_string(),
+                path: root.join(rel),
+            });
+        }
+        let findings = check_listing(listing);
+        assert_eq!(
+            places(&findings),
+            vec!["gone.ESM:1", "dir.rep/:1"],
+            "{findings:#?}"
+        );
         let mut out = Listing {
             files: Vec::new(),
             problems: Vec::new(),
