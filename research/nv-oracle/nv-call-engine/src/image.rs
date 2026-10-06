@@ -31,6 +31,23 @@ pub enum Placement {
     Allocated,
 }
 
+impl MappedImage {
+    /// The address range that belongs to the mapped program: its own pages,
+    /// plus (with the host placeholder) the rest of the range the placeholder
+    /// reserved. Snapshot regions may be written there.
+    fn owned_range(&self) -> (u64, u64) {
+        match self.placement {
+            Placement::HostPlaceholder { base, size } => {
+                (u64::from(base), u64::from(base) + u64::from(size))
+            }
+            Placement::Allocated => (
+                u64::from(self.pe.image_base),
+                u64::from(self.pe.image_base) + u64::from(self.pe.size_of_image),
+            ),
+        }
+    }
+}
+
 static TOOK_OVER: AtomicBool = AtomicBool::new(false);
 
 /// True once the host program's pages have been replaced by the image. From
@@ -169,9 +186,25 @@ fn alloc_at(base: u32, size: u32) -> Result<(), String> {
     ))
 }
 
+fn inside(range: (u64, u64), start: u64, end: u64) -> bool {
+    range.0 <= start && end <= range.1
+}
+
 /// Make `[addr, addr + len)` committed and writable, allocating at that
-/// exact address if nothing is there yet. Used for snapshot regions.
-pub fn ensure_writable(addr: u32, len: usize) -> Result<(), String> {
+/// exact address where nothing is there yet. Used for snapshot regions.
+///
+/// Memory that is already in use is only touched when it belongs to the
+/// mapped program (`owned`) or was allocated for an earlier snapshot region
+/// (`made`, which this adds to). Anything else is the harness's own memory
+/// (its code and data, heaps, stacks, the buffer arena) or something the
+/// called code could reach through another route: overwriting it would
+/// corrupt the harness, so it is an error that names what is there.
+fn ensure_writable(
+    addr: u32,
+    len: usize,
+    owned: (u64, u64),
+    made: &mut Vec<(u64, u64)>,
+) -> Result<(), String> {
     let end = u64::from(addr) + len as u64;
     if end > 0x1_0000_0000 {
         return Err(format!(
@@ -195,10 +228,29 @@ pub fn ensure_writable(addr: u32, len: usize) -> Result<(), String> {
         let region_end = (info.base_address as usize as u64 + info.region_size as u64).min(end);
         let page_start = cur & !0xfff;
         let span = (region_end - page_start + 0xfff) & !0xfff;
+        if info.state != win::MEM_FREE
+            && !inside(owned, page_start, page_start + span)
+            && !made
+                .iter()
+                .any(|&r| inside(r, page_start, page_start + span))
+        {
+            return Err(format!(
+                "snapshot region {addr:#010x}+{len:#x} overlaps memory that is not part of the mapped image \
+                 or free address space: {}. A snapshot region may lie inside the image, in free address \
+                 space, or in pages that earlier snapshot files allocated.",
+                describe_region(cur as u32)
+            ));
+        }
         match info.state {
             win::MEM_FREE => {
+                // Allocations start on 64 KiB boundaries. Take the whole block
+                // (as far as the free range reaches), not just the pages
+                // needed: a later file in the same block then finds it ours,
+                // where a smaller allocation would leave the rest of the
+                // block unusable.
                 let aligned = cur & !0xffff;
-                let span = (region_end - aligned + 0xfff) & !0xfff;
+                let free_end = info.base_address as usize as u64 + info.region_size as u64;
+                let span = ((region_end + 0xffff) & !0xffff).min(free_end) - aligned;
                 // SAFETY: allocating a free range; result is checked.
                 let got = unsafe {
                     win::VirtualAlloc(
@@ -214,9 +266,10 @@ pub fn ensure_writable(addr: u32, len: usize) -> Result<(), String> {
                         describe_region(aligned as u32)
                     ));
                 }
+                made.push((aligned, aligned + span));
             }
             win::MEM_RESERVE => {
-                // SAFETY: committing inside an existing reservation.
+                // SAFETY: committing inside a reservation of the mapped program.
                 let got = unsafe {
                     win::VirtualAlloc(
                         page_start as usize as *mut c_void,
@@ -396,9 +449,18 @@ pub struct SnapshotRegion {
     pub sha256: String,
 }
 
+/// What applying a snapshot folder did.
+#[derive(Default)]
+pub struct Snapshot {
+    pub regions: Vec<SnapshotRegion>,
+    /// Address ranges allocated for the regions (outside the image).
+    allocated: Vec<(u64, u64)>,
+}
+
 /// Apply every `<hexaddr>.bin` file in `dir` to memory. Regions outside the
-/// image are allocated at their exact addresses.
-pub fn apply_snapshot(dir: &Path) -> Result<Vec<SnapshotRegion>, String> {
+/// image are allocated at their exact addresses; see [`ensure_writable`] for
+/// what a region may overlap. Two files must not cover the same bytes.
+pub fn apply_snapshot(dir: &Path, img: &MappedImage) -> Result<Snapshot, String> {
     let mut files = Vec::new();
     let entries = std::fs::read_dir(dir)
         .map_err(|e| format!("cannot read snapshot folder {}: {e}", dir.display()))?;
@@ -422,14 +484,28 @@ pub fn apply_snapshot(dir: &Path) -> Result<Vec<SnapshotRegion>, String> {
         files.push((addr, path));
     }
     files.sort();
-    let mut applied = Vec::new();
+    let owned = img.owned_range();
+    let mut made: Vec<(u64, u64)> = Vec::new();
+    let mut applied: Vec<SnapshotRegion> = Vec::new();
     for (addr, path) in files {
         let bytes =
             std::fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         if bytes.is_empty() {
             continue;
         }
-        ensure_writable(addr, bytes.len())?;
+        let end = u64::from(addr) + bytes.len() as u64;
+        if let Some(prev) = applied.iter().find(|r| {
+            u64::from(addr) < u64::from(r.addr) + r.size as u64 && end > u64::from(r.addr)
+        }) {
+            return Err(format!(
+                "snapshot file {} ({addr:#010x}+{:#x}) overlaps the region {:#010x}+{:#x} of another file",
+                path.display(),
+                bytes.len(),
+                prev.addr,
+                prev.size
+            ));
+        }
+        ensure_writable(addr, bytes.len(), owned, &mut made)?;
         // SAFETY: the range was just made committed and writable.
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as usize as *mut u8, bytes.len())
@@ -440,5 +516,91 @@ pub fn apply_snapshot(dir: &Path) -> Result<Vec<SnapshotRegion>, String> {
             sha256: sha256::hex_digest(&bytes),
         });
     }
-    Ok(applied)
+    Ok(Snapshot {
+        regions: applied,
+        allocated: made,
+    })
+}
+
+/// `IMAGE_SCN_MEM_WRITE`.
+const SECTION_WRITABLE: u32 = 0x8000_0000;
+
+/// A copy of the memory the called code can change, taken after the image is
+/// mapped and the snapshot applied: the image's writable sections, the pages
+/// of every snapshot region and everything that was allocated for the
+/// snapshot. Putting it back before each vector makes a result independent of
+/// the vectors that ran before it (a counter, or a run-once initialiser flag,
+/// would otherwise carry over).
+///
+/// Memory that the called code allocates itself (through resolved imports)
+/// and read-only parts of the image are not covered.
+pub struct Baseline {
+    ranges: Vec<(u32, Vec<u8>)>,
+}
+
+impl Baseline {
+    pub fn capture(img: &MappedImage, snapshot: &Snapshot) -> Baseline {
+        let image_end = u64::from(img.pe.image_base) + u64::from(img.pe.size_of_image);
+        let mut spans: Vec<(u64, u64)> = Vec::new();
+        for s in &img.pe.sections {
+            if s.characteristics & SECTION_WRITABLE == 0 {
+                continue;
+            }
+            let len = if s.virtual_size == 0 {
+                s.raw_size
+            } else {
+                s.virtual_size
+            };
+            let start = u64::from(img.pe.image_base) + u64::from(s.virtual_address);
+            let end = ((start + u64::from(len) + 0xfff) & !0xfff).min(image_end);
+            spans.push((start, end));
+        }
+        for r in &snapshot.regions {
+            let start = u64::from(r.addr) & !0xfff;
+            let end = (u64::from(r.addr) + r.size as u64 + 0xfff) & !0xfff;
+            spans.push((start, end));
+        }
+        spans.extend(snapshot.allocated.iter().copied());
+        // Merge overlapping spans, so no byte is copied twice.
+        spans.retain(|(a, b)| b > a);
+        spans.sort_unstable();
+        let mut merged: Vec<(u64, u64)> = Vec::new();
+        for (a, b) in spans {
+            match merged.last_mut() {
+                Some(last) if a <= last.1 => last.1 = last.1.max(b),
+                _ => merged.push((a, b)),
+            }
+        }
+        let ranges = merged
+            .into_iter()
+            .map(|(a, b)| {
+                // SAFETY: the pages were committed and made writable when the
+                // image was mapped or the snapshot applied.
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(a as usize as *const u8, (b - a) as usize)
+                };
+                (a as u32, bytes.to_vec())
+            })
+            .collect();
+        Baseline { ranges }
+    }
+
+    /// Write every saved range back.
+    pub fn restore(&self) {
+        for (addr, bytes) in &self.ranges {
+            // SAFETY: the same pages that were read when the copy was taken.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    *addr as usize as *mut u8,
+                    bytes.len(),
+                )
+            };
+        }
+    }
+
+    /// Bytes held (and written back before each vector).
+    pub fn size(&self) -> usize {
+        self.ranges.iter().map(|(_, b)| b.len()).sum()
+    }
 }

@@ -1,22 +1,33 @@
 //! Calling a function on the real CPU and recovering from faults.
 //!
 //! `nv_call_raw` is a small assembly routine. Given a [`CallFrame`] it sets
-//! the FPU control word and MXCSR, pushes the stack arguments, loads the
-//! registers, calls the target, and copies back EAX, EDX, ST0 (when
-//! asked), XMM0, the FPU status word and the stack pointer. The stack
-//! pointer is always restored from a saved copy rather than computed, so it
-//! does not matter whether the callee or the caller removes the arguments.
+//! the FPU control word and MXCSR, registers an exception handler record,
+//! pushes the stack arguments, loads the registers, calls the target, and
+//! copies back EAX, EDX, ST0 (when asked), XMM0, the FPU status word and the
+//! stack pointer. The stack pointer is always restored from a saved copy
+//! rather than computed, so it does not matter whether the callee or the
+//! caller removes the arguments.
 //!
-//! A vectored exception handler turns CPU faults inside the call into a
-//! recorded [`Fault`] and resumes at `nv_call_recover`, which resets the FPU
-//! and returns to the Rust caller as if the call had ended. Calls to
-//! unresolved imports go through a trap that does the same.
+//! Faults are caught by a frame-based handler: the harness's record is put on
+//! the thread's handler chain (`fs:[0]`) before the call, so every record the
+//! called code registers during the call is searched before it, and so are
+//! the handlers inside system libraries it calls (`IsBadReadPtr` has one).
+//! Those see an exception first, exactly as in the original program. Only an
+//! exception that none of them handled reaches the harness's record, and only
+//! then does it become a recorded [`Fault`]: the handler points the resumed
+//! context at `nv_call_recover`, which puts the harness's own chain head back,
+//! resets the FPU and returns to the Rust caller as if the call had ended.
+//! Calls to unresolved imports go through a trap that does the same.
+//!
+//! The record is on the harness thread's chain only, so an exception on any
+//! other thread that the called code creates never reaches it.
 
 use nv_oracle_core::vectors::Fault;
 use nv_win as win;
 use std::arch::global_asm;
+use std::ffi::c_void;
 use std::mem::offset_of;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
 
 /// Everything the assembly routine reads and writes. Field offsets are
 /// passed to the assembly as constants, so the order here is free to change.
@@ -72,7 +83,6 @@ impl CallFrame {
 // harness runs one call at a time on one thread, so plain atomics suffice.
 static SAVED_ESP: AtomicU32 = AtomicU32::new(0);
 static CALL_TARGET: AtomicU32 = AtomicU32::new(0);
-static IN_CALL: AtomicBool = AtomicBool::new(false);
 static TRAP_HIT: AtomicU32 = AtomicU32::new(0);
 static TRAP_INDEX: AtomicU32 = AtomicU32::new(0);
 static TRAP_CALLER: AtomicU32 = AtomicU32::new(0);
@@ -92,12 +102,16 @@ global_asm!(
     "    push ebx",
     "    push esi",
     "    push edi",
+    // Locals: [esp] control word, [esp+4] MXCSR, [esp+8] the frame,
+    // [esp+12] the thread's handler chain head to put back afterwards.
     "    sub esp, 16",
     "    mov ebx, [ebp + 8]",
     "    mov [esp + 8], ebx",
     "    fnstcw word ptr [esp]",
     "    stmxcsr dword ptr [esp + 4]",
     "    mov dword ptr [{saved_esp}], esp",
+    "    mov eax, dword ptr fs:[0]",
+    "    mov [esp + 12], eax",
     "    mov eax, [ebx + {off_target}]",
     "    mov dword ptr [{call_target}], eax",
     "    fninit",
@@ -107,6 +121,13 @@ global_asm!(
     "    movups xmm1, xmmword ptr [ebx + {off_xmm} + 16]",
     "    movups xmm2, xmmword ptr [ebx + {off_xmm} + 32]",
     "    movups xmm3, xmmword ptr [ebx + {off_xmm} + 48]",
+    // Register the handler record above the arguments (a callee that
+    // removes its own arguments must find nothing but them below its return
+    // address): handler, then the previous head, then fs:[0] points here.
+    "    mov eax, offset {seh_handler}",
+    "    push eax",
+    "    push dword ptr fs:[0]",
+    "    mov dword ptr fs:[0], esp",
     "    mov ecx, [ebx + {off_nstack}]",
     "    mov esi, [ebx + {off_stack}]",
     "2:",
@@ -148,6 +169,9 @@ global_asm!(
     "_nv_call_recover:",
     "    cld",
     "    mov esp, dword ptr [{saved_esp}]",
+    // Take the record (and any the callee left behind) off the chain.
+    "    mov eax, [esp + 12]",
+    "    mov dword ptr fs:[0], eax",
     "    fninit",
     "    fldcw word ptr [esp]",
     "    ldmxcsr dword ptr [esp + 4]",
@@ -168,6 +192,7 @@ global_asm!(
     "    jmp _nv_call_recover",
     saved_esp = sym SAVED_ESP,
     call_target = sym CALL_TARGET,
+    seh_handler = sym seh_handler,
     trap_index = sym TRAP_INDEX,
     trap_caller = sym TRAP_CALLER,
     trap_hit = sym TRAP_HIT,
@@ -196,10 +221,23 @@ extern "C" {
     fn nv_call_trap();
 }
 
+// On x86 with the MSVC linker, an exception handler must be listed in the
+// image's safe handler table or Windows refuses to call it. (The MinGW
+// linker does not build such a table, and does not need the entry.)
+#[cfg(target_env = "msvc")]
+global_asm!(".safeseh {seh_handler}", seh_handler = sym seh_handler);
+
 /// Address of the trap routine, for building import stubs.
 pub fn trap_address() -> u32 {
     nv_call_trap as *const () as usize as u32
 }
+
+const STATUS_STACK_OVERFLOW: u32 = 0xC000_00FD;
+
+/// `ExceptionFlags` bits.
+const EXCEPTION_NONCONTINUABLE: u32 = 0x1;
+const EXCEPTION_UNWINDING: u32 = 0x2;
+const EXCEPTION_EXIT_UNWIND: u32 = 0x4;
 
 fn is_fault_code(code: u32) -> bool {
     matches!(
@@ -213,19 +251,33 @@ fn is_fault_code(code: u32) -> bool {
             | 0xC000_008C
             ..=0xC000_0093 // array bounds and FPU exceptions
             | 0xC000_00FD // stack overflow
+            | 0xC000_02B4 // float multiple faults (SSE exceptions the MXCSR unmasks)
+            | 0xC000_02B5 // float multiple traps
             | 0x8000_0003 // breakpoint
     )
 }
 
-unsafe extern "system" fn fault_handler(ep: *mut win::ExceptionPointers) -> i32 {
-    if !IN_CALL.load(Relaxed) {
-        return 0; // EXCEPTION_CONTINUE_SEARCH
+/// The handler record's function, called by the system as
+/// `handler(record, frame, context, dispatcher)` with the C convention. It
+/// runs only for exceptions that no handler of the called code accepted.
+unsafe extern "C" fn seh_handler(
+    rec: *mut win::ExceptionRecord,
+    _frame: *mut c_void,
+    ctx: *mut win::Context,
+    _dispatcher: *mut c_void,
+) -> i32 {
+    const CONTINUE_EXECUTION: i32 = 0;
+    const CONTINUE_SEARCH: i32 = 1;
+    let rec = &mut *rec;
+    // Unwinding calls every record being removed; this one has nothing to
+    // clean up. Other exceptions (C++ throws, debug-print and thread-name
+    // exceptions the system continues from) are not faults.
+    if rec.exception_flags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND) != 0
+        || !is_fault_code(rec.exception_code)
+    {
+        return CONTINUE_SEARCH;
     }
-    let rec = &*(*ep).exception_record;
-    let ctx = &mut *(*ep).context_record;
-    if !is_fault_code(rec.exception_code) {
-        return 0;
-    }
+    let ctx = &mut *ctx;
     FAULT_CODE.store(rec.exception_code, Relaxed);
     FAULT_EIP.store(ctx.eip, Relaxed);
     if rec.exception_code == 0xC000_0005 && rec.number_parameters >= 2 {
@@ -243,19 +295,63 @@ unsafe extern "system" fn fault_handler(ep: *mut win::ExceptionPointers) -> i32 
         FAULT_ADDR.store(0, Relaxed);
     }
     FAULT_HIT.store(1, Relaxed);
-    IN_CALL.store(false, Relaxed);
+    // The faulting code is abandoned, not continued, so a record that was
+    // raised as non-continuable must not turn this into another exception.
+    rec.exception_flags &= !EXCEPTION_NONCONTINUABLE;
     ctx.eip = nv_call_recover as *const () as usize as u32;
-    -1 // EXCEPTION_CONTINUE_EXECUTION
+    CONTINUE_EXECUTION
 }
 
-/// Install the fault handler. Call once before [`run`].
-pub fn install_fault_handler() -> Result<(), String> {
-    // SAFETY: registering a handler with a valid function pointer.
-    let h = unsafe { win::AddVectoredExceptionHandler(1, Some(fault_handler)) };
-    if h.is_null() {
-        Err("AddVectoredExceptionHandler failed".into())
-    } else {
-        Ok(())
+/// A stack overflow uses up the thread's guard page. Put it back on the
+/// lowest committed page of the stack, so that the next overflow is reported
+/// as one as well instead of ending the process. (`_resetstkoflw` does the
+/// same.) Called after the stack has been unwound.
+fn rearm_stack_guard() {
+    let here = 0u8;
+    let here_addr = std::ptr::addr_of!(here) as usize;
+    let mut info = win::MemoryBasicInformation::zeroed();
+    let query = |addr: usize, info: &mut win::MemoryBasicInformation| {
+        // SAFETY: valid output buffer of the right size.
+        unsafe {
+            win::VirtualQuery(
+                addr as *const c_void,
+                info,
+                std::mem::size_of::<win::MemoryBasicInformation>(),
+            )
+        }
+    };
+    if query(here_addr, &mut info) == 0 {
+        return;
+    }
+    // Walk up from the base of the stack's reservation to its lowest usable
+    // page: the first one that is committed and not marked no-access (some
+    // systems keep a no-access page at the very bottom).
+    let mut cur = info.allocation_base as usize;
+    while cur < here_addr {
+        if query(cur, &mut info) == 0 {
+            return;
+        }
+        if info.state == win::MEM_COMMIT && info.protect != win::PAGE_NOACCESS {
+            if info.protect & win::PAGE_GUARD == 0 {
+                let mut old = 0u32;
+                // SAFETY: protecting one page of this thread's own stack,
+                // well below the part in use.
+                unsafe {
+                    win::VirtualProtect(
+                        cur as *mut c_void,
+                        0x1000,
+                        win::PAGE_READWRITE | win::PAGE_GUARD,
+                        &mut old,
+                    )
+                };
+            }
+            return;
+        }
+        let next = info.base_address as usize + info.region_size;
+        if next <= cur {
+            return;
+        }
+        cur = next;
     }
 }
 
@@ -280,9 +376,7 @@ pub enum Stopped {
 pub unsafe fn run(frame: &mut CallFrame) -> Option<Stopped> {
     FAULT_HIT.store(0, Relaxed);
     TRAP_HIT.store(0, Relaxed);
-    IN_CALL.store(true, Relaxed);
     nv_call_raw(frame);
-    IN_CALL.store(false, Relaxed);
     if TRAP_HIT.load(Relaxed) != 0 {
         return Some(Stopped::Import {
             index: TRAP_INDEX.load(Relaxed) as usize,
@@ -291,6 +385,9 @@ pub unsafe fn run(frame: &mut CallFrame) -> Option<Stopped> {
     }
     if FAULT_HIT.load(Relaxed) != 0 {
         let code = FAULT_CODE.load(Relaxed);
+        if code == STATUS_STACK_OVERFLOW {
+            rearm_stack_guard();
+        }
         let access = match FAULT_ACCESS.load(Relaxed) {
             1 => Some("read"),
             2 => Some("write"),

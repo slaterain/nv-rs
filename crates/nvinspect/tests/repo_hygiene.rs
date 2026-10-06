@@ -4,34 +4,46 @@
 //! `path:line: rule` entries when it finds:
 //!
 //! * a control character (other than tab, line feed and carriage return) in a
-//!   text file, or a binary file (a NUL byte in a file whose extension is not a
-//!   known text type);
+//!   text file, a hidden control character (a C1 control, U+0080 to U+009F, or
+//!   a bidirectional control such as U+202E, which can make code read
+//!   differently from what it does), text that is not valid UTF-8, or a binary
+//!   file (a NUL byte in a file whose extension is not a known text type);
 //! * an absolute Windows or macOS user-profile path in a text file (write
-//!   `%USERPROFILE%` instead). A Windows drive path matches `Users` in any
-//!   case; the macOS form `/Users/<name>` is case-sensitive, because git hosts
-//!   and web APIs use a lowercase `users`. The shared profile folders `Public`,
-//!   `Default`, `Default User`, `All Users` and `Shared` name nobody and are
-//!   allowed;
+//!   `%USERPROFILE%` instead). A Windows drive path matches `Users` or the older
+//!   `Documents and Settings` in any case; the macOS form `/Users/<name>` is
+//!   case-sensitive, because git hosts and web APIs use a lowercase `users`. The
+//!   shared profile folders `Public`, `Default`, `Default User`, `All Users` and
+//!   `Shared` name nobody and are allowed;
 //! * a game, recording or Ghidra project file type, as a file name or as a
-//!   directory name (a project database is a `<name>.rep` directory);
+//!   directory name (a project database is a `<name>.rep` directory). The name
+//!   rule applies to a tracked file even when it was deleted from the work tree;
 //! * under `crates/`, `viewer/` and `docs/`: a decompiler's automatic names
-//!   (function, label, data and pointer names made from an address, numbered
-//!   parameters, register inputs, stack and numbered temporaries, helper calls),
-//!   or a fenced C or C++ block in Markdown. Write a function as its address
-//!   (`00b0d7b0`), a global as `[011d8a84]`, and anything else in plain words.
+//!   (function, label, data, pointer and string names made from an address,
+//!   numbered parameters, register inputs, stack and numbered temporaries,
+//!   helper calls), or a fenced C or C++ block in Markdown (any of the tags
+//!   `c`, `h`, `cc`, `cpp`, `cxx`, `c++`, `hpp` and `hxx`, however the fence
+//!   writes it). Write a function as its address (`00b0d7b0`), a global as
+//!   `[011d8a84]`, and anything else in plain words.
 //!
-//! Which files: the list comes from `git ls-files --cached --others
-//! --exclude-standard`, so every ignore source git honours (nested `.gitignore`
-//! files, `.git/info/exclude`, the user's global excludes file) applies, and a
-//! file added with `git add -f` is checked even under an ignored directory.
-//! Files git ignores are not part of the repository and are not read. When the
-//! checkout has no `.git`, or git cannot be run, the test walks the directory
-//! tree instead and follows the simple entries of every `.gitignore` it meets
-//! (and always skips `target`, `.git`, `node_modules`, `.build` and `.claude`).
+//! Which files: the list comes from `git ls-files`, the tracked files plus the
+//! untracked ones git does not ignore, so every ignore source git honours
+//! (nested `.gitignore` files, `.git/info/exclude`, the user's global excludes
+//! file) applies, and a file added with `git add -f` is checked even under an
+//! ignored directory. Files git ignores are not part of the repository and are
+//! not read. One exception: an untracked file inside a `.claude` directory is
+//! local agent state (settings that name the user's folders, scratch worktrees)
+//! and is skipped, as the walk below skips it; once such a file is tracked it
+//! is checked like any other. Better still, ignore `.claude/settings.local.json`
+//! and `.claude/worktrees/` in the root `.gitignore`. When the checkout has no
+//! `.git`, or git cannot be run, the test walks the directory tree instead and
+//! follows the simple entries of every `.gitignore` it meets (and always skips
+//! `target`, `.git`, `node_modules`, `.build` and `.claude`).
 //!
-//! Every listed file is read except a few known image and font types. Entries
-//! that cannot be read, and files too large to scan, are reported rather than
-//! skipped. Symbolic links are not followed; only their names are checked.
+//! Every listed file is read except a few known image and font types. The
+//! content rules read the copy in the work tree, not the staged one: run the
+//! test before staging, or after the last edit. Entries that cannot be read,
+//! and files too large to scan, are reported rather than skipped. Symbolic links
+//! are not followed; only their names are checked.
 //!
 //! Matching is done by hand (the core crates take no external libraries), and
 //! the matchers have their own tests below on synthetic strings. Banned tokens
@@ -165,6 +177,43 @@ fn control_characters(bytes: &[u8]) -> Vec<(usize, u8)> {
     found
 }
 
+/// A control character that is encoded as more than one byte and does not show:
+/// the C1 controls and the bidirectional controls (the Unicode `Bidi_Control`
+/// set: the Arabic letter mark, the left-to-right and right-to-left marks, the
+/// embeddings and overrides, and the isolates).
+fn is_hidden_control(c: char) -> bool {
+    matches!(
+        c,
+        '\u{80}'..='\u{9f}'
+            | '\u{61c}'
+            | '\u{200e}'
+            | '\u{200f}'
+            | '\u{202a}'..='\u{202e}'
+            | '\u{2066}'..='\u{2069}'
+    )
+}
+
+/// Line number (1-based) and character of the first hidden control character
+/// on each line of `text`.
+fn hidden_controls(text: &str) -> Vec<(usize, char)> {
+    text.lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            line.chars()
+                .find(|&c| is_hidden_control(c))
+                .map(|c| (i + 1, c))
+        })
+        .collect()
+}
+
+/// The line (1-based) of the first byte sequence in `bytes` that is not valid
+/// UTF-8, or `None` when the whole input is.
+fn invalid_utf8_line(bytes: &[u8]) -> Option<usize> {
+    let error = std::str::from_utf8(bytes).err()?;
+    let before = &bytes[..error.valid_up_to()];
+    Some(1 + before.iter().filter(|&&b| b == b'\n').count())
+}
+
 fn is_separator(c: u8) -> bool {
     c == b'\\' || c == b'/'
 }
@@ -206,22 +255,29 @@ fn skip_separators(s: &[u8]) -> Option<&[u8]> {
     }
 }
 
-/// Whether `rest` starts with separator(s), `Users` in any case, separator(s)
-/// and the name of a person.
+/// The folders that hold the user profiles: `Users`, and `Documents and
+/// Settings` on Windows XP and older (lowercase; matched without regard to
+/// case).
+const PROFILE_ROOTS: &[&str] = &["users", "documents and settings"];
+
+/// Whether `rest` starts with separator(s), a profile root in any case,
+/// separator(s) and the name of a person.
 fn users_then_name(rest: &[u8]) -> bool {
     let Some(rest) = skip_separators(rest) else {
         return false;
     };
-    if rest.len() < 5 || !rest[..5].eq_ignore_ascii_case(b"users") {
+    let Some(root) = PROFILE_ROOTS.iter().find(|root| {
+        rest.len() >= root.len() && rest[..root.len()].eq_ignore_ascii_case(root.as_bytes())
+    }) else {
         return false;
-    }
-    let Some(rest) = skip_separators(&rest[5..]) else {
+    };
+    let Some(rest) = skip_separators(&rest[root.len()..]) else {
         return false;
     };
     names_a_person(rest)
 }
 
-/// A drive letter, a colon, and `Users` and a user name below it.
+/// A drive letter, a colon, and a profile root and a user name below it.
 fn windows_user_path(b: &[u8]) -> bool {
     let mut i = 0;
     while i + 1 < b.len() {
@@ -299,7 +355,8 @@ fn is_hex_offset(s: &str) -> bool {
 }
 
 /// Kind prefixes of names made from an address. `thunk_` and the kinds may wrap
-/// each other (a pointer to a function, a thunk of a function).
+/// each other (a pointer to a function, a thunk of a function). Switch labels,
+/// string labels and the fixed-width forms are matched on their own below.
 const ADDRESS_KINDS: &[&str] = &[
     "FUN_",
     "DAT_",
@@ -315,15 +372,45 @@ const ADDRESS_KINDS: &[&str] = &[
     "QWORD_",
     "FLOAT_",
     "DOUBLE_",
-    "switchD_",
-    "switchdataD_",
     "joined_r0x",
+    "code_r0x",
 ];
 
-/// A name made of a kind prefix and an address, or a switch case label (a
-/// prefix and a case value). The whole token has to match.
+/// Whether `s` is exactly eight hex digits (a stack or register offset is
+/// always printed in full).
+fn is_full_width_hex(s: &str) -> bool {
+    s.len() == 8 && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// A string label: `s_` (or `u_` for a Unicode string), the start of the text
+/// with every character that cannot be in a name replaced by `_`, and the
+/// address, as in `s_<text>_<address>`.
+fn string_label(s: &str) -> bool {
+    let Some(body) = s.strip_prefix("s_").or_else(|| s.strip_prefix("u_")) else {
+        return false;
+    };
+    body.rsplit_once('_')
+        .is_some_and(|(_, address)| is_address(address))
+}
+
+/// The label of a pointer: `PTR_`, the name of what it points to (itself made
+/// from an address, or a string, or an ordinary symbol), `_` and the address of
+/// the pointer.
+fn pointer_label(s: &str) -> bool {
+    s.strip_prefix("PTR_").is_some_and(|body| {
+        body.rsplit_once('_')
+            .is_some_and(|(target, address)| !target.is_empty() && is_address(address))
+    })
+}
+
+/// A name the decompiler or the listing makes from an address: a kind prefix and
+/// an address, a switch label (the address of the switch, then a case label or
+/// another suffix), a switch case label (a prefix and a case value), a string or
+/// pointer label, a stack or register offset, or an import by ordinal. The whole
+/// token has to match. Leading underscores do not matter: the decompiler prints
+/// one when an access does not match the type of the data it reads.
 fn address_name(token: &str) -> bool {
-    let mut rest = token;
+    let mut rest = token.trim_start_matches('_');
     loop {
         if let Some(inner) = rest.strip_prefix("thunk_") {
             rest = inner;
@@ -331,6 +418,24 @@ fn address_name(token: &str) -> bool {
         }
         if let Some(value) = rest.strip_prefix("caseD_") {
             return is_hex_offset(value);
+        }
+        if let Some(number) = rest.strip_prefix("Ordinal_") {
+            return all_digits(number) && number.len() <= 5;
+        }
+        if let Some(hex) = ["stack0x", "register0x"]
+            .iter()
+            .find_map(|kind| rest.strip_prefix(kind))
+        {
+            return is_full_width_hex(hex);
+        }
+        if let Some(tail) = ["switchD_", "switchdataD_"]
+            .iter()
+            .find_map(|kind| rest.strip_prefix(kind))
+        {
+            return is_address(tail.split('_').next().unwrap_or(""));
+        }
+        if pointer_label(rest) || string_label(rest) {
+            return true;
         }
         let Some(kind) = ADDRESS_KINDS.iter().find(|k| rest.starts_with(**k)) else {
             return false;
@@ -413,19 +518,19 @@ fn stack_input(token: &str) -> bool {
 /// pointer, array, void).
 const TYPE_LETTERS: &[u8] = b"abcdfilpsuv";
 
-/// The type prefix of a temporary: one to three of the type letters (`u`, `pc`,
-/// `ppu`), or pointers to a named type (`p`s and one capital letter, as in
-/// `pC` or `ppC`).
+/// The type prefix of a temporary: any run of `p` (pointers) and then up to
+/// three of the type letters (`u`, `pc`, `ppu`, `ppuc`), or one capital letter
+/// for a named type (`pF` points to a `FILE`, `U` holds a `UINT`).
 fn temporary_prefix(prefix: &str) -> bool {
     let b = prefix.as_bytes();
-    if b.is_empty() || b.len() > 4 {
+    if b.is_empty() || b.len() > 8 {
         return false;
     }
-    if b.len() <= 3 && b.iter().all(|c| TYPE_LETTERS.contains(c)) {
-        return true;
+    let pointers = b.iter().take_while(|&&c| c == b'p').count();
+    match &b[pointers..] {
+        [named] if named.is_ascii_uppercase() => true,
+        rest => rest.len() <= 3 && rest.iter().all(|c| TYPE_LETTERS.contains(c)),
     }
-    let (last, init) = b.split_last().expect("not empty");
-    last.is_ascii_uppercase() && !init.is_empty() && init.iter().all(|&c| c == b'p')
 }
 
 /// A numbered temporary: a type prefix, `Var` and a decimal number.
@@ -436,12 +541,17 @@ fn numbered_temporary(token: &str) -> bool {
     temporary_prefix(&token[..at]) && all_digits(&token[at + 3..])
 }
 
-/// A temporary on the stack: a type prefix, `Stack_` and the offset in hex.
+/// A temporary on the stack: a type prefix, `Stack`, an optional capital letter
+/// (a `Y` marks some slots), `_` and the offset in hex.
 fn stack_temporary(token: &str) -> bool {
-    let Some(at) = token.find("Stack_") else {
+    let Some(at) = token.find("Stack") else {
         return false;
     };
-    temporary_prefix(&token[..at]) && is_hex_offset(&token[at + 6..])
+    let after = &token[at + 5..];
+    let after = after
+        .strip_prefix(|c: char| c.is_ascii_uppercase())
+        .unwrap_or(after);
+    after.strip_prefix('_').is_some_and(is_hex_offset) && temporary_prefix(&token[..at])
 }
 
 /// Short words that are made only of hex letters, so a stack local of that name
@@ -482,11 +592,16 @@ fn helper_call(token: &str, next: Option<u8>) -> bool {
             .any(|h| token.strip_prefix(h).is_some_and(all_digits))
 }
 
-/// The decompiler's sized type for an unknown value.
+/// The decompiler's sized types: `undefined` and a size for an unknown value,
+/// and `unk`, a kind and a size for a value of an odd size.
 fn undefined_type(token: &str) -> bool {
-    token
-        .strip_prefix("undefined")
-        .is_some_and(|n| all_digits(n) && n.len() <= 2)
+    ["undefined", "unkbyte", "unkint", "unkuint", "unkfloat"]
+        .iter()
+        .any(|kind| {
+            token
+                .strip_prefix(kind)
+                .is_some_and(|n| all_digits(n) && n.len() <= 2)
+        })
 }
 
 fn is_auto_name(token: &str, next: Option<u8>) -> bool {
@@ -531,8 +646,30 @@ fn ghidra_auto_name(line: &str) -> Option<&str> {
     ghidra_auto_names(line).into_iter().next()
 }
 
+/// Fence languages that mean C or C++ source or headers (lowercase).
+const C_LANGUAGES: &[&str] = &["c", "h", "cc", "cpp", "cxx", "c++", "hpp", "hxx"];
+
+/// The language a fence names, lowercase, from the text after the fence
+/// characters. Besides a bare word (`c`), this reads a word followed by more
+/// (`c title="x"`, `c,ignore`, `c{1-3}`, `c:file.h`), a class in attribute
+/// braces (`{.c}`, `{#id .c .numberLines}`) and `language-c`.
+fn fence_language(info: &str) -> String {
+    let word = match info.strip_prefix('{') {
+        Some(attributes) => attributes
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .find_map(|part| part.strip_prefix('.'))
+            .unwrap_or(""),
+        None => info,
+    };
+    let word = word.strip_prefix("language-").unwrap_or(word);
+    word.chars()
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '#'))
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
 /// Opening lines (1-based) of fenced code blocks tagged as C or C++, with the
-/// tag. A fence inside another block (a longer or different fence showing
+/// language. A fence inside another block (a longer or different fence showing
 /// Markdown, say) is content, not an opener.
 fn c_fences(text: &str) -> Vec<(usize, String)> {
     let mut found = Vec::new();
@@ -563,10 +700,9 @@ fn c_fences(text: &str) -> Vec<(usize, String)> {
                     continue;
                 }
                 open = Some((c, len));
-                let tag = info.split_whitespace().next().unwrap_or("");
-                let tag = tag.to_ascii_lowercase();
-                if matches!(tag.as_str(), "c" | "cpp" | "c++") {
-                    found.push((n + 1, tag));
+                let language = fence_language(info);
+                if C_LANGUAGES.contains(&language.as_str()) {
+                    found.push((n + 1, language));
                 }
             }
         }
@@ -732,8 +868,36 @@ fn git(root: &Path) -> Command {
     command
 }
 
+/// The names `git ls-files -z <args>` prints in `root`, as raw bytes, or `None`
+/// when git cannot be run or fails.
+fn git_ls_files(root: &Path, args: &[&str]) -> Option<Vec<Vec<u8>>> {
+    let output = git(root)
+        .args(["ls-files", "-z"])
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(
+        output
+            .stdout
+            .split(|&b| b == 0)
+            .filter(|name| !name.is_empty())
+            .map(<[u8]>::to_vec)
+            .collect(),
+    )
+}
+
+/// Whether `rel` is inside a `.claude` directory: local agent settings and
+/// scratch worktrees, which belong to one person's checkout.
+fn in_agent_state(rel: &str) -> bool {
+    rel.split('/').any(|component| component == ".claude")
+}
+
 /// The files git tracks or would add (everything not ignored), or `None` when
-/// `root` is not the top of a git checkout or git cannot be run.
+/// `root` is not the top of a git checkout or git cannot be run. An untracked
+/// file inside a `.claude` directory is left out (see the module header).
 fn files_from_git(root: &Path) -> Option<Listing> {
     // `root` must be the top of the checkout. Without this, a directory that is
     // not a repository (a copy made with `git archive`, a fixture) would be
@@ -745,24 +909,18 @@ fn files_from_git(root: &Path) -> Option<Listing> {
     if !prefix.status.success() || !prefix.stdout.iter().all(u8::is_ascii_whitespace) {
         return None;
     }
-    let output = git(root)
-        .args([
-            "ls-files",
-            "-z",
-            "--cached",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    let tracked = git_ls_files(root, &["--cached"])?;
+    let untracked = git_ls_files(root, &["--others", "--exclude-standard"])?;
     let mut rels = Vec::new();
     let mut problems = Vec::new();
-    for raw in output.stdout.split(|&b| b == 0).filter(|r| !r.is_empty()) {
-        match String::from_utf8(raw.to_vec()) {
-            Ok(rel) => rels.push(rel),
+    let named = tracked
+        .iter()
+        .map(|name| (name, true))
+        .chain(untracked.iter().map(|name| (name, false)));
+    for (raw, is_tracked) in named {
+        match std::str::from_utf8(raw) {
+            Ok(rel) if is_tracked || !in_agent_state(rel) => rels.push(rel.to_string()),
+            Ok(_) => {}
             Err(_) => problems.push(format!(
                 "{}:1: file name is not valid UTF-8",
                 String::from_utf8_lossy(raw)
@@ -883,7 +1041,19 @@ fn check_text(rel: &str, bytes: &[u8]) -> Vec<(usize, String)> {
             format!("control character 0x{byte:02x} (only tab, LF and CR are allowed)"),
         ));
     }
+    if let Some(line) = invalid_utf8_line(bytes) {
+        found.push((line, "not valid UTF-8 (text files are UTF-8)".to_string()));
+    }
     let text = String::from_utf8_lossy(bytes);
+    for (line, c) in hidden_controls(&text) {
+        found.push((
+            line,
+            format!(
+                "hidden control character U+{:04X} (C1 control or bidirectional control)",
+                c as u32
+            ),
+        ));
+    }
     let top = rel.split('/').next().unwrap_or("");
     let provenance = rel.contains('/') && PROVENANCE_DIRS.contains(&top);
     for (i, line) in text.lines().enumerate() {
@@ -930,17 +1100,12 @@ fn check_listing(listing: Listing) -> Vec<String> {
     let mut findings = listing.problems;
     let mut banned_dirs: BTreeSet<String> = BTreeSet::new();
     for file in &listing.files {
-        let meta = match fs::symlink_metadata(&file.path) {
-            Ok(meta) => meta,
-            // Tracked, but removed from the work tree: nothing to check.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => {
-                findings.push(format!("{}:1: cannot read file: {e}", file.rel));
-                continue;
-            }
-        };
+        let meta = fs::symlink_metadata(&file.path);
+        // The name rule needs no file, so it also applies to a tracked file that
+        // was deleted from the work tree.
         if let Some((prefix, ext)) = banned_component(&file.rel) {
-            if prefix.len() == file.rel.len() && !meta.is_dir() {
+            let is_dir = meta.as_ref().is_ok_and(|meta| meta.is_dir());
+            if prefix.len() == file.rel.len() && !is_dir {
                 findings.push(format!(
                     "{}:1: game, recording or binary file type `.{ext}` is never committed",
                     file.rel
@@ -953,6 +1118,15 @@ fn check_listing(listing: Listing) -> Vec<String> {
             }
             continue;
         }
+        let meta = match meta {
+            Ok(meta) => meta,
+            // Tracked, but removed from the work tree: nothing to read.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => {
+                findings.push(format!("{}:1: cannot read file: {e}", file.rel));
+                continue;
+            }
+        };
         // A directory here is a submodule or a nested repository; a link is
         // not followed.
         if meta.is_dir() || meta.file_type().is_symlink() {

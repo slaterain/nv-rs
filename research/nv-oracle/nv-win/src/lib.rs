@@ -36,6 +36,9 @@ pub const DLL_PROCESS_ATTACH: u32 = 1;
 pub const DLL_THREAD_ATTACH: u32 = 2;
 pub const DLL_THREAD_DETACH: u32 = 3;
 
+pub const GET_MODULE_HANDLE_EX_FLAG_PIN: u32 = 0x1;
+pub const GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS: u32 = 0x4;
+
 pub const CREATE_SUSPENDED: u32 = 0x4;
 pub const INFINITE: u32 = 0xFFFF_FFFF;
 pub const WAIT_OBJECT_0: u32 = 0;
@@ -129,12 +132,6 @@ pub struct ExceptionRecord {
 }
 
 #[repr(C)]
-pub struct ExceptionPointers {
-    pub exception_record: *mut ExceptionRecord,
-    pub context_record: *mut Context,
-}
-
-#[repr(C)]
 pub struct StartupInfoW {
     pub cb: u32,
     pub reserved: *mut u16,
@@ -197,7 +194,6 @@ const _: () = assert!(size_of::<StartupInfoW>() == 68);
 const _: () = assert!(size_of::<ProcessInformation>() == 16);
 const _: () = assert!(size_of::<ThreadEntry32>() == 28);
 
-pub type VectoredHandler = unsafe extern "system" fn(*mut ExceptionPointers) -> i32;
 pub type ThreadStart = unsafe extern "system" fn(*mut c_void) -> u32;
 
 #[link(name = "kernel32")]
@@ -236,12 +232,10 @@ extern "system" {
         written: *mut usize,
     ) -> Bool;
     pub fn FlushInstructionCache(process: Handle, addr: *const c_void, size: usize) -> Bool;
-    pub fn AddVectoredExceptionHandler(first: u32, handler: Option<VectoredHandler>)
-        -> *mut c_void;
-    pub fn RemoveVectoredExceptionHandler(handle: *mut c_void) -> u32;
     pub fn LoadLibraryA(name: *const u8) -> Handle;
     pub fn LoadLibraryW(name: *const u16) -> Handle;
     pub fn GetModuleHandleW(name: *const u16) -> Handle;
+    pub fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut Handle) -> Bool;
     pub fn GetModuleFileNameW(module: Handle, buf: *mut u16, size: u32) -> u32;
     pub fn GetProcAddress(module: Handle, name: *const u8) -> *mut c_void;
     pub fn GetLastError() -> u32;

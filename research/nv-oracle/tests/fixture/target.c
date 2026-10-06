@@ -176,7 +176,9 @@ FX int fx_raise_noncont(void) {
 
 /* Calls Sleep for a while: a thread inside a hooked function with a captured
  * return while the probe is unloaded. */
+static volatile LONG fx_inside_sleepy;
 FX int fx_sleepy(int ms) {
+    InterlockedExchange(&fx_inside_sleepy, 1);
     Sleep((DWORD)ms);
     return ms + 1;
 }
@@ -685,7 +687,10 @@ static int unload_inside(const char *dll) {
     }
     int result = 0;
     HANDLE t = CreateThread(NULL, 0, sleepy_thread, &result, 0, NULL);
-    Sleep(150);
+    /* Wait until the thread is inside the function (and then a moment more,
+     * so that it is in Sleep), well before its 400 ms are over. */
+    for (int i = 0; i < 500 && !fx_inside_sleepy; i++) Sleep(10);
+    Sleep(50);
     FreeLibrary(h);
     printf("unload-inside: freed\n");
     fflush(stdout);

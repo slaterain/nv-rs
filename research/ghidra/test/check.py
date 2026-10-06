@@ -368,6 +368,17 @@ def stage_cards(c):
     check(cw["changes_fpu_control"] is True and cw["instruction_counts"]["x87_control"] == 1 and
           cw["instruction_counts"]["fldcw"] == 1 and cw["instruction_counts"]["ldmxcsr"] == 0,
           "set_cw card: FLDCW counted")
+    k = card("fx_load_cw_const")["float_constants"]
+    check(len(k) == 1 and k[0]["read_as"] == "x87_cw" and k[0]["access_size"] == 2 and k[0]["bytes"] == "7f02" and
+          k[0]["precision_bits"] == 53 and k[0]["rounding"] == "nearest" and k[0]["exception_masks"] == "0x3f",
+          "FLDCW from a constant: x87 control word 0x027f decoded (53-bit precision, round to nearest, all masked)")
+    km = card("fx_load_mxcsr_const")
+    k = km["float_constants"]
+    check(len(k) == 1 and k[0]["read_as"] == "mxcsr" and k[0]["access_size"] == 4 and k[0]["bytes"] == "c09f0000" and
+          k[0]["flush_to_zero"] is True and k[0]["denormals_are_zero"] is True and k[0]["rounding"] == "nearest" and
+          k[0]["exception_masks"] == "0x3f" and km["instruction_counts"]["ldmxcsr"] == 1 and
+          km["changes_fpu_control"] is True,
+          "LDMXCSR from a constant: MXCSR 0x9fc0 decoded (flush to zero, denormals are zero, round to nearest)")
     th = card("Obj_Compute")
     check(th["calling_convention"] == "__thiscall", "thiscall card: calling convention __thiscall")
     m = card("main")

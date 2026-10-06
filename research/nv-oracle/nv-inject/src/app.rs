@@ -4,14 +4,15 @@ use std::ffi::{c_void, OsStr};
 use std::path::{Path, PathBuf};
 
 const USAGE: &str = "\
-usage: nv-inject [--dll <path>] --launch <exe> [args...] [--wait]
+usage: nv-inject [--dll <path>] [--wait] --launch <exe> [args...]
        nv-inject [--dll <path>] --pid <n>
 
   --dll <path>    the DLL to load (default: nv_probe.dll next to nv-inject.exe)
-  --launch <exe>  start the program suspended, load the DLL, then resume it;
-                  everything after the exe is passed to the program
   --wait          with --launch: wait for the program to exit and print its
-                  exit code
+                  exit code (nv-inject then exits with 3 if the code is not 0)
+  --launch <exe>  start the program suspended, load the DLL, then resume it;
+                  everything after the exe is passed to the program, so give
+                  --dll and --wait before --launch
   --pid <n>       load the DLL into a running process
   -h, --help      this text
 
@@ -34,7 +35,13 @@ struct Options {
 }
 
 fn parse_args() -> Result<Options, String> {
-    let mut args = std::env::args().skip(1).peekable();
+    parse(std::env::args().skip(1))
+}
+
+/// Parse the arguments after the program name. Everything after the program
+/// that `--launch` names belongs to that program.
+fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
+    let mut args = args;
     let mut dll: Option<PathBuf> = None;
     let mut target: Option<Target> = None;
     let mut wait = false;
@@ -217,6 +224,15 @@ pub fn main() -> i32 {
             }
         }
         Target::Launch { exe, args, wait } => {
+            for a in args
+                .iter()
+                .filter(|a| matches!(a.as_str(), "--wait" | "--dll"))
+            {
+                eprintln!(
+                    "nv-inject: note: {a} after the program name is passed to the program, not to nv-inject; \
+                     give it before --launch"
+                );
+            }
             let exe_path = PathBuf::from(&exe);
             let wide_exe = win::wide(exe_path.as_os_str());
             let mut cmd = win::wide(OsStr::new(&cmdline::command_line(&exe, &args)));
@@ -293,5 +309,50 @@ pub fn main() -> i32 {
             unsafe { win::CloseHandle(pi.process) };
             exit
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_text(text: &str) -> Result<Options, String> {
+        parse(text.split_whitespace().map(String::from))
+    }
+
+    #[test]
+    fn options_before_launch_are_nv_injects() {
+        let o = parse_text("--dll a.dll --wait --launch game.exe -windowed 1").unwrap();
+        assert_eq!(o.dll, PathBuf::from("a.dll"));
+        match o.target {
+            Target::Launch { exe, args, wait } => {
+                assert_eq!(exe, "game.exe");
+                assert_eq!(args, ["-windowed", "1"]);
+                assert!(wait);
+            }
+            Target::Pid(_) => panic!("expected a launch"),
+        }
+    }
+
+    #[test]
+    fn everything_after_the_program_belongs_to_the_program() {
+        let o = parse_text("--dll a.dll --launch game.exe loop 2 --wait").unwrap();
+        match o.target {
+            Target::Launch { args, wait, .. } => {
+                assert_eq!(args, ["loop", "2", "--wait"]);
+                assert!(!wait, "a --wait after the program must not turn waiting on");
+            }
+            Target::Pid(_) => panic!("expected a launch"),
+        }
+    }
+
+    #[test]
+    fn pid_and_errors() {
+        let o = parse_text("--dll a.dll --pid 42").unwrap();
+        assert!(matches!(o.target, Target::Pid(42)));
+        assert!(parse_text("--dll a.dll").is_err());
+        assert!(parse_text("--dll a.dll --pid x").is_err());
+        assert!(parse_text("--dll a.dll --launch").is_err());
+        assert!(parse_text("--bogus --pid 1").is_err());
     }
 }

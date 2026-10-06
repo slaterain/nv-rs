@@ -46,9 +46,10 @@ of a script anywhere below `research/ghidra`, `target/` included: a mutated
 copy there once replaced the real export script in a later run. The tests
 build their modified copies in a temporary folder outside the repository, and
 check at the end that `target/` holds no `.java` file. Also run the commands
-from a folder that has no file named like a script (the repository root is
-fine), because Ghidra reads `NvExportProgram.java` as a path before it
-searches the script directories.
+from the repository root (as the PowerShell commands below do): Ghidra reads
+`NvExportProgram.java` as a path relative to the current folder before it
+searches the script directories, so standing in a folder that holds a file
+of that name runs that file, or fails if the folder is not a script path.
 
 | Script | What it is for | Methodology step |
 | --- | --- | --- |
@@ -466,14 +467,16 @@ function that is both the execute and the eval handler of one entry,
 functions that read float, double and 80-bit constants, an SSE function
 (`ADDSS`, `SQRTSS`), `RSQRTSS` and `RCPSS` functions, an x87 `FSIN`
 function and call chains around it of several depths, a pair of functions
-that call each other, an `FLDCW` function, a function that reads a writable
+that call each other, an `FLDCW` function, functions that load the x87
+control word and `MXCSR` from constants, a function that reads a writable
 float global, eight functions that read a constant through an SSE conversion
 (`CVTSD2SS`, `CVTSS2SD`, `CVTTSS2SI`, `CVTTSD2SI`, `CVTPS2PD`, `CVTPD2PS`,
 `CVTDQ2PD`, `CVTSI2SD`), a `thiscall` method, an integer-only function, and a
 function reachable only through a function-pointer table.
 
-What the tests check (the last run is recorded in the report that came with
-this change; count the `ok` lines of a run to see the current number):
+What the tests check (274 `ok` lines and no failure on the last run, in
+about four minutes; the run before it also passed with the compiled-script
+cache of the one before that, so a repeated run is not affected by leftovers):
 
 - Identity JSON has the required fields; its SHA-256 and MD5 equal those of
   the analyzed file; TimeDateStamp, Characteristics (the large-address-aware

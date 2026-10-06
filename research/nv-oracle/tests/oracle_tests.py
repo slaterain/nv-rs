@@ -9,10 +9,11 @@ Subcommands:
   extra-vectors  nm output                  ->  vectors for faults, imports,
                                                 snapshots and register presets
   extra-check    results mode label         ->  check those (mode: nosnap,
-                                                snapshot, resolve or keep)
+                                                snapshot, snapshot-keep, resolve
+                                                or keep)
   snapshot-files nm output + folder         ->  write snapshot region files
   probe-manifest variant nm exe out [k=v..] ->  write nv-probe.txt
-  probe-check    variant log out base label ->  check a probe log
+  probe-check    variant log out base label [exe] ->  check a probe log
   nvse-check     log out mode label         ->  check the NVSE simulation
 Run with no arguments for details. Standard library only.
 """
@@ -170,6 +171,11 @@ def extra_vectors(syms):
         v("after_faults", "fx_add3", args=["i32:1", "i32:2", "i32:3"]),
         v("global_5", "fx_use_global", args=["i32:5"]),
         v("read_ptr", "fx_read_ptr"),
+        # A write into a snapshot region is undone before the next vector.
+        v("snap_write", "fx_fill", args=["ptr:0x0a000100", "i32:7"], ret="void"),
+        v("read_ptr_after_write", "fx_read_ptr"),
+        v("snap_same_page", "fx_deref", args=["ptr:0x0a000200"]),
+        v("snap_same_block", "fx_deref", args=["ptr:0x0a003000"]),
         v("regs_ecx_5", "fx_tiny_raw", regs={"ecx": "0x5"}),
         v("regs_ecx_0", "fx_tiny_raw", regs={"ecx": "0x0"}),
         v("mix_declared_cdecl", "fx_mix", args=["i32:3", "u32:16"]),
@@ -229,15 +235,21 @@ def cmd_snapshot_files(nm, folder):
         f.write(struct.pack("<I", 0x0A000100))
     with open(os.path.join(folder, "0a000100.bin"), "wb") as f:
         f.write(struct.pack("<i", 51966))
+    # A second file in a page that the first one allocated, and a third one in
+    # another page of the same 64 KiB block.
+    with open(os.path.join(folder, "0a000200.bin"), "wb") as f:
+        f.write(struct.pack("<i", 4660))
+    with open(os.path.join(folder, "0a003000.bin"), "wb") as f:
+        f.write(struct.pack("<i", 22136))
     return 0
 
 
 def cmd_extra_check(results, mode, label):
-    """`mode` is nosnap, snapshot, resolve (imports resolved) or keep
-    (--keep-state)."""
-    snapshot = mode == "snapshot"
+    """`mode` is nosnap, snapshot, snapshot-keep, resolve (imports resolved)
+    or keep (--keep-state)."""
+    snapshot = mode in ("snapshot", "snapshot-keep")
     resolve = mode == "resolve"
-    keep = mode == "keep"
+    keep = mode in ("keep", "snapshot-keep")
     rows = read_jsonl(results)
     header = rows[0]
     by_id = {r["id"]: r for r in rows if r.get("type") == "result"}
@@ -274,6 +286,20 @@ def cmd_extra_check(results, mode, label):
     r = by_id["read_ptr"]
     want = 51966 if snapshot else -1
     check(r["fault"] is None and r["value"]["i32"] == want, f"pointer read {r['value']} (snapshot={snapshot})")
+
+    r = by_id["read_ptr_after_write"]
+    if snapshot:
+        want = 7 if keep else 51966
+        check(r["fault"] is None and r["value"]["i32"] == want, f"snapshot region after a write into it: {r['value']}, wanted {want} (keep-state={keep})")
+    else:
+        check(by_id["snap_write"]["fault"] is not None and r["value"]["i32"] == -1, "no snapshot: the write faults, the pointer stays null")
+    for name, want, what in (("snap_same_page", 4660, "in a page the first file allocated"),
+                             ("snap_same_block", 22136, "in another page of the same 64 KiB block")):
+        r = by_id[name]
+        if snapshot:
+            check(r["fault"] is None and r["value"]["i32"] == want, f"a later snapshot file {what}: {r['value']}")
+        else:
+            check(r["fault"] is not None and r["fault"]["name"] == "access_violation", f"nothing is mapped there without the snapshot: {r['fault']}")
 
     check(by_id["regs_ecx_5"]["regs"]["eax"] == "0x00000001", "preset ECX nonzero")
     check(by_id["regs_ecx_0"]["regs"]["eax"] == "0x00000000", "preset ECX zero")

@@ -20,6 +20,11 @@
 //! so it waits `nvse_grace_ms` for NVSE to call in; if no call arrives it
 //! installs on its own thread. Nothing is installed twice.
 //!
+//! A probe with a return-capturing hook pins itself in memory, because a
+//! thread inside a hooked function returns through a stub that calls back
+//! into the DLL. Without such a hook, `FreeLibrary` unloads the DLL and puts
+//! the original bytes back.
+//!
 //! The ABI facts used for NVSE are only these: `PluginInfo` is
 //! `{u32 infoVersion = 1, const char *name, u32 version}`, `NVSEInterface`
 //! starts with `u32 nvseVersion, runtimeVersion, editorVersion, isEditor`,
@@ -311,31 +316,38 @@ fn install(origin: Origin) {
         header.str("host_exe", &e.display().to_string());
     }
 
-    // The host program must be the one the manifest was written for.
-    let mut refuse_all: Option<String> = None;
-    if let Some(want) = manifest.host_sha256 {
-        let got = exe
-            .as_ref()
-            .ok_or_else(|| "cannot find the host exe".to_string())
-            .and_then(|p| std::fs::File::open(p).map_err(|e| e.to_string()))
-            .and_then(|f| sha256::digest_reader(f).map_err(|e| e.to_string()));
-        match got {
-            Ok(have) => {
-                header.str("host_sha256", &nv_oracle_core::hex::encode(&have));
-                if have != want {
-                    header.str("host_sha256_check", "mismatch");
-                    refuse_all = Some("host exe SHA-256 does not match host_sha256".into());
-                } else {
-                    header.str("host_sha256_check", "match");
-                }
-            }
-            Err(e) => {
-                header.str("host_sha256_check", "error");
-                refuse_all = Some(format!("cannot hash the host exe: {e}"));
-            }
+    // The log always says which binary it measured: the host exe is hashed
+    // whether or not the manifest asks for the hash to be checked. When it
+    // does, the host must be the program the manifest was written for.
+    let hash = exe
+        .as_ref()
+        .ok_or_else(|| "cannot find the host exe".to_string())
+        .and_then(|p| std::fs::File::open(p).map_err(|e| e.to_string()))
+        .and_then(|f| sha256::digest_reader(f).map_err(|e| e.to_string()));
+    match &hash {
+        Ok(have) => {
+            header.str("host_sha256", &nv_oracle_core::hex::encode(have));
         }
-    } else {
-        header.str("host_sha256_check", "not_requested");
+        Err(e) => {
+            header.str("host_sha256_error", e);
+        }
+    }
+    let mut refuse_all: Option<String> = None;
+    match (manifest.host_sha256, &hash) {
+        (None, _) => {
+            header.str("host_sha256_check", "not_requested");
+        }
+        (Some(want), Ok(have)) if *have == want => {
+            header.str("host_sha256_check", "match");
+        }
+        (Some(_), Ok(_)) => {
+            header.str("host_sha256_check", "mismatch");
+            refuse_all = Some("host exe SHA-256 does not match host_sha256".into());
+        }
+        (Some(_), Err(e)) => {
+            header.str("host_sha256_check", "error");
+            refuse_all = Some(format!("cannot hash the host exe: {e}"));
+        }
     }
 
     let mut statuses: Vec<String> = Vec::new();
@@ -370,7 +382,15 @@ fn install(origin: Origin) {
 
     // Publish the table, then patch (with other threads stopped).
     let mut installed_json: Vec<String> = Vec::new();
+    let mut pinned = false;
     if !hooks.is_empty() {
+        // A function hooked with return capture comes back through a stub
+        // that calls into this DLL, possibly long after it was entered. If
+        // the DLL could be unloaded meanwhile, that thread would return into
+        // unmapped memory, so such a probe keeps itself in the process.
+        if hooks.iter().any(|h| h.ret_stub != 0) {
+            pinned = pin_module();
+        }
         let table = runtime::publish(runtime::Table { hooks });
         let frozen = if manifest.suspend_threads {
             memory::Frozen::freeze_others()
@@ -409,8 +429,24 @@ fn install(origin: Origin) {
     installed_json.extend(statuses);
     header
         .raw("hooks", &json::array_of(&installed_json))
-        .bool("installed", INSTALLED.load(SeqCst));
+        .bool("installed", INSTALLED.load(SeqCst))
+        .bool("pinned", pinned);
     push(&mut guard, &header.finish());
+}
+
+/// Keep this DLL mapped until the process ends: `FreeLibrary` then does not
+/// unload it, and its `DllMain` is not told to detach before the process
+/// exits.
+fn pin_module() -> bool {
+    let mut module: win::Handle = std::ptr::null_mut();
+    // SAFETY: the address is a function of this module, as the flag says.
+    unsafe {
+        win::GetModuleHandleExW(
+            win::GET_MODULE_HANDLE_EX_FLAG_PIN | win::GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+            pin_module as *const () as *const u16,
+            &mut module,
+        ) != 0
+    }
 }
 
 fn push(guard: &mut std::sync::MutexGuard<'_, Option<log::Logger>>, line: &str) {
@@ -470,8 +506,10 @@ fn prepare(
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(0);
 
-/// Put the original bytes back (the DLL is being unloaded). The stubs stay
-/// allocated, so a thread still running inside one does not fault.
+/// Put the original bytes back (the DLL is being unloaded). Only a probe
+/// without return capture gets here: one with it has pinned itself. The stubs
+/// stay allocated, but they call into this DLL, so a thread that is inside one
+/// of them at this moment is lost.
 fn uninstall() {
     let Some(table) = runtime::table() else {
         return;

@@ -21,7 +21,7 @@ Names, types, struct layouts and source-file names from the prototype
 symbols may be used in research and in committed code comments and docs.
 Their provenance is always recorded:
 
-- In Ghidra, transferred names carry the tag `src:xbox_pdb` plus a pin
+- In Ghidra, transferred names carry the tag `src:xbox_pdb.<tier>` plus a pin
   naming the tool and commit that transferred them
   (`research/ghidra/NvImportNameMap.java`).
 - In committed comments and docs, a name or layout taken from the prototype

@@ -167,6 +167,20 @@ NOINLINE void fx_set_cw(unsigned short cw)
     __asm__ volatile("fldcw %0" : : "m"(cw));
 }
 
+/* control words read from constants in memory */
+const unsigned short k_cw_const = 0x027f; /* 53-bit precision, round to nearest, all exceptions masked */
+const unsigned k_mxcsr_const = 0x9fc0;    /* flush to zero and denormals are zero, round to nearest, masked */
+
+NOINLINE void fx_load_cw_const(void)
+{
+    __asm__ volatile("fldcw %0" : : "m"(k_cw_const));
+}
+
+NOINLINE void fx_load_mxcsr_const(void)
+{
+    __asm__ volatile("ldmxcsr %0" : : "m"(k_mxcsr_const));
+}
+
 NOINLINE unsigned fx_sum(unsigned a, unsigned b)
 {
     /* integer only, no globals: tier A, not stateful */
@@ -354,6 +368,8 @@ int main(int argc, char **argv)
     acc += (int)fx_sum((unsigned)sel, (unsigned)sel);
     acc += (int)fx_gain(f);
     fx_set_cw(0x027f);
+    fx_load_cw_const();
+    fx_load_mxcsr_const();
     acc += g_dispatch[idx](sel);
     acc += (int)fx_cvt_sd2ss();
     acc += (int)fx_cvt_ss2sd();

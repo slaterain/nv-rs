@@ -50,10 +50,11 @@ custom register conventions (see "Known limitations").
   deciding with the maintainer that they count as acceptable recordings.
   `.gitignore` here already excludes `*.jsonl` and `*.bin`.
 - The tools check what they run against: `nv-call` reports the SHA-256 of the
-  image in its header, and `nv-probe` refuses to install any hook when the
-  host exe's SHA-256 differs from `host_sha256` in its manifest, or when the
-  bytes at a hook address differ from the bytes you expected. Every artifact
-  derived from a run should carry that exe hash.
+  image in its header. `nv-probe` always hashes the host exe and writes it
+  into its log header (`host_sha256`); it refuses to install any hook when
+  that hash differs from `host_sha256` in the manifest, or when the bytes at a
+  hook address differ from the bytes you expected. Every artifact derived from
+  a run should carry that exe hash.
 - `nv-probe` refuses to load in the editor (`isEditor != 0`).
 - Antivirus programs may flag any DLL injector. Use an exclusion for the
   private oracle folder rather than weakening protection elsewhere.
@@ -107,7 +108,7 @@ crates compile to empty programs.
 
 ```
 nv-call <image.exe> <vectors.jsonl | -> [--snapshot <dir>] [--resolve-imports]
-        [--fpcw <hex>] [--mxcsr <hex>] [--out <file>] [--arena <hex>]
+        [--keep-state] [--fpcw <hex>] [--mxcsr <hex>] [--out <file>] [--arena <hex>]
 ```
 
 ### Why there are two files
@@ -140,10 +141,26 @@ message when it is taken (the message names what is there).
    functions instead (anything missing keeps a stub). Resolving is only
    sensible for imports that are safe to run, such as simple kernel32 calls.
 4. `--snapshot <dir>` applies every `<hexaddr>.bin` file in the folder after
-   mapping (for example `011dea3c.bin`). A region outside the image is
-   allocated at that exact address. The header lists each region with its size
-   and SHA-256.
-5. Runs each vector (below), one JSON line each, after one header line.
+   mapping (for example `011dea3c.bin`). A region inside the image (or the rest
+   of the range `nv-call.exe`'s placeholder reserved) is written into it, and a
+   region in free address space is allocated at that exact address, taking the
+   whole 64 KiB block it starts in, so later files in the same block fit.
+   A region over anything else is refused with a message naming what is there:
+   that would be the harness's own code, data, heap, stack or buffer arena, and
+   overwriting it would corrupt the harness. So are two files that cover the
+   same bytes. The header lists each region with its size and SHA-256.
+5. Takes a copy of the memory the called code can change: the image's writable
+   sections (`.data`, `.bss`), the pages of the snapshot regions and anything
+   that was allocated for them.
+6. Runs each vector (below), one JSON line each, after one header line. Before
+   each vector the copy from step 5 is written back, so a result does not
+   depend on which vectors ran before it: a static counter, or a run-once
+   initialiser flag that an earlier vector set, starts from the same state in
+   every vector. `--keep-state` turns this off, for the case where state
+   should carry from one vector to the next (the header says which was used:
+   `state_restored`, and `state_bytes` is the size of the copy). Read-only
+   parts of the image, and memory the called code allocates itself through
+   resolved imports, are not covered.
 
 ### Vector file (JSON lines)
 
@@ -159,8 +176,8 @@ message when it is taken (the message names what is there).
 | `id` | Name copied into the result. |
 | `fn` | Function address (hex string or number). |
 | `cc` | `cdecl` (default), `stdcall`, `thiscall` or `fastcall`. |
-| `args` | Strings written `kind:value`, placed by the convention: `i8 u8 i16 u16 i32 u32 bool i64 u64` (decimal or `0x` hex, negative allowed); `f32`/`f64` (a decimal, or `0x` and the exact bit pattern such as `f32:0x3fc00000`); `ptr:NAME`, `ptr:NAME+0x10` (address of a buffer), `ptr:0x1234` or `ptr:null`; `raw:0x3f800000,0x1` (raw dwords pushed as they are). For `thiscall` the first argument is `this` (ECX); for `fastcall` the first two integer-like single dwords go in ECX and EDX; floats and 64-bit values always go on the stack. |
-| `buffers` | Named blocks, each `{"size": n, "init": "hex"}`, zero-filled beyond `init`. They are placed in an arena (at 0x30000000 when free, so stored pointers repeat between runs), made fresh for each vector, and reported after the call. |
+| `args` | Strings written `kind:value`, placed by the convention: `i8 u8 i16 u16 i32 u32 bool i64 u64` (decimal or `0x` hex, negative allowed); `f32`/`f64` (a decimal, or `0x` and the exact bit pattern such as `f32:0x3fc00000`); `ptr:NAME`, `ptr:NAME+0x10` (address of a buffer), `ptr:0x1234` or `ptr:null`; `raw:0x3f800000,0x1` (raw dwords, always on the stack as they are). For `thiscall` the first argument is `this` (ECX); for `fastcall` the first two integer-like single dwords go in ECX and EDX; floats, 64-bit values and `raw:` values (even a single dword) always go on the stack. Use `u32:` or `ptr:` for a value that belongs in a register; a `raw:` value cannot be `this`. |
+| `buffers` | Named blocks, each `{"size": n, "init": "hex"}`, zero-filled beyond `init`. They are placed in an arena (at 0x30000000 when free, so stored pointers repeat between runs), made fresh for each vector (zeroed, then filled from `init`), and reported after the call. The image's writable memory is put back as well, see step 6 above. |
 | `ret` | `void i32 u32 ptr i64 f32_x87 f64_x87 xmm0` (default `i32`). Decides whether ST0 is read and how the value is summarised. |
 | `fpcw`, `mxcsr` | Control words set before the call. Defaults: `0x027F` (53-bit precision, round to nearest, exceptions masked) and `0x1F80`, or the `--fpcw`/`--mxcsr` option. Set `0x007F` for a thread whose Direct3D device did not use `FPU_PRESERVE`. Direct3D 9 sets single precision on the creating thread without that flag; confirm what the game's thread really uses. |
 | `regs` | Registers to preset, for custom conventions: `eax ecx edx ebx esi edi`, and `xmm0` to `xmm3` as hex bytes in memory order. A preset that conflicts with the convention's own argument registers is an error. |
@@ -186,9 +203,11 @@ line was rejected.
 
 - `regs` is `null` after a fault. `fault` is `null` or
   `{"kind":"exception","code","name","eip","address","access"}` (access
-  violations, illegal instructions, integer divide by zero, FPU traps that the
-  control word unmasks, breakpoints) or
-  `{"kind":"import","name","index","caller"}`.
+  violations, illegal instructions, integer divide by zero, x87 and SSE
+  exceptions that the control word or MXCSR unmasks, stack overflow,
+  breakpoints) or `{"kind":"import","name","index","caller"}`. An SSE
+  exception shows up as `float_multiple_traps` (0xC00002B5) under Wine; other
+  Windows versions may report one of the other `float_*` names.
 - `st0.raw` is the 10-byte x87 register in memory order (significand first),
   captured only for x87 return kinds and only when the FPU stack is not
   empty. `f32_bits` rounds the 80-bit value straight to single precision, as
@@ -204,12 +223,23 @@ line was rejected.
 - The header line has the CPU vendor and brand string (RSQRTSS and RCPSS
   estimates are reported to differ between Intel and AMD, so record which CPU
   made a vector), the image SHA-256 and base, the control words, import
-  counts, the placeholder and the snapshot regions.
+  counts, the placeholder, the snapshot regions, and whether memory is put
+  back between vectors (`state_restored`).
 
-Faults inside a call are caught by a vectored exception handler that records
-them, resets the FPU (`fninit`, control word restored) and returns to the
-harness, so one bad vector does not stop the batch. C++ exceptions and
-Windows' own debug-print exceptions are not touched.
+Faults inside a call are caught by an exception handler record that the call
+routine puts on the thread's handler chain just before it calls the function.
+It sits behind everything the called code registers itself, so an exception
+that the called code, or a system function it calls, handles on its own never
+becomes a fault: `IsBadReadPtr` on a bad pointer returns 1 here as it does in
+the original program. An exception that reaches the record is written down,
+the thread's handler chain is put back (including after a call that left its own
+records on it, or was abandoned at an import trap), the FPU is reset (`fninit`,
+control word restored) and the call returns to the harness, so one bad vector
+does not stop the batch. A stack overflow is recovered too, and the stack's
+guard page is armed again, so a second overflowing vector is reported as one
+as well. C++ exceptions, Windows' own debug-print and thread-name exceptions are
+not touched. The record belongs to the harness thread only: a fault on another
+thread that the called code creates is not caught.
 
 ## nv-probe
 
@@ -256,8 +286,14 @@ Which mode applies is the `mode` setting:
 | `nvse` | Only in `NVSEPlugin_Load`. Use when the DLL sits in NVSE's plugin folder. |
 | `auto` (default) | `DllMain` cannot tell the two apart, so a thread waits `nvse_grace_ms` (default 1500) for NVSE to call `Query` or `Load`. If NVSE calls, it does the work and the thread does nothing; if not, the thread installs the hooks itself. Nothing is installed twice. |
 
-Unloading the DLL (`FreeLibrary`) puts the original bytes back. The generated
-stubs are left allocated so a thread still inside one does not fault.
+A probe with at least one return-capturing hook (`ret=`) pins itself in memory
+once it has prepared its hooks (`GetModuleHandleEx` with the pin flag; the header
+says `"pinned":true`). A thread inside such a function returns through a stub
+that calls back into the DLL, possibly long after the function was entered, so
+the DLL must not be unloaded meanwhile. `FreeLibrary` then does nothing, and the
+hooks keep working until the process ends. A probe without return capture is not
+pinned: `FreeLibrary` puts the original bytes back (the generated stubs stay
+allocated, but see the limitations for a thread inside one at that moment).
 
 ### How a hook works
 
@@ -290,8 +326,10 @@ stubs are left allocated so a thread still inside one does not fault.
 If the output file cannot be created the probe installs nothing and leaves a
 note, `nv-probe-error.txt`, next to the DLL.
 
-- A header line with the origin, process id, host exe path and hash check, each
-  hook's status (`installed` with the stolen byte count, or `refused` with the
+- A header line with the origin, process id, host exe path and its SHA-256
+  (always, `host_sha256`) with the result of the check against the manifest
+  (`host_sha256_check`: `match`, `mismatch`, `error` or `not_requested`),
+  whether the module is pinned, each hook's status (`installed` with the stolen byte count, or `refused` with the
   reason), how many threads were suspended and moved, or a `manifest_error`.
   It is written before any call record.
 - `{"type":"call","seq","tid","hook","tick","args":[...],"regs":{...},"dumps":[...]}`.
@@ -312,14 +350,18 @@ note, `nv-probe-error.txt`, next to the DLL.
 ## nv-inject
 
 ```
-nv-inject [--dll <path>] --launch <exe> [args...] [--wait]
+nv-inject [--dll <path>] [--wait] --launch <exe> [args...]
 nv-inject [--dll <path>] --pid <n>
 ```
 
 The DLL defaults to `nv_probe.dll` next to `nv-inject.exe`. `--launch` creates
 the program suspended, with the exe's folder as its working directory, loads
-the DLL with `CreateRemoteThread(LoadLibraryW)`, then resumes it. `--wait`
-waits for the exit and prints the exit code. The tool reports the module handle
+the DLL with `CreateRemoteThread(LoadLibraryW)`, then resumes it. Everything
+after the program's name belongs to the program, so `--dll` and `--wait` go
+before `--launch` (`nv-inject` warns if it sees either one after the program).
+`--wait` waits for the exit and prints `process <id> exited with code <n>`;
+`nv-inject` then exits with 0 when the program's code was 0 and with 3 otherwise.
+The tool reports the module handle
 or an error. It relies on kernel32 sitting at the same address in the target
 as in `nv-inject.exe`, which Windows does for system DLLs within a boot
 session. Both processes must be 32-bit.
@@ -345,7 +387,7 @@ State that `nv-call` needs from a running game: dump the regions with
 ## Tests
 
 `tests/run-wine-tests.sh` builds everything, builds a synthetic program from
-`tests/fixture/target.c` (original code written for the test), and runs 16
+`tests/fixture/target.c` (original code written for the test), and runs 21
 groups, most of them under Wine. `PROFILE=debug` runs the same tests on
 unoptimised builds with overflow checks. It needs `cargo`, `wine`, `python3`
 and the MinGW i686 tools, and writes only under `target/wine-tests`.
@@ -358,12 +400,20 @@ and the MinGW i686 tools, and writes only under `target/wine-tests`.
   (cdecl, stdcall, thiscall, fastcall; float returns through x87; an
   `RSQRTSS` quaternion normalise; a struct writer; fixed control words 24-,
   53- and 64-bit with different rounding), and every `nv-call` result is
-  compared bit for bit: EAX, float bits, raw 80-bit ST0, XMM0 and buffers;
+  compared bit for bit: EAX, float bits, raw 80-bit ST0, XMM0 and buffers.
+  This includes a function that catches its own access violation with its own
+  handler record, whose answer must be the same under `nv-call`;
 - `nv-call` on faults (null read, write, illegal instruction, divide by
-  zero), import traps, register presets, a wrongly declared convention, bad
-  input lines, snapshots (including a region outside the image) and resolved
-  imports; the image at a different base; the clear failure when the address
-  range is taken;
+  zero), an SSE exception that the vector's MXCSR unmasks, two stack overflows
+  in a row, import traps, register presets, a wrongly declared convention, bad
+  input lines, snapshots (including a region outside the image, later files in
+  the same page and in the same 64 KiB block, and a write into a region that is
+  undone for the next vector) and resolved imports (an API that handles its own access violation,
+  a non-continuable software exception); the handler chain after a call that
+  registered its own record and then faulted or hit an import; two identical
+  stateful vectors giving the same answer, and `--keep-state`; the image at a
+  different base; the clear failure when the address range is taken; a snapshot
+  over the engine's own data, or over another snapshot file, refused;
 - `nv-probe` through `nv-inject --launch` (call counts, argument values by
   type, struct bytes before and after, return values, x87 return, recursion
   order, per-hook limit, refusal on wrong expected bytes, refusal on wrong host
@@ -371,7 +421,13 @@ and the MinGW i686 tools, and writes only under `target/wine-tests`.
   a relative call, a hooked jump thunk), four threads calling a hooked recursive
   function, injection into a running process, patching without suspending
   threads, `auto` mode both with and without NVSE, and the NVSE exports
-  (`Query`/`Load`, editor refusal, unload restoring the code);
+  (`Query`/`Load`, editor refusal, unload restoring the code when there is no
+  return capture, the module staying pinned when there is); a hooked jump thunk
+  and the function it jumps to, both with return capture; the host exe hash
+  written when the manifest does not ask for it; a thread inside a
+  return-captured function while the DLL is unloaded;
+- `nv-inject --wait --launch`: waits for the program, and reports (and passes
+  on) the program's own exit code;
 - the unit tests of the portable crates, on the host and as 32-bit programs
   under Wine.
 
@@ -391,7 +447,13 @@ real exe:
 
 - the MSVC target build, and the maintainer's Windows version's loader (the
   placeholder, `VirtualProtect` over image pages, ASLR placement of other
-  allocations);
+  allocations). The MSVC compile (to object files, not linked: there is no
+  MSVC linker here) was checked, including that the exception handler is
+  listed in the safe-handler table (`.safeseh`), which that linker requires on
+  x86; the link and the run were not;
+- how a real Windows reports an SSE exception (the code may differ from
+  Wine's), and the stack-overflow guard page handling, which was only
+  exercised under Wine;
 - mapping the real unpacked exe (its size against `NV_CALL_RESERVE_MB`, its
   import table, its TLS and security-cookie use);
 - real functions of the game, their conventions and which of them depend on
@@ -407,10 +469,13 @@ real exe:
 - Shadow stack: the return capture relies on every hooked call returning
   through the stub. A function left by an exception, `longjmp` or a thread
   killed inside it never reaches the stub. Stale entries are dropped the next
-  time a hooked function is entered from a higher stack position, and that
-  call's return record is simply never written. If a return stub cannot find
-  its entry at all the original return address is lost, so the probe logs a
-  `fatal` record and ends the process rather than jump somewhere wrong.
+  time a hooked function is entered from a strictly higher stack position
+  (one that is already unwound), and that call's return record is simply never
+  written. A hooked function that jumps into another hooked function (a jump
+  thunk, or a tail call) arrives at the same stack position and keeps its
+  entry, so both returns are logged, innermost first. If a return stub cannot
+  find its entry at all the original return address is lost, so the probe logs
+  a `fatal` record and ends the process rather than jump somewhere wrong.
 - Functions the decoder cannot handle: only a defined subset of instructions
   is accepted at a function's start (listed in
   [nv-oracle-core/src/decode.rs](nv-oracle-core/src/decode.rs)). A function
@@ -433,10 +498,15 @@ real exe:
   allocator state, or anything a constructor sets up sees an empty world unless
   a snapshot provides it. It catches hardware faults, not C++ exceptions thrown
   out of the called code, and cannot recover from a callee that corrupts its
-  own stack badly enough to break exception dispatch. Code that calls
-  `ExitProcess` (through a resolved import) ends the harness.
-- Unloading the probe while a thread is inside one of its stubs or handlers
-  crashes that thread.
+  own stack, or its handler chain, badly enough to break exception dispatch.
+  Code that calls `ExitProcess` (through a resolved import) ends the harness.
+- `nv-call` puts back the image's writable sections and the snapshot regions
+  before each vector, not read-only parts of the image (which the harness maps
+  writable, so a callee could change them) and not memory that the callee
+  allocates through resolved imports.
+- Unloading a probe that has no return-capturing hook while a thread is inside
+  one of its stubs or handlers crashes that thread. (A probe with such a hook
+  pins itself and cannot be unloaded, see above.)
 - Logging flushes on a timer only when another record arrives, not from a
   background thread, because waiting for a thread inside `DllMain` can
   deadlock the loader.

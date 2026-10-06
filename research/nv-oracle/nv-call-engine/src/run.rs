@@ -1,7 +1,7 @@
 //! Command line, header, and the vector loop.
 
 use crate::call::{self, CallFrame, Stopped};
-use crate::image::{self, MappedImage};
+use crate::image::{self, Baseline, MappedImage};
 use nv_oracle_core::abi::Place;
 use nv_oracle_core::hex;
 use nv_oracle_core::json::{self, ObjectWriter};
@@ -22,6 +22,10 @@ options:
   --snapshot <dir>     apply <hexaddr>.bin region files after mapping
   --resolve-imports    fill the import table from this system's DLLs
                        (default: every import traps and ends the call)
+  --keep-state         do not put the image's writable memory and the snapshot
+                       regions back before each vector (default: every vector
+                       starts from the state after mapping and snapshot, so a
+                       result does not depend on the vectors before it)
   --fpcw <hex>         default x87 control word (default 0x027F)
   --mxcsr <hex>        default MXCSR (default 0x1F80)
   --out <file>         write results to a file instead of stdout
@@ -34,6 +38,7 @@ struct Options {
     vectors: String,
     snapshot: Option<PathBuf>,
     resolve_imports: bool,
+    keep_state: bool,
     fpcw: u16,
     mxcsr: u32,
     out: Option<PathBuf>,
@@ -48,6 +53,7 @@ fn parse_args() -> Result<Options, String> {
         vectors: String::new(),
         snapshot: None,
         resolve_imports: false,
+        keep_state: false,
         fpcw: DEFAULT_FPCW,
         mxcsr: DEFAULT_MXCSR,
         out: None,
@@ -62,6 +68,7 @@ fn parse_args() -> Result<Options, String> {
             }
             "--snapshot" => o.snapshot = Some(PathBuf::from(value("--snapshot")?)),
             "--resolve-imports" => o.resolve_imports = true,
+            "--keep-state" => o.keep_state = true,
             "--fpcw" => {
                 let v = hex::parse_u32(&value("--fpcw")?)?;
                 o.fpcw = u16::try_from(v).map_err(|_| "--fpcw must fit 16 bits".to_string())?;
@@ -170,8 +177,9 @@ impl Arena {
 fn header_line(
     opts: &Options,
     img: &MappedImage,
-    snapshot: &[image::SnapshotRegion],
+    snapshot: &image::Snapshot,
     arena: &Arena,
+    baseline: &Baseline,
 ) -> String {
     let (vendor, brand) = cpu_info();
     let mut o = ObjectWriter::new();
@@ -189,6 +197,8 @@ fn header_line(
         .bool("imports_resolved", img.imports_resolved);
     o.u64("imports_unresolved", img.unresolved as u64);
     o.hex32("arena_base", arena.base as u32);
+    o.bool("state_restored", !opts.keep_state)
+        .u64("state_bytes", baseline.size() as u64);
     match img.placement {
         image::Placement::HostPlaceholder { base, size } => {
             let mut x = ObjectWriter::new();
@@ -201,6 +211,7 @@ fn header_line(
     }
     if opts.snapshot.is_some() {
         let regions: Vec<String> = snapshot
+            .regions
             .iter()
             .map(|r| {
                 let mut x = ObjectWriter::new();
@@ -232,8 +243,12 @@ fn execute(
     opts: &Options,
     img: &MappedImage,
     arena: &mut Arena,
+    baseline: Option<&Baseline>,
 ) -> Result<CallResult, String> {
     let layout = v.layout()?;
+    if let Some(b) = baseline {
+        b.restore();
+    }
     arena.reset();
     let mut addrs: HashMap<String, u32> = HashMap::new();
     for b in &v.buffers {
@@ -368,10 +383,6 @@ pub fn main() -> i32 {
             return 2;
         }
     };
-    if let Err(e) = call::install_fault_handler() {
-        eprintln!("nv-call: {e}");
-        return 1;
-    }
     let img = match image::map(&opts.image, opts.resolve_imports) {
         Ok(i) => i,
         Err(e) => {
@@ -380,15 +391,18 @@ pub fn main() -> i32 {
         }
     };
     let snapshot = match &opts.snapshot {
-        Some(dir) => match image::apply_snapshot(dir) {
+        Some(dir) => match image::apply_snapshot(dir, &img) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("nv-call: {e}");
                 return 1;
             }
         },
-        None => Vec::new(),
+        None => image::Snapshot::default(),
     };
+    // Everything the called code can change, as it is now. Taken before the
+    // arena is allocated, so the arena is not part of it (it is reset on its own).
+    let baseline = Baseline::capture(&img, &snapshot);
     let mut arena = match Arena::new(opts.arena) {
         Ok(a) => a,
         Err(e) => {
@@ -421,7 +435,8 @@ pub fn main() -> i32 {
         let _ = writeln!(out, "{line}");
         let _ = out.flush();
     };
-    emit(&header_line(&opts, &img, &snapshot, &arena));
+    emit(&header_line(&opts, &img, &snapshot, &arena, &baseline));
+    let restore = (!opts.keep_state).then_some(&baseline);
 
     let mut errors = 0;
     for (i, line) in input.lines().enumerate() {
@@ -447,7 +462,7 @@ pub fn main() -> i32 {
                 emit(&error_line(line_no, None, &e));
                 errors += 1;
             }
-            Ok(v) => match execute(&v, &opts, &img, &mut arena) {
+            Ok(v) => match execute(&v, &opts, &img, &mut arena, restore) {
                 Ok(r) => emit(&r.to_json()),
                 Err(e) => {
                     emit(&error_line(line_no, Some(&v.id), &e));

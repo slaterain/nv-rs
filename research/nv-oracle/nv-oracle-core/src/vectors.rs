@@ -19,7 +19,9 @@
 //!   hex, negative allowed); `f32` and `f64` take a decimal float, or `0x`
 //!   and the exact bit pattern (`f32:0x3fc00000`); `ptr:NAME[+off]` is the
 //!   address of a named buffer, and `ptr:0x1234` or `ptr:null` a literal
-//!   address; `raw:0x3f800000[,0x1...]` pushes raw dwords.
+//!   address; `raw:0x3f800000[,0x1...]` pushes raw dwords on the stack as
+//!   they are, even one dword under `fastcall` (it never goes in ECX or EDX,
+//!   and cannot be the `this` of `thiscall`; use `u32:` or `ptr:` for those).
 //! - `buffers`: named memory blocks, each `{"size": n, "init": "hex"}`,
 //!   zero-filled beyond `init`. Fresh for every vector and reported after
 //!   the call.
@@ -71,7 +73,7 @@ pub enum ArgValue {
     },
     /// A literal address.
     Address(u32),
-    /// Raw dwords, pushed as they are.
+    /// Raw dwords, always on the stack, in the order given.
     Raw(Vec<u32>),
 }
 
@@ -82,9 +84,13 @@ impl ArgValue {
             ArgValue::F32(_) => ArgType::F32.shape(),
             ArgValue::F64(_) => ArgType::F64.shape(),
             ArgValue::Buffer { .. } | ArgValue::Address(_) => ArgType::Ptr.shape(),
+            // Raw dwords are pushed as they are. They never take ECX or EDX,
+            // not even a single one (a float bit pattern or a small struct
+            // passed by value goes on the stack under every convention);
+            // `u32:` and `ptr:` are the arguments that follow the register rules.
             ArgValue::Raw(d) => ArgShape {
                 dwords: d.len(),
-                int_like: d.len() == 1,
+                int_like: false,
             },
         }
     }
@@ -528,6 +534,8 @@ pub fn exception_name(code: u32) -> &'static str {
         0xC000_0092 => "float_stack_check",
         0xC000_0093 => "float_underflow",
         0xC000_00FD => "stack_overflow",
+        0xC000_02B4 => "float_multiple_faults",
+        0xC000_02B5 => "float_multiple_traps",
         0x8000_0003 => "breakpoint",
         0x8000_0004 => "single_step",
         _ => "exception",
@@ -906,6 +914,28 @@ mod tests {
     }
 
     #[test]
+    fn raw_dwords_always_go_on_the_stack() {
+        use crate::abi::Place;
+        let v = Vector::parse(
+            r#"{"id":"r","fn":"0x1000","cc":"fastcall","args":["raw:0x3f800000","u32:5","u32:6"]}"#,
+        )
+        .unwrap();
+        // The single raw dword is on the stack; the integers take ECX and EDX.
+        assert_eq!(
+            v.layout().unwrap().places,
+            [Place::Stack(0), Place::Ecx, Place::Edx]
+        );
+        // A raw value cannot stand in for `this`.
+        assert!(
+            Vector::parse(r#"{"id":"r","fn":"0x1000","cc":"thiscall","args":["raw:0x1000"]}"#)
+                .is_err()
+        );
+        // Under cdecl it is one stack slot, as before.
+        let v = Vector::parse(r#"{"id":"r","fn":"0x1000","args":["raw:1,2","i32:3"]}"#).unwrap();
+        assert_eq!(v.layout().unwrap().stack_dwords, 3);
+    }
+
+    #[test]
     fn writer_and_parser_agree() {
         let v = Vector::parse(SAMPLE).unwrap();
         let again = Vector::parse(&v.to_json()).unwrap();
@@ -1114,6 +1144,9 @@ mod tests {
             Some("KERNEL32.dll!Sleep")
         );
         assert_eq!(exception_name(0xC000_001D), "illegal_instruction");
+        // What SSE raises when a vector's MXCSR unmasks an exception.
+        assert_eq!(exception_name(0xC000_02B5), "float_multiple_traps");
+        assert_eq!(exception_name(0xC000_02B4), "float_multiple_faults");
         assert_eq!(exception_name(1), "exception");
     }
 }

@@ -1,6 +1,6 @@
 //! nv-inject: load a DLL into a new or running 32-bit process.
 //!
-//!   nv-inject [--dll <path>] --launch <exe> [args...] [--wait]
+//!   nv-inject [--dll <path>] [--wait] --launch <exe> [args...]
 //!   nv-inject [--dll <path>] --pid <n>
 //!
 //! The DLL is loaded with `CreateRemoteThread(LoadLibraryW)`. With

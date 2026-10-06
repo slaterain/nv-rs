@@ -331,8 +331,12 @@ fn enter_impl(id: u32, regs: &mut SavedRegs, ts: &mut ThreadState) {
     if hook.ret_stub != 0 {
         // Replace the return address so the function comes back through
         // the return stub. First drop shadow entries from calls that never
-        // returned (their frames are at or below this one).
-        while ts.shadow.last().is_some_and(|s| s.entry_esp <= entry_esp) {
+        // returned: their frames are below this one, which is only possible
+        // once the stack has unwound past them. An entry at the very same
+        // position is not stale. It is the hooked function that just jumped
+        // here (a jump thunk, or a tail call), whose return stub is the
+        // return address now in the slot, and it must stay for that stub.
+        while ts.shadow.last().is_some_and(|s| s.entry_esp < entry_esp) {
             ts.shadow.pop();
         }
         // SAFETY: the slot is the function's own return address on its stack.

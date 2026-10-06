@@ -159,7 +159,7 @@ RW=(-process nvfixture.exe -noanalysis)
 
 CARD_ADDRS=$(
     for n in fx_angle_to_unit fx_double_scale fx_extended fx_possible_float_immediate fx_sse_scalar fx_rsqrt \
-        fx_rcp fx_sin fx_set_cw fx_sum fx_gain Obj_Compute main \
+        fx_rcp fx_sin fx_set_cw fx_load_cw_const fx_load_mxcsr_const fx_sum fx_gain Obj_Compute main \
         fx_cvt_sd2ss fx_cvt_ss2sd fx_cvt_tss2si fx_cvt_tsd2si fx_cvt_ps2pd fx_cvt_pd2ps fx_cvt_dq2pd fx_cvt_si2sd \
         fx_sin_top fx_chain0 fx_chain8 fx_ping fx_crt_top; do
         printf '%s,' "$(sym $n)"

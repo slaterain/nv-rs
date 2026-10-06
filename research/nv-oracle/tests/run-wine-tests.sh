@@ -110,18 +110,25 @@ group "nv-call: every vector matches the program's own results bit for bit" nv_c
 nv_call_extras() {
     $PY extra-vectors "$OUT/nm.txt" "$W/extra.jsonl" || return 1
     $PY snapshot-files "$OUT/nm.txt" "$W/snap" || return 1
+    # Six deliberately bad lines make the exit status 2; each run must still finish.
     call fixture.exe extra.jsonl --out extra_results.jsonl
-    # Six deliberately bad lines make the exit status 2; the run must still finish.
     [ $? -eq 2 ] || { echo "expected exit status 2 for bad vector lines"; return 1; }
     $PY extra-check "$W/extra_results.jsonl" nosnap "faults, traps, registers, bad input" || return 1
     call fixture.exe extra.jsonl --snapshot snap --out extra_snap_results.jsonl
     [ $? -eq 2 ] || return 1
     $PY extra-check "$W/extra_snap_results.jsonl" snapshot "snapshot regions applied" || return 1
+    call fixture.exe extra.jsonl --snapshot snap --keep-state --out extra_snapkeep.jsonl
+    [ $? -eq 2 ] || return 1
+    $PY extra-check "$W/extra_snapkeep.jsonl" snapshot-keep "snapshot regions, state kept" || return 1
     call fixture.exe extra.jsonl --resolve-imports --out extra_resolve.jsonl
-    grep -q '"id":"import_trap".*"fault":null' "$W/extra_resolve.jsonl" || { echo "resolved import did not run"; return 1; }
+    [ $? -eq 2 ] || return 1
     grep -q '"imports_resolved":true' "$W/extra_resolve.jsonl" || { echo "header does not say imports were resolved"; return 1; }
+    $PY extra-check "$W/extra_resolve.jsonl" resolve "resolved imports, exceptions the called code handles itself" || return 1
+    call fixture.exe extra.jsonl --keep-state --out extra_keep.jsonl
+    [ $? -eq 2 ] || return 1
+    $PY extra-check "$W/extra_keep.jsonl" keep "--keep-state carries memory from one vector to the next"
 }
-group "nv-call: faults, import traps, register presets, snapshots, bad input" nv_call_extras
+group "nv-call: faults, traps, handlers, stack overflow, state restore, imports, snapshots, bad input" nv_call_extras
 
 nv_call_far() {
     $PY call-vectors "$OUT/selftest_far.txt" "$OUT/nm_far.txt" "$W/vectors_far.jsonl" &&
@@ -140,6 +147,28 @@ nv_call_collide() {
 }
 group "nv-call: a taken address range fails with a clear message" nv_call_collide
 
+nv_call_snapshot_refusals() {
+    # A snapshot file must not overwrite the harness's own memory, or another
+    # snapshot file. The engine's own data section is a place that is certainly taken.
+    local va msg code
+    va=$($OBJDUMP -h "$W/nv_call_engine.dll" | awk '$2 == ".data" { print $4 }')
+    [ -n "$va" ] || { echo "cannot find the engine's .data section"; return 1; }
+    rm -rf "$W/snap_bad" "$W/snap_overlap"
+    mkdir -p "$W/snap_bad" "$W/snap_overlap"
+    head -c 4096 /dev/zero | tr '\0' '\377' > "$W/snap_bad/$va.bin"
+    msg=$(call fixture.exe extra.jsonl --snapshot snap_bad 2>&1 >/dev/null)
+    code=$?
+    echo "   exit $code: $msg"
+    [ $code -eq 1 ] && echo "$msg" | grep -q "0x$va" && echo "$msg" | grep -q "not part of the mapped image" || return 1
+    head -c 8 /dev/zero > "$W/snap_overlap/0a000100.bin"
+    head -c 8 /dev/zero > "$W/snap_overlap/0a000104.bin"
+    msg=$(call fixture.exe extra.jsonl --snapshot snap_overlap 2>&1 >/dev/null)
+    code=$?
+    echo "   exit $code: $msg"
+    [ $code -eq 1 ] && echo "$msg" | grep -q "overlap"
+}
+group "nv-call: a snapshot over the harness's own memory or another snapshot is refused" nv_call_snapshot_refusals
+
 nv_call_usage() {
     local out
     out=$(call 2>&1)
@@ -153,13 +182,17 @@ group "nv-call: usage and missing-file errors" nv_call_usage
 # ------------------------------------------------------------ nv-probe
 PD="$OUT/probe"
 # Start the program suspended, load the probe, run to the end. Prints only the
-# program's own output and fails if nv-inject or the program fails.
+# program's own output. Fails if nv-inject fails, or if the program's exit
+# status is not reported as 0 (--wait comes before --launch; everything after
+# the program name belongs to the program).
 inj() {
     local raw code
-    raw=$(cd "$PD" && wine nv-inject.exe --dll nv_probe.dll --launch fixture.exe "$@" --wait 2>&1)
+    raw=$(cd "$PD" && wine nv-inject.exe --dll nv_probe.dll --wait --launch fixture.exe "$@" 2>&1)
     code=$?
     printf '%s\n' "$raw" | grep -v '^nv-inject:'
     [ $code -eq 0 ] || { echo "nv-inject exit status $code" >&2; return 1; }
+    printf '%s\n' "$raw" | grep -q '^nv-inject: process [0-9]* exited with code 0$' ||
+        { echo "nv-inject did not report that the program exited with code 0" >&2; return 1; }
     return 0
 }
 manifest() { $PY probe-manifest "$1" "$OUT/nm.txt" "$PD/fixture.exe" "$PD/nv-probe.txt" "${@:2}"; }
@@ -168,14 +201,14 @@ manifest() { $PY probe-manifest "$1" "$OUT/nm.txt" "$PD/fixture.exe" "$PD/nv-pro
 probe_main() {
     manifest main output=probe-main.jsonl && rm -f "$PD/probe-main.jsonl" &&
         inj loop 5 > "$PD/prog-main.txt" &&
-        $PY probe-check main "$PD/probe-main.jsonl" "$PD/prog-main.txt" "$PD/baseline.txt" "nv-probe hooks"
+        $PY probe-check main "$PD/probe-main.jsonl" "$PD/prog-main.txt" "$PD/baseline.txt" "nv-probe hooks" "$PD/fixture.exe"
 }
 group "nv-probe: arguments, returns, struct dumps, x87 returns, nesting, limits, refusals" probe_main
 
 probe_badsha() {
     manifest badsha output=probe-badsha.jsonl && rm -f "$PD/probe-badsha.jsonl" &&
         inj loop 5 > "$PD/prog-badsha.txt" &&
-        $PY probe-check badsha "$PD/probe-badsha.jsonl" "$PD/prog-badsha.txt" "$PD/baseline.txt" "nv-probe wrong host hash"
+        $PY probe-check badsha "$PD/probe-badsha.jsonl" "$PD/prog-badsha.txt" "$PD/baseline.txt" "nv-probe wrong host hash" "$PD/fixture.exe"
 }
 group "nv-probe: a wrong host exe hash refuses every hook" probe_badsha
 
@@ -229,6 +262,12 @@ nvse_runs() {
     rm -f "$PD/probe-nvse.jsonl"
     (cd "$PD" && wine fixture.exe nvse-sim nv_probe.dll > prog-nvse.txt) &&
         $PY nvse-check "$PD/probe-nvse.jsonl" "$PD/prog-nvse.txt" normal "NVSE query and load" || return 1
+    # With return capture the module pins itself, so FreeLibrary leaves the hooks working.
+    rm -f "$PD/probe-nvse.jsonl"
+    (cd "$PD" && wine fixture.exe nvse-sim nv_probe.dll free > prog-nvse-free-pinned.txt) &&
+        $PY nvse-check "$PD/probe-nvse.jsonl" "$PD/prog-nvse-free-pinned.txt" free-pinned "NVSE unload with return capture keeps the module" || return 1
+    # Without it the unload puts the original bytes back.
+    manifest noret output=probe-nvse.jsonl mode=nvse || return 1
     rm -f "$PD/probe-nvse.jsonl"
     (cd "$PD" && wine fixture.exe nvse-sim nv_probe.dll free > prog-nvse-free.txt) &&
         $PY nvse-check "$PD/probe-nvse.jsonl" "$PD/prog-nvse-free.txt" free "NVSE unload restores the code" || return 1
@@ -241,6 +280,49 @@ nvse_runs() {
         $PY nvse-check "$PD/probe-auto-nvse.jsonl" "$PD/prog-auto-nvse.txt" normal "auto mode defers to NVSE"
 }
 group "nv-probe: NVSE plugin exports, editor refusal, unload, auto mode deferring to NVSE" nvse_runs
+
+probe_tail() {
+    manifest tail output=probe-tail.jsonl && rm -f "$PD/probe-tail.jsonl" &&
+        inj loop 5 > "$PD/prog-tail.txt" &&
+        $PY probe-check tail "$PD/probe-tail.jsonl" "$PD/prog-tail.txt" "$PD/baseline.txt" "nv-probe tail jump between hooked functions" "$PD/fixture.exe"
+}
+group "nv-probe: a jump from one return-captured function into another" probe_tail
+
+probe_nosha() {
+    manifest nosha output=probe-nosha.jsonl && rm -f "$PD/probe-nosha.jsonl" &&
+        inj loop 5 > "$PD/prog-nosha.txt" &&
+        $PY probe-check nosha "$PD/probe-nosha.jsonl" "$PD/prog-nosha.txt" "$PD/baseline.txt" "nv-probe host hash without host_sha256" "$PD/fixture.exe"
+}
+group "nv-probe: the host exe hash is logged even when the manifest does not ask" probe_nosha
+
+probe_unload_inside() {
+    manifest sleepy output=probe-sleepy.jsonl mode=inject && rm -f "$PD/probe-sleepy.jsonl" &&
+        (cd "$PD" && wine fixture.exe unload-inside nv_probe.dll > prog-sleepy.txt) &&
+        $PY probe-check sleepy "$PD/probe-sleepy.jsonl" "$PD/prog-sleepy.txt" "$PD/baseline.txt" "nv-probe unload while a thread is inside a hooked function"
+}
+group "nv-probe: unloading while a thread is inside a return-captured function" probe_unload_inside
+
+inject_wait() {
+    manifest simple output=probe-inject-wait.jsonl || return 1
+    local out code t0 t1
+    # The program's own exit status comes through, and nv-inject passes it on as 3.
+    out=$(cd "$PD" && wine nv-inject.exe --dll nv_probe.dll --wait --launch fixture.exe bogus-mode 2>&1)
+    code=$?
+    echo "$out" | grep -q 'exited with code 2$' || { echo "exit code 2 was not reported: $out"; return 1; }
+    [ $code -eq 3 ] || { echo "nv-inject exit status $code, wanted 3"; return 1; }
+    # --wait before --launch really waits: the program sleeps one second before it works.
+    t0=$(date +%s%N)
+    out=$(cd "$PD" && wine nv-inject.exe --dll nv_probe.dll --wait --launch fixture.exe loop 1 1000 2>&1) || { echo "$out"; return 1; }
+    t1=$(date +%s%N)
+    echo "$out" | grep -q 'exited with code 0$' || { echo "exit code 0 was not reported: $out"; return 1; }
+    [ $(( (t1 - t0) / 1000000 )) -ge 900 ] || { echo "nv-inject returned before the program ended"; return 1; }
+    # Written after the program name, --wait belongs to the program, and nv-inject says so.
+    out=$(cd "$PD" && wine nv-inject.exe --dll nv_probe.dll --launch fixture.exe loop 1 --wait 2>&1) || { echo "$out"; return 1; }
+    echo "$out" | grep -q 'passed to the program' || { echo "no warning about a trailing --wait: $out"; return 1; }
+    sleep 1
+    rm -f "$PD/probe-inject-wait.jsonl"
+}
+group "nv-inject: --wait before --launch waits and reports the program's exit code" inject_wait
 
 # -------------------------------------------------------------- summary
 echo

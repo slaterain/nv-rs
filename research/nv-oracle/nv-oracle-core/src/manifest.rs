@@ -11,7 +11,7 @@
 //! | key | meaning | default |
 //! | --- | --- | --- |
 //! | `output` | log file path; `%PID%` is replaced by the process id; a relative path is relative to the DLL's folder | `nv-probe.jsonl` |
-//! | `host_sha256` | expected SHA-256 of the host exe file; on mismatch no hook is installed | not checked |
+//! | `host_sha256` | expected SHA-256 of the host exe file; on mismatch no hook is installed | not checked (the log header carries the hash either way) |
 //! | `mode` | `inject`, `nvse` or `auto` (see the README) | `auto` |
 //! | `nvse_grace_ms` | how long `auto` mode waits for NVSE to call the plugin before starting on its own | `1500` |
 //! | `flush_ms` | how often buffered log lines are written | `250` |
