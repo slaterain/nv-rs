@@ -203,6 +203,26 @@ grep -q "no function starts at 00000001" "$LOGS/card_bad_address.log" || fail "c
 [ ! -e "$OUT/cards_bad" ] || fail "a card was written for a bad address list"
 echo "  ok   card with an address that is not a function fails and writes nothing"
 
+# run_ghidra must not accept a run that opened nothing. A program name that is not in the project
+# makes analyzeHeadless exit with 1. A project whose program database is damaged makes it exit
+# with 0, log "Error during analysis" and run no script, which only the log shows. Each call runs
+# in a subshell, because a failing run_ghidra ends the shell it runs in.
+if (run_ghidra open_wrong_name ok "$TARGET/proj" "$PROJ_NAME" -process no-such-program.exe -noanalysis -readOnly \
+    "${SP[@]}" -postScript NvExeIdentity.java out="$OUT/never_identity.json") >/dev/null 2>&1; then
+    fail "run_ghidra accepted a run whose program is not in the project"
+fi
+cp -a "$TARGET/proj" "$TARGET/proj_damaged"
+find "$TARGET/proj_damaged" -name 'db.1.gbf' -exec sh -c 'head -c 4096 /dev/zero >"$1"' _ {} \;
+if (run_ghidra open_damaged ok "$TARGET/proj_damaged" "$PROJ_NAME" "${RO[@]}" "${SP[@]}" \
+    -postScript NvExeIdentity.java out="$OUT/never_identity.json") >/dev/null 2>&1; then
+    fail "run_ghidra accepted a run that could not open its program"
+fi
+grep -q "Error during analysis" "$LOGS/open_damaged.log" || fail "the damaged project did not fail the way the test assumes"
+[ "$(grep -c '^INFO  SCRIPT: ' "$LOGS/open_damaged.log" || true)" -eq 0 ] || fail "a script ran on the damaged project"
+[ ! -e "$OUT/never_identity.json" ] || fail "a script wrote output on a run that opened nothing"
+echo "  ok   run_ghidra rejects a wrong program name (exit 1) and a damaged project (exit 0, no script ran)"
+rm -rf "$TARGET/proj_damaged"
+
 # The Rich header cannot come from MinGW, so the test writes one into a copy of the fixture's DOS
 # stub, imports that copy into its own project and reads its identity.
 check richgen
@@ -304,10 +324,19 @@ cat >"$OUT/names_inside.csv" <<EOF
 address,name,source,pin,kind
 $(printf '%08x' $((0x$A_SUM + 1))),InsideRow,own,aaaa,
 $(printf '%08x' $((0x$A_GAIN_FN + 1))),InsideLabel,own,bbbb,label
+$(sym cmd_badcode_execute),NotCode,own,cccc,
 EOF
 run_ghidra names_inside ok "$TARGET/proj" "$PROJ_NAME" "${RO[@]}" "${SP[@]}" \
     -postScript NvImportNameMap.java csv="$OUT/names_inside.csv" dry=1 report="$OUT/names_inside.report.csv"
 check names_inside
+# The same bytes with kind=function cannot become a function: the row is rejected, so the run fails.
+cat >"$OUT/names_badcode_fn.csv" <<EOF
+address,name,source,pin,kind
+$(sym cmd_badcode_execute),NotCodeFunction,own,dddd,function
+EOF
+run_ghidra names_badcode_fn fail "$TARGET/proj" "$PROJ_NAME" "${RO[@]}" "${SP[@]}" \
+    -postScript NvImportNameMap.java csv="$OUT/names_badcode_fn.csv" dry=1 report="$OUT/names_badcode_fn.report.csv"
+check names_badcode_fn
 
 # After the forced name import the function has the import's tags and no src:cmdtable.
 mkdir -p "$STAGE/testscripts"

@@ -349,8 +349,9 @@ fn ensure_writable(
         {
             return Err(format!(
                 "snapshot region {addr:#010x}+{len:#x} overlaps memory that is not part of the mapped image \
-                 or free address space: {}. A snapshot region may lie inside the image, in free address \
-                 space, or in pages that earlier snapshot files allocated.",
+                 or free address space: {}. A snapshot region may lie inside the image, in the unused rest \
+                 of the placeholder array, in free address space, or in pages that earlier snapshot files \
+                 allocated.",
                 describe_region(cur as u32)
             ));
         }
@@ -508,7 +509,10 @@ pub fn map(
         _ => {
             // Whole 64 KiB blocks, so the pages after the image are not left
             // as an unusable tail of its block.
-            alloc_at(base, round_up(u64::from(pe.size_of_image), GRANULARITY) as usize)?;
+            alloc_at(
+                base,
+                round_up(u64::from(pe.size_of_image), GRANULARITY) as usize,
+            )?;
             Placement::Allocated
         }
     };

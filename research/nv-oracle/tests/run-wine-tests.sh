@@ -59,8 +59,11 @@ $CC $CFLAGS -Wl,--image-base=0x04000000 -o "$OUT/fixture_far_unstripped.exe" "$F
 $CC $CFLAGS -Wl,--image-base=0x10000000 -o "$OUT/fixture_collide.exe" "$F" || exit 1
 $NM "$OUT/fixture_unstripped.exe" > "$OUT/nm.txt"
 $NM "$OUT/fixture_far_unstripped.exe" > "$OUT/nm_far.txt"
+# The thread fixture: a 4 MiB .bss, a TLS callback, threads (see threadfx.c).
+$CC $CFLAGS -o "$OUT/threadfx.exe" "$HERE/fixture/threadfx.c" || exit 1
+$NM "$OUT/threadfx.exe" > "$OUT/nm_threadfx.txt"
 
-cp "$REL/nv-call.exe" "$REL/nv_call_engine.dll" "$OUT/fixture.exe" "$OUT/fixture_far_unstripped.exe" "$OUT/fixture_collide.exe" "$OUT/work/"
+cp "$REL/nv-call.exe" "$REL/nv_call_engine.dll" "$OUT/fixture.exe" "$OUT/fixture_far_unstripped.exe" "$OUT/fixture_collide.exe" "$OUT/threadfx.exe" "$OUT/work/"
 cp "$REL/nv-inject.exe" "$REL/nv_probe.dll" "$OUT/fixture.exe" "$OUT/probe/"
 
 # Ground truth: the program calls its own functions on this CPU.
@@ -147,11 +150,29 @@ nv_call_collide() {
 }
 group "nv-call: a taken address range fails with a clear message" nv_call_collide
 
+# Section header fields of a PE file, as lower-case hex without the 0x.
+section_va() { $OBJDUMP -h "$1" | awk -v n="$2" '$2 == n { print $4 }'; }
+size_of_image() { $OBJDUMP -p "$1" | awk '$1 == "SizeOfImage" { print $2 }'; }
+hexadd() { printf '%08x' $(( 16#$1 + $2 )); }
+
+# Run nv-call with a one-file snapshot of 64 bytes at <hexaddr>; it must be
+# refused with exit 1 and a message that names the address.
+refuse_at() { # refuse_at <label> <hexaddr>
+    local msg code
+    rm -rf "$W/snap_$1"
+    mkdir -p "$W/snap_$1"
+    head -c 64 /dev/zero | tr '\0' '\377' > "$W/snap_$1/$2.bin"
+    msg=$(call fixture.exe extra.jsonl --snapshot "snap_$1" 2>&1 >/dev/null)
+    code=$?
+    echo "   $1: exit $code: $msg"
+    [ $code -eq 1 ] && echo "$msg" | grep -q "0x$2" && echo "$msg" | grep -q "not part of the mapped image"
+}
+
 nv_call_snapshot_refusals() {
     # A snapshot file must not overwrite the harness's own memory, or another
     # snapshot file. The engine's own data section is a place that is certainly taken.
     local va msg code
-    va=$($OBJDUMP -h "$W/nv_call_engine.dll" | awk '$2 == ".data" { print $4 }')
+    va=$(section_va "$W/nv_call_engine.dll" .data)
     [ -n "$va" ] || { echo "cannot find the engine's .data section"; return 1; }
     rm -rf "$W/snap_bad" "$W/snap_overlap"
     mkdir -p "$W/snap_bad" "$W/snap_overlap"
@@ -165,9 +186,99 @@ nv_call_snapshot_refusals() {
     msg=$(call fixture.exe extra.jsonl --snapshot snap_overlap 2>&1 >/dev/null)
     code=$?
     echo "   exit $code: $msg"
-    [ $code -eq 1 ] && echo "$msg" | grep -q "overlap"
+    [ $code -eq 1 ] && echo "$msg" | grep -q "overlap" || return 1
+    # The host program's own sections are inside the range it reserves, but they
+    # are not the placeholder array: its import table (live data), the startup
+    # tables behind it (the TLS callback array), and what is left of its code
+    # in front of a small image.
+    local idata crt bss remnant
+    idata=$(section_va "$W/nv-call.exe" .idata)
+    crt=$(section_va "$W/nv-call.exe" .CRT)
+    bss=$(section_va "$W/nv-call.exe" .bss)
+    [ -n "$idata" ] && [ -n "$crt" ] && [ -n "$bss" ] || { echo "cannot find the host's sections"; return 1; }
+    refuse_at host_idata "$idata" || return 1
+    refuse_at host_crt "$crt" || return 1
+    remnant=$(hexadd 400000 $(( 16#$(size_of_image "$W/fixture.exe") + 0x10000 )))
+    if [ $(( 16#$remnant )) -lt $(( 16#$bss )) ]; then
+        refuse_at host_code "$remnant" || return 1
+    else
+        echo "   (the host's code ends before the fixture's image does; no leftover code to test)"
+    fi
 }
 group "nv-call: a snapshot over the harness's own memory or another snapshot is refused" nv_call_snapshot_refusals
+
+nv_call_placeholder_array() {
+    # The array itself is the image's: a region in it, past the end of a small
+    # image, is accepted and read back, and the header reports the range
+    # that was reserved without the host's sections behind the array.
+    local bss va idata
+    bss=$(section_va "$W/nv-call.exe" .bss)
+    idata=$(section_va "$W/nv-call.exe" .idata)
+    va=$(hexadd "$bss" 0x1000000)
+    rm -rf "$W/snap_array"
+    mkdir -p "$W/snap_array"
+    printf '\x78\x56\x34\x12' > "$W/snap_array/$va.bin"
+    $PY deref-vector "$OUT/nm.txt" "$W/deref_array.jsonl" "$va" &&
+        call fixture.exe deref_array.jsonl --snapshot snap_array --out deref_array_results.jsonl &&
+        $PY deref-check "$W/deref_array_results.jsonl" 0x12345678 "snapshot inside the placeholder array" "$idata"
+}
+group "nv-call: a snapshot region inside the placeholder array is accepted, and the reserved range ends with the array" nv_call_placeholder_array
+
+nv_call_blocks() {
+    # Address space comes in 64 KiB blocks. An image the engine allocated owns
+    # the whole last block, so a snapshot file in the pages after its end works.
+    local size va msg code block
+    size=$(size_of_image "$OUT/fixture_far_unstripped.exe")
+    if [ $(( 16#$size % 65536 )) -eq 0 ]; then
+        echo "   (the far image ends on a 64 KiB boundary: no tail to test)"
+    else
+        va=$(hexadd 04000000 $(( 16#$size )))
+        rm -rf "$W/snap_tail"
+        mkdir -p "$W/snap_tail"
+        printf '\x78\x56\x34\x12' > "$W/snap_tail/$va.bin"
+        $PY deref-vector "$OUT/nm_far.txt" "$W/deref_tail.jsonl" "$va" &&
+            call fixture_far_unstripped.exe deref_tail.jsonl --snapshot snap_tail --out deref_tail_results.jsonl &&
+            $PY deref-check "$W/deref_tail_results.jsonl" 0x12345678 "snapshot in the tail of the image's last 64 KiB block" || return 1
+    fi
+    # Pages after somebody else's allocation are free but cannot be allocated.
+    # The error says so and names the block (the engine's own image is one).
+    size=$(size_of_image "$W/nv_call_engine.dll")
+    if [ $(( 16#$size % 65536 )) -eq 0 ]; then
+        echo "   (the engine image ends on a 64 KiB boundary: no tail to test)"
+        return 0
+    fi
+    va=$(hexadd 10000000 $(( 16#$size )))
+    rm -rf "$W/snap_tail2"
+    mkdir -p "$W/snap_tail2"
+    printf '\1\2\3\4' > "$W/snap_tail2/$va.bin"
+    $PY deref-vector "$OUT/nm.txt" "$W/deref_tail2.jsonl" "$va" || return 1
+    msg=$(call fixture.exe deref_tail2.jsonl --snapshot snap_tail2 2>&1 >/dev/null)
+    code=$?
+    echo "   exit $code: $msg"
+    # The message names the block the tail belongs to (the one the engine's image ends in).
+    block=$(printf '0x%08x' $(( (16#$va) & ~0xffff )))
+    [ $code -eq 1 ] && echo "$msg" | grep -q "unused tail of a 64 KiB block" && echo "$msg" | grep -q "block at $block"
+}
+group "nv-call: 64 KiB blocks (the tail of an allocated image's block, the unusable tail of another block)" nv_call_blocks
+
+nv_call_threads() {
+    # The thread fixture has a 4 MiB .bss (its image covers the host's startup
+    # code), a TLS callback that counts thread starts, and functions that start
+    # threads. Natively the callback runs once for the one thread.
+    local out code
+    out=$(cd "$OUT" && wine threadfx.exe tls)
+    echo "   natively: $out"
+    echo "$out" | grep -qE '^tls_count=[1-9]' || { echo "the TLS callback does not run natively, so this test would prove nothing"; return 1; }
+    $PY thread-vectors "$OUT/nm_threadfx.txt" "$W/threads_ok.jsonl" "$W/threads_fault.jsonl" || return 1
+    call threadfx.exe threads_ok.jsonl --resolve-imports --out threads_ok_results.jsonl || { echo "nv-call failed"; return 1; }
+    $PY thread-check ok "$W/threads_ok_results.jsonl" "image TLS callbacks are not run in the harness" || return 1
+    call threadfx.exe threads_fault.jsonl --resolve-imports --out threads_fault_results.jsonl 2> "$W/threads_fault_stderr.txt"
+    code=$?
+    echo "   faulting thread: exit $code: $(head -c 300 "$W/threads_fault_stderr.txt")"
+    [ $code -eq 4 ] || { echo "expected exit status 4"; return 1; }
+    $PY thread-check fault "$W/threads_fault_results.jsonl" "exception on a thread the called code created" "$W/threads_fault_stderr.txt"
+}
+group "nv-call: image TLS callbacks stay off, and an exception on a callee's thread ends the process with the engine's message" nv_call_threads
 
 nv_call_usage() {
     local out

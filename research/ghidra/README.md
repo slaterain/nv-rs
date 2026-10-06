@@ -310,7 +310,7 @@ Input header: `address,name,source,pin[,kind]`.
 | `name` | The name, optionally qualified as `Class::Method` or `Foo<int>::Bar`. |
 | `source` | Where the name came from (`rtti`, `xnvse`, `jip`, `jg`, `bgs`, `llm`, `own`, ...): 1 to 32 characters of `[A-Za-z0-9_.-]`. |
 | `pin` | Commit hash or other version stamp of that source. Empty becomes `none`. |
-| `kind` | `function` or `label`. Empty means function if one exists or can be created at the address, otherwise label. An address inside a function but not at its entry is a `conflict` that names the function's entry: it is most likely an address that is slightly off, and a label would hide the name from the export. Give `kind=label` for a label inside the function. |
+| `kind` | `function` or `label`. Empty means function if one exists or can be created at the address (code is there, or its first instruction decodes), otherwise label; `kind=function` at bytes that do not decode is rejected. An address inside a function but not at its entry is a `conflict` that names the function's entry: it is most likely an address that is slightly off, and a label would hide the name from the export. Give `kind=label` for a label inside the function. |
 
 Sanitization: surrounding whitespace is trimmed and each run of whitespace
 inside becomes one `_`. After that the name may only use
@@ -413,7 +413,8 @@ $id.pe_header.section_hash_status
 # The export is only complete if manifest.json exists and its gate passed.
 $m = Get-Content "$Out\export\manifest.json" -Raw | ConvertFrom-Json
 $m.gate.passed; $m.records_written; $m.function_count_api; $m.status_counts
-$m.uncovered_executable.uncovered_non_padding_bytes; $m.vtable_checks.bad_slots_total
+$m.uncovered_executable.uncovered_non_padding_bytes
+$m.vtable_checks.vtable_count; $m.vtable_checks.bad_slots_total
 
 # Cards for chosen functions (every address must be a function entry).
 Invoke-Nv "$Out\cards.log" @(
@@ -499,7 +500,7 @@ It needs Ghidra 12.1.x (`GHIDRA_INSTALL_DIR`; the Linux test container has
 it in `/opt/tools/ghidra_12.1.4_PUBLIC`), a JDK, the MinGW i686 cross
 compiler (`i686-w64-mingw32-gcc`, `-nm`, `-strip`) and Python 3. It writes
 everything under `research/ghidra/target/` (ignored by git) and takes about
-four minutes. `NV_TEST_RUN_FIXTURE=1` also runs the stripped fixture under
+five minutes. `NV_TEST_RUN_FIXTURE=1` also runs the stripped fixture under
 Wine as a check that it is a working program.
 
 What it does:
@@ -508,17 +509,27 @@ What it does:
    game) with `-O1 -msse2` into a 32-bit PE. It keeps an unstripped copy only
    to read symbol addresses with `nm`, strips the copy that Ghidra
    analyzes, and links with `--pdb` so the exe carries a CodeView record
-   (the `.pdb` file itself is deleted, so Ghidra cannot load names from it).
+   (the `.pdb` file itself is deleted, so Ghidra cannot load names from it;
+   the name given to the linker is long so that one test can write a longer
+   path over it in a copy of the exe).
 2. Imports and analyzes the stripped exe in a throwaway project.
 3. Runs every script with the same flags the commands above use (read-only
    for exports and cards, on a project copy for the name scripts) and
    checks the outputs with `test/check.py` (standard library only), using
-   small helper scripts in `test/` (`InspectNv`, `MakeClass`, `TxProbe`,
-   `UnitProbe`) that are not part of the shipped tools.
+   small helper scripts in `test/` (`InspectNv`, `MakeClass`, `SetLabels`,
+   `TxProbe`, `UnitProbe`) that are not part of the shipped tools.
 4. Runs mutated copies of the scripts (made by `test/mutate.py`, which
    fails unless the text it replaces occurs exactly once) to show that the
    safety nets work. The copies, and the helper scripts, are written to a
    temporary folder outside the repository and removed at the end.
+
+Every `analyzeHeadless` run in the suite must exit with 0, have none of the
+open or abort messages in its log, and start as many scripts as it was given
+`-postScript` arguments. Some failures to open the program still exit with 0,
+so the exit status alone would not show that nothing ran. The suite checks
+that this check works: a wrong program name (exit 1) and a project with a
+damaged program database (exit 0, `Error during analysis`, no script started)
+are both refused.
 
 What the fixture contains: a table of 40-byte command entries with handlers
 that only the table points to, one entry with a null name pointer and one
@@ -531,12 +542,17 @@ that call each other, an `FLDCW` function, functions that load the x87
 control word and `MXCSR` from constants, a function that reads a writable
 float global, eight functions that read a constant through an SSE conversion
 (`CVTSD2SS`, `CVTSS2SD`, `CVTTSS2SI`, `CVTTSD2SI`, `CVTPS2PD`, `CVTPD2PS`,
-`CVTDQ2PD`, `CVTSI2SD`), a `thiscall` method, an integer-only function, and a
-function reachable only through a function-pointer table.
+`CVTDQ2PD`, `CVTSI2SD`), two functions that load a constant with `MOVQ` and
+`MOVD`, a `thiscall` method, an integer-only function, a function reachable
+only through a function-pointer table, a function that calls `cos` and one
+that calls `GetTickCount` through the import table, a function that calls
+through an indexed table, two more pointer tables that the vtable test
+labels, and a table entry (after the terminator) whose handler pointers lead
+to bytes that are no instruction and to the inside of another function.
 
-What the tests check (274 `ok` lines and no failure on the last run, in
-about four minutes; the run before it also passed with the compiled-script
-cache of the one before that, so a repeated run is not affected by leftovers):
+What the tests check (331 `ok` lines and no failure on the last run, in
+about five minutes; a repeated run is not affected by leftovers of an
+earlier one):
 
 - Identity JSON has the required fields; its SHA-256 and MD5 equal those of
   the analyzed file; TimeDateStamp, Characteristics (the large-address-aware
@@ -544,7 +560,9 @@ cache of the one before that, so a repeated run is not affected by leftovers):
   table with the SHA-256 of every section's raw bytes equal values parsed by
   an independent Python PE reader. The recorded path has no user-profile
   folder. A copy of the fixture whose DOS stub holds a hand-made Rich header
-  (MinGW makes none) shows the entries decoded and the checksum valid.
+  (MinGW makes none) and whose CodeView path is under a made-up
+  `/home/<name>/` folder shows the entries decoded, the checksum valid and the
+  PDB path redacted.
 - The export manifest has `records_written == function_count_api` minus
   external functions, the SHA-256 of `functions.jsonl` matches the file, the
   records are sorted and complete (with `class`, `vtable_slots`, `provenance`
@@ -552,6 +570,14 @@ cache of the one before that, so a repeated run is not affected by leftovers):
   After the name steps the function in slot 1 of the `Fixture::vftable`
   label carries that slot, and the class is the parent namespace once the
   namespace has been turned into a class.
+- Vtable label forms: on a copy of the labeled project the label at the
+  table is renamed `vftable_for_Base`, another table gets `` `vftable' `` (with
+  a second plain `vftable` label at its address) and a third `vftable{for_Base}`.
+  The export finds all three tables, lists the slot whose target is code
+  without a function, gives each slot to the function it points at, and
+  treats the second label as an alias. A unit test of `isVtableName` covers
+  the name forms and `vftable_meta_ptr`. Run against the previous export
+  script, the same project gives one table.
 - A mutated copy of the export script that drops one function makes the
   gate throw and leaves no `manifest.json`.
 - Three more mutated copies force the decompile outcomes other than `ok`
@@ -571,6 +597,12 @@ cache of the one before that, so a repeated run is not affected by leftovers):
   `CVTTSD2SI` as SSE. The `RSQRTSS` and `RCPSS` functions are tier C, the
   `FSIN` function is tier D, x87 arithmetic is tier B, integer and SSE
   arithmetic is tier A, and the stateful flag is right for the cases tried.
+  `MOVQ` and `MOVD` constants are decoded (6.5 as f64, 9.25 as f32).
+- Calls through the import table: a function that calls `cos` through
+  `call dword ptr [__imp__cos]` is tier D and not a lower bound, its caller is
+  tier D through it, a function that only calls `GetTickCount` is tier A and
+  not a lower bound, and a call through an indexed table stays unresolved
+  and a lower bound.
 - Tier through callees: an integer-only caller of a wrapper around `FSIN`
   is tier D two levels down; the same code eleven levels down is not seen
   at the default depth 8 (the tier is a lower bound, and says so) and is seen
@@ -583,12 +615,22 @@ cache of the one before that, so a repeated run is not affected by leftovers):
   names a pointer used for two roles once, does not change anything on a dry
   run, predicts the real run exactly (also with `force=1`), is idempotent,
   keeps a user name unless `force=1`, and shows a wrong stride (48) as mostly
-  invalid entries.
+  invalid entries. A table entry whose pointers lead to `FF FF` bytes and to
+  the inside of a function creates nothing, in the dry run and the real run
+  alike (the two agree row by row). A function that the name import already
+  named (a shared stub, or one with exactly the wanted name) does not get
+  `src:cmdtable`, while the functions the script creates and names do. A
+  mutated copy in which `createFunction` returns nothing makes the script
+  abort, and the project then has no new function.
 - Name-map import names a stripped function, creates a function at a
   function-pointer-only address, creates labels with Info bookmarks, refuses
   to overwrite a user name without `force=1`, handles `rva=1`, a byte-order
   mark, sanitization and rejected rows (nothing applied), and adds the
-  `src:` and `pin:` tags. Duplicate names: two rows that give one name to
+  `src:` and `pin:` tags. An address inside a function with no `kind` is a
+  conflict that names the function's entry, and `kind=label` is accepted.
+  Bytes that are no instruction (`FF FF ...`) never become a function: with
+  no `kind` the row becomes a label, with `kind=function` it is rejected.
+  Duplicate names: two rows that give one name to
   two addresses, and two names for one address, are rejected; a name already
   in the program is a conflict that names the other address; `force=1`
   allows the duplicate and says so; two sources that agree on a name add
@@ -602,7 +644,7 @@ cache of the one before that, so a repeated run is not affected by leftovers):
   an earlier row (or entries) were applied, and the saved project then has
   no rename, no function created, no tag and no bookmark left.
 - `NvCommon.f80ToDouble` equals the correctly rounded double (computed with
-  exact fractions in Python) for 300+ 80-bit values, including values on or
+  exact fractions in Python) for 289 80-bit values, including values on or
   next to the halfway point between two doubles, where rounding twice would
   give a different result; the cases are checked to include ones that the
   earlier method gets wrong. The path redaction handles Windows, macOS and
@@ -618,9 +660,10 @@ tested only on the synthetic MinGW program above. On the Windows machine:
   `0x01190910`, both from public xNVSE sources, not verified by us). The
   fixture proves the layout code reads a 40-byte layout correctly; it cannot
   say what the real table uses.
-- **Scale and time.** The fixture has 115 functions. A full export of the
-  real program has tens of thousands; the time, memory use and the number of
-  `timeout` and `error` statuses are unmeasured.
+- **Scale and time.** The fixture has 148 internal functions (197 with the
+  external ones). A full export of the real program has tens of thousands;
+  the time, memory use and the number of `timeout` and `error` statuses are
+  unmeasured.
 - **Real decompiler failures.** No Ghidra decompile ever timed out or failed
   here. The "decompiler returned no result" branch, the timeout branch and
   the error branch of `NvExportProgram` were reached only by mutated copies
@@ -629,19 +672,25 @@ tested only on the synthetic MinGW program above. On the Windows machine:
   the way the script expects. In particular the error text is only checked
   for the fallback sentence, because Ghidra gave no message of its own.
 - **MSVC code.** The fixture is compiled with GCC. The tier heuristics,
-  padding detection and the `vftable` check have not been run on
-  MSVC-compiled code or on vtables labeled by Ghidra's RTTI analysis; the
-  `vftable` check was exercised with a hand-made label. No test used a
-  function that Ghidra's FunctionID database named; the CRT-name case is
-  made by importing a name.
+  padding detection and the vtable check have not been run on MSVC-compiled
+  code or on vtables labeled by Ghidra's RTTI analysis. The vtable check was
+  exercised with hand-made labels in the three name forms (`vftable_for_<Base>`,
+  `` `vftable' `` and `vftable{for_<Base>}`), taken from Ghidra's class-recovery
+  source and the PDB convention, not from labels that analysis made. Import
+  calls were tested with MinGW's `call dword ptr [__imp__cos]`; MSVC's `/MD`
+  code uses the same form but was not tested. No test used a function that
+  Ghidra's FunctionID database named; the CRT-name case is made by importing
+  a name.
 - **PDB information and the Rich header.** The identity script was checked
   against a CodeView `RSDS` record produced by the MinGW linker and a Rich
   header written by the test. The `NB10` form is untested, and so are the
   real executable's record, its real Rich header and its unpacking (a Steam
   wrapper changes the file). The raw-section hashes need the executable to
   still be at the path Ghidra recorded; otherwise they are `null`.
-- **Windows.** `analyzeHeadless.bat`, PowerShell quoting, project copying
-  with lock files, and the Windows decompiler binary were not run.
+- **Windows.** `analyzeHeadless.bat`, PowerShell quoting, the `Invoke-Nv`
+  helper (its checks were written and tested in bash, in `run_ghidra` of the
+  test script), project copying with lock files, and the Windows decompiler
+  binary were not run.
 - **Transaction abort is Ghidra behaviour.** It was verified on Ghidra
   12.1.4 (with `TxProbe` and with the injected failures) and could change in
   another version; the tests would then fail.

@@ -675,3 +675,33 @@ The default is **excluded**. Any change needs a written policy amendment that na
 119. https://raw.githubusercontent.com/vawser/Smithbox/main/Documentation/Binary%20Templates/CTL.bt
 120. https://raw.githubusercontent.com/slfx77/bethesda-multitool/main/src/BethesdaMultitool/Core/Formats/FaceGen/EgtFormat.cs
 121. crates/shaders/src/lib.rs and viewer/src/game_lit.wgsl (nv-rs)
+## Tools in this repository
+
+Added on 2026-10-05 and tested only on synthetic binaries. None of them has
+been run against `FalloutNV.exe` yet.
+
+| Tool | Methodology step | What it does | Tested here |
+| --- | --- | --- | --- |
+| [`research/ghidra`](../research/ghidra/README.md) | 1-3 | `NvExeIdentity` (exe identity, sections, CodeView), `NvExportProgram` (export of every function with a count gate, uncovered code and vtable checks), `NvFunctionCard` (cards with decoded float constants and CPU-fidelity tier A-D), `NvLabelCommandTables` (names command handlers; stride is a parameter), `NvImportNameMap` (name maps with `src:`/`pin:` provenance) | Headless on Ghidra 12.1.4 against a stripped MinGW fixture |
+| [`research/nv-oracle`](../research/nv-oracle/README.md) | 6 | `nv-call` (calls one exe function on the real CPU with chosen FPU/SSE state), `nv-probe` (in-game hooks logging arguments, memory and returns; injectable or NVSE plugin), `nv-inject` | 32-bit Wine 9 against a synthetic target; MSVC target compiled and clippy-checked but not linked |
+| `crates/nvinspect/tests/repo_hygiene.rs` | Repository rules | Rejects game/binary file types, user-profile paths, control characters and Ghidra automatic names in code and docs | Runs in `cargo test` |
+
+## Decisions after this document
+
+On 2026-10-05 the maintainer changed two of the rules above. The decision
+records take precedence over this document where they differ:
+
+- [ADR-0002](adr/0002-xbox-prototype-symbols.md): the Xbox 360 prototype
+  symbols are used in full, with `src:xbox_pdb.<tier>` tags in Ghidra and
+  `(Xbox PDB)` markers in committed text. This replaces "Xbox 360 PDB
+  decision" (default excluded) and the step 2 rules that keep PDB-derived
+  names out. Local steps: [PROTOTYPE_SYMBOLS.md](PROTOTYPE_SYMBOLS.md).
+- [ADR-0003](adr/0003-decompiled-code-in-the-project.md): decompiled logic may
+  be translated into Rust when marked with its address. This replaces the
+  "Don't translate decompiled functions" rule and makes the OS-isolated
+  clean-room lanes (step 5, step 7 "Implementer") optional. Oracle tests,
+  provenance and regression tests still apply.
+- [ADR-0004](adr/0004-mudcrab-style-layout.md): the repository layout and
+  docs follow Mudcrab's shape; the paths in this document move then.
+
+Leaked SDK and source trees remain outside this methodology.

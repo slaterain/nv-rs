@@ -9,8 +9,9 @@
 //            (letters, digits, '_', '.', '-'; at most 32 characters)
 //   pin      commit hash (or other version stamp) of that source
 //   kind     function or label. If empty: function when a function exists or
-//            can be created at the address, otherwise label. An address inside
-//            a function, not at its entry, is a conflict until kind=label is given.
+//            can be created at the address (code is there or its bytes decode as
+//            an instruction), otherwise label. An address inside a function, not
+//            at its entry, is a conflict until kind=label is given.
 // Lines whose first cell starts with '#' are comments.
 //
 // Name sanitization: surrounding whitespace is trimmed and runs of
@@ -62,6 +63,7 @@ import java.util.TreeSet;
 import java.util.regex.Pattern;
 
 import ghidra.app.script.GhidraScript;
+import ghidra.app.util.PseudoDisassembler;
 import ghidra.program.model.address.Address;
 import ghidra.program.model.listing.Bookmark;
 import ghidra.program.model.listing.BookmarkType;
@@ -388,7 +390,12 @@ public class NvImportNameMap extends GhidraScript {
         return applyLabel(addr, addrOut, row.name, row.shortName, row.nsPath, row.source, row.pin);
     }
 
-    /** True when a function could be created at addr: executable memory, not inside another function. */
+    /**
+     * True when a function could be created at addr: executable memory, not inside
+     * another function, no defined data, and an instruction there or bytes that decode
+     * as one (a pseudo-disassembly, which changes nothing, so a dry run decides like
+     * a real run). Only the first instruction is checked.
+     */
     private boolean canCreateFunction(Address addr) {
         MemoryBlock b = prog.getMemory().getBlock(addr);
         if (b == null || !b.isExecute() || !b.isInitialized()) {
@@ -398,7 +405,18 @@ public class NvImportNameMap extends GhidraScript {
         if (in != null) {
             return false;
         }
-        return getDataAt(addr) == null || !getDataAt(addr).isDefined();
+        if (getDataAt(addr) != null && getDataAt(addr).isDefined()) {
+            return false;
+        }
+        if (getInstructionAt(addr) != null) {
+            return true;
+        }
+        try {
+            return new PseudoDisassembler(prog).disassemble(addr) != null;
+        }
+        catch (Exception e) {
+            return false; // InsufficientBytes, UnknownInstruction or UnknownContext
+        }
     }
 
     private Namespace findNamespace(List<String> path, boolean create) throws Exception {
@@ -420,7 +438,8 @@ public class NvImportNameMap extends GhidraScript {
             String shortName, List<String> nsPath, String source, String pin) throws Exception {
         boolean create = fn == null;
         if (create && !canCreateFunction(addr)) {
-            return reject(addrOut, "cannot create a function here (not executable memory, or inside another function)");
+            return reject(addrOut, "cannot create a function here (not executable memory, inside another " +
+                "function, defined data, or bytes that do not decode as an instruction)");
         }
         String detail = create ? (dry ? "would create function" : "created function") : "";
         boolean replacesUserName = false;

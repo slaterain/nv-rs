@@ -35,3 +35,6 @@ Thumbs.db
 # Python bytecode from research test helpers
 __pycache__/
 *.pyc
+# Claude Code local state
+.claude/settings.local.json
+.claude/worktrees/

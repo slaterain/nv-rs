@@ -20,6 +20,8 @@ The injected process must be 32-bit, like this tool. Use a private copy of
 the game, never the files of the real installation.
 ";
 
+const ONE_TARGET: &str = "give only one of --launch <exe> and --pid <n>";
+
 enum Target {
     Launch {
         exe: String,
@@ -55,13 +57,18 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             "--wait" => wait = true,
             "--pid" => {
                 let n = args.next().ok_or("--pid needs a number")?;
-                target = Some(Target::Pid(
-                    n.parse().map_err(|_| format!("bad process id {n:?}"))?,
-                ));
+                let pid = n.parse().map_err(|_| format!("bad process id {n:?}"))?;
+                if target.is_some() {
+                    return Err(ONE_TARGET.into());
+                }
+                target = Some(Target::Pid(pid));
             }
             "--launch" => {
                 let exe = args.next().ok_or("--launch needs a program")?;
                 let rest: Vec<String> = args.by_ref().collect();
+                if target.is_some() {
+                    return Err(ONE_TARGET.into());
+                }
                 target = Some(Target::Launch {
                     exe,
                     args: rest,
@@ -71,8 +78,12 @@ fn parse(args: impl Iterator<Item = String>) -> Result<Options, String> {
             other => return Err(format!("unknown option {other}")),
         }
     }
-    if let Some(Target::Launch { wait: w, .. }) = &mut target {
-        *w = wait;
+    match &mut target {
+        Some(Target::Launch { wait: w, .. }) => *w = wait,
+        // There is no process of ours to wait for when the DLL goes into a
+        // running one, so a script that asks for it must be told.
+        Some(Target::Pid(_)) if wait => return Err("--wait only works with --launch".into()),
+        _ => {}
     }
     let target = target.ok_or("give --launch <exe> or --pid <n>")?;
     let dll = match dll {
@@ -354,5 +365,27 @@ mod tests {
         assert!(parse_text("--dll a.dll --pid x").is_err());
         assert!(parse_text("--dll a.dll --launch").is_err());
         assert!(parse_text("--bogus --pid 1").is_err());
+    }
+
+    #[test]
+    fn contradictory_options_are_errors() {
+        // --wait has nothing to wait for with --pid, in either order.
+        for text in ["--wait --pid 42", "--pid 42 --wait"] {
+            let e = parse_text(text).err().expect(text);
+            assert!(e.contains("--wait"), "{text}: {e}");
+        }
+        // Only one target.
+        for text in ["--pid 42 --launch game.exe", "--pid 1 --pid 2"] {
+            let e = parse_text(text).err().expect(text);
+            assert!(e.contains("only one"), "{text}: {e}");
+        }
+        // After --launch everything belongs to the program: this is a launch
+        // of game.exe with two arguments, not a second target.
+        match parse_text("--launch game.exe --pid 42").unwrap().target {
+            Target::Launch { args, .. } => assert_eq!(args, ["--pid", "42"]),
+            Target::Pid(_) => panic!("expected a launch"),
+        }
+        // A wait on a launch is fine.
+        assert!(parse_text("--wait --launch game.exe").is_ok());
     }
 }

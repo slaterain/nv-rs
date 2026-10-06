@@ -33,6 +33,28 @@ reading do not establish them.
 
 ## Active work: M1
 
+Methodology and pipeline batch, 2026-10-05 (cloud session without game
+files; PR #10). Research into precedent projects and tooling produced
+[METHODOLOGY.md](METHODOLOGY.md). The maintainer's decisions are in
+[adr/](adr/README.md): full use of the Xbox 360 prototype symbols,
+translating marked decompiled logic, and a Mudcrab-style layout (planned in
+ADR-0004). New tools in `research/`, tested only on synthetic binaries:
+Ghidra scripts (identity, gated full export, function cards, command-table
+labels, name import) and `nv-oracle` (`nv-call`, `nv-probe`, `nv-inject`).
+There is also a repository hygiene test. Root 976 tests, clippy and format
+pass, as do 24/24 `nv-oracle` Wine groups and the Ghidra suite. PR #10's
+Windows CI passed at `12d8321`. None of the tools has run against
+FalloutNV.exe yet.
+[PROTOTYPE_SYMBOLS.md](PROTOTYPE_SYMBOLS.md) lists likely names for the
+look-IK functions (`00c78610` BoneTrack, `00c755e0` LimitBoneRot); these are
+unverified. Order for the local session: land
+`codex/m1-reload-update-order`, merge PR #10 (`OPENING_LOOK_IK.md` will
+conflict), then run the ADR-0004 restructure. **Next action:** look-IK
+pilot. Load the prototype with its symbols, confirm the `bhkRagdollController`
+pairs and field names in the PC disassembly, then record `00c755e0` and
+`00c78610` arguments and results with `nv-probe` in a private game copy
+while Doc looks at the player.
+
 The published baseline includes the opening package look lock, Doc's queued
 chair exit, native Info HUD and tester bounds correction, SPECIAL interface,
 and same-cell trigger reset on F9. Live evidence reaches the tester through
@@ -84,8 +106,8 @@ successful reloads; failed loads preserve playback. Root926/viewer89 tests,
 both workspaces' checks/releases and live success/rejection cases pass.
 It does not restore the saved conversation. Native RaceSexMenu
 navigation is traced; field callbacks and original comparison remain open.
-See [FACE_CREATION.md](FACE_CREATION.md). Next action: finish camera PR #7
-when both amended checks pass, then publish its verified build. See
+See [FACE_CREATION.md](FACE_CREATION.md). Camera PR #7 and dialogue PR #8
+have since merged; check their build publication against the Codex branch. See
 [PERSISTENCE.md](PERSISTENCE.md) for owners and unfinished checks. Gaze cap
 constructors are now identified; runtime configuration and original comparison
 remain unverified. Do not repeat the established

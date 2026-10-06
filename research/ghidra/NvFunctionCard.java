@@ -15,17 +15,19 @@
 //   D  x87 transcendentals, or calls to CRT math functions
 // The tier is the highest class present. "tier" counts the function's own
 // code and its calls to math routines by name. "tier_with_callees" also
-// walks the direct callees, and theirs, down to depth levels (default 8),
+// walks the callees, and theirs, down to depth levels (default 8),
 // applying the instruction classes and the math-routine names at every
 // level. A routine that FunctionID or a name import called _CIsin or
-// sin counts as tier D wherever it is reached.
+// sin counts as tier D wherever it is reached, whether it is called
+// directly or through the import table ("call dword ptr [__imp__cos]").
 //
 // The tier is a heuristic for choosing how to test a function, not a proof.
 // "tier_is_lower_bound" is true when something that could raise
-// tier_with_callees was not looked at: an indirect call (its target is not
-// known), a direct call to an address with no function, an imported routine
-// with no usable name, or callees below the depth limit. Writes through
-// pointers and code reached by jump tables are not followed.
+// tier_with_callees was not looked at: an indirect call whose target is not
+// known (a call through an absolute import-table slot is known), a direct
+// call to an address with no function, an imported routine with no usable
+// name, or callees below the depth limit. Writes through pointers and code
+// reached by jump tables are not followed.
 //
 // The cards describe a program you own. Keep them in the private research
 // tree. Never commit them.
@@ -642,8 +644,12 @@ public class NvFunctionCard extends GhidraScript {
                         // Its name was already matched against the math patterns by the
                         // caller's scan; its code is not in the image.
                         if (UNNAMED_IMPORT.matcher(target.getName()).matches()) {
-                            addBound("callee " + NvCommon.addr(callee.getEntryPoint()) + " imports " +
-                                target.getName(true) + ", which has no usable name");
+                            // A call through the import table reaches the import itself; a
+                            // call to a stub in the image reaches it through that stub.
+                            String who = callee.isExternal() ? "import " + target.getName(true)
+                                : "callee " + NvCommon.addr(callee.getEntryPoint()) + " imports " +
+                                    target.getName(true);
+                            addBound(who + ", which has no usable name");
                         }
                         continue;
                     }

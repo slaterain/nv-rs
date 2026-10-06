@@ -100,6 +100,12 @@ and `nv_call_engine.dll` at 0x10000000, both with address randomisation off
 `/BASE:... /DYNAMICBASE:NO` for MSVC). Do not change them without reading
 "Why there are two files" below.
 
+`nv-call.exe` is also linked without a safe-exception-handler table
+(`/SAFESEH:NO`; rustc asks for one on x86, and the build script's argument
+comes later on the link line and replaces it) and without DEP opt-in
+(`/NXCOMPAT:NO`, `-Wl,--disable-nxcompat`). Both are about the range the
+mapped game will occupy; see "Exception handlers of the mapped code" below.
+
 `cargo test` on any host runs the unit tests of `nv-oracle-core` and the
 command-line quoting tests of `nv-inject`. On a Linux host the Windows-only
 crates compile to empty programs.
@@ -122,10 +128,36 @@ is therefore only a small host, linked at 0x00400000 with a large zero-filled
 placeholder, so the operating system reserves the whole range before
 anything else can land in it. It loads `nv_call_engine.dll`, which is linked
 at 0x10000000 (with ASLR off), and the engine replaces the placeholder with
-the image. After that the host's own code no longer exists, so the engine ends
-the process itself. If the image's range is not inside the placeholder, the
-engine asks the system for it with `VirtualAlloc` and fails with a clear
-message when it is taken (the message names what is there).
+the image. The host tells the engine where its placeholder array is and how
+long it is (the two arguments of `nv_call_run`). The range reserved for the
+image runs from the host's base to the end of that array; the host's own
+sections behind the array (its import table, startup tables and TLS template)
+are not part of it and are never handed to the image. After the takeover the
+host's own code no longer exists, so the engine ends the process itself. Before
+it overwrites anything, the engine replaces the process's top-level exception
+filter (the host's startup code registered one that lives in those pages) with
+its own, which prints what happened and ends the process with status 4; see
+"Faults" below. If the image's range is not inside the placeholder, the engine
+asks the system for it with `VirtualAlloc` (whole 64 KiB blocks) and fails with
+a clear message when it is taken (the message names what is there).
+
+#### Exception handlers of the mapped code
+
+Windows checks every structured-exception handler before it calls it. The
+loader records, when the process starts, which handlers are valid for the
+address range of each image: for `nv-call.exe` that is the range the mapped
+game will occupy, so a table recorded for the host would not contain a single
+handler of the game (C++ `try`/`catch`, `__try`) and dispatch would end the
+process at the first one. `nv-call.exe` therefore has no such table (every
+handler inside its own range is accepted), which needs the build script's
+`/SAFESEH:NO`. Handlers in memory that belongs to no image, as with an image
+that was mapped outside the placeholder by `VirtualAlloc`, are refused when DEP
+is on for the process, so the host does not opt in to DEP. On a Windows set to
+DEP for every program, an image mapped outside the placeholder cannot run its
+own exception handlers; keep the game's range inside the placeholder. This is
+reasoning about Windows' checks, not something the Wine tests can show (Wine
+does not make these checks); the link options are verified only on the link
+command line (see "What was tested here").
 
 ### What it does
 
@@ -133,7 +165,12 @@ message when it is taken (the message names what is there).
 2. Maps headers and sections at the preferred base. No relocations are
    applied and no CRT, TLS or static constructors are run: only what is in the
    file exists. Anything the game initialises at run time (singletons, post-INI
-   settings) has to come from a snapshot.
+   settings) has to come from a snapshot. One byte range of the image differs
+   from the file: the TLS directory entry in the in-memory copy of the headers
+   is zeroed (`tls_directory_cleared` in the header says so). The loader reads
+   an executable's TLS directory from the headers in memory each time a thread
+   starts or ends, so the image's own TLS callbacks would otherwise run inside
+   the harness whenever the called code, or the system, starts a thread.
 3. Imports are not resolved by default. Every import-table slot points at a
    small per-import stub. If the called code reaches an import, the call stops
    and the result reports the import's name (`KERNEL32.dll!Sleep`) and the
@@ -141,14 +178,20 @@ message when it is taken (the message names what is there).
    functions instead (anything missing keeps a stub). Resolving is only
    sensible for imports that are safe to run, such as simple kernel32 calls.
 4. `--snapshot <dir>` applies every `<hexaddr>.bin` file in the folder after
-   mapping (for example `011dea3c.bin`). A region inside the image (or the rest
-   of the range `nv-call.exe`'s placeholder reserved) is written into it, and a
-   region in free address space is allocated at that exact address, taking the
-   whole 64 KiB block it starts in, so later files in the same block fit.
-   A region over anything else is refused with a message naming what is there:
-   that would be the harness's own code, data, heap, stack or buffer arena, and
-   overwriting it would corrupt the harness. So are two files that cover the
-   same bytes. The header lists each region with its size and SHA-256.
+   mapping (for example `011dea3c.bin`). A region inside the image (or in the
+   rest of `nv-call.exe`'s placeholder array, past the end of a small image) is
+   written into it, and a region in free address space is allocated at that
+   exact address, taking the whole 64 KiB block it starts in, so later files in
+   the same block fit. A region over anything else is refused with a message
+   naming what is there: the harness's own code, data, heap, stack or buffer
+   arena, and also the host program's other sections (its import table and
+   startup tables behind the placeholder array, and what is left of its code in
+   front of a small image). Overwriting any of it would corrupt the harness. So
+   are two files that cover the same bytes. A region that starts in the free
+   pages after another allocation's end, inside a 64 KiB block that is not
+   free, is refused too (the system only hands out whole blocks); the message
+   gives the next address that works. The header lists each region with its
+   size and SHA-256.
 5. Takes a copy of the memory the called code can change: the image's writable
    sections (`.data`, `.bss`), the pages of the snapshot regions and anything
    that was allocated for them.
@@ -186,7 +229,8 @@ Blank lines and lines starting with `#` are skipped. A bad line produces a
 `{"type":"error",...}` line and the run continues. Exit status: 0 when every
 vector ran (faults are results, not errors), 1 when the setup failed (image,
 snapshot, address range, input file), 2 for a usage error or when any vector
-line was rejected.
+line was rejected, 4 when the process was ended by an exception that the
+harness could not record (see "Faults").
 
 ### Result line
 
@@ -202,12 +246,17 @@ line was rejected.
 ```
 
 - `regs` is `null` after a fault. `fault` is `null` or
-  `{"kind":"exception","code","name","eip","address","access"}` (access
-  violations, illegal instructions, integer divide by zero, x87 and SSE
-  exceptions that the control word or MXCSR unmasks, stack overflow,
-  breakpoints) or `{"kind":"import","name","index","caller"}`. An SSE
-  exception shows up as `float_multiple_traps` (0xC00002B5) under Wine; other
-  Windows versions may report one of the other `float_*` names.
+  `{"kind":"exception","code","name","eip","address","access"}` or
+  `{"kind":"import","name","index","caller"}`. An exception fault is any
+  exception that the called code did not handle itself: access violations,
+  illegal instructions, integer divide by zero, x87 and SSE exceptions that the
+  control word or MXCSR unmasks, stack overflow, breakpoints and single steps,
+  a C++ `throw` (`cpp_exception`, 0xE06D7363), an invalid disposition, and
+  any code the program raises with `RaiseException` (reported as `exception`
+  with the code in `code`). An SSE exception shows up as
+  `float_multiple_traps` (0xC00002B5) under Wine; other Windows versions may
+  report one of the other `float_*` names. For a software exception `eip` is
+  where the system raised it, not a place in the image.
 - `st0.raw` is the 10-byte x87 register in memory order (significand first),
   captured only for x87 return kinds and only when the FPU stack is not
   empty. `f32_bits` rounds the 80-bit value straight to single precision, as
@@ -223,23 +272,43 @@ line was rejected.
 - The header line has the CPU vendor and brand string (RSQRTSS and RCPSS
   estimates are reported to differ between Intel and AMD, so record which CPU
   made a vector), the image SHA-256 and base, the control words, import
-  counts, the placeholder, the snapshot regions, and whether memory is put
-  back between vectors (`state_restored`).
+  counts, the placeholder (the range the host reserved for the image, from its
+  base to the end of its array, and where the array starts), the snapshot
+  regions, whether memory is put back between vectors (`state_restored`) and
+  whether the TLS directory entry was zeroed (`tls_directory_cleared`).
+
+### Faults
 
 Faults inside a call are caught by an exception handler record that the call
 routine puts on the thread's handler chain just before it calls the function.
 It sits behind everything the called code registers itself, so an exception
 that the called code, or a system function it calls, handles on its own never
 becomes a fault: `IsBadReadPtr` on a bad pointer returns 1 here as it does in
-the original program. An exception that reaches the record is written down,
-the thread's handler chain is put back (including after a call that left its own
-records on it, or was abandoned at an import trap), the FPU is reset (`fninit`,
-control word restored) and the call returns to the harness, so one bad vector
-does not stop the batch. A stack overflow is recovered too, and the stack's
-guard page is armed again, so a second overflowing vector is reported as one
-as well. C++ exceptions, Windows' own debug-print and thread-name exceptions are
-not touched. The record belongs to the harness thread only: a fault on another
-thread that the called code creates is not caught.
+the original program. Every other exception that reaches the record is written
+down as a fault, whatever its code: a C++ `throw`, a code the called program
+raises itself, a single step, an invalid disposition (anything that is not
+handled would otherwise go on to the process's unhandled-exception path, which
+under Wine carries on from the raise as if the function had returned, a wrong
+result with `fault: null`, and on Windows ends the harness and the rest of the
+batch). The only exceptions that are continued instead are the ones a debugger
+swallows: the text of `OutputDebugString` and thread names (0x40010006,
+0x4001000A and 0x406D1388); the function then goes on, as it would under a
+debugger. The recorded exception is abandoned, the thread's handler chain is
+put back (including after a call that left its own records on it, or was
+abandoned at an import trap), the trap flag is cleared, the FPU is reset
+(`fninit`, control word restored) and the call returns to the harness, so one
+bad vector does not stop the batch. A stack overflow is recovered too, and the
+stack's guard page is armed again, so a second overflowing vector is reported as
+one as well.
+
+The record belongs to the harness thread only. An exception on a thread that
+the called code creates never reaches it. It goes to the process's top-level
+filter, which the engine owns while an image is mapped: it prints
+`nv-call: unhandled exception <code> at <address> outside the harness's reach
+...` on stderr and ends the process with status 4. The results already written
+are complete (each line is flushed). The exception filter that the host's
+startup code had registered is not used: its code is among the pages the image
+replaces (it is, for any image larger than about 0xA0000 bytes).
 
 ## nv-probe
 
@@ -291,9 +360,12 @@ once it has prepared its hooks (`GetModuleHandleEx` with the pin flag; the heade
 says `"pinned":true`). A thread inside such a function returns through a stub
 that calls back into the DLL, possibly long after the function was entered, so
 the DLL must not be unloaded meanwhile. `FreeLibrary` then does nothing, and the
-hooks keep working until the process ends. A probe without return capture is not
-pinned: `FreeLibrary` puts the original bytes back (the generated stubs stay
-allocated, but see the limitations for a thread inside one at that moment).
+hooks keep working until the process ends. If the pin fails (`"pinned":false`
+with a `ret=` hook in the manifest), every `ret=` hook is refused with that
+reason and only the hooks without return capture are installed. A probe without
+return capture is not pinned: `FreeLibrary` puts the original bytes back (the
+generated stubs stay allocated, but see the limitations for a thread inside one
+at that moment).
 
 ### How a hook works
 
@@ -361,6 +433,9 @@ after the program's name belongs to the program, so `--dll` and `--wait` go
 before `--launch` (`nv-inject` warns if it sees either one after the program).
 `--wait` waits for the exit and prints `process <id> exited with code <n>`;
 `nv-inject` then exits with 0 when the program's code was 0 and with 3 otherwise.
+`--wait` only works with `--launch` (with `--pid` there is no process of its
+own to wait for), and `--launch` and `--pid` cannot be given together; both are
+usage errors (exit 2).
 The tool reports the module handle
 or an error. It relies on kernel32 sitting at the same address in the target
 as in `nv-inject.exe`, which Windows does for system DLLs within a boot
@@ -386,9 +461,10 @@ State that `nv-call` needs from a running game: dump the regions with
 
 ## Tests
 
-`tests/run-wine-tests.sh` builds everything, builds a synthetic program from
-`tests/fixture/target.c` (original code written for the test), and runs 21
-groups, most of them under Wine. `PROFILE=debug` runs the same tests on
+`tests/run-wine-tests.sh` builds everything, builds two synthetic programs
+from `tests/fixture/target.c` and `tests/fixture/threadfx.c` (original code
+written for the test; the second has a 4 MiB `.bss`, a TLS callback and
+functions that start threads), and runs 24 groups, most of them under Wine. `PROFILE=debug` runs the same tests on
 unoptimised builds with overflow checks. It needs `cargo`, `wine`, `python3`
 and the MinGW i686 tools, and writes only under `target/wine-tests`.
 
@@ -409,11 +485,24 @@ and the MinGW i686 tools, and writes only under `target/wine-tests`.
   input lines, snapshots (including a region outside the image, later files in
   the same page and in the same 64 KiB block, and a write into a region that is
   undone for the next vector) and resolved imports (an API that handles its own access violation,
-  a non-continuable software exception); the handler chain after a call that
+  a non-continuable software exception); exceptions that nothing handles (a
+  C++-style throw, a code the program raises itself, a single step from the
+  trap flag), each recorded as a fault with the next vector still running, and a
+  thread-name exception that is continued; the handler chain after a call that
   registered its own record and then faulted or hit an import; two identical
   stateful vectors giving the same answer, and `--keep-state`; the image at a
   different base; the clear failure when the address range is taken; a snapshot
-  over the engine's own data, or over another snapshot file, refused;
+  over the engine's own data, over another snapshot file, or over the host
+  program's own sections (its import table, its startup tables, the leftover
+  code in front of a small image) refused; a snapshot inside the placeholder
+  array accepted, and the header's reserved range ending with the array;
+  snapshot files at the 64 KiB block edges (in the unused tail of an image's last
+  block, which works, and in the free pages after another allocation, which
+  fails with a message that says why); an image with a TLS directory and a
+  callback, whose callback does not run when the called code starts a thread; a
+  4 MiB image (it covers the host's old exception filter) where the called
+  code starts a thread that faults, which ends the process with the engine's
+  message and status 4;
 - `nv-probe` through `nv-inject --launch` (call counts, argument values by
   type, struct bytes before and after, return values, x87 return, recursion
   order, per-hook limit, refusal on wrong expected bytes, refusal on wrong host
@@ -450,7 +539,18 @@ real exe:
   allocations). The MSVC compile (to object files, not linked: there is no
   MSVC linker here) was checked, including that the exception handler is
   listed in the safe-handler table (`.safeseh`), which that linker requires on
-  x86; the link and the run were not;
+  x86; the link and the run were not. For the host, only the order of the
+  link arguments was checked (`cargo rustc -- --print link-args` shows
+  `/SAFESEH` and `/NXCOMPAT` from rustc first and the build script's
+  `/SAFESEH:NO` and `/NXCOMPAT:NO` last). That `link.exe` takes the last value,
+  that `dumpbin /loadconfig nv-call.exe` then shows no Safe Exception Handler
+  Table, and that the mapped code's handlers are accepted on Windows are
+  reasoning, not tests: Wine does not check handlers;
+- how a real Windows delivers thread start and exit to the image's TLS
+  callbacks (the tests show that, under Wine, clearing the directory entry in
+  the headers in memory stops them), and the engine's top-level filter on a
+  real Windows (under Wine it runs and ends the process with status 4 for an
+  exception on a thread the called code created);
 - how a real Windows reports an SSE exception (the code may differ from
   Wine's), and the stack-overflow guard page handling, which was only
   exercised under Wine;
@@ -496,10 +596,15 @@ real exe:
 - `nv-call` runs the function on the harness's main thread, with the harness's
   stack and thread-local storage: code that uses thread-local slots, the game's
   allocator state, or anything a constructor sets up sees an empty world unless
-  a snapshot provides it. It catches hardware faults, not C++ exceptions thrown
-  out of the called code, and cannot recover from a callee that corrupts its
-  own stack, or its handler chain, badly enough to break exception dispatch.
+  a snapshot provides it. An exception that nothing in the called code handles
+  (hardware fault or a thrown C++ exception alike) is recorded as a fault. It
+  cannot recover from a callee that corrupts its own stack, or its handler
+  chain, badly enough to break exception dispatch.
   Code that calls `ExitProcess` (through a resolved import) ends the harness.
+  A thread the callee creates (through a resolved import) starts without the
+  image's TLS setup (its TLS directory is never given to the loader), and an
+  exception on it ends the process with status 4. The harness thread is the
+  only one that is recovered.
 - `nv-call` puts back the image's writable sections and the snapshot regions
   before each vector, not read-only parts of the image (which the harness maps
   writable, so a callee could change them) and not memory that the callee

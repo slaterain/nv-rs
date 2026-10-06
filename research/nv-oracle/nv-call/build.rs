@@ -29,11 +29,23 @@ fn main() {
             println!("cargo:rustc-link-arg-bins=/BASE:0x00400000");
             println!("cargo:rustc-link-arg-bins=/DYNAMICBASE:NO");
             println!("cargo:rustc-link-arg-bins=/LARGEADDRESSAWARE");
+            // rustc asks for a safe-handler table on x86. The loader records
+            // that table for the address range of this program when it starts,
+            // and that range is where the image will be mapped: every handler
+            // of the mapped code would be missing from it and be refused. This
+            // argument comes after rustc's own and replaces it. And do not
+            // opt in to DEP: a handler in memory that is not part of an image
+            // (an image mapped outside the placeholder) is refused when DEP is
+            // on for the process.
+            println!("cargo:rustc-link-arg-bins=/SAFESEH:NO");
+            println!("cargo:rustc-link-arg-bins=/NXCOMPAT:NO");
         }
         _ => {
             println!("cargo:rustc-link-arg-bins=-Wl,--image-base=0x400000");
             println!("cargo:rustc-link-arg-bins=-Wl,--disable-dynamicbase");
             println!("cargo:rustc-link-arg-bins=-Wl,--large-address-aware");
+            // Same reason as /NXCOMPAT:NO for MSVC above.
+            println!("cargo:rustc-link-arg-bins=-Wl,--disable-nxcompat");
         }
     }
 }

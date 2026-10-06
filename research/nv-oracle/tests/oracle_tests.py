@@ -12,6 +12,10 @@ Subcommands:
                                                 snapshot, snapshot-keep, resolve
                                                 or keep)
   snapshot-files nm output + folder         ->  write snapshot region files
+  deref-vector   nm out addr                ->  one vector that reads the dword at addr
+  deref-check    results value label        ->  check what it read (and the header)
+  thread-vectors nm ok-out fault-out        ->  vectors for the thread fixture
+  thread-check   ok|fault results label [stderr] -> check the thread fixture runs
   probe-manifest variant nm exe out [k=v..] ->  write nv-probe.txt
   probe-check    variant log out base label [exe] ->  check a probe log
   nvse-check     log out mode label         ->  check the NVSE simulation
@@ -250,6 +254,87 @@ def cmd_snapshot_files(nm, folder):
     with open(os.path.join(folder, "0a003000.bin"), "wb") as f:
         f.write(struct.pack("<i", 22136))
     return 0
+
+
+def cmd_deref_vector(nm, out, addr):
+    """A vector that reads the dword at `addr` (hex), to see what a snapshot
+    file put there."""
+    syms = parse_nm(open(nm).read())
+    v = {"id": "deref", "fn": "0x%08x" % syms["fx_deref"], "args": ["ptr:0x%08x" % int(addr, 16)], "ret": "i32"}
+    with open(out, "w") as f:
+        f.write(json.dumps(v) + "\n")
+    return 0
+
+
+def cmd_deref_check(results, value, label, host_idata=None):
+    """`host_idata` (hex VA of nv-call.exe's .idata): the placeholder range
+    in the header must end before it."""
+    rows = read_jsonl(results)
+    header = rows[0]
+    r = {x["id"]: x for x in rows if x.get("type") == "result"}.get("deref")
+    check(header.get("type") == "header" and r is not None, "header and one result")
+    if r is not None:
+        check(r["fault"] is None and r["value"]["u32"] == int(value, 0), f"the snapshot region was read back: {r['fault'] or r['value']}")
+    if host_idata:
+        ph = header.get("placeholder")
+        check(ph is not None, "the header reports the placeholder")
+        if ph:
+            base, size, array = int(ph["base"], 16), ph["size"], int(ph["array_start"], 16)
+            check(base == 0x400000 and array > base, f"placeholder starts at the host's base, its array later: {ph}")
+            check(base + size <= int(host_idata, 16), f"the reserved range ends before the host's .idata ({base + size:#x} vs {host_idata})")
+            check(base + size > array, f"the range reaches past the start of the array: {ph}")
+    return finish(label)
+
+
+def cmd_thread_vectors(nm, ok_out, fault_out):
+    syms = parse_nm(open(nm).read())
+
+    def v(i, sym, args=()):
+        return {"id": i, "fn": "0x%08x" % syms[sym], "args": list(args), "ret": "i32"}
+    ok = [v("add_a", "tx_add", ["i32:1", "i32:2"]), v("spawn", "tx_spawn"),
+          v("add_b", "tx_add", ["i32:3", "i32:4"]), v("spawn_again", "tx_spawn")]
+    fault = [v("add_a", "tx_add", ["i32:1", "i32:2"]), v("spawn_fault", "tx_spawn_fault"),
+             v("add_b", "tx_add", ["i32:3", "i32:4"])]
+    for path, vectors in ((ok_out, ok), (fault_out, fault)):
+        with open(path, "w") as f:
+            for d in vectors:
+                f.write(json.dumps(d) + "\n")
+    return 0
+
+
+# The code of nv-call's host program ends well below this; the thread fixture's
+# image must reach past the function the host registers as the exception filter.
+HOST_CODE_LIMIT = 0x100000
+
+
+def cmd_thread_check(mode, results, label, stderr_path=None):
+    rows = read_jsonl(results)
+    header = rows[0]
+    by_id = {r["id"]: r for r in rows if r.get("type") == "result"}
+
+    def eax_of(i):
+        r = by_id.get(i)
+        return int(r["regs"]["eax"], 16) if r and r["regs"] else None
+    check(header["size_of_image"] > HOST_CODE_LIMIT, f"the image is larger than the host's code ({header['size_of_image']:#x})")
+    check(eax_of("add_a") == 3, f"the first vector ran: {eax_of('add_a')}")
+    if mode == "ok":
+        # The image has a TLS directory with a callback. The loader reads that
+        # directory from the headers in memory on every thread start, so unless
+        # the entry is cleared the callback runs inside the harness (natively
+        # it runs once for the one thread the function starts).
+        check(header["tls_directory_cleared"] is True, f"the header says the TLS directory was cleared: {header.get('tls_directory_cleared')}")
+        check(all(r["fault"] is None for r in by_id.values()), "no vector faulted")
+        check(eax_of("spawn") == 0 and eax_of("spawn_again") == 0, f"the image's TLS callback did not run: {eax_of('spawn')}, {eax_of('spawn_again')}")
+        check(eax_of("add_b") == 7, "the vectors between ran")
+    else:
+        # A fault on a thread the called code created is outside the harness's
+        # reach. The engine's own filter says so and ends the process; the
+        # image's bytes at the host's old filter address are not run.
+        check("spawn_fault" not in by_id and "add_b" not in by_id, f"the process ended inside the faulting vector: {sorted(by_id)}")
+        text = open(stderr_path).read() if stderr_path else ""
+        check("nv-call: unhandled exception 0xC0000005" in text and "outside the harness's reach" in text,
+              f"the engine's own message is on stderr: {text.strip()[:200]}")
+    return finish(label)
 
 
 def cmd_extra_check(results, mode, label):
@@ -779,6 +864,14 @@ def main(argv):
         return cmd_snapshot_files(*args)
     if cmd == "extra-check":
         return cmd_extra_check(*args)
+    if cmd == "deref-vector":
+        return cmd_deref_vector(*args)
+    if cmd == "deref-check":
+        return cmd_deref_check(*args)
+    if cmd == "thread-vectors":
+        return cmd_thread_vectors(*args)
+    if cmd == "thread-check":
+        return cmd_thread_check(*args)
     if cmd == "decode-crosscheck":
         return cmd_decode_crosscheck(*args)
     if cmd == "probe-manifest":

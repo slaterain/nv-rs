@@ -12,8 +12,10 @@
 //! image. After that the host's own code no longer exists, which is why it
 //! does nothing except hand over and why the engine ends the process itself.
 //!
-//! The host is built without the Rust runtime (`no_main`) so nothing in it
-//! installs handlers that point into its own code.
+//! The host is built without the Rust runtime (`no_main`) so the Rust
+//! runtime installs no handlers that point into its own code. The C startup
+//! code still registers a top-level exception filter there, which is why the
+//! engine replaces the filter before it overwrites anything.
 
 #![no_main]
 

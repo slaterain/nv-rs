@@ -855,13 +855,23 @@ def stage_inject(c):
 def stage_names_inside(c):
     print("name import: an address inside a function")
     rows = load_csv(c.path("names_inside.report.csv"))
-    check(len(rows) == 2, "report has one row per CSV row")
-    inside, label = rows
+    check(len(rows) == 3, "report has one row per CSV row")
+    inside, label, notcode = rows
     check(inside["action"] == "conflict" and "address is inside function" in inside["detail"] and
           "at %s, not at its entry" % hx(c.sym("fx_sum")) in inside["detail"] and "kind=label" in inside["detail"],
           "an address inside fx_sum with no kind is a conflict that names the function's entry (%s)" % inside["detail"])
     check(label["action"] == "would-apply" and label["kind"] == "label" and label["applied_name"] == "InsideLabel",
           "the same kind of address with kind=label is accepted as a label inside the function")
+    check(notcode["action"] == "would-apply" and notcode["kind"] == "label",
+          "bytes that do not decode as an instruction are not made a function: with no kind the row becomes a label")
+
+
+def stage_names_badcode_fn(c):
+    print("name import: kind=function at bytes that are no instruction")
+    rows = load_csv(c.path("names_badcode_fn.report.csv"))
+    check(len(rows) == 1 and rows[0]["action"] == "rejected" and
+          "bytes that do not decode as an instruction" in rows[0]["detail"],
+          "the row is rejected with the reason (%s)" % (rows[0]["detail"] if rows else "no row"))
 
 
 def stage_vt(c):
@@ -1206,6 +1216,7 @@ STAGES = {
     "dups": stage_dups,
     "inject": stage_inject,
     "names_inside": stage_names_inside,
+    "names_badcode_fn": stage_names_badcode_fn,
     "vt": stage_vt,
     "label_tags": stage_label_tags,
     "badcode": stage_badcode,

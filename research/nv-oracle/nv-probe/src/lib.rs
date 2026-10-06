@@ -380,17 +380,27 @@ fn install(origin: Origin) {
         }
     }
 
+    // A function hooked with return capture comes back through a stub that
+    // calls into this DLL, possibly long after it was entered. If the DLL could
+    // be unloaded meanwhile, that thread would return into unmapped memory, so
+    // such a probe keeps itself in the process. When that fails, those hooks
+    // are refused: `FreeLibrary` would otherwise unload the probe under them.
+    let mut pinned = false;
+    if hooks.iter().any(|h| h.ret_stub != 0) {
+        pinned = pin_module();
+    }
+    let (kept, refused) = split_for_pin(hooks, pinned, |h| h.ret_stub != 0);
+    hooks = kept;
+    for h in &refused {
+        statuses.push(describe_refusal(
+            &h.spec,
+            "return capture needs the probe to stay loaded, and keeping it loaded failed (no hook with ret= is installed)",
+        ));
+    }
+
     // Publish the table, then patch (with other threads stopped).
     let mut installed_json: Vec<String> = Vec::new();
-    let mut pinned = false;
     if !hooks.is_empty() {
-        // A function hooked with return capture comes back through a stub
-        // that calls into this DLL, possibly long after it was entered. If
-        // the DLL could be unloaded meanwhile, that thread would return into
-        // unmapped memory, so such a probe keeps itself in the process.
-        if hooks.iter().any(|h| h.ret_stub != 0) {
-            pinned = pin_module();
-        }
         let table = runtime::publish(runtime::Table { hooks });
         let frozen = if manifest.suspend_threads {
             memory::Frozen::freeze_others()
@@ -432,6 +442,20 @@ fn install(origin: Origin) {
         .bool("installed", INSTALLED.load(SeqCst))
         .bool("pinned", pinned);
     push(&mut guard, &header.finish());
+}
+
+/// Hooks that may be installed, and hooks that must be refused. Without a pin
+/// (the module could not be kept loaded) a hook that captures the return must
+/// not be installed; the others do not depend on the DLL staying loaded.
+fn split_for_pin<T>(
+    hooks: Vec<T>,
+    pinned: bool,
+    captures_return: impl Fn(&T) -> bool,
+) -> (Vec<T>, Vec<T>) {
+    if pinned {
+        return (hooks, Vec::new());
+    }
+    hooks.into_iter().partition(|h| !captures_return(h))
 }
 
 /// Keep this DLL mapped until the process ends: `FreeLibrary` then does not
@@ -524,4 +548,21 @@ fn uninstall() {
     }
     frozen.thaw();
     INSTALLED.store(false, SeqCst);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unpinned_probe_refuses_return_capture() {
+        // Hooks stand in as their return-stub address (0 for none).
+        let (kept, refused) = split_for_pin(vec![0u32, 5, 0, 7], false, |&h| h != 0);
+        assert_eq!(kept, [0, 0]);
+        assert_eq!(refused, [5, 7]);
+        // With the pin in place nothing is refused.
+        let (kept, refused) = split_for_pin(vec![0u32, 5, 0, 7], true, |&h| h != 0);
+        assert_eq!(kept, [0, 5, 0, 7]);
+        assert!(refused.is_empty());
+    }
 }
