@@ -39,6 +39,8 @@ use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::input::mouse::{AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::input::ButtonState;
 use bevy::prelude::*;
+use bevy::render::camera::CameraOutputMode;
+use bevy::render::render_resource::BlendState;
 use bevy::window::PrimaryWindow;
 use cellview::{Game, TextureData};
 use ui::draw::{DrawItem, Textures};
@@ -172,6 +174,13 @@ impl OpenMenu {
         matches!(self, OpenMenu::Barter(_) | OpenMenu::Recipe(_))
     }
 
+    /// A menu that draws a 3D scene into the HUD's picture, under the
+    /// menus' tiles: the Vigor Tester's machine (`vigor::draw`), the Caravan
+    /// table (`caravan_table`).
+    fn draws_scene(&self) -> bool {
+        matches!(self, OpenMenu::Vigor(_) | OpenMenu::Caravan(_))
+    }
+
     fn closed(&self) -> bool {
         match self {
             OpenMenu::Message(m) => m.closed,
@@ -227,8 +236,54 @@ impl Plugin for GameMenusPlugin {
                     .before(crate::menus::run_menus),
             )
             .add_systems(Update, vigor::draw.after(run_open_menus))
+            .add_systems(
+                Update,
+                compose_hud_over_scene.after(crate::menus::run_menus),
+            )
             .add_systems(Update, hacking::play_sounds.after(run_open_menus))
             .add_systems(Update, companion_wheel::play_voices.after(run_open_menus));
+    }
+}
+
+/// How the HUD's camera writes its picture this frame: over a menu's 3D
+/// scene (drawn into the same picture first, by the scene's own camera at
+/// order −5) it blends its tiles over it; otherwise it writes the picture
+/// as it is.
+fn hud_output(open: &[OpenMenu]) -> CameraOutputMode {
+    if open.iter().any(OpenMenu::draws_scene) {
+        CameraOutputMode::Write {
+            blend_state: Some(BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            clear_color: ClearColorConfig::None,
+        }
+    } else {
+        CameraOutputMode::default()
+    }
+}
+
+fn blends(mode: &CameraOutputMode) -> bool {
+    matches!(
+        mode,
+        CameraOutputMode::Write {
+            blend_state: Some(_),
+            ..
+        }
+    )
+}
+
+/// The one place that sets the HUD camera's output, for every menu that
+/// draws a 3D scene under the menus. (Each menu used to set it itself, and
+/// the Caravan table's "not open, so stop blending" undid the Vigor
+/// Tester's every frame: the HUD's empty picture replaced the machine, so
+/// the tester's menu worked but couldn't be seen.)
+fn compose_hud_over_scene(
+    menus: Res<GameMenus>,
+    mut cameras: Query<&mut Camera, With<crate::hud::HudCamera>>,
+) {
+    let wanted = hud_output(menus.screen.as_deref().map_or(&[], |s| &s.open));
+    for mut camera in &mut cameras {
+        if blends(&camera.output_mode) != blends(&wanted) {
+            camera.output_mode = wanted;
+        }
     }
 }
 

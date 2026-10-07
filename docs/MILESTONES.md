@@ -45,8 +45,14 @@ passed all three acceptance routes after merging. None has been compared
 side by side with the original game. The twelve major systems are open
 as GitHub issues #13–#24. A shared read-only Ghidra server now serves
 agents' queries ([RESEARCH_WORKFLOW.md](RESEARCH_WORKFLOW.md)).
-**Next action:** play the latest build in the play copy and file F12
-reports; then B14 (opening) and B1/B2 (physics), split into sub-PRs.
+Playtest of build 23 (2026-10-07): the Vigor Tester's screen was
+invisible since build 11 (B22, fixed: one system sets the HUD camera's
+blending for every 3D menu; checked live by capturing the window, against
+the build-11 code). New: B23, the hands and weapon around menus.
+**Next action:** after Chazm's PR is merged and tasks reassigned, B14
+(opening), B23, then B1/B2 (physics), split into sub-PRs. The opening's
+Vigor Tester step has no acceptance route yet (the doc route starts at
+stage 110).
 
 Overnight batches, 2026-10-06 (local session; integration branch
 `claude/overnight-integration`, not merged into `main`; each batch also has

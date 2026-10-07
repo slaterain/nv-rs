@@ -258,9 +258,10 @@ mod tests {
         assert!(matches!(camera.clear_color, ClearColorConfig::Custom(c) if c == Color::NONE));
     }
 
-    #[test]
-    fn tester_applies_each_click_to_live_values_and_only_closes_at_budget() {
-        let data = testdata::room("vigor-menu");
+    /// The tester's menu open on a generated room's data (its models and
+    /// pictures stand-in files of the right names), with the game.
+    fn opened_tester(tag: &str) -> (testdata::TempData, cellview::Game, VigorScreen) {
+        let data = testdata::room(tag);
         let model = std::fs::read(data.path().join("meshes/test/floor.nif")).unwrap();
         let texture = std::fs::read(data.path().join("textures/test/floor.dds")).unwrap();
         for path in [
@@ -287,7 +288,7 @@ mod tests {
         let models = Arc::new(VigorScene::load(&game.assets).unwrap());
         let mut menu = VigorMenu::new(0, 40);
         menu.model.page = 1;
-        let mut opened = VigorScreen {
+        let opened = VigorScreen {
             menu,
             models,
             size: UVec2::new(1920, 1080),
@@ -295,6 +296,24 @@ mod tests {
             time: 0.0,
             pointer: None,
         };
+        (data, game, opened)
+    }
+
+    /// With the tester open the HUD's camera blends its picture over the
+    /// machine, decided in one place for every menu with a 3D scene. (The
+    /// Caravan table's own reset once undid it every frame: the tester's
+    /// menu worked but was drawn over by the HUD's empty picture.)
+    #[test]
+    fn the_hud_blends_over_the_tester_and_writes_plainly_without_it() {
+        let (_data, _game, opened) = opened_tester("vigor-hud");
+        let open = vec![super::super::OpenMenu::Vigor(Box::new(opened))];
+        assert!(super::super::blends(&super::super::hud_output(&open)));
+        assert!(!super::super::blends(&super::super::hud_output(&[])));
+    }
+
+    #[test]
+    fn tester_applies_each_click_to_live_values_and_only_closes_at_budget() {
+        let (_data, game, mut opened) = opened_tester("vigor-menu");
         let mut state = GameState::default();
         world::chargen::set_special(&mut state, [5; 7]);
         opened.menu.intents.push(InputIntent::TileClick(4));
@@ -373,7 +392,6 @@ pub fn draw(
         &mut Visibility,
         &MeshMaterial3d<GameLitMaterial>,
     )>,
-    mut hud_cameras: Query<&mut Camera, With<Camera2d>>,
     world_camera: Query<&Projection, With<crate::FlyCamera>>,
 ) {
     let open = menus.screen.as_ref().and_then(|s| {
@@ -383,20 +401,10 @@ pub fn draw(
         })
     });
     // Each camera clears its intermediate picture to transparent. The -5
-    // camera replaces the output; the -4 camera blends cursor/XML over it.
+    // camera replaces the output; the HUD's camera (-4) blends cursor/XML
+    // over it while this menu is open (`super::compose_hud_over_scene`).
     // Bevy 0.16 chooses an implicit output blend from query iteration order
     // when None is used, so the first camera must explicitly replace.
-    if shown.active || open.is_some() {
-        for mut camera in &mut hud_cameras {
-            if camera.order == -4 {
-                camera.clear_color = ClearColorConfig::Custom(Color::NONE);
-                camera.output_mode = CameraOutputMode::Write {
-                    blend_state: open.map(|_| BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    clear_color: ClearColorConfig::None,
-                };
-            }
-        }
-    }
     let Some(open) = open else {
         if shown.active {
             for entity in shown.entities.drain(..) {

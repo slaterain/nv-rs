@@ -216,6 +216,21 @@ aim point follows the pose. docs/NPC_COMBAT.md.
 lines linked from another topic are picked like the topic's own (an
 untraced guess): Ringo offers two extra replies. Trace or gate it.
 
+### Playtest of build 23 (2026-10-07)
+
+**B22. The Vigor Tester's screen is invisible.** The menu opened and
+worked (sounds, stats changing) but wasn't drawn, since build 11. Cause:
+the Caravan table's code reset the HUD camera's blending every frame
+whenever the Caravan wasn't open, undoing the Vigor Tester's. Fixed on
+`claude/menu-scene-hud`: one system (`game_menus::compose_hud_over_scene`)
+decides the HUD camera's output for every menu with a 3D scene.
+
+**B23. Hands and the weapon in menus.** The first-person hands and the
+equipped weapon disappear in menus such as barter, and come back too
+early when the Pip-Boy is put away. Trace when the game hides and shows
+the first-person model around menus and the Pip-Boy's lowering
+animation, and do the same.
+
 ### In progress
 
 - Nothing; every overnight branch is merged.

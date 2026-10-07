@@ -63,7 +63,8 @@ const HUD_LAYER: usize = 23;
 pub struct HudLayer(pub Handle<Image>);
 
 /// The HUD's camera (it writes the HUD's picture each frame; while a menu's
-/// 3D scene is drawn into it first it blends over it: `caravan_table`). It
+/// 3D scene is drawn into it first it blends over it:
+/// `game_menus::compose_hud_over_scene`). It
 /// clears its picture first, except while a scope is up, when the scope's
 /// overlay camera has cleared it (`scope::update_scope`).
 #[derive(Component)]
