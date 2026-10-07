@@ -79,7 +79,11 @@ use bevy::render::render_resource::{
     TextureViewDescriptor, TextureViewDimension, WgpuFeatures,
 };
 use bevy::render::renderer::RenderDevice;
+#[cfg(target_os = "macos")]
+use bevy::render::settings::Backends;
+use bevy::render::settings::{RenderCreation, WgpuSettings};
 use bevy::render::view::screenshot::{save_to_disk, Screenshot, ScreenshotCaptured};
+use bevy::render::RenderPlugin;
 use bevy::window::{CursorGrabMode, WindowResolution};
 use cellview::{space, Blend, Game, GpuFormat, TextureData, ViewerScene};
 use exterior::{ExteriorStart, PendingExterior};
@@ -101,6 +105,21 @@ const START_EV100: f32 = 5.5;
 fn full_brightness_nits() -> f32 {
     1.2 * 2f32.powf(START_EV100)
 }
+
+/// Use Apple's native graphics API for macOS builds. Bevy's default backend
+/// set is cross-platform; macOS builds select Metal explicitly.
+fn renderer_plugin() -> RenderPlugin {
+    let mut settings = WgpuSettings::default();
+    #[cfg(target_os = "macos")]
+    {
+        settings.backends = Some(Backends::METAL);
+    }
+    RenderPlugin {
+        render_creation: RenderCreation::Automatic(settings),
+        ..default()
+    }
+}
+
 const LOOK_SPEED: f32 = 0.003;
 
 /// The camera's near plane, in meters.
@@ -326,7 +345,7 @@ fn main() {
             waited: 0.0,
         })
         .add_plugins({
-            let plugins = DefaultPlugins.set(WindowPlugin {
+            let plugins = DefaultPlugins.set(renderer_plugin()).set(WindowPlugin {
                 primary_window: Some(window),
                 ..default()
             });

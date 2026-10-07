@@ -4,7 +4,7 @@
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE-APACHE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
 A from-scratch reimplementation of **Fallout: New Vegas** in **Rust** with the
@@ -123,6 +123,28 @@ cargo run --release -- "<path to Fallout New Vegas\Data>" GSDocMitchellHouse
 
 The core crates and their tests need no game files. Running the viewer and
 `nvinspect` on real assets needs your `Data` folder.
+
+### Build and run on macOS
+
+The source build and Bevy viewer support native macOS. The viewer selects
+Metal on macOS. Install stable Rust and the Xcode Command Line Tools, then
+build the core crates and viewer as above. On Apple Silicon, Cargo builds a
+native arm64 viewer binary by default. Pass the absolute path to the `Data`
+folder from your own **PC** game installation:
+
+```sh
+cd viewer
+cargo run --release -- "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
+```
+
+The project does not include game files or provide a macOS game installer. A
+Windows PC install's `Data` folder can be read directly from a disk or copied
+to the Mac. Native config discovery checks `~/Documents/My Games/FalloutNV`
+and the install's `Fallout_default.ini`. If your Windows game runs in a
+compatibility-layer prefix and you want its mod list or settings, pass the
+prefix's `plugins.txt` with `--plugins` and `Fallout.ini` with `--ini`.
+Windows release ZIPs and the research tools that inspect `FalloutNV.exe`
+remain Windows-specific.
 
 ---
 
