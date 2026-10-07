@@ -62,9 +62,8 @@ nv-rs/
 | **Test content** | `testdata` | Builds synthetic plugins, archives and meshes for tests, so tests never need game files. |
 | **Engine** | `viewer` (binary `nv-viewer`) | The Bevy app: rendering, audio and input on top of the game crates. |
 
-[ADR-0004](docs/adr/0004-mudcrab-style-layout.md) plans to merge these groups
-into five crates (`formats`, `game`, `tools`, `test-content`, `engine`) and to
-regroup the docs.
+This layout stays: a proposal to merge the groups into five crates
+([ADR-0004](docs/adr/0004-mudcrab-style-layout.md)) was rejected.
 
 ---
 
@@ -77,9 +76,9 @@ against the original game. Status and evidence are in
 - [ ] **M1: Opening and persistent world** (active): the opening movie and
   wakeup, Doc Mitchell's character creation, leaving for Goodsprings, and
   saving and reloading with all state intact.
-- [ ] **M2: Core gameplay loop:** Sunny's tutorial and a Goodsprings quest
-  branch: movement, weapons, damage, AI, dialogue, loot, trade, progression
-  and V.A.T.S.
+- [ ] **M2: Core gameplay loop** (active alongside M1): Sunny's tutorial
+  and a Goodsprings quest branch: movement, weapons, damage, AI, dialogue,
+  loot, trade, progression and V.A.T.S.
 - [ ] **M3: Base-game systems and campaign:** coverage of quests, creatures,
   weapons, effects, factions, companions, travel and menus, up to campaign
   completion.
@@ -90,11 +89,22 @@ against the original game. Status and evidence are in
 - [ ] **M6: VR:** shared simulation with independent aim and views, tested on
   a headset.
 
-The opening has been played live from Doc's vigor tester through the SPECIAL
-menu. That segment is not the whole opening, and nothing here is a complete
-playthrough yet. Native NVSE plugin DLLs are not supported, original-game
-saves are not interchangeable with nv-rs saves, and VR and performance targets
-have not been validated.
+What plays today (October 2026): Doc Mitchell's house and his walk to the
+door, Goodsprings with its people going about their routines, and two
+Goodsprings quests driven by their own scripts: Back in the Saddle (Sunny's
+tutorial) and Ghost Town Gunfight. Along the way: NPC combat, animation and
+navigation, dialogue, barter, the Pip-Boy, radio, physics and ragdolls,
+terminals and hacking; crafting, Caravan and parts of Dead Money are in but
+mostly checked by tests so far. These
+three routes are replayed automatically on every change
+(`scripts/acceptance.ps1`).
+
+What it isn't yet: a complete playthrough. Parts of the routes are still
+driven by console lines, the face editor isn't built, and nothing has been
+compared side by side with the original game across a whole route. Native
+NVSE plugin DLLs are not supported, original-game saves can't be loaded,
+and VR and performance targets have not been validated. The open work is
+in [docs/TASKS.md](docs/TASKS.md).
 
 ---
 
@@ -122,7 +132,15 @@ cargo run --release -- "<path to Fallout New Vegas\Data>" GSDocMitchellHouse
 ```
 
 The core crates and their tests need no game files. Running the viewer and
-`nvinspect` on real assets needs your `Data` folder.
+`nvinspect` on real assets needs your `Data` folder. To replay the
+acceptance routes (Windows, PowerShell):
+
+```powershell
+powershell -File scripts\acceptance.ps1 -Data "<path to Fallout New Vegas\Data>" -Build
+```
+
+Windows is the tested platform; a macOS / Metal port is being worked on in
+a fork.
 
 ---
 
@@ -130,6 +148,8 @@ The core crates and their tests need no game files. Running the viewer and
 
 | Read this | For |
 | --- | --- |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute: claiming tasks, pull requests, forks |
+| [docs/TASKS.md](docs/TASKS.md) | Open tasks: major systems (claim on GitHub) and the maintainer's list |
 | [docs/MILESTONES.md](docs/MILESTONES.md) | Active work, blockers, evidence and the next action |
 | [docs/METHODOLOGY.md](docs/METHODOLOGY.md) | How the game's program is read and reimplemented, with sources |
 | [docs/adr/](docs/adr/README.md) | Decisions: method, symbols, decompiled code, layout, tools |
@@ -137,6 +157,8 @@ The core crates and their tests need no game files. Running the viewer and
 | [research/ghidra](research/ghidra/README.md), [research/nv-oracle](research/nv-oracle/README.md) | The research tools and how to run them |
 | [docs/TECHNICAL_REFERENCE.md](docs/TECHNICAL_REFERENCE.md) | Detailed feature descriptions |
 | [docs/OPENING.md](docs/OPENING.md), [docs/OPENING_LOOK_IK.md](docs/OPENING_LOOK_IK.md), [docs/FACE_CREATION.md](docs/FACE_CREATION.md), [docs/PERSISTENCE.md](docs/PERSISTENCE.md), [docs/VIGOR.md](docs/VIGOR.md) | M1 topic findings |
+| [docs/GOODSPRINGS_ROUTE.md](docs/GOODSPRINGS_ROUTE.md), [docs/PACKAGES.md](docs/PACKAGES.md), [docs/PATHING.md](docs/PATHING.md), [docs/NPC_COMBAT.md](docs/NPC_COMBAT.md), [docs/ANIMATION.md](docs/ANIMATION.md), [docs/DIALOGUE.md](docs/DIALOGUE.md), [docs/PHYSICS.md](docs/PHYSICS.md), [docs/WEAPON_EFFECTS.md](docs/WEAPON_EFFECTS.md), [docs/PIPBOY.md](docs/PIPBOY.md) | M2 topic findings (each says what's traced, tested and missing) |
+| [docs/CONTRIB_CHAZM.md](docs/CONTRIB_CHAZM.md), [docs/CONTRIB_PLAYCON.md](docs/CONTRIB_PLAYCON.md), [docs/DEAD_MONEY.md](docs/DEAD_MONEY.md) | Contributors' merged work |
 | [docs/VR.md](docs/VR.md) | VR boundaries and proposals |
 | [docs/PLAYTESTING.md](docs/PLAYTESTING.md), [docs/MAINTAINING.md](docs/MAINTAINING.md) | Testing builds and maintaining releases |
 
@@ -144,10 +166,25 @@ The core crates and their tests need no game files. Running the viewer and
 
 ## Contributing
 
-nv-rs is a personal project maintained by **slaterain**. Contributions are
-welcome through forks and pull requests when they fit the active milestone.
-Read [CONTRIBUTING.md](CONTRIBUTING.md) and [docs/GOVERNANCE.md](docs/GOVERNANCE.md)
-first.
+nv-rs is maintained by **slaterain** and welcomes contributors (and their
+AI agents). The way in:
+
+1. Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md), and
+   give both to your agent.
+2. Claim a task: the major systems in [docs/TASKS.md](docs/TASKS.md) are
+   GitHub issues titled `[task] …`; comment `Claiming this` before you
+   start.
+3. Work in a fork on a topic branch from the latest `main`, and open a
+   small pull request against `main` that passes the checks and the
+   acceptance routes.
+
+**Already have work in a fork?** `main` moved forward a long way on
+2026-10-07. Sync your fork first, then follow
+["Already working in a fork?"](CONTRIBUTING.md#already-working-in-a-fork-start-here)
+to get your work claimed, rebased and into a pull request.
+
+Final decisions rest with the maintainer
+([docs/GOVERNANCE.md](docs/GOVERNANCE.md)).
 
 ## Legal and license
 

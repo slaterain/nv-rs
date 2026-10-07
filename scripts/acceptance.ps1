@@ -2,7 +2,7 @@
 .SYNOPSIS
 Replays the shared acceptance routes in the release viewer and reports
 pass/fail for each. Every pull request that touches the game must pass
-them (docs/CONTRIBUTING.md).
+them (CONTRIBUTING.md).
 
 .DESCRIPTION
 Routes (commands and success lines documented in docs/GOODSPRINGS_ROUTE.md

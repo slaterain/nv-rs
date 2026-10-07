@@ -1,7 +1,7 @@
 # Handoff: overnight session, 2026-10-06 → 07
 
 For the next lead session (Claude). Read [AGENTS.md](../AGENTS.md),
-[MILESTONES.md](MILESTONES.md), [CONTRIBUTING.md](CONTRIBUTING.md) and
+[MILESTONES.md](MILESTONES.md), [CONTRIBUTING.md](../CONTRIBUTING.md) and
 [TASKS.md](TASKS.md) first. Your job tonight: fix the playtest bugs and do the
 optimizations on the maintainer's list in TASKS.md, using small bounded
 agents; push and publish as each fix lands, and keep the integration
@@ -11,8 +11,9 @@ branch green.
 
 Updated 2026-10-07 morning (overnight session 2026-10-06 → 07).
 
-- Integration branch: `claude/overnight-integration` (pushed). `main` is
-  untouched; merging integration into `main` is the user's decision.
+- `main` has everything (merged from `claude/overnight-integration` on
+  2026-10-07, PR #26). Work from `main` now; it only changes through pull
+  requests (CI checks and the maintainer's review).
 - Published: play builds 12 to 23 in `Desktop\nv-rs-play` (23 has everything).
   Every merge was checked with the full root and viewer checks and
   `scripts/acceptance.ps1` before publishing.
@@ -27,9 +28,9 @@ Updated 2026-10-07 morning (overnight session 2026-10-06 → 07).
 - Every overnight branch is merged; nothing is running. Worktrees stay in
   `%USERPROFILE%\nv-re\work\wt-b<n>-*` (their build folders were cleared).
 - GitHub: issues #13–#24 are the twelve `[task] M<n>` major systems
-  (links point at this branch until it is merged into `main`). PRs #11 and
-  #12 are merged into integration only; they stay open on GitHub for the
-  maintainer.
+  PRs #11 and #12 were closed by PR #26. Contributors' forks: see
+  CONTRIBUTING.md, "Already working in a fork?"; what the forks held on
+  2026-10-07 is in TASKS.md.
 - Ghidra: one shared read-only server replaces per-agent `ghidra.ps1` runs
   for queries (docs/RESEARCH_WORKFLOW.md, "Ghidra MCP trial"). Start it with
   the local `start-nvrs.ps1` in the tool's folder under

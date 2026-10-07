@@ -34,7 +34,7 @@ reading do not establish them.
 ## Active work: M1
 
 Next session: start with [HANDOFF.md](HANDOFF.md). Open tasks:
-[TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](CONTRIBUTING.md).
+[TASKS.md](TASKS.md); contributor rules: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 Overnight 2026-10-06 → 07 (integration branch, play builds 12 onward):
 radio unification and the 2 key, death into ragdoll, Chazm's PRs #11 and

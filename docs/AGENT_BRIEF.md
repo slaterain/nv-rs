@@ -15,7 +15,7 @@ names) or recorded from the original game. Nothing is guessed.
 - Repository: `slaterain/nv-rs`. Branch from `claude/overnight-integration`
   (not `main`, until the maintainer merges it). Open pull requests against
   `claude/overnight-integration`.
-- Read, in order: `AGENTS.md`, `docs/CONTRIBUTING.md`, `docs/TASKS.md`,
+- Read, in order: `AGENTS.md`, `CONTRIBUTING.md`, `docs/TASKS.md`,
   then the docs for your task's area.
 - You need your own legal copy of the game (Data folder) to run the
   viewer and the acceptance routes. Never commit anything from it.
@@ -41,7 +41,7 @@ titled `[task] …`) are open. Splittable ones suit several agents:
 
 **Not open:** the maintainer's list in `docs/TASKS.md` (physics, dialogue,
 animation, opening, combat effects, the bugs from playtests), and the
-areas owned in `docs/CONTRIBUTING.md` (Chazm: terminals, item scripts,
+areas owned in `CONTRIBUTING.md` (Chazm: terminals, item scripts,
 repair and weapon mods, companions, Caravan, casinos, performance; the
 Dead Money contributor: Dead Money, crafting). If your task needs a
 change there, keep it minimal and say so in the pull request.

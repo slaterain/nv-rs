@@ -2,7 +2,7 @@
 
 Two lists. **Major systems** are open to contributors: each is a GitHub
 issue on `slaterain/nv-rs` titled `[task] <name>`, and you claim it on the
-issue before starting (see [CONTRIBUTING.md](CONTRIBUTING.md), "Claiming
+issue before starting (see [CONTRIBUTING.md](../CONTRIBUTING.md), "Claiming
 a task"). The **maintainer's list** (playtest bugs and polish in the
 systems the maintainer owns) is not open for claiming; report new bugs as
 issues instead.
@@ -220,7 +220,7 @@ untraced guess): Ringo offers two extra replies. Trace or gate it.
 
 - Nothing; every overnight branch is merged.
 
-Landed on the integration branch 2026-10-07: death into ragdoll, one
+Landed (in `main` since 2026-10-07): death into ragdoll, one
 radio state and the 2 key, Chazm's PRs #11 and #12 (docs/CONTRIB_CHAZM.md),
 B3, B4, B5, B6, B10, B11, B12, B13, B16.
 
@@ -229,3 +229,21 @@ stand-in, `ai::fallen_transform`, from the original baseline) instead of
 playing `Death`; ragdolls don't come to rest (B1); receivers (NPC radios)
 play without distance falloff; thrown weapons play `SNAM`, which the game
 doesn't.
+
+### Work in forks (checked 2026-10-07)
+
+Most forks only hold copies of the maintainer's `claude/*` branches,
+which are all in `main` now. Work found that isn't in `main`:
+
+- `abusager13`: `codex/macos-metal-support`, a native macOS / Metal port
+  (2 commits). Welcome as a pull request against `main` once rebased;
+  claim it on GitHub first.
+- `Playcon`: `rebase/*` (INFC links, line of sight, radio functions,
+  `--use`). Already in `main`: the first and last unchanged, the other
+  two through the Dead Money merge (radio since unified with the Pip-Boy's).
+  Nothing left to merge; check against `main` before reopening.
+- `suzeclaw-coder`: one commit on `main` (view bob and recoil springs,
+  landing dip, heartbeat vignette, flanking "anti-conga" steering, a
+  procedural audio synthesizer for tests). These aren't traced from the
+  game, so they can't be merged as they are; anything traced from them is
+  welcome as its own pull request.

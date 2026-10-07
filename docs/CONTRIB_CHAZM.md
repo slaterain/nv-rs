@@ -5,7 +5,7 @@ Merged 2026-10-06 on `claude/contrib-chazm` (from
 `pr/11` (tip `f9bfd0d`, based on the old main `33dee45`; 46 commits by
 `chazmm`), so the history and authorship stay. Chazm owns terminals, item
 scripts, Repair and weapon mods, companions, Caravan, casinos and
-performance ([CONTRIBUTING.md](CONTRIBUTING.md)). The pull request brought
+performance ([CONTRIBUTING.md](../CONTRIBUTING.md)). The pull request brought
 no game files, executable bytes, recordings or oracle dumps (the hygiene
 test's only finding in the worktree is the worktree's own `.git` file).
 
