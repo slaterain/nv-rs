@@ -36,6 +36,7 @@ const NAM6: FourCC = FourCC::new(b"NAM6");
 const HCLR: FourCC = FourCC::new(b"HCLR");
 const FGGS: FourCC = FourCC::new(b"FGGS");
 const FGGA: FourCC = FourCC::new(b"FGGA");
+const FGTS: FourCC = FourCC::new(b"FGTS");
 const NIFZ: FourCC = FourCC::new(b"NIFZ");
 const BMDT: FourCC = FourCC::new(b"BMDT");
 const MOD3: FourCC = FourCC::new(b"MOD3");
@@ -196,6 +197,82 @@ pub fn body_tint_path(order: &LoadOrder, npc: FormId, female: bool) -> Option<St
         npc.0 & 0x00FF_FFFF,
         if female { "female" } else { "male" }
     ))
+}
+
+/// A body tint the game makes when it has no file for it, as a texture
+/// reference: see [`MadeBodyTint`].
+pub const MADE_BODY_TINT: &str = "egttint:";
+
+/// An NPC's body tint as the game finds or makes it (`006149b0`): its
+/// file ([`body_tint_path`]) when the game has one; otherwise ("Failed to
+/// find body mod texture … Creating from scratch", always so for the
+/// player, who has none) made from the race's body texture morphs for the
+/// sex (the race's body part 3, `UpperBodyHumanMale.egt`, `006131a0`) with
+/// the face's texture values: the race's `FGTS` for the sex plus the NPC's
+/// own (`00652af0` adds the two faces' values, race first), made into a
+/// picture by `nif::Egt::tint`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MadeBodyTint {
+    pub file: String,
+    pub egt: String,
+    pub values: Vec<f32>,
+}
+
+impl MadeBodyTint {
+    /// As a texture reference: `egttint:<file>;<egt>;<values>`.
+    pub fn reference(&self) -> String {
+        let values: Vec<String> = self.values.iter().map(|v| v.to_string()).collect();
+        format!(
+            "{MADE_BODY_TINT}{};{};{}",
+            self.file,
+            self.egt,
+            values.join(",")
+        )
+    }
+
+    /// Back from [`MadeBodyTint::reference`].
+    pub fn parse(reference: &str) -> Option<MadeBodyTint> {
+        let mut parts = reference.strip_prefix(MADE_BODY_TINT)?.splitn(3, ';');
+        let file = parts.next()?.to_string();
+        let egt = parts.next()?.to_string();
+        let values = parts
+            .next()?
+            .split(',')
+            .filter(|v| !v.is_empty())
+            .map(|v| v.parse().ok())
+            .collect::<Option<Vec<f32>>>()?;
+        Some(MadeBodyTint { file, egt, values })
+    }
+}
+
+/// An NPC's body tint reference (see [`MadeBodyTint`]): `record` the
+/// record its face comes from, `npc` its form.
+fn body_tint(
+    order: &LoadOrder,
+    npc: FormId,
+    record: &Record,
+    race: Option<&Race>,
+    female: bool,
+) -> Option<String> {
+    let file = body_tint_path(order, npc, female)?;
+    let made = race.and_then(|race| {
+        let egt = race.body(female, 3).0?.clone();
+        let own = record
+            .get(FGTS)
+            .map(|s| floats(&s.data))
+            .unwrap_or_default();
+        let theirs = &race.texture[usize::from(female)];
+        let n = own.len().max(theirs.len());
+        let values = (0..n)
+            .map(|i| theirs.get(i).copied().unwrap_or(0.0) + own.get(i).copied().unwrap_or(0.0))
+            .collect();
+        Some(MadeBodyTint {
+            file: file.clone(),
+            egt,
+            values,
+        })
+    });
+    Some(made.map_or(file, |m| m.reference()))
 }
 
 /// An NPC's FaceGen face: the values of the shape controls (`FGGS`, 50
@@ -473,6 +550,10 @@ pub fn first_person_look(
     let player = order.get(crate::dialogue::PLAYER_BASE)?;
     let record = player.record().ok()?;
     let race = form(&player, &record, RNAM).and_then(|id| Race::load(order, id));
+    // The player's body tint on the arms and hands, as on any NPC's bare
+    // skin below the head (made by the game for the player: see
+    // [`MadeBodyTint`]).
+    let tint = body_tint(order, player.form_id, &record, race.as_ref(), female);
     let mut covered = 0u32;
     let mut parts = Vec::new();
     let part = |model: String, skin_texture: Option<String>, bone: Option<String>| ActorPart {
@@ -482,7 +563,7 @@ pub fn first_person_look(
         hide_mesh: None,
         hair_tint: None,
         facegen: false,
-        face_tint: None,
+        face_tint: tint.clone(),
         bone,
         parent_bone: None,
     };
@@ -886,7 +967,7 @@ fn npc_look_dressed(
     let mut covered = 0u32;
     let mut parts = Vec::new();
     // The NPC's body tint, for the skin pieces of everything below the head.
-    let body_tint = body_tint_path(order, trr.form_id, female);
+    let body_tint = body_tint(order, trr.form_id, traits_record, race.as_ref(), female);
     let carried: Vec<FormId> = match &dressing {
         Some(d) => d.worn.to_vec(),
         None => pick_worn(order, &inventory_entries(order, irr, inventory_record)),
@@ -1329,6 +1410,9 @@ struct Race {
     /// [male, female]: the race's own FaceGen shape (`FGGS`, `FGGA` after
     /// the `MNAM` / `FNAM` that follow its hair and eye lists).
     face: [Option<Face>; 2],
+    /// [male, female]: the race's own FaceGen texture values (FGTS,
+    /// there too).
+    texture: [Vec<f32>; 2],
 }
 
 impl Race {
@@ -1339,6 +1423,7 @@ impl Race {
             head: [Vec::new(), Vec::new()],
             body: [Vec::new(), Vec::new()],
             face: [None, None],
+            texture: [Vec::new(), Vec::new()],
         };
         // NAM0 (head) or NAM1 (body), then MNAM (male) or FNAM (female),
         // then INDX with its MODL and ICON. After the hair and eye lists,
@@ -1348,6 +1433,7 @@ impl Race {
         let mut after_lists = false;
         for sub in &record.subrecords {
             match sub.kind {
+                k if after_lists && k == FGTS => race.texture[sex] = floats(&sub.data),
                 k if after_lists && (k == FGGS || k == FGGA) => {
                     let values = floats(&sub.data);
                     let face = race.face[sex].get_or_insert_with(|| Face {
@@ -1416,6 +1502,21 @@ impl Race {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_made_body_tint_goes_through_its_reference() {
+        let made = MadeBodyTint {
+            file: "textures\\characters\\bodymods\\falloutnv.esm\\00000007modbodymale.dds".into(),
+            egt: "Characters\\_Male\\UpperBodyHumanMale.egt".into(),
+            values: vec![0.5, -1.25, 0.0],
+        };
+        let reference = made.reference();
+        assert!(reference.starts_with(MADE_BODY_TINT));
+        // It sits in a `facetint:<tint>|<base>` reference: no `|`.
+        assert!(!reference.contains('|'));
+        assert_eq!(MadeBodyTint::parse(&reference), Some(made));
+        assert_eq!(MadeBodyTint::parse("textures\\a.dds"), None);
+    }
 
     #[test]
     fn unskinned_biped_pieces_hang_from_their_slots_bone() {

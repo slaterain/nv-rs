@@ -733,7 +733,13 @@ fn retexture(mesh: &mut nif::Mesh, part: &ActorPart) {
         *first = format!("{HAIR_LAYER}{layer}|{first}");
     }
     if let (true, Some(tint), Some(first)) = (skin, &part.face_tint, mesh.textures.first_mut()) {
-        *first = format!("{FACE_TINT}{}|{first}", assets::texture_path(tint));
+        // A tint the game makes (`world::MadeBodyTint`) goes as it is.
+        let tint = if tint.starts_with(world::actor::MADE_BODY_TINT) {
+            tint.clone()
+        } else {
+            assets::texture_path(tint)
+        };
+        *first = format!("{FACE_TINT}{tint}|{first}");
     }
 }
 

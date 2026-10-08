@@ -54,6 +54,7 @@ and held with its traced modifier and blur (`0086f450`, `00718ab0`,
 `00ba4270`); live: the Vigor Tester's room blurred, the Pip-Boy and a
 message box not ([MENU_FADES.md](MENU_FADES.md)).
 B33 (branch `claude/b33-greetings-chatter`): greetings' four remaining conditions and the held look (`008eeec0`, `008bc3d0`); live 9 → 5 greetings on a 240 s Goodsprings walk ([DIALOGUE.md](DIALOGUE.md)).
+B23/B27 (branch `claude/b23-b27-first-person`): menus no longer hide the hands and weapon, only the dialogue menu (also under its barter menu) and the Pip-Boy arm while up or going down do (`00870bd0`, `011d9514`); the player's body tint made from the race's `.egt` and `FGTS` as the game does (`006149b0`, `0065b410`); live: pistol behind a message box, Pip-Boy put-away, tinted hand ([PLAYER_ACTIONS.md](PLAYER_ACTIONS.md), [FACEGEN_CONTROLS.md](FACEGEN_CONTROLS.md)).
 **Next action:** after Chazm's PR is merged and tasks reassigned, B14
 (opening), B23, then B1/B2 (physics), split into sub-PRs. The opening's
 Vigor Tester step has no acceptance route yet (the doc route starts at

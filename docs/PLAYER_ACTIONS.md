@@ -156,6 +156,14 @@ the aim term only feeds the sway). The sway's rotation also lands in a
 global (`011e09ec`, written last in `00962de0`) that shots may read; not
 followed (shots leave along the view).
 
+## The first-person model around menus (`viewer::viewmodel`, B23)
+
+| Address | What | Status |
+| --- | --- | --- |
+| `00870bd0` @ `00870c7b`..`00870ca5` | The frame's first-person pass (`00874c10`, `00875110`) is drawn unless the first-person node is culled, the Pip-Boy is drawn on its own (`InterfaceManager+0x1dc`, its node at +8; only with `bUsePipboyMode` off) or `011d9514` is set. Menu mode itself doesn't hide it: behind other menus (containers, messages) the hands and weapon stay in the world | implemented |
+| `007617a0` / `00762160` / `00761960` | `011d9514`: set by the dialogue menu's constructor, cleared when it closes and by its destructor; so no first-person pass while the dialogue menu is in being, also under the barter and repair menus it opens (`00763ff0` keeps it, hidden) | implemented; a line said with `SayTo` (no menu) keeps the view |
+| `007f8ba0` | The Pip-Boy is the one first-person model in the game (`pipboyscreen` found under node `00950bb0(1)`), playing `Pipboy.kf` over the hold pose; here its arm is a model of its own holding the hands and weapon, so the ordinary view stays hidden while that arm is up, being raised or being put away (to `Pipboy.kf`'s end, 0.73 s), and comes back when it's down | implemented |
+
 ## Scopes (`world::iron_sights::scoped`, `viewer::scope`)
 
 | Address | What | Status |

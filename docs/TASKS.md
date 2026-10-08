@@ -257,6 +257,7 @@ equipped weapon disappear in menus such as barter, and come back too
 early when the Pip-Boy is put away. Trace when the game hides and shows
 the first-person model around menus and the Pip-Boy's lowering
 animation, and do the same.
+**Done** on `claude/b23-b27-first-person`: the game skips its first-person pass only for the dialogue menu (`011d9514`, checked in `00870bd0`), which stays under the barter menu it opens, so the hands stay hidden in barter-from-dialogue as in the game but show behind other menus; the Pip-Boy arm (the game's one first-person model) now holds the view until `Pipboy.kf` ends. Not done: ending a conversation with Tab (the dialogue menu doesn't take it).
 
 ### Playtest of builds 23–24 (2026-10-07)
 
@@ -280,6 +281,7 @@ why they pass at that point.
 **B27. The first-person hand looks pale and untextured** (reports 007,
 008). Check its texture and skin tint (the player's FaceGen body tint)
 and how the first-person model's materials are built.
+**Done** on `claude/b23-b27-first-person`: the hands had no body tint; the game makes the player's (and any NPC's without a `bodymods` file) from the race's `UpperBodyHumanMale.egt` and race + NPC `FGTS` (`006149b0`, `00652af0`, `0065b410`, `0064ceb0`): `nif::Egt`, `world::actor::MadeBodyTint`.
 
 **B28. The Prospector Saloon's window is see-through** (report 007). The
 game draws it as glass with its window environment map; trace the

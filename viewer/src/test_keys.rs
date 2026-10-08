@@ -54,6 +54,8 @@ pub fn parse(at: f32, v: &str) -> Result<TimedPress, String> {
         "mouse-right" => Press::Mouse(MouseButton::Right),
         // The pause menu's key.
         "escape" => Press::Key(KeyCode::Escape),
+        // The Pip-Boy's key (let go before the light's hold time).
+        "tab" => Press::Key(KeyCode::Tab),
         n if n.starts_with("mouse-x=") || n.starts_with("mouse-y=") || n.starts_with("wheel=") => {
             let (kind, amount) = n.split_once('=').unwrap_or_default();
             let amount = amount

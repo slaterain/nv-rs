@@ -15,6 +15,33 @@ and asymmetric (an NPC's `FGGS`, `FGGA`), texture symmetric (`FGTS`) and
 texture asymmetric (no record holds it). The face object keeps them at
 `+kind × 0x40 + symmetry × 0x20` (`00652230`).
 
+## Body tints made from the texture coordinates (B27)
+
+An NPC's bare skin below the head (arms, hands, gloves' fingers) takes a
+body tint as `FaceGenMap0` (`world::actor::MadeBodyTint`). `006149b0`
+looks for `textures\characters\bodymods\<plugin>\<id>ModBody<Male|Female>.dds`
+(names from `006147e0`, the folder from `006148f0`); when that isn't there
+("Failed to find body mod texture '%s' for '%s' (%08X). Creating from
+scratch.", not logged for the player, who never has one) it makes it:
+
+- the race's body texture morphs for the sex (`006131a0`: race
+  `+0x3c8 + sex × 0x18`, the race's body part 3, `UpperBodyHumanMale.egt`,
+  32 × 32, 50 symmetric morphs; layout in `crates/nif/src/egt.rs`);
+- the face's coordinates: the race's for the sex plus the NPC's own
+  (`00652af0(race face, NPC face, out, 0, 0)` adds all four vectors), of
+  which the texture symmetric ones (`FGTS`) are used;
+- `0065b410`: per morph, `_ftol(scale × 256) × _ftol(value × 256)` (the
+  256 is the double at `010231d8`) times each signed byte, summed as
+  integers, × 1/65536; `0064ceb0(−255, 255, 0.5)`: each sum rounded down
+  (`00404040`), kept within ±255, `(v + 255) × 0.5` stored truncated
+  (so no change is 127).
+
+Implemented: `nif::Egt` (reader and `tint`, tested on synthetic files),
+`world::actor::MadeBodyTint` (the file, else the morphs and values), made
+in `cellview`'s texture cache and laid on as the files are
+(`TextureData::plus_face_tint`). The player's first-person arms and hands
+and every NPC without a tint file get it.
+
 ## Loading
 
 The FaceGen manager (`00651b30`, created by `00650ea0`) loads
