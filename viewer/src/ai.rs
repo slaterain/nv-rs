@@ -4143,7 +4143,7 @@ pub(crate) fn move_body(
     walker: &mut Walker,
     collider: &mut physics::Collider,
     others: &[(FormId, physics::Person)],
-    movers: &mut Vec<physics::rigid::Mover>,
+    movers: &mut Vec<physics::proxy::SurfaceContact>,
     rules: &Ground,
     dt: f32,
 ) {
@@ -4151,19 +4151,6 @@ pub(crate) fn move_body(
     if far_move(walker, wanted, rules) {
         walker.against_someone = false;
         return;
-    }
-    // Walking into moving clutter pushes it (the character proxy's push
-    // on the bodies it touches, at the velocity the controller is given;
-    // `clutter` and `physics::rigid` carry it out). The controller itself
-    // is held by them meanwhile, as by anything solid (`00c711d0`).
-    if let (Some(m), true) = (wanted, walker.body.is_some() && dt > 0.0) {
-        let shape = body_shape(walker);
-        movers.push(physics::rigid::Mover {
-            feet: walker.position,
-            radius: shape.radius,
-            height: shape.height,
-            velocity: [m[0] / dt, m[1] / dt, 0.0],
-        });
     }
     let p = walker.position;
     if let Some(body) = &walker.body {
@@ -4215,6 +4202,8 @@ pub(crate) fn move_body(
         dt,
     );
     body.fell = None;
+    // What the proxy touched, for the clutter to push (`applySurfaceInteractions`).
+    movers.extend(body.surface.iter().copied());
     // Outdoors, feet left more than 30 under the land are put on it
     // (`0092f260` at `0093012a`: the land's height under them, `004572e0`,
     // and `SetPosition`, which moves the controller too, `00931620`).
@@ -4688,9 +4677,35 @@ mod tests {
     }
 
     #[test]
-    fn walking_people_are_handed_to_the_clutter_as_pushers() {
+    fn walking_people_hand_the_bodies_they_touch_to_the_clutter() {
         let mut collider = floor_and_wall();
         let mut w = Walker::at(FormId(1), [0.0, -300.0, 0.0], 0.0, 1.0, false);
+        // A clutter box, its face 25 in front of the walker.
+        let (h, y) = (15.0, -260.0);
+        let corners: Vec<[f32; 3]> = (0..8)
+            .map(|k| {
+                [
+                    if k & 1 == 0 { -h } else { h },
+                    y + if k & 2 == 0 { -h } else { h },
+                    if k & 4 == 0 { 0.0 } else { 2.0 * h },
+                ]
+            })
+            .collect();
+        let faces: [[u32; 3]; 12] = [
+            [0, 2, 1],
+            [1, 2, 3],
+            [4, 5, 6],
+            [5, 7, 6],
+            [0, 1, 4],
+            [1, 5, 4],
+            [2, 6, 3],
+            [3, 6, 7],
+            [0, 4, 2],
+            [2, 4, 6],
+            [1, 3, 5],
+            [3, 7, 5],
+        ];
+        collider.add_layered(&corners, &faces, (0.0, 77, physics::NO_MATERIAL), None, 4);
         w.set_path(
             vec![[0.0, -300.0, 0.0], [0.0, 0.0, 0.0]],
             0.0,
@@ -4700,8 +4715,7 @@ mod tests {
         let dt = 1.0 / 60.0;
         let mut movers = Vec::new();
         // The first frame makes the controller; then they walk and push.
-        for _ in 0..3 {
-            movers.clear();
+        for _ in 0..12 {
             step(&mut w, 85.0, dt);
             move_body(
                 &mut w,
@@ -4715,10 +4729,14 @@ mod tests {
                 dt,
             );
         }
-        assert_eq!(movers.len(), 1);
-        // At the walk's speed, along the path (+y).
-        let v = movers[0].velocity;
-        assert!((v[1] - 85.0).abs() < 1.0 && v[0].abs() < 1.0, "{v:?}");
+        // The clutter box ahead (reference 77, layer 4) is touched; its
+        // face is toward the walker (-y), who closes on it at the walk's
+        // speed.
+        assert!(!movers.is_empty());
+        let t = movers.last().unwrap();
+        assert_eq!(t.reference, 77);
+        assert!(t.normal[1] < -0.5, "{:?}", t.normal);
+        assert!(t.velocity[1] > 0.0, "{:?}", t.velocity);
     }
 
     #[test]

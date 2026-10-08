@@ -52,6 +52,13 @@ pub struct Player {
     /// movement key ends (`0093e860`).
     always_run: Option<bool>,
     auto_move: bool,
+    /// The game keeps the player's running speed once when it loads
+    /// (`0055d760`, `physics::controller::set_reference_speed`); set at the
+    /// first walking update here.
+    reference_speed_set: bool,
+    /// Counts the character proxy updates (for `clutter` to apply each
+    /// update's touches once).
+    pub surface_serial: u32,
 }
 
 impl Player {
@@ -68,6 +75,8 @@ impl Player {
             sneak_blend: 0.0,
             always_run: None,
             auto_move: false,
+            reference_speed_set: false,
+            surface_serial: 0,
         }
     }
 
@@ -376,6 +385,14 @@ pub fn walk(
         (keys.just_pressed(KeyCode::Space) && !locked && locomotion::may_jump(over_encumbered))
             .then(|| locomotion::jump_height(settings, 1.0, false));
     let dt = time.delta_secs();
+    // The running speed `fSpeedPct` is measured against, kept once
+    // (`0055d760`).
+    if !player.reference_speed_set {
+        physics::controller::set_reference_speed(world::animation::run_speed(
+            order, &state.0, player_ref,
+        ));
+        player.reference_speed_set = true;
+    }
     // One controller move a frame (`bhkCharacterController::Move`): on the
     // ground at the wanted velocity, in the air steered 0.3 of the way to
     // it; a jump asked for here leaves the ground the next frame.
@@ -387,6 +404,7 @@ pub fn walk(
         locomotion::air_gain(locomotion::AIR_CONTROL),
         dt,
     );
+    player.surface_serial = player.surface_serial.wrapping_add(1);
     // Outdoors, feet more than 30 under the land are put on it, the player's
     // too (`MobileObject::Move`, `0092f260` at `0093012a`; `world::ground`).
     let feet = player.character.feet;

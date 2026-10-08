@@ -76,8 +76,8 @@ of the mouse spring is telekinesis (`fMagicTelekinesis…`).
   (translated). `Collider` triangles carry their body's layer;
   `Collider::raycast_layer` casts as a layer does.
 - `physics::rigid`: `RigidWorld`, `Clock`, bodies with their
-  hulls/spheres/capsules, contacts against the collider, each other and
-  walkers (`Mover`; only bodies under `MOVE_LIMIT_MASS`), friction and
+  hulls/spheres/capsules, contacts against the collider, each other,
+  the character proxy's pushes (`apply_surface_interactions`), friction and
   restitution combined as the game does, damping, speed limits, sleeping
   and waking, Havok-unit impulses, `Spring` (the mouse spring),
   `ContactEvent`s (a pair beginning to touch, with its closing speed),
@@ -93,7 +93,7 @@ of the mouse spring is telekinesis (`fMagicTelekinesis…`).
 - Viewer `clutter`: bodies registered (at their saved pose and velocity;
   once the collider has ground under them; asleep), moved in
   `CellCollision` and drawn; shot pushes and blasts;
-  the player and every moving `Walker` push (and `clutter::actor_walks`
+  the player and every moving `Walker` push through their proxies (and `clutter::actor_walks`
   for actor controllers to report their controller); the Grab control
   (`grab_held`); contact sounds through `SoundRequests` with the material
   pair gate; physics damage worked out and logged for destructible
@@ -126,10 +126,9 @@ Batch 3 (`claude/m2-physics-3`):
 This solver's own (labelled in code; Havok's contact solver isn't
 translated yet, B1 PR 7): XPBD substeps (8) and passes (4) for bodies with
 something near them; contact generation (no edge-against-edge
-between bodies); overlap recovery at most 0.05 units per correction; walkers
-as unstoppable capsules reaching 2 units out (`hkpCharacterProxy`'s
-surface interactions aren't translated; the walkers themselves are the
-game's controller, below); a contact "added" is a pair that
+between bodies); overlap recovery at most 0.05 units per correction (walkers
+as unstoppable capsules reaching 2 units out were this solver's, replaced by
+the character proxy's push, "The character proxy"); a contact "added" is a pair that
 starts touching (Havok adds and removes single points).
 
 ## Havok's world step (B1, PRs 1–4, `claude/b1-havok-step`, 2026-10-07)
@@ -268,8 +267,8 @@ between checks never sleeps.
 In nv-rs: sleeping is per simulation island (PR 5, below). Waking an awake
 body (an impulse, the wind's force, the spring) cancels its island's
 pending sleep. Each ragdoll is one island.
-Walkers still wake what they push faster than 2 units/s (this solver's
-walkers, PR 10). The invented rules are gone: "1 s under 2 units/s and
+People pushing a body wake it through the proxy's impulse (`00c9c1d0` in
+`applySurfaceInteractions`). The invented rules are gone: "1 s under 2 units/s and
 0.3 rad/s" (clutter) and "1 s under 4 units/s and 0.6 rad/s" (ragdolls).
 
 ### Simulation islands (PR 5, `claude/b1-p5-islands`)
@@ -340,7 +339,7 @@ corner, edge end, triangle) that keeps its identity from step to step, as
 Havok's agents keep their points. The position is on the other side's
 surface (taken: the agents aren't traced). A fixed body is a collider
 triangle's placed reference (0: the landscape and unowned statics).
-Walkers' pushes aren't Havok contacts and aren't heard. The contacts still
+The proxy's pushes aren't Havok contacts and aren't heard. The contacts still
 move bodies by this solver's substeps until PR 7, which solves these
 points.
 
@@ -375,10 +374,10 @@ from 200 units leaves the floor at about 2% of its landing speed (the
 integrated-velocity scheme spends the target on moving it out).
 
 In nv-rs: the island's constraints are its manifolds in key order (the
-game's order is its entities' constraint lists); walkers pushing a body
-are keyframed bodies at their velocity whose touches are new points every
-step (this solver's walkers, PR 10). Not translated: maximum-impulse
-contacts (0x12; the game's points have none), constraint priorities ≥ 4
+game's order is its entities' constraint lists); people pushing a body are
+the character proxy's impulses (`applySurfaceInteractions`, "The character
+proxy"), not contacts. Not translated: maximum-impulse contacts (0x12; the
+game's points have none), constraint priorities >= 4
 (TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
 and sphere motion specifics (all bodies use the box motion's rules).
 
@@ -461,7 +460,7 @@ points; a point's friction, restitution, pairing, normal and distance.
 `nif` scene `reads_collision_shapes_in_game_units`; `physics`
 `layers::tests` (3), `grab::tests` (2), `contacts::tests` (3),
 `impulses::tests` (3), `rigid::tests` (clock, fall and rest, shot off a
-rail, stacking and walker push, the move limit, the player walking into
+rail, stacking and the proxy's push, the proxy's impulse values, the player walking into
 a body whose triangles are in the collider, deltas, impulse units,
 surfaces through `extend`, material combination, landing contact event,
 grab spring carry/release/removal, rail end, bottle at the origin and at
@@ -802,15 +801,68 @@ doesn't count as support. On the ground dynamic friction × `fSpeedPct`.
   contact point is ours (`contact_on`), as are the convex-vertices and
   triangle shapes' support-vertex tie breaks. `IsStep`'s convex-shape
   branch (a ray against the whole shape) uses the triangle test too.
-- `applySurfaceInteractions` (`00cacf80`, pushing bodies): clutter is still
-  pushed by `physics::rigid`'s walker rule, now with the velocity the
-  state asked for (`Character::pushing`).
+- `applySurfaceInteractions`: translated (below). Left of it: the listener
+  callback for bodies with property 0x1300 (`00c6ca30`, moving platforms,
+  with the moving platforms above) and other characters' interaction
+  callbacks.
 - Bethesda's point collector (`00cd36a0`: edge-hit filtering, trigger
   bookkeeping), the support material and velocity (`00c6e980`), moving
   platforms (`01267bb4`), hurtful bodies, pitch and roll, lying
   creatures, creatures' shapes from `BSBound`, the swimming, flying,
   climbing and projectile states, `VelocityMod`.
-- `fSpeedPct`'s divisor is taken as 308 (77 × 4).
+
+### Pushing bodies (`applySurfaceInteractions` `00cacf80`) and `fSpeedPct`'s divisor
+
+Called by `integrateImplementation` (`00cade20`) after each pass's solve and
+before the cast move (`StApplySurf`), with the update's time and the world's
+gravity, for every manifold point (so up to 4 times an update). For a point
+whose collidable is a rigid body (type 1) that isn't fixed or keyframed
+(motion types 4, 5): the listener's `+0x10` for bodies with property 0x1300
+(moving platforms, not translated; the character listener's `+0x14` is a
+no-op stub, `00c6c760`); then, with `n` the point's normal toward the
+character, `v` the body's velocity at the point (`v + ω × (p − centre of
+mass)`) less the proxy's velocity (`+0x10`) along `n`, `f = −0.9 v`, plus
+`0.4 ÷ dt` × the distance when it is negative; `f < 0`: impulse
+`f ÷ (1/m + (r × n)·I⁻¹(r × n))` along `n`, no less than `−strength × dt`
+(`+0x6c`); then `g·n × dt` (less `v` when `v < 0`) × the character's mass
+(`+0x70`) along `n` when below −1.19e-7. The body is woken (`00c9c1d0`: its
+deactivation counters cleared, activated) and the impulse applied at the
+point (`applyPointImpulse`, motion vtable `+0x50`) whatever its size (a
+resting touch zero), so **any body within 0.15 of the character stays
+awake**. Bethesda's settings feed it nothing: the cinfo's strength is
+FLT_MAX and mass 0 (`00c6cde0`, nothing sets them later), so a touch gives
+the body 0.9 of the closing speed whatever its mass (through its centre of
+mass; `fMoveLimitMass` isn't read here), and the weight term is zero.
+
+In nv-rs: `Proxy::integrate` records the touches (`proxy::SurfaceContact`:
+the triangle's placed reference, point, normal, distance, the proxy's
+velocity, dt, strength, mass), `Character::surface` hands them out, and
+`RigidWorld::apply_surface_interactions` applies them in order (the body
+state doesn't change between passes but by these impulses, so applying
+afterwards equals applying in the pass). The viewer's `clutter` applies the
+player's and the people's (`ai::move_body`) once per update. The walker rule
+(`Mover`, `WALKER_WAKE_SPEED`, `PUSH_SKIN`, `MOVE_LIMIT_MASS`, keyframed
+capsules in the island solver) is gone. Not like the game: nothing keeps a
+pushed body out of the character (the game's characters also have the
+controller's world presence; not traced), so a pushed body can end inside
+the hull the proxy has stepped into (dynamic bodies are support straight up
+and never walls, `00c711d0`). `NV_PUSH_LOG=1` logs the player's feet and
+each body the proxies touched.
+
+`fSpeedPct`'s divisor (`01267bc4`, zero in the executable) is written only
+by `0055e230` (when above zero), from `0055d760` when the player's
+controller is set up: `00647f00(player's actor values, 0, 0, 0, 1, 0, 0)`
+= `00647d10` × `fMoveRunMult` (`011d0898`, 4). `00647d10`: SpeedMult
+(actor value 21) × 0.01 × `fMoveBaseSpeed` (`011d0448`, 77) × `fMoveOneCrippledLegSpeedMult`
+(0.85, `011d11b8`) or `fMoveTwoCrippledLegsSpeedMult` (0.75, `011d0268`)
+when one or two legs are crippled (actor values 29, 30; 1 otherwise; 1 too
+when actor value 72 is set), with
+the sneak, no-weapon (`fMoveNoWeaponMult`) and armour terms off for these
+arguments. So 308 for SpeedMult 100 and sound legs, and otherwise the
+player's own: `physics::controller::set_reference_speed` takes
+`world::animation::run_speed` once, at the player's first walking update
+(the game keeps it from loading: later changes of SpeedMult or legs don't
+change it). The people use the same one value.
 
 ### Tested (generated)
 
@@ -846,6 +898,18 @@ feet ten times a second.
   the game's controller; it was likely the viewer's own controller's
   push-out, or needs another place to reproduce. The deepest anyone stood
   was the navmesh hand-over above, which the game has too (its far rule).
+- **Pushing bodies through the proxy** (`NV_PUSH_LOG=1 --answer-boxes`, at
+  −69538, 2700 heading north, W held 3 s from 3 s; nothing compared with
+  the game): the player walks into the two Goodsprings crates
+  (0010B8CF/0010B8D0) in front of the general store: 244 log lines of
+  touches, the crate at speeds of about 115–175 units a second while
+  touched (the walk's), moved from (−69538, 2825) to (−69570, 2844), the
+  pair coming to rest at 5.7 s, 52.5 and 67.2 units from where they were
+  put (the player arrived at about 4.5 s). The
+  specified tumbleweed route no longer meets 00178A80: with the wind it is
+  960 units off by 5 s (the player starts walking at 3 s); the run logged no
+  touches. Without `--answer-boxes` the "Classic Pack" notice keeps the
+  player from moving.
 
 Seen, not changed: an actor placed inside a wall (a bad `--at`) is held
 there: its penetration recovery is a slow velocity, and a beam on the

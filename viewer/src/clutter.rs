@@ -37,7 +37,8 @@ use esm::FormId;
 use physics::contacts::{self, ContactSettings};
 use physics::grab::{self, GrabSettings};
 use physics::impulses::{self, ImpulseSettings};
-use physics::rigid::{ContactEvent, Mover, Pose, RigidWorld, Spring};
+use physics::proxy::SurfaceContact;
+use physics::rigid::{ContactEvent, Pose, RigidWorld, Spring};
 use preview::cell::DynamicBody;
 
 use crate::controls::Controls;
@@ -89,10 +90,10 @@ static PUSHES: Mutex<Vec<Push>> = Mutex::new(Vec::new());
 /// The people (not the player) walking this frame, as their character
 /// controllers want to move (`ai::move_body`): they push what they walk
 /// into as the player does.
-static WALKERS: Mutex<Vec<Mover>> = Mutex::new(Vec::new());
+static WALKERS: Mutex<Vec<SurfaceContact>> = Mutex::new(Vec::new());
 
 /// The people's walkers for the next update (replacing the last list).
-pub(crate) fn walkers(list: Vec<Mover>) {
+pub(crate) fn walkers(list: Vec<SurfaceContact>) {
     if let Ok(mut q) = WALKERS.lock() {
         *q = list;
     }
@@ -156,6 +157,8 @@ pub struct Clutter {
     grab_settings: Option<GrabSettings>,
     /// Scripts' enable state when the bodies' triangles were last switched.
     disabled_seen: world::Disabled,
+    /// The last of the player's proxy updates applied ([`Player::surface_serial`]).
+    surface_seen: u32,
     /// What the player holds with the Grab control.
     held: Option<Held>,
     /// Bodies whose ground isn't in the collider yet.
@@ -435,24 +438,52 @@ fn simulate(
     if recheck {
         clutter.disabled_seen = state.disabled.clone();
     }
-    // The player and people push what they walk into.
-    let c = &player.character;
-    let shape = physics::CharacterShape::PLAYER;
-    let mut movers = if player.walking && player.ready {
-        vec![Mover {
-            feet: c.feet,
-            radius: shape.radius,
-            height: shape.height,
-            velocity: c.pushing,
-        }]
-    } else {
-        Vec::new()
-    };
-    // And the people walking about (`ai::move_body`).
-    if let Ok(q) = WALKERS.lock() {
-        movers.extend(q.iter().copied());
+    // The player's and the people's character proxies push the bodies they
+    // touched in their last update (`applySurfaceInteractions`, `00cacf80`;
+    // `ai::move_body` for the people), each update's touches once.
+    let mut touches = Vec::new();
+    if player.walking && player.ready && player.surface_serial != clutter.surface_seen {
+        touches.extend(player.character.surface.iter().copied());
     }
-    clutter.world.set_movers(movers);
+    clutter.surface_seen = player.surface_serial;
+    if let Ok(mut q) = WALKERS.lock() {
+        touches.append(&mut q);
+    }
+    clutter
+        .world
+        .apply_surface_interactions(&touches, physics::havok::GRAVITY);
+    if std::env::var("NV_PUSH_LOG").is_ok_and(|v| v == "1") && player.surface_serial % 30 == 1 {
+        let f = player.character.feet;
+        eprintln!(
+            "player feet ({:.1}, {:.1}, {:.1}), walking {} ready {}, {} touches",
+            f[0],
+            f[1],
+            f[2],
+            player.walking,
+            player.ready,
+            player.character.surface.len()
+        );
+    }
+    // `NV_PUSH_LOG=1`: each body the proxies touched, its speed after.
+    if !touches.is_empty() && std::env::var("NV_PUSH_LOG").is_ok_and(|v| v == "1") {
+        let mut seen = HashSet::new();
+        for t in touches.iter().filter(|t| seen.insert(t.reference)) {
+            if let Some(i) = clutter.world.find(t.reference) {
+                let b = &clutter.world.bodies[i];
+                eprintln!(
+                    "proxy touches {:08X}: at ({:.1}, {:.1}, {:.1}), velocity ({:.1}, {:.1}, {:.1}), asleep {}",
+                    t.reference,
+                    b.center()[0],
+                    b.center()[1],
+                    b.center()[2],
+                    b.velocity()[0],
+                    b.velocity()[1],
+                    b.velocity()[2],
+                    b.asleep
+                );
+            }
+        }
+    }
     // Shots and blasts.
     let pushes: Vec<Push> = PUSHES
         .lock()
@@ -537,9 +568,9 @@ fn simulate(
     }
     // Contacts begun: impact sounds and physics damage.
     let now = time.elapsed_secs();
-    let listener = cameras
-        .single()
-        .map_or(c.feet, |camera| game_point(camera.translation));
+    let listener = cameras.single().map_or(player.character.feet, |camera| {
+        game_point(camera.translation)
+    });
     for event in clutter.world.take_contacts() {
         contact(
             clutter,

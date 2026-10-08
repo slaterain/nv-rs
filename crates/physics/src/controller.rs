@@ -90,13 +90,35 @@ pub const ANIM_STATIC_EXTRA_DOWN_FRICTION: f32 = 0.577;
 pub const GROUND_MAX_VELOCITY_DELTA: f32 = 500.0;
 pub const AIR_MAX_VELOCITY_DELTA: f32 = 2000.0;
 
-/// The player's running speed the game keeps when a game loads
-/// (`01267bc4`, set by `0055e230` from `00647f00` in `0055d760`): the
-/// move's speed is divided by it into `fSpeedPct`. Here `fMoveBaseSpeed`
-/// (77) × `fMoveRunMult` (4) from `FalloutNV.esm`, the player's running
-/// speed without penalties (an approximation: the actor's own speed
-/// multiplier and the call's flags aren't followed).
+/// The player's running speed the game keeps (`01267bc4`; zero in the
+/// executable until a game loads): the move's speed is divided by it into
+/// `fSpeedPct` (`00c73170`, the only reader). `0055d760` (a game loading
+/// or starting) sets it for the player (`0055e230`, only when above
+/// zero) to `00647f00(player's actor values, 0, 0, 0, 1, 0, 0)`:
+/// SpeedMult (actor value 21) ÷ 100 × `fMoveBaseSpeed` (`011d0448`; 77 in
+/// `FalloutNV.esm`) × the legs' condition (`fMoveOneCrippledLegSpeedMult`
+/// 0.85, `fMoveTwoCrippledLegsSpeedMult` 0.75 for one or two crippled legs,
+/// `00647d10`) × `fMoveRunMult` (`011d0898`; 4). See
+/// [`set_reference_speed`] (`world::animation::run_speed` works it out).
+/// This default is that value for SpeedMult 100 and sound legs.
 pub const REFERENCE_SPEED: f32 = 308.0;
+
+static REFERENCE_SPEED_BITS: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0x439a_0000);
+
+/// The running speed `fSpeedPct` is measured against now (`01267bc4`).
+pub fn reference_speed() -> f32 {
+    f32::from_bits(REFERENCE_SPEED_BITS.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// `0055e230`: keeps the player's running speed, unless it isn't above
+/// zero.
+// Translated from 0055e230 (decompiled, FalloutNV.exe 1.4.0.525)
+pub fn set_reference_speed(speed: f32) {
+    if speed > 0.0 {
+        REFERENCE_SPEED_BITS.store(speed.to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+}
 
 /// The listener's state (`bhkCharacterListener`, controller +0x410).
 #[derive(Debug, Clone, PartialEq)]
@@ -243,9 +265,9 @@ impl ListenerState {
                     // `fMoveLimitMass` (95) also has its constraint's
                     // velocity cleared (the walking collider's clutter
                     // triangles carry no velocity, so that changes
-                    // nothing here). They're pushed by the walker in
-                    // `crate::rigid` (Havok's `applySurfaceInteractions`
-                    // isn't translated).
+                    // nothing here). The proxy pushes them
+                    // (`applySurfaceInteractions`, `crate::proxy` and
+                    // `crate::rigid`).
                     if self.flags & flags::CHECKING_SUPPORT == 0 {
                         nz = 1.0;
                         support = [0.0, 0.0, 1.0, 0.0];
@@ -754,7 +776,7 @@ impl Controller {
         } else {
             self.listener.flags |= flags::MOVING;
         }
-        let speed_pct = input.speed / REFERENCE_SPEED;
+        let speed_pct = input.speed / reference_speed();
         let dt = input.dt;
         let inv_dt = 1.0 / dt;
         let mut direction = scale(d, inv_dt);

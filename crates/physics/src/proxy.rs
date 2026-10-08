@@ -12,11 +12,13 @@
 //! and out are game units. The collision queries the phantom makes are in
 //! [`crate::character_cd`] (not traced: Havok's agents).
 //!
-//! Not translated: `applySurfaceInteractions` (`00cacf80`; the push on
-//! dynamic bodies and other characters' interaction callbacks) — the
-//! walking collider holds no dynamic bodies (clutter is pushed by
-//! [`crate::rigid`]'s own walker rule), and other characters' proxies are
-//! phantoms, which it doesn't push.
+//! `applySurfaceInteractions` (`00cacf80`, the push on the dynamic bodies
+//! the manifold touches) is split: each pass records its touches here
+//! ([`SurfaceContact`]) and
+//! [`crate::rigid::RigidWorld::apply_surface_interactions`] applies them
+//! to the bodies. Not translated: the listener callback it fires for
+//! bodies with property 0x1300 (moving platforms); other characters'
+//! proxies are phantoms, which it doesn't push.
 
 use crate::character_cd::{Body, Hull, Query, RootCdPoint};
 use crate::simplex::{self, SimplexSolverInput, SimplexSolverOutput, SurfaceConstraintInfo};
@@ -76,6 +78,32 @@ impl ProxySettings {
     };
 }
 
+/// One manifold point's touch on a body the proxy may push
+/// (`applySurfaceInteractions`, `00cacf80`: the manifold entry and the
+/// values the function reads from the proxy and the step), recorded after
+/// each pass's solve for
+/// [`crate::rigid::RigidWorld::apply_surface_interactions`]. Whether the
+/// collidable is a dynamic body is for the body's side to say (the
+/// function skips fixed and keyframed ones).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfaceContact {
+    /// The placed reference the touched triangle belongs to.
+    pub reference: u32,
+    /// The contact point on the body's surface (game units, world).
+    pub position: Vec3,
+    /// The separating normal toward the character, and its distance
+    /// (Havok units; negative: penetrating).
+    pub normal: Vec3,
+    pub distance: f32,
+    /// The proxy's velocity (+0x10, Havok units a second).
+    pub velocity: Vec3,
+    /// The step's time (`stepInfo` +0x8, seconds).
+    pub dt: f32,
+    /// `m_characterStrength` (+0x6c) and `m_characterMass` (+0x70).
+    pub strength: f32,
+    pub mass: f32,
+}
+
 /// The proxy's state between updates (`hkpCharacterProxy` +0x10
 /// `m_velocity`, +0x20 `m_oldDisplacement`, +0x74 `m_manifold`).
 #[derive(Debug, Clone, PartialEq)]
@@ -87,6 +115,9 @@ pub struct Proxy {
     pub old_displacement: Vec3,
     pub manifold: Vec<RootCdPoint>,
     pub settings: ProxySettings,
+    /// The touches `applySurfaceInteractions` found since taken, in pass
+    /// order (see [`SurfaceContact`]).
+    pub surface: Vec<SurfaceContact>,
 }
 
 /// What changes the surface constraints once they're built
@@ -135,6 +166,7 @@ impl Proxy {
             old_displacement: [0.0; 3],
             manifold: Vec::new(),
             settings,
+            surface: Vec::new(),
         }
     }
 
@@ -396,7 +428,25 @@ impl Proxy {
                 min_delta_time,
                 constraints: &constraints,
             });
-            // StApplySurf: not translated (see the module's notes).
+            // StApplySurf (`00cacf80`): the manifold's touches on bodies,
+            // before the cast move adds its hit.
+            for p in &self.manifold {
+                if let Body::Triangle(t) = p.body {
+                    let reference = collider.owner(t);
+                    if reference != 0 {
+                        self.surface.push(SurfaceContact {
+                            reference,
+                            position: p.position,
+                            normal: p.normal,
+                            distance: p.distance,
+                            velocity: self.velocity,
+                            dt,
+                            strength: s.character_strength,
+                            mass: s.character_mass,
+                        });
+                    }
+                }
+            }
             // StCastMove.
             let solved = [output.position[0], output.position[1], output.position[2]];
             let same = (0..3).all(|k| (self.old_displacement[k] - solved[k]).abs() <= 0.001);

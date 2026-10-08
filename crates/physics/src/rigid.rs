@@ -56,20 +56,6 @@ pub const DEFAULT_SURFACE: Surface = Surface {
     friction: 0.5,
     restitution: 0.4,
 };
-/// A walker moving into a sleeping body faster than this (game units a
-/// second) wakes it (this solver's walkers, until the character proxy,
-/// `hkpCharacterProxy`, is translated: B1 PR 10).
-const WALKER_WAKE_SPEED: f32 = 2.0;
-/// How far a walker reaches past its capsule to push a body (game units):
-/// walkers are kept their radius and the body's shell off it by the
-/// collider, so the push is felt this much further out (this solver's).
-pub const PUSH_SKIN: f32 = 2.0;
-/// `[HAVOK] fMoveLimitMass` (95): the character controller's contact
-/// callback (`00c711d0`, the copy at `011b0128`) treats a body at least
-/// this heavy apart from lighter ones (it keeps the contact's surface
-/// velocity only for lighter bodies). Read as: walkers push only bodies
-/// lighter than this (the proxy's handling past that branch isn't traced).
-pub const MOVE_LIMIT_MASS: f32 = 95.0;
 
 /// One solid piece of a body, in its model's space (game units).
 #[derive(Debug, Clone, PartialEq)]
@@ -472,27 +458,6 @@ impl Rigid {
     }
 }
 
-/// A walker, as the bodies feel it: an upright capsule from the feet up
-/// `height`, `radius` wide, moving at `velocity`, which nothing stops.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Mover {
-    pub feet: Vec3,
-    pub radius: f32,
-    pub height: f32,
-    pub velocity: Vec3,
-}
-
-impl Mover {
-    fn segment(&self) -> (Vec3, Vec3) {
-        let low = self.feet[2] + self.radius;
-        let high = (self.feet[2] + self.height - self.radius).max(low);
-        (
-            [self.feet[0], self.feet[1], low],
-            [self.feet[0], self.feet[1], high],
-        )
-    }
-}
-
 /// The other side of a contact.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Other {
@@ -584,14 +549,13 @@ pub struct ContactEvent {
     pub speed: f32,
 }
 
-/// Free rigid bodies and the walkers that push them.
+/// Free rigid bodies.
 #[derive(Debug, Clone, Default)]
 pub struct RigidWorld {
     pub bodies: Vec<Rigid>,
     pub clock: Clock,
     /// The world's solver settings (`hkpSolverInfo`), rescaled each frame.
     pub solver: crate::havok::SolverInfo,
-    movers: Vec<Mover>,
     /// The player's grab, if they hold something.
     pub spring: Option<Spring>,
     /// Each agent's contact points (its contact manager's atom,
@@ -735,13 +699,6 @@ impl RigidWorld {
     pub fn remove(&mut self, reference: u32) -> Option<Rigid> {
         let i = self.find(reference)?;
         Some(self.remove_at(i))
-    }
-
-    /// Whether walkers push body `i`: it moves and is lighter than
-    /// [`MOVE_LIMIT_MASS`].
-    fn pushable(&self, i: usize) -> bool {
-        let b = &self.bodies[i];
-        b.dynamic() && b.setup.mass < MOVE_LIMIT_MASS
     }
 
     /// Sets a body's velocities (game units and radians a second) and
@@ -909,9 +866,64 @@ impl RigidWorld {
         (rd, sub(t, mat_vec(&rd, t0)))
     }
 
-    /// The walkers this frame.
-    pub fn set_movers(&mut self, movers: Vec<Mover>) {
-        self.movers = movers;
+    /// The character proxy's push on the dynamic bodies it touches
+    /// (`applySurfaceInteractions`, `00cacf80`, `hkpCharacterProxy`; the
+    /// manifold's touches as the proxy recorded them,
+    /// [`crate::proxy::SurfaceContact`]), applied in order. A touch on a
+    /// body that moves (not fixed or keyframed, motion type 4 and 5 skipped)
+    /// gets: with `v` the body's velocity at the point minus the proxy's,
+    /// along the normal `n` (toward the character), `f = −0.9 v`, plus
+    /// `0.4 ÷ dt` × the distance when that is negative (a penetration); when
+    /// `f < 0`, the impulse `f ÷ k` along `n`, `k` the body's inverse mass
+    /// plus `(r × n)·I⁻¹(r × n)` at the arm `r` from its centre of mass, not
+    /// below `−strength × dt`; then the character's weight, `mass × (dt × g·n
+    /// − v` when `v < 0`) along `n` when below −1.19e-7. The body is woken
+    /// (`00c9c1d0`) and the impulse applied at the point whatever its size.
+    /// Not translated: the listener callback for bodies with property
+    /// 0x1300 (`00c6ca30`, moving platforms; the character listener's
+    /// other, `+0x14`, does nothing).
+    // Translated from 00cacf80 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn apply_surface_interactions(
+        &mut self,
+        contacts: &[crate::proxy::SurfaceContact],
+        gravity: Vec3,
+    ) {
+        let u = HAVOK_UNIT;
+        for c in contacts {
+            let Some(i) = self.find(c.reference) else {
+                continue;
+            };
+            let b = &self.bodies[i];
+            if !b.dynamic() {
+                continue;
+            }
+            let n = c.normal;
+            // The point's arm and the body's velocity there, Havok units.
+            let arm = scale(sub(c.position, b.x), 1.0 / u);
+            let at = scale(b.point_velocity(sub(c.position, b.x)), 1.0 / u);
+            let v = dot(sub(at, c.velocity), n);
+            let mut f = -v * 0.9;
+            if c.distance < 0.0 {
+                f += c.distance * (1.0 / c.dt) * 0.4;
+            }
+            let mut impulse = [0.0; 3];
+            if f < 0.0 {
+                let rn = cross(arm, n);
+                // The stored inverse inertia is per game unit squared:
+                // times the unit squared it is Havok's.
+                let k = b.inverse_mass + u * u * dot(rn, b.inverse_inertia_world(rn));
+                let j = (f / k).max(-c.strength * c.dt);
+                impulse = scale(n, j);
+            }
+            let mut w = c.dt * dot(gravity, n);
+            if v < 0.0 {
+                w -= v;
+            }
+            if w < -1.192_092_9e-7 {
+                impulse = add(impulse, scale(n, w * c.mass));
+            }
+            self.apply_point_impulse(i, impulse, c.position);
+        }
     }
 
     /// Wakes a body (`hkpEntity::activate`, Xbox PDB): a sleeping one's
@@ -1031,20 +1043,6 @@ impl RigidWorld {
             b.asleep = true;
         }
         self.woken(&cleanup.activated);
-        // Walkers wake what they push (this solver's walkers: the
-        // character proxy's push, `hkpCharacterProxy`, is PR 10's).
-        for i in 0..self.bodies.len() {
-            if self.bodies[i].asleep && self.pushable(i) {
-                let pushed = self.movers.iter().any(|m| {
-                    self.mover_touches(i, m)
-                        .iter()
-                        .any(|t| dot(m.velocity, t.n) > WALKER_WAKE_SPEED)
-                });
-                if pushed {
-                    self.wake(i);
-                }
-            }
-        }
         // The grab's spring acts first (an action, before Havok solves).
         if let Some(s) = self.spring {
             if s.body < self.bodies.len() && self.bodies[s.body].dynamic() {
@@ -1080,10 +1078,6 @@ impl RigidWorld {
                 !m.is_empty()
                     && (members.contains(&a)
                         || matches!(p, Partner::Body(b) if members.contains(&b)))
-            }) || members.iter().any(|&i| {
-                self.movers
-                    .iter()
-                    .any(|m| self.pushable(i) && !self.mover_touches(i, m).is_empty())
             });
             if constrained {
                 self.solve_island(&members, dt);
@@ -1201,37 +1195,6 @@ impl RigidWorld {
             sides.push((ia, ib));
         }
         let held = copies.len();
-        for mover in &self.movers {
-            for &i in members {
-                if !self.pushable(i) {
-                    continue;
-                }
-                let touches = self.mover_touches(i, mover);
-                if touches.is_empty() {
-                    continue;
-                }
-                let ib = accs.len();
-                accs.push(Accumulator::keyframed(
-                    hv(mover.feet),
-                    scale(mover.velocity, 1.0 / u),
-                ));
-                spin.push([0.0; 3]);
-                let me = &self.bodies[i].setup;
-                let props = crate::manifold::point_properties(
-                    (me.friction, DEFAULT_SURFACE.friction),
-                    (me.restitution, DEFAULT_SURFACE.restitution),
-                );
-                let mut m = Manifold::default();
-                for t in &touches {
-                    let mut p = self.new_point(i, Partner::Fixed(0), t);
-                    p.position = hv(p.position);
-                    p.distance /= u;
-                    m.add(p, props);
-                }
-                copies.push(m);
-                sides.push((acc_of[&i], ib));
-            }
-        }
         let step = Step::new(&solver, dt, crate::havok::GRAVITY);
         let q = QueryIn::new(&solver, &step);
         let mut schemas = Vec::new();
@@ -1665,50 +1628,6 @@ impl RigidWorld {
                             key: feature_key(6, shapes, 0, 0),
                             radius_b: rb,
                         });
-                    }
-                }
-            }
-        }
-        out
-    }
-
-    /// Where body `i` touches a walker (the walker's side as world points).
-    fn mover_touches(&self, i: usize, m: &Mover) -> Vec<Touch> {
-        let b = &self.bodies[i];
-        let (s0, s1) = m.segment();
-        let radius = m.radius + PUSH_SKIN;
-        let surface = DEFAULT_SURFACE;
-        // Quick reject.
-        let c = closest_on_segment(b.x, s0, s1);
-        if length(sub(b.x, c)) > b.reach + radius {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for (si, shape) in b.setup.shapes.iter().enumerate() {
-            for (k, (p, r)) in feature_points(shape).into_iter().enumerate() {
-                let world = b.to_world(p);
-                let on = closest_on_segment(world, s0, s1);
-                let d = length(sub(world, on));
-                if d < r + radius && d > 1e-5 {
-                    out.push(Touch {
-                        on_a: p,
-                        on_b: on,
-                        n: scale(sub(world, on), 1.0 / d),
-                        margin: r + radius,
-                        surface,
-                        key: feature_key(7, si, k, 0),
-                        radius_b: radius,
-                    });
-                }
-            }
-            if let Shape::Hull { planes, shell, .. } = shape {
-                for k in 0..=4 {
-                    let p = add(s0, scale(sub(s1, s0), k as f32 / 4.0));
-                    if let Some(mut t) = corner_in_hull(b, p, planes, shell + radius, 0.0, surface)
-                    {
-                        t.key = feature_key(8, si, k, 0);
-                        t.radius_b = radius;
-                        out.push(t);
                     }
                 }
             }
@@ -2272,7 +2191,7 @@ mod tests {
     }
 
     #[test]
-    fn bodies_stack_and_a_walker_pushes_them() {
+    fn bodies_stack_and_the_proxy_pushes_them() {
         let c = floor(0.0);
         let mut w = RigidWorld::new();
         let lower = w.add(crate_(3, [10.0; 3], 10.0), (I3, [0.0, 0.0, 10.7]));
@@ -2283,17 +2202,12 @@ mod tests {
         }
         let top = w.bodies[upper].pose().1;
         assert!((top[2] - 32.1).abs() < 1.5, "{top:?}");
-        // A walker coming from the west at 150 units a second pushes the
-        // lower box east.
+        // A proxy coming from the west at 150 units a second touches the
+        // lower box's west face every frame and pushes it east.
         let start = w.bodies[lower].pose().1;
-        for k in 0..60 {
-            let x = -40.0 + 150.0 * k as f32 / 60.0;
-            w.set_movers(vec![Mover {
-                feet: [x, 0.0, 0.0],
-                radius: 20.0,
-                height: 128.0,
-                velocity: [150.0, 0.0, 0.0],
-            }]);
+        for _ in 0..60 {
+            let touch = touch_west(&w, lower, 150.0 / HAVOK_UNIT);
+            w.apply_surface_interactions(&[touch], crate::havok::GRAVITY);
             w.update(&c, 1.0 / 60.0);
         }
         let now = w.bodies[lower].pose().1;
@@ -2530,36 +2444,111 @@ mod tests {
         assert!(w.bodies[j].asleep);
     }
 
-    #[test]
-    fn walkers_push_only_bodies_lighter_than_the_move_limit() {
-        let c = floor(0.0);
-        let mut w = RigidWorld::new();
-        let light = w.add(crate_(11, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
-        let heavy = w.add(crate_(12, [10.0; 3], 100.0), (I3, [0.0, 200.0, 10.7]));
-        for k in 0..60 {
-            let x = -40.0 + 150.0 * k as f32 / 60.0;
-            w.set_movers(vec![
-                Mover {
-                    feet: [x, 0.0, 0.0],
-                    radius: 20.0,
-                    height: 128.0,
-                    velocity: [150.0, 0.0, 0.0],
-                },
-                Mover {
-                    feet: [x, 200.0, 0.0],
-                    radius: 20.0,
-                    height: 128.0,
-                    velocity: [150.0, 0.0, 0.0],
-                },
-            ]);
-            w.update(&c, 1.0 / 60.0);
+    /// A touch on the west face of a crate at `h` high, the proxy moving
+    /// east at `speed` Havok units a second (`applySurfaceInteractions`).
+    fn touch_west(w: &RigidWorld, i: usize, speed: f32) -> crate::proxy::SurfaceContact {
+        let b = w.bodies[i].center();
+        crate::proxy::SurfaceContact {
+            reference: w.bodies[i].setup.reference,
+            position: [b[0] - 10.0, b[1], b[2]],
+            normal: [-1.0, 0.0, 0.0],
+            distance: 0.0,
+            velocity: [speed, 0.0, 0.0],
+            dt: 1.0 / 60.0,
+            strength: 3.402_822e38,
+            mass: 0.0,
         }
-        assert!(w.bodies[light].center()[0] > 20.0);
-        assert!(w.bodies[heavy].center()[0].abs() < 0.5 && w.bodies[heavy].asleep);
+    }
+
+    #[test]
+    fn a_touch_gives_a_body_nine_tenths_of_the_proxys_speed_whatever_its_mass() {
+        // Through the centre of mass the impulse is f ÷ inverse mass, so
+        // the body gains 0.9 × the closing speed (the game's strength is
+        // FLT_MAX: nothing limits it).
+        for mass in [5.0, 20.0, 100.0, 400.0] {
+            let mut w = RigidWorld::new();
+            let i = w.add(crate_(11, [10.0; 3], mass), (I3, [0.0, 0.0, 10.7]));
+            let touch = touch_west(&w, i, 2.0);
+            w.apply_surface_interactions(&[touch], crate::havok::GRAVITY);
+            let v = w.bodies[i].velocity();
+            assert!(
+                (v[0] - 0.9 * 2.0 * HAVOK_UNIT).abs() < 1e-2,
+                "{mass}: {v:?}"
+            );
+            assert!(v[1].abs() < 1e-3 && v[2].abs() < 1e-3, "{mass}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn a_touch_pushes_a_second_time_by_what_is_left() {
+        // The second pass sees the first push's velocity: 0.9 of the rest.
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(11, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
+        let touch = touch_west(&w, i, 2.0);
+        w.apply_surface_interactions(&[touch, touch], crate::havok::GRAVITY);
+        let v = w.bodies[i].velocity()[0] / HAVOK_UNIT;
+        assert!((v - (2.0 - 0.1 * 0.1 * 2.0)).abs() < 1e-3, "{v}");
+    }
+
+    #[test]
+    fn a_touch_from_a_body_moving_away_or_a_stranger_does_nothing() {
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(11, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
+        // The proxy moving away from the body (west).
+        let away = touch_west(&w, i, -2.0);
+        // A reference the world doesn't hold.
+        let mut stranger = touch_west(&w, i, 2.0);
+        stranger.reference = 999;
+        w.apply_surface_interactions(&[away, stranger], crate::havok::GRAVITY);
+        assert_eq!(w.bodies[i].velocity(), [0.0; 3]);
+    }
+
+    #[test]
+    fn a_penetrating_touch_is_pushed_out_at_four_tenths_per_step() {
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(11, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
+        let mut touch = touch_west(&w, i, 0.0);
+        touch.distance = -0.05;
+        w.apply_surface_interactions(&[touch], crate::havok::GRAVITY);
+        // f = −0.05 × 60 × 0.4 along the normal: the body goes east.
+        let v = w.bodies[i].velocity()[0] / HAVOK_UNIT;
+        assert!((v - 0.05 * 60.0 * 0.4).abs() < 1e-3, "{v}");
+    }
+
+    #[test]
+    fn the_strength_limits_the_impulse_and_the_mass_adds_weight() {
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(11, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
+        let mut touch = touch_west(&w, i, 2.0);
+        // At most strength × dt: 30 × (1/60) = 0.5 of impulse, 0.025
+        // Havok units a second on 20 kg.
+        touch.strength = 30.0;
+        w.apply_surface_interactions(&[touch], crate::havok::GRAVITY);
+        let v = w.bodies[i].velocity()[0] / HAVOK_UNIT;
+        assert!((v - 0.5 / 20.0).abs() < 1e-4, "{v}");
+        // Standing on a body (the normal up) with a mass: dt × g·n × mass
+        // down on it.
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(12, [10.0; 3], 20.0), (I3, [0.0, 0.0, 10.7]));
+        let b = w.bodies[i].center();
+        let on = crate::proxy::SurfaceContact {
+            reference: 12,
+            position: [b[0], b[1], b[2] + 10.0],
+            normal: [0.0, 0.0, 1.0],
+            distance: 0.0,
+            velocity: [0.0; 3],
+            dt: 1.0 / 60.0,
+            strength: 3.402_822e38,
+            mass: 80.0,
+        };
+        w.apply_surface_interactions(&[on], crate::havok::GRAVITY);
+        let vz = w.bodies[i].velocity()[2] / HAVOK_UNIT;
+        assert!((vz - 80.0 / 20.0 * (-98.1 / 60.0)).abs() < 1e-3, "{vz}");
     }
 
     /// As the viewer has it: the body's triangles in the collider (the
-    /// walking character is kept off them) and the character as a mover.
+    /// walking character walks through them) and the proxy's touches
+    /// handed to the world.
     fn walk_into(h: Vec3, mass: f32) -> (Vec3, Vec3) {
         let mut c = floor(0.0);
         let setup = crate_(13, h, mass);
@@ -2574,12 +2563,7 @@ mod tests {
         let mut walker = crate::Character::new([-100.0, 0.0, 0.0]);
         for _ in 0..90 {
             walker.update_controlled(&c, &shape, [280.0, 0.0], None, 1.0, 1.0 / 60.0);
-            w.set_movers(vec![Mover {
-                feet: walker.feet,
-                radius: shape.radius,
-                height: shape.height,
-                velocity: [walker.pushing[0], walker.pushing[1], 0.0],
-            }]);
+            w.apply_surface_interactions(&walker.surface, crate::havok::GRAVITY);
             w.update(&c, 1.0 / 60.0);
             let (r, t) = w.delta(i);
             c.move_owner(13, &r, t);

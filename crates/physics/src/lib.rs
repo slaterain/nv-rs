@@ -1071,10 +1071,11 @@ pub struct Character {
     pub fell: Option<f32>,
     /// The controller's horizontal velocity, game units a second.
     pub horizontal: [f32; 2],
-    /// The velocity the controller's state handed the proxy this update
-    /// (`OutVelocity` +0x4f0), game units a second: what it pushes the
-    /// clutter it walks into with, though the proxy itself is held.
-    pub pushing: Vec3,
+    /// The bodies the last update's proxy touched, for the rigid world to
+    /// push (`applySurfaceInteractions`, `00cacf80`; see
+    /// [`proxy::SurfaceContact`] and
+    /// [`rigid::RigidWorld::apply_surface_interactions`]).
+    pub surface: Vec<proxy::SurfaceContact>,
     pub controller: controller::Controller,
 }
 
@@ -1089,7 +1090,7 @@ impl Character {
             left_ground_at: feet[2],
             fell: None,
             horizontal: [0.0; 2],
-            pushing: [0.0; 3],
+            surface: Vec::new(),
             controller: controller::Controller::new(
                 shape.step_havok(),
                 controller::gravity_multiplier(shape.gravity),
@@ -1115,6 +1116,7 @@ impl Character {
         air_gain: f32,
         dt: f32,
     ) {
+        self.surface.clear();
         if dt <= 0.0 {
             return;
         }
@@ -1147,7 +1149,7 @@ impl Character {
         let v = c.proxy.velocity;
         self.vertical_speed = v[2] * HAVOK_UNIT;
         self.horizontal = [v[0] * HAVOK_UNIT, v[1] * HAVOK_UNIT];
-        self.pushing = scale(c.out_velocity, HAVOK_UNIT);
+        self.surface = std::mem::take(&mut c.proxy.surface);
         self.on_ground = c.state == controller::State::OnGround;
         if was_on_ground && !self.on_ground {
             self.left_ground_at = c.fall_start;
@@ -2077,5 +2079,74 @@ mod tests {
         assert!(plain
             .raycast_layer([0.0, 0.0, 50.0], north, 500.0, 6)
             .is_some());
+    }
+
+    #[test]
+    fn the_reference_speed_is_the_default_until_set_and_zero_is_ignored() {
+        // 77 × 4 with SpeedMult 100 and sound legs (`00647f00`); `0055e230`
+        // keeps nothing that isn't above zero.
+        assert_eq!(controller::reference_speed(), 77.0 * 4.0);
+        controller::set_reference_speed(0.0);
+        controller::set_reference_speed(-5.0);
+        assert_eq!(controller::reference_speed(), controller::REFERENCE_SPEED);
+    }
+
+    #[test]
+    fn a_touching_character_hands_the_body_to_the_world_each_update() {
+        // A crate beside the character: its triangles carry the reference
+        // the world's body has.
+        let (h, y) = (10.0f32, 20.25 + 10.0 + 5.0);
+        let corners: Vec<Vec3> = (0..8)
+            .map(|k| {
+                [
+                    if k & 1 == 0 { -h } else { h },
+                    y + if k & 2 == 0 { -h } else { h },
+                    if k & 4 == 0 { 0.0 } else { 2.0 * h },
+                ]
+            })
+            .collect();
+        let faces: [[u32; 3]; 12] = [
+            [0, 2, 1],
+            [1, 2, 3],
+            [4, 5, 6],
+            [5, 7, 6],
+            [0, 1, 4],
+            [1, 5, 4],
+            [2, 6, 3],
+            [3, 6, 7],
+            [0, 4, 2],
+            [2, 4, 6],
+            [1, 3, 5],
+            [3, 7, 5],
+        ];
+        let mut c = Collider::new();
+        c.add(
+            &[
+                [-500.0, -500.0, 0.0],
+                [500.0, -500.0, 0.0],
+                [500.0, 500.0, 0.0],
+                [-500.0, 500.0, 0.0],
+            ],
+            &[[0, 1, 2], [0, 2, 3]],
+        );
+        c.add_layered(&corners, &faces, (0.0, 55, NO_MATERIAL), None, 4);
+        let shape = CharacterShape::PLAYER;
+        let mut who = Character::new([0.0, 0.0, 0.0]);
+        let mut seen = Vec::new();
+        for _ in 0..30 {
+            who.update_controlled(&c, &shape, [0.0, 200.0], None, 1.0, 1.0 / 60.0);
+            seen.extend(who.surface.iter().copied());
+        }
+        let touch = seen.first().expect("the crate was touched");
+        assert_eq!(touch.reference, 55);
+        // Its face looks back at the character (south, tilted by the hull's
+        // rounded front), the proxy moves
+        // north at the move's speed.
+        assert!(touch.normal[1] < -0.5, "{:?}", touch.normal);
+        assert!(touch.velocity[1] > 0.0, "{:?}", touch.velocity);
+        assert!((touch.dt - 1.0 / 60.0).abs() < 1e-6);
+        // Not touching (an update with no move): nothing is kept.
+        who.update_controlled(&c, &shape, [0.0, 0.0], None, 1.0, 0.0);
+        assert!(who.surface.is_empty());
     }
 }
