@@ -279,6 +279,20 @@ NPCs sometimes walk waist-deep in the ground. B4's land rule only lifts
 feet more than 30 units under the land and its far-from-camera rule puts
 people at navmesh height (up to ~21 under the land); this is deeper, so
 something else is involved. Reproduce with `NV_GROUND_LOG=1`. Progress (`claude/b1-character-proxy`, B1 PR 10): with the game's own controller nobody near the camera stood more than 10 under the land in the gunfight, Back in the Saddle or the road runs (PHYSICS.md, "The character proxy"); not seen again, so likely the old controller's push-out. Close after a playtest.
+Seen again in build 28; re-checked on main 56a3d10 (`claude/b25-sink`, 2026-10-08; logs in
+`%USERPROFILE%\nv-re\work\b25`): the vms16 gunfight route, 200 s, `NV_GROUND_LOG=1`, plus a
+per-frame trace of ganger 00104C70. Nobody with a controller was more than 10.7 under the
+land. The deepest rows are all explained: far from the camera (> 2449.5) people stand at the
+navmesh's height (−10 to −24 here, e.g. 00104C68 −23.6; `00697980` interpolates the triangle's
+plane as `world::ground::navmesh_height` does); a ganger handed from that rule to his
+controller at 2465 units came in 1.93 Havok units (13.5) inside the land triangle under him
+(the start collector found it: `Triangle(275418)`, distance −1.93) and rose at the proxy's
+penetration recovery (1 Havok unit a second per unit crossed). Frame rate: the same depths at
+~200 fps (dt ≈ 0.005) and ~70 fps (dt ≈ 0.013), so the viewer's small dt isn't the cause seen
+here. Nothing waist-deep (> 30, which the land rule would lift) was reproduced: not fixed.
+Next: a report (F12) with the actor's form ID and place, or compare a far-rule ganger's
+height in the original game (if the game shows them on the land at 25–50 m, the navmesh
+height or the 2449.5 distance is wrong).
 
 **B26. Ringo greets you as a stranger after the gunfight.** When he comes
 over after the Powder Gangers are dead he uses his first-meeting lines.
