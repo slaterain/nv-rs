@@ -654,7 +654,44 @@ doesn't count as support. On the ground dynamic friction × `fSpeedPct`.
   climbing and projectile states, `VelocityMod`.
 - `fSpeedPct`'s divisor is taken as 308 (77 × 4).
 
-PHYSICS_LIVE_PLACEHOLDER
+### Tested (generated)
+
+`physics` tests: walking up a 16-unit step but not a 32-unit bench or a
+64-unit block; 30° and 45° slopes climbed, 50° and 60° not; standing on a
+box and walking off its edge (fall 64 counted from the edge); falling and
+landing (feet 0.7 + 0.35 above a model's triangles); a wall stopping the
+hull's corner the shells and keep distance away; people as walls nobody
+stands on; a jump rising 64, keeping the run-up and landing; sunk 40 into
+the land: standing still it stays (the move skips integration), walking it
+comes up at the recovery speed; the hull's 18 points; GJK and the
+overlapping case; the simplex solver's own six (`physics::simplex`).
+
+### Verified live (release viewer, installed data, `NV_GROUND_LOG=1`; nothing compared with the game)
+
+The ground log now gives each actor's controller state, and the player's
+feet ten times a second.
+
+- Acceptance: doc, vcg02, vms16 all pass (one run).
+- Ghost Town Gunfight (`--wait 330`, XP +50): 5465 log rows of people with
+  a controller; their feet never more than 10.2 under the land. The one
+  case: a ganger handed from the far-from-camera rule (navmesh height, B4)
+  to his controller 10 under, risen to +4 a second later. Everyone else
+  stands 1.0 above statics (shell + keep distance) and 3.8 above the land
+  (its 3.5 shell + 0.35). Back in the Saddle: 938 rows, none under the
+  land. Gangers coming down the road (`gangers\shot.png`): on the road.
+- The player: standing jump 61 high (sampled every 0.1 s), 0.85 s in the
+  air; a running jump uphill keeps its 330 units a second and lands on the
+  slope; walking off the road's edge falls and lands on the land; walking
+  up and down the hill east of the road at +3.7 to +4.2 over the land; a
+  16-unit ledge inside the saloon's shell ridden up in 0.3 s.
+- B25 (people waist-deep while moving) didn't happen in these runs with
+  the game's controller; it was likely the viewer's own controller's
+  push-out, or needs another place to reproduce. The deepest anyone stood
+  was the navmesh hand-over above, which the game has too (its far rule).
+
+Seen, not changed: an actor placed inside a wall (a bad `--at`) is held
+there: its penetration recovery is a slow velocity, and a beam on the
+other side stops it, as Havok's proxy would.
 ## Not compared / gaps
 
 - Nothing compared with the original game: how far bottles fly, how they
