@@ -79,6 +79,7 @@ impl RagdollRig {
                 inertia: b.inertia.map(|i| i * s * s),
                 capsule: b.capsule.map(|(a, c, r)| (sv(a), sv(c), r * s)),
                 friction: b.friction,
+                restitution: b.restitution,
                 linear_damping: b.linear_damping,
                 angular_damping: b.angular_damping,
                 max_linear_speed: b.max_linear_speed * s,
@@ -95,6 +96,8 @@ impl RagdollRig {
                 bodies: j.bodies,
                 pivots: [sv(j.pivots[0]), sv(j.pivots[1])],
                 limit: limit(&j.limit),
+                third: j.third,
+                max_friction: j.max_friction,
             })
             .collect();
         (bodies, joints)

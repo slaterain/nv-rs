@@ -103,6 +103,15 @@ pub struct RagdollJoint {
     pub bodies: [usize; 2],
     pub pivots: [Vec3; 2],
     pub limit: JointLimit,
+    /// Each body's third axis of the joint's frame (the ragdoll's motor
+    /// axis, the hinge's second perpendicular axis), in the body's frame;
+    /// zero for a ball and socket. With the twist (or axle) and plane (or
+    /// perpendicular) axes the frame `hkpSetLocalTransformsConstraintAtom`
+    /// gives the solver.
+    pub third: [Vec3; 2],
+    /// The most friction torque (`hkpAngFrictionConstraintAtom`'s, set by
+    /// `00cde9f0` from the file's value); 0 for a ball and socket.
+    pub max_friction: f32,
 }
 
 /// A skeleton's ragdoll.
@@ -324,20 +333,22 @@ impl Nif {
             }
             other => other,
         };
-        let (pivots, limit) = match wrapped {
+        let (pivots, limit, third, max_friction) = match wrapped {
             "bhkRagdollConstraint" => {
-                let mut side = || -> Result<(Vec3, Vec3, Vec3)> {
+                type Side = (Vec3, Vec3, Vec3, Vec3);
+                let mut side = || -> Result<Side> {
                     let twist = vec4(&mut r, "a twist axis")?;
                     let plane = vec4(&mut r, "a plane axis")?;
-                    vec4(&mut r, "a motor axis")?;
+                    let motor = vec4(&mut r, "a motor axis")?;
                     let pivot = scaled(vec4(&mut r, "a pivot")?);
-                    Ok((twist, plane, pivot))
+                    Ok((twist, plane, motor, pivot))
                 };
-                let (twist_a, plane_a, pivot_a) = side()?;
-                let (twist_b, plane_b, pivot_b) = side()?;
+                let (twist_a, plane_a, motor_a, pivot_a) = side()?;
+                let (twist_b, plane_b, motor_b, pivot_b) = side()?;
                 let cone = r.f32("the cone's angle")?;
                 let plane_range = (r.f32("the plane's least")?, r.f32("the plane's most")?);
                 let twist_range = (r.f32("the twist's least")?, r.f32("the twist's most")?);
+                let max_friction = r.f32("the most friction")?;
                 (
                     [pivot_a, pivot_b],
                     JointLimit::Ragdoll {
@@ -347,19 +358,23 @@ impl Nif {
                         plane_range,
                         twist_range,
                     },
+                    [motor_a, motor_b],
+                    max_friction,
                 )
             }
             "bhkLimitedHingeConstraint" => {
-                let mut side = || -> Result<(Vec3, Vec3, Vec3)> {
+                type Side = (Vec3, Vec3, Vec3, Vec3);
+                let mut side = || -> Result<Side> {
                     let axle = vec4(&mut r, "an axle")?;
                     let perpendicular = vec4(&mut r, "a perpendicular axis")?;
-                    vec4(&mut r, "a second perpendicular axis")?;
+                    let second = vec4(&mut r, "a second perpendicular axis")?;
                     let pivot = scaled(vec4(&mut r, "a pivot")?);
-                    Ok((axle, perpendicular, pivot))
+                    Ok((axle, perpendicular, second, pivot))
                 };
-                let (axle_a, perp_a, pivot_a) = side()?;
-                let (axle_b, perp_b, pivot_b) = side()?;
+                let (axle_a, perp_a, second_a, pivot_a) = side()?;
+                let (axle_b, perp_b, second_b, pivot_b) = side()?;
                 let range = (r.f32("the least angle")?, r.f32("the most angle")?);
+                let max_friction = r.f32("the most friction")?;
                 (
                     [pivot_a, pivot_b],
                     JointLimit::Hinge {
@@ -367,12 +382,14 @@ impl Nif {
                         perpendicular: [perp_a, perp_b],
                         range,
                     },
+                    [second_a, second_b],
+                    max_friction,
                 )
             }
             "bhkBallAndSocketConstraint" => {
                 let pivot_a = scaled(vec4(&mut r, "a pivot")?);
                 let pivot_b = scaled(vec4(&mut r, "a pivot")?);
-                ([pivot_a, pivot_b], JointLimit::Free)
+                ([pivot_a, pivot_b], JointLimit::Free, [[0.0; 3]; 2], 0.0)
             }
             _ => return Ok(None),
         };
@@ -380,6 +397,8 @@ impl Nif {
             bodies: [a, b],
             pivots,
             limit,
+            third,
+            max_friction,
         }))
     }
 }

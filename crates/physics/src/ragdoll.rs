@@ -2,26 +2,33 @@
 //! coming to rest on a [`Collider`], as the game's dead do.
 //!
 //! The bodies, their joints and the joints' limits come from the skeleton
-//! (`nif::ragdoll`); this module only moves them. The game hands them to
-//! Havok; here they're stepped with extended position-based dynamics
-//! (Müller et al., "Detailed Rigid Body Simulation with Extended Position
-//! Based Dynamics", 2020): each step is split into substeps that move the
-//! bodies, then correct their positions so the joints hold and nothing sits
-//! inside the world, then work out the velocities from the moves.
+//! (`nif::ragdoll`). The game hands them to Havok, and so does this: the
+//! joints' constraint atoms ([`crate::constraint`]: the ball socket, twist,
+//! cone and plane limits, angular friction, the hinge's limit and 2-D
+//! constraint) are built into the solver's Jacobians by the game's builder
+//! (`00d6f460`) and solved with the contacts of the ragdoll's capsules
+//! (against the world's triangles and against each other) in one island
+//! solve ([`crate::solver`], `hkpConstraintSolverSetup::solve` `00d88b50`),
+//! once a world step (`fMaxTime` 0.016 s in `Fallout.ini`), in the world's
+//! solver substeps.
 //!
 //! Read from the game: masses, inertia, centres of mass, damping, friction,
-//! the most speed, every capsule, pivot, axis and angle limit, and the step
-//! (`[HAVOK] fMaxTime` 0.016 in `Fallout.ini`, about 1/60 s). Not read
-//! (guesses, marked where they're used): gravity (real gravity, as for
-//! walking), how Havok measures the limits' angles (checked only in that the
-//! skeleton's own pose falls inside every limit), no bouncing (the bodies'
-//! restitution isn't combined with the world's). A ragdoll's own bodies
+//! restitution, the most speed, every capsule, pivot, axis and angle limit,
+//! the most friction torque, the step, the solver's settings and the
+//! atoms' constants (see [`crate::constraint`]). A ragdoll's own bodies
 //! meet as the game's collision filter has them: one system group, so the
-//! part table decides ([`parts_meet`], `00c84740`); they're pushed apart
-//! without friction (this solver's).
+//! part table decides ([`parts_meet`], `00c84740`). Not Havok's: the
+//! contact points themselves (Havok's collision agents aren't translated;
+//! capsule ends and the axis' closest point against the triangles, the
+//! closest points of two capsules, this generator's), the ragdoll's
+//! motors (the game's death leaves them off), and gravity (real gravity,
+//! as for walking).
 
+use crate::constraint::{self, Atom, Frames, JointRuntime, Pose};
+use crate::manifold::{point_properties, Manifold, NewPoint, PointProperties};
+use crate::solver::{self, Accumulator, BodyVelocity, QueryIn, Step};
 use crate::vec::*;
-use crate::{segment_triangle_closest, Collider, Vec3};
+use crate::{closest_on_triangle, segment_triangle_closest, Collider, Vec3, HAVOK_UNIT};
 
 /// A rotation as a row-major matrix (column vectors), as `nif` stores it.
 pub type Mat3 = [[f32; 3]; 3];
@@ -30,8 +37,6 @@ pub(crate) type Quat = [f32; 4];
 
 /// The physics step: `[HAVOK] fMaxTime` (0.016 s).
 pub const STEP: f32 = 0.016;
-/// Substeps per step (a choice of this solver, not the game's).
-const SUBSTEPS: usize = 10;
 
 /// What a body is made of, in its own frame (game units).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -43,6 +48,7 @@ pub struct BodySetup {
     /// Two ends and a radius.
     pub capsule: Option<(Vec3, Vec3, f32)>,
     pub friction: f32,
+    pub restitution: f32,
     pub linear_damping: f32,
     pub angular_damping: f32,
     pub max_linear_speed: f32,
@@ -99,6 +105,45 @@ pub struct JointSetup {
     pub bodies: [usize; 2],
     pub pivots: [Vec3; 2],
     pub limit: Limit,
+    /// Each body's third axis of the joint's frame (the twist and plane
+    /// axes, or the axle and perpendicular, come first; `nif::RagdollJoint
+    /// ::third`).
+    pub third: [Vec3; 2],
+    /// The most angular friction torque (Havok units).
+    pub max_friction: f32,
+}
+
+impl JointSetup {
+    /// The joint's constraint atoms, for the solver's builder.
+    fn atoms(&self) -> Vec<Atom> {
+        match self.limit {
+            Limit::Cone {
+                cone,
+                plane_range,
+                twist_range,
+                ..
+            } => constraint::ragdoll_atoms(cone, plane_range, twist_range, self.max_friction),
+            Limit::Hinge { range, .. } => constraint::hinge_atoms(range, self.max_friction),
+            Limit::Free => constraint::ball_atoms(),
+        }
+    }
+
+    /// The frames: each body's three axes and the pivot (Havok units).
+    fn frames(&self) -> Frames {
+        let axes = |k: usize| match self.limit {
+            Limit::Cone { twist, plane, .. } => [twist[k], plane[k], self.third[k]],
+            Limit::Hinge {
+                axle,
+                perpendicular,
+                ..
+            } => [axle[k], perpendicular[k], self.third[k]],
+            Limit::Free => [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+        };
+        Frames {
+            axes: [axes(0), axes(1)],
+            pivots: self.pivots.map(|p| scale(p, 1.0 / HAVOK_UNIT)),
+        }
+    }
 }
 
 /// A joint's angles now, against its limits (radians).
@@ -118,23 +163,20 @@ struct State {
     w: Vec3,
 }
 
-/// A contact found while correcting positions, for the velocity pass.
-struct Contact {
-    body: usize,
-    /// The touching point, from the centre, in the body's frame.
-    local: Vec3,
-    normal: Vec3,
-    /// How much correction it took (mass × distance).
-    lambda: f32,
-}
-
 /// A ragdoll in motion.
 #[derive(Debug, Clone)]
 pub struct Ragdoll {
     pub bodies: Vec<BodySetup>,
     pub joints: Vec<JointSetup>,
-    /// Pairs of its own bodies that meet ([`parts_meet`]).
+    /// Each joint's atoms and what they keep from step to step.
+    atoms: Vec<Vec<Atom>>,
+    runtimes: Vec<JointRuntime>,
+    /// Pairs of its own bodies that meet ([`parts_meet`]) and the contact
+    /// points between each pair's capsules.
     pairs: Vec<(usize, usize)>,
+    pair_points: Vec<Manifold>,
+    /// Each body's contact points with the world's triangles.
+    world_points: Vec<Manifold>,
     state: Vec<State>,
     /// Each body's Havok motion: speed limits and deactivation state
     /// (`crate::havok::Motion`; position and velocities are in `state`).
@@ -144,7 +186,7 @@ pub struct Ragdoll {
     /// Marked inactive at the last step (put to sleep at the next one's
     /// start).
     inactive: bool,
-    /// Its solver settings' deactivation flags (`crate::havok::SolverInfo`).
+    /// Its solver settings (`crate::havok::SolverInfo`).
     solver: crate::havok::SolverInfo,
     /// At rest: no longer stepped.
     pub asleep: bool,
@@ -154,6 +196,46 @@ pub struct Ragdoll {
 /// (`crate::GRAVITY`); nothing in the game's death path changes a body's
 /// gravity factor.
 pub const GRAVITY: f32 = crate::GRAVITY;
+
+/// A rotation's columns (its axes in the world).
+fn columns(q: Quat) -> [Vec3; 3] {
+    let r = quat_mat(q);
+    [
+        [r[0][0], r[1][0], r[2][0]],
+        [r[0][1], r[1][1], r[2][1]],
+        [r[0][2], r[1][2], r[2][2]],
+    ]
+}
+
+/// A contact point's identity: what kind of touch, which feature (capsule
+/// end or axis) and which triangle.
+fn point_key(kind: u64, feature: u64, triangle: u32) -> u64 {
+    kind << 56 | feature << 32 | u64::from(triangle)
+}
+
+/// The contact manager's update for one agent (`hkpSimpleConstraintContactMgr`
+/// `00cfcf80`, `00cfd320`, as [`crate::rigid`] does): points still found
+/// keep their properties with the new position, normal and distance, the
+/// ones no longer found go, new ones are added with their properties.
+fn update_points(m: &mut Manifold, found: &[(NewPoint, PointProperties)]) {
+    let mut k = 0;
+    while k < m.points.len() {
+        if let Some((n, _)) = found.iter().find(|(n, _)| n.key == m.points[k].key) {
+            let p = &mut m.points[k];
+            p.position = n.position;
+            p.normal = n.normal;
+            p.distance = n.distance;
+            k += 1;
+        } else {
+            m.remove(k);
+        }
+    }
+    for (n, props) in found {
+        if !m.points.iter().any(|p| p.key == n.key) {
+            m.add(*n, *props);
+        }
+    }
+}
 
 impl Ragdoll {
     /// Bodies placed at `frames` (each body frame's rotation and origin in
@@ -192,9 +274,15 @@ impl Ragdoll {
                 }
             }
         }
+        let atoms: Vec<Vec<Atom>> = joints.iter().map(JointSetup::atoms).collect();
+        let runtimes = atoms.iter().map(|a| JointRuntime::new(a)).collect();
         Ragdoll {
+            pair_points: vec![Manifold::default(); pairs.len()],
+            world_points: vec![Manifold::default(); bodies.len()],
             bodies,
             joints,
+            atoms,
+            runtimes,
             pairs,
             state,
             motions,
@@ -307,83 +395,370 @@ impl Ragdoll {
     /// Moves on by a frame of `dt` seconds, in the world's whole steps
     /// ([`crate::havok::Clock`], `00c66760`/`00c6ae70`).
     pub fn update(&mut self, collider: &Collider, dt: f32) {
-        let (n, _) = self.clock.advance(dt);
+        let (n, step) = self.clock.advance(dt);
         for _ in 0..n {
             if self.asleep {
                 return;
             }
-            self.step(collider);
+            self.step_by(collider, step);
         }
     }
 
-    /// One physics step.
+    /// One physics step of the game's length.
     pub fn step(&mut self, collider: &Collider) {
+        self.step_by(collider, STEP);
+    }
+
+    /// One physics step of `dt` seconds: the contact points for where the
+    /// bodies are, the joints' and contacts' Jacobians, the island's solve
+    /// (`hkpConstraintSolverSetup::solve` `00d88b50`) and the bodies moved
+    /// (`hkRigidMotionUtilApplyAccumulators` `00d29bf0`), with the
+    /// deactivation bookkeeping.
+    // Translated from 00d88b50 and 00d29bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+    fn step_by(&mut self, collider: &Collider, dt: f32) {
         self.begin_step();
         if self.asleep {
             return;
         }
-        let h = STEP / SUBSTEPS as f32;
-        // Triangles each body might touch this step.
-        let nearby: Vec<Vec<u32>> = (0..self.bodies.len())
-            .map(|i| {
-                let Some((a, b, radius)) = self.bodies[i].capsule else {
-                    return Vec::new();
-                };
-                let (r, origin) = self.frame(i);
-                let (a, b) = (add(origin, mat_vec(&r, a)), add(origin, mat_vec(&r, b)));
-                let reach = radius + length(self.state[i].v) * STEP + 4.0;
-                let lo = [
-                    a[0].min(b[0]) - reach,
-                    a[1].min(b[1]) - reach,
-                    a[2].min(b[2]) - reach,
-                ];
-                let hi = [
-                    a[0].max(b[0]) + reach,
-                    a[1].max(b[1]) + reach,
-                    a[2].max(b[2]) + reach,
-                ];
-                collider
-                    .near(lo, hi)
-                    .into_iter()
-                    .filter(|&t| {
-                        let [p, q, s] = collider.triangle(t);
-                        p[2].max(q[2]).max(s[2]) >= lo[2] && p[2].min(q[2]).min(s[2]) <= hi[2]
-                    })
-                    .collect()
-            })
-            .collect();
+        let n = self.bodies.len();
+        let u = HAVOK_UNIT;
         // Havok's forces for a constrained island (`00d29830`): damping
-        // once a step, gravity per substep (below); after this solver's
-        // substeps, the velocity checks of `00d29bf0`.
-        for i in 0..self.bodies.len() {
+        // once a step.
+        for i in 0..n {
             if self.bodies[i].mass > 0.0 {
                 let mut m = self.motion(i);
-                m.apply_damping(STEP);
+                m.apply_damping(dt);
                 self.set_motion(i, &m);
             }
         }
-        for _ in 0..SUBSTEPS {
-            self.substep(collider, &nearby, h);
+        self.find_points(collider);
+        let origin = self.state[0].x;
+        let hv = |p: Vec3| scale(sub(p, origin), 1.0 / u);
+        // The accumulators: the world's fixed body, then each body.
+        let mut accs = vec![Accumulator::fixed()];
+        let mut spin = vec![[0.0f32; 3]];
+        let mut poses = Vec::with_capacity(n);
+        for i in 0..n {
+            let (s, b) = (&self.state[i], &self.bodies[i]);
+            let rotation = columns(s.q);
+            if b.mass > 0.0 {
+                let inertia = b.inertia.map(|k| u * u / k.max(1e-6));
+                accs.push(Accumulator::dynamic(
+                    hv(s.x),
+                    rotation,
+                    scale(s.v, 1.0 / u),
+                    s.w,
+                    inertia,
+                    1.0 / b.mass,
+                    usize::from(self.motions[i].deactivation_class),
+                    crate::havok::from_half(self.motions[i].gravity_factor),
+                ));
+            } else {
+                accs.push(Accumulator::keyframed(hv(s.x), scale(s.v, 1.0 / u)));
+            }
+            spin.push(s.w);
+            let (_, frame_origin) = self.frame(i);
+            poses.push(Pose {
+                origin: hv(frame_origin),
+                rotation,
+            });
         }
-        // The deactivation bookkeeping per body (`00d29bf0`); the ragdoll's
-        // bodies are one island (its constraints join them): marked
-        // inactive when the fewest passing checks is more than 5.
+        // The contact constraints (Havok units): the bodies' points with the
+        // world (against the fixed body), then the pairs'.
+        let mut copies: Vec<Manifold> = Vec::new();
+        let mut sides = Vec::new();
+        let havok = |m: &Manifold| {
+            let mut c = m.clone();
+            for p in &mut c.points {
+                p.position = hv(p.position);
+                p.distance /= u;
+            }
+            c
+        };
+        let mut keys = Vec::new();
+        for (i, m) in self.world_points.iter().enumerate() {
+            if !m.is_empty() {
+                copies.push(havok(m));
+                sides.push((1 + i, 0));
+                keys.push((false, i));
+            }
+        }
+        for (k, m) in self.pair_points.iter().enumerate() {
+            if !m.is_empty() {
+                let (a, b) = self.pairs[k];
+                copies.push(havok(m));
+                sides.push((1 + a, 1 + b));
+                keys.push((true, k));
+            }
+        }
+        let step = Step::new(&self.solver, dt, crate::havok::GRAVITY);
+        let q = QueryIn::new(&self.solver, &step);
+        let cx = constraint::Context {
+            q: &q,
+            tau: self.solver.tau,
+        };
+        let mut schemas = Vec::new();
+        // The joints first (their bodies' constraints are older than the
+        // contacts), their headers numbered after the contacts'.
+        for (j, joint) in self.joints.iter().enumerate() {
+            let [a, b] = joint.bodies;
+            let (ia, ib) = (1 + a, 1 + b);
+            constraint::build(
+                &self.atoms[j],
+                &joint.frames(),
+                [&poses[a], &poses[b]],
+                copies.len() + j,
+                &cx,
+                &constraint::Sides {
+                    ids: (ia, ib),
+                    a: &accs[ia],
+                    b: &accs[ib],
+                },
+                &mut self.runtimes[j],
+                &mut schemas,
+            );
+        }
+        for (ci, (c, &(ia, ib))) in copies.iter_mut().zip(&sides).enumerate() {
+            let velocity = |k: usize| BodyVelocity {
+                linear: accs[k].linear,
+                angular: spin[k],
+                center: accs[k].center,
+            };
+            solver::fire_callbacks(
+                c,
+                &q,
+                (accs[ia].inv_mass, accs[ib].inv_mass),
+                &velocity(ia),
+                &velocity(ib),
+                self.solver.contact_resting_velocity,
+            );
+            solver::build_contact_jacobians(
+                c,
+                ci,
+                &q,
+                (ia, ib),
+                &accs[ia],
+                &accs[ib],
+                &mut schemas,
+            );
+        }
+        let results = solver::solve(&self.solver, &step, &schemas, &mut accs);
+        {
+            let mut refs: Vec<&mut Manifold> = copies.iter_mut().collect();
+            solver::export(&self.solver, &step, &schemas, &results, &accs, &mut refs);
+        }
+        constraint::export(
+            &self.solver,
+            &step,
+            &schemas,
+            &results,
+            &accs,
+            copies.len(),
+            &mut self.runtimes,
+        );
+        for (c, &(pair, k)) in copies.iter().zip(&keys) {
+            let m = if pair {
+                &mut self.pair_points[k]
+            } else {
+                &mut self.world_points[k]
+            };
+            for (p, cp) in m.points.iter_mut().zip(&c.points) {
+                p.props = cp.props;
+            }
+            m.info = c.info;
+        }
+        // The bodies moved (`00d29bf0`) and the deactivation bookkeeping per
+        // body; the ragdoll's bodies are one island (its constraints join
+        // them): marked inactive when the fewest passing checks is more
+        // than 5.
         let mut fewest = u32::MAX;
-        for i in 0..self.bodies.len() {
-            if self.bodies[i].mass > 0.0 {
-                let mut m = self.motion(i);
-                m.reset_invalid_velocities(crate::HAVOK_UNIT);
-                m.clamp_linear_velocity(crate::HAVOK_UNIT);
-                m.clamp_angular_velocity(STEP);
-                if let Some(f) = m.update_deactivation(&self.solver, crate::HAVOK_UNIT) {
-                    fewest = fewest.min(f);
-                }
-                self.set_motion(i, &m);
+        for i in 0..n {
+            if self.bodies[i].mass <= 0.0 {
+                continue;
             }
+            let acc = accs[1 + i];
+            let cols = columns(self.state[i].q);
+            let mut m = self.motion(i);
+            if let Some(f) = m.apply_accumulator(
+                scale(acc.linear, u),
+                solver::apply_cols(&cols, acc.angular),
+                scale(acc.sum_linear, u),
+                solver::apply_cols(&cols, acc.sum_angular),
+                dt,
+                u,
+                &self.solver,
+            ) {
+                fewest = fewest.min(f);
+            }
+            self.set_motion(i, &m);
         }
         self.inactive = fewest != u32::MAX
             && fewest > crate::havok::INACTIVE_FRAMES_TO_DEACTIVATE
             && crate::havok::WANT_DEACTIVATION;
+    }
+
+    /// The contact points for where the bodies are (the end of Havok's
+    /// previous step, `hkpSimulation::collide` `00cf8bc0`): each capsule
+    /// against the world's triangles near it, and each pair of the
+    /// ragdoll's own capsules that meet. This generator's (Havok's agents
+    /// aren't translated): a capsule's two end spheres and the closest point
+    /// of its axis (when it isn't an end) against a triangle, the closest
+    /// points of two axes; each within the collision tolerance
+    /// (`00cfb570`), on the other side's surface.
+    fn find_points(&mut self, collider: &Collider) {
+        let tol = crate::havok::COLLISION_TOLERANCE * HAVOK_UNIT;
+        for i in 0..self.bodies.len() {
+            let Some((ea, eb, radius)) = self.bodies[i].capsule else {
+                continue;
+            };
+            let (r, origin) = self.frame(i);
+            let (p, q) = (add(origin, mat_vec(&r, ea)), add(origin, mat_vec(&r, eb)));
+            // The collision tolerance and the distance it can close in the step: a
+            // point this near is kept, and the solver lets a body approach it no
+            // further than the gap (without continuous collision, PR 9, this is
+            // what stops a fast body at a surface).
+            let tol = tol + length(self.state[i].v) * STEP;
+            let reach = radius + 4.0 + tol;
+            let lo = [
+                p[0].min(q[0]) - reach,
+                p[1].min(q[1]) - reach,
+                p[2].min(q[2]) - reach,
+            ];
+            let hi = [
+                p[0].max(q[0]) + reach,
+                p[1].max(q[1]) + reach,
+                p[2].max(q[2]) + reach,
+            ];
+            let mut found: Vec<(NewPoint, PointProperties)> = Vec::new();
+            let b = &self.bodies[i];
+            // How far behind a face a point may be and still count.
+            let deep = 2.0 * radius + tol + 1.0;
+            for t in collider.near(lo, hi) {
+                let [ta, tb, tc] = collider.triangle(t);
+                if ta[2].max(tb[2]).max(tc[2]) < lo[2] || ta[2].min(tb[2]).min(tc[2]) > hi[2] {
+                    continue;
+                }
+                let shell = collider.shell(t);
+                let surface = collider.surface(t).unwrap_or(crate::rigid::DEFAULT_SURFACE);
+                let props = point_properties(
+                    (b.friction, surface.friction),
+                    (b.restitution, surface.restitution),
+                );
+                let face = {
+                    let f = normalize(cross(sub(tb, ta), sub(tc, ta)));
+                    if dot(f, sub(self.state[i].x, ta)) >= 0.0 {
+                        f
+                    } else {
+                        scale(f, -1.0)
+                    }
+                };
+                // A point of the capsule (an end, or the axis' closest
+                // point) against the triangle: over the face, the face's
+                // normal (a point gone through still counts, up to `deep`
+                // behind it, as the rigid bodies' do); beside it, from the
+                // closest point.
+                let margin = radius + shell;
+                let mut touch = |c: Vec3, feature: u64| {
+                    let s = dot(face, sub(c, ta));
+                    let on_plane = sub(c, scale(face, s));
+                    let over = {
+                        let side = |p: Vec3, q: Vec3, r: Vec3| {
+                            dot(cross(sub(q, p), sub(on_plane, p)), face)
+                                * dot(cross(sub(q, p), sub(r, p)), face)
+                                >= 0.0
+                        };
+                        side(ta, tb, tc) && side(tb, tc, ta) && side(tc, ta, tb)
+                    };
+                    let (on, n, d) = if over {
+                        if !(s < margin + tol && s > -deep) {
+                            return;
+                        }
+                        (on_plane, face, s)
+                    } else {
+                        let on = closest_on_triangle(c, ta, tb, tc);
+                        let d = length(sub(c, on));
+                        if d >= margin + tol || d <= 1e-5 {
+                            return;
+                        }
+                        (on, scale(sub(c, on), 1.0 / d), d)
+                    };
+                    found.push((
+                        NewPoint {
+                            key: point_key(1, feature, t),
+                            position: add(on, scale(n, shell)),
+                            normal: n,
+                            distance: d - margin,
+                        },
+                        props,
+                    ));
+                };
+                touch(p, 0);
+                touch(q, 1);
+                let (on_axis, _) = segment_triangle_closest(p, q, ta, tb, tc);
+                if dist2(on_axis, p) > 1e-4 && dist2(on_axis, q) > 1e-4 {
+                    touch(on_axis, 2);
+                }
+            }
+            update_points(&mut self.world_points[i], &found);
+        }
+        for k in 0..self.pairs.len() {
+            let (a, b) = self.pairs[k];
+            let (Some((a0, a1, ra)), Some((b0, b1, rb))) =
+                (self.bodies[a].capsule, self.bodies[b].capsule)
+            else {
+                continue;
+            };
+            let ends = |me: &Self, body: usize, p: Vec3, q: Vec3| {
+                let (r, origin) = me.frame(body);
+                (add(origin, mat_vec(&r, p)), add(origin, mat_vec(&r, q)))
+            };
+            let (pa, qa) = ends(self, a, a0, a1);
+            let (pb, qb) = ends(self, b, b0, b1);
+            let mut found = Vec::new();
+            let tol = tol + (length(self.state[a].v) + length(self.state[b].v)) * STEP;
+            let (fa, fb) = (self.bodies[a], self.bodies[b]);
+            let props =
+                point_properties((fa.friction, fb.friction), (fa.restitution, fb.restitution));
+            // The ends of each axis against the other, and the axes' closest
+            // points when neither is an end; the normal from the second
+            // body toward the first.
+            let mut touch = |on_a: Vec3, on_b: Vec3, feature: u64| {
+                let gap = sub(on_a, on_b);
+                let d = length(gap);
+                if d >= ra + rb + tol {
+                    return;
+                }
+                let n = if d > 1e-5 {
+                    scale(gap, 1.0 / d)
+                } else {
+                    let between = sub(self.state[a].x, self.state[b].x);
+                    if length(between) > 1e-5 {
+                        normalize(between)
+                    } else {
+                        [0.0, 0.0, 1.0]
+                    }
+                };
+                found.push((
+                    NewPoint {
+                        key: point_key(2, feature, 0),
+                        position: add(on_b, scale(n, rb)),
+                        normal: n,
+                        distance: d - (ra + rb),
+                    },
+                    props,
+                ));
+            };
+            touch(pa, closest_on_segment(pa, pb, qb), 0);
+            touch(qa, closest_on_segment(qa, pb, qb), 1);
+            touch(closest_on_segment(pb, pa, qa), pb, 2);
+            touch(closest_on_segment(qb, pa, qa), qb, 3);
+            let (on_a, on_b) = segments_closest(pa, qa, pb, qb);
+            let end = |p: Vec3| [pa, qa, pb, qb].iter().any(|e| dist2(*e, p) < 1e-4);
+            if !end(on_a) && !end(on_b) {
+                touch(on_a, on_b, 4);
+            }
+            update_points(&mut self.pair_points[k], &found);
+        }
     }
 
     /// The start of a step (`00cf8da0`): an island marked inactive goes to
@@ -417,66 +792,6 @@ impl Ragdoll {
         self.inactive = false;
     }
 
-    fn substep(&mut self, collider: &Collider, nearby: &[Vec<u32>], h: f32) {
-        let previous: Vec<State> = self.state.clone();
-        for (s, b) in self.state.iter_mut().zip(&self.bodies) {
-            if b.mass <= 0.0 {
-                continue;
-            }
-            s.v[2] -= GRAVITY * h;
-            s.x = add(s.x, scale(s.v, h));
-            s.q = rotated(s.q, scale(s.w, h));
-        }
-        for j in 0..self.joints.len() {
-            self.solve_joint(j);
-        }
-        for k in 0..self.pairs.len() {
-            let (a, b) = self.pairs[k];
-            self.solve_pair(a, b);
-        }
-        let mut contacts = Vec::new();
-        for (i, tris) in nearby.iter().enumerate() {
-            self.solve_contacts(collider, i, tris, &mut contacts);
-        }
-        // Velocities from the moves.
-        for ((s, p), b) in self.state.iter_mut().zip(&previous).zip(&self.bodies) {
-            if b.mass <= 0.0 {
-                continue;
-            }
-            s.v = scale(sub(s.x, p.x), 1.0 / h);
-            let d = quat_mul(s.q, conjugate(p.q));
-            let w = scale([d[0], d[1], d[2]], 2.0 / h);
-            s.w = if d[3] < 0.0 { scale(w, -1.0) } else { w };
-        }
-        // Friction (stopping a sliding point outright when the push it got
-        // allows: static friction) and no bounce.
-        for c in &contacts {
-            let b = self.bodies[c.body];
-            let s = self.state[c.body];
-            let r = mat_vec(&quat_mat(s.q), c.local);
-            let at = add(s.v, cross(s.w, r));
-            let vn = dot(at, c.normal);
-            let vt = sub(at, scale(c.normal, vn));
-            let mut dv = [0.0; 3];
-            let slide = length(vt);
-            if slide > 1e-6 {
-                let stop = (b.friction * c.lambda / h).min(slide);
-                dv = add(dv, scale(vt, -stop / slide));
-            }
-            if vn < 0.0 {
-                dv = add(dv, scale(c.normal, -vn));
-            }
-            let size = length(dv);
-            if size > 1e-6 {
-                let n = scale(dv, 1.0 / size);
-                let w = self.inverse_mass_at(c.body, r, n);
-                if w > 0.0 {
-                    self.impulse(c.body, scale(n, size / w), r);
-                }
-            }
-        }
-    }
-
     /// Body `i` as a Havok motion (game units), its velocities and limits.
     fn motion(&self, i: usize) -> crate::havok::Motion {
         let (b, s) = (&self.bodies[i], &self.state[i]);
@@ -497,255 +812,6 @@ impl Ragdoll {
         s.q = m.rotation;
         s.v = m.linear_velocity;
         s.w = m.angular_velocity;
-    }
-
-    /// The inverse of a body's inertia, in the world, applied to `a`.
-    fn inverse_inertia(&self, body: usize, a: Vec3) -> Vec3 {
-        let b = &self.bodies[body];
-        if b.mass <= 0.0 {
-            return [0.0; 3];
-        }
-        let r = quat_mat(self.state[body].q);
-        let local = mat_t_vec(&r, a);
-        let scaled = [
-            local[0] / b.inertia[0].max(1e-6),
-            local[1] / b.inertia[1].max(1e-6),
-            local[2] / b.inertia[2].max(1e-6),
-        ];
-        mat_vec(&r, scaled)
-    }
-
-    /// How readily a body gives at `r` (from its centre) along `n`.
-    fn inverse_mass_at(&self, body: usize, r: Vec3, n: Vec3) -> f32 {
-        let b = &self.bodies[body];
-        if b.mass <= 0.0 {
-            return 0.0;
-        }
-        let rn = cross(r, n);
-        1.0 / b.mass + dot(rn, self.inverse_inertia(body, rn))
-    }
-
-    /// Moves a body as a positional push `p` at `r` would.
-    fn shift(&mut self, body: usize, p: Vec3, r: Vec3) {
-        let m = self.bodies[body].mass;
-        if m <= 0.0 {
-            return;
-        }
-        let turn = self.inverse_inertia(body, cross(r, p));
-        let s = &mut self.state[body];
-        s.x = add(s.x, scale(p, 1.0 / m));
-        s.q = rotated(s.q, turn);
-    }
-
-    /// Changes a body's velocities as an impulse `p` at `r` would.
-    fn impulse(&mut self, body: usize, p: Vec3, r: Vec3) {
-        let m = self.bodies[body].mass;
-        if m <= 0.0 {
-            return;
-        }
-        let turn = self.inverse_inertia(body, cross(r, p));
-        let s = &mut self.state[body];
-        s.v = add(s.v, scale(p, 1.0 / m));
-        s.w = add(s.w, turn);
-    }
-
-    /// Turns the first body by `angle` about `axis` (unit) relative to the
-    /// second, shared by how readily each turns.
-    fn turn_apart(&mut self, a: usize, b: usize, axis: Vec3, angle: f32) {
-        let wa = dot(axis, self.inverse_inertia(a, axis));
-        let wb = dot(axis, self.inverse_inertia(b, axis));
-        if wa + wb <= 0.0 {
-            return;
-        }
-        let p = scale(axis, angle / (wa + wb));
-        let ta = self.inverse_inertia(a, p);
-        let tb = self.inverse_inertia(b, p);
-        self.state[a].q = rotated(self.state[a].q, ta);
-        self.state[b].q = rotated(self.state[b].q, scale(tb, -1.0));
-    }
-
-    fn solve_joint(&mut self, joint: usize) {
-        let JointSetup {
-            bodies: [a, b],
-            pivots,
-            limit,
-        } = self.joints[joint];
-        // The pivots meet.
-        let arm = |me: &Self, body: usize, pivot: Vec3| {
-            let r = quat_mat(me.state[body].q);
-            mat_vec(&r, sub(pivot, me.bodies[body].center))
-        };
-        let (ra, rb) = (arm(self, a, pivots[0]), arm(self, b, pivots[1]));
-        let gap = sub(add(self.state[b].x, rb), add(self.state[a].x, ra));
-        let c = length(gap);
-        if c > 1e-6 {
-            let n = scale(gap, 1.0 / c);
-            let w = self.inverse_mass_at(a, ra, n) + self.inverse_mass_at(b, rb, n);
-            if w > 0.0 {
-                let p = scale(n, c / w);
-                self.shift(a, p, ra);
-                self.shift(b, scale(p, -1.0), rb);
-            }
-        }
-        // The angles stay within the limits.
-        let rot = |me: &Self, body: usize| quat_mat(me.state[body].q);
-        match limit {
-            Limit::Cone {
-                twist,
-                plane,
-                cone,
-                plane_range,
-                twist_range,
-            } => {
-                let (r1, r2) = (rot(self, a), rot(self, b));
-                let (a1, a2) = (mat_vec(&r1, twist[0]), mat_vec(&r2, twist[1]));
-                let between = angle_between(a1, a2);
-                if between > cone {
-                    let axis = normalize(cross(a1, a2));
-                    if length(axis) > 0.5 {
-                        self.turn_apart(a, b, axis, between - cone);
-                    }
-                }
-                let (r1, r2) = (rot(self, a), rot(self, b));
-                let a1 = mat_vec(&r1, twist[0]);
-                let c2 = mat_vec(&r2, plane[1]);
-                let elevation = dot(a1, c2).clamp(-1.0, 1.0).asin();
-                let kept = elevation.clamp(plane_range.0, plane_range.1);
-                if kept != elevation {
-                    let axis = normalize(cross(c2, a1));
-                    if length(axis) > 0.5 {
-                        self.turn_apart(a, b, axis, elevation - kept);
-                    }
-                }
-                let (r1, r2) = (rot(self, a), rot(self, b));
-                if let Some((t, turned)) = twist_angle(
-                    mat_vec(&r1, twist[0]),
-                    mat_vec(&r2, twist[1]),
-                    mat_vec(&r1, plane[0]),
-                    mat_vec(&r2, plane[1]),
-                ) {
-                    let kept = turned.clamp(twist_range.0, twist_range.1);
-                    if kept != turned {
-                        self.turn_apart(a, b, t, kept - turned);
-                    }
-                }
-            }
-            Limit::Hinge {
-                axle,
-                perpendicular,
-                range,
-            } => {
-                let (r1, r2) = (rot(self, a), rot(self, b));
-                let (a1, a2) = (mat_vec(&r1, axle[0]), mat_vec(&r2, axle[1]));
-                let off = angle_between(a1, a2);
-                if off > 1e-4 {
-                    let axis = normalize(cross(a1, a2));
-                    if length(axis) > 0.5 {
-                        self.turn_apart(a, b, axis, off);
-                    }
-                }
-                let (r1, r2) = (rot(self, a), rot(self, b));
-                let a1 = normalize(mat_vec(&r1, axle[0]));
-                let turned = turn_about(
-                    a1,
-                    mat_vec(&r2, perpendicular[1]),
-                    mat_vec(&r1, perpendicular[0]),
-                );
-                if let Some(turned) = turned {
-                    let kept = turned.clamp(range.0, range.1);
-                    if kept != turned {
-                        self.turn_apart(a, b, a1, kept - turned);
-                    }
-                }
-            }
-            Limit::Free => {}
-        }
-    }
-
-    /// Pushes two of the ragdoll's own capsules apart where they overlap
-    /// (bodies whose parts meet, [`parts_meet`]); shared by how readily
-    /// each gives there (this solver's, as for the joints).
-    fn solve_pair(&mut self, a: usize, b: usize) {
-        let (Some((a0, a1, ra)), Some((b0, b1, rb))) =
-            (self.bodies[a].capsule, self.bodies[b].capsule)
-        else {
-            return;
-        };
-        let ends = |me: &Self, body: usize, p: Vec3, q: Vec3| {
-            let (r, origin) = me.frame(body);
-            (add(origin, mat_vec(&r, p)), add(origin, mat_vec(&r, q)))
-        };
-        let (pa, qa) = ends(self, a, a0, a1);
-        let (pb, qb) = ends(self, b, b0, b1);
-        let (on_a, on_b) = segments_closest(pa, qa, pb, qb);
-        let gap = sub(on_b, on_a);
-        let d = length(gap);
-        let depth = ra + rb - d;
-        if depth <= 0.0 || d < 1e-6 {
-            return;
-        }
-        let n = scale(gap, 1.0 / d);
-        // The touching points, from each centre.
-        let arm_a = sub(add(on_a, scale(n, ra)), self.state[a].x);
-        let arm_b = sub(sub(on_b, scale(n, rb)), self.state[b].x);
-        let w = self.inverse_mass_at(a, arm_a, n) + self.inverse_mass_at(b, arm_b, n);
-        if w <= 0.0 {
-            return;
-        }
-        let p = scale(n, depth / w);
-        self.shift(a, scale(p, -1.0), arm_a);
-        self.shift(b, p, arm_b);
-    }
-
-    /// Pushes a body's capsule out of the triangles it overlaps.
-    fn solve_contacts(
-        &mut self,
-        collider: &Collider,
-        body: usize,
-        triangles: &[u32],
-        contacts: &mut Vec<Contact>,
-    ) {
-        let Some((ea, eb, radius)) = self.bodies[body].capsule else {
-            return;
-        };
-        for &t in triangles {
-            let (r, origin) = self.frame(body);
-            let (p, q) = (add(origin, mat_vec(&r, ea)), add(origin, mat_vec(&r, eb)));
-            let [ta, tb, tc] = collider.triangle(t);
-            let (on_axis, on_triangle) = segment_triangle_closest(p, q, ta, tb, tc);
-            let gap = sub(on_axis, on_triangle);
-            let d = length(gap);
-            if d >= radius {
-                continue;
-            }
-            let n = if d > 1e-5 {
-                scale(gap, 1.0 / d)
-            } else {
-                let face = normalize(cross(sub(tb, ta), sub(tc, ta)));
-                let centre = self.state[body].x;
-                if dot(face, sub(centre, ta)) >= 0.0 {
-                    face
-                } else {
-                    scale(face, -1.0)
-                }
-            };
-            let depth = radius - d;
-            let touch = sub(on_axis, scale(n, radius));
-            let arm = sub(touch, self.state[body].x);
-            let w = self.inverse_mass_at(body, arm, n);
-            if w <= 0.0 {
-                continue;
-            }
-            let lambda = depth / w;
-            self.shift(body, scale(n, lambda), arm);
-            let r = quat_mat(self.state[body].q);
-            contacts.push(Contact {
-                body,
-                local: mat_t_vec(&r, arm),
-                normal: n,
-                lambda,
-            });
-        }
     }
 }
 
@@ -779,6 +845,16 @@ pub fn joint_angles(limit: &Limit, r1: &Mat3, r2: &Mat3) -> JointAngles {
         }
         Limit::Free => JointAngles::Free,
     }
+}
+
+/// The point of segment `a`–`b` closest to `p`.
+fn closest_on_segment(p: Vec3, a: Vec3, b: Vec3) -> Vec3 {
+    let ab = sub(b, a);
+    let l2 = dot(ab, ab);
+    if l2 <= 1e-12 {
+        return a;
+    }
+    add(a, scale(ab, (dot(sub(p, a), ab) / l2).clamp(0.0, 1.0)))
 }
 
 /// The closest points of two segments (`p1`–`q1`, `p2`–`q2`): on the
@@ -866,21 +942,6 @@ pub(crate) fn mat_t_vec(m: &Mat3, v: Vec3) -> Vec3 {
     ]
 }
 
-pub(crate) fn quat_mul(a: Quat, b: Quat) -> Quat {
-    let [ax, ay, az, aw] = a;
-    let [bx, by, bz, bw] = b;
-    [
-        aw * bx + ax * bw + ay * bz - az * by,
-        aw * by - ax * bz + ay * bw + az * bx,
-        aw * bz + ax * by - ay * bx + az * bw,
-        aw * bw - ax * bx - ay * by - az * bz,
-    ]
-}
-
-pub(crate) fn conjugate(q: Quat) -> Quat {
-    [-q[0], -q[1], -q[2], q[3]]
-}
-
 pub(crate) fn quat_normalize(q: Quat) -> Quat {
     let l = (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt();
     if l > 0.0 {
@@ -888,17 +949,6 @@ pub(crate) fn quat_normalize(q: Quat) -> Quat {
     } else {
         [0.0, 0.0, 0.0, 1.0]
     }
-}
-
-/// `q` turned by the small rotation vector `by` (in the world).
-pub(crate) fn rotated(q: Quat, by: Vec3) -> Quat {
-    let d = quat_mul([by[0], by[1], by[2], 0.0], q);
-    quat_normalize([
-        q[0] + 0.5 * d[0],
-        q[1] + 0.5 * d[1],
-        q[2] + 0.5 * d[2],
-        q[3] + 0.5 * d[3],
-    ])
 }
 
 pub(crate) fn quat_mat(q: Quat) -> Mat3 {
@@ -989,12 +1039,25 @@ mod tests {
             inertia: [mass * 9.0, mass * 40.0, mass * 40.0],
             capsule: Some(([0.0; 3], [20.0, 0.0, 0.0], 3.0)),
             friction: 0.3,
+            restitution: 0.0,
             linear_damping: 0.1,
             angular_damping: 0.05,
             max_linear_speed: 7000.0,
             max_angular_speed: 30.0,
             layer: 8,
             part: 0,
+        }
+    }
+
+    /// A ball and socket from a rod's origin (the first body) to the end of
+    /// the second.
+    fn ball(a: usize, b: usize) -> JointSetup {
+        JointSetup {
+            bodies: [a, b],
+            pivots: [[0.0; 3], [20.0, 0.0, 0.0]],
+            limit: Limit::Free,
+            third: [[0.0; 3]; 2],
+            max_friction: 0.0,
         }
     }
 
@@ -1045,11 +1108,11 @@ mod tests {
 
     #[test]
     fn own_bodies_meet_only_as_the_part_table_says() {
-        // Two rods crossing at the same spot, held up (no mass for the
-        // first). A head (part 1) and a left forearm (6) meet in the
-        // game's table (`01268078` row 1 has bit 6); a head and the body
-        // (2) don't.
-        let crossing = |part_a: u8, part_b: u8| {
+        // Two rods side by side at the same spot, the first held up (no
+        // mass). A head (part 1) and a left forearm (6) meet in the game's
+        // table (`01268078` row 1 has bit 6); a head and the body (2)
+        // don't.
+        let side_by_side = |part_a: u8, part_b: u8| {
             let mut a = rod(0.0);
             a.part = part_a;
             let mut b = rod(4.0);
@@ -1057,9 +1120,11 @@ mod tests {
             let mut r = Ragdoll::new(
                 vec![a, b],
                 Vec::new(),
-                &[(I3, [0.0, 0.0, 500.0]), (I3, [0.0, 0.0, 502.0])],
+                &[(I3, [0.0, 0.0, 500.0]), (I3, [0.0, 0.0, 508.0])],
             );
-            r.step(&Collider::new());
+            for _ in 0..60 {
+                r.step(&Collider::new());
+            }
             let (_, low) = r.frame(0);
             let (_, high) = r.frame(1);
             high[2] - low[2]
@@ -1084,12 +1149,12 @@ mod tests {
                 ..rod(1.0)
             }
         ));
-        // Meeting: pushed apart to the two radii (6), less a step's fall.
-        let apart = crossing(1, 6);
-        assert!(apart > 5.0, "{apart}");
+        // Meeting: the second lands on the first, the two radii apart.
+        let apart = side_by_side(1, 6);
+        assert!((5.0..7.0).contains(&apart), "{apart}");
         // Not meeting: the second falls through the first.
-        let through = crossing(1, 2);
-        assert!(through < 2.0, "{through}");
+        let through = side_by_side(1, 2);
+        assert!(through < 0.0, "{through}");
     }
 
     #[test]
@@ -1106,6 +1171,93 @@ mod tests {
                 perpendicular: [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
                 range: (0.0, std::f32::consts::FRAC_PI_2),
             },
+            // axle × perpendicular
+            third: [[0.0, 0.0, -1.0]; 2],
+            max_friction: 0.0,
+        };
+        let mut r = Ragdoll::new(
+            vec![rod(0.0), rod(4.0)],
+            vec![joint],
+            &[(I3, [0.0, 0.0, 200.0]), (I3, [20.0, 0.0, 200.0])],
+        );
+        let (mut lowest, mut highest) = (0.0f32, 0.0f32);
+        let c = floor();
+        for _ in 0..240 {
+            r.update(&c, 1.0 / 60.0);
+            if let JointAngles::Hinge { angle, .. } = r.joint_angles(0) {
+                lowest = lowest.min(angle);
+                highest = highest.max(angle);
+            }
+        }
+        assert!(r.joint_gap(0) < 0.5, "gap {}", r.joint_gap(0));
+        let JointAngles::Hinge { misaligned, angle } = r.joint_angles(0) else {
+            unreachable!()
+        };
+        assert!(misaligned < 0.02, "{misaligned}");
+        // It fell from level, swinging to the limit and no further (positive
+        // about the axle: the first body turning from the second's plane axis
+        // toward its third), and hangs near straight down.
+        assert!(
+            lowest > -0.1 && highest < std::f32::consts::FRAC_PI_2 + 0.1,
+            "{lowest} {highest}"
+        );
+        assert!(
+            (angle - std::f32::consts::FRAC_PI_2).abs() < 0.25,
+            "{angle}"
+        );
+        // Hanging straight down from the first rod's end.
+        let (rot, origin) = r.frame(1);
+        let tip = add(origin, mat_vec(&rot, [20.0, 0.0, 0.0]));
+        assert!(
+            (tip[0] - 20.0).abs() < 6.0 && (tip[2] - 180.0).abs() < 3.0,
+            "{tip:?}"
+        );
+    }
+
+    #[test]
+    fn a_hanging_chain_keeps_its_joints_together() {
+        // Five rods laid out along x, held at the first's origin, ball and
+        // socket joints between them: they swing down like a whip.
+        let n = 5;
+        let bodies: Vec<BodySetup> = (0..n)
+            .map(|i| rod(if i == 0 { 0.0 } else { 3.0 }))
+            .collect();
+        let joints: Vec<JointSetup> = (1..n).map(|i| ball(i, i - 1)).collect();
+        let frames: Vec<(Mat3, Vec3)> = (0..n)
+            .map(|i| (I3, [20.0 * i as f32, 0.0, 300.0]))
+            .collect();
+        let mut r = Ragdoll::new(bodies, joints, &frames);
+        let c = floor();
+        let mut worst = 0.0f32;
+        for _ in 0..360 {
+            r.update(&c, 1.0 / 60.0);
+            for j in 0..n - 1 {
+                worst = worst.max(r.joint_gap(j));
+            }
+        }
+        // The joints stay together (Havok's tau 0.6 closes a gap over a few
+        // steps; a whip's swing opens one a little).
+        assert!(worst < 2.0, "joint gap {worst}");
+    }
+
+    #[test]
+    fn a_cone_limit_holds() {
+        // A rod hung off the end of a fixed one by a ragdoll joint with a
+        // 30° cone: it falls to the cone's edge and no further. Frames:
+        // twist x, plane z, third twist × plane = −y.
+        let cone = 30.0f32.to_radians();
+        let joint = JointSetup {
+            bodies: [1, 0],
+            pivots: [[0.0; 3], [20.0, 0.0, 0.0]],
+            limit: Limit::Cone {
+                twist: [[1.0, 0.0, 0.0]; 2],
+                plane: [[0.0, 0.0, 1.0]; 2],
+                cone,
+                plane_range: (-1.0, 1.0),
+                twist_range: (-1.0, 1.0),
+            },
+            third: [[0.0, -1.0, 0.0]; 2],
+            max_friction: 0.0,
         };
         let mut r = Ragdoll::new(
             vec![rod(0.0), rod(4.0)],
@@ -1113,24 +1265,47 @@ mod tests {
             &[(I3, [0.0, 0.0, 200.0]), (I3, [20.0, 0.0, 200.0])],
         );
         let c = floor();
+        let mut widest = 0.0f32;
         for _ in 0..240 {
             r.update(&c, 1.0 / 60.0);
+            let JointAngles::Cone { cone: now, .. } = r.joint_angles(0) else {
+                unreachable!()
+            };
+            widest = widest.max(now);
         }
         assert!(r.joint_gap(0) < 0.5, "gap {}", r.joint_gap(0));
-        let JointAngles::Hinge { misaligned, angle } = r.joint_angles(0) else {
+        // Not past the edge by more than the solver's give.
+        assert!(widest < cone + 0.12, "{widest} against {cone}");
+        let JointAngles::Cone { cone: now, .. } = r.joint_angles(0) else {
             unreachable!()
         };
-        assert!(misaligned < 0.02, "{misaligned}");
-        assert!(
-            (angle.abs() - std::f32::consts::FRAC_PI_2).abs() < 0.05,
-            "{angle}"
-        );
-        // Hanging straight down from the first rod's end.
-        let (rot, origin) = r.frame(1);
-        let tip = add(origin, mat_vec(&rot, [20.0, 0.0, 0.0]));
-        assert!(
-            (tip[0] - 20.0).abs() < 1.0 && (tip[2] - 180.0).abs() < 1.0,
-            "{tip:?}"
-        );
+        assert!(now > cone - 0.12, "{now}: it should hang at the edge");
+    }
+
+    #[test]
+    fn a_jointed_body_settles_and_sleeps() {
+        // Three rods in a chain dropped on the floor lie still and go to
+        // sleep, their joints together.
+        let bodies: Vec<BodySetup> = (0..3).map(|_| rod(3.0)).collect();
+        let joints = vec![ball(1, 0), ball(2, 1)];
+        let frames = [
+            (I3, [0.0, 0.0, 40.0]),
+            (I3, [20.0, 0.0, 40.0]),
+            (I3, [40.0, 0.0, 40.0]),
+        ];
+        let mut r = Ragdoll::new(bodies, joints, &frames);
+        let c = floor();
+        for _ in 0..1200 {
+            r.update(&c, 1.0 / 60.0);
+            if r.asleep {
+                break;
+            }
+        }
+        assert!(r.asleep, "still moving: {:?}", r.fastest());
+        assert!(r.joint_gap(0) < 1.0 && r.joint_gap(1) < 1.0);
+        for i in 0..3 {
+            let (_, origin) = r.frame(i);
+            assert!(origin[2] < 8.0, "body {i} at {origin:?}");
+        }
     }
 }

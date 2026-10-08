@@ -272,6 +272,28 @@ pub enum Schema {
         max_impulse: f32,
         radius: f32,
     },
+    /// Type 5: one 1-D Jacobian, its impulse unbounded (a ball and
+    /// socket's rows, `crate::constraint`).
+    Linear { jac: Jacobian },
+    /// Type 0xc: one angular-only row (the 2-D angular constraint's);
+    /// `slot` is its place in the joint's runtime data.
+    AngularRow { row: AngularJacobian, slot: usize },
+    /// Type 0xd: an angular limit (twist, cone, plane, hinge): the row, the
+    /// two bounds and the limit's tau, all as the builder left them.
+    AngularLimit {
+        row: AngularJacobian,
+        lower: f32,
+        upper: f32,
+        tau: f32,
+        slot: usize,
+    },
+    /// Type 0xe: angular friction about one axis, at most `max_impulse` a
+    /// micro step.
+    AngularFriction {
+        row: AngularJacobian,
+        max_impulse: f32,
+        slot: usize,
+    },
 }
 
 impl Schema {
@@ -283,6 +305,9 @@ impl Schema {
             Schema::ContactPair { .. } => 2,
             Schema::Friction2d { .. } => 3,
             Schema::Friction3d { .. } => 4,
+            // The table at `011b9434`: types 5, 0xc and 0xd keep one, 0xe two.
+            Schema::Linear { .. } | Schema::AngularRow { .. } | Schema::AngularLimit { .. } => 1,
+            Schema::AngularFriction { .. } => 2,
         }
     }
 }
@@ -642,6 +667,11 @@ fn push(j: &Jacobian, x: f32, a: &mut Accumulator, b: &mut Accumulator) {
     }
 }
 
+/// `J v` for an angular row (each body's own angular velocity).
+fn angular_velocity(j: &AngularJacobian, a: &Accumulator, b: &Accumulator) -> f32 {
+    dot(j.angular_a, a.angular) + dot(j.angular_b, b.angular)
+}
+
 fn push_angular(j: &AngularJacobian, x: f32, a: &mut Accumulator, b: &mut Accumulator) {
     for k in 0..3 {
         a.angular[k] += j.angular_a[k] * a.inv_inertia[k] * x;
@@ -670,7 +700,12 @@ fn pair_mut(accs: &mut [Accumulator], a: usize, b: usize) -> (&mut Accumulator, 
 /// stop the sliding (and the turning), the lot scaled down to at most the
 /// most impulse (the scale kept in the results).
 // Translated from 00d8d030 (decompiled, FalloutNV.exe 1.4.0.525)
-fn solve_schemas(schemas: &[Schema], accs: &mut [Accumulator], results: &mut [f32]) {
+fn solve_schemas(
+    info: &SolverInfo,
+    schemas: &[Schema],
+    accs: &mut [Accumulator],
+    results: &mut [f32],
+) {
     let (mut ia, mut ib) = (0usize, 0usize);
     let mut r = 0usize;
     for s in schemas {
@@ -771,6 +806,62 @@ fn solve_schemas(schemas: &[Schema], accs: &mut [Accumulator], results: &mut [f3
                 push_angular(angular, turn, a, b);
                 results[r + 2] += turn;
             }
+            Schema::Linear { jac } => {
+                let (a, b) = pair_mut(accs, ia, ib);
+                let x = (jac.rhs - velocity(jac, a, b)) * jac.inv_jac_diag;
+                push(jac, x, a, b);
+                results[r] += x;
+            }
+            Schema::AngularRow { row, .. } => {
+                let (a, b) = pair_mut(accs, ia, ib);
+                let x = (row.rhs - angular_velocity(row, a, b)) * row.inv_jac_diag;
+                push_angular(row, x, a, b);
+                results[r] += x;
+            }
+            Schema::AngularLimit {
+                row,
+                lower,
+                upper,
+                tau,
+                ..
+            } => {
+                let (a, b) = pair_mut(accs, ia, ib);
+                // The velocity the row sees: the velocities less their sums
+                // (× damping) and the sums (× tau × damping ÷ tau).
+                let inv_factor = 1.0 / info.integrate_velocity_factor;
+                let moved = dot(row.angular_a, sub(a.angular, a.sum_angular))
+                    + dot(row.angular_b, sub(b.angular, b.sum_angular));
+                let summed = dot(row.angular_a, a.sum_angular) + dot(row.angular_b, b.sum_angular);
+                let seen = info.damping * moved + tau * inv_factor * summed;
+                let wanted = tau * row.rhs - seen;
+                // Past the lower bound it pushes up (the impulse stays at
+                // or above 0), past the upper it pushes down.
+                let x1 = (wanted - lower) * row.inv_jac_diag;
+                let x = if x1 <= -results[r] {
+                    let x2 = (wanted - upper) * row.inv_jac_diag;
+                    (x2 < -results[r]).then_some(x2)
+                } else {
+                    Some(x1)
+                };
+                if let Some(x) = x {
+                    push_angular(row, x, a, b);
+                    results[r] += x;
+                }
+            }
+            Schema::AngularFriction {
+                row, max_impulse, ..
+            } => {
+                let (a, b) = pair_mut(accs, ia, ib);
+                let mut x = row.inv_jac_diag * (row.rhs - angular_velocity(row, a, b));
+                let mut factor = 1.0;
+                if x.abs() > *max_impulse {
+                    factor = max_impulse / x.abs();
+                    x *= factor;
+                }
+                results[r + 1] = factor;
+                push_angular(row, x, a, b);
+                results[r] += x;
+            }
         }
         r += s.results();
     }
@@ -867,7 +958,7 @@ pub fn solve(
     let n = s.num_steps.max(1);
     for k in 0..n {
         for _ in 0..s.num_micro_steps.max(1) {
-            solve_schemas(schemas, accs, &mut results);
+            solve_schemas(s, schemas, accs, &mut results);
         }
         integrate_velocities(s, step, accs, k == n - 1);
     }
@@ -947,6 +1038,11 @@ pub fn export(
                     dot(angular.angular_a, a.sum_angular) + dot(angular.angular_b, b.sum_angular);
                 d[6] = factor * (angular.rhs * friction_scale - ang * frame);
             }
+            // The joints' rows export through `crate::constraint::export`.
+            Schema::Linear { .. }
+            | Schema::AngularRow { .. }
+            | Schema::AngularLimit { .. }
+            | Schema::AngularFriction { .. } => {}
         }
         r += sch.results();
     }

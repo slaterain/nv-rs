@@ -23,6 +23,7 @@
 //! ```
 
 pub mod character_cd;
+pub mod constraint;
 pub mod contacts;
 pub mod controller;
 pub mod grab;

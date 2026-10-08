@@ -118,7 +118,7 @@ Batch 3 (`claude/m2-physics-3`):
   bone): the dog's pelvis/spine bodies and the eight constraints that
   join her legs, head and tail to them.
 - `physics::ragdoll`: `BodySetup::layer`/`part`, `parts_meet`, pairs of a
-  ragdoll's own capsules pushed apart (this solver's, frictionless).
+  ragdoll's own capsules as contact points in the solve (PR 8, below).
 - `world::actor::slot_parent_bone`, `ActorPart::parent_bone`,
   `Armor::pieces_facegen`; `preview::actor` hangs unskinned armour pieces
   from the slot's bone (FaceGen ones upright, as head parts).
@@ -231,7 +231,7 @@ triangle, body or walker within its reach plus a step's travel) is stepped
 exactly by the translation; one with something near gets the damping once,
 gravity per substep inside this solver's XPBD substeps (which also move it:
 PR 7 replaces them), then the reset, the linear clamp and the turn cap on
-ω. Ragdolls likewise (damping and caps were per substep). The gravity
+ω. Ragdolls likewise until PR 8 (damping and caps were per substep). The gravity
 factor is 1 for every body (nothing traced sets another).
 
 ### Sleeping (deactivation, PR 4)
@@ -391,6 +391,94 @@ units in the first 5 s; before, 0.5–1 unit per 5 s) and are heard as they
 bounce. Two Goodsprings crates woken by them come to rest at 3.7 s.
 Steady frame time 17.1 ms (vsync), main-thread work 9.5–10 ms (PR 4's run:
 11.5 ms).
+
+### Ragdoll constraints (PR 8, `claude/b1-ragdoll`)
+
+Ragdolls (and any `bhkRagdollConstraint`, `bhkLimitedHingeConstraint`,
+`bhkBallAndSocketConstraint` data) are solved by the same island solve as
+the contacts: `physics::constraint` builds the joints' atoms into the
+solver's schemas, `physics::ragdoll` builds the capsules' contacts and
+steps through `solver::solve`, once a world step in the world's solver
+substeps. Private notes: `%USERPROFILE%\nv-re\work\b1-ragdoll` (decompiles in
+`dec\`).
+
+The data objects are the NIF's own: `bhkRagdollConstraint` (`00cc67a0`) holds
+a `hkpRagdollConstraintData` (0x140 bytes) built by `00cdf2f0` (defaults) →
+`00cdf460` (atoms), the loader copying the file's axes, pivots and angles
+into it; the clone `00cc6830` shows which fields come from the file (twist
+least/most `+0x104`/`+0x108`, cone widest `+0x11c`, planes least/most
+`+0x12c`/`+0x130`, `00cde9f0` the most friction torque `+0xf8`). Atoms
+(Xbox PDB `hkpConstraintAtom::AtomType` order, which the builder's switch
+follows: 2 set local transforms, 5 ball socket, 0xc 2-D angular, 0xe angular
+limit, 0xf twist limit, 0x10 cone limit, 0x11 angular friction, 0x12 angular
+motor, 0x13 ragdoll motors):
+
+| Data | Atoms, in memory order | Constants (constructors) |
+| --- | --- | --- |
+| ragdoll `00cdf460` | transforms, ragdoll motors, angular friction, twist, cone, planes, ball socket | friction: axes 0–2 (`+0xf3` first 0, `+0xf4` count 3); twist: twist axis 0, reference axis 1, tau factor 0.8, defaults ±30° replaced by the file; cone: axis 0 against 0, mode 0 (zero when aligned), least −100, tau 0.8, angle offset at runtime +56; planes: axis 0 against 1, mode 1 (zero when perpendicular), tau 0.8; ball socket: stabilization 1.0 (hkUFloat8), most impulse `HK_REAL_MAX` (`0x7f7fffee`: schema 5, no cap) |
+| limited hinge `00cb9170` | transforms, angular motor, angular friction, angular limit, 2-D angular, ball socket | friction axis 0, count 1; limit axis 0, ±π replaced by the file, tau 1.0; 2-D free axis 0; ball socket as above |
+| ball and socket `00d54290` | translations, ball socket | stabilization 1.0 |
+
+| Builder (`00d6f460`, one atom at a time) | Rule |
+| --- | --- |
+| Frames | transforms atom: each body's three axes (the file's twist, plane, motor axes; axle, perpendicular, second perpendicular) and pivot turned by the body's transform |
+| Ball socket `00d6ced0` | three rows along the world axes; the right-hand side the pivots' gap + L ((ω_A × r_A) − (ω_B × r_B)), L = stabilization ÷ rhs factor, × the rhs factor; so stabilization 1 leaves the bodies' turning out of the row. Inverse diagonal = virtual mass factor ÷ (effective mass + ε). Schema 5 |
+| 2-D angular `00dcee80` | rows about B's axes (i+2)%3 and −(i+1)%3 with rhs −(A's axis i · B's other axis) × rhs factor; schema 0xc |
+| Angular limit (0xe) | angle = atan2(B₂·A₁, −(B₀×B₂)·A₁) by the game's polynomial `00cbff80`, kept within π of the last solve's (solver data); row about A's axis; schema 0xd |
+| Twist (0xf) | axis = the normalized sum of the two twist axes; angle of A's reference axis against B's about it; tau = ½\|A+B\|² × tau factor × tau |
+| Cone / planes (0x10) | angle between A's axis and B's reference axis (or π/2 − that), about the cross product × the mode's sign; skipped when parallel; the cone's stabilization: an allowed angle offset kept in the runtime moves the angle as a contact's allowed penetration moves its distance |
+| Limit row | inverse diagonal = tau ÷ (effective mass + ε); rhs −angle ÷ substep; bounds −min and −max ÷ substep × tau; schema 0xd |
+| Angular friction (0x11) | per axis one row, rhs = last solve's drift × 1 ÷ substep, at most torque × micro step; schema 0xe; skipped at torque 0 |
+| Solver | `00d8d030` cases 5, 0xc, 0xd, 0xe: unbounded rows; the limit sees damping × J(ω − Σ) + tau × (damping ÷ tau) × JΣ (Σ the integrated sums), takes the lower bound's impulse while it stays positive, else the upper's; friction scales the micro step's impulse to its most |
+| Export `00def570` | each angular row keeps rhs × substep − JΣ × step (friction × its scale) as solver data for the next step |
+
+In nv-rs: `physics::ragdoll` is one island of dynamic bodies (mass 0 bodies
+are keyframed, as the fixed ones of a tree) in the solve with the capsules'
+contacts. Joints come first, then the world's contacts, then the pairs'. The
+step is the clock's (0.016 s), solver settings `SolverInfo::new` (4 substeps,
+1 micro step, tau 0.6, damping 1.0). The old XPBD substeps, positional
+joint/contact corrections and friction pass are gone. The bodies' damping,
+the speed caps, the turn cap and the deactivation counts are `Motion`'s
+(`apply_accumulator`), as for every rigid body.
+
+Taken, not traced: the atoms' runtime data starts at 0 (the data's `Runtime`
+constructor isn't traced), the ragdoll motors and the angular motor are
+left off (their motor pointers are null in the game's death path; no motor
+data is read), the file's malleable strength (tau 0.9) isn't applied, the
+actor-scale clone `00cbd9e0` (friction torque scaling) isn't followed, the
+violated-constraint list (`m_violatedConstraints`) isn't kept. The contact
+points are this generator's (a capsule's two end spheres and the closest
+point of its axis against each triangle, ends against the other axis for the
+pairs; kept within the collision tolerance plus the distance the body can
+close in the step, which stands where continuous collision, PR 9, will
+stop a fast body); one contact manifold a body for the whole world, one a
+pair. A ragdoll's contacts follow `physics::rigid`'s property rules (friction
+√(f₁f₂), restitution √(r₁r₂) × 128); triangles' surface or
+`DEFAULT_SURFACE`. A new point's penetration is *allowed* by the solver's
+rules (`00d72190`), so a body already deep in another stays so: bodies
+start apart.
+
+Unit tests (`physics::ragdoll`): a chain of ball sockets hanging from a
+fixed rod keeps every joint gap under 2 units while it whips down; a hinge
+keeps its axle aligned and its angle within the limit and hangs; a 30° cone
+limit holds (widest angle within 0.12 rad of the limit) with the pivot
+together; a three-rod chain dropped on a floor lies still, goes to sleep and
+its joints stay together; a rod falls and rests on the floor; own capsules
+meet by the part table. `physics::constraint`: the polynomial atan2, the
+atoms' result slots, the ball socket's right-hand side.
+
+Verified live (release viewer, installed data, nothing compared with the
+game; `Fallout.ini` defaults): `WastelandNV --at -67845,3000,8400,0,0
+--freeze-ai --walk --answer-boxes --box-answers 1 --run-at 3
+"EasyPeteRef.Kill"` (`--wait 25`; a second view from
+`--at -67845,3260,8480,0,45`): "00104C80 goes limp at (-67845, 3334, 8392)
+moving (19.9, 1.4, 0.0) units/s" at 4.1 s and "00104C80 comes to rest, its
+first body at (-67840.3, 3345.0, 8396.5)" at 7.6 s, 3.5 s after he fell
+(before, ragdolls never came to rest: "jitter"). Easy Pete lies on his back
+on a porch's boards (Goodsprings), arms by his sides, legs bent at the
+knees, every limb joined and the hat by his head (`b1-ragdoll\after3.png`;
+`after.png` is the first view, a tumbleweed in front of him). Identical
+runs (the same rest time and place in the three).
 
 ### Data layouts used (Xbox PDB, matched to the PC code)
 
@@ -678,7 +766,8 @@ pushes something under it back up: the 30-unit rule does.
   not compared.
 - A dead ganger's ragdoll lay sunk to the waist after the gunfight
   (`run4\end.png`): ragdoll capsules meet triangles from either side
-  (`physics::ragdoll`, this solver's, B1); not changed here.
+  (`physics::ragdoll`; PR 8 makes them the solver's contacts, keeping the
+  face's side for a point gone through); not rechecked here.
 - The viewer's bridge (no controller until collision is within 320 below)
   stays; the far rule's controller warp conditions (flags 0x2000000,
   0x4000000, 1) and in-air reset (`008e2680`) aren't followed (the
@@ -963,16 +1052,16 @@ enough passes through the land (00178A82, from z 7992 to 1082 in 5 s).
   are not reproduced yet (B1 PRs 6–9; the step driver, integrator,
   deactivation and simulation islands are, above). Clutter constraints aren't
   simulated: joined or constrained clutter bodies stay solid (ragdolls'
-  joints are, in `physics::ragdoll`). Inertia under a reference's
+  joints are solved: PR 8). Inertia under a reference's
   scale isn't traced (scaled by s², mass kept).
 - Dying: the living bodies' velocity handed over at death (which branch
   of `00c65b00` the biped takes) isn't traced; the `Death` group's
   post-animation action (`0089d900` asks the 3D for 0xe0 and, when it
   has one, adds process post-animation action 0x20, `00903180`) isn't
   followed; creatures without a ragdoll still tip over as a stand-in
-  (`ai::fallen_transform`) instead of playing `Death`. Ragdolls jitter
-  instead of settling (the dog's still moves at 10–30 units/s after
-  10 s). Ragdoll self-contacts are frictionless positional pushes.
+  (`ai::fallen_transform`) instead of playing `Death`. Ragdolls
+  settle now (PR 8); the dog's ragdoll and the other creatures' weren't
+  run again.
 - The wind listener's call each frame follows `00c6ae70`; the wind
   direction stays 1 rad (no other writer of the sky's `+0xd0` was found
   in the sky's code). Which slot of a multi-slot armour holds its model
