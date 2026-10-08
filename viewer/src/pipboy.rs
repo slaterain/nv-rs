@@ -626,6 +626,35 @@ pub struct Pipboy {
 }
 
 impl Pipboy {
+    /// Where the arm is in its raising animation at `now`: up to `Hit`
+    /// while opening, held there, on from `Hit` to the end while being
+    /// put away; `None` once it's down and away.
+    fn raise_at(&self, now: f32) -> Option<f32> {
+        let (start, hit, stop) = self
+            .arm
+            .as_ref()
+            .and_then(|a| a.raise.as_ref())
+            .map_or((0.0, 0.33, 0.73), |r| {
+                (r.sequence.start, r.hit, r.sequence.stop)
+            });
+        let since = self
+            .since
+            .filter(|_| !self.at_once)
+            .map(|s| (now - s).max(0.0));
+        raise_time(start, hit, stop, self.open, since)
+    }
+
+    /// Whether the first-person model with the Pip-Boy (the arm, the
+    /// hands, the weapon in hand) is on screen: up, or still being raised
+    /// or put away. In the game this is the one first-person model
+    /// (`007f8ba0` finds `pipboyscreen` under the first-person node,
+    /// `00950bb0(1)`), playing `Pipboy.kf` over the hold pose; here
+    /// it's drawn apart, so the ordinary first-person view
+    /// (`viewmodel`) waits until it's down.
+    pub fn arm_shown(&self, now: f32) -> bool {
+        self.open || self.raise_at(now).is_some()
+    }
+
     /// The shown menu's class number while it's up (STATS 1003, ITEMS
     /// 1002, DATA 1023).
     pub fn menu_class(&self) -> Option<i32> {
@@ -2139,19 +2168,8 @@ pub(crate) fn update_pipboy(
     }
 
     // Where the arm is in its raising animation (none: down and away).
-    let (start, hit, stop) = pipboy
-        .arm
-        .as_ref()
-        .and_then(|a| a.raise.as_ref())
-        .map_or((0.0, 0.33, 0.73), |r| {
-            (r.sequence.start, r.hit, r.sequence.stop)
-        });
-    let since = pipboy
-        .since
-        .filter(|_| !pipboy.at_once)
-        .map(|s| (now - s).max(0.0));
-    let raise_at = raise_time(start, hit, stop, pipboy.open, since);
-    let shown = pipboy.open || raise_at.is_some();
+    let raise_at = pipboy.raise_at(now);
+    let shown = pipboy.arm_shown(now);
     for mut camera in &mut cameras {
         if camera.is_active != shown {
             camera.is_active = shown;

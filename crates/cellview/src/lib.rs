@@ -1202,6 +1202,38 @@ impl<'a> TextureCache<'a> {
 }
 
 impl TextureCache<'_> {
+    /// A skin tint: a file, or a body tint the game makes when it has no
+    /// file for it (`world::actor::MadeBodyTint`: its file if there, else
+    /// made from the race's texture morphs, `nif::Egt::tint`).
+    fn tint(&self, reference: &str) -> Option<TextureData> {
+        let read = |path: &str| {
+            self.assets
+                .read(path)
+                .ok()
+                .flatten()
+                .and_then(|bytes| TextureData::from_dds(path, bytes).ok())
+        };
+        let Some(made) = world::actor::MadeBodyTint::parse(reference) else {
+            return read(reference);
+        };
+        if let Some(file) = read(&made.file) {
+            return Some(file);
+        }
+        let bytes = self.assets.read(&assets::mesh_path(&made.egt)).ok()??;
+        let egt = nif::Egt::parse(&bytes).ok()?;
+        let rgb = egt.tint(&made.values);
+        let pixels = rgb
+            .chunks_exact(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect();
+        Some(TextureData::from_rgba(
+            format!("{} made with {} values", made.egt, made.values.len()),
+            egt.width as u32,
+            egt.height as u32,
+            pixels,
+        ))
+    }
+
     /// A texture from the game's files (or a head's with its NPC's face
     /// tint laid on: see `preview::actor::FACE_TINT`; without a tint file,
     /// just the base).
@@ -1211,13 +1243,7 @@ impl TextureCache<'_> {
         }
         if let Some((tint, base)) = preview::actor::face_tint_parts(path) {
             let found = self.read(base).map(|b| {
-                let tinted = self
-                    .assets
-                    .read(tint)
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| TextureData::from_dds(tint, bytes).ok())
-                    .and_then(|t| b.plus_face_tint(&t).ok());
+                let tinted = self.tint(tint).and_then(|t| b.plus_face_tint(&t).ok());
                 self.push(tinted.unwrap_or(b))
             });
             self.index.insert(path.to_string(), found);

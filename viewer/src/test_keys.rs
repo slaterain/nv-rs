@@ -56,6 +56,8 @@ pub fn parse(at: f32, v: &str) -> Result<TimedPress, String> {
         "escape" => Press::Key(KeyCode::Escape),
         // Jump (control 12).
         "space" => Press::Key(KeyCode::Space),
+        // The Pip-Boy's key (let go before the light's hold time).
+        "tab" => Press::Key(KeyCode::Tab),
         n if n.starts_with("mouse-x=") || n.starts_with("mouse-y=") || n.starts_with("wheel=") => {
             let (kind, amount) = n.split_once('=').unwrap_or_default();
             let amount = amount

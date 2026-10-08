@@ -26,7 +26,11 @@
 //! frame so its `Camera1st` node sits at the eye: the skeleton stands facing
 //! where the player looks, and looking up and down turns everything under
 //! `Bip01 Looking` (the pivot at eye height) by the pitch. Hidden while
-//! flying, in menus and conversations, when dead, and in screenshots.
+//! flying, while the dialogue menu is in being (also under the barter menu
+//! it opens; the game skips its first-person pass then, `00870bd0`), while
+//! the Pip-Boy's arm is up or going up or down (`pipboy` draws it with
+//! the hands and weapon), when dead, and in screenshots. Other menus
+//! don't hide it: it stays in the world behind them.
 //!
 //! Not yet: the Pip-Boy glove, V.A.T.S. drawing the weapon by itself.
 
@@ -463,11 +467,12 @@ fn playing(
     (t >= 0.0 && t <= s.stop - s.start).then_some((s, s.start + t))
 }
 
-/// What can hide the first-person view: a conversation, a menu, a picture
-/// being taken, V.A.T.S.'s camera.
+/// What can hide the first-person view: the dialogue menu, the Pip-Boy's
+/// arm, a picture being taken, V.A.T.S.'s camera; and the menus, which
+/// tell a menu from the ground still loading.
 type ViewGates<'w> = (
     Res<'w, Conversation>,
-    Res<'w, Menus>,
+    (Res<'w, Menus>, Res<'w, crate::pipboy::Pipboy>),
     Res<'w, ScreenshotRequest>,
     Res<'w, ShowInPictures>,
     Res<'w, crate::vats::Vats>,
@@ -492,7 +497,7 @@ pub fn update_view_model(
     game: Res<GameFiles>,
     state: Res<DialogueState>,
     player: Res<Player>,
-    (conversation, menus, screenshot, in_pictures, vats): ViewGates,
+    (conversation, (menus, pipboy), screenshot, in_pictures, vats): ViewGates,
     mut view: ResMut<ViewModel>,
     mut attack: ResMut<crate::combat::PlayerAttack>,
     mut spawner: Spawner,
@@ -740,10 +745,23 @@ pub fn update_view_model(
         }
         playing(s.as_ref(), Some(since), now)
     });
+    // Menus don't hide it: the frame's first-person pass (`00870bd0`:
+    // `00874c10`, `00875110`) is skipped only with the first-person node
+    // culled, the Pip-Boy drawn on its own (`bUsePipboyMode` off, its node
+    // at `InterfaceManager+0x1dc`+8) or the dialogue menu in being
+    // (`011d9514`, set by its constructor `007617a0`, cleared by its
+    // closing `00762160` and destructor `00761960`; checked at
+    // `00870c9b`), which it is under the barter and recipe menus it opens
+    // too. A line said with `SayTo` opens no dialogue menu.
+    let dialog_menu = conversation.0.as_ref().is_some_and(|t| !t.is_line_only());
+    // Not ready with no menu up: the ground is still loading.
+    let loading = !player.ready && !menus.is_open() && !dialog_menu;
     let shown = (player.walking || in_pictures.0)
-        && player.ready
-        && conversation.0.is_none()
-        && !menus.is_open()
+        && !loading
+        && !dialog_menu
+        // The Pip-Boy's arm holds the hands and the weapon while it's up,
+        // raised or put away (`pipboy`: one model in the game).
+        && !pipboy.arm_shown(time.elapsed_secs())
         && (screenshot.path.is_none() || in_pictures.0)
         && !state.dead.contains(&PLAYER_REF)
         // A V.A.T.S. camera shot has the view.

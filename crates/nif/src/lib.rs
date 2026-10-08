@@ -26,6 +26,7 @@ pub mod camera;
 pub mod collision;
 pub mod ctl;
 pub mod egm;
+pub mod egt;
 mod error;
 mod file;
 mod header;
@@ -52,6 +53,7 @@ pub use blocks::{
 pub use collision::{Collision, CollisionPart, CollisionShape, RigidBodyInfo};
 pub use ctl::Ctl;
 pub use egm::Egm;
+pub use egt::Egt;
 pub use error::{Error, Result};
 pub use file::{BlockInfo, Nif};
 pub use header::{version_string, Header, V20_2_0_7};
