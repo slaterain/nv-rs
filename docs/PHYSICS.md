@@ -123,14 +123,206 @@ Batch 3 (`claude/m2-physics-3`):
   `Armor::pieces_facegen`; `preview::actor` hangs unskinned armour pieces
   from the slot's bone (FaceGen ones upright, as head parts).
 
-This solver's own (labelled in code; Havok's solver isn't translated):
-XPBD substeps (8) and passes (4); contact generation (no edge-against-edge
-between bodies); sleeping after 1 s under 2 units/s and 0.3 rad/s (Havok's
-deactivation uses its reference distance and frame counters, not
-translated); overlap recovery at most 0.05 units per correction; walkers
+This solver's own (labelled in code; Havok's contact solver isn't
+translated yet, B1 PR 7): XPBD substeps (8) and passes (4) for bodies with
+something near them; contact generation (no edge-against-edge
+between bodies); overlap recovery at most 0.05 units per correction; walkers
 as unstoppable capsules reaching 2 units out (`hkpCharacterProxy`'s
 surface interactions aren't translated); a contact "added" is a pair that
 starts touching (Havok adds and removes single points).
+
+## Havok's world step (B1, PRs 1–4, `claude/b1-havok-step`, 2026-10-07)
+
+The game's own Havok (**7.1.0-r1**, build tree dated 2009-12-22, strings
+`010cf778`/`010d6628`) translated from FalloutNV.exe 1.4.0.525, names from
+the Xbox prototype's PDB. No Havok SDK, header or documentation was used.
+Code: `physics::havok`; used by `physics::rigid` and `physics::ragdoll`.
+Units are Havok units (1 = `HAVOK_UNIT`, 6.9991 game units) unless said.
+
+### The frame (`bhkWorld::Update` `00c6ae70`, vtable `+0xc4`)
+
+Per frame and loaded world: batched adds (≤ 100 a frame from a queue of
+≤ 3000, `00c674d0`), constraints (≤ 200), actions (≤ 100); then, when the
+world is enabled (`+0x15`) and the frame time (`011afe68`) is over 0: the
+step = `fMaxTime` × the time multiplier (`01267b38` × `011ac3a0`, set again
+here whatever the clock computed); `bhkAction`s updated (`00c6a540`);
+`bhkWorld::ScaleSolverInfo` (`00c66a00`); pending operations;
+`hkpWorld::setFrameTimeMarker` (`00c91040`, marker = current time + the
+accumulated time `011afe64`); `hkpWorld::stepDeltaTime(step)` (`00c91b10`)
+until `isSimulationAtMarker` (`00c91060`, exact equality); then the entity
+listeners with the frame time (`00c66e20`: wind, traps, water) and the
+debugger; batched removes after.
+
+The clock, `bhkWorld::SetDeltaTime` (`00c66760`, `[HAVOK] iUpdateType` 0):
+accumulated = carried (`012677b0`) + frame, held to 166.67 s; ≤ 0: no
+steps, the carry untouched; n = round(accumulated ÷ step) (x87: halves to
+even), at most 3 (1 when the second argument is set: `00525420`, a game
+mode of 4, not followed); n > 0: carry = accumulated − n·step, held to at
+most a setting read through `00403e20` (taken as one step, not traced);
+accumulated = n·step, so the loop runs exactly n whole steps and bodies are
+read at a whole step (no interpolation). n = 0: under half a step it all
+waits (unless forced by the third argument or `01267b4c`); exactly half a
+step (rounded to 0) runs one step here (Havok's snapping of a step to the
+marker isn't traced). `physics::havok::Clock`; the rigid world and every
+ragdoll step on it (ragdolls had their own 8-step accumulator).
+
+One step, `hkpSimulation::stepDeltaTime` (`00cf8730`): integrate (`+0x10`)
+→ collide (`+0x14`) → advance time (`+0x18`). `iSimType` 1 makes the world
+`hkpContinuousSimulation` (`00c661d0` maps 1 → 2), one thread.
+`hkpSimulation::integrateInternal` (`00cf8da0`): the dirty islands cleaned
+up (`00cb55d0`: put to sleep `00cb5310` or woken `00cb5100`); actions
+(`00cf8b00`: the grab's mouse spring); the deactivation flags
+(`hkpSolverInfo::incrementDeactivationFlags`, inlined: counter `+0x307`
++1, flag bit 1 of `+0x305` flipped when (c − 4) & 7 = 0, bit 2 when
+c & 7 = 0, `+0x306` flipped and the counter zeroed when c & 15 = 0); then
+each active island, last to first: without constraints
+`hkRigidMotionUtilApplyForcesAndStep` (`00d28a30`), with constraints
+`hkpConstraintSolverSetup::solve` (`00d88b50`: `00d29830` forces into
+accumulators, the solver `00d8d030`, `00d29bf0` back into the motions);
+both return the island's fewest passing deactivation checks.
+
+### World and solver settings (`physics::havok`, PR 1)
+
+| What | Where | Value |
+| --- | --- | --- |
+| Gravity | cells' `InitHavok` `00554010`/`00552dc0` from `011ca158` (`00f4b550`) | (0, 0, −98.1) |
+| Solver tau, damping, iterations, micro steps | Havok's cinfo defaults `00c90b80` | 0.6, 1.0, 4, 1 |
+| Friction tau and ratios | `hkpSolverInfo::setTauAndDamping` `00c90e60` | tau ÷ 2; damping ÷ tau, tau ÷ damping, damping ÷ friction tau, friction tau ÷ damping; integrate velocity factor tau ÷ damping |
+| Contact resting velocity | Bethesda's cinfo `00c681c0` | FLT_MAX |
+| Collision tolerance, expected max linear velocity, expected step | `00c681c0`/`00c90b80` | 0.1, 200, `fMaxTime` |
+| Activate on transform change | `00c681c0` (`+0xa7`) | off |
+| Deactivation on, islands on | `00c90b80` (`+0xd0`, `+0xd2`) → world `+0xd5` | wanted |
+| Per frame | `bhkWorld::ScaleSolverInfo` `00c66a00` | r = step ÷ `fMaxTime`: substeps max(2, trunc(4r)) (4 at normal speed), tau 0.6(1 − k) + 0.6kr, k = `fHavokTauRatio` (`011d1320` → `011afe60`, 0.5); damping ÷ tau and tau ÷ damping refreshed, friction tau and the integrate factor not |
+| Deactivation classes | `hkpWorld::hkpWorld` `00c95a80` | g = 98.1; (v, a) = (1.19e-7, 0) for 0/1, (0.01, 0.08), (0.017, 0.2), (0.02, 0.3), (0.025, 0.4) for 2–5: linear threshold inverse 1/(vg), angular 1/(vg·g·0.1), slow multiplier 1 − ¼·0.016·(ag)/(vg), relative sleep velocity ¼·0.016 ÷ a (2.13e37 when a = 0); every class: distances² {d², (4d)²} and rotations² (hkHalf) {(2d)², (8d)²} with d = 0.02 |
+| Speeds | hkUFloat8 table `010c7948` (256 floats, 0 … 1000002), encoder `00ca9360` (binary search on the float bits) | a motion's most linear (`+0xbc`) and angular (`+0xbd`) speed are indices; a model's 1068 and 31.57 are table entries |
+| hkHalf | `00c95a80` (store: the float's upper 16 bits), `00d28a30` (load) | gravity factor, rotation thresholds |
+
+### The integrator (`hkpMotion` steps, PR 3)
+
+`hkRigidMotionUtilApplyForcesAndStep` (Xbox PDB, `00d28a30`), per motion by
+type (`+0x08`: 1–3 dynamic, 4 keyframed, 5 fixed, 6 thin box, 7
+character):
+
+1. Fixed: skipped (and not counted for sleeping). Keyframed: no forces.
+   Character: damping only. Others: v += gravity factor (hkHalf `+0x11e`)
+   × gravity × dt (`hkpSolverInfo::m_globalAccelerationPerStep`, world
+   `+0x200`).
+2. Damping: v × max(0, 1 − dt × linear damping `+0xb4`); ω × max(0, 1 −
+   angular damping `+0xb8` × dt).
+3. Any velocity component ≥ 1e6 (or NaN): both velocities zero (`01268370`).
+4. Swept transform: centre0 = centre1, time0 = the step's start; |v|
+   held to the table's most linear speed; centre1 += dt × v.
+5. rotation0 = rotation1; a = ω·dt/2; x = |a|² × 0.4052847 (4/π²); the cap
+   c = min(most angular speed × dt, 0.9): when c² < x, ω and a × c/√x and
+   x = c²; w = 1 − 0.822948x − 0.130529x² − 0.044408x³; rotation1 = (a, w)
+   · rotation0 (`00c66320`), normalized (`005611c0`, `rsqrtss` + one Newton
+   step; exact here); the transform rebuilt (`00cb2d90`).
+6. The deactivation bookkeeping (below).
+
+(Thin boxes get extra inertia handling and a second clamp: not translated,
+none simulated.) Bodies in islands with constraints get the same damping
+in `00d29830` (gravity factor kept in the accumulator, gravity added by the
+solver per substep, `m_globalAccelerationPerSubStep` `+0x1f0`) and the same
+reset, clamps, integration and bookkeeping in `00d29bf0`.
+
+In nv-rs (`physics::havok::Motion`; positions in game units, the cap and
+thresholds scaled by `HAVOK_UNIT`): a body with nothing near it (no
+triangle, body or walker within its reach plus a step's travel) is stepped
+exactly by the translation; one with something near gets the damping once,
+gravity per substep inside this solver's XPBD substeps (which also move it:
+PR 7 replaces them), then the reset, the linear clamp and the turn cap on
+ω. Ragdolls likewise (damping and caps were per substep). The gravity
+factor is 1 for every body (nothing traced sets another).
+
+### Sleeping (deactivation, PR 4)
+
+Per motion, at the end of each step (`00d28a30`/`00d29bf0`): the counter
+(`+0x09`) goes up; when it's a multiple of 4 there's a check, of slot 1
+when it's a multiple of 16 (counter back to 0; 0xff stays "never"), else
+slot 0. The slot's reference energy (`+0xfc + 16j`) keeps the largest
+|v|² + min(radius `+0xb0`, 1)² |ω|². Pass: the centre within the class's
+distance² of the reference position (`+0xf0 + 16j`) and the rotation
+within its rotation² of the reference rotation (`+0x110 + 4j`, four bytes
+(b − 128) × 0.00859375): the count (`+0x0a + 2j`, bits 0–6) + 1, held at
+64; the old count kept in bits 7–13, the solver's select flag in 14–15.
+Fail: count 0, references set to where the body is now (rotation
+compressed by `00d975d0`: c × 116.36363 + 196736.5, bits 6–13 of the
+float). Returned: the larger of the two counts; the island's is the
+fewest of its bodies'.
+
+An island with more than 5 is marked inactive (`00cf8da0` →
+`markIslandInactive` `00cb5420`, the world's dirty list); at the next
+step's start (`00cb55d0` → `00cb5310`) it goes to sleep when every body
+passes `00d28560` (a quarter of its energy now − 0.01 not above the
+counting slot's reference energy), with both velocities set to zero
+(motion vtable `+0x40`/`+0x44` with `01267e30`); else it stays active.
+Waking an island (`00cb5100`) starts its bodies' counts again.
+
+So a body at rest from a new motion (references zero, taken as the
+constructor's: not traced) passes at steps 8, 12, 20, 24, 28 and 36 (the
+first check, at 4, sets the references; 16 and 32 are slot 1's) and sleeps
+at the start of step 37 (0.59 s); a body creeping 0.016 Havok units
+between checks never sleeps.
+
+In nv-rs: islands are approximated (until PR 5) by the awake bodies joined
+by this step's body–body contacts; an awake body touching a sleeping one
+wakes it (Havok merges their islands; here on contact, there on a
+broadphase pair). Waking an awake body (an impulse, the wind's force, the
+spring) cancels its island's pending sleep. Each ragdoll is one island.
+Walkers still wake what they push faster than 2 units/s (this solver's
+walkers, PR 10). The invented rules are gone: "1 s under 2 units/s and
+0.3 rad/s" (clutter) and "1 s under 4 units/s and 0.6 rad/s" (ragdolls).
+
+### Data layouts used (Xbox PDB, matched to the PC code)
+
+`hkpMotion` (0x120, entity `+0xe0`): `+0x08` type, `+0x09` deactivation
+counter, `+0x0a` inactive counts [2], `+0x10` transform, `+0x50`/`+0x60`
+centre of mass 0/1, `+0x70`/`+0x80` rotation 0/1, `+0x90` local centre of
+mass, `+0xa0` delta angle, `+0xb0` object radius, `+0xb4`/`+0xb8`
+damping, `+0xbc`/`+0xbd` most speeds, `+0xbe` deactivation class, `+0xc0`
+inverse inertia and mass, `+0xd0`/`+0xe0` velocities, `+0xf0` reference
+positions [2], `+0x110` reference rotations [2], `+0x11e` gravity factor.
+`hkpSolverInfo` (world `+0x1e0`): `+0x04` tau, `+0x08` damping, `+0x0c`
+friction tau, `+0x10`/`+0x20` gravity per substep/step, `+0x50`… ratios,
+`+0x60` contact resting velocity, `+0x64` deactivation info [6] (0x1c),
+`+0x10c` substep dt, `+0x114` substeps, `+0x120` 1/substeps, `+0x125`
+select flags [2], `+0x127` integrate counter.
+
+### Verified live (release viewer, installed data; nothing compared with the game)
+
+Route: `WastelandNV --at -68232.9,4900,8440,0,10 --walk --weapon
+WeapNV9mmPistol --run "StartQuest VCG02" --run "VCG02BottleMarkerREF.Enable"
+--answer-boxes --key-at 3 r:1.0 --key-at 6 mouse-left --key-at 8 mouse-left
+--key-at 10 mouse-left --fps --wait 35` (input by `--key-at` only), the same
+on a build of `main`'s physics (`1949bd2`) for comparison.
+
+- The VCG02 bottles stand on the rail and stay there (screenshot after 35 s);
+  the shot one (`Hit 0010A208 at 148 units`) lands and "comes to rest" at
+  10.1 s (main's code: 10.5 s), and no contact or rest line follows in the
+  25 s after: it stays still. The other six never move.
+- Tumbleweeds (wind 49) creep 0.5–1 unit per 5 s; the same on main's code
+  (a probe of this solver shows why: a sphere's contacts act at its centre,
+  so friction can't roll it; PR 7).
+- Frame time, same route, steady part (16 two-second samples each; the
+  machine was shared, so treat as rough): main's physics 19.5 ms a frame,
+  main-thread work 15.6 ms; this branch 17.3 ms, 11.5 ms.
+
+Not checked live: Doc's house clutter (it loads asleep and nothing woke it
+in either build), a dead NPC coming to rest.
+
+### Tested (generated)
+
+`havok::tests`: the speed table and encoder, hkHalf, the constructor's
+settings, `ScaleSolverInfo` at 1, ½ and ¼ speed, the flags over 16 steps,
+frame times 5–100 ms and 60 Hz carry, half speed, one step only; free
+fall and damping step by step against hand-computed values, speed and spin
+caps (in Havok and game units), invalid velocities; a still body passing
+its sixth check at step 36 and 32 steps after waking, creeping and slowly
+turning bodies never passing, the last test, rotation compression.
+`rigid::tests`: a body in the open stepped exactly by the integrator; a
+box resting on the floor asleep at step 37; a stack asleep together and a
+nudge waking both; the earlier tests (falls and rests, rail bottles, shot
+off a rail, stacking, walkers, grab) unchanged.
 
 ## Tested
 
@@ -366,8 +558,9 @@ pushes something under it back up: the 30-unit rule does.
 
 - Nothing compared with the original game: how far bottles fly, how they
   tumble, settle heights, rest times, grab feel, sound choice and volume.
-- Havok's solver, contact manifolds, deactivation and penetration
-  recovery are not reproduced (above). Clutter constraints aren't
+- Havok's contact solver, contact manifolds, simulation islands and
+  penetration recovery are not reproduced yet (B1 PRs 5–9; the step
+  driver, integrator and deactivation are, above). Clutter constraints aren't
   simulated: joined or constrained clutter bodies stay solid (ragdolls'
   joints are, in `physics::ragdoll`). Inertia under a reference's
   scale isn't traced (scaled by s², mass kept).

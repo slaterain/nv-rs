@@ -98,7 +98,7 @@ settings, (2) the step driver, (3) the single-body integrator,
 (4) sleeping, (5) simulation islands, (6) the contact manager with
 per-point events, (7) the contact solver (maybe two PRs), (8) ragdoll
 constraints, (9) continuous collision, (10) the character proxy (its
-own task). 1–4 should already stop the jitter and the jiggling.
+own task). 1–4 should already stop the jitter and the jiggling. Progress: PRs 1-4 (constants, step driver, integrator, sleeping) on `claude/b1-havok-step` (docs/PHYSICS.md, "Havok's world step"); islands approximated by contacts until PR 5.
 
 **B2. Grab (Z) 1:1.** Carried objects flail, spasm and pass through
 things. Trace the game's grab spring (`0095f930`, `00960520`, the
