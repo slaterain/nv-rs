@@ -6,7 +6,9 @@ them (CONTRIBUTING.md).
 
 .DESCRIPTION
 Routes (commands and success lines documented in docs/GOODSPRINGS_ROUTE.md,
-docs/PATHING.md and docs/VANCE_GUN_ROUTE.md):
+docs/PATHING.md and docs/VANCE_GUN_ROUTE.md; scripts/acceptance.sh runs
+the same routes on Linux and macOS, so a route changed here changes there
+too):
   doc    Doc Mitchell walks the west rooms to his chair spot and talks
          (GSDocMitchellHouse, VCG01 stage 110).
   vcg02  Back in the Saddle: Sunny's walks, wells, reward (the quest's own

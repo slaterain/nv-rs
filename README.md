@@ -7,7 +7,7 @@
 [![Rust](https://img.shields.io/badge/Rust-2021_edition-orange.svg)](https://www.rust-lang.org/)
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
 **Fallout: New Vegas, rebuilt in Rust, aiming to play exactly like the
@@ -156,9 +156,13 @@ env -u DISPLAY WGPU_BACKEND=vulkan cargo run --release -- \
   "/path/to/Fallout New Vegas/Data" GSDocMitchellHouse
 ```
 
-For Steam/Proton installations, pass the active plugin list and INI when
-needed with `--plugins` and `--ini`. Linux builds currently run from source;
-Windows remains the packaged playtest platform.
+For Steam/Proton installations, the game's own `Fallout.ini`,
+`FalloutPrefs.ini` and `plugins.txt` are read from its Proton prefix in the
+same Steam library, once the game has been started there; `--ini` and
+`--plugins` still override them. The acceptance routes run with
+`scripts/acceptance.sh` ([docs/PLAYTESTING.md](docs/PLAYTESTING.md#linux)).
+Linux builds currently run from source; Windows remains the packaged
+playtest platform.
 
 ---
 

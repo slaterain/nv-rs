@@ -31,6 +31,15 @@ macOS.
 The macOS distant-land material has no prepass or shadow pass, so it may
 look different from other platforms.
 
+## Linux
+
+Build the viewer from source as described in the
+[Linux build instructions](../README.md#build-and-run-on-linux-vulkan-and-wayland).
+The game data comes from the Windows version installed through Steam (Steam
+Play / Proton), for example `~/.steam/steam/steamapps/common/Fallout New Vegas/Data`.
+
+The game's own settings (`Fallout.ini`, `FalloutPrefs.ini`) and active-plugin list (`plugins.txt`) are read from the game's Proton prefix in the same Steam library (`steamapps/compatdata/<app id>/pfx/drive_c/users/steamuser`), once the game has been started there; until then nv-rs uses the install's `Fallout_default.ini` and the official files. Both Steam editions are looked for (app ids 22380 and 22490). The acceptance routes run with `scripts/acceptance.sh` (`--help` lists its options; `--headless` needs gamescope).
+
 ## Current live route
 
 The verified route is a copied stage-55 opening save moved to the vigor tester in Doc Mitchell's house. Triggering the tester advances to stage 60, Doc gives the instruction, the objective appears, and pressing E opens the original SPECIAL scene. Same-cell F9 reload at the tester also works after script occupancy is reset. This verifies that segment of the route only; it does not demonstrate completion of the opening or campaign.

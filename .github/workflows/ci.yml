@@ -9,18 +9,38 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  linux-viewer:
-    name: check (viewer, Linux)
+  check-linux:
+    name: check (Linux)
     runs-on: ubuntu-latest
+    env:
+      # Same as the Windows job: one build from the cache, no incremental state or debug info.
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install native viewer dependencies
         run: sudo apt-get update && sudo apt-get install --yes libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
-      - name: Install stable Rust
-        run: rustup toolchain install stable --profile minimal
+      - name: Install stable Rust tools
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: |
+            . -> target
+            viewer -> target
+          shared-key: linux
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Check Linux viewer
         working-directory: viewer
         run: cargo check --locked
+      - name: Check the Linux acceptance script
+        run: shellcheck scripts/acceptance.sh
+      - name: Check core formatting, tests and lints
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings
   check:
     name: check (${{ matrix.workspace }})
     runs-on: windows-latest
