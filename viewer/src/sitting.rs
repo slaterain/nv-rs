@@ -1468,6 +1468,8 @@ pub fn idle_requests(
     mut state: bevy::prelude::ResMut<crate::dialogue::DialogueState>,
     mut seats: bevy::prelude::ResMut<Seats>,
     lines: bevy::prelude::Res<crate::chatter::Lines>,
+    conversation: bevy::prelude::Res<crate::dialogue::Conversation>,
+    mut said_to: bevy::prelude::Local<Option<world::talk_idles::SaidKey>>,
     mut actors: bevy::prelude::Query<(&Walker, &mut Life, &mut ActorRig)>,
 ) {
     use world::talk_idles::{self, Ask, Request};
@@ -1480,7 +1482,27 @@ pub fn idle_requests(
         w.package
             .is_some_and(|p| talk_idles::package_has_idles(order, p))
     };
-    for s in &lines.started {
+    // A line said to the player without the menu (`SayTo`) is said
+    // through the GREET procedure (`005c9100` → `008dbe30` → `008a20d0`):
+    // each response begun asks for its speaker idle as a greeting's does
+    // (Doc Mitchell's "Whoa, easy there" plays `VCG01DocWhoaThere`).
+    let mut say_to = Vec::new();
+    if let Some(talk) = conversation.0.as_ref().filter(|t| t.is_line_only()) {
+        if let Some((key, response)) = talk.said() {
+            if *said_to != Some(key) {
+                *said_to = Some(key);
+                say_to.push(crate::chatter::ResponseStarted {
+                    speaker: talk.speaker(),
+                    listener: world::dialogue::PLAYER_REF,
+                    response: response.clone(),
+                    conversation: None,
+                });
+            }
+        }
+    } else {
+        *said_to = None;
+    }
+    for s in lines.started.iter().chain(&say_to) {
         let listener = (s.listener != s.speaker && s.listener != world::dialogue::PLAYER_REF)
             .then(|| {
                 actors
