@@ -478,19 +478,179 @@ impl Motion {
     /// world units (`hkpSolverInfo::m_globalAccelerationPerStep`). A fixed
     /// motion isn't touched. (A thin box's extra inertia handling in that
     /// function isn't translated: no thin-box bodies are simulated here.)
+    /// Then the deactivation bookkeeping; gives the body's count of
+    /// passing checks ([`Motion::update_deactivation`]).
     // Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
-    pub fn step(&mut self, dt: f32, gravity_per_step: Vec3, unit: f32) {
+    pub fn step(
+        &mut self,
+        dt: f32,
+        gravity_per_step: Vec3,
+        unit: f32,
+        solver: &SolverInfo,
+    ) -> Option<u32> {
         if self.kind == motion_type::FIXED {
-            return;
+            return None;
         }
         self.apply_forces(dt, gravity_per_step);
         self.integrate(dt, unit);
+        self.update_deactivation(solver, unit)
     }
 }
 
-/// A motion's deactivation state (filled in by the deactivation step).
+/// A motion's deactivation state (`hkpMotion`, Xbox PDB names). A new
+/// motion's is taken as all zero (the constructor, Xbox `8295e5a8`, isn't
+/// traced on the PC).
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
-pub struct Deactivation {}
+pub struct Deactivation {
+    /// `m_deactivationIntegrateCounter` (`+0x09`): counts steps, 1 to 16
+    /// then 0; 0xff means never checked.
+    pub counter: u8,
+    /// `m_deactivationNumInactiveFrames[2]` (`+0x0a`): bits 0–6 the
+    /// passing checks in a row (at most 64), bits 7–13 the count before,
+    /// bits 14–15 the solver's select flag.
+    pub inactive: [u16; 2],
+    /// `m_deactivationRefPosition[2]` (`+0xf0`): where the body was when
+    /// the count began (world units), and in `w` the largest
+    /// |v|² + min(radius, 1)² |ω|² (Havok units) seen since.
+    pub ref_position: [[f32; 4]; 2],
+    /// `m_deactivationRefOrientation[2]` (`+0x110`): its rotation then,
+    /// compressed ([`compress_quat`]).
+    pub ref_orientation: [u32; 2],
+}
+
+/// A rotation in four bytes (`00d975d0`): each component × 116.36363 +
+/// 196736.5 as a float, its bits 6–13 (so round(c × 116.36) + 128).
+// Translated from 00d975d0 (decompiled, FalloutNV.exe 1.4.0.525)
+pub fn compress_quat(q: Quat) -> u32 {
+    let byte = |c: f32| ((c * 116.363_63 + 196_736.5).to_bits() >> 6) & 0xff;
+    byte(q[0]) | byte(q[1]) << 8 | byte(q[2]) << 16 | byte(q[3]) << 24
+}
+
+/// The bytes back: (b − 128) × 0.00859375 (`00d28a30`).
+pub fn decompress_quat(c: u32) -> Quat {
+    let f = |k: u32| (((c >> (8 * k)) & 0xff) as i32 - 0x80) as f32 * 0.008_593_75;
+    [f(0), f(1), f(2), f(3)]
+}
+
+/// An island is deactivated once the fewest checks in a row any of its
+/// bodies has passed is more than this (`00cf8da0`).
+pub const INACTIVE_FRAMES_TO_DEACTIVATE: u32 = 5;
+
+impl Motion {
+    /// |v|² + min(radius, 1)² |ω|², in Havok units.
+    fn energy(&self, unit: f32) -> f32 {
+        let r = self.object_radius.min(1.0);
+        let v = crate::vec::scale(self.linear_velocity, 1.0 / unit);
+        let w = self.angular_velocity;
+        r * r * crate::vec::dot(w, w) + crate::vec::dot(v, v)
+    }
+
+    /// The more frequent of the two checks' counts of passing checks in a
+    /// row.
+    pub fn inactive_frames(&self) -> u32 {
+        let d = &self.deactivation;
+        u32::from(d.inactive[0] & 0x7f).max(u32::from(d.inactive[1] & 0x7f))
+    }
+
+    /// The deactivation bookkeeping at the end of a body's step
+    /// (`hkRigidMotionUtilApplyForcesAndStep` `00d28a30` and
+    /// `hkRigidMotionUtilApplyAccumulators` `00d29bf0`): the counter goes
+    /// up; every 4th step a check, of slot 1 every 16th (counter back to
+    /// 0), else slot 0. The slot's reference energy keeps its largest
+    /// value. When the centre is within the class's distance of the slot's
+    /// reference position and the rotation within its distance of the
+    /// reference rotation, the slot's count goes up by one (held at 64);
+    /// otherwise it goes to 0 and the references are set to where the body
+    /// is now. Gives the larger count of the two slots (none for a fixed
+    /// motion).
+    // Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn update_deactivation(&mut self, solver: &SolverInfo, unit: f32) -> Option<u32> {
+        if self.kind == motion_type::FIXED {
+            return None;
+        }
+        let c = u32::from(self.deactivation.counter) + 1;
+        self.deactivation.counter = c as u8;
+        if c & 3 == 0 {
+            let j = if c & 15 == 0 {
+                if c == 0x100 {
+                    self.deactivation.counter = 0xff;
+                    return Some(self.inactive_frames());
+                }
+                self.deactivation.counter = 0;
+                1
+            } else {
+                0
+            };
+            let e = self.energy(unit);
+            let info = &solver.deactivation[usize::from(self.deactivation_class).min(5)];
+            let d = &mut self.deactivation;
+            d.ref_position[j][3] = d.ref_position[j][3].max(e);
+            let r = d.ref_position[j];
+            let dist = crate::vec::dist2([r[0], r[1], r[2]], self.center);
+            let flag = u16::from(solver.select_flags[j]);
+            let old = d.inactive[j] & 0x7f;
+            let mut passed = false;
+            if dist <= info.max_dist_sqrd[j] * unit * unit {
+                let q = decompress_quat(d.ref_orientation[j]);
+                let rot: f32 = (0..4).map(|k| (q[k] - self.rotation[k]).powi(2)).sum();
+                if rot <= from_half(info.max_rot_sqrd[j]) {
+                    let count = old - (old >> 6) + 1;
+                    d.inactive[j] = count | ((flag << 7 | old) << 7);
+                    passed = true;
+                }
+            }
+            if !passed {
+                d.inactive[j] = (flag << 7 | old) << 7;
+                d.ref_position[j] = [self.center[0], self.center[1], self.center[2], 0.0];
+                d.ref_orientation[j] = compress_quat(self.rotation);
+            }
+        }
+        Some(self.inactive_frames())
+    }
+
+    /// The last test before an island marked inactive goes to sleep
+    /// (`00d28560`, from the dirty-island cleanup `00cb55d0` →
+    /// `00cb5310`): it fails when a quarter of the body's energy now less
+    /// 0.01 is more than the largest energy its counting slot (the one with
+    /// the larger count, slot 1 on a tie) has seen.
+    // Translated from 00d28560 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn can_deactivate(&self, unit: f32) -> bool {
+        let d = &self.deactivation;
+        let j = if (d.inactive[1] & 0x7f) < (d.inactive[0] & 0x7f) {
+            0
+        } else {
+            1
+        };
+        let fails = d.ref_position[j][3] < self.energy(unit) * 0.25 - 0.010_000_001;
+        !fails
+    }
+
+    /// Going to sleep with its island (`00cb5310`): both velocities set to
+    /// zero (`hkpMotion::setLinearVelocity`/`setAngularVelocity`, vtable
+    /// `+0x40`/`+0x44`, with the zero vector at `01267e30`).
+    // Translated from 00cb5310 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn deactivate(&mut self) {
+        self.linear_velocity = [0.0; 3];
+        self.angular_velocity = [0.0; 3];
+    }
+
+    /// Woken with its island (`00cb5100`): both counts start again at 0,
+    /// keeping the solver's select flags (each flipped when the solver's
+    /// counter is behind the body's).
+    // Translated from 00cb5100 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn activate(&mut self, solver: &SolverInfo) {
+        let d = &mut self.deactivation;
+        let mut f0 = u16::from(solver.select_flags[0]);
+        let mut f1 = u16::from(solver.select_flags[1]);
+        if (solver.integrate_counter & 3) < (d.counter & 3) {
+            f0 = !f0;
+        }
+        if solver.integrate_counter < d.counter {
+            f1 = !f1;
+        }
+        d.inactive = [f0 << 14, f1 << 14];
+    }
+}
 
 /// The most steps one frame takes (`00c66760`: 3, or 1 when its second
 /// argument is set; the caller passes `00525420(...)` tested on a game
@@ -616,7 +776,7 @@ mod tests {
         let (mut v, mut z) = (0.0f32, 100.0f32);
         for _ in 0..62 {
             let before = z;
-            m.step(dt, g_step(dt), 1.0);
+            m.step(dt, g_step(dt), 1.0, &SolverInfo::new());
             // By hand, in the same order and precision.
             v += 1.0 * (-98.1 * dt);
             v *= (1.0 - dt * 0.0f32).max(0.0);
@@ -632,12 +792,12 @@ mod tests {
         // gravity.
         let mut m = body();
         m.gravity_factor = half(0.0);
-        m.step(dt, g_step(dt), 1.0);
+        m.step(dt, g_step(dt), 1.0, &SolverInfo::new());
         assert_eq!(m.linear_velocity, [0.0; 3]);
         for kind in [motion_type::KEYFRAMED, motion_type::FIXED] {
             let mut m = body();
             m.kind = kind;
-            m.step(dt, g_step(dt), 1.0);
+            m.step(dt, g_step(dt), 1.0, &SolverInfo::new());
             assert_eq!(m.linear_velocity, [0.0; 3]);
         }
     }
@@ -652,7 +812,7 @@ mod tests {
         let dt = MAX_TIME;
         let (mut v, mut w) = (10.0f32, 2.0f32);
         for _ in 0..100 {
-            m.step(dt, [0.0; 3], 1.0);
+            m.step(dt, [0.0; 3], 1.0, &SolverInfo::new());
             v *= (1.0 - dt * 0.1f32).max(0.0);
             w *= (1.0 - 0.05f32 * dt).max(0.0);
             assert_eq!(m.linear_velocity[0], v);
@@ -662,7 +822,7 @@ mod tests {
         let mut m = body();
         m.linear_damping = 100.0;
         m.linear_velocity = [10.0, 0.0, 0.0];
-        m.step(dt, [0.0; 3], 1.0);
+        m.step(dt, [0.0; 3], 1.0, &SolverInfo::new());
         assert_eq!(m.linear_velocity, [0.0; 3]);
     }
 
@@ -672,18 +832,18 @@ mod tests {
         // 2000 Havok units a second against the bottle's 1068.
         let mut m = body();
         m.linear_velocity = [2000.0, 0.0, 0.0];
-        m.step(dt, [0.0; 3], 1.0);
+        m.step(dt, [0.0; 3], 1.0, &SolverInfo::new());
         assert!((m.linear_velocity[0] - 1068.0).abs() < 1e-3);
         assert!((m.center[0] - 1068.0 * dt).abs() < 1e-3);
         // In game units, the same cap scaled.
         let mut m = body();
         m.linear_velocity = [2000.0 * 7.0, 0.0, 0.0];
-        m.step(dt, [0.0; 3], 7.0);
+        m.step(dt, [0.0; 3], 7.0, &SolverInfo::new());
         assert!((m.linear_velocity[0] - 1068.0 * 7.0).abs() < 1e-2);
         // Spin: |ω| dt / π held to min(31.57 × dt, 0.9) = 0.505.
         let mut m = body();
         m.angular_velocity = [0.0, 0.0, 200.0];
-        m.step(dt, [0.0; 3], 1.0);
+        m.step(dt, [0.0; 3], 1.0, &SolverInfo::new());
         let cap = 31.57 * dt * std::f32::consts::PI / dt;
         assert!(
             (m.angular_velocity[2] - cap).abs() < 0.01,
@@ -693,7 +853,7 @@ mod tests {
         // Under the cap, untouched; a quarter turn about z in 0.2 rad steps.
         let mut m = body();
         m.angular_velocity = [0.0, 0.0, 10.0];
-        m.step(dt, [0.0; 3], 1.0);
+        m.step(dt, [0.0; 3], 1.0, &SolverInfo::new());
         assert_eq!(m.angular_velocity[2], 10.0);
         let a = 10.0 * dt * 0.5;
         let x = a * a * FOUR_OVER_PI_SQ;
@@ -706,7 +866,7 @@ mod tests {
         let mut m = body();
         m.max_angular_velocity = 255;
         m.angular_velocity = [500.0, 0.0, 0.0];
-        m.step(0.016, [0.0; 3], 1.0);
+        m.step(0.016, [0.0; 3], 1.0, &SolverInfo::new());
         let cap = MAX_STEP_TURN * std::f32::consts::PI / 0.016;
         assert!(
             (m.angular_velocity[0] - cap).abs() < 0.05,
@@ -720,15 +880,95 @@ mod tests {
         let mut m = body();
         m.linear_velocity = [f32::NAN, 0.0, 0.0];
         m.angular_velocity = [1.0, 0.0, 0.0];
-        m.step(MAX_TIME, [0.0; 3], 1.0);
+        m.step(MAX_TIME, [0.0; 3], 1.0, &SolverInfo::new());
         assert_eq!(m.linear_velocity, [0.0; 3]);
         assert_eq!(m.angular_velocity, [0.0; 3]);
         let mut m = body();
         m.max_linear_velocity = 255;
         m.angular_velocity = [0.0, 2e6, 0.0];
-        m.step(MAX_TIME, [0.0; 3], 1.0);
+        m.step(MAX_TIME, [0.0; 3], 1.0, &SolverInfo::new());
         assert_eq!(m.angular_velocity, [0.0; 3]);
         assert_eq!(m.center, [0.0, 0.0, 100.0]);
+    }
+
+    /// Steps a motion with no gravity until its count passes 5; the step
+    /// that did it (None within `limit`).
+    fn steps_to_rest(m: &mut Motion, limit: u32) -> Option<u32> {
+        let mut s = SolverInfo::new();
+        for k in 1..=limit {
+            s.increment_deactivation_flags();
+            let frames = m.step(MAX_TIME, [0.0; 3], 1.0, &s).unwrap();
+            if frames > INACTIVE_FRAMES_TO_DEACTIVATE {
+                return Some(k);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn a_still_body_passes_on_its_sixth_check() {
+        // From a new motion (references zero): the first check (step 4)
+        // sets the references; slot 0 then passes at 8, 12, 20, 24, 28,
+        // 36 (16 and 32 are slot 1's): the sixth pass is at step 36.
+        let mut m = body();
+        m.center = [10.0, 20.0, 30.0];
+        assert_eq!(steps_to_rest(&mut m, 200), Some(36));
+        assert!(m.can_deactivate(1.0));
+        // Packed: count 6, the count before (5) in bits 7–13.
+        assert_eq!(m.deactivation.inactive[0] & 0x3fff, 6 | 5 << 7);
+        // Asleep: velocities zeroed. Woken: the counts start again, so it
+        // takes 6 more passes of slot 0; its counter stood at 4, so they
+        // come 8 to 36 on it, skipping 16 and 32: 32 steps.
+        m.linear_velocity = [0.001, 0.0, 0.0];
+        m.deactivate();
+        assert_eq!(m.linear_velocity, [0.0; 3]);
+        let s = SolverInfo::new();
+        m.activate(&s);
+        assert_eq!(m.inactive_frames(), 0);
+        assert_eq!(steps_to_rest(&mut m, 200), Some(32));
+    }
+
+    #[test]
+    fn a_creeping_body_never_passes() {
+        // 0.004 Havok units a step: 0.016 between checks, but its
+        // reference stays put, so every second check fails.
+        let mut m = body();
+        m.linear_velocity = [0.004 / MAX_TIME, 0.0, 0.0];
+        assert_eq!(steps_to_rest(&mut m, 1000), None);
+        // Turning slowly (0.01 rad a step) never passes either.
+        let mut m = body();
+        m.angular_velocity = [0.0, 0.0, 0.01 / MAX_TIME];
+        assert_eq!(steps_to_rest(&mut m, 1000), None);
+        // A body that wanders within 0.08 but past 0.02 between checks:
+        // only slot 1 (every 16 steps) can count; it isn't reached here
+        // as the drift adds up.
+        let mut m = body();
+        m.linear_velocity = [0.006 / MAX_TIME, 0.0, 0.0];
+        assert_eq!(steps_to_rest(&mut m, 1000), None);
+    }
+
+    #[test]
+    fn a_body_moving_faster_than_it_counted_stays_awake() {
+        let mut m = body();
+        m.center = [10.0, 20.0, 30.0];
+        steps_to_rest(&mut m, 200);
+        assert!(m.can_deactivate(1.0));
+        // Suddenly moving at 1 unit a second: 1/4 − 0.01 > 0.
+        m.linear_velocity = [1.0, 0.0, 0.0];
+        assert!(!m.can_deactivate(1.0));
+    }
+
+    #[test]
+    fn rotations_compress_to_a_byte_each() {
+        let q = quat_normalize([0.1, -0.2, 0.3, 0.9]);
+        let back = decompress_quat(compress_quat(q));
+        for k in 0..4 {
+            assert!((back[k] - q[k]).abs() <= 0.5 / 116.0, "{back:?} {q:?}");
+        }
+        assert_eq!(
+            compress_quat([0.0, 0.0, 0.0, 1.0]),
+            0x80 | 0x80 << 8 | 0x80 << 16 | 244 << 24
+        );
     }
 
     #[test]
