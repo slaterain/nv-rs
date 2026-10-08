@@ -82,13 +82,23 @@ systems. Report anything new as an issue.
 
 **B1. Havok world 1:1 (solver, integration, sleeping, contacts).**
 `crates/physics` uses its own solver and sleep rules, labelled as such in
-docs/PHYSICS.md. Translate the game's Havok 2010 world step instead:
-integration, contact solver and friction/restitution, deactivation
-(sleeping) rules, collision filter and layers (already traced), contact
-points and callbacks. Symptoms: objects clatter and jitter when they
-should rest; tumbleweeds don't roll like the game; dead bodies keep
-moving or jiggle; repeated impact sounds. Big task: split it into
-sub-PRs (step and integration, then contacts and solver, then sleeping).
+docs/PHYSICS.md. Translate the game's own Havok instead: the exe has
+**Havok 7.1.0-r1** (built 2009-12-22) compiled in, and the Xbox
+prototype's PDB names its classes and layouts. Only those two sources:
+no Havok SDK (proprietary, and a different version). Symptoms: objects
+clatter and jitter when they should rest; tumbleweeds don't roll like the
+game; dead bodies keep moving or jiggle; repeated impact sounds; physics
+is slow. A map of the exe's Havok (frame driver, fixed 0.016 s steps with
+4 solver substeps, the integrator, sleeping every 4th step under 0.02
+units with 5 passing checks, one contact event per new contact point,
+friction √(f₁f₂), Bethesda's overrides) is in the maintainer's private
+research notes; it goes into docs/PHYSICS.md with the first PR.
+Planned pull requests, in order: (1) world constants and solver
+settings, (2) the step driver, (3) the single-body integrator,
+(4) sleeping, (5) simulation islands, (6) the contact manager with
+per-point events, (7) the contact solver (maybe two PRs), (8) ragdoll
+constraints, (9) continuous collision, (10) the character proxy (its
+own task). 1–4 should already stop the jitter and the jiggling.
 
 **B2. Grab (Z) 1:1.** Carried objects flail, spasm and pass through
 things. Trace the game's grab spring (`0095f930`, `00960520`, the
@@ -231,13 +241,58 @@ early when the Pip-Boy is put away. Trace when the game hides and shows
 the first-person model around menus and the Pip-Boy's lowering
 animation, and do the same.
 
+### Playtest of builds 23–24 (2026-10-07)
+
+**B24. Easy Pete's face is invisible.** Only his beard, moustache and
+hat draw (reports 007, 008). #34's texture-cache fix (`ba8e864`: the
+shared cache freed textures still in use) fits the symptom; check on
+build 25 first. Next suspect if it persists: his `headold.nif` and its
+`.tri` disagree on 25 vertices.
+
+**B25. People sink to the waist while moving.** Powder Gangers and other
+NPCs sometimes walk waist-deep in the ground. B4's land rule only lifts
+feet more than 30 units under the land and its far-from-camera rule puts
+people at navmesh height (up to ~21 under the land); this is deeper, so
+something else is involved. Reproduce with `NV_GROUND_LOG=1`.
+
+**B26. Ringo greets you as a stranger after the gunfight.** When he comes
+over after the Powder Gangers are dead he uses his first-meeting lines.
+Trace his greeting's conditions (VMS16 stages, met-before checks) and
+why they pass at that point.
+
+**B27. The first-person hand looks pale and untextured** (reports 007,
+008). Check its texture and skin tint (the player's FaceGen body tint)
+and how the first-person model's materials are built.
+
+**B28. The Prospector Saloon's window is see-through** (report 007). The
+game draws it as glass with its window environment map; trace the
+shader flags (window environment map, alpha) and draw it the same way.
+
+**B29. The "revise your character" prompt looped.** Fixed in #33: a
+message box's answer goes only to the script that showed it (`005b4630`,
+`005b4a80`), and references moved by scripts run where they are.
+
+**B30. `GetAV XP` before any XP.** `player.GetAV XP` on a player who has
+never earned XP returns nothing instead of 0, which stops script blocks
+that test it (VCG04's prompt can't appear before the first XP). Trace the
+actor value getter and return what the game returns.
+
+**B31. The blurred room behind menus.** The Vigor Tester (and the
+Pip-Boy, pause and other menus) show the world behind them blurred.
+Traced: `00871dc0` draws the static menu background and `00718ab0` picks
+its image-space modifier from game data: `PopupBackgroundFX` (the Vigor
+Tester's), `InterfaceBackgroundFX`, `PipBackgroundFX`,
+`PauseBackgroundFX`. Implement it.
+
 ### In progress
 
 - Nothing; every overnight branch is merged.
 
 Landed (in `main` since 2026-10-07): death into ragdoll, one
 radio state and the 2 key, Chazm's PRs #11 and #12 (docs/CONTRIB_CHAZM.md),
-B3, B4, B5, B6, B10, B11, B12, B13, B16.
+B3, B4, B5, B6, B10, B11, B12, B13, B16; B22 (#32), B29 (#33); Chazm's #31 (#34:
+casinos, tutorials, terminals, menu fades, companions, weapon classes,
+.fos saves, mods, factions and crime).
 
 Follow-ups found: creatures without a ragdoll tip onto their side (a
 stand-in, `ai::fallen_transform`, from the original baseline) instead of
