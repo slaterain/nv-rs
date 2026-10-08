@@ -374,11 +374,19 @@ from 200 units leaves the floor at about 2% of its landing speed (the
 integrated-velocity scheme spends the target on moving it out).
 
 In nv-rs: the island's constraints are its manifolds in key order (the
+<<<<<<< HEAD
 game's order is its entities' constraint lists); people pushing a body are
 the character proxy's impulses (`applySurfaceInteractions`, "The character
 proxy"), not contacts. Not translated: maximum-impulse contacts (0x12; the
 game's points have none), constraint priorities >= 4
 (TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
+=======
+game's order is its entities' constraint lists); walkers pushing a body
+are keyframed bodies at their velocity whose touches are new points every
+step (this solver's walkers, PR 10). Not translated: maximum-impulse
+contacts (0x12; the game's points have none), constraint priorities ≥ 4
+(full TOI, "Continuous collision" below), the contact impulse limit callbacks (`00d01700`), thin box
+>>>>>>> origin/claude/b1-ccd
 and sphere motion specifics (all bodies use the box motion's rules).
 
 Verified live (release viewer, installed data, the PR 4 bottle route,
@@ -1041,8 +1049,58 @@ player's ears (163 `PHYBabyRattle`s in 16 s at the VCG02 fence).
 Now `clutter::play_contact_sounds` starts them with
 `weapon_fx::play_at_with` at the point; `within_reach` is the box test.
 
-Seen, left for B1 PR 9 (continuous collision): a tumbleweed blown fast
-enough passes through the land (00178A82, from z 7992 to 1082 in 5 s).
+Seen in the build 28 playtest as "a tumbleweed blown fast enough passes
+through the land" (00178A82, from z 7992 to 1082 in 5 s): **it isn't
+tunnelling.** It rolls at 50–150 units/s (2–3 units a step) and falls
+freely as it crosses y = −4096, where the viewer's loaded terrain ends
+(`--at -68232.9,4990`: the squares y −1 to 3; 2265 triangles in
+x −66000..−63000, y −4096..−3000, 6 south of −4096 in z 7000..8500). The
+game's own loaded grid ends somewhere else; what the game does with a
+body that rolls out of it isn't traced (left).
+
+## Continuous collision (B1 PR 9, `claude/b1-ccd`, 2026-10-08)
+
+`physics::continuous`; `RigidWorld::continuous`. The world is continuous
+(`iSimType` 1, `00c681c0`; `hkpContinuousSimulation` ctor `00d0d020`).
+Each body's quality is the model's cinfo byte (`bhkRigidBody::LoadBinary`
+`00c8ea30` only byte-swaps the blob; `00c8d4a0` names 0 fixed, 1 keyframed,
+2 debris, 4 moving, 5 critical, 6 bullet, 7 user, 0xff invalid; 3 is
+`DEBRIS_SIMPLE_TOI`, Xbox PDB). `RigidSetup::quality` carries it. This
+settles B1 question 3 of the Havok map: **the tumbleweeds (all twelve
+near the start) and the bottle model carry 3**, and the dispatcher's
+quality table (`00cfb570`, `+0x1bb0`; the whole table is in
+`continuous::pair_quality`) gives fixed against 3 the collision quality 2,
+simplified time of impact (against debris 2: a plain step; against
+moving, critical, bullet: the full one).
+
+| What | Where | Rule |
+| --- | --- | --- |
+| Queue | `00d0d150` | the narrowphase (`00d0d8b0`, "TtNarrowPhase") queues an event per pair whose agent found a time: time, separating normal, agent; the quality info's `+0x14` byte (set for index 2, `00cfb570`) marks it simple; 250 events (`sizeOfToiEventQueue`), a full queue asserts and loses the event |
+| Order | `handleAllToisTill` `00d0e9c0` (from `advanceTimeInternal` `00d0ed10`, "TtTOIs") | the earliest first, a tie by the bodies' ids (`+0xd4`); an event whose agent no longer confirms it (`00d0bc20`) is dropped |
+| Handling | `handleSimpleToi` `00d0e210` ("TtSimpleTOI") | for each body of quality 3: the swept transform is set to the event's time (`00cf1d50`: position lerp, rotation by two half blends through the normalized sum of the ends, then both ends of the sweep are that pose), the body's other queued events and its agents' predictions are dropped (`00cc0ea0`); velocities untouched. The contacts at that pose come from the next collide, the solver acts on the next step; the rest of the step's travel is lost |
+
+Translated in `RigidWorld::continuous` / `swept_pose`: the table, the
+event order and queue, the handling. **Not traced, labelled in the code:**
+how the narrowphase finds an event's time. The predictive agents
+(`00cfedd0`, the tables at dispatcher `+0x16b8`/`+0x16dc`) keep a
+separating plane, bound the pair's remaining separation by the bodies'
+travel and turn, and run the shape pair's linear cast when it falls
+below the collision tolerance; the separation the time is for comes from
+the quality info's fractions (−0.5, −0.25, −0.35/(n−1)…, `00cfb570`,
+n = 3 for simplified) of the bodies' allowed penetration depth. Here: the
+first time a corner (sphere, capsule end) of the body touches a triangle
+that the step carried it through (behind its plane at the end, the nearest
+point straight below), by conservative advancement; only when the step
+carried a point further than the PSI's own reach (`point_triangle`), so
+slower bodies behave as before. Edges against hull faces, capsule axes
+and events between two bodies (quality 3 bodies meet at 1: a plain step)
+aren't swept. Not translated: the full time of impact (`simulateToi`
+`00d100a0`: a solve at the time and the rest of the step again) for
+quality 4 and 5 bodies, the `toiCollisionResponseRotateNormal` (0.2) and
+`numToisTillAllowedPenetration` bookkeeping, the safe-time backstep for
+them. Unit-tested: a ball and a slanted box shot at a floor of no
+thickness at 1500–9000 units/s stay above it; as debris (quality 2) the
+same ball goes through. Live (the PR 9 route, 40 s, release viewer, tumbleweeds all quality 3): 00178A82 still goes down at (−64959, −4254) in the run with this on (z 8000 at 10 s at y −4109, 724 at 15 s), in the other three runs it stayed on the land; the runs differ (the dice). So the continuous collision doesn't touch that fall: it is the terrain edge.
 
 ## Not compared / gaps
 

@@ -175,6 +175,11 @@ pub struct RigidSetup {
     pub max_angular_speed: f32,
     /// Havok's motion system (`nif::RigidBodyInfo::motion`).
     pub motion: u8,
+    /// Havok's collision quality (`hkpCollidableQualityType`, as the model
+    /// stores it in the cinfo's last byte: `00c8d4a0` names 0 fixed, 1
+    /// keyframed, 2 debris, 4 moving, 5 critical, 6 bullet, 7 user; 3 is
+    /// debris with simplified TOI, Xbox PDB): [`crate::continuous`].
+    pub quality: u8,
     /// The wind pushes it (`nif::collision::BODY_WIND`, [`crate::wind`]).
     pub wind: bool,
     pub shapes: Vec<Shape>,
@@ -1115,6 +1120,7 @@ impl RigidWorld {
                 self.islands.mark_inactive(id);
             }
         }
+        self.continuous(collider);
         self.collide_broadphase();
         self.collide_narrowphase(collider);
     }
@@ -1246,6 +1252,77 @@ impl RigidWorld {
             b.set_motion(&m);
         }
     }
+    /// The continuous part of `hkpContinuousSimulation::collideInternal`
+    /// (`00d0ef40`) and `handleSimpleToi` (`00d0e210`) for the active
+    /// bodies whose quality gets a simplified time of impact against the
+    /// world ([`crate::continuous`]): a body the step carried through a
+    /// triangle is set to its pose at the time it touched it (centre,
+    /// turn: `00cf1d50`), its velocities as they were; the contacts there
+    /// are the collide's and the next step's. At most the world's queue
+    /// of events ([`crate::continuous::TOI_QUEUE`]).
+    // Translated from 00d0e210 and 00cf1d50 (decompiled, FalloutNV.exe 1.4.0.525)
+    fn continuous(&mut self, collider: &Collider) {
+        let owners: HashSet<u32> = self.bodies.iter().map(|b| b.setup.reference).collect();
+        let mut events = Vec::new();
+        for i in self.active_bodies() {
+            let b = &self.bodies[i];
+            if !b.dynamic() || !crate::continuous::simple_toi_against_world(b.setup.quality) {
+                continue;
+            }
+            // Only a step that carried a point further than the PSI's own
+            // reach (`point_triangle`) can have lost it.
+            let travel = length(sub(b.x, b.start.0));
+            if travel <= b.reach {
+                continue;
+            }
+            let margin = b.reach + crate::havok::COLLISION_TOLERANCE * HAVOK_UNIT;
+            let lo = sub(
+                [
+                    b.start.0[0].min(b.x[0]),
+                    b.start.0[1].min(b.x[1]),
+                    b.start.0[2].min(b.x[2]),
+                ],
+                [margin; 3],
+            );
+            let hi = add(
+                [
+                    b.start.0[0].max(b.x[0]),
+                    b.start.0[1].max(b.x[1]),
+                    b.start.0[2].max(b.x[2]),
+                ],
+                [margin; 3],
+            );
+            let tris: Vec<u32> = collider
+                .near(lo, hi)
+                .into_iter()
+                .filter(|&t| !owners.contains(&collider.owner(t)))
+                .collect();
+            let points: Vec<(Vec3, f32)> = b
+                .setup
+                .shapes
+                .iter()
+                .flat_map(feature_points)
+                .map(|(p, r)| (sub(p, b.setup.center), r))
+                .collect();
+            if let Some(t) =
+                crate::continuous::first_touch(collider, &tris, b.start, (b.x, b.q), &points)
+            {
+                events.push((t, i));
+            }
+        }
+        // In time order (`00d0e9c0`: the earliest first; ties, the lower
+        // body); the queue holds so many.
+        events.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        events.truncate(crate::continuous::TOI_QUEUE);
+        for (t, i) in events {
+            let b = &mut self.bodies[i];
+            let (x, q) = crate::continuous::swept_pose(b.start, (b.x, b.q), t);
+            b.x = x;
+            b.q = q;
+            b.moved = true;
+        }
+    }
+
     /// The broadphase part of `hkpSimulation::collide` (`00cf8bc0`; the
     /// continuous simulation's `00d0d3f0` per island): the moving bodies'
     /// boxes recalculated (`00d1a330`), then the pairs updated
@@ -1946,6 +2023,7 @@ mod tests {
             max_linear_speed: 1068.0 * HAVOK_UNIT,
             max_angular_speed: 31.57,
             motion: 4,
+            quality: 3,
             wind: false,
             shapes: vec![Shape::hull(corners, &planes, 0.7)],
         }
@@ -2260,6 +2338,7 @@ mod tests {
             max_linear_speed: 1068.0 * HAVOK_UNIT,
             max_angular_speed: 31.57,
             motion: 4,
+            quality: 3,
             wind: false,
             shapes: vec![Shape::hull(vertices, &planes, 0.7)],
         }
@@ -2771,6 +2850,52 @@ mod tests {
             "{fastest_up} {fastest_down}"
         );
         assert!(fastest_up < -fastest_down, "{fastest_up} {fastest_down}");
+    }
+
+    /// A body shot at a floor of no thickness, its step longer than the
+    /// body (`first_touch`): with the simplified time of impact (quality 3,
+    /// the game's clutter) it is set where it touched, and rests on the
+    /// floor; as debris (quality 2, none against the world) it is carried
+    /// through.
+    fn shot_at_the_floor(quality: u8, setup: RigidSetup, velocity: Vec3) -> f32 {
+        let c = floor(0.0);
+        let mut w = RigidWorld::new();
+        let i = w.add(RigidSetup { quality, ..setup }, (I3, [0.0, 0.0, 60.0]));
+        w.set_velocity(i, velocity, [0.0; 3]);
+        w.wake(i);
+        let mut lowest = f32::MAX;
+        for _ in 0..90 {
+            w.update(&c, STEP);
+            lowest = lowest.min(w.bodies[i].center()[2]);
+        }
+        lowest
+    }
+
+    #[test]
+    fn a_ball_shot_fast_at_the_floor_doesnt_pass_through() {
+        for speed in [1500.0, 4000.0, 9000.0] {
+            let v = [0.0, 0.0, -speed];
+            let lowest =
+                shot_at_the_floor(crate::continuous::DEBRIS_SIMPLE_TOI, ball(1, 5.0, 1.0), v);
+            assert!(lowest > -1.0, "{speed}: {lowest}");
+        }
+        // The same without the time of impact goes through.
+        let v = [0.0, 0.0, -9000.0];
+        let lowest = shot_at_the_floor(crate::continuous::DEBRIS, ball(1, 5.0, 1.0), v);
+        assert!(lowest < -10.0, "{lowest}");
+    }
+
+    #[test]
+    fn a_crate_shot_fast_and_slantwise_at_the_floor_doesnt_pass_through() {
+        for speed in [2000.0, 6000.0] {
+            let v = [speed * 0.3, speed * 0.1, -speed];
+            let lowest = shot_at_the_floor(
+                crate::continuous::DEBRIS_SIMPLE_TOI,
+                crate_(1, [4.0, 6.0, 3.0], 2.0),
+                v,
+            );
+            assert!(lowest > -1.0, "{speed}: {lowest}");
+        }
     }
 
     #[test]

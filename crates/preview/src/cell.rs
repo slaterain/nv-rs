@@ -1881,6 +1881,7 @@ impl CellScene {
                 max_linear_speed: info.max_linear_speed,
                 max_angular_speed: info.max_angular_speed,
                 motion: info.motion,
+                quality: info.quality,
                 wind: info.body_flags & nif::collision::BODY_WIND != 0,
                 shapes: parts.iter().map(|p| body_shape(p, s)).collect(),
             };

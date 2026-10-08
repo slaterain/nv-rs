@@ -511,10 +511,11 @@ fn simulate(
             for b in clutter.world.bodies.iter().filter(|b| b.setup.wind) {
                 let at = b.pose().1;
                 println!(
-                    "{now:.1} s: wind {:.1} (heading {:.2} rad) has {} at ({:.1}, {:.1}, {:.1}), {:.1} units from where it was put.",
+                    "{now:.1} s: wind {:.1} (heading {:.2} rad) has {} (quality {}) at ({:.1}, {:.1}, {:.1}), {:.1} units from where it was put.",
                     wind.speed,
                     wind.direction,
                     FormId(b.setup.reference),
+                    b.setup.quality,
                     at[0],
                     at[1],
                     at[2],
