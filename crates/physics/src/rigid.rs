@@ -1269,10 +1269,17 @@ impl RigidWorld {
             if !b.dynamic() || !crate::continuous::simple_toi_against_world(b.setup.quality) {
                 continue;
             }
-            // Only a step that carried a point further than the PSI's own
-            // reach (`point_triangle`) can have lost it.
-            let travel = length(sub(b.x, b.start.0));
-            if travel <= b.reach {
+            // Every moving step is looked at, not only one that carried the
+            // centre past the shape's reach: a thin shape that turns as it
+            // falls can end a step with a corner a few units behind the
+            // floor, which the PSI finds but accepts as allowed penetration
+            // (a new point's distance), so it falls through (the
+            // ophthalmoscope by Doc Mitchell's bed, 2 units thick). The
+            // game's agents decide by a predictive cast against fractions
+            // of the body's allowed penetration depth (not traced);
+            // `first_touch` keeps to points whose centres ended behind a
+            // triangle, so a body resting on one isn't stopped.
+            if b.x == b.start.0 && b.q == b.start.1 {
                 continue;
             }
             let margin = b.reach + crate::havok::COLLISION_TOLERANCE * HAVOK_UNIT;
@@ -2883,6 +2890,35 @@ mod tests {
         let v = [0.0, 0.0, -9000.0];
         let lowest = shot_at_the_floor(crate::continuous::DEBRIS, ball(1, 5.0, 1.0), v);
         assert!(lowest < -10.0, "{lowest}");
+    }
+
+    #[test]
+    fn a_thin_rod_dropped_from_carrying_height_rests_on_the_floor() {
+        // The ophthalmoscope by Doc Mitchell's bed (`Opthamoscope01.nif`:
+        // one hull 6 × 2 × 14, radius 0.7, quality 3) let go of 70 units
+        // up, upright, lying and tilted, still or turning.
+        let rod = crate_(1, [3.0, 1.0, 7.0], 1.0);
+        let c = floor(0.0);
+        let s = 0.5f32.sqrt();
+        let poses: [Mat3; 3] = [
+            I3,
+            [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]],
+            [[1.0, 0.0, 0.0], [0.0, s, -s], [0.0, s, s]],
+        ];
+        for (k, r) in poses.iter().enumerate() {
+            for spin in [[0.0; 3], [3.0, 1.0, 0.5]] {
+                let mut w = RigidWorld::new();
+                let i = w.add(rod.clone(), (*r, [0.0, 0.0, 70.0]));
+                w.set_velocity(i, [0.0; 3], spin);
+                w.wake(i);
+                let mut lowest = f32::MAX;
+                for _ in 0..240 {
+                    w.update(&c, STEP);
+                    lowest = lowest.min(w.bodies[i].center()[2]);
+                }
+                assert!(lowest > 0.0, "pose {k}, spin {spin:?}: lowest {lowest}");
+            }
+        }
     }
 
     #[test]

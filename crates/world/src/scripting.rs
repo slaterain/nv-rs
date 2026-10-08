@@ -4405,8 +4405,11 @@ impl<'a> Runner<'a> {
                 events.push(Event::Weather(Some(w)));
             }
             "ReleaseWeatherOverride" => {
-                self.state.weather.forced = None;
-                events.push(Event::Weather(None));
+                // Nothing to tell when nothing was forced (a script calling
+                // it every frame would otherwise report it every frame).
+                if self.state.weather.forced.take().is_some() {
+                    events.push(Event::Weather(None));
+                }
             }
             "PlayBink" => {
                 let Value::Text(file) = arg(0) else {
