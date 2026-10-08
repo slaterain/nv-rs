@@ -2012,7 +2012,9 @@ fn rethink_queued_package_before_furniture(
         .sitters
         .get(&me)
         .is_some_and(|sitter| sitter.state.is_settled());
-    if !settled {
+    // Getting up asked for (the exit's state 5 is about to start): no more
+    // checks, as on the path for anyone else.
+    if !settled || life.getting_up {
         return false;
     }
     let forced = take_forced_package_evaluation(walker, ctx.state, me);
