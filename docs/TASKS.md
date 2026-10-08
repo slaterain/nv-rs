@@ -206,7 +206,7 @@ update `00921e80` waits only while an idle is starting (`00498f80`), so he
 now gets up at `00104BFA`'s `evp` (64.4 s, was 68.2 s). Still about 7 s
 after the player's own stand-up begins (end of `00104BF9`); what in the
 game, if anything, gets him up earlier isn't established. docs/OPENING.md,
-"Help-up timing".
+"Help-up timing". `claude/opening-trace`: the whole opening traced step by step (docs/OPENING.md, "The whole opening, step by step"); **fixed** that variables a nested stage script set were overwritten when the quest script ended its block, which cut the 3 s blackout and the 2.8 s before Doc's first line to 0.2 s. Left: the tag/trait menus and farewell not driven, the face menu (B15).
 
 **B15. Character creator (race menu).** The face editor/race menu is
 not implemented (it auto-accepts). docs/FACE_CREATION.md and

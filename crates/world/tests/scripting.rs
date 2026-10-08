@@ -2243,3 +2243,58 @@ fn removeme_takes_the_worn_one() {
     );
     assert!(state.unhandled.is_empty(), "{:?}", state.unhandled_first);
 }
+
+/// A quest script that sets a stage from its `GameMode` block runs that
+/// stage's result script with the quest's own variables, and what it sets
+/// stays (the game keeps one copy of a script's variables). `VCG01SCRIPT`
+/// does this at the start of the opening: `setstage VCG01 1` runs stage 1's
+/// `set VCG01.fTimer to 2.8`, the 2.8 s before Doc speaks. Keeping the
+/// block's old copy of `fTimer` lost it (Doc spoke 0.2 s in, not 3 s).
+#[test]
+fn a_stage_set_from_the_quests_script_keeps_the_variables_it_sets() {
+    use testdata::{group, record, sub, zstr};
+    let data = testdata::TempData::empty("quest-stage-vars");
+    let mut script = sub(b"EDID", &zstr("TestStageVarsScript"));
+    script.extend(sub(b"SCHR", &[0; 20]));
+    script.extend(sub(
+        b"SCTX",
+        b"scn TestStageVarsScript\nfloat fTimer\nshort nStep\nBegin GameMode\nif nStep == 0\nset fTimer to 0\nset nStep to 1\nelseif fTimer > 0\nset fTimer to fTimer - GetSecondsPassed\nelse\nsetstage TestStageVars 1\nendif\nEnd",
+    ));
+    let mut quest = sub(b"EDID", &zstr("TestStageVars"));
+    quest.extend(sub(b"SCRI", &0x900u32.to_le_bytes()));
+    let mut qdata = vec![0x01, 50, 0, 0];
+    qdata.extend(0.1f32.to_le_bytes());
+    quest.extend(sub(b"DATA", &qdata));
+    quest.extend(sub(b"INDX", &1u16.to_le_bytes()));
+    quest.extend(sub(b"QSDT", &[0]));
+    quest.extend(sub(b"SCHR", &[0; 20]));
+    quest.extend(sub(b"SCTX", b"set TestStageVars.fTimer to 2.8"));
+    let mut hedr = 1.34f32.to_le_bytes().to_vec();
+    hedr.extend([0; 8]);
+    let mut plugin = record(b"TES4", 0, &sub(b"HEDR", &hedr));
+    plugin.extend(group(*b"SCPT", 0, &record(b"SCPT", 0x900, &script)));
+    plugin.extend(group(*b"QUST", 0, &record(b"QUST", 0x901, &quest)));
+    data.write("FalloutNV.esm", &plugin);
+    let order = LoadOrder::from_data_dir(data.path(), &ActivePlugins::OfficialOnly).unwrap();
+    let scripts = ScriptCache::default();
+    let mut state = GameState::new(&order);
+    state.running.insert(FormId(0x901));
+    let timer = |state: &GameState| {
+        state
+            .variables
+            .get(&FormId(0x901))
+            .and_then(|l| l.iter().find(|v| v.0 == "ftimer").map(|v| v.2))
+            .unwrap_or(0.0)
+    };
+    // The first run sets the step; the next sees no timer and sets stage 1,
+    // whose script sets the timer, which the block mustn't overwrite.
+    for _ in 0..4 {
+        Runner::new(&order, &scripts, &mut state).update(0.1);
+    }
+    assert_eq!(state.stages.get(&FormId(0x901)), Some(&1));
+    assert!(
+        timer(&state) > 2.0 && timer(&state) <= 2.8,
+        "fTimer is {}",
+        timer(&state)
+    );
+}

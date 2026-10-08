@@ -4897,9 +4897,28 @@ impl Host for Runner<'_> {
             .enumerate()
             .map(|(i, a)| self.argument(a, kind(i), locals))
             .collect();
+        // The commands that run other scripts (a quest stage's result script
+        // runs with the quest's own variables) may touch this script's
+        // variables, which are out of the state while it runs. The game
+        // keeps one copy, so the nested script sees this one's current
+        // values and its changes stay: hand them over for the command, take
+        // them back after. (`VCG01SCRIPT`'s `setstage VCG01 1` runs stage
+        // 1's `set VCG01.fTimer to 2.8`; keeping the run's old copy lost the
+        // 2.8 s, and Doc spoke after 0.2 s instead of 3 s.)
+        let shared = matches!(sig.name, "SetStage" | "StartQuest" | "StopQuest")
+            .then_some(self.owner)
+            .flatten();
+        if let Some(owner) = shared {
+            self.state.variables.insert(owner, locals.clone());
+        }
         let value = self
             .change(sig.name, target, &args)
             .or_else(|| self.facts().value(call.function, target, &args));
+        if let Some(owner) = shared {
+            if let Some(current) = self.state.variables.remove(&owner) {
+                *locals = current;
+            }
+        }
         if value.is_none() {
             *self.state.unhandled.entry(sig.name).or_default() += 1;
             if !self.state.unhandled_first.contains_key(sig.name) {
