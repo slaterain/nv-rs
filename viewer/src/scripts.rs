@@ -1141,6 +1141,30 @@ pub fn run_scripts(
             _ => world::scripting::interactive_references(order, cell),
         },
     );
+    // References scripts moved run in the cell they stand in now
+    // (`world::ref_scripts::RefScripts::place_moved`).
+    let moved_now: Vec<(FormId, Option<FormId>)> =
+        world::ref_scripts::moved_references(order, state)
+            .into_iter()
+            .map(|r| {
+                let cell = state
+                    .place(order, r)
+                    .and_then(|(space, _, at, _)| match &exterior {
+                        Some(e) if space == e.grid.world.form_id => {
+                            e.grid.cell_at(world::square_of(at))
+                        }
+                        Some(_) => None,
+                        None => here.0.map(FormId).filter(|&c| c == space),
+                    });
+                (r, cell)
+            })
+            .collect();
+    if cell_scripts
+        .scheduler
+        .place_moved(&mut Runner::new(order, &scripts.0, state), &moved_now)
+    {
+        cell_scripts.refs = cell_scripts.scheduler.refs().to_vec();
+    }
     // Time stands still in the dialogue menu (not while a line is said)
     // and in the other menus.
     let dt = time.delta_secs();
@@ -1293,6 +1317,7 @@ pub fn run_scripts(
                 text,
                 buttons,
             } if !buttons.is_empty() => {
+                println!("Message box shown: {}", text.lines().next().unwrap_or(""));
                 waiting.push(crate::menus::Menu::Message {
                     title,
                     text: fill_keys(&text),

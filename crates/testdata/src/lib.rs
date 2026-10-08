@@ -22,6 +22,7 @@ pub mod packages;
 pub mod particles;
 pub mod quest_targets;
 pub mod ref_scripts;
+pub mod revise;
 pub mod trees;
 pub mod vats;
 pub mod water;

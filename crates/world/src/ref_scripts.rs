@@ -107,6 +107,26 @@ pub fn grid_squares(center: (i32, i32), grids: i32) -> Vec<(i32, i32)> {
     out
 }
 
+/// The placed references a script moved somewhere else (a place of their
+/// own in the state, [`crate::scripting::GameState::spaces`]), for
+/// [`RefScripts::place_moved`]. People and creatures are left out: they
+/// change cells as their AI moves them, which isn't followed here.
+pub fn moved_references(order: &LoadOrder, state: &crate::scripting::GameState) -> Vec<FormId> {
+    let mut out: Vec<FormId> = state
+        .spaces
+        .keys()
+        .copied()
+        .filter(|&r| r != crate::dialogue::PLAYER_REF)
+        .filter(|&r| {
+            crate::scripting::base_of(order, r)
+                .and_then(|b| order.get(b))
+                .is_some_and(|b| !matches!(b.entry.header.kind.as_bytes(), b"NPC_" | b"CREA"))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Who is inside one trigger, and its queued enter (`true`) and leave
 /// events (`TriggerEntry::RefList` (Xbox PDB)).
 #[derive(Debug, Default, Clone)]
@@ -233,6 +253,81 @@ impl RefScripts {
             .flat_map(|(_, refs)| refs.iter().cloned())
             .collect();
         true
+    }
+
+    /// References scripts moved (`MoveTo`, `SetPos`) go with their scripts
+    /// to the cell they are in now. The game's `MoveTo` (`005ccb20`) sets
+    /// the position and hands the reference to `00573800`: outdoors the
+    /// cell of the grid square under it (`005875a0(x >> 12, y >> 12)`)
+    /// takes it (`00548230`: out of its old cell's list, `0054ca90`, into
+    /// the new one, its 3D loaded when that cell is attached, which flags
+    /// `OnLoad`, `00451ef0`); `TESObjectCELL::RunScripts` then runs it with
+    /// that cell's references. `now` gives each moved reference
+    /// ([`moved_references`]) and the attached cell it stands in (`None`:
+    /// none attached). One moved out of the attached cells stops running
+    /// and leaves its trigger's occupants; one moved into one gets
+    /// `OnLoad`. Returns whether anything changed.
+    pub fn place_moved(&mut self, runner: &mut Runner, now: &[(FormId, Option<FormId>)]) -> bool {
+        let mut changed = false;
+        for &(reference, cell_now) in now {
+            let listed = self
+                .cells
+                .iter()
+                .position(|(_, refs)| refs.iter().any(|r| r.reference == reference));
+            let listed_cell = listed.map(|i| self.cells[i].0);
+            let target = cell_now.filter(|c| self.cells.iter().any(|(cell, _)| cell == c));
+            if listed_cell == target {
+                // Still there: only where it stands (its trigger moved).
+                if let (Some(i), Some((_, _, p, _))) =
+                    (listed, runner.state.place(runner.order, reference))
+                {
+                    for r in self.cells[i]
+                        .1
+                        .iter_mut()
+                        .filter(|r| r.reference == reference)
+                    {
+                        r.position = p;
+                    }
+                }
+                continue;
+            }
+            changed = true;
+            let mut item = None;
+            if let Some(i) = listed {
+                let refs = &mut self.cells[i].1;
+                if let Some(at) = refs.iter().position(|r| r.reference == reference) {
+                    item = Some(refs.remove(at));
+                }
+                self.pending.remove(&reference);
+                self.force_leave(runner, reference);
+                self.disabled.remove(&reference);
+            }
+            let Some(cell) = target else { continue };
+            let Some(mut r) =
+                item.or_else(|| crate::scripting::interactive_reference(runner.order, reference))
+            else {
+                continue;
+            };
+            if let Some((_, _, p, _)) = runner.state.place(runner.order, reference) {
+                r.position = p;
+            }
+            if r.script.is_some() {
+                self.flag(reference, ON_LOAD, None);
+                let off = !crate::enabled_now(runner.order, reference, &runner.state.disabled);
+                self.disabled.insert(reference, off);
+            }
+            if let Some((_, refs)) = self.cells.iter_mut().find(|(c, _)| *c == cell) {
+                refs.push(r);
+            }
+        }
+        if changed {
+            self.all = self
+                .cells
+                .iter()
+                .flat_map(|(_, refs)| refs.iter().cloned())
+                .collect();
+        }
+        changed
     }
 
     /// Everyone inside a trigger leaves it at once (`0062c860`): for each,

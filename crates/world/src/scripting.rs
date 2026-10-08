@@ -373,9 +373,14 @@ pub struct GameState {
     pub map_markers: HashSet<FormId>,
     /// Image space modifiers (`IMAD`) scripts applied, oldest first.
     pub modifiers: Vec<FormId>,
-    /// The button the player pressed in the last message box, until a
-    /// script asks (`GetButtonPressed` gives it once, then -1).
+    /// The button the player pressed in the last message box (the box's
+    /// callback `005b4a70` keeps it at `0118c684`), until its owner asks
+    /// (`GetButtonPressed` gives it once, then -1).
     pub button: Option<i32>,
+    /// Whose that button is (`011cac64`): set by the latest `ShowMessage`
+    /// ([`Runner::message_owner`]); `GetButtonPressed` from anyone else
+    /// gives -1 and leaves the button where it is (`005b4a80`).
+    pub button_owner: Option<FormId>,
     /// The player's controls scripts turned off (`DisablePlayerControls`),
     /// by [`controls`] number.
     pub controls_off: [bool; 7],
@@ -1585,6 +1590,14 @@ impl Interactive {
 /// volumes; items lying around; containers.
 pub fn interactive_references(order: &LoadOrder, cell: FormId) -> Vec<Interactive> {
     interactive_from(order, order.references_in_cell(cell))
+}
+
+/// One placed reference as [`interactive_references`] lists it (`None`:
+/// not a placed reference, or nothing to do with it).
+pub fn interactive_reference(order: &LoadOrder, reference: FormId) -> Option<Interactive> {
+    interactive_from(order, order.get(reference))
+        .into_iter()
+        .next()
 }
 
 /// [`interactive_references`] for one exterior grid square: its cell's
@@ -3567,6 +3580,27 @@ impl<'a> Runner<'a> {
         }
     }
 
+    /// Who a message box shown now belongs to, and who asks
+    /// `GetButtonPressed` (`005b4630`, `005b4a80`): the reference the script
+    /// runs on (its form ID, `0084e3a0` reads form +0xc), unless there is
+    /// none or it's a temporary one (form flag 0x4000, `004077c0`), then
+    /// the script itself (a quest's script, say). References made while
+    /// playing stand for the temporary ones (that `PlaceAtMe` sets 0x4000
+    /// isn't traced). A quest stage's result script counts as its quest's
+    /// script here (which form the game hands for it isn't traced). A
+    /// console line has neither: form 0.
+    pub fn message_owner(&self) -> FormId {
+        if let Some(this) = self
+            .this
+            .filter(|t| !self.state.more.placed.refs.contains_key(t))
+        {
+            return this;
+        }
+        self.owner
+            .and_then(|o| script_of(self.order, o))
+            .unwrap_or(FormId(0))
+    }
+
     /// `ShowMessage`: the message with the script's values filled in (its
     /// `%.0f`-style places). A message box (`DNAM` 0x01) gets the buttons
     /// whose conditions pass, asked about the player (a guess at whom they
@@ -3586,6 +3620,11 @@ impl<'a> Runner<'a> {
             &record.get(DESC).map(|s| s.zstring()).unwrap_or_default(),
             values,
         );
+        // `005b4630`: once the text is made, any button still waiting is
+        // dropped (`005b4940`: `0118c684` = -1) and the box's buttons
+        // belong to whoever shows it (`011cac64`), box or corner message.
+        self.state.button = None;
+        self.state.button_owner = Some(self.message_owner());
         let message_box = record
             .get(DNAM)
             .and_then(|s| s.data.first())
@@ -3672,8 +3711,18 @@ impl<'a> Runner<'a> {
                 let values: Vec<f64> = args.iter().skip(1).map(Value::number).collect();
                 self.message(arg(0).form(), &values);
             }
+            // `005b4a80`: the button only for the owner the box was shown
+            // by; anyone else gets -1 and the button stays for the owner.
             "GetButtonPressed" => {
-                return Some(self.state.button.take().map_or(-1.0, f64::from));
+                let mine = self.state.button_owner == Some(self.message_owner());
+                return Some(match self.state.button.filter(|&b| b >= 0 && mine) {
+                    Some(b) => {
+                        self.state.button = None;
+                        self.state.button_owner = None;
+                        f64::from(b)
+                    }
+                    None => -1.0,
+                });
             }
             "SexChange" => {
                 if target? != PLAYER_REF {

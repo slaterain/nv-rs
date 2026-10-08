@@ -79,6 +79,100 @@ Raw records, assembly, copied saves
 and decompilation remain outside the repository in nv-re/work/codex-m1 and
 nv-re/decomp/codex-m1.
 
+## The character-revision prompt (B29)
+
+Branch `claude/b29-revise-loop`, 2026-10-07. Playtest bug: the "revise your
+character" prompt came again and again after editing, so the player could
+never leave. Private probes, logs and window captures in
+`%USERPROFILE%\nv-re\work\b29`.
+
+### The data
+
+The prompt is `VCG04` ("Player Character Revision", `0011649E`), started by
+`VCG01` stage 200 (Doc's farewell timer), not by Doc's door.
+`VCG04QuestScript` waits until the player is in `WastelandNV` east of
+x -59433 or north of y 14752 or south of y -21205 (well out of
+Goodsprings), then `VCG04ActivatorRef.MoveTo player`,
+`VCG04ActivatorRef.Activate player 1`, `Done` 1. The activator
+(`001164A3`, persistent, placed at -73702, 1360 west of Goodsprings) shows
+`VCG04Message` in `OnActivate`; its `GameMode` reads `GetButtonPressed`:
+0 `GetPlayerName` and ask again, 1 level 1, perks and traits removed,
+`ShowRaceMenu`, then over the next runs `SetSPECIALPoints 40`,
+`SetTagSkills 3`, `ShowTraitMenu`, and ask again; 2 `RewardXP` (what was
+earned, if rebuilt) and `StopQuest VCG04`. So after an edit the game asks
+once more by design; "Finished - Travel Onward" ends it.
+
+### Traced (FalloutNV.exe 1.4.0.525)
+
+| Address | What | Used for |
+| --- | --- | --- |
+| `005b4630` | `ShowMessage`: after the text is made, `005b4940` drops any waiting button (`0118c684` = -1); the owner `011cac64` = the reference the script runs on (`0084e3a0`: form ID), or the script when there is none or it is temporary (flag 0x4000, `004077c0`); box callback `005b4a70` | `Runner::message`, `message_owner` |
+| `005b4a70` | Box callback: the pressed button (interface +0xe4, `00703fa0`) into `0118c684` | viewer sets `GameState::button` |
+| `005b4a80` | `GetButtonPressed`: the button only when the asker's owner equals `011cac64`, then -1 and owner 0; anyone else -1, button kept | `GetButtonPressed` |
+| `005c71c0`, `005c7220`, `0060c9c0` | `StartQuest`/`StopQuest`: the quest's running bit and "changed", nothing else (no variables reset, no other quest run) | unchanged |
+| `005ccb20` | `MoveTo` on a reference (not the player): its position set to the target's, then `00573800` | `RefScripts::place_moved` |
+| `00573800`, `005875a0`, `00548230` | Outdoors the cell of the grid square under it (`x >> 12`, `y >> 12`) takes it: out of its old cell (`0054ca90`), into the new one's list, 3D loaded when that cell is attached (so `OnLoad`) | as above |
+
+### What was wrong
+
+- `GetButtonPressed` was one value for everyone: the first script to ask
+  took any box's button. The loop: while the revise activator runs, any
+  other pop-up answered "OK" (button 0; the review found Old World Blues'
+  start message doing it in the PR branch's vms16 log) reached
+  `VCG04ActivatorScript` as "Edit Name": name entry, then the revise box
+  again, every time another message came up. A neighbour reading it every frame (the Mojave
+  Express box once used, `vMojaveExpressBoxSCRIPT`) could take
+  "Finished", so the prompt never ended; a button nobody read stayed for
+  the next box.
+- The moved activator didn't run where it was moved: its script ran only
+  while its placed square (west of Goodsprings) was attached. Answered out
+  past the border, the button did nothing there and fired when the player
+  next came back to Goodsprings: the rebuild menus and the prompt again,
+  out of nowhere (seen live on the old build: "Rebuild Character" at
+  x -58000 did nothing; back at Goodsprings the tag skills menu opened).
+- Starting a quest re-runs or resets nothing, in the game or here (checked
+  for the "pop-ups come back when a quest is added" idea).
+
+### Implemented
+
+- `world::scripting`: `GameState::button_owner`; `ShowMessage` drops a
+  waiting button and records the owner; `GetButtonPressed` only for it.
+- `world::ref_scripts::RefScripts::place_moved` and `moved_references`:
+  references scripts moved (not people or creatures, whose cells follow
+  their AI and aren't followed here) leave their old cell's list and join
+  the attached cell under them, with `OnLoad`; the viewer calls it each
+  frame after attaching cells.
+- The viewer logs "Message box shown: ..." when a script's box opens.
+
+### Tested
+
+`crates/world/tests/revise_prompt.rs` on a generated `VCG04`-shaped world
+(`testdata::revise`): another script's box answered "OK" no longer reaches
+the activator as "Edit Name"; a neighbour asking every frame no longer takes the
+box's "Finished"; an unread button is dropped by the next message; the
+prompt triggered past the border is answered there ("Rebuild" asks once
+more, "Finished" stops the quest) and nothing is asked again back home; a
+moved reference changes cells. The other three tests were run against the
+old behaviour and fail there; the "OK" test was added after (under the old
+single button the activator, the only one asking, takes the 0).
+
+### Verified live (release viewer, installed data)
+
+`WastelandNV --at -58000,3446,8600,90 --run "RewardXP 100" --run-at 5
+"StartQuest VCG04"`, answered with real clicks (window capture script in
+the private folder): the prompt shows; "Rebuild Character" runs at once
+(face menu still a stand-in line, tag skills, traits); the prompt shows
+once more; "Finished" restores the XP (level 2 menu) and nothing is asked
+again.
+
+### Not done / not compared
+
+- The face menu (`ShowRaceMenu`) and the SPECIAL menu `SetSPECIALPoints`
+  opens in the game (`CharGenMenu` kind 0) aren't there yet.
+- `GetAV XP` on a player who never earned XP gives nothing (the block
+  stops) instead of 0, so the prompt can't show before any XP.
+- Not compared with the original game.
+
 ## Current priority: opening camera and assistance behavior
 
 User clarification: the clips play. The defects are player camera input
