@@ -374,19 +374,11 @@ from 200 units leaves the floor at about 2% of its landing speed (the
 integrated-velocity scheme spends the target on moving it out).
 
 In nv-rs: the island's constraints are its manifolds in key order (the
-<<<<<<< HEAD
 game's order is its entities' constraint lists); people pushing a body are
 the character proxy's impulses (`applySurfaceInteractions`, "The character
 proxy"), not contacts. Not translated: maximum-impulse contacts (0x12; the
 game's points have none), constraint priorities >= 4
-(TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
-=======
-game's order is its entities' constraint lists); walkers pushing a body
-are keyframed bodies at their velocity whose touches are new points every
-step (this solver's walkers, PR 10). Not translated: maximum-impulse
-contacts (0x12; the game's points have none), constraint priorities ≥ 4
 (full TOI, "Continuous collision" below), the contact impulse limit callbacks (`00d01700`), thin box
->>>>>>> origin/claude/b1-ccd
 and sphere motion specifics (all bodies use the box motion's rules).
 
 Verified live (release viewer, installed data, the PR 4 bottle route,
