@@ -670,6 +670,8 @@ B12 (`claude/b12-doc-dialogue`): Doc's door conversation no longer restarts fore
 
 B29 (`claude/b29-revise-loop`, 2026-10-07): the revise prompt (`VCG04`, out past Goodsprings, not Doc's door) kept coming back: `GetButtonPressed` was one value any script could take, and the activator `MoveTo player` moved didn't run where it was moved, so answers fired later back in Goodsprings. Now a box's button is its shower's only (`005b4630`/`005b4940`/`005b4a80`) and moved references run in the cell under them (`005ccb20` → `00573800` → `00548230`); `StartQuest` resets nothing (`005c71c0`). Verified live at the border (rebuild, asked once more, Finished ends it); not compared with the original ([OPENING.md](OPENING.md)). **Next action:** the face and SPECIAL chargen menus the prompt opens.
 
+B32 (`claude/b32-dlc-rerun`, 2026-10-07): DLC start messages "again on a later cell change" were each acceptance route starting a new game; script variables already persist across cell changes as in the game (`00455490`, `ExtraScript` via `00565870`). Verified live (three `MoveTo` cell changes, each DLC message once) and by `ref_scripts::once_only_guards_survive_cell_changes` ([SCRIPTS_RUNTIME.md](SCRIPTS_RUNTIME.md)). **Next action:** none.
+
 B3 (`claude/b3-crosshair-pick`, 2026-10-07): the crosshair pick is the
 game's view caster (`0070bc20` → `00631d60`: layer-40 sphere cast, exact
 ray/NiPick per hit, fuzzy fallback for statics), one pick for talk, doors,

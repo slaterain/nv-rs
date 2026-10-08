@@ -63,6 +63,17 @@ not implemented here (AI owners). `TESDataHandler::RunAllPersistentRefScripts`
   occupants out (guess for the caller chain, see above). Body points
   (feet/middle/head) stand for the character's collision shape, as before
   (approximation).
+- Script variables belong to their owner, never to a cell: a quest's run
+  from the data handler's quest list (`00455490`, +0x118) whatever is
+  attached, and a reference's live in its `ExtraScript` event list
+  (extra 0x0D, `00565870`), which attaching or detaching its cell doesn't
+  rebuild. Here both are `GameState::variables`, which no cell change
+  touches; only `ResetQuest` (`005da180`) and a new game or a load start
+  them over. So the DLC start quests' guards (`nEnableDLC`,
+  `DoOnceMessage`, `VDLCPackQuest`'s `b…ItemsGiven`) hold after any number
+  of cell changes (B32: checked live with three `MoveTo` cell changes;
+  the repeat seen came from the acceptance script starting each route as a
+  new game).
 - F9 reloads reset the pass: every cell attaches again (`OnLoad` again,
   triggers re-entered). In the original, event flags are saved with
   references (`005a9f20` restores a pending 0x1000); not compared.
@@ -74,7 +85,8 @@ not implemented here (AI owners). `TESDataHandler::RunAllPersistentRefScripts`
 squares, neighbouring cells running, `OnLoad` once per attach and not on
 grid moves, disabled objects running and `OnLoad` on enable, trigger
 enter/trigger/leave order, one event per step, force leave on disable and
-detach, the pass stopping, interiors. Viewer tests in `scripts.rs` use the
+detach, the pass stopping, interiors, a start-game quest's once-only
+guard and a reference's counts surviving two cell changes (B32). Viewer tests in `scripts.rs` use the
 new attach path for the VCG01 trigger and tester fixtures.
 
 ## Gaps

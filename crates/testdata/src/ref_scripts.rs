@@ -3,7 +3,9 @@
 //! object standing in 1,0, people in 0,1 (one following an enable parent, a
 //! persistent disabled one), and the interior `ScriptRoom`. Counters count
 //! their `OnLoad` and `GameMode` runs; a trigger counts its events; a mover
-//! calls `Activate` (a command that stops the pass) every frame.
+//! calls `Activate` (a command that stops the pass) every frame; a
+//! start-game quest's script does something once, as the DLC start
+//! scripts do.
 
 use crate::{f32s, group, placed, record, record_flagged, sub, zstr, TempData};
 
@@ -52,6 +54,12 @@ pub mod ids {
     pub const AWAKE_REF: u32 = 0x2308;
     /// Persistent and initially disabled, standing in 0,1 at 100,4200.
     pub const LONE_REF: u32 = 0x2309;
+    /// A DLC start script's shape (`NVDLC03MQ00SCRIPT`): `nEnableDLC` 0 →
+    /// 1 with `fStartTimer` 5, then once it runs out `iShown` + 1 and
+    /// `nEnableDLC` 2.
+    pub const ONCE_QUEST_SCRIPT: u32 = 0x2103;
+    /// Start game enabled, with `ONCE_QUEST_SCRIPT`.
+    pub const ONCE_QUEST: u32 = 0x2400;
 }
 
 fn script(id: u32, name: &str, source: &str) -> Vec<u8> {
@@ -95,6 +103,24 @@ pub fn ref_scripts(tag: &str) -> TempData {
         "scn MoverScript\nshort iFrames\n\
          Begin GameMode\n\tset iFrames to iFrames + 1\n\tActivate\nEnd",
     ));
+    scripts.extend(script(
+        ONCE_QUEST_SCRIPT,
+        "OnceQuestScript",
+        "scn OnceQuestScript\nshort nEnableDLC\nshort iShown\nfloat fStartTimer\n\
+         Begin GameMode\n\
+         \tif nEnableDLC == 0\n\t\tset nEnableDLC to 1\n\t\tset fStartTimer to 5\n\
+         \telseif nEnableDLC == 1\n\
+         \t\tif fStartTimer <= 0\n\t\t\tset iShown to iShown + 1\n\t\t\tset nEnableDLC to 2\n\
+         \t\telse\n\t\t\tset fStartTimer to fStartTimer - GetSecondsPassed\n\t\tendif\n\
+         \tendif\nEnd",
+    ));
+    let quests = {
+        let mut d = sub(b"EDID", &zstr("OnceQuest"));
+        d.extend(sub(b"SCRI", &ONCE_QUEST_SCRIPT.to_le_bytes()));
+        // Start game enabled (0x01), priority 0, no delay of its own.
+        d.extend(sub(b"DATA", &[0x01, 0, 0, 0, 0, 0, 0, 0]));
+        record(b"QUST", ONCE_QUEST, &d)
+    };
     let mut activators = activator(COUNTER, "Counter", COUNTER_SCRIPT);
     activators.extend(activator(TRIGGER, "Trigger", TRIGGER_SCRIPT));
     activators.extend(activator(MOVER, "Mover", MOVER_SCRIPT));
@@ -192,6 +218,7 @@ pub fn ref_scripts(tag: &str) -> TempData {
     plugin.extend(group(*b"SCPT", 0, &scripts));
     plugin.extend(group(*b"ACTI", 0, &activators));
     plugin.extend(group(*b"NPC_", 0, &people));
+    plugin.extend(group(*b"QUST", 0, &quests));
     plugin.extend(interiors);
     plugin.extend(group(*b"WRLD", 0, &worlds));
     data.write("FalloutNV.esm", &plugin);

@@ -292,6 +292,16 @@ its image-space modifier from game data: `PopupBackgroundFX` (the Vigor
 Tester's), `InterfaceBackgroundFX`, `PipBackgroundFX`,
 `PauseBackgroundFX`. Implement it.
 
+**B32. DLC start scripts re-run on a later cell change.** Fixed
+(`claude/b32-dlc-rerun`): not a game-state fault. Quest and reference
+script variables persist across cell attach/detach in the game
+(`00455490` runs quests from the data handler's list; a reference's
+variables live in its `ExtraScript`, `00565870`) and here
+(`GameState::variables`; three live `MoveTo` cell changes showed each DLC
+message once). The repeats seen came from `scripts/acceptance.ps1`
+starting each route as a new game; it now says so. Regression test:
+`ref_scripts::once_only_guards_survive_cell_changes`.
+
 ### In progress
 
 - Nothing; every overnight branch is merged.
