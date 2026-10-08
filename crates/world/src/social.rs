@@ -135,14 +135,17 @@ pub enum Greeting {
 }
 
 /// The facts `008eeec0` asks before a greeting (process = their high
-/// process; the player's are the `PlayerCharacter`'s). Not carried out
-/// (their meaning isn't traced, so they're left out and never block):
-/// the player's `00969860` (+0x224 → +0x94), the process's `+0x66c`
-/// (`00901460`: bytes +0x411…+0x415 all clear), the actor's look target
-/// (`+0x2c8` → process +0x40, set through process `+0x12c` `0091ea40`) not
-/// being the player, and the process's `+0x4e0` (`008d9050`, byte +0x374).
+/// process; the player's are the `PlayerCharacter`'s). Names marked
+/// (Xbox PDB) are the prototype's; the PC offsets are its less 0x10 where
+/// `TESForm` comes first (the PC's has no editor ID string).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct GreetingCheck {
+    /// `PlayerCharacter::IsImportantConversationRunning` (Xbox PDB,
+    /// `00969860`): the player's running AI conversation (+0x224,
+    /// `pAIConversationRunning`, a `DialoguePackage`) has someone talking
+    /// in it (its +0x94, `pTalkingActor`). Busy for everyone, and nobody
+    /// starts a conversation with another (`008efa4e`).
+    pub important_conversation: bool,
     /// In combat (actor +0x104, `00493bb0`).
     pub in_combat: bool,
     /// Fleeing (`008a6650(0)`: a flee package, type 22 or 10, or a low
@@ -175,6 +178,28 @@ pub struct GreetingCheck {
     /// The player trespassing (player +0x1c0, `008d1e70` through vfunc
     /// +0x448; set from `00546da0` by `008d2a40`).
     pub player_trespassing: bool,
+    /// Their target is the player: the actor's `+0x2c8` (`008815a0`) gives
+    /// the process's `pTarget` (+0x40, Xbox PDB; `GetTarget` `+0x128`,
+    /// `008d6f30`), which a package sets as it starts (`0090a1a0`:
+    /// `006780e0` → `SetTarget` `+0x12c`); in combat it can give the combat
+    /// target instead, but people in combat are busy anyway.
+    pub target_is_player: bool,
+    /// Running a run-once package (`IsRunningRunOnce` (Xbox PDB), process
+    /// `+0x35c` `008d8310`: `GetRunOncePackage` `+0x20c` not null, the
+    /// `RunOncePackage` at +0xe4). With the player their target, only then
+    /// are they near.
+    pub running_run_once: bool,
+    /// Someone asked them to look at someone (`CanSetActionHeadTrackTarget`
+    /// (Xbox PDB), process `+0x66c` `00901460`, false: a flag of head-track
+    /// slots 1–5, `HeadTrackingTargetFlags` +0x411…+0x415, set;
+    /// `world::head_track::HeadTrack::action_free`). Not near then.
+    pub head_track_asked: bool,
+    /// Their package goes on only because the player is near
+    /// (`ContinuingPackageforPC` (Xbox PDB), process `+0x4e0` `008d9050`:
+    /// byte +0x374, set by `SetContinuingPackage` `+0x4e4` in `0090a1a0`
+    /// when a package with general flag 0x200, "continue if PC near"
+    /// (`008840f0`), would have given way). No greeting then.
+    pub continuing_for_player: bool,
     /// The distance between them and the player (`005723b0`).
     pub distance: f32,
     /// The player in combat (player +0xdf0 `bPlayerInCombat` (Xbox PDB),
@@ -194,7 +219,8 @@ impl GreetingCheck {
     /// The first gate (`008ef5cc`…`008ef6c0`): busy people don't greet or
     /// chatter.
     pub fn busy(&self) -> bool {
-        self.in_combat
+        self.important_conversation
+            || self.in_combat
             || self.fleeing
             || self.unconscious
             || self.knocked
@@ -278,6 +304,28 @@ pub fn flags_forbid_hellos(general: u32, behaviour: u16) -> bool {
     general & 0x1000 != 0 && behaviour & 0x01 == 0
 }
 
+/// Whether a package forbids conversations with others (`008a78f0(1)`, in
+/// `00904800`): its general flag 0x1000 set and behaviour flag 0x02 clear
+/// (`0067a8d0`).
+pub fn package_forbids_conversations(order: &LoadOrder, package: FormId) -> bool {
+    let (general, behaviour) = package_flag_words(order, package);
+    flags_forbid_conversations(general, behaviour)
+}
+
+/// [`package_forbids_conversations`] on the flag words.
+// Translated from 008a78f0 case 1 (decompiled, FalloutNV.exe 1.4.0.525).
+pub fn flags_forbid_conversations(general: u32, behaviour: u16) -> bool {
+    general & 0x1000 != 0 && behaviour & 0x02 == 0
+}
+
+/// The package types `00678610` holds (0x12…0x24 but 0x1a and 0x1e: the
+/// packages the game makes for combat, alarms, fleeing, dialogue and the
+/// like); someone running one doesn't look for others to talk to
+/// (`00904800`).
+pub fn made_package_kind(kind: u8) -> bool {
+    matches!(kind, 0x12..=0x24) && kind != 0x1a && kind != 0x1e
+}
+
 /// Whether a package allows idle chatter (`0067abd0`: behaviour flag 0x80,
 /// the editor's "Allow Idle Chatter", inferred name; asked whatever the
 /// general flags).
@@ -318,12 +366,15 @@ impl Social {
     /// 1. Someone busy ([`GreetingCheck::busy`]) neither greets nor
     ///    chatters ([`Greeting::Busy`]).
     /// 2. Detecting the player (above 0), not asleep, the player neither
-    ///    sneaking nor trespassing, and the player within
-    ///    `fAIMinGreetingDistance`: no idle chatter, and a greeting
-    ///    ([`Greeting::Greet`]) when the player isn't in combat, their
-    ///    package allows hellos, isn't an alarm package, they aren't
-    ///    standing still in a made conversation package, and their greeting
-    ///    timer has run out; else [`Greeting::Near`].
+    ///    sneaking nor trespassing, their target not the player (unless
+    ///    they run a run-once package), nobody having asked them to look at
+    ///    someone, and the player within `fAIMinGreetingDistance`: no idle
+    ///    chatter, and a greeting ([`Greeting::Greet`]) when the player
+    ///    isn't in combat, their package allows hellos and isn't going on
+    ///    only for the player, isn't an alarm package, they aren't standing
+    ///    still in a made conversation package, their target isn't the
+    ///    player, and their greeting timer has run out; else
+    ///    [`Greeting::Near`].
     /// 3. Otherwise [`Greeting::Away`]: the idle chatter timer runs
     ///    ([`Self::chatter_due`]).
     ///
@@ -338,14 +389,18 @@ impl Social {
             && !check.asleep
             && !check.player_sneaking
             && !check.player_trespassing
+            && (!check.target_is_player || check.running_run_once)
+            && !check.head_track_asked
             && check.distance <= settings.greeting_distance;
         if !near {
             return Greeting::Away;
         }
         let greets = !check.player_in_combat
             && !check.hellos_forbidden
+            && !check.continuing_for_player
             && !check.alarm_package
             && !check.still_in_made_dialogue
+            && !check.target_is_player
             && self.greeting <= 0.0;
         if greets {
             Greeting::Greet
@@ -710,6 +765,11 @@ mod tests {
                 player_spoken_to: true,
                 ..near(100.0)
             },
+            // Someone talking in the player's AI conversation.
+            GreetingCheck {
+                important_conversation: true,
+                ..near(100.0)
+            },
         ] {
             assert_eq!(social.greeting(&busy, &s), Greeting::Busy, "{busy:?}");
         }
@@ -734,6 +794,17 @@ mod tests {
                 player_trespassing: true,
                 ..near(100.0)
             },
+            // Their target is the player, with no run-once package.
+            GreetingCheck {
+                target_is_player: true,
+                ..near(100.0)
+            },
+            // Asked to look at someone (a head-track slot above the
+            // default one): `CanSetActionHeadTrackTarget` false.
+            GreetingCheck {
+                head_track_asked: true,
+                ..near(100.0)
+            },
         ] {
             assert_eq!(social.greeting(&away, &s), Greeting::Away, "{away:?}");
         }
@@ -755,6 +826,17 @@ mod tests {
                 still_in_made_dialogue: true,
                 ..near(100.0)
             },
+            GreetingCheck {
+                continuing_for_player: true,
+                ..near(100.0)
+            },
+            // The player their target, in a run-once package: near, but
+            // no greeting.
+            GreetingCheck {
+                target_is_player: true,
+                running_run_once: true,
+                ..near(100.0)
+            },
         ] {
             assert_eq!(social.greeting(&quiet, &s), Greeting::Near, "{quiet:?}");
         }
@@ -766,6 +848,19 @@ mod tests {
         assert!(flags_forbid_hellos(0x1000, 0));
         assert!(flags_forbid_hellos(0x1000, 0x80));
         assert!(!flags_forbid_hellos(0x1000, 0x01));
+        assert!(!flags_forbid_conversations(0, 0));
+        assert!(flags_forbid_conversations(0x1000, 0x01));
+        assert!(!flags_forbid_conversations(0x1000, 0x02));
+    }
+
+    #[test]
+    fn the_games_own_packages_dont_look_for_conversations() {
+        for kind in [0x12, 0x15, 0x16, 0x1c, 0x1d, 0x24] {
+            assert!(made_package_kind(kind), "{kind:#x}");
+        }
+        for kind in [0, 12, 15, 0x11, 0x1a, 0x1e, 0x25] {
+            assert!(!made_package_kind(kind), "{kind:#x}");
+        }
     }
 
     #[test]

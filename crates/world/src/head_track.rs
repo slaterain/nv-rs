@@ -186,6 +186,14 @@ impl HeadTrack {
         self.current_slot().and_then(|s| self.targets[s as usize])
     }
 
+    /// Whether someone may ask the actor to look at someone
+    /// (`CanSetActionHeadTrackTarget` (Xbox PDB), `+0x66c`, `00901460`):
+    /// no flag of slots 1–5 set.
+    // Translated from 00901460 (decompiled, FalloutNV.exe 1.4.0.525).
+    pub fn action_free(&self) -> bool {
+        !self.flags[1..].iter().any(|&f| f)
+    }
+
     /// Whether the actor may choose its own target (`+0x668`): nothing
     /// asked of it and the hold over.
     pub fn may_choose(&self) -> bool {

@@ -360,12 +360,60 @@ on these routes.
 
 ### Not carried out
 
-Untraced conditions, left out (they never block): the player's
-`00969860` (+0x224 → +0x94), process `+0x66c` (`00901460`), the actor's
-look target (process +0x40) not being the player, process `+0x4e0`
-(+0x374). The GREET line's subtitle path in `0057b7c0` (`00705210`).
-Idle chatter's listener (the chatter GREET's +0x70 target) isn't
-settled.
+The GREET line's subtitle path in `0057b7c0` (`00705210`). (The four
+conditions left out here are decoded under B33 below.)
+
+### B33: the four other conditions, and the look a greeting leaves
+
+Branch `claude/b33-greetings-chatter`, 2026-10-08. Playtest report: people
+greeted on their own, and every 30 s. Names from the Xbox PDB
+(`Fallout_Release_MemDebug.pdb`, `pdbdump`); the PC's `TESForm` lacks the
+prototype's editor ID string, so PC offsets after it are the Xbox's less
+0x10 (player +0x6cc `bGreetingPlayer` is Xbox +0x6dc, +0xe24
+`fLastHelloTime` Xbox +0xe34). Vtable slots read from the exe.
+
+| Address | What | Used for |
+| --- | --- | --- |
+| `00969860` | `PlayerCharacter::IsImportantConversationRunning`: +0x224 `pAIConversationRunning` (a `DialoguePackage`) with its +0x94 `pTalkingActor` set. In the first gate (busy) and before conversations with others (`008efa4e`) | `GreetingCheck::important_conversation`; the viewer has no such conversation (talking with the player opens the menu, the world stands still), so false |
+| `008ef78c`…`008ef7b1`: Character `+0x2c8` `008815a0`, `00881570` → process `+0x35c` `008d8310` | Near only when their target (process +0x40 `pTarget`, `GetTarget` `+0x128` `008d6f30`; set as a package starts, `0090a1a0` `006780e0` → `+0x12c`) isn't the player, or they run a run-once package (`IsRunningRunOnce`: `GetRunOncePackage` `+0x20c` → +0xe4 not null) | `target_is_player` (the package's reference target, or a `StartConversation` walk to the player), `running_run_once` (run-once packages aren't carried out: false) |
+| `008ef7b7`: process `+0x66c` `00901460` | `CanSetActionHeadTrackTarget`: none of `HeadTrackingTargetFlags` 1–5 (+0x411…+0x415) set. Else not near | `head_track_asked`, `HeadTrack::action_free` |
+| `008ef841`: `008a69d0` → process `+0x4e0` `008d9050` | `ContinuingPackageforPC` (+0x374): no greeting. Set by `SetContinuingPackage` (`+0x4e4`) in `0090a1a0` when a package with general flag 0x200 ("continue if PC near", `008840f0`) would have given way | `continuing_for_player`; not carried out in the package choice, so false |
+| `008ef88d` | No greeting while their target (`+0x128`) is the player | `target_is_player` |
+| `008bc3d0` | Before the cooldown check: the player put in their ACTION head-track slot (`+0x628`), whether the greeting is said or not. Said, the GREET procedure's end clears it with demote (`008dbe30`, `+0x644(1)`); not said (cooldown, or no line: `008dbe30` only resets the timer and the flag), it stays till the head-track update empties the slots (`008a3100` step 4: the player no longer detected) | viewer `social_frame`, `Walker::greet_look`, `head_track_asks` |
+
+So someone ready to greet while the cooldown holds (or with nothing to
+say) looks at the player and isn't near again, so neither greets nor
+loses the look, until they lose sight of the player; meanwhile the idle
+chatter path runs for them. Someone who greeted is free again after
+their line: standing by them, they greet again once their 20 s and the
+player's 30 s are over (traced; still to compare with the original).
+
+Conversations with others (`00904800`, read again): only with a
+package that isn't one the game makes (`00678610`: types 0x12…0x24 but
+0x1a and 0x1e) and doesn't forbid them (`008a78f0(1)`: general flag 0x1000
+with behaviour flag 0x02 clear, `0067a8d0`): `made_package_kind`,
+`package_forbids_conversations`. Its candidates are the people in their
+detection list (+0x25c) at level 3 (`piVar[1] == 3`); the viewer still
+offers everyone near (its detection has no such levels).
+
+Idle chatter (`008ef8ee`…`008ef9af`): `fIdleChatterCommentTimer`
+(`011cd008`, exe 5, data 15) and `…Max` (`011cd18c`, exe 30, data 60), set
+by `00f5a590`/`00f5a5c0`; `IdleChatter` said through `ProcessGreet`
+(`+0x2a4`) with no topic listener: the GREET procedure's listener is the
+actor's +0x70 (`pDialogueItemTarget`, Xbox +0x80; `004fd380`), else the
+last one (process +0x370). The viewer still asks the lines' conditions
+with the player as listener.
+
+Verified live (release viewer, installed data, 240 s): `WastelandNV --at
+-70618,-1000,8200,180 --answer-boxes`, `player.MoveTo` settlers 01–03
+then Easy Pete (standing there 60 s), three rounds. Build 25 (≈ main):
+9 greetings, Easy Pete every 30 s while the player stood by him (38, 68;
+127, 157; 216, 246 s). This branch: 5, Easy Pete once a visit (39, 126,
+217 s): 20 s after his line he was ready while the cooldown still held,
+so he looked at the player and stayed so; settler 01 twice (9, 96 s), not
+on the third round. No idle chatter or conversations with others on
+either (the settlers' packages forbid both). Not compared with the
+original game.
 ## Silent lines after skipping: the voice file's name (B11)
 
 Branch `claude/b11-voice-skip`, 2026-10-07. Playtest bug: after skipping

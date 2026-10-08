@@ -296,6 +296,17 @@ values, and the blur effect's passes and weights (`00ba4d20`,
 `00ba4270`) ([MENU_FADES.md](MENU_FADES.md)); left: depth of field, a
 blur under 1, the Pip-Boy's own capture.
 
+**B33. Greetings on their own, every 30 s.** NPCs shouldn't greet
+automatically, and not every 30 seconds; check their random lines,
+greetings and talk with each other. **Fixed on
+`claude/b33-greetings-chatter`:** B10's four left-out conditions decoded
+(the player's AI conversation, their target being the player, the ACTION
+head-track slot, a package continuing for the player) and the look
+`008bc3d0` leaves when a greeting can't be said, which keeps them from
+greeting again till they lose sight of the player; conversations with
+others also need a package that allows them (`008a78f0(1)`, `00678610`)
+(docs/DIALOGUE.md, B33). Live: 9 greetings → 5 on the same route.
+
 ### In progress
 
 - Nothing; every overnight branch is merged.
