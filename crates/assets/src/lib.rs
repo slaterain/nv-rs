@@ -215,13 +215,13 @@ impl IniSettings {
 /// The INI files the game reads its settings from, lowest first: the
 /// install's `Fallout_default.ini`, then the user's `Fallout.ini` and
 /// `FalloutPrefs.ini` under `Documents\My Games\FalloutNV` (or OneDrive's
-/// Documents).
+/// Documents) in the first of [`user_profiles`] that has them.
 pub fn default_settings_files(data_dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     if let Some(game_dir) = data_dir.parent() {
         files.push(game_dir.join("Fallout_default.ini"));
     }
-    if let Some(home) = user_home() {
+    'profiles: for home in user_profiles(data_dir) {
         for documents in [
             home.join("Documents"),
             home.join("OneDrive").join("Documents"),
@@ -230,7 +230,7 @@ pub fn default_settings_files(data_dir: &Path) -> Vec<PathBuf> {
             if dir.join("Fallout.ini").exists() {
                 files.push(dir.join("Fallout.ini"));
                 files.push(dir.join("FalloutPrefs.ini"));
-                break;
+                break 'profiles;
             }
         }
     }
@@ -256,11 +256,11 @@ pub fn archive_list_from(candidates: &[PathBuf]) -> ArchiveList {
 
 /// Where the game's settings usually are: `Fallout.ini` under
 /// `Documents\My Games\FalloutNV` (also checked under OneDrive, which
-/// often holds Documents), then `Fallout_default.ini` in the install folder
-/// that contains `Data`.
+/// often holds Documents) in each of [`user_profiles`], then
+/// `Fallout_default.ini` in the install folder that contains `Data`.
 pub fn default_ini_candidates(data_dir: &Path) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(home) = user_home() {
+    for home in user_profiles(data_dir) {
         for documents in [
             home.join("Documents"),
             home.join("OneDrive").join("Documents"),
@@ -290,6 +290,72 @@ fn user_home_from(
     home: Option<std::ffi::OsString>,
 ) -> Option<PathBuf> {
     userprofile.or(home).map(PathBuf::from)
+}
+
+/// The folders that stand for the user's Windows profile, where the game
+/// keeps `Documents\My Games\FalloutNV` and `AppData\Local\FalloutNV`,
+/// most likely first. On Windows that is [`user_home`]. Elsewhere the game
+/// itself runs under Steam's Proton, so the profile in its prefix
+/// ([`proton_profile`]) comes before the home folder.
+pub fn user_profiles(data_dir: &Path) -> Vec<PathBuf> {
+    let proton = if cfg!(windows) {
+        None
+    } else {
+        proton_profile(data_dir)
+    };
+    proton.into_iter().chain(user_home()).collect()
+}
+
+/// Fallout: New Vegas's Steam app ids: the usual edition, and the one Steam
+/// calls "Fallout: New Vegas PCR".
+pub const STEAM_APP_IDS: [&str; 2] = ["22380", "22490"];
+
+/// The Windows profile in the Proton prefix of the Steam library that holds
+/// the game: for `<library>/steamapps/common/<game>/Data`, the folder
+/// `<library>/steamapps/compatdata/<app id>/pfx/drive_c/users/steamuser`.
+/// The app id is the one in the install's `steam_appid.txt`, else one of
+/// [`STEAM_APP_IDS`]. `None` when there is no such folder (the game was
+/// never started under Proton, or isn't a Steam install).
+pub fn proton_profile(data_dir: &Path) -> Option<PathBuf> {
+    let data_dir = data_dir
+        .canonicalize()
+        .unwrap_or_else(|_| data_dir.to_path_buf());
+    let game_dir = data_dir.parent()?;
+    let steamapps = game_dir.parent()?.parent()?;
+    let listed = std::fs::read_to_string(game_dir.join("steam_appid.txt"))
+        .ok()
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty());
+    listed
+        .into_iter()
+        .chain(STEAM_APP_IDS.iter().map(|id| id.to_string()))
+        .map(|id| {
+            steamapps
+                .join("compatdata")
+                .join(id)
+                .join("pfx")
+                .join("drive_c")
+                .join("users")
+                .join("steamuser")
+        })
+        .find(|dir| dir.is_dir())
+}
+
+/// The game's active-plugin list in the Proton prefix
+/// (`AppData\Local\FalloutNV\plugins.txt` in [`proton_profile`]), where
+/// the game writes it when it runs under Proton. On Windows it is always
+/// `None`: the game's own place is `%LOCALAPPDATA%`
+/// (`esm::load_order::default_plugins_txt`).
+pub fn proton_plugins_txt(data_dir: &Path) -> Option<PathBuf> {
+    if cfg!(windows) {
+        return None;
+    }
+    let path = proton_profile(data_dir)?
+        .join("AppData")
+        .join("Local")
+        .join("FalloutNV")
+        .join("plugins.txt");
+    path.is_file().then_some(path)
 }
 
 /// The game's `[Archive]` settings that decide which archives load and
@@ -892,5 +958,74 @@ mod tests {
             user_home_from(Some("windows-home".into()), Some("mac-home".into())),
             Some(PathBuf::from("windows-home"))
         );
+    }
+
+    /// A Steam library with the game and its Proton prefix, as Steam lays
+    /// them out on Linux.
+    fn steam_library(tag: &str, app_id: Option<&str>, prefix_id: &str) -> testdata::TempData {
+        let library = testdata::TempData::empty(tag);
+        let game = "steamapps/common/Fallout New Vegas";
+        library.write(&format!("{game}/Data/FalloutNV.esm"), b"");
+        library.write(&format!("{game}/Fallout_default.ini"), b"");
+        if let Some(id) = app_id {
+            library.write(
+                &format!("{game}/steam_appid.txt"),
+                format!("{id}\n").as_bytes(),
+            );
+        }
+        let profile = format!("steamapps/compatdata/{prefix_id}/pfx/drive_c/users/steamuser");
+        library.write(
+            &format!("{profile}/Documents/My Games/FalloutNV/Fallout.ini"),
+            b"",
+        );
+        library.write(
+            &format!("{profile}/AppData/Local/FalloutNV/plugins.txt"),
+            b"FalloutNV.esm\n",
+        );
+        library
+    }
+
+    fn data_dir(library: &testdata::TempData) -> PathBuf {
+        library
+            .path()
+            .join("steamapps/common/Fallout New Vegas/Data")
+    }
+
+    #[test]
+    fn proton_profile_follows_the_install_app_id() {
+        let library = steam_library("proton-app-id", Some("22490"), "22490");
+        let profile = proton_profile(&data_dir(&library)).unwrap();
+        assert!(profile.ends_with("compatdata/22490/pfx/drive_c/users/steamuser"));
+    }
+
+    #[test]
+    fn proton_profile_falls_back_to_the_known_app_ids() {
+        let library = steam_library("proton-no-app-id", None, "22380");
+        let profile = proton_profile(&data_dir(&library)).unwrap();
+        assert!(profile.ends_with("compatdata/22380/pfx/drive_c/users/steamuser"));
+    }
+
+    #[test]
+    fn no_proton_profile_without_a_prefix() {
+        let library = steam_library("proton-other-id", Some("22490"), "12345");
+        assert_eq!(proton_profile(&data_dir(&library)), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn settings_and_plugins_come_from_the_proton_prefix() {
+        let library = steam_library("proton-settings", Some("22490"), "22490");
+        let data = data_dir(&library);
+        let files = default_settings_files(&data);
+        assert!(files[0].ends_with("Fallout New Vegas/Fallout_default.ini"));
+        assert!(files[1].ends_with(
+            "compatdata/22490/pfx/drive_c/users/steamuser/Documents/My Games/FalloutNV/Fallout.ini"
+        ));
+        assert!(files[2].ends_with("My Games/FalloutNV/FalloutPrefs.ini"));
+        assert!(default_ini_candidates(&data)[0]
+            .ends_with("steamuser/Documents/My Games/FalloutNV/Fallout.ini"));
+        assert!(proton_plugins_txt(&data)
+            .unwrap()
+            .ends_with("steamuser/AppData/Local/FalloutNV/plugins.txt"));
     }
 }

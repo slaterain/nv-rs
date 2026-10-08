@@ -293,7 +293,7 @@ fn sound_files_by_folder<'a>(
 
 impl Game {
     pub fn open(data_dir: &Path, options: &Options) -> Result<Game, Error> {
-        let order = LoadOrder::from_data_dir(data_dir, &active_plugins(options)?)?;
+        let order = LoadOrder::from_data_dir(data_dir, &active_plugins(options, data_dir)?)?;
         let list = match &options.ini {
             Some(ini) => archive_list_from(std::slice::from_ref(ini)),
             None => archive_list_from(&default_ini_candidates(data_dir)),

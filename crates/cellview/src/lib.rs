@@ -683,11 +683,16 @@ pub fn find_data_folder(path: &Path) -> Result<PathBuf, Error> {
     )))
 }
 
-pub(crate) fn active_plugins(options: &Options) -> Result<ActivePlugins, Error> {
+pub(crate) fn active_plugins(options: &Options, data_dir: &Path) -> Result<ActivePlugins, Error> {
     if options.official {
         return Ok(ActivePlugins::OfficialOnly);
     }
-    let Some(path) = options.plugins_txt.clone().or_else(default_plugins_txt) else {
+    let Some(path) = options
+        .plugins_txt
+        .clone()
+        .or_else(default_plugins_txt)
+        .or_else(|| assets::proton_plugins_txt(data_dir))
+    else {
         return Ok(ActivePlugins::OfficialOnly);
     };
     let bytes = std::fs::read(&path)
