@@ -183,6 +183,11 @@ line, other menus' fades.
 (he walks in place); the camera snaps around during the name prompt and
 other menus; the help-up sequence isn't right. Compare with the opening
 movie/recordings and fix. docs/OPENING.md, docs/FURNITURE.md.
+Traced on `claude/b14-opening` (docs/OPENING.md, B14), not fixed: the
+game walks Doc round his chair to its front marker under the 7 s fade;
+the viewer's path goes through the chair and his controller is blocked.
+Needs the game's `NavMeshObstacleManager` (untraced) first; the help-up
+waits on that; the menu camera snap wasn't reproduced.
 
 **B15. Character creator (race menu).** The face editor/race menu is
 not implemented (it auto-accepts). docs/FACE_CREATION.md and

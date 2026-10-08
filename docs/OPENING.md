@@ -79,6 +79,77 @@ Raw records, assembly, copied saves
 and decompilation remain outside the repository in nv-re/work/codex-m1 and
 nv-re/decomp/codex-m1.
 
+## B14: Doc's chair, the menu camera and the help-up (traced, not fixed)
+
+Branch `claude/b14-opening`, 2026-10-07. Research only; no code changed.
+Private logs and window captures in `%USERPROFILE%\nv-re\work\b14`.
+
+### Doc not sitting at the start
+
+Seen live (release viewer, `--new-game --no-movies --answer-boxes`):
+Doc's first package is `VCG01DocMitchellFirstPosition` (`00104C1D`,
+travel, no conditions, location the chair `001059B0`, `Chair01F`, MNAM
+0x40000004 so only marker number 14, the front). He is placed (ACHR
+`00104C0F`, 2289,2244) about 24 units behind the chair's back, while the
+front marker is at about 2293,2322, beside the bed. The navmesh path
+runs straight through the chair (2288,2244 → 2288,2304 → 2293,2322); the
+chair's collision (`Chair01.NIF`, one triangle mesh, layer 1 STATIC, which
+the character layer collides with, PHYSICS.md) pushes his controller back
+to 2280,2226, and he is "stuck" every 1.5 s for the whole opening. Older
+viewer logs (before actors had controllers, `codex-m1/doc-evp-opening.log`)
+show him walking through and seated by 4.7 s.
+
+What the game does (FalloutNV.exe 1.4.0.525):
+- The travel's furniture case `00915f10` (MiddleHighProcess +0x7c8) →
+  `00921350` (turn to the marker's heading or set it, sit request +0x614(4))
+  → the sit procedure `00904f50`: 40 or more from the marker copy, an NPC
+  gets a path request to it with radius 40 (`008b3690`, the player is
+  `SetPos`'d instead); within 40 the sit update `009213e0` puts him on the
+  marker and plays the entry. The viewer does the same.
+- No "start seated" path was found. The sit state lives only in the
+  middle-high process: its setter `00920d00` is in the HighProcess and
+  MiddleHighProcess vtables only (`01087d24`, `0108950c`), so the low
+  process never seats anyone; the 3D-attach handler `00925700` (+0x564)
+  only re-places actors already in a sit state; the instant sit `0088d2f0`
+  is the player's (callers `0093bea0`, `00972d30`). The first-run branch on
+  process +0x22a in `008eeec0`/`00915f10` calls +0x2ac = `00922ad0` →
+  `0088d640` (release), not a seat.
+- So the game walks him round to the front marker. The intro's fade
+  (`VCG01FadeInFromBlackISFX`, 7.0 s) and the 6 s wake-up cover a walk of
+  that length and the 1.7 s `Chair_ForwardEnter.kf`, which fits him being
+  seated when the view clears.
+- How the game's path goes round the chair is the missing piece: the game
+  has a navmesh obstacle system (`NavMeshObstacleManager`, singleton getter
+  `006c0720`, constructor `006c02c0`, called from reference code such as
+  `0056b2d0`, `005702e0`, `00570f70`; `ReferenceObstacleArray`,
+  `bhkObstacleDeactivationListener`, `bUseObstacleAvoidance:Pathfinding`,
+  `fObstacleUpdateDeltaWhenMoving`) that the viewer's pathing doesn't have.
+  Which references it cuts out of the navmesh, and how, isn't traced.
+
+Next action: trace `NavMeshObstacleManager` (what registers a reference's
+bodies, how triangles are cut, `006c0720` callers) and port it into
+`world::ai` pathing; Doc's route then comes from the navmesh. Do not seat
+him at once or let him walk through statics: neither is the game.
+
+### The camera during the name prompt
+
+Seen live (window captures each second, name menu held open): while the
+`TextEditMenu` is up the bedsit camera holds still (the viewer stops the
+player's camera animation in menus, `player_idle::animate`, and looking is
+blocked by the player's script package, `005cc7a0`); after OK it carries
+on with the bedsit loop. A snap wasn't reproduced in these captures, and
+the game's camera behaviour in menu mode (`fMenuModeAnimBlend`, whether the
+opening's camera idle pauses) wasn't traced. Not changed.
+
+### The help-up
+
+Not reached: Doc's help-up is his chair exit
+`SpecialIdle_NVDocChairFrontExit.kf` (the tree's exit for marker 14 during
+VCG01 stages 10-50; `NPCDocPlyStand` text key at 7.067 s), timed with the
+player's `LooseVCG01PlayerStandup` (VCG01PlayerSection2, added by the
+result script of INFO `00104BF9`). It needs Doc seated in that chair, so
+it waits for the part above.
+
 ## The character-revision prompt (B29)
 
 Branch `claude/b29-revise-loop`, 2026-10-07. Playtest bug: the "revise your

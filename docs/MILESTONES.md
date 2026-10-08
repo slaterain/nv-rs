@@ -383,6 +383,12 @@ game does (`00763ff0`/`007640a0`, menu fades `00a1d910`/`00a1db20`);
 unit-tested and verified live with Chet; details and gaps in
 [DIALOGUE.md](DIALOGUE.md).
 
+B14 opening, 2026-10-07 (`claude/b14-opening`): traced, not fixed. Doc's
+chair is reached by the ordinary travel/sit procedure (no start-seated path
+in the game); the viewer's path goes through the chair, so he's blocked.
+Needs the game's navmesh obstacle system first; details in
+[OPENING.md](OPENING.md) (B14).
+
 B16 local map, 2026-10-07 (`claude/b16-local-map`): the Pip-Boy local map's
 scale, zoom limits and steps re-traced and found as implemented (see
 [PIPBOY.md](PIPBOY.md)); fixed the map running off to its limits after any
