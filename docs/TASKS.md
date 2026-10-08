@@ -98,7 +98,7 @@ settings, (2) the step driver, (3) the single-body integrator,
 (4) sleeping, (5) simulation islands, (6) the contact manager with
 per-point events, (7) the contact solver (maybe two PRs), (8) ragdoll
 constraints, (9) continuous collision, (10) the character proxy (its
-own task). 1–4 should already stop the jitter and the jiggling. Progress: PRs 1-4 (constants, step driver, integrator, sleeping) on `claude/b1-havok-step` (docs/PHYSICS.md, "Havok's world step"); islands approximated by contacts until PR 5.
+own task). 1–4 should already stop the jitter and the jiggling. Progress: PRs 1-4 (constants, step driver, integrator, sleeping) on `claude/b1-havok-step` (docs/PHYSICS.md, "Havok's world step"); PR 5 (simulation islands) on `claude/b1-p5-islands`; PR 6 (contact manager, per-point events) on `claude/b1-p6-contacts`; PR 7 (contact solver) on `claude/b1-p7-solver`.
 
 **B2. Grab (Z) 1:1.** Carried objects flail, spasm and pass through
 things. Trace the game's grab spring (`0095f930`, `00960520`, the
@@ -276,7 +276,15 @@ something else is involved. Reproduce with `NV_GROUND_LOG=1`.
 **B26. Ringo greets you as a stranger after the gunfight.** When he comes
 over after the Powder Gangers are dead he uses his first-meeting lines.
 Trace his greeting's conditions (VMS16 stages, met-before checks) and
-why they pass at that point.
+why they pass at that point. **Traced (`claude/b26-b30-scripts`): not an
+engine fault.** His `GREETING` lines (all `VFreeformGoodsprings`, file
+order) put the first meeting, 00104C5F (only `GetIsID`, say once), before
+the stage-100 thanks, 00105D0D; the game skips a line only once its
+said byte (`INFO+0x22`, say-once flag `+0x25` 0x04, `0061e600`) is set.
+The vms16 acceptance route never meets Ringo (it replays the quest's
+result scripts from stage 65), so the game would greet him as a stranger
+too. Live: met first in `GSGasStation`, then `SetStage VMS16 100`, he
+says "I owe you a huge favor" ([GOODSPRINGS_ROUTE.md](GOODSPRINGS_ROUTE.md)).
 
 **B27. The first-person hand looks pale and untextured** (reports 007,
 008). Check its texture and skin tint (the player's FaceGen body tint)
@@ -294,7 +302,15 @@ message box's answer goes only to the script that showed it (`005b4630`,
 **B30. `GetAV XP` before any XP.** `player.GetAV XP` on a player who has
 never earned XP returns nothing instead of 0, which stops script blocks
 that test it (VCG04's prompt can't appear before the first XP). Trace the
-actor value getter and return what the game returns.
+actor value getter and return what the game returns. **Fixed on
+`claude/b26-b30-scripts`:** `GetActorValue` (`0059c4f0`) always sets its
+result from the actor's owner `+0xc` (`0093acb0` for the player: base,
+`008803a0`, plus modifiers); the base form's getter (`005f0fb0`) gives 0
+for every value no record field holds. XP, poison/radiation/fire/
+electric/frost/energy/EMP resistance now give 0, speed mult `ACBS`'s
+(case 0x15, `008f21d0`). Still none: crit chance, unarmed damage, damage
+resistance and threshold (derived or armour-fed, not traced). Live:
+`VCG04ActivatorRef.Activate player 1` at 0 XP shows the revise box.
 
 **B31. The blurred room behind menus.** The Vigor Tester (and the
 Pip-Boy, pause and other menus) show the world behind them blurred.
@@ -317,6 +333,16 @@ head-track slot, a package continuing for the player) and the look
 greeting again till they lose sight of the player; conversations with
 others also need a package that allows them (`008a78f0(1)`, `00678610`)
 (docs/DIALOGUE.md, B33). Live: 9 greetings → 5 on the same route.
+
+**B32. DLC start scripts re-run on a later cell change.** Fixed
+(`claude/b32-dlc-rerun`): not a game-state fault. Quest and reference
+script variables persist across cell attach/detach in the game
+(`00455490` runs quests from the data handler's list; a reference's
+variables live in its `ExtraScript`, `00565870`) and here
+(`GameState::variables`; three live `MoveTo` cell changes showed each DLC
+message once). The repeats seen came from `scripts/acceptance.ps1`
+starting each route as a new game; it now says so. Regression test:
+`ref_scripts::once_only_guards_survive_cell_changes`.
 
 ### In progress
 

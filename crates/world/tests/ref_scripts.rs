@@ -264,6 +264,39 @@ fn a_command_that_changes_references_stops_the_pass() {
     assert_eq!(refs.pending(FormId(PERSISTENT_REF)), &[("onload", None)]);
 }
 
+/// B32: a start-game quest's once-only guard (the DLC start scripts'
+/// `nEnableDLC`) belongs to the quest, not to any cell, and a reference's
+/// variables stay with the reference while its cell is detached: changing
+/// cell twice and back neither runs the guarded part again nor starts the
+/// reference's variables over.
+#[test]
+fn once_only_guards_survive_cell_changes() {
+    let f = fixture("refscripts-once");
+    let mut state = GameState::new(&f.order);
+    assert!(state.running.contains(&FormId(ONCE_QUEST)));
+    let mut refs = RefScripts::default();
+    let step = |cells: &[u32], state: &mut GameState, refs: &mut RefScripts| {
+        f.attach(refs, state, cells);
+        for _ in 0..3 {
+            f.frame(refs, state, &[]);
+            Runner::new(&f.order, &f.cache, state).update(6.0);
+        }
+    };
+    // Starting indoors, then out, in again and out again.
+    step(&[ROOM], &mut state, &mut refs);
+    step(&[FIELD], &mut state, &mut refs);
+    assert_eq!(var(&state, ONCE_QUEST, "iShown"), 1.0);
+    assert_eq!(var(&state, ONCE_QUEST, "nEnableDLC"), 2.0);
+    step(&[ROOM], &mut state, &mut refs);
+    step(&[FIELD], &mut state, &mut refs);
+    assert_eq!(var(&state, ONCE_QUEST, "iShown"), 1.0);
+    assert_eq!(var(&state, ONCE_QUEST, "nEnableDLC"), 2.0);
+    // The room's counter kept its count across the detach: loaded twice,
+    // run on each of its six frames.
+    assert_eq!(var(&state, ROOM_REF, "iLoads"), 2.0);
+    assert_eq!(var(&state, ROOM_REF, "iFrames"), 6.0);
+}
+
 #[test]
 fn an_interior_runs_its_own_references() {
     let f = fixture("refscripts-interior");

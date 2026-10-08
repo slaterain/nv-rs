@@ -410,14 +410,17 @@ impl Motion {
         self.angular_velocity = crate::vec::scale(self.angular_velocity, a);
     }
 
-    /// Both velocities reset to zero when any component is at least
-    /// [`VELOCITY_LIMIT`] Havok units (or not a number).
+    /// Both velocities reset when any component is at least
+    /// [`VELOCITY_LIMIT`] Havok units (or not a number): to the vector at
+    /// `01268370`, which the static initializer `00fbdde0` fills with the
+    /// unit x (1, 0, 0, 0) — so 1 Havok unit a second along x and 1 rad a
+    /// second about x, not zero (corrected in PR 7).
     pub fn reset_invalid_velocities(&mut self, unit: f32) {
         let limit = VELOCITY_LIMIT * unit;
-        let ok = |v: Vec3| v.iter().all(|c| c.abs() < limit);
-        if !(ok(self.linear_velocity) && ok(self.angular_velocity)) {
-            self.linear_velocity = [0.0; 3];
-            self.angular_velocity = [0.0; 3];
+        let ok = |v: Vec3, l: f32| v.iter().all(|c| c.abs() < l);
+        if !(ok(self.linear_velocity, limit) && ok(self.angular_velocity, VELOCITY_LIMIT)) {
+            self.linear_velocity = [unit, 0.0, 0.0];
+            self.angular_velocity = [1.0, 0.0, 0.0];
         }
     }
 
@@ -493,6 +496,67 @@ impl Motion {
         }
         self.apply_forces(dt, gravity_per_step);
         self.integrate(dt, unit);
+        self.update_deactivation(solver, unit)
+    }
+}
+
+impl Motion {
+    /// `hkRigidMotionUtilApplyAccumulators` (Xbox PDB, `00d29bf0`) for a
+    /// box motion after the solver: the motion's velocities are the
+    /// solver's (`linear`, `angular` in the world); the body moves by the
+    /// solver's integration velocities (`move_linear`, `move_angular`;
+    /// reset to the unit x when any component is at or over 1e6 or not a
+    /// number, `01268370`): the swept transform's start set to its end, the
+    /// centre moved by dt × the linear one held to the most linear speed,
+    /// the rotation turned by the angular one as [`Motion::integrate`]
+    /// turns it (held to min(most angular speed × dt, 0.9), the motion's
+    /// own angular velocity untouched). Then both velocities are held to
+    /// the most speeds (|ω| itself to the most angular speed), and the
+    /// deactivation bookkeeping. All in world units (`unit` per Havok
+    /// unit), angular in radians.
+    // Translated from 00d29bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+    #[allow(clippy::too_many_arguments)]
+    pub fn apply_accumulator(
+        &mut self,
+        linear: Vec3,
+        angular: Vec3,
+        move_linear: Vec3,
+        move_angular: Vec3,
+        dt: f32,
+        unit: f32,
+        solver: &SolverInfo,
+    ) -> Option<u32> {
+        self.linear_velocity = linear;
+        self.angular_velocity = angular;
+        let limit = VELOCITY_LIMIT * unit;
+        let ok = |v: Vec3, l: f32| v.iter().all(|c| c.abs() < l);
+        let (mut ml, mut ma) = (move_linear, move_angular);
+        if !(ok(ml, limit) && ok(ma, VELOCITY_LIMIT)) {
+            ml = [unit, 0.0, 0.0];
+            ma = [1.0, 0.0, 0.0];
+        }
+        self.center0 = self.center;
+        let max = UFLOAT8[self.max_linear_velocity as usize] * unit;
+        let l2 = crate::vec::dot(ml, ml);
+        if max * max < l2 {
+            ml = crate::vec::scale(ml, (1.0 / l2.sqrt()) * max);
+        }
+        for (c, m) in self.center.iter_mut().zip(ml) {
+            *c += dt * m;
+        }
+        self.rotation0 = self.rotation;
+        let kept = self.angular_velocity;
+        self.angular_velocity = ma;
+        let q = self.half_turn(dt);
+        self.angular_velocity = kept;
+        self.rotation = quat_normalize(quat_mul(q, self.rotation0));
+        self.clamp_linear_velocity(unit);
+        let maxa = UFLOAT8[self.max_angular_velocity as usize];
+        let w2 = crate::vec::dot(self.angular_velocity, self.angular_velocity);
+        if maxa * maxa < w2 {
+            self.angular_velocity =
+                crate::vec::scale(self.angular_velocity, (1.0 / w2.sqrt()) * maxa);
+        }
         self.update_deactivation(solver, unit)
     }
 }
@@ -881,14 +945,15 @@ mod tests {
         m.linear_velocity = [f32::NAN, 0.0, 0.0];
         m.angular_velocity = [1.0, 0.0, 0.0];
         m.step(MAX_TIME, [0.0; 3], 1.0, &SolverInfo::new());
-        assert_eq!(m.linear_velocity, [0.0; 3]);
-        assert_eq!(m.angular_velocity, [0.0; 3]);
+        // Reset to the unit x (`01268370`), then integrated.
+        assert_eq!(m.linear_velocity, [1.0, 0.0, 0.0]);
+        assert_eq!(m.angular_velocity, [1.0, 0.0, 0.0]);
         let mut m = body();
         m.max_linear_velocity = 255;
         m.angular_velocity = [0.0, 2e6, 0.0];
         m.step(MAX_TIME, [0.0; 3], 1.0, &SolverInfo::new());
-        assert_eq!(m.angular_velocity, [0.0; 3]);
-        assert_eq!(m.center, [0.0, 0.0, 100.0]);
+        assert_eq!(m.angular_velocity, [1.0, 0.0, 0.0]);
+        assert_eq!(m.center, [MAX_TIME, 0.0, 100.0]);
     }
 
     /// Steps a motion with no gravity until its count passes 5; the step

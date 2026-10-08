@@ -264,14 +264,133 @@ first check, at 4, sets the references; 16 and 32 are slot 1's) and sleeps
 at the start of step 37 (0.59 s); a body creeping 0.016 Havok units
 between checks never sleeps.
 
-In nv-rs: islands are approximated (until PR 5) by the awake bodies joined
-by this step's body–body contacts; an awake body touching a sleeping one
-wakes it (Havok merges their islands; here on contact, there on a
-broadphase pair). Waking an awake body (an impulse, the wind's force, the
-spring) cancels its island's pending sleep. Each ragdoll is one island.
+In nv-rs: sleeping is per simulation island (PR 5, below). Waking an awake
+body (an impulse, the wind's force, the spring) cancels its island's
+pending sleep. Each ragdoll is one island.
 Walkers still wake what they push faster than 2 units/s (this solver's
 walkers, PR 10). The invented rules are gone: "1 s under 2 units/s and
 0.3 rad/s" (clutter) and "1 s under 4 units/s and 0.6 rad/s" (ragdolls).
+
+### Simulation islands (PR 5, `claude/b1-p5-islands`)
+
+`hkpSimulationIsland` (Xbox PDB, 0x6c bytes): the bodies Havok steps,
+sleeps and wakes together (`physics::islands`; `RigidWorld::islands`).
+`iSimType` 1 makes the world continuous, so its `m_minDesiredIslandSize`
+(`+0xb4`) stays 0 (`00c95a80` sets it only for the multithreaded world):
+no "sparse" islands, an island is exactly a connected group.
+
+| What | Where | Rule |
+| --- | --- | --- |
+| Adding | `hkpWorld::addEntity` `00c914d0`, `addEntityBatch` `00c94bd0` | a body gets an island of its own, active or not by the add's activation (Bethesda's batch add: not); a fixed body joins the fixed island (none here) |
+| Boxes | `hkpEntityAabbUtil::entityBatchRecalcAabb` `00d1a330`, after each island's integration | the shape's box with half the collision tolerance (0.05 Havok units, collision input `+0x8` × 0.5); grown on each side by the step's turn × the object radius (motion `+0xac` × `+0xb0`) but not past the bounding sphere (centre ± (radius + 0.05)), then by the centre's travel back to the step's start (`+0x50` − `+0x60`): a swept box |
+| Pairs | broadphase `00cf9c60`/`00d0d3f0` (3-axis sweep), `00cf7080` (the collision filter), `hkpEntityEntityBroadPhaseListener::addCollisionPair` `00d10800` / `removeCollisionPair` `00d10860` (Xbox vtable names) | overlapping boxes the filter lets meet get an agent when the quality table (`dispatcher +0x1bb0`) has a non-zero entry for the two bodies' qualities (fixed against fixed has none) |
+| Merging | `hkpWorldAgentUtil::addAgent` `00cc0f40` → `hkpWorldOperationUtil::mergeIslands` `00cb5570` → `internalMergeTwoIslands` `00cb4c60` | unless either body is fixed (motion type 5) or they share one: the island with more bodies is kept (a tie: the one stored first); when either is active, the inactive one is activated first (`00cb5100`) — **a moving body wakes a sleeping one when their boxes meet**, before they touch; active marks and split requests are or-ed (the marks as they were before that activation); the kept island goes on the dirty list when either was |
+| Splitting | `removeAgent` `00cc10b0`; `hkpDefaultWorldMaintenanceMgr::performMaintenance` `00d0b280` → `splitSimulationIslands` `00cb6f30` → `00cb6e70` → `00cb6060`, connectivity `00d074c0` | a pair whose boxes part loses its agent; when both bodies share an island it asks for a split check (`+0x25` bits 0–1). At the next step's start (`hkpSimulation::integrate` `00cf9340`, before the dirty islands are cleaned up) each such island is split into its connected parts: bodies joined by an agent with a non-fixed partner (entity `+0x60`), a constraint between two non-fixed bodies (`+0xac`) or an action's bodies. New islands keep the old one's state, and are marked inactive when it was active but marked inactive |
+| Sleeping | `00cf8da0` → `markIslandInactive` `00cb5420`; `cleanupDirtyIslands` `00cb55d0` → `00cb5310` / `00cb5100` | PR 4's rule, now per island: more than 5 passing checks for its fewest, still marked active: marked inactive and put on the dirty list; cleaned up at the next step's start: asleep when every body passes `00d28560` (velocities zeroed), else marked active again; an island marked active is woken |
+| Waking | `hkpEntity::activate` (Xbox PDB) → `markIslandActive` (Xbox PDB) | an impulse, force or the spring on a sleeping body wakes its whole island (here at once; Havok at the next step's cleanup, before anything moves) |
+
+The island flags' bit positions on the PC are the PDB's mirrored
+(`m_splitCheckRequested` `bool:2@6` is `+0x25 & 3`, `m_activeMark`
+`@4` is `+0x26 & 0xc`), read from `00cb6f30` and `00cb55d0`.
+
+So a place's clutter that touches (or nearly: within 0.1 Havok units, 0.7
+game units, box to box) loads as islands asleep together, and knocking one
+wakes the lot (a stack, a shelf's worth); bodies that part sleep apart.
+
+In nv-rs: the broadphase is every pair of bodies' boxes (no 3-axis sweep;
+the same pairs); the body's step-start pose is its centre and rotation
+before this solver's substeps. The world's statics (the collider) are
+Havok's fixed bodies: they pair with every body and join no island. The
+split's choice of which part keeps the old island isn't followed (it
+changes nothing but storage). Islands are stepped together as before
+(this solver's contacts until PR 7).
+
+### Contact points (PR 6, `claude/b1-p6-contacts`)
+
+Each agent (a broadphase pair) has a contact manager
+(`hkpSimpleConstraintContactMgr`, vtable `010cc984`, one per pair of
+collidables: a body against one fixed body gets one, whatever triangles it
+touches) holding its points in a `hkpSimpleContactConstraintAtom` (0x30
+bytes + 0x20 a point + the properties): `physics::manifold`,
+`RigidWorld::manifolds`.
+
+| What | Where | Rule |
+| --- | --- | --- |
+| When | `hkpSimulation::collide` `00cf8bc0` (continuous `00d0ef40`) | after a step's integration, for the agents of active islands; a sleeping island's points stay as they were; a body added asleep has none until its island is first stepped (`addEntityBatch` `00c94bd0` makes agents, no points) |
+| Tolerance | `hkpCollisionDispatcher::initCollisionQualityInfo` `00cfb570` | points are made and kept up to the collision tolerance apart (0.1 Havok units, 0.7 game units) |
+| Adding | `addContactPointImpl` `00cfcf80` → `00d92df0` | the first point adds the contact constraint to the island; a point's impulse and solver data start at 0, its flags at 1 (new: the solver's callbacks finish it); when the point before it isn't paired and has no most impulse, it is paired with it (flags 3: the two are solved as one 2 × 2 block); the info's flag 4 (work the contact radius out again) is set |
+| Properties | `setContactPointProperties` `00cfd800` | friction √(f₁f₂) as hkUFloat8 (`00ca9360`: the table's next entry up, so 1.118 → 1.14), restitution √(r₁r₂) × 128 rounded to a byte, most impulse 0 (none) |
+| Event | `00cfcba0`, `hkpWorldCallbackUtil::fireContactPointAdded` `00d01850` → the world's contact listeners (`+0x1a0`, slot `+0x10`) | once per new point, with its projected velocity (`+0x1c`): body A's velocity at the point less B's (`00ca0c40`: v + ω × (p − centre)), along the normal. The game's `FOCollisionListener::contactPointAddedCallback` (`00623cb0`) plays the impact sounds and works out physics damage from it |
+| Removing | `removeContactPointImpl` `00cfd320` → `00cfd200` | the later points move down, the one now in its place loses its pairing, the info's flags 1 and 4 are set; the removed callbacks are empty in the game; the last point gone removes the constraint |
+
+So a body resting on its points hears nothing more, and a body that lands
+is heard once per corner that comes into contact (each with its own
+speed), where before a pair beginning to touch was heard each time it
+touched again after a bounce or a jitter (the repeated impact sounds).
+(`m_allowToSkipConfirmedCallbacks`, collision input `+0x6d`, is 0 in the
+game's world: `00c90b80` leaves cinfo `+0x75` 0 and Bethesda's `00c681c0`
+doesn't set it.)
+
+In nv-rs the points come from this solver's generator (Havok's agents —
+GSK, box-box, MOPP — aren't translated): a body's corners, sphere and
+capsule centres and a capsule's axis against triangles and other bodies'
+shapes, a triangle's edges into a hull; each point has a feature key (which
+corner, edge end, triangle) that keeps its identity from step to step, as
+Havok's agents keep their points. The position is on the other side's
+surface (taken: the agents aren't traced). A fixed body is a collider
+triangle's placed reference (0: the landscape and unowned statics).
+Walkers' pushes aren't Havok contacts and aren't heard. The contacts still
+move bodies by this solver's substeps until PR 7, which solves these
+points.
+
+### The contact solver (PR 7, `claude/b1-p7-solver`)
+
+An active island with contact points (its contact constraints) is stepped
+by `hkpConstraintSolverSetup::solve` (`00d88b50`), the rest body by body
+(PR 3). `physics::solver`, in Havok units about the island's first body;
+`RigidWorld::solve_island`. This replaces this solver's XPBD substeps,
+overlap corrections and bounce/friction passes (deleted).
+
+| Stage | Where | Rule |
+| --- | --- | --- |
+| Accumulators | `hkRigidMotionUtilApplyForcesAndBuildAccumulators` `00d29830` | the world's fixed body first (keyframed, zero); per body (box motion types): the motion's velocities damped in place, then linear velocity (world), angular velocity in the body's axes (the rotation transposed, `00cd4ba0`), inverse inertia diagonal and inverse mass (`+0xc0`), centre, gravity factor, deactivation class |
+| New points | `hkSimpleContactConstraintData_fireCallbacks` `00d92900` | for each point flagged new: projected velocity v (`00df2510`, damped motion velocities, accumulator centres); r = restitution byte ÷ 128; when v ≥ −`contactRestingVelocity` (always: Bethesda's FLT_MAX, `00c681c0`) or r ≤ 0.3: impulse guess (r + 1) ÷ (inverse masses + 1e-10) × −0.2 × v, solver data r v × substep × −1.3, allowed penetration that + distance when r > 0, else 0. The other path (`hkpSimpleCollisionResponse::solveSingleContact` `00d9ee50`, an immediate bounce) is never taken in the game: **that is what Bethesda's FLT_MAX resting velocity does** |
+| Jacobians | `hkSimpleContactConstraintDataBuildJacobian` `00d72190` | per point a 1-D Jacobian along the normal; right-hand side: with allowed penetration dA and solver data s: step = min(frame dt × 1 (`011b6924`), −0.05 (`011b6928`) × dA), gap = (d − dA) − step; when 2·step + frame dt < −s − (d − dA) (a penetration the solver didn't predict) it is added to the allowance; the allowance (≤ −ε) kept; rhs = −gap × tau ÷ damping ÷ substep. Paired points (flag 2) one 2 × 2 block (coupling × 0.99), inverted with the virtual mass factor (damping). Friction when Σfriction ÷ n × Σ(last impulses) > 0: the mean normal (or the first), an axis from x/y/z by the info's index (re-picked as the normal's least component when within √0.1, clearing the drifts), two 1-D Jacobians at the points' mean, their 2 × 2 inverse, rhs = the drifts the export left × friction tau ÷ damping ÷ substep, at most that total per micro step; with 2+ points the turning friction about the normal at the mean radius (worked out again when info flag 4 is set) |
+| Solver | `hkSolveConstraints` `00d8d030` (schema types 0x10, 0x14, 0x16, 0x17) | gravity × factor once into the velocities, sums zeroed; per substep (4 at normal speed), per micro step (1): each schema: contacts keep their total impulse ≥ 0 (a pair: both, else the second alone, else the first alone); friction impulses scaled down together to the most; then per body (`hkSolveIntegrateVelocitiesByTheSteps`, inlined): components ≥ 1e6 → the unit x (`01268370`); per component \|ω\|·angular inverse + \|v\|·linear inverse ≤ 1 → × slow multiplier, or all ≤ the relative sleep velocity → zero (**the deactivation velocity thresholds are read here**, open question 5); sum += 0.6 × (v − sum); last substep: sum × ¼ ÷ 0.6 is the velocity the body moves by, v − old sum its velocity; otherwise v = (v − old sum) + new sum + gravity |
+| Export | `hkSolverExport` `00def570` | each point's impulse; its solver data rhs × damping ÷ tau × substep − J·sum × step (the distance the solver expects, negated); friction impulses and drifts (× the last scale; friction tau) into the atom's info (`+0x18`…`+0x2c`) |
+| Apply | `hkRigidMotionUtilApplyAccumulators` `00d29bf0` | the motion's velocities the solver's (angular back to the world); moved by the sums (reset to unit x when invalid; held to the most linear speed; turn capped as PR 3), then \|v\| and \|ω\| held to the most speeds; deactivation bookkeeping |
+
+Corrected in passing: the invalid-velocity reset (`00d28a30`, PR 3) is to
+the vector at `01268370`, which the static initializer `00fbdde0` sets to
+(1, 0, 0, 0), not zero. Box motions keep only their inertia tensor's
+diagonal (`hkpBoxMotion::setInertiaLocal` `00d1e750`); impulses and the
+solver now use it.
+
+What it does: a box rests without drifting, a ball rolls down a slope with
+its spin matching its speed, a sliding box stops after about v² ÷ 2μg, a
+bottle stands on the rail and falls off when shot. Restitution in the PSI
+step is a one-step offset of a new point's distance: a 0.4 ball dropped
+from 200 units leaves the floor at about 2% of its landing speed (the
+integrated-velocity scheme spends the target on moving it out).
+
+In nv-rs: the island's constraints are its manifolds in key order (the
+game's order is its entities' constraint lists); walkers pushing a body
+are keyframed bodies at their velocity whose touches are new points every
+step (this solver's walkers, PR 10). Not translated: maximum-impulse
+contacts (0x12; the game's points have none), constraint priorities ≥ 4
+(TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
+and sphere motion specifics (all bodies use the box motion's rules).
+
+Verified live (release viewer, installed data, the PR 4 bottle route,
+`--wait 35`; nothing compared with the game): the six other VCG02 bottles
+stand on the rail for the whole run (screenshot); the shot one
+(`Hit 0010A208 at 149 units`, impulse 15) is heard twice as its points
+come (25 and 107 units/s, no repeats) and comes to rest at 10.3 s, 127.5
+units off, and stays. The tumbleweeds now roll in the wind (00178A80 1441
+units in the first 5 s; before, 0.5–1 unit per 5 s) and are heard as they
+bounce. Two Goodsprings crates woken by them come to rest at 3.7 s.
+Steady frame time 17.1 ms (vsync), main-thread work 9.5–10 ms (PR 4's run:
+11.5 ms).
 
 ### Data layouts used (Xbox PDB, matched to the PC code)
 
@@ -323,6 +442,18 @@ turning bodies never passing, the last test, rotation compression.
 box resting on the floor asleep at step 37; a stack asleep together and a
 nudge waking both; the earlier tests (falls and rests, rail bottles, shot
 off a rail, stacking, walkers, grab) unchanged.
+PR 5: `islands::tests` (bodies alone and merged on a pair, fixed bodies
+join nothing, an active island waking the one it merges with, a removed
+agent splitting at the next check, sleep and wake through the dirty list,
+a wake cancelling a pending sleep, removal renumbering); `rigid::tests`:
+boxes put 0.2 apart share an island and a push wakes both, not a far one;
+a sliding box wakes a sleeper when their boxes meet, before the faces
+touch; two boxes shoved apart split and the one left sleeps alone; layers
+the filter keeps apart get no pair.
+PR 6: `manifold::tests` (points paired as they come, unpaired when one
+goes; properties as the manager combines them); `rigid::tests`: each new
+point of a landing box heard once and none while it rests on the same
+points; a point's friction, restitution, pairing, normal and distance.
 
 ## Tested
 
@@ -558,9 +689,9 @@ pushes something under it back up: the 30-unit rule does.
 
 - Nothing compared with the original game: how far bottles fly, how they
   tumble, settle heights, rest times, grab feel, sound choice and volume.
-- Havok's contact solver, contact manifolds, simulation islands and
-  penetration recovery are not reproduced yet (B1 PRs 5–9; the step
-  driver, integrator and deactivation are, above). Clutter constraints aren't
+- Havok's contact solver, contact manifolds and penetration recovery
+  are not reproduced yet (B1 PRs 6–9; the step driver, integrator,
+  deactivation and simulation islands are, above). Clutter constraints aren't
   simulated: joined or constrained clutter bodies stay solid (ragdolls'
   joints are, in `physics::ragdoll`). Inertia under a reference's
   scale isn't traced (scaled by s², mass kept).

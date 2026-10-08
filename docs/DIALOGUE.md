@@ -47,7 +47,10 @@ INFO flag bits as the code tests them (`INFO+0x25`, `+0x26`): 0x01 Goodbye,
 0x02 random, 0x04 say once, 0x08 run immediately, 0x20 random end, 0x40 no
 menu begin script, 0x80 speech challenge; byte 3: 0x01 say once a day,
 0x02 always darken, 0x10 low Intelligence, 0x20 high Intelligence. GECK
-names are unverified.
+names are unverified. `0061e600` first refuses a deleted form (`+8` flag
+0x20), then a say-once line whose said byte (`INFO+0x22`) is set; a
+say-once first-meeting line with no other conditions therefore wins
+until it has been said (Ringo's 00104C5F, B26).
 
 ## Implemented
 
