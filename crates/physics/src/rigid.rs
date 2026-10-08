@@ -44,13 +44,11 @@ use crate::{
     Vec3, GRAVITY, HAVOK_UNIT,
 };
 
+pub use crate::havok::{Clock, MAX_STEPS};
+
 /// `[HAVOK] fMaxTime` as `Fallout_default.ini` sets it (the executable's
 /// default is 1/60).
-pub const STEP: f32 = 0.016;
-/// The most steps one frame takes: 3 (`00c66760`: 3 when its second
-/// argument is false, 1 when true; which the play loop passes, from
-/// `00525420`, is taken as false here, not traced further).
-pub const MAX_STEPS: u32 = 3;
+pub const STEP: f32 = crate::havok::MAX_TIME;
 /// Substeps per step, and position passes over the contacts per substep
 /// (choices of this solver, not the game's).
 const SUBSTEPS: usize = 8;
@@ -85,66 +83,6 @@ pub const PUSH_SKIN: f32 = 2.0;
 /// velocity only for lighter bodies). Read as: walkers push only bodies
 /// lighter than this (the proxy's handling past that branch isn't traced).
 pub const MOVE_LIMIT_MASS: f32 = 95.0;
-
-/// The game's Havok step clock (`00c66760` with `iUpdateType` 0): the frame
-/// time joins the time left over; it runs as many whole steps of
-/// [`Clock::step`] as it rounds to (at most [`Clock::max_steps`]) and keeps
-/// the rest (which can be negative after rounding up) for the next frame,
-/// never more than one step; less than half a step waits.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Clock {
-    pub step: f32,
-    pub max_steps: u32,
-    /// Time not yet stepped (`012677b0`).
-    left: f32,
-}
-
-impl Default for Clock {
-    fn default() -> Self {
-        Clock::new(STEP)
-    }
-}
-
-impl Clock {
-    pub fn new(step: f32) -> Self {
-        Clock {
-            step,
-            max_steps: MAX_STEPS,
-            left: 0.0,
-        }
-    }
-
-    /// The steps a frame of `frame` seconds takes: how many, and how long
-    /// each is.
-    // Translated from 00c66760 (decompiled, FalloutNV.exe 1.4.0.525)
-    pub fn advance(&mut self, frame: f32) -> (u32, f32) {
-        // The time multiplier at `011ac3a0` is 1 here (it isn't traced
-        // what changes it).
-        let step = self.step;
-        let t = (self.left + frame).min(166.666_67);
-        if t <= 0.0 {
-            self.left = 0.0;
-            return (0, 0.0);
-        }
-        // The x87's rounding: to the nearest, halves to even.
-        let q = t / step;
-        let mut r = q.round();
-        if (q - q.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
-            r -= q.signum();
-        }
-        let n = (r as u32).min(self.max_steps);
-        if n != 0 {
-            self.left = (t - n as f32 * step).min(step);
-            return (n, step);
-        }
-        if t < step * 0.5 {
-            self.left = t;
-            return (0, 0.0);
-        }
-        self.left = 0.0;
-        (1, t)
-    }
-}
 
 /// One solid piece of a body, in its model's space (game units).
 #[derive(Debug, Clone, PartialEq)]
@@ -568,6 +506,8 @@ enum Toucher {
 pub struct RigidWorld {
     pub bodies: Vec<Rigid>,
     pub clock: Clock,
+    /// The world's solver settings (`hkpSolverInfo`), rescaled each frame.
+    pub solver: crate::havok::SolverInfo,
     movers: Vec<Mover>,
     /// The player's grab, if they hold something.
     pub spring: Option<Spring>,
@@ -817,15 +757,29 @@ impl RigidWorld {
 
     /// Moves on by a frame of `frame` seconds, in the game's steps
     /// ([`Clock`]); the steps taken.
+    ///
+    /// As `bhkWorld::Update` (`00c6ae70`) runs a frame with a frame time
+    /// over 0: the solver settings scaled to the step (`00c66a00`), then
+    /// `hkpWorld::stepDeltaTime` for each whole step to the frame marker
+    /// (see [`Clock`]). The wind listener (`00c66e20`) runs after, with the
+    /// frame's time (the viewer's `clutter`).
+    // Translated from 00c6ae70 (decompiled, FalloutNV.exe 1.4.0.525)
     pub fn update(&mut self, collider: &Collider, frame: f32) -> u32 {
-        let (n, dt) = self.clock.advance(frame);
+        let (n, _) = self.clock.advance(frame);
+        if frame <= 0.0 {
+            return 0;
+        }
+        let step = self.clock.step();
+        self.solver.scale(step, crate::havok::TAU_RATIO);
         for _ in 0..n {
-            self.step(collider, dt);
+            self.step(collider, step);
         }
         n
     }
 
-    /// One step of `dt` seconds.
+    /// One step of `dt` seconds (`hkpSimulation::stepDeltaTime` `00cf8730`:
+    /// integrate, collide, advance time; here the integration and this
+    /// solver's contacts together).
     pub fn step(&mut self, collider: &Collider, dt: f32) {
         // Walkers wake what they push.
         for i in 0..self.bodies.len() {
@@ -847,6 +801,9 @@ impl RigidWorld {
                 self.apply_spring(&s, dt);
             }
         }
+        // `hkpSimulation::integrateInternal` (`00cf8da0`): actions (the
+        // spring, above), then the deactivation flags, then the islands.
+        self.solver.increment_deactivation_flags();
         if !self.awake() || dt <= 0.0 {
             return;
         }
@@ -1725,7 +1682,7 @@ mod tests {
         // A long frame: three steps at most, the rest held to one step.
         let (n, dt) = c.advance(0.2);
         assert_eq!((n, dt), (3, 0.016));
-        assert!((c.left - 0.016).abs() < 1e-6, "{}", c.left);
+        assert!((c.left() - 0.016).abs() < 1e-6, "{}", c.left());
         // Less than half a step waits; half or more takes one of it all.
         let mut c = Clock::new(0.016);
         assert_eq!(c.advance(0.005), (0, 0.0));
@@ -1736,7 +1693,7 @@ mod tests {
         // Rounding up runs ahead: the rest is negative.
         let mut c = Clock::new(0.016);
         assert_eq!(c.advance(0.013).0, 1);
-        assert!(c.left < 0.0);
+        assert!(c.left() < 0.0);
     }
 
     #[test]

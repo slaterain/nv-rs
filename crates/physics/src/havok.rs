@@ -279,9 +279,155 @@ impl SolverInfo {
     }
 }
 
+/// The most steps one frame takes (`00c66760`: 3, or 1 when its second
+/// argument is set; the caller passes `00525420(...)` tested on a game
+/// mode of 4, not traced further: taken as unset).
+pub const MAX_STEPS: u32 = 3;
+/// The most time the clock holds (`00c66760`).
+pub const MAX_ACCUMULATED: f32 = 166.666_67;
+
+/// The game's Havok frame clock and step driver: `bhkWorld::SetDeltaTime`
+/// (`00c66760`, Xbox `8293ce80`) with `[HAVOK] iUpdateType` 0, as
+/// `bhkWorld::Update` (`00c6ae70`) uses it.
+///
+/// Each frame the frame time joins the time carried over (`012677b0`),
+/// held to [`MAX_ACCUMULATED`]; n = that ÷ the step, rounded (the x87's
+/// round to nearest, halves to even), at most [`Clock::max_steps`]; the
+/// rest (negative after rounding up) is carried, held to at most one
+/// step (`0040ebd0` with a setting read through `00403e20`, taken as the
+/// step: not traced). Under half a step waits for the next frame.
+///
+/// `bhkWorld::Update` then sets the step to `fMaxTime` × the time
+/// multiplier again, sets the frame marker (`hkpWorld::setFrameTimeMarker`
+/// `00c91040`: current time + the accumulated time) and calls
+/// `hkpWorld::stepDeltaTime` (`00c91b10`) until the simulation is at the
+/// marker (`00c91060`, exact equality): exactly n whole steps. Bodies are
+/// read where the last whole step left them: nothing is interpolated.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Clock {
+    /// `fMaxTime` (`01267b38`).
+    pub max_time: f32,
+    /// The time multiplier (`011ac3a0`, eased toward `011ac3a4` by
+    /// `00aa4e40`; 1 at normal speed).
+    pub time_multiplier: f32,
+    pub max_steps: u32,
+    /// The third argument or `01267b4c`: run a step even under half a
+    /// step's time (not set by anything nv-rs does).
+    pub forced: bool,
+    /// Time not yet stepped (`012677b0`).
+    left: f32,
+}
+
+impl Default for Clock {
+    fn default() -> Self {
+        Clock::new(MAX_TIME)
+    }
+}
+
+impl Clock {
+    pub fn new(max_time: f32) -> Self {
+        Clock {
+            max_time,
+            time_multiplier: 1.0,
+            max_steps: MAX_STEPS,
+            forced: false,
+            left: 0.0,
+        }
+    }
+
+    /// The step length (`012677ac` = `01267b38` × `011ac3a0`).
+    pub fn step(&self) -> f32 {
+        self.max_time * self.time_multiplier
+    }
+
+    /// Time carried to the next frame.
+    pub fn left(&self) -> f32 {
+        self.left
+    }
+
+    /// The whole steps a frame of `frame` seconds runs, and their length.
+    // Translated from 00c66760 and 00c6ae70 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn advance(&mut self, frame: f32) -> (u32, f32) {
+        let step = self.step();
+        let t = (self.left + frame).min(MAX_ACCUMULATED);
+        if t <= 0.0 {
+            // The carried time isn't touched on this path.
+            return (0, 0.0);
+        }
+        let q = t / step;
+        let mut r = q.round();
+        if (q - q.trunc()).abs() == 0.5 && r % 2.0 != 0.0 {
+            r -= q.signum();
+        }
+        let n = (r as u32).min(self.max_steps);
+        if n != 0 {
+            self.left = (t - n as f32 * step).min(step);
+            return (n, step);
+        }
+        if !self.forced && t < step * 0.5 {
+            self.left = t;
+            return (0, 0.0);
+        }
+        // Exactly half a step rounded down to 0 (or forced): the whole
+        // time is the marker and nothing is carried; `bhkWorld::Update`
+        // still steps by the fixed step (one step here; Havok's snapping
+        // of the last step to the marker isn't traced).
+        self.left = 0.0;
+        (1, step)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frames_run_whole_steps_and_carry_the_rest() {
+        let mut c = Clock::default();
+        // 60 Hz: one step a frame, 0.000667 s carried each time, so every
+        // 24th frame or so runs two.
+        let mut steps = 0;
+        let mut twos = 0;
+        for _ in 0..240 {
+            let (n, dt) = c.advance(1.0 / 60.0);
+            assert_eq!(dt, 0.016);
+            assert!(n == 1 || n == 2, "{n}");
+            twos += (n == 2) as u32;
+            steps += n;
+        }
+        // 4 s of frames: 250 steps of 0.016 s, give or take the carry.
+        assert!((249..=250).contains(&steps), "{steps}");
+        assert!(twos > 0);
+        // Frame times from 5 to 100 ms.
+        for (frame, want) in [
+            (0.005, 0),
+            (0.009, 1),
+            (0.016, 1),
+            (0.025, 2),
+            (0.033, 2),
+            (0.05, 3),
+            (0.1, 3),
+        ] {
+            let mut c = Clock::default();
+            assert_eq!(c.advance(frame).0, want, "{frame}");
+        }
+        // A long frame: three steps, one step's time carried.
+        let mut c = Clock::default();
+        assert_eq!(c.advance(0.2), (3, 0.016));
+        assert!((c.left() - 0.016).abs() < 1e-7);
+        // Half speed: steps of 0.008.
+        let mut c = Clock {
+            time_multiplier: 0.5,
+            ..Clock::default()
+        };
+        assert_eq!(c.advance(0.016), (2, 0.008));
+        // One step only.
+        let mut c = Clock {
+            max_steps: 1,
+            ..Clock::default()
+        };
+        assert_eq!(c.advance(0.05).0, 1);
+    }
 
     #[test]
     fn the_speed_table_holds_the_bodies_values() {

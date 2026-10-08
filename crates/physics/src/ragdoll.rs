@@ -136,8 +136,8 @@ pub struct Ragdoll {
     /// Pairs of its own bodies that meet ([`parts_meet`]).
     pairs: Vec<(usize, usize)>,
     state: Vec<State>,
-    /// Time not yet stepped.
-    pending: f32,
+    /// The world's step clock (`crate::havok::Clock`).
+    pub clock: crate::havok::Clock,
     /// How long everything has been nearly still.
     still: f32,
     /// At rest: no longer stepped.
@@ -177,7 +177,7 @@ impl Ragdoll {
             joints,
             pairs,
             state,
-            pending: 0.0,
+            clock: crate::havok::Clock::default(),
             still: 0.0,
             asleep: false,
         }
@@ -282,14 +282,14 @@ impl Ragdoll {
         length(sub(p(0), p(1)))
     }
 
-    /// Moves on by `dt` seconds, in steps of [`STEP`].
+    /// Moves on by a frame of `dt` seconds, in the world's whole steps
+    /// ([`crate::havok::Clock`], `00c66760`/`00c6ae70`).
     pub fn update(&mut self, collider: &Collider, dt: f32) {
-        if self.asleep {
-            return;
-        }
-        self.pending = (self.pending + dt).min(STEP * 8.0);
-        while self.pending >= STEP {
-            self.pending -= STEP;
+        let (n, _) = self.clock.advance(dt);
+        for _ in 0..n {
+            if self.asleep {
+                return;
+            }
             self.step(collider);
         }
     }
