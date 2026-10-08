@@ -280,6 +280,41 @@ check `008a6ce0` not yet read: `00573f40`, `005c9530`, `00886360`,
 condition near its line 152), `00967da0`. Also open: whether the viewer's
 package clocks count menu time (the game's don't).
 
+
+#### Help-up timing and daylight, from the original (2026-10-08)
+
+The maintainer's two recordings of the original's opening, aligned with
+Doc's voice files by their loudness envelopes (correlation 0.95):
+"Well, I got most of it right" (`00104BF9`) starts the moment the face
+menu closes, and Doc's chair exit starts with it (rising by 0.6 s, bending
+down at ≈ 6.4 s); the player's stand-up (on-begin idle of
+`VCG01PlayerSection2`, set at that line's end) rises at ≈ 8–10 s, so his
+help lands as the player stands. Doc's standing package needs
+`GetStage VCG01 >= 40`, set by `VCG01SCRIPT`'s `MenuMode 1036` while the
+menu is open. Ruled out as the trigger: `SetStage` (`005c7140` →
+`0060d510`, runs the stage only), the line's end (`00935f60`: the end
+script, then process vfunc +0x88 `008d8dc0`, which clears the "saying"
+byte +0x459), the menu's finish (`007ada40`), the 20 s timer and the hour
+(both pause in menu mode: `0086e650` sets `011dea2b` from `00702360`/
+`007023a0`, interface +0xc != 1). `EvaluatePackage` (`008a6ce0`) itself
+only flags actor +0x145 and sets the process's last hour to the hour − 1
+(`00693d50`), so the hour test fires at the next update; many callers
+use the same trick, none traced to the menu's close. Implemented from the
+recording, labelled: `GameState::evaluate_everyone`, set after the face
+menu's MenuMode blocks; every walker's packages are looked at once. Live:
+Doc `Sitting -> Want to stand` at 52.7 s, with `00104BF9` (was 61.3 s).
+
+`SayTo` lines now ask for their speaker idle (`005c9100` → `008dbe30` →
+`008a20d0`, as greetings): "Whoa, easy there" plays `VCG01DocWhoaThere`
+(Doc leaning forward in his chair as the player sits up, as recorded),
+"How'd I do?" `VCG01DocGiveMirror`.
+
+Daylight: `VCG00` stage 0 (source "DEMO ONLY") sets `GameHour` to 23;
+nothing after changes it, and `VCG01` stage 0 is set only by `VCG00`'s
+cleanup, so the game does run it. The recordings show daylight; the
+maintainer's decision: it's a leftover, the opening is meant in daylight.
+The viewer keeps the hour through that stage (`GameHour`'s own value, 12).
+
 ## The character-revision prompt (B29)
 
 Branch `claude/b29-revise-loop`, 2026-10-07. Playtest bug: the "revise your

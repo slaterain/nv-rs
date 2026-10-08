@@ -1070,7 +1070,21 @@ pub fn run_scripts(
         if let Some((quest, n)) = start_stage.0.take() {
             match order.form_by_editor_id(&quest) {
                 Some(q) => {
+                    // The new game's start (`VCG00` 0) is a leftover intro
+                    // script (its source says "DEMO ONLY"): its `Set
+                    // GameHour to 23` would start Doc Mitchell's house at
+                    // night. The opening is meant in daylight (the
+                    // maintainer's decision, 2026-10-08, from the original
+                    // game as played), so the clock keeps the hour it had
+                    // (`GameHour`'s own value, 12) through that stage.
+                    let keep_hour = (quest.eq_ignore_ascii_case("VCG00") && n == 0)
+                        .then(|| order.form_by_editor_id("GameHour"))
+                        .flatten()
+                        .and_then(|g| state.0.globals.get(&g).map(|&h| (g, h)));
                     let set = Runner::new(order, &scripts.0, &mut state.0).set_stage(q, n);
+                    if let Some((g, h)) = keep_hour {
+                        state.0.globals.insert(g, h);
+                    }
                     println!(
                         "SetStage {quest} {n}: {}",
                         if set {
@@ -1885,8 +1899,14 @@ pub fn run_scripts(
             Err(e) => println!("Couldn't save {file}: {e}"),
         }
     }
+    // The face menu closing has everyone's packages looked at again, after
+    // its MenuMode blocks (`GameState::evaluate_everyone`).
+    let face_menu = menus.contains(&world::scripting::RACE_SEX_MENU);
     for menu in menus {
         Runner::new(order, &scripts.0, state).menu_mode(menu);
+    }
+    if face_menu {
+        state.evaluate_everyone = true;
     }
 
     notices.0.retain(|(_, at)| now - at < NOTICE_SECONDS);

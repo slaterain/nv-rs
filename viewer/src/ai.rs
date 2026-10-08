@@ -827,9 +827,14 @@ pub fn move_actors(
     };
     // How many chose whom to look at this frame (`011df674`).
     let mut head_track_choices = 0;
+    // Everyone's packages looked at once (`GameState::evaluate_everyone`).
+    let everyone = std::mem::take(&mut state.evaluate_everyone);
     for (mut walker, mut life, mut rig, mut transform, mut visibility) in &mut actors {
         let walker = &mut *walker;
         let me = walker.reference;
+        if everyone {
+            state.evaluate.insert(me);
+        }
         // The turn in place under way (as the last frame left it) plays the
         // turn animation, while the turn state lasts (at least
         // `fActorTurnAnimMinTime`).
