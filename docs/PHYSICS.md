@@ -381,6 +381,17 @@ contacts (0x12; the game's points have none), constraint priorities ≥ 4
 (TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
 and sphere motion specifics (all bodies use the box motion's rules).
 
+Verified live (release viewer, installed data, the PR 4 bottle route,
+`--wait 35`; nothing compared with the game): the six other VCG02 bottles
+stand on the rail for the whole run (screenshot); the shot one
+(`Hit 0010A208 at 149 units`, impulse 15) is heard twice as its points
+come (25 and 107 units/s, no repeats) and comes to rest at 10.3 s, 127.5
+units off, and stays. The tumbleweeds now roll in the wind (00178A80 1441
+units in the first 5 s; before, 0.5–1 unit per 5 s) and are heard as they
+bounce. Two Goodsprings crates woken by them come to rest at 3.7 s.
+Steady frame time 17.1 ms (vsync), main-thread work 9.5–10 ms (PR 4's run:
+11.5 ms).
+
 ### Data layouts used (Xbox PDB, matched to the PC code)
 
 `hkpMotion` (0x120, entity `+0xe0`): `+0x08` type, `+0x09` deactivation
