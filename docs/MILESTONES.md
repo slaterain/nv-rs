@@ -773,6 +773,11 @@ calling `ForceFlee`, 9 asking `GetGroupMemberCount`. Generated-data
 tests; live checks in the Prospector Saloon; not compared with the
 original. Evidence, gaps and next action: [FATIGUE.md](FATIGUE.md).
 
+B14 research `claude/b14-navmesh-obstacles` (2026-10-07): the navmesh
+obstacle manager registers only forms flagged 0x02000000 (no furniture),
+so it isn't why the game's Doc gets round his chair; not ported, cause
+open: [OPENING.md](OPENING.md) B14, [PATHING.md](PATHING.md).
+
 ## Original `.fos` saves (M7 research, `claude/fos-saves`, 2026-10-07)
 
 Format and scope written down from the exe's writer and reader and checked

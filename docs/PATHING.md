@@ -5,6 +5,21 @@ and how people move through the cell's collision (`claude/m2-npc-nav`),
 then its gaps (`claude/m2-npc-nav-2`, first below), and the long way over
 the navmesh info map (`claude/m2-long-paths`, further down).
 
+**Navmesh obstacles (traced, not ported, `claude/b14-navmesh-obstacles`).**
+Besides closed doors (below), `NavMeshObstacleManager` (Xbox PDB, getter
+`006c0720`) cuts the navmesh round references whose base form has flag
+0x02000000 (`TESObjectREFR::GetObstacle` `00564bc0` → `TESForm::GetObstacle`
+`00401210`): added on cell attach and 3D load (`005575d0`, `0056b2d0`,
+`005702e0` → `006c0c30`), removed on detach and unload (`005576c0`,
+`00570f70` → `006c0c80`); moving ones per the Xbox PDB names
+(`ProcessMovingReferences`, `bhkObstacleDeactivationListener`; not read). The cut
+itself is `NavMeshObstacleCutter` (Xbox PDB: box verts and edges, split
+edges, new triangles, undo data, portal reconnection) on background tasks
+(`006c8170`). In FalloutNV.esm that is 304 STAT, 20 MSTT, 19 CONT, 11 ACTI,
+7 SCOL and no furniture. Not ported: it doesn't affect B14 (OPENING.md),
+and the cutter is large; the viewer still paths through these objects'
+footprints and relies on the stuck rule (`009e4cf0`, below).
+
 ## Doors, ends off the navmesh, the path manager, clutter
 
 Branch `claude/m2-npc-nav-2` (on `claude/overnight-integration` at

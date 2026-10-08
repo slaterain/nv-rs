@@ -126,10 +126,46 @@ What the game does (FalloutNV.exe 1.4.0.525):
   `fObstacleUpdateDeltaWhenMoving`) that the viewer's pathing doesn't have.
   Which references it cuts out of the navmesh, and how, isn't traced.
 
-Next action: trace `NavMeshObstacleManager` (what registers a reference's
-bodies, how triangles are cut, `006c0720` callers) and port it into
-`world::ai` pathing; Doc's route then comes from the navmesh. Do not seat
-him at once or let him walk through statics: neither is the game.
+Traced on `claude/b14-navmesh-obstacles` (2026-10-07): **the obstacle
+manager doesn't touch Doc's chair.**
+- A reference is a navmesh obstacle only when
+  `TESObjectREFR::GetObstacle` (Xbox PDB; REFR vtable `0102f55c` slot
+  0x15c = `00564bc0`) says so: its base form's `TESForm::GetObstacle`
+  (slot 0xb0, `00401210`), which is the form flag 0x02000000. Every
+  registration is gated on it: cell attach/detach
+  (`TESObjectCELL::AddObstaclesAndDoors`/`RemoveObstaclesAndDoors` (Xbox
+  PDB) `005575d0`/`005576c0` → `AddObstacleForReference` `006c0c30` /
+  `RemoveObstacleForReference` `006c0c80`), 3D load and unload
+  (`0056b2d0`, `005702e0`, `00570f70`); doors go their own way (closed
+  doors, `006c0f10`/`006c1060`, already in `world::ai::doors`).
+- `Chair01F` (FURN `000157F2`) has record flags 0x20000000 only; no FURN in
+  FalloutNV.esm has 0x02000000 (0 of 234). The flagged forms are 304 STAT
+  (billboards, pylons, machines), 20 MSTT (trucks, vertibird, barrels), 19
+  CONT (vendor containers), 11 ACTI, 7 SCOL. So porting the manager (the
+  `NavMeshObstacleCutter` (Xbox PDB) that splits navmesh triangles round an
+  obstacle's box and reconnects portals) would not change Doc's route.
+- The navmesh doesn't avoid the chair either: `GSDocMitchellHouse`'s
+  triangles there are large (`t62`, `t72` of the joined mesh) and cover the
+  chair; the navmesh's open edge runs at about y 2291..2315 just behind
+  the front marker.
+- The stuck rule is already the game's: `009e4cf0` (called from the path
+  handler update `009e0a00`) marks an obstacle (`00691510`, flag
+  0x80000000, radius from `0069ef80`, cost 1) at the handler's location
+  +0x34, whose position (+0x40) is the actor's position it has just
+  copied; the viewer does the same (`ai::unstick`). With Doc's start inside
+  that circle and one corridor, the re-path can't go round the chair.
+
+So what keeps the game's Doc from being blocked by his chair is still
+unknown. Candidates not yet checked: whether the game moves an actor
+placed overlapping collision (Doc's ACHR is about 3 units inside the
+chair's bounds) when his controller is made; whether the character
+controller skips the furniture the actor is entering
+(`Actor::IsTryingToEnterFurniture` (Xbox PDB), PC address not found);
+the furniture marker's target offset
+(`TESFurniture::GetMarkerTargetOffset` (Xbox PDB)) for the goal. A
+recording of the original's first seconds (Doc's position each frame,
+before the fade clears) would settle which. Do not seat him at once or let
+him walk through statics: neither is traced.
 
 ### The camera during the name prompt
 
