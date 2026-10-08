@@ -58,6 +58,7 @@ message box not ([MENU_FADES.md](MENU_FADES.md)).
 Vigor Tester step has no acceptance route yet (the doc route starts at
 stage 110).
 B1 PRs 1-4 (`claude/b1-havok-step`, 2026-10-07): the game's own Havok world constants, step driver, single-body integrator and sleeping translated (`physics::havok`; the invented sleep rules gone; contacts still this solver's until PR 7). Verified live: the VCG02 bottles stay on the rail, a shot one comes to rest and stays. Evidence: [PHYSICS.md](PHYSICS.md). **Next action:** B1 PR 5 (simulation islands).
+B1 PR 10 (`claude/b1-character-proxy`, 2026-10-08): every walker moved by the game's own controller (Bethesda's states, steps, walls and slopes around Havok's proxy and simplex solver, `physics::controller`/`proxy`/`simplex`); acceptance passes; B25's waist-deep walking not seen live. Next: pushing bodies (`applySurfaceInteractions`) and swimming.
 
 Overnight batches, 2026-10-06 (local session; integration branch
 `claude/overnight-integration`, not merged into `main`; each batch also has

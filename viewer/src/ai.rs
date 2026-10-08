@@ -4410,7 +4410,7 @@ mod tests {
             step(&mut w, 85.0, dt);
             move_body(&mut w, &mut collider, &[], &mut Vec::new(), &rules, dt);
         }
-        assert!(w.body.is_some_and(|b| b.on_ground), "{:?}", w.body);
+        assert!(w.body.as_ref().is_some_and(|b| b.on_ground), "{:?}", w.body);
         assert!(w.position[2].abs() < 1.0, "{:?}", w.position);
         assert!(w.position[1] > -200.0 + 30.0, "walked on: {:?}", w.position);
     }
@@ -4569,7 +4569,9 @@ mod tests {
             );
             closest = closest.min((w.position[0] - 5.0).hypot(w.position[1] + 150.0));
         }
-        assert!(closest >= 2.0 * 20.25 - 0.5, "{closest}");
+        // Two octagonal hulls: flat against flat their centres are 2 ×
+        // (20.25 × cos 22.5° + the 0.7 convex radius) apart.
+        assert!(closest >= 2.0 * 19.4 - 0.5, "{closest}");
     }
 
     /// A square of navmesh, (0,0)–(200,200), two triangles.

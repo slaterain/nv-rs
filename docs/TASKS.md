@@ -270,7 +270,7 @@ build 25 first. Next suspect if it persists: his `headold.nif` and its
 NPCs sometimes walk waist-deep in the ground. B4's land rule only lifts
 feet more than 30 units under the land and its far-from-camera rule puts
 people at navmesh height (up to ~21 under the land); this is deeper, so
-something else is involved. Reproduce with `NV_GROUND_LOG=1`.
+something else is involved. Reproduce with `NV_GROUND_LOG=1`. Progress (`claude/b1-character-proxy`, B1 PR 10): with the game's own controller nobody near the camera stood more than 10 under the land in the gunfight, Back in the Saddle or the road runs (PHYSICS.md, "The character proxy"); not seen again, so likely the old controller's push-out. Close after a playtest.
 
 **B26. Ringo greets you as a stranger after the gunfight.** When he comes
 over after the Powder Gangers are dead he uses his first-meeting lines.
