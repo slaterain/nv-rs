@@ -234,9 +234,29 @@ pub struct Rigid {
     moved_by: Vec3,
     /// At rest: not stepped until something pushes it.
     pub asleep: bool,
+    /// Havok's motion: its speed limits, gravity factor and deactivation
+    /// state (the position and velocities are the fields above).
+    pub motion: crate::havok::Motion,
+    /// Stepped by Havok's integrator alone this step (nothing near it).
+    free: bool,
     /// Moved since it was put (the game's "Havok moved" reference change,
     /// `CHANGE_REFR_HAVOK_MOVE`, named by `0083fef0`).
     pub moved: bool,
+}
+
+/// The hkUFloat8 index of a model's most speed (Havok units a second, or
+/// radians a second): [`crate::havok::ufloat8`], taking the entry below
+/// when the value is that entry give or take the rounding of nv-rs's
+/// game-unit scaling (1e-5 of it).
+pub(crate) fn speed_index(v: f32) -> u8 {
+    let i = crate::havok::ufloat8(v);
+    if i > 0 {
+        let below = crate::havok::UFLOAT8[i as usize - 1];
+        if (below - v).abs() <= below * 1e-5 {
+            return i - 1;
+        }
+    }
+    i
 }
 
 fn mat_mul(a: &Mat3, b: &Mat3) -> Mat3 {
@@ -296,6 +316,16 @@ impl Rigid {
             .map(|s| s.reach(setup.center))
             .fold(0.0f32, f32::max);
         let (r, t) = pose;
+        let mut motion = crate::havok::Motion::new(
+            crate::havok::motion_type::DYNAMIC,
+            add(mat_vec(&r, setup.center), t),
+            mat_quat(&r),
+        );
+        motion.linear_damping = setup.linear_damping;
+        motion.angular_damping = setup.angular_damping;
+        motion.max_linear_velocity = speed_index(setup.max_linear_speed / HAVOK_UNIT);
+        motion.max_angular_velocity = speed_index(setup.max_angular_speed);
+        motion.object_radius = reach / HAVOK_UNIT;
         Rigid {
             x: add(mat_vec(&r, setup.center), t),
             q: mat_quat(&r),
@@ -307,6 +337,8 @@ impl Rigid {
             moved_by: [0.0; 3],
             asleep: true,
             moved: false,
+            motion,
+            free: false,
             inverse_inertia,
             inverse_mass,
             setup,
@@ -339,6 +371,30 @@ impl Rigid {
 
     pub fn dynamic(&self) -> bool {
         self.inverse_mass > 0.0
+    }
+
+    /// Moved by this solver's contact substeps this step.
+    fn solved(&self) -> bool {
+        !self.asleep && self.dynamic() && !self.free
+    }
+
+    /// Its Havok motion with the position and velocities as they are now
+    /// (game units).
+    fn motion_now(&self) -> crate::havok::Motion {
+        let mut m = self.motion;
+        m.center = self.x;
+        m.rotation = self.q;
+        m.linear_velocity = self.v;
+        m.angular_velocity = self.w;
+        m
+    }
+
+    fn set_motion(&mut self, m: &crate::havok::Motion) {
+        self.motion = *m;
+        self.x = m.center;
+        self.q = m.rotation;
+        self.v = m.linear_velocity;
+        self.w = m.angular_velocity;
     }
 
     /// The inverse inertia in the world applied to `a`.
@@ -541,6 +597,25 @@ impl RigidWorld {
     pub fn remove(&mut self, reference: u32) -> Option<Rigid> {
         let i = self.find(reference)?;
         Some(self.remove_at(i))
+    }
+
+    /// Whether another body or a walker is within body `i`'s reach and a
+    /// step's travel (then this solver's contacts may act on it).
+    fn near_anything(&self, i: usize, dt: f32) -> bool {
+        let b = &self.bodies[i];
+        let travel = length(b.v) * dt;
+        let bodies = self
+            .bodies
+            .iter()
+            .enumerate()
+            .any(|(j, o)| j != i && length(sub(b.x, o.x)) <= b.reach + o.reach + 2.0 + travel);
+        bodies
+            || (self.pushable(i)
+                && self.movers.iter().any(|m| {
+                    let (s0, s1) = m.segment();
+                    length(sub(b.x, closest_on_segment(b.x, s0, s1)))
+                        <= b.reach + m.radius + PUSH_SKIN + travel
+                }))
     }
 
     /// Whether walkers push body `i`: it moves and is lighter than
@@ -851,10 +926,46 @@ impl RigidWorld {
                     .collect()
             })
             .collect();
+        // Havok's integration (`00cf8da0`): a body with nothing near it
+        // (no triangle, body or walker within its reach and a step's
+        // travel: no contact constraints in its island) is stepped exactly
+        // by `hkRigidMotionUtilApplyForcesAndStep` (`00d28a30`); the others
+        // get the same forces (`00d29830`: damping now, gravity per
+        // substep), this solver's contacts, then the velocity checks of
+        // `hkRigidMotionUtilApplyAccumulators` (`00d29bf0`).
+        let gravity_step = scale(crate::havok::GRAVITY, dt * HAVOK_UNIT);
+        for (i, tris) in nearby.iter().enumerate() {
+            let free = !self.bodies[i].asleep
+                && self.bodies[i].dynamic()
+                && tris.is_empty()
+                && !self.near_anything(i, dt);
+            let b = &mut self.bodies[i];
+            b.free = free;
+            if b.asleep || !b.dynamic() {
+                continue;
+            }
+            let mut m = b.motion_now();
+            if free {
+                m.step(dt, gravity_step, HAVOK_UNIT);
+            } else {
+                m.apply_damping(dt);
+            }
+            b.set_motion(&m);
+        }
         let h = dt / SUBSTEPS as f32;
         self.this_step.clear();
         for _ in 0..SUBSTEPS {
             self.substep(collider, &nearby, h);
+        }
+        for b in &mut self.bodies {
+            if b.asleep || !b.dynamic() || b.free {
+                continue;
+            }
+            let mut m = b.motion_now();
+            m.reset_invalid_velocities(HAVOK_UNIT);
+            m.clamp_linear_velocity(HAVOK_UNIT);
+            m.clamp_angular_velocity(dt);
+            b.set_motion(&m);
         }
         // Contacts begun this step (Havok adds a contact point once).
         let now: HashSet<(usize, Toucher)> = self.this_step.keys().copied().collect();
@@ -891,10 +1002,12 @@ impl RigidWorld {
         let before: Vec<(Vec3, Quat, Vec3, Vec3)> =
             self.bodies.iter().map(|b| (b.x, b.q, b.v, b.w)).collect();
         for b in &mut self.bodies {
-            if b.asleep || !b.dynamic() {
+            if !b.solved() {
                 continue;
             }
-            b.v[2] -= GRAVITY * h;
+            // The solver's gravity per substep, × the gravity factor.
+            let g = crate::havok::from_half(b.motion.gravity_factor) * h * HAVOK_UNIT;
+            b.v = add(b.v, scale(crate::havok::GRAVITY, g));
             b.x = add(b.x, scale(b.v, h));
             b.moved_by = scale(b.v, h);
             b.q = rotated(b.q, scale(b.w, h));
@@ -903,7 +1016,7 @@ impl RigidWorld {
         // (each correction measured from where the last left the bodies).
         let mut touches: Vec<(usize, Other, Touch)> = Vec::new();
         for (i, tris) in nearby.iter().enumerate() {
-            if self.bodies[i].asleep || !self.bodies[i].dynamic() {
+            if !self.bodies[i].solved() {
                 continue;
             }
             for (tri, t) in self.world_touches(collider, i, tris) {
@@ -969,7 +1082,7 @@ impl RigidWorld {
         }
         // Velocities from the moves.
         for (b, (_, q, _, _)) in self.bodies.iter_mut().zip(&before) {
-            if b.asleep || !b.dynamic() {
+            if !b.solved() {
                 continue;
             }
             b.v = scale(b.moved_by, 1.0 / h);
@@ -987,22 +1100,6 @@ impl RigidWorld {
         }
         for c in &contacts {
             self.friction_pass(c, h);
-        }
-        for b in &mut self.bodies {
-            if b.asleep || !b.dynamic() {
-                continue;
-            }
-            let s = &b.setup;
-            b.v = scale(b.v, (1.0 - s.linear_damping * h).max(0.0));
-            b.w = scale(b.w, (1.0 - s.angular_damping * h).max(0.0));
-            let speed = length(b.v);
-            if s.max_linear_speed > 0.0 && speed > s.max_linear_speed {
-                b.v = scale(b.v, s.max_linear_speed / speed);
-            }
-            let spin = length(b.w);
-            if s.max_angular_speed > 0.0 && spin > s.max_angular_speed {
-                b.w = scale(b.w, s.max_angular_speed / spin);
-            }
         }
     }
 
@@ -1694,6 +1791,27 @@ mod tests {
         let mut c = Clock::new(0.016);
         assert_eq!(c.advance(0.013).0, 1);
         assert!(c.left() < 0.0);
+    }
+
+    #[test]
+    fn a_body_in_the_open_is_stepped_by_havoks_integrator() {
+        // Far above the floor: nothing near it, so each step is exactly
+        // `hkRigidMotionUtilApplyForcesAndStep` in game units.
+        let c = floor(0.0);
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(1, [10.0; 3], 5.0), (I3, [0.0, 0.0, 5000.0]));
+        w.wake(i);
+        w.bodies[i].w = [0.0, 0.0, 3.0];
+        let mut m = w.bodies[i].motion_now();
+        let g = scale(crate::havok::GRAVITY, STEP * HAVOK_UNIT);
+        for _ in 0..40 {
+            assert_eq!(w.update(&c, STEP), 1);
+            m.step(STEP, g, HAVOK_UNIT);
+            assert!(w.bodies[i].free);
+            assert_eq!(w.bodies[i].center(), m.center);
+            assert_eq!(w.bodies[i].velocity(), m.linear_velocity);
+            assert_eq!(w.bodies[i].spin(), m.angular_velocity);
+        }
     }
 
     #[test]

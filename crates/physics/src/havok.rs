@@ -279,6 +279,219 @@ impl SolverInfo {
     }
 }
 
+/// `hkpMotion::MotionType` values (Xbox PDB), the motion's `+0x08`.
+pub mod motion_type {
+    pub const DYNAMIC: u8 = 1;
+    pub const SPHERE_INERTIA: u8 = 2;
+    pub const BOX_INERTIA: u8 = 3;
+    pub const KEYFRAMED: u8 = 4;
+    pub const FIXED: u8 = 5;
+    pub const THIN_BOX_INERTIA: u8 = 6;
+    pub const CHARACTER: u8 = 7;
+}
+
+/// A rotation as a quaternion (x, y, z, w), as Havok keeps it.
+pub type Quat = [f32; 4];
+
+/// Any velocity component this big or bigger (or not a number) resets
+/// both velocities to zero (`00d28a30`, the zero vector at `01268370`).
+pub const VELOCITY_LIMIT: f32 = 1e6;
+/// The most half-turn a step may make, in the integrator's measure
+/// (|ω| dt ÷ π; `00d28a30`).
+pub const MAX_STEP_TURN: f32 = 0.9;
+/// 4 ÷ π² (as the executable has it).
+const FOUR_OVER_PI_SQ: f32 = 0.405_284_7;
+
+/// `q · r`, Havok's quaternion product (`00c66320`).
+// Translated from 00c66320 (decompiled, FalloutNV.exe 1.4.0.525)
+pub fn quat_mul(q: Quat, r: Quat) -> Quat {
+    [
+        r[3] * q[0] + q[3] * r[0] + (q[1] * r[2] - q[2] * r[1]),
+        r[3] * q[1] + q[3] * r[1] + (q[2] * r[0] - q[0] * r[2]),
+        r[3] * q[2] + q[3] * r[2] + (q[0] * r[1] - q[1] * r[0]),
+        r[3] * q[3] - (q[2] * r[2] + q[1] * r[1] + q[0] * r[0]),
+    ]
+}
+
+/// The quaternion made unit length (`005611c0` → `005611e0`; the
+/// executable takes the reciprocal square root with `rsqrtss` and one
+/// Newton step, here exactly).
+pub fn quat_normalize(q: Quat) -> Quat {
+    let l = q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3];
+    if l == 0.0 {
+        return q;
+    }
+    let s = 1.0 / l.sqrt();
+    [q[0] * s, q[1] * s, q[2] * s, q[3] * s]
+}
+
+/// A body's motion as Havok steps it (`hkpMotion`, 0x120 bytes at entity
+/// `+0xe0`; fields named by the Xbox PDB). Positions and velocities are in
+/// world units: Havok units scaled by the `unit` the step functions take.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Motion {
+    /// `m_type` (`+0x08`, [`motion_type`]).
+    pub kind: u8,
+    /// The swept transform's `m_centerOfMass1` (`+0x60`): the centre of
+    /// mass now; `m_centerOfMass0` (`+0x50`): at the step's start.
+    pub center: Vec3,
+    pub center0: Vec3,
+    /// `m_rotation1` (`+0x80`) and `m_rotation0` (`+0x70`).
+    pub rotation: Quat,
+    pub rotation0: Quat,
+    /// `m_linearVelocity` (`+0xd0`), `m_angularVelocity` (`+0xe0`, world).
+    pub linear_velocity: Vec3,
+    pub angular_velocity: Vec3,
+    /// `+0xb4`, `+0xb8`.
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+    /// `m_maxLinearVelocity`, `m_maxAngularVelocity` (hkUFloat8, `+0xbc`,
+    /// `+0xbd`; Havok units a second and radians a second).
+    pub max_linear_velocity: u8,
+    pub max_angular_velocity: u8,
+    /// `m_gravityFactor` (hkHalf, `+0x11e`).
+    pub gravity_factor: u16,
+    /// `m_objectRadius` (`+0xb0`, Havok units).
+    pub object_radius: f32,
+    /// `m_deactivationClass` (`+0xbe`).
+    pub deactivation_class: u8,
+    pub deactivation: Deactivation,
+}
+
+impl Motion {
+    /// A still motion at `center`/`rotation`, with a gravity factor of 1.
+    pub fn new(kind: u8, center: Vec3, rotation: Quat) -> Motion {
+        Motion {
+            kind,
+            center,
+            center0: center,
+            rotation,
+            rotation0: rotation,
+            linear_velocity: [0.0; 3],
+            angular_velocity: [0.0; 3],
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            max_linear_velocity: 255,
+            max_angular_velocity: 255,
+            gravity_factor: half(1.0),
+            object_radius: 0.0,
+            deactivation_class: 2,
+            deactivation: Deactivation::default(),
+        }
+    }
+
+    /// The forces part of a step: gravity × the gravity factor (not for
+    /// keyframed, fixed or character motions) and damping
+    /// v × max(0, 1 − dt × damping) for both velocities (not for keyframed
+    /// or fixed). The same rule builds the solver's velocity accumulators
+    /// (`hkRigidMotionUtilApplyForcesAndBuildAccumulators` `00d29830`),
+    /// whose gravity the solver adds per substep instead.
+    // Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn apply_forces(&mut self, dt: f32, gravity_per_step: Vec3) {
+        use motion_type::*;
+        match self.kind {
+            KEYFRAMED | FIXED => return,
+            CHARACTER => {}
+            _ => {
+                let gf = from_half(self.gravity_factor);
+                for (v, g) in self.linear_velocity.iter_mut().zip(gravity_per_step) {
+                    *v += gf * g;
+                }
+            }
+        }
+        self.apply_damping(dt);
+    }
+
+    /// Damping alone (`00d28a30`, `00d29830`).
+    pub fn apply_damping(&mut self, dt: f32) {
+        let l = (1.0 - dt * self.linear_damping).max(0.0);
+        self.linear_velocity = crate::vec::scale(self.linear_velocity, l);
+        let a = (1.0 - self.angular_damping * dt).max(0.0);
+        self.angular_velocity = crate::vec::scale(self.angular_velocity, a);
+    }
+
+    /// Both velocities reset to zero when any component is at least
+    /// [`VELOCITY_LIMIT`] Havok units (or not a number).
+    pub fn reset_invalid_velocities(&mut self, unit: f32) {
+        let limit = VELOCITY_LIMIT * unit;
+        let ok = |v: Vec3| v.iter().all(|c| c.abs() < limit);
+        if !(ok(self.linear_velocity) && ok(self.angular_velocity)) {
+            self.linear_velocity = [0.0; 3];
+            self.angular_velocity = [0.0; 3];
+        }
+    }
+
+    /// The linear velocity held to the most linear speed.
+    pub fn clamp_linear_velocity(&mut self, unit: f32) {
+        let max = UFLOAT8[self.max_linear_velocity as usize] * unit;
+        let v = self.linear_velocity;
+        let l2 = crate::vec::dot(v, v);
+        if max * max < l2 {
+            self.linear_velocity = crate::vec::scale(v, (1.0 / l2.sqrt()) * max);
+        }
+    }
+
+    /// The step's half turn `ω dt / 2` and the quaternion's w, with the
+    /// turn held to min(most angular speed × dt, [`MAX_STEP_TURN`]) in
+    /// the measure |a|² × 4/π² (the angular velocity scaled down with it).
+    fn half_turn(&mut self, dt: f32) -> Quat {
+        let h = dt * 0.5;
+        let mut a = crate::vec::scale(self.angular_velocity, h);
+        let mut x = crate::vec::dot(a, a) * FOUR_OVER_PI_SQ;
+        let lim = (UFLOAT8[self.max_angular_velocity as usize] * dt).min(MAX_STEP_TURN);
+        if lim * lim < x {
+            let s = (1.0 / x.sqrt()) * lim;
+            self.angular_velocity = crate::vec::scale(self.angular_velocity, s);
+            a = crate::vec::scale(a, s);
+            x = lim * lim;
+        }
+        let w = ((1.0 - x * 0.822_948) - x * x * 0.130_529) - x * 0.044_408 * x * x;
+        [a[0], a[1], a[2], w]
+    }
+
+    /// The angular velocity held as [`Motion::integrate`] holds it, without
+    /// turning the body (for bodies this solver's contacts move).
+    pub fn clamp_angular_velocity(&mut self, dt: f32) {
+        self.half_turn(dt);
+    }
+
+    /// The integration part of a step: invalid velocities reset, the swept
+    /// transform's start set to its end, the linear velocity clamped, the
+    /// centre moved by dt × v, the rotation turned by the half turn
+    /// (`q = (a, w) · rotation0`, normalized).
+    // Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn integrate(&mut self, dt: f32, unit: f32) {
+        self.reset_invalid_velocities(unit);
+        self.center0 = self.center;
+        self.clamp_linear_velocity(unit);
+        for k in 0..3 {
+            self.center[k] += dt * self.linear_velocity[k];
+        }
+        self.rotation0 = self.rotation;
+        let q = self.half_turn(dt);
+        self.rotation = quat_normalize(quat_mul(q, self.rotation0));
+    }
+
+    /// One step of a body with no constraints in its island
+    /// (`hkRigidMotionUtilApplyForcesAndStep`, Xbox PDB, `00d28a30`): the
+    /// forces, then the integration. `gravity_per_step` is gravity × dt in
+    /// world units (`hkpSolverInfo::m_globalAccelerationPerStep`). A fixed
+    /// motion isn't touched. (A thin box's extra inertia handling in that
+    /// function isn't translated: no thin-box bodies are simulated here.)
+    // Translated from 00d28a30 (decompiled, FalloutNV.exe 1.4.0.525)
+    pub fn step(&mut self, dt: f32, gravity_per_step: Vec3, unit: f32) {
+        if self.kind == motion_type::FIXED {
+            return;
+        }
+        self.apply_forces(dt, gravity_per_step);
+        self.integrate(dt, unit);
+    }
+}
+
+/// A motion's deactivation state (filled in by the deactivation step).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Deactivation {}
+
 /// The most steps one frame takes (`00c66760`: 3, or 1 when its second
 /// argument is set; the caller passes `00525420(...)` tested on a game
 /// mode of 4, not traced further: taken as unset).
@@ -380,6 +593,143 @@ impl Clock {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn body() -> Motion {
+        let mut m = Motion::new(
+            motion_type::BOX_INERTIA,
+            [0.0, 0.0, 100.0],
+            [0.0, 0.0, 0.0, 1.0],
+        );
+        m.max_linear_velocity = ufloat8(1068.0);
+        m.max_angular_velocity = ufloat8(31.57);
+        m
+    }
+
+    fn g_step(dt: f32) -> Vec3 {
+        crate::vec::scale(GRAVITY, dt)
+    }
+
+    #[test]
+    fn a_falling_body_follows_the_integrator_step_by_step() {
+        let mut m = body();
+        let dt = MAX_TIME;
+        let (mut v, mut z) = (0.0f32, 100.0f32);
+        for _ in 0..62 {
+            let before = z;
+            m.step(dt, g_step(dt), 1.0);
+            // By hand, in the same order and precision.
+            v += 1.0 * (-98.1 * dt);
+            v *= (1.0 - dt * 0.0f32).max(0.0);
+            z += dt * v;
+            assert_eq!(m.linear_velocity, [0.0, 0.0, v]);
+            assert_eq!(m.center, [0.0, 0.0, z]);
+            assert_eq!(m.center0[2], before);
+        }
+        // About a second: 98.1 × 0.992 s.
+        assert!((m.linear_velocity[2] + 98.1 * 62.0 * dt).abs() < 1e-3);
+        assert_eq!(m.rotation, [0.0, 0.0, 0.0, 1.0]);
+        // A gravity factor of 0 floats; keyframed and fixed bodies get no
+        // gravity.
+        let mut m = body();
+        m.gravity_factor = half(0.0);
+        m.step(dt, g_step(dt), 1.0);
+        assert_eq!(m.linear_velocity, [0.0; 3]);
+        for kind in [motion_type::KEYFRAMED, motion_type::FIXED] {
+            let mut m = body();
+            m.kind = kind;
+            m.step(dt, g_step(dt), 1.0);
+            assert_eq!(m.linear_velocity, [0.0; 3]);
+        }
+    }
+
+    #[test]
+    fn damping_takes_off_a_share_each_step() {
+        let mut m = body();
+        m.linear_damping = 0.1;
+        m.angular_damping = 0.05;
+        m.linear_velocity = [10.0, 0.0, 0.0];
+        m.angular_velocity = [0.0, 0.0, 2.0];
+        let dt = MAX_TIME;
+        let (mut v, mut w) = (10.0f32, 2.0f32);
+        for _ in 0..100 {
+            m.step(dt, [0.0; 3], 1.0);
+            v *= (1.0 - dt * 0.1f32).max(0.0);
+            w *= (1.0 - 0.05f32 * dt).max(0.0);
+            assert_eq!(m.linear_velocity[0], v);
+            assert_eq!(m.angular_velocity[2], w);
+        }
+        // Damping past 1/dt stops the body at once.
+        let mut m = body();
+        m.linear_damping = 100.0;
+        m.linear_velocity = [10.0, 0.0, 0.0];
+        m.step(dt, [0.0; 3], 1.0);
+        assert_eq!(m.linear_velocity, [0.0; 3]);
+    }
+
+    #[test]
+    fn speed_and_spin_are_capped() {
+        let dt = MAX_TIME;
+        // 2000 Havok units a second against the bottle's 1068.
+        let mut m = body();
+        m.linear_velocity = [2000.0, 0.0, 0.0];
+        m.step(dt, [0.0; 3], 1.0);
+        assert!((m.linear_velocity[0] - 1068.0).abs() < 1e-3);
+        assert!((m.center[0] - 1068.0 * dt).abs() < 1e-3);
+        // In game units, the same cap scaled.
+        let mut m = body();
+        m.linear_velocity = [2000.0 * 7.0, 0.0, 0.0];
+        m.step(dt, [0.0; 3], 7.0);
+        assert!((m.linear_velocity[0] - 1068.0 * 7.0).abs() < 1e-2);
+        // Spin: |ω| dt / π held to min(31.57 × dt, 0.9) = 0.505.
+        let mut m = body();
+        m.angular_velocity = [0.0, 0.0, 200.0];
+        m.step(dt, [0.0; 3], 1.0);
+        let cap = 31.57 * dt * std::f32::consts::PI / dt;
+        assert!(
+            (m.angular_velocity[2] - cap).abs() < 0.01,
+            "{:?}",
+            m.angular_velocity
+        );
+        // Under the cap, untouched; a quarter turn about z in 0.2 rad steps.
+        let mut m = body();
+        m.angular_velocity = [0.0, 0.0, 10.0];
+        m.step(dt, [0.0; 3], 1.0);
+        assert_eq!(m.angular_velocity[2], 10.0);
+        let a = 10.0 * dt * 0.5;
+        let x = a * a * FOUR_OVER_PI_SQ;
+        let w = ((1.0 - x * 0.822_948) - x * x * 0.130_529) - x * 0.044_408 * x * x;
+        let want = quat_normalize([0.0, 0.0, a, w]);
+        assert_eq!(m.rotation, want);
+        // The real half angle's sine and cosine, closely.
+        assert!((want[2] - a.sin()).abs() < 1e-4 && (want[3] - a.cos()).abs() < 1e-4);
+        // A big spin is held to 0.9 when the body allows more.
+        let mut m = body();
+        m.max_angular_velocity = 255;
+        m.angular_velocity = [500.0, 0.0, 0.0];
+        m.step(0.016, [0.0; 3], 1.0);
+        let cap = MAX_STEP_TURN * std::f32::consts::PI / 0.016;
+        assert!(
+            (m.angular_velocity[0] - cap).abs() < 0.05,
+            "{:?}",
+            m.angular_velocity
+        );
+    }
+
+    #[test]
+    fn invalid_velocities_are_reset() {
+        let mut m = body();
+        m.linear_velocity = [f32::NAN, 0.0, 0.0];
+        m.angular_velocity = [1.0, 0.0, 0.0];
+        m.step(MAX_TIME, [0.0; 3], 1.0);
+        assert_eq!(m.linear_velocity, [0.0; 3]);
+        assert_eq!(m.angular_velocity, [0.0; 3]);
+        let mut m = body();
+        m.max_linear_velocity = 255;
+        m.angular_velocity = [0.0, 2e6, 0.0];
+        m.step(MAX_TIME, [0.0; 3], 1.0);
+        assert_eq!(m.angular_velocity, [0.0; 3]);
+        assert_eq!(m.center, [0.0, 0.0, 100.0]);
+    }
 
     #[test]
     fn frames_run_whole_steps_and_carry_the_rest() {

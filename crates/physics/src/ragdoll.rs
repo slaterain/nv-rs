@@ -136,6 +136,9 @@ pub struct Ragdoll {
     /// Pairs of its own bodies that meet ([`parts_meet`]).
     pairs: Vec<(usize, usize)>,
     state: Vec<State>,
+    /// Each body's Havok motion: speed limits and deactivation state
+    /// (`crate::havok::Motion`; position and velocities are in `state`).
+    motions: Vec<crate::havok::Motion>,
     /// The world's step clock (`crate::havok::Clock`).
     pub clock: crate::havok::Clock,
     /// How long everything has been nearly still.
@@ -163,6 +166,20 @@ impl Ragdoll {
                 w: [0.0; 3],
             })
             .collect();
+        let motions = bodies
+            .iter()
+            .zip(&state)
+            .map(|(b, s): (&BodySetup, &State)| {
+                let mut m = crate::havok::Motion::new(crate::havok::motion_type::DYNAMIC, s.x, s.q);
+                m.max_linear_velocity =
+                    crate::rigid::speed_index(b.max_linear_speed / crate::HAVOK_UNIT);
+                m.max_angular_velocity = crate::rigid::speed_index(b.max_angular_speed);
+                m.object_radius = b.capsule.map_or(0.0, |(a, e, r)| {
+                    length(sub(a, b.center)).max(length(sub(e, b.center))) + r
+                }) / crate::HAVOK_UNIT;
+                m
+            })
+            .collect();
         let mut pairs = Vec::new();
         for i in 0..bodies.len() {
             for j in i + 1..bodies.len() {
@@ -177,6 +194,7 @@ impl Ragdoll {
             joints,
             pairs,
             state,
+            motions,
             clock: crate::havok::Clock::default(),
             still: 0.0,
             asleep: false,
@@ -326,8 +344,27 @@ impl Ragdoll {
                     .collect()
             })
             .collect();
+        // Havok's forces for a constrained island (`00d29830`): damping
+        // once a step, gravity per substep (below); after this solver's
+        // substeps, the velocity checks of `00d29bf0`.
+        for i in 0..self.bodies.len() {
+            if self.bodies[i].mass > 0.0 {
+                let mut m = self.motion(i);
+                m.apply_damping(STEP);
+                self.set_motion(i, &m);
+            }
+        }
         for _ in 0..SUBSTEPS {
             self.substep(collider, &nearby, h);
+        }
+        for i in 0..self.bodies.len() {
+            if self.bodies[i].mass > 0.0 {
+                let mut m = self.motion(i);
+                m.reset_invalid_velocities(crate::HAVOK_UNIT);
+                m.clamp_linear_velocity(crate::HAVOK_UNIT);
+                m.clamp_angular_velocity(STEP);
+                self.set_motion(i, &m);
+            }
         }
         // Asleep once everything has been nearly still for a second (this
         // solver's thresholds; Havok's deactivation isn't traced).
@@ -403,18 +440,28 @@ impl Ragdoll {
                 }
             }
         }
-        for (s, b) in self.state.iter_mut().zip(&self.bodies) {
-            s.v = scale(s.v, (1.0 - b.linear_damping * h).max(0.0));
-            s.w = scale(s.w, (1.0 - b.angular_damping * h).max(0.0));
-            let speed = length(s.v);
-            if speed > b.max_linear_speed && b.max_linear_speed > 0.0 {
-                s.v = scale(s.v, b.max_linear_speed / speed);
-            }
-            let spin = length(s.w);
-            if spin > b.max_angular_speed && b.max_angular_speed > 0.0 {
-                s.w = scale(s.w, b.max_angular_speed / spin);
-            }
-        }
+    }
+
+    /// Body `i` as a Havok motion (game units), its velocities and limits.
+    fn motion(&self, i: usize) -> crate::havok::Motion {
+        let (b, s) = (&self.bodies[i], &self.state[i]);
+        let mut m = self.motions[i];
+        m.center = s.x;
+        m.rotation = s.q;
+        m.linear_velocity = s.v;
+        m.angular_velocity = s.w;
+        m.linear_damping = b.linear_damping;
+        m.angular_damping = b.angular_damping;
+        m
+    }
+
+    fn set_motion(&mut self, i: usize, m: &crate::havok::Motion) {
+        self.motions[i] = *m;
+        let s = &mut self.state[i];
+        s.x = m.center;
+        s.q = m.rotation;
+        s.v = m.linear_velocity;
+        s.w = m.angular_velocity;
     }
 
     /// The inverse of a body's inertia, in the world, applied to `a`.
