@@ -261,7 +261,7 @@ animation, and do the same.
 
 ### Playtest of builds 23–24 (2026-10-07)
 
-**B24. Easy Pete's face is invisible.** Only his beard, moustache and
+**B24. Easy Pete's face is invisible.** Fixed by #34's texture-cache fix (checked on build 25). Only his beard, moustache and
 hat draw (reports 007, 008). #34's texture-cache fix (`ba8e864`: the
 shared cache freed textures still in use) fits the symptom; check on
 build 25 first. Next suspect if it persists: his `headold.nif` and its
