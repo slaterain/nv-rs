@@ -1188,6 +1188,22 @@ fn levels_come_as_the_game_works_them_out() {
     assert_eq!(xp::xp_for_level(&order, 2), 200.0);
     assert_eq!(xp::xp_for_level(&order, 3), 550.0);
     assert_eq!(xp::xp_for_level(&order, 30), 66_700.0);
+    // No XP yet: the base form gives 0 for it (`005f0fb0`), so a script
+    // testing it goes on (VCG04's revise prompt); the resistances only
+    // effects raise are 0 the same way.
+    assert_eq!(ask(&order, &scripts, &mut state, "player.GetAV XP"), 0.0);
+    assert_eq!(
+        ask(&order, &scripts, &mut state, "player.GetAV XP == 0"),
+        1.0
+    );
+    assert_eq!(
+        ask(&order, &scripts, &mut state, "player.GetAV RadResist"),
+        0.0
+    );
+    assert_eq!(
+        ask(&order, &scripts, &mut state, "player.GetAV FireResist"),
+        0.0
+    );
     let health_at_1 = world::combat::max_health(&order, &state, PLAYER_REF).unwrap();
     Runner::new(&order, &scripts, &mut state).run_source("player.SetAV Intelligence 5", None, None);
 

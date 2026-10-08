@@ -54,6 +54,7 @@ and held with its traced modifier and blur (`0086f450`, `00718ab0`,
 `00ba4270`); live: the Vigor Tester's room blurred, the Pip-Boy and a
 message box not ([MENU_FADES.md](MENU_FADES.md)).
 B33 (branch `claude/b33-greetings-chatter`): greetings' four remaining conditions and the held look (`008eeec0`, `008bc3d0`); live 9 → 5 greetings on a 240 s Goodsprings walk ([DIALOGUE.md](DIALOGUE.md)).
+B26/B30 (branch `claude/b26-b30-scripts`): Ringo's first-meeting line after the gunfight is the acceptance route skipping the meeting (say-once, `0061e600`; met first, he says "I owe you a huge favor" live); `GetAV XP` and other record-less actor values give the base form's 0 (`005f0fb0`), VCG04's revise box live at 0 XP.
 **Next action:** after Chazm's PR is merged and tasks reassigned, B14
 (opening), B23, then B1/B2 (physics), split into sub-PRs. The opening's
 Vigor Tester step has no acceptance route yet (the doc route starts at
