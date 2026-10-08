@@ -143,6 +143,13 @@ pub struct Walker {
     pub(crate) velocity: [f32; 3],
     /// The player's detection value at their last detection run.
     pub(crate) detected_player: i32,
+    /// A greeting tried with no line begun (the player's cooldown not over,
+    /// or no `HELLO` line): `008bc3d0` put the player in their ACTION
+    /// head-track slot all the same, and only the GREET procedure's end
+    /// (never reached) clears it, so it holds till the head-track update
+    /// empties the slots (`008a3100` step 4: the player no longer
+    /// detected).
+    pub(crate) greet_look: bool,
     pub(crate) social: Option<Social>,
     /// A dialogue package's steps (`world::ai::talk`): its travel over
     /// (walking up to the target may take them off the place; the game
@@ -309,6 +316,7 @@ impl Walker {
             avoidance: Avoidance::default(),
             velocity: [0.0; 3],
             detected_player: i32::MIN,
+            greet_look: false,
             social: None,
             talk_run: world::ai::talk::DialogueRun::begin(),
             head_track: HeadTrack::default(),
@@ -2871,7 +2879,25 @@ fn social_frame(
         .player_position
         .map(|p| distance(p, walker.position));
     let detected = walker.detected_player;
+    // The greeting that held the player in their ACTION slot is over once
+    // the head-track update emptied it.
+    if walker.head_track.in_slot(Slot::Action) != Some(PLAYER_REF) {
+        walker.greet_look = false;
+    }
+    // Their target (`008815a0` → process +0x40): their package's own
+    // reference target as it started (`0090a1a0`, `006780e0`), or the
+    // player a script's `StartConversation` sent them to.
+    let target_is_player = walker.talk_to.is_some()
+        || walker
+            .package
+            .and_then(|p| world::ai::Package::load(order, p))
+            .and_then(|p| p.target)
+            .is_some_and(|(kind, who, _)| kind == 0 && who == PLAYER_REF);
     let check = world::social::GreetingCheck {
+        // The player's AI conversation (+0x224): the viewer has none; a
+        // conversation with the player opens the dialogue menu, and the
+        // world stands still while it is open.
+        important_conversation: false,
         in_combat: ctx.state.combat.contains_key(&me),
         fleeing: walker.fleeing.is_some() || package_kind == Some(world::ai::kinds::FLEE),
         unconscious: ctx.state.unconscious.contains(&me),
@@ -2884,6 +2910,13 @@ fn social_frame(
         asleep: crate::sitting::sit_state(ctx.state, me) == 9,
         player_sneaking: ctx.state.player_sneaking,
         player_trespassing: greeter.player_trespassing,
+        target_is_player,
+        // Run-once packages (process +0xe4) aren't carried out here.
+        running_run_once: false,
+        head_track_asked: !walker.head_track.action_free(),
+        // Packages going on for the player (general flag 0x200, `0090a1a0`)
+        // aren't carried out here.
+        continuing_for_player: false,
         distance: player_distance.unwrap_or(f32::MAX),
         player_in_combat: greeter.player_in_combat,
         hellos_forbidden: walker
@@ -2896,10 +2929,18 @@ fn social_frame(
     // Busy: neither a greeting nor chatter (`008ef6cc`), but the
     // conversation check below still runs.
     let greeting = social.greeting(&check, &moves.social);
-    // A greeting (`008bc3d0`): only when nobody has greeted the player for
-    // `fHelloCooldownTime`; then `HELLO` said to the player through the
-    // GREET procedure, no dialogue menu (none found for them: nothing
-    // said, but their timer and the cooldown are set all the same).
+    // A greeting (`008bc3d0`): the player goes in their ACTION head-track
+    // slot (`+0x628`) whatever comes of it; only when nobody has greeted
+    // the player for `fHelloCooldownTime`, `HELLO` said to the player
+    // through the GREET procedure, no dialogue menu (none found for them:
+    // nothing said, but their timer and the cooldown are set all the same).
+    // A greeting not begun leaves the slot set ([`Walker::greet_look`]), so
+    // they aren't near again (`CanSetActionHeadTrackTarget`) till the
+    // player is lost from their sight.
+    if greeting == world::social::Greeting::Greet {
+        walker.head_track.set(Slot::Action, Some(PLAYER_REF));
+        walker.greet_look = true;
+    }
     if greeting == world::social::Greeting::Greet && greeter.cooldown.free() {
         social.greeted(&moves.social);
         greeter.cooldown.greeted(greeter.now_ms);
@@ -2921,7 +2962,8 @@ fn social_frame(
         );
         if let Some(info) = line {
             lines.say_to(me, PLAYER_REF, info);
-            walker.head_track.set(Slot::Action, Some(PLAYER_REF));
+            // Their line's end lets the slot go (`008dbe30`, `+0x644(1)`).
+            walker.greet_look = false;
             // They turn to the player standing, unless their package is
             // one that keeps them busy (GREET, `008dbe30`).
             let busy = matches!(
@@ -2971,22 +3013,32 @@ fn social_frame(
             }
         }
     }
-    // Conversations with others (`00904800`): not while asleep or in sleep,
-    // use item at, ambush, guard, dialogue or use weapon packages; a
-    // sandbox only if it allows them; follow, escort and accompany only
-    // with their target. Not looked for while their GREET flag is up or
-    // someone says a line to the player (`008eeec0` at `008efa4e`), nor
-    // (as before, inferred) while they say a line.
-    if check.greeting_line || check.player_spoken_to || lines.is_saying(me) {
+    // Conversations with others (`00904800`): only with a package, not one
+    // the game makes (`00678610`) nor one that forbids them (`008a78f0(1)`,
+    // `world::social::package_forbids_conversations`); not while asleep or
+    // in sleep, use item at, ambush, guard, dialogue or use weapon
+    // packages; a sandbox only if it allows them; follow, escort and
+    // accompany only with their target. Not looked for while someone talks
+    // in the player's AI conversation, their GREET flag is up or someone
+    // says a line to the player (`008eeec0` at `008efa4e`), nor (as before,
+    // inferred) while they say a line.
+    if check.important_conversation
+        || check.greeting_line
+        || check.player_spoken_to
+        || lines.is_saying(me)
+    {
         walker.social = Some(social);
         return;
     }
-    let allowed = match package_kind {
+    let allowed = walker.package.is_some_and(|p| {
+        !package_kind.is_some_and(world::social::made_package_kind)
+            && !world::social::package_forbids_conversations(order, p)
+    }) && match package_kind {
         Some(4) | Some(8) | Some(9) | Some(14) | Some(15) | Some(16) => false,
         Some(12) => walker.package.is_some_and(|p| {
             world::sandbox::package_flags(order, p) & world::sandbox::flags::NO_CONVERSATION == 0
         }),
-        _ => walker.package.is_some(),
+        _ => true,
     };
     let only = match package_kind {
         Some(1) | Some(2) | Some(7) => walker
@@ -3064,7 +3116,7 @@ fn head_track_asks(
         walker.head_track.set(slot, Some(PLAYER_REF));
     }
     let saying = lines.is_saying(me) || (with_player && !in_menu);
-    if walker.head_track.in_slot(Slot::Action).is_some() && !saying {
+    if walker.head_track.in_slot(Slot::Action).is_some() && !saying && !walker.greet_look {
         walker.head_track.clear(Slot::Action, true, settings);
     }
     let talking = chats.0.contains_key(&me) || (with_player && in_menu);
@@ -5318,15 +5370,26 @@ mod tests {
         frame(&mut state, &mut chatty, &mut lines, &mut cooldown, 1_000);
         assert!(!lines.is_saying(FormId(fixture::CHATTY_REF)));
         assert_eq!(chatty.social.as_ref().unwrap().greeting, 0.0);
-        // The line over, still within the cooldown: nobody greets.
+        // The line over, still within the cooldown: nobody greets, but
+        // Chatty, ready to, looks at the player (its ACTION slot,
+        // `008bc3d0`) and holds the look.
         let mut lines = Lines::default();
         frame(&mut state, &mut chatty, &mut lines, &mut cooldown, 20_000);
         assert_eq!(chatty.social.as_ref().unwrap().greeting, 0.0);
         assert!(lines.queue.is_empty());
-        // 30 s after the greeting the cooldown is over: Chatty greets (it
-        // has no line for the player, but its timer and the cooldown are
-        // set all the same).
+        assert_eq!(chatty.head_track.in_slot(Slot::Action), Some(PLAYER_REF));
+        // B33: 30 s after the greeting the cooldown is over, but someone
+        // asked to look at someone isn't near (`CanSetActionHeadTrackTarget`,
+        // `00901460`): no greeting while the look holds.
         frame(&mut state, &mut chatty, &mut lines, &mut cooldown, 31_001);
+        assert_eq!(chatty.social.as_ref().unwrap().greeting, 0.0);
+        assert!(cooldown.free());
+        // The head-track update lets the player go (`008a3100` step 4, the
+        // player lost from sight); seen again, Chatty greets (it has no
+        // line for the player, but its timer and the cooldown are set all
+        // the same).
+        chatty.head_track.clear_all();
+        frame(&mut state, &mut chatty, &mut lines, &mut cooldown, 32_000);
         assert_eq!(chatty.social.as_ref().unwrap().greeting, 20.0);
         assert!(!cooldown.free());
         // The greeter's own timer was set by its greeting.

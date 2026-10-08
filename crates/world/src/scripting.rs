@@ -2631,6 +2631,24 @@ impl Facts<'_> {
         if let 47..=51 | 53..=55 | 62..=75 = index {
             return Some(0.0);
         }
+        // What the base form's actor value getter (`005f0fb0`, the
+        // `TESActorBase` owner's `+8`; people's skills first go through
+        // `00607850`) gives for the values no record field holds: 0, so
+        // `player.GetAV XP` is 0 before any XP (the script handler,
+        // `0059c4f0`, always sets its result from the actor's owner `+0xc`,
+        // `0093acb0` for the player: that base plus the modifiers). Poison,
+        // radiation, fire, electric, frost, energy and EMP resistance only
+        // effects raise. Speed mult is `ACBS`'s (case `0x15`, `008f21d0`).
+        if let 19 | 20 | 24 | 52 | 58..=61 = index {
+            return Some(0.0);
+        }
+        if index == 21 {
+            let acbs = record.get(ACBS).filter(|s| s.data.len() >= 16)?;
+            return Some(f64::from(u16::from_le_bytes([
+                acbs.data[14],
+                acbs.data[15],
+            ])));
+        }
         // Assistance (`AIDT` byte 14).
         if index == 57 {
             let (_, record) =

@@ -53,12 +53,18 @@ B31 (branch `claude/b31-menu-blur`): the world behind menus captured once
 and held with its traced modifier and blur (`0086f450`, `00718ab0`,
 `00ba4270`); live: the Vigor Tester's room blurred, the Pip-Boy and a
 message box not ([MENU_FADES.md](MENU_FADES.md)).
+B33 (branch `claude/b33-greetings-chatter`): greetings' four remaining conditions and the held look (`008eeec0`, `008bc3d0`); live 9 → 5 greetings on a 240 s Goodsprings walk ([DIALOGUE.md](DIALOGUE.md)).
+B26/B30 (branch `claude/b26-b30-scripts`): Ringo's first-meeting line after the gunfight is the acceptance route skipping the meeting (say-once, `0061e600`; met first, he says "I owe you a huge favor" live); `GetAV XP` and other record-less actor values give the base form's 0 (`005f0fb0`), VCG04's revise box live at 0 XP.
 **Next action:** after Chazm's PR is merged and tasks reassigned, B14
 (opening), B23, then B1/B2 (physics), split into sub-PRs. The opening's
 Vigor Tester step has no acceptance route yet (the doc route starts at
 stage 110).
 B1 PRs 1-4 (`claude/b1-havok-step`, 2026-10-07): the game's own Havok world constants, step driver, single-body integrator and sleeping translated (`physics::havok`; the invented sleep rules gone; contacts still this solver's until PR 7). Verified live: the VCG02 bottles stay on the rail, a shot one comes to rest and stays. Evidence: [PHYSICS.md](PHYSICS.md). **Next action:** B1 PR 5 (simulation islands).
 B1 PR 10 (`claude/b1-character-proxy`, 2026-10-08): every walker moved by the game's own controller (Bethesda's states, steps, walls and slopes around Havok's proxy and simplex solver, `physics::controller`/`proxy`/`simplex`); acceptance passes; B25's waist-deep walking not seen live. Next: pushing bodies (`applySurfaceInteractions`) and swimming.
+
+B1 PR 5 (`claude/b1-p5-islands`): Havok's simulation islands translated (`physics::islands`: swept broadphase boxes `00d1a330`, pairs merge islands `00cc0f40`/`00cb4c60` so a moving body wakes a sleeper when their boxes meet, parted pairs split at the next step `00cb6060`, sleep and wake per island through the dirty list `00cb55d0`). Evidence: [PHYSICS.md](PHYSICS.md) "Simulation islands". **Next action:** B1 PR 6 (contact manager).
+B1 PR 6 (`claude/b1-p6-contacts`): Havok's contact manager translated (`physics::manifold`: points per agent kept within 0.1 Havok units, properties `00cfd800`, pairing `00d92df0`, removal `00cfd200`; one "contact point added" event per new point `00cfcf80` → `00d01850`, so resting bodies stop re-sounding). Evidence: [PHYSICS.md](PHYSICS.md) "Contact points". **Next action:** B1 PR 7 (contact solver).
+B1 PR 7 (`claude/b1-p7-solver`): Havok's contact solver translated (`physics::solver`: accumulators `00d29830`, new-point callbacks `00d92900`, contact and friction Jacobians `00d72190`, `hkSolveConstraints` `00d8d030` with 4 substeps and the integrated-velocity sums, export `00def570`, apply `00d29bf0`); this solver's XPBD contacts deleted. Contact resting velocity FLT_MAX turns off Havok's immediate bounce. Evidence: [PHYSICS.md](PHYSICS.md) "The contact solver". **Next action:** B1 PR 8 (ragdoll constraints).
 
 Overnight batches, 2026-10-06 (local session; integration branch
 `claude/overnight-integration`, not merged into `main`; each batch also has
@@ -675,6 +681,8 @@ hit's push only after a hit; the dead go limp with the AI held still
 B12 (`claude/b12-doc-dialogue`): Doc's door conversation no longer restarts forever: a dialogue package that has talked is finished (`005fa330` saves it at DONE, `008b1070`/`00913250` restore it, `0090a1a0` keeps the same package), the menu opens an update after `InitiateDialogue`, AI holds still under message boxes, and an own-delay quest's first run is traced (`005ac1e0`). Verified live: hardcore box, no new conversation, VCG01 completes, Doc sandboxes; not compared with the original ([DIALOGUE.md](DIALOGUE.md)). **Next action:** watch the farewell in the original game.
 
 B29 (`claude/b29-revise-loop`, 2026-10-07): the revise prompt (`VCG04`, out past Goodsprings, not Doc's door) kept coming back: `GetButtonPressed` was one value any script could take, and the activator `MoveTo player` moved didn't run where it was moved, so answers fired later back in Goodsprings. Now a box's button is its shower's only (`005b4630`/`005b4940`/`005b4a80`) and moved references run in the cell under them (`005ccb20` → `00573800` → `00548230`); `StartQuest` resets nothing (`005c71c0`). Verified live at the border (rebuild, asked once more, Finished ends it); not compared with the original ([OPENING.md](OPENING.md)). **Next action:** the face and SPECIAL chargen menus the prompt opens.
+
+B32 (`claude/b32-dlc-rerun`, 2026-10-07): DLC start messages "again on a later cell change" were each acceptance route starting a new game; script variables already persist across cell changes as in the game (`00455490`, `ExtraScript` via `00565870`). Verified live (three `MoveTo` cell changes, each DLC message once) and by `ref_scripts::once_only_guards_survive_cell_changes` ([SCRIPTS_RUNTIME.md](SCRIPTS_RUNTIME.md)). **Next action:** none.
 
 B3 (`claude/b3-crosshair-pick`, 2026-10-07): the crosshair pick is the
 game's view caster (`0070bc20` → `00631d60`: layer-40 sphere cast, exact

@@ -129,7 +129,9 @@ foreach ($r in $chosen) {
     # box answered "Finished - Travel Onward" (its third button).
     $a = @($Data) + $spec.Args + @('--answer-boxes', '--box-answers', '2', '--screenshot', $shot)
     if ($Background) { $a += '--background' }
-    Write-Host "== $r"
+    # Each route is its own viewer run: a new game, so the DLC start
+    # messages show again in every route that starts outside Doc's house.
+    Write-Host "== $r (new game)"
     $start = Get-Date
     # Windows PowerShell turns a native program's stderr lines into errors.
     $ErrorActionPreference = 'Continue'
