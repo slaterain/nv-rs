@@ -329,6 +329,10 @@ pub struct Sitter {
     /// the frame the heading changes, not blended across it. The caller
     /// takes it (and clears it) after each [`Sitter::update`].
     pub skip_next_blend: bool,
+    /// The furniture's model has collision (`004b66d0` counts its 3D's
+    /// collision objects, asked by the process's `00920fd0`): the caller
+    /// sets it, from the model. See [`Sitter::others_pass_through`].
+    pub furniture_collides: bool,
 }
 
 /// The idle tree's answer for someone using furniture, asked with
@@ -356,6 +360,7 @@ impl Sitter {
             position,
             heading,
             skip_next_blend: false,
+            furniture_collides: false,
         }
     }
 
@@ -390,7 +395,31 @@ impl Sitter {
             position,
             heading,
             skip_next_blend: false,
+            furniture_collides: false,
         }
+    }
+
+    /// Whether other people's character controllers pass through this
+    /// one's (translated from `00920d00`, the process's sit-state setter,
+    /// and `00c711d0`, the controller's contact callback; FalloutNV.exe
+    /// 1.4.0.525). Entering "want to sit" or "want to sleep" (or seated
+    /// straight from "load sit idle", 1 → 4, and 6 → 9), when
+    /// `00920fd0` holds — a sit marker (`00509510`: 10–20, 26) or a bed
+    /// marker (`005094f0`: under 10) on furniture whose model has
+    /// collision — the setter sets flag 0x08000000 on the actor's
+    /// controller (+0x410 → +0x414, through `00629670`); "want to stand",
+    /// "want to wake" or back to normal clears it. A controller meeting a
+    /// character (layer 30) whose controller has that flag drops the
+    /// contact (its plane's normal and velocity zeroed). So from sitting
+    /// down until getting up begins, a sitter doesn't block anyone; while
+    /// getting up they do again.
+    pub fn others_pass_through(&self) -> bool {
+        use SitState::*;
+        matches!(
+            self.state,
+            WantToSit | WaitingForSitAnim | Sitting | WantToSleep | WaitingForSleepAnim | Sleeping
+        ) && self.furniture_collides
+            && (is_sit_marker(self.marker.number) || self.marker.number < 10)
     }
 
     /// Whether they've reached the marker: within [`SIT_REACH`].
@@ -609,6 +638,75 @@ pub fn taken_markers(
         .filter(|(who, s)| **who != except && s.furniture == furniture)
         .map(|(_, s)| s.marker.index)
         .collect()
+}
+
+/// Whether two references are in the same cell now (`00575ca0`, the
+/// parent cell): interiors by their cell; outdoors by the worldspace and
+/// the grid square (4096 units) each stands in, since the game keeps an
+/// exterior reference in the cell under it (persistent ones included).
+pub fn same_cell(
+    order: &LoadOrder,
+    state: &crate::scripting::GameState,
+    a: FormId,
+    b: FormId,
+) -> bool {
+    let (Some((space_a, cell_a, at_a, _)), Some((space_b, cell_b, at_b, _))) =
+        (state.place(order, a), state.place(order, b))
+    else {
+        return false;
+    };
+    if space_a != cell_a || space_b != cell_b {
+        let square = |p: [f32; 3]| ((p[0] / 4096.0).floor(), (p[1] / 4096.0).floor());
+        return space_a == space_b && square(at_a) == square(at_b);
+    }
+    cell_a == cell_b
+}
+
+/// The furniture and marker the game puts someone straight into once a
+/// cell has loaded (translated from `00972d30`, FalloutNV.exe 1.4.0.525).
+/// That pass runs after an interior or exterior cell load (`00453dc0`,
+/// `00454450`, `004512c0`) and after the player is moved (`0093cdf0`),
+/// over every high-process actor (`00968670`) that isn't disabled or dead,
+/// isn't in combat and isn't using furniture (sit state 0). Its current
+/// package's target (`00881650`), else the package location's reference
+/// (`0067f390`: "near a reference"), is taken when it is furniture (base
+/// form type 0x27) in the actor's cell; then the first marker its `MNAM`
+/// allows that nobody occupies (`005682c0` with 1: occupied bits only),
+/// placed (`00568500`) — and the instant sit `0088d2f0` seats them there
+/// ([`Sitter::seated`]). `candidates` are those two in that order;
+/// `placed` gives a piece of furniture's markers where it stands. None
+/// when the first candidate in the cell has no marker free (the game then
+/// doesn't seat them; what it does instead, `006d6f80`, isn't traced).
+///
+/// Not carried out here: the patrol branch (a patrol package's current
+/// point), the linked-reference location (`00569b80`), the process's
+/// fallback (+0x514), and the eat and sleep packages' search of the cell
+/// for a free chair or bed.
+pub fn seat_on_load(
+    order: &LoadOrder,
+    state: &crate::scripting::GameState,
+    who: FormId,
+    candidates: &[FormId],
+    placed: impl Fn(FormId) -> Option<Vec<PlacedMarker>>,
+) -> Option<(FormId, PlacedMarker)> {
+    let furniture = candidates.iter().copied().find(|&f| {
+        crate::scripting::GameState::is_furniture(order, f) && same_cell(order, state, who, f)
+    })?;
+    let base = crate::scripting::base_of(order, furniture)?;
+    let flags = marker_flags(order, base);
+    let markers = placed(furniture)?;
+    // Occupied: marked by the sit update or an instant sit (`00568020`),
+    // so whoever has begun sitting there; someone still on the way only
+    // reserves it, which this pass doesn't ask.
+    let occupied: Vec<u8> = state
+        .sitters
+        .iter()
+        .filter(|(o, s)| **o != who && s.furniture == furniture && s.state != SitState::Normal)
+        .map(|(_, s)| s.marker.index)
+        .collect();
+    let index = first_free(&markers, flags, |i| occupied.contains(&i))?;
+    let marker = markers.iter().find(|m| m.index == index).copied()?;
+    Some((furniture, marker))
 }
 
 /// What activating a piece of furniture does (`TESFurniture::Activate`,

@@ -395,3 +395,85 @@ fn a_sandbox_finds_what_its_package_and_the_owners_allow() {
     assert!(seen.contains(&activities::SIT) && seen.contains(&activities::WANDER));
     state.stand(me);
 }
+
+/// The pass after a cell loads (`00972d30`): someone whose package sends
+/// them to a chair in their cell is put straight into its first free
+/// usable marker, seated there (`0088d2f0`), even standing behind it with
+/// the chair in the way; and from sitting down until getting up begins
+/// nobody else's controller is stopped by them (`00920d00`, `00c711d0`).
+#[test]
+fn a_cell_load_seats_someone_at_once_and_others_pass_sitters() {
+    let (_data, order) = order("sitting-on-load");
+    let mut state = GameState::new(&order);
+    let me = FormId(SITTER_REF);
+    let other = FormId(OWNER_REF);
+    let chair = FormId(CHAIR_REF);
+    // The chair 100 east: its front marker (14, the only one its MNAM
+    // 0x40000001 allows) and a side one (11, not usable).
+    let markers = [
+        nif::FurnitureMarker {
+            offset: [0.0, 60.0, -30.0],
+            heading: std::f32::consts::PI,
+            marker: 14,
+        },
+        nif::FurnitureMarker {
+            offset: [-50.0, 0.0, -30.0],
+            heading: std::f32::consts::FRAC_PI_2,
+            marker: 11,
+        },
+    ];
+    let placed = furniture::place_markers(&markers, [100.0, 0.0, 0.0], 0.0, 1.0);
+    let at = |_: FormId| Some(placed.clone());
+    // They stand at the origin, behind the chair's back from its front
+    // marker; not furniture (themselves) is passed over.
+    let (f, marker) = furniture::seat_on_load(&order, &state, me, &[me, chair], at).unwrap();
+    assert_eq!((f, marker.index, marker.number), (chair, 0, 14));
+    let settings = MarkerSettings::read(&order, 14);
+    let mut pick = |_: u8, _: u8, _: u8| Some((FormId(CHAIR_DYNAMIC_IDLE), "loop.kf".to_string()));
+    let mut seated = Sitter::seated(chair, marker, settings, 1.0, &mut pick);
+    let (seat, heading) = furniture::seat(&marker, &settings, 1.0);
+    assert_eq!(seated.state, SitState::Sitting);
+    assert_eq!((seated.position, seated.heading), (seat, heading));
+    assert!(seated.dynamic_idle.is_some());
+
+    // Someone on the way to that marker only reserves it: still free.
+    state.furniture.insert(other, chair);
+    state
+        .sitters
+        .insert(other, Sitter::new(chair, marker, settings, [0.0; 3], 0.0));
+    assert!(furniture::seat_on_load(&order, &state, me, &[chair], at).is_some());
+    // Someone sitting in it occupies it: no free marker, not seated.
+    state.sitters.insert(
+        other,
+        Sitter::seated(chair, marker, settings, 1.0, &mut pick),
+    );
+    assert!(furniture::seat_on_load(&order, &state, me, &[chair], at).is_none());
+    state.stand(other);
+    state.sitters.remove(&other);
+    // A chair in another cell isn't theirs to sit in at once.
+    state.spaces.insert(chair, (FormId(0xABC), FormId(0xABC)));
+    assert!(furniture::seat_on_load(&order, &state, me, &[chair], at).is_none());
+
+    // Seated in furniture with collision: others pass through them; not
+    // when the furniture has none, and not once getting up has begun.
+    assert!(!seated.others_pass_through());
+    seated.furniture_collides = true;
+    assert!(seated.others_pass_through());
+    seated.stand_up();
+    let mut ask = |sitting: u8, _: u8, _: u8| {
+        (sitting == 4).then(|| {
+            (
+                FormId(CHAIR_FRONT_STAND),
+                "Chair_ForwardExit.kf".to_string(),
+            )
+        })
+    };
+    let mut anims = Anims;
+    seated.update(0.0, false, &mut ask, &mut anims);
+    assert_eq!(seated.state, SitState::WantToStand);
+    assert!(!seated.others_pass_through());
+    // On the way in (before sitting down) they still block.
+    let mut walking = Sitter::new(chair, marker, settings, [0.0; 3], 0.0);
+    walking.furniture_collides = true;
+    assert!(!walking.others_pass_through());
+}

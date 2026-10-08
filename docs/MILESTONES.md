@@ -778,6 +778,8 @@ obstacle manager registers only forms flagged 0x02000000 (no furniture),
 so it isn't why the game's Doc gets round his chair; not ported, cause
 open: [OPENING.md](OPENING.md) B14, [PATHING.md](PATHING.md).
 
+B14 fixed `claude/b14-doc-seated` (2026-10-07): after a cell load, the game seats loaded actors in their package's furniture (`00972d30` → `0088d2f0`), so Doc is seated from the first frame. Also, people sitting down or seated no longer block others (`00920d00`/`00c711d0`). Verified live (Doc, Easy Pete): [OPENING.md](OPENING.md) B14.
+
 ## Original `.fos` saves (M7 research, `claude/fos-saves`, 2026-10-07)
 
 Format and scope written down from the exe's writer and reader and checked

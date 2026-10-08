@@ -128,14 +128,17 @@ pub fn game_point(p: Vec3) -> [f32; 3] {
 /// radius comes from its skeleton (`fighting::Kit`), its height taken as
 /// 128 × its scale (a guess: the game sizes it from the skeleton's
 /// `BSBound`). The dead don't block (their bodies are on the `DEADBIP`
-/// layer, which the player's controller passes).
+/// layer, which the player's controller passes), nor do people sitting
+/// down or seated in furniture (`ai::passed_through`).
 fn people(
     walkers: &Query<&crate::ai::Walker>,
     state: &world::scripting::GameState,
 ) -> Vec<physics::Person> {
     walkers
         .iter()
-        .filter(|w| !state.dead.contains(&w.reference))
+        .filter(|w| {
+            !state.dead.contains(&w.reference) && !crate::ai::passed_through(state, w.reference)
+        })
         .map(|w| {
             let creature = w.kit.as_ref().is_some_and(|k| k.creature.is_some());
             physics::Person {

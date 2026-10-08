@@ -79,93 +79,109 @@ Raw records, assembly, copied saves
 and decompilation remain outside the repository in nv-re/work/codex-m1 and
 nv-re/decomp/codex-m1.
 
-## B14: Doc's chair, the menu camera and the help-up (traced, not fixed)
+## B14: Doc's chair, the menu camera and the help-up
 
-Branch `claude/b14-opening`, 2026-10-07. Research only; no code changed.
-Private logs and window captures in `%USERPROFILE%\nv-re\work\b14`.
+Research on `claude/b14-opening` and `claude/b14-navmesh-obstacles`; the
+fix on `claude/b14-doc-seated` (2026-10-07). Private logs and window
+captures in `%USERPROFILE%\nv-re\work\b14` and `...\b14-seated`.
 
-### Doc not sitting at the start
+### Doc seated at the start (fixed)
 
-Seen live (release viewer, `--new-game --no-movies --answer-boxes`):
-Doc's first package is `VCG01DocMitchellFirstPosition` (`00104C1D`,
-travel, no conditions, location the chair `001059B0`, `Chair01F`, MNAM
-0x40000004 so only marker number 14, the front). He is placed (ACHR
-`00104C0F`, 2289,2244) about 24 units behind the chair's back, while the
-front marker is at about 2293,2322, beside the bed. The navmesh path
-runs straight through the chair (2288,2244 → 2288,2304 → 2293,2322); the
-chair's collision (`Chair01.NIF`, one triangle mesh, layer 1 STATIC, which
-the character layer collides with, PHYSICS.md) pushes his controller back
-to 2280,2226, and he is "stuck" every 1.5 s for the whole opening. Older
-viewer logs (before actors had controllers, `codex-m1/doc-evp-opening.log`)
-show him walking through and seated by 4.7 s.
+The maintainer, who played the original: Doc is already sitting in the
+chair beside the bed when the view clears, and gets up only to help the
+player stand. The earlier notes here said no start-seated path exists and
+the game walks him round the chair under the fade. **That was wrong**: it
+rested on "the instant sit `0088d2f0` is the player's". Its second caller,
+`00972d30`, is the game's pass over every loaded actor once a cell has
+loaded, and it seats Doc before the first frame.
 
-What the game does (FalloutNV.exe 1.4.0.525):
-- The travel's furniture case `00915f10` (MiddleHighProcess +0x7c8) →
-  `00921350` (turn to the marker's heading or set it, sit request +0x614(4))
-  → the sit procedure `00904f50`: 40 or more from the marker copy, an NPC
-  gets a path request to it with radius 40 (`008b3690`, the player is
-  `SetPos`'d instead); within 40 the sit update `009213e0` puts him on the
-  marker and plays the entry. The viewer does the same.
-- No "start seated" path was found. The sit state lives only in the
-  middle-high process: its setter `00920d00` is in the HighProcess and
-  MiddleHighProcess vtables only (`01087d24`, `0108950c`), so the low
-  process never seats anyone; the 3D-attach handler `00925700` (+0x564)
-  only re-places actors already in a sit state; the instant sit `0088d2f0`
-  is the player's (callers `0093bea0`, `00972d30`). The first-run branch on
-  process +0x22a in `008eeec0`/`00915f10` calls +0x2ac = `00922ad0` →
-  `0088d640` (release), not a seat.
-- So the game walks him round to the front marker. The intro's fade
-  (`VCG01FadeInFromBlackISFX`, 7.0 s) and the 6 s wake-up cover a walk of
-  that length and the 1.7 s `Chair_ForwardEnter.kf`, which fits him being
-  seated when the view clears.
-- How the game's path goes round the chair is the missing piece: the game
-  has a navmesh obstacle system (`NavMeshObstacleManager`, singleton getter
-  `006c0720`, constructor `006c02c0`, called from reference code such as
-  `0056b2d0`, `005702e0`, `00570f70`; `ReferenceObstacleArray`,
-  `bhkObstacleDeactivationListener`, `bUseObstacleAvoidance:Pathfinding`,
-  `fObstacleUpdateDeltaWhenMoving`) that the viewer's pathing doesn't have.
-  Which references it cuts out of the navmesh, and how, isn't traced.
+The pass (FalloutNV.exe 1.4.0.525, decompiled):
+- Callers: the interior and exterior cell loads (`00453dc0`, `00454450`,
+  `004512c0`), and the player being moved (`0093cdf0`). `00975d10` also
+  calls it.
+- Who it covers: each actor in the high process list (`005be5c0(0)`,
+  `00968670`) that isn't disabled and isn't dead (`004938e0`). It also
+  skips actors where `008a3b30` holds (read here as "in combat") and
+  anyone already in furniture (sit state 0 only), and it needs the
+  process level to be high (`0045cd60` = 0).
+- Which furniture: the current package's target (`00881650`), else its
+  location's reference (`00886080` → `0067f390`, "near a reference";
+  linked reference `00569b80`), else the process's fallback (+0x514).
+  It must be `FURN` (`00568680`, type 0x27) in the actor's own cell
+  (`00575ca0`). A patrol package uses its current point. Eat and sleep
+  packages search the cell for a free chair or bed instead.
+- Which marker: the first one the `MNAM` allows that nobody occupies
+  (`005682c0` with 1, so only the occupied bits, extra 0x12, count, not
+  reservations). `00568500` places it into the process's marker copy.
+- The instant sit `0088d2f0`: heading = marker heading; position = marker
+  + the marker number's `fFurnitureMarkerNNDelta*`, turned by the heading
+  (`00509920`); SetPos; the marker is marked occupied (`00568020`);
+  heading += `HeadingDelta` (`00931d30`); sit state 1, then the seated
+  loop is loaded (+0x4d8). If there is none, it logs "%s went to sit at %s
+  and had no animation" and sets state 0; otherwise state 4.
 
-Traced on `claude/b14-navmesh-obstacles` (2026-10-07): **the obstacle
-manager doesn't touch Doc's chair.**
-- A reference is a navmesh obstacle only when
-  `TESObjectREFR::GetObstacle` (Xbox PDB; REFR vtable `0102f55c` slot
-  0x15c = `00564bc0`) says so: its base form's `TESForm::GetObstacle`
-  (slot 0xb0, `00401210`), which is the form flag 0x02000000. Every
-  registration is gated on it: cell attach/detach
-  (`TESObjectCELL::AddObstaclesAndDoors`/`RemoveObstaclesAndDoors` (Xbox
-  PDB) `005575d0`/`005576c0` → `AddObstacleForReference` `006c0c30` /
-  `RemoveObstacleForReference` `006c0c80`), 3D load and unload
-  (`0056b2d0`, `005702e0`, `00570f70`); doors go their own way (closed
-  doors, `006c0f10`/`006c1060`, already in `world::ai::doors`).
-- `Chair01F` (FURN `000157F2`) has record flags 0x20000000 only; no FURN in
-  FalloutNV.esm has 0x02000000 (0 of 234). The flagged forms are 304 STAT
-  (billboards, pylons, machines), 20 MSTT (trucks, vertibird, barrels), 19
-  CONT (vendor containers), 11 ACTI, 7 SCOL. So porting the manager (the
-  `NavMeshObstacleCutter` (Xbox PDB) that splits navmesh triangles round an
-  obstacle's box and reconnects portals) would not change Doc's route.
-- The navmesh doesn't avoid the chair either: `GSDocMitchellHouse`'s
-  triangles there are large (`t62`, `t72` of the joined mesh) and cover the
-  chair; the navmesh's open edge runs at about y 2291..2315 just behind
-  the front marker.
-- The stuck rule is already the game's: `009e4cf0` (called from the path
-  handler update `009e0a00`) marks an obstacle (`00691510`, flag
-  0x80000000, radius from `0069ef80`, cost 1) at the handler's location
-  +0x34, whose position (+0x40) is the actor's position it has just
-  copied; the viewer does the same (`ai::unstick`). With Doc's start inside
-  that circle and one corridor, the re-path can't go round the chair.
+Doc's first package `VCG01DocMitchellFirstPosition` (`00104C1D`, travel,
+location: the chair `001059B0`, `Chair01F`, MNAM 0x40000004) passes. He is
+seated on marker 14 (front) at about 2285,2265,7360 before he ever walks.
+His placement about 24 units behind the chair's back, and the chair's
+collision in the way, therefore never matter. (The obstacle manager
+findings stay true: `Chair01F` isn't an obstacle, only forms with flag
+0x02000000 are, `00564bc0` → `00401210`.)
 
-So what keeps the game's Doc from being blocked by his chair is still
-unknown. Candidates not yet checked: whether the game moves an actor
-placed overlapping collision (Doc's ACHR is about 3 units inside the
-chair's bounds) when his controller is made; whether the character
-controller skips the furniture the actor is entering
-(`Actor::IsTryingToEnterFurniture` (Xbox PDB), PC address not found);
-the furniture marker's target offset
-(`TESFurniture::GetMarkerTargetOffset` (Xbox PDB)) for the goal. A
-recording of the original's first seconds (Doc's position each frame,
-before the fade clears) would settle which. Do not seat him at once or let
-him walk through statics: neither is traced.
+Implemented: `world::furniture::seat_on_load` and `same_cell`. In the
+viewer, `sitting::seat_on_load` runs at an actor's first package choice
+after their cell or square loads (`Walker::settle`), using the package's
+target, then its "near a reference" location. Regression test:
+`world/tests/sitting.rs`
+`a_cell_load_seats_someone_at_once_and_others_pass_sitters`.
+
+Verified live in the release viewer (`--new-game --no-movies
+--answer-boxes`, window captures read back):
+- Doc is seated in the chair beside the bed from the first frame. He
+  stays seated through the wake-up, the name prompt and the stitches
+  conversation.
+- At INFO `00104BFA` (68 s) he gets up with
+  `SpecialIdle_NVDocChairFrontExit.kf` beside the player's
+  `LooseVCG01PlayerStandup`. VCG01's stage `ResetAI` follows at 78 s.
+- Easy Pete (`WastelandNV` at 9:00, `EasyPeteChairPackage8x4`) is seated
+  on his porch chair `0010634A` as the square loads.
+
+Not done:
+- The pass also runs over actors that were already loaded when a later
+  load happens (an exterior grid shift, or the player moved); here it
+  covers only those who have just loaded.
+- It runs at each actor's own first package choice, not before everyone's
+  AI. So on the Goodsprings porch, 00104F0A (on a sandbox walk) took
+  Pete's chair as its target just before he was seated in it.
+- Not carried out: the patrol, linked-reference, fallback (+0x514) and
+  eat/sleep search branches, and what the game does when no marker is
+  free (`006d6f80`).
+- The help-up's timing against the player's stand-up (the
+  `NPCDocPlyStand` text key at 7.067 s) hasn't been compared with the
+  original.
+
+### People in furniture don't block others (furniture collisions)
+
+Traced while checking why NPCs get caught on furniture:
+- `00920d00` (the sit-state setter) sets controller flag 0x08000000 (+0x414,
+  via `00629670`) and actor vfunc +0x2e0(0.1) when entering want-to-sit or
+  want-to-sleep, or going 1 → 4 or 6 → 9. It does so only if `00920fd0`
+  holds: a sit marker (10–20 or 26) or a bed marker (under 10), on
+  furniture whose 3D has collision objects (`004b66d0`). Want-to-stand,
+  want-to-wake and normal clear the flag.
+- The controller's contact callback `00c711d0` zeroes a contact with a
+  character (layer 30) whose controller has 0x08000000.
+- So from sitting down until getting up begins, a sitter doesn't block the
+  player or anyone else. `Sitter::others_pass_through`; the viewer leaves
+  those people out of the controllers' people (`ai::passed_through`, also
+  used by `walk::people`).
+- While someone is in a sit state, `MobileObject::Move` (`0092f260`)
+  doesn't integrate their controller: the entry and exit animations carry
+  them through the furniture. The viewer already did this (no controller
+  in furniture).
+- Not modelled: sitters restored by a load or by the 3D-attach path
+  (`00925700`, `00927d70`) don't go through `00920d00`, so in the game they
+  may lack the flag; here they get it too.
 
 ### The camera during the name prompt
 
@@ -179,12 +195,12 @@ opening's camera idle pauses) wasn't traced. Not changed.
 
 ### The help-up
 
-Not reached: Doc's help-up is his chair exit
+Now reached (see above): Doc's help-up is his chair exit
 `SpecialIdle_NVDocChairFrontExit.kf` (the tree's exit for marker 14 during
 VCG01 stages 10-50; `NPCDocPlyStand` text key at 7.067 s), timed with the
 player's `LooseVCG01PlayerStandup` (VCG01PlayerSection2, added by the
-result script of INFO `00104BF9`). It needs Doc seated in that chair, so
-it waits for the part above.
+result script of INFO `00104BF9`). Its timing against the original isn't
+compared.
 
 ## The character-revision prompt (B29)
 

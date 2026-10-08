@@ -189,8 +189,17 @@ the viewer's path goes through the chair and his controller is blocked.
 The help-up waits on that; the menu camera snap wasn't reproduced.
 `claude/b14-navmesh-obstacles`: `NavMeshObstacleManager` traced and ruled
 out (only forms with flag 0x02000000 are obstacles, `00564bc0` →
-`00401210`; `Chair01F` and every FURN lack it). Cause still open; next:
-record Doc's first seconds in the original (docs/OPENING.md, B14).
+`00401210`; `Chair01F` and every FURN lack it).
+`claude/b14-doc-seated`: **Doc seated, fixed.** After a cell load the game
+seats every loaded actor in their package's furniture (`00972d30` → the
+instant sit `0088d2f0`). The earlier "walked under the fade" reading was
+wrong because it took `0088d2f0` for player-only. People sitting down or
+seated no longer block others (`00920d00` sets flag 0x08000000, which
+`00c711d0` honours). Verified live: Doc is seated from the first frame and
+gets up with his special exit at the help-up; Easy Pete is seated on his
+porch. Left: the pass over actors already loaded at a later load, the
+eat/sleep/patrol branches, the help-up timing against the original, and
+the menu camera (not reproduced).
 
 **B15. Character creator (race menu).** The face editor/race menu is
 not implemented (it auto-accepts). docs/FACE_CREATION.md and

@@ -132,6 +132,12 @@ pub struct Walker {
     /// Placed (or moved by a script) since the last frame: start from the
     /// state's position.
     fresh: bool,
+    /// Loaded since their last package choice: the cell (or attached
+    /// square) they're in has just loaded, so the game's pass over the
+    /// loaded actors (`00972d30`) seats them in their package's furniture
+    /// at once ([`crate::sitting::seat_on_load`]). Taken by the next
+    /// [`rethink`].
+    pub(crate) settle: bool,
     avoidance: Avoidance,
     /// Units a second, as last moved.
     pub(crate) velocity: [f32; 3],
@@ -299,6 +305,7 @@ impl Walker {
             clock: PackageClock::default(),
             evaluate: true,
             fresh: true,
+            settle: true,
             avoidance: Avoidance::default(),
             velocity: [0.0; 3],
             detected_player: i32::MIN,
@@ -879,6 +886,9 @@ pub fn move_actors(
                 *visibility = Visibility::Inherited;
                 walker.parked = false;
                 walker.fresh = true;
+                // Their square loaded: the pass after an exterior load
+                // (`00454450` → `00972d30`).
+                walker.settle = true;
                 walker.package = None;
                 if !talkers.0.iter().any(|t| t.reference == me) {
                     talkers.0.push(crate::dialogue::Talker {
@@ -1753,6 +1763,7 @@ fn rethink(ctx: &mut Ctx, walker: &mut Walker, life: &mut Life, ask: &mut Asking
     let game = ctx.game;
     let order = &game.order;
     let me = walker.reference;
+    let settle = std::mem::take(&mut walker.settle);
     let state = &mut *ctx.state;
     let package = current_package(order, state, me);
     let near = package
@@ -1884,6 +1895,27 @@ fn rethink(ctx: &mut Ctx, walker: &mut Walker, life: &mut Life, ask: &mut Asking
     if let Some(f) = target_ref.filter(|f| world::scripting::GameState::is_furniture(order, *f)) {
         if state.furniture.get(&me) == Some(&f) {
             return;
+        }
+        // Just loaded: the pass after the load seats them there at once
+        // (`00972d30` → `0088d2f0`); the package's target first, then its
+        // location's reference.
+        if settle && !ctx.fighting {
+            let candidates: Vec<FormId> = package
+                .as_ref()
+                .and_then(world::ai::followed)
+                .map(|f| f.0)
+                .into_iter()
+                .chain(
+                    package
+                        .as_ref()
+                        .and_then(|p| p.location)
+                        .filter(|l| l.kind == 0)
+                        .map(|l| l.form),
+                )
+                .collect();
+            if crate::sitting::seat_on_load(ctx, walker, life, &candidates) {
+                return;
+            }
         }
         if crate::sitting::begin_use(ctx, walker, f) {
             return;
@@ -3848,10 +3880,21 @@ pub(crate) fn body_shape(walker: &Walker) -> physics::CharacterShape {
     }
 }
 
+/// Whether someone's controller is passed through by everyone else's: in
+/// furniture from sitting down until getting up begins
+/// (`Sitter::others_pass_through`, `00920d00` and `00c711d0`).
+pub(crate) fn passed_through(state: &world::scripting::GameState, who: FormId) -> bool {
+    state
+        .sitters
+        .get(&who)
+        .is_some_and(|s| s.others_pass_through())
+}
+
 /// The others someone's controller runs into (the game's controllers
 /// collide with each other, layer 30 with itself; `physics::Person`): the
 /// player and everyone alive on screen, where they stood as this frame
-/// began.
+/// began, but not those in furniture whose controllers others pass
+/// through ([`passed_through`]).
 fn bodies(
     state: &world::scripting::GameState,
     actors: &Query<Person>,
@@ -3859,7 +3902,7 @@ fn bodies(
     let mut out = Vec::new();
     if let Some(p) = state
         .player_position
-        .filter(|_| !state.dead.contains(&PLAYER_REF))
+        .filter(|_| !state.dead.contains(&PLAYER_REF) && !passed_through(state, PLAYER_REF))
     {
         let shape = physics::CharacterShape::PLAYER;
         out.push((
@@ -3872,7 +3915,10 @@ fn bodies(
         ));
     }
     for (walker, _, _, _, visibility) in actors.iter() {
-        if *visibility == Visibility::Hidden || state.dead.contains(&walker.reference) {
+        if *visibility == Visibility::Hidden
+            || state.dead.contains(&walker.reference)
+            || passed_through(state, walker.reference)
+        {
             continue;
         }
         let shape = body_shape(walker);

@@ -50,6 +50,28 @@ pub fn markers(
     Some(nif.furniture_markers())
 }
 
+/// Whether a piece of furniture's model (its base record, `FURN`) has
+/// collision: what `00920fd0` asks of its 3D (`004b66d0`, a count of its
+/// collision objects above 0). False when the model can't be read.
+pub fn has_collision(assets: &assets::Assets, order: &LoadOrder, furniture: FormId) -> bool {
+    let Some(record) = order.get(furniture).and_then(|r| r.record().ok()) else {
+        return false;
+    };
+    let Some(model) = record.get(esm::FourCC::new(b"MODL")).map(|s| s.zstring()) else {
+        return false;
+    };
+    let Some(nif) = assets
+        .read(&assets::mesh_path(&model))
+        .ok()
+        .flatten()
+        .and_then(|b| nif::Nif::parse(b).ok())
+    else {
+        return false;
+    };
+    nif.collision()
+        .is_ok_and(|c| !c.parts.is_empty() || c.no_collision > 0)
+}
+
 /// How a person sits in a piece of furniture (its base record, `FURN`):
 /// `None` when its model has no markers or no exit the idle tree knows.
 pub fn sitting(

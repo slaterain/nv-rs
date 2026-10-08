@@ -37,6 +37,8 @@ pub struct Seats {
     roots: HashMap<String, Arc<Vec<FormId>>>,
     sequences: HashMap<String, Option<Arc<nif::Sequence>>>,
     markers: HashMap<FormId, Arc<Vec<nif::FurnitureMarker>>>,
+    /// Whether each piece of furniture's model (by base) has collision.
+    collides: HashMap<FormId, bool>,
     marker_settings: HashMap<u8, MarkerSettings>,
     pub sandbox: sandbox::Settings,
     /// Each cell's references a sandbox could use ([`Seats::candidates`]).
@@ -60,6 +62,7 @@ impl Seats {
             roots: HashMap::new(),
             sequences: HashMap::new(),
             markers: HashMap::new(),
+            collides: HashMap::new(),
             marker_settings: HashMap::new(),
             sandbox: sandbox::Settings::read(order),
             candidates: HashMap::new(),
@@ -120,6 +123,18 @@ impl Seats {
                 )
             })
             .clone()
+    }
+
+    /// Whether a placed piece of furniture's model has collision (by its
+    /// reference; read once per base): `Sitter::furniture_collides`.
+    fn collides(&mut self, game: &cellview::Game, furniture_ref: FormId) -> bool {
+        let Some(base) = world::scripting::base_of(&game.order, furniture_ref) else {
+            return false;
+        };
+        *self
+            .collides
+            .entry(base)
+            .or_insert_with(|| preview::furniture::has_collision(&game.assets, &game.order, base))
     }
 
     fn marker_settings(&mut self, order: &LoadOrder, number: u8) -> MarkerSettings {
@@ -464,13 +479,14 @@ pub fn begin_use(ctx: &mut Ctx, walker: &mut Walker, furniture_ref: FormId) -> b
         return false;
     };
     let settings = ctx.seats.marker_settings(order, marker.number);
-    let sitter = Sitter::new(
+    let mut sitter = Sitter::new(
         furniture_ref,
         marker,
         settings,
         walker.position,
         walker.heading,
     );
+    sitter.furniture_collides = ctx.seats.collides(game, furniture_ref);
     if sitter.in_reach(walker.position) {
         walker.clear_path();
     } else {
@@ -501,8 +517,6 @@ fn seat_at_once(
     let me = walker.reference;
     let game = ctx.game;
     let order = &game.order;
-    let (skeleton, _) = skeleton(life, order, me);
-    let roots = ctx.seats.roots(&skeleton);
     if let Some(base) = world::scripting::base_of(order, furniture_ref) {
         ctx.seats.markers(ctx.game, base);
     }
@@ -517,28 +531,7 @@ fn seat_at_once(
         ctx.state.stand(me);
         return false;
     };
-    let settings = ctx.seats.marker_settings(order, marker.number);
-    let seed = ctx.state.roll();
-    let flags = (ctx.talking, ctx.fighting);
-    let sitter = {
-        let (state, tree) = (&*ctx.state, &ctx.seats.tree);
-        let (w, l) = (&*walker, &*life);
-        let mut pick = |sitting: u8, sleeping: u8, number: u8| {
-            pick_idle(
-                order,
-                state,
-                tree,
-                &roots,
-                w,
-                l,
-                flags,
-                (sitting, sleeping, number),
-                seed,
-            )
-            .map(|i| (i.form_id, i.model))
-        };
-        Sitter::seated(furniture_ref, marker, settings, walker.scale, &mut pick)
-    };
+    let sitter = seated_sitter(ctx, walker, life, furniture_ref, marker);
     println!(
         "{me} is seated at {:.0},{:.0},{:.0} (marker {}){}",
         sitter.position[0],
@@ -556,6 +549,97 @@ fn seat_at_once(
     walker.clear_path();
     ctx.state.sitters.insert(me, sitter);
     true
+}
+
+/// The pass the game makes over everyone loaded once a cell has loaded
+/// (`00972d30`; the rule is `world::furniture::seat_on_load`): someone
+/// whose package sends them to a piece of furniture in their cell, on
+/// none yet, is seated there at once by the instant sit (`0088d2f0`) —
+/// at the seat, facing the marker's heading plus its heading delta, the
+/// seated loop loaded (sit state 1, then 4), the marker occupied. Without
+/// a seated loop the game gives up ("%s went to sit at %s and had no
+/// animation", state back to 0) and so does this. `candidates`: the
+/// package's target, then its location's reference. True if seated.
+pub fn seat_on_load(
+    ctx: &mut Ctx,
+    walker: &mut Walker,
+    life: &mut Life,
+    candidates: &[FormId],
+) -> bool {
+    let me = walker.reference;
+    let game = ctx.game;
+    let order = &game.order;
+    for &f in candidates {
+        if let Some(base) = world::scripting::base_of(order, f) {
+            ctx.seats.markers(game, base);
+        }
+    }
+    let chosen = {
+        let (state, markers) = (&*ctx.state, &ctx.seats.markers);
+        furniture::seat_on_load(order, state, me, candidates, |f| {
+            placed_markers(order, state, markers, f).map(|(p, _)| p)
+        })
+    };
+    let Some((furniture_ref, marker)) = chosen else {
+        return false;
+    };
+    let sitter = seated_sitter(ctx, walker, life, furniture_ref, marker);
+    if sitter.dynamic_idle.is_none() {
+        println!("{me} went to sit at {furniture_ref} and had no animation");
+        return false;
+    }
+    println!(
+        "{me} is seated in {furniture_ref} as the cell loads, at {:.0},{:.0},{:.0} (marker {})",
+        sitter.position[0], sitter.position[1], sitter.position[2], marker.number
+    );
+    walker.position = sitter.position;
+    walker.heading = sitter.heading;
+    walker.clear_path();
+    walker.target = None;
+    ctx.state.furniture.insert(me, furniture_ref);
+    ctx.state.sitters.insert(me, sitter);
+    true
+}
+
+/// Someone settled in `marker` of a piece of furniture ([`Sitter::seated`]),
+/// with the seated loop the idle tree gives them.
+fn seated_sitter(
+    ctx: &mut Ctx,
+    walker: &Walker,
+    life: &mut Life,
+    furniture_ref: FormId,
+    marker: furniture::PlacedMarker,
+) -> Sitter {
+    let me = walker.reference;
+    let game = ctx.game;
+    let order = &game.order;
+    let (skeleton, _) = skeleton(life, order, me);
+    let roots = ctx.seats.roots(&skeleton);
+    let settings = ctx.seats.marker_settings(order, marker.number);
+    let collides = ctx.seats.collides(game, furniture_ref);
+    let seed = ctx.state.roll();
+    let flags = (ctx.talking, ctx.fighting);
+    let mut sitter = {
+        let (state, tree) = (&*ctx.state, &ctx.seats.tree);
+        let (w, l) = (walker, &*life);
+        let mut pick = |sitting: u8, sleeping: u8, number: u8| {
+            pick_idle(
+                order,
+                state,
+                tree,
+                &roots,
+                w,
+                l,
+                flags,
+                (sitting, sleeping, number),
+                seed,
+            )
+            .map(|i| (i.form_id, i.model))
+        };
+        Sitter::seated(furniture_ref, marker, settings, walker.scale, &mut pick)
+    };
+    sitter.furniture_collides = collides;
+    sitter
 }
 
 /// The player using furniture (`world::furniture`, the game's own code
@@ -674,7 +758,8 @@ fn player_activates(
             view.force_temp_third();
             seat.loop_asked = false;
             let settings = seats.marker_settings(order, marker.number);
-            let sitter = Sitter::new(furniture_ref, marker, settings, feet, heading);
+            let mut sitter = Sitter::new(furniture_ref, marker, settings, feet, heading);
+            sitter.furniture_collides = seats.collides(game, furniture_ref);
             println!(
                 "The player uses {furniture_ref} (marker {}, number {}).",
                 marker.index, marker.number
@@ -796,7 +881,8 @@ pub fn player_furniture(
                     let settings = seats.marker_settings(order, marker.number);
                     let roots = seats.roots(&player_skeleton(order));
                     let seed = state.roll();
-                    let sitter = {
+                    let collides = seats.collides(game, f);
+                    let mut sitter = {
                         let (snapshot, tree) = (&*state, &seats.tree);
                         let mut pick = |sitting: u8, sleeping: u8, number: u8| {
                             pick_player_idle(
@@ -811,6 +897,7 @@ pub fn player_furniture(
                         };
                         Sitter::seated(f, marker, settings, 1.0, &mut pick)
                     };
+                    sitter.furniture_collides = collides;
                     state.sitters.insert(PLAYER_REF, sitter);
                     seat.applied_heading = None;
                     view.camera.temp_third = furniture::TempThirdPerson::default();
