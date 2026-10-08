@@ -128,7 +128,8 @@ translated yet, B1 PR 7): XPBD substeps (8) and passes (4) for bodies with
 something near them; contact generation (no edge-against-edge
 between bodies); overlap recovery at most 0.05 units per correction; walkers
 as unstoppable capsules reaching 2 units out (`hkpCharacterProxy`'s
-surface interactions aren't translated); a contact "added" is a pair that
+surface interactions aren't translated; the walkers themselves are the
+game's controller, below); a contact "added" is a pair that
 starts touching (Havok adds and removes single points).
 
 ## Havok's world step (B1, PRs 1–4, `claude/b1-havok-step`, 2026-10-07)
@@ -554,6 +555,106 @@ pushes something under it back up: the 30-unit rule does.
   controller is put at the new position always); `fCharControllerWarpDistSqr`
   isn't read from INI files.
 
+## The character proxy (B1 PR 10, `claude/b1-character-proxy`, 2026-10-08)
+
+Every walking actor, the player too, is now moved by the game's own
+character controller: Bethesda's `bhkCharacterController` around Havok
+7.1's `hkpCharacterProxy`, translated from FalloutNV.exe 1.4.0.525 with
+the Xbox PDB's names and layouts. It replaces the viewer's own capsule
+(stepped and snapped down, pushed out of overlaps). Code:
+`physics::proxy`, `physics::simplex`, `physics::controller`,
+`physics::character_cd`; `physics::Character` keeps its interface.
+Private outputs (decompiles, logs, screenshots): `%USERPROFILE%\nv-re\work\b1cc`.
+
+### Shape and settings
+
+| What | Where | Value |
+| --- | --- | --- |
+| Shape | `00c72410` → `00c70de0`, convex vertices `00cd7f50` | 18 points: a bottom point, an 8-point ring (directions `011b0154`/`011b0174`, 0.7071) of radius 20.25 at step + 0.1 Havok above it (31.7 units), a ring at 53.875 above the centre, a top point; convex radius 0.1. The capsule built beside it isn't used for people |
+| Centre | `00c72410` (+0x538) | half the height + 2 × keep distance above the feet: the hull's surface is at the feet |
+| Proxy cinfo | `00c6cde0`, `00c6da50` | dynamic friction 1, static 0, keep contact tolerance 0.1, keep distance 0.05, contact angle sensitivity 10, 4 user planes, solver speed 100 (Havok's 10), strength FLT_MAX, mass 0, max slope pi/2 (never acts), penetration recovery speed 1, cast iterations 10 (4 set by each move) |
+| Listener | `00c6c7a0` | max slope cos 47° (0.682), step 31 × scale (at least 0.75 × radius), cast depth = step ÷ tan 47° |
+
+### One move (`bhkCharacterController::Move` `00c73170`, vtable +0xc8)
+
+Called once a frame by `MobileObject::Move` with the frame's time, the
+displacement and the actor's speed (`fSpeedPct` = speed ÷ the player's
+running speed `01267bc4`).
+
+1. Standing still (displacement within 0.05) clears flag 0x8; the wanted
+   velocity is the displacement ÷ dt (z dropped unless swimming/flying).
+2. The proxy's velocity is the starting velocity (its z cleared standing
+   still unless in the air).
+3. The support check (`00c6cef0` → `00cae900`), when not on the ground,
+   moving, or without a support normal: the manifold's constraints, as
+   the listener changes them, solved for 1/60 s of a unit move straight
+   down; supported when that stops or turns it; the surface normal and
+   velocity from the touched constraints facing up more than 0.08. The
+   controller is supported when that says so and not every support was
+   walled off, or when anything counted as support (flag 0x200); while
+   jumping (flag 0x2000) never, until the jump is over.
+4. The state's update sets the velocity:
+   - on the ground (`00cd4800`): not supported → the vertical velocity
+     cleared, the fall measured from here, into the air; otherwise Havok's
+     movement util (`00d6aef0`) moves it toward the wanted velocity in the
+     support's plane (gain 1, ≤ 500 an update), keeps the old vertical
+     velocity and adds gravity × 0.5 × `fSpeedPct` × dt; a wanted jump
+     starts only on walkable ground (flag 0x400);
+   - jumping (`00cd4280`): √(2 g h) up **added to the proxy's own
+     velocity** (the run-up is kept), then into the air at once;
+   - in the air (`00cd3fb0`): supported → landed (flag 0x80, the fall
+     damage's cue) and on the ground; else steered across the up axis
+     (gain `fAcrobatics` × 0.3, ≤ 2000 an update), gravity added.
+5. Standing still in a manifold equal to the last one (`LastManifold`,
+   within 0.001, same bodies) **the proxy isn't integrated at all** and its
+   velocity is zero; otherwise `hkpCharacterProxy::integrate`.
+
+### The proxy's update (`00cade20`, `integrateImplementation`)
+
+Up to 4 passes while time is left: cast the shape by the last solved move
+(`m_oldDisplacement`), collecting what's within 0.15 of the start;
+`updateManifold` (`00caf4d0`: each point replaced by the most alike start
+point within 1.1 by `surfaceDistance` `00cafd90`, or dropped; the closest
+new start points and the cast's first hit join; near-duplicates within 0.1
+dropped); one surface constraint per point (`00cacd60`: the plane kept
+0.05 back, fixed bodies priority 2; **a crossed plane becomes a velocity
+out of it of 1 Havok unit a second per unit crossed**); Bethesda's
+listener; Havok's simplex solver (`00d24360` with `00d23f50`, `00d234e0`,
+`00d23480`, `00d23850`, `00d23ca0`, `00d23380`); if the solved move
+differs from the cast one by more than 0.001, cast it and stop 0.05 short
+of the first new surface (`00cacc50`). The last solved velocity is kept.
+
+### Bethesda's listener (`processConstraintsCallback` `00c711d0`)
+
+Per manifold point: other controllers (layer 30, phantoms) are vertical
+walls and nothing else; dynamic bodies (clutter, weapons, projectiles)
+count as support straight up; `ANIM_STATIC` fixed or keyframed bodies get
+extra down friction 0.577; ground facing up at least 0.682 is walkable
+(extra down friction 5.77 standing still); steeper ground is a **step**
+(`IsStep` `00c6eb00`: the contact no more than step/3 above feet + step,
+and a segment at feet + step over the contact, the cast depth further on,
+clear of the contacted triangle) and becomes a ramp (normal (x, y, 1)
+normalized), or else gets a vertical wall added (≤ 4) and under 0.2
+doesn't count as support. On the ground dynamic friction × `fSpeedPct`.
+
+### Not translated / stand-ins (labelled in code)
+
+- Havok's collision agents (convex against triangles, linear casts): GJK
+  and separating axes, a conservative-advancement cast with the world's
+  early-out 0.01 and 20 iterations; contact points taken from the touching
+  features (Havok's choice isn't traced). `IsStep`'s convex-shape branch
+  (a ray against the whole shape) uses the triangle test too.
+- `applySurfaceInteractions` (`00cacf80`, pushing bodies): clutter is still
+  pushed by `physics::rigid`'s walker rule, now with the velocity the
+  state asked for (`Character::pushing`).
+- Bethesda's point collector (`00cd36a0`: edge-hit filtering, trigger
+  bookkeeping), the support material and velocity (`00c6e980`), moving
+  platforms (`01267bb4`), hurtful bodies, pitch and roll, lying
+  creatures, creatures' shapes from `BSBound`, the swimming, flying,
+  climbing and projectile states, `VelocityMod`.
+- `fSpeedPct`'s divisor is taken as 308 (77 × 4).
+
+PHYSICS_LIVE_PLACEHOLDER
 ## Not compared / gaps
 
 - Nothing compared with the original game: how far bottles fly, how they

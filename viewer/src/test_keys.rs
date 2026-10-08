@@ -33,7 +33,7 @@ pub struct TimedPress {
     pub hold: f32,
 }
 
-/// Parses `KEY` or `KEY:HOLD` (a letter A–Z, a digit, `mouse-left`,
+/// Parses `KEY` or `KEY:HOLD` (`space`, a letter A–Z, a digit, `mouse-left`,
 /// `mouse-right`, `mouse-x=COUNTS` / `mouse-y=COUNTS`: the mouse moved
 /// sideways / down that much
 /// each frame; `wheel=NOTCHES`: the wheel turned that much each frame;
@@ -54,6 +54,8 @@ pub fn parse(at: f32, v: &str) -> Result<TimedPress, String> {
         "mouse-right" => Press::Mouse(MouseButton::Right),
         // The pause menu's key.
         "escape" => Press::Key(KeyCode::Escape),
+        // Jump (control 12).
+        "space" => Press::Key(KeyCode::Space),
         n if n.starts_with("mouse-x=") || n.starts_with("mouse-y=") || n.starts_with("wheel=") => {
             let (kind, amount) = n.split_once('=').unwrap_or_default();
             let amount = amount

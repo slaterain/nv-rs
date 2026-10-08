@@ -2292,7 +2292,7 @@ mod tests {
                 feet: walker.feet,
                 radius: shape.radius,
                 height: shape.height,
-                velocity: [walker.horizontal[0], walker.horizontal[1], 0.0],
+                velocity: [walker.pushing[0], walker.pushing[1], 0.0],
             }]);
             w.update(&c, 1.0 / 60.0);
             let (r, t) = w.delta(i);

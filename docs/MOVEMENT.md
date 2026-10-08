@@ -68,47 +68,33 @@ Implemented: `may_run` (over-encumbered, iron sights, grabbed weight),
 `may_jump`. Tested. The viewer passes no iron sights and no grabbed weight
 (neither exists there yet); anim action 7 is not modelled.
 
-## Jump and air control (`physics::Character::update_controlled`)
+## Jump and air control (`physics::controller`)
+
+The controller is the game's own since B1 PR 10 (PHYSICS.md, "The
+character proxy"); its states set the velocity once per move.
 
 | Address | What | Status |
 | --- | --- | --- |
 | `00930640` | Jump height `fJumpHeightMin` × `GetScale` (`00567400`), × `fJumpSwimmingMult` swimming | implemented, tested (player scale taken as 1) |
 | `00884aa0` | Player vfunc +0x254: `00930640` then the jump sound | sound not done here |
-| `00cd4280` | Jumping state: vertical speed √(2 \|g × mult\| h); horizontal velocity **replaced** by the support's velocity (`01267e30`, zero for static ground) | implemented, tested |
-| `00cd3fb0` | In-air state: the movement input's gain = air control × 0.3 + 0 (`011b0140`, `01267bbc`), or 1 with controller flags 0x1800; max change 2000 Havok/s (`01013970`); vertical component restored, gravity added | gain implemented, tested; flags 0x1800 not traced |
-| `0087d6c0` | Actor vfunc +0x2e4, air control: 1.0 for everyone | implemented |
-| `00cd4800` | On-ground state: gain 1, max change 500 Havok/s (`01013d84`) | implemented |
-| `00c73170` | The controller's per-frame movement ("TtCharacter movement"): desired velocity = the move delta ÷ its dt (z kept only flying or swimming) | used: one controller update per frame, assumed because `PlayerMover::Update` (`009e9e50`) hands the frame's dt and delta to player vfunc +0x250; not confirmed by a recording |
+| `00c6d4b0` | The jump asked for: wanted state jumping, `fJumpHeight` | implemented |
+| `00cd4800` | On-ground state: a wanted jump is taken only on walkable ground (flag 0x400); the jumping state runs at the next move | implemented, tested |
+| `00cd4280` | Jumping state: √(2 \|g × mult\| h) up **added to the proxy's own velocity** (`hkpCharacterProxy::getLinearVelocity` `00cac950`; the zero vector `01267e30` only without a proxy): the run-up is kept; then into the air at once | implemented, tested |
+| `00cd3fb0` | In-air state: gain `fAcrobatics` × 0.3 + `01267bbc` (0, no writer), or 1 with flags 0x1800; at most 2000 Havok/s an update (`bhkCharacterStateInAir` +8); the up component kept; gravity × `fGravity` × dt added | implemented, tested |
+| `0087d6c0` | Actor vfunc +0x2e4, air control (`fAcrobatics`): 1.0 for everyone | implemented |
+| `00d6aef0` | Havok's movement util: the velocity moved toward the wanted one in the surface's frame (forward (0, −1, 0), the support normal), gap cut to the state's maximum | implemented |
 
-Deviations fixed: a jump kept the run-up's horizontal velocity and the
-player had full control in the air. Now the jump starts with no horizontal
-velocity on still ground and the velocity closes 0.3 of the gap to the
-wanted one each frame (frame-rate dependent, if the controller is
-integrated once per frame as assumed above). The player may not jump while
-over-encumbered. The earlier finding that the jump keeps the horizontal
-velocity was wrong: `00cd4280` adds the jump vector to the support's
-velocity (`01267e30` holds zeros).
+Correction: an earlier batch read the jumping state as replacing the
+horizontal velocity with `01267e30` (zeros); that is only the branch
+without a proxy. With one, the jump keeps the run-up.
 
 Unresolved, labelled in code:
-- Whether the in-air state also runs in the frame the jump starts
-  (`00c6cba0`); here it doesn't.
-- The wanted velocity in the air: in the game it is the PlayerMover's move
-  delta (`009e9e50`, `PlayerMover::Update` (Xbox PDB)), whose length comes
-  from the current movement animation's root motion (`00494390`) and whose
-  direction comes from the keys. Here it is the key direction at the
-  formula speed, on the ground and in the air.
-- Slopes: on the ground the game builds the velocity in the support's
-  plane (`00d6aef0` with the support normal) and Havok's proxy solver
-  slides it; here the horizontal velocity is used unchanged and the
-  capsule is stepped and snapped down.
-- Backward and sideways speeds: the game's speed is the movement
-  animation's root speed × (formula speed ÷ the Forward group's root
-  speed) (`00895110`, `world::animation::movement_rate`), so backward and
-  strafe speeds follow each animation's own root speed. Here every
-  direction moves at the formula speed.
-- Camera follow: the camera still sits at `cellview::EYE_HEIGHT` above the
-  feet; the game's first-person camera node was not traced in this batch.
-
+- The wanted velocity is the key direction at the formula speed; in the
+  game it is the PlayerMover's move delta (`009e9e50`), whose length comes
+  from the movement animation's root motion (`00494390`).
+- Backward and sideways speeds follow each animation's own root speed in
+  the game (`00895110`); here every direction moves at the formula speed.
+- Camera follow: the camera sits at `cellview::EYE_HEIGHT` above the feet.
 ## Kept on the land (`0092f260`)
 
 `MobileObject::Move` (`0092f260`) runs for the player too: after the
@@ -141,7 +127,7 @@ compared.
 ## Checks and handoff
 
 Branch `claude/m1-movement`. Tests: `world` `locomotion::tests` (5),
-`physics` `a_running_jump_starts_from_standing_and_steers_three_tenths_a_frame`.
+`physics` `a_jump_rises_its_height_keeps_its_run_up_and_lands` (B1 PR 10).
 Not compared against the original game. Next action: record the player's
 speed and jump arc in the original (holstered/drawn rifle, heavy armour,
 over-encumbered, running jump distance) with `nv-probe` on `00885bf0` and

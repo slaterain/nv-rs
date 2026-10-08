@@ -2,9 +2,10 @@
 //!
 //! [`Collider`] holds a cell's solid surfaces as one triangle set, bucketed
 //! on a grid for quick lookups; [`shapes`] turns the models' Havok shapes
-//! (hulls, spheres, capsules) into triangles for it. [`Character`] is a
-//! walking capsule that moves through a collider: it falls, lands, slides
-//! along walls, climbs low steps and follows the floor down stairs.
+//! (hulls, spheres, capsules) into triangles for it. [`Character`] is the
+//! game's character controller ([`controller`]) around Havok's character
+//! proxy ([`proxy`]): it falls, lands, slides along walls, rides up steps
+//! and stops at slopes steeper than 47 degrees.
 //!
 //! ```
 //! use physics::{Character, CharacterShape, Collider};
@@ -16,19 +17,23 @@
 //! let shape = CharacterShape::PLAYER;
 //! let mut player = Character::new([0.0, 0.0, 50.0]);
 //! for _ in 0..120 {
-//!     player.update(&floor, &shape, [0.0, 0.0], false, 1.0 / 60.0);
+//!     player.update(&floor, &shape, [0.0, 0.0], 1.0 / 60.0);
 //! }
 //! assert!(player.on_ground && player.feet[2].abs() < 1.0);
 //! ```
 
+pub mod character_cd;
 pub mod contacts;
+pub mod controller;
 pub mod grab;
 pub mod havok;
 pub mod impulses;
 pub mod layers;
+pub mod proxy;
 pub mod ragdoll;
 pub mod rigid;
 pub mod shapes;
+pub mod simplex;
 mod vec;
 pub mod view_caster;
 pub mod wind;
@@ -124,21 +129,6 @@ pub const NO_MATERIAL: u32 = u32::MAX;
 
 fn bucket(v: f32) -> i32 {
     (v / BUCKET).floor() as i32
-}
-
-/// Whether a triangle's box is further than `reach` (and a margin, for
-/// rounding) from a segment's box along some axis: then no point of it is
-/// within `reach` of the segment, and the exact test can be skipped.
-fn surely_beyond(t: [Vec3; 3], a: Vec3, b: Vec3, reach: f32) -> bool {
-    const MARGIN: f32 = 0.05;
-    (0..3).any(|k| {
-        let (t0, t1) = (
-            t[0][k].min(t[1][k]).min(t[2][k]),
-            t[0][k].max(t[1][k]).max(t[2][k]),
-        );
-        let (s0, s1) = (a[k].min(b[k]), a[k].max(b[k]));
-        t0 - s1 > reach + MARGIN || s0 - t1 > reach + MARGIN
-    })
 }
 
 /// [`bucket_keys`] without making a list: each key in the same order.
@@ -1012,13 +1002,12 @@ impl CharacterShape {
     /// 23 × 17.5 × 64, so radius (23 + 17.5) / 2 = 20.25 and height 128;
     /// steps up to 31 (`00c6eb00`); ground no steeper than 47°
     /// (`011b0148`, cosine 0.682); the world's gravity, multiplied by one.
-    /// The shape's bottom floats 0.1 Havok units (0.7) above the feet
-    /// (twice the 0.05 keep distance, `00c72410`), which is just the shell
-    /// every model's collision has around it (0.1 Havok units, see
-    /// [`Collider`]): standing on a model, the feet are at its triangles.
-    /// The game's shape is an eight-sided hull with a cone underneath 31.7
-    /// units tall that slides over step edges; this is a capsule with the
-    /// same radius and height (the step rule stands in for the cone).
+    /// The hull's bottom point floats 0.1 Havok units (`lift`, 0.7) above
+    /// the feet (twice the 0.05 keep distance, `00c72410`) and its convex
+    /// radius is 0.1, so its surface is at the feet; the proxy keeps 0.05
+    /// Havok units (0.35) off what it stands on. The shape is the game's
+    /// eight-sided hull with a cone underneath 31.7 units tall
+    /// ([`CharacterShape::hull`]).
     pub const PLAYER: CharacterShape = CharacterShape {
         radius: 20.25,
         height: 128.0,
@@ -1029,532 +1018,157 @@ impl CharacterShape {
         lift: 0.1 * HAVOK_UNIT,
     };
 
-    /// The capsule's axis: the centres of its bottom and top spheres, for
-    /// feet at `feet`.
-    fn axis(&self, feet: Vec3) -> (Vec3, Vec3) {
-        let bottom = self.lift + self.radius;
-        let top = (self.lift + self.height - self.radius).max(bottom);
-        (add(feet, [0.0, 0.0, bottom]), add(feet, [0.0, 0.0, top]))
+    /// The controller's step height in Havok units (`fStepHeight` +0x470):
+    /// the cinfo's (31 game units × 0.142875, `00c6da50`), raised to at
+    /// least 0.75 × the radius (`00c72410`).
+    pub fn step_havok(&self) -> f32 {
+        (self.step / HAVOK_UNIT).max(self.radius / HAVOK_UNIT * 0.75)
+    }
+
+    /// How far the shape's centre is above the feet (game units): half the
+    /// height and twice the proxy's keep distance (`fCenter` +0x538,
+    /// `00c72410`: 2 × 0.05 Havok units + (half height − radius + radius)).
+    pub fn centre(&self) -> f32 {
+        2.0 * proxy::ProxySettings::GAME.keep_distance * HAVOK_UNIT + self.height * 0.5
+    }
+
+    /// The controller's hull ([`character_cd::Hull::character`]) for an
+    /// upright shape: its capsule's axis points at ±(half height − radius)
+    /// round the centre (`00c72410`).
+    pub fn hull(&self) -> character_cd::Hull {
+        let half = (self.height * 0.5 - self.radius).max(0.0);
+        character_cd::Hull::character(
+            [0.0, 0.0, -half],
+            [0.0, 0.0, half],
+            self.radius,
+            self.step_havok(),
+        )
     }
 }
 
-/// A walking character.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// A walking character: Bethesda's character controller around Havok's
+/// character proxy ([`controller`], [`proxy`]), as every actor in the game
+/// walks, with the shape of [`CharacterShape::hull`].
+#[derive(Debug, Clone, PartialEq)]
 pub struct Character {
-    /// The bottom of the capsule, in game units.
+    /// Where the feet are, game units (the controller's position less its
+    /// centre's height).
     pub feet: Vec3,
-    /// Vertical speed, units per second (up positive).
+    /// The controller's vertical speed, game units a second (up positive).
     pub vertical_speed: f32,
+    /// In the on-ground state.
     pub on_ground: bool,
-    /// The height of the point it last stood on. With the rounded bottom
-    /// resting on a ledge's edge, that's the ledge's top, a little above
-    /// the feet; steps are measured from it, so a ledge higher than a step
-    /// can't be climbed a bit at a time.
+    /// The feet's height when last on the ground.
     pub ground: f32,
     /// The height the feet were at when it last left the ground (jumping
-    /// or stepping off), and on landing how far it fell from there (the
-    /// game measures falls this way, not from the top of a jump:
-    /// `00c70550`); taken by whoever applies fall damage.
+    /// or stepping off, `fFallStartHeight`), and on landing how far it fell
+    /// from there (the game measures falls this way, not from the top of a
+    /// jump: `00c70550`); taken by whoever applies fall damage.
     pub left_ground_at: f32,
     pub fell: Option<f32>,
-    /// Horizontal velocity, units per second, as [`Character::update_controlled`]
-    /// keeps it from one update to the next.
+    /// The controller's horizontal velocity, game units a second.
     pub horizontal: [f32; 2],
+    /// The velocity the controller's state handed the proxy this update
+    /// (`OutVelocity` +0x4f0), game units a second: what it pushes the
+    /// clutter it walks into with, though the proxy itself is held.
+    pub pushing: Vec3,
+    pub controller: controller::Controller,
 }
-
-/// The most the on-ground state changes the velocity in one update: 500
-/// Havok units a second (`01013d84`, the movement input's maximum velocity
-/// change, `00cd4800`), in game units.
-pub const GROUND_MAX_VELOCITY_CHANGE: f32 = 500.0 * HAVOK_UNIT;
-/// The in-air state's: 2000 Havok units a second (`01013970`, stored by
-/// its constructor `00cd3f90`).
-pub const AIR_MAX_VELOCITY_CHANGE: f32 = 2000.0 * HAVOK_UNIT;
-
-/// Moves `current` toward `desired` by `gain` of the gap, the gap first
-/// cut to `max_change` long (the controller's movement input, as the
-/// ground and air states use it, `00cd4800` and `00cd3fb0`).
-pub fn blend_velocity(
-    current: [f32; 2],
-    desired: [f32; 2],
-    gain: f32,
-    max_change: f32,
-) -> [f32; 2] {
-    let mut diff = [desired[0] - current[0], desired[1] - current[1]];
-    let len = (diff[0] * diff[0] + diff[1] * diff[1]).sqrt();
-    if len > max_change {
-        let k = max_change / len;
-        diff = [diff[0] * k, diff[1] * k];
-    }
-    [current[0] + gain * diff[0], current[1] + gain * diff[1]]
-}
-
-/// A surface the capsule rests on or is pushed by.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Support {
-    /// The face's normal, turned toward the capsule.
-    normal: Vec3,
-    /// The height of the point touched.
-    height: f32,
-}
-
-/// Longest time step the controller takes at once, in seconds.
-const MAX_STEP: f32 = 1.0 / 120.0;
-/// How many times a step pushes the capsule out of what it overlaps.
-const RESOLVE_PASSES: usize = 4;
 
 impl Character {
     pub fn new(feet: Vec3) -> Self {
+        let shape = CharacterShape::PLAYER;
         Self {
             feet,
             vertical_speed: 0.0,
-            on_ground: false,
+            on_ground: true,
             ground: feet[2],
             left_ground_at: feet[2],
             fell: None,
             horizontal: [0.0; 2],
+            pushing: [0.0; 3],
+            controller: controller::Controller::new(
+                shape.step_havok(),
+                controller::gravity_multiplier(shape.gravity),
+            ),
         }
     }
 
     /// One controller update of `dt` seconds wanting to go at `desired`
-    /// (x, y; units per second), as the game's character states set the
-    /// velocity once per update before it's integrated:
-    ///
-    /// - jumping (asked, and standing): upward at `jump_speed`, the
-    ///   horizontal velocity set to the ground's own (still ground: 0) —
-    ///   the jumping state `00cd4280` replaces it, it doesn't keep the
-    ///   run-up;
-    /// - on the ground: the wanted velocity (gain 1, `00cd4800`);
-    /// - in the air: `air_gain` of the way from the current velocity to the
-    ///   wanted one (`00cd3fb0`; `world::locomotion::air_gain`, 0.3).
-    ///
-    /// Whether the in-air state also runs in the update a jump starts
-    /// isn't traced (the jumping state hands over through `00c6cba0`); here
-    /// it doesn't. On slopes the game works the velocity out in the
-    /// ground's plane and Havok's proxy solver slides it; neither is
-    /// modelled (the horizontal velocity is used as it is).
+    /// (x, y; game units a second), as `bhkCharacterController::Move`
+    /// (`00c73170`) is handed one move a frame (the frame's displacement
+    /// and speed): the support check, the state (on the ground, jumping,
+    /// in the air) setting the velocity, and the proxy moving the shape.
+    /// `jump_height` (game units) asks for a jump this update (taken on
+    /// walkable ground; it leaves the ground the update after, as the
+    /// jumping state runs then). `air_gain` is the in-air state's steering
+    /// (`fAcrobatics` × 0.3, `world::locomotion::air_gain`).
     pub fn update_controlled(
         &mut self,
         collider: &Collider,
         shape: &CharacterShape,
         desired: [f32; 2],
-        jump_speed: Option<f32>,
+        jump_height: Option<f32>,
         air_gain: f32,
         dt: f32,
     ) {
-        let jumping = self.on_ground && jump_speed.is_some_and(|s| s > 0.0);
-        if jumping {
-            self.horizontal = [0.0; 2];
-        } else if self.on_ground {
-            self.horizontal =
-                blend_velocity(self.horizontal, desired, 1.0, GROUND_MAX_VELOCITY_CHANGE);
-        } else {
-            self.horizontal =
-                blend_velocity(self.horizontal, desired, air_gain, AIR_MAX_VELOCITY_CHANGE);
+        if dt <= 0.0 {
+            return;
         }
-        let velocity = self.horizontal;
-        let before = self.feet;
-        self.update_with_jump(collider, shape, velocity, jump_speed, dt);
-        // What's kept is the velocity the move ended with (Havok's proxy
-        // leaves the solved velocity in the controller): stopped or slid by
-        // what it ran into.
-        if dt > 0.0 {
-            self.horizontal = [
-                (self.feet[0] - before[0]) / dt.min(0.25),
-                (self.feet[1] - before[1]) / dt.min(0.25),
-            ];
+        let c = &mut self.controller;
+        let step = shape.step_havok();
+        if c.listener.step_height != step {
+            c.listener = controller::ListenerState {
+                flags: c.listener.flags,
+                ..controller::ListenerState::new(step)
+            };
+        }
+        c.gravity = controller::gravity_multiplier(shape.gravity);
+        if let Some(h) = jump_height.filter(|&h| h > 0.0) {
+            c.jump(h);
+        }
+        let was_on_ground = c.state == controller::State::OnGround;
+        let input = controller::MoveInput {
+            dt,
+            displacement: [desired[0] * dt, desired[1] * dt, 0.0],
+            speed: (desired[0] * desired[0] + desired[1] * desired[1]).sqrt(),
+            air_gain,
+        };
+        c.move_by(
+            collider,
+            &shape.hull(),
+            shape.centre(),
+            &mut self.feet,
+            input,
+        );
+        let v = c.proxy.velocity;
+        self.vertical_speed = v[2] * HAVOK_UNIT;
+        self.horizontal = [v[0] * HAVOK_UNIT, v[1] * HAVOK_UNIT];
+        self.pushing = scale(c.out_velocity, HAVOK_UNIT);
+        self.on_ground = c.state == controller::State::OnGround;
+        if was_on_ground && !self.on_ground {
+            self.left_ground_at = c.fall_start;
+        }
+        if c.listener.flags & controller::flags::LANDED != 0 {
+            self.fell = Some(c.fall_start - self.feet[2]);
+        }
+        if self.on_ground {
+            self.ground = self.feet[2];
         }
     }
 
-    /// Moves for `dt` seconds wanting to go at `velocity` (x, y; units per
-    /// second), jumping at `jump_speed` (units per second up) if asked and
-    /// standing on something.
+    /// [`Character::update_controlled`] steering fully in the air, without
+    /// jumping.
     pub fn update(
         &mut self,
         collider: &Collider,
         shape: &CharacterShape,
         velocity: [f32; 2],
-        jump: bool,
         dt: f32,
     ) {
-        self.update_with_jump(collider, shape, velocity, jump.then_some(0.0), dt);
-    }
-
-    /// As [`Character::update`], with a jump speed (units per second up)
-    /// when jumping.
-    pub fn update_with_jump(
-        &mut self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        velocity: [f32; 2],
-        jump: Option<f32>,
-        dt: f32,
-    ) {
-        if let (Some(speed), true) = (jump, self.on_ground) {
-            if speed > 0.0 {
-                self.vertical_speed = speed;
-                self.on_ground = false;
-                self.left_ground_at = self.feet[2];
-            }
-        }
-        let mut left = dt.clamp(0.0, 0.25);
-        while left > 1e-6 {
-            let h = left.min(MAX_STEP);
-            left -= h;
-            // Stepping off an edge, the rounded bottom rolls over it before
-            // letting go; the point last stood on is where it left.
-            let (was_on_ground, z) = (self.on_ground, self.feet[2].max(self.ground));
-            self.substep(collider, shape, velocity, h);
-            if was_on_ground && !self.on_ground {
-                self.left_ground_at = z;
-            } else if !was_on_ground && self.on_ground {
-                self.fell = Some(self.left_ground_at - self.feet[2]);
-            }
-        }
-    }
-
-    fn substep(
-        &mut self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        velocity: [f32; 2],
-        dt: f32,
-    ) {
-        let horizontal = [velocity[0] * dt, velocity[1] * dt, 0.0];
-        let was_on_ground = self.on_ground;
-
-        // Horizontal: straight, and stepped up then down; keep whichever
-        // gets further.
-        if dot(horizontal, horizontal) > 0.0 {
-            let straight = self.moved(collider, shape, horizontal).0;
-            let lifted = add(self.feet, [0.0, 0.0, shape.step]);
-            let up = Character {
-                feet: lifted,
-                ..*self
-            }
-            .moved(collider, shape, [0.0; 3])
-            .0;
-            let mut stepped = None;
-            if (up[2] - lifted[2]).abs() < 0.01 {
-                let across = Character { feet: up, ..*self }
-                    .moved(collider, shape, horizontal)
-                    .0;
-                let (down, ground) = Character {
-                    feet: across,
-                    ..*self
-                }
-                .swept_down(collider, shape, shape.step);
-                // Landed on something no lower than it started and no more
-                // than a step above where it stood: the step's edge counts
-                // (the rounded bottom rests on it first).
-                if ground.is_some_and(|g| {
-                    g.normal[2] > 0.0
-                        && g.height <= self.ground.max(self.feet[2]) + shape.step + 0.01
-                }) && down[2] >= self.feet[2] - 0.01
-                {
-                    stepped = Some(down);
-                }
-            }
-            let gain = |p: Vec3| {
-                let d = sub(p, self.feet);
-                d[0] * horizontal[0] + d[1] * horizontal[1]
-            };
-            self.feet = match stepped {
-                Some(s) if was_on_ground && gain(s) > gain(straight) + 0.01 => s,
-                _ => straight,
-            };
-        }
-
-        // Vertical: gravity, then land or hit the ceiling.
-        if !self.on_ground {
-            self.vertical_speed -= shape.gravity * dt;
-        }
-        let (after, ground) = if self.on_ground {
-            // Stay on the floor going down slopes and stairs.
-            self.swept_down(collider, shape, shape.step)
-        } else {
-            self.moved(collider, shape, [0.0, 0.0, self.vertical_speed * dt])
-        };
-        let stands_on = |g: Option<Support>| g.filter(|g| g.normal[2] >= shape.max_slope_cos);
-        let standing = stands_on(ground);
-        if self.on_ground && standing.is_none() {
-            // Walked off an edge: only the free fall moves it.
-            self.on_ground = false;
-            let (after, ground) = self.moved(collider, shape, [0.0; 3]);
-            self.feet = after;
-            if let Some(g) = stands_on(ground) {
-                self.on_ground = true;
-                self.ground = g.height;
-            }
-            return;
-        }
-        self.feet = after;
-        if let Some(g) = standing {
-            self.on_ground = true;
-            self.vertical_speed = 0.0;
-            self.ground = g.height;
-        } else {
-            self.on_ground = false;
-            if ground.is_some_and(|g| g.normal[2] < -0.5) && self.vertical_speed > 0.0 {
-                self.vertical_speed = 0.0;
-            }
-        }
-    }
-
-    /// Where the capsule ends up moving by `delta` and being pushed out of
-    /// everything it overlaps, and the most upward-facing push it got (the
-    /// surface it rests on), if any.
-    fn moved(
-        &self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        delta: Vec3,
-    ) -> (Vec3, Option<Support>) {
-        // In pieces of at most half the radius, so nothing is jumped
-        // through and contacts are met in order.
-        let pieces = (length(delta) / (shape.radius * 0.5)).ceil().max(1.0) as usize;
-        let piece = scale(delta, 1.0 / pieces as f32);
-        let mut feet = self.feet;
-        let mut best: Option<Support> = None;
-        for _ in 0..pieces {
-            let (next, support) = Character { feet, ..*self }.pushed_out(collider, shape, piece);
-            feet = next;
-            if let Some(s) = support {
-                if best.map_or(true, |b| s.normal[2] > b.normal[2]) {
-                    best = Some(s);
-                }
-            }
-        }
-        (feet, best)
-    }
-
-    /// Lowers the capsule by up to `distance`, stopping where it first
-    /// touches something (a sweep, not a push: landing on a step's edge
-    /// stays on the step). Returns where it stops and the face it rests on.
-    fn swept_down(
-        &self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        distance: f32,
-    ) -> (Vec3, Option<Support>) {
-        const INCREMENT: f32 = 0.5;
-        let steps = (distance / INCREMENT).ceil().max(1.0) as usize;
-        let piece = distance / steps as f32;
-        let mut feet = self.feet;
-        // The triangles near it are the same at every step (the grid is
-        // across x and y, which the sweep keeps): found once.
-        let candidates = self.touch_candidates(collider, shape);
-        for _ in 0..steps {
-            let next = [feet[0], feet[1], feet[2] - piece];
-            if let Some(support) = (Character {
-                feet: next,
-                ..*self
-            })
-            .touching_among(collider, shape, &candidates)
-            {
-                return (feet, Some(support));
-            }
-            feet = next;
-        }
-        (feet, None)
-    }
-
-    /// The triangles near enough for [`Character::touching_among`] to look at.
-    fn touch_candidates(&self, collider: &Collider, shape: &CharacterShape) -> Vec<u32> {
-        let r = shape.radius;
-        let lo = [
-            self.feet[0] - r - 1.0,
-            self.feet[1] - r - 1.0,
-            self.feet[2] - 1.0,
-        ];
-        let hi = [
-            self.feet[0] + r + 1.0,
-            self.feet[1] + r + 1.0,
-            self.feet[2] + shape.lift + shape.height + 1.0,
-        ];
-        collider.near(lo, hi)
-    }
-
-    /// The face the capsule overlaps most among `candidates` (in their
-    /// order), turned toward it, if any.
-    fn touching_among(
-        &self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        candidates: &[u32],
-    ) -> Option<Support> {
-        let r = shape.radius;
-        let (bottom, top) = shape.axis(self.feet);
-        let mut best: Option<Support> = None;
-        for &t in candidates {
-            let [a, b, c] = collider.triangle(t);
-            if surely_beyond([a, b, c], bottom, top, r + collider.shell(t)) {
-                continue;
-            }
-            let (on_axis, on_triangle) = segment_triangle_closest(bottom, top, a, b, c);
-            let gap = sub(on_axis, on_triangle);
-            let d = length(gap);
-            // A triangle with no area gives no distance: not touched.
-            let shell = collider.shell(t);
-            if d.is_nan() || d >= r + shell - 0.01 {
-                continue;
-            }
-            let face = normalize(cross(sub(b, a), sub(c, a)));
-            let toward = if d > 1e-6 { gap } else { sub(bottom, a) };
-            let normal = if dot(face, toward) >= 0.0 {
-                face
-            } else {
-                scale(face, -1.0)
-            };
-            // Prefer what it stands on, and of that the highest point.
-            let better = best.map_or(true, |b| {
-                normal[2] > b.normal[2] + 1e-4
-                    || (normal[2] > b.normal[2] - 1e-4 && on_triangle[2] > b.height)
-            });
-            if better {
-                best = Some(Support {
-                    normal,
-                    height: stood_height(on_triangle, shell, shape),
-                });
-            }
-        }
-        best
-    }
-
-    /// Moves by `delta` (short) and pushes the capsule out of everything it
-    /// overlaps.
-    fn pushed_out(
-        &self,
-        collider: &Collider,
-        shape: &CharacterShape,
-        delta: Vec3,
-    ) -> (Vec3, Option<Support>) {
-        let mut feet = add(self.feet, delta);
-        let r = shape.radius;
-        let mut best: Option<Support> = None;
-        // The deepest overlap first, then look again: pushing out of a face
-        // also clears its neighbors' edges, which would otherwise push the
-        // capsule sideways.
-        let lo = [feet[0] - r - 4.0, feet[1] - r - 4.0, feet[2] - 4.0];
-        let hi = [
-            feet[0] + r + 4.0,
-            feet[1] + r + 4.0,
-            feet[2] + shape.lift + shape.height + 4.0,
-        ];
-        let candidates: Vec<u32> = collider
-            .near(lo, hi)
-            .into_iter()
-            .filter(|&t| {
-                let [a, b, c] = collider.triangle(t);
-                a[2].max(b[2]).max(c[2]) >= lo[2] && a[2].min(b[2]).min(c[2]) <= hi[2]
-            })
-            .collect();
-        for _ in 0..RESOLVE_PASSES * 2 {
-            let (bottom, top) = shape.axis(feet);
-            let mut deepest: Option<(f32, Vec3, Support)> = None;
-            for &t in &candidates {
-                let [a, b, c] = collider.triangle(t);
-                if surely_beyond([a, b, c], bottom, top, r + collider.shell(t)) {
-                    continue;
-                }
-                let (on_axis, on_triangle) = segment_triangle_closest(bottom, top, a, b, c);
-                let gap = sub(on_axis, on_triangle);
-                let d = length(gap);
-                // A triangle with no area (two corners the same) gives no
-                // distance at all: it's nothing to push against.
-                let shell = collider.shell(t);
-                let reach = r + shell;
-                if d.is_nan() || d >= reach - 1e-4 {
-                    continue;
-                }
-                let face = normalize(cross(sub(b, a), sub(c, a)));
-                let n = if d > 1e-6 {
-                    scale(gap, 1.0 / d)
-                } else {
-                    // The axis passes through the triangle: push along its
-                    // face normal, toward the side the capsule came from.
-                    if dot(face, sub(self.feet, a)) >= 0.0 {
-                        face
-                    } else {
-                        scale(face, -1.0)
-                    }
-                };
-                let depth = reach - d;
-                if deepest.map_or(true, |(dd, _, _)| depth > dd) {
-                    // What supports the capsule is the surface it touches,
-                    // so report the face's normal (turned toward the
-                    // capsule), not the push: resting on a step's edge is
-                    // standing on the step.
-                    let normal = if dot(face, n) >= 0.0 {
-                        face
-                    } else {
-                        scale(face, -1.0)
-                    };
-                    deepest = Some((
-                        depth,
-                        n,
-                        Support {
-                            normal,
-                            height: stood_height(on_triangle, shell, shape),
-                        },
-                    ));
-                }
-            }
-            // Other people: pushed apart sideways only (the game flattens
-            // these contacts to walls), wherever their heights overlap.
-            for p in collider.people() {
-                let below = feet[2] + shape.lift + shape.height < p.feet[2];
-                let above = feet[2] + shape.lift > p.feet[2] + p.height;
-                if below || above {
-                    continue;
-                }
-                let apart = [feet[0] - p.feet[0], feet[1] - p.feet[1], 0.0];
-                let d = length(apart);
-                let reach = r + p.radius;
-                if d >= reach - 1e-4 {
-                    continue;
-                }
-                let n = if d > 1e-6 {
-                    scale(apart, 1.0 / d)
-                } else {
-                    // Right on top of them: back the way it came.
-                    let back = [-delta[0], -delta[1], 0.0];
-                    if length(back) > 1e-6 {
-                        normalize(back)
-                    } else {
-                        [1.0, 0.0, 0.0]
-                    }
-                };
-                let depth = reach - d;
-                if deepest.map_or(true, |(dd, _, _)| depth > dd) {
-                    deepest = Some((
-                        depth,
-                        n,
-                        Support {
-                            normal: n,
-                            height: p.feet[2],
-                        },
-                    ));
-                }
-            }
-            let Some((depth, n, support)) = deepest else {
-                break;
-            };
-            feet = add(feet, scale(n, depth + 1e-3));
-            if best.map_or(true, |b| support.normal[2] > b.normal[2]) {
-                best = Some(support);
-            }
-        }
-        (feet, best)
+        self.update_controlled(collider, shape, velocity, None, 1.0, dt);
     }
 }
-
-/// The height the feet are at standing on a point of a triangle: its shell's
-/// surface above the point, less how far the shape floats above the feet
-/// (the same on models' collision: the feet are at the triangles).
-fn stood_height(on_triangle: Vec3, shell: f32, shape: &CharacterShape) -> f32 {
-    on_triangle[2] + shell - shape.lift
-}
-
 /// The closest points between segment `p`–`q` and triangle `a b c`: one on
 /// the segment, one on the triangle.
 pub(crate) fn segment_triangle_closest(
@@ -1893,31 +1507,30 @@ mod tests {
         c
     }
 
-    #[test]
-    fn does_not_climb_a_ledge_higher_than_a_step_bit_by_bit() {
-        // The rounded bottom can rest on the bench's edge 22 units up (under
-        // a step); from there the bench's top is only 10 higher. Steps count
-        // from the point stood on, so it stays blocked.
-        let c = room();
-        let mut p = Character::new([0.0, -100.0, 0.0]);
-        run(&c, &mut p, [0.0, -200.0], 2.0);
-        let r = CharacterShape::PLAYER.radius;
-        assert!(p.feet[2] < 1.0, "climbed: {:?}", p.feet);
-        assert!(p.feet[1] > -200.0 + r - 1.0, "went through: {:?}", p.feet);
-    }
+    /// How far the feet stay above a surface: the proxy's keep distance
+    /// (0.05 Havok units), the hull's surface being at the feet.
+    const KEEP: f32 = 0.05 * HAVOK_UNIT;
 
     fn run(c: &Collider, player: &mut Character, velocity: [f32; 2], seconds: f32) {
-        let steps = (seconds * 60.0) as usize;
+        let steps = (seconds * 60.0).round() as usize;
         for _ in 0..steps {
-            player.update(c, &CharacterShape::PLAYER, velocity, false, 1.0 / 60.0);
+            player.update(c, &CharacterShape::PLAYER, velocity, 1.0 / 60.0);
         }
+    }
+
+    /// Feet standing on a model's surface at height `z`: its shell and the
+    /// keep distance above (the cast stops within its early-out, 0.01 Havok
+    /// units, of that).
+    fn stands_at(feet: f32, z: f32) -> bool {
+        let want = z + SHELL + KEEP;
+        feet >= want - 0.05 && feet <= want + 0.1
     }
 
     #[test]
     fn a_flat_sliver_triangle_is_ignored() {
         // Game collision has triangles with no area: two corners the same
         // (the Prospector Saloon's, about 40, −581, 3516), or three in a
-        // line. One near the capsule made its position NaN.
+        // line.
         let mut c = room();
         c.add(
             &[[0.0, 0.0, 10.0], [0.0, 0.0, 10.0], [1.9, -3.2, 10.7]],
@@ -1927,7 +1540,7 @@ mod tests {
             &[[-10.0, 0.0, 10.0], [0.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
             &[[0, 1, 2]],
         );
-        let mut p = Character::new([0.0, 0.0, 0.0]);
+        let mut p = Character::new([0.0, 0.0, 2.0]);
         run(&c, &mut p, [0.0, 0.0], 0.5);
         assert!(p.feet.iter().all(|v| v.is_finite()), "{:?}", p.feet);
         run(&c, &mut p, [50.0, 0.0], 0.5);
@@ -1935,34 +1548,39 @@ mod tests {
     }
 
     #[test]
-    fn falls_onto_the_floor_and_stands_there() {
+    fn falls_onto_the_floor_lands_and_stands_there() {
         let c = room();
         let mut p = Character::new([0.0, 0.0, 100.0]);
+        run(&c, &mut p, [0.0, 0.0], 0.1);
+        assert!(!p.on_ground, "falling");
         run(&c, &mut p, [0.0, 0.0], 2.0);
         assert!(p.on_ground);
-        assert!(p.feet[2].abs() < 0.5, "{:?}", p.feet);
+        assert!(stands_at(p.feet[2], 0.0), "{:?}", p.feet);
+        // Measured from where it left the ground: the start.
+        let fell = p.fell.expect("landed");
+        assert!((fell - 100.0).abs() < 2.0, "{fell}");
+        // Standing still: no velocity, no drift.
+        let at = p.feet;
+        run(&c, &mut p, [0.0, 0.0], 1.0);
+        assert_eq!(p.feet, at);
+        assert_eq!(p.controller.proxy.velocity, [0.0; 3]);
     }
 
     #[test]
-    fn stops_at_a_wall_its_radius_and_the_shell_away() {
+    fn stops_at_a_wall_its_radius_the_shells_and_the_keep_distance_away() {
         let c = room();
-        let mut p = Character::new([0.0, 0.0, 0.0]);
+        let mut p = Character::new([0.0, 0.0, 1.05]);
         run(&c, &mut p, [300.0, 0.0], 2.0);
-        let r = CharacterShape::PLAYER.radius;
-        assert!(
-            (p.feet[0] - (200.0 - r - SHELL)).abs() < 0.1,
-            "{:?}",
-            p.feet
-        );
-        // Standing on the floor's shell, floating its own lift above the
-        // feet: the feet are at the floor.
-        assert!(p.feet[2].abs() < 0.05, "{:?}", p.feet);
+        // The hull's corner points along x: radius + its convex radius.
+        let r = CharacterShape::PLAYER.radius + 0.1 * HAVOK_UNIT;
+        let x = 200.0 - SHELL - KEEP - r;
+        assert!((p.feet[0] - x).abs() < 0.1, "{:?} {x}", p.feet);
+        assert!(p.feet[1].abs() < 0.01, "{:?}", p.feet);
+        assert!(stands_at(p.feet[2], 0.0), "{:?}", p.feet);
     }
 
     #[test]
     fn triangles_without_area_are_left_out() {
-        // Corners in a line (the saloon's collision has some): the closest
-        // point test divides by the area, which made the walk NaN.
         let mut c = room();
         let before = c.triangle_count();
         c.add(
@@ -1970,7 +1588,7 @@ mod tests {
             &[[0, 1, 2]],
         );
         assert_eq!(c.triangle_count(), before);
-        let mut p = Character::new([0.0, -60.0, 0.0]);
+        let mut p = Character::new([0.0, -60.0, 1.05]);
         run(&c, &mut p, [0.0, 100.0], 1.0);
         assert!(p.feet.iter().all(|v| v.is_finite()), "{:?}", p.feet);
         assert!((p.feet[1] - 40.0).abs() < 1.0, "{:?}", p.feet);
@@ -1992,7 +1610,7 @@ mod tests {
             0x123,
         );
         assert!(c.owns(0x123) && !c.owns(0x124));
-        let mut p = Character::new([0.0, 0.0, 0.0]);
+        let mut p = Character::new([0.0, 0.0, 1.05]);
         run(&c, &mut p, [0.0, 100.0], 1.0);
         assert!(p.feet[1] < 100.0 - 20.0, "closed: {:?}", p.feet);
         // Open: walked through, and rays pass.
@@ -2000,72 +1618,198 @@ mod tests {
         assert!(c
             .raycast([0.0, 0.0, 50.0], [0.0, 1.0, 0.0], 150.0)
             .is_none());
-        // Still found by a ray that looks for it (to close it again).
         let (_, t) = c
             .raycast_including_hidden([0.0, 0.0, 50.0], [0.0, 1.0, 0.0], 150.0)
             .unwrap();
         assert_eq!(c.owner(t), 0x123);
-        let mut p = Character::new([0.0, 0.0, 0.0]);
+        let mut p = Character::new([0.0, 0.0, 1.05]);
         run(&c, &mut p, [0.0, 100.0], 1.5);
         assert!(p.feet[1] > 120.0, "open: {:?}", p.feet);
-        // Merged colliders keep both the owners and what's switched off.
         let mut merged = Collider::new();
         merged.extend(&c);
         assert!(merged.is_hidden(0x123) && merged.owns(0x123));
     }
 
     #[test]
-    fn people_block_sideways_only() {
+    fn people_are_walls_nobody_stands_on() {
         let mut c = room();
+        let other = [0.0, 100.0, 1.05];
         c.set_people(vec![Person {
-            feet: [0.0, 100.0, 0.0],
+            feet: other,
             radius: 20.25,
             height: 128.0,
         }]);
-        let mut p = Character::new([0.0, 0.0, 0.0]);
-        run(&c, &mut p, [0.0, 200.0], 1.0);
-        let r = CharacterShape::PLAYER.radius;
+        // Walking into them: never inside their hull (their contacts are
+        // vertical walls), sliding round it, on the floor all the way.
+        let mut p = Character::new([5.0, 0.0, 1.05]);
+        for _ in 0..90 {
+            p.update(&c, &CharacterShape::PLAYER, [0.0, 150.0], 1.0 / 60.0);
+            let apart = (p.feet[0] - other[0]).hypot(p.feet[1] - other[1]);
+            // Two octagons of radius 20.25 (their flats 18.7 out).
+            assert!(apart > 2.0 * 18.7, "{apart} {:?}", p.feet);
+            assert!(stands_at(p.feet[2], 0.0), "{:?}", p.feet);
+        }
+        // Dropped on their head: their top is a wall too, so it slides off
+        // to the floor.
+        let mut p = Character::new([5.0, 100.0, 140.0]);
+        run(&c, &mut p, [0.0, 0.0], 3.0);
+        assert!(p.on_ground && stands_at(p.feet[2], 0.0), "{:?}", p.feet);
+    }
+    #[test]
+    fn walks_up_a_step_but_not_a_bench_or_a_block() {
+        // The 16-unit step: under the 31-unit step height.
+        let c = room();
+        let mut p = Character::new([0.0, 0.0, 1.05]);
+        run(&c, &mut p, [-200.0, 0.0], 0.65);
+        run(&c, &mut p, [0.0, 0.0], 1.0);
+        assert!(p.feet[0] < -110.0, "went on: {:?}", p.feet);
+        assert!(stands_at(p.feet[2], 16.0), "onto the step: {:?}", p.feet);
+        assert!(p.feet[1].abs() < 0.5, "straight on: {:?}", p.feet);
+        // The 32-unit bench: over a step.
+        let mut p = Character::new([0.0, -100.0, 1.05]);
+        run(&c, &mut p, [0.0, -200.0], 2.0);
+        assert!(p.feet[1] > -200.0, "went through: {:?}", p.feet);
+        assert!(stands_at(p.feet[2], 0.0), "climbed: {:?}", p.feet);
+        // The 64-unit block.
+        let mut p = Character::new([0.0, 100.0, 1.05]);
+        run(&c, &mut p, [0.0, 200.0], 2.0);
         assert!(
-            (p.feet[1] - (100.0 - r - 20.25)).abs() < 0.5,
+            p.feet[1] < 200.0 && stands_at(p.feet[2], 0.0),
             "{:?}",
             p.feet
         );
-        // Dropped on top of them, nobody stands on anybody: pushed off
-        // sideways to the floor.
-        let mut p = Character::new([0.0, 101.0, 140.0]);
-        run(&c, &mut p, [0.0, 0.0], 2.0);
-        assert!(p.on_ground && p.feet[2].abs() < 0.05, "{:?}", p.feet);
-        let apart = ((p.feet[0]).powi(2) + (p.feet[1] - 100.0).powi(2)).sqrt();
-        assert!(apart >= r + 20.25 - 0.5, "{apart}");
+    }
+
+    /// A ramp rising along +x from x = 0 at `degrees`, with a floor before
+    /// it.
+    fn ramp(degrees: f32) -> Collider {
+        let mut c = Collider::new();
+        let rise = 1000.0 * degrees.to_radians().tan();
+        c.add_solid(
+            &[
+                [-500.0, -500.0, 0.0],
+                [0.0, -500.0, 0.0],
+                [0.0, 500.0, 0.0],
+                [-500.0, 500.0, 0.0],
+                [1000.0, -500.0, rise],
+                [1000.0, 500.0, rise],
+            ],
+            &[[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]],
+            SHELL,
+            0,
+        );
+        c
     }
 
     #[test]
-    fn walks_up_a_low_step_but_not_a_high_block() {
-        let c = room();
-        let mut p = Character::new([0.0, 0.0, 0.0]);
-        run(&c, &mut p, [-200.0, 0.0], 1.0);
-        assert!(
-            (p.feet[2] - 16.0).abs() < 0.5,
-            "onto the step: {:?}",
-            p.feet
-        );
-        assert!(p.feet[1].abs() < 0.5, "straight on: {:?}", p.feet);
-        let mut p = Character::new([0.0, 100.0, 0.0]);
-        run(&c, &mut p, [0.0, 200.0], 2.0);
-        let r = CharacterShape::PLAYER.radius;
-        assert!(
-            p.feet[1] < 200.0 - r + 1.0 && p.feet[2] < 1.0,
-            "blocked: {:?}",
-            p.feet
-        );
+    fn walks_up_slopes_to_47_degrees_and_not_steeper() {
+        for (degrees, climbs) in [(30.0, true), (45.0, true), (50.0, false), (60.0, false)] {
+            let c = ramp(degrees);
+            let mut p = Character::new([-60.0, 0.0, 1.05]);
+            run(&c, &mut p, [0.0, 0.0], 0.2);
+            run(&c, &mut p, [200.0, 0.0], 3.0);
+            if climbs {
+                assert!(p.feet[2] > 100.0, "{degrees}: {:?}", p.feet);
+                assert!(p.on_ground, "{degrees}: {:?}", p.feet);
+            } else {
+                assert!(p.feet[2] < 32.0, "{degrees}: climbed {:?}", p.feet);
+            }
+        }
     }
 
+    #[test]
+    fn stands_on_a_box_and_walks_off_its_edge() {
+        let c = room();
+        // On top of the 64-unit block (y 200 to 300).
+        let mut p = Character::new([0.0, 250.0, 70.0]);
+        run(&c, &mut p, [0.0, 0.0], 0.5);
+        assert!(p.on_ground && stands_at(p.feet[2], 64.0), "{:?}", p.feet);
+        p.fell = None;
+        // South off its front edge at y = 200.
+        run(&c, &mut p, [0.0, -150.0], 1.5);
+        assert!(p.on_ground && stands_at(p.feet[2], 0.0), "{:?}", p.feet);
+        let fell = p.fell.expect("landed");
+        assert!((fell - 64.0).abs() < 2.0, "{fell}");
+    }
+
+    #[test]
+    fn a_jump_rises_its_height_keeps_its_run_up_and_lands() {
+        let c = room();
+        let shape = CharacterShape::PLAYER;
+        let dt = 1.0 / 60.0;
+        let mut p = Character::new([120.0, 250.0, 1.05]);
+        run(&c, &mut p, [0.0, 0.0], 0.2);
+        let start = p.feet[2];
+        // Running south, then the jump (`fJumpHeightMin` 64).
+        for _ in 0..10 {
+            p.update_controlled(&c, &shape, [0.0, -308.0], None, 0.3, dt);
+        }
+        assert!((p.horizontal[1] + 308.0).abs() < 1.0, "{:?}", p.horizontal);
+        p.update_controlled(&c, &shape, [0.0, -308.0], Some(64.0), 0.3, dt);
+        // Asked on the ground; it leaves the update after.
+        p.update_controlled(&c, &shape, [0.0, -308.0], None, 0.3, dt);
+        assert!(!p.on_ground);
+        // The jumping state adds √(2 g h) up to the proxy's velocity: the
+        // run-up is kept (`00cd4280`).
+        assert!((p.horizontal[1] + 308.0).abs() < 1.0, "{:?}", p.horizontal);
+        let mut highest = p.feet[2];
+        for _ in 0..120 {
+            p.update_controlled(&c, &shape, [0.0, -308.0], None, 0.3, dt);
+            highest = highest.max(p.feet[2]);
+            if p.on_ground {
+                break;
+            }
+        }
+        assert!((highest - start - 64.0).abs() < 4.0, "{highest} {start}");
+        assert!(p.on_ground && stands_at(p.feet[2], 0.0), "{:?}", p.feet);
+        assert!(p.fell.is_some_and(|f| f.abs() < 1.0), "{:?}", p.fell);
+    }
+
+    #[test]
+    fn sunk_waist_deep_in_the_land_comes_up_at_the_recovery_speed() {
+        // Terrain: a big flat square with the land's 0.5 Havok-unit shell.
+        let mut c = Collider::new();
+        c.add_solid(
+            &[
+                [-2000.0, -2000.0, 0.0],
+                [2000.0, -2000.0, 0.0],
+                [2000.0, 2000.0, 0.0],
+                [-2000.0, 2000.0, 0.0],
+            ],
+            &[[0, 1, 2], [0, 2, 3]],
+            TERRAIN_SHELL,
+            0,
+        );
+        let surface = TERRAIN_SHELL + KEEP;
+        // Away from the square's diagonal (an edge both its triangles share).
+        let mut p = Character::new([-500.0, -300.0, -40.0]);
+        run(&c, &mut p, [0.0, 0.0], 0.5);
+        // Standing still in an unchanged manifold the proxy isn't
+        // integrated at all (`00c73170`): it stays sunk (but for the first
+        // update, which falls before the manifold is there).
+        let sunk = p.feet[2];
+        assert!(sunk < -38.0, "{sunk}");
+        run(&c, &mut p, [0.0, 0.0], 1.0);
+        assert_eq!(p.feet[2], sunk);
+        // Walking, the crossing becomes a velocity out of the land at the
+        // penetration recovery speed (1 a second for each Havok unit sunk,
+        // `00cacd60`): about 1 − e^-0.5 of the way up in half a second.
+        run(&c, &mut p, [150.0, 0.0], 0.5);
+        let depth = surface - sunk;
+        let risen = p.feet[2] - sunk;
+        assert!(
+            risen > 0.25 * depth && risen < 0.6 * depth,
+            "{risen} of {depth}"
+        );
+        run(&c, &mut p, [150.0, 0.0], 6.0);
+        assert!((p.feet[2] - surface).abs() < 1.0, "{:?}", p.feet);
+    }
     #[test]
     fn walks_straight_across_a_triangulated_floor() {
         // The floor quad's diagonal runs through the start: its edge
-        // mustn't push the capsule sideways.
+        // mustn't push the shape sideways.
         let c = room();
-        let mut p = Character::new([0.0, 0.0, 0.0]);
+        let mut p = Character::new([0.0, 0.0, 1.05]);
         run(&c, &mut p, [-60.0, 0.0], 1.0);
         assert!(
             p.feet[1].abs() < 0.01 && (p.feet[0] + 60.0).abs() < 1.0,
@@ -2073,98 +1817,6 @@ mod tests {
             p.feet
         );
     }
-
-    #[test]
-    fn walks_off_a_ledge_and_falls() {
-        let c = room();
-        // On top of the 64-unit block, walking off its front edge.
-        let mut p = Character::new([0.0, 250.0, 64.0]);
-        run(&c, &mut p, [0.0, 0.0], 0.2);
-        assert!(
-            p.on_ground && (p.feet[2] - 64.0).abs() < 0.5,
-            "{:?}",
-            p.feet
-        );
-        p.fell = None;
-        run(&c, &mut p, [0.0, -200.0], 1.5);
-        assert!(p.on_ground && p.feet[2].abs() < 0.5, "{:?}", p.feet);
-        // The fall is counted from where it stepped off.
-        let fell = p.fell.expect("landed");
-        assert!((fell - 64.0).abs() < 1.0, "{fell}");
-    }
-
-    #[test]
-    fn jumps_and_comes_back_down() {
-        let c = room();
-        let mut p = Character::new([0.0, 0.0, 0.0]);
-        run(&c, &mut p, [0.0, 0.0], 0.5);
-        p.update_with_jump(
-            &c,
-            &CharacterShape::PLAYER,
-            [0.0, 0.0],
-            Some(500.0),
-            1.0 / 60.0,
-        );
-        let mut highest: f32 = 0.0;
-        for _ in 0..120 {
-            p.update(&c, &CharacterShape::PLAYER, [0.0, 0.0], false, 1.0 / 60.0);
-            highest = highest.max(p.feet[2]);
-        }
-        assert!(highest > 50.0, "{highest}");
-        assert!(p.on_ground && p.feet[2].abs() < 0.5);
-        // A jump on flat ground is no fall: measured from where it left
-        // the ground, not from the top.
-        assert!(p.fell.is_some_and(|f| f.abs() < 0.5), "{:?}", p.fell);
-    }
-
-    #[test]
-    fn a_running_jump_starts_from_standing_and_steers_three_tenths_a_frame() {
-        let c = room();
-        let shape = CharacterShape::PLAYER;
-        let dt = 1.0 / 60.0;
-        let mut p = Character::new([-50.0, 0.0, 0.0]);
-        // Settle, then run east at 308.
-        for _ in 0..30 {
-            p.update_controlled(&c, &shape, [0.0, 0.0], None, 0.3, dt);
-        }
-        p.update_controlled(&c, &shape, [308.0, 0.0], None, 0.3, dt);
-        assert!(p.on_ground && (p.horizontal[0] - 308.0).abs() < 0.5);
-        // The jump's update: the run-up is dropped.
-        let x = p.feet[0];
-        p.update_controlled(&c, &shape, [308.0, 0.0], Some(296.5), 0.3, dt);
-        assert!(!p.on_ground);
-        assert!((p.feet[0] - x).abs() < 1e-3, "{}", p.feet[0] - x);
-        // Then 0.3 of the gap each update: 92.4, then 157.1.
-        p.update_controlled(&c, &shape, [308.0, 0.0], None, 0.3, dt);
-        assert!((p.horizontal[0] - 92.4).abs() < 0.1, "{:?}", p.horizontal);
-        p.update_controlled(&c, &shape, [308.0, 0.0], None, 0.3, dt);
-        assert!((p.horizontal[0] - 157.08).abs() < 0.1, "{:?}", p.horizontal);
-        // Letting go in the air slows it the same way, not at once.
-        p.update_controlled(&c, &shape, [0.0, 0.0], None, 0.3, dt);
-        assert!((p.horizontal[0] - 109.96).abs() < 0.1, "{:?}", p.horizontal);
-        assert_eq!(
-            blend_velocity([0.0, 0.0], [10000.0, 0.0], 1.0, 500.0),
-            [500.0, 0.0]
-        );
-    }
-
-    #[test]
-    fn the_game_jump_rises_its_height() {
-        // `fJumpHeightMin` 64: launched at √(2 g h), about 296.5 a second.
-        let speed = (2.0 * GRAVITY * 64.0).sqrt();
-        assert!((speed - 296.5).abs() < 0.2, "{speed}");
-        let c = room();
-        let mut p = Character::new([0.0, 0.0, 0.0]);
-        run(&c, &mut p, [0.0, 0.0], 0.5);
-        p.update_with_jump(&c, &CharacterShape::PLAYER, [0.0, 0.0], Some(speed), 1e-4);
-        let mut highest: f32 = 0.0;
-        for _ in 0..1200 {
-            p.update(&c, &CharacterShape::PLAYER, [0.0, 0.0], false, 1.0 / 1200.0);
-            highest = highest.max(p.feet[2]);
-        }
-        assert!((highest - 64.0).abs() < 1.0, "{highest}");
-    }
-
     #[test]
     fn merged_colliders_keep_every_surface() {
         let mut merged = Collider::new();
@@ -2251,134 +1903,6 @@ mod tests {
         all.extend(&c);
         all.move_owner(0x904, &turn, [0.0, 1000.0, 0.0]);
         assert!(north(&all).is_none());
-    }
-
-    /// The box test only skips triangles the exact test finds out of reach.
-    #[test]
-    fn surely_beyond_never_skips_a_triangle_within_reach() {
-        let mut seed = 12345u64;
-        let mut unit = || {
-            seed = seed
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            ((seed >> 33) as f32) / (1u64 << 31) as f32 * 2.0 - 1.0
-        };
-        let mut skipped = 0;
-        for _ in 0..200_000 {
-            let mut p = || [unit() * 120.0, unit() * 120.0, unit() * 120.0];
-            let (a, b, c) = (p(), p(), p());
-            let bottom = [unit() * 60.0, unit() * 60.0, unit() * 60.0];
-            let top = add(bottom, [0.0, 0.0, unit().abs() * 80.0]);
-            let reach = 20.0 + unit().abs() * 20.0;
-            if surely_beyond([a, b, c], bottom, top, reach) {
-                skipped += 1;
-                let (on_axis, on_triangle) = segment_triangle_closest(bottom, top, a, b, c);
-                let d = length(sub(on_axis, on_triangle));
-                assert!(
-                    d.is_nan() || d >= reach,
-                    "{a:?} {b:?} {c:?} {bottom:?} {top:?} {reach} {d}"
-                );
-            }
-        }
-        assert!(skipped > 10_000);
-    }
-
-    /// A seeded number from -1 to 1 (the tests' own, no library).
-    fn lcg(seed: &mut u64) -> f32 {
-        *seed = seed
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        ((*seed >> 33) as f32) / (1u64 << 31) as f32 * 2.0 - 1.0
-    }
-
-    /// Where the outdoor numbers are largest (Goodsprings, about -68000,
-    /// 5800, 8480; f32 steps of 1/128 there) and just past the margin, the
-    /// box test still only skips what both exact tests (the touch's and
-    /// the push's, the stricter) leave out.
-    #[test]
-    fn surely_beyond_never_skips_a_triangle_within_reach_outdoors() {
-        let mut seed = 777u64;
-        let origin = [-68250.0, 5800.0, 8480.0];
-        let reach = CharacterShape::PLAYER.radius + 0.7;
-        let mut skipped = 0;
-        for i in 0..200_000 {
-            let mut u = || lcg(&mut seed);
-            let bottom = add(origin, [u() * 40.0, u() * 40.0, u() * 40.0]);
-            let top = add(bottom, [0.0, 0.0, 87.0]);
-            // A triangle whose box starts just beyond reach along one axis.
-            let k = i % 3;
-            let gap = reach + 0.05 + u().abs() * 0.02;
-            let mut corner = |_| {
-                let mut p = add(bottom, [u() * 60.0, u() * 60.0, u() * 60.0]);
-                let start = if k == 2 { top[k] } else { bottom[k] };
-                p[k] = start + gap + u().abs() * 30.0;
-                p
-            };
-            let (a, b, c) = (corner(0), corner(1), corner(2));
-            if surely_beyond([a, b, c], bottom, top, reach) {
-                skipped += 1;
-                let (on_axis, on_triangle) = segment_triangle_closest(bottom, top, a, b, c);
-                let d = length(sub(on_axis, on_triangle));
-                assert!(
-                    d.is_nan() || d >= reach - 1e-4,
-                    "{a:?} {b:?} {c:?} {bottom:?} {top:?} {reach} {d}"
-                );
-            }
-        }
-        assert!(skipped > 100_000);
-    }
-
-    /// The downward sweep with its candidates found once gives what
-    /// finding them again at every step (the way before) gives: the grid
-    /// is across x and y, which the sweep keeps.
-    #[test]
-    fn one_candidate_list_sweeps_as_one_per_step() {
-        let mut seed = 4242u64;
-        let origin = [-68250.0, 5800.0, 8480.0];
-        let shape = CharacterShape::PLAYER;
-        for _ in 0..40 {
-            let mut c = Collider::new();
-            let mut vertices = Vec::new();
-            let mut triangles = Vec::new();
-            for _ in 0..300 {
-                let mut u = || lcg(&mut seed);
-                let middle = add(origin, [u() * 400.0, u() * 400.0, u() * 150.0]);
-                let base = vertices.len() as u32;
-                for _ in 0..3 {
-                    let mut u = || lcg(&mut seed);
-                    vertices.push(add(middle, [u() * 60.0, u() * 60.0, u() * 20.0]));
-                }
-                triangles.push([base, base + 1, base + 2]);
-            }
-            c.add(&vertices, &triangles);
-            for _ in 0..50 {
-                let mut u = || lcg(&mut seed);
-                let feet = add(origin, [u() * 300.0, u() * 300.0, 200.0 + u() * 100.0]);
-                let distance = 50.0 + u().abs() * 400.0;
-                let walker = Character::new(feet);
-                let found = walker.swept_down(&c, &shape, distance);
-                // The way before: the triangles near looked up at each step.
-                let steps = (distance / 0.5).ceil().max(1.0) as usize;
-                let piece = distance / steps as f32;
-                let mut at = feet;
-                let mut expected = (at, None);
-                for _ in 0..steps {
-                    let next = [at[0], at[1], at[2] - piece];
-                    let there = Character {
-                        feet: next,
-                        ..walker
-                    };
-                    let near = there.touch_candidates(&c, &shape);
-                    if let Some(s) = there.touching_among(&c, &shape, &near) {
-                        expected = (at, Some(s));
-                        break;
-                    }
-                    at = next;
-                    expected = (at, None);
-                }
-                assert_eq!(found, expected, "{feet:?} {distance}");
-            }
-        }
     }
 
     /// Moving an owner leaves every bucket's list as taking its triangles

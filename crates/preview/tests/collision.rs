@@ -99,8 +99,9 @@ fn collision_markers_are_solid_and_triggers_are_not() {
     // The sphere, radius 40.
     let d = ray(&c, [0.0, 0.0, 0.0], [-1.0, 0.0, 0.0]).unwrap();
     assert!((d - 260.0).abs() < 1.0, "{d}");
-    // Walking into the plane stops the player its radius and the box's
-    // shell (0.1 Havok units) short of it.
+    // Walking into the plane stops the player its hull's reach (its radius
+    // and convex radius, 0.1 Havok units), the box's shell (0.1) and the
+    // proxy's keep distance (0.05) short of it.
     c.add(
         &[
             [-1000.0, -1000.0, 0.0],
@@ -113,9 +114,10 @@ fn collision_markers_are_solid_and_triggers_are_not() {
     let shape = physics::CharacterShape::PLAYER;
     let mut p = physics::Character::new([0.0, 0.0, 0.0]);
     for _ in 0..120 {
-        p.update(&c, &shape, [300.0, 0.0], false, 1.0 / 60.0);
+        p.update(&c, &shape, [300.0, 0.0], 1.0 / 60.0);
     }
-    let stop = 100.0 - 0.01 - 0.1 * nif::collision::HAVOK_SCALE - shape.radius;
+    let h = nif::collision::HAVOK_SCALE;
+    let stop = 100.0 - 0.01 - 0.1 * h - 0.05 * h - (shape.radius + 0.1 * h);
     assert!((p.feet[0] - stop).abs() < 0.1, "{:?} vs {stop}", p.feet);
 }
 

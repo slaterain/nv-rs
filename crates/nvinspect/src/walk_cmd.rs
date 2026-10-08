@@ -56,7 +56,7 @@ pub fn walk(
     let shape = CharacterShape::PLAYER;
     let mut settled = Character::new(arrival.position);
     for _ in 0..120 {
-        settled.update(&collider, &shape, [0.0, 0.0], false, STEP);
+        settled.update(&collider, &shape, [0.0, 0.0], STEP);
     }
     writeln!(
         out,
@@ -87,7 +87,7 @@ pub fn walk(
         let angle = heading + turn.to_radians();
         // Heading is clockwise from north (+y).
         let velocity = [angle.sin() * RUN_SPEED, angle.cos() * RUN_SPEED];
-        let mut c = settled;
+        let mut c = settled.clone();
         let mut lowest = c.feet[2];
         let mut highest = c.feet[2];
         let steps = (seconds / STEP).round() as usize;
@@ -96,7 +96,7 @@ pub fn walk(
         let mut changes = Vec::new();
         for _ in 0..steps {
             let before = c.feet;
-            c.update(&collider, &shape, velocity, false, STEP);
+            c.update(&collider, &shape, velocity, STEP);
             lowest = lowest.min(c.feet[2]);
             highest = highest.max(c.feet[2]);
             let rise = c.feet[2] - before[2];

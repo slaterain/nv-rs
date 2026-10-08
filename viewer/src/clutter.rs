@@ -370,7 +370,7 @@ fn simulate(
             feet: c.feet,
             radius: shape.radius,
             height: shape.height,
-            velocity: [c.horizontal[0], c.horizontal[1], c.vertical_speed],
+            velocity: c.pushing,
         }]
     } else {
         Vec::new()

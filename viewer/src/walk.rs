@@ -372,13 +372,13 @@ pub fn walk(
     }
     let shape = CharacterShape::PLAYER;
     // Jump: not over-encumbered; `fJumpHeightMin` × the player's scale (1).
-    let jump = (keys.just_pressed(KeyCode::Space)
-        && !locked
-        && locomotion::may_jump(over_encumbered))
-    .then(|| locomotion::jump_speed(shape.gravity, locomotion::jump_height(settings, 1.0, false)));
+    let jump =
+        (keys.just_pressed(KeyCode::Space) && !locked && locomotion::may_jump(over_encumbered))
+            .then(|| locomotion::jump_height(settings, 1.0, false));
     let dt = time.delta_secs();
-    // One controller update a frame: on the ground at the wanted velocity,
-    // in the air steered 0.3 of the way to it.
+    // One controller move a frame (`bhkCharacterController::Move`): on the
+    // ground at the wanted velocity, in the air steered 0.3 of the way to
+    // it; a jump asked for here leaves the ground the next frame.
     player.character.update_controlled(
         &collision.0,
         &shape,
