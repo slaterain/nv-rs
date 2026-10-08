@@ -914,3 +914,41 @@ fn show_tutorial_menu_asks_for_the_menu_with_its_message() {
     );
     assert!(state.tutorials == Default::default());
 }
+
+/// The menu backgrounds' modifiers, generated as `FalloutNV.esm` lays them
+/// out: not animatable, so their first keys hold; the Vigor Tester's
+/// popup blur of 3 draws the radius-3 pass with the table's row 3, and the
+/// pause menu's also takes the colour out and tints.
+#[test]
+fn menu_backgrounds_take_their_modifiers_first_keys() {
+    use world::menu_background::{blur_weights, modifier, weight_row, MenuState};
+    use world::modifier::{track, Modifier};
+    let (_data, order) = order("menu-background");
+    let tester = MenuState {
+        setting: true,
+        menu_mode: true,
+        top: Some(world::menu_background::menu::LOVE_TESTER),
+        ..MenuState::default()
+    };
+    let id = modifier(&tester).unwrap();
+    assert_eq!(id, FormId(MENU_POPUP_FX));
+    let popup = Modifier::load(&order, id).unwrap();
+    assert!(!popup.animatable);
+    // Held at the first keys however long the menu is up.
+    for age in [0.0, 0.5, 30.0] {
+        let v = popup.at(age);
+        assert_eq!(v.blur, 3.0);
+        assert_eq!(v.multiply[track::SATURATION], 1.0);
+        assert_eq!(v.tint[3], 0.0);
+    }
+    assert_eq!(blur_weights(popup.at(0.0).blur), Some((3, weight_row(3))));
+    let pause = MenuState {
+        pause_menu: true,
+        ..tester
+    };
+    let pause = Modifier::load(&order, modifier(&pause).unwrap()).unwrap();
+    assert_eq!(pause.editor_id.as_deref(), Some("PauseBackgroundFX"));
+    let v = pause.at(10.0);
+    assert_eq!((v.blur, v.multiply[track::SATURATION]), (3.0, 0.0));
+    assert_eq!(v.tint, [0.671, 0.659, 0.239, 0.588]);
+}

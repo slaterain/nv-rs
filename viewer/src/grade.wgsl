@@ -31,6 +31,10 @@ struct ImageSpaceGrade {
     hdr: vec4<f32>,
     // The colour the picture fades to, and how far.
     fade: vec4<f32>,
+    // x: the modifiers' blur pass radius (0: none); y: how far its weights
+    // are toward that row from the one below; z: the menus' background held;
+    // w: which capture.
+    background: vec4<f32>,
 }
 @group(0) @binding(2) var<uniform> grade: ImageSpaceGrade;
 // The bloom (final pass) or the average brightness (bright pass).
@@ -126,6 +130,41 @@ fn blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     }
     let alpha = textureSample(source, linear_sampler, in.uv + vec2<f32>(radius, 0.0) * d).a;
     return vec4<f32>(sum, alpha);
+}
+
+// The image space blur effect's pass (`world::menu_background`, `00ba4270`):
+// `ISBLUR(2r+1)` with the weights of the table's rows max(r − 1, 1) and r
+// mixed, taps −r … r texels along `step`.
+fn modifier_blur(uv: vec2<f32>, step: vec2<f32>) -> vec4<f32> {
+    let radius = grade.background.x;
+    let low = max(radius - 1.0, 1.0);
+    var sum = vec3<f32>(0.0);
+    for (var k = -radius; k <= radius; k += 1.0) {
+        var w_low = 0.0;
+        if abs(k) <= low {
+            w_low = blur_weight(k, low);
+        }
+        let w = mix(w_low, blur_weight(k, radius), grade.background.y);
+        sum += w * textureSample(source, linear_sampler, uv + k * step).rgb;
+    }
+    return vec4<f32>(sum, 1.0);
+}
+
+// Down first (`BlurScale` (0, 1/height)), then across ((1/width, 0)).
+@fragment
+fn modifier_blur_down(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    return modifier_blur(in.uv, vec2<f32>(0.0, texel(source).y));
+}
+
+@fragment
+fn modifier_blur_across(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    return modifier_blur(in.uv, vec2<f32>(texel(source).x, 0.0));
+}
+
+// The picture as it is (the background captured without a blur).
+@fragment
+fn copy(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    return textureSample(source, linear_sampler, in.uv);
 }
 
 // `ISHDRBLENDINSHADERCIN`: the scene and the bloom combined under the

@@ -77,6 +77,7 @@ pub mod look_ik;
 pub mod magic;
 pub mod map;
 pub mod melee;
+pub mod menu_background;
 pub mod message_icon;
 pub mod mines;
 pub mod modifier;

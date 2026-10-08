@@ -43,6 +43,7 @@ mod lod;
 mod lod_objects;
 mod look;
 mod map;
+mod menu_background;
 mod menus;
 mod movie;
 mod music;
@@ -332,6 +333,7 @@ fn main() {
         .init_resource::<emittance::Glows>()
         .init_resource::<lod_objects::DistantObjects>()
         .init_resource::<effects::Effects>()
+        .init_resource::<menu_background::MenuBackground>()
         .init_resource::<PlayingGroups>()
         .init_resource::<doors::SwingDoors>()
         .init_resource::<doors::DoorPoses>()
@@ -535,8 +537,12 @@ fn main() {
                     .after(scripts::run_scripts),
                 walk::toggle_walking,
                 adjust_exposure,
-                // The cell's grade, then the screen effects scripts applied.
-                (toggle_grade, effects::play_effects).chain(),
+                // The cell's grade, then the menus' background and the
+                // screen effects scripts applied, once the menus up this
+                // frame are known (`MenuDraw`).
+                (toggle_grade, menu_background::update, effects::play_effects)
+                    .chain()
+                    .after(game_menus::draw_menus),
                 take_screenshot,
                 update_help,
                 grab_cursor,

@@ -2,8 +2,10 @@
 //! `world::modifier`) played on the camera's final pass: each from when it
 //! was applied, until it's removed or (animatable ones) has played out.
 //! What the passes take is drawn (bloom, brightness limit, cinematic
-//! values, tint, fade colour); blur, double vision, radial blur and depth
-//! of field aren't.
+//! values, tint, fade colour, and a blur of 1 to 7: `world::menu_background`);
+//! a blur under 1, double vision, radial blur and depth of field aren't.
+//! The menus' background modifier (`menu_background`) plays here too, at
+//! strength 1 while the background is held.
 
 use std::collections::HashMap;
 
@@ -24,6 +26,9 @@ pub struct Effects {
     /// an instance of its own: the modifier, when it started (seconds) and
     /// its strength (`world::impacts::with_strength`).
     pub instances: Vec<(FormId, f32, f32)>,
+    /// The menus' background while it's held: the modifier it was captured
+    /// with and which capture it is (`menu_background`).
+    pub background: Option<(Option<FormId>, u32)>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -44,6 +49,7 @@ pub fn play_effects(
         started,
         records,
         instances,
+        background,
     } = &mut *effects;
     started.retain(|id, _| applied.contains(id));
     let mut values = Vec::new();
@@ -100,12 +106,26 @@ pub fn play_effects(
         values.push(world::impacts::with_strength(&m.at(age), strength));
         true
     });
+    // The menus' background modifier: not animatable, so its first keys,
+    // at strength 1 (`00871dc0` → `005299a0(imad, 1.0, 0)`).
+    if let Some((Some(id), _)) = *background {
+        if let Some(m) = records
+            .entry(id)
+            .or_insert_with(|| Modifier::load(order, id))
+        {
+            values.push(m.at(0.0));
+        }
+    }
     let base = if grading.on {
         grading.grade
     } else {
         grading.grade.without_cinematic()
     };
-    let grade = base.with_modifiers(&values);
+    let mut grade = base.with_modifiers(&values);
+    if let Some((_, generation)) = *background {
+        grade.background.z = 1.0;
+        grade.background.w = generation as f32;
+    }
     for mut current in &mut cameras {
         if *current != grade {
             *current = grade;

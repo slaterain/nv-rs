@@ -343,6 +343,22 @@ fn compose_hud_over_scene(
     }
 }
 
+/// What `world::menu_background` reads from the game's menus here: the
+/// start menu up as the pause menu (`004a4040`) and as the main menu
+/// (`0070edf0`, without its pause flag), and whether a tile is named
+/// "Player Name Entry Menu" (`00718ab0`, `00a03da0`).
+pub(crate) fn background_facts(menus: &GameMenus) -> (bool, bool, bool) {
+    let Some(screen) = menus.screen.as_deref() else {
+        return (false, false, false);
+    };
+    let pause = tutorial::held(&screen.open);
+    let start = screen.open.iter().any(|m| matches!(m, OpenMenu::Start(_)));
+    let naming = screen
+        .ui
+        .find_below(screen.ui.screen, "Player Name Entry Menu")
+        .is_some();
+    (pause, start && !pause, naming)
+}
 /// Which button `--answer-boxes` gives a box of `buttons` buttons: the only
 /// one, else the next choice given (taken), else none (left open).
 fn box_choice(buttons: usize, choices: &mut std::collections::VecDeque<usize>) -> Option<usize> {

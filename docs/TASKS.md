@@ -282,7 +282,11 @@ Pip-Boy, pause and other menus) show the world behind them blurred.
 Traced: `00871dc0` draws the static menu background and `00718ab0` picks
 its image-space modifier from game data: `PopupBackgroundFX` (the Vigor
 Tester's), `InterfaceBackgroundFX`, `PipBackgroundFX`,
-`PauseBackgroundFX`. Implement it.
+`PauseBackgroundFX`. Implement it. **Done on `claude/b31-menu-blur`:**
+the capture, hold and release (`0086f450`), the modifier choice and its
+values, and the blur effect's passes and weights (`00ba4d20`,
+`00ba4270`) ([MENU_FADES.md](MENU_FADES.md)); left: depth of field, a
+blur under 1, the Pip-Boy's own capture.
 
 ### In progress
 

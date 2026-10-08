@@ -77,14 +77,75 @@ they appeared and vanished at once. The start menu's own page fades
 (`START_MENU.md`) run inside this one. Log lines `Menu NAME fading in/out
 (S s).` and `Menu NAME faded out.` show them.
 
-Not done: the image space effect the game fades along with the first menu
-opened and the last one closed (the image space manager's effect 15,
-`007123f0`/`007123a0`); a menu closed before it was ever shown (whose
+Not done: a menu closed before it was ever shown (whose
 `StartFadeOut` does nothing in the game, leaving it to fade in again) is
 removed at once here; the menus' own pictures aren't faded by the
 material alpha but by the drawn alpha (the same for the flat pictures the
 menus use).
 
+## The world behind the menus (B31)
+
+The image space manager's effect 15 is the menus' background: the world
+drawn once, with an image space modifier, and held still while the menus
+are up (`world::menu_background`, `viewer/src/menu_background.rs`; the
+blur in `viewer/src/grade.rs` / `grade.wgsl`). Traced in FalloutNV.exe
+1.4.0.525:
+
+- Each frame the render path (`0086e650`) sets "menu mode" (`011dea2b`: a
+  menu-mode menu is up, `00702360`, or the Pip-Boy is coming up, its state
+  2, `00709bc0`) and calls `0086f450`. It captures (`00871dc0`) when in
+  menu mode, `bStaticMenuBackground:Display` is on (default 1,
+  `00f40570`; read once into `011dea28`), nothing is captured yet
+  (`011dea29`), and not: the dialogue menu (1009) on top, the main menu (the
+  start menu without its pause flag, `0070edf0`), V.A.T.S. (1056) or a
+  message box (1001) shown (`00702680` with mask 0xb: fade state shown,
+  fading out or fading in), the Pip-Boy up or coming up (`00705a00`), or
+  `00703d50` (an unidentified object at `011d8ce8`).
+- `00871dc0` draws the world with the modifier `00718ab0` picks applied at
+  strength 1 (`005299a0(imad, 1.0, 0)`), takes it away again (`00529c90`)
+  and sets `011dea29`. `00718ab0`: `PauseBackgroundFX` (`0004EEE8`) for
+  the pause menu (`004a4040`), else `PipBackgroundFX` (`00096389`) for the
+  Pip-Boy (`00967ae0`), else `InterfaceBackgroundFX` (`00044F34`) when the
+  lock (1014) is on top, else `PopupBackgroundFX` (`00032B38`) unless a
+  tile is named "Player Name Entry Menu" (then none).
+- Once captured it stays while menu mode lasts (unless the main menu,
+  `00703d50`, or the dialogue or V.A.T.S. menu on top), while fader 1 runs
+  (`007014a0(1)`) or while menu 1054, 1014, 1060, 1074 (the Vigor
+  Tester), 1080, 1081, 1082 or 1083 is shown; otherwise `00877430` lets it
+  go (effect 15 off: `007123f0`/`007123a0`; `011dea29` cleared).
+- The modifiers (all flags 0, so their first keys hold): popup: blur 3;
+  pause: blur 3, saturation × 0, tracks 18 × 0.8 and 19 × 1.3, tint
+  (0.67, 0.66, 0.24) at 0.59, depth of field 1; interface: blur 2, bright
+  clamp × 2, saturation × 0.1, brightness × 0.5, tint (0.33, 0.58, 0.44)
+  at 0.78; Pip-Boy: depth of field 0.7 only.
+- The blur: the manager keeps the largest blur of the modifiers playing
+  (`00b8ccb0`, `+0x25c`), hands it to the blur effect (`00b8d020` →
+  `012003d0`; vtable `010b8000`), which draws its pass for radius
+  `ceil(blur)` (`00ba4d20`, `00ec9e10`), 1 to 7 (none above 7). That pass
+  (`00ba4270`) is `ISBLUR(2r+1)` down then across, taps −r … r texels,
+  weights from the exe's 7 × 15 table (`011ade38` + r × 0xf0) mixed
+  between rows max(r − 1, 1) and r by `1 − (r − blur)`. Every row is a
+  Gaussian with σ = r / 2 normalized over its taps (the same as the bloom
+  blur's, checked in `world::menu_background`'s tests).
+
+In the viewer the menus up are read into those tests each frame; on a
+capture the modifier's values join the final pass's (tint, saturation,
+brightness, …) and the picture before the final pass is blurred once into
+a held texture, which the final pass then reads until the background is
+let go. The Vigor Tester's machine, the HUD and the menus are drawn over
+it (they come in at the final pass). A blur from any other modifier (a
+script's or a hit's) is drawn by the same blur, live.
+
+Not done: a blur under 1 (the effect's passes 9 and 10, a blend; none of
+the four has one), depth of field (`PipBackgroundFX`'s only effect, the
+pause one's too), the Pip-Boy's own capture (other callers of `00871dc0`:
+`007cbaf0`, `007ce7a0`, behind `007079b0`; not traced, so the Pip-Boy shows
+the world as it is, which its modifier only changes by depth of field),
+`00967ae0`'s other case (a player state at `+0x690`), fader 1, and where
+the blur falls among the game's other passes (here before the bloom is
+added and the grade applied; the bloom is still taken from the live world
+while the picture is held). Whether the copy pass before the blur (pass 0)
+works at full size isn't traced; it is taken as full size.
 ## Checks
 
 The dialogue menu fading out under a service menu and back in

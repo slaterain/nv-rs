@@ -80,6 +80,12 @@ pub struct ImageSpaceGrade {
     /// pass's last step: `lerp(c, Fade.rgb, Fade.w)`); set by image space
     /// modifiers.
     pub fade: Vec4,
+    /// The image space modifiers' blur and the menus' still background
+    /// (`world::menu_background`): `x` the blur pass's radius in texels (0:
+    /// none), `y` how far its weights are toward that radius's row from the
+    /// one below; `z` 1 while the background is held; `w` which capture it
+    /// is (a new number captures again).
+    pub background: Vec4,
 }
 
 /// A camera whose final passes are left to a later camera on the same
@@ -99,6 +105,7 @@ impl ImageSpaceGrade {
         bloom: Vec4::new(1.0, 0.0, 0.0, 1.0),
         hdr: Vec4::new(1.0, 0.0, 0.0, 0.0),
         fade: Vec4::ZERO,
+        background: Vec4::ZERO,
     };
 
     /// The same with image space modifiers playing (`world::modifier`):
@@ -155,6 +162,15 @@ impl ImageSpaceGrade {
             }
         }
         out.fade = fade;
+        // The blur: the largest of the modifiers' (`00b8ccb0`), drawn by
+        // the blur effect's pass for it (`world::menu_background`).
+        let blur = values.iter().map(|m| m.blur).fold(0.0, f32::max);
+        let (radius, mix) = world::menu_background::blur_pass(blur).map_or((0.0, 0.0), |r| {
+            let f = 1.0 - (r as f32 - blur);
+            (r as f32, if f == 0.0 { 1.0 } else { f })
+        });
+        out.background.x = radius;
+        out.background.y = mix;
         out
     }
 
@@ -292,6 +308,7 @@ impl Plugin for GradePlugin {
         };
         render_app
             .init_resource::<EyeAverages>()
+            .init_resource::<HeldBackgrounds>()
             .add_systems(
                 Render,
                 prepare_bloom_textures.in_set(RenderSet::PrepareResources),
@@ -323,6 +340,24 @@ struct BloomTextures {
     /// After the bright pass and vertical blur, then the horizontal blur.
     vertical: CachedTexture,
     horizontal: CachedTexture,
+    /// The modifiers' blur, down then across, at the picture's size.
+    blurred: [CachedTexture; 2],
+}
+
+/// The menus' still background per camera (`world::menu_background`): the
+/// picture captured once (blurred by the modifier it was captured with)
+/// and shown, unchanged, until the menus let it go.
+#[derive(Resource, Default)]
+struct HeldBackgrounds(HashMap<MainEntity, Held>);
+
+struct Held {
+    _texture: Texture,
+    view: TextureView,
+    size: Extent3d,
+    /// The capture it holds (`ImageSpaceGrade::background.w`).
+    generation: f32,
+    /// Captured this frame.
+    capture: bool,
 }
 
 /// The average brightness each camera keeps from frame to frame (the
@@ -342,11 +377,51 @@ fn prepare_bloom_textures(
     mut commands: Commands,
     mut cache: ResMut<TextureCache>,
     mut averages: ResMut<EyeAverages>,
+    mut held: ResMut<HeldBackgrounds>,
     device: Res<RenderDevice>,
-    views: Query<(Entity, &MainEntity, &ViewTarget), With<ImageSpaceGrade>>,
+    views: Query<(Entity, &MainEntity, &ViewTarget, &ImageSpaceGrade)>,
 ) {
+    for (_, main, target, grade) in &views {
+        if grade.background.z < 0.5 {
+            held.0.remove(main);
+            continue;
+        }
+        let size = target.main_texture().size();
+        let stale = held.0.get(main).is_none_or(|h| h.size != size);
+        if stale {
+            let texture = device.create_texture(&TextureDescriptor {
+                label: Some("menu_background"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: ViewTarget::TEXTURE_FORMAT_HDR,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&TextureViewDescriptor::default());
+            held.0.insert(
+                *main,
+                Held {
+                    _texture: texture,
+                    view,
+                    size,
+                    generation: f32::NAN,
+                    capture: false,
+                },
+            );
+        }
+        if let Some(h) = held.0.get_mut(main) {
+            // A new capture (or a new picture size) draws it again; else it
+            // stays as it was.
+            h.capture = h.generation != grade.background.w;
+            h.generation = grade.background.w;
+        }
+    }
+    held.0
+        .retain(|main, _| views.iter().any(|(_, m, _, _)| m == main));
     let mut seen = Vec::new();
-    for (_, main, _) in &views {
+    for (_, main, _, _) in &views {
         seen.push(*main);
         let a = averages.0.entry(*main).or_insert_with(|| {
             let textures = ["image_space_average_a", "image_space_average_b"].map(|label| {
@@ -375,7 +450,7 @@ fn prepare_bloom_textures(
         a.written = 1 - a.written;
     }
     averages.0.retain(|main, _| seen.contains(main));
-    for (entity, _, target) in &views {
+    for (entity, _, target, _) in &views {
         let size = target.main_texture().size();
         let mut texture = |width: u32, height: u32, label: &'static str| {
             cache.get(
@@ -414,6 +489,10 @@ fn prepare_bloom_textures(
             levels,
             vertical: texture(bw, bh, "image_space_bloom_v"),
             horizontal: texture(bw, bh, "image_space_bloom_h"),
+            blurred: [
+                texture(size.width, size.height, "image_space_blur_down"),
+                texture(size.width, size.height, "image_space_blur_across"),
+            ],
         });
     }
 }
@@ -431,13 +510,14 @@ impl ViewNode for GradeNode {
         &'static DynamicUniformIndex<ImageSpaceGrade>,
         &'static BloomTextures,
         Option<&'static GradeDeferred>,
+        &'static ImageSpaceGrade,
     );
 
     fn run(
         &self,
         _graph: &mut RenderGraphContext,
         render_context: &mut RenderContext,
-        (view_target, main, grade_index, textures, deferred): QueryItem<Self::ViewQuery>,
+        (view_target, main, grade_index, textures, deferred, values): QueryItem<Self::ViewQuery>,
         world: &World,
     ) -> Result<(), NodeRunError> {
         if deferred.is_some() {
@@ -449,11 +529,19 @@ impl ViewNode for GradeNode {
         let grade_pipeline = world.resource::<GradePipeline>();
         let pipeline_cache = world.resource::<PipelineCache>();
         let ids = &grade_pipeline.pipelines;
-        let Some(pipelines) = [ids.down, ids.average, ids.bright, ids.blur, ids.last]
-            .map(|id| pipeline_cache.get_render_pipeline(id))
-            .into_iter()
-            .collect::<Option<Vec<_>>>()
-        else {
+        let Some(pipelines) = [
+            ids.down,
+            ids.average,
+            ids.bright,
+            ids.blur,
+            ids.last,
+            ids.blur_down,
+            ids.blur_across,
+            ids.copy,
+        ]
+        .map(|id| pipeline_cache.get_render_pipeline(id))
+        .into_iter()
+        .collect::<Option<Vec<_>>>() else {
             return Ok(());
         };
         let uniforms = world.resource::<ComponentUniforms<ImageSpaceGrade>>();
@@ -475,7 +563,8 @@ impl ViewNode for GradeNode {
             offset: grade_index.index(),
             overlay,
         };
-        let [down, average, bright, blur, last] = pipelines[..] else {
+        let [down, average, bright, blur, last, blur_down, blur_across, copy] = pipelines[..]
+        else {
             return Ok(());
         };
 
@@ -504,10 +593,32 @@ impl ViewNode for GradeNode {
         // The final pass reads the current picture and writes the adjusted
         // one; the view target swaps to it afterwards.
         let post_process = view_target.post_process_write();
+        // The modifiers' blur (`world::menu_background`), down then across;
+        // with the menus' background held, the picture captured once, then
+        // shown as it is.
+        let blurring = values.background.x >= 1.0;
+        let [blur_a, blur_b] = &textures.blurred;
+        let (blur_a, blur_b) = (&blur_a.default_view, &blur_b.default_view);
+        let mut picture = post_process.source;
+        if let Some(h) = world.resource::<HeldBackgrounds>().0.get(main) {
+            if h.capture {
+                if blurring {
+                    pass.draw(render_context, blur_down, picture, avg, blur_a);
+                    pass.draw(render_context, blur_across, blur_a, avg, &h.view);
+                } else {
+                    pass.draw(render_context, copy, picture, avg, &h.view);
+                }
+            }
+            picture = &h.view;
+        } else if blurring {
+            pass.draw(render_context, blur_down, picture, avg, blur_a);
+            pass.draw(render_context, blur_across, blur_a, avg, blur_b);
+            picture = blur_b;
+        }
         pass.draw(
             render_context,
             last,
-            post_process.source,
+            picture,
             horizontal,
             post_process.destination,
         );
@@ -569,6 +680,9 @@ struct Pipelines {
     bright: CachedRenderPipelineId,
     blur: CachedRenderPipelineId,
     last: CachedRenderPipelineId,
+    blur_down: CachedRenderPipelineId,
+    blur_across: CachedRenderPipelineId,
+    copy: CachedRenderPipelineId,
 }
 
 #[derive(Resource)]
@@ -631,6 +745,9 @@ impl FromWorld for GradePipeline {
             bright: queue("bright_blur"),
             blur: queue("blur"),
             last: queue("fragment"),
+            blur_down: queue("modifier_blur_down"),
+            blur_across: queue("modifier_blur_across"),
+            copy: queue("copy"),
         };
         Self {
             layout,

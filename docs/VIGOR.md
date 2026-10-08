@@ -44,8 +44,20 @@ and blends over the scene. This removes black behind the cabinet and avoids
 applying alpha to the already blended bulb glows again. A camera-output
 regression and rendered before/after check cover it; fixed capture:
 `nv-re/work/codex-m1/vigor-background-fixed.png`.
-The original's background blur and exact final colour/bloom parity remain
-unimplemented/unverified; no guessed blur or colour tuning was added.
+Exact final colour/bloom parity remains unverified.
+
+The blurred room (B31, traced: [MENU_FADES.md](MENU_FADES.md), "The world
+behind the menus"): as the tester opens (menu mode, LoveTesterMenu 1074 on
+top) the game captures the room once with `PopupBackgroundFX`
+(`00032B38`: a blur of 3 and nothing else, `00718ab0`) and holds it while
+the menu is up (1074 keeps it even out of menu mode, `0086f450`); the
+cabinet is drawn over it. The blur is the game's radius-3 pass,
+`ISBLUR7` down then across with the exe's row-3 weights. Checked live in
+the release viewer (window capture at VCG01 stage 60, `nv-re/work/b31/
+vigor.png`): the room behind the cabinet is blurred, the cabinet and its
+screen sharp; the log says `Menu background captured with
+Some(FormId(00032B38)) (top menu Some(1074))`. Not compared side by side
+with the original.
 
 LoveTesterMenu 1074 loads `menus\chargen\love_tester_menu.xml`. Its XML
 draws nothing on its own: invisible hotrects and unsized images catch input.

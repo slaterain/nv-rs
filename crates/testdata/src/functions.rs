@@ -47,6 +47,10 @@ pub mod ids {
     pub const DOOR: u32 = 0xF16;
     pub const CHEST: u32 = 0xF17;
     pub const FLASH: u32 = 0xF18;
+    /// The menu backgrounds' modifiers, at their `FalloutNV.esm` form IDs
+    /// (`world::menu_background::form`).
+    pub const MENU_POPUP_FX: u32 = 0x0003_2B38;
+    pub const MENU_PAUSE_FX: u32 = 0x0004_EEE8;
     /// Starts with the game; objectives 10, 20, 30; stage 10.
     pub const QUEST: u32 = 0xF19;
     /// VCG01 activation regression fixture: stage 60/objective 30, then 65.
@@ -302,11 +306,52 @@ pub fn functions(tag: &str) -> TempData {
     ));
     let mut flash = 0u32.to_le_bytes().to_vec();
     flash.extend(1.0f32.to_le_bytes());
-    plugin.extend(group(
-        *b"IMAD",
-        0,
-        &named(b"IMAD", FLASH, "TestFlash", &sub(b"DNAM", &flash)),
+
+    // The menu backgrounds' modifiers, laid out as `FalloutNV.esm`'s (flags
+    // 0, a 1 s duration, keys at 0 and 1): `PopupBackgroundFX` a blur of 3;
+    // `PauseBackgroundFX` a blur of 3, saturation × 0 and a tint.
+    let keys = |pairs: &[(f32, f32)]| -> Vec<u8> {
+        pairs
+            .iter()
+            .flat_map(|(t, v)| t.to_le_bytes().into_iter().chain(v.to_le_bytes()))
+            .collect()
+    };
+    let background = |id: u32, name: &str, saturation: f32, tint: [f32; 4]| {
+        let mut dnam = 0u32.to_le_bytes().to_vec();
+        dnam.extend(1.0f32.to_le_bytes());
+        let mut d = sub(b"DNAM", &dnam);
+        d.extend(sub(b"BNAM", &keys(&[(0.0, 3.0), (1.0, 0.0)])));
+        let mut t = Vec::new();
+        for (time, c) in [(0.0f32, tint), (1.0, [1.0, 1.0, 1.0, 0.0])] {
+            t.extend(time.to_le_bytes());
+            t.extend(c.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        d.extend(sub(b"TNAM", &t));
+        // Track 17 (saturation): multiply, then add.
+        d.extend(sub(
+            &[17, b'I', b'A', b'D'],
+            &keys(&[(0.0, saturation), (1.0, 1.0)]),
+        ));
+        d.extend(sub(
+            &[17 | 0x40, b'I', b'A', b'D'],
+            &keys(&[(0.0, 0.0), (1.0, 0.0)]),
+        ));
+        named(b"IMAD", id, name, &d)
+    };
+    let mut imads = named(b"IMAD", FLASH, "TestFlash", &sub(b"DNAM", &flash));
+    imads.extend(background(
+        MENU_POPUP_FX,
+        "PopupBackgroundFX",
+        1.0,
+        [1.0, 1.0, 1.0, 0.0],
     ));
+    imads.extend(background(
+        MENU_PAUSE_FX,
+        "PauseBackgroundFX",
+        0.0,
+        [0.671, 0.659, 0.239, 0.588],
+    ));
+    plugin.extend(group(*b"IMAD", 0, &imads));
 
     // Quests.
     let quest = |id: u32, name: &str, flags: u8, stage: i16, objectives: &[i32]| {

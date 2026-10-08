@@ -49,6 +49,10 @@ Playtest of build 23 (2026-10-07): the Vigor Tester's screen was
 invisible since build 11 (B22, fixed: one system sets the HUD camera's
 blending for every 3D menu; checked live by capturing the window, against
 the build-11 code). New: B23, the hands and weapon around menus.
+B31 (branch `claude/b31-menu-blur`): the world behind menus captured once
+and held with its traced modifier and blur (`0086f450`, `00718ab0`,
+`00ba4270`); live: the Vigor Tester's room blurred, the Pip-Boy and a
+message box not ([MENU_FADES.md](MENU_FADES.md)).
 **Next action:** after Chazm's PR is merged and tasks reassigned, B14
 (opening), B23, then B1/B2 (physics), split into sub-PRs. The opening's
 Vigor Tester step has no acceptance route yet (the doc route starts at
