@@ -44,9 +44,23 @@ use crate::controls::Controls;
 use crate::dialogue::{Conversation, DialogueState};
 use crate::menus::Menus;
 use crate::scripts::PlacedRef;
-use crate::sounds::SoundRequests;
 use crate::walk::{game_point, CellCollision, Player};
 use crate::{FlyCamera, GameFiles};
+
+/// This viewer frame's time as the game's frame timer gives it to Havok
+/// (`physics::havok::FrameTimer`, `00aa4ee0`): 0 on a viewer frame that
+/// doesn't end a game frame. The bodies' world and the ragdolls step by
+/// it, never by a viewer frame under the game's 10 ms.
+#[derive(Resource, Default)]
+pub(crate) struct HavokFrame {
+    timer: physics::havok::FrameTimer,
+    pub(crate) dt: f32,
+}
+
+fn time_havok_frame(time: Res<Time>, mut frame: ResMut<HavokFrame>) {
+    let frame = &mut *frame;
+    frame.dt = frame.timer.frame(time.delta_secs());
+}
 
 /// A push waiting for the simulation.
 #[derive(Debug, Clone, PartialEq)]
@@ -152,6 +166,61 @@ pub struct Clutter {
     /// When each pair of materials last sounded (seconds), for
     /// `iCollisionSoundTimeDelta`.
     sounded: HashMap<i32, f32>,
+    /// Contact sounds to start ([`play_contact_sounds`]).
+    contact_sounds: Vec<ContactSound>,
+}
+
+/// A contact's sound to start at its point (`00837550`).
+#[derive(Debug, Clone, Copy)]
+struct ContactSound {
+    sound: FormId,
+    at: [f32; 3],
+    /// Hundredths of a decibel, in place of the sound's own.
+    attenuation: i16,
+    frequency: f32,
+}
+
+/// Whether a sound at `at` can be heard from `listener` (`00837550` →
+/// `0082eca0`): on each axis no further than the sound's largest distance
+/// byte × 100 (`00553b90`; the game doesn't put 0 up to 60 here).
+// Translated from 0082eca0 (decompiled, FalloutNV.exe 1.4.0.525)
+fn within_reach(max_byte: u8, at: [f32; 3], listener: [f32; 3]) -> bool {
+    let reach = f32::from(max_byte) * 100.0;
+    (0..3).all(|k| (at[k] - listener[k]).abs() <= reach)
+}
+
+/// Starts the contacts' sounds at their points, as loud as the listener's
+/// distance makes them (`weapon_fx::play_at_with`, flags 0x4102: the
+/// sound's own distances).
+fn play_contact_sounds(
+    mut commands: Commands,
+    game: Res<GameFiles>,
+    mut wavs: ResMut<Assets<crate::sounds::PcmSound>>,
+    mut clutter: ResMut<Clutter>,
+    cameras: Query<&Transform, With<FlyCamera>>,
+    mut pick: Local<u64>,
+) {
+    if clutter.contact_sounds.is_empty() {
+        return;
+    }
+    let sounds = std::mem::take(&mut clutter.contact_sounds);
+    let Ok(camera) = cameras.single() else {
+        return;
+    };
+    let listener = game_point(camera.translation);
+    for s in sounds {
+        *pick = pick.wrapping_add(1);
+        crate::weapon_fx::play_at_with(
+            &mut commands,
+            &game.0,
+            &mut wavs,
+            s.sound,
+            (s.at, listener),
+            *pick,
+            Some(s.attenuation),
+            s.frequency,
+        );
+    }
 }
 
 /// The player's grab: the held reference and how far from the eye it's
@@ -182,14 +251,17 @@ pub struct ClutterPlugin;
 
 impl Plugin for ClutterPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<Clutter>().add_systems(
-            Update,
-            (grab_held, simulate, draw)
-                .chain()
-                .after(crate::combat::player_attack)
-                .after(crate::explosives::fly_thrown)
-                .after(crate::walk::walk),
-        );
+        app.init_resource::<Clutter>()
+            .init_resource::<HavokFrame>()
+            .add_systems(First, time_havok_frame)
+            .add_systems(
+                Update,
+                (grab_held, simulate, play_contact_sounds, draw)
+                    .chain()
+                    .after(crate::combat::player_attack)
+                    .after(crate::explosives::fly_thrown)
+                    .after(crate::walk::walk),
+            );
     }
 }
 
@@ -198,12 +270,13 @@ impl Plugin for ClutterPlugin {
 #[allow(clippy::too_many_arguments)]
 fn simulate(
     time: Res<Time>,
+    havok: Res<HavokFrame>,
     game: Res<GameFiles>,
     mut state: ResMut<DialogueState>,
     mut collision: ResMut<CellCollision>,
     player: Res<Player>,
     mut clutter: ResMut<Clutter>,
-    mut sounds: ResMut<SoundRequests>,
+    cameras: Query<&Transform, With<FlyCamera>>,
     drawn: Query<&Simulated>,
     (exterior, mut weathers): (
         Option<Res<crate::exterior::Exterior>>,
@@ -392,10 +465,13 @@ fn simulate(
     let awake: Vec<usize> = (0..clutter.world.bodies.len())
         .filter(|&i| !clutter.world.bodies[i].asleep)
         .collect();
-    clutter.world.update(&collision.0, time.delta_secs());
-    // The wind listener, once a frame after the steps, with the frame's
+    // Only on a game frame (`HavokFrame`): between them the game sleeps.
+    if havok.dt > 0.0 {
+        clutter.world.update(&collision.0, havok.dt);
+    }
+    // The wind listener, once a game frame after the steps, with its
     // time (`00c6ae70` → `00c66e20`), on the bodies the wind moves.
-    let dt = time.delta_secs();
+    let dt = havok.dt;
     let wind = physics::wind::Wind::set(sky_wind, physics::wind::SKY_WIND_DIRECTION);
     if dt > 0.0 && wind.speed != 0.0 {
         // Every five seconds, where the wind has taken its bodies.
@@ -461,6 +537,9 @@ fn simulate(
     }
     // Contacts begun: impact sounds and physics damage.
     let now = time.elapsed_secs();
+    let listener = cameras
+        .single()
+        .map_or(c.feet, |camera| game_point(camera.translation));
     for event in clutter.world.take_contacts() {
         contact(
             clutter,
@@ -468,7 +547,7 @@ fn simulate(
             order,
             &contact_settings,
             now,
-            &mut sounds,
+            listener,
             event,
         );
     }
@@ -502,7 +581,7 @@ fn contact(
     order: &esm::LoadOrder,
     s: &ContactSettings,
     now: f32,
-    sounds: &mut SoundRequests,
+    listener: [f32; 3],
     e: ContactEvent,
 ) {
     let (mat_a, mass_a, ref_a) = side(clutter, e.body);
@@ -529,19 +608,38 @@ fn contact(
         if let Some(sound) =
             contacts::collision_sound((mat_a, mass_a), (mat_b, sound_mass_b), e.speed, s)
         {
+            // Each side's sound record, then (`00837550`) nothing unless
+            // one is within reach of the listener, then one per pair of
+            // materials per `iCollisionSoundTimeDelta`.
+            let forms: Vec<(&str, FormId, u8)> = sound
+                .sounds
+                .into_iter()
+                .flatten()
+                .filter_map(|id| {
+                    let form = order.form_by_editor_id(id)?;
+                    let max = world::weapon_fx::SoundLevels::load(order, form)?.max_byte;
+                    Some((id, form, max))
+                })
+                .collect();
+            let heard = forms
+                .iter()
+                .any(|&(_, _, max)| within_reach(max, e.point, listener));
             let gap = s.time_delta_ms as f32 / 1000.0;
             let quiet = clutter
                 .sounded
                 .get(&sound.key)
                 .is_some_and(|&t| now - t < gap);
-            if !quiet {
+            if heard && !quiet {
                 clutter.sounded.insert(sound.key, now);
                 let mut played = Vec::new();
-                for id in sound.sounds.into_iter().flatten() {
-                    if let Some(form) = order.form_by_editor_id(id) {
-                        sounds.0.push(form);
-                        played.push(id);
-                    }
+                for (id, form, _) in forms {
+                    clutter.contact_sounds.push(ContactSound {
+                        sound: form,
+                        at: e.point,
+                        attenuation: sound.attenuation as i16,
+                        frequency: sound.frequency,
+                    });
+                    played.push(id);
                 }
                 println!(
                     "  {} meets {} at {:.0} units a second: {} (attenuation {:.1} dB, frequency × {:.2})",
@@ -925,6 +1023,18 @@ mod tests {
         let moved = m.transform_point3(drawn);
         let want = Vec3::from(space::point([5.0, 10.0, 2.0]));
         assert!((moved - want).length() < 1e-5, "{moved} vs {want}");
+    }
+
+    #[test]
+    fn contact_sounds_are_heard_only_within_the_sounds_reach() {
+        // A tumbleweed's rattle (largest distance byte 20: 2000 units) far
+        // off in the wind is silent; one beside the listener isn't. The
+        // reach is a box, axis by axis, and a byte of 0 reaches nowhere.
+        let listener = [-68233.0, 4990.0, 8400.0];
+        assert!(within_reach(20, [-68233.0, 6900.0, 8400.0], listener));
+        assert!(!within_reach(20, [-64960.0, -4238.0, 8400.0], listener));
+        assert!(within_reach(20, [-66300.0, 6900.0, 8400.0], listener));
+        assert!(!within_reach(0, [-68233.0, 4991.0, 8400.0], listener));
     }
 
     #[test]

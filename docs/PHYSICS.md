@@ -823,6 +823,47 @@ feet ten times a second.
 Seen, not changed: an actor placed inside a wall (a bad `--at`) is held
 there: its penetration recovery is a slow velocity, and a beam on the
 other side stops it, as Havok's proxy would.
+
+## Frozen bodies and far-off clatter (`claude/physics-clock`, 2026-10-08)
+
+Playtest of build 28: moved objects lag or freeze in the air; the
+clattering is back.
+
+**Frozen in the air: the game's frame timer.** The viewer runs uncapped
+(mailbox, ~210 frames a second in Doc's house). `bhkWorld::SetDeltaTime`
+(`00c66760`, [`physics::havok::Clock`]) rounds the carried time plus the
+frame to whole steps and carries the rest, which goes negative after
+rounding up (a frame of 0.6 steps runs one and carries −0.4); a total at
+or under 0 returns early *without touching the carried time*. So once
+frames are shorter than the negative carry (under ~6.4 ms) no step runs
+again until a slow frame comes: bodies hang where they were, then jump.
+The game never meets this: its frame timer (`00aa4ee0`, the timer at
+`011f6394` that `0086f260` passes to `00c66760`) counts whole
+milliseconds of `GetTickCount`, sleeps out a frame under 10 ms and reports
+10, caps one over 166 ms at 166. `physics::havok::FrameTimer` translates
+it: the viewer's frame times are gathered until 10 whole ms have passed
+and handed over as one game frame (the fraction kept); the bodies' world,
+the wind and the ragdolls step only on those frames
+(`clutter::HavokFrame`). Tests: `havok::tests::
+short_frames_through_the_timer_keep_the_clock_stepping` (straight from
+210 Hz frames: 1 step in 2 s; through the timer: 125).
+
+**The clatter: contact sounds everywhere.** `ImpactMixer::
+PlayCollisionSound` (`00837550`) first checks each side's sound can be
+heard (`0082eca0`: on each axis within the sound's largest distance byte
+(`SNDD` +1, `00553b90`, raw) × 100 of the listener, else nothing at all,
+the 333 ms gate untouched), then plays it at the contact point (flags
+0x4102, the sound's own distances, position `00ad8b60`) with the
+contact's static attenuation and frequency (`00ad89b0`, `00ad8a90`). The
+viewer queued them as flat 2D sounds at full volume: every tumbleweed
+rolling in the wind anywhere in the loaded squares rattled in the
+player's ears (163 `PHYBabyRattle`s in 16 s at the VCG02 fence).
+Now `clutter::play_contact_sounds` starts them with
+`weapon_fx::play_at_with` at the point; `within_reach` is the box test.
+
+Seen, left for B1 PR 9 (continuous collision): a tumbleweed blown fast
+enough passes through the land (00178A82, from z 7992 to 1082 in 5 s).
+
 ## Not compared / gaps
 
 - Nothing compared with the original game: how far bottles fly, how they

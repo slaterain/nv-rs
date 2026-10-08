@@ -814,9 +814,106 @@ impl Clock {
     }
 }
 
+/// The fewest whole milliseconds the game's frame timer reports (`00aa4ee0`
+/// sleeps out a shorter frame and reports 10).
+pub const FRAME_MIN_MS: u32 = 10;
+/// The most whole milliseconds it reports (`00aa4ee0`: 0xa6; the time
+/// beyond is lost, so the game slows down).
+pub const FRAME_MAX_MS: u32 = 166;
+
+/// The game's frame timer as the Havok clock is given it: the frame time
+/// that `00aa4ee0` stores at `+0xc` of the timer at `011f6394`, which
+/// `0086f260` passes to `bhkWorld::SetDeltaTime` ([`Clock::advance`]).
+///
+/// The game measures each frame in whole milliseconds of `GetTickCount`;
+/// a frame under [`FRAME_MIN_MS`] is slept out (`Sleep(10 - ms)`) and
+/// reported as 10, one over [`FRAME_MAX_MS`] as 166; the result × the time
+/// multiplier (1 at normal speed, as [`Clock`] takes it). So the clock never
+/// sees a frame under 0.01 s. The viewer's frames are shorter (it isn't
+/// held to 100 a second): their time is gathered here until a game frame's
+/// worth has passed, as if the game were sleeping meanwhile, and then given
+/// as one frame of the whole milliseconds gathered (the fraction kept for
+/// the next).
+///
+/// Without this the clock's carried time goes below zero (a frame of 0.6
+/// steps runs a whole step and carries −0.4 of one), and a following frame
+/// shorter than that leaves the total at or under zero: the path on which
+/// `00c66760` returns without touching the carried time, so no step runs
+/// again while frames stay that short (bodies hang in the air).
+// Translated from 00aa4ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct FrameTimer {
+    /// Milliseconds gathered since the last game frame.
+    pending: f64,
+}
+
+impl FrameTimer {
+    /// A viewer frame of `seconds`: the game frame's time in seconds when
+    /// one ends with it, else 0 (no game frame yet).
+    pub fn frame(&mut self, seconds: f32) -> f32 {
+        if seconds > 0.0 {
+            self.pending += f64::from(seconds) * 1000.0;
+        }
+        let ms = self.pending.floor();
+        if ms < f64::from(FRAME_MIN_MS) {
+            return 0.0;
+        }
+        self.pending -= ms;
+        // The 0xa6 cap: the rest of a long frame is dropped.
+        let ms = (ms as u32).min(FRAME_MAX_MS);
+        (f64::from(ms) * 0.001) as f32
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_frame_timer_never_gives_the_clock_a_frame_under_10_ms() {
+        // 210 viewer frames a second for 2 s: game frames of 10 to 14 ms
+        // (one ends with every third viewer frame or so), and the whole
+        // time reaches the clock but for the fraction of a ms left.
+        let mut timer = FrameTimer::default();
+        let mut total = 0.0f64;
+        for _ in 0..420 {
+            let f = timer.frame(1.0 / 210.0);
+            assert!(f == 0.0 || (0.010..=0.0145).contains(&f), "{f}");
+            total += f64::from(f);
+        }
+        assert!((total - 2.0).abs() < 0.0011, "{total}");
+        // 60 a second: 16 or 17 ms, every viewer frame.
+        let mut timer = FrameTimer::default();
+        for _ in 0..60 {
+            let f = timer.frame(1.0 / 60.0);
+            assert!((0.016..=0.0171).contains(&f), "{f}");
+        }
+        // A hitch of half a second reaches the clock as 166 ms.
+        let mut timer = FrameTimer::default();
+        assert!((timer.frame(0.5) - 0.166).abs() < 1e-6);
+        assert_eq!(timer.frame(0.0), 0.0);
+    }
+
+    #[test]
+    fn short_frames_through_the_timer_keep_the_clock_stepping() {
+        // Straight from 210 Hz frames the carried time goes below zero
+        // after the first step and no step runs again.
+        let mut c = Clock::default();
+        let steps: u32 = (0..420).map(|_| c.advance(1.0 / 210.0).0).sum();
+        assert_eq!(steps, 1);
+        // Through the game's frame timer, 2 s are 125 steps of 0.016 s,
+        // give or take the carry.
+        let mut c = Clock::default();
+        let mut timer = FrameTimer::default();
+        let mut steps = 0;
+        for _ in 0..420 {
+            let f = timer.frame(1.0 / 210.0);
+            if f > 0.0 {
+                steps += c.advance(f).0;
+            }
+        }
+        assert!((123..=126).contains(&steps), "{steps}");
+    }
 
     fn body() -> Motion {
         let mut m = Motion::new(

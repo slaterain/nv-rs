@@ -369,9 +369,15 @@ pub fn start_effects(mut p: StartParams) {
                         shot.shooter,
                         20.0 * amp.max(1e-5).log10()
                     );
-                    if let Some(e) =
-                        start_sound(&mut p.commands, &game, &mut p.wavs, s.sound, now_ms, amp)
-                    {
+                    if let Some(e) = start_sound(
+                        &mut p.commands,
+                        &game,
+                        &mut p.wavs,
+                        s.sound,
+                        now_ms,
+                        amp,
+                        1.0,
+                    ) {
                         if !s.two_d {
                             p.commands.entity(e).insert(placed);
                         }
@@ -468,7 +474,7 @@ pub fn start_effects(mut p: StartParams) {
             .sum::<f32>()
             .sqrt();
         let amp = loudness(&placed, Some(d));
-        if let Some(e) = start_sound(&mut p.commands, &game, &mut p.wavs, swing, now_ms, amp) {
+        if let Some(e) = start_sound(&mut p.commands, &game, &mut p.wavs, swing, now_ms, amp, 1.0) {
             p.commands.entity(e).insert(placed);
         }
     }
@@ -487,6 +493,24 @@ pub(crate) fn play_at(
     (at, listener): ([f32; 3], [f32; 3]),
     pick: u64,
 ) -> Option<f32> {
+    play_at_with(commands, game, wavs, sound, (at, listener), pick, None, 1.0)
+}
+
+/// [`play_at`] with the static attenuation (hundredths of a decibel) set
+/// in place of the sound's own (`None`: its own) and its frequency ×
+/// `speed`, as `ImpactMixer::PlayCollisionSound` (`00837550`) sets them on
+/// a contact's sounds (`00ad89b0`, `00ad8a90`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn play_at_with(
+    commands: &mut Commands,
+    game: &cellview::Game,
+    wavs: &mut Assets<PcmSound>,
+    sound: FormId,
+    (at, listener): ([f32; 3], [f32; 3]),
+    pick: u64,
+    static_attenuation: Option<i16>,
+    speed: f32,
+) -> Option<f32> {
     let levels = SoundLevels::load(&game.order, sound)?;
     let placed = PlacedSound {
         shooter: FormId(0),
@@ -494,7 +518,7 @@ pub(crate) fn play_at(
         follows: false,
         distances: levels.distances(),
         curve: levels.curve_mb(),
-        static_attenuation: levels.static_attenuation,
+        static_attenuation: static_attenuation.unwrap_or(levels.static_attenuation),
         volume: 1.0,
     };
     let d = (0..3)
@@ -502,7 +526,7 @@ pub(crate) fn play_at(
         .sum::<f32>()
         .sqrt();
     let amp = loudness(&placed, Some(d));
-    let e = start_sound(commands, game, wavs, sound, pick, amp)?;
+    let e = start_sound(commands, game, wavs, sound, pick, amp, speed)?;
     commands.entity(e).insert(placed);
     Some(20.0 * amp.max(1e-5).log10())
 }
@@ -522,10 +546,12 @@ fn start_sound(
     id: FormId,
     pick: u64,
     amplitude: f32,
+    speed: f32,
 ) -> Option<Entity> {
     let sound = world::sound::Sound::load(&game.order, id)?;
     let settings = PlaybackSettings {
         volume: Volume::Linear(amplitude),
+        speed,
         ..PlaybackSettings::DESPAWN
     };
     crate::sounds::play_with(commands, game, wavs, &sound, pick, settings)

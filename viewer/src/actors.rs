@@ -630,6 +630,7 @@ pub fn animate_actors(
     menus: Option<Res<crate::menus::Menus>>,
     drawn: Option<Res<crate::game_menus::MenuDraw>>,
     collision: Option<Res<crate::walk::CellCollision>>,
+    havok: Option<Res<crate::clutter::HavokFrame>>,
     look: Option<Res<crate::look::LookSettings>>,
     game: Option<Res<crate::GameFiles>>,
     state: Option<Res<crate::dialogue::DialogueState>>,
@@ -668,8 +669,11 @@ pub fn animate_actors(
             if dead.sim.asleep {
                 continue;
             }
-            if let Some(c) = &collision {
-                dead.sim.update(&c.0, time.delta_secs());
+            // By the game frame's time (`clutter::HavokFrame`), as the
+            // bodies' world.
+            let havok_dt = havok.as_ref().map_or(0.0, |h| h.dt);
+            if let (Some(c), true) = (&collision, havok_dt > 0.0) {
+                dead.sim.update(&c.0, havok_dt);
             }
             if dead.sim.asleep {
                 // The game takes settled bodies out of the world here
