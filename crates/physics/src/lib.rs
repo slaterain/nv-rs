@@ -31,6 +31,7 @@ pub mod manifold;
 pub mod ragdoll;
 pub mod rigid;
 pub mod shapes;
+pub mod solver;
 mod vec;
 pub mod view_caster;
 pub mod wind;

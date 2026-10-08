@@ -13,9 +13,7 @@
 //! up to three a frame, carrying the rest over ([`Clock`], `00c66760` with
 //! `iUpdateType` 0).
 //!
-//! This solver's own (Havok's isn't reproduced, labelled where used): each
-//! step is split into substeps of extended position-based dynamics (as in
-//! [`crate::ragdoll`]); contacts are found between a body's corners (and
+//! This solver's own (labelled where used): contacts are found between a body's corners (and
 //! sphere and capsule centres) and the other side's faces, and between the
 //! other side's corners and a body's hull, not edge against edge; a
 //! surface added without a body's values rubs and bounces as Havok's
@@ -33,17 +31,16 @@
 //! single-body integrator, solver-path forces and velocity checks, and
 //! deactivation ([`crate::havok`], B1 PRs 1–4); the broadphase's boxes
 //! and pairs and the simulation islands they merge and split
-//! ([`crate::islands`], B1 PR 5).
+//! ([`crate::islands`], B1 PR 5); the contact manager (`crate::manifold`,
+//! PR 6); the constraint solver for contacts (`crate::solver`, PR 7).
 
 use std::collections::{BTreeSet, HashSet};
 
-use crate::ragdoll::{
-    conjugate, mat_quat, mat_t_vec, mat_vec, quat_mat, quat_mul, rotated, Mat3, Quat,
-};
+use crate::ragdoll::{mat_quat, mat_t_vec, mat_vec, quat_mat, Mat3, Quat};
 use crate::vec::*;
 use crate::{
     closest_on_triangle, segment_segment_closest, segment_triangle_closest, Collider, Surface,
-    Vec3, GRAVITY, HAVOK_UNIT,
+    Vec3, HAVOK_UNIT,
 };
 
 pub use crate::havok::{Clock, MAX_STEPS};
@@ -51,16 +48,6 @@ pub use crate::havok::{Clock, MAX_STEPS};
 /// `[HAVOK] fMaxTime` as `Fallout_default.ini` sets it (the executable's
 /// default is 1/60).
 pub const STEP: f32 = crate::havok::MAX_TIME;
-/// Substeps per step, and position passes over the contacts per substep
-/// (choices of this solver, not the game's).
-const SUBSTEPS: usize = 8;
-const ITERATIONS: usize = 4;
-/// The most one correction moves a touching point out (game units): placed
-/// objects can start sunk into what they stand on (the VCG02 bottles sit
-/// 1.4 units into their rail's shells), and pushing them out at once
-/// throws them (this solver's; Havok recovers penetration gradually too,
-/// by its own rule, not traced).
-const MAX_CORRECTION: f32 = 0.05;
 /// What a surface added without its body's values rubs and bounces like:
 /// Havok's default body (`hkpRigidBodyCinfo`: friction 0.5, restitution
 /// 0.4; not traced in the executable). The game's clutter models carry
@@ -214,8 +201,10 @@ pub type Pose = (Mat3, Vec3);
 #[derive(Debug, Clone)]
 pub struct Rigid {
     pub setup: RigidSetup,
-    /// The inverse inertia in the model's space (zero: it doesn't turn).
-    inverse_inertia: Mat3,
+    /// The inverse inertia in the model's axes, as Havok's box motion keeps
+    /// it: 1 ÷ the tensor's diagonal only (`hkpBoxMotion::setInertiaLocal`,
+    /// Xbox PDB, `00d1e750`; zero: it doesn't turn).
+    inverse_inertia: Vec3,
     inverse_mass: f32,
     /// The centre of mass in the world, the turn, the velocities.
     x: Vec3,
@@ -230,17 +219,11 @@ pub struct Rigid {
     /// Its count of passing deactivation checks after its last step
     /// (`crate::havok::Motion::update_deactivation`).
     frames: u32,
-    /// How far the centre moved this substep, kept apart from `x` (far
-    /// from the origin a position's rounding is worth several units a
-    /// second of speed).
-    moved_by: Vec3,
     /// At rest: not stepped until something pushes it.
     pub asleep: bool,
     /// Havok's motion: its speed limits, gravity factor and deactivation
     /// state (the position and velocities are the fields above).
     pub motion: crate::havok::Motion,
-    /// Stepped by Havok's integrator alone this step (nothing near it).
-    free: bool,
     /// Moved since it was put (the game's "Havok moved" reference change,
     /// `CHANGE_REFR_HAVOK_MOVE`, named by `0083fef0`).
     pub moved: bool,
@@ -313,10 +296,19 @@ impl Rigid {
     fn new(setup: RigidSetup, pose: Pose) -> Rigid {
         let dynamic = crate::impulses::moves(setup.motion) && setup.mass > 0.0;
         let inverse_mass = if dynamic { 1.0 / setup.mass } else { 0.0 };
+        // `00d1e750`: 1 ÷ each diagonal element.
         let inverse_inertia = if dynamic {
-            invert(&setup.inertia)
+            let d = |k: usize| {
+                let i = setup.inertia[k][k];
+                if i > 0.0 {
+                    1.0 / i
+                } else {
+                    0.0
+                }
+            };
+            [d(0), d(1), d(2)]
         } else {
-            [[0.0; 3]; 3]
+            [0.0; 3]
         };
         let reach = setup
             .shapes
@@ -344,11 +336,9 @@ impl Rigid {
             rest: pose,
             reach,
             frames: 0,
-            moved_by: [0.0; 3],
             asleep: true,
             moved: false,
             motion,
-            free: false,
             inverse_inertia,
             inverse_mass,
             setup,
@@ -428,11 +418,6 @@ impl Rigid {
         self.inverse_mass > 0.0
     }
 
-    /// Moved by this solver's contact substeps this step.
-    fn solved(&self) -> bool {
-        !self.asleep && self.dynamic() && !self.free
-    }
-
     /// Its Havok motion with the position and velocities as they are now
     /// (game units).
     fn motion_now(&self) -> crate::havok::Motion {
@@ -455,27 +440,9 @@ impl Rigid {
     /// The inverse inertia in the world applied to `a`.
     fn inverse_inertia_world(&self, a: Vec3) -> Vec3 {
         let r = quat_mat(self.q);
-        mat_vec(&r, mat_vec(&self.inverse_inertia, mat_t_vec(&r, a)))
-    }
-
-    /// How readily it gives at `arm` (from its centre) along `n`.
-    fn give(&self, arm: Vec3, n: Vec3) -> f32 {
-        if self.inverse_mass == 0.0 {
-            return 0.0;
-        }
-        let rn = cross(arm, n);
-        self.inverse_mass + dot(rn, self.inverse_inertia_world(rn))
-    }
-
-    /// Moves it as a positional push `p` at `arm` would.
-    fn shift(&mut self, p: Vec3, arm: Vec3) {
-        if self.inverse_mass == 0.0 {
-            return;
-        }
-        let turn = self.inverse_inertia_world(cross(arm, p));
-        self.x = add(self.x, scale(p, self.inverse_mass));
-        self.moved_by = add(self.moved_by, scale(p, self.inverse_mass));
-        self.q = rotated(self.q, turn);
+        let l = mat_t_vec(&r, a);
+        let ii = self.inverse_inertia;
+        mat_vec(&r, [l[0] * ii[0], l[1] * ii[1], l[2] * ii[2]])
     }
 
     /// Changes its velocities as an impulse `p` (game units) at `arm` would.
@@ -532,26 +499,6 @@ enum Other {
     /// The collider's triangle (still).
     World(u32),
     Body(usize),
-    /// A walker moving at this velocity.
-    Mover(Vec3),
-}
-
-/// A contact found while correcting positions, for the velocity pass.
-#[derive(Debug, Clone, Copy)]
-struct Contact {
-    a: usize,
-    other: Other,
-    /// From each side's centre to the touching point, in the world.
-    arm_a: Vec3,
-    arm_b: Vec3,
-    /// Pushes `a` away from the other side.
-    n: Vec3,
-    /// How much correction it took (mass × distance).
-    lambda: f32,
-    friction: f32,
-    restitution: f32,
-    /// The normal speed of `a` against the other side before the substep.
-    approach: f32,
 }
 
 /// A touching point before it's solved: on `a` (a model-space point of
@@ -788,25 +735,6 @@ impl RigidWorld {
     pub fn remove(&mut self, reference: u32) -> Option<Rigid> {
         let i = self.find(reference)?;
         Some(self.remove_at(i))
-    }
-
-    /// Whether another body or a walker is within body `i`'s reach and a
-    /// step's travel (then this solver's contacts may act on it).
-    fn near_anything(&self, i: usize, dt: f32) -> bool {
-        let b = &self.bodies[i];
-        let travel = length(b.v) * dt;
-        let bodies = self
-            .bodies
-            .iter()
-            .enumerate()
-            .any(|(j, o)| j != i && length(sub(b.x, o.x)) <= b.reach + o.reach + 2.0 + travel);
-        bodies
-            || (self.pushable(i)
-                && self.movers.iter().any(|m| {
-                    let (s0, s1) = m.segment();
-                    length(sub(b.x, closest_on_segment(b.x, s0, s1)))
-                        <= b.reach + m.radius + PUSH_SKIN + travel
-                }))
     }
 
     /// Whether walkers push body `i`: it moves and is lighter than
@@ -1137,75 +1065,40 @@ impl RigidWorld {
                 b.start = (b.x, b.q);
             }
         }
-        let owners: HashSet<u32> = self.bodies.iter().map(|b| b.setup.reference).collect();
-        // The triangles each awake body might touch this step: near its
-        // centre, not its own or another body's.
-        let nearby: Vec<Vec<u32>> = (0..self.bodies.len())
-            .map(|i| {
-                let b = &self.bodies[i];
-                if b.asleep {
-                    return Vec::new();
-                }
-                let reach = b.reach + length(b.v) * dt + 8.0;
-                let lo = sub(b.x, [reach; 3]);
-                let hi = add(b.x, [reach; 3]);
-                collider
-                    .near(lo, hi)
-                    .into_iter()
-                    .filter(|&t| !owners.contains(&collider.owner(t)))
-                    .filter(|&t| {
-                        let [p, q, s] = collider.triangle(t);
-                        p[2].max(q[2]).max(s[2]) >= lo[2] && p[2].min(q[2]).min(s[2]) <= hi[2]
-                    })
-                    .collect()
-            })
-            .collect();
-        // Havok's integration (`00cf8da0`): a body with nothing near it
-        // (no triangle, body or walker within its reach and a step's
-        // travel: no contact constraints in its island) is stepped exactly
-        // by `hkRigidMotionUtilApplyForcesAndStep` (`00d28a30`); the others
-        // get the same forces (`00d29830`: damping now, gravity per
-        // substep), this solver's contacts, then the velocity checks of
-        // `hkRigidMotionUtilApplyAccumulators` (`00d29bf0`).
+        // Each active island, last to first (`00cf8da0`): without contact
+        // points (no constraint in it) each body is stepped alone by
+        // `hkRigidMotionUtilApplyForcesAndStep` (`00d28a30`); with some,
+        // the solver steps the island ([`RigidWorld::solve_island`]).
         let gravity_step = scale(crate::havok::GRAVITY, dt * HAVOK_UNIT);
         let solver = self.solver;
-        for (i, tris) in nearby.iter().enumerate() {
-            let free = !self.bodies[i].asleep
-                && self.bodies[i].dynamic()
-                && tris.is_empty()
-                && !self.near_anything(i, dt);
-            let b = &mut self.bodies[i];
-            b.free = free;
-            if b.asleep || !b.dynamic() {
+        for id in self.islands.active().into_iter().rev() {
+            let Some(island) = self.islands.island(id) else {
                 continue;
-            }
-            let mut m = b.motion_now();
-            if free {
-                b.frames = m.step(dt, gravity_step, HAVOK_UNIT, &solver).unwrap_or(0);
+            };
+            let members = island.bodies.clone();
+            let constrained = self.manifolds.iter().any(|(&(a, p), m)| {
+                !m.is_empty()
+                    && (members.contains(&a)
+                        || matches!(p, Partner::Body(b) if members.contains(&b)))
+            }) || members.iter().any(|&i| {
+                self.movers
+                    .iter()
+                    .any(|m| self.pushable(i) && !self.mover_touches(i, m).is_empty())
+            });
+            if constrained {
+                self.solve_island(&members, dt);
             } else {
-                m.apply_damping(dt);
+                for &i in &members {
+                    let b = &mut self.bodies[i];
+                    let mut m = b.motion_now();
+                    b.frames = m.step(dt, gravity_step, HAVOK_UNIT, &solver).unwrap_or(0);
+                    b.set_motion(&m);
+                }
             }
-            b.set_motion(&m);
-        }
-        let h = dt / SUBSTEPS as f32;
-        for _ in 0..SUBSTEPS {
-            self.substep(collider, &nearby, h);
-        }
-        for b in &mut self.bodies {
-            if b.asleep || !b.dynamic() || b.free {
-                continue;
-            }
-            let mut m = b.motion_now();
-            m.reset_invalid_velocities(HAVOK_UNIT);
-            m.clamp_linear_velocity(HAVOK_UNIT);
-            m.clamp_angular_velocity(dt);
-            b.frames = m.update_deactivation(&solver, HAVOK_UNIT).unwrap_or(0);
-            b.set_motion(&m);
-        }
-        // Each active island's fewest passing checks (each body's count
-        // was updated with its step): more than 5 and still marked active,
-        // it is marked inactive (`00cf8da0` → `00cb5420`) and goes to sleep
-        // at the next step's start, above.
+        } // Each active island's fewest passing checks (each body's count
+          // was updated with its step): more than 5 and still marked active,
+          // it is marked inactive (`00cf8da0` → `00cb5420`) and goes to sleep
+          // at the next step's start, above.
         for b in &mut self.bodies {
             if !b.asleep && b.dynamic() {
                 b.moved |= b.v != [0.0; 3] || b.w != [0.0; 3];
@@ -1232,6 +1125,164 @@ impl RigidWorld {
         self.collide_narrowphase(collider);
     }
 
+    /// `hkpConstraintSolverSetup::solve` (`00d88b50`) for an island with
+    /// contact points (`crate::solver`, in Havok units about the first
+    /// body's centre): the accumulators, the world's fixed body first
+    /// (`00d29830`, which damps the motions' velocities); for each contact
+    /// constraint the callbacks for its new points (`00d92900`) and its
+    /// Jacobians (`00d72190`); the solver (`00d8d030`); the export
+    /// (`00def570`) into the points' properties and the friction's data;
+    /// the accumulators applied to the motions (`00d29bf0`), each body's
+    /// count of passing checks kept. Walkers pushing a body are this
+    /// solver's: keyframed bodies at their velocity, their touches new
+    /// points every step.
+    // Translated from 00d88b50 (decompiled, FalloutNV.exe 1.4.0.525)
+    fn solve_island(&mut self, members: &[usize], dt: f32) {
+        use crate::manifold::Manifold;
+        use crate::solver::*;
+        let u = HAVOK_UNIT;
+        let solver = self.solver;
+        let origin = self.bodies[members[0]].x;
+        let hv = |p: Vec3| scale(sub(p, origin), 1.0 / u);
+        let cols = |q: Quat| {
+            let r = quat_mat(q);
+            [
+                [r[0][0], r[1][0], r[2][0]],
+                [r[0][1], r[1][1], r[2][1]],
+                [r[0][2], r[1][2], r[2][2]],
+            ]
+        };
+        let mut accs = vec![Accumulator::fixed()];
+        let mut spin = vec![[0.0f32; 3]];
+        let mut acc_of = std::collections::HashMap::new();
+        for &i in members {
+            let b = &mut self.bodies[i];
+            let mut m = b.motion_now();
+            m.apply_damping(dt);
+            b.set_motion(&m);
+            acc_of.insert(i, accs.len());
+            accs.push(Accumulator::dynamic(
+                hv(b.x),
+                cols(b.q),
+                scale(b.v, 1.0 / u),
+                b.w,
+                scale(b.inverse_inertia, u * u),
+                b.inverse_mass,
+                usize::from(b.motion.deactivation_class),
+                crate::havok::from_half(b.motion.gravity_factor),
+            ));
+            spin.push(b.w);
+        }
+        // The island's contact constraints, Havok units.
+        let mut keys = Vec::new();
+        let mut copies: Vec<Manifold> = Vec::new();
+        let mut sides = Vec::new();
+        for (key, m) in &self.manifolds {
+            let Some(&ia) = acc_of.get(&key.0) else {
+                continue;
+            };
+            let ib = match key.1 {
+                Partner::Body(j) => match acc_of.get(&j) {
+                    Some(&ib) => ib,
+                    None => continue,
+                },
+                Partner::Fixed(_) => 0,
+            };
+            if m.is_empty() {
+                continue;
+            }
+            let mut c = m.clone();
+            for p in &mut c.points {
+                p.position = hv(p.position);
+                p.distance /= u;
+            }
+            keys.push(*key);
+            copies.push(c);
+            sides.push((ia, ib));
+        }
+        let held = copies.len();
+        for mover in &self.movers {
+            for &i in members {
+                if !self.pushable(i) {
+                    continue;
+                }
+                let touches = self.mover_touches(i, mover);
+                if touches.is_empty() {
+                    continue;
+                }
+                let ib = accs.len();
+                accs.push(Accumulator::keyframed(
+                    hv(mover.feet),
+                    scale(mover.velocity, 1.0 / u),
+                ));
+                spin.push([0.0; 3]);
+                let me = &self.bodies[i].setup;
+                let props = crate::manifold::point_properties(
+                    (me.friction, DEFAULT_SURFACE.friction),
+                    (me.restitution, DEFAULT_SURFACE.restitution),
+                );
+                let mut m = Manifold::default();
+                for t in &touches {
+                    let mut p = self.new_point(i, Partner::Fixed(0), t);
+                    p.position = hv(p.position);
+                    p.distance /= u;
+                    m.add(p, props);
+                }
+                copies.push(m);
+                sides.push((acc_of[&i], ib));
+            }
+        }
+        let step = Step::new(&solver, dt, crate::havok::GRAVITY);
+        let q = QueryIn::new(&solver, &step);
+        let mut schemas = Vec::new();
+        for (ci, (c, &(ia, ib))) in copies.iter_mut().zip(&sides).enumerate() {
+            let velocity = |k: usize| BodyVelocity {
+                linear: accs[k].linear,
+                angular: spin[k],
+                center: accs[k].center,
+            };
+            fire_callbacks(
+                c,
+                &q,
+                (accs[ia].inv_mass, accs[ib].inv_mass),
+                &velocity(ia),
+                &velocity(ib),
+                solver.contact_resting_velocity,
+            );
+            build_contact_jacobians(c, ci, &q, (ia, ib), &accs[ia], &accs[ib], &mut schemas);
+        }
+        let results = solve(&solver, &step, &schemas, &mut accs);
+        {
+            let mut refs: Vec<&mut Manifold> = copies.iter_mut().collect();
+            export(&solver, &step, &schemas, &results, &accs, &mut refs);
+        }
+        for (key, c) in keys.iter().zip(&copies[..held]) {
+            if let Some(m) = self.manifolds.get_mut(key) {
+                for (p, cp) in m.points.iter_mut().zip(&c.points) {
+                    p.props = cp.props;
+                }
+                m.info = c.info;
+            }
+        }
+        for &i in members {
+            let acc = accs[acc_of[&i]];
+            let b = &mut self.bodies[i];
+            let c = cols(b.q);
+            let mut m = b.motion_now();
+            b.frames = m
+                .apply_accumulator(
+                    scale(acc.linear, u),
+                    apply_cols(&c, acc.angular),
+                    scale(acc.sum_linear, u),
+                    apply_cols(&c, acc.sum_angular),
+                    dt,
+                    u,
+                    &solver,
+                )
+                .unwrap_or(0);
+            b.set_motion(&m);
+        }
+    }
     /// The broadphase part of `hkpSimulation::collide` (`00cf8bc0`; the
     /// continuous simulation's `00d0d3f0` per island): the moving bodies'
     /// boxes recalculated (`00d1a330`), then the pairs updated
@@ -1405,84 +1456,6 @@ impl RigidWorld {
         }
     }
 
-    fn substep(&mut self, collider: &Collider, nearby: &[Vec<u32>], h: f32) {
-        let before: Vec<(Vec3, Quat, Vec3, Vec3)> =
-            self.bodies.iter().map(|b| (b.x, b.q, b.v, b.w)).collect();
-        for b in &mut self.bodies {
-            if !b.solved() {
-                continue;
-            }
-            // The solver's gravity per substep, × the gravity factor.
-            let g = crate::havok::from_half(b.motion.gravity_factor) * h * HAVOK_UNIT;
-            b.v = add(b.v, scale(crate::havok::GRAVITY, g));
-            b.x = add(b.x, scale(b.v, h));
-            b.moved_by = scale(b.v, h);
-            b.q = rotated(b.q, scale(b.w, h));
-        }
-        // What touches what, found once, then corrected a few times over
-        // (each correction measured from where the last left the bodies).
-        let mut touches: Vec<(usize, Other, Touch)> = Vec::new();
-        for (i, tris) in nearby.iter().enumerate() {
-            if !self.bodies[i].solved() {
-                continue;
-            }
-            for (tri, t) in self.world_touches(collider, i, tris, 0.0) {
-                touches.push((i, Other::World(tri), t));
-            }
-            for j in 0..self.bodies.len() {
-                if j == i || (j < i && !self.bodies[j].asleep) {
-                    continue;
-                }
-                let gap = length(sub(self.bodies[i].x, self.bodies[j].x));
-                if gap > self.bodies[i].reach + self.bodies[j].reach + 2.0 {
-                    continue;
-                }
-                let found = self.body_touches(i, j, 0.0);
-                touches.extend(found.into_iter().map(|t| (i, Other::Body(j), t)));
-            }
-            if self.pushable(i) {
-                for m in &self.movers {
-                    for t in self.mover_touches(i, m) {
-                        touches.push((i, Other::Mover(m.velocity), t));
-                    }
-                }
-            }
-        }
-        let mut lambdas = vec![0.0f32; touches.len()];
-        for _ in 0..ITERATIONS {
-            for (k, &(a, other, t)) in touches.iter().enumerate() {
-                lambdas[k] += self.correct(a, other, &t);
-            }
-        }
-        let contacts: Vec<Contact> = touches
-            .iter()
-            .zip(&lambdas)
-            .filter(|(_, &l)| l > 0.0)
-            .map(|(&(a, other, t), &l)| self.contact(a, other, &t, l, &before))
-            .collect();
-        // Velocities from the moves.
-        for (b, (_, q, _, _)) in self.bodies.iter_mut().zip(&before) {
-            if !b.solved() {
-                continue;
-            }
-            b.v = scale(b.moved_by, 1.0 / h);
-            let d = quat_mul(b.q, conjugate(*q));
-            let w = scale([d[0], d[1], d[2]], 2.0 / h);
-            b.w = if d[3] < 0.0 { scale(w, -1.0) } else { w };
-        }
-        // Bounce (or stop approaching), with each contact's push summed
-        // over a few passes, then friction.
-        let mut pushed = vec![0.0f32; contacts.len()];
-        for _ in 0..ITERATIONS {
-            for (c, p) in contacts.iter().zip(pushed.iter_mut()) {
-                self.normal_pass(c, h, p);
-            }
-        }
-        for c in &contacts {
-            self.friction_pass(c, h);
-        }
-    }
-
     /// Both sides' points of a touch in the world, and the arms from their
     /// centres.
     fn ends(&self, a: usize, other: Other, t: &Touch) -> (Vec3, Vec3, Vec3, Vec3) {
@@ -1496,146 +1469,6 @@ impl RigidWorld {
             _ => [0.0; 3],
         };
         (pa, pb, sub(pa, self.bodies[a].x), arm_b)
-    }
-
-    /// Corrects one touching point's overlap (position-based): the
-    /// correction it took (mass × distance), 0 when they're apart.
-    fn correct(&mut self, a: usize, other: Other, t: &Touch) -> f32 {
-        let (pa, pb, arm_a, arm_b) = self.ends(a, other, t);
-        let depth = t.margin - dot(sub(pa, pb), t.n);
-        if depth <= 0.0 {
-            return 0.0;
-        }
-        // A deep overlap (a body placed sunk into what holds it) comes out
-        // a little at a time.
-        let depth = depth.min(MAX_CORRECTION);
-        let wb = match other {
-            Other::Body(j) if !self.bodies[j].asleep => self.bodies[j].give(arm_b, t.n),
-            _ => 0.0,
-        };
-        let wa = self.bodies[a].give(arm_a, t.n);
-        if wa + wb <= 0.0 {
-            return 0.0;
-        }
-        let lambda = depth / (wa + wb);
-        self.bodies[a].shift(scale(t.n, lambda), arm_a);
-        if let Other::Body(j) = other {
-            if !self.bodies[j].asleep {
-                self.bodies[j].shift(scale(t.n, -lambda), arm_b);
-            }
-        }
-        lambda
-    }
-
-    /// A corrected touch, for the velocity pass.
-    fn contact(
-        &self,
-        a: usize,
-        other: Other,
-        t: &Touch,
-        lambda: f32,
-        before: &[(Vec3, Quat, Vec3, Vec3)],
-    ) -> Contact {
-        let (_, _, arm_a, arm_b) = self.ends(a, other, t);
-        // How fast they approached each other before the substep.
-        let (_, qa, va, wa_) = before[a];
-        let ra = mat_vec(&quat_mat(qa), mat_t_vec(&quat_mat(self.bodies[a].q), arm_a));
-        let mut rel = add(va, cross(wa_, ra));
-        match other {
-            Other::Body(j) => {
-                let (_, _, vb, wb_) = before[j];
-                rel = sub(rel, add(vb, cross(wb_, arm_b)));
-            }
-            Other::Mover(v) => rel = sub(rel, v),
-            Other::World(_) => {}
-        }
-        let me = &self.bodies[a].setup;
-        Contact {
-            a,
-            other,
-            arm_a,
-            arm_b,
-            n: t.n,
-            lambda,
-            friction: combined_friction(me.friction, t.surface.friction),
-            restitution: combined_restitution(me.restitution, t.surface.restitution),
-            approach: dot(rel, t.n),
-        }
-    }
-
-    /// The velocity of a contact's first side against the other at the
-    /// touching point, and the other body when it moves.
-    fn relative(&self, c: &Contact) -> (Vec3, Option<usize>) {
-        let mut rel = self.bodies[c.a].point_velocity(c.arm_a);
-        let mut moving = None;
-        match c.other {
-            Other::Body(j) => {
-                rel = sub(rel, self.bodies[j].point_velocity(c.arm_b));
-                if !self.bodies[j].asleep {
-                    moving = Some(j);
-                }
-            }
-            Other::Mover(v) => rel = sub(rel, v),
-            Other::World(_) => {}
-        }
-        (rel, moving)
-    }
-
-    /// Gives a contact an impulse `p` (game units) on its first side, and
-    /// the opposite on a moving other body.
-    fn kick_contact(&mut self, c: &Contact, p: Vec3, other: Option<usize>) {
-        self.bodies[c.a].kick(p, c.arm_a);
-        if let Some(j) = other {
-            self.bodies[j].kick(scale(p, -1.0), c.arm_b);
-        }
-    }
-
-    /// How readily a contact's sides give along `dir`, together.
-    fn contact_give(&self, c: &Contact, dir: Vec3, other: Option<usize>) -> f32 {
-        self.bodies[c.a].give(c.arm_a, dir)
-            + other.map_or(0.0, |j| self.bodies[j].give(c.arm_b, dir))
-    }
-
-    /// One pass of a contact's normal velocity: set to a bounce off a real
-    /// approach (faster than gravity gives in two substeps) by the
-    /// restitution, else to zero, which also takes back speed the overlap
-    /// correction gave (as Müller et al.'s restitution step does); `pushed`
-    /// sums the impulse given so far.
-    fn normal_pass(&mut self, c: &Contact, h: f32, pushed: &mut f32) {
-        let (rel, other) = self.relative(c);
-        let vn = dot(rel, c.n);
-        let target = if c.approach < -2.0 * GRAVITY * h {
-            -c.restitution * c.approach
-        } else {
-            0.0
-        };
-        let w = self.contact_give(c, c.n, other);
-        if w <= 0.0 {
-            return;
-        }
-        let p = (target - vn) / w;
-        *pushed += p;
-        if p != 0.0 {
-            self.kick_contact(c, scale(c.n, p), other);
-        }
-    }
-
-    /// A contact's friction: sliding slowed by friction × the push that
-    /// kept the sides apart, stopped outright when that's enough.
-    fn friction_pass(&mut self, c: &Contact, h: f32) {
-        let (rel, other) = self.relative(c);
-        let vn = dot(rel, c.n);
-        let vt = sub(rel, scale(c.n, vn));
-        let slide = length(vt);
-        if slide < 1e-6 {
-            return;
-        }
-        let dir = scale(vt, -1.0 / slide);
-        let stop = (c.friction * c.lambda / h).min(slide);
-        let w = self.contact_give(c, dir, other);
-        if w > 0.0 {
-            self.kick_contact(c, scale(dir, stop / w), other);
-        }
     }
 
     /// Where body `i` touches the collider's triangles `tris`, or comes
@@ -2236,7 +2069,6 @@ mod tests {
             assert_eq!(w.update(&c, STEP), 1);
             let solver = w.solver;
             m.step(STEP, g, HAVOK_UNIT, &solver);
-            assert!(w.bodies[i].free);
             assert_eq!(w.bodies[i].center(), m.center);
             assert_eq!(w.bodies[i].velocity(), m.linear_velocity);
             assert_eq!(w.bodies[i].spin(), m.angular_velocity);
@@ -2330,9 +2162,9 @@ mod tests {
                 break;
             }
         }
-        let (_, x) = woke_at.expect("the sleeper wakes");
-        // Faces 20 apart at the start; woken while the gap is still open.
-        assert!(x + 10.7 < 40.0 - 10.7, "{x}");
+        woke_at.expect("the sleeper wakes");
+        // Woken by the broadphase pair, before any contact moved it.
+        assert_eq!(w.bodies[sleeper].center(), [40.0, 0.0, 10.7]);
         assert_eq!(w.islands.island_of(mover), w.islands.island_of(sleeper));
     }
 
@@ -2861,6 +2693,120 @@ mod tests {
         // Paired as they came: 1, 3, 1, 3.
         assert_eq!(m.points[1].props.flags & crate::manifold::POINT_PAIRED, 2);
         assert!(p.normal[2] > 0.99 && p.distance.abs() < 1.0, "{p:?}");
+    }
+    /// A ball of `radius` and `mass` (solid sphere inertia).
+    fn ball(reference: u32, radius: f32, mass: f32) -> RigidSetup {
+        let k = 0.4 * mass * radius * radius;
+        RigidSetup {
+            shapes: vec![Shape::Sphere {
+                center: [0.0; 3],
+                radius,
+            }],
+            inertia: [[k, 0.0, 0.0], [0.0, k, 0.0], [0.0, 0.0, k]],
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            ..crate_(reference, [radius; 3], mass)
+        }
+    }
+
+    #[test]
+    fn a_box_at_rest_doesnt_drift() {
+        let c = floor(0.0);
+        let mut w = RigidWorld::new();
+        let i = w.add(crate_(1, [10.0; 3], 5.0), (I3, [0.0, 0.0, 10.7]));
+        let start = w.bodies[i].center();
+        for _ in 0..1000 {
+            w.wake(i);
+            w.update(&c, STEP);
+        }
+        let now = w.bodies[i].center();
+        assert!(length(sub(now, start)) < 0.1, "{start:?} -> {now:?}");
+        let (r, _) = w.bodies[i].pose();
+        assert!(r[2][2] > 0.9999, "{r:?}");
+    }
+
+    #[test]
+    fn a_ball_rolls_down_a_slope() {
+        // A 20° slope rising toward +x: the ball rolls down toward -x, its
+        // spin matching its speed (no slipping at friction 0.5).
+        let a = 20f32.to_radians();
+        let (s, co) = (a.sin(), a.cos());
+        let mut c = Collider::new();
+        let p = |x: f32, y: f32| [x * co, y, x * s];
+        c.add(
+            &[
+                p(-2000.0, -500.0),
+                p(2000.0, -500.0),
+                p(2000.0, 500.0),
+                p(-2000.0, 500.0),
+            ],
+            &[[0, 1, 2], [0, 2, 3]],
+        );
+        let mut w = RigidWorld::new();
+        let n = [-s, 0.0, co];
+        let i = w.add(ball(1, 10.0, 5.0), (I3, scale(n, 10.0)));
+        w.wake(i);
+        for _ in 0..60 {
+            w.update(&c, STEP);
+        }
+        let b = &w.bodies[i];
+        let v = b.velocity();
+        let spin = length(b.spin()) * 10.0;
+        assert!(v[0] < -50.0, "{v:?}");
+        assert!(
+            (spin - length(v)).abs() < 0.25 * length(v),
+            "spin {spin} speed {}",
+            length(v)
+        );
+        // Still on the slope.
+        assert!(dot(sub(b.center(), [0.0; 3]), n) < 11.5);
+    }
+
+    #[test]
+    fn a_dropped_ball_comes_back_up_a_little() {
+        let c = floor(0.0);
+        let mut w = RigidWorld::new();
+        let i = w.add(ball(1, 5.0, 1.0), (I3, [0.0, 0.0, 200.0]));
+        w.wake(i);
+        let mut fastest_down = 0.0f32;
+        let mut fastest_up = 0.0f32;
+        for _ in 0..120 {
+            w.update(&c, STEP);
+            let vz = w.bodies[i].velocity()[2];
+            if fastest_up == 0.0 {
+                fastest_down = fastest_down.min(vz);
+            }
+            fastest_up = fastest_up.max(vz);
+        }
+        // It comes back up, much slower than it came down: Havok's PSI
+        // restitution is a one-step distance offset on the new point
+        // (`00d92900`), which the solver's integrated velocities mostly
+        // spend on moving the ball out (about 2% here).
+        assert!(
+            fastest_up > 0.01 * -fastest_down,
+            "{fastest_up} {fastest_down}"
+        );
+        assert!(fastest_up < -fastest_down, "{fastest_up} {fastest_down}");
+    }
+
+    #[test]
+    fn a_sliding_box_stops_by_friction() {
+        let c = floor(0.0);
+        let mut w = RigidWorld::new();
+        let mut setup = crate_(1, [10.0; 3], 5.0);
+        setup.linear_damping = 0.0;
+        let i = w.add(setup, (I3, [0.0, 0.0, 10.7]));
+        w.wake(i);
+        w.update(&c, STEP);
+        w.set_velocity(i, [300.0, 0.0, 0.0], [0.0; 3]);
+        for _ in 0..240 {
+            w.update(&c, STEP);
+        }
+        // About v² ÷ (2 μ g) with μ = √(0.5 × 0.5) (the table's 0.514).
+        let x = w.bodies[i].center()[0];
+        let want = 300.0 * 300.0 / (2.0 * 0.514 * crate::GRAVITY);
+        assert!(x > 0.5 * want && x < 1.5 * want, "{x} vs {want}");
+        assert!(length(w.bodies[i].velocity()) < 1.0);
     }
     #[test]
     fn the_grab_spring_carries_a_body_to_its_target() {

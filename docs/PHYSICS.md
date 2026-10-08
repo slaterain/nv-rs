@@ -343,6 +343,44 @@ Walkers' pushes aren't Havok contacts and aren't heard. The contacts still
 move bodies by this solver's substeps until PR 7, which solves these
 points.
 
+### The contact solver (PR 7, `claude/b1-p7-solver`)
+
+An active island with contact points (its contact constraints) is stepped
+by `hkpConstraintSolverSetup::solve` (`00d88b50`), the rest body by body
+(PR 3). `physics::solver`, in Havok units about the island's first body;
+`RigidWorld::solve_island`. This replaces this solver's XPBD substeps,
+overlap corrections and bounce/friction passes (deleted).
+
+| Stage | Where | Rule |
+| --- | --- | --- |
+| Accumulators | `hkRigidMotionUtilApplyForcesAndBuildAccumulators` `00d29830` | the world's fixed body first (keyframed, zero); per body (box motion types): the motion's velocities damped in place, then linear velocity (world), angular velocity in the body's axes (the rotation transposed, `00cd4ba0`), inverse inertia diagonal and inverse mass (`+0xc0`), centre, gravity factor, deactivation class |
+| New points | `hkSimpleContactConstraintData_fireCallbacks` `00d92900` | for each point flagged new: projected velocity v (`00df2510`, damped motion velocities, accumulator centres); r = restitution byte ÷ 128; when v ≥ −`contactRestingVelocity` (always: Bethesda's FLT_MAX, `00c681c0`) or r ≤ 0.3: impulse guess (r + 1) ÷ (inverse masses + 1e-10) × −0.2 × v, solver data r v × substep × −1.3, allowed penetration that + distance when r > 0, else 0. The other path (`hkpSimpleCollisionResponse::solveSingleContact` `00d9ee50`, an immediate bounce) is never taken in the game: **that is what Bethesda's FLT_MAX resting velocity does** |
+| Jacobians | `hkSimpleContactConstraintDataBuildJacobian` `00d72190` | per point a 1-D Jacobian along the normal; right-hand side: with allowed penetration dA and solver data s: step = min(frame dt × 1 (`011b6924`), −0.05 (`011b6928`) × dA), gap = (d − dA) − step; when 2·step + frame dt < −s − (d − dA) (a penetration the solver didn't predict) it is added to the allowance; the allowance (≤ −ε) kept; rhs = −gap × tau ÷ damping ÷ substep. Paired points (flag 2) one 2 × 2 block (coupling × 0.99), inverted with the virtual mass factor (damping). Friction when Σfriction ÷ n × Σ(last impulses) > 0: the mean normal (or the first), an axis from x/y/z by the info's index (re-picked as the normal's least component when within √0.1, clearing the drifts), two 1-D Jacobians at the points' mean, their 2 × 2 inverse, rhs = the drifts the export left × friction tau ÷ damping ÷ substep, at most that total per micro step; with 2+ points the turning friction about the normal at the mean radius (worked out again when info flag 4 is set) |
+| Solver | `hkSolveConstraints` `00d8d030` (schema types 0x10, 0x14, 0x16, 0x17) | gravity × factor once into the velocities, sums zeroed; per substep (4 at normal speed), per micro step (1): each schema: contacts keep their total impulse ≥ 0 (a pair: both, else the second alone, else the first alone); friction impulses scaled down together to the most; then per body (`hkSolveIntegrateVelocitiesByTheSteps`, inlined): components ≥ 1e6 → the unit x (`01268370`); per component \|ω\|·angular inverse + \|v\|·linear inverse ≤ 1 → × slow multiplier, or all ≤ the relative sleep velocity → zero (**the deactivation velocity thresholds are read here**, open question 5); sum += 0.6 × (v − sum); last substep: sum × ¼ ÷ 0.6 is the velocity the body moves by, v − old sum its velocity; otherwise v = (v − old sum) + new sum + gravity |
+| Export | `hkSolverExport` `00def570` | each point's impulse; its solver data rhs × damping ÷ tau × substep − J·sum × step (the distance the solver expects, negated); friction impulses and drifts (× the last scale; friction tau) into the atom's info (`+0x18`…`+0x2c`) |
+| Apply | `hkRigidMotionUtilApplyAccumulators` `00d29bf0` | the motion's velocities the solver's (angular back to the world); moved by the sums (reset to unit x when invalid; held to the most linear speed; turn capped as PR 3), then \|v\| and \|ω\| held to the most speeds; deactivation bookkeeping |
+
+Corrected in passing: the invalid-velocity reset (`00d28a30`, PR 3) is to
+the vector at `01268370`, which the static initializer `00fbdde0` sets to
+(1, 0, 0, 0), not zero. Box motions keep only their inertia tensor's
+diagonal (`hkpBoxMotion::setInertiaLocal` `00d1e750`); impulses and the
+solver now use it.
+
+What it does: a box rests without drifting, a ball rolls down a slope with
+its spin matching its speed, a sliding box stops after about v² ÷ 2μg, a
+bottle stands on the rail and falls off when shot. Restitution in the PSI
+step is a one-step offset of a new point's distance: a 0.4 ball dropped
+from 200 units leaves the floor at about 2% of its landing speed (the
+integrated-velocity scheme spends the target on moving it out).
+
+In nv-rs: the island's constraints are its manifolds in key order (the
+game's order is its entities' constraint lists); walkers pushing a body
+are keyframed bodies at their velocity whose touches are new points every
+step (this solver's walkers, PR 10). Not translated: maximum-impulse
+contacts (0x12; the game's points have none), constraint priorities ≥ 4
+(TOI, PR 9), the contact impulse limit callbacks (`00d01700`), thin box
+and sphere motion specifics (all bodies use the box motion's rules).
+
 ### Data layouts used (Xbox PDB, matched to the PC code)
 
 `hkpMotion` (0x120, entity `+0xe0`): `+0x08` type, `+0x09` deactivation
