@@ -243,3 +243,66 @@ fn the_body_never_turns_at_once_sitting_down_or_getting_up() {
     let without = largest_frame_turn(false);
     assert!(without > 90.0f32.to_radians(), "{}°", without.to_degrees());
 }
+
+/// Getting up waits for a seated idle only while it's starting (`00498f80`
+/// in `00921e80` cases 4 and 9): not yet playing, or blending in. Once in,
+/// however much of it is left, the exit begins. Doc Mitchell's
+/// `SitChairRelaxA.kf` (16.1 s) used to hold his help-up in the opening
+/// until it had played out, 16 s after his package changed (B14).
+#[test]
+fn a_seated_idle_holds_getting_up_only_while_it_blends_in() {
+    let chair = Chair::new();
+    let bones = bones();
+    let front = nif::FurnitureMarker {
+        offset: [-2.0, 62.8, -37.2],
+        heading: 3141.0 / 1000.0,
+        marker: 14,
+    };
+    let placed = place_markers(&[front], [0.0; 3], 0.0, 1.0)[0];
+    let settings = MarkerSettings {
+        delta: [2.4809, 57.3572, -28.948],
+        heading_delta: PI,
+    };
+    let mut pick = |sitting: u8, _: u8, _: u8| match sitting {
+        1 => Some((FormId(2), "Seat".to_string())),
+        2 => Some((FormId(3), "Enter".to_string())),
+        4 => Some((FormId(4), "Exit".to_string())),
+        _ => None,
+    };
+    let mut sitter = Sitter::seated(FormId(1), placed, settings, 1.0, &mut pick);
+    assert_eq!(sitter.state, SitState::Sitting);
+    let mut player = Player::default();
+    player.play(group::DYNAMIC_IDLE, &chair.seat, -1, &bones);
+    player.update(1.0);
+    // A seated idle of SitChairRelaxA.kf's length, not played yet: it
+    // counts as starting (the game's idle whose sequence hasn't loaded).
+    let relax = seq(
+        "Relax",
+        16.1,
+        false,
+        [0.0; 3],
+        &[PI, PI],
+        &[(0.0, "start"), (16.1, "end")],
+    );
+    assert!(player.idle_starting(section::SPECIAL_IDLE, &relax));
+    player.play_idle_in(section::SPECIAL_IDLE, &relax, 0, &bones);
+    sitter.stand_up();
+    let dt = 1.0 / 60.0;
+    let mut anims = &chair;
+    // Blending in from the pose: getting up waits.
+    let starting = player.idle_starting(section::SPECIAL_IDLE, &relax);
+    assert!(starting);
+    sitter.update(dt, starting, &mut pick, &mut anims);
+    assert_eq!(sitter.state, SitState::Sitting);
+    assert!(sitter.playing.is_none());
+    // In at full weight (the default 0.2 s blend), nearly all of it left.
+    for _ in 0..30 {
+        player.update(dt);
+    }
+    let starting = player.idle_starting(section::SPECIAL_IDLE, &relax);
+    assert!(!starting);
+    assert!(player.time(section::SPECIAL_IDLE).unwrap() < 1.0);
+    sitter.update(dt, starting, &mut pick, &mut anims);
+    assert_eq!(sitter.state, SitState::WantToStand);
+    assert_eq!(sitter.playing.as_ref().unwrap().model, "Exit");
+}

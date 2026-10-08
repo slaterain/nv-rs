@@ -1033,6 +1033,47 @@ pub fn player_furniture(
 
 /// Lets go of a sandbox choice that couldn't be carried out: its target
 /// weighs nothing till the next scan, and something else is chosen.
+/// Whether their special idle is still starting (`00498f80`, see
+/// `world::animation::Player::idle_starting`): a requested one blending
+/// in, or the tree's idle not yet playing or blending in. Only this holds
+/// a seated actor who is to get up (`00921e80` cases 4 and 9); an idle
+/// playing at full weight doesn't, however long it has left. `seq` is the
+/// tree's idle's sequence, if one plays.
+pub(crate) fn special_idle_starting(
+    life: &Life,
+    rig: &ActorRig,
+    seq: Option<&Arc<nif::Sequence>>,
+) -> bool {
+    use world::animation::State;
+    if rig.scripted_idle.is_some() {
+        let slot = world::animation::slot(rig.idle_section);
+        return matches!(
+            rig.player.state(slot),
+            Some(State::EaseIn | State::TransDest)
+        );
+    }
+    match seq {
+        Some(seq) if life.idles.playing.is_some() => {
+            rig.player.idle_starting(rig.overlay_section, seq)
+        }
+        _ => false,
+    }
+}
+
+/// The exit replaces whatever special idle they had (`00497ca0`: the
+/// current one stopped with its own blend-out, `004994f0`, then the exit
+/// queued): the tree's idle ends, and a requested one is freed.
+fn replace_seated_idle(life: &mut Life, rig: &mut ActorRig) {
+    life.idles.stop();
+    if rig.scripted_idle.take().is_some() {
+        let slot = world::animation::slot(rig.idle_section);
+        if rig.player.playing(slot) == Some(world::animation::group::SPECIAL_IDLE) {
+            rig.player.stop_section(slot);
+        }
+        rig.idle_section = world::animation::section::SPECIAL_IDLE;
+    }
+}
+
 fn give_up(life: &mut Life) {
     if let Some(sb) = life.sandbox.as_mut() {
         sb.failed();
@@ -1116,7 +1157,12 @@ pub fn furniture_frame(
     // The procedure's step, the tree asked with its sit state.
     let (skeleton, _) = skeleton(life, order, me);
     let roots = ctx.seats.roots(&skeleton);
-    let seated_idle = life.idles.playing.is_some();
+    let seated_seq = life
+        .idles
+        .playing
+        .as_ref()
+        .and_then(|p| ctx.seats.sequence(ctx.game, &p.model));
+    let seated_idle = special_idle_starting(life, rig, seated_seq.as_ref());
     // The dice only when the tree will be asked (sitting down or getting
     // up), so a run repeats however fast frames come.
     let asks = sitter.state == SitState::Normal
@@ -1163,6 +1209,12 @@ pub fn furniture_frame(
                 .map(|p| format!(", playing {}", p.model))
                 .unwrap_or_default()
         );
+    }
+    // Getting up began: the exit takes the special idle's place, the seated
+    // idle playing is stopped with its blend-out (`00921e80` case 4/9 →
+    // `00497ca0` → `004994f0`).
+    if before.is_settled() && !sitter.state.is_settled() {
+        replace_seated_idle(life, rig);
     }
     walker.position = sitter.position;
     walker.heading = sitter.heading;

@@ -1034,6 +1034,25 @@ impl Player {
         self.play_from_pose(group::SPECIAL_IDLE, section, seq, loops, bones, Some(pose));
     }
 
+    /// Whether the special idle `seq`, meant to play in `section`, is still
+    /// on its way in: not playing there yet (the game's idle whose sequence
+    /// hasn't loaded), or playing but in state 2 (`EaseIn`) or 5
+    /// (`TransDest`). Once it plays at full weight it no longer counts.
+    ///
+    /// Translated from 00498f80 (decompiled, FalloutNV.exe 1.4.0.525): the
+    /// animation's current idle (+0x124, `spAnimIdle`) and its queued one
+    /// (+0x128) are each "starting" when they have no sequence yet (unless
+    /// the idle's state, +8, is 3) or their sequence's state (+0x44) is 2 or
+    /// 5. The queued idle has no counterpart here (idles here are played as
+    /// soon as they're taken, their sequences loaded). Getting up from furniture
+    /// (`00921e80` cases 4 and 9) waits only while this holds.
+    pub fn idle_starting(&self, section: u8, seq: &Arc<Sequence>) -> bool {
+        let section = slot(section);
+        let loaded = self.playing(section) == Some(group::SPECIAL_IDLE)
+            && self.sequence(section).is_some_and(|s| Arc::ptr_eq(s, seq));
+        !loaded || matches!(self.state(section), Some(State::EaseIn | State::TransDest))
+    }
+
     /// Requests an already loaded special-idle sequence immediately.
     /// `Actor::PlayIdle`'s request path (`00498f80`, called by `008dae00`)
     /// refuses another request while the current special-idle sequence is

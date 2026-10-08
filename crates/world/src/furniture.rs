@@ -317,7 +317,7 @@ pub struct Sitter {
     /// The entry or exit animation playing.
     pub playing: Option<Playing>,
     /// Asked to get up (`Actor::StandUp`, which keeps asking until done)
-    /// while not yet settled, or while a seated idle plays.
+    /// while not yet settled, or while a seated idle is starting.
     pub stand_requested: bool,
     /// Where the actor stands and faces (radians clockwise from north).
     pub position: [f32; 3],
@@ -440,8 +440,11 @@ impl Sitter {
 
     /// One frame of the sit or stand procedure, `dt` seconds:
     /// `009213e0` on the way in, `00921e80` on the way out. `seated_idle`
-    /// says a seated idle (relaxing, talking) is playing: getting up waits
-    /// for it to end (`00498f80`).
+    /// says a seated idle (relaxing, talking) is still starting: not yet
+    /// loaded or still blending in (`00498f80`,
+    /// `world::animation::Player::idle_starting`). Getting up waits only
+    /// for that; an idle already playing at full weight doesn't hold it, as
+    /// the exit replaces it (`00497ca0` stops it with its blend-out).
     pub fn update(
         &mut self,
         dt: f32,

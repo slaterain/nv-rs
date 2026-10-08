@@ -202,6 +202,64 @@ player's `LooseVCG01PlayerStandup` (VCG01PlayerSection2, added by the
 result script of INFO `00104BF9`). Its timing against the original isn't
 compared.
 
+#### Help-up timing (`claude/b14-helpup`, 2026-10-08)
+
+Play build 28: Doc helps the player up at the wrong time. Private notes,
+dumps and the live log in `%USERPROFILE%\nv-re\work\b14-helpup`.
+
+The data:
+- INFO `00104BF9` ("Well, I got most of it right…", voice 3.61 s), end
+  script: `player.addscriptpackage VCG01PlayerSection2` (`001055C4`,
+  begin idle `LooseVCG01PlayerStandup` `001055C2`), then `SayTo` the next
+  line.
+- INFO `00104BFA` ("Okay. No sense keeping you in bed anymore…", voice
+  7.03 s), end script: `SetStage VCG01 45`, then `DocMitchellREF.evp`
+  with the comment "Make Doc stand up before you do". Stage 45: a 3 s
+  timer ("delay while the player stands") to stage 50.
+- Doc's `VCG01DocMitchellBedsideStandingPackage` (`00107238`, travel to
+  `GSDocMitchellBesideMarker` `00107235`) has `GetStage VCG01 >= 40`, so
+  any package check from stage 40 on gets him up. Stage 40 is set by
+  VCG01SCRIPT's `MenuMode 1036` (the race menu).
+- His exit `NVchairStandDoc` (`00169CDE`): `SpecialIdle_NVDocChairFrontExit.kf`,
+  11.97 s. Sampled: he rises 1.0–2.5 s, bends down to the player
+  6–7.5 s (`Bip01 NonAccum` z 67 → 45; `Sound: NPCDocPlyStand` 7.07 s,
+  `0017469A`), pulls back up 8.5–11 s.
+- The player's `SpecialIdle_NVCG01PlayerStandup.kf`, 11.13 s: the
+  `Camera1st` track leans forward 1.5–4 s and rises 4–6.5 s (z −29 → +3).
+  So the two line up when Doc's exit starts about 2–4.5 s before the
+  player's stand-up.
+
+What the viewer did wrong (fixed): getting up waited for the seated idle
+playing to end. Doc's `SitChairRelaxIdleA` (16.1 s, from 52.1 s) held his
+exit to 68.2 s although `evp` had changed his package at about 64 s.
+In the game the stand update `00921e80` (cases 4/9) waits only while
+`00498f80` holds: the animation's current idle (+0x124) or queued one
+(+0x128) has no sequence yet, or its sequence's state (+0x44) is 2
+(easing in) or 5 (transition destination). An idle playing at full weight
+doesn't hold it; the exit replaces it (`00497ca0` stops it with its
+blend-out, `004994f0`). Implemented: `world::animation::Player::idle_starting`,
+`sitting::special_idle_starting` and `replace_seated_idle`. Regression
+tests: `world/tests/furniture_blend.rs`
+`a_seated_idle_holds_getting_up_only_while_it_blends_in`, viewer
+`actors::tests::a_tree_idle_counts_as_starting_only_until_it_has_blended_in`.
+
+Live (release viewer, `--new-game --no-movies --answer-boxes --box-answers 2`,
+log only): `00104BF9` 52.8 s, player's stand-up from about 57.1 s,
+`00104BFA` 57.1 s, Doc `Sitting -> Want to stand` with the front exit at
+64.4 s (was 68.2 s), `Want to stand -> Normal` 76.4 s.
+
+**Not resolved:** even so Doc's exit starts about 7 s after the player's
+stand-up, so his bend (≈ 70–72 s) comes after the player is up (≈ 61–64 s).
+By the data alone the game would do the same unless something checks
+Doc's packages between stage 40 and the end of `00104BFA` (his 20 s
+package timer or hour check, `008da670`, could; whether `SayTo` or the
+race menu's close forces one wasn't found: `SayTo` `005c9100` and the
+process's say `008dbe30` don't call it in what was read). The end of a
+non-menu line (where its end script runs and whether a package check
+follows) wasn't traced. Next: trace the speech-finished path that runs an
+INFO's end script for `SayTo`, or record the original from the race
+menu's close to the help-up.
+
 ## The character-revision prompt (B29)
 
 Branch `claude/b29-revise-loop`, 2026-10-07. Playtest bug: the "revise your

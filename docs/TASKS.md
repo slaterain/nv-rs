@@ -200,6 +200,13 @@ gets up with his special exit at the help-up; Easy Pete is seated on his
 porch. Left: the pass over actors already loaded at a later load, the
 eat/sleep/patrol branches, the help-up timing against the original, and
 the menu camera (not reproduced).
+`claude/b14-helpup` (play build 28 report): fixed that Doc's exit waited
+for his seated idle to finish (`SitChairRelaxA`, 16 s); the game's stand
+update `00921e80` waits only while an idle is starting (`00498f80`), so he
+now gets up at `00104BFA`'s `evp` (64.4 s, was 68.2 s). Still about 7 s
+after the player's own stand-up begins (end of `00104BF9`); what in the
+game, if anything, gets him up earlier isn't established. docs/OPENING.md,
+"Help-up timing".
 
 **B15. Character creator (race menu).** The face editor/race menu is
 not implemented (it auto-accepts). docs/FACE_CREATION.md and
