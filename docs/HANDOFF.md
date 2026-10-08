@@ -2,16 +2,16 @@
 
 For the next lead session (Claude). Read [AGENTS.md](../AGENTS.md),
 [CONTRIBUTING.md](../CONTRIBUTING.md), [MILESTONES.md](MILESTONES.md) and
-[TASKS.md](TASKS.md) first. This session stopped at 93% of the weekly
-usage (the stop rule is 95%) before the maintainer's next request could
-start.
+[TASKS.md](TASKS.md) first. This session went past the 95% usage stop
+rule at the maintainer's request (to finish the physics follow-up) and
+stopped before 100%.
 
 ## State
 
 - `main` has everything merged through PRs (ruleset "Maintainer-reviewed
   main": squash merges, CI `check (core)` and `check (viewer)`, merges with
   `gh pr merge --admin`).
-- Play copy (`Desktop\nv-rs-play`): build 29 (main with #51 and #52).
+- Play copy (`Desktop\nv-rs-play`): build 30 (main with #58).
 - Landed this session:
   - #51 (`claude/physics-clock`): bodies froze in the air above ~156
     frames a second; the Havok clock now gets the game frame timer's frames
@@ -42,19 +42,28 @@ start.
   handed back to their controller and rise slowly. Ask the maintainer for
   an F12 report on a sunk NPC; compare far-rule heights with the game.
 
-## Next, in order (the maintainer's request of 2026-10-08)
+## Done after that (the maintainer's request of 2026-10-08)
 
-1. The character proxy's untraced parts: Havok's convex-against-triangle
-   collision agents instead of the generic queries,
-   `applySurfaceInteractions` (pushing dynamic bodies), the speed-fraction
-   divisor (308, approximate). docs/PHYSICS.md "The character proxy".
-2. The rest of B1: PR 8 (ragdoll constraints; reading notes in
-   docs/PHYSICS.md and `%USERPROFILE%\nv-re\work\b1-solver`) and PR 9
-   (continuous collision: a tumbleweed blown fast tunnels through the land,
-   00178A82, seen in #51's run).
-3. Then merge and publish a play build, as before. The maintainer asked
-   to avoid reaching 100% usage.
+#58 (combining #54–#57, each described there; build 30): the proxy's
+linear cast is Havok's GSK cast (`00daf8e0`); the proxy pushes bodies
+(`applySurfaceInteractions` `00cacf80`) and `fSpeedPct`'s divisor is the
+player's run speed; ragdolls run on the game's constraint solver
+(`00d6f460`, `00d8d030`); debris gets simplified time of impact against the
+world (`00cfb570`, `00d0e210`). Checked: root 1758 and viewer 169 tests,
+clippy, fmt, the three acceptance routes; live runs per PR.
 
+## Next, in order
+
+1. Physics leftovers (labelled; docs/PHYSICS.md, TASKS.md B1): the GJK
+   (`00daad40`) and penetration depth (`00daa7e0`) under the agents;
+   moving platforms (`00c6ca30`); a pushed body overlapping the player's
+   hull (no keep-out traced); ragdoll motors and the runtime data's
+   constructor; full TOI (`00d100a0`) for moving/critical bodies and the
+   agents' event times; the tumbleweed rolling off the viewer's loaded
+   terrain (y −4096 near x −64960): what the game does with a body leaving
+   its loaded grid.
+2. B14's help-up timing and B25 (above).
+3. The rest of TASKS.md (B2 grab on the new solver, B7, B8, …).
 ## How the work was run
 
 As in the previous handoff: one worktree per task from `origin/main`
