@@ -197,7 +197,7 @@ wrong because it took `0088d2f0` for player-only. People sitting down or
 seated no longer block others (`00920d00` sets flag 0x08000000, which
 `00c711d0` honours). Verified live: Doc is seated from the first frame and
 gets up with his special exit at the help-up; Easy Pete is seated on his
-porch. Left: the pass over actors already loaded at a later load, the
+porch. Seated people now get the timed package checks (`claude/b14-timer`: Doc up at 61.3 s, ~5 s behind the player still; OPENING.md). Left: the pass over actors already loaded at a later load, the
 eat/sleep/patrol branches, the help-up timing against the original, and
 the menu camera (not reproduced).
 `claude/b14-helpup` (play build 28 report): fixed that Doc's exit waited

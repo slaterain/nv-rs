@@ -260,6 +260,26 @@ follows) wasn't traced. Next: trace the speech-finished path that runs an
 INFO's end script for `SayTo`, or record the original from the race
 menu's close to the help-up.
 
+
+#### Seated people's timed package checks (`claude/b14-timer`, 2026-10-08)
+
+`008da670` checks someone's packages in sit states 0, 4 (sitting) and 9
+(sleeping): forced, with none, on the 20 s timer or a new game hour. The
+viewer only honoured forced checks for a settled sitter, so a seated Doc
+waited for `DocMitchellREF.evp` at the end of `00104BFA`. Now his clock runs
+seated too (`ai::rethink_queued_package_before_furniture`). Live (`--new-game
+--no-movies --answer-boxes --box-answers 2`, `%USERPROFILE%\nv-re\work\b14-timer`):
+stage 40 at ~52.7 s (the race menu's `MenuMode 1036`, run once as the menu
+isn't drawn), Doc `Sitting -> Want to stand` at 61.3 s (was 64.4 s), on his
+timer. Still about 5 s behind the player's stand-up (~57 s, the on-begin
+idle of `VCG01PlayerSection2`, which `AddScriptPackage` `005cc4f0` sets at
+once). Ruled out: `00762160` (the dialogue menu's close) and
+`AddScriptPackage` deferring the player's package. Callers of the forced
+check `008a6ce0` not yet read: `00573f40`, `005c9530`, `00886360`,
+`008d0e80` (via `00925700`), `008e0f80` (a process update, forced under a
+condition near its line 152), `00967da0`. Also open: whether the viewer's
+package clocks count menu time (the game's don't).
+
 ## The character-revision prompt (B29)
 
 Branch `claude/b29-revise-loop`, 2026-10-07. Playtest bug: the "revise your

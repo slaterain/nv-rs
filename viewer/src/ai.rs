@@ -1231,8 +1231,8 @@ pub fn move_actors(
             talking,
         };
         // The game's package check runs while sit state is 0, 4 or 9
-        // (`008da670`). A forced EVP must therefore be honored while a
-        // settled actor is still in furniture; otherwise this early-return
+        // (`008da670`): forced, on the 20 s timer or a new hour, also while
+        // a settled actor is still in furniture; otherwise this early-return
         // path prevents the package change from requesting the stand-up.
         let package_checked_before_furniture = rethink_queued_package_before_furniture(
             &mut ctx, walker, &mut life, game_hour, &mut ask,
@@ -1991,9 +1991,14 @@ fn take_forced_package_evaluation(
     walker_forced || state_forced
 }
 
-/// Run a queued forced package check before the furniture path returns early
-/// for a settled sitter. Entry and exit states are left to finish first, as
-/// `008da670` only permits package evaluation in sit states 0, 4 and 9.
+/// The package check (`008da670`) for a settled sitter, before the
+/// furniture path returns early: forced, none, the 20 s timer or a new game
+/// hour, as for anyone (sit states 0, 4 and 9 allow it; 4 is sitting, 9
+/// sleeping). So someone seated gets up once their package's conditions
+/// change without a script's `EvaluatePackage` (Doc at the new game's
+/// help-up: his standing package needs `GetStage VCG01 >= 40`). Entry and
+/// exit states are left to finish first. Whether the clock was looked at
+/// (the caller doesn't count it again this frame).
 fn rethink_queued_package_before_furniture(
     ctx: &mut Ctx,
     walker: &mut Walker,
@@ -2010,16 +2015,14 @@ fn rethink_queued_package_before_furniture(
     if !settled {
         return false;
     }
-    if !take_forced_package_evaluation(walker, ctx.state, me) {
-        return false;
-    }
+    let forced = take_forced_package_evaluation(walker, ctx.state, me);
     let due = walker
         .clock
-        .due(ctx.dt, game_hour, true, walker.package.is_some());
+        .due(ctx.dt, game_hour, forced, walker.package.is_some());
     if due {
         rethink(ctx, walker, life, ask);
     }
-    due
+    true
 }
 
 /// A walk to a reference that moves (whom they follow, a package's
