@@ -19,7 +19,8 @@
 //! no lighting property recursions, the platform and language texture swap
 //! (`004b71a0` to `004b7660`), `FixedStrings::InitSDM` with its shutdown
 //! counterpart, and the methods of `NiTMap<unsigned int, VertexDist>`
-//! (constructor to `NewItem`). The next session continues at `004b9d80`.
+//! (constructor to `NewItem`). Session 4 covers the last three, `004b9d80` to `004b9de0`: the unit is
+//! complete.
 //!
 //! Conventions this file uses, so the next session finds them:
 //!
@@ -313,7 +314,9 @@ const VERTEX_DIST_MAP_VTABLE: u32 = 0x0102_05b4;
 const MAP_BASE_VTABLE: u32 = 0x0102_05d4;
 const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
 const NI_ARRAY_DELETE: u32 = 0x00aa_10f0;
-const MAP_ALLOCATE_ITEM: u32 = 0x004b_9de0;
+const ALLOCATOR_EMPTY_CONSTRUCTOR: u32 = 0x0065_de30;
+/// `006b8310(this, block)`: `operator delete(block)`.
+const ALLOCATOR_FREE: u32 = 0x006b_8310;
 const MEMORY_SET: u32 = 0x0040_3d30;
 
 /// `FixedStrings` (Xbox PDB) members, in the order `InitSDM` makes them: the
@@ -3625,8 +3628,44 @@ pub fn fn_004b9d30(e: &mut Engine, this: Ptr<NiTMap>) {
 /// `NiTMap<unsigned_int_VertexDist>::NewItem` (Xbox PDB): the result of
 /// `004b9de0` on the allocator at `this + 0xc`.
 pub fn ni_t_map_vertex_dist_new_item(e: &mut Engine, this: Ptr<NiTMap>) -> u32 {
-    e.call(MAP_ALLOCATE_ITEM, &args![this.addr().wrapping_add(0xc)])
-        .u32()
+    fn_004b9de0(e, Ptr::new(this.addr().wrapping_add(0xc)))
+}
+
+// Translated from 004b9d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees a map item (Xbox PDB name unknown): constructs the empty
+/// allocator at `item + 8` (`0065de30`, which only returns its `this`),
+/// then `006b8310` on `this + 0xc` with `item`, which calls
+/// `operator delete(item)`. (The decompiler hangs the arguments wrongly;
+/// the disassembly passes `0` to the first call and `item` to the second.)
+pub fn fn_004b9d80(e: &mut Engine, this: Ptr<NiTMap>, item: u32) {
+    e.call(
+        ALLOCATOR_EMPTY_CONSTRUCTOR,
+        &args![item.wrapping_add(8), 0u32],
+    );
+    e.call(ALLOCATOR_FREE, &args![this.addr().wrapping_add(0xc), item]);
+}
+
+// Translated from 004b9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned_int_VertexDist>_>_unsigned_int_VertexDist>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the base destructor [`fn_004b9d30`] and, when bit 0 of
+/// `flags` is set, frees the block. Returns `this`.
+pub fn ni_t_map_base_vertex_dist_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004b9d30(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004b9de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates a 0x14 byte map item (Xbox PDB name unknown) with
+/// `operator new`; `this` (the allocator member) is not used.
+pub fn fn_004b9de0(e: &mut Engine, _this: Ptr) -> u32 {
+    e.call(OPERATOR_NEW, &args![0x14u32]).u32()
 }
 
 /// This unit's translated functions, by exe address.
@@ -3807,6 +3846,12 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x004b9d60,
             ni_t_map_vertex_dist_new_item(Ptr<NiTMap>) -> u32
         ),
+        entry!(0x004b9d80, fn_004b9d80(Ptr<NiTMap>, u32)),
+        entry!(
+            0x004b9db0,
+            ni_t_map_base_vertex_dist_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(0x004b9de0, fn_004b9de0(Ptr) -> u32),
     ]
 }
 
@@ -7686,10 +7731,58 @@ mod tests {
     #[test]
     fn ni_t_map_vertex_dist_new_item_allocates_through_the_allocator_member() {
         let mut e = engine();
-        e.register(MAP_ALLOCATE_ITEM, |_, a| ret_u(a[0] + 0x100));
+        e.register(OPERATOR_NEW, |_, a| ret_u(a[0] + 0x100));
+        assert_eq!(e.call(0x004b_9d60, &args![0x3000u32]).u32(), 0x14 + 0x100);
+    }
+
+    #[test]
+    fn fn_004b9de0_allocates_0x14_bytes() {
+        let mut e = engine();
+        e.register(OPERATOR_NEW, |_, a| ret_u(a[0] + 0x100));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_9de0, &args![0x3000u32]).u32(), 0x114);
         assert_eq!(
-            e.call(0x004b_9d60, &args![0x3000u32]).u32(),
-            0x3000 + 0xc + 0x100
+            calls_to(&take_log(&mut e), OPERATOR_NEW),
+            vec![args![0x14u32]]
+        );
+    }
+
+    #[test]
+    fn fn_004b9d80_builds_the_allocator_then_frees_the_item() {
+        let mut e = engine();
+        e.register(ALLOCATOR_EMPTY_CONSTRUCTOR, |_, a| ret_u(a[0]));
+        e.register(ALLOCATOR_FREE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_9d80, &args![0x3000u32, 0x5000u32]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, ALLOCATOR_EMPTY_CONSTRUCTOR),
+            vec![args![0x5008u32, 0u32]]
+        );
+        assert_eq!(
+            calls_to(&log, ALLOCATOR_FREE),
+            vec![args![0x300cu32, 0x5000u32]]
+        );
+    }
+
+    #[test]
+    fn ni_t_map_base_vertex_dist_scalar_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine();
+        e.map(0x0102_0000, 0x1000);
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(NI_ARRAY_DELETE, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_9db0, &args![p(map), 0u32]).u32(), map);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, MAP_REMOVE_ALL).len(), 1);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_9db0, &args![p(map), 1u32]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), OPERATOR_DELETE),
+            vec![args![map]]
         );
     }
 }
