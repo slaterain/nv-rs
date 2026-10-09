@@ -3,8 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::playercharacter`]; anything public there may be used here.
 //!
-//! The earlier sessions cover `0095d090` to `00961d90`; the latest covers
-//! `00961de0` to `00964060` (the next function to translate is `009640b0`).
+//! The earlier sessions cover `0095d090` to `00964060`; the latest covers
+//! `009640b0` to `00967a00`, the end of the range (no function of the range
+//! is open after it).
 //! The main file declares no
 //! layout yet, so the `PlayerCharacter` fields used here are declared in
 //! this file. The PC `PlayerCharacter` is the Xbox PDB's with every field
@@ -193,6 +194,38 @@ layout! {
         0x874 fLastDropAngleMod: f32,
         /// `pAutoAimActor` (Xbox PDB): `Actor*`.
         0xd2c pAutoAimActor: Ptr,
+        /// `pClosestConversation` (Xbox PDB): `DialoguePackage*`.
+        0x208 pClosestConversation: Ptr,
+        /// `iNumberofStealWarnings` (Xbox PDB).
+        0x228 iNumberofStealWarnings: u32,
+        /// `fStealWarningTimer` (Xbox PDB).
+        0x22c fStealWarningTimer: f32,
+        /// `iNumberofPickpocketWarnings` (Xbox PDB).
+        0x230 iNumberofPickpocketWarnings: u32,
+        /// `fPickPocketWarningTimer` (Xbox PDB).
+        0x234 fPickPocketWarningTimer: f32,
+        /// `pIronsightsDOFInstance` (Xbox PDB): `ImageSpaceModifierInstanceDOF*`.
+        0x5ec pIronsightsDOFInstance: Ptr,
+        /// `pVatsDOFInstance` (Xbox PDB): `ImageSpaceModifierInstanceDOF*`.
+        0x5f0 pVatsDOFInstance: Ptr,
+        /// `pVatsDRBInstance` (Xbox PDB): `ImageSpaceModifierInstanceDRB*`.
+        0x5f4 pVatsDRBInstance: Ptr,
+        /// `BulletAutoAim` (Xbox PDB), an `NiPoint3`: x.
+        0xd30 BulletAutoAimX: f32,
+        /// `BulletAutoAim`: y.
+        0xd34 BulletAutoAimY: f32,
+        /// `BulletAutoAim`: z.
+        0xd38 BulletAutoAimZ: f32,
+        /// `bTarget3DDistant` (Xbox PDB).
+        0xd40 bTarget3DDistant: u8,
+        /// `pPlayersTargetActor` (Xbox PDB): `Actor*`.
+        0xd44 pPlayersTargetActor: Ptr,
+        /// `pListofPercievedActors` (Xbox PDB): `BSSimpleList<ActorsNearPlayerData *>*`.
+        0xd48 pListofPercievedActors: Ptr,
+        /// `fMenuModeButtonTimer` (Xbox PDB).
+        0xd4c fMenuModeButtonTimer: f32,
+        /// `bMenuModeButtonClicked` (Xbox PDB).
+        0xd54 bMenuModeButtonClicked: u8,
     }
 }
 
@@ -5038,6 +5071,2454 @@ const SUFFIX_0108B3D8: u32 = 0x0108_b3d8;
 /// The data at `011a9484`.
 const UP_VECTOR_011A9484: u32 = 0x011a_9484;
 
+/// Offset of the `listNotes` (`BSSimpleList<BGSNote *>`, Xbox PDB) list: its
+/// first node is embedded in the player object (PC `+0x5e4`).
+const NOTES_LIST_OFFSET: u32 = 0x5e4;
+/// `(list)`: the number of items in a `BSSimpleList` (the map names the
+/// folded body `VATS::GetCount`).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `ImageSpaceModifierInstance::Stop` (Xbox PDB), cdecl `(instance)`.
+const IMAGE_SPACE_INSTANCE_STOP: u32 = 0x0052_93f0;
+/// `ImageSpaceModifierInstanceDOF::Trigger` (Xbox PDB), cdecl, six words.
+const IMAGE_SPACE_DOF_TRIGGER: u32 = 0x0052_a150;
+/// Cdecl, ten words: starts the VATS `ImageSpaceModifierInstanceDRB` and
+/// returns it.
+const IMAGE_SPACE_DRB_TRIGGER: u32 = 0x0052_a780;
+/// `(instance, flag)`: sets or clears bit 0 of the instance's flags (+0x18).
+const IMAGE_SPACE_INSTANCE_SET_ACTIVE: u32 = 0x005b_bd60;
+/// `(float *value, minimum, maximum)`, cdecl: clamps `*value` into the range.
+const CLAMP_FLOAT_IN_PLACE: u32 = 0x0053_30e0;
+/// `NiPoint2::NiPoint2(x, y)` (`ECX` = the point), returns the point.
+const NI_POINT2_NEW: u32 = 0x0045_2dc0;
+/// The byte the iron sights update sets: 1 while the player aims through
+/// the iron sights in first person.
+const IRON_SIGHTS_ACTIVE: u32 = 0x011f_9423;
+/// The `ActorMover` constructor `(this, owner)`, on a 0xa0 byte block.
+const ACTOR_MOVER_NEW: u32 = 0x009e_9d00;
+/// `(actor mover, mask, set)`: sets or clears the bits of `mask` in the word
+/// at `+0x94` of the actor mover.
+const ACTOR_MOVER_SET_FLAGS: u32 = 0x009e_a360;
+/// `(holder, index)`: the 16-bit animation group id the holder keeps for
+/// `index` (`+0x4c + index * 2`).
+const ANIMATION_HOLDER_GET_GROUP: u32 = 0x0043_01b0;
+/// `(object, mask)`: whether the object's flag word has any bit of `mask`.
+const FLAGS_TEST: u32 = 0x004f_d420;
+/// `(object)`: the dword at `+0xa0` of the object.
+const READ_FIELD_A0: u32 = 0x004f_d400;
+/// `(reference)`: the reference's base form (the folded `004181e0`).
+const GET_BASE_FORM: u32 = 0x0041_81e0;
+/// `(form)`: the float at `+0x68`.
+const READ_FIELD_68: u32 = 0x0069_ef80;
+/// Cdecl `(strength, a, b)` blending function.
+const BLEND_FLOATS: u32 = 0x009c_3f50;
+/// `(message)`, cdecl: logs a script warning.
+const LOG_WARNING: u32 = 0x005b_5e40;
+/// `BSStringT` constructor and destructor on a local (`ECX` = the string).
+const STRING_NEW: u32 = 0x0040_37b0;
+const STRING_DELETE: u32 = 0x0040_37d0;
+/// `MapMarkerData::GetLocationName` (Xbox PDB, folded): `ECX` = the note's
+/// name member; answers the string.
+const GET_LOCATION_NAME: u32 = 0x0040_8da0;
+/// `(string, format, text)`: formats into a `BSStringT`.
+const STRING_FORMAT: u32 = 0x0040_6f60;
+/// `ECX` = a `BSStringT`: its text pointer (the dword at `+0`).
+const STRING_TEXT: u32 = 0x0055_9450;
+/// `(text)`, cdecl: shows the text as a HUD message.
+const SHOW_HUD_MESSAGE: u32 = 0x0070_3c00;
+/// `(note)`, cdecl: takes a note out of the note display.
+const NOTE_REMOVE_FROM_DISPLAY: u32 = 0x0070_4470;
+/// The setting holding the format of the new note message.
+const NOTE_FORMAT_SETTING: u32 = 0x011d_3ca0;
+/// The text logged when a null note is added.
+const NULL_NOTE_WARNING: u32 = 0x0108_b400;
+/// The sound played when a note is added.
+const NOTE_ADDED_SOUND: u32 = 0x0108_4dd4;
+/// `BGSTerminal` type descriptor.
+const TYPE_BGS_TERMINAL: u32 = 0x0118_9ebc;
+/// `BGSTerminal::IsHacked` (Xbox PDB), cdecl `(reference)`.
+const TERMINAL_IS_HACKED: u32 = 0x0050_1870;
+/// `BGSTerminal::IsUnlocked` (Xbox PDB), `ECX` = terminal form, `(reference)`.
+const TERMINAL_IS_UNLOCKED: u32 = 0x0050_1ae0;
+/// `BGSTerminal::IsLockedOut` (Xbox PDB), cdecl `(reference)`.
+const TERMINAL_IS_LOCKED_OUT: u32 = 0x0050_1990;
+/// `BGSTerminal::GetRawDifficulty` (Xbox PDB), `ECX` = terminal form, `(reference)`.
+const TERMINAL_GET_RAW_DIFFICULTY: u32 = 0x0050_1a30;
+/// `BGSTerminal::IsHackEligible` (Xbox PDB), `ECX` = terminal form,
+/// `(reference, skill)`.
+const TERMINAL_IS_HACK_ELIGIBLE: u32 = 0x0050_1760;
+/// `ActorValueOwner::GetClampedActorFloatValue` (Xbox PDB) `(owner, actor value)`.
+const ACTOR_VALUE_GET_CLAMPED: u32 = 0x0066_ef50;
+/// Offset of the `ActorValueOwner` base in an actor.
+const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
+/// The global pointer to the form map the iteration below walks.
+const FORM_MAP: u32 = 0x011c_54c0;
+/// `(map)`: the first occupied bucket entry of the map.
+const MAP_FIRST_ENTRY: u32 = 0x004b_9ba0;
+/// `(map, &entry, &key, &value)`: reads the entry and steps to the next one.
+const MAP_NEXT_ENTRY: u32 = 0x006b_7f20;
+/// `(reference)`, cdecl: removes extra data 0x50 from the reference's list.
+const REFERENCE_REMOVE_EXTRA_50: u32 = 0x0050_1a10;
+/// The setting a steal or pickpocket warning timer takes when it is unset.
+const WARNING_TIMER_SETTING: u32 = 0x011c_d5fc;
+/// `bhkCharacterProxy` accessors (`ECX` = the controller from `009306d0`): the
+/// word at `+0x0c` of the object the controller holds at `+0x630`, and the
+/// word at `+0xc0` of the object it holds at `+0x638` (0 when that is null).
+const CONTROLLER_BODY_AT_630: u32 = 0x00c6_fd40;
+const CONTROLLER_BODY_AT_638: u32 = 0x00c6_fd60;
+/// `(body)`: the scene graph object of a Havok body.
+const BODY_GET_AV_OBJECT: u32 = 0x0081_0660;
+/// `ActorsNearPlayerData` constructor on an 8 byte block.
+const NEAR_PLAYER_DATA_NEW: u32 = 0x0047_81b0;
+/// `BSSimpleList` constructor on an 8 byte block.
+const LIST_NEW: u32 = 0x0096_a2d0;
+/// `(node)`: removes the item of a list node: the next node's item and link move into it (an
+/// only node is just cleared) and the next node is freed.
+const LIST_REMOVE_NODE: u32 = 0x0063_f7b0;
+/// `Actor::GetDetectionLevelAgainstActor` (Xbox PDB).
+const ACTOR_GET_DETECTION_LEVEL: u32 = 0x008a_0d10;
+/// `Actor::LineOfSight` (Xbox PDB).
+const ACTOR_LINE_OF_SIGHT: u32 = 0x0088_b880;
+/// `MiddleHighProcess::GetForceNextUpdate` (Xbox PDB), `ECX` = the actor.
+const ACTOR_GET_FORCE_NEXT_UPDATE: u32 = 0x0056_6950;
+/// `TESObjectREFR::GetDistanceFromReference` (Xbox PDB) `(from, other, 0, 0)`.
+const REFERENCE_GET_DISTANCE: u32 = 0x0057_23b0;
+/// `DialoguePackage::GetActorStartedConversation` (Xbox PDB).
+const CONVERSATION_GET_STARTER: u32 = 0x009e_e040;
+/// `DialoguePackage::GetTargetOfConversation` (Xbox PDB).
+const CONVERSATION_GET_TARGET: u32 = 0x008d_80e0;
+/// `TESObjectREFR::IsFurniture` (Xbox PDB).
+const REFERENCE_IS_FURNITURE: u32 = 0x0056_8680;
+/// The largest float (`FLT_MAX`).
+const FLOAT_MAX: u32 = 0x0101_6970;
+/// The distance (1200.0, a double) under which a conversation can become
+/// the closest.
+const CONVERSATION_DISTANCE: u32 = 0x0108_b468;
+
+// Translated from 009640b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object (`+8`) of the first entry of the player's action list
+/// (`+0x60c`), 0 when the list is missing or empty.
+pub fn fn_009640b0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let list = e.get(this, PlayerCharacter::pListofActions).addr();
+    if list != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![list]).u32();
+        if e.mem.u32(slot) != 0 {
+            let slot = e.call(LIST_NODE_SLOT, &args![list]).u32();
+            let action = e.mem.u32(slot);
+            return e.mem.u32(action + 8);
+        }
+    }
+    0
+}
+
+// Translated from 00964100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetPlayerAction` (Xbox PDB): the first entry of the
+/// action list (`+0x60c`) of type `kind` (its first word), or null.
+pub fn player_character_get_player_action(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    kind: u32,
+) -> Ptr {
+    let list = e.get(this, PlayerCharacter::pListofActions).addr();
+    if list == 0 {
+        return Ptr::new(0);
+    }
+    let mut found = 0;
+    let mut node = list;
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 || found != 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let action = e.mem.u32(slot);
+        if action != 0 && e.mem.u32(action) == kind {
+            found = action;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    Ptr::new(found)
+}
+
+// Translated from 00964190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the player's actor mover (`+0x190`): the old one gets its
+/// deleting destructor (virtual at +0), a new 0xa0 byte `ActorMover` is built
+/// by `009e9d00(this)`. The exception frame is not translated.
+pub fn fn_00964190(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let old = e.get(this, PlayerCharacter::pActorMover).addr();
+    if old != 0 {
+        e.vcall(old, 0, &args![1u32]);
+    }
+    let block = e.call(OPERATOR_NEW, &args![0xa0u32]).u32();
+    let mover = if block != 0 {
+        e.call(ACTOR_MOVER_NEW, &args![block, this]).u32()
+    } else {
+        0
+    };
+    e.set(this, PlayerCharacter::pActorMover, Ptr::new(mover));
+}
+
+// Translated from 00965240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `011f9423` (1 while the iron sights are in use in first
+/// person, see [`player_character_update_image_space_ironsights`]).
+pub fn fn_00965240(e: &mut Engine, value: u8) {
+    e.set_global(IRON_SIGHTS_ACTIVE, value);
+}
+
+// Translated from 00965250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float at `+0x28` of the image space modifier instance.
+pub fn fn_00965250(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x28, value);
+}
+
+// Translated from 00965580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float at `+0x38` of the image space modifier instance.
+pub fn fn_00965580(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x38, value);
+}
+
+// Translated from 009655a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::StopIronSightsImageSpace` (Xbox PDB): stops the iron
+/// sights depth of field instance (`+0x5ec`) and forgets it.
+pub fn player_character_stop_iron_sights_image_space(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let instance = e.get(this, PlayerCharacter::pIronsightsDOFInstance);
+    if !instance.is_null() {
+        e.call(IMAGE_SPACE_INSTANCE_STOP, &args![instance]);
+        e.set(this, PlayerCharacter::pIronsightsDOFInstance, Ptr::new(0));
+    }
+}
+
+// Translated from 009655e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stops the VATS depth of field instance (`+0x5f0`) and forgets it.
+pub fn fn_009655e0(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let instance = e.get(this, PlayerCharacter::pVatsDOFInstance);
+    if !instance.is_null() {
+        e.call(IMAGE_SPACE_INSTANCE_STOP, &args![instance]);
+        e.set(this, PlayerCharacter::pVatsDOFInstance, Ptr::new(0));
+    }
+}
+
+// Translated from 00966980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `+0x64`, or 1.0 when the flag word of the object has bit
+/// 0x20000 (`004fd420`).
+pub fn fn_00966980(e: &mut Engine, this: Ptr) -> f32 {
+    if e.call(FLAGS_TEST, &args![this, 0x20000u32]).bool() {
+        1.0
+    } else {
+        e.mem.f32(this.addr() + 0x64)
+    }
+}
+
+// Translated from 009669c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the blend function `009c3f50` with the float at `+0x68` of the
+/// object's base form (`004181e0`, `0069ef80`) and the floats at `+0xcc`
+/// and `+0xd0`, and answers its float result (the function leaves it in
+/// `ST0`).
+pub fn fn_009669c0(e: &mut Engine, this: Ptr) -> f32 {
+    let first = e.mem.f32(this.addr() + 0xcc);
+    let second = e.mem.f32(this.addr() + 0xd0);
+    let form = e.call(GET_BASE_FORM, &args![this]).u32();
+    let strength = e.call(READ_FIELD_68, &args![form]).f32();
+    e.call(BLEND_FLOATS, &args![strength, first, second]).f32()
+}
+
+// Translated from 00966a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float at `+0xd0`.
+pub fn fn_00966a00(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0xd0, value);
+}
+
+// Translated from 00966a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `+0xec`.
+pub fn fn_00966a20(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0xec)
+}
+
+// Translated from 00966a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float global at `011f1c00`.
+pub fn fn_00966a40(e: &mut Engine) -> f32 {
+    e.global::<f32>(0x011f_1c00)
+}
+
+// Translated from 00966a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of entries of the player's note list (`+0x5e4`), as the list
+/// counter `005ae380` answers.
+pub fn fn_00966a50(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    e.call(LIST_COUNT, &args![this.addr() + NOTES_LIST_OFFSET])
+        .u32()
+}
+
+// Translated from 00966a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::AddNote` (Xbox PDB): adds `note` to the note list
+/// (`+0x5e4`) unless it is already there; a null note only logs a warning.
+/// A new note formats its location name with the format setting `011d3ca0`
+/// into a local string and, when `show` is set, shows that text as a HUD
+/// message. In every non-null case the sound `UIItemGenericUp` message is
+/// shown by `007052f0` with the formatted text. The exception frame is not
+/// translated.
+pub fn player_character_add_note(e: &mut Engine, this: Ptr<PlayerCharacter>, note: u32, show: u8) {
+    e.with_stack(8, |e, string| {
+        e.call(STRING_NEW, &args![string]);
+        if note == 0 {
+            e.call(LOG_WARNING, &args![NULL_NOTE_WARNING]);
+            e.call(STRING_DELETE, &args![string]);
+            return;
+        }
+        let list = this.addr() + NOTES_LIST_OFFSET;
+        e.with_stack(4, |e, cell| {
+            e.mem.set_u32(cell.addr(), note);
+            if !e.call(LIST_CONTAINS, &args![list, cell]).bool() {
+                e.call(LIST_APPEND, &args![list, cell]);
+                let name = e.call(GET_LOCATION_NAME, &args![note + 0x48]).u32();
+                let format = e.call(SETTING_STRING, &args![NOTE_FORMAT_SETTING]).u32();
+                e.call(STRING_FORMAT, &args![string, format, name]);
+                if show != 0 {
+                    let text = e.call(STRING_TEXT, &args![string]).u32();
+                    e.call(SHOW_HUD_MESSAGE, &args![text]);
+                }
+            }
+        });
+        let text = e.call(STRING_TEXT, &args![string]).u32();
+        let duration: f32 = e.global(MESSAGE_DURATION_010162C0);
+        e.call(
+            FUNCTION_007052F0,
+            &args![text, 0u32, 0u32, NOTE_ADDED_SOUND, duration, 0u32],
+        );
+        e.call(STRING_DELETE, &args![string]);
+    });
+}
+
+// Translated from 00966b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes `note` out of the note display (`00704470`) and removes it from
+/// the player's note list (`+0x5e4`).
+pub fn fn_00966b80(e: &mut Engine, this: Ptr<PlayerCharacter>, note: u32) {
+    e.call(NOTE_REMOVE_FROM_DISPLAY, &args![note]);
+    list_remove_item(e, this.addr() + NOTES_LIST_OFFSET, note);
+}
+
+// Translated from 00966bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The note at position `index` of the player's note list (`+0x5e4`), 0 when
+/// the list is shorter.
+pub fn fn_00966bb0(e: &mut Engine, this: Ptr<PlayerCharacter>, index: u32) -> u32 {
+    let mut node = this.addr() + NOTES_LIST_OFFSET;
+    let mut position = 0u32;
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        if position == index {
+            let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+            return e.mem.u32(slot);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        position = position.wrapping_add(1);
+    }
+    0
+}
+
+// Translated from 00966c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `note` (non-null) is in the player's note list (`+0x5e4`).
+pub fn fn_00966c10(e: &mut Engine, this: Ptr<PlayerCharacter>, note: u32) -> bool {
+    if note == 0 {
+        return false;
+    }
+    let list = this.addr() + NOTES_LIST_OFFSET;
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), note);
+        e.call(LIST_CONTAINS, &args![list, cell]).bool()
+    })
+}
+
+// Translated from 00966c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetTerminalAccess` (Xbox PDB): how the player can use
+/// the terminal reference `terminal`: 4 when it has no terminal form, 0 when
+/// the terminal's `+0xa0` word is a note the player has, 1 when it is hacked
+/// or unlocked, 2 when it is locked out or of raw difficulty 5, 3 when the
+/// player's actor value 0x28 allows hacking it, else 4.
+pub fn player_character_get_terminal_access(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    terminal: u32,
+) -> u32 {
+    let mut form = 0;
+    if terminal != 0 && e.call(READ_DWORD_AT_20, &args![terminal]).u32() != 0 {
+        let base = e.call(READ_DWORD_AT_20, &args![terminal]).u32();
+        form = dynamic_cast_form(e, base, TYPE_BGS_TERMINAL);
+    }
+    if form == 0 {
+        return 4;
+    }
+    let note = e.call(READ_FIELD_A0, &args![form]).u32();
+    if fn_00966c10(e, this, note) {
+        return 0;
+    }
+    if e.call(TERMINAL_IS_HACKED, &args![terminal]).bool()
+        || e.call(TERMINAL_IS_UNLOCKED, &args![form, terminal]).bool()
+    {
+        return 1;
+    }
+    if e.call(TERMINAL_IS_LOCKED_OUT, &args![terminal]).bool()
+        || e.call(TERMINAL_GET_RAW_DIFFICULTY, &args![form, terminal])
+            .u32()
+            == 5
+    {
+        return 2;
+    }
+    let owner = this.addr() + ACTOR_VALUE_OWNER_OFFSET;
+    let skill = e
+        .call(ACTOR_VALUE_GET_CLAMPED, &args![owner, 0x28u32])
+        .f32();
+    if e.call(TERMINAL_IS_HACK_ELIGIBLE, &args![form, terminal, skill])
+        .bool()
+    {
+        3
+    } else {
+        4
+    }
+}
+
+// Translated from 00966d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the form map (`011c54c0`): for each entry whose value is a form of
+/// type 0x3a (a reference) whose base form (`+0x20`) is of type 0x17, calls
+/// `00501a10(reference)`. `ECX` is not read.
+pub fn fn_00966d70(e: &mut Engine, _unused_this: Ptr) {
+    let map = e.global::<u32>(FORM_MAP);
+    let first = e.call(MAP_FIRST_ENTRY, &args![map]).u32();
+    e.with_stack(12, |e, cells| {
+        let entry = cells.addr();
+        let key = entry + 4;
+        let value = entry + 8;
+        e.mem.set_u32(entry, first);
+        while e.mem.u32(entry) != 0 {
+            e.mem.set_u32(value, 0);
+            e.mem.set_u32(key, 0);
+            e.call(MAP_NEXT_ENTRY, &args![map, entry, key, value]);
+            let form = e.mem.u32(value);
+            if form != 0 && e.call(FORM_GET_TYPE, &args![form]).u32() == 0x3a {
+                let base = e.call(READ_DWORD_AT_20, &args![form]).u32();
+                if e.call(FORM_GET_TYPE, &args![base]).u32() == 0x17 {
+                    e.call(REFERENCE_REMOVE_EXTRA_50, &args![form]);
+                }
+            }
+        }
+    });
+}
+
+// Translated from 00966e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts one more steal warning (`+0x228`); when its timer (`+0x22c`) is
+/// -1.0 it is set to the setting at `011cd5fc`.
+pub fn fn_00966e00(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let count = e.get(this, PlayerCharacter::iNumberofStealWarnings);
+    e.set(
+        this,
+        PlayerCharacter::iNumberofStealWarnings,
+        count.wrapping_add(1),
+    );
+    let timer = e.get(this, PlayerCharacter::fStealWarningTimer);
+    if f64::from(timer) == e.global::<f64>(DOUBLE_MINUS_ONE) {
+        let value = setting_float(e, WARNING_TIMER_SETTING);
+        e.set(this, PlayerCharacter::fStealWarningTimer, value);
+    }
+}
+
+// Translated from 00966e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts one more pickpocket warning (`+0x230`); when its timer (`+0x234`)
+/// is -1.0 it is set to the setting at `011cd5fc`.
+pub fn fn_00966e50(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let count = e.get(this, PlayerCharacter::iNumberofPickpocketWarnings);
+    e.set(
+        this,
+        PlayerCharacter::iNumberofPickpocketWarnings,
+        count.wrapping_add(1),
+    );
+    let timer = e.get(this, PlayerCharacter::fPickPocketWarningTimer);
+    if f64::from(timer) == e.global::<f64>(DOUBLE_MINUS_ONE) {
+        let value = setting_float(e, WARNING_TIMER_SETTING);
+        e.set(this, PlayerCharacter::fPickPocketWarningTimer, value);
+    }
+}
+
+// Translated from 00966ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears (`set`) the bits `mask` in the flag word of the player's
+/// actor mover (`009ea360`, the mover of the global player). When bit 0x400
+/// is in `mask` and the player has a third person animation, the animation
+/// group the actor keeps at index 4 (virtual `+0x1e4`, `004301b0`) is
+/// blended out when its type is 0x11.
+pub fn fn_00966ea0(e: &mut Engine, this: Ptr<PlayerCharacter>, mask: u32, set: u8) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let mover = e.mem.u32(player + 0x190);
+    e.call(ACTOR_MOVER_SET_FLAGS, &args![mover, mask, u32::from(set)]);
+    if mask & 0x400 != 0 {
+        let animation = e.call(PLAYER_GET_ANIMATION, &args![this, 0u32]).u32();
+        if animation != 0 {
+            let holder = e.vcall(this.addr(), 0x1e4, &args![]).u32();
+            let group = e
+                .call(ANIMATION_HOLDER_GET_GROUP, &args![holder, 4u32])
+                .u16();
+            if e.call(ANIM_GROUP_GET_TYPE, &args![u32::from(group)]).u32() == 0x11 {
+                let animation = e.call(PLAYER_GET_ANIMATION, &args![this, 0u32]).u32();
+                e.call(ANIMATION_BLEND_OUT, &args![animation, 4u32, 0u32]);
+            }
+        }
+    }
+}
+
+// Translated from 00966f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Notes that `actor` is near the player: nothing happens when the actor's
+/// base form answers true to its virtual at `+0x20` (on the subobject at
+/// `+0x30`) or the actor's virtual at `+0x22c` answers true. Otherwise an
+/// existing `ActorsNearPlayerData` entry of the actor (`IsActorPerceived`)
+/// gets `bHostile` (`+4`) and `bHasLineofSightNotDetection` (`+5`) set; a
+/// missing entry is made (8 bytes, `004781b0`) and appended to the list
+/// (`+0xd48`, itself created on first use). The exception frame is not
+/// translated.
+pub fn fn_00966f20(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    hostile: u8,
+    line_of_sight_only: u8,
+) {
+    let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+    if e.vcall(base + 0x30, 0x20, &args![]).bool() {
+        return;
+    }
+    if e.vcall(actor, 0x22c, &args![0u32]).bool() {
+        return;
+    }
+    let entry = player_character_is_actor_perceived(e, this, actor).addr();
+    if entry != 0 {
+        e.mem.set_u8(entry + 5, line_of_sight_only);
+        e.mem.set_u8(entry + 4, hostile);
+        return;
+    }
+    if e.get(this, PlayerCharacter::pListofPercievedActors)
+        .is_null()
+    {
+        let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let list = if block != 0 {
+            e.call(LIST_NEW, &args![block]).u32()
+        } else {
+            0
+        };
+        e.set(
+            this,
+            PlayerCharacter::pListofPercievedActors,
+            Ptr::new(list),
+        );
+    }
+    let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let entry = if block != 0 {
+        e.call(NEAR_PLAYER_DATA_NEW, &args![block]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(entry, actor);
+    e.mem.set_u8(entry + 4, hostile);
+    e.mem.set_u8(entry + 5, line_of_sight_only);
+    let list = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), entry);
+        e.call(LIST_APPEND, &args![list, cell]);
+    });
+}
+
+// Translated from 00967090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsActorPerceived` (Xbox PDB): the `ActorsNearPlayerData`
+/// entry of `actor` in the list at `+0xd48`, or null.
+pub fn player_character_is_actor_perceived(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+) -> Ptr {
+    let mut node = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if e.mem.u32(entry) == actor {
+            return Ptr::new(entry);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    Ptr::new(0)
+}
+
+// Translated from 009670f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `actor` has an entry in the perceived list (`+0xd48`) whose
+/// `bHasLineofSightNotDetection` (`+5`) is clear; false when the actor has
+/// none.
+pub fn fn_009670f0(e: &mut Engine, this: Ptr<PlayerCharacter>, actor: u32) -> bool {
+    let mut node = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if e.mem.u32(entry) == actor {
+            return e.mem.u8(entry + 5) == 0;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 00967160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsPlayerDetectedByNonTeammates` (Xbox PDB): whether
+/// some actor of the perceived list (`+0xd48`) other than `excluded`, that
+/// has an actor and no forced next update (`00566950`), has a line of sight
+/// to the global player (`Actor::LineOfSight`) and a positive detection
+/// level against it (`Actor::GetDetectionLevelAgainstActor`).
+pub fn player_character_is_player_detected_by_non_teammates(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    excluded: u32,
+) -> bool {
+    let mut node = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        let actor = e.mem.u32(entry);
+        if actor != 0
+            && !e.call(ACTOR_GET_FORCE_NEXT_UPDATE, &args![actor]).bool()
+            && actor != excluded
+        {
+            let player = e.global::<u32>(PLAYER_CHARACTER);
+            let line_of_sight = e
+                .call(
+                    ACTOR_LINE_OF_SIGHT,
+                    &args![actor, 0u32, player, 1u32, 0u32, 0u32],
+                )
+                .u8();
+            let level = e.with_stack(4, |e, cell| {
+                e.mem.set_u8(cell.addr(), line_of_sight);
+                e.call(
+                    ACTOR_GET_DETECTION_LEVEL,
+                    &args![actor, 0u32, player, cell, 0u32, 0u32, 0u32, 0u32],
+                )
+                .i32()
+            });
+            if level > 0 {
+                return true;
+            }
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 00967220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ChangePerceivedActorHostileStatus` (Xbox PDB): sets
+/// `bHostile` (`+4`) of the perceived-list entry of `actor`.
+pub fn player_character_change_perceived_actor_hostile_status(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    hostile: u8,
+) {
+    let mut node = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if e.mem.u32(entry) == actor {
+            e.mem.set_u8(entry + 4, hostile);
+            return;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00967290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties and deletes the perceived-actors list (`+0xd48`): every entry is
+/// freed and its head node removed (`0063f7b0`), then the list object gets its
+/// deleting destructor and the field is cleared.
+pub fn fn_00967290(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    if e.get(this, PlayerCharacter::pListofPercievedActors)
+        .is_null()
+    {
+        return;
+    }
+    loop {
+        let list = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+        if list == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![list]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![list]).u32();
+        let entry = e.mem.u32(slot);
+        e.call(OPERATOR_DELETE, &args![entry]);
+        let list = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+        e.call(LIST_REMOVE_NODE, &args![list]);
+    }
+    let list = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    if list != 0 {
+        e.call(LIST_DELETE, &args![list, 1u32]);
+    }
+    e.set(this, PlayerCharacter::pListofPercievedActors, Ptr::new(0));
+}
+
+// Translated from 00967350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::RemovePerceivedActor` (Xbox PDB): frees the entry of
+/// `actor` in the perceived list (`+0xd48`) and removes its node
+/// (`0063f7b0`).
+pub fn player_character_remove_perceived_actor(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+) {
+    let mut node = e.get(this, PlayerCharacter::pListofPercievedActors).addr();
+    while node != 0 {
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_NODE_SLOT, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if e.mem.u32(entry) == actor {
+            e.call(OPERATOR_DELETE, &args![entry]);
+            e.call(LIST_REMOVE_NODE, &args![node]);
+            return;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00967700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether either of the bytes at `+0x160` and `+0x161` is set (the Pipboy
+/// manager's two "open" flags).
+pub fn fn_00967700(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x160) != 0 || e.mem.u8(this.addr() + 0x161) != 0
+}
+
+// Translated from 00967730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::CheckForClosesConversation` (Xbox PDB): decides the
+/// global player's `pClosestConversation` (`+0x208`). `first` and `second`
+/// are the two participants of the conversation `conversation`; the
+/// smaller of their distances to the player is compared with the distance
+/// of the current conversation's closest participant (infinite when there
+/// is none): when either participant is the player the field is cleared;
+/// otherwise `conversation` replaces it when there is no current one and the
+/// distance is at most 1200.0, or when it is no farther than the current
+/// one.
+pub fn player_character_check_for_closes_conversation(
+    e: &mut Engine,
+    first: u32,
+    second: u32,
+    conversation: u32,
+) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let mut distance = e
+        .call(REFERENCE_GET_DISTANCE, &args![first, player, 0u32, 0u32])
+        .f32();
+    let second_distance = e
+        .call(REFERENCE_GET_DISTANCE, &args![second, player, 0u32, 0u32])
+        .f32();
+    if distance > second_distance {
+        distance = second_distance;
+    }
+    let mut closest: f32 = e.global(FLOAT_MAX);
+    let current = e.mem.u32(player + 0x208);
+    if current != 0 {
+        if e.call(CONVERSATION_GET_STARTER, &args![current]).u32() != 0 {
+            let starter = e.call(CONVERSATION_GET_STARTER, &args![current]).u32();
+            closest = e
+                .call(REFERENCE_GET_DISTANCE, &args![starter, player, 0u32, 0u32])
+                .f32();
+        }
+        if e.call(CONVERSATION_GET_TARGET, &args![current]).u32() != 0 {
+            let target = e.call(CONVERSATION_GET_TARGET, &args![current]).u32();
+            let target_distance = e
+                .call(REFERENCE_GET_DISTANCE, &args![target, player, 0u32, 0u32])
+                .f32();
+            if closest > target_distance {
+                closest = target_distance;
+            }
+        }
+    }
+    if second == player || first == player {
+        e.mem.set_u32(player + 0x208, 0);
+    } else {
+        let current = e.mem.u32(player + 0x208);
+        let limit: f64 = e.global(CONVERSATION_DISTANCE);
+        if (current == 0 && f64::from(distance) <= limit) || (current != 0 && distance <= closest) {
+            e.mem.set_u32(player + 0x208, conversation);
+        }
+    }
+}
+
+/// The reference the Havok body `body` stands for: `0044ddc0` of the node
+/// owner `004b5a20(004ae750(body))`, 0 when any step is missing.
+fn body_reference_word(e: &mut Engine, body: u32) -> u32 {
+    let owner = if body != 0 {
+        let proxy = e.call(BODY_LOOKUP_004AE750, &args![body]).u32();
+        e.call(FUNCTION_004B5A20, &args![proxy]).u32()
+    } else {
+        0
+    };
+    if owner != 0 {
+        e.call(READ_FIELD_8, &args![owner]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 009678a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsStandingOnFurniture` (Xbox PDB): whether the
+/// reference of the body under the player's character controller
+/// (`00c6fd20`) is furniture (`TESObjectREFR::IsFurniture`).
+pub fn player_character_is_standing_on_furniture(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+) -> bool {
+    let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+    if controller == 0 {
+        return false;
+    }
+    let body = e.call(FUNCTION_00C6FD20, &args![controller]).u32();
+    let word = body_reference_word(e, body);
+    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![word]).u32();
+    reference != 0 && e.call(REFERENCE_IS_FURNITURE, &args![reference]).bool()
+}
+
+// Translated from 00967950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The reference of the body `00c6fd40` of the player's character
+/// controller, when that differs from the body `00c6fd20` returns and has a
+/// reference word; null otherwise.
+pub fn fn_00967950(e: &mut Engine, this: Ptr<PlayerCharacter>) -> Ptr {
+    let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+    if controller == 0 {
+        return Ptr::new(0);
+    }
+    let body = e.call(FUNCTION_00C6FD20, &args![controller]).u32();
+    let standing = e.call(CONTROLLER_BODY_AT_630, &args![controller]).u32();
+    if body == standing {
+        return Ptr::new(0);
+    }
+    let standing = e.call(CONTROLLER_BODY_AT_630, &args![controller]).u32();
+    let word = body_reference_word(e, standing);
+    if word == 0 {
+        return Ptr::new(0);
+    }
+    Ptr::new(e.call(FIND_REFERENCE_FOR_3D, &args![word]).u32())
+}
+
+// Translated from 00967a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetBumpedRef` (Xbox PDB): the reference of the body
+/// the player's character controller bumped (`00c6fd60`, then its scene
+/// object `00810660`), when its virtual at `+0x100` answers true; else null.
+pub fn player_character_get_bumped_ref(e: &mut Engine, this: Ptr<PlayerCharacter>) -> Ptr {
+    let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+    if controller == 0 {
+        return Ptr::new(0);
+    }
+    let body = e.call(CONTROLLER_BODY_AT_638, &args![controller]).u32();
+    let node = if body != 0 {
+        e.call(BODY_GET_AV_OBJECT, &args![body]).u32()
+    } else {
+        0
+    };
+    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![node]).u32();
+    if reference != 0 && e.vcall(reference, 0x100, &args![]).bool() {
+        Ptr::new(reference)
+    } else {
+        Ptr::new(0)
+    }
+}
+
+/// `BSAudio::QInstance` (Xbox PDB), no arguments: the audio manager.
+const AUDIO_INSTANCE: u32 = 0x0045_3a70;
+/// `BSAudio::GetSoundHandleByName` (Xbox PDB) `(audio, handle out, name, flags)`.
+const AUDIO_GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
+/// The setting object of the iron sights' depth of field start.
+const SETTING_011CFD70: u32 = 0x011c_fd70;
+const SETTING_011CF8C8: u32 = 0x011c_f8c8;
+/// The setting read as the iron sights' fade limit and target.
+const SETTING_011CE6B4: u32 = 0x011c_e6b4;
+const SETTING_011CE4D4: u32 = 0x011c_e4d4;
+/// The setting object of the iron sights' blend rate.
+const SETTING_011CEDF4: u32 = 0x011c_edf4;
+/// The settings of the VATS depth of field and DRB image space modifiers.
+const SETTING_011CFE20: u32 = 0x011c_fe20;
+const SETTING_011CF38C: u32 = 0x011c_f38c;
+const SETTING_011CEC04: u32 = 0x011c_ec04;
+const SETTING_011CFCC8: u32 = 0x011c_fcc8;
+const SETTING_011CE924: u32 = 0x011c_e924;
+const SETTING_011CF4F8: u32 = 0x011c_f4f8;
+/// The float (a small scale factor) the VATS DRB point is built from.
+const POINT_SCALE_01016248: u32 = 0x0101_6248;
+/// The held-menu-button time setting.
+const SETTING_011CD098: u32 = 0x011c_d098;
+/// The byte that says the Pipboy light toggle already fired for the
+/// current press of the menu mode button.
+const MENU_MODE_BUTTON_FIRED: u32 = 0x011e_0d70;
+/// `(pipboy manager)`: true while the Pipboy is in use (`00507d80`).
+const PIPBOY_IS_ACTIVE: u32 = 0x0050_7d80;
+/// `FOPipboyManager::ShowPipboyLightEffect` (Xbox PDB) `(manager, a, b, c)`.
+const PIPBOY_SHOW_LIGHT_EFFECT: u32 = 0x007f_a310;
+/// `MagicTarget::Dispel` (Xbox PDB) `(target, item, flag)`.
+const MAGIC_TARGET_DISPEL: u32 = 0x0082_4400;
+/// The caster object whose `MagicTarget` base the Pipboy light effects
+/// affect (`0093ccd0`, no arguments).
+const GET_LIGHT_TARGET_OWNER: u32 = 0x0093_ccd0;
+/// `PlayerCharacter::IsInState`-like `(player, mask)`: whether the byte at
+/// `+0x680` has any bit of `mask`.
+const PLAYER_HAS_CONTROL_BITS: u32 = 0x005a_03f0;
+/// The sounds of the Pipboy light switching on and off.
+const PIPBOY_LIGHT_ON_SOUND: u32 = 0x0108_b444;
+const PIPBOY_LIGHT_OFF_SOUND: u32 = 0x0108_b454;
+
+/// One step of the image space blend: moves `current` towards `target` by
+/// `frame time / rate` (the float setting `rate_setting` is the time to
+/// cross one unit) and clamps it into `0..=limit`, as the x87 code does
+/// (`005330e0` on a stack float).
+fn approach_image_space(
+    e: &mut Engine,
+    current: f32,
+    target: f32,
+    rate_setting: u32,
+    limit: f32,
+) -> f32 {
+    let rate = setting_float(e, rate_setting);
+    let per_second = 1.0 / f64::from(rate);
+    let frame = e.call(READ_FLOAT_AT_C, &args![FRAME_TIME_OBJECT]).f32();
+    let step = (f64::from(frame) * per_second) as f32;
+    let moved = if current < target {
+        (f64::from(current) + f64::from(step)) as f32
+    } else {
+        (f64::from(current) - f64::from(step)) as f32
+    };
+    e.with_stack(4, |e, cell| {
+        e.mem.set_f32(cell.addr(), moved);
+        e.call(CLAMP_FLOAT_IN_PLACE, &args![cell, 0.0f32, limit]);
+        e.mem.f32(cell.addr())
+    })
+}
+
+// Translated from 009650a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateImageSpaceIronsights` (Xbox PDB): keeps the iron
+/// sights depth of field instance (`+0x5ec`, triggered on first use and
+/// flagged active) moving to its target. The target is the setting
+/// `011ce6b4` while the player aims through the iron sights outside third
+/// person (also setting the iron sights byte `011f9423`), else 0. The
+/// strength steps towards it by the frame time over the setting
+/// `011cedf4`, clamped to `0..=setting 011ce6b4`, and is stored in the
+/// instance (`0063f790`) together with the setting `011ce4d4`
+/// (`00965250`). The read of the setting `011ce4d4` before the target is
+/// kept; its value is not used.
+pub fn player_character_update_image_space_ironsights(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    if e.get(this, PlayerCharacter::pIronsightsDOFInstance)
+        .is_null()
+    {
+        let first = setting_float(e, SETTING_011CFD70);
+        let second = setting_float(e, SETTING_011CF8C8);
+        let instance = e
+            .call(
+                IMAGE_SPACE_DOF_TRIGGER,
+                &args![second, first, 4u32, 0.0f32, 0.0f32, 0.0f32],
+            )
+            .u32();
+        e.set(
+            this,
+            PlayerCharacter::pIronsightsDOFInstance,
+            Ptr::new(instance),
+        );
+        if instance != 0 {
+            e.call(IMAGE_SPACE_INSTANCE_SET_ACTIVE, &args![instance, 1u32]);
+        }
+    }
+    let limit = setting_float(e, SETTING_011CE6B4);
+    let mut target = 0.0f32;
+    let instance = e.get(this, PlayerCharacter::pIronsightsDOFInstance);
+    let mut current = e.call(READ_FLOAT_AT_C, &args![instance]).f32();
+    if e.call(ACTOR_GET_IRON_SIGHTS, &args![this]).bool()
+        && e.get(this, PlayerCharacter::b3rdPerson) == 0
+    {
+        setting_float(e, SETTING_011CE4D4);
+        target = setting_float(e, SETTING_011CE6B4);
+        fn_00965240(e, 1);
+    } else {
+        fn_00965240(e, 0);
+    }
+    if current != target {
+        current = approach_image_space(e, current, target, SETTING_011CEDF4, limit);
+    }
+    let instance = e.get(this, PlayerCharacter::pIronsightsDOFInstance);
+    e.call(SET_FLOAT_AT_C, &args![instance, current]);
+    let value = e.call(SETTING_FLOAT_VALUE, &args![SETTING_011CE4D4]).f32();
+    let instance = e.get(this, PlayerCharacter::pIronsightsDOFInstance);
+    fn_00965250(e, instance, value);
+}
+
+// Translated from 00965270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateImageSpaceVATS` (Xbox PDB): keeps the VATS depth
+/// of field (`+0x5f0`) and DRB (`+0x5f4`) image space instances, made on
+/// first use and flagged active, moving to their targets. While the object
+/// at `011f2250` reports mode 2 or 3 and the target object `011f21cc`
+/// exists, the targets are the settings `011cfcc8` (DRB) and `011ce924`
+/// (depth of field) and the fade is the distance (virtual `+0x1f4`
+/// positions) between that object and the player; otherwise the targets are
+/// 0. Each strength steps by the frame time over the setting `011cf4f8`
+/// and is clamped to `0..=` its setting; both instances get their strength
+/// and the fade (`0063f790`, `00693d50`, `00965580`).
+pub fn player_character_update_image_space_vats(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let mut fade = 0.0f32;
+    if e.get(this, PlayerCharacter::pVatsDOFInstance).is_null() {
+        let strength = setting_float(e, SETTING_011CFE20);
+        let instance = e
+            .call(
+                IMAGE_SPACE_DOF_TRIGGER,
+                &args![fade, strength, 0u32, 0.0f32, 0.0f32, 0.0f32],
+            )
+            .u32();
+        e.set(this, PlayerCharacter::pVatsDOFInstance, Ptr::new(instance));
+        if instance != 0 {
+            e.call(IMAGE_SPACE_INSTANCE_SET_ACTIVE, &args![instance, 1u32]);
+        }
+    }
+    if e.get(this, PlayerCharacter::pVatsDRBInstance).is_null() {
+        let scale: f32 = e.global(POINT_SCALE_01016248);
+
+        let instance = e.with_stack(8, |e, point| {
+            e.call(NI_POINT2_NEW, &args![point, scale, scale]);
+            let at_cf38c = setting_float(e, SETTING_011CF38C);
+            let at_cec04 = setting_float(e, SETTING_011CEC04);
+            let strength = setting_float(e, SETTING_011CFE20);
+            e.call(
+                IMAGE_SPACE_DRB_TRIGGER,
+                &args![
+                    fade, strength, 0u32, 0.0f32, at_cec04, at_cf38c, 0.0f32, 0.0f32, point, 0.0f32
+                ],
+            )
+            .u32()
+        });
+        e.set(this, PlayerCharacter::pVatsDRBInstance, Ptr::new(instance));
+        if instance != 0 {
+            e.call(IMAGE_SPACE_INSTANCE_SET_ACTIVE, &args![instance, 1u32]);
+        }
+    }
+    let drb_limit = setting_float(e, SETTING_011CFCC8);
+    let dof_limit = setting_float(e, SETTING_011CE924);
+    let mut dof_target = 0.0f32;
+    let mut drb_target = 0.0f32;
+    let dof_instance = e.get(this, PlayerCharacter::pVatsDOFInstance);
+    let mut dof_current = e.call(READ_FLOAT_AT_C, &args![dof_instance]).f32();
+    let drb_instance = e.get(this, PlayerCharacter::pVatsDRBInstance);
+    let mut drb_current = e.call(READ_FLOAT_AT_C, &args![drb_instance]).f32();
+    let mode = e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32();
+    let in_mode = mode == 2 || e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() == 3;
+    let target_object = e.global::<u32>(POINTER_011F21CC);
+    if in_mode && target_object != 0 {
+        drb_target = drb_limit;
+        dof_target = dof_limit;
+        let own = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        let other = e.with_stack(12, |e, difference| {
+            let position = e.vcall(target_object, 0x1f4, &args![]).u32();
+            let result = e
+                .call(VECTOR_SUBTRACT, &args![position, difference, own])
+                .u32();
+            e.call(VECTOR_LENGTH, &args![result]).f32()
+        });
+        fade = other;
+    }
+    if dof_current != dof_target {
+        dof_current = approach_image_space(e, dof_current, dof_target, SETTING_011CF4F8, dof_limit);
+    }
+    if drb_current != drb_target {
+        drb_current = approach_image_space(e, drb_current, drb_target, SETTING_011CF4F8, drb_limit);
+    }
+    let dof_instance = e.get(this, PlayerCharacter::pVatsDOFInstance);
+    e.call(SET_FLOAT_AT_C, &args![dof_instance, dof_current]);
+    let dof_instance = e.get(this, PlayerCharacter::pVatsDOFInstance);
+    e.call(SET_FLOAT_AT_20, &args![dof_instance, fade]);
+    let drb_instance = e.get(this, PlayerCharacter::pVatsDRBInstance);
+    e.call(SET_FLOAT_AT_C, &args![drb_instance, drb_current]);
+    let drb_instance = e.get(this, PlayerCharacter::pVatsDRBInstance);
+    fn_00965580(e, drb_instance, fade);
+}
+
+/// Plays the sound `name` (`GetSoundHandleByName` flags 0x121) on a local
+/// sound handle, then destroys the handle.
+fn play_ui_sound(e: &mut Engine, name: u32) {
+    e.with_stack(SOUND_HANDLE_SIZE, |e, handle| {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let found = e
+            .call(
+                AUDIO_GET_SOUND_HANDLE_BY_NAME,
+                &args![audio, handle, name, 0x121u32],
+            )
+            .u32();
+        e.call(SOUND_HANDLE_PLAY, &args![found, 0u32]);
+        e.call(EMPTY_DESTRUCTOR, &args![handle]);
+    });
+}
+
+/// `ShowPipboyLightEffect(a, b, c)` on the current Pipboy manager.
+fn show_pipboy_light_effect(e: &mut Engine, a: u32, b: u32, c: u32) {
+    let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+    e.call(PIPBOY_SHOW_LIGHT_EFFECT, &args![pipboy, a, b, c]);
+}
+
+/// The `MagicTarget` of the object `0093ccd0` answers (`+0x18`), 0 when
+/// there is none.
+fn light_target(e: &mut Engine) -> u32 {
+    let owner = e.call(GET_LIGHT_TARGET_OWNER, &args![]).u32();
+    if owner != 0 {
+        owner + 0x18
+    } else {
+        0
+    }
+}
+
+// Translated from 009673d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateMenuModeButton` (Xbox PDB): the Pipboy light
+/// toggle on a held menu button. While control 0xe is down in state 2 (and
+/// the toggle has not fired) for longer than the setting `011cd098`, the
+/// button counts as clicked (`+0xd54`). Otherwise, while control 0xe is
+/// down in state 1 or 0 the timer (`+0xd4c`) grows by `delta`; the first
+/// time it passes the setting with the Pipboy in use, the Pipboy light is
+/// toggled (effects, sounds `UIPipBoyLightOn`/`Off`, a dispel or a cast
+/// through the `MagicCaster` base at `+0x88`) and the fired byte
+/// (`011e0d70`) is set; when the button is released the click, the timer
+/// and the byte are cleared. Last, while the Pipboy manager reports one of
+/// its flags (`00967700`) but is not in use, the light effects are cleared
+/// and the target dispelled. The exception frame is not translated.
+pub fn player_character_update_menu_mode_button(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    delta: f32,
+) {
+    let owner = e.global::<u32>(POINTER_011DEA0C);
+    let controls = e.call(FUNCTION_00877720, &args![owner]).u32();
+    let magic_target = this.addr() + MAGIC_TARGET_OFFSET;
+    let mut clicked = false;
+    if e.global::<u8>(MENU_MODE_BUTTON_FIRED) == 0
+        && e.call(CONTROL_QUERY, &args![controls, 0xeu32, 2u32]).u32() != 0
+    {
+        let threshold = setting_float(e, SETTING_011CD098);
+        let timer = e.get(this, PlayerCharacter::fMenuModeButtonTimer);
+        if threshold > timer {
+            e.set(this, PlayerCharacter::bMenuModeButtonClicked, 1);
+            clicked = true;
+        }
+    }
+    if !clicked {
+        let down = e.call(CONTROL_QUERY, &args![controls, 0xeu32, 1u32]).u32() != 0
+            || e.call(CONTROL_QUERY, &args![controls, 0xeu32, 0u32]).u32() != 0;
+        if !down {
+            e.set(this, PlayerCharacter::bMenuModeButtonClicked, 0);
+            e.set(this, PlayerCharacter::fMenuModeButtonTimer, 0.0);
+            e.set_global(MENU_MODE_BUTTON_FIRED, 0u8);
+        } else {
+            let timer = e.get(this, PlayerCharacter::fMenuModeButtonTimer);
+            let timer = (f64::from(timer) + f64::from(delta)) as f32;
+            e.set(this, PlayerCharacter::fMenuModeButtonTimer, timer);
+            if e.global::<u8>(MENU_MODE_BUTTON_FIRED) == 0 {
+                let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+                if e.call(PIPBOY_IS_ACTIVE, &args![pipboy]).u32() != 0 {
+                    let threshold = setting_float(e, SETTING_011CD098);
+                    let timer = e.get(this, PlayerCharacter::fMenuModeButtonTimer);
+                    if threshold < timer {
+                        let target = light_target(e);
+                        if e.call(
+                            MAGIC_TARGET_IS_SPELL_TARGET,
+                            &args![magic_target, target, 1u32],
+                        )
+                        .bool()
+                        {
+                            show_pipboy_light_effect(e, 1, 0, 1);
+                            show_pipboy_light_effect(e, 0, 0, 1);
+                            play_ui_sound(e, PIPBOY_LIGHT_OFF_SOUND);
+                            let target = light_target(e);
+                            e.call(
+                                MAGIC_TARGET_DISPEL,
+                                &args![magic_target, target, 0u32, 0u32],
+                            );
+                        } else if !e
+                            .call(
+                                PLAYER_HAS_CONTROL_BITS,
+                                &args![e.global::<u32>(PLAYER_CHARACTER), 4u32],
+                            )
+                            .bool()
+                        {
+                            show_pipboy_light_effect(e, 1, 1, 1);
+                            show_pipboy_light_effect(e, 0, 1, 1);
+                            play_ui_sound(e, PIPBOY_LIGHT_ON_SOUND);
+                            let caster = e.call(GET_LIGHT_TARGET_OWNER, &args![]).u32();
+                            e.vcall(this.addr() + MAGIC_CASTER_OFFSET, 0, &args![caster, 0u32]);
+                        }
+                        e.set_global(MENU_MODE_BUTTON_FIRED, 1u8);
+                    }
+                }
+            }
+        }
+    }
+    let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+    if fn_00967700(e, Ptr::new(pipboy)) {
+        let pipboy = e.call(INTERFACE_GET_PIPBOY, &args![]).u32();
+        if e.call(PIPBOY_IS_ACTIVE, &args![pipboy]).u32() == 0 {
+            show_pipboy_light_effect(e, 1, 0, 1);
+            show_pipboy_light_effect(e, 0, 0, 1);
+            let target = light_target(e);
+            e.call(
+                MAGIC_TARGET_DISPEL,
+                &args![magic_target, target, 0u32, 0u32],
+            );
+        }
+    }
+}
+
+/// `(array, 0)`: the number of entries of the process list `ProcessLists +
+/// 4`.
+const FUNCTION_005BE5C0: u32 = 0x005b_e5c0;
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB).
+const GET_CURRENT_PROCESS_TYPE: u32 = 0x0093_1850;
+/// `NiAVObject::GetWorldBound` (Xbox PDB), `ECX` = the node: a pointer to the
+/// 16 byte bound (centre and radius).
+const NODE_GET_WORLD_BOUND: u32 = 0x0043_d450;
+/// `NiCamera::ScreenSpaceBoundBound` (Xbox PDB) `(camera, bound, out, out, epsilon)`.
+const SCREEN_SPACE_BOUND_BOUND: u32 = 0x00a7_05f0;
+/// `(object, value)`: stores a float at `+0x0c`.
+const SET_FLOAT_AT_C: u32 = 0x0063_f790;
+/// `(object, value)`: stores a float at `+0x20`.
+const SET_FLOAT_AT_20: u32 = 0x0069_3d50;
+/// `_ftol2_sse` (`00ec62c0`) truncating the value held in `ST0` (an `f64`).
+const FTOL2: u32 = 0x00ec_62c0;
+/// `(camera, a, b, origin out, direction out, 0)`: the camera's ray for the
+/// window point `(a, b)`.
+const WINDOW_POINT_TO_RAY: u32 = 0x00a7_1080;
+/// The getter of the global object at `011d8a80` (it ignores its arguments).
+const GLOBAL_OBJECT_GETTER: u32 = 0x004b_7210;
+/// The float at `+0x40` / `+0x38` of the object.
+const READ_FLOAT_AT_40: u32 = 0x0079_2760;
+const READ_FLOAT_AT_38: u32 = 0x009a_9350;
+/// The holder of the player's camera (`ECX` of [`READ_DWORD_AT_AC`]).
+const GET_CAMERA_HOLDER: u32 = 0x0045_c670;
+/// The function at `008cfbc0`, cdecl, nine words `(node, origin xyz, end xyz,
+/// &distance, 0)`: casts the ray and returns what it hits.
+const FUNCTION_008CFBC0: u32 = 0x008c_fbc0;
+/// The function at `0062a190` `(object, 0x25, form)`.
+const FUNCTION_0062A190: u32 = 0x0062_a190;
+/// The function at `0059ceb0` `(object, other)`.
+const FUNCTION_0059CEB0: u32 = 0x0059_ceb0;
+/// The function at `0059cee0` `(object)`: destroys the `0062a190` object.
+const FUNCTION_0059CEE0: u32 = 0x0059_cee0;
+/// The function at `005df560` `(matrix, index, &a, &b, &c)`.
+const FUNCTION_005DF560: u32 = 0x005d_f560;
+/// The function at `005df510` `(matrix, index, &a)`.
+const FUNCTION_005DF510: u32 = 0x005d_f510;
+/// The function at `005df5b0` `(object)`: a pointer to three floats.
+const FUNCTION_005DF5B0: u32 = 0x005d_f5b0;
+/// `NiMatrix3::MakeXRotation` (Xbox PDB) `(matrix, angle)`.
+const MATRIX_MAKE_X_ROTATION: u32 = 0x0052_4ac0;
+/// `MobileObject::GetLooking` (Xbox PDB).
+const MOBILE_OBJECT_GET_LOOKING: u32 = 0x0093_1d70;
+/// `ECX` = the player; adds a float to the position (`0070c3b0`).
+const FUNCTION_0070C3B0: u32 = 0x0070_c3b0;
+/// The function at `00888960`: reads the pick count override.
+const FUNCTION_00888960: u32 = 0x0088_8960;
+/// `bhkWorld::SetPickCountOverride` (Xbox PDB), cdecl `(count)`.
+const WORLD_SET_PICK_COUNT_OVERRIDE: u32 = 0x00c6_6230;
+/// `TES::Pick` (Xbox PDB), `ECX` = the `TES` global, `(pick data)`.
+const TES_PICK: u32 = 0x0045_8420;
+/// The global `TES` singleton pointer.
+const TES_SINGLETON: u32 = 0x011d_ea10;
+/// The function at `004b71d0`, cdecl, no arguments.
+const FUNCTION_004B71D0: u32 = 0x004b_71d0;
+/// The function at `008b3ef0` `(reference, index)`.
+const FUNCTION_008B3EF0: u32 = 0x008b_3ef0;
+/// The function at `007f3b40`, cdecl `(index)`.
+const FUNCTION_007F3B40: u32 = 0x007f_3b40;
+/// `BGSBodyPartData::GetBodyPart` (Xbox PDB) `(data, index)`.
+const BODY_PART_DATA_GET_BODY_PART: u32 = 0x005e_50f0;
+/// The function at `005e5190`: the byte of a body part.
+const FUNCTION_005E5190: u32 = 0x005e_5190;
+/// The setting for the auto aim range.
+const SETTING_011CED64: u32 = 0x011c_ed64;
+/// The setting for the half size of the auto aim screen box.
+const SETTING_011CEFA4: u32 = 0x011c_efa4;
+/// The double the auto aim box setting is multiplied with.
+const AIM_BOX_SCALE_01023B88: u32 = 0x0102_3b88;
+/// The float epsilon `ScreenSpaceBoundBound` gets.
+const SCREEN_EPSILON_010718C0: u32 = 0x0107_18c0;
+/// The double added to the distance to the targeted object.
+const AIM_DISTANCE_PAD_0102E430: u32 = 0x0102_e430;
+/// The global written with the body part byte of the aimed actor.
+const AIMED_BODY_PART: u32 = 0x011a_59f0;
+
+/// Size of the emulated frame of [`player_character_update_auto_aim_actor`]
+/// (its locals reach down to `[EBP - 0x3cc]`), and where `EBP` is in it.
+const AUTO_AIM_FRAME: u32 = 0x440;
+const AUTO_AIM_EBP: u32 = 0x400;
+
+/// Copies `words` words from `source` to `destination`.
+fn copy_words(e: &mut Engine, source: u32, destination: u32, words: u32) {
+    for word in 0..words {
+        let value = e.mem.u32(source + word * 4);
+        e.mem.set_u32(destination + word * 4, value);
+    }
+}
+
+/// Truncates a float like the game's `_ftol2` helper.
+fn float_to_int(e: &mut Engine, value: f32) -> u32 {
+    e.call(FTOL2, &args![f64::from(value)]).u32()
+}
+
+/// The camera ray of the window: `origin` and `direction` are filled by
+/// `00a71080` from the camera and the screen object's `+0x38` / `+0x40`
+/// floats, truncated to integers.
+fn camera_window_ray(e: &mut Engine, origin: u32, direction: u32) {
+    let screen = e
+        .call(GLOBAL_OBJECT_GETTER, &args![origin, direction, 0u32])
+        .u32();
+    let second = e.call(READ_FLOAT_AT_40, &args![screen]).f32();
+    let second = float_to_int(e, second);
+    let screen = e.call(GLOBAL_OBJECT_GETTER, &args![second]).u32();
+    let first = e.call(READ_FLOAT_AT_38, &args![screen]).f32();
+    let first = float_to_int(e, first);
+    let holder = e.call(GET_CAMERA_HOLDER, &args![]).u32();
+    let camera = e.call(READ_DWORD_AT_AC, &args![holder]).u32();
+    e.call(
+        WINDOW_POINT_TO_RAY,
+        &args![camera, first, second, origin, direction, 0u32],
+    );
+}
+
+/// `8cfbc0(node, origin (3 words), end (3 words), &distance, 0)`.
+fn cast_aim_ray(e: &mut Engine, node: u32, origin: u32, end: u32, distance: u32) -> u32 {
+    let origin_words = [
+        e.mem.u32(origin),
+        e.mem.u32(origin + 4),
+        e.mem.u32(origin + 8),
+    ];
+    let end_words = [e.mem.u32(end), e.mem.u32(end + 4), e.mem.u32(end + 8)];
+    e.call(
+        FUNCTION_008CFBC0,
+        &args![
+            node,
+            origin_words[0],
+            origin_words[1],
+            origin_words[2],
+            end_words[0],
+            end_words[1],
+            end_words[2],
+            distance,
+            0u32
+        ],
+    )
+    .u32()
+}
+
+/// One actor of the auto aim scan: if it is a candidate (an actor whose
+/// virtual `+0x100` answers true, not `+0x22c`, in process type 0, with a 3D
+/// node, and perceived by the player), is closer than `range`, and its
+/// screen bounds overlap the auto aim box and it is in the player's line
+/// of sight, it becomes the player's target actor (`+0xd44`) and, when
+/// it is a hostile entry of the perceived list, the best actor.
+fn auto_aim_candidate(
+    e: &mut Engine,
+    f: Frame,
+    this: Ptr<PlayerCharacter>,
+    camera: u32,
+    actor: u32,
+    best: &mut u32,
+    range: &mut f32,
+) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    if actor == 0
+        || !e.vcall(actor, 0x100, &args![]).bool()
+        || e.vcall(actor, 0x22c, &args![0u32]).bool()
+        || e.call(GET_CURRENT_PROCESS_TYPE, &args![actor]).u32() != 0
+        || e.vcall(actor, 0x1d0, &args![]).u32() == 0
+        || player_character_is_actor_perceived(e, Ptr::new(player), actor).is_null()
+    {
+        return;
+    }
+    let own_position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+    let actor_position = e.vcall(actor, 0x1f4, &args![]).u32();
+    e.call(
+        VECTOR_SUBTRACT,
+        &args![actor_position, f.at(0xffff_ffb4), own_position],
+    );
+    let distance = e.call(VECTOR_LENGTH, &args![f.at(0xffff_ffb4)]).f32();
+    let entry = player_character_is_actor_perceived(e, Ptr::new(player), actor).addr();
+    let hostile = e.mem.u8(entry + 4);
+    if (*range).partial_cmp(&distance) != Some(std::cmp::Ordering::Greater) {
+        return;
+    }
+    for offset in [0xffff_ffa0u32, 0xffff_ff94, 0xffff_ff88, 0xffff_ff7c] {
+        e.call(IDENTITY_006815C0, &args![f.at(offset)]);
+    }
+    let node = e.vcall(actor, 0x1d0, &args![]).u32();
+    let bound = e.call(NODE_GET_WORLD_BOUND, &args![node]).u32();
+    copy_words(e, bound, f.at(0xffff_ff6c), 4);
+    let epsilon: f32 = e.global(SCREEN_EPSILON_010718C0);
+    e.call(
+        SCREEN_SPACE_BOUND_BOUND,
+        &args![
+            camera,
+            f.at(0xffff_ff6c),
+            f.at(0xffff_ff88),
+            f.at(0xffff_ff7c),
+            epsilon
+        ],
+    );
+    let radius_at = e.vcall(actor, 0x1dc, &args![f.at(0xffff_ff60)]).u32();
+    let radius = e.mem.f32(radius_at);
+    e.call(SET_FLOAT_AT_C, &args![f.at(0xffff_ff6c), radius]);
+    let epsilon: f32 = e.global(SCREEN_EPSILON_010718C0);
+    e.call(
+        SCREEN_SPACE_BOUND_BOUND,
+        &args![
+            camera,
+            f.at(0xffff_ff6c),
+            f.at(0xffff_ffa0),
+            f.at(0xffff_ff94),
+            epsilon
+        ],
+    );
+    // The box: [-0x34] is its minimum, [-0x30] its maximum.
+    let low = e.mem.f32(f.at(0xffff_ffcc));
+    let high = e.mem.f32(f.at(0xffff_ffd0));
+    let minus_one: f64 = e.global(DOUBLE_MINUS_ONE);
+    let one: f64 = e.global(DOUBLE_ONE);
+    let first = e.mem.f32(f.at(0xffff_ffa0));
+    let second = e.mem.f32(f.at(0xffff_ff94));
+    let third = e.mem.f32(f.at(0xffff_ff8c));
+    let fourth = e.mem.f32(f.at(0xffff_ff80));
+    let hidden = (f64::from(first) == minus_one && f64::from(second) == one)
+        || (low > first && low > second)
+        || (high < first && high < second)
+        || (f64::from(third) == minus_one && f64::from(fourth) == one)
+        || (low > third && low > fourth)
+        || (high < third && high < fourth);
+    if hidden {
+        return;
+    }
+    let line_of_sight = e
+        .call(
+            ACTOR_LINE_OF_SIGHT,
+            &args![player, 0u32, actor, 1u32, 0u32, 0u32],
+        )
+        .bool();
+    if !line_of_sight {
+        return;
+    }
+    e.set(this, PlayerCharacter::pPlayersTargetActor, Ptr::new(actor));
+    if hostile != 0 {
+        *best = actor;
+        *range = distance;
+    }
+}
+
+// Translated from 00964260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateAutoAimActor` (Xbox PDB): picks the actor the
+/// player is auto aiming at and the point the bullets aim for. Nothing
+/// happens without a 3D node (virtual `+0x1d0`). The process list is scanned
+/// for the closest hostile perceived actor (see [`auto_aim_candidate`]) within
+/// the range setting `011ced64` whose screen bounds are in the box of half
+/// size `011cefa4`; the last one in sight is the player's target actor
+/// (`+0xd44`), the closest hostile one the best actor. A pick from the
+/// player's aim ray (`TES::Pick`, or a ray from the camera when the object
+/// at `011f2250` reports mode 4 or a flag is set) sets the targeted 3D
+/// (`+0xd3c`) and the bullet aim point (`+0xd30`). Depending on the mode
+/// the best or the picked actor is re-checked with a camera ray
+/// (`008cfbc0`), and may set the target actor and the aimed body part
+/// (`011a59f0`). The best actor is dropped when it is also the picked one and
+/// the player's weapon is not a melee type (`006450c0`); it is stored in
+/// `pAutoAimActor` (`+0xd2c`). `bTarget3DDistant` (`+0xd40`) says whether the
+/// picked actor is farther away than the word at `+0x18` of the screen
+/// object, and the iron sights and VATS image space updates run. The
+/// exception frame and the stack cookie are not translated; the 0x3cc byte
+/// frame is emulated so that the locals the callees receive by address keep
+/// the layout the game gives them.
+pub fn player_character_update_auto_aim_actor(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let block = e.mem.alloc(AUTO_AIM_FRAME);
+    let frame = Frame {
+        ebp: block + AUTO_AIM_EBP,
+    };
+    update_auto_aim_actor_in_frame(e, frame, this);
+    e.mem.free(block);
+}
+
+fn update_auto_aim_actor_in_frame(e: &mut Engine, f: Frame, this: Ptr<PlayerCharacter>) {
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return;
+    }
+    let mut best = 0u32;
+    let mut range = setting_float(e, SETTING_011CED64);
+    let holder = e.call(GET_CAMERA_HOLDER, &args![]).u32();
+    let camera = e.call(READ_DWORD_AT_AC, &args![holder]).u32();
+    let scale: f64 = e.global(AIM_BOX_SCALE_01023B88);
+    let half = (f64::from(setting_float(e, SETTING_011CEFA4)) * scale) as f32;
+    let scale: f64 = e.global(AIM_BOX_SCALE_01023B88);
+    let negative_half = (-f64::from(setting_float(e, SETTING_011CEFA4)) * scale) as f32;
+    e.call(
+        NI_POINT2_NEW,
+        &args![f.at(0xffff_ffcc), negative_half, half],
+    );
+    e.set(this, PlayerCharacter::pPlayersTargetActor, Ptr::new(0));
+    let mut index = 0u32;
+    loop {
+        let array = e.call(ADD_4_TO_ADDRESS, &args![PROCESS_LISTS]).u32();
+        let count = e.call(FUNCTION_005BE5C0, &args![array, 0u32]).u32();
+        if index >= count {
+            break;
+        }
+        let array = e.call(ADD_4_TO_ADDRESS, &args![PROCESS_LISTS]).u32();
+        let actor = e.call(PICK_RESULT_GET, &args![array, index]).u32();
+        auto_aim_candidate(e, f, this, camera, actor, &mut best, &mut range);
+        index += 1;
+    }
+    e.call(FUNCTION_004A3C20, &args![f.at(0xffff_fea0)]);
+    e.call(FUNCTION_0062A190, &args![f.at(0xffff_fe20), 0x25u32, best]);
+    if best != 0 {
+        e.call(
+            FUNCTION_0059CEB0,
+            &args![f.at(0xffff_fea0), f.at(0xffff_fe20)],
+        );
+    }
+    let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+    copy_words(e, position, f.at(0xffff_fe14), 3);
+    let reach = setting_float(e, SETTING_011CED64);
+    e.call(
+        FUNCTION_00416870,
+        &args![f.at(0xffff_fe08), 0.0f32, reach, 0.0f32],
+    );
+    let origin = f.at(0xffff_fe14);
+    let direction = f.at(0xffff_fe08);
+    if e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() == 4
+        || e.global::<u8>(FLAG_011E07B8) != 0
+    {
+        // The ray follows the player's view: rotate the (0, reach, 0)
+        // direction by the heading and looking angles.
+        let lift = e.call(FUNCTION_0070C3B0, &args![this]).f32();
+        let z = e.mem.f32(origin + 8);
+        e.mem
+            .set_f32(origin + 8, (f64::from(lift) + f64::from(z)) as f32);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fde4)]);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fdc0)]);
+        let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+        e.call(FUNCTION_004A0C90, &args![f.at(0xffff_fde4), heading]);
+        let looking = e.call(MOBILE_OBJECT_GET_LOOKING, &args![this]).f32();
+        e.call(MATRIX_MAKE_X_ROTATION, &args![f.at(0xffff_fdc0), looking]);
+        let product = e
+            .call(
+                MATRIX_MULTIPLY,
+                &args![f.at(0xffff_fde4), f.at(0xffff_fd9c), f.at(0xffff_fdc0)],
+            )
+            .u32();
+        copy_words(e, product, f.at(0xffff_fde4), 9);
+        let rotated = e
+            .call(
+                FUNCTION_004B4500,
+                &args![f.at(0xffff_fde4), f.at(0xffff_fd84), direction],
+            )
+            .u32();
+        let sum = e
+            .call(VECTOR_ADD, &args![rotated, f.at(0xffff_fd90), origin])
+            .u32();
+        copy_words(e, sum, direction, 3);
+    } else {
+        let matrix = e.call(FUNCTION_00461130, &args![camera]).u32();
+        copy_words(e, matrix, f.at(0xffff_fd60), 9);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fd3c)]);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fd30)]);
+        for axis in 0..3u32 {
+            e.call(
+                FUNCTION_005DF560,
+                &args![
+                    f.at(0xffff_fd60),
+                    axis,
+                    f.at(0xffff_fd34),
+                    f.at(0xffff_fd38),
+                    f.at(0xffff_fd30)
+                ],
+            );
+            e.call(
+                FUNCTION_005DF510,
+                &args![f.at(0xffff_fd3c), axis, f.at(0xffff_fd30)],
+            );
+        }
+        let position = e.call(FUNCTION_005DF5B0, &args![this]).u32();
+        copy_words(e, position, origin, 3);
+        let rotated = e
+            .call(
+                FUNCTION_004B4500,
+                &args![f.at(0xffff_fd3c), f.at(0xffff_fd18), direction],
+            )
+            .u32();
+        let sum = e
+            .call(VECTOR_ADD, &args![rotated, f.at(0xffff_fd24), origin])
+            .u32();
+        copy_words(e, sum, direction, 3);
+    }
+    e.call(FUNCTION_004A3DA0, &args![f.at(0xffff_fea0), origin]);
+    e.call(FUNCTION_004A3EB0, &args![f.at(0xffff_fea0), direction]);
+    e.call(FUNCTION_00931ED0, &args![this, f.at(0xffff_fd14)]);
+    e.call(FUNCTION_008C71B0, &args![f.at(0xffff_fd10), 0u32]);
+    e.call(FUNCTION_004A39F0, &args![f.at(0xffff_fd10), 0x25u32]);
+    let filter = e.call(FUNCTION_004A3A20, &args![f.at(0xffff_fd14)]).u32();
+    e.call(FUNCTION_0059CE80, &args![f.at(0xffff_fd10), filter]);
+    let word = e.mem.u32(f.at(0xffff_fd10));
+    e.call(FUNCTION_004A3F70, &args![f.at(0xffff_fea0), word]);
+    let previous = e.call(FUNCTION_00888960, &args![]).u8();
+    e.call(WORLD_SET_PICK_COUNT_OVERRIDE, &args![1u32]);
+    let tes = e.global::<u32>(TES_SINGLETON);
+    let picked = e.call(TES_PICK, &args![tes, f.at(0xffff_fea0)]).u32();
+    e.call(WORLD_SET_PICK_COUNT_OVERRIDE, &args![u32::from(previous)]);
+    let picked_reference = if picked != 0 {
+        e.call(FIND_REFERENCE_FOR_3D, &args![picked]).u32()
+    } else {
+        0
+    };
+    e.call(SMART_POINTER_ASSIGN, &args![this.addr() + 0xd3c, picked]);
+    let ray_length = e.mem.f32(f.at(0xffff_fee0));
+    let difference = e
+        .call(
+            VECTOR_SUBTRACT,
+            &args![direction, f.at(0xffff_fce8), origin],
+        )
+        .u32();
+    let scaled = e
+        .call(
+            FUNCTION_0045BB20,
+            &args![difference, f.at(0xffff_fcf4), ray_length],
+        )
+        .u32();
+    let aim_point = e
+        .call(VECTOR_ADD, &args![origin, f.at(0xffff_fcdc), scaled])
+        .u32();
+    copy_words(e, aim_point, this.addr() + 0xd30, 3);
+    let process = e.call(PLAYER_GET_PROCESS, &args![this]).u32();
+    let weapon = e.vcall(process, 0x148, &args![]).u32();
+    let weapon_word = if weapon != 0 {
+        e.call(READ_FIELD_8, &args![weapon]).u32()
+    } else {
+        0
+    };
+    if e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() != 2
+        && picked_reference != 0
+        && picked_reference == best
+    {
+        let node = e.vcall(best, 0x1d0, &args![]).u32();
+        let reach = setting_float(e, SETTING_011CED64);
+        e.mem.set_f32(f.at(0xffff_fcc4), reach);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fcb8)]);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fcac)]);
+        camera_window_ray(e, f.at(0xffff_fcb8), f.at(0xffff_fcac));
+        let hit = cast_aim_ray(
+            e,
+            node,
+            f.at(0xffff_fcb8),
+            f.at(0xffff_fcac),
+            f.at(0xffff_fcc4),
+        );
+        if hit != 0 {
+            let reference = e.call(FIND_REFERENCE_FOR_3D, &args![hit]).u32();
+            if reference != 0 && e.vcall(reference, 0x100, &args![]).bool() {
+                e.set(
+                    this,
+                    PlayerCharacter::pPlayersTargetActor,
+                    Ptr::new(reference),
+                );
+            }
+        }
+    } else if e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() == 2
+        && e.global::<u32>(POINTER_011F21CC) != 0
+        && weapon_word != 0
+        && !e.call(WEAPON_IS_MELEE_TYPE, &args![weapon_word]).bool()
+        && !e.call(FUNCTION_004B71D0, &args![]).bool()
+    {
+        let target_object = e.global::<u32>(POINTER_011F21CC);
+        let node = e.vcall(target_object, 0x1d0, &args![]).u32();
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let own_node = e.vcall(player, 0x1d0, &args![]).u32();
+        let own_position = e.call(ADD_8C_TO_ADDRESS, &args![own_node]).u32();
+        let target_node = e.vcall(target_object, 0x1d0, &args![]).u32();
+        let target_position = e.call(ADD_8C_TO_ADDRESS, &args![target_node]).u32();
+        let between = e
+            .call(
+                VECTOR_SUBTRACT,
+                &args![target_position, f.at(0xffff_fc94), own_position],
+            )
+            .u32();
+        let length = e.call(VECTOR_LENGTH, &args![between]).f32();
+        let pad: f64 = e.global(AIM_DISTANCE_PAD_0102E430);
+        e.mem
+            .set_f32(f.at(0xffff_fc90), (f64::from(length) + pad) as f32);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fc84)]);
+        e.call(IDENTITY_006815C0, &args![f.at(0xffff_fc78)]);
+        camera_window_ray(e, f.at(0xffff_fc84), f.at(0xffff_fc78));
+        let hit = cast_aim_ray(
+            e,
+            node,
+            f.at(0xffff_fc84),
+            f.at(0xffff_fc78),
+            f.at(0xffff_fc90),
+        );
+        if hit != 0 {
+            let reference = e.call(FIND_REFERENCE_FOR_3D, &args![hit]).u32();
+            e.set_global(AIMED_BODY_PART, 0xffff_ffffu32);
+            if e.vcall(reference, 0x100, &args![]).bool() {
+                let piece = if e.vcall(hit, 0xc, &args![]).u32() != 0 {
+                    let part = e.vcall(hit, 0xc, &args![]).u32();
+                    e.call(FUNCTION_008B3EF0, &args![reference, part]).u32()
+                } else {
+                    let part = fn_009611e0(e, Ptr::new(hit));
+                    e.call(FUNCTION_008B3EF0, &args![reference, part]).u32()
+                };
+                e.call(FUNCTION_007F3B40, &args![piece]);
+                let base = e.call(GET_BASE_FORM, &args![reference]).u32();
+                let body_parts = e.vcall(base, 0x180, &args![]).u32();
+                if body_parts != 0 {
+                    let part = e
+                        .call(BODY_PART_DATA_GET_BODY_PART, &args![body_parts, piece])
+                        .u32();
+                    if part != 0 {
+                        let byte = e.call(FUNCTION_005E5190, &args![part]).u8();
+                        e.set_global(AIMED_BODY_PART, i32::from(byte as i8) as u32);
+                    }
+                }
+            }
+        }
+    }
+    if picked_reference != 0 && picked_reference == best {
+        let weapon = e.call(ACTOR_GET_CURRENT_WEAPON, &args![this]).u32();
+        if weapon != 0 {
+            let weapon = e.call(ACTOR_GET_CURRENT_WEAPON, &args![this]).u32();
+            if !e.call(WEAPON_IS_MELEE_TYPE, &args![weapon]).bool() {
+                best = 0;
+            }
+        }
+    }
+    e.set(this, PlayerCharacter::pAutoAimActor, Ptr::new(best));
+    let aimed = f.at(0xffff_fc50);
+    e.call(IDENTITY_006815C0, &args![aimed]);
+    if picked_reference != 0 {
+        let position = e.vcall(picked_reference, 0x1f4, &args![]).u32();
+        let difference = e
+            .call(VECTOR_SUBTRACT, &args![position, f.at(0xffff_fc44), origin])
+            .u32();
+        copy_words(e, difference, aimed, 3);
+    }
+    let distance = e.call(VECTOR_LENGTH, &args![aimed]).f32();
+    let distant = if picked_reference != 0 {
+        let screen = e.call(GLOBAL_OBJECT_GETTER, &args![]).u32();
+        let limit = fn_009611e0(e, Ptr::new(screen)) as i32;
+        f64::from(distance) > f64::from(limit)
+    } else {
+        false
+    };
+    e.set(this, PlayerCharacter::bTarget3DDistant, u8::from(distant));
+    player_character_update_image_space_ironsights(e, this);
+    player_character_update_image_space_vats(e, this);
+    e.call(FUNCTION_0059CEE0, &args![f.at(0xffff_fe20)]);
+}
+
+/// The vector of three zero floats at `011f426c`.
+const ZERO_VECTOR: u32 = 0x011f_426c;
+/// `VATS::GetCurrentAction`-like getter, `ECX` = `011f2250`: the current VATS
+/// action (its `+0x0c` is the target, `+0x10` the body part index, `+4` a flag).
+const FUNCTION_009C71C0: u32 = 0x009c_71c0;
+/// The function at `004ad010` (`ECX` = weapon): a weapon flag.
+const FUNCTION_004AD010: u32 = 0x004a_d010;
+/// `BGSBodyPartData::GetBodyPart_ov2` (Xbox PDB), `ECX` = the data, `(index)`.
+const FUNCTION_005E5130: u32 = 0x005e_5130;
+/// `ECX` = a body part: its node name.
+const FUNCTION_0043B230: u32 = 0x0043_b230;
+/// The function at `0062bfb0`, cdecl `(out, node)`: returns a pointer to a vector.
+const FUNCTION_0062BFB0: u32 = 0x0062_bfb0;
+/// `ECX` = the actor: a pointer to a 20 byte VATS aim record or null.
+const FUNCTION_008D8B80: u32 = 0x008d_8b80;
+/// The function at `00524c40` `(matrix, out, vector)`: the vector rotated by the matrix.
+const FUNCTION_00524C40: u32 = 0x0052_4c40;
+/// `NiPoint3::operator!=` `(this, other)`: true when the vectors differ.
+const VECTOR_NOT_EQUAL: u32 = 0x0043_9090;
+/// `(minimum, maximum)`, cdecl: a random float in the range.
+const FUNCTION_00476B70: u32 = 0x0047_6b70;
+/// The function at `004579e0`, cdecl `(float)`: a square root.
+const FUNCTION_004579E0: u32 = 0x0045_79e0;
+/// The functions at `004e4470` / `004e44b0`, cdecl `(angle)`: cosine and sine.
+const FUNCTION_004E4470: u32 = 0x004e_4470;
+const FUNCTION_004E44B0: u32 = 0x004e_44b0;
+/// `ECX` = the actor: a float.
+const FUNCTION_004E4600: u32 = 0x004e_4600;
+/// `NiMatrix3::Inverse` (Xbox PDB) `(this, out)`: returns `out`.
+const MATRIX_INVERSE: u32 = 0x004b_45b0;
+/// Cdecl `(vector)`: the heading angle of the vector (`GetZAngleFromVector`).
+const FUNCTION_004B13C0: u32 = 0x004b_13c0;
+/// Cdecl `(float)`: an arc tangent.
+const FUNCTION_004B1460: u32 = 0x004b_1460;
+/// Cdecl `(float)`: an arc sine.
+const FUNCTION_004B5530: u32 = 0x004b_5530;
+/// Cdecl `(float)`: a float function.
+const FUNCTION_004019B0: u32 = 0x0040_19b0;
+/// `CombatUtilities::GetProjectedPointForTarget_ov4` (Xbox PDB), cdecl, 13 words.
+const FUNCTION_009A8F00: u32 = 0x009a_8f00;
+/// `CombatUtilities::CalculateProjectileLOS` (Xbox PDB), cdecl, 12 words.
+const FUNCTION_009A6E90: u32 = 0x009a_6e90;
+/// Cdecl `(actor, vector xyz, float, 0)`: a pitch angle.
+const FUNCTION_009A7D50: u32 = 0x009a_7d50;
+/// `ECX` = a matrix, `(index, out)`: reads a column of the matrix.
+const FUNCTION_00439F50: u32 = 0x0043_9f50;
+/// `ECX` = a weapon, `(has mod, 0, actor)`: the number of projectiles.
+const FUNCTION_00525B20: u32 = 0x0052_5b20;
+/// `ECX` = the player.
+const FUNCTION_00524D10: u32 = 0x0052_4d10;
+/// The settings of the aim offset limits and the aim jitter.
+const SETTING_011CF438: u32 = 0x011c_f438;
+const SETTING_011CF0BC: u32 = 0x011c_f0bc;
+const SETTING_011CE90C: u32 = 0x011c_e90c;
+const SETTING_011CFC20: u32 = 0x011c_fc20;
+const SETTING_011CE780: u32 = 0x011c_e780;
+const SETTING_011CFAF8: u32 = 0x011c_faf8;
+const SETTING_011CF9B0: u32 = 0x011c_f9b0;
+const SETTING_011CFD10: u32 = 0x011c_fd10;
+/// `FLT_MIN` as a double (the "unset" angle default).
+const FLOAT_MIN_DOUBLE: u32 = 0x0107_7e90;
+/// -pi, 2 pi and pi as doubles of floats.
+const NEGATIVE_PI_DOUBLE: u32 = 0x0101_ff58;
+const TWO_PI_DOUBLE: u32 = 0x0101_ff48;
+const PI_DOUBLE: u32 = 0x0101_ff40;
+/// 1.553343 and -1.553343 as doubles and floats (the pitch limits).
+const PITCH_LIMIT_DOUBLE: u32 = 0x0108_b3f8;
+const PITCH_LIMIT_FLOAT: u32 = 0x0108_a7f8;
+const NEGATIVE_PITCH_LIMIT_DOUBLE: u32 = 0x0108_a7f0;
+const NEGATIVE_PITCH_LIMIT_FLOAT: u32 = 0x0108_a7ec;
+/// Degrees to radians (a double).
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// 1.25, 0.1 and 10.0 as doubles.
+const SCALE_ONE_AND_A_QUARTER: u32 = 0x0102_1798;
+const STEP_FRACTION: u32 = 0x0107_2758;
+const AIM_LIFT: u32 = 0x0102_0758;
+/// 16.0 (float): the radius used for a bound with no radius.
+const DEFAULT_BOUND_RADIUS: u32 = 0x0101_e57c;
+/// 2 pi as a float.
+const TWO_PI_FLOAT: u32 = 0x0101_ff50;
+/// The node name `Weapon`.
+const WEAPON_NODE_NAME: u32 = 0x0101_3be8;
+
+/// Wraps an angle into `-pi ..= pi` the way the aim code does.
+fn wrap_angle(e: &mut Engine, angle: f32) -> f32 {
+    let low: f64 = e.global(NEGATIVE_PI_DOUBLE);
+    let turn: f64 = e.global(TWO_PI_DOUBLE);
+    let mut angle = angle;
+    while f64::from(angle) < low {
+        angle = (f64::from(angle) + turn) as f32;
+    }
+    let high: f64 = e.global(PI_DOUBLE);
+    while f64::from(angle) > high {
+        angle = (f64::from(angle) - turn) as f32;
+    }
+    angle
+}
+
+/// Limits a pitch to the 1.553343 range the aim code uses.
+fn clamp_pitch(e: &mut Engine, pitch: f32) -> f32 {
+    let mut pitch = pitch;
+    let high: f64 = e.global(PITCH_LIMIT_DOUBLE);
+    if f64::from(pitch) > high {
+        pitch = e.global(PITCH_LIMIT_FLOAT);
+    }
+    let low: f64 = e.global(NEGATIVE_PITCH_LIMIT_DOUBLE);
+    if f64::from(pitch) < low {
+        pitch = e.global(NEGATIVE_PITCH_LIMIT_FLOAT);
+    }
+    pitch
+}
+
+/// `value` limited to `-limit ..= limit` by the two compares of the aim code.
+fn clamp_symmetric(value: f32, limit: f32) -> f32 {
+    if limit < value {
+        limit
+    } else if value < -limit {
+        -limit
+    } else {
+        value
+    }
+}
+
+/// Size of the emulated frame of [`fn_00965620`] (its locals reach down to
+/// `[EBP - 0x20c]`), and where `EBP` is in it.
+const AIM_OFFSETS_FRAME: u32 = 0x240;
+const AIM_OFFSETS_EBP: u32 = 0x220;
+
+// Translated from 00965620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Computes how far the aim of the player is off the direction to the
+/// target and adds it to `*heading` and `*pitch` (the wobble code calls it
+/// with the offsets of the frame, see [`player_character_add_gun_wobble`]).
+/// `actor` is the actor whose heading and pitch are the reference (or 0, then
+/// `default_heading` and `default_pitch` are), `aim_node` the node the
+/// shot comes from (0: the player's root node), `origin_override` a vector
+/// to use as the origin instead of the node's position (or 0). The target
+/// point is the VATS target's node (when the object at `011f2250` reports mode
+/// 4 and an action with a target exists), the player's targeted actor
+/// (`00963730`) or the stored bullet aim point (`+0xd30`); without one the
+/// function leaves the offsets alone. For a VATS target the projectile's
+/// flight is searched for a free line (`009a8f00`, `009a6e90`) and the
+/// actor's `+0xd0` float is set; the angles are then limited by settings
+/// that depend on the weapon (melee or none, VATS, `00524d10`) and the
+/// offsets of a multi-projectile weapon and the VATS jitter are added.
+/// `*heading` is wrapped into `-pi ..= pi` and `*pitch` limited to 1.553343.
+/// An early return happens when the iron sights are up with a weapon that
+/// has a flagged mod or the mode word is 0 and the weapon flags forbid it.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00965620(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    aim_node: u32,
+    heading: Ptr,
+    pitch: Ptr,
+    origin_override: u32,
+    default_heading: f32,
+    default_pitch: f32,
+) {
+    let block = e.mem.alloc(AIM_OFFSETS_FRAME);
+    let frame = Frame {
+        ebp: block + AIM_OFFSETS_EBP,
+    };
+    aim_offsets_in_frame(
+        e,
+        frame,
+        this,
+        actor,
+        aim_node,
+        heading.addr(),
+        pitch.addr(),
+        origin_override,
+        default_heading,
+        default_pitch,
+    );
+    e.mem.free(block);
+}
+
+/// The weapon's current weapon form of the player (`Actor::GetCurrentWeapon`).
+fn current_weapon(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    e.call(ACTOR_GET_CURRENT_WEAPON, &args![this]).u32()
+}
+
+/// Whether the player's current weapon is a melee type (`006450c0`).
+fn current_weapon_is_melee(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    let weapon = current_weapon(e, this);
+    e.call(WEAPON_IS_MELEE_TYPE, &args![weapon]).bool()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn aim_offsets_in_frame(
+    e: &mut Engine,
+    f: Frame,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    aim_node: u32,
+    heading_out: u32,
+    pitch_out: u32,
+    origin_override: u32,
+    default_heading: f32,
+    default_pitch: f32,
+) {
+    let vec_v = f.at(0xffff_ffdc);
+    let vec_s = f.at(0xffff_ffe8);
+    let vec_w = f.at(0xffff_ffc8);
+    let vec_z = f.at(0xffff_ffa4);
+    let vec_d = f.at(0xffff_ff44);
+    let matrix_m = f.at(0xffff_ff64);
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    copy_words(e, ZERO_VECTOR, vec_v, 3);
+    let vats_action = e.call(FUNCTION_009C71C0, &args![OBJECT_011F2250]).u32();
+    let mut in_vats_target = false;
+    let mut node = 0u32;
+    let source = if origin_override != 0 {
+        origin_override
+    } else if aim_node != 0 {
+        e.call(ADD_8C_TO_ADDRESS, &args![aim_node]).u32()
+    } else {
+        ZERO_VECTOR
+    };
+    copy_words(e, source, vec_s, 3);
+    if e.call(ACTOR_GET_IRON_SIGHTS, &args![this]).bool()
+        && e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() == 0
+        && current_weapon(e, this) != 0
+    {
+        let weapon = current_weapon(e, this);
+        if e.call(FUNCTION_004AD030, &args![weapon]).bool() {
+            let process = e.get(this, PlayerCharacter::pCurrentProcess).addr();
+            if process != 0 && e.vcall(process, 0x148, &args![]).u32() != 0 {
+                let item = e.vcall(process, 0x148, &args![]).u32();
+                if e.call(ITEM_CHANGE_HAS_MOD, &args![item, 0xeu32]).bool() {
+                    return;
+                }
+            }
+        }
+        let weapon = current_weapon(e, this);
+        if e.call(FUNCTION_004AD010, &args![weapon]).bool() {
+            let weapon = current_weapon(e, this);
+            if !e.call(FUNCTION_004AD030, &args![weapon]).bool() {
+                return;
+            }
+        }
+    }
+    if e.call(READ_FIELD_8, &args![OBJECT_011F2250]).u32() == 4
+        && vats_action != 0
+        && e.mem.u32(vats_action + 0xc) != 0
+    {
+        in_vats_target = true;
+        let target = e.mem.u32(vats_action + 0xc);
+        node = e.vcall(target, 0x1d0, &args![]).u32();
+    }
+    let mut jitter_heading = 0.0f32;
+    let mut jitter_pitch = 0.0f32;
+    let ranged = aim_node != 0 && current_weapon(e, this) != 0 && !current_weapon_is_melee(e, this);
+    if !ranged {
+        // No node, no weapon or a melee weapon: the offset to the player's
+        // targeted actor or to the stored bullet aim point.
+        let targeted = fn_00963730(e, this).addr();
+        if targeted != 0 {
+            let targeted = fn_00963730(e, this).addr();
+            let root = e.call(PLAYER_GET_ROOT_NODE, &args![this, 0u32]).u32();
+            let root_bound = e.call(NODE_GET_WORLD_BOUND, &args![root]).u32();
+            let root_bound = e.call(IDENTITY_006815C0, &args![root_bound]).u32();
+            let target_node = e.vcall(targeted, 0x1d0, &args![]).u32();
+            let bound = e.call(NODE_GET_WORLD_BOUND, &args![target_node]).u32();
+            let bound = e.call(IDENTITY_006815C0, &args![bound]).u32();
+            let difference = e
+                .call(
+                    VECTOR_SUBTRACT,
+                    &args![bound, f.at(0xffff_fee0), root_bound],
+                )
+                .u32();
+            copy_words(e, difference, vec_v, 3);
+        } else if e
+            .call(VECTOR_NOT_EQUAL, &args![this.addr() + 0xd30, ZERO_VECTOR])
+            .bool()
+        {
+            let root = e.call(PLAYER_GET_ROOT_NODE, &args![this, 0u32]).u32();
+            let root_bound = e.call(NODE_GET_WORLD_BOUND, &args![root]).u32();
+            let root_bound = e.call(IDENTITY_006815C0, &args![root_bound]).u32();
+            let difference = e
+                .call(
+                    VECTOR_SUBTRACT,
+                    &args![this.addr() + 0xd30, f.at(0xffff_fed4), root_bound],
+                )
+                .u32();
+            copy_words(e, difference, vec_v, 3);
+        }
+    } else if in_vats_target {
+        let target = e.mem.u32(vats_action + 0xc);
+        if e.vcall(target, 0x100, &args![]).bool()
+            && (actor == 0 || e.call(FORM_GET_TYPE, &args![actor]).u32() != 0x3e)
+        {
+            let reference = e.mem.u32(vats_action + 0xc);
+            let base = e.call(GET_BASE_FORM, &args![reference]).u32();
+            let parts = e.vcall(base, 0x180, &args![]).u32();
+            if parts != 0 {
+                let index = e.mem.u32(vats_action + 0x10);
+                let part = e.call(FUNCTION_005E5130, &args![parts, index]).u32();
+                if part != 0 || index == 0xffff_ffff {
+                    let name = if index == 0xffff_ffff {
+                        WEAPON_NODE_NAME
+                    } else {
+                        e.call(FUNCTION_0043B230, &args![part]).u32()
+                    };
+                    let model = e.vcall(reference, 0x1d0, &args![]).u32();
+                    let found = e.call(FIND_NODE_BY_NAME, &args![model, name]).u32();
+                    if found != 0 {
+                        node = found;
+                    }
+                }
+            }
+        }
+        if node == 0 {
+            return;
+        }
+        let centre = e.call(ADD_8C_TO_ADDRESS, &args![node]).u32();
+        copy_words(e, centre, vec_w, 3);
+        if e.mem.u8(vats_action + 4) != 0 {
+            e.vcall(node, 0xc, &args![]);
+            copy_words(e, ZERO_VECTOR, vec_z, 3);
+            if actor == 0 || e.call(FORM_GET_TYPE, &args![actor]).u32() != 0x3e {
+                let point = e
+                    .call(FUNCTION_0062BFB0, &args![f.at(0xffff_fec8), node])
+                    .u32();
+                copy_words(e, point, vec_z, 3);
+            }
+            if actor != 0 && e.call(FUNCTION_008D8B80, &args![actor]).u32() != 0 {
+                let record = e.call(FUNCTION_008D8B80, &args![actor]).u32();
+                let target = e.mem.u32(vats_action + 0xc);
+                e.mem.set_u32(record, target);
+                e.call(SMART_POINTER_ASSIGN, &args![record + 4, node]);
+                copy_words(e, vec_z, record + 8, 3);
+            }
+            let matrix = e.call(FUNCTION_00461130, &args![node]).u32();
+            let rotated = e
+                .call(FUNCTION_00524C40, &args![matrix, f.at(0xffff_febc), vec_z])
+                .u32();
+            copy_words(e, rotated, vec_w, 3);
+        } else {
+            let bound = e.call(NODE_GET_WORLD_BOUND, &args![node]).u32();
+            let radius = e.call(READ_FLOAT_AT_C, &args![bound]).f64();
+            let position = if radius == 0.0 {
+                e.call(ADD_8C_TO_ADDRESS, &args![node]).u32()
+            } else {
+                let bound = e.call(NODE_GET_WORLD_BOUND, &args![node]).u32();
+                e.call(IDENTITY_006815C0, &args![bound]).u32()
+            };
+            copy_words(e, position, vec_w, 3);
+        }
+        let difference = e
+            .call(VECTOR_SUBTRACT, &args![vec_w, f.at(0xffff_feac), vec_s])
+            .u32();
+        copy_words(e, difference, vec_v, 3);
+        if e.mem.u8(vats_action + 4) == 0 {
+            let bound = e.call(NODE_GET_WORLD_BOUND, &args![node]).u32();
+            let mut radius = e.call(READ_FLOAT_AT_C, &args![bound]).f32();
+            if f64::from(radius) == 0.0 {
+                radius = e.global(DEFAULT_BOUND_RADIUS);
+            }
+            let upper = setting_float(e, SETTING_011CF438);
+            let lower = setting_float(e, SETTING_011CF0BC);
+            let random = e.call(FUNCTION_00476B70, &args![lower, upper]).f64();
+            let radius = (random * f64::from(radius)) as f32;
+            let length = e.call(VECTOR_LENGTH, &args![vec_v]).f32();
+            let squares = (f64::from(radius) * f64::from(radius)
+                + f64::from(length) * f64::from(length)) as f32;
+            let hypotenuse = e.call(FUNCTION_004579E0, &args![squares]).f32();
+            let tau: f32 = e.global(TWO_PI_FLOAT);
+            let angle = e.call(FUNCTION_00476B70, &args![0.0f32, tau]).f32();
+            let cosine = e.call(FUNCTION_004E4470, &args![angle]).f64();
+            jitter_heading = (cosine * (f64::from(radius) / f64::from(hypotenuse))) as f32;
+            let sine = e.call(FUNCTION_004E44B0, &args![angle]).f64();
+            jitter_pitch = (sine * (f64::from(radius) / f64::from(hypotenuse))) as f32;
+        }
+    } else {
+        let targeted = fn_00963730(e, this).addr();
+        if targeted != 0 {
+            let targeted = fn_00963730(e, this).addr();
+            let target_node = e.vcall(targeted, 0x1d0, &args![]).u32();
+            let bound = e.call(NODE_GET_WORLD_BOUND, &args![target_node]).u32();
+            let bound = e.call(IDENTITY_006815C0, &args![bound]).u32();
+            let difference = e
+                .call(VECTOR_SUBTRACT, &args![bound, f.at(0xffff_fea0), vec_s])
+                .u32();
+            copy_words(e, difference, vec_v, 3);
+        } else if aim_node != 0
+            && e.call(VECTOR_NOT_EQUAL, &args![this.addr() + 0xd30, ZERO_VECTOR])
+                .bool()
+        {
+            let difference = e
+                .call(
+                    VECTOR_SUBTRACT,
+                    &args![this.addr() + 0xd30, f.at(0xffff_fe94), vec_s],
+                )
+                .u32();
+            copy_words(e, difference, vec_v, 3);
+        }
+    }
+    let minimum: f64 = e.global(FLOAT_MIN_DOUBLE);
+    let use_angles = actor != 0
+        || (f64::from(default_pitch) != minimum && f64::from(default_heading) != minimum);
+    if !e.call(VECTOR_NOT_EQUAL, &args![vec_v, ZERO_VECTOR]).bool() {
+        return;
+    }
+    copy_words(e, vec_v, vec_d, 3);
+    e.call(FUNCTION_004A0C10, &args![vec_d]);
+    e.call(IDENTITY_006815C0, &args![matrix_m]);
+    if !use_angles {
+        let matrix = if aim_node != 0 {
+            e.call(FUNCTION_00461130, &args![aim_node]).u32()
+        } else {
+            let root = e.call(PLAYER_GET_ROOT_NODE, &args![this, 0u32]).u32();
+            e.call(FUNCTION_00461130, &args![root]).u32()
+        };
+        copy_words(e, matrix, matrix_m, 9);
+        let inverse = e
+            .call(MATRIX_INVERSE, &args![matrix_m, f.at(0xffff_fe70)])
+            .u32();
+        let local = e
+            .call(FUNCTION_004B4500, &args![inverse, f.at(0xffff_fe64), vec_d])
+            .u32();
+        copy_words(e, local, vec_d, 3);
+        if !in_vats_target {
+            let global = e
+                .call(
+                    FUNCTION_004B4500,
+                    &args![WOBBLE_RESULT_MATRIX, f.at(0xffff_fe58), vec_d],
+                )
+                .u32();
+            copy_words(e, global, vec_d, 3);
+        }
+    }
+    let direction_y = e.mem.f32(vec_d + 4);
+    let mut heading_raw: f32;
+    let mut pitch_raw: f32;
+    if f64::from(direction_y) == 0.0 {
+        heading_raw = 0.0;
+        pitch_raw = 0.0;
+    } else {
+        let mut special = false;
+        if in_vats_target && actor != 0 {
+            let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+            special = fn_00966980(e, Ptr::new(base)) > 0.0;
+        }
+        if special {
+            if e.call(FORM_GET_TYPE, &args![actor]).u32() == 0x3e {
+                find_clear_shot(e, f, actor, vats_action);
+            }
+            if use_angles {
+                heading_raw = e.call(FUNCTION_004B13C0, &args![vec_d]).f32();
+                let reference = aim_pitch(e, actor, vec_v);
+                pitch_raw = -reference as f32;
+            } else {
+                let ratio = (f64::from(e.mem.f32(vec_d)) / f64::from(direction_y)) as f32;
+                heading_raw = e.call(FUNCTION_004B1460, &args![ratio]).f32();
+                let reference = aim_pitch(e, actor, vec_v);
+                let current = e.mem.f32(pitch_out);
+                pitch_raw = (-reference - f64::from(current)) as f32;
+            }
+        } else {
+            if use_angles {
+                heading_raw = e.call(FUNCTION_004B13C0, &args![vec_d]).f32();
+            } else {
+                let ratio = (f64::from(e.mem.f32(vec_d)) / f64::from(direction_y)) as f32;
+                heading_raw = e.call(FUNCTION_004B1460, &args![ratio]).f32();
+            }
+            let z = e.mem.f32(vec_d + 8);
+            pitch_raw = -e.call(FUNCTION_004B5530, &args![z]).f32();
+        }
+    }
+    let mut heading_delta: f32;
+    let mut pitch_delta: f32;
+    if use_angles {
+        heading_raw = wrap_angle(e, heading_raw);
+        pitch_raw = clamp_pitch(e, pitch_raw);
+        let reference_heading = if actor != 0 {
+            e.vcall(actor, 0x2bc, &args![0u32]).f32()
+        } else {
+            default_heading
+        };
+        let reference_pitch = if actor != 0 {
+            e.call(MOBILE_OBJECT_GET_LOOKING, &args![actor]).f32()
+        } else {
+            default_pitch
+        };
+        let reference_heading = wrap_angle(e, reference_heading);
+        let reference_pitch = clamp_pitch(e, reference_pitch);
+        heading_delta = (f64::from(heading_raw) - f64::from(reference_heading)) as f32;
+        pitch_delta = (f64::from(pitch_raw) - f64::from(reference_pitch)) as f32;
+    } else {
+        heading_delta = heading_raw;
+        pitch_delta = pitch_raw;
+    }
+    heading_delta = wrap_angle(e, heading_delta);
+    if current_weapon(e, this) == 0 || current_weapon_is_melee(e, this) {
+        if f64::from(heading_delta) < 0.0 {
+            heading_delta = 0.0;
+        }
+        pitch_delta = 0.0;
+    }
+    let weapon_missing_or_melee = current_weapon(e, this) == 0 || current_weapon_is_melee(e, this);
+    let mut limit = if weapon_missing_or_melee {
+        setting_float(e, SETTING_011CE90C)
+    } else if in_vats_target {
+        setting_float(e, SETTING_011CFC20)
+    } else if e.call(FUNCTION_00524D10, &args![this]).bool() {
+        setting_float(e, SETTING_011CE780)
+    } else {
+        setting_float(e, SETTING_011CFAF8)
+    };
+    let degrees: f64 = e.global(DEGREES_TO_RADIANS);
+    limit = (f64::from(limit) * degrees) as f32;
+    heading_delta = clamp_symmetric(heading_delta, limit);
+    pitch_delta = clamp_symmetric(pitch_delta, limit);
+    let weapon = current_weapon(e, this);
+    if use_angles {
+        let mut has_mod = 0u8;
+        let process = e.get(this, PlayerCharacter::pCurrentProcess).addr();
+        if e.vcall(process, 0x148, &args![]).u32() != 0 {
+            let item = e.vcall(process, 0x148, &args![]).u32();
+            has_mod = e.call(ITEM_CHANGE_HAS_MOD, &args![item, 0xcu32]).u8();
+        }
+        if !in_vats_target {
+            let column = f.at(0xffff_fef8);
+            e.call(IDENTITY_006815C0, &args![column]);
+            e.call(
+                FUNCTION_00439F50,
+                &args![WOBBLE_RESULT_MATRIX, 1u32, column],
+            );
+            let angle = e.call(FUNCTION_004B13C0, &args![column]).f64();
+            heading_delta = (angle + f64::from(heading_delta)) as f32;
+            let z = e.mem.f32(f.at(0xffff_ff00));
+            let arc = e.call(FUNCTION_004B5530, &args![z]).f64();
+            pitch_delta = (-arc + f64::from(pitch_delta)) as f32;
+            let heading_extra = if actor != 0 {
+                fn_00966a20(e, Ptr::new(actor))
+            } else {
+                0.0
+            };
+            heading_delta = (f64::from(heading_delta) + f64::from(heading_extra)) as f32;
+            let pitch_extra = if actor != 0 {
+                e.call(FUNCTION_004E4600, &args![actor]).f32()
+            } else {
+                0.0
+            };
+            pitch_delta = (f64::from(pitch_delta) + f64::from(pitch_extra)) as f32;
+        } else if weapon != 0 {
+            let projectiles = e
+                .call(
+                    FUNCTION_00525B20,
+                    &args![weapon, u32::from(has_mod), 0u32, player],
+                )
+                .u8();
+            if projectiles > 1 {
+                let heading_extra = if actor != 0 {
+                    fn_00966a20(e, Ptr::new(actor))
+                } else {
+                    0.0
+                };
+                let spread = setting_float(e, SETTING_011CF9B0);
+                heading_delta = (f64::from(spread) * f64::from(heading_extra)
+                    + f64::from(heading_delta)) as f32;
+                let pitch_extra = if actor != 0 {
+                    e.call(FUNCTION_004E4600, &args![actor]).f32()
+                } else {
+                    0.0
+                };
+                let spread = setting_float(e, SETTING_011CF9B0);
+                pitch_delta =
+                    (f64::from(spread) * f64::from(pitch_extra) + f64::from(pitch_delta)) as f32;
+            }
+        }
+    }
+    if in_vats_target && e.mem.u8(vats_action + 4) == 0 {
+        let degrees: f64 = e.global(DEGREES_TO_RADIANS);
+        let jitter_limit = (f64::from(setting_float(e, SETTING_011CFD10)) * degrees) as f32;
+        jitter_heading = clamp_symmetric(jitter_heading, jitter_limit);
+        jitter_pitch = clamp_symmetric(jitter_pitch, jitter_limit);
+        heading_delta = (f64::from(heading_delta) + f64::from(jitter_heading)) as f32;
+        pitch_delta = (f64::from(pitch_delta) + f64::from(jitter_pitch)) as f32;
+    }
+    let sum = (f64::from(e.mem.f32(heading_out)) + f64::from(heading_delta)) as f32;
+    let sum = wrap_angle(e, sum);
+    e.mem.set_f32(heading_out, sum);
+    let sum = (f64::from(e.mem.f32(pitch_out)) + f64::from(pitch_delta)) as f32;
+    let sum = clamp_pitch(e, sum);
+    e.mem.set_f32(pitch_out, sum);
+}
+
+/// `-009a7d50(actor, vector, 0.0, 0)` as the double the game holds in `ST0`
+/// (the sign is applied by the caller).
+fn aim_pitch(e: &mut Engine, actor: u32, vector: u32) -> f64 {
+    let x = e.mem.u32(vector);
+    let y = e.mem.u32(vector + 4);
+    let z = e.mem.u32(vector + 8);
+    e.call(FUNCTION_009A7D50, &args![actor, x, y, z, 0.0f32, 0u32])
+        .f64()
+}
+
+/// The search for a clear shot to a VATS target actor of type 0x3e (the
+/// block of [`fn_00965620`] that scales the actor's `+0xd0` float): steps
+/// the projected distance from `009669c0(actor) * 1.25` ... until the
+/// projectile line of sight (`009a6e90`) reaches the target, then stores
+/// `found * (actor's +0xd0 float)`.
+fn find_clear_shot(e: &mut Engine, f: Frame, actor: u32, vats_action: u32) {
+    let vec_v = f.at(0xffff_ffdc);
+    let vec_s = f.at(0xffff_ffe8);
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let length = e.call(VECTOR_LENGTH, &args![vec_v]).f64();
+    let scale = fn_00966a40(e);
+    let scaled = (f64::from(scale) * length) as f32;
+    let start = e.call(FUNCTION_004019B0, &args![scaled]).f32();
+    let reach = fn_009669c0(e, Ptr::new(actor));
+    let end = (f64::from(reach) * e.global::<f64>(SCALE_ONE_AND_A_QUARTER)) as f32;
+    let mut found = 0.0f32;
+    let mut pass = 1i32;
+    while f64::from(found) == 0.0 && pass < 2 {
+        let mut step = start;
+        while f64::from(found) == 0.0 && end >= step {
+            let lift: f64 = e.global(AIM_LIFT);
+            let z = e.mem.f32(vec_v + 8);
+            e.mem.set_f32(vec_v + 8, (f64::from(z) + lift) as f32);
+            let multiplier = fn_00966a40(e);
+            let zero = [
+                e.mem.u32(ZERO_VECTOR),
+                e.mem.u32(ZERO_VECTOR + 4),
+                e.mem.u32(ZERO_VECTOR + 8),
+            ];
+            let sum = e
+                .call(VECTOR_ADD, &args![vec_v, f.at(0xffff_fe4c), vec_s])
+                .u32();
+            let sum_words = [e.mem.u32(sum), e.mem.u32(sum + 4), e.mem.u32(sum + 8)];
+            let origin = [e.mem.u32(vec_s), e.mem.u32(vec_s + 4), e.mem.u32(vec_s + 8)];
+            let projected = f.at(0xffff_ff18);
+            e.call(
+                FUNCTION_009A8F00,
+                &args![
+                    projected,
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    sum_words[0],
+                    sum_words[1],
+                    sum_words[2],
+                    zero[0],
+                    zero[1],
+                    zero[2],
+                    step,
+                    multiplier,
+                    0u32
+                ],
+            );
+            let hit = f.at(0xffff_ff14);
+            e.mem.set_u32(hit, 0);
+            let point = [
+                e.mem.u32(projected),
+                e.mem.u32(projected + 4),
+                e.mem.u32(projected + 8),
+            ];
+            let origin = [e.mem.u32(vec_s), e.mem.u32(vec_s + 4), e.mem.u32(vec_s + 8)];
+            let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+            let clear = e
+                .call(
+                    FUNCTION_009A6E90,
+                    &args![
+                        player, base, step, origin[0], origin[1], origin[2], point[0], point[1],
+                        point[2], 0u32, hit, 0u32
+                    ],
+                )
+                .bool();
+            let target = e.mem.u32(vats_action + 0xc);
+            if !clear || e.mem.u32(hit) == target {
+                let reach = fn_009669c0(e, Ptr::new(actor));
+                found = (f64::from(step) / f64::from(reach)) as f32;
+            }
+            let fraction: f64 = e.global(STEP_FRACTION);
+            step = ((f64::from(end) - f64::from(start)) * fraction + f64::from(step)) as f32;
+        }
+        pass += 1;
+    }
+    if f64::from(found) != 0.0 {
+        let distance = e.call(READ_FLOAT_AT_D0, &args![actor]).f64();
+        let value = (distance * f64::from(found)) as f32;
+        fn_00966a00(e, Ptr::new(actor), value);
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5181,6 +7662,94 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00963eb0, fn_00963eb0(Ptr<PlayerCharacter>, u32, f32, u32)),
         entry!(0x00964060, fn_00964060(Ptr<PlayerCharacter>) -> u32),
+        entry!(0x009640b0, fn_009640b0(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00964100,
+            player_character_get_player_action(Ptr<PlayerCharacter>, u32) -> Ptr
+        ),
+        entry!(0x00964190, fn_00964190(Ptr<PlayerCharacter>)),
+        entry!(
+            0x00964260,
+            player_character_update_auto_aim_actor(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x009650a0,
+            player_character_update_image_space_ironsights(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00965240, fn_00965240(u8)),
+        entry!(0x00965250, fn_00965250(Ptr, f32)),
+        entry!(
+            0x00965270,
+            player_character_update_image_space_vats(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00965580, fn_00965580(Ptr, f32)),
+        entry!(
+            0x009655a0,
+            player_character_stop_iron_sights_image_space(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x009655e0, fn_009655e0(Ptr<PlayerCharacter>)),
+        entry!(
+            0x00965620,
+            fn_00965620(Ptr<PlayerCharacter>, u32, u32, Ptr, Ptr, u32, f32, f32)
+        ),
+        entry!(0x00966980, fn_00966980(Ptr) -> f32),
+        entry!(0x009669c0, fn_009669c0(Ptr) -> f32),
+        entry!(0x00966a00, fn_00966a00(Ptr, f32)),
+        entry!(0x00966a20, fn_00966a20(Ptr) -> f32),
+        entry!(0x00966a40, fn_00966a40() -> f32),
+        entry!(0x00966a50, fn_00966a50(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00966a70,
+            player_character_add_note(Ptr<PlayerCharacter>, u32, u8)
+        ),
+        entry!(0x00966b80, fn_00966b80(Ptr<PlayerCharacter>, u32)),
+        entry!(0x00966bb0, fn_00966bb0(Ptr<PlayerCharacter>, u32) -> u32),
+        entry!(0x00966c10, fn_00966c10(Ptr<PlayerCharacter>, u32) -> bool),
+        entry!(
+            0x00966c60,
+            player_character_get_terminal_access(Ptr<PlayerCharacter>, u32) -> u32
+        ),
+        entry!(0x00966d70, fn_00966d70(Ptr)),
+        entry!(0x00966e00, fn_00966e00(Ptr<PlayerCharacter>)),
+        entry!(0x00966e50, fn_00966e50(Ptr<PlayerCharacter>)),
+        entry!(0x00966ea0, fn_00966ea0(Ptr<PlayerCharacter>, u32, u8)),
+        entry!(0x00966f20, fn_00966f20(Ptr<PlayerCharacter>, u32, u8, u8)),
+        entry!(
+            0x00967090,
+            player_character_is_actor_perceived(Ptr<PlayerCharacter>, u32) -> Ptr
+        ),
+        entry!(0x009670f0, fn_009670f0(Ptr<PlayerCharacter>, u32) -> bool),
+        entry!(
+            0x00967160,
+            player_character_is_player_detected_by_non_teammates(Ptr<PlayerCharacter>, u32) -> bool
+        ),
+        entry!(
+            0x00967220,
+            player_character_change_perceived_actor_hostile_status(Ptr<PlayerCharacter>, u32, u8)
+        ),
+        entry!(0x00967290, fn_00967290(Ptr<PlayerCharacter>)),
+        entry!(
+            0x00967350,
+            player_character_remove_perceived_actor(Ptr<PlayerCharacter>, u32)
+        ),
+        entry!(
+            0x009673d0,
+            player_character_update_menu_mode_button(Ptr<PlayerCharacter>, f32)
+        ),
+        entry!(0x00967700, fn_00967700(Ptr) -> bool),
+        entry!(
+            0x00967730,
+            player_character_check_for_closes_conversation(u32, u32, u32)
+        ),
+        entry!(
+            0x009678a0,
+            player_character_is_standing_on_furniture(Ptr<PlayerCharacter>) -> bool
+        ),
+        entry!(0x00967950, fn_00967950(Ptr<PlayerCharacter>) -> Ptr),
+        entry!(
+            0x00967a00,
+            player_character_get_bumped_ref(Ptr<PlayerCharacter>) -> Ptr
+        ),
     ]
 }
 
@@ -10067,5 +12636,2206 @@ mod tests {
             e.call(0x0096_3eb0, &args![player, 6u32, 3.0f32, 0u32]);
         });
         assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn first_action_object_is_read_from_the_head_of_the_list() {
+        let mut e = engine(&[]);
+        let first = action(&mut e, 3, 1.0, 0x9100_0001);
+        let second = action(&mut e, 4, 1.0, 0x9100_0002);
+        let player = action_world(&mut e, &[first, second]);
+        assert_eq!(e.call(0x0096_40b0, &args![player]).u32(), 0x9100_0001);
+        let empty = e.new_object::<PlayerCharacter>();
+        assert_eq!(e.call(0x0096_40b0, &args![empty]).u32(), 0);
+        // A list whose head holds no action.
+        let blank = action_world(&mut e, &[0]);
+        assert_eq!(e.call(0x0096_40b0, &args![blank]).u32(), 0);
+    }
+
+    #[test]
+    fn get_player_action_finds_the_first_entry_of_the_type() {
+        let mut e = engine(&[]);
+        let first = action(&mut e, 3, 1.0, 0);
+        let second = action(&mut e, 4, 1.0, 0);
+        let third = action(&mut e, 4, 2.0, 0);
+        let player = action_world(&mut e, &[first, second, third]);
+        assert_eq!(e.call(0x0096_4100, &args![player, 4u32]).u32(), second);
+        assert_eq!(e.call(0x0096_4100, &args![player, 3u32]).u32(), first);
+        assert_eq!(e.call(0x0096_4100, &args![player, 9u32]).u32(), 0);
+        let empty = e.new_object::<PlayerCharacter>();
+        assert_eq!(e.call(0x0096_4100, &args![empty, 4u32]).u32(), 0);
+    }
+
+    #[test]
+    fn actor_mover_is_replaced_and_the_old_one_destroyed() {
+        let mut e = engine(&[OPERATOR_NEW, ACTOR_MOVER_NEW]);
+        answer(&mut e, SLOT_A, 0);
+        answer(&mut e, OPERATOR_NEW, 0x4000_0000);
+        e.register_double(ACTOR_MOVER_NEW, |_, a| int(a[0] + 0x10));
+        let old = object_with_slots(&mut e, &[(0, SLOT_A)]);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(player, PlayerCharacter::pActorMover, Ptr::new(old));
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_4190, &args![player]);
+        });
+        assert_eq!(calls_to(&log, SLOT_A), [[old, 1]]);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), [[0xa0]]);
+        assert_eq!(
+            calls_to(&log, ACTOR_MOVER_NEW),
+            [[0x4000_0000, player.addr()]]
+        );
+        assert_eq!(
+            e.get(player, PlayerCharacter::pActorMover).addr(),
+            0x4000_0010
+        );
+        // Without a mover nothing is destroyed.
+        let fresh = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_4190, &args![fresh]);
+        });
+        assert!(calls_to(&log, SLOT_A).is_empty());
+        assert_eq!(
+            e.get(fresh, PlayerCharacter::pActorMover).addr(),
+            0x4000_0010
+        );
+    }
+
+    #[test]
+    fn image_space_setters_store_their_floats() {
+        let mut e = engine(&[]);
+        e.call(0x0096_5240, &args![1u8]);
+        assert_eq!(e.global::<u8>(IRON_SIGHTS_ACTIVE), 1);
+        e.call(0x0096_5240, &args![0u8]);
+        assert_eq!(e.global::<u8>(IRON_SIGHTS_ACTIVE), 0);
+        let object = e.mem.alloc(0x80);
+        e.call(0x0096_5250, &args![Ptr::<()>::new(object), 1.5f32]);
+        e.call(0x0096_5580, &args![Ptr::<()>::new(object), -2.0f32]);
+        e.call(0x0096_6a00, &args![Ptr::<()>::new(object), 3.25f32]);
+        assert_eq!(e.mem.f32(object + 0x28), 1.5);
+        assert_eq!(e.mem.f32(object + 0x38), -2.0);
+        assert_eq!(e.mem.f32(object + 0xd0), 3.25);
+    }
+
+    #[test]
+    fn iron_sights_and_vats_depth_of_field_instances_are_stopped() {
+        let mut e = engine(&[IMAGE_SPACE_INSTANCE_STOP]);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(
+            player,
+            PlayerCharacter::pIronsightsDOFInstance,
+            Ptr::new(0x5000_0001),
+        );
+        e.set(
+            player,
+            PlayerCharacter::pVatsDOFInstance,
+            Ptr::new(0x5000_0002),
+        );
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_55a0, &args![player]);
+            e.call(0x0096_55e0, &args![player]);
+        });
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_INSTANCE_STOP),
+            [[0x5000_0001], [0x5000_0002]]
+        );
+        assert!(e
+            .get(player, PlayerCharacter::pIronsightsDOFInstance)
+            .is_null());
+        assert!(e.get(player, PlayerCharacter::pVatsDOFInstance).is_null());
+        // Nothing to stop the second time.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_55a0, &args![player]);
+            e.call(0x0096_55e0, &args![player]);
+        });
+        assert!(calls_to(&log, IMAGE_SPACE_INSTANCE_STOP).is_empty());
+    }
+
+    #[test]
+    fn flag_dependent_float_getter() {
+        let mut e = engine(&[FLAGS_TEST]);
+        let object = e.mem.alloc(0x80);
+        e.mem.set_f32(object + 0x64, 0.25);
+        answer(&mut e, FLAGS_TEST, 0);
+        assert_eq!(
+            e.call(0x0096_6980, &args![Ptr::<()>::new(object)]).f32(),
+            0.25
+        );
+        answer(&mut e, FLAGS_TEST, 1);
+        let log = logged(&mut e, |e| {
+            assert_eq!(
+                e.call(0x0096_6980, &args![Ptr::<()>::new(object)]).f32(),
+                1.0
+            );
+        });
+        assert_eq!(calls_to(&log, FLAGS_TEST), [[object, 0x20000]]);
+    }
+
+    #[test]
+    fn blend_function_gets_the_form_float_and_the_two_object_floats() {
+        let mut e = engine(&[GET_BASE_FORM, READ_FIELD_68, BLEND_FLOATS]);
+        answer(&mut e, GET_BASE_FORM, 0x6000_0000);
+        answer_float(&mut e, READ_FIELD_68, 0.5);
+        answer_float(&mut e, BLEND_FLOATS, 0.75);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_f32(object + 0xcc, 2.0);
+        e.mem.set_f32(object + 0xd0, 3.0);
+        let log = logged(&mut e, |e| {
+            assert_eq!(
+                e.call(0x0096_69c0, &args![Ptr::<()>::new(object)]).f32(),
+                0.75
+            );
+        });
+        assert_eq!(calls_to(&log, GET_BASE_FORM), [[object]]);
+        assert_eq!(calls_to(&log, READ_FIELD_68), [[0x6000_0000]]);
+        assert_eq!(
+            calls_to(&log, BLEND_FLOATS),
+            [[0.5f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn small_getters() {
+        let mut e = engine(&[LIST_COUNT]);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_f32(object + 0xec, 9.5);
+        assert_eq!(
+            e.call(0x0096_6a20, &args![Ptr::<()>::new(object)]).f32(),
+            9.5
+        );
+        e.set_global(0x011f_1c00, 4.5f32);
+        assert_eq!(e.call(0x0096_6a40, &args![]).f32(), 4.5);
+        answer(&mut e, LIST_COUNT, 6);
+        let player = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0096_6a50, &args![player]).u32(), 6);
+        });
+        assert_eq!(calls_to(&log, LIST_COUNT), [[player.addr() + 0x5e4]]);
+    }
+
+    const CALLEES_00966A70: &[u32] = &[
+        STRING_NEW,
+        STRING_DELETE,
+        LOG_WARNING,
+        LIST_CONTAINS,
+        LIST_APPEND,
+        GET_LOCATION_NAME,
+        SETTING_STRING,
+        STRING_FORMAT,
+        STRING_TEXT,
+        SHOW_HUD_MESSAGE,
+        FUNCTION_007052F0,
+    ];
+
+    #[test]
+    fn a_new_note_is_listed_formatted_and_announced() {
+        let mut e = engine(CALLEES_00966A70);
+        e.set_global(MESSAGE_DURATION_010162C0, 2.0f32);
+        answer(&mut e, SETTING_STRING, 0x6000_0001);
+        answer(&mut e, GET_LOCATION_NAME, 0x6000_0002);
+        answer(&mut e, STRING_TEXT, 0x6000_0003);
+        let note = 0x7000_0000u32;
+        let seen = Rc::new(Cell::new(0u32));
+        let remember = seen.clone();
+        e.register_double(LIST_CONTAINS, move |e, a| {
+            remember.set(e.mem.u32(a[1]));
+            int(0)
+        });
+        let player = e.new_object::<PlayerCharacter>();
+        let list = player.addr() + 0x5e4;
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6a70, &args![player, note, 1u8]);
+        });
+        assert_eq!(seen.get(), note);
+        let appended = calls_to(&log, LIST_APPEND);
+        assert_eq!(appended.len(), 1);
+        assert_eq!(appended[0][0], list);
+        let created = calls_to(&log, STRING_NEW);
+        assert_eq!(calls_to(&log, STRING_DELETE), created);
+        let string = created[0][0];
+        assert_eq!(
+            calls_to(&log, STRING_FORMAT),
+            [[string, 0x6000_0001, 0x6000_0002]]
+        );
+        assert_eq!(calls_to(&log, GET_LOCATION_NAME), [[note + 0x48]]);
+        assert_eq!(calls_to(&log, SETTING_STRING), [[NOTE_FORMAT_SETTING]]);
+        assert_eq!(calls_to(&log, SHOW_HUD_MESSAGE), [[0x6000_0003]]);
+        assert_eq!(
+            calls_to(&log, FUNCTION_007052F0),
+            [[0x6000_0003, 0, 0, NOTE_ADDED_SOUND, 2.0f32.to_bits(), 0]]
+        );
+        // Without the show flag the message is not shown, the sound still is.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6a70, &args![player, note, 0u8]);
+        });
+        assert!(calls_to(&log, SHOW_HUD_MESSAGE).is_empty());
+        assert_eq!(calls_to(&log, FUNCTION_007052F0).len(), 1);
+    }
+
+    #[test]
+    fn a_known_note_is_only_announced_and_a_null_note_only_logged() {
+        let mut e = engine(CALLEES_00966A70);
+        answer(&mut e, LIST_CONTAINS, 1);
+        let player = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6a70, &args![player, 0x7000_0000u32, 1u8]);
+        });
+        assert!(calls_to(&log, LIST_APPEND).is_empty());
+        assert!(calls_to(&log, STRING_FORMAT).is_empty());
+        assert!(calls_to(&log, SHOW_HUD_MESSAGE).is_empty());
+        assert_eq!(calls_to(&log, FUNCTION_007052F0).len(), 1);
+
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6a70, &args![player, 0u32, 1u8]);
+        });
+        assert_eq!(calls_to(&log, LOG_WARNING), [[NULL_NOTE_WARNING]]);
+        assert!(calls_to(&log, FUNCTION_007052F0).is_empty());
+        assert!(calls_to(&log, LIST_CONTAINS).is_empty());
+        assert_eq!(
+            calls_to(&log, STRING_NEW).len(),
+            calls_to(&log, STRING_DELETE).len()
+        );
+    }
+
+    #[test]
+    fn a_note_is_removed_from_the_display_and_the_list() {
+        let mut e = engine(&[NOTE_REMOVE_FROM_DISPLAY, LIST_REMOVE]);
+        let seen = Rc::new(Cell::new(0u32));
+        let remember = seen.clone();
+        e.register_double(LIST_REMOVE, move |e, a| {
+            remember.set(e.mem.u32(a[1]));
+            int(1)
+        });
+        let player = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6b80, &args![player, 0x7000_0010u32]);
+        });
+        assert_eq!(calls_to(&log, NOTE_REMOVE_FROM_DISPLAY), [[0x7000_0010]]);
+        assert_eq!(seen.get(), 0x7000_0010);
+        assert_eq!(calls_to(&log, LIST_REMOVE)[0][0], player.addr() + 0x5e4);
+    }
+
+    /// A player whose embedded note list holds `notes`.
+    fn note_world(e: &mut Engine, notes: &[u32]) -> Ptr<PlayerCharacter> {
+        list_accessors(e);
+        let player = e.new_object::<PlayerCharacter>();
+        if let Some((&first, rest)) = notes.split_first() {
+            let next = list_of(e, rest);
+            e.mem.set_u32(player.addr() + 0x5e4, first);
+            e.mem.set_u32(player.addr() + 0x5e8, next);
+        }
+        player
+    }
+
+    #[test]
+    fn note_by_index() {
+        let mut e = engine(&[]);
+        let player = note_world(&mut e, &[0x7000_0001, 0x7000_0002]);
+        assert_eq!(e.call(0x0096_6bb0, &args![player, 0u32]).u32(), 0x7000_0001);
+        assert_eq!(e.call(0x0096_6bb0, &args![player, 1u32]).u32(), 0x7000_0002);
+        assert_eq!(e.call(0x0096_6bb0, &args![player, 2u32]).u32(), 0);
+        let none = note_world(&mut e, &[]);
+        assert_eq!(e.call(0x0096_6bb0, &args![none, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn note_membership_asks_the_list_unless_the_note_is_null() {
+        let mut e = engine(&[LIST_CONTAINS]);
+        let seen = Rc::new(Cell::new(0u32));
+        let remember = seen.clone();
+        e.register_double(LIST_CONTAINS, move |e, a| {
+            remember.set(e.mem.u32(a[1]));
+            int(1)
+        });
+        let player = e.new_object::<PlayerCharacter>();
+        assert!(e.call(0x0096_6c10, &args![player, 0x7000_0003u32]).bool());
+        assert_eq!(seen.get(), 0x7000_0003);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0096_6c10, &args![player, 0u32]).bool());
+        });
+        assert!(calls_to(&log, LIST_CONTAINS).is_empty());
+    }
+
+    const CALLEES_00966C60: &[u32] = &[
+        READ_DWORD_AT_20,
+        RT_DYNAMIC_CAST,
+        READ_FIELD_A0,
+        LIST_CONTAINS,
+        TERMINAL_IS_HACKED,
+        TERMINAL_IS_UNLOCKED,
+        TERMINAL_IS_LOCKED_OUT,
+        TERMINAL_GET_RAW_DIFFICULTY,
+        TERMINAL_IS_HACK_ELIGIBLE,
+        ACTOR_VALUE_GET_CLAMPED,
+    ];
+
+    /// The terminal reference 0x7000_0000 with the terminal form
+    /// 0x7100_0000 and the answers of the terminal queries.
+    fn terminal_access(
+        owned: u32,
+        hacked: u32,
+        unlocked: u32,
+        locked_out: u32,
+        difficulty: u32,
+        eligible: u32,
+    ) -> (u32, Vec<Vec<u32>>) {
+        let mut e = engine(CALLEES_00966C60);
+        answer(&mut e, READ_DWORD_AT_20, 0x7200_0000);
+        answer(&mut e, RT_DYNAMIC_CAST, 0x7100_0000);
+        answer(&mut e, READ_FIELD_A0, 0x7300_0000);
+        answer(&mut e, LIST_CONTAINS, owned);
+        answer(&mut e, TERMINAL_IS_HACKED, hacked);
+        answer(&mut e, TERMINAL_IS_UNLOCKED, unlocked);
+        answer(&mut e, TERMINAL_IS_LOCKED_OUT, locked_out);
+        answer(&mut e, TERMINAL_GET_RAW_DIFFICULTY, difficulty);
+        answer(&mut e, TERMINAL_IS_HACK_ELIGIBLE, eligible);
+        answer_float(&mut e, ACTOR_VALUE_GET_CLAMPED, 25.0);
+        let player = e.new_object::<PlayerCharacter>();
+        let mut result = 0;
+        let log = logged(&mut e, |e| {
+            result = e.call(0x0096_6c60, &args![player, 0x7000_0000u32]).u32();
+        });
+        (result, log.into_iter().map(|(_, args)| args).collect())
+    }
+
+    #[test]
+    fn terminal_access_levels() {
+        // (owned note, hacked, unlocked, locked out, difficulty, eligible)
+        assert_eq!(terminal_access(1, 0, 0, 0, 0, 0).0, 0);
+        assert_eq!(terminal_access(0, 1, 0, 0, 0, 0).0, 1);
+        assert_eq!(terminal_access(0, 0, 1, 0, 0, 0).0, 1);
+        assert_eq!(terminal_access(0, 0, 0, 1, 0, 0).0, 2);
+        assert_eq!(terminal_access(0, 0, 0, 0, 5, 0).0, 2);
+        assert_eq!(terminal_access(0, 0, 0, 0, 2, 1).0, 3);
+        assert_eq!(terminal_access(0, 0, 0, 0, 2, 0).0, 4);
+    }
+
+    #[test]
+    fn terminal_access_without_a_terminal_form() {
+        let mut e = engine(CALLEES_00966C60);
+        let player = e.new_object::<PlayerCharacter>();
+        // No reference at all.
+        assert_eq!(e.call(0x0096_6c60, &args![player, 0u32]).u32(), 4);
+        // A base form that is not a terminal (the cast answers null).
+        answer(&mut e, READ_DWORD_AT_20, 0x7200_0000);
+        answer(&mut e, RT_DYNAMIC_CAST, 0);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0096_6c60, &args![player, 0x7000_0000u32]).u32(), 4);
+        });
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            [[0x7200_0000, 0, TYPE_TES_FORM, TYPE_BGS_TERMINAL, 0]]
+        );
+        // A reference with no base form.
+        answer(&mut e, READ_DWORD_AT_20, 0);
+        assert_eq!(e.call(0x0096_6c60, &args![player, 0x7000_0000u32]).u32(), 4);
+    }
+
+    #[test]
+    fn terminal_access_passes_the_skill_to_the_hack_check() {
+        let (_, calls) = terminal_access(0, 0, 0, 0, 2, 1);
+        assert!(calls.contains(&vec![0x7100_0000, 0x7000_0000, 25.0f32.to_bits()]));
+        assert!(calls.contains(&vec![0x7100_0000, 0x7000_0000]));
+    }
+
+    #[test]
+    fn form_map_walk_clears_extra_data_of_matching_references() {
+        let mut e = engine(&[
+            MAP_FIRST_ENTRY,
+            MAP_NEXT_ENTRY,
+            FORM_GET_TYPE,
+            READ_DWORD_AT_20,
+            REFERENCE_REMOVE_EXTRA_50,
+        ]);
+        e.set_global(FORM_MAP, 0x6000_0000u32);
+        // Forms: +4 is the type, +0x20 the base form.
+        let make = |e: &mut Engine, kind: u8, base_kind: u8| {
+            let base = e.mem.alloc(0x40);
+            e.mem.set_u8(base + 4, base_kind);
+            let form = e.mem.alloc(0x40);
+            e.mem.set_u8(form + 4, kind);
+            e.mem.set_u32(form + 0x20, base);
+            form
+        };
+        let wanted = make(&mut e, 0x3a, 0x17);
+        let other_base = make(&mut e, 0x3a, 0x18);
+        let other_kind = make(&mut e, 0x10, 0x17);
+        let forms = vec![wanted, other_base, other_kind];
+        e.register_double(FORM_GET_TYPE, |e, a| int(u32::from(e.mem.u8(a[0] + 4))));
+        e.register_double(READ_DWORD_AT_20, |e, a| int(e.mem.u32(a[0] + 0x20)));
+        answer(&mut e, MAP_FIRST_ENTRY, 1);
+        let table = forms.clone();
+        e.register_double(MAP_NEXT_ENTRY, move |e, a| {
+            let position = e.mem.u32(a[1]) as usize;
+            e.mem.set_u32(a[3], table[position - 1]);
+            let next = if position < 3 { position as u32 + 1 } else { 0 };
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6d70, &args![Ptr::<()>::new(0)]);
+        });
+        assert_eq!(calls_to(&log, REFERENCE_REMOVE_EXTRA_50), [[wanted]]);
+        assert_eq!(calls_to(&log, MAP_NEXT_ENTRY).len(), 3);
+    }
+
+    #[test]
+    fn steal_and_pickpocket_warnings_count_and_arm_their_timers() {
+        let mut e = engine(&[]);
+        e.set_global(DOUBLE_MINUS_ONE, -1.0f64);
+        float_settings(&mut e, &[(WARNING_TIMER_SETTING, 7.5)]);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(player, PlayerCharacter::fStealWarningTimer, -1.0);
+        e.set(player, PlayerCharacter::fPickPocketWarningTimer, 2.0);
+        e.call(0x0096_6e00, &args![player]);
+        e.call(0x0096_6e50, &args![player]);
+        assert_eq!(e.get(player, PlayerCharacter::iNumberofStealWarnings), 1);
+        assert_eq!(e.get(player, PlayerCharacter::fStealWarningTimer), 7.5);
+        assert_eq!(
+            e.get(player, PlayerCharacter::iNumberofPickpocketWarnings),
+            1
+        );
+        // A running timer is left alone; the count still grows.
+        assert_eq!(e.get(player, PlayerCharacter::fPickPocketWarningTimer), 2.0);
+        e.call(0x0096_6e00, &args![player]);
+        assert_eq!(e.get(player, PlayerCharacter::iNumberofStealWarnings), 2);
+        assert_eq!(e.get(player, PlayerCharacter::fStealWarningTimer), 7.5);
+        // The pickpocket timer is armed the same way.
+        e.set(player, PlayerCharacter::fPickPocketWarningTimer, -1.0);
+        e.call(0x0096_6e50, &args![player]);
+        assert_eq!(e.get(player, PlayerCharacter::fPickPocketWarningTimer), 7.5);
+    }
+
+    const CALLEES_00966EA0: &[u32] = &[
+        ACTOR_MOVER_SET_FLAGS,
+        PLAYER_GET_ANIMATION,
+        ANIMATION_HOLDER_GET_GROUP,
+        ANIM_GROUP_GET_TYPE,
+        ANIMATION_BLEND_OUT,
+    ];
+
+    #[test]
+    fn mover_flags_are_set_and_the_blend_out_needs_group_type_0x11() {
+        let mut e = engine(CALLEES_00966EA0);
+        let player = player_with(&mut e, &[(0x1e4, SLOT_A)], &[]);
+        let mover = e.mem.alloc(0x100);
+        e.set(player, PlayerCharacter::pActorMover, Ptr::new(mover));
+        answer(&mut e, SLOT_A, 0x6000_0001);
+        answer(&mut e, PLAYER_GET_ANIMATION, 0x6000_0002);
+        answer(&mut e, ANIMATION_HOLDER_GET_GROUP, 0x77);
+        answer(&mut e, ANIM_GROUP_GET_TYPE, 0x11);
+        // Mask without 0x400: only the flags.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6ea0, &args![player, 0x3u32, 1u8]);
+        });
+        assert_eq!(calls_to(&log, ACTOR_MOVER_SET_FLAGS), [[mover, 3, 1]]);
+        assert!(calls_to(&log, PLAYER_GET_ANIMATION).is_empty());
+        // With 0x400 and the right group type the animation is blended out.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6ea0, &args![player, 0x400u32, 0u8]);
+        });
+        assert_eq!(calls_to(&log, ACTOR_MOVER_SET_FLAGS), [[mover, 0x400, 0]]);
+        assert_eq!(
+            calls_to(&log, ANIMATION_HOLDER_GET_GROUP),
+            [[0x6000_0001, 4]]
+        );
+        assert_eq!(calls_to(&log, ANIM_GROUP_GET_TYPE), [[0x77]]);
+        assert_eq!(calls_to(&log, ANIMATION_BLEND_OUT), [[0x6000_0002, 4, 0]]);
+        // Another group type: no blend out.
+        answer(&mut e, ANIM_GROUP_GET_TYPE, 0x10);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6ea0, &args![player, 0x400u32, 0u8]);
+        });
+        assert!(calls_to(&log, ANIMATION_BLEND_OUT).is_empty());
+        // No animation at all: the group is not even asked for.
+        answer(&mut e, PLAYER_GET_ANIMATION, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6ea0, &args![player, 0x400u32, 0u8]);
+        });
+        assert!(calls_to(&log, ANIMATION_HOLDER_GET_GROUP).is_empty());
+    }
+
+    /// A player whose perceived list (`+0xd48`) holds one `ActorsNearPlayerData`
+    /// entry per `(actor, hostile, line of sight only)`; returns the entries.
+    fn perceived_world(
+        e: &mut Engine,
+        entries: &[(u32, u8, u8)],
+    ) -> (Ptr<PlayerCharacter>, Vec<u32>) {
+        list_accessors(e);
+        let player = player_with(e, &[], &[]);
+        let mut blocks = Vec::new();
+        for &(actor, hostile, sight) in entries {
+            let block = e.mem.alloc(8);
+            e.mem.set_u32(block, actor);
+            e.mem.set_u8(block + 4, hostile);
+            e.mem.set_u8(block + 5, sight);
+            blocks.push(block);
+        }
+        let list = list_of(e, &blocks);
+        e.set(
+            player,
+            PlayerCharacter::pListofPercievedActors,
+            Ptr::new(list),
+        );
+        (player, blocks)
+    }
+
+    const CALLEES_00966F20: &[u32] = &[
+        GET_BASE_FORM,
+        OPERATOR_NEW,
+        NEAR_PLAYER_DATA_NEW,
+        LIST_NEW,
+        LIST_APPEND,
+    ];
+
+    /// An actor whose virtual `+0x22c` answers `second` and whose base form
+    /// answers `first` to its subobject's virtual `+0x20`.
+    fn noticed_actor(e: &mut Engine, first: u32, second: u32) -> u32 {
+        answer(e, SLOT_A, first);
+        answer(e, SLOT_B, second);
+        let sub = object_with_slots(e, &[(0x20, SLOT_A)]);
+        let base = e.mem.alloc(0x40);
+        let vtable = e.mem.u32(sub);
+        e.mem.set_u32(base + 0x30, vtable);
+        answer(e, GET_BASE_FORM, base);
+        object_with_slots(e, &[(0x22c, SLOT_B)])
+    }
+
+    #[test]
+    fn a_noticed_actor_gets_a_new_entry_and_the_list_is_made() {
+        let mut e = engine(CALLEES_00966F20);
+        list_accessors(&mut e);
+        let actor = noticed_actor(&mut e, 0, 0);
+        let list_block = e.mem.alloc(8);
+        let entry_block = e.mem.alloc(8);
+        let mut blocks = vec![list_block, entry_block].into_iter();
+        e.register_double(OPERATOR_NEW, move |_, _| int(blocks.next().unwrap()));
+        e.register_double(LIST_NEW, |_, a| int(a[0]));
+        e.register_double(NEAR_PLAYER_DATA_NEW, |_, a| int(a[0]));
+        let player = e.new_object::<PlayerCharacter>();
+        let seen = Rc::new(Cell::new(0u32));
+        let remember = seen.clone();
+        e.register_double(LIST_APPEND, move |e, a| {
+            remember.set(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6f20, &args![player, actor, 1u8, 0u8]);
+        });
+        assert_eq!(
+            e.get(player, PlayerCharacter::pListofPercievedActors)
+                .addr(),
+            list_block
+        );
+        assert_eq!(e.mem.u32(entry_block), actor);
+        assert_eq!(e.mem.u8(entry_block + 4), 1);
+        assert_eq!(e.mem.u8(entry_block + 5), 0);
+        assert_eq!(calls_to(&log, LIST_APPEND)[0][0], list_block);
+        assert_eq!(seen.get(), entry_block);
+        assert_eq!(calls_to(&log, LIST_NEW), [[list_block]]);
+    }
+
+    #[test]
+    fn a_known_actor_is_updated_in_place_and_blocked_ones_are_ignored() {
+        let mut e = engine(CALLEES_00966F20);
+        let actor = noticed_actor(&mut e, 0, 0);
+        let (player, entries) = perceived_world(&mut e, &[(actor, 0, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6f20, &args![player, actor, 1u8, 1u8]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(e.mem.u8(entries[0] + 4), 1);
+        assert_eq!(e.mem.u8(entries[0] + 5), 1);
+        // The base form's virtual says the actor is not to be listed.
+        let mut e = engine(CALLEES_00966F20);
+        let actor = noticed_actor(&mut e, 1, 0);
+        let (player, entries) = perceived_world(&mut e, &[(actor, 0, 0)]);
+        e.call(0x0096_6f20, &args![player, actor, 1u8, 1u8]);
+        assert_eq!(e.mem.u8(entries[0] + 4), 0);
+        // So does the actor's own virtual.
+        let mut e = engine(CALLEES_00966F20);
+        let actor = noticed_actor(&mut e, 0, 1);
+        let (player, entries) = perceived_world(&mut e, &[(actor, 0, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_6f20, &args![player, actor, 1u8, 1u8]);
+        });
+        assert_eq!(e.mem.u8(entries[0] + 4), 0);
+        assert_eq!(calls_to(&log, SLOT_B), [[actor, 0]]);
+    }
+
+    #[test]
+    fn perceived_actor_lookups() {
+        let mut e = engine(&[]);
+        let (player, entries) =
+            perceived_world(&mut e, &[(0x6000_0001, 1, 0), (0x6000_0002, 0, 1)]);
+        assert_eq!(
+            e.call(0x0096_7090, &args![player, 0x6000_0002u32]).u32(),
+            entries[1]
+        );
+        assert_eq!(e.call(0x0096_7090, &args![player, 0x6000_0009u32]).u32(), 0);
+        // Entries with a line of sight only flag count as not seen.
+        assert!(e.call(0x0096_70f0, &args![player, 0x6000_0001u32]).bool());
+        assert!(!e.call(0x0096_70f0, &args![player, 0x6000_0002u32]).bool());
+        assert!(!e.call(0x0096_70f0, &args![player, 0x6000_0009u32]).bool());
+        let none = e.new_object::<PlayerCharacter>();
+        assert_eq!(e.call(0x0096_7090, &args![none, 0x6000_0001u32]).u32(), 0);
+    }
+
+    #[test]
+    fn hostile_status_of_a_perceived_actor_can_be_changed() {
+        let mut e = engine(&[]);
+        let (player, entries) =
+            perceived_world(&mut e, &[(0x6000_0001, 0, 0), (0x6000_0002, 0, 0)]);
+        e.call(0x0096_7220, &args![player, 0x6000_0002u32, 1u8]);
+        assert_eq!(e.mem.u8(entries[0] + 4), 0);
+        assert_eq!(e.mem.u8(entries[1] + 4), 1);
+        e.call(0x0096_7220, &args![player, 0x6000_0009u32, 1u8]);
+        assert_eq!(e.mem.u8(entries[0] + 4), 0);
+    }
+
+    const CALLEES_00967160: &[u32] = &[
+        ACTOR_GET_FORCE_NEXT_UPDATE,
+        ACTOR_LINE_OF_SIGHT,
+        ACTOR_GET_DETECTION_LEVEL,
+    ];
+
+    #[test]
+    fn detection_by_non_teammates() {
+        let mut e = engine(CALLEES_00967160);
+        let (player, _) = perceived_world(
+            &mut e,
+            &[
+                (0x6000_0001, 0, 0),
+                (0x6000_0002, 0, 0),
+                (0x6000_0003, 0, 0),
+            ],
+        );
+        answer(&mut e, ACTOR_LINE_OF_SIGHT, 1);
+        // Actor 1 is the excluded one, actor 2 has a forced update; only
+        // actor 3 counts and is detected.
+        e.register_double(ACTOR_GET_FORCE_NEXT_UPDATE, |_, a| {
+            int(u32::from(a[0] == 0x6000_0002))
+        });
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let remember = seen.clone();
+        e.register_double(ACTOR_GET_DETECTION_LEVEL, move |e, a| {
+            remember.borrow_mut().push((a[0], e.mem.u8(a[3])));
+            int(2)
+        });
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0096_7160, &args![player, 0x6000_0001u32]).bool());
+        });
+        assert_eq!(*seen.borrow(), [(0x6000_0003, 1)]);
+        assert_eq!(
+            calls_to(&log, ACTOR_LINE_OF_SIGHT),
+            [[0x6000_0003, 0, player.addr(), 1, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, ACTOR_GET_DETECTION_LEVEL)[0][1..3].to_vec(),
+            vec![0, player.addr()]
+        );
+        // Nobody detected: false.
+        answer(&mut e, ACTOR_GET_DETECTION_LEVEL, 0);
+        assert!(!e.call(0x0096_7160, &args![player, 0x6000_0001u32]).bool());
+        // An empty list: false.
+        let empty = e.new_object::<PlayerCharacter>();
+        assert!(!e.call(0x0096_7160, &args![empty, 0x6000_0001u32]).bool());
+    }
+
+    #[test]
+    fn the_perceived_list_is_emptied_and_deleted() {
+        let mut e = engine(&[OPERATOR_DELETE, LIST_REMOVE_NODE, LIST_DELETE]);
+        let (player, entries) =
+            perceived_world(&mut e, &[(0x6000_0001, 0, 0), (0x6000_0002, 0, 0)]);
+        // Removing a node moves the next node's item into it.
+        e.register_double(LIST_REMOVE_NODE, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let item = e.mem.u32(next);
+                let after = e.mem.u32(next + 4);
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        let list = e
+            .get(player, PlayerCharacter::pListofPercievedActors)
+            .addr();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_7290, &args![player]);
+        });
+        assert_eq!(
+            calls_to(&log, OPERATOR_DELETE),
+            [[entries[0]], [entries[1]]]
+        );
+        assert_eq!(calls_to(&log, LIST_DELETE), [[list, 1]]);
+        assert!(e
+            .get(player, PlayerCharacter::pListofPercievedActors)
+            .is_null());
+        // Nothing to do without a list.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_7290, &args![player]);
+        });
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn one_perceived_actor_is_removed() {
+        let mut e = engine(&[OPERATOR_DELETE, LIST_REMOVE_NODE]);
+        let (player, entries) =
+            perceived_world(&mut e, &[(0x6000_0001, 0, 0), (0x6000_0002, 0, 0)]);
+        let first = e
+            .get(player, PlayerCharacter::pListofPercievedActors)
+            .addr();
+        let second = e.mem.u32(first + 4);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_7350, &args![player, 0x6000_0002u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), [[entries[1]]]);
+        assert_eq!(calls_to(&log, LIST_REMOVE_NODE), [[second]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_7350, &args![player, 0x6000_0009u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn pipboy_flag_check() {
+        let mut e = engine(&[]);
+        let object = e.mem.alloc(0x200);
+        assert!(!e.call(0x0096_7700, &args![Ptr::<()>::new(object)]).bool());
+        e.mem.set_u8(object + 0x161, 1);
+        assert!(e.call(0x0096_7700, &args![Ptr::<()>::new(object)]).bool());
+        e.mem.set_u8(object + 0x161, 0);
+        e.mem.set_u8(object + 0x160, 1);
+        assert!(e.call(0x0096_7700, &args![Ptr::<()>::new(object)]).bool());
+    }
+
+    const CALLEES_00967730: &[u32] = &[
+        REFERENCE_GET_DISTANCE,
+        CONVERSATION_GET_STARTER,
+        CONVERSATION_GET_TARGET,
+    ];
+
+    /// The global player (conversation `current`) and the distances of the
+    /// references 0x6000_0001 .. 3 to it.
+    fn conversation_world(current: u32, distances: [f32; 3]) -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine(CALLEES_00967730);
+        e.set_global(FLOAT_MAX, f32::MAX);
+        e.set_global(CONVERSATION_DISTANCE, 1200.0f64);
+        let player = player_with(&mut e, &[], &[]);
+        e.mem.set_u32(player.addr() + 0x208, current);
+        e.register_double(REFERENCE_GET_DISTANCE, move |_, a| {
+            float(f64::from(distances[(a[0] - 0x6000_0001) as usize]))
+        });
+        // The current conversation 0x6100_0000: starter 3, target 2 (none for
+        // the other conversation).
+        e.register_double(CONVERSATION_GET_STARTER, |_, a| {
+            int(if a[0] == 0x6100_0000 { 0x6000_0003 } else { 0 })
+        });
+        e.register_double(CONVERSATION_GET_TARGET, |_, a| {
+            int(if a[0] == 0x6100_0000 { 0x6000_0002 } else { 0 })
+        });
+        (e, player)
+    }
+
+    #[test]
+    fn a_conversation_within_range_becomes_the_closest_one() {
+        let (mut e, player) = conversation_world(0, [500.0, 900.0, 0.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
+        // Beyond 1200: not taken.
+        let (mut e, player) = conversation_world(0, [1500.0, 1300.0, 0.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0);
+        // The smaller of the two distances counts.
+        let (mut e, player) = conversation_world(0, [1500.0, 1100.0, 0.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
+    }
+
+    #[test]
+    fn a_conversation_replaces_the_current_one_only_when_closer() {
+        // The current conversation's closest member is at 600.
+        let (mut e, player) = conversation_world(0x6100_0000, [250.0, 900.0, 600.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
+        let (mut e, player) = conversation_world(0x6100_0000, [650.0, 900.0, 600.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6100_0000);
+        // Equal distances count as closer.
+        let (mut e, player) = conversation_world(0x6100_0000, [600.0, 900.0, 600.0]);
+        e.call(
+            0x0096_7730,
+            &args![0x6000_0001u32, 0x6000_0002u32, 0x6200_0000u32],
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x208), 0x6200_0000);
+    }
+
+    #[test]
+    fn a_conversation_with_the_player_clears_the_closest_one() {
+        let (mut e, player) = conversation_world(0x6100_0000, [250.0, 900.0, 600.0]);
+        let me = player.addr();
+        e.register_double(REFERENCE_GET_DISTANCE, |_, _| float(10.0));
+        e.call(0x0096_7730, &args![me, 0x6000_0002u32, 0x6200_0000u32]);
+        assert_eq!(e.mem.u32(me + 0x208), 0);
+        e.mem.set_u32(me + 0x208, 0x6100_0000);
+        e.call(0x0096_7730, &args![0x6000_0002u32, me, 0x6200_0000u32]);
+        assert_eq!(e.mem.u32(me + 0x208), 0);
+    }
+
+    const CALLEES_FURNITURE: &[u32] = &[
+        GET_CHAR_CONTROLLER,
+        FUNCTION_00C6FD20,
+        CONTROLLER_BODY_AT_630,
+        CONTROLLER_BODY_AT_638,
+        BODY_LOOKUP_004AE750,
+        FUNCTION_004B5A20,
+        READ_FIELD_8,
+        FIND_REFERENCE_FOR_3D,
+        REFERENCE_IS_FURNITURE,
+        BODY_GET_AV_OBJECT,
+    ];
+
+    /// The body-to-reference chain: each step adds one to its argument and
+    /// `FindReferenceFor3D` knows the word 0x6400_0004.
+    fn body_chain(e: &mut Engine) {
+        answer(e, GET_CHAR_CONTROLLER, 0x6000_0000);
+        e.register_double(BODY_LOOKUP_004AE750, |_, a| int(a[0] + 1));
+        e.register_double(FUNCTION_004B5A20, |_, a| int(a[0] + 1));
+        e.register_double(READ_FIELD_8, |_, a| int(a[0] + 1));
+        e.register_double(FIND_REFERENCE_FOR_3D, |_, a| {
+            int(if a[0] == 0x6400_0004 { 0x6500_0000 } else { 0 })
+        });
+    }
+
+    #[test]
+    fn standing_on_furniture() {
+        let mut e = engine(CALLEES_FURNITURE);
+        body_chain(&mut e);
+        answer(&mut e, REFERENCE_IS_FURNITURE, 1);
+        let player = e.new_object::<PlayerCharacter>();
+        // The body 0x6400_0001 goes through three +1 steps to the word the
+        // reference lookup knows (0x6400_0004).
+        answer(&mut e, FUNCTION_00C6FD20, 0x6400_0001);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0096_78a0, &args![player]).bool());
+        });
+        assert_eq!(calls_to(&log, REFERENCE_IS_FURNITURE), [[0x6500_0000]]);
+        // Not furniture.
+        answer(&mut e, REFERENCE_IS_FURNITURE, 0);
+        assert!(!e.call(0x0096_78a0, &args![player]).bool());
+        // No body: the lookup is asked with 0 and finds nothing.
+        answer(&mut e, FUNCTION_00C6FD20, 0);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0096_78a0, &args![player]).bool());
+        });
+        assert_eq!(calls_to(&log, FIND_REFERENCE_FOR_3D), [[0]]);
+        // No controller.
+        answer(&mut e, GET_CHAR_CONTROLLER, 0);
+        assert!(!e.call(0x0096_78a0, &args![player]).bool());
+    }
+
+    #[test]
+    fn reference_of_the_second_body() {
+        let mut e = engine(CALLEES_FURNITURE);
+        body_chain(&mut e);
+        let player = e.new_object::<PlayerCharacter>();
+        answer(&mut e, FUNCTION_00C6FD20, 0x6400_0001);
+        answer(&mut e, CONTROLLER_BODY_AT_630, 0x6400_0001);
+        // Same body twice: nothing.
+        assert_eq!(e.call(0x0096_7950, &args![player]).u32(), 0);
+        // A different second body, three steps from the known word.
+        answer(&mut e, CONTROLLER_BODY_AT_630, 0x6400_0001);
+        answer(&mut e, FUNCTION_00C6FD20, 0x6400_0009);
+        assert_eq!(e.call(0x0096_7950, &args![player]).u32(), 0x6500_0000);
+        // Second body missing.
+        answer(&mut e, CONTROLLER_BODY_AT_630, 0);
+        assert_eq!(e.call(0x0096_7950, &args![player]).u32(), 0);
+        // Its chain ends in no word.
+        answer(&mut e, CONTROLLER_BODY_AT_630, 0x6400_0100);
+        assert_eq!(e.call(0x0096_7950, &args![player]).u32(), 0);
+        answer(&mut e, GET_CHAR_CONTROLLER, 0);
+        assert_eq!(e.call(0x0096_7950, &args![player]).u32(), 0);
+    }
+
+    #[test]
+    fn bumped_reference() {
+        let mut e = engine(CALLEES_FURNITURE);
+        body_chain(&mut e);
+        let player = e.new_object::<PlayerCharacter>();
+        answer(&mut e, CONTROLLER_BODY_AT_638, 0x6600_0000);
+        // The scene object of the bumped body is the word the lookup knows.
+        answer(&mut e, BODY_GET_AV_OBJECT, 0x6400_0004);
+        // The reference whose virtual +0x100 decides.
+        let reference = object_with_slots(&mut e, &[(0x100, SLOT_A)]);
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            int(if a[0] == 0x6400_0004 { reference } else { 0 })
+        });
+        answer(&mut e, SLOT_A, 1);
+        assert_eq!(e.call(0x0096_7a00, &args![player]).u32(), reference);
+        answer(&mut e, SLOT_A, 0);
+        assert_eq!(e.call(0x0096_7a00, &args![player]).u32(), 0);
+        // No bumped body: the lookup gets 0 and finds nothing.
+        answer(&mut e, CONTROLLER_BODY_AT_638, 0);
+        assert_eq!(e.call(0x0096_7a00, &args![player]).u32(), 0);
+        answer(&mut e, GET_CHAR_CONTROLLER, 0);
+        assert_eq!(e.call(0x0096_7a00, &args![player]).u32(), 0);
+    }
+
+    const CALLEES_009650A0: &[u32] = &[
+        IMAGE_SPACE_DOF_TRIGGER,
+        IMAGE_SPACE_INSTANCE_SET_ACTIVE,
+        READ_FLOAT_AT_C,
+        ACTOR_GET_IRON_SIGHTS,
+        CLAMP_FLOAT_IN_PLACE,
+        SET_FLOAT_AT_C,
+        SETTING_FLOAT_VALUE,
+        SETTING_FLOAT,
+    ];
+
+    /// The real clamp: `*value` limited to `minimum ..= maximum`.
+    fn clamp_double(e: &mut Engine) {
+        e.register_double(CLAMP_FLOAT_IN_PLACE, |e, a| {
+            let value = e.mem.f32(a[0]);
+            let minimum = f32::from_bits(a[1]);
+            let maximum = f32::from_bits(a[2]);
+            if value <= maximum {
+                if value < minimum {
+                    e.mem.set_f32(a[0], minimum);
+                }
+            } else {
+                e.mem.set_f32(a[0], maximum);
+            }
+            Ret::default()
+        });
+    }
+
+    /// `READ_FLOAT_AT_C` answering the frame time for the frame time object
+    /// and the strength kept per image space instance otherwise.
+    fn strengths(e: &mut Engine, frame_time: f64, instances: &[(u32, f64)]) {
+        let table: HashMap<u32, f64> = instances.iter().copied().collect();
+        e.register_double(READ_FLOAT_AT_C, move |_, a| {
+            if a[0] == FRAME_TIME_OBJECT {
+                float(frame_time)
+            } else {
+                float(table.get(&a[0]).copied().unwrap_or(0.0))
+            }
+        });
+    }
+
+    #[test]
+    fn iron_sights_instance_is_made_and_the_strength_moves_to_the_limit() {
+        let mut e = engine(CALLEES_009650A0);
+        float_settings(
+            &mut e,
+            &[
+                (SETTING_011CFD70, 8.0),
+                (SETTING_011CF8C8, 9.0),
+                (SETTING_011CE6B4, 0.5),
+                (SETTING_011CE4D4, 3.0),
+                (SETTING_011CEDF4, 0.5),
+            ],
+        );
+        clamp_double(&mut e);
+        let instance = e.mem.alloc(0x80);
+        answer(&mut e, IMAGE_SPACE_DOF_TRIGGER, instance);
+        strengths(&mut e, 0.1, &[(instance, 0.0)]);
+        answer(&mut e, ACTOR_GET_IRON_SIGHTS, 1);
+        answer_float(&mut e, SETTING_FLOAT_VALUE, 3.0);
+        let player = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_50a0, &args![player]);
+        });
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_DOF_TRIGGER),
+            [[
+                9.0f32.to_bits(),
+                8.0f32.to_bits(),
+                4,
+                0.0f32.to_bits(),
+                0.0f32.to_bits(),
+                0.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_INSTANCE_SET_ACTIVE),
+            [[instance, 1]]
+        );
+        assert_eq!(
+            e.get(player, PlayerCharacter::pIronsightsDOFInstance)
+                .addr(),
+            instance
+        );
+        // Target 0.5, strength 0 plus 0.1 / 0.5 clamped into 0 ..= 0.5.
+        assert_eq!(
+            calls_to(&log, SET_FLOAT_AT_C),
+            [[instance, 0.2f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, CLAMP_FLOAT_IN_PLACE)[0][1..],
+            [0.0f32.to_bits(), 0.5f32.to_bits()]
+        );
+        assert_eq!(e.global::<u8>(IRON_SIGHTS_ACTIVE), 1);
+        assert_eq!(e.mem.f32(instance + 0x28), 3.0);
+    }
+
+    #[test]
+    fn iron_sights_strength_falls_back_without_the_sights() {
+        let mut e = engine(CALLEES_009650A0);
+        float_settings(&mut e, &[(SETTING_011CE6B4, 0.5), (SETTING_011CEDF4, 0.5)]);
+        clamp_double(&mut e);
+        let instance = e.mem.alloc(0x80);
+        strengths(&mut e, 0.1, &[(instance, 0.3)]);
+        answer(&mut e, ACTOR_GET_IRON_SIGHTS, 1);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(
+            player,
+            PlayerCharacter::pIronsightsDOFInstance,
+            Ptr::new(instance),
+        );
+        e.set_global(IRON_SIGHTS_ACTIVE, 1u8);
+        // Third person: the sights do not count.
+        e.set(player, PlayerCharacter::b3rdPerson, 1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_50a0, &args![player]);
+        });
+        assert!(calls_to(&log, IMAGE_SPACE_DOF_TRIGGER).is_empty());
+        assert_eq!(e.global::<u8>(IRON_SIGHTS_ACTIVE), 0);
+        // 0.3 - 0.2 = 0.1.
+        let stored = calls_to(&log, SET_FLOAT_AT_C);
+        assert_eq!(stored.len(), 1);
+        assert!((f32::from_bits(stored[0][1]) - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn iron_sights_strength_at_its_target_is_not_stepped() {
+        let mut e = engine(CALLEES_009650A0);
+        float_settings(&mut e, &[(SETTING_011CE6B4, 0.5)]);
+        let instance = e.mem.alloc(0x80);
+        strengths(&mut e, 0.1, &[(instance, 0.0)]);
+        answer(&mut e, ACTOR_GET_IRON_SIGHTS, 0);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(
+            player,
+            PlayerCharacter::pIronsightsDOFInstance,
+            Ptr::new(instance),
+        );
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_50a0, &args![player]);
+        });
+        assert!(calls_to(&log, CLAMP_FLOAT_IN_PLACE).is_empty());
+        assert_eq!(calls_to(&log, SET_FLOAT_AT_C), [[instance, 0]]);
+    }
+
+    const CALLEES_00965270: &[u32] = &[
+        IMAGE_SPACE_DOF_TRIGGER,
+        IMAGE_SPACE_DRB_TRIGGER,
+        NI_POINT2_NEW,
+        IMAGE_SPACE_INSTANCE_SET_ACTIVE,
+        READ_FLOAT_AT_C,
+        READ_FIELD_8,
+        VECTOR_SUBTRACT,
+        VECTOR_LENGTH,
+        CLAMP_FLOAT_IN_PLACE,
+        SET_FLOAT_AT_C,
+        SET_FLOAT_AT_20,
+        SETTING_FLOAT,
+    ];
+
+    fn vats_settings(e: &mut Engine) {
+        float_settings(
+            e,
+            &[
+                (SETTING_011CFE20, 2.0),
+                (SETTING_011CF38C, 3.0),
+                (SETTING_011CEC04, 4.0),
+                (SETTING_011CFCC8, 0.8),
+                (SETTING_011CE924, 0.6),
+                (SETTING_011CF4F8, 0.5),
+            ],
+        );
+    }
+
+    #[test]
+    fn vats_instances_are_made_when_missing() {
+        let mut e = engine(CALLEES_00965270);
+        vats_settings(&mut e);
+        e.set_global(POINT_SCALE_01016248, 0.25f32);
+        let dof = e.mem.alloc(0x80);
+        let drb = e.mem.alloc(0x80);
+        answer(&mut e, IMAGE_SPACE_DOF_TRIGGER, dof);
+        answer(&mut e, IMAGE_SPACE_DRB_TRIGGER, drb);
+        strengths(&mut e, 0.1, &[]);
+        let player = e.new_object::<PlayerCharacter>();
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_5270, &args![player]);
+        });
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_DOF_TRIGGER),
+            [[
+                0,
+                2.0f32.to_bits(),
+                0,
+                0.0f32.to_bits(),
+                0.0f32.to_bits(),
+                0.0f32.to_bits()
+            ]]
+        );
+        let point = calls_to(&log, NI_POINT2_NEW)[0][0];
+        assert_eq!(
+            calls_to(&log, NI_POINT2_NEW),
+            [[point, 0.25f32.to_bits(), 0.25f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_DRB_TRIGGER),
+            [[
+                0,
+                2.0f32.to_bits(),
+                0,
+                0.0f32.to_bits(),
+                4.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0.0f32.to_bits(),
+                0.0f32.to_bits(),
+                point,
+                0.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&log, IMAGE_SPACE_INSTANCE_SET_ACTIVE),
+            [[dof, 1], [drb, 1]]
+        );
+        assert_eq!(e.get(player, PlayerCharacter::pVatsDOFInstance).addr(), dof);
+        assert_eq!(e.get(player, PlayerCharacter::pVatsDRBInstance).addr(), drb);
+    }
+
+    #[test]
+    fn vats_strengths_follow_the_targets_and_the_fade_is_the_distance() {
+        let mut e = engine(CALLEES_00965270);
+        vats_settings(&mut e);
+        let dof = e.mem.alloc(0x80);
+        let drb = e.mem.alloc(0x80);
+        strengths(&mut e, 0.1, &[(dof, 0.0), (drb, 0.7)]);
+        clamp_double(&mut e);
+        // Mode 2 and a target object whose position the virtual +0x1f4 gives.
+        e.register_double(READ_FIELD_8, |_, a| {
+            int(if a[0] == OBJECT_011F2250 { 2 } else { 0 })
+        });
+        let target = object_with_slots(&mut e, &[(0x1f4, SLOT_A)]);
+        e.set_global(POINTER_011F21CC, target);
+        answer(&mut e, SLOT_A, 0x6000_0010);
+        let player = player_with(&mut e, &[(0x1f4, SLOT_B)], &[]);
+        answer(&mut e, SLOT_B, 0x6000_0020);
+        e.register_double(VECTOR_SUBTRACT, |_, a| int(a[1]));
+        answer_float(&mut e, VECTOR_LENGTH, 5.0);
+        e.set(player, PlayerCharacter::pVatsDOFInstance, Ptr::new(dof));
+        e.set(player, PlayerCharacter::pVatsDRBInstance, Ptr::new(drb));
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_5270, &args![player]);
+        });
+        let difference = calls_to(&log, VECTOR_SUBTRACT)[0].clone();
+        assert_eq!(difference[0], 0x6000_0010);
+        assert_eq!(difference[2], 0x6000_0020);
+        // Depth of field climbs to 0.6, the DRB falls from 0.7 towards 0.8
+        // (0.7 + 0.2 clamped to its limit 0.8 gives 0.8).
+        let stored = calls_to(&log, SET_FLOAT_AT_C);
+        assert_eq!(stored[0], vec![dof, 0.2f32.to_bits()]);
+        assert_eq!(stored[1], vec![drb, 0.8f32.to_bits()]);
+        assert_eq!(calls_to(&log, SET_FLOAT_AT_20), [[dof, 5.0f32.to_bits()]]);
+        assert_eq!(e.mem.f32(drb + 0x38), 5.0);
+    }
+
+    #[test]
+    fn vats_targets_are_zero_outside_the_modes() {
+        let mut e = engine(CALLEES_00965270);
+        vats_settings(&mut e);
+        let dof = e.mem.alloc(0x80);
+        let drb = e.mem.alloc(0x80);
+        strengths(&mut e, 0.1, &[(dof, 0.5), (drb, 0.0)]);
+        clamp_double(&mut e);
+        let player = e.new_object::<PlayerCharacter>();
+        e.set(player, PlayerCharacter::pVatsDOFInstance, Ptr::new(dof));
+        e.set(player, PlayerCharacter::pVatsDRBInstance, Ptr::new(drb));
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_5270, &args![player]);
+        });
+        // The depth of field falls by 0.2 to 0.3; the DRB is already at 0.
+        let stored = calls_to(&log, SET_FLOAT_AT_C);
+        assert_eq!(stored.len(), 2);
+        assert!((f32::from_bits(stored[0][1]) - 0.3).abs() < 1e-6);
+        assert_eq!(stored[1], vec![drb, 0]);
+        assert_eq!(calls_to(&log, CLAMP_FLOAT_IN_PLACE).len(), 1);
+        assert!(calls_to(&log, VECTOR_SUBTRACT).is_empty());
+    }
+
+    const CALLEES_009673D0: &[u32] = &[
+        FUNCTION_00877720,
+        CONTROL_QUERY,
+        SETTING_FLOAT,
+        INTERFACE_GET_PIPBOY,
+        PIPBOY_IS_ACTIVE,
+        GET_LIGHT_TARGET_OWNER,
+        MAGIC_TARGET_IS_SPELL_TARGET,
+        PIPBOY_SHOW_LIGHT_EFFECT,
+        AUDIO_INSTANCE,
+        AUDIO_GET_SOUND_HANDLE_BY_NAME,
+        SOUND_HANDLE_PLAY,
+        EMPTY_DESTRUCTOR,
+        MAGIC_TARGET_DISPEL,
+        PLAYER_HAS_CONTROL_BITS,
+    ];
+
+    /// The menu mode button world: `held` says for the control states 0, 1
+    /// and 2 whether the control query answers yes; the Pipboy manager is
+    /// `active` and has `flags` in its two flag bytes; the threshold setting
+    /// is 1.0.
+    fn menu_button_world(
+        held: [bool; 3],
+        active: bool,
+        flags: u8,
+        spell_target: bool,
+        player_bits: bool,
+    ) -> (Engine, Ptr<PlayerCharacter>, u32) {
+        let mut e = engine(CALLEES_009673D0);
+        float_settings(&mut e, &[(SETTING_011CD098, 1.0)]);
+        let pipboy = e.mem.alloc(0x200);
+        e.mem.set_u8(pipboy + 0x160, flags);
+        answer(&mut e, INTERFACE_GET_PIPBOY, pipboy);
+        answer(&mut e, PIPBOY_IS_ACTIVE, u32::from(active));
+        e.register_double(CONTROL_QUERY, move |_, a| {
+            int(u32::from(held[a[2] as usize]))
+        });
+        answer(&mut e, FUNCTION_00877720, 0x6000_0001);
+        answer(&mut e, GET_LIGHT_TARGET_OWNER, 0x6100_0000);
+        answer(
+            &mut e,
+            MAGIC_TARGET_IS_SPELL_TARGET,
+            u32::from(spell_target),
+        );
+        answer(&mut e, PLAYER_HAS_CONTROL_BITS, u32::from(player_bits));
+        answer(&mut e, AUDIO_INSTANCE, 0x6200_0000);
+        e.register_double(AUDIO_GET_SOUND_HANDLE_BY_NAME, |_, a| int(a[1]));
+        answer(&mut e, SLOT_A, 0);
+        let caster = object_with_slots(&mut e, &[(0, SLOT_A)]);
+        let player = player_with(&mut e, &[], &[]);
+        let caster_vtable = e.mem.u32(caster);
+        e.mem
+            .set_u32(player.addr() + MAGIC_CASTER_OFFSET, caster_vtable);
+        (e, player, pipboy)
+    }
+
+    #[test]
+    fn holding_the_button_in_state_two_below_the_threshold_clicks_it() {
+        let (mut e, player, _) = menu_button_world([false, false, true], true, 0, false, false);
+        e.set(player, PlayerCharacter::fMenuModeButtonTimer, 0.5);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.25f32]);
+        });
+        assert_eq!(e.get(player, PlayerCharacter::bMenuModeButtonClicked), 1);
+        assert_eq!(e.get(player, PlayerCharacter::fMenuModeButtonTimer), 0.5);
+        assert_eq!(calls_to(&log, CONTROL_QUERY), [[0x6000_0001, 0xe, 2]]);
+        assert!(calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT).is_empty());
+    }
+
+    #[test]
+    fn releasing_the_button_clears_the_click_the_timer_and_the_fired_byte() {
+        let (mut e, player, _) = menu_button_world([false; 3], true, 0, false, false);
+        e.set(player, PlayerCharacter::fMenuModeButtonTimer, 0.75);
+        e.set(player, PlayerCharacter::bMenuModeButtonClicked, 1);
+        e.set_global(MENU_MODE_BUTTON_FIRED, 1u8);
+        e.call(0x0096_73d0, &args![player, 0.25f32]);
+        assert_eq!(e.get(player, PlayerCharacter::bMenuModeButtonClicked), 0);
+        assert_eq!(e.get(player, PlayerCharacter::fMenuModeButtonTimer), 0.0);
+        assert_eq!(e.global::<u8>(MENU_MODE_BUTTON_FIRED), 0);
+    }
+
+    #[test]
+    fn a_long_press_switches_the_pipboy_light_off_when_it_is_a_spell_target() {
+        let (mut e, player, pipboy) = menu_button_world([false, true, false], true, 0, true, false);
+        e.set(player, PlayerCharacter::fMenuModeButtonTimer, 0.75);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert_eq!(e.get(player, PlayerCharacter::fMenuModeButtonTimer), 1.25);
+        assert_eq!(
+            calls_to(&log, MAGIC_TARGET_IS_SPELL_TARGET),
+            [[player.addr() + 0x94, 0x6100_0018, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT),
+            [[pipboy, 1, 0, 1], [pipboy, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, AUDIO_GET_SOUND_HANDLE_BY_NAME)[0][2..],
+            [PIPBOY_LIGHT_OFF_SOUND, 0x121]
+        );
+        assert_eq!(calls_to(&log, SOUND_HANDLE_PLAY).len(), 1);
+        assert_eq!(calls_to(&log, EMPTY_DESTRUCTOR).len(), 1);
+        assert_eq!(
+            calls_to(&log, MAGIC_TARGET_DISPEL),
+            [[player.addr() + 0x94, 0x6100_0018, 0, 0]]
+        );
+        assert_eq!(e.global::<u8>(MENU_MODE_BUTTON_FIRED), 1);
+        assert!(calls_to(&log, SLOT_A).is_empty());
+    }
+
+    #[test]
+    fn a_long_press_switches_the_pipboy_light_on_through_the_caster() {
+        let (mut e, player, pipboy) =
+            menu_button_world([true, false, false], true, 0, false, false);
+        e.set(player, PlayerCharacter::fMenuModeButtonTimer, 0.75);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert_eq!(
+            calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT),
+            [[pipboy, 1, 1, 1], [pipboy, 0, 1, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, AUDIO_GET_SOUND_HANDLE_BY_NAME)[0][2..],
+            [PIPBOY_LIGHT_ON_SOUND, 0x121]
+        );
+        assert_eq!(
+            calls_to(&log, SLOT_A),
+            [[player.addr() + MAGIC_CASTER_OFFSET, 0x6100_0000, 0]]
+        );
+        assert!(calls_to(&log, MAGIC_TARGET_DISPEL).is_empty());
+        assert_eq!(e.global::<u8>(MENU_MODE_BUTTON_FIRED), 1);
+    }
+
+    #[test]
+    fn a_long_press_with_a_player_state_bit_only_marks_the_press_as_handled() {
+        let (mut e, player, _) = menu_button_world([true, false, false], true, 0, false, true);
+        e.set(player, PlayerCharacter::fMenuModeButtonTimer, 0.75);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert_eq!(
+            calls_to(&log, PLAYER_HAS_CONTROL_BITS),
+            [[player.addr(), 4]]
+        );
+        assert!(calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT).is_empty());
+        assert_eq!(e.global::<u8>(MENU_MODE_BUTTON_FIRED), 1);
+        // The press is not handled twice.
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert!(calls_to(&log, PLAYER_HAS_CONTROL_BITS).is_empty());
+    }
+
+    #[test]
+    fn the_pipboy_light_effects_are_cleared_when_its_flags_stay_set_without_the_pipboy() {
+        let (mut e, player, pipboy) = menu_button_world([false; 3], false, 1, false, false);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert_eq!(
+            calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT),
+            [[pipboy, 1, 0, 1], [pipboy, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, MAGIC_TARGET_DISPEL),
+            [[player.addr() + 0x94, 0x6100_0018, 0, 0]]
+        );
+        // With the Pipboy in use nothing happens.
+        let (mut e, player, _) = menu_button_world([false; 3], true, 1, false, false);
+        let log = logged(&mut e, |e| {
+            e.call(0x0096_73d0, &args![player, 0.5f32]);
+        });
+        assert!(calls_to(&log, PIPBOY_SHOW_LIGHT_EFFECT).is_empty());
+    }
+
+    const SLOT_G: u32 = 0x7000_0007;
+    const SLOT_H: u32 = 0x7000_0008;
+    const SLOT_I: u32 = 0x7000_0009;
+    const SLOT_J: u32 = 0x7000_000a;
+
+    /// Every callee of `PlayerCharacter::UpdateAutoAimActor` and of the two
+    /// image space updates it runs at its end.
+    fn auto_aim_callees() -> Vec<u32> {
+        let mut all = vec![
+            GET_CAMERA_HOLDER,
+            READ_DWORD_AT_AC,
+            NI_POINT2_NEW,
+            ADD_4_TO_ADDRESS,
+            FUNCTION_005BE5C0,
+            PICK_RESULT_GET,
+            GET_CURRENT_PROCESS_TYPE,
+            VECTOR_SUBTRACT,
+            VECTOR_LENGTH,
+            IDENTITY_006815C0,
+            NODE_GET_WORLD_BOUND,
+            SCREEN_SPACE_BOUND_BOUND,
+            ACTOR_LINE_OF_SIGHT,
+            FUNCTION_004A3C20,
+            FUNCTION_0062A190,
+            FUNCTION_0059CEB0,
+            FUNCTION_00416870,
+            READ_FIELD_8,
+            FUNCTION_0070C3B0,
+            FUNCTION_004A0C90,
+            MOBILE_OBJECT_GET_LOOKING,
+            MATRIX_MAKE_X_ROTATION,
+            MATRIX_MULTIPLY,
+            FUNCTION_004B4500,
+            VECTOR_ADD,
+            FUNCTION_00461130,
+            FUNCTION_005DF560,
+            FUNCTION_005DF510,
+            FUNCTION_005DF5B0,
+            FUNCTION_004A3DA0,
+            FUNCTION_004A3EB0,
+            FUNCTION_00931ED0,
+            FUNCTION_008C71B0,
+            FUNCTION_004A39F0,
+            FUNCTION_004A3A20,
+            FUNCTION_0059CE80,
+            FUNCTION_004A3F70,
+            FUNCTION_00888960,
+            WORLD_SET_PICK_COUNT_OVERRIDE,
+            TES_PICK,
+            FIND_REFERENCE_FOR_3D,
+            SMART_POINTER_ASSIGN,
+            FUNCTION_0045BB20,
+            PLAYER_GET_PROCESS,
+            WEAPON_IS_MELEE_TYPE,
+            FUNCTION_004B71D0,
+            ADD_8C_TO_ADDRESS,
+            GLOBAL_OBJECT_GETTER,
+            READ_FLOAT_AT_40,
+            READ_FLOAT_AT_38,
+            WINDOW_POINT_TO_RAY,
+            FUNCTION_008CFBC0,
+            FUNCTION_008B3EF0,
+            FUNCTION_007F3B40,
+            GET_BASE_FORM,
+            BODY_PART_DATA_GET_BODY_PART,
+            FUNCTION_005E5190,
+            ACTOR_GET_CURRENT_WEAPON,
+            FUNCTION_0059CEE0,
+        ];
+        all.extend_from_slice(CALLEES_009650A0);
+        all.extend_from_slice(CALLEES_00965270);
+        all
+    }
+
+    /// The auto aim fixture: a player (3D node, position, a perceived list
+    /// with the one `actor`) scanning a process list of that one actor.
+    struct AutoAim {
+        e: Engine,
+        player: Ptr<PlayerCharacter>,
+        actor: u32,
+    }
+
+    const AIM_NODE: u32 = 0x6000_0003;
+    const AIM_CAMERA: u32 = 0x6000_0006;
+
+    fn auto_aim_world(hostile: u8, distance: f64) -> AutoAim {
+        let mut e = engine(&auto_aim_callees());
+        list_accessors(&mut e);
+        e.set_global(DOUBLE_MINUS_ONE, -1.0f64);
+        e.set_global(DOUBLE_ONE, 1.0f64);
+        e.set_global(AIM_BOX_SCALE_01023B88, 1.0f64);
+        float_settings(
+            &mut e,
+            &[(SETTING_011CED64, 5000.0), (SETTING_011CEFA4, 0.5)],
+        );
+        let own_position = e.mem.alloc(12);
+        let actor_position = e.mem.alloc(12);
+        let radius = e.mem.alloc(4);
+        e.mem.set_f32(radius, 2.0);
+        answer(&mut e, SLOT_A, AIM_NODE);
+        answer(&mut e, SLOT_B, own_position);
+        answer(&mut e, SLOT_C, 1);
+        answer(&mut e, SLOT_D, 0);
+        answer(&mut e, SLOT_F, actor_position);
+        answer(&mut e, SLOT_G, radius);
+        answer(&mut e, SLOT_H, 0);
+        let player = player_with(
+            &mut e,
+            &[(0x1d0, SLOT_A), (0x1f4, SLOT_B)],
+            &[(0x148, SLOT_H)],
+        );
+        let actor = object_with_slots(
+            &mut e,
+            &[
+                (0x100, SLOT_C),
+                (0x22c, SLOT_D),
+                (0x1d0, SLOT_A),
+                (0x1f4, SLOT_F),
+                (0x1dc, SLOT_G),
+            ],
+        );
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry, actor);
+        e.mem.set_u8(entry + 4, hostile);
+        let list = list_of(&mut e, &[entry]);
+        e.set(
+            player,
+            PlayerCharacter::pListofPercievedActors,
+            Ptr::new(list),
+        );
+        let process = object_with_slots(&mut e, &[(0x148, SLOT_H)]);
+        answer(&mut e, PLAYER_GET_PROCESS, process);
+        answer(&mut e, ADD_4_TO_ADDRESS, 0x6000_0010);
+        answer(&mut e, FUNCTION_005BE5C0, 1);
+        answer(&mut e, PICK_RESULT_GET, actor);
+        for address in [
+            VECTOR_SUBTRACT,
+            VECTOR_ADD,
+            FUNCTION_004B4500,
+            MATRIX_MULTIPLY,
+            FUNCTION_0045BB20,
+        ] {
+            e.register_double(address, |_, a| int(a[1]));
+        }
+        answer_float(&mut e, VECTOR_LENGTH, distance);
+        let bound = e.mem.alloc(16);
+        answer(&mut e, NODE_GET_WORLD_BOUND, bound);
+        answer(&mut e, GET_CAMERA_HOLDER, 0x6000_0005);
+        answer(&mut e, READ_DWORD_AT_AC, AIM_CAMERA);
+        answer(&mut e, ACTOR_LINE_OF_SIGHT, 1);
+        let matrix = e.mem.alloc(36);
+        answer(&mut e, FUNCTION_00461130, matrix);
+        let position = e.mem.alloc(12);
+        answer(&mut e, FUNCTION_005DF5B0, position);
+        let dof = e.mem.alloc(0x80);
+        let drb = e.mem.alloc(0x80);
+        answer(&mut e, IMAGE_SPACE_DOF_TRIGGER, dof);
+        answer(&mut e, IMAGE_SPACE_DRB_TRIGGER, drb);
+        AutoAim { e, player, actor }
+    }
+
+    #[test]
+    fn auto_aim_does_nothing_without_a_3d_node() {
+        let mut world = auto_aim_world(1, 100.0);
+        answer(&mut world.e, SLOT_A, 0);
+        let player = world.player;
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        // The call itself and the one virtual.
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn auto_aim_picks_the_visible_hostile_actor_in_range() {
+        let mut world = auto_aim_world(1, 100.0);
+        let (player, actor) = (world.player, world.actor);
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        let e = &mut world.e;
+        assert_eq!(
+            e.get(player, PlayerCharacter::pPlayersTargetActor).addr(),
+            actor
+        );
+        assert_eq!(e.get(player, PlayerCharacter::pAutoAimActor).addr(), actor);
+        assert_eq!(e.get(player, PlayerCharacter::bTarget3DDistant), 0);
+        // The box is the setting scaled by the double: -0.5 and 0.5.
+        let point = calls_to(&log, NI_POINT2_NEW)[0].clone();
+        assert_eq!(point[1..], [(-0.5f32).to_bits(), 0.5f32.to_bits()]);
+        // Both screen space bounds are asked for with the camera, the second
+        // one with the radius the actor's virtual +0x1dc gave.
+        let bounds = calls_to(&log, SCREEN_SPACE_BOUND_BOUND);
+        assert_eq!(bounds.len(), 2);
+        assert_eq!(bounds[0][0], AIM_CAMERA);
+        assert_eq!(bounds[1][1], bounds[0][1]);
+        assert_eq!(
+            calls_to(&log, SET_FLOAT_AT_C)[0],
+            vec![bounds[0][1], 2.0f32.to_bits()]
+        );
+        assert_eq!(
+            calls_to(&log, ACTOR_LINE_OF_SIGHT),
+            [[player.addr(), 0, actor, 1, 0, 0]]
+        );
+        let query = calls_to(&log, FUNCTION_0062A190)[0].clone();
+        assert_eq!(query[1..], [0x25, actor]);
+        assert_eq!(
+            calls_to(&log, FUNCTION_0059CEB0),
+            [[calls_to(&log, FUNCTION_004A3C20)[0][0], query[0]]]
+        );
+        assert_eq!(calls_to(&log, FUNCTION_0059CEE0), [[query[0]]]);
+    }
+
+    #[test]
+    fn auto_aim_keeps_a_friendly_actor_as_target_but_not_as_the_best_one() {
+        let mut world = auto_aim_world(0, 100.0);
+        let (player, actor) = (world.player, world.actor);
+        world.e.call(0x0096_4260, &args![player]);
+        let e = &mut world.e;
+        assert_eq!(
+            e.get(player, PlayerCharacter::pPlayersTargetActor).addr(),
+            actor
+        );
+        assert!(e.get(player, PlayerCharacter::pAutoAimActor).is_null());
+    }
+
+    #[test]
+    fn auto_aim_ignores_actors_out_of_range_or_off_screen() {
+        let mut world = auto_aim_world(1, 6000.0);
+        let player = world.player;
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        assert!(calls_to(&log, SCREEN_SPACE_BOUND_BOUND).is_empty());
+        assert!(world
+            .e
+            .get(player, PlayerCharacter::pPlayersTargetActor)
+            .is_null());
+
+        // On range, but the second bound covers the whole screen.
+        let mut world = auto_aim_world(1, 100.0);
+        let player = world.player;
+        let mut calls = 0;
+        world
+            .e
+            .register_double(SCREEN_SPACE_BOUND_BOUND, move |e, a| {
+                calls += 1;
+                if calls == 2 {
+                    e.mem.set_f32(a[2], -1.0);
+                    e.mem.set_f32(a[3], 1.0);
+                }
+                Ret::default()
+            });
+        let log = logged(&mut world.e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        assert!(calls_to(&log, ACTOR_LINE_OF_SIGHT).is_empty());
+        assert!(world
+            .e
+            .get(player, PlayerCharacter::pPlayersTargetActor)
+            .is_null());
+        assert!(world
+            .e
+            .get(player, PlayerCharacter::pAutoAimActor)
+            .is_null());
+    }
+
+    #[test]
+    fn auto_aim_rechecks_the_picked_actor_with_a_camera_ray() {
+        let mut world = auto_aim_world(1, 100.0);
+        let (player, actor) = (world.player, world.actor);
+        let e = &mut world.e;
+        let picked = 0x6000_0009u32;
+        answer(e, TES_PICK, picked);
+        let second = object_with_slots(e, &[(0x100, SLOT_I)]);
+        answer(e, SLOT_I, 1);
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            int(match a[0] {
+                0x6000_0009 => actor,
+                0x6b00_0000 => second,
+                _ => 0,
+            })
+        });
+        let screen = e.mem.alloc(0x40);
+        e.mem.set_u32(screen + 0x18, 50);
+        answer(e, GLOBAL_OBJECT_GETTER, screen);
+        answer_float(e, READ_FLOAT_AT_40, 10.75);
+        answer_float(e, READ_FLOAT_AT_38, 20.5);
+        answer(e, FUNCTION_008CFBC0, 0x6b00_0000);
+        let log = logged(e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        let ray = calls_to(&log, WINDOW_POINT_TO_RAY)[0].clone();
+        assert_eq!(ray[..3], [AIM_CAMERA, 20, 10]);
+        assert_eq!(ray[5], 0);
+        let cast = calls_to(&log, FUNCTION_008CFBC0)[0].clone();
+        assert_eq!(cast[0], AIM_NODE);
+        assert_eq!(cast[8], 0);
+        assert_eq!(
+            e.get(player, PlayerCharacter::pPlayersTargetActor).addr(),
+            second
+        );
+        assert_eq!(e.get(player, PlayerCharacter::pAutoAimActor).addr(), actor);
+        assert_eq!(
+            calls_to(&log, SMART_POINTER_ASSIGN),
+            [[player.addr() + 0xd3c, picked]]
+        );
+        // The picked actor is 100 away, the screen object's word is 50.
+        assert_eq!(e.get(player, PlayerCharacter::bTarget3DDistant), 1);
+    }
+
+    #[test]
+    fn auto_aim_in_mode_two_records_the_body_part_the_ray_hits() {
+        let mut world = auto_aim_world(1, 100.0);
+        let player = world.player;
+        let e = &mut world.e;
+        e.register_double(READ_FIELD_8, |_, a| {
+            int(if a[0] == OBJECT_011F2250 {
+                2
+            } else {
+                0x6900_0000
+            })
+        });
+        let target = object_with_slots(e, &[(0x1d0, SLOT_A), (0x1f4, SLOT_F)]);
+        e.set_global(POINTER_011F21CC, target);
+        answer(e, SLOT_H, 0x6800_0000);
+        e.set_global(AIM_DISTANCE_PAD_0102E430, 128.0f64);
+        let hit = object_with_slots(e, &[(0xc, SLOT_E)]);
+        answer(e, SLOT_E, 0);
+        e.mem.set_u32(hit + 0x18, 7);
+        let reference = object_with_slots(e, &[(0x100, SLOT_I)]);
+        answer(e, SLOT_I, 1);
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            int(if a[0] == hit { reference } else { 0 })
+        });
+        answer(e, FUNCTION_008CFBC0, hit);
+        answer(e, FUNCTION_008B3EF0, 3);
+        let base = object_with_slots(e, &[(0x180, SLOT_J)]);
+        answer(e, SLOT_J, 0x6c00_0000);
+        answer(e, GET_BASE_FORM, base);
+        answer(e, BODY_PART_DATA_GET_BODY_PART, 0x6d00_0000);
+        answer(e, FUNCTION_005E5190, 0xfe);
+        let log = logged(e, |e| {
+            e.call(0x0096_4260, &args![player]);
+        });
+        let cast = calls_to(&log, FUNCTION_008CFBC0)[0].clone();
+        assert_eq!(cast[0], AIM_NODE);
+        assert_eq!(calls_to(&log, FUNCTION_008B3EF0), [[reference, 7]]);
+        assert_eq!(calls_to(&log, FUNCTION_007F3B40), [[3]]);
+        assert_eq!(
+            calls_to(&log, BODY_PART_DATA_GET_BODY_PART),
+            [[0x6c00_0000, 3]]
+        );
+        // The part byte is sign extended.
+        assert_eq!(e.global::<u32>(AIMED_BODY_PART), 0xffff_fffe);
+    }
+
+    /// Every callee of `fn_00965620` and of the helpers it runs for real.
+    fn aim_offsets_callees() -> Vec<u32> {
+        vec![
+            FUNCTION_009C71C0,
+            ACTOR_GET_IRON_SIGHTS,
+            READ_FIELD_8,
+            ACTOR_GET_CURRENT_WEAPON,
+            FUNCTION_004AD030,
+            FUNCTION_004AD010,
+            ITEM_CHANGE_HAS_MOD,
+            WEAPON_IS_MELEE_TYPE,
+            ADD_8C_TO_ADDRESS,
+            PLAYER_GET_ROOT_NODE,
+            NODE_GET_WORLD_BOUND,
+            IDENTITY_006815C0,
+            VECTOR_SUBTRACT,
+            VECTOR_NOT_EQUAL,
+            FORM_GET_TYPE,
+            GET_BASE_FORM,
+            FUNCTION_005E5130,
+            FUNCTION_0043B230,
+            FIND_NODE_BY_NAME,
+            FUNCTION_0062BFB0,
+            FUNCTION_008D8B80,
+            SMART_POINTER_ASSIGN,
+            FUNCTION_00461130,
+            FUNCTION_00524C40,
+            READ_FLOAT_AT_C,
+            FUNCTION_00476B70,
+            VECTOR_LENGTH,
+            FUNCTION_004579E0,
+            FUNCTION_004E4470,
+            FUNCTION_004E44B0,
+            FUNCTION_004A0C10,
+            MATRIX_INVERSE,
+            FUNCTION_004B4500,
+            FUNCTION_004B13C0,
+            FUNCTION_004B1460,
+            FUNCTION_004B5530,
+            MOBILE_OBJECT_GET_LOOKING,
+            FUNCTION_00524D10,
+            FUNCTION_00439F50,
+            FUNCTION_00525B20,
+            FUNCTION_004E4600,
+            FUNCTION_009A7D50,
+            FUNCTION_004019B0,
+            FUNCTION_009A8F00,
+            FUNCTION_009A6E90,
+            READ_FLOAT_AT_D0,
+            SETTING_FLOAT,
+            VECTOR_ADD,
+            FLAGS_TEST,
+            BLEND_FLOATS,
+            READ_FIELD_68,
+            PLAYER_GET_ROOT_NODE,
+        ]
+    }
+
+    /// The angle and limit constants of the exe.
+    fn aim_constants(e: &mut Engine) {
+        let pi = std::f32::consts::PI;
+        e.set_global(FLOAT_MIN_DOUBLE, f64::from(f32::MIN_POSITIVE));
+        e.set_global(NEGATIVE_PI_DOUBLE, -f64::from(pi));
+        e.set_global(TWO_PI_DOUBLE, f64::from(2.0 * pi));
+        e.set_global(PI_DOUBLE, f64::from(pi));
+        e.set_global(PITCH_LIMIT_DOUBLE, f64::from(1.553343f32));
+        e.set_global(PITCH_LIMIT_FLOAT, 1.553343f32);
+        e.set_global(NEGATIVE_PITCH_LIMIT_DOUBLE, -f64::from(1.553343f32));
+        e.set_global(NEGATIVE_PITCH_LIMIT_FLOAT, -1.553343f32);
+        e.set_global(DEGREES_TO_RADIANS, f64::from(0.017453292f32));
+        e.set_global(SCALE_ONE_AND_A_QUARTER, 1.25f64);
+        e.set_global(STEP_FRACTION, 0.1f64);
+        e.set_global(AIM_LIFT, 10.0f64);
+        e.set_global(TWO_PI_FLOAT, 2.0 * pi);
+        e.set_global(DEFAULT_BOUND_RADIUS, 16.0f32);
+    }
+
+    /// The radians of `degrees` the way the aim limits are computed.
+    fn degrees_to_radians(degrees: f32) -> f32 {
+        (f64::from(degrees) * f64::from(0.017453292f32)) as f32
+    }
+
+    /// An engine with the doubles every aim offset test shares: real
+    /// vector subtraction and comparison, identity transforms, identity
+    /// angle functions, a player (process virtual `+0x148` is `SLOT_H`).
+    fn aim_offsets_world() -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine(&aim_offsets_callees());
+        aim_constants(&mut e);
+        e.register_double(VECTOR_SUBTRACT, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            int(a[1])
+        });
+        e.register_double(VECTOR_NOT_EQUAL, |e, a| {
+            let same = (0..3).all(|i| e.mem.f32(a[0] + 4 * i) == e.mem.f32(a[1] + 4 * i));
+            int(u32::from(!same))
+        });
+        e.register_double(FUNCTION_004B4500, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.u32(a[2] + 4 * i);
+                e.mem.set_u32(a[1] + 4 * i, value);
+            }
+            int(a[1])
+        });
+        e.register_double(MATRIX_INVERSE, |_, a| int(a[1]));
+        e.register_double(VECTOR_ADD, |_, a| int(a[1]));
+        float_settings(&mut e, &[]);
+        e.register_double(IDENTITY_006815C0, |_, a| int(a[0]));
+        e.register_double(FUNCTION_004B1460, |_, a| {
+            float(f64::from(f32::from_bits(a[0])))
+        });
+        e.register_double(FUNCTION_004B5530, |_, a| {
+            float(f64::from(f32::from_bits(a[0])))
+        });
+        answer(&mut e, SLOT_H, 0);
+        let player = player_with(&mut e, &[], &[(0x148, SLOT_H)]);
+        (e, player)
+    }
+
+    /// Calls the offsets function for `player`: returns the two outputs.
+    #[allow(clippy::too_many_arguments)]
+    fn run_aim_offsets(
+        e: &mut Engine,
+        player: Ptr<PlayerCharacter>,
+        actor: u32,
+        aim_node: u32,
+        origin_override: u32,
+        defaults: (f32, f32),
+        start: (f32, f32),
+    ) -> (f32, f32) {
+        let heading = e.mem.alloc(4);
+        let pitch = e.mem.alloc(4);
+        e.mem.set_f32(heading, start.0);
+        e.mem.set_f32(pitch, start.1);
+        e.call(
+            0x0096_5620,
+            &args![
+                player,
+                actor,
+                aim_node,
+                heading,
+                pitch,
+                origin_override,
+                defaults.0,
+                defaults.1
+            ],
+        );
+        (e.mem.f32(heading), e.mem.f32(pitch))
+    }
+
+    fn set_bullet_aim(e: &mut Engine, player: Ptr<PlayerCharacter>, point: (f32, f32, f32)) {
+        e.set(player, PlayerCharacter::BulletAutoAimX, point.0);
+        e.set(player, PlayerCharacter::BulletAutoAimY, point.1);
+        e.set(player, PlayerCharacter::BulletAutoAimZ, point.2);
+    }
+
+    /// The player's root node bound, a bound centre of three floats.
+    fn root_bound(e: &mut Engine, centre: (f32, f32, f32)) {
+        answer(e, PLAYER_GET_ROOT_NODE, 0x6000_0001);
+        let bound = e.mem.alloc(16);
+        e.mem.set_f32(bound, centre.0);
+        e.mem.set_f32(bound + 4, centre.1);
+        e.mem.set_f32(bound + 8, centre.2);
+        answer(e, NODE_GET_WORLD_BOUND, bound);
+    }
+
+    #[test]
+    fn aim_offsets_leave_the_outputs_alone_without_a_target() {
+        let (mut e, player) = aim_offsets_world();
+        root_bound(&mut e, (0.0, 0.0, 0.0));
+        let log = logged(&mut e, |e| {
+            let (heading, pitch) = run_aim_offsets(e, player, 0, 0, 0, (0.0, 0.0), (0.25, -0.5));
+            assert_eq!((heading, pitch), (0.25, -0.5));
+        });
+        // The bullet aim point is the zero vector: nothing is rotated.
+        assert!(calls_to(&log, FUNCTION_004A0C10).is_empty());
+    }
+
+    #[test]
+    fn aim_offsets_from_the_bullet_aim_point_without_angles() {
+        let (mut e, player) = aim_offsets_world();
+        float_settings(&mut e, &[(SETTING_011CE90C, 20.0)]);
+        root_bound(&mut e, (1.0, 1.0, 0.25));
+        set_bullet_aim(&mut e, player, (3.0, 4.0, 0.5));
+        let node_matrix = e.mem.alloc(36);
+        answer(&mut e, FUNCTION_00461130, node_matrix);
+        let log = logged(&mut e, |e| {
+            // Both angle defaults at FLT_MIN and no actor: no angle mode.
+            let (heading, pitch) = run_aim_offsets(
+                e,
+                player,
+                0,
+                0,
+                0,
+                (f32::MIN_POSITIVE, f32::MIN_POSITIVE),
+                (0.125, 0.5),
+            );
+            // The direction (2, 3, 0.25) gives a heading of 2/3 and a pitch
+            // of -0.25, but with no weapon the pitch is dropped and the
+            // heading limited to 20 degrees.
+            let limit = degrees_to_radians(20.0);
+            assert_eq!(heading, (f64::from(0.125f32) + f64::from(limit)) as f32);
+            assert_eq!(pitch, 0.5);
+        });
+        // The matrix is the root node's, inverted then multiplied with the
+        // global matrix.
+        assert_eq!(calls_to(&log, FUNCTION_00461130), [[0x6000_0001]]);
+        assert_eq!(calls_to(&log, MATRIX_INVERSE).len(), 1);
+        let transforms = calls_to(&log, FUNCTION_004B4500);
+        assert_eq!(transforms.len(), 2);
+        assert_eq!(transforms[1][0], WOBBLE_RESULT_MATRIX);
+        assert_eq!(
+            calls_to(&log, FUNCTION_004B1460),
+            [[(2.0f32 / 3.0).to_bits()]]
+        );
+        assert_eq!(calls_to(&log, FUNCTION_004B5530), [[0.25f32.to_bits()]]);
+    }
+
+    #[test]
+    fn aim_offsets_with_angles_follow_the_actor() {
+        let (mut e, player) = aim_offsets_world();
+        float_settings(&mut e, &[(SETTING_011CFAF8, 90.0)]);
+        root_bound(&mut e, (0.0, 0.0, 0.0));
+        set_bullet_aim(&mut e, player, (1.0, 2.0, 0.5));
+        // The actor: heading 0.125 (virtual +0x2bc), looking 0.25, offsets
+        // 0.0625 and 0.125.
+        answer_float(&mut e, SLOT_A, 0.125);
+        let actor = object_with_slots(&mut e, &[(0x2bc, SLOT_A)]);
+        e.mem.set_f32(actor + 0xec, 0.0625);
+        answer_float(&mut e, MOBILE_OBJECT_GET_LOOKING, 0.25);
+        answer_float(&mut e, FUNCTION_004E4600, 0.125);
+        // A ranged weapon.
+        answer(&mut e, ACTOR_GET_CURRENT_WEAPON, 0x6000_0004);
+        let mut angles = vec![0.5, 0.25].into_iter();
+        e.register_double(FUNCTION_004B13C0, move |_, _| float(angles.next().unwrap()));
+        let log = logged(&mut e, |e| {
+            let (heading, pitch) = run_aim_offsets(e, player, actor, 0, 0, (0.0, 0.0), (0.0, 0.0));
+            // Heading 0.5 - 0.125 + the column angle 0.25 + 0.0625; pitch
+            // -0.5 - 0.25 and the actor's 0.125.
+            assert_eq!(heading, 0.6875);
+            assert_eq!(pitch, -0.625);
+        });
+        assert_eq!(calls_to(&log, FUNCTION_004B13C0).len(), 2);
+        assert_eq!(
+            calls_to(&log, FUNCTION_00439F50)[0][..2],
+            [WOBBLE_RESULT_MATRIX, 1]
+        );
+        assert_eq!(calls_to(&log, SLOT_A), [[actor, 0]]);
+    }
+
+    #[test]
+    fn aim_offsets_return_early_for_iron_sights_with_a_flagged_mod() {
+        let (mut e, player) = aim_offsets_world();
+        root_bound(&mut e, (0.0, 0.0, 0.0));
+        set_bullet_aim(&mut e, player, (1.0, 2.0, 0.5));
+        answer(&mut e, ACTOR_GET_IRON_SIGHTS, 1);
+        answer(&mut e, ACTOR_GET_CURRENT_WEAPON, 0x6000_0004);
+        answer(&mut e, FUNCTION_004AD030, 1);
+        answer(&mut e, SLOT_H, 0x6000_0005);
+        answer(&mut e, ITEM_CHANGE_HAS_MOD, 1);
+        let log = logged(&mut e, |e| {
+            let (heading, pitch) = run_aim_offsets(e, player, 0, 0, 0, (0.0, 0.0), (0.25, 0.5));
+            assert_eq!((heading, pitch), (0.25, 0.5));
+        });
+        assert_eq!(calls_to(&log, ITEM_CHANGE_HAS_MOD), [[0x6000_0005, 0xe]]);
+        assert!(calls_to(&log, VECTOR_NOT_EQUAL).is_empty());
+        // Without the flagged mod the computation goes on.
+        answer(&mut e, ITEM_CHANGE_HAS_MOD, 0);
+        answer(&mut e, FUNCTION_004AD010, 0);
+        let log = logged(&mut e, |e| {
+            run_aim_offsets(e, player, 0, 0, 0, (0.0, 0.0), (0.25, 0.5));
+        });
+        assert!(!calls_to(&log, VECTOR_NOT_EQUAL).is_empty());
+        // A weapon with the second flag but not the first returns too.
+        answer(&mut e, FUNCTION_004AD030, 0);
+        answer(&mut e, FUNCTION_004AD010, 1);
+        let log = logged(&mut e, |e| {
+            run_aim_offsets(e, player, 0, 0, 0, (0.0, 0.0), (0.25, 0.5));
+        });
+        assert!(calls_to(&log, VECTOR_NOT_EQUAL).is_empty());
+    }
+
+    /// A VATS action: target reference `+0xc`, body part index `+0x10`
+    /// (-1: the weapon node) and the marker flag `+4`.
+    fn vats_action(e: &mut Engine, marker: u8) -> (u32, u32) {
+        let target = object_with_slots(e, &[(0x100, SLOT_C), (0x1d0, SLOT_D)]);
+        answer(e, SLOT_C, 1);
+        answer(e, SLOT_D, 0x6000_0040);
+        let action = e.mem.alloc(0x20);
+        e.mem.set_u32(action + 0xc, target);
+        e.mem.set_u32(action + 0x10, 0xffff_ffff);
+        e.mem.set_u8(action + 4, marker);
+        answer(e, FUNCTION_009C71C0, action);
+        e.register_double(READ_FIELD_8, |_, a| {
+            int(if a[0] == OBJECT_011F2250 { 4 } else { 0 })
+        });
+        (action, target)
+    }
+
+    /// The vectors the VATS node lookup and rotation answer with.
+    fn vats_vectors(e: &mut Engine) -> (u32, u32) {
+        let vector = |e: &mut Engine, value: f32| {
+            let block = e.mem.alloc(12);
+            for i in 0..3 {
+                e.mem.set_f32(block + 4 * i, value);
+            }
+            block
+        };
+        let centre = vector(e, 1.0);
+        let rotated = vector(e, 2.0);
+        (centre, rotated)
+    }
+
+    #[test]
+    fn aim_offsets_at_a_vats_target_use_the_weapon_node_and_the_vats_limit() {
+        let (mut e, player) = aim_offsets_world();
+        float_settings(&mut e, &[(SETTING_011CFC20, 45.0)]);
+        let (action, target) = vats_action(&mut e, 1);
+        let (centre, rotated) = vats_vectors(&mut e);
+        // The target's base form has body parts; index -1 asks for the
+        // weapon node, found under the target's 3D.
+        let base = object_with_slots(&mut e, &[(0x180, SLOT_J)]);
+        answer(&mut e, SLOT_J, 0x6c00_0000);
+        answer(&mut e, GET_BASE_FORM, base);
+        let node = object_with_slots(&mut e, &[(0xc, SLOT_I)]);
+        answer(&mut e, SLOT_I, 0);
+        answer(&mut e, FIND_NODE_BY_NAME, node);
+        answer(&mut e, ADD_8C_TO_ADDRESS, centre);
+        answer(&mut e, FUNCTION_0062BFB0, centre);
+        let matrix = e.mem.alloc(36);
+        answer(&mut e, FUNCTION_00461130, matrix);
+        answer(&mut e, FUNCTION_00524C40, rotated);
+        // A ranged weapon with three projectiles.
+        answer(&mut e, ACTOR_GET_CURRENT_WEAPON, 0x6000_0004);
+        answer(&mut e, FUNCTION_00525B20, 3);
+        answer_float(&mut e, FUNCTION_004B13C0, 0.5);
+        let log = logged(&mut e, |e| {
+            let (heading, pitch) =
+                run_aim_offsets(e, player, 0, 0x6000_0020, 0, (0.125, 0.25), (0.0, 0.0));
+            // Heading 0.5 - 0.125; the pitch -1 - 0.25 is limited to
+            // the 45 degree VATS limit.
+            assert_eq!(heading, 0.375);
+            assert_eq!(pitch, -degrees_to_radians(45.0));
+        });
+        assert_eq!(
+            calls_to(&log, FIND_NODE_BY_NAME),
+            [[0x6000_0040, WEAPON_NODE_NAME]]
+        );
+        assert_eq!(calls_to(&log, FUNCTION_0062BFB0)[0][1], node);
+        assert_eq!(calls_to(&log, FUNCTION_00461130), [[node]]);
+        assert_eq!(calls_to(&log, FUNCTION_00524C40)[0][0], matrix);
+        assert_eq!(
+            calls_to(&log, FUNCTION_00525B20),
+            [[0x6000_0004, 0, 0, player.addr()]]
+        );
+        let _ = (action, target);
+    }
+
+    #[test]
+    fn aim_offsets_search_a_clear_shot_for_a_vats_actor_of_type_0x3e() {
+        let (mut e, player) = aim_offsets_world();
+        float_settings(&mut e, &[(SETTING_011CFC20, 45.0)]);
+        e.set_global(0x011f_1c00, 0.5f32);
+        let (action, target) = vats_action(&mut e, 1);
+        let (centre, rotated) = vats_vectors(&mut e);
+        // The actor: type 0x3e, base form with a positive float at +0x64.
+        answer_float(&mut e, SLOT_A, 0.0);
+        let actor = object_with_slots(&mut e, &[(0x2bc, SLOT_A)]);
+        let base = object_with_slots(&mut e, &[(0x180, SLOT_J)]);
+        e.mem.set_f32(base + 0x64, 1.0);
+        answer(&mut e, SLOT_J, 0x6c00_0000);
+        answer(&mut e, GET_BASE_FORM, base);
+        answer(&mut e, FORM_GET_TYPE, 0x3e);
+        let node = object_with_slots(&mut e, &[(0xc, SLOT_I)]);
+        answer(&mut e, SLOT_I, 0);
+        answer(&mut e, ADD_8C_TO_ADDRESS, centre);
+        let matrix = e.mem.alloc(36);
+        answer(&mut e, FUNCTION_00461130, matrix);
+        answer(&mut e, FUNCTION_00524C40, rotated);
+        answer(&mut e, FUNCTION_008D8B80, 0);
+        answer(&mut e, ACTOR_GET_CURRENT_WEAPON, 0x6000_0004);
+        answer(&mut e, FUNCTION_00525B20, 1);
+        answer_float(&mut e, FUNCTION_004B13C0, 0.5);
+        answer_float(&mut e, FUNCTION_009A7D50, 0.25);
+        // The vats action's node: the target's 3D is the node here.
+        answer(&mut e, SLOT_D, node);
+        // The search: a length of 10 scaled by 0.5, start 5, and a reach of
+        // 4 * 1.25 = 5: one probe, the projectile line of sight reaches the
+        // target.
+        answer_float(&mut e, VECTOR_LENGTH, 10.0);
+        answer_float(&mut e, FUNCTION_004019B0, 5.0);
+        answer_float(&mut e, BLEND_FLOATS, 4.0);
+        answer_float(&mut e, READ_FIELD_68, 2.0);
+        answer_float(&mut e, READ_FLOAT_AT_D0, 8.0);
+        e.register_double(FUNCTION_009A6E90, move |e, a| {
+            e.mem.set_u32(a[10], target);
+            int(1)
+        });
+        let log = logged(&mut e, |e| {
+            run_aim_offsets(e, player, actor, 0x6000_0020, 0, (0.0, 0.0), (0.0, 0.0));
+        });
+        let probe = calls_to(&log, FUNCTION_009A8F00);
+        assert_eq!(probe.len(), 1);
+        assert_eq!(probe[0][10], 5.0f32.to_bits());
+        assert_eq!(probe[0][11], 0.5f32.to_bits());
+        assert_eq!(probe[0][12], 0);
+        let los = calls_to(&log, FUNCTION_009A6E90);
+        assert_eq!(los.len(), 1);
+        assert_eq!(los[0][0], player.addr());
+        assert_eq!(los[0][1], base);
+        assert_eq!(los[0][2], 5.0f32.to_bits());
+        assert_eq!(los[0][9], 0);
+        assert_eq!(los[0][11], 0);
+        // found = 5 / 4, scaled by the actor's +0xd0 float (8) = 10.
+        assert_eq!(e.mem.f32(actor + 0xd0), 10.0);
+        let _ = action;
     }
 }
