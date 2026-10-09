@@ -37,7 +37,17 @@
 //!   the water textures (`TES::PreloadAddonNodes`, `TES::PreloadForms`,
 //!   `fn_0045a370`, `fn_0045a520`, `fn_0045a600`) with their one-line helpers.
 //!
-//! The next session continues at `0045a750` (`TES::SetupTemporaryParticleCache`).
+//! Session 3 (the next 40 functions, `0045a750` to `0045cac0`) holds the
+//! temporary particle cache (`TES::SetupTemporaryParticleCache`,
+//! `TES::AddTemporaryParticleObjectToCache`, `TES::GetUnusedCachedParticleObject`,
+//! the cache entry's constructor and destructors), the `NavMeshInfoMap` accessors,
+//! the two long walks that add the loaded world to (`fn_0045b070`) and take it
+//! out of (`fn_0045bc80`) the first shadow scene node, a set of small accessors
+//! of classes the compiler folded into this unit, the two passes over the 5x5
+//! grid of cells (`fn_0045c780`, `fn_0045c840`) and
+//! `TES::InitDistantTextureBlending`.
+//!
+//! The next session continues at `0045cb90`.
 
 #[allow(unused_imports)]
 use super::tes::*;
@@ -2053,6 +2063,1329 @@ pub fn fn_0045a730(_e: &mut Engine, this: Ptr) -> u32 {
     this.addr().wrapping_add(0x130)
 }
 
+// ----- Session 3: `0045a750` to `0045cac0` -----
+//
+// The particle cache, the `NavMeshInfoMap` accessors, two long walks over the
+// loaded cells and the water system (`fn_0045b070`, `fn_0045bc80`) and a set
+// of small accessors on the objects they use. Several small functions belong
+// to other classes whose bodies the compiler folded into this unit: they are
+// named by address and described by what they do.
+
+/// `sDismemberParticleDefault` (a string `INISetting`).
+const SETTING_DISMEMBER_PARTICLE_DEFAULT: u32 = 0x011c_e0c0;
+/// `sDismemberRobotParticleDefault`.
+const SETTING_DISMEMBER_ROBOT_PARTICLE_DEFAULT: u32 = 0x011c_fa28;
+/// `sBloodParticleMeleeDefault`.
+const SETTING_BLOOD_PARTICLE_MELEE_DEFAULT: u32 = 0x011c_e1a0;
+/// `sImpactParticleWoodDefault`.
+const SETTING_IMPACT_PARTICLE_WOOD_DEFAULT: u32 = 0x011c_fa64;
+/// `sImpactParticleMetalDefault`.
+const SETTING_IMPACT_PARTICLE_METAL_DEFAULT: u32 = 0x011c_f3a4;
+/// `sImpactParticleConcreteDefault`.
+const SETTING_IMPACT_PARTICLE_CONCRETE_DEFAULT: u32 = 0x011c_f54c;
+
+/// The particle models `TES::SetupTemporaryParticleCache` loads, in the order
+/// it visits them.
+const PARTICLE_CACHE_SETTINGS: [u32; 8] = [
+    SETTING_DISMEMBER_PARTICLE_DEFAULT,
+    SETTING_DISMEMBER_ROBOT_PARTICLE_DEFAULT,
+    SETTING_SPLASH_PARTICLES,
+    SETTING_BLOOD_PARTICLE_MELEE_DEFAULT,
+    SETTING_IMPACT_PARTICLE_WOOD_DEFAULT,
+    SETTING_IMPACT_PARTICLE_METAL_DEFAULT,
+    SETTING_IMPACT_PARTICLE_CONCRETE_DEFAULT,
+    SETTING_BLOOD_PARTICLE_DEFAULT,
+];
+/// The same settings in the order `fn_0045ac80` releases their models.
+const PARTICLE_CACHE_RELEASE_ORDER: [u32; 8] = [
+    SETTING_BLOOD_PARTICLE_DEFAULT,
+    SETTING_SPLASH_PARTICLES,
+    SETTING_BLOOD_PARTICLE_MELEE_DEFAULT,
+    SETTING_IMPACT_PARTICLE_METAL_DEFAULT,
+    SETTING_IMPACT_PARTICLE_CONCRETE_DEFAULT,
+    SETTING_IMPACT_PARTICLE_WOOD_DEFAULT,
+    SETTING_DISMEMBER_PARTICLE_DEFAULT,
+    SETTING_DISMEMBER_ROBOT_PARTICLE_DEFAULT,
+];
+/// A byte set once the particle cache has been filled.
+const PARTICLE_CACHE_READY: u32 = 0x011c_3f08;
+
+/// `operator new(size)`.
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `operator delete(pointer)`.
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `_eh_vector_constructor_iterator_(array, size, count, constructor,
+/// destructor)`.
+const VECTOR_CONSTRUCT: u32 = 0x00ec_782f;
+/// `NiPointer()` with a null pointer (what the array constructor calls).
+const NI_POINTER_DEFAULT_CONSTRUCT: u32 = 0x0066_94e0;
+/// The deleting destructor of an array of `NiPointer`s (flags `3`: destroy the
+/// elements, free the block).
+const NI_POINTER_ARRAY_DELETING_DESTRUCTOR: u32 = 0x0066_7120;
+/// `ecx` = a particle cache entry: whether its first word is the argument.
+const CACHE_ENTRY_HOLDS_OBJECT: u32 = 0x0082_2510;
+/// `this->+8` (the next link of a cache entry).
+const LINK_GET_NEXT: u32 = 0x0044_ddc0;
+/// `this->+8 = argument`.
+const LINK_SET_NEXT: u32 = 0x0040_3550;
+/// `NiObject::Clone` (Xbox PDB `NiObject::Clone_ov2`: no argument).
+const NI_OBJECT_CLONE: u32 = 0x00a5_d680;
+/// `NiPointer<T>::operator=(const NiPointer<T>&)`: the argument is the address
+/// of the other pointer cell.
+const NI_POINTER_COPY_ASSIGN: u32 = 0x006e_5cc0;
+/// `NiPointer<T>::NiPointer(const NiPointer<T>&)`: the argument is the address
+/// of the other pointer cell.
+const NI_POINTER_COPY_CONSTRUCT: u32 = 0x0055_9a40;
+/// Accessor for the parent pointer at `+0x18` of a scene object.
+const NODE_PARENT: u32 = 0x0096_11e0;
+/// `NavMeshInfoMap::NavMeshInfoMap` (the object is 0x40 bytes).
+const NAV_MESH_INFO_MAP_CONSTRUCT: u32 = 0x006b_5c30;
+/// Logs a warning (`const char*`).
+const LOG_WARNING: u32 = 0x005b_5e40;
+/// `"AI: Multiple NavMeshInfoMaps loaded"`.
+const MESSAGE_MULTIPLE_NAV_MESH_INFO_MAPS: u32 = 0x0101_7f94;
+/// The test on the data handler (`004516b0`, in the main part of this unit)
+/// that stops `TES::GetNavMeshInfoMap` from creating the map.
+const DATA_HANDLER_BLOCKS_NAV_MESH_INFO_MAP: u32 = 0x0045_16b0;
+
+/// The calls `fn_0045b020` makes, in order.
+const STATIC_SETUP_CALLS: [u32; 6] = [
+    0x0064_9e40,
+    0x0065_c570,
+    0x0066_2760,
+    0x004f_92e0,
+    0x004e_0050,
+    0x004d_e580,
+];
+/// The calls `fn_0045b050` makes, in order.
+const STATIC_TEARDOWN_CALLS: [u32; 5] = [
+    0x0064_9ec0,
+    0x0065_c5f0,
+    0x0066_27e0,
+    0x004f_9360,
+    0x004e_00d0,
+];
+
+/// The value of the pointer stored in the cell at `address`
+/// (`NiPointer::operator T*`).
+fn pointer_at(e: &mut Engine, address: u32) -> u32 {
+    e.call(NI_POINTER_GET, &args![address]).u32()
+}
+
+// Translated from 0045a750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::SetupTemporaryParticleCache` (Xbox PDB): once (the byte at
+/// `011c3f08` marks the cache as filled), loads the eight default particle
+/// models named by the settings in `PARTICLE_CACHE_SETTINGS`
+/// (`ModelLoader::LoadFile(name, 0, 1, 0, 0, 0)`, for each whose text is not
+/// empty) and adds each to the particle cache
+/// (`TES::AddTemporaryParticleObjectToCache`).
+///
+/// Not translated: the compiler's exception-unwinding frame and the stack
+/// cookie check.
+pub fn tes_setup_temporary_particle_cache(e: &mut Engine, this: Ptr<TES>) {
+    if e.mem.u8(PARTICLE_CACHE_READY) != 0 {
+        return;
+    }
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0x32u32, 1u32, TES_CPP_PATH, 0x1c66u32],
+        );
+        e.mem.set_u8(PARTICLE_CACHE_READY, 1);
+        for setting in PARTICLE_CACHE_SETTINGS {
+            let text = setting_text(e, setting);
+            if e.mem.i8(text) != 0 {
+                let name = setting_text(e, setting);
+                let model_loader: u32 = e.global(MODEL_LOADER);
+                let model = e
+                    .call(
+                        MODEL_LOADER_LOAD_FILE,
+                        &args![model_loader, name, 0u32, 1u32, 0u32, 0u32, 0u32],
+                    )
+                    .u32();
+                tes_add_temporary_particle_object_to_cache(e, this, model);
+            }
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 0045a9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::AddTemporaryParticleObjectToCache` (Xbox PDB): unless `object` is
+/// null or already held by an entry of the list at `TES::pParticleCacheHead`
+/// (`+0xB0`), makes a new 12-byte entry (`fn_0045ab30`) holding it, puts it at
+/// the head of the list, and gives it an array of three `NiPointer`s: the
+/// first holds `object`, the other two hold clones of it.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_add_temporary_particle_object_to_cache(e: &mut Engine, this: Ptr<TES>, object: u32) {
+    if object == 0 {
+        return;
+    }
+    let mut node = e.get(this, TES::pParticleCacheHead).addr();
+    while node != 0 {
+        if e.call(CACHE_ENTRY_HOLDS_OBJECT, &args![node, object])
+            .bool()
+        {
+            return;
+        }
+        node = e.call(LINK_GET_NEXT, &args![node]).u32();
+    }
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let entry = if block != 0 {
+        fn_0045ab30(e, Ptr::new(block)).addr()
+    } else {
+        0
+    };
+    e.call(NI_POINTER_ASSIGN, &args![entry, object]);
+    let old_head = e.get(this, TES::pParticleCacheHead).addr();
+    e.call(LINK_SET_NEXT, &args![entry, old_head]);
+    e.set(this, TES::pParticleCacheHead, Ptr::new(entry));
+    let raw = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+    let cells = if raw != 0 {
+        e.mem.set_u32(raw, 3);
+        e.call(
+            VECTOR_CONSTRUCT,
+            &args![
+                raw + 4,
+                4u32,
+                3u32,
+                NI_POINTER_DEFAULT_CONSTRUCT,
+                NI_POINTER_DTOR
+            ],
+        );
+        raw + 4
+    } else {
+        0
+    };
+    e.mem.set_u32(entry + 4, cells);
+    e.call(NI_POINTER_ASSIGN, &args![cells, object]);
+    for index in 1..3u32 {
+        let clone = e.call(NI_OBJECT_CLONE, &args![object]).u32();
+        e.call(NI_POINTER_ASSIGN, &args![cells + 4 * index, clone]);
+    }
+}
+
+// Translated from 0045ab30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a particle cache entry: a null `NiPointer` at `+0`, the
+/// array of cached objects at `+4` and the next link at `+8`, both null.
+/// Returns `this`.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_0045ab30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(NI_POINTER_CTOR, &args![this, 0u32]);
+    e.call(NI_POINTER_ASSIGN, &args![this, 0u32]);
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.mem.set_u32(this.addr() + 8, 0);
+    this
+}
+
+// Translated from 0045aba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetUnusedCachedParticleObject` (Xbox PDB): clears the `NiPointer`
+/// cell `out`, then looks for the cache entry holding `key`. Returns 0 when
+/// there is none, 1 when there is one but none of its three cached objects
+/// is both present and without a parent, and 2 when `out` has been set to the
+/// first such object.
+pub fn tes_get_unused_cached_particle_object(
+    e: &mut Engine,
+    this: Ptr<TES>,
+    key: u32,
+    out: u32,
+) -> u32 {
+    e.call(NI_POINTER_ASSIGN, &args![out, 0u32]);
+    let mut result = 0;
+    let mut node = e.get(this, TES::pParticleCacheHead).addr();
+    while node != 0 {
+        if e.call(CACHE_ENTRY_HOLDS_OBJECT, &args![node, key]).bool() {
+            result = 1;
+            break;
+        }
+        node = e.call(LINK_GET_NEXT, &args![node]).u32();
+    }
+    if node != 0 {
+        let cells = e.mem.u32(node + 4);
+        if cells != 0 {
+            for index in 0..3u32 {
+                let slot = cells + 4 * index;
+                if pointer_at(e, slot) != 0 {
+                    let object = pointer_at(e, slot);
+                    if e.call(NODE_PARENT, &args![object]).u32() == 0 {
+                        e.call(NI_POINTER_COPY_ASSIGN, &args![out, slot]);
+                        return 2;
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+// Translated from 0045ac80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the particle cache: destroys every entry of the list at `+0xB0`
+/// (`fn_0045ae20` with flag 1), clears the head, and releases the models of
+/// the eight settings (`fn_0045a5e0`, each whose text is not empty) in the
+/// order of `PARTICLE_CACHE_RELEASE_ORDER`.
+pub fn fn_0045ac80(e: &mut Engine, this: Ptr<TES>) {
+    let mut node = e.get(this, TES::pParticleCacheHead).addr();
+    while node != 0 {
+        let next = e.call(LINK_GET_NEXT, &args![node]).u32();
+        if node != 0 {
+            fn_0045ae20(e, Ptr::new(node), 1);
+        }
+        node = next;
+    }
+    e.set(this, TES::pParticleCacheHead, Ptr::new(0));
+    for setting in PARTICLE_CACHE_RELEASE_ORDER {
+        let text = setting_text(e, setting);
+        if e.mem.i8(text) != 0 {
+            let name = setting_text(e, setting);
+            let model_loader: u32 = e.global(MODEL_LOADER);
+            fn_0045a5e0(e, Ptr::new(model_loader), name);
+        }
+    }
+}
+
+// Translated from 0045ae20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of a particle cache entry: destroys it
+/// (`fn_0045ae50`) and, when bit 0 of `flags` is set, frees it. Returns
+/// `this`.
+pub fn fn_0045ae20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0045ae50(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0045ae50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of a particle cache entry: clears the `NiPointer` at `+0`,
+/// destroys the array of three cached objects at `+4` (when there is one) and
+/// releases the entry's own pointer.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_0045ae50(e: &mut Engine, this: Ptr) {
+    e.call(NI_POINTER_ASSIGN, &args![this, 0u32]);
+    let cells = e.mem.u32(this.addr() + 4);
+    if cells != 0 {
+        e.call(NI_POINTER_ARRAY_DELETING_DESTRUCTOR, &args![cells, 3u32]);
+    }
+    e.call(NI_POINTER_DTOR, &args![this]);
+}
+
+// Translated from 0045aee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `TES::bAllowUnusedPurge` (`+0xB5`).
+pub fn fn_0045aee0(e: &mut Engine, this: Ptr<TES>, value: u8) {
+    e.mem
+        .set_u8(this.addr() + TES::bAllowUnusedPurge.off, value);
+}
+
+// Translated from 0045af00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetNavMeshInfoMap` (Xbox PDB): returns `pNavMeshInfoMap` (`+0xBC`),
+/// first creating it (a 0x40-byte `NavMeshInfoMap`) when there is none, the
+/// data handler exists and `004516b0` says it may be created.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_get_nav_mesh_info_map(e: &mut Engine, this: Ptr<TES>) -> Ptr {
+    if e.get(this, TES::pNavMeshInfoMap).is_null() {
+        let handler: u32 = e.global(DATA_HANDLER);
+        if handler != 0
+            && !e
+                .call(DATA_HANDLER_BLOCKS_NAV_MESH_INFO_MAP, &args![handler])
+                .bool()
+        {
+            let block = e.call(OPERATOR_NEW, &args![0x40u32]).u32();
+            let map = if block != 0 {
+                e.call(NAV_MESH_INFO_MAP_CONSTRUCT, &args![block]).u32()
+            } else {
+                0
+            };
+            e.set(this, TES::pNavMeshInfoMap, Ptr::new(map));
+        }
+    }
+    e.get(this, TES::pNavMeshInfoMap)
+}
+
+// Translated from 0045afb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::SetNavMeshInfoMap` (Xbox PDB): when a map is already set, logs
+/// "AI: Multiple NavMeshInfoMaps loaded" if `map` is not null, and deletes
+/// the old one (its slot `0x10` with argument 1); then stores `map`.
+pub fn tes_set_nav_mesh_info_map(e: &mut Engine, this: Ptr<TES>, map: Ptr) {
+    let old = e.get(this, TES::pNavMeshInfoMap);
+    if !old.is_null() {
+        if !map.is_null() {
+            e.call(LOG_WARNING, &args![MESSAGE_MULTIPLE_NAV_MESH_INFO_MAPS]);
+        }
+        e.vcall(old.addr(), 0x10, &args![1u32]);
+    }
+    e.set(this, TES::pNavMeshInfoMap, map);
+}
+
+// Translated from 0045b020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls six set-up routines in turn (`00649e40`, `0065c570`, `00662760`,
+/// `004f92e0`, `004e0050`, `004de580`).
+pub fn fn_0045b020(e: &mut Engine) {
+    for function in STATIC_SETUP_CALLS {
+        e.call(function, &[]);
+    }
+}
+
+// Translated from 0045b050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls five tear-down routines in turn (`00649ec0`, `0065c5f0`, `006627e0`,
+/// `004f9360`, `004e00d0`).
+pub fn fn_0045b050(e: &mut Engine) {
+    for function in STATIC_TEARDOWN_CALLS {
+        e.call(function, &[]);
+    }
+}
+
+// ----- the scene walks (`0045b070`, `0045bc80`) -----
+
+/// `fn_00450b80`: the entry of the shadow scene node table.
+const SHADOW_SCENE_NODE_GETTER: u32 = 0x0045_0b80;
+/// `fn_00454b30`: the word at `+0x1E0` of the scene node (its state object).
+const SCENE_NODE_STATE: u32 = 0x0045_4b30;
+/// `fn_00456fc0`: `ecx` = a cell, argument = the index of one of its lists;
+/// returns the list's object (or 0).
+const CELL_GET_LIST: u32 = 0x0045_6fc0;
+/// Number of entries of the array at `+0x9C` of a node (`ecx` = the node).
+const NODE_CHILD_COUNT: u32 = 0x0043_b480;
+/// Entry `n` of the array at `+0x9C` of a node (`ecx` = the node).
+const NODE_CHILD_AT: u32 = 0x0043_b4a0;
+/// World space function giving the terrain manager.
+const WORLD_SPACE_TERRAIN: u32 = 0x0058_6170;
+/// Terrain manager call made with the camera before the add walk.
+const TERRAIN_PREPARE_FOR_CAMERA: u32 = 0x006f_d080;
+/// Terrain manager call made before the removal walk.
+const TERRAIN_PREPARE_FOR_REMOVAL: u32 = 0x006f_d130;
+/// `ecx` = a form: a helper whose result the scene walks do not use.
+const FORM_HAS_BUFFER_FORM: u32 = 0x007a_f430;
+/// `ecx` = the water system: its second list holder.
+const WATER_SYSTEM_SECOND_HOLDER: u32 = 0x0067_33e0;
+/// `ecx` = the water system: address of its list header at `+0x3C`.
+const WATER_SYSTEM_LIST: u32 = 0x005a_8080;
+/// The next position of the list `ecx`, after the position argument.
+const LIST_NEXT_POSITION: u32 = 0x007b_52d0;
+/// The address of the item of the position argument in the list `ecx`.
+const LIST_ITEM_ADDRESS: u32 = 0x0063_17a0;
+/// Advances the position cell argument of the list `ecx`; returns the address
+/// of the item it passed.
+const LIST_ITERATE: u32 = 0x0057_cbe0;
+/// The `NiRTTI` the first object of a water entry must have.
+const WATER_ENTRY_RTTI: u32 = 0x0120_2e74;
+/// A global the scene walks hand to `00483710` (an empty function) before and
+/// after.
+const SCENE_WALK_MARKER: u32 = 0x011c_3c0f;
+/// `00483710`: an empty function taking `ecx` = the marker address.
+const SCENE_WALK_MARKER_CALL: u32 = 0x0048_3710;
+/// Size of the culling process object on the stack.
+const CULLING_PROCESS_SIZE: u32 = 0x90;
+/// Culling process constructor (`ecx` = the object, argument 0).
+const CULLING_PROCESS_CONSTRUCT: u32 = 0x00a6_9400;
+/// Culling process: set the camera.
+const CULLING_PROCESS_SET_CAMERA: u32 = 0x0041_fd00;
+/// Culling process: set the frustum.
+const CULLING_PROCESS_SET_FRUSTUM: u32 = 0x00a6_94a0;
+/// Culling process destructor.
+const CULLING_PROCESS_DESTRUCT: u32 = 0x00a6_93e0;
+/// `ecx` = the culling process: the address of its member at `+0x2C` (a
+/// stack argument pushed before the call is ignored and stays pushed).
+const CULLING_PROCESS_MEMBER: u32 = 0x005d_8a70;
+/// `ecx` = the culling process: the word at `+0x0C`.
+const CULLING_PROCESS_WORD: u32 = 0x0084_e3a0;
+/// Shadow scene node call that adds an object seen from a position:
+/// (object, x, y, z, culling process).
+const SCENE_ADD_OBJECT: u32 = 0x00b5_bbe0;
+/// Shadow scene node call that adds a candidate object:
+/// (object, culling process word, culling process member, flag).
+const SCENE_ADD_CANDIDATE: u32 = 0x00b5_f170;
+/// `ecx` = a scene object: the first step of reaching `[[object + 0xAC] + 0xC]`.
+const OBJECT_FIRST_LINK: u32 = 0x0066_29f0;
+/// Second step of the link above.
+const OBJECT_SECOND_LINK: u32 = 0x0043_b230;
+/// Call made on the node the two links reach, to take the object out of the
+/// scene.
+const NODE_REMOVE: u32 = 0x0052_8820;
+/// `ecx` = a state object: its list of tracked objects.
+const SCENE_STATE_LIST: u32 = 0x0041_3f40;
+/// `ecx` = a state object: its queue of objects.
+const SCENE_STATE_QUEUE: u32 = 0x0089_1170;
+/// `ecx` = a queue: whether it is empty.
+const SCENE_STATE_QUEUE_IS_EMPTY: u32 = 0x0076_b610;
+/// `ecx` = a state object: the object it holds.
+const SCENE_STATE_HELD: u32 = 0x0056_c7f0;
+/// `ecx` = an object: its first list of attached items.
+const OBJECT_ITEMS_A: u32 = 0x006a_b360;
+/// `ecx` = an object: its second list of attached items.
+const OBJECT_ITEMS_B: u32 = 0x0051_4f30;
+/// `ecx` = an item: the object behind its pointer at `+0x104`.
+const ITEM_GET_TARGET_OBJECT: u32 = 0x004f_9bf0;
+/// `ecx` = an object: releases it (argument 0).
+const OBJECT_RELEASE: u32 = 0x00c4_7980;
+/// `ecx` = a point: adds the point `other` (second argument) and stores the
+/// sum in the first argument.
+const POINT_ADD: u32 = 0x0043_9e90;
+/// `ecx` = a matrix: copies its column (first argument) to the point (second
+/// argument).
+const MATRIX_GET_COLUMN: u32 = 0x0043_9f50;
+/// Constructor of a vector of three `float`s: (x, y, z).
+const VECTOR3_CONSTRUCT: u32 = 0x0041_6870;
+
+/// Adds `object` to `scene`, seen from the camera position `position`.
+fn scene_add_object(e: &mut Engine, scene: u32, object: u32, position: [u32; 3], process: Ptr) {
+    e.call(
+        SCENE_ADD_OBJECT,
+        &args![
+            scene,
+            object,
+            position[0],
+            position[1],
+            position[2],
+            process
+        ],
+    );
+}
+
+/// Takes `object` out of the scene: reaches `[[object + 0xAC] + 0xC]` and
+/// calls `00528820` on it.
+fn scene_remove_object(e: &mut Engine, object: u32) {
+    let first = e.call(OBJECT_FIRST_LINK, &args![object]).u32();
+    let node = e.call(OBJECT_SECOND_LINK, &args![first]).u32();
+    e.call(NODE_REMOVE, &args![node]);
+}
+
+/// The water system of `this` (`TES::pWaterSystem`).
+fn water_system(e: &mut Engine, this: Ptr<TES>) -> u32 {
+    e.call(TES_WATER_SYSTEM_GETTER, &args![this]).u32()
+}
+
+/// The list header at `+0x3C` of the water system.
+fn water_system_list(e: &mut Engine, this: Ptr<TES>) -> u32 {
+    let system = water_system(e, this);
+    e.call(WATER_SYSTEM_LIST, &args![system]).u32()
+}
+
+/// Goes through the list at `holder + 0x24`: for each entry (after calling
+/// `007af430` on it) whose slot `0x1D0` object has a first child with the
+/// water entry `NiRTTI`, calls `visit` with that child.
+fn visit_water_entries(e: &mut Engine, holder: u32, visit: &mut dyn FnMut(&mut Engine, u32)) {
+    let list = holder + 0x24;
+    let mut position = pointer_at(e, list);
+    while position != 0 {
+        let next = e.call(LIST_NEXT_POSITION, &args![list, position]).u32();
+        if position != 0 {
+            let item_address = e.call(LIST_ITEM_ADDRESS, &args![list, position]).u32();
+            let entry = e.mem.u32(item_address);
+            e.call(FORM_HAS_BUFFER_FORM, &args![entry]);
+            let objects = e.vcall(entry, 0x1d0, &[]).u32();
+            let first = e.call(NODE_CHILD_AT, &args![objects, 0u32]).u32();
+            if fn_0045bad0(e, WATER_ENTRY_RTTI, Ptr::new(first)) {
+                let object = e.call(NODE_CHILD_AT, &args![objects, 0u32]).u32();
+                visit(e, object);
+            }
+        }
+        position = next;
+    }
+}
+
+/// The water system walk both scene functions make: when there is a water
+/// system, every entry of its list at `+0x3C` (each holding a list at
+/// `+0x24`) and then its second holder are visited with
+/// `visit_water_entries`.
+fn visit_water_system(e: &mut Engine, this: Ptr<TES>, visit: &mut dyn FnMut(&mut Engine, u32)) {
+    if water_system(e, this) == 0 {
+        return;
+    }
+    let list = water_system_list(e, this);
+    let mut position = pointer_at(e, list);
+    while position != 0 {
+        let list = water_system_list(e, this);
+        let next = e.call(LIST_NEXT_POSITION, &args![list, position]).u32();
+        if position != 0 {
+            let list = water_system_list(e, this);
+            let item_address = e.call(LIST_ITEM_ADDRESS, &args![list, position]).u32();
+            let holder = e.mem.u32(item_address);
+            visit_water_entries(e, holder, visit);
+        }
+        position = next;
+    }
+    let system = water_system(e, this);
+    let second = e.call(WATER_SYSTEM_SECOND_HOLDER, &args![system]).u32();
+    if second != 0 {
+        visit_water_entries(e, second, visit);
+    }
+}
+
+/// Calls `visit` with each child of the node `list`, the way the scene walks
+/// do: the count is read again before every step, null children are skipped.
+fn visit_children(e: &mut Engine, list: u32, visit: &mut dyn FnMut(&mut Engine, u32)) {
+    let mut index = 0;
+    while index < e.call(NODE_CHILD_COUNT, &args![list]).u32() {
+        let object = e.call(NODE_CHILD_AT, &args![list, index]).u32();
+        if object != 0 {
+            visit(e, object);
+        }
+        index += 1;
+    }
+}
+
+/// The cell pointer in slot (x, y) of the grid array.
+fn grid_cell_at(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32) -> u32 {
+    let grid = e.get(this, TES::pGridCellA);
+    let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid, x, y]).u32();
+    e.mem.u32(slot)
+}
+
+// Translated from 0045b070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the objects of the loaded world to the first shadow scene node
+/// (`fn_00450b80(0)`), for the camera `camera`. With a culling process on
+/// the stack (set to the camera and its frustum, `fn_0045bbe0`) and the
+/// camera position (`fn_0045bb80`, three words), `00b5bbe0` is called for: the
+/// interior cell's list 7 entries whose slot `0x104` returns 0; or, outdoors,
+/// the terrain manager is told of the camera and every loaded grid cell's
+/// lists 7 and 2 are added; then the children of the scene node's child 6
+/// (slot `0xC`) and the water system's entries (`visit_water_system`).
+///
+/// When the scene node has a state object (`fn_00454b30`), see
+/// `scene_update_held_object`.
+///
+/// The empty function `00483710` is called with `011c3c0f` before and after.
+/// Not translated: the compiler's exception-unwinding frame, the stack cookie
+/// check, and a local the code initialises and never reads.
+pub fn fn_0045b070(e: &mut Engine, this: Ptr<TES>, camera: u32) {
+    e.call(SCENE_WALK_MARKER_CALL, &args![SCENE_WALK_MARKER]);
+    e.with_stack(CULLING_PROCESS_SIZE, |e, process| {
+        e.call(CULLING_PROCESS_CONSTRUCT, &args![process, 0u32]);
+        e.call(CULLING_PROCESS_SET_CAMERA, &args![process, camera]);
+        let frustum = fn_0045bbe0(e, Ptr::new(camera));
+        e.call(CULLING_PROCESS_SET_FRUSTUM, &args![process, frustum]);
+        let location = fn_0045bb80(e, Ptr::new(camera)).addr();
+        let position = [
+            e.mem.u32(location),
+            e.mem.u32(location + 4),
+            e.mem.u32(location + 8),
+        ];
+        let scene = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+        let mut add = |e: &mut Engine, object: u32| {
+            scene_add_object(e, scene, object, position, process);
+        };
+        let interior = e.get(this, TES::pInteriorCell).addr();
+        if interior != 0 {
+            let list = e.call(CELL_GET_LIST, &args![interior, 7u32]).u32();
+            if list != 0 {
+                let mut index = 0;
+                while index < e.call(NODE_CHILD_COUNT, &args![list]).u32() {
+                    let object = e.call(NODE_CHILD_AT, &args![list, index]).u32();
+                    if object != 0 && e.vcall(object, 0x104, &[]).u32() == 0 {
+                        add(e, object);
+                    }
+                    index += 1;
+                }
+            }
+        } else {
+            let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+            let terrain = if world_space != 0 {
+                let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                e.call(WORLD_SPACE_TERRAIN, &args![world_space]).u32()
+            } else {
+                0
+            };
+            if terrain != 0 {
+                e.call(TERRAIN_PREPARE_FOR_CAMERA, &args![terrain, camera]);
+            }
+            let mut x = 0;
+            while x < grids_to_load(e) {
+                let mut y = 0;
+                while y < grids_to_load(e) {
+                    let cell = grid_cell_at(e, this, x, y);
+                    if cell != 0 {
+                        let list = e.call(CELL_GET_LIST, &args![cell, 7u32]).u32();
+                        if list != 0 {
+                            visit_children(e, list, &mut add);
+                        }
+                        let list = e.call(CELL_GET_LIST, &args![cell, 2u32]).u32();
+                        visit_children(e, list, &mut add);
+                    }
+                    y += 1;
+                }
+                x += 1;
+            }
+        }
+        let child = fn_0045bc00(e, Ptr::new(scene), 6);
+        let children = if child != 0 {
+            e.vcall(child, 0xc, &[]).u32()
+        } else {
+            0
+        };
+        if children != 0 {
+            visit_children(e, children, &mut add);
+        }
+        visit_water_system(e, this, &mut add);
+        let first = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+        if e.call(SCENE_NODE_STATE, &args![first]).u32() != 0 {
+            scene_update_held_object(e, camera, scene, process);
+        }
+        e.call(SCENE_WALK_MARKER_CALL, &args![SCENE_WALK_MARKER]);
+        e.call(CULLING_PROCESS_DESTRUCT, &args![process]);
+    });
+}
+
+/// The second half of `fn_0045b070`, run when the scene node has a state
+/// object. The state's list at `+0x30` is cleared (`fn_0045bc60`) and a point
+/// `near` units in front of the camera (the camera's first matrix column times
+/// the frustum's near distance, plus its position) is built. The held object
+/// (a `NiPointer` cell set from `0056c7f0`) is kept only if its slot `0x108`
+/// accepts the point (otherwise the cell is cleared); a kept one is offered to
+/// the scene with `00b5f170`. If the cell is empty, the state's queue
+/// (`00891170`, when not empty) is walked: each object whose slot `0x108`
+/// accepts the point is offered, the first one also fills the cell. If the cell
+/// is still empty, a null object is offered. The held object becomes the
+/// state's pointer (`fn_0045bc40`).
+fn scene_update_held_object(e: &mut Engine, camera: u32, scene: u32, process: Ptr) {
+    let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+    let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
+    fn_0045bc60(e, Ptr::new(state));
+    let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+    let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
+    let held_object = e.call(SCENE_STATE_HELD, &args![state]).u32();
+    // The held cell (4 bytes), then three points of 12 bytes.
+    e.with_stack(4 + 36, |e, cell| {
+        e.call(NI_POINTER_CTOR, &args![cell, held_object]);
+        let held = cell.addr();
+        let column_point = held + 4;
+        let scaled_point = held + 16;
+        let point = held + 28;
+        let frustum = fn_0045bbe0(e, Ptr::new(camera));
+        let near = e.mem.f32(frustum.addr() + 0x10);
+        let column = fn_0045bba0(e, Ptr::new(camera), Ptr::new(column_point));
+        let scaled = fn_0045bb20(e, column, Ptr::new(scaled_point), near);
+        let location = fn_0045bb80(e, Ptr::new(camera));
+        e.call(POINT_ADD, &args![location, point, scaled]);
+        let mut flag = 1u32;
+        if pointer_at(e, held) != 0 {
+            let object = pointer_at(e, held);
+            if !e.vcall(object, 0x108, &args![point]).bool() {
+                e.call(NI_POINTER_ASSIGN, &args![held, 0u32]);
+            } else {
+                let object = pointer_at(e, held);
+                scene_add_candidate(e, scene, process, object, 1);
+            }
+        }
+        if pointer_at(e, held) == 0 {
+            let state = e.call(SCENE_NODE_STATE, &args![scene]).u32();
+            let queue = e.call(SCENE_STATE_QUEUE, &args![state]).u32();
+            if !e.call(SCENE_STATE_QUEUE_IS_EMPTY, &args![queue]).bool() {
+                e.with_stack(4, |e, position| {
+                    let first = pointer_at(e, queue);
+                    e.mem.set_u32(position.addr(), first);
+                    while e.mem.u32(position.addr()) != 0 {
+                        let item_address = e.call(LIST_ITERATE, &args![queue, position]).u32();
+                        let item = pointer_at(e, item_address);
+                        if item != 0 && e.vcall(item, 0x108, &args![point]).bool() {
+                            scene_add_candidate(e, scene, process, item, flag);
+                            if pointer_at(e, held) == 0 {
+                                e.call(NI_POINTER_ASSIGN, &args![held, item]);
+                                flag = 0;
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        if pointer_at(e, held) == 0 {
+            scene_add_candidate(e, scene, process, 0, flag);
+        }
+        let value = pointer_at(e, held);
+        let state = e.call(SCENE_NODE_STATE, &args![scene]).u32();
+        fn_0045bc40(e, Ptr::new(state), value);
+        e.call(NI_POINTER_DTOR, &args![held]);
+    });
+}
+
+/// `00b5f170(object, word, member, flag)` with the two culling process values
+/// the code reads through `0084e3a0` and `005d8a70` (which ignores the flag
+/// pushed before it; the flag stays on the stack as the last argument).
+fn scene_add_candidate(e: &mut Engine, scene: u32, process: Ptr, object: u32, flag: u32) {
+    let member = e.call(CULLING_PROCESS_MEMBER, &args![process]).u32();
+    let word = e.call(CULLING_PROCESS_WORD, &args![process]).u32();
+    e.call(
+        SCENE_ADD_CANDIDATE,
+        &args![scene, object, word, member, flag],
+    );
+}
+
+// Translated from 0045bad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl`: false for a null `object`, otherwise whether `object`'s slot 8
+/// returns `rtti` (`fn_0045baf0`).
+pub fn fn_0045bad0(e: &mut Engine, rtti: u32, object: Ptr) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    fn_0045baf0(e, object, rtti)
+}
+
+// Translated from 0045baf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether this object's slot 8 (`GetRTTI`) returns `rtti`.
+pub fn fn_0045baf0(e: &mut Engine, this: Ptr, rtti: u32) -> bool {
+    e.vcall(this.addr(), 8, &[]).u32() == rtti
+}
+
+// Translated from 0045bb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores into `out` (a three-`float` vector) the vector `this` (three
+/// `float`s) multiplied by `scale`; returns `out`.
+pub fn fn_0045bb20(e: &mut Engine, this: Ptr, out: Ptr, scale: f32) -> Ptr {
+    let x = e.mem.f32(this.addr());
+    let y = e.mem.f32(this.addr() + 4);
+    let z = e.mem.f32(this.addr() + 8);
+    e.call(
+        VECTOR3_CONSTRUCT,
+        &args![out, x * scale, y * scale, z * scale],
+    );
+    out
+}
+
+// Translated from 0045bb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0x8C` (the camera's world position).
+pub fn fn_0045bb80(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0x8c))
+}
+
+// Translated from 0045bba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores into `out` the first column of the 3x3 matrix at `this + 0x68`
+/// (`00439f50` with column 0, into a local vector); returns `out`.
+pub fn fn_0045bba0(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    e.with_stack(12, |e, local| {
+        e.call(VECTOR_CTOR, &args![local]);
+        e.call(
+            MATRIX_GET_COLUMN,
+            &args![this.addr().wrapping_add(0x68), 0u32, local],
+        );
+        for word in 0..3 {
+            let value = e.mem.u32(local.addr() + 4 * word);
+            e.mem.set_u32(out.addr() + 4 * word, value);
+        }
+    });
+    out
+}
+
+// Translated from 0045bbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0xDC` (the camera's frustum).
+pub fn fn_0045bbe0(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0xdc))
+}
+
+// Translated from 0045bc00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry `index` of the node's child array (`+0x9C`, its count a 16-bit word
+/// at `+0xA`), or 0 when `index` is not below the count.
+pub fn fn_0045bc00(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let array = this.addr().wrapping_add(0x9c);
+    let count = e.call(CHILD_ARRAY_COUNT, &args![array]).u32();
+    if count <= index {
+        return 0;
+    }
+    let slot = e.call(CHILD_ARRAY_SLOT, &args![array, index]).u32();
+    pointer_at(e, slot)
+}
+
+/// `ecx` = an array: its count (the 16-bit word at `+0xA`).
+const CHILD_ARRAY_COUNT: u32 = 0x0065_8930;
+/// `ecx` = an array: the address of entry `n`.
+const CHILD_ARRAY_SLOT: u32 = 0x0087_7a30;
+
+// Translated from 0045bc40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPointer` assignment to the cell at `this + 0x2C`.
+pub fn fn_0045bc40(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(
+        NI_POINTER_ASSIGN,
+        &args![this.addr().wrapping_add(0x2c), value],
+    );
+}
+
+// Translated from 0045bc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the list at `this + 0x30` (`004a4650`).
+pub fn fn_0045bc60(e: &mut Engine, this: Ptr) {
+    e.call(LIST_CLEAR, &args![this.addr().wrapping_add(0x30)]);
+}
+
+/// `ecx` = a list: removes all its nodes.
+const LIST_CLEAR: u32 = 0x004a_4650;
+
+// Translated from 0045bc80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the objects of the loaded world out of the scene (the counterpart
+/// of `fn_0045b070`; every removal is `scene_remove_object`, which reaches
+/// `[[object + 0xAC] + 0xC]` and calls `00528820` on it).
+///
+/// - Interior: the cell's list 7 entries whose slot `0x104` returns 0.
+/// - Outdoors: the terrain manager is told (`006fd130`), then every loaded
+///   grid cell's list 7 entries get their slot `0xBC` called before being
+///   removed, and, when `with_lists` is set, the list 2 entries are removed.
+/// - Then the children of the first shadow scene node's child 6 (slot `0xC`)
+///   and the water system's entries.
+///
+/// When the scene node has a state object: its tracked list is walked and
+/// `fn_0045c4a0` run on each item; then, when its queue is not empty and
+/// `with_queue` is set, each queued object (held in a copied `NiPointer`) gets
+/// its slot `0xBC` called, `fn_0045c570(3)` and `fn_0045c4e0(0)` run on it,
+/// both its item lists are walked (`fn_0045c4a0` on every item; for the
+/// first list's items whose `fn_0045c4c0` target is not null, that target's
+/// object is released) before the pointer is dropped.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_0045bc80(e: &mut Engine, this: Ptr<TES>, with_lists: u8, with_queue: u8) {
+    let interior = e.get(this, TES::pInteriorCell).addr();
+    if interior != 0 {
+        let list = e.call(CELL_GET_LIST, &args![interior, 7u32]).u32();
+        if list != 0 {
+            let mut index = 0;
+            while index < e.call(NODE_CHILD_COUNT, &args![list]).u32() {
+                let object = e.call(NODE_CHILD_AT, &args![list, index]).u32();
+                if object != 0 && e.vcall(object, 0x104, &[]).u32() == 0 {
+                    scene_remove_object(e, object);
+                }
+                index += 1;
+            }
+        }
+    } else {
+        let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+        let terrain = if world_space != 0 {
+            let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+            e.call(WORLD_SPACE_TERRAIN, &args![world_space]).u32()
+        } else {
+            0
+        };
+        if terrain != 0 {
+            e.call(TERRAIN_PREPARE_FOR_REMOVAL, &args![terrain]);
+        }
+        let mut x = 0;
+        while x < grids_to_load(e) {
+            let mut y = 0;
+            while y < grids_to_load(e) {
+                let cell = grid_cell_at(e, this, x, y);
+                if cell != 0 {
+                    let list = e.call(CELL_GET_LIST, &args![cell, 7u32]).u32();
+                    if list != 0 {
+                        visit_children(e, list, &mut |e, object| {
+                            e.vcall(object, 0xbc, &[]);
+                            scene_remove_object(e, object);
+                        });
+                    }
+                    if with_lists != 0 {
+                        let list = e.call(CELL_GET_LIST, &args![cell, 2u32]).u32();
+                        visit_children(e, list, &mut |e, object| {
+                            scene_remove_object(e, object);
+                        });
+                    }
+                }
+                y += 1;
+            }
+            x += 1;
+        }
+    }
+    let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+    let child = fn_0045bc00(e, Ptr::new(node), 6);
+    let children = if child != 0 {
+        e.vcall(child, 0xc, &[]).u32()
+    } else {
+        0
+    };
+    if children != 0 {
+        visit_children(e, children, &mut |e, object| {
+            scene_remove_object(e, object);
+        });
+    }
+    let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+    if e.call(SCENE_NODE_STATE, &args![node]).u32() != 0 {
+        scene_release_tracked(e, with_queue != 0);
+    }
+    visit_water_system(e, this, &mut |e, object| {
+        scene_remove_object(e, object);
+    });
+}
+
+/// The state-object part of `fn_0045bc80` (see there).
+fn scene_release_tracked(e: &mut Engine, with_queue: bool) {
+    let tracked = |e: &mut Engine| {
+        let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+        let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
+        e.call(SCENE_STATE_LIST, &args![state]).u32()
+    };
+    let list = tracked(e);
+    e.with_stack(4, |e, position| {
+        let first = pointer_at(e, list);
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            let list = tracked(e);
+            let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
+            let item = e.mem.u32(item_address);
+            if item != 0 {
+                fn_0045c4a0(e, Ptr::new(item));
+            }
+        }
+    });
+    let node = e.call(SHADOW_SCENE_NODE_GETTER, &args![0u32]).u32();
+    let state = e.call(SCENE_NODE_STATE, &args![node]).u32();
+    let queue = e.call(SCENE_STATE_QUEUE, &args![state]).u32();
+    if e.call(SCENE_STATE_QUEUE_IS_EMPTY, &args![queue]).bool() || !with_queue {
+        return;
+    }
+    e.with_stack(4, |e, position| {
+        let first = pointer_at(e, queue);
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            let item_address = e.call(LIST_ITERATE, &args![queue, position]).u32();
+            e.with_stack(4, |e, held| {
+                e.call(NI_POINTER_COPY_CONSTRUCT, &args![held, item_address]);
+                if pointer_at(e, held.addr()) != 0 {
+                    scene_release_queued(e, held.addr());
+                }
+                e.call(NI_POINTER_DTOR, &args![held]);
+            });
+        }
+    });
+}
+
+/// One queued object of `scene_release_tracked`, held by the `NiPointer`
+/// cell `held`.
+fn scene_release_queued(e: &mut Engine, held: u32) {
+    let object = pointer_at(e, held);
+    e.vcall(object, 0xbc, &[]);
+    let object = pointer_at(e, held);
+    fn_0045c570(e, Ptr::new(object), 3);
+    let object = pointer_at(e, held);
+    fn_0045c4e0(e, Ptr::new(object), 0);
+    let object = pointer_at(e, held);
+    let list = e.call(OBJECT_ITEMS_A, &args![object]).u32();
+    e.with_stack(4, |e, position| {
+        let first = pointer_at(e, list);
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            let object = pointer_at(e, held);
+            let list = e.call(OBJECT_ITEMS_A, &args![object]).u32();
+            let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
+            let item = e.mem.u32(item_address);
+            if item != 0 {
+                fn_0045c4a0(e, Ptr::new(item));
+                let target_cell = fn_0045c4c0(e, Ptr::new(item));
+                if e.call(ITEM_GET_TARGET_OBJECT, &args![target_cell]).u32() != 0 {
+                    let target_cell = fn_0045c4c0(e, Ptr::new(item));
+                    let target = e.call(ITEM_GET_TARGET_OBJECT, &args![target_cell]).u32();
+                    e.call(OBJECT_RELEASE, &args![target, 0u32]);
+                }
+            }
+        }
+    });
+    let object = pointer_at(e, held);
+    let list = e.call(OBJECT_ITEMS_B, &args![object]).u32();
+    e.with_stack(4, |e, position| {
+        let first = pointer_at(e, list);
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            let object = pointer_at(e, held);
+            let list = e.call(OBJECT_ITEMS_B, &args![object]).u32();
+            let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
+            let item = e.mem.u32(item_address);
+            if item != 0 {
+                fn_0045c4a0(e, Ptr::new(item));
+            }
+        }
+    });
+}
+
+// Translated from 0045c4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at `this + 0x40`.
+pub fn fn_0045c4a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr().wrapping_add(0x40), 0);
+}
+
+// Translated from 0045c4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pointer stored in the `NiPointer` cell at `this + 0x104`.
+pub fn fn_0045c4c0(e: &mut Engine, this: Ptr) -> u32 {
+    pointer_at(e, this.addr().wrapping_add(0x104))
+}
+
+// Translated from 0045c4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the object at `this + 0xCC` by `value`: when there is one that
+/// differs from `value`, it is destroyed first (`fn_0045c520`).
+pub fn fn_0045c4e0(e: &mut Engine, this: Ptr, value: u32) {
+    let current = e.mem.u32(this.addr().wrapping_add(0xcc));
+    if current != 0 && current != value {
+        fn_0045c520(e, this);
+    }
+    e.mem.set_u32(this.addr().wrapping_add(0xcc), value);
+}
+
+// Translated from 0045c520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys and frees the object at `this + 0xCC` (`fn_0045c5f0`, flag 1)
+/// and clears the field.
+pub fn fn_0045c520(e: &mut Engine, this: Ptr) {
+    let object = e.mem.u32(this.addr().wrapping_add(0xcc));
+    if object != 0 {
+        fn_0045c5f0(e, Ptr::new(object), 1);
+    }
+    e.mem.set_u32(this.addr().wrapping_add(0xcc), 0);
+}
+
+// Translated from 0045c570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at `+8` of the node `[[this + 0xAC] + 0xC]`
+/// (`00403550`, with `value` left on the stack by the two link steps), then in
+/// the same word of the node `[item + 0xC]` of every item of the list at
+/// `this + 0xD0`.
+pub fn fn_0045c570(e: &mut Engine, this: Ptr, value: u32) {
+    let first = e.call(OBJECT_FIRST_LINK, &args![this]).u32();
+    let node = e.call(OBJECT_SECOND_LINK, &args![first]).u32();
+    e.call(LINK_SET_NEXT, &args![node, value]);
+    let list = this.addr().wrapping_add(0xd0);
+    e.with_stack(4, |e, position| {
+        let head = pointer_at(e, list);
+        e.mem.set_u32(position.addr(), head);
+        while e.mem.u32(position.addr()) != 0 {
+            let item_address = e.call(LIST_ITERATE, &args![list, position]).u32();
+            let item = pointer_at(e, item_address);
+            if item != 0 {
+                let node = e.call(OBJECT_SECOND_LINK, &args![item]).u32();
+                e.call(LINK_SET_NEXT, &args![node, value]);
+            }
+        }
+    });
+}
+
+// Translated from 0045c5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: runs the destructor `00c47770` and, when bit 0
+/// of `flags` is set, frees the object. Returns `this`.
+pub fn fn_0045c5f0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(OBJECT_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+/// The destructor `fn_0045c5f0` runs.
+const OBJECT_DESTRUCT: u32 = 0x00c4_7770;
+
+// Translated from 0045c620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiFrustumPlanes::NiFrustumPlanes` (Xbox PDB): constructs the six planes
+/// of 0x10 bytes (`00a69940` each) and sets the active planes word at
+/// `+0x60` to `0x3F`. Returns `this`.
+pub fn ni_frustum_planes_ni_frustum_planes(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(
+        ARRAY_CONSTRUCT,
+        &args![this, 0x10u32, 6u32, FRUSTUM_PLANE_CONSTRUCT],
+    );
+    e.mem.set_u32(this.addr().wrapping_add(0x60), 0x3f);
+    this
+}
+
+/// `_vector_constructor_iterator_(array, size, count, constructor)`.
+const ARRAY_CONSTRUCT: u32 = 0x0040_1050;
+/// The plane constructor.
+const FRUSTUM_PLANE_CONSTRUCT: u32 = 0x00a6_9940;
+
+// Translated from 0045c650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0xD0`.
+pub fn fn_0045c650(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0xd0))
+}
+
+// Translated from 0045c670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pointer held by the `NiPointer` cell at `011deb7c`.
+pub fn fn_0045c670(e: &mut Engine) -> u32 {
+    pointer_at(e, 0x011d_eb7c)
+}
+
+// Translated from 0045c680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::RangedNodeVisibilityChangedCB` (Xbox PDB): calls `00578060` with
+/// `node` when `visible` is not 0, else `00578170`.
+pub fn tes_ranged_node_visibility_changed_cb(e: &mut Engine, node: u32, visible: u8) {
+    if visible != 0 {
+        e.call(RANGED_NODE_SHOWN, &args![node]);
+    } else {
+        e.call(RANGED_NODE_HIDDEN, &args![node]);
+    }
+}
+
+/// Called with a node that became visible.
+const RANGED_NODE_SHOWN: u32 = 0x0057_8060;
+/// Called with a node that became hidden.
+const RANGED_NODE_HIDDEN: u32 = 0x0057_8170;
+
+// Translated from 0045c6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The map names this `TES::GetLODMult`; the body takes a form and returns a
+/// class from its form type (`TESForm::GetFormType`, minus `0x18`): 3 for
+/// types `0x2A` and `0x2B`; 2 for types `0x18`, `0x19`, `0x1A`, `0x1D`,
+/// `0x1F`, `0x28`, `0x29`, `0x2E`, `0x2F`, `0x32`, `0x67`, `0x6C`, `0x73` and
+/// `0x74`; 1 for every other type.
+pub fn fn_0045c6b0(e: &mut Engine, form: Ptr) -> u32 {
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+    if form_type.wrapping_sub(0x18) > 0x5c {
+        return 1;
+    }
+    match form_type {
+        0x2a | 0x2b => 3,
+        0x18 | 0x19 | 0x1a | 0x1d | 0x1f | 0x28 | 0x29 | 0x2e | 0x2f | 0x32 | 0x67 | 0x6c
+        | 0x73 | 0x74 => 2,
+        _ => 1,
+    }
+}
+
+// ----- the grid cell passes (`0045c780` to `0045cac0`) -----
+
+/// A byte; when set the pass of `fn_0045c780` marks only the centre cell
+/// (2, 2) of the 5x5 grid.
+const GRID_PASS_CENTRE_ONLY: u32 = 0x011c_3c0c;
+/// The 5x5 table of flags `fn_0045c780` marks cells with (row `x`, column
+/// `y`).
+const GRID_FLAGS_FIRST: u32 = 0x0101_7830;
+/// The 5x5 table of flags `fn_0045c840` marks cells with.
+const GRID_FLAGS_SECOND: u32 = 0x0101_784c;
+/// `ecx` = the grid array: its side length.
+const GRID_SIDE: u32 = 0x0084_e3a0;
+/// Returns the object used by the two marking calls (no arguments).
+const MARKING_CONTEXT: u32 = 0x0043_8220;
+/// `ecx` = an object, argument = the context: the target of the marking call.
+const MARKING_TARGET: u32 = 0x00a5_9d30;
+/// `ecx` = the marking target: (operation, flag).
+const MARKING_APPLY: u32 = 0x0044_1130;
+/// `ecx` = a cell: its scene object (0 when it has none).
+const CELL_SCENE_OBJECT: u32 = 0x0054_6fb0;
+/// `ecx` = a cell scene object: whether the cell is to be refreshed.
+const SCENE_OBJECT_NEEDS_REFRESH: u32 = 0x0045_cb90;
+/// `ecx` = a cell scene object: refreshes it.
+const SCENE_OBJECT_REFRESH: u32 = 0x0054_00e0;
+
+// Translated from 0045c780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When `uGridsToLoad` is 5: for every cell (x, y) of the grid array, runs
+/// `fn_0045c8d0(x, y, flag)`, the flag being (x == 2 and y == 2) when the byte
+/// at `011c3c0c` is set, else the byte at row `x`, column `y` of the 5x5 table
+/// at `01017830`.
+pub fn fn_0045c780(e: &mut Engine, this: Ptr<TES>) {
+    if grids_to_load(e) != 5 {
+        return;
+    }
+    let mut x = 0;
+    while x < grid_side(e, this) {
+        let mut y = 0;
+        while y < grid_side(e, this) {
+            let flag = if e.mem.u8(GRID_PASS_CENTRE_ONLY) != 0 {
+                (x == 2 && y == 2) as u8
+            } else {
+                e.mem.u8(GRID_FLAGS_FIRST + x * 5 + y)
+            };
+            fn_0045c8d0(e, this, x, y, flag);
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+/// The side length of the grid array of `this`.
+fn grid_side(e: &mut Engine, this: Ptr<TES>) -> u32 {
+    let grid = e.get(this, TES::pGridCellA);
+    e.call(GRID_SIDE, &args![grid]).u32()
+}
+
+// Translated from 0045c840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `fn_0045c780` but with the second table (`0101784c`) and
+/// `fn_0045c9e0`, and without the centre-only switch.
+pub fn fn_0045c840(e: &mut Engine, this: Ptr<TES>) {
+    if grids_to_load(e) != 5 {
+        return;
+    }
+    let mut x = 0;
+    while x < grid_side(e, this) {
+        let mut y = 0;
+        while y < grid_side(e, this) {
+            let flag = e.mem.u8(GRID_FLAGS_SECOND + x * 5 + y);
+            fn_0045c9e0(e, this, x, y, flag);
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+/// For the grid cell at (x, y), when it is loaded, for the
+/// two marking passes: for each of its four list-2 children, the
+/// object its first child's slot `0x18` returns is passed to the marking call
+/// with `operation` and `flag`.
+fn mark_cell_objects(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32, operation: u32, flag: u32) {
+    let grid = e.get(this, TES::pGridCellA);
+    let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid, x, y]).u32();
+    if slot == 0 || e.mem.u32(slot) == 0 {
+        return;
+    }
+    let mut index = 0;
+    while index < 4 {
+        let cell = e.mem.u32(slot);
+        let node = fn_0045c9a0(e, Ptr::new(cell), index);
+        let object = if fn_0045bc00(e, Ptr::new(node), 0) != 0 {
+            let first = e.call(NODE_CHILD_AT, &args![node, 0u32]).u32();
+            e.vcall(first, 0x18, &[]).u32()
+        } else {
+            0
+        };
+        if object != 0 {
+            let context = e.call(MARKING_CONTEXT, &[]).u32();
+            let target = e.call(MARKING_TARGET, &args![object, context]).u32();
+            e.call(MARKING_APPLY, &args![target, operation, flag]);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 0045c8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For the grid cell at (x, y), when it is loaded: for each of its four
+/// quadrant nodes (`fn_0045c9a0`), takes the object of the node's first
+/// child (its slot `0x18`) and applies `00441130` with operation `0x2E` and
+/// `flag`.
+pub fn fn_0045c8d0(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32, flag: u8) {
+    mark_cell_objects(e, this, x, y, 0x2e, flag as u32);
+}
+
+// Translated from 0045c9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Entry `index` of the cell's list 2 (`fn_00456fc0(cell, 2)`), or 0 when the
+/// cell has no such list.
+pub fn fn_0045c9a0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let list = e.call(CELL_GET_LIST, &args![this, 2u32]).u32();
+    if list != 0 {
+        e.call(NODE_CHILD_AT, &args![list, index]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 0045c9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same walk as `fn_0045c8d0` with operation `0x34` and the flag
+/// inverted (1 when `flag` is 0).
+pub fn fn_0045c9e0(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32, flag: u8) {
+    mark_cell_objects(e, this, x, y, 0x34, (flag == 0) as u32);
+}
+
+// Translated from 0045cac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::InitDistantTextureBlending` (Xbox PDB): for every cell (x, y) of the
+/// `uGridsToLoad` square whose slot is loaded and which has a scene object
+/// (`00546fb0`) that `0045cb90` accepts, calls `005400e0` on the cell's scene
+/// object.
+pub fn tes_init_distant_texture_blending(e: &mut Engine, this: Ptr<TES>) {
+    let mut x = 0;
+    while x < grids_to_load(e) {
+        let mut y = 0;
+        while y < grids_to_load(e) {
+            let cell = grid_cell_at(e, this, x, y);
+            let object = if cell != 0 {
+                e.call(CELL_SCENE_OBJECT, &args![cell]).u32()
+            } else {
+                0
+            };
+            if cell != 0 && object != 0 && e.call(SCENE_OBJECT_NEEDS_REFRESH, &args![object]).bool()
+            {
+                let object = e.call(CELL_SCENE_OBJECT, &args![cell]).u32();
+                e.call(SCENE_OBJECT_REFRESH, &args![object]);
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2145,6 +3478,55 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0045a5e0, fn_0045a5e0(Ptr, u32)),
         entry!(0x0045a600, fn_0045a600(Ptr<TES>)),
         entry!(0x0045a730, fn_0045a730(Ptr) -> u32),
+        entry!(0x0045a750, tes_setup_temporary_particle_cache(Ptr<TES>)),
+        entry!(
+            0x0045a9a0,
+            tes_add_temporary_particle_object_to_cache(Ptr<TES>, u32)
+        ),
+        entry!(0x0045ab30, fn_0045ab30(Ptr) -> Ptr),
+        entry!(
+            0x0045aba0,
+            tes_get_unused_cached_particle_object(Ptr<TES>, u32, u32) -> u32
+        ),
+        entry!(0x0045ac80, fn_0045ac80(Ptr<TES>)),
+        entry!(0x0045ae20, fn_0045ae20(Ptr, u32) -> Ptr),
+        entry!(0x0045ae50, fn_0045ae50(Ptr)),
+        entry!(0x0045aee0, fn_0045aee0(Ptr<TES>, u8)),
+        entry!(0x0045af00, tes_get_nav_mesh_info_map(Ptr<TES>) -> Ptr),
+        entry!(0x0045afb0, tes_set_nav_mesh_info_map(Ptr<TES>, Ptr)),
+        entry!(0x0045b020, fn_0045b020()),
+        entry!(0x0045b050, fn_0045b050()),
+        entry!(0x0045b070, fn_0045b070(Ptr<TES>, u32)),
+        entry!(0x0045bad0, fn_0045bad0(u32, Ptr) -> bool),
+        entry!(0x0045baf0, fn_0045baf0(Ptr, u32) -> bool),
+        entry!(0x0045bb20, fn_0045bb20(Ptr, Ptr, f32) -> Ptr),
+        entry!(0x0045bb80, fn_0045bb80(Ptr) -> Ptr),
+        entry!(0x0045bba0, fn_0045bba0(Ptr, Ptr) -> Ptr),
+        entry!(0x0045bbe0, fn_0045bbe0(Ptr) -> Ptr),
+        entry!(0x0045bc00, fn_0045bc00(Ptr, u32) -> u32),
+        entry!(0x0045bc40, fn_0045bc40(Ptr, u32)),
+        entry!(0x0045bc60, fn_0045bc60(Ptr)),
+        entry!(0x0045bc80, fn_0045bc80(Ptr<TES>, u8, u8)),
+        entry!(0x0045c4a0, fn_0045c4a0(Ptr)),
+        entry!(0x0045c4c0, fn_0045c4c0(Ptr) -> u32),
+        entry!(0x0045c4e0, fn_0045c4e0(Ptr, u32)),
+        entry!(0x0045c520, fn_0045c520(Ptr)),
+        entry!(0x0045c570, fn_0045c570(Ptr, u32)),
+        entry!(0x0045c5f0, fn_0045c5f0(Ptr, u32) -> Ptr),
+        entry!(
+            0x0045c620,
+            ni_frustum_planes_ni_frustum_planes(Ptr) -> Ptr
+        ),
+        entry!(0x0045c650, fn_0045c650(Ptr) -> Ptr),
+        entry!(0x0045c670, fn_0045c670() -> u32),
+        entry!(0x0045c680, tes_ranged_node_visibility_changed_cb(u32, u8)),
+        entry!(0x0045c6b0, fn_0045c6b0(Ptr) -> u32),
+        entry!(0x0045c780, fn_0045c780(Ptr<TES>)),
+        entry!(0x0045c840, fn_0045c840(Ptr<TES>)),
+        entry!(0x0045c8d0, fn_0045c8d0(Ptr<TES>, u32, u32, u8)),
+        entry!(0x0045c9a0, fn_0045c9a0(Ptr, u32) -> u32),
+        entry!(0x0045c9e0, fn_0045c9e0(Ptr<TES>, u32, u32, u8)),
+        entry!(0x0045cac0, tes_init_distant_texture_blending(Ptr<TES>)),
     ]
 }
 
@@ -4860,5 +6242,1336 @@ mod tests {
         e.call(0x0045_a600, &args![world.tes]);
         assert!(listed.borrow().is_empty());
         assert_eq!(*water.borrow(), vec![vec![world.tes.addr()]]);
+    }
+
+    // ===== Session 3: `0045a750` to `0045cac0` =====
+
+    /// The text of the C string at `address`.
+    fn cstr(e: &Engine, address: u32) -> String {
+        let mut text = String::new();
+        let mut at = address;
+        while e.mem.u8(at) != 0 {
+            text.push(e.mem.u8(at) as char);
+            at += 1;
+        }
+        text
+    }
+
+    /// An engine with the globals mapped and the particle cache's callees
+    /// (list links, `NiPointer`, allocation) replaced by simple doubles.
+    fn cache_engine() -> Engine {
+        let mut e = Engine::new();
+        map_globals(&mut e);
+        for page in [0x011c_e000u32, 0x011c_f000, 0x011d_1000] {
+            e.map(page, 0x1000);
+        }
+        ni_pointer_doubles(&mut e);
+        noop(
+            &mut e,
+            &[SCOPE_GUARD_CTOR, SCOPE_GUARD_DTOR, VECTOR_CONSTRUCT],
+        );
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(CACHE_ENTRY_HOLDS_OBJECT, |e, a| {
+            ret((e.mem.u32(a[0]) == a[1]) as u32)
+        });
+        e.register(LINK_GET_NEXT, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(LINK_SET_NEXT, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            Ret::default()
+        });
+        e.register(NI_OBJECT_CLONE, |_, a| ret(a[0] + 0x100));
+        e.register(NI_POINTER_COPY_ASSIGN, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        e.register(NODE_PARENT, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+        e
+    }
+
+    /// Gives each listed string setting the text given; the other particle
+    /// settings are empty.
+    fn set_particle_texts(e: &mut Engine, texts: &[(u32, &str)]) {
+        let empty = e.mem.alloc(4);
+        let mut table = vec![];
+        for setting in PARTICLE_CACHE_SETTINGS {
+            let text = match texts.iter().find(|(s, _)| *s == setting) {
+                Some((_, text)) => {
+                    let at = e.mem.alloc(32);
+                    e.mem.write(at, text.as_bytes());
+                    at
+                }
+                None => empty,
+            };
+            table.push((setting, text));
+        }
+        e.register_double(SETTING_VALUE_ADDRESS_STRING, move |_, a| {
+            ret(table.iter().find(|(s, _)| *s == a[0]).unwrap().1)
+        });
+    }
+
+    /// A cache entry holding `object` with three cached cells, as
+    /// `TES::AddTemporaryParticleObjectToCache` builds them; `parents` gives
+    /// the parent word of each cached object (0 = none).
+    fn cache_entry(e: &mut Engine, object: u32, parents: [u32; 3], next: u32) -> u32 {
+        let entry = e.mem.alloc(12);
+        e.mem.set_u32(entry, object);
+        e.mem.set_u32(entry + 8, next);
+        let cells = e.mem.alloc(12);
+        e.mem.set_u32(entry + 4, cells);
+        for (index, parent) in parents.iter().enumerate() {
+            let cached = e.mem.alloc(0x20);
+            e.mem.set_u32(cached + 0x18, *parent);
+            e.mem.set_u32(cells + 4 * index as u32, cached);
+        }
+        entry
+    }
+
+    // ----- 0045a750 -----
+
+    #[test]
+    fn setup_loads_the_models_with_text_once_and_caches_them() {
+        let mut e = cache_engine();
+        set_particle_texts(
+            &mut e,
+            &[
+                (SETTING_DISMEMBER_PARTICLE_DEFAULT, "dismember.nif"),
+                (SETTING_BLOOD_PARTICLE_DEFAULT, "blood.nif"),
+            ],
+        );
+        e.set_global(MODEL_LOADER, 0x5555u32);
+        let loads = Rc::new(RefCell::new(vec![]));
+        let inner = loads.clone();
+        e.register_double(MODEL_LOADER_LOAD_FILE, move |_, a| {
+            inner.borrow_mut().push(a.to_vec());
+            ret(0x7000 * inner.borrow().len() as u32)
+        });
+        let tes: Ptr<TES> = e.new_object();
+        e.call(0x0045_a750, &args![tes]);
+        {
+            let loads = loads.borrow();
+            assert_eq!(loads.len(), 2);
+            assert_eq!(cstr(&e, loads[0][1]), "dismember.nif");
+            assert_eq!(cstr(&e, loads[1][1]), "blood.nif");
+            for load in loads.iter() {
+                assert_eq!((load[0], load[2..].to_vec()), (0x5555, vec![0, 1, 0, 0, 0]));
+            }
+        }
+        assert_eq!(e.mem.u8(PARTICLE_CACHE_READY), 1);
+        // Two entries: the later model first.
+        let head = e.get(tes, TES::pParticleCacheHead).addr();
+        assert_eq!(e.mem.u32(head), 0x7000 * 2);
+        let tail = e.mem.u32(head + 8);
+        assert_eq!(e.mem.u32(tail), 0x7000);
+        assert_eq!(e.mem.u32(tail + 8), 0);
+        // A second call finds the cache filled and does nothing.
+        e.call(0x0045_a750, &args![tes]);
+        assert_eq!(loads.borrow().len(), 2);
+    }
+
+    // ----- 0045a9a0, 0045ab30 -----
+
+    #[test]
+    fn adding_an_object_makes_an_entry_with_the_object_and_two_clones() {
+        let mut e = cache_engine();
+        let tes: Ptr<TES> = e.new_object();
+        e.call(0x0045_a9a0, &args![tes, 0u32]);
+        assert!(e.get(tes, TES::pParticleCacheHead).is_null());
+        e.call(0x0045_a9a0, &args![tes, 0x4000u32]);
+        let entry = e.get(tes, TES::pParticleCacheHead).addr();
+        assert_eq!(e.mem.u32(entry), 0x4000);
+        assert_eq!(e.mem.u32(entry + 8), 0);
+        let cells = e.mem.u32(entry + 4);
+        assert_eq!(e.mem.u32(cells - 4), 3);
+        assert_eq!(
+            [0, 4, 8].map(|offset| e.mem.u32(cells + offset)),
+            [0x4000, 0x4100, 0x4100]
+        );
+        // The same object again changes nothing; another one goes first.
+        e.call(0x0045_a9a0, &args![tes, 0x4000u32]);
+        assert_eq!(e.get(tes, TES::pParticleCacheHead).addr(), entry);
+        e.call(0x0045_a9a0, &args![tes, 0x5000u32]);
+        let second = e.get(tes, TES::pParticleCacheHead).addr();
+        assert_ne!(second, entry);
+        assert_eq!(e.mem.u32(second + 8), entry);
+    }
+
+    #[test]
+    fn a_cache_entry_starts_empty() {
+        let mut e = cache_engine();
+        let block = e.mem.alloc(12);
+        e.mem.set_u32(block, 0x1111);
+        e.mem.set_u32(block + 4, 0x2222);
+        e.mem.set_u32(block + 8, 0x3333);
+        assert_eq!(e.call(0x0045_ab30, &args![block]).u32(), block);
+        assert_eq!([0, 4, 8].map(|offset| e.mem.u32(block + offset)), [0, 0, 0]);
+    }
+
+    // ----- 0045aba0 -----
+
+    #[test]
+    fn the_unused_cached_object_is_the_first_without_a_parent() {
+        let mut e = cache_engine();
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0x1234);
+        let tes: Ptr<TES> = e.new_object();
+        // No entry for the key: 0, and the cell was cleared.
+        assert_eq!(e.call(0x0045_aba0, &args![tes, 0x4000u32, out]).u32(), 0);
+        assert_eq!(e.mem.u32(out), 0);
+        // An entry whose three objects all have parents: 1.
+        let used = cache_entry(&mut e, 0x4000, [1, 1, 1], 0);
+        e.set(tes, TES::pParticleCacheHead, Ptr::new(used));
+        assert_eq!(e.call(0x0045_aba0, &args![tes, 0x4000u32, out]).u32(), 1);
+        assert_eq!(e.mem.u32(out), 0);
+        // The second object is free: 2, with the cell set to it.
+        let free = cache_entry(&mut e, 0x4000, [1, 0, 0], used);
+        e.set(tes, TES::pParticleCacheHead, Ptr::new(free));
+        assert_eq!(e.call(0x0045_aba0, &args![tes, 0x4000u32, out]).u32(), 2);
+        let cells = e.mem.u32(free + 4);
+        assert_eq!(e.mem.u32(out), e.mem.u32(cells + 4));
+        // An entry without its array: 1.
+        let bare = cache_entry(&mut e, 0x6000, [0, 0, 0], 0);
+        e.mem.set_u32(bare + 4, 0);
+        e.set(tes, TES::pParticleCacheHead, Ptr::new(bare));
+        assert_eq!(e.call(0x0045_aba0, &args![tes, 0x6000u32, out]).u32(), 1);
+    }
+
+    // ----- 0045ac80, 0045ae20, 0045ae50 -----
+
+    #[test]
+    fn emptying_the_cache_destroys_the_entries_and_releases_the_models() {
+        let mut e = cache_engine();
+        set_particle_texts(
+            &mut e,
+            &[
+                (SETTING_DISMEMBER_ROBOT_PARTICLE_DEFAULT, "robot.nif"),
+                (SETTING_BLOOD_PARTICLE_DEFAULT, "blood.nif"),
+            ],
+        );
+        e.set_global(MODEL_LOADER, 0x5555u32);
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        let arrays = recording(&mut e, NI_POINTER_ARRAY_DELETING_DESTRUCTOR, 0);
+        let released = recording(&mut e, MODEL_LOADER_RELEASE_MODEL, 0);
+        let tes: Ptr<TES> = e.new_object();
+        let second = cache_entry(&mut e, 0x5000, [0, 0, 0], 0);
+        let first = cache_entry(&mut e, 0x4000, [0, 0, 0], second);
+        e.set(tes, TES::pParticleCacheHead, Ptr::new(first));
+        e.call(0x0045_ac80, &args![tes]);
+        assert!(e.get(tes, TES::pParticleCacheHead).is_null());
+        assert_eq!(*freed.borrow(), vec![vec![first], vec![second]]);
+        assert_eq!(arrays.borrow().len(), 2);
+        // Blood first, the robot dismember particle last.
+        let released = released.borrow();
+        assert_eq!(released.len(), 2);
+        assert_eq!(cstr(&e, released[0][1]), "blood.nif");
+        assert_eq!(cstr(&e, released[1][1]), "robot.nif");
+        assert_eq!(released[0][0], 0x5555);
+        assert_eq!(released[0][2..], [1, 1]);
+    }
+
+    #[test]
+    fn destroying_an_entry_frees_it_only_with_the_flag() {
+        let mut e = cache_engine();
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        let arrays = recording(&mut e, NI_POINTER_ARRAY_DELETING_DESTRUCTOR, 0);
+        let entry = cache_entry(&mut e, 0x4000, [0, 0, 0], 0);
+        let cells = e.mem.u32(entry + 4);
+        assert_eq!(e.call(0x0045_ae20, &args![entry, 0u32]).u32(), entry);
+        assert!(freed.borrow().is_empty());
+        assert_eq!(*arrays.borrow(), vec![vec![cells, 3]]);
+        // The pointer cell was cleared (assignment of null, then release).
+        assert_eq!(e.mem.u32(entry), 0);
+        assert_eq!(e.call(0x0045_ae20, &args![entry, 3u32]).u32(), entry);
+        assert_eq!(*freed.borrow(), vec![vec![entry]]);
+        // An entry without an array has nothing to destroy.
+        let bare = e.mem.alloc(12);
+        e.call(0x0045_ae50, &args![bare]);
+        assert_eq!(arrays.borrow().len(), 2);
+    }
+
+    // ----- 0045aee0 -----
+
+    #[test]
+    fn the_purge_switch_stores_the_byte() {
+        let mut e = Engine::new();
+        let tes: Ptr<TES> = e.new_object();
+        e.call(0x0045_aee0, &args![tes, 1u8]);
+        assert!(e.get(tes, TES::bAllowUnusedPurge));
+        e.call(0x0045_aee0, &args![tes, 0u8]);
+        assert!(!e.get(tes, TES::bAllowUnusedPurge));
+    }
+
+    // ----- 0045af00, 0045afb0 -----
+
+    #[test]
+    fn the_nav_mesh_info_map_is_created_on_demand() {
+        let mut e = cache_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let created = recording(&mut e, NAV_MESH_INFO_MAP_CONSTRUCT, 0x9999);
+        let blocked = Rc::new(RefCell::new(0u32));
+        let inner = blocked.clone();
+        e.register_double(DATA_HANDLER_BLOCKS_NAV_MESH_INFO_MAP, move |_, _| {
+            ret(*inner.borrow())
+        });
+        let tes: Ptr<TES> = e.new_object();
+        // No data handler: nothing is made.
+        assert!(e.call(0x0045_af00, &args![tes]).ptr::<()>().is_null());
+        // A data handler that blocks the map: still nothing.
+        e.set_global(DATA_HANDLER, 0x1234u32);
+        *blocked.borrow_mut() = 1;
+        assert!(e.call(0x0045_af00, &args![tes]).ptr::<()>().is_null());
+        assert!(created.borrow().is_empty());
+        // Allowed: a 0x40-byte object is built and kept.
+        *blocked.borrow_mut() = 0;
+        assert_eq!(e.call(0x0045_af00, &args![tes]).u32(), 0x9999);
+        assert_eq!(created.borrow().len(), 1);
+        assert_eq!(e.get(tes, TES::pNavMeshInfoMap).addr(), 0x9999);
+        // Already there: returned as is.
+        assert_eq!(e.call(0x0045_af00, &args![tes]).u32(), 0x9999);
+        assert_eq!(created.borrow().len(), 1);
+    }
+
+    #[test]
+    fn setting_the_nav_mesh_info_map_deletes_the_old_one() {
+        let mut e = Engine::new();
+        map_globals(&mut e);
+        let warnings = recording(&mut e, LOG_WARNING, 0);
+        let deleted = recording(&mut e, 0x7000_0010, 0);
+        let table = vtable(&mut e, &[(0x10, 0x7000_0010)]);
+        let old = object_with(&mut e, table);
+        let tes: Ptr<TES> = e.new_object();
+        // No old map: just stored.
+        e.call(0x0045_afb0, &args![tes, 0x2000u32]);
+        assert_eq!(e.get(tes, TES::pNavMeshInfoMap).addr(), 0x2000);
+        assert!(warnings.borrow().is_empty());
+        // An old map and a new one: warning, old deleted with argument 1.
+        e.set(tes, TES::pNavMeshInfoMap, old);
+        e.call(0x0045_afb0, &args![tes, 0x3000u32]);
+        assert_eq!(
+            *warnings.borrow(),
+            vec![vec![MESSAGE_MULTIPLE_NAV_MESH_INFO_MAPS]]
+        );
+        assert_eq!(*deleted.borrow(), vec![vec![old.addr(), 1]]);
+        assert_eq!(e.get(tes, TES::pNavMeshInfoMap).addr(), 0x3000);
+        // An old map and none: deleted without a warning.
+        e.set(tes, TES::pNavMeshInfoMap, old);
+        e.call(0x0045_afb0, &args![tes, 0u32]);
+        assert_eq!(warnings.borrow().len(), 1);
+        assert_eq!(deleted.borrow().len(), 2);
+        assert!(e.get(tes, TES::pNavMeshInfoMap).is_null());
+    }
+
+    // ----- 0045b020, 0045b050 -----
+
+    #[test]
+    fn the_two_setup_functions_call_their_routines_in_order() {
+        let mut e = Engine::new();
+        noop(&mut e, &STATIC_SETUP_CALLS);
+        noop(&mut e, &STATIC_TEARDOWN_CALLS);
+        e.call_log = Some(vec![]);
+        e.call(0x0045_b020, &[]);
+        e.call(0x0045_b050, &[]);
+        let log = e.call_log.take().unwrap();
+        let called: Vec<u32> = log.iter().map(|call| call.0).collect();
+        let mut expected = vec![0x0045_b020];
+        expected.extend(STATIC_SETUP_CALLS);
+        expected.push(0x0045_b050);
+        expected.extend(STATIC_TEARDOWN_CALLS);
+        assert_eq!(called, expected);
+    }
+
+    // ----- 0045bad0, 0045baf0 -----
+
+    #[test]
+    fn the_exact_type_test_compares_slot_8_with_the_rtti() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(8, 0x7000_0008)]);
+        let object = object_with(&mut e, table);
+        returns(&mut e, 0x7000_0008, 0xabcd);
+        assert_eq!(
+            e.call(0x0045_baf0, &args![object, 0xabcdu32]).u32() & 0xff,
+            1
+        );
+        assert_eq!(
+            e.call(0x0045_baf0, &args![object, 0xabceu32]).u32() & 0xff,
+            0
+        );
+        // `fn_0045bad0` takes the RTTI first and tests for a null object.
+        assert!(e.call(0x0045_bad0, &args![0xabcdu32, object]).bool());
+        assert!(!e.call(0x0045_bad0, &args![0xabceu32, object]).bool());
+        assert!(!e.call(0x0045_bad0, &args![0xabcdu32, 0u32]).bool());
+    }
+
+    // ----- 0045bb20, 0045bb80, 0045bba0, 0045bbe0, 0045c650 -----
+
+    #[test]
+    fn a_scaled_vector_goes_to_the_out_vector_through_the_constructor() {
+        let mut e = Engine::new();
+        let constructed = recording(&mut e, VECTOR3_CONSTRUCT, 0);
+        let this = e.mem.alloc(12);
+        for (index, value) in [1.0f32, -2.0, 4.0].iter().enumerate() {
+            e.mem.set_f32(this + 4 * index as u32, *value);
+        }
+        let out = e.mem.alloc(12);
+        assert_eq!(e.call(0x0045_bb20, &args![this, out, 0.5f32]).u32(), out);
+        assert_eq!(
+            *constructed.borrow(),
+            vec![vec![
+                out,
+                0.5f32.to_bits(),
+                (-1.0f32).to_bits(),
+                2.0f32.to_bits()
+            ]]
+        );
+    }
+
+    #[test]
+    fn the_field_address_helpers_add_their_offsets() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0045_bb80, &args![0x1000u32]).u32(), 0x108c);
+        assert_eq!(e.call(0x0045_bbe0, &args![0x1000u32]).u32(), 0x10dc);
+        assert_eq!(e.call(0x0045_c650, &args![0x1000u32]).u32(), 0x10d0);
+    }
+
+    #[test]
+    fn the_first_matrix_column_is_copied_to_the_out_vector() {
+        let mut e = Engine::new();
+        e.register(VECTOR_CTOR, |_, a| ret(a[0]));
+        let asked = Rc::new(RefCell::new(vec![]));
+        let inner = asked.clone();
+        e.register_double(MATRIX_GET_COLUMN, move |e, a| {
+            inner.borrow_mut().push(a.to_vec());
+            for (index, value) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+                e.mem.set_f32(a[2] + 4 * index as u32, *value);
+            }
+            Ret::default()
+        });
+        let out = e.mem.alloc(12);
+        assert_eq!(e.call(0x0045_bba0, &args![0x2000u32, out]).u32(), out);
+        let asked = asked.borrow();
+        assert_eq!((asked[0][0], asked[0][1]), (0x2068, 0));
+        assert_eq!(
+            [0, 4, 8].map(|offset| e.mem.f32(out + offset)),
+            [7.0, 8.0, 9.0]
+        );
+    }
+
+    // ----- 0045bc00, 0045bc40, 0045bc60 -----
+
+    #[test]
+    fn a_child_is_read_only_below_the_count() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0xc0de);
+        returns(&mut e, CHILD_ARRAY_COUNT, 3);
+        let asked = recording(&mut e, CHILD_ARRAY_SLOT, slot);
+        assert_eq!(e.call(0x0045_bc00, &args![0x1000u32, 2u32]).u32(), 0xc0de);
+        assert_eq!(*asked.borrow(), vec![vec![0x1000 + 0x9c, 2]]);
+        // At or past the count: 0, with no lookup.
+        assert_eq!(e.call(0x0045_bc00, &args![0x1000u32, 3u32]).u32(), 0);
+        assert_eq!(asked.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_scene_helpers_work_on_their_fields() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        let this = e.mem.alloc(0x40);
+        e.call(0x0045_bc40, &args![this, 0x1234u32]);
+        assert_eq!(e.mem.u32(this + 0x2c), 0x1234);
+        let cleared = recording(&mut e, LIST_CLEAR, 0);
+        e.call(0x0045_bc60, &args![this]);
+        assert_eq!(*cleared.borrow(), vec![vec![this + 0x30]]);
+    }
+
+    // ----- 0045c4a0 to 0045c5f0 -----
+
+    #[test]
+    fn small_field_accessors() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        let this = e.mem.alloc(0x110);
+        e.mem.set_u32(this + 0x40, 0xffff);
+        e.call(0x0045_c4a0, &args![this]);
+        assert_eq!(e.mem.u32(this + 0x40), 0);
+        e.mem.set_u32(this + 0x104, 0x4321);
+        assert_eq!(e.call(0x0045_c4c0, &args![this]).u32(), 0x4321);
+    }
+
+    #[test]
+    fn the_global_pointer_cell_is_read() {
+        let mut e = Engine::new();
+        map_globals(&mut e);
+        ni_pointer_doubles(&mut e);
+        e.set_global(0x011d_eb7cu32, 0x7777u32);
+        assert_eq!(e.call(0x0045_c670, &[]).u32(), 0x7777);
+    }
+
+    #[test]
+    fn replacing_the_object_destroys_a_different_old_one() {
+        let mut e = Engine::new();
+        let destroyed = recording(&mut e, OBJECT_DESTRUCT, 0);
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        let this = e.mem.alloc(0xe0);
+        // Nothing there yet: just stored.
+        e.call(0x0045_c4e0, &args![this, 0x9000u32]);
+        assert_eq!(e.mem.u32(this + 0xcc), 0x9000);
+        assert!(destroyed.borrow().is_empty());
+        // The same object again: unchanged, nothing destroyed.
+        e.call(0x0045_c4e0, &args![this, 0x9000u32]);
+        assert!(destroyed.borrow().is_empty());
+        // A different one: the old one is destroyed and freed first.
+        e.call(0x0045_c4e0, &args![this, 0xa000u32]);
+        assert_eq!(*destroyed.borrow(), vec![vec![0x9000]]);
+        assert_eq!(*freed.borrow(), vec![vec![0x9000]]);
+        assert_eq!(e.mem.u32(this + 0xcc), 0xa000);
+        // Clearing destroys it as well.
+        e.call(0x0045_c4e0, &args![this, 0u32]);
+        assert_eq!(destroyed.borrow().len(), 2);
+        assert_eq!(e.mem.u32(this + 0xcc), 0);
+        // `fn_0045c520` with nothing held does nothing.
+        e.call(0x0045_c520, &args![this]);
+        assert_eq!(destroyed.borrow().len(), 2);
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructor_frees_with_bit_0() {
+        let mut e = Engine::new();
+        let destroyed = recording(&mut e, OBJECT_DESTRUCT, 0);
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        assert_eq!(e.call(0x0045_c5f0, &args![0x9000u32, 0u32]).u32(), 0x9000);
+        assert!(freed.borrow().is_empty());
+        e.call(0x0045_c5f0, &args![0x9000u32, 1u32]);
+        assert_eq!(destroyed.borrow().len(), 2);
+        assert_eq!(*freed.borrow(), vec![vec![0x9000]]);
+    }
+
+    /// A chain of nodes `[next, 0, item]` and a cell holding its head;
+    /// returns the cell.
+    fn chain_cell(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(12);
+            e.mem.set_u32(node, next);
+            e.mem.set_u32(node + 8, *item);
+            next = node;
+        }
+        let cell = e.mem.alloc(4);
+        e.mem.set_u32(cell, next);
+        cell
+    }
+
+    /// The head node of a chain made like `chain_cell` (0 when empty).
+    fn chain_head(e: &mut Engine, items: &[u32]) -> u32 {
+        let cell = chain_cell(e, items);
+        e.mem.u32(cell)
+    }
+
+    /// The doubles for walking a chain made by `chain_cell`.
+    fn chain_doubles(e: &mut Engine) {
+        e.register(LIST_NEXT_POSITION, |e, a| {
+            ret(if a[1] != 0 { e.mem.u32(a[1]) } else { 0 })
+        });
+        e.register(LIST_ITEM_ADDRESS, |_, a| ret(a[1] + 8));
+        e.register(LIST_ITERATE, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            ret(node + 8)
+        });
+    }
+
+    #[test]
+    fn the_word_is_stored_on_the_linked_node_and_on_every_listed_item() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        chain_doubles(&mut e);
+        e.register(OBJECT_FIRST_LINK, |e, a| ret(e.mem.u32(a[0] + 0xac)));
+        e.register(OBJECT_SECOND_LINK, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        let stored = recording(&mut e, LINK_SET_NEXT, 0);
+        // The node `[[this + 0xac] + 0xc]`, and the nodes `[item + 0xc]`.
+        let own_node = e.mem.alloc(0x10);
+        let own_holder = e.mem.alloc(0x20);
+        e.mem.set_u32(own_holder + 0xc, own_node);
+        let item_one = e.mem.alloc(0x20);
+        e.mem.set_u32(item_one + 0xc, 0x5100);
+        let item_two = e.mem.alloc(0x20);
+        e.mem.set_u32(item_two + 0xc, 0x5200);
+        let this = e.mem.alloc(0x110);
+        e.mem.set_u32(this + 0xac, own_holder);
+        let cell = chain_cell(&mut e, &[item_one, 0, item_two]);
+        let head = e.mem.u32(cell);
+        e.mem.set_u32(this + 0xd0, head);
+        e.call(0x0045_c570, &args![this, 3u32]);
+        assert_eq!(
+            *stored.borrow(),
+            vec![vec![own_node, 3], vec![0x5100, 3], vec![0x5200, 3]]
+        );
+    }
+
+    // ----- 0045c620, 0045c680, 0045c6b0 -----
+
+    #[test]
+    fn the_frustum_planes_constructor_builds_six_planes() {
+        let mut e = Engine::new();
+        let built = recording(&mut e, ARRAY_CONSTRUCT, 0);
+        let this = e.mem.alloc(0x70);
+        assert_eq!(e.call(0x0045_c620, &args![this]).u32(), this);
+        assert_eq!(
+            *built.borrow(),
+            vec![vec![this, 0x10, 6, FRUSTUM_PLANE_CONSTRUCT]]
+        );
+        assert_eq!(e.mem.u32(this + 0x60), 0x3f);
+    }
+
+    #[test]
+    fn the_visibility_callback_picks_by_the_flag() {
+        let mut e = Engine::new();
+        let shown = recording(&mut e, RANGED_NODE_SHOWN, 0);
+        let hidden = recording(&mut e, RANGED_NODE_HIDDEN, 0);
+        e.call(0x0045_c680, &args![0x10u32, 1u8]);
+        e.call(0x0045_c680, &args![0x20u32, 0u8]);
+        assert_eq!(*shown.borrow(), vec![vec![0x10]]);
+        assert_eq!(*hidden.borrow(), vec![vec![0x20]]);
+    }
+
+    #[test]
+    fn a_form_type_gives_its_class() {
+        let mut e = Engine::new();
+        let form_type = Rc::new(RefCell::new(0u32));
+        let inner = form_type.clone();
+        e.register_double(FORM_GET_TYPE, move |_, _| ret(*inner.borrow()));
+        for (value, class) in [
+            (0x2a, 3),
+            (0x2b, 3),
+            (0x18, 2),
+            (0x1d, 2),
+            (0x32, 2),
+            (0x74, 2),
+            (0x1b, 1),
+            (0x30, 1),
+            (0x75, 1),
+            (0x17, 1),
+            (0, 1),
+        ] {
+            *form_type.borrow_mut() = value;
+            assert_eq!(
+                e.call(0x0045_c6b0, &args![0x1000u32]).u32(),
+                class,
+                "{value:#x}"
+            );
+        }
+    }
+
+    // ----- 0045c780, 0045c840, 0045c8d0, 0045c9a0, 0045c9e0 -----
+
+    struct MarkWorld {
+        e: Engine,
+        tes: Ptr<TES>,
+        applied: Log,
+    }
+
+    /// A 5x5 grid whose cells all have four quadrant nodes with an object
+    /// (every marking call is logged as (target, operation, flag)).
+    fn mark_world(grids: u32) -> MarkWorld {
+        let mut e = Engine::new();
+        map_globals(&mut e);
+        ni_pointer_doubles(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, grids);
+        e.register(GRID_SIDE, |_, _| ret(5));
+        e.register(GRID_CELL_ARRAY_GET, |e, a| {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, 0x10_0000 + a[1] * 16 + a[2]);
+            ret(slot)
+        });
+        e.register(CELL_GET_LIST, |_, a| ret(a[0] + 0x1000 * a[1]));
+        let leaf_table = vtable(&mut e, &[(0x18, 0x7000_0018)]);
+        let leaf = object_with(&mut e, leaf_table).addr();
+        returns(&mut e, 0x7000_0018, leaf + 1);
+        e.register_double(NODE_CHILD_AT, move |_, a| {
+            // A cell list gives quadrant nodes; a node gives the leaf.
+            ret(if a[0] < 0x20_0000 {
+                0x30_0000 + a[1]
+            } else {
+                leaf
+            })
+        });
+        returns(&mut e, CHILD_ARRAY_COUNT, 1);
+        let present = e.mem.alloc(4);
+        e.mem.set_u32(present, 1);
+        returns(&mut e, CHILD_ARRAY_SLOT, present);
+        returns(&mut e, MARKING_CONTEXT, 0xc0de);
+        returns(&mut e, MARKING_TARGET, 0x7a76);
+        let applied = recording(&mut e, MARKING_APPLY, 0);
+        let tes: Ptr<TES> = e.new_object();
+        MarkWorld { e, tes, applied }
+    }
+
+    fn put_table(e: &mut Engine, address: u32, flags: &[u8; 25]) {
+        e.mem.write(address, flags);
+    }
+
+    fn pattern() -> [u8; 25] {
+        let mut flags = [0u8; 25];
+        for (index, flag) in flags.iter_mut().enumerate() {
+            *flag = (index % 3 == 0) as u8;
+        }
+        flags
+    }
+
+    #[test]
+    fn the_first_pass_marks_each_cell_by_the_table() {
+        let mut w = mark_world(5);
+        put_table(&mut w.e, GRID_FLAGS_FIRST, &pattern());
+        w.e.call(0x0045_c780, &args![w.tes]);
+        let applied = w.applied.borrow();
+        assert_eq!(applied.len(), 100);
+        for (cell, chunk) in applied.chunks(4).enumerate() {
+            for call in chunk {
+                assert_eq!(call[1..], [0x2e, pattern()[cell] as u32], "cell {cell}");
+            }
+        }
+        assert_eq!(applied[0][..1], [0x7a76]);
+    }
+
+    #[test]
+    fn the_first_pass_can_mark_only_the_centre_cell() {
+        let mut w = mark_world(5);
+        put_table(&mut w.e, GRID_FLAGS_FIRST, &[1; 25]);
+        w.e.mem.set_u8(GRID_PASS_CENTRE_ONLY, 1);
+        w.e.call(0x0045_c780, &args![w.tes]);
+        let applied = w.applied.borrow();
+        for (cell, chunk) in applied.chunks(4).enumerate() {
+            for call in chunk {
+                assert_eq!(call[2], (cell == 12) as u32, "cell {cell}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_passes_do_nothing_unless_five_grids_are_loaded() {
+        let mut w = mark_world(3);
+        w.e.call(0x0045_c780, &args![w.tes]);
+        w.e.call(0x0045_c840, &args![w.tes]);
+        assert!(w.applied.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_second_pass_marks_with_the_inverted_table() {
+        let mut w = mark_world(5);
+        put_table(&mut w.e, GRID_FLAGS_SECOND, &pattern());
+        w.e.call(0x0045_c840, &args![w.tes]);
+        let applied = w.applied.borrow();
+        assert_eq!(applied.len(), 100);
+        for (cell, chunk) in applied.chunks(4).enumerate() {
+            for call in chunk {
+                assert_eq!(
+                    call[1..],
+                    [0x34, (pattern()[cell] == 0) as u32],
+                    "cell {cell}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn marking_a_cell_stops_at_what_is_missing() {
+        let mut w = mark_world(5);
+        // A missing slot, then a slot whose cell is null.
+        w.e.register(GRID_CELL_ARRAY_GET, |e, a| {
+            let slot = e.mem.alloc(4);
+            if a[1] != 0 {
+                e.mem.set_u32(slot, 0x10_0000);
+            }
+            ret(if a[2] == 9 { 0 } else { slot })
+        });
+        w.e.call(0x0045_c8d0, &args![w.tes, 9u32, 9u32, 1u8]);
+        w.e.call(0x0045_c8d0, &args![w.tes, 0u32, 0u32, 1u8]);
+        // A complete cell gives four markings; then a node without a first child
+        // and a first child without an object give none.
+        w.e.call(0x0045_c8d0, &args![w.tes, 1u32, 0u32, 1u8]);
+        assert_eq!(w.applied.borrow().len(), 4);
+        returns(&mut w.e, CHILD_ARRAY_COUNT, 0);
+        w.e.call(0x0045_c9e0, &args![w.tes, 1u32, 0u32, 1u8]);
+        assert_eq!(w.applied.borrow().len(), 4);
+        returns(&mut w.e, CHILD_ARRAY_COUNT, 1);
+        returns(&mut w.e, 0x7000_0018, 0);
+        w.e.call(0x0045_c8d0, &args![w.tes, 1u32, 0u32, 1u8]);
+        assert_eq!(w.applied.borrow().len(), 4);
+    }
+
+    #[test]
+    fn a_quadrant_comes_from_the_second_cell_list() {
+        let mut e = Engine::new();
+        let asked = recording(&mut e, CELL_GET_LIST, 0);
+        let cell = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x0045_c9a0, &args![cell, 3u32]).u32(), 0);
+        assert_eq!(*asked.borrow(), vec![vec![cell, 2]]);
+        returns(&mut e, CELL_GET_LIST, 0x6000);
+        let node = recording(&mut e, NODE_CHILD_AT, 0x6100);
+        assert_eq!(e.call(0x0045_c9a0, &args![cell, 3u32]).u32(), 0x6100);
+        assert_eq!(*node.borrow(), vec![vec![0x6000, 3]]);
+    }
+
+    // ----- 0045cac0 -----
+
+    #[test]
+    fn distant_blending_refreshes_the_cells_that_accept_it() {
+        let mut e = Engine::new();
+        map_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+        // Cell (1, 0) is not loaded; the others are cells 100 + 10x + y.
+        e.register(GRID_CELL_ARRAY_GET, |e, a| {
+            let slot = e.mem.alloc(4);
+            if (a[1], a[2]) != (1, 0) {
+                e.mem.set_u32(slot, 100 + 10 * a[1] + a[2]);
+            }
+            ret(slot)
+        });
+        // Cell 100 has no scene object; 101 one the test refuses.
+        e.register(CELL_SCENE_OBJECT, |_, a| {
+            ret(if a[0] == 100 { 0 } else { a[0] + 1000 })
+        });
+        e.register(
+            SCENE_OBJECT_NEEDS_REFRESH,
+            |_, a| ret((a[0] == 1111) as u32),
+        );
+        let refreshed = recording(&mut e, SCENE_OBJECT_REFRESH, 0);
+        let tes: Ptr<TES> = e.new_object();
+        e.call(0x0045_cac0, &args![tes]);
+        assert_eq!(*refreshed.borrow(), vec![vec![1111]]);
+    }
+
+    // ----- 0045b070, 0045bc80 -----
+
+    /// Vtable slots of the scene objects, all reading a field of the object:
+    /// `+0x50` is what slot `0x104` and `0x108` return, `+0x54` slot `0xC`,
+    /// `+0x58` slot `0x1D0`, `+0x5C` slot 8.
+    fn scene_vtable(e: &mut Engine) -> u32 {
+        e.register(0x7100_0104, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+        e.register(0x7100_0108, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+        e.register(0x7100_000c, |e, a| ret(e.mem.u32(a[0] + 0x54)));
+        e.register(0x7100_01d0, |e, a| ret(e.mem.u32(a[0] + 0x58)));
+        e.register(0x7100_0008, |e, a| ret(e.mem.u32(a[0] + 0x5c)));
+        vtable(
+            e,
+            &[
+                (0x104, 0x7100_0104),
+                (0x108, 0x7100_0108),
+                (0xc, 0x7100_000c),
+                (0x1d0, 0x7100_01d0),
+                (8, 0x7100_0008),
+                (0xbc, 0x7100_00bc),
+            ],
+        )
+    }
+
+    type Lists = Rc<RefCell<std::collections::HashMap<u32, Vec<u32>>>>;
+
+    struct SceneWorld {
+        e: Engine,
+        tes: Ptr<TES>,
+        scene: u32,
+        camera: u32,
+        table: u32,
+        lists: Lists,
+        cell_lists: Rc<RefCell<std::collections::HashMap<(u32, u32), u32>>>,
+        grid_cells: Rc<RefCell<std::collections::HashMap<(u32, u32), u32>>>,
+        added: Log,
+        removed: Log,
+        shown_to_slot_bc: Log,
+        water: Rc<std::cell::Cell<u32>>,
+        state: Rc<std::cell::Cell<u32>>,
+    }
+
+    impl SceneWorld {
+        fn new() -> SceneWorld {
+            let mut e = Engine::new();
+            map_globals(&mut e);
+            ni_pointer_doubles(&mut e);
+            chain_doubles(&mut e);
+            returns(&mut e, CHILD_ARRAY_COUNT, 0);
+            returns(&mut e, CHILD_ARRAY_SLOT, 0);
+            put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+            let table = scene_vtable(&mut e);
+            let scene = e.mem.alloc(0x200);
+            returns(&mut e, SHADOW_SCENE_NODE_GETTER, scene);
+            let camera = e.mem.alloc(0x200);
+            for (index, value) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+                e.mem.set_f32(camera + 0x8c + 4 * index as u32, *value);
+            }
+            e.mem.set_f32(camera + 0xdc + 0x10, 2.0);
+            noop(
+                &mut e,
+                &[
+                    SCENE_WALK_MARKER_CALL,
+                    CULLING_PROCESS_CONSTRUCT,
+                    CULLING_PROCESS_SET_CAMERA,
+                    CULLING_PROCESS_SET_FRUSTUM,
+                    CULLING_PROCESS_DESTRUCT,
+                    FORM_HAS_BUFFER_FORM,
+                ],
+            );
+            let lists: Lists = Rc::new(RefCell::new(Default::default()));
+            let inner = lists.clone();
+            e.register_double(NODE_CHILD_COUNT, move |_, a| {
+                ret(inner
+                    .borrow()
+                    .get(&a[0])
+                    .map_or(0, |list| list.len() as u32))
+            });
+            let inner = lists.clone();
+            e.register_double(NODE_CHILD_AT, move |_, a| {
+                ret(inner.borrow()[&a[0]][a[1] as usize])
+            });
+            let cell_lists: Rc<RefCell<std::collections::HashMap<(u32, u32), u32>>> =
+                Rc::new(RefCell::new(Default::default()));
+            let inner = cell_lists.clone();
+            e.register_double(CELL_GET_LIST, move |_, a| {
+                ret(inner.borrow().get(&(a[0], a[1])).copied().unwrap_or(0))
+            });
+            let grid_cells: Rc<RefCell<std::collections::HashMap<(u32, u32), u32>>> =
+                Rc::new(RefCell::new(Default::default()));
+            let inner = grid_cells.clone();
+            e.register_double(GRID_CELL_ARRAY_GET, move |e, a| {
+                let slot = e.mem.alloc(4);
+                let cell = inner.borrow().get(&(a[1], a[2])).copied().unwrap_or(0);
+                e.mem.set_u32(slot, cell);
+                ret(slot)
+            });
+            let water = Rc::new(std::cell::Cell::new(0));
+            let inner = water.clone();
+            e.register_double(TES_WATER_SYSTEM_GETTER, move |_, _| ret(inner.get()));
+            let state = Rc::new(std::cell::Cell::new(0));
+            let inner = state.clone();
+            e.register_double(SCENE_NODE_STATE, move |_, _| ret(inner.get()));
+            // The links `scene_remove_object` follows: the node is object + 2.
+            e.register(OBJECT_FIRST_LINK, |_, a| ret(a[0] + 1));
+            e.register(OBJECT_SECOND_LINK, |_, a| ret(a[0] + 1));
+            let removed = recording(&mut e, NODE_REMOVE, 0);
+            let added = recording(&mut e, SCENE_ADD_OBJECT, 0);
+            let shown_to_slot_bc = recording(&mut e, 0x7100_00bc, 0);
+            let tes: Ptr<TES> = e.new_object();
+            SceneWorld {
+                e,
+                tes,
+                scene,
+                camera,
+                table,
+                lists,
+                cell_lists,
+                grid_cells,
+                added,
+                removed,
+                shown_to_slot_bc,
+                water,
+                state,
+            }
+        }
+
+        /// A scene object; `flag` is what slots 0x104 and 0x108 return.
+        fn object(&mut self, flag: u32) -> u32 {
+            let object = self.e.mem.alloc(0x100);
+            self.e.mem.set_u32(object, self.table);
+            self.e.mem.set_u32(object + 0x50, flag);
+            object
+        }
+
+        /// A child list with the given entries; returns its id.
+        fn list(&mut self, entries: &[u32]) -> u32 {
+            let id = self.e.mem.alloc(4);
+            self.lists.borrow_mut().insert(id, entries.to_vec());
+            id
+        }
+
+        fn add_args(&self) -> Vec<Vec<u32>> {
+            self.added.borrow().clone()
+        }
+
+        /// The objects `SCENE_ADD_OBJECT` was called with, in order.
+        fn added_objects(&self) -> Vec<u32> {
+            self.added.borrow().iter().map(|call| call[1]).collect()
+        }
+
+        /// The nodes `NODE_REMOVE` was called with, in order, as objects.
+        fn removed_objects(&self) -> Vec<u32> {
+            self.removed
+                .borrow()
+                .iter()
+                .map(|call| call[0] - 2)
+                .collect()
+        }
+    }
+
+    #[test]
+    fn the_add_walk_takes_interior_objects_that_slot_104_accepts() {
+        let mut w = SceneWorld::new();
+        let accepted = w.object(0);
+        let refused = w.object(1);
+        let list = w.list(&[accepted, 0, refused]);
+        w.cell_lists.borrow_mut().insert((0xce11, 7), list);
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        w.e.call_log = Some(vec![]);
+        w.e.call(0x0045_b070, &args![w.tes, w.camera]);
+        let log = w.e.call_log.take().unwrap();
+        assert_eq!(w.added_objects(), vec![accepted]);
+        // (scene, object, x, y, z, process) with the camera position.
+        let call = &w.add_args()[0];
+        assert_eq!(call[0], w.scene);
+        assert_eq!(
+            call[2..5],
+            [10.0f32.to_bits(), 20.0f32.to_bits(), 30.0f32.to_bits()]
+        );
+        // The empty marker function is called before and after, and the
+        // culling process is set to the camera and destroyed at the end.
+        let markers = calls_to(&log, SCENE_WALK_MARKER_CALL);
+        assert_eq!(
+            markers,
+            vec![vec![SCENE_WALK_MARKER], vec![SCENE_WALK_MARKER]]
+        );
+        assert_eq!(calls_to(&log, CULLING_PROCESS_SET_CAMERA)[0][1], w.camera);
+        assert_eq!(
+            calls_to(&log, CULLING_PROCESS_SET_FRUSTUM)[0][1],
+            w.camera + 0xdc
+        );
+        assert_eq!(
+            calls_to(&log, CULLING_PROCESS_DESTRUCT),
+            vec![vec![call[5]]]
+        );
+        // No terrain work indoors.
+        assert!(calls_to(&log, GET_WORLD_SPACE).is_empty());
+    }
+
+    #[test]
+    fn the_add_walk_goes_through_the_loaded_grid_cells_outdoors() {
+        let mut w = SceneWorld::new();
+        let (p, q, r, s) = (w.object(0), w.object(0), w.object(0), w.object(0));
+        let seven = w.list(&[p]);
+        let two_a = w.list(&[q]);
+        let two_b = w.list(&[r, s]);
+        {
+            let mut cells = w.cell_lists.borrow_mut();
+            cells.insert((0xc1, 7), seven);
+            cells.insert((0xc1, 2), two_a);
+            // Cell 0xc2 has no list 7.
+            cells.insert((0xc2, 2), two_b);
+        }
+        let nothing = w.list(&[]);
+        w.cell_lists.borrow_mut().insert((0xc3, 2), nothing);
+        {
+            let mut grid = w.grid_cells.borrow_mut();
+            grid.insert((0, 0), 0xc1);
+            grid.insert((1, 0), 0xc2);
+            grid.insert((1, 1), 0xc3);
+        }
+        returns(&mut w.e, GET_WORLD_SPACE, 0x77);
+        returns(&mut w.e, WORLD_SPACE_TERRAIN, 0x88);
+        let terrain = recording(&mut w.e, TERRAIN_PREPARE_FOR_CAMERA, 0);
+        w.e.call(0x0045_b070, &args![w.tes, w.camera]);
+        assert_eq!(w.added_objects(), vec![p, q, r, s]);
+        assert_eq!(*terrain.borrow(), vec![vec![0x88, w.camera]]);
+        // Without a world space there is no terrain call.
+        returns(&mut w.e, GET_WORLD_SPACE, 0);
+        w.e.call(0x0045_b070, &args![w.tes, w.camera]);
+        assert_eq!(terrain.borrow().len(), 1);
+        assert_eq!(w.added.borrow().len(), 8);
+    }
+
+    #[test]
+    fn the_add_walk_also_takes_the_scene_children_and_the_water_entries() {
+        let mut w = SceneWorld::new();
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        // Child 6 of the scene node, whose slot 0xC gives a list of two.
+        let (m, n) = (w.object(0), w.object(0));
+        let children = w.list(&[m, 0, n]);
+        let child = w.object(0);
+        w.e.mem.set_u32(child + 0x54, children);
+        let cell = w.e.mem.alloc(4);
+        w.e.mem.set_u32(cell, child);
+        returns(&mut w.e, CHILD_ARRAY_COUNT, 7);
+        returns(&mut w.e, CHILD_ARRAY_SLOT, cell);
+        // The water system: one holder with an entry whose object has the
+        // right type, then a second holder whose entry has another type.
+        let accepted = w.object(0);
+        w.e.mem.set_u32(accepted + 0x5c, WATER_ENTRY_RTTI);
+        let refused = w.object(0);
+        w.e.mem.set_u32(refused + 0x5c, WATER_ENTRY_RTTI + 4);
+        let good_objects = w.list(&[accepted]);
+        let bad_objects = w.list(&[refused]);
+        let good_entry = w.object(0);
+        w.e.mem.set_u32(good_entry + 0x58, good_objects);
+        let bad_entry = w.object(0);
+        w.e.mem.set_u32(bad_entry + 0x58, bad_objects);
+        let first_holder = w.e.mem.alloc(0x40);
+        let head = chain_head(&mut w.e, &[good_entry]);
+        w.e.mem.set_u32(first_holder + 0x24, head);
+        let second_holder = w.e.mem.alloc(0x40);
+        let head = chain_head(&mut w.e, &[bad_entry]);
+        w.e.mem.set_u32(second_holder + 0x24, head);
+        let system = w.e.mem.alloc(0x40);
+        w.water.set(system);
+        let holders = chain_cell(&mut w.e, &[first_holder]);
+        returns(&mut w.e, WATER_SYSTEM_LIST, holders);
+        returns(&mut w.e, WATER_SYSTEM_SECOND_HOLDER, second_holder);
+        let reviewed = recording(&mut w.e, FORM_HAS_BUFFER_FORM, 0);
+        w.e.call(0x0045_b070, &args![w.tes, w.camera]);
+        assert_eq!(w.added_objects(), vec![m, n, accepted]);
+        // `007af430` was called on both entries.
+        assert_eq!(*reviewed.borrow(), vec![vec![good_entry], vec![bad_entry]]);
+    }
+
+    /// The state-object half of the add walk: the held object, the
+    /// candidates, the point in front of the camera.
+    type Asked = Rc<RefCell<Vec<(u32, [f32; 3])>>>;
+
+    struct HeldWorld {
+        w: SceneWorld,
+        candidates: Log,
+        asked: Asked,
+        state: u32,
+    }
+
+    fn held_world() -> HeldWorld {
+        let mut w = SceneWorld::new();
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        let state = w.e.mem.alloc(0x40);
+        w.state.set(state);
+        returns(&mut w.e, SCENE_STATE_HELD, 0);
+        let queue_cell = chain_cell(&mut w.e, &[]);
+        returns(&mut w.e, SCENE_STATE_QUEUE, queue_cell);
+        returns(&mut w.e, SCENE_STATE_QUEUE_IS_EMPTY, 1);
+        // The point is the position plus the first column times near (2).
+        w.e.register(VECTOR_CTOR, |_, a| ret(a[0]));
+        w.e.register(MATRIX_GET_COLUMN, |e, a| {
+            for (index, value) in [1.0f32, 0.0, 0.0].iter().enumerate() {
+                e.mem.set_f32(a[2] + 4 * index as u32, *value);
+            }
+            Ret::default()
+        });
+        w.e.register(VECTOR3_CONSTRUCT, |e, a| {
+            for word in 0..3 {
+                e.mem.set_u32(a[0] + 4 * word, a[1 + word as usize]);
+            }
+            ret(a[0])
+        });
+        w.e.register(POINT_ADD, |e, a| {
+            for word in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * word) + e.mem.f32(a[2] + 4 * word);
+                e.mem.set_f32(a[1] + 4 * word, sum);
+            }
+            ret(a[1])
+        });
+        w.e.register(CULLING_PROCESS_MEMBER, |_, a| ret(a[0] + 0x2c));
+        returns(&mut w.e, CULLING_PROCESS_WORD, 0x3133);
+        let candidates = recording(&mut w.e, SCENE_ADD_CANDIDATE, 0);
+        // Slot 0x108 records the point it is asked about.
+        let asked = Rc::new(RefCell::new(vec![]));
+        let inner = asked.clone();
+        w.e.register_double(0x7100_0108, move |e, a| {
+            let point = [0, 4, 8].map(|offset| e.mem.f32(a[1] + offset));
+            inner.borrow_mut().push((a[0], point));
+            ret(e.mem.u32(a[0] + 0x50))
+        });
+        noop(&mut w.e, &[LIST_CLEAR]);
+        HeldWorld {
+            w,
+            candidates,
+            asked,
+            state,
+        }
+    }
+
+    fn stored_state_pointer(h: &HeldWorld) -> u32 {
+        h.w.e.mem.u32(h.state + 0x2c)
+    }
+
+    #[test]
+    fn a_held_object_that_accepts_the_point_is_offered_and_kept() {
+        let mut h = held_world();
+        let held = h.w.object(1);
+        returns(&mut h.w.e, SCENE_STATE_HELD, held);
+        let cleared = recording(&mut h.w.e, LIST_CLEAR, 0);
+        h.w.e.call(0x0045_b070, &args![h.w.tes, h.w.camera]);
+        // The tracked list was cleared first.
+        assert_eq!(*cleared.borrow(), vec![vec![h.state + 0x30]]);
+        // The point: position (10, 20, 30) + column (1, 0, 0) * near (2).
+        assert_eq!(*h.asked.borrow(), vec![(held, [12.0, 20.0, 30.0])]);
+        let candidates = h.candidates.borrow();
+        assert_eq!(candidates.len(), 1);
+        // (scene, object, process word, process member, flag 1).
+        assert_eq!(candidates[0][..3], [h.w.scene, held, 0x3133]);
+        assert_eq!(candidates[0][4], 1);
+        assert_eq!(stored_state_pointer(&h), held);
+    }
+
+    #[test]
+    fn a_held_object_that_refuses_the_point_is_dropped_for_the_queue() {
+        let mut h = held_world();
+        let held = h.w.object(0);
+        let (first, second, third) = (h.w.object(0), h.w.object(1), h.w.object(1));
+        returns(&mut h.w.e, SCENE_STATE_HELD, held);
+        let queue = chain_cell(&mut h.w.e, &[0, first, second, third]);
+        returns(&mut h.w.e, SCENE_STATE_QUEUE, queue);
+        returns(&mut h.w.e, SCENE_STATE_QUEUE_IS_EMPTY, 0);
+        h.w.e.call(0x0045_b070, &args![h.w.tes, h.w.camera]);
+        // The held object, the null entry skipped, then the queue's
+        // refusing entry; the accepting ones are offered, the first with flag
+        // 1 and filling the cell, the next with flag 0.
+        let asked: Vec<u32> = h.asked.borrow().iter().map(|call| call.0).collect();
+        assert_eq!(asked, vec![held, first, second, third]);
+        let candidates = h.candidates.borrow();
+        let offered: Vec<(u32, u32)> = candidates.iter().map(|call| (call[1], call[4])).collect();
+        assert_eq!(offered, vec![(second, 1), (third, 0)]);
+        assert_eq!(stored_state_pointer(&h), second);
+    }
+
+    #[test]
+    fn with_nothing_to_hold_a_null_candidate_is_offered() {
+        let mut h = held_world();
+        h.w.e.call(0x0045_b070, &args![h.w.tes, h.w.camera]);
+        let candidates = h.candidates.borrow();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!((candidates[0][1], candidates[0][4]), (0, 1));
+        assert!(h.asked.borrow().is_empty());
+        assert_eq!(stored_state_pointer(&h), 0);
+    }
+
+    // ----- 0045bc80 -----
+
+    #[test]
+    fn the_removal_walk_takes_out_interior_objects_that_slot_104_accepts() {
+        let mut w = SceneWorld::new();
+        let accepted = w.object(0);
+        let refused = w.object(1);
+        let list = w.list(&[accepted, refused]);
+        w.cell_lists.borrow_mut().insert((0xce11, 7), list);
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        let terrain = recording(&mut w.e, TERRAIN_PREPARE_FOR_REMOVAL, 0);
+        w.e.call(0x0045_bc80, &args![w.tes, 1u8, 1u8]);
+        assert_eq!(w.removed_objects(), vec![accepted]);
+        assert!(terrain.borrow().is_empty());
+        assert!(w.shown_to_slot_bc.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_removal_walk_outdoors_calls_slot_bc_and_optionally_removes_list_2() {
+        for with_lists in [0u8, 1] {
+            let mut w = SceneWorld::new();
+            let (p, q, r) = (w.object(0), w.object(0), w.object(0));
+            let seven = w.list(&[p]);
+            let two = w.list(&[q, r]);
+            w.cell_lists.borrow_mut().insert((0xc1, 7), seven);
+            w.cell_lists.borrow_mut().insert((0xc1, 2), two);
+            w.grid_cells.borrow_mut().insert((0, 0), 0xc1);
+            returns(&mut w.e, GET_WORLD_SPACE, 0x77);
+            returns(&mut w.e, WORLD_SPACE_TERRAIN, 0x88);
+            let terrain = recording(&mut w.e, TERRAIN_PREPARE_FOR_REMOVAL, 0);
+            w.e.call(0x0045_bc80, &args![w.tes, with_lists, 0u8]);
+            assert_eq!(*terrain.borrow(), vec![vec![0x88]]);
+            // Slot 0xBC is called for the list 7 object only.
+            assert_eq!(*w.shown_to_slot_bc.borrow(), vec![vec![p]]);
+            let expected = if with_lists == 0 {
+                vec![p]
+            } else {
+                vec![p, q, r]
+            };
+            assert_eq!(w.removed_objects(), expected, "{with_lists}");
+        }
+    }
+
+    #[test]
+    fn the_removal_walk_takes_out_the_scene_children_and_the_water_entries() {
+        let mut w = SceneWorld::new();
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        let (m, n) = (w.object(0), w.object(0));
+        let children = w.list(&[m, n]);
+        let child = w.object(0);
+        w.e.mem.set_u32(child + 0x54, children);
+        let cell = w.e.mem.alloc(4);
+        w.e.mem.set_u32(cell, child);
+        returns(&mut w.e, CHILD_ARRAY_COUNT, 7);
+        returns(&mut w.e, CHILD_ARRAY_SLOT, cell);
+        let accepted = w.object(0);
+        w.e.mem.set_u32(accepted + 0x5c, WATER_ENTRY_RTTI);
+        let objects = w.list(&[accepted]);
+        let entry = w.object(0);
+        w.e.mem.set_u32(entry + 0x58, objects);
+        // The entry is under the water system's second holder only.
+        let second_holder = w.e.mem.alloc(0x40);
+        let head = chain_head(&mut w.e, &[entry]);
+        w.e.mem.set_u32(second_holder + 0x24, head);
+        let system = w.e.mem.alloc(0x40);
+        w.water.set(system);
+        let no_holders = chain_cell(&mut w.e, &[]);
+        returns(&mut w.e, WATER_SYSTEM_LIST, no_holders);
+        returns(&mut w.e, WATER_SYSTEM_SECOND_HOLDER, second_holder);
+        w.e.call(0x0045_bc80, &args![w.tes, 0u8, 0u8]);
+        assert_eq!(w.removed_objects(), vec![m, n, accepted]);
+    }
+
+    #[test]
+    fn the_removal_walk_resets_the_tracked_items_and_releases_queued_objects() {
+        let mut w = SceneWorld::new();
+        w.e.set(w.tes, TES::pInteriorCell, Ptr::new(0xce11));
+        let state = w.e.mem.alloc(0x40);
+        w.state.set(state);
+        // Tracked items, each with a word at +0x40 the walk clears.
+        let tracked: Vec<u32> = (0..2).map(|_| w.e.mem.alloc(0x120)).collect();
+        for item in &tracked {
+            w.e.mem.set_u32(item + 0x40, 0xaa);
+        }
+        let tracked_list = chain_cell(&mut w.e, &[tracked[0], 0, tracked[1]]);
+        returns(&mut w.e, SCENE_STATE_LIST, tracked_list);
+        // One queued object with two items in its first list (one with a
+        // binding target) and one in its second.
+        let queued = w.object(0);
+        w.e.mem.set_u32(queued + 0xcc, 0);
+        let queue = chain_cell(&mut w.e, &[queued]);
+        returns(&mut w.e, SCENE_STATE_QUEUE, queue);
+        returns(&mut w.e, SCENE_STATE_QUEUE_IS_EMPTY, 0);
+        w.e.register(NI_POINTER_COPY_CONSTRUCT, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        let with_target = w.e.mem.alloc(0x120);
+        let without_target = w.e.mem.alloc(0x120);
+        let second_item = w.e.mem.alloc(0x120);
+        for item in [with_target, without_target, second_item] {
+            w.e.mem.set_u32(item + 0x40, 0xaa);
+        }
+        w.e.mem.set_u32(with_target + 0x104, 0x7a00);
+        w.e.mem.set_u32(without_target + 0x104, 0x7b00);
+        let first_list = chain_cell(&mut w.e, &[with_target, without_target]);
+        let second_list = chain_cell(&mut w.e, &[second_item]);
+        returns(&mut w.e, OBJECT_ITEMS_A, first_list);
+        returns(&mut w.e, OBJECT_ITEMS_B, second_list);
+        w.e.register(ITEM_GET_TARGET_OBJECT, |_, a| {
+            ret((a[0] == 0x7a00) as u32 * 0x9a00)
+        });
+        let released = recording(&mut w.e, OBJECT_RELEASE, 0);
+        let stored = recording(&mut w.e, LINK_SET_NEXT, 0);
+        // `with_queue` off: only the tracked items are reset.
+        w.e.call(0x0045_bc80, &args![w.tes, 0u8, 0u8]);
+        assert_eq!(
+            tracked
+                .iter()
+                .map(|item| w.e.mem.u32(item + 0x40))
+                .collect::<Vec<_>>(),
+            vec![0, 0]
+        );
+        assert_eq!(w.e.mem.u32(with_target + 0x40), 0xaa);
+        assert!(released.borrow().is_empty());
+        // `with_queue` on: the queued object is reset and its items released.
+        w.e.call(0x0045_bc80, &args![w.tes, 0u8, 1u8]);
+        assert_eq!(w.shown_to_slot_bc.borrow().clone(), vec![vec![queued]]);
+        assert_eq!(*released.borrow(), vec![vec![0x9a00, 0]]);
+        for item in [with_target, without_target, second_item] {
+            assert_eq!(w.e.mem.u32(item + 0x40), 0, "{item:#x}");
+        }
+        // The queued object's link node got the value 3 (`fn_0045c570`).
+        assert_eq!(stored.borrow()[0], vec![queued + 2, 3]);
+        assert_eq!(w.e.mem.u32(queued + 0xcc), 0);
     }
 }
