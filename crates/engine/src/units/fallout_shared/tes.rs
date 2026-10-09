@@ -12,8 +12,16 @@
 //! water system's creation and deletion, the culling and lighting of the
 //! grid of loaded exterior cells, the grid-position tests,
 //! `TES::LoadGridCell`, and the function that loads one reference into the
-//! scene (`00451ef0`) with its small helpers. The next session continues at
-//! `00452440`.
+//! scene (`00451ef0`) with its small helpers.
+//! Session 3 (the next 40 functions, `00452440` to `00454af0`) holds the
+//! per-frame world update and the cell loading and switching code:
+//! `TES::UpdateCurrentGridCell` (which follows the player across the exterior
+//! grid and moves it), `TES::GridArrayLoad`, `TES::AllCellsInGridLoaded`,
+//! `TES::CleanUpUnusedTextures`, the world update `00453550` and
+//! `TES::UpdateCellMainThread`, the choice of a cell to unload (`00453a80`),
+//! and the two cell switches (`00453dc0` into a cell, `00454450` back out to
+//! the exterior), with their one-line accessors. The next session continues
+//! at `00454b10`.
 //!
 //! The PC build lays `TES` out like the Xbox build up to `0xC4` bytes; the
 //! offsets used so far are declared in [`TES`] below with the Xbox PDB names.
@@ -89,6 +97,12 @@ layout! {
         0x6C listActiveImageSpaceModifiers: Inline<BSSimpleList>,
         /// `bUpdateGridString` (Xbox PDB).
         0x7D bUpdateGridString: bool,
+        /// `fCell_delta_x` (Xbox PDB): the distance, in world units, from the
+        /// current position to the border of the cell in x (see
+        /// `TES::UpdateCurrentGridCell`).
+        0x80 fCell_delta_x: f32,
+        /// `fCell_delta_y` (Xbox PDB).
+        0x84 fCell_delta_y: f32,
         /// `pWorldSpace` (Xbox PDB).
         0x88 pWorldSpace: Ptr,
         /// `listLastLoadedExteriors` (Xbox PDB).
@@ -1998,6 +2012,1647 @@ pub fn fn_00452420(e: &mut Engine, loaded_data: Ptr, mask: u32) -> bool {
     e.mem.u32(loaded_data.addr() + 0x10) & mask != 0
 }
 
+// Globals, settings and callees of the cell-update code (session 3).
+
+/// `bBackgroundCellLoads:BackgroundLoad`.
+const SETTING_BACKGROUND_CELL_LOADS: u32 = 0x011c_9670;
+/// `bPreemptivelyUnloadCells:General`.
+const SETTING_PREEMPTIVELY_UNLOAD_CELLS: u32 = 0x011c_3d40;
+/// `fAnimationMult:General`.
+const SETTING_ANIMATION_MULT: u32 = 0x011c_5724;
+/// `bHavokDebug:HAVOK`.
+const SETTING_HAVOK_DEBUG: u32 = 0x0126_7b28;
+/// The `ExteriorCellLoader` singleton pointer.
+const EXTERIOR_CELL_LOADER: u32 = 0x011c_9618;
+/// The `Main` singleton pointer (`Main::RenderMenuBackground` is `00871dc0`).
+const MAIN_OBJECT: u32 = 0x011d_ea0c;
+/// The movie player pointer (`MoviePlayer::GetPlayingSequence` is `00ec17c0`).
+const MOVIE_PLAYER: u32 = 0x0126_fac4;
+/// The `FOCollisionListener` singleton pointer (0xC bytes, built by
+/// `00623430` on first use).
+const COLLISION_LISTENER: u32 = 0x011c_c224;
+/// An object `00453a80`'s sibling `004537b0` returns (passed to `0087aa90`).
+const TASK_QUEUE_OBJECT: u32 = 0x011d_f1a8;
+/// `BSAudio::QInstance` (Xbox PDB) returns this.
+const AUDIO_INSTANCE: u32 = 0x011f_6d98;
+/// The object `00453550` and `004537c0` pass to `0084d030` (a float getter).
+const FRAME_TIME_OBJECT: u32 = 0x011f_6394;
+/// The object `00452510` and `00452530` pass to `0040fbf0` and `0040fba0`
+/// (a counted lock).
+const CLEANUP_LOCK: u32 = 0x011f_4480;
+/// Byte read by `00452540`: whether texture purging is allowed at all.
+const PURGE_ALLOWED: u32 = 0x011c_70e9;
+/// Byte `00452480` returns.
+const BYTE_0119B8C8: u32 = 0x0119_b8c8;
+/// Byte stored by `00452e40`.
+const BYTE_011AF70C: u32 = 0x011a_f70c;
+/// Byte stored by `00454440`.
+const BYTE_011F9427: u32 = 0x011f_9427;
+/// Byte `00454450` sets to 1 (`0118 9625`).
+const BYTE_01189625: u32 = 0x0118_9625;
+/// Byte `UpdateCurrentGridCell` sets while the grid centre has moved and
+/// `00454450` clears; read with [`GRID_FLAG_MOVED_COPY`].
+const GRID_FLAG_MOVED: u32 = 0x011c_3c0c;
+/// Copy of [`GRID_FLAG_MOVED`] taken right after it is set or cleared.
+const GRID_FLAG_MOVED_COPY: u32 = 0x011f_94aa;
+/// Byte set by `00454450` from `00454b70` (called on the terrain manager).
+const GRID_FLAG_TERRAIN: u32 = 0x011f_94ab;
+/// Float stored by `UpdateCurrentGridCell` and `00454450` from `00452e70(0)`.
+const GRID_FLOAT_011F94AC: u32 = 0x011f_94ac;
+/// Two floats `00452e70` indexes with its argument.
+const FLOAT_PAIR_011F940C: u32 = 0x011f_940c;
+/// The world position (two floats) of the centre of the current grid cell.
+const GRID_CENTRE: u32 = 0x011f_962c;
+/// The previous value of [`GRID_CENTRE`] (two floats).
+const GRID_PREVIOUS_CENTRE: u32 = 0x011f_9634;
+/// A pair of floats `00452df0` compares [`GRID_PREVIOUS_CENTRE`] with.
+const GRID_CENTRE_REFERENCE: u32 = 0x011f_4980;
+/// Float time `00453550` adds its argument to.
+const TIME_ACCUMULATOR: u32 = 0x011c_3c08;
+/// A `double` 0.0 (`UpdateCurrentGridCell` compares the cell deltas with it).
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+/// A `double` 0.5.
+const DOUBLE_HALF: u32 = 0x0101_1588;
+/// A `double` 4096.0, the edge of an exterior cell in world units.
+const DOUBLE_CELL_SIZE: u32 = 0x0101_7a10;
+/// A `float` 4096.0 and a `float` 3072.0: the extent `UpdateCurrentGridCell`
+/// measures the cell deltas from (3072.0 when `uGridsToLoad` is 3).
+const FLOAT_CELL_EXTENT: u32 = 0x0101_7a3c;
+const FLOAT_CELL_EXTENT_SMALL_GRID: u32 = 0x0101_7a38;
+/// `"Loading Area (queued cells)..."` and `"Loading Area (unloaded
+/// cells)..."`.
+const LOADING_AREA_QUEUED_CELLS: u32 = 0x0101_7a18;
+const LOADING_AREA_UNLOADED_CELLS: u32 = 0x0101_79e8;
+
+/// `abs` (the CRT's, `int` in, `int` out).
+const ABS: u32 = 0x00ec_7d40;
+/// `TESWorldSpace::GetCellFromCellCoord` (Xbox PDB): `(worldSpace, x, y)`.
+const WORLD_SPACE_GET_CELL_FROM_CELL_COORD: u32 = 0x0058_75a0;
+/// The data handler's lookup of the cell at `(x, y, worldSpace, 0)`
+/// (`tesdatahandler.cpp`; a null world space means the current one).
+const DATA_HANDLER_GET_CELL: u32 = 0x0046_1c20;
+/// `TESDataHandler::UnloadCell` (Xbox PDB).
+const DATA_HANDLER_UNLOAD_CELL: u32 = 0x0046_2290;
+/// `ExteriorCellLoader::QueueCellLoad` (Xbox PDB): `(worldSpace, x, y)`.
+const EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD: u32 = 0x0052_83c0;
+/// `TES::AddToBuffer` (Xbox PDB): `(cell)`.
+const TES_ADD_TO_BUFFER: u32 = 0x0045_4b90;
+/// Returns `this + 0x8c`, the address of `listLastLoadedExteriors`.
+const GET_LAST_LOADED_EXTERIORS: u32 = 0x0045_bb80;
+/// `TES::SetWorldSpace` (the decompiler's name for `00458200`): `(world
+/// space)`.
+const SET_WORLD_SPACE: u32 = 0x0045_8200;
+/// `(text)`: the call both "Loading Area (...)" messages are passed to.
+const SET_LOADING_AREA_TEXT: u32 = 0x0045_81e0;
+/// `TESObjectCELL::Load3D` (Xbox PDB).
+const CELL_LOAD_3D: u32 = 0x0054_5cf0;
+/// `NiAVObject::UpdateProperties` (Xbox PDB).
+const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// `TESObjectCELL::AttachLights` (Xbox PDB): `(cell, flag)`.
+const CELL_ATTACH_LIGHTS: u32 = 0x0054_ba80;
+/// `TESObjectCELL::Detach` (Xbox PDB): `(cell, flag)`.
+const CELL_DETACH: u32 = 0x0055_2bd0;
+/// `BGSTerrainManager::Update` (Xbox PDB): `(terrain, position, flags)`.
+const TERRAIN_MANAGER_UPDATE: u32 = 0x006f_ca90;
+/// Puts the item at the address passed at the head of a list: `(list,
+/// &item)`. The list `00452ff0` fills is `listLastLoadedExteriors`.
+const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+/// The `NiPointer` getter (first word of `this`).
+const NI_POINTER_GET: u32 = 0x0055_9450;
+/// `NiPointer<NiSourceTexture>` constructor `(this, 0)` and destructor.
+const NI_POINTER_CTOR: u32 = 0x0063_3c90;
+const NI_POINTER_DTOR: u32 = 0x0045_cec0;
+/// `TES::CreateTextureImage` (Xbox PDB): `(this, name, &texture, 1, 0)`.
+const TES_CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
+/// Returns `this + 0x64` (`TES::pWaterSystem`; the map names it
+/// `DetailedActorPathHandler::GetCurrentNodeIndex`, identical code).
+const TES_WATER_SYSTEM_GETTER: u32 = 0x0070_ec90;
+/// `(waterSystem, texture)`: stores the texture through `0066b0d0` on
+/// `this + 0x1c`.
+const WATER_SYSTEM_SET_TEXTURE: u32 = 0x0052_d3b0;
+/// `TESObjectCELL::LoadAllTempData` (Xbox PDB).
+const CELL_LOAD_ALL_TEMP_DATA: u32 = 0x0055_0340;
+/// `(modelLoader, cell)`: byte answer used to start loading a cell's models.
+const MODEL_LOADER_CELL_NEEDS_MODELS: u32 = 0x0044_7950;
+/// `TESObjectCELL::AttachToWorld` (Xbox PDB): `(cell, root)`.
+const CELL_ATTACH_TO_WORLD: u32 = 0x0055_2970;
+/// The exterior havok world's counters (`bhkworld.obj`): `00c66300` and
+/// `00c66310` add one to the counters at `+0x18` and `+0x1c`; `00c6b540`
+/// and `00c68f00` take one off (argument: a flag that re-enables the
+/// work the counter held back).
+const HAVOK_WORLD_ADD_COUNT_18: u32 = 0x00c6_6300;
+const HAVOK_WORLD_ADD_COUNT_1C: u32 = 0x00c6_6310;
+const HAVOK_WORLD_DROP_COUNT_18: u32 = 0x00c6_b540;
+const HAVOK_WORLD_DROP_COUNT_1C: u32 = 0x00c6_8f00;
+/// `bhkWorld::SetVisualDebugger` (Xbox PDB): `(world, flag)`.
+const HAVOK_WORLD_SET_VISUAL_DEBUGGER: u32 = 0x00c6_a640;
+/// Returns `this + 0x50` (`bstempeffectparticle.cpp`, identical code); the
+/// grid move calls it on the havok world and drops the result.
+const HAVOK_WORLD_GET_0X50: u32 = 0x0068_a830;
+/// `FaderManager::CreateFader` (Xbox PDB): `(manager, 1, seconds, flag)`.
+const FADER_CREATE_FADER: u32 = 0x0070_0960;
+/// `PlayerCharacter` virtual slots: `0x1f4` returns the position (three
+/// floats), `0x1d0` a pointer that is null while no fade is wanted.
+const PLAYER_SLOT_POSITION: u32 = 0x1f4;
+const PLAYER_SLOT_FADE_OBJECT: u32 = 0x1d0;
+
+/// The `ExteriorCellLoader` singleton.
+fn exterior_cell_loader(e: &mut Engine) -> u32 {
+    e.global(EXTERIOR_CELL_LOADER)
+}
+
+/// The `abs` check `UpdateCurrentGridCell` and `00454450` make: the grid
+/// centre moved by more than one cell in x (first) or y.
+fn grid_moved_far(e: &mut Engine, delta_x: i32, delta_y: i32) -> bool {
+    e.call(ABS, &args![delta_x]).i32() > 1 || e.call(ABS, &args![delta_y]).i32() > 1
+}
+
+/// `(grid + 0.5) * 4096.0` rounded to a `float`: the world coordinate of the
+/// centre of grid column or row `grid`.
+fn grid_cell_centre(e: &mut Engine, grid: i32) -> f32 {
+    let half: f64 = e.global(DOUBLE_HALF);
+    let size: f64 = e.global(DOUBLE_CELL_SIZE);
+    ((grid as f64 + half) * size) as f32
+}
+
+/// Stores the world position of the centre of the current grid cell in
+/// [`GRID_CENTRE`] (through `00452dc0`).
+fn store_grid_centre(e: &mut Engine, this: Ptr<TES>) {
+    let grid_y = e.get(this, TES::iCurrentGridY);
+    let centre_y = grid_cell_centre(e, grid_y);
+    let grid_x = e.get(this, TES::iCurrentGridX);
+    let centre_x = grid_cell_centre(e, grid_x);
+    let words = e.with_stack(8, |e, out| {
+        let result = fn_00452dc0(e, out, centre_x, centre_y);
+        [e.mem.u32(result.addr()), e.mem.u32(result.addr() + 4)]
+    });
+    e.set_global(GRID_CENTRE, words[0]);
+    e.set_global(GRID_CENTRE + 4, words[1]);
+}
+
+/// `previous centre = centre` (two words).
+fn copy_grid_centre_to_previous(e: &mut Engine) {
+    let first: u32 = e.global(GRID_CENTRE);
+    e.set_global(GRID_PREVIOUS_CENTRE, first);
+    let second: u32 = e.global(GRID_CENTRE + 4);
+    e.set_global(GRID_PREVIOUS_CENTRE + 4, second);
+}
+
+/// The tail both `00453dc0` and `00454450` end with: the water system is
+/// given the image of the location name (`WATER_SYSTEM_SET_TEXTURE`).
+/// `named` is whether the name starts with a character (the callers test it
+/// with their own read of the name); `name_of` reads the name (called again
+/// inside the scope, as the code does). Named: under a memory tag `0x1d`
+/// guard, `TES::CreateTextureImage` builds the image into a
+/// `NiPointer<NiSourceTexture>` temporary and its pointer is handed over;
+/// otherwise a null image is.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+fn apply_location_image(
+    e: &mut Engine,
+    line: u32,
+    named: bool,
+    name_of: impl Fn(&mut Engine) -> u32,
+) {
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if !named {
+        let water_system = e.call(TES_WATER_SYSTEM_GETTER, &args![tes_singleton]).u32();
+        e.call(WATER_SYSTEM_SET_TEXTURE, &args![water_system, 0u32]);
+        return;
+    }
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0x1du32, 1u32, TES_CPP_PATH, line],
+        );
+        e.with_stack(4, |e, texture| {
+            e.call(NI_POINTER_CTOR, &args![texture, 0u32]);
+            let name = name_of(e);
+            e.call(
+                TES_CREATE_TEXTURE_IMAGE,
+                &args![tes_singleton, name, texture, 1u32, 0u32],
+            );
+            let image = e.call(NI_POINTER_GET, &args![texture]).u32();
+            let water_system = e.call(TES_WATER_SYSTEM_GETTER, &args![tes_singleton]).u32();
+            e.call(WATER_SYSTEM_SET_TEXTURE, &args![water_system, image]);
+            e.call(NI_POINTER_DTOR, &args![texture]);
+        });
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 00452440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x40000000` of the flags word of `form` is set
+/// (`00452460` with that mask). `00451ef0` asks it of a type 0x23 form.
+pub fn fn_00452440(e: &mut Engine, form: Ptr) -> bool {
+    fn_00452460(e, form, 0x4000_0000)
+}
+
+// Translated from 00452460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether any bit of `mask` is set in the flags word `00624700` finds in
+/// `form` (it returns the address `form + 0x48`).
+pub fn fn_00452460(e: &mut Engine, form: Ptr, mask: u32) -> bool {
+    let flags = e.call(0x0062_4700, &args![form]).u32();
+    e.mem.u32(flags) & mask != 0
+}
+
+// Translated from 00452480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `0119b8c8`.
+pub fn fn_00452480(e: &mut Engine) -> u8 {
+    e.global(BYTE_0119B8C8)
+}
+
+// Translated from 00452490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::CleanUpUnusedTextures` (Xbox PDB): when purging is allowed
+/// (`00452540`), takes the counted lock (`00452510`), flushes (`00664cd0(1)`),
+/// purges the unused textures (`BSTexturePalette::PurgeUnusedTextures`,
+/// `00a61cd0`) when `bAllowUnusedPurge` (`004524f0`) or `force` is set,
+/// flushes again and releases the lock (`00452530`).
+pub fn tes_clean_up_unused_textures(e: &mut Engine, this: Ptr<TES>, force: u8) {
+    if fn_00452540(e, this) == 0 {
+        return;
+    }
+    fn_00452510(e);
+    e.call(0x0066_4cd0, &args![1u32]);
+    if fn_004524f0(e, this) != 0 || force != 0 {
+        e.call(0x00a6_1cd0, &args![]);
+    }
+    e.call(0x0066_4cd0, &args![1u32]);
+    fn_00452530(e);
+}
+
+// Translated from 004524f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::bAllowUnusedPurge` (Xbox PDB `+0xB5`).
+pub fn fn_004524f0(e: &mut Engine, this: Ptr<TES>) -> u8 {
+    e.get(this, TES::bAllowUnusedPurge) as u8
+}
+
+// Translated from 00452510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0040fbf0(0)` on the object at `011f4480` (takes the counted lock).
+pub fn fn_00452510(e: &mut Engine) {
+    e.call(0x0040_fbf0, &args![CLEANUP_LOCK, 0u32]);
+}
+
+// Translated from 00452530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0040fba0` on the object at `011f4480` (releases the counted lock).
+pub fn fn_00452530(e: &mut Engine) {
+    e.call(0x0040_fba0, &args![CLEANUP_LOCK]);
+}
+
+// Translated from 00452540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether textures may be purged: true unless the byte at `011c70e9` is set
+/// and `005d4a40(this)` says no.
+pub fn fn_00452540(e: &mut Engine, this: Ptr<TES>) -> u8 {
+    if e.global::<u8>(PURGE_ALLOWED) != 0 && !e.call(0x005d_4a40, &args![this]).bool() {
+        return 0;
+    }
+    1
+}
+
+// Translated from 00452580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::UpdateCurrentGridCell` (Xbox PDB): follows the player (or camera)
+/// position `pos` (two floats, the x and y world coordinates) across the
+/// exterior grid. `flag` is the "settle" flag the callers pass (`0` from the
+/// cell switches, true when the save/load object does not answer yes).
+///
+/// First it clears the last-loaded list, refreshes the havok bound and the
+/// moved flags. With no data handler it does nothing. When the grid centre
+/// is not set yet (`0x7fffffff`) it takes it from `pos`, loads the area
+/// (`00457d70(1, worldSpace, 0)`, `004515a0`) and returns true.
+///
+/// Otherwise the offset of `pos` from the centre of the current cell is
+/// stored in `fCell_delta_x`/`y` as the distance left to the cell border
+/// (`4096.0` or `3072.0` for three grids). While the position is still well
+/// inside the cell (both distances positive, no script running) it only
+/// queues the cell loads of the column and row that come into range when the
+/// background loading settings allow, and returns false. Once the position
+/// crosses into another cell the grid is moved: the new centre and the world
+/// centre globals are stored, the pending loads cancelled and (without an
+/// interior cell loaded, or while a script runs) the cells are loaded,
+/// unloaded and attached again with the havok world locked, then the terrain
+/// manager is updated at the player and true is returned.
+pub fn tes_update_current_grid_cell(e: &mut Engine, this: Ptr<TES>, pos: Ptr, flag: u8) -> bool {
+    let base = this.addr();
+    let list = e.call(GET_LAST_LOADED_EXTERIORS, &args![this]).u32();
+    e.call(0x0047_0470, &args![list]);
+    e.call(0x0045_c840, &args![this]);
+    if e.global::<u8>(GRID_FLAG_MOVED) != 0
+        && e.global::<u8>(GRID_FLAG_MOVED_COPY) == 0
+        && e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0
+    {
+        e.set_global(GRID_FLAG_MOVED, 0u8);
+        e.call(0x0045_c780, &args![this]);
+    }
+    let script_context: u32 = e.global(SCRIPT_CONTEXT);
+    if e.call(0x0042_ce10, &args![script_context]).bool() {
+        let bound = e.call(NI_POINTER_GET, &args![base + 0xc0]).u32();
+        e.call(0x0062_8da0, &args![bound]);
+    }
+    let grid_cells = e.get(this, TES::pGridCellA);
+    let cell = e.call(0x0045_7070, &args![this]).u32();
+    let bound = e.call(NI_POINTER_GET, &args![base + 0xc0]).u32();
+    e.call(0x0062_71b0, &args![bound, cell, grid_cells]);
+    if e.global::<u32>(DATA_HANDLER) == 0 {
+        return false;
+    }
+    if e.get(this, TES::iCurrentGridX) == 0x7fff_ffff
+        || e.get(this, TES::iCurrentGridY) == 0x7fff_ffff
+    {
+        if !pos.is_null() {
+            let x_value = e.mem.f32(pos.addr());
+            let cell_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x_value]).i32() >> 12;
+            e.set(this, TES::iCurrentGridX, cell_x);
+            let y_value = e.mem.f32(pos.addr() + 4);
+            let cell_y = e.call(FLOAT_TO_INT_ROUNDED, &args![y_value]).i32() >> 12;
+            e.set(this, TES::iCurrentGridY, cell_y);
+            let grid_x = e.get(this, TES::iCurrentGridX);
+            e.set(this, TES::iCurrentQueuedX, grid_x);
+            let grid_y = e.get(this, TES::iCurrentGridY);
+            e.set(this, TES::iCurrentQueuedY, grid_y);
+        }
+        let world_space = e.get(this, TES::pWorldSpace);
+        e.call(0x0045_7d70, &args![this, 1u32, world_space, 0u32]);
+        fn_004515a0(e, this, pos, 0);
+        return true;
+    }
+    let x_value = e.mem.f32(pos.addr());
+    let position_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x_value]).i32();
+    let y_value = e.mem.f32(pos.addr() + 4);
+    let position_y = e.call(FLOAT_TO_INT_ROUNDED, &args![y_value]).i32();
+    let grid_x = e.get(this, TES::iCurrentGridX);
+    let offset_x = position_x.wrapping_sub(grid_x.wrapping_shl(12).wrapping_add(0x800));
+    let grid_y = e.get(this, TES::iCurrentGridY);
+    let offset_y = position_y.wrapping_sub(grid_y.wrapping_shl(12).wrapping_add(0x800));
+    let mut extent: f32 = e.global(FLOAT_CELL_EXTENT);
+    if setting_uint(e, SETTING_GRIDS_TO_LOAD) == 3 {
+        extent = e.global(FLOAT_CELL_EXTENT_SMALL_GRID);
+    }
+    let distance_x = e.call(ABS, &args![offset_x]).i32();
+    e.set(
+        this,
+        TES::fCell_delta_x,
+        (extent as f64 - distance_x as f64) as f32,
+    );
+    let distance_y = e.call(ABS, &args![offset_y]).i32();
+    e.set(
+        this,
+        TES::fCell_delta_y,
+        (extent as f64 - distance_y as f64) as f32,
+    );
+    let script_running = e.call(0x0042_ce10, &args![script_context]).bool();
+    let zero: f64 = e.global(DOUBLE_ZERO);
+    if e.get(this, TES::fCell_delta_x) as f64 > zero
+        && e.get(this, TES::fCell_delta_y) as f64 > zero
+        && !script_running
+    {
+        if setting_byte(e, SETTING_BACKGROUND_CELL_LOADS) != 0
+            && e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0
+        {
+            let queued_x = position_x >> 12;
+            let queued_y = position_y >> 12;
+            if e.get(this, TES::iCurrentQueuedX) != queued_x
+                || e.get(this, TES::iCurrentQueuedY) != queued_y
+            {
+                if setting_byte(e, SETTING_PREEMPTIVELY_UNLOAD_CELLS) != 0
+                    && e.call(0x0045_4d50, &args![this, 1u32]).u32() != 0
+                {
+                    tes_clean_up_unused_textures(e, this, 0);
+                }
+                let half = setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1;
+                let reach = half as i32;
+                let mut column = e.get(this, TES::iCurrentQueuedX);
+                let moved_x = queued_x.wrapping_sub(e.get(this, TES::iCurrentQueuedX));
+                if moved_x != 0 {
+                    column = ((half.wrapping_add(1)) as i32)
+                        .wrapping_mul(moved_x)
+                        .wrapping_add(column);
+                    let mut offset = reach.wrapping_neg();
+                    while offset <= reach {
+                        let row = offset.wrapping_add(e.get(this, TES::iCurrentQueuedY));
+                        let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                        let loader = exterior_cell_loader(e);
+                        e.call(
+                            EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD,
+                            &args![loader, world_space, column, row],
+                        );
+                        offset += 1;
+                    }
+                }
+                let mut row = e.get(this, TES::iCurrentQueuedY);
+                let moved_y = queued_y.wrapping_sub(e.get(this, TES::iCurrentQueuedY));
+                if moved_y != 0 {
+                    row = ((half.wrapping_add(1)) as i32)
+                        .wrapping_mul(moved_y)
+                        .wrapping_add(row);
+                    let mut offset = reach.wrapping_neg();
+                    while offset <= reach {
+                        let column_here = offset.wrapping_add(e.get(this, TES::iCurrentQueuedX));
+                        let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                        let loader = exterior_cell_loader(e);
+                        e.call(
+                            EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD,
+                            &args![loader, world_space, column_here, row],
+                        );
+                        offset += 1;
+                    }
+                }
+                if moved_x != 0 && moved_y != 0 {
+                    let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                    let loader = exterior_cell_loader(e);
+                    e.call(
+                        EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD,
+                        &args![loader, world_space, column, row],
+                    );
+                }
+            }
+            e.set(this, TES::iCurrentQueuedX, queued_x);
+            e.set(this, TES::iCurrentQueuedY, queued_y);
+        }
+        return false;
+    }
+
+    // The position left the cell: move the grid.
+    fn_00452e40(e, 0);
+    let mut loading_menu = e.call(0x0070_5e80, &args![]).u8();
+    let loader = exterior_cell_loader(e);
+    if loading_menu == 0
+        && e.call(0x0052_85a0, &args![loader]).u32() != 0
+        && !e.call(0x0042_ce10, &args![script_context]).bool()
+    {
+        e.call(
+            SET_LOADING_AREA_TEXT,
+            &args![this, LOADING_AREA_QUEUED_CELLS],
+        );
+        loading_menu = 1;
+    }
+    let mut new_x = position_x >> 12;
+    let mut new_y = position_y >> 12;
+    if e.call(0x0042_ce10, &args![script_context]).bool()
+        && fn_00452e90(e, Ptr::new(script_context))
+    {
+        new_x = e.get(this, TES::iCurrentGridX);
+        new_y = e.get(this, TES::iCurrentGridY);
+    }
+    let moved_x = new_x.wrapping_sub(e.get(this, TES::iCurrentGridX));
+    let moved_y = new_y.wrapping_sub(e.get(this, TES::iCurrentGridY));
+    e.set(this, TES::iCurrentGridX, new_x);
+    e.set(this, TES::iCurrentGridY, new_y);
+    let grid_x = e.get(this, TES::iCurrentGridX);
+    e.set(this, TES::iCurrentQueuedX, grid_x);
+    let grid_y = e.get(this, TES::iCurrentGridY);
+    e.set(this, TES::iCurrentQueuedY, grid_y);
+    copy_grid_centre_to_previous(e);
+    store_grid_centre(e, this);
+    if fn_00452df0(
+        e,
+        Ptr::new(GRID_PREVIOUS_CENTRE),
+        Ptr::new(GRID_CENTRE_REFERENCE),
+    ) || grid_moved_far(e, moved_x, moved_y)
+    {
+        copy_grid_centre_to_previous(e);
+    }
+    let wind = fn_00452e70(e, 0);
+    e.set_global(GRID_FLOAT_011F94AC, wind);
+    e.set_global(GRID_FLAG_MOVED, 1u8);
+    let moved: u8 = e.global(GRID_FLAG_MOVED);
+    e.set_global(GRID_FLAG_MOVED_COPY, moved);
+    e.call(0x0045_c840, &args![this]);
+    e.call(0x0045_c780, &args![this]);
+    let loader = exterior_cell_loader(e);
+    e.call(0x0052_8110, &args![loader]);
+    let loader = exterior_cell_loader(e);
+    if e.call(0x0052_81f0, &args![loader]).u32() != 0 {
+        let loader = exterior_cell_loader(e);
+        e.call(0x0052_82d0, &args![loader]);
+    }
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0 || script_running {
+        if setting_byte(e, SETTING_PREEMPTIVELY_UNLOAD_CELLS) != 0
+            && e.call(0x0045_4d50, &args![this, 1u32]).u32() != 0
+        {
+            tes_clean_up_unused_textures(e, this, 0);
+        }
+        if e.call(GET_WORLD_SPACE, &args![this]).u32() == 0 {
+            let data_handler: u32 = e.global(DATA_HANDLER);
+            let holder = e.call(0x0046_0140, &args![data_handler]).u32();
+            let slot = e.call(0x0068_15c0, &args![holder]).u32();
+            let world_space = e.mem.u32(slot);
+            e.call(SET_WORLD_SPACE, &args![this, world_space]);
+        }
+        let far = grid_moved_far(e, moved_x, moved_y);
+        if fn_00451010(e) != 0 {
+            if far || flag == 0 {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_1C, &args![world, 0u32]);
+            }
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_ADD_COUNT_1C, &args![world]);
+        }
+        let grid_cells = e.get(this, TES::pGridCellA);
+        e.vcall(grid_cells.addr(), 0x10, &args![new_x, new_y]);
+        if fn_00451010(e) != 0 {
+            let loader = exterior_cell_loader(e);
+            if loading_menu == 0 && (!far || e.call(0x0052_85a0, &args![loader]).u32() == 0) {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_GET_0X50, &args![world]);
+            }
+            if far {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_1C, &args![world, 0u32]);
+            } else {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_1C, &args![world, flag]);
+            }
+        }
+        if loading_menu == 0
+            && !tes_all_cells_in_grid_loaded(e, this)
+            && !e.call(0x0042_ce10, &args![script_context]).bool()
+        {
+            e.call(
+                SET_LOADING_AREA_TEXT,
+                &args![this, LOADING_AREA_UNLOADED_CELLS],
+            );
+        }
+        if grid_moved_far(e, moved_x, moved_y) {
+            e.call(0x0045_7be0, &args![this, 0u32]);
+        }
+        if fn_00451010(e) != 0 {
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
+        }
+        tes_grid_array_load(e, this);
+        fn_00452e50(e, this);
+        if fn_00451010(e) != 0 {
+            if far {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
+            } else {
+                let world = fn_00451010(e);
+                e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, flag]);
+            }
+        }
+    }
+    tes_clean_up_unused_textures(e, this, 0);
+    e.call(0x0062_f460, &args![]);
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0 {
+        let player: u32 = e.global(PLAYER_CHARACTER);
+        // `PlayerCharacter` slot 0x1f4 returns the position (three floats).
+        let player_position = e.vcall(player, PLAYER_SLOT_POSITION, &args![]).u32();
+        let world_space = e.get(this, TES::pWorldSpace);
+        let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+        e.call(
+            TERRAIN_MANAGER_UPDATE,
+            &args![terrain, player_position, 0xfu32],
+        );
+    }
+    fn_00452e40(e, 1);
+    true
+}
+
+// Translated from 00452dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the two floats `x`, `y` in `this` and returns `this` (a
+/// two-float point's constructor).
+pub fn fn_00452dc0(e: &mut Engine, this: Ptr, x: f32, y: f32) -> Ptr {
+    e.mem.set_f32(this.addr(), x);
+    e.mem.set_f32(this.addr() + 4, y);
+    this
+}
+
+// Translated from 00452df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the two floats at `this` equal those at `other` (a NaN never
+/// equals).
+pub fn fn_00452df0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    e.mem.f32(this.addr()) == e.mem.f32(other.addr())
+        && e.mem.f32(this.addr() + 4) == e.mem.f32(other.addr() + 4)
+}
+
+// Translated from 00452e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte in `011af70c`.
+pub fn fn_00452e40(e: &mut Engine, value: u8) {
+    e.set_global(BYTE_011AF70C, value);
+}
+
+// Translated from 00452e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `TES::bUpdateGridString` (Xbox PDB `+0x7D`).
+pub fn fn_00452e50(e: &mut Engine, this: Ptr<TES>) {
+    e.set(this, TES::bUpdateGridString, true);
+}
+
+// Translated from 00452e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The float at `011f940c + 4 * (selector != 0)`, returned in `ST0`.
+pub fn fn_00452e70(e: &mut Engine, selector: u8) -> f32 {
+    let index = (selector != 0) as u32;
+    e.global(FLOAT_PAIR_011F940C + 4 * index)
+}
+
+// Translated from 00452e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit `0x20` of the flags word at `+0x244` of `this` (the script context
+/// object at `011ddf38`; `0042ce10` reads its own bit of the same word).
+pub fn fn_00452e90(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x244) & 0x20 != 0
+}
+
+// Translated from 00452eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::CancelExteriorCellLoads` (Xbox PDB): calls
+/// `ExteriorCellLoader::CancelAllCellLoads` (`00528540`) on the loader.
+pub fn tes_cancel_exterior_cell_loads(e: &mut Engine, _this: Ptr<TES>) {
+    let loader = exterior_cell_loader(e);
+    e.call(0x0052_8540, &args![loader]);
+}
+
+// Translated from 00452ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::AllCellsInGridLoaded` (Xbox PDB): false without a world space (the
+/// one of the `TES` singleton); otherwise whether, for every slot of the
+/// `uGridsToLoad` square around the current grid cell that holds a cell (or
+/// whose cell `TESWorldSpace::GetCellFromCellCoord`, `005875a0`, finds),
+/// `00454e20` says the cell is loaded. A slot that holds nothing is skipped; a
+/// missing cell or one that is not loaded makes the answer false.
+pub fn tes_all_cells_in_grid_loaded(e: &mut Engine, this: Ptr<TES>) -> bool {
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if e.call(GET_WORLD_SPACE, &args![tes_singleton]).u32() == 0 {
+        return false;
+    }
+    let half = setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1;
+    let origin_x = e.get(this, TES::iCurrentGridX).wrapping_sub(half as i32);
+    let half = setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1;
+    let origin_y = e.get(this, TES::iCurrentGridY).wrapping_sub(half as i32);
+    let mut x = 0u32;
+    while x < grids_to_load(e) {
+        let mut y = 0u32;
+        while y < grids_to_load(e) {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            if slot != 0 {
+                let mut cell = e.mem.u32(slot);
+                if cell == 0 {
+                    let tes_singleton: u32 = e.global(TES_SINGLETON);
+                    let world_space = e.call(GET_WORLD_SPACE, &args![tes_singleton]).u32();
+                    cell = e
+                        .call(
+                            WORLD_SPACE_GET_CELL_FROM_CELL_COORD,
+                            &args![
+                                world_space,
+                                origin_x.wrapping_add(x as i32),
+                                origin_y.wrapping_add(y as i32)
+                            ],
+                        )
+                        .u32();
+                }
+                if cell == 0 || !e.call(0x0045_4e20, &args![this, cell]).bool() {
+                    return false;
+                }
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+    true
+}
+
+// Translated from 00452ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GridArrayLoad` (Xbox PDB): loads every cell of the `uGridsToLoad`
+/// square around the current grid cell, then attaches them.
+///
+/// Under a memory tag `0x1a` guard: for every grid slot `TES::LoadGridCell`
+/// is run and the cell found at the grid position is entered in the
+/// exterior buffer (`00454b90`) when `00453490` says so; a load-screen
+/// counter advances when the loading menu is up or the save/load object says
+/// yes twice (the counter and the percentage it computes live in locals the
+/// code never reads again, so only the setting reads and the screen refresh
+/// `00861ea0` remain). Then every cell of the square that exists is put on
+/// the last-loaded list, and those in load state 5 are first attached
+/// (`0054bcf0`), buffered and have their 3D properties updated. The havok
+/// world's `+0x18` counter is raised around the loading and the work ends
+/// with `00451570(0)` and `00451520(1)` (a byte at `01189184`).
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_grid_array_load(e: &mut Engine, this: Ptr<TES>) {
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0x1au32, 1u32, TES_CPP_PATH, 0x8d6u32],
+        );
+        let half = setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1;
+        let origin_x = e.get(this, TES::iCurrentGridX).wrapping_sub(half as i32);
+        let half = setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1;
+        let origin_y = e.get(this, TES::iCurrentGridY).wrapping_sub(half as i32);
+        let mut loading_menu_visible = 0u8;
+        if e.call(0x0070_5e80, &args![]).bool() {
+            loading_menu_visible = 1;
+        }
+        let loading_menu_raw = e.call(0x0070_5e80, &args![]).u8();
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        let script_context: u32 = e.global(SCRIPT_CONTEXT);
+        fn_004534f0(e, save_load, 1);
+        fn_00453500(e, Ptr::new(script_context), 1);
+        if fn_00451010(e) != 0 {
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
+        }
+        let mut x = 0u32;
+        while x < grids_to_load(e) {
+            let mut y = 0u32;
+            while y < grids_to_load(e) {
+                tes_load_grid_cell(
+                    e,
+                    this,
+                    x,
+                    y,
+                    origin_x.wrapping_add(x as i32),
+                    origin_y.wrapping_add(y as i32),
+                );
+                let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                let data_handler: u32 = e.global(DATA_HANDLER);
+                let cell = e
+                    .call(
+                        DATA_HANDLER_GET_CELL,
+                        &args![
+                            data_handler,
+                            origin_x.wrapping_add(x as i32),
+                            origin_y.wrapping_add(y as i32),
+                            world_space,
+                            0u32
+                        ],
+                    )
+                    .u32();
+                let tes_singleton: u32 = e.global(TES_SINGLETON);
+                if fn_00453490(e, Ptr::new(tes_singleton), Ptr::new(cell)) {
+                    e.call(TES_ADD_TO_BUFFER, &args![this, cell]);
+                }
+                let save_load: u32 = e.global(SAVE_LOAD_GAME);
+                let counts = loading_menu_raw != 0
+                    || (e.call(0x0047_c850, &args![save_load]).bool()
+                        && e.call(0x0047_c850, &args![save_load]).bool());
+                if counts {
+                    // The percentage (loaded / grids^2 * 100) goes to a local
+                    // the code never reads; the two setting reads remain.
+                    let first = e
+                        .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
+                        .u32();
+                    let second = e
+                        .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
+                        .u32();
+                    let _cells = e.mem.u32(first).wrapping_mul(e.mem.u32(second));
+                    let save_load: u32 = e.global(SAVE_LOAD_GAME);
+                    if e.call(0x0047_c850, &args![save_load]).bool()
+                        && e.call(0x0047_c850, &args![save_load]).bool()
+                    {
+                        e.call(0x0086_1ea0, &args![save_load]);
+                    }
+                }
+                y += 1;
+            }
+            x += 1;
+        }
+        if fn_00451010(e) != 0 {
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
+        }
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        fn_004534f0(e, save_load, 0);
+        if e.call(0x0087_27b0, &args![save_load]).bool() {
+            let first = e.call(0x0047_c850, &args![save_load]).u8();
+            let second = e.call(0x0047_c850, &args![save_load]).u8();
+            fn_004534f0(e, save_load, 1);
+            fn_004534f0(e, save_load, 1);
+            e.call(0x0085_8af0, &args![save_load, 0u32, 0u32, 0u32]);
+            e.call(0x0085_f850, &args![save_load, 0u32]);
+            fn_004534f0(e, save_load, second as u32);
+            fn_004534f0(e, save_load, first as u32);
+        }
+        fn_00453500(e, Ptr::new(script_context), 0);
+        if !e.call(0x0042_ce10, &args![script_context]).bool() {
+            e.call(0x0084_92b0, &args![script_context, 0u32]);
+        }
+        if fn_00451010(e) != 0 {
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
+        }
+        let mut x = 0u32;
+        while x < grids_to_load(e) {
+            let mut y = 0u32;
+            while y < grids_to_load(e) {
+                if e.call(GET_WORLD_SPACE, &args![this]).u32() != 0 {
+                    let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+                    let data_handler: u32 = e.global(DATA_HANDLER);
+                    let cell = e
+                        .call(
+                            DATA_HANDLER_GET_CELL,
+                            &args![
+                                data_handler,
+                                origin_x.wrapping_add(x as i32),
+                                origin_y.wrapping_add(y as i32),
+                                world_space,
+                                0u32
+                            ],
+                        )
+                        .u32();
+                    if cell != 0 {
+                        if fn_00450fd0(e, Ptr::new(cell)) == 5 {
+                            e.call(
+                                0x0054_bcf0,
+                                &args![cell, (loading_menu_visible == 0) as u32],
+                            );
+                            e.call(TES_ADD_TO_BUFFER, &args![this, cell]);
+                            let node = e.call(CELL_LOAD_3D, &args![cell]).u32();
+                            e.call(NODE_UPDATE_PROPERTIES, &args![node]);
+                            if fn_00453470(e, Ptr::new(node)) == 0 {
+                                e.with_stack(12, |e, update| {
+                                    e.call(UPDATE_OBJECT_CTOR, &args![update, 0.0f32, 0u8, 0u8]);
+                                    e.call(NODE_UPDATE, &args![node, update]);
+                                });
+                            }
+                        }
+                        e.with_stack(4, |e, slot| {
+                            e.mem.set_u32(slot.addr(), cell);
+                            let list = e.call(GET_LAST_LOADED_EXTERIORS, &args![this]).u32();
+                            e.call(LIST_ADD_HEAD, &args![list, slot]);
+                        });
+                    }
+                }
+                y += 1;
+            }
+            x += 1;
+        }
+        if fn_00451010(e) != 0 {
+            let world = fn_00451010(e);
+            e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
+        }
+        fn_00451570(e, 0);
+        fn_00451520(e, 1);
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 00453470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `009938b0` on `this + 0x9c` and returns its result.
+pub fn fn_00453470(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0099_38b0, &args![this.addr() + 0x9c]).u32()
+}
+
+// Translated from 00453490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this` is the `TES` the checks run on (`00454bd0`/`00454e20` take it as
+/// `this`). Whether `cell` (null: false) is in the buffer: `00454bd0` when
+/// `00425fd0` says the cell is an interior (its bit 0 at +0x24), `00454e20`
+/// otherwise.
+pub fn fn_00453490(e: &mut Engine, this: Ptr<TES>, cell: Ptr) -> bool {
+    if cell.is_null() {
+        return false;
+    }
+    if e.call(0x0042_5fd0, &args![cell]).bool() {
+        e.call(0x0045_4bd0, &args![this, cell]).bool()
+    } else {
+        e.call(0x0045_4e20, &args![this, cell]).bool()
+    }
+}
+
+// Translated from 004534f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Does nothing (`RET 4`); `this` is the `TESSaveLoadGame` object, the word
+/// a flag the callers pass.
+pub fn fn_004534f0(_e: &mut Engine, _this: u32, _value: u32) {}
+
+// Translated from 00453500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`value` != 0) or clears bit `0x10` of the flags word at `+0x244` of
+/// `this` (the script context object at `011ddf38`).
+pub fn fn_00453500(e: &mut Engine, this: Ptr, value: u8) {
+    let address = this.addr() + 0x244;
+    let flags = e.mem.u32(address);
+    if value != 0 {
+        e.mem.set_u32(address, flags | 0x10);
+    } else {
+        e.mem.set_u32(address, flags & !0x10);
+    }
+}
+
+// Translated from 00453550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame update of the world manager (`delta` seconds): feeds the sky's
+/// wind speed and angle (`fWindSpeed` +0xCC, `fWindAngle` +0xD0, read by
+/// `004536e0`/`00453700`; zeros with an interior cell loaded) to `00c468c0`
+/// and `00c74550`, advances the time accumulator `011c3c08`, steps the
+/// interior cell (`00551890`) or the grid cells (`004ba9a0`) with it,
+/// runs the task queue object and the collision listener when more than one
+/// hardware thread is configured / always, updates the sky (scaled by
+/// `fAnimationMult` while in a dialog) on a single thread, and runs
+/// `004537c0` there too.
+pub fn fn_00453550(e: &mut Engine, this: Ptr<TES>, delta: f32) {
+    let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+    if interior == 0 {
+        let sky = e.get(this, TES::pSky);
+        let wind_speed = fn_004536e0(e, sky);
+        let sky = e.get(this, TES::pSky);
+        let wind_angle = fn_00453700(e, sky);
+        e.call(0x00c4_68c0, &args![wind_speed]);
+        e.call(0x00c7_4550, &args![wind_speed, wind_angle]);
+    } else {
+        e.call(0x00c4_68c0, &args![0.0f32]);
+        e.call(0x00c7_4550, &args![0.0f32, 0.0f32]);
+    }
+    let time = (e.global::<f32>(TIME_ACCUMULATOR) as f64 + delta as f64) as f32;
+    e.set_global(TIME_ACCUMULATOR, time);
+    e.call(0x0045_3860, &args![this, 1u32]);
+    if interior != 0 {
+        let time: f32 = e.global(TIME_ACCUMULATOR);
+        e.call(0x0055_1890, &args![interior, time, 0u32]);
+    } else {
+        let grid_cells = e.get(this, TES::pGridCellA);
+        let time: f32 = e.global(TIME_ACCUMULATOR);
+        e.call(0x004b_a9a0, &args![grid_cells, time]);
+    }
+    e.call(0x0045_3860, &args![this, 0u32]);
+    if setting_uint(e, SETTING_NUM_HW_THREADS) as i32 > 1 {
+        let object = fn_004537b0(e);
+        e.call(0x0087_aa90, &args![object]);
+    }
+    let listener = fn_00453720(e);
+    e.call(0x0062_3640, &args![listener]);
+    if setting_uint(e, SETTING_NUM_HW_THREADS) as i32 == 1 {
+        let mut seconds = delta as f64;
+        if e.call(0x0070_50d0, &args![]).bool() {
+            let frame_time = e.call(0x0084_d030, &args![FRAME_TIME_OBJECT]).f64();
+            seconds = setting_float(e, SETTING_ANIMATION_MULT) as f64 * frame_time;
+        }
+        let sky = e.get(this, TES::pSky);
+        e.call(0x0063_ac70, &args![sky, seconds as f32]);
+    }
+    if setting_uint(e, SETTING_NUM_HW_THREADS) as i32 == 1 {
+        tes_update_cell_main_thread(e, this);
+    }
+    e.call(0x0097_5080, &args![OBJECT_011E0E80]);
+}
+
+// Translated from 004536e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::fWindSpeed` (Xbox PDB `+0xCC`), returned in `ST0`.
+pub fn fn_004536e0(e: &mut Engine, sky: Ptr) -> f32 {
+    e.mem.f32(sky.addr() + 0xcc)
+}
+
+// Translated from 00453700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::fWindAngle` (Xbox PDB `+0xD0`), returned in `ST0`.
+pub fn fn_00453700(e: &mut Engine, sky: Ptr) -> f32 {
+    e.mem.f32(sky.addr() + 0xd0)
+}
+
+// Translated from 00453720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The collision listener singleton (`011cc224`): the existing one, or a new
+/// 0xC byte object built by `00623430` (null when the allocation fails).
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_00453720(e: &mut Engine) -> u32 {
+    let existing: u32 = e.global(COLLISION_LISTENER);
+    if existing != 0 {
+        return existing;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    if block == 0 {
+        0
+    } else {
+        e.call(0x0062_3430, &args![block]).u32()
+    }
+}
+
+// Translated from 004537b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the word at `011df1a8`.
+pub fn fn_004537b0(e: &mut Engine) -> u32 {
+    e.global(TASK_QUEUE_OBJECT)
+}
+
+// Translated from 004537c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::UpdateCellMainThread` (Xbox PDB): updates the sky with the frame
+/// time (`00453850`; in a dialog `fAnimationMult` times the value
+/// `0084d030` gives) and runs the update of the temp node manager with an
+/// update object holding the time accumulator `011c3c08`.
+pub fn tes_update_cell_main_thread(e: &mut Engine, this: Ptr<TES>) {
+    let seconds = if e.call(0x0070_50d0, &args![]).bool() {
+        let frame_time = e.call(0x0084_d030, &args![FRAME_TIME_OBJECT]).f64();
+        setting_float(e, SETTING_ANIMATION_MULT) as f64 * frame_time
+    } else {
+        e.call(0x0045_3850, &args![]).f64()
+    };
+    let sky = e.get(this, TES::pSky);
+    e.call(0x0063_ac70, &args![sky, seconds as f32]);
+    e.with_stack(12, |e, update| {
+        let time: f32 = e.global(TIME_ACCUMULATOR);
+        e.call(UPDATE_OBJECT_CTOR, &args![update, time, 0u8, 0u8]);
+        let temp_node_manager = e.call(0x0096_11e0, &args![this]).u32();
+        e.call(NODE_UPDATE, &args![temp_node_manager, update]);
+    });
+}
+
+// Translated from 00453a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAudio::QInstance` (Xbox PDB): returns the word at `011f6d98`.
+pub fn bs_audio_q_instance(e: &mut Engine) -> u32 {
+    e.global(AUDIO_INSTANCE)
+}
+
+// Translated from 00453a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes one cell out of the cell buffers to unload and unloads it
+/// (`TESDataHandler::UnloadCell`, `00462290`); true when there was one.
+///
+/// With no interior cell loaded: the last non-empty slot of the interior
+/// buffer (`uInterior Cell Buffer`) is taken; failing that the exterior
+/// buffer is sorted (`TES::SortExteriorBuffer`, `00454fc0`) and its last slot
+/// (above the first `grid * grid` slots, the loaded square) that is neither
+/// loaded (`TES::IsCellLoaded`) nor pinned (`00557090`) is taken.
+/// With an interior cell: the exterior buffer is searched the same way, then
+/// the interior buffer for a slot other than the loaded interior cell, then
+/// the whole exterior buffer from the front (which also runs `00453940`).
+/// After an unload with the first exterior slot empty and a world space, the
+/// terrain manager is told (`006fce00`).
+pub fn fn_00453a80(e: &mut Engine, this: Ptr<TES>) -> bool {
+    let mut taken = 0u32;
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() == 0 {
+        let mut index = setting_uint(e, SETTING_INTERIOR_CELL_BUFFER).wrapping_sub(1) as i32;
+        while index >= 0 {
+            let buffer = e.get(this, TES::pInteriorBuffer).addr();
+            let slot = buffer.wrapping_add((index as u32).wrapping_mul(4));
+            if e.mem.u32(slot) != 0 {
+                taken = e.mem.u32(slot);
+                e.mem.set_u32(slot, 0);
+                break;
+            }
+            index = index.wrapping_sub(1);
+        }
+        if taken == 0 {
+            e.call(0x0045_4fc0, &args![this]);
+            let lower = loaded_square_cells(e, this);
+            let mut index = setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER).wrapping_sub(1);
+            while index >= lower {
+                let buffer = e.get(this, TES::pExteriorBuffer).addr();
+                let slot = buffer.wrapping_add(index.wrapping_mul(4));
+                let cell = e.mem.u32(slot);
+                if cell != 0
+                    && !tes_is_cell_loaded(e, this, Ptr::new(cell), 1)
+                    && !e.call(0x0055_7090, &args![cell]).bool()
+                {
+                    taken = cell;
+                    let buffer = e.get(this, TES::pExteriorBuffer).addr();
+                    e.mem.set_u32(buffer.wrapping_add(index.wrapping_mul(4)), 0);
+                    break;
+                }
+                index = index.wrapping_sub(1);
+            }
+        }
+    } else {
+        let lower = loaded_square_cells(e, this);
+        let mut index = setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER).wrapping_sub(1);
+        while index >= lower {
+            let buffer = e.get(this, TES::pExteriorBuffer).addr();
+            let slot = buffer.wrapping_add(index.wrapping_mul(4));
+            let cell = e.mem.u32(slot);
+            if cell != 0
+                && !tes_is_cell_loaded(e, this, Ptr::new(cell), 1)
+                && !e.call(0x0055_7090, &args![cell]).bool()
+            {
+                taken = cell;
+                let buffer = e.get(this, TES::pExteriorBuffer).addr();
+                e.mem.set_u32(buffer.wrapping_add(index.wrapping_mul(4)), 0);
+                break;
+            }
+            index = index.wrapping_sub(1);
+        }
+        if taken == 0 {
+            let mut index = setting_uint(e, SETTING_INTERIOR_CELL_BUFFER).wrapping_sub(1) as i32;
+            while index >= 0 {
+                let buffer = e.get(this, TES::pInteriorBuffer).addr();
+                let slot = buffer.wrapping_add((index as u32).wrapping_mul(4));
+                let cell = e.mem.u32(slot);
+                if cell != 0 {
+                    let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+                    if cell != interior {
+                        taken = cell;
+                        let buffer = e.get(this, TES::pInteriorBuffer).addr();
+                        e.mem
+                            .set_u32(buffer.wrapping_add((index as u32).wrapping_mul(4)), 0);
+                        break;
+                    }
+                }
+                index = index.wrapping_sub(1);
+            }
+        }
+        if taken == 0 {
+            let mut index = 0u32;
+            while index < lower {
+                let buffer = e.get(this, TES::pExteriorBuffer).addr();
+                let slot = buffer.wrapping_add(index.wrapping_mul(4));
+                let cell = e.mem.u32(slot);
+                if cell != 0
+                    && !tes_is_cell_loaded(e, this, Ptr::new(cell), 1)
+                    && !e.call(0x0055_7090, &args![cell]).bool()
+                {
+                    taken = cell;
+                    let buffer = e.get(this, TES::pExteriorBuffer).addr();
+                    e.mem.set_u32(buffer.wrapping_add(index.wrapping_mul(4)), 0);
+                    e.call(0x0045_3940, &args![this]);
+                    break;
+                }
+                index += 1;
+            }
+        }
+    }
+    if taken == 0 {
+        return false;
+    }
+    let data_handler: u32 = e.global(DATA_HANDLER);
+    e.call(DATA_HANDLER_UNLOAD_CELL, &args![data_handler, taken]);
+    let buffer = e.get(this, TES::pExteriorBuffer).addr();
+    if e.mem.u32(buffer) == 0 && e.call(GET_WORLD_SPACE, &args![this]).u32() != 0 {
+        let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+        let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+        e.call(0x006f_ce00, &args![terrain]);
+    }
+    true
+}
+
+/// `GridCellArray`'s two `0084e3a0` counts multiplied: the number of slots
+/// of the loaded square at the front of the exterior buffer.
+fn loaded_square_cells(e: &mut Engine, this: Ptr<TES>) -> u32 {
+    let grid_cells = e.get(this, TES::pGridCellA);
+    let first = e.call(0x0084_e3a0, &args![grid_cells]).i32();
+    let grid_cells = e.get(this, TES::pGridCellA);
+    let second = e.call(0x0084_e3a0, &args![grid_cells]).i32();
+    first.wrapping_mul(second) as u32
+}
+
+// Translated from 00453dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Switches the loaded area to `cell` (null: back to the exterior at `pos`,
+/// two floats). When `cell` is already the loaded interior cell this is just
+/// `UpdateCurrentGridCell(pos, 0)`.
+///
+/// Otherwise the old area is torn down (the menu background is drawn first
+/// unless a cell test runs; the havok world flags are reset; the shadow scene
+/// node is cleared; an old interior cell is detached; a cell that is not in
+/// the buffer takes the place of the last interior-buffer slot). Then the new
+/// cell becomes the loaded one (`008d7dc0`). A non-null `cell` is attached to
+/// the object root, entered in the loaded state (havok world, models,
+/// lights, furniture, fader) and its name's image is built and applied; for
+/// the exterior case the grid shadow state is reset. Always ends with the
+/// obstacle manager refresh `006c0720`/`006c39c0` unless a script runs.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_00453dc0(e: &mut Engine, this: Ptr<TES>, cell: Ptr, pos: Ptr) {
+    let script_context: u32 = e.global(SCRIPT_CONTEXT);
+    if !fn_00451530(e, this) {
+        let main: u32 = e.global(MAIN_OBJECT);
+        e.call(0x0087_1dc0, &args![main]);
+    }
+    let world = fn_00451010(e);
+    fn_00454380(e, Ptr::new(world), 0);
+    let world = fn_00451010(e);
+    e.call(HAVOK_WORLD_SET_VISUAL_DEBUGGER, &args![world, 0u32]);
+    let mut current = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+    if current == cell.addr() {
+        tes_update_current_grid_cell(e, this, pos, 0);
+        return;
+    }
+    let accumulator = e.call(0x00b4_f5c0, &args![]).u32();
+    if accumulator != 0 {
+        let accumulator = e.call(0x00b4_f5c0, &args![]).u32();
+        e.call(0x00b6_5570, &args![accumulator]);
+    }
+    if setting_byte(e, SETTING_PREEMPTIVELY_UNLOAD_CELLS) != 0 {
+        if current == 0 {
+            if e.call(0x0045_5200, &args![this, 1u32, 0u32]).u32() != 0 {
+                tes_clean_up_unused_textures(e, this, 0);
+            }
+        } else {
+            e.call(0x0045_3940, &args![this]);
+            if e.call(0x0045_5200, &args![this, 1u32, 0u32]).u32() != 0 {
+                tes_clean_up_unused_textures(e, this, 0);
+            }
+        }
+    }
+    if !e.call(0x0042_ce10, &args![script_context]).bool()
+        && !e.call(0x0070_2680, &args![0x3efu32, 0u32]).bool()
+    {
+        let movie_player: u32 = e.global(MOVIE_PLAYER);
+        if !e.call(0x00ec_17c0, &args![movie_player]).bool() {
+            let main: u32 = e.global(MAIN_OBJECT);
+            e.call(0x0086_ff70, &args![main]);
+        }
+    }
+    let list = e.call(0x0054_6c20, &args![cell]).u32();
+    if list != 0 {
+        e.call(0x0052_6270, &args![list]);
+    }
+    let value = e.call(0x0054_7610, &args![cell]).u32();
+    e.call(0x0058_eeb0, &args![value]);
+    let shadow_scene_node = fn_00450b80(e, 0);
+    e.call(0x00b5_ddf0, &args![shadow_scene_node, 0u32]);
+    let shadow_scene_node = fn_00450b80(e, 0);
+    e.call(0x00b5_fd60, &args![shadow_scene_node]);
+    let shadow_scene_node = fn_00450b80(e, 0);
+    e.call(0x00b5_d180, &args![shadow_scene_node]);
+    let mut left_interior = false;
+    if current != 0 {
+        left_interior = true;
+        e.call(CELL_DETACH, &args![current, 1u32]);
+        e.call(0x00b4_f9a0, &args![]);
+        let player: u32 = e.global(PLAYER_CHARACTER);
+        let value = e.call(0x0095_0bb0, &args![player, 0u32]).u32();
+        let shadow_scene_node = fn_00450b80(e, 0);
+        e.call(0x00b5_cbd0, &args![shadow_scene_node, value]);
+    }
+    if !e.call(0x0045_4bd0, &args![this, cell]).bool() {
+        let last = setting_uint(e, SETTING_INTERIOR_CELL_BUFFER).wrapping_sub(1);
+        let buffered = fn_00454420(e, this, last as i32);
+        if buffered != 0 {
+            e.call(0x0045_5330, &args![this, buffered]);
+        }
+    }
+    current = cell.addr();
+    e.call(0x008d_7dc0, &args![this, cell]);
+    fn_00454440(e, 1);
+    if current != 0 {
+        if e.get(this, TES::iSaveGridX) == 0x7fff_ffff && !left_interior {
+            let grid_x = e.get(this, TES::iCurrentGridX);
+            e.set(this, TES::iSaveGridX, grid_x);
+            let grid_y = e.get(this, TES::iCurrentGridY);
+            e.set(this, TES::iSaveGridY, grid_y);
+            tes_cull_grid_cells(e, this, 1, 0);
+        }
+        let x_value = e.mem.f32(pos.addr());
+        let cell_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x_value]).i32() >> 12;
+        e.set(this, TES::iCurrentGridX, cell_x);
+        let y_value = e.mem.f32(pos.addr() + 4);
+        let cell_y = e.call(FLOAT_TO_INT_ROUNDED, &args![y_value]).i32() >> 12;
+        e.set(this, TES::iCurrentGridY, cell_y);
+        e.call(CELL_LOAD_ALL_TEMP_DATA, &args![current]);
+        let script_running = e.call(0x0042_ce10, &args![script_context]).bool();
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        // The save/load answer is stored in a local the code never reads.
+        e.call(0x0047_c850, &args![save_load]);
+        if fn_00454400(e, Ptr::new(current)) != 0 && !fn_00450fb0(e, Ptr::new(current)) {
+            e.call(0x0045_7d70, &args![this, 1u32, current, 0u32]);
+        }
+        let object_root = e.get(this, TES::pObjRoot);
+        e.call(CELL_ATTACH_TO_WORLD, &args![current, object_root]);
+        let havok_world = fn_004543c0(e, Ptr::new(current));
+        let base = this.addr();
+        if e.call(NI_POINTER_GET, &args![base + 0xc0]).u32() != 0 {
+            let bound = e.call(NI_POINTER_GET, &args![base + 0xc0]).u32();
+            e.call(0x0062_8da0, &args![bound]);
+        }
+        if havok_world != 0 {
+            e.call(HAVOK_WORLD_ADD_COUNT_18, &args![havok_world]);
+        }
+        e.call(0x0054_bcf0, &args![current, 1u32]);
+        let model_loader: u32 = e.global(MODEL_LOADER);
+        if e.call(
+            MODEL_LOADER_CELL_NEEDS_MODELS,
+            &args![model_loader, current],
+        )
+        .bool()
+        {
+            e.call(0x0045_7d70, &args![this, 1u32, current, 0u32]);
+        }
+        e.call(0x0045_5400, &args![this, current]);
+        if !script_running {
+            let io_manager: u32 = e.global(IO_MANAGER);
+            e.call(0x00c3_dfa0, &args![io_manager, 1u32]);
+        }
+        if havok_world != 0 {
+            e.call(HAVOK_WORLD_DROP_COUNT_18, &args![havok_world, 0u32]);
+        }
+        let tes_singleton: u32 = e.global(TES_SINGLETON);
+        e.call(0x0045_cda0, &args![tes_singleton]);
+        if !fn_00451530(e, this) && !script_running {
+            let player: u32 = e.global(PLAYER_CHARACTER);
+            if e.vcall(player, PLAYER_SLOT_FADE_OBJECT, &args![]).u32() != 0 {
+                let fader_manager: u32 = e.global(FADER_MANAGER);
+                e.call(
+                    FADER_CREATE_FADER,
+                    &args![fader_manager, 1u32, 0.0f32, 0u32],
+                );
+            }
+        }
+        if !script_running {
+            e.call(0x0097_5f90, &args![OBJECT_011E0E80]);
+            e.call(0x0045_9870, &args![this]);
+            e.call(0x0097_2d30, &args![OBJECT_011E0E80]);
+            e.call(0x0097_2bb0, &args![OBJECT_011E0E80]);
+        }
+        tes_clean_up_unused_textures(e, this, 0);
+        let data_handler: u32 = e.global(DATA_HANDLER);
+        e.call(0x0046_0360, &args![data_handler]);
+        let node = e.call(CELL_LOAD_3D, &args![current]).u32();
+        e.call(NODE_UPDATE_PROPERTIES, &args![node]);
+        if fn_00453470(e, Ptr::new(node)) == 0 {
+            e.with_stack(12, |e, update| {
+                e.call(UPDATE_OBJECT_CTOR, &args![update, 0.0f32, 0u8, 0u8]);
+                e.call(NODE_UPDATE, &args![node, update]);
+            });
+        }
+        e.call(CELL_ATTACH_LIGHTS, &args![current, 1u32]);
+        e.call(0x0045_4c20, &args![this, cell]);
+    }
+    if !left_interior {
+        let accumulator = e.call(0x00b4_f5c0, &args![]).u32();
+        if accumulator != 0 {
+            e.call(0x00b6_31d0, &args![accumulator]);
+        }
+        e.call(0x00b6_2a20, &args![]);
+        let grid_cells = e.get(this, TES::pGridCellA);
+        e.call(0x004b_aec0, &args![grid_cells]);
+    }
+    if fn_00451530(e, this) {
+        e.call(0x0045_7d70, &args![this, 0u32, 0u32, 0u32]);
+    }
+    tes_clean_up_unused_textures(e, this, 0);
+    e.call(0x0070_38b0, &args![0u32]);
+    let name = fn_004543a0(e, Ptr::new(current));
+    let named = e.mem.u8(name) as i8 != 0;
+    apply_location_image(e, 0xc74, named, |e| fn_004543a0(e, Ptr::new(current)));
+    if !e.call(0x0042_ce10, &args![script_context]).bool() {
+        let first = e.call(0x006c_0720, &args![]).u32();
+        e.call(0x006c_39c0, &args![first]);
+    }
+}
+
+// Translated from 00454380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte at `+0x15` of `this` (the havok world).
+pub fn fn_00454380(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x15, value);
+}
+
+// Translated from 004543a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `MapMarkerData::GetLocationName` (Xbox PDB, `00408da0`) on
+/// `this + 0x58` and returns its result (the string pointer, or the empty
+/// string `01011584`). The code reads the result as the name of a cell or
+/// world space.
+pub fn fn_004543a0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0040_8da0, &args![this.addr() + 0x58]).u32()
+}
+
+// Translated from 004543c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The havok world of a cell: for a cell whose bit 0 of `+0x24` is set (an
+/// interior; `00425fd0`) `0041b9a0(cell + 0x28)`, otherwise the exterior
+/// world (`00451010`).
+pub fn fn_004543c0(e: &mut Engine, cell: Ptr) -> u32 {
+    if e.call(0x0042_5fd0, &args![cell]).bool() {
+        e.call(0x0041_b9a0, &args![cell.addr() + 0x28]).u32()
+    } else {
+        fn_00451010(e)
+    }
+}
+
+// Translated from 00454400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `VATS::GetCount`'s twin (Xbox PDB name `VATS::GetCount` for the shared
+/// body): the number of non-null entries of the list at `this + 0xac`
+/// (`005ae380`).
+pub fn fn_00454400(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x005a_e380, &args![this.addr() + 0xac]).u32()
+}
+
+// Translated from 00454420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot `index` of the interior cell buffer (`pInteriorBuffer`, +0x38).
+pub fn fn_00454420(e: &mut Engine, this: Ptr<TES>, index: i32) -> u32 {
+    let buffer = e.get(this, TES::pInteriorBuffer).addr();
+    e.mem
+        .u32(buffer.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 00454440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte in `011f9427`.
+pub fn fn_00454440(e: &mut Engine, value: u8) {
+    e.set_global(BYTE_011F9427, value);
+}
+
+// Translated from 00454450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Leaves the interior cell and returns to the exterior around `pos` (two
+/// floats): the terrain manager is told the position, an interior cell is
+/// detached and unloaded or buffered, the saved grid is restored (or reset),
+/// the grid is rebuilt (`UpdateCurrentGridCell(pos, settle)`), the player
+/// area is attached again, the fade started, the lights and furniture set up,
+/// and the sky, image and obstacle state refreshed.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_00454450(e: &mut Engine, this: Ptr<TES>, pos: Ptr) {
+    let script_context: u32 = e.global(SCRIPT_CONTEXT);
+    let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+    if world_space != 0 {
+        let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+        e.call(TERRAIN_MANAGER_UPDATE, &args![terrain, pos, 0xfu32]);
+        let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+        e.call(0x006f_cdb0, &args![terrain, pos]);
+    }
+    fn_00454440(e, 0);
+    let world_space = e.get(this, TES::pWorldSpace);
+    if !world_space.is_null() {
+        let value = e.call(0x0067_33e0, &args![world_space]).u32();
+        e.call(0x0058_eeb0, &args![value]);
+    }
+    e.call(0x00b5_8070, &args![0u32]);
+    let world = fn_00451010(e);
+    fn_00454380(e, Ptr::new(world), 1);
+    let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+    if interior != 0 {
+        let shadow_scene_node = fn_00450b80(e, 0);
+        let node_cell = e.call(0x0045_4b30, &args![shadow_scene_node]).u32();
+        let interior_cell = e.call(0x009d_9f20, &args![interior]).u32();
+        if node_cell == interior_cell {
+            let shadow_scene_node = fn_00450b80(e, 0);
+            e.call(0x00b5_ddf0, &args![shadow_scene_node, 0u32]);
+        }
+        e.call(CELL_DETACH, &args![interior, 1u32]);
+        if !e.call(0x0045_4bd0, &args![this, interior]).bool() {
+            let data_handler: u32 = e.global(DATA_HANDLER);
+            e.call(DATA_HANDLER_UNLOAD_CELL, &args![data_handler, interior]);
+        } else {
+            e.call(0x0054_af40, &args![interior, 1u32]);
+        }
+        e.call(0x008d_7dc0, &args![this, 0u32]);
+        if !e.call(0x0042_ce10, &args![script_context]).bool() {
+            if e.get(this, TES::iSaveGridX) == 0x7fff_ffff {
+                if e.call(0x0045_7620, &args![this, pos]).u32() == 0 {
+                    e.set(this, TES::iCurrentGridX, 0x7fff_ffff);
+                    e.set(this, TES::iCurrentGridY, 0x7fff_ffff);
+                    let grid_x = e.get(this, TES::iCurrentGridX);
+                    e.set(this, TES::iCurrentQueuedX, grid_x);
+                    let grid_y = e.get(this, TES::iCurrentGridY);
+                    e.set(this, TES::iCurrentQueuedY, grid_y);
+                }
+            } else {
+                let exterior_buffer = e.get(this, TES::pExteriorBuffer).addr();
+                if e.mem.u32(exterior_buffer) != 0 {
+                    let save_x = e.get(this, TES::iSaveGridX);
+                    e.set(this, TES::iCurrentGridX, save_x);
+                    let save_y = e.get(this, TES::iSaveGridY);
+                    e.set(this, TES::iCurrentGridY, save_y);
+                    tes_cull_grid_cells(e, this, 0, pos.addr());
+                } else {
+                    e.set(this, TES::iCurrentGridX, 0x7fff_ffff);
+                    e.set(this, TES::iCurrentGridY, 0x7fff_ffff);
+                    let grid_x = e.get(this, TES::iCurrentGridX);
+                    e.set(this, TES::iCurrentQueuedX, grid_x);
+                    let grid_y = e.get(this, TES::iCurrentGridY);
+                    e.set(this, TES::iCurrentQueuedY, grid_y);
+                }
+                e.set(this, TES::iSaveGridX, 0x7fff_ffff);
+                e.set(this, TES::iSaveGridY, 0x7fff_ffff);
+            }
+        }
+        let shadow_scene_node = fn_00450b80(e, 0);
+        e.call(0x00b5_d180, &args![shadow_scene_node]);
+        let player: u32 = e.global(PLAYER_CHARACTER);
+        let value = e.call(0x0095_0bb0, &args![player, 0u32]).u32();
+        let shadow_scene_node = fn_00450b80(e, 0);
+        e.call(0x00b5_cbd0, &args![shadow_scene_node, value]);
+    }
+    let land_root = e.get(this, TES::pObjLandRoot);
+    if !land_root.is_null() {
+        let node = e.call(0x0096_11e0, &args![land_root]).u32();
+        if node != 0 {
+            fn_00450f90(e, Ptr::new(node), 0);
+        }
+        e.call(0x006f_d1f0, &args![1u32]);
+    }
+    fn_00451010(e);
+    let debugger = fn_00454ae0(e);
+    let world = fn_00451010(e);
+    e.call(
+        HAVOK_WORLD_SET_VISUAL_DEBUGGER,
+        &args![world, debugger as u32],
+    );
+    let script_running = e.call(0x0042_ce10, &args![script_context]).bool();
+    let save_load: u32 = e.global(SAVE_LOAD_GAME);
+    let save_load_answer = e.call(0x0047_c850, &args![save_load]).u8();
+    tes_update_current_grid_cell(e, this, pos, (save_load_answer == 0) as u8);
+    let grid_x = e.get(this, TES::iCurrentGridX);
+    let grid_y = e.get(this, TES::iCurrentGridY);
+    let centre_cell = fn_00451900(e, this, grid_x, grid_y);
+    let model_loader: u32 = e.global(MODEL_LOADER);
+    if e.call(
+        MODEL_LOADER_CELL_NEEDS_MODELS,
+        &args![model_loader, centre_cell],
+    )
+    .bool()
+    {
+        e.call(0x0045_7d70, &args![this, 1u32, centre_cell, 0u32]);
+    }
+    if fn_00451010(e) != 0 {
+        let world = fn_00451010(e);
+        e.call(HAVOK_WORLD_ADD_COUNT_18, &args![world]);
+    }
+    if !script_running {
+        let io_manager: u32 = e.global(IO_MANAGER);
+        e.call(0x00c3_dfa0, &args![io_manager, 4u32]);
+    }
+    let value = e.call(0x0044_ddc0, &args![this]).u32();
+    e.call(0x004b_a7d0, &args![value]);
+    e.call(0x0045_c840, &args![this]);
+    e.call(0x0045_c780, &args![this]);
+    if fn_00451010(e) != 0 {
+        let world = fn_00451010(e);
+        e.call(HAVOK_WORLD_DROP_COUNT_18, &args![world, 0u32]);
+    }
+    e.call(0x0045_cda0, &args![this]);
+    // A 12-byte local: the position (x, y, 0.0) built by `00416870`; the
+    // third float is then overwritten by `004572e0`.
+    e.with_stack(12, |e, point| {
+        let x = e.mem.f32(pos.addr());
+        let y = e.mem.f32(pos.addr() + 4);
+        e.call(0x0041_6870, &args![point, x, y, 0.0f32]);
+        e.call(0x0045_72e0, &args![this, pos, point.addr() + 8]);
+        fn_00451590(e, 0);
+        let point_words = [
+            e.mem.u32(point.addr()),
+            e.mem.u32(point.addr() + 4),
+            e.mem.u32(point.addr() + 8),
+        ];
+        let global_words = [
+            e.global::<u32>(POINT_011A9478),
+            e.global::<u32>(POINT_011A9478 + 4),
+            e.global::<u32>(POINT_011A9478 + 8),
+        ];
+        e.call(
+            0x0057_d0a0,
+            &args![
+                point_words[0],
+                point_words[1],
+                point_words[2],
+                global_words[0],
+                global_words[1],
+                global_words[2],
+                1.0f32
+            ],
+        );
+    });
+    fn_00451590(e, 1);
+    if !fn_00451530(e, this) && !script_running {
+        let seconds = setting_float(e, SETTING_FADE_TO_BLACK_FADE_SECONDS);
+        let fader_manager: u32 = e.global(FADER_MANAGER);
+        // The trailing 1 is the word the code pushed before reading the
+        // setting.
+        e.call(
+            FADER_CREATE_FADER,
+            &args![fader_manager, 1u32, seconds, 1u32],
+        );
+    }
+    if !script_running {
+        e.call(0x0097_5f90, &args![OBJECT_011E0E80]);
+        e.call(0x0045_9870, &args![this]);
+        e.call(0x0097_2d30, &args![OBJECT_011E0E80]);
+        e.call(0x0097_2bb0, &args![OBJECT_011E0E80]);
+    }
+    if interior != 0 && !e.call(0x0045_4b10, &args![interior]).bool() {
+        let sky = e.get(this, TES::pSky).addr();
+        let first = e.call(0x0044_edb0, &args![sky]).u32();
+        e.call(0x0063_ddb0, &args![sky, first]);
+        let sky = e.get(this, TES::pSky).addr();
+        let second = e.call(0x0082_5c00, &args![sky]).u32();
+        let sky = e.get(this, TES::pSky).addr();
+        e.call(0x0063_ddb0, &args![sky, second]);
+    }
+    tes_update_grid_lights(e, this);
+    e.call(0x0045_5400, &args![this, 0u32]);
+    let object_root = e.get(this, TES::pObjRoot);
+    e.call(NODE_UPDATE_PROPERTIES, &args![object_root]);
+    e.call(0x0070_38b0, &args![0u32]);
+    if fn_00451530(e, this) {
+        e.call(0x0045_7d70, &args![this, 0u32, 0u32, 0u32]);
+    }
+    tes_clean_up_unused_textures(e, this, 0);
+    let mut named = false;
+    let world_space = e.get(this, TES::pWorldSpace);
+    if !world_space.is_null() {
+        let text = e.call(0x0045_4b50, &args![world_space]).u32();
+        named = e.mem.u8(text) as i8 != 0;
+    }
+    apply_location_image(e, 0xd6a, named, |e| {
+        let world_space = e.get(this, TES::pWorldSpace);
+        e.call(0x0045_4b50, &args![world_space]).u32()
+    });
+    e.set_global(BYTE_01189625, 1u8);
+    store_grid_centre(e, this);
+    copy_grid_centre_to_previous(e);
+    let wind = fn_00452e70(e, 0);
+    e.set_global(GRID_FLOAT_011F94AC, wind);
+    e.set_global(GRID_FLAG_MOVED, 0u8);
+    let moved: u8 = e.global(GRID_FLAG_MOVED);
+    e.set_global(GRID_FLAG_MOVED_COPY, moved);
+    let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+    let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+    let terrain_flag = e.call(0x0045_4b70, &args![terrain]).bool();
+    e.set_global(GRID_FLAG_TERRAIN, terrain_flag as u8);
+    if !e.call(0x0042_ce10, &args![script_context]).bool() {
+        let first = e.call(0x006c_0720, &args![]).u32();
+        e.call(0x006c_39c0, &args![first]);
+    }
+}
+
+// Translated from 00454ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bHavokDebug:HAVOK`'s value (`00454af0` on the setting at `01267b28`).
+pub fn fn_00454ae0(e: &mut Engine) -> u8 {
+    fn_00454af0(e, SETTING_HAVOK_DEBUG)
+}
+
+// Translated from 00454af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `bool` setting's value: the byte `00408d60` finds in the setting `this`.
+pub fn fn_00454af0(e: &mut Engine, this: u32) -> u8 {
+    setting_byte(e, this)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2090,6 +3745,49 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004523c0, fn_004523c0(Ptr) -> bool),
         entry!(0x004523e0, fn_004523e0(Ptr, u32) -> bool),
         entry!(0x00452420, fn_00452420(Ptr, u32) -> bool),
+        entry!(0x00452440, fn_00452440(Ptr) -> bool),
+        entry!(0x00452460, fn_00452460(Ptr, u32) -> bool),
+        entry!(0x00452480, fn_00452480() -> u8),
+        entry!(0x00452490, tes_clean_up_unused_textures(Ptr<TES>, u8)),
+        entry!(0x004524f0, fn_004524f0(Ptr<TES>) -> u8),
+        entry!(0x00452510, fn_00452510()),
+        entry!(0x00452530, fn_00452530()),
+        entry!(0x00452540, fn_00452540(Ptr<TES>) -> u8),
+        entry!(
+            0x00452580,
+            tes_update_current_grid_cell(Ptr<TES>, Ptr, u8) -> bool
+        ),
+        entry!(0x00452dc0, fn_00452dc0(Ptr, f32, f32) -> Ptr),
+        entry!(0x00452df0, fn_00452df0(Ptr, Ptr) -> bool),
+        entry!(0x00452e40, fn_00452e40(u8)),
+        entry!(0x00452e50, fn_00452e50(Ptr<TES>)),
+        entry!(0x00452e70, fn_00452e70(u8) -> f32),
+        entry!(0x00452e90, fn_00452e90(Ptr) -> bool),
+        entry!(0x00452eb0, tes_cancel_exterior_cell_loads(Ptr<TES>)),
+        entry!(0x00452ed0, tes_all_cells_in_grid_loaded(Ptr<TES>) -> bool),
+        entry!(0x00452ff0, tes_grid_array_load(Ptr<TES>)),
+        entry!(0x00453470, fn_00453470(Ptr) -> u32),
+        entry!(0x00453490, fn_00453490(Ptr<TES>, Ptr) -> bool),
+        entry!(0x004534f0, fn_004534f0(u32, u32)),
+        entry!(0x00453500, fn_00453500(Ptr, u8)),
+        entry!(0x00453550, fn_00453550(Ptr<TES>, f32)),
+        entry!(0x004536e0, fn_004536e0(Ptr) -> f32),
+        entry!(0x00453700, fn_00453700(Ptr) -> f32),
+        entry!(0x00453720, fn_00453720() -> u32),
+        entry!(0x004537b0, fn_004537b0() -> u32),
+        entry!(0x004537c0, tes_update_cell_main_thread(Ptr<TES>)),
+        entry!(0x00453a70, bs_audio_q_instance() -> u32),
+        entry!(0x00453a80, fn_00453a80(Ptr<TES>) -> bool),
+        entry!(0x00453dc0, fn_00453dc0(Ptr<TES>, Ptr, Ptr)),
+        entry!(0x00454380, fn_00454380(Ptr, u8)),
+        entry!(0x004543a0, fn_004543a0(Ptr) -> u32),
+        entry!(0x004543c0, fn_004543c0(Ptr) -> u32),
+        entry!(0x00454400, fn_00454400(Ptr) -> u32),
+        entry!(0x00454420, fn_00454420(Ptr<TES>, i32) -> u32),
+        entry!(0x00454440, fn_00454440(u8)),
+        entry!(0x00454450, fn_00454450(Ptr<TES>, Ptr)),
+        entry!(0x00454ae0, fn_00454ae0() -> u8),
+        entry!(0x00454af0, fn_00454af0(u32) -> u8),
     ]
 }
 
@@ -4760,5 +6458,1749 @@ mod tests {
         assert!(!e.call(0x0045_23e0, &args![refr, 0b1001u32]).bool());
         assert!(!e.call(0x0045_2420, &args![data, 0u32]).bool());
         assert!(e.call(0x0045_2420, &args![data, 4u32]).bool());
+    }
+
+    // ---- Session 3: the cell update code (00452440 to 00454af0) ----
+
+    /// `abs` as the CRT computes it.
+    fn install_abs(e: &mut Engine) {
+        e.register(ABS, |_, a| Ret {
+            eax: (a[0] as i32).wrapping_abs() as u32,
+            ..Ret::default()
+        });
+    }
+
+    /// The exe functions the cell-update code calls that a test does not
+    /// care about: each is made to return 0 (a test overrides the few that
+    /// matter).
+    const UPDATE_CALLEES: &[u32] = &[
+        0x0040_8da0,
+        0x0040_fba0,
+        0x0040_fbf0,
+        0x0041_6870,
+        0x0041_b9a0,
+        0x0042_5fd0,
+        0x0042_ce10,
+        0x0044_7950,
+        0x0044_ddc0,
+        0x0044_edb0,
+        0x0045_3850,
+        0x0045_3860,
+        0x0045_3940,
+        0x0045_4b10,
+        0x0045_4b30,
+        0x0045_4b50,
+        0x0045_4b70,
+        0x0045_4b90,
+        0x0045_4bd0,
+        0x0045_4c20,
+        0x0045_4d50,
+        0x0045_4e20,
+        0x0045_4fc0,
+        0x0045_5200,
+        0x0045_5330,
+        0x0045_5400,
+        0x0045_68c0,
+        0x0045_7070,
+        0x0045_72e0,
+        0x0045_7620,
+        0x0045_7be0,
+        0x0045_7d70,
+        0x0045_81e0,
+        0x0045_8200,
+        0x0045_9870,
+        0x0045_bb80,
+        0x0045_c780,
+        0x0045_c840,
+        0x0045_cda0,
+        0x0045_cec0,
+        0x0046_0140,
+        0x0046_0360,
+        0x0046_1c20,
+        0x0046_2290,
+        0x0047_0470,
+        0x0047_c850,
+        0x004b_a7d0,
+        0x004b_a9a0,
+        0x004b_aec0,
+        0x0052_6270,
+        0x0052_8110,
+        0x0052_81f0,
+        0x0052_82d0,
+        0x0052_83c0,
+        0x0052_8540,
+        0x0052_85a0,
+        0x0052_d3b0,
+        0x0054_5cf0,
+        0x0054_6c20,
+        0x0054_7610,
+        0x0054_af40,
+        0x0054_ba80,
+        0x0054_bcf0,
+        0x0055_0340,
+        0x0055_1890,
+        0x0055_2970,
+        0x0055_2bd0,
+        0x0055_7090,
+        0x0055_9450,
+        0x0057_d0a0,
+        0x0058_75a0,
+        0x0058_eeb0,
+        0x005a_e380,
+        0x005a_e3d0,
+        0x005d_4a40,
+        0x0062_3430,
+        0x0062_3640,
+        0x0062_4700,
+        0x0062_71b0,
+        0x0062_8da0,
+        0x0062_f460,
+        0x0063_3c90,
+        0x0063_ac70,
+        0x0063_ddb0,
+        0x0066_4cd0,
+        0x0067_33e0,
+        0x0068_15c0,
+        0x0068_a830,
+        0x006c_0720,
+        0x006c_39c0,
+        0x006f_ca90,
+        0x006f_cdb0,
+        0x006f_ce00,
+        0x006f_d1f0,
+        0x0070_0960,
+        0x0070_2680,
+        0x0070_38b0,
+        0x0070_50d0,
+        0x0070_5e80,
+        0x0070_ec90,
+        0x0082_5c00,
+        0x0084_92b0,
+        0x0084_d030,
+        0x0084_e3a0,
+        0x0085_8af0,
+        0x0085_f850,
+        0x0086_1ea0,
+        0x0086_ff70,
+        0x0087_1dc0,
+        0x0087_27b0,
+        0x0087_aa90,
+        0x008d_7dc0,
+        0x0095_0bb0,
+        0x0096_11e0,
+        0x0097_2bb0,
+        0x0097_2d30,
+        0x0097_5080,
+        0x0097_5f90,
+        0x0099_38b0,
+        0x009d_9f20,
+        0x00a5_a040,
+        0x00a6_1cd0,
+        0x00b4_f5c0,
+        0x00b4_f9a0,
+        0x00b5_8070,
+        0x00b5_cbd0,
+        0x00b5_d180,
+        0x00b5_ddf0,
+        0x00b5_fd60,
+        0x00b6_2a20,
+        0x00b6_31d0,
+        0x00b6_5570,
+        0x00c3_dfa0,
+        0x00c4_68c0,
+        0x00c6_6300,
+        0x00c6_6310,
+        0x00c6_8f00,
+        0x00c6_a640,
+        0x00c6_b540,
+        0x00c7_4550,
+        0x00ec_17c0,
+        0x0066_b0d0,
+        SCOPE_GUARD_CTOR,
+        SCOPE_GUARD_DTOR,
+        UPDATE_OBJECT_CTOR,
+        NODE_UPDATE,
+        GRID_CELL_ARRAY_ATTACH_TO_WORLD,
+        0x0058_5b30,
+        0x0058_8150,
+        0x0055_1440,
+        0x004b_a5a0,
+        0x004b_a550,
+        0x0054_6fb0,
+        0x0053_5b90,
+        0x0053_a090,
+        0x0053_f440,
+        0x0054_71e0,
+        0x0054_4c30,
+        0x0054_4c60,
+        0x00ec_623a,
+        0x0049_c860,
+        0x0053_fa40,
+        0x0040_1280,
+    ];
+
+    /// `0042ce10` reads bit 1 of the word at `+0x244` of the script context
+    /// object; this installs the object (all flags clear) and that double.
+    fn install_script_context(e: &mut Engine) -> u32 {
+        e.register(0x0042_ce10, |e, a| Ret {
+            eax: (e.mem.u32(a[0] + 0x244) & 2 != 0) as u32,
+            ..Ret::default()
+        });
+        e.map(SCRIPT_CONTEXT, 4);
+        let context = e.mem.alloc(0x300);
+        e.set_global(SCRIPT_CONTEXT, context);
+        context
+    }
+
+    /// An engine for the cell-update functions: `grids` x `grids` grid
+    /// around cell (10, 20), the grid centre queued there too, a world space,
+    /// the exterior havok world `0x8000`, the exterior cell loader `0x5000`,
+    /// doubles for every callee, and the constants the code reads. Returns
+    /// the engine, the `TES` (also the singleton), the script context
+    /// object and the grid slot table.
+    fn update_engine(grids: u32) -> (Engine, Ptr<TES>, u32, u32) {
+        let (mut e, tes, table) = grid_engine(grids);
+        noop(&mut e, UPDATE_CALLEES);
+        install_getters(&mut e);
+        install_float_to_int(&mut e);
+        install_abs(&mut e);
+        let context = install_script_context(&mut e);
+        for (addr, len) in [
+            (GRID_FLAG_MOVED, 1),
+            (GRID_FLAG_MOVED_COPY, 1),
+            (GRID_FLAG_TERRAIN, 1),
+            (GRID_FLOAT_011F94AC, 4),
+            (FLOAT_PAIR_011F940C, 8),
+            (GRID_CENTRE, 8),
+            (GRID_PREVIOUS_CENTRE, 8),
+            (GRID_CENTRE_REFERENCE, 8),
+            (EXTERIOR_CELL_LOADER, 4),
+            (PLAYER_CHARACTER, 4),
+            (BYTE_011AF70C, 1),
+            (SAVE_LOAD_GAME, 4),
+            (EXTERIOR_WORLD, 4),
+            (FLOAT_CELL_EXTENT, 4),
+            (FLOAT_CELL_EXTENT_SMALL_GRID, 4),
+            (DOUBLE_ZERO, 8),
+            (DOUBLE_HALF, 8),
+            (DOUBLE_CELL_SIZE, 8),
+            (PURGE_ALLOWED, 1),
+            (TES_SINGLETON, 4),
+            (GRID_LOAD_IN_PROGRESS, 1),
+            (GRID_FLAG_01189184, 1),
+            (GRID_FLAG_011AD86C, 1),
+            (MODEL_LOADER, 4),
+            (IO_MANAGER, 4),
+            (FADER_MANAGER, 4),
+            (MAIN_OBJECT, 4),
+            (MOVIE_PLAYER, 4),
+            (BYTE_011F9427, 1),
+            (BYTE_01189625, 1),
+            (TIME_ACCUMULATOR, 4),
+            (POINT_011A9478, 12),
+            (COLLISION_LISTENER, 4),
+            (TASK_QUEUE_OBJECT, 4),
+        ] {
+            e.map(addr, len);
+        }
+        e.set_global(FLOAT_CELL_EXTENT, 4096.0f32);
+        e.set_global(FLOAT_CELL_EXTENT_SMALL_GRID, 3072.0f32);
+        e.set_global(DOUBLE_ZERO, 0.0f64);
+        e.set_global(DOUBLE_HALF, 0.5f64);
+        e.set_global(DOUBLE_CELL_SIZE, 4096.0f64);
+        e.set_global(FLOAT_PAIR_011F940C, 1.5f32);
+        e.set_global(FLOAT_PAIR_011F940C + 4, 2.5f32);
+        put_setting(&mut e, SETTING_BACKGROUND_CELL_LOADS, 1u8);
+        put_setting(&mut e, SETTING_PREEMPTIVELY_UNLOAD_CELLS, 0u8);
+        put_setting(&mut e, SETTING_FADE_TO_BLACK_FADE_SECONDS, 0.25f32);
+        let handler = e.mem.alloc(0x700);
+        e.set_global(DATA_HANDLER, handler);
+        e.set_global(TES_SINGLETON, tes.addr());
+        e.set_global(EXTERIOR_CELL_LOADER, 0x5000u32);
+        // The first word of `spExteriorWorld` is the havok world.
+        e.set_global(EXTERIOR_WORLD, 0x8000u32);
+        // The grid cell array has its slot 0x10 (move to a new centre).
+        let array = e.get(tes, TES::pGridCellA).addr();
+        e.put_vtable(0x0300_1000, &[0, 0, 0, 0, 0x0300_0010]);
+        e.mem.set_u32(array, 0x0300_1000);
+        noop(&mut e, &[0x0300_0010]);
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        returns(&mut e, GET_TERRAIN_MANAGER, 0x7001);
+        returns(&mut e, 0x0045_bb80, 0x7000);
+        returns(&mut e, 0x0045_7070, 0x6100);
+        // `TES::LoadGridCell` finds its grid slot already filled.
+        returns(&mut e, 0x0058_5b30, 0x7777);
+        returns(&mut e, 0x004b_a5a0, 1);
+        e.map(0x8000, 0x100);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0x6000));
+        e.set(tes, TES::iCurrentGridX, 10);
+        e.set(tes, TES::iCurrentGridY, 20);
+        e.set(tes, TES::iCurrentQueuedX, 10);
+        e.set(tes, TES::iCurrentQueuedY, 20);
+        (e, tes, context, table)
+    }
+
+    /// The number of calls to `addr` in `log`.
+    fn count_calls(log: &[(u32, Vec<u32>)], addr: u32) -> usize {
+        calls_to(log, addr).len()
+    }
+
+    /// A player whose slot `0x1f4` returns `0x8888` and slot `0x1d0` returns
+    /// `fade`.
+    fn install_player(e: &mut Engine, fade: u32) {
+        let player = object_with_slots(
+            e,
+            0x0300_2000,
+            &[(0x1f4, 0x0300_01f4), (0x1d0, 0x0300_01d0)],
+        );
+        e.set_global(PLAYER_CHARACTER, player);
+        returns(e, 0x0300_01f4, 0x8888);
+        returns(e, 0x0300_01d0, fade);
+    }
+
+    #[test]
+    fn form_flag_tests_read_the_flags_word_the_getter_points_at() {
+        let mut e = Engine::new();
+        e.register(0x0062_4700, |_, a| Ret {
+            eax: a[0] + 0x48,
+            ..Ret::default()
+        });
+        let form = e.mem.alloc(0x60);
+        e.mem.set_u32(form + 0x48, 0x4000_0000);
+        assert!(e.call(0x0045_2440, &args![form]).bool());
+        assert!(e.call(0x0045_2460, &args![form, 0x4000_0000u32]).bool());
+        assert!(!e.call(0x0045_2460, &args![form, 0x0000_0001u32]).bool());
+        e.mem.set_u32(form + 0x48, 0xbfff_ffff);
+        assert!(!e.call(0x0045_2440, &args![form]).bool());
+        e.mem.set_u32(form + 0x48, 0x0000_0003);
+        assert!(e.call(0x0045_2460, &args![form, 0x0000_0001u32]).bool());
+    }
+
+    #[test]
+    fn byte_getter_returns_the_global() {
+        let mut e = Engine::new();
+        e.map(BYTE_0119B8C8, 1);
+        assert_eq!(e.call(0x0045_2480, &args![]).u8(), 0);
+        e.set_global(BYTE_0119B8C8, 0x5au8);
+        assert_eq!(e.call(0x0045_2480, &args![]).u8(), 0x5a);
+    }
+
+    /// An engine for the texture clean-up: purging allowed (`purge_byte`),
+    /// the script check (`005d4a40`) answering `check`.
+    fn cleanup_engine(purge_byte: u8, check: u32) -> (Engine, Ptr<TES>) {
+        let mut e = Engine::new();
+        e.map(PURGE_ALLOWED, 1);
+        e.set_global(PURGE_ALLOWED, purge_byte);
+        returns(&mut e, 0x005d_4a40, check);
+        noop(
+            &mut e,
+            &[0x0040_fbf0, 0x0040_fba0, 0x0066_4cd0, 0x00a6_1cd0],
+        );
+        let tes: Ptr<TES> = e.new_object();
+        (e, tes)
+    }
+
+    #[test]
+    fn texture_cleanup_does_nothing_when_purging_is_not_allowed() {
+        let (mut e, tes) = cleanup_engine(1, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2490, &args![tes, 1u8]);
+        });
+        assert_eq!(addresses(&log), vec![0x0045_2490, 0x005d_4a40]);
+    }
+
+    #[test]
+    fn texture_cleanup_purges_only_when_the_setting_or_the_flag_says_so() {
+        let (mut e, tes) = cleanup_engine(0, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2490, &args![tes, 0u8]);
+        });
+        assert_eq!(
+            addresses(&log),
+            vec![
+                0x0045_2490,
+                0x0040_fbf0,
+                0x0066_4cd0,
+                0x0066_4cd0,
+                0x0040_fba0
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x0040_fbf0), vec![vec![CLEANUP_LOCK, 0]]);
+        assert_eq!(calls_to(&log, 0x0040_fba0), vec![vec![CLEANUP_LOCK]]);
+        assert_eq!(calls_to(&log, 0x0066_4cd0), vec![vec![1], vec![1]]);
+        // The flag argument forces the purge.
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2490, &args![tes, 1u8]);
+        });
+        assert_eq!(
+            addresses(&log),
+            vec![
+                0x0045_2490,
+                0x0040_fbf0,
+                0x0066_4cd0,
+                0x00a6_1cd0,
+                0x0066_4cd0,
+                0x0040_fba0
+            ]
+        );
+        // So does `bAllowUnusedPurge`.
+        e.set(tes, TES::bAllowUnusedPurge, true);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2490, &args![tes, 0u8]);
+        });
+        assert_eq!(count_calls(&log, 0x00a6_1cd0), 1);
+    }
+
+    #[test]
+    fn purge_flag_getter_reads_the_field() {
+        let mut e = Engine::new();
+        let tes: Ptr<TES> = e.new_object();
+        assert_eq!(e.call(0x0045_24f0, &args![tes]).u8(), 0);
+        e.set(tes, TES::bAllowUnusedPurge, true);
+        assert_eq!(e.call(0x0045_24f0, &args![tes]).u8(), 1);
+    }
+
+    #[test]
+    fn cleanup_lock_wrappers_use_the_lock_object() {
+        let mut e = Engine::new();
+        noop(&mut e, &[0x0040_fbf0, 0x0040_fba0]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2510, &args![]);
+            e.call(0x0045_2530, &args![]);
+        });
+        assert_eq!(calls_to(&log, 0x0040_fbf0), vec![vec![0x011f_4480, 0]]);
+        assert_eq!(calls_to(&log, 0x0040_fba0), vec![vec![0x011f_4480]]);
+    }
+
+    #[test]
+    fn purge_is_allowed_unless_the_byte_is_set_and_the_check_fails() {
+        for (byte, check, allowed) in [(0u8, 0u32, 1u8), (0, 1, 1), (1, 1, 1), (1, 0, 0)] {
+            let (mut e, tes) = cleanup_engine(byte, check);
+            assert_eq!(
+                e.call(0x0045_2540, &args![tes]).u8(),
+                allowed,
+                "byte {byte} check {check}"
+            );
+        }
+    }
+
+    #[test]
+    fn grid_update_stops_without_a_data_handler() {
+        let (mut e, tes, _, _) = update_engine(5);
+        e.set_global(DATA_HANDLER, 0u32);
+        e.set_global(GRID_FLAG_MOVED, 1u8);
+        e.set(tes, TES::spLoadedAreaBound, Ptr::new(0x9000));
+        let pos = position(&mut e, 0.0, 0.0);
+        let array = e.get(tes, TES::pGridCellA).addr();
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_2580, &args![tes, pos, 0u8]).bool());
+        });
+        // The last-loaded list is cleared, and the moved flag (set while the
+        // second flag is clear and no interior is loaded) is reset.
+        assert_eq!(calls_to(&log, 0x0047_0470), vec![vec![0x7000]]);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 0);
+        assert_eq!(calls_to(&log, 0x0045_c780), vec![vec![tes.addr()]]);
+        // The havok bound is refreshed with the cell and the grid array.
+        assert_eq!(
+            calls_to(&log, 0x0062_71b0),
+            vec![vec![0x9000, 0x6100, array]]
+        );
+        assert!(calls_to(&log, 0x0045_7d70).is_empty());
+        assert!(calls_to(&log, 0x0052_83c0).is_empty());
+    }
+
+    #[test]
+    fn grid_update_keeps_the_moved_flag_while_the_copy_is_set_or_an_interior_is_loaded() {
+        let (mut e, tes, _, _) = update_engine(5);
+        e.set_global(DATA_HANDLER, 0u32);
+        let pos = position(&mut e, 0.0, 0.0);
+        e.set_global(GRID_FLAG_MOVED, 1u8);
+        e.set_global(GRID_FLAG_MOVED_COPY, 1u8);
+        e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 1);
+        e.set_global(GRID_FLAG_MOVED_COPY, 0u8);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 1);
+    }
+
+    #[test]
+    fn grid_update_with_an_unset_grid_takes_the_position() {
+        let (mut e, tes, _, _) = update_engine(5);
+        e.set(tes, TES::iCurrentGridX, 0x7fff_ffff);
+        // `004512c0` returns at once while a grid load is in progress.
+        e.set_global(GRID_LOAD_IN_PROGRESS, 1u8);
+        let pos = position(&mut e, 5.0 * 4096.0 + 10.0, 7.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_2580, &args![tes, pos, 0u8]).bool());
+        });
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 5);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 7);
+        assert_eq!(e.get(tes, TES::iCurrentQueuedX), 5);
+        assert_eq!(e.get(tes, TES::iCurrentQueuedY), 7);
+        assert_eq!(
+            calls_to(&log, 0x0045_7d70),
+            vec![vec![tes.addr(), 1, 0x6000, 0]]
+        );
+        assert_eq!(count_calls(&log, 0x0062_f460), 1);
+    }
+
+    #[test]
+    fn grid_update_with_an_unset_grid_and_no_position_keeps_it_unset() {
+        let (mut e, tes, _, _) = update_engine(5);
+        e.set(tes, TES::iCurrentGridY, 0x7fff_ffff);
+        e.set_global(GRID_LOAD_IN_PROGRESS, 1u8);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_2580, &args![tes, 0u32, 0u8]).bool());
+        });
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 10);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 0x7fff_ffff);
+        assert_eq!(count_calls(&log, 0x0045_7d70), 1);
+    }
+
+    /// The loader's `QueueCellLoad` calls as `(x, y)` pairs.
+    fn queued_loads(log: &[(u32, Vec<u32>)]) -> Vec<(u32, u32)> {
+        calls_to(log, EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD)
+            .into_iter()
+            .map(|w| {
+                assert_eq!((w[0], w[1]), (0x5000, 0x6000));
+                (w[2], w[3])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn grid_update_inside_the_cell_queues_the_new_column() {
+        let (mut e, tes, _, _) = update_engine(5);
+        // Cell 11 is one column over; the position is 2148 units from the
+        // centre of cell 10 in x, so 1948 remain to the border.
+        let pos = position(&mut e, 11.0 * 4096.0 + 100.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_2580, &args![tes, pos, 0u8]).bool());
+        });
+        assert_eq!(e.get(tes, TES::fCell_delta_x), 1948.0);
+        assert_eq!(e.get(tes, TES::fCell_delta_y), 4096.0);
+        // half = 2: the column is (2 + 1) * 1 + 10 = 13, rows 18 to 22.
+        assert_eq!(
+            queued_loads(&log),
+            vec![(13, 18), (13, 19), (13, 20), (13, 21), (13, 22)]
+        );
+        assert_eq!(e.get(tes, TES::iCurrentQueuedX), 11);
+        assert_eq!(e.get(tes, TES::iCurrentQueuedY), 20);
+        // The grid itself did not move.
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 10);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 20);
+    }
+
+    #[test]
+    fn grid_update_inside_the_cell_queues_row_column_and_corner() {
+        let (mut e, tes, _, _) = update_engine(5);
+        let pos = position(&mut e, 11.0 * 4096.0 + 100.0, 21.0 * 4096.0 + 100.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        let loads = queued_loads(&log);
+        assert_eq!(loads.len(), 11);
+        assert_eq!(
+            loads[..5],
+            [(13, 18), (13, 19), (13, 20), (13, 21), (13, 22)]
+        );
+        // The row is (2 + 1) * 1 + 20 = 23, columns 8 to 12 (the queued x is
+        // still 10 while they are issued), then the corner.
+        assert_eq!(
+            loads[5..10],
+            [(8, 23), (9, 23), (10, 23), (11, 23), (12, 23)]
+        );
+        assert_eq!(loads[10], (13, 23));
+        assert_eq!(e.get(tes, TES::iCurrentQueuedY), 21);
+    }
+
+    #[test]
+    fn grid_update_inside_the_same_queued_cell_queues_nothing() {
+        let (mut e, tes, _, _) = update_engine(5);
+        let pos = position(&mut e, 10.0 * 4096.0 + 2048.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_2580, &args![tes, pos, 0u8]).bool());
+        });
+        assert!(queued_loads(&log).is_empty());
+        assert_eq!(e.get(tes, TES::fCell_delta_x), 4096.0);
+    }
+
+    #[test]
+    fn grid_update_inside_the_cell_cleans_up_textures_before_queueing_when_asked() {
+        let (mut e, tes, _, _) = update_engine(5);
+        put_setting(&mut e, SETTING_PREEMPTIVELY_UNLOAD_CELLS, 1u8);
+        returns(&mut e, 0x0045_4d50, 1);
+        let pos = position(&mut e, 11.0 * 4096.0 + 100.0, 20.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0045_4d50), vec![vec![tes.addr(), 1]]);
+        assert_eq!(count_calls(&log, 0x0040_fbf0), 1);
+        assert_eq!(queued_loads(&log).len(), 5);
+    }
+
+    #[test]
+    fn grid_update_inside_the_cell_does_not_queue_without_background_loading_or_in_an_interior() {
+        let (mut e, tes, _, _) = update_engine(5);
+        let pos = position(&mut e, 11.0 * 4096.0 + 100.0, 20.0 * 4096.0 + 2048.0);
+        put_setting(&mut e, SETTING_BACKGROUND_CELL_LOADS, 0u8);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_2580, &args![tes, pos, 0u8]).bool());
+        });
+        assert!(queued_loads(&log).is_empty());
+        assert_eq!(e.get(tes, TES::iCurrentQueuedX), 10);
+        put_setting(&mut e, SETTING_BACKGROUND_CELL_LOADS, 1u8);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        });
+        assert!(queued_loads(&log).is_empty());
+    }
+
+    #[test]
+    fn grid_update_distance_uses_three_thousand_for_three_grids() {
+        let (mut e, tes, _, _) = update_engine(3);
+        let pos = position(
+            &mut e,
+            10.0 * 4096.0 + 2048.0 + 100.0,
+            20.0 * 4096.0 + 2048.0,
+        );
+        e.call(0x0045_2580, &args![tes, pos, 0u8]);
+        assert_eq!(e.get(tes, TES::fCell_delta_x), 3072.0 - 100.0);
+        assert_eq!(e.get(tes, TES::fCell_delta_y), 3072.0);
+    }
+
+    /// Runs a move of the grid from cell (10, 20) to the position
+    /// `(x_cell, 20)` (the cell's centre), with `world_space` as the current
+    /// one, and returns the log. The loader reports no queued loads
+    /// (`005285a0` returns `queued`).
+    fn grid_move(e: &mut Engine, tes: Ptr<TES>, x_cell: u32, flag: u8) -> Vec<(u32, Vec<u32>)> {
+        let pos = position(e, x_cell as f32 * 4096.0 + 2048.0, 20.0 * 4096.0 + 2048.0);
+        run_logged(e, |e| {
+            assert!(e.call(0x0045_2580, &args![tes, pos, flag]).bool());
+        })
+    }
+
+    #[test]
+    fn grid_move_far_away_reloads_the_grid_around_the_new_cell() {
+        let (mut e, tes, _, _) = update_engine(5);
+        let array = e.get(tes, TES::pGridCellA).addr();
+        install_player(&mut e, 0);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0));
+        returns(&mut e, 0x0046_0140, 0x7100);
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x6abc);
+        returns(&mut e, 0x0068_15c0, slot);
+        let log = grid_move(&mut e, tes, 12, 0);
+        // The cell deltas are the (negative) distances to the border.
+        assert_eq!(e.get(tes, TES::fCell_delta_x), -4096.0);
+        assert_eq!(e.get(tes, TES::fCell_delta_y), 4096.0);
+        // The grid is on cell (12, 20) and the queue follows it.
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 12);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 20);
+        assert_eq!(e.get(tes, TES::iCurrentQueuedX), 12);
+        assert_eq!(e.get(tes, TES::iCurrentQueuedY), 20);
+        // The centre globals: (12.5 * 4096, 20.5 * 4096); a move of two
+        // cells resets the previous centre to the same value.
+        for base in [GRID_CENTRE, GRID_PREVIOUS_CENTRE] {
+            assert_eq!(e.global::<f32>(base), 51200.0);
+            assert_eq!(e.global::<f32>(base + 4), 83968.0);
+        }
+        assert_eq!(e.global::<f32>(GRID_FLOAT_011F94AC), 1.5);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 1);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED_COPY), 1);
+        assert!(e.get(tes, TES::bUpdateGridString));
+        // No world space: the data handler's current one is set.
+        assert_eq!(
+            calls_to(&log, 0x0046_0140),
+            vec![vec![e.global(DATA_HANDLER)]]
+        );
+        assert_eq!(calls_to(&log, 0x0068_15c0), vec![vec![0x7100]]);
+        assert_eq!(calls_to(&log, 0x0045_8200), vec![vec![tes.addr(), 0x6abc]]);
+        // The havok world counters (far move: both dropped to 0 first).
+        let world = vec![0x8000u32];
+        let with_zero = |w: &[u32]| vec![w[0], 0];
+        assert_eq!(count_calls(&log, HAVOK_WORLD_ADD_COUNT_1C), 1);
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_ADD_COUNT_1C),
+            vec![world.clone()]
+        );
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_DROP_COUNT_1C),
+            vec![with_zero(&world), with_zero(&world)]
+        );
+        // Block 1, the grid array load (twice each) and block 4.
+        assert_eq!(count_calls(&log, HAVOK_WORLD_DROP_COUNT_18), 4);
+        assert_eq!(count_calls(&log, HAVOK_WORLD_ADD_COUNT_18), 3);
+        assert!(calls_to(&log, HAVOK_WORLD_DROP_COUNT_18)
+            .iter()
+            .all(|w| *w == with_zero(&world)));
+        // The grid array moves to the new centre.
+        assert_eq!(calls_to(&log, 0x0300_0010), vec![vec![array, 12, 20]]);
+        // Nothing queued: the unloaded-cells message (no world space, so
+        // not all cells are loaded), no queued-cells message.
+        assert_eq!(
+            calls_to(&log, SET_LOADING_AREA_TEXT),
+            vec![vec![tes.addr(), LOADING_AREA_UNLOADED_CELLS]]
+        );
+        assert_eq!(calls_to(&log, HAVOK_WORLD_GET_0X50), vec![world.clone()]);
+        assert_eq!(calls_to(&log, 0x0045_7be0), vec![vec![tes.addr(), 0]]);
+        // The wind value comes from the table, and the terrain follows the
+        // player.
+        assert_eq!(
+            calls_to(&log, TERRAIN_MANAGER_UPDATE),
+            vec![vec![0x7001, 0x8888, 0xf]]
+        );
+        // `00452e40(1)` is the last thing done.
+        assert_eq!(e.global::<u8>(BYTE_011AF70C), 1);
+        assert_eq!(count_calls(&log, 0x0052_8110), 1);
+        assert_eq!(count_calls(&log, 0x0052_82d0), 0);
+    }
+
+    #[test]
+    fn grid_move_reports_queued_cells_and_cancels_the_loads() {
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        returns(&mut e, 0x0052_85a0, 1);
+        returns(&mut e, 0x0052_81f0, 1);
+        let log = grid_move(&mut e, tes, 12, 0);
+        // Queued cells: the message, and neither the later message nor the
+        // havok world's `0x50` query.
+        assert_eq!(
+            calls_to(&log, SET_LOADING_AREA_TEXT),
+            vec![vec![tes.addr(), LOADING_AREA_QUEUED_CELLS]]
+        );
+        assert_eq!(count_calls(&log, HAVOK_WORLD_GET_0X50), 0);
+        // The loader is told to cancel (`005281f0` found something).
+        assert_eq!(calls_to(&log, 0x0052_82d0), vec![vec![0x5000]]);
+    }
+
+    #[test]
+    fn grid_move_by_one_cell_keeps_the_previous_centre_and_passes_the_flag() {
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        // The previous centre differs from the reference pair.
+        e.set_global(GRID_CENTRE, 1.0f32);
+        e.set_global(GRID_CENTRE + 4, 2.0f32);
+        e.set_global(GRID_CENTRE_REFERENCE, 3.0f32);
+        e.set_global(GRID_CENTRE_REFERENCE + 4, 4.0f32);
+        let log = grid_move(&mut e, tes, 11, 7);
+        // One column: not far. The previous centre is the old centre.
+        assert_eq!(e.global::<f32>(GRID_PREVIOUS_CENTRE), 1.0);
+        assert_eq!(e.global::<f32>(GRID_PREVIOUS_CENTRE + 4), 2.0);
+        assert_eq!(e.global::<f32>(GRID_CENTRE), 11.5 * 4096.0);
+        // The flag is handed to the havok world counters; the block 1
+        // drops are skipped.
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_DROP_COUNT_1C),
+            vec![vec![0x8000, 7]]
+        );
+        // Grid array load (two) and block 4 (flag).
+        let drops = calls_to(&log, HAVOK_WORLD_DROP_COUNT_18);
+        assert_eq!(drops.len(), 3);
+        assert_eq!(drops[2], vec![0x8000, 7]);
+        assert_eq!(count_calls(&log, 0x0045_7be0), 0);
+    }
+
+    #[test]
+    fn grid_move_resets_the_previous_centre_when_it_equals_the_reference() {
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        e.set_global(GRID_CENTRE, 1.0f32);
+        e.set_global(GRID_CENTRE + 4, 2.0f32);
+        // The old centre is copied to the previous centre first; it equals
+        // the reference pair, so the previous centre is then overwritten with
+        // the new centre even for a one-cell move.
+        e.set_global(GRID_PREVIOUS_CENTRE, 1.0f32);
+        e.set_global(GRID_PREVIOUS_CENTRE + 4, 2.0f32);
+        e.set_global(GRID_CENTRE_REFERENCE, 1.0f32);
+        e.set_global(GRID_CENTRE_REFERENCE + 4, 2.0f32);
+        grid_move(&mut e, tes, 11, 0);
+        assert_eq!(e.global::<f32>(GRID_PREVIOUS_CENTRE), 11.5 * 4096.0);
+    }
+
+    #[test]
+    fn grid_move_in_a_script_context_with_bit_20_stays_on_the_current_cell() {
+        let (mut e, tes, context, _) = update_engine(5);
+        let array = e.get(tes, TES::pGridCellA).addr();
+        install_player(&mut e, 0);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        // Script running (bit 2) and bit 0x20.
+        e.mem.set_u32(context + 0x244, 0x22);
+        let log = grid_move(&mut e, tes, 15, 0);
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 10);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 20);
+        // An interior is loaded but a script runs: the cells are still
+        // reloaded; the terrain is not updated (interior loaded).
+        assert_eq!(calls_to(&log, 0x0300_0010), vec![vec![array, 10, 20]]);
+        assert_eq!(count_calls(&log, TERRAIN_MANAGER_UPDATE), 0);
+        // No loading-area message while a script runs.
+        assert_eq!(count_calls(&log, SET_LOADING_AREA_TEXT), 0);
+    }
+
+    #[test]
+    fn grid_move_with_an_interior_and_no_script_only_updates_the_bookkeeping() {
+        let (mut e, tes, _, _) = update_engine(5);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = grid_move(&mut e, tes, 12, 0);
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 12);
+        assert_eq!(count_calls(&log, 0x0300_0010), 0);
+        assert_eq!(count_calls(&log, TERRAIN_MANAGER_UPDATE), 0);
+        assert_eq!(e.global::<u8>(BYTE_011AF70C), 1);
+    }
+
+    #[test]
+    fn grid_move_cleans_up_textures_when_preemptive_unloading_is_on() {
+        let (mut e, tes, _, _) = update_engine(5);
+        install_player(&mut e, 0);
+        put_setting(&mut e, SETTING_PREEMPTIVELY_UNLOAD_CELLS, 1u8);
+        returns(&mut e, 0x0045_4d50, 1);
+        let log = grid_move(&mut e, tes, 12, 0);
+        assert_eq!(calls_to(&log, 0x0045_4d50), vec![vec![tes.addr(), 1]]);
+        // Once before the move and once after.
+        assert_eq!(count_calls(&log, 0x0040_fbf0), 2);
+    }
+
+    #[test]
+    fn point_constructor_stores_two_floats() {
+        let mut e = Engine::new();
+        let point = e.mem.alloc(8);
+        let result = e.call(0x0045_2dc0, &args![point, 1.5f32, -2.0f32]).u32();
+        assert_eq!(result, point);
+        assert_eq!(e.mem.f32(point), 1.5);
+        assert_eq!(e.mem.f32(point + 4), -2.0);
+    }
+
+    #[test]
+    fn point_equality_compares_both_floats() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(8);
+        let b = e.mem.alloc(8);
+        for (a0, a1, b0, b1, equal) in [
+            (1.0f32, 2.0f32, 1.0f32, 2.0f32, true),
+            (1.0, 2.0, 1.0, 3.0, false),
+            (1.0, 2.0, 0.0, 2.0, false),
+            (f32::NAN, 2.0, f32::NAN, 2.0, false),
+            (1.0, f32::NAN, 1.0, f32::NAN, false),
+        ] {
+            e.mem.set_f32(a, a0);
+            e.mem.set_f32(a + 4, a1);
+            e.mem.set_f32(b, b0);
+            e.mem.set_f32(b + 4, b1);
+            assert_eq!(e.call(0x0045_2df0, &args![a, b]).bool(), equal);
+        }
+    }
+
+    #[test]
+    fn small_stores_write_their_globals() {
+        let mut e = Engine::new();
+        e.map(BYTE_011AF70C, 1);
+        e.call(0x0045_2e40, &args![9u8]);
+        assert_eq!(e.global::<u8>(BYTE_011AF70C), 9);
+        e.map(BYTE_011F9427, 1);
+        e.call(0x0045_4440, &args![3u8]);
+        assert_eq!(e.global::<u8>(BYTE_011F9427), 3);
+        let tes: Ptr<TES> = e.new_object();
+        assert!(!e.get(tes, TES::bUpdateGridString));
+        e.call(0x0045_2e50, &args![tes]);
+        assert!(e.get(tes, TES::bUpdateGridString));
+    }
+
+    #[test]
+    fn float_table_is_indexed_by_whether_the_argument_is_set() {
+        let mut e = Engine::new();
+        e.map(FLOAT_PAIR_011F940C, 8);
+        e.set_global(FLOAT_PAIR_011F940C, 1.25f32);
+        e.set_global(FLOAT_PAIR_011F940C + 4, 8.5f32);
+        assert_eq!(e.call(0x0045_2e70, &args![0u8]).f32(), 1.25);
+        assert_eq!(e.call(0x0045_2e70, &args![1u8]).f32(), 8.5);
+        assert_eq!(e.call(0x0045_2e70, &args![200u8]).f32(), 8.5);
+    }
+
+    #[test]
+    fn script_context_bit_20_and_bit_10() {
+        let mut e = Engine::new();
+        let context = e.mem.alloc(0x300);
+        assert!(!e.call(0x0045_2e90, &args![context]).bool());
+        e.mem.set_u32(context + 0x244, 0x20);
+        assert!(e.call(0x0045_2e90, &args![context]).bool());
+        e.mem.set_u32(context + 0x244, 0xffff_ffdf);
+        assert!(!e.call(0x0045_2e90, &args![context]).bool());
+        // `00453500` sets and clears bit 0x10 only.
+        e.mem.set_u32(context + 0x244, 0x20);
+        e.call(0x0045_3500, &args![context, 1u8]);
+        assert_eq!(e.mem.u32(context + 0x244), 0x30);
+        e.call(0x0045_3500, &args![context, 0u8]);
+        assert_eq!(e.mem.u32(context + 0x244), 0x20);
+        e.mem.set_u32(context + 0x244, 0xffff_ffff);
+        e.call(0x0045_3500, &args![context, 0u8]);
+        assert_eq!(e.mem.u32(context + 0x244), 0xffff_ffef);
+    }
+
+    #[test]
+    fn cancelling_the_exterior_loads_calls_the_loader() {
+        let mut e = Engine::new();
+        e.map(EXTERIOR_CELL_LOADER, 4);
+        e.set_global(EXTERIOR_CELL_LOADER, 0x5000u32);
+        noop(&mut e, &[0x0052_8540]);
+        let tes: Ptr<TES> = e.new_object();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2eb0, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, 0x0052_8540), vec![vec![0x5000]]);
+    }
+
+    /// A TES whose singleton and data are set for `AllCellsInGridLoaded`
+    /// with `uGridsToLoad` 2 around (10, 20); every slot holds a cell and
+    /// `00454e20` answers `loaded`.
+    fn all_cells_engine(loaded: u32) -> (Engine, Ptr<TES>, u32, Vec<u32>) {
+        let (mut e, tes, table, _) = {
+            let (e, tes, context, table) = update_engine(2);
+            (e, tes, table, context)
+        };
+        let mut cells = vec![];
+        for x in 0..2 {
+            for y in 0..2 {
+                let cell = new_cell(&mut e, 3, 0);
+                put_cell(&mut e, table, 2, x, y, cell);
+                cells.push(cell);
+            }
+        }
+        returns(&mut e, 0x0045_4e20, loaded);
+        (e, tes, table, cells)
+    }
+
+    #[test]
+    fn all_cells_in_grid_loaded_is_false_without_a_world_space() {
+        let (mut e, tes, _, _) = all_cells_engine(1);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0));
+        assert!(!e.call(0x0045_2ed0, &args![tes]).bool());
+    }
+
+    #[test]
+    fn all_cells_in_grid_loaded_asks_about_every_cell() {
+        let (mut e, tes, _, cells) = all_cells_engine(1);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_2ed0, &args![tes]).bool());
+        });
+        let asked: Vec<Vec<u32>> = cells.iter().map(|c| vec![tes.addr(), *c]).collect();
+        assert_eq!(calls_to(&log, 0x0045_4e20), asked);
+    }
+
+    #[test]
+    fn all_cells_in_grid_loaded_stops_at_the_first_cell_that_is_not_loaded() {
+        let (mut e, tes, _, _) = all_cells_engine(0);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_2ed0, &args![tes]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x0045_4e20), 1);
+    }
+
+    #[test]
+    fn all_cells_in_grid_loaded_looks_empty_slots_up_in_the_world_space() {
+        let (mut e, tes, table, cells) = all_cells_engine(1);
+        // Slot (0, 1) is empty; its cell comes from the world space at
+        // (10 - 1 + 0, 20 - 1 + 1).
+        put_cell(&mut e, table, 2, 0, 1, 0);
+        let found = new_cell(&mut e, 3, 0);
+        returns(&mut e, 0x0058_75a0, found);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_2ed0, &args![tes]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0058_75a0), vec![vec![0x6000, 9, 20]]);
+        let asked = calls_to(&log, 0x0045_4e20);
+        assert_eq!(asked[1], vec![tes.addr(), found]);
+        assert_eq!(asked[0], vec![tes.addr(), cells[0]]);
+        // A cell the world space does not know makes the answer false.
+        returns(&mut e, 0x0058_75a0, 0);
+        assert!(!e.call(0x0045_2ed0, &args![tes]).bool());
+    }
+
+    #[test]
+    fn all_cells_in_grid_loaded_skips_grid_positions_without_a_slot() {
+        let (mut e, tes, table, _) = all_cells_engine(1);
+        // `GridCellArray::Get` finds no slot for (1, 1).
+        e.register_double(GRID_CELL_ARRAY_GET, move |_, a| Ret {
+            eax: if (a[1], a[2]) == (1, 1) {
+                0
+            } else {
+                table + (a[1] * 2 + a[2]) * 4
+            },
+            ..Ret::default()
+        });
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_2ed0, &args![tes]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x0045_4e20), 3);
+    }
+
+    /// A grid load engine: `uGridsToLoad` 2, cells in all four slots of the
+    /// data handler's lookup (`00461c20`) with the given load `states`, a
+    /// world space, and `004ba5a0` (grid slot already filled) true.
+    fn array_load_engine(states: [u8; 4]) -> (Engine, Ptr<TES>, u32, Vec<u32>) {
+        let (mut e, tes, context, _) = update_engine(2);
+        let cells: Vec<u32> = states
+            .iter()
+            .map(|state| new_cell(&mut e, *state, 0))
+            .collect();
+        let lookup = cells.clone();
+        // The data handler is asked for (x, y, worldSpace, 0) with x in
+        // 9..=10 and y in 19..=20.
+        e.register_double(0x0046_1c20, move |_, a| {
+            let index = ((a[1] - 9) * 2 + (a[2] - 19)) as usize;
+            Ret {
+                eax: lookup[index],
+                ..Ret::default()
+            }
+        });
+        returns(&mut e, 0x0058_5b30, 0x7777);
+        returns(&mut e, 0x004b_a5a0, 1);
+        (e, tes, context, cells)
+    }
+
+    #[test]
+    fn grid_array_load_without_a_world_space_only_brackets_the_work() {
+        let (mut e, tes, context, _) = array_load_engine([5, 5, 5, 5]);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        // The memory tag guard with tag 0x1a and the source line.
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_CTOR)
+                .iter()
+                .map(|w| w[1..].to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![0x1a, 1, TES_CPP_PATH, 0x8d6]]
+        );
+        assert_eq!(count_calls(&log, SCOPE_GUARD_DTOR), 1);
+        // The script context's bit 0x10 is set only while it runs.
+        assert_eq!(e.mem.u32(context + 0x244) & 0x10, 0);
+        // The script flag is clear: the fade is started again.
+        assert_eq!(calls_to(&log, 0x0084_92b0), vec![vec![context, 0]]);
+        // The havok world is locked twice (start and after the first loop).
+        assert_eq!(count_calls(&log, HAVOK_WORLD_ADD_COUNT_18), 2);
+        assert_eq!(count_calls(&log, HAVOK_WORLD_DROP_COUNT_18), 2);
+        // End: `00451570(0)` and `00451520(1)`.
+        assert_eq!(calls_to(&log, 0x0066_b0d0), vec![vec![0x011f_95e8, 0]]);
+        assert_eq!(e.global::<u8>(GRID_FLAG_01189184), 1);
+        // Nothing was attached.
+        assert_eq!(count_calls(&log, 0x0054_bcf0), 0);
+    }
+
+    #[test]
+    fn grid_array_load_loads_buffers_and_attaches_the_cells() {
+        let (mut e, tes, _, cells) = array_load_engine([5, 3, 5, 6]);
+        // The cells are not interiors; the buffer check says yes.
+        returns(&mut e, 0x0045_4e20, 1);
+        returns(&mut e, 0x0054_5cf0, 0xd000);
+        let added = Rc::new(RefCell::new(vec![]));
+        let seen = added.clone();
+        e.register_double(LIST_ADD_HEAD, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        // `TES::LoadGridCell` ran for the four slots: each asked the grid
+        // array whether it was already filled and added the cell to the
+        // buffer.
+        assert_eq!(count_calls(&log, 0x004b_a5a0), 4);
+        // The four cells went into the buffer once from the first loop; the
+        // state 5 cells (0 and 2) again from the second.
+        let buffered: Vec<u32> = calls_to(&log, TES_ADD_TO_BUFFER)
+            .iter()
+            .map(|w| w[1])
+            .collect();
+        assert_eq!(buffered.len(), 4 + 4 + 2);
+        // Only the state 5 cells are attached (flag: loading menu not up).
+        assert_eq!(
+            calls_to(&log, 0x0054_bcf0),
+            vec![vec![cells[0], 1], vec![cells[2], 1]]
+        );
+        // Their 3D is updated, once each, and `009938b0` (0) says to
+        // update it with the zero update object.
+        assert_eq!(
+            calls_to(&log, NODE_UPDATE_PROPERTIES),
+            vec![vec![0xd000]; 2]
+        );
+        assert_eq!(count_calls(&log, UPDATE_OBJECT_CTOR), 2);
+        assert_eq!(count_calls(&log, NODE_UPDATE), 2);
+        // Every cell found goes onto the last-loaded list (`this + 0x8c`),
+        // whatever its state.
+        assert_eq!(
+            *added.borrow(),
+            vec![
+                (0x7000, cells[0]),
+                (0x7000, cells[1]),
+                (0x7000, cells[2]),
+                (0x7000, cells[3])
+            ]
+        );
+    }
+
+    #[test]
+    fn grid_array_load_counts_progress_when_the_loading_menu_is_up() {
+        let (mut e, tes, _, _) = array_load_engine([3, 3, 3, 3]);
+        returns(&mut e, 0x0070_5e80, 1);
+        returns(&mut e, 0x0047_c850, 1);
+        returns(&mut e, 0x0087_27b0, 1);
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        // One progress step per cell: the setting read twice for the
+        // percentage and the save/load screen refreshed.
+        assert_eq!(calls_to(&log, 0x0086_1ea0), vec![vec![save_load]; 4]);
+        // The final save/load block: the two flags are fetched, the screen
+        // reset, then the flags restored.
+        assert_eq!(calls_to(&log, 0x0085_8af0), vec![vec![save_load, 0, 0, 0]]);
+        assert_eq!(calls_to(&log, 0x0085_f850), vec![vec![save_load, 0]]);
+        // No cell is in state 5, so none is attached.
+        assert_eq!(count_calls(&log, 0x0054_bcf0), 0);
+    }
+
+    #[test]
+    fn grid_array_load_attaches_with_the_loading_menu_flag_when_it_is_up() {
+        let (mut e, tes, _, cells) = array_load_engine([5, 3, 3, 3]);
+        returns(&mut e, 0x0070_5e80, 1);
+        returns(&mut e, 0x0054_5cf0, 0xd000);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_2ff0, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, 0x0054_bcf0), vec![vec![cells[0], 0]]);
+    }
+
+    #[test]
+    fn node_update_check_getter_adds_0x9c() {
+        let mut e = Engine::new();
+        returns(&mut e, 0x0099_38b0, 42);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_3470, &args![0x1000u32]).u32(), 42);
+        });
+        assert_eq!(calls_to(&log, 0x0099_38b0), vec![vec![0x109c]]);
+    }
+
+    #[test]
+    fn buffer_check_uses_the_interior_or_exterior_test() {
+        let mut e = Engine::new();
+        let tes: Ptr<TES> = e.new_object();
+        returns(&mut e, 0x0045_4bd0, 1);
+        returns(&mut e, 0x0045_4e20, 0);
+        returns(&mut e, 0x0042_5fd0, 1);
+        // Null: false without any call.
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_3490, &args![tes, 0u32]).bool());
+        });
+        assert_eq!(addresses(&log), vec![0x0045_3490]);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3490, &args![tes, 0x4000u32]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0045_4bd0), vec![vec![tes.addr(), 0x4000]]);
+        assert_eq!(count_calls(&log, 0x0045_4e20), 0);
+        returns(&mut e, 0x0042_5fd0, 0);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_3490, &args![tes, 0x4000u32]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0045_4e20), vec![vec![tes.addr(), 0x4000]]);
+    }
+
+    #[test]
+    fn save_game_flag_function_does_nothing() {
+        let mut e = Engine::new();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_34f0, &args![0x1234u32, 1u32]);
+        });
+        assert_eq!(addresses(&log), vec![0x0045_34f0]);
+    }
+
+    #[test]
+    fn wind_getters_read_the_sky_fields() {
+        let mut e = Engine::new();
+        let sky = e.mem.alloc(0x100);
+        e.mem.set_f32(sky + 0xcc, 3.5);
+        e.mem.set_f32(sky + 0xd0, -0.75);
+        assert_eq!(e.call(0x0045_36e0, &args![sky]).f32(), 3.5);
+        assert_eq!(e.call(0x0045_3700, &args![sky]).f32(), -0.75);
+    }
+
+    #[test]
+    fn collision_listener_is_created_once() {
+        let mut e = Engine::new();
+        e.map(COLLISION_LISTENER, 4);
+        returns(&mut e, OPERATOR_NEW, 0x9000);
+        returns(&mut e, 0x0062_3430, 0x9000);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_3720, &args![]).u32(), 0x9000);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0xc]]);
+        assert_eq!(calls_to(&log, 0x0062_3430), vec![vec![0x9000]]);
+        // Once the constructor has stored the pointer, it is returned as is.
+        e.set_global(COLLISION_LISTENER, 0x9000u32);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_3720, &args![]).u32(), 0x9000);
+        });
+        assert_eq!(addresses(&log), vec![0x0045_3720]);
+        // A failed allocation gives null.
+        e.set_global(COLLISION_LISTENER, 0u32);
+        returns(&mut e, OPERATOR_NEW, 0);
+        assert_eq!(e.call(0x0045_3720, &args![]).u32(), 0);
+    }
+
+    #[test]
+    fn instance_getters_return_their_globals() {
+        let mut e = Engine::new();
+        e.map(TASK_QUEUE_OBJECT, 4);
+        e.map(AUDIO_INSTANCE, 4);
+        e.set_global(TASK_QUEUE_OBJECT, 0x1111u32);
+        e.set_global(AUDIO_INSTANCE, 0x2222u32);
+        assert_eq!(e.call(0x0045_37b0, &args![]).u32(), 0x1111);
+        assert_eq!(e.call(0x0045_3a70, &args![]).u32(), 0x2222);
+    }
+
+    /// An engine for the per-frame update (`00453550`).
+    fn frame_engine(threads: i32) -> (Engine, Ptr<TES>) {
+        let (mut e, tes, _, _) = update_engine(3);
+        put_setting(&mut e, SETTING_NUM_HW_THREADS, threads);
+        put_setting(&mut e, SETTING_ANIMATION_MULT, 0.5f32);
+        let sky = e.mem.alloc(0x100);
+        e.mem.set_f32(sky + 0xcc, 3.5);
+        e.mem.set_f32(sky + 0xd0, -0.75);
+        e.set(tes, TES::pSky, Ptr::new(sky));
+        e.set_global(TIME_ACCUMULATOR, 10.0f32);
+        e.set_global(COLLISION_LISTENER, 0x9000u32);
+        e.set_global(TASK_QUEUE_OBJECT, 0x1111u32);
+        returns_float(&mut e, 0x0045_3850, 0.25);
+        returns_float(&mut e, 0x0084_d030, 4.0);
+        (e, tes)
+    }
+
+    #[test]
+    fn frame_update_passes_the_wind_and_steps_the_grid_cells() {
+        let (mut e, tes) = frame_engine(1);
+        let array = e.get(tes, TES::pGridCellA).addr();
+        let sky = e.get(tes, TES::pSky).addr();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3550, &args![tes, 0.5f32]);
+        });
+        assert_eq!(e.global::<f32>(TIME_ACCUMULATOR), 10.5);
+        assert_eq!(calls_to(&log, 0x00c4_68c0), vec![vec![3.5f32.to_bits()]]);
+        assert_eq!(
+            calls_to(&log, 0x00c7_4550),
+            vec![vec![3.5f32.to_bits(), (-0.75f32).to_bits()]]
+        );
+        // The time is passed to the grid array (no interior cell).
+        assert_eq!(
+            calls_to(&log, 0x004b_a9a0),
+            vec![vec![array, 10.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0045_3860),
+            vec![vec![tes.addr(), 1], vec![tes.addr(), 0]]
+        );
+        // One hardware thread: the sky is updated with the frame time
+        // (the argument, as no dialog is up) here and again by `004537c0`
+        // with `00453850`'s value.
+        assert_eq!(
+            calls_to(&log, 0x0063_ac70),
+            vec![vec![sky, 0.5f32.to_bits()], vec![sky, 0.25f32.to_bits()]]
+        );
+        assert_eq!(count_calls(&log, 0x0087_aa90), 0);
+        assert_eq!(calls_to(&log, 0x0062_3640), vec![vec![0x9000]]);
+        assert_eq!(calls_to(&log, 0x0097_5080), vec![vec![OBJECT_011E0E80]]);
+    }
+
+    #[test]
+    fn frame_update_in_an_interior_zeroes_the_wind_and_steps_the_cell() {
+        let (mut e, tes) = frame_engine(1);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3550, &args![tes, 1.0f32]);
+        });
+        assert_eq!(calls_to(&log, 0x00c4_68c0), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x00c7_4550), vec![vec![0, 0]]);
+        assert_eq!(
+            calls_to(&log, 0x0055_1890),
+            vec![vec![0x6200, 11.0f32.to_bits(), 0]]
+        );
+        assert_eq!(count_calls(&log, 0x004b_a9a0), 0);
+    }
+
+    #[test]
+    fn frame_update_in_a_dialog_scales_the_sky_time() {
+        let (mut e, tes) = frame_engine(1);
+        returns(&mut e, 0x0070_50d0, 1);
+        let sky = e.get(tes, TES::pSky).addr();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3550, &args![tes, 0.5f32]);
+        });
+        // `fAnimationMult` (0.5) times the frame time of `0084d030` (4.0),
+        // for the update here and for `004537c0`.
+        assert_eq!(
+            calls_to(&log, 0x0063_ac70),
+            vec![vec![sky, 2.0f32.to_bits()], vec![sky, 2.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0084_d030),
+            vec![vec![FRAME_TIME_OBJECT], vec![FRAME_TIME_OBJECT]]
+        );
+    }
+
+    #[test]
+    fn frame_update_with_several_threads_runs_the_task_queue_and_skips_the_sky() {
+        let (mut e, tes) = frame_engine(4);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3550, &args![tes, 0.5f32]);
+        });
+        assert_eq!(calls_to(&log, 0x0087_aa90), vec![vec![0x1111]]);
+        assert_eq!(count_calls(&log, 0x0063_ac70), 0);
+        assert_eq!(count_calls(&log, 0x0045_37c0), 0);
+        // The collision listener still runs.
+        assert_eq!(count_calls(&log, 0x0062_3640), 1);
+    }
+
+    #[test]
+    fn cell_main_thread_update_updates_the_sky_and_the_temp_node_manager() {
+        let (mut e, tes) = frame_engine(1);
+        e.set(tes, TES::pTempNodeManager, Ptr::new(0x9200));
+        returns(&mut e, 0x0096_11e0, 0x9200);
+        let sky = e.get(tes, TES::pSky).addr();
+        let updates = Rc::new(RefCell::new(vec![]));
+        let seen = updates.clone();
+        e.register_double(UPDATE_OBJECT_CTOR, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_37c0, &args![tes]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0063_ac70),
+            vec![vec![sky, 0.25f32.to_bits()]]
+        );
+        // The update object holds the time accumulator, flags 0 and 0.
+        let ctor = updates.borrow();
+        assert_eq!(ctor.len(), 1);
+        assert_eq!(ctor[0][1..], [10.0f32.to_bits(), 0, 0]);
+        let node_updates = calls_to(&log, NODE_UPDATE);
+        assert_eq!(node_updates.len(), 1);
+        assert_eq!(node_updates[0][0], 0x9200);
+        assert_eq!(node_updates[0][1], ctor[0][0]);
+    }
+
+    /// Stores the buffer contents of a `TES`: a table of `count` words.
+    fn buffer(e: &mut Engine, words: &[u32]) -> u32 {
+        let table = e.mem.alloc(4 * words.len() as u32 + 4);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *word);
+        }
+        table
+    }
+
+    /// An engine for `00453a80`: interior buffer of 3 slots, exterior buffer
+    /// of 6 slots, a 2 x 2 loaded square, everything stubbed.
+    fn unload_engine(interior: &[u32], exterior: &[u32]) -> (Engine, Ptr<TES>, u32, u32) {
+        let (mut e, tes, _, _) = update_engine(2);
+        put_setting(&mut e, SETTING_INTERIOR_CELL_BUFFER, interior.len() as u32);
+        put_setting(&mut e, SETTING_EXTERIOR_CELL_BUFFER, exterior.len() as u32);
+        let interior_table = buffer(&mut e, interior);
+        let exterior_table = buffer(&mut e, exterior);
+        e.set(tes, TES::pInteriorBuffer, Ptr::new(interior_table));
+        e.set(tes, TES::pExteriorBuffer, Ptr::new(exterior_table));
+        // The square holds 2 * 2 slots.
+        returns(&mut e, 0x0084_e3a0, 2);
+        (e, tes, interior_table, exterior_table)
+    }
+
+    #[test]
+    fn unloading_takes_the_last_interior_buffer_cell_first() {
+        let (mut e, tes, interior, _) = unload_engine(&[0x11, 0, 0x33], &[0; 6]);
+        let handler: u32 = e.global(DATA_HANDLER);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(e.mem.u32(interior + 8), 0);
+        assert_eq!(e.mem.u32(interior), 0x11);
+        assert_eq!(calls_to(&log, 0x0046_2290), vec![vec![handler, 0x33]]);
+        // The exterior buffer was not looked at.
+        assert_eq!(count_calls(&log, 0x0045_4fc0), 0);
+    }
+
+    #[test]
+    fn unloading_without_an_interior_cell_takes_a_buffered_exterior_cell() {
+        // The first 4 slots are the loaded square; the search runs from the
+        // end down to slot 4: slot 5 is loaded (cell state 3 is not what
+        // `TES::IsCellLoaded` calls loaded, state 6 is), slot 4 is free.
+        let loaded = 0x2000;
+        let (mut e, tes, _, exterior) = unload_engine(&[0, 0, 0], &[0, 0, 0, 0, 0x2100, loaded]);
+        e.map(loaded, 0x100);
+        e.mem.set_u8(loaded + 0x26, 6);
+        e.map(0x2100, 0x100);
+        e.mem.set_u8(0x2100 + 0x26, 3);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x0045_4fc0), 1);
+        // Slot 4 was taken (slot 5 is loaded and stays).
+        assert_eq!(e.mem.u32(exterior + 16), 0);
+        assert_eq!(e.mem.u32(exterior + 20), loaded);
+        assert_eq!(count_calls(&log, 0x0046_2290), 1);
+        assert_eq!(calls_to(&log, 0x0046_2290)[0][1], 0x2100);
+    }
+
+    #[test]
+    fn unloading_skips_cells_the_object_check_pins() {
+        let (mut e, tes, _, exterior) = unload_engine(&[0, 0, 0], &[0, 0, 0, 0, 0x2100, 0x2200]);
+        for cell in [0x2100u32, 0x2200] {
+            e.map(cell, 0x100);
+            e.mem.set_u8(cell + 0x26, 3);
+        }
+        // `00557090` pins the last one.
+        e.register_double(0x0055_7090, |_, a| Ret {
+            eax: (a[0] == 0x2200) as u32,
+            ..Ret::default()
+        });
+        assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        assert_eq!(e.mem.u32(exterior + 16), 0);
+        assert_eq!(e.mem.u32(exterior + 20), 0x2200);
+    }
+
+    #[test]
+    fn unloading_nothing_returns_false() {
+        let (mut e, tes, _, _) = unload_engine(&[0, 0, 0], &[0; 6]);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x0046_2290), 0);
+    }
+
+    #[test]
+    fn unloading_an_exterior_cell_tells_the_terrain_when_the_first_slot_is_empty() {
+        let (mut e, tes, _, _) = unload_engine(&[0, 0, 0], &[0, 0, 0, 0, 0x2100, 0]);
+        e.map(0x2100, 0x100);
+        e.mem.set_u8(0x2100 + 0x26, 3);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x006f_ce00), vec![vec![0x7001]]);
+    }
+
+    #[test]
+    fn unloading_with_an_interior_cell_searches_the_exterior_buffer_first() {
+        let (mut e, tes, interior, exterior) =
+            unload_engine(&[0x11, 0x6200, 0x33], &[0, 0, 0, 0, 0x2100, 0]);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        e.map(0x2100, 0x100);
+        e.mem.set_u8(0x2100 + 0x26, 3);
+        assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        assert_eq!(e.mem.u32(exterior + 16), 0);
+        assert_eq!(e.mem.u32(interior + 8), 0x33);
+    }
+
+    #[test]
+    fn unloading_with_an_interior_cell_falls_back_to_the_other_interiors() {
+        // The loaded interior cell (0x6200) is never taken.
+        let (mut e, tes, interior, _) = unload_engine(&[0x11, 0x33, 0x6200], &[0; 6]);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let handler: u32 = e.global(DATA_HANDLER);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0046_2290), vec![vec![handler, 0x33]]);
+        assert_eq!(e.mem.u32(interior + 4), 0);
+        assert_eq!(e.mem.u32(interior + 8), 0x6200);
+    }
+
+    #[test]
+    fn unloading_with_an_interior_cell_finally_takes_from_the_loaded_square() {
+        // Only the front of the exterior buffer holds a cell; taking it runs
+        // `00453940`.
+        let (mut e, tes, _, exterior) = unload_engine(&[0, 0, 0], &[0x2100, 0, 0, 0, 0, 0]);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        e.map(0x2100, 0x100);
+        e.mem.set_u8(0x2100 + 0x26, 3);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_3a80, &args![tes]).bool());
+        });
+        assert_eq!(e.mem.u32(exterior), 0);
+        assert_eq!(calls_to(&log, 0x0045_3940), vec![vec![tes.addr()]]);
+        assert_eq!(calls_to(&log, 0x0046_2290)[0][1], 0x2100);
+    }
+
+    /// An engine for the cell switches (`00453dc0`, `00454450`).
+    fn switch_engine() -> (Engine, Ptr<TES>, u32) {
+        let (mut e, tes, context, _) = update_engine(5);
+        install_player(&mut e, 0);
+        put_setting(&mut e, SETTING_HAVOK_DEBUG, 1u8);
+        put_setting(&mut e, SETTING_INTERIOR_CELL_BUFFER, 3u32);
+        // A shadow scene node table with one entry.
+        e.map(SHADOW_SCENE_NODE_TABLE, 16);
+        e.set_global(SHADOW_SCENE_NODE_TABLE, 0xa000u32);
+        // The grid's interior buffer.
+        let interior_table = buffer(&mut e, &[0x11, 0, 0x33]);
+        e.set(tes, TES::pInteriorBuffer, Ptr::new(interior_table));
+        e.set(tes, TES::iSaveGridX, 0x7fff_ffff);
+        e.set(tes, TES::iSaveGridY, 0x7fff_ffff);
+        e.set(tes, TES::pObjRoot, Ptr::new(0x9300));
+        e.set(tes, TES::pObjLandRoot, Ptr::new(0x9400));
+        let sky = e.mem.alloc(0x100);
+        e.set(tes, TES::pSky, Ptr::new(sky));
+        // `00408da0` returns the (empty) name string of a cell.
+        let empty = e.mem.alloc(8);
+        returns(&mut e, 0x0040_8da0, empty);
+        noop(&mut e, &[0x00b5_ddb0]);
+        (e, tes, context)
+    }
+
+    #[test]
+    fn switching_to_the_loaded_interior_cell_only_updates_the_grid() {
+        let (mut e, tes, _) = switch_engine();
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let pos = position(&mut e, 2048.0, 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3dc0, &args![tes, 0x6200u32, pos]);
+        });
+        // The havok world's debug byte and visual debugger are cleared.
+        assert_eq!(e.mem.u8(0x8000 + 0x15), 0);
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_SET_VISUAL_DEBUGGER),
+            vec![vec![0x8000, 0]]
+        );
+        // Nothing of the switch ran: no detach, no cell attached.
+        assert_eq!(count_calls(&log, CELL_DETACH), 0);
+        assert_eq!(count_calls(&log, CELL_ATTACH_TO_WORLD), 0);
+        assert_eq!(count_calls(&log, 0x0087_1dc0), 1);
+    }
+
+    #[test]
+    fn switching_into_an_interior_attaches_it_and_builds_the_name_image() {
+        let (mut e, tes, _) = switch_engine();
+        // No interior is loaded yet. The new cell is an interior (0x6300).
+        let cell = e.mem.alloc(0x100);
+        // The cell name: a string pointer whose first byte is set.
+        let name = e.mem.alloc(8);
+        e.mem.set_u8(name, b'X');
+        returns(&mut e, 0x0040_8da0, name);
+        returns(&mut e, 0x0054_5cf0, 0xd000);
+        returns(&mut e, 0x0041_b9a0, 0x8100); // the interior's own havok world
+        returns(&mut e, 0x0042_5fd0, 1);
+        returns(&mut e, 0x0045_4400, 0);
+        returns(&mut e, 0x0070_ec90, 0xe000);
+        e.register(TES_CREATE_TEXTURE_IMAGE, |e, a| {
+            e.mem.set_u32(a[2], 0xe100);
+            Ret::default()
+        });
+        returns(&mut e, 0x0045_4bd0, 1);
+        let pos = position(&mut e, 3.0 * 4096.0 + 5.0, 4.0 * 4096.0 + 5.0);
+        e.set(tes, TES::iSaveGridX, 1);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3dc0, &args![tes, cell, pos]);
+        });
+        // The grid is set to the position's cell.
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 3);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 4);
+        // The cell is attached to the object root, its lights attached, its
+        // temp data loaded.
+        assert_eq!(
+            calls_to(&log, CELL_ATTACH_TO_WORLD),
+            vec![vec![cell, 0x9300]]
+        );
+        assert_eq!(calls_to(&log, CELL_ATTACH_LIGHTS), vec![vec![cell, 1]]);
+        assert_eq!(calls_to(&log, CELL_LOAD_ALL_TEMP_DATA), vec![vec![cell]]);
+        // The name image: the memory tag guard 0x1d with the source line
+        // 0xc74, the image built from the name and handed to the water
+        // system.
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_CTOR)
+                .iter()
+                .map(|w| w[1..].to_vec())
+                .collect::<Vec<_>>(),
+            vec![vec![0x1d, 1, TES_CPP_PATH, 0xc74]]
+        );
+        let create = calls_to(&log, TES_CREATE_TEXTURE_IMAGE);
+        assert_eq!(create.len(), 1);
+        assert_eq!(create[0][0], tes.addr());
+        assert_eq!(create[0][1], name);
+        assert_eq!((create[0][3], create[0][4]), (1, 0));
+        assert_eq!(
+            calls_to(&log, WATER_SYSTEM_SET_TEXTURE),
+            vec![vec![0xe000, 0xe100]]
+        );
+        // The pointer temporary is built and destroyed around it.
+        assert_eq!(count_calls(&log, NI_POINTER_CTOR), 1);
+        assert_eq!(count_calls(&log, NI_POINTER_DTOR), 1);
+        // The new cell is the loaded one.
+        assert_eq!(calls_to(&log, 0x008d_7dc0), vec![vec![tes.addr(), cell]]);
+    }
+
+    #[test]
+    fn switching_to_the_exterior_detaches_the_interior_and_clears_the_name() {
+        let (mut e, tes, _) = switch_engine();
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        // The interior cell's name is empty.
+        let empty = e.mem.alloc(8);
+        returns(&mut e, 0x0040_8da0, empty);
+        returns(&mut e, 0x0070_ec90, 0xe000);
+        let pos = position(&mut e, 2048.0, 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3dc0, &args![tes, 0u32, pos]);
+        });
+        assert_eq!(calls_to(&log, CELL_DETACH), vec![vec![0x6200, 1]]);
+        // The new cell is null: the loaded cell is set to null; no cell
+        // attach.
+        assert_eq!(calls_to(&log, 0x008d_7dc0), vec![vec![tes.addr(), 0]]);
+        assert_eq!(count_calls(&log, CELL_ATTACH_TO_WORLD), 0);
+        // No name: the water system gets a null image.
+        assert_eq!(
+            calls_to(&log, WATER_SYSTEM_SET_TEXTURE),
+            vec![vec![0xe000, 0]]
+        );
+        assert_eq!(count_calls(&log, SCOPE_GUARD_CTOR), 0);
+        // The buffered interior cell is released through `00455330` when
+        // the new cell is not in the buffer.
+        assert_eq!(calls_to(&log, 0x0045_5330), vec![vec![tes.addr(), 0x33]]);
+        // The object-lighting reset of the leaving case.
+        assert_eq!(count_calls(&log, 0x00b4_f9a0), 1);
+        assert_eq!(count_calls(&log, 0x006c_0720), 1);
+    }
+
+    #[test]
+    fn switching_does_not_buffer_a_cell_that_is_already_buffered() {
+        let (mut e, tes, _) = switch_engine();
+        returns(&mut e, 0x0045_4bd0, 1);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let pos = position(&mut e, 2048.0, 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3dc0, &args![tes, 0u32, pos]);
+        });
+        assert_eq!(count_calls(&log, 0x0045_5330), 0);
+    }
+
+    #[test]
+    fn switching_with_a_script_running_skips_the_menu_background_and_the_obstacle_refresh() {
+        let (mut e, tes, context) = switch_engine();
+        e.mem.set_u32(context + 0x244, 2);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let pos = position(&mut e, 2048.0, 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_3dc0, &args![tes, 0u32, pos]);
+        });
+        assert_eq!(count_calls(&log, 0x0086_ff70), 0);
+        assert_eq!(count_calls(&log, 0x006c_0720), 0);
+    }
+
+    #[test]
+    fn leaving_an_interior_restores_the_saved_grid_and_starts_the_fade() {
+        let (mut e, tes, _) = switch_engine();
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        e.set(tes, TES::iSaveGridX, 7);
+        e.set(tes, TES::iSaveGridY, 8);
+        // A cell in the first exterior buffer slot: the saved grid is
+        // restored and the grid cells culled.
+        let exterior = buffer(&mut e, &[0x2100, 0, 0]);
+        e.set(tes, TES::pExteriorBuffer, Ptr::new(exterior));
+        e.map(0x2100, 0x100);
+        let empty = e.mem.alloc(8);
+        returns(&mut e, 0x0040_8da0, empty);
+        returns(&mut e, 0x0070_ec90, 0xe000);
+        returns(&mut e, 0x0045_4b50, empty);
+        // The position is the centre of the saved cell, so the grid stays.
+        let pos = position(&mut e, 7.0 * 4096.0 + 2048.0, 8.0 * 4096.0 + 2048.0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4450, &args![tes, pos]);
+        });
+        // The terrain manager is updated with the position and told to
+        // update its morph parameters.
+        assert_eq!(
+            calls_to(&log, TERRAIN_MANAGER_UPDATE),
+            vec![vec![0x7001, pos, 0xf]]
+        );
+        assert_eq!(calls_to(&log, 0x006f_cdb0), vec![vec![0x7001, pos]]);
+        // The interior is detached; the cell test (`00454bd0` false) unloads it.
+        assert_eq!(calls_to(&log, CELL_DETACH), vec![vec![0x6200, 1]]);
+        let handler: u32 = e.global(DATA_HANDLER);
+        assert_eq!(calls_to(&log, 0x0046_2290), vec![vec![handler, 0x6200]]);
+        assert_eq!(e.get(tes, TES::iSaveGridX), 0x7fff_ffff);
+        assert_eq!(e.get(tes, TES::iSaveGridY), 0x7fff_ffff);
+        // Culling ran with the restored grid position.
+        assert_eq!(e.get(tes, TES::iCurrentGridX), 7);
+        assert_eq!(e.get(tes, TES::iCurrentGridY), 8);
+        // The havok world: the visual debugger gets the setting's value.
+        assert_eq!(
+            calls_to(&log, HAVOK_WORLD_SET_VISUAL_DEBUGGER),
+            vec![vec![0x8000, 1]]
+        );
+        // The fade is started (no cell test, no script) with the setting.
+        assert_eq!(
+            calls_to(&log, FADER_CREATE_FADER),
+            vec![vec![e.global(FADER_MANAGER), 1, 0.25f32.to_bits(), 1]]
+        );
+        // The new grid centre and flags.
+        assert_eq!(e.global::<u8>(BYTE_01189625), 1);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 0);
+        assert_eq!(e.global::<u8>(GRID_FLAG_MOVED_COPY), 0);
+        for base in [GRID_CENTRE, GRID_PREVIOUS_CENTRE] {
+            assert_eq!(e.global::<f32>(base), 7.5 * 4096.0);
+            assert_eq!(e.global::<f32>(base + 4), 8.5 * 4096.0);
+        }
+        assert_eq!(e.global::<f32>(GRID_FLOAT_011F94AC), 1.5);
+        assert_eq!(e.global::<u8>(GRID_FLAG_TERRAIN), 0);
+    }
+
+    #[test]
+    fn cell_accessors_pass_their_offsets_on() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x100);
+        e.call(0x0045_4380, &args![object, 7u8]);
+        assert_eq!(e.mem.u8(object + 0x15), 7);
+        returns(&mut e, 0x0040_8da0, 0x1234);
+        returns(&mut e, 0x005a_e380, 3);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_43a0, &args![object]).u32(), 0x1234);
+            assert_eq!(e.call(0x0045_4400, &args![object]).u32(), 3);
+        });
+        assert_eq!(calls_to(&log, 0x0040_8da0), vec![vec![object + 0x58]]);
+        assert_eq!(calls_to(&log, 0x005a_e380), vec![vec![object + 0xac]]);
+    }
+
+    #[test]
+    fn interior_buffer_slots_are_read_by_index() {
+        let mut e = Engine::new();
+        let tes: Ptr<TES> = e.new_object();
+        let table = buffer(&mut e, &[0x11, 0x22, 0x33]);
+        e.set(tes, TES::pInteriorBuffer, Ptr::new(table));
+        assert_eq!(e.call(0x0045_4420, &args![tes, 0u32]).u32(), 0x11);
+        assert_eq!(e.call(0x0045_4420, &args![tes, 2u32]).u32(), 0x33);
+    }
+
+    #[test]
+    fn a_cells_havok_world_is_its_own_for_an_interior() {
+        let mut e = Engine::new();
+        e.map(EXTERIOR_WORLD, 4);
+        e.set_global(EXTERIOR_WORLD, 0x8000u32);
+        install_getters(&mut e);
+        returns(&mut e, 0x0041_b9a0, 0x8100);
+        returns(&mut e, 0x0042_5fd0, 1);
+        let cell = e.mem.alloc(0x100);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_43c0, &args![cell]).u32(), 0x8100);
+        });
+        assert_eq!(calls_to(&log, 0x0041_b9a0), vec![vec![cell + 0x28]]);
+        // An exterior cell uses the exterior world.
+        returns(&mut e, 0x0042_5fd0, 0);
+        assert_eq!(e.call(0x0045_43c0, &args![cell]).u32(), 0x8000);
+    }
+
+    #[test]
+    fn havok_debug_setting_getters_read_the_byte() {
+        let mut e = settings_engine();
+        put_setting(&mut e, SETTING_HAVOK_DEBUG, 1u8);
+        assert_eq!(e.call(0x0045_4ae0, &args![]).u8(), 1);
+        put_setting(&mut e, 0x0300_0000, 0x37u8);
+        assert_eq!(e.call(0x0045_4af0, &args![0x0300_0000u32]).u8(), 0x37);
+        put_setting(&mut e, SETTING_HAVOK_DEBUG, 0u8);
+        assert_eq!(e.call(0x0045_4ae0, &args![]).u8(), 0);
     }
 }
