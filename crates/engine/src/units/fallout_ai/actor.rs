@@ -10,8 +10,12 @@
 //!
 //! Notes for the next session (this file's range is `00000000` up to
 //! `00884990`, translated in blocks of 40 functions in address order):
-//! - Block 1 (b0148) ends with `0087f620`; the next function is `0087f660`
-//!   (`Actor::CheckBreathTimer`).
+//! - Block 1 (b0148) ends with `0087f620`; block 2 (`0087f660` up to
+//!   `00881360`: editor location, disposition modifiers, the actor-value
+//!   change functions) ends with `00881360`. The next function is `00881450`
+//!   (`Actor::GetPackage`).
+//! - Functions at `0x0088xxxx` whose `this` is the actor-value owner
+//!   sub-object (`Actor + 0xa4`) take it as a plain `Ptr` and subtract `0xa4`.
 //! - `004181e0` (the engine map calls it `BGSSaveFormBuffer::GetForm`, the
 //!   linker folded it) returns the reference's base form; [`base_form`] wraps
 //!   it. `005d43c0` returns the reference's `ExtraDataList`
@@ -29,6 +33,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSSimpleList;
 
 layout! {
     /// `Actor` (Xbox PDB), `0x1b4` bytes on PC (the PDB's `0x1c4` minus the `0x10`
@@ -63,6 +68,9 @@ layout! {
         0xF0 bBlockPostAnim: bool,
         /// `bReloadTargetQueued` (Xbox PDB).
         0xF1 bReloadTargetQueued: bool,
+        /// `DispModifierList` (Xbox PDB `+0x10c`): `BSSimpleList<DispositionModifier *>`,
+        /// the list head embedded in the actor.
+        0xFC DispModifierList: Inline<BSSimpleList>,
         /// `bInCombat` (Xbox PDB).
         0x104 bInCombat: bool,
         /// `eLifeState` (Xbox PDB).
@@ -157,6 +165,15 @@ layout! {
         0x1B0 bTurretBehavior: u8,
         /// `bForceHitReaction` (Xbox PDB).
         0x1B1 bForceHitReaction: bool,
+    }
+
+    /// `DispositionModifier` (Xbox PDB), 8 bytes: one entry of
+    /// [`Actor::DispModifierList`].
+    pub struct DispositionModifier: 0x08 {
+        /// `modifieramount` (Xbox PDB).
+        0x00 modifieramount: i32,
+        /// `pactormodified` (Xbox PDB): `Actor *`.
+        0x04 pactormodified: Ptr,
     }
 
     /// `bhkRagdollController` (Xbox PDB, `0x2d0` bytes there; the PC size is not
@@ -1279,6 +1296,1027 @@ pub fn fn_0087f620(e: &mut Engine, this: Ptr<Actor>) -> bool {
     e.vcall(this.addr(), 0x218, &args![]).bool() || !actor_swims_only(e, this)
 }
 
+// ---------------------------------------------------------------------------
+// Block 2 (batch b0148, continued): `0087f660` up to `00881360`
+
+/// `_ftol2_sse` (`00ec62c0`): truncates the value the game holds in `ST0`; the
+/// uniform form takes it as a leading `f64` argument.
+const FLOAT_TO_INT: u32 = 0x00ec_62c0;
+/// The form-type byte of a form (`00401170`, the byte at `+4`).
+const FORM_TYPE: u32 = 0x0040_1170;
+/// Bit 0 of the byte at `+0x24` of an object (`00425fd0`).
+const FLAG_BIT_0_AT_0X24: u32 = 0x0042_5fd0;
+/// A list node's own address (`006815c0`): the item is the word at the result.
+const LIST_NODE_ITEM_SLOT: u32 = 0x0068_15c0;
+/// A list node's next pointer (`00726070`, the word at `+4`).
+const LIST_NODE_NEXT: u32 = 0x0072_6070;
+/// Removes the first node holding the item whose address is passed (a
+/// pointer to a local holding the item): `(list, &item)`.
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+/// Appends the item whose address is passed: `(list, &item)`.
+const LIST_APPEND_ITEM: u32 = 0x005a_e3d0;
+/// Empties a list (`00470470`).
+const LIST_CLEAR: u32 = 0x0047_0470;
+/// Releases a block allocated with `operator new` (`00401030`, cdecl).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// The actor's process (`008d8520`: the word at `+0x68`; the engine map names
+/// it `MiddleHighProcess::GetSavedAcquireObject` because the code is folded).
+const ACTOR_PROCESS: u32 = 0x008d_8520;
+/// `bool` test of actor value `(index)`, true when the value is a plain
+/// stat that has a base entry (`0066ee10`, cdecl).
+const ACTOR_VALUE_HAS_BASE: u32 = 0x0066_ee10;
+/// `(index, mask)`: whether the actor-value flag word has a bit of `mask`
+/// (`00406d70`, cdecl).
+const ACTOR_VALUE_HAS_FLAG: u32 = 0x0040_6d70;
+/// Tells the actor value `(owner, index, base, value, other owner)` changed
+/// (`0066ee50`, cdecl, five words).
+const ACTOR_VALUE_CHANGED: u32 = 0x0066_ee50;
+/// `(index)` whether `index` is within `0 ..= 0x2d` (`0047f060`, cdecl).
+const ACTOR_VALUE_IS_STAT: u32 = 0x0047_f060;
+/// Offset of the actor-value owner sub-object inside an `Actor`.
+const ACTOR_VALUE_OWNER: u32 = 0xa4;
+/// Offset of the editor location (three `float`s) inside an `Actor`.
+const EDITOR_LOCATION: u32 = 0x160;
+
+/// `_ftol2_sse` on a value in `ST0`.
+fn float_to_int(e: &mut Engine, value: f64) -> i32 {
+    e.call(FLOAT_TO_INT, &args![value]).i32()
+}
+
+/// Copies three words (a `NiPoint3`).
+fn copy_point(e: &mut Engine, from: u32, to: u32) {
+    for i in 0..3 {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+}
+
+/// The actor's process (`008d8520`).
+fn actor_process(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    e.call(ACTOR_PROCESS, &args![this]).ptr()
+}
+
+/// `owner + 0xa4` of a pointer that may be null (null stays null).
+fn owner_of(actor: u32) -> u32 {
+    if actor != 0 {
+        actor + ACTOR_VALUE_OWNER
+    } else {
+        0
+    }
+}
+
+/// The base value of actor value `index` (the owner's virtual `+0xc`), or
+/// `0.0` when `0066ee10` says the value has none.
+fn base_actor_value(e: &mut Engine, this: Ptr<Actor>, index: u32) -> f32 {
+    if e.call(ACTOR_VALUE_HAS_BASE, &args![index]).bool() {
+        e.vcall(this.addr() + ACTOR_VALUE_OWNER, 0xc, &args![index])
+            .f32()
+    } else {
+        0.0
+    }
+}
+
+/// The report every actor-value change ends with: `0066ee50(owner of this,
+/// index, base, value, owner of source)`.
+fn report_actor_value_change(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    index: u32,
+    base: f32,
+    value: f32,
+    source: u32,
+) {
+    e.call(
+        ACTOR_VALUE_CHANGED,
+        &args![owner_of(this.addr()), index, base, value, owner_of(source)],
+    );
+}
+
+/// The item of the first node of the disposition-modifier list whose actor
+/// (`DispositionModifier::pactormodified`) is `target`, or 0.
+fn find_disposition_modifier(e: &mut Engine, this: Ptr<Actor>, target: u32) -> u32 {
+    let mut node = this.at(Actor::DispModifierList).cast::<()>();
+    while !node.is_null() {
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        if item == 0 {
+            break;
+        }
+        if e.mem.u32(item + 4) == target {
+            return item;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).ptr();
+    }
+    0
+}
+
+// Translated from 0087f660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CheckBreathTimer` (Xbox PDB): false when the actor has a process
+/// whose virtual `+0x300` (the breath timer) is smaller than the swim breath
+/// time (`00648a10` of the integer part of `008be7a0`); true otherwise.
+pub fn actor_check_breath_timer(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let mut result = true;
+    let level = e.call(0x008b_e7a0, &args![this]).f64();
+    let level = float_to_int(e, level);
+    let limit = e.call(0x0064_8a10, &args![level]).f32();
+    let process = e.get(this, Actor::pCurrentProcess);
+    if !process.is_null() {
+        let timer = e.vcall(process.addr(), 0x300, &args![]).f32();
+        if limit > timer {
+            result = false;
+        }
+    }
+    result
+}
+
+// Translated from 0087f6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The result of `00408da0` on the data at `+0x18` of `004ac110`'s record of
+/// the actor's form (`MapMarkerData::GetLocationName` in the decompiler's
+/// naming), 0 when the actor has no form (virtual `+0x218` false) or the
+/// record's check `0048cee0` fails.
+pub fn fn_0087f6c0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mut form = 0;
+    if e.vcall(this.addr(), 0x218, &args![]).bool() {
+        form = e.call(GET_FORM, &args![this]).u32();
+    }
+    if form != 0 {
+        let record = e.call(0x004a_c110, &args![form]).u32();
+        let data = if record != 0 { record + 0x18 } else { 0 };
+        if data != 0 && e.call(0x0048_cee0, &args![data]).u32() != 0 {
+            return e.call(0x0040_8da0, &args![data]).u32();
+        }
+    }
+    0
+}
+
+// Translated from 0087f750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The editor location form when it is set and its form type is `0x41`, else null.
+pub fn fn_0087f750(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let form = e.get(this, Actor::pEditorLocForm);
+    if !form.is_null() && e.call(FORM_TYPE, &args![form]).u32() == 0x41 {
+        form
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 0087f7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The editor location form when it is set, its form type is `0x39` and
+/// `00425fd0` is true for it, else null.
+pub fn fn_0087f7a0(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let mut form = Ptr::NULL;
+    let location = e.get(this, Actor::pEditorLocForm);
+    if !location.is_null() && e.call(FORM_TYPE, &args![location]).u32() == 0x39 {
+        form = location;
+    }
+    if !form.is_null() && !e.call(FLAG_BIT_0_AT_0X24, &args![form]).bool() {
+        form = Ptr::NULL;
+    }
+    form
+}
+
+// Translated from 0087f800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Records the actor's current place as its editor location: the position
+/// (`00436aa0`, three floats) into `+0x160`, the z rotation (virtual `+0x2bc`
+/// with argument 0) into `fEditorLocZRot`, and the form: `008d6f30` when it
+/// passes `00425fd0`, else `00575d70` (`TESObjectREFR::GetWorldSpace`).
+pub fn fn_0087f800(e: &mut Engine, this: Ptr<Actor>) {
+    let position = e.call(0x0043_6aa0, &args![this]).u32();
+    copy_point(e, position, this.addr() + EDITOR_LOCATION);
+    let z_rotation = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+    e.set(this, Actor::fEditorLocZRot, z_rotation);
+    if e.call(0x008d_6f30, &args![this]).u32() != 0 {
+        let candidate = e.call(0x008d_6f30, &args![this]).ptr::<()>();
+        if e.call(FLAG_BIT_0_AT_0X24, &args![candidate]).bool() {
+            let form = e.call(0x008d_6f30, &args![this]).ptr();
+            e.set(this, Actor::pEditorLocForm, form);
+            return;
+        }
+    }
+    let form = e.call(0x0057_5d70, &args![this]).ptr();
+    e.set(this, Actor::pEditorLocForm, form);
+}
+
+// Translated from 0087f890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the editor location from `position` and `rotation`; the form is
+/// `candidate` when it is set and passes `00425fd0`, else `fallback`.
+pub fn fn_0087f890(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    fallback: Ptr,
+    candidate: Ptr,
+    position: Ptr,
+    rotation: f32,
+) {
+    copy_point(e, position.addr(), this.addr() + EDITOR_LOCATION);
+    e.set(this, Actor::fEditorLocZRot, rotation);
+    if !candidate.is_null() && e.call(FLAG_BIT_0_AT_0X24, &args![candidate]).bool() {
+        e.set(this, Actor::pEditorLocForm, candidate);
+    } else {
+        e.set(this, Actor::pEditorLocForm, fallback);
+    }
+}
+
+// Translated from 0087f900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor has an editor location form.
+pub fn fn_0087f900(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    !e.get(this, Actor::pEditorLocForm).is_null()
+}
+
+// Translated from 0087f920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the editor location back: false when the actor has none; otherwise
+/// the position goes to `position`, `(0, 0, z rotation)` to `rotation` and the
+/// form to the word at `form`, and the result is true. The fourth word the
+/// function pops is never read.
+pub fn fn_0087f920(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    position: Ptr,
+    rotation: Ptr,
+    form: Ptr,
+    _unused_3: u32,
+) -> bool {
+    let location = e.get(this, Actor::pEditorLocForm);
+    if location.is_null() {
+        return false;
+    }
+    copy_point(e, this.addr() + EDITOR_LOCATION, position.addr());
+    e.mem.set_f32(rotation.addr(), 0.0);
+    e.mem.set_f32(rotation.addr() + 4, 0.0);
+    let z_rotation = e.get(this, Actor::fEditorLocZRot);
+    e.mem.set_f32(rotation.addr() + 8, z_rotation);
+    e.mem.set_u32(form.addr(), location.addr());
+    true
+}
+
+// Translated from 0087f990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `005bb4d0` on the base form's component at `+0x90`.
+pub fn fn_0087f990(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let base = base_form(e, this);
+    e.call(0x005b_b4d0, &args![base.byte_add(0x90)]).bool()
+}
+
+// Translated from 0087f9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor-value owner's virtual `+0` (an integer) for actor value `0x15`,
+/// as a `float`.
+pub fn fn_0087f9c0(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    let value = e
+        .vcall(this.addr() + ACTOR_VALUE_OWNER, 0, &args![0x15u32])
+        .i32();
+    value as f32
+}
+
+// Translated from 0087f9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0047ded0` on the base form's component at `+0x30`.
+pub fn fn_0087f9f0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let base = base_form(e, this);
+    e.call(0x0047_ded0, &args![base.byte_add(0x30)]).u32()
+}
+
+// Translated from 0087fa10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a process: its virtual `+0x118` with `flag`, then its virtual `+0x4a0`.
+pub fn fn_0087fa10(e: &mut Engine, this: Ptr<Actor>, flag: bool) {
+    let process = e.get(this, Actor::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x118, &args![flag]);
+        e.vcall(process.addr(), 0x4a0, &args![]);
+    }
+}
+
+// Translated from 0087fa60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a process: its virtual `+0x120` with `flag`.
+pub fn fn_0087fa60(e: &mut Engine, this: Ptr<Actor>, flag: bool) {
+    let process = e.get(this, Actor::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x120, &args![flag]);
+    }
+}
+
+// Translated from 0087faa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::EndMovement` (Xbox PDB): with a process, its virtual `+0x294` with
+/// the actor.
+pub fn actor_end_movement(e: &mut Engine, this: Ptr<Actor>) {
+    let process = e.get(this, Actor::pCurrentProcess);
+    if !process.is_null() {
+        e.vcall(process.addr(), 0x294, &args![this]);
+    }
+}
+
+// Translated from 0087fad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes from the disposition-modifier list the entry for `target`
+/// (`DispositionModifier::pactormodified`), if there is one.
+pub fn fn_0087fad0(e: &mut Engine, this: Ptr<Actor>, target: u32) {
+    let item = find_disposition_modifier(e, this, target);
+    if item != 0 {
+        let list = this.at(Actor::DispModifierList);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+        });
+    }
+}
+
+// Translated from 0087fb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `amount` to the disposition modifier the actor keeps toward `target`,
+/// only when `target` is the player. Sets the actor's flag bit `0x80000`
+/// (virtual `+0x48`). When the actor already has an entry for the player,
+/// the amount is first limited so that the actor's disposition (virtual
+/// `+0x344` with the player and 0) plus the amount stays within `0 ..= 100`
+/// (a sum below 0 turns the amount into `-disposition`; a sum above 100
+/// keeps only the part up to 100, or 0), then it is added to the entry.
+/// Otherwise a new entry `{ amount, target }` is allocated and appended
+/// (`00564db0(target, 1)` is called on the player first).
+pub fn fn_0087fb40(e: &mut Engine, this: Ptr<Actor>, target: Ptr, amount: f32) {
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if target.addr() != player {
+        return;
+    }
+    let mut amount = amount;
+    e.vcall(this.addr(), 0x48, &args![0x80000u32]);
+    let entry = find_disposition_modifier(e, this, target.addr());
+    if entry != 0 {
+        let entry: Ptr<DispositionModifier> = Ptr::new(entry);
+        let disposition = e.vcall(this.addr(), 0x344, &args![target, 0u32]).i32();
+        let sum = disposition as f64 + amount as f64;
+        let zero: f64 = e.global(0x0101_2060);
+        let hundred: f64 = e.global(0x0101_7a40);
+        if sum < zero {
+            amount = (amount as f64 - sum) as f32;
+        } else if sum > hundred {
+            let total = float_to_int(e, amount as f64).wrapping_add(disposition);
+            let excess = total.wrapping_sub(100);
+            if amount as f64 > excess as f64 {
+                amount = (amount as f64 - excess as f64) as f32;
+            } else {
+                amount = 0.0;
+            }
+        }
+        let delta = float_to_int(e, amount as f64);
+        let current = e.get(entry, DispositionModifier::modifieramount);
+        e.set(
+            entry,
+            DispositionModifier::modifieramount,
+            current.wrapping_add(delta),
+        );
+    } else {
+        let item = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let delta = float_to_int(e, amount as f64);
+        let item: Ptr<DispositionModifier> = Ptr::new(item);
+        e.set(item, DispositionModifier::modifieramount, delta);
+        e.set(item, DispositionModifier::pactormodified, target);
+        e.call(0x0056_4db0, &args![target, 1u32]);
+        let list = this.at(Actor::DispModifierList);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item.addr());
+            e.call(LIST_APPEND_ITEM, &args![list, slot]);
+        });
+    }
+}
+
+// Translated from 0087fcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The disposition modifier the actor keeps toward `target` as a `float`, 0
+/// when it has none.
+pub fn fn_0087fcb0(e: &mut Engine, this: Ptr<Actor>, target: u32) -> f32 {
+    let entry = find_disposition_modifier(e, this, target);
+    if entry != 0 {
+        e.mem.i32(entry) as f32
+    } else {
+        0.0
+    }
+}
+
+// Translated from 0087fd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearDispositionModifiers` (Xbox PDB): frees every entry of the
+/// disposition-modifier list, then empties the list (`00470470`).
+pub fn actor_clear_disposition_modifiers(e: &mut Engine, this: Ptr<Actor>) {
+    let list = this.at(Actor::DispModifierList);
+    let mut node = list.cast::<()>();
+    while !node.is_null() {
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        if item == 0 {
+            break;
+        }
+        e.call(OPERATOR_DELETE, &args![item]);
+        node = e.call(LIST_NODE_NEXT, &args![node]).ptr();
+    }
+    e.call(LIST_CLEAR, &args![list]);
+}
+
+// Translated from 0087fd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A score of the actor towards `other`, clamped to `0 ..= 100` (it looks
+/// like the actor's disposition towards `other`; the virtual `+0x344` the
+/// modifier code above calls with `(other, 0)` has this shape). Returns 0
+/// without `other` and 100 at once when `other` is the actor's own target
+/// form. `cached` (may be null) is a block of six words that stands in for the
+/// values the function otherwise reads from the actor: `+0`, `+4`, `+8`
+/// (the target form), `+0xc`, `+0x10` and `+0x14`.
+///
+/// Two paths follow: the first (when the actor is not a creature-like
+/// actor, virtual `+0x218` false, and it has an owner reference or a saved
+/// acquire object, or `00608d80` is true) and the second both read the
+/// values of `other`'s actor-value owner and combine them with
+/// `00642a60`; the result goes through `BGSEntryPoint::HandleEntryPoint`
+/// (`005e58f0`, entry point `0xe`) and is clamped. The extra argument words
+/// the code pushes for the owner's virtual `+8` call are never read by it
+/// (the callee pops one word), so only `0x17` is passed.
+pub fn fn_0087fd90(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>, cached: Ptr) -> i32 {
+    let mut result: i32 = 0;
+    if other.is_null() {
+        return result;
+    }
+    let mut saved_acquire = 0u32;
+    let cached_37c;
+    let virtual_37c = e.vcall(this.addr(), 0x37c, &args![]).u32();
+    let mut target_form = 0u32;
+    let base_of_this;
+    let flags_word;
+    let skill_word;
+    let owner_reference;
+    let mut other_base = base_form(e, other).addr();
+    if other_base != 0 {
+        let component = e.call(0x005d_8a70, &args![other_base + 0x30]).u32();
+        if e.call(0x0082_56d0, &args![component]).bool() {
+            other_base = base_form(e, other).addr();
+        }
+    }
+    if !cached.is_null() {
+        cached_37c = e.mem.u32(cached.addr());
+        owner_reference = e.mem.u32(cached.addr() + 0xc);
+        flags_word = e.mem.u32(cached.addr() + 0x10);
+        skill_word = e.mem.u32(cached.addr() + 0x14);
+        target_form = e.mem.u32(cached.addr() + 8);
+        base_of_this = e.mem.u32(cached.addr() + 4);
+    } else {
+        cached_37c = e.vcall(this.addr(), 0x37c, &args![]).u32();
+        owner_reference = e.call(0x0056_7790, &args![this]).u32();
+        base_of_this = base_form(e, this).addr();
+        flags_word = e.call(0x0047_d3d0, &args![base_of_this + 0x30]).u16() as u32;
+        skill_word = e
+            .vcall(this.addr() + ACTOR_VALUE_OWNER, 8, &args![3u32])
+            .u32();
+        if e.vcall(this.addr(), 0x218, &args![]).bool() {
+            target_form = e.call(GET_FORM, &args![this]).u32();
+        }
+    }
+    let process = actor_process(e, this);
+    if !process.is_null() {
+        saved_acquire = e.vcall(process.addr(), 0x52c, &args![]).u32();
+    }
+    if e.call(GET_FORM, &args![other]).u32() == target_form {
+        return 100;
+    }
+    let creature_like = e.vcall(this.addr(), 0x218, &args![]).bool();
+    let first_path = (!creature_like && (owner_reference != 0 || saved_acquire != 0))
+        || e.call(0x0060_8d80, &args![this]).bool();
+    if first_path {
+        if target_form == 0 {
+            if owner_reference != 0 && e.call(FORM_TYPE, &args![owner_reference]).u32() == 0x2a {
+                target_form = owner_reference;
+            }
+            if target_form == 0 && saved_acquire != 0 {
+                let form = e.call(GET_FORM, &args![saved_acquire]).u32();
+                if e.call(FORM_TYPE, &args![form]).u32() == 0x2a {
+                    target_form = e.call(GET_FORM, &args![saved_acquire]).u32();
+                }
+            }
+        }
+        if target_form != 0 && e.call(GET_FORM, &args![other]).u32() == target_form {
+            return 100;
+        }
+        if target_form != 0 && other_base != 0 {
+            // Locals the compiler keeps (an unused copy of `other_base` among them).
+            let mut cached_value = 0u32;
+            if e.vcall(other.addr(), 0x218, &args![]).bool() {
+                cached_value = e
+                    .call(0x0048_bf50, &args![cached_37c + 0x40, virtual_37c])
+                    .u32();
+            }
+            let (outcome, out_first) = e.with_stack(12, |e, outs| {
+                e.mem.set_u32(outs.addr(), 0xffff_ffff);
+                e.mem.set_u32(outs.addr() + 4, 0);
+                e.mem.set_u32(outs.addr() + 8, 0);
+                let outcome = e
+                    .call(
+                        0x008b_7fe0,
+                        &args![this, other, outs, outs.byte_add(4), outs.byte_add(8)],
+                    )
+                    .u32();
+                (outcome, e.mem.u32(outs.addr()))
+            });
+            let mut hostile = 0u32;
+            if e.call(0x008a_16d0, &args![other]).bool() {
+                if !e.call(0x0049_3bb0, &args![other]).bool() {
+                    hostile = 1;
+                } else {
+                    let combat_target = e.vcall(this.addr(), 0x428, &args![]).u32();
+                    if combat_target != 0 && e.call(0x0097_fa10, &args![combat_target, this]).bool()
+                    {
+                        hostile = 1;
+                    }
+                }
+            }
+            let player = e.global::<u32>(PLAYER_POINTER);
+            let actor_in_high = if target_form == e.call(GET_FORM, &args![player]).u32() {
+                player
+            } else {
+                e.call(0x0097_0a20, &args![PROCESS_LISTS, target_form, 0u32])
+                    .u32()
+            };
+            let mut other_value = 0i32;
+            if actor_in_high != 0 {
+                let value = e.vcall(actor_in_high, 0x464, &args![other]).f64();
+                other_value = float_to_int(e, value);
+            }
+            e.vcall(this.addr(), 0x21c, &args![]);
+            let _ = (cached_value, outcome, out_first, hostile, other_value);
+            let owner_value = e
+                .vcall(other.addr() + ACTOR_VALUE_OWNER, 8, &args![0x17u32])
+                .u32();
+            let clamped = e
+                .call(0x0066_ef20, &args![other.addr() + ACTOR_VALUE_OWNER, 8u32])
+                .u32();
+            result = e
+                .call(
+                    0x0064_2a60,
+                    &args![flags_word, clamped, skill_word, owner_value],
+                )
+                .i32();
+        }
+    } else {
+        if target_form == 0
+            && owner_reference != 0
+            && e.call(FORM_TYPE, &args![owner_reference]).u32() == 0x2a
+        {
+            target_form = owner_reference;
+        }
+        if target_form != 0 && e.call(GET_FORM, &args![other]).u32() == target_form {
+            return 100;
+        }
+        let other_base_again = base_form(e, other).addr();
+        if other_base_again != 0 && base_of_this != 0 {
+            let mut cached_value = 0u32;
+            if cached_37c != 0 && virtual_37c != 0 {
+                cached_value = e
+                    .call(0x0048_bf50, &args![cached_37c + 0x40, virtual_37c])
+                    .u32();
+            }
+            let (outcome, out_first) = e.with_stack(12, |e, outs| {
+                e.mem.set_u32(outs.addr(), 0xffff_ffff);
+                e.mem.set_u32(outs.addr() + 4, 0);
+                e.mem.set_u32(outs.addr() + 8, 0);
+                let outcome = e
+                    .call(
+                        0x008b_7fe0,
+                        &args![this, other, outs, outs.byte_add(4), outs.byte_add(8)],
+                    )
+                    .u32();
+                (outcome, e.mem.u32(outs.addr()))
+            });
+            let weapon_drawn = e.call(0x008a_16d0, &args![other]).u8();
+            let value = e.vcall(this.addr(), 0x464, &args![other]).f64();
+            let other_value = float_to_int(e, value);
+            e.vcall(this.addr(), 0x21c, &args![]);
+            let _ = (cached_value, outcome, out_first, weapon_drawn, other_value);
+            let owner_value = e
+                .vcall(other.addr() + ACTOR_VALUE_OWNER, 8, &args![0x17u32])
+                .u32();
+            let clamped = e
+                .call(0x0066_ef20, &args![other.addr() + ACTOR_VALUE_OWNER, 8u32])
+                .u32();
+            result = e
+                .call(
+                    0x0064_2a60,
+                    &args![flags_word, clamped, skill_word, owner_value],
+                )
+                .i32();
+        }
+    }
+    let mut score = result as f32;
+    e.with_stack(4, |e, cell| {
+        e.mem.set_f32(cell.addr(), score);
+        e.call(0x005e_58f0, &args![0xeu32, this, other, cell]);
+        score = e.mem.f32(cell.addr());
+    });
+    result = float_to_int(e, score as f64);
+    result.clamp(0, 100)
+}
+
+// Translated from 00880370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// On the actor-value owner `this` (the sub-object at `Actor + 0xa4`): the
+/// virtual `+4` value of actor value `index`, passed through `00404040` and
+/// truncated.
+pub fn fn_00880370(e: &mut Engine, this: Ptr, index: u32) -> i32 {
+    let value = e.vcall(this.addr(), 4, &args![index]).f32();
+    let adjusted = e.call(0x0040_4040, &args![value]).f64();
+    float_to_int(e, adjusted)
+}
+
+// Translated from 008803a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// On the actor-value owner `this` (the sub-object at `Actor + 0xa4`): the
+/// value of actor value `index` once the modifiers apply. The base value is
+/// the integer result of the base form component's (`+0x100`) virtual `+8`;
+/// the actor's virtual `+0x48c` gives the modifier and a flag. Which of the
+/// two (or their sum) is returned depends on `0047f060`, the actor-value flag
+/// words (`00406d70` with `0x1000`, `0x800`, `0x80`, `0x40`), the actor's
+/// virtual `+0x21c` and `+0x360`, `00566950`, and the result of `0066ed60`.
+pub fn fn_008803a0(e: &mut Engine, this: Ptr, index: u32) -> f32 {
+    let actor: Ptr<Actor> = Ptr::new(this.addr().wrapping_sub(ACTOR_VALUE_OWNER));
+    let component = base_form(e, actor).addr() + 0x100;
+    let mut base_value = e.vcall(component, 8, &args![index]).i32() as f32;
+    let (modifier, flag) = e.with_stack(4, |e, flag| {
+        e.mem.set_u8(flag.addr(), 0);
+        let modifier = e.vcall(actor.addr(), 0x48c, &args![index, flag]).f32();
+        (modifier, e.mem.u8(flag.addr()) != 0)
+    });
+    if flag && !e.call(ACTOR_VALUE_IS_STAT, &args![index]).bool() {
+        return modifier;
+    }
+    if e.vcall(actor.addr(), 0x21c, &args![]).bool()
+        && e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x1000u32])
+            .bool()
+    {
+        return base_value;
+    }
+    let combine = e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x800u32]).bool()
+        || e.vcall(actor.addr(), 0x360, &args![]).bool()
+        || e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x80u32]).bool()
+        || (e.call(0x0056_6950, &args![actor]).bool() && index == 0x10);
+    if !combine {
+        return base_value;
+    }
+    if flag && e.call(ACTOR_VALUE_IS_STAT, &args![index]).bool() {
+        base_value = modifier;
+    }
+    let (accepted, result) = e.with_stack(4, |e, cell| {
+        e.mem.set_f32(cell.addr(), 0.0);
+        let accepted = e
+            .call(0x0066_ed60, &args![actor.addr(), index, cell])
+            .bool();
+        (accepted, e.mem.f32(cell.addr()))
+    });
+    if !accepted {
+        return base_value;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x40u32]).bool() || flag {
+        return (result as f64 + base_value as f64) as f32;
+    }
+    result
+}
+
+// Translated from 00880580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// On the actor-value owner `this` (the sub-object at `Actor + 0xa4`): with a
+/// process, the process's virtual `+0x398` called with (the actor's base
+/// form, `index`, the actor); without, the owner's own virtual `+0` with
+/// `index`.
+pub fn fn_00880580(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let actor: Ptr<Actor> = Ptr::new(this.addr().wrapping_sub(ACTOR_VALUE_OWNER));
+    if !e.get(actor, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, actor);
+        let base = base_form(e, actor);
+        e.vcall(process.addr(), 0x398, &args![base, index, actor])
+            .u32()
+    } else {
+        e.vcall(this.addr(), 0, &args![index]).u32()
+    }
+}
+
+// Translated from 008805f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` counterpart of `00880580`: with a process, its virtual `+0x39c`
+/// result; without, the owner's virtual `+0` (an integer) as a `float`.
+pub fn fn_008805f0(e: &mut Engine, this: Ptr, index: u32) -> f32 {
+    let actor: Ptr<Actor> = Ptr::new(this.addr().wrapping_sub(ACTOR_VALUE_OWNER));
+    if !e.get(actor, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, actor);
+        let base = base_form(e, actor);
+        e.vcall(process.addr(), 0x39c, &args![base, index, actor])
+            .f32()
+    } else {
+        e.vcall(this.addr(), 0, &args![index]).i32() as f32
+    }
+}
+
+// Translated from 00880660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009376e0` (the modifier list at `+0xe0`) with (`kind`, `value`), as a `float`.
+pub fn fn_00880660(e: &mut Engine, this: Ptr<Actor>, kind: u8, value: u32) -> f32 {
+    e.call(0x0093_76e0, &args![this.byte_add(0xe0), kind as u32, value])
+        .f32()
+}
+
+// Translated from 00880690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009375e0` (the modifier list at `+0xe0`) with (`kind`, `amount`), then sets
+/// the actor's flag bit `0x400000` (virtual `+0x48`).
+pub fn fn_00880690(e: &mut Engine, this: Ptr<Actor>, kind: u8, amount: f32) {
+    e.call(
+        0x0093_75e0,
+        &args![this.byte_add(0xe0), kind as u32, amount],
+    );
+    e.vcall(this.addr(), 0x48, &args![0x0040_0000u32]);
+}
+
+// Translated from 008806d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor's virtual `+0x394` with (`index`, `value` as a `float`).
+pub fn fn_008806d0(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32) {
+    e.vcall(this.addr(), 0x394, &args![index, value as f32]);
+}
+
+// Translated from 00880700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Changes actor value `index` by `amount` (a `float`) for the actor: the
+/// base value is read first (`0` unless `0066ee10`). With the flag `0x100`
+/// (`00406d70`) the amount is clamped: a negative amount becomes 0 and,
+/// otherwise, an amount not below the maximum of `0066e920`'s record
+/// (`+0x98`) becomes that maximum minus 1. Then the actor's virtual `+0x490`
+/// is called with (`index`, amount), the process's virtual `+0x3b0` with
+/// `index` when the actor's virtual `+0x360` is false and it has a process,
+/// and `0066ee50` reports the change.
+pub fn fn_00880700(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
+    let base = base_actor_value(e, this, index);
+    let mut amount = amount;
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        let zero: f64 = e.global(0x0101_2060);
+        if (amount as f64) < zero {
+            amount = 0.0;
+        } else {
+            let record = e.call(0x0066_e920, &args![index]).u32();
+            if record != 0 {
+                let maximum = e.mem.i32(record + 0x98) as f64;
+                if amount as f64 >= maximum {
+                    let one: f64 = e.global(0x0101_2070);
+                    amount = (maximum - one) as f32;
+                }
+            }
+        }
+    }
+    e.vcall(this.addr(), 0x490, &args![index, amount]);
+    if !e.vcall(this.addr(), 0x360, &args![]).bool() && !actor_process(e, this).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3b0, &args![index]);
+    }
+    e.call(
+        ACTOR_VALUE_CHANGED,
+        &args![owner_of(this.addr()), index, base, amount, 0u32],
+    );
+}
+
+// Translated from 00880850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00880890` on (`index`, `value` as a `float`, `source`), passed through
+/// `00404040` and truncated.
+pub fn fn_00880850(e: &mut Engine, this: Ptr, index: u32, value: i32, source: u32) -> i32 {
+    let adjusted = fn_00880890(e, this, index, value as f32, source);
+    let rounded = e.call(0x0040_4040, &args![adjusted]).f64();
+    float_to_int(e, rounded)
+}
+
+// Translated from 00880890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns its second word, a `float`, unchanged (the first and third words
+/// are never read).
+pub fn fn_00880890(_e: &mut Engine, _this: Ptr, _unused_0: u32, value: f32, _unused_2: u32) -> f32 {
+    value
+}
+
+// Translated from 008808a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::DifficultyLevelAdjustHealthModifier` (Xbox PDB): `modifier` times
+/// `00648cb0(difficulty, 0x10, actor's virtual +0x360)`, where the difficulty
+/// is the player's `+0x7b8` (`005be4d0`). The second word is never read.
+pub fn actor_difficulty_level_adjust_health_modifier(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    modifier: f32,
+    _unused_1: u32,
+) -> f32 {
+    let flag = e.vcall(this.addr(), 0x360, &args![]).bool();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let difficulty = e.call(0x005b_e4d0, &args![player]).u32();
+    let factor = e.call(0x0064_8cb0, &args![difficulty, 0x10u32, flag]).f32();
+    (modifier as f64 * factor as f64) as f32
+}
+
+// Translated from 008808f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0047f060(index)`; the second word is never read.
+pub fn fn_008808f0(e: &mut Engine, _this: Ptr, index: u32, _unused_1: u32) -> u32 {
+    e.call(ACTOR_VALUE_IS_STAT, &args![index]).u32()
+}
+
+// Translated from 00880910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004bfc80` on the container changes (`00418520`) of the reference's extra
+/// data list; false when it has none.
+pub fn fn_00880910(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let mut result = false;
+    let list = extra_data_list(e, this);
+    let changes = e.call(0x0041_8520, &args![list]).u32();
+    if changes != 0 {
+        result = e.call(0x004b_fc80, &args![changes]).bool();
+    }
+    result
+}
+
+// Translated from 00880950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Changes actor value `index` by the integer `value` (first adjusted by
+/// `00880850`). Does nothing for index `0x16` with a negative value unless the
+/// actor's virtual `+0x38c` is true, nor for values with the flag `0x100`.
+/// Calls the process's virtual `+0x3a4` with (actor, `index`, value), for
+/// index `0x10` with a negative value the actor's virtual `+0x4b8` with
+/// (`source`, value as a `float`), sets the actor's flag bit `0x100000`
+/// (virtual `+0x48`), and reports the change with `0066ee50`.
+pub fn fn_00880950(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, source: Ptr<Actor>) {
+    if index == 0x16 && value < 0 && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let value = fn_00880850(e, this.cast(), index, value, source.addr());
+    let base = base_actor_value(e, this, index);
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3a4, &args![this, index, value]);
+    }
+    if index == 0x10 && value < 0 {
+        e.vcall(this.addr(), 0x4b8, &args![source, value as f32]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0010_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    report_actor_value_change(e, this, index, base, value as f32, source.addr());
+}
+
+// Translated from 00880ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` counterpart of `00880950` (adjusted by `00880890`; process
+/// virtual `+0x3a0`; the negative test is `amount < 0.0`).
+pub fn fn_00880ad0(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, source: Ptr<Actor>) {
+    let zero: f64 = e.global(0x0101_2060);
+    if index == 0x16 && (amount as f64) < zero && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let amount = fn_00880890(e, this.cast(), index, amount, source.addr());
+    let base = base_actor_value(e, this, index);
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3a0, &args![this, index, amount]);
+    }
+    if index == 0x10 && (amount as f64) < zero {
+        e.vcall(this.addr(), 0x4b8, &args![source, amount]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0010_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    report_actor_value_change(e, this, index, base, amount, source.addr());
+}
+
+// Translated from 00880c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `00880950`, but the change goes to the modifier list at `+0xd0`
+/// (`00937480(kind = index, value as a float, 2)`), the flag bit set is
+/// `0x800000` and the process call is its virtual `+0x3b0` with `index`
+/// (after the flag bit, with no `0x3a4` call before).
+pub fn fn_00880c70(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, source: Ptr<Actor>) {
+    if index == 0x16 && value < 0 && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let value = fn_00880850(e, this.cast(), index, value, source.addr());
+    let base = base_actor_value(e, this, index);
+    e.call(
+        0x0093_7480,
+        &args![this.byte_add(0xd0), index as u8 as u32, value as f32, 2u32],
+    );
+    if index == 0x10 && value < 0 {
+        e.vcall(this.addr(), 0x4b8, &args![source, value as f32]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0080_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3b0, &args![index]);
+    }
+    report_actor_value_change(e, this, index, base, value as f32, source.addr());
+}
+
+// Translated from 00880e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` counterpart of `00880c70` (adjusted by `00880890`).
+pub fn fn_00880e00(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, source: Ptr<Actor>) {
+    let zero: f64 = e.global(0x0101_2060);
+    if index == 0x16 && (amount as f64) < zero && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let amount = fn_00880890(e, this.cast(), index, amount, source.addr());
+    let base = base_actor_value(e, this, index);
+    e.call(
+        0x0093_7480,
+        &args![this.byte_add(0xd0), index as u8 as u32, amount, 2u32],
+    );
+    if index == 0x10 && (amount as f64) < zero {
+        e.vcall(this.addr(), 0x4b8, &args![source, amount]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0080_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3b0, &args![index]);
+    }
+    report_actor_value_change(e, this, index, base, amount, source.addr());
+}
+
+// Translated from 00880fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `00880950` with the process's virtual `+0x3ac` and the flag bit `0x200000`.
+pub fn fn_00880fb0(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32, source: Ptr<Actor>) {
+    if index == 0x16 && value < 0 && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let value = fn_00880850(e, this.cast(), index, value, source.addr());
+    let base = base_actor_value(e, this, index);
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3ac, &args![this, index, value]);
+    }
+    if index == 0x10 && value < 0 {
+        e.vcall(this.addr(), 0x4b8, &args![source, value as f32]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0020_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    report_actor_value_change(e, this, index, base, value as f32, source.addr());
+}
+
+// Translated from 00881130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` counterpart of `00880fb0` (adjusted by `00880890`; process
+/// virtual `+0x3a8`). For index `0x16` with a negative amount the change is
+/// also bounded by the float setting at `011d2664` (read through `00403e20`):
+/// nothing happens unless the setting is below the base value, and an amount
+/// that would take base plus amount to the setting or below becomes setting
+/// minus base.
+pub fn fn_00881130(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32, source: Ptr<Actor>) {
+    let zero: f64 = e.global(0x0101_2060);
+    if index == 0x16 && (amount as f64) < zero && !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+        return;
+    }
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let mut amount = fn_00880890(e, this.cast(), index, amount, source.addr());
+    let base = base_actor_value(e, this, index);
+    if index == 0x16 && (amount as f64) < zero {
+        let limit_slot = e.call(0x0040_3e20, &args![0x011d_2664u32]).u32();
+        let limit = e.mem.f32(limit_slot);
+        if limit as f64 >= base as f64 {
+            return;
+        }
+        let sum = (base as f64 + amount as f64) as f32;
+        let limit_slot = e.call(0x0040_3e20, &args![0x011d_2664u32]).u32();
+        let limit = e.mem.f32(limit_slot);
+        if limit as f64 > sum as f64 {
+            let limit_slot = e.call(0x0040_3e20, &args![0x011d_2664u32]).u32();
+            let limit = e.mem.f32(limit_slot);
+            amount = (limit as f64 - base as f64) as f32;
+        }
+    }
+    if !e.get(this, Actor::pCurrentProcess).is_null() {
+        let process = actor_process(e, this);
+        e.vcall(process.addr(), 0x3a8, &args![this, index, amount]);
+    }
+    if index == 0x10 && (amount as f64) < zero {
+        e.vcall(this.addr(), 0x4b8, &args![source, amount]);
+    }
+    e.vcall(this.addr(), 0x48, &args![0x0020_0000u32]);
+    fn_008808f0(e, this.cast(), index, 0);
+    report_actor_value_change(e, this, index, base, amount, source.addr());
+}
+
+// Translated from 00881330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor's virtual `+0x3b4` with (`index`, `value` as a `float`).
+pub fn fn_00881330(e: &mut Engine, this: Ptr<Actor>, index: u32, value: i32) {
+    e.vcall(this.addr(), 0x3b4, &args![index, value as f32]);
+}
+
+// Translated from 00881360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `amount` to the current value of actor value `index` (the owner's
+/// virtual `+4`) through the actor's virtual `+0x394`, then reports the
+/// change (`0066ee50`) with the base value read before; does nothing for
+/// values with the flag `0x100`.
+pub fn fn_00881360(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
+    if e.call(ACTOR_VALUE_HAS_FLAG, &args![index, 0x100u32]).bool() {
+        return;
+    }
+    let base = base_actor_value(e, this, index);
+    let current = e
+        .vcall(this.addr() + ACTOR_VALUE_OWNER, 4, &args![index])
+        .f32();
+    let new_value = (current as f64 + amount as f64) as f32;
+    e.vcall(this.addr(), 0x394, &args![index, new_value]);
+    fn_008808f0(e, this.cast(), index, 0);
+    e.call(
+        ACTOR_VALUE_CHANGED,
+        &args![owner_of(this.addr()), index, base, amount, 0u32],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1328,6 +2366,52 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0087f570, actor_swims_only(Ptr<Actor>) -> bool),
         entry!(0x0087f5c0, fn_0087f5c0(Ptr<Actor>) -> bool),
         entry!(0x0087f620, fn_0087f620(Ptr<Actor>) -> bool),
+        entry!(0x0087f660, actor_check_breath_timer(Ptr<Actor>) -> bool),
+        entry!(0x0087f6c0, fn_0087f6c0(Ptr<Actor>) -> u32),
+        entry!(0x0087f750, fn_0087f750(Ptr<Actor>) -> Ptr),
+        entry!(0x0087f7a0, fn_0087f7a0(Ptr<Actor>) -> Ptr),
+        entry!(0x0087f800, fn_0087f800(Ptr<Actor>)),
+        entry!(0x0087f890, fn_0087f890(Ptr<Actor>, Ptr, Ptr, Ptr, f32)),
+        entry!(0x0087f900, fn_0087f900(Ptr<Actor>) -> bool),
+        entry!(
+            0x0087f920,
+            fn_0087f920(Ptr<Actor>, Ptr, Ptr, Ptr, u32) -> bool
+        ),
+        entry!(0x0087f990, fn_0087f990(Ptr<Actor>) -> bool),
+        entry!(0x0087f9c0, fn_0087f9c0(Ptr<Actor>) -> f32),
+        entry!(0x0087f9f0, fn_0087f9f0(Ptr<Actor>) -> u32),
+        entry!(0x0087fa10, fn_0087fa10(Ptr<Actor>, bool)),
+        entry!(0x0087fa60, fn_0087fa60(Ptr<Actor>, bool)),
+        entry!(0x0087faa0, actor_end_movement(Ptr<Actor>)),
+        entry!(0x0087fad0, fn_0087fad0(Ptr<Actor>, u32)),
+        entry!(0x0087fb40, fn_0087fb40(Ptr<Actor>, Ptr, f32)),
+        entry!(0x0087fcb0, fn_0087fcb0(Ptr<Actor>, u32) -> f32),
+        entry!(0x0087fd20, actor_clear_disposition_modifiers(Ptr<Actor>)),
+        entry!(0x0087fd90, fn_0087fd90(Ptr<Actor>, Ptr<Actor>, Ptr) -> i32),
+        entry!(0x00880370, fn_00880370(Ptr, u32) -> i32),
+        entry!(0x008803a0, fn_008803a0(Ptr, u32) -> f32),
+        entry!(0x00880580, fn_00880580(Ptr, u32) -> u32),
+        entry!(0x008805f0, fn_008805f0(Ptr, u32) -> f32),
+        entry!(0x00880660, fn_00880660(Ptr<Actor>, u8, u32) -> f32),
+        entry!(0x00880690, fn_00880690(Ptr<Actor>, u8, f32)),
+        entry!(0x008806d0, fn_008806d0(Ptr<Actor>, u32, i32)),
+        entry!(0x00880700, fn_00880700(Ptr<Actor>, u32, f32)),
+        entry!(0x00880850, fn_00880850(Ptr, u32, i32, u32) -> i32),
+        entry!(0x00880890, fn_00880890(Ptr, u32, f32, u32) -> f32),
+        entry!(
+            0x008808a0,
+            actor_difficulty_level_adjust_health_modifier(Ptr<Actor>, f32, u32) -> f32
+        ),
+        entry!(0x008808f0, fn_008808f0(Ptr, u32, u32) -> u32),
+        entry!(0x00880910, fn_00880910(Ptr<Actor>) -> bool),
+        entry!(0x00880950, fn_00880950(Ptr<Actor>, u32, i32, Ptr<Actor>)),
+        entry!(0x00880ad0, fn_00880ad0(Ptr<Actor>, u32, f32, Ptr<Actor>)),
+        entry!(0x00880c70, fn_00880c70(Ptr<Actor>, u32, i32, Ptr<Actor>)),
+        entry!(0x00880e00, fn_00880e00(Ptr<Actor>, u32, f32, Ptr<Actor>)),
+        entry!(0x00880fb0, fn_00880fb0(Ptr<Actor>, u32, i32, Ptr<Actor>)),
+        entry!(0x00881130, fn_00881130(Ptr<Actor>, u32, f32, Ptr<Actor>)),
+        entry!(0x00881330, fn_00881330(Ptr<Actor>, u32, i32)),
+        entry!(0x00881360, fn_00881360(Ptr<Actor>, u32, f32)),
     ]
 }
 
@@ -2855,5 +3939,872 @@ mod tests_accessors {
             ret((a[0] == owner && a[1] == 0x35) as u32)
         });
         assert!(e.call(0x0087_f5c0, &args![actor]).bool());
+    }
+}
+
+#[cfg(test)]
+mod tests_block2 {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The argument words of each call a double saw.
+    type Log = Rc<RefCell<Vec<Vec<u32>>>>;
+
+    const VTABLE: u32 = 0x0200_0000;
+    const OWNER_VTABLE: u32 = 0x0201_0000;
+    const PROCESS_VTABLE: u32 = 0x0202_0000;
+
+    /// An engine with the pages of the globals the tests set mapped.
+    fn new_engine() -> Engine {
+        let mut e = Engine::new();
+        for page in [0x0101_2000, 0x0101_7000, 0x011d_e000] {
+            e.map(page, 0x1000);
+        }
+        e
+    }
+
+    fn ret(value: u32) -> Ret {
+        value.into_ret()
+    }
+
+    fn slot(vtable: u32, offset: u32) -> u32 {
+        0x6000_0000 + (vtable & 0x00ff_ffff) + offset
+    }
+
+    /// A double over `addr` that returns `value` and logs the argument words.
+    fn record(e: &mut Engine, addr: u32, value: Ret) -> Log {
+        let log: Log = Rc::new(RefCell::new(vec![]));
+        let seen = log.clone();
+        e.register_double(addr, move |_, a| {
+            seen.borrow_mut().push(a.to_vec());
+            value
+        });
+        log
+    }
+
+    /// Doubles returning zero over every address.
+    fn stub(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| Ret::default());
+        }
+    }
+
+    /// An object of `size` bytes whose vtable (at `vtable`) has the listed
+    /// slots, each a double returning zero.
+    fn object(e: &mut Engine, size: u32, vtable: u32, offsets: &[u32]) -> Ptr {
+        e.map(vtable, 0x1000);
+        for offset in offsets {
+            let target = slot(vtable, *offset);
+            e.mem.set_u32(vtable + offset, target);
+            e.register(target, |_, _| Ret::default());
+        }
+        let object = Ptr::new(e.mem.alloc(size));
+        e.mem.set_u32(object.addr(), vtable);
+        object
+    }
+
+    /// An actor whose vtable has the listed slots.
+    fn actor(e: &mut Engine, slots: &[u32]) -> Ptr<Actor> {
+        object(e, 0x1b4, VTABLE, slots).cast()
+    }
+
+    /// Gives the actor a process with the listed virtual slots.
+    fn give_process(e: &mut Engine, actor: Ptr<Actor>, slots: &[u32]) -> Ptr {
+        let process = object(e, 0x400, PROCESS_VTABLE, slots);
+        e.set(actor, Actor::pCurrentProcess, process);
+        e.register(ACTOR_PROCESS, |e, a| ret(e.mem.u32(a[0] + 0x68)));
+        process
+    }
+
+    /// Gives the actor an actor-value owner at `+0xa4` with the listed slots.
+    fn give_owner(e: &mut Engine, actor: Ptr<Actor>, slots: &[u32]) -> u32 {
+        e.map(OWNER_VTABLE, 0x1000);
+        for offset in slots {
+            let target = slot(OWNER_VTABLE, *offset);
+            e.mem.set_u32(OWNER_VTABLE + offset, target);
+            e.register(target, |_, _| Ret::default());
+        }
+        e.mem.set_u32(actor.addr() + 0xa4, OWNER_VTABLE);
+        actor.addr() + 0xa4
+    }
+
+    /// Makes `base` the actor's base form.
+    fn give_base(e: &mut Engine, base: u32) {
+        e.register_double(GET_BASE_FORM, move |_, _| ret(base));
+    }
+
+    /// `_ftol2_sse`: truncation of the `f64` in the first two words.
+    fn install_float_to_int(e: &mut Engine) {
+        e.register(FLOAT_TO_INT, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            ret(value as i32 as u32)
+        });
+    }
+
+    /// The disposition-modifier list of `actor` with the given entries
+    /// `(amount, target)`; returns the item addresses. Installs the two node
+    /// helpers.
+    fn modifier_list(e: &mut Engine, actor: Ptr<Actor>, entries: &[(i32, u32)]) -> Vec<u32> {
+        e.register(LIST_NODE_ITEM_SLOT, |_, a| ret(a[0]));
+        e.register(LIST_NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let mut items = vec![];
+        let mut node = actor.addr() + 0xfc;
+        for (i, (amount, target)) in entries.iter().enumerate() {
+            let item = e.mem.alloc(8);
+            e.mem.set_i32(item, *amount);
+            e.mem.set_u32(item + 4, *target);
+            e.mem.set_u32(node, item);
+            if i + 1 < entries.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+            items.push(item);
+        }
+        items
+    }
+
+    // ---- 0087f660 ----
+
+    #[test]
+    fn check_breath_timer_is_false_only_when_the_swim_time_exceeds_the_timer() {
+        let mut e = new_engine();
+        install_float_to_int(&mut e);
+        let actor = actor(&mut e, &[]);
+        e.register(0x008b_e7a0, |_, _| 7.9f32.into_ret());
+        // 00648a10 gives twice the integer level: 14.0.
+        e.register(0x0064_8a10, |_, a| ((a[0] as i32) as f32 * 2.0).into_ret());
+        assert!(e.call(0x0087_f660, &args![actor]).bool());
+        give_process(&mut e, actor, &[0x300]);
+        e.register(slot(PROCESS_VTABLE, 0x300), |_, _| 20.0f32.into_ret());
+        assert!(e.call(0x0087_f660, &args![actor]).bool());
+        e.register(slot(PROCESS_VTABLE, 0x300), |_, _| 10.0f32.into_ret());
+        assert!(!e.call(0x0087_f660, &args![actor]).bool());
+    }
+
+    // ---- 0087f6c0 ----
+
+    #[test]
+    fn location_name_needs_a_form_a_record_and_a_passing_check() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x218]);
+        e.register(GET_FORM, |_, _| ret(0x5000));
+        e.register(0x004a_c110, |_, _| ret(0x6000));
+        e.register(0x0048_cee0, |_, _| ret(1));
+        let name = record(&mut e, 0x0040_8da0, ret(0x777));
+        assert_eq!(e.call(0x0087_f6c0, &args![actor]).u32(), 0);
+        e.register(slot(VTABLE, 0x218), |_, _| ret(1));
+        assert_eq!(e.call(0x0087_f6c0, &args![actor]).u32(), 0x777);
+        assert_eq!(name.borrow()[0], vec![0x6018]);
+        e.register(0x0048_cee0, |_, _| ret(0));
+        assert_eq!(e.call(0x0087_f6c0, &args![actor]).u32(), 0);
+        e.register(0x004a_c110, |_, _| ret(0));
+        assert_eq!(e.call(0x0087_f6c0, &args![actor]).u32(), 0);
+    }
+
+    // ---- 0087f750 / 0087f7a0 ----
+
+    #[test]
+    fn editor_location_form_getters_check_the_form_type() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        e.register(FORM_TYPE, |_, _| ret(0x41));
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(1));
+        assert_eq!(e.call(0x0087_f750, &args![actor]).u32(), 0);
+        e.set(actor, Actor::pEditorLocForm, Ptr::<()>::new(0x4444));
+        assert_eq!(e.call(0x0087_f750, &args![actor]).u32(), 0x4444);
+        assert_eq!(e.call(0x0087_f7a0, &args![actor]).u32(), 0);
+        e.register(FORM_TYPE, |_, _| ret(0x39));
+        assert_eq!(e.call(0x0087_f750, &args![actor]).u32(), 0);
+        assert_eq!(e.call(0x0087_f7a0, &args![actor]).u32(), 0x4444);
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(0));
+        assert_eq!(e.call(0x0087_f7a0, &args![actor]).u32(), 0);
+    }
+
+    // ---- 0087f800 ----
+
+    #[test]
+    fn editor_location_is_taken_from_the_actor() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x2bc]);
+        let position = e.mem.alloc(12);
+        for i in 0..3 {
+            e.mem.set_f32(position + 4 * i, 1.0 + i as f32);
+        }
+        e.register_double(0x0043_6aa0, move |_, _| ret(position));
+        let rotation = record(&mut e, slot(VTABLE, 0x2bc), 2.5f32.into_ret());
+        e.register(0x008d_6f30, |_, _| ret(0x9000));
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(1));
+        e.register(0x0057_5d70, |_, _| ret(0x9100));
+        e.call(0x0087_f800, &args![actor]);
+        assert_eq!(e.mem.f32(actor.addr() + 0x160 + 8), 3.0);
+        assert_eq!(e.get(actor, Actor::fEditorLocZRot), 2.5);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x9000);
+        assert_eq!(rotation.borrow()[0], vec![actor.addr(), 0]);
+        // The candidate fails the check: the world space form is used.
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(0));
+        e.call(0x0087_f800, &args![actor]);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x9100);
+        // No candidate at all.
+        e.register(0x008d_6f30, |_, _| ret(0));
+        e.set(actor, Actor::pEditorLocForm, Ptr::<()>::new(1));
+        e.call(0x0087_f800, &args![actor]);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x9100);
+    }
+
+    // ---- 0087f890 ----
+
+    #[test]
+    fn editor_location_is_set_from_the_arguments() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let position = e.mem.alloc(12);
+        for i in 0..3 {
+            e.mem.set_f32(position + 4 * i, 4.0 + i as f32);
+        }
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(1));
+        let words = args![actor, 0x1000u32, 0x2000u32, position, 0.5f32];
+        e.call(0x0087_f890, &words);
+        assert_eq!(e.mem.f32(actor.addr() + 0x160 + 8), 6.0);
+        assert_eq!(e.get(actor, Actor::fEditorLocZRot), 0.5);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x2000);
+        e.register(FLAG_BIT_0_AT_0X24, |_, _| ret(0));
+        e.call(0x0087_f890, &words);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x1000);
+        e.set(actor, Actor::pEditorLocForm, Ptr::<()>::new(1));
+        let words = args![actor, 0x1000u32, 0u32, position, 0.5f32];
+        e.call(0x0087_f890, &words);
+        assert_eq!(e.get(actor, Actor::pEditorLocForm).addr(), 0x1000);
+    }
+
+    // ---- 0087f900 / 0087f920 ----
+
+    #[test]
+    fn editor_location_can_be_tested_and_read_back() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let out = e.mem.alloc(0x20);
+        let words = args![actor, out, out + 0x10, out + 0x1c, 0u32];
+        assert!(!e.call(0x0087_f900, &args![actor]).bool());
+        assert!(!e.call(0x0087_f920, &words).bool());
+        e.set(actor, Actor::pEditorLocForm, Ptr::<()>::new(0x4444));
+        e.set(actor, Actor::fEditorLocZRot, 3.0f32);
+        for i in 0..3 {
+            e.mem.set_f32(actor.addr() + 0x160 + 4 * i, 1.0 + i as f32);
+        }
+        assert!(e.call(0x0087_f900, &args![actor]).bool());
+        assert!(e.call(0x0087_f920, &words).bool());
+        assert_eq!(e.mem.f32(out + 8), 3.0);
+        let rotation = (
+            e.mem.f32(out + 0x10),
+            e.mem.f32(out + 0x14),
+            e.mem.f32(out + 0x18),
+        );
+        assert_eq!(rotation, (0.0, 0.0, 3.0));
+        assert_eq!(e.mem.u32(out + 0x1c), 0x4444);
+    }
+
+    // ---- 0087f990 / 0087f9f0 ----
+
+    #[test]
+    fn base_form_component_predicates() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        give_base(&mut e, 0x3000);
+        let first = record(&mut e, 0x005b_b4d0, ret(1));
+        let second = record(&mut e, 0x0047_ded0, ret(0x1234));
+        assert!(e.call(0x0087_f990, &args![actor]).bool());
+        assert_eq!(first.borrow()[0], vec![0x3090]);
+        assert_eq!(e.call(0x0087_f9f0, &args![actor]).u32(), 0x1234);
+        assert_eq!(second.borrow()[0], vec![0x3030]);
+    }
+
+    // ---- 0087f9c0 ----
+
+    #[test]
+    fn owner_value_for_actor_value_0x15_is_returned_as_a_float() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        give_owner(&mut e, actor, &[0]);
+        let seen = record(&mut e, slot(OWNER_VTABLE, 0), ret((-3i32) as u32));
+        assert_eq!(e.call(0x0087_f9c0, &args![actor]).f32(), -3.0);
+        assert_eq!(seen.borrow()[0], vec![actor.addr() + 0xa4, 0x15]);
+    }
+
+    // ---- 0087fa10 / 0087fa60 / 0087faa0 ----
+
+    #[test]
+    fn process_forwarders_need_a_process() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        e.call(0x0087_fa10, &args![actor, true]);
+        e.call(0x0087_fa60, &args![actor, true]);
+        e.call(0x0087_faa0, &args![actor]);
+        let process = give_process(&mut e, actor, &[0x118, 0x120, 0x294, 0x4a0]);
+        let first = record(&mut e, slot(PROCESS_VTABLE, 0x118), Ret::default());
+        let second = record(&mut e, slot(PROCESS_VTABLE, 0x4a0), Ret::default());
+        let third = record(&mut e, slot(PROCESS_VTABLE, 0x120), Ret::default());
+        let fourth = record(&mut e, slot(PROCESS_VTABLE, 0x294), Ret::default());
+        e.call(0x0087_fa10, &args![actor, true]);
+        e.call(0x0087_fa60, &args![actor, false]);
+        e.call(0x0087_faa0, &args![actor]);
+        assert_eq!(first.borrow()[0], vec![process.addr(), 1]);
+        assert_eq!(second.borrow()[0], vec![process.addr()]);
+        assert_eq!(third.borrow()[0], vec![process.addr(), 0]);
+        assert_eq!(fourth.borrow()[0], vec![process.addr(), actor.addr()]);
+    }
+
+    // ---- 0087fad0 ----
+
+    #[test]
+    fn removing_a_disposition_modifier_hands_the_item_to_the_list_remover() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let items = modifier_list(&mut e, actor, &[(5, 0x100), (6, 0x200)]);
+        let seen: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.call(0x0087_fad0, &args![actor, 0x200u32]);
+        assert_eq!(*seen.borrow(), vec![(actor.addr() + 0xfc, items[1])]);
+        e.call(0x0087_fad0, &args![actor, 0x300u32]);
+        assert_eq!(seen.borrow().len(), 1);
+    }
+
+    // ---- 0087fb40 ----
+
+    #[test]
+    fn disposition_modifier_is_added_for_the_player_and_limited_to_0_100() {
+        let mut e = new_engine();
+        install_float_to_int(&mut e);
+        e.set_global(0x0101_7a40, 100.0f64);
+        e.set_global(PLAYER_POINTER, 0x7000u32);
+        let actor = actor(&mut e, &[0x48, 0x344]);
+        let flags = record(&mut e, slot(VTABLE, 0x48), Ret::default());
+        // The target is not the player: nothing happens.
+        e.call(0x0087_fb40, &args![actor, 0x7100u32, 5.0f32]);
+        assert!(flags.borrow().is_empty());
+        // No entry yet: a new one is allocated and appended.
+        modifier_list(&mut e, actor, &[]);
+        let block = e.mem.alloc(8);
+        e.register_double(OPERATOR_NEW, move |_, _| ret(block));
+        let hold = record(&mut e, 0x0056_4db0, Ret::default());
+        let appended: Rc<RefCell<Vec<u32>>> = Rc::new(RefCell::new(vec![]));
+        let log = appended.clone();
+        e.register_double(LIST_APPEND_ITEM, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        e.call(0x0087_fb40, &args![actor, 0x7000u32, 12.75f32]);
+        assert_eq!(flags.borrow()[0], vec![actor.addr(), 0x80000]);
+        assert_eq!(hold.borrow()[0], vec![0x7000, 1]);
+        assert_eq!(*appended.borrow(), vec![block]);
+        assert_eq!((e.mem.i32(block), e.mem.u32(block + 4)), (12, 0x7000));
+        // An entry exists (amount 10): the amount is limited by the disposition.
+        let items = modifier_list(&mut e, actor, &[(10, 0x7000)]);
+        // (disposition, amount, expected entry): 60 - 80 < 0 turns the amount
+        // into -60; within range adds it; above 100 keeps only the part up to
+        // 100; already at 100 adds 0.
+        let cases = [
+            (60i32, -80.0f32, -50),
+            (60, 30.0, 40),
+            (90, 30.0, 20),
+            (100, 30.0, 10),
+        ];
+        for (disposition, amount, expected) in cases {
+            e.mem.set_i32(items[0], 10);
+            e.register_double(slot(VTABLE, 0x344), move |_, _| ret(disposition as u32));
+            e.call(0x0087_fb40, &args![actor, 0x7000u32, amount]);
+            assert_eq!(e.mem.i32(items[0]), expected, "{disposition} {amount}");
+        }
+    }
+
+    // ---- 0087fcb0 ----
+
+    #[test]
+    fn disposition_modifier_toward_an_actor_is_its_amount_or_zero() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        modifier_list(&mut e, actor, &[(5, 0x100), (-7, 0x200)]);
+        assert_eq!(e.call(0x0087_fcb0, &args![actor, 0x200u32]).f32(), -7.0);
+        assert_eq!(e.call(0x0087_fcb0, &args![actor, 0x100u32]).f32(), 5.0);
+        assert_eq!(e.call(0x0087_fcb0, &args![actor, 0x300u32]).f32(), 0.0);
+    }
+
+    // ---- 0087fd20 ----
+
+    #[test]
+    fn clearing_the_disposition_modifiers_frees_each_entry_then_clears_the_list() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let items = modifier_list(&mut e, actor, &[(1, 0x100), (2, 0x200)]);
+        let freed = record(&mut e, OPERATOR_DELETE, Ret::default());
+        let cleared = record(&mut e, LIST_CLEAR, Ret::default());
+        e.call(0x0087_fd20, &args![actor]);
+        assert_eq!(*freed.borrow(), vec![vec![items[0]], vec![items[1]]]);
+        assert_eq!(*cleared.borrow(), vec![vec![actor.addr() + 0xfc]]);
+    }
+
+    // ---- 0087fd90 ----
+
+    /// The doubles the score function needs, all returning zero except the
+    /// ones that matter to the cases; `GetForm` of an object is its address + 1.
+    fn score_fixture(e: &mut Engine) -> (Ptr<Actor>, Ptr<Actor>) {
+        install_float_to_int(e);
+        stub(
+            e,
+            &[
+                0x005d_8a70,
+                0x0082_56d0,
+                0x0060_8d80,
+                0x0048_bf50,
+                0x008b_7fe0,
+                0x008a_16d0,
+                0x0049_3bb0,
+                0x0097_fa10,
+                0x0097_0a20,
+                0x0066_ef20,
+                0x0056_7790,
+                0x0047_d3d0,
+                ACTOR_PROCESS,
+                0x005e_58f0,
+                0x0064_2a60,
+                FORM_TYPE,
+            ],
+        );
+        e.set_global(PLAYER_POINTER, 0x7000u32);
+        let this = actor(e, &[0x37c, 0x218, 0x21c, 0x428, 0x464]);
+        let other: Ptr<Actor> = object(e, 0x1b4, 0x0203_0000, &[0x218]).cast();
+        e.map(OWNER_VTABLE, 0x1000);
+        e.mem.set_u32(other.addr() + 0xa4, OWNER_VTABLE);
+        e.mem.set_u32(OWNER_VTABLE + 8, slot(OWNER_VTABLE, 8));
+        e.register(slot(OWNER_VTABLE, 8), |_, _| ret(0x55));
+        give_base(e, 0x3000);
+        e.register(GET_FORM, |_, a| ret(a[0] + 1));
+        (this, other)
+    }
+
+    #[test]
+    fn score_is_zero_without_a_target_and_100_for_the_actors_own_form() {
+        let mut e = new_engine();
+        let (this, other) = score_fixture(&mut e);
+        assert_eq!(e.call(0x0087_fd90, &args![this, 0u32, 0u32]).i32(), 0);
+        // The cached block names the target form: GetForm(other) == other + 1.
+        let cached = e.mem.alloc(0x18);
+        e.mem.set_u32(cached + 8, other.addr() + 1);
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 100);
+    }
+
+    #[test]
+    fn score_combines_the_owner_values_and_is_clamped() {
+        let mut e = new_engine();
+        let (this, other) = score_fixture(&mut e);
+        // First path: not creature-like (virtual +0x218 false) with an owner reference.
+        let cached = e.mem.alloc(0x18);
+        e.mem.set_u32(cached + 4, 0x3300); // base of this
+        e.mem.set_u32(cached + 8, 0x4400); // target form
+        e.mem.set_u32(cached + 0xc, 0x5500); // owner reference
+        e.mem.set_u32(cached + 0x10, 0x66);
+        e.mem.set_u32(cached + 0x14, 0x77);
+        let combine = record(&mut e, 0x0064_2a60, ret(150));
+        let seen = Rc::new(RefCell::new(0.0f32));
+        let entry_point_input = seen.clone();
+        e.register_double(0x005e_58f0, move |e, a| {
+            *entry_point_input.borrow_mut() = e.mem.f32(a[3]);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 100);
+        // 00642a60(flags word, clamped value of 8, skill word, owner value).
+        assert_eq!(combine.borrow()[0], vec![0x66, 0, 0x77, 0x55]);
+        assert_eq!(*seen.borrow(), 150.0);
+        // A negative score is raised to 0.
+        e.register(0x0064_2a60, |_, _| ret((-20i32) as u32));
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 0);
+        e.register(0x0064_2a60, |_, _| ret(42));
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 42);
+        // The entry point may change the score.
+        e.register(0x005e_58f0, |e, a| {
+            e.mem.set_f32(a[3], 7.9);
+            Ret::default()
+        });
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 7);
+        // Second path: creature-like (virtual +0x218 true), no owner reference.
+        e.register(0x005e_58f0, |_, _| Ret::default());
+        e.register(slot(VTABLE, 0x218), |_, _| ret(1));
+        e.mem.set_u32(cached + 0xc, 0);
+        e.register(0x0064_2a60, |_, _| ret(61));
+        assert_eq!(e.call(0x0087_fd90, &args![this, other, cached]).i32(), 61);
+    }
+
+    // ---- 00880370 ----
+
+    #[test]
+    fn owner_value_is_adjusted_and_truncated() {
+        let mut e = new_engine();
+        install_float_to_int(&mut e);
+        let owner = Ptr::<()>::new(e.mem.alloc(8));
+        e.map(OWNER_VTABLE, 0x1000);
+        e.mem.set_u32(owner.addr(), OWNER_VTABLE);
+        e.mem.set_u32(OWNER_VTABLE + 4, slot(OWNER_VTABLE, 4));
+        e.register(slot(OWNER_VTABLE, 4), |_, a| {
+            ((a[1] as f32) * 0.5 + 0.75).into_ret()
+        });
+        e.register(0x0040_4040, |_, a| (f32::from_bits(a[0]) * 2.0).into_ret());
+        // virtual +4(6) = 3.75; doubled 7.5; truncated 7.
+        assert_eq!(e.call(0x0088_0370, &args![owner, 6u32]).i32(), 7);
+    }
+
+    // ---- 008803a0 ----
+
+    #[test]
+    fn modified_owner_value_picks_base_modifier_or_sum() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x48c, 0x21c, 0x360]);
+        let owner = give_owner(&mut e, actor, &[]);
+        // The base form's component at +0x100 has virtual +8 giving 10.
+        let base = e.mem.alloc(0x200);
+        e.map(0x0204_0000, 0x1000);
+        e.mem.set_u32(0x0204_0000 + 8, slot(0x0204_0000, 8));
+        e.mem.set_u32(base + 0x100, 0x0204_0000);
+        give_base(&mut e, base);
+        e.register(slot(0x0204_0000, 8), |_, _| ret(10));
+        e.register(slot(VTABLE, 0x48c), |e, a| {
+            e.mem.set_u8(a[2], 1);
+            4.5f32.into_ret()
+        });
+        stub(
+            &mut e,
+            &[
+                ACTOR_VALUE_IS_STAT,
+                ACTOR_VALUE_HAS_FLAG,
+                0x0056_6950,
+                0x0066_ed60,
+            ],
+        );
+        // The modifier flag is set and the index is not a stat: the modifier.
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 4.5);
+        // A stat index, nothing special: the base value.
+        e.register(ACTOR_VALUE_IS_STAT, |_, _| ret(1));
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 10.0);
+        // Flag 0x800 set: 0066ed60 gives 2.0; with the modifier flag the base
+        // becomes the modifier 4.5 and the result is the sum.
+        e.register(ACTOR_VALUE_HAS_FLAG, |_, a| ret((a[1] == 0x800) as u32));
+        e.register(0x0066_ed60, |e, a| {
+            e.mem.set_f32(a[2], 2.0);
+            ret(1)
+        });
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 6.5);
+        // 0066ed60 refuses: the base value (here the modifier replaced it).
+        e.register(0x0066_ed60, |_, _| ret(0));
+        assert_eq!(e.call(0x0088_03a0, &args![owner, 3u32]).f32(), 4.5);
+    }
+
+    // ---- 00880580 / 008805f0 ----
+
+    #[test]
+    fn owner_thunks_use_the_process_when_there_is_one() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let owner = give_owner(&mut e, actor, &[0]);
+        e.register(slot(OWNER_VTABLE, 0), |_, _| ret(9));
+        give_base(&mut e, 0x3000);
+        assert_eq!(e.call(0x0088_0580, &args![owner, 4u32]).u32(), 9);
+        assert_eq!(e.call(0x0088_05f0, &args![owner, 4u32]).f32(), 9.0);
+        let process = give_process(&mut e, actor, &[0x398, 0x39c]);
+        let first = record(&mut e, slot(PROCESS_VTABLE, 0x398), ret(77));
+        let second = record(&mut e, slot(PROCESS_VTABLE, 0x39c), 1.5f32.into_ret());
+        assert_eq!(e.call(0x0088_0580, &args![owner, 4u32]).u32(), 77);
+        assert_eq!(e.call(0x0088_05f0, &args![owner, 4u32]).f32(), 1.5);
+        let expected = vec![process.addr(), 0x3000, 4, actor.addr()];
+        assert_eq!(first.borrow()[0], expected);
+        assert_eq!(second.borrow()[0], expected);
+    }
+
+    // ---- 00880660 / 00880690 / 008806d0 ----
+
+    #[test]
+    fn modifier_list_accessors_at_0xe0() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x48, 0x394]);
+        let getter = record(&mut e, 0x0093_76e0, 2.5f32.into_ret());
+        let setter = record(&mut e, 0x0093_75e0, Ret::default());
+        let flags = record(&mut e, slot(VTABLE, 0x48), Ret::default());
+        let change = record(&mut e, slot(VTABLE, 0x394), Ret::default());
+        assert_eq!(e.call(0x0088_0660, &args![actor, 3u8, 9u32]).f32(), 2.5);
+        assert_eq!(getter.borrow()[0], vec![actor.addr() + 0xe0, 3, 9]);
+        e.call(0x0088_0690, &args![actor, 4u8, 1.5f32]);
+        let expected = vec![actor.addr() + 0xe0, 4, 1.5f32.to_bits()];
+        assert_eq!(setter.borrow()[0], expected);
+        assert_eq!(flags.borrow()[0], vec![actor.addr(), 0x400000]);
+        e.call(0x0088_06d0, &args![actor, 7u32, -2i32]);
+        let expected = vec![actor.addr(), 7, (-2.0f32).to_bits()];
+        assert_eq!(change.borrow()[0], expected);
+    }
+
+    // ---- 00880700 ----
+
+    #[test]
+    fn float_actor_value_change_clamps_with_flag_0x100() {
+        let mut e = new_engine();
+        e.set_global(0x0101_2070, 1.0f64);
+        let actor = actor(&mut e, &[0x490, 0x360]);
+        give_owner(&mut e, actor, &[0xc]);
+        give_process(&mut e, actor, &[0x3b0]);
+        e.register(ACTOR_VALUE_HAS_BASE, |_, _| ret(1));
+        e.register(slot(OWNER_VTABLE, 0xc), |_, _| 8.0f32.into_ret());
+        e.register(ACTOR_VALUE_HAS_FLAG, |_, a| ret((a[1] == 0x100) as u32));
+        let record_block = e.mem.alloc(0x100);
+        e.mem.set_i32(record_block + 0x98, 50);
+        e.register_double(0x0066_e920, move |_, _| ret(record_block));
+        let change = record(&mut e, slot(VTABLE, 0x490), Ret::default());
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3b0), Ret::default());
+        let report = record(&mut e, ACTOR_VALUE_CHANGED, Ret::default());
+        // Negative: 0.
+        e.call(0x0088_0700, &args![actor, 5u32, -3.0f32]);
+        assert_eq!(change.borrow()[0], vec![actor.addr(), 5, 0]);
+        // Above the maximum: maximum - 1.
+        e.call(0x0088_0700, &args![actor, 5u32, 60.0f32]);
+        assert_eq!(change.borrow()[1][2], 49.0f32.to_bits());
+        // Below the maximum: unchanged.
+        e.call(0x0088_0700, &args![actor, 5u32, 20.0f32]);
+        assert_eq!(change.borrow()[2][2], 20.0f32.to_bits());
+        assert_eq!(process_call.borrow().len(), 3);
+        let expected = vec![
+            actor.addr() + 0xa4,
+            5,
+            8.0f32.to_bits(),
+            20.0f32.to_bits(),
+            0,
+        ];
+        assert_eq!(report.borrow()[2], expected);
+    }
+
+    // ---- 00880850 / 00880890 ----
+
+    #[test]
+    fn adjustment_helpers_pass_the_value_through() {
+        let mut e = new_engine();
+        install_float_to_int(&mut e);
+        e.register(0x0040_4040, |_, a| (f32::from_bits(a[0]) + 0.5).into_ret());
+        let words = args![0u32, 1u32, 2.5f32, 3u32];
+        assert_eq!(e.call(0x0088_0890, &words).f32(), 2.5);
+        assert_eq!(e.call(0x0088_0850, &args![0u32, 1u32, 4i32, 3u32]).i32(), 4);
+    }
+
+    // ---- 008808a0 ----
+
+    #[test]
+    fn health_modifier_is_scaled_by_the_difficulty_factor() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x360]);
+        e.set_global(PLAYER_POINTER, 0x7000u32);
+        e.register(slot(VTABLE, 0x360), |_, _| ret(1));
+        let level = record(&mut e, 0x005b_e4d0, ret(2));
+        let factor = record(&mut e, 0x0064_8cb0, 1.5f32.into_ret());
+        assert_eq!(e.call(0x0088_08a0, &args![actor, 4.0f32, 0u32]).f32(), 6.0);
+        assert_eq!(level.borrow()[0], vec![0x7000]);
+        assert_eq!(factor.borrow()[0], vec![2, 0x10, 1]);
+    }
+
+    // ---- 008808f0 / 00880910 ----
+
+    #[test]
+    fn small_forwarders() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[]);
+        let stat = record(&mut e, ACTOR_VALUE_IS_STAT, ret(1));
+        assert_eq!(e.call(0x0088_08f0, &args![actor, 12u32, 0u32]).u32(), 1);
+        assert_eq!(stat.borrow()[0], vec![12]);
+        e.register(GET_EXTRA_DATA_LIST, |_, a| ret(a[0] + 0x44));
+        e.register(0x0041_8520, |_, _| ret(0));
+        e.register(0x004b_fc80, |_, _| ret(1));
+        assert!(!e.call(0x0088_0910, &args![actor]).bool());
+        e.register(0x0041_8520, |_, _| ret(0x8000));
+        assert!(e.call(0x0088_0910, &args![actor]).bool());
+    }
+
+    // ---- 00880950 and its three siblings ----
+
+    /// An actor with everything the integer and float change functions use:
+    /// (actor, source, report log, flag-bit log, hit log, modifier-list log).
+    /// Index `0x99` has the flag `0x100`.
+    fn change_fixture(e: &mut Engine) -> (Ptr<Actor>, Ptr<Actor>, Log, Log, Log, Log) {
+        install_float_to_int(e);
+        e.set_global(0x0101_2070, 1.0f64);
+        let slots = [0x38c, 0x4b8, 0x48, 0x3a4, 0x3a0, 0x3ac, 0x3a8, 0x3b0];
+        let this = actor(e, &slots);
+        let source: Ptr<Actor> = object(e, 0x1b4, 0x0205_0000, &[]).cast();
+        give_owner(e, this, &[0xc]);
+        give_process(e, this, &[0x3a4, 0x3a0, 0x3ac, 0x3a8, 0x3b0]);
+        e.register(ACTOR_VALUE_HAS_BASE, |_, _| ret(1));
+        e.register(slot(OWNER_VTABLE, 0xc), |_, _| 3.0f32.into_ret());
+        e.register(ACTOR_VALUE_HAS_FLAG, |_, a| {
+            ret((a[1] == 0x100 && a[0] == 0x99) as u32)
+        });
+        e.register(0x0040_4040, |_, a| f32::from_bits(a[0]).into_ret());
+        e.register(ACTOR_VALUE_IS_STAT, |_, _| ret(1));
+        let report = record(e, ACTOR_VALUE_CHANGED, Ret::default());
+        let flags = record(e, slot(VTABLE, 0x48), Ret::default());
+        let hit = record(e, slot(VTABLE, 0x4b8), Ret::default());
+        let list = record(e, 0x0093_7480, Ret::default());
+        (this, source, report, flags, hit, list)
+    }
+
+    #[test]
+    fn integer_change_calls_the_process_then_reports() {
+        let mut e = new_engine();
+        let (this, source, report, flags, hit, _) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3a4), Ret::default());
+        e.call(0x0088_0950, &args![this, 0x10u32, -4i32, source]);
+        assert_eq!(
+            process_call.borrow()[0][1..],
+            [this.addr(), 0x10, (-4i32) as u32]
+        );
+        let expected = vec![this.addr(), source.addr(), (-4.0f32).to_bits()];
+        assert_eq!(hit.borrow()[0], expected);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x100000]);
+        let expected = vec![
+            this.addr() + 0xa4,
+            0x10,
+            3.0f32.to_bits(),
+            (-4.0f32).to_bits(),
+            source.addr() + 0xa4,
+        ];
+        assert_eq!(report.borrow()[0], expected);
+        // The flag 0x100 index is ignored; index 0x16 with a negative value too.
+        e.call(0x0088_0950, &args![this, 0x99u32, 4i32, source]);
+        e.call(0x0088_0950, &args![this, 0x16u32, -4i32, source]);
+        assert_eq!(report.borrow().len(), 1);
+        e.register(slot(VTABLE, 0x38c), |_, _| ret(1));
+        e.call(0x0088_0950, &args![this, 0x16u32, -4i32, source]);
+        assert_eq!(report.borrow().len(), 2);
+    }
+
+    #[test]
+    fn float_change_calls_the_process_then_reports() {
+        let mut e = new_engine();
+        let (this, source, report, flags, hit, _) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3a0), Ret::default());
+        e.call(0x0088_0ad0, &args![this, 0x10u32, -4.5f32, source]);
+        let expected = [this.addr(), 0x10, (-4.5f32).to_bits()];
+        assert_eq!(process_call.borrow()[0][1..], expected);
+        let expected = vec![this.addr(), source.addr(), (-4.5f32).to_bits()];
+        assert_eq!(hit.borrow()[0], expected);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x100000]);
+        assert_eq!(report.borrow()[0][3], (-4.5f32).to_bits());
+        e.call(0x0088_0ad0, &args![this, 0x16u32, -1.0f32, source]);
+        e.call(0x0088_0ad0, &args![this, 0x99u32, 1.0f32, source]);
+        assert_eq!(report.borrow().len(), 1);
+        // A non-negative amount does not call the hit function.
+        e.call(0x0088_0ad0, &args![this, 0x10u32, 2.0f32, source]);
+        assert_eq!(hit.borrow().len(), 1);
+    }
+
+    #[test]
+    fn integer_change_to_the_modifier_list_at_0xd0() {
+        let mut e = new_engine();
+        let (this, source, report, flags, _, list) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3b0), Ret::default());
+        e.call(0x0088_0c70, &args![this, 0x10u32, 7i32, source]);
+        let expected = vec![this.addr() + 0xd0, 0x10, 7.0f32.to_bits(), 2];
+        assert_eq!(list.borrow()[0], expected);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x800000]);
+        assert_eq!(process_call.borrow()[0][1], 0x10);
+        assert_eq!(report.borrow()[0][3], 7.0f32.to_bits());
+        e.call(0x0088_0c70, &args![this, 0x99u32, 7i32, source]);
+        assert_eq!(report.borrow().len(), 1);
+    }
+
+    #[test]
+    fn float_change_to_the_modifier_list_at_0xd0() {
+        let mut e = new_engine();
+        let (this, source, report, flags, hit, list) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3b0), Ret::default());
+        e.call(0x0088_0e00, &args![this, 0x10u32, -2.5f32, source]);
+        let expected = vec![this.addr() + 0xd0, 0x10, (-2.5f32).to_bits(), 2];
+        assert_eq!(list.borrow()[0], expected);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x800000]);
+        assert_eq!(hit.borrow().len(), 1);
+        assert_eq!(process_call.borrow()[0][1], 0x10);
+        assert_eq!(report.borrow()[0][3], (-2.5f32).to_bits());
+        e.call(0x0088_0e00, &args![this, 0x99u32, 1.0f32, source]);
+        assert_eq!(report.borrow().len(), 1);
+    }
+
+    #[test]
+    fn integer_change_variant_0x3ac_sets_flag_0x200000() {
+        let mut e = new_engine();
+        let (this, source, report, flags, _, _) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3ac), Ret::default());
+        e.call(0x0088_0fb0, &args![this, 0x20u32, 5i32, source]);
+        assert_eq!(process_call.borrow()[0][1..], [this.addr(), 0x20, 5]);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x200000]);
+        assert_eq!(report.borrow()[0][3], 5.0f32.to_bits());
+        e.call(0x0088_0fb0, &args![this, 0x99u32, 5i32, source]);
+        assert_eq!(report.borrow().len(), 1);
+    }
+
+    #[test]
+    fn float_change_variant_0x3a8_bounds_index_0x16_by_the_setting() {
+        let mut e = new_engine();
+        let (this, source, report, flags, _, _) = change_fixture(&mut e);
+        let process_call = record(&mut e, slot(PROCESS_VTABLE, 0x3a8), Ret::default());
+        // The setting (float at 0x011d2664 through 00403e20) is 1.0; the base is 3.0.
+        let setting = e.mem.alloc(4);
+        e.mem.set_f32(setting, 1.0);
+        e.register_double(0x0040_3e20, move |_, _| ret(setting));
+        e.call(0x0088_1130, &args![this, 0x20u32, 2.0f32, source]);
+        let expected = [this.addr(), 0x20, 2.0f32.to_bits()];
+        assert_eq!(process_call.borrow()[0][1..], expected);
+        assert_eq!(flags.borrow()[0], vec![this.addr(), 0x200000]);
+        // Index 0x16, amount -1: 3 - 1 = 2 stays above the setting: unchanged.
+        e.register(slot(VTABLE, 0x38c), |_, _| ret(1));
+        e.call(0x0088_1130, &args![this, 0x16u32, -1.0f32, source]);
+        assert_eq!(process_call.borrow()[1][3], (-1.0f32).to_bits());
+        // Amount -5: 3 - 5 is below the setting, so the amount becomes 1 - 3 = -2.
+        e.call(0x0088_1130, &args![this, 0x16u32, -5.0f32, source]);
+        assert_eq!(process_call.borrow()[2][3], (-2.0f32).to_bits());
+        // The setting above the base: nothing happens.
+        e.mem.set_f32(setting, 4.0);
+        let before = report.borrow().len();
+        e.call(0x0088_1130, &args![this, 0x16u32, -1.0f32, source]);
+        assert_eq!(report.borrow().len(), before);
+        // The flag 0x100 index is ignored.
+        e.call(0x0088_1130, &args![this, 0x99u32, 1.0f32, source]);
+        assert_eq!(report.borrow().len(), before);
+    }
+
+    // ---- 00881330 / 00881360 ----
+
+    #[test]
+    fn forwarding_value_changes() {
+        let mut e = new_engine();
+        let actor = actor(&mut e, &[0x3b4, 0x394]);
+        give_owner(&mut e, actor, &[0xc, 4]);
+        let direct = record(&mut e, slot(VTABLE, 0x3b4), Ret::default());
+        e.call(0x0088_1330, &args![actor, 3u32, 9i32]);
+        assert_eq!(direct.borrow()[0], vec![actor.addr(), 3, 9.0f32.to_bits()]);
+        e.register(ACTOR_VALUE_HAS_BASE, |_, _| ret(1));
+        e.register(ACTOR_VALUE_HAS_FLAG, |_, a| ret((a[0] == 0x99) as u32));
+        e.register(ACTOR_VALUE_IS_STAT, |_, _| ret(1));
+        e.register(slot(OWNER_VTABLE, 0xc), |_, _| 3.0f32.into_ret());
+        e.register(slot(OWNER_VTABLE, 4), |_, _| 10.0f32.into_ret());
+        let set = record(&mut e, slot(VTABLE, 0x394), Ret::default());
+        let report = record(&mut e, ACTOR_VALUE_CHANGED, Ret::default());
+        e.call(0x0088_1360, &args![actor, 7u32, 2.5f32]);
+        assert_eq!(set.borrow()[0], vec![actor.addr(), 7, 12.5f32.to_bits()]);
+        let expected = vec![
+            actor.addr() + 0xa4,
+            7,
+            3.0f32.to_bits(),
+            2.5f32.to_bits(),
+            0,
+        ];
+        assert_eq!(report.borrow()[0], expected);
+        e.call(0x0088_1360, &args![actor, 0x99u32, 2.5f32]);
+        assert_eq!(set.borrow().len(), 1);
     }
 }
