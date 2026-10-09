@@ -1,7 +1,7 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)); PR 1 (the frame map) done 2026-10-09, the rest is
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map) and PR 2 (`world::frame`) done 2026-10-09, the rest is
 not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
 ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
 `research/engine-map/frame.tsv`.
@@ -257,6 +257,63 @@ whenever it is regenerated. On 2026-10-09, after the rolling translation
 batches up to #81, of the 143 depth-1 call sites 22 are `translated`, 37
 `traced`, 5 `platform` and 79 `open`.
 
+## PR 2 result: `world::frame`
+
+`crates/world/src/frame.rs` (2026-10-09) is the control flow of
+`0086e650`, translated (ADR-0003 marker): `STEPS` lists its 143 calls in
+the exe's order (a test loads `frame.tsv` and compares address and name
+row by row), each with a `Stage` (the table above), a `Gate` and a
+`Wiring`. `steps_run(&FrameState)` says which run for given inputs. The
+disassembly and the decompiler agree on every branch (the decompiler only
+drops two blocks behind a local that is always 0, `0086ebd7`, `0086ec00`).
+
+The gates (branch addresses in `0086e650`; each has a test):
+
+| Gate | Steps | Branches |
+| --- | --- | --- |
+| Tab and Alt both held: return after step 1 | 2-143 | `0086e682`, `0086e69a` |
+| Menu mode (`[011dea2b]` = `IsInMenuMode` or `IsPipboyOpening`; V.A.T.S.'s menu, sleep/wait, dialogue and the pause menu count) or the free camera's frozen world (`Main` +7, set only for `TFC` 1, 2 or 5: `005bc260` → `00961e30` → `00961f50`) stops the screen splatters, the cell tests, the sky update, `Calendar::Update` and (one thread) `TES::RunAnimations` | 46-47, 50-58 | `0086e918`, `0086e923`, `0086e946`, `0086e955`, `0086e9dc` |
+| The radiation, process-level and follower lists, and the AI work's start and join, run when menu mode is clear or the fader is visible (`[011dea2d]`), the console is hidden (`[011dea2e]`) and the world is not frozen | 62-68, 98-102, 128-131 | `0086ea0c`-`0086ea84`, `0086ec1d`-`0086ec74`, `0086ee0c`-`0086ee45` |
+| With threads > 1 and no AI work this frame, the main thread runs the interface idle, and `LastMinuteUpdate` in menu mode | 105-107 | `0086ecad`, `0086ecb5`, `0086ecc9` |
+| One thread: the interface idle before the AI work, the obstacle manager (with `bUseObstacleAvoidance`, `011d73e4`) and `CombatManager::Update` on the main thread | 80, 113-116 | `0086eb31`, `0086ed00`, `0086ed11` |
+| V.A.T.S. playback (manager mode 4, `[011f2250]`+8) skips `BSSceneGraph::SetCameraFOV` | 87-89 | `0086eb6d` |
+| Loading: the start menu with flag 0x10000 skips the block; up without flag 1 it suspends the loading menu's thread; otherwise an open in-game loading menu is shown | 36-39 | `0086e8a6`, `0086e8b2`, `0086e8c5` |
+| Sleeping or waiting: top menu 1012 asks `UpdateSleeping`; when true the menu background is redrawn | 120-121 | `0086ed75`, `0086ed81` |
+| `PathManager::Update` stops only with the frozen world | 108-109 | `0086ecd9` |
+| The memory free: interface mode 3 and no rendered menu other than the Pip-Boy | 13 | `0086e74e`, `0086e756` |
+| The game-mode frame counter (`0086ef40`) | 31 | `0086e87a` |
+| The heap sort (`00aa7290`): menu mode, the view key held, or 45 s gathered | 142-143 | `0086eeb9`, `0086eec2`, `0086eed4`, `0086eee7` |
+| Requests and short-circuits: pathing profile `[011deefc]`, texture purge `[011f4461]`, display mode change `[011c6fbb]`, console open `[011dea2f]`, the parallel update's begin and end, the menu queries | 4, 9-10, 19, 23-24, 49, 51-52, 73, 118, 127, 135-136 | `0086e6c0`, `0086e714`, `0086e7a8`, `0086e7fd`, `0086e936`, `0086e96b`, `0086e97d`, `0086ead8`, `0086ed64`, `0086edfe`, `0086ee79` |
+
+There is no separate "paused" test: the pause menu is a menu-mode menu.
+The mode-dependent arguments are modelled too: `Main::OnIdle_UpdateImageSpace`
+gets "the world runs", `BSTreeManager::Update` its negation and
+`CombatManager::Update` "menu mode, the fader or the frozen world".
+
+Steps wired to existing nv-rs code (checked by reading it):
+
+- **Is the step**: 44 `Main::OnIdle_HandleMenuBackground` (`0086f450`) →
+  `world::menu_background::Background::update`, run by the viewer's
+  `menu_background::update`.
+- **Partly there** (still open): 32 `Main::OnIdle_UpdateTimer` →
+  `physics::havok::Clock` (the frame timer and Havok's delta only); 45
+  `FaderManager::UpdateFaders` → `world::living::sleep::Fade` and the
+  fade to black in the viewer's `game_menus` (two faders); 56
+  `Calendar::Update` → `GameState::advance_clock` (its calendar is a
+  labelled guess); 77 `BSTreeManager::Update` → `speedtree::wind` (its
+  `006658b0` only); 78 `Main::OnIdle_UpdateCurrentGridCell` →
+  `world::ref_scripts`' grid-move test (`00452580`).
+- **Open**: the other 137.
+
+Left for PR 3: the viewer's per-frame systems still run in their own
+`.chain()`/`.before`/`.after` order, with menu mode approximated per
+system (`menus::Menus::is_open`, the dialogue test, Bevy's virtual clock
+paused in V.A.T.S.). PR 3 makes `Stage`/`FrameStep` system sets, puts each
+system in the set of the step it belongs to, and runs each set under its
+`Gate`, evaluated from one `FrameState` filled once per frame. Inputs with
+no viewer counterpart yet (fader 1, the frozen world, the interface mode,
+the thread count) need a source or a fixed value.
+
 ## PR sequence
 
 Each PR names one next action, regenerates the ledger and passes the
@@ -277,7 +334,7 @@ acceptance routes, as in B1.
    V.A.T.S. and while sleeping, as an ordered `FrameStep` list. Each step
    either calls our existing system or is marked `open` with its address.
    Tests: the step order equals the traced order; the mode gates match the
-   branches of `0086e650`.
+   branches of `0086e650`. *Done*: "PR 2 result" above.
 3. **Bevy order from the frame.** The viewer's per-frame systems are ordered
    by `FrameStep` system sets instead of their own `.before`/`.after`
    chains; remove the chains it replaces. This is where "runs in the wrong

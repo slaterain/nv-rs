@@ -894,6 +894,26 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
   `iNumHWThreads`; six `?` rows and six position-only leads.
 - Next action: PR 2 (`world::frame`, the control flow of `0086e650`).
 
+### Phase 1 PR 2: `world::frame` (`claude/phase1-world-frame`, 2026-10-09)
+
+- Evidence: `crates/world/src/frame.rs`, translated from `0086e650`
+  (disassembly and decompiler agree): the 143 calls in the exe's order
+  (`STEPS`, checked against `frame.tsv` by a test), each with its gate
+  (36 gate kinds, one test per gate naming its branch addresses) and its
+  wiring. Gates: Tab+Alt held ends the frame; menu mode (V.A.T.S.'s menu,
+  sleep/wait, dialogue, the Pip-Boy, the pause menu) and the free camera's
+  frozen world (`TFC 1`, `Main` +7) stop the world block, the process
+  lists and the AI work; the fader lets the lists and AI run in menu mode,
+  the console stops them; V.A.T.S. playback skips the scene graph's field
+  of view; the loading block; sleeping redraws the menu background;
+  threads = 1 vs > 1. FRAME_SKELETON.md "PR 2 result".
+- Wiring: 1 step is an existing system (`Main::OnIdle_HandleMenuBackground`
+  → `world::menu_background`); 5 partly exist (timer, faders, calendar,
+  tree wind, grid move); 137 open. Nothing in the viewer changed.
+- Files: `crates/world/src/frame.rs`, `crates/world/src/lib.rs`,
+  `docs/FRAME_SKELETON.md`, `docs/LEDGER.md` (generated).
+- Next action: PR 3 (order the viewer's systems by `FrameStep` sets).
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,
