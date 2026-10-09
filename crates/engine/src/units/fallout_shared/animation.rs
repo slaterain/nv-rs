@@ -28,8 +28,9 @@
 //! Session 5 (b0010) finishes the unit: the sequence map's destructors,
 //! `SetAt`, `GetAt`, `GetNext`, `SetValue` and base constructor (`0049c080` to
 //! `0049c5a0`), the two folded `NiQuatTransform` getters (`0058cb00`,
-//! `00a3f9e0`) with `0058cb60`, and `Animation::SkipUpdate` (`008eeaa0`). Only
-//! `00f39c20` (`Animation::SpecialIdleAuto`, a `library` initializer) is left.
+//! `00a3f9e0`) with `0058cb60`, and `Animation::SkipUpdate` (`008eeaa0`).
+//! Session 6 translates the last one, `00f39c20` (`Animation::SpecialIdleAuto`,
+//! a static initializer); the unit is complete.
 //!
 //! The 8 slots of `Animation` (`group`, `action`, `loopCount`, `nextGroup`,
 //! `nextLoops`, `pCurrentSequence` are arrays of 8) are indexed by the slot
@@ -8554,6 +8555,16 @@ pub fn fn_0058cb60(e: &mut Engine, this: Ptr, out_a: Ptr, out_b: Ptr, out_c: Ptr
     e.mem.u32(a + 0x20)
 }
 
+// Translated from 00f39c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleAuto` (Xbox PDB name of the slot; the body is a
+/// static initializer): constructs the `bAnimateDoorPhysics:General` setting
+/// object at `011c4c64` (name string at `0101abb4`, value 1) and registers its
+/// destructor (`00fc8470`) with `atexit`.
+pub fn animation_special_idle_auto(e: &mut Engine) {
+    e.call(0x0045_cf30, &args![0x011c_4c64u32, 0x0101_abb4u32, 1u32]);
+    e.call(0x00ec_658f, &args![0x00fc_8470u32]);
+}
+
 // Translated from 008eeaa0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `Animation::SkipUpdate` (Xbox PDB): stores `value` in `cSkipUpdate`.
 pub fn animation_skip_update(e: &mut Engine, this: Ptr<Animation>, value: u8) {
@@ -8947,6 +8958,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0058cb60, fn_0058cb60(Ptr, Ptr, Ptr, Ptr) -> u32),
         entry!(0x008eeaa0, animation_skip_update(Ptr<Animation>, u8)),
         entry!(0x00a3f9e0, fn_00a3f9e0(Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x00f39c20, animation_special_idle_auto()),
     ]
 }
 
@@ -17631,5 +17643,22 @@ mod tests {
         e.call(0x008e_eaa0, &args![this, 0x14u32]);
         assert_eq!(e.mem.u8(this.addr() + 0xcc), 0x14);
         assert_eq!(e.mem.u8(this.addr() + 0xcd), 0x5a);
+    }
+
+    #[test]
+    fn special_idle_auto_constructs_the_door_physics_setting_and_registers_exit() {
+        let mut e = engine();
+        e.register(0x0045_cf30, |_, a| ret(a[0]));
+        e.register(0x00ec_658f, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x00f3_9c20, &args![]);
+        assert_eq!(
+            e.call_log.clone().unwrap(),
+            vec![
+                (0x00f3_9c20, vec![]),
+                (0x0045_cf30, vec![0x011c_4c64, 0x0101_abb4, 1]),
+                (0x00ec_658f, vec![0x00fc_8470]),
+            ]
+        );
     }
 }
