@@ -3,10 +3,10 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesconditionfunctions`]; anything public there may be used here.
 //!
-//! Progress: this part holds `005a2a50` to `005a4f30` (the first session
+//! Progress: this part holds `005a2a50` to `005a60f0` (the first session
 //! `005a2a50` to `005a3c90`, the second `005a3d00` to `005a4f30`, 40 functions
-//! each); the next session continues with the first function after
-//! `005a4f30` (`005a5020`).
+//! each; the third `005a5020` to `005a60f0`, 37 functions). Every function
+//! of the range is translated; `00f46450` is a `library` entry.
 //!
 //! The main file keeps its constants and helpers private, so this part
 //! declares again the ones it needs. Every condition function has the shape
@@ -2155,6 +2155,812 @@ pub fn script_get_aggro_radius_violated_condition_function(
     true
 }
 
+// ---- session 3: 005a5020 to 005a60f0 -------------------------------------
+
+/// The `float` global VATS target checks pass as their angle: pi / 2.
+const VATS_ANGLE_RIGHT: u32 = 0x0101_ff38;
+/// 3 pi / 2.
+const VATS_ANGLE_LEFT: u32 = 0x0101_ff34;
+/// pi.
+const VATS_ANGLE_BACK: u32 = 0x0102_b3c8;
+/// `GetVATSAreaFree`-style test of an actor (`this` the actor; the second
+/// word and an angle `float`), result in ST0.
+const ACTOR_GET_VATS_AREA_FREE: u32 = 0x008b_d830;
+/// Same shape, the target-visible test.
+const ACTOR_GET_VATS_TARGET_VISIBLE: u32 = 0x008b_dbd0;
+/// The `double` 100.0 in the exe's data.
+const DOUBLE_ONE_HUNDRED: u32 = 0x0101_7a40;
+/// `bool` of the actor in ECX with a flag byte at `+0x94`'s object: the
+/// `0x21` / 0 test behind `GetConcussed` (`this` is the actor + `0x94`).
+const ACTOR_PART_TEST_822CF0: u32 = 0x0082_2cf0;
+/// The byte global `fn_005a50e0` returns.
+const BYTE_GLOBAL_5A50E0: u32 = 0x011d_be50;
+/// Virtual (vtable `+0x764`, `+0x75c`, `+0x76c`) on the actor's process:
+/// three `float`s in ST0 that `GetRadiationLevel` adds.
+const VSLOT_PROCESS_RADIATION_A: u32 = 0x764;
+const VSLOT_PROCESS_RADIATION_B: u32 = 0x75c;
+const VSLOT_PROCESS_RADIATION_C: u32 = 0x76c;
+/// `TESObjectREFR::GetMapMarkerData` (Xbox PDB): the reference's marker data.
+const REF_GET_MAP_MARKER_DATA: u32 = 0x0056_9060;
+/// `MapMarkerData::GetVisible` / `GetTravelLoc` (Xbox PDB).
+const MAP_MARKER_GET_VISIBLE: u32 = 0x0043_8ed0;
+const MAP_MARKER_GET_TRAVEL_LOC: u32 = 0x0043_8ef0;
+/// Virtual (vtable `+0x148`) on the actor's process: the weapon `ItemChange`
+/// or null.
+const VSLOT_PROCESS_WEAPON_ITEM: u32 = 0x148;
+/// The `int` global `GetWeaponHealthPerc` compares the weapon's `+0x08`
+/// with.
+const WEAPON_COMPARE_GLOBAL: u32 = 0x011c_a278;
+/// `ItemChange::GetItemHealth` (Xbox PDB): `this` the change and (1); ST0.
+const ITEM_CHANGE_GET_ITEM_HEALTH: u32 = 0x004b_cdb0;
+/// Virtual (vtable `+0x30c`) on the actor's process: a byte test.
+const VSLOT_PROCESS_TEST_30C: u32 = 0x30c;
+/// `TESWorldSpace::GetParentWorldSimple` (Xbox PDB) of the reference in ECX.
+const REF_GET_PARENT_WORLD_SIMPLE: u32 = 0x004f_d380;
+/// `Actor::IsInCombatWithActor` (Xbox PDB): `this` the actor and (other).
+const ACTOR_IS_IN_COMBAT_WITH_ACTOR: u32 = 0x008b_c700;
+/// The player's level (`this` the player; the low 16 bits).
+const PLAYER_GET_LEVEL: u32 = 0x0087_f9f0;
+/// Returns a pointer to the `int` maximum level (`this` is [`GAME_SETTING_MAX_LEVEL`]).
+const SETTING_GET_INT_PTR: u32 = 0x0043_d4d0;
+const GAME_SETTING_MAX_LEVEL: u32 = 0x011d_0c60;
+/// Virtual (vtable `+0x08`) of the object at `player + 0xa4`, called with 0x18.
+const PLAYER_PART_OFFSET: u32 = 0xa4;
+const VSLOT_PLAYER_PART_08: u32 = 0x08;
+/// `GamePlayFormulas::GetRequiredExperiencePoints` (Xbox PDB), cdecl, a
+/// level.
+const GET_REQUIRED_EXPERIENCE_POINTS: u32 = 0x0064_8b50;
+/// Virtual (vtable `+0x320`) on an actor: a byte test (ignoring crime).
+const VSLOT_ACTOR_TEST_320: u32 = 0x320;
+/// The object whose byte `IsGoreDisabled` reads, and its getter.
+const GORE_OBJECT: u32 = 0x011d_f7f8;
+const GORE_GET_BYTE_PTR: u32 = 0x0040_8d60;
+/// The object `GetActorsInHigh` reads from.
+const ACTORS_IN_HIGH_OBJECT: u32 = 0x011e_0e80;
+/// `[this + 0x18]` getter used by the `GetReputation` debug lines: the name
+/// string (`this` a form plus `0x18`).
+const FORM_PART_GET_NAME: u32 = 0x0040_8da0;
+/// Three reputation-like accessors of the form in ECX, one word pushed:
+/// ST0, ST0, and a signed byte in AL.
+const FORM_QUERY_6155C0: u32 = 0x0061_55c0;
+const FORM_QUERY_616A60: u32 = 0x0061_6a60;
+const FORM_QUERY_616A90: u32 = 0x0061_6a90;
+/// The objective of the quest in ECX with the objective number pushed.
+const QUEST_GET_OBJECTIVE: u32 = 0x0060_c8e0;
+/// `cdecl` test of one word (`IsPlayerTagSkill`'s first test).
+const TAG_SKILL_TEST: u32 = 0x0047_f060;
+/// `this` the player, one word pushed: the class record, tested by
+/// [`fn_005a5f40`].
+const PLAYER_GET_CLASS: u32 = 0x0088_4350;
+/// `this` the player: the hardcore-mode byte.
+const PLAYER_IS_HARDCORE: u32 = 0x004d_1360;
+/// Counterpart of [`fn_005a60d0`] (`this` the challenge), outside this unit
+/// range.
+const CHALLENGE_GET_COMPLETED: u32 = 0x005a_6150;
+
+/// The VATS checks of this part share one shape: the value is the callee's
+/// ST0 for the actor with `param1` and an angle, 0.0 for a non-actor.
+/// `call` is (callee, angle, debug format).
+fn vats_check(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    result: Ptr,
+    call: (u32, f32, u32),
+) -> bool {
+    let (callee, angle, format) = call;
+    set_result(e, result, 0.0);
+    if !reference.is_null() && e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+        let value = e.call(callee, &args![reference, param1, angle]).f32();
+        set_result(e, result, value as f64);
+    }
+    if trace_enabled(e) {
+        trace_result(e, format, result);
+    }
+    true
+}
+
+// Translated from 005a5020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetConcussedConditionFunction` (Xbox PDB): for an actor, when
+/// [`fn_005a50e0`] is set, 1.0 if the `0x21` test on the actor part says yes.
+pub fn script_get_concussed_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && fn_005a50e0(e) != 0 {
+        if e.call(
+            ACTOR_PART_TEST_822CF0,
+            &args![actor.addr() + 0x94, 0x21u32, 0u32],
+        )
+        .bool()
+        {
+            set_result(e, result, 1.0);
+        }
+        // "%s is not concussed " / "%s is concussed"
+        if let Some(format) = trace_choice(e, result, 0x0103_61d8, 0x0103_61c0) {
+            let name = e.call(REF_GET_NAME, &args![actor]).u32();
+            e.call(DEBUG_PRINT, &args![format, name]);
+        }
+    }
+    true
+}
+
+// Translated from 005a50e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition helper without Xbox PDB name: the byte global at `011dbe50`.
+pub fn fn_005a50e0(e: &mut Engine) -> u8 {
+    e.global::<u8>(BYTE_GLOBAL_5A50E0)
+}
+
+// Translated from 005a50f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetRadiationLevelConditionFunction` (Xbox PDB): for an actor
+/// with a process, the sum of three `float`s the process returns from its
+/// virtuals `+0x76c`, `+0x75c` and `+0x764`.
+pub fn script_get_radiation_level_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if actor.is_null() {
+        return true;
+    }
+    set_result(e, result, 0.0);
+    if !e
+        .call(ACTOR_GET_PROCESS, &args![actor])
+        .ptr::<()>()
+        .is_null()
+    {
+        let first = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let second = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let third = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let a = e.vcall(third, VSLOT_PROCESS_RADIATION_A, &args![]).f32() as f64;
+        let b = e.vcall(second, VSLOT_PROCESS_RADIATION_B, &args![]).f32() as f64;
+        let c = e.vcall(first, VSLOT_PROCESS_RADIATION_C, &args![]).f32() as f64;
+        set_result(e, result, c + b + a);
+    }
+    if trace_enabled(e) {
+        let value = e.mem.f64(result.addr());
+        let name = e.call(REF_GET_NAME, &args![actor]).u32();
+        // "%s radiation level is %.2f"
+        e.call(DEBUG_PRINT, &args![0x0103_61e8u32, name, value]);
+    }
+    true
+}
+
+// Translated from 005a51e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetMapMarkerVisibleConditionFunction` (Xbox PDB): 0.0 without
+/// marker data, 1.0 when the marker is visible, 2.0 when it also has a
+/// travel location. The debug line is printed for every call.
+pub fn script_get_map_marker_visible_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let data = e.call(REF_GET_MAP_MARKER_DATA, &args![reference]).u32();
+        if data != 0 && e.call(MAP_MARKER_GET_VISIBLE, &args![data]).bool() {
+            set_result(e, result, 1.0);
+            if e.call(MAP_MARKER_GET_TRAVEL_LOC, &args![data]).bool() {
+                let two: f64 = e.global(DOUBLE_TWO);
+                set_result(e, result, two);
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "marker state = %.0f"
+        trace_result(e, 0x0103_6204, result);
+    }
+    true
+}
+
+// Translated from 005a5270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetWeaponHealthPercConditionFunction` (Xbox PDB): for an actor
+/// with a process, the health of its weapon item, or 100.0 without one.
+/// Does not clear the result first.
+pub fn script_get_weapon_health_perc_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let actor = actor_of(e, reference);
+    if !actor.is_null()
+        && !e
+            .call(ACTOR_GET_PROCESS, &args![actor])
+            .ptr::<()>()
+            .is_null()
+    {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let item = e.vcall(process, VSLOT_PROCESS_WEAPON_ITEM, &args![]).u32();
+        let mut found = false;
+        if item != 0 {
+            let field = e.call(OBJECT_GET_FIELD_08, &args![item]).u32();
+            if field != e.global::<u32>(WEAPON_COMPARE_GLOBAL) {
+                let health = e
+                    .call(ITEM_CHANGE_GET_ITEM_HEALTH, &args![item, 1u32])
+                    .f32();
+                set_result(e, result, health as f64);
+                found = true;
+            }
+        }
+        if !found {
+            let hundred: f64 = e.global(DOUBLE_ONE_HUNDRED);
+            set_result(e, result, hundred);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetWeaponHealthPerc >> %0.2f"
+        trace_result(e, 0x0103_6218, result);
+    }
+    true
+}
+
+// Translated from 005a5330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsGreetingPlayerConditionFunction` (Xbox PDB): 1.0 when the
+/// actor's process says (virtual `+0x30c`) yes and the reference's parent
+/// world is the one in the player global (`011dea3c`).
+pub fn script_is_greeting_player_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null()
+        && !e
+            .call(ACTOR_GET_PROCESS, &args![actor])
+            .ptr::<()>()
+            .is_null()
+    {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        if e.vcall(process, VSLOT_PROCESS_TEST_30C, &args![]).bool() {
+            let world = e.call(REF_GET_PARENT_WORLD_SIMPLE, &args![actor]).u32();
+            if world == e.global::<u32>(PLAYER) {
+                set_result(e, result, 1.0);
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "IsGreeting the player >> %.2f"
+        trace_result(e, 0x0103_6238, result);
+    }
+    true
+}
+
+// Translated from 005a53e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCombatTargetConditionFunction` (Xbox PDB): 1.0 when the actor
+/// is in combat with the actor `param1`.
+pub fn script_is_combat_target_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null()
+        && e.call(ACTOR_IS_IN_COMBAT_WITH_ACTOR, &args![actor, param1])
+            .bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "IsCombatTarget >> %.2f"
+        trace_result(e, 0x0103_6258, result);
+    }
+    true
+}
+
+// Translated from 005a5460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSRightAreaFreeConditionFunction` (Xbox PDB): the area
+/// check to the right (angle pi / 2).
+pub fn script_get_vats_right_area_free_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_RIGHT);
+    let call = (ACTOR_GET_VATS_AREA_FREE, angle, 0x0103_6270);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a54f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSLeftAreaFreeConditionFunction` (Xbox PDB): the area
+/// check to the left (angle 3 pi / 2).
+pub fn script_get_vats_left_area_free_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_LEFT);
+    let call = (ACTOR_GET_VATS_AREA_FREE, angle, 0x0103_628c);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a5580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSBackAreaFreeConditionFunction` (Xbox PDB): the area
+/// check behind (angle pi).
+pub fn script_get_vats_back_area_free_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_BACK);
+    let call = (ACTOR_GET_VATS_AREA_FREE, angle, 0x0103_62a8);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a5610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSFrontAreaFreeConditionFunction` (Xbox PDB): the area
+/// check in front (angle 0.0).
+pub fn script_get_vats_front_area_free_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let call = (ACTOR_GET_VATS_AREA_FREE, 0.0, 0x0103_62c4);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a5690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSRightTargetVisibleConditionFunction` (Xbox PDB): the
+/// target-visible check to the right (angle pi / 2).
+pub fn script_get_vats_right_target_visible_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_RIGHT);
+    let call = (ACTOR_GET_VATS_TARGET_VISIBLE, angle, 0x0103_62e0);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a5720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSLeftTargetVisibleConditionFunction` (Xbox PDB): the
+/// target-visible check to the left (angle 3 pi / 2).
+pub fn script_get_vats_left_target_visible_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_LEFT);
+    let call = (ACTOR_GET_VATS_TARGET_VISIBLE, angle, 0x0103_6300);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a57b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSBackTargetVisibleConditionFunction` (Xbox PDB): the
+/// target-visible check behind (angle pi).
+pub fn script_get_vats_back_target_visible_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let angle = e.global::<f32>(VATS_ANGLE_BACK);
+    let call = (ACTOR_GET_VATS_TARGET_VISIBLE, angle, 0x0103_6320);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a5840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSFrontTargetVisibleConditionFunction` (Xbox PDB): the
+/// target-visible check in front (angle 0.0).
+pub fn script_get_vats_front_target_visible_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let call = (ACTOR_GET_VATS_TARGET_VISIBLE, 0.0, 0x0103_6340);
+    vats_check(e, reference, param1, result, call)
+}
+
+// Translated from 005a58c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetXPForNextLevelConditionFunction` (Xbox PDB): the experience
+/// points still needed for the player's next level; 0.0 (and a message)
+/// at the maximum level.
+pub fn script_get_xp_for_next_level_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    let level = e.call(PLAYER_GET_LEVEL, &args![player]).u16() as i32;
+    let max_ptr = e
+        .call(SETTING_GET_INT_PTR, &args![GAME_SETTING_MAX_LEVEL])
+        .u32();
+    let max_level = e.mem.u32(max_ptr) as i32;
+    if level >= max_level {
+        if trace_enabled(e) {
+            // "Player already at maximum level."
+            e.call(DEBUG_PRINT, &args![0x0103_637cu32]);
+        }
+        return true;
+    }
+    let player = e.global::<u32>(PLAYER);
+    let current = e
+        .vcall(
+            player + PLAYER_PART_OFFSET,
+            VSLOT_PLAYER_PART_08,
+            &args![0x18u32],
+        )
+        .i32();
+    let required = e
+        .call(GET_REQUIRED_EXPERIENCE_POINTS, &args![(level + 1) as u32])
+        .i32();
+    set_result(e, result, required.wrapping_sub(current) as f64);
+    if trace_enabled(e) {
+        // "GetXPForNextLevel >> %.2f"
+        trace_result(e, 0x0103_6360, result);
+    }
+    true
+}
+
+// Translated from 005a59a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIgnoreCrimeConditionFunction` (Xbox PDB): 1.0 when the actor
+/// answers its virtual `+0x320` test with yes.
+pub fn script_get_ignore_crime_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.vcall(actor.addr(), VSLOT_ACTOR_TEST_320, &args![]).bool() {
+        set_result(e, result, 1.0);
+    }
+    // "%s is not ignoring crime" / "%s is ignoring crime"
+    if let Some(format) = trace_choice(e, result, 0x0103_63bc, 0x0103_63a0) {
+        let name = e.call(REF_GET_NAME, &args![reference]).u32();
+        e.call(DEBUG_PRINT, &args![format, name]);
+    }
+    true
+}
+
+// Translated from 005a5a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsGoreDisabledConditionFunction` (Xbox PDB): 1.0 when the byte
+/// the object at `011df7f8` hands out is exactly 1.
+pub fn script_is_gore_disabled_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let byte_ptr = e.call(GORE_GET_BYTE_PTR, &args![GORE_OBJECT]).u32();
+    if e.mem.u8(byte_ptr) == 1 {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "IsGoreDisabled >> %0.2f"
+        trace_result(e, 0x0103_63d4, result);
+    }
+    true
+}
+
+// Translated from 005a5ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetActorsInHighConditionFunction` (Xbox PDB): the `int` that
+/// [`fn_005a5b10`] reads from the object at `011e0e80`.
+pub fn script_get_actors_in_high_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let count = fn_005a5b10(e, Ptr::new(ACTORS_IN_HIGH_OBJECT)) as i32;
+    set_result(e, result, count as f64);
+    if trace_enabled(e) {
+        // "GetActorsInHigh >> %0.2f"
+        trace_result(e, 0x0103_63ec, result);
+    }
+    true
+}
+
+// Translated from 005a5b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Getter without Xbox PDB name: the word at `this + 0x103b0`.
+pub fn fn_005a5b10(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x103b0)
+}
+
+// Translated from 005a5b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetForceHitReactionConditionFunction` (Xbox PDB): the byte at
+/// actor `+0x1b1`. Does not clear the result first.
+pub fn script_get_force_hit_reaction_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let value = fn_005a5bb0(e, actor);
+        set_result(e, result, value as f64);
+        if trace_enabled(e) {
+            let value = e.mem.f64(result.addr());
+            let name = e.call(REF_GET_NAME, &args![actor]).u32();
+            // "GetForceHitReactionConditionFunction: %s >> %0.2f"
+            e.call(DEBUG_PRINT, &args![0x0103_6408u32, name, value]);
+        }
+    }
+    true
+}
+
+// Translated from 005a5bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Getter without Xbox PDB name: the byte at `this + 0x1b1`.
+pub fn fn_005a5bb0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x1b1)
+}
+
+/// The three `GetReputation:` condition functions below print the same line
+/// (a copy in the exe): the name through `FORM_PART_GET_NAME` of
+/// `form + 0x18`, and the result.
+fn trace_form_value(e: &mut Engine, form: Ptr, result: Ptr) {
+    if trace_enabled(e) {
+        let value = e.mem.f64(result.addr());
+        let name = e.call(FORM_PART_GET_NAME, &args![form.addr() + 0x18]).u32();
+        // "GetReputation: %s >> %0.2f"
+        e.call(DEBUG_PRINT, &args![0x0103_643cu32, name, value]);
+    }
+}
+
+// Translated from 005a5bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line "GetReputation"):
+/// for a non-null form `param1`, the ST0 value of `006155c0(param1,
+/// param2)`. Leaves the result alone for a null `param1`.
+pub fn fn_005a5bd0(e: &mut Engine, _reference: u32, form: Ptr, param2: u32, result: Ptr) -> bool {
+    if !form.is_null() {
+        let value = e.call(FORM_QUERY_6155C0, &args![form, param2]).f64();
+        set_result(e, result, value);
+        trace_form_value(e, form, result);
+    }
+    true
+}
+
+// Translated from 005a5c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line "GetReputation"):
+/// like [`fn_005a5bd0`] with `00616a60`.
+pub fn fn_005a5c40(e: &mut Engine, _reference: u32, form: Ptr, param2: u32, result: Ptr) -> bool {
+    if !form.is_null() {
+        let value = e.call(FORM_QUERY_616A60, &args![form, param2]).f64();
+        set_result(e, result, value);
+        trace_form_value(e, form, result);
+    }
+    true
+}
+
+// Translated from 005a5cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line "GetReputation"):
+/// for a non-null form `param1`, the signed byte `00616a90(param1, low
+/// byte of param2)` returns.
+pub fn fn_005a5cb0(e: &mut Engine, _reference: u32, form: Ptr, param2: u32, result: Ptr) -> bool {
+    if !form.is_null() {
+        let value = e.call(FORM_QUERY_616A90, &args![form, param2 & 0xff]).u8() as i8;
+        set_result(e, result, value as f64);
+        trace_form_value(e, form, result);
+    }
+    true
+}
+
+// Translated from 005a5d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line
+/// "GetObjectiveCompleted"): 1.0 when the objective `param2` of the quest
+/// `param1` exists and [`fn_005a5dc0`] says so, else 0.0. Leaves the result
+/// alone when there is no quest or objective.
+pub fn fn_005a5d30(e: &mut Engine, _reference: u32, quest: Ptr, param2: u32, result: Ptr) -> bool {
+    if !quest.is_null() {
+        let objective = e.call(QUEST_GET_OBJECTIVE, &args![quest, param2]).u32();
+        if objective != 0 {
+            let done = fn_005a5dc0(e, Ptr::new(objective));
+            set_result(e, result, if done { 1.0 } else { 0.0 });
+            if trace_enabled(e) {
+                // "GetObjectiveCompleted >> %0.2f"
+                trace_result(e, 0x0103_6458, result);
+            }
+        }
+    }
+    true
+}
+
+// Translated from 005a5dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Objective test without Xbox PDB name: the `int` at `this + 0x20` is
+/// greater than 1.
+pub fn fn_005a5dc0(e: &mut Engine, this: Ptr) -> bool {
+    (e.mem.u32(this.addr() + 0x20) as i32) > 1
+}
+
+// Translated from 005a5de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line
+/// "GetObjectiveDisplayed"): like [`fn_005a5d30`] with [`fn_005a5e70`].
+pub fn fn_005a5de0(e: &mut Engine, _reference: u32, quest: Ptr, param2: u32, result: Ptr) -> bool {
+    if !quest.is_null() {
+        let objective = e.call(QUEST_GET_OBJECTIVE, &args![quest, param2]).u32();
+        if objective != 0 {
+            let shown = fn_005a5e70(e, Ptr::new(objective)) as u8 != 0;
+            set_result(e, result, if shown { 1.0 } else { 0.0 });
+            if trace_enabled(e) {
+                // "GetObjectiveDisplayed >> %0.2f"
+                trace_result(e, 0x0103_6478, result);
+            }
+        }
+    }
+    true
+}
+
+// Translated from 005a5e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Objective bit test without Xbox PDB name: bit 0 of the word at
+/// `this + 0x20`.
+pub fn fn_005a5e70(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x20) & 1
+}
+
+// Translated from 005a5e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name (debug line
+/// "IsPlayerTagSkill"): for an actor, 1.0 when `param1` passes the test at
+/// `0047f060` and equals one of the four words at `+0x44..+0x50` of the
+/// record `00884350` returns for the player ([`fn_005a5f40`]).
+pub fn fn_005a5e90(e: &mut Engine, reference: Ptr, param1: u32, _param2: u32, result: Ptr) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.call(TAG_SKILL_TEST, &args![param1]).bool() {
+        let player = e.global::<u32>(PLAYER);
+        let class = e.call(PLAYER_GET_CLASS, &args![player]).u32();
+        if fn_005a5f40(e, Ptr::new(class), param1) {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "IsPlayerTagSkill >> %.0f"
+        trace_result(e, 0x0103_6498, result);
+    }
+    true
+}
+
+// Translated from 005a5f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Test without Xbox PDB name (`this` a record, one word): whether the word
+/// equals one of the four at `this + 0x44`, `0x48`, `0x4c` and `0x50`.
+pub fn fn_005a5f40(e: &mut Engine, this: Ptr, value: u32) -> bool {
+    [0x44u32, 0x48, 0x4c, 0x50]
+        .iter()
+        .any(|offset| e.mem.u32(this.addr() + offset) == value)
+}
+
+// Translated from 005a5f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsHardcoreConditionalFunction` (Xbox PDB): the byte `004d1360`
+/// returns for the player, when the player exists. Leaves the result alone
+/// otherwise.
+pub fn script_is_hardcore_conditional_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    if player != 0 {
+        let value = e.call(PLAYER_IS_HARDCORE, &args![player]).u8();
+        set_result(e, result, value as f64);
+    }
+    if trace_enabled(e) {
+        // "IsHardcore? >> %f"
+        trace_result(e, 0x0103_64b4, result);
+    }
+    true
+}
+
+// Translated from 005a5ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsAlwaysHardcoreConditionalFunction` (Xbox PDB): the byte at
+/// `+0xe38` of the player ([`fn_005a6050`]), when the player exists.
+pub fn script_is_always_hardcore_conditional_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    if player != 0 {
+        let value = fn_005a6050(e, Ptr::new(player));
+        set_result(e, result, value as f64);
+    }
+    if trace_enabled(e) {
+        // "GetAlwaysHardcore? >> %f"
+        trace_result(e, 0x0103_64c8, result);
+    }
+    true
+}
+
+// Translated from 005a6050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Getter without Xbox PDB name: the byte at `this + 0xe38`.
+pub fn fn_005a6050(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xe38)
+}
+
+// Translated from 005a6070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ChallengeLockedConditionFunction` (Xbox PDB): bit 0 of the word
+/// at `param1 + 0x70` ([`fn_005a60d0`]), for a non-null `param1`.
+pub fn script_challenge_locked_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    param1: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    if !param1.is_null() {
+        let value = fn_005a60d0(e, param1);
+        set_result(e, result, value as i32 as f64);
+    }
+    if trace_enabled(e) {
+        // "ChallengeLocked? >> %f"
+        trace_result(e, 0x0103_64e4, result);
+    }
+    true
+}
+
+// Translated from 005a60d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Getter without Xbox PDB name: bit 0 of the word at `this + 0x70`.
+pub fn fn_005a60d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x70) & 1
+}
+
+// Translated from 005a60f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetChallengeCompletedConditionFunction` (Xbox PDB): the `int`
+/// `005a6150` returns for a non-null `param1`.
+pub fn script_get_challenge_completed_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    param1: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    if !param1.is_null() {
+        let value = e.call(CHALLENGE_GET_COMPLETED, &args![param1]).i32();
+        set_result(e, result, value as f64);
+    }
+    if trace_enabled(e) {
+        // "ChallengeComplete? >> %f"
+        trace_result(e, 0x0103_64fc, result);
+    }
+    true
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2238,6 +3044,43 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a4dd0, script_get_is_alignment_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x005a4ea0, script_get_is_used_item_equip_type_condition_function(u32, u32, u32, Ptr) -> bool),
         entry!(0x005a4f30, script_get_aggro_radius_violated_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5020, script_get_concussed_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a50e0, fn_005a50e0() -> u8),
+        entry!(0x005a50f0, script_get_radiation_level_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a51e0, script_get_map_marker_visible_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5270, script_get_weapon_health_perc_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5330, script_is_greeting_player_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a53e0, script_is_combat_target_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5460, script_get_vats_right_area_free_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a54f0, script_get_vats_left_area_free_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5580, script_get_vats_back_area_free_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5610, script_get_vats_front_area_free_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5690, script_get_vats_right_target_visible_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5720, script_get_vats_left_target_visible_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a57b0, script_get_vats_back_target_visible_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5840, script_get_vats_front_target_visible_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a58c0, script_get_xp_for_next_level_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a59a0, script_get_ignore_crime_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5a50, script_is_gore_disabled_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a5ab0, script_get_actors_in_high_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a5b10, fn_005a5b10(Ptr) -> u32),
+        entry!(0x005a5b30, script_get_force_hit_reaction_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5bb0, fn_005a5bb0(Ptr) -> u8),
+        entry!(0x005a5bd0, fn_005a5bd0(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a5c40, fn_005a5c40(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a5cb0, fn_005a5cb0(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a5d30, fn_005a5d30(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a5dc0, fn_005a5dc0(Ptr) -> bool),
+        entry!(0x005a5de0, fn_005a5de0(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a5e70, fn_005a5e70(Ptr) -> u32),
+        entry!(0x005a5e90, fn_005a5e90(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a5f40, fn_005a5f40(Ptr, u32) -> bool),
+        entry!(0x005a5f90, script_is_hardcore_conditional_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a5ff0, script_is_always_hardcore_conditional_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a6050, fn_005a6050(Ptr) -> u8),
+        entry!(0x005a6070, script_challenge_locked_condition_function(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a60d0, fn_005a60d0(Ptr) -> u32),
+        entry!(0x005a60f0, script_get_challenge_completed_condition_function(u32, Ptr, u32, Ptr) -> bool),
     ]
 }
 
@@ -3819,5 +4662,622 @@ mod tests {
         let plain = non_actor(&mut e);
         assert_eq!(run(&mut e, 0x005a_4f30, plain, 0, 0), (true, 0.0));
         assert!(printed(&mut e, 0.0, 0x005a_4f30, plain, 0, 0).is_empty());
+    }
+
+    /// `engine()` plus the pages the third session's functions read.
+    fn engine_s3() -> Engine {
+        let mut e = engine();
+        for page in [
+            0x0101_f000u32,
+            0x0102_b000,
+            0x0101_7000,
+            0x011d_b000,
+            0x011f_1000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DOUBLE_ONE_HUNDRED, 100.0f64);
+        e
+    }
+
+    /// A stub returning `value` in ST0 that checks its argument words.
+    fn stub_st0_args(e: &mut Engine, addr: u32, expected: Vec<u32>, value: f64) {
+        e.register_double(addr, move |_, a| {
+            assert_eq!(a, expected.as_slice());
+            Ret {
+                st0: value,
+                ..Ret::default()
+            }
+        });
+    }
+
+    /// A stub returning `eax` that checks its argument words.
+    fn stub_args(e: &mut Engine, addr: u32, expected: Vec<u32>, eax: u32) {
+        e.register_double(addr, move |_, a| {
+            assert_eq!(a, expected.as_slice());
+            Ret {
+                eax,
+                ..Ret::default()
+            }
+        });
+    }
+
+    #[test]
+    fn a5020_concussed_needs_the_flag_and_the_part_test() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        e.set_global(BYTE_GLOBAL_5A50E0, 1u8);
+        stub_args(&mut e, ACTOR_PART_TEST_822CF0, vec![a + 0x94, 0x21, 0], 1);
+        assert_eq!(run(&mut e, 0x005a_5020, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_5020, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_61c0, a + 0x100])]);
+        stub_args(&mut e, ACTOR_PART_TEST_822CF0, vec![a + 0x94, 0x21, 0], 0);
+        assert_eq!(run(&mut e, 0x005a_5020, a, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_5020, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_61d8, a + 0x100])]);
+        // The flag clear: 0.0, and no debug line.
+        e.set_global(BYTE_GLOBAL_5A50E0, 0u8);
+        assert_eq!(run(&mut e, 0x005a_5020, a, 0, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_5020, a, 0, 0).is_empty());
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_5020, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_5020, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a50e0_returns_the_byte_global() {
+        let mut e = engine_s3();
+        e.set_global(BYTE_GLOBAL_5A50E0, 5u8);
+        assert_eq!(e.call(0x005a_50e0, &args![]).u8(), 5);
+    }
+
+    #[test]
+    fn a50f0_radiation_level_sums_three_process_floats() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        let process = object(
+            &mut e,
+            &[
+                (VSLOT_PROCESS_RADIATION_A, 0x0f00_0011),
+                (VSLOT_PROCESS_RADIATION_B, 0x0f00_0012),
+                (VSLOT_PROCESS_RADIATION_C, 0x0f00_0013),
+            ],
+        );
+        stub_st0(&mut e, 0x0f00_0011, 1.5);
+        stub_st0(&mut e, 0x0f00_0012, 2.25);
+        stub_st0(&mut e, 0x0f00_0013, 0.5);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        assert_eq!(run(&mut e, 0x005a_50f0, a, 0, 0), (true, 4.25));
+        let w = words(4.25);
+        let lines = printed(&mut e, 0.0, 0x005a_50f0, a, 0, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_61e8, a + 0x100, w[0], w[1]])]
+        );
+        // Without a process: 0.0 (and the line still prints).
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_50f0, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_50f0, plain, 0, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_50f0, plain, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn a51e0_map_marker_visible_is_zero_one_or_two() {
+        let mut e = engine_s3();
+        stub_args(&mut e, REF_GET_MAP_MARKER_DATA, vec![0x1000], 0x5000);
+        stub(&mut e, MAP_MARKER_GET_VISIBLE, 1);
+        stub(&mut e, MAP_MARKER_GET_TRAVEL_LOC, 0);
+        assert_eq!(run(&mut e, 0x005a_51e0, 0x1000, 0, 0), (true, 1.0));
+        stub(&mut e, MAP_MARKER_GET_TRAVEL_LOC, 1);
+        assert_eq!(run(&mut e, 0x005a_51e0, 0x1000, 0, 0), (true, 2.0));
+        stub(&mut e, MAP_MARKER_GET_VISIBLE, 0);
+        assert_eq!(run(&mut e, 0x005a_51e0, 0x1000, 0, 0), (true, 0.0));
+        stub(&mut e, REF_GET_MAP_MARKER_DATA, 0);
+        assert_eq!(run(&mut e, 0x005a_51e0, 0x1000, 0, 0), (true, 0.0));
+        // No reference: 0.0, and the debug line prints anyway.
+        let w = words(0.0);
+        let lines = printed(&mut e, 5.0, 0x005a_51e0, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6204, w[0], w[1]])]);
+    }
+
+    #[test]
+    fn a5270_weapon_health_perc() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        let process = object(&mut e, &[(VSLOT_PROCESS_WEAPON_ITEM, 0x0f00_0021)]);
+        stub(&mut e, 0x0f00_0021, 0x6000);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        e.set_global(WEAPON_COMPARE_GLOBAL, 0x6666u32);
+        stub_args(&mut e, OBJECT_GET_FIELD_08, vec![0x6000], 0x7000);
+        stub_st0_args(&mut e, ITEM_CHANGE_GET_ITEM_HEALTH, vec![0x6000, 1], 42.5);
+        assert_eq!(run(&mut e, 0x005a_5270, a, 0, 0), (true, 42.5));
+        let w = words(42.5);
+        let lines = printed(&mut e, 0.0, 0x005a_5270, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6218, w[0], w[1]])]);
+        // The item's field equals the global: 100.0.
+        stub(&mut e, OBJECT_GET_FIELD_08, 0x6666);
+        assert_eq!(run(&mut e, 0x005a_5270, a, 0, 0), (true, 100.0));
+        // No weapon item: 100.0.
+        stub(&mut e, 0x0f00_0021, 0);
+        assert_eq!(run(&mut e, 0x005a_5270, a, 0, 0), (true, 100.0));
+        // No process or no actor: the result is left alone.
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_5270, a, 0, 0), (true, SENTINEL));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_5270, plain, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a5330_is_greeting_player_compares_the_world() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        let process = object(&mut e, &[(VSLOT_PROCESS_TEST_30C, SLOT_YES)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        stub_args(&mut e, REF_GET_PARENT_WORLD_SIMPLE, vec![a], 0x1234);
+        e.set_global(PLAYER, 0x1234u32);
+        assert_eq!(run(&mut e, 0x005a_5330, a, 0, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5330, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6238, w[0], w[1]])]);
+        e.set_global(PLAYER, 0x4321u32);
+        assert_eq!(run(&mut e, 0x005a_5330, a, 0, 0), (true, 0.0));
+        let other = object(&mut e, &[(VSLOT_PROCESS_TEST_30C, SLOT_NO)]);
+        stub(&mut e, ACTOR_GET_PROCESS, other);
+        e.set_global(PLAYER, 0x1234u32);
+        assert_eq!(run(&mut e, 0x005a_5330, a, 0, 0), (true, 0.0));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_5330, a, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_5330, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a53e0_is_combat_target() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        stub_args(&mut e, ACTOR_IS_IN_COMBAT_WITH_ACTOR, vec![a, 0x777], 1);
+        assert_eq!(run(&mut e, 0x005a_53e0, a, 0x777, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_53e0, a, 0x777, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6258, w[0], w[1]])]);
+        stub_args(&mut e, ACTOR_IS_IN_COMBAT_WITH_ACTOR, vec![a, 0x777], 0);
+        assert_eq!(run(&mut e, 0x005a_53e0, a, 0x777, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_53e0, plain, 0x777, 0), (true, 0.0));
+    }
+
+    /// One VATS check: the actor, the angle word and the debug format.
+    fn check_vats(addr: u32, callee: u32, angle: f32, format: u32) {
+        let mut e = engine_s3();
+        e.set_global(VATS_ANGLE_RIGHT, std::f32::consts::FRAC_PI_2);
+        e.set_global(VATS_ANGLE_LEFT, 4.712_389f32);
+        e.set_global(VATS_ANGLE_BACK, std::f32::consts::PI);
+        let a = actor(&mut e);
+        stub_st0_args(&mut e, callee, vec![a, 0x55, angle.to_bits()], 0.75);
+        assert_eq!(run(&mut e, addr, a, 0x55, 0), (true, 0.75));
+        let w = words(0.75);
+        let lines = printed(&mut e, 0.0, addr, a, 0x55, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![format, w[0], w[1]])]);
+        // A reference that is not an actor, or none: 0.0 and the line.
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, addr, plain, 0x55, 0), (true, 0.0));
+        assert_eq!(run(&mut e, addr, 0, 0x55, 0), (true, 0.0));
+        let w = words(0.0);
+        let lines = printed(&mut e, 3.0, addr, 0, 0x55, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![format, w[0], w[1]])]);
+    }
+
+    #[test]
+    fn a5460_vats_right_area_free() {
+        let angle = std::f32::consts::FRAC_PI_2;
+        check_vats(0x005a_5460, ACTOR_GET_VATS_AREA_FREE, angle, 0x0103_6270);
+    }
+
+    #[test]
+    fn a54f0_vats_left_area_free() {
+        check_vats(
+            0x005a_54f0,
+            ACTOR_GET_VATS_AREA_FREE,
+            4.712_389,
+            0x0103_628c,
+        );
+    }
+
+    #[test]
+    fn a5580_vats_back_area_free() {
+        let angle = std::f32::consts::PI;
+        check_vats(0x005a_5580, ACTOR_GET_VATS_AREA_FREE, angle, 0x0103_62a8);
+    }
+
+    #[test]
+    fn a5610_vats_front_area_free() {
+        check_vats(0x005a_5610, ACTOR_GET_VATS_AREA_FREE, 0.0, 0x0103_62c4);
+    }
+
+    #[test]
+    fn a5690_vats_right_target_visible() {
+        let angle = std::f32::consts::FRAC_PI_2;
+        check_vats(
+            0x005a_5690,
+            ACTOR_GET_VATS_TARGET_VISIBLE,
+            angle,
+            0x0103_62e0,
+        );
+    }
+
+    #[test]
+    fn a5720_vats_left_target_visible() {
+        check_vats(
+            0x005a_5720,
+            ACTOR_GET_VATS_TARGET_VISIBLE,
+            4.712_389,
+            0x0103_6300,
+        );
+    }
+
+    #[test]
+    fn a57b0_vats_back_target_visible() {
+        let angle = std::f32::consts::PI;
+        check_vats(
+            0x005a_57b0,
+            ACTOR_GET_VATS_TARGET_VISIBLE,
+            angle,
+            0x0103_6320,
+        );
+    }
+
+    #[test]
+    fn a5840_vats_front_target_visible() {
+        check_vats(0x005a_5840, ACTOR_GET_VATS_TARGET_VISIBLE, 0.0, 0x0103_6340);
+    }
+
+    #[test]
+    fn a58c0_xp_for_next_level() {
+        let mut e = engine_s3();
+        let player = e.mem.alloc(0x300);
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(player + PLAYER_PART_OFFSET, vtable);
+        e.mem.set_u32(vtable + VSLOT_PLAYER_PART_08, 0x0f00_0031);
+        stub_args(
+            &mut e,
+            0x0f00_0031,
+            vec![player + PLAYER_PART_OFFSET, 0x18],
+            1000,
+        );
+        e.set_global(PLAYER, player);
+        // The high bits of the level word are dropped.
+        stub(&mut e, PLAYER_GET_LEVEL, 0x7_0005);
+        let max_ptr = e.mem.alloc(8);
+        e.mem.set_u32(max_ptr, 30);
+        stub(&mut e, SETTING_GET_INT_PTR, max_ptr);
+        stub_args(&mut e, GET_REQUIRED_EXPERIENCE_POINTS, vec![6], 1500);
+        assert_eq!(run(&mut e, 0x005a_58c0, 0, 0, 0), (true, 500.0));
+        let w = words(500.0);
+        let lines = printed(&mut e, 0.0, 0x005a_58c0, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6360, w[0], w[1]])]);
+        // At the maximum level: 0.0 and the message.
+        e.mem.set_u32(max_ptr, 5);
+        assert_eq!(run(&mut e, 0x005a_58c0, 0, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_58c0, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_637c])]);
+    }
+
+    #[test]
+    fn a59a0_ignore_crime() {
+        let mut e = engine_s3();
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_TEST_320, SLOT_YES),
+            ],
+        );
+        assert_eq!(run(&mut e, 0x005a_59a0, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_59a0, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_63a0, a + 0x100])]);
+        let b = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_TEST_320, SLOT_NO),
+            ],
+        );
+        assert_eq!(run(&mut e, 0x005a_59a0, b, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_59a0, b, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_63bc, b + 0x100])]);
+        assert_eq!(run(&mut e, 0x005a_59a0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a5a50_gore_disabled_is_exactly_one() {
+        let mut e = engine_s3();
+        let byte = e.mem.alloc(4);
+        stub_args(&mut e, GORE_GET_BYTE_PTR, vec![GORE_OBJECT], byte);
+        e.mem.set_u8(byte, 1);
+        assert_eq!(run(&mut e, 0x005a_5a50, 0, 0, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5a50, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_63d4, w[0], w[1]])]);
+        e.mem.set_u8(byte, 2);
+        assert_eq!(run(&mut e, 0x005a_5a50, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a5ab0_actors_in_high_reads_the_count() {
+        let mut e = engine_s3();
+        e.mem.set_u32(ACTORS_IN_HIGH_OBJECT + 0x103b0, 7);
+        assert_eq!(run(&mut e, 0x005a_5ab0, 0, 0, 0), (true, 7.0));
+        e.mem.set_u32(ACTORS_IN_HIGH_OBJECT + 0x103b0, -3i32 as u32);
+        assert_eq!(run(&mut e, 0x005a_5ab0, 0, 0, 0), (true, -3.0));
+        let w = words(-3.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5ab0, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_63ec, w[0], w[1]])]);
+    }
+
+    #[test]
+    fn a5b10_reads_the_word_at_103b0() {
+        let mut e = engine_s3();
+        let base = 0x011e_0000u32;
+        e.map(0x011f_0000, 0x1000);
+        e.mem.set_u32(base + 0x103b0, 0xabcd);
+        assert_eq!(e.call(0x005a_5b10, &args![base]).u32(), 0xabcd);
+    }
+
+    #[test]
+    fn a5b30_force_hit_reaction_reads_the_actor_byte() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        e.mem.set_u8(a + 0x1b1, 3);
+        assert_eq!(run(&mut e, 0x005a_5b30, a, 0, 0), (true, 3.0));
+        let w = words(3.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5b30, a, 0, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_6408, a + 0x100, w[0], w[1]])]
+        );
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_5b30, plain, 0, 0), (true, SENTINEL));
+        assert_eq!(run(&mut e, 0x005a_5b30, 0, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a5bb0_reads_the_byte_at_1b1() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x300);
+        e.mem.set_u8(o + 0x1b1, 9);
+        assert_eq!(e.call(0x005a_5bb0, &args![o]).u8(), 9);
+    }
+
+    /// The three reputation-like functions: the form, the value, the line.
+    fn check_form_value(addr: u32, callee: u32, p2: u32, passed: u32, ret: Ret, expected: f64) {
+        let mut e = engine_s3();
+        let form = e.mem.alloc(0x40);
+        e.register_double(callee, move |_, a| {
+            assert_eq!(a, [form, passed]);
+            ret
+        });
+        stub_args(&mut e, FORM_PART_GET_NAME, vec![form + 0x18], 0x9400);
+        let result = e.mem.alloc(8);
+        e.mem.set_f64(result, SENTINEL);
+        assert!(e.call(addr, &args![0x1000u32, form, p2, result]).bool());
+        assert_eq!(e.mem.f64(result), expected);
+        e.call_log = Some(vec![]);
+        e.call(addr, &args![0x1000u32, form, p2, result]);
+        let w = words(expected);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, DEBUG_PRINT).is_empty());
+        trace_on(&mut e);
+        e.call(addr, &args![0x1000u32, form, p2, result]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT),
+            vec![vec![0x0103_643c, 0x9400, w[0], w[1]]]
+        );
+        // A null form leaves the result alone and prints nothing.
+        e.mem.set_f64(result, SENTINEL);
+        trace_on(&mut e);
+        e.call(addr, &args![0x1000u32, 0u32, p2, result]);
+        assert_eq!(e.mem.f64(result), SENTINEL);
+        assert!(calls_to(&take_log(&mut e), DEBUG_PRINT).is_empty());
+    }
+
+    #[test]
+    fn a5bd0_form_value_from_6155c0() {
+        let ret = Ret {
+            st0: 12.5,
+            ..Ret::default()
+        };
+        check_form_value(0x005a_5bd0, FORM_QUERY_6155C0, 0x33, 0x33, ret, 12.5);
+    }
+
+    #[test]
+    fn a5c40_form_value_from_616a60() {
+        let ret = Ret {
+            st0: -4.0,
+            ..Ret::default()
+        };
+        check_form_value(0x005a_5c40, FORM_QUERY_616A60, 0x33, 0x33, ret, -4.0);
+    }
+
+    #[test]
+    fn a5cb0_form_value_is_a_signed_byte() {
+        let ret = Ret {
+            eax: 0xfe,
+            ..Ret::default()
+        };
+        // Only the low byte of the second word is passed on.
+        check_form_value(0x005a_5cb0, FORM_QUERY_616A90, 0x1ff, 0xff, ret, -2.0);
+    }
+
+    /// The two objective functions: the quest, the objective and the line.
+    fn check_objective(addr: u32, field: u32, expected: f64, format: u32) {
+        let mut e = engine_s3();
+        let objective = e.mem.alloc(0x40);
+        e.mem.set_u32(objective + 0x20, field);
+        stub_args(&mut e, QUEST_GET_OBJECTIVE, vec![0x4000, 3], objective);
+        let result = e.mem.alloc(8);
+        e.mem.set_f64(result, SENTINEL);
+        trace_on(&mut e);
+        e.call(addr, &args![0x1000u32, 0x4000u32, 3u32, result]);
+        assert_eq!(e.mem.f64(result), expected);
+        let w = words(expected);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, DEBUG_PRINT), vec![vec![format, w[0], w[1]]]);
+        // No objective, or no quest: the result is left alone, no line.
+        stub(&mut e, QUEST_GET_OBJECTIVE, 0);
+        e.mem.set_f64(result, SENTINEL);
+        trace_on(&mut e);
+        e.call(addr, &args![0x1000u32, 0x4000u32, 3u32, result]);
+        e.call(addr, &args![0x1000u32, 0u32, 3u32, result]);
+        assert_eq!(e.mem.f64(result), SENTINEL);
+        assert!(calls_to(&take_log(&mut e), DEBUG_PRINT).is_empty());
+    }
+
+    #[test]
+    fn a5d30_objective_completed_needs_state_above_one() {
+        check_objective(0x005a_5d30, 2, 1.0, 0x0103_6458);
+        check_objective(0x005a_5d30, 1, 0.0, 0x0103_6458);
+    }
+
+    #[test]
+    fn a5dc0_greater_than_one() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x40);
+        for (value, expected) in [(0u32, false), (1, false), (2, true), (-5i32 as u32, false)] {
+            e.mem.set_u32(o + 0x20, value);
+            assert_eq!(e.call(0x005a_5dc0, &args![o]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn a5de0_objective_displayed_is_bit_zero() {
+        check_objective(0x005a_5de0, 3, 1.0, 0x0103_6478);
+        check_objective(0x005a_5de0, 2, 0.0, 0x0103_6478);
+    }
+
+    #[test]
+    fn a5e70_bit_zero_of_the_word_at_20() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x40);
+        e.mem.set_u32(o + 0x20, 0xff);
+        assert_eq!(e.call(0x005a_5e70, &args![o]).u32(), 1);
+        e.mem.set_u32(o + 0x20, 0xfe);
+        assert_eq!(e.call(0x005a_5e70, &args![o]).u32(), 0);
+    }
+
+    #[test]
+    fn a5e90_player_tag_skill() {
+        let mut e = engine_s3();
+        let a = actor(&mut e);
+        let class = e.mem.alloc(0x80);
+        for (i, value) in [11u32, 12, 5, 14].into_iter().enumerate() {
+            e.mem.set_u32(class + 0x44 + 4 * i as u32, value);
+        }
+        e.set_global(PLAYER, 0x8000u32);
+        stub_args(&mut e, TAG_SKILL_TEST, vec![5], 1);
+        stub_args(&mut e, PLAYER_GET_CLASS, vec![0x8000], class);
+        assert_eq!(run(&mut e, 0x005a_5e90, a, 5, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5e90, a, 5, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6498, w[0], w[1]])]);
+        // The skill is not among the four.
+        e.mem.set_u32(class + 0x4c, 6);
+        assert_eq!(run(&mut e, 0x005a_5e90, a, 5, 0), (true, 0.0));
+        // The first test fails.
+        e.mem.set_u32(class + 0x4c, 5);
+        stub_args(&mut e, TAG_SKILL_TEST, vec![5], 0);
+        assert_eq!(run(&mut e, 0x005a_5e90, a, 5, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_5e90, plain, 5, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_5e90, 0, 5, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a5f40_matches_any_of_four_words() {
+        let mut e = engine_s3();
+        let record = e.mem.alloc(0x80);
+        for (i, value) in [1u32, 2, 3, 4].into_iter().enumerate() {
+            e.mem.set_u32(record + 0x44 + 4 * i as u32, value);
+        }
+        for value in [1u32, 2, 3, 4] {
+            assert!(e.call(0x005a_5f40, &args![record, value]).bool());
+        }
+        assert!(!e.call(0x005a_5f40, &args![record, 5u32]).bool());
+        assert!(!e.call(0x005a_5f40, &args![record, 0u32]).bool());
+    }
+
+    #[test]
+    fn a5f90_hardcore_reads_the_player_byte() {
+        let mut e = engine_s3();
+        e.set_global(PLAYER, 0x5000u32);
+        stub_args(&mut e, PLAYER_IS_HARDCORE, vec![0x5000], 1);
+        assert_eq!(run(&mut e, 0x005a_5f90, 0, 0, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5f90, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_64b4, w[0], w[1]])]);
+        // No player: the result is left alone.
+        e.set_global(PLAYER, 0u32);
+        assert_eq!(run(&mut e, 0x005a_5f90, 0, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a5ff0_always_hardcore_reads_the_byte_at_e38() {
+        let mut e = engine_s3();
+        let player = e.mem.alloc(0x1000);
+        e.mem.set_u8(player + 0xe38, 1);
+        e.set_global(PLAYER, player);
+        assert_eq!(run(&mut e, 0x005a_5ff0, 0, 0, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_5ff0, 0, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_64c8, w[0], w[1]])]);
+        e.mem.set_u8(player + 0xe38, 0);
+        assert_eq!(run(&mut e, 0x005a_5ff0, 0, 0, 0), (true, 0.0));
+        e.set_global(PLAYER, 0u32);
+        assert_eq!(run(&mut e, 0x005a_5ff0, 0, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a6050_reads_the_byte_at_e38() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x1000);
+        e.mem.set_u8(o + 0xe38, 7);
+        assert_eq!(e.call(0x005a_6050, &args![o]).u8(), 7);
+    }
+
+    #[test]
+    fn a6070_challenge_locked_is_bit_zero_of_the_word_at_70() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x100);
+        e.mem.set_u32(o + 0x70, 3);
+        assert_eq!(run(&mut e, 0x005a_6070, 0, o, 0), (true, 1.0));
+        let w = words(1.0);
+        let lines = printed(&mut e, 0.0, 0x005a_6070, 0, o, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_64e4, w[0], w[1]])]);
+        e.mem.set_u32(o + 0x70, 2);
+        assert_eq!(run(&mut e, 0x005a_6070, 0, o, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_6070, 0, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a60d0_bit_zero_of_the_word_at_70() {
+        let mut e = engine_s3();
+        let o = e.mem.alloc(0x100);
+        e.mem.set_u32(o + 0x70, 0xff);
+        assert_eq!(e.call(0x005a_60d0, &args![o]).u32(), 1);
+        e.mem.set_u32(o + 0x70, 0xfe);
+        assert_eq!(e.call(0x005a_60d0, &args![o]).u32(), 0);
+    }
+
+    #[test]
+    fn a60f0_challenge_completed_passes_the_value_through() {
+        let mut e = engine_s3();
+        stub_args(&mut e, CHALLENGE_GET_COMPLETED, vec![0x6100], 7);
+        assert_eq!(run(&mut e, 0x005a_60f0, 0, 0x6100, 0), (true, 7.0));
+        let w = words(7.0);
+        let lines = printed(&mut e, 0.0, 0x005a_60f0, 0, 0x6100, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_64fc, w[0], w[1]])]);
+        stub(&mut e, CHALLENGE_GET_COMPLETED, -1i32 as u32);
+        assert_eq!(run(&mut e, 0x005a_60f0, 0, 0x6100, 0), (true, -1.0));
+        assert_eq!(run(&mut e, 0x005a_60f0, 0, 0, 0), (true, SENTINEL));
     }
 }
