@@ -25,7 +25,43 @@
 //! `UnloadCell`, `004624b0` (the scan of the data directory for plugin
 //! files, whose Windows file-find imports are called by their import
 //! slots) and the small `TESFile`/stream helpers the compiler emitted next to
-//! them. The next session continues at `00462ee0` (`CreateThreadSafeFiles`).
+//! them. Session 2 stops before `00462ee0`.
+//!
+//! Session 3 (the next 40 functions, `00462ee0` to `0046a060`) holds the
+//! data load `00463070` (the plugin files chosen, opened and read, then
+//! virtual `0x88` on the forms of about 40 lists), the file loader
+//! `00467780` and the record loader `00467bd0` (one case per record type),
+//! `CreateFormOfType` (`00465110`, a table of constructors), the reference
+//! placement `004698a0`, `CleanUpBadForms`, `GetNextID` and its helpers, the
+//! group check `004695a0` and the small accessors and setters the compiler
+//! emitted next to them. The next session continues at `0046a080` (a
+//! placement function of the same family, called by `004698a0` for
+//! projectiles).
+//!
+//! Notes for session 3:
+//! - Form type numbers (the byte at `TESForm +4` and the number
+//!   `TESFile::GetTESForm` answers for a record) index a name table in the
+//!   exe at `0x01187004`; the `FORM_TYPE_*` constants are documented with the
+//!   record code that table gives (`FORM_TYPE_CELL` is `CELL`, ...). The
+//!   dispatch tables of `00467bd0` (`0x0046943c`) and `004695a0`
+//!   (`0x00469678`) are read off the exe and written as lists
+//!   ([`GENERIC_FORM_TYPES`], [`SAVE_SKIPPED_GROUP_TYPES`]).
+//! - A pushed word that the decompiler hung on the wrong call is the rule
+//!   in this unit: `PUSH x; CALL getter; MOV ECX,EAX; CALL method` is
+//!   `method(getter(), x)` whenever the getter has a plain `RET`. The
+//!   arguments of every call were checked against the `RET n` of the callee.
+//!   Example: `00463070` logs a warning as `LOG_MESSAGE(00403df0(object),
+//!   name)`; the name is pushed before `00403df0`, which only reads `ECX`
+//!   and leaves the word on the stack, so the logging call behind it
+//!   receives it as its first format argument.
+//! - The record loaders keep state in words of the exe's data
+//!   (`LOADING_CELL`, `LOADING_WORLD_SPACE`, `LOADING_TOPIC_INFO`, the
+//!   progress counters); `00467780` clears the first three at its start.
+//!   The compiler's exception frames of `00463070`, `00467bd0`, `00465110`,
+//!   `00469500` and `004698a0` are not translated.
+//! - `fn_00469880` is a `_mbscmp` wrapper (the map names it
+//!   `previous_character`); `00464f60` is the map's `GetNavMeshByIndex`
+//!   (a smart-pointer array lookup).
 //!
 //! Notes for session 2:
 //! - The virtual at `0x130` of a `TESForm` is the editor id getter and takes
@@ -549,6 +585,443 @@ const WORLD_SPACE_TYPE_DESCRIPTOR: u32 = 0x0118_3fd0;
 
 /// Sets a `BSStringT` (`this`, the text); answers `this`.
 const SUMMARY_SET: u32 = 0x0043_8390;
+
+// Session 3 (`00462ee0` to `0046a060`): more callees, data and layouts.
+//
+// Form type numbers: the loaders below compare the number
+// `TESFile::GetTESForm` (`00472660`) answers (the type of the record the file
+// is positioned on) and the number of `TESForm +4` with the values below. The
+// exe keeps a name table for them at [`FORM_TYPE_NAME_TABLE`] (12-byte
+// entries whose first word points to the four-letter record code); the code
+// in the doc of each constant is that table's entry.
+/// `TES4`, the file header record.
+const FORM_TYPE_TES4: u32 = 0x01;
+/// `GRUP`, a group header.
+const FORM_TYPE_GRUP: u32 = 0x02;
+/// `GMST`.
+const FORM_TYPE_GMST: u32 = 0x03;
+/// `SKIL`.
+const FORM_TYPE_SKIL: u32 = 0x0f;
+/// `ARMO` and `ARMA`, which `fn_00467bd0` accepts for one another.
+const FORM_TYPE_ARMO: u32 = 0x18;
+const FORM_TYPE_ARMA: u32 = 0x60;
+/// `NPC_` and `CREA`: the references of these types are 0x1C8 and 0x1C0
+/// bytes in `fn_004698a0`.
+const FORM_TYPE_NPC: u32 = 0x2a;
+const FORM_TYPE_CREATURE: u32 = 0x2b;
+/// `PROJ` and `EXPL`: `fn_004698a0` hands these to `0046a080` / `0046a190`.
+const FORM_TYPE_PROJECTILE: u32 = 0x33;
+const FORM_TYPE_EXPLOSION: u32 = 0x51;
+/// `NAVI`.
+const FORM_TYPE_NAVI: u32 = 0x38;
+/// `CELL`, `WRLD`, `LAND`, `NAVM`.
+const FORM_TYPE_CELL: u32 = 0x39;
+const FORM_TYPE_WORLD_SPACE: u32 = 0x41;
+const FORM_TYPE_LAND: u32 = 0x42;
+const FORM_TYPE_NAV_MESH: u32 = 0x43;
+/// `DIAL` and `INFO`.
+const FORM_TYPE_TOPIC: u32 = 0x45;
+const FORM_TYPE_TOPIC_INFO: u32 = 0x46;
+/// `IDLE` and `CPTH`.
+const FORM_TYPE_IDLE: u32 = 0x48;
+const FORM_TYPE_CAMERA_PATH: u32 = 0x5c;
+/// `TOFT`.
+const FORM_TYPE_TOFT: u32 = 0x50;
+/// `AVIF` and `DOBJ`.
+const FORM_TYPE_ACTOR_VALUE: u32 = 0x59;
+const FORM_TYPE_DEFAULT_OBJECTS: u32 = 0x64;
+/// The types of reference records: `REFR`, `ACHR`, `ACRE`, `PMIS`, `PGRE`,
+/// `PBEA`, `PFLA` and `PCBE`.
+const REFERENCE_FORM_TYPES: [u32; 8] = [0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x69];
+/// The record types `fn_00467bd0` loads with the generic sequence (create
+/// the form when there is none, load it, add it to the data handler): the
+/// entries of its dispatch table (`0x0046943c`) that lead to that code.
+const GENERIC_FORM_TYPES: [u8; 66] = [
+    0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x16, 0x17, 0x23, 0x30, 0x31, 0x33, 0x35, 0x36, 0x37, 0x47, 0x49, 0x4a, 0x4b, 0x4d, 0x4e, 0x4f,
+    0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x5a, 0x5b, 0x5d, 0x5e, 0x5f, 0x61, 0x62, 0x63,
+    0x65, 0x66, 0x68, 0x6a, 0x6b, 0x6c, 0x6d, 0x6e, 0x6f, 0x70, 0x71, 0x72, 0x73, 0x74, 0x75, 0x76,
+    0x77, 0x78,
+];
+/// The exe's form type name table: 12-byte entries, the first word of each
+/// points to the record code (`"NONE"`, `"TES4"`, `"GRUP"`, `"GMST"`, ...).
+const FORM_TYPE_NAME_TABLE: u32 = 0x0118_7004;
+/// The record flags of the current record header (`m_currentform` `+8`):
+/// partial (`0x4000`) and the bit `fn_00467bd0` tests before the two calls
+/// around the load (`0x20`).
+const RECORD_FLAG_PARTIAL: u32 = 0x4000;
+const RECORD_FLAG_DELETED: u32 = 0x20;
+/// `ONAM` as the little-endian word `TESFile::GetTESChunk` answers.
+const CHUNK_ONAM: u32 = 0x4d41_4e4f;
+
+// Words of the exe's data that the record loaders keep between records.
+/// The cell `fn_00467bd0` is loading references into (`CELL` records set it).
+const LOADING_CELL: u32 = 0x011c_3f30;
+/// The world space being loaded (`WRLD` records set it).
+const LOADING_WORLD_SPACE: u32 = 0x011c_3f34;
+/// The topic info (`INFO`) being loaded.
+const LOADING_TOPIC_INFO: u32 = 0x011c_3f38;
+/// The topic (`DIAL`) a partial record remembers.
+const LOADING_TOPIC: u32 = 0x011c_beb0;
+/// The sum of the form counts of the files being loaded and the number of
+/// records read so far (the progress of "Loading Files").
+const LOAD_FORM_TOTAL: u32 = 0x011c_3f24;
+const LOAD_FORM_DONE: u32 = 0x011c_3f28;
+/// The byte `CleanUpBadForms` and `fn_00463070` read and clear.
+const BAD_FORMS_FLAG: u32 = 0x011c_54b9;
+/// A counter `fn_00467780` increments for every record while a save game is
+/// loaded.
+const SAVE_RECORD_COUNTER: u32 = 0x011c_40a8;
+/// The object (pointer variable) `fn_00467780` registers editor ids with.
+const EDITOR_ID_MAP: u32 = 0x011c_54c8;
+/// The object `GetNextID` brackets its work with (`0040fbf0(name)` and
+/// `0040fba0()` with this as `this`).
+const FUNCTION_TIMER: u32 = 0x011c_4000;
+/// Two objects whose text pointer (`+4`, read by `00403df0`) is the message
+/// `fn_00463070` logs.
+const MASTER_WARNING_TEXT: u32 = 0x011c_4024;
+const MASTER_SUMMARY_TEXT: u32 = 0x011c_4048;
+/// The object whose `00867890` runs between two of the form lists.
+const OBJECT_011DE7B8: u32 = 0x011d_e7b8;
+/// The base form `fn_004698a0` compares with before it hands its last
+/// argument to the extra data list (a word of the group
+/// `0x011ca220`..`0x011ca26c`).
+const BASE_FORM_011CA23C: u32 = 0x011c_a23c;
+/// The words of that group `fn_004698a0` compares the base form with before
+/// it gives the new reference an extra object (in the code's order).
+const SPECIAL_BASE_FORM_WORDS: [u32; 9] = [
+    0x011c_a230,
+    0x011c_a234,
+    0x011c_a220,
+    0x011c_a250,
+    0x011c_a244,
+    0x011c_a248,
+    0x011c_a224,
+    0x011c_a228,
+    0x011c_a22c,
+];
+/// Doubles in the exe's data: `100.0` and the version limit `0.2` below which
+/// a persistent reference is reported.
+const PERCENT_SCALE: u32 = 0x0101_7a40;
+const OLD_FILE_VERSION_LIMIT: u32 = 0x0101_8a90;
+
+// Messages (addresses of the format strings in the exe's data).
+/// `"MASTERFILE: Invalid forms were encountered on load and need to be
+/// removed from the master file. Contact a programmer immediately to fix any
+/// problems in the file."`.
+const INVALID_FORMS_MESSAGE: u32 = 0x0101_88b0;
+/// `"Loading Files %d%% (%s)"`.
+const LOADING_FILES_FORMAT: u32 = 0x0101_89a0;
+/// `"Data\\%s*.bsa"` and `"DATA\\%s"`.
+const BSA_SEARCH_FORMAT: u32 = 0x0101_8834;
+const BSA_PATH_FORMAT: u32 = 0x0101_882c;
+/// `"FORMS: Form (%08X) in file \"%s\" has wrong type.\n\nShould be:\t%s\nIs:\t\t%s"`.
+const WRONG_TYPE_FORMAT: u32 = 0x0101_8b98;
+/// `"FORMS: Partial form (%08X) found with no matching original data."` and
+/// the message logged when the partial flag of such a form is cleared.
+const PARTIAL_FORM_FORMAT: u32 = 0x0101_8b50;
+const PARTIAL_FORM_CLEARED_MESSAGE: u32 = 0x0101_8af8;
+/// `"CELLS: Error adding %scell (%08X) to world space (%08X). Cell will be
+/// destroyed."`, and the two strings for its `%s`: `"Persistent "` and `""`.
+const CELL_ADD_ERROR_FORMAT: u32 = 0x0101_8a98;
+const PERSISTENT_PREFIX: u32 = 0x0101_8aec;
+const NO_PREFIX: u32 = 0x0101_1584;
+/// `"CELLS: ref (%08X) to base object %s (%08X) in cell %s (%i, %i) (%08X) is
+/// persistent in the non-persistent file %s."`.
+const PERSISTENT_REFERENCE_FORMAT: u32 = 0x0101_8a18;
+/// `"FORMS: Unknown %s_ID in ConstructObject."` and the message for a record
+/// whose type is 0 and which has no tag.
+const UNKNOWN_ID_FORMAT: u32 = 0x0101_89ec;
+const UNKNOWN_RECORD_MESSAGE: u32 = 0x0101_89b8;
+/// `"FORMS: TESDataHandler trying to create TESForm for unknown type '%s'."`.
+const CREATE_UNKNOWN_FORM_FORMAT: u32 = 0x0101_8958;
+/// `"TESDataHandler::GetNextID"`.
+const GET_NEXT_ID_NAME: u32 = 0x0101_8be0;
+
+// `TESFile` (offsets are the Xbox PDB fields).
+/// Bit 2 of `m_Flags` (`+0x3E8`), the bit `FILE_SET_FLAG_BIT_2` sets: the file
+/// is selected for loading (`00471cd0`).
+const FILE_IS_SELECTED: u32 = 0x0047_1cd0;
+/// `TESFile::GetThreadSafeFile` (Xbox PDB).
+const FILE_GET_THREAD_SAFE_FILE: u32 = 0x0047_39b0;
+/// `TESFile::IsFileVersionTooHigh` (Ghidra project name): whether the header
+/// version is above a limit in the exe's data (logs when it is).
+const FILE_VERSION_TOO_HIGH: u32 = 0x0047_38a0;
+/// A check of the master files of a file (walks `listMasters` with
+/// `FindFirstFileA`); `fn_00463070` logs a warning when it answers true for
+/// a non-master file.
+const FILE_MASTERS_CHECK: u32 = 0x0047_1af0;
+/// The name of the master at a 1-based index of `listMasters`, or null.
+const FILE_GET_MASTER_NAME: u32 = 0x0047_1a60;
+/// Sets the compile index of the file: the top byte of the word at `+0x3E4`
+/// and the byte `cCompileIndex` (`+0x40C`); takes the index as a byte.
+const FILE_SET_COMPILE_INDEX: u32 = 0x0047_3210;
+/// `TESFile::GetTESForm` (Ghidra project name): the type number of the record
+/// the file is positioned on (the record header is read first when
+/// `m_currentform` is empty).
+const FILE_GET_RECORD_TYPE: u32 = 0x0047_2660;
+/// The form id of the current record (`m_currentform` `+0xC`, file `+0x24C`).
+const FILE_GET_FORM_ID: u32 = 0x008d_8ac0;
+/// `00473d00(offset, size)`: moves within the file (for `TOFT` records).
+const FILE_SEEK: u32 = 0x0047_3d00;
+/// `00473f20(id, file)` (cdecl): registers a record id read from a header.
+const FILE_REGISTER_ID: u32 = 0x0047_3f20;
+/// `00473ce0(size)`, which `SetMasterFileLargeBuffer` calls on each master.
+const FILE_SET_LARGE_BUFFER: u32 = 0x0047_3ce0;
+/// `0044edb0`: the answer `fn_00463070` wants true (with `bCached`) from a
+/// file before it loads it as part of a partial load.
+const FILE_STEP_44EDB0: u32 = 0x0044_edb0;
+
+// `TESForm` and friends.
+/// `TESForm::SetFile(file)` (Xbox PDB), and three steps `fn_00467bd0` runs.
+const FORM_SET_FILE: u32 = 0x0048_4f50;
+const FORM_STEP_484AB0: u32 = 0x0048_4ab0;
+const FORM_STEP_483870: u32 = 0x0048_3870;
+const FORM_STEP_483720: u32 = 0x0048_3720;
+/// Cdecl, one argument (a form id): true for an id from 1 to `0x7FF`.
+const FORM_ID_CHECK: u32 = 0x0048_4b40;
+/// `TESForm::SetFireOff(flag)` and `TESForm::SetDestructible(flag)` (Xbox
+/// PDB).
+const FORM_SET_FIRE_OFF: u32 = 0x0048_4a70;
+const FORM_SET_DESTRUCTIBLE: u32 = 0x0048_46a0;
+/// Vtable slots of `TESForm` used by the loaders: a test whether the form
+/// takes partial records (answer in AL), the two calls around loading a
+/// form (`0x18`, `0x14`) and a hook called with the file (`0x24`).
+const FORM_VTABLE_IS_PARTIAL: u32 = 0x118;
+const FORM_VTABLE_BEFORE_LOAD: u32 = 0x18;
+const FORM_VTABLE_AFTER_LOAD: u32 = 0x14;
+const FORM_VTABLE_SET_FILE_HOOK: u32 = 0x24;
+/// Slot `0x88` of the forms in the lists of `fn_00463070`.
+const VTABLE_SLOT_88: u32 = 0x88;
+/// Slots of the references and base objects `fn_00467bd0` and
+/// `fn_004698a0` call.
+const REFERENCE_VTABLE_SET_CELL: u32 = 0x228;
+const REFERENCE_VTABLE_GET_POSITION: u32 = 0x1f4;
+const REFERENCE_VTABLE_SET_EXTRA: u32 = 0x1cc;
+const REFERENCE_VTABLE_SLOT_1CC: u32 = 0x1cc;
+const REFERENCE_VTABLE_SLOT_1D0: u32 = 0x1d0;
+const REFERENCE_VTABLE_SLOT_1F4: u32 = 0x1f4;
+const REFERENCE_VTABLE_SLOT_100: u32 = 0x100;
+const REFERENCE_VTABLE_SLOT_48: u32 = 0x48;
+const BASE_VTABLE_ADDED_TO_CELL: u32 = 0x16c;
+const BASE_VTABLE_REMOVED_FROM_CELL: u32 = 0x170;
+const ACTOR_VTABLE_SLOT_290: u32 = 0x290;
+const ACTOR_VTABLE_SLOT_46C: u32 = 0x46c;
+
+// References (`TESObjectREFR`) and cells.
+/// `TESObjectREFR::CreateReference(type, 1)` (Xbox PDB, cdecl).
+const REFERENCE_CREATE: u32 = 0x0056_4480;
+const REFERENCE_SET_BASE_TYPE: u32 = 0x004f_15a0;
+/// The word at `+0x40` of a reference: the cell it is in.
+const REFERENCE_GET_PARENT_CELL: u32 = 0x008d_6f30;
+/// `TESObjectREFR::GetRefPersists`, `MustRefPersist`, `SetRefPersists(flag)`,
+/// `SetObjectReference(base)`, `SetLocationOnReference(position)` (Ghidra
+/// project / Xbox PDB names).
+const REFERENCE_GET_PERSISTS: u32 = 0x0056_53d0;
+const REFERENCE_MUST_PERSIST: u32 = 0x0056_5260;
+const REFERENCE_SET_PERSISTS: u32 = 0x0056_5480;
+const REFERENCE_SET_OBJECT_REFERENCE: u32 = 0x0057_5690;
+const REFERENCE_SET_LOCATION: u32 = 0x0057_5830;
+/// `00575700(x, y, z)`: sets the rotation (three words by value).
+const REFERENCE_SET_ROTATION: u32 = 0x0057_5700;
+/// `TESObjectREFR::GetOrientation(buffer)` (Xbox PDB): fills the matrix and
+/// answers its address.
+const REFERENCE_GET_ORIENTATION: u32 = 0x0056_fa00;
+/// The word at `+8` of a reference and its setter (`this`, flags).
+const REFERENCE_FLAGS: u32 = 0x0044_ddc0;
+const REFERENCE_SET_FLAGS: u32 = 0x0040_3550;
+/// `TESObjectREFR::HasContainer` (Ghidra project name).
+const REFERENCE_HAS_CONTAINER: u32 = 0x0055_d310;
+const REFERENCE_STEP_564C60: u32 = 0x0056_4c60;
+const REFERENCE_STEP_564E00: u32 = 0x0056_4e00;
+const REFERENCE_STEP_564EB0: u32 = 0x0056_4eb0;
+const REFERENCE_STEP_43FCD0: u32 = 0x0043_fcd0;
+/// The extra data list of a reference (`this + 0x44`).
+const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
+/// The base object of a reference (`004181e0` calls `007af430`).
+const REFERENCE_BASE_OBJECT: u32 = 0x0041_81e0;
+/// `ExtraDataList::SetPersistentCell(cell)` (Xbox PDB), `BaseExtraList::AddExtra`
+/// (Xbox PDB) and the steps `fn_004698a0` runs on a list.
+const EXTRA_SET_PERSISTENT_CELL: u32 = 0x0041_d390;
+const EXTRA_ADD: u32 = 0x0040_ff60;
+/// The constructor of the 0x10-byte extra built from `extra_value`.
+const EXTRA_CONSTRUCT: u32 = 0x0041_faf0;
+const EXTRA_STEP_420A60: u32 = 0x0042_0a60;
+const EXTRA_CHECK_42CDE0: u32 = 0x0042_cde0;
+const EXTRA_STEP_41AEB0: u32 = 0x0041_aeb0;
+/// The 0xAC-byte object (aligned allocator) a new reference gets for some
+/// base forms: constructor `(this, 0)`.
+const SPECIAL_EXTRA_CONSTRUCT: u32 = 0x00a5_ecb0;
+/// `InventoryChanges::GetInventoryChanges(reference)` (Xbox PDB, cdecl) and
+/// three steps on the result.
+const INVENTORY_CHANGES_GET: u32 = 0x004b_f220;
+const INVENTORY_STEP_4D1440: u32 = 0x004d_1440;
+const INVENTORY_STEP_4D1610: u32 = 0x004d_1610;
+const INVENTORY_STEP_4D1960: u32 = 0x004d_1960;
+/// `BGSDestructibleObjectForm::IsDestructible` (Xbox PDB, cdecl).
+const DESTRUCTIBLE_CHECK: u32 = 0x0047_53d0;
+/// Checks and steps on the component at `+0x30` of a base object.
+const COMPONENT_CHECK: u32 = 0x0047_cdb0;
+const COMPONENT_STEP: u32 = 0x0047_ce10;
+/// `TESObjectCELL::AddReference(reference, flag)`, `RemoveReference` (Xbox
+/// PDB), `RunScripts(1, 1)` and the cell tests.
+const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
+const CELL_REMOVE_REFERENCE: u32 = 0x0054_ca90;
+const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
+/// The test between `"Persistent "` and `""` in the cell error message.
+const CELL_IS_PERSISTENT: u32 = 0x0055_16c0;
+const CELL_GET_DATA_X: u32 = 0x0054_4c30;
+const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
+const CELL_SET_LAND: u32 = 0x0054_70a0;
+const LAND_CONSTRUCT: u32 = 0x0053_3120;
+const LAND_SET_CELL: u32 = 0x0053_40e0;
+const WORLD_SPACE_CONSTRUCT: u32 = 0x0058_2c20;
+const WORLD_GET_CELL_FROM_WORLD_COORD: u32 = 0x0058_7550;
+const WORLD_ADD_PERSISTENT_REF: u32 = 0x0058_7ff0;
+const WORLD_STEP_5857B0: u32 = 0x0058_57b0;
+const WORLD_STEP_589F50: u32 = 0x0058_9f50;
+const CELL_STEP_54DE80: u32 = 0x0054_de80;
+/// `ProcessLists::RemoveReference(reference, 3)` (Xbox PDB), `this` is the
+/// object at [`OBJECT_011E0E80`].
+const PROCESS_LISTS_REMOVE_REFERENCE: u32 = 0x0096_d470;
+/// `TES::IsCellLoaded(cell, 0)`, `TES::SetNavMeshInfoMap(map)` (Xbox PDB) and
+/// the getter of the map.
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+const TES_SET_NAV_MESH_INFO_MAP: u32 = 0x0045_afb0;
+const TES_GET_NAV_MESH_INFO_MAP: u32 = 0x0045_af00;
+/// Steps `fn_00463070` runs on the `TES` singleton: `(0, 0)`, `(0)`, none.
+const TES_STEP_4539A0: u32 = 0x0045_39a0;
+const TES_STEP_8D7DC0: u32 = 0x008d_7dc0;
+const TES_STEP_450D80: u32 = 0x0045_0d80;
+/// `BGSDefaultObjectManager::Instance()` and
+/// `BGSDefaultObjectManager::GetDefaultObject(index)` (Xbox PDB, cdecl).
+const DEFAULT_OBJECT_MANAGER_INSTANCE: u32 = 0x0058_d680;
+const DEFAULT_OBJECT_MANAGER_GET: u32 = 0x0058_db10;
+/// `TESFaction::CheckFactionReactions()` (Xbox PDB).
+const FACTION_CHECK_REACTIONS: u32 = 0x005f_d850;
+/// Tail steps of `fn_00463070`.
+const HANDLER_STEP_46FB50: u32 = 0x0046_fb50;
+const PLAYER_STEP_8D50E0: u32 = 0x008d_50e0;
+const STEP_867890: u32 = 0x0086_7890;
+const STEP_61BA10: u32 = 0x0061_ba10;
+const STEP_61A5A0: u32 = 0x0061_a5a0;
+const STEP_408DF0: u32 = 0x0040_8df0;
+const IDLE_MANAGER_FINISH: u32 = 0x005f_fc20;
+const CAMERA_PATH_MANAGER_FINISH: u32 = 0x0058_b970;
+/// The handler's error report (`this`, code): `4` when a file cannot be
+/// opened or closed, `3` when loading one fails.
+const HANDLER_REPORT_ERROR: u32 = 0x0046_a330;
+/// `TESDataHandler::GenerateDefaultObjects` (Xbox PDB).
+const GENERATE_DEFAULT_OBJECTS: u32 = 0x0046_a370;
+/// The placement of projectiles and explosions (`this`, base form, position,
+/// rotation, cell, world space).
+const PLACE_PROJECTILE: u32 = 0x0046_a080;
+const PLACE_EXPLOSION: u32 = 0x0046_a190;
+/// Constructors of the references `fn_004698a0` builds
+/// (`Character::Character`, `Creature::Creature`,
+/// `TESObjectREFR::TESObjectREFR`).
+const CHARACTER_CONSTRUCT: u32 = 0x008d_1d30;
+const CREATURE_CONSTRUCT: u32 = 0x008d_43a0;
+const REFERENCE_CONSTRUCT: u32 = 0x0055_a2f0;
+/// The aligned allocator (one argument, the size).
+const ALIGNED_NEW: u32 = 0x00aa_13e0;
+/// `TESDataHandler::CreateFormOfType`'s helper: the name of a form type
+/// (cdecl, the type; `""` from type 0x79).
+const FORM_TYPE_NAME: u32 = 0x0046_12b0;
+/// Constructors used by `fn_00467bd0`.
+const NAV_MESH_INFO_MAP_CONSTRUCT: u32 = 0x006b_5c30;
+const NAV_MESH_CONSTRUCT: u32 = 0x0068_eb80;
+const TOPIC_CONSTRUCT: u32 = 0x0061_8580;
+const TOPIC_INFO_CONSTRUCT: u32 = 0x0061_ccd0;
+const SKILL_STEP_617EA0: u32 = 0x0061_7ea0;
+/// `00404a70()`: the object whose virtual `0x28` takes a `GMST` chunk.
+const GAME_SETTINGS_OBJECT: u32 = 0x0040_4a70;
+/// A `NiPointer<NavMesh>` and its helpers: assignment of a raw pointer
+/// (`this`, pointer), copy construction (`this`, `&other`), the destructor,
+/// the getter of the pointer (`this` is the address of the pointer), and the
+/// holder `fn_00469500` fills.
+const SMART_POINTER_SET: u32 = 0x0042_fd70;
+const SMART_POINTER_COPY: u32 = 0x0042_fa20;
+const SMART_POINTER_DESTROY: u32 = 0x0042_fa40;
+const SMART_POINTER_GET: u32 = 0x0055_9450;
+const SMART_POINTER_HOLDER_ADD: u32 = 0x0042_f850;
+const HOLDER_CONSTRUCT: u32 = 0x0042_f800;
+/// The members of a nav mesh: the pointer at `+0x24` (`0059bb30`), the word at
+/// `+0x64` of that (`0070ec90`) and the setter `00557760(member, holder)`.
+const NAV_MESH_MEMBER: u32 = 0x0059_bb30;
+const NAV_MESH_MEMBER_STATE: u32 = 0x0070_ec90;
+const NAV_MESH_MEMBER_SET: u32 = 0x0055_7760;
+/// The array's size word (`+8`).
+const ARRAY_COUNT_FIELD: u32 = 0x0044_ddc0;
+/// `00470110(this)`.
+const STEP_470110: u32 = 0x0047_0110;
+/// The getter `fn_00465040` and `fn_00463070` use for a list / the holder of
+/// a list `fn_00463070` walks.
+const LIST_GETTER_6377E0: u32 = 0x0063_77e0;
+const HOLDER_GETTER: u32 = 0x0041_69d0;
+/// `TESDataHandler::CleanUpBadForms` helpers: list is empty (count at `+8`),
+/// sets the byte at `0x01202d63`, sets `bClearingData`, and the list's
+/// first-position / next / clear.
+const BAD_FORM_LIST_IS_EMPTY: u32 = 0x0076_b610;
+const BAD_FORMS_SET_FLAG: u32 = 0x0046_1300;
+const HANDLER_SET_CLEARING_DATA: u32 = 0x0045_0b40;
+const BAD_FORM_LIST_FIRST: u32 = 0x0055_9450;
+const BAD_FORM_LIST_NEXT: u32 = 0x0057_cbe0;
+const BAD_FORM_LIST_CLEAR: u32 = 0x0055_9c30;
+/// `listBadForms`: find an item (`this`, `&item`, 0) and append one (`this`,
+/// `&item`).
+const BAD_FORM_LIST_FIND: u32 = 0x0049_c680;
+const BAD_FORM_LIST_APPEND: u32 = 0x0047_00d0;
+/// `fn_00463070`: the cell of an item of the list at `+0x10` (`005f36f0`).
+const ITEM_GET_CELL: u32 = 0x005f_36f0;
+/// `00403df0(this)`: `this ? this->text : 0`.
+const TEXT_OF: u32 = 0x0040_3df0;
+/// `strrchr` (cdecl wrapper), `ArchiveManager`'s "is this archive open"
+/// (cdecl, path) and the buffers of `open_file_archives`.
+const STRING_RFIND_CHAR: u32 = 0x0040_ab30;
+const ARCHIVE_IS_OPEN: u32 = 0x00af_5320;
+const ARCHIVE_BASE_NAME: u32 = 0x000;
+const ARCHIVE_SEARCH: u32 = 0x104;
+const ARCHIVE_PATH: u32 = 0x208;
+const ARCHIVE_FIND_DATA: u32 = 0x30c;
+const ARCHIVE_FRAME_SIZE: u32 = 0x44c;
+/// The `GetNextID` timer entry/exit.
+const FUNCTION_TIMER_ENTER: u32 = 0x0040_fbf0;
+const FUNCTION_TIMER_LEAVE: u32 = 0x0040_fba0;
+/// `0084aad0(form id)` on the object at `0x011ddf38`: whether the id is in
+/// use there.
+const FORM_ID_IN_USE: u32 = 0x0084_aad0;
+/// `_mbscmp`.
+const MBSCMP: u32 = 0x00ec_8244;
+/// `_ftol2` (`ST0` is the leading `f64` argument).
+const FTOL2: u32 = 0x00ec_62c0;
+/// Save game hooks of `fn_00467780` / `fn_004695a0` (`this` is the object at
+/// `0x011de45c`): whether a save game is being loaded, a periodic tick, and
+/// the announcement of a form.
+const SAVE_LOAD_ACTIVE: u32 = 0x0047_c850;
+const SAVE_LOAD_TICK: u32 = 0x0086_1ea0;
+const SAVE_LOAD_ANNOUNCE: u32 = 0x0086_32a0;
+/// `00470200(this = editor id map; editor id, form)`.
+const EDITOR_ID_MAP_ADD: u32 = 0x0047_0200;
+/// Nodes and the scene (`fn_004698a0`): two steps on a node with a position
+/// and an orientation, `bhkNiCollisionObject::ResetSim`, the shadow scene
+/// node getter, `ShadowSceneNode::AddObject`, `NiAVObject::UpdateProperties`,
+/// a vector constructor and a step with it.
+const NODE_STEP_440460: u32 = 0x0044_0460;
+const NODE_STEP_43FA80: u32 = 0x0043_fa80;
+const COLLISION_RESET_SIM: u32 = 0x00c6_bd00;
+const SHADOW_SCENE_NODE_GETTER: u32 = 0x0045_0b80;
+const SCENE_ADD_OBJECT: u32 = 0x00b5_eeb0;
+const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+const VECTOR_CONSTRUCT: u32 = 0x0043_d410;
+const NODE_STEP_A59C60: u32 = 0x00a5_9c60;
+/// `__RTDynamicCast` targets: `TESBoundObject`, `TESObjectLIGH`, `Actor`,
+/// `MobileObject`, `TESSkill`.
+const BOUND_OBJECT_TYPE_DESCRIPTOR: u32 = 0x0118_3108;
+const LIGHT_OBJECT_TYPE_DESCRIPTOR: u32 = 0x0118_3938;
+const ACTOR_TYPE_DESCRIPTOR: u32 = 0x0118_46d4;
+const MOBILE_OBJECT_TYPE_DESCRIPTOR: u32 = 0x0118_4920;
+const SKILL_TYPE_DESCRIPTOR: u32 = 0x0118_6518;
 
 layout! {
     /// `TESDataHandler` (Xbox PDB), 0x63C bytes on both builds. The lists
@@ -2899,6 +3372,2302 @@ pub fn fn_00462ec0(e: &mut Engine, this: Ptr, text: Ptr) -> Ptr {
     e.call(SUMMARY_SET, &args![this.addr() + 0x418, text]).ptr()
 }
 
+// ---------------------------------------------------------------------------
+// Session 3: `00462ee0` to `0046a060`.
+// ---------------------------------------------------------------------------
+
+// Translated from 00462ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CreateThreadSafeFiles` (Xbox PDB): walks `listFiles`,
+/// stopping at the first empty node, and calls `TESFile::GetThreadSafeFile`
+/// (`004739b0`) on every file whose bit 2 of `m_Flags` is set (`00471cd0`).
+pub fn tes_data_handler_create_thread_safe_files(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let mut node = fn_0045dfc0(e, this).addr();
+    while node != 0 {
+        if e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            break;
+        }
+        let file = list_item(e, node);
+        if e.call(FILE_IS_SELECTED, &args![file]).bool() {
+            e.call(FILE_GET_THREAD_SAFE_FILE, &args![file]);
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00462f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetListFile` (Xbox PDB): the file in `listFiles` whose
+/// name equals `name` (`_stricmp`, `TESFile` name at `+0x20`), or null.
+/// Null when `name` is null; the walk stops at the first node with a null
+/// item.
+pub fn tes_data_handler_get_list_file(e: &mut Engine, this: Ptr<TESDataHandler>, name: Ptr) -> Ptr {
+    let mut node = fn_0045dfc0(e, this).addr();
+    if name.is_null() {
+        return Ptr::NULL;
+    }
+    while node != 0 && list_item(e, node) != 0 {
+        let file = list_item(e, node);
+        let file_name = e.call(FILE_NAME, &args![file]).u32();
+        if e.call(STRING_COMPARE, &args![name, file_name]).i32() == 0 {
+            return Ptr::new(file);
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    Ptr::NULL
+}
+
+// Translated from 00462fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `TESObjectCELL::RunScripts(1, 1)` (`0054c740`) on every cell of
+/// `arrayInteriorCells`, then on the cell `005f36f0` (named
+/// `ActorMover::GetPreferredMoveMode` in the map, which is wrong for this
+/// body) returns for every non-null item of the list at `+0x10`
+/// (`fn_00460140`), when it is not null.
+pub fn fn_00462fb0(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let cells = this.at(TESDataHandler::arrayInteriorCells).addr();
+    let count = e.call(ARRAY_SIZE, &args![cells]).i32();
+    for index in 0..count {
+        let slot = e.call(ARRAY_AT, &args![cells, index]).u32();
+        let cell = e.mem.u32(slot);
+        if cell != 0 {
+            e.call(CELL_RUN_SCRIPTS, &args![cell, 1u32, 1u32]);
+        }
+    }
+    let mut node = fn_00460140(e, this).addr();
+    while node != 0 {
+        let item = list_item(e, node);
+        if item != 0 {
+            let cell = e.call(ITEM_GET_CELL, &args![item]).u32();
+            if cell != 0 {
+                e.call(CELL_RUN_SCRIPTS, &args![cell, 1u32, 1u32]);
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00463070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the plugin files of `listFiles` (the load of the game's data): not
+/// named by the Xbox PDB map. `flag` is the byte argument; when it is not 0
+/// the compile count is reset first and the default objects are not
+/// generated, only the files that `0044edb0` and `bCached` accept are loaded.
+///
+/// 1. Sets `bSaveLoad`; resets the `TES` singleton (`004539a0(0, 0)`, the
+///    `+0x88` word when `flag` is 0, `008d7dc0(0)`, `00450d80`) and the byte
+///    at `0x011c54b9`. When a save game is being loaded builds the index
+///    table of the active file. For every file with bit 2 of `m_Flags`
+///    (`00471cd0`) reads its header (`00471400`), builds its index table and
+///    checks its masters: a master whose version is too high is skipped, a
+///    missing one logs "Unable to find masterfile" (`Error`), clears
+///    `bSaveLoad` and returns false.
+/// 2. Warnings are disabled while the files to compile are chosen: files
+///    without bit 2 are destroyed and removed from the list; the active
+///    file is remembered in `pActiveFile`; the others are appended to
+///    `pFileIndex` (`iNumCompile`, at most 0xFE), with their compile index.
+///    A non-master file with something wrong in its masters (`00471af0`,
+///    only when `bMasterSave` is false) logs the message at `0x011c4024`.
+///    `iNextID` becomes `0xFF000800` and the active file is appended last.
+/// 3. Opens every file to compile and sums their form counts in
+///    `0x011c3f24`; opens the `Data\<name>*.bsa` archives of each file with
+///    masters.
+/// 4. With `bLoadingFiles` set loads every file (`fn_00467780`, which also
+///    reports errors with `0046a330`), generating the default objects first
+///    when `flag` is 0 (`0046a370`), with the large buffer of the master files
+///    bracketed by `SetMasterFileLargeBuffer(-3)` / `(-1)`.
+/// 5. Runs virtual `0x88` on the forms of 30-odd lists in a fixed order
+///    (the two `fn_00463070` tables below and the special cases between),
+///    sets the default shaders from `BGSDefaultObjectManager`, and finishes
+///    with `TESFaction::CheckFactionReactions`, `0046fb50`, clearing the
+///    cell word and `bSaveLoad`.
+///
+/// Returns true unless a master file is missing. The compiler's exception
+/// frame is not translated.
+pub fn fn_00463070(e: &mut Engine, this: Ptr<TESDataHandler>, flag: u8) -> bool {
+    let scope = scope_enter(e, 0x16, 0x13ba);
+    e.set(this, TESDataHandler::bSaveLoad, true);
+    if flag != 0 {
+        e.set(this, TESDataHandler::iNumCompile, 0);
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.call(TES_STEP_4539A0, &args![tes, 0u32, 0u32]);
+    if flag == 0 {
+        fn_00460170(e, Ptr::new(tes));
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.call(TES_STEP_8D7DC0, &args![tes, 0u32]);
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.call(TES_STEP_450D80, &args![tes]);
+    e.set_global(BAD_FORMS_FLAG, 0u8);
+
+    // 1. Header and index table of every selected file.
+    let mut node = fn_0045dfc0(e, this).addr();
+    if e.get(this, TESDataHandler::bSaveLoadGame) {
+        let active = e.get(this, TESDataHandler::pActiveFile).addr();
+        e.call(FILE_OPEN_HEADER, &args![active]);
+        let files = fn_0045dfc0(e, this);
+        e.call(FILE_GEN_INDEX_TABLE, &args![active, files, 1u32]);
+    }
+    while node != 0 && list_item(e, node) != 0 {
+        let file = list_item(e, node);
+        if e.call(FILE_IS_SELECTED, &args![file]).bool() {
+            e.call(FILE_OPEN_HEADER, &args![file]);
+            let files = fn_0045dfc0(e, this);
+            e.call(FILE_GEN_INDEX_TABLE, &args![file, files, 1u32]);
+            if !e.call(FILE_VERSION_TOO_HIGH, &args![file]).bool() {
+                let count = e.call(FILE_INDEX_COUNT, &args![file]).u32();
+                let mut index = 0u32;
+                while index < count {
+                    let master = e.call(FILE_GET_INDEX_FILE, &args![file, index + 1]).u32();
+                    let mut accepted = false;
+                    if master != 0 && !e.call(FILE_VERSION_TOO_HIGH, &args![master]).bool() {
+                        e.call(FILE_SET_FLAG_BIT_2, &args![master, 1u32]);
+                        accepted = true;
+                    }
+                    if !accepted {
+                        // `Error` ("Unable to find masterfile: %s" with the name of the
+                        // master, or the "<unknown>" text when it has none; the name is
+                        // asked for twice, to choose the text and as its argument).
+                        if e.call(FILE_GET_MASTER_NAME, &args![file, index + 1]).u32() != 0 {
+                            e.call(FILE_GET_MASTER_NAME, &args![file, index + 1]);
+                        }
+                        error(e);
+                        e.set(this, TESDataHandler::bSaveLoad, false);
+                        scope_leave(e, scope);
+                        return false;
+                    }
+                    index += 1;
+                }
+            } else {
+                e.call(FILE_SET_FLAG_BIT_2, &args![file, 0u32]);
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+
+    // 2. The files to compile.
+    let mut warned = false;
+    e.call(DISABLE_WARNING_COUNT, &args![1u32]);
+    let mut node = fn_0045dfc0(e, this).addr();
+    let mut previous = 0u32;
+    while node != 0 && list_item(e, node) != 0 {
+        let file = list_item(e, node);
+        let mut destroy = false;
+        if !e.call(FILE_IS_SELECTED, &args![file]).bool() {
+            destroy = true;
+        } else {
+            if !e.call(FILE_GET_MASTER, &args![file]).bool()
+                && !e.get(this, TESDataHandler::bMasterSave)
+                && e.call(FILE_MASTERS_CHECK, &args![file]).bool()
+            {
+                warned = true;
+                let name = e.call(FILE_NAME, &args![file]).u32();
+                let name = fn_00464f30(e, name);
+                let message = e.call(TEXT_OF, &args![MASTER_WARNING_TEXT]).u32();
+                e.call(LOG_MESSAGE, &args![message, name]);
+            }
+            if e.call(FILE_GET_ACTIVE, &args![file]).bool() {
+                e.set(this, TESDataHandler::pActiveFile, Ptr::new(file));
+                node = e.call(LIST_NEXT, &args![node]).u32();
+                continue;
+            }
+            add_file_to_compile(e, this, file);
+        }
+        if !destroy {
+            previous = node;
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        } else {
+            if file != 0 {
+                fn_004601a0(e, Ptr::new(file), 1);
+            }
+            if previous == 0 {
+                e.call(LIST_REMOVE_HEAD, &args![node]);
+            } else {
+                let slot = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+                e.call(LIST_REMOVE_ITEM, &args![previous, slot]);
+                node = e.call(LIST_NEXT, &args![previous]).u32();
+            }
+        }
+    }
+    e.set(this, TESDataHandler::iNextID, 0xff00_0800);
+    if warned {
+        let message = e.call(TEXT_OF, &args![MASTER_SUMMARY_TEXT]).u32();
+        e.call(LOG_MESSAGE, &args![message]);
+    }
+    e.call(DISABLE_WARNING_COUNT, &args![0u32]);
+    let active = e.get(this, TESDataHandler::pActiveFile).addr();
+    if active != 0 {
+        add_file_to_compile(e, this, active);
+    }
+
+    // 3. Open the files, then their archives.
+    e.set_global(LOAD_FORM_TOTAL, 0u32);
+    let mut index = 0u32;
+    while index < e.get(this, TESDataHandler::iNumCompile) {
+        let file = compiled_file(e, this, index);
+        if !e.call(FILE_OPEN, &args![file, 0u32, 0u32]).bool() {
+            e.call(HANDLER_REPORT_ERROR, &args![this, 4u32]);
+        } else {
+            let forms = fn_00464dd0(e, Ptr::new(file));
+            let total = e.global::<u32>(LOAD_FORM_TOTAL);
+            e.set_global(LOAD_FORM_TOTAL, forms.wrapping_add(total));
+        }
+        index += 1;
+    }
+    let mut index = 0u32;
+    while index < e.get(this, TESDataHandler::iNumCompile) {
+        let scope = scope_enter(e, 0x13, 0x1532);
+        let file = compiled_file(e, this, index);
+        let masters = fn_00464df0(e, Ptr::new(file));
+        if !e.call(LIST_IS_EMPTY, &args![masters]).bool() {
+            open_file_archives(e, file);
+        }
+        scope_leave(e, scope);
+        index += 1;
+    }
+
+    // 4. Load the records of every file.
+    fn_00464d30(e, this, 1);
+    if flag == 0 {
+        e.call(GENERATE_DEFAULT_OBJECTS, &args![this]);
+    }
+    e.set_global(LOAD_FORM_DONE, 0u32);
+    tes_data_handler_set_master_file_large_buffer(e, this, 0xffff_fffd);
+    let mut index = 0u32;
+    while index < e.get(this, TESDataHandler::iNumCompile) {
+        let file = compiled_file(e, this, index);
+        let first = index == 0;
+        let wanted = flag == 0
+            || (e.call(FILE_STEP_44EDB0, &args![file]).u32() != 0
+                && fn_00464db0(e, Ptr::new(file)) != 0);
+        if wanted && !fn_00467780(e, this, Ptr::new(file), first as u8) {
+            e.call(HANDLER_REPORT_ERROR, &args![this, 3u32]);
+        }
+        index += 1;
+    }
+    let singleton = e.global::<u32>(DATA_HANDLER_SINGLETON);
+    tes_data_handler_set_master_file_large_buffer(e, Ptr::new(singleton), 0xffff_ffff);
+    fn_00464d30(e, this, 0);
+
+    // 5. Virtual 0x88 on the loaded forms.
+    for getter in POST_LOAD_LISTS_1 {
+        let list = list_of(e, this, getter);
+        call_slot_88(e, list, NullItem::Stop);
+    }
+    e.call(STEP_867890, &args![OBJECT_011DE7B8]);
+    let list = list_of(e, this, 0x0046_12e0);
+    call_slot_88(e, list, NullItem::Stop);
+    e.call(STEP_61BA10, &args![0u32]);
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    let player_part = fn_00464e30(e, Ptr::new(player));
+    e.call(STEP_61A5A0, &args![1u32, player_part]);
+    let object_list = e.get(this, TESDataHandler::pObjectList).addr();
+    let mut object = e.call(LIST_NEXT, &args![object_list]).u32();
+    while object != 0 {
+        e.vcall(object, VTABLE_SLOT_88, &args![]);
+        object = e.call(OBJECT_NEXT, &args![object]).u32();
+    }
+    let object_list = e.get(this, TESDataHandler::pObjectList).addr();
+    let mut object = e.call(LIST_NEXT, &args![object_list]).u32();
+    while object != 0 {
+        let form_type = e.call(FORM_GET_TYPE, &args![object]).i32();
+        if form_type > 0x29 && form_type < 0x2c {
+            e.vcall(object + 0x30, FORM_VTABLE_DELETE, &args![0u32]);
+        }
+        object = e.call(OBJECT_NEXT, &args![object]).u32();
+    }
+    let mut holder = e.call(HOLDER_GETTER, &args![this]).u32();
+    while holder != 0 {
+        let list = holder + 4;
+        if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+            break;
+        }
+        let item = list_item(e, list);
+        e.vcall(item, VTABLE_SLOT_88, &args![]);
+        let next = e.call(LIST_NEXT, &args![list]).u32();
+        holder = if next == 0 { 0 } else { next - 4 };
+    }
+    let mut node = fn_00460140(e, this).addr();
+    while node != 0 {
+        list_item(e, node);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    if e.call(TES_GET_NAV_MESH_INFO_MAP, &args![tes]).u32() != 0 {
+        let tes = e.global::<u32>(TES_SINGLETON);
+        let map = e.call(TES_GET_NAV_MESH_INFO_MAP, &args![tes]).u32();
+        e.vcall(map, VTABLE_SLOT_88, &args![]);
+    }
+    let cells = this.at(TESDataHandler::arrayInteriorCells).addr();
+    let count = e.call(ARRAY_SIZE, &args![cells]).i32();
+    for index in 0..count {
+        let slot = e.call(ARRAY_AT, &args![cells, index]).u32();
+        let cell = e.mem.u32(slot);
+        if cell != 0 {
+            e.vcall(cell, VTABLE_SLOT_88, &args![]);
+        }
+    }
+    let list = list_of(e, this, 0x0046_0140);
+    call_slot_88(e, list, NullItem::Skip);
+    let list = list_of(e, this, 0x0046_1250);
+    call_slot_88(e, list, NullItem::Stop);
+    let manager = e.call(DEFAULT_OBJECT_MANAGER_INSTANCE, &args![]).u32();
+    e.vcall(manager, VTABLE_SLOT_88, &args![]);
+    let shader_setters: [(u32, ShaderSetter); 3] = [
+        (0x1f, fn_00464d50),
+        (0x20, fn_00464d70),
+        (0x21, fn_00464d90),
+    ];
+    for (default_object, setter) in shader_setters {
+        e.call(DEFAULT_OBJECT_MANAGER_INSTANCE, &args![]);
+        let object = e
+            .call(DEFAULT_OBJECT_MANAGER_GET, &args![default_object])
+            .ptr::<()>();
+        if !object.is_null() {
+            let singleton = e.global::<u32>(DATA_HANDLER_SINGLETON);
+            setter(e, Ptr::new(singleton), object);
+        }
+    }
+    let list = list_of(e, this, 0x009d_9f40);
+    call_slot_88(e, list, NullItem::Stop);
+    let list = list_of(e, this, 0x0046_1270);
+    call_slot_88(e, list, NullItem::Stop);
+    let idle_manager = e.global::<u32>(IDLE_MANAGER);
+    e.call(IDLE_MANAGER_FINISH, &args![idle_manager]);
+    let camera_path_manager = e.global::<u32>(CAMERA_PATH_MANAGER);
+    e.call(CAMERA_PATH_MANAGER_FINISH, &args![camera_path_manager]);
+    e.call(STEP_408DF0, &args![]);
+    for getter in POST_LOAD_LISTS_2 {
+        let list = list_of(e, this, getter);
+        call_slot_88(e, list, NullItem::Skip);
+    }
+    e.call(FACTION_CHECK_REACTIONS, &args![]);
+    e.call(HANDLER_STEP_46FB50, &args![this]);
+    e.set_global(LOADING_CELL, 0u32);
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    let player_part = fn_00464e10(e, Ptr::new(player));
+    e.call(PLAYER_STEP_8D50E0, &args![player_part]);
+    e.set(this, TESDataHandler::bSaveLoad, false);
+    scope_leave(e, scope);
+    true
+}
+
+/// The getters of the first run of lists whose forms get virtual `0x88`
+/// after the files are loaded, in the order of `fn_00463070`. Each takes the
+/// handler (`this`) and answers the address of a form list (the ones the
+/// linker folded with other classes' accessors are in other units).
+const POST_LOAD_LISTS_1: [u32; 32] = [
+    0x0043_6aa0,
+    0x0046_1110,
+    0x004e_a950,
+    0x0062_4700,
+    0x0046_1130,
+    0x0087_1a30,
+    0x009c_1a50,
+    0x0040_77e0,
+    0x0046_1150,
+    0x0050_3650,
+    0x0098_4250,
+    0x0051_4f30,
+    0x0045_5600,
+    0x0046_10b0,
+    0x0087_4670,
+    0x0046_1010,
+    0x0046_11f0,
+    0x0046_0ff0,
+    0x0046_1030,
+    0x0050_6390,
+    0x0062_d2f0,
+    0x0046_1050,
+    0x0046_0fb0,
+    0x0046_1070,
+    0x0046_1290,
+    0x0046_1090,
+    0x0045_a730,
+    0x0046_10f0,
+    0x0046_1230,
+    0x0045_a330,
+    0x0046_11d0,
+    0x004a_0d10,
+];
+
+/// The getters of the last run: lists whose null items are skipped.
+const POST_LOAD_LISTS_2: [u32; 8] = [
+    0x0041_d8a0,
+    0x0087_eaa0,
+    0x0046_1170,
+    0x0046_10d0,
+    0x0046_0090,
+    0x0046_00b0,
+    0x0046_00d0,
+    0x0041_3f40,
+];
+
+/// A setter of one of the default shader pointers of the handler.
+type ShaderSetter = fn(&mut Engine, Ptr<TESDataHandler>, Ptr);
+
+/// What a loop over a form list does with a node whose item is null.
+#[derive(Clone, Copy, PartialEq)]
+enum NullItem {
+    /// Ends the loop.
+    Stop,
+    /// Goes on with the next node.
+    Skip,
+}
+
+/// The address of the form list that `getter` answers for `this`: the
+/// getters in this file are called directly, the others by address.
+fn list_of(e: &mut Engine, this: Ptr<TESDataHandler>, getter: u32) -> u32 {
+    match getter {
+        0x0046_0090 => fn_00460090(e, this).addr(),
+        0x0046_00b0 => fn_004600b0(e, this).addr(),
+        0x0046_00d0 => fn_004600d0(e, this).addr(),
+        0x0046_0140 => fn_00460140(e, this).addr(),
+        0x0046_1010 => fn_00461010(e, this).addr(),
+        0x0046_1030 => fn_00461030(e, this).addr(),
+        0x0046_1050 => fn_00461050(e, this).addr(),
+        0x0046_1090 => fn_00461090(e, this).addr(),
+        0x0046_10b0 => fn_004610b0(e, this).addr(),
+        0x0046_1170 => fn_00461170(e, this).addr(),
+        0x0046_11d0 => fn_004611d0(e, this).addr(),
+        0x0046_11f0 => fn_004611f0(e, this).addr(),
+        0x0046_1230 => fn_00461230(e, this).addr(),
+        0x0046_1250 => fn_00461250(e, this).addr(),
+        0x0046_1270 => fn_00461270(e, this).addr(),
+        0x0046_1290 => fn_00461290(e, this).addr(),
+        _ => e.call(getter, &args![this]).u32(),
+    }
+}
+
+/// Calls virtual `0x88` (no arguments) on the item of each node of the list
+/// that starts at `node`.
+fn call_slot_88(e: &mut Engine, mut node: u32, null_item: NullItem) {
+    while node != 0 {
+        let item = list_item(e, node);
+        if item != 0 {
+            e.vcall(item, VTABLE_SLOT_88, &args![]);
+        } else if null_item == NullItem::Stop {
+            break;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+/// The file at `index` of `pFileIndex`.
+fn compiled_file(e: &mut Engine, this: Ptr<TESDataHandler>, index: u32) -> u32 {
+    e.mem
+        .u32(this.at(TESDataHandler::pFileIndex).addr() + index * 4)
+}
+
+/// Appends `file` to `pFileIndex`, gives it the next compile index
+/// (`TESFile` `00473210` takes the old count as a byte) and reports
+/// "Too many selected files to compile!" (`Error`) from 0xFF files on.
+fn add_file_to_compile(e: &mut Engine, this: Ptr<TESDataHandler>, file: u32) {
+    let count = e.get(this, TESDataHandler::iNumCompile);
+    e.mem
+        .set_u32(this.at(TESDataHandler::pFileIndex).addr() + count * 4, file);
+    e.set(this, TESDataHandler::iNumCompile, count.wrapping_add(1));
+    e.call(FILE_SET_COMPILE_INDEX, &args![file, count & 0xff]);
+    if e.get(this, TESDataHandler::iNumCompile) >= 0xff {
+        error(e);
+    }
+}
+
+/// Opens the `Data\<name>*.bsa` archives of `file` (its name without the
+/// extension): for every found file that is not empty, `DATA\<name>` is
+/// opened through `ArchiveManager::OpenArchive` unless `00af5320` says it is
+/// already open.
+fn open_file_archives(e: &mut Engine, file: u32) {
+    let name = e.call(FILE_NAME, &args![file]).u32();
+    e.with_stack(ARCHIVE_FRAME_SIZE, |e, frame| {
+        let base_name = frame.addr() + ARCHIVE_BASE_NAME;
+        let search = frame.addr() + ARCHIVE_SEARCH;
+        let find_data = frame.addr() + ARCHIVE_FIND_DATA;
+        let path = frame.addr() + ARCHIVE_PATH;
+        e.call(STRING_COPY_S, &args![base_name, 0x104u32, name]);
+        let dot = e.call(STRING_RFIND_CHAR, &args![base_name, 0x2eu32]).u32();
+        if dot != 0 {
+            e.mem.set_u8(dot, 0);
+        }
+        e.call(
+            FORMAT_S,
+            &args![search, 0x104u32, BSA_SEARCH_FORMAT, base_name],
+        );
+        let handle = e.call(FIND_FIRST_FILE_A, &args![search, find_data]).u32();
+        if handle != INVALID_HANDLE {
+            loop {
+                let size_high = e.mem.u32(find_data + FIND_DATA_SIZE_HIGH);
+                let size_low = e.mem.u32(find_data + FIND_DATA_SIZE_LOW);
+                if size_high != 0 || size_low != 0 {
+                    e.call(
+                        FORMAT_S,
+                        &args![
+                            path,
+                            0x104u32,
+                            BSA_PATH_FORMAT,
+                            find_data + FIND_DATA_FILE_NAME
+                        ],
+                    );
+                    if e.call(ARCHIVE_IS_OPEN, &args![path]).u32() == 0 {
+                        e.call(OPEN_ARCHIVE, &args![path, 0u32, 0u32]);
+                    }
+                }
+                if e.call(FIND_NEXT_FILE_A, &args![handle, find_data]).u32() == 0 {
+                    break;
+                }
+            }
+            e.call(FIND_CLOSE, &args![handle]);
+        }
+    });
+}
+
+// Translated from 00464d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `bLoadingFiles` (`this + 0x620`).
+pub fn fn_00464d30(e: &mut Engine, this: Ptr<TESDataHandler>, loading: u8) {
+    e.mem.set_u8(this.addr() + 0x620, loading);
+}
+
+// Translated from 00464d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pSpotterShader` (`this + 0x630`).
+pub fn fn_00464d50(e: &mut Engine, this: Ptr<TESDataHandler>, shader: Ptr) {
+    e.set(this, TESDataHandler::pSpotterShader, shader);
+}
+
+// Translated from 00464d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pItemDetectedShader` (`this + 0x634`).
+pub fn fn_00464d70(e: &mut Engine, this: Ptr<TESDataHandler>, shader: Ptr) {
+    e.set(this, TESDataHandler::pItemDetectedShader, shader);
+}
+
+// Translated from 00464d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pCateyeMobileShader` (`this + 0x638`).
+pub fn fn_00464d90(e: &mut Engine, this: Ptr<TESDataHandler>, shader: Ptr) {
+    e.set(this, TESDataHandler::pCateyeMobileShader, shader);
+}
+
+// Translated from 00464db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bCached` (`+0x428`, the byte) of a `TESFile`.
+pub fn fn_00464db0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x428)
+}
+
+// Translated from 00464dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fileHeaderInfo.iFormCount` (`+0x3E0`, the word after `fVersion`) of a
+/// `TESFile`.
+pub fn fn_00464dd0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x3e0)
+}
+
+// Translated from 00464df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x3EC` of a `TESFile`: its `listMasters`.
+pub fn fn_00464df0(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x3ec)
+}
+
+// Translated from 00464e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x878` (an embedded object of the player; the
+/// linker folded this accessor with others).
+pub fn fn_00464e10(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x878)
+}
+
+// Translated from 00464e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x6A8` (an embedded object of the player; folded like
+/// `00464e10`).
+pub fn fn_00464e30(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x6a8)
+}
+
+// Translated from 00464e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CleanUpBadForms` (Xbox PDB): when `listBadForms` is not
+/// empty (`0076b610` says its count at `+8` is 0) and the byte at
+/// `0x011c54b9` is set, only sets the byte at `0x01202d63` (`00461300`) and
+/// logs "MASTERFILE: Invalid forms were encountered on load ...". Otherwise
+/// sets `bClearingData`, destroys every form of the list through virtual
+/// `0x10` (flag 1), empties the list (`00559c30`) and restores
+/// `bClearingData`.
+pub fn tes_data_handler_clean_up_bad_forms(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let list = this.at(TESDataHandler::listBadForms).addr();
+    if !e.call(BAD_FORM_LIST_IS_EMPTY, &args![list]).bool() && e.global::<u8>(BAD_FORMS_FLAG) != 0 {
+        e.call(BAD_FORMS_SET_FLAG, &args![]);
+        e.call(LOG_MESSAGE, &args![INVALID_FORMS_MESSAGE]);
+        return;
+    }
+    let was_clearing = e.call(HANDLER_IS_CLEARING_DATA, &args![this]).u8();
+    e.call(HANDLER_SET_CLEARING_DATA, &args![this, 1u32]);
+    let first = e.call(BAD_FORM_LIST_FIRST, &args![list]).u32();
+    e.with_stack(4, |e, position| {
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            let item_slot = e.call(BAD_FORM_LIST_NEXT, &args![list, position]).u32();
+            let form = e.mem.u32(item_slot);
+            if form != 0 {
+                e.vcall(form, FORM_VTABLE_DELETE, &args![1u32]);
+            }
+        }
+    });
+    e.call(BAD_FORM_LIST_CLEAR, &args![list]);
+    e.call(HANDLER_SET_CLEARING_DATA, &args![this, was_clearing as u32]);
+}
+
+// Translated from 00464f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns its argument (cdecl).
+pub fn fn_00464f30(_e: &mut Engine, value: u32) -> u32 {
+    value
+}
+
+// Translated from 00464f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00470110(this)`.
+pub fn fn_00464f40(e: &mut Engine, this: Ptr) {
+    e.call(STEP_470110, &args![this]);
+}
+
+// Translated from 00464f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMeshArray::GetNavMeshByIndex` (map name; the body is the smart-pointer
+/// `GetAt` of an `NiTArray` of nav mesh pointers): puts the element at
+/// `index` of `this` (size at `+8`, `00877a30` gives the address of an
+/// element) into the smart pointer `out`, or null when `index` is not below
+/// the size. Returns `out`.
+pub fn nav_mesh_array_get_nav_mesh_by_index(
+    e: &mut Engine,
+    this: Ptr,
+    out: Ptr,
+    index: u32,
+) -> Ptr {
+    let size = e.call(ARRAY_COUNT_FIELD, &args![this]).u32();
+    if index >= size {
+        fn_00464fc0(e, out, 0);
+    } else {
+        let element = e.call(ARRAY_AT, &args![this, index]).u32();
+        e.call(SMART_POINTER_COPY, &args![out, element]);
+    }
+    out
+}
+
+// Translated from 00464fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the smart pointer `out` to `value` (`fn_00464ff0`); returns `out`
+/// (cdecl).
+pub fn fn_00464fc0(e: &mut Engine, out: Ptr, value: u32) -> Ptr {
+    fn_00464ff0(e, out, value);
+    out
+}
+
+// Translated from 00464ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0042fd70(this, value)`, the smart pointer's assignment of a raw
+/// pointer; returns `this`.
+pub fn fn_00464ff0(e: &mut Engine, this: Ptr, value: u32) -> Ptr {
+    e.call(SMART_POINTER_SET, &args![this, value]);
+    this
+}
+
+// Translated from 00465010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetCompiledFile` (Xbox PDB): `pFileIndex[index]`, or null
+/// when `index` is negative or above 0xFE.
+pub fn tes_data_handler_get_compiled_file(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    index: i32,
+) -> Ptr {
+    if !(0..=0xfe).contains(&index) {
+        return Ptr::NULL;
+    }
+    Ptr::new(compiled_file(e, this, index as u32))
+}
+
+// Translated from 00465040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls virtual `0x88` on the items of the list `006377e0` answers for the
+/// handler, up to the first null item, then runs `fn_00462fb0`.
+pub fn fn_00465040(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let mut node = e.call(LIST_GETTER_6377E0, &args![this]).u32();
+    while node != 0 {
+        let item = list_item(e, node);
+        if item == 0 {
+            break;
+        }
+        e.vcall(item, VTABLE_SLOT_88, &args![]);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    fn_00462fb0(e, this);
+}
+
+// Translated from 004650a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::SetMasterFileLargeBuffer` (Xbox PDB): calls
+/// `00473ce0(file, size)` on every master file (`TESFile::GetMaster`) of
+/// `listFiles`, up to the first null item.
+pub fn tes_data_handler_set_master_file_large_buffer(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    size: u32,
+) {
+    let mut node = fn_0045dfc0(e, this).addr();
+    while node != 0 && list_item(e, node) != 0 {
+        let file = list_item(e, node);
+        if e.call(FILE_GET_MASTER, &args![file]).bool() {
+            e.call(FILE_SET_LARGE_BUFFER, &args![file, size]);
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00465110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CreateFormOfType` (Xbox PDB), a plain function of the
+/// form type number (a byte): allocates the object of that type with the
+/// size and constructor of its row in [`FORM_CONSTRUCTORS`] (the exe's
+/// switch has one case per type; the table is read off its cases) and returns
+/// it. The allocator is `operator new` (`00401000`), except for the two
+/// types the table marks with the aligned allocator (`00aa13e0`); the
+/// constructor gets the block (`this`) and, for type `0x59`, the extra
+/// arguments (-1, 0). A block that could not be allocated gives a null form,
+/// the result of two types is the address `+0x14` / `+0xC` of the constructed
+/// object (a base class of a form with several), and a type without a row
+/// logs "FORMS: TESDataHandler trying to create TESForm for unknown type '%s'."
+/// with the name `004612b0` gives the type, and answers null. The allocation
+/// scope (kind `0x30`, line `0x1c18`) is held throughout.
+pub fn tes_data_handler_create_form_of_type(e: &mut Engine, form_type: u8) -> Ptr {
+    let scope = scope_enter(e, 0x30, 0x1c18);
+    let mut form = 0u32;
+    match FORM_CONSTRUCTORS
+        .iter()
+        .find(|row| row.0 == form_type)
+        .copied()
+    {
+        None => {
+            let name = e.call(FORM_TYPE_NAME, &args![form_type as u32]).u32();
+            e.call(LOG_MESSAGE, &args![CREATE_UNKNOWN_FORM_FORMAT, name]);
+        }
+        Some((_, size, construct)) => {
+            let allocator = if ALIGNED_FORM_TYPES.contains(&form_type) {
+                ALIGNED_NEW
+            } else {
+                OPERATOR_NEW
+            };
+            let memory = e.call(allocator, &args![size]).u32();
+            let object = if memory == 0 {
+                0
+            } else if form_type == FORM_TYPE_ACTOR_VALUE as u8 {
+                e.call(construct, &args![memory, 0xffff_ffffu32, 0u32])
+                    .u32()
+            } else {
+                e.call(construct, &args![memory]).u32()
+            };
+            form = match form_type {
+                0x22 if object != 0 => object + 0x14,
+                0x26 if object != 0 => object + 0x0c,
+                _ => object,
+            };
+        }
+    }
+    scope_leave(e, scope);
+    Ptr::new(form)
+}
+
+/// The form types `CreateFormOfType` allocates with the aligned allocator.
+const ALIGNED_FORM_TYPES: [u8; 2] = [0x04, 0x43];
+
+const FORM_CONSTRUCTORS: [(u8, u32, u32); 104] = [
+    (0x04, 0xa0, 0x0059_22e0),  // TXST
+    (0x05, 0x24, 0x0059_0210),  // MICN
+    (0x06, 0x28, 0x005a_6320),  // GLOB
+    (0x07, 0x60, 0x005f_6610),  // CLAS
+    (0x08, 0x4c, 0x005f_c680),  // FACT
+    (0x09, 0x50, 0x005e_72c0),  // HDPT
+    (0x0a, 0x4c, 0x005f_daa0),  // HAIR
+    (0x0b, 0x34, 0x005f_c050),  // EYES
+    (0x0c, 0x524, 0x0061_0210), // RACE
+    (0x0d, 0x6c, 0x005e_2b70),  // SOUN
+    (0x0e, 0x54, 0x0058_98c0),  // ASPC
+    (0x0f, 0x60, 0x0061_7da0),  // SKIL
+    (0x10, 0xb0, 0x0040_7020),  // MGEF
+    (0x11, 0x54, 0x005a_a0f0),  // SCPT
+    (0x12, 0x28, 0x0054_0c50),  // LTEX
+    (0x13, 0x44, 0x0040_9080),  // ENCH
+    (0x14, 0x44, 0x0040_e160),  // SPEL
+    (0x15, 0x90, 0x0051_04f0),  // ACTI
+    (0x16, 0x98, 0x004f_e640),  // TACT
+    (0x17, 0xa8, 0x004f_faa0),  // TERM
+    (0x18, 0x190, 0x0051_29f0), // ARMO
+    (0x19, 0xc4, 0x0051_4500),  // BOOK
+    (0x1a, 0x154, 0x0051_5440), // CLOT
+    (0x1b, 0x9c, 0x0051_60f0),  // CONT
+    (0x1c, 0x90, 0x0051_73e0),  // DOOR
+    (0x1d, 0xa4, 0x0040_98f0),  // INGR
+    (0x1e, 0xc8, 0x0050_c6c0),  // LIGH
+    (0x1f, 0xac, 0x0051_a6a0),  // MISC
+    (0x20, 0x58, 0x0051_b140),  // STAT
+    (0x21, 0x50, 0x004f_e260),  // SCOL
+    (0x22, 0x74, 0x004f_ba00),  // MSTT
+    (0x23, 0x50, 0x004f_c1b0),  // PWAT
+    (0x24, 0x68, 0x0050_9a10),  // GRAS
+    (0x25, 0x94, 0x0051_b6e0),  // TREE
+    (0x26, 0x9c, 0x0050_8450),  // FLOR
+    (0x27, 0x94, 0x0050_8e00),  // FURN
+    (0x28, 0x388, 0x0051_d770), // WEAP
+    (0x29, 0xdc, 0x0050_26b0),  // AMMO
+    (0x2a, 0x20c, 0x0060_1170), // NPC_
+    (0x2b, 0x160, 0x005f_7230), // CREA
+    (0x2c, 0x70, 0x0050_adf0),  // LVLC
+    (0x2d, 0x70, 0x0050_a770),  // LVLN
+    (0x2e, 0xac, 0x0050_a5a0),  // KEYM
+    (0x2f, 0xd8, 0x0040_2820),  // ALCH
+    (0x30, 0x40, 0x005e_7a90),  // IDLM
+    (0x31, 0x80, 0x005e_8060),  // NOTE
+    (0x32, 0xb4, 0x004f_93b0),  // COBJ
+    (0x33, 0xd0, 0x004f_ce60),  // PROJ
+    (0x34, 0x4c, 0x0050_b400),  // LVLI
+    (0x35, 0x36c, 0x0058_07f0), // WTHR
+    (0x36, 0x58, 0x0052_aaa0),  // CLMT
+    (0x37, 0x38, 0x004f_0770),  // REGN
+    (0x39, 0xe0, 0x0054_15b0),  // CELL
+    (0x3a, 0x68, 0x0055_a2f0),  // REFR
+    (0x41, 0xec, 0x0058_2c20),  // WRLD
+    (0x42, 0x2c, 0x0053_3120),  // LAND
+    (0x43, 0x108, 0x0068_eb80), // NAVM
+    (0x47, 0x6c, 0x0060_c4b0),  // QUST
+    (0x48, 0x54, 0x005f_e040),  // IDLE
+    (0x49, 0x80, 0x0067_07c0),  // PACK
+    (0x4a, 0x108, 0x0050_5010), // CSTY
+    (0x4b, 0x40, 0x005a_66e0),  // LSCR
+    (0x4c, 0x4c, 0x0050_b8f0),  // LVSP
+    (0x4d, 0x3c, 0x0051_1950),  // ANIO
+    (0x4e, 0x194, 0x0057_eba0), // WATR
+    (0x4f, 0x170, 0x0050_5c40), // EFSH
+    (0x51, 0xa8, 0x004f_abf0),  // EXPL
+    (0x52, 0x24, 0x004f_9cd0),  // DEBR
+    (0x53, 0xb0, 0x0052_b310),  // IMGS
+    (0x54, 0x730, 0x0052_b8f0), // IMAD
+    (0x55, 0x24, 0x0058_f9d0),  // FLST
+    (0x56, 0x50, 0x005e_aab0),  // PERK
+    (0x57, 0x74, 0x005e_4af0),  // BPTD
+    (0x58, 0x60, 0x004f_8b00),  // ADDN
+    (0x59, 0xc4, 0x0066_fe40),  // AVIF
+    (0x5a, 0x20, 0x0059_1b70),  // RADS
+    (0x5b, 0x78, 0x0058_bd30),  // CAMS
+    (0x5c, 0x38, 0x0058_a380),  // CPTH
+    (0x5d, 0x24, 0x005e_ffc0),  // VTYP
+    (0x5e, 0x78, 0x0058_db40),  // IPCT
+    (0x5f, 0x4c, 0x0058_e810),  // IPDS
+    (0x60, 0x190, 0x0051_1e40), // ARMA
+    (0x61, 0x30, 0x0052_5c40),  // ECZN
+    (0x62, 0x40, 0x0059_0530),  // MESG
+    (0x63, 0x148, 0x005e_d680), // RGDL
+    (0x65, 0x44, 0x0052_65c0),  // LGTM
+    (0x66, 0x34, 0x0059_1200),  // MUSC
+    (0x67, 0xb0, 0x0051_9cc0),  // IMOD
+    (0x68, 0x50, 0x0061_53c0),  // REPU
+    (0x6a, 0x5c, 0x005a_7c50),  // RCPE
+    (0x6b, 0x28, 0x005a_77b0),  // RCCT
+    (0x6c, 0x9c, 0x0050_3bd0),  // CHIP
+    (0x6d, 0x220, 0x0050_4480), // CSNO
+    (0x6e, 0x70, 0x005a_7160),  // LSCT
+    (0x6f, 0xc4, 0x0059_7610),  // MSET
+    (0x70, 0xb8, 0x0059_5310),  // ALOC
+    (0x71, 0x7c, 0x005f_4e00),  // CHAL
+    (0x72, 0x30, 0x0059_9c40),  // AMEF
+    (0x73, 0xbc, 0x0059_a370),  // CCRD
+    (0x74, 0xcc, 0x0059_ae60),  // CMNY
+    (0x75, 0x2c, 0x0059_b880),  // CDCK
+    (0x76, 0x20, 0x0040_10b0),  // DEHY
+    (0x77, 0x20, 0x0040_1a10),  // HUNG
+    (0x78, 0x20, 0x0040_20f0),  // SLPD
+];
+
+// Translated from 00467780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads every record of `file` (the plugin file loader of the data handler;
+/// not named by the Xbox PDB map). `first` is true for the first file of the
+/// load. Opens the file (`TESFile::OpenTES`, reporting error 4 on failure),
+/// clears the words `0x011c3f30`..`0x011c3f38` and `ucGameSettingsLoadState`,
+/// and then, for each record until the file ends:
+/// - a group header (type 2) is checked by `fn_004695a0` and skipped
+///   (`00473660`) when it says no; the loop ends if the skip fails;
+/// - a type `0x50` record: id `-1` ends the file, id `-2` moves the file
+///   to the offset in the record (`00473d00`) and ends it, otherwise the
+///   offset table of the word at `0x011c3f38` / `0x011c3f34` /
+///   `0x011c3f30` takes the record id (`00589f50`, `005857b0`,
+///   `0054de80`, whichever word is set first);
+/// - any other record goes to `fn_00467bd0`; when it fails the result is
+///   false. When it works and a save game is being loaded (`0x011de45c`
+///   and `0047c850`) the record counter at `0x011c40a8` is incremented
+///   (`00861ea0` every 256) and the form is announced to the save game
+///   (`008632a0`); otherwise a form that exists and is not of one of the
+///   reference types (see the table in the code) with an editor id has it
+///   registered (`00470200`).
+///
+/// After each record the number of records read (`0x011c3f28`) goes up and
+/// the percentage of `0x011c3f24` is formatted as "Loading Files %d%% (%s)"
+/// into a local buffer when it changed; the next record is read
+/// (`TESFile::NextForm(1)`) unless the record was skipped. At the end the
+/// file is closed (`TESFile::CloseTES`, error 4 on failure). Returns whether
+/// every record loaded.
+pub fn fn_00467780(e: &mut Engine, this: Ptr<TESDataHandler>, file: Ptr, first: u8) -> bool {
+    if !e.call(FILE_OPEN, &args![file, 0u32, 0u32]).bool() {
+        e.call(HANDLER_REPORT_ERROR, &args![this, 4u32]);
+    }
+    let mut result = true;
+    let mut last_percent = 0i32;
+    e.set_global(LOADING_CELL, 0u32);
+    e.set_global(LOADING_WORLD_SPACE, 0u32);
+    e.set_global(LOADING_TOPIC_INFO, 0u32);
+    e.set(this, TESDataHandler::ucGameSettingsLoadState, 0);
+    loop {
+        let mut advance = true;
+        let mut more = true;
+        if e.call(FILE_GET_RECORD_TYPE, &args![file]).u32() == FORM_TYPE_GRUP {
+            let header = fn_00462270(e, file);
+            if !fn_004695a0(e, this, file, header) {
+                advance = false;
+                if !e.call(FILE_SKIP_GROUP, &args![file]).bool() {
+                    more = false;
+                }
+            }
+        } else if e.call(FILE_GET_RECORD_TYPE, &args![file]).u32() == FORM_TYPE_TOFT {
+            let header = fn_00462270(e, file);
+            let id = e.mem.u32(header.addr() + 0xc);
+            if id == 0xffff_ffff {
+                advance = false;
+                more = false;
+            } else if id == 0xffff_fffe {
+                let header = fn_00462270(e, file);
+                let length = e.mem.u32(header.addr() + 4);
+                let offset = fn_00467bb0(e, file).wrapping_add(0x18);
+                e.call(FILE_SEEK, &args![file, offset, length]);
+                advance = false;
+                more = false;
+            } else if e.global::<u32>(LOADING_TOPIC_INFO) != 0 {
+                let topic_info = e.global::<u32>(LOADING_TOPIC_INFO);
+                e.call(WORLD_STEP_589F50, &args![topic_info, id]);
+            } else if e.global::<u32>(LOADING_WORLD_SPACE) != 0 {
+                let offset = id.wrapping_sub(fn_00467bb0(e, file)).wrapping_add(0x18);
+                let world_space = e.global::<u32>(LOADING_WORLD_SPACE);
+                e.call(WORLD_STEP_5857B0, &args![world_space, file, offset]);
+            } else if e.global::<u32>(LOADING_CELL) != 0 {
+                let cell = e.global::<u32>(LOADING_CELL);
+                if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+                    let masters = fn_00464df0(e, file);
+                    if e.call(LIST_IS_EMPTY, &args![masters]).bool() {
+                        let cell = e.global::<u32>(LOADING_CELL);
+                        e.call(CELL_STEP_54DE80, &args![cell, id]);
+                    }
+                }
+            }
+        } else if !fn_00467bd0(e, this, file, first, Ptr::NULL, 0) {
+            result = false;
+        } else {
+            register_loaded_form(e, file);
+        }
+
+        let done = e.global::<u32>(LOAD_FORM_DONE).wrapping_add(1);
+        e.set_global(LOAD_FORM_DONE, done);
+        let total = e.global::<u32>(LOAD_FORM_TOTAL);
+        let scale = e.global::<f64>(PERCENT_SCALE);
+        let percent = e
+            .call(FTOL2, &args![done as f64 / total as f64 * scale])
+            .u32() as i32;
+        if percent != last_percent {
+            last_percent = percent;
+            let name = e.call(FILE_NAME, &args![file]).u32();
+            e.with_stack(0x104, |e, buffer| {
+                e.call(
+                    FORMAT_S,
+                    &args![buffer, 0x104u32, LOADING_FILES_FORMAT, percent, name],
+                );
+            });
+        }
+        if advance {
+            more = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+        }
+        if !more {
+            break;
+        }
+    }
+    if !e.call(FILE_CLOSE, &args![file]).bool() {
+        e.call(HANDLER_REPORT_ERROR, &args![this, 4u32]);
+    }
+    result
+}
+
+/// What `fn_00467780` does with a record `fn_00467bd0` loaded: looks the form
+/// of the record up by id and, while a save game is loading, announces it to
+/// the save game (counting the records); otherwise registers its editor id
+/// (virtual `0x130`) with the object at `0x011c54c8`, except for the
+/// reference types and the other types the table below lists.
+fn register_loaded_form(e: &mut Engine, file: Ptr) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME_SINGLETON);
+    if save_load != 0 && e.call(SAVE_LOAD_ACTIVE, &args![save_load]).bool() {
+        let count = e.global::<u32>(SAVE_RECORD_COUNTER).wrapping_add(1);
+        e.set_global(SAVE_RECORD_COUNTER, count);
+        if count & 0xff == 0 {
+            e.call(SAVE_LOAD_TICK, &args![save_load]);
+        }
+        let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+        let form = e.call(FORM_BY_ID, &args![id]).u32();
+        if form != 0 {
+            e.call(SAVE_LOAD_ANNOUNCE, &args![save_load, form]);
+        }
+    } else {
+        let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+        let form = e.call(FORM_BY_ID, &args![id]).u32();
+        if form != 0 {
+            let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+            if !UNREGISTERED_EDITOR_ID_TYPES.contains(&form_type) {
+                let editor_id = e.vcall(form, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+                if editor_id != 0 && e.mem.u8(editor_id) != 0 {
+                    let map = e.global::<u32>(EDITOR_ID_MAP);
+                    e.call(EDITOR_ID_MAP_ADD, &args![map, editor_id, form]);
+                }
+            }
+        }
+    }
+}
+
+/// The form types whose editor ids `register_loaded_form` does not register
+/// (the entries of the exe's switch that lead out of the function):
+/// `NPC_`, `CREA` and the reference types and `PCBE`.
+const UNREGISTERED_EDITOR_ID_TYPES: [u32; 10] =
+    [0x2a, 0x2b, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x69];
+
+// Translated from 00467bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `m_fileoffset` (`+0x264`) of a `TESFile` (Xbox PDB).
+pub fn fn_00467bb0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x264)
+}
+
+// Translated from 00467bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the record `file` is positioned on (the record loader called by
+/// `fn_00467780`; not named by the Xbox PDB map). `flag` selects whether
+/// the form that already exists for the record id is looked up and checked;
+/// `form` is the form to load into (null: look it up by the record id, or
+/// create one); `allow_without_cell` lets reference records load while no
+/// cell has been loaded yet. Returns false when the record is rejected.
+/// The allocation scope (kind `0x30`, line `0x1e99`) is held throughout.
+///
+/// In order: the state `ucGameSettingsLoadState` follows the record type
+/// (the first `GMST` sets 1, any other type sets 2, and a `GMST` after the
+/// first clears it); with the form found, a record of another type than the
+/// form is rejected with "FORMS: Form (%08X) in file \"%s\" has wrong type"
+/// (`ARMO` and `ARMA` are accepted for each other); a partial record (flag
+/// `0x4000` of the header, for a non-master file or one with masters, on a
+/// form whose virtual `0x118` says so) updates the form in place
+/// (remembering a `CELL`, `WRLD` or `DIAL` form in the words `0x011c3f30`,
+/// `0x011c3f34` and `0x011cbeb0`) and returns true; a partial record with no
+/// form is rejected unless its id belongs to the file (then the flag is
+/// cleared); a form that is not marked with flag `0x20` gets the two calls
+/// (`00483870`, virtual `0x18`, `00483720`, virtual `0x14`). The load itself
+/// is one case per record type (`TES4`, `GMST`, `SKIL`, `NAVI`, `CELL`,
+/// `WRLD`, `LAND`, `NAVM`, `DIAL`, `INFO`, `IDLE` / `CPTH`, `AVIF`, `DOBJ`,
+/// the reference records and the generic types in [`GENERIC_FORM_TYPES`]);
+/// every other type creates its form with `TESDataHandler::CreateFormOfType`
+/// (warnings disabled meanwhile), logs "FORMS: Unknown %s_ID in
+/// ConstructObject." if that fails, and puts a form it created into the
+/// object list. The compiler's exception frame is not translated.
+pub fn fn_00467bd0(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    file: Ptr,
+    flag: u8,
+    form: Ptr,
+    allow_without_cell: u8,
+) -> bool {
+    let scope = scope_enter(e, 0x30, 0x1e99);
+    let result = load_record(e, this, file, flag, form.addr(), allow_without_cell);
+    scope_leave(e, scope);
+    result
+}
+
+/// The body of `fn_00467bd0` (everything between entering and leaving its
+/// allocation scope).
+fn load_record(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    file: Ptr,
+    flag: u8,
+    form: u32,
+    allow_without_cell: u8,
+) -> bool {
+    let mut form = form;
+    let record_type = e.call(FILE_GET_RECORD_TYPE, &args![file]).u32();
+    let state = e.get(this, TESDataHandler::ucGameSettingsLoadState);
+    if state == 0 && record_type == FORM_TYPE_GMST {
+        e.set(this, TESDataHandler::ucGameSettingsLoadState, 1);
+    } else {
+        let not_settings = record_type != FORM_TYPE_GMST;
+        e.set(
+            this,
+            TESDataHandler::ucGameSettingsLoadState,
+            not_settings as u8,
+        );
+        if not_settings {
+            e.set(this, TESDataHandler::ucGameSettingsLoadState, 2);
+        }
+    }
+
+    // The form the id belongs to, if the caller asked for the check.
+    let mut check_form = true;
+    if flag != 0 {
+        let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+        if !e.call(FORM_ID_CHECK, &args![id]).bool() {
+            check_form = false;
+        }
+    }
+    if check_form {
+        if form == 0 {
+            let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+            form = e.call(FORM_BY_ID, &args![id]).u32();
+        }
+        if form != 0 {
+            let mut wrong_type = false;
+            if e.call(FORM_GET_TYPE, &args![form]).u32() != record_type {
+                if record_type == FORM_TYPE_ARMO || record_type == FORM_TYPE_ARMA {
+                    if e.call(FORM_GET_TYPE, &args![form]).u32() != FORM_TYPE_ARMO
+                        && e.call(FORM_GET_TYPE, &args![form]).u32() != FORM_TYPE_ARMA
+                    {
+                        wrong_type = true;
+                    }
+                } else {
+                    wrong_type = true;
+                }
+            }
+            if wrong_type {
+                let table_entry = e.mem.u32(FORM_TYPE_NAME_TABLE + record_type * 12);
+                let form_type_name = e.call(FORM_GET_TYPE_NAME, &args![form]).u32();
+                let file_name = e.call(FILE_NAME, &args![file]).u32();
+                let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+                e.call(
+                    LOG_MESSAGE,
+                    &args![
+                        WRONG_TYPE_FORMAT,
+                        id,
+                        file_name,
+                        form_type_name,
+                        table_entry
+                    ],
+                );
+                return false;
+            }
+        }
+    }
+
+    // A partial record of a plugin that is not a master (or has masters).
+    let mut partial = false;
+    let has_masters = if e.call(FILE_GET_MASTER, &args![file]).bool() {
+        let masters = fn_00464df0(e, file);
+        !e.call(LIST_IS_EMPTY, &args![masters]).bool()
+    } else {
+        true
+    };
+    if has_masters && form != 0 && e.vcall(form, FORM_VTABLE_IS_PARTIAL, &args![]).bool() {
+        let header = fn_00462270(e, file);
+        if e.mem.u32(header.addr() + 8) & RECORD_FLAG_PARTIAL != 0 {
+            partial = true;
+        }
+    }
+    if partial {
+        match e.call(FORM_GET_TYPE, &args![form]).u32() {
+            FORM_TYPE_CELL => e.set_global(LOADING_CELL, form),
+            FORM_TYPE_WORLD_SPACE => e.set_global(LOADING_WORLD_SPACE, form),
+            FORM_TYPE_TOPIC => e.set_global(LOADING_TOPIC, form),
+            _ => {}
+        }
+        e.vcall(form, FORM_VTABLE_SET_FILE_HOOK, &args![file]);
+        e.call(FORM_SET_FILE, &args![form, file]);
+        e.call(FORM_STEP_484AB0, &args![form, 0u32]);
+        if e.call(FILE_GET_ACTIVE, &args![file]).bool() {
+            e.vcall(form, FORM_VTABLE_SET_ALTERED, &args![1u32]);
+        }
+        return true;
+    }
+    if form == 0 {
+        let header = fn_00462270(e, file);
+        if e.mem.u32(header.addr() + 8) & RECORD_FLAG_PARTIAL != 0 {
+            let id = e.call(FILE_GET_FORM_ID, &args![file]).u32();
+            e.call(LOG_MESSAGE, &args![PARTIAL_FORM_FORMAT, id]);
+            let owner = e.call(FILE_GET_FORM_ID, &args![file]).u32() >> 24;
+            let compile_index = e.call(FILE_COMPILE_INDEX, &args![file]).u8() as u32;
+            if owner != compile_index {
+                return false;
+            }
+            e.call(LOG_MESSAGE, &args![PARTIAL_FORM_CLEARED_MESSAGE]);
+            let header = fn_00462270(e, file);
+            let flags = e.mem.u32(header.addr() + 8);
+            e.mem
+                .set_u32(header.addr() + 8, flags & !RECORD_FLAG_PARTIAL);
+        }
+    }
+    if form != 0 {
+        let header = fn_00462270(e, file);
+        if e.mem.u32(header.addr() + 8) & RECORD_FLAG_DELETED == 0 {
+            e.call(FORM_STEP_483870, &args![form]);
+            e.vcall(form, FORM_VTABLE_BEFORE_LOAD, &args![]);
+            e.call(FORM_STEP_483720, &args![form]);
+            e.vcall(form, FORM_VTABLE_AFTER_LOAD, &args![]);
+        }
+    }
+
+    match record_type {
+        FORM_TYPE_TES4 => {
+            load_header_record(e, file);
+            true
+        }
+        FORM_TYPE_GMST => {
+            load_game_setting(e, file);
+            true
+        }
+        FORM_TYPE_SKIL => {
+            if form != 0 {
+                let skill = e
+                    .call(
+                        DYNAMIC_CAST,
+                        &args![
+                            form,
+                            0u32,
+                            FORM_TYPE_DESCRIPTOR,
+                            SKILL_TYPE_DESCRIPTOR,
+                            0u32
+                        ],
+                    )
+                    .u32();
+                if skill != 0 {
+                    e.call(SKILL_STEP_617EA0, &args![skill]);
+                    tes_data_handler_load_form(e, Ptr::new(skill), file);
+                }
+            }
+            true
+        }
+        FORM_TYPE_NAVI => load_nav_mesh_info_map(e, file, form),
+        FORM_TYPE_CELL => load_cell(e, this, file, form),
+        t if REFERENCE_FORM_TYPES.contains(&t) => {
+            load_reference(e, this, file, record_type, form, allow_without_cell)
+        }
+        FORM_TYPE_WORLD_SPACE => {
+            if form == 0 {
+                let memory = e.call(OPERATOR_NEW, &args![0xecu32]).u32();
+                let world_space = if memory == 0 {
+                    0
+                } else {
+                    e.call(WORLD_SPACE_CONSTRUCT, &args![memory]).u32()
+                };
+                tes_data_handler_load_form(e, Ptr::new(world_space), file);
+                let world_spaces = this.at(TESDataHandler::listWorldSpaces);
+                list_add_item(e, world_spaces.addr(), world_space);
+                e.set_global(LOADING_WORLD_SPACE, world_space);
+            } else {
+                tes_data_handler_load_form(e, Ptr::new(form), file);
+                e.set_global(LOADING_WORLD_SPACE, form);
+            }
+            true
+        }
+        FORM_TYPE_LAND => {
+            let cell = e.global::<u32>(LOADING_CELL);
+            if cell != 0 {
+                let mut land = e.call(CELL_GET_LAND, &args![cell]).u32();
+                if land == 0 {
+                    let memory = e.call(OPERATOR_NEW, &args![0x2cu32]).u32();
+                    land = if memory == 0 {
+                        0
+                    } else {
+                        e.call(LAND_CONSTRUCT, &args![memory]).u32()
+                    };
+                    let cell = e.global::<u32>(LOADING_CELL);
+                    e.call(LAND_SET_CELL, &args![land, cell]);
+                    let cell = e.global::<u32>(LOADING_CELL);
+                    e.call(CELL_SET_LAND, &args![cell, land]);
+                }
+                tes_data_handler_load_form(e, Ptr::new(land), file);
+            }
+            true
+        }
+        FORM_TYPE_NAV_MESH => load_nav_mesh(e, file, form),
+        FORM_TYPE_TOPIC => {
+            let scope = scope_enter(e, 0x35, 0x213b);
+            if form == 0 {
+                let memory = e.call(OPERATOR_NEW, &args![0x48u32]).u32();
+                let topic = if memory == 0 {
+                    0
+                } else {
+                    e.call(TOPIC_CONSTRUCT, &args![memory, 0u32]).u32()
+                };
+                tes_data_handler_load_form(e, Ptr::new(topic), file);
+                fn_00461780(e, this, topic);
+            } else {
+                tes_data_handler_load_form(e, Ptr::new(form), file);
+            }
+            scope_leave(e, scope);
+            true
+        }
+        FORM_TYPE_TOPIC_INFO => {
+            let scope = scope_enter(e, 0x35, 0x2152);
+            let mut form = form;
+            let existed = form != 0;
+            if !existed {
+                let memory = e.call(OPERATOR_NEW, &args![0x50u32]).u32();
+                form = if memory == 0 {
+                    0
+                } else {
+                    e.call(TOPIC_INFO_CONSTRUCT, &args![memory, 0u32]).u32()
+                };
+            }
+            e.set_global(LOADING_TOPIC_INFO, form);
+            let loaded = tes_data_handler_load_form(e, Ptr::new(form), file);
+            if !existed {
+                let topic_info = e.global::<u32>(LOADING_TOPIC_INFO);
+                fn_004617b0(e, this, topic_info);
+            }
+            scope_leave(e, scope);
+            loaded
+        }
+        FORM_TYPE_IDLE | FORM_TYPE_CAMERA_PATH => {
+            if form == 0 {
+                let created = tes_data_handler_create_form_of_type(e, record_type as u8);
+                tes_data_handler_load_form(e, created, file);
+            } else {
+                tes_data_handler_load_form(e, Ptr::new(form), file);
+            }
+            true
+        }
+        FORM_TYPE_ACTOR_VALUE => {
+            tes_data_handler_load_form(e, Ptr::new(form), file);
+            true
+        }
+        FORM_TYPE_DEFAULT_OBJECTS => {
+            let manager = e.call(DEFAULT_OBJECT_MANAGER_INSTANCE, &args![]).u32();
+            tes_data_handler_load_form(e, Ptr::new(manager), file);
+            true
+        }
+        t if t <= 0xff && GENERIC_FORM_TYPES.contains(&(t as u8)) => {
+            if form == 0 {
+                let created = tes_data_handler_create_form_of_type(e, record_type as u8);
+                tes_data_handler_load_form(e, created, file);
+                tes_data_handler_add_form_to_data_handler(e, this, created);
+            } else {
+                tes_data_handler_load_form(e, Ptr::new(form), file);
+            }
+            true
+        }
+        _ => load_other_record(e, this, file, record_type, form),
+    }
+}
+
+/// Adds `item` to the `BSSimpleList` at `list` through the
+/// word-holding-the-item convention (`00905820`).
+fn list_add_item(e: &mut Engine, list: u32, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_APPEND, &args![list, slot]);
+    });
+}
+
+/// `TES4` record: walks its chunks; the `ONAM` chunk holds a table of form
+/// ids; each is converted (swapped when the file needs it) so that the
+/// master index in its top byte becomes the compile index of that master (or
+/// of this file) and registered with `00473f20`. Only the first `ONAM` chunk
+/// is read.
+fn load_header_record(e: &mut Engine, file: Ptr) {
+    let mut chunk = e.call(FILE_GET_CHUNK_ID, &args![file]).u32();
+    while chunk != 0 {
+        if chunk == CHUNK_ONAM {
+            let scope = scope_enter(e, 0x16, 0x1fe0);
+            let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+            let count = size >> 2;
+            let bytes = count.saturating_mul(4);
+            let buffer = e.call(OPERATOR_NEW, &args![bytes]).u32();
+            e.call(FILE_GET_CHUNK_DATA, &args![file, buffer, size]);
+            for index in 0..count {
+                let mut id = e.mem.u32(buffer + index * 4);
+                if e.call(FILE_MUST_ENDIAN_CONVERT, &args![file]).bool() {
+                    id = e.with_stack(4, |e, slot| {
+                        e.mem.set_u32(slot.addr(), id);
+                        e.call(SWAP_WORD, &args![slot, 0u32]);
+                        e.mem.u32(slot.addr())
+                    });
+                }
+                let master_index = id >> 24;
+                let mut master = e
+                    .call(FILE_GET_INDEX_FILE, &args![file, master_index + 1])
+                    .u32();
+                if master == 0 {
+                    master = file.addr();
+                }
+                let compile_index = e.call(FILE_COMPILE_INDEX, &args![master]).u8() as u32;
+                id = (id & 0x00ff_ffff) | compile_index << 24;
+                e.call(FILE_REGISTER_ID, &args![id, file]);
+            }
+            e.call(OPERATOR_DELETE, &args![buffer]);
+            chunk = 0;
+            scope_leave(e, scope);
+        } else if !e.call(FILE_NEXT_CHUNK, &args![file]).bool() {
+            chunk = 0;
+        } else {
+            chunk = e.call(FILE_GET_CHUNK_ID, &args![file]).u32();
+        }
+    }
+}
+
+/// `GMST` record: when the first chunk is `EDID`, reads the chunk into a
+/// buffer on the stack and hands it to the game settings object
+/// (`00404a70`, virtual `0x28` with the file and the buffer). The
+/// allocation scope has kind 9, line `0x2111`.
+fn load_game_setting(e: &mut Engine, file: Ptr) {
+    let scope = scope_enter(e, 9, 0x2111);
+    if e.call(FILE_GET_CHUNK_ID, &args![file]).u32() == CHUNK_EDID {
+        let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32();
+        e.with_stack(size.max(4), |e, buffer| {
+            e.call(FILE_GET_CHUNK_DATA, &args![file, buffer, 0u32]);
+            let settings = e.call(GAME_SETTINGS_OBJECT, &args![]).u32();
+            e.vcall(settings, 0x28, &args![file, buffer]);
+        });
+    }
+    scope_leave(e, scope);
+}
+
+/// `NAVI` record: loads the nav mesh info map, creating it (0x40 bytes,
+/// `NavMeshInfoMap::NavMeshInfoMap`) and handing it to
+/// `TES::SetNavMeshInfoMap` first when there is none. Allocation scope kind
+/// `0x2e`, line `0x272d`.
+fn load_nav_mesh_info_map(e: &mut Engine, file: Ptr, form: u32) -> bool {
+    let scope = scope_enter(e, 0x2e, 0x272d);
+    if form == 0 {
+        let memory = e.call(OPERATOR_NEW, &args![0x40u32]).u32();
+        let map = if memory == 0 {
+            0
+        } else {
+            e.call(NAV_MESH_INFO_MAP_CONSTRUCT, &args![memory]).u32()
+        };
+        let tes = e.global::<u32>(TES_SINGLETON);
+        e.call(TES_SET_NAV_MESH_INFO_MAP, &args![tes, map]);
+        tes_data_handler_load_form(e, Ptr::new(map), file);
+    } else {
+        tes_data_handler_load_form(e, Ptr::new(form), file);
+    }
+    scope_leave(e, scope);
+    true
+}
+
+/// `CELL` record: creates the cell when there is none (0xE0 bytes), loads
+/// it, marks it altered when a save game is being loaded and sets bit 0
+/// of its flags; a cell it created goes to `arrayInteriorCells` (interior)
+/// or to the world space (exterior, the first world space when none is being
+/// loaded); an exterior cell the world space refuses is destroyed after
+/// logging "CELLS: Error adding %scell ..." and replaced by the cell the
+/// world space has at its coordinates. The result is remembered in
+/// `0x011c3f30`.
+fn load_cell(e: &mut Engine, this: Ptr<TESDataHandler>, file: Ptr, form: u32) -> bool {
+    let mut cell = form;
+    let mut created = false;
+    if cell == 0 {
+        let memory = e.call(OPERATOR_NEW, &args![0xe0u32]).u32();
+        cell = if memory == 0 {
+            0
+        } else {
+            e.call(CELL_CONSTRUCT, &args![memory]).u32()
+        };
+        created = true;
+    }
+    tes_data_handler_load_form(e, Ptr::new(cell), file);
+    if e.get(this, TESDataHandler::bSaveLoadGame) {
+        e.vcall(cell, FORM_VTABLE_SET_ALTERED, &args![1u32]);
+    }
+    e.call(FORM_SET_FLAG_BIT_0, &args![cell, 1u32]);
+    if created {
+        if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+            let cells = this.at(TESDataHandler::arrayInteriorCells).addr();
+            let count = e.call(ARRAY_SIZE, &args![cells]).u32();
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), cell);
+                e.call(ARRAY_SET_AT_GROW, &args![cells, count, slot]);
+            });
+        } else {
+            if e.global::<u32>(LOADING_WORLD_SPACE) == 0 {
+                let world_spaces = fn_00460140(e, this).addr();
+                let first = list_item(e, world_spaces);
+                e.set_global(LOADING_WORLD_SPACE, first);
+            }
+            let world_space = e.global::<u32>(LOADING_WORLD_SPACE);
+            if !e.call(WORLD_ADD_CELL, &args![world_space, cell]).bool() {
+                let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+                let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+                let world_space = e.global::<u32>(LOADING_WORLD_SPACE);
+                let existing = e.call(WORLD_GET_CELL, &args![world_space, x, y]).u32();
+                let prefix = if e.call(CELL_IS_PERSISTENT, &args![cell]).bool() {
+                    PERSISTENT_PREFIX
+                } else {
+                    NO_PREFIX
+                };
+                let world_space = e.global::<u32>(LOADING_WORLD_SPACE);
+                let world_id = e.call(FORM_GET_ID, &args![world_space]).u32();
+                let cell_id = e.call(FORM_GET_ID, &args![cell]).u32();
+                e.call(
+                    LOG_MESSAGE,
+                    &args![CELL_ADD_ERROR_FORMAT, prefix, cell_id, world_id],
+                );
+                if cell != 0 {
+                    e.vcall(cell, FORM_VTABLE_DELETE, &args![1u32]);
+                }
+                cell = existing;
+            }
+        }
+    }
+    e.set_global(LOADING_CELL, cell);
+    true
+}
+
+/// `NAVM` record: loads the nav mesh (0x108 bytes from the aligned
+/// allocator, built by `0068eb80`, held by a smart pointer the game keeps on
+/// its stack). For a new nav mesh whose second member (`59bb30`) exists and
+/// whose `70ec90` is empty, builds a 0x10-byte holder (`004694e0`) and
+/// hands it to that member (`00557760`); then gives the object `70ec90`
+/// answers a copy of the smart pointer (`fn_00469500`). Allocation scope
+/// kind `0x2e`, line `0x270f`.
+fn load_nav_mesh(e: &mut Engine, file: Ptr, form: u32) -> bool {
+    let scope = scope_enter(e, 0x2e, 0x270f);
+    if form == 0 {
+        let memory = e.call(ALIGNED_NEW, &args![0x108u32]).u32();
+        let nav_mesh = if memory == 0 {
+            0
+        } else {
+            e.call(NAV_MESH_CONSTRUCT, &args![memory]).u32()
+        };
+        e.with_stack(4, |e, pointer| {
+            fn_00464fc0(e, pointer, nav_mesh);
+            let mesh = e.call(SMART_POINTER_GET, &args![pointer]).u32();
+            tes_data_handler_load_form(e, Ptr::new(mesh), file);
+            let mesh = e.call(SMART_POINTER_GET, &args![pointer]).u32();
+            if e.call(NAV_MESH_MEMBER, &args![mesh]).u32() != 0 {
+                let mesh = e.call(SMART_POINTER_GET, &args![pointer]).u32();
+                let member = e.call(NAV_MESH_MEMBER, &args![mesh]).u32();
+                if e.call(NAV_MESH_MEMBER_STATE, &args![member]).u32() == 0 {
+                    let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+                    let holder = if memory == 0 {
+                        0
+                    } else {
+                        fn_004694e0(e, Ptr::new(memory)).addr()
+                    };
+                    let mesh = e.call(SMART_POINTER_GET, &args![pointer]).u32();
+                    let member = e.call(NAV_MESH_MEMBER, &args![mesh]).u32();
+                    e.call(NAV_MESH_MEMBER_SET, &args![member, holder]);
+                }
+                e.with_stack(4, |e, copy| {
+                    e.call(SMART_POINTER_COPY, &args![copy, pointer]);
+                    let value = e.mem.u32(copy.addr());
+                    let mesh = e.call(SMART_POINTER_GET, &args![pointer]).u32();
+                    let member = e.call(NAV_MESH_MEMBER, &args![mesh]).u32();
+                    let target = e.call(NAV_MESH_MEMBER_STATE, &args![member]).u32();
+                    fn_00469500(e, Ptr::new(target), value);
+                });
+            }
+            e.call(SMART_POINTER_DESTROY, &args![pointer]);
+        });
+    } else {
+        tes_data_handler_load_form(e, Ptr::new(form), file);
+    }
+    scope_leave(e, scope);
+    true
+}
+
+/// The reference records (`REFR`, `ACHR`, `ACRE`, `PMIS`, `PGRE`, `PBEA`,
+/// `PFLA`, `PCBE`). Rejected (false) when no cell is being loaded and
+/// `allow_without_cell` is 0. The reference is `form`, or a new one from
+/// `TESObjectREFR::CreateReference(type, 1)`; for an existing one whose
+/// parent cell (virtual `0` of the sub-object at `+0x18`) is the cell being
+/// loaded nothing needs placing again (`is_new` false), otherwise it is
+/// removed from its parent cell. It loads (`LoadForm`); when that fails the
+/// reference is detached (base type, parent cell, persistent cell or virtual
+/// `0x228`), put on `listBadForms` and removed from the process lists.
+/// For a reference with a base object: placed in the cell being loaded and
+/// moved to the cell at its position when the cell is persistent; the base
+/// object gets virtual `0x16c` / `0x170`; while a save game loads, virtual
+/// `0x1cc(0, 1)`; and a persistent reference of a file with a version below
+/// 0.2 logs "CELLS: ref (%08X) to base object %s (%08X) in cell %s (%i, %i)
+/// (%08X) is persistent in the non-persistent file %s." and clears bit
+/// `0x400` of its flags.
+fn load_reference(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    file: Ptr,
+    record_type: u32,
+    form: u32,
+    allow_without_cell: u8,
+) -> bool {
+    let _ = this;
+    if e.global::<u32>(LOADING_CELL) == 0 && allow_without_cell == 0 {
+        return false;
+    }
+    let mut is_new = true;
+    let reference;
+    if form == 0 {
+        reference = e
+            .call(REFERENCE_CREATE, &args![record_type & 0xff, 1u32])
+            .u32();
+    } else {
+        reference = form;
+        e.call(OBJECT_NEXT, &args![reference]);
+        let parent = e.vcall(reference + 0x18, 0, &args![]).u32();
+        if parent == e.global::<u32>(LOADING_CELL) {
+            is_new = false;
+        } else if parent != 0 {
+            e.call(CELL_REMOVE_REFERENCE, &args![parent, reference]);
+        }
+    }
+    if !tes_data_handler_load_form(e, Ptr::new(reference), file) {
+        if e.call(OBJECT_NEXT, &args![reference]).u32() == 0 {
+            e.call(REFERENCE_SET_BASE_TYPE, &args![reference, record_type]);
+        }
+        if e.call(REFERENCE_GET_PARENT_CELL, &args![reference]).u32() != 0 {
+            let parent = e.call(REFERENCE_GET_PARENT_CELL, &args![reference]).u32();
+            e.call(CELL_REMOVE_REFERENCE, &args![parent, reference]);
+        }
+        let cell = e.global::<u32>(LOADING_CELL);
+        if cell != 0 && e.call(CELL_IS_PERSISTENT, &args![cell]).bool() {
+            let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+            let cell = e.global::<u32>(LOADING_CELL);
+            e.call(EXTRA_SET_PERSISTENT_CELL, &args![extra_list, cell]);
+        } else {
+            let cell = e.global::<u32>(LOADING_CELL);
+            e.vcall(reference, REFERENCE_VTABLE_SET_CELL, &args![cell]);
+        }
+        let bad_forms = this.at(TESDataHandler::listBadForms).addr();
+        e.with_stack(8, |e, slots| {
+            e.mem.set_u32(slots.addr(), reference);
+            let found = e
+                .call(BAD_FORM_LIST_FIND, &args![bad_forms, slots, 0u32])
+                .u32();
+            if found == 0 {
+                e.mem.set_u32(slots.addr() + 4, reference);
+                e.call(BAD_FORM_LIST_APPEND, &args![bad_forms, slots.addr() + 4]);
+            }
+        });
+        is_new = false;
+        let mobile = e
+            .call(
+                DYNAMIC_CAST,
+                &args![
+                    reference,
+                    0u32,
+                    REFERENCE_TYPE_DESCRIPTOR,
+                    MOBILE_OBJECT_TYPE_DESCRIPTOR,
+                    0u32
+                ],
+            )
+            .u32();
+        if mobile != 0 {
+            e.call(
+                PROCESS_LISTS_REMOVE_REFERENCE,
+                &args![OBJECT_011E0E80, mobile, 3u32],
+            );
+        }
+    }
+    if e.call(OBJECT_NEXT, &args![reference]).u32() != 0 {
+        let flag_bit = fn_00469570(e);
+        if flag_bit {
+            is_new = false;
+        }
+        if is_new {
+            let cell = e.global::<u32>(LOADING_CELL);
+            if cell != 0 {
+                e.call(CELL_ADD_REFERENCE, &args![cell, reference, 0u32]);
+                if e.call(CELL_IS_PERSISTENT, &args![cell]).bool() {
+                    let parent = e.call(REFERENCE_GET_PARENT_CELL, &args![reference]).u32();
+                    if parent != 0 {
+                        let position = e.vcall(reference, REFERENCE_VTABLE_GET_POSITION, &args![]);
+                        let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+                        let moved_to = e
+                            .call(
+                                WORLD_GET_CELL_FROM_WORLD_COORD,
+                                &args![world_space, position.u32()],
+                            )
+                            .u32();
+                        if parent != moved_to {
+                            if moved_to != 0 {
+                                e.call(CELL_ADD_REFERENCE, &args![moved_to, reference, 0u32]);
+                            } else {
+                                e.call(CELL_REMOVE_REFERENCE, &args![parent, reference]);
+                            }
+                        }
+                    }
+                }
+            }
+            if !e.call(FORM_HAS_FLAG_BIT_5, &args![reference]).bool() {
+                let base = e.call(OBJECT_NEXT, &args![reference]).u32();
+                e.vcall(base, BASE_VTABLE_ADDED_TO_CELL, &args![]);
+            }
+        } else if e.call(FORM_HAS_FLAG_BIT_5, &args![reference]).bool() {
+            let base = e.call(OBJECT_NEXT, &args![reference]).u32();
+            e.vcall(base, BASE_VTABLE_REMOVED_FROM_CELL, &args![]);
+        }
+        let save_load = e.global::<u32>(SAVE_LOAD_GAME_SINGLETON);
+        if save_load != 0
+            && e.call(SAVE_LOAD_ACTIVE, &args![save_load]).bool()
+            && e.call(REFERENCE_STEP_43FCD0, &args![reference]).u32() != 0
+        {
+            e.vcall(reference, REFERENCE_VTABLE_SET_EXTRA, &args![0u32, 1u32]);
+        }
+        if e.call(REFERENCE_GET_PERSISTS, &args![reference]).bool() {
+            let version = fn_004694c0(e, file);
+            if (version as f64) < e.global::<f64>(OLD_FILE_VERSION_LIMIT) {
+                report_persistent_reference(e, file, reference);
+                let flags = e.call(REFERENCE_FLAGS, &args![reference]).u32();
+                e.call(REFERENCE_SET_FLAGS, &args![reference, flags & 0xffff_fbff]);
+            }
+        }
+    }
+    true
+}
+
+/// Logs "CELLS: ref (%08X) to base object %s (%08X) in cell %s (%i, %i)
+/// (%08X) is persistent in the non-persistent file %s." for a persistent
+/// `reference` loaded from `file`. The editor ids come from virtual `0x130`
+/// of the cell being loaded and of the base object, each passed through
+/// `fn_00464f30`.
+fn report_persistent_reference(e: &mut Engine, file: Ptr, reference: u32) {
+    let base = e.call(OBJECT_NEXT, &args![reference]).u32();
+    let file_name = e.call(FILE_NAME, &args![file]).u32();
+    let cell = e.global::<u32>(LOADING_CELL);
+    let cell_id = e.call(FORM_GET_ID, &args![cell]).u32();
+    let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+    let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+    let cell_editor_id = e.vcall(cell, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+    let cell_editor_id = fn_00464f30(e, cell_editor_id);
+    let base_id = e.call(FORM_GET_ID, &args![base]).u32();
+    let base_editor_id = e.vcall(base, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+    let base_editor_id = fn_00464f30(e, base_editor_id);
+    let reference_id = e.call(FORM_GET_ID, &args![reference]).u32();
+    e.call(
+        LOG_MESSAGE,
+        &args![
+            PERSISTENT_REFERENCE_FORMAT,
+            reference_id,
+            base_editor_id,
+            base_id,
+            cell_editor_id,
+            x,
+            y,
+            cell_id,
+            file_name
+        ],
+    );
+}
+
+/// The types `fn_00467bd0` has no case for: creates the form with
+/// `CreateFormOfType` unless one was given, with warnings disabled meanwhile.
+/// Without a form: logs "FORMS: Unknown %s_ID in ConstructObject." with the
+/// four characters of the record tag (or a message of its own for a type 0
+/// record without a tag) and returns false. Otherwise loads it: if that
+/// fails the form is destroyed (virtual `0x10`, flag 1) and false returned;
+/// a form it created goes into the object list (`pObjectList`).
+fn load_other_record(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    file: Ptr,
+    record_type: u32,
+    form: u32,
+) -> bool {
+    e.call(DISABLE_WARNING_COUNT, &args![1u32]);
+    let is_new = form == 0;
+    let mut created = form;
+    if is_new {
+        created = tes_data_handler_create_form_of_type(e, record_type as u8).addr();
+    }
+    if created == 0 {
+        let header = fn_00462270(e, file);
+        let tag = e.mem.u32(header.addr());
+        if tag != 0 {
+            e.with_stack(8, |e, text| {
+                for byte in 0..4 {
+                    e.mem.set_u8(text.addr() + byte, (tag >> (8 * byte)) as u8);
+                }
+                e.mem.set_u8(text.addr() + 4, 0);
+                e.call(LOG_MESSAGE, &args![UNKNOWN_ID_FORMAT, text]);
+            });
+        } else if record_type == 0 {
+            e.call(LOG_MESSAGE, &args![UNKNOWN_RECORD_MESSAGE]);
+        }
+        e.call(DISABLE_WARNING_COUNT, &args![0u32]);
+        return false;
+    }
+    e.call(DISABLE_WARNING_COUNT, &args![0u32]);
+    if tes_data_handler_load_form(e, Ptr::new(created), file) {
+        if is_new {
+            let object_list = e.get(this, TESDataHandler::pObjectList).addr();
+            e.call(OBJECT_LIST_ADD, &args![object_list, created]);
+        }
+        true
+    } else {
+        e.vcall(created, FORM_VTABLE_DELETE, &args![1u32]);
+        false
+    }
+}
+
+// Translated from 004694c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fVersion` (`+0x3DC`, the float) of a `TESFile`: `fileHeaderInfo`.
+pub fn fn_004694c0(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x3dc)
+}
+
+// Translated from 004694e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0042f800(this)` (a smart-pointer holder's constructor) and returns
+/// `this`.
+pub fn fn_004694e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(HOLDER_CONSTRUCT, &args![this]);
+    this
+}
+
+// Translated from 00469500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0042f850(this, &argument)` followed by the destructor of the argument
+/// (`0042fa40`): `argument` is a smart pointer passed by value (one word on
+/// the stack, which the callee destroys). Returns what `0042f850` answers.
+/// The compiler's exception frame is not translated.
+pub fn fn_00469500(e: &mut Engine, this: Ptr, argument: u32) -> u32 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), argument);
+        let result = e.call(SMART_POINTER_HOLDER_ADD, &args![this, slot]).u32();
+        e.call(SMART_POINTER_DESTROY, &args![slot]);
+        result
+    })
+}
+
+// Translated from 00469570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 1 of the TLS word at `+0x294` (the same word `fn_004623f0` and
+/// `fn_00462480` work on).
+pub fn fn_00469570(e: &mut Engine) -> bool {
+    let tls = e.tls();
+    e.mem.u32(tls + TLS_FLAG_WORD) & 2 != 0
+}
+
+// Translated from 004695a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the group `header` of `file` is loaded (the check `fn_00467780`
+/// makes before skipping a group): true by default, and false when `header`
+/// is not null and its type word (`+0xC`) is 4, 5 or 9 (an unsigned compare:
+/// at least 4 and either at most 5 or 9) or, while a save game is loaded,
+/// the type `TESForm::GetFormTypeFromFormString(header +8)` is one of
+/// [`SAVE_SKIPPED_GROUP_TYPES`]. A file that is not null, is not a master
+/// and is not read for the save game (`0x011de45c` with `0047c850`) is true
+/// without looking at the header. `this` is not read.
+pub fn fn_004695a0(e: &mut Engine, _this: Ptr<TESDataHandler>, file: Ptr, header: Ptr) -> bool {
+    let mut loaded = true;
+    if !file.is_null() && !e.call(FILE_GET_MASTER, &args![file]).bool() {
+        let save_load = e.global::<u32>(SAVE_LOAD_GAME_SINGLETON);
+        if save_load == 0 || !e.call(SAVE_LOAD_ACTIVE, &args![save_load]).bool() {
+            return true;
+        }
+    }
+    if !header.is_null() {
+        let group_type = e.mem.u32(header.addr() + 0xc);
+        if group_type >= 4 && (group_type <= 5 || group_type == 9) {
+            loaded = false;
+        }
+        if loaded {
+            let save_load = e.global::<u32>(SAVE_LOAD_GAME_SINGLETON);
+            if save_load != 0 && e.call(SAVE_LOAD_ACTIVE, &args![save_load]).bool() {
+                let label = e.mem.u32(header.addr() + 8);
+                let form_type = e.call(FORM_TYPE_FROM_STRING, &args![label]).u32();
+                if SAVE_SKIPPED_GROUP_TYPES.contains(&form_type) {
+                    loaded = false;
+                }
+            }
+        }
+    }
+    loaded
+}
+
+/// The form type numbers (from the dispatch table at `0x00469670`) for which
+/// `fn_004695a0` says a group is not loaded while a save game is loaded.
+const SAVE_SKIPPED_GROUP_TYPES: [u32; 64] = [
+    0x03, 0x04, 0x05, 0x07, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14,
+    0x15, 0x16, 0x17, 0x1b, 0x1c, 0x1d, 0x20, 0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x2c, 0x2d, 0x2f,
+    0x30, 0x31, 0x33, 0x34, 0x35, 0x36, 0x37, 0x45, 0x46, 0x48, 0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e,
+    0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x5b, 0x5c, 0x61, 0x66, 0x6f, 0x70,
+];
+
+// Translated from 004696f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::RemoveIDFromDataHandler` (Xbox PDB): lowers `iNextID` to
+/// `form_id` when it is a runtime id (top byte 0xFF, low 24 bits above
+/// 0x7FF), `bDontRemoveIDs` is clear and `form_id` is below `iNextID`.
+pub fn tes_data_handler_remove_id_from_data_handler(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    form_id: u32,
+) {
+    if form_id != 0
+        && form_id >> 24 == 0xff
+        && !e.get(this, TESDataHandler::bDontRemoveIDs)
+        && form_id < e.get(this, TESDataHandler::iNextID)
+        && form_id & 0x00ff_ffff > 0x7ff
+    {
+        e.set(this, TESDataHandler::iNextID, form_id);
+    }
+}
+
+// Translated from 00469760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `form_id` is in use: true when a form with that id exists
+/// (`TESForm` lookup, `004839c0`), else the answer of `0084aad0(form_id)` on
+/// the object at `0x011ddf38`. `this` is not read.
+pub fn fn_00469760(e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> bool {
+    if e.call(FORM_BY_ID, &args![form_id]).u32() != 0 {
+        return true;
+    }
+    let object = e.global::<u32>(OBJECT_011DDF38);
+    e.call(FORM_ID_IN_USE, &args![object, form_id]).bool()
+}
+
+// Translated from 004697a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Increments `iNextID`; when its low 24 bits reach `0x7FFFFF` they wrap to
+/// `0x800` (the top byte is kept).
+pub fn fn_004697a0(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let next = e.get(this, TESDataHandler::iNextID).wrapping_add(1);
+    e.set(this, TESDataHandler::iNextID, next);
+    let next = e.get(this, TESDataHandler::iNextID);
+    if next & 0x00ff_ffff >= 0x7f_ffff {
+        e.set(
+            this,
+            TESDataHandler::iNextID,
+            (next & 0xff00_0000).wrapping_add(0x800),
+        );
+    }
+}
+
+// Translated from 00469800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetNextID` (Xbox PDB): the next free form id. Brackets
+/// its work with the timer object at `0x011c4000` (`0040fbf0(name)` and
+/// `0040fba0()`); skips every id `fn_00469760` says is in use; returns
+/// `iNextID` and then steps it (`fn_004697a0`).
+pub fn tes_data_handler_get_next_id(e: &mut Engine, this: Ptr<TESDataHandler>) -> u32 {
+    e.call(
+        FUNCTION_TIMER_ENTER,
+        &args![FUNCTION_TIMER, GET_NEXT_ID_NAME],
+    );
+    while fn_00469760(e, this, e.get(this, TESDataHandler::iNextID)) {
+        fn_004697a0(e, this);
+    }
+    let id = e.get(this, TESDataHandler::iNextID);
+    fn_004697a0(e, this);
+    e.call(FUNCTION_TIMER_LEAVE, &args![FUNCTION_TIMER]);
+    id
+}
+
+// Translated from 00469860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `form_id` is at least `0xFF000000` (a runtime-created id).
+pub fn fn_00469860(_e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> bool {
+    form_id >= 0xff00_0000
+}
+
+// Translated from 00469880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A cdecl wrapper of `_mbscmp(first, second)` (`00ec8244`); returns its
+/// result (the map names it `previous_character`, which it is not).
+pub fn fn_00469880(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.call(MBSCMP, &args![first, second]).i32()
+}
+
+// Translated from 004698a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates a reference to `base_form` and puts it in the world (not named by
+/// the Xbox PDB map; its callers are placement paths of the game such as
+/// `DropItemIntoWorld`, `Create` and `DoSummon`); returns the reference.
+/// `position` points to the three floats of its position and `rotation` to
+/// the three words of its rotation (copied by value to `00575700`). `cell`
+/// counts only when it is an interior cell (`00425fd0`), and then
+/// `world_space` is dropped; without a cell the target cell is the one of
+/// `world_space` at the position (the position as an integer, `>> 12`, then
+/// `TESWorldSpace::GetCellFromCellCoord`); with neither the function returns
+/// null. `existing` is a reference to reuse (null: build one);
+/// `extra_value` becomes an extra data (0x10 bytes, `0041faf0`) of a new
+/// reference, and `extra_list_value` goes to `00420a60` of the new
+/// reference when the base form is the one at `0x011ca23c`.
+///
+/// A new reference is built by the type of the base form: `NPC_` a
+/// 0x1C8-byte `Character`, `CREA` a 0x1C0-byte `Creature`, `PROJ` and `EXPL`
+/// are handed to `0046a080` / `0046a190` (their result is returned as it
+/// is), anything else a 0x68-byte `TESObjectREFR`. The reference gets its
+/// base form (a reused one only if it has none), its location and rotation,
+/// then is put in the target cell (with its 3D set up when the cell is
+/// loaded, `TES::IsCellLoaded`) or, without a cell, made persistent in the
+/// world space (`AddPersistentRef`). An actor reference then gets virtual
+/// `0x46c` unless virtual `0x290` is true, and a new one `fn_0046a010(0)`.
+/// The compiler's exception frame is not translated.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_004698a0(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    base_form: u32,
+    position: Ptr,
+    rotation: Ptr,
+    cell: u32,
+    world_space: u32,
+    existing: u32,
+    extra_value: u32,
+    extra_list_value: u32,
+) -> u32 {
+    let mut reference = 0u32;
+    let mut cell = cell;
+    let mut world_space = world_space;
+    if cell != 0 && !e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        cell = 0;
+    }
+    if cell != 0 {
+        world_space = 0;
+    }
+    if base_form != 0 && (cell != 0 || world_space != 0) {
+        let persists;
+        if existing != 0 {
+            let mut persists_now = e.call(REFERENCE_GET_PERSISTS, &args![existing]).bool();
+            e.call(REFERENCE_SET_PERSISTS, &args![existing, 0u32]);
+            let parent = e.call(REFERENCE_GET_PARENT_CELL, &args![existing]).u32();
+            if parent != 0 {
+                e.call(CELL_REMOVE_REFERENCE, &args![parent, existing]);
+            }
+            reference = existing;
+            if e.call(OBJECT_NEXT, &args![reference]).u32() == 0 {
+                e.call(REFERENCE_SET_OBJECT_REFERENCE, &args![reference, base_form]);
+            }
+            if e.call(REFERENCE_MUST_PERSIST, &args![reference]).bool() {
+                persists_now = true;
+            }
+            persists = persists_now;
+        } else {
+            match e.call(FORM_GET_TYPE, &args![base_form]).u32() {
+                FORM_TYPE_NPC => {
+                    reference = construct_reference(e, 0x1c8, CHARACTER_CONSTRUCT);
+                }
+                FORM_TYPE_CREATURE => {
+                    reference = construct_reference(e, 0x1c0, CREATURE_CONSTRUCT);
+                }
+                FORM_TYPE_PROJECTILE => {
+                    return e
+                        .call(
+                            PLACE_PROJECTILE,
+                            &args![this, base_form, position, rotation, cell, world_space],
+                        )
+                        .u32();
+                }
+                FORM_TYPE_EXPLOSION => {
+                    return e
+                        .call(
+                            PLACE_EXPLOSION,
+                            &args![this, base_form, position, rotation, cell, world_space],
+                        )
+                        .u32();
+                }
+                _ => {
+                    reference = construct_reference(e, 0x68, REFERENCE_CONSTRUCT);
+                }
+            }
+            if base_form == e.global::<u32>(BASE_FORM_011CA23C) && extra_list_value != 0 {
+                let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+                e.call(
+                    EXTRA_STEP_420A60,
+                    &args![extra_list, 0u32, extra_list_value],
+                );
+            }
+            e.call(REFERENCE_SET_OBJECT_REFERENCE, &args![reference, base_form]);
+            if extra_value != 0 {
+                let memory = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+                let extra = if memory == 0 {
+                    0
+                } else {
+                    e.call(EXTRA_CONSTRUCT, &args![memory, extra_value]).u32()
+                };
+                let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+                e.call(EXTRA_ADD, &args![extra_list, extra]);
+            }
+            if e.call(REFERENCE_STEP_564E00, &args![reference]).bool() {
+                e.call(REFERENCE_STEP_564EB0, &args![reference, 1u32]);
+            }
+            persists = e.call(REFERENCE_MUST_PERSIST, &args![reference]).bool();
+            let light = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![
+                        base_form,
+                        0u32,
+                        BOUND_OBJECT_TYPE_DESCRIPTOR,
+                        LIGHT_OBJECT_TYPE_DESCRIPTOR,
+                        0u32
+                    ],
+                )
+                .u32();
+            if light != 0 {
+                let bit = fn_0046a060(e, Ptr::new(light));
+                e.call(FORM_SET_FIRE_OFF, &args![reference, bit as u32]);
+            }
+        }
+        place_reference(
+            e,
+            this,
+            base_form,
+            position,
+            rotation,
+            cell,
+            world_space,
+            reference,
+            persists,
+        );
+    }
+    finish_placed_reference(e, reference, existing)
+}
+
+/// Allocates `size` bytes (`operator new`) and constructs a reference in them
+/// with `construct`; null when the allocation failed.
+fn construct_reference(e: &mut Engine, size: u32, construct: u32) -> u32 {
+    let memory = e.call(OPERATOR_NEW, &args![size]).u32();
+    if memory == 0 {
+        0
+    } else {
+        e.call(construct, &args![memory]).u32()
+    }
+}
+
+/// The middle of `fn_004698a0`, from virtual `0x100` of the reference to its
+/// placement in the target cell or the world space.
+#[allow(clippy::too_many_arguments)]
+fn place_reference(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    base_form: u32,
+    position: Ptr,
+    rotation: Ptr,
+    cell: u32,
+    world_space: u32,
+    reference: u32,
+    persists: bool,
+) {
+    if e.vcall(reference, REFERENCE_VTABLE_SLOT_100, &args![])
+        .bool()
+    {
+        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+        if e.call(COMPONENT_CHECK, &args![base + 0x30]).bool() {
+            let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+            e.call(COMPONENT_STEP, &args![base + 0x30, reference]);
+        }
+    }
+    let id = e.call(FORM_GET_ID, &args![reference]).u32();
+    if fn_00469860(e, this, id) {
+        e.vcall(reference, REFERENCE_VTABLE_SLOT_48, &args![0u32]);
+    }
+    let base = e.call(OBJECT_NEXT, &args![reference]).u32();
+    if e.call(DESTRUCTIBLE_CHECK, &args![base]).bool() {
+        e.call(FORM_SET_DESTRUCTIBLE, &args![reference, 1u32]);
+    }
+    e.call(REFERENCE_SET_LOCATION, &args![reference, position]);
+    let rotation_x = e.mem.u32(rotation.addr());
+    let rotation_y = e.mem.u32(rotation.addr() + 4);
+    let rotation_z = e.mem.u32(rotation.addr() + 8);
+    e.call(
+        REFERENCE_SET_ROTATION,
+        &args![reference, rotation_x, rotation_y, rotation_z],
+    );
+    let target_cell = if world_space != 0 {
+        let x = e.mem.u32(position.addr());
+        let x = e.call(FLOAT_TO_INT, &args![x]).i32() >> 12;
+        let y = e.mem.u32(position.addr() + 4);
+        let y = e.call(FLOAT_TO_INT, &args![y]).i32() >> 12;
+        e.call(WORLD_GET_CELL, &args![world_space, x, y]).u32()
+    } else {
+        cell
+    };
+    if target_cell == 0 {
+        e.vcall(reference, REFERENCE_VTABLE_SLOT_1CC, &args![0u32, 0u32]);
+        e.call(REFERENCE_SET_PERSISTS, &args![reference, 1u32]);
+        e.call(WORLD_ADD_PERSISTENT_REF, &args![world_space, reference]);
+        return;
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    if e.call(TES_IS_CELL_LOADED, &args![tes, target_cell, 0u32])
+        .bool()
+    {
+        let mut special = false;
+        for word in SPECIAL_BASE_FORM_WORDS {
+            if base_form == e.global::<u32>(word) {
+                special = true;
+                break;
+            }
+        }
+        if special {
+            let memory = e.call(ALIGNED_NEW, &args![0xacu32]).u32();
+            let object = if memory == 0 {
+                0
+            } else {
+                e.call(SPECIAL_EXTRA_CONSTRUCT, &args![memory, 0u32]).u32()
+            };
+            e.vcall(reference, REFERENCE_VTABLE_SLOT_1CC, &args![object, 1u32]);
+        }
+        e.vcall(reference, REFERENCE_VTABLE_SET_CELL, &args![target_cell]);
+        if e.call(REFERENCE_HAS_CONTAINER, &args![reference]).u32() != 0 {
+            let changes = e.call(INVENTORY_CHANGES_GET, &args![reference]).u32();
+            e.call(INVENTORY_STEP_4D1440, &args![changes]);
+            e.call(INVENTORY_STEP_4D1610, &args![changes]);
+            e.call(INVENTORY_STEP_4D1960, &args![changes]);
+            if e.call(EXTRA_CHECK_42CDE0, &args![changes]).bool() {
+                let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+                e.call(EXTRA_STEP_41AEB0, &args![extra_list]);
+            }
+        }
+        e.vcall(reference, REFERENCE_VTABLE_SET_CELL, &args![0u32]);
+    }
+    e.call(REFERENCE_STEP_564C60, &args![reference, 1u32]);
+    e.call(CELL_ADD_REFERENCE, &args![target_cell, reference, 0u32]);
+    e.call(REFERENCE_SET_PERSISTS, &args![reference, persists as u32]);
+    let node = e
+        .vcall(reference, REFERENCE_VTABLE_SLOT_1D0, &args![])
+        .u32();
+    if node != 0 {
+        let node_position = e
+            .vcall(reference, REFERENCE_VTABLE_SLOT_1F4, &args![])
+            .u32();
+        e.call(NODE_STEP_440460, &args![node, node_position]);
+        e.with_stack(0x24, |e, buffer| {
+            let orientation = e
+                .call(REFERENCE_GET_ORIENTATION, &args![reference, buffer])
+                .u32();
+            e.call(NODE_STEP_43FA80, &args![node, orientation]);
+        });
+        e.call(COLLISION_RESET_SIM, &args![node, 1u32]);
+        let scene = e.call(SHADOW_SCENE_NODE_GETTER, &args![]).u32();
+        e.call(SCENE_ADD_OBJECT, &args![scene, node]);
+        e.call(NODE_UPDATE_PROPERTIES, &args![node]);
+        e.with_stack(0x0c, |e, vector| {
+            e.call(VECTOR_CONSTRUCT, &args![vector, 0u32, 0u32, 0u32]);
+            e.call(NODE_STEP_A59C60, &args![node, vector]);
+        });
+    }
+}
+
+/// The end of `fn_004698a0`: the actor cast of the reference. An actor gets
+/// virtual `0x46c` unless virtual `0x290` is true, and, when the function
+/// built the reference itself (`existing` null), `fn_0046a010(0)`. Returns the
+/// reference.
+fn finish_placed_reference(e: &mut Engine, reference: u32, existing: u32) -> u32 {
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                reference,
+                0u32,
+                REFERENCE_TYPE_DESCRIPTOR,
+                ACTOR_TYPE_DESCRIPTOR,
+                0u32
+            ],
+        )
+        .u32();
+    if actor != 0 && !e.vcall(actor, ACTOR_VTABLE_SLOT_290, &args![]).bool() {
+        e.vcall(actor, ACTOR_VTABLE_SLOT_46C, &args![]);
+    }
+    if actor != 0 && existing == 0 {
+        fn_0046a010(e, Ptr::new(actor), 0);
+    }
+    reference
+}
+
+// Translated from 0046a010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` nonzero) or clears bit `0x200000` of the word at `this + 8`.
+pub fn fn_0046a010(e: &mut Engine, this: Ptr, flag: u8) {
+    let word = e.mem.u32(this.addr() + 8);
+    let word = if flag != 0 {
+        word | 0x20_0000
+    } else {
+        word & 0xffdf_ffff
+    };
+    e.mem.set_u32(this.addr() + 8, word);
+}
+
+// Translated from 0046a060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x20` of the word at `this + 0xA8` is set.
+pub fn fn_0046a060(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0xa8) & 0x20 != 0
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3110,6 +5879,82 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00462e80, fn_00462e80(Ptr) -> Ptr),
         entry!(0x00462ea0, fn_00462ea0(Ptr) -> Ptr),
         entry!(0x00462ec0, fn_00462ec0(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x00462ee0,
+            tes_data_handler_create_thread_safe_files(Ptr<TESDataHandler>)
+        ),
+        entry!(
+            0x00462f40,
+            tes_data_handler_get_list_file(Ptr<TESDataHandler>, Ptr) -> Ptr
+        ),
+        entry!(0x00462fb0, fn_00462fb0(Ptr<TESDataHandler>)),
+        entry!(0x00463070, fn_00463070(Ptr<TESDataHandler>, u8) -> bool),
+        entry!(0x00464d30, fn_00464d30(Ptr<TESDataHandler>, u8)),
+        entry!(0x00464d50, fn_00464d50(Ptr<TESDataHandler>, Ptr)),
+        entry!(0x00464d70, fn_00464d70(Ptr<TESDataHandler>, Ptr)),
+        entry!(0x00464d90, fn_00464d90(Ptr<TESDataHandler>, Ptr)),
+        entry!(0x00464db0, fn_00464db0(Ptr) -> u8),
+        entry!(0x00464dd0, fn_00464dd0(Ptr) -> u32),
+        entry!(0x00464df0, fn_00464df0(Ptr) -> Ptr),
+        entry!(0x00464e10, fn_00464e10(Ptr) -> Ptr),
+        entry!(0x00464e30, fn_00464e30(Ptr) -> Ptr),
+        entry!(
+            0x00464e50,
+            tes_data_handler_clean_up_bad_forms(Ptr<TESDataHandler>)
+        ),
+        entry!(0x00464f30, fn_00464f30(u32) -> u32),
+        entry!(0x00464f40, fn_00464f40(Ptr)),
+        entry!(
+            0x00464f60,
+            nav_mesh_array_get_nav_mesh_by_index(Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(0x00464fc0, fn_00464fc0(Ptr, u32) -> Ptr),
+        entry!(0x00464ff0, fn_00464ff0(Ptr, u32) -> Ptr),
+        entry!(
+            0x00465010,
+            tes_data_handler_get_compiled_file(Ptr<TESDataHandler>, i32) -> Ptr
+        ),
+        entry!(0x00465040, fn_00465040(Ptr<TESDataHandler>)),
+        entry!(
+            0x004650a0,
+            tes_data_handler_set_master_file_large_buffer(Ptr<TESDataHandler>, u32)
+        ),
+        entry!(0x00465110, tes_data_handler_create_form_of_type(u8) -> Ptr),
+        entry!(
+            0x00467780,
+            fn_00467780(Ptr<TESDataHandler>, Ptr, u8) -> bool
+        ),
+        entry!(0x00467bb0, fn_00467bb0(Ptr) -> u32),
+        entry!(
+            0x00467bd0,
+            fn_00467bd0(Ptr<TESDataHandler>, Ptr, u8, Ptr, u8) -> bool
+        ),
+        entry!(0x004694c0, fn_004694c0(Ptr) -> f32),
+        entry!(0x004694e0, fn_004694e0(Ptr) -> Ptr),
+        entry!(0x00469500, fn_00469500(Ptr, u32) -> u32),
+        entry!(0x00469570, fn_00469570() -> bool),
+        entry!(
+            0x004695a0,
+            fn_004695a0(Ptr<TESDataHandler>, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x004696f0,
+            tes_data_handler_remove_id_from_data_handler(Ptr<TESDataHandler>, u32)
+        ),
+        entry!(0x00469760, fn_00469760(Ptr<TESDataHandler>, u32) -> bool),
+        entry!(0x004697a0, fn_004697a0(Ptr<TESDataHandler>)),
+        entry!(
+            0x00469800,
+            tes_data_handler_get_next_id(Ptr<TESDataHandler>) -> u32
+        ),
+        entry!(0x00469860, fn_00469860(Ptr<TESDataHandler>, u32) -> bool),
+        entry!(0x00469880, fn_00469880(u32, u32) -> i32),
+        entry!(
+            0x004698a0,
+            fn_004698a0(Ptr<TESDataHandler>, u32, Ptr, Ptr, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x0046a010, fn_0046a010(Ptr, u8)),
+        entry!(0x0046a060, fn_0046a060(Ptr) -> bool),
     ]
 }
 
@@ -6417,5 +9262,3284 @@ mod tests {
         );
         // The node was not advanced after a move: the file is visited again.
         assert_eq!(calls(&env.e, FILE_GEN_INDEX_TABLE).len(), 3);
+    }
+
+    // ---------------------------------------------------------------
+    // Session 3: `00462ee0` to `0046a060`.
+    // ---------------------------------------------------------------
+
+    /// `engine2` plus the pages of the loader globals, the strings and the
+    /// constants the session 3 functions read; the allocation scope
+    /// functions are doubles.
+    fn engine3() -> (Engine, Ptr<TESDataHandler>) {
+        let (mut e, this) = engine2();
+        for page in [0x011c_4000, 0x0101_7000, 0x0101_8000, 0x0118_7000] {
+            e.map(page, 0x1000);
+        }
+        do_nothing(&mut e, &[SCOPE_ENTER, SCOPE_LEAVE]);
+        e.mem.set_cstr(BSA_SEARCH_FORMAT, b"Data\\%s*.bsa");
+        e.mem.set_cstr(BSA_PATH_FORMAT, b"DATA\\%s");
+        e.mem
+            .set_cstr(LOADING_FILES_FORMAT, b"Loading Files %d%% (%s)");
+        e.set_global(PERCENT_SCALE, 100.0f64);
+        e.set_global(OLD_FILE_VERSION_LIMIT, 0.2f64);
+        (e, this)
+    }
+
+    /// A zeroed `TESFile`-sized block with the name at `+0x20` (as the
+    /// `FILE_NAME` accessor, registered here, returns it).
+    fn file_named(e: &mut Engine, name: &str) -> u32 {
+        let file = e.mem.alloc(0x42c);
+        e.mem.set_cstr(file + 0x20, name.as_bytes());
+        e.register(FILE_NAME, |_, a| ret(a[0] + 0x20));
+        file
+    }
+
+    #[test]
+    fn create_thread_safe_files_picks_the_selected_files() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        build_list(&mut e, this.addr() + 0x210, &[0xa1, 0xb2, 0xc3]);
+        e.register(FILE_IS_SELECTED, |_, a| ret((a[0] != 0xb2) as u32));
+        do_nothing(&mut e, &[FILE_GET_THREAD_SAFE_FILE]);
+        start_log(&mut e);
+        e.call(0x0046_2ee0, &args![this]);
+        assert_eq!(
+            calls(&e, FILE_GET_THREAD_SAFE_FILE),
+            vec![vec![0xa1], vec![0xc3]]
+        );
+    }
+
+    #[test]
+    fn create_thread_safe_files_stops_at_an_empty_node() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        // The list head is empty: nothing is asked of any file.
+        e.register(FILE_IS_SELECTED, |_, _| panic!("no file to ask"));
+        e.call(0x0046_2ee0, &args![this]);
+    }
+
+    #[test]
+    fn get_list_file_finds_a_file_by_name_without_case() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        real_string_compare(&mut e);
+        let first = file_named(&mut e, "Fallout.esm");
+        let second = file_named(&mut e, "Update.esp");
+        build_list(&mut e, this.addr() + 0x210, &[first, second]);
+        let wanted = c_string(&mut e, "UPDATE.ESP");
+        assert_eq!(e.call(0x0046_2f40, &args![this, wanted]).u32(), second);
+        let missing = c_string(&mut e, "Missing.esp");
+        assert_eq!(e.call(0x0046_2f40, &args![this, missing]).u32(), 0);
+    }
+
+    #[test]
+    fn get_list_file_of_a_null_name_is_null_and_stops_at_a_null_item() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        real_string_compare(&mut e);
+        let file = file_named(&mut e, "Fallout.esm");
+        build_list(&mut e, this.addr() + 0x210, &[file]);
+        assert_eq!(e.call(0x0046_2f40, &args![this, 0u32]).u32(), 0);
+        // A list whose first item is null never compares anything.
+        e.mem.set_u32(this.addr() + 0x210, 0);
+        let name = c_string(&mut e, "Fallout.esm");
+        assert_eq!(e.call(0x0046_2f40, &args![this, name]).u32(), 0);
+    }
+
+    #[test]
+    fn cell_scripts_run_on_the_interior_cells_then_the_world_space_cells() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        word_array(&mut e, &[0xc1, 0, 0xc2]);
+        // Three world spaces: the cell of the first is 0xe1, the second
+        // item is null and the third has no cell.
+        build_list(&mut e, this.addr() + 0x10, &[0xd1, 0, 0xd3]);
+        e.register(ITEM_GET_CELL, |_, a| {
+            ret(if a[0] == 0xd1 { 0xe1 } else { 0 })
+        });
+        do_nothing(&mut e, &[CELL_RUN_SCRIPTS]);
+        start_log(&mut e);
+        e.call(0x0046_2fb0, &args![this]);
+        assert_eq!(
+            calls(&e, CELL_RUN_SCRIPTS),
+            vec![vec![0xc1, 1, 1], vec![0xc2, 1, 1], vec![0xe1, 1, 1]]
+        );
+        // The third world space was asked for its cell even though it has none.
+        assert_eq!(calls(&e, ITEM_GET_CELL), vec![vec![0xd1], vec![0xd3]]);
+    }
+
+    #[test]
+    fn loading_files_flag_is_the_byte_at_0x620() {
+        let (mut e, this) = engine3();
+        e.call(0x0046_4d30, &args![this, 1u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0x620), 1);
+        assert!(e.get(this, TESDataHandler::bLoadingFiles));
+        e.call(0x0046_4d30, &args![this, 0u32]);
+        assert!(!e.get(this, TESDataHandler::bLoadingFiles));
+    }
+
+    #[test]
+    fn spotter_shader_is_set_at_0x630() {
+        let (mut e, this) = engine3();
+        e.call(0x0046_4d50, &args![this, 0x1111u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x630), 0x1111);
+        assert_eq!(e.mem.u32(this.addr() + 0x634), 0);
+    }
+
+    #[test]
+    fn item_detected_shader_is_set_at_0x634() {
+        let (mut e, this) = engine3();
+        e.call(0x0046_4d70, &args![this, 0x2222u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x634), 0x2222);
+        assert_eq!(e.mem.u32(this.addr() + 0x630), 0);
+    }
+
+    #[test]
+    fn cateye_mobile_shader_is_set_at_0x638() {
+        let (mut e, this) = engine3();
+        e.call(0x0046_4d90, &args![this, 0x3333u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0x638), 0x3333);
+        assert_eq!(e.mem.u32(this.addr() + 0x634), 0);
+    }
+
+    #[test]
+    fn file_cached_flag_getter_reads_the_byte_at_0x428() {
+        let (mut e, _) = engine3();
+        let file = e.mem.alloc(0x42c);
+        assert_eq!(e.call(0x0046_4db0, &args![file]).u8(), 0);
+        e.mem.set_u8(file + 0x428, 1);
+        assert_eq!(e.call(0x0046_4db0, &args![file]).u8(), 1);
+    }
+
+    #[test]
+    fn file_form_count_getter_reads_the_word_at_0x3e0() {
+        let (mut e, _) = engine3();
+        let file = e.mem.alloc(0x42c);
+        e.mem.set_u32(file + 0x3e0, 77);
+        assert_eq!(e.call(0x0046_4dd0, &args![file]).u32(), 77);
+    }
+
+    #[test]
+    fn file_master_list_is_at_0x3ec() {
+        let (mut e, _) = engine3();
+        let file = e.mem.alloc(0x42c);
+        assert_eq!(e.call(0x0046_4df0, &args![file]).u32(), file + 0x3ec);
+    }
+
+    #[test]
+    fn player_part_at_0x878_is_an_address() {
+        let (mut e, _) = engine3();
+        assert_eq!(e.call(0x0046_4e10, &args![0x1000u32]).u32(), 0x1878);
+    }
+
+    #[test]
+    fn player_part_at_0x6a8_is_an_address() {
+        let (mut e, _) = engine3();
+        assert_eq!(e.call(0x0046_4e30, &args![0x1000u32]).u32(), 0x16a8);
+    }
+
+    #[test]
+    fn file_version_getter_reads_the_float_at_0x3dc() {
+        let (mut e, _) = engine3();
+        let file = e.mem.alloc(0x42c);
+        e.mem.set_f32(file + 0x3dc, 0.8);
+        assert_eq!(e.call(0x0046_94c0, &args![file]).f32(), 0.8);
+    }
+
+    #[test]
+    fn file_offset_getter_reads_the_word_at_0x264() {
+        let (mut e, _) = engine3();
+        let file = e.mem.alloc(0x42c);
+        e.mem.set_u32(file + 0x264, 0x1234);
+        assert_eq!(e.call(0x0046_7bb0, &args![file]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn identity_returns_its_argument() {
+        let (mut e, _) = engine3();
+        assert_eq!(
+            e.call(0x0046_4f30, &args![0xdead_beefu32]).u32(),
+            0xdead_beef
+        );
+    }
+
+    #[test]
+    fn step_wrapper_passes_this_on() {
+        let (mut e, _) = engine3();
+        do_nothing(&mut e, &[STEP_470110]);
+        start_log(&mut e);
+        e.call(0x0046_4f40, &args![0x4000u32]);
+        assert_eq!(calls(&e, STEP_470110), vec![vec![0x4000]]);
+    }
+
+    #[test]
+    fn multibyte_compare_wrapper_passes_both_strings_and_returns_the_result() {
+        let (mut e, _) = engine3();
+        e.register(MBSCMP, |_, a| ret(a[0].wrapping_sub(a[1])));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_9880, &args![7u32, 5u32]).i32(), 2);
+        assert_eq!(e.call(0x0046_9880, &args![5u32, 7u32]).i32(), -2);
+        assert_eq!(calls(&e, MBSCMP), vec![vec![7, 5], vec![5, 7]]);
+    }
+    #[test]
+    fn bad_form_clean_up_destroys_the_forms_and_restores_the_flag() {
+        let (mut e, this) = engine3();
+        let list = this.addr() + 0x1fc;
+        // The list holds two forms (and a null entry); `BAD_FORM_LIST_NEXT`
+        // advances the position word, which the double keeps in `cursor`.
+        let deleted = Rc::new(RefCell::new(Vec::new()));
+        let log = deleted.clone();
+        let vtable = 0x0300_0000;
+        let mut slots = vec![0x7fff_0000u32; 8];
+        slots[FORM_VTABLE_DELETE as usize / 4] = 0x0300_1000;
+        e.put_vtable(vtable, &slots);
+        let table = e.mem.alloc(16);
+        for (i, make_form) in [true, false, true].iter().enumerate() {
+            if *make_form {
+                let object = e.mem.alloc(8);
+                e.mem.set_u32(object, vtable);
+                e.mem.set_u32(table + 4 * i as u32, object);
+            }
+        }
+        e.register(BAD_FORM_LIST_IS_EMPTY, |_, _| ret(0));
+        e.register(HANDLER_IS_CLEARING_DATA, |_, _| ret(0));
+        e.register(BAD_FORM_LIST_FIRST, |_, _| ret(1));
+        e.register_double(BAD_FORM_LIST_NEXT, move |e, a| {
+            // a[1] is the address of the position word (1-based index).
+            let position = e.mem.u32(a[1]);
+            e.mem
+                .set_u32(a[1], if position < 3 { position + 1 } else { 0 });
+            ret(table + 4 * (position - 1))
+        });
+        e.register_double(0x0300_1000, move |_, a| {
+            log.borrow_mut().push((a[0], a[1]));
+            ret(0)
+        });
+        do_nothing(&mut e, &[HANDLER_SET_CLEARING_DATA, BAD_FORM_LIST_CLEAR]);
+        start_log(&mut e);
+        e.call(0x0046_4e50, &args![this]);
+        let deleted = deleted.borrow();
+        assert_eq!(deleted.len(), 2, "both forms are destroyed with flag 1");
+        assert!(deleted.iter().all(|(_, flag)| *flag == 1));
+        // bClearingData is set around the work and restored to its old value.
+        assert_eq!(
+            calls(&e, HANDLER_SET_CLEARING_DATA),
+            vec![vec![this.addr(), 1], vec![this.addr(), 0]]
+        );
+        assert_eq!(calls(&e, BAD_FORM_LIST_CLEAR), vec![vec![list]]);
+    }
+
+    #[test]
+    fn bad_form_clean_up_only_logs_when_the_list_is_not_empty_and_the_flag_is_set() {
+        let (mut e, this) = engine3();
+        e.set_global(BAD_FORMS_FLAG, 1u8);
+        e.register(BAD_FORM_LIST_IS_EMPTY, |_, _| ret(0));
+        do_nothing(&mut e, &[BAD_FORMS_SET_FLAG, LOG_MESSAGE]);
+        start_log(&mut e);
+        e.call(0x0046_4e50, &args![this]);
+        assert_eq!(calls(&e, BAD_FORMS_SET_FLAG).len(), 1);
+        assert_eq!(calls(&e, LOG_MESSAGE), vec![vec![INVALID_FORMS_MESSAGE]]);
+        // Nothing was destroyed or reset.
+        assert!(calls(&e, HANDLER_SET_CLEARING_DATA).is_empty());
+    }
+
+    #[test]
+    fn bad_form_clean_up_destroys_the_forms_when_the_flag_is_clear() {
+        let (mut e, this) = engine3();
+        e.set_global(BAD_FORMS_FLAG, 0u8);
+        e.register(BAD_FORM_LIST_IS_EMPTY, |_, _| ret(0));
+        e.register(HANDLER_IS_CLEARING_DATA, |_, _| ret(1));
+        e.register(BAD_FORM_LIST_FIRST, |_, _| ret(0));
+        do_nothing(&mut e, &[HANDLER_SET_CLEARING_DATA, BAD_FORM_LIST_CLEAR]);
+        start_log(&mut e);
+        e.call(0x0046_4e50, &args![this]);
+        // An empty position: no iteration; the old flag value 1 is restored.
+        assert_eq!(
+            calls(&e, HANDLER_SET_CLEARING_DATA),
+            vec![vec![this.addr(), 1], vec![this.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn nav_mesh_array_lookup_copies_the_element_or_sets_null() {
+        let (mut e, _) = engine3();
+        let array = e.mem.alloc(16);
+        e.mem.set_u32(array + 8, 3);
+        let out = e.mem.alloc(8);
+        e.register(ARRAY_COUNT_FIELD, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(ARRAY_AT, |_, a| ret(0x5000 + 4 * a[1]));
+        e.register(SMART_POINTER_COPY, |_, _| ret(0));
+        e.register(SMART_POINTER_SET, |_, a| ret(a[0]));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_4f60, &args![array, out, 2u32]).u32(), out);
+        assert_eq!(calls(&e, SMART_POINTER_COPY), vec![vec![out, 0x5008]]);
+        assert!(calls(&e, SMART_POINTER_SET).is_empty());
+        assert_eq!(e.call(0x0046_4f60, &args![array, out, 3u32]).u32(), out);
+        assert_eq!(calls(&e, SMART_POINTER_SET), vec![vec![out, 0]]);
+    }
+
+    #[test]
+    fn smart_pointer_setters_pass_the_pointer_on() {
+        let (mut e, _) = engine3();
+        e.register(SMART_POINTER_SET, |_, a| ret(a[0]));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_4fc0, &args![0x100u32, 0x200u32]).u32(), 0x100);
+        assert_eq!(e.call(0x0046_4ff0, &args![0x300u32, 0x400u32]).u32(), 0x300);
+        assert_eq!(
+            calls(&e, SMART_POINTER_SET),
+            vec![vec![0x100, 0x200], vec![0x300, 0x400]]
+        );
+    }
+
+    #[test]
+    fn compiled_file_is_bounded_to_0xfe() {
+        let (mut e, this) = engine3();
+        for index in [0u32, 5, 0xfe] {
+            e.mem
+                .set_u32(this.addr() + 0x21c + 4 * index, 0x7000 + index);
+        }
+        assert_eq!(e.call(0x0046_5010, &args![this, 0i32]).u32(), 0x7000);
+        assert_eq!(e.call(0x0046_5010, &args![this, 5i32]).u32(), 0x7005);
+        assert_eq!(e.call(0x0046_5010, &args![this, 0xfei32]).u32(), 0x70fe);
+        assert_eq!(e.call(0x0046_5010, &args![this, 0xffi32]).u32(), 0);
+        assert_eq!(e.call(0x0046_5010, &args![this, -1i32]).u32(), 0);
+    }
+
+    #[test]
+    fn list_walk_calls_slot_88_up_to_a_null_item_then_the_cell_scripts() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        let vtable = 0x0300_2000;
+        let mut slots = vec![0x7fff_0000u32; 0x80];
+        slots[0x88 / 4] = 0x0300_2100;
+        e.put_vtable(vtable, &slots);
+        let seen = recording_double(&mut e, 0x0300_2100);
+        let objects: Vec<u32> = (0..2)
+            .map(|_| {
+                let object = e.mem.alloc(8);
+                e.mem.set_u32(object, vtable);
+                object
+            })
+            .collect();
+        // The list is the head node of an owner outside the handler, then a
+        // null item that ends the walk (the third item is never reached).
+        let head = e.mem.alloc(8);
+        build_list(&mut e, head, &[objects[0], objects[1], 0, 0xdead]);
+        e.register_double(LIST_GETTER_6377E0, move |_, _| ret(head));
+        // The follow-up `fn_00462fb0` finds no cells.
+        word_array(&mut e, &[]);
+        start_log(&mut e);
+        e.call(0x0046_5040, &args![this]);
+        let seen = seen.borrow();
+        assert_eq!(*seen, vec![(objects[0], 0), (objects[1], 0)]);
+        assert!(calls(&e, CELL_RUN_SCRIPTS).is_empty());
+    }
+
+    #[test]
+    fn master_file_large_buffer_is_set_on_the_master_files_only() {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        build_list(&mut e, this.addr() + 0x210, &[0xa1, 0xb2, 0, 0xc3]);
+        e.register(FILE_GET_MASTER, |_, a| ret((a[0] == 0xa1) as u32));
+        do_nothing(&mut e, &[FILE_SET_LARGE_BUFFER]);
+        start_log(&mut e);
+        e.call(0x0046_50a0, &args![this, 0xffff_fffdu32]);
+        // Only the master file; the walk ends at the null item before 0xc3.
+        assert_eq!(
+            calls(&e, FILE_SET_LARGE_BUFFER),
+            vec![vec![0xa1, 0xffff_fffd]]
+        );
+        assert_eq!(calls(&e, FILE_GET_MASTER).len(), 2);
+    }
+
+    #[test]
+    fn holder_constructor_and_smart_pointer_argument_function() {
+        let (mut e, _) = engine3();
+        e.register(HOLDER_CONSTRUCT, |_, a| ret(a[0]));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_94e0, &args![0x8000u32]).u32(), 0x8000);
+        assert_eq!(calls(&e, HOLDER_CONSTRUCT), vec![vec![0x8000]]);
+        // `00469500`: the argument word is put in a temporary whose address
+        // goes to `0042f850`, and the same temporary is destroyed afterwards.
+        let temporaries = Rc::new(RefCell::new(Vec::new()));
+        let seen = temporaries.clone();
+        e.register_double(SMART_POINTER_HOLDER_ADD, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1]), a[1]));
+            ret(0x55)
+        });
+        let destroyed = recording_double(&mut e, SMART_POINTER_DESTROY);
+        assert_eq!(
+            e.call(0x0046_9500, &args![0x9000u32, 0x1234u32]).u32(),
+            0x55
+        );
+        let temporaries = temporaries.borrow();
+        assert_eq!(temporaries.len(), 1);
+        assert_eq!((temporaries[0].0, temporaries[0].1), (0x9000, 0x1234));
+        assert_eq!(destroyed.borrow()[0].0, temporaries[0].2);
+    }
+
+    #[test]
+    fn thread_flag_bit_1_is_tested() {
+        let (mut e, _) = engine3();
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_FLAG_WORD, 0b01);
+        assert!(!e.call(0x0046_9570, &args![]).bool());
+        e.mem.set_u32(tls + TLS_FLAG_WORD, 0b10);
+        assert!(e.call(0x0046_9570, &args![]).bool());
+    }
+
+    /// A group header at `header`: the type word at `+0xC` and the label at
+    /// `+8`.
+    fn group_header(e: &mut Engine, label: u32, group_type: u32) -> u32 {
+        let header = e.mem.alloc(0x18);
+        e.mem.set_u32(header + 8, label);
+        e.mem.set_u32(header + 0xc, group_type);
+        header
+    }
+
+    #[test]
+    fn group_check_is_true_for_a_plugin_that_is_not_a_master_and_not_a_save() {
+        let (mut e, this) = engine3();
+        e.register(FILE_GET_MASTER, |_, _| ret(0));
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0u32);
+        let header = group_header(&mut e, 0, 4);
+        // The type is not even looked at.
+        assert!(e.call(0x0046_95a0, &args![this, 0x7000u32, header]).bool());
+    }
+
+    #[test]
+    fn group_check_refuses_the_group_types_4_5_and_9() {
+        let (mut e, this) = engine3();
+        e.register(FILE_GET_MASTER, |_, _| ret(1));
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0u32);
+        for (group_type, loaded) in [(3u32, true), (4, false), (5, false), (6, true), (9, false)] {
+            let header = group_header(&mut e, 0, group_type);
+            assert_eq!(
+                e.call(0x0046_95a0, &args![this, 0x7000u32, header]).bool(),
+                loaded,
+                "group type {group_type}"
+            );
+        }
+        // A null header is loaded, a null file skips the master test.
+        assert!(e.call(0x0046_95a0, &args![this, 0x7000u32, 0u32]).bool());
+        e.register(FILE_GET_MASTER, |_, _| panic!("a null file is not asked"));
+        let header = group_header(&mut e, 0, 8);
+        assert!(e.call(0x0046_95a0, &args![this, 0u32, header]).bool());
+    }
+
+    #[test]
+    fn group_check_uses_the_save_game_table_while_a_save_loads() {
+        let (mut e, this) = engine3();
+        e.register(FILE_GET_MASTER, |_, _| ret(0));
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0x4000u32);
+        e.register(SAVE_LOAD_ACTIVE, |_, _| ret(1));
+        // The label is a form type number for the double: 0x39 (`CELL`) is
+        // not in the table, 0x3a is not, 0x45 (`DIAL`) is.
+        e.register(FORM_TYPE_FROM_STRING, |_, a| ret(a[0]));
+        for (label, loaded) in [(0x39u32, true), (0x45, false), (0x03, false), (0x71, true)] {
+            let header = group_header(&mut e, label, 8);
+            assert_eq!(
+                e.call(0x0046_95a0, &args![this, 0x7000u32, header]).bool(),
+                loaded,
+                "label {label:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn remove_id_lowers_the_next_id_for_runtime_ids_only() {
+        let (mut e, this) = engine3();
+        e.set(this, TESDataHandler::iNextID, 0xff00_1000);
+        // Not a runtime id, zero, or at least the next id: ignored.
+        for id in [0x0100_0900u32, 0, 0xff00_1000, 0xff00_2000, 0xff00_07ff] {
+            e.call(0x0046_96f0, &args![this, id]);
+            assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_1000, "{id:#x}");
+        }
+        e.call(0x0046_96f0, &args![this, 0xff00_0900u32]);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0900);
+        // Not while ids are kept.
+        e.set(this, TESDataHandler::bDontRemoveIDs, true);
+        e.call(0x0046_96f0, &args![this, 0xff00_0800u32]);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0900);
+    }
+
+    #[test]
+    fn id_in_use_asks_the_forms_then_the_other_object() {
+        let (mut e, this) = engine3();
+        e.set_global(OBJECT_011DDF38, 0x6000u32);
+        e.register(FORM_BY_ID, |_, a| ret((a[0] == 0x10) as u32));
+        e.register(FORM_ID_IN_USE, |_, a| {
+            assert_eq!(a[0], 0x6000);
+            ret((a[1] == 0x20) as u32)
+        });
+        assert!(e.call(0x0046_9760, &args![this, 0x10u32]).bool());
+        assert!(e.call(0x0046_9760, &args![this, 0x20u32]).bool());
+        assert!(!e.call(0x0046_9760, &args![this, 0x30u32]).bool());
+    }
+
+    #[test]
+    fn next_id_steps_and_wraps_inside_the_runtime_range() {
+        let (mut e, this) = engine3();
+        e.set(this, TESDataHandler::iNextID, 0xff00_0800);
+        e.call(0x0046_97a0, &args![this]);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0801);
+        e.set(this, TESDataHandler::iNextID, 0xff7f_fffd);
+        e.call(0x0046_97a0, &args![this]);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff7f_fffe);
+        // 0x7FFFFF is the limit: back to 0x800 with the top byte kept.
+        e.call(0x0046_97a0, &args![this]);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0800);
+    }
+
+    #[test]
+    fn get_next_id_skips_the_ids_in_use() {
+        let (mut e, this) = engine3();
+        e.set(this, TESDataHandler::iNextID, 0xff00_0800);
+        do_nothing(&mut e, &[FUNCTION_TIMER_ENTER, FUNCTION_TIMER_LEAVE]);
+        e.register(FORM_BY_ID, |_, a| {
+            ret((a[0] == 0xff00_0800 || a[0] == 0xff00_0801) as u32)
+        });
+        e.set_global(OBJECT_011DDF38, 0u32);
+        e.register(FORM_ID_IN_USE, |_, _| ret(0));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_9800, &args![this]).u32(), 0xff00_0802);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0803);
+        let log = log_without(&e, &[FORM_BY_ID, FORM_ID_IN_USE]);
+        assert_eq!(
+            log,
+            vec![
+                (FUNCTION_TIMER_ENTER, vec![FUNCTION_TIMER, GET_NEXT_ID_NAME]),
+                (FUNCTION_TIMER_LEAVE, vec![FUNCTION_TIMER]),
+            ]
+        );
+    }
+
+    #[test]
+    fn runtime_id_test_is_true_from_0xff000000() {
+        let (mut e, this) = engine3();
+        assert!(e.call(0x0046_9860, &args![this, 0xff00_0000u32]).bool());
+        assert!(e.call(0x0046_9860, &args![this, 0xffff_ffffu32]).bool());
+        assert!(!e.call(0x0046_9860, &args![this, 0xfeff_ffffu32]).bool());
+        assert!(!e.call(0x0046_9860, &args![this, 0u32]).bool());
+    }
+
+    #[test]
+    fn bit_0x200000_of_the_word_at_8_is_set_and_cleared() {
+        let (mut e, _) = engine3();
+        let object = e.mem.alloc(0xb0);
+        e.call(0x0046_a010, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object + 8), 0x20_0000);
+        e.mem.set_u32(object + 8, 0xffff_ffff);
+        e.call(0x0046_a010, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object + 8), 0xffdf_ffff);
+        // Any nonzero byte sets it.
+        e.call(0x0046_a010, &args![object, 0x80u32]);
+        assert_eq!(e.mem.u32(object + 8), 0xffff_ffff);
+    }
+
+    #[test]
+    fn bit_0x20_of_the_word_at_0xa8_is_tested() {
+        let (mut e, _) = engine3();
+        let object = e.mem.alloc(0xb0);
+        assert!(!e.call(0x0046_a060, &args![object]).bool());
+        e.mem.set_u32(object + 0xa8, 0x20);
+        assert!(e.call(0x0046_a060, &args![object]).bool());
+        e.mem.set_u32(object + 0xa8, 0xffff_ffdf);
+        assert!(!e.call(0x0046_a060, &args![object]).bool());
+    }
+    // ---------------------------------------------------------------
+    // CreateFormOfType.
+    // ---------------------------------------------------------------
+
+    /// Doubles for `operator new`, the aligned allocator and every
+    /// constructor of the table: each constructor returns its `this` (or
+    /// the value `construct_result` gives); the allocators return distinct
+    /// blocks and record their sizes.
+    fn form_factory(e: &mut Engine) -> Rc<RefCell<Vec<(u32, u32)>>> {
+        let sizes = Rc::new(RefCell::new(Vec::new()));
+        for (allocator, name) in [(OPERATOR_NEW, 0u32), (ALIGNED_NEW, 1u32)] {
+            let log = sizes.clone();
+            e.register_double(allocator, move |e, a| {
+                log.borrow_mut().push((name, a[0]));
+                ret(e.mem.alloc(a[0]))
+            });
+        }
+        for &(_, _, construct) in FORM_CONSTRUCTORS.iter() {
+            e.register(construct, |_, a| ret(a[0]));
+        }
+        sizes
+    }
+
+    #[test]
+    fn create_form_of_type_allocates_and_constructs_by_the_table() {
+        let (mut e, _) = engine3();
+        let sizes = form_factory(&mut e);
+        start_log(&mut e);
+        // 0x15 (`ACTI`): a 0x90-byte block, constructor 005104f0.
+        let form = e.call(0x0046_5110, &args![0x15u32]).u32();
+        assert_eq!(*sizes.borrow(), vec![(0, 0x90)]);
+        assert_eq!(calls(&e, 0x0051_04f0), vec![vec![form]]);
+        // 0x39 (`CELL`): 0xE0 bytes.
+        sizes.borrow_mut().clear();
+        e.call(0x0046_5110, &args![0x39u32]);
+        assert_eq!(*sizes.borrow(), vec![(0, 0xe0)]);
+        // The scope is entered and left around each call.
+        assert_eq!(calls(&e, SCOPE_ENTER).len(), 2);
+        assert_eq!(
+            calls(&e, SCOPE_ENTER)[0][1..],
+            [0x30, 1, SOURCE_FILE, 0x1c18]
+        );
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 2);
+    }
+
+    #[test]
+    fn create_form_of_type_uses_the_aligned_allocator_for_two_types() {
+        let (mut e, _) = engine3();
+        let sizes = form_factory(&mut e);
+        e.call(0x0046_5110, &args![0x04u32]);
+        e.call(0x0046_5110, &args![0x43u32]);
+        assert_eq!(*sizes.borrow(), vec![(1, 0xa0), (1, 0x108)]);
+    }
+
+    #[test]
+    fn create_form_of_type_adjusts_the_result_of_two_types() {
+        let (mut e, _) = engine3();
+        form_factory(&mut e);
+        let first = e.call(0x0046_5110, &args![0x22u32]).u32();
+        let second = e.call(0x0046_5110, &args![0x26u32]).u32();
+        // The constructors answer their `this`, which is the block; the
+        // forms are inside the blocks.
+        assert_eq!(e.mem.block_size(first - 0x14), Some(0x78));
+        assert_eq!(e.mem.block_size(second - 0x0c), Some(0xa0));
+    }
+
+    #[test]
+    fn create_form_of_type_0x59_passes_two_extra_arguments() {
+        let (mut e, _) = engine3();
+        form_factory(&mut e);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        e.register_double(0x0066_fe40, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            ret(a[0])
+        });
+        let form = e.call(0x0046_5110, &args![0x59u32]).u32();
+        assert_eq!(*seen.borrow(), vec![vec![form, 0xffff_ffff, 0]]);
+    }
+
+    #[test]
+    fn create_form_of_type_returns_null_when_the_allocation_fails() {
+        let (mut e, _) = engine3();
+        form_factory(&mut e);
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        e.register(0x0051_04f0, |_, _| panic!("no block to construct in"));
+        assert_eq!(e.call(0x0046_5110, &args![0x15u32]).u32(), 0);
+    }
+
+    #[test]
+    fn create_form_of_type_logs_a_type_without_a_row() {
+        let (mut e, _) = engine3();
+        form_factory(&mut e);
+        e.register(FORM_TYPE_NAME, |_, a| ret(0x7777_0000 + a[0]));
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        start_log(&mut e);
+        // 0x38 (`NAVI`) and 0x79 are not made by this function.
+        assert_eq!(e.call(0x0046_5110, &args![0x38u32]).u32(), 0);
+        assert_eq!(e.call(0x0046_5110, &args![0x79u32]).u32(), 0);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![
+                vec![CREATE_UNKNOWN_FORM_FORMAT, 0x7777_0038],
+                vec![CREATE_UNKNOWN_FORM_FORMAT, 0x7777_0079],
+            ]
+        );
+    }
+
+    #[test]
+    fn the_form_constructor_table_has_one_row_per_type() {
+        let mut types: Vec<u8> = FORM_CONSTRUCTORS.iter().map(|row| row.0).collect();
+        let count = types.len();
+        types.dedup();
+        assert_eq!(types.len(), count, "sorted and without repeats");
+        assert!(types.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!((types[0], types[count - 1]), (0x04, 0x78));
+    }
+
+    // ---------------------------------------------------------------
+    // The record loader (`fn_00467bd0`) and the file loader
+    // (`fn_00467780`).
+    // ---------------------------------------------------------------
+
+    /// A form-like object whose virtual slots are doubles: the slot at byte
+    /// offset `s` of the vtable is a double at `base + s` that answers the
+    /// value `answers` gives for `s` (1 for the load slot `0x20` and 0 for
+    /// the others by default). The calls to the slots show in the call log
+    /// at `base + s` (see [`Probe::slot`]).
+    struct Probe {
+        object: u32,
+        base: u32,
+    }
+
+    impl Probe {
+        fn slot(&self, slot: u32) -> u32 {
+            self.base + slot
+        }
+    }
+
+    fn probe_form(e: &mut Engine, answers: &[(u32, u32)]) -> Probe {
+        // Every probe has its own range of doubles and its own vtable.
+        thread_local! {
+            static PROBES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+        }
+        let index = PROBES.with(|count| {
+            count.set(count.get() + 1);
+            count.get()
+        });
+        let base = 0x0310_0000 + 0x1000 * index;
+        let vtable = e.mem.alloc(0x600);
+        for slot in (0..0x600u32).step_by(4) {
+            e.mem.set_u32(vtable + slot, base + slot);
+            let answer = answers
+                .iter()
+                .find(|(s, _)| *s == slot)
+                .map(|(_, v)| *v)
+                .unwrap_or((slot == 0x20) as u32);
+            e.register_double(base + slot, move |_, _| ret(answer));
+        }
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object, vtable);
+        Probe { object, base }
+    }
+
+    /// An engine, the handler and a `TESFile` for a record of `record_type`
+    /// whose id is `0x0100_0abc`: the record type, the id, the master and
+    /// active tests and the flag setter are doubles; the form lookup finds
+    /// nothing.
+    fn record_setup(record_type: u32) -> (Engine, Ptr<TESDataHandler>, u32) {
+        let (mut e, this) = engine3();
+        let file = file_named(&mut e, "Plugin.esp");
+        e.mem.set_u32(file + 0x24c, 0x0100_0abc);
+        e.register_double(FILE_GET_RECORD_TYPE, move |_, _| ret(record_type));
+        e.register(FILE_GET_FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0x24c)));
+        e.register(FILE_GET_MASTER, |_, _| ret(0));
+        e.register(FILE_GET_ACTIVE, |_, _| ret(0));
+        e.register(FORM_BY_ID, |_, _| ret(0));
+        e.register(FORM_SET_FLAG_BIT_0, |_, _| ret(0));
+        // An existing form has the record type unless a test says otherwise.
+        e.register_double(FORM_GET_TYPE, move |_, _| ret(record_type));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        (e, this, file)
+    }
+
+    fn load_record_call(e: &mut Engine, this: Ptr<TESDataHandler>, file: u32, form: u32) -> bool {
+        e.call(0x0046_7bd0, &args![this, file, 0u32, form, 0u32])
+            .bool()
+    }
+
+    #[test]
+    fn record_loader_holds_the_scope_and_follows_the_game_settings_state() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_GMST);
+        // The first settings record sets 1, the next clears the state again,
+        // any other type sets 2.
+        e.register(FILE_GET_CHUNK_ID, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(e.get(this, TESDataHandler::ucGameSettingsLoadState), 1);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(e.get(this, TESDataHandler::ucGameSettingsLoadState), 0);
+        // Two scopes per call: the function's (kind 0x30, line 0x1e99) and
+        // the settings case's (kind 9, line 0x2111).
+        let scopes = calls(&e, SCOPE_ENTER);
+        assert_eq!(scopes.len(), 4);
+        assert_eq!(scopes[0][1..], [0x30, 1, SOURCE_FILE, 0x1e99]);
+        assert_eq!(scopes[1][1..], [9, 1, SOURCE_FILE, 0x2111]);
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 4);
+        let (mut e, this, file) = record_setup(0x59);
+        let form = probe_form(&mut e, &[]);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        assert_eq!(e.get(this, TESDataHandler::ucGameSettingsLoadState), 2);
+    }
+
+    #[test]
+    fn record_loader_rejects_a_form_of_the_wrong_type() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_CELL);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x3a));
+        e.register(FORM_GET_TYPE_NAME, |_, _| ret(0xaaaa));
+        e.mem.set_u32(FORM_TYPE_NAME_TABLE + 0x39 * 12, 0xbbbb);
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, form.object));
+        let name = e.call(FILE_NAME, &args![file]).u32();
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![WRONG_TYPE_FORMAT, 0x0100_0abc, name, 0xaaaa, 0xbbbb]]
+        );
+        // Nothing was loaded.
+        assert!(calls(&e, form.slot(0x20)).is_empty());
+        // The scope was left all the same.
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn record_loader_accepts_armor_for_armor_addon_and_back() {
+        for (record_type, form_type) in [(0x18u32, 0x60u32), (0x60, 0x18), (0x18, 0x18)] {
+            let (mut e, this, file) = record_setup(record_type);
+            let form = probe_form(&mut e, &[]);
+            e.register_double(FORM_GET_TYPE, move |_, _| ret(form_type));
+            do_nothing(&mut e, &[LOG_MESSAGE, DISABLE_WARNING_COUNT]);
+            start_log(&mut e);
+            assert!(load_record_call(&mut e, this, file, form.object));
+            assert!(
+                calls(&e, LOG_MESSAGE).is_empty(),
+                "{record_type:#x} / {form_type:#x}"
+            );
+        }
+        // Any other pair is wrong.
+        let (mut e, this, file) = record_setup(0x18);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x19));
+        e.register(FORM_GET_TYPE_NAME, |_, _| ret(1));
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        assert!(!load_record_call(&mut e, this, file, form.object));
+    }
+
+    #[test]
+    fn record_loader_does_not_check_the_form_type_when_the_id_is_unknown() {
+        let (mut e, this, file) = record_setup(0x59);
+        // `flag` set: the id check (`00484b40`) says no, so the form type is
+        // not compared and the form is not looked up either.
+        e.register(FORM_ID_CHECK, |_, _| ret(0));
+        e.register(FORM_BY_ID, |_, _| panic!("no lookup"));
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| panic!("no type check"));
+        assert!(e
+            .call(0x0046_7bd0, &args![this, file, 1u32, form.object, 0u32])
+            .bool());
+    }
+
+    #[test]
+    fn record_loader_updates_a_partial_form_in_place() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_CELL);
+        let form = probe_form(&mut e, &[(FORM_VTABLE_IS_PARTIAL, 1)]);
+        e.mem.set_u32(file + 0x240 + 8, RECORD_FLAG_PARTIAL);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_CELL));
+        e.register(FORM_SET_FILE, |_, _| ret(0));
+        e.register(FORM_STEP_484AB0, |_, _| ret(0));
+        e.register(FILE_GET_ACTIVE, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        assert_eq!(e.global::<u32>(LOADING_CELL), form.object);
+        assert_eq!(calls(&e, form.slot(0x24)), vec![vec![form.object, file]]);
+        assert_eq!(calls(&e, FORM_SET_FILE), vec![vec![form.object, file]]);
+        assert_eq!(calls(&e, FORM_STEP_484AB0), vec![vec![form.object, 0]]);
+        // The active file marks the form altered; nothing was loaded.
+        assert_eq!(calls(&e, form.slot(0xc8)), vec![vec![form.object, 1]]);
+        assert!(calls(&e, form.slot(0x20)).is_empty());
+        // The other remembered types.
+        for (record_type, global) in [
+            (FORM_TYPE_WORLD_SPACE, LOADING_WORLD_SPACE),
+            (FORM_TYPE_TOPIC, LOADING_TOPIC),
+        ] {
+            let (mut e, this, file) = record_setup(record_type);
+            let form = probe_form(&mut e, &[(FORM_VTABLE_IS_PARTIAL, 1)]);
+            e.mem.set_u32(file + 0x240 + 8, RECORD_FLAG_PARTIAL);
+            e.register_double(FORM_GET_TYPE, move |_, _| ret(record_type));
+            e.register(FORM_SET_FILE, |_, _| ret(0));
+            e.register(FORM_STEP_484AB0, |_, _| ret(0));
+            assert!(load_record_call(&mut e, this, file, form.object));
+            assert_eq!(e.global::<u32>(global), form.object);
+        }
+    }
+
+    #[test]
+    fn record_loader_rejects_a_partial_record_of_another_file_with_no_form() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_GMST);
+        e.mem.set_u32(file + 0x240 + 8, RECORD_FLAG_PARTIAL);
+        // The id's top byte (1) is not the file's compile index (2).
+        e.register(FILE_COMPILE_INDEX, |_, _| ret(2));
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![PARTIAL_FORM_FORMAT, 0x0100_0abc]]
+        );
+        // The same index: the flag is cleared and the record loads on.
+        e.register(FILE_COMPILE_INDEX, |_, _| ret(1));
+        e.register(FILE_GET_CHUNK_ID, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(e.mem.u32(file + 0x240 + 8), 0);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![
+                vec![PARTIAL_FORM_FORMAT, 0x0100_0abc],
+                vec![PARTIAL_FORM_CLEARED_MESSAGE]
+            ]
+        );
+    }
+
+    #[test]
+    fn record_loader_wraps_a_form_that_is_not_flagged_in_the_two_calls() {
+        let (mut e, this, file) = record_setup(0x59);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x59));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        let wanted = [
+            FORM_STEP_483870,
+            form.slot(0x18),
+            FORM_STEP_483720,
+            form.slot(0x14),
+            form.slot(0x20),
+        ];
+        let order: Vec<u32> = call_order(&e)
+            .into_iter()
+            .filter(|addr| wanted.contains(addr))
+            .collect();
+        assert_eq!(order, wanted);
+        // Flag 0x20: neither call.
+        let (mut e, this, file) = record_setup(0x59);
+        let form = probe_form(&mut e, &[]);
+        e.mem.set_u32(file + 0x240 + 8, RECORD_FLAG_DELETED);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x59));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        assert!(calls(&e, form.slot(0x18)).is_empty());
+        assert!(calls(&e, form.slot(0x14)).is_empty());
+    }
+
+    #[test]
+    fn header_record_converts_the_ids_of_the_onam_chunk() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_TES4);
+        // The chunks: something else, then ONAM, which is the last read.
+        let chunks = Rc::new(RefCell::new(vec![CHUNK_ONAM, 0x1111_1111]));
+        let list = chunks.clone();
+        e.register_double(FILE_GET_CHUNK_ID, move |_, _| {
+            ret(*list.borrow().last().unwrap())
+        });
+        let list = chunks.clone();
+        e.register_double(FILE_NEXT_CHUNK, move |_, _| {
+            let mut list = list.borrow_mut();
+            let more = list.len() > 1;
+            list.pop();
+            ret(more as u32)
+        });
+        e.register(FILE_CHUNK_SIZE, |_, _| ret(8));
+        let buffer = e.mem.alloc(8);
+        e.register_double(OPERATOR_NEW, move |_, a| {
+            assert_eq!(a[0], 8);
+            ret(buffer)
+        });
+        e.register(FILE_GET_CHUNK_DATA, |e, a| {
+            // The ids as the file has them: master index 1, master index 0.
+            e.mem.set_u32(a[1], 0x0100_1234);
+            e.mem.set_u32(a[1] + 4, 0x0000_0042);
+            assert_eq!(a[2], 8);
+            ret(0)
+        });
+        e.register(FILE_MUST_ENDIAN_CONVERT, |_, _| ret(0));
+        let master = e.mem.alloc(0x42c);
+        e.register_double(FILE_GET_INDEX_FILE, move |_, a| {
+            // Index 2 (master index 1 plus one) is the master, 1 is none.
+            ret(if a[1] == 2 { master } else { 0 })
+        });
+        e.register_double(FILE_COMPILE_INDEX, move |_, a| {
+            ret(if a[0] == master { 5 } else { 7 })
+        });
+        do_nothing(&mut e, &[FILE_REGISTER_ID, OPERATOR_DELETE]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, FILE_REGISTER_ID),
+            vec![vec![0x0500_1234, file], vec![0x0700_0042, file]]
+        );
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![buffer]]);
+        // The inner scope: kind 0x16, line 0x1fe0.
+        assert!(calls(&e, SCOPE_ENTER)
+            .iter()
+            .any(|call| call[1..] == [0x16, 1, SOURCE_FILE, 0x1fe0]));
+    }
+
+    #[test]
+    fn header_record_swaps_the_ids_of_a_file_that_needs_it_and_stops_without_onam() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_TES4);
+        e.register(FILE_GET_CHUNK_ID, |_, _| ret(CHUNK_ONAM));
+        e.register(FILE_CHUNK_SIZE, |_, _| ret(4));
+        let buffer = e.mem.alloc(8);
+        e.register_double(OPERATOR_NEW, move |_, _| ret(buffer));
+        e.register(FILE_GET_CHUNK_DATA, |e, a| {
+            e.mem.set_u32(a[1], 0x4200_0001);
+            ret(0)
+        });
+        e.register(FILE_MUST_ENDIAN_CONVERT, |_, _| ret(1));
+        e.register(SWAP_WORD, |e, a| {
+            let word = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], word.swap_bytes());
+            ret(0)
+        });
+        e.register(FILE_GET_INDEX_FILE, |_, _| ret(0));
+        e.register(FILE_COMPILE_INDEX, |_, _| ret(9));
+        do_nothing(&mut e, &[FILE_REGISTER_ID, OPERATOR_DELETE]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        // 0x42000001 swapped is 0x01000042: master index 1 (not found: this
+        // file), so the top byte becomes this file's compile index.
+        assert_eq!(calls(&e, FILE_REGISTER_ID), vec![vec![0x0900_0042, file]]);
+        // Without ONAM the chunks are walked to the end.
+        let (mut e, this, file) = record_setup(FORM_TYPE_TES4);
+        e.register(FILE_GET_CHUNK_ID, |_, _| ret(0x4452_4548));
+        e.register(FILE_NEXT_CHUNK, |_, _| ret(0));
+        assert!(load_record_call(&mut e, this, file, 0));
+    }
+
+    #[test]
+    fn game_setting_record_hands_the_edid_chunk_to_the_settings_object() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_GMST);
+        e.register(FILE_GET_CHUNK_ID, |_, _| ret(CHUNK_EDID));
+        e.register(FILE_CHUNK_SIZE, |_, _| ret(6));
+        e.register(FILE_GET_CHUNK_DATA, |e, a| {
+            assert_eq!(a[2], 0, "size 0: the whole chunk");
+            e.mem.set_cstr(a[1], b"fGame");
+            ret(0)
+        });
+        let settings = probe_form(&mut e, &[]);
+        let object = settings.object;
+        e.register_double(GAME_SETTINGS_OBJECT, move |_, _| ret(object));
+        let text = Rc::new(RefCell::new(Vec::new()));
+        let seen = text.clone();
+        e.register_double(settings.slot(0x28), move |e, a| {
+            seen.borrow_mut().push((a[1], e.mem.cstr(a[2])));
+            ret(0)
+        });
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(*text.borrow(), vec![(file, b"fGame".to_vec())]);
+    }
+
+    #[test]
+    fn skill_record_loads_only_an_existing_skill() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_SKIL);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_SKIL));
+        let skill = probe_form(&mut e, &[]);
+        let skill_object = skill.object;
+        e.register_double(DYNAMIC_CAST, move |_, _| ret(skill_object));
+        e.register(SKILL_STEP_617EA0, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                form.object,
+                0,
+                FORM_TYPE_DESCRIPTOR,
+                SKILL_TYPE_DESCRIPTOR,
+                0
+            ]]
+        );
+        assert_eq!(calls(&e, SKILL_STEP_617EA0), vec![vec![skill.object]]);
+        assert_eq!(calls(&e, skill.slot(0x20)), vec![vec![skill.object, file]]);
+        // No form: nothing happens.
+        let (mut e, this, file) = record_setup(FORM_TYPE_SKIL);
+        assert!(load_record_call(&mut e, this, file, 0));
+    }
+
+    #[test]
+    fn nav_mesh_info_map_record_creates_and_registers_the_map() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_NAVI);
+        let map = probe_form(&mut e, &[]);
+        let map_object = map.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(NAV_MESH_INFO_MAP_CONSTRUCT, move |_, _| ret(map_object));
+        e.register(TES_SET_NAV_MESH_INFO_MAP, |_, _| ret(0));
+        e.set_global(TES_SINGLETON, 0x5000u32);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x40]]);
+        assert_eq!(
+            calls(&e, TES_SET_NAV_MESH_INFO_MAP),
+            vec![vec![0x5000, map.object]]
+        );
+        assert_eq!(calls(&e, map.slot(0x20)), vec![vec![map.object, file]]);
+        assert!(calls(&e, SCOPE_ENTER)
+            .iter()
+            .any(|call| call[1..] == [0x2e, 1, SOURCE_FILE, 0x272d]));
+        // An existing map is only loaded.
+        let (mut e, this, file) = record_setup(FORM_TYPE_NAVI);
+        let map = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_NAVI));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, map.object));
+        assert_eq!(calls(&e, map.slot(0x20)).len(), 1);
+    }
+
+    /// The doubles a cell record needs: the cell constructor (the probe),
+    /// allocation, the interior test and the array.
+    fn cell_setup(interior: bool) -> (Engine, Ptr<TESDataHandler>, u32, Probe) {
+        let (mut e, this, file) = record_setup(FORM_TYPE_CELL);
+        let cell = probe_form(&mut e, &[]);
+        let object = cell.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(CELL_CONSTRUCT, move |_, _| ret(object));
+        e.register_double(CELL_IS_INTERIOR, move |_, _| ret(interior as u32));
+        e.register(FORM_SET_FLAG_BIT_0, |_, _| ret(0));
+        (e, this, file, cell)
+    }
+
+    #[test]
+    fn cell_record_puts_a_new_interior_cell_in_the_interior_array() {
+        let (mut e, this, file, cell) = cell_setup(true);
+        e.register(ARRAY_SIZE, |_, _| ret(3));
+        let stored = Rc::new(RefCell::new(Vec::new()));
+        let log = stored.clone();
+        e.register_double(ARRAY_SET_AT_GROW, move |e, a| {
+            log.borrow_mut().push((a[0], a[1], e.mem.u32(a[2])));
+            ret(0)
+        });
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0xe0]]);
+        assert_eq!(calls(&e, cell.slot(0x20)), vec![vec![cell.object, file]]);
+        assert_eq!(
+            *stored.borrow(),
+            vec![(this.addr() + 0x1dc, 3, cell.object)]
+        );
+        assert_eq!(e.global::<u32>(LOADING_CELL), cell.object);
+        // bit 0 of the flags is set by the record loader after the load.
+        assert!(calls(&e, FORM_SET_FLAG_BIT_0).contains(&vec![cell.object, 1]));
+        // Not a save game: not marked altered.
+        assert!(calls(&e, cell.slot(0xc8)).is_empty());
+    }
+
+    #[test]
+    fn cell_record_marks_the_cell_altered_while_a_save_game_loads() {
+        let (mut e, this, file, cell) = cell_setup(true);
+        e.set(this, TESDataHandler::bSaveLoadGame, true);
+        e.register(ARRAY_SIZE, |_, _| ret(0));
+        e.register(ARRAY_SET_AT_GROW, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, cell.slot(0xc8)), vec![vec![cell.object, 1]]);
+    }
+
+    #[test]
+    fn cell_record_adds_an_exterior_cell_to_the_world_being_loaded() {
+        let (mut e, this, file, cell) = cell_setup(false);
+        e.set_global(LOADING_WORLD_SPACE, 0x6000u32);
+        e.register(WORLD_ADD_CELL, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, WORLD_ADD_CELL), vec![vec![0x6000, cell.object]]);
+        assert_eq!(e.global::<u32>(LOADING_CELL), cell.object);
+    }
+
+    #[test]
+    fn cell_record_takes_the_first_world_space_when_none_is_being_loaded() {
+        let (mut e, this, file, cell) = cell_setup(false);
+        real_lists(&mut e);
+        build_list(&mut e, this.addr() + 0x10, &[0x7000]);
+        e.register(WORLD_ADD_CELL, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(e.global::<u32>(LOADING_WORLD_SPACE), 0x7000);
+        assert_eq!(calls(&e, WORLD_ADD_CELL), vec![vec![0x7000, cell.object]]);
+    }
+
+    #[test]
+    fn cell_record_destroys_an_exterior_cell_the_world_refuses() {
+        let (mut e, this, file, cell) = cell_setup(false);
+        e.set_global(LOADING_WORLD_SPACE, 0x6000u32);
+        e.register(WORLD_ADD_CELL, |_, _| ret(0));
+        e.register(CELL_GET_DATA_X, |_, _| ret(4));
+        e.register(CELL_GET_DATA_Y, |_, _| ret((-3i32) as u32));
+        e.register(WORLD_GET_CELL, |_, _| ret(0x8888));
+        e.register(CELL_IS_PERSISTENT, |_, _| ret(1));
+        e.register(FORM_GET_ID, |_, a| {
+            ret(if a[0] == 0x6000 { 0x3c } else { 0x77 })
+        });
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        // The cell at the same coordinates replaces it.
+        assert_eq!(e.global::<u32>(LOADING_CELL), 0x8888);
+        assert_eq!(
+            calls(&e, WORLD_GET_CELL),
+            vec![vec![0x6000, 4, (-3i32) as u32]]
+        );
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![CELL_ADD_ERROR_FORMAT, PERSISTENT_PREFIX, 0x77, 0x3c]]
+        );
+        assert_eq!(calls(&e, cell.slot(0x10)), vec![vec![cell.object, 1]]);
+    }
+
+    #[test]
+    fn cell_record_with_a_form_only_loads_it() {
+        let (mut e, this, file, cell) = cell_setup(true);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_CELL));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, cell.object));
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        assert!(calls(&e, ARRAY_SET_AT_GROW).is_empty());
+        assert_eq!(e.global::<u32>(LOADING_CELL), cell.object);
+    }
+
+    #[test]
+    fn world_space_record_is_listed_and_remembered() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_WORLD_SPACE);
+        let world = probe_form(&mut e, &[]);
+        let object = world.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(WORLD_SPACE_CONSTRUCT, move |_, _| ret(object));
+        let appended = Rc::new(RefCell::new(Vec::new()));
+        let log = appended.clone();
+        e.register_double(LIST_APPEND, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            ret(0)
+        });
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0xec]]);
+        assert_eq!(*appended.borrow(), vec![(this.addr() + 0x10, world.object)]);
+        assert_eq!(e.global::<u32>(LOADING_WORLD_SPACE), world.object);
+        // An existing one is loaded and remembered.
+        let (mut e, this, file) = record_setup(FORM_TYPE_WORLD_SPACE);
+        let world = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_WORLD_SPACE));
+        assert!(load_record_call(&mut e, this, file, world.object));
+        assert_eq!(e.global::<u32>(LOADING_WORLD_SPACE), world.object);
+    }
+
+    #[test]
+    fn land_record_needs_a_cell_and_makes_the_land_when_the_cell_has_none() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_LAND);
+        // No cell being loaded: the record is skipped.
+        assert!(load_record_call(&mut e, this, file, 0));
+        e.set_global(LOADING_CELL, 0x6100u32);
+        let land = probe_form(&mut e, &[]);
+        let object = land.object;
+        e.register(CELL_GET_LAND, |_, _| ret(0));
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(LAND_CONSTRUCT, move |_, _| ret(object));
+        do_nothing(&mut e, &[LAND_SET_CELL, CELL_SET_LAND]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x2c]]);
+        assert_eq!(calls(&e, LAND_SET_CELL), vec![vec![land.object, 0x6100]]);
+        assert_eq!(calls(&e, CELL_SET_LAND), vec![vec![0x6100, land.object]]);
+        assert_eq!(calls(&e, land.slot(0x20)), vec![vec![land.object, file]]);
+        // The cell already has a land: it is only loaded.
+        let existing = probe_form(&mut e, &[]);
+        let existing_object = existing.object;
+        e.register_double(CELL_GET_LAND, move |_, _| ret(existing_object));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        assert_eq!(calls(&e, existing.slot(0x20)).len(), 1);
+    }
+
+    #[test]
+    fn nav_mesh_record_fills_the_member_holder_of_a_new_nav_mesh() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_NAV_MESH);
+        let mesh = probe_form(&mut e, &[]);
+        let mesh_object = mesh.object;
+        e.register_double(ALIGNED_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(NAV_MESH_CONSTRUCT, move |_, _| ret(mesh_object));
+        // The smart pointer: a word that holds the pointer.
+        e.register(SMART_POINTER_SET, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        e.register(SMART_POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(SMART_POINTER_COPY, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        e.register(SMART_POINTER_DESTROY, |_, _| ret(0));
+        // The nav mesh's member (`+0x24`) and its state word (`+0x64`).
+        let member = e.mem.alloc(0x80);
+        e.register_double(NAV_MESH_MEMBER, move |_, _| ret(member));
+        e.register(NAV_MESH_MEMBER_STATE, |e, a| ret(e.mem.u32(a[0] + 0x64)));
+        e.register(NAV_MESH_MEMBER_SET, |e, a| {
+            e.mem.set_u32(a[0] + 0x64, a[1]);
+            ret(0)
+        });
+        e.register(HOLDER_CONSTRUCT, |_, a| ret(a[0]));
+        let handed = Rc::new(RefCell::new(Vec::new()));
+        let log = handed.clone();
+        e.register_double(SMART_POINTER_HOLDER_ADD, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            ret(0)
+        });
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, ALIGNED_NEW), vec![vec![0x108]]);
+        assert_eq!(calls(&e, mesh.slot(0x20)), vec![vec![mesh.object, file]]);
+        // The empty member got a 0x10-byte holder; the object its state word
+        // names received the smart pointer's value.
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x10]]);
+        let holder = e.mem.u32(member + 0x64);
+        assert_ne!(holder, 0);
+        assert_eq!(*handed.borrow(), vec![(holder, mesh.object)]);
+        assert!(calls(&e, SCOPE_ENTER)
+            .iter()
+            .any(|call| call[1..] == [0x2e, 1, SOURCE_FILE, 0x270f]));
+        // The copy `fn_00469500` was given and the pointer on the stack are
+        // both destroyed.
+        assert_eq!(calls(&e, SMART_POINTER_DESTROY).len(), 2);
+    }
+
+    #[test]
+    fn nav_mesh_record_with_a_form_only_loads_it() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_NAV_MESH);
+        let mesh = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_NAV_MESH));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, mesh.object));
+        assert_eq!(calls(&e, mesh.slot(0x20)).len(), 1);
+        assert!(calls(&e, ALIGNED_NEW).is_empty());
+    }
+
+    #[test]
+    fn topic_record_creates_and_lists_the_topic() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_TOPIC);
+        let topic = probe_form(&mut e, &[]);
+        let object = topic.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(TOPIC_CONSTRUCT, move |_, a| {
+            assert_eq!(a[1], 0);
+            ret(object)
+        });
+        e.register(TOPIC_LIST_FUNCTION, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x48]]);
+        assert_eq!(
+            calls(&e, TOPIC_LIST_FUNCTION),
+            vec![vec![topic.object, this.addr() + 0x108, 1]]
+        );
+        assert!(calls(&e, SCOPE_ENTER)
+            .iter()
+            .any(|call| call[1..] == [0x35, 1, SOURCE_FILE, 0x213b]));
+        // An existing topic is only loaded.
+        let (mut e, this, file) = record_setup(FORM_TYPE_TOPIC);
+        let topic = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_TOPIC));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, topic.object));
+        assert!(calls(&e, TOPIC_LIST_FUNCTION).is_empty());
+    }
+
+    #[test]
+    fn topic_info_record_is_remembered_and_listed_when_new() {
+        let (mut e, this, file) = record_setup(FORM_TYPE_TOPIC_INFO);
+        let info = probe_form(&mut e, &[(0x20, 1)]);
+        let object = info.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(TOPIC_INFO_CONSTRUCT, move |_, a| {
+            assert_eq!(a[1], 0);
+            ret(object)
+        });
+        e.register(TOPIC_INFO_LIST_FUNCTION, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x50]]);
+        assert_eq!(e.global::<u32>(LOADING_TOPIC_INFO), info.object);
+        assert_eq!(
+            calls(&e, TOPIC_INFO_LIST_FUNCTION),
+            vec![vec![info.object, this.addr() + 0x110]]
+        );
+        // The load's answer is the record loader's, and an existing topic
+        // info is not listed again.
+        let (mut e, this, file) = record_setup(FORM_TYPE_TOPIC_INFO);
+        let info = probe_form(&mut e, &[(0x20, 0)]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_TOPIC_INFO));
+        e.register(TOPIC_INFO_LIST_FUNCTION, |_, _| panic!("not listed again"));
+        assert!(!load_record_call(&mut e, this, file, info.object));
+    }
+
+    #[test]
+    fn the_simple_record_types_create_load_and_add_the_form() {
+        // IDLE and CPTH: created and loaded only; AVIF and DOBJ: loaded;
+        // a generic type: created, loaded and added to the data handler.
+        let (mut e, this, file) = record_setup(FORM_TYPE_IDLE);
+        let created = probe_form(&mut e, &[]);
+        let object = created.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(0x005f_e040, move |_, _| ret(object));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, created.slot(0x20)).len(), 1);
+        assert!(calls(&e, 0x0046_03b0).is_empty());
+
+        let (mut e, this, file) = record_setup(FORM_TYPE_DEFAULT_OBJECTS);
+        let manager = probe_form(&mut e, &[]);
+        let object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| ret(object));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, manager.slot(0x20)),
+            vec![vec![manager.object, file]]
+        );
+
+        let (mut e, this, file) = record_setup(FORM_TYPE_ACTOR_VALUE);
+        let value = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_ACTOR_VALUE));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, value.object));
+        assert_eq!(calls(&e, value.slot(0x20)).len(), 1);
+    }
+
+    #[test]
+    fn a_generic_record_type_adds_its_new_form_to_the_data_handler() {
+        // 0x05 (`MICN`) is a generic type.
+        let (mut e, this, file) = record_setup(0x05);
+        let created = probe_form(&mut e, &[(0x130, 0)]);
+        let object = created.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(0x0059_0210, move |_, _| ret(object));
+        // `AddFormToDataHandler` (a translation of this file) appends the form
+        // to the list of its type, here the one of type 5.
+        e.register(FORM_GET_TYPE, |_, _| ret(5));
+        let added = Rc::new(RefCell::new(Vec::new()));
+        let log = added.clone();
+        e.register_double(LIST_ADD, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            ret(0)
+        });
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, created.slot(0x20)).len(), 1);
+        assert_eq!(
+            *added.borrow(),
+            vec![(fn_00461210(&mut e, this).addr(), created.object)]
+        );
+    }
+
+    #[test]
+    fn an_existing_form_of_a_generic_type_is_only_loaded() {
+        let (mut e, this, file) = record_setup(0x05);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x05));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, form.object));
+        assert_eq!(calls(&e, form.slot(0x20)).len(), 1);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn other_record_types_create_the_form_and_put_it_in_the_object_list() {
+        // 0x15 (`ACTI`) has no case of its own.
+        let (mut e, this, file) = record_setup(0x15);
+        let created = probe_form(&mut e, &[]);
+        let object = created.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(0x0051_04f0, move |_, _| ret(object));
+        do_nothing(&mut e, &[DISABLE_WARNING_COUNT]);
+        e.register(OBJECT_LIST_ADD, |_, a| ret(a[1]));
+        let list = e.mem.alloc(16);
+        e.set(this, TESDataHandler::pObjectList, Ptr::new(list));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        // Warnings are off around the creation (count 1, then 0).
+        assert_eq!(calls(&e, DISABLE_WARNING_COUNT), vec![vec![1], vec![0]]);
+        assert_eq!(calls(&e, created.slot(0x20)).len(), 1);
+        assert_eq!(calls(&e, OBJECT_LIST_ADD), vec![vec![list, created.object]]);
+    }
+
+    #[test]
+    fn other_record_types_destroy_a_form_that_fails_to_load() {
+        let (mut e, this, file) = record_setup(0x15);
+        let created = probe_form(&mut e, &[(0x20, 0)]);
+        let object = created.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(0x0051_04f0, move |_, _| ret(object));
+        do_nothing(&mut e, &[DISABLE_WARNING_COUNT]);
+        e.register(OBJECT_LIST_ADD, |_, _| {
+            panic!("a failed form is not listed")
+        });
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, 0));
+        assert_eq!(calls(&e, created.slot(0x10)), vec![vec![created.object, 1]]);
+    }
+
+    #[test]
+    fn other_record_types_with_an_existing_form_are_not_listed() {
+        let (mut e, this, file) = record_setup(0x15);
+        let form = probe_form(&mut e, &[]);
+        e.register(FORM_GET_TYPE, |_, _| ret(0x15));
+        do_nothing(&mut e, &[DISABLE_WARNING_COUNT]);
+        e.register(OBJECT_LIST_ADD, |_, _| {
+            panic!("an existing form is not listed")
+        });
+        assert!(load_record_call(&mut e, this, file, form.object));
+    }
+
+    #[test]
+    fn other_record_types_report_an_unknown_tag() {
+        // A type that has no constructor (0x2c is a case of the table, so use
+        // 0x44, which is not): the allocation never happens.
+        let (mut e, this, file) = record_setup(0x44);
+        e.mem.set_u32(file + 0x240, u32::from_le_bytes(*b"XYZW"));
+        e.register(FORM_TYPE_NAME, |_, _| ret(0));
+        do_nothing(&mut e, &[DISABLE_WARNING_COUNT, LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, 0));
+        // The first message is the one of `CreateFormOfType`; the second is
+        // the unknown id with the four characters as a string.
+        let messages = calls(&e, LOG_MESSAGE);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1][0], UNKNOWN_ID_FORMAT);
+        // The text was on the function's stack: it is gone, but the call
+        // happened between the two warning count changes.
+        assert_eq!(calls(&e, DISABLE_WARNING_COUNT), vec![vec![1], vec![0]]);
+        // A record with no tag and type 0 has a message of its own.
+        let (mut e, this, file) = record_setup(0);
+        e.register(FORM_TYPE_NAME, |_, _| ret(0));
+        do_nothing(&mut e, &[DISABLE_WARNING_COUNT, LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, 0));
+        let messages = calls(&e, LOG_MESSAGE);
+        assert_eq!(messages.last().unwrap(), &vec![UNKNOWN_RECORD_MESSAGE]);
+    }
+
+    // ---------------------------------------------------------------
+    // Reference records.
+    // ---------------------------------------------------------------
+
+    /// A reference probe: the sub-object at `+0x18` has a vtable whose slot 0
+    /// answers `parent_cell`; the doubles for the base object accessor
+    /// (`007af430`, answering `base`), the flag test (`0x20` bit, answering
+    /// `bit_5`) and the parent cell accessor (`008d6f30`) are registered.
+    fn reference_setup(
+        record_type: u32,
+        parent_cell: u32,
+        load_result: u32,
+    ) -> (Engine, Ptr<TESDataHandler>, u32, Probe, Probe) {
+        let (mut e, this, file) = record_setup(record_type);
+        let reference = probe_form(&mut e, &[(0x20, load_result), (0x1f4, 0x7777)]);
+        let base = probe_form(&mut e, &[]);
+        let sub_vtable = e.mem.alloc(8);
+        let parent = parent_cell;
+        e.register_double(0x0320_0000, move |_, _| ret(parent));
+        e.mem.set_u32(sub_vtable, 0x0320_0000);
+        e.mem.set_u32(reference.object + 0x18, sub_vtable);
+        let (reference_object, base_object) = (reference.object, base.object);
+        e.register_double(OBJECT_NEXT, move |_, a| {
+            ret(if a[0] == reference_object {
+                base_object
+            } else {
+                0
+            })
+        });
+        e.register_double(REFERENCE_CREATE, move |_, _| ret(reference_object));
+        e.register(FORM_HAS_FLAG_BIT_5, |_, _| ret(0));
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0));
+        e.register(REFERENCE_GET_PERSISTS, |_, _| ret(0));
+        e.register(CELL_IS_PERSISTENT, |_, _| ret(0));
+        do_nothing(&mut e, &[CELL_ADD_REFERENCE, CELL_REMOVE_REFERENCE]);
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0u32);
+        (e, this, file, reference, base)
+    }
+
+    #[test]
+    fn reference_record_without_a_cell_is_rejected_unless_allowed() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 1);
+        start_log(&mut e);
+        assert!(!load_record_call(&mut e, this, file, 0));
+        assert!(calls(&e, REFERENCE_CREATE).is_empty());
+        // With the permission (the fifth argument) the reference is built.
+        assert!(e
+            .call(0x0046_7bd0, &args![this, file, 0u32, 0u32, 1u32])
+            .bool());
+        assert_eq!(calls(&e, REFERENCE_CREATE), vec![vec![0x3a, 1]]);
+        assert_eq!(calls(&e, reference.slot(0x20)).len(), 1);
+    }
+
+    #[test]
+    fn a_new_reference_is_added_to_the_cell_and_its_base_object_told() {
+        let (mut e, this, file, reference, base) = reference_setup(0x3a, 0, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, CELL_ADD_REFERENCE),
+            vec![vec![0x6000, reference.object, 0]]
+        );
+        // Not persistent, the flag clear: virtual 0x16c of the base object.
+        assert_eq!(calls(&e, base.slot(0x16c)), vec![vec![base.object]]);
+        assert!(calls(&e, base.slot(0x170)).is_empty());
+    }
+
+    #[test]
+    fn a_reference_with_bit_5_is_not_told_about_the_cell() {
+        let (mut e, this, file, _, base) = reference_setup(0x3a, 0, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        e.register(FORM_HAS_FLAG_BIT_5, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert!(calls(&e, base.slot(0x16c)).is_empty());
+    }
+
+    #[test]
+    fn the_thread_flag_turns_off_the_placement() {
+        let (mut e, this, file, _, base) = reference_setup(0x3a, 0, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_FLAG_WORD, 2);
+        e.register(FORM_HAS_FLAG_BIT_5, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        // Not added to the cell; with bit 5, virtual 0x170 instead.
+        assert!(calls(&e, CELL_ADD_REFERENCE).is_empty());
+        assert_eq!(calls(&e, base.slot(0x170)), vec![vec![base.object]]);
+    }
+
+    #[test]
+    fn an_existing_reference_in_the_loading_cell_is_not_placed_again() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0x6000, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, reference.object));
+        assert!(calls(&e, CELL_REMOVE_REFERENCE).is_empty());
+        assert!(calls(&e, CELL_ADD_REFERENCE).is_empty());
+        assert!(calls(&e, REFERENCE_CREATE).is_empty());
+    }
+
+    #[test]
+    fn an_existing_reference_in_another_cell_is_removed_from_it_first() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0x6500, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, reference.object));
+        assert_eq!(
+            calls(&e, CELL_REMOVE_REFERENCE),
+            vec![vec![0x6500, reference.object]]
+        );
+        assert_eq!(
+            calls(&e, CELL_ADD_REFERENCE),
+            vec![vec![0x6000, reference.object, 0]]
+        );
+    }
+
+    #[test]
+    fn a_reference_in_a_persistent_cell_moves_to_the_cell_at_its_position() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        e.register(CELL_IS_PERSISTENT, |_, _| ret(1));
+        // The reference's parent cell is 0x6100 and the cell at its position
+        // is 0x6200.
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0x6100));
+        e.register(CELL_GET_WORLD_SPACE, |_, a| ret(a[0] + 1));
+        e.register(WORLD_GET_CELL_FROM_WORLD_COORD, |_, _| ret(0x6200));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, WORLD_GET_CELL_FROM_WORLD_COORD),
+            vec![vec![0x6001, 0x7777]]
+        );
+        assert_eq!(
+            calls(&e, CELL_ADD_REFERENCE),
+            vec![
+                vec![0x6000, reference.object, 0],
+                vec![0x6200, reference.object, 0]
+            ]
+        );
+        // No cell at the position: the reference leaves its parent cell.
+        e.register(WORLD_GET_CELL_FROM_WORLD_COORD, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, CELL_REMOVE_REFERENCE),
+            vec![vec![0x6100, reference.object]]
+        );
+    }
+
+    #[test]
+    fn a_reference_that_fails_to_load_is_detached_and_listed_as_bad() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 0);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        // No base object yet: its type is set; the parent cell 0x6100 is
+        // left; the (non-persistent) cell gets virtual 0x228.
+        e.register_double(OBJECT_NEXT, |_, _| ret(0));
+        e.register(REFERENCE_SET_BASE_TYPE, |_, _| ret(0));
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0x6100));
+        e.register(BAD_FORM_LIST_FIND, |_, _| ret(0));
+        let appended = Rc::new(RefCell::new(Vec::new()));
+        let log = appended.clone();
+        e.register_double(BAD_FORM_LIST_APPEND, move |e, a| {
+            log.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            ret(0)
+        });
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(PROCESS_LISTS_REMOVE_REFERENCE, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, REFERENCE_SET_BASE_TYPE),
+            vec![vec![reference.object, 0x3a]]
+        );
+        assert_eq!(
+            calls(&e, CELL_REMOVE_REFERENCE),
+            vec![vec![0x6100, reference.object]]
+        );
+        assert_eq!(
+            calls(&e, reference.slot(0x228)),
+            vec![vec![reference.object, 0x6000]]
+        );
+        assert_eq!(
+            *appended.borrow(),
+            vec![(this.addr() + 0x1fc, reference.object)]
+        );
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                reference.object,
+                0,
+                REFERENCE_TYPE_DESCRIPTOR,
+                MOBILE_OBJECT_TYPE_DESCRIPTOR,
+                0
+            ]]
+        );
+        assert_eq!(
+            calls(&e, PROCESS_LISTS_REMOVE_REFERENCE),
+            vec![vec![OBJECT_011E0E80, reference.object, 3]]
+        );
+    }
+
+    #[test]
+    fn a_reference_that_fails_to_load_in_a_persistent_cell_sets_its_persistent_cell() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 0);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        e.register(CELL_IS_PERSISTENT, |_, _| ret(1));
+        e.register(REFERENCE_EXTRA_DATA_LIST, |_, a| ret(a[0] + 0x44));
+        e.register(EXTRA_SET_PERSISTENT_CELL, |_, _| ret(0));
+        // The bad form list already has it; the cast finds nothing.
+        e.register(BAD_FORM_LIST_FIND, |_, _| ret(1));
+        e.register(DYNAMIC_CAST, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, EXTRA_SET_PERSISTENT_CELL),
+            vec![vec![reference.object + 0x44, 0x6000]]
+        );
+        assert!(calls(&e, BAD_FORM_LIST_APPEND).is_empty());
+        assert!(calls(&e, reference.slot(0x228)).is_empty());
+    }
+
+    #[test]
+    fn a_persistent_reference_of_an_old_file_is_reported_and_unmarked() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 1);
+        let cell = probe_form(&mut e, &[(0x130, 0x4c01)]);
+        let base = probe_form(&mut e, &[(0x130, 0x4b01)]);
+        e.set_global(LOADING_CELL, cell.object);
+        let base_object = base.object;
+        let reference_object = reference.object;
+        e.register_double(OBJECT_NEXT, move |_, a| {
+            ret(if a[0] == reference_object {
+                base_object
+            } else {
+                0
+            })
+        });
+        e.register(REFERENCE_GET_PERSISTS, |_, _| ret(1));
+        e.mem.set_f32(file + 0x3dc, 0.1);
+        e.register(FORM_GET_ID, |_, a| ret(0x1000 + (a[0] & 0xfff)));
+        e.register(CELL_GET_DATA_X, |_, _| ret(2));
+        e.register(CELL_GET_DATA_Y, |_, _| ret(3));
+        e.register(REFERENCE_FLAGS, |_, _| ret(0x0000_ffff));
+        e.register(REFERENCE_SET_FLAGS, |_, _| ret(0));
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        let name = e.call(FILE_NAME, &args![file]).u32();
+        let messages = calls(&e, LOG_MESSAGE);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(
+            messages[0],
+            vec![
+                PERSISTENT_REFERENCE_FORMAT,
+                0x1000 + (reference.object & 0xfff),
+                0x4b01,
+                0x1000 + (base.object & 0xfff),
+                0x4c01,
+                2,
+                3,
+                0x1000 + (cell.object & 0xfff),
+                name
+            ]
+        );
+        // Bit 0x400 of the flags is cleared.
+        assert_eq!(
+            calls(&e, REFERENCE_SET_FLAGS),
+            vec![vec![reference.object, 0x0000_fbff]]
+        );
+        // A file of version 0.2 or more is not reported.
+        e.mem.set_f32(file + 0x3dc, 0.2);
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn a_reference_hooks_into_the_save_game_while_one_loads() {
+        let (mut e, this, file, reference, _) = reference_setup(0x3a, 0, 1);
+        e.set_global(LOADING_CELL, 0x6000u32);
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0x4000u32);
+        e.register(SAVE_LOAD_ACTIVE, |_, _| ret(1));
+        e.register(REFERENCE_STEP_43FCD0, |_, _| ret(1));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert_eq!(
+            calls(&e, reference.slot(0x1cc)),
+            vec![vec![reference.object, 0, 1]]
+        );
+        // The model test answers 0: nothing is hooked.
+        e.register(REFERENCE_STEP_43FCD0, |_, _| ret(0));
+        start_log(&mut e);
+        assert!(load_record_call(&mut e, this, file, 0));
+        assert!(calls(&e, reference.slot(0x1cc)).is_empty());
+    }
+
+    // ---------------------------------------------------------------
+    // The file loader (`fn_00467780`).
+    // ---------------------------------------------------------------
+
+    /// `sprintf_s(destination, size, format, ...)` for `%s`, `%d` and `%%`;
+    /// the word arguments follow the format.
+    fn real_format(e: &mut Engine) {
+        e.register(FORMAT_S, |e, a| {
+            let format = e.mem.cstr(a[2]);
+            let mut out = Vec::new();
+            let mut next = 3;
+            let mut i = 0;
+            while i < format.len() {
+                if format[i] == b'%' {
+                    i += 1;
+                    match format[i] {
+                        b's' => {
+                            out.extend(e.mem.cstr(a[next]));
+                            next += 1;
+                        }
+                        b'd' => {
+                            out.extend((a[next] as i32).to_string().into_bytes());
+                            next += 1;
+                        }
+                        other => out.push(other),
+                    }
+                } else {
+                    out.push(format[i]);
+                }
+                i += 1;
+            }
+            e.mem.set_cstr(a[0], &out);
+            ret(out.len() as u32)
+        });
+    }
+
+    /// `_ftol2`: truncation.
+    fn real_ftol2(e: &mut Engine) {
+        e.register(FTOL2, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            ret(value as i32 as u32)
+        });
+    }
+
+    /// A file being read: `records` are the record types in order (with
+    /// the word at `+0xC` of the header, the group type or the `TOFT` id).
+    /// The record cursor is shared with the doubles for the record type,
+    /// `NextForm` and the group skip, which move it.
+    struct Reader {
+        file: u32,
+        cursor: Rc<RefCell<usize>>,
+    }
+
+    fn reader_setup(records: &[(u32, u32)]) -> (Engine, Ptr<TESDataHandler>, Reader) {
+        let (mut e, this) = engine3();
+        let file = file_named(&mut e, "Plugin.esp");
+        real_format(&mut e);
+        real_ftol2(&mut e);
+        e.set_global(LOAD_FORM_TOTAL, 10u32);
+        e.set_global(LOAD_FORM_DONE, 0u32);
+        let records: Vec<(u32, u32)> = records.to_vec();
+        let cursor = Rc::new(RefCell::new(0usize));
+        let set_header = {
+            let records = records.clone();
+            move |e: &mut Engine, file: u32, index: usize| {
+                if let Some(&(_, word)) = records.get(index) {
+                    e.mem.set_u32(file + 0x240 + 0xc, word);
+                }
+            }
+        };
+        set_header(&mut e, file, 0);
+        let (types, at) = (records.clone(), cursor.clone());
+        e.register_double(FILE_GET_RECORD_TYPE, move |_, _| ret(types[*at.borrow()].0));
+        let (count, at, header) = (records.len(), cursor.clone(), set_header.clone());
+        e.register_double(FILE_NEXT_FORM, move |e, a| {
+            *at.borrow_mut() += 1;
+            let index = *at.borrow();
+            header(e, a[0], index);
+            ret((index < count) as u32)
+        });
+        let (at, header) = (cursor.clone(), set_header);
+        e.register_double(FILE_SKIP_GROUP, move |e, a| {
+            *at.borrow_mut() += 1;
+            let index = *at.borrow();
+            header(e, a[0], index);
+            ret(1)
+        });
+        e.register(FILE_OPEN, |_, _| ret(1));
+        e.register(FILE_CLOSE, |_, _| ret(1));
+        e.register(FILE_GET_FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0x24c)));
+        e.register(FORM_ID_CHECK, |_, a| {
+            ret((a[0] != 0 && a[0] <= 0x7ff) as u32)
+        });
+        real_lists(&mut e);
+        let (types, at) = (records.clone(), cursor.clone());
+        e.register_double(FORM_GET_TYPE, move |_, _| ret(types[*at.borrow()].0));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        e.register(FILE_GET_MASTER, |_, _| ret(1));
+        e.register(FILE_GET_ACTIVE, |_, _| ret(0));
+        e.register(FORM_BY_ID, |_, _| ret(0));
+        e.register(FORM_SET_FLAG_BIT_0, |_, _| ret(0));
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0u32);
+        (e, this, Reader { file, cursor })
+    }
+
+    #[test]
+    fn file_loader_reads_the_records_and_reports_the_progress() {
+        // A group the check refuses (type 4), a default objects record and
+        // the end marker (`TOFT` with id -1).
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_GRUP, 4),
+            (FORM_TYPE_DEFAULT_OBJECTS, 0),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        start_log(&mut e);
+        assert!(e.call(0x0046_7780, &args![this, reader.file, 1u32]).bool());
+        // The group was skipped, the default objects loaded, the end ended
+        // the file; the file was opened and closed.
+        assert_eq!(calls(&e, FILE_SKIP_GROUP).len(), 1);
+        assert_eq!(
+            calls(&e, manager.slot(0x20)),
+            vec![vec![manager.object, reader.file]]
+        );
+        assert_eq!(calls(&e, FILE_NEXT_FORM), vec![vec![reader.file, 1]]);
+        assert_eq!(calls(&e, FILE_OPEN), vec![vec![reader.file, 0, 0]]);
+        assert_eq!(calls(&e, FILE_CLOSE), vec![vec![reader.file]]);
+        // Three records: 10%, 20%, 30% of the total of 10.
+        assert_eq!(e.global::<u32>(LOAD_FORM_DONE), 3);
+        let percents: Vec<u32> = calls(&e, FORMAT_S).iter().map(|call| call[3]).collect();
+        assert_eq!(percents, vec![10, 20, 30]);
+        // The globals the loader clears are zero.
+        assert_eq!(e.global::<u32>(LOADING_CELL), 0);
+        assert_eq!(e.global::<u32>(LOADING_WORLD_SPACE), 0);
+        assert_eq!(e.global::<u32>(LOADING_TOPIC_INFO), 0);
+        assert_eq!(e.get(this, TESDataHandler::ucGameSettingsLoadState), 2);
+    }
+
+    #[test]
+    fn file_loader_formats_the_percentage_only_when_it_changes() {
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_GRUP, 4),
+            (FORM_TYPE_GRUP, 4),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        e.set_global(LOAD_FORM_TOTAL, 1000u32);
+        // 1 of 1000 is 0.1%: the percentage stays 0, the same as at the
+        // start; 3 of 1000 is still 0.
+        start_log(&mut e);
+        assert!(e.call(0x0046_7780, &args![this, reader.file, 0u32]).bool());
+        assert!(calls(&e, FORMAT_S).is_empty());
+        // With a total of 3 the three records give 33%, 66% and 100%.
+        e.set_global(LOAD_FORM_DONE, 0u32);
+        *reader.cursor.borrow_mut() = 0;
+        e.mem.set_u32(reader.file + 0x240 + 0xc, 4);
+        e.set_global(LOAD_FORM_TOTAL, 3u32);
+        start_log(&mut e);
+        assert!(e.call(0x0046_7780, &args![this, reader.file, 0u32]).bool());
+        let formats = calls(&e, FORMAT_S);
+        let percents: Vec<u32> = formats.iter().map(|call| call[3]).collect();
+        assert_eq!(percents, vec![33, 66, 100]);
+        assert!(formats.iter().all(|call| call[2] == LOADING_FILES_FORMAT));
+    }
+
+    #[test]
+    fn file_loader_reports_a_file_that_does_not_open_or_close() {
+        let (mut e, this, reader) = reader_setup(&[(FORM_TYPE_TOFT, 0xffff_ffff)]);
+        e.register(FILE_OPEN, |_, _| ret(0));
+        e.register(FILE_CLOSE, |_, _| ret(0));
+        do_nothing(&mut e, &[HANDLER_REPORT_ERROR]);
+        start_log(&mut e);
+        assert!(e.call(0x0046_7780, &args![this, reader.file, 0u32]).bool());
+        assert_eq!(
+            calls(&e, HANDLER_REPORT_ERROR),
+            vec![vec![this.addr(), 4], vec![this.addr(), 4]]
+        );
+    }
+
+    #[test]
+    fn file_loader_result_is_false_when_a_record_fails_and_goes_on() {
+        // An `INFO` record whose load fails, then the end marker.
+        let (mut e, this, reader) =
+            reader_setup(&[(FORM_TYPE_TOPIC_INFO, 0), (FORM_TYPE_TOFT, 0xffff_ffff)]);
+        let info = probe_form(&mut e, &[(0x20, 0)]);
+        let object = info.object;
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(TOPIC_INFO_CONSTRUCT, move |_, _| ret(object));
+        e.register(TOPIC_INFO_LIST_FUNCTION, |_, _| ret(0));
+        assert!(!e.call(0x0046_7780, &args![this, reader.file, 0u32]).bool());
+        // The loop went on to the end marker.
+        assert_eq!(e.global::<u32>(LOAD_FORM_DONE), 2);
+    }
+
+    #[test]
+    fn file_loader_toft_record_with_id_minus_2_moves_the_file() {
+        // Id -2 moves the file to the offset in the header (plus the file
+        // offset and 0x18) and ends the loop.
+        let (mut e, this, reader) = reader_setup(&[(FORM_TYPE_TOFT, 0xffff_fffe)]);
+        e.mem.set_u32(reader.file + 0x264, 0x1000);
+        e.mem.set_u32(reader.file + 0x240 + 4, 0x55);
+        do_nothing(&mut e, &[FILE_SEEK]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        assert_eq!(calls(&e, FILE_SEEK), vec![vec![reader.file, 0x1018, 0x55]]);
+        assert!(calls(&e, FILE_NEXT_FORM).is_empty());
+    }
+
+    /// A reader whose first record is of `first_type` and loads the existing
+    /// form `form` (so that the matching word of the loader is set), then a
+    /// `TOFT` record with the id 0x1100 and the end marker.
+    fn toft_after(first_type: u32) -> (Engine, Ptr<TESDataHandler>, Reader, Probe) {
+        let (mut e, this, reader) = reader_setup(&[
+            (first_type, 0),
+            (FORM_TYPE_TOFT, 0x1100),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let form = probe_form(&mut e, &[]);
+        let object = form.object;
+        e.register_double(FORM_BY_ID, move |_, _| ret(object));
+        e.mem.set_u32(reader.file + 0x264, 0x100);
+        (e, this, reader, form)
+    }
+
+    #[test]
+    fn file_loader_toft_record_after_an_info_record_goes_to_the_topic_info() {
+        let (mut e, this, reader, info) = toft_after(FORM_TYPE_TOPIC_INFO);
+        do_nothing(&mut e, &[WORLD_STEP_589F50]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        assert_eq!(e.global::<u32>(LOADING_TOPIC_INFO), info.object);
+        assert_eq!(
+            calls(&e, WORLD_STEP_589F50),
+            vec![vec![info.object, 0x1100]]
+        );
+    }
+
+    #[test]
+    fn file_loader_toft_record_after_a_world_record_goes_to_the_world_space() {
+        let (mut e, this, reader, world) = toft_after(FORM_TYPE_WORLD_SPACE);
+        do_nothing(&mut e, &[WORLD_STEP_5857B0]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        // The id minus the file offset plus 0x18.
+        assert_eq!(
+            calls(&e, WORLD_STEP_5857B0),
+            vec![vec![world.object, reader.file, 0x1100 - 0x100 + 0x18]]
+        );
+    }
+
+    #[test]
+    fn file_loader_toft_record_after_a_cell_record_goes_to_an_interior_cell() {
+        let (mut e, this, reader, cell) = toft_after(FORM_TYPE_CELL);
+        e.register(CELL_IS_INTERIOR, |_, _| ret(1));
+        do_nothing(&mut e, &[CELL_STEP_54DE80]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        assert_eq!(calls(&e, CELL_STEP_54DE80), vec![vec![cell.object, 0x1100]]);
+        // A cell that is not an interior one gets nothing.
+        let (mut e, this, reader, _) = toft_after(FORM_TYPE_CELL);
+        e.register(CELL_IS_INTERIOR, |_, _| ret(0));
+        e.register(CELL_STEP_54DE80, |_, _| panic!("not an interior cell"));
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+    }
+
+    #[test]
+    fn file_loader_toft_record_without_anything_loaded_does_nothing() {
+        let (mut e, this, reader) =
+            reader_setup(&[(FORM_TYPE_TOFT, 0x1100), (FORM_TYPE_TOFT, 0xffff_ffff)]);
+        start_log(&mut e);
+        assert!(e.call(0x0046_7780, &args![this, reader.file, 0u32]).bool());
+        assert_eq!(calls(&e, FILE_NEXT_FORM).len(), 1);
+    }
+
+    #[test]
+    fn file_loader_registers_the_editor_id_of_a_loaded_form() {
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_DEFAULT_OBJECTS, 0),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        // After the load the form of the record id has an editor id.
+        let editor_id = c_string(&mut e, "MyForm");
+        let form = probe_form(&mut e, &[(0x130, editor_id)]);
+        let form_object = form.object;
+        e.register_double(FORM_BY_ID, move |_, _| ret(form_object));
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_DEFAULT_OBJECTS));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        e.set_global(EDITOR_ID_MAP, 0x5500u32);
+        do_nothing(&mut e, &[EDITOR_ID_MAP_ADD]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        assert_eq!(
+            calls(&e, EDITOR_ID_MAP_ADD),
+            vec![vec![0x5500, editor_id, form.object]]
+        );
+        // An empty editor id is not registered, nor is a reference.
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_DEFAULT_OBJECTS, 0),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        let empty = c_string(&mut e, "");
+        let form = probe_form(&mut e, &[(0x130, empty)]);
+        let form_object = form.object;
+        e.register_double(FORM_BY_ID, move |_, _| ret(form_object));
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_DEFAULT_OBJECTS));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        e.register(EDITOR_ID_MAP_ADD, |_, _| panic!("no editor id to register"));
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+    }
+
+    #[test]
+    fn file_loader_tells_the_save_game_about_the_forms_it_loads() {
+        let (mut e, this, reader) = reader_setup(&[
+            (FORM_TYPE_DEFAULT_OBJECTS, 0),
+            (FORM_TYPE_TOFT, 0xffff_ffff),
+        ]);
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        let form = probe_form(&mut e, &[]);
+        let form_object = form.object;
+        e.register_double(FORM_BY_ID, move |_, _| ret(form_object));
+        e.register(FORM_GET_TYPE, |_, _| ret(FORM_TYPE_DEFAULT_OBJECTS));
+        do_nothing(&mut e, &[FORM_STEP_483870, FORM_STEP_483720]);
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0x4000u32);
+        e.register(SAVE_LOAD_ACTIVE, |_, _| ret(1));
+        // The counter is at 0xff: the next record makes it 0x100, which
+        // calls the tick.
+        e.set_global(SAVE_RECORD_COUNTER, 0xffu32);
+        do_nothing(&mut e, &[SAVE_LOAD_TICK, SAVE_LOAD_ANNOUNCE]);
+        start_log(&mut e);
+        e.call(0x0046_7780, &args![this, reader.file, 0u32]);
+        assert_eq!(e.global::<u32>(SAVE_RECORD_COUNTER), 0x100);
+        assert_eq!(calls(&e, SAVE_LOAD_TICK), vec![vec![0x4000]]);
+        assert_eq!(
+            calls(&e, SAVE_LOAD_ANNOUNCE),
+            vec![vec![0x4000, form.object]]
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // The data load (`fn_00463070`).
+    // ---------------------------------------------------------------
+
+    /// The list functions that change a list, over the plain nodes of
+    /// `real_lists`: removing the head node pulls the next node's words
+    /// into it; removing an item finds the node that holds the item in the
+    /// chain from the node given.
+    fn real_list_removal(e: &mut Engine) {
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next == 0 {
+                e.mem.set_u32(a[0], 0);
+            } else {
+                let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            }
+            ret(0)
+        });
+        e.register(LIST_REMOVE_ITEM, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let mut node = a[0];
+            let mut before = 0;
+            while node != 0 && e.mem.u32(node) != item {
+                before = node;
+                node = e.mem.u32(node + 4);
+            }
+            if node != 0 {
+                let next = e.mem.u32(node + 4);
+                if before != 0 {
+                    e.mem.set_u32(before + 4, next);
+                } else if next != 0 {
+                    let (next_item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                    e.mem.set_u32(node, next_item);
+                    e.mem.set_u32(node + 4, after);
+                }
+            }
+            ret(1)
+        });
+    }
+
+    /// The loader of the data: `files` are the flags words of the files of
+    /// `listFiles` (`+0x3E8`: bit 0 master, bit 2 selected, bit 3 active).
+    /// Every call outside this file that the load makes is a double: files
+    /// answer their flags; each file has ten forms and one record (the end
+    /// marker), so loading it takes no further doubles; the lists of the
+    /// other units are empty; the rest does nothing.
+    struct Loader {
+        e: Engine,
+        this: Ptr<TESDataHandler>,
+        files: Vec<u32>,
+        manager: Probe,
+    }
+
+    /// The getters of the lists that are in other units.
+    const FOREIGN_LIST_GETTERS: [u32; 29] = [
+        0x0043_6aa0,
+        0x0046_1110,
+        0x004e_a950,
+        0x0062_4700,
+        0x0046_1130,
+        0x0087_1a30,
+        0x009c_1a50,
+        0x0040_77e0,
+        0x0046_1150,
+        0x0050_3650,
+        0x0098_4250,
+        0x0051_4f30,
+        0x0045_5600,
+        0x0087_4670,
+        0x0046_0ff0,
+        0x0050_6390,
+        0x0062_d2f0,
+        0x0046_0fb0,
+        0x0046_1070,
+        0x0045_a730,
+        0x0046_10f0,
+        0x0045_a330,
+        0x004a_0d10,
+        0x0046_12e0,
+        0x009d_9f40,
+        0x0041_d8a0,
+        0x0087_eaa0,
+        0x0046_10d0,
+        0x0041_3f40,
+    ];
+
+    fn loader_setup(flags: &[u32]) -> Loader {
+        let (mut e, this) = engine3();
+        real_lists(&mut e);
+        real_list_removal(&mut e);
+        real_format(&mut e);
+        real_ftol2(&mut e);
+        let files: Vec<u32> = flags
+            .iter()
+            .enumerate()
+            .map(|(index, word)| {
+                let file = file_named(&mut e, &format!("File{index}.esp"));
+                e.mem.set_u32(file + 0x3e8, *word);
+                e.mem.set_u32(file + 0x3e0, 10);
+                // The one record: `TOFT` with id -1.
+                e.mem.set_u32(file + 0x240 + 0xc, 0xffff_ffff);
+                file
+            })
+            .collect();
+        build_list(&mut e, this.addr() + 0x210, &files);
+        // The file flags as the game keeps them.
+        e.register(FILE_IS_SELECTED, |e, a| {
+            ret((e.mem.u32(a[0] + 0x3e8) & 4 != 0) as u32)
+        });
+        e.register(FILE_GET_MASTER, |e, a| {
+            ret((e.mem.u32(a[0] + 0x3e8) & 1 != 0) as u32)
+        });
+        e.register(FILE_GET_ACTIVE, |e, a| {
+            ret((e.mem.u32(a[0] + 0x3e8) & 8 != 0) as u32)
+        });
+        e.register(FILE_SET_FLAG_BIT_2, |e, a| {
+            let word = e.mem.u32(a[0] + 0x3e8);
+            e.mem
+                .set_u32(a[0] + 0x3e8, if a[1] != 0 { word | 4 } else { word & !4 });
+            ret(0)
+        });
+        e.register(FILE_VERSION_TOO_HIGH, |_, _| ret(0));
+        e.register(FILE_INDEX_COUNT, |_, _| ret(0));
+        e.register(FILE_MASTERS_CHECK, |_, _| ret(0));
+        e.register(FILE_OPEN, |_, _| ret(1));
+        e.register(FILE_CLOSE, |_, _| ret(1));
+        e.register(FILE_STEP_44EDB0, |_, _| ret(1));
+        e.register(FILE_GET_RECORD_TYPE, |_, _| ret(FORM_TYPE_TOFT));
+        e.register(TEXT_OF, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(FILE_GET_FORM_ID, |e, a| ret(e.mem.u32(a[0] + 0x24c)));
+        do_nothing(
+            &mut e,
+            &[
+                TES_STEP_4539A0,
+                TES_STEP_8D7DC0,
+                TES_STEP_450D80,
+                FILE_OPEN_HEADER,
+                FILE_GEN_INDEX_TABLE,
+                DISABLE_WARNING_COUNT,
+                LOG_MESSAGE,
+                FILE_SET_COMPILE_INDEX,
+                HANDLER_REPORT_ERROR,
+                GENERATE_DEFAULT_OBJECTS,
+                FILE_SET_LARGE_BUFFER,
+                FILE_DESTRUCT,
+                OPERATOR_DELETE,
+                IDLE_MANAGER_FINISH,
+                CAMERA_PATH_MANAGER_FINISH,
+                STEP_867890,
+                STEP_61BA10,
+                STEP_61A5A0,
+                STEP_408DF0,
+                FACTION_CHECK_REACTIONS,
+                HANDLER_STEP_46FB50,
+                PLAYER_STEP_8D50E0,
+            ],
+        );
+        e.register(HOLDER_GETTER, |_, _| ret(0));
+        e.register(TES_GET_NAV_MESH_INFO_MAP, |_, _| ret(0));
+        e.register(DEFAULT_OBJECT_MANAGER_GET, |_, _| ret(0));
+        let manager = probe_form(&mut e, &[]);
+        let manager_object = manager.object;
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| {
+            ret(manager_object)
+        });
+        let empty_list = e.mem.alloc(8);
+        for getter in FOREIGN_LIST_GETTERS {
+            e.register_double(getter, move |_, _| ret(empty_list));
+        }
+        word_array(&mut e, &[]);
+        let object_list = e.mem.alloc(8);
+        e.set(this, TESDataHandler::pObjectList, Ptr::new(object_list));
+        e.map(0x5000, 0x1000);
+        e.set_global(TES_SINGLETON, 0x5000u32);
+        e.set_global(PLAYER_SINGLETON, 0x5100u32);
+        e.set_global(IDLE_MANAGER, 0x5200u32);
+        e.set_global(CAMERA_PATH_MANAGER, 0x5300u32);
+        Loader {
+            e,
+            this,
+            files,
+            manager,
+        }
+    }
+
+    fn load(loader: &mut Loader, flag: u32) -> bool {
+        let this = loader.this;
+        loader.e.call(0x0046_3070, &args![this, flag]).bool()
+    }
+
+    #[test]
+    fn load_selects_the_files_to_compile_and_makes_the_active_one_last() {
+        // master (selected, master), unselected, plugin (selected), active.
+        let mut l = loader_setup(&[5, 0, 4, 12]);
+        let (master, unselected, plugin, active) = (l.files[0], l.files[1], l.files[2], l.files[3]);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let this = l.this;
+        let e = &mut l.e;
+        // The compile list, in order, with the compile indexes.
+        assert_eq!(e.get(this, TESDataHandler::iNumCompile), 3);
+        let compiled: Vec<u32> = (0..3)
+            .map(|i| e.mem.u32(this.addr() + 0x21c + 4 * i))
+            .collect();
+        assert_eq!(compiled, vec![master, plugin, active]);
+        assert_eq!(
+            calls(e, FILE_SET_COMPILE_INDEX),
+            vec![vec![master, 0], vec![plugin, 1], vec![active, 2]]
+        );
+        assert_eq!(e.get(this, TESDataHandler::pActiveFile).addr(), active);
+        assert_eq!(e.get(this, TESDataHandler::iNextID), 0xff00_0800);
+        // The unselected file was destroyed (flags 1) and removed from the
+        // chain after the master's node.
+        assert_eq!(calls(e, FILE_DESTRUCT), vec![vec![unselected]]);
+        assert_eq!(calls(e, OPERATOR_DELETE), vec![vec![unselected]]);
+        let master_node = this.addr() + 0x210;
+        let removed = calls(e, LIST_REMOVE_ITEM);
+        assert_eq!(removed.len(), 1);
+        assert_eq!(removed[0][0], master_node);
+        // The warning count is 1 while the files are chosen, then 0.
+        assert_eq!(calls(e, DISABLE_WARNING_COUNT), vec![vec![1], vec![0]]);
+    }
+
+    #[test]
+    fn load_opens_every_file_to_compile_and_loads_them_in_order() {
+        let mut l = loader_setup(&[5, 4, 12]);
+        let files = l.files.clone();
+        let this = l.this;
+        // `GenerateDefaultObjects` runs with `bLoadingFiles` and `bSaveLoad`
+        // set.
+        let state = Rc::new(RefCell::new(Vec::new()));
+        let seen = state.clone();
+        l.e.register_double(GENERATE_DEFAULT_OBJECTS, move |e, a| {
+            seen.borrow_mut().push((
+                a[0],
+                e.get(this, TESDataHandler::bLoadingFiles),
+                e.get(this, TESDataHandler::bSaveLoad),
+            ));
+            ret(0)
+        });
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        assert_eq!(*state.borrow(), vec![(this.addr(), true, true)]);
+        let e = &mut l.e;
+        // Each file is opened twice: once to read the form count, once by
+        // the loader; both with (0, 0).
+        let opened: Vec<u32> = calls(e, FILE_OPEN).iter().map(|call| call[0]).collect();
+        assert_eq!(
+            opened,
+            vec![files[0], files[1], files[2], files[0], files[1], files[2]]
+        );
+        assert_eq!(e.global::<u32>(LOAD_FORM_TOTAL), 30);
+        assert_eq!(e.global::<u32>(LOAD_FORM_DONE), 3);
+        // The large buffer of the master file: -3 before the loads and -1
+        // after, on the singleton.
+        assert_eq!(
+            calls(e, FILE_SET_LARGE_BUFFER),
+            vec![vec![files[0], 0xffff_fffd], vec![files[0], 0xffff_ffff]]
+        );
+        // The end state.
+        assert!(!e.get(this, TESDataHandler::bSaveLoad));
+        assert!(!e.get(this, TESDataHandler::bLoadingFiles));
+        assert_eq!(e.global::<u32>(LOADING_CELL), 0);
+        assert_eq!(calls(e, FACTION_CHECK_REACTIONS).len(), 1);
+        assert_eq!(calls(e, HANDLER_STEP_46FB50), vec![vec![this.addr()]]);
+        // The player's part goes to the last step.
+        assert_eq!(calls(e, PLAYER_STEP_8D50E0), vec![vec![0x5100 + 0x878]]);
+        assert_eq!(calls(e, STEP_61A5A0), vec![vec![1, 0x5100 + 0x6a8]]);
+        // The scopes: the function's, then one per file for the archives.
+        let scopes = calls(e, SCOPE_ENTER);
+        assert_eq!(scopes[0][1..], [0x16, 1, SOURCE_FILE, 0x13ba]);
+        assert_eq!(scopes.len(), 1 + 3);
+        assert_eq!(scopes[1][1..], [0x13, 1, SOURCE_FILE, 0x1532]);
+        assert_eq!(calls(e, SCOPE_LEAVE).len(), 4);
+    }
+
+    #[test]
+    fn partial_load_skips_the_default_objects_and_the_files_that_are_not_cached() {
+        let mut l = loader_setup(&[5, 4]);
+        let (first, second) = (l.files[0], l.files[1]);
+        let this = l.this;
+        l.e.set(this, TESDataHandler::iNumCompile, 5);
+        // Only the first file is cached.
+        l.e.mem.set_u8(first + 0x428, 1);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 1));
+        let e = &mut l.e;
+        assert!(calls(e, GENERATE_DEFAULT_OBJECTS).is_empty());
+        // The count was reset: two files, not seven.
+        assert_eq!(e.get(this, TESDataHandler::iNumCompile), 2);
+        // Opened in the count pass, and the first again by the loader.
+        let opened: Vec<u32> = calls(e, FILE_OPEN).iter().map(|call| call[0]).collect();
+        assert_eq!(opened, vec![first, second, first]);
+    }
+
+    #[test]
+    fn load_clears_a_word_of_the_tes_object_unless_asked_not_to() {
+        let mut l = loader_setup(&[5]);
+        l.e.mem.set_u32(0x5000 + 0x88, 0xdead);
+        assert!(load(&mut l, 0));
+        assert_eq!(l.e.mem.u32(0x5000 + 0x88), 0);
+        let mut l = loader_setup(&[5]);
+        l.e.mem.set_u32(0x5000 + 0x88, 0xdead);
+        assert!(load(&mut l, 1));
+        assert_eq!(l.e.mem.u32(0x5000 + 0x88), 0xdead);
+    }
+
+    #[test]
+    fn load_stops_with_false_when_a_master_file_is_missing() {
+        let mut l = loader_setup(&[4]);
+        let file = l.files[0];
+        // The file lists one master that cannot be found.
+        l.e.register(FILE_INDEX_COUNT, |_, _| ret(1));
+        l.e.register(FILE_GET_INDEX_FILE, |_, _| ret(0));
+        l.e.register(FILE_GET_MASTER_NAME, |_, _| ret(0x7000));
+        start_log(&mut l.e);
+        assert!(!load(&mut l, 0));
+        let this = l.this;
+        let e = &mut l.e;
+        assert!(!e.get(this, TESDataHandler::bSaveLoad));
+        assert_eq!(calls(e, FILE_GET_INDEX_FILE), vec![vec![file, 1]]);
+        // The name is asked twice (the test, then the argument).
+        assert_eq!(
+            calls(e, FILE_GET_MASTER_NAME),
+            vec![vec![file, 1], vec![file, 1]]
+        );
+        // No file was opened and the scope was left.
+        assert!(calls(e, FILE_OPEN).is_empty());
+        assert_eq!(calls(e, SCOPE_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn load_selects_the_masters_of_a_selected_file() {
+        let mut l = loader_setup(&[4]);
+        let master = file_named(&mut l.e, "Master.esm");
+        l.e.mem.set_u32(master + 0x3e8, 1);
+        l.e.register_double(FILE_INDEX_COUNT, |_, _| ret(1));
+        l.e.register_double(FILE_GET_INDEX_FILE, move |_, _| ret(master));
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        assert_eq!(calls(&l.e, FILE_SET_FLAG_BIT_2)[0], vec![master, 1]);
+    }
+
+    #[test]
+    fn load_deselects_a_file_whose_version_is_too_high() {
+        let mut l = loader_setup(&[4, 4]);
+        let (high, fine) = (l.files[0], l.files[1]);
+        l.e.register_double(
+            FILE_VERSION_TOO_HIGH,
+            move |_, a| ret((a[0] == high) as u32),
+        );
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let this = l.this;
+        let e = &mut l.e;
+        assert_eq!(calls(e, FILE_SET_FLAG_BIT_2)[0], vec![high, 0]);
+        // It is then no longer selected and is destroyed.
+        assert_eq!(calls(e, FILE_DESTRUCT), vec![vec![high]]);
+        assert_eq!(e.get(this, TESDataHandler::iNumCompile), 1);
+        assert_eq!(e.mem.u32(this.addr() + 0x21c), fine);
+    }
+
+    #[test]
+    fn load_reads_the_index_table_of_the_active_file_of_a_save_game() {
+        let mut l = loader_setup(&[4]);
+        let this = l.this;
+        let active = file_named(&mut l.e, "Save.ess");
+        l.e.mem.set_u32(active + 0x240 + 0xc, 0xffff_ffff);
+        l.e.set(this, TESDataHandler::pActiveFile, Ptr::new(active));
+        l.e.set(this, TESDataHandler::bSaveLoadGame, true);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let e = &mut l.e;
+        assert_eq!(calls(e, FILE_OPEN_HEADER)[0], vec![active]);
+        assert_eq!(
+            calls(e, FILE_GEN_INDEX_TABLE)[0],
+            vec![active, this.addr() + 0x210, 1]
+        );
+    }
+
+    #[test]
+    fn load_warns_about_a_plugin_whose_masters_are_wrong() {
+        let mut l = loader_setup(&[4]);
+        let file = l.files[0];
+        l.e.register(FILE_MASTERS_CHECK, |_, _| ret(1));
+        // The message objects keep their text pointer at +4.
+        l.e.mem.set_u32(MASTER_WARNING_TEXT + 4, 0x7100);
+        l.e.mem.set_u32(MASTER_SUMMARY_TEXT + 4, 0x7200);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let name = l.e.call(FILE_NAME, &args![file]).u32();
+        assert_eq!(
+            calls(&l.e, LOG_MESSAGE),
+            vec![vec![0x7100, name], vec![0x7200]]
+        );
+        // Not for a master save: no warning.
+        let mut l = loader_setup(&[4]);
+        l.e.register(FILE_MASTERS_CHECK, |_, _| ret(1));
+        let this = l.this;
+        l.e.set(this, TESDataHandler::bMasterSave, true);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        assert!(calls(&l.e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn load_opens_the_archives_of_a_file_that_has_masters() {
+        let mut l = loader_setup(&[4]);
+        let file = l.files[0];
+        // The file has a master: its `listMasters` is not empty.
+        l.e.mem.set_u32(file + 0x3ec, 1);
+        l.e.register(STRING_COPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            ret(a[0])
+        });
+        l.e.register(STRING_RFIND_CHAR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            ret(text
+                .iter()
+                .rposition(|&c| c == a[1] as u8)
+                .map_or(0, |at| a[0] + at as u32))
+        });
+        // Three archives found: an open one, an empty one and a new one.
+        let found = Rc::new(RefCell::new(vec![
+            ("File0 - Main.bsa", 100u32),
+            ("File0 - Empty.bsa", 0),
+            ("File0 - Textures.bsa", 50),
+        ]));
+        let list = found.clone();
+        let searches = Rc::new(RefCell::new(Vec::new()));
+        let log = searches.clone();
+        l.e.register_double(FIND_FIRST_FILE_A, move |e, a| {
+            log.borrow_mut().push(e.mem.cstr(a[0]));
+            let (name, size) = list.borrow_mut().remove(0);
+            e.mem.set_u32(a[1] + FIND_DATA_SIZE_LOW, size);
+            e.mem.set_cstr(a[1] + FIND_DATA_FILE_NAME, name.as_bytes());
+            ret(7)
+        });
+        let list = found.clone();
+        l.e.register_double(FIND_NEXT_FILE_A, move |e, a| {
+            assert_eq!(a[0], 7);
+            let mut list = list.borrow_mut();
+            if list.is_empty() {
+                return ret(0);
+            }
+            let (name, size) = list.remove(0);
+            e.mem.set_u32(a[1] + FIND_DATA_SIZE_LOW, size);
+            e.mem.set_cstr(a[1] + FIND_DATA_FILE_NAME, name.as_bytes());
+            ret(1)
+        });
+        l.e.register(ARCHIVE_IS_OPEN, |e, a| {
+            ret((e.mem.cstr(a[0]) == b"DATA\\File0 - Main.bsa") as u32)
+        });
+        do_nothing(&mut l.e, &[FIND_CLOSE, OPEN_ARCHIVE]);
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let e = &mut l.e;
+        assert_eq!(*searches.borrow(), vec![b"Data\\File0*.bsa".to_vec()]);
+        let opened: Vec<Vec<u8>> = calls(e, OPEN_ARCHIVE)
+            .iter()
+            .map(|call| {
+                assert_eq!(call[1..], [0, 0]);
+                e.mem.cstr(call[0])
+            })
+            .collect();
+        // Only the one that was not open and not empty.
+        assert_eq!(opened.len(), 1);
+        assert_eq!(calls(e, FIND_CLOSE), vec![vec![7]]);
+        assert_eq!(
+            calls(e, ARCHIVE_IS_OPEN).len(),
+            2,
+            "the empty one is not asked"
+        );
+    }
+
+    #[test]
+    fn load_finds_no_archives_for_a_file_without_masters() {
+        let mut l = loader_setup(&[4]);
+        l.e.register(FIND_FIRST_FILE_A, |_, _| {
+            panic!("no search without masters")
+        });
+        assert!(load(&mut l, 0));
+    }
+
+    #[test]
+    fn load_leaves_the_search_handle_alone_when_nothing_matches() {
+        let mut l = loader_setup(&[4]);
+        let file = l.files[0];
+        l.e.mem.set_u32(file + 0x3ec, 1);
+        l.e.register(STRING_COPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            ret(a[0])
+        });
+        l.e.register(STRING_RFIND_CHAR, |_, _| ret(0));
+        l.e.register(FIND_FIRST_FILE_A, |_, _| ret(INVALID_HANDLE));
+        l.e.register(FIND_CLOSE, |_, _| panic!("nothing to close"));
+        // No dot in the name: the whole name is searched for.
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        assert_eq!(calls(&l.e, FIND_FIRST_FILE_A).len(), 1);
+    }
+
+    #[test]
+    fn load_hands_the_default_shaders_to_the_data_handler() {
+        let mut l = loader_setup(&[4]);
+        let this = l.this;
+        l.e.register(DEFAULT_OBJECT_MANAGER_GET, |_, a| ret(0x8000 + a[0]));
+        assert!(load(&mut l, 0));
+        assert_eq!(l.e.get(this, TESDataHandler::pSpotterShader).addr(), 0x801f);
+        assert_eq!(
+            l.e.get(this, TESDataHandler::pItemDetectedShader).addr(),
+            0x8020
+        );
+        assert_eq!(
+            l.e.get(this, TESDataHandler::pCateyeMobileShader).addr(),
+            0x8021
+        );
+        // A missing default object leaves its shader alone.
+        let mut l = loader_setup(&[4]);
+        let this = l.this;
+        l.e.register(DEFAULT_OBJECT_MANAGER_GET, |_, a| {
+            ret(if a[0] == 0x20 { 0x9000 } else { 0 })
+        });
+        assert!(load(&mut l, 0));
+        assert_eq!(l.e.get(this, TESDataHandler::pSpotterShader).addr(), 0);
+        assert_eq!(
+            l.e.get(this, TESDataHandler::pItemDetectedShader).addr(),
+            0x9000
+        );
+        assert_eq!(l.e.get(this, TESDataHandler::pCateyeMobileShader).addr(), 0);
+    }
+
+    #[test]
+    fn load_calls_slot_88_of_the_actor_holders_but_not_after_the_end_of_their_list() {
+        // `004169d0` answers a holder whose list (at +4) has one item; the
+        // next holder is the node before the list node `00726070` answers.
+        let mut l = loader_setup(&[4]);
+        let form = probe_form(&mut l.e, &[]);
+        let holder = l.e.mem.alloc(16);
+        l.e.mem.set_u32(holder + 4, form.object);
+        // The next node of the list at holder+4 is 0: the loop ends.
+        l.e.register_double(HOLDER_GETTER, move |_, _| ret(holder));
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        assert_eq!(calls(&l.e, form.slot(0x88)), vec![vec![form.object]]);
+    }
+
+    #[test]
+    fn load_runs_slot_88_on_the_forms_in_the_order_of_the_game() {
+        let mut l = loader_setup(&[4]);
+        let this = l.this;
+        // One probe form in each list we can reach, in the order the load
+        // calls them: two lists of the first run (`00461010`, `00461290`),
+        // the object list, the interior cells, the world spaces, `00461250`,
+        // the default object manager, `00461270` and the last run
+        // (`00460090`, `004600d0`).
+        let mut expected = Vec::new();
+        let put = |l: &mut Loader, list: u32| {
+            let form = probe_form(&mut l.e, &[]);
+            l.e.mem.set_u32(list, form.object);
+            form.slot(0x88)
+        };
+        let list = fn_00461010(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        let list = fn_00461290(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        // The object list: the first object is the word at +4, the next
+        // one the word at +0x20 of an object.
+        let object_list = l.e.get(this, TESDataHandler::pObjectList).addr();
+        let object = probe_form(&mut l.e, &[]);
+        l.e.mem.set_u32(object_list + 4, object.object);
+        l.e.register(OBJECT_NEXT, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        l.e.register(FORM_GET_TYPE, |_, _| ret(0));
+        expected.push(object.slot(0x88));
+        let cell = probe_form(&mut l.e, &[]);
+        let cell_object = cell.object;
+        l.e.register_double(ARRAY_SIZE, |_, _| ret(2));
+        l.e.register_double(ARRAY_AT, move |e, a| {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, if a[1] == 1 { cell_object } else { 0 });
+            ret(slot)
+        });
+        expected.push(cell.slot(0x88));
+        let list = fn_00460140(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        let list = fn_00461250(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        expected.push(l.manager.slot(0x88));
+        let list = fn_00461270(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        let list = fn_00460090(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        let list = fn_004600d0(&mut l.e, this).addr();
+        expected.push(put(&mut l, list));
+        start_log(&mut l.e);
+        assert!(load(&mut l, 0));
+        let slot_88_calls: Vec<u32> = call_order(&l.e)
+            .into_iter()
+            .filter(|addr| expected.contains(addr))
+            .collect();
+        assert_eq!(slot_88_calls, expected);
+    }
+
+    // ---------------------------------------------------------------
+    // Placing a reference (`fn_004698a0`).
+    // ---------------------------------------------------------------
+
+    /// The pieces of a placement: the handler, a position and a rotation in
+    /// memory, a base form of type `base_type` and the reference the
+    /// constructors build.
+    struct Placement {
+        e: Engine,
+        this: Ptr<TESDataHandler>,
+        base: u32,
+        position: u32,
+        rotation: u32,
+        reference: Probe,
+        base_object: u32,
+    }
+
+    fn placement_setup(base_type: u32, reference_answers: &[(u32, u32)]) -> Placement {
+        let (mut e, this) = engine3();
+        let reference = probe_form(&mut e, reference_answers);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 8192.0);
+        e.mem.set_f32(position + 4, -4096.0);
+        e.mem.set_f32(position + 8, 7.5);
+        let rotation = e.mem.alloc(12);
+        e.mem.set_f32(rotation, 1.0);
+        e.mem.set_f32(rotation + 4, 2.0);
+        e.mem.set_f32(rotation + 8, 3.0);
+        let base = 0x0000_1234;
+        let base_object = 0x0000_5678;
+        e.register_double(FORM_GET_TYPE, move |_, _| ret(base_type));
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let object = reference.object;
+        for construct in [CHARACTER_CONSTRUCT, CREATURE_CONSTRUCT, REFERENCE_CONSTRUCT] {
+            e.register_double(construct, move |_, _| ret(object));
+        }
+        e.register(CELL_IS_INTERIOR, |_, _| ret(1));
+        e.register_double(OBJECT_NEXT, move |_, _| ret(base_object));
+        e.register(FORM_GET_ID, |_, _| ret(0x0100_0001));
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0));
+        e.register(REFERENCE_GET_PERSISTS, |_, _| ret(0));
+        e.register(REFERENCE_MUST_PERSIST, |_, _| ret(0));
+        e.register(REFERENCE_STEP_564E00, |_, _| ret(0));
+        e.register(DESTRUCTIBLE_CHECK, |_, _| ret(0));
+        e.register(DYNAMIC_CAST, |_, _| ret(0));
+        e.register(TES_IS_CELL_LOADED, |_, _| ret(0));
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.set_global(TES_SINGLETON, 0x5000u32);
+        do_nothing(
+            &mut e,
+            &[
+                REFERENCE_SET_OBJECT_REFERENCE,
+                REFERENCE_SET_LOCATION,
+                REFERENCE_SET_ROTATION,
+                REFERENCE_SET_PERSISTS,
+                REFERENCE_STEP_564C60,
+                CELL_ADD_REFERENCE,
+                CELL_REMOVE_REFERENCE,
+                FORM_SET_DESTRUCTIBLE,
+                FORM_SET_FIRE_OFF,
+            ],
+        );
+        Placement {
+            e,
+            this,
+            base,
+            position,
+            rotation,
+            reference,
+            base_object,
+        }
+    }
+
+    /// Calls `fn_004698a0` with the placement's pieces and the given cell,
+    /// world space, reuse and extra values.
+    fn place(
+        p: &mut Placement,
+        cell: u32,
+        world_space: u32,
+        existing: u32,
+        extras: [u32; 2],
+    ) -> u32 {
+        let (this, base, position, rotation) = (p.this, p.base, p.position, p.rotation);
+        p.e.call(
+            0x0046_98a0,
+            &args![
+                this,
+                base,
+                position,
+                rotation,
+                cell,
+                world_space,
+                existing,
+                extras[0],
+                extras[1]
+            ],
+        )
+        .u32()
+    }
+
+    #[test]
+    fn placing_needs_a_base_form_and_a_cell_or_a_world_space() {
+        let mut p = placement_setup(0x15, &[]);
+        start_log(&mut p.e);
+        // Neither: null, nothing built; an exterior cell counts as none.
+        assert_eq!(place(&mut p, 0, 0, 0, [0, 0]), 0);
+        p.e.register(CELL_IS_INTERIOR, |_, _| ret(0));
+        assert_eq!(place(&mut p, 0x6000, 0, 0, [0, 0]), 0);
+        assert!(calls(&p.e, OPERATOR_NEW).is_empty());
+        // No base form: null too.
+        let (this, position, rotation) = (p.this, p.position, p.rotation);
+        assert_eq!(
+            p.e.call(
+                0x0046_98a0,
+                &args![this, 0u32, position, rotation, 0x6000u32, 0u32, 0u32, 0u32, 0u32]
+            )
+            .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn placing_builds_a_reference_by_the_type_of_the_base_form() {
+        for (base_type, size) in [
+            (FORM_TYPE_NPC, 0x1c8u32),
+            (FORM_TYPE_CREATURE, 0x1c0),
+            (0x15, 0x68),
+        ] {
+            let mut p = placement_setup(base_type, &[]);
+            start_log(&mut p.e);
+            let reference = place(&mut p, 0x6000, 0, 0, [0, 0]);
+            assert_eq!(reference, p.reference.object);
+            assert_eq!(
+                calls(&p.e, OPERATOR_NEW),
+                vec![vec![size]],
+                "type {base_type:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn placing_a_projectile_or_an_explosion_is_handed_on() {
+        for (base_type, target) in [
+            (FORM_TYPE_PROJECTILE, PLACE_PROJECTILE),
+            (FORM_TYPE_EXPLOSION, PLACE_EXPLOSION),
+        ] {
+            let mut p = placement_setup(base_type, &[]);
+            p.e.register(target, |_, _| ret(0x4242));
+            start_log(&mut p.e);
+            assert_eq!(place(&mut p, 0x6000, 0, 0, [0, 0]), 0x4242);
+            assert_eq!(
+                calls(&p.e, target),
+                vec![vec![
+                    p.this.addr(),
+                    p.base,
+                    p.position,
+                    p.rotation,
+                    0x6000,
+                    0
+                ]]
+            );
+            assert!(calls(&p.e, OPERATOR_NEW).is_empty());
+        }
+    }
+
+    #[test]
+    fn placing_sets_the_base_form_location_rotation_and_adds_it_to_the_cell() {
+        let mut p = placement_setup(0x15, &[]);
+        start_log(&mut p.e);
+        let reference = place(&mut p, 0x6000, 0, 0, [0, 0]);
+        let object = p.reference.object;
+        assert_eq!(reference, object);
+        assert_eq!(
+            calls(&p.e, REFERENCE_SET_OBJECT_REFERENCE),
+            vec![vec![object, p.base]]
+        );
+        assert_eq!(
+            calls(&p.e, REFERENCE_SET_LOCATION),
+            vec![vec![object, p.position]]
+        );
+        // The rotation goes by value: the three words.
+        assert_eq!(
+            calls(&p.e, REFERENCE_SET_ROTATION),
+            vec![vec![
+                object,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits()
+            ]]
+        );
+        // The cell is not loaded: only the reference is added, with the
+        // persistence flag computed (not persistent: 0).
+        assert_eq!(
+            calls(&p.e, CELL_ADD_REFERENCE),
+            vec![vec![0x6000, object, 0]]
+        );
+        assert_eq!(calls(&p.e, REFERENCE_SET_PERSISTS), vec![vec![object, 0]]);
+        assert_eq!(calls(&p.e, REFERENCE_STEP_564C60), vec![vec![object, 1]]);
+        assert!(calls(&p.e, p.reference.slot(0x228)).is_empty());
+    }
+
+    #[test]
+    fn placing_in_a_world_space_finds_the_cell_of_the_position() {
+        let mut p = placement_setup(0x15, &[]);
+        let ws = 0x7000u32;
+        p.e.register(WORLD_GET_CELL, |_, _| ret(0x6600));
+        start_log(&mut p.e);
+        place(&mut p, 0, ws, 0, [0, 0]);
+        // 8192.0 and -4096.0 shifted right by 12 (arithmetic).
+        assert_eq!(
+            calls(&p.e, WORLD_GET_CELL),
+            vec![vec![ws, 2, (-1i32) as u32]]
+        );
+        assert_eq!(calls(&p.e, CELL_ADD_REFERENCE)[0][0], 0x6600);
+        // A world space is dropped when an interior cell is given.
+        let mut p = placement_setup(0x15, &[]);
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, ws, 0, [0, 0]);
+        assert!(calls(&p.e, WORLD_GET_CELL).is_empty());
+    }
+
+    #[test]
+    fn placing_where_there_is_no_cell_makes_the_reference_persistent_in_the_world() {
+        let mut p = placement_setup(0x15, &[]);
+        let ws = 0x7000u32;
+        p.e.register(WORLD_GET_CELL, |_, _| ret(0));
+        p.e.register(WORLD_ADD_PERSISTENT_REF, |_, _| ret(0));
+        start_log(&mut p.e);
+        let reference = place(&mut p, 0, ws, 0, [0, 0]);
+        let object = p.reference.object;
+        assert_eq!(reference, object);
+        assert_eq!(
+            calls(&p.e, p.reference.slot(0x1cc)),
+            vec![vec![object, 0, 0]]
+        );
+        assert_eq!(calls(&p.e, REFERENCE_SET_PERSISTS), vec![vec![object, 1]]);
+        assert_eq!(
+            calls(&p.e, WORLD_ADD_PERSISTENT_REF),
+            vec![vec![ws, object]]
+        );
+        assert!(calls(&p.e, CELL_ADD_REFERENCE).is_empty());
+    }
+
+    #[test]
+    fn placing_in_a_loaded_cell_sets_up_the_reference_there() {
+        let mut p = placement_setup(0x15, &[(0x1d0, 0x7700)]);
+        p.e.register(TES_IS_CELL_LOADED, |_, _| ret(1));
+        // The base form is one of the special ones: an extra object is built
+        // from the aligned allocator.
+        p.e.set_global(0x011c_a22c, p.base);
+        p.e.register_double(ALIGNED_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        p.e.register(SPECIAL_EXTRA_CONSTRUCT, |_, a| ret(a[0]));
+        // The reference has a container.
+        p.e.register(REFERENCE_HAS_CONTAINER, |_, _| ret(1));
+        p.e.register(INVENTORY_CHANGES_GET, |_, _| ret(0x8100));
+        p.e.register(EXTRA_CHECK_42CDE0, |_, _| ret(1));
+        p.e.register(REFERENCE_EXTRA_DATA_LIST, |_, a| ret(a[0] + 0x44));
+        do_nothing(
+            &mut p.e,
+            &[
+                INVENTORY_STEP_4D1440,
+                INVENTORY_STEP_4D1610,
+                INVENTORY_STEP_4D1960,
+                EXTRA_STEP_41AEB0,
+                NODE_STEP_440460,
+                NODE_STEP_43FA80,
+                COLLISION_RESET_SIM,
+                SCENE_ADD_OBJECT,
+                NODE_UPDATE_PROPERTIES,
+                VECTOR_CONSTRUCT,
+                NODE_STEP_A59C60,
+            ],
+        );
+        p.e.register(REFERENCE_GET_ORIENTATION, |_, a| ret(a[1]));
+        p.e.register(SHADOW_SCENE_NODE_GETTER, |_, _| ret(0x8200));
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0, 0]);
+        let object = p.reference.object;
+        // The cell is told to the reference around the container work.
+        assert_eq!(
+            calls(&p.e, p.reference.slot(0x228)),
+            vec![vec![object, 0x6000], vec![object, 0]]
+        );
+        let extra = calls(&p.e, p.reference.slot(0x1cc));
+        assert_eq!(extra.len(), 1);
+        assert_eq!(extra[0][2], 1);
+        for step in [
+            INVENTORY_STEP_4D1440,
+            INVENTORY_STEP_4D1610,
+            INVENTORY_STEP_4D1960,
+        ] {
+            assert_eq!(calls(&p.e, step), vec![vec![0x8100]]);
+        }
+        assert_eq!(calls(&p.e, EXTRA_STEP_41AEB0), vec![vec![object + 0x44]]);
+        // The 3D: position, orientation, reset, scene, properties, vector.
+        assert_eq!(calls(&p.e, NODE_STEP_440460)[0][0], 0x7700);
+        assert_eq!(calls(&p.e, COLLISION_RESET_SIM), vec![vec![0x7700, 1]]);
+        assert_eq!(calls(&p.e, SCENE_ADD_OBJECT), vec![vec![0x8200, 0x7700]]);
+        assert_eq!(calls(&p.e, NODE_UPDATE_PROPERTIES), vec![vec![0x7700]]);
+        let vector = calls(&p.e, VECTOR_CONSTRUCT);
+        assert_eq!(vector[0][1..], [0, 0, 0]);
+        assert_eq!(calls(&p.e, NODE_STEP_A59C60)[0][0], 0x7700);
+        assert_eq!(calls(&p.e, NODE_STEP_A59C60)[0][1], vector[0][0]);
+    }
+
+    #[test]
+    fn placing_in_a_loaded_cell_without_a_container_or_a_special_base_form_does_less() {
+        let mut p = placement_setup(0x15, &[]);
+        p.e.register(TES_IS_CELL_LOADED, |_, _| ret(1));
+        p.e.register(REFERENCE_HAS_CONTAINER, |_, _| ret(0));
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0, 0]);
+        let object = p.reference.object;
+        assert_eq!(
+            calls(&p.e, p.reference.slot(0x228)),
+            vec![vec![object, 0x6000], vec![object, 0]]
+        );
+        // No extra object (virtual 0x1cc) for an ordinary base form.
+        assert!(calls(&p.e, p.reference.slot(0x1cc)).is_empty());
+        // No 3D (virtual 0x1d0 answers 0).
+        assert!(calls(&p.e, NODE_STEP_440460).is_empty());
+    }
+
+    #[test]
+    fn placing_reuses_an_existing_reference() {
+        let mut p = placement_setup(0x15, &[]);
+        let existing = p.e.mem.alloc(0x100);
+        let vtable = p.e.mem.alloc(0x600);
+        let target = 0x0330_0000u32;
+        for slot in (0..0x600).step_by(4) {
+            p.e.mem.set_u32(vtable + slot, target + slot);
+            p.e.register(target + slot, |_, _| ret(0));
+        }
+        p.e.mem.set_u32(existing, vtable);
+        p.e.register(REFERENCE_GET_PERSISTS, |_, _| ret(1));
+        p.e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0x6100));
+        // No base object yet.
+        p.e.register(OBJECT_NEXT, |_, _| ret(0));
+        start_log(&mut p.e);
+        let reference = place(&mut p, 0x6000, 0, existing, [0, 0]);
+        assert_eq!(reference, existing);
+        assert!(calls(&p.e, OPERATOR_NEW).is_empty());
+        // Persistence off, removed from its cell, base form set, then
+        // persistence back on when added to the new cell.
+        assert_eq!(
+            calls(&p.e, REFERENCE_SET_PERSISTS),
+            vec![vec![existing, 0], vec![existing, 1]]
+        );
+        assert_eq!(
+            calls(&p.e, CELL_REMOVE_REFERENCE),
+            vec![vec![0x6100, existing]]
+        );
+        assert_eq!(
+            calls(&p.e, REFERENCE_SET_OBJECT_REFERENCE),
+            vec![vec![existing, p.base]]
+        );
+        assert_eq!(
+            calls(&p.e, CELL_ADD_REFERENCE),
+            vec![vec![0x6000, existing, 0]]
+        );
+        // Being "reused", it gets no `fn_0046a010` pass (no actor anyway).
+    }
+
+    #[test]
+    fn placing_gives_a_new_reference_its_extras_and_flags() {
+        let mut p = placement_setup(0x15, &[]);
+        // The base form is the one at 0x011ca23c and the arguments hold
+        // values.
+        p.e.set_global(BASE_FORM_011CA23C, p.base);
+        p.e.register(REFERENCE_EXTRA_DATA_LIST, |_, a| ret(a[0] + 0x44));
+        do_nothing(&mut p.e, &[EXTRA_STEP_420A60, EXTRA_ADD]);
+        p.e.register_double(EXTRA_CONSTRUCT, |_, a| ret(a[0]));
+        p.e.register(REFERENCE_STEP_564E00, |_, _| ret(1));
+        p.e.register(REFERENCE_STEP_564EB0, |_, _| ret(0));
+        p.e.register(REFERENCE_MUST_PERSIST, |_, _| ret(1));
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0x91, 0x92]);
+        let object = p.reference.object;
+        assert_eq!(
+            calls(&p.e, EXTRA_STEP_420A60),
+            vec![vec![object + 0x44, 0, 0x92]]
+        );
+        // The 0x10-byte extra is built from the first value and added.
+        let built = calls(&p.e, EXTRA_CONSTRUCT);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0][1], 0x91);
+        assert_eq!(
+            calls(&p.e, EXTRA_ADD),
+            vec![vec![object + 0x44, built[0][0]]]
+        );
+        assert_eq!(calls(&p.e, OPERATOR_NEW), vec![vec![0x68], vec![0x10]]);
+        assert_eq!(calls(&p.e, REFERENCE_STEP_564EB0), vec![vec![object, 1]]);
+        // MustRefPersist: persistent when added to the cell.
+        assert_eq!(calls(&p.e, REFERENCE_SET_PERSISTS), vec![vec![object, 1]]);
+    }
+
+    #[test]
+    fn placing_a_light_sets_fire_off_by_the_bit_of_the_base_form() {
+        let mut p = placement_setup(0x1e, &[]);
+        let light = p.e.mem.alloc(0xb0);
+        p.e.mem.set_u32(light + 0xa8, 0x20);
+        p.e.register_double(DYNAMIC_CAST, move |_, a| {
+            if a[3] == LIGHT_OBJECT_TYPE_DESCRIPTOR {
+                assert_eq!(a[2], BOUND_OBJECT_TYPE_DESCRIPTOR);
+                ret(light)
+            } else {
+                ret(0)
+            }
+        });
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0, 0]);
+        assert_eq!(
+            calls(&p.e, FORM_SET_FIRE_OFF),
+            vec![vec![p.reference.object, 1]]
+        );
+    }
+
+    #[test]
+    fn placing_runs_the_extra_steps_of_the_form_and_the_component() {
+        let mut p = placement_setup(0x15, &[(0x100, 1)]);
+        // Virtual 0x100 true: the component of the base object is checked
+        // and stepped; a destructible base form is marked; a runtime id
+        // gets virtual 0x48.
+        p.e.register(REFERENCE_BASE_OBJECT, |_, _| ret(0x8300));
+        p.e.register(COMPONENT_CHECK, |_, _| ret(1));
+        p.e.register(COMPONENT_STEP, |_, _| ret(0));
+        p.e.register(DESTRUCTIBLE_CHECK, |_, _| ret(1));
+        p.e.register(FORM_GET_ID, |_, _| ret(0xff00_0010));
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0, 0]);
+        let object = p.reference.object;
+        assert_eq!(calls(&p.e, COMPONENT_CHECK), vec![vec![0x8330]]);
+        assert_eq!(calls(&p.e, COMPONENT_STEP), vec![vec![0x8330, object]]);
+        assert_eq!(calls(&p.e, FORM_SET_DESTRUCTIBLE), vec![vec![object, 1]]);
+        assert_eq!(calls(&p.e, p.reference.slot(0x48)), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn placing_an_actor_runs_the_actor_hooks() {
+        let mut p = placement_setup(FORM_TYPE_NPC, &[]);
+        let actor = p.e.mem.alloc(0x100);
+        let vtable = p.e.mem.alloc(0x500);
+        for slot in (0..0x500).step_by(4) {
+            p.e.mem.set_u32(vtable + slot, 0x0340_0000 + slot);
+            p.e.register(0x0340_0000 + slot, |_, _| ret(0));
+        }
+        p.e.mem.set_u32(actor, vtable);
+        p.e.mem.set_u32(actor + 8, 0xffff_ffff);
+        p.e.register_double(DYNAMIC_CAST, move |_, a| {
+            if a[3] == ACTOR_TYPE_DESCRIPTOR {
+                assert_eq!(a[2], REFERENCE_TYPE_DESCRIPTOR);
+                ret(actor)
+            } else {
+                ret(0)
+            }
+        });
+        start_log(&mut p.e);
+        place(&mut p, 0x6000, 0, 0, [0, 0]);
+        // Virtual 0x290 answered 0: virtual 0x46c runs; a new reference
+        // has bit 0x200000 of its word at +8 cleared.
+        assert_eq!(calls(&p.e, 0x0340_0000 + 0x290), vec![vec![actor]]);
+        assert_eq!(calls(&p.e, 0x0340_0000 + 0x46c), vec![vec![actor]]);
+        assert_eq!(p.e.mem.u32(actor + 8), 0xffdf_ffff);
+        // 0x290 true: no 0x46c; an existing reference keeps its word.
+        p.e.register(0x0340_0000 + 0x290, |_, _| ret(1));
+        p.e.mem.set_u32(actor + 8, 0xffff_ffff);
+        start_log(&mut p.e);
+        let existing = p.reference.object;
+        place(&mut p, 0x6000, 0, existing, [0, 0]);
+        assert!(calls(&p.e, 0x0340_0000 + 0x46c).is_empty());
+        assert_eq!(p.e.mem.u32(actor + 8), 0xffff_ffff);
+        let _ = p.base_object;
     }
 }
