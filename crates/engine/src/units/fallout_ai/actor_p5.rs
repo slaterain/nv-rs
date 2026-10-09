@@ -2759,6 +2759,2175 @@ pub fn fn_008b43a0(
         }
     }
 }
+/// The default location (three floats) written when an actor has no usable position.
+const DEFAULT_LOCATION: u32 = 0x011f_426c;
+/// `"AI: Maximum number of factions %i reached in Actor::IntegrateFactionLists for actor '%s' (%08X)"`.
+const INTEGRATE_OVERFLOW_MESSAGE: u32 = 0x0108_4f40;
+
+// ---- 008b4cf0 .. 008b6df0: dismemberment ----------------------------------
+
+/// Setting whose byte, when non-zero, makes the loop of [`actor_dismember`]
+/// look at the part it was asked for only.
+const DISMEMBER_SINGLE_PART_SETTING: u32 = 0x011d_f858;
+/// Table of the names `"DismemberedLimb<n>_..."` of the limb nodes, indexed by
+/// body part index (4 bytes each, pointers to the strings).
+const LIMB_NAME_TABLE: u32 = 0x0119_6d6c;
+/// `double` constant `pi / 180`.
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// The limb bone table filled by [`actor_fill_bone_array`]: up to 0x100
+/// node pointers, and the number of entries before it.
+const LIMB_BONES: u32 = 0x011d_f270;
+const LIMB_BONE_COUNT: u32 = 0x011d_f268;
+const LIMB_BONE_CAPACITY: u32 = 0x100;
+/// The object whose `+4` pointer is the speed factor of a thrown limb
+/// (`00403e20` returns the pointer).
+const LIMB_VELOCITY_OWNER: u32 = 0x011c_ef14;
+/// `"MODELS: Increase the MAX_LIMB_BONES (%s, %d, %d) define in Actor.cpp ..."`.
+const LIMB_BONES_MESSAGE: u32 = 0x0108_4e78;
+/// `"DismemberedLimb"` and its length, compared against node names.
+const DISMEMBERED_LIMB_PREFIX: u32 = 0x0108_4e64;
+/// The object (VATS instance) that `44ddc0`, `9c71c0` and `44edb0` are called on.
+const VATS_INSTANCE: u32 = 0x011f_2250;
+/// `ProcessLists` instance, receiver of `00974290`.
+const PROCESS_LISTS_INSTANCE: u32 = 0x011e_0e80;
+/// A `NiNode` is allocated with this many bytes (`00aa13e0`) and built with `00a5ecb0`.
+const NODE_SIZE: u32 = 0xac;
+
+// Translated from 008b4cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part (`this`): the byte at `+0x65`, which [`actor_dismember`] compares
+/// against 100.
+pub fn fn_008b4cf0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x65)
+}
+
+// Translated from 008b4d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::Dismember` (Xbox PDB): dismembers the body part `part_index` of an
+/// actor hit for the actor value `actor_value` (the hit's kind, 0x19 to 0x1f
+/// for a limb or head).
+///
+/// Nothing happens for a humanoid creature, or an actor whose slot `0x218`
+/// answers true, while the setting at `011df7f8` is non-zero. An
+/// `actor_value` outside 0x19..=0x1f only calls `TESObjectREFR::SetDismembered`
+/// (`00572fc0`) with part -1, for the hit's part (or `part_index` without a
+/// hit). Otherwise it stops when the part is already dismembered
+/// (`00573090`), the actor is essential (`0087f3d0`) or slot `0x1a0` says so.
+/// The body part data gives the part's flags (`008b4cd0`, `008b4360`) and
+/// chance byte (`008b4cf0`); with the hit's flag `0x40` or `0x20`
+/// (`0058cba0`) and `00646e50` the two outcome bytes are decided, and when
+/// either is set the parts of the body (at most 15) that have the actor value
+/// are tried: the first one with a limb node (process slot `0x6d0`) that
+/// `00456610` does not reject and that is either listed (`008b5190`) or
+/// severable (`008b4360`) is dismembered: `SetDismembered`, then
+/// [`fn_008b52a0`] or, when `008c7aa0` says so, the task queue
+/// (`004537b0`, `0087b440`).
+#[allow(clippy::too_many_arguments)]
+pub fn actor_dismember(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    hit: u32,
+    actor_value: i32,
+    part_index: u32,
+    first_extra: u32,
+    second_extra: u32,
+    chance: u32,
+    limit: u32,
+    rolled: u8,
+) {
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![form, 0u32, 0x0118_46e8u32, 0x0118_3a00u32, 0u32],
+        )
+        .u32();
+    let humanoid = cast != 0 && e.call(0x005f_bf20, &args![cast]).bool();
+    if humanoid || e.vcall(this.addr(), 0x218, &args![]).bool() {
+        let setting = e.call(0x0040_8d60, &args![DISMEMBER_BLOCK_SETTING]).u32();
+        if e.mem.u8(setting) != 0 {
+            return;
+        }
+    }
+    if !(0x19..=0x1f).contains(&actor_value) {
+        let part = if hit != 0 {
+            e.mem.u32(hit + 0x10)
+        } else {
+            part_index
+        };
+        e.call(
+            0x0057_2fc0,
+            &args![this, u32::MAX, first_extra, second_extra, part, 0u32],
+        );
+        return;
+    }
+    if e.call(0x0057_3090, &args![this, part_index]).bool() {
+        return;
+    }
+    if e.call(0x0087_f3d0, &args![this]).bool() {
+        return;
+    }
+    if e.vcall(this.addr(), 0x1a0, &args![0u32]).bool() {
+        return;
+    }
+    let mut part_chance: u32 = 0;
+    let mut part_flag = false;
+    let mut severable = false;
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    if body_parts != 0 {
+        let part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
+        if part != 0 {
+            part_flag = fn_008b4cd0(e, Ptr::new(part));
+            if fn_008b4360(e, Ptr::new(part)) {
+                part_chance = u32::from(fn_008b4cf0(e, Ptr::new(part)));
+            }
+            if part_flag && part_chance as i32 >= 100 {
+                severable = true;
+            }
+        }
+    }
+    let other_part = hit != 0 && e.mem.u32(hit + 0x10) != part_index;
+    let mut outcome_20: u8 = 0;
+    let mut outcome_40: u8 = severable as u8;
+    if hit != 0 {
+        if e.call(0x0058_cba0, &args![hit, 0x40u32]).bool() {
+            outcome_40 = 1;
+        } else if e.call(0x0058_cba0, &args![hit, 0x20u32]).bool() {
+            outcome_20 = 1;
+        }
+    }
+    if outcome_20 == 0 && outcome_40 == 0 {
+        let source = if other_part {
+            0
+        } else if first_extra != 0 && e.call(0x0040_1170, &args![first_extra]).u32() == 0x28 {
+            first_extra
+        } else if hit != 0 && e.mem.u32(hit + 0x30) != 0 {
+            e.mem.u32(hit + 0x30)
+        } else if hit != 0 && e.mem.u32(hit + 0xc) == 0x2d {
+            e.global::<u32>(0x011c_a278)
+        } else {
+            0
+        };
+        let magic_target = if this.addr() == 0 {
+            0
+        } else {
+            this.addr() + 0xa4
+        };
+        (outcome_20, outcome_40) = e.with_stack(8, |e, bytes| {
+            let (first, second) = (bytes.addr(), bytes.addr() + 1);
+            e.mem.set_u8(first, outcome_20);
+            e.mem.set_u8(second, outcome_40);
+            e.call(
+                0x0064_6e50,
+                &args![
+                    magic_target,
+                    source,
+                    part_chance,
+                    chance,
+                    limit,
+                    part_flag as u32,
+                    first,
+                    second
+                ],
+            );
+            (e.mem.u8(first), e.mem.u8(second))
+        });
+    }
+    if outcome_20 == 0 && outcome_40 == 0 {
+        return;
+    }
+    let mut index: i32 = 0;
+    while index < 0xf {
+        let setting = e
+            .call(0x0040_8d60, &args![DISMEMBER_SINGLE_PART_SETTING])
+            .u32();
+        if e.mem.u8(setting) != 0 && index != -1 {
+            index = part_index as i32;
+        }
+        'part: {
+            let form = e.call(0x0041_81e0, &args![this]).u32();
+            let body_parts = e.vcall(form, 0x180, &args![]).u32();
+            let part = if body_parts != 0 {
+                e.call(0x005e_50f0, &args![body_parts, index as u32]).u32()
+            } else {
+                0
+            };
+            if part == 0 || i32::from(e.call(0x005e_5190, &args![part]).u8() as i8) != actor_value {
+                break 'part;
+            }
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            let limb = e.vcall(process, 0x6d0, &args![index as u32]).u32();
+            if limb == 0 || e.call(0x0045_6610, &args![limb]).bool() {
+                break 'part;
+            }
+            if outcome_40 != 0 && !fn_008b4360(e, Ptr::new(part)) {
+                outcome_40 = 0;
+            }
+            if !fn_008b5190(e, Ptr::new(part)) && !fn_008b4360(e, Ptr::new(part)) {
+                break 'part;
+            }
+            e.call(
+                0x0057_2fc0,
+                &args![
+                    this,
+                    index as u32,
+                    first_extra,
+                    second_extra,
+                    index as u32,
+                    outcome_40 as u32
+                ],
+            );
+            if !e.call(0x008c_7aa0, &args![]).bool() {
+                fn_008b52a0(
+                    e,
+                    this,
+                    actor_value,
+                    index as u32,
+                    outcome_40,
+                    (rolled == 0) as u8,
+                    1,
+                    0,
+                );
+            } else {
+                let queue = e.call(0x0045_37b0, &args![]).u32();
+                e.call(
+                    0x0087_b440,
+                    &args![
+                        queue,
+                        this,
+                        actor_value,
+                        index as u32,
+                        outcome_40 as u32,
+                        (rolled == 0) as u32
+                    ],
+                );
+            }
+            let setting = e
+                .call(0x0040_8d60, &args![DISMEMBER_SINGLE_PART_SETTING])
+                .u32();
+            if e.mem.u8(setting) != 0 && index != -1 {
+                return;
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 008b5190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part (`this`): flag `0x01` of the byte at `+0x60`.
+pub fn fn_008b5190(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x60) & 1 != 0
+}
+
+// Translated from 008b51b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ScriptDismember` (Xbox PDB): dismembers the body part
+/// `part_index` for a script. Needs the actor's 3D (slot `0x1d0`). The part
+/// comes from the body part data (`005e50f0`); its actor value is `005e5190`,
+/// and when the part exists, slot `0x3ac` is called with that value and
+/// twice the `MagicTarget` slot-`0xc` answer for `(value, third)`.
+/// `Actor::Dismember` is then called with no hit, the value (-1 without a
+/// part), `part_index`, `second_extra`, chance 0 and limit 1000.
+pub fn actor_script_dismember(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    second_extra: u32,
+    part_index: u32,
+    third: u32,
+) {
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return;
+    }
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    let mut part = 0;
+    let mut value: i32 = -1;
+    if body_parts != 0 {
+        part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
+    }
+    if part != 0 {
+        value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
+        let current = e
+            .vcall(this.addr() + 0xa4, 0xc, &args![value as u32, third])
+            .f64();
+        let doubled = (current + current) as f32;
+        e.vcall(this.addr(), 0x3ac, &args![value as u32, doubled]);
+    }
+    actor_dismember(
+        e,
+        this,
+        0,
+        value,
+        part_index,
+        0,
+        second_extra,
+        0,
+        1000,
+        (part_index == 0) as u8,
+    );
+}
+
+/// Creates the node `NiNode` the limb pieces hang from (`00aa13e0` allocates
+/// [`NODE_SIZE`] bytes, `00a5ecb0` builds it), or 0 when the allocation fails.
+fn new_limb_node(e: &mut Engine) -> u32 {
+    let block = e.call(0x00aa_13e0, &args![NODE_SIZE]).u32();
+    if block == 0 {
+        return 0;
+    }
+    e.call(0x00a5_ecb0, &args![block, 0u32]).u32()
+}
+
+/// A limb flying off: `bound_owner`'s world bound (`NiAVObject::GetWorldBound`,
+/// `0043d450`) gives a centre; the direction from the centre to `node`'s
+/// position (`node + 0x8c`) is normalised and scaled by the factor read
+/// through `00403e20` on [`LIMB_VELOCITY_OWNER`], and added as a velocity
+/// (`TESHavokUtilities::AddVelocity`, `0062b8d0`). `frame` is 0x40 bytes of
+/// scratch.
+fn add_limb_velocity(e: &mut Engine, bound_owner: u32, node: u32, frame: u32) {
+    let bound = e.call(0x0043_d450, &args![bound_owner]).u32();
+    for word in 0..4 {
+        let value = e.mem.u32(bound + 4 * word);
+        e.mem.set_u32(frame + 4 * word, value);
+    }
+    let centre_source = e.call(0x0068_15c0, &args![frame]).u32();
+    let centre = frame + 0x10;
+    for word in 0..3 {
+        let value = e.mem.u32(centre_source + 4 * word);
+        e.mem.set_u32(centre + 4 * word, value);
+    }
+    let direction = frame + 0x20;
+    let position = e.call(0x0045_bb80, &args![node]).u32();
+    e.call(0x0043_9ef0, &args![position, direction, centre]);
+    e.call(0x004a_0c10, &args![direction]);
+    let factor_at = e.call(0x0040_3e20, &args![LIMB_VELOCITY_OWNER]).u32();
+    let factor = e.mem.f32(factor_at);
+    let velocity = frame + 0x30;
+    e.call(0x0045_bb20, &args![direction, velocity, factor]);
+    e.call(0x0062_b8d0, &args![node, velocity, 0u32]);
+}
+
+// Translated from 008b52a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Turns the body part `part_index` of a dismembered actor into a loose
+/// piece. Called by [`actor_dismember`] and [`actor_create_dismembered_limbs`].
+///
+/// Does nothing for a humanoid creature (or an actor whose slot `0x218`
+/// answers true) while the setting at `011df7f8` is non-zero. With
+/// `hide_only` the node of the part's limb (process slot `0x6d0`) is only
+/// searched for among the actor's skeleton nodes by its name
+/// (`LIMB_NAME_TABLE`) and handed to [`actor_hide_dismembered_limb`]. Otherwise a node group
+/// is added under the skeleton root, the part's transform is built from the
+/// body part data (`008b6260`, `009f8300`, euler angles to a matrix with
+/// `00a59540`, composed by `0062c250` with the parent's), and the piece is
+/// either a clone of the limb (`NiObject::Clone`, `00a5d2c0`, placed with
+/// `00440460`, `0043fa80`, `00440490`) or, with `hide_only`, the model
+/// [`fn_008b3fe0`] builds; without either a plain node. The limb's own
+/// collision objects are removed, the piece gets collision, motion and a
+/// velocity ([`add_limb_velocity`]), and the optional effects follow: the
+/// explosion and debris of the body part (`flag_18`), the decals / effect
+/// objects (`flag_14`, `689210` ...), the hide call ([`actor_hide_dismembered_limb`] or slot
+/// `0x73c` when `flag_1c` is clear), VATS notifications and the property
+/// update. The compiler's exception frame is not modelled.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008b52a0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    actor_value: i32,
+    part_index: u32,
+    hide_only: u8,
+    flag_14: u8,
+    flag_18: u8,
+    flag_1c: u8,
+) {
+    let frame = e.mem.alloc(0x400);
+    limb_piece(
+        e,
+        this,
+        actor_value,
+        part_index,
+        hide_only,
+        flag_14,
+        flag_18,
+        flag_1c,
+        frame,
+    );
+    e.mem.free(frame);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn limb_piece(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    actor_value: i32,
+    part_index: u32,
+    hide_only: u8,
+    flag_14: u8,
+    flag_18: u8,
+    flag_1c: u8,
+    frame: u32,
+) {
+    // Scratch layout (all offsets from `frame`).
+    let name = frame;
+    let second_name = frame + 0x10;
+    let cloning = frame + 0x20;
+    let transform_a = frame + 0x60;
+    let transform_b = frame + 0xa0;
+    let transform_c = frame + 0xe0;
+    let transform_d = frame + 0x120;
+    let composed_scratch = frame + 0x160;
+    let euler = frame + 0x1a0;
+    let angle_out = frame + 0x1b0;
+    let zero_vector = frame + 0x1f0;
+    let inverse_scratch = frame + 0x200;
+    let burst = frame + 0x240;
+    let out_word = frame + 0x300;
+
+    let this_addr = this.addr();
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![form, 0u32, 0x0118_46e8u32, 0x0118_3a00u32, 0u32],
+        )
+        .u32();
+    let humanoid = cast != 0 && e.call(0x005f_bf20, &args![cast]).bool();
+    if humanoid || e.vcall(this_addr, 0x218, &args![]).bool() {
+        let setting = e.call(0x0040_8d60, &args![DISMEMBER_BLOCK_SETTING]).u32();
+        if e.mem.u8(setting) != 0 {
+            return;
+        }
+    }
+    let root = e.call(0x0043_fcd0, &args![this]).u32();
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let havok = e.call(0x0045_43c0, &args![cell]).u32();
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
+    let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * part_index);
+    e.call(0x0043_8170, &args![name, limb_name]);
+    if hide_only != 0 {
+        let count = e.call(0x0043_b480, &args![root]).u32();
+        for child_index in 0..count {
+            let node = e.call(0x0043_b4a0, &args![root, child_index]).u32();
+            if node != 0 {
+                let node_name = e.call(0x0041_3f40, &args![node]).u32();
+                if e.call(0x009a_3830, &args![node_name, name]).bool() {
+                    actor_hide_dismembered_limb(e, this, part_index, limb, node, hide_only);
+                    e.call(0x0043_81b0, &args![name]);
+                    return;
+                }
+            }
+        }
+    }
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    let part_data = if body_parts != 0 {
+        e.call(0x005e_50f0, &args![body_parts, part_index]).u32()
+    } else {
+        0
+    };
+    actor_fill_bone_array(e, this, limb, 0);
+    let group = new_limb_node(e);
+    e.call(0x00a5_b950, &args![group, name]);
+    e.vcall(root, 0xdc, &args![group, 1u32]);
+    e.call(0x0043_d410, &args![zero_vector, 0.0f32, 0u32, 0u32]);
+    e.vcall(group, 0xb8, &args![zero_vector]);
+    let path = fn_008b6200(e, Ptr::new(part_data));
+    e.call(0x0043_8170, &args![second_name, path]);
+    let mut parent = e.vcall(root, 0x9c, &args![second_name]).u32();
+    e.call(0x0043_81b0, &args![second_name]);
+    if parent == 0 {
+        parent = limb;
+    }
+    e.call(0x0047_6a80, &args![transform_b]);
+    e.call(0x0047_6a80, &args![transform_a]);
+    // The part's offset and rotation (degrees) from the body part data.
+    let offset = fn_008b6260(e, Ptr::new(part_data), Ptr::new(inverse_scratch));
+    for word in 0..3 {
+        let value = e.mem.u32(offset.addr() + 4 * word);
+        e.mem.set_u32(transform_a + 0x24 + 4 * word, value);
+    }
+    let factor: f64 = e.global(DEGREES_TO_RADIANS);
+    let mut angles = [0.0f32; 3];
+    for (slot, source_word) in [(2usize, 2u32), (1, 1), (0, 0)] {
+        let out = angle_out + 12 * slot as u32;
+        let at = e.call(0x009f_8300, &args![part_data, out]).u32();
+        let degrees = e.mem.f32(at + 4 * source_word);
+        angles[slot] = (f64::from(degrees) * factor) as f32;
+    }
+    e.call(0x0041_6870, &args![euler, angles[0], angles[1], angles[2]]);
+    let (x, y, z) = (e.mem.f32(euler), e.mem.f32(euler + 4), e.mem.f32(euler + 8));
+    e.call(0x00a5_9540, &args![transform_a, x, y, z]);
+    e.mem.set_f32(transform_a + 0x30, 1.0);
+    let parent_transform = e.call(0x0046_1130, &args![parent]).u32();
+    let composed = e
+        .call(
+            0x0062_c250,
+            &args![parent_transform, composed_scratch, transform_a],
+        )
+        .u32();
+    for word in 0..13 {
+        let value = e.mem.u32(composed + 4 * word);
+        e.mem.set_u32(transform_b + 4 * word, value);
+    }
+    let mut clone: u32;
+    if hide_only == 0 {
+        e.call(0x004a_d050, &args![cloning, 1.0f32]);
+        e.call(0x004a_d240, &args![cloning, 1.0f32]);
+        clone = e.call(0x00a5_d2c0, &args![limb, cloning]).u32();
+        let reference = e.call(0x0089_1350, &args![]).u32();
+        let other = e.call(0x004a_de00, &args![clone, reference]).u32();
+        let mut matched: u8 = 0;
+        if other != 0 && other != clone && e.call(0x0096_11e0, &args![other]).u32() != 0 {
+            let owner = if e.vcall(this_addr, 0x1e8, &args![]).u32() != 0 {
+                let list = e.vcall(this_addr, 0x1e8, &args![]).u32();
+                e.call(0x0040_7840, &args![list]).u32()
+            } else {
+                0
+            };
+            let head = if owner != 0 {
+                e.call(0x0072_6070, &args![owner + 0xe0]).u32()
+            } else {
+                0
+            };
+            let mut node = if head != 0 {
+                e.call(0x0050_0940, &args![head]).u32()
+            } else {
+                0
+            };
+            while node != 0 {
+                let slot = e.call(0x0068_15c0, &args![node]).u32();
+                if e.mem.u32(slot) == 0 || matched != 0 {
+                    break;
+                }
+                let slot = e.call(0x0068_15c0, &args![node]).u32();
+                let item = e.mem.u32(slot);
+                let table = e.vcall(this_addr, 0x1e8, &args![]).u32();
+                let found = e.call(0x004a_af30, &args![table, item]).u32();
+                matched = if found != 0 { e.mem.u8(found + 0xc) } else { 0 };
+                node = e.call(0x0072_6070, &args![node]).u32();
+            }
+            if matched == 0 {
+                let world = e.call(0x0096_11e0, &args![other]).u32();
+                e.vcall(world, 0xe8, &args![other]);
+            }
+        }
+        e.call(0x0047_6a80, &args![transform_c]);
+        e.call(0x0047_6a80, &args![transform_d]);
+        let root_transform = e.call(0x0046_1130, &args![root]).u32();
+        fn_008b42e0(e, Ptr::new(root_transform), Ptr::new(transform_c));
+        let limb_transform = e.call(0x0046_1130, &args![limb]).u32();
+        let composed = e
+            .call(
+                0x0062_c250,
+                &args![transform_c, composed_scratch, limb_transform],
+            )
+            .u32();
+        for word in 0..13 {
+            let value = e.mem.u32(composed + 4 * word);
+            e.mem.set_u32(transform_d + 4 * word, value);
+        }
+        e.call(0x0044_0460, &args![clone, transform_d + 0x24]);
+        e.call(0x0043_fa80, &args![clone, transform_d]);
+        let scale = e.mem.f32(transform_d + 0x30);
+        e.call(0x0044_0490, &args![clone, scale]);
+        if flag_18 != 0 {
+            let effect = e.call(0x004f_b070, &args![part_data]).u32();
+            if effect != 0 {
+                let place = e.call(0x008d_6f30, &args![this]).u32();
+                let effect = e.call(0x004f_b070, &args![part_data]).u32();
+                let mut words = vec![effect, 0, 0, place];
+                for word in 0..3 {
+                    words.push(e.mem.u32(transform_b + 0x24 + 4 * word));
+                }
+                for word in 0..9 {
+                    words.push(e.mem.u32(transform_b + 4 * word));
+                }
+                e.call(0x009a_c9c0, &words);
+            }
+            if e.call(0x0040_7840, &args![part_data]).u32() != 0
+                && fn_008b6220(e, Ptr::new(part_data)) > 0
+            {
+                let actor_scale = e.call(0x0056_7400, &args![this]).f64();
+                let part_scale = e.call(0x0064_47b0, &args![part_data]).f64();
+                let scale = (part_scale * actor_scale) as f32;
+                let count = fn_008b6220(e, Ptr::new(part_data));
+                let place = e.call(0x008d_6f30, &args![this]).u32();
+                let object = e.call(0x0040_7840, &args![part_data]).u32();
+                e.call(
+                    0x004f_a6f0,
+                    &args![object, place, transform_b + 0x24, u32::from(count), scale],
+                );
+            }
+        }
+        e.call(0x004a_d270, &args![cloning]);
+    } else {
+        clone = fn_008b3fe0(e, this, part_index, parent, transform_b, flag_18 != 0);
+    }
+    if clone == 0 {
+        clone = new_limb_node(e);
+    }
+    if hide_only == 0 {
+        let handle = e.vcall(clone, 0xc, &args![]).u32();
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        e.vcall(process, 0x6cc, &args![part_index, handle]);
+    }
+    if e.call(0x0068_38b0, &args![limb]).u32() != 0 && e.call(0x0045_3470, &args![limb]).u32() != 0
+    {
+        let mut child_index = 0;
+        while child_index < e.call(0x0043_b480, &args![limb]).u32() {
+            let node = e.call(0x0043_b4a0, &args![limb, child_index]).u32();
+            if node != 0 {
+                e.call(0x00c6_9ee0, &args![node, 1u32, 1u32]);
+                e.call(0x00c6_a200, &args![node, 1u32, 1u32, 1u32]);
+            }
+            child_index += 1;
+        }
+    }
+    if clone != 0 {
+        let collision = e.call(0x004b_5260, &args![clone]).u32();
+        if collision != 0 {
+            let body = e.call(0x006f_a820, &args![collision]).u32();
+            if body != 0 {
+                e.call(0x00c8_ec60, &args![body]);
+            }
+        }
+        e.vcall(group, 0xdc, &args![clone, 1u32]);
+        e.call(0x00c6_bd00, &args![clone, 1u32]);
+        e.call(0x0043_d410, &args![out_word, 0.0f32, 0u32, 0u32]);
+        e.call(0x00a5_9c60, &args![clone, out_word]);
+        e.call(0x00c6_a350, &args![clone, 1u32, 1u32, 1u32, 1u32]);
+        e.vcall(havok, 0xd0, &args![clone, 1u32, 0u32, 0u32, 1u32]);
+        let actor_root = e.vcall(this_addr, 0x1d0, &args![]).u32();
+        add_limb_velocity(e, actor_root, clone, burst);
+    }
+    if flag_18 != 0 {
+        let kind = if hide_only != 0 {
+            e.call(0x005e_3fc0, &args![part_data]).u32()
+        } else {
+            e.call(0x004f_d400, &args![part_data]).u32()
+        };
+        let sound = if kind != 0 {
+            let form = e.call(0x0041_81e0, &args![this]).u32();
+            let selector = e.vcall(form + 0x30, 0x58, &args![]).u32();
+            e.call(0x0058_e9d0, &args![kind, selector]).u32()
+        } else {
+            0
+        };
+        let list = if sound != 0 { sound + 0x18 } else { 0 };
+        if list != 0
+            && e.call(0x0048_cee0, &args![list]).u32() != 0
+            && e.mem.u32(this_addr + 0x10c) == 0
+        {
+            for round in 0..2 {
+                let (enabled, target) = if round == 0 {
+                    (flag_14 != 0, parent)
+                } else {
+                    (hide_only == 0, clone)
+                };
+                if !enabled {
+                    continue;
+                }
+                let actor_scale = e.call(0x0056_7400, &args![this]).f64() as f32;
+                let mut matrix = [0u32; 9];
+                if round == 0 {
+                    for (word, slot) in matrix.iter_mut().enumerate() {
+                        *slot = e.mem.u32(transform_b + 4 * word as u32);
+                    }
+                } else {
+                    let inverse = e
+                        .call(0x004b_45b0, &args![transform_b, inverse_scratch])
+                        .u32();
+                    for (word, slot) in matrix.iter_mut().enumerate() {
+                        *slot = e.mem.u32(inverse + 4 * word as u32);
+                    }
+                }
+                let handle = e.vcall(list, 0x14, &args![]).u32();
+                let place = e.call(0x008d_6f30, &args![this]).u32();
+                let mut words = vec![place, 1.0f32.to_bits(), handle];
+                words.extend_from_slice(&matrix);
+                for word in 0..3 {
+                    words.push(e.mem.u32(transform_b + 0x24 + 4 * word));
+                }
+                words.push(actor_scale.to_bits());
+                words.push(7);
+                words.push(target);
+                let created = e.call(0x0068_9210, &words).u32();
+                if e.call(0x0067_33e0, &args![sound]).u32() != 0 {
+                    e.call(0x0068_a8d0, &args![created, sound]);
+                    let block = e.call(0x0040_1000, &args![0x10u32]).u32();
+                    let object = if block != 0 {
+                        let extra = fn_008b6240(e, Ptr::new(part_data));
+                        e.call(0x004a_2c70, &args![block, created, sound, u32::from(extra)])
+                            .u32()
+                    } else {
+                        0
+                    };
+                    e.call(0x004a_1a50, &args![object]);
+                }
+            }
+        }
+    }
+    e.call(0x0045_0f90, &args![limb, 1u32]);
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if hide_only != 0 && process != 0 && flag_1c == 0 {
+        e.vcall(
+            process,
+            0x73c,
+            &args![part_index, limb, clone, u32::from(hide_only)],
+        );
+    } else {
+        actor_hide_dismembered_limb(e, this, part_index, limb, clone, hide_only);
+    }
+    if hide_only == 0 && e.call(0x0044_ddc0, &args![VATS_INSTANCE]).u32() == 4 && clone != 0 {
+        let action = e.call(0x009c_71c0, &args![VATS_INSTANCE]).u32();
+        if action != 0 && e.mem.u32(action + 0x10) == actor_value as u32 {
+            let target = e.call(0x0044_edb0, &args![VATS_INSTANCE]).u32();
+            if target != 0 {
+                if e.call(0x0063_9b40, &args![target]).u32() == 2 {
+                    e.call(0x0058_cbc0, &args![target, clone]);
+                }
+                if e.call(0x008d_6f30, &args![target]).u32() == 2 {
+                    e.call(0x0058_ccf0, &args![target, clone]);
+                }
+            }
+        }
+    }
+    e.call(0x00a5_a040, &args![root]);
+    let sibling = e.mem.u32(this_addr + 0xb0);
+    if sibling != 0 {
+        let handle = e.call(0x0093_1ed0, &args![this, out_word + 0x10]).u32();
+        let value = e.call(0x004a_3a20, &args![handle]).u32();
+        let actor_root = e.vcall(this_addr, 0x1d0, &args![]).u32();
+        e.call(0x00ca_2ad0, &args![sibling, actor_root, value]);
+    }
+    e.call(0x0043_81b0, &args![name]);
+}
+
+// Translated from 008b6200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part data entry (`this`): `00559450` of the member at `+0x24` (a path).
+pub fn fn_008b6200(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0055_9450, &args![this.addr() + 0x24]).u32()
+}
+
+// Translated from 008b6220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part data entry (`this`): the byte at `+0x78`.
+pub fn fn_008b6220(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x78)
+}
+
+// Translated from 008b6240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part data entry (`this`): the byte at `+0xa8`.
+pub fn fn_008b6240(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xa8)
+}
+
+// Translated from 008b6260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part data entry (`this`): copies the three words at `+0x88` to `out`
+/// and returns `out`.
+pub fn fn_008b6260(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    for word in 0..3 {
+        let value = e.mem.u32(this.addr() + 0x88 + 4 * word);
+        e.mem.set_u32(out.addr() + 4 * word, value);
+    }
+    out
+}
+
+// Translated from 008b6290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::HideDismemberedLimb` (Xbox PDB): hides the skinned nodes of the
+/// actor's 3D that belong to the limb `limb` of the body part `part_index`
+/// (the body part data of the actor's base form, slot `0x180`, then
+/// `005e50f0`). `owner` is the object (when not 0) whose world node
+/// (`009611e0`) is left alone.
+///
+/// For each child of the actor's root (`0043fcd0`) that `004910d0` accepts,
+/// that is not the owner's node and that [`actor_is_skinned_to_limb`]
+/// accepts: with `hide_only`, `005e4730` hides it (and `00450f90` /
+/// `005e55e0` follow); otherwise a clone (`NiObject::Clone`, `00a5d2c0`) is
+/// hidden, its children shown (`005e5750`), attached to the owner's world
+/// node (slot `0xdc`) and to the skeleton (`004ade40` with `owner` slot `0xc`).
+/// The compiler's exception frame is not modelled.
+pub fn actor_hide_dismembered_limb(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    part_index: u32,
+    limb: u32,
+    owner: u32,
+    hide_only: u8,
+) {
+    let root = e.call(0x0043_fcd0, &args![this]).u32();
+    let world = if owner != 0 {
+        e.call(0x0096_11e0, &args![owner]).u32()
+    } else {
+        0
+    };
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    let part = if body_parts != 0 {
+        e.call(0x005e_50f0, &args![body_parts, part_index]).u32()
+    } else {
+        0
+    };
+    if part == 0 || limb == 0 {
+        return;
+    }
+    let mut index = 0;
+    while index < e.call(0x0043_b480, &args![root]).u32() {
+        let node = e.call(0x0043_b4a0, &args![root, index]).u32();
+        if node != 0
+            && e.call(0x0049_10d0, &args![node]).bool()
+            && node != world
+            && actor_is_skinned_to_limb(e, this, node, limb)
+        {
+            if hide_only != 0 {
+                e.call(0x005e_4730, &args![part_index, node]);
+                if part_index == 0 {
+                    e.call(0x0045_0f90, &args![node, 1u32]);
+                } else {
+                    e.call(
+                        0x005e_55e0,
+                        &args![body_parts, limb, root, part_index, node],
+                    );
+                }
+            } else {
+                e.with_stack(0x40, |e, cloning| {
+                    let cloning = cloning.addr();
+                    e.call(0x004a_d050, &args![cloning, 1.0f32]);
+                    let clone = e.call(0x00a5_d2c0, &args![node, cloning]).u32();
+                    e.call(0x005e_4730, &args![part_index, node]);
+                    e.call(
+                        0x005e_55e0,
+                        &args![body_parts, limb, root, part_index, node],
+                    );
+                    e.call(0x005e_4970, &args![part_index, clone]);
+                    e.call(
+                        0x005e_5750,
+                        &args![body_parts, limb, root, part_index, clone],
+                    );
+                    e.vcall(world, 0xdc, &args![clone, 1u32]);
+                    let skeleton = e.vcall(owner, 0xc, &args![]).u32();
+                    e.call(0x004a_de40, &args![skeleton, clone, 0u32, 0u32]);
+                    e.call(0x004a_d270, &args![cloning]);
+                });
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 008b64e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::UnhideDismemberedLimb` (Xbox PDB): shows again the nodes of the
+/// actor's 3D that are skinned to `limb` for the body part `part_index`
+/// (`005e4890`, and `00450f90(node, 0)` first when `part_index` is 0, then
+/// `005e5750` on the body part data).
+pub fn actor_unhide_dismembered_limb(e: &mut Engine, this: Ptr<Actor>, part_index: u32, limb: u32) {
+    let root = e.call(0x0043_fcd0, &args![this]).u32();
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    let part = if body_parts != 0 {
+        e.call(0x005e_50f0, &args![body_parts, part_index]).u32()
+    } else {
+        0
+    };
+    if part == 0 || limb == 0 {
+        return;
+    }
+    let mut index = 0;
+    while index < e.call(0x0043_b480, &args![root]).u32() {
+        let node = e.call(0x0043_b4a0, &args![root, index]).u32();
+        if node != 0
+            && e.call(0x0049_10d0, &args![node]).bool()
+            && actor_is_skinned_to_limb(e, this, node, limb)
+        {
+            if part_index == 0 {
+                e.call(0x0045_0f90, &args![node, 0u32]);
+            }
+            e.call(0x005e_4890, &args![part_index, node]);
+            e.call(
+                0x005e_5750,
+                &args![body_parts, limb, root, part_index, node],
+            );
+        }
+        index += 1;
+    }
+}
+
+// Translated from 008b65f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::UpdateDismemberedLimbVel` (Xbox PDB): gives the dismembered limbs
+/// of the actor a velocity. With the dismemberment extra data (`0042e8c0`
+/// of the extra data list) and the actor's 3D skeleton node list (slot
+/// `0x1d0`, then slot `0xc`), the world is activated (`00c6a270`) when
+/// there are entries; for each entry (`00441420`, its first byte is the body
+/// part index, whose name is looked up in the limb name table) the first
+/// node of the list with that name (`009a3830`) is thrown
+/// ([`add_limb_velocity`]). The compiler's exception frame is not modelled.
+pub fn actor_update_dismembered_limb_vel(e: &mut Engine, this: Ptr<Actor>) {
+    let list = e.call(0x005d_43c0, &args![this]).u32();
+    let record = e.call(0x0042_e8c0, &args![list]).u32();
+    if record == 0 {
+        return;
+    }
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() == 0 {
+        return;
+    }
+    let root = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    let nodes = e.vcall(root, 0xc, &args![]).u32();
+    let count = fn_008b6800(e, Ptr::new(record));
+    if nodes == 0 {
+        return;
+    }
+    if count != 0 {
+        e.call(0x00c6_a270, &args![nodes, 1u32, 1u32, 0u32]);
+    }
+    let frame = e.mem.alloc(0x80);
+    let name = frame;
+    let burst = frame + 0x10;
+    for entry_index in 0..count {
+        let mut found = 0;
+        let entry = e.call(0x0044_1420, &args![record, entry_index]).u32();
+        let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * u32::from(e.mem.u8(entry)));
+        e.call(0x0043_8170, &args![name, limb_name]);
+        let mut node_index = 0;
+        while node_index < e.call(0x0043_b480, &args![nodes]).u32() && found == 0 {
+            let node = e.call(0x0043_b4a0, &args![nodes, node_index]).u32();
+            if node != 0 {
+                let node_name = e.call(0x0041_3f40, &args![node]).u32();
+                if e.call(0x009a_3830, &args![node_name, name]).bool() {
+                    found = node;
+                }
+            }
+            node_index += 1;
+        }
+        if found != 0 {
+            add_limb_velocity(e, nodes, found, burst);
+        }
+        e.call(0x0043_81b0, &args![name]);
+    }
+    e.mem.free(frame);
+}
+
+// Translated from 008b6800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Dismemberment extra data (`this`): `0044ddc0` of the member at `+0x20`
+/// (the number of entries).
+pub fn fn_008b6800(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0044_ddc0, &args![this.addr() + 0x20]).u32()
+}
+
+// Translated from 008b6820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearDismemberedLimbs` (Xbox PDB): removes the dismemberment extra
+/// data (`0042e8e0`) and, when the actor has 3D, a process and body part
+/// data, restores the limbs.
+///
+/// Every node of the 3D skeleton list (slot `0x1d0`, then slot `0xc`) whose
+/// name starts with `"DismemberedLimb"` (`004564f0`) has its objects removed
+/// (`00c69ee0`), is dropped from the list (slot `0xf0`) and sets bit `n` of a
+/// mask, `n` being the number after the prefix (`atol`). With a non-empty
+/// mask the targets are reloaded ([`actor_reload_targets`]), the process
+/// slot `0x6c8` is called, and each flagged part's limb (process slot
+/// `0x6d0`) gets [`actor_fill_bone_array`], `00450f90(limb, 0)`,
+/// [`actor_unhide_dismembered_limb`] and its collision objects enabled again (`00c6a200`,
+/// then the havok world's slot `0xd0` when there is one).
+pub fn actor_clear_dismembered_limbs(e: &mut Engine, this: Ptr<Actor>) {
+    let list = e.call(0x005d_43c0, &args![this]).u32();
+    e.call(0x0042_e8e0, &args![list]);
+    let root = e.call(0x0043_fcd0, &args![this]).u32();
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    if root == 0 || e.call(ACTOR_GET_PROCESS, &args![this]).u32() == 0 || body_parts == 0 {
+        return;
+    }
+    let nodes = e.vcall(root, 0xc, &args![]).u32();
+    if nodes == 0 {
+        return;
+    }
+    let mut mask: u16 = 0;
+    let count = e.call(0x0043_b480, &args![nodes]).u32();
+    for index in 0..count {
+        let node = e.call(0x0043_b4a0, &args![nodes, index]).u32();
+        if node == 0 {
+            continue;
+        }
+        let node_name = e.call(0x0041_3f40, &args![node]).u32();
+        let name = e.call(0x0043_b1b0, &args![node_name]).u32();
+        if name == 0 {
+            continue;
+        }
+        if e.call(0x0045_64f0, &args![name, DISMEMBERED_LIMB_PREFIX, 0xfu32])
+            .u32()
+            != 0
+        {
+            continue;
+        }
+        let number = e.call(0x00ec_a6d3, &args![name + 0xf]).u32();
+        e.call(0x00c6_9ee0, &args![node, 1u32, 1u32]);
+        e.vcall(nodes, 0xf0, &args![index]);
+        mask |= 1u32.wrapping_shl(number) as u16;
+    }
+    if mask == 0 {
+        return;
+    }
+    actor_reload_targets(e, this, 0);
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    e.vcall(process, 0x6c8, &args![root, body_parts]);
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    let havok = e.call(0x0045_43c0, &args![cell]).u32();
+    for part_index in 0..0xfu32 {
+        if u32::from(mask) & 1u32.wrapping_shl(part_index) == 0 {
+            continue;
+        }
+        let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+        let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
+        if limb == 0 {
+            continue;
+        }
+        actor_fill_bone_array(e, this, limb, 0);
+        e.call(0x0045_0f90, &args![limb, 0u32]);
+        actor_unhide_dismembered_limb(e, this, part_index, limb);
+        if e.call(0x0068_38b0, &args![limb]).u32() != 0
+            && e.call(0x0045_3470, &args![limb]).u32() != 0
+        {
+            let mut child_index = 0;
+            while child_index < e.call(0x0043_b480, &args![limb]).u32() {
+                let node = e.call(0x0043_b4a0, &args![limb, child_index]).u32();
+                if node != 0 {
+                    e.call(0x00c6_a200, &args![node, 0u32, 1u32, 1u32]);
+                    if havok != 0 {
+                        e.vcall(havok, 0xd0, &args![node, 1u32, 0u32, 0u32, 1u32]);
+                    }
+                }
+                child_index += 1;
+            }
+        }
+    }
+}
+
+// Translated from 008b6ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CreateDismemberedLimbs` (Xbox PDB): rebuilds the dismembered
+/// limbs of an actor from its dismemberment extra data (`0042e8c0`). With
+/// 3D, a process and body part data, and a non-empty record (the word at
+/// `+0xc`), each entry (`00441420`: part index, a byte given to
+/// [`fn_008b52a0`], a byte that skips the equipment update, a byte that asks
+/// for [`fn_008b6df0`]) whose body part exists is handled unless its limb
+/// node is already among the nodes named by the limb name table
+/// (`009a3830`). For an actor of the creature kind (slot `0x218`) without
+/// the skip byte, the equipment list of the entry (`+4`) is compared
+/// (`004387b0`) with the actor's current one and, when they differ,
+/// applied (`00605e70`); then the bones are filled, the limb is shown
+/// ([`actor_unhide_dismembered_limb`]) and the piece is made ([`fn_008b52a0`]). When any
+/// equipment was applied, the targets are reloaded and process slot
+/// `0x468` is called with 1. The compiler's exception frame is not
+/// modelled.
+pub fn actor_create_dismembered_limbs(e: &mut Engine, this: Ptr<Actor>) {
+    let list = e.call(0x005d_43c0, &args![this]).u32();
+    let record = e.call(0x0042_e8c0, &args![list]).u32();
+    if record == 0 {
+        return;
+    }
+    let root = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    if root == 0 || e.call(ACTOR_GET_PROCESS, &args![this]).u32() == 0 || body_parts == 0 {
+        return;
+    }
+    let mut applied = false;
+    if e.mem.u16(record + 0xc) != 0 {
+        let mut creature_form = 0;
+        let mut creature = 0;
+        if e.vcall(this.addr(), 0x218, &args![]).bool() {
+            creature_form = e.call(0x0041_81e0, &args![this]).u32();
+            creature = this.addr();
+        }
+        let mut compared = false;
+        let count = fn_008b6800(e, Ptr::new(record));
+        let frame = e.mem.alloc(0x40);
+        let name = frame;
+        let equipment = frame + 0x10;
+        for index in 0..count {
+            let entry = e.call(0x0044_1420, &args![record, index]).u32();
+            let part_index = u32::from(e.mem.u8(entry));
+            let part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
+            if part == 0 {
+                continue;
+            }
+            let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+            let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
+            if limb != 0 {
+                let world = e.call(0x0096_11e0, &args![limb]).u32();
+                let limb_name = e.global::<u32>(LIMB_NAME_TABLE + 4 * part_index);
+                e.call(0x0043_8170, &args![name, limb_name]);
+                let node_name = e.call(0x0041_3f40, &args![world]).u32();
+                let present = e.call(0x009a_3830, &args![node_name, name]).bool();
+                e.call(0x0043_81b0, &args![name]);
+                if present {
+                    continue;
+                }
+            }
+            if creature_form != 0 && e.mem.u8(entry + 2) == 0 {
+                let mut same = false;
+                if !compared {
+                    e.call(0x0042_f570, &args![equipment]);
+                    let worn = e.vcall(creature, 0x1e8, &args![equipment]).u32();
+                    e.call(0x0060_5fc0, &args![creature_form, this, worn]);
+                    same = e.call(0x0043_87b0, &args![equipment, entry + 4]).bool();
+                    compared = true;
+                    e.call(0x0042_ff80, &args![equipment]);
+                }
+                if !same {
+                    let worn = e.vcall(creature, 0x1e8, &args![entry + 4]).u32();
+                    e.call(0x0060_5e70, &args![creature_form, this, worn]);
+                    applied = true;
+                }
+            }
+            actor_fill_bone_array(e, this, limb, 0);
+            actor_unhide_dismembered_limb(e, this, part_index, limb);
+            let value = i32::from(e.call(0x005e_5190, &args![part]).u8() as i8);
+            let second = e.mem.u8(entry + 1);
+            fn_008b52a0(e, this, value, part_index, second, 0, 0, 1);
+            if e.mem.u8(entry + 3) != 0 {
+                fn_008b6df0(e, this, part_index);
+            }
+        }
+        e.mem.free(frame);
+    }
+    if applied {
+        actor_reload_targets(e, this, 0);
+        let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+        e.vcall(process, 0x468, &args![1u32]);
+    }
+}
+
+// Translated from 008b6df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the limb `part_index` from the world: `00573050(this, part_index,
+/// 1)`; with a limb node (process slot `0x6d0`) that has a world node
+/// (`009611e0`), that node is hidden (`00450f90(.., 1)`), its objects
+/// removed (`00c69ee0`) and the limb handed to the process lists
+/// (`00974290`). Returns whether a limb was removed.
+pub fn fn_008b6df0(e: &mut Engine, this: Ptr<Actor>, part_index: u32) -> bool {
+    e.call(0x0057_3050, &args![this, part_index, 1u32]);
+    let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+    let limb = e.vcall(process, 0x6d0, &args![part_index]).u32();
+    if limb != 0 {
+        let world = e.call(0x0096_11e0, &args![limb]).u32();
+        if world != 0 {
+            e.call(0x0045_0f90, &args![world, 1u32]);
+            e.call(0x00c6_9ee0, &args![world, 1u32, 1u32]);
+            e.call(0x0097_4290, &args![PROCESS_LISTS_INSTANCE, limb]);
+            return true;
+        }
+    }
+    false
+}
+
+// ---- 008b6e80 .. 008b8e20: limb bones, animation sets, factions -----------
+
+// Translated from 008b6e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsSkinnedToLimb` (Xbox PDB): whether `node` (or a descendant)
+/// is skinned (slot `0x18` answers non-zero) to one of the bones in the limb
+/// bone table ([`actor_fill_bone_array`]). The check goes through the
+/// children (slot `0xc`, when slot `0x10` is 0) with the same function; a
+/// skinned node's skin (`0043fad0`) gives the bone list (`005585e0`, count
+/// `008041a0`, list `00825c00`) that is searched in the table. `limb` is
+/// only passed on to the recursion.
+pub fn actor_is_skinned_to_limb(e: &mut Engine, _this: Ptr<Actor>, node: u32, _limb: u32) -> bool {
+    if node == 0 {
+        return false;
+    }
+    let mut skinned = 0;
+    if e.vcall(node, 0x18, &args![]).u32() != 0 {
+        skinned = node;
+    } else if e.vcall(node, 0xc, &args![]).u32() != 0 && e.vcall(node, 0x10, &args![]).u32() == 0 {
+        let children = e.vcall(node, 0xc, &args![]).u32();
+        let mut index = 0;
+        while index < e.call(0x0043_b480, &args![children]).u32() {
+            let child = e.call(0x0043_b4a0, &args![children, index]).u32();
+            if actor_is_skinned_to_limb(e, _this, child, _limb) {
+                return true;
+            }
+            index += 1;
+        }
+    }
+    if skinned == 0 || e.vcall(skinned, 0x18, &args![]).u32() == 0 {
+        return false;
+    }
+    let skin = e.call(0x0043_fad0, &args![skinned]).u32();
+    if skin != 0 {
+        let bones = e.call(0x0055_85e0, &args![skin]).u32();
+        let count = e.call(0x0080_41a0, &args![bones]).u32();
+        let list = e.call(0x0082_5c00, &args![skin]).u32();
+        for index in 0..count {
+            let bone = e.mem.u32(list + 4 * index);
+            let mut slot = 0;
+            while slot < e.global::<u32>(LIMB_BONE_COUNT) {
+                if e.global::<u32>(LIMB_BONES + 4 * slot) == bone {
+                    return true;
+                }
+                slot += 1;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 008b6ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::FillBoneArray` (Xbox PDB): adds `node` (when it answers non-zero
+/// to slot `0xc`) and, recursively, its children to the limb bone table at
+/// `011df270` (0x100 entries, counted at `011df268`). Without `keep` the table
+/// is cleared first (`00403d30`, as a memset). A full table logs a message
+/// instead (`005b5e40` with the actor's name from `0055d520`).
+pub fn actor_fill_bone_array(e: &mut Engine, this: Ptr<Actor>, node: u32, keep: u8) {
+    if keep == 0 {
+        e.call(0x0040_3d30, &args![LIMB_BONES, 0u32, 0x400u32]);
+        e.set_global::<u32>(LIMB_BONE_COUNT, 0);
+    }
+    if node == 0 {
+        return;
+    }
+    if e.vcall(node, 0xc, &args![]).u32() == 0 {
+        return;
+    }
+    let count = e.global::<u32>(LIMB_BONE_COUNT);
+    if count >= LIMB_BONE_CAPACITY {
+        let name = e.call(0x0055_d520, &args![this]).u32();
+        e.call(
+            0x005b_5e40,
+            &args![LIMB_BONES_MESSAGE, name, count, LIMB_BONE_CAPACITY],
+        );
+    } else {
+        e.set_global::<u32>(LIMB_BONES + 4 * count, node);
+        e.set_global::<u32>(LIMB_BONE_COUNT, count + 1);
+    }
+    let mut index = 0;
+    while index < e.call(0x0043_b480, &args![node]).u32() {
+        let child = e.call(0x0043_b4a0, &args![node, index]).u32();
+        actor_fill_bone_array(e, this, child, 1);
+        index += 1;
+    }
+}
+
+// Translated from 008b70d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetAnimation` (Xbox PDB): the process's animation (process slot
+/// `0x1b8`), or 0 without a process.
+pub fn actor_get_animation(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process == 0 {
+        return 0;
+    }
+    e.vcall(process, 0x1b8, &args![]).u32()
+}
+
+// Translated from 008b7100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes a position (three floats) to `out` and returns whether the actor
+/// has a meaningful one. Without 3D (slot `0x1d0`), not visible
+/// ([`actor_is_visible`] with 7) or while the player sleeps or rests
+/// (`0094df60`) `out` is the default location at `011f426c` and the result is
+/// false. Otherwise, when slot `0x230` or slot `0x22c(0)` answers true, the
+/// position comes from `bhkBlendCollisionObject::SetBipTransform`
+/// (`00c821b0`) turned by a rotation about the actor's height
+/// (`004a0c90`, `004b3ae0`); else the default location is used for an actor
+/// whose process has a state (slot `0x28c` + `0x410`) that [`fn_008b7320`]
+/// accepts or without slot `0x1e4`, and `00494390` of the `0x1e4` object
+/// otherwise.
+pub fn fn_008b7100(e: &mut Engine, this: Ptr<Actor>, out: Ptr) -> bool {
+    let this_addr = this.addr();
+    let default_location = |e: &mut Engine, out: u32| {
+        for word in 0..3 {
+            let value = e.mem.u32(DEFAULT_LOCATION + 4 * word);
+            e.mem.set_u32(out + 4 * word, value);
+        }
+    };
+    if e.vcall(this_addr, 0x1d0, &args![]).u32() == 0
+        || !actor_is_visible(e, this, 7)
+        || e.call(0x0094_df60, &args![e.global::<u32>(PLAYER_CHARACTER)])
+            .bool()
+    {
+        default_location(e, out.addr());
+        return false;
+    }
+    if e.vcall(this_addr, 0x230, &args![]).bool() || e.vcall(this_addr, 0x22c, &args![0u32]).bool()
+    {
+        let flag = !e.vcall(this_addr, 0x22c, &args![0u32]).bool();
+        let root = e.call(0x0043_fcd0, &args![this]).u32();
+        e.call(0x00c8_21b0, &args![root, out, flag as u32]);
+        let position = e.call(0x0043_0830, &args![this]).u32();
+        let height = e.mem.f32(position + 8);
+        e.with_stack(0x40, |e, scratch| {
+            let rotation = scratch.addr();
+            let result_scratch = rotation + 0x30;
+            e.call(0x0068_15c0, &args![rotation]);
+            e.call(0x004a_0c90, &args![rotation, height]);
+            let rotated = e
+                .call(0x004b_3ae0, &args![result_scratch, out, rotation])
+                .u32();
+            for word in 0..3 {
+                let value = e.mem.u32(rotated + 4 * word);
+                e.mem.set_u32(out.addr() + 4 * word, value);
+            }
+        });
+        return true;
+    }
+    let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+    let controller = e.vcall(process, 0x28c, &args![]).u32();
+    let state = if controller == 0 {
+        0
+    } else {
+        controller + 0x410
+    };
+    if state != 0 && fn_008b7320(e, Ptr::new(state)) {
+        default_location(e, out.addr());
+        return true;
+    }
+    let object = e.vcall(this_addr, 0x1e4, &args![]).u32();
+    if object == 0 {
+        default_location(e, out.addr());
+        return true;
+    }
+    if e.call(0x0050_d4a0, &args![this]).bool() {
+        e.call(0x0049_4390, &args![object, out, this, 1u32, 0u32]);
+    } else {
+        e.call(0x0049_4390, &args![object, out, this, 0u32, 1u32]);
+    }
+    true
+}
+
+// Translated from 008b7320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Character controller state (`this`): the byte at `+0x69` is set and the
+/// word at `+0x6c` is non-zero.
+pub fn fn_008b7320(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x69) != 0 && e.mem.u32(this.addr() + 0x6c) != 0
+}
+
+// Translated from 008b7360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reloads the locomotion animation lists ([`fn_008b73f0`]) of the actor,
+/// for the player once for the third-person animation and once for the
+/// first-person one (`PlayerCharacter::GetAnimation(1)`, with the model
+/// path `00464f30(00403df0(011cdd78))`). `replacement` is passed on.
+pub fn fn_008b7360(e: &mut Engine, this: Ptr<Actor>, hurt: u8, replacement: u32) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    if this.addr() == player {
+        let animation = e.call(PLAYER_GET_ANIMATION, &args![player, 0u32]).u32();
+        fn_008b73f0(e, this, hurt, animation, 0, replacement);
+        let pooled = e.call(0x0040_3df0, &args![0x011c_dd78u32]).u32();
+        let path = e.call(0x0046_4f30, &args![pooled]).u32();
+        let animation = e.call(PLAYER_GET_ANIMATION, &args![player, 1u32]).u32();
+        fn_008b73f0(e, this, hurt, animation, path, replacement);
+    } else {
+        let animation = actor_get_animation(e, this);
+        fn_008b73f0(e, this, hurt, animation, 0, replacement);
+    }
+}
+
+// Translated from 008b73f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the locomotion animation lists of the actor's model into
+/// `animation` (the actor's own when 0): the model path is `model_path`
+/// (`TESObjectREFR::GetModel`, `005715d0`, when 0), cut at its last `'\'`
+/// and extended with `"\Locomotion\"`, `"Hurt\"` (`hurt`) or `"Toddler\"`
+/// (the player when `008397d0` and `model_path` are set), `"IdleAnims"`.
+/// The list (`ModelLoader::BuildKFFileList`, `00447330`, with the process
+/// option flag 0xC for the player, or from slot `0x148` / `008a6970`) is
+/// installed, replacing the old one (`00445430`, `004465f0`) or, with
+/// `replacement`, into it (`00446500`). Then, unless `hurt`, an actor with
+/// slot `0x390` gets the child / female / male list too. The compiler's
+/// stack cookie is not modelled.
+pub fn fn_008b73f0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    hurt: u8,
+    animation: u32,
+    model_path: u32,
+    replacement: u32,
+) {
+    let mut animation = animation;
+    if animation == 0 {
+        animation = actor_get_animation(e, this);
+    }
+    if animation == 0 && replacement == 0 {
+        return;
+    }
+    e.with_stack(0x104, |e, buffer| {
+        locomotion_lists(
+            e,
+            this,
+            hurt,
+            animation,
+            model_path,
+            replacement,
+            buffer.addr(),
+        )
+    });
+}
+
+/// Installs a built animation list: `00445430` and `004465f0` replace the
+/// animation's list, `00446500` (with `0043cc60` of the replacement) fills the
+/// replacement; the list is released afterwards (`004702f0`).
+fn install_animation_list(
+    e: &mut Engine,
+    list: u32,
+    animation: u32,
+    replacement: u32,
+    cancel: bool,
+) {
+    let loader = e.global::<u32>(MODEL_LOADER);
+    if replacement == 0 {
+        if cancel {
+            e.call(0x0044_5430, &args![loader, animation]);
+        }
+        e.call(
+            0x0044_65f0,
+            &args![loader, list, animation, 5u32, 0u32, 0u32],
+        );
+    } else {
+        let first = e.call(0x0043_cc60, &args![replacement]).u32();
+        e.call(0x0044_6500, &args![loader, list, first, replacement, 0u32]);
+    }
+    e.call(0x0047_02f0, &args![list, 1u32]);
+}
+
+fn locomotion_lists(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    hurt: u8,
+    animation: u32,
+    model_path: u32,
+    replacement: u32,
+    buffer: u32,
+) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    if model_path != 0 {
+        e.call(0x0040_6d30, &args![buffer, 0x104u32, model_path]);
+    } else {
+        let model = e.call(0x0057_15d0, &args![this]).u32();
+        e.call(0x0040_6d30, &args![buffer, 0x104u32, model]);
+    }
+    let slash = e.call(0x0040_ab30, &args![buffer, 0x5cu32]).u32();
+    if slash == 0 {
+        return;
+    }
+    let room = |slash: u32| 0x104u32.wrapping_sub(slash.wrapping_sub(buffer));
+    e.call(0x0040_6d30, &args![slash, room(slash), 0x0101_7114u32]);
+    if hurt != 0 {
+        e.call(0x0040_6d50, &args![slash, room(slash), 0x0101_70f8u32]);
+    } else if this.addr() == player && e.call(0x0083_97d0, &args![player]).bool() && model_path != 0
+    {
+        e.call(0x0040_6d50, &args![slash, room(slash), 0x0108_4f20u32]);
+    }
+    e.call(0x0040_6d50, &args![slash, room(slash), 0x0101_70ecu32]);
+    let mut options: u32 = 0;
+    if this.addr() == player {
+        options = 0xc;
+    } else if e.call(ACTOR_GET_PROCESS, &args![this]).u32() != 0 {
+        let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+        let kind = e.call(0x0045_cd60, &args![process]).i32();
+        if (0..=1).contains(&kind) {
+            let process = e.call(ACTOR_GET_PROCESS, &args![this]).u32();
+            let source = e.vcall(process, 0x148, &args![]).u32();
+            if source != 0 {
+                let source = e.vcall(process, 0x148, &args![]).u32();
+                let handle = e.call(0x0044_ddc0, &args![source]).u32();
+                let index = e.call(0x0044_6390, &args![handle]).u32();
+                options = e.global::<u32>(0x0118_a838 + 4 * index);
+            } else if e.call(0x008a_6970, &args![this]).bool() {
+                options = 1;
+            }
+        }
+    }
+    let loader = e.global::<u32>(MODEL_LOADER);
+    let list = e
+        .call(0x0044_7330, &args![loader, buffer, 0u32, 1u32, options])
+        .u32();
+    if list == 0 {
+        return;
+    }
+    install_animation_list(e, list, animation, replacement, true);
+    if hurt != 0 || e.vcall(this.addr(), 0x390, &args![]).u32() == 0 {
+        return;
+    }
+    let tail = if e.vcall(this.addr(), 0x1a0, &args![1u32]).bool() {
+        0x0108_4f0cu32
+    } else if e.call(0x0087_f4c0, &args![this]).u32() == 1 {
+        0x0108_4ef8
+    } else {
+        0x0108_4ee4
+    };
+    e.call(0x0040_6d30, &args![slash, room(slash), tail]);
+    e.call(0x0040_6d50, &args![slash, room(slash), 0x0101_70ecu32]);
+    let list = e
+        .call(0x0044_7330, &args![loader, buffer, 0u32, 0u32, 0u32])
+        .u32();
+    if list != 0 {
+        install_animation_list(e, list, animation, replacement, false);
+    }
+}
+
+// Translated from 008b78c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reloads the locomotion animations ([`fn_008b7360`] with no replacement)
+/// when the kinds of animation now wanted differ from the loaded ones. It
+/// reads the names of the animations' current sequences (`0049c390` on
+/// `00497280` of the animation, slot `0x10` of the sequence, `0043b1b0` of
+/// `00413f40`) and records whether they contain `"Hurt\"`, `"Toddler\"`,
+/// `"Child\"` and `"Female\"`; these are compared with the actor's present
+/// state (`008b7b70`, `008397d0` for the player, slot `0x1a0(1)`,
+/// `0087f4c0`). `force` reloads regardless. Any missing animation, sequence
+/// or name ends the function without a reload.
+pub fn fn_008b78c0(e: &mut Engine, this: Ptr<Actor>, force: u8) {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let mut has_hurt: u8 = 0;
+    let mut has_female: u8 = 0;
+    let mut has_toddler: u8 = 0;
+    let mut has_child: u8 = 0;
+    let rounds: u32 = if this.addr() == player { 2 } else { 1 };
+    for round in 0..rounds {
+        let animation = if this.addr() == player {
+            e.call(PLAYER_GET_ANIMATION, &args![player, (round == 1) as u32])
+                .u32()
+        } else {
+            actor_get_animation(e, this)
+        };
+        if animation == 0 {
+            return;
+        }
+        if e.call(0x0049_7280, &args![animation]).u32() == 0 {
+            return;
+        }
+        let found = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), 0);
+            let sequences = e.call(0x0049_7280, &args![animation]).u32();
+            let present = e
+                .call(0x0049_c390, &args![sequences, 3u32, slot.addr()])
+                .bool();
+            (present, e.mem.u32(slot.addr()))
+        });
+        if !found.0 || found.1 == 0 {
+            return;
+        }
+        let sequence = e.vcall(found.1, 0x10, &args![u32::MAX]).u32();
+        if sequence == 0 {
+            return;
+        }
+        let name_holder = e.call(0x0041_3f40, &args![sequence]).u32();
+        if e.call(0x0043_b1b0, &args![name_holder]).u32() == 0 {
+            return;
+        }
+        let name_holder = e.call(0x0041_3f40, &args![sequence]).u32();
+        let text = e.call(0x0043_b1b0, &args![name_holder]).u32();
+        if e.call(0x00ec_7750, &args![text, 0x0101_70f8u32]).u32() != 0 {
+            has_hurt = 1;
+        }
+        if e.call(0x00ec_7750, &args![text, 0x0108_4f20u32]).u32() != 0 {
+            has_toddler = 1;
+        }
+        if e.call(0x00ec_7750, &args![text, 0x0108_4f34u32]).u32() != 0 {
+            has_child = 1;
+        }
+        if e.call(0x00ec_7750, &args![text, 0x0108_4f2cu32]).u32() != 0 {
+            has_female = 1;
+        }
+    }
+    let hurt = fn_008b7b70(e, this) as u8;
+    let mut toddler: u8 = 0;
+    let female = (e.call(0x0087_f4c0, &args![this]).u32() == 1) as u8;
+    if this.addr() == player {
+        toddler = e.call(0x0083_97d0, &args![player]).u8();
+    }
+    let child = e.vcall(this.addr(), 0x1a0, &args![1u32]).u8();
+    if child != 0 {
+        has_female = female;
+    }
+    if force == 0
+        && child == has_child
+        && toddler == has_toddler
+        && hurt == has_hurt
+        && has_female == female
+    {
+        return;
+    }
+    // The original has the body of `fn_008b7360` inlined here.
+    fn_008b7360(e, this, hurt, 0);
+}
+
+// Translated from 008b7b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor is hurt: the actor values read through the
+/// `MagicTarget` at `+0xa4` (slot `0xc`) are `0x1d` or `0x1e` zero, and `0x48` zero.
+pub fn fn_008b7b70(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let target = this.addr() + 0xa4;
+    let first = e.vcall(target, 0xc, &args![0x1du32]).f64();
+    let mut ok = first == zero;
+    if !ok {
+        let second = e.vcall(target, 0xc, &args![0x1eu32]).f64();
+        ok = second == zero;
+    }
+    if !ok {
+        return false;
+    }
+    e.vcall(target, 0xc, &args![0x48u32]).f64() == zero
+}
+
+/// The faction list head of an actor: `0042e800`'s ancestors in the
+/// originals read `004181e0(actor) + 0x30` through `005d8a70`.
+fn faction_list_head(e: &mut Engine, actor: u32) -> u32 {
+    let form = e.call(0x0041_81e0, &args![actor]).u32();
+    e.call(0x005d_8a70, &args![form + 0x30]).u32()
+}
+
+/// The extra faction changes of an actor (`0042e800` of its extra data
+/// list `005d43c0`), or 0.
+fn faction_changes(e: &mut Engine, actor: u32) -> u32 {
+    let list = e.call(0x005d_43c0, &args![actor]).u32();
+    e.call(0x0042_e800, &args![list]).u32()
+}
+
+/// Collects the actor's factions into `buffer` (0x80 entries) with
+/// [`actor_integrate_faction_lists`]; returns the count.
+fn collect_factions(e: &mut Engine, actor: Ptr<Actor>, buffer: u32) -> u32 {
+    collect_factions_and_changes(e, actor, buffer).0
+}
+
+/// [`collect_factions`] that also returns the extra faction changes it read.
+fn collect_factions_and_changes(e: &mut Engine, actor: Ptr<Actor>, buffer: u32) -> (u32, u32) {
+    let head = faction_list_head(e, actor.addr());
+    let changes = faction_changes(e, actor.addr());
+    let extra = if changes == 0 {
+        0
+    } else {
+        e.mem.u32(changes + 0xc)
+    };
+    (
+        actor_integrate_faction_lists(e, actor, buffer, 0x80, head, extra),
+        changes,
+    )
+}
+
+// Translated from 008b7c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::AddFactionMinorCrime` (Xbox PDB): calls `005fda00(faction, a, b)`
+/// on every faction of the actor that [`fn_008b7d00`] accepts.
+pub fn actor_add_faction_minor_crime(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u8) {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+            e.call(0x005f_da00, &args![faction, first, u32::from(second)]);
+        }
+    }
+    e.mem.free(buffer);
+}
+
+// Translated from 008b7d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Faction (`this`): flag `0x100` of the word at `+0x34`.
+pub fn fn_008b7d00(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x34) & 0x100 != 0
+}
+
+// Translated from 008b7d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::AddFactionMajorCrime` (Xbox PDB): calls `005fda50(faction, a, b)`
+/// on every faction of the actor that [`fn_008b7d00`] accepts.
+pub fn actor_add_faction_major_crime(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u8) {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+            e.call(0x005f_da50, &args![faction, first, u32::from(second)]);
+        }
+    }
+    e.mem.free(buffer);
+}
+
+// Translated from 008b7e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sum of `006733e0` over the actor's factions.
+pub fn fn_008b7e20(e: &mut Engine, this: Ptr<Actor>) -> i32 {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    let mut sum: i32 = 0;
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0 {
+            sum = sum.wrapping_add(e.call(0x0067_33e0, &args![faction]).i32());
+        }
+    }
+    e.mem.free(buffer);
+    sum
+}
+
+// Translated from 008b7f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sum of `008041a0` over the actor's factions.
+pub fn fn_008b7f00(e: &mut Engine, this: Ptr<Actor>) -> i32 {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    let mut sum: i32 = 0;
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0 {
+            sum = sum.wrapping_add(e.call(0x0080_41a0, &args![faction]).i32());
+        }
+    }
+    e.mem.free(buffer);
+    sum
+}
+
+// Translated from 008b7fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the faction relation between two actors. Both actors' factions are
+/// collected; for each pair, equal factions give their `0048bf50` value
+/// (taken when above the best so far, starting at -100000), and pairs of
+/// different factions give the `0048bf50` of `(first, second)` when no equal
+/// pair was found and it is below the lowest so far (starting at 100000).
+/// A taken pair sets `*found` to 1 and `*first` / `*second` to the two
+/// factions. Returns the value taken last (0 when none).
+pub fn fn_008b7fe0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    other: Ptr<Actor>,
+    found: Ptr,
+    first: Ptr,
+    second: Ptr,
+) -> i32 {
+    let mut best: i32 = -100_000;
+    let mut lowest: i32 = 100_000;
+    let mut result: i32 = 0;
+    let head_a = faction_list_head(e, this.addr());
+    let head_b = faction_list_head(e, other.addr());
+    let changes_a = faction_changes(e, this.addr());
+    let changes_b = faction_changes(e, other.addr());
+    let buffer_a = e.mem.alloc(0x200);
+    let buffer_b = e.mem.alloc(0x200);
+    let extra_a = if changes_a == 0 {
+        0
+    } else {
+        e.mem.u32(changes_a + 0xc)
+    };
+    let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
+    let extra_b = if changes_b == 0 {
+        0
+    } else {
+        e.mem.u32(changes_b + 0xc)
+    };
+    let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
+    for i in 0..count_a {
+        let faction_a = e.mem.u32(buffer_a + 4 * i);
+        if faction_a == 0 {
+            continue;
+        }
+        for j in 0..count_b {
+            let faction_b = e.mem.u32(buffer_b + 4 * j);
+            if faction_b == 0 {
+                continue;
+            }
+            if faction_a == faction_b {
+                let value = e
+                    .call(0x0048_bf50, &args![faction_a + 0x24, faction_a])
+                    .i32();
+                if value > best {
+                    best = value;
+                    e.mem.set_u32(found.addr(), 1);
+                    e.mem.set_u32(first.addr(), faction_a);
+                    e.mem.set_u32(second.addr(), faction_a);
+                    result = value;
+                }
+            } else if best == -100_000 {
+                let value = e
+                    .call(0x0048_bf50, &args![faction_a + 0x24, faction_b])
+                    .i32();
+                if value < lowest {
+                    lowest = value;
+                    e.mem.set_u32(found.addr(), 1);
+                    e.mem.set_u32(first.addr(), faction_a);
+                    e.mem.set_u32(second.addr(), faction_b);
+                    result = value;
+                }
+            }
+        }
+    }
+    e.mem.free(buffer_a);
+    e.mem.free(buffer_b);
+    result
+}
+
+// Translated from 008b8290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetFactionRank` (Xbox PDB): 1 when `faction` is one of the
+/// actor's factions, else -1. The second stack word is never read.
+pub fn actor_get_faction_rank(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    faction: u32,
+    _unused_2: u32,
+) -> i32 {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    let mut rank: i32 = -1;
+    for index in 0..count {
+        if e.mem.u32(buffer + 4 * index) == faction {
+            rank = 1;
+        }
+    }
+    e.mem.free(buffer);
+    rank
+}
+
+// Translated from 008b8360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetFactionsThatCareAboutCrime` (Xbox PDB): for each faction of the
+/// actor that [`fn_008b7d00`] accepts and that `other` is in (`008b8e90`),
+/// `0047eb90(faction, 1)` and `009ebae0(third, faction)` are called. Returns
+/// whether any faction qualified.
+pub fn actor_set_factions_that_care_about_crime(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    other: Ptr,
+    third: Ptr,
+) -> u8 {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    let mut any: u8 = 0;
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0
+            && fn_008b7d00(e, Ptr::new(faction))
+            && e.call(0x008b_8e90, &args![other, faction]).bool()
+        {
+            e.call(0x0047_eb90, &args![faction, 1u32]);
+            e.call(0x009e_bae0, &args![third, faction]);
+            any = 1;
+        }
+    }
+    e.mem.free(buffer);
+    any
+}
+
+// Translated from 008b8490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::HasFactionThatCaresAboutCrime` (Xbox PDB): whether any faction of
+/// the actor is accepted by [`fn_008b7d00`].
+pub fn actor_has_faction_that_cares_about_crime(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let buffer = e.mem.alloc(0x200);
+    let count = collect_factions(e, this, buffer);
+    let mut any: u8 = 0;
+    for index in 0..count {
+        let faction = e.mem.u32(buffer + 4 * index);
+        if faction != 0 && fn_008b7d00(e, Ptr::new(faction)) {
+            any = 1;
+            break;
+        }
+    }
+    e.mem.free(buffer);
+    any
+}
+
+// Translated from 008b8580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the rank of `faction` for the actor: slot `0x48(0x80000000)` first,
+/// then the faction lists are collected. A faction already in them is
+/// changed (`rank` -1 removes it: `00436e10`, else `00436f20`), a new one is
+/// added (`00436f80`) in the extra faction changes (created with `0042e760`
+/// when missing). Nothing happens for faction 0.
+pub fn fn_008b8580(e: &mut Engine, this: Ptr<Actor>, faction: u32, rank: u8) {
+    if faction == 0 {
+        return;
+    }
+    e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
+    let buffer = e.mem.alloc(0x200);
+    let (count, mut changes) = collect_factions_and_changes(e, this, buffer);
+    if changes == 0 {
+        let list = e.call(0x005d_43c0, &args![this]).u32();
+        e.call(0x0042_e760, &args![list]);
+        changes = faction_changes(e, this.addr());
+    }
+    let signed_rank = rank as i8 as i32 as u32;
+    let mut known = false;
+    for index in 0..count {
+        if e.mem.u32(buffer + 4 * index) == faction {
+            if rank as i8 == -1 {
+                e.call(0x0043_6e10, &args![changes, faction]);
+            } else {
+                e.call(0x0043_6f20, &args![changes, faction, signed_rank]);
+            }
+            known = true;
+            break;
+        }
+    }
+    if !known {
+        e.call(0x0043_6f80, &args![changes, faction, signed_rank]);
+    }
+    e.mem.free(buffer);
+}
+
+// Translated from 008b86e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Changes the rank of `faction` by `delta` (a signed byte): with a faction
+/// the actor has (`GetFactionRank` 1 or more, `third` is only passed on),
+/// the new rank is clamped at 0 and set with [`fn_008b8580`].
+pub fn fn_008b86e0(e: &mut Engine, this: Ptr<Actor>, faction: u32, delta: u8, third: u8) {
+    if faction == 0 {
+        return;
+    }
+    let rank = actor_get_faction_rank(e, this, faction, u32::from(third));
+    if rank > -1 {
+        let mut rank = rank + i32::from(delta as i8);
+        if rank < 0 {
+            rank = 0;
+        }
+        fn_008b8580(e, this, faction, rank as u8);
+    }
+}
+
+// Translated from 008b8740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Combines a running faction reaction with another (`__cdecl`): `other`'s
+/// `0048c1b0(faction + 0x24)` is `reaction_2`. Reaction 0 becomes it,
+/// reaction 1 becomes it when it is not 0, reaction 3 becomes it when it is
+/// 2; anything else is kept.
+pub fn fn_008b8740(e: &mut Engine, reaction: i32, faction: Ptr, other: u32) -> i32 {
+    let new = e
+        .call(0x0048_c1b0, &args![faction.addr() + 0x24, other])
+        .i32();
+    match reaction {
+        0 => new,
+        1 if new != 0 => new,
+        3 if new == 2 => new,
+        _ => reaction,
+    }
+}
+
+// Translated from 008b87a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetFactionFightReaction` (Xbox PDB): the strongest reaction of
+/// `this`'s factions towards `other`'s, each pair combined by
+/// [`fn_008b8740`] (2 ends the search at once). The factions come from the
+/// form's list and, when an extra faction change list exists, from
+/// [`actor_integrate_faction_lists`]. When `other` is the player and
+/// `005a2270` accepts the faction the result is 1 (and `*player_flag` is
+/// set to 1 unless both actors have factions from the extra lists).
+pub fn actor_get_faction_fight_reaction(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    other: Ptr<Actor>,
+    player_flag: Ptr,
+) -> i32 {
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    let mut result: i32 = 0;
+    let form_a = e.call(0x0041_81e0, &args![this]).u32();
+    let head_a = e.call(0x005d_8a70, &args![form_a + 0x30]).u32();
+    let form_b = e.call(0x0041_81e0, &args![other]).u32();
+    let head_b = e.call(0x005d_8a70, &args![form_b + 0x30]).u32();
+    let changes_a = faction_changes(e, this.addr());
+    let changes_b = faction_changes(e, other.addr());
+    let flag = player_flag.addr();
+
+    // `*(list node) = faction ptr`, `(+4) = rank`: valid when the rank is >= 0.
+    fn faction_of(e: &mut Engine, node: u32) -> Option<u32> {
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if entry != 0 && (e.mem.u8(entry + 4) as i8) > -1 {
+            Some(entry)
+        } else {
+            None
+        }
+    }
+
+    if changes_a == 0 && changes_b == 0 {
+        let mut node_a = head_a;
+        while node_a != 0 {
+            if let Some(entry_a) = faction_of(e, node_a) {
+                let mut node_b = head_b;
+                if other.addr() == player && e.call(0x005a_2270, &args![e.mem.u32(entry_a)]).bool()
+                {
+                    result = 1;
+                    e.mem.set_u8(flag, 1);
+                } else {
+                    while node_b != 0 {
+                        if let Some(entry_b) = faction_of(e, node_b) {
+                            let fa = e.mem.u32(entry_a);
+                            let fb = e.mem.u32(entry_b);
+                            result = fn_008b8740(e, result, Ptr::new(fa), fb);
+                            if result == 2 {
+                                return 2;
+                            }
+                        }
+                        node_b = e.call(0x0072_6070, &args![node_b]).u32();
+                    }
+                }
+            }
+            node_a = e.call(0x0072_6070, &args![node_a]).u32();
+        }
+    } else if changes_a != 0 && changes_b == 0 {
+        let buffer = e.mem.alloc(0x200);
+        let extra = e.mem.u32(changes_a + 0xc);
+        let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_a, extra);
+        let mut done = None;
+        'outer: for i in 0..count {
+            let faction_a = e.mem.u32(buffer + 4 * i);
+            if faction_a == 0 {
+                continue;
+            }
+            if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                result = 1;
+                e.mem.set_u8(flag, 1);
+                continue;
+            }
+            let mut node_b = head_b;
+            while node_b != 0 {
+                if let Some(entry_b) = faction_of(e, node_b) {
+                    let fb = e.mem.u32(entry_b);
+                    result = fn_008b8740(e, result, Ptr::new(faction_a), fb);
+                    if result == 2 {
+                        done = Some(2);
+                        break 'outer;
+                    }
+                }
+                node_b = e.call(0x0072_6070, &args![node_b]).u32();
+            }
+        }
+        e.mem.free(buffer);
+        if let Some(value) = done {
+            return value;
+        }
+    } else if changes_a == 0 && changes_b != 0 {
+        let buffer = e.mem.alloc(0x200);
+        let extra = e.mem.u32(changes_b + 0xc);
+        let count = actor_integrate_faction_lists(e, this, buffer, 0x80, head_b, extra);
+        let mut done = None;
+        let mut node_a = head_a;
+        'outer_b: while node_a != 0 {
+            if let Some(entry_a) = faction_of(e, node_a) {
+                let faction_a = e.mem.u32(entry_a);
+                if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                    result = 1;
+                    e.mem.set_u8(flag, 1);
+                } else {
+                    for j in 0..count {
+                        let faction_b = e.mem.u32(buffer + 4 * j);
+                        if faction_b != 0 {
+                            result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
+                            if result == 2 {
+                                done = Some(2);
+                                break 'outer_b;
+                            }
+                        }
+                    }
+                }
+            }
+            node_a = e.call(0x0072_6070, &args![node_a]).u32();
+        }
+        e.mem.free(buffer);
+        if let Some(value) = done {
+            return value;
+        }
+    } else {
+        let buffer_a = e.mem.alloc(0x200);
+        let buffer_b = e.mem.alloc(0x200);
+        let extra_a = e.mem.u32(changes_a + 0xc);
+        let count_a = actor_integrate_faction_lists(e, this, buffer_a, 0x80, head_a, extra_a);
+        let extra_b = e.mem.u32(changes_b + 0xc);
+        let count_b = actor_integrate_faction_lists(e, this, buffer_b, 0x80, head_b, extra_b);
+        let mut done = None;
+        'outer_c: for i in 0..count_a {
+            let faction_a = e.mem.u32(buffer_a + 4 * i);
+            if faction_a == 0 {
+                continue;
+            }
+            if other.addr() == player && e.call(0x005a_2270, &args![faction_a]).bool() {
+                result = 1;
+                continue;
+            }
+            for j in 0..count_b {
+                let faction_b = e.mem.u32(buffer_b + 4 * j);
+                if faction_b != 0 {
+                    result = fn_008b8740(e, result, Ptr::new(faction_a), faction_b);
+                    if result == 2 {
+                        done = Some(2);
+                        break 'outer_c;
+                    }
+                }
+            }
+        }
+        e.mem.free(buffer_a);
+        e.mem.free(buffer_b);
+        if let Some(value) = done {
+            return value;
+        }
+    }
+    result
+}
+
+// Translated from 008b8ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IntegrateFactionLists` (Xbox PDB): fills `buffer` (room for
+/// `capacity` entries) with the factions of the list `first` (node chain; an
+/// entry counts when its rank byte is not negative), then merges the list
+/// `second`: a faction already in the buffer is zeroed when the second
+/// list's rank is -1, a new one is appended when its rank is not negative.
+/// Reaching `capacity` logs a message (`005b5e40` with the actor's name and
+/// form id) and returns `capacity`. Returns the number of entries.
+pub fn actor_integrate_faction_lists(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    buffer: u32,
+    capacity: u32,
+    first: u32,
+    second: u32,
+) -> u32 {
+    let mut count: u32 = 0;
+    let mut node = first;
+    while node != 0 {
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if entry != 0 && (e.mem.u8(entry + 4) as i8) > -1 {
+            let faction = e.mem.u32(entry);
+            e.mem.set_u32(buffer + 4 * count, faction);
+            count += 1;
+            if count >= capacity {
+                integrate_overflow(e, this, capacity);
+                return capacity;
+            }
+        }
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    let mut node = second;
+    while node != 0 {
+        let slot = e.call(0x0068_15c0, &args![node]).u32();
+        let entry = e.mem.u32(slot);
+        if entry != 0 {
+            let faction = e.mem.u32(entry);
+            let mut found = u32::MAX;
+            for index in 0..count {
+                if e.mem.u32(buffer + 4 * index) == faction {
+                    found = index;
+                }
+            }
+            if found == u32::MAX {
+                if (e.mem.u8(entry + 4) as i8) > -1 {
+                    e.mem.set_u32(buffer + 4 * count, faction);
+                    count += 1;
+                    if count >= capacity {
+                        integrate_overflow(e, this, capacity);
+                        return capacity;
+                    }
+                }
+            } else if e.mem.u8(entry + 4) as i8 == -1 {
+                e.mem.set_u32(buffer + 4 * found, 0);
+            }
+        }
+        node = e.call(0x0072_6070, &args![node]).u32();
+    }
+    count
+}
+
+/// The overflow message of [`actor_integrate_faction_lists`].
+fn integrate_overflow(e: &mut Engine, this: Ptr<Actor>, capacity: u32) {
+    let form_id = e.call(0x0084_e3a0, &args![this]).u32();
+    let name = e.call(0x0055_d520, &args![this]).u32();
+    e.call(
+        0x005b_5e40,
+        &args![3u32, INTEGRATE_OVERFLOW_MESSAGE, capacity, name, form_id],
+    );
+}
+
+// Translated from 008b8e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the faction `faction` with `rank` in the actor's extra faction
+/// changes (`00436f80`), after slot `0x48(0x80000000)` and creating the
+/// changes (`0042e760`) when missing.
+pub fn fn_008b8e20(e: &mut Engine, this: Ptr<Actor>, faction: u32, rank: u32) {
+    e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
+    let mut changes = faction_changes(e, this.addr());
+    if changes == 0 {
+        let list = e.call(0x005d_43c0, &args![this]).u32();
+        e.call(0x0042_e760, &args![list]);
+        changes = faction_changes(e, this.addr());
+    }
+    if changes != 0 {
+        e.call(0x0043_6f80, &args![changes, faction, rank]);
+    }
+}
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2901,6 +5070,88 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008b4380, fn_008b4380(Ptr) -> u8),
         entry!(0x008b43a0, fn_008b43a0(Ptr<Actor>, u32, u32, u32)),
         entry!(0x008b4cd0, fn_008b4cd0(Ptr) -> bool),
+        entry!(0x008b4cf0, fn_008b4cf0(Ptr) -> u8),
+        entry!(
+            0x008b4d10,
+            actor_dismember(Ptr<Actor>, u32, i32, u32, u32, u32, u32, u32, u8)
+        ),
+        entry!(0x008b5190, fn_008b5190(Ptr) -> bool),
+        entry!(
+            0x008b51b0,
+            actor_script_dismember(Ptr<Actor>, u32, u32, u32)
+        ),
+        entry!(
+            0x008b52a0,
+            fn_008b52a0(Ptr<Actor>, i32, u32, u8, u8, u8, u8)
+        ),
+        entry!(0x008b6200, fn_008b6200(Ptr) -> u32),
+        entry!(0x008b6220, fn_008b6220(Ptr) -> u8),
+        entry!(0x008b6240, fn_008b6240(Ptr) -> u8),
+        entry!(0x008b6260, fn_008b6260(Ptr, Ptr) -> Ptr),
+        entry!(
+            0x008b6290,
+            actor_hide_dismembered_limb(Ptr<Actor>, u32, u32, u32, u8)
+        ),
+        entry!(
+            0x008b64e0,
+            actor_unhide_dismembered_limb(Ptr<Actor>, u32, u32)
+        ),
+        entry!(0x008b65f0, actor_update_dismembered_limb_vel(Ptr<Actor>)),
+        entry!(0x008b6800, fn_008b6800(Ptr) -> u32),
+        entry!(0x008b6820, actor_clear_dismembered_limbs(Ptr<Actor>)),
+        entry!(0x008b6ae0, actor_create_dismembered_limbs(Ptr<Actor>)),
+        entry!(0x008b6df0, fn_008b6df0(Ptr<Actor>, u32) -> bool),
+        entry!(
+            0x008b6e80,
+            actor_is_skinned_to_limb(Ptr<Actor>, u32, u32) -> bool
+        ),
+        entry!(0x008b6ff0, actor_fill_bone_array(Ptr<Actor>, u32, u8)),
+        entry!(0x008b70d0, actor_get_animation(Ptr<Actor>) -> u32),
+        entry!(0x008b7100, fn_008b7100(Ptr<Actor>, Ptr) -> bool),
+        entry!(0x008b7320, fn_008b7320(Ptr) -> bool),
+        entry!(0x008b7360, fn_008b7360(Ptr<Actor>, u8, u32)),
+        entry!(0x008b73f0, fn_008b73f0(Ptr<Actor>, u8, u32, u32, u32)),
+        entry!(0x008b78c0, fn_008b78c0(Ptr<Actor>, u8)),
+        entry!(0x008b7b70, fn_008b7b70(Ptr<Actor>) -> bool),
+        entry!(
+            0x008b7c00,
+            actor_add_faction_minor_crime(Ptr<Actor>, u32, u8)
+        ),
+        entry!(0x008b7d00, fn_008b7d00(Ptr) -> bool),
+        entry!(
+            0x008b7d20,
+            actor_add_faction_major_crime(Ptr<Actor>, u32, u8)
+        ),
+        entry!(0x008b7e20, fn_008b7e20(Ptr<Actor>) -> i32),
+        entry!(0x008b7f00, fn_008b7f00(Ptr<Actor>) -> i32),
+        entry!(
+            0x008b7fe0,
+            fn_008b7fe0(Ptr<Actor>, Ptr<Actor>, Ptr, Ptr, Ptr) -> i32
+        ),
+        entry!(
+            0x008b8290,
+            actor_get_faction_rank(Ptr<Actor>, u32, u32) -> i32
+        ),
+        entry!(
+            0x008b8360,
+            actor_set_factions_that_care_about_crime(Ptr<Actor>, Ptr, Ptr) -> u8
+        ),
+        entry!(
+            0x008b8490,
+            actor_has_faction_that_cares_about_crime(Ptr<Actor>) -> u8
+        ),
+        entry!(0x008b8580, fn_008b8580(Ptr<Actor>, u32, u8)),
+        entry!(0x008b86e0, fn_008b86e0(Ptr<Actor>, u32, u8, u8)),
+        entry!(0x008b8740, fn_008b8740(i32, Ptr, u32) -> i32),
+        entry!(
+            0x008b87a0,
+            actor_get_faction_fight_reaction(Ptr<Actor>, Ptr<Actor>, Ptr) -> i32
+        ),
+        entry!(
+            0x008b8ca0,
+            actor_integrate_faction_lists(Ptr<Actor>, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x008b8e20, fn_008b8e20(Ptr<Actor>, u32, u32)),
     ]
 }
 
@@ -6618,5 +8869,2482 @@ mod tests {
                 vec![w.actor.addr(), w.hit, 7, 0x1234, 0xaa, 0xbb, 0, 0, 0]
             )]
         );
+    }
+
+    // ---- 008b4cf0 .. 008b6df0: dismemberment ----------------------------
+
+    /// Registers doubles that answer 0 at every address in `addresses`.
+    fn zeros(e: &mut Engine, addresses: &[u32]) {
+        for &address in addresses {
+            e.register(address, |_, _| Ret::default());
+        }
+    }
+
+    /// The arguments of every logged call to `address`.
+    fn args_of(log: &[(u32, Vec<u32>)], address: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|call| call.0 == address)
+            .map(|call| call.1.clone())
+            .collect()
+    }
+
+    /// Runs `f` with call logging on and returns its result and the log.
+    fn logged<R>(e: &mut Engine, f: impl FnOnce(&mut Engine) -> R) -> (R, Vec<(u32, Vec<u32>)>) {
+        e.call_log = Some(vec![]);
+        let result = f(e);
+        (result, e.call_log.take().unwrap())
+    }
+
+    #[test]
+    fn body_part_chance_byte_of_008b4cf0() {
+        let (mut e, _) = engine();
+        let part = e.mem.alloc(0x100);
+        e.mem.set_u8(part + 0x65, 77);
+        assert_eq!(e.call(0x008b_4cf0, &args![part]).u8(), 77);
+    }
+
+    #[test]
+    fn body_part_listed_flag_of_008b5190() {
+        let (mut e, _) = engine();
+        let part = e.mem.alloc(0x100);
+        assert!(!e.call(0x008b_5190, &args![part]).bool());
+        e.mem.set_u8(part + 0x60, 0x03);
+        assert!(e.call(0x008b_5190, &args![part]).bool());
+        e.mem.set_u8(part + 0x60, 0xfe);
+        assert!(!e.call(0x008b_5190, &args![part]).bool());
+    }
+
+    /// The pattern `62c250` writes into the transform it composes: 13 words
+    /// `0x1000 + n`.
+    const COMPOSED: u32 = 0x1000;
+    /// The part (body part index) the limb stage answers for.
+    const STAGE_PART_INDEX: u32 = 4;
+
+    /// A world for `fn_008b52a0` and its callers: an actor with 3D (a root
+    /// node with one child), a process that has one limb node, a base form
+    /// with body part data and one body part (index 4) whose actor value is
+    /// 0x1a. Every callee outside the file is a double (default answer 0).
+    struct LimbStage {
+        s: Scene,
+        actor: Ptr<Actor>,
+        body_parts: u32,
+        part: u32,
+        process: u32,
+        root: u32,
+        limb: u32,
+        clone: u32,
+        group: u32,
+        havok: u32,
+        child: u32,
+    }
+
+    fn limb_stage() -> LimbStage {
+        let mut s = scene(&[
+            0x218, 0x1d0, 0x1e8, 0x9c, 0xdc, 0xb8, 0xd0, 0xc, 0x6cc, 0x6d0, 0x73c, 0x14, 0x58,
+            0x180, 0x1a0, 0x18, 0x10, 0xe8, 0x468, 0xf0, 0x6c8, 0x28c, 0x1e4, 0x230, 0x22c, 0x3ac,
+        ]);
+        let actor = s.actor();
+        let vtable = s.vtable;
+        let form = s.object(0x40);
+        s.e.mem.set_u32(form + 0x30, vtable);
+        let body_parts = s.e.mem.alloc(0x40);
+        s.answer(form, 0x180, body_parts);
+        let process = s.object(0x40);
+        let root = s.object(0x100);
+        let limb = s.object(0x100);
+        let clone = s.object(0x100);
+        let group = s.object(0xac);
+        let havok = s.object(0x40);
+        let child = s.object(0x100);
+        let part = s.e.mem.alloc(0x100);
+        s.e.mem.set_u8(part + 0x61, 0x1a);
+        s.e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        s.answer(process, 0x6d0, limb);
+        s.answer(actor.addr(), 0x1d0, root);
+        s.answer(clone, 0xc, 0xc10c);
+        let bound = s.e.mem.alloc(0x10);
+        for (word, value) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+            s.e.mem.set_f32(bound + 4 * word as u32, value);
+        }
+        let factor = s.e.mem.alloc(8);
+        s.e.mem.set_f32(factor, 2.0);
+        let e = &mut s.e;
+        for page in [
+            0x0102_3000,
+            0x0119_6000,
+            0x011c_a000,
+            0x011d_f000,
+            0x011f_4000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global::<f64>(DEGREES_TO_RADIANS, f64::from_bits(0x3f91_df46_a000_0000));
+        zeros(
+            e,
+            &[
+                0x00ec_43fb,
+                0x005f_bf20,
+                0x0043_8170,
+                0x0041_3f40,
+                0x009a_3830,
+                0x0043_81b0,
+                0x00a5_b950,
+                0x0043_d410,
+                0x0055_9450,
+                0x0047_6a80,
+                0x00a5_9540,
+                0x004a_d050,
+                0x004a_d240,
+                0x004a_de00,
+                0x0096_11e0,
+                0x0040_7840,
+                0x0072_6070,
+                0x0050_0940,
+                0x004a_af30,
+                0x0044_0460,
+                0x0043_fa80,
+                0x0044_0490,
+                0x004f_b070,
+                0x009a_c9c0,
+                0x0056_7400,
+                0x0064_47b0,
+                0x004f_a6f0,
+                0x004a_d270,
+                0x0045_0f90,
+                0x0068_38b0,
+                0x0045_3470,
+                0x00c6_9ee0,
+                0x00c6_a200,
+                0x004b_5260,
+                0x006f_a820,
+                0x00c8_ec60,
+                0x00c6_bd00,
+                0x00a5_9c60,
+                0x00c6_a350,
+                0x005e_3fc0,
+                0x004f_d400,
+                0x0048_cee0,
+                0x004b_45b0,
+                0x0068_9210,
+                0x0067_33e0,
+                0x0068_a8d0,
+                0x0040_1000,
+                0x004a_2c70,
+                0x004a_1a50,
+                0x0044_ddc0,
+                0x009c_71c0,
+                0x0044_edb0,
+                0x0063_9b40,
+                0x0058_cbc0,
+                0x0058_ccf0,
+                0x00a5_a040,
+                0x0093_1ed0,
+                0x004a_3a20,
+                0x00ca_2ad0,
+                0x0043_9ef0,
+                0x004a_0c10,
+                0x0045_bb20,
+                0x0062_b8d0,
+                0x0049_10d0,
+                0x005e_4730,
+                0x005e_55e0,
+                0x005e_4970,
+                0x005e_5750,
+                0x005e_4890,
+                0x004a_de40,
+                0x0043_fad0,
+                0x0055_85e0,
+                0x0080_41a0,
+                0x0082_5c00,
+                0x0040_3d30,
+                0x0055_d520,
+                0x005b_5e40,
+                0x005d_8a70,
+                0x005e_3fa0,
+                0x0058_e9d0,
+                0x0057_2fc0,
+                0x0057_3090,
+                0x0087_f3d0,
+                0x0058_cba0,
+                0x0040_1170,
+                0x0045_6610,
+                0x008c_7aa0,
+                0x0087_b440,
+                0x0064_6e50,
+                0x0043_b480,
+                0x0043_b4a0,
+                0x0042_e8e0,
+                0x00c6_a270,
+                0x0097_4290,
+                0x0057_3050,
+                0x0042_e8c0,
+                0x005d_43c0,
+                0x0045_64f0,
+                0x00ec_a6d3,
+                0x0043_b1b0,
+                ACTOR_GET_ANIMATION,
+            ],
+        );
+        zeros(e, &[0x004b_46a0, 0x004a_0bd0, 0x004b_4500]);
+        let triple = e.mem.alloc(0x10);
+        e.register_double(0x004a_3760, move |_, _| int(triple));
+        e.register_double(0x0041_81e0, move |_, _| int(form));
+        e.register(0x0040_8d60, |_, a| int(a[0]));
+        e.register_double(0x0043_fcd0, move |_, _| int(root));
+        e.register(0x008d_6f30, |_, _| int(0x5000));
+        e.register_double(0x0045_43c0, move |_, _| int(havok));
+        e.register(ACTOR_GET_PROCESS, |e, a| int(e.mem.u32(a[0] + 0x68)));
+        e.register_double(0x005e_50f0, move |_, a| {
+            int(if a[1] == STAGE_PART_INDEX { part } else { 0 })
+        });
+        e.register(0x005e_5190, |e, a| int(u32::from(e.mem.u8(a[0] + 0x61))));
+        e.register_double(0x0043_b480, move |_, a| int(u32::from(a[0] == root)));
+        e.register_double(0x0043_b4a0, move |_, a| {
+            int(if a[0] == root { child } else { 0 })
+        });
+        e.register_double(0x00aa_13e0, move |_, _| int(group));
+        e.register(0x00a5_ecb0, |_, a| int(a[0]));
+        e.register(0x0046_1130, |_, a| int(a[0] + 0x10));
+        e.register(0x0062_c250, |e, a| {
+            for word in 0..13 {
+                e.mem.set_u32(a[1] + 4 * word, COMPOSED + word);
+            }
+            int(a[1])
+        });
+        e.register(0x009f_8300, |e, a| {
+            for (word, value) in [10.0f32, 20.0, 30.0].into_iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * word as u32, value);
+            }
+            int(a[1])
+        });
+        e.register(0x0041_6870, |e, a| {
+            for word in 0..3 {
+                e.mem.set_u32(a[0] + 4 * word, a[1 + word as usize]);
+            }
+            Ret::default()
+        });
+        e.register_double(0x00a5_d2c0, move |_, _| int(clone));
+        e.register(0x0089_1350, |_, _| int(7));
+        e.register(0x0068_15c0, |_, a| int(a[0]));
+        e.register_double(0x0043_d450, move |_, _| int(bound));
+        e.register(0x0045_bb80, |_, a| int(a[0] + 0x8c));
+        e.register_double(0x0040_3e20, move |_, _| int(factor));
+        LimbStage {
+            s,
+            actor,
+            body_parts,
+            part,
+            process,
+            root,
+            limb,
+            clone,
+            group,
+            havok,
+            child,
+        }
+    }
+
+    impl LimbStage {
+        fn dismember(&mut self, value: i32, part_index: u32, hit: u32) -> Vec<(u32, Vec<u32>)> {
+            let actor = self.actor;
+            logged(&mut self.s.e, |e| {
+                e.call(
+                    0x008b_4d10,
+                    &args![actor, hit, value, part_index, 0xe1u32, 0xe2u32, 0xe3u32, 0xe4u32, 0u32],
+                )
+            })
+            .1
+        }
+
+        fn slot_calls_on(&self, object: u32) -> Vec<(u32, Vec<u32>)> {
+            self.s
+                .slot_calls()
+                .into_iter()
+                .filter(|call| call.0 == object)
+                .map(|call| (call.1, call.2))
+                .collect()
+        }
+    }
+
+    #[test]
+    fn dismember_with_a_value_outside_the_limb_range_only_marks_the_part() {
+        let mut w = limb_stage();
+        let actor = w.actor.addr();
+        let log = w.dismember(0x10, 4, 0);
+        assert_eq!(
+            args_of(&log, 0x0057_2fc0),
+            vec![vec![actor, u32::MAX, 0xe1, 0xe2, 4, 0]]
+        );
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        // With a hit, the hit's part index (+0x10) is used instead.
+        let hit = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u32(hit + 0x10, 9);
+        let log = w.dismember(0x18, 4, hit);
+        assert_eq!(
+            args_of(&log, 0x0057_2fc0),
+            vec![vec![actor, u32::MAX, 0xe1, 0xe2, 9, 0]]
+        );
+        let log = w.dismember(0x20, 4, 0);
+        assert_eq!(args_of(&log, 0x0057_2fc0).len(), 1);
+    }
+
+    #[test]
+    fn dismember_stops_for_blocked_creatures_dismembered_parts_and_essential_actors() {
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(DISMEMBER_BLOCK_SETTING, 1);
+        w.s.answer(w.actor.addr(), 0x218, 1);
+        let log = w.dismember(0x1a, 4, 0);
+        assert!(args_of(&log, 0x0057_2fc0).is_empty());
+        assert!(args_of(&log, 0x0057_3090).is_empty());
+
+        for stopper in [0x0057_3090, 0x0087_f3d0] {
+            let mut w = limb_stage();
+            w.s.e.register(stopper, |_, _| int(1));
+            let log = w.dismember(0x1a, 4, 0);
+            assert!(args_of(&log, 0x0064_6e50).is_empty(), "{stopper:08x}");
+            assert!(args_of(&log, 0x00a5_a040).is_empty());
+        }
+        let mut w = limb_stage();
+        w.s.answer(w.actor.addr(), 0x1a0, 1);
+        let log = w.dismember(0x1a, 4, 0);
+        assert!(args_of(&log, 0x0064_6e50).is_empty());
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+    }
+
+    #[test]
+    fn dismember_asks_the_outcome_routine_and_stops_when_it_sets_nothing() {
+        let mut w = limb_stage();
+        // Part flags 0x40 and 0x08; chance byte 100 makes it severable.
+        w.s.e.mem.set_u8(w.part + 0x60, 0x48);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        let log = w.dismember(0x1a, 4, 0);
+        // Severable: the outcome is set at once and 00646e50 is not asked.
+        assert!(args_of(&log, 0x0064_6e50).is_empty());
+        assert_eq!(args_of(&log, 0x00a5_a040).len(), 1);
+
+        let mut w = limb_stage();
+        let actor = w.actor.addr();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x01);
+        w.s.e.mem.set_u8(w.part + 0x65, 33);
+        let log = w.dismember(0x1a, 4, 0);
+        let asked = args_of(&log, 0x0064_6e50);
+        assert_eq!(asked.len(), 1);
+        // (magic target, source, chance byte, chance, limit, part flag, two byte pointers):
+        // the chance byte is only read for a part with flag 0x08.
+        assert_eq!(asked[0][..6], [actor + 0xa4, 0, 0, 0xe3, 0xe4, 0]);
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+    }
+
+    #[test]
+    fn dismember_takes_the_source_from_the_extra_word_or_the_hit() {
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x01);
+        w.s.e.register(0x0040_1170, |_, _| int(0x28));
+        let log = w.dismember(0x1a, 4, 0);
+        assert_eq!(args_of(&log, 0x0064_6e50)[0][1], 0xe1);
+
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x01);
+        w.s.e.set_global::<u32>(0x011c_a278, 0x5150);
+        let hit = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u32(hit + 0x10, 4);
+        w.s.e.mem.set_u32(hit + 0x30, 0x4242);
+        let log = w.dismember(0x1a, 4, hit);
+        assert_eq!(args_of(&log, 0x0064_6e50)[0][1], 0x4242);
+        w.s.e.mem.set_u32(hit + 0x30, 0);
+        w.s.e.mem.set_u32(hit + 0xc, 0x2d);
+        let log = w.dismember(0x1a, 4, hit);
+        assert_eq!(args_of(&log, 0x0064_6e50)[0][1], 0x5150);
+        // A hit on another part gives no source.
+        w.s.e.mem.set_u32(hit + 0x10, 5);
+        let log = w.dismember(0x1a, 4, hit);
+        assert_eq!(args_of(&log, 0x0064_6e50)[0][1], 0);
+    }
+
+    #[test]
+    fn dismember_makes_the_piece_for_the_part_with_the_value() {
+        let mut w = limb_stage();
+        let actor = w.actor.addr();
+        let (limb, group) = (w.limb, w.group);
+        // Listed (0x01) and severable (0x08, 0x40, chance 100): the outcome stays
+        // set, so the piece is only hidden (`hide_only`): no clone is made and
+        // slot 0x73c of the process gets the limb.
+        w.s.e.mem.set_u8(w.part + 0x60, 0x49);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        let log = w.dismember(0x1a, 4, 0);
+        assert_eq!(
+            args_of(&log, 0x0057_2fc0),
+            vec![vec![actor, 4, 0xe1, 0xe2, 4, 1]]
+        );
+        assert!(args_of(&log, 0x00a5_d2c0).is_empty());
+        assert!(w
+            .slot_calls_on(w.process)
+            .contains(&(0x73c, vec![4, limb, group, 1])));
+        // The outcome byte is cleared for a part that is not severable, so a clone is made.
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x01);
+        w.s.e.register(0x0064_6e50, |e, a| {
+            e.mem.set_u8(a[7], 1);
+            Ret::default()
+        });
+        let log = w.dismember(0x1a, 4, 0);
+        assert_eq!(args_of(&log, 0x00a5_d2c0).len(), 1);
+        assert!(w
+            .slot_calls_on(w.process)
+            .contains(&(0x6cc, vec![4, 0xc10c])));
+        // A part with another actor value is skipped.
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x49);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        w.s.e.mem.set_u8(w.part + 0x61, 0x1b);
+        let log = w.dismember(0x1a, 4, 0);
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        // A limb the check rejects is skipped too.
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x49);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        w.s.e.register(0x0045_6610, |_, _| int(1));
+        let log = w.dismember(0x1a, 4, 0);
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+    }
+
+    #[test]
+    fn dismember_goes_through_the_task_queue_when_asked_to() {
+        let mut w = limb_stage();
+        let actor = w.actor.addr();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x49);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        w.s.e.register(0x008c_7aa0, |_, _| int(1));
+        w.s.e.register(0x0045_37b0, |_, _| int(0x7777));
+        let log = w.dismember(0x1a, 4, 0);
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        assert_eq!(
+            args_of(&log, 0x0087_b440),
+            vec![vec![0x7777, actor, 0x1a, 4, 1, 1]]
+        );
+    }
+
+    #[test]
+    fn dismember_with_the_single_part_setting_stops_after_one_part() {
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(w.part + 0x60, 0x49);
+        w.s.e.mem.set_u8(w.part + 0x65, 100);
+        w.s.e.mem.set_u8(DISMEMBER_SINGLE_PART_SETTING, 1);
+        let log = w.dismember(0x1a, 4, 0);
+        assert_eq!(args_of(&log, 0x00a5_a040).len(), 1);
+        assert_eq!(args_of(&log, 0x0057_2fc0).len(), 1);
+    }
+
+    #[test]
+    fn script_dismember_asks_the_value_and_dismembers_without_a_hit() {
+        let mut w = limb_stage();
+        let actor = w.actor;
+        let a = actor.addr();
+        w.s.e.mem.set_u8(w.part + 0x61, 0x1c);
+        let seen: Rc<std::cell::RefCell<Vec<Vec<u32>>>> = Default::default();
+        let sink = seen.clone();
+        w.s.e.register_double(0x0f30_0000 + 0xc, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            float(2.5)
+        });
+        let part = w.part;
+        w.s.e.register_double(0x005e_50f0, move |_, _| int(part));
+        let ((), log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_51b0, &args![actor, 0x77u32, 3u32, 0x66u32]);
+        });
+        // The slot gets twice the answer.
+        assert_eq!(seen.borrow()[0], vec![a + 0xa4, 0x1c, 0x66]);
+        assert!(w
+            .s
+            .slot_calls()
+            .contains(&(a, 0x3ac, vec![0x1c, 5.0f32.to_bits()])));
+        // Dismember: no hit, the value, the part 3, chance 0 and limit 1000.
+        assert_eq!(args_of(&log, 0x0057_3090), vec![vec![a, 3]]);
+        assert_eq!(
+            args_of(&log, 0x0064_6e50)[0][..6],
+            [a + 0xa4, 0, 0, 0, 1000, 0]
+        );
+        // Without a part the value is -1 and the part is only marked.
+        w.s.e.register(0x005e_50f0, |_, _| int(0));
+        let ((), log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_51b0, &args![actor, 0x77u32, 0u32, 0x66u32]);
+        });
+        assert_eq!(
+            args_of(&log, 0x0057_2fc0),
+            vec![vec![a, u32::MAX, 0, 0x77, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn script_dismember_needs_3d() {
+        let mut w = limb_stage();
+        let actor = w.actor;
+        w.s.answer(actor.addr(), 0x1d0, 0);
+        let ((), log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_51b0, &args![actor, 0u32, 3u32, 0u32]);
+        });
+        assert_eq!(log.len(), 2);
+    }
+
+    fn limb_piece_run(
+        w: &mut LimbStage,
+        hide_only: u8,
+        flag_14: u8,
+        flag_18: u8,
+        flag_1c: u8,
+    ) -> Vec<(u32, Vec<u32>)> {
+        let actor = w.actor;
+        logged(&mut w.s.e, |e| {
+            e.call(
+                0x008b_52a0,
+                &args![
+                    actor,
+                    0x1au32,
+                    STAGE_PART_INDEX,
+                    hide_only,
+                    flag_14,
+                    flag_18,
+                    flag_1c
+                ],
+            );
+        })
+        .1
+    }
+
+    #[test]
+    fn limb_piece_is_skipped_for_blocked_creatures() {
+        let mut w = limb_stage();
+        w.s.e.mem.set_u8(DISMEMBER_BLOCK_SETTING, 1);
+        w.s.answer(w.actor.addr(), 0x218, 1);
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        assert!(args_of(&log, 0x0043_fcd0).is_empty());
+    }
+
+    #[test]
+    fn limb_piece_clones_the_limb_and_throws_it() {
+        let mut w = limb_stage();
+        let (root, limb, clone, group, havok) = (w.root, w.limb, w.clone, w.group, w.havok);
+        w.s.e
+            .set_global::<u32>(LIMB_NAME_TABLE + 4 * STAGE_PART_INDEX, 0x4e4e);
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+
+        // The name of the part is built from the name table, the group node is
+        // attached to the root and placed at the origin.
+        assert_eq!(args_of(&log, 0x0043_8170)[0][1], 0x4e4e);
+        let name = args_of(&log, 0x0043_8170)[0][0];
+        assert_eq!(args_of(&log, 0x00a5_b950), vec![vec![group, name]]);
+        assert!(w.slot_calls_on(root).contains(&(0xdc, vec![group, 1])));
+        assert_eq!(w.slot_calls_on(group)[0].0, 0xb8);
+
+        // The euler angles of the body part data (degrees) become radians.
+        let factor = f64::from_bits(0x3f91_df46_a000_0000);
+        let radians = |degrees: f32| ((f64::from(degrees) * factor) as f32).to_bits();
+        let matrix_calls = args_of(&log, 0x00a5_9540);
+        assert_eq!(matrix_calls.len(), 1);
+        assert_eq!(
+            matrix_calls[0][1..],
+            [radians(10.0), radians(20.0), radians(30.0)]
+        );
+        assert_eq!(args_of(&log, 0x0041_6870).len(), 1);
+
+        // The limb is cloned and the clone placed from the composed transform.
+        let cloning = args_of(&log, 0x00a5_d2c0);
+        assert_eq!(cloning.len(), 1);
+        assert_eq!(cloning[0][0], limb);
+        assert_eq!(args_of(&log, 0x004a_de00), vec![vec![clone, 7]]);
+        let translate = args_of(&log, 0x0044_0460);
+        assert_eq!(translate[0][0], clone);
+        assert_eq!(w.s.e.mem.u32(translate[0][1]), COMPOSED + 9);
+        let rotate = args_of(&log, 0x0043_fa80);
+        assert_eq!(rotate[0][0], clone);
+        assert_eq!(w.s.e.mem.u32(rotate[0][1]), COMPOSED);
+        assert_eq!(args_of(&log, 0x0044_0490), vec![vec![clone, COMPOSED + 12]]);
+        assert!(w
+            .slot_calls_on(w.process)
+            .contains(&(0x6cc, vec![STAGE_PART_INDEX, 0xc10c])));
+
+        // The clone joins the group, gets collision, motion and a velocity.
+        assert!(w.slot_calls_on(group).contains(&(0xdc, vec![clone, 1])));
+        assert_eq!(args_of(&log, 0x00c6_bd00), vec![vec![clone, 1]]);
+        assert_eq!(args_of(&log, 0x00c6_a350), vec![vec![clone, 1, 1, 1, 1]]);
+        assert!(w
+            .slot_calls_on(havok)
+            .contains(&(0xd0, vec![clone, 1, 0, 0, 1])));
+        let velocity = args_of(&log, 0x0062_b8d0);
+        assert_eq!(velocity.len(), 1);
+        assert_eq!(velocity[0][0], clone);
+        assert_eq!(velocity[0][2], 0);
+        let scaling = args_of(&log, 0x0045_bb20);
+        assert_eq!(scaling[0][1], velocity[0][1]);
+        assert_eq!(scaling[0][2], 2.0f32.to_bits());
+        let direction = args_of(&log, 0x0043_9ef0);
+        assert_eq!(direction[0][0], clone + 0x8c);
+        assert_eq!(w.s.e.mem.f32(direction[0][2]), 1.0);
+        assert_eq!(args_of(&log, 0x004a_0c10), vec![vec![direction[0][1]]]);
+
+        // The limb is hidden and the property update runs; the name is released.
+        assert_eq!(args_of(&log, 0x0045_0f90).last(), Some(&vec![limb, 1]));
+        assert_eq!(args_of(&log, 0x00a5_a040), vec![vec![root]]);
+        let released = args_of(&log, 0x0043_81b0);
+        assert_eq!(released.len(), 2);
+        assert_eq!(released[1], vec![name]);
+    }
+
+    #[test]
+    fn limb_piece_places_the_clone_with_the_parent_node_when_the_root_has_the_part() {
+        let mut w = limb_stage();
+        let root = w.root;
+        w.s.answer(root, 0x9c, 0x9a9a);
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+        // The parent's transform (46 1130 of the node found by name) is the composing side.
+        assert_eq!(args_of(&log, 0x0046_1130)[0], vec![0x9a9a]);
+    }
+
+    #[test]
+    fn limb_piece_plays_the_effects_of_the_part() {
+        let mut w = limb_stage();
+        let (limb, clone) = (w.limb, w.clone);
+        w.s.e.mem.set_u8(w.part + 0x78, 3);
+        w.s.e.mem.set_u8(w.part + 0xa8, 5);
+        w.s.e.register(0x004f_b070, |_, _| int(0xef));
+        w.s.e.register(0x0040_7840, |_, _| int(0xb1));
+        w.s.e.register(0x0056_7400, |_, _| float(1.5));
+        w.s.e.register(0x0064_47b0, |_, _| float(2.0));
+        // Debris objects: a sound (with a vtable at +0x18 for the list), a selector.
+        let sound = w.s.object(0x40);
+        let vtable = w.s.vtable;
+        w.s.e.mem.set_u32(sound + 0x18, vtable);
+        w.s.answer(sound + 0x18, 0x14, 0x7a7a);
+        w.s.e.register(0x004f_d400, |_, _| int(0x77));
+        w.s.e.register_double(0x0058_e9d0, move |_, _| int(sound));
+        w.s.e.register(0x0048_cee0, |_, _| int(1));
+        w.s.e.register(0x0067_33e0, |_, _| int(1));
+        w.s.e.register(0x0068_9210, |_, _| int(0xc4c4));
+        w.s.e.register(0x0040_1000, |_, _| int(0xb10c));
+        w.s.e.register(0x004a_2c70, |_, _| int(0x0b1e));
+        w.s.e.register(0x004b_45b0, |e, a| {
+            for word in 0..9 {
+                e.mem.set_u32(a[1] + 4 * word, 0x2000 + word);
+            }
+            int(a[1])
+        });
+        let log = limb_piece_run(&mut w, 0, 1, 1, 0);
+
+        // Explosion of the part: effect, 0, 0, the cell, the translation, the rotation.
+        let mut explosion = vec![0xef, 0, 0, 0x5000];
+        explosion.extend((9..12).map(|word| COMPOSED + word));
+        explosion.extend((0..9).map(|word| COMPOSED + word));
+        assert_eq!(args_of(&log, 0x009a_c9c0), vec![explosion]);
+        // The model object: scale (actor 1.5 * part 2.0) and the count byte (3).
+        let model = args_of(&log, 0x004f_a6f0);
+        assert_eq!(model.len(), 1);
+        assert_eq!(model[0][0], 0xb1);
+        assert_eq!(model[0][1], 0x5000);
+        assert_eq!(model[0][3], 3);
+        assert_eq!(model[0][4], 3.0f32.to_bits());
+
+        // Debris, for the parent (hide_only is clear: so also for the clone, inverted).
+        let debris = args_of(&log, 0x0068_9210);
+        assert_eq!(debris.len(), 2);
+        let mut expected = vec![0x5000, 1.0f32.to_bits(), 0x7a7a];
+        expected.extend((0..9).map(|word| COMPOSED + word));
+        expected.extend((9..12).map(|word| COMPOSED + word));
+        expected.extend([1.5f32.to_bits(), 7, limb]);
+        assert_eq!(debris[0], expected);
+        let mut expected = vec![0x5000, 1.0f32.to_bits(), 0x7a7a];
+        expected.extend((0..9).map(|word| 0x2000 + word));
+        expected.extend((9..12).map(|word| COMPOSED + word));
+        expected.extend([1.5f32.to_bits(), 7, clone]);
+        assert_eq!(debris[1], expected);
+        assert_eq!(args_of(&log, 0x0068_a8d0), vec![vec![0xc4c4, sound]; 2]);
+        assert_eq!(args_of(&log, 0x0040_1000), vec![vec![0x10]; 2]);
+        assert_eq!(
+            args_of(&log, 0x004a_2c70),
+            vec![vec![0xb10c, 0xc4c4, sound, 5]; 2]
+        );
+        assert_eq!(args_of(&log, 0x004a_1a50), vec![vec![0x0b1e]; 2]);
+    }
+
+    #[test]
+    fn limb_piece_skips_the_debris_when_the_actor_has_the_blocking_word() {
+        let mut w = limb_stage();
+        let actor = w.actor.addr();
+        let sound = w.s.object(0x40);
+        let vtable = w.s.vtable;
+        w.s.e.mem.set_u32(sound + 0x18, vtable);
+        w.s.e.register(0x004f_d400, |_, _| int(0x77));
+        w.s.e.register_double(0x0058_e9d0, move |_, _| int(sound));
+        w.s.e.register(0x0048_cee0, |_, _| int(1));
+        w.s.e.mem.set_u32(actor + 0x10c, 1);
+        let log = limb_piece_run(&mut w, 0, 1, 1, 0);
+        assert!(args_of(&log, 0x0068_9210).is_empty());
+        w.s.e.mem.set_u32(actor + 0x10c, 0);
+        w.s.e.register(0x0048_cee0, |_, _| int(0));
+        let log = limb_piece_run(&mut w, 0, 1, 1, 0);
+        assert!(args_of(&log, 0x0068_9210).is_empty());
+    }
+
+    #[test]
+    fn limb_piece_hides_the_node_found_by_name() {
+        let mut w = limb_stage();
+        let (limb, child, root) = (w.limb, w.child, w.root);
+        // The bone table holds the limb (it is filled before in a real run).
+        w.s.e.set_global::<u32>(LIMB_BONE_COUNT, 1);
+        w.s.e.set_global::<u32>(LIMB_BONES, limb);
+        w.s.answer(child, 0x18, 1);
+        w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
+        w.s.e
+            .register_double(0x009a_3830, move |_, a| int(u32::from(a[0] == child)));
+        w.s.e.register(0x0049_10d0, |_, _| int(1));
+        w.s.e.register(0x0043_fad0, |_, _| int(0x5c1));
+        w.s.e.register(0x0055_85e0, |_, _| int(0xb01));
+        w.s.e.register(0x0080_41a0, |_, _| int(1));
+        let list = w.s.e.mem.alloc(8);
+        w.s.e.mem.set_u32(list, limb);
+        w.s.e.register_double(0x0082_5c00, move |_, _| int(list));
+        let body_parts = w.body_parts;
+        let log = limb_piece_run(&mut w, 1, 0, 0, 0);
+        // `actor_hide_dismembered_limb` hides it: 005e4730 then 005e55e0.
+        assert_eq!(
+            args_of(&log, 0x005e_4730),
+            vec![vec![STAGE_PART_INDEX, child]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_55e0),
+            vec![vec![body_parts, limb, root, STAGE_PART_INDEX, child]]
+        );
+        // The function ends there: nothing is created.
+        assert!(args_of(&log, 0x00aa_13e0).is_empty());
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        assert_eq!(args_of(&log, 0x0043_81b0).len(), 1);
+    }
+
+    #[test]
+    fn limb_piece_without_a_match_uses_the_process_slot_or_the_hide_function() {
+        let mut w = limb_stage();
+        let (limb, group) = (w.limb, w.group);
+        let log = limb_piece_run(&mut w, 1, 0, 0, 0);
+        assert!(w
+            .slot_calls_on(w.process)
+            .contains(&(0x73c, vec![STAGE_PART_INDEX, limb, group, 1])));
+        assert_eq!(args_of(&log, 0x00a5_a040).len(), 1);
+        // The group node is the piece, nothing is cloned.
+        assert!(args_of(&log, 0x00a5_d2c0).is_empty());
+        // With the third option the hide function is used instead.
+        let mut w = limb_stage();
+        w.s.e.register(0x0049_10d0, |_, _| int(0));
+        let _ = limb_piece_run(&mut w, 1, 0, 0, 1);
+        assert!(w
+            .slot_calls_on(w.process)
+            .iter()
+            .all(|call| call.0 != 0x73c));
+    }
+
+    #[test]
+    fn limb_piece_tells_vats_and_the_sibling() {
+        let mut w = limb_stage();
+        let (clone, root) = (w.clone, w.root);
+        let actor = w.actor.addr();
+        let target = w.s.e.mem.alloc(0x40);
+        let action = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u32(action + 0x10, 0x1a);
+        w.s.e.register(0x0044_ddc0, |_, a| {
+            int(if a[0] == VATS_INSTANCE { 4 } else { 0 })
+        });
+        w.s.e.register_double(0x009c_71c0, move |_, _| int(action));
+        w.s.e.register_double(0x0044_edb0, move |_, _| int(target));
+        w.s.e.register(0x0063_9b40, |_, _| int(2));
+        w.s.e.register_double(0x008d_6f30, move |_, a| {
+            int(if a[0] == target { 2 } else { 0x5000 })
+        });
+        let sibling = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u32(actor + 0xb0, sibling);
+        w.s.e.register(0x0093_1ed0, |_, _| int(0x4d4d));
+        w.s.e.register(0x004a_3a20, |_, a| int(a[0] + 1));
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+        assert_eq!(args_of(&log, 0x0058_cbc0), vec![vec![target, clone]]);
+        assert_eq!(args_of(&log, 0x0058_ccf0), vec![vec![target, clone]]);
+        assert_eq!(
+            args_of(&log, 0x00ca_2ad0),
+            vec![vec![sibling, root, 0x4d4e]]
+        );
+        // Another action's attacker, or another VATS state, is left alone.
+        w.s.e.mem.set_u32(action + 0x10, 0x1b);
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+        assert!(args_of(&log, 0x0058_cbc0).is_empty());
+    }
+
+    #[test]
+    fn limb_piece_removes_the_collision_of_the_limb_children_and_resets_the_clone() {
+        let mut w = limb_stage();
+        let (limb, clone) = (w.limb, w.clone);
+        let (root, child) = (w.root, w.child);
+        w.s.e.register(0x0068_38b0, |_, _| int(1));
+        w.s.e.register(0x0045_3470, |_, _| int(1));
+        w.s.e.register_double(0x0043_b480, move |_, a| {
+            int(u32::from(a[0] == root || a[0] == limb))
+        });
+        w.s.e.register_double(0x0043_b4a0, move |_, a| {
+            int(if a[0] == root || a[0] == limb {
+                child
+            } else {
+                0
+            })
+        });
+        w.s.e.register(0x004b_5260, |_, _| int(0xc011));
+        w.s.e.register(0x006f_a820, |_, _| int(0xb0d1));
+        let log = limb_piece_run(&mut w, 0, 0, 0, 0);
+        assert!(args_of(&log, 0x00c6_9ee0).contains(&vec![child, 1, 1]));
+        assert!(args_of(&log, 0x00c6_a200).contains(&vec![child, 1, 1, 1]));
+        assert_eq!(args_of(&log, 0x004b_5260), vec![vec![clone]]);
+        assert_eq!(args_of(&log, 0x006f_a820), vec![vec![0xc011]]);
+        assert_eq!(args_of(&log, 0x00c8_ec60), vec![vec![0xb0d1]]);
+    }
+
+    /// Writes `text` as a C string in fresh memory and returns its address.
+    fn cstr(e: &mut Engine, text: &str) -> u32 {
+        let at = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.write(at, text.as_bytes());
+        at
+    }
+
+    /// The bone table holds the limb, and `child` is skinned to it.
+    fn make_child_skinned(w: &mut LimbStage) {
+        let (limb, child) = (w.limb, w.child);
+        w.s.e.set_global::<u32>(LIMB_BONE_COUNT, 1);
+        w.s.e.set_global::<u32>(LIMB_BONES, limb);
+        w.s.answer(child, 0x18, 1);
+        w.s.e.register(0x0049_10d0, |_, _| int(1));
+        w.s.e.register(0x0043_fad0, |_, _| int(0x5c1));
+        w.s.e.register(0x0055_85e0, |_, _| int(0xb01));
+        w.s.e.register(0x0080_41a0, |_, _| int(1));
+        let list = w.s.e.mem.alloc(8);
+        w.s.e.mem.set_u32(list, limb);
+        w.s.e.register_double(0x0082_5c00, move |_, _| int(list));
+    }
+
+    #[test]
+    fn body_part_data_readers_of_008b6200_to_008b6260() {
+        let (mut e, _) = engine();
+        let entry = e.mem.alloc(0x100);
+        e.register(0x0055_9450, |_, a| int(a[0] + 1));
+        assert_eq!(e.call(0x008b_6200, &args![entry]).u32(), entry + 0x24 + 1);
+        e.mem.set_u8(entry + 0x78, 7);
+        e.mem.set_u8(entry + 0xa8, 9);
+        assert_eq!(e.call(0x008b_6220, &args![entry]).u8(), 7);
+        assert_eq!(e.call(0x008b_6240, &args![entry]).u8(), 9);
+        for (word, value) in [0x11u32, 0x22, 0x33].into_iter().enumerate() {
+            e.mem.set_u32(entry + 0x88 + 4 * word as u32, value);
+        }
+        let out = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x008b_6260, &args![entry, out]).u32(), out);
+        assert_eq!(
+            [e.mem.u32(out), e.mem.u32(out + 4), e.mem.u32(out + 8)],
+            [0x11, 0x22, 0x33]
+        );
+    }
+
+    #[test]
+    fn dismemberment_extra_data_count_of_008b6800() {
+        let (mut e, _) = engine();
+        e.register(0x0044_ddc0, |_, a| int(a[0] + 5));
+        assert_eq!(
+            e.call(0x008b_6800, &args![0x1000u32]).u32(),
+            0x1000 + 0x20 + 5
+        );
+    }
+
+    #[test]
+    fn hide_dismembered_limb_hides_the_skinned_nodes() {
+        let mut w = limb_stage();
+        make_child_skinned(&mut w);
+        let (actor, limb, child, root, body_parts) =
+            (w.actor, w.limb, w.child, w.root, w.body_parts);
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(
+                0x008b_6290,
+                &args![actor, STAGE_PART_INDEX, limb, 0xbe1u32, 1u32],
+            )
+        });
+        assert_eq!(
+            args_of(&log, 0x005e_4730),
+            vec![vec![STAGE_PART_INDEX, child]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_55e0),
+            vec![vec![body_parts, limb, root, STAGE_PART_INDEX, child]]
+        );
+        // Part 0 hides the node itself instead.
+        w.s.e
+            .register_double(0x005e_50f0, move |_, _| int(body_parts));
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_6290, &args![actor, 0u32, limb, 0xbe1u32, 1u32])
+        });
+        assert_eq!(args_of(&log, 0x005e_4730), vec![vec![0, child]]);
+        assert_eq!(args_of(&log, 0x0045_0f90), vec![vec![child, 1]]);
+        assert!(args_of(&log, 0x005e_55e0).is_empty());
+    }
+
+    #[test]
+    fn hide_dismembered_limb_clones_and_attaches_the_node_when_not_hiding_only() {
+        let mut w = limb_stage();
+        make_child_skinned(&mut w);
+        let (actor, limb, child, root, body_parts, clone) =
+            (w.actor, w.limb, w.child, w.root, w.body_parts, w.clone);
+        let owner = w.s.object(0x40);
+        let world = w.s.object(0x40);
+        w.s.answer(owner, 0xc, 0x5ce1);
+        w.s.e.register_double(0x0096_11e0, move |_, a| {
+            int(if a[0] == owner { world } else { 0 })
+        });
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(
+                0x008b_6290,
+                &args![actor, STAGE_PART_INDEX, limb, owner, 0u32],
+            )
+        });
+        assert_eq!(args_of(&log, 0x00a5_d2c0)[0][0], child);
+        assert_eq!(
+            args_of(&log, 0x005e_4730),
+            vec![vec![STAGE_PART_INDEX, child]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_55e0),
+            vec![vec![body_parts, limb, root, STAGE_PART_INDEX, child]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_4970),
+            vec![vec![STAGE_PART_INDEX, clone]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_5750),
+            vec![vec![body_parts, limb, root, STAGE_PART_INDEX, clone]]
+        );
+        assert!(w.slot_calls_on(world).contains(&(0xdc, vec![clone, 1])));
+        assert_eq!(args_of(&log, 0x004a_de40), vec![vec![0x5ce1, clone, 0, 0]]);
+        assert_eq!(args_of(&log, 0x004a_d270).len(), 1);
+    }
+
+    #[test]
+    fn hide_dismembered_limb_needs_the_part_and_the_limb() {
+        let mut w = limb_stage();
+        make_child_skinned(&mut w);
+        let (actor, limb) = (w.actor, w.limb);
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_6290, &args![actor, 3u32, limb, 0xbe1u32, 1u32])
+        });
+        assert!(args_of(&log, 0x0049_10d0).is_empty());
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(
+                0x008b_6290,
+                &args![actor, STAGE_PART_INDEX, 0u32, 0xbe1u32, 1u32],
+            )
+        });
+        assert!(args_of(&log, 0x0049_10d0).is_empty());
+    }
+
+    #[test]
+    fn unhide_dismembered_limb_shows_the_skinned_nodes() {
+        let mut w = limb_stage();
+        make_child_skinned(&mut w);
+        let (actor, limb, child, root, body_parts) =
+            (w.actor, w.limb, w.child, w.root, w.body_parts);
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_64e0, &args![actor, STAGE_PART_INDEX, limb])
+        });
+        assert_eq!(
+            args_of(&log, 0x005e_4890),
+            vec![vec![STAGE_PART_INDEX, child]]
+        );
+        assert_eq!(
+            args_of(&log, 0x005e_5750),
+            vec![vec![body_parts, limb, root, STAGE_PART_INDEX, child]]
+        );
+        assert!(args_of(&log, 0x0045_0f90).is_empty());
+        // Part 0 shows the node first.
+        w.s.e
+            .register_double(0x005e_50f0, move |_, _| int(body_parts));
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_64e0, &args![actor, 0u32, limb])
+        });
+        assert_eq!(args_of(&log, 0x0045_0f90), vec![vec![child, 0]]);
+        // No limb: nothing.
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_64e0, &args![actor, 0u32, 0u32])
+        });
+        assert!(args_of(&log, 0x005e_5750).is_empty());
+    }
+
+    #[test]
+    fn dismembered_limbs_are_thrown_one_by_one() {
+        let mut w = limb_stage();
+        let (actor, root) = (w.actor, w.root);
+        let nodes = w.s.object(0x40);
+        w.s.answer(root, 0xc, nodes);
+        let (n0, n1) = (w.s.object(0x100), w.s.object(0x100));
+        let record = w.s.e.mem.alloc(0x40);
+        let entries = [w.s.e.mem.alloc(8), w.s.e.mem.alloc(8)];
+        w.s.e.mem.set_u8(entries[0], 1);
+        w.s.e.mem.set_u8(entries[1], 2);
+        w.s.e.set_global::<u32>(LIMB_NAME_TABLE + 4, 0x1111);
+        w.s.e.set_global::<u32>(LIMB_NAME_TABLE + 8, 0x2222);
+        w.s.e.register(0x005d_43c0, |_, a| int(a[0]));
+        w.s.e.register_double(0x0042_e8c0, move |_, _| int(record));
+        w.s.e.register(0x0044_ddc0, |_, _| int(2));
+        w.s.e
+            .register_double(0x0044_1420, move |_, a| int(entries[a[1] as usize]));
+        w.s.e.register_double(0x0043_b480, move |_, a| {
+            int(if a[0] == nodes { 2 } else { 0 })
+        });
+        w.s.e.register_double(0x0043_b4a0, move |_, a| {
+            int(if a[1] == 0 { n0 } else { n1 })
+        });
+        w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
+        w.s.e
+            .register_double(0x009a_3830, move |_, a| int(u32::from(a[0] == n1)));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_65f0, &args![actor]));
+        assert_eq!(args_of(&log, 0x00c6_a270), vec![vec![nodes, 1, 1, 0]]);
+        let names = args_of(&log, 0x0043_8170);
+        assert_eq!(
+            names.iter().map(|call| call[1]).collect::<Vec<_>>(),
+            [0x1111, 0x2222]
+        );
+        assert_eq!(args_of(&log, 0x009a_3830).len(), 4);
+        let thrown = args_of(&log, 0x0062_b8d0);
+        assert_eq!(
+            thrown.iter().map(|call| call[0]).collect::<Vec<_>>(),
+            [n1, n1]
+        );
+        assert_eq!(args_of(&log, 0x0043_81b0).len(), 2);
+        // No matching node: nothing is thrown.
+        w.s.e.register(0x009a_3830, |_, _| int(0));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_65f0, &args![actor]));
+        assert!(args_of(&log, 0x0062_b8d0).is_empty());
+        // Without the extra data nothing happens.
+        w.s.e.register(0x0042_e8c0, |_, _| int(0));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_65f0, &args![actor]));
+        assert_eq!(log.len(), 3);
+    }
+
+    #[test]
+    fn clearing_dismembered_limbs_restores_the_flagged_parts() {
+        let mut w = limb_stage();
+        let (actor, root, limb, child, havok, process, body_parts) = (
+            w.actor,
+            w.root,
+            w.limb,
+            w.child,
+            w.havok,
+            w.process,
+            w.body_parts,
+        );
+        w.s.e.map(0x0108_4000, 0x1000);
+        w.s.e
+            .mem
+            .write(DISMEMBERED_LIMB_PREFIX, b"DismemberedLimb\0");
+        let nodes = w.s.object(0x40);
+        w.s.answer(root, 0xc, nodes);
+        let (n0, n1, n2) = (w.s.object(0x100), w.s.object(0x100), w.s.object(0x100));
+        let text0 = cstr(&mut w.s.e, "DismemberedLimb2_Arm");
+        let text1 = cstr(&mut w.s.e, "Something");
+        w.s.e.register(0x005d_43c0, |_, a| int(a[0]));
+        w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
+        w.s.e.register_double(0x0043_b1b0, move |_, a| {
+            int(match a[0] {
+                x if x == n0 => text0,
+                x if x == n1 => text1,
+                _ => 0,
+            })
+        });
+        w.s.e.register(0x0045_64f0, |e, a| {
+            let mut head = [0u8; 15];
+            e.mem.read(a[0], &mut head);
+            int(u32::from(&head != b"DismemberedLimb"))
+        });
+        w.s.e.register(0x00ec_a6d3, |_, _| int(2));
+        w.s.e.register_double(0x0043_b480, move |_, a| {
+            int(if a[0] == nodes {
+                3
+            } else if a[0] == limb {
+                1
+            } else {
+                0
+            })
+        });
+        w.s.e.register_double(0x0043_b4a0, move |_, a| {
+            int(if a[0] == nodes {
+                [n0, n1, n2][a[1] as usize]
+            } else if a[0] == limb {
+                child
+            } else {
+                0
+            })
+        });
+        w.s.e.register(0x0068_38b0, |_, _| int(1));
+        w.s.e.register(0x0045_3470, |_, _| int(1));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6820, &args![actor]));
+        // Only the first node has the prefix: its objects are removed and it leaves the list.
+        assert_eq!(args_of(&log, 0x00c6_9ee0), vec![vec![n0, 1, 1]]);
+        assert_eq!(args_of(&log, 0x0045_64f0).len(), 2);
+        assert!(w.slot_calls_on(nodes).contains(&(0xf0, vec![0])));
+        // Part 2 is restored: process slot 0x6c8, bones, show, collision on again.
+        assert!(w
+            .slot_calls_on(process)
+            .contains(&(0x6c8, vec![root, body_parts])));
+        assert!(args_of(&log, 0x0045_0f90).contains(&vec![limb, 0]));
+        assert_eq!(args_of(&log, 0x00c6_a200), vec![vec![child, 0, 1, 1]]);
+        assert!(w
+            .slot_calls_on(havok)
+            .contains(&(0xd0, vec![child, 1, 0, 0, 1])));
+    }
+
+    #[test]
+    fn clearing_dismembered_limbs_does_nothing_without_a_flagged_node() {
+        let mut w = limb_stage();
+        let (actor, root) = (w.actor, w.root);
+        let nodes = w.s.object(0x40);
+        w.s.answer(root, 0xc, nodes);
+        w.s.e.register(0x005d_43c0, |_, a| int(a[0]));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6820, &args![actor]));
+        assert!(args_of(&log, 0x00c6_9ee0).is_empty());
+        assert!(args_of(&log, 0x0045_0f90).is_empty());
+        // The extra data is removed first in any case.
+        assert_eq!(args_of(&log, 0x0042_e8e0).len(), 1);
+    }
+
+    /// The world of the `008b6ae0` tests: one entry (part 4) whose bytes are
+    /// the three flags, a creature-kind actor.
+    fn create_stage(skip: u8, wants_removal: u8) -> (LimbStage, u32, u32) {
+        let mut w = limb_stage();
+        let record = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u16(record + 0xc, 1);
+        let entry = w.s.e.mem.alloc(0x40);
+        w.s.e.mem.set_u8(entry, STAGE_PART_INDEX as u8);
+        w.s.e.mem.set_u8(entry + 1, 9);
+        w.s.e.mem.set_u8(entry + 2, skip);
+        w.s.e.mem.set_u8(entry + 3, wants_removal);
+        w.s.e.register(0x005d_43c0, |_, a| int(a[0]));
+        w.s.e.register_double(0x0042_e8c0, move |_, _| int(record));
+        w.s.e.register(0x0044_ddc0, |_, _| int(1));
+        w.s.e.register_double(0x0044_1420, move |_, _| int(entry));
+        w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
+        w.s.e.register(0x0096_11e0, |_, a| int(a[0] + 8));
+        zeros(
+            &mut w.s.e,
+            &[
+                ACTOR_GET_ANIMATION,
+                0x0042_f570,
+                0x0042_ff80,
+                0x0043_87b0,
+                0x0060_5fc0,
+                0x0060_5e70,
+                0x0057_3050,
+            ],
+        );
+        (w, record, entry)
+    }
+
+    #[test]
+    fn creating_dismembered_limbs_rebuilds_the_equipment_and_the_pieces() {
+        let (mut w, _, entry) = create_stage(0, 1);
+        let (actor, process) = (w.actor, w.process);
+        let a = actor.addr();
+        w.s.answer(a, 0x218, 1);
+        w.s.answer(a, 0x1e8, 0x77);
+        let form = w.s.e.call(0x0041_81e0, &args![a]).u32();
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        // The worn equipment is built for the comparison, then applied because they differ.
+        let compared = args_of(&log, 0x0043_87b0);
+        assert_eq!(compared.len(), 1);
+        assert_eq!(compared[0][1], entry + 4);
+        assert_eq!(args_of(&log, 0x0060_5fc0), vec![vec![form, a, 0x77]]);
+        assert_eq!(args_of(&log, 0x0060_5e70), vec![vec![form, a, 0x77]]);
+        // The piece is made (hide only: the entry's second byte), the removal is asked.
+        assert_eq!(
+            args_of(&log, 0x0057_3050),
+            vec![vec![a, STAGE_PART_INDEX, 1]]
+        );
+        assert_eq!(args_of(&log, 0x00a5_a040).len(), 1);
+        // The equipment changed: the targets are reloaded and the process told.
+        assert!(w.slot_calls_on(process).contains(&(0x468, vec![1])));
+        assert!(!args_of(&log, ACTOR_GET_ANIMATION).is_empty());
+    }
+
+    #[test]
+    fn creating_dismembered_limbs_skips_the_equipment_for_the_skip_byte_and_non_creatures() {
+        let (mut w, _, _) = create_stage(1, 0);
+        let (actor, process) = (w.actor, w.process);
+        w.s.answer(actor.addr(), 0x218, 1);
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        assert!(args_of(&log, 0x0060_5fc0).is_empty());
+        assert!(args_of(&log, 0x0057_3050).is_empty());
+        assert!(!w.slot_calls_on(process).iter().any(|call| call.0 == 0x468));
+        let (mut w, _, _) = create_stage(0, 0);
+        let actor = w.actor;
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        assert!(args_of(&log, 0x0060_5fc0).is_empty());
+        assert_eq!(args_of(&log, 0x00a5_a040).len(), 1);
+    }
+
+    #[test]
+    fn creating_dismembered_limbs_leaves_parts_whose_limb_exists() {
+        let (mut w, _, _) = create_stage(0, 1);
+        let actor = w.actor;
+        w.s.e.register(0x009a_3830, |_, _| int(1));
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        assert!(args_of(&log, 0x00a5_a040).is_empty());
+        assert!(args_of(&log, 0x0057_3050).is_empty());
+        // A record without entries (word +0xc zero) does nothing at all.
+        let (mut w, record, _) = create_stage(0, 1);
+        let actor = w.actor;
+        w.s.e.mem.set_u16(record + 0xc, 0);
+        let (_, log) = logged(&mut w.s.e, |e| e.call(0x008b_6ae0, &args![actor]));
+        assert!(args_of(&log, 0x0044_1420).is_empty());
+    }
+
+    #[test]
+    fn removing_a_limb_from_the_world() {
+        let mut w = limb_stage();
+        let (actor, limb) = (w.actor, w.limb);
+        w.s.e.register(0x0096_11e0, |_, a| int(a[0] + 8));
+        let (removed, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_6df0, &args![actor, STAGE_PART_INDEX]).bool()
+        });
+        assert!(removed);
+        assert_eq!(
+            args_of(&log, 0x0057_3050),
+            vec![vec![actor.addr(), STAGE_PART_INDEX, 1]]
+        );
+        assert_eq!(args_of(&log, 0x0045_0f90), vec![vec![limb + 8, 1]]);
+        assert_eq!(args_of(&log, 0x00c6_9ee0), vec![vec![limb + 8, 1, 1]]);
+        assert_eq!(
+            args_of(&log, 0x0097_4290),
+            vec![vec![PROCESS_LISTS_INSTANCE, limb]]
+        );
+        // Without a world node, or without a limb, nothing is removed.
+        w.s.e.register(0x0096_11e0, |_, _| int(0));
+        let (removed, _) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_6df0, &args![actor, STAGE_PART_INDEX]).bool()
+        });
+        assert!(!removed);
+        let process = w.process;
+        w.s.answer(process, 0x6d0, 0);
+        let (removed, _) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_6df0, &args![actor, STAGE_PART_INDEX]).bool()
+        });
+        assert!(!removed);
+    }
+
+    // ---- 008b6e80 .. 008b7b70: bones, animation sets ---------------------
+
+    /// An engine for the bone table and node tests: nodes are objects of a
+    /// scene whose slots `0x18`, `0xc` and `0x10` are the ones used.
+    fn bone_scene() -> Scene {
+        let mut s = scene(&[0x18, 0xc, 0x10, 0x1b8]);
+        s.e.map(0x011d_f000, 0x1000);
+        zeros(
+            &mut s.e,
+            &[
+                0x0043_fad0,
+                0x0055_85e0,
+                0x0080_41a0,
+                0x0082_5c00,
+                0x0043_b480,
+                0x0043_b4a0,
+            ],
+        );
+        s
+    }
+
+    #[test]
+    fn skinned_nodes_are_found_in_the_bone_table() {
+        let mut s = bone_scene();
+        let actor = s.actor();
+        let node = s.object(0x40);
+        s.answer(node, 0x18, 1);
+        s.e.register(0x0043_fad0, |_, _| int(0x5c1));
+        s.e.register(0x0055_85e0, |_, _| int(0xb01));
+        s.e.register(0x0080_41a0, |_, _| int(2));
+        let list = s.e.mem.alloc(8);
+        s.e.mem.set_u32(list, 0xb0aa);
+        s.e.mem.set_u32(list + 4, 0xb0bb);
+        s.e.register_double(0x0082_5c00, move |_, _| int(list));
+        s.e.set_global::<u32>(LIMB_BONE_COUNT, 2);
+        s.e.set_global::<u32>(LIMB_BONES, 0xb0cc);
+        s.e.set_global::<u32>(LIMB_BONES + 4, 0xb0bb);
+        assert!(s.e.call(0x008b_6e80, &args![actor, node, 3u32]).bool());
+        // No match in the table.
+        s.e.set_global::<u32>(LIMB_BONES + 4, 0xb0dd);
+        assert!(!s.e.call(0x008b_6e80, &args![actor, node, 3u32]).bool());
+        // A node without skin data, or a null node.
+        s.e.register(0x0043_fad0, |_, _| int(0));
+        assert!(!s.e.call(0x008b_6e80, &args![actor, node, 3u32]).bool());
+        assert!(!s.e.call(0x008b_6e80, &args![actor, 0u32, 3u32]).bool());
+    }
+
+    #[test]
+    fn skinned_children_count_for_their_parent() {
+        let mut s = bone_scene();
+        let actor = s.actor();
+        let (parent, children, skinned_child, plain_child) = (
+            s.object(0x40),
+            s.object(0x40),
+            s.object(0x40),
+            s.object(0x40),
+        );
+        s.answer(parent, 0xc, children);
+        s.answer(skinned_child, 0x18, 1);
+        s.e.register_double(0x0043_b480, move |_, a| {
+            int(if a[0] == children { 2 } else { 0 })
+        });
+        s.e.register_double(0x0043_b4a0, move |_, a| {
+            int(if a[1] == 0 {
+                plain_child
+            } else {
+                skinned_child
+            })
+        });
+        s.e.register(0x0043_fad0, |_, _| int(0x5c1));
+        s.e.register(0x0055_85e0, |_, _| int(0xb01));
+        s.e.register(0x0080_41a0, |_, _| int(1));
+        let list = s.e.mem.alloc(8);
+        s.e.mem.set_u32(list, 0xb0aa);
+        s.e.register_double(0x0082_5c00, move |_, _| int(list));
+        s.e.set_global::<u32>(LIMB_BONE_COUNT, 1);
+        s.e.set_global::<u32>(LIMB_BONES, 0xb0aa);
+        assert!(s.e.call(0x008b_6e80, &args![actor, parent, 3u32]).bool());
+        // Slot 0x10 stops the descent.
+        s.answer(parent, 0x10, 1);
+        assert!(!s.e.call(0x008b_6e80, &args![actor, parent, 3u32]).bool());
+    }
+
+    #[test]
+    fn the_bone_table_collects_the_nodes_and_their_children() {
+        let mut s = bone_scene();
+        let actor = s.actor();
+        let (node, child, other) = (s.object(0x40), s.object(0x40), s.object(0x40));
+        s.answer(node, 0xc, 1);
+        s.answer(child, 0xc, 1);
+        s.e.register_double(0x0043_b480, move |_, a| int(u32::from(a[0] == node)));
+        s.e.register_double(0x0043_b4a0, move |_, _| int(child));
+        s.e.set_global::<u32>(LIMB_BONE_COUNT, 7);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_6ff0, &args![actor, node, 0u32]));
+        assert_eq!(args_of(&log, 0x0040_3d30), vec![vec![LIMB_BONES, 0, 0x400]]);
+        assert_eq!(s.e.global::<u32>(LIMB_BONE_COUNT), 2);
+        assert_eq!(s.e.global::<u32>(LIMB_BONES), node);
+        assert_eq!(s.e.global::<u32>(LIMB_BONES + 4), child);
+        // Kept: appended; a node without slot 0xc is not.
+        s.e.call(0x008b_6ff0, &args![actor, other, 1u32]);
+        assert_eq!(s.e.global::<u32>(LIMB_BONE_COUNT), 2);
+        s.e.call(0x008b_6ff0, &args![actor, 0u32, 1u32]);
+        assert_eq!(s.e.global::<u32>(LIMB_BONE_COUNT), 2);
+    }
+
+    #[test]
+    fn a_full_bone_table_logs_a_message() {
+        let mut s = bone_scene();
+        let actor = s.actor();
+        let node = s.object(0x40);
+        s.answer(node, 0xc, 1);
+        s.e.register(0x0055_d520, |_, _| int(0x4e4e));
+        s.e.set_global::<u32>(LIMB_BONE_COUNT, 0x100);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_6ff0, &args![actor, node, 1u32]));
+        assert_eq!(
+            args_of(&log, 0x005b_5e40),
+            vec![vec![LIMB_BONES_MESSAGE, 0x4e4e, 0x100, 0x100]]
+        );
+        assert_eq!(s.e.global::<u32>(LIMB_BONE_COUNT), 0x100);
+    }
+
+    #[test]
+    fn the_animation_of_an_actor_comes_from_its_process() {
+        let mut s = bone_scene();
+        let actor = s.actor();
+        assert_eq!(s.e.call(0x008b_70d0, &args![actor]).u32(), 0);
+        let process = s.object(0x40);
+        s.answer(process, 0x1b8, 0xa11);
+        s.e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        assert_eq!(s.e.call(0x008b_70d0, &args![actor]).u32(), 0xa11);
+    }
+
+    /// The scene of the `008b7100` tests: an actor with 3D and visible flags,
+    /// a process answering slot `0x28c`, and doubles for the callees.
+    fn position_scene() -> (Scene, Ptr<Actor>, u32) {
+        let mut s = scene(&[0x1d0, 0x230, 0x22c, 0x28c, 0x1e4]);
+        let actor = s.actor();
+        let process = s.object(0x40);
+        s.e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        s.e.set(actor, Actor::iVisFlags, 7);
+        s.answer(actor.addr(), 0x1d0, 0x3d3d);
+        let e = &mut s.e;
+        e.map(0x011f_4000, 0x1000);
+        for (word, value) in [1.5f32, 2.5, 3.5].into_iter().enumerate() {
+            e.mem.set_f32(DEFAULT_LOCATION + 4 * word as u32, value);
+        }
+        e.register(ACTOR_GET_PROCESS, |e, a| int(e.mem.u32(a[0] + 0x68)));
+        zeros(
+            e,
+            &[
+                0x0094_df60,
+                0x0043_fcd0,
+                0x00c8_21b0,
+                0x0043_0830,
+                0x0068_15c0,
+                0x004a_0c90,
+                0x004b_3ae0,
+                0x0050_d4a0,
+                0x0049_4390,
+            ],
+        );
+        (s, actor, process)
+    }
+
+    fn position_of(e: &mut Engine, actor: Ptr<Actor>) -> (bool, [f32; 3]) {
+        let out = e.mem.alloc(0x10);
+        let result = e.call(0x008b_7100, &args![actor, out]).bool();
+        (
+            result,
+            [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+        )
+    }
+
+    #[test]
+    fn position_defaults_without_3d_visibility_or_while_the_player_sleeps() {
+        let (mut s, actor, _) = position_scene();
+        s.answer(actor.addr(), 0x1d0, 0);
+        assert_eq!(position_of(&mut s.e, actor), (false, [1.5, 2.5, 3.5]));
+        s.answer(actor.addr(), 0x1d0, 0x3d3d);
+        s.e.set(actor, Actor::iVisFlags, 5);
+        assert_eq!(position_of(&mut s.e, actor), (false, [1.5, 2.5, 3.5]));
+        s.e.set(actor, Actor::iVisFlags, 7);
+        s.e.register(0x0094_df60, |_, _| int(1));
+        assert_eq!(position_of(&mut s.e, actor), (false, [1.5, 2.5, 3.5]));
+    }
+
+    #[test]
+    fn position_from_the_bip_transform_is_rotated_by_the_height() {
+        let (mut s, actor, _) = position_scene();
+        s.answer(actor.addr(), 0x230, 1);
+        s.e.register(0x0043_fcd0, |_, _| int(0x7007));
+        let place = s.e.mem.alloc(0x10);
+        s.e.mem.set_f32(place + 8, 9.0);
+        s.e.register_double(0x0043_0830, move |_, _| int(place));
+        s.e.register(0x004b_3ae0, |e, a| {
+            for word in 0..3 {
+                e.mem.set_f32(a[0] + 4 * word, 10.0 + word as f32);
+            }
+            int(a[0])
+        });
+        let out = s.e.mem.alloc(0x10);
+        let (result, log) = logged(&mut s.e, |e| e.call(0x008b_7100, &args![actor, out]).bool());
+        assert!(result);
+        // Slot 0x22c (0) answered false: the flag is 1.
+        assert_eq!(args_of(&log, 0x00c8_21b0), vec![vec![0x7007, out, 1]]);
+        assert_eq!(args_of(&log, 0x004a_0c90)[0][1], 9.0f32.to_bits());
+        assert_eq!(
+            [s.e.mem.f32(out), s.e.mem.f32(out + 4), s.e.mem.f32(out + 8)],
+            [10.0, 11.0, 12.0]
+        );
+        // Slot 0x22c true instead: the flag is 0.
+        s.answer(actor.addr(), 0x230, 0);
+        s.answer(actor.addr(), 0x22c, 1);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_7100, &args![actor, out]));
+        assert_eq!(args_of(&log, 0x00c8_21b0), vec![vec![0x7007, out, 0]]);
+    }
+
+    #[test]
+    fn position_without_the_blocking_state_comes_from_the_1e4_object() {
+        let (mut s, actor, process) = position_scene();
+        let controller = s.e.mem.alloc(0x500);
+        s.answer(process, 0x28c, controller);
+        // A state that is set and non-empty gives the default location.
+        s.e.mem.set_u8(controller + 0x410 + 0x69, 1);
+        s.e.mem.set_u32(controller + 0x410 + 0x6c, 3);
+        assert_eq!(position_of(&mut s.e, actor), (true, [1.5, 2.5, 3.5]));
+        s.e.mem.set_u32(controller + 0x410 + 0x6c, 0);
+        // No slot 0x1e4 object: default again.
+        assert_eq!(position_of(&mut s.e, actor), (true, [1.5, 2.5, 3.5]));
+        // With the object, 00494390 fills the position: the two flags depend on 0050d4a0.
+        let object = s.object(0x40);
+        s.answer(actor.addr(), 0x1e4, object);
+        s.e.register(0x0049_4390, |e, a| {
+            e.mem.set_f32(a[1], 7.0);
+            Ret::default()
+        });
+        let out = s.e.mem.alloc(0x10);
+        let (result, log) = logged(&mut s.e, |e| e.call(0x008b_7100, &args![actor, out]).bool());
+        assert!(result);
+        assert_eq!(
+            args_of(&log, 0x0049_4390),
+            vec![vec![object, out, actor.addr(), 0, 1]]
+        );
+        assert_eq!(s.e.mem.f32(out), 7.0);
+        s.e.register(0x0050_d4a0, |_, _| int(1));
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_7100, &args![actor, out]));
+        assert_eq!(
+            args_of(&log, 0x0049_4390),
+            vec![vec![object, out, actor.addr(), 1, 0]]
+        );
+    }
+
+    #[test]
+    fn controller_state_of_008b7320_needs_the_byte_and_the_word() {
+        let (mut e, _) = engine();
+        let state = e.mem.alloc(0x100);
+        assert!(!e.call(0x008b_7320, &args![state]).bool());
+        e.mem.set_u8(state + 0x69, 1);
+        assert!(!e.call(0x008b_7320, &args![state]).bool());
+        e.mem.set_u32(state + 0x6c, 4);
+        assert!(e.call(0x008b_7320, &args![state]).bool());
+        e.mem.set_u8(state + 0x69, 0);
+        assert!(!e.call(0x008b_7320, &args![state]).bool());
+    }
+
+    /// Exe strings the animation code compares with or builds from.
+    const ANIMATION_STRINGS: [(u32, &str); 9] = [
+        (0x0101_7114, "\\Locomotion\\"),
+        (0x0101_70f8, "Hurt\\"),
+        (0x0108_4f20, "Toddler\\"),
+        (0x0101_70ec, "IdleAnims"),
+        (0x0108_4f0c, "\\Locomotion\\Child\\"),
+        (0x0108_4ef8, "\\Locomotion\\Female\\"),
+        (0x0108_4ee4, "\\Locomotion\\Male\\"),
+        (0x0108_4f34, "Child\\"),
+        (0x0108_4f2c, "Female\\"),
+    ];
+
+    /// The text of the C string at `at`.
+    fn text_at(e: &Engine, at: u32) -> String {
+        let mut bytes = vec![];
+        while e.mem.u8(at + bytes.len() as u32) != 0 {
+            bytes.push(e.mem.u8(at + bytes.len() as u32));
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+
+    /// The `(path, [loader, a, b, options])` of every list built.
+    type PathLog = Rc<std::cell::RefCell<Vec<(String, Vec<u32>)>>>;
+
+    /// The scene of the animation-list tests: string routines work on memory,
+    /// `00447330` records the path it is given and returns a list when
+    /// `lists` says so.
+    struct Animations {
+        s: Scene,
+        actor: Ptr<Actor>,
+        process: u32,
+        paths: PathLog,
+    }
+
+    fn animations() -> Animations {
+        let mut s = scene(&[0x148, 0x390, 0x1a0, 0xc, 0x1b8, 0x1d0, 0x10]);
+        let actor = s.actor();
+        let process = s.object(0x40);
+        s.e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        let e = &mut s.e;
+        for page in [0x0101_7000, 0x0108_4000, 0x0118_a000, 0x011c_3000] {
+            e.map(page, 0x1000);
+        }
+        for (at, text) in ANIMATION_STRINGS {
+            e.mem.write(at, text.as_bytes());
+        }
+        e.set_global::<u32>(MODEL_LOADER, 0x10ad);
+        e.register(ACTOR_GET_PROCESS, |e, a| int(e.mem.u32(a[0] + 0x68)));
+        e.register(0x0040_6d30, |e, a| {
+            let text = text_at(e, a[2]);
+            e.mem.write(a[0], text.as_bytes());
+            e.mem.set_u8(a[0] + text.len() as u32, 0);
+            int(a[0])
+        });
+        e.register(0x0040_6d50, |e, a| {
+            let (head, tail) = (text_at(e, a[0]), text_at(e, a[2]));
+            let at = a[0] + head.len() as u32;
+            e.mem.write(at, tail.as_bytes());
+            e.mem.set_u8(at + tail.len() as u32, 0);
+            int(a[0])
+        });
+        e.register(0x0040_ab30, |e, a| {
+            let text = text_at(e, a[0]);
+            int(text
+                .rfind(a[1] as u8 as char)
+                .map_or(0, |at| a[0] + at as u32))
+        });
+        e.register(0x0057_15d0, |e, _| {
+            let path = cstr(e, "Meshes\\Chars\\skel.nif");
+            int(path)
+        });
+        let paths: PathLog = Default::default();
+        let log = paths.clone();
+        e.register_double(0x0044_7330, move |e, a| {
+            log.borrow_mut()
+                .push((text_at(e, a[1]), vec![a[0], a[2], a[3], a[4]]));
+            int(0x5757)
+        });
+        zeros(
+            e,
+            &[
+                0x0044_5430,
+                0x0044_65f0,
+                0x0044_6500,
+                0x0047_02f0,
+                0x0043_cc60,
+                0x0083_97d0,
+                0x0087_f4c0,
+                0x008a_6970,
+                0x0045_cd60,
+                0x0044_ddc0,
+                0x0044_6390,
+                0x0049_7280,
+                0x0049_c390,
+                0x0041_3f40,
+                0x0043_b1b0,
+                0x00ec_7750,
+                0x0040_3df0,
+                0x0046_4f30,
+            ],
+        );
+        e.register(PLAYER_GET_ANIMATION, |_, a| {
+            int(if a[1] == 0 { 0xa100 } else { 0xa200 })
+        });
+        Animations {
+            s,
+            actor,
+            process,
+            paths,
+        }
+    }
+
+    impl Animations {
+        fn load(
+            &mut self,
+            hurt: u8,
+            animation: u32,
+            path: u32,
+            replacement: u32,
+        ) -> Vec<(u32, Vec<u32>)> {
+            let actor = self.actor;
+            logged(&mut self.s.e, |e| {
+                e.call(
+                    0x008b_73f0,
+                    &args![actor, hurt, animation, path, replacement],
+                )
+            })
+            .1
+        }
+    }
+
+    #[test]
+    fn locomotion_lists_use_the_model_path_and_replace_the_animation() {
+        let mut w = animations();
+        let log = w.load(0, 0xa1, 0, 0);
+        assert_eq!(
+            w.paths.borrow()[0],
+            (
+                "Meshes\\Chars\\Locomotion\\IdleAnims".to_string(),
+                vec![0x10ad, 0, 1, 0]
+            )
+        );
+        // The old list is cancelled and the new one installed for the animation, then released.
+        assert_eq!(args_of(&log, 0x0044_5430), vec![vec![0x10ad, 0xa1]]);
+        assert_eq!(
+            args_of(&log, 0x0044_65f0),
+            vec![vec![0x10ad, 0x5757, 0xa1, 5, 0, 0]]
+        );
+        assert_eq!(args_of(&log, 0x0047_02f0), vec![vec![0x5757, 1]]);
+        // Slot 0x390 is false: no second list.
+        assert_eq!(w.paths.borrow().len(), 1);
+    }
+
+    #[test]
+    fn locomotion_lists_for_hurt_actors_and_given_model_paths() {
+        let mut w = animations();
+        let path = cstr(&mut w.s.e, "Meshes\\Other\\body.nif");
+        w.load(1, 0xa1, path, 0);
+        assert_eq!(
+            w.paths.borrow()[0].0,
+            "Meshes\\Other\\Locomotion\\Hurt\\IdleAnims"
+        );
+        // Only one list for hurt actors, even with slot 0x390.
+        w.s.answer(w.actor.addr(), 0x390, 1);
+        w.paths.borrow_mut().clear();
+        w.load(1, 0xa1, path, 0);
+        assert_eq!(w.paths.borrow().len(), 1);
+    }
+
+    #[test]
+    fn locomotion_lists_add_the_child_female_or_male_set() {
+        let mut w = animations();
+        w.s.answer(w.actor.addr(), 0x390, 1);
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(
+            w.paths.borrow()[1].0,
+            "Meshes\\Chars\\Locomotion\\Male\\IdleAnims"
+        );
+        assert_eq!(w.paths.borrow()[1].1, vec![0x10ad, 0, 0, 0]);
+        w.s.e.register(0x0087_f4c0, |_, _| int(1));
+        w.paths.borrow_mut().clear();
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(
+            w.paths.borrow()[1].0,
+            "Meshes\\Chars\\Locomotion\\Female\\IdleAnims"
+        );
+        w.s.answer(w.actor.addr(), 0x1a0, 1);
+        w.paths.borrow_mut().clear();
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(
+            w.paths.borrow()[1].0,
+            "Meshes\\Chars\\Locomotion\\Child\\IdleAnims"
+        );
+        // The second list does not cancel the first one's replacement again.
+        let log = w.load(0, 0xa1, 0, 0);
+        assert_eq!(args_of(&log, 0x0044_5430).len(), 1);
+        assert_eq!(args_of(&log, 0x0044_65f0).len(), 2);
+    }
+
+    #[test]
+    fn locomotion_lists_fill_a_replacement_when_given() {
+        let mut w = animations();
+        w.s.e.register(0x0043_cc60, |_, _| int(0xc1c1));
+        let log = w.load(0, 0xa1, 0, 0x7e7e);
+        assert_eq!(
+            args_of(&log, 0x0044_6500),
+            vec![vec![0x10ad, 0x5757, 0xc1c1, 0x7e7e, 0]]
+        );
+        assert!(args_of(&log, 0x0044_5430).is_empty());
+        // Without an animation or a replacement nothing is built; the actor's own is used.
+        let log = w.load(0, 0, 0, 0);
+        assert!(args_of(&log, 0x0040_6d30).is_empty());
+        let process = w.process;
+        w.s.answer(process, 0x1b8, 0xa77);
+        let log = w.load(0, 0, 0, 0);
+        assert_eq!(
+            args_of(&log, 0x0044_65f0),
+            vec![vec![0x10ad, 0x5757, 0xa77, 5, 0, 0]]
+        );
+        // A path without a backslash ends it.
+        let flat = cstr(&mut w.s.e, "flat.nif");
+        let log = w.load(0, 0xa1, flat, 0);
+        assert!(args_of(&log, 0x0044_7330).is_empty());
+    }
+
+    #[test]
+    fn locomotion_options_come_from_the_process_or_the_player() {
+        let mut w = animations();
+        let process = w.process;
+        // A process whose kind (0045cd60) is 0 or 1 and whose slot 0x148 gives a source.
+        w.s.e.register(0x0045_cd60, |_, _| int(1));
+        let source = w.s.object(0x40);
+        w.s.answer(process, 0x148, source);
+        w.s.e.register(0x0044_ddc0, |_, _| int(0x44));
+        w.s.e.register(0x0044_6390, |_, _| int(3));
+        w.s.e.set_global::<u32>(0x0118_a838 + 12, 0x0d0d);
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(w.paths.borrow()[0].1, vec![0x10ad, 0, 1, 0x0d0d]);
+        // No source: option 1 when 008a6970 says so.
+        w.s.answer(process, 0x148, 0);
+        w.s.e.register(0x008a_6970, |_, _| int(1));
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(w.paths.borrow()[1].1[3], 1);
+        // A process kind outside 0..=1: 0.
+        w.s.e.register(0x0045_cd60, |_, _| int(2));
+        w.load(0, 0xa1, 0, 0);
+        assert_eq!(w.paths.borrow()[2].1[3], 0);
+        // The player: 0xc, and the Toddler set with 008397d0 and a model path.
+        let player = w.s.e.global::<u32>(PLAYER_CHARACTER);
+        let vtable = w.s.vtable;
+        w.s.e.mem.set_u32(player, vtable);
+        w.s.e.register(0x0083_97d0, |_, _| int(1));
+        let path = cstr(&mut w.s.e, "Meshes\\Chars\\skel.nif");
+        w.paths.borrow_mut().clear();
+        w.s.e
+            .call(0x008b_73f0, &args![player, 0u8, 0xa1u32, path, 0u32]);
+        assert_eq!(
+            w.paths.borrow()[0],
+            (
+                "Meshes\\Chars\\Locomotion\\Toddler\\IdleAnims".to_string(),
+                vec![0x10ad, 0, 1, 0xc]
+            )
+        );
+    }
+
+    #[test]
+    fn the_players_locomotion_is_reloaded_for_both_animations() {
+        let mut w = animations();
+        let player = w.s.e.global::<u32>(PLAYER_CHARACTER);
+        w.s.e.register(0x0040_3df0, |_, _| int(0x00a0));
+        w.s.e.register(0x0046_4f30, |e, _| {
+            let path = cstr(e, "Meshes\\Fp\\arms.nif");
+            int(path)
+        });
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_7360, &args![player, 1u32, 0u32])
+        });
+        let paths = w.paths.borrow().clone();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0].0, "Meshes\\Chars\\Locomotion\\Hurt\\IdleAnims");
+        assert_eq!(paths[1].0, "Meshes\\Fp\\Locomotion\\Hurt\\IdleAnims");
+        assert_eq!(
+            args_of(&log, PLAYER_GET_ANIMATION),
+            vec![vec![player, 0], vec![player, 1]]
+        );
+        assert_eq!(args_of(&log, 0x0040_3df0), vec![vec![0x011c_dd78]]);
+        // Another actor: its own animation, one list.
+        w.paths.borrow_mut().clear();
+        let process = w.process;
+        w.s.answer(process, 0x1b8, 0xa77);
+        let actor = w.actor;
+        let (_, log) = logged(&mut w.s.e, |e| {
+            e.call(0x008b_7360, &args![actor, 0u32, 0u32])
+        });
+        assert_eq!(w.paths.borrow().len(), 1);
+        assert_eq!(args_of(&log, 0x0044_65f0)[0][2], 0xa77);
+    }
+
+    /// The scene of `008b78c0`: the animation's sequence name is `name`; the
+    /// actor values (magic target slot `0xc`) are 0 except those in `values`.
+    fn reload_scene(name: &str, values: &'static [(u32, f64)]) -> Animations {
+        let mut w = animations();
+        let process = w.process;
+        w.s.answer(process, 0x1b8, 0xa77);
+        let sequences = w.s.object(0x40);
+        let sequence_holder = w.s.object(0x40);
+        let text = cstr(&mut w.s.e, name);
+        w.s.e.register(0x0049_7280, |_, _| int(0x5eb));
+        w.s.e.register_double(0x0049_c390, move |e, a| {
+            e.mem.set_u32(a[2], sequences);
+            int(1)
+        });
+        w.s.answer(sequences, 0x10, sequence_holder);
+        w.s.e.register(0x0041_3f40, |_, a| int(a[0]));
+        w.s.e.register_double(0x0043_b1b0, move |_, _| int(text));
+        w.s.e.register(0x00ec_7750, |e, a| {
+            let (haystack, needle) = (text_at(e, a[0]), text_at(e, a[1]));
+            int(haystack.find(&needle).map_or(0, |at| a[0] + at as u32))
+        });
+        w.s.e.register_double(0x0f30_0000 + 0xc, move |_, a| {
+            float(values.iter().find(|v| v.0 == a[1]).map_or(0.0, |v| v.1))
+        });
+        w
+    }
+
+    #[test]
+    fn the_locomotion_is_reloaded_when_the_wanted_kinds_differ() {
+        // Not hurt, but the loaded set has "Hurt\": reload.
+        let mut w = reload_scene(
+            "Meshes\\Locomotion\\Hurt\\IdleAnims",
+            &[(0x1d, 1.0), (0x1e, 1.0)],
+        );
+        let actor = w.actor;
+        w.s.e.call(0x008b_78c0, &args![actor, 0u32]);
+        assert_eq!(w.paths.borrow().len(), 1);
+        // The state matches the loaded set (hurt: 0x1d is zero and 0x48 is zero): left alone.
+        let mut w = reload_scene("Meshes\\Locomotion\\Hurt\\IdleAnims", &[]);
+        let actor = w.actor;
+        w.s.e.call(0x008b_78c0, &args![actor, 0u32]);
+        assert!(w.paths.borrow().is_empty());
+        // `force` reloads anyway.
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert_eq!(w.paths.borrow().len(), 1);
+        // A child set that matches a child actor (not hurt on both sides): left alone.
+        let mut w = reload_scene("x\\Child\\Female\\y", &[(0x1d, 1.0), (0x1e, 1.0)]);
+        let actor = w.actor;
+        w.s.answer(actor.addr(), 0x1a0, 1);
+        w.s.e.register(0x0087_f4c0, |_, _| int(1));
+        w.s.e.call(0x008b_78c0, &args![actor, 0u32]);
+        assert!(w.paths.borrow().is_empty());
+        // The same set for an actor that is not a child: reload.
+        w.s.answer(actor.addr(), 0x1a0, 0);
+        w.s.e.call(0x008b_78c0, &args![actor, 0u32]);
+        assert_eq!(w.paths.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_locomotion_reload_needs_the_animation_sequence_and_name() {
+        let mut w = reload_scene("x", &[]);
+        let actor = w.actor;
+        let process = w.process;
+        w.s.answer(process, 0x1b8, 0);
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+        w.s.answer(process, 0x1b8, 0xa77);
+        w.s.e.register(0x0049_7280, |_, _| int(0));
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+        w.s.e.register(0x0049_7280, |_, _| int(0x5eb));
+        w.s.e.register(0x0049_c390, |_, _| int(0));
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+        // A sequence that is 0, or one without a name, ends it too.
+        let object = w.s.object(0x40);
+        w.s.e.register_double(0x0049_c390, move |e, a| {
+            e.mem.set_u32(a[2], object);
+            int(1)
+        });
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+        w.s.answer(object, 0x10, 0x5e9);
+        w.s.e.register(0x0043_b1b0, |_, _| int(0));
+        w.s.e.call(0x008b_78c0, &args![actor, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+        // The player needs both animations.
+        let mut w = reload_scene("x", &[]);
+        let player = w.s.e.global::<u32>(PLAYER_CHARACTER);
+        w.s.e.register(PLAYER_GET_ANIMATION, |_, a| {
+            int(if a[1] == 0 { 0xa100 } else { 0 })
+        });
+        w.s.e.call(0x008b_78c0, &args![player, 1u32]);
+        assert!(w.paths.borrow().is_empty());
+    }
+
+    #[test]
+    fn hurt_is_both_pairs_of_actor_values_being_zero_in_the_right_way() {
+        let mut s = scene(&[0xc]);
+        let actor = s.actor();
+        s.e.map(0x0101_2000, 0x1000);
+        let table: Rc<std::cell::RefCell<std::collections::HashMap<u32, f64>>> = Default::default();
+        let values = table.clone();
+        s.e.register_double(0x0f30_0000 + 0xc, move |_, a| {
+            float(values.borrow().get(&a[1]).copied().unwrap_or(0.0))
+        });
+        let hurt = |s: &mut Scene, one: f64, two: f64, three: f64| {
+            *table.borrow_mut() = [(0x1d, one), (0x1e, two), (0x48, three)]
+                .into_iter()
+                .collect();
+            s.e.call(0x008b_7b70, &args![actor]).bool()
+        };
+        assert!(hurt(&mut s, 0.0, 5.0, 0.0));
+        assert!(hurt(&mut s, 2.0, 0.0, 0.0));
+        assert!(!hurt(&mut s, 2.0, 3.0, 0.0));
+        assert!(!hurt(&mut s, 0.0, 0.0, 1.0));
+        // The second value is only asked when the first is not zero.
+        s.e.call_log = Some(vec![]);
+        hurt(&mut s, 0.0, 3.0, 0.0);
+        let log = s.e.call_log.take().unwrap();
+        let slots: Vec<u32> = log
+            .iter()
+            .map(|call| call.1.get(1).copied().unwrap_or(0))
+            .collect();
+        assert_eq!(slots, vec![0, 0x1d, 0x48]);
+    }
+
+    // ---- 008b7b70 .. 008b8e20: factions -----------------------------------
+
+    /// The scene of the faction tests: an actor keeps the head of its form's
+    /// faction chain at `+0x30` and its extra faction changes (a block whose
+    /// `+0xc` is another chain head) at `+0x38`; chain nodes are `[entry,
+    /// next]` and entries `[faction, rank byte at +4]`.
+    fn faction_stage() -> Scene {
+        let mut s = scene(&[0x48]);
+        let e = &mut s.e;
+        e.register(0x0041_81e0, |_, a| int(a[0]));
+        e.register(0x005d_8a70, |e, a| int(e.mem.u32(a[0])));
+        e.register(0x005d_43c0, |_, a| int(a[0]));
+        e.register(0x0042_e800, |e, a| int(e.mem.u32(a[0] + 0x38)));
+        e.register(0x0068_15c0, |_, a| int(a[0]));
+        e.register(0x0072_6070, |e, a| int(e.mem.u32(a[0] + 4)));
+        zeros(e, &[0x0084_e3a0, 0x0055_d520, 0x005b_5e40]);
+        s
+    }
+
+    /// A chain of `(faction, rank)` entries; returns the first node.
+    fn faction_chain(e: &mut Engine, entries: &[(u32, i8)]) -> u32 {
+        let mut next = 0;
+        for &(faction, rank) in entries.iter().rev() {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, faction);
+            e.mem.set_u8(entry + 4, rank as u8);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, entry);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    /// Gives `actor` the factions `base` and, when given, the extra `changes`.
+    fn give_factions(
+        s: &mut Scene,
+        actor: Ptr<Actor>,
+        base: &[(u32, i8)],
+        changes: Option<&[(u32, i8)]>,
+    ) {
+        let head = faction_chain(&mut s.e, base);
+        s.e.mem.set_u32(actor.addr() + 0x30, head);
+        let block = match changes {
+            Some(extra) => {
+                let chain = faction_chain(&mut s.e, extra);
+                let block = s.e.mem.alloc(0x20);
+                s.e.mem.set_u32(block + 0xc, chain);
+                block
+            }
+            None => 0,
+        };
+        s.e.mem.set_u32(actor.addr() + 0x38, block);
+    }
+
+    /// A faction object with the word at `+0x34` set to `flags`.
+    fn faction_with(e: &mut Engine, flags: u32) -> u32 {
+        let faction = e.mem.alloc(0x80);
+        e.mem.set_u32(faction + 0x34, flags);
+        faction
+    }
+
+    #[test]
+    fn faction_lists_merge_the_base_and_the_changes() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        give_factions(
+            &mut s,
+            actor,
+            &[(0xf1, 0), (0xf2, 5), (0xf3, -1)],
+            Some(&[(0xf2, -1), (0xf4, 3), (0xf5, -1), (0xf1, 2)]),
+        );
+        let head = s.e.mem.u32(actor.addr() + 0x30);
+        let block = s.e.mem.u32(actor.addr() + 0x38);
+        let extra = s.e.mem.u32(block + 0xc);
+        let buffer = s.e.mem.alloc(0x200);
+        let count =
+            s.e.call(0x008b_8ca0, &args![actor, buffer, 0x80u32, head, extra])
+                .u32();
+        // 0xf3 (rank -1) is left out, 0xf2 is removed by the changes, 0xf4 is added,
+        // 0xf5 (rank -1, not present) is not, and 0xf1 stays.
+        assert_eq!(count, 3);
+        assert_eq!(
+            [
+                s.e.mem.u32(buffer),
+                s.e.mem.u32(buffer + 4),
+                s.e.mem.u32(buffer + 8)
+            ],
+            [0xf1, 0, 0xf4]
+        );
+        // Without the second chain only the first one counts.
+        let count =
+            s.e.call(0x008b_8ca0, &args![actor, buffer, 0x80u32, head, 0u32])
+                .u32();
+        assert_eq!(count, 2);
+        assert_eq!(
+            s.e.call(0x008b_8ca0, &args![actor, buffer, 0x80u32, 0u32, 0u32])
+                .u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn faction_lists_stop_at_the_capacity_with_a_message() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        s.e.register(0x0084_e3a0, |_, _| int(0x1d));
+        s.e.register(0x0055_d520, |_, _| int(0x4e4e));
+        give_factions(
+            &mut s,
+            actor,
+            &[(0xf1, 0), (0xf2, 0), (0xf3, 0)],
+            Some(&[(0xf4, 0)]),
+        );
+        let head = s.e.mem.u32(actor.addr() + 0x30);
+        let block = s.e.mem.u32(actor.addr() + 0x38);
+        let extra = s.e.mem.u32(block + 0xc);
+        let buffer = s.e.mem.alloc(0x200);
+        let (count, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_8ca0, &args![actor, buffer, 2u32, head, extra])
+                .u32()
+        });
+        assert_eq!(count, 2);
+        assert_eq!(
+            args_of(&log, 0x005b_5e40),
+            vec![vec![3, INTEGRATE_OVERFLOW_MESSAGE, 2, 0x4e4e, 0x1d]]
+        );
+        // The second chain can overflow too.
+        let (count, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_8ca0, &args![actor, buffer, 2u32, 0u32, head])
+                .u32()
+        });
+        assert_eq!(count, 2);
+        assert_eq!(args_of(&log, 0x005b_5e40).len(), 1);
+    }
+
+    #[test]
+    fn crime_flag_of_a_faction() {
+        let (mut e, _) = engine();
+        let faction = e.mem.alloc(0x80);
+        assert!(!e.call(0x008b_7d00, &args![faction]).bool());
+        e.mem.set_u32(faction + 0x34, 0x100);
+        assert!(e.call(0x008b_7d00, &args![faction]).bool());
+        e.mem.set_u32(faction + 0x34, 0xfeff);
+        assert!(!e.call(0x008b_7d00, &args![faction]).bool());
+    }
+
+    #[test]
+    fn crimes_are_added_to_the_factions_that_care() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        let (caring, indifferent) = (faction_with(&mut s.e, 0x100), faction_with(&mut s.e, 0));
+        give_factions(&mut s, actor, &[(caring, 0), (indifferent, 0)], None);
+        zeros(&mut s.e, &[0x005f_da00, 0x005f_da50]);
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_7c00, &args![actor, 0x55u32, 9u32])
+        });
+        assert_eq!(args_of(&log, 0x005f_da00), vec![vec![caring, 0x55, 9]]);
+        assert!(args_of(&log, 0x005f_da50).is_empty());
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_7d20, &args![actor, 0x66u32, 7u32])
+        });
+        assert_eq!(args_of(&log, 0x005f_da50), vec![vec![caring, 0x66, 7]]);
+        assert!(args_of(&log, 0x005f_da00).is_empty());
+    }
+
+    #[test]
+    fn faction_sums_of_008b7e20_and_008b7f00() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        give_factions(&mut s, actor, &[(3, 0), (4, 0), (5, -1)], Some(&[(6, 1)]));
+        s.e.register(0x0067_33e0, |_, a| int(a[0] * 10));
+        s.e.register(0x0080_41a0, |_, a| int(a[0] + 100));
+        assert_eq!(s.e.call(0x008b_7e20, &args![actor]).i32(), 30 + 40 + 60);
+        assert_eq!(s.e.call(0x008b_7f00, &args![actor]).i32(), 103 + 104 + 106);
+    }
+
+    /// Two actors with the given base factions and a relation table for `0048bf50`.
+    fn relation_scene(
+        first: &[(u32, i8)],
+        second: &[(u32, i8)],
+        relations: &'static [((u32, u32), i32)],
+    ) -> (Scene, Ptr<Actor>, Ptr<Actor>) {
+        let mut s = faction_stage();
+        let (a, b) = (s.actor(), s.actor());
+        give_factions(&mut s, a, first, None);
+        give_factions(&mut s, b, second, None);
+        s.e.register(0x0048_bf50, |_, args| {
+            let key = (args[0] - 0x24, args[1]);
+            int(RELATIONS.with(|table| {
+                table
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.0 == key)
+                    .map_or(0, |entry| entry.1)
+            }) as u32)
+        });
+        RELATIONS.with(|table| *table.borrow_mut() = relations);
+        (s, a, b)
+    }
+
+    thread_local! {
+        static RELATIONS: std::cell::RefCell<&'static [((u32, u32), i32)]> =
+            const { std::cell::RefCell::new(&[]) };
+    }
+
+    #[test]
+    fn the_best_relation_between_two_actors_prefers_shared_factions() {
+        let (mut s, a, b) = relation_scene(
+            &[(0x100, 0), (0x200, 0)],
+            &[(0x200, 0), (0x300, 0)],
+            &[
+                ((0x100, 0x200), 7),
+                ((0x100, 0x300), 3),
+                ((0x200, 0x200), 10),
+                ((0x200, 0x300), 99),
+            ],
+        );
+        let out = s.e.mem.alloc(0x10);
+        let result =
+            s.e.call(0x008b_7fe0, &args![a, b, out, out + 4, out + 8])
+                .i32();
+        // The lowest relation of unshared pairs is overridden by the shared faction.
+        assert_eq!(result, 10);
+        assert_eq!(
+            [s.e.mem.u32(out), s.e.mem.u32(out + 4), s.e.mem.u32(out + 8)],
+            [1, 0x200, 0x200]
+        );
+    }
+
+    #[test]
+    fn the_lowest_relation_between_unshared_factions_is_taken() {
+        let (mut s, a, b) = relation_scene(
+            &[(0x100, 0), (0x400, 0)],
+            &[(0x200, 0), (0x300, 0)],
+            &[
+                ((0x100, 0x200), 7),
+                ((0x100, 0x300), 3),
+                ((0x400, 0x200), 1),
+                ((0x400, 0x300), 5),
+            ],
+        );
+        let out = s.e.mem.alloc(0x10);
+        let result =
+            s.e.call(0x008b_7fe0, &args![a, b, out, out + 4, out + 8])
+                .i32();
+        assert_eq!(result, 1);
+        assert_eq!(
+            [s.e.mem.u32(out), s.e.mem.u32(out + 4), s.e.mem.u32(out + 8)],
+            [1, 0x400, 0x200]
+        );
+        // No factions: nothing is written and the result is 0.
+        let (mut s, a, b) = relation_scene(&[], &[], &[]);
+        let out = s.e.mem.alloc(0x10);
+        assert_eq!(
+            s.e.call(0x008b_7fe0, &args![a, b, out, out + 4, out + 8])
+                .i32(),
+            0
+        );
+        assert_eq!(s.e.mem.u32(out), 0);
+    }
+
+    #[test]
+    fn the_rank_of_a_faction_is_one_when_the_actor_has_it() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        give_factions(&mut s, actor, &[(3, 0), (4, 0)], Some(&[(5, 2), (4, -1)]));
+        assert_eq!(s.e.call(0x008b_8290, &args![actor, 3u32, 0u32]).i32(), 1);
+        assert_eq!(s.e.call(0x008b_8290, &args![actor, 5u32, 0u32]).i32(), 1);
+        assert_eq!(s.e.call(0x008b_8290, &args![actor, 4u32, 0u32]).i32(), -1);
+        assert_eq!(s.e.call(0x008b_8290, &args![actor, 9u32, 0u32]).i32(), -1);
+    }
+
+    #[test]
+    fn factions_that_care_about_crime_are_recorded() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        let (caring, indifferent, absent) = (
+            faction_with(&mut s.e, 0x100),
+            faction_with(&mut s.e, 0),
+            faction_with(&mut s.e, 0x100),
+        );
+        give_factions(
+            &mut s,
+            actor,
+            &[(caring, 0), (indifferent, 0), (absent, 0)],
+            None,
+        );
+        zeros(&mut s.e, &[0x0047_eb90, 0x009e_bae0]);
+        // The other object is in the `caring` faction only.
+        s.e.register_double(0x008b_8e90, move |_, a| int(u32::from(a[1] == caring)));
+        let (result, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_8360, &args![actor, 0x0b0b_u32, 0x0c0cu32])
+                .u8()
+        });
+        assert_eq!(result, 1);
+        assert_eq!(args_of(&log, 0x0047_eb90), vec![vec![caring, 1]]);
+        assert_eq!(args_of(&log, 0x009e_bae0), vec![vec![0x0c0c, caring]]);
+        assert_eq!(args_of(&log, 0x008b_8e90).len(), 2);
+        s.e.register(0x008b_8e90, |_, _| int(0));
+        assert_eq!(s.e.call(0x008b_8360, &args![actor, 1u32, 2u32]).u8(), 0);
+    }
+
+    #[test]
+    fn an_actor_has_a_faction_that_cares_about_crime() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        let indifferent = faction_with(&mut s.e, 0);
+        give_factions(&mut s, actor, &[(indifferent, 0)], None);
+        assert_eq!(s.e.call(0x008b_8490, &args![actor]).u8(), 0);
+        let caring = faction_with(&mut s.e, 0x100);
+        give_factions(&mut s, actor, &[(indifferent, 0), (caring, 0)], None);
+        assert_eq!(s.e.call(0x008b_8490, &args![actor]).u8(), 1);
+    }
+
+    #[test]
+    fn setting_a_faction_rank_changes_removes_or_adds() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        let a = actor.addr();
+        give_factions(&mut s, actor, &[(3, 0)], Some(&[(4, 1)]));
+        let changes = s.e.mem.u32(a + 0x38);
+        zeros(
+            &mut s.e,
+            &[0x0043_6e10, 0x0043_6f20, 0x0043_6f80, 0x0042_e760],
+        );
+        // A faction the actor has: removed with rank -1, else set.
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_8580, &args![actor, 3u32, 0xffu8])
+        });
+        assert_eq!(args_of(&log, 0x0043_6e10), vec![vec![changes, 3]]);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_8580, &args![actor, 4u32, 2u8]));
+        assert_eq!(args_of(&log, 0x0043_6f20), vec![vec![changes, 4, 2]]);
+        // A new faction is added; the rank is sign extended.
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_8580, &args![actor, 9u32, 0xf0u8])
+        });
+        assert_eq!(
+            args_of(&log, 0x0043_6f80),
+            vec![vec![changes, 9, 0xffff_fff0]]
+        );
+        // Slot 0x48 is asked first; faction 0 does nothing.
+        assert!(s.slot_calls().contains(&(a, 0x48, vec![0x8000_0000])));
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_8580, &args![actor, 0u32, 1u8]));
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn setting_a_faction_rank_creates_the_changes_when_missing() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        let a = actor.addr();
+        give_factions(&mut s, actor, &[(3, 0)], None);
+        let block = s.e.mem.alloc(0x20);
+        s.e.register_double(0x0042_e760, move |e, _| {
+            e.mem.set_u32(a + 0x38, block);
+            Ret::default()
+        });
+        zeros(&mut s.e, &[0x0043_6f80]);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_8580, &args![actor, 9u32, 1u8]));
+        assert_eq!(args_of(&log, 0x0043_6f80), vec![vec![block, 9, 1]]);
+        // The same through 008b8e20, which always stores.
+        s.e.mem.set_u32(a + 0x38, 0);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_8e20, &args![actor, 8u32, 6u32]));
+        assert_eq!(args_of(&log, 0x0043_6f80), vec![vec![block, 8, 6]]);
+        // Without changes even after the creation, nothing is stored.
+        s.e.register(0x0042_e760, |_, _| Ret::default());
+        s.e.mem.set_u32(a + 0x38, 0);
+        let (_, log) = logged(&mut s.e, |e| e.call(0x008b_8e20, &args![actor, 8u32, 6u32]));
+        assert!(args_of(&log, 0x0043_6f80).is_empty());
+    }
+
+    #[test]
+    fn changing_a_faction_rank_clamps_at_zero_and_needs_the_faction() {
+        let mut s = faction_stage();
+        let actor = s.actor();
+        give_factions(&mut s, actor, &[(3, 0)], Some(&[(4, 1)]));
+        let changes = s.e.mem.u32(actor.addr() + 0x38);
+        zeros(&mut s.e, &[0x0043_6e10, 0x0043_6f20, 0x0043_6f80]);
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_86e0, &args![actor, 3u32, 0xfdu8, 0u8])
+        });
+        // The rank of a held faction is 1; 1 - 3 is clamped at 0.
+        assert_eq!(args_of(&log, 0x0043_6f20), vec![vec![changes, 3, 0]]);
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_86e0, &args![actor, 3u32, 4u8, 0u8])
+        });
+        assert_eq!(args_of(&log, 0x0043_6f20), vec![vec![changes, 3, 5]]);
+        // A faction the actor does not have, or none at all: nothing.
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_86e0, &args![actor, 9u32, 4u8, 0u8])
+        });
+        assert!(args_of(&log, 0x0043_6f20).is_empty() && args_of(&log, 0x0043_6f80).is_empty());
+        let (_, log) = logged(&mut s.e, |e| {
+            e.call(0x008b_86e0, &args![actor, 0u32, 4u8, 0u8])
+        });
+        assert_eq!(log.len(), 1);
+    }
+
+    #[test]
+    fn faction_reactions_are_combined_by_008b8740() {
+        let (mut e, _) = engine();
+        e.register(0x0048_c1b0, |_, a| int(a[1]));
+        let combine = |e: &mut Engine, running: i32, new: u32| {
+            e.call(0x008b_8740, &args![running, 0x1000u32, new]).i32()
+        };
+        assert_eq!(combine(&mut e, 0, 3), 3);
+        assert_eq!(combine(&mut e, 1, 0), 1);
+        assert_eq!(combine(&mut e, 1, 3), 3);
+        assert_eq!(combine(&mut e, 3, 2), 2);
+        assert_eq!(combine(&mut e, 3, 1), 3);
+        assert_eq!(combine(&mut e, 2, 3), 2);
+        // The relation is asked of the faction's member at +0x24.
+        e.call_log = Some(vec![]);
+        combine(&mut e, 0, 5);
+        assert_eq!(
+            args_of(&e.call_log.take().unwrap(), 0x0048_c1b0),
+            vec![vec![0x1024, 5]]
+        );
+    }
+
+    /// The scene of the `008b87a0` tests: relations by `(faction, other)` come
+    /// from `0048c1b0` through the thread-local table, `005a2270` accepts
+    /// `friendly`.
+    fn reaction_scene(
+        relations: &'static [((u32, u32), u32)],
+        friendly: u32,
+    ) -> (Scene, Ptr<Actor>, Ptr<Actor>, u32) {
+        let mut s = faction_stage();
+        let (a, b) = (s.actor(), s.actor());
+        REACTIONS.with(|table| *table.borrow_mut() = relations);
+        s.e.register(0x0048_c1b0, |_, args| {
+            let key = (args[0] - 0x24, args[1]);
+            int(REACTIONS.with(|table| {
+                table
+                    .borrow()
+                    .iter()
+                    .find(|entry| entry.0 == key)
+                    .map_or(0, |entry| entry.1)
+            }))
+        });
+        s.e.register_double(0x005a_2270, move |_, a| int(u32::from(a[0] == friendly)));
+        let flag = s.e.mem.alloc(8);
+        (s, a, b, flag)
+    }
+
+    thread_local! {
+        static REACTIONS: std::cell::RefCell<&'static [((u32, u32), u32)]> =
+            const { std::cell::RefCell::new(&[]) };
+    }
+
+    #[test]
+    fn the_fight_reaction_of_plain_factions_is_folded_pair_by_pair() {
+        let (mut s, a, b, flag) = reaction_scene(
+            &[((0x10, 0x30), 1), ((0x20, 0x30), 0), ((0x10, 0x40), 3)],
+            0,
+        );
+        give_factions(&mut s, a, &[(0x10, 0), (0x20, 0)], None);
+        give_factions(&mut s, b, &[(0x30, 0), (0x40, 0)], None);
+        // 0 -> 1 (0x10 vs 0x30), then 1 -> 3 (0x10 vs 0x40); the rest are 0 and keep it.
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, b, flag]).i32(), 3);
+        // A reaction of 2 ends the search at once.
+        let (mut s, a, b, flag) = reaction_scene(&[((0x10, 0x30), 2)], 0);
+        give_factions(&mut s, a, &[(0x10, 0), (0x20, 0)], None);
+        give_factions(&mut s, b, &[(0x30, 0), (0x40, 0)], None);
+        let (result, log) = logged(&mut s.e, |e| e.call(0x008b_87a0, &args![a, b, flag]).i32());
+        assert_eq!(result, 2);
+        assert_eq!(args_of(&log, 0x0048_c1b0).len(), 1);
+        // Entries with a negative rank are ignored.
+        let (mut s, a, b, flag) = reaction_scene(&[((0x10, 0x30), 2)], 0);
+        give_factions(&mut s, a, &[(0x10, -1)], None);
+        give_factions(&mut s, b, &[(0x30, 0)], None);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, b, flag]).i32(), 0);
+    }
+
+    #[test]
+    fn the_fight_reaction_towards_the_player_is_friendly_for_accepted_factions() {
+        let (mut s, a, _, flag) = reaction_scene(&[((0x10, 0x30), 2)], 0x10);
+        let player: Ptr<Actor> = Ptr::new(s.e.global::<u32>(PLAYER_CHARACTER));
+        give_factions(&mut s, a, &[(0x10, 0), (0x20, 0)], None);
+        give_factions(&mut s, player, &[(0x30, 0)], None);
+        s.e.mem.set_u8(flag, 0);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, player, flag]).i32(), 1);
+        assert_eq!(s.e.mem.u8(flag), 1);
+    }
+
+    #[test]
+    fn the_fight_reaction_with_changes_on_either_side() {
+        // Changes on the first actor only: its merged list against the other's chain.
+        let (mut s, a, b, flag) = reaction_scene(&[((0x11, 0x30), 2), ((0x10, 0x30), 1)], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        give_factions(&mut s, b, &[(0x30, 0)], None);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, b, flag]).i32(), 2);
+        // Changes on the second actor only.
+        let (mut s, a, b, flag) = reaction_scene(&[((0x10, 0x31), 2)], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], None);
+        give_factions(&mut s, b, &[(0x30, 0)], Some(&[(0x31, 0)]));
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, b, flag]).i32(), 2);
+        // Changes on both.
+        let (mut s, a, b, flag) = reaction_scene(&[((0x11, 0x31), 1)], 0);
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        give_factions(&mut s, b, &[(0x30, 0)], Some(&[(0x31, 0)]));
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, b, flag]).i32(), 1);
+        // The player as the other actor with changes: friendly, flag set (not for both-sides).
+        let (mut s, a, _, flag) = reaction_scene(&[], 0x10);
+        let player: Ptr<Actor> = Ptr::new(s.e.global::<u32>(PLAYER_CHARACTER));
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        give_factions(&mut s, player, &[(0x30, 0)], None);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, player, flag]).i32(), 1);
+        assert_eq!(s.e.mem.u8(flag), 1);
+        give_factions(&mut s, a, &[(0x10, 0)], None);
+        give_factions(&mut s, player, &[(0x30, 0)], Some(&[(0x31, 0)]));
+        s.e.mem.set_u8(flag, 0);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, player, flag]).i32(), 1);
+        assert_eq!(s.e.mem.u8(flag), 1);
+        give_factions(&mut s, a, &[(0x10, 0)], Some(&[(0x11, 0)]));
+        s.e.mem.set_u8(flag, 0);
+        assert_eq!(s.e.call(0x008b_87a0, &args![a, player, flag]).i32(), 1);
+        assert_eq!(s.e.mem.u8(flag), 0);
     }
 }
