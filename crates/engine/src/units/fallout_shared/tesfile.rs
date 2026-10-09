@@ -7,8 +7,13 @@
 //! header information and the lists of masters.
 //!
 //! Notes for the next session (session 1 translated the first 40 functions
-//! of the queue, `00470650` to `00472660`; the queue continues at
-//! `004726b0`):
+//! of the queue, `00470650` to `00472660`; session 2 the next 40, `004726b0`
+//! to `00473d00`, adding [`FormGroup`] (the 0x1C-byte entry of
+//! `m_grouplist`) and the helpers `seek_from_end` and `count_form`; the
+//! queue continues at `00473d20`). Session 1 still reaches `GetTESChunk`,
+//! `ReadFormHeader`, `ReadChunkHeader`, `CloseAllOpenGroups` and
+//! `FreeDecompressedForm` by address (their tests put doubles there);
+//! that works unchanged now that they are translated:
 //! - Layouts: [`TESFile`] (0x42C bytes, Xbox PDB names, PC offsets checked
 //!   against this unit's code), [`Form`] (the 0x18-byte record header,
 //!   `FORM`), [`FileHeader`], [`PathBuffer`] and [`Win32FindData`]. Fields
@@ -125,9 +130,120 @@ const ALWAYS_TRUE: u32 = 0x008d_0360;
 /// is reported.
 const NOTE_FAILURE: u32 = 0x0046_1300;
 
+// Callees and data of the second session (`004726b0` to `00473d00`).
+// Callees outside this unit are described by what their body does; the
+// engine map's names for several of them belong to other, folded code.
+/// `bMustEndianConvert` getter (`00401680`): the byte at `+0x299`.
+const MUST_ENDIAN_CONVERT: u32 = 0x0040_1680;
+/// Swaps the byte order of a six-byte chunk header (`u32` id, `u16` size)
+/// in place (`004141e0`, `this` = the header).
+const CHUNK_HEADER_ENDIAN: u32 = 0x0041_41e0;
+/// Moves the cursor past the current chunk and reads the next chunk header
+/// (`004726f0`, translated in `units/unplaced`): used after an `XXXX`
+/// chunk.
+const SKIP_TO_NEXT_CHUNK: u32 = 0x0047_26f0;
+/// `HighProcess::GetPostAnimationActions` (Xbox PDB name of folded code):
+/// answers the `u32` at `+0x424`, the size of the decompressed form buffer.
+const DECOMPRESSED_FORM_SIZE: u32 = 0x0047_27d0;
+/// `TESFile::DecompressCurrentForm` (Xbox PDB), later in this unit.
+const DECOMPRESS_CURRENT_FORM: u32 = 0x0047_40a0;
+/// The thread-safe file map's constructor (`004744a0(this, 0x25)`), later in
+/// this unit: a hash table of 0x25 buckets.
+const THREAD_FILE_MAP_CONSTRUCT: u32 = 0x0047_44a0;
+/// The thread-safe file map's lookup: `(map; key, &value)`.
+const THREAD_FILE_MAP_LOOKUP: u32 = 0x0085_3130;
+/// The thread-safe file map's `SetAt(map; key, value)` (the engine map's
+/// `NiTMapBase<..CombatThreat_P..>::SetAt` is folded code).
+const THREAD_FILE_MAP_SET_AT: u32 = 0x0084_4700;
+/// The map's iteration: `begin(map)` answers the first position and
+/// `next(map; &position, &key, &value)` steps it.
+const THREAD_FILE_MAP_BEGIN: u32 = 0x004b_9ba0;
+const THREAD_FILE_MAP_NEXT: u32 = 0x006b_7f20;
+/// Clears the map (`00438af0`).
+const THREAD_FILE_MAP_CLEAR: u32 = 0x0043_8af0;
+/// A call on a `TESFile` (`00483710`) made on each file of the map before
+/// it is deleted, and on a new thread-safe file after it is stored.
+const RELEASE_FILE: u32 = 0x0048_3710;
+/// Scalar deleting destructor `(object; 1)` (`004601a0`).
+const SCALAR_DELETE: u32 = 0x0046_01a0;
+/// `BSSimpleList::AddHead(list; &item)` (`005ae3d0`).
+const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+/// `BSSimpleList::IsEmpty(list)` (`008256d0`).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `BSFile` write `(file; data, size, &one, 1)` (`0044e120`); answers the
+/// number of bytes written.
+const BSFILE_WRITE: u32 = 0x0044_e120;
+/// `TESForm` accessors used by the writer: the form type index (the byte at
+/// `+4`), the flags word, and the form id (`+0xC`).
+const FORM_TYPE_INDEX: u32 = 0x0040_1170;
+const FORM_FLAGS: u32 = 0x0044_ddc0;
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `TESForm` calls made by `LoadForm`, described by their arguments.
+const FORM_SET_TYPE: u32 = 0x004f_15a0;
+const FORM_IS_FLAGGED: u32 = 0x0040_77c0;
+const FORM_SET_LOAD_FLAGS: u32 = 0x0040_3550;
+const FORM_FILE_FLAGS: u32 = 0x0052_24a0;
+const FORM_SKINNED_NODE: u32 = 0x008d_8ac0;
+const FORM_SET_FILE: u32 = 0x0048_4f50;
+/// `TESForm::FreeFormBuffer` (Xbox PDB): releases the buffer of the form
+/// that was written.
+const FORM_FREE_FORM_BUFFER: u32 = 0x0048_5b30;
+/// `(masked form id) -> bool` check used by `ReadFormHeader` (`00484b40`,
+/// `tesform.cpp`).
+const FORM_ID_NEEDS_STRIPPING: u32 = 0x0048_4b40;
+/// The current thread id (`0040fc90`) and the thread id of the procedure
+/// owner (`0044edb0`, `this` = the global at [`PROCEDURE_OWNER`]).
+const CURRENT_THREAD: u32 = 0x0040_fc90;
+const OWNER_THREAD: u32 = 0x0044_edb0;
+const PROCEDURE_OWNER: u32 = 0x011d_ea0c;
+/// Byte at `+0x61A` of the data handler (`004516b0`, `this` = the
+/// handler).
+const HANDLER_GROUPS_FLAG: u32 = 0x0045_16b0;
+/// `MessageHandler::IncDisableWarningCount(flag)` (Xbox PDB).
+const WARNING_COUNT: u32 = 0x0043_b2b0;
+/// CRT `sprintf(buffer, format, ...)`.
+const SPRINTF: u32 = 0x00ec_623a;
+/// The data handler's file table, `(handler) -> table` (`0045dfc0`: `+0x210`).
+const HANDLER_FILE_TABLE: u32 = 0x0045_dfc0;
+/// `(this) -> directory` of a `TESFile` (`00462e80`: `+0x124`).
+const FILE_DIRECTORY: u32 = 0x0046_2e80;
+/// The table of record tags by form type index: 12-byte entries whose first
+/// word is the tag.
+const FORM_TAG_TABLE: u32 = 0x0118_7008;
+/// Size of a group entry (`FORM_GROUP`) and of a record header.
+const GROUP_ENTRY_SIZE: u32 = 0x1c;
+
+// Messages of the second session.
+const MESSAGE_CHUNK_TOO_BIG: u32 = 0x0101_a0c0;
+const MESSAGE_CHUNK_SECOND_READ_FAILED: u32 = 0x0101_a078;
+const MESSAGE_CHUNK_FIRST_READ_FAILED: u32 = 0x0101_a130;
+const MESSAGE_WRITE_ERROR: u32 = 0x0101_a174;
+const MESSAGE_CREATE_GROUP_FAILED: u32 = 0x0101_a198;
+const MESSAGE_VERSION_TOO_HIGH: u32 = 0x0101_a1d4;
+/// The `double` 1.34 (the highest header version this exe loads).
+const HIGHEST_HEADER_VERSION: u32 = 0x0101_a208;
+
 /// The word at this address is the `whence` the code passes to `BSFile`'s
 /// seek (0 in the exe).
 pub(crate) const SEEK_MODE: u32 = 0x010a_2480;
+/// The `whence` that seeks from the end of the file (2 in the exe).
+const SEEK_FROM_END: u32 = 0x010a_2488;
+/// `"XXXX"` as a little-endian word: a chunk whose data is the real size of
+/// the chunk after it.
+const CHUNK_ID_XXXX: u32 = 0x5858_5858;
+/// Bits of a form's flags word that are saved in the record header.
+const SAVED_FORM_FLAGS_MASK: u32 = 0x3003_2fe0;
+/// `TES_RETURN_CODE` 10: a write to the file came up short.
+const RETURN_CODE_WRITE_ERROR: u32 = 10;
+/// Size of a `TESFile` (the allocation of a per-thread copy).
+const TES_FILE_SIZE: u32 = 0x42c;
+/// `(form) -> text`: the name of the form's type (`00440e30`: the string of
+/// the form's type index in the tag table at `01187004`).
+const FORM_TYPE_NAME: u32 = 0x0044_0e30;
+/// Globals written by the form that is being saved: the buffer pointer
+/// (`011c54cc`) and its size (`011c54d0`).
+const SAVE_BUFFER: u32 = 0x011c_54cc;
+const SAVE_BUFFER_SIZE: u32 = 0x011c_54d0;
 /// The `TESDataHandler` singleton pointer.
 pub(crate) const DATA_HANDLER: u32 = 0x011c_3f2c;
 /// A global the stream code passes as `this` to [`ALWAYS_TRUE`].
@@ -231,6 +347,16 @@ layout! {
         0x04 iFormCount: u32,
         /// `iNextFormID` (Xbox PDB).
         0x08 iNextFormID: u32,
+    }
+
+    /// `FORM_GROUP` (Xbox PDB), 0x1C bytes: a group entry of
+    /// `m_grouplist`.
+    pub struct FormGroup: 0x1C {
+        /// `GroupData` (Xbox PDB): the group's record header.
+        0x00 GroupData: Inline<Form>,
+        /// `iGroupOffset` (Xbox PDB): the file offset the header was
+        /// written at.
+        0x18 iGroupOffset: u32,
     }
 
     /// A `char[260]` path or name buffer embedded in an object.
@@ -382,6 +508,13 @@ fn log(e: &mut Engine, words: &[u32]) {
 /// global at [`SEEK_MODE`]).
 fn seek(e: &mut Engine, file: Ptr, offset: u32) {
     let whence: u32 = e.global(SEEK_MODE);
+    e.vcall(file.addr(), 0x14, &args![offset, whence]);
+}
+
+/// Seeks the `BSFile` to `offset` counted from the end of the file (vtable
+/// slot `+0x14`, `whence` from the global at [`SEEK_FROM_END`]).
+fn seek_from_end(e: &mut Engine, file: Ptr, offset: u32) {
+    let whence: u32 = e.global(SEEK_FROM_END);
     e.vcall(file.addr(), 0x14, &args![offset, whence]);
 }
 
@@ -1346,6 +1479,862 @@ pub fn tes_file_get_tes_form(e: &mut Engine, this: Ptr<TESFile>) -> u32 {
     e.call(TYPE_FROM_FORM_TAG, &args![tag]).u32()
 }
 
+// Translated from 004726b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetTESChunk` (Xbox PDB): reads the chunk header if none is
+/// loaded (answering 0 when it cannot be read), then answers the current
+/// chunk id.
+pub fn tes_file_get_tes_chunk(e: &mut Engine, this: Ptr<TESFile>) -> u32 {
+    if e.get(this, TESFile::m_currentchunkID) == 0 && !tes_file_read_chunk_header(e, this) {
+        return 0;
+    }
+    e.get(this, TESFile::m_currentchunkID)
+}
+
+// Translated from 004727f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetChunkData` (Xbox PDB): reads a four-byte chunk (the buffer
+/// is a `u32`) and swaps its byte order when the file must be converted.
+/// The answer is that of [`tes_file_get_chunk_data_ov3`]; the decompiler
+/// shows it as `void` but the code returns its `AL`.
+pub fn tes_file_get_chunk_data(e: &mut Engine, this: Ptr<TESFile>, buffer: Ptr) -> bool {
+    let read = tes_file_get_chunk_data_ov3(e, this, buffer, 4);
+    if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+        e.call(SWAP_U32, &args![buffer, 0u32]);
+    }
+    read
+}
+
+// Translated from 00472840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetChunkData_ov2` (Xbox PDB): reads a two-byte chunk (the
+/// buffer is a `u16`) and swaps its byte order when the file must be
+/// converted.
+pub fn tes_file_get_chunk_data_ov2(e: &mut Engine, this: Ptr<TESFile>, buffer: Ptr) -> bool {
+    let read = tes_file_get_chunk_data_ov3(e, this, buffer, 2);
+    if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+        e.call(SWAP_U16, &args![buffer, 0u32]);
+    }
+    read
+}
+
+// Translated from 00472890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetChunkData_ov3` (Xbox PDB): copies the current chunk's data
+/// into `buffer`. A chunk without data answers true at once. If the cursor
+/// into the chunk (`m_chunkoffset`) is not at its start, an uncompressed
+/// record is first seeked to the chunk's data; then the data is read from
+/// the file (or copied from the decompressed form). With a `max_size`
+/// below the chunk's size only `max_size - 1` bytes are read, the last byte
+/// of the buffer is zeroed and the truncation is reported. Answers false
+/// when a file read comes up short (reported with the system's message);
+/// the decompiler shows the function as `void`.
+pub fn tes_file_get_chunk_data_ov3(
+    e: &mut Engine,
+    this: Ptr<TESFile>,
+    buffer: Ptr,
+    max_size: u32,
+) -> bool {
+    let chunk_size = e.get(this, TESFile::m_actualChunkSize);
+    if chunk_size == 0 {
+        return true;
+    }
+    let compressed = fn_00472100(e, this);
+    if e.get(this, TESFile::m_chunkoffset) != 0 {
+        if !compressed {
+            let header_size = e.call(FORM_HEADER_SIZE, &args![this]).u32();
+            let position = e
+                .get(this, TESFile::m_fileoffset)
+                .wrapping_add(header_size)
+                .wrapping_add(e.get(this, TESFile::m_formoffset))
+                .wrapping_add(6);
+            let file = e.get(this, TESFile::m_pFile);
+            seek(e, file, position);
+        }
+        e.set(this, TESFile::m_chunkoffset, 0);
+    }
+    if max_size != 0 && chunk_size > max_size {
+        let wanted = max_size - 1;
+        e.mem
+            .set_u8(buffer.addr().wrapping_add(max_size).wrapping_sub(1), 0);
+        if !compressed {
+            let file = e.get(this, TESFile::m_pFile);
+            let read = e.call(BSFILE_READ, &args![file, buffer, wanted]).u32();
+            e.set(this, TESFile::m_chunkoffset, read);
+            if read != wanted {
+                report_set_file_pointer_failure(e, MESSAGE_CHUNK_FIRST_READ_FAILED);
+                return false;
+            }
+        } else {
+            let offset = e.get(this, TESFile::m_formoffset).wrapping_add(6);
+            let source = fn_00473930(e, this).wrapping_add(offset);
+            e.call(MEMCPY, &args![buffer, source, wanted]);
+            e.set(this, TESFile::m_chunkoffset, wanted);
+        }
+        // The chunk id and the record tag as NUL-terminated text.
+        let chunk_id = e.get(this, TESFile::m_currentchunkID);
+        let form = this.at(TESFile::m_currentform);
+        let form_tag = e.get(form, Form::form);
+        let form_id = e.get(form, Form::iFormID);
+        e.with_stack(0x10, |e, text| {
+            e.mem.set_u32(text.addr(), chunk_id);
+            e.mem.set_u8(text.addr() + 4, 0);
+            e.mem.set_u32(text.addr() + 8, form_tag);
+            e.mem.set_u8(text.addr() + 12, 0);
+            log(
+                e,
+                &args![
+                    MESSAGE_CHUNK_TOO_BIG,
+                    chunk_size,
+                    text,
+                    text.addr() + 8,
+                    form_id,
+                    max_size,
+                    buffer
+                ],
+            );
+        });
+        return true;
+    }
+    if !compressed {
+        let file = e.get(this, TESFile::m_pFile);
+        let read = e.call(BSFILE_READ, &args![file, buffer, chunk_size]).u32();
+        e.set(this, TESFile::m_chunkoffset, read);
+        if read != chunk_size {
+            report_set_file_pointer_failure(e, MESSAGE_CHUNK_SECOND_READ_FAILED);
+            return false;
+        }
+    } else {
+        let offset = e.get(this, TESFile::m_formoffset).wrapping_add(6);
+        let source = fn_00473930(e, this).wrapping_add(offset);
+        e.call(MEMCPY, &args![buffer, source, chunk_size]);
+        e.set(this, TESFile::m_chunkoffset, chunk_size);
+    }
+    true
+}
+
+// Translated from 00472bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::ReadFormHeader` (Xbox PDB): reads the 0x18-byte record header
+/// at the file's position into `m_currentform` (answering false when the
+/// file is not open, and zeroing the header when the read comes up short),
+/// converts its byte order if needed and, for a record that is not one of
+/// the two header-only tags, replaces the mod index (top byte) of its form
+/// id by the compile index of the master it names (or this file's own),
+/// then strips the index if the id check answers true.
+pub fn tes_file_read_form_header(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    let file = e.get(this, TESFile::m_pFile);
+    if file.is_null() {
+        return false;
+    }
+    let form = this.at(TESFile::m_currentform);
+    let read = e.call(BSFILE_READ, &args![file, form, 0x18u32]).u32();
+    if read != 0x18 {
+        e.call(MEMSET, &args![form, 0u32, 0x18u32]);
+        return false;
+    }
+    if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+        form_endian(e, form);
+    }
+    let tag = e.get(form, Form::form);
+    if tag != e.global::<u32>(RECORD_TAG_01187020) && tag != e.global::<u32>(RECORD_TAG_011873C8) {
+        let mut master = Ptr::NULL;
+        if !e.get(this, TESFile::m_pMasterPtrs).is_null() {
+            let index = (e.get(form, Form::iFormID) >> 24).wrapping_add(1);
+            master = tes_file_get_index_file(e, this, index);
+        }
+        let mod_index = if !master.is_null() {
+            fn_00473250(e, master.cast())
+        } else {
+            e.get(this, TESFile::cCompileIndex)
+        };
+        let form_id = e.get(form, Form::iFormID);
+        e.set(
+            form,
+            Form::iFormID,
+            (mod_index as u32) << 24 | form_id & 0x00ff_ffff,
+        );
+        let stripped = e.get(form, Form::iFormID) & 0x00ff_ffff;
+        if e.call(FORM_ID_NEEDS_STRIPPING, &args![stripped]).bool() {
+            e.set(form, Form::iFormID, stripped);
+        }
+    }
+    true
+}
+
+// Translated from 00472d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::ReadChunkHeader` (Xbox PDB): reads the six-byte chunk header
+/// (`u32` id, `u16` size) at the cursor, from the file or from the
+/// decompressed form, into `m_currentchunkID` and `m_actualChunkSize`
+/// (swapping the byte order if needed). Answers false, with the chunk
+/// cleared, when it cannot be read. An `XXXX` chunk holds the real size of
+/// the chunk after it: it is read (four bytes), the cursor moves past it and
+/// the size is stored.
+pub fn tes_file_read_chunk_header(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    e.with_stack(0x10, |e, header| {
+        if !fn_00472100(e, this) {
+            let file = e.get(this, TESFile::m_pFile);
+            let read = e.call(BSFILE_READ, &args![file, header, 6u32]).u32();
+            if read != 6 {
+                fn_004720d0(e, this);
+                return false;
+            }
+        } else {
+            let offset = e.get(this, TESFile::m_formoffset);
+            let buffer = fn_00473930(e, this);
+            if buffer == 0 || offset >= e.call(DECOMPRESSED_FORM_SIZE, &args![this]).u32() {
+                fn_004720d0(e, this);
+                return false;
+            }
+            e.call(MEMCPY, &args![header, buffer.wrapping_add(offset), 6u32]);
+        }
+        if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+            e.call(CHUNK_HEADER_ENDIAN, &args![header]);
+        }
+        let id = e.mem.u32(header.addr());
+        e.set(this, TESFile::m_currentchunkID, id);
+        let size = e.mem.u16(header.addr() + 4) as u32;
+        e.set(this, TESFile::m_actualChunkSize, size);
+        if id == CHUNK_ID_XXXX {
+            let real_size = header.byte_add(8);
+            e.mem.set_u32(real_size.addr(), 0);
+            tes_file_get_chunk_data_ov3(e, this, real_size, 0);
+            if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+                e.call(SWAP_U32, &args![real_size, 0u32]);
+            }
+            e.call(SKIP_TO_NEXT_CHUNK, &args![this]);
+            let value = e.mem.u32(real_size.addr());
+            e.set(this, TESFile::m_actualChunkSize, value);
+        }
+        true
+    })
+}
+
+// Translated from 00472e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::StartForm` (Xbox PDB): begins writing `form`. Closes and opens
+/// the groups it needs, fills `m_saveform` (record tag of the form's type,
+/// length 0, the form's flags masked with `0x30032FE0`, its form id and the
+/// form version), remembers the file offset it is written at
+/// (`m_saveformoffset`) and writes the header there.
+pub fn tes_file_start_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
+    tes_file_start_and_end_groups_for_form(e, this, form);
+    let save = this.at(TESFile::m_saveform);
+    let flags = e.call(FORM_FLAGS, &args![form]).u32();
+    e.set(save, Form::flags, flags & SAVED_FORM_FLAGS_MASK);
+    let type_index = e.call(FORM_TYPE_INDEX, &args![form]).u32();
+    let tag = e.mem.u32(FORM_TAG_TABLE + type_index.wrapping_mul(12));
+    e.set(save, Form::form, tag);
+    let form_id = e.call(FORM_ID, &args![form]).u32();
+    e.set(save, Form::iFormID, form_id);
+    let version = fn_00470bb0(e) as u16;
+    e.set(save, Form::sFormVersion, version);
+    e.set(save, Form::sVCVersion, 0);
+    e.set(save, Form::iVersionControl, 0);
+    e.set(save, Form::length, 0);
+    let file = e.get(this, TESFile::m_pFile);
+    seek_from_end(e, file, 0);
+    let position = fn_004720a0(e, file);
+    e.set(this, TESFile::m_saveformoffset, position);
+    e.set(this, TESFile::m_savechunkoffset, 0);
+    tes_file_easy_write(e, this, save.addr(), 0x18);
+}
+
+// Translated from 00472f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::LoadForm` (Xbox PDB): gives `form` the type of the current
+/// record ([`tes_file_get_tes_form`]), sets its load flags (a word taken
+/// from this file, plus `0x4000` when the form's flag test answers true),
+/// hands it a node through its virtual slot `+0x128` and records this file
+/// as its file.
+pub fn tes_file_load_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
+    let record_type = tes_file_get_tes_form(e, this);
+    e.call(FORM_SET_TYPE, &args![form, record_type]);
+    let flags = e.call(FORM_FILE_FLAGS, &args![this]).u32();
+    if e.call(FORM_IS_FLAGGED, &args![form]).bool() {
+        e.call(FORM_SET_LOAD_FLAGS, &args![form, flags | 0x4000]);
+    } else {
+        e.call(FORM_SET_LOAD_FLAGS, &args![form, flags]);
+    }
+    let node = e.call(FORM_SKINNED_NODE, &args![this, 1u32]).u32();
+    e.vcall(form.addr(), 0x128, &args![node]);
+    e.call(FORM_SET_FILE, &args![form, this]);
+}
+
+// Translated from 00472fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::AddTESForm` (Xbox PDB): writes the form that was saved into
+/// the global buffer (`011c54cc`, size `011c54d0`) at the end of the file,
+/// after closing and opening the groups `form` needs, and counts it in
+/// `fileHeaderInfo.iFormCount` when a buffer was written. Answers the
+/// result of [`tes_file_easy_write`] and releases the form's buffer.
+pub fn tes_file_add_tes_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) -> u32 {
+    tes_file_start_and_end_groups_for_form(e, this, form);
+    let file = e.get(this, TESFile::m_pFile);
+    seek_from_end(e, file, 0);
+    let size = fn_00473080(e, form);
+    let data = fn_00473070(e, form);
+    let result = tes_file_easy_write(e, this, data, size);
+    if fn_00473070(e, form) != 0 && fn_00473080(e, form) != 0 {
+        count_form(e, this);
+    }
+    e.call(FORM_FREE_FORM_BUFFER, &args![form]);
+    result
+}
+
+/// `fileHeaderInfo.iFormCount += 1`.
+fn count_form(e: &mut Engine, this: Ptr<TESFile>) {
+    let header = this.at(TESFile::fileHeaderInfo);
+    let count = e.get(header, FileHeader::iFormCount);
+    e.set(header, FileHeader::iFormCount, count.wrapping_add(1));
+}
+
+// Translated from 00473070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the global at `011c54cc`: the buffer of the form being saved.
+pub fn fn_00473070(e: &mut Engine, _unused_this: Ptr) -> u32 {
+    e.global(SAVE_BUFFER)
+}
+
+// Translated from 00473080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the global at `011c54d0`: the size of the buffer of the form
+/// being saved.
+pub fn fn_00473080(e: &mut Engine, _unused_this: Ptr) -> u32 {
+    e.global(SAVE_BUFFER_SIZE)
+}
+
+// Translated from 00473090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts one more form in `fileHeaderInfo.iFormCount`, copies the saved
+/// chunk offset into the save header's length (`m_saveform.length`), seeks
+/// back to the offset the header was written at (`m_saveformoffset`) and
+/// writes the header again. Answers the write result.
+pub fn fn_00473090(e: &mut Engine, this: Ptr<TESFile>) -> u32 {
+    count_form(e, this);
+    let save = this.at(TESFile::m_saveform);
+    let length = e.get(this, TESFile::m_savechunkoffset);
+    e.set(save, Form::length, length);
+    let file = e.get(this, TESFile::m_pFile);
+    let position = e.get(this, TESFile::m_saveformoffset);
+    seek(e, file, position);
+    tes_file_easy_write(e, this, save.addr(), 0x18)
+}
+
+// Translated from 00473110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::EasyWrite` (Xbox PDB): writes `size` bytes at `data` to the
+/// file. Stores the result in `m_lastError` and answers it: 0 when `data`
+/// is null or everything was written, else 10 (reported) after a short
+/// write.
+pub fn tes_file_easy_write(e: &mut Engine, this: Ptr<TESFile>, data: u32, size: u32) -> u32 {
+    if data != 0 {
+        let file = e.get(this, TESFile::m_pFile);
+        if fn_00473180(e, file, data, size) < size {
+            let error_slot = e.call(ERRNO, &args![]).u32();
+            let _error = e.mem.u32(error_slot);
+            e.set(this, TESFile::m_lastError, RETURN_CODE_WRITE_ERROR);
+            log(e, &args![MESSAGE_WRITE_ERROR]);
+            return e.get(this, TESFile::m_lastError);
+        }
+    }
+    e.set(this, TESFile::m_lastError, 0);
+    e.get(this, TESFile::m_lastError)
+}
+
+// Translated from 00473180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes `size` bytes at `data` to the `BSFile` (`0044e120` with a count of
+/// 1 and the flag 1); answers the number of bytes written.
+pub fn fn_00473180(e: &mut Engine, this: Ptr, data: u32, size: u32) -> u32 {
+    e.with_stack(4, |e, one| {
+        e.mem.set_u32(one.addr(), 1);
+        e.call(BSFILE_WRITE, &args![this, data, size, one, 1u32])
+            .u32()
+    })
+}
+
+// Translated from 004731c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the top byte of `m_Flags`.
+pub fn fn_004731c0(e: &mut Engine, this: Ptr<TESFile>, value: u32) {
+    let flags = e.get(this, TESFile::m_Flags) & 0x00ff_ffff;
+    e.set(this, TESFile::m_Flags, flags | value << 24);
+}
+
+// Translated from 00473210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the compile index: the top byte of `fileHeaderInfo.iNextFormID` and
+/// `cCompileIndex`.
+pub fn fn_00473210(e: &mut Engine, this: Ptr<TESFile>, index: u8) {
+    let header = this.at(TESFile::fileHeaderInfo);
+    let next = e.get(header, FileHeader::iNextFormID);
+    e.set(
+        header,
+        FileHeader::iNextFormID,
+        (index as u32) << 24 | next & 0x00ff_ffff,
+    );
+    e.set(this, TESFile::cCompileIndex, index);
+}
+
+// Translated from 00473250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers `cCompileIndex`.
+pub fn fn_00473250(e: &mut Engine, this: Ptr<TESFile>) -> u8 {
+    e.get(this, TESFile::cCompileIndex)
+}
+
+// Translated from 00473270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// (cdecl, one argument) Destroys every item of the `BSSimpleList` whose
+/// head node is `list`: while the list is not empty, deletes the head's
+/// item (a non-null one through its scalar deleting destructor) and removes
+/// the head.
+pub fn fn_00473270(e: &mut Engine, list: Ptr) {
+    while !e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        let item = list_item(e, list.addr());
+        if item != 0 {
+            e.call(SCALAR_DELETE, &args![item, 1u32]);
+        }
+        e.call(LIST_REMOVE_HEAD, &args![list]);
+    }
+}
+
+// Translated from 004732d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the item at the head of `m_grouplist`: the innermost open group
+/// (a `FORM_GROUP`), or 0.
+pub fn fn_004732d0(e: &mut Engine, this: Ptr<TESFile>) -> u32 {
+    let list = this.at(TESFile::m_grouplist).addr();
+    list_item(e, list)
+}
+
+// Translated from 004732f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the address of `m_grouplist`.
+pub fn fn_004732f0(_e: &mut Engine, this: Ptr<TESFile>) -> Ptr<BSSimpleList> {
+    this.at(TESFile::m_grouplist)
+}
+
+// Translated from 00473310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::StartGroup` (Xbox PDB): pushes a copy of the group header
+/// `group_header` on `m_grouplist` ([`fn_00473440`]) and, when the file is
+/// open, writes it at the end of the file, remembering the offset in the
+/// entry (`iGroupOffset`) and counting the record in `iFormCount`.
+pub fn tes_file_start_group(e: &mut Engine, this: Ptr<TESFile>, group_header: Ptr) {
+    if group_header.is_null() {
+        return;
+    }
+    fn_00473440(e, this, group_header);
+    let file = e.get(this, TESFile::m_pFile);
+    if !file.is_null() {
+        let group = Ptr::<FormGroup>::new(fn_004732d0(e, this));
+        seek_from_end(e, file, 0);
+        let position = fn_004720a0(e, file);
+        e.set(group, FormGroup::iGroupOffset, position);
+        tes_file_easy_write(e, this, group.addr(), 0x18);
+        count_form(e, this);
+    }
+}
+
+// Translated from 004733a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::EndGroup` (Xbox PDB): closes the innermost group. When the
+/// file is open, stores the group's length (the file's end minus the offset
+/// it started at) in its header and rewrites the header there. Then removes
+/// the entry ([`fn_00473490`]).
+pub fn tes_file_end_group(e: &mut Engine, this: Ptr<TESFile>) {
+    let group = Ptr::<FormGroup>::new(fn_004732d0(e, this));
+    if group.is_null() {
+        return;
+    }
+    let file = e.get(this, TESFile::m_pFile);
+    if !file.is_null() {
+        seek_from_end(e, file, 0);
+        let end = fn_004720a0(e, file);
+        let start = e.get(group, FormGroup::iGroupOffset);
+        e.set(
+            group.at(FormGroup::GroupData),
+            Form::length,
+            end.wrapping_sub(start),
+        );
+        seek(e, file, start);
+        tes_file_easy_write(e, this, group.addr(), 0x18);
+    }
+    fn_00473490(e, this);
+}
+
+// Translated from 00473440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates a 0x1C-byte `FORM_GROUP`, adds it at the head of `m_grouplist`
+/// and copies the 0x18-byte header `header` into it. Does nothing for a null
+/// header.
+pub fn fn_00473440(e: &mut Engine, this: Ptr<TESFile>, header: Ptr) {
+    if header.is_null() {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![GROUP_ENTRY_SIZE]).u32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), block);
+        e.call(LIST_ADD_HEAD, &args![this.at(TESFile::m_grouplist), slot]);
+        let entry = e.mem.u32(slot.addr());
+        e.call(MEMCPY, &args![entry, header, 0x18u32]);
+    });
+}
+
+// Translated from 00473490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the innermost group entry: drops the head node of `m_grouplist`
+/// and deletes the entry. Does nothing when there is none.
+pub fn fn_00473490(e: &mut Engine, this: Ptr<TESFile>) {
+    let group = fn_004732d0(e, this);
+    if group != 0 {
+        e.call(LIST_REMOVE_HEAD, &args![this.at(TESFile::m_grouplist)]);
+        delete(e, group);
+    }
+}
+
+// Translated from 004734d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::FindForm` (Xbox PDB): positions the cursor on the record of
+/// `form`. Answers false for a null form, a file with no groups, a closed
+/// file or one that is not ready. If the form's virtual slot `+0x7C` (given
+/// this file) answers true, the form is taken as found. Otherwise the file
+/// is rewound and its records are scanned: group records the form's slot
+/// `+0x110` (`header, 1, 0`) accepts are entered, the others are skipped
+/// ([`fn_00473660`]); a record with the tag of the form's type (slot
+/// `+0x8C` indexes the tag table) and the form's id ends the scan with true.
+pub fn tes_file_find_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) -> bool {
+    if form.is_null() || !fn_00473640(e, this) {
+        return false;
+    }
+    let file = e.get(this, TESFile::m_pFile);
+    if file.is_null() || !e.call(FILE_IS_READY, &args![file]).bool() {
+        return false;
+    }
+    if e.vcall(form.addr(), 0x7c, &args![this]).bool() {
+        return true;
+    }
+    tes_file_tes_rewind(e, this, 1);
+    let current = this.at(TESFile::m_currentform);
+    while e.get(current, Form::form) == e.global::<u32>(RECORD_TAG_01187014) {
+        tes_file_next_form(e, this, 1);
+    }
+    let type_index = e.vcall(form.addr(), 0x8c, &args![]).u32();
+    let wanted_tag = e.mem.u32(FORM_TAG_TABLE + type_index.wrapping_mul(12));
+    let wanted_id = e.call(FORM_ID, &args![form]).u32();
+    loop {
+        let tag = e.get(current, Form::form);
+        if tag == 0 {
+            return false;
+        }
+        if tag == e.global::<u32>(RECORD_TAG_01187020) {
+            if e.vcall(form.addr(), 0x110, &args![current, 1u32, 0u32])
+                .bool()
+            {
+                tes_file_next_form(e, this, 1);
+            } else {
+                fn_00473660(e, this);
+            }
+        } else if tag == wanted_tag && e.get(current, Form::iFormID) == wanted_id {
+            return true;
+        } else {
+            tes_file_next_form(e, this, 1);
+        }
+    }
+}
+
+// Translated from 00473640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers `bHasGroups`.
+pub fn fn_00473640(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    e.get(this, TESFile::bHasGroups)
+}
+
+// Translated from 00473660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the current record is a group header (the tag at
+/// [`RECORD_TAG_01187020`]), clears its tag, takes the header size off its
+/// length and moves on to the next record ([`fn_004721d0`]), answering
+/// whether one was read; else false.
+pub fn fn_00473660(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    let form = this.at(TESFile::m_currentform);
+    if e.get(form, Form::form) != e.global::<u32>(RECORD_TAG_01187020) {
+        return false;
+    }
+    e.set(form, Form::form, 0);
+    let header_size = e.call(FORM_HEADER_SIZE, &args![this]).u32();
+    let length = e.get(form, Form::length);
+    e.set(form, Form::length, length.wrapping_sub(header_size));
+    fn_004721d0(e, this)
+}
+
+// Translated from 004736c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::StartAndEndGroupsForForm` (Xbox PDB): makes the open groups fit
+/// `form` before it is written (nothing for a null form or one whose type
+/// index is 1). The form's virtual slot `+0x110` (`group, flag, 1`) tells
+/// whether a group is acceptable for it: the open groups are ended up to the
+/// outermost one it does not accept with flag 1; then groups are started
+/// (slot `+0x114` builds a group header for the current innermost group)
+/// until the innermost one is accepted with flag 0. When the form cannot
+/// build a group header with the group tag, the failure is reported.
+pub fn tes_file_start_and_end_groups_for_form(e: &mut Engine, this: Ptr<TESFile>, form: Ptr) {
+    if form.is_null() || e.call(FORM_TYPE_INDEX, &args![form]).u32() == 1 {
+        return;
+    }
+    let mut group;
+    let mut outermost_refused = 0u32;
+    let mut node = fn_004732f0(e, this).addr();
+    while node != 0 {
+        group = list_item(e, node);
+        if group != 0
+            && !e
+                .vcall(form.addr(), 0x110, &args![group, 1u32, 1u32])
+                .bool()
+        {
+            outermost_refused = group;
+        }
+        node = list_next(e, node);
+    }
+    if outermost_refused != 0 {
+        group = fn_004732d0(e, this);
+        while group != 0 {
+            tes_file_end_group(e, this);
+            if group == outermost_refused {
+                group = 0;
+            } else {
+                group = fn_004732d0(e, this);
+            }
+        }
+    }
+    group = fn_004732d0(e, this);
+    loop {
+        if group != 0
+            && e.vcall(form.addr(), 0x110, &args![group, 0u32, 1u32])
+                .bool()
+        {
+            return;
+        }
+        let made = e.with_stack(0x18, |e, header| {
+            e.vcall(form.addr(), 0x114, &args![header, group]);
+            if e.get(header.cast::<Form>(), Form::form) == e.global::<u32>(RECORD_TAG_01187020) {
+                tes_file_start_group(e, this, header);
+                true
+            } else {
+                false
+            }
+        });
+        if !made {
+            let form_id = e.call(FORM_ID, &args![form]).u32();
+            let name = e.vcall(form.addr(), 0x130, &args![]).u32();
+            let type_name = e.call(FORM_TYPE_NAME, &args![form]).u32();
+            log(
+                e,
+                &args![MESSAGE_CREATE_GROUP_FAILED, type_name, name, form_id],
+            );
+            return;
+        }
+        group = fn_004732d0(e, this);
+    }
+}
+
+// Translated from 00473830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::CloseAllOpenGroups` (Xbox PDB): while a group is open, ends it
+/// properly ([`tes_file_end_group`]) if the data handler's byte at `+0x61A`
+/// is set, else just removes its entry ([`fn_00473490`]).
+pub fn tes_file_close_all_open_groups(e: &mut Engine, this: Ptr<TESFile>) {
+    while fn_004732d0(e, this) != 0 {
+        let handler: u32 = e.global(DATA_HANDLER);
+        if e.call(HANDLER_GROUPS_FLAG, &args![handler]).bool() {
+            tes_file_end_group(e, this);
+        } else {
+            fn_00473490(e, this);
+        }
+    }
+}
+
+// Translated from 00473880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers false.
+pub fn fn_00473880(_e: &mut Engine, _unused_this: Ptr<TESFile>) -> bool {
+    false
+}
+
+// Translated from 004738a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::IsFileVersionTooHigh` (Xbox PDB): true when the header version
+/// is above 1.34 (the `double` at `0101a208`), which is reported with
+/// warnings disabled around the report ("File %s is a higher version than
+/// this EXE can load.").
+pub fn tes_file_is_file_version_too_high(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    let version = e.call(HEADER_VERSION, &args![this]).f32() as f64;
+    let highest: f64 = e.global(HIGHEST_HEADER_VERSION);
+    if version > highest {
+        e.call(WARNING_COUNT, &args![0u32]);
+        let name = e.call(FILE_NAME, &args![this]).u32();
+        e.with_stack(PATH_BUFFER_SIZE, |e, text| {
+            e.call(SPRINTF, &args![text, MESSAGE_VERSION_TOO_HIGH, name]);
+            log(e, &args![text]);
+        });
+        e.call(WARNING_COUNT, &args![1u32]);
+        true
+    } else {
+        false
+    }
+}
+
+// Translated from 00473930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers the decompressed form buffer (`pDecompressedFormBuffer`),
+/// decompressing the current form first when there is none.
+pub fn fn_00473930(e: &mut Engine, this: Ptr<TESFile>) -> u32 {
+    if e.get(this, TESFile::pDecompressedFormBuffer).is_null() {
+        e.call(DECOMPRESS_CURRENT_FORM, &args![this]);
+    }
+    e.get(this, TESFile::pDecompressedFormBuffer).addr()
+}
+
+// Translated from 00473960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees the decompressed form buffer, if any, and clears its pointer and
+/// size.
+pub fn fn_00473960(e: &mut Engine, this: Ptr<TESFile>) {
+    let buffer = e.get(this, TESFile::pDecompressedFormBuffer);
+    if !buffer.is_null() {
+        e.call(OPERATOR_DELETE, &args![buffer]);
+        e.set(this, TESFile::pDecompressedFormBuffer, Ptr::NULL);
+        e.set(this, TESFile::iDecompressedFormBufferSize, 0);
+    }
+}
+
+// Translated from 004739b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetThreadSafeFile` (Xbox PDB): the file to use on the current
+/// thread. Goes up `pThreadSafeParent` to the root file ([`fn_00473c70`]);
+/// if the current thread is the procedure owner's, answers that root, else
+/// the root's per-thread copy ([`tes_file_get_thread_safe_file_for_thread`]).
+pub fn tes_file_get_thread_safe_file(e: &mut Engine, this: Ptr<TESFile>) -> Ptr<TESFile> {
+    let mut root = this;
+    while !fn_00473c70(e, root).is_null() {
+        root = fn_00473c70(e, root);
+    }
+    if !root.is_null() {
+        let thread = e.call(CURRENT_THREAD, &args![]).u32();
+        let owner: u32 = e.global(PROCEDURE_OWNER);
+        if thread == e.call(OWNER_THREAD, &args![owner]).u32() {
+            return root;
+        }
+    }
+    let thread = e.call(CURRENT_THREAD, &args![]).u32();
+    tes_file_get_thread_safe_file_for_thread(e, root, thread)
+}
+
+// Translated from 00473a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the per-thread file copies: walks `pThreadSafeFileMap`
+/// releasing and deleting each file, clears the map, deletes it through its
+/// virtual destructor and zeroes the pointer. Does nothing without a map.
+pub fn fn_00473a10(e: &mut Engine, this: Ptr<TESFile>) {
+    let map = e.get(this, TESFile::pThreadSafeFileMap);
+    if map.is_null() {
+        return;
+    }
+    e.with_stack(12, |e, slots| {
+        let position = slots;
+        let key = slots.byte_add(4);
+        let value = slots.byte_add(8);
+        let first = e.call(THREAD_FILE_MAP_BEGIN, &args![map]).u32();
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            e.mem.set_u32(key.addr(), 0);
+            e.mem.set_u32(value.addr(), 0);
+            e.call(THREAD_FILE_MAP_NEXT, &args![map, position, key, value]);
+            let file = e.mem.u32(value.addr());
+            e.call(RELEASE_FILE, &args![file]);
+            if file != 0 {
+                e.call(SCALAR_DELETE, &args![file, 1u32]);
+            }
+        }
+    });
+    e.call(THREAD_FILE_MAP_CLEAR, &args![map]);
+    let map = e.get(this, TESFile::pThreadSafeFileMap);
+    if !map.is_null() {
+        e.vcall(map.addr(), 0, &args![1u32]);
+    }
+    e.set(this, TESFile::pThreadSafeFileMap, Ptr::NULL);
+}
+
+// Translated from 00473ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetThreadSafeFileForThread` (Xbox PDB): this file's own copy
+/// for thread `thread`. Looks it up in `pThreadSafeFileMap`; if there is
+/// none, builds one: a new `TESFile` with this file's directory and name,
+/// the same master flag and compile index, an index table built against the
+/// data handler's file table, this file's root as parent, opened, and
+/// stored in the map (which is created first when needed). The compiler's
+/// exception-unwinding frame is not translated.
+pub fn tes_file_get_thread_safe_file_for_thread(
+    e: &mut Engine,
+    this: Ptr<TESFile>,
+    thread: u32,
+) -> Ptr<TESFile> {
+    let mut copy = 0u32;
+    let map = e.get(this, TESFile::pThreadSafeFileMap);
+    if !map.is_null() {
+        copy = e.with_stack(4, |e, slot| {
+            e.call(THREAD_FILE_MAP_LOOKUP, &args![map, thread, slot]);
+            e.mem.u32(slot.addr())
+        });
+    }
+    if copy == 0 {
+        let block = e.call(OPERATOR_NEW, &args![TES_FILE_SIZE]).u32();
+        let created = if block != 0 {
+            let name = e.call(FILE_NAME, &args![this]).u32();
+            let directory = e.call(FILE_DIRECTORY, &args![this]).u32();
+            tes_file_tes_file(e, Ptr::new(block), Ptr::new(directory), Ptr::new(name), 0)
+        } else {
+            Ptr::NULL
+        };
+        let new_file = created;
+        let master = tes_file_get_master(e, this);
+        fn_00471c50(e, new_file, master);
+        let compile_index = fn_00473250(e, this);
+        fn_00473210(e, new_file, compile_index);
+        let handler: u32 = e.global(DATA_HANDLER);
+        let table = e.call(HANDLER_FILE_TABLE, &args![handler]).u32();
+        tes_file_gen_index_table(e, new_file, Ptr::new(table), 0);
+        fn_00473cb0(e, new_file, this);
+        tes_file_open_tes(e, new_file, 0, 0);
+        if e.get(this, TESFile::pThreadSafeFileMap).is_null() {
+            let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+            let table = if block != 0 {
+                e.call(THREAD_FILE_MAP_CONSTRUCT, &args![block, 0x25u32])
+                    .u32()
+            } else {
+                0
+            };
+            e.set(this, TESFile::pThreadSafeFileMap, Ptr::new(table));
+        }
+        let map = e.get(this, TESFile::pThreadSafeFileMap);
+        e.call(THREAD_FILE_MAP_SET_AT, &args![map, thread, new_file]);
+        e.call(RELEASE_FILE, &args![new_file]);
+        copy = new_file.addr();
+    }
+    Ptr::new(copy)
+}
+
+// Translated from 00473c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Goes up `pThreadSafeParent` from `this`'s parent to the root (the file
+/// whose parent is null); answers 0 when `this` has no parent.
+pub fn fn_00473c70(e: &mut Engine, this: Ptr<TESFile>) -> Ptr<TESFile> {
+    let mut current = e.get(this, TESFile::pThreadSafeParent);
+    while !current.is_null() {
+        let next = e.get(current.cast::<TESFile>(), TESFile::pThreadSafeParent);
+        if next.is_null() {
+            break;
+        }
+        current = next;
+    }
+    current.cast()
+}
+
+// Translated from 00473cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pThreadSafeParent` to the root of `other` (`other` itself when it
+/// has no parent).
+pub fn fn_00473cb0(e: &mut Engine, this: Ptr<TESFile>, other: Ptr<TESFile>) {
+    let mut root = other;
+    loop {
+        let next = e.get(root, TESFile::pThreadSafeParent);
+        if next.is_null() {
+            break;
+        }
+        root = next.cast();
+    }
+    e.set(this, TESFile::pThreadSafeParent, root.cast());
+}
+
+// Translated from 00473ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets `m_uiBufferAllocSize` to its default (the global at `01186740`);
+/// the word it is passed is not read.
+pub fn fn_00473ce0(e: &mut Engine, this: Ptr<TESFile>, _unused_1: u32) {
+    let size: u32 = e.global(DEFAULT_BUFFER_SIZE);
+    e.set(this, TESFile::m_uiBufferAllocSize, size);
+}
+
+// Translated from 00473d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Answers true; takes two words it does not read.
+pub fn fn_00473d00(_e: &mut Engine, _unused_this: Ptr, _unused_1: u32, _unused_2: u32) -> bool {
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1407,6 +2396,70 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00472620, tes_file_get_tes_form_no_ret(Ptr<TESFile>)),
         entry!(0x00472660, tes_file_get_tes_form(Ptr<TESFile>) -> u32),
+        entry!(0x004726b0, tes_file_get_tes_chunk(Ptr<TESFile>) -> u32),
+        entry!(
+            0x004727f0,
+            tes_file_get_chunk_data(Ptr<TESFile>, Ptr) -> bool
+        ),
+        entry!(
+            0x00472840,
+            tes_file_get_chunk_data_ov2(Ptr<TESFile>, Ptr) -> bool
+        ),
+        entry!(
+            0x00472890,
+            tes_file_get_chunk_data_ov3(Ptr<TESFile>, Ptr, u32) -> bool
+        ),
+        entry!(0x00472bc0, tes_file_read_form_header(Ptr<TESFile>) -> bool),
+        entry!(0x00472d30, tes_file_read_chunk_header(Ptr<TESFile>) -> bool),
+        entry!(0x00472e60, tes_file_start_form(Ptr<TESFile>, Ptr)),
+        entry!(0x00472f60, tes_file_load_form(Ptr<TESFile>, Ptr)),
+        entry!(0x00472fe0, tes_file_add_tes_form(Ptr<TESFile>, Ptr) -> u32),
+        entry!(0x00473070, fn_00473070(Ptr) -> u32),
+        entry!(0x00473080, fn_00473080(Ptr) -> u32),
+        entry!(0x00473090, fn_00473090(Ptr<TESFile>) -> u32),
+        entry!(
+            0x00473110,
+            tes_file_easy_write(Ptr<TESFile>, u32, u32) -> u32
+        ),
+        entry!(0x00473180, fn_00473180(Ptr, u32, u32) -> u32),
+        entry!(0x004731c0, fn_004731c0(Ptr<TESFile>, u32)),
+        entry!(0x00473210, fn_00473210(Ptr<TESFile>, u8)),
+        entry!(0x00473250, fn_00473250(Ptr<TESFile>) -> u8),
+        entry!(0x00473270, fn_00473270(Ptr)),
+        entry!(0x004732d0, fn_004732d0(Ptr<TESFile>) -> u32),
+        entry!(0x004732f0, fn_004732f0(Ptr<TESFile>) -> Ptr<BSSimpleList>),
+        entry!(0x00473310, tes_file_start_group(Ptr<TESFile>, Ptr)),
+        entry!(0x004733a0, tes_file_end_group(Ptr<TESFile>)),
+        entry!(0x00473440, fn_00473440(Ptr<TESFile>, Ptr)),
+        entry!(0x00473490, fn_00473490(Ptr<TESFile>)),
+        entry!(0x004734d0, tes_file_find_form(Ptr<TESFile>, Ptr) -> bool),
+        entry!(0x00473640, fn_00473640(Ptr<TESFile>) -> bool),
+        entry!(0x00473660, fn_00473660(Ptr<TESFile>) -> bool),
+        entry!(
+            0x004736c0,
+            tes_file_start_and_end_groups_for_form(Ptr<TESFile>, Ptr)
+        ),
+        entry!(0x00473830, tes_file_close_all_open_groups(Ptr<TESFile>)),
+        entry!(0x00473880, fn_00473880(Ptr<TESFile>) -> bool),
+        entry!(
+            0x004738a0,
+            tes_file_is_file_version_too_high(Ptr<TESFile>) -> bool
+        ),
+        entry!(0x00473930, fn_00473930(Ptr<TESFile>) -> u32),
+        entry!(0x00473960, fn_00473960(Ptr<TESFile>)),
+        entry!(
+            0x004739b0,
+            tes_file_get_thread_safe_file(Ptr<TESFile>) -> Ptr<TESFile>
+        ),
+        entry!(0x00473a10, fn_00473a10(Ptr<TESFile>)),
+        entry!(
+            0x00473ae0,
+            tes_file_get_thread_safe_file_for_thread(Ptr<TESFile>, u32) -> Ptr<TESFile>
+        ),
+        entry!(0x00473c70, fn_00473c70(Ptr<TESFile>) -> Ptr<TESFile>),
+        entry!(0x00473cb0, fn_00473cb0(Ptr<TESFile>, Ptr<TESFile>)),
+        entry!(0x00473ce0, fn_00473ce0(Ptr<TESFile>, u32)),
+        entry!(0x00473d00, fn_00473d00(Ptr, u32, u32) -> bool),
     ]
 }
 
@@ -2824,5 +3877,1353 @@ mod tests {
         e.register(TYPE_FROM_FORM_TAG, |_, _| ret(99));
         let file = new_file(&mut e);
         assert_eq!(e.call(0x0047_2660, &args![file]).u32(), 0);
+    }
+
+    // ---- Second session: GetTESChunk to the end of the writer code. ----
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// The vtable of the fake `TESForm` objects, and the addresses of the
+    /// doubles the tests put into its slots.
+    const FORM_VTABLE: u32 = 0x0200_2000;
+    const FAKE_SLOT_A: u32 = 0x7100_0100;
+    const FAKE_SLOT_B: u32 = 0x7100_0110;
+    const FAKE_SLOT_C: u32 = 0x7100_0120;
+    const FAKE_SLOT_D: u32 = 0x7100_0130;
+    /// Tag a test gives group headers.
+    const TAG_GROUP: u32 = TAG_HEADER_ONLY;
+
+    /// `engine()` plus the pages and getters the second session reads.
+    fn engine2() -> Engine {
+        let mut e = engine();
+        for page in [0x011c_5000, 0x011d_e000, FORM_VTABLE] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(SEEK_FROM_END, 2u32);
+        e.set_global(HIGHEST_HEADER_VERSION, 1.34f32 as f64);
+        e.register(MUST_ENDIAN_CONVERT, |e, a| {
+            ret(e.mem.u8(a[0] + 0x299) as u32)
+        });
+        e.register(CHUNK_HEADER_ENDIAN, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id.swap_bytes());
+            let size = e.mem.u16(a[0] + 4);
+            e.mem.set_u16(a[0] + 4, size.swap_bytes());
+            Ret::default()
+        });
+        e.register(FILE_DIRECTORY, |_, a| ret(a[0] + 0x124));
+        e.register(TYPE_FROM_FORM_TAG, |_, _| ret(99));
+        e
+    }
+
+    /// A fake `TESForm`: an object with the fake vtable whose slots (byte
+    /// offsets) hold the given function addresses.
+    fn form_with_slots(e: &mut Engine, slots: &[(u32, u32)]) -> Ptr {
+        for (offset, function) in slots {
+            e.mem.set_u32(FORM_VTABLE + offset, *function);
+        }
+        let form = Ptr::new(e.mem.alloc(0x20));
+        e.mem.set_u32(form.addr(), FORM_VTABLE);
+        form
+    }
+
+    /// A file with a fake open `BSFile`.
+    fn open_file(e: &mut Engine) -> (Ptr<TESFile>, Ptr) {
+        let file = new_file(e);
+        let bsfile = fake_bsfile(e);
+        e.set(file, TESFile::m_pFile, bsfile);
+        (file, bsfile)
+    }
+
+    /// A `BSFile::ReadF` double serving `data` in order.
+    fn serve_reads(e: &mut Engine, data: Vec<u8>) {
+        let mut position = 0usize;
+        e.register_double(BSFILE_READ, move |e, a| {
+            let count = (a[2] as usize).min(data.len() - position);
+            e.mem.write(a[1], &data[position..position + count]);
+            position += count;
+            ret(count as u32)
+        });
+    }
+
+    /// A `BSFile` write double that keeps what each write contained and
+    /// answers `answer` (or the full size when `u32::MAX`).
+    fn log_writes(e: &mut Engine, answer: u32) -> Rc<RefCell<Vec<Vec<u8>>>> {
+        let writes = Rc::new(RefCell::new(Vec::new()));
+        let sink = writes.clone();
+        e.register_double(BSFILE_WRITE, move |e, a| {
+            assert_eq!(e.mem.u32(a[3]), 1);
+            assert_eq!(a[4], 1);
+            sink.borrow_mut().push(e.mem.bytes(a[1], a[2]));
+            ret(if answer == u32::MAX { a[2] } else { answer })
+        });
+        writes
+    }
+
+    /// Doubles that put a group head on the list: `AddHead(list; &item)`
+    /// stores the item in the head node.
+    fn list_add_head_double(e: &mut Engine) {
+        e.register(LIST_ADD_HEAD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let old = e.mem.u32(a[0]);
+            if old != 0 {
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, old);
+                let next = e.mem.u32(a[0] + 4);
+                e.mem.set_u32(node + 4, next);
+                e.mem.set_u32(a[0] + 4, node);
+            }
+            e.mem.set_u32(a[0], item);
+            Ret::default()
+        });
+    }
+
+    /// Sets the size of the current chunk.
+    fn set_chunk(e: &mut Engine, file: Ptr<TESFile>, size: u32) {
+        e.set(file, TESFile::m_actualChunkSize, size);
+    }
+
+    /// Puts the list of group entries (addresses) into `m_grouplist`.
+    fn set_groups(e: &mut Engine, file: Ptr<TESFile>, groups: &[u32]) {
+        let head = build_list(e, groups);
+        e.mem.write(file.addr() + 0x290, &e.mem.bytes(head, 8));
+    }
+
+    fn group_entry(e: &mut Engine, id: u32) -> u32 {
+        let group = e.mem.alloc(0x1c);
+        e.mem.set_u32(group, TAG_GROUP);
+        e.mem.set_u32(group + 0x18, id);
+        group
+    }
+
+    #[test]
+    fn get_tes_chunk_reads_the_header_only_when_none_is_loaded() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        e.set(file, TESFile::m_currentchunkID, 0x1234);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_26b0, &args![file]).u32(), 0x1234);
+        assert!(calls_to(&e.call_log.take().unwrap(), BSFILE_READ).is_empty());
+        // None loaded and the read fails.
+        e.set(file, TESFile::m_currentchunkID, 0);
+        serve_reads(&mut e, vec![]);
+        assert_eq!(e.call(0x0047_26b0, &args![file]).u32(), 0);
+        // None loaded and the read works.
+        serve_reads(&mut e, b"EDID\x05\x00".to_vec());
+        assert_eq!(
+            e.call(0x0047_26b0, &args![file]).u32(),
+            u32::from_le_bytes(*b"EDID")
+        );
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 5);
+    }
+
+    #[test]
+    fn get_chunk_data_swaps_a_word_when_the_file_must_be_converted() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_chunk(&mut e, file, 4);
+        serve_reads(&mut e, vec![1, 2, 3, 4]);
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        assert!(e.call(0x0047_27f0, &args![file, buffer]).bool());
+        assert_eq!(e.mem.u32(buffer.addr()), 0x0403_0201);
+        // Converted.
+        e.set(file, TESFile::bMustEndianConvert, true);
+        e.set(file, TESFile::m_chunkoffset, 0);
+        serve_reads(&mut e, vec![1, 2, 3, 4]);
+        assert!(e.call(0x0047_27f0, &args![file, buffer]).bool());
+        assert_eq!(e.mem.u32(buffer.addr()), 0x0102_0304);
+    }
+
+    #[test]
+    fn get_chunk_data_ov2_swaps_a_halfword_when_the_file_must_be_converted() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_chunk(&mut e, file, 2);
+        e.set(file, TESFile::bMustEndianConvert, true);
+        serve_reads(&mut e, vec![1, 2]);
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        assert!(e.call(0x0047_2840, &args![file, buffer]).bool());
+        assert_eq!(e.mem.u16(buffer.addr()), 0x0102);
+        // A failed read is the answer, and nothing is swapped.
+        e.set(file, TESFile::m_chunkoffset, 0);
+        e.set(file, TESFile::bMustEndianConvert, false);
+        serve_reads(&mut e, vec![9]);
+        e.mem.set_u16(buffer.addr(), 0);
+        assert!(!e.call(0x0047_2840, &args![file, buffer]).bool());
+    }
+
+    #[test]
+    fn chunk_data_of_an_empty_chunk_is_trivially_read() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_2890, &args![file, buffer, 0u32]).bool());
+        assert!(calls_to(&e.call_log.take().unwrap(), BSFILE_READ).is_empty());
+    }
+
+    #[test]
+    fn chunk_data_reads_the_whole_chunk_from_the_file() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        set_chunk(&mut e, file, 5);
+        e.set(file, TESFile::m_fileoffset, 0x100);
+        e.set(file, TESFile::m_formoffset, 0x10);
+        // The cursor is not at the chunk's data: seek there first.
+        e.set(file, TESFile::m_chunkoffset, 3);
+        serve_reads(&mut e, b"hello".to_vec());
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_2890, &args![file, buffer, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        // 0x100 + 0x18 (record header) + 0x10 + 6 (chunk header) = 0x12E.
+        assert_eq!(
+            calls_to(&log, FAKE_SEEK),
+            vec![vec![bsfile.addr(), 0x12e, 0]]
+        );
+        assert_eq!(e.mem.bytes(buffer.addr(), 5), b"hello");
+        assert_eq!(e.get(file, TESFile::m_chunkoffset), 5);
+    }
+
+    #[test]
+    fn chunk_data_reports_a_short_read() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_chunk(&mut e, file, 5);
+        serve_reads(&mut e, b"hel".to_vec());
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_2890, &args![file, buffer, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        let complaint = calls_to(&log, LOG);
+        assert_eq!(complaint[0][0], MESSAGE_CHUNK_SECOND_READ_FAILED);
+        assert_eq!(e.get(file, TESFile::m_chunkoffset), 3);
+    }
+
+    #[test]
+    fn chunk_data_truncates_to_the_buffer_size() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_chunk(&mut e, file, 8);
+        e.set(
+            file,
+            TESFile::m_currentchunkID,
+            u32::from_le_bytes(*b"EDID"),
+        );
+        set_tag(&mut e, file, u32::from_le_bytes(*b"NPC_"), 0x40, 0);
+        e.set(current_form(file), Form::iFormID, 0x0100_0007);
+        serve_reads(&mut e, b"abcdefgh".to_vec());
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.mem.write(buffer.addr(), &[0xee; 8]);
+        // Keep what the report was given: the texts are on the stack.
+        let seen = Rc::new(RefCell::new(None));
+        let sink = seen.clone();
+        e.register_double(LOG, move |e, a| {
+            *sink.borrow_mut() = Some((
+                a[0],
+                a[1],
+                e.mem.cstr(a[2]),
+                e.mem.cstr(a[3]),
+                a[4],
+                a[5],
+                a[6],
+            ));
+            Ret::default()
+        });
+        assert!(e.call(0x0047_2890, &args![file, buffer, 4u32]).bool());
+        // Three bytes read and the fourth zeroed.
+        assert_eq!(e.mem.bytes(buffer.addr(), 5), b"abc\0\xee");
+        assert_eq!(e.get(file, TESFile::m_chunkoffset), 3);
+        assert_eq!(
+            seen.borrow().clone().unwrap(),
+            (
+                MESSAGE_CHUNK_TOO_BIG,
+                8,
+                b"EDID".to_vec(),
+                b"NPC_".to_vec(),
+                0x0100_0007,
+                4,
+                buffer.addr()
+            )
+        );
+    }
+
+    #[test]
+    fn chunk_data_reports_a_short_read_of_a_truncated_chunk() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_chunk(&mut e, file, 8);
+        serve_reads(&mut e, b"a".to_vec());
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_2890, &args![file, buffer, 4u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LOG)[0][0], MESSAGE_CHUNK_FIRST_READ_FAILED);
+    }
+
+    #[test]
+    fn chunk_data_of_a_compressed_record_comes_from_the_decompressed_form() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_tag(&mut e, file, TAG_RECORD, 0x40, RECORD_FLAG_COMPRESSED);
+        let decompressed = e.mem.alloc(0x20);
+        e.mem.write(decompressed + 0x16, b"world!");
+        e.set(
+            file,
+            TESFile::pDecompressedFormBuffer,
+            Ptr::new(decompressed),
+        );
+        e.set(file, TESFile::m_formoffset, 0x10);
+        set_chunk(&mut e, file, 6);
+        let buffer: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_2890, &args![file, buffer, 0u32]).bool());
+        assert!(calls_to(&e.call_log.take().unwrap(), BSFILE_READ).is_empty());
+        assert_eq!(e.mem.bytes(buffer.addr(), 6), b"world!");
+        assert_eq!(e.get(file, TESFile::m_chunkoffset), 6);
+        // Truncated: only max - 1 bytes are copied.
+        let small: Ptr = Ptr::new(e.mem.alloc(8));
+        e.register(LOG, |_, _| Ret::default());
+        assert!(e.call(0x0047_2890, &args![file, small, 3u32]).bool());
+        assert_eq!(e.mem.bytes(small.addr(), 3), b"wo\0");
+    }
+
+    /// 0x18 bytes of a record header.
+    fn header_bytes(tag: u32, length: u32, flags: u32, id: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for word in [tag, length, flags, id, 0, 0] {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn read_form_header_needs_an_open_file_and_a_whole_header() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        assert!(!e.call(0x0047_2bc0, &args![file]).bool());
+        let (file, _) = open_file(&mut e);
+        serve_reads(&mut e, vec![0x55; 5]);
+        set_tag(&mut e, file, TAG_RECORD, 1, 1);
+        assert!(!e.call(0x0047_2bc0, &args![file]).bool());
+        // The header is zeroed.
+        assert_eq!(e.mem.bytes(file.addr() + 0x240, 0x18), vec![0; 0x18]);
+    }
+
+    #[test]
+    fn read_form_header_puts_the_compile_index_into_the_form_id() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        e.set(file, TESFile::cCompileIndex, 0x07);
+        e.register(FORM_ID_NEEDS_STRIPPING, |_, a| {
+            ret((a[0] == 0x00ab_cdef) as u32)
+        });
+        serve_reads(&mut e, header_bytes(TAG_RECORD, 0x20, 0, 0x0200_1234));
+        assert!(e.call(0x0047_2bc0, &args![file]).bool());
+        let form = current_form(file);
+        assert_eq!(e.get(form, Form::form), TAG_RECORD);
+        assert_eq!(e.get(form, Form::iFormID), 0x0700_1234);
+        // The id check answers true: the index is stripped.
+        serve_reads(&mut e, header_bytes(TAG_RECORD, 0x20, 0, 0x0100_abcd));
+        serve_reads(&mut e, header_bytes(TAG_RECORD, 0x20, 0, 0x01ab_cdef));
+        assert!(e.call(0x0047_2bc0, &args![file]).bool());
+        assert_eq!(e.get(form, Form::iFormID), 0x00ab_cdef);
+    }
+
+    #[test]
+    fn read_form_header_takes_the_index_of_the_master_a_form_id_names() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        e.set(file, TESFile::cCompileIndex, 0x07);
+        e.set(file, TESFile::iMasterCount, 2);
+        let master_a = new_file(&mut e);
+        let master_b = new_file(&mut e);
+        e.set(master_b, TESFile::cCompileIndex, 0x03);
+        let table = e.mem.alloc(8);
+        e.mem.set_u32(table, master_a.addr());
+        e.mem.set_u32(table + 4, master_b.addr());
+        e.set(file, TESFile::m_pMasterPtrs, Ptr::new(table));
+        e.register(FORM_ID_NEEDS_STRIPPING, |_, _| ret(0));
+        // Index byte 1 names the second master (counting this file as 0
+        // then adding 1 to the byte).
+        serve_reads(&mut e, header_bytes(TAG_RECORD, 0x20, 0, 0x0100_0042));
+        assert!(e.call(0x0047_2bc0, &args![file]).bool());
+        assert_eq!(e.get(current_form(file), Form::iFormID), 0x0300_0042);
+        // A header-only tag keeps its id.
+        serve_reads(&mut e, header_bytes(TAG_HEADER_ONLY, 0x20, 0, 0x0100_0042));
+        assert!(e.call(0x0047_2bc0, &args![file]).bool());
+        assert_eq!(e.get(current_form(file), Form::iFormID), 0x0100_0042);
+    }
+
+    #[test]
+    fn read_form_header_converts_a_foreign_byte_order() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        e.set(file, TESFile::bMustEndianConvert, true);
+        e.register(FORM_ID_NEEDS_STRIPPING, |_, _| ret(0));
+        let mut swapped = header_bytes(TAG_RECORD, 0x20, 0, 0x0000_0042);
+        for word in swapped.chunks_mut(4).take(5) {
+            word.reverse();
+        }
+        swapped[0x14..0x16].reverse();
+        serve_reads(&mut e, swapped);
+        assert!(e.call(0x0047_2bc0, &args![file]).bool());
+        let form = current_form(file);
+        assert_eq!(e.get(form, Form::form), TAG_RECORD);
+        assert_eq!(e.get(form, Form::length), 0x20);
+    }
+
+    #[test]
+    fn read_chunk_header_reads_six_bytes_from_the_file() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        serve_reads(&mut e, b"EDID\x09\x00".to_vec());
+        assert!(e.call(0x0047_2d30, &args![file]).bool());
+        assert_eq!(
+            e.get(file, TESFile::m_currentchunkID),
+            u32::from_le_bytes(*b"EDID")
+        );
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 9);
+        // A short read clears the chunk.
+        serve_reads(&mut e, b"ED".to_vec());
+        assert!(!e.call(0x0047_2d30, &args![file]).bool());
+        assert_eq!(e.get(file, TESFile::m_currentchunkID), 0);
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 0);
+    }
+
+    #[test]
+    fn read_chunk_header_converts_a_foreign_byte_order() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        e.set(file, TESFile::bMustEndianConvert, true);
+        serve_reads(&mut e, b"DIDE\x00\x09".to_vec());
+        assert!(e.call(0x0047_2d30, &args![file]).bool());
+        assert_eq!(
+            e.get(file, TESFile::m_currentchunkID),
+            u32::from_le_bytes(*b"EDID")
+        );
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 9);
+    }
+
+    #[test]
+    fn read_chunk_header_of_a_compressed_record_comes_from_the_buffer() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_tag(&mut e, file, TAG_RECORD, 0x40, RECORD_FLAG_COMPRESSED);
+        let decompressed = e.mem.alloc(0x20);
+        e.mem.write(decompressed + 4, b"DATA\x03\x00");
+        e.set(
+            file,
+            TESFile::pDecompressedFormBuffer,
+            Ptr::new(decompressed),
+        );
+        e.set(file, TESFile::m_formoffset, 4);
+        e.register(DECOMPRESSED_FORM_SIZE, |_, _| ret(0x20));
+        assert!(e.call(0x0047_2d30, &args![file]).bool());
+        assert_eq!(
+            e.get(file, TESFile::m_currentchunkID),
+            u32::from_le_bytes(*b"DATA")
+        );
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 3);
+        // Past the end of the decompressed form.
+        e.set(file, TESFile::m_formoffset, 0x20);
+        assert!(!e.call(0x0047_2d30, &args![file]).bool());
+        assert_eq!(e.get(file, TESFile::m_currentchunkID), 0);
+    }
+
+    #[test]
+    fn read_chunk_header_of_an_xxxx_chunk_takes_the_size_from_its_data() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        serve_reads(&mut e, b"XXXX\x04\x00\x00\x01\x00\x00".to_vec());
+        e.register(SKIP_TO_NEXT_CHUNK, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_2d30, &args![file]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SKIP_TO_NEXT_CHUNK), vec![vec![file.addr()]]);
+        assert_eq!(e.get(file, TESFile::m_actualChunkSize), 0x100);
+    }
+
+    #[test]
+    fn start_form_fills_the_save_header_and_writes_it() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        let form = form_with_slots(&mut e, &[]);
+        e.register(FORM_TYPE_INDEX, |_, _| ret(1));
+        e.register(FORM_FLAGS, |_, _| ret(0xffff_ffff));
+        e.register(FORM_ID, |_, _| ret(0x0100_0abc));
+        e.mem.set_u32(FORM_TAG_TABLE + 12, TAG_RECORD);
+        e.mem.set_u32(CONFIG_SEEK_RESULT, 0x400);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_2e60, &args![file, form]);
+        let log = e.call_log.take().unwrap();
+        let save = file.at(TESFile::m_saveform);
+        assert_eq!(e.get(save, Form::form), TAG_RECORD);
+        assert_eq!(e.get(save, Form::length), 0);
+        assert_eq!(e.get(save, Form::flags), 0x3003_2fe0);
+        assert_eq!(e.get(save, Form::iFormID), 0x0100_0abc);
+        assert_eq!(e.get(save, Form::iVersionControl), 0);
+        assert_eq!(e.get(save, Form::sFormVersion), 0xf);
+        assert_eq!(e.get(save, Form::sVCVersion), 0);
+        assert_eq!(e.get(file, TESFile::m_saveformoffset), 0x400);
+        assert_eq!(e.get(file, TESFile::m_savechunkoffset), 0);
+        // Seeked from the end (whence 2), then wrote the 0x18-byte header.
+        assert_eq!(calls_to(&log, FAKE_SEEK), vec![vec![bsfile.addr(), 0, 2]]);
+        assert_eq!(writes.borrow().len(), 1);
+        assert_eq!(writes.borrow()[0].len(), 0x18);
+        assert_eq!(&writes.borrow()[0][..4], &TAG_RECORD.to_le_bytes());
+    }
+
+    #[test]
+    fn load_form_sets_the_type_the_load_flags_and_the_file() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        set_tag(&mut e, file, TAG_RECORD, 0x20, 0);
+        e.register_double(FAKE_SLOT_A, |_, _| Ret::default());
+        let form = form_with_slots(&mut e, &[(0x128, FAKE_SLOT_A)]);
+        e.register(FORM_SET_TYPE, |_, _| Ret::default());
+        e.register(FORM_FILE_FLAGS, |_, _| ret(0x10));
+        e.register(FORM_SET_LOAD_FLAGS, |_, _| Ret::default());
+        e.register(FORM_SKINNED_NODE, |_, _| ret(0x77));
+        e.register(FORM_SET_FILE, |_, _| Ret::default());
+        e.register(FORM_IS_FLAGGED, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_2f60, &args![file, form]);
+        let log = e.call_log.take().unwrap();
+        // The type of the record (the double of `GetFormTypeFromFormString`
+        // answers 99).
+        assert_eq!(calls_to(&log, FORM_SET_TYPE), vec![vec![form.addr(), 99]]);
+        assert_eq!(
+            calls_to(&log, FORM_SET_LOAD_FLAGS),
+            vec![vec![form.addr(), 0x4010]]
+        );
+        assert_eq!(
+            calls_to(&log, FORM_SKINNED_NODE),
+            vec![vec![file.addr(), 1]]
+        );
+        assert_eq!(calls_to(&log, FAKE_SLOT_A), vec![vec![form.addr(), 0x77]]);
+        assert_eq!(
+            calls_to(&log, FORM_SET_FILE),
+            vec![vec![form.addr(), file.addr()]]
+        );
+        // A form the test does not flag gets the plain word.
+        e.register(FORM_IS_FLAGGED, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_2f60, &args![file, form]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FORM_SET_LOAD_FLAGS),
+            vec![vec![form.addr(), 0x10]]
+        );
+    }
+
+    #[test]
+    fn add_tes_form_writes_the_saved_buffer_and_counts_the_form() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        let form = form_with_slots(&mut e, &[]);
+        e.register(FORM_TYPE_INDEX, |_, _| ret(1));
+        e.register(FORM_FREE_FORM_BUFFER, |_, _| Ret::default());
+        let buffer = e.mem.alloc(0x10);
+        e.mem.write(buffer, b"0123456789abcdef");
+        e.set_global(SAVE_BUFFER, buffer);
+        e.set_global(SAVE_BUFFER_SIZE, 0x10u32);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_2fe0, &args![file, form]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, FAKE_SEEK), vec![vec![bsfile.addr(), 0, 2]]);
+        assert_eq!(writes.borrow()[0], b"0123456789abcdef");
+        assert_eq!(
+            e.get(file.at(TESFile::fileHeaderInfo), FileHeader::iFormCount),
+            1
+        );
+        assert_eq!(
+            calls_to(&log, FORM_FREE_FORM_BUFFER),
+            vec![vec![form.addr()]]
+        );
+        // No buffer: nothing is written or counted.
+        e.set_global(SAVE_BUFFER, 0u32);
+        assert_eq!(e.call(0x0047_2fe0, &args![file, form]).u32(), 0);
+        assert_eq!(writes.borrow().len(), 1);
+        assert_eq!(
+            e.get(file.at(TESFile::fileHeaderInfo), FileHeader::iFormCount),
+            1
+        );
+        // A short write is the answer.
+        e.set_global(SAVE_BUFFER, buffer);
+        log_writes(&mut e, 3);
+        assert_eq!(e.call(0x0047_2fe0, &args![file, form]).u32(), 10);
+    }
+
+    #[test]
+    fn the_save_buffer_getters_answer_the_globals() {
+        let mut e = engine2();
+        e.set_global(SAVE_BUFFER, 0x1234u32);
+        e.set_global(SAVE_BUFFER_SIZE, 0x56u32);
+        assert_eq!(e.call(0x0047_3070, &args![0u32]).u32(), 0x1234);
+        assert_eq!(e.call(0x0047_3080, &args![0u32]).u32(), 0x56);
+    }
+
+    #[test]
+    fn rewriting_the_save_header_seeks_back_and_writes_it_again() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        e.set(file, TESFile::m_saveformoffset, 0x30);
+        e.set(file, TESFile::m_savechunkoffset, 0x77);
+        let save = file.at(TESFile::m_saveform);
+        e.set(save, Form::form, TAG_RECORD);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_3090, &args![file]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FAKE_SEEK),
+            vec![vec![bsfile.addr(), 0x30, 0]]
+        );
+        assert_eq!(e.get(save, Form::length), 0x77);
+        assert_eq!(
+            &writes.borrow()[0][..8],
+            &[0x52, 0x45, 0x52, 0x52, 0x77, 0, 0, 0]
+        );
+        assert_eq!(
+            e.get(file.at(TESFile::fileHeaderInfo), FileHeader::iFormCount),
+            1
+        );
+    }
+
+    #[test]
+    fn easy_write_reports_a_short_write() {
+        let mut e = engine2();
+        let (file, _) = open_file(&mut e);
+        let data = e.mem.alloc(0x20);
+        let writes = log_writes(&mut e, u32::MAX);
+        assert_eq!(e.call(0x0047_3110, &args![file, data, 0x20u32]).u32(), 0);
+        assert_eq!(writes.borrow()[0].len(), 0x20);
+        assert_eq!(e.get(file, TESFile::m_lastError), 0);
+        // Nothing to write is fine.
+        assert_eq!(e.call(0x0047_3110, &args![file, 0u32, 0x20u32]).u32(), 0);
+        assert_eq!(writes.borrow().len(), 1);
+        // Short: error 10 and a report.
+        log_writes(&mut e, 0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_3110, &args![file, data, 0x20u32]).u32(), 10);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LOG), vec![vec![MESSAGE_WRITE_ERROR]]);
+        assert_eq!(e.get(file, TESFile::m_lastError), 10);
+    }
+
+    #[test]
+    fn bsfile_write_passes_a_count_of_one() {
+        let mut e = engine2();
+        let bsfile = fake_bsfile(&mut e);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let sink = seen.clone();
+        e.register_double(BSFILE_WRITE, move |e, a| {
+            sink.borrow_mut().push((a.to_vec(), e.mem.u32(a[3])));
+            ret(0x44)
+        });
+        assert_eq!(
+            e.call(0x0047_3180, &args![bsfile, 0x1000u32, 0x44u32])
+                .u32(),
+            0x44
+        );
+        let seen = seen.borrow();
+        assert_eq!(seen[0].0[..3], [bsfile.addr(), 0x1000, 0x44]);
+        assert_eq!(seen[0].0[4], 1);
+        assert_eq!(seen[0].1, 1);
+    }
+
+    #[test]
+    fn the_top_byte_setters_keep_the_rest() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        e.set(file, TESFile::m_Flags, 0x1234_0011);
+        e.call(0x0047_31c0, &args![file, 0x7fu32]);
+        assert_eq!(e.get(file, TESFile::m_Flags), 0x7f34_0011);
+        let header = file.at(TESFile::fileHeaderInfo);
+        e.set(header, FileHeader::iNextFormID, 0x0100_0800);
+        e.call(0x0047_3210, &args![file, 0x09u8]);
+        assert_eq!(e.get(header, FileHeader::iNextFormID), 0x0900_0800);
+        assert_eq!(e.get(file, TESFile::cCompileIndex), 9);
+        assert_eq!(e.call(0x0047_3250, &args![file]).u8(), 9);
+    }
+
+    #[test]
+    fn destroying_a_list_deletes_every_item_and_empties_it() {
+        let mut e = engine2();
+        e.register(LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        let deleted = Rc::new(RefCell::new(Vec::new()));
+        let sink = deleted.clone();
+        e.register_double(SCALAR_DELETE, move |_, a| {
+            sink.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        let list = build_list(&mut e, &[0x111, 0, 0x222]);
+        e.call(0x0047_3270, &args![list]);
+        assert_eq!(*deleted.borrow(), vec![(0x111, 1), (0x222, 1)]);
+        assert_eq!(e.mem.u32(list), 0);
+    }
+
+    #[test]
+    fn the_group_list_accessors() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        assert_eq!(e.call(0x0047_32f0, &args![file]).u32(), file.addr() + 0x290);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        set_groups(&mut e, file, &[0x1000, 0x2000]);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0x1000);
+    }
+
+    #[test]
+    fn start_group_stores_a_copy_and_writes_its_header() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        list_add_head_double(&mut e);
+        let header = e.mem.alloc(0x18);
+        e.mem.set_u32(header, TAG_GROUP);
+        e.mem.set_u32(header + 4, 0x40);
+        e.mem.set_u32(CONFIG_SEEK_RESULT, 0x600);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3310, &args![file, header]);
+        let log = e.call_log.take().unwrap();
+        let group = Ptr::<FormGroup>::new(e.call(0x0047_32d0, &args![file]).u32());
+        assert!(!group.is_null());
+        assert_eq!(e.get(group.at(FormGroup::GroupData), Form::form), TAG_GROUP);
+        assert_eq!(e.get(group.at(FormGroup::GroupData), Form::length), 0x40);
+        assert_eq!(e.get(group, FormGroup::iGroupOffset), 0x600);
+        assert_eq!(calls_to(&log, FAKE_SEEK), vec![vec![bsfile.addr(), 0, 2]]);
+        assert_eq!(
+            writes.borrow()[0][..8],
+            [0x47, 0x52, 0x55, 0x50, 0x40, 0, 0, 0]
+        );
+        assert_eq!(
+            e.get(file.at(TESFile::fileHeaderInfo), FileHeader::iFormCount),
+            1
+        );
+        // A null header does nothing.
+        e.call(0x0047_3310, &args![file, 0u32]);
+        assert_eq!(writes.borrow().len(), 1);
+    }
+
+    #[test]
+    fn start_group_without_a_file_only_pushes_the_group() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        list_add_head_double(&mut e);
+        let header = e.mem.alloc(0x18);
+        e.mem.set_u32(header, TAG_GROUP);
+        e.call(0x0047_3310, &args![file, header]);
+        assert_ne!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        assert_eq!(
+            e.get(file.at(TESFile::fileHeaderInfo), FileHeader::iFormCount),
+            0
+        );
+    }
+
+    #[test]
+    fn end_group_stores_the_length_and_rewrites_the_header() {
+        let mut e = engine2();
+        let (file, bsfile) = open_file(&mut e);
+        let group = group_entry(&mut e, 0x100);
+        set_groups(&mut e, file, &[group]);
+        e.mem.set_u32(CONFIG_SEEK_RESULT, 0x500);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_33a0, &args![file]);
+        let log = e.call_log.take().unwrap();
+        // End of the file at 0x500, the group started at 0x100.
+        assert_eq!(
+            calls_to(&log, FAKE_SEEK),
+            vec![vec![bsfile.addr(), 0, 2], vec![bsfile.addr(), 0x100, 0]]
+        );
+        assert_eq!(writes.borrow()[0].len(), 0x18);
+        assert_eq!(writes.borrow()[0][4..8], 0x400u32.to_le_bytes());
+        // The entry is gone.
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        assert_eq!(e.mem.block_size(group), None);
+        // No group: nothing happens.
+        e.call(0x0047_33a0, &args![file]);
+        assert_eq!(writes.borrow().len(), 1);
+    }
+
+    #[test]
+    fn end_group_without_a_file_just_drops_the_entry() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        let group = group_entry(&mut e, 0x100);
+        set_groups(&mut e, file, &[group]);
+        e.call(0x0047_33a0, &args![file]);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        assert_eq!(e.mem.block_size(group), None);
+    }
+
+    #[test]
+    fn a_group_entry_is_a_copy_of_the_header_added_at_the_head() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        let added = Rc::new(RefCell::new(Vec::new()));
+        let sink = added.clone();
+        e.register_double(LIST_ADD_HEAD, move |e, a| {
+            sink.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let header = e.mem.alloc(0x18);
+        e.mem.write(header, &[7; 0x18]);
+        e.call(0x0047_3440, &args![file, header]);
+        let added = added.borrow();
+        assert_eq!(added[0].0, file.addr() + 0x290);
+        // A 0x1C-byte entry holding the 0x18 bytes of the header.
+        assert!(e.mem.block_size(added[0].1).unwrap() >= 0x1c);
+        assert_eq!(e.mem.bytes(added[0].1, 0x18), vec![7; 0x18]);
+        drop(added);
+        // A null header does nothing.
+        e.call(0x0047_3440, &args![file, 0u32]);
+    }
+
+    #[test]
+    fn removing_a_group_entry_drops_the_node_and_frees_it() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        // Nothing open: nothing happens.
+        e.call(0x0047_3490, &args![file]);
+        let first = group_entry(&mut e, 1);
+        let second = group_entry(&mut e, 2);
+        set_groups(&mut e, file, &[first, second]);
+        e.call(0x0047_3490, &args![file]);
+        assert_eq!(e.mem.block_size(first), None);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), second);
+    }
+
+    /// A file whose reads produce the given `(tag, form id)` records in turn
+    /// (the last one forever), at the start of a 0x1000-byte stream.
+    fn record_stream(e: &mut Engine, records: Vec<(u32, u32)>) -> Ptr<TESFile> {
+        let mut next = 0;
+        e.register_double(READ_FORM_HEADER, move |e, a| {
+            let (tag, id) = records[next.min(records.len() - 1)];
+            next += 1;
+            e.mem.set_u32(a[0] + 0x240, tag);
+            e.mem.set_u32(a[0] + 0x244, 0x20);
+            e.mem.set_u32(a[0] + 0x248, 0);
+            e.mem.set_u32(a[0] + 0x24c, id);
+            ret((tag != 0) as u32)
+        });
+        e.register(READ_CHUNK_HEADER, |_, _| Ret::default());
+        e.register(GET_TES_CHUNK, |_, _| Ret::default());
+        let (file, _) = open_file(e);
+        e.set(file, TESFile::m_filesize, 0x1000);
+        e.set(file, TESFile::bHasGroups, true);
+        file
+    }
+
+    #[test]
+    fn find_form_refuses_what_cannot_be_searched() {
+        let mut e = engine2();
+        let form = form_with_slots(&mut e, &[(0x7c, FAKE_SLOT_A)]);
+        e.register(FAKE_SLOT_A, |_, _| ret(1));
+        let file = record_stream(&mut e, vec![(TAG_RECORD, 1)]);
+        assert!(!e.call(0x0047_34d0, &args![file, 0u32]).bool());
+        // No groups in the file.
+        e.set(file, TESFile::bHasGroups, false);
+        assert!(!e.call(0x0047_34d0, &args![file, form]).bool());
+        e.set(file, TESFile::bHasGroups, true);
+        // The file is not ready.
+        let bsfile = e.get(file, TESFile::m_pFile);
+        e.mem.set_u8(bsfile.addr() + 0x2c, 0);
+        assert!(!e.call(0x0047_34d0, &args![file, form]).bool());
+        e.mem.set_u8(bsfile.addr() + 0x2c, 1);
+        // The form says it is in the file.
+        assert!(e.call(0x0047_34d0, &args![file, form]).bool());
+        // No file at all.
+        e.set(file, TESFile::m_pFile, Ptr::NULL);
+        assert!(!e.call(0x0047_34d0, &args![file, form]).bool());
+    }
+
+    #[test]
+    fn find_form_scans_the_records_for_its_tag_and_id() {
+        let mut e = engine2();
+        let form = form_with_slots(
+            &mut e,
+            &[
+                (0x7c, FAKE_SLOT_A),
+                (0x8c, FAKE_SLOT_B),
+                (0x110, FAKE_SLOT_C),
+            ],
+        );
+        e.register(FAKE_SLOT_A, |_, _| ret(0));
+        e.register(FAKE_SLOT_B, |_, _| ret(5));
+        // The groups the form accepts are entered.
+        e.register(FAKE_SLOT_C, |_, _| ret(1));
+        e.register(FORM_ID, |_, _| ret(0x42));
+        e.mem.set_u32(FORM_TAG_TABLE + 5 * 12, TAG_RECORD);
+        let file = record_stream(
+            &mut e,
+            vec![
+                (TAG_RECORD, 0x41),
+                (TAG_GROUP, 0),
+                (TAG_OTHER_HEADER_ONLY, 0),
+                (TAG_RECORD, 0x42),
+            ],
+        );
+        assert!(e.call(0x0047_34d0, &args![file, form]).bool());
+        assert_eq!(e.get(current_form(file), Form::iFormID), 0x42);
+    }
+
+    #[test]
+    fn find_form_skips_the_groups_the_form_refuses() {
+        let mut e = engine2();
+        let form = form_with_slots(
+            &mut e,
+            &[
+                (0x7c, FAKE_SLOT_A),
+                (0x8c, FAKE_SLOT_B),
+                (0x110, FAKE_SLOT_C),
+            ],
+        );
+        e.register(FAKE_SLOT_A, |_, _| ret(0));
+        e.register(FAKE_SLOT_B, |_, _| ret(5));
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let sink = asked.clone();
+        e.register_double(FAKE_SLOT_C, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            ret(0)
+        });
+        e.register(FORM_ID, |_, _| ret(0x42));
+        e.mem.set_u32(FORM_TAG_TABLE + 5 * 12, TAG_RECORD);
+        let file = record_stream(&mut e, vec![(TAG_GROUP, 0), (TAG_RECORD, 0x42)]);
+        assert!(e.call(0x0047_34d0, &args![file, form]).bool());
+        // The group header was offered to slot +0x110 with (1, 0).
+        let asked = asked.borrow();
+        assert_eq!(asked[0][0], form.addr());
+        assert_eq!(asked[0][1], file.addr() + 0x240);
+        assert_eq!(asked[0][2..], [1, 0]);
+    }
+
+    #[test]
+    fn find_form_gives_up_at_the_end_of_the_records() {
+        let mut e = engine2();
+        let form = form_with_slots(&mut e, &[(0x7c, FAKE_SLOT_A), (0x8c, FAKE_SLOT_B)]);
+        e.register(FAKE_SLOT_A, |_, _| ret(0));
+        e.register(FAKE_SLOT_B, |_, _| ret(5));
+        e.register(FORM_ID, |_, _| ret(0x42));
+        e.mem.set_u32(FORM_TAG_TABLE + 5 * 12, TAG_RECORD);
+        e.register(LOG, |_, _| Ret::default());
+        let file = record_stream(&mut e, vec![(TAG_RECORD, 0x41), (0, 0)]);
+        assert!(!e.call(0x0047_34d0, &args![file, form]).bool());
+    }
+
+    #[test]
+    fn has_groups_is_a_flag() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        assert!(!e.call(0x0047_3640, &args![file]).bool());
+        e.set(file, TESFile::bHasGroups, true);
+        assert!(e.call(0x0047_3640, &args![file]).bool());
+    }
+
+    #[test]
+    fn skipping_a_group_header_moves_to_the_next_record() {
+        let mut e = engine2();
+        let file = record_stream(&mut e, vec![(TAG_GROUP, 0), (TAG_RECORD, 5)]);
+        e.call(0x0047_2150, &args![file, 0u8]);
+        set_tag(&mut e, file, TAG_GROUP, 0x50, 0);
+        // The record is a group: its tag is cleared, the header size comes
+        // off its length and the next record is read.
+        assert!(e.call(0x0047_3660, &args![file]).bool());
+        assert_eq!(e.get(current_form(file), Form::form), TAG_RECORD);
+        assert_eq!(
+            e.get(file, TESFile::m_fileoffset),
+            0x18 + 0x18 + 0x50 - 0x18
+        );
+        // Anything else is left alone.
+        assert!(!e.call(0x0047_3660, &args![file]).bool());
+        assert_eq!(e.get(current_form(file), Form::form), TAG_RECORD);
+    }
+
+    /// Registers at `FAKE_SLOT_A` a form slot `+0x110` double that accepts the
+    /// groups whose offset field is above `limit`.
+    fn accept_groups_with_offset_above(e: &mut Engine, limit: u32) {
+        e.register_double(FAKE_SLOT_A, move |e, a| {
+            // (form; group, flag, third)
+            ret((e.mem.u32(a[1] + 0x18) > limit) as u32)
+        });
+    }
+
+    #[test]
+    fn groups_for_a_form_are_left_alone_for_a_null_form_or_type_one() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        e.call(0x0047_36c0, &args![file, 0u32]);
+        let form = form_with_slots(&mut e, &[]);
+        e.register(FORM_TYPE_INDEX, |_, _| ret(1));
+        e.call(0x0047_36c0, &args![file, form]);
+    }
+
+    #[test]
+    fn groups_the_form_refuses_are_ended() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        let form = form_with_slots(&mut e, &[(0x110, FAKE_SLOT_A)]);
+        e.register(FORM_TYPE_INDEX, |_, _| ret(5));
+        accept_groups_with_offset_above(&mut e, 1);
+        let inner = group_entry(&mut e, 1);
+        let outer = group_entry(&mut e, 2);
+        set_groups(&mut e, file, &[inner, outer]);
+        e.call(0x0047_36c0, &args![file, form]);
+        // The inner group was ended, the outer one is accepted.
+        assert_eq!(e.mem.block_size(inner), None);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), outer);
+    }
+
+    #[test]
+    fn missing_groups_are_started() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        list_add_head_double(&mut e);
+        let form = form_with_slots(&mut e, &[(0x110, FAKE_SLOT_A), (0x114, FAKE_SLOT_B)]);
+        e.register(FORM_TYPE_INDEX, |_, _| ret(5));
+        // Any group that exists is accepted.
+        e.register(FAKE_SLOT_A, |_, _| ret(1));
+        let built = Rc::new(RefCell::new(Vec::new()));
+        let sink = built.clone();
+        e.register_double(FAKE_SLOT_B, move |e, a| {
+            sink.borrow_mut().push(a.to_vec());
+            e.mem.set_u32(a[1], TAG_GROUP);
+            Ret::default()
+        });
+        e.call(0x0047_36c0, &args![file, form]);
+        // The form built one header (no group existed yet) and it was
+        // started.
+        assert_eq!(built.borrow().len(), 1);
+        assert_eq!(built.borrow()[0][0], form.addr());
+        assert_eq!(built.borrow()[0][2], 0);
+        assert_ne!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+    }
+
+    #[test]
+    fn a_form_that_cannot_build_its_group_is_reported() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        let form = form_with_slots(
+            &mut e,
+            &[
+                (0x110, FAKE_SLOT_A),
+                (0x114, FAKE_SLOT_B),
+                (0x130, FAKE_SLOT_C),
+            ],
+        );
+        e.register(FORM_TYPE_INDEX, |_, _| ret(5));
+        e.register(FAKE_SLOT_A, |_, _| ret(0));
+        // The header it builds does not carry the group tag.
+        e.register(FAKE_SLOT_B, |_, _| Ret::default());
+        e.register(FAKE_SLOT_C, |_, _| ret(0x2222));
+        e.register(FORM_TYPE_NAME, |_, _| ret(0x1111));
+        e.register(FORM_ID, |_, _| ret(0xabc));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_36c0, &args![file, form]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, LOG),
+            vec![vec![MESSAGE_CREATE_GROUP_FAILED, 0x1111, 0x2222, 0xabc]]
+        );
+    }
+
+    #[test]
+    fn close_all_open_groups_ends_or_drops_each_group() {
+        let mut e = engine2();
+        e.set_global(DATA_HANDLER, 0x1234u32);
+        let (file, _) = open_file(&mut e);
+        let first = group_entry(&mut e, 1);
+        let second = group_entry(&mut e, 2);
+        set_groups(&mut e, file, &[first, second]);
+        let writes = log_writes(&mut e, u32::MAX);
+        e.register(HANDLER_GROUPS_FLAG, |_, a| {
+            assert_eq!(a[0], 0x1234);
+            ret(1)
+        });
+        e.call(0x0047_3830, &args![file]);
+        // Each group was ended properly: its header was rewritten.
+        assert_eq!(writes.borrow().len(), 2);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        // With the handler's byte clear the entries are just dropped.
+        let third = group_entry(&mut e, 3);
+        set_groups(&mut e, file, &[third]);
+        e.register(HANDLER_GROUPS_FLAG, |_, _| ret(0));
+        e.call(0x0047_3830, &args![file]);
+        assert_eq!(writes.borrow().len(), 2);
+        assert_eq!(e.call(0x0047_32d0, &args![file]).u32(), 0);
+        assert_eq!(e.mem.block_size(third), None);
+    }
+
+    #[test]
+    fn the_stub_answers_false() {
+        let mut e = engine2();
+        assert!(!e.call(0x0047_3880, &args![0u32]).bool());
+    }
+
+    #[test]
+    fn a_header_version_above_1_34_is_reported() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        e.set_global(HIGHEST_HEADER_VERSION, 1.34f32 as f64);
+        e.set(
+            file.at(TESFile::fileHeaderInfo),
+            FileHeader::fVersion,
+            1.34f32,
+        );
+        e.register(HEADER_VERSION, |e, a| Ret {
+            st0: e.mem.f32(a[0] + 0x3dc) as f64,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0047_38a0, &args![file]).bool());
+        assert!(calls_to(&e.call_log.take().unwrap(), LOG).is_empty());
+        e.set(
+            file.at(TESFile::fileHeaderInfo),
+            FileHeader::fVersion,
+            1.5f32,
+        );
+        e.register(WARNING_COUNT, |_, _| Ret::default());
+        e.register(SPRINTF, |e, a| {
+            assert_eq!(a[1], MESSAGE_VERSION_TOO_HIGH);
+            let name = e.mem.cstr(a[2]);
+            let mut text = b"File ".to_vec();
+            text.extend_from_slice(&name);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        let reported = Rc::new(RefCell::new(Vec::new()));
+        let sink = reported.clone();
+        e.register_double(LOG, move |e, a| {
+            sink.borrow_mut().push(e.mem.cstr(a[0]));
+            Ret::default()
+        });
+        set_name(&mut e, file, b"Data\\", b"New.esm");
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0047_38a0, &args![file]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, WARNING_COUNT), vec![vec![0], vec![1]]);
+        assert_eq!(*reported.borrow(), vec![b"File New.esm".to_vec()]);
+    }
+
+    #[test]
+    fn the_decompressed_buffer_is_made_on_demand() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        e.register(DECOMPRESS_CURRENT_FORM, |e, a| {
+            e.mem.set_u32(a[0] + 0x420, 0x5000);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_3930, &args![file]).u32(), 0x5000);
+        assert_eq!(e.call(0x0047_3930, &args![file]).u32(), 0x5000);
+        // Only the first call decompressed.
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), DECOMPRESS_CURRENT_FORM).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn freeing_the_decompressed_buffer_clears_it() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        fn_00473960(&mut e, file);
+        let buffer = e.mem.alloc(0x40);
+        e.set(file, TESFile::pDecompressedFormBuffer, Ptr::new(buffer));
+        e.set(file, TESFile::iDecompressedFormBufferSize, 0x40);
+        fn_00473960(&mut e, file);
+        assert_eq!(e.mem.block_size(buffer), None);
+        assert_eq!(e.get(file, TESFile::pDecompressedFormBuffer), Ptr::NULL);
+        assert_eq!(e.get(file, TESFile::iDecompressedFormBufferSize), 0);
+    }
+
+    #[test]
+    fn the_root_file_is_used_on_the_owner_thread() {
+        let mut e = engine2();
+        let root = new_file(&mut e);
+        let child = new_file(&mut e);
+        e.set(child, TESFile::pThreadSafeParent, root.cast());
+        e.set_global(PROCEDURE_OWNER, 0x5555u32);
+        e.register(CURRENT_THREAD, |_, _| ret(7));
+        e.register(OWNER_THREAD, |_, a| {
+            assert_eq!(a[0], 0x5555);
+            ret(7)
+        });
+        // A file without parent is its own root.
+        assert_eq!(e.call(0x0047_39b0, &args![root]).u32(), root.addr());
+        assert_eq!(e.call(0x0047_39b0, &args![child]).u32(), root.addr());
+    }
+
+    #[test]
+    fn another_thread_gets_the_per_thread_copy() {
+        let mut e = engine2();
+        let root = new_file(&mut e);
+        let copy = new_file(&mut e);
+        let map = e.mem.alloc(0x10);
+        e.set(root, TESFile::pThreadSafeFileMap, Ptr::new(map));
+        e.register(CURRENT_THREAD, |_, _| ret(8));
+        e.register(OWNER_THREAD, |_, _| ret(7));
+        let copy_address = copy.addr();
+        e.register_double(THREAD_FILE_MAP_LOOKUP, move |e, a| {
+            e.mem.set_u32(a[2], copy_address);
+            ret(1)
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_39b0, &args![root]).u32(), copy.addr());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, THREAD_FILE_MAP_LOOKUP)[0][..2], [map, 8]);
+    }
+
+    #[test]
+    fn destroying_the_per_thread_copies_deletes_them_and_the_map() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        // Without a map nothing happens.
+        e.call(0x0047_3a10, &args![file]);
+        let map_vtable = 0x0200_2800;
+        e.map(map_vtable, 0x100);
+        e.mem.set_u32(map_vtable, FAKE_SLOT_D);
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map, map_vtable);
+        e.set(file, TESFile::pThreadSafeFileMap, Ptr::new(map));
+        e.register(THREAD_FILE_MAP_BEGIN, |_, _| ret(1));
+        let copy = 0x6000u32;
+        e.register_double(THREAD_FILE_MAP_NEXT, move |e, a| {
+            // The position is cleared after the only entry.
+            e.mem.set_u32(a[1], 0);
+            e.mem.set_u32(a[3], copy);
+            Ret::default()
+        });
+        e.register(RELEASE_FILE, |_, _| Ret::default());
+        e.register(SCALAR_DELETE, |_, _| Ret::default());
+        e.register(THREAD_FILE_MAP_CLEAR, |_, _| Ret::default());
+        e.register(FAKE_SLOT_D, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3a10, &args![file]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, RELEASE_FILE), vec![vec![copy]]);
+        assert_eq!(calls_to(&log, SCALAR_DELETE), vec![vec![copy, 1]]);
+        assert_eq!(calls_to(&log, THREAD_FILE_MAP_CLEAR), vec![vec![map]]);
+        // The map is deleted through its virtual destructor with flag 1.
+        assert_eq!(calls_to(&log, FAKE_SLOT_D), vec![vec![map, 1]]);
+        assert_eq!(e.get(file, TESFile::pThreadSafeFileMap), Ptr::NULL);
+    }
+
+    #[test]
+    fn a_missing_per_thread_copy_is_built_and_stored() {
+        let mut e = engine2();
+        e.register(CLOSE_ALL_GROUPS, |_, _| Ret::default());
+        e.register(READ_HEADER_STATUS, |_, _| ret(0));
+        e.register(BSFILE_READ, |e, a| {
+            e.mem.set_u32(a[1], TAG_FILE_HEADER);
+            ret(0x18)
+        });
+        e.register(READ_FORM_HEADER, |e, a| {
+            e.mem.set_u32(a[0] + 0x240, TAG_RECORD);
+            ret(1)
+        });
+        e.register(TYPE_FROM_FORM_TAG, |_, _| ret(7));
+        e.register(GET_TES_CHUNK, |e, a| {
+            e.mem.set_u32(a[0] + 0x258, CHUNK_ID_HEDR);
+            Ret::default()
+        });
+        e.register(HANDLER_FILE_TABLE, |_, a| ret(a[0] + 0x210));
+        e.register(RELEASE_FILE, |_, _| Ret::default());
+        e.map(0x7000, 0x1000);
+        e.set_global(DATA_HANDLER, 0x7000u32);
+        let this = new_file(&mut e);
+        set_name(&mut e, this, b"Data\\", b"Fallout.esm");
+        e.set(this, TESFile::cCompileIndex, 5);
+        e.set(this, TESFile::m_Flags, FLAG_MASTER);
+        let map = e.mem.alloc(0x10);
+        e.register_double(THREAD_FILE_MAP_CONSTRUCT, move |_, a| {
+            assert_eq!(a[1], 0x25);
+            ret(map)
+        });
+        let stored = Rc::new(RefCell::new(Vec::new()));
+        let sink = stored.clone();
+        e.register_double(THREAD_FILE_MAP_SET_AT, move |_, a| {
+            sink.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        let copy = e.call(0x0047_3ae0, &args![this, 9u32]).ptr::<TESFile>();
+        let log = e.call_log.take().unwrap();
+        assert!(!copy.is_null());
+        assert_ne!(copy, this);
+        // A new file for the same name, flagged like this one, whose
+        // parent is this file's root.
+        assert_eq!(e.mem.cstr(copy.addr() + 0x20), b"Fallout.esm");
+        assert_eq!(e.get(copy, TESFile::cCompileIndex), 5);
+        assert_eq!(e.get(copy, TESFile::m_Flags) & FLAG_MASTER, FLAG_MASTER);
+        assert_eq!(e.get(copy, TESFile::pThreadSafeParent), this.cast());
+        assert!(!e.get(copy, TESFile::m_pFile).is_null());
+        // The map was created, then the copy was stored under the thread.
+        assert_eq!(e.get(this, TESFile::pThreadSafeFileMap), Ptr::new(map));
+        assert_eq!(*stored.borrow(), vec![vec![map, 9, copy.addr()]]);
+        assert_eq!(calls_to(&log, RELEASE_FILE), vec![vec![copy.addr()]]);
+    }
+
+    #[test]
+    fn a_known_per_thread_copy_is_answered_without_building() {
+        let mut e = engine2();
+        let this = new_file(&mut e);
+        let map = e.mem.alloc(0x10);
+        e.set(this, TESFile::pThreadSafeFileMap, Ptr::new(map));
+        e.register(THREAD_FILE_MAP_LOOKUP, |e, a| {
+            e.mem.set_u32(a[2], 0x7777);
+            ret(1)
+        });
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_3ae0, &args![this, 3u32]).u32(), 0x7777);
+        assert!(calls_to(&e.call_log.take().unwrap(), BSFILE_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn the_root_of_the_parent_chain() {
+        let mut e = engine2();
+        let root = new_file(&mut e);
+        let middle = new_file(&mut e);
+        let leaf = new_file(&mut e);
+        e.set(middle, TESFile::pThreadSafeParent, root.cast());
+        e.set(leaf, TESFile::pThreadSafeParent, middle.cast());
+        assert_eq!(e.call(0x0047_3c70, &args![leaf]).u32(), root.addr());
+        assert_eq!(e.call(0x0047_3c70, &args![middle]).u32(), root.addr());
+        // No parent: none.
+        assert_eq!(e.call(0x0047_3c70, &args![root]).u32(), 0);
+    }
+
+    #[test]
+    fn a_parent_is_always_stored_as_the_root() {
+        let mut e = engine2();
+        let root = new_file(&mut e);
+        let middle = new_file(&mut e);
+        let this = new_file(&mut e);
+        e.set(middle, TESFile::pThreadSafeParent, root.cast());
+        e.call(0x0047_3cb0, &args![this, middle]);
+        assert_eq!(e.get(this, TESFile::pThreadSafeParent), root.cast());
+        e.call(0x0047_3cb0, &args![this, root]);
+        assert_eq!(e.get(this, TESFile::pThreadSafeParent), root.cast());
+    }
+
+    #[test]
+    fn the_buffer_size_is_reset_to_its_default() {
+        let mut e = engine2();
+        let file = new_file(&mut e);
+        e.set(file, TESFile::m_uiBufferAllocSize, 5);
+        e.call(0x0047_3ce0, &args![file, 0x99u32]);
+        assert_eq!(e.get(file, TESFile::m_uiBufferAllocSize), 0x4000);
+    }
+
+    #[test]
+    fn the_always_true_method_ignores_its_arguments() {
+        let mut e = engine2();
+        assert!(e.call(0x0047_3d00, &args![0u32, 1u32, 2u32]).bool());
     }
 }
