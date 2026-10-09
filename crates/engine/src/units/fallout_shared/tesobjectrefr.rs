@@ -16,12 +16,16 @@
 //!
 //! # Where this file stops
 //!
-//! This file holds two batches of 40 functions each: `00426720` to
-//! `0055e730` (the first batch; `0055e230` was left for the second), and then
+//! This file holds three batches of 40 functions each: `00426720` to
+//! `0055e730` (the first batch; `0055e230` was left for the second), then
 //! `0055e230` and `0055e940` to `005612a0` (the game-load and game-save
 //! handlers, the sequence and Havok records of a reference, and the helpers
-//! of the Havok glue the linker placed here). The next session continues
-//! with the next open function after `005612a0` in address order (`00561440`).
+//! of the Havok glue the linker placed here), and then `00561440` to
+//! `00563890` (the rest of the Havok glue, the editor location, the
+//! buffer-based save and load handlers and their Havok and animation
+//! records). That finishes the address range of this file (everything below
+//! `00563d80`); the unit's functions from `00563d80` on belong to the next
+//! part file.
 //!
 //! Several functions in this range are not `TESObjectREFR` methods but small
 //! `ExtraDataList`, list-node and manager helpers the linker placed in this
@@ -291,6 +295,8 @@ layout! {
         0x04 iUnderwaterCount: i32,
         /// `fRelevantWaterHeight` (Xbox PDB).
         0x08 fRelevantWaterHeight: f32,
+        /// `fCachedRadius` (Xbox PDB).
+        0x0C fCachedRadius: f32,
         /// `spPhantom` (Xbox PDB): `NiPointer<bhkPhantom>`.
         0x18 spPhantom: Ptr,
     }
@@ -4507,6 +4513,1793 @@ pub fn fn_005612a0(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
     out
 }
 
+// ===========================================================================
+// 00561440 to 00563890: the vector helpers and rigid-body setters of the
+// Havok glue, the load of the older Havok record, the editor location,
+// `Update3DPosition`, the buffer-based game-save and game-load handlers
+// (`BGSSaveGameBuffer` / `BGSLoadFormBuffer`) and the Havok and animation
+// records they write and read. The next function of the unit after this
+// range is `00563d80`.
+
+layout! {
+    /// `BGSHavokSaveData` (Xbox PDB), 0x20 bytes: what the buffer-based save
+    /// and load of a reference's rigid bodies keep while they walk its
+    /// collision nodes. `cFlags`: 1 = active bodies only, 2 = the collision
+    /// root's own body was seen, 4 = active and inactive bodies, or a
+    /// keyframed one.
+    pub struct BGSHavokSaveData: 0x20 {
+        /// `cFlags` (Xbox PDB).
+        0x00 cFlags: u8,
+        /// `iActiveBoneCount` (Xbox PDB).
+        0x04 iActiveBoneCount: u32,
+        /// `iInactiveBoneCount` (Xbox PDB).
+        0x08 iInactiveBoneCount: u32,
+        /// `iKeyFramedBoneCount` (Xbox PDB).
+        0x0C iKeyFramedBoneCount: u32,
+        /// `pRef` (Xbox PDB): `TESObjectREFR*`.
+        0x10 pRef: Ptr,
+        /// `pObj3D` (Xbox PDB): `NiAVObject*`.
+        0x14 pObj3D: Ptr,
+        /// `pCollisionRoot` (Xbox PDB): `bhkNiCollisionObject*`.
+        0x18 pCollisionRoot: Ptr,
+        /// `pSaveLoadBuffer` (Xbox PDB): the save or load buffer the
+        /// callbacks write to or read from.
+        0x1C pSaveLoadBuffer: Ptr,
+    }
+
+    /// The 0x1c-byte record `fn_00561860` builds on its stack and hands to
+    /// the collision walker (`00c68900`) for the older Havok record: the same
+    /// start as [`CollisionWalkContext`] (`bRecurse`, `iMode`), then the
+    /// collision root, the reference and the flags `fn_00561b40` tests. Not
+    /// in the Xbox PDB (a local type); the names describe the use.
+    pub struct OldHavokLoadWalk: 0x1c {
+        /// Non-zero: descend into the children.
+        0x04 bRecurse: u8,
+        /// `0x12`.
+        0x08 iMode: u32,
+        /// The reference's collision root (`004a8b00` of its 3D).
+        0x0C pCollisionRoot: Ptr,
+        /// The `TESObjectREFR` being loaded.
+        0x10 pRef: Ptr,
+        /// Bit 0: the saved record has velocities; bit 1: the pose is the
+        /// reference's own (cleared once used).
+        0x14 iFlags: u32,
+        /// Always 0.
+        0x18 iSpare: u32,
+    }
+}
+
+/// `00a29680`: a bare `RET` in this build. `fn_00561580` and `fn_00561690`
+/// call it on the body before and after they change its entity.
+const BODY_LOCK_MARKER: u32 = 0x00a2_9680;
+/// `hkpEntity::activate` and `hkpEntity::deactivate` (the map's names).
+const ENTITY_ACTIVATE: u32 = 0x00c9_c1d0;
+const ENTITY_DEACTIVATE: u32 = 0x00c9_c240;
+/// `NiPoint3` to `hkVector4` for the angular velocity
+/// (`00553fc0(dest, source)`, cdecl): copies three floats and zeroes the
+/// fourth lane.
+const NI_POINT_TO_VECTOR_ZERO_W: u32 = 0x0055_3fc0;
+/// The four component getters `fn_00561500` calls on the `NiQuaternion`
+/// (each returns a `float` in `ST0`: the values at +4, +8, +0xc and +0, in
+/// the order the `hkQuaternion` takes them).
+const QUATERNION_COMPONENTS: [u32; 4] = [0x006b_9130, 0x0048_8d50, 0x0084_d030, 0x006a_7f50];
+/// The SSE helpers `fn_00561730` chains (all `thiscall` on a stack
+/// `hkVector4`): `00458a10(out; a, b)` is a `SUBPS`, `00458ad0(v; v)` an
+/// `ANDPS`, `004589c0(v; float)` fills all four lanes, `00458a60(a; out, b)`
+/// a `CMPLEPS` and `00458990(mask vector; bits)` tests that all the bits
+/// are set in the mask.
+const VECTOR_SUBTRACT: u32 = 0x0045_8a10;
+const VECTOR_ABSOLUTE: u32 = 0x0045_8ad0;
+const VECTOR_SPLAT: u32 = 0x0045_89c0;
+const VECTOR_COMPARE: u32 = 0x0045_8a60;
+const VECTOR_ALL_SET: u32 = 0x0045_8990;
+/// The tolerance `0.001` the velocity setters pass (the same `float` as
+/// [`RADIUS_EPSILON`]).
+const VELOCITY_EPSILON: u32 = RADIUS_EPSILON;
+/// `bhkCharacterController::SetPosition_ov2` (`00c6e390`, takes an
+/// `hkVector4`) and `MobileObject::GetCharController` (`009306d0`).
+const CONTROLLER_SET_POSITION: u32 = 0x00c6_e390;
+const GET_CHARACTER_CONTROLLER: u32 = 0x0093_06d0;
+/// `ExtraDataList::GetStartingWorldOrCell` (`0041b320`),
+/// `TESObjectREFR::GetWorldSpace` (`00575d70`), the cell test `00425fd0`
+/// that `InitItem` also applies to a parent cell, and
+/// `TESObjectCELL::GetWorldSpace` (`0054ddd0`).
+const EXTRA_GET_STARTING_SPACE: u32 = 0x0041_b320;
+const GET_WORLD_SPACE: u32 = 0x0057_5d70;
+const CELL_TEST: u32 = 0x0042_5fd0;
+const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+/// The `TES` singleton and `TES::IsCellLoaded(TES; cell, flag)`
+/// (`004511e0`).
+const GLOBAL_TES: u32 = 0x011d_ea10;
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+/// `GetLocationCellOrWorld(form, &cell, &world)` (`00846190`, cdecl),
+/// `TESWorldSpace::GetCellFromWorldCoord(world; position)` (`00587550`),
+/// `TESObjectREFR::SetLocationOnReference(this; position)` (`00575830`), the
+/// rotation setter (`00575700`, three `float`s by value) and
+/// `TESObjectREFR::MoveRefToNewSpace(this, cell, world)` (`00573800`, cdecl).
+const GET_LOCATION_CELL_OR_WORLD: u32 = 0x0084_6190;
+const WORLD_CELL_FROM_COORD: u32 = 0x0058_7550;
+const SET_LOCATION_ON_REFERENCE: u32 = 0x0057_5830;
+const SET_ROTATION: u32 = 0x0057_5700;
+const MOVE_REF_TO_NEW_SPACE: u32 = 0x0057_3800;
+/// The `BGSSaveLoadGame` singleton (`iGlobalFlags` at +0x244, Xbox PDB) and
+/// `BGSSaveLoadGame::GetChange(this; reference, change flags)`
+/// (`0084a6d0`), with the change flags built by `008c71b0(cell; value)`.
+const GLOBAL_SAVE_LOAD_GAME: u32 = 0x011d_df38;
+const SAVE_LOAD_GET_CHANGE: u32 = 0x0084_a6d0;
+const CHANGE_FLAGS_CONSTRUCT: u32 = 0x008c_71b0;
+/// `BGSLoadFormBuffer::Header.iChangeFlags` (`00428110(buffer; out)`
+/// copies the `BGSChangeFlags` at +0x17) and `iOldChangeFlags`
+/// (`0042ce30(buffer; out)` copies the one at +0x2c); both return `out`.
+/// `004280f0(flags; mask)` tells whether any bit of `mask` is set.
+const BUFFER_CHANGE_FLAGS: u32 = 0x0042_8110;
+const BUFFER_OLD_CHANGE_FLAGS: u32 = 0x0042_ce30;
+const CHANGE_FLAGS_TEST: u32 = 0x0042_80f0;
+/// The steps `SaveGame` and `LoadGame` of this unit start with:
+/// `TESForm::SaveGame(buffer)` (`00484d60`), `TESForm::LoadGame(buffer)`
+/// (`00484da0`) and the empty step `004534f0(this; buffer)`.
+const FORM_SAVE_GAME_BUFFER: u32 = 0x0048_4d60;
+const FORM_LOAD_GAME_BUFFER: u32 = 0x0048_4da0;
+const EMPTY_BUFFER_STEP: u32 = 0x0045_34f0;
+/// Buffer functions: `BGSSaveGameBuffer::SaveData(buffer; source, size, 0)`
+/// (`00865e50`), `BGSLoadGameBuffer::LoadData(buffer; dest, size)`
+/// (`00864980`), `BGSSaveGameBuffer::SaveString(buffer; text, 0)`
+/// (`00865e70`), `BGSLoadGameBuffer::LoadString(buffer; dest)` (`008649a0`),
+/// `StartVariableSizedValue` (`00865f20`), `SaveVariableSizedValue(buffer;
+/// value)` (`00865f60`), `SaveVariableSizedValue_ov2(buffer; size, token)`
+/// (`00865ff0`), `LoadVariableSizedValue` (`00864a60`) and
+/// `BGSLoadGameSubBuffer::SaveGame(sub buffer; buffer)` (`00865510`).
+const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+const BUFFER_SAVE_STRING: u32 = 0x0086_5e70;
+const BUFFER_LOAD_STRING: u32 = 0x0086_49a0;
+const BUFFER_START_VARIABLE: u32 = 0x0086_5f20;
+const BUFFER_SAVE_VARIABLE: u32 = 0x0086_5f60;
+const BUFFER_SAVE_VARIABLE_OV2: u32 = 0x0086_5ff0;
+const BUFFER_LOAD_VARIABLE: u32 = 0x0086_4a60;
+const SUB_BUFFER_SAVE_GAME: u32 = 0x0086_5510;
+/// `SaveGameWarning(format, ...)` (`00845cc0`, cdecl): the buffer-based
+/// loaders report with it where the older ones use [`MESSAGE`].
+const SAVE_GAME_WARNING: u32 = 0x0084_5cc0;
+/// `BGSSaveLoadGame::QueueSubBuffer(this; 0, buffer, 0)` (`0084a810`).
+const QUEUE_SUB_BUFFER: u32 = 0x0084_a810;
+/// `ExtraDataList` handlers: `SaveGame_ov2(list; buffer)` (`00426a30`),
+/// `LoadGame_ov2(list; buffer)` (`00428150`), `0042ceb0(list; buffer, base)`,
+/// `FinishLoadGame(list; buffer)` (`0042d9e0`), `0042dae0(list; buffer)`,
+/// `0042dd90(list; buffer)`, `0041aeb0(list)`, `GetSavedAnimation(list)`
+/// (`00422a10`) and `00422850(list; name)`, which stores the name of the last
+/// finished sequence.
+const EXTRA_SAVE_GAME_OV2: u32 = 0x0042_6a30;
+const EXTRA_LOAD_GAME_OV2: u32 = 0x0042_8150;
+const EXTRA_LOAD_GAME_WITH_BASE: u32 = 0x0042_ceb0;
+const EXTRA_FINISH_LOAD_GAME: u32 = 0x0042_d9e0;
+const EXTRA_LOAD_STEP: u32 = 0x0042_dae0;
+const EXTRA_LOAD_LAST_STEP: u32 = 0x0042_dd90;
+const EXTRA_STEP_BEFORE_CHANGES: u32 = 0x0041_aeb0;
+const EXTRA_GET_SAVED_ANIMATION: u32 = 0x0042_2a10;
+const EXTRA_SET_LAST_SEQUENCE: u32 = 0x0042_2850;
+/// `InventoryChanges` handlers taking the buffer (`this` is the result of
+/// [`GET_INVENTORY_CHANGES`]): `SaveGame` (`004d4090`), `LoadGame`
+/// (`004d4160`) and `004d42f0`.
+const INVENTORY_CHANGES_SAVE_GAME: u32 = 0x004d_4090;
+const INVENTORY_CHANGES_LOAD_GAME: u32 = 0x004d_4160;
+const INVENTORY_CHANGES_FINISH: u32 = 0x004d_42f0;
+/// `00452370(this)`, the test the load handlers apply to a reference before
+/// the destruction stage.
+const REFR_HEALTH_GATE: u32 = 0x0045_2370;
+/// `ExtraDataList::GetObjectHealth` (`0041b6b0`, `float` in `ST0`),
+/// `BGSDestructibleObjectForm::GetDestructionForm(base)` (`00475400`,
+/// cdecl), `UpdateCurrentDamageStage(form; reference, flag)` (`00476f50`)
+/// and `TESObjectREFR::UpdateAddonNodeSounds(this, flag)` (`0057a3c0`).
+const EXTRA_GET_OBJECT_HEALTH: u32 = 0x0041_b6b0;
+const GET_DESTRUCTION_FORM: u32 = 0x0047_5400;
+const UPDATE_DAMAGE_STAGE: u32 = 0x0047_6f50;
+const UPDATE_ADDON_NODE_SOUNDS: u32 = 0x0057_a3c0;
+/// `TESHavokUtilities::Should3DRagDoll(reference, 3D)` (`0062c3c0`, cdecl).
+const SHOULD_3D_RAGDOLL: u32 = 0x0062_c3c0;
+/// `TESObjectCELL::AddActivatingRef(cell; reference)` (`005455c0`),
+/// `00545670(cell; reference)` and `TESObjectCELL::AttachReference3D(cell;
+/// reference, flag)` (`00548880`).
+const CELL_ADD_ACTIVATING_REF: u32 = 0x0054_55c0;
+const CELL_REFERENCE_STEP: u32 = 0x0054_5670;
+const CELL_ATTACH_REFERENCE_3D: u32 = 0x0054_8880;
+/// `TESObjectREFR::ClearAction(this, 4)` (`00572db0`), `00572d50(this, 4)`,
+/// `BGSOpenCloseForm::SnapHavokTo3D(reference)` (`0047b360`, cdecl) and the
+/// navmesh obstacle manager (`006c0720` returns it; `OnDoorClose`
+/// `006c0f10` and `006c0dc0` take the reference).
+const REFR_CLEAR_ACTION: u32 = 0x0057_2db0;
+const REFR_SET_ACTION: u32 = 0x0057_2d50;
+const SNAP_HAVOK_TO_3D: u32 = 0x0047_b360;
+const GET_OBSTACLE_MANAGER: u32 = 0x006c_0720;
+const OBSTACLE_ON_DOOR_CLOSE: u32 = 0x006c_0f10;
+const OBSTACLE_ON_DOOR_OPEN: u32 = 0x006c_0dc0;
+/// `0042ce10(BGSSaveLoadGame)`, `00437b90(reference)`, `00450ff0(cell)`,
+/// `TES::GetCellPriority(TES; cell, 0)` (`00458be0`) and
+/// `ModelLoader::QueueReference(loader; reference, priority, 1)`
+/// (`00444850`, loader at `011c3b3c`).
+const SAVE_LOAD_GAME_TEST: u32 = 0x0042_ce10;
+const REFR_3D_TEST: u32 = 0x0043_7b90;
+const CELL_PRIORITY_TEST: u32 = 0x0045_0ff0;
+const TES_GET_CELL_PRIORITY: u32 = 0x0045_8be0;
+const GLOBAL_MODEL_LOADER: u32 = 0x011c_3b3c;
+const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
+/// `00549580(base)`, `TESWorldSpace::GetTerrainManager(world)` (`00586170`)
+/// and `BGSTerrainManager::HideTree(manager; reference, 1)` (`006fcfa0`).
+const BASE_FORM_TEST: u32 = 0x0054_9580;
+const WORLD_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+const TERRAIN_HIDE_TREE: u32 = 0x006f_cfa0;
+/// The texts `fn_005636e0` swaps (`01011f30` and `0101abac`, which the
+/// decompiler shows as "Close") and the `strcpy_s`-like
+/// `00406d30(dest, size, source)` (cdecl).
+const TEXT_OPEN_SIDE: u32 = 0x0101_1f30;
+const TEXT_CLOSE_SIDE: u32 = 0x0101_abac;
+const STRING_COPY: u32 = 0x0040_6d30;
+/// Functions after this range that `fn_005636e0` and `fn_00563650` call:
+/// `00563d80(this; manager, name, time)`, `SaveControllerManager`
+/// (`00563f30(manager, buffer, blend)`, cdecl) and `00564010(manager,
+/// buffer, blend)` (cdecl, the loader that follows `SaveControllerManager`).
+const ANIMATION_LOAD_STEP: u32 = 0x0056_3d80;
+const SAVE_CONTROLLER_MANAGER: u32 = 0x0056_3f30;
+const CONTROLLER_MANAGER_LOADER: u32 = 0x0056_4010;
+/// `00517630(body)` is compared with 4 (the Xbox name of the counter it
+/// feeds, `iKeyFramedBoneCount`, suggests the keyframed motion type);
+/// `004d9fa0(node, 0)` is the step all three loading callbacks take first;
+/// `00437bd0(reference)` is the first of four tests `LoadHavokData` makes
+/// of an actor.
+const BODY_MOTION_KIND: u32 = 0x0051_7630;
+const RAGDOLL_NODE_STEP: u32 = 0x004d_9fa0;
+const REFR_STATE_TEST: u32 = 0x0043_7bd0;
+/// A `bhkRigidBody` virtual (`+0xe4`) that `fn_00563380` calls with 4 when
+/// bit 2 of a body's saved kind byte is set.
+const BODY_SLOT_SET_KIND: u32 = 0xe4;
+/// `0047ab40(reference, sequence)` (cdecl), the shadow-scene getter
+/// `00450b80(0)` and `ShadowSceneNode::AddObject(scene; object)`
+/// (`00b5eeb0`).
+const GENERIC_SEQUENCE_STEP: u32 = 0x0047_ab40;
+const SCENE_GETTER: u32 = 0x0045_0b80;
+const SCENE_ADD_OBJECT: u32 = 0x00b5_eeb0;
+/// The address of `LOADED_REF_DATA::m_spData3D` inside the loaded data, which
+/// `00559450` dereferences.
+const LOADED_DATA_3D_OFFSET: u32 = 0x14;
+/// The extra-data type `GetEditorLocation` asks for (the editor location)
+/// and the form type byte it compares a default space with.
+const EXTRA_TYPE_EDITOR_LOCATION: u32 = 0xf;
+const FORM_TYPE_CELL: u32 = 0x39;
+
+/// Runs the default constructor the compiler calls on each stack
+/// `NiPoint3` or `hkVector4` in `vectors`.
+fn construct_vectors(e: &mut Engine, vectors: &[u32]) {
+    for vector in vectors {
+        e.call(VECTOR_CONSTRUCT, &args![*vector]);
+    }
+}
+
+/// Whether the change flags `reader` copies out of `buffer`
+/// ([`BUFFER_CHANGE_FLAGS`] or [`BUFFER_OLD_CHANGE_FLAGS`]) have any bit of
+/// `mask`: the game copies them into a 4-byte local (`reader` returns it) and
+/// asks `004280f0(flags; mask)`.
+fn buffer_changed(e: &mut Engine, reader: u32, buffer: u32, mask: u32) -> bool {
+    e.with_stack(4, |e, local| {
+        let flags = e.call(reader, &args![buffer, local]).u32();
+        e.call(CHANGE_FLAGS_TEST, &args![flags, mask]).bool()
+    })
+}
+
+/// The change-flag mask for the extra data of a reference: `0xa4021c40`,
+/// plus `0x3fc00` added (not or-ed) for an actor, which gives `0xa4061840`.
+fn extra_change_mask(actor: bool) -> u32 {
+    let extra = if actor { 0x3_fc00 } else { 0 };
+    0xa402_1c40u32.wrapping_add(extra)
+}
+
+/// The save version byte of the save-load stream (`008df040`).
+fn save_version(e: &mut Engine, save_load: u32) -> u8 {
+    e.call(SAVE_VERSION, &args![save_load]).u8()
+}
+
+/// The part of the destruction-stage step the load handlers share: the
+/// reference has loaded data (`00452370` holds) whose pointer at +0x14 is
+/// set.
+fn has_loaded_3d_data(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    if !e.call(REFR_HEALTH_GATE, &args![this]).bool() {
+        return false;
+    }
+    let loaded = e.get(this, TESObjectREFR::pLoadedData);
+    !loaded.is_null()
+        && e.call(
+            READ_FIRST_DWORD,
+            &args![loaded.addr() + LOADED_DATA_3D_OFFSET],
+        )
+        .u32()
+            != 0
+}
+
+/// Updates the damage stage from the base form's destruction form
+/// (`UpdateCurrentDamageStage(reference, flag)`); when it changed, the
+/// addon node sounds are updated.
+fn update_damage_stage(e: &mut Engine, this: Ptr<TESObjectREFR>, flag: u32) {
+    let base = e.call(GET_BASE_FORM, &args![this]).u32();
+    let destruction = e.call(GET_DESTRUCTION_FORM, &args![base]).u32();
+    if e.call(UPDATE_DAMAGE_STAGE, &args![destruction, this, flag])
+        .bool()
+    {
+        e.call(UPDATE_ADDON_NODE_SOUNDS, &args![this, 0u32]);
+    }
+}
+
+// Translated from 00561440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dot product of the two four-lane vectors `this` and `other`
+/// (`MULPS`, then two shuffle-and-add steps), written to all four lanes of
+/// the vector at `out` through `004a3c90` (the 16-byte copy); returns `out`.
+/// The sums are added in the order `(p3 + p1) + (p2 + p0)` the shuffles give.
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn fn_00561440(e: &mut Engine, this: Ptr, out: Ptr, other: Ptr) -> Ptr {
+    let mut products = [0f32; 4];
+    for (lane, product) in products.iter_mut().enumerate() {
+        let at = 4 * lane as u32;
+        *product = e.mem.f32(this.addr() + at) * e.mem.f32(other.addr() + at);
+    }
+    let low = products[2] + products[0];
+    let high = products[3] + products[1];
+    let sum = high + low;
+    e.with_stack(0x10, |e, result| {
+        for lane in 0..4 {
+            e.mem.set_f32(result.addr() + 4 * lane, sum);
+        }
+        e.call(COPY_16_BYTES, &args![out, result]);
+    });
+    out
+}
+
+// Translated from 00561500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Converts the `NiQuaternion` at `source` into the `hkQuaternion` at
+/// `dest` (cdecl): the component getters of [`QUATERNION_COMPONENTS`]
+/// (`ST0`, rounded to `float`) are stored into elements 0 to 3 of `dest`;
+/// returns `dest`.
+pub fn fn_00561500(e: &mut Engine, dest: Ptr, source: Ptr) -> Ptr {
+    for (index, getter) in QUATERNION_COMPONENTS.iter().enumerate() {
+        let value = e.call(*getter, &args![source]).f32();
+        let at = fn_00560d30(e, dest, index as u32);
+        e.mem.set_f32(at.addr(), value);
+    }
+    dest
+}
+
+// Translated from 00561580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Activates (`active` non-zero, `hkpEntity::activate`) or deactivates
+/// (`hkpEntity::deactivate`) the Havok entity of the rigid body `this`,
+/// between the two calls of the empty lock marker [`BODY_LOCK_MARKER`];
+/// nothing for a body without an entity.
+pub fn fn_00561580(e: &mut Engine, this: Ptr, active: u8) {
+    let entity = e.call(BODY_ENTITY, &args![this]).u32();
+    if entity != 0 {
+        e.call(BODY_LOCK_MARKER, &args![this]);
+        if active != 0 {
+            e.call(ENTITY_ACTIVATE, &args![entity]);
+        } else {
+            e.call(ENTITY_DEACTIVATE, &args![entity]);
+        }
+        e.call(BODY_LOCK_MARKER, &args![this]);
+    }
+}
+
+// Translated from 005615d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the body's linear velocity from the `NiPoint3` at `vector`:
+/// converted to an `hkVector4` (`004a3e00`) and handed to `fn_00561690`.
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn fn_005615d0(e: &mut Engine, this: Ptr, vector: Ptr) {
+    e.with_stack(0x10, |e, converted| {
+        e.call(VECTOR_CONSTRUCT, &args![converted]);
+        let result = e.call(NI_TO_VECTOR, &args![converted, vector]).u32();
+        fn_00561690(e, this, Ptr::new(result));
+    });
+}
+
+// Translated from 00561630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the body's angular velocity from the `NiPoint3` at `vector`:
+/// converted to an `hkVector4` with a zero fourth lane (`00553fc0`) and
+/// handed to `fn_005617c0`.
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn fn_00561630(e: &mut Engine, this: Ptr, vector: Ptr) {
+    e.with_stack(0x10, |e, converted| {
+        e.call(VECTOR_CONSTRUCT, &args![converted]);
+        let result = e
+            .call(NI_POINT_TO_VECTOR_ZERO_W, &args![converted, vector])
+            .u32();
+        fn_005617c0(e, this, Ptr::new(result));
+    });
+}
+
+// Translated from 00561690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the linear velocity `velocity` (an `hkVector4`) of the body's entity
+/// (`004ae750`) with the lock marker around it; nothing without an entity.
+pub fn fn_00561690(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    let entity = e.call(BODY_ENTITY, &args![this]).u32();
+    if entity != 0 {
+        e.call(BODY_LOCK_MARKER, &args![this]);
+        hkp_rigid_body_set_linear_velocity(e, Ptr::new(entity), velocity);
+        e.call(BODY_LOCK_MARKER, &args![this]);
+    }
+}
+
+// Translated from 005616d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpRigidBody::setLinearVelocity` (Xbox PDB): unless `velocity` is
+/// within `0.001` ([`VELOCITY_EPSILON`]) of the entity's current linear
+/// velocity (`fn_00560dc0`, compared by `fn_00561730`), activates the entity
+/// and sets the velocity through the motion's virtual at +0x40.
+pub fn hkp_rigid_body_set_linear_velocity(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    let epsilon: f32 = e.global(VELOCITY_EPSILON);
+    let current = fn_00560dc0(e, this);
+    if fn_00561730(e, velocity, current, epsilon) == 0 {
+        e.call(ENTITY_ACTIVATE, &args![this]);
+        let motion = e.call(BODY_VECTOR_PART, &args![this]).u32();
+        e.vcall(motion, 0x40, &args![velocity]);
+    }
+}
+
+// Translated from 00561730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the vector `this` is within `epsilon` of the vector `other` in
+/// all four lanes: the difference (`SUBPS`), made absolute (`ANDPS`), is
+/// compared lane by lane (`CMPLEPS`) with `epsilon` in all lanes, and all
+/// four result bits must be set (mask `0xf`). Returns the 0 or 1 of
+/// `00458990`.
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn fn_00561730(e: &mut Engine, this: Ptr, other: Ptr, epsilon: f32) -> u32 {
+    e.with_stack(0x30, |e, frame| {
+        let difference = frame.addr();
+        let tolerance = frame.addr() + 0x10;
+        let compared = frame.addr() + 0x20;
+        e.call(VECTOR_CONSTRUCT, &args![difference]);
+        e.call(VECTOR_SUBTRACT, &args![difference, this, other]);
+        e.call(VECTOR_ABSOLUTE, &args![difference, difference]);
+        e.call(VECTOR_CONSTRUCT, &args![tolerance]);
+        e.call(VECTOR_SPLAT, &args![tolerance, epsilon]);
+        let mask = e
+            .call(VECTOR_COMPARE, &args![difference, compared, tolerance])
+            .u32();
+        e.call(VECTOR_ALL_SET, &args![mask, 0xfu32]).u32()
+    })
+}
+
+// Translated from 005617c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the angular velocity `velocity` (an `hkVector4`) of the body's
+/// entity with the lock marker around it; nothing without an entity.
+pub fn fn_005617c0(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    let entity = e.call(BODY_ENTITY, &args![this]).u32();
+    if entity != 0 {
+        e.call(BODY_LOCK_MARKER, &args![this]);
+        hkp_rigid_body_set_angular_velocity(e, Ptr::new(entity), velocity);
+        e.call(BODY_LOCK_MARKER, &args![this]);
+    }
+}
+
+// Translated from 00561800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpRigidBody::setAngularVelocity` (Xbox PDB): like
+/// [`hkp_rigid_body_set_linear_velocity`] against the entity's second
+/// velocity vector (`fn_00560e50`), setting through the motion's virtual at
+/// +0x44.
+pub fn hkp_rigid_body_set_angular_velocity(e: &mut Engine, this: Ptr, velocity: Ptr) {
+    let epsilon: f32 = e.global(VELOCITY_EPSILON);
+    let current = fn_00560e50(e, this);
+    if fn_00561730(e, velocity, current, epsilon) == 0 {
+        e.call(ENTITY_ACTIVATE, &args![this]);
+        let motion = e.call(BODY_VECTOR_PART, &args![this]).u32();
+        e.vcall(motion, 0x44, &args![velocity]);
+    }
+}
+
+// Translated from 00561860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Loads the Havok record of a reference from a save older than version
+/// 0x51 (`fn_00560530` sends them here); `size` is the record's size.
+///
+/// Without a loaded 3D the record is skipped, with a message. Otherwise it
+/// reads the flags: saves before version 0x16 and 0x16 to 0x2a read a single
+/// byte that sets bit 0 when it is non-zero (before 0x16 it is read before
+/// the 3D is looked up), 0x2b and later read the flags byte itself. From
+/// version 0x18 it reads the saved bone count and compares it with the
+/// current one (`fn_00560350`): a different count skips the rest of the
+/// record (`size - 2`), logs why and knocks an actor down. The same count
+/// walks the collision nodes with `fn_00561b40`, freezes an actor's rigid
+/// bodies when it is fixed (virtual +0x234) and gives the 3D a zero
+/// velocity record.
+pub fn fn_00561860(e: &mut Engine, this: Ptr<TESObjectREFR>, size: u16) {
+    let me = this.addr();
+    let save_load = global_ptr(e, GLOBAL_SAVE_LOAD);
+    e.with_stack(0x80, |e, frame| {
+        let flags_slot = frame.addr();
+        let legacy_slot = frame.addr() + 1;
+        let saved_count_slot = frame.addr() + 2;
+        let record: Ptr<HavokSaveData> = Ptr::new(frame.addr() + 0x10);
+        let walk: Ptr<OldHavokLoadWalk> = Ptr::new(frame.addr() + 0x30);
+        let vector = frame.addr() + 0x50;
+        if save_version(e, save_load) < 0x16 {
+            e.call(FORM_LOAD_DATA, &args![this, legacy_slot, 1u32]);
+            if e.mem.u8(legacy_slot) != 0 {
+                let flags = e.mem.u8(flags_slot);
+                e.mem.set_u8(flags_slot, flags | 1);
+            }
+        }
+        let obj3d = loaded_3d(e, me);
+        if obj3d == 0 {
+            let form_id = e.call(FORM_ID, &args![this]).u32();
+            let name = e.vcall(me, 0x130, &args![]).u32();
+            e.call(MESSAGE, &args![HAVOK_NO_3D_FORMAT, name, form_id]);
+            e.call(SAVE_SKIP, &args![save_load, u32::from(size)]);
+            return;
+        }
+        let actor = if is_actor(e, me) { me } else { 0 };
+        if save_version(e, save_load) >= 0x2b {
+            e.call(FORM_LOAD_DATA, &args![this, flags_slot, 1u32]);
+        }
+        if save_version(e, save_load) >= 0x16 && save_version(e, save_load) < 0x2b {
+            e.call(FORM_LOAD_DATA, &args![this, legacy_slot, 1u32]);
+            if e.mem.u8(legacy_slot) != 0 {
+                let flags = e.mem.u8(flags_slot);
+                e.mem.set_u8(flags_slot, flags | 1);
+            }
+        }
+        if save_version(e, save_load) >= 0x18 {
+            e.call(FORM_LOAD_DATA, &args![this, saved_count_slot, 1u32]);
+            fn_0055ebf0(e, record);
+            fn_00560350(e, this, record);
+            let active = e.get(record, HavokSaveData::sActiveBoneCount);
+            let inactive = e.get(record, HavokSaveData::sInactiveBoneCount);
+            let current = (u32::from(active) + u32::from(inactive)) as u8;
+            let saved = e.mem.u8(saved_count_slot);
+            if current != saved {
+                let form_id = e.call(FORM_ID, &args![this]).u32();
+                let name = e.vcall(me, 0x130, &args![]).u32();
+                e.call(
+                    MESSAGE,
+                    &args![
+                        HAVOK_BONE_COUNT_FORMAT,
+                        name,
+                        form_id,
+                        u32::from(saved),
+                        u32::from(current)
+                    ],
+                );
+                e.call(
+                    SAVE_SKIP,
+                    &args![save_load, u32::from(size).wrapping_sub(2)],
+                );
+                if actor != 0 {
+                    let ragdoll = e.mem.u32(actor + 0xac);
+                    if ragdoll != 0 {
+                        e.call(DISABLE_RAGDOLL_ANIM, &args![ragdoll, 1u32]);
+                    }
+                    e.call(KNOCK_DOWN, &args![obj3d, ZERO_VECTOR, 1u32, 0.0f32, 0u32]);
+                }
+                return;
+            }
+        }
+        e.set(walk, OldHavokLoadWalk::iMode, 0x12);
+        e.set(walk, OldHavokLoadWalk::bRecurse, 1);
+        let root = e.call(COLLISION_ROOT, &args![obj3d]).u32();
+        e.set(walk, OldHavokLoadWalk::pCollisionRoot, Ptr::new(root));
+        e.set(walk, OldHavokLoadWalk::pRef, this.cast());
+        let flags = u32::from(e.mem.u8(flags_slot));
+        e.set(walk, OldHavokLoadWalk::iFlags, flags);
+        e.set(walk, OldHavokLoadWalk::iSpare, 0);
+        e.call(WALK_COLLISION, &args![obj3d, walk, 0x0056_1b40u32]);
+        if actor != 0 && e.vcall(actor, 0x234, &args![]).bool() {
+            e.call(SET_FIXED, &args![obj3d, 1u32, 1u32]);
+            e.call(SET_MOTION, &args![obj3d, 1u32, 1u32, 0u32, 1u32]);
+            let group = e.vcall(actor, 0x1e4, &args![]).u32();
+            if group != 0 {
+                e.call(CLEAR_ANIM_GROUP, &args![group, 0x14u32, 0.0f32]);
+                e.call(ANIM_FINISH, &args![group]);
+            }
+        }
+        e.call(MAKE_VELOCITY, &args![vector, 0.0f32, 0u32, 0u32]);
+        e.call(SET_3D_VELOCITY, &args![obj3d, vector]);
+    });
+}
+
+// Translated from 00561b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `fn_00561860` hands to the collision walker (`walk` is its
+/// [`OldHavokLoadWalk`]): for each collision node `node` that is not skipped
+/// and has a rigid body it reads the pose and the velocities from the save
+/// game. A node whose object is named "Arrow" is skipped, and for an
+/// actor so is one of the type at `011f9140`; an actor otherwise gets the
+/// node's virtual +0xb0 (1, 0, 0) first.
+///
+/// The pose comes from the stream, unless flag 2 is set (saves from
+/// version 0x2b) or, in older saves, the node is the collision root: then
+/// it is the reference's own location and orientation and flag 2 is
+/// cleared. The velocities are the two vectors of the stream and the body
+/// is activated when bit 0 of the flags is set, else zero vectors.
+pub fn fn_00561b40(e: &mut Engine, node: Ptr, walk: Ptr<OldHavokLoadWalk>) {
+    let save_load = global_ptr(e, GLOBAL_SAVE_LOAD);
+    let body_ref = e.call(NODE_BODY_REF, &args![node]).u32();
+    e.call(RAGDOLL_NODE_STEP, &args![node, 0u32]);
+    if e.call(NODE_OBJECT, &args![node]).u32() != 0 {
+        let object = e.call(NODE_OBJECT, &args![node]).u32();
+        if sequence_name(e, object) != 0 {
+            let object = e.call(NODE_OBJECT, &args![node]).u32();
+            let name = sequence_name(e, object);
+            if e.call(STRING_COMPARE, &args![name, ARROW]).u32() == 0 {
+                return;
+            }
+        }
+    }
+    let reference = e.get(walk, OldHavokLoadWalk::pRef).addr();
+    if e.vcall(reference, 0x100, &args![]).bool() {
+        let object = e.call(NODE_OBJECT, &args![node]).u32();
+        if e.call(IS_OF_TYPE, &args![SKIPPED_NODE_TYPE, object]).bool() {
+            return;
+        }
+        e.vcall(node.addr(), 0xb0, &args![1u32, 0u32, 0u32]);
+    }
+    if body_ref == 0 {
+        return;
+    }
+    let body = node_rigid_body(e, body_ref);
+    if body == 0 {
+        return;
+    }
+    let body = Ptr::new(body);
+    e.with_stack(0x80, |e, frame| {
+        let position = frame.addr();
+        let first = frame.addr() + 0x10;
+        let second = frame.addr() + 0x20;
+        let rotation = frame.addr() + 0x30;
+        let quaternion = frame.addr() + 0x40;
+        let matrix = frame.addr() + 0x50;
+        construct_vectors(e, &[position, first, second, rotation]);
+        let flags = e.get(walk, OldHavokLoadWalk::iFlags);
+        let mut from_stream = flags & 2 == 0;
+        if save_version(e, save_load) < 0x2b {
+            from_stream = node != e.get(walk, OldHavokLoadWalk::pCollisionRoot);
+        }
+        if from_stream {
+            e.call(SAVE_READ, &args![save_load, position, 0xcu32]);
+            e.call(SAVE_READ, &args![save_load, rotation, 0x10u32]);
+            fn_005610f0(e, body, Ptr::new(position));
+            fn_00561150(e, body, Ptr::new(rotation));
+        } else {
+            e.set(walk, OldHavokLoadWalk::iFlags, flags & !2);
+            let location = e.vcall(reference, 0x1f4, &args![]).u32();
+            fn_005610f0(e, body, Ptr::new(location));
+            e.call(VECTOR_CONSTRUCT, &args![quaternion]);
+            let orientation = e.call(GET_ORIENTATION, &args![reference, matrix]).u32();
+            e.call(QUATERNION_FROM_ROTATION, &args![quaternion, orientation]);
+            fn_00561150(e, body, Ptr::new(quaternion));
+        }
+        if e.get(walk, OldHavokLoadWalk::iFlags) & 1 == 0 {
+            fn_005615d0(e, body, Ptr::new(ZERO_VECTOR));
+            fn_00561630(e, body, Ptr::new(ZERO_VECTOR));
+        } else {
+            e.call(SAVE_READ, &args![save_load, first, 0xcu32]);
+            e.call(SAVE_READ, &args![save_load, second, 0xcu32]);
+            fn_005615d0(e, body, Ptr::new(first));
+            fn_00561630(e, body, Ptr::new(second));
+            fn_00561580(e, body, 1);
+        }
+    });
+}
+
+// Translated from 00561d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetOriginalOpenByDefaultState` (Xbox PDB): bit 8 of the
+/// reference's extra-data flags, inverted when the save-load game already
+/// has the change `0x400000` (the open-state change) recorded for it
+/// (`BGSSaveLoadGame::GetChange`, with the change flags built by
+/// `008c71b0`).
+pub fn tes_object_refr_get_original_open_by_default_state(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+) -> bool {
+    let me = this.addr();
+    let flags = e.with_stack(4, |e, cell| {
+        e.call(CHANGE_FLAGS_CONSTRUCT, &args![cell, 0x0040_0000u32]);
+        e.mem.u32(cell.addr())
+    });
+    let save_load_game = global_ptr(e, GLOBAL_SAVE_LOAD_GAME);
+    let recorded = e
+        .call(SAVE_LOAD_GET_CHANGE, &args![save_load_game, this, flags])
+        .bool();
+    let list = extra_list(e, me);
+    let open = e.call(EXTRA_FLAG_TEST, &args![list, 8u32]).bool();
+    if recorded {
+        !open
+    } else {
+        open
+    }
+}
+
+// Translated from 00561df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetEditorLocation` (Xbox PDB), virtual at +0x138: the
+/// position and rotation the reference was placed with in the editor, from
+/// its editor-location extra data (type 0xf); false without it.
+///
+/// `space` receives the world space or cell it applies to: the extra's
+/// starting space, else the reference's world space (`00575d70`), else its
+/// parent cell, else `default_cell` (a cell of form type 0x39 stands for
+/// itself when `00425fd0` holds, else for its world space; any other form
+/// stands for itself); false when none of them exists.
+pub fn tes_object_refr_get_editor_location(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    position: Ptr,
+    rotation: Ptr,
+    space: Ptr,
+    default_cell: Ptr,
+) -> bool {
+    let me = this.addr();
+    let list = extra_list(e, me);
+    let record = e
+        .call(EXTRA_GET_DATA, &args![list, EXTRA_TYPE_EDITOR_LOCATION])
+        .u32();
+    if record == 0 {
+        return false;
+    }
+    let list = extra_list(e, me);
+    let starting = e.call(EXTRA_GET_STARTING_SPACE, &args![list]).u32();
+    e.mem.set_u32(space.addr(), starting);
+    if e.mem.u32(space.addr()) == 0 {
+        let world = e.call(GET_WORLD_SPACE, &args![this]).u32();
+        e.mem.set_u32(space.addr(), world);
+        if e.mem.u32(space.addr()) == 0 {
+            let parent = e.get(this, TESObjectREFR::pParentCell);
+            if !parent.is_null() {
+                e.mem.set_u32(space.addr(), parent.addr());
+            } else if default_cell.is_null() {
+                return false;
+            } else if e.call(FORM_TYPE, &args![default_cell]).u32() == FORM_TYPE_CELL {
+                if e.call(CELL_TEST, &args![default_cell]).bool() {
+                    e.mem.set_u32(space.addr(), default_cell.addr());
+                } else {
+                    let world = e.call(CELL_GET_WORLD_SPACE, &args![default_cell]).u32();
+                    e.mem.set_u32(space.addr(), world);
+                }
+            } else {
+                e.mem.set_u32(space.addr(), default_cell.addr());
+            }
+        }
+    }
+    for word in 0..3 {
+        let value = e.mem.u32(record + 0xc + 4 * word);
+        e.mem.set_u32(position.addr() + 4 * word, value);
+    }
+    for word in 0..3 {
+        let value = e.mem.u32(record + 0x18 + 4 * word);
+        e.mem.set_u32(rotation.addr() + 4 * word, value);
+    }
+    true
+}
+
+// Translated from 00561ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::MoveToEditorLocation` (Xbox PDB): puts the reference
+/// back where the editor placed it. Asks the editor location (virtual
+/// +0x138) and resolves the cell it is in (`GetLocationCellOrWorld`, and
+/// `GetCellFromWorldCoord` for an exterior). A reference that does not
+/// persist needs that cell to be loaded. Sets the location, then the
+/// rotation, moves the reference to its cell (an interior one, by
+/// `00425fd0`) or world space and updates its 3D position. False when the
+/// reference has no editor location or its cell is not loaded.
+pub fn tes_object_refr_move_to_editor_location(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    default_cell: Ptr,
+) -> bool {
+    let me = this.addr();
+    e.with_stack(0x30, |e, frame| {
+        let position = frame.addr();
+        let rotation = frame.addr() + 0xc;
+        let space = frame.addr() + 0x18;
+        let cell_slot = frame.addr() + 0x1c;
+        let world_slot = frame.addr() + 0x20;
+        construct_vectors(e, &[position, rotation]);
+        e.mem.set_u32(space, 0);
+        let found = e
+            .vcall(me, 0x138, &args![position, rotation, space, default_cell])
+            .bool();
+        if !found {
+            return false;
+        }
+        e.mem.set_u32(cell_slot, 0);
+        e.mem.set_u32(world_slot, 0);
+        let target = e.mem.u32(space);
+        e.call(
+            GET_LOCATION_CELL_OR_WORLD,
+            &args![target, cell_slot, world_slot],
+        );
+        if e.mem.u32(world_slot) != 0 {
+            let world = e.mem.u32(world_slot);
+            let cell = e.call(WORLD_CELL_FROM_COORD, &args![world, position]).u32();
+            e.mem.set_u32(cell_slot, cell);
+        }
+        if !e.call(GET_REF_PERSISTS, &args![this]).bool() {
+            let cell = e.mem.u32(cell_slot);
+            if cell == 0 {
+                return false;
+            }
+            let tes = global_ptr(e, GLOBAL_TES);
+            if !e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() {
+                return false;
+            }
+        }
+        e.call(SET_LOCATION_ON_REFERENCE, &args![this, position]);
+        let words = [
+            e.mem.u32(rotation),
+            e.mem.u32(rotation + 4),
+            e.mem.u32(rotation + 8),
+        ];
+        e.call(SET_ROTATION, &args![this, words[0], words[1], words[2]]);
+        let cell = e.mem.u32(cell_slot);
+        if cell != 0 && e.call(CELL_TEST, &args![cell]).bool() {
+            e.call(MOVE_REF_TO_NEW_SPACE, &args![this, cell, 0u32]);
+        } else {
+            let world = e.mem.u32(world_slot);
+            e.call(MOVE_REF_TO_NEW_SPACE, &args![this, 0u32, world]);
+        }
+        tes_object_refr_update_3d_position(e, this);
+        true
+    })
+}
+
+// Translated from 00562020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::Update3DPosition` (Xbox PDB): moves the reference's
+/// loaded 3D to its location and orientation. For a mobile object
+/// (virtual +0xfc) with a character controller the controller is moved to
+/// the location first (`bhk_character_controller_set_position`). Then the
+/// 3D gets the location (`00440460`) and orientation (`0043fa80`), the
+/// Havok world is updated (`00c69f50`) and the 3D gets a zero velocity
+/// record. Nothing without a loaded 3D.
+pub fn tes_object_refr_update_3d_position(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    let obj3d = loaded_3d(e, me);
+    if obj3d == 0 {
+        return;
+    }
+    if e.vcall(me, 0xfc, &args![]).bool() {
+        let controller = e.call(GET_CHARACTER_CONTROLLER, &args![this]).u32();
+        if controller != 0 {
+            bhk_character_controller_set_position(e, Ptr::new(controller), Ptr::new(me + 0x30));
+        }
+    }
+    e.call(SET_3D_LOCATION, &args![obj3d, me + 0x30]);
+    e.with_stack(0x30, |e, frame| {
+        let matrix = frame.addr();
+        let record = frame.addr() + 0x24;
+        let orientation = e.call(GET_ORIENTATION, &args![this, matrix]).u32();
+        e.call(SET_3D_ORIENTATION, &args![obj3d, orientation]);
+        e.call(UPDATE_POSITION, &args![obj3d, 1u32, 0u32]);
+        e.call(MAKE_VELOCITY, &args![record, 0.0f32, 0u32, 0u32]);
+        e.call(SET_3D_VELOCITY, &args![obj3d, record]);
+    });
+}
+
+// Translated from 005620e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCharacterController::SetPosition` (Xbox PDB): converts the `NiPoint3`
+/// at `position` to an `hkVector4` (`004a3e00`) and sets it as the
+/// controller's position (`SetPosition_ov2`, `00c6e390`).
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn bhk_character_controller_set_position(e: &mut Engine, this: Ptr, position: Ptr) {
+    e.with_stack(0x10, |e, converted| {
+        e.call(VECTOR_CONSTRUCT, &args![converted]);
+        let result = e.call(NI_TO_VECTOR, &args![converted, position]).u32();
+        e.call(CONTROLLER_SET_POSITION, &args![this, result]);
+    });
+}
+
+// Translated from 00562140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// After the empty step `004534f0`, when the buffer's change flags have
+/// `0x10000000`, the reference is not an actor, has a loaded 3D, the
+/// save-load game's global flags do not have bit 4 (`fn_005621d0`) and
+/// `fn_00563530` is false: clears `0x10000000` from the buffer's change
+/// flags (`fn_005621f0`).
+pub fn fn_00562140(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(EMPTY_BUFFER_STEP, &args![this, buffer]);
+    if !buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x1000_0000) {
+        return;
+    }
+    if is_actor(e, me) || loaded_3d(e, me) == 0 {
+        return;
+    }
+    let save_load_game = global_ptr(e, GLOBAL_SAVE_LOAD_GAME);
+    if fn_005621d0(e, Ptr::new(save_load_game)) {
+        return;
+    }
+    if fn_00563530(e, this) {
+        return;
+    }
+    fn_005621f0(e, buffer, 0x1000_0000);
+}
+
+// Translated from 005621d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 4 of `BGSSaveLoadGame::iGlobalFlags` (+0x244, Xbox PDB) is
+/// set.
+pub fn fn_005621d0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x244) & 4 != 0
+}
+
+// Translated from 005621f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the bits of `mask` from the change flags
+/// (`BGSLoadFormBuffer::Header.iChangeFlags`, at +0x17) of the buffer
+/// (`fn_00562210`).
+pub fn fn_005621f0(e: &mut Engine, this: Ptr, mask: u32) {
+    fn_00562210(e, Ptr::new(this.addr() + 0x17), mask);
+}
+
+// Translated from 00562210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BGSChangeFlags` clear: `*this &= !mask`.
+pub fn fn_00562210(e: &mut Engine, this: Ptr, mask: u32) {
+    let flags = e.mem.u32(this.addr());
+    e.mem.set_u32(this.addr(), !mask & flags);
+}
+
+// Translated from 00562230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SaveGame` (Xbox PDB, the overload taking the save
+/// buffer): after the form's own step (`00484d60`) writes, for the change
+/// flags of `buffer`: the scale (flag 0x10, 4 bytes at +0x3c), the extra data
+/// (`0xa4021c40`, plus `0x3fc00` for an actor), the inventory changes
+/// (`0x8000020`) and, for a non-actor with flag 0x10000000, the animation:
+/// the saved animation of the extra data is either handed to a sub buffer
+/// when the reference has no 3D (`00865510`) or written as a sized value
+/// around `SaveAnimation` (`tes_object_refr_save_animation`).
+pub fn tes_object_refr_save_game_ov2(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(FORM_SAVE_GAME_BUFFER, &args![this, buffer]);
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x10) {
+        e.call(BUFFER_SAVE_DATA, &args![buffer, me + 0x3c, 4u32, 0u32]);
+    }
+    let actor = e.vcall(me, 0x100, &args![]).bool();
+    let mask = extra_change_mask(actor);
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), mask) {
+        let list = extra_list(e, me);
+        e.call(EXTRA_SAVE_GAME_OV2, &args![list, buffer]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0800_0020) {
+        let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+        e.call(INVENTORY_CHANGES_SAVE_GAME, &args![changes, buffer]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x1000_0000) && !is_actor(e, me) {
+        let list = extra_list(e, me);
+        let animation = e.call(EXTRA_GET_SAVED_ANIMATION, &args![list]).u32();
+        e.with_stack(4, |e, cell| {
+            e.call(CHANGE_FLAGS_CONSTRUCT, &args![cell, animation]);
+            if loaded_3d(e, me) == 0 && e.call(READ_FIRST_DWORD, &args![cell]).u32() != 0 {
+                e.call(SUB_BUFFER_SAVE_GAME, &args![cell, buffer]);
+            } else {
+                let token = e.call(BUFFER_START_VARIABLE, &args![buffer]).u32();
+                let before = e.call(FORM_ID, &args![buffer]).u32();
+                tes_object_refr_save_animation(e, this, buffer);
+                let after = e.call(FORM_ID, &args![buffer]).u32();
+                e.call(
+                    BUFFER_SAVE_VARIABLE_OV2,
+                    &args![buffer, after.wrapping_sub(before), token],
+                );
+            }
+        });
+    }
+}
+
+// Translated from 005623d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::LoadGame` (the overload taking the load buffer; the map
+/// has no name for it): after the form's own step (`00484da0`), for the
+/// change flags of `buffer`: 0x200000 empties a non-actor form, 0x10 reads
+/// the scale (4 bytes at +0x3c) and applies it (`00567490`), the extra data
+/// (`0xa4021c40`, plus `0x3fc00` for an actor), the inventory changes
+/// (`0x8000020`), a queued sub buffer (0x10000000, non-actors) and the
+/// open-state flag (0x400000, non-actors). It then applies a destruction
+/// stage when the reference has loaded data and its health is not -1, and
+/// ends with `fn_0055d6d0` on the loaded 3D.
+pub fn fn_005623d0(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(FORM_LOAD_GAME_BUFFER, &args![this, buffer]);
+    let actor = e.vcall(me, 0x100, &args![]).bool();
+    if !actor && buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0020_0000) {
+        e.call(FORM_SET_EMPTY, &args![this, 1u32]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x10) {
+        e.call(BUFFER_LOAD_DATA, &args![buffer, me + 0x3c, 4u32]);
+        let scale = e.mem.f32(me + 0x3c);
+        e.call(SET_SCALE, &args![this, scale]);
+    }
+    let mask = extra_change_mask(actor);
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), mask) {
+        let list = extra_list(e, me);
+        e.call(EXTRA_LOAD_GAME_OV2, &args![list, buffer]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0800_0020) {
+        let list = extra_list(e, me);
+        e.call(EXTRA_STEP_BEFORE_CHANGES, &args![list]);
+        let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+        e.call(INVENTORY_CHANGES_LOAD_GAME, &args![changes, buffer]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x1000_0000) && !is_actor(e, me) {
+        let save_load_game = global_ptr(e, GLOBAL_SAVE_LOAD_GAME);
+        e.call(QUEUE_SUB_BUFFER, &args![save_load_game, 0u32, buffer, 0u32]);
+    }
+    if !is_actor(e, me) && buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0040_0000) {
+        copy_open_state_flag(e, me);
+    }
+    if has_loaded_3d_data(e, this) {
+        let list = extra_list(e, me);
+        let health = e.call(EXTRA_GET_OBJECT_HEALTH, &args![list]).f32();
+        let marker: f64 = e.global(MINUS_ONE_DOUBLE);
+        if health as f64 != marker && e.call(GET_BASE_FORM, &args![this]).u32() != 0 {
+            update_damage_stage(e, this, 0);
+        }
+    }
+    let obj3d = get_3d(e, me);
+    fn_0055d6d0(e, this, Ptr::new(obj3d));
+}
+
+// Translated from 00562660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// After the empty step (`004534f0`): takes the disabled state from the
+/// enable-state parent (`follow_enable_parent`); loads the extra data
+/// (`0042ceb0`, flags `0xa4021c40` plus `0x3fc00` for an actor, with the
+/// base object) and the inventory changes (`0x8000020`, `004d42f0`); and
+/// hides the terrain tree of a disabled exterior object whose base form
+/// passes `00549580`.
+pub fn fn_00562660(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(EMPTY_BUFFER_STEP, &args![this, buffer]);
+    let parent = e.call(ENABLE_PARENT, &args![this]).u32();
+    if parent != 0 {
+        follow_enable_parent(e, this, parent);
+    }
+    let actor = e.vcall(me, 0x100, &args![]).bool();
+    let mask = extra_change_mask(actor);
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), mask) {
+        let base = e.get(this.at(TESObjectREFR::data), OBJ_REFR::pObjectReference);
+        let list = extra_list(e, me);
+        e.call(EXTRA_LOAD_GAME_WITH_BASE, &args![list, buffer, base]);
+    }
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0800_0020) {
+        let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+        e.call(INVENTORY_CHANGES_FINISH, &args![changes, buffer]);
+    }
+    if e.call(GET_BASE_FORM, &args![this]).u32() != 0 {
+        let base = e.call(GET_BASE_FORM, &args![this]).u32();
+        if e.call(BASE_FORM_TEST, &args![base]).bool()
+            && e.call(FORM_IS_DISABLED, &args![this]).bool()
+        {
+            let world = e.call(GET_WORLD_SPACE, &args![this]).u32();
+            if world != 0 {
+                let manager = e.call(WORLD_GET_TERRAIN_MANAGER, &args![world]).u32();
+                e.call(TERRAIN_HIDE_TREE, &args![manager, this, 1u32]);
+            }
+        }
+    }
+}
+
+// Translated from 005627c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::FinishLoadGame` (Xbox PDB): after the empty step
+/// (`004534f0`), finishes the extra data (`0xa4021c40`, plus `0x3fc00` for an
+/// actor); for a non-actor with change flag 0x800000 puts the open/close
+/// state back (`tes_object_refr_get_original_open_by_default_state` picks
+/// which way: `ClearAction(4)` or `00572d50(4)`, then `SnapHavokTo3D` and
+/// the navmesh obstacle manager's `OnDoorClose` or its open counterpart);
+/// adds the reference to its cell's activating references (flag
+/// 0x4000000); and, unless the save-load game says so (`0042ce10`), either
+/// runs the virtual +0x1cc (when `00437b90` holds) or queues the reference
+/// for loading (`ModelLoader::QueueReference`) when it has no 3D and its
+/// cell passes `00450ff0`.
+pub fn tes_object_refr_finish_load_game(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(EMPTY_BUFFER_STEP, &args![this, buffer]);
+    let actor = e.vcall(me, 0x100, &args![]).bool();
+    let mask = extra_change_mask(actor);
+    if buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), mask) {
+        let list = extra_list(e, me);
+        e.call(EXTRA_FINISH_LOAD_GAME, &args![list, buffer]);
+    }
+    if !is_actor(e, me) && buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0080_0000) {
+        if tes_object_refr_get_original_open_by_default_state(e, this) {
+            e.call(REFR_CLEAR_ACTION, &args![this, 4u32]);
+            e.call(SNAP_HAVOK_TO_3D, &args![this]);
+            let manager = e.call(GET_OBSTACLE_MANAGER, &args![]).u32();
+            e.call(OBSTACLE_ON_DOOR_CLOSE, &args![manager, this]);
+        } else {
+            e.call(REFR_SET_ACTION, &args![this, 4u32]);
+            e.call(SNAP_HAVOK_TO_3D, &args![this]);
+            let manager = e.call(GET_OBSTACLE_MANAGER, &args![]).u32();
+            e.call(OBSTACLE_ON_DOOR_OPEN, &args![manager, this]);
+        }
+    }
+    let parent = e.get(this, TESObjectREFR::pParentCell);
+    if !parent.is_null() && buffer_changed(e, BUFFER_CHANGE_FLAGS, buffer.addr(), 0x0400_0000) {
+        e.call(CELL_ADD_ACTIVATING_REF, &args![parent, this]);
+    }
+    let save_load_game = global_ptr(e, GLOBAL_SAVE_LOAD_GAME);
+    if e.call(SAVE_LOAD_GAME_TEST, &args![save_load_game]).bool() {
+        return;
+    }
+    if e.call(REFR_3D_TEST, &args![this]).bool() {
+        e.vcall(me, 0x1cc, &args![0u32, 0u32]);
+    } else if get_3d(e, me) == 0 {
+        let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+        if cell != 0 {
+            let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+            if e.call(CELL_PRIORITY_TEST, &args![cell]).bool() {
+                let cell = e.call(GET_PARENT_CELL, &args![this]).u32();
+                let tes = global_ptr(e, GLOBAL_TES);
+                let priority = e.call(TES_GET_CELL_PRIORITY, &args![tes, cell, 0u32]).u32();
+                let loader = global_ptr(e, GLOBAL_MODEL_LOADER);
+                e.call(
+                    MODEL_LOADER_QUEUE_REFERENCE,
+                    &args![loader, this, priority, 1u32],
+                );
+            }
+        }
+    }
+}
+
+// Translated from 005629a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second step of loading a reference from the buffer, with the
+/// buffer's old change flags (`BGSLoadFormBuffer::iOldChangeFlags`). After
+/// the empty step (`004534f0`) it resets the loaded data's cached radius
+/// to -1.0 (+0xc); empties a non-actor form for flag 0x200000
+/// (`SetEmpty(0)`); remembers whether the extra data has a health other
+/// than -1; loads the extra data (`0042dae0`); applies the destruction
+/// stage when it had a health; runs `fn_00563890` for flag 0x10000000 on a
+/// non-actor; runs `0042dd90`; for flag 0x8000020 either calls the virtual
+/// +0x208 (when the buffer has bit 4 in its `iFlags`, `fn_00562d00`) or
+/// resets the state (`00574920`, with 0 when flag 0x20 is set, else 1); for
+/// a non-actor copies the open-state flag (0x400000) and sets the open
+/// state; restores the rag doll data of a non-actor whose 3D should be a
+/// rag doll; adds the reference to its cell's activating references
+/// (0x4000000) and ends with `fn_0055d6d0`.
+pub fn fn_005629a0(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    e.call(EMPTY_BUFFER_STEP, &args![this, buffer]);
+    let loaded = e.get(this, TESObjectREFR::pLoadedData);
+    if !loaded.is_null() {
+        let marker: f32 = e.global(MINUS_ONE_FLOAT);
+        e.set(
+            loaded.cast::<LOADED_REF_DATA>(),
+            LOADED_REF_DATA::fCachedRadius,
+            marker,
+        );
+    }
+    let actor = e.vcall(me, 0x100, &args![]).bool();
+    if !actor && buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x0020_0000) {
+        e.call(FORM_SET_EMPTY, &args![this, 0u32]);
+    }
+    let list = extra_list(e, me);
+    let health = e.call(EXTRA_GET_OBJECT_HEALTH, &args![list]).f32();
+    let marker: f64 = e.global(MINUS_ONE_DOUBLE);
+    let has_health = health as f64 != marker;
+    let mask = extra_change_mask(actor);
+    if buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), mask) {
+        let list = extra_list(e, me);
+        e.call(EXTRA_LOAD_STEP, &args![list, buffer]);
+    }
+    if has_health && has_loaded_3d_data(e, this) {
+        update_damage_stage(e, this, 1);
+    }
+    if buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x1000_0000) && !is_actor(e, me) {
+        fn_00563890(e, this);
+    }
+    let list = extra_list(e, me);
+    e.call(EXTRA_LOAD_LAST_STEP, &args![list, buffer]);
+    if buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x0800_0020) {
+        if fn_00562d00(e, buffer) {
+            e.vcall(me, 0x208, &args![0u32]);
+        } else if buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x20) {
+            e.call(RESET_STATE, &args![this, 0u32]);
+        } else {
+            e.call(RESET_STATE, &args![this, 1u32]);
+        }
+    }
+    if !is_actor(e, me) {
+        if buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x0040_0000) {
+            copy_open_state_flag(e, me);
+        }
+        let state = e.call(GET_OPEN_STATE, &args![this, 8u32]).u8();
+        e.call(SET_OPEN_STATE, &args![this, u32::from(state), 1u32]);
+    }
+    if get_3d(e, me) != 0 {
+        let obj3d = get_3d(e, me);
+        if e.call(SHOULD_3D_RAGDOLL, &args![this, obj3d]).bool() && !is_actor(e, me) {
+            e.call(RESTORE_RAGDOLL_DATA, &args![this, 0u32]);
+        }
+    }
+    let parent = e.get(this, TESObjectREFR::pParentCell);
+    if !parent.is_null() && buffer_changed(e, BUFFER_OLD_CHANGE_FLAGS, buffer.addr(), 0x0400_0000) {
+        e.call(CELL_REFERENCE_STEP, &args![parent, this]);
+    }
+    let obj3d = get_3d(e, me);
+    fn_0055d6d0(e, this, Ptr::new(obj3d));
+}
+
+// Translated from 00562d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 4 of `BGSLoadFormBuffer::iFlags` (+0x28, Xbox PDB) is set.
+pub fn fn_00562d00(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x28) & 4 != 0
+}
+
+// Translated from 00562d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counts the rigid bodies of the reference's loaded 3D into the
+/// [`BGSHavokSaveData`] `record` (`fn_00563120` does the counting for each
+/// collision node) and sets its flags: 4 when there are active and
+/// inactive bodies or any keyframed one, else 1 when there are active ones.
+/// Fills the reference, the 3D and the collision root first; nothing
+/// without a loaded 3D.
+pub fn fn_00562d20(e: &mut Engine, this: Ptr<TESObjectREFR>, record: Ptr<BGSHavokSaveData>) {
+    let me = this.addr();
+    let obj3d = loaded_3d(e, me);
+    if obj3d == 0 {
+        return;
+    }
+    e.set(record, BGSHavokSaveData::pRef, this.cast());
+    e.set(record, BGSHavokSaveData::pObj3D, Ptr::new(obj3d));
+    let root = e.call(COLLISION_ROOT, &args![obj3d]).u32();
+    e.set(record, BGSHavokSaveData::pCollisionRoot, Ptr::new(root));
+    e.with_stack(0x10, |e, frame| {
+        let walk: Ptr<CollisionWalkContext> = frame.cast();
+        e.set(walk, CollisionWalkContext::iMode, 0x12);
+        e.set(walk, CollisionWalkContext::bRecurse, 1);
+        e.set(walk, CollisionWalkContext::pUserData, record.cast());
+        e.call(WALK_COLLISION, &args![obj3d, walk, 0x0056_3120u32]);
+    });
+    let active = e.get(record, BGSHavokSaveData::iActiveBoneCount);
+    let inactive = e.get(record, BGSHavokSaveData::iInactiveBoneCount);
+    let flags = e.get(record, BGSHavokSaveData::cFlags);
+    if active != 0 && inactive != 0 {
+        e.set(record, BGSHavokSaveData::cFlags, flags | 4);
+    } else if active != 0 {
+        e.set(record, BGSHavokSaveData::cFlags, flags | 1);
+    }
+    if e.get(record, BGSHavokSaveData::iKeyFramedBoneCount) != 0 {
+        let flags = e.get(record, BGSHavokSaveData::cFlags);
+        e.set(record, BGSHavokSaveData::cFlags, flags | 4);
+    }
+}
+
+// Translated from 00562de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SaveHavokData` (Xbox PDB): writes the Havok record of
+/// the reference into the save `buffer`. Counts the bodies (`fn_00562d20`),
+/// writes the flags byte, the sized value (active + inactive count) and
+/// then walks the collision nodes with `fn_00563220`, which writes each
+/// body. Nothing without a loaded 3D.
+pub fn tes_object_refr_save_havok_data(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    let obj3d = loaded_3d(e, me);
+    if obj3d == 0 {
+        return;
+    }
+    e.with_stack(0x30, |e, frame| {
+        let record: Ptr<BGSHavokSaveData> = frame.cast();
+        let walk: Ptr<CollisionWalkContext> = Ptr::new(frame.addr() + 0x20);
+        fn_00562e70(e, record);
+        e.set(record, BGSHavokSaveData::pSaveLoadBuffer, buffer);
+        fn_00562d20(e, this, record);
+        e.call(BUFFER_SAVE_DATA, &args![buffer, record, 1u32, 0u32]);
+        let total = e
+            .get(record, BGSHavokSaveData::iActiveBoneCount)
+            .wrapping_add(e.get(record, BGSHavokSaveData::iInactiveBoneCount));
+        e.call(BUFFER_SAVE_VARIABLE, &args![buffer, total]);
+        e.set(walk, CollisionWalkContext::iMode, 0x12);
+        e.set(walk, CollisionWalkContext::bRecurse, 1);
+        e.set(walk, CollisionWalkContext::pUserData, record.cast());
+        e.call(WALK_COLLISION, &args![obj3d, walk, 0x0056_3220u32]);
+    });
+}
+
+// Translated from 00562e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of [`BGSHavokSaveData`]: clears all 0x20 bytes
+/// (the flags byte, then seven words); returns `this`.
+pub fn fn_00562e70(e: &mut Engine, this: Ptr<BGSHavokSaveData>) -> Ptr<BGSHavokSaveData> {
+    e.mem.set_u8(this.addr(), 0);
+    for word in 1..8 {
+        e.mem.set_u32(this.addr() + 4 * word, 0);
+    }
+    this
+}
+
+// Translated from 00562ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::LoadHavokData` (Xbox PDB): reads the Havok record
+/// `tes_object_refr_save_havok_data` wrote. Without a loaded 3D only warns
+/// (`SaveGameWarning`). Otherwise reads the flags byte and the saved body
+/// count and compares it with the current one (`fn_00562d20`): a different
+/// count warns and knocks an actor down (disabling its ragdoll animation
+/// first); the same count sets the 3D's motion (`SetMotion`, kind 4 for an
+/// actor that fails all four of `00437bd0`, virtual +0x22c(0), +0x2e8 and
+/// +0x230, else 1), gives it a zero velocity record and walks the collision
+/// nodes with `fn_00563380`, ending with the zero velocity record again.
+pub fn tes_object_refr_load_havok_data(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    let obj3d = loaded_3d(e, me);
+    if obj3d == 0 {
+        let form_id = e.call(FORM_ID, &args![this]).u32();
+        let name = e.vcall(me, 0x130, &args![]).u32();
+        e.call(SAVE_GAME_WARNING, &args![HAVOK_NO_3D_FORMAT, name, form_id]);
+        return;
+    }
+    e.with_stack(0x60, |e, frame| {
+        let flags_slot = frame.addr();
+        let record: Ptr<BGSHavokSaveData> = Ptr::new(frame.addr() + 0x10);
+        let walk: Ptr<CollisionWalkContext> = Ptr::new(frame.addr() + 0x30);
+        let velocity = frame.addr() + 0x40;
+        e.call(BUFFER_LOAD_DATA, &args![buffer, flags_slot, 1u32]);
+        let saved = e.call(BUFFER_LOAD_VARIABLE, &args![buffer]).u32();
+        fn_00562e70(e, record);
+        e.set(record, BGSHavokSaveData::pSaveLoadBuffer, buffer);
+        fn_00562d20(e, this, record);
+        let current = e
+            .get(record, BGSHavokSaveData::iActiveBoneCount)
+            .wrapping_add(e.get(record, BGSHavokSaveData::iInactiveBoneCount));
+        if saved != current {
+            let form_id = e.call(FORM_ID, &args![this]).u32();
+            let name = e.vcall(me, 0x130, &args![]).u32();
+            e.call(
+                SAVE_GAME_WARNING,
+                &args![HAVOK_BONE_COUNT_FORMAT, name, form_id, saved, current],
+            );
+            let actor = if is_actor(e, me) { me } else { 0 };
+            if actor != 0 {
+                let ragdoll = e.mem.u32(actor + 0xac);
+                if ragdoll != 0 {
+                    e.call(DISABLE_RAGDOLL_ANIM, &args![ragdoll, 1u32]);
+                }
+                e.call(KNOCK_DOWN, &args![obj3d, ZERO_VECTOR, 1u32, 0.0f32, 0u32]);
+            }
+            return;
+        }
+        let flags = e.mem.u8(flags_slot);
+        e.set(record, BGSHavokSaveData::cFlags, flags);
+        e.set(walk, CollisionWalkContext::iMode, 0x12);
+        e.set(walk, CollisionWalkContext::bRecurse, 1);
+        e.set(walk, CollisionWalkContext::pUserData, record.cast());
+        let mut motion = 1u32;
+        if is_actor(e, me) {
+            let moving = e.call(REFR_STATE_TEST, &args![this]).bool()
+                || e.vcall(me, 0x22c, &args![0u32]).bool()
+                || e.vcall(me, 0x2e8, &args![]).bool()
+                || e.vcall(me, 0x230, &args![]).bool();
+            if !moving {
+                motion = 4;
+            }
+        }
+        e.call(SET_MOTION, &args![obj3d, motion, 1u32, 0u32, 0u32]);
+        e.call(MAKE_VELOCITY, &args![velocity, 0.0f32, 0u32, 0u32]);
+        e.call(SET_3D_VELOCITY, &args![obj3d, velocity]);
+        e.call(WALK_COLLISION, &args![obj3d, walk, 0x0056_3380u32]);
+        e.call(SET_3D_VELOCITY, &args![obj3d, velocity]);
+    });
+}
+
+// Translated from 00563120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `fn_00562d20` hands to the collision walker to count the
+/// bodies into the [`BGSHavokSaveData`] in the walk's user data: for each
+/// collision node with a rigid body it sets flag 2 when the node is the
+/// collision root, counts the body as active or inactive and, when its
+/// motion kind (`00517630`) is 4 and `fn_005631e0(0x200)` is false, as a
+/// keyframed one.
+pub fn fn_00563120(e: &mut Engine, node: Ptr, walk: Ptr<CollisionWalkContext>) {
+    let state: Ptr<BGSHavokSaveData> = e.get(walk, CollisionWalkContext::pUserData).cast();
+    let body_ref = e.call(NODE_BODY_REF, &args![node]).u32();
+    if body_ref == 0 {
+        return;
+    }
+    let body = node_rigid_body(e, body_ref);
+    if body == 0 {
+        return;
+    }
+    if node == e.get(state, BGSHavokSaveData::pCollisionRoot) {
+        let flags = e.get(state, BGSHavokSaveData::cFlags);
+        e.set(state, BGSHavokSaveData::cFlags, flags | 2);
+    }
+    if bhk_rigid_body_is_active(e, Ptr::new(body)) {
+        let count = e.get(state, BGSHavokSaveData::iActiveBoneCount);
+        e.set(
+            state,
+            BGSHavokSaveData::iActiveBoneCount,
+            count.wrapping_add(1),
+        );
+    } else {
+        let count = e.get(state, BGSHavokSaveData::iInactiveBoneCount);
+        e.set(
+            state,
+            BGSHavokSaveData::iInactiveBoneCount,
+            count.wrapping_add(1),
+        );
+    }
+    if e.call(BODY_MOTION_KIND, &args![body]).u32() == 4 && !fn_005631e0(e, Ptr::new(body), 0x200) {
+        let count = e.get(state, BGSHavokSaveData::iKeyFramedBoneCount);
+        e.set(
+            state,
+            BGSHavokSaveData::iKeyFramedBoneCount,
+            count.wrapping_add(1),
+        );
+    }
+}
+
+// Translated from 005631e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `fn_00563200(this, mask)` is non-zero.
+pub fn fn_005631e0(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    fn_00563200(e, this, mask) != 0
+}
+
+// Translated from 00563200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x10` ANDed with `mask` (applied to a rigid body
+/// here; the same body serves other classes through identical-code
+/// folding).
+pub fn fn_00563200(e: &mut Engine, this: Ptr, mask: u32) -> u32 {
+    e.mem.u32(this.addr() + 0x10) & mask
+}
+
+// Translated from 00563220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `tes_object_refr_save_havok_data` hands to the collision
+/// walker to write the bodies into the buffer of the [`BGSHavokSaveData`]
+/// in the walk's user data: for each collision node with a rigid body it
+/// writes (except for the collision root) the position (12 bytes) and
+/// rotation (16); if flag 4 is set a kind byte (bit 0: active; bit 1:
+/// motion kind 4 and `fn_005631e0(0x200)` false); and for an active body
+/// its two velocity vectors (12 bytes each).
+pub fn fn_00563220(e: &mut Engine, node: Ptr, walk: Ptr<CollisionWalkContext>) {
+    let state: Ptr<BGSHavokSaveData> = e.get(walk, CollisionWalkContext::pUserData).cast();
+    let buffer = e.get(state, BGSHavokSaveData::pSaveLoadBuffer).addr();
+    let body_ref = e.call(NODE_BODY_REF, &args![node]).u32();
+    if body_ref == 0 {
+        return;
+    }
+    let body = node_rigid_body(e, body_ref);
+    if body == 0 {
+        return;
+    }
+    let body = Ptr::new(body);
+    if node != e.get(state, BGSHavokSaveData::pCollisionRoot) {
+        e.with_stack(0x20, |e, frame| {
+            let position = frame.addr();
+            let rotation = frame.addr() + 0x10;
+            construct_vectors(e, &[position, rotation]);
+            bhk_rigid_body_get_position(e, body, Ptr::new(position));
+            bhk_rigid_body_get_rotation(e, body, Ptr::new(rotation));
+            e.call(BUFFER_SAVE_DATA, &args![buffer, position, 0xcu32, 0u32]);
+            e.call(BUFFER_SAVE_DATA, &args![buffer, rotation, 0x10u32, 0u32]);
+        });
+    }
+    let active = bhk_rigid_body_is_active(e, body);
+    if e.get(state, BGSHavokSaveData::cFlags) & 4 != 0 {
+        e.with_stack(4, |e, kind| {
+            let mut bits = 0u8;
+            if active {
+                bits |= 1;
+            }
+            if e.call(BODY_MOTION_KIND, &args![body]).u32() == 4 && !fn_005631e0(e, body, 0x200) {
+                bits |= 2;
+            }
+            e.mem.set_u8(kind.addr(), bits);
+            e.call(BUFFER_SAVE_DATA, &args![buffer, kind, 1u32, 0u32]);
+        });
+    }
+    if active {
+        e.with_stack(0x20, |e, frame| {
+            let first = frame.addr();
+            let second = frame.addr() + 0x10;
+            construct_vectors(e, &[first, second]);
+            fn_00560d50(e, body, Ptr::new(first));
+            fn_00560de0(e, body, Ptr::new(second));
+            e.call(BUFFER_SAVE_DATA, &args![buffer, first, 0xcu32, 0u32]);
+            e.call(BUFFER_SAVE_DATA, &args![buffer, second, 0xcu32, 0u32]);
+        });
+    }
+}
+
+// Translated from 00563380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The callback `tes_object_refr_load_havok_data` hands to the collision
+/// walker to read the bodies, the reverse of `fn_00563220`: for each
+/// collision node with a rigid body it sets the pose from the buffer (for
+/// the collision root, when flag 2 is set, from the reference's own location
+/// and orientation, clearing the flag), then reads the kind byte if flag 4
+/// is set (bit 0 makes the body active, bit 1 calls the body's virtual
+/// +0xe4 with 4) and, for an active body (flag 1 or bit 0), the two
+/// velocity vectors, and activates the body.
+pub fn fn_00563380(e: &mut Engine, node: Ptr, walk: Ptr<CollisionWalkContext>) {
+    let state: Ptr<BGSHavokSaveData> = e.get(walk, CollisionWalkContext::pUserData).cast();
+    let buffer = e.get(state, BGSHavokSaveData::pSaveLoadBuffer).addr();
+    let body_ref = e.call(NODE_BODY_REF, &args![node]).u32();
+    e.call(RAGDOLL_NODE_STEP, &args![node, 0u32]);
+    if body_ref == 0 {
+        return;
+    }
+    let body = node_rigid_body(e, body_ref);
+    if body == 0 {
+        return;
+    }
+    let body = Ptr::new(body);
+    e.with_stack(0x80, |e, frame| {
+        let position = frame.addr();
+        let rotation = frame.addr() + 0x10;
+        let matrix = frame.addr() + 0x20;
+        let kind = frame.addr() + 0x50;
+        let first = frame.addr() + 0x60;
+        let second = frame.addr() + 0x70;
+        construct_vectors(e, &[position, rotation]);
+        let flags = e.get(state, BGSHavokSaveData::cFlags);
+        if flags & 2 != 0 {
+            e.set(state, BGSHavokSaveData::cFlags, flags & !2);
+            let reference = e.get(state, BGSHavokSaveData::pRef).addr();
+            let location = e.vcall(reference, 0x1f4, &args![]).u32();
+            for word in 0..3 {
+                let value = e.mem.u32(location + 4 * word);
+                e.mem.set_u32(position + 4 * word, value);
+            }
+            let orientation = e.call(GET_ORIENTATION, &args![reference, matrix]).u32();
+            e.call(QUATERNION_FROM_ROTATION, &args![rotation, orientation]);
+        } else {
+            e.call(BUFFER_LOAD_DATA, &args![buffer, position, 0xcu32]);
+            e.call(BUFFER_LOAD_DATA, &args![buffer, rotation, 0x10u32]);
+        }
+        fn_00561150(e, body, Ptr::new(rotation));
+        fn_005610f0(e, body, Ptr::new(position));
+        let mut active = e.get(state, BGSHavokSaveData::cFlags) & 1 != 0;
+        if e.get(state, BGSHavokSaveData::cFlags) & 4 != 0 {
+            e.mem.set_u8(kind, 0);
+            e.call(BUFFER_LOAD_DATA, &args![buffer, kind, 1u32]);
+            let bits = e.mem.u8(kind);
+            if bits & 1 != 0 {
+                active = true;
+            }
+            if bits & 2 != 0 {
+                e.vcall(body.addr(), BODY_SLOT_SET_KIND, &args![4u32]);
+            }
+        }
+        if active {
+            construct_vectors(e, &[first, second]);
+            e.call(BUFFER_LOAD_DATA, &args![buffer, first, 0xcu32]);
+            e.call(BUFFER_LOAD_DATA, &args![buffer, second, 0xcu32]);
+            fn_005615d0(e, body, Ptr::new(first));
+            fn_00561630(e, body, Ptr::new(second));
+            fn_00561580(e, body, 1);
+        }
+    });
+}
+
+// Translated from 00563530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the reference's animation state is saved with its Havok data:
+/// true when the extra data has a last finished sequence, or when the
+/// loaded data's 3D (+0x14) has a controller manager with a generic
+/// sequence (`008041a0`) whose name is neither of the two table entries
+/// (`011977d8`, `01197820`); false otherwise.
+pub fn fn_00563530(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    let me = this.addr();
+    let list = extra_list(e, me);
+    if e.call(EXTRA_GET_LAST_SEQUENCE, &args![list]).u32() != 0 {
+        return true;
+    }
+    let loaded = e.get(this, TESObjectREFR::pLoadedData);
+    if loaded.is_null() {
+        return false;
+    }
+    if e.call(
+        READ_FIRST_DWORD,
+        &args![loaded.addr() + LOADED_DATA_3D_OFFSET],
+    )
+    .u32()
+        == 0
+    {
+        return false;
+    }
+    let obj3d = e
+        .call(
+            READ_FIRST_DWORD,
+            &args![loaded.addr() + LOADED_DATA_3D_OFFSET],
+        )
+        .u32();
+    let controller = controller_of(e, obj3d);
+    let manager = manager_of(e, controller);
+    if manager == 0 || !e.call(MANAGER_HAS_SEQUENCES, &args![manager]).bool() {
+        return false;
+    }
+    let count = e.call(MANAGER_SEQUENCE_COUNT, &args![manager]).u32();
+    for index in 0..count {
+        let sequence = e.call(MANAGER_SEQUENCE_AT, &args![manager, index]).u32();
+        if e.call(SEQUENCE_IS_GENERIC, &args![sequence]).u32() == 0 {
+            continue;
+        }
+        let first = e.global::<u32>(NAME_SEQUENCE_A);
+        let name = sequence_name(e, sequence);
+        if e.call(SEQUENCE_NAME_COMPARE, &args![name, first]).u32() == 0 {
+            continue;
+        }
+        let second = e.global::<u32>(NAME_SEQUENCE_B);
+        let name = sequence_name(e, sequence);
+        if e.call(SEQUENCE_NAME_COMPARE, &args![name, second]).u32() == 0 {
+            continue;
+        }
+        return true;
+    }
+    false
+}
+
+// Translated from 00563650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SaveAnimation` (Xbox PDB): writes the last finished
+/// sequence's name (`BGSSaveGameBuffer::SaveString`) and the controller
+/// manager of the loaded 3D (`SaveControllerManager`, `00563f30`) with the
+/// default blend marker -1.0.
+pub fn tes_object_refr_save_animation(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    let mut manager = 0;
+    let obj3d = loaded_3d(e, me);
+    if obj3d != 0 && controller_of(e, obj3d) != 0 {
+        let controller = controller_of(e, obj3d);
+        manager = manager_of(e, controller);
+    }
+    let list = extra_list(e, me);
+    let last = e.call(EXTRA_GET_LAST_SEQUENCE, &args![list]).u32();
+    e.call(BUFFER_SAVE_STRING, &args![buffer, last, 0u32]);
+    let marker: f32 = e.global(MINUS_ONE_FLOAT);
+    e.call(SAVE_CONTROLLER_MANAGER, &args![manager, buffer, marker]);
+}
+
+// Translated from 005636e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads what `tes_object_refr_save_animation` wrote: the name of the last
+/// finished sequence (`BGSLoadGameBuffer::LoadString`, up to 0x104 bytes),
+/// stored in the extra data (`00422850`) when it is not empty. For an
+/// open/close form the names of the two sides (`01011f30` and `0101abac`)
+/// are swapped (`strcpy_s`-like `00406d30`) and the sequence is loaded
+/// (`00563d80`) with a time of -`FLT_MAX` when it was swapped, else
+/// `FLT_MAX`. Then the controller manager is loaded (`00564010`) with the
+/// default blend marker -1.0.
+///
+/// The stack-protector cookie of the compiled function is not translated.
+pub fn fn_005636e0(e: &mut Engine, this: Ptr<TESObjectREFR>, buffer: Ptr) {
+    let me = this.addr();
+    let mut manager = 0;
+    let obj3d = loaded_3d(e, me);
+    if obj3d != 0 && controller_of(e, obj3d) != 0 {
+        let controller = controller_of(e, obj3d);
+        manager = manager_of(e, controller);
+    }
+    e.with_stack(0x110, |e, name| {
+        e.call(BUFFER_LOAD_STRING, &args![buffer, name]);
+        if e.call(STRING_LENGTH, &args![name]).u32() != 0 {
+            let list = extra_list(e, me);
+            e.call(EXTRA_SET_LAST_SEQUENCE, &args![list, name]);
+            let mut swapped = false;
+            let base = e.call(GET_BASE_FORM, &args![this]).u32();
+            if e.call(IS_OPEN_CLOSE_FORM, &args![base]).bool() {
+                if e.call(SEQUENCE_NAME_COMPARE, &args![name, TEXT_OPEN_SIDE])
+                    .u32()
+                    == 0
+                {
+                    e.call(STRING_COPY, &args![name, 0x104u32, TEXT_CLOSE_SIDE]);
+                    swapped = true;
+                } else if e
+                    .call(SEQUENCE_NAME_COMPARE, &args![name, TEXT_CLOSE_SIDE])
+                    .u32()
+                    == 0
+                {
+                    e.call(STRING_COPY, &args![name, 0x104u32, TEXT_OPEN_SIDE]);
+                    swapped = true;
+                }
+            }
+            let maximum: f32 = e.global(FLOAT_MAX);
+            let time = if swapped { -maximum } else { maximum };
+            e.call(ANIMATION_LOAD_STEP, &args![this, manager, name, time]);
+        }
+    });
+    let marker: f32 = e.global(MINUS_ONE_FLOAT);
+    e.call(CONTROLLER_MANAGER_LOADER, &args![manager, buffer, marker]);
+}
+
+// Translated from 00563890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the animation of a freshly loaded reference back in its rest
+/// state, like `fn_0055f970` with a different second half. If the last
+/// finished sequence of the reference is "Unequip", or its controller
+/// manager has a generic-location sequence named "Unequip", or its 3D has
+/// a morpher controller, the reference's location is set from its base
+/// object (virtual +0x178), the virtuals +0x1cc and +0x1c4 run, and a
+/// loaded parent cell re-attaches the 3D (`AttachReference3D`). Then, for
+/// the manager: each generic sequence is handled by `0047ab40`, the manager
+/// is deactivated, its sequence 0 is restarted with the offset -`FLT_MAX`
+/// (its offset time is the 3D's velocity record), the manager is deactivated
+/// again and the two table sequences (`011977d8`, `01197820`) found by name
+/// are restarted the same way. It ends by deactivating the manager once
+/// more and, for a reference reset in the first part, adding its 3D to the
+/// shadow scene (`ShadowSceneNode::AddObject`).
+///
+/// The compiler's exception-unwinding frame is not translated.
+pub fn fn_00563890(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    let mut reset = false;
+    let obj3d = loaded_3d(e, me);
+    if obj3d != 0 {
+        let list = extra_list(e, me);
+        let last = e.call(EXTRA_GET_LAST_SEQUENCE, &args![list]).u32();
+        if last != 0 {
+            let unequip = e.global::<u32>(NAME_UNEQUIP);
+            if e.call(SEQUENCE_NAME_COMPARE, &args![last, unequip]).u32() == 0 {
+                reset = true;
+            }
+        }
+        if !reset && controller_of(e, obj3d) != 0 {
+            let controller = controller_of(e, obj3d);
+            let manager = manager_of(e, controller);
+            if manager != 0 {
+                let sequence = find_sequence(e, manager, NAME_UNEQUIP);
+                if sequence != 0 && e.call(SEQUENCE_IS_GENERIC, &args![sequence]).u32() != 0 {
+                    reset = true;
+                }
+            }
+        }
+        if !reset && e.call(HAS_MORPHER_CONTROLLER, &args![obj3d]).bool() {
+            reset = true;
+        }
+        if reset {
+            let base = e.get(this.at(TESObjectREFR::data), OBJ_REFR::pObjectReference);
+            let location = e.vcall(base.addr(), 0x178, &args![this]).u32();
+            e.vcall(me, 0x1cc, &args![location, 1u32]);
+            e.vcall(me, 0x1c4, &args![]);
+            let parent = e.get(this, TESObjectREFR::pParentCell);
+            if !parent.is_null() {
+                let tes = global_ptr(e, GLOBAL_TES);
+                if e.call(TES_IS_CELL_LOADED, &args![tes, parent, 0u32]).bool() {
+                    e.call(CELL_ATTACH_REFERENCE_3D, &args![parent, this, 0u32]);
+                }
+            }
+        }
+    }
+    let obj3d = loaded_3d(e, me);
+    if obj3d != 0 && controller_of(e, obj3d) != 0 {
+        let controller = controller_of(e, obj3d);
+        let manager = manager_of(e, controller);
+        if manager != 0 {
+            let mut index = 0u32;
+            while index < e.call(MANAGER_SEQUENCE_COUNT, &args![manager]).u32() {
+                let sequence = e.call(MANAGER_SEQUENCE_AT, &args![manager, index]).u32();
+                if sequence != 0 && e.call(SEQUENCE_IS_GENERIC, &args![sequence]).u32() != 0 {
+                    e.call(GENERIC_SEQUENCE_STEP, &args![this, sequence]);
+                }
+                index += 1;
+            }
+            e.call(MANAGER_DEACTIVATE_ALL, &args![manager, 0.0f32]);
+            e.call(MANAGER_SET_FLAG, &args![manager, 1u32]);
+            let first_sequence = e.call(MANAGER_SEQUENCE_AT, &args![manager, 0u32]).u32();
+            if first_sequence != 0 {
+                e.call(
+                    MANAGER_ACTIVATE,
+                    &args![manager, first_sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+                );
+                restart_offset(e, obj3d, first_sequence);
+            }
+            e.call(MANAGER_DEACTIVATE_ALL, &args![manager, 0.0f32]);
+            e.call(MANAGER_SET_FLAG, &args![manager, 0u32]);
+            let first = find_sequence(e, manager, NAME_SEQUENCE_A);
+            let second = find_sequence(e, manager, NAME_SEQUENCE_B);
+            if first != 0 || second != 0 {
+                e.call(MANAGER_SET_FLAG, &args![manager, 1u32]);
+                for sequence in [first, second] {
+                    if sequence != 0 {
+                        if e.call(SEQUENCE_IS_GENERIC, &args![sequence]).u32() == 0 {
+                            e.call(
+                                MANAGER_ACTIVATE,
+                                &args![manager, sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+                            );
+                        }
+                        restart_offset(e, obj3d, sequence);
+                    }
+                }
+            }
+        }
+    }
+    let controller = if obj3d != 0 {
+        controller_of(e, obj3d)
+    } else {
+        0
+    };
+    let manager = manager_of(e, controller);
+    if manager != 0 {
+        e.call(MANAGER_DEACTIVATE_ALL, &args![manager, 0.0f32]);
+    }
+    if reset && obj3d != 0 {
+        let scene = e.call(SCENE_GETTER, &args![0u32]).u32();
+        e.call(SCENE_ADD_OBJECT, &args![scene, obj3d]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4636,6 +6429,79 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005611e0, fn_005611e0(Ptr)),
         entry!(0x00561240, fn_00561240(Ptr, Ptr) -> Ptr),
         entry!(0x005612a0, fn_005612a0(Ptr, Ptr) -> Ptr),
+        entry!(0x00561440, fn_00561440(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x00561500, fn_00561500(Ptr, Ptr) -> Ptr),
+        entry!(0x00561580, fn_00561580(Ptr, u8)),
+        entry!(0x005615d0, fn_005615d0(Ptr, Ptr)),
+        entry!(0x00561630, fn_00561630(Ptr, Ptr)),
+        entry!(0x00561690, fn_00561690(Ptr, Ptr)),
+        entry!(0x005616d0, hkp_rigid_body_set_linear_velocity(Ptr, Ptr)),
+        entry!(0x00561730, fn_00561730(Ptr, Ptr, f32) -> u32),
+        entry!(0x005617c0, fn_005617c0(Ptr, Ptr)),
+        entry!(0x00561800, hkp_rigid_body_set_angular_velocity(Ptr, Ptr)),
+        entry!(0x00561860, fn_00561860(Ptr<TESObjectREFR>, u16)),
+        entry!(0x00561b40, fn_00561b40(Ptr, Ptr<OldHavokLoadWalk>)),
+        entry!(
+            0x00561d90,
+            tes_object_refr_get_original_open_by_default_state(Ptr<TESObjectREFR>) -> bool
+        ),
+        entry!(
+            0x00561df0,
+            tes_object_refr_get_editor_location(Ptr<TESObjectREFR>, Ptr, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(
+            0x00561ef0,
+            tes_object_refr_move_to_editor_location(Ptr<TESObjectREFR>, Ptr) -> bool
+        ),
+        entry!(
+            0x00562020,
+            tes_object_refr_update_3d_position(Ptr<TESObjectREFR>)
+        ),
+        entry!(0x005620e0, bhk_character_controller_set_position(Ptr, Ptr)),
+        entry!(0x00562140, fn_00562140(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x005621d0, fn_005621d0(Ptr) -> bool),
+        entry!(0x005621f0, fn_005621f0(Ptr, u32)),
+        entry!(0x00562210, fn_00562210(Ptr, u32)),
+        entry!(
+            0x00562230,
+            tes_object_refr_save_game_ov2(Ptr<TESObjectREFR>, Ptr)
+        ),
+        entry!(0x005623d0, fn_005623d0(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x00562660, fn_00562660(Ptr<TESObjectREFR>, Ptr)),
+        entry!(
+            0x005627c0,
+            tes_object_refr_finish_load_game(Ptr<TESObjectREFR>, Ptr)
+        ),
+        entry!(0x005629a0, fn_005629a0(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x00562d00, fn_00562d00(Ptr) -> bool),
+        entry!(
+            0x00562d20,
+            fn_00562d20(Ptr<TESObjectREFR>, Ptr<BGSHavokSaveData>)
+        ),
+        entry!(
+            0x00562de0,
+            tes_object_refr_save_havok_data(Ptr<TESObjectREFR>, Ptr)
+        ),
+        entry!(
+            0x00562e70,
+            fn_00562e70(Ptr<BGSHavokSaveData>) -> Ptr<BGSHavokSaveData>
+        ),
+        entry!(
+            0x00562ed0,
+            tes_object_refr_load_havok_data(Ptr<TESObjectREFR>, Ptr)
+        ),
+        entry!(0x00563120, fn_00563120(Ptr, Ptr<CollisionWalkContext>)),
+        entry!(0x005631e0, fn_005631e0(Ptr, u32) -> bool),
+        entry!(0x00563200, fn_00563200(Ptr, u32) -> u32),
+        entry!(0x00563220, fn_00563220(Ptr, Ptr<CollisionWalkContext>)),
+        entry!(0x00563380, fn_00563380(Ptr, Ptr<CollisionWalkContext>)),
+        entry!(0x00563530, fn_00563530(Ptr<TESObjectREFR>) -> bool),
+        entry!(
+            0x00563650,
+            tes_object_refr_save_animation(Ptr<TESObjectREFR>, Ptr)
+        ),
+        entry!(0x005636e0, fn_005636e0(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x00563890, fn_00563890(Ptr<TESObjectREFR>)),
     ]
 }
 
@@ -10761,5 +12627,2793 @@ mod tests {
             calls_to(&log, SET_3D_VELOCITY),
             vec![vec![obj3d, calls_to(&log, MAKE_VELOCITY)[0][0]]]
         );
+    }
+
+    // ===== 00561440 to 00563890 ==========================================
+
+    type Sink = std::rc::Rc<std::cell::RefCell<Vec<Vec<u8>>>>;
+    /// The walks of `load_havok_setup`: (callback, flags byte of the record).
+    type WalkFlags = std::rc::Rc<std::cell::RefCell<Vec<(u32, u8)>>>;
+    /// The sequence loads of `load_animation_setup`: (this, manager, name, time).
+    type SequenceLoads = std::rc::Rc<std::cell::RefCell<Vec<(u32, u32, Vec<u8>, u32)>>>;
+
+    /// Registers a double at `addr` that records the `len` bytes its argument
+    /// number `arg` points to, at each call.
+    fn record_bytes(e: &mut Engine, addr: u32, arg: usize, len: u32) -> Sink {
+        let sink: Sink = Sink::default();
+        let seen = sink.clone();
+        e.register_double(addr, move |e, a| {
+            seen.borrow_mut().push(e.mem.bytes(a[arg], len));
+            Ret::default()
+        });
+        sink
+    }
+
+    /// Registers a double at `addr` that records `a[2]` bytes at `a[1]`
+    /// (a buffer write: destination, source, size).
+    fn record_writes(e: &mut Engine, addr: u32) -> Sink {
+        let sink: Sink = Sink::default();
+        let seen = sink.clone();
+        e.register_double(addr, move |e, a| {
+            seen.borrow_mut().push(e.mem.bytes(a[1], a[2]));
+            Ret::default()
+        });
+        sink
+    }
+
+    /// A stream the buffer load double reads from.
+    fn load_stream(e: &mut Engine, bytes: Vec<u8>) -> std::rc::Rc<std::cell::Cell<usize>> {
+        let position = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        let seen = position.clone();
+        e.register_double(BUFFER_LOAD_DATA, move |e, a| {
+            let at = seen.get();
+            let size = a[2] as usize;
+            e.mem.write(a[1], &bytes[at..at + size]);
+            seen.set(at + size);
+            Ret::default()
+        });
+        position
+    }
+
+    fn lanes(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks(4)
+            .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+            .collect()
+    }
+
+    /// The addresses of `log` that are in `only`, in call order.
+    fn ordered(log: &[(u32, Vec<u32>)], only: &[u32]) -> Vec<u32> {
+        log.iter()
+            .map(|(a, _)| *a)
+            .filter(|a| only.contains(a))
+            .collect()
+    }
+
+    /// A 16-byte vector with the given lanes.
+    fn vector4(e: &mut Engine, x: f32, y: f32, z: f32) -> u32 {
+        let vector = e.mem.alloc(16);
+        e.mem.write(vector, &floats(&[x, y, z, 0.0]));
+        vector
+    }
+
+    /// Doubles with the meaning of the SSE helpers `fn_00561730` chains.
+    fn vector_doubles(e: &mut Engine) {
+        e.register(VECTOR_SUBTRACT, |e, a| {
+            for i in 0..4 {
+                let value = e.mem.f32(a[1] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        e.register(VECTOR_ABSOLUTE, |e, a| {
+            for i in 0..4 {
+                let value = e.mem.f32(a[1] + 4 * i).abs();
+                e.mem.set_f32(a[0] + 4 * i, value);
+            }
+            a[0].into_ret()
+        });
+        e.register(VECTOR_SPLAT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1]);
+            }
+            a[0].into_ret()
+        });
+        e.register(VECTOR_COMPARE, |e, a| {
+            for i in 0..4 {
+                let within = e.mem.f32(a[0] + 4 * i) <= e.mem.f32(a[2] + 4 * i);
+                e.mem
+                    .set_u32(a[1] + 4 * i, if within { u32::MAX } else { 0 });
+            }
+            a[1].into_ret()
+        });
+        e.register(VECTOR_ALL_SET, |e, a| {
+            let mut bits = 0;
+            for i in 0..4 {
+                bits |= (e.mem.u32(a[0] + 4 * i) >> 31) << i;
+            }
+            u32::from(bits & a[1] == a[1]).into_ret()
+        });
+    }
+
+    /// What the motion's two velocity setters were given.
+    struct MotionLog {
+        linear: Sink,
+        angular: Sink,
+    }
+
+    /// Doubles for the velocity setters of the body `body` made by
+    /// `velocity_body`: its current velocities are (1, 2, 3) and
+    /// (10, 11, 12), its motion (the first velocity holder) gets a vtable
+    /// whose slots +0x40 and +0x44 record the 12 bytes of the vector.
+    fn motion_doubles(e: &mut Engine, body: u32) -> MotionLog {
+        vector_doubles(e);
+        e.register(NI_TO_VECTOR, |e, a| {
+            let bytes = e.mem.bytes(a[1], 12);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        e.register(NI_POINT_TO_VECTOR_ZERO_W, |e, a| {
+            let bytes = e.mem.bytes(a[1], 12);
+            e.mem.write(a[0], &bytes);
+            e.mem.set_u32(a[0] + 12, 0);
+            a[0].into_ret()
+        });
+        stub(e, &[BODY_LOCK_MARKER, ENTITY_ACTIVATE, ENTITY_DEACTIVATE]);
+        let entity = e.mem.u32(body + 4);
+        let motion = e.mem.u32(entity + 0x10);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0x40, 0x00fb_0140);
+        e.mem.set_u32(vtable + 0x44, 0x00fb_0144);
+        e.mem.set_u32(motion, vtable);
+        MotionLog {
+            linear: record_bytes(e, 0x00fb_0140, 1, 12),
+            angular: record_bytes(e, 0x00fb_0144, 1, 12),
+        }
+    }
+
+    /// An engine with a body whose entity has the velocities (1, 2, 3) and
+    /// (10, 11, 12): (engine, body, entity, motion log).
+    fn glue_world() -> (Engine, u32, u32, MotionLog) {
+        let mut e = batch_engine();
+        e.set_global(VELOCITY_EPSILON, 0.001f32);
+        let (body, _, _) = velocity_body(&mut e);
+        let motion = motion_doubles(&mut e, body);
+        let entity = e.mem.u32(body + 4);
+        (e, body, entity, motion)
+    }
+
+    // ---- 00561440, 00561500 ---------------------------------------------
+
+    #[test]
+    fn fn_00561440_is_the_dot_product_added_in_the_order_of_the_shuffles() {
+        let mut e = batch_engine();
+        e.register(COPY_16_BYTES, |e, a| {
+            let bytes = e.mem.bytes(a[1], 16);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        let this = e.mem.alloc(16);
+        let other = e.mem.alloc(16);
+        let out = e.mem.alloc(16);
+        e.mem.write(this, &floats(&[1.0, 2.0, 3.0, 4.0]));
+        e.mem.write(other, &floats(&[5.0, 6.0, 7.0, 8.0]));
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0056_1440, &args![this, out, other]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, out);
+        assert_eq!(lanes(&e.mem.bytes(out, 16)), vec![70.0; 4]);
+        assert_eq!(calls_to(&log, COPY_16_BYTES).len(), 1);
+        // the sum is (p3 + p1) + (p2 + p0), not left to right
+        e.mem.write(this, &floats(&[1.0e8, 1.0, -1.0e8, 1.0]));
+        e.mem.write(other, &floats(&[1.0; 4]));
+        e.call(0x0056_1440, &args![this, out, other]);
+        assert_eq!(lanes(&e.mem.bytes(out, 16)), vec![2.0; 4]);
+    }
+
+    #[test]
+    fn fn_00561500_stores_the_quaternion_components_in_havok_order() {
+        let mut e = batch_engine();
+        // the four getters return the floats at +4, +8, +0xc and +0 in ST0
+        for (getter, offset) in [
+            (0x006b_9130, 4),
+            (0x0048_8d50, 8),
+            (0x0084_d030, 0xc),
+            (0x006a_7f50, 0),
+        ] {
+            e.register_double(getter, move |e, a| Ret {
+                st0: f64::from(e.mem.f32(a[0] + offset)),
+                ..Ret::default()
+            });
+        }
+        let source = e.mem.alloc(16);
+        e.mem.write(source, &floats(&[0.5, 0.1, 0.2, 0.3]));
+        let dest = e.mem.alloc(16);
+        assert_eq!(e.call(0x0056_1500, &args![dest, source]).u32(), dest);
+        assert_eq!(lanes(&e.mem.bytes(dest, 16)), vec![0.1, 0.2, 0.3, 0.5]);
+    }
+
+    // ---- 00561580 and the velocity setters -------------------------------
+
+    #[test]
+    fn fn_00561580_activates_or_deactivates_the_entity_between_lock_markers() {
+        let mut e = batch_engine();
+        returns(&mut e, BODY_ENTITY, 0x4040);
+        stub(
+            &mut e,
+            &[BODY_LOCK_MARKER, ENTITY_ACTIVATE, ENTITY_DEACTIVATE],
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1580, &args![0x3000u32, 1u8]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log),
+            vec![
+                0x0056_1580,
+                BODY_ENTITY,
+                BODY_LOCK_MARKER,
+                ENTITY_ACTIVATE,
+                BODY_LOCK_MARKER
+            ]
+        );
+        assert_eq!(calls_to(&log, ENTITY_ACTIVATE), vec![vec![0x4040]]);
+        assert_eq!(calls_to(&log, BODY_LOCK_MARKER), vec![vec![0x3000]; 2]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1580, &args![0x3000u32, 0u8]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ENTITY_DEACTIVATE), vec![vec![0x4040]]);
+        assert!(calls_to(&log, ENTITY_ACTIVATE).is_empty());
+        // a body without an entity does nothing
+        returns(&mut e, BODY_ENTITY, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1580, &args![0x3000u32, 1u8]);
+        assert_eq!(addresses(&e.call_log.take().unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn fn_00561730_tells_whether_all_lanes_are_within_the_tolerance() {
+        let mut e = batch_engine();
+        vector_doubles(&mut e);
+        let this = vector4(&mut e, 1.0, 2.0, 3.0);
+        let near = vector4(&mut e, 1.0005, 2.0, 3.0);
+        let far = vector4(&mut e, 1.0, 2.0, 3.01);
+        assert_eq!(e.call(0x0056_1730, &args![this, near, 0.001f32]).u32(), 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_1730, &args![this, far, 0.001f32]).u32(), 0);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            ordered(
+                &log,
+                &[
+                    VECTOR_SUBTRACT,
+                    VECTOR_ABSOLUTE,
+                    VECTOR_SPLAT,
+                    VECTOR_COMPARE,
+                    VECTOR_ALL_SET
+                ]
+            ),
+            vec![
+                VECTOR_SUBTRACT,
+                VECTOR_ABSOLUTE,
+                VECTOR_SPLAT,
+                VECTOR_COMPARE,
+                VECTOR_ALL_SET
+            ]
+        );
+        // the subtraction is this - other, the splat the tolerance, and all
+        // four bits of the comparison are required
+        let sub = calls_to(&log, VECTOR_SUBTRACT);
+        assert_eq!(&sub[0][1..], &[this, far]);
+        assert_eq!(calls_to(&log, VECTOR_SPLAT)[0][1], 0.001f32.to_bits());
+        assert_eq!(calls_to(&log, VECTOR_ALL_SET)[0][1], 0xf);
+        // a lane past the tolerance in any position fails
+        let off_in_w = e.mem.alloc(16);
+        e.mem.write(off_in_w, &floats(&[1.0, 2.0, 3.0, 0.5]));
+        assert_eq!(
+            e.call(0x0056_1730, &args![this, off_in_w, 0.001f32]).u32(),
+            0
+        );
+    }
+
+    #[test]
+    fn the_rigid_body_velocity_setters_only_act_on_a_changed_velocity() {
+        let (mut e, _, entity, motion) = glue_world();
+        let same = vector4(&mut e, 1.0, 2.0, 3.0);
+        let near = vector4(&mut e, 1.0005, 2.0, 3.0);
+        let far = vector4(&mut e, 4.0, 5.0, 6.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_16d0, &args![entity, same]);
+        e.call(0x0056_16d0, &args![entity, near]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, ENTITY_ACTIVATE).is_empty());
+        assert!(motion.linear.borrow().is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_16d0, &args![entity, far]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ENTITY_ACTIVATE), vec![vec![entity]]);
+        assert_eq!(
+            motion.linear.borrow().clone(),
+            vec![floats(&[4.0, 5.0, 6.0])]
+        );
+        // the angular velocity is compared with (10, 11, 12) and set through
+        // the other slot
+        let angular_same = vector4(&mut e, 10.0, 11.0, 12.0);
+        e.call(0x0056_1800, &args![entity, angular_same]);
+        assert!(motion.angular.borrow().is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1800, &args![entity, far]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, ENTITY_ACTIVATE), vec![vec![entity]]);
+        assert_eq!(
+            motion.angular.borrow().clone(),
+            vec![floats(&[4.0, 5.0, 6.0])]
+        );
+        assert_eq!(motion.linear.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_body_level_velocity_setters_lock_around_the_entity_change() {
+        let (mut e, body, entity, motion) = glue_world();
+        let far = vector4(&mut e, 4.0, 5.0, 6.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1690, &args![body, far]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            ordered(&log, &[BODY_LOCK_MARKER, ENTITY_ACTIVATE]),
+            vec![BODY_LOCK_MARKER, ENTITY_ACTIVATE, BODY_LOCK_MARKER]
+        );
+        assert_eq!(calls_to(&log, BODY_LOCK_MARKER), vec![vec![body]; 2]);
+        assert_eq!(calls_to(&log, ENTITY_ACTIVATE), vec![vec![entity]]);
+        assert_eq!(motion.linear.borrow().len(), 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_17c0, &args![body, far]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, BODY_LOCK_MARKER), vec![vec![body]; 2]);
+        assert_eq!(motion.angular.borrow().len(), 1);
+        // a body without an entity is left alone
+        let bare = e.mem.alloc(0x40);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1690, &args![bare, far]);
+        e.call(0x0056_17c0, &args![bare, far]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, BODY_LOCK_MARKER).is_empty());
+    }
+
+    #[test]
+    fn the_point_setters_convert_the_vector_and_set_the_velocity() {
+        let (mut e, body, _, motion) = glue_world();
+        let point = e.mem.alloc(16);
+        e.mem.write(point, &floats(&[7.0, 8.0, 9.0]));
+        e.call(0x0056_15d0, &args![body, point]);
+        assert_eq!(
+            motion.linear.borrow().clone(),
+            vec![floats(&[7.0, 8.0, 9.0])]
+        );
+        assert!(motion.angular.borrow().is_empty());
+        e.call(0x0056_1630, &args![body, point]);
+        assert_eq!(
+            motion.angular.borrow().clone(),
+            vec![floats(&[7.0, 8.0, 9.0])]
+        );
+    }
+
+    // ---- 00561860: the older Havok record --------------------------------
+
+    /// `havok_load_setup` without the stand-in for `00561860`: the same
+    /// engine with the callees of the Havok record loaders stubbed.
+    fn old_havok_setup(version: u8, stream: &[u8]) -> (Engine, u32) {
+        let mut e = havok_engine();
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        e.mem.set_u8(game + 0x80, version);
+        let buffer = e.mem.u32(game + 0x14);
+        e.mem.write(buffer, stream);
+        stub(
+            &mut e,
+            &[
+                MESSAGE,
+                SET_HAVOK_WEAPON,
+                DISABLE_RAGDOLL_ANIM,
+                KNOCK_DOWN,
+                SET_MOTION,
+                SET_FIXED,
+                CLEAR_ANIM_GROUP,
+                ANIM_FINISH,
+                MAKE_VELOCITY,
+                SET_3D_VELOCITY,
+            ],
+        );
+        (e, buffer)
+    }
+
+    type Walks = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    /// A collision walker double that records the callback and the context
+    /// bytes of each walk and calls no callback.
+    fn capture_walks(e: &mut Engine) -> Walks {
+        let walks: Walks = Walks::default();
+        let seen = walks.clone();
+        e.register_double(WALK_COLLISION, move |e, a| {
+            seen.borrow_mut().push((a[2], e.mem.bytes(a[1], 0x10)));
+            Ret::default()
+        });
+        walks
+    }
+
+    #[test]
+    fn fn_00561860_skips_a_record_without_3d_after_the_legacy_byte() {
+        let (mut e, buffer) = old_havok_setup(0x10, &[1, 0xff]);
+        returns(&mut e, GET_LOADED_3D, 0);
+        let refr = big_refr(&mut e, false);
+        e.mem.set_u32(refr.addr() + 0xc, 0x0006_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 12u16]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MESSAGE),
+            vec![vec![HAVOK_NO_3D_FORMAT, 0x0e01, 0x0006_0001]]
+        );
+        // the legacy byte is read before the 3D is looked up (before 0x16),
+        // then the record's size is skipped
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 1 + 12);
+        // a later version reads nothing first
+        let (mut e, buffer) = old_havok_setup(0x2b, &[]);
+        returns(&mut e, GET_LOADED_3D, 0);
+        let refr = big_refr(&mut e, false);
+        e.call(0x0056_1860, &args![refr, 12u16]);
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 12);
+    }
+
+    #[test]
+    fn fn_00561860_with_a_different_bone_count_skips_the_record_and_knocks_an_actor_down() {
+        // version 0x2b: flags byte 8, saved count 5; two bodies now
+        let (mut e, buffer) = old_havok_setup(0x2b, &[8, 5]);
+        let root = havok_node(&mut e, 0, Some(true), false);
+        let first = havok_node(&mut e, 0, Some(true), false);
+        install_walk(&mut e, vec![root, first]);
+        returns(&mut e, COLLISION_ROOT, root);
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        let refr = big_refr(&mut e, true);
+        e.mem.set_u32(refr.addr() + 0xc, 0x0006_0001);
+        e.mem.set_u32(refr.addr() + 0xac, 0x5a5a);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 20u16]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MESSAGE),
+            vec![vec![HAVOK_BONE_COUNT_FORMAT, 0x0e01, 0x0006_0001, 5, 2]]
+        );
+        // the two bytes read, then size - 2 skipped
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 2 + 18);
+        assert_eq!(calls_to(&log, DISABLE_RAGDOLL_ANIM), vec![vec![0x5a5a, 1]]);
+        assert_eq!(
+            calls_to(&log, KNOCK_DOWN),
+            vec![vec![obj3d, ZERO_VECTOR, 1, 0.0f32.to_bits(), 0]]
+        );
+        // the bodies are not walked a second time
+        assert!(calls_to(&log, MAKE_VELOCITY).is_empty());
+        // a non-actor is only reported
+        let (mut e, _) = old_havok_setup(0x2b, &[8, 5]);
+        install_walk(&mut e, vec![root]);
+        returns(&mut e, COLLISION_ROOT, root);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 20u16]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MESSAGE).len(), 1);
+        assert!(calls_to(&log, KNOCK_DOWN).is_empty());
+    }
+
+    #[test]
+    fn fn_00561860_with_the_same_count_walks_the_bodies_with_the_saved_flags() {
+        let (mut e, buffer) = old_havok_setup(0x2b, &[1, 0]);
+        let walks = capture_walks(&mut e);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        slot(&mut e, 0x234, |_, _| true.into_ret());
+        slot(&mut e, 0x1e4, |_, _| 0x9009u32.into_ret());
+        let refr = big_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 20u16]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, MESSAGE).is_empty());
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 2);
+        // the first walk counts (fn_00560870), the second loads (fn_00561b40)
+        // with the context: recurse, mode 0x12, root, reference, flags, 0
+        let walks = walks.borrow();
+        assert_eq!(walks.len(), 2);
+        assert_eq!(walks[0].0, 0x0056_0870);
+        assert_eq!(walks[1].0, 0x0056_1b40);
+        let context = calls_to(&log, WALK_COLLISION)[1][1];
+        assert_eq!(e.mem.u8(context + 4), 1);
+        assert_eq!(e.mem.u32(context + 8), 0x12);
+        assert_eq!(e.mem.u32(context + 0xc), 0x7007);
+        assert_eq!(e.mem.u32(context + 0x10), refr.addr());
+        assert_eq!(e.mem.u32(context + 0x14), 1);
+        assert_eq!(e.mem.u32(context + 0x18), 0);
+        // a fixed actor has its bodies frozen and its animation group cleared
+        assert_eq!(calls_to(&log, SET_FIXED), vec![vec![obj3d, 1, 1]]);
+        assert_eq!(calls_to(&log, SET_MOTION), vec![vec![obj3d, 1, 1, 0, 1]]);
+        assert_eq!(
+            calls_to(&log, CLEAR_ANIM_GROUP),
+            vec![vec![0x9009, 0x14, 0.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&log, ANIM_FINISH), vec![vec![0x9009]]);
+        // and every reference gets the zero velocity record
+        let made = calls_to(&log, MAKE_VELOCITY);
+        assert_eq!(made.len(), 1);
+        assert_eq!(&made[0][1..], &[0.0f32.to_bits(), 0, 0]);
+        assert_eq!(
+            calls_to(&log, SET_3D_VELOCITY),
+            vec![vec![obj3d, made[0][0]]]
+        );
+        // a non-actor skips the freezing
+        let (mut e, _) = old_havok_setup(0x2b, &[0, 0]);
+        install_walk(&mut e, vec![]);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 20u16]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SET_FIXED).is_empty());
+        assert_eq!(calls_to(&log, MAKE_VELOCITY).len(), 1);
+    }
+
+    #[test]
+    fn fn_00561860_reads_the_flags_the_way_each_version_saved_them() {
+        // before 0x16: a byte before the 3D lookup that sets bit 0; no count
+        // before 0x18, so a different count does not matter
+        let (mut e, buffer) = old_havok_setup(0x10, &[1]);
+        let walks = capture_walks(&mut e);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        returns(&mut e, GET_LOADED_3D, 0x3d3d);
+        let refr = big_refr(&mut e, false);
+        e.call(0x0056_1860, &args![refr, 5u16]);
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 1);
+        assert_eq!(walks.borrow().len(), 1);
+        // 0x16 to 0x2a: the same byte, read after the lookup
+        let (mut e, buffer) = old_havok_setup(0x17, &[7]);
+        let walks = capture_walks(&mut e);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        returns(&mut e, GET_LOADED_3D, 0x3d3d);
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 5u16]);
+        let log = e.call_log.take().unwrap();
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + 1);
+        let context = calls_to(&log, WALK_COLLISION)[0][1];
+        assert_eq!(e.mem.u32(context + 0x14), 1);
+        assert_eq!(walks.borrow().len(), 1);
+        // 0x2b and later: the flags byte itself
+        let (mut e, _) = old_havok_setup(0x2b, &[6, 0]);
+        let _walks = capture_walks(&mut e);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        returns(&mut e, GET_LOADED_3D, 0x3d3d);
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1860, &args![refr, 5u16]);
+        let log = e.call_log.take().unwrap();
+        let context = calls_to(&log, WALK_COLLISION)[1][1];
+        assert_eq!(e.mem.u32(context + 0x14), 6);
+    }
+
+    // ---- 00561b40: the callback of the older record ------------------------
+
+    /// An engine with a rich body for the older loading callback, the
+    /// doubles for the velocities, and a walk context of `iFlags` `flags`
+    /// whose reference is `refr` and root `root`.
+    fn old_load_setup(
+        version: u8,
+        stream: &[u8],
+        flags: u32,
+        actor: bool,
+    ) -> (Engine, u32, BodyLog, MotionLog, Ptr<OldHavokLoadWalk>, u32) {
+        let (mut e, _) = old_havok_setup(version, &[]);
+        let (body, log) = rich_body(&mut e, true, false);
+        let motion = motion_doubles(&mut e, body);
+        stub(&mut e, &[RAGDOLL_NODE_STEP]);
+        let refr = batch_refr(&mut e, actor);
+        let walk: Ptr<OldHavokLoadWalk> = e.new_object();
+        e.set(walk, OldHavokLoadWalk::pRef, refr.cast());
+        e.set(walk, OldHavokLoadWalk::iFlags, flags);
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        let buffer = e.mem.u32(game + 0x14);
+        e.mem.write(buffer, stream);
+        (e, body, log, motion, walk, buffer)
+    }
+
+    #[test]
+    fn fn_00561b40_reads_the_pose_and_the_velocities_from_the_stream() {
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        stream.extend(floats(&[4.0, 5.0, 6.0, 7.0, 8.0, 9.0]));
+        let (mut e, body, log, motion, walk, buffer) = old_load_setup(0x51, &stream, 1, false);
+        let node = node_of(&mut e, body);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1b40, &args![node, walk]);
+        let calls = e.call_log.take().unwrap();
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + stream.len() as u32);
+        assert_eq!(calls_to(&calls, RAGDOLL_NODE_STEP), vec![vec![node, 0]]);
+        assert_eq!(log.position.borrow()[0], floats(&[1.0, 2.0, 3.0]));
+        let rotation = lanes(&log.rotation.borrow()[0]);
+        assert!(
+            (rotation[3] - 1.0).abs() < 1e-3 && rotation[0] == 0.0,
+            "{rotation:?}"
+        );
+        assert_eq!(
+            motion.linear.borrow().clone(),
+            vec![floats(&[4.0, 5.0, 6.0])]
+        );
+        assert_eq!(
+            motion.angular.borrow().clone(),
+            vec![floats(&[7.0, 8.0, 9.0])]
+        );
+        // the flag setter and the two changed velocities activate the entity
+        assert_eq!(calls_to(&calls, ENTITY_ACTIVATE).len(), 3);
+        // without bit 0 the velocities are the zero vector and nothing is read
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        let (mut e, body, _, motion, walk, buffer) = old_load_setup(0x51, &stream, 0, false);
+        let node = node_of(&mut e, body);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1b40, &args![node, walk]);
+        let calls = e.call_log.take().unwrap();
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer + stream.len() as u32);
+        assert_eq!(motion.linear.borrow().clone(), vec![vec![0u8; 12]]);
+        assert_eq!(motion.angular.borrow().clone(), vec![vec![0u8; 12]]);
+        assert_eq!(calls_to(&calls, ENTITY_ACTIVATE).len(), 2);
+    }
+
+    #[test]
+    fn fn_00561b40_takes_the_collision_roots_pose_from_the_reference() {
+        // saves before 0x2b: the node that is the collision root
+        let (mut e, body, log, motion, walk, buffer) = old_load_setup(0x20, &[], 0, false);
+        let node = node_of(&mut e, body);
+        e.set(walk, OldHavokLoadWalk::pCollisionRoot, Ptr::new(node));
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            e.mem.write(a[0], &floats(&[0.0, 2.0, 0.0, 0.0]));
+            a[0].into_ret()
+        });
+        let refr = e.get(walk, OldHavokLoadWalk::pRef);
+        e.mem.write(refr.addr() + 0x30, &floats(&[9.0, 8.0, 7.0]));
+        e.call(0x0056_1b40, &args![node, walk]);
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        // nothing is read from the stream for the pose or the velocities
+        assert_eq!(e.mem.u32(game + 0x14), buffer);
+        assert_eq!(log.position.borrow()[0], floats(&[9.0, 8.0, 7.0]));
+        let rotation = lanes(&log.rotation.borrow()[0]);
+        assert!((rotation[1] - 1.0).abs() < 1e-3, "{rotation:?}");
+        assert_eq!(motion.linear.borrow().len(), 1);
+        // a newer save asks flag 2 instead, and clears it
+        let (mut e, body, log, _, walk, _) = old_load_setup(0x51, &[], 2, false);
+        let node = node_of(&mut e, body);
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            e.mem.write(a[0], &floats(&[0.0, 2.0, 0.0, 0.0]));
+            a[0].into_ret()
+        });
+        e.call(0x0056_1b40, &args![node, walk]);
+        assert_eq!(e.get(walk, OldHavokLoadWalk::iFlags), 0);
+        assert_eq!(log.position.borrow().len(), 1);
+        // an older save's other nodes read their pose
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        let (mut e, body, log, _, walk, _) = old_load_setup(0x20, &stream, 0, false);
+        let node = node_of(&mut e, body);
+        e.set(walk, OldHavokLoadWalk::pCollisionRoot, Ptr::new(0x1234));
+        e.call(0x0056_1b40, &args![node, walk]);
+        assert_eq!(log.position.borrow()[0], floats(&[1.0, 2.0, 3.0]));
+    }
+
+    #[test]
+    fn fn_00561b40_skips_arrows_and_gives_an_actors_node_its_virtual() {
+        let (mut e, body, log, _, walk, buffer) = old_load_setup(0x51, &[], 0, false);
+        // an arrow: skipped even with a body
+        let arrow_object = fake_sequence(&mut e, "Arrow", 0, 0);
+        let arrow = node_of(&mut e, body);
+        e.mem.set_u32(arrow + 8, arrow_object);
+        e.call(0x0056_1b40, &args![arrow, walk]);
+        assert!(log.position.borrow().is_empty());
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD);
+        assert_eq!(e.mem.u32(game + 0x14), buffer);
+        // a node without a body reads nothing
+        let bare = havok_node(&mut e, 0, None, false);
+        e.call(0x0056_1b40, &args![bare, walk]);
+        assert!(log.position.borrow().is_empty());
+        // an actor: an object of the skipped type ends it, another one makes
+        // the node's virtual +0xb0 run with (1, 0, 0) first
+        let (mut e, body, log, _, walk, _) = old_load_setup(0x51, &[0; 40], 0, true);
+        let skipped = e.mem.alloc(0x40);
+        e.mem.set_u8(skipped + 0x1e, 1);
+        let node = node_of(&mut e, body);
+        e.mem.set_u32(node + 8, skipped);
+        e.call(0x0056_1b40, &args![node, walk]);
+        assert!(log.position.borrow().is_empty());
+        let plain = e.mem.alloc(0x40);
+        e.mem.set_u32(node + 8, plain);
+        let vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(vtable + 0xb0, 0x00fb_00b0);
+        e.mem.set_u32(node, vtable);
+        e.register_double(0x00fb_00b0, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_1b40, &args![node, walk]);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&calls, 0x00fb_00b0), vec![vec![node, 1, 0, 0]]);
+        assert_eq!(log.position.borrow().len(), 1);
+    }
+
+    // ---- 00561d90 ---------------------------------------------------------
+
+    #[test]
+    fn original_open_state_is_the_extra_flag_inverted_when_the_change_is_recorded() {
+        for (recorded, flag, expected) in [
+            (false, false, false),
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            let mut e = batch_engine();
+            e.register(CHANGE_FLAGS_CONSTRUCT, |e, a| {
+                e.mem.set_u32(a[0], a[1]);
+                a[0].into_ret()
+            });
+            e.set_global(GLOBAL_SAVE_LOAD_GAME, 0x7777u32);
+            returns(&mut e, SAVE_LOAD_GET_CHANGE, u32::from(recorded));
+            returns(&mut e, EXTRA_FLAG_TEST, u32::from(flag));
+            let refr = new_refr(&mut e);
+            e.call_log = Some(vec![]);
+            let state = e.call(0x0056_1d90, &args![refr]).bool();
+            let log = e.call_log.take().unwrap();
+            assert_eq!(state, expected, "recorded {recorded}, flag {flag}");
+            // the change asked about is the open state, 0x400000
+            assert_eq!(
+                calls_to(&log, SAVE_LOAD_GET_CHANGE),
+                vec![vec![0x7777, refr.addr(), 0x0040_0000]]
+            );
+            assert_eq!(
+                calls_to(&log, EXTRA_FLAG_TEST),
+                vec![vec![refr.addr() + 0x44, 8]]
+            );
+        }
+    }
+
+    // ---- 00561df0 / 00561ef0: the editor location --------------------------
+
+    /// A reference with an editor-location extra (position 1, 2, 3 at +0xc
+    /// and rotation 10, 11, 12 at +0x18) and doubles that give it no
+    /// starting space, no world space and no parent cell; returns the
+    /// engine, the reference and three output slots (position, rotation,
+    /// space).
+    fn editor_location_setup() -> (Engine, Ptr<TESObjectREFR>, u32, u32, u32) {
+        let mut e = batch_engine();
+        let record = e.mem.alloc(0x40);
+        for i in 0..3 {
+            e.mem.set_f32(record + 0xc + 4 * i, 1.0 + i as f32);
+            e.mem.set_f32(record + 0x18 + 4 * i, 10.0 + i as f32);
+        }
+        e.register_double(EXTRA_GET_DATA, move |_, a| {
+            if a[1] == 0xf {
+                record.into_ret()
+            } else {
+                0u32.into_ret()
+            }
+        });
+        returns(&mut e, EXTRA_GET_STARTING_SPACE, 0);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        let refr = new_refr(&mut e);
+        let position = e.mem.alloc(16);
+        let rotation = e.mem.alloc(16);
+        let space = e.mem.alloc(16);
+        (e, refr, position, rotation, space)
+    }
+
+    #[test]
+    fn editor_location_needs_the_extra_and_copies_its_position_and_rotation() {
+        let (mut e, refr, position, rotation, space) = editor_location_setup();
+        returns(&mut e, EXTRA_GET_STARTING_SPACE, 0x5001);
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, 0u32])
+            .bool());
+        assert_eq!(lanes(&e.mem.bytes(position, 12)), vec![1.0, 2.0, 3.0]);
+        assert_eq!(lanes(&e.mem.bytes(rotation, 12)), vec![10.0, 11.0, 12.0]);
+        assert_eq!(e.mem.u32(space), 0x5001);
+        // no editor-location extra: false, and nothing written
+        e.register(EXTRA_GET_DATA, |_, _| 0u32.into_ret());
+        let other = e.mem.alloc(16);
+        assert!(!e
+            .call(0x0056_1df0, &args![refr, other, other, other, 0u32])
+            .bool());
+        assert_eq!(e.mem.u32(other), 0);
+    }
+
+    #[test]
+    fn editor_location_space_comes_from_the_extra_the_world_the_parent_cell_or_the_default() {
+        // the reference's world space when the extra has none
+        let (mut e, refr, position, rotation, space) = editor_location_setup();
+        returns(&mut e, GET_WORLD_SPACE, 0x6006);
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, 0u32])
+            .bool());
+        assert_eq!(e.mem.u32(space), 0x6006);
+        // else the parent cell
+        let (mut e, refr, position, rotation, space) = editor_location_setup();
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(0x7007));
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, 0u32])
+            .bool());
+        assert_eq!(e.mem.u32(space), 0x7007);
+        // else the default cell: none is false
+        let (mut e, refr, position, rotation, space) = editor_location_setup();
+        assert!(!e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, 0u32])
+            .bool());
+        // a cell (form type 0x39) that passes the cell test stands for itself
+        let cell = form(&mut e, 0x39, 0x1111, 0);
+        returns(&mut e, CELL_TEST, 1);
+        returns(&mut e, CELL_GET_WORLD_SPACE, 0x8008);
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, cell])
+            .bool());
+        assert_eq!(e.mem.u32(space), cell);
+        // one that fails it stands for its world space
+        returns(&mut e, CELL_TEST, 0);
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, cell])
+            .bool());
+        assert_eq!(e.mem.u32(space), 0x8008);
+        // any other form stands for itself
+        let other = form(&mut e, 0x3a, 0x2222, 0);
+        assert!(e
+            .call(0x0056_1df0, &args![refr, position, rotation, space, other])
+            .bool());
+        assert_eq!(e.mem.u32(space), other);
+    }
+
+    /// An engine for `MoveToEditorLocation`: the reference's virtual +0x138
+    /// reports position (4, 5, 6) and rotation (7, 8, 9) in the space
+    /// 0x6006.
+    fn move_to_editor_setup() -> (Engine, Ptr<TESObjectREFR>) {
+        let mut e = batch_engine();
+        slot(&mut e, 0x138, |e, a| {
+            e.mem.write(a[1], &floats(&[4.0, 5.0, 6.0]));
+            e.mem.write(a[2], &floats(&[7.0, 8.0, 9.0]));
+            e.mem.set_u32(a[3], 0x6006);
+            true.into_ret()
+        });
+        let refr = batch_refr(&mut e, false);
+        let tes = e.mem.alloc(8);
+        e.set_global(GLOBAL_TES, tes);
+        // the space resolves to the world 0x7007 and no cell
+        e.register(GET_LOCATION_CELL_OR_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0);
+            e.mem.set_u32(a[2], 0x7007);
+            Ret::default()
+        });
+        returns(&mut e, WORLD_CELL_FROM_COORD, 0x8008);
+        returns(&mut e, GET_REF_PERSISTS, 0);
+        returns(&mut e, TES_IS_CELL_LOADED, 1);
+        returns(&mut e, CELL_TEST, 0);
+        returns(&mut e, GET_LOADED_3D, 0);
+        stub(
+            &mut e,
+            &[
+                SET_LOCATION_ON_REFERENCE,
+                SET_ROTATION,
+                MOVE_REF_TO_NEW_SPACE,
+            ],
+        );
+        (e, refr)
+    }
+
+    #[test]
+    fn move_to_editor_location_moves_the_reference_to_its_exterior_cell() {
+        let (mut e, refr) = move_to_editor_setup();
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        // the cell comes from the world and the position the editor gave
+        let from_coord = calls_to(&log, WORLD_CELL_FROM_COORD);
+        assert_eq!(from_coord.len(), 1);
+        assert_eq!(from_coord[0][0], 0x7007);
+        assert_eq!(calls_to(&log, GET_LOCATION_CELL_OR_WORLD)[0][0], 0x6006);
+        assert_eq!(
+            calls_to(&log, SET_LOCATION_ON_REFERENCE),
+            vec![vec![refr.addr(), from_coord[0][1]]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_ROTATION),
+            vec![vec![
+                refr.addr(),
+                7.0f32.to_bits(),
+                8.0f32.to_bits(),
+                9.0f32.to_bits()
+            ]]
+        );
+        // an exterior cell: moved by world space, no cell
+        assert_eq!(
+            calls_to(&log, MOVE_REF_TO_NEW_SPACE),
+            vec![vec![refr.addr(), 0, 0x7007]]
+        );
+    }
+
+    #[test]
+    fn move_to_editor_location_moves_the_reference_into_an_interior_cell() {
+        let (mut e, refr) = move_to_editor_setup();
+        e.register(GET_LOCATION_CELL_OR_WORLD, |e, a| {
+            e.mem.set_u32(a[1], 0x9009);
+            e.mem.set_u32(a[2], 0);
+            Ret::default()
+        });
+        returns(&mut e, CELL_TEST, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0056_1ef0, &args![refr, 0x1234u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, WORLD_CELL_FROM_COORD).is_empty());
+        assert_eq!(
+            calls_to(&log, MOVE_REF_TO_NEW_SPACE),
+            vec![vec![refr.addr(), 0x9009, 0]]
+        );
+        // the default cell was handed to the virtual
+        assert_eq!(calls_to(&log, 0x00fd_0138)[0][4], 0x1234);
+    }
+
+    #[test]
+    fn move_to_editor_location_needs_a_loaded_cell_unless_the_reference_persists() {
+        // not persistent and the cell is not loaded: nothing is moved
+        let (mut e, refr) = move_to_editor_setup();
+        returns(&mut e, TES_IS_CELL_LOADED, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, TES_IS_CELL_LOADED).len(), 1);
+        assert!(calls_to(&log, SET_LOCATION_ON_REFERENCE).is_empty());
+        // no cell at all
+        returns(&mut e, WORLD_CELL_FROM_COORD, 0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, TES_IS_CELL_LOADED).is_empty());
+        // a persistent reference does not need one
+        returns(&mut e, GET_REF_PERSISTS, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, MOVE_REF_TO_NEW_SPACE).len(), 1);
+        // no editor location: false before anything else
+        slot(&mut e, 0x138, |_, _| false.into_ret());
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, GET_LOCATION_CELL_OR_WORLD).is_empty());
+    }
+
+    #[test]
+    fn move_to_editor_location_ends_with_the_3d_position_update() {
+        let (mut e, refr) = move_to_editor_setup();
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        stub(
+            &mut e,
+            &[
+                SET_3D_LOCATION,
+                SET_3D_ORIENTATION,
+                UPDATE_POSITION,
+                SET_3D_VELOCITY,
+                MAKE_VELOCITY,
+            ],
+        );
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0056_1ef0, &args![refr, 0u32]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_3D_LOCATION).len(), 1);
+        assert_eq!(calls_to(&log, UPDATE_POSITION), vec![vec![obj3d, 1, 0]]);
+    }
+
+    // ---- 00562020, 005620e0 ------------------------------------------------
+
+    #[test]
+    fn update_3d_position_moves_the_controller_and_the_3d() {
+        let mut e = batch_engine();
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        slot(&mut e, 0xfc, |_, _| true.into_ret());
+        returns(&mut e, GET_CHARACTER_CONTROLLER, 0xc7c7);
+        e.register(NI_TO_VECTOR, |e, a| {
+            let bytes = e.mem.bytes(a[1], 12);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        let positions = record_bytes(&mut e, CONTROLLER_SET_POSITION, 1, 12);
+        stub(
+            &mut e,
+            &[
+                SET_3D_LOCATION,
+                SET_3D_ORIENTATION,
+                UPDATE_POSITION,
+                SET_3D_VELOCITY,
+                MAKE_VELOCITY,
+            ],
+        );
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        let refr = batch_refr(&mut e, false);
+        e.mem.write(refr.addr() + 0x30, &floats(&[1.0, 2.0, 3.0]));
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2020, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            ordered(
+                &log,
+                &[
+                    GET_CHARACTER_CONTROLLER,
+                    CONTROLLER_SET_POSITION,
+                    SET_3D_LOCATION,
+                    GET_ORIENTATION,
+                    SET_3D_ORIENTATION,
+                    UPDATE_POSITION,
+                    MAKE_VELOCITY,
+                    SET_3D_VELOCITY
+                ]
+            ),
+            vec![
+                GET_CHARACTER_CONTROLLER,
+                CONTROLLER_SET_POSITION,
+                SET_3D_LOCATION,
+                GET_ORIENTATION,
+                SET_3D_ORIENTATION,
+                UPDATE_POSITION,
+                MAKE_VELOCITY,
+                SET_3D_VELOCITY
+            ]
+        );
+        assert_eq!(positions.borrow().clone(), vec![floats(&[1.0, 2.0, 3.0])]);
+        assert_eq!(
+            calls_to(&log, SET_3D_LOCATION),
+            vec![vec![obj3d, refr.addr() + 0x30]]
+        );
+        let matrix = calls_to(&log, GET_ORIENTATION)[0][1];
+        assert_eq!(
+            calls_to(&log, SET_3D_ORIENTATION),
+            vec![vec![obj3d, matrix]]
+        );
+        assert_eq!(calls_to(&log, UPDATE_POSITION), vec![vec![obj3d, 1, 0]]);
+        let made = calls_to(&log, MAKE_VELOCITY);
+        assert_eq!(&made[0][1..], &[0.0f32.to_bits(), 0, 0]);
+        assert_eq!(
+            calls_to(&log, SET_3D_VELOCITY),
+            vec![vec![obj3d, made[0][0]]]
+        );
+    }
+
+    #[test]
+    fn update_3d_position_leaves_the_controller_alone_unless_mobile_with_one() {
+        let mut e = batch_engine();
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        slot(&mut e, 0xfc, |_, _| false.into_ret());
+        returns(&mut e, GET_CHARACTER_CONTROLLER, 0xc7c7);
+        stub(
+            &mut e,
+            &[
+                CONTROLLER_SET_POSITION,
+                SET_3D_LOCATION,
+                SET_3D_ORIENTATION,
+                UPDATE_POSITION,
+                SET_3D_VELOCITY,
+                MAKE_VELOCITY,
+            ],
+        );
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        let refr = batch_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2020, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, GET_CHARACTER_CONTROLLER).is_empty());
+        assert_eq!(calls_to(&log, UPDATE_POSITION).len(), 1);
+        // mobile but without a controller
+        slot(&mut e, 0xfc, |_, _| true.into_ret());
+        returns(&mut e, GET_CHARACTER_CONTROLLER, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2020, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, CONTROLLER_SET_POSITION).is_empty());
+        assert_eq!(calls_to(&log, UPDATE_POSITION).len(), 1);
+        // no 3D: nothing at all
+        returns(&mut e, GET_LOADED_3D, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2020, &args![refr]);
+        assert_eq!(addresses(&e.call_log.take().unwrap()).len(), 2);
+    }
+
+    #[test]
+    fn character_controller_position_is_converted_to_a_havok_vector() {
+        let mut e = batch_engine();
+        e.register(NI_TO_VECTOR, |e, a| {
+            let bytes = e.mem.bytes(a[1], 12);
+            e.mem.write(a[0], &bytes);
+            a[0].into_ret()
+        });
+        let vectors = record_bytes(&mut e, CONTROLLER_SET_POSITION, 1, 12);
+        let point = e.mem.alloc(16);
+        e.mem.write(point, &floats(&[3.0, 2.0, 1.0]));
+        e.call_log = Some(vec![]);
+        e.call(0x0056_20e0, &args![0xc7c7u32, point]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, CONTROLLER_SET_POSITION)[0][0], 0xc7c7);
+        assert_eq!(vectors.borrow().clone(), vec![floats(&[3.0, 2.0, 1.0])]);
+    }
+
+    // ---- 00562140 and the change-flag helpers -----------------------------
+
+    /// An engine with the readers of the buffer's change flags (header at
+    /// +0x17, old at +0x2c) and the flag test working on memory, and a
+    /// save-load game object at its global; see `buffer_with`.
+    fn buffer_engine() -> Engine {
+        let mut e = batch_engine();
+        e.register(BUFFER_CHANGE_FLAGS, |e, a| {
+            let flags = e.mem.u32(a[0] + 0x17);
+            e.mem.set_u32(a[1], flags);
+            a[1].into_ret()
+        });
+        e.register(BUFFER_OLD_CHANGE_FLAGS, |e, a| {
+            let flags = e.mem.u32(a[0] + 0x2c);
+            e.mem.set_u32(a[1], flags);
+            a[1].into_ret()
+        });
+        e.register(CHANGE_FLAGS_TEST, |e, a| {
+            (e.mem.u32(a[0]) & a[1] != 0).into_ret()
+        });
+        let game = e.mem.alloc(0x300);
+        e.set_global(GLOBAL_SAVE_LOAD_GAME, game);
+        e
+    }
+
+    fn buffer_with(e: &mut Engine, header: u32, old: u32, own: u32) -> u32 {
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(buffer + 0x17, header);
+        e.mem.set_u32(buffer + 0x2c, old);
+        e.mem.set_u32(buffer + 0x28, own);
+        buffer
+    }
+
+    #[test]
+    fn fn_00562140_clears_the_animation_change_unless_something_keeps_it() {
+        let mut e = buffer_engine();
+        stub(&mut e, &[EMPTY_BUFFER_STEP]);
+        returns(&mut e, GET_LOADED_3D, 0x3d3d);
+        returns(&mut e, EXTRA_GET_LAST_SEQUENCE, 0);
+        let refr = batch_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x1000_0040, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2140, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, EMPTY_BUFFER_STEP),
+            vec![vec![refr.addr(), buffer]]
+        );
+        // only the 0x10000000 bit goes
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x40);
+        // without the bit, nothing happens
+        let buffer = buffer_with(&mut e, 0x40, 0, 0);
+        e.call(0x0056_2140, &args![refr, buffer]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x40);
+        // a sequence left to save keeps it
+        returns(&mut e, EXTRA_GET_LAST_SEQUENCE, 0x5151);
+        let buffer = buffer_with(&mut e, 0x1000_0040, 0, 0);
+        e.call(0x0056_2140, &args![refr, buffer]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x1000_0040);
+        returns(&mut e, EXTRA_GET_LAST_SEQUENCE, 0);
+        // so does the save-load game's global flag 4
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD_GAME);
+        e.mem.set_u32(game + 0x244, 4);
+        let buffer = buffer_with(&mut e, 0x1000_0040, 0, 0);
+        e.call(0x0056_2140, &args![refr, buffer]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x1000_0040);
+        e.mem.set_u32(game + 0x244, 0);
+        // a reference without a 3D
+        returns(&mut e, GET_LOADED_3D, 0);
+        let buffer = buffer_with(&mut e, 0x1000_0040, 0, 0);
+        e.call(0x0056_2140, &args![refr, buffer]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x1000_0040);
+        returns(&mut e, GET_LOADED_3D, 0x3d3d);
+        // and an actor
+        let actor = batch_refr(&mut e, true);
+        let buffer = buffer_with(&mut e, 0x1000_0040, 0, 0);
+        e.call(0x0056_2140, &args![actor, buffer]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 0x1000_0040);
+    }
+
+    #[test]
+    fn the_change_flag_helpers_test_and_clear_bits() {
+        let mut e = batch_engine();
+        let game = e.mem.alloc(0x300);
+        e.mem.set_u32(game + 0x244, 0xb);
+        assert!(!e.call(0x0056_21d0, &args![game]).bool());
+        e.mem.set_u32(game + 0x244, 0x5);
+        assert!(e.call(0x0056_21d0, &args![game]).bool());
+        let flags = e.mem.alloc(8);
+        e.mem.set_u32(flags, 0xff);
+        e.call(0x0056_2210, &args![flags, 0x0fu32]);
+        assert_eq!(e.mem.u32(flags), 0xf0);
+        // the buffer's change flags are at +0x17
+        let buffer = e.mem.alloc(0x40);
+        e.mem.set_u32(buffer + 0x17, 0x1000_0003);
+        e.call(0x0056_21f0, &args![buffer, 0x1000_0000u32]);
+        assert_eq!(e.mem.u32(buffer + 0x17), 3);
+        // the buffer's own flags: bit 4 at +0x28
+        e.mem.set_u32(buffer + 0x28, 4);
+        assert!(e.call(0x0056_2d00, &args![buffer]).bool());
+        e.mem.set_u32(buffer + 0x28, 0xb);
+        assert!(!e.call(0x0056_2d00, &args![buffer]).bool());
+    }
+
+    // ---- the buffer-based save and load handlers ---------------------------
+
+    /// `buffer_engine` with stand-ins for everything the buffer handlers
+    /// call: stubs for the writers and loaders, the inventory changes at
+    /// 0x1c1c, no loaded 3D, the shadow-scene and model-loader globals.
+    fn buffer_handler_engine() -> Engine {
+        let mut e = buffer_engine();
+        stub(
+            &mut e,
+            &[
+                FORM_SAVE_GAME_BUFFER,
+                FORM_LOAD_GAME_BUFFER,
+                EMPTY_BUFFER_STEP,
+                BUFFER_SAVE_DATA,
+                BUFFER_LOAD_DATA,
+                EXTRA_SAVE_GAME_OV2,
+                EXTRA_LOAD_GAME_OV2,
+                EXTRA_LOAD_GAME_WITH_BASE,
+                EXTRA_FINISH_LOAD_GAME,
+                EXTRA_LOAD_STEP,
+                EXTRA_LOAD_LAST_STEP,
+                EXTRA_STEP_BEFORE_CHANGES,
+                INVENTORY_CHANGES_SAVE_GAME,
+                INVENTORY_CHANGES_LOAD_GAME,
+                INVENTORY_CHANGES_FINISH,
+                QUEUE_SUB_BUFFER,
+                FORM_SET_EMPTY,
+                FORM_SET_DISABLED,
+                SET_SCALE,
+                UPDATE_ADDON_NODE_SOUNDS,
+                TERRAIN_HIDE_TREE,
+                CELL_ADD_ACTIVATING_REF,
+                CELL_REFERENCE_STEP,
+                RESET_STATE,
+                SET_OPEN_STATE,
+                RESTORE_RAGDOLL_DATA,
+                EXTRA_FLAG_SET,
+                EXTRA_FLAG_CLEAR,
+                REFR_CLEAR_ACTION,
+                REFR_SET_ACTION,
+                SNAP_HAVOK_TO_3D,
+                OBSTACLE_ON_DOOR_CLOSE,
+                OBSTACLE_ON_DOOR_OPEN,
+                MODEL_LOADER_QUEUE_REFERENCE,
+                WORLD_GET_TERRAIN_MANAGER,
+            ],
+        );
+        returns(&mut e, GET_INVENTORY_CHANGES, 0x1c1c);
+        returns(&mut e, GET_OPEN_STATE, 0);
+        returns(&mut e, BASE_FORM_TEST, 0);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        returns(&mut e, EXTRA_FLAG_TEST, 0);
+        returns(&mut e, REFR_HEALTH_GATE, 0);
+        returns(&mut e, GET_LOADED_3D, 0);
+        returns(&mut e, GET_OBSTACLE_MANAGER, 0x0b0b);
+        returns(&mut e, SAVE_LOAD_GAME_TEST, 0);
+        returns(&mut e, REFR_3D_TEST, 0);
+        e.register(CHANGE_FLAGS_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            a[0].into_ret()
+        });
+        e.register(CHECKED_CAST, |_, a| a[1].into_ret());
+        let tes = e.mem.alloc(8);
+        e.set_global(GLOBAL_TES, tes);
+        let loader = e.mem.alloc(8);
+        e.set_global(GLOBAL_MODEL_LOADER, loader);
+        e
+    }
+
+    /// A reference whose virtual +0x1d0 (the loaded 3D) gives null.
+    fn handler_refr(e: &mut Engine, actor: bool) -> Ptr<TESObjectREFR> {
+        slot(e, 0x1d0, |_, _| 0u32.into_ret());
+        batch_refr(e, actor)
+    }
+
+    // ---- 00562230 -----------------------------------------------------------
+
+    #[test]
+    fn save_game_ov2_writes_each_part_for_its_change_flag() {
+        let mut e = buffer_handler_engine();
+        let writes = record_writes(&mut e, BUFFER_SAVE_DATA);
+        let refr = handler_refr(&mut e, false);
+        e.mem.write(refr.addr() + 0x3c, &floats(&[2.5]));
+        let buffer = buffer_with(&mut e, 0x10 | 0x40 | 0x20, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FORM_SAVE_GAME_BUFFER),
+            vec![vec![refr.addr(), buffer]]
+        );
+        // the scale: four bytes at +0x3c
+        assert_eq!(writes.borrow().clone(), vec![floats(&[2.5])]);
+        assert_eq!(
+            calls_to(&log, BUFFER_SAVE_DATA),
+            vec![vec![buffer, refr.addr() + 0x3c, 4, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_SAVE_GAME_OV2),
+            vec![vec![refr.addr() + 0x44, buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, INVENTORY_CHANGES_SAVE_GAME),
+            vec![vec![0x1c1c, buffer]]
+        );
+        // no flags, no parts
+        let buffer = buffer_with(&mut e, 0x2, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log)
+                .into_iter()
+                .filter(|a| *a == BUFFER_SAVE_DATA || *a == EXTRA_SAVE_GAME_OV2)
+                .count(),
+            0
+        );
+        // 0x40000 is an extra-data flag only for an actor
+        let buffer = buffer_with(&mut e, 0x4_0000, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), EXTRA_SAVE_GAME_OV2).is_empty());
+        let actor = handler_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![actor, buffer]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), EXTRA_SAVE_GAME_OV2).len(),
+            1
+        );
+    }
+
+    /// The doubles the animation part of `SaveGame` needs: the saved
+    /// animation `animation`, a loaded 3D `obj3d`, a buffer position at
+    /// +0xc that `SaveControllerManager` advances by 10, a start token.
+    fn animation_save_engine(animation: u32, obj3d: u32) -> Engine {
+        let mut e = buffer_handler_engine();
+        returns(&mut e, EXTRA_GET_SAVED_ANIMATION, animation);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        returns(&mut e, BUFFER_START_VARIABLE, 0x7070);
+        returns(&mut e, GET_CONTROLLER, 0);
+        e.register(CHECKED_CAST, |_, a| a[1].into_ret());
+        returns(&mut e, EXTRA_GET_LAST_SEQUENCE, 0x5151);
+        stub(
+            &mut e,
+            &[
+                BUFFER_SAVE_STRING,
+                BUFFER_SAVE_VARIABLE_OV2,
+                SUB_BUFFER_SAVE_GAME,
+            ],
+        );
+        e.register(SAVE_CONTROLLER_MANAGER, |e, a| {
+            let position = e.mem.u32(a[1] + 0xc);
+            e.mem.set_u32(a[1] + 0xc, position + 10);
+            Ret::default()
+        });
+        e
+    }
+
+    #[test]
+    fn save_game_ov2_saves_the_animation_as_a_sized_value() {
+        let mut e = animation_save_engine(0, 0x3d3d);
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x1000_0000, 0, 0);
+        e.mem.set_u32(buffer + 0xc, 100);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            ordered(
+                &log,
+                &[
+                    BUFFER_START_VARIABLE,
+                    BUFFER_SAVE_STRING,
+                    SAVE_CONTROLLER_MANAGER,
+                    BUFFER_SAVE_VARIABLE_OV2
+                ]
+            ),
+            vec![
+                BUFFER_START_VARIABLE,
+                BUFFER_SAVE_STRING,
+                SAVE_CONTROLLER_MANAGER,
+                BUFFER_SAVE_VARIABLE_OV2
+            ]
+        );
+        // the last finished sequence name, then the manager with the -1.0 blend
+        assert_eq!(
+            calls_to(&log, BUFFER_SAVE_STRING),
+            vec![vec![buffer, 0x5151, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, SAVE_CONTROLLER_MANAGER),
+            vec![vec![0, buffer, 0xbf80_0000]]
+        );
+        // the size of what the animation wrote, and the token
+        assert_eq!(
+            calls_to(&log, BUFFER_SAVE_VARIABLE_OV2),
+            vec![vec![buffer, 10, 0x7070]]
+        );
+    }
+
+    #[test]
+    fn save_game_ov2_hands_a_3d_less_animation_to_a_sub_buffer() {
+        // no 3D but a saved animation: the sub buffer saves it
+        let mut e = animation_save_engine(0x5252, 0);
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x1000_0000, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        let sub = calls_to(&log, SUB_BUFFER_SAVE_GAME);
+        assert_eq!(sub.len(), 1);
+        assert_eq!(sub[0][1], buffer);
+        // the cell it is called on holds the saved animation
+        assert_eq!(calls_to(&log, CHANGE_FLAGS_CONSTRUCT)[0][1], 0x5252);
+        assert!(calls_to(&log, BUFFER_START_VARIABLE).is_empty());
+        // no 3D and no animation: the sized value is written anyway
+        let mut e = animation_save_engine(0, 0);
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x1000_0000, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, BUFFER_SAVE_VARIABLE_OV2).len(), 1);
+        // a 3D with an animation: also the sized value
+        let mut e = animation_save_engine(0x5252, 0x3d3d);
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x1000_0000, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SUB_BUFFER_SAVE_GAME).is_empty());
+        assert_eq!(calls_to(&log, BUFFER_SAVE_VARIABLE_OV2).len(), 1);
+        // an actor does not save the animation
+        let actor = handler_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2230, &args![actor, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), BUFFER_START_VARIABLE).is_empty());
+    }
+
+    // ---- 005623d0 -----------------------------------------------------------
+
+    #[test]
+    fn fn_005623d0_loads_each_part_for_its_change_flag() {
+        let mut e = buffer_handler_engine();
+        let refr = handler_refr(&mut e, false);
+        e.mem.write(refr.addr() + 0x3c, &floats(&[2.5]));
+        let buffer = buffer_with(
+            &mut e,
+            0x0020_0000 | 0x10 | 0x40 | 0x20 | 0x1000_0000 | 0x0040_0000,
+            0,
+            0,
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FORM_LOAD_GAME_BUFFER),
+            vec![vec![refr.addr(), buffer]]
+        );
+        assert_eq!(calls_to(&log, FORM_SET_EMPTY), vec![vec![refr.addr(), 1]]);
+        assert_eq!(
+            calls_to(&log, BUFFER_LOAD_DATA),
+            vec![vec![buffer, refr.addr() + 0x3c, 4]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_SCALE),
+            vec![vec![refr.addr(), 2.5f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_LOAD_GAME_OV2),
+            vec![vec![refr.addr() + 0x44, buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_STEP_BEFORE_CHANGES),
+            vec![vec![refr.addr() + 0x44]]
+        );
+        assert_eq!(
+            calls_to(&log, INVENTORY_CHANGES_LOAD_GAME),
+            vec![vec![0x1c1c, buffer]]
+        );
+        let game = e.global::<u32>(GLOBAL_SAVE_LOAD_GAME);
+        assert_eq!(
+            calls_to(&log, QUEUE_SUB_BUFFER),
+            vec![vec![game, 0, buffer, 0]]
+        );
+        // the open-state flag: the list does not have it, so it is cleared
+        assert_eq!(
+            calls_to(&log, EXTRA_FLAG_TEST),
+            vec![vec![refr.addr() + 0x44, 8]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_FLAG_CLEAR),
+            vec![vec![refr.addr() + 0x44, 8]]
+        );
+    }
+
+    #[test]
+    fn fn_005623d0_leaves_the_non_actor_parts_to_other_references() {
+        let mut e = buffer_handler_engine();
+        let actor = handler_refr(&mut e, true);
+        let buffer = buffer_with(
+            &mut e,
+            0x0020_0000 | 0x1000_0000 | 0x0040_0000 | 0x4_0000,
+            0,
+            0,
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![actor, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, FORM_SET_EMPTY).is_empty());
+        assert!(calls_to(&log, QUEUE_SUB_BUFFER).is_empty());
+        assert!(calls_to(&log, EXTRA_FLAG_TEST).is_empty());
+        // 0x40000 is an extra-data flag for an actor
+        assert_eq!(calls_to(&log, EXTRA_LOAD_GAME_OV2).len(), 1);
+    }
+
+    #[test]
+    fn fn_005623d0_applies_the_destruction_stage_when_there_is_a_health() {
+        let mut e = buffer_handler_engine();
+        returns(&mut e, REFR_HEALTH_GATE, 1);
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: 50.0,
+            ..Ret::default()
+        });
+        returns(&mut e, GET_DESTRUCTION_FORM, 0xd0d0);
+        returns(&mut e, UPDATE_DAMAGE_STAGE, 1);
+        let refr = handler_refr(&mut e, false);
+        let loaded = e.mem.alloc(0x20);
+        e.mem.set_u32(loaded + 0x14, 0x3d3d);
+        e.set(refr, TESObjectREFR::pLoadedData, Ptr::new(loaded));
+        let base = e.mem.alloc(0x20);
+        e.set(
+            refr.at(TESObjectREFR::data),
+            OBJ_REFR::pObjectReference,
+            Ptr::new(base),
+        );
+        let buffer = buffer_with(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, GET_DESTRUCTION_FORM), vec![vec![base]]);
+        assert_eq!(
+            calls_to(&log, UPDATE_DAMAGE_STAGE),
+            vec![vec![0xd0d0, refr.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&log, UPDATE_ADDON_NODE_SOUNDS),
+            vec![vec![refr.addr(), 0]]
+        );
+        // a stage that did not change leaves the sounds alone
+        returns(&mut e, UPDATE_DAMAGE_STAGE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), UPDATE_ADDON_NODE_SOUNDS).is_empty());
+        // a health of -1.0 or no base object skips the step
+        returns(&mut e, UPDATE_DAMAGE_STAGE, 1);
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), UPDATE_DAMAGE_STAGE).is_empty());
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: 50.0,
+            ..Ret::default()
+        });
+        e.set(
+            refr.at(TESObjectREFR::data),
+            OBJ_REFR::pObjectReference,
+            Ptr::new(0),
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0056_23d0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), UPDATE_DAMAGE_STAGE).is_empty());
+    }
+
+    // ---- 00562660 -----------------------------------------------------------
+
+    #[test]
+    fn fn_00562660_follows_the_enable_parent_and_loads_extras_and_inventory() {
+        let mut e = buffer_handler_engine();
+        let parent = form(&mut e, 0x3a, 0x2222, 0x800);
+        returns(&mut e, ENABLE_PARENT, parent);
+        returns(&mut e, FOLLOWS_ENABLE_PARENT, 0);
+        let refr = handler_refr(&mut e, false);
+        let base = form(&mut e, 0x3b, 0x3333, 0);
+        e.set(
+            refr.at(TESObjectREFR::data),
+            OBJ_REFR::pObjectReference,
+            Ptr::new(base),
+        );
+        let buffer = buffer_with(&mut e, 0x40 | 0x20, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, EMPTY_BUFFER_STEP),
+            vec![vec![refr.addr(), buffer]]
+        );
+        // a disabled parent that is followed as it is disables the reference
+        assert_eq!(
+            calls_to(&log, FORM_SET_DISABLED),
+            vec![vec![refr.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_LOAD_GAME_WITH_BASE),
+            vec![vec![refr.addr() + 0x44, buffer, base]]
+        );
+        assert_eq!(
+            calls_to(&log, INVENTORY_CHANGES_FINISH),
+            vec![vec![0x1c1c, buffer]]
+        );
+        // followed inverted: the opposite
+        returns(&mut e, FOLLOWS_ENABLE_PARENT, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, FORM_SET_DISABLED),
+            vec![vec![refr.addr(), 0]]
+        );
+        // no parent: no change; no flags: no loading
+        returns(&mut e, ENABLE_PARENT, 0);
+        let buffer = buffer_with(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, FORM_SET_DISABLED).is_empty());
+        assert!(calls_to(&log, EXTRA_LOAD_GAME_WITH_BASE).is_empty());
+        assert!(calls_to(&log, INVENTORY_CHANGES_FINISH).is_empty());
+    }
+
+    #[test]
+    fn fn_00562660_hides_the_terrain_tree_of_a_disabled_object() {
+        let mut e = buffer_handler_engine();
+        returns(&mut e, ENABLE_PARENT, 0);
+        returns(&mut e, BASE_FORM_TEST, 1);
+        returns(&mut e, GET_WORLD_SPACE, 0x6006);
+        returns(&mut e, WORLD_GET_TERRAIN_MANAGER, 0x7a7a);
+        let refr = handler_refr(&mut e, false);
+        let base = form(&mut e, 0x3b, 0x3333, 0);
+        e.set(
+            refr.at(TESObjectREFR::data),
+            OBJ_REFR::pObjectReference,
+            Ptr::new(base),
+        );
+        let buffer = buffer_with(&mut e, 0, 0, 0);
+        // the reference is not disabled
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), TERRAIN_HIDE_TREE).is_empty());
+        // disabled (flag 0x800 at +8)
+        e.mem.set_u32(refr.addr() + 8, 0x800);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, WORLD_GET_TERRAIN_MANAGER),
+            vec![vec![0x6006]]
+        );
+        assert_eq!(
+            calls_to(&log, TERRAIN_HIDE_TREE),
+            vec![vec![0x7a7a, refr.addr(), 1]]
+        );
+        // the base form fails its test, or there is no world space
+        returns(&mut e, BASE_FORM_TEST, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), TERRAIN_HIDE_TREE).is_empty());
+        returns(&mut e, BASE_FORM_TEST, 1);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2660, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), TERRAIN_HIDE_TREE).is_empty());
+    }
+
+    // ---- 005627c0 -----------------------------------------------------------
+
+    #[test]
+    fn finish_load_game_puts_the_open_state_back_for_a_non_actor() {
+        // recorded change absent and the extra flag set: originally open
+        let mut e = buffer_handler_engine();
+        returns(&mut e, SAVE_LOAD_GET_CHANGE, 0);
+        returns(&mut e, EXTRA_FLAG_TEST, 1);
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0x40 | 0x0080_0000, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, EMPTY_BUFFER_STEP),
+            vec![vec![refr.addr(), buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_FINISH_LOAD_GAME),
+            vec![vec![refr.addr() + 0x44, buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, REFR_CLEAR_ACTION),
+            vec![vec![refr.addr(), 4]]
+        );
+        assert_eq!(calls_to(&log, SNAP_HAVOK_TO_3D), vec![vec![refr.addr()]]);
+        assert_eq!(
+            calls_to(&log, OBSTACLE_ON_DOOR_CLOSE),
+            vec![vec![0x0b0b, refr.addr()]]
+        );
+        assert!(calls_to(&log, REFR_SET_ACTION).is_empty());
+        // the other way round
+        returns(&mut e, EXTRA_FLAG_TEST, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, REFR_SET_ACTION), vec![vec![refr.addr(), 4]]);
+        assert_eq!(
+            calls_to(&log, OBSTACLE_ON_DOOR_OPEN),
+            vec![vec![0x0b0b, refr.addr()]]
+        );
+        assert!(calls_to(&log, REFR_CLEAR_ACTION).is_empty());
+        // an actor does not
+        let actor = handler_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![actor, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, SNAP_HAVOK_TO_3D).is_empty());
+    }
+
+    #[test]
+    fn finish_load_game_adds_the_activating_reference_and_queues_the_3d() {
+        let mut e = buffer_handler_engine();
+        returns(&mut e, CELL_PRIORITY_TEST, 1);
+        returns(&mut e, TES_GET_CELL_PRIORITY, 5);
+        let refr = handler_refr(&mut e, false);
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(0x6006));
+        let buffer = buffer_with(&mut e, 0x0400_0000, 0, 0);
+        let tes = e.global::<u32>(GLOBAL_TES);
+        let loader = e.global::<u32>(GLOBAL_MODEL_LOADER);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, CELL_ADD_ACTIVATING_REF),
+            vec![vec![0x6006, refr.addr()]]
+        );
+        // no 3D and a cell that passes the test: queued with its priority
+        assert_eq!(
+            calls_to(&log, TES_GET_CELL_PRIORITY),
+            vec![vec![tes, 0x6006, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, MODEL_LOADER_QUEUE_REFERENCE),
+            vec![vec![loader, refr.addr(), 5, 1]]
+        );
+        // a cell that fails the test, or a reference that has a 3D, is not
+        returns(&mut e, CELL_PRIORITY_TEST, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), MODEL_LOADER_QUEUE_REFERENCE).is_empty());
+        returns(&mut e, CELL_PRIORITY_TEST, 1);
+        slot(&mut e, 0x1d0, |_, _| 0x3d3du32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), MODEL_LOADER_QUEUE_REFERENCE).is_empty());
+        slot(&mut e, 0x1d0, |_, _| 0u32.into_ret());
+        // the virtual +0x1cc instead when 00437b90 holds
+        returns(&mut e, REFR_3D_TEST, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x00fd_01cc), vec![vec![refr.addr(), 0, 0]]);
+        assert!(calls_to(&log, MODEL_LOADER_QUEUE_REFERENCE).is_empty());
+        // the save-load game can say to do none of it
+        returns(&mut e, SAVE_LOAD_GAME_TEST, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_27c0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), REFR_3D_TEST).is_empty());
+    }
+
+    // ---- 005629a0 -----------------------------------------------------------
+
+    #[test]
+    fn fn_005629a0_resets_the_radius_and_loads_with_the_old_change_flags() {
+        let mut e = buffer_handler_engine();
+        let refr = handler_refr(&mut e, false);
+        let loaded = e.mem.alloc(0x20);
+        e.set(refr, TESObjectREFR::pLoadedData, Ptr::new(loaded));
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        // header flags are ignored: only the old change flags count
+        let buffer = buffer_with(&mut e, 0xffff_ffff, 0x0020_0000 | 0x40, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.f32(loaded + 0xc), -1.0);
+        assert_eq!(calls_to(&log, FORM_SET_EMPTY), vec![vec![refr.addr(), 0]]);
+        assert_eq!(
+            calls_to(&log, EXTRA_LOAD_STEP),
+            vec![vec![refr.addr() + 0x44, buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_LOAD_LAST_STEP),
+            vec![vec![refr.addr() + 0x44, buffer]]
+        );
+        assert!(calls_to(&log, UPDATE_DAMAGE_STAGE).is_empty());
+        // an actor is not emptied and its extra-data mask is wider
+        let actor = handler_refr(&mut e, true);
+        let buffer = buffer_with(&mut e, 0, 0x0020_0000 | 0x4_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![actor, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, FORM_SET_EMPTY).is_empty());
+        assert_eq!(calls_to(&log, EXTRA_LOAD_STEP).len(), 1);
+    }
+
+    #[test]
+    fn fn_005629a0_updates_the_damage_stage_for_an_object_with_a_health() {
+        let mut e = buffer_handler_engine();
+        returns(&mut e, REFR_HEALTH_GATE, 1);
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: 50.0,
+            ..Ret::default()
+        });
+        returns(&mut e, GET_DESTRUCTION_FORM, 0xd0d0);
+        returns(&mut e, UPDATE_DAMAGE_STAGE, 1);
+        let refr = handler_refr(&mut e, false);
+        let loaded = e.mem.alloc(0x20);
+        e.mem.set_u32(loaded + 0x14, 0x3d3d);
+        e.set(refr, TESObjectREFR::pLoadedData, Ptr::new(loaded));
+        let buffer = buffer_with(&mut e, 0, 0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        // this version makes the call without a base-form check and with 1
+        assert_eq!(
+            calls_to(&log, UPDATE_DAMAGE_STAGE),
+            vec![vec![0xd0d0, refr.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&log, UPDATE_ADDON_NODE_SOUNDS),
+            vec![vec![refr.addr(), 0]]
+        );
+        // a health of -1.0 skips it
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), UPDATE_DAMAGE_STAGE).is_empty());
+    }
+
+    #[test]
+    fn fn_005629a0_resets_the_state_and_the_open_state() {
+        let mut e = buffer_handler_engine();
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        returns(&mut e, GET_OPEN_STATE, 3);
+        let refr = handler_refr(&mut e, false);
+        // flag 0x20 present: the state is reset with 0
+        let buffer = buffer_with(&mut e, 0, 0x20 | 0x0040_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, RESET_STATE), vec![vec![refr.addr(), 0]]);
+        // the open-state flag is copied, then the open state set
+        assert_eq!(calls_to(&log, EXTRA_FLAG_CLEAR).len(), 1);
+        assert_eq!(calls_to(&log, GET_OPEN_STATE), vec![vec![refr.addr(), 8]]);
+        assert_eq!(
+            calls_to(&log, SET_OPEN_STATE),
+            vec![vec![refr.addr(), 3, 1]]
+        );
+        // only the 0x8000000 bit: reset with 1
+        let buffer = buffer_with(&mut e, 0, 0x0800_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, RESET_STATE), vec![vec![refr.addr(), 1]]);
+        assert!(calls_to(&log, EXTRA_FLAG_TEST).is_empty());
+        // the buffer's own flag 4 calls the virtual +0x208 instead
+        let buffer = buffer_with(&mut e, 0, 0x0800_0000, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, RESET_STATE).is_empty());
+        assert_eq!(calls_to(&log, 0x00fd_0208), vec![vec![refr.addr(), 0]]);
+        // an actor sets no open state
+        let actor = handler_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![actor, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), SET_OPEN_STATE).is_empty());
+    }
+
+    #[test]
+    fn fn_005629a0_restores_the_ragdoll_and_the_activating_reference() {
+        let mut e = buffer_handler_engine();
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        returns(&mut e, SHOULD_3D_RAGDOLL, 1);
+        // a 3D whose virtual +0x10 gives no target ends fn_0055d6d0 at once
+        let obj3d = object_with_vtable(&mut e, 0x40, &[(0x10, 0x00fb_0010)]);
+        e.register(0x00fb_0010, |_, _| 0u32.into_ret());
+        e.register_double(0x00fd_01d0, move |_, _| obj3d.into_ret());
+        e.mem.set_u32(REFR_VTABLE + 0x1d0, 0x00fd_01d0);
+        let refr = batch_refr(&mut e, false);
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(0x6006));
+        let buffer = buffer_with(&mut e, 0, 0x0400_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SHOULD_3D_RAGDOLL),
+            vec![vec![refr.addr(), obj3d]]
+        );
+        assert_eq!(
+            calls_to(&log, RESTORE_RAGDOLL_DATA),
+            vec![vec![refr.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&log, CELL_REFERENCE_STEP),
+            vec![vec![0x6006, refr.addr()]]
+        );
+        // an actor keeps its rag doll data; a 3D that should not be one too
+        let actor = batch_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![actor, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), RESTORE_RAGDOLL_DATA).is_empty());
+        let refr = batch_refr(&mut e, false);
+        returns(&mut e, SHOULD_3D_RAGDOLL, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), RESTORE_RAGDOLL_DATA).is_empty());
+    }
+
+    #[test]
+    fn fn_005629a0_runs_the_rest_state_for_a_non_actor_with_the_animation_flag() {
+        let mut e = buffer_handler_engine();
+        e.register(EXTRA_GET_OBJECT_HEALTH, |_, _| Ret {
+            st0: -1.0,
+            ..Ret::default()
+        });
+        let refr = handler_refr(&mut e, false);
+        let buffer = buffer_with(&mut e, 0, 0x1000_0000, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![refr, buffer]);
+        let log = e.call_log.take().unwrap();
+        // fn_00563890 looks the 3D up twice
+        assert_eq!(calls_to(&log, GET_LOADED_3D).len(), 2);
+        // an actor does not
+        let actor = handler_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_29a0, &args![actor, buffer]);
+        assert!(calls_to(&e.call_log.take().unwrap(), GET_LOADED_3D).is_empty());
+    }
+
+    #[test]
+    fn the_extra_data_change_mask_adds_the_actor_bits() {
+        assert_eq!(extra_change_mask(false), 0xa402_1c40);
+        assert_eq!(extra_change_mask(true), 0xa406_1840);
+    }
+
+    // ---- the Havok record of the buffer-based save --------------------------
+
+    /// The double of `00517630`: the body's motion kind is at +0x30.
+    fn motion_kind_double(e: &mut Engine) {
+        e.register(BODY_MOTION_KIND, |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+    }
+
+    /// A collision node with a rigid body made by `rich_body` (position
+    /// (1, 2, 3), rotation (5, 6, 7, 8), velocities (1, 2, 3) and (10, 11,
+    /// 12)), motion kind `kind` and flag word `flag_word` (+0x10). Returns
+    /// the node and the body.
+    fn glue_node(e: &mut Engine, active: bool, kind: u32, flag_word: u32) -> (u32, u32) {
+        let (body, _) = rich_body(e, active, false);
+        e.mem.set_u32(body + 0x30, kind);
+        e.mem.set_u32(body + 0x10, flag_word);
+        (node_of(e, body), body)
+    }
+
+    fn save_state(
+        e: &mut Engine,
+        refr: Ptr<TESObjectREFR>,
+        root: u32,
+        flags: u8,
+        buffer: u32,
+    ) -> (Ptr<BGSHavokSaveData>, Ptr<CollisionWalkContext>) {
+        let record: Ptr<BGSHavokSaveData> = e.new_object();
+        e.set(record, BGSHavokSaveData::pRef, refr.cast());
+        e.set(record, BGSHavokSaveData::pCollisionRoot, Ptr::new(root));
+        e.set(record, BGSHavokSaveData::cFlags, flags);
+        e.set(record, BGSHavokSaveData::pSaveLoadBuffer, Ptr::new(buffer));
+        let walk: Ptr<CollisionWalkContext> = e.new_object();
+        e.set(walk, CollisionWalkContext::pUserData, record.cast());
+        (record, walk)
+    }
+
+    #[test]
+    fn havok_record_constructor_and_the_flag_word_tests() {
+        let mut e = batch_engine();
+        let record: Ptr<BGSHavokSaveData> = e.new_object();
+        e.mem.write(record.addr(), &[0xff; 0x20]);
+        assert_eq!(e.call(0x0056_2e70, &args![record]).u32(), record.addr());
+        // the flags byte and the seven words are cleared; the padding after
+        // the byte is not touched
+        let cleared = e.mem.bytes(record.addr(), 0x20);
+        assert_eq!(cleared[0], 0);
+        assert_eq!(cleared[1..4], [0xff; 3]);
+        assert_eq!(cleared[4..], [0u8; 0x1c]);
+        // the flag word is at +0x10
+        let body = e.mem.alloc(0x40);
+        e.mem.set_u32(body + 0x10, 0x203);
+        assert_eq!(e.call(0x0056_3200, &args![body, 0x200u32]).u32(), 0x200);
+        assert_eq!(e.call(0x0056_3200, &args![body, 0x400u32]).u32(), 0);
+        assert!(e.call(0x0056_31e0, &args![body, 0x200u32]).bool());
+        assert!(e.call(0x0056_31e0, &args![body, 0x3u32]).bool());
+        assert!(!e.call(0x0056_31e0, &args![body, 0x400u32]).bool());
+    }
+
+    #[test]
+    fn fn_00563120_counts_active_inactive_and_keyframed_bodies() {
+        let mut e = havok_engine();
+        motion_kind_double(&mut e);
+        let (root, _) = glue_node(&mut e, true, 0, 0);
+        let (keyed, _) = glue_node(&mut e, true, 4, 0);
+        let (flagged, _) = glue_node(&mut e, false, 4, 0x200);
+        let (idle, _) = glue_node(&mut e, false, 0, 0);
+        let bare = havok_node(&mut e, 0, None, false);
+        let refr = batch_refr(&mut e, false);
+        let (record, walk) = save_state(&mut e, refr, root, 0, 0);
+        for node in [root, keyed, flagged, idle, bare] {
+            e.call(0x0056_3120, &args![node, walk]);
+        }
+        assert_eq!(e.get(record, BGSHavokSaveData::iActiveBoneCount), 2);
+        assert_eq!(e.get(record, BGSHavokSaveData::iInactiveBoneCount), 2);
+        // the body of kind 4 whose flag word has 0x200 is not keyframed
+        assert_eq!(e.get(record, BGSHavokSaveData::iKeyFramedBoneCount), 1);
+        // only the collision root sets flag 2
+        assert_eq!(e.get(record, BGSHavokSaveData::cFlags), 2);
+    }
+
+    #[test]
+    fn fn_00562d20_sets_the_record_flags_from_the_counted_bodies() {
+        let mut e = havok_engine();
+        motion_kind_double(&mut e);
+        let (root, _) = glue_node(&mut e, true, 0, 0);
+        let (keyed, _) = glue_node(&mut e, false, 4, 0);
+        let (idle, _) = glue_node(&mut e, false, 0, 0);
+        install_walk(&mut e, vec![root, keyed, idle]);
+        returns(&mut e, COLLISION_ROOT, root);
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        let refr = big_refr(&mut e, false);
+        let record: Ptr<BGSHavokSaveData> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2d20, &args![refr, record]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(record, BGSHavokSaveData::pRef), refr.cast());
+        assert_eq!(e.get(record, BGSHavokSaveData::pObj3D), Ptr::new(obj3d));
+        assert_eq!(
+            e.get(record, BGSHavokSaveData::pCollisionRoot),
+            Ptr::new(root)
+        );
+        assert_eq!(e.get(record, BGSHavokSaveData::iActiveBoneCount), 1);
+        assert_eq!(e.get(record, BGSHavokSaveData::iInactiveBoneCount), 2);
+        assert_eq!(e.get(record, BGSHavokSaveData::iKeyFramedBoneCount), 1);
+        // root seen (2), active and inactive (4)
+        assert_eq!(e.get(record, BGSHavokSaveData::cFlags), 6);
+        let walks = calls_to(&log, WALK_COLLISION);
+        assert_eq!(walks.len(), 1);
+        assert_eq!(walks[0][0], obj3d);
+        assert_eq!(walks[0][2], 0x0056_3120);
+        assert_eq!(e.mem.u8(walks[0][1] + 4), 1);
+        assert_eq!(e.mem.u32(walks[0][1] + 8), 0x12);
+        assert_eq!(e.mem.u32(walks[0][1] + 0xc), record.addr());
+        // only active bodies: flag 1
+        let (mut e, record, _) = {
+            let mut e = havok_engine();
+            motion_kind_double(&mut e);
+            let (root, _) = glue_node(&mut e, true, 0, 0);
+            let (second, _) = glue_node(&mut e, true, 0, 0);
+            install_walk(&mut e, vec![root, second]);
+            returns(&mut e, COLLISION_ROOT, root);
+            returns(&mut e, GET_LOADED_3D, obj3d);
+            let record: Ptr<BGSHavokSaveData> = e.new_object();
+            (e, record, root)
+        };
+        let refr = big_refr(&mut e, false);
+        e.call(0x0056_2d20, &args![refr, record]);
+        assert_eq!(e.get(record, BGSHavokSaveData::cFlags), 3);
+        // a keyframed body alone: flag 4 (and the root's 2)
+        let (mut e, record) = {
+            let mut e = havok_engine();
+            motion_kind_double(&mut e);
+            let (root, _) = glue_node(&mut e, false, 4, 0);
+            install_walk(&mut e, vec![root]);
+            returns(&mut e, COLLISION_ROOT, root);
+            returns(&mut e, GET_LOADED_3D, obj3d);
+            let record: Ptr<BGSHavokSaveData> = e.new_object();
+            (e, record)
+        };
+        let refr = big_refr(&mut e, false);
+        e.call(0x0056_2d20, &args![refr, record]);
+        assert_eq!(e.get(record, BGSHavokSaveData::cFlags), 6);
+        // no 3D: the record is left alone
+        returns(&mut e, GET_LOADED_3D, 0);
+        let untouched: Ptr<BGSHavokSaveData> = e.new_object();
+        e.mem.set_u8(untouched.addr(), 0x77);
+        e.call(0x0056_2d20, &args![refr, untouched]);
+        assert_eq!(e.mem.u8(untouched.addr()), 0x77);
+        assert_eq!(e.get(untouched, BGSHavokSaveData::pRef), Ptr::new(0));
+    }
+
+    #[test]
+    fn fn_00563220_writes_pose_kind_and_velocities_of_a_body() {
+        let mut e = havok_engine();
+        motion_kind_double(&mut e);
+        let writes = record_writes(&mut e, BUFFER_SAVE_DATA);
+        let (node, _) = glue_node(&mut e, true, 4, 0);
+        let (root, _) = glue_node(&mut e, true, 0, 0);
+        let refr = batch_refr(&mut e, false);
+        let (_, walk) = save_state(&mut e, refr, root, 4, 0x6600);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3220, &args![node, walk]);
+        let log = e.call_log.take().unwrap();
+        // position, rotation, kind (active, keyframed), the two velocities
+        let mut rotation = floats(&[5.0, 7.0, 6.0, 8.0]);
+        rotation.truncate(16);
+        assert_eq!(
+            writes.borrow().clone(),
+            vec![
+                floats(&[1.0, 2.0, 3.0]),
+                rotation,
+                vec![3],
+                floats(&[1.0, 2.0, 3.0]),
+                floats(&[10.0, 11.0, 12.0]),
+            ]
+        );
+        assert!(calls_to(&log, BUFFER_SAVE_DATA)
+            .iter()
+            .all(|c| c[0] == 0x6600));
+        // the collision root has no pose of its own
+        writes.borrow_mut().clear();
+        e.call(0x0056_3220, &args![root, walk]);
+        assert_eq!(writes.borrow().len(), 3);
+        assert_eq!(writes.borrow()[0], vec![1]);
+        // a flag word with 0x200 is not keyframed; without flag 4 there is
+        // no kind byte
+        let (flagged, _) = glue_node(&mut e, true, 4, 0x200);
+        writes.borrow_mut().clear();
+        e.call(0x0056_3220, &args![flagged, walk]);
+        assert_eq!(writes.borrow()[2], vec![1]);
+        let (_, walk) = save_state(&mut e, refr, root, 0, 0x6600);
+        writes.borrow_mut().clear();
+        e.call(0x0056_3220, &args![flagged, walk]);
+        assert_eq!(writes.borrow().len(), 4);
+        // an inactive body has no velocities
+        let (idle, _) = glue_node(&mut e, false, 0, 0);
+        let (_, walk) = save_state(&mut e, refr, root, 4, 0x6600);
+        writes.borrow_mut().clear();
+        e.call(0x0056_3220, &args![idle, walk]);
+        assert_eq!(writes.borrow().len(), 3);
+        assert_eq!(writes.borrow()[2], vec![0]);
+        // a node without a body writes nothing
+        let bare = havok_node(&mut e, 0, None, false);
+        writes.borrow_mut().clear();
+        e.call(0x0056_3220, &args![bare, walk]);
+        assert!(writes.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_havok_data_writes_the_flags_the_count_and_each_body() {
+        let mut e = havok_engine();
+        motion_kind_double(&mut e);
+        let writes = record_writes(&mut e, BUFFER_SAVE_DATA);
+        let (root, _) = glue_node(&mut e, true, 0, 0);
+        let (second, _) = glue_node(&mut e, true, 0, 0);
+        let (idle, _) = glue_node(&mut e, false, 0, 0);
+        install_walk(&mut e, vec![root, second, idle]);
+        returns(&mut e, COLLISION_ROOT, root);
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        stub(&mut e, &[BUFFER_SAVE_VARIABLE]);
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2de0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        let written = writes.borrow().clone();
+        // flags: root seen (2), active and inactive (4)
+        assert_eq!(written[0], vec![6]);
+        // then the count of the active and inactive bodies
+        assert_eq!(calls_to(&log, BUFFER_SAVE_VARIABLE), vec![vec![0x6600, 3]]);
+        // the root: kind and two velocities; the others also a pose
+        assert_eq!(written[1], vec![1]);
+        assert_eq!(written.len(), 1 + 3 + 5 + 3);
+        assert_eq!(written[4], floats(&[1.0, 2.0, 3.0]));
+        assert_eq!(written[6], vec![1]);
+        assert_eq!(written[11], vec![0]);
+        // two walks: counting, then writing
+        let walks = calls_to(&log, WALK_COLLISION);
+        assert_eq!(
+            walks.iter().map(|w| w[2]).collect::<Vec<_>>(),
+            vec![0x0056_3120, 0x0056_3220]
+        );
+        // without a loaded 3D nothing is written
+        returns(&mut e, GET_LOADED_3D, 0);
+        writes.borrow_mut().clear();
+        e.call(0x0056_2de0, &args![refr, 0x6600u32]);
+        assert!(writes.borrow().is_empty());
+    }
+
+    // ---- the Havok record of the buffer-based load -------------------------
+
+    #[test]
+    fn fn_00563380_reads_pose_kind_and_velocities_into_a_body() {
+        let mut e = havok_engine();
+        let (body, log) = rich_body(&mut e, true, false);
+        let motion = motion_doubles(&mut e, body);
+        stub(&mut e, &[RAGDOLL_NODE_STEP]);
+        // the body's virtual +0xe4 records its argument
+        let vtable = e.mem.u32(body);
+        e.mem.set_u32(vtable + 0xe4, 0x00fb_00e4);
+        e.register_double(0x00fb_00e4, |_, _| Ret::default());
+        let node = node_of(&mut e, body);
+        let refr = batch_refr(&mut e, false);
+        let root = havok_node(&mut e, 0, None, false);
+        let (record, walk) = save_state(&mut e, refr, root, 4, 0x6600);
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        stream.push(3);
+        stream.extend(floats(&[4.0, 5.0, 6.0]));
+        stream.extend(floats(&[7.0, 8.0, 9.0]));
+        let position = load_stream(&mut e, stream.clone());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3380, &args![node, walk]);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(position.get(), stream.len());
+        assert_eq!(calls_to(&calls, RAGDOLL_NODE_STEP), vec![vec![node, 0]]);
+        assert_eq!(log.position.borrow()[0], floats(&[1.0, 2.0, 3.0]));
+        let rotation = lanes(&log.rotation.borrow()[0]);
+        assert!((rotation[3] - 1.0).abs() < 1e-3, "{rotation:?}");
+        // bit 1 of the kind byte calls the body's virtual with 4
+        assert_eq!(calls_to(&calls, 0x00fb_00e4), vec![vec![body, 4]]);
+        // bit 0 makes it active: the velocities and the flag setter
+        assert_eq!(
+            motion.linear.borrow().clone(),
+            vec![floats(&[4.0, 5.0, 6.0])]
+        );
+        assert_eq!(
+            motion.angular.borrow().clone(),
+            vec![floats(&[7.0, 8.0, 9.0])]
+        );
+        assert_eq!(calls_to(&calls, ENTITY_ACTIVATE).len(), 3);
+        // flag 1 alone: active without a kind byte
+        e.set(record, BGSHavokSaveData::cFlags, 1);
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        stream.extend(floats(&[4.0, 5.0, 6.0, 7.0, 8.0, 9.0]));
+        let position = load_stream(&mut e, stream.clone());
+        e.call(0x0056_3380, &args![node, walk]);
+        assert_eq!(position.get(), stream.len());
+        // flags 0: inactive, nothing but the pose
+        e.set(record, BGSHavokSaveData::cFlags, 0);
+        let mut stream = floats(&[1.0, 2.0, 3.0]);
+        stream.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+        let position = load_stream(&mut e, stream.clone());
+        motion.linear.borrow_mut().clear();
+        e.call(0x0056_3380, &args![node, walk]);
+        assert_eq!(position.get(), stream.len());
+        assert!(motion.linear.borrow().is_empty());
+        // a node without a body: only the step
+        let bare = havok_node(&mut e, 0, None, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3380, &args![bare, walk]);
+        let calls = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&calls, RAGDOLL_NODE_STEP), vec![vec![bare, 0]]);
+        assert_eq!(addresses(&calls).len(), 3);
+    }
+
+    #[test]
+    fn fn_00563380_takes_the_collision_roots_pose_from_the_reference() {
+        let mut e = havok_engine();
+        let (body, log) = rich_body(&mut e, true, false);
+        stub(&mut e, &[RAGDOLL_NODE_STEP]);
+        let node = node_of(&mut e, body);
+        let refr = batch_refr(&mut e, false);
+        e.mem.write(refr.addr() + 0x30, &floats(&[9.0, 8.0, 7.0]));
+        e.register(GET_ORIENTATION, |_, a| a[1].into_ret());
+        e.register(QUATERNION_FROM_ROTATION, |e, a| {
+            e.mem.write(a[0], &floats(&[0.0, 2.0, 0.0, 0.0]));
+            a[0].into_ret()
+        });
+        let (record, walk) = save_state(&mut e, refr, node, 2, 0x6600);
+        let position = load_stream(&mut e, vec![]);
+        e.call(0x0056_3380, &args![node, walk]);
+        // nothing is read, and the flag is cleared
+        assert_eq!(position.get(), 0);
+        assert_eq!(e.get(record, BGSHavokSaveData::cFlags), 0);
+        assert_eq!(log.position.borrow()[0], floats(&[9.0, 8.0, 7.0]));
+        let rotation = lanes(&log.rotation.borrow()[0]);
+        assert!((rotation[1] - 1.0).abs() < 1e-3, "{rotation:?}");
+    }
+
+    #[test]
+    fn load_havok_data_warns_without_a_3d_or_when_the_count_differs() {
+        // no 3D
+        let mut e = havok_engine();
+        returns(&mut e, GET_LOADED_3D, 0);
+        stub(&mut e, &[SAVE_GAME_WARNING]);
+        let refr = big_refr(&mut e, false);
+        e.mem.set_u32(refr.addr() + 0xc, 0x0006_0001);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_GAME_WARNING),
+            vec![vec![HAVOK_NO_3D_FORMAT, 0x0e01, 0x0006_0001]]
+        );
+        assert!(calls_to(&log, BUFFER_LOAD_DATA).is_empty());
+        // a different count: warned, and an actor is knocked down
+        let mut e = havok_engine();
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        install_walk(&mut e, vec![]);
+        returns(&mut e, BUFFER_LOAD_VARIABLE, 7);
+        stub(
+            &mut e,
+            &[
+                SAVE_GAME_WARNING,
+                BUFFER_LOAD_DATA,
+                DISABLE_RAGDOLL_ANIM,
+                KNOCK_DOWN,
+            ],
+        );
+        let refr = big_refr(&mut e, true);
+        e.mem.set_u32(refr.addr() + 0xc, 0x0006_0001);
+        e.mem.set_u32(refr.addr() + 0xac, 0x5a5a);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_GAME_WARNING),
+            vec![vec![HAVOK_BONE_COUNT_FORMAT, 0x0e01, 0x0006_0001, 7, 0]]
+        );
+        assert_eq!(calls_to(&log, DISABLE_RAGDOLL_ANIM), vec![vec![0x5a5a, 1]]);
+        assert_eq!(
+            calls_to(&log, KNOCK_DOWN),
+            vec![vec![obj3d, ZERO_VECTOR, 1, 0.0f32.to_bits(), 0]]
+        );
+        assert!(calls_to(&log, SET_MOTION).is_empty());
+        // a non-actor is only warned
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SAVE_GAME_WARNING).len(), 1);
+        assert!(calls_to(&log, KNOCK_DOWN).is_empty());
+    }
+
+    /// An engine for a Havok load whose counts agree (none saved, none
+    /// now); the flags byte read is 5. The walks are recorded as (callback,
+    /// the flags byte of the record in the user data).
+    fn load_havok_setup() -> (Engine, u32, WalkFlags) {
+        let mut e = havok_engine();
+        let obj3d = e.mem.alloc(0x20);
+        returns(&mut e, GET_LOADED_3D, obj3d);
+        returns(&mut e, COLLISION_ROOT, 0x7007);
+        returns(&mut e, BUFFER_LOAD_VARIABLE, 0);
+        e.register(BUFFER_LOAD_DATA, |e, a| {
+            e.mem.set_u8(a[1], 5);
+            Ret::default()
+        });
+        stub(
+            &mut e,
+            &[
+                SET_MOTION,
+                MAKE_VELOCITY,
+                SET_3D_VELOCITY,
+                SAVE_GAME_WARNING,
+            ],
+        );
+        let walks = WalkFlags::default();
+        let seen = walks.clone();
+        e.register_double(WALK_COLLISION, move |e, a| {
+            let record = e.mem.u32(a[1] + 0xc);
+            seen.borrow_mut().push((a[2], e.mem.u8(record)));
+            Ret::default()
+        });
+        slot(&mut e, 0x2e8, |_, _| false.into_ret());
+        slot(&mut e, 0x230, |_, _| false.into_ret());
+        returns(&mut e, REFR_STATE_TEST, 0);
+        (e, obj3d, walks)
+    }
+
+    #[test]
+    fn load_havok_data_sets_the_motion_and_walks_the_bodies() {
+        let (mut e, obj3d, walks) = load_havok_setup();
+        let refr = big_refr(&mut e, false);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        // the first walk counts, the second loads with the flags byte read
+        assert_eq!(
+            walks.borrow().clone(),
+            vec![(0x0056_3120, 0), (0x0056_3380, 5)]
+        );
+        assert_eq!(calls_to(&log, SET_MOTION), vec![vec![obj3d, 1, 1, 0, 0]]);
+        let made = calls_to(&log, MAKE_VELOCITY);
+        assert_eq!(&made[0][1..], &[0.0f32.to_bits(), 0, 0]);
+        // the zero velocity record is given before and after the walk
+        assert_eq!(
+            calls_to(&log, SET_3D_VELOCITY),
+            vec![vec![obj3d, made[0][0]]; 2]
+        );
+        // an actor gets motion 4 unless one of its four tests holds
+        let actor = big_refr(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![actor, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_MOTION), vec![vec![obj3d, 4, 1, 0, 0]]);
+        assert_eq!(calls_to(&log, 0x00fd_022c), vec![vec![actor.addr(), 0]]);
+        returns(&mut e, REFR_STATE_TEST, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![actor, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_MOTION)[0][1], 1);
+        // the tests are made in order; the first that holds ends them
+        assert!(calls_to(&log, 0x00fd_022c).is_empty());
+        returns(&mut e, REFR_STATE_TEST, 0);
+        slot(&mut e, 0x22c, |_, _| true.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![actor, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_MOTION)[0][1], 1);
+        assert!(calls_to(&log, 0x00fd_02e8).is_empty());
+        slot(&mut e, 0x22c, |_, _| false.into_ret());
+        slot(&mut e, 0x2e8, |_, _| true.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![actor, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_MOTION)[0][1], 1);
+        assert!(calls_to(&log, 0x00fd_0230).is_empty());
+        slot(&mut e, 0x2e8, |_, _| false.into_ret());
+        slot(&mut e, 0x230, |_, _| true.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_2ed0, &args![actor, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, SET_MOTION)[0][1], 1);
+    }
+
+    // ---- 00563530, 00563650, 005636e0: the animation state ----------------
+
+    /// A reference with loaded data whose 3D (+0x14) is `rest_setup`'s node.
+    fn loaded_refr(e: &mut Engine, refr: Ptr<TESObjectREFR>, node: u32) {
+        let loaded = e.mem.alloc(0x20);
+        e.mem.set_u32(loaded + 0x14, node);
+        e.set(refr, TESObjectREFR::pLoadedData, Ptr::new(loaded));
+    }
+
+    #[test]
+    fn fn_00563530_is_true_for_a_finished_sequence_or_a_generic_sequence_of_another_name() {
+        // a last finished sequence
+        let (mut e, refr, _, _, _) = rest_setup(Some("Walk"), &[]);
+        assert!(e.call(0x0056_3530, &args![refr]).bool());
+        // no loaded data
+        let (mut e, refr, _, node, _) = rest_setup(None, &[("Walk", 1)]);
+        assert!(!e.call(0x0056_3530, &args![refr]).bool());
+        // loaded data without a 3D
+        loaded_refr(&mut e, refr, 0);
+        assert!(!e.call(0x0056_3530, &args![refr]).bool());
+        // a generic sequence named neither "IdleA" nor "IdleB"
+        loaded_refr(&mut e, refr, node);
+        assert!(e.call(0x0056_3530, &args![refr]).bool());
+        // not generic, or one of the two names: false
+        for sequences in [
+            vec![("Walk", 0)],
+            vec![("IdleA", 1)],
+            vec![("IdleB", 1), ("Walk", 0)],
+            vec![],
+        ] {
+            let (mut e, refr, _, node, _) = rest_setup(None, &sequences);
+            loaded_refr(&mut e, refr, node);
+            assert!(!e.call(0x0056_3530, &args![refr]).bool(), "{sequences:?}");
+        }
+        // the second of several decides
+        let (mut e, refr, _, node, _) = rest_setup(None, &[("IdleA", 1), ("Other", 1)]);
+        loaded_refr(&mut e, refr, node);
+        assert!(e.call(0x0056_3530, &args![refr]).bool());
+    }
+
+    #[test]
+    fn save_animation_writes_the_last_sequence_and_the_controller_manager() {
+        let (mut e, refr, manager, _, _) = rest_setup(Some("Walk"), &[]);
+        stub(&mut e, &[BUFFER_SAVE_STRING, SAVE_CONTROLLER_MANAGER]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3650, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        let strings = calls_to(&log, BUFFER_SAVE_STRING);
+        assert_eq!(strings.len(), 1);
+        assert_eq!(strings[0][0], 0x6600);
+        assert_eq!(e.mem.cstr(strings[0][1]), b"Walk".to_vec());
+        assert_eq!(strings[0][2], 0);
+        assert_eq!(
+            calls_to(&log, SAVE_CONTROLLER_MANAGER),
+            vec![vec![manager, 0x6600, 0xbf80_0000]]
+        );
+        // without a 3D the manager is null
+        returns(&mut e, GET_LOADED_3D, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3650, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, SAVE_CONTROLLER_MANAGER),
+            vec![vec![0, 0x6600, 0xbf80_0000]]
+        );
+    }
+
+    /// `rest_setup` plus the doubles `fn_005636e0` needs; the name the
+    /// buffer yields is `name`, and a base object that `open_close` says is
+    /// an open/close form. Records (this, manager, name, time) of the
+    /// sequence load and the name stored in the extra data.
+    fn load_animation_setup(
+        name: &'static str,
+        open_close: bool,
+    ) -> (Engine, Ptr<TESObjectREFR>, u32, SequenceLoads, Sink) {
+        let (mut e, refr, manager, _, _) = rest_setup(None, &[]);
+        e.mem.set_cstr(TEXT_OPEN_SIDE, b"Open");
+        e.mem.set_cstr(TEXT_CLOSE_SIDE, b"Close");
+        e.register_double(BUFFER_LOAD_STRING, move |e, a| {
+            e.mem.set_cstr(a[1], name.as_bytes());
+            Ret::default()
+        });
+        let stored = Sink::default();
+        let seen = stored.clone();
+        e.register_double(EXTRA_SET_LAST_SEQUENCE, move |e, a| {
+            seen.borrow_mut().push(e.mem.cstr(a[1]));
+            Ret::default()
+        });
+        returns(&mut e, IS_OPEN_CLOSE_FORM, u32::from(open_close));
+        e.register(STRING_COPY, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0], &text);
+            Ret::default()
+        });
+        let loads = SequenceLoads::default();
+        let seen = loads.clone();
+        e.register_double(ANIMATION_LOAD_STEP, move |e, a| {
+            seen.borrow_mut().push((a[0], a[1], e.mem.cstr(a[2]), a[3]));
+            Ret::default()
+        });
+        stub(&mut e, &[CONTROLLER_MANAGER_LOADER]);
+        (e, refr, manager, loads, stored)
+    }
+
+    #[test]
+    fn fn_005636e0_swaps_the_two_sides_of_an_open_close_form() {
+        for (name, open_close, expected, swapped) in [
+            ("Open", true, "Close", true),
+            ("Close", true, "Open", true),
+            ("Walk", true, "Walk", false),
+            ("Open", false, "Open", false),
+        ] {
+            let (mut e, refr, manager, loads, stored) = load_animation_setup(name, open_close);
+            e.call_log = Some(vec![]);
+            e.call(0x0056_36e0, &args![refr, 0x6600u32]);
+            let log = e.call_log.take().unwrap();
+            // the name read is stored first, as read
+            assert_eq!(stored.borrow().clone(), vec![name.as_bytes().to_vec()]);
+            let time = if swapped { -f32::MAX } else { f32::MAX };
+            assert_eq!(
+                loads.borrow().clone(),
+                vec![(
+                    refr.addr(),
+                    manager,
+                    expected.as_bytes().to_vec(),
+                    time.to_bits()
+                )],
+                "{name} {open_close}"
+            );
+            assert_eq!(
+                calls_to(&log, CONTROLLER_MANAGER_LOADER),
+                vec![vec![manager, 0x6600, 0xbf80_0000]]
+            );
+        }
+        // an empty name stores nothing and loads no sequence
+        let (mut e, refr, manager, loads, stored) = load_animation_setup("", true);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_36e0, &args![refr, 0x6600u32]);
+        let log = e.call_log.take().unwrap();
+        assert!(stored.borrow().is_empty());
+        assert!(loads.borrow().is_empty());
+        assert_eq!(
+            calls_to(&log, CONTROLLER_MANAGER_LOADER),
+            vec![vec![manager, 0x6600, 0xbf80_0000]]
+        );
+    }
+
+    // ---- 00563890 -----------------------------------------------------------
+
+    /// `rest_setup` plus the doubles `fn_00563890` needs on top.
+    fn rest_state_setup(
+        last_finished: Option<&str>,
+        sequences: &[(&str, u32)],
+    ) -> (Engine, Ptr<TESObjectREFR>, u32, u32, Vec<u32>) {
+        let (mut e, refr, manager, node, made) = rest_setup(last_finished, sequences);
+        stub(
+            &mut e,
+            &[
+                GENERIC_SEQUENCE_STEP,
+                CELL_ATTACH_REFERENCE_3D,
+                SCENE_ADD_OBJECT,
+            ],
+        );
+        returns(&mut e, TES_IS_CELL_LOADED, 1);
+        returns(&mut e, SCENE_GETTER, 0x5c5c);
+        let tes = e.mem.alloc(8);
+        e.set_global(GLOBAL_TES, tes);
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(0x6006));
+        (e, refr, manager, node, made)
+    }
+
+    #[test]
+    fn fn_00563890_resets_the_reference_and_restarts_its_sequences() {
+        let (mut e, refr, manager, node, made) =
+            rest_state_setup(Some("Unequip"), &[("Walk", 1), ("IdleA", 0)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        // the reset: location from the base object, the two virtuals, and
+        // the loaded parent cell attaches the 3D again
+        assert_eq!(
+            calls_to(&log, 0x00fd_01cc),
+            vec![vec![refr.addr(), 0x1234, 1]]
+        );
+        assert_eq!(calls_to(&log, 0x00fd_01c4).len(), 1);
+        assert_eq!(
+            calls_to(&log, CELL_ATTACH_REFERENCE_3D),
+            vec![vec![0x6006, refr.addr(), 0]]
+        );
+        // only the generic sequence is stepped
+        assert_eq!(
+            calls_to(&log, GENERIC_SEQUENCE_STEP),
+            vec![vec![refr.addr(), made[0]]]
+        );
+        // deactivated after the loop, after the first sequence, and at the end
+        assert_eq!(
+            calls_to(&log, MANAGER_DEACTIVATE_ALL),
+            vec![vec![manager, 0]; 3]
+        );
+        assert_eq!(
+            calls_to(&log, MANAGER_SET_FLAG),
+            vec![vec![manager, 1], vec![manager, 0], vec![manager, 1]]
+        );
+        // the first sequence and the found idle sequence are activated
+        let activate = |sequence: u32| {
+            vec![
+                manager,
+                sequence,
+                0,
+                0,
+                1.0f32.to_bits(),
+                0.0f32.to_bits(),
+                0,
+            ]
+        };
+        assert_eq!(
+            calls_to(&log, MANAGER_ACTIVATE),
+            vec![activate(made[0]), activate(made[1])]
+        );
+        let minimum = (-f32::MAX).to_bits();
+        assert_eq!(
+            calls_to(&log, SEQUENCE_SET_OFFSET),
+            vec![vec![made[0], minimum], vec![made[1], minimum]]
+        );
+        let records = calls_to(&log, MAKE_VELOCITY);
+        assert_eq!(records.len(), 2);
+        assert_eq!(&records[0][1..], &[0.5f32.to_bits(), 1, 0]);
+        assert_eq!(&records[1][1..], &[1.5f32.to_bits(), 1, 0]);
+        assert_eq!(
+            calls_to(&log, SET_3D_VELOCITY),
+            vec![vec![node, records[0][0]], vec![node, records[1][0]]]
+        );
+        // a reset reference's 3D goes back into the shadow scene
+        assert_eq!(calls_to(&log, SCENE_GETTER), vec![vec![0]]);
+        assert_eq!(calls_to(&log, SCENE_ADD_OBJECT), vec![vec![0x5c5c, node]]);
+    }
+
+    #[test]
+    fn fn_00563890_without_a_reset_only_restarts_the_sequences() {
+        let (mut e, refr, manager, _, made) = rest_state_setup(Some("Walk"), &[("IdleB", 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x00fd_01c4).is_empty());
+        assert!(calls_to(&log, CELL_ATTACH_REFERENCE_3D).is_empty());
+        assert!(calls_to(&log, SCENE_ADD_OBJECT).is_empty());
+        // the generic IdleB is stepped and restarted but not activated again
+        assert_eq!(
+            calls_to(&log, GENERIC_SEQUENCE_STEP),
+            vec![vec![refr.addr(), made[0]]]
+        );
+        // sequence 0 is the same one: activated once, offset twice
+        assert_eq!(calls_to(&log, MANAGER_ACTIVATE).len(), 1);
+        assert_eq!(calls_to(&log, SEQUENCE_SET_OFFSET).len(), 2);
+        assert_eq!(
+            calls_to(&log, MANAGER_SET_FLAG),
+            vec![vec![manager, 1], vec![manager, 0], vec![manager, 1]]
+        );
+        // no sequences at all: the flag goes up and down, nothing restarts
+        let (mut e, refr, manager, _, _) = rest_state_setup(None, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MANAGER_SET_FLAG),
+            vec![vec![manager, 1], vec![manager, 0]]
+        );
+        assert!(calls_to(&log, MANAGER_ACTIVATE).is_empty());
+        assert_eq!(calls_to(&log, MANAGER_DEACTIVATE_ALL).len(), 3);
+    }
+
+    #[test]
+    fn fn_00563890_resets_for_a_generic_unequip_or_a_morpher_and_needs_a_loaded_cell() {
+        // a generic sequence named "Unequip"
+        let (mut e, refr, _, _, _) = rest_state_setup(None, &[("Unequip", 1)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        assert_eq!(calls_to(&e.call_log.take().unwrap(), 0x00fd_01c4).len(), 1);
+        // a morpher controller, and a cell that is not loaded
+        let (mut e, refr, _, node, _) = rest_state_setup(None, &[]);
+        returns(&mut e, HAS_MORPHER_CONTROLLER, 1);
+        returns(&mut e, TES_IS_CELL_LOADED, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, HAS_MORPHER_CONTROLLER), vec![vec![node]]);
+        assert_eq!(calls_to(&log, 0x00fd_01c4).len(), 1);
+        assert!(calls_to(&log, CELL_ATTACH_REFERENCE_3D).is_empty());
+        // a reference without a parent cell is not re-attached either
+        e.set(refr, TESObjectREFR::pParentCell, Ptr::new(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        assert!(calls_to(&e.call_log.take().unwrap(), TES_IS_CELL_LOADED).is_empty());
+        // no 3D: only the final cast of the missing controller
+        returns(&mut e, GET_LOADED_3D, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_3890, &args![refr]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, MANAGER_DEACTIVATE_ALL).is_empty());
+        assert!(calls_to(&log, SCENE_ADD_OBJECT).is_empty());
+        assert_eq!(calls_to(&log, CHECKED_CAST), vec![vec![MANAGER_TYPE, 0]]);
     }
 }
