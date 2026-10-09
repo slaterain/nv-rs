@@ -22,6 +22,12 @@
 //! map and the lock-free queue with its push); the queue continues at
 //! `006c6fe0`.
 //!
+//! Session 4 (b0328) translated the last 14: `006c6fe0` up to and including
+//! `006c77a0` (the lock-free queue pop and node retirement, the deleting
+//! destructors of the containers, the interface manager's destructor and the
+//! `ObstacleTaskData` constructor). The unit is finished; `006c7850` and the
+//! functions after it belong to other units.
+//!
 //! Conventions of this file:
 //!
 //! - The compiler built this unit without optimisation, so every accessor
@@ -198,6 +204,32 @@ layout! {
         /// this interface's pair of protected-node slots (the second slot is
         /// at `+8`).
         0x04 pReferencedNodes: u32,
+        /// The second protected-node slot address (`+0x08`) of the pair
+        /// `pReferencedNodes` starts (the Xbox PDB has `[2]` pointers at
+        /// `+0x04`); the pop keeps the successor of the head in it.
+        0x08 pReferencedNodesSecond: u32,
+        /// `iDeleteCount` (Xbox PDB): nodes retired and not yet freed.
+        0x0c iDeleteCount: u32,
+        /// `pDeleteHead` (Xbox PDB): the first retired node.
+        0x10 pDeleteHead: u32,
+    }
+
+    /// `ObstacleTaskData` (Xbox PDB), `0x58` bytes: a `BSXenonTaskletData`
+    /// base (vtable, `bYielding`, `pLink`, `pGroupData`, `bRunOnStartup`,
+    /// `TaskDataLock`; built by `006c7850`) and the fields below.
+    pub struct ObstacleTaskData: 0x58 {
+        /// `pInfo` (Xbox PDB): `NavMeshInfo *`.
+        0x18 pInfo: u32,
+        /// `spSrcMesh` (Xbox PDB): a navmesh holder (`NavMeshPtr`).
+        0x1c spSrcMesh: Inline<()>,
+        /// `spNewNavMesh` (Xbox PDB): a navmesh holder.
+        0x20 spNewNavMesh: Inline<()>,
+        /// `Operations` (Xbox PDB): `BSSimpleArray<ObstacleTaskNavMeshOperation, 1024>`.
+        0x24 Operations: Inline<()>,
+        /// `PortalSwaps` (Xbox PDB): a `TaskPortalSwap`.
+        0x34 PortalSwaps: Inline<()>,
+        /// `bPortalModified` (Xbox PDB).
+        0x54 bPortalModified: bool,
     }
 
     /// One item of an `NiTMap` bucket chain (`NiTMapItem<K, V>`): next item,
@@ -4320,6 +4352,22 @@ const QUEUE_SCOPE_CATEGORY: u32 = 6;
 const QUEUE_SOURCE_PATH: u32 = 0x0101_73f8;
 const QUEUE_INTERFACE_SOURCE_PATH: u32 = 0x0106_649c;
 const QUEUE_INCREMENT_COUNT_SLOT: u32 = 0x08;
+/// Virtual slot `0x0c` of a queue: `DecrementCount`.
+const QUEUE_DECREMENT_COUNT_SLOT: u32 = 0x0c;
+/// Session 4 (`006c6fe0`..`006c77a0`): the interface of a thread. `006c75c0
+/// (interface, flags)` destroys one, `006c7610(interface)` frees its batch of
+/// retired nodes, `0044e360(word)` is run by the manager's destructor on its
+/// word at `+4`.
+const QUEUE_INTERFACE_DESTROY: u32 = 0x006c_75c0;
+const QUEUE_INTERFACE_FREE_BATCH: u32 = 0x006c_7610;
+const QUEUE_MANAGER_RELEASE: u32 = 0x0044_e360;
+/// `ObstacleTaskData`: the vtable (`0106c7ec`), the base constructor
+/// (`006c7850`), the constructors of `Operations` (`006c87c0`) and
+/// `PortalSwaps` (`00699450`).
+const TASK_DATA_VTABLE: u32 = 0x0106_c7ec;
+const TASK_BASE_CTOR: u32 = 0x006c_7850;
+const TASK_OPERATIONS_CTOR: u32 = 0x006c_87c0;
+const TASK_PORTAL_SWAPS_CTOR: u32 = 0x0069_9450;
 
 /// A scope guard around `body` with the category, file name and line the
 /// lock-free queue code gives it (see [`with_scope_guard`] for the other one).
@@ -4526,7 +4574,7 @@ pub fn fn_006c5ff0(e: &mut Engine, this: Ptr<LockFreeQueue>, value: u32) {
 // Translated from 006c6030 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `LockFreeQueue<bhkRigidBody *>::Pop` (engine map: unnamed): under the
 /// queue's spin lock, pops through the calling thread's interface (`00449f80`,
-/// then `006c6fe0`, not translated yet) into the word at `out`. True when a
+/// then [`fn_006c6fe0`]) into the word at `out`. True when a
 /// value was popped.
 pub fn fn_006c6030(e: &mut Engine, this: Ptr<LockFreeQueue>, out: u32) -> bool {
     let lock = this.addr() + QUEUE_LOCK_OFFSET;
@@ -5018,6 +5066,271 @@ pub fn fn_006c6e60(e: &mut Engine, this: Ptr<LockFreeQueueInterface>, value: u32
     });
 }
 
+// Translated from 006c6fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeQueue<bhkRigidBody *>::LockFreeQueueInterface` pop (engine map:
+/// unnamed): stores the head node in this interface's first protected slot and
+/// its successor in the second, re-reading the head to check it did not move.
+/// An empty queue (no successor) clears the first slot, stores 0 at `out` and
+/// answers false. A head that equals the tail has the tail moved on with a
+/// compare-and-swap (`004491c0`) and the loop starts again. Otherwise the
+/// successor's value (`+4`) is copied to `out` and the head swung to the
+/// successor with a compare-and-swap; when that succeeds the queue's virtual
+/// slot `0x0c` (`DecrementCount`) runs, the successor's value is cleared, both
+/// slots are cleared and the old head is handed to [`fn_006c7560`]; true.
+pub fn fn_006c6fe0(e: &mut Engine, this: Ptr<LockFreeQueueInterface>, out: u32) -> bool {
+    let queue = e.get(this, LockFreeQueueInterface::pOwner);
+    let head_slot = queue + LockFreeQueue::pHead.off;
+    let tail_slot = queue + LockFreeQueue::pTail.off;
+    let first_slot = e.get(this, LockFreeQueueInterface::pReferencedNodes);
+    let second_slot = e.get(this, LockFreeQueueInterface::pReferencedNodesSecond);
+    let head = loop {
+        let head = word(e, head_slot);
+        e.mem.set_u32(first_slot, head);
+        if head != word(e, head_slot) {
+            continue;
+        }
+        let tail = word(e, tail_slot);
+        let next = word(e, head);
+        e.mem.set_u32(second_slot, next);
+        if head != word(e, head_slot) {
+            continue;
+        }
+        if next == 0 {
+            e.mem.set_u32(first_slot, 0);
+            e.mem.set_u32(out, 0);
+            return false;
+        }
+        if head == tail {
+            e.call(COMPARE_AND_SWAP, &args![tail_slot, next, tail]);
+            continue;
+        }
+        let value = word(e, next + 4);
+        e.mem.set_u32(out, value);
+        if e.call(COMPARE_AND_SWAP, &args![head_slot, next, head])
+            .bool()
+        {
+            e.vcall(queue, QUEUE_DECREMENT_COUNT_SLOT, &args![]);
+            e.mem.set_u32(next + 4, 0);
+            break head;
+        }
+    };
+    e.mem.set_u32(first_slot, 0);
+    e.mem.set_u32(second_slot, 0);
+    fn_006c7560(e, this, head);
+    true
+}
+
+// Translated from 006c7110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiPointer<ObstacleData>_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor `006c6190`, then `operator delete` when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_simple_array_obstacle_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    bs_simple_array_obstacle_data_destructor(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned_int_NiPointer<ReferenceObstacleArray>_>_>_unsigned_int_NiPointer<ReferenceObstacleArray>_>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the base destructor `006c63b0`, then `operator delete` when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn ni_tmap_base_reference_obstacle_array_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    e.call(REFERENCE_MAP_BASE_DTOR, &args![this]);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeQueue<bhkRigidBody_P>::_scalar_deleting_destructor_` (Xbox PDB):
+/// the destructor `006c6680`, then `operator delete` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn lock_free_queue_rigid_body_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<LockFreeQueue>,
+    flags: u32,
+) -> Ptr<LockFreeQueue> {
+    fn_006c6680(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c71a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deleting destructor of the queue's interface manager (engine map:
+/// unnamed; the object `006c73b0` builds): the destructor [`fn_006c74a0`],
+/// then `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_006c71a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_006c74a0(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c71d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<bhkRigidBody_P_NiPointer<ObstacleData>_>_>_bhkRigidBody_P_NiPointer<ObstacleData>_>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the base destructor `006c6ae0`, then `operator delete` when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn ni_tmap_base_rigid_body_obstacle_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_006c6ae0(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned_int_ObstacleTaskData_P>_>_unsigned_int_ObstacleTaskData_P>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the base destructor `006c6be0`, then `operator delete` when
+/// bit 0 of `flags` is set. Returns `this`.
+pub fn ni_tmap_base_obstacle_task_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_006c6be0(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<ObstacleTaskData_P_1024>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor `006c6c40`, then `operator delete` when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_simple_array_obstacle_task_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_006c6c40(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<NavMeshPtr_1024>::_scalar_deleting_destructor_` (Xbox PDB):
+/// the destructor `006c6ce0`, then `operator delete` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bs_scrap_array_nav_mesh_ptr_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_006c6ce0(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c7290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<TESObjectCELL_P_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the base destructor `006c6de0`, then `operator delete` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn bs_simple_array_tes_object_cell_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_006c6de0(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c72c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<TESObjectCELL_P_1024>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the destructor `006c6e00`, then `operator delete` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn bs_scrap_array_tes_object_cell_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    flags: u32,
+) -> Ptr<BSSimpleArray> {
+    fn_006c6e00(e, this);
+    delete_if_requested(e, this, flags);
+    this
+}
+
+// Translated from 006c74a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the queue's interface manager (engine map: unnamed; a
+/// `fastcall` on the object, which `006c73b0` builds): its first word is the
+/// number of interfaces; the interface array at `+8` holds eight-byte entries
+/// whose second word is an interface, and each interface that exists is
+/// destroyed with `006c75c0(interface, 1)`. Then the array is freed with
+/// `operator delete` and `0044e360` runs on the word at `+4`.
+pub fn fn_006c74a0(e: &mut Engine, this: Ptr) {
+    let mut index = 0;
+    while index < e.call(NI_POINTER_GET, &args![this]).u32() {
+        // Entry `index` of the array at +8; its second word.
+        let entries = word(e, this.addr() + 8);
+        let interface = word(e, entries + index * 8 + 4);
+        if interface != 0 {
+            e.call(QUEUE_INTERFACE_DESTROY, &args![interface, 1u32]);
+        }
+        index += 1;
+    }
+    let entries = word(e, this.addr() + 8);
+    e.call(OPERATOR_DELETE, &args![entries]);
+    let word_at_4 = word(e, this.addr() + 4);
+    e.call(QUEUE_MANAGER_RELEASE, &args![word_at_4]);
+}
+
+// Translated from 006c7560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeQueue<bhkRigidBody *>::LockFreeQueueInterface` retirement of a
+/// popped node (engine map: unnamed): the node's value is cleared, the node
+/// is chained in front of the interface's delete list (`006ecd40(node,
+/// previous head)` stores the previous head at the node's `+4`), the count of
+/// retired nodes goes up, and when it reaches the queue's delete batch size
+/// (`0084e3a0` on the owner) `006c7610` frees the batch.
+pub fn fn_006c7560(e: &mut Engine, this: Ptr<LockFreeQueueInterface>, node: u32) {
+    e.mem.set_u32(node + 4, 0);
+    let previous = e.get(this, LockFreeQueueInterface::pDeleteHead);
+    e.call(TASKLET_SET_DATA, &args![node, previous]);
+    e.set(this, LockFreeQueueInterface::pDeleteHead, node);
+    let count = e
+        .get(this, LockFreeQueueInterface::iDeleteCount)
+        .wrapping_add(1);
+    e.set(this, LockFreeQueueInterface::iDeleteCount, count);
+    let owner = e.get(this, LockFreeQueueInterface::pOwner);
+    let batch = e.call(FORM_ID, &args![owner]).u32();
+    if count == batch {
+        e.call(QUEUE_INTERFACE_FREE_BATCH, &args![this]);
+    }
+}
+
+// Translated from 006c77a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ObstacleTaskData::ObstacleTaskData` (engine map: unnamed): the base
+/// constructor `006c7850`, the vtable `0106c7ec`, the two navmesh holders
+/// `spSrcMesh` (`+0x1c`) and `spNewNavMesh` (`+0x20`) with `0042fb00`, the
+/// `Operations` array (`+0x24`, `006c87c0`) and `PortalSwaps` (`+0x34`,
+/// `00699450`), then `pInfo` (`+0x18`) is the argument and `bPortalModified`
+/// (`+0x54`) is false. Returns `this`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_006c77a0(
+    e: &mut Engine,
+    this: Ptr<ObstacleTaskData>,
+    nav_mesh_info: u32,
+) -> Ptr<ObstacleTaskData> {
+    e.call(TASK_BASE_CTOR, &args![this]);
+    e.mem.set_u32(this.addr(), TASK_DATA_VTABLE);
+    let source = this.addr() + ObstacleTaskData::spSrcMesh.off;
+    e.call(NAVMESH_HOLDER_CTOR, &args![source]);
+    let new_mesh = this.addr() + ObstacleTaskData::spNewNavMesh.off;
+    e.call(NAVMESH_HOLDER_CTOR, &args![new_mesh]);
+    let operations = this.addr() + ObstacleTaskData::Operations.off;
+    e.call(TASK_OPERATIONS_CTOR, &args![operations]);
+    let swaps = this.addr() + ObstacleTaskData::PortalSwaps.off;
+    e.call(TASK_PORTAL_SWAPS_CTOR, &args![swaps]);
+    e.set(this, ObstacleTaskData::pInfo, nav_mesh_info);
+    e.set(this, ObstacleTaskData::bPortalModified, false);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5271,6 +5584,88 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x006c6de0, fn_006c6de0(Ptr<BSSimpleArray>)),
         entry!(0x006c6e00, fn_006c6e00(Ptr<BSSimpleArray>)),
         entry!(0x006c6e60, fn_006c6e60(Ptr<LockFreeQueueInterface>, u32)),
+        entry!(
+            0x006c6fe0,
+            fn_006c6fe0(Ptr<LockFreeQueueInterface>, u32) -> bool
+        ),
+        entry!(
+            0x006c7110,
+            bs_simple_array_obstacle_data_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006c7140,
+            ni_tmap_base_reference_obstacle_array_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            )
+                -> Ptr<NiTMap>
+        ),
+        entry!(
+            0x006c7170,
+            lock_free_queue_rigid_body_scalar_deleting_destructor(
+                Ptr<LockFreeQueue>,
+                u32,
+            )
+                -> Ptr<LockFreeQueue>
+        ),
+        entry!(0x006c71a0, fn_006c71a0(Ptr, u32) -> Ptr),
+        entry!(
+            0x006c71d0,
+            ni_tmap_base_rigid_body_obstacle_data_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            )
+                -> Ptr<NiTMap>
+        ),
+        entry!(
+            0x006c7200,
+            ni_tmap_base_obstacle_task_data_scalar_deleting_destructor(
+                Ptr<NiTMap>,
+                u32,
+            ) -> Ptr<NiTMap>
+        ),
+        entry!(
+            0x006c7230,
+            bs_simple_array_obstacle_task_data_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006c7260,
+            bs_scrap_array_nav_mesh_ptr_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006c7290,
+            bs_simple_array_tes_object_cell_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x006c72c0,
+            bs_scrap_array_tes_object_cell_scalar_deleting_destructor(
+                Ptr<BSSimpleArray>,
+                u32,
+            )
+                -> Ptr<BSSimpleArray>
+        ),
+        entry!(0x006c74a0, fn_006c74a0(Ptr)),
+        entry!(0x006c7560, fn_006c7560(Ptr<LockFreeQueueInterface>, u32)),
+        entry!(
+            0x006c77a0,
+            fn_006c77a0(Ptr<ObstacleTaskData>, u32) -> Ptr<ObstacleTaskData>
+        ),
     ]
 }
 
@@ -9911,5 +10306,283 @@ mod tests {
         assert_eq!(calls(&e, &[SPIN_LOCK_LOCK])[0].1, vec![0x4020, 0]);
         stub_ret(&mut e, QUEUE_INTERFACE_POP, 0);
         assert!(!fn_006c6030(&mut e, Ptr::new(0x4000), 0x7770));
+    }
+
+    // ---- Session 4 (`006c6fe0`..`006c77a0`) ----
+
+    /// A queue object (virtual slot `0x0c` is `DecrementCount`) holding the
+    /// dummy head `nodes[0]` and one node per value after it (each node: next,
+    /// value), the tail at the last node, and an interface for it whose two
+    /// protected slots are words of memory. Returns (queue, interface, nodes,
+    /// first slot, second slot, the log of `DecrementCount`).
+    #[allow(clippy::type_complexity)]
+    fn pop_fixture(
+        e: &mut Engine,
+        values: &[u32],
+        batch: u32,
+    ) -> (u32, Ptr<LockFreeQueueInterface>, Vec<u32>, u32, u32, Log) {
+        let queue = object_with_slots(e, &[(0x0c, 0)]);
+        let decrements = record(e, queue + 0x0c, 0);
+        let nodes: Vec<u32> = (0..=values.len()).map(|_| e.mem.alloc(8)).collect();
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_u32(nodes[i], nodes[i + 1]);
+            e.mem.set_u32(nodes[i + 1] + 4, *value);
+        }
+        e.mem.set_u32(queue + 4, nodes[0]);
+        e.mem.set_u32(queue + 8, *nodes.last().unwrap());
+        e.mem.set_u32(queue + 0x0c, batch);
+        let slots = e.mem.alloc(8);
+        let interface = e.new_object::<LockFreeQueueInterface>();
+        e.mem.set_u32(interface.addr(), queue);
+        e.mem.set_u32(interface.addr() + 4, slots);
+        e.mem.set_u32(interface.addr() + 8, slots + 4);
+        e.register(COMPARE_AND_SWAP, |e, a| {
+            if e.mem.u32(a[0]) == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        e.register(TASKLET_SET_DATA, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            ret(a[0])
+        });
+        stub(e, &[QUEUE_INTERFACE_FREE_BATCH]);
+        (queue, interface, nodes, slots, slots + 4, decrements)
+    }
+
+    #[test]
+    fn a_pop_takes_the_first_value_and_retires_the_old_head() {
+        let mut e = engine();
+        let (queue, interface, nodes, first, second, decrements) =
+            pop_fixture(&mut e, &[0x77, 0x88], 8);
+        let out = slot_with(&mut e, 0xdead);
+        start_log(&mut e);
+        assert!(fn_006c6fe0(&mut e, interface, out));
+        assert_eq!(e.mem.u32(out), 0x77);
+        assert_eq!(e.mem.u32(queue + 4), nodes[1]);
+        // The new head's value is cleared; the old head is chained into the
+        // interface's list of retired nodes.
+        assert_eq!(e.mem.u32(nodes[1] + 4), 0);
+        assert_eq!(e.mem.u32(interface.addr() + 0x10), nodes[0]);
+        assert_eq!(e.mem.u32(interface.addr() + 0x0c), 1);
+        assert_eq!(e.mem.u32(nodes[0] + 4), 0);
+        assert_eq!((e.mem.u32(first), e.mem.u32(second)), (0, 0));
+        assert_eq!(decrements.borrow().len(), 1);
+        assert!(calls(&e, &[QUEUE_INTERFACE_FREE_BATCH]).is_empty());
+        let swaps: Vec<_> = calls(&e, &[COMPARE_AND_SWAP])
+            .into_iter()
+            .map(|c| c.1)
+            .collect();
+        assert_eq!(swaps, vec![vec![queue + 4, nodes[1], nodes[0]]]);
+    }
+
+    #[test]
+    fn a_pop_from_an_empty_queue_answers_false() {
+        let mut e = engine();
+        let (queue, interface, nodes, first, second, decrements) = pop_fixture(&mut e, &[], 8);
+        let out = slot_with(&mut e, 0xdead);
+        assert!(!fn_006c6fe0(&mut e, interface, out));
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(e.mem.u32(queue + 4), nodes[0]);
+        assert_eq!(e.mem.u32(first), 0);
+        // The second slot keeps the (null) successor it was given.
+        assert_eq!(e.mem.u32(second), 0);
+        assert!(decrements.borrow().is_empty());
+        assert_eq!(e.mem.u32(interface.addr() + 0x0c), 0);
+    }
+
+    #[test]
+    fn a_pop_first_moves_a_lagging_tail_on() {
+        let mut e = engine();
+        let (queue, interface, nodes, _, _, _) = pop_fixture(&mut e, &[0x55], 8);
+        // The tail still points at the head although a node follows it.
+        e.mem.set_u32(queue + 8, nodes[0]);
+        let out = slot_with(&mut e, 0);
+        start_log(&mut e);
+        assert!(fn_006c6fe0(&mut e, interface, out));
+        assert_eq!(e.mem.u32(out), 0x55);
+        assert_eq!(e.mem.u32(queue + 8), nodes[1]);
+        let swaps: Vec<_> = calls(&e, &[COMPARE_AND_SWAP])
+            .into_iter()
+            .map(|c| c.1)
+            .collect();
+        assert_eq!(
+            swaps,
+            vec![
+                vec![queue + 8, nodes[1], nodes[0]],
+                vec![queue + 4, nodes[1], nodes[0]]
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pop_retries_when_another_thread_took_the_head() {
+        let mut e = engine();
+        let (queue, interface, nodes, _, _, decrements) = pop_fixture(&mut e, &[0x11, 0x22], 8);
+        // The first compare-and-swap fails because another thread popped.
+        let attempts = Rc::new(RefCell::new(0));
+        let shared = attempts.clone();
+        e.register_double(COMPARE_AND_SWAP, move |e, a| {
+            *shared.borrow_mut() += 1;
+            if *shared.borrow() == 1 {
+                e.mem.set_u32(a[0], a[1]);
+                ret(0)
+            } else if e.mem.u32(a[0]) == a[2] {
+                e.mem.set_u32(a[0], a[1]);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        let out = slot_with(&mut e, 0);
+        assert!(fn_006c6fe0(&mut e, interface, out));
+        assert_eq!(*attempts.borrow(), 2);
+        assert_eq!(e.mem.u32(out), 0x22);
+        assert_eq!(e.mem.u32(queue + 4), nodes[2]);
+        assert_eq!(decrements.borrow().len(), 1);
+    }
+
+    #[test]
+    fn retiring_a_node_frees_the_batch_when_it_is_full() {
+        let mut e = engine();
+        let (_, interface, _, _, _, _) = pop_fixture(&mut e, &[], 2);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first + 4, 0x99);
+        start_log(&mut e);
+        fn_006c7560(&mut e, interface, first);
+        assert_eq!(e.mem.u32(first + 4), 0);
+        assert_eq!(e.mem.u32(interface.addr() + 0x10), first);
+        assert_eq!(e.mem.u32(interface.addr() + 0x0c), 1);
+        assert!(calls(&e, &[QUEUE_INTERFACE_FREE_BATCH]).is_empty());
+        fn_006c7560(&mut e, interface, second);
+        // The second node points at the first through its `+4` word.
+        assert_eq!(e.mem.u32(second + 4), first);
+        assert_eq!(e.mem.u32(interface.addr() + 0x10), second);
+        assert_eq!(e.mem.u32(interface.addr() + 0x0c), 2);
+        assert_eq!(
+            calls(&e, &[QUEUE_INTERFACE_FREE_BATCH]),
+            vec![(QUEUE_INTERFACE_FREE_BATCH, vec![interface.addr()])]
+        );
+    }
+
+    #[test]
+    fn the_interface_manager_destructor_destroys_each_existing_interface() {
+        let mut e = engine();
+        let manager = e.mem.alloc(0x10);
+        let entries = e.mem.alloc(24);
+        e.mem.set_u32(manager, 3);
+        e.mem.set_u32(manager + 4, 0x7001);
+        e.mem.set_u32(manager + 8, entries);
+        e.mem.set_u32(entries + 4, 0xa000);
+        e.mem.set_u32(entries + 12, 0);
+        e.mem.set_u32(entries + 20, 0xc000);
+        let destroyed = record(&mut e, QUEUE_INTERFACE_DESTROY, 0);
+        let freed = record(&mut e, OPERATOR_DELETE, 0);
+        let released = record(&mut e, QUEUE_MANAGER_RELEASE, 0);
+        fn_006c74a0(&mut e, Ptr::new(manager));
+        assert_eq!(*destroyed.borrow(), vec![vec![0xa000, 1], vec![0xc000, 1]]);
+        assert_eq!(*freed.borrow(), vec![vec![entries]]);
+        assert_eq!(*released.borrow(), vec![vec![0x7001]]);
+    }
+
+    #[test]
+    fn the_interface_manager_deleting_destructor_deletes_only_when_asked() {
+        let mut e = engine();
+        let manager = e.mem.alloc(0x10);
+        let entries = e.mem.alloc(8);
+        e.mem.set_u32(manager + 8, entries);
+        stub(&mut e, &[QUEUE_INTERFACE_DESTROY, QUEUE_MANAGER_RELEASE]);
+        let freed = record(&mut e, OPERATOR_DELETE, 0);
+        assert_eq!(fn_006c71a0(&mut e, Ptr::new(manager), 0).addr(), manager);
+        assert_eq!(*freed.borrow(), vec![vec![entries]]);
+        assert_eq!(fn_006c71a0(&mut e, Ptr::new(manager), 1).addr(), manager);
+        assert_eq!(
+            *freed.borrow(),
+            vec![vec![entries], vec![entries], vec![manager]]
+        );
+    }
+
+    #[test]
+    fn the_container_deleting_destructors_delete_only_when_asked() {
+        type Array = fn(&mut Engine, Ptr<BSSimpleArray>, u32) -> Ptr<BSSimpleArray>;
+        let arrays: [Array; 5] = [
+            bs_simple_array_obstacle_data_scalar_deleting_destructor,
+            bs_simple_array_obstacle_task_data_scalar_deleting_destructor,
+            bs_scrap_array_nav_mesh_ptr_scalar_deleting_destructor,
+            bs_simple_array_tes_object_cell_scalar_deleting_destructor,
+            bs_scrap_array_tes_object_cell_scalar_deleting_destructor,
+        ];
+        for destructor in arrays {
+            let mut e = engine();
+            let array = e.new_object::<BSSimpleArray>();
+            stub(
+                &mut e,
+                &[
+                    ARRAY_CLEAR,
+                    OBSTACLE_ARRAY_EMPTY,
+                    HOLDER_ARRAY_CLEAR,
+                    HOLDER_ARRAY_BASE_DTOR,
+                ],
+            );
+            let freed = record(&mut e, OPERATOR_DELETE, 0);
+            assert_eq!(destructor(&mut e, array, 0), array);
+            assert!(freed.borrow().is_empty());
+            assert_eq!(destructor(&mut e, array, 1), array);
+            assert_eq!(*freed.borrow(), vec![vec![array.addr()]]);
+        }
+        type Map = fn(&mut Engine, Ptr<NiTMap>, u32) -> Ptr<NiTMap>;
+        let maps: [Map; 3] = [
+            ni_tmap_base_reference_obstacle_array_scalar_deleting_destructor,
+            ni_tmap_base_rigid_body_obstacle_data_scalar_deleting_destructor,
+            ni_tmap_base_obstacle_task_data_scalar_deleting_destructor,
+        ];
+        for destructor in maps {
+            let (mut e, map, _) = map_destruction_engine();
+            let freed = record(&mut e, OPERATOR_DELETE, 0);
+            assert_eq!(destructor(&mut e, map, 0), map);
+            assert!(freed.borrow().iter().all(|call| call[0] != map.addr()));
+            assert_eq!(destructor(&mut e, map, 1), map);
+            assert_eq!(freed.borrow().last(), Some(&vec![map.addr()]));
+        }
+    }
+
+    #[test]
+    fn the_queue_deleting_destructor_deletes_only_when_asked() {
+        for flags in [0, 1] {
+            let (mut e, _) = queue_engine();
+            let (queue, _, _) = queue_with_nodes(&mut e);
+            e.mem.set_u32(queue.addr() + 0x10, 0x5000);
+            let freed = record(&mut e, OPERATOR_DELETE, 0);
+            stub(&mut e, &[QUEUE_INTERFACE_MANAGER_DELETE, QUEUE_BASE_DTOR]);
+            assert_eq!(
+                lock_free_queue_rigid_body_scalar_deleting_destructor(&mut e, queue, flags),
+                queue
+            );
+            let deleted = freed.borrow().iter().any(|call| call[0] == queue.addr());
+            assert_eq!(deleted, flags == 1);
+        }
+    }
+
+    #[test]
+    fn the_task_constructor_builds_the_members_and_records_the_info() {
+        let mut e = engine();
+        let task = e.new_object::<ObstacleTaskData>();
+        e.mem.set_u8(task.addr() + 0x54, 1);
+        let base = record(&mut e, TASK_BASE_CTOR, 0);
+        let holders = record(&mut e, NAVMESH_HOLDER_CTOR, 0);
+        let operations = record(&mut e, TASK_OPERATIONS_CTOR, 0);
+        let swaps = record(&mut e, TASK_PORTAL_SWAPS_CTOR, 0);
+        assert_eq!(fn_006c77a0(&mut e, task, 0x4321), task);
+        let at = task.addr();
+        assert_eq!(e.mem.u32(at), TASK_DATA_VTABLE);
+        assert_eq!(*base.borrow(), vec![vec![at]]);
+        assert_eq!(*holders.borrow(), vec![vec![at + 0x1c], vec![at + 0x20]]);
+        assert_eq!(*operations.borrow(), vec![vec![at + 0x24]]);
+        assert_eq!(*swaps.borrow(), vec![vec![at + 0x34]]);
+        assert_eq!(e.mem.u32(at + 0x18), 0x4321);
+        assert_eq!(e.mem.u8(at + 0x54), 0);
     }
 }
