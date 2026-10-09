@@ -3,9 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 80 queue entries of this range (`005c4240` to
-//! `005c7430`) are translated. The next session continues at `005c7490`
-//! (the next open entry of the queue).
+//! Progress: all 120 queue entries of this range (`005c4240` to `005c83f0`)
+//! are translated; the range is complete.
 //!
 //! Notes on the exe's code that the translations rely on:
 //! - Every body is `cdecl` with the eight stack words of [`ScriptArgs`]. The
@@ -491,6 +490,112 @@ const RTTI_TES_BOUND_OBJECT: u32 = 0x0118_3108;
 const RTTI_TES_NPC: u32 = 0x0118_3a1c;
 /// The float `999.0` that `005c6b60` restores the limb values by.
 const LIMB_RESTORE_AMOUNT: u32 = 0x0103_b2d0;
+
+// Condition functions of 005c7490..005c83f0 (all `cdecl`: `thisObj,
+// first, second, result`; their `AL` is the command's result).
+/// `Script::GetAttackedConditionFunction` (Xbox PDB).
+const GET_ATTACKED_CONDITION: u32 = 0x0059_ec30;
+/// `Script::GetIsCreatureConditionFunction` (Xbox PDB).
+const GET_IS_CREATURE_CONDITION: u32 = 0x0059_ecc0;
+/// `Script::GetShouldAttackConditionFunction` (Xbox PDB).
+const GET_SHOULD_ATTACK_CONDITION: u32 = 0x0059_ed30;
+/// `Script::GetInCellConditionFunction` (Xbox PDB).
+const GET_IN_CELL_CONDITION: u32 = 0x0059_ef60;
+/// `Script::GetInWorldspaceConditionFunction` (Xbox PDB).
+const GET_IN_WORLDSPACE_CONDITION: u32 = 0x0059_f0c0;
+/// `Script::GetInSameCellConditionFunction` (Xbox PDB).
+const GET_IN_SAME_CELL_CONDITION: u32 = 0x0059_ee80;
+/// `Script::GetIsClassConditionFunction` (Xbox PDB).
+const GET_IS_CLASS_CONDITION: u32 = 0x0059_f180;
+/// `Script::GetIsRaceConditionFunction` (Xbox PDB).
+const GET_IS_RACE_CONDITION: u32 = 0x0059_f240;
+/// `Script::GetIsCreatureTypeConditionFunction` (Xbox PDB).
+const GET_IS_CREATURE_TYPE_CONDITION: u32 = 0x0059_f300;
+/// `Script::GetIsSexConditionFunction` (Xbox PDB).
+const GET_IS_SEX_CONDITION: u32 = 0x0059_f3c0;
+/// `Script::GetIsPlayableRaceConditionFunction` (Xbox PDB).
+const GET_IS_PLAYABLE_RACE_CONDITION: u32 = 0x0059_f540;
+/// `Script::GetInFactionConditionFunction` (Xbox PDB).
+const GET_IN_FACTION_CONDITION: u32 = 0x0059_f630;
+/// `Script::GetIsIDConditionFunction` (Xbox PDB).
+const GET_IS_ID_CONDITION: u32 = 0x0059_f7b0;
+/// `Script::IsInListConditionFunction` (Xbox PDB).
+const IS_IN_LIST_CONDITION: u32 = 0x0059_f890;
+/// `Script::GetIsChildConditionFunction` (Xbox PDB).
+const GET_IS_CHILD_CONDITION: u32 = 0x0059_f940;
+/// `Script::GetIsUsedItemConditionFunction` (Xbox PDB).
+const GET_IS_USED_ITEM_CONDITION: u32 = 0x0059_f9b0;
+/// `Script::GetIsUsedItemTypeConditionFunction` (Xbox PDB).
+const GET_IS_USED_ITEM_TYPE_CONDITION: u32 = 0x0059_fa90;
+/// `Script::GetUsedItemLevelConditionFunction` (Xbox PDB).
+const GET_USED_ITEM_LEVEL_CONDITION: u32 = 0x0059_fb00;
+/// `Script::GetUsedItemActivateConditionFunction` (Xbox PDB).
+const GET_USED_ITEM_ACTIVATE_CONDITION: u32 = 0x0059_fb50;
+/// `Script::GetIsRefConditionFunction` (Xbox PDB).
+const GET_IS_REF_CONDITION: u32 = 0x0059_fbb0;
+/// `Script::GetFactionRankConditionFunction` (Xbox PDB).
+const GET_FACTION_RANK_CONDITION: u32 = 0x0059_fc50;
+/// `Script::GetGlobalValueConditionFunction` (Xbox PDB).
+const GET_GLOBAL_VALUE_CONDITION: u32 = 0x0059_fd30;
+/// `Script::GetXPForNextLevelConditionFunction` (Xbox PDB).
+const GET_XP_FOR_NEXT_LEVEL_CONDITION: u32 = 0x005a_58c0;
+
+// Cells, the player, actors, factions and extra data.
+/// `thiscall` on a cell (`bool`): sets or clears bit `0x20` of the byte at
+/// `this + 0x24` and notifies through virtual slot `0x48` (`2`).
+const CELL_SET_FLAG_0X20: u32 = 0x0054_4340;
+/// `thiscall` on the player (`byte`): stores the byte at `this + 0x75c`
+/// (`bChargen` of the Xbox `PlayerCharacter`, which sits at `+0x76c` there;
+/// 0x10 lower on PC, as for every class derived from `TESForm`).
+const PLAYER_SET_CHARGEN: u32 = 0x0095_0010;
+/// `thiscall` on an actor (`faction, rank`, the rank a byte): sets the
+/// actor's rank in a faction; the faction is added to the actor, changed or
+/// (rank `-1`) removed.
+const ACTOR_SET_FACTION_RANK: u32 = 0x008b_8580;
+/// `thiscall` on an actor (`faction, delta, flag`, the delta and the flag
+/// bytes): when the actor has the faction at a rank of at least 0, sets the
+/// rank to the old rank plus the (signed) delta, not below 0, through
+/// [`ACTOR_SET_FACTION_RANK`].
+const ACTOR_ADD_TO_FACTION_RANK: u32 = 0x008b_86e0;
+/// `thiscall` on a faction (`other faction`): the reaction of this faction
+/// to the other, an `int`.
+const FACTION_GET_REACTION: u32 = 0x005f_d3b0;
+/// `thiscall` on a faction (`other faction, value`): stores a reaction and
+/// notifies through virtual slot `0x48` (`4`).
+const FACTION_SET_REACTION: u32 = 0x005f_d3d0;
+/// `thiscall` on a faction (`other faction, value`): the same shape as
+/// [`FACTION_SET_REACTION`], through another helper (`0048c0b0`).
+const FACTION_MODIFY_REACTION: u32 = 0x005f_d400;
+/// `thiscall` on a faction (`other faction, code`): the same shape as
+/// [`FACTION_SET_REACTION`], through another helper (`0048c220`).
+const FACTION_SET_RELATION_CODE: u32 = 0x005f_d430;
+/// `thiscall` on a reference: `this + 0x44`, its embedded `ExtraDataList`.
+const REFERENCE_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `thiscall` on an `ExtraDataList`:
+/// `BaseExtraList::GetExtraData(0x5e)` (Xbox PDB), the extra data
+/// object or 0.
+const GET_EXTRA_DATA_0X5E: u32 = 0x0042_e800;
+/// `thiscall` on an `ExtraDataList`: adds the extra data `0x5e` object when
+/// the list has none.
+const ADD_EXTRA_DATA_0X5E: u32 = 0x0042_e760;
+/// `thiscall` on a reference: its base form (the engine map calls it
+/// `BGSSaveFormBuffer::GetForm`).
+const REFERENCE_BASE_FORM: u32 = 0x0041_81e0;
+/// `thiscall` on the extra data `0x5e` object (`base form`): updates the
+/// object's lists (it walks the list at `this + 0xc` and, when a second
+/// object is given, another list); not examined further here.
+const EXTRA_DATA_0X5E_UPDATE: u32 = 0x0043_70f0;
+/// `thiscall` on a string holder (the engine map calls it
+/// `MapMarkerData::GetLocationName`): the string's text, or the empty string
+/// when it has none.
+const STRING_OR_EMPTY: u32 = 0x0040_8da0;
+/// `_ftol2_sse`: the `double` in `ST0` (a leading `f64` argument) truncated
+/// into `EAX`.
+const FTOL: u32 = 0x00ec_62c0;
+/// `"GetChargenValue >> %i"`
+const MSG_GET_CHARGEN_VALUE: u32 = 0x0103_b2d4;
+/// `"%.20s reaction to %.20s is %.1f"`
+const MSG_FACTION_REACTION: u32 = 0x0103_b2ec;
 
 // ---- Globals ----------------------------------------------------------------
 
@@ -2492,6 +2597,474 @@ pub fn script_get_is_current_weather_function(e: &mut Engine, a: ScriptArgs) -> 
     condition_with_one_argument(e, a, GET_IS_CURRENT_WEATHER_CONDITION)
 }
 
+// ---- 005c7490 .. 005c83f0 ---------------------------------------------------
+
+/// A condition command with two parsed arguments (word locals initialised
+/// to 0, in output order): false when the parameters do not parse,
+/// otherwise the condition function gets `(thisObj, first, second, result)`
+/// and its `AL` is returned.
+fn condition_with_two_arguments(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    let Some([first, second]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    e.call(condition, &args![a.this_obj, first, second, a.result])
+        .bool()
+}
+
+/// A condition command with one parsed argument that runs on the player
+/// instead of the command's reference: the condition function gets
+/// `(player, argument, 0, result)`.
+fn condition_on_player_with_one_argument(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    let Some([argument]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    let player = e.global::<u32>(PLAYER);
+    e.call(condition, &args![player, argument, 0u32, a.result])
+        .bool()
+}
+
+/// The `RTTI` cast of the command's reference to `Actor` (`__RTDynamicCast`
+/// from `TESObjectREFR`): the actor or 0.
+fn cast_to_actor(e: &mut Engine, reference: Ptr) -> u32 {
+    e.call(
+        DYNAMIC_CAST,
+        &args![reference, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 005c7490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetAttackedConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c7490(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_ATTACKED_CONDITION)
+}
+
+// Translated from 005c74b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsCreatureConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c74b0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_CREATURE_CONDITION)
+}
+
+// Translated from 005c74d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetShouldAttack` (Xbox PDB): parses one argument and returns
+/// `GetShouldAttackConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_should_attack(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_SHOULD_ATTACK_CONDITION)
+}
+
+// Translated from 005c7530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing one argument: `Script::GetInCellConditionFunction(
+/// thisObj, argument, 0, result)`; returns its `AL`.
+pub fn fn_005c7530(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IN_CELL_CONDITION)
+}
+
+// Translated from 005c7590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing two arguments: `Script::GetInCellConditionFunction(
+/// thisObj, first, second, result)`; returns its `AL` (false when the
+/// parameters do not parse).
+pub fn fn_005c7590(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_two_arguments(e, a, GET_IN_CELL_CONDITION)
+}
+
+// Translated from 005c7600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetInWorldspace` (Xbox PDB): parses one argument and returns
+/// `GetInWorldspaceConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_in_worldspace(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IN_WORLDSPACE_CONDITION)
+}
+
+// Translated from 005c7660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a cell and a signed number: when the cell is given,
+/// sets (number greater than 0) or clears bit `0x20` of its flags byte
+/// through [`CELL_SET_FLAG_0X20`]. Returns true (false when the parameters
+/// do not parse).
+pub fn fn_005c7660(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([cell, number]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    if cell != 0 {
+        e.call(CELL_SET_FLAG_0X20, &args![cell, (number as i32 > 0) as u32]);
+    }
+    true
+}
+
+// Translated from 005c76d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetInSameCell` (Xbox PDB): parses one argument and returns
+/// `GetInSameCellConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_in_same_cell(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IN_SAME_CELL_CONDITION)
+}
+
+// Translated from 005c7730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing one argument: `Script::GetIsClassConditionFunction(
+/// thisObj, argument, 0, result)`; returns its `AL`.
+pub fn fn_005c7730(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_CLASS_CONDITION)
+}
+
+// Translated from 005c7790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking one number: stores 1 (number non-zero) or 0 as the
+/// player's chargen byte through [`PLAYER_SET_CHARGEN`]. Returns true
+/// (false when the parameters do not parse).
+pub fn fn_005c7790(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([flag]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    let player = e.global::<u32>(PLAYER);
+    e.call(PLAYER_SET_CHARGEN, &args![player, (flag != 0) as u32]);
+    true
+}
+
+// Translated from 005c7800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function-style command: the result is 0.0, or, when the player exists,
+/// his chargen byte ([`fn_005c7870`]). With the console echo on, the result
+/// is printed truncated to an `int`. Always returns true.
+pub fn fn_005c7800(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_result(e, a, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    if player != 0 {
+        let chargen = fn_005c7870(e, Ptr::new(player));
+        set_result(e, a, chargen as f64);
+        if echo_enabled(e) {
+            let value = e.mem.f64(a.result.addr());
+            let truncated = e.call(FTOL, &args![value]).u32();
+            console_print(e, &args![MSG_GET_CHARGEN_VALUE, truncated]);
+        }
+    }
+    true
+}
+
+// Translated from 005c7870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player's chargen byte (`bChargen` of the Xbox `PlayerCharacter`):
+/// `*(this + 0x75c)` (`fastcall`).
+pub fn fn_005c7870(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x75c)
+}
+
+// Translated from 005c7890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing one argument: `Script::GetIsRaceConditionFunction(
+/// thisObj, argument, 0, result)`; returns its `AL`.
+pub fn fn_005c7890(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_RACE_CONDITION)
+}
+
+// Translated from 005c78f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCreatureType` (Xbox PDB): parses one argument and returns
+/// `GetIsCreatureTypeConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_is_creature_type(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_CREATURE_TYPE_CONDITION)
+}
+
+// Translated from 005c7950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing one argument: `Script::GetIsSexConditionFunction(
+/// thisObj, argument, 0, result)`; returns its `AL`. (The game does not
+/// initialise the local; it starts at 0 here.)
+pub fn fn_005c7950(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_SEX_CONDITION)
+}
+
+// Translated from 005c79b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsPlayableRaceConditionFunction(
+/// thisObj, 0, 0, result)`; returns its `AL`.
+pub fn fn_005c79b0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_PLAYABLE_RACE_CONDITION)
+}
+
+// Translated from 005c79d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command parsing one argument: `Script::GetInFactionConditionFunction(
+/// thisObj, argument, 0, result)`; returns its `AL`.
+pub fn fn_005c79d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IN_FACTION_CONDITION)
+}
+
+// Translated from 005c7a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `GetIsClass`: parses one argument and returns
+/// `GetIsClassConditionFunction(player, argument, 0, result)`.
+pub fn fn_005c7a30(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_on_player_with_one_argument(e, a, GET_IS_CLASS_CONDITION)
+}
+
+// Translated from 005c7a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `GetIsRace`: parses one argument and returns
+/// `GetIsRaceConditionFunction(player, argument, 0, result)`.
+pub fn fn_005c7a90(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_on_player_with_one_argument(e, a, GET_IS_RACE_CONDITION)
+}
+
+// Translated from 005c7af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `GetIsSex`: parses one argument and returns
+/// `GetIsSexConditionFunction(player, argument, 0, result)`. (The game does
+/// not initialise the local; it starts at 0 here.)
+pub fn fn_005c7af0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_on_player_with_one_argument(e, a, GET_IS_SEX_CONDITION)
+}
+
+// Translated from 005c7b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `GetInFaction`: parses one argument and returns
+/// `GetInFactionConditionFunction(player, argument, 0, result)`.
+pub fn fn_005c7b50(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_on_player_with_one_argument(e, a, GET_IN_FACTION_CONDITION)
+}
+
+// Translated from 005c7bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsID` (Xbox PDB): parses one argument and returns
+/// `GetIsIDConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_is_id(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_ID_CONDITION)
+}
+
+// Translated from 005c7c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsInListFunction` (Xbox PDB): parses one argument and returns
+/// `IsInListConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_is_in_list_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, IS_IN_LIST_CONDITION)
+}
+
+// Translated from 005c7c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsChildConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c7c70(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_CHILD_CONDITION)
+}
+
+// Translated from 005c7ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsUsedItem` (Xbox PDB): parses one argument and returns
+/// `GetIsUsedItemConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_is_used_item(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_USED_ITEM_CONDITION)
+}
+
+// Translated from 005c7d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsUsedItemType` (Xbox PDB): parses one argument that the
+/// parser stores as a single byte (the game's local is an uninitialised
+/// byte; it starts at 0 here) and returns
+/// `GetIsUsedItemTypeConditionFunction(thisObj, byte, 0, result)`.
+pub fn script_get_is_used_item_type(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([kind]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    e.call(
+        GET_IS_USED_ITEM_TYPE_CONDITION,
+        &args![a.this_obj, kind & 0xff, 0u32, a.result],
+    )
+    .bool()
+}
+
+// Translated from 005c7d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetUsedItemLevelConditionFunction(thisObj,
+/// 0, 0, result)`; returns its `AL`.
+pub fn fn_005c7d60(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_USED_ITEM_LEVEL_CONDITION)
+}
+
+// Translated from 005c7d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetUsedItemActivateConditionFunction(
+/// thisObj, 0, 0, result)`; returns its `AL`.
+pub fn fn_005c7d80(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_USED_ITEM_ACTIVATE_CONDITION)
+}
+
+// Translated from 005c7da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsRef` (Xbox PDB): parses one argument and returns
+/// `GetIsRefConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_is_ref(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_REF_CONDITION)
+}
+
+// Translated from 005c7e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFactionRank` (Xbox PDB): parses one argument and returns
+/// `GetFactionRankConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_faction_rank(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_FACTION_RANK_CONDITION)
+}
+
+// Translated from 005c7e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a faction and a rank (the second parsed as a byte):
+/// the result is 0.0. When the command's reference casts to `Actor`, its
+/// base form accessor runs ([`REFERENCE_BASE_FORM`], result unused) and,
+/// when the faction is given, [`ACTOR_SET_FACTION_RANK`] sets the rank.
+/// Returns true (false when the parameters do not parse; the result is then
+/// not touched).
+pub fn fn_005c7e60(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([faction, rank]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    set_result(e, a, 0.0);
+    let actor = cast_to_actor(e, a.this_obj);
+    if actor == 0 {
+        return true;
+    }
+    e.call(REFERENCE_BASE_FORM, &args![actor]);
+    if faction != 0 {
+        e.call(ACTOR_SET_FACTION_RANK, &args![actor, faction, rank & 0xff]);
+    }
+    true
+}
+
+// Translated from 005c7f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a faction and a rank change (the second parsed as a
+/// byte): the result is 0.0. When the command's reference casts to `Actor`,
+/// its base form accessor runs ([`REFERENCE_BASE_FORM`], result unused) and,
+/// when the faction is given, [`ACTOR_ADD_TO_FACTION_RANK`] runs with the
+/// change and whether the actor is the player. Returns true (false when the
+/// parameters do not parse; the result is then not touched).
+pub fn fn_005c7f10(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([faction, change]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    set_result(e, a, 0.0);
+    let actor = cast_to_actor(e, a.this_obj);
+    if actor == 0 {
+        return true;
+    }
+    e.call(REFERENCE_BASE_FORM, &args![actor]);
+    if faction != 0 {
+        let is_player = actor == e.global::<u32>(PLAYER);
+        e.call(
+            ACTOR_ADD_TO_FACTION_RANK,
+            &args![actor, faction, change & 0xff, is_player as u32],
+        );
+    }
+    true
+}
+
+// Translated from 005c7fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFactionReaction` (Xbox PDB): the result is 0.0, or, when
+/// both factions are given, the first faction's reaction to the second
+/// ([`FACTION_GET_REACTION`]). With the console echo on, prints "<first
+/// name> reaction to <second name> is <value>". Returns true (false when
+/// the parameters do not parse; the result is then 0.0).
+pub fn script_get_faction_reaction(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_result(e, a, 0.0);
+    let Some([first, second]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    if first != 0 && second != 0 {
+        let reaction = e.call(FACTION_GET_REACTION, &args![first, second]).u32() as i32;
+        set_result(e, a, reaction as f64);
+    }
+    if echo_enabled(e) {
+        // The game asks for the second name first (it is pushed first).
+        let second_name = e.call(STRING_OR_EMPTY, &args![second + 0x18]).u32();
+        let first_name = e.call(STRING_OR_EMPTY, &args![first + 0x18]).u32();
+        let value = e.mem.f64(a.result.addr());
+        console_print(
+            e,
+            &args![MSG_FACTION_REACTION, first_name, second_name, value],
+        );
+    }
+    true
+}
+
+// Translated from 005c80a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a faction, another faction and a value: the result is
+/// 0.0, and when both factions are given [`FACTION_SET_REACTION`] runs on
+/// the first with the second and the value. Returns true (false when the
+/// parameters do not parse; the result is then not touched).
+pub fn fn_005c80a0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second, value]) = parse_into(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    set_result(e, a, 0.0);
+    if second != 0 && first != 0 {
+        e.call(FACTION_SET_REACTION, &args![first, second, value]);
+    }
+    true
+}
+
+// Translated from 005c8120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking two factions and two flags: the result is 0.0, and when
+/// both factions are given each is told about the other through
+/// [`FACTION_SET_RELATION_CODE`], with code 3 when its flag is non-zero and
+/// 2 when it is 0 (the first flag for the first faction). Returns true
+/// (false when the parameters do not parse; the result is then not
+/// touched).
+pub fn fn_005c8120(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_relation_codes(e, a, 2, 3)
+}
+
+// Translated from 005c81f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like [`fn_005c8120`], with code 0 when the flag is non-zero and 1 when
+/// it is 0.
+pub fn fn_005c81f0(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_relation_codes(e, a, 1, 0)
+}
+
+/// The body of `005c8120` and `005c81f0`: `if_clear` and `if_set` are the
+/// relation codes for a flag that is 0 and one that is not.
+fn set_relation_codes(e: &mut Engine, a: ScriptArgs, if_clear: u32, if_set: u32) -> bool {
+    let Some([first, second, first_flag, second_flag]) = parse_into(e, a, [0, 0, 0, 0]) else {
+        return false;
+    };
+    set_result(e, a, 0.0);
+    if second != 0 && first != 0 {
+        let code = if first_flag == 0 { if_clear } else { if_set };
+        e.call(FACTION_SET_RELATION_CODE, &args![first, second, code]);
+        let code = if second_flag == 0 { if_clear } else { if_set };
+        e.call(FACTION_SET_RELATION_CODE, &args![second, first, code]);
+    }
+    true
+}
+
+// Translated from 005c82c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a faction, another faction and a value: the result is
+/// 0.0, and when both factions are given [`FACTION_MODIFY_REACTION`] runs
+/// on the first with the second and the value. Returns true (false when
+/// the parameters do not parse; the result is then not touched).
+pub fn fn_005c82c0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second, value]) = parse_into(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    set_result(e, a, 0.0);
+    if second != 0 && first != 0 {
+        e.call(FACTION_MODIFY_REACTION, &args![first, second, value]);
+    }
+    true
+}
+
+// Translated from 005c8340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command on an actor-like reference: when the reference is given and
+/// answers true to virtual slot `0x100`, marks it changed through slot
+/// `0x48` (`0x8000_0000`), makes sure its extra data `0x5e` exists (adding
+/// it when `GetExtraData(0x5e)` of its embedded `ExtraDataList` finds none)
+/// and updates that object from the reference's base form
+/// ([`EXTRA_DATA_0X5E_UPDATE`]). Always returns true.
+pub fn fn_005c8340(e: &mut Engine, a: ScriptArgs) -> bool {
+    let reference = a.this_obj;
+    if reference.is_null() || !e.vcall(reference.addr(), 0x100, &args![]).bool() {
+        return true;
+    }
+    e.vcall(reference.addr(), 0x48, &args![0x8000_0000u32]);
+    let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+    let mut extra = e.call(GET_EXTRA_DATA_0X5E, &args![list]).u32();
+    if extra == 0 {
+        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+        e.call(ADD_EXTRA_DATA_0X5E, &args![list]);
+        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32();
+        extra = e.call(GET_EXTRA_DATA_0X5E, &args![list]).u32();
+    }
+    let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    e.call(EXTRA_DATA_0X5E_UPDATE, &args![extra, base_form]);
+    true
+}
+
+// Translated from 005c83d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetXPForNextLevelConditionFunction(thisObj,
+/// 0, 0, result)`; returns its `AL`.
+pub fn fn_005c83d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_XP_FOR_NEXT_LEVEL_CONDITION)
+}
+
+// Translated from 005c83f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetGlobalValue` (Xbox PDB): parses one argument and returns
+/// `GetGlobalValueConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_global_value(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_GLOBAL_VALUE_CONDITION)
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2611,6 +3184,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x005c7430,
             script_get_is_current_weather_function(ScriptArgs) -> bool
         ),
+        entry!(0x005c7490, fn_005c7490(ScriptArgs) -> bool),
+        entry!(0x005c74b0, fn_005c74b0(ScriptArgs) -> bool),
+        entry!(0x005c74d0, script_get_should_attack(ScriptArgs) -> bool),
+        entry!(0x005c7530, fn_005c7530(ScriptArgs) -> bool),
+        entry!(0x005c7590, fn_005c7590(ScriptArgs) -> bool),
+        entry!(0x005c7600, script_get_in_worldspace(ScriptArgs) -> bool),
+        entry!(0x005c7660, fn_005c7660(ScriptArgs) -> bool),
+        entry!(0x005c76d0, script_get_in_same_cell(ScriptArgs) -> bool),
+        entry!(0x005c7730, fn_005c7730(ScriptArgs) -> bool),
+        entry!(0x005c7790, fn_005c7790(ScriptArgs) -> bool),
+        entry!(0x005c7800, fn_005c7800(ScriptArgs) -> bool),
+        entry!(0x005c7870, fn_005c7870(Ptr) -> u8),
+        entry!(0x005c7890, fn_005c7890(ScriptArgs) -> bool),
+        entry!(0x005c78f0, script_get_is_creature_type(ScriptArgs) -> bool),
+        entry!(0x005c7950, fn_005c7950(ScriptArgs) -> bool),
+        entry!(0x005c79b0, fn_005c79b0(ScriptArgs) -> bool),
+        entry!(0x005c79d0, fn_005c79d0(ScriptArgs) -> bool),
+        entry!(0x005c7a30, fn_005c7a30(ScriptArgs) -> bool),
+        entry!(0x005c7a90, fn_005c7a90(ScriptArgs) -> bool),
+        entry!(0x005c7af0, fn_005c7af0(ScriptArgs) -> bool),
+        entry!(0x005c7b50, fn_005c7b50(ScriptArgs) -> bool),
+        entry!(0x005c7bb0, script_get_is_id(ScriptArgs) -> bool),
+        entry!(0x005c7c10, script_is_in_list_function(ScriptArgs) -> bool),
+        entry!(0x005c7c70, fn_005c7c70(ScriptArgs) -> bool),
+        entry!(0x005c7ca0, script_get_is_used_item(ScriptArgs) -> bool),
+        entry!(0x005c7d00, script_get_is_used_item_type(ScriptArgs) -> bool),
+        entry!(0x005c7d60, fn_005c7d60(ScriptArgs) -> bool),
+        entry!(0x005c7d80, fn_005c7d80(ScriptArgs) -> bool),
+        entry!(0x005c7da0, script_get_is_ref(ScriptArgs) -> bool),
+        entry!(0x005c7e00, script_get_faction_rank(ScriptArgs) -> bool),
+        entry!(0x005c7e60, fn_005c7e60(ScriptArgs) -> bool),
+        entry!(0x005c7f10, fn_005c7f10(ScriptArgs) -> bool),
+        entry!(0x005c7fd0, script_get_faction_reaction(ScriptArgs) -> bool),
+        entry!(0x005c80a0, fn_005c80a0(ScriptArgs) -> bool),
+        entry!(0x005c8120, fn_005c8120(ScriptArgs) -> bool),
+        entry!(0x005c81f0, fn_005c81f0(ScriptArgs) -> bool),
+        entry!(0x005c82c0, fn_005c82c0(ScriptArgs) -> bool),
+        entry!(0x005c8340, fn_005c8340(ScriptArgs) -> bool),
+        entry!(0x005c83d0, fn_005c83d0(ScriptArgs) -> bool),
+        entry!(0x005c83f0, script_get_global_value(ScriptArgs) -> bool),
     ]
 }
 
@@ -5245,13 +5858,622 @@ mod tests {
         check_one_argument_condition(0x005c_7430, GET_IS_CURRENT_WEATHER_CONDITION);
     }
 
+    // ---- 005c7490 .. 005c83f0 ---------------------------------------------------
+
+    /// A command run on the player (`0x77`) with one parsed argument (the
+    /// double stores `0x55` in the local).
+    fn check_player_one_argument_condition(entry: u32, callee: u32) {
+        let mut e = engine();
+        e.set_global(PLAYER, 0x77u32);
+        parse_gives(&mut e, true, &[0x55]);
+        e.register(callee, |_, _| true.into_ret());
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(
+            calls(&e, callee),
+            vec![vec![0x77, 0x55, 0, a.result.addr()]]
+        );
+        e.register(callee, |_, _| false.into_ret());
+        assert!(!e.call(entry, &args![a]).bool());
+        // A parse that leaves the local alone: the local starts at 0.
+        parse_gives(&mut e, true, &[]);
+        e.register(callee, |_, _| true.into_ret());
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(calls(&e, callee)[0][1], 0);
+        // Parameters that do not parse: false, nothing called.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert!(calls(&e, callee).is_empty());
+    }
+
+    #[test]
+    fn attacked_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7490, GET_ATTACKED_CONDITION, None);
+    }
+
+    #[test]
+    fn is_creature_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_74b0, GET_IS_CREATURE_CONDITION, None);
+    }
+
+    #[test]
+    fn should_attack_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_74d0, GET_SHOULD_ATTACK_CONDITION);
+    }
+
+    #[test]
+    fn in_cell_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7530, GET_IN_CELL_CONDITION);
+    }
+
+    #[test]
+    fn in_cell_command_with_two_arguments_passes_both() {
+        check_two_argument_condition(0x005c_7590, GET_IN_CELL_CONDITION);
+    }
+
+    #[test]
+    fn in_worldspace_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7600, GET_IN_WORLDSPACE_CONDITION);
+    }
+
+    #[test]
+    fn cell_flag_command_sets_the_flag_when_the_number_is_positive() {
+        let mut e = engine();
+        accept(&mut e, &[CELL_SET_FLAG_0X20]);
+        let a = script(&mut e, 0x40);
+        for (number, expected) in [
+            (5u32, 1u32),
+            (1, 1),
+            (0, 0),
+            (0xffff_ffff, 0),
+            (0x8000_0000, 0),
+        ] {
+            parse_gives(&mut e, true, &[0x3000, number]);
+            start_log(&mut e);
+            assert!(e.call(0x005c_7660, &args![a]).bool());
+            assert_eq!(
+                calls(&e, CELL_SET_FLAG_0X20),
+                vec![vec![0x3000, expected]],
+                "number {number:#x}"
+            );
+        }
+        // No cell: true, nothing called.
+        parse_gives(&mut e, true, &[0, 5]);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7660, &args![a]).bool());
+        assert!(calls(&e, CELL_SET_FLAG_0X20).is_empty());
+        // Parameters that do not parse: false, nothing called.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_7660, &args![a]).bool());
+        assert!(calls(&e, CELL_SET_FLAG_0X20).is_empty());
+    }
+
+    #[test]
+    fn in_same_cell_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_76d0, GET_IN_SAME_CELL_CONDITION);
+    }
+
+    #[test]
+    fn is_class_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7730, GET_IS_CLASS_CONDITION);
+    }
+
+    #[test]
+    fn chargen_command_stores_whether_the_number_is_non_zero() {
+        let mut e = engine();
+        e.set_global(PLAYER, 0x77u32);
+        accept(&mut e, &[PLAYER_SET_CHARGEN]);
+        let a = script(&mut e, 0x40);
+        for (number, expected) in [(0u32, 0u32), (1, 1), (0xffff_ffff, 1), (0x100, 1)] {
+            parse_gives(&mut e, true, &[number]);
+            start_log(&mut e);
+            assert!(e.call(0x005c_7790, &args![a]).bool());
+            assert_eq!(
+                calls(&e, PLAYER_SET_CHARGEN),
+                vec![vec![0x77, expected]],
+                "number {number:#x}"
+            );
+        }
+        // Parameters that do not parse: false, nothing called.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_7790, &args![a]).bool());
+        assert!(calls(&e, PLAYER_SET_CHARGEN).is_empty());
+    }
+
+    #[test]
+    fn chargen_getter_reads_the_byte_behind_the_player() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x800);
+        e.mem.set_u32(player + 0x75c, 0xaabb_cc01);
+        assert_eq!(e.call(0x005c_7870, &args![player]).u32() & 0xff, 1);
+        e.mem.set_u8(player + 0x75c, 0);
+        assert_eq!(e.call(0x005c_7870, &args![player]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn chargen_value_command_returns_the_byte_and_prints_it_with_the_echo() {
+        let mut e = engine();
+        e.register(FTOL, |_, a| (f64::take(a, &mut 0) as i32 as u32).into_ret());
+        let player = e.mem.alloc(0x800);
+        e.mem.set_u8(player + 0x75c, 1);
+        e.set_global(PLAYER, player);
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7800, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 1.0);
+        // The echo is off: nothing printed.
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+
+        e.mem.set_u8(player + 0x75c, 0);
+        let tls = e.tls();
+        e.mem.set_u8(tls + TLS_ECHO, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7800, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_GET_CHARGEN_VALUE, 0]]
+        );
+
+        e.mem.set_u8(player + 0x75c, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7800, &args![a]).bool());
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![MSG_GET_CHARGEN_VALUE, 1]]
+        );
+
+        // No player: the result is 0.0 and nothing is printed.
+        e.set_global(PLAYER, 0u32);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7800, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    #[test]
+    fn is_race_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7890, GET_IS_RACE_CONDITION);
+    }
+
+    #[test]
+    fn is_creature_type_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_78f0, GET_IS_CREATURE_TYPE_CONDITION);
+    }
+
+    #[test]
+    fn is_sex_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7950, GET_IS_SEX_CONDITION);
+    }
+
+    #[test]
+    fn is_playable_race_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_79b0, GET_IS_PLAYABLE_RACE_CONDITION, None);
+    }
+
+    #[test]
+    fn in_faction_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_79d0, GET_IN_FACTION_CONDITION);
+    }
+
+    #[test]
+    fn is_class_command_on_the_player_passes_the_player() {
+        check_player_one_argument_condition(0x005c_7a30, GET_IS_CLASS_CONDITION);
+    }
+
+    #[test]
+    fn is_race_command_on_the_player_passes_the_player() {
+        check_player_one_argument_condition(0x005c_7a90, GET_IS_RACE_CONDITION);
+    }
+
+    #[test]
+    fn is_sex_command_on_the_player_passes_the_player() {
+        check_player_one_argument_condition(0x005c_7af0, GET_IS_SEX_CONDITION);
+    }
+
+    #[test]
+    fn in_faction_command_on_the_player_passes_the_player() {
+        check_player_one_argument_condition(0x005c_7b50, GET_IN_FACTION_CONDITION);
+    }
+
+    #[test]
+    fn is_id_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7bb0, GET_IS_ID_CONDITION);
+    }
+
+    #[test]
+    fn is_in_list_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7c10, IS_IN_LIST_CONDITION);
+    }
+
+    #[test]
+    fn is_child_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7c70, GET_IS_CHILD_CONDITION, None);
+    }
+
+    #[test]
+    fn is_used_item_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7ca0, GET_IS_USED_ITEM_CONDITION);
+    }
+
+    #[test]
+    fn is_used_item_type_command_passes_only_the_byte_the_parser_stored() {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x1122_3344]);
+        e.register(GET_IS_USED_ITEM_TYPE_CONDITION, |_, _| true.into_ret());
+        let mut a = script(&mut e, 0x40);
+        a.event_list = 0x66;
+        start_log(&mut e);
+        assert!(e.call(0x005c_7d00, &args![a]).bool());
+        assert_eq!(
+            calls(&e, GET_IS_USED_ITEM_TYPE_CONDITION),
+            vec![vec![0x40, 0x44, 0, a.result.addr()]]
+        );
+        assert_eq!(
+            calls(&e, PARSE_PARAMETERS)[0][..7],
+            [1, 2, 8, 0x40, 0, 5, 0x66]
+        );
+        // The callee's `AL` is the result.
+        e.register(GET_IS_USED_ITEM_TYPE_CONDITION, |_, _| false.into_ret());
+        assert!(!e.call(0x005c_7d00, &args![a]).bool());
+        // Parameters that do not parse: false, nothing called.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_7d00, &args![a]).bool());
+        assert!(calls(&e, GET_IS_USED_ITEM_TYPE_CONDITION).is_empty());
+    }
+
+    #[test]
+    fn used_item_level_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7d60, GET_USED_ITEM_LEVEL_CONDITION, None);
+    }
+
+    #[test]
+    fn used_item_activate_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7d80, GET_USED_ITEM_ACTIVATE_CONDITION, None);
+    }
+
+    #[test]
+    fn is_ref_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7da0, GET_IS_REF_CONDITION);
+    }
+
+    #[test]
+    fn faction_rank_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7e00, GET_FACTION_RANK_CONDITION);
+    }
+
+    /// An engine for the actor commands: `__RTDynamicCast` answers `actor`
+    /// (0 for "not an actor"), the other callees just accept the call.
+    fn actor_engine(actor: u32) -> Engine {
+        let mut e = engine();
+        e.register_double(DYNAMIC_CAST, move |_, _| actor.into_ret());
+        accept(&mut e, &[REFERENCE_BASE_FORM, ACTOR_SET_FACTION_RANK]);
+        accept(&mut e, &[ACTOR_ADD_TO_FACTION_RANK]);
+        e
+    }
+
+    #[test]
+    fn set_faction_rank_command_sets_the_rank_on_an_actor() {
+        let mut e = actor_engine(0x7000);
+        parse_gives(&mut e, true, &[0x4000, 0x1234_5603]);
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7e60, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x40, 0, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0]]
+        );
+        assert_eq!(calls(&e, REFERENCE_BASE_FORM), vec![vec![0x7000]]);
+        // The rank is the low byte of the second local.
+        assert_eq!(
+            calls(&e, ACTOR_SET_FACTION_RANK),
+            vec![vec![0x7000, 0x4000, 3]]
+        );
+
+        // No faction: the base form accessor runs, nothing else.
+        parse_gives(&mut e, true, &[0, 3]);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7e60, &args![a]).bool());
+        assert_eq!(calls(&e, REFERENCE_BASE_FORM).len(), 1);
+        assert!(calls(&e, ACTOR_SET_FACTION_RANK).is_empty());
+
+        // Parameters that do not parse: false, the result is not touched.
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_7e60, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 5.0);
+        assert!(calls(&e, DYNAMIC_CAST).is_empty());
+    }
+
+    #[test]
+    fn set_faction_rank_command_does_nothing_on_a_non_actor() {
+        let mut e = actor_engine(0);
+        parse_gives(&mut e, true, &[0x4000, 3]);
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7e60, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert!(calls(&e, REFERENCE_BASE_FORM).is_empty());
+        assert!(calls(&e, ACTOR_SET_FACTION_RANK).is_empty());
+    }
+
+    #[test]
+    fn modify_faction_rank_command_tells_whether_the_actor_is_the_player() {
+        let mut e = actor_engine(0x7000);
+        parse_gives(&mut e, true, &[0x4000, 0x1234_56ff]);
+        e.set_global(PLAYER, 0x7000u32);
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7f10, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert_eq!(calls(&e, REFERENCE_BASE_FORM), vec![vec![0x7000]]);
+        assert_eq!(
+            calls(&e, ACTOR_ADD_TO_FACTION_RANK),
+            vec![vec![0x7000, 0x4000, 0xff, 1]]
+        );
+
+        // Another actor than the player.
+        e.set_global(PLAYER, 0x8000u32);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7f10, &args![a]).bool());
+        assert_eq!(
+            calls(&e, ACTOR_ADD_TO_FACTION_RANK),
+            vec![vec![0x7000, 0x4000, 0xff, 0]]
+        );
+
+        // No faction: nothing changes.
+        parse_gives(&mut e, true, &[0, 1]);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7f10, &args![a]).bool());
+        assert!(calls(&e, ACTOR_ADD_TO_FACTION_RANK).is_empty());
+
+        // Parameters that do not parse: false, the result is not touched.
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005c_7f10, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 5.0);
+    }
+
+    #[test]
+    fn modify_faction_rank_command_does_nothing_on_a_non_actor() {
+        let mut e = actor_engine(0);
+        parse_gives(&mut e, true, &[0x4000, 1]);
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7f10, &args![a]).bool());
+        assert!(calls(&e, REFERENCE_BASE_FORM).is_empty());
+        assert!(calls(&e, ACTOR_ADD_TO_FACTION_RANK).is_empty());
+    }
+
+    #[test]
+    fn faction_reaction_command_returns_the_reaction_and_prints_it_with_the_echo() {
+        let mut e = engine();
+        e.register(FACTION_GET_REACTION, |_, _| (-3i32 as u32).into_ret());
+        e.register(STRING_OR_EMPTY, |_, a| (a[0] + 0x1000).into_ret());
+        let a = script(&mut e, 0x40);
+        parse_gives(&mut e, true, &[0x4000, 0x5000]);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7fd0, &args![a]).bool());
+        assert_eq!(result_of(&e, a), -3.0);
+        assert_eq!(calls(&e, FACTION_GET_REACTION), vec![vec![0x4000, 0x5000]]);
+        // The echo is off: nothing printed.
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+
+        // With the echo on the names of the two factions (`+ 0x18`) and
+        // the value are printed; the second name is asked for first.
+        let tls = e.tls();
+        e.mem.set_u8(tls + TLS_ECHO, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7fd0, &args![a]).bool());
+        assert_eq!(calls(&e, STRING_OR_EMPTY), vec![vec![0x5018], vec![0x4018]]);
+        let value = (-3.0f64).to_bits();
+        assert_eq!(
+            calls(&e, CONSOLE_PRINT),
+            vec![vec![
+                MSG_FACTION_REACTION,
+                0x5018,
+                0x6018,
+                value as u32,
+                (value >> 32) as u32
+            ]]
+        );
+
+        // A missing faction: the result stays 0.0 (the echo still prints).
+        parse_gives(&mut e, true, &[0x4000, 0]);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7fd0, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert!(calls(&e, FACTION_GET_REACTION).is_empty());
+        assert_eq!(calls(&e, CONSOLE_PRINT).len(), 1);
+
+        // Parameters that do not parse: false, the result is 0.0.
+        e.mem.set_f64(a.result.addr(), 9.0);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_7fd0, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert!(calls(&e, CONSOLE_PRINT).is_empty());
+    }
+
+    /// A command parsing two factions and a value and calling
+    /// `callee(first, second, value)`.
+    fn check_faction_value_command(entry: u32, callee: u32) {
+        let mut e = engine();
+        accept(&mut e, &[callee]);
+        parse_gives(&mut e, true, &[0x4000, 0x5000, 7]);
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 5.0);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        assert_eq!(calls(&e, callee), vec![vec![0x4000, 0x5000, 7]]);
+        // Either faction missing: nothing is called.
+        for outs in [[0, 0x5000, 7], [0x4000, 0, 7]] {
+            parse_gives(&mut e, true, &outs);
+            start_log(&mut e);
+            assert!(e.call(entry, &args![a]).bool());
+            assert!(calls(&e, callee).is_empty());
+        }
+        // Parameters that do not parse: false, the result is not touched.
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 5.0);
+    }
+
+    #[test]
+    fn set_reaction_command_passes_both_factions_and_the_value() {
+        check_faction_value_command(0x005c_80a0, FACTION_SET_REACTION);
+    }
+
+    #[test]
+    fn modify_reaction_command_passes_both_factions_and_the_value() {
+        check_faction_value_command(0x005c_82c0, FACTION_MODIFY_REACTION);
+    }
+
+    /// A command parsing two factions and two flags; `if_clear` and `if_set`
+    /// are the codes for a clear and a set flag.
+    fn check_relation_codes(entry: u32, if_clear: u32, if_set: u32) {
+        let mut e = engine();
+        accept(&mut e, &[FACTION_SET_RELATION_CODE]);
+        let a = script(&mut e, 0x40);
+        for (first_flag, second_flag) in [(0u32, 0u32), (0, 9), (9, 0), (9, 9)] {
+            parse_gives(&mut e, true, &[0x4000, 0x5000, first_flag, second_flag]);
+            e.mem.set_f64(a.result.addr(), 5.0);
+            start_log(&mut e);
+            assert!(e.call(entry, &args![a]).bool());
+            assert_eq!(result_of(&e, a), 0.0);
+            let code = |flag: u32| if flag == 0 { if_clear } else { if_set };
+            assert_eq!(
+                calls(&e, FACTION_SET_RELATION_CODE),
+                vec![
+                    vec![0x4000, 0x5000, code(first_flag)],
+                    vec![0x5000, 0x4000, code(second_flag)]
+                ]
+            );
+        }
+        // Either faction missing: nothing is called.
+        for outs in [[0, 0x5000, 1, 1], [0x4000, 0, 1, 1]] {
+            parse_gives(&mut e, true, &outs);
+            start_log(&mut e);
+            assert!(e.call(entry, &args![a]).bool());
+            assert!(calls(&e, FACTION_SET_RELATION_CODE).is_empty());
+        }
+        // Parameters that do not parse: false, the result is not touched.
+        e.mem.set_f64(a.result.addr(), 5.0);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 5.0);
+    }
+
+    #[test]
+    fn relation_command_uses_codes_two_and_three() {
+        check_relation_codes(0x005c_8120, 2, 3);
+    }
+
+    #[test]
+    fn relation_command_uses_codes_one_and_zero() {
+        check_relation_codes(0x005c_81f0, 1, 0);
+    }
+
+    /// The reference of `005c8340`: its virtual slot `0x100` answers
+    /// `answer`, slot `0x48` records the call. The embedded extra data list
+    /// is `reference + 0x44`; the extra data `0x5e` object is `0xe000`, found
+    /// at once when `extra_present` and otherwise only after
+    /// [`ADD_EXTRA_DATA_0X5E`] ran.
+    fn extra_data_engine(answer: u32, extra_present: bool) -> (Engine, u32) {
+        let mut e = engine();
+        let reference = object_with(&mut e, &[(0x100, answer), (0x48, V_RECORD)]);
+        e.register(REFERENCE_EXTRA_LIST, |_, a| (a[0] + 0x44).into_ret());
+        e.register(REFERENCE_BASE_FORM, |_, _| 0x9000u32.into_ret());
+        accept(&mut e, &[EXTRA_DATA_0X5E_UPDATE]);
+        let present = std::rc::Rc::new(std::cell::Cell::new(extra_present));
+        let for_add = present.clone();
+        e.register_double(ADD_EXTRA_DATA_0X5E, move |_, _| {
+            for_add.set(true);
+            Ret::default()
+        });
+        e.register_double(GET_EXTRA_DATA_0X5E, move |_, _| {
+            (if present.get() { 0xe000u32 } else { 0 }).into_ret()
+        });
+        (e, reference)
+    }
+
+    #[test]
+    fn update_extra_data_command_uses_the_existing_extra_data() {
+        let (mut e, reference) = extra_data_engine(V_TRUE, true);
+        let a = script(&mut e, reference);
+        start_log(&mut e);
+        assert!(e.call(0x005c_8340, &args![a]).bool());
+        assert_eq!(calls(&e, V_RECORD), vec![vec![reference, 0x8000_0000]]);
+        assert!(calls(&e, ADD_EXTRA_DATA_0X5E).is_empty());
+        assert_eq!(calls(&e, GET_EXTRA_DATA_0X5E), vec![vec![reference + 0x44]]);
+        assert_eq!(
+            calls(&e, EXTRA_DATA_0X5E_UPDATE),
+            vec![vec![0xe000, 0x9000]]
+        );
+    }
+
+    #[test]
+    fn update_extra_data_command_adds_the_extra_data_when_missing() {
+        let (mut e, reference) = extra_data_engine(V_TRUE, false);
+        let a = script(&mut e, reference);
+        start_log(&mut e);
+        assert!(e.call(0x005c_8340, &args![a]).bool());
+        assert_eq!(calls(&e, ADD_EXTRA_DATA_0X5E), vec![vec![reference + 0x44]]);
+        assert_eq!(calls(&e, GET_EXTRA_DATA_0X5E).len(), 2);
+        assert_eq!(
+            calls(&e, EXTRA_DATA_0X5E_UPDATE),
+            vec![vec![0xe000, 0x9000]]
+        );
+    }
+
+    #[test]
+    fn update_extra_data_command_needs_a_reference_that_answers_true() {
+        let (mut e, reference) = extra_data_engine(V_FALSE, true);
+        let a = script(&mut e, reference);
+        start_log(&mut e);
+        assert!(e.call(0x005c_8340, &args![a]).bool());
+        assert!(calls(&e, V_RECORD).is_empty());
+        assert!(calls(&e, EXTRA_DATA_0X5E_UPDATE).is_empty());
+        // No reference at all.
+        let a = script(&mut e, 0);
+        assert!(e.call(0x005c_8340, &args![a]).bool());
+        assert!(calls(&e, EXTRA_DATA_0X5E_UPDATE).is_empty());
+    }
+
+    #[test]
+    fn xp_for_next_level_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_83d0, GET_XP_FOR_NEXT_LEVEL_CONDITION, None);
+    }
+
+    #[test]
+    fn global_value_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_83f0, GET_GLOBAL_VALUE_CONDITION);
+    }
+
     #[test]
     fn every_function_of_the_part_is_registered_once() {
         let mut addresses: Vec<u32> = funcs().iter().map(|f| f.0).collect();
-        assert_eq!(addresses.len(), 80);
+        assert_eq!(addresses.len(), 120);
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 80);
+        assert_eq!(addresses.len(), 120);
         assert!(addresses
             .iter()
             .all(|a| (0x005c_4240..0x005c_8450).contains(a)));
