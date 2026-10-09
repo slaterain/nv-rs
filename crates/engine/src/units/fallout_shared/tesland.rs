@@ -10,9 +10,15 @@
 //! normal and colour readers, the form-record `Load`, `LoadVertices` with
 //! `LoadVerticesIntoArrays` (the loader that reads the land chunks straight
 //! from the plugin file), `UnLoadVertices`, `MakeLandTriStrips` and the
-//! function that builds the four quadrant meshes (`005374f0`). The next
-//! session continues with the first `open` function after `005374f0`
-//! (`00537b10`).
+//! function that builds the four quadrant meshes (`005374f0`). The second
+//! session translated the next 40 by address, `00537b10` to `00539f40`: the
+//! small getters and constructors the mesh builder calls, the
+//! `NiAdditionalGeometryData` functions, the release of the loaded data
+//! (`00537eb0`), `Save` (`00538110`), the Havok MOPP code object and its
+//! base classes, the save-reference slots of the land's vtable, the data
+//! allocator (`00539500`) and the material builder (`00539960`). The next
+//! session continues with the first `open` function after `00539f40`
+//! (`00539f50`).
 //!
 //! ## Layout (PC build)
 //!
@@ -375,6 +381,152 @@ const LAND_TEXTURE_QUEUE: u32 = 0x0054_1540;
 /// The render task priority the loaders pass.
 const QUEUE_PRIORITY: u32 = 5;
 
+// ---- Second session: data and callees ---------------------------------------
+
+/// The word every save reference record starts with (the global at
+/// `01187020`), and the type descriptors of
+/// `TESChildCell`, `TESObjectREFR` and `TESObjectCELL`.
+const SAVE_REFERENCE_MARKER: u32 = 0x0118_7020;
+const RTTI_TES_CHILD_CELL: u32 = 0x0118_ac2c;
+const RTTI_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+const RTTI_TES_OBJECT_CELL: u32 = 0x0118_3fb4;
+/// The global word `00539f40` returns (the key under which the percent
+/// extra data is attached to a quadrant mesh).
+const EXTRA_DATA_KEY: u32 = 0x011f_94bc;
+/// `"MASTERFILE: Error saving land height Data for cell (%i, %i). Error
+/// correction attempted."` plus CR LF.
+const SAVE_HEIGHT_ERROR: u32 = 0x0102_e308;
+
+/// `NiAdditionalGeometryData` (0x2C bytes) and `BSPackedAdditionalGeometryData`
+/// (0x34 bytes): vtables, `GetRTTI` results, the `NiObject` constructor,
+/// the destructor body of the first, `NiFree(pointer, size)` and the
+/// constructors of the members at +0x1c.
+const ADDITIONAL_GEOMETRY_DATA_VTABLE: u32 = 0x0102_e274;
+const PACKED_ADDITIONAL_GEOMETRY_DATA_VTABLE: u32 = 0x0102_e1dc;
+const ADDITIONAL_GEOMETRY_DATA_RTTI: u32 = 0x011f_4a30;
+const PACKED_ADDITIONAL_GEOMETRY_DATA_RTTI: u32 = 0x011f_4aac;
+const NI_OBJECT_CONSTRUCT: u32 = 0x00a5_d3a0;
+const ADDITIONAL_GEOMETRY_DATA_DESTRUCT: u32 = 0x00a7_3080;
+const NI_FREE: u32 = 0x00aa_1460;
+/// Called with `this + 0x1c` and `(0, 1)` by the constructor; the member's
+/// other constructor (`this + 0x1c`) and the destructor `00540800` are
+/// later functions of this unit.
+const MEMBER_CONSTRUCT: u32 = 0x0054_0830;
+const MEMBER_CONSTRUCT_AGAIN: u32 = 0x005e_03d0;
+const MEMBER_DESTRUCT: u32 = 0x0054_0800;
+
+/// The Havok MOPP code object (0x30 bytes): the three vtables of its base
+/// classes (a base object, a referenced object, the MOPP code), the
+/// allocator it comes from, the constructors of its members at +0x10, +0x20
+/// and +0x2c, the call that sizes the array at +0x20, the call that
+/// finishes the member at +0x2c (with 2), the destructor of the array at
+/// +0x20, and the Havok memory router calls of the release function.
+const HAVOK_BASE_OBJECT_VTABLE: u32 = 0x0102_e388;
+const HAVOK_REFERENCED_OBJECT_VTABLE: u32 = 0x0102_e378;
+const HAVOK_MOPP_CODE_VTABLE: u32 = 0x0102_e368;
+const MOPP_ALLOCATE: u32 = 0x0056_d280;
+const MOPP_MEMBER_CONSTRUCT_A: u32 = 0x0062_40d0;
+const MOPP_MEMBER_CONSTRUCT_B: u32 = 0x0062_99a0;
+const MOPP_ARRAY_SET_SIZE: u32 = 0x0054_0750;
+const MOPP_MEMBER_FINISH: u32 = 0x0054_07b0;
+const MOPP_ARRAY_DESTRUCT: u32 = 0x0054_08e0;
+const HAVOK_MEMORY_ROUTER: u32 = 0x00c8_5750;
+/// `BaseProcess::GetCurrentProcedureIndex` (Xbox PDB name of the folded
+/// body at `0044edb0`): here it turns the router into the allocator object.
+const HAVOK_ALLOCATOR_OF_ROUTER: u32 = 0x0044_edb0;
+
+/// Calls of the release function of the loaded data (`00537eb0`): the
+/// entry `index` of the table at `011f91c8` (`00450b80`), a cell's
+/// physics object (`004543c0`), "the slot does not hold this value"
+/// (`0052aa80`, `(slot, value)`), the call that hands the rigid body to
+/// the physics object (`005380d0`), `ShadowSceneNode::RemoveObject`
+/// (Xbox PDB, `(manager, object)`) and `+0x18` of an object (`009611e0`).
+const TABLE_ENTRY: u32 = 0x0045_0b80;
+const CELL_PHYSICS_OBJECT: u32 = 0x0045_43c0;
+const SLOT_HOLDS_OTHER_THAN: u32 = 0x0052_aa80;
+const PHYSICS_OBJECT_ADD_BODY: u32 = 0x0053_80d0;
+const SHADOW_SCENE_NODE_REMOVE_OBJECT: u32 = 0x00b5_b1c0;
+const OBJECT_FIELD_0X18: u32 = 0x0096_11e0;
+/// Slots of the quadrant node (`0xf0`, called with 0) and of the border
+/// object's owner (`0xe8`).
+const NODE_DETACH_SLOT: u32 = 0xf0;
+const BORDER_OWNER_SLOT: u32 = 0xe8;
+
+/// The getters `00537b10` to `00537bd0` end in: `00460140`, `0041bb10`,
+/// `008256d0` and `004b5020`.
+const GETTER_00460140: u32 = 0x0046_0140;
+const GETTER_0041BB10: u32 = 0x0041_bb10;
+const LIST_CHECK: u32 = 0x0082_56d0;
+const BASE_CONSTRUCT_004B5020: u32 = 0x004b_5020;
+
+/// Form type and save helpers: the form's type byte (`00401170`), "the
+/// type is one of the reference types" (`005548a0`),
+/// `TESObjectREFR::GetRefPersists` (Xbox PDB), "the id belongs to the
+/// cell's file" (`00485be0`, `(cell, id)`), the cell's reference id of a
+/// save (`00544210`), and a form method of `tesform.cpp` that takes a flag
+/// byte (`00484730`).
+const FORM_TYPE: u32 = 0x0040_1170;
+const TYPE_IS_REFERENCE_KIND: u32 = 0x0055_48a0;
+const GET_REF_PERSISTS: u32 = 0x0056_53d0;
+const FORM_ID_IN_CELL_FILE: u32 = 0x0048_5be0;
+const CELL_SAVE_ID: u32 = 0x0054_4210;
+const FORM_FLAG_SETTER: u32 = 0x0048_4730;
+/// Slots of the cell (`0x38` and `0x3c` of its vtable, `0x110`) and of the
+/// parent-cell part of the land (`0`).
+const CELL_SLOT_REFERENCE_OWNED: u32 = 0x38;
+const CELL_SLOT_REFERENCE_CHECK: u32 = 0x3c;
+const CELL_SLOT_SAVE_CHECK: u32 = 0x110;
+const CHILD_CELL_PARENT_SLOT: u32 = 0;
+/// Slot `0xc8` of the parent cell, called with 1 by `fn_00539010`.
+const CELL_SLOT_MARK: u32 = 0xc8;
+
+/// The save writer: `TESForm::StartForm`, `TESForm::CloseForm`,
+/// `TESForm::CompressSaveBuffer` (Xbox PDB), `TESForm::__AddChunkData(tag,
+/// data, size)`, `TESForm::AddChunkArray(tag, data, size)`, the
+/// big-endian flag, the load-if-needed call at the start of `Save`, the
+/// opacity of layer `l` at vertex `i` of quadrant `q` (`(this, q, i, l)`,
+/// a float), `abs`, `_ftol2` (the double is in ST0) and the form id getter.
+const FORM_START: u32 = 0x0048_55a0;
+const FORM_CLOSE: u32 = 0x0048_5680;
+const FORM_COMPRESS_SAVE_BUFFER: u32 = 0x0048_3d70;
+const FORM_ADD_CHUNK_DATA: u32 = 0x0048_5990;
+const FORM_ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+const IS_BIG_ENDIAN: u32 = 0x0040_1500;
+const LAND_LOAD_FOR_SAVE: u32 = 0x0053_db20;
+const LAND_LAYER_OPACITY: u32 = 0x0053_a830;
+const INT_ABS: u32 = 0x00ec_7d40;
+const FTOL2: u32 = 0x00ec_62c0;
+
+/// The constructor of `LoadedLandData` (`this`), and the shader property
+/// calls of the material builder (`fn_00539960`): the property
+/// (`BSShaderPPLightingProperty`, 0x104 bytes) constructor, the setter of
+/// the word at +0x58, the texture-set setter `(this, slot, set)`, the
+/// slot flags setter `(this, 10 words)`, `BGSTextureSet::GetAsShaderTextureSet`
+/// (Xbox PDB), the flag byte of a land texture (`+0x1f`), the first child
+/// of a node (`0045bc00`, `(this, 0)`), `BSShaderManager::CreateTangentSpaceSimple`
+/// and `BSShaderManager::PrepareObject` (Xbox PDB), `NiObjectNET::AddExtraData`
+/// (Xbox PDB, `(this, key, data)`), the percent extra data constructor
+/// (`00539f50`, `(this, 0x2420, first block)`) and the geometry data's
+/// setter `00a67260`.
+const LOADED_LAND_DATA_CONSTRUCT: u32 = 0x0054_05a0;
+const SHADER_PROPERTY_CONSTRUCT: u32 = 0x00b6_6f50;
+const SHADER_PROPERTY_SET_WORD_0X58: u32 = 0x005a_8060;
+const SHADER_PROPERTY_SET_TEXTURE_SET: u32 = 0x00b6_8660;
+const SHADER_PROPERTY_SET_FLAGS: u32 = 0x00b6_6640;
+const TEXTURE_SET_AS_SHADER_SET: u32 = 0x0059_2cf0;
+const LAND_TEXTURE_FLAG_BYTE: u32 = 0x0054_1590;
+const NODE_FIRST_GEOMETRY: u32 = 0x0045_bc00;
+const CREATE_TANGENT_SPACE_SIMPLE: u32 = 0x00b5_4b60;
+const PREPARE_OBJECT: u32 = 0x00b5_7e30;
+const OBJECT_ADD_EXTRA_DATA: u32 = 0x00a5_bc40;
+const PERCENT_EXTRA_DATA_CONSTRUCT: u32 = 0x0053_9f50;
+const GEOMETRY_DATA_SET_SHARED: u32 = 0x00a6_7260;
+/// Allocation size of the extra data and of the property, and the slot of
+/// the property's tangent space query (`0xd4`).
+const EXTRA_DATA_SIZE: u32 = 0x14;
+const SHADER_PROPERTY_SIZE: u32 = 0x104;
+const PROPERTY_SLOT_TANGENT_SPACE: u32 = 0xd4;
+
 // ---- Layouts ---------------------------------------------------------------
 
 layout! {
@@ -382,7 +534,8 @@ layout! {
     /// the `TESChildCell` vtable at +0x18, then the fields below.
     pub struct TESObjectLAND: 0x2c {
         /// `Data` (Xbox PDB, `OBJ_LAND`): the land's flags. Bit 0x01: height
-        /// and normal data present; 0x02: vertex colours; 0x04: textures;
+        /// and normal data present; 0x02: vertex colours; 0x04: textures; 0x08: the
+        /// vertex data is loaded;
         /// 0x10: set by the editor; 0x400: the data is read from the world
         /// space's land file; 0x800: the Havok MOPP code was built.
         0x1C Data: u32,
@@ -464,6 +617,7 @@ pub(crate) const CHUNK_VERTEX_TEXTURE: u32 = tag(b"VTXT");
 pub(crate) const FLAG_HEIGHTS: u32 = 0x1;
 pub(crate) const FLAG_COLORS: u32 = 0x2;
 pub(crate) const FLAG_TEXTURES: u32 = 0x4;
+pub(crate) const FLAG_LOADED: u32 = 0x8;
 pub(crate) const FLAG_EDITED: u32 = 0x10;
 pub(crate) const FLAG_FROM_WORLD_SPACE: u32 = 0x400;
 pub(crate) const FLAG_MOPP_BUILT: u32 = 0x800;
@@ -2547,6 +2701,1129 @@ pub fn fn_005374f0(e: &mut Engine, this: Ptr<TESObjectLAND>) {
     }
 }
 
+// ---- Second session: small functions, Havok MOPP code, save ---------------
+
+/// `FISTP` with the truncating rounding mode the compiler's cast sets: the
+/// integer of `value`, or `i32::MIN` (the "integer indefinite" value) when
+/// it does not fit.
+fn x87_truncate(value: f64) -> i32 {
+    if value.is_nan() || value >= 2_147_483_648.0 || value <= -2_147_483_649.0 {
+        i32::MIN
+    } else {
+        value as i32
+    }
+}
+
+/// Whether the save writer targets a big-endian file (`00401500`).
+fn is_big_endian(e: &mut Engine) -> bool {
+    e.call(IS_BIG_ENDIAN, &args![]).bool()
+}
+
+// Translated from 00537b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The object `00460140` gives for the smart pointer at `this + 0xb8` (the
+/// strips' bound, see `fn_005374f0`).
+pub fn fn_00537b10(e: &mut Engine, this: Ptr) -> Ptr {
+    let held = e.call(SMART_POINTER_GET, &args![this.byte_add(0xb8)]).u32();
+    e.call(GETTER_00460140, &args![held]).ptr()
+}
+
+// Translated from 00537b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The result of `0041bb10` on the member at `this + 0x28` (a cell's MOPP
+/// holder, see `fn_005374f0`).
+pub fn fn_00537b30(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(GETTER_0041BB10, &args![this.byte_add(0x28)]).ptr()
+}
+
+// Translated from 00537b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `008256d0` returns 0 for the member at `this + 0xac` of a cell
+/// (the check on the cell's reference list, see `fn_005374f0`).
+pub fn fn_00537b50(e: &mut Engine, this: Ptr) -> bool {
+    !e.call(LIST_CHECK, &args![this.byte_add(0xac)]).bool()
+}
+
+// Translated from 00537b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the local `fn_005374f0` keeps: runs `00537bb0`, then
+/// sets +8 to 0 and +0xc to 1.0. Returns `this`.
+pub fn fn_00537b80(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00537bb0(e, this);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_f32(this.addr() + 0xc, 1.0);
+    this
+}
+
+// Translated from 00537bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the base constructor `004b5020` and clears +4. Returns `this`.
+pub fn fn_00537bb0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(BASE_CONSTRUCT_004B5020, &args![this]);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00537bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The value of the smart pointer at `this + 0x78` (the render task of a
+/// scheduler, see `fn_005374f0`).
+pub fn fn_00537bd0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SMART_POINTER_GET, &args![this.byte_add(0x78)]).ptr()
+}
+
+// Translated from 00537bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::NiAdditionalGeometryData` (Xbox PDB): the
+/// `NiObject` constructor, the vtable, the member at +0x1c (constructed
+/// with `(0, 1)` and again with `005e03d0`), the count `value` at +0xc and
+/// zeroes at +8, +0x10, +0x14 and +0x18. Returns `this`. (The unwinding
+/// frame is not translated.)
+pub fn ni_additional_geometry_data_ni_additional_geometry_data(
+    e: &mut Engine,
+    this: Ptr,
+    value: u16,
+) -> Ptr {
+    e.call(NI_OBJECT_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), ADDITIONAL_GEOMETRY_DATA_VTABLE);
+    e.call(MEMBER_CONSTRUCT, &args![this.byte_add(0x1c), 0u32, 1u32]);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_u16(this.addr() + 0xc, value);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    e.mem.set_u32(this.addr() + 0x14, 0);
+    e.call(MEMBER_CONSTRUCT_AGAIN, &args![this.byte_add(0x1c)]);
+    e.mem.set_u32(this.addr() + 0x18, 0);
+    this
+}
+
+// Translated from 00537ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::GetRTTI` (Xbox PDB): the class's `NiRTTI`.
+pub fn ni_additional_geometry_data_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(ADDITIONAL_GEOMETRY_DATA_RTTI)
+}
+
+// Translated from 00537cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiAdditionalGeometryData::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor body `00a73080` and frees the 0x2C bytes when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn ni_additional_geometry_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(ADDITIONAL_GEOMETRY_DATA_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_FREE, &args![this, 0x2cu32]);
+    }
+    this
+}
+
+// Translated from 00537ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `00540800` on `this` (the decompiler names it after a library
+/// destructor; it is a function of this unit that a later session
+/// translates).
+pub fn fn_00537ce0(e: &mut Engine, this: Ptr) {
+    e.call(MEMBER_DESTRUCT, &args![this]);
+}
+
+// Translated from 00537d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPackedAdditionalGeometryData::GetRTTI` (Xbox PDB): the class's
+/// `NiRTTI`.
+pub fn bs_packed_additional_geometry_data_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(PACKED_ADDITIONAL_GEOMETRY_DATA_RTTI)
+}
+
+// Translated from 00537d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSPackedAdditionalGeometryData::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `00537d40` and frees the 0x34 bytes when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bs_packed_additional_geometry_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00537d40(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE, &args![this, 0x34u32]);
+    }
+    this
+}
+
+// Translated from 00537d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `BSPackedAdditionalGeometryData` (by its caller's Xbox PDB
+/// name): stores its vtable and runs the base destructor body `00a73080`.
+pub fn fn_00537d40(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), PACKED_ADDITIONAL_GEOMETRY_DATA_VTABLE);
+    e.call(ADDITIONAL_GEOMETRY_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00537eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases what the loaded data of a land holds in the scene and physics:
+/// clears the queued textures, hands the rigid body back to the cell's
+/// physics object (when there is one that holds it) and releases it, then
+/// for each quadrant with a mesh drops the vertex, colour and normal
+/// arrays, removes the node from the shadow scene node and detaches it
+/// (slot `0xf0`), frees the mesh array, and finally lets the border
+/// object's owner (slot `0xe8`) release the border and clears it.
+pub fn fn_00537eb0(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    e.call(
+        QUEUED_FILE_POINTER_SET,
+        &args![this.byte_add(TESObjectLAND::spQueuedTextures.off), 0u32],
+    );
+    let data = loaded_data(e, this);
+    if data.is_null() {
+        return;
+    }
+    let meshes = e.get(data, LoadedLandData::ppMesh);
+    if !meshes.is_null() {
+        let cell = e.get(this, TESObjectLAND::pParentCell);
+        let physics = if cell.is_null() {
+            0
+        } else {
+            e.call(CELL_PHYSICS_OBJECT, &args![cell]).u32()
+        };
+        let body_slot = data.byte_add(LoadedLandData::spLandRB.off);
+        if physics != 0
+            && e.call(SLOT_HOLDS_OTHER_THAN, &args![body_slot, 0u32])
+                .bool()
+        {
+            let body = e.call(SMART_POINTER_GET, &args![body_slot]).u32();
+            e.call(PHYSICS_OBJECT_ADD_BODY, &args![physics, body]);
+        }
+        e.call(TEXTURING_PROPERTY_SET, &args![body_slot, 0u32]);
+        for quadrant in 0..QUADRANTS {
+            let node = element(e, meshes, quadrant);
+            if node != 0 {
+                let vertices = e.get(data, LoadedLandData::ppVertices);
+                e.mem.set_u32(vertices.addr() + 4 * quadrant, 0);
+                let colors = e.get(data, LoadedLandData::ppColorsA);
+                e.mem.set_u32(colors.addr() + 4 * quadrant, 0);
+                let normals = e.get(data, LoadedLandData::ppNormals);
+                let block = element(e, normals, quadrant);
+                e.call(DEALLOCATE, &args![block]);
+                e.mem.set_u32(normals.addr() + 4 * quadrant, 0);
+                let manager = e.call(TABLE_ENTRY, &args![0u32]).u32();
+                e.call(SHADOW_SCENE_NODE_REMOVE_OBJECT, &args![manager, node]);
+                e.vcall(node, NODE_DETACH_SLOT, &args![0u32]);
+            }
+            e.mem.set_u32(meshes.addr() + 4 * quadrant, 0);
+        }
+        e.call(DEALLOCATE, &args![meshes]);
+        e.set(data, LoadedLandData::ppMesh, Ptr::NULL);
+    }
+    let border_slot = data.byte_add(LoadedLandData::spBorder.off);
+    if e.call(SMART_POINTER_GET, &args![border_slot]).u32() != 0 {
+        let border = e.call(SMART_POINTER_GET, &args![border_slot]).u32();
+        let owner = e.call(OBJECT_FIELD_0X18, &args![border]).u32();
+        if owner != 0 {
+            let border = e.call(SMART_POINTER_GET, &args![border_slot]).u32();
+            e.vcall(owner, BORDER_OWNER_SLOT, &args![border]);
+        }
+        e.call(TEXTURING_PROPERTY_SET, &args![border_slot, 0u32]);
+    }
+}
+
+// Translated from 00538110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectLAND::Save` (Xbox PDB): writes the land record. Needs one of
+/// the data flags 1, 2 or 4 and either the "loaded" bit (8) or all of the
+/// vertex, normal and colour arrays; loads the data first when the flag
+/// test `fn_005341e0` fails. Opens the form and writes `DATA` (the flags).
+/// With flag 1 it writes `VNML` (the normals, normalized in place, as three
+/// signed bytes of a 33 x 33 grid) and `VHGT` (the base height as a float,
+/// then the 33 x 33 height steps as signed bytes, clamped to +-127;
+/// clamping is reported in the log and the later heights follow the
+/// clamped steps). With flag 2 it writes `VCLR` (the colours as bytes).
+/// With flag 4 it writes, per quadrant, `BTXT` (the quadrant's own base
+/// texture) and per layer `ATXT` (layer texture, 0 for the default) and
+/// `VTXT` (the position and opacity of each vertex with a non-zero
+/// opacity). Each quadrant fills the 17 x 17 block that starts at
+/// `(q / 2) * 16 * 33 + (q % 2) * 16` of the grid and the shared edges are
+/// written once. Records are byte swapped around the write when the writer
+/// is big-endian. Ends with `CloseForm` and `CompressSaveBuffer`.
+///
+/// The padding bytes the game leaves uninitialized on its stack (the 3
+/// bytes after the 33 x 33 steps of `VHGT`, the byte at +5 of a `BTXT` or
+/// `ATXT` record and the 2 bytes at +2 of a `VTXT` entry) are written as 0.
+pub fn tes_object_land_save(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    if !fn_00539460(e, this) {
+        return;
+    }
+    let data = loaded_data(e, this);
+    let has_arrays = !data.is_null()
+        && !e.get(data, LoadedLandData::ppVertices).is_null()
+        && !e.get(data, LoadedLandData::ppNormals).is_null()
+        && !e.get(data, LoadedLandData::ppColorsA).is_null();
+    if e.get(this, TESObjectLAND::Data) & FLAG_LOADED == 0 && !has_arrays {
+        return;
+    }
+    if !fn_005341e0(e, this) {
+        e.call(LAND_LOAD_FOR_SAVE, &args![this]);
+    }
+    e.call(FORM_START, &args![this]);
+    let flags_word = this.byte_add(TESObjectLAND::Data.off);
+    if is_big_endian(e) {
+        e.call(SWAP_WORD, &args![flags_word]);
+    }
+    e.call(FORM_ADD_CHUNK_DATA, &args![CHUNK_DATA, flags_word, 4u32]);
+    if is_big_endian(e) {
+        e.call(SWAP_WORD, &args![flags_word]);
+    }
+    if e.get(this, TESObjectLAND::Data) & FLAG_HEIGHTS != 0 {
+        save_heights_and_normals(e, this);
+    }
+    if e.get(this, TESObjectLAND::Data) & FLAG_COLORS != 0 {
+        save_colors(e, this);
+    }
+    if e.get(this, TESObjectLAND::Data) & FLAG_TEXTURES != 0 {
+        save_textures(e, this);
+    }
+    e.call(FORM_CLOSE, &args![this]);
+    e.call(FORM_COMPRESS_SAVE_BUFFER, &args![]);
+}
+
+/// The cells of the 33 x 33 grid that quadrant `quadrant` writes: for each
+/// of its 17 x 17 vertices `(vertex index, grid index)`, without the shared
+/// edge vertices the neighbouring quadrant writes (the last row of the
+/// upper quadrants and the last column of the left ones). The column test
+/// runs after the row test and undoes it, so quadrant 1 also keeps its
+/// corner vertex (last row, last column), which quadrant 3 writes again.
+fn quadrant_grid_cells(quadrant: i32) -> Vec<(u32, usize)> {
+    let mut cells = Vec::new();
+    for vertex in 0..QUADRANT_VERTICES as i32 {
+        let row = vertex / 0x11;
+        let column = vertex % 0x11;
+        let grid = row * 0x21 + (quadrant / 2) * 16 * 0x21 + (quadrant % 2) * 16 + column;
+        let mut skip = false;
+        if row == 0x10 {
+            skip = true;
+            if quadrant / 2 == 1 {
+                skip = false;
+            }
+        }
+        if column == 0x10 {
+            skip = true;
+            if quadrant % 2 == 1 {
+                skip = false;
+            }
+        }
+        if !skip {
+            cells.push((vertex as u32, grid as usize));
+        }
+    }
+    cells
+}
+
+/// The `VNML` and `VHGT` chunks of `Save`.
+fn save_heights_and_normals(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    let data = loaded_data(e, this);
+    let vertices = e.get(data, LoadedLandData::ppVertices);
+    let normals = e.get(data, LoadedLandData::ppNormals);
+    let mut heights = vec![0i32; CHUNK_VERTICES];
+    let mut normal_bytes = vec![0u8; CHUNK_VERTICES * 3];
+    for quadrant in 0..QUADRANTS as i32 {
+        for (vertex, grid) in quadrant_grid_cells(quadrant) {
+            let position = element(e, vertices, quadrant as u32) + vertex * 12;
+            let height = e.mem.f32(position + 8);
+            heights[grid] = e.call(FLOAT_TO_INT, &args![height]).i32() >> 3;
+            let normal = element(e, normals, quadrant as u32) + vertex * 12;
+            e.call(NI_POINT3_NORMALIZE, &args![normal]);
+            for axis in 0..3 {
+                let scaled = e.mem.f32(normal + 4 * axis) as f64 * e.global::<f64>(F64_127);
+                normal_bytes[grid * 3 + axis as usize] = e.call(FTOL2, &args![scaled]).u32() as u8;
+            }
+        }
+    }
+    e.with_stack(0xcc3, |e, buffer| {
+        e.mem.write(buffer.addr(), &normal_bytes);
+        e.call(
+            FORM_ADD_CHUNK_ARRAY,
+            &args![CHUNK_NORMALS, buffer, 0xcc3u32],
+        );
+    });
+    let mut previous = heights[0];
+    let base = heights[0] as f32;
+    let mut clamped = false;
+    let mut steps = vec![0u8; CHUNK_VERTICES];
+    for index in 0..CHUNK_VERTICES {
+        let difference = heights[index].wrapping_sub(previous);
+        let magnitude = e.call(INT_ABS, &args![difference]).i32();
+        if magnitude >= 0x80 {
+            clamped = true;
+            steps[index] = if heights[index] > previous {
+                0x7f
+            } else {
+                0x81
+            };
+        } else {
+            steps[index] = difference as u8;
+        }
+        if (index + 1) % 0x21 == 0 {
+            previous = heights[index - 32];
+        } else if !clamped {
+            previous = heights[index];
+        } else {
+            previous = (steps[index] as i8 as i32).wrapping_add(previous);
+        }
+    }
+    e.with_stack(0x448, |e, chunk| {
+        e.mem.set_f32(chunk.addr(), base);
+        e.mem.write(chunk.addr() + 4, &steps);
+        if is_big_endian(e) {
+            e.call(SWAP_WORD, &args![chunk]);
+        }
+        e.call(FORM_ADD_CHUNK_DATA, &args![CHUNK_HEIGHTS, chunk, 0x448u32]);
+        if is_big_endian(e) {
+            e.call(SWAP_WORD, &args![chunk]);
+        }
+    });
+    if clamped {
+        let (x, y) = cell_coordinates(e, this);
+        e.call(LOG_MESSAGE, &args![SAVE_HEIGHT_ERROR, x, y]);
+    }
+}
+
+/// The `VCLR` chunk of `Save`: the red, green and blue of each vertex as
+/// bytes (the float times 255, truncated).
+fn save_colors(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    let data = loaded_data(e, this);
+    let colors = e.get(data, LoadedLandData::ppColorsA);
+    let mut bytes = vec![0u8; CHUNK_VERTICES * 3];
+    for quadrant in 0..QUADRANTS as i32 {
+        for (vertex, grid) in quadrant_grid_cells(quadrant) {
+            let color = element(e, colors, quadrant as u32) + vertex * 16;
+            for axis in 0..3 {
+                let scaled = e.mem.f32(color + 4 * axis) as f64 * e.global::<f64>(F64_255);
+                bytes[grid * 3 + axis as usize] = x87_truncate(scaled) as u8;
+            }
+        }
+    }
+    e.with_stack(0xcc3, |e, buffer| {
+        e.mem.write(buffer.addr(), &bytes);
+        e.call(FORM_ADD_CHUNK_ARRAY, &args![CHUNK_COLORS, buffer, 0xcc3u32]);
+    });
+}
+
+/// Writes one 8-byte `BTXT` or `ATXT` record (form id, quadrant, layer),
+/// byte swapped around the write when the writer is big-endian.
+fn save_texture_record(e: &mut Engine, tag: u32, form_id: u32, quadrant: u32, layer: u16) {
+    e.with_stack(8, |e, record| {
+        e.mem.set_u32(record.addr(), form_id);
+        e.mem.set_u8(record.addr() + 4, quadrant as u8);
+        e.mem.set_u16(record.addr() + 6, layer);
+        if is_big_endian(e) {
+            fn_00535a60(e, record);
+        }
+        e.call(FORM_ADD_CHUNK_DATA, &args![tag, record, 8u32]);
+        if is_big_endian(e) {
+            fn_00535a60(e, record);
+        }
+    });
+}
+
+/// The word at `field + 4 * index` of the land's loaded data.
+fn data_slot(e: &mut Engine, this: Ptr<TESObjectLAND>, field: u32, index: u32) -> u32 {
+    let data = loaded_data(e, this);
+    e.mem.u32(data.addr() + field + 4 * index)
+}
+
+/// The `BTXT`, `ATXT` and `VTXT` chunks of `Save`.
+fn save_textures(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    e.call(LAND_FLUSH_WARNINGS, &args![this]);
+    for quadrant in 0..QUADRANTS {
+        let texture = data_slot(e, this, LoadedLandData::pDefQuadTexture.off, quadrant);
+        if texture != 0 {
+            let default_texture = fn_00535ae0(e).addr();
+            if texture != default_texture {
+                let form_id = e.call(FORM_ID, &args![texture]).u32();
+                save_texture_record(e, CHUNK_BASE_TEXTURE, form_id, quadrant, 0xffff);
+            }
+        }
+        let layers = data_slot(e, this, LoadedLandData::pQuadTextureArray.off, quadrant);
+        if layers == 0 {
+            continue;
+        }
+        for layer in 0..6u32 {
+            let texture = e.mem.u32(layers + 4 * layer);
+            if texture == 0 {
+                continue;
+            }
+            let default_texture = fn_00535ae0(e).addr();
+            let form_id = if texture == default_texture {
+                0
+            } else {
+                e.call(FORM_ID, &args![texture]).u32()
+            };
+            save_texture_record(e, CHUNK_ADDITIONAL_TEXTURE, form_id, quadrant, layer as u16);
+            let mut entries: Vec<(u16, f32)> = Vec::new();
+            for vertex in 0..QUADRANT_VERTICES {
+                if data_slot(e, this, LoadedLandData::ppPercentArrays.off, quadrant) != 0 {
+                    let opacity = e
+                        .call(LAND_LAYER_OPACITY, &args![this, quadrant, vertex, layer])
+                        .f32();
+                    if opacity > 0.0 {
+                        entries.push((vertex as u16, opacity));
+                    }
+                }
+            }
+            if entries.is_empty() {
+                continue;
+            }
+            let count = entries.len() as u32;
+            e.with_stack(count * 8, |e, buffer| {
+                for (i, (position, opacity)) in entries.iter().enumerate() {
+                    let entry = buffer.addr() + 8 * i as u32;
+                    e.mem.set_u16(entry, *position);
+                    e.mem.set_f32(entry + 4, *opacity);
+                }
+                if is_big_endian(e) {
+                    for i in 0..count {
+                        fn_00535aa0(e, buffer.byte_add(8 * i));
+                    }
+                }
+                e.call(
+                    FORM_ADD_CHUNK_DATA,
+                    &args![CHUNK_VERTEX_TEXTURE, buffer, count * 8],
+                );
+                if is_big_endian(e) {
+                    for i in 0..count {
+                        fn_00535aa0(e, buffer.byte_add(8 * i));
+                    }
+                }
+            });
+        }
+    }
+}
+
+// Translated from 00538c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the Havok MOPP code object of a land from `size` bytes at `data`
+/// and stores it at `out`: allocates the 0x30-byte object and constructs it
+/// (`fn_00538d70`), copies the first 0x10 bytes to +0x10 and the rest into
+/// the array at +0x20 (sized first). Needs `data`, `size` and `out`, and
+/// more than 0x10 bytes; otherwise (or when nothing is left for the array)
+/// the object is destroyed through its vtable and `out` is cleared.
+/// Returns whether the object was built. `_unused_0` is the unused `this`.
+pub fn fn_00538c00(e: &mut Engine, _unused_0: Ptr, data: u32, size: u32, out: Ptr) -> bool {
+    let mut built = false;
+    if data != 0 && size != 0 && !out.is_null() {
+        let memory = e.call(MOPP_ALLOCATE, &args![0x30u32]).u32();
+        let object = if memory == 0 {
+            0
+        } else {
+            fn_00538d70(e, Ptr::new(memory)).addr()
+        };
+        e.mem.set_u32(out.addr(), object);
+        if size > 0x10 {
+            e.call(MEMORY_COPY, &args![object + 0x10, data, 0x10u32]);
+            let remaining = size - 0x10;
+            if remaining != 0 {
+                e.call(MOPP_ARRAY_SET_SIZE, &args![object + 0x20, remaining]);
+                let buffer = e.call(SMART_POINTER_GET, &args![object + 0x20]).u32();
+                e.call(MEMORY_COPY, &args![buffer, data + 0x10, remaining]);
+                built = true;
+            }
+        }
+        if !built {
+            if object != 0 {
+                e.vcall(object, 0, &args![1u32]);
+            }
+            e.mem.set_u32(out.addr(), 0);
+        }
+    }
+    built
+}
+
+// Translated from 00538d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the Havok MOPP code object (the class whose vtable is
+/// `0102e368`; `hkpMoppCode` by the Xbox PDB name of its deleting
+/// destructor `00538f80`): the base constructor, the vtable, the members at
+/// +0x10, +0x20 and +0x2c, the four words at +0x10 cleared and the member at
+/// +0x2c finished with 2. Returns `this`. (The unwinding frame is not
+/// translated.)
+pub fn fn_00538d70(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00538ef0(e, this);
+    e.mem.set_u32(this.addr(), HAVOK_MOPP_CODE_VTABLE);
+    e.call(MOPP_MEMBER_CONSTRUCT_A, &args![this.byte_add(0x10)]);
+    e.call(MOPP_MEMBER_CONSTRUCT_B, &args![this.byte_add(0x20)]);
+    // `006815c0` is also the `NiPoint3` default constructor of the vector
+    // constructor iterator (identical code folded).
+    e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![this.byte_add(0x2c)]);
+    fn_00538f40(e, this.byte_add(0x10));
+    e.call(MOPP_MEMBER_FINISH, &args![this.byte_add(0x2c), 2u32]);
+    this
+}
+
+// Translated from 00538e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the referenced-object base: stores its vtable and
+/// runs `fn_00538e30`.
+pub fn fn_00538e10(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), HAVOK_REFERENCED_OBJECT_VTABLE);
+    fn_00538e30(e, this);
+}
+
+// Translated from 00538e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the Havok base object: stores its vtable.
+pub fn fn_00538e30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), HAVOK_BASE_OBJECT_VTABLE);
+}
+
+// Translated from 00538e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkBaseObject::_scalar_deleting_destructor_` (Xbox PDB): the destructor
+/// body `fn_00538e30`, then the allocator's free when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn hk_base_object_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00538e30(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00538e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the referenced-object base (vtable
+/// `0102e378`): the destructor body `fn_00538e10`, then the Havok free
+/// `fn_00538eb0` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00538e80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00538e10(e, this);
+    if flags & 1 != 0 {
+        fn_00538eb0(e, this);
+    }
+    this
+}
+
+// Translated from 00538eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives the object back to the Havok allocator: asks the allocator object
+/// (`00c85750` through `0044edb0`) to free `object`, whose size is the
+/// 16-bit word at +4 (slot 8 of the allocator's vtable, `(object, size)`).
+pub fn fn_00538eb0(e: &mut Engine, object: Ptr) {
+    let router = e.call(HAVOK_MEMORY_ROUTER, &args![]).u32();
+    let allocator = e.call(HAVOK_ALLOCATOR_OF_ROUTER, &args![router]).u32();
+    let size = e.mem.u16(object.addr() + 4) as u32;
+    e.vcall(allocator, 8, &args![object, size]);
+}
+
+// Translated from 00538ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the referenced-object base: the Havok base constructor
+/// `fn_00538f20`, the vtable `0102e378` and the 16-bit word at +6 (the
+/// reference count) set to 1. Returns `this`.
+pub fn fn_00538ef0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00538f20(e, this);
+    e.mem.set_u32(this.addr(), HAVOK_REFERENCED_OBJECT_VTABLE);
+    e.mem.set_u16(this.addr() + 6, 1);
+    this
+}
+
+// Translated from 00538f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the Havok base object: stores its vtable. Returns `this`.
+pub fn fn_00538f20(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), HAVOK_BASE_OBJECT_VTABLE);
+    this
+}
+
+// Translated from 00538f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the 16 bytes at `this` (the code stores a zeroed `XMM` register).
+pub fn fn_00538f40(e: &mut Engine, this: Ptr) {
+    for word in 0..4 {
+        e.mem.set_u32(this.addr() + 4 * word, 0);
+    }
+}
+
+// Translated from 00538f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `hkpMoppCode::_scalar_deleting_destructor_` (Xbox PDB): the destructor
+/// `fn_00538fb0`, then the Havok free `fn_00538eb0` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn hkp_mopp_code_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00538fb0(e, this);
+    if flags & 1 != 0 {
+        fn_00538eb0(e, this);
+    }
+    this
+}
+
+// Translated from 00538fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the Havok MOPP code object: stores its vtable `0102e368`,
+/// destroys the array at +0x20 and runs `fn_00538e10`. (The decompiler
+/// names it after a library destructor; the unwinding frame is not
+/// translated.)
+pub fn fn_00538fb0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), HAVOK_MOPP_CODE_VTABLE);
+    e.call(MOPP_ARRAY_DESTRUCT, &args![this.byte_add(0x20)]);
+    fn_00538e10(e, this);
+}
+
+// Translated from 00539010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the form method `00484730` with `flag`, and when `flag` is set and
+/// the land has a parent cell, calls slot `0xc8` of that cell's vtable
+/// with 1.
+pub fn fn_00539010(e: &mut Engine, this: Ptr<TESObjectLAND>, flag: u8) {
+    e.call(FORM_FLAG_SETTER, &args![this, flag]);
+    let cell = e.get(this, TESObjectLAND::pParentCell);
+    if flag != 0 && !cell.is_null() {
+        e.vcall(cell.addr(), CELL_SLOT_MARK, &args![1u32]);
+    }
+}
+
+// Translated from 00539060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot `0x3c` of the land's vtable: whether the land saves `form`. For
+/// the reference kinds `005548a0` accepts, the form is cast to a
+/// `TESChildCell`; when its parent cell (slot 0) is the land's own, the
+/// answer is 1 for the types `0x3a` to `0x40` and `0x69` when the form is a
+/// `TESObjectREFR` that does not persist (`GetRefPersists`), 1 for type
+/// `0x43` and 0 otherwise; when it differs, slot `0x3c` of the land's
+/// parent cell decides, asked about that other cell. For other types slot
+/// `0x3c` of the parent cell decides, asked about `form`.
+pub fn fn_00539060(e: &mut Engine, this: Ptr<TESObjectLAND>, form: u32) -> u8 {
+    let child_cell = this.byte_add(CHILD_CELL_OFFSET).addr();
+    let kind = e.call(FORM_TYPE, &args![form]).u32();
+    if !e.call(TYPE_IS_REFERENCE_KIND, &args![kind]).bool() {
+        let cell = e.vcall(child_cell, CHILD_CELL_PARENT_SLOT, &args![]).u32();
+        return e.vcall(cell, CELL_SLOT_REFERENCE_CHECK, &args![form]).u8();
+    }
+    let owner = form_cast(e, form, RTTI_TES_CHILD_CELL);
+    let other_cell = e.vcall(owner, 0, &args![]).u32();
+    let own_cell = e.vcall(child_cell, CHILD_CELL_PARENT_SLOT, &args![]).u32();
+    if other_cell != own_cell {
+        let cell = e.vcall(child_cell, CHILD_CELL_PARENT_SLOT, &args![]).u32();
+        return e
+            .vcall(cell, CELL_SLOT_REFERENCE_CHECK, &args![other_cell])
+            .u8();
+    }
+    let kind = e.call(FORM_TYPE, &args![form]).u32();
+    match kind {
+        0x3a..=0x40 | 0x69 => {
+            let reference = form_cast(e, form, RTTI_TES_OBJECT_REFR);
+            if reference != 0 && !e.call(GET_REF_PERSISTS, &args![reference]).bool() {
+                1
+            } else {
+                0
+            }
+        }
+        0x43 => 1,
+        _ => 0,
+    }
+}
+
+// Translated from 005391d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot `0x38` of the land's vtable, on a save reference record
+/// `reference` (marker word at +0, id at +8, kind at +0xc). Ignores a
+/// record without the marker. For kinds 8 and 9 it looks the form up by the
+/// id, casts it to a `TESObjectCELL` and compares it with the land's parent
+/// cell (the answer is 0 either way); for other kinds slot `0x38` of the
+/// parent cell decides.
+pub fn fn_005391d0(e: &mut Engine, this: Ptr<TESObjectLAND>, reference: Ptr) -> u8 {
+    if reference.is_null() || e.mem.u32(reference.addr()) != e.global::<u32>(SAVE_REFERENCE_MARKER)
+    {
+        return 0;
+    }
+    let kind = e.mem.u32(reference.addr() + 0xc);
+    if (8..=9).contains(&kind) {
+        let id = e.mem.u32(reference.addr() + 8);
+        let form = e.call(FORM_LOOKUP_BY_ID, &args![id]).u32();
+        let cell = form_cast(e, form, RTTI_TES_OBJECT_CELL);
+        if cell != 0 {
+            let _same = e.call(PARENT_CELL, &args![this]).u32() == cell;
+        }
+        0
+    } else {
+        let cell = e.call(PARENT_CELL, &args![this]).u32();
+        e.vcall(cell, CELL_SLOT_REFERENCE_OWNED, &args![reference])
+            .u8()
+    }
+}
+
+// Translated from 00539280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot `0x110` of the land's vtable, on a save reference record
+/// `reference` and two flag bytes. Ignores a record without the marker.
+/// Kind 6 needs `flag`, kinds 8 and 9 do not; for those, the answer is 1
+/// when `00485be0` says the id belongs to the parent cell (0 for kind 8).
+/// Other kinds need `flag` too and slot `0x110` of the parent cell decides
+/// (with `reference`, `flag` and `second_flag`).
+pub fn fn_00539280(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    reference: Ptr,
+    flag: u8,
+    second_flag: u8,
+) -> u8 {
+    if reference.is_null() || e.mem.u32(reference.addr()) != e.global::<u32>(SAVE_REFERENCE_MARKER)
+    {
+        return 0;
+    }
+    let cell = e.call(PARENT_CELL, &args![this]).u32();
+    let kind = e.mem.u32(reference.addr() + 0xc);
+    match kind {
+        6 => {
+            if flag == 0 {
+                return 0;
+            }
+        }
+        8 | 9 => {}
+        _ => {
+            if flag == 0 {
+                return 0;
+            }
+            return e
+                .vcall(
+                    cell,
+                    CELL_SLOT_SAVE_CHECK,
+                    &args![reference, flag, second_flag],
+                )
+                .u8();
+        }
+    }
+    let id = e.mem.u32(reference.addr() + 8);
+    if e.call(FORM_ID_IN_CELL_FILE, &args![cell, id]).bool() {
+        let kind = e.mem.u32(reference.addr() + 0xc);
+        if kind == 8 {
+            0
+        } else {
+            1
+        }
+    } else {
+        0
+    }
+}
+
+// Translated from 00539360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Slot `0x114` of the land's vtable: fills the save reference record
+/// `out` for the record `reference`. Clears the marker of `out` first. For
+/// kinds 3 and 5, when the id (+8) of `reference` is the cell's save id
+/// (`00544210`), `out` becomes kind 6 with the parent cell's form id; for
+/// kind 6, when the id is the parent cell's form id, `out` becomes kind 9
+/// with the form id of the parent cell. The other words (+4 and +0x10) are
+/// cleared.
+pub fn fn_00539360(e: &mut Engine, this: Ptr<TESObjectLAND>, out: Ptr, reference: Ptr) {
+    if out.is_null() {
+        return;
+    }
+    e.mem.set_u32(out.addr(), 0);
+    if reference.is_null() {
+        return;
+    }
+    let cell = e.call(PARENT_CELL, &args![this]).u32();
+    let parent = e.call(PARENT_CELL, &args![this]).u32();
+    let form_id = e.call(FORM_ID, &args![parent]).u32();
+    let kind = e.mem.u32(reference.addr() + 0xc);
+    match kind {
+        3 | 5 => {
+            let save_id = e.call(CELL_SAVE_ID, &args![cell]).u32();
+            if e.mem.u32(reference.addr() + 8) == save_id {
+                let marker = e.global::<u32>(SAVE_REFERENCE_MARKER);
+                e.mem.set_u32(out.addr(), marker);
+                e.mem.set_u32(out.addr() + 0xc, 6);
+                e.mem.set_u32(out.addr() + 8, form_id);
+                e.mem.set_u32(out.addr() + 4, 0);
+                e.mem.set_u32(out.addr() + 0x10, 0);
+            }
+        }
+        6 if e.mem.u32(reference.addr() + 8) == form_id => {
+            let marker = e.global::<u32>(SAVE_REFERENCE_MARKER);
+            e.mem.set_u32(out.addr(), marker);
+            e.mem.set_u32(out.addr() + 0xc, 9);
+            let parent = e.call(PARENT_CELL, &args![this]).u32();
+            let form_id = e.call(FORM_ID, &args![parent]).u32();
+            e.mem.set_u32(out.addr() + 8, form_id);
+            e.mem.set_u32(out.addr() + 4, 0);
+            e.mem.set_u32(out.addr() + 0x10, 0);
+        }
+        _ => {}
+    }
+}
+
+// Translated from 00539460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether any of the flag bits 1 (heights), 4 (textures) or 2 (colours) of
+/// the land's data is set.
+pub fn fn_00539460(e: &mut Engine, this: Ptr<TESObjectLAND>) -> bool {
+    e.get(this, TESObjectLAND::Data) & (FLAG_HEIGHTS | FLAG_COLORS | FLAG_TEXTURES) != 0
+}
+
+// Translated from 005394a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether flag bit 8 of the land's data (the vertex data is loaded) is
+/// set.
+pub fn fn_005394a0(e: &mut Engine, this: Ptr<TESObjectLAND>) -> bool {
+    e.get(this, TESObjectLAND::Data) & FLAG_LOADED != 0
+}
+
+// Translated from 005394c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears flag bit 8 of the land's data (the vertex data is
+/// loaded).
+pub fn fn_005394c0(e: &mut Engine, this: Ptr<TESObjectLAND>, loaded: bool) {
+    let data = e.get(this, TESObjectLAND::Data);
+    let data = if loaded {
+        data | FLAG_LOADED
+    } else {
+        data & !FLAG_LOADED
+    };
+    e.set(this, TESObjectLAND::Data, data);
+}
+
+// Translated from 00539500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates the loaded data of a land that has none (or has no vertex
+/// array): returns false otherwise. Constructs the 0xA4-byte
+/// `LoadedLandData`, stores the cell coordinates, allocates the arrays of
+/// four pointers for vertices, colours, normals and normal-set flags and the
+/// default height (`0053a550`), then for each quadrant allocates the 0x121
+/// vertex, colour and normal entries, the normal-set flags, the percent
+/// pointer array (0x484 bytes), the layer texture array (0x18 bytes) and sets
+/// the default texture. When `source` has no loaded data the quadrant starts
+/// as a copy of the shared defaults (vertices, colours, normals, flags), its
+/// vertex heights set to the default height unless that is -2048, a zeroed
+/// block of 0x121 percent entries of 0x20 bytes and zeroed layer textures.
+pub fn fn_00539500(e: &mut Engine, this: Ptr<TESObjectLAND>, source: Ptr<TESObjectLAND>) -> bool {
+    let existing = loaded_data(e, this);
+    if !existing.is_null() && !e.get(existing, LoadedLandData::ppVertices).is_null() {
+        return false;
+    }
+    let memory = e.call(ALLOCATE, &args![0xa4u32]).u32();
+    let data: Ptr<LoadedLandData> = if memory == 0 {
+        Ptr::NULL
+    } else {
+        e.call(LOADED_LAND_DATA_CONSTRUCT, &args![memory]).ptr()
+    };
+    e.set(this, TESObjectLAND::pLoadedData, data.cast());
+    let cell = e.get(this, TESObjectLAND::pParentCell);
+    let x = e.call(CELL_GET_DATA_X, &args![cell]).i32();
+    e.set(data, LoadedLandData::iCellX, x);
+    let y = e.call(CELL_GET_DATA_Y, &args![cell]).i32();
+    e.set(data, LoadedLandData::iCellY, y);
+    for field in [
+        LoadedLandData::ppVertices.off,
+        LoadedLandData::ppColorsA.off,
+        LoadedLandData::ppNormals.off,
+        LoadedLandData::ppNormalsSet.off,
+    ] {
+        let array = e.call(ALLOCATE, &args![0x10u32]).u32();
+        e.mem.set_u32(data.addr() + field, array);
+    }
+    let default_height = e.call(LAND_DEFAULT_HEIGHT, &args![this]).f32();
+    for quadrant in 0..QUADRANTS {
+        let slot = 4 * quadrant;
+        let vertices =
+            allocate_vector(e, 0xd8c, 12, QUADRANT_VERTICES, NI_POINT3_DEFAULT_CONSTRUCT);
+        let array = e.get(data, LoadedLandData::ppVertices);
+        e.mem.set_u32(array.addr() + slot, vertices);
+        let colors = allocate_vector(e, 0x1210, 16, QUADRANT_VERTICES, NI_COLOR_DEFAULT_CONSTRUCT);
+        let array = e.get(data, LoadedLandData::ppColorsA);
+        e.mem.set_u32(array.addr() + slot, colors);
+        let normals = allocate_vector(e, 0xd8c, 12, QUADRANT_VERTICES, NI_POINT3_DEFAULT_CONSTRUCT);
+        let array = e.get(data, LoadedLandData::ppNormals);
+        e.mem.set_u32(array.addr() + slot, normals);
+        let flags = e.call(ALLOCATE, &args![0x121u32]).u32();
+        let array = e.get(data, LoadedLandData::ppNormalsSet);
+        e.mem.set_u32(array.addr() + slot, flags);
+        let percent = e.call(ALLOCATE, &args![0x484u32]).u32();
+        e.mem.set_u32(
+            data.addr() + LoadedLandData::ppPercentArrays.off + slot,
+            percent,
+        );
+        let default_texture = fn_00535ae0(e).addr();
+        e.mem.set_u32(
+            data.addr() + LoadedLandData::pDefQuadTexture.off + slot,
+            default_texture,
+        );
+        let layers = e.call(ALLOCATE, &args![0x18u32]).u32();
+        e.mem.set_u32(
+            data.addr() + LoadedLandData::pQuadTextureArray.off + slot,
+            layers,
+        );
+        if !source.is_null() && !loaded_data(e, source).is_null() {
+            continue;
+        }
+        let blocks = e.global::<u32>(DEFAULT_VERTEX_BLOCKS + slot);
+        e.call(MEMORY_COPY, &args![vertices, blocks, 0xd8cu32]);
+        let defaults = e.global::<u32>(DEFAULT_COLORS);
+        e.call(MEMORY_COPY, &args![colors, defaults, 0x1210u32]);
+        let defaults = e.global::<u32>(DEFAULT_NORMALS);
+        e.call(MEMORY_COPY, &args![normals, defaults, 0xd8cu32]);
+        let defaults = e.global::<u32>(DEFAULT_NORMAL_SET);
+        e.call(MEMORY_COPY, &args![flags, defaults, 0x121u32]);
+        if default_height != e.global::<f32>(F32_MINUS_2048) {
+            for vertex in 0..QUADRANT_VERTICES {
+                e.mem.set_f32(vertices + 8 + vertex * 12, default_height);
+            }
+        }
+        let block = e.call(ALLOCATE, &args![0x2420u32]).u32();
+        e.call(MEMORY_SET, &args![block, 0u32, 0x2420u32]);
+        for entry in 0..QUADRANT_VERTICES {
+            e.mem.set_u32(percent + 4 * entry, block + 0x20 * entry);
+        }
+        e.call(MEMORY_SET, &args![layers, 0u32, 0x18u32]);
+    }
+    true
+}
+
+// Translated from 00539960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the materials of the quadrant meshes of a land (source line
+/// 0xca4 of the allocation tag). Fails (false) without loaded data or
+/// without a first mesh. Fills the colours with white (alpha 0) when the
+/// land has no vertex colours, sets the "loaded" flag, and for each
+/// quadrant attaches the percent extra data to the mesh, creates a
+/// `BSShaderPPLightingProperty`, gives it the quadrant's default texture
+/// set (or the default land texture's) in slot 0 and the layer texture sets
+/// in slots 1 to 6, the flag bytes of those textures, the tangent space of
+/// the mesh's first geometry and the geometry data hand-over (slot `0xd4`),
+/// attaches it and prepares the mesh. Returns true.
+pub fn fn_00539960(e: &mut Engine, this: Ptr<TESObjectLAND>) -> bool {
+    scoped(e, 0xca4, |e| {
+        let data = loaded_data(e, this);
+        if data.is_null() {
+            return false;
+        }
+        let meshes = e.get(data, LoadedLandData::ppMesh);
+        if meshes.is_null() || element(e, meshes, 0) == 0 {
+            return false;
+        }
+        let white = ni_color(e, 1.0, 1.0, 1.0, 0.0);
+        if e.get(this, TESObjectLAND::Data) & FLAG_COLORS == 0 {
+            let colors = e.get(data, LoadedLandData::ppColorsA);
+            for quadrant in 0..QUADRANTS {
+                for row in 0..0x11 {
+                    for column in 0..0x11 {
+                        let at = element(e, colors, quadrant) + (row * 0x11 + column) * 0x10;
+                        write_words(e, at, &white);
+                    }
+                }
+            }
+        }
+        fn_005394c0(e, this, true);
+        for quadrant in 0..QUADRANTS {
+            build_quadrant_material(e, data, meshes, quadrant);
+        }
+        true
+    })
+}
+
+/// The per-quadrant part of `fn_00539960`.
+fn build_quadrant_material(e: &mut Engine, data: Ptr<LoadedLandData>, meshes: Ptr, quadrant: u32) {
+    let mesh = element(e, meshes, quadrant);
+    if data
+        .addr()
+        .wrapping_add(LoadedLandData::ppPercentArrays.off)
+        != 0
+    {
+        let memory = e.call(NI_ALLOCATE_OBJECT, &args![EXTRA_DATA_SIZE]).u32();
+        let extra = if memory == 0 {
+            0
+        } else {
+            let percent = e
+                .mem
+                .u32(data.addr() + LoadedLandData::ppPercentArrays.off + 4 * quadrant);
+            let first = e.mem.u32(percent);
+            e.call(
+                PERCENT_EXTRA_DATA_CONSTRUCT,
+                &args![memory, 0x2420u32, first],
+            )
+            .u32()
+        };
+        let key = fn_00539f40(e);
+        e.call(OBJECT_ADD_EXTRA_DATA, &args![mesh, key, extra]);
+    }
+    let memory = e
+        .call(NI_ALLOCATE_OBJECT, &args![SHADER_PROPERTY_SIZE])
+        .u32();
+    let property = if memory == 0 {
+        0
+    } else {
+        e.call(SHADER_PROPERTY_CONSTRUCT, &args![memory]).u32()
+    };
+    e.call(SHADER_PROPERTY_SET_WORD_0X58, &args![property, 1u32]);
+    if property == 0 {
+        return;
+    }
+    let default_slot = data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant;
+    let layers = e
+        .mem
+        .u32(data.addr() + LoadedLandData::pQuadTextureArray.off + 4 * quadrant);
+    // Slot 0: the quadrant's default texture's texture set, else the
+    // default land texture's.
+    let texture = e.mem.u32(default_slot);
+    let texture_set = if texture != 0 && e.call(OBJECT_FIELD_0X18, &args![texture]).u32() != 0 {
+        let set = e.call(OBJECT_FIELD_0X18, &args![texture]).u32();
+        e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32()
+    } else {
+        let default_texture = fn_00535ae0(e).addr();
+        let set = e.call(OBJECT_FIELD_0X18, &args![default_texture]).u32();
+        e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32()
+    };
+    e.call(
+        SHADER_PROPERTY_SET_TEXTURE_SET,
+        &args![property, 0u32, texture_set],
+    );
+    for slot in 1..7u32 {
+        let texture = e.mem.u32(layers + 4 * slot - 4);
+        if texture != 0 && e.call(OBJECT_FIELD_0X18, &args![texture]).u32() != 0 {
+            let set = e.call(OBJECT_FIELD_0X18, &args![texture]).u32();
+            let shader_set = e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32();
+            e.call(
+                SHADER_PROPERTY_SET_TEXTURE_SET,
+                &args![property, slot, shader_set],
+            );
+        } else {
+            e.call(
+                SHADER_PROPERTY_SET_TEXTURE_SET,
+                &args![property, slot, 0u32],
+            );
+        }
+    }
+    // The flag bytes of the layer textures 5 to 0, then of the default one.
+    let sources = [
+        e.mem.u32(layers + 0x14),
+        e.mem.u32(layers + 0x10),
+        e.mem.u32(layers + 0xc),
+        e.mem.u32(layers + 8),
+        e.mem.u32(layers + 4),
+        e.mem.u32(layers),
+        e.mem.u32(default_slot),
+    ];
+    let mut flag_bytes = [0u32; 7];
+    for (flag_byte, source) in flag_bytes.iter_mut().zip(sources) {
+        *flag_byte = if source == 0 {
+            0
+        } else {
+            e.call(LAND_TEXTURE_FLAG_BYTE, &args![source]).u8() as u32
+        };
+    }
+    let [layer5, layer4, layer3, layer2, layer1, layer0, default_flag] = flag_bytes;
+    e.call(
+        SHADER_PROPERTY_SET_FLAGS,
+        &args![
+            property,
+            default_flag,
+            layer0,
+            layer1,
+            layer2,
+            layer3,
+            layer4,
+            layer5,
+            0u32,
+            0u32,
+            0u32
+        ],
+    );
+    let geometry = e.call(NODE_FIRST_GEOMETRY, &args![mesh, 0u32]).u32();
+    let tangent_space = e.call(CREATE_TANGENT_SPACE_SIMPLE, &args![geometry]).u32();
+    fn_00539f20(e, Ptr::new(property), tangent_space);
+    let shared = e
+        .vcall(property, PROPERTY_SLOT_TANGENT_SPACE, &args![geometry])
+        .u32();
+    fn_00539ef0(e, Ptr::new(geometry), shared);
+    e.call(NODE_ATTACH_PROPERTY, &args![geometry, property]);
+    e.call(PREPARE_OBJECT, &args![mesh, 0u32, 0u32]);
+}
+
+// Translated from 00539ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands `value` to `00a67260` on the object held by the smart pointer at
+/// `this + 0xb8`.
+pub fn fn_00539ef0(e: &mut Engine, this: Ptr, value: u32) {
+    let held = e.call(SMART_POINTER_GET, &args![this.byte_add(0xb8)]).u32();
+    e.call(GEOMETRY_DATA_SET_SHARED, &args![held, value]);
+}
+
+// Translated from 00539f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns `value` to the smart pointer at `this + 0xd0`.
+pub fn fn_00539f20(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(TEXTURING_PROPERTY_SET, &args![this.byte_add(0xd0), value]);
+}
+
+// Translated from 00539f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The global word at `011f94bc` (the key of the percent extra data).
+pub fn fn_00539f40(e: &mut Engine) -> u32 {
+    e.global::<u32>(EXTRA_DATA_KEY)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2623,6 +3900,67 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_object_land_make_land_tri_strips(Ptr<TESObjectLAND>, u8) -> Ptr
         ),
         entry!(0x005374f0, fn_005374f0(Ptr<TESObjectLAND>)),
+        entry!(0x00537b10, fn_00537b10(Ptr) -> Ptr),
+        entry!(0x00537b30, fn_00537b30(Ptr) -> Ptr),
+        entry!(0x00537b50, fn_00537b50(Ptr) -> bool),
+        entry!(0x00537b80, fn_00537b80(Ptr) -> Ptr),
+        entry!(0x00537bb0, fn_00537bb0(Ptr) -> Ptr),
+        entry!(0x00537bd0, fn_00537bd0(Ptr) -> Ptr),
+        entry!(
+            0x00537bf0,
+            ni_additional_geometry_data_ni_additional_geometry_data(Ptr, u16) -> Ptr
+        ),
+        entry!(0x00537ca0, ni_additional_geometry_data_get_rtti() -> Ptr),
+        entry!(
+            0x00537cb0,
+            ni_additional_geometry_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00537ce0, fn_00537ce0(Ptr)),
+        entry!(0x00537d00, bs_packed_additional_geometry_data_get_rtti() -> Ptr),
+        entry!(
+            0x00537d10,
+            bs_packed_additional_geometry_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00537d40, fn_00537d40(Ptr)),
+        entry!(0x00537eb0, fn_00537eb0(Ptr<TESObjectLAND>)),
+        entry!(0x00538110, tes_object_land_save(Ptr<TESObjectLAND>)),
+        entry!(0x00538c00, fn_00538c00(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x00538d70, fn_00538d70(Ptr) -> Ptr),
+        entry!(0x00538e10, fn_00538e10(Ptr)),
+        entry!(0x00538e30, fn_00538e30(Ptr)),
+        entry!(
+            0x00538e50,
+            hk_base_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00538e80, fn_00538e80(Ptr, u32) -> Ptr),
+        entry!(0x00538eb0, fn_00538eb0(Ptr)),
+        entry!(0x00538ef0, fn_00538ef0(Ptr) -> Ptr),
+        entry!(0x00538f20, fn_00538f20(Ptr) -> Ptr),
+        entry!(0x00538f40, fn_00538f40(Ptr)),
+        entry!(
+            0x00538f80,
+            hkp_mopp_code_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00538fb0, fn_00538fb0(Ptr)),
+        entry!(0x00539010, fn_00539010(Ptr<TESObjectLAND>, u8)),
+        entry!(0x00539060, fn_00539060(Ptr<TESObjectLAND>, u32) -> u8),
+        entry!(0x005391d0, fn_005391d0(Ptr<TESObjectLAND>, Ptr) -> u8),
+        entry!(
+            0x00539280,
+            fn_00539280(Ptr<TESObjectLAND>, Ptr, u8, u8) -> u8
+        ),
+        entry!(0x00539360, fn_00539360(Ptr<TESObjectLAND>, Ptr, Ptr)),
+        entry!(0x00539460, fn_00539460(Ptr<TESObjectLAND>) -> bool),
+        entry!(0x005394a0, fn_005394a0(Ptr<TESObjectLAND>) -> bool),
+        entry!(0x005394c0, fn_005394c0(Ptr<TESObjectLAND>, bool)),
+        entry!(
+            0x00539500,
+            fn_00539500(Ptr<TESObjectLAND>, Ptr<TESObjectLAND>) -> bool
+        ),
+        entry!(0x00539960, fn_00539960(Ptr<TESObjectLAND>) -> bool),
+        entry!(0x00539ef0, fn_00539ef0(Ptr, u32)),
+        entry!(0x00539f20, fn_00539f20(Ptr, u32)),
+        entry!(0x00539f40, fn_00539f40() -> u32),
     ]
 }
 
@@ -2649,7 +3987,7 @@ mod tests {
     }
 
     /// The pages that hold the exe's constants and the statics.
-    const PAGES: [u32; 18] = [
+    const PAGES: [u32; 21] = [
         0x0101_1000,
         0x0101_2000,
         0x0101_5000,
@@ -2659,6 +3997,9 @@ mod tests {
         0x0101_e000,
         0x0102_3000,
         0x0102_d000,
+        0x0102_e000,
+        0x0118_7000,
+        0x011f_9000,
         0x0118_3000,
         0x0118_a000,
         0x0118_b000,
@@ -5269,5 +6610,1388 @@ mod tests {
         e.register(CELL_GET_3D, |_, _| ret(0));
         e.call(0x0053_74f0, &args![this]);
         assert_eq!(world.events.borrow().len(), before);
+    }
+
+    // ---- Second session: small functions, Havok MOPP code, save --------------
+
+    fn noop(e: &mut Engine, addresses: &[u32]) {
+        for address in addresses {
+            e.register(*address, |_, _| Ret::default());
+        }
+    }
+
+    /// A block filled with 0xdd bytes, to see what a function writes.
+    fn dirty_object(e: &mut Engine, size: u32) -> u32 {
+        let object = e.mem.alloc(size);
+        e.mem.write(object, &vec![0xdd; size as usize]);
+        object
+    }
+
+    #[test]
+    fn bound_getter_asks_the_callee_about_the_smart_pointer() {
+        let mut e = engine();
+        e.register(GETTER_00460140, |_, a| ret(a[0] + 0x10));
+        let object = e.mem.alloc(0xc0);
+        e.mem.set_u32(object + 0xb8, 0x4444);
+        assert_eq!(e.call(0x0053_7b10, &args![object]).u32(), 0x4454);
+    }
+
+    #[test]
+    fn mopp_holder_getter_passes_the_member() {
+        let mut e = engine();
+        e.register(GETTER_0041BB10, |_, a| ret(a[0] + 1));
+        assert_eq!(e.call(0x0053_7b30, &args![0x1000u32]).u32(), 0x1029);
+    }
+
+    #[test]
+    fn reference_list_check_is_true_when_the_callee_says_zero() {
+        let mut e = engine();
+        e.register(LIST_CHECK, |_, a| ret((a[0] != 0x2000 + 0xac) as u32));
+        assert_eq!(e.call(0x0053_7b50, &args![0x2000u32]).u32() & 0xff, 1);
+        e.register(LIST_CHECK, |_, _| ret(0x100 | 1));
+        assert_eq!(e.call(0x0053_7b50, &args![0x2000u32]).u32() & 0xff, 0);
+        e.register(LIST_CHECK, |_, _| ret(0x100));
+        assert_eq!(e.call(0x0053_7b50, &args![0x2000u32]).u32() & 0xff, 1);
+    }
+
+    #[test]
+    fn mesh_helper_constructors_run_the_base_and_set_their_fields() {
+        let mut e = engine();
+        e.register(BASE_CONSTRUCT_004B5020, |_, a| ret(a[0]));
+        let object = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_7bb0, &args![object]).u32(), object);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(BASE_CONSTRUCT_004B5020, vec![object])]
+        );
+        assert_eq!(e.mem.u32(object + 4), 0);
+        assert_eq!(e.mem.u32(object + 8), 0xdddd_dddd);
+        let object = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_7b80, &args![object]).u32(), object);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(BASE_CONSTRUCT_004B5020, vec![object])]
+        );
+        assert_eq!(e.mem.u32(object + 4), 0);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.f32(object + 0xc), 1.0);
+    }
+
+    #[test]
+    fn render_task_getter_reads_the_smart_pointer() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(object + 0x78, 0x3333);
+        assert_eq!(e.call(0x0053_7bd0, &args![object]).u32(), 0x3333);
+    }
+
+    #[test]
+    fn additional_geometry_data_constructor_sets_its_fields() {
+        let mut e = engine();
+        e.register(NI_OBJECT_CONSTRUCT, |_, a| ret(a[0]));
+        noop(&mut e, &[MEMBER_CONSTRUCT, MEMBER_CONSTRUCT_AGAIN]);
+        let object = dirty_object(&mut e, 0x2c);
+        start_log(&mut e);
+        let result = e.call(0x0053_7bf0, &args![object, 0x1234u32]);
+        assert_eq!(result.u32(), object);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (NI_OBJECT_CONSTRUCT, vec![object]),
+                (MEMBER_CONSTRUCT, vec![object + 0x1c, 0, 1]),
+                (MEMBER_CONSTRUCT_AGAIN, vec![object + 0x1c]),
+            ]
+        );
+        assert_eq!(e.mem.u32(object), ADDITIONAL_GEOMETRY_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + 8), 0);
+        assert_eq!(e.mem.u16(object + 0xc), 0x1234);
+        assert_eq!(e.mem.u32(object + 0x10), 0);
+        assert_eq!(e.mem.u32(object + 0x14), 0);
+        assert_eq!(e.mem.u32(object + 0x18), 0);
+        // The member's own bytes are left to its constructors.
+        assert_eq!(e.mem.u32(object + 0x1c), 0xdddd_dddd);
+    }
+
+    #[test]
+    fn additional_geometry_data_rtti_is_a_constant() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0053_7ca0, &args![]).u32(), 0x011f_4a30);
+        assert_eq!(e.call(0x0053_7d00, &args![]).u32(), 0x011f_4aac);
+    }
+
+    #[test]
+    fn additional_geometry_data_deleting_destructor_frees_with_bit_zero() {
+        let mut e = engine();
+        noop(&mut e, &[ADDITIONAL_GEOMETRY_DATA_DESTRUCT, NI_FREE]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_7cb0, &args![0x5000u32, 2u32]).u32(), 0x5000);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(ADDITIONAL_GEOMETRY_DATA_DESTRUCT, vec![0x5000])]
+        );
+        start_log(&mut e);
+        e.call(0x0053_7cb0, &args![0x5000u32, 3u32]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (ADDITIONAL_GEOMETRY_DATA_DESTRUCT, vec![0x5000]),
+                (NI_FREE, vec![0x5000, 0x2c]),
+            ]
+        );
+    }
+
+    #[test]
+    fn member_destructor_is_called_on_this() {
+        let mut e = engine();
+        noop(&mut e, &[MEMBER_DESTRUCT]);
+        start_log(&mut e);
+        e.call(0x0053_7ce0, &args![0x6000u32]);
+        assert_eq!(end_log(&mut e), vec![(MEMBER_DESTRUCT, vec![0x6000])]);
+    }
+
+    #[test]
+    fn packed_additional_geometry_data_destructors() {
+        let mut e = engine();
+        noop(&mut e, &[ADDITIONAL_GEOMETRY_DATA_DESTRUCT, NI_FREE]);
+        let object = dirty_object(&mut e, 0x34);
+        start_log(&mut e);
+        e.call(0x0053_7d40, &args![object]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(ADDITIONAL_GEOMETRY_DATA_DESTRUCT, vec![object])]
+        );
+        assert_eq!(e.mem.u32(object), PACKED_ADDITIONAL_GEOMETRY_DATA_VTABLE);
+        // The deleting form: destructor, then the free of 0x34 bytes.
+        let object = dirty_object(&mut e, 0x34);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_7d10, &args![object, 1u32]).u32(), object);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (ADDITIONAL_GEOMETRY_DATA_DESTRUCT, vec![object]),
+                (NI_FREE, vec![object, 0x34]),
+            ]
+        );
+        assert_eq!(e.mem.u32(object), PACKED_ADDITIONAL_GEOMETRY_DATA_VTABLE);
+        start_log(&mut e);
+        e.call(0x0053_7d10, &args![object, 0u32]);
+        assert_eq!(called(&mut e), vec![ADDITIONAL_GEOMETRY_DATA_DESTRUCT]);
+    }
+
+    /// A land with loaded data whose four meshes (all but `missing`) are
+    /// nodes with a detach slot, plus the doubles of the release function.
+    fn release_world(
+        e: &mut Engine,
+        missing: Option<u32>,
+    ) -> (Ptr<TESObjectLAND>, Ptr<LoadedLandData>, Vec<u32>, u32) {
+        let detach = 0x0900_0001;
+        let owner_slot = 0x0900_0002;
+        e.register(detach, |_, _| Ret::default());
+        e.register(owner_slot, |_, _| Ret::default());
+        noop(
+            e,
+            &[
+                PHYSICS_OBJECT_ADD_BODY,
+                SHADOW_SCENE_NODE_REMOVE_OBJECT,
+                TEXTURING_PROPERTY_SET,
+            ],
+        );
+        e.register(QUEUED_FILE_POINTER_SET, |_, _| Ret::default());
+        e.register(CELL_PHYSICS_OBJECT, |_, _| ret(0x7777));
+        e.register(SLOT_HOLDS_OTHER_THAN, |_, _| ret(1));
+        e.register(TABLE_ENTRY, |_, _| ret(0x8888));
+        let (this, data) = land_with_data(e);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(0x6000));
+        let meshes = e.mem.alloc(16);
+        let mut nodes = Vec::new();
+        for quadrant in 0..4 {
+            let node = object_with_vtable(e, 0x20, &[(NODE_DETACH_SLOT, detach)]);
+            if missing != Some(quadrant) {
+                e.mem.set_u32(meshes + 4 * quadrant, node);
+            }
+            nodes.push(node);
+        }
+        e.set(data, LoadedLandData::ppMesh, Ptr::new(meshes));
+        e.mem.set_u32(data.addr() + 0x94, 0x5151);
+        let border = 0x6161;
+        e.mem.set_u32(data.addr() + 0x14, border);
+        let owner = object_with_vtable(e, 0x20, &[(BORDER_OWNER_SLOT, owner_slot)]);
+        e.register_double(OBJECT_FIELD_0X18, move |_, _| ret(owner));
+        (this, data, nodes, owner)
+    }
+
+    #[test]
+    fn release_drops_the_quadrants_the_body_and_the_border() {
+        let mut e = engine();
+        let (this, data, nodes, owner) = release_world(&mut e, Some(2));
+        let meshes = e.get(data, LoadedLandData::ppMesh);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let blocks: Vec<u32> = (0..4).map(|q| element(&e, normals, q)).collect();
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        e.mem.set_u32(vertices.addr() + 8, 0x1111);
+        start_log(&mut e);
+        e.call(0x0053_7eb0, &args![this]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, QUEUED_FILE_POINTER_SET),
+            vec![vec![this.addr() + 0x24, 0]]
+        );
+        assert_eq!(
+            arguments_of(&log, PHYSICS_OBJECT_ADD_BODY),
+            vec![vec![0x7777, 0x5151]]
+        );
+        assert_eq!(
+            arguments_of(&log, TEXTURING_PROPERTY_SET),
+            vec![vec![data.addr() + 0x94, 0], vec![data.addr() + 0x14, 0]]
+        );
+        let present = [nodes[0], nodes[1], nodes[3]];
+        assert_eq!(
+            arguments_of(&log, SHADOW_SCENE_NODE_REMOVE_OBJECT),
+            present.iter().map(|n| vec![0x8888, *n]).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            arguments_of(&log, 0x0900_0001),
+            present.iter().map(|n| vec![*n, 0]).collect::<Vec<_>>()
+        );
+        let freed: Vec<u32> = arguments_of(&log, DEALLOCATE)
+            .into_iter()
+            .map(|a| a[0])
+            .collect();
+        assert_eq!(freed, vec![blocks[0], blocks[1], blocks[3], meshes.addr()]);
+        // The slots are cleared; the quadrant without a mesh keeps its arrays.
+        assert_eq!(e.mem.u32(vertices.addr() + 8), 0x1111);
+        assert_eq!(element(&e, normals, 2), blocks[2]);
+        assert_eq!(element(&e, normals, 0), 0);
+        assert_eq!(element(&e, vertices, 0), 0);
+        assert!(e.get(data, LoadedLandData::ppMesh).is_null());
+        // The border owner releases the border.
+        assert_eq!(arguments_of(&log, 0x0900_0002), vec![vec![owner, 0x6161]]);
+    }
+
+    #[test]
+    fn release_without_meshes_or_data_does_less() {
+        let mut e = engine();
+        let (this, data, _, _) = release_world(&mut e, None);
+        e.set(data, LoadedLandData::ppMesh, Ptr::NULL);
+        start_log(&mut e);
+        e.call(0x0053_7eb0, &args![this]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, CELL_PHYSICS_OBJECT).is_empty());
+        assert_eq!(
+            arguments_of(&log, TEXTURING_PROPERTY_SET),
+            vec![vec![data.addr() + 0x14, 0]]
+        );
+        // A border that is not held is left alone.
+        e.mem.set_u32(data.addr() + 0x14, 0);
+        start_log(&mut e);
+        e.call(0x0053_7eb0, &args![this]);
+        assert_eq!(
+            called(&mut e),
+            vec![QUEUED_FILE_POINTER_SET, SMART_POINTER_GET]
+        );
+        // No loaded data at all: only the queued textures are cleared.
+        let bare = land(&mut e);
+        start_log(&mut e);
+        e.call(0x0053_7eb0, &args![bare]);
+        assert_eq!(called(&mut e), vec![QUEUED_FILE_POINTER_SET]);
+        // Without the body in the physics object, the body is only released.
+        let (this, data, _, _) = release_world(&mut e, None);
+        e.register(SLOT_HOLDS_OTHER_THAN, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0053_7eb0, &args![this]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, PHYSICS_OBJECT_ADD_BODY).is_empty());
+        assert_eq!(
+            arguments_of(&log, TEXTURING_PROPERTY_SET)[0],
+            vec![data.addr() + 0x94, 0]
+        );
+    }
+
+    // ---- Save ----------------------------------------------------------------
+
+    type Chunks = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    /// An engine with the doubles of the save writer; every chunk written is
+    /// recorded as `(tag, bytes)`.
+    fn save_engine(big_endian: bool) -> (Engine, Chunks) {
+        let mut e = engine();
+        noop(
+            &mut e,
+            &[
+                FORM_START,
+                FORM_CLOSE,
+                FORM_COMPRESS_SAVE_BUFFER,
+                LAND_FLUSH_WARNINGS,
+                LAND_LOAD_FOR_SAVE,
+                SWAP_WORD,
+                SWAP_BYTES_32,
+                SWAP_BYTES_16,
+                LOG_MESSAGE,
+                NI_POINT3_NORMALIZE,
+            ],
+        );
+        if big_endian {
+            e.register(IS_BIG_ENDIAN, |_, _| ret(1));
+        } else {
+            e.register(IS_BIG_ENDIAN, |_, _| ret(0));
+        }
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register(INT_ABS, |_, a| ret((a[0] as i32).wrapping_abs() as u32));
+        e.register(CELL_GET_DATA_X, |_, _| ret(-7i32 as u32));
+        e.register(CELL_GET_DATA_Y, |_, _| ret(9));
+        e.register(LAND_LAYER_OPACITY, |_, _| float_ret(0.0));
+        let chunks: Chunks = recorder();
+        for address in [FORM_ADD_CHUNK_DATA, FORM_ADD_CHUNK_ARRAY] {
+            let sink = chunks.clone();
+            e.register_double(address, move |e, a| {
+                sink.borrow_mut().push((a[0], e.mem.bytes(a[1], a[2])));
+                Ret::default()
+            });
+        }
+        (e, chunks)
+    }
+
+    /// Sets every vertex height, normal (0, 0, 1) and colour of the data.
+    fn fill_land(e: &mut Engine, data: Ptr<LoadedLandData>, height: f32, color: [f32; 4]) {
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let colors = e.get(data, LoadedLandData::ppColorsA);
+        for quadrant in 0..4 {
+            for vertex in 0..0x121 {
+                let at = element(e, vertices, quadrant) + vertex * 12;
+                e.mem.set_f32(at + 8, height);
+                let at = element(e, normals, quadrant) + vertex * 12;
+                e.mem.set_f32(at + 8, 1.0);
+                let at = element(e, colors, quadrant) + vertex * 16;
+                for (i, value) in color.iter().enumerate() {
+                    e.mem.set_f32(at + 4 * i as u32, *value);
+                }
+            }
+        }
+    }
+
+    fn tags(chunks: &Chunks) -> Vec<u32> {
+        chunks.borrow().iter().map(|(tag, _)| *tag).collect()
+    }
+
+    #[test]
+    fn save_writes_flags_normals_heights_and_colors() {
+        let (mut e, chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x1 | 0x2 | 0x8);
+        fill_land(&mut e, data, 80.0, [1.0, 0.5, 0.0, 1.0]);
+        e.set(data, LoadedLandData::iCellX, -3);
+        e.set(data, LoadedLandData::iCellY, 4);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            tags(&chunks),
+            vec![CHUNK_DATA, CHUNK_NORMALS, CHUNK_HEIGHTS, CHUNK_COLORS]
+        );
+        let chunks = chunks.borrow();
+        assert_eq!(chunks[0].1, 0xbu32.to_le_bytes());
+        // Normals: (0, 0, 127) for each of the 33 x 33 grid points.
+        assert_eq!(chunks[1].1.len(), 0xcc3);
+        assert!(chunks[1].1.chunks(3).all(|n| n == [0, 0, 127]));
+        // Heights: 80 >> 3 = 10 everywhere, so the base is 10 and the steps 0.
+        assert_eq!(chunks[2].1.len(), 0x448);
+        assert_eq!(
+            f32::from_le_bytes(chunks[2].1[..4].try_into().unwrap()),
+            10.0
+        );
+        assert!(chunks[2].1[4..].iter().all(|b| *b == 0));
+        // Colours: red 1.0 -> 255, green 0.5 -> 127, blue 0.
+        assert!(chunks[3].1.chunks(3).all(|c| c == [255, 127, 0]));
+        // Nothing was clamped, so nothing was logged, and the form was
+        // opened and closed around the chunks.
+        assert!(arguments_of(&log, LOG_MESSAGE).is_empty());
+        let order = called_order(&log);
+        assert!(order.contains(&FORM_START));
+        assert_eq!(
+            &order[order.len() - 2..],
+            &[FORM_CLOSE, FORM_COMPRESS_SAVE_BUFFER]
+        );
+        // The normals were normalized in place: 4 x 289 vertices minus the
+        // shared edges are 1089 grid points, and the code handles the corner
+        // vertex of quadrant 1 that quadrant 3 writes again (the column test
+        // undoes the row test), so one more.
+        assert_eq!(arguments_of(&log, NI_POINT3_NORMALIZE).len(), 0x442);
+    }
+
+    /// The addresses of the calls of `log`, in order.
+    fn called_order(log: &[(u32, Vec<u32>)]) -> Vec<u32> {
+        log.iter().map(|(address, _)| *address).collect()
+    }
+
+    #[test]
+    fn save_clamps_big_height_steps_and_reports_them() {
+        let (mut e, chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x1 | 0x8);
+        fill_land(&mut e, data, 80.0, [0.0; 4]);
+        e.set(data, LoadedLandData::iCellX, -3);
+        e.set(data, LoadedLandData::iCellY, 4);
+        // The second grid point of the first row rises by 200 steps; the
+        // third falls back to the base.
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let second = element(&e, vertices, 0) + 12;
+        e.mem.set_f32(second + 8, 80.0 + 8.0 * 200.0);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        let log = end_log(&mut e);
+        let chunks = chunks.borrow();
+        let heights = &chunks[2].1;
+        assert_eq!(chunks[2].0, CHUNK_HEIGHTS);
+        // Step 0 is 0; step 1 is clamped to +127; the follower sees the
+        // clamped previous height (80 + 127 steps), so the step back down is
+        // clamped to -127 too, and the later ones stay on the clamped track.
+        assert_eq!(heights[4], 0);
+        assert_eq!(heights[5], 0x7f);
+        assert_eq!(heights[6], 0x81);
+        assert_eq!(
+            arguments_of(&log, LOG_MESSAGE),
+            vec![vec![SAVE_HEIGHT_ERROR, -3i32 as u32, 4]]
+        );
+    }
+
+    #[test]
+    fn save_steps_restart_from_the_row_start() {
+        let (mut e, chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x1 | 0x8);
+        fill_land(&mut e, data, 0.0, [0.0; 4]);
+        // Quadrant 0's vertices 0 and 1 (grid points 0 and 1): heights 8 and
+        // 24 (1 and 3 after >> 3); the first point of the second row (vertex
+        // 17, grid point 33) is 40 (5).
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let block = element(&e, vertices, 0);
+        e.mem.set_f32(block + 8, 8.0);
+        e.mem.set_f32(block + 12 + 8, 24.0);
+        e.mem.set_f32(block + 17 * 12 + 8, 40.0);
+        e.call(0x0053_8110, &args![this]);
+        let chunks = chunks.borrow();
+        let bytes = &chunks[2].1;
+        assert_eq!(f32::from_le_bytes(bytes[..4].try_into().unwrap()), 1.0);
+        assert_eq!(bytes[4], 0);
+        assert_eq!(bytes[5], 2);
+        // After the first row, the previous height is the row's first (1),
+        // so the next row starts with a step of 5 - 1.
+        assert_eq!(bytes[4 + 33], 4);
+    }
+
+    #[test]
+    fn save_writes_the_texture_chunks() {
+        let (mut e, chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x4 | 0x8);
+        e.set_global(DEFAULT_LAND_TEXTURE, 0xdefu32);
+        e.register(FORM_ID, |_, a| ret(a[0] + 0x1000_0000));
+        // Quadrant 0 has its own texture and layer 2, quadrant 1 the default
+        // texture and the default as layer 0, quadrant 2 nothing.
+        let base = data.addr() + LoadedLandData::pDefQuadTexture.off;
+        e.mem.set_u32(base, 0xa0);
+        e.mem.set_u32(base + 4, 0xdef);
+        let layers_of = |e: &Engine, q: u32| {
+            e.mem
+                .u32(data.addr() + LoadedLandData::pQuadTextureArray.off + 4 * q)
+        };
+        let layers = layers_of(&e, 0);
+        e.mem.set_u32(layers + 8, 0xb0);
+        let layers = layers_of(&e, 1);
+        e.mem.set_u32(layers, 0xdef);
+        e.register(LAND_LAYER_OPACITY, |_, a| {
+            // Only vertex 3 of quadrant 0 layer 2 has an opacity.
+            float_ret(if a[1] == 0 && a[2] == 3 && a[3] == 2 {
+                0.5
+            } else {
+                0.0
+            })
+        });
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            tags(&chunks),
+            vec![
+                CHUNK_DATA,
+                CHUNK_BASE_TEXTURE,
+                CHUNK_ADDITIONAL_TEXTURE,
+                CHUNK_VERTEX_TEXTURE,
+                CHUNK_ADDITIONAL_TEXTURE
+            ]
+        );
+        let chunks = chunks.borrow();
+        // BTXT: form id, quadrant 0, unused, layer 0xffff.
+        assert_eq!(chunks[1].1, [0xa0, 0, 0, 0x10, 0, 0, 0xff, 0xff]);
+        // ATXT: form id, quadrant 0, unused, layer 2.
+        assert_eq!(chunks[2].1, [0xb0, 0, 0, 0x10, 0, 0, 2, 0]);
+        // VTXT: one entry, position 3 and opacity 0.5.
+        assert_eq!(chunks[3].1, [3, 0, 0, 0, 0, 0, 0, 0x3f]);
+        // The default texture in a layer is written with form id 0, in
+        // quadrant 1; the quadrant's own default texture is not written.
+        assert_eq!(chunks[4].1, [0, 0, 0, 0, 1, 0, 0, 0]);
+        assert_eq!(
+            arguments_of(&log, LAND_FLUSH_WARNINGS),
+            vec![vec![this.addr()]]
+        );
+        assert_eq!(arguments_of(&log, LAND_LAYER_OPACITY).len(), 2 * 0x121);
+    }
+
+    #[test]
+    fn save_swaps_the_records_of_a_big_endian_writer() {
+        let (mut e, chunks) = save_engine(true);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x1 | 0x4 | 0x8);
+        fill_land(&mut e, data, 0.0, [0.0; 4]);
+        e.set_global(DEFAULT_LAND_TEXTURE, 0xdefu32);
+        e.register(FORM_ID, |_, a| ret(a[0]));
+        let base = data.addr() + LoadedLandData::pDefQuadTexture.off;
+        e.mem.set_u32(base, 0xa0);
+        let layers = e
+            .mem
+            .u32(data.addr() + LoadedLandData::pQuadTextureArray.off);
+        e.mem.set_u32(layers, 0xb0);
+        e.register(LAND_LAYER_OPACITY, |_, a| {
+            float_ret(if a[2] < 2 { 1.0 } else { 0.0 })
+        });
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        let log = end_log(&mut e);
+        // The flags word and the height chunk are swapped before and after.
+        assert_eq!(
+            arguments_of(&log, SWAP_WORD).len(),
+            4,
+            "DATA and VHGT, twice each"
+        );
+        // Texture records: form id (32 bit) and layer (16 bit) twice for each
+        // of BTXT and ATXT; VTXT entries: 2 entries, twice.
+        assert_eq!(arguments_of(&log, SWAP_BYTES_32).len(), 2 + 2 + 2 * 2);
+        assert_eq!(arguments_of(&log, SWAP_BYTES_16).len(), 2 + 2 + 2 * 2);
+        assert_eq!(chunks.borrow().len(), 6);
+    }
+
+    #[test]
+    fn save_does_nothing_without_data_to_write() {
+        let (mut e, chunks) = save_engine(false);
+        let this = land(&mut e);
+        // No data flags that matter.
+        e.set(this, TESObjectLAND::Data, 0x10);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        assert!(called(&mut e).is_empty());
+        // Heights, but neither the loaded bit nor the arrays.
+        e.set(this, TESObjectLAND::Data, 0x1);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        assert!(called(&mut e).is_empty());
+        assert!(chunks.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_loads_the_data_first_when_it_is_not_loaded() {
+        let (mut e, chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x2);
+        fill_land(&mut e, data, 0.0, [0.0; 4]);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, LAND_LOAD_FOR_SAVE),
+            vec![vec![this.addr()]]
+        );
+        assert_eq!(tags(&chunks), vec![CHUNK_DATA, CHUNK_COLORS]);
+        // A land the editor changed (0x10) does not need the load.
+        let (mut e, _chunks) = save_engine(false);
+        let (this, data) = land_with_data(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x12);
+        fill_land(&mut e, data, 0.0, [0.0; 4]);
+        start_log(&mut e);
+        e.call(0x0053_8110, &args![this]);
+        assert!(arguments_of(&end_log(&mut e), LAND_LOAD_FOR_SAVE).is_empty());
+    }
+
+    // ---- Havok MOPP code -------------------------------------------------------
+
+    #[test]
+    fn mopp_code_is_built_from_the_chunk() {
+        let mut e = engine();
+        e.register(MOPP_ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(MOPP_ARRAY_SET_SIZE, |e, a| {
+            let buffer = e.mem.alloc(a[1]);
+            e.mem.set_u32(a[0], buffer);
+            Ret::default()
+        });
+        noop(
+            &mut e,
+            &[
+                MOPP_MEMBER_CONSTRUCT_A,
+                MOPP_MEMBER_CONSTRUCT_B,
+                MOPP_MEMBER_FINISH,
+            ],
+        );
+        let data = e.mem.alloc(0x18);
+        let bytes: Vec<u8> = (1..=0x18).collect();
+        e.mem.write(data, &bytes);
+        let out = e.mem.alloc(8);
+        let result = e.call(0x0053_8c00, &args![0u32, data, 0x18u32, out]);
+        assert_eq!(result.u32() & 0xff, 1);
+        let object = e.mem.u32(out);
+        assert_ne!(object, 0);
+        assert_eq!(e.mem.u32(object), HAVOK_MOPP_CODE_VTABLE);
+        // The first 0x10 bytes are at +0x10, the rest in the array at +0x20.
+        assert_eq!(e.mem.bytes(object + 0x10, 0x10), bytes[..0x10]);
+        let buffer = e.mem.u32(object + 0x20);
+        assert_eq!(e.mem.bytes(buffer, 8), bytes[0x10..]);
+    }
+
+    #[test]
+    fn mopp_code_that_cannot_be_built_is_destroyed() {
+        let mut e = engine();
+        e.register(MOPP_ALLOCATE, |e, a| ret(e.mem.alloc(a[0])));
+        noop(
+            &mut e,
+            &[
+                MOPP_MEMBER_CONSTRUCT_A,
+                MOPP_MEMBER_CONSTRUCT_B,
+                MOPP_MEMBER_FINISH,
+            ],
+        );
+        let destroy = 0x0900_0003;
+        e.register(destroy, |_, _| Ret::default());
+        // The vtable the constructor stores is the exe's; put one with a
+        // destructor in slot 0 where the exe would have it.
+        e.mem.set_u32(HAVOK_MOPP_CODE_VTABLE, destroy);
+        let data = e.mem.alloc(0x20);
+        let out = e.mem.alloc(8);
+        // Exactly 0x10 bytes: nothing is left for the array.
+        start_log(&mut e);
+        let result = e.call(0x0053_8c00, &args![0u32, data, 0x10u32, out]);
+        let log = end_log(&mut e);
+        assert_eq!(result.u32() & 0xff, 0);
+        assert_eq!(e.mem.u32(out), 0);
+        let object = arguments_of(&log, destroy);
+        assert_eq!(object.len(), 1);
+        assert_eq!(object[0][1], 1);
+        // Missing inputs are refused without allocating.
+        for (data, size, out) in [(0, 0x20, out), (data, 0, out), (data, 0x20, 0)] {
+            start_log(&mut e);
+            let result = e.call(0x0053_8c00, &args![0u32, data, size, out]);
+            assert_eq!(result.u32() & 0xff, 0);
+            assert!(called(&mut e).is_empty());
+        }
+    }
+
+    #[test]
+    fn havok_constructors_and_destructors_store_their_vtables() {
+        let mut e = engine();
+        noop(
+            &mut e,
+            &[
+                MOPP_MEMBER_CONSTRUCT_A,
+                MOPP_MEMBER_CONSTRUCT_B,
+                MOPP_MEMBER_FINISH,
+                MOPP_ARRAY_DESTRUCT,
+            ],
+        );
+        e.register(NI_POINT3_DEFAULT_CONSTRUCT, |_, _| Ret::default());
+        let object = dirty_object(&mut e, 0x30);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_8d70, &args![object]).u32(), object);
+        let log = end_log(&mut e);
+        assert_eq!(
+            log,
+            vec![
+                (MOPP_MEMBER_CONSTRUCT_A, vec![object + 0x10]),
+                (MOPP_MEMBER_CONSTRUCT_B, vec![object + 0x20]),
+                (NI_POINT3_DEFAULT_CONSTRUCT, vec![object + 0x2c]),
+                (MOPP_MEMBER_FINISH, vec![object + 0x2c, 2]),
+            ]
+        );
+        assert_eq!(e.mem.u32(object), HAVOK_MOPP_CODE_VTABLE);
+        // The reference count is 1 and the four words at +0x10 are cleared.
+        assert_eq!(e.mem.u16(object + 6), 1);
+        assert_eq!(e.mem.bytes(object + 0x10, 16), vec![0; 16]);
+        // The destructor goes back through the base classes.
+        start_log(&mut e);
+        e.call(0x0053_8fb0, &args![object]);
+        assert_eq!(called(&mut e), vec![MOPP_ARRAY_DESTRUCT]);
+        assert_eq!(e.mem.u32(object), HAVOK_BASE_OBJECT_VTABLE);
+    }
+
+    #[test]
+    fn havok_base_object_functions() {
+        let mut e = engine();
+        let object = dirty_object(&mut e, 0x10);
+        assert_eq!(e.call(0x0053_8f20, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), HAVOK_BASE_OBJECT_VTABLE);
+        let object = dirty_object(&mut e, 0x10);
+        assert_eq!(e.call(0x0053_8ef0, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), HAVOK_REFERENCED_OBJECT_VTABLE);
+        assert_eq!(e.mem.u16(object + 6), 1);
+        e.call(0x0053_8e30, &args![object]);
+        assert_eq!(e.mem.u32(object), HAVOK_BASE_OBJECT_VTABLE);
+        e.call(0x0053_8e10, &args![object]);
+        // The referenced-object destructor ends with the base vtable.
+        assert_eq!(e.mem.u32(object), HAVOK_BASE_OBJECT_VTABLE);
+    }
+
+    #[test]
+    fn havok_base_object_deleting_destructor_frees_with_bit_zero() {
+        let mut e = engine();
+        let object = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_8e50, &args![object, 0u32]).u32(), object);
+        assert!(called(&mut e).is_empty());
+        assert_eq!(e.mem.u32(object), HAVOK_BASE_OBJECT_VTABLE);
+        start_log(&mut e);
+        e.call(0x0053_8e50, &args![object, 1u32]);
+        assert_eq!(end_log(&mut e), vec![(DEALLOCATE, vec![object])]);
+    }
+
+    #[test]
+    fn havok_free_asks_the_allocator_with_the_stored_size() {
+        let mut e = engine();
+        let free = 0x0900_0004;
+        e.register(free, |_, _| Ret::default());
+        let allocator = object_with_vtable(&mut e, 0x10, &[(8, free)]);
+        e.register(HAVOK_MEMORY_ROUTER, |_, _| ret(0x77));
+        e.register_double(HAVOK_ALLOCATOR_OF_ROUTER, move |_, a| {
+            assert_eq!(a[0], 0x77);
+            ret(allocator)
+        });
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u16(object + 4, 0x30);
+        start_log(&mut e);
+        e.call(0x0053_8eb0, &args![object]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, free),
+            vec![vec![allocator, object, 0x30]]
+        );
+    }
+
+    #[test]
+    fn havok_deleting_destructors_free_with_bit_zero() {
+        let mut e = engine();
+        let free = 0x0900_0004;
+        e.register(free, |_, _| Ret::default());
+        let allocator = object_with_vtable(&mut e, 0x10, &[(8, free)]);
+        e.register(HAVOK_MEMORY_ROUTER, |_, _| ret(0x77));
+        e.register_double(HAVOK_ALLOCATOR_OF_ROUTER, move |_, _| ret(allocator));
+        noop(&mut e, &[MOPP_ARRAY_DESTRUCT]);
+        for (address, vtable) in [
+            (0x0053_8e80, HAVOK_BASE_OBJECT_VTABLE),
+            (0x0053_8f80, HAVOK_BASE_OBJECT_VTABLE),
+        ] {
+            let object = e.mem.alloc(0x40);
+            e.mem.set_u16(object + 4, 0x40);
+            start_log(&mut e);
+            assert_eq!(e.call(address, &args![object, 0u32]).u32(), object);
+            assert!(arguments_of(&end_log(&mut e), free).is_empty());
+            assert_eq!(e.mem.u32(object), vtable);
+            start_log(&mut e);
+            e.call(address, &args![object, 1u32]);
+            assert_eq!(
+                arguments_of(&end_log(&mut e), free),
+                vec![vec![allocator, object, 0x40]]
+            );
+        }
+    }
+
+    #[test]
+    fn four_words_are_cleared() {
+        let mut e = engine();
+        let object = dirty_object(&mut e, 0x20);
+        e.call(0x0053_8f40, &args![object]);
+        assert_eq!(e.mem.bytes(object, 16), vec![0; 16]);
+        assert_eq!(e.mem.u32(object + 16), 0xdddd_dddd);
+    }
+
+    // ---- Save references, flags and the data allocator -------------------------
+
+    #[test]
+    fn marking_asks_the_form_and_the_cell() {
+        let mut e = engine();
+        noop(&mut e, &[FORM_FLAG_SETTER]);
+        let slot = 0x0900_0005;
+        e.register(slot, |_, _| Ret::default());
+        let cell = object_with_vtable(&mut e, 0x40, &[(CELL_SLOT_MARK, slot)]);
+        let this = land(&mut e);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(cell));
+        start_log(&mut e);
+        e.call(0x0053_9010, &args![this, 0u32]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(FORM_FLAG_SETTER, vec![this.addr(), 0])]
+        );
+        start_log(&mut e);
+        e.call(0x0053_9010, &args![this, 1u32]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (FORM_FLAG_SETTER, vec![this.addr(), 1]),
+                (slot, vec![cell, 1]),
+            ]
+        );
+        // Without a cell only the form method runs.
+        e.set(this, TESObjectLAND::pParentCell, Ptr::NULL);
+        start_log(&mut e);
+        e.call(0x0053_9010, &args![this, 1u32]);
+        assert_eq!(called(&mut e), vec![FORM_FLAG_SETTER]);
+    }
+
+    /// A land whose parent cell and child-cell part answer through vtables:
+    /// the child-cell part's slot 0 gives `own_cell`, the cell's slots
+    /// `0x38`, `0x3c` and `0x110` are doubles that return 0x11, 0x22 and
+    /// 0x33.
+    fn reference_world(e: &mut Engine) -> (Ptr<TESObjectLAND>, u32) {
+        let (a, b, c) = (0x0900_0006, 0x0900_0007, 0x0900_0008);
+        e.register(a, |_, _| ret(0x11));
+        e.register(b, |_, _| ret(0x22));
+        e.register(c, |_, _| ret(0x33));
+        let cell = object_with_vtable(
+            e,
+            0x40,
+            &[
+                (CELL_SLOT_REFERENCE_OWNED, a),
+                (CELL_SLOT_REFERENCE_CHECK, b),
+                (CELL_SLOT_SAVE_CHECK, c),
+            ],
+        );
+        let own_slot = 0x0900_0009;
+        e.register_double(own_slot, move |_, _| ret(cell));
+        let this = land(e);
+        let vtable = e.mem.alloc(0x10);
+        e.mem.set_u32(vtable, own_slot);
+        e.mem.set_u32(this.addr() + 0x18, vtable);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(cell));
+        e.set_global(SAVE_REFERENCE_MARKER, 0x5a5a_5a5au32);
+        (this, cell)
+    }
+
+    fn reference_record(e: &mut Engine, kind: u32, id: u32) -> Ptr {
+        let record = e.mem.alloc(0x14);
+        e.mem.set_u32(record, 0x5a5a_5a5a);
+        e.mem.set_u32(record + 8, id);
+        e.mem.set_u32(record + 0xc, kind);
+        Ptr::new(record)
+    }
+
+    #[test]
+    fn reference_owned_check_follows_the_kind() {
+        let mut e = engine();
+        let (this, cell) = reference_world(&mut e);
+        // Other kinds: the cell decides.
+        let record = reference_record(&mut e, 3, 0x100);
+        assert_eq!(e.call(0x0053_91d0, &args![this, record]).u32() & 0xff, 0x11);
+        // Kinds 8 and 9: the form is looked up and cast; the answer is 0.
+        e.register(FORM_LOOKUP_BY_ID, |_, a| ret(a[0] + 1));
+        e.register(RT_DYNAMIC_CAST, |_, a| ret(a[0]));
+        for kind in [8, 9] {
+            let record = reference_record(&mut e, kind, 0x100);
+            start_log(&mut e);
+            assert_eq!(e.call(0x0053_91d0, &args![this, record]).u32() & 0xff, 0);
+            let log = end_log(&mut e);
+            assert_eq!(arguments_of(&log, FORM_LOOKUP_BY_ID), vec![vec![0x100]]);
+            assert_eq!(arguments_of(&log, PARENT_CELL), vec![vec![this.addr()]]);
+        }
+        // No record, or a record without the marker: 0.
+        assert_eq!(e.call(0x0053_91d0, &args![this, 0u32]).u32() & 0xff, 0);
+        let record = reference_record(&mut e, 3, 0x100);
+        e.mem.set_u32(record.addr(), 0);
+        assert_eq!(e.call(0x0053_91d0, &args![this, record]).u32() & 0xff, 0);
+        let _ = cell;
+    }
+
+    #[test]
+    fn save_check_follows_the_kind_and_the_flags() {
+        let mut e = engine();
+        let (this, cell) = reference_world(&mut e);
+        e.register(FORM_ID_IN_CELL_FILE, |_, a| ret((a[1] == 0x100) as u32));
+        // Kind 6 needs the flag.
+        let record = reference_record(&mut e, 6, 0x100);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 0u32, 0u32]).u32() & 0xff,
+            0
+        );
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 1u32, 0u32]).u32() & 0xff,
+            1
+        );
+        // Kind 8 does not, and is answered 0 when the id belongs to the cell.
+        let record = reference_record(&mut e, 8, 0x100);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 0u32, 0u32]).u32() & 0xff,
+            0
+        );
+        let record = reference_record(&mut e, 9, 0x100);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 0u32, 0u32]).u32() & 0xff,
+            1
+        );
+        // An id that is not the cell's: 0.
+        let record = reference_record(&mut e, 9, 0x200);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 0u32, 0u32]).u32() & 0xff,
+            0
+        );
+        // Other kinds need the flag and the cell decides.
+        let record = reference_record(&mut e, 3, 0x100);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 0u32, 1u32]).u32() & 0xff,
+            0
+        );
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 1u32, 0u32]).u32() & 0xff,
+            0x33
+        );
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, 0x0900_0008),
+            vec![vec![cell, record.addr(), 1, 0]]
+        );
+        // No marker: 0.
+        e.mem.set_u32(record.addr(), 1);
+        assert_eq!(
+            e.call(0x0053_9280, &args![this, record, 1u32, 0u32]).u32() & 0xff,
+            0
+        );
+    }
+
+    #[test]
+    fn reference_check_of_a_form_follows_its_type() {
+        let mut e = engine();
+        let (this, _cell) = reference_world(&mut e);
+        e.register(FORM_TYPE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(TYPE_IS_REFERENCE_KIND, |_, a| ret((a[0] != 0x20) as u32));
+        // A form of an unrelated type: the cell decides, asked about the form.
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, 0x20);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9060, &args![this, form]).u32() & 0xff, 0x22);
+        assert_eq!(
+            arguments_of(&end_log(&mut e), 0x0900_0007),
+            vec![vec![e.mem.u32(this.addr() + 0x20), form]]
+        );
+        // A reference kind whose child-cell owner is the land's own cell.
+        let owner = 0x0900_000a;
+        let own_cell = e.mem.u32(this.addr() + 0x20);
+        e.register_double(owner, move |_, _| ret(own_cell));
+        let owner_object = object_with_vtable(&mut e, 0x10, &[(0, owner)]);
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            // To a TESChildCell: the owner object; to a TESObjectREFR: the form.
+            ret(if a[3] == RTTI_TES_CHILD_CELL {
+                owner_object
+            } else {
+                a[0]
+            })
+        });
+        e.register(GET_REF_PERSISTS, |e, a| ret(e.mem.u8(a[0] + 8) as u32));
+        for (kind, persists, expected) in [
+            (0x3a, 0, 1),
+            (0x40, 0, 1),
+            (0x69, 0, 1),
+            (0x3a, 1, 0),
+            (0x43, 0, 1),
+            (0x41, 0, 0),
+            (0x6a, 0, 0),
+        ] {
+            let form = e.mem.alloc(0x20);
+            e.mem.set_u8(form + 4, kind);
+            e.mem.set_u8(form + 8, persists);
+            assert_eq!(
+                e.call(0x0053_9060, &args![this, form]).u32() & 0xff,
+                expected,
+                "type {kind:#x} persists {persists}"
+            );
+        }
+        // Another cell owns the form: the land's cell decides, asked about
+        // the other cell.
+        let other_cell = 0x4242;
+        e.register_double(owner, move |_, _| ret(other_cell));
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u8(form + 4, 0x3a);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9060, &args![this, form]).u32() & 0xff, 0x22);
+        assert_eq!(
+            arguments_of(&end_log(&mut e), 0x0900_0007),
+            vec![vec![own_cell, other_cell]]
+        );
+    }
+
+    #[test]
+    fn reference_translation_builds_the_save_record() {
+        let mut e = engine();
+        let (this, cell) = reference_world(&mut e);
+        e.register(FORM_ID, |_, a| ret(a[0] + 5));
+        e.register(CELL_SAVE_ID, |_, a| ret(a[0] + 7));
+        let out = dirty_object(&mut e, 0x14);
+        let out: Ptr = Ptr::new(out);
+        // Kind 3 with the cell's save id becomes kind 6 with the form id.
+        let record = reference_record(&mut e, 3, cell + 7);
+        e.call(0x0053_9360, &args![this, out, record]);
+        let words = |e: &Engine| {
+            (0..5)
+                .map(|i| e.mem.u32(out.addr() + 4 * i))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(words(&e), vec![0x5a5a_5a5a, 0, cell + 5, 6, 0]);
+        // Kind 5 with another id leaves only the cleared marker.
+        let record = reference_record(&mut e, 5, 1);
+        e.call(0x0053_9360, &args![this, out, record]);
+        assert_eq!(e.mem.u32(out.addr()), 0);
+        // Kind 6 with the form id becomes kind 9.
+        let record = reference_record(&mut e, 6, cell + 5);
+        e.call(0x0053_9360, &args![this, out, record]);
+        assert_eq!(words(&e), vec![0x5a5a_5a5a, 0, cell + 5, 9, 0]);
+        // Kind 6 with another id, or an unknown kind: nothing.
+        for (kind, id) in [(6, 1), (4, cell + 5)] {
+            let record = reference_record(&mut e, kind, id);
+            e.call(0x0053_9360, &args![this, out, record]);
+            assert_eq!(e.mem.u32(out.addr()), 0);
+        }
+        // No source record: the marker is cleared; no destination: nothing.
+        e.mem.set_u32(out.addr(), 9);
+        e.call(0x0053_9360, &args![this, out, 0u32]);
+        assert_eq!(e.mem.u32(out.addr()), 0);
+        start_log(&mut e);
+        e.call(0x0053_9360, &args![this, 0u32, record]);
+        assert!(called(&mut e).is_empty());
+    }
+
+    #[test]
+    fn data_flag_tests_and_setter() {
+        let mut e = engine();
+        let this = land(&mut e);
+        for (data, expected) in [(0u32, 0), (1, 1), (2, 1), (4, 1), (0x18, 0), (0x1c, 1)] {
+            e.set(this, TESObjectLAND::Data, data);
+            assert_eq!(
+                e.call(0x0053_9460, &args![this]).u32() & 0xff,
+                expected,
+                "{data:#x}"
+            );
+        }
+        e.set(this, TESObjectLAND::Data, 0x7);
+        assert_eq!(e.call(0x0053_94a0, &args![this]).u32() & 0xff, 0);
+        e.call(0x0053_94c0, &args![this, 1u32]);
+        assert_eq!(e.get(this, TESObjectLAND::Data), 0xf);
+        assert_eq!(e.call(0x0053_94a0, &args![this]).u32() & 0xff, 1);
+        e.call(0x0053_94c0, &args![this, 0u32]);
+        assert_eq!(e.get(this, TESObjectLAND::Data), 0x7);
+    }
+
+    /// The default blocks of the shared statics, each starting with a marker
+    /// word.
+    fn default_blocks(e: &mut Engine) {
+        for quadrant in 0..4 {
+            let block = e.mem.alloc(0xd8c);
+            e.mem.set_u32(block, 0xa0 + quadrant);
+            e.mem.set_f32(block + 8, 1.5);
+            e.set_global(DEFAULT_VERTEX_BLOCKS + 4 * quadrant, block);
+        }
+        for (global, marker, size) in [
+            (DEFAULT_COLORS, 0xc0u32, 0x1210u32),
+            (DEFAULT_NORMALS, 0xd0, 0xd8c),
+            (DEFAULT_NORMAL_SET, 0xe0, 0x121),
+        ] {
+            let block = e.mem.alloc(size);
+            e.mem.set_u32(block, marker);
+            e.set_global(global, block);
+        }
+        e.set_global(DEFAULT_LAND_TEXTURE, 0xdefu32);
+    }
+
+    fn allocation_world(e: &mut Engine) {
+        default_blocks(e);
+        e.register(LOADED_LAND_DATA_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(CELL_GET_DATA_X, |_, _| ret(-7i32 as u32));
+        e.register(CELL_GET_DATA_Y, |_, _| ret(9));
+        e.register(LAND_DEFAULT_HEIGHT, |_, _| float_ret(7.0));
+    }
+
+    #[test]
+    fn data_allocation_copies_the_defaults_into_a_fresh_land() {
+        let mut e = engine();
+        allocation_world(&mut e);
+        let this = land(&mut e);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(0x6000));
+        assert_eq!(e.call(0x0053_9500, &args![this, 0u32]).u32() & 0xff, 1);
+        let data = loaded_data(&e, this);
+        assert_eq!(e.get(data, LoadedLandData::iCellX), -7);
+        assert_eq!(e.get(data, LoadedLandData::iCellY), 9);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let colors = e.get(data, LoadedLandData::ppColorsA);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let flags = e.get(data, LoadedLandData::ppNormalsSet);
+        for quadrant in 0..4 {
+            // Each quadrant has its own copy of its default vertex block,
+            // with the default height in every Z.
+            let block = element(&e, vertices, quadrant);
+            assert_eq!(e.mem.u32(block), 0xa0 + quadrant);
+            assert_eq!(e.mem.f32(block + 8), 7.0);
+            assert_eq!(e.mem.f32(block + 0x120 * 12 + 8), 7.0);
+            assert_eq!(e.mem.u32(element(&e, colors, quadrant)), 0xc0);
+            assert_eq!(e.mem.u32(element(&e, normals, quadrant)), 0xd0);
+            assert_eq!(e.mem.u32(element(&e, flags, quadrant)), 0xe0);
+            // The default texture, an empty set of layer textures, and the
+            // percent array pointing at 0x121 entries of 0x20 bytes.
+            assert_eq!(
+                e.mem
+                    .u32(data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant),
+                0xdef
+            );
+            let layers = e
+                .mem
+                .u32(data.addr() + LoadedLandData::pQuadTextureArray.off + 4 * quadrant);
+            assert_eq!(e.mem.bytes(layers, 0x18), vec![0; 0x18]);
+            let percent = e
+                .mem
+                .u32(data.addr() + LoadedLandData::ppPercentArrays.off + 4 * quadrant);
+            let first = e.mem.u32(percent);
+            assert_eq!(e.mem.u32(percent + 4 * 0x120), first + 0x20 * 0x120);
+            assert_eq!(e.mem.block_size(first), Some(0x2420));
+        }
+        // A land that already has vertex arrays is left alone.
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9500, &args![this, 0u32]).u32() & 0xff, 0);
+        assert!(called(&mut e).is_empty());
+    }
+
+    #[test]
+    fn data_allocation_keeps_the_default_vertices_for_height_minus_2048() {
+        let mut e = engine();
+        allocation_world(&mut e);
+        e.register(LAND_DEFAULT_HEIGHT, |_, _| float_ret(-2048.0));
+        let this = land(&mut e);
+        e.call(0x0053_9500, &args![this, 0u32]);
+        let data = loaded_data(&e, this);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        assert_eq!(e.mem.f32(element(&e, vertices, 1) + 8), 1.5);
+    }
+
+    #[test]
+    fn data_allocation_for_a_copy_leaves_the_blocks_empty() {
+        let mut e = engine();
+        allocation_world(&mut e);
+        let (source, _data) = land_with_data(&mut e);
+        let this = land(&mut e);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9500, &args![this, source]).u32() & 0xff, 1);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, MEMORY_COPY).is_empty());
+        assert!(arguments_of(&log, MEMORY_SET).is_empty());
+        let data = loaded_data(&e, this);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        assert_eq!(e.mem.u32(element(&e, vertices, 0)), 0);
+        // The arrays are still there for the caller to fill.
+        assert_eq!(arguments_of(&log, ALLOCATE).len(), 1 + 4 + 4 * 6);
+    }
+
+    // ---- Quadrant materials ----------------------------------------------------
+
+    /// A land with four mesh nodes and the doubles of the material builder.
+    fn material_world(e: &mut Engine) -> (Ptr<TESObjectLAND>, Ptr<LoadedLandData>, Vec<u32>) {
+        let (this, data) = land_with_data(e);
+        e.set_global(DEFAULT_LAND_TEXTURE, 0xdefu32);
+        let meshes = e.mem.alloc(16);
+        let nodes: Vec<u32> = (0..4).map(|_| e.mem.alloc(0x20)).collect();
+        for (i, node) in nodes.iter().enumerate() {
+            e.mem.set_u32(meshes + 4 * i as u32, *node);
+        }
+        e.set(data, LoadedLandData::ppMesh, Ptr::new(meshes));
+        let tangent_slot = 0x0900_000b;
+        e.register(tangent_slot, |_, _| ret(0x7777));
+        let vtable = e.mem.alloc(0x200);
+        e.mem
+            .set_u32(vtable + PROPERTY_SLOT_TANGENT_SPACE, tangent_slot);
+        e.register(NI_ALLOCATE_OBJECT, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(SHADER_PROPERTY_CONSTRUCT, move |e, a| {
+            e.mem.set_u32(a[0], vtable);
+            ret(a[0])
+        });
+        e.register(PERCENT_EXTRA_DATA_CONSTRUCT, |_, a| ret(a[0]));
+        e.set_global(EXTRA_DATA_KEY, 0x4b4bu32);
+        noop(
+            e,
+            &[
+                OBJECT_ADD_EXTRA_DATA,
+                SHADER_PROPERTY_SET_WORD_0X58,
+                SHADER_PROPERTY_SET_TEXTURE_SET,
+                SHADER_PROPERTY_SET_FLAGS,
+                TEXTURING_PROPERTY_SET,
+                GEOMETRY_DATA_SET_SHARED,
+                NODE_ATTACH_PROPERTY,
+                PREPARE_OBJECT,
+            ],
+        );
+        // Texture 0 has no texture set; the others have one at +0x18.
+        e.register(OBJECT_FIELD_0X18, |_, a| {
+            ret(if a[0] == 0x0bad { 0 } else { a[0] + 0x100 })
+        });
+        e.register(TEXTURE_SET_AS_SHADER_SET, |_, a| ret(a[0] + 1));
+        e.register(LAND_TEXTURE_FLAG_BYTE, |_, a| ret(0x100 | (a[0] & 0xff)));
+        // Each mesh's first geometry holds a geometry data at +0xb8.
+        e.register(NODE_FIRST_GEOMETRY, |e, _| {
+            let geometry = e.mem.alloc(0x100);
+            e.mem.set_u32(geometry + 0xb8, 0x3030);
+            ret(geometry)
+        });
+        e.register(CREATE_TANGENT_SPACE_SIMPLE, |_, a| ret(a[0] + 1));
+        (this, data, nodes)
+    }
+
+    #[test]
+    fn materials_are_built_for_every_quadrant() {
+        let mut e = engine();
+        let (this, data, nodes) = material_world(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x1);
+        // Quadrant 0: its own default texture and layers 1 and 3; quadrant 1
+        // a default texture without a texture set.
+        let base = data.addr() + LoadedLandData::pDefQuadTexture.off;
+        e.mem.set_u32(base, 0xa0);
+        e.mem.set_u32(base + 4, 0x0bad);
+        let layers = e
+            .mem
+            .u32(data.addr() + LoadedLandData::pQuadTextureArray.off);
+        e.mem.set_u32(layers + 4, 0x31);
+        e.mem.set_u32(layers + 12, 0x33);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9960, &args![this]).u32() & 0xff, 1);
+        let log = end_log(&mut e);
+        // The guard is entered with the source line of the function.
+        assert_eq!(
+            arguments_of(&log, SCOPE_GUARD_ENTER)[0][1..],
+            [GUARD_TAG, 1, SOURCE_FILE, 0xca4]
+        );
+        assert!(e.get(this, TESObjectLAND::Data) & FLAG_LOADED != 0);
+        // The vertex colours are white with alpha 0 (no colour flag).
+        let colors = e.get(data, LoadedLandData::ppColorsA);
+        for quadrant in 0..4 {
+            let block = element(&e, colors, quadrant);
+            for vertex in [0, 0x120] {
+                let at = block + vertex * 16;
+                assert_eq!(
+                    (0..4).map(|i| e.mem.f32(at + 4 * i)).collect::<Vec<_>>(),
+                    vec![1.0, 1.0, 1.0, 0.0]
+                );
+            }
+        }
+        // Extra data: one per mesh, built from the first percent block.
+        let extra = arguments_of(&log, OBJECT_ADD_EXTRA_DATA);
+        assert_eq!(extra.len(), 4);
+        for (quadrant, call) in extra.iter().enumerate() {
+            let percent = e
+                .mem
+                .u32(data.addr() + LoadedLandData::ppPercentArrays.off + 4 * quadrant as u32);
+            let first = e.mem.u32(percent);
+            assert_eq!(call[0], nodes[quadrant]);
+            assert_eq!(call[1], 0x4b4b);
+            assert_eq!(
+                arguments_of(&log, PERCENT_EXTRA_DATA_CONSTRUCT)[quadrant][1..],
+                [0x2420, first]
+            );
+        }
+        // Texture sets of quadrant 0: its own texture in slot 0, layers 1 and
+        // 3 in slots 2 and 4, nothing elsewhere.
+        let sets = arguments_of(&log, SHADER_PROPERTY_SET_TEXTURE_SET);
+        assert_eq!(sets.len(), 4 * 7);
+        let slots: Vec<(u32, u32)> = sets[..7].iter().map(|a| (a[1], a[2])).collect();
+        assert_eq!(
+            slots,
+            vec![
+                (0, 0xa0 + 0x100 + 1),
+                (1, 0),
+                (2, 0x31 + 0x100 + 1),
+                (3, 0),
+                (4, 0x33 + 0x100 + 1),
+                (5, 0),
+                (6, 0)
+            ]
+        );
+        // Quadrant 1's texture has no set, so slot 0 gets the default land
+        // texture's.
+        assert_eq!(sets[7][1..], [0, 0xdef + 0x100 + 1]);
+        // The flags: default texture first, then layers 0 to 5 (the layer
+        // order of the call is the reverse of the order they were read in).
+        let flags = arguments_of(&log, SHADER_PROPERTY_SET_FLAGS);
+        assert_eq!(flags.len(), 4);
+        assert_eq!(flags[0][1..], [0xa0, 0, 0x31, 0, 0x33, 0, 0, 0, 0, 0]);
+        assert_eq!(flags[1][1], 0x0bad & 0xff);
+        // Tangent space, hand-over, attach and prepare of the first mesh.
+        let geometry = arguments_of(&log, CREATE_TANGENT_SPACE_SIMPLE)[0][0];
+        assert_eq!(
+            arguments_of(&log, NODE_FIRST_GEOMETRY)[0],
+            vec![nodes[0], 0]
+        );
+        let property = flags[0][0];
+        assert_eq!(
+            arguments_of(&log, TEXTURING_PROPERTY_SET)[0],
+            vec![property + 0xd0, geometry + 1]
+        );
+        assert_eq!(
+            arguments_of(&log, GEOMETRY_DATA_SET_SHARED)[0],
+            vec![0x3030, 0x7777]
+        );
+        assert_eq!(
+            arguments_of(&log, NODE_ATTACH_PROPERTY)[0],
+            vec![geometry, property]
+        );
+        assert_eq!(arguments_of(&log, PREPARE_OBJECT)[0], vec![nodes[0], 0, 0]);
+    }
+
+    #[test]
+    fn materials_keep_the_colors_of_a_land_with_vertex_colors() {
+        let mut e = engine();
+        let (this, data, _nodes) = material_world(&mut e);
+        e.set(this, TESObjectLAND::Data, 0x2);
+        let colors = e.get(data, LoadedLandData::ppColorsA);
+        e.mem.set_f32(element(&e, colors, 0), 0.25);
+        assert_eq!(e.call(0x0053_9960, &args![this]).u32() & 0xff, 1);
+        assert_eq!(e.mem.f32(element(&e, colors, 0)), 0.25);
+    }
+
+    #[test]
+    fn materials_need_loaded_meshes() {
+        let mut e = engine();
+        let (this, data, _nodes) = material_world(&mut e);
+        let meshes = e.get(data, LoadedLandData::ppMesh);
+        e.mem.set_u32(meshes.addr(), 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_9960, &args![this]).u32() & 0xff, 0);
+        assert_eq!(called(&mut e), vec![SCOPE_GUARD_ENTER, SCOPE_GUARD_LEAVE]);
+        e.set(data, LoadedLandData::ppMesh, Ptr::NULL);
+        assert_eq!(e.call(0x0053_9960, &args![this]).u32() & 0xff, 0);
+        e.set(this, TESObjectLAND::pLoadedData, Ptr::NULL);
+        assert_eq!(e.call(0x0053_9960, &args![this]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn geometry_and_property_helpers() {
+        let mut e = engine();
+        noop(&mut e, &[GEOMETRY_DATA_SET_SHARED, TEXTURING_PROPERTY_SET]);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object + 0xb8, 0x3333);
+        start_log(&mut e);
+        e.call(0x0053_9ef0, &args![object, 0x99u32]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (SMART_POINTER_GET, vec![object + 0xb8]),
+                (GEOMETRY_DATA_SET_SHARED, vec![0x3333, 0x99])
+            ]
+        );
+        start_log(&mut e);
+        e.call(0x0053_9f20, &args![object, 0x55u32]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![(TEXTURING_PROPERTY_SET, vec![object + 0xd0, 0x55])]
+        );
+        e.set_global(EXTRA_DATA_KEY, 0x1234u32);
+        assert_eq!(e.call(0x0053_9f40, &args![]).u32(), 0x1234);
     }
 }
