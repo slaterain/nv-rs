@@ -1810,6 +1810,705 @@ pub fn fn_00704af0(e: &mut Engine) {
     }
 }
 
+/// The type descriptors the menu casts pass to `__RTDynamicCast`
+/// (`00ec43fb`, `cdecl`): the source type is always `Menu`, the targets
+/// `StatsMenu`, `DialogMenu`, `SleepWaitMenu` and `VATSMenu`.
+const MENU_TYPE: u32 = 0x0119_f34c;
+const STATS_MENU_TYPE: u32 = 0x0119_f37c;
+const DIALOG_MENU_TYPE: u32 = 0x0119_f394;
+const SLEEP_WAIT_MENU_TYPE: u32 = 0x0119_f3cc;
+const VATS_MENU_TYPE: u32 = 0x0119_f3e8;
+/// `__RTDynamicCast(object, 0, source type, target type, 0)`.
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// Menu ids of the menus this part looks up.
+const MENU_DIALOG: i32 = 0x3f1;
+const MENU_SLEEP_WAIT: i32 = 0x3f4;
+const MENU_VATS: i32 = 0x420;
+/// Menu ids `00705000` and `00705020` test for existence.
+const MENU_435: i32 = 0x435;
+const MENU_41D: i32 = 0x41d;
+/// `StatsMenu::Create` (Xbox PDB), `StatsMenu::UpdateAll` (on the menu),
+/// `StatsMenu::SetKnobPosition` (`cdecl`, one word),
+/// `StatsMenu::UpdateAllActorValues` and `StatsMenu::UpdateActorValue` (the
+/// last two on the menu, the second with the value).
+const STATS_MENU_CREATE: u32 = 0x007d_a2c0;
+const STATS_UPDATE_ALL: u32 = 0x007d_cc80;
+const STATS_SET_KNOB_POSITION: u32 = 0x007d_fc90;
+const STATS_UPDATE_ALL_ACTOR_VALUES: u32 = 0x007d_cfc0;
+const STATS_UPDATE_ACTOR_VALUE: u32 = 0x007d_d090;
+/// The actor value that updates the whole stats screen (`0x4d`).
+const ACTOR_VALUE_ALL: u32 = 0x4d;
+/// The global holding the container menu object (`011d93f8`) and
+/// `ContainerMenu::UpdateLists` (Xbox PDB) on it.
+const CONTAINER_MENU_GLOBAL: u32 = 0x011d_93f8;
+const CONTAINER_UPDATE_LISTS: u32 = 0x0075_c280;
+/// The word at `+0x80` of the object at [`CONTAINER_MENU_GLOBAL`].
+const CONTAINER_MENU_FIELD: u32 = 0x80;
+/// `ContainerMenu::Create` (`cdecl`) and `ContainerMenu::Close` (Xbox PDB).
+const CONTAINER_MENU_CREATE: u32 = 0x0075_b310;
+const CONTAINER_MENU_CLOSE: u32 = 0x0075_b750;
+/// `TESObjectREFR::GetOwner` and `TESObjectREFR::IsAnOwner` (Xbox PDB) on a
+/// reference; the latter takes the word at `011dea3c` and a flag.
+const REFR_GET_OWNER: u32 = 0x0056_7790;
+const REFR_IS_AN_OWNER: u32 = 0x0057_85e0;
+const OWNER_GLOBAL: u32 = 0x011d_ea3c;
+/// Slot `0x100` of a reference (a getter answering a byte).
+const REFR_SLOT_100: u32 = 0x100;
+/// `BarterMenu::Create` and `RecipeMenu::Create` (Xbox PDB), `cdecl`, two
+/// words each.
+const BARTER_MENU_CREATE: u32 = 0x0072_d250;
+const RECIPE_MENU_CREATE: u32 = 0x0072_6ff0;
+/// `BSTimer::SetGlobalTimeMultiplier` (Xbox PDB) on the timer at
+/// `011f6394`: a float and a flag.
+const SET_GLOBAL_TIME_MULTIPLIER: u32 = 0x00aa_4db0;
+const GLOBAL_TIMER: u32 = 0x011f_6394;
+/// `DialogMenu::Create` (`cdecl`, three words), `DialogMenu::SetPause` (on
+/// the menu, one word), `DialogMenu::ServiceStart` and the getter
+/// `004fb070` on a dialog menu.
+const DIALOG_MENU_CREATE: u32 = 0x0076_1a20;
+const DIALOG_SET_PAUSE: u32 = 0x0076_4200;
+const DIALOG_SERVICE_START: u32 = 0x0076_3ff0;
+const DIALOG_MENU_GETTER: u32 = 0x004f_b070;
+/// The byte set while a dialog is open (`011d9514`).
+const IN_DIALOG_FLAG: u32 = 0x011d_9514;
+/// The HUD main menu object (the word at `011d96c0`) and, on it,
+/// `HUDMainMenu::ShowSubtitle` (Xbox PDB), `00775380` and `00775920`.
+const HUD_MAIN_MENU: u32 = 0x011d_96c0;
+const HUD_SHOW_SUBTITLE: u32 = 0x0077_4fd0;
+const HUD_SHOW_SUBTITLE_TIMED: u32 = 0x0077_5380;
+const HUD_HIDE_SUBTITLE: u32 = 0x0077_5920;
+/// `HUDMainMenu::SetRegionText` (Xbox PDB, `cdecl`): a pointer to a
+/// 0x10c-byte request (a word, a 260-byte text, a flag byte at `+0x108`).
+const HUD_SET_REGION_TEXT: u32 = 0x0077_28f0;
+/// `strcpy_s(buffer, size, text)` (`00406d30`, `cdecl`).
+const STRING_COPY_BOUNDED: u32 = 0x0040_6d30;
+/// The copy (`00418900`: `this`, source pointer; a word, a byte and a word)
+/// and the empty destructor (`00483710`) of the 12-byte value `ShowSubtitle`
+/// takes by value.
+const SUBTITLE_VALUE_COPY: u32 = 0x0041_8900;
+const SUBTITLE_VALUE_DTOR: u32 = 0x0048_3710;
+/// `StartMenu::Create(first, second)` (Xbox PDB, `cdecl`).
+const START_MENU_CREATE: u32 = 0x007c_b7d0;
+/// `LockPickMenu::Create` (Xbox PDB, `cdecl`, three words).
+const LOCK_PICK_MENU_CREATE: u32 = 0x0078_db00;
+/// `SleepWaitMenu::Create` (`cdecl`, one word), `SleepWaitMenu::
+/// UpdateSleeping` (on the menu) and `SleepWaitMenu::Close` (Xbox PDB).
+const SLEEP_MENU_CREATE: u32 = 0x007b_fc30;
+const SLEEP_UPDATE_SLEEPING: u32 = 0x007c_0580;
+const SLEEP_MENU_CLOSE: u32 = 0x007c_01b0;
+/// `VATSMenu::Create` and `VATSMenu::Close` (Xbox PDB).
+const VATS_MENU_CREATE: u32 = 0x007e_9200;
+const VATS_MENU_CLOSE: u32 = 0x007e_bd50;
+/// `00709be0` and `00709bc0`: true when the manager's `+0x4bc` word is 0
+/// and 2 (`00709c00`, [`MANAGER_MODE_IS_THREE`], tests for 3).
+const MANAGER_MODE_IS_ZERO: u32 = 0x0070_9be0;
+const MANAGER_MODE_IS_TWO: u32 = 0x0070_9bc0;
+/// `RaceSexMenu::Create` (Xbox PDB, `cdecl`) and the words the deferred
+/// path writes: the pending menu kind (`011d8950`) and its argument
+/// (`011d8960`).
+const RACE_SEX_MENU_CREATE: u32 = 0x007a_c730;
+const PENDING_MENU_KIND: u32 = 0x011d_8950;
+const PENDING_MENU_ARGUMENT: u32 = 0x011d_8960;
+/// The pending menu kind of the race/sex menu.
+const PENDING_RACE_SEX: u32 = 5;
+/// `0043d4d0` on `011c3ea4`: the address of a counter word.
+const COUNTER_ACCESSOR: u32 = 0x0043_d4d0;
+const COUNTER_OBJECT: u32 = 0x011c_3ea4;
+/// Methods of the manager the thin wrappers forward to.
+const MANAGER_LAST_MINUTE_UPDATE: u32 = 0x0071_3c70;
+const MANAGER_GETTER_A: u32 = 0x0060_2170;
+const MANAGER_GETTER_B: u32 = 0x0046_0fb0;
+const MANAGER_CALL_A: u32 = 0x0071_33f0;
+const MANAGER_CALL_B: u32 = 0x0071_7e30;
+
+/// The menu of class `menu_id` cast to `target_type`: `GetMenuByClass`,
+/// `Tile::GetMenu` and `__RTDynamicCast`. 0 when there is no such menu or
+/// it is another class.
+fn menu_cast(e: &mut Engine, menu_id: i32, target_type: u32) -> u32 {
+    let tile = e.call(GET_MENU_BY_CLASS, &args![menu_id]).u32();
+    if tile == 0 {
+        return 0;
+    }
+    let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![menu, 0u32, MENU_TYPE, target_type, 0u32],
+    )
+    .u32()
+}
+
+// Translated from 00704bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the container menu object (`011d93f8`) exists:
+/// `ContainerMenu::UpdateLists(0)` on it.
+pub fn fn_00704bc0(e: &mut Engine) {
+    let menu = e.global::<u32>(CONTAINER_MENU_GLOBAL);
+    if menu != 0 {
+        e.call(CONTAINER_UPDATE_LISTS, &args![menu, 0u32]);
+    }
+}
+
+// Translated from 00704be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StatsMenu::Create` when the manager is ready, else 0.
+pub fn fn_00704be0(e: &mut Engine) -> u32 {
+    match ready_manager(e) {
+        Some(_) => e.call(STATS_MENU_CREATE, &[]).u32(),
+        None => 0,
+    }
+}
+
+// Translated from 00704c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::SetStatsMenuVisible` (Xbox PDB), `cdecl`: shows (`show`
+/// set) or hides the stats menu; `check_state` is as in
+/// [`interface_set_map_menu_visible`].
+///
+/// To show it while it is not visible: the inventory, repair (with
+/// `RepairMenu::ResetMenu`), item-mod (with `ItemModMenu::ResetMenu`) and
+/// map menus fade out, the stats menu is created if it does not exist, its
+/// id goes into [`TRAIT_CURRENT_MENU`], `StatsMenu::UpdateAll` runs and it
+/// fades in. Hiding a visible one fades it out. Showing always ends with
+/// the Pipboy refresh (tab 1) and `StatsMenu::SetKnobPosition(0)` when
+/// `00974d90` says so.
+pub fn interface_set_stats_menu_visible(e: &mut Engine, show: u8, check_state: u8) {
+    let Some(manager) = ready_manager(e) else {
+        return;
+    };
+    let mut stats = e.call(GET_MENU_BY_CLASS, &args![MENU_STATS]).u32();
+    let inventory = e.call(GET_MENU_BY_CLASS, &args![MENU_INVENTORY]).u32();
+    let repair = e.call(GET_MENU_BY_CLASS, &args![MENU_REPAIR]).u32();
+    let item_mod = e.call(GET_MENU_BY_CLASS, &args![MENU_ITEM_MOD]).u32();
+    let map = e.call(GET_MENU_BY_CLASS, &args![MENU_MAP]).u32();
+    let mask = if check_state != 0 { 0xb } else { 0 };
+    let visible = interface_is_menu_id_visible(e, MENU_STATS, mask) != 0;
+    if show != 0 && !visible {
+        if inventory != 0 {
+            menu_fade_out(e, inventory);
+        }
+        if repair != 0 {
+            menu_fade_out(e, repair);
+            e.call(REPAIR_RESET_MENU, &[]);
+        }
+        if item_mod != 0 {
+            menu_fade_out(e, item_mod);
+            e.call(ITEM_MOD_RESET_MENU, &[]);
+        }
+        if map != 0 {
+            menu_fade_out(e, map);
+        }
+        if stats == 0 {
+            stats = fn_00704be0(e);
+        }
+        if stats != 0 {
+            set_current_menu(e, manager, MENU_STATS);
+            let menu = e.call(TILE_GET_MENU, &args![stats]).u32();
+            e.call(STATS_UPDATE_ALL, &args![menu]);
+            menu_fade_in(e, stats);
+        }
+    } else if show == 0 && visible && stats != 0 {
+        menu_fade_out(e, stats);
+    }
+    if show != 0 {
+        refresh_pipboy_tab(e, manager, 1);
+        call_if_pipboy_query(e, manager, STATS_SET_KNOB_POSITION);
+    }
+}
+
+// Translated from 00704df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The flag byte of the stats menu id ([`fn_007027b0`]).
+pub fn fn_00704df0(e: &mut Engine) -> u8 {
+    fn_007027b0(e, MENU_STATS)
+}
+
+// Translated from 00704e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::UpdateActorValue` (Xbox PDB), `cdecl`: when the manager is
+/// ready, the stats menu is showing (state bits `0xb`) and really is a
+/// `StatsMenu`: `UpdateAllActorValues` for the value `0x4d`, else
+/// `UpdateActorValue(value)`.
+pub fn interface_update_actor_value(e: &mut Engine, actor_value: u32) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    if interface_is_menu_id_visible(e, MENU_STATS, 0xb) == 0 {
+        return;
+    }
+    let menu = menu_cast(e, MENU_STATS, STATS_MENU_TYPE);
+    if menu == 0 {
+        return;
+    }
+    if actor_value == ACTOR_VALUE_ALL {
+        e.call(STATS_UPDATE_ALL_ACTOR_VALUES, &args![menu]);
+    } else {
+        e.call(STATS_UPDATE_ACTOR_VALUE, &args![menu, actor_value]);
+    }
+}
+
+// Translated from 00704ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CreateContainerMenu` (Xbox PDB), `cdecl(reference, mode)`:
+/// when the manager is ready, `ContainerMenu::Create`. Mode 1 becomes 2
+/// when the reference's slot `0x100` answers false, it has an owner
+/// (`TESObjectREFR::GetOwner`) and `IsAnOwner(011dea3c, 1)` is false.
+pub fn interface_create_container_menu(e: &mut Engine, reference: u32, mode: u32) -> u32 {
+    if ready_manager(e).is_none() {
+        return 0;
+    }
+    let mut mode = mode;
+    if mode == 1
+        && e.vcall(reference, REFR_SLOT_100, &[]).u8() == 0
+        && e.call(REFR_GET_OWNER, &args![reference]).u32() != 0
+    {
+        let player = e.global::<u32>(OWNER_GLOBAL);
+        if e.call(REFR_IS_AN_OWNER, &args![reference, player, 1u32])
+            .u8()
+            == 0
+        {
+            mode = 2;
+        }
+    }
+    e.call(CONTAINER_MENU_CREATE, &args![reference, mode]).u32()
+}
+
+// Translated from 00704f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ContainerMenu::Close` when the manager is ready.
+pub fn fn_00704f50(e: &mut Engine) {
+    if ready_manager(e).is_some() {
+        e.call(CONTAINER_MENU_CLOSE, &[]);
+    }
+}
+
+// Translated from 00704f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BarterMenu::Create(a, b)` (`cdecl`) when the manager is ready.
+pub fn fn_00704f80(e: &mut Engine, first: u32, second: u32) {
+    if ready_manager(e).is_some() {
+        e.call(BARTER_MENU_CREATE, &args![first, second]);
+    }
+}
+
+// Translated from 00704fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RecipeMenu::Create(a, b)` (`cdecl`) when the manager is ready.
+pub fn fn_00704fc0(e: &mut Engine, first: u32, second: u32) {
+    if ready_manager(e).is_some() {
+        e.call(RECIPE_MENU_CREATE, &args![first, second]);
+    }
+}
+
+// Translated from 00705000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether a menu of class `0x435` exists.
+pub fn fn_00705000(e: &mut Engine) -> bool {
+    e.call(GET_MENU_BY_CLASS, &args![MENU_435]).u32() != 0
+}
+
+// Translated from 00705020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether a menu of class `0x41d` exists.
+pub fn fn_00705020(e: &mut Engine) -> bool {
+    e.call(GET_MENU_BY_CLASS, &args![MENU_41D]).u32() != 0
+}
+
+// Translated from 00705040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns what [`fn_00705050`] returns (the code calls it and leaves `eax`).
+pub fn fn_00705040(e: &mut Engine) -> u32 {
+    fn_00705050(e)
+}
+
+// Translated from 00705050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x80` of the object at `011d93f8`, 0 when there is none.
+pub fn fn_00705050(e: &mut Engine) -> u32 {
+    let menu = e.global::<u32>(CONTAINER_MENU_GLOBAL);
+    if menu == 0 {
+        0
+    } else {
+        e.mem.u32(menu + CONTAINER_MENU_FIELD)
+    }
+}
+
+// Translated from 00705070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CreateDialogMenu` (Xbox PDB), `cdecl`: first
+/// `BSTimer::SetGlobalTimeMultiplier(1.0, 1)` on the timer at `011f6394`,
+/// then `DialogMenu::Create` (three words) when the manager is ready, else
+/// 0.
+pub fn interface_create_dialog_menu(e: &mut Engine, first: u32, second: u32, third: u32) -> u32 {
+    e.call(
+        SET_GLOBAL_TIME_MULTIPLIER,
+        &args![GLOBAL_TIMER, 1.0f32.to_bits(), 1u32],
+    );
+    if ready_manager(e).is_none() {
+        return 0;
+    }
+    e.call(DIALOG_MENU_CREATE, &args![first, second, third])
+        .u32()
+}
+
+// Translated from 007050d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::InDialog` (Xbox PDB): the dialog flag ([`fn_00705100`]) when
+/// the manager is ready, else 0.
+pub fn interface_in_dialog(e: &mut Engine) -> u8 {
+    match ready_manager(e) {
+        Some(_) => fn_00705100(e),
+        None => 0,
+    }
+}
+
+// Translated from 00705100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dialog flag byte (`011d9514`).
+pub fn fn_00705100(e: &mut Engine) -> u8 {
+    e.global::<u8>(IN_DIALOG_FLAG)
+}
+
+// Translated from 00705110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::SetDialogPause` (Xbox PDB), `cdecl`: when the manager is
+/// ready and the menu of class `0x3f1` is a `DialogMenu`,
+/// `DialogMenu::SetPause(pause)` on it.
+pub fn interface_set_dialog_pause(e: &mut Engine, pause: u8) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    let menu = menu_cast(e, MENU_DIALOG, DIALOG_MENU_TYPE);
+    if menu != 0 {
+        e.call(DIALOG_SET_PAUSE, &args![menu, pause]);
+    }
+}
+
+// Translated from 00705190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::InDialogWith` (Xbox PDB): the result of `004fb070` on the
+/// dialog menu when the manager is ready and the menu of class `0x3f1` is a
+/// `DialogMenu`, else 0.
+pub fn interface_in_dialog_with(e: &mut Engine) -> u32 {
+    if ready_manager(e).is_none() {
+        return 0;
+    }
+    let menu = menu_cast(e, MENU_DIALOG, DIALOG_MENU_TYPE);
+    if menu == 0 {
+        return 0;
+    }
+    e.call(DIALOG_MENU_GETTER, &args![menu]).u32()
+}
+
+// Translated from 00705210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::ShowSubtitle` (Xbox PDB), `cdecl`, nine words: a word
+/// (`speaker`), a 12-byte value by value (`text_a/b/c`: a word, a byte and
+/// a word), three words (`position_*`), a word and a byte. Inside a scope
+/// guard (line 0x8ec of `Interface.cpp`): when the manager is ready and the
+/// HUD main menu object (`011d96c0`) exists, copies the 12-byte value
+/// (`00418900`) and calls `HUDMainMenu::ShowSubtitle` on the object with the
+/// speaker, the copy, the three words, the word and the byte. The by-value
+/// argument is then destroyed (`00483710`, which does nothing). Always
+/// returns 0. The exception frame is not translated.
+#[allow(clippy::too_many_arguments)]
+pub fn interface_show_subtitle(
+    e: &mut Engine,
+    speaker: u32,
+    text_a: u32,
+    text_b: u32,
+    text_c: u32,
+    position_a: u32,
+    position_b: u32,
+    position_c: u32,
+    word: u32,
+    flag: u8,
+) -> u8 {
+    e.with_stack(4, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0x8ecu32],
+        );
+        e.with_stack(12, |e, text| {
+            e.mem.set_u32(text.addr(), text_a);
+            e.mem.set_u32(text.addr() + 4, text_b);
+            e.mem.set_u32(text.addr() + 8, text_c);
+            let hud = e.global::<u32>(HUD_MAIN_MENU);
+            if ready_manager(e).is_some() && hud != 0 {
+                e.with_stack(12, |e, copy| {
+                    e.call(SUBTITLE_VALUE_COPY, &args![copy, text]);
+                    let copy_a = e.mem.u32(copy.addr());
+                    let copy_b = e.mem.u32(copy.addr() + 4);
+                    let copy_c = e.mem.u32(copy.addr() + 8);
+                    e.call(
+                        HUD_SHOW_SUBTITLE,
+                        &args![
+                            hud, speaker, copy_a, copy_b, copy_c, position_a, position_b,
+                            position_c, word, flag
+                        ],
+                    );
+                });
+            }
+            e.call(SCOPE_GUARD_DTOR, &args![guard]);
+            e.call(SUBTITLE_VALUE_DTOR, &args![text]);
+        });
+    });
+    0
+}
+
+// Translated from 007052f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl`, six words (the fifth a float, the sixth a byte): inside a scope
+/// guard (line 0x901 of `Interface.cpp`), when the manager is ready and the
+/// HUD main menu object (`011d96c0`) exists, calls `00775380` on it with
+/// the six words. Always returns 0. The exception frame is not translated.
+pub fn fn_007052f0(
+    e: &mut Engine,
+    first: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    value: f32,
+    flag: u8,
+) -> u8 {
+    e.with_stack(4, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0xdu32, 1u32, INTERFACE_CPP_PATH, 0x901u32],
+        );
+        let hud = e.global::<u32>(HUD_MAIN_MENU);
+        if ready_manager(e).is_some() && hud != 0 {
+            e.call(
+                HUD_SHOW_SUBTITLE_TIMED,
+                &args![hud, first, second, third, fourth, value.to_bits(), flag],
+            );
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+    0
+}
+
+// Translated from 007053b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the manager is ready and the HUD main menu object (`011d96c0`)
+/// exists: `00775920` on it.
+pub fn fn_007053b0(e: &mut Engine) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    let hud = e.global::<u32>(HUD_MAIN_MENU);
+    if hud != 0 {
+        e.call(HUD_HIDE_SUBTITLE, &args![hud]);
+    }
+}
+
+// Translated from 007053f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::Create(0, 0)` when the manager is ready.
+pub fn fn_007053f0(e: &mut Engine) {
+    if ready_manager(e).is_some() {
+        e.call(START_MENU_CREATE, &args![0u32, 0u32]);
+    }
+}
+
+// Translated from 00705420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl(region, text, flag)` where `text` is an 8-byte string by value
+/// (two words, the first its character pointer): when the manager is
+/// ready, builds a request on the stack (the word, the text copied with
+/// `strcpy_s(buffer, 0x104, text)` or an empty string, the flag byte at
+/// `+0x108`) and passes it to `HUDMainMenu::SetRegionText`. The string
+/// argument is destroyed at the end (`004037d0`). The stack-protector
+/// cookie and the exception frame are not translated.
+pub fn fn_00705420(e: &mut Engine, region: u32, text_a: u32, text_b: u32, flag: u8) {
+    e.with_stack(8, |e, text| {
+        e.mem.set_u32(text.addr(), text_a);
+        e.mem.set_u32(text.addr() + 4, text_b);
+        if ready_manager(e).is_some() {
+            e.with_stack(0x10c, |e, request| {
+                e.mem.set_u8(request.addr() + 0x108, flag);
+                e.mem.set_u32(request.addr(), region);
+                let buffer = request.addr() + 4;
+                if e.call(FIRST_WORD, &args![text]).u32() == 0 {
+                    e.mem.set_u8(buffer, 0);
+                } else {
+                    let characters = e.call(FIRST_WORD, &args![text]).u32();
+                    e.call(STRING_COPY_BOUNDED, &args![buffer, 0x104u32, characters]);
+                }
+                e.call(HUD_SET_REGION_TEXT, &args![request]);
+            });
+        }
+        e.call(STRING_DTOR, &args![text]);
+    });
+}
+
+// Translated from 007054f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CreateSleepMenu` (Xbox PDB), `cdecl(flag)`: when the manager
+/// is ready and `00709be0` (its `+0x4bc` word is 0) says so: an existing
+/// sleep/wait menu (class `0x3f4`) is destroyed through slot 0 with 1, then
+/// `SleepWaitMenu::Create(flag)`.
+pub fn interface_create_sleep_menu(e: &mut Engine, flag: u8) {
+    if ready_manager(e).is_none() || !e.call(MANAGER_MODE_IS_ZERO, &[]).bool() {
+        return;
+    }
+    let menu = menu_cast(e, MENU_SLEEP_WAIT, SLEEP_WAIT_MENU_TYPE);
+    if menu != 0 {
+        e.vcall(menu, 0, &args![1u32]);
+    }
+    e.call(SLEEP_MENU_CREATE, &args![flag]);
+}
+
+// Translated from 007055c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CloseSleepMenu` (Xbox PDB): when the manager is ready and
+/// the menu of class `0x3f4` is a `SleepWaitMenu`: `SleepWaitMenu::Close`.
+pub fn interface_close_sleep_menu(e: &mut Engine) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    if menu_cast(e, MENU_SLEEP_WAIT, SLEEP_WAIT_MENU_TYPE) != 0 {
+        e.call(SLEEP_MENU_CLOSE, &[]);
+    }
+}
+
+// Translated from 00705640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CreateVATSMenu` (Xbox PDB): when the manager is ready, an
+/// existing VATS menu (class `0x420`) is destroyed through slot 0 with 1,
+/// then `VATSMenu::Create`.
+pub fn interface_create_vats_menu(e: &mut Engine) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    let menu = menu_cast(e, MENU_VATS, VATS_MENU_TYPE);
+    if menu != 0 {
+        e.vcall(menu, 0, &args![1u32]);
+    }
+    e.call(VATS_MENU_CREATE, &[]);
+}
+
+// Translated from 007056f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::UpdateSleeping` (Xbox PDB): looks up the menu of the
+/// sleep/wait id ([`fn_00705770`]) first; then, when the manager is ready
+/// and that menu exists, `SleepWaitMenu::UpdateSleeping` on it decides the
+/// result (1 or 0).
+pub fn interface_update_sleeping(e: &mut Engine) -> u8 {
+    let id = fn_00705770(e);
+    let tile = e.call(GET_MENU_BY_CLASS, &args![id]).u32();
+    let menu = if tile == 0 {
+        0
+    } else {
+        e.call(TILE_GET_MENU, &args![tile]).u32()
+    };
+    if ready_manager(e).is_some() && menu != 0 && e.call(SLEEP_UPDATE_SLEEPING, &args![menu]).bool()
+    {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 00705770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The menu id of the sleep/wait menu, `0x3f4`.
+pub fn fn_00705770(_e: &mut Engine) -> u32 {
+    MENU_SLEEP_WAIT as u32
+}
+
+// Translated from 00705780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CloseVATSMenu` (Xbox PDB): when the manager is ready and the
+/// menu of class `0x420` is a `VATSMenu`: `VATSMenu::Close`.
+pub fn interface_close_vats_menu(e: &mut Engine) {
+    if ready_manager(e).is_none() {
+        return;
+    }
+    if menu_cast(e, MENU_VATS, VATS_MENU_TYPE) != 0 {
+        e.call(VATS_MENU_CLOSE, &[]);
+    }
+}
+
+// Translated from 00705800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `StartMenu::Create(1, 1)` when the manager is ready.
+pub fn fn_00705800(e: &mut Engine) {
+    if ready_manager(e).is_some() {
+        e.call(START_MENU_CREATE, &args![1u32, 1u32]);
+    }
+}
+
+// Translated from 00705830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockPickMenu::Create(a, b, flag)` (`cdecl`) when the manager is ready.
+pub fn fn_00705830(e: &mut Engine, first: u32, second: u32, flag: u8) {
+    if ready_manager(e).is_some() {
+        e.call(LOCK_PICK_MENU_CREATE, &args![first, second, flag]);
+    }
+}
+
+// Translated from 00705870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CreateRaceSexMenu` (Xbox PDB), `cdecl(argument)`: when the
+/// dialog flag ([`fn_00705100`]) is set, `DialogMenu::ServiceStart` runs
+/// first. Then, if the counter that `0043d4d0` finds on `011c3ea4` is above
+/// 1 (signed) and no menu is pending (`011d8950` is 0), the creation is
+/// deferred: `011d8950` becomes 5 and `011d8960` the argument. Otherwise
+/// `RaceSexMenu::Create(argument)` runs now.
+pub fn interface_create_race_sex_menu(e: &mut Engine, argument: u32) {
+    if fn_00705100(e) != 0 {
+        e.call(DIALOG_SERVICE_START, &[]);
+    }
+    let counter = e.call(COUNTER_ACCESSOR, &args![COUNTER_OBJECT]).u32();
+    if e.mem.i32(counter) > 1 && e.global::<u32>(PENDING_MENU_KIND) == 0 {
+        e.set_global::<u32>(PENDING_MENU_KIND, PENDING_RACE_SEX);
+        e.set_global::<u32>(PENDING_MENU_ARGUMENT, argument);
+    } else {
+        e.call(RACE_SEX_MENU_CREATE, &args![argument]);
+    }
+}
+
+// Translated from 007058c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fastcall` getter: the word at `+0xc4` of `this`.
+pub fn fn_007058c0(e: &mut Engine, this: u32) -> u32 {
+    e.mem.u32(this + 0xc4)
+}
+
+// Translated from 007058e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::LastMinuteUpdate` (Xbox PDB): `00713c70` on the manager when
+/// it is ready.
+pub fn interface_last_minute_update(e: &mut Engine) {
+    if let Some(manager) = ready_manager(e) {
+        e.call(MANAGER_LAST_MINUTE_UPDATE, &args![manager]);
+    }
+}
+
+// Translated from 00705910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00602170` on the manager when it is ready, else 0.
+pub fn fn_00705910(e: &mut Engine) -> u32 {
+    match ready_manager(e) {
+        Some(manager) => e.call(MANAGER_GETTER_A, &args![manager]).u32(),
+        None => 0,
+    }
+}
+
+// Translated from 00705950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00460fb0` on the manager when it is ready, else 0.
+pub fn fn_00705950(e: &mut Engine) -> u32 {
+    match ready_manager(e) {
+        Some(manager) => e.call(MANAGER_GETTER_B, &args![manager]).u32(),
+        None => 0,
+    }
+}
+
+// Translated from 00705990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetPipboy` (Xbox PDB): the manager's Pipboy object (getter
+/// `00704370`) when it is ready, else 0.
+pub fn interface_get_pipboy(e: &mut Engine) -> u32 {
+    match ready_manager(e) {
+        Some(manager) => e.call(MANAGER_PIPBOY, &args![manager]).u32(),
+        None => 0,
+    }
+}
+
+// Translated from 007059d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `007133f0` on the manager when it is ready.
+pub fn fn_007059d0(e: &mut Engine) {
+    if let Some(manager) = ready_manager(e) {
+        e.call(MANAGER_CALL_A, &args![manager]);
+    }
+}
+
+// Translated from 00705a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::IsInPipboyMenu` (Xbox PDB): when the manager is ready, true
+/// if its `+0x4bc` word is 2 (`00709bc0`) or 3 ([`MANAGER_MODE_IS_THREE`]).
+pub fn interface_is_in_pipboy_menu(e: &mut Engine) -> u8 {
+    if ready_manager(e).is_none() {
+        return 0;
+    }
+    if e.call(MANAGER_MODE_IS_TWO, &[]).bool() || e.call(MANAGER_MODE_IS_THREE, &[]).bool() {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 00705a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00717e30` on the manager when it is ready.
+pub fn fn_00705a60(e: &mut Engine) {
+    if let Some(manager) = ready_manager(e) {
+        e.call(MANAGER_CALL_B, &args![manager]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1899,6 +2598,49 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x007048f0, interface_set_inventory_menu_visible(u8, u8, u8)),
         entry!(0x00704ad0, interface_get_inventory_menu_visible() -> u8),
         entry!(0x00704af0, fn_00704af0()),
+        entry!(0x00704bc0, fn_00704bc0()),
+        entry!(0x00704be0, fn_00704be0() -> u32),
+        entry!(0x00704c10, interface_set_stats_menu_visible(u8, u8)),
+        entry!(0x00704df0, fn_00704df0() -> u8),
+        entry!(0x00704e10, interface_update_actor_value(u32)),
+        entry!(0x00704ed0, interface_create_container_menu(u32, u32) -> u32),
+        entry!(0x00704f50, fn_00704f50()),
+        entry!(0x00704f80, fn_00704f80(u32, u32)),
+        entry!(0x00704fc0, fn_00704fc0(u32, u32)),
+        entry!(0x00705000, fn_00705000() -> bool),
+        entry!(0x00705020, fn_00705020() -> bool),
+        entry!(0x00705040, fn_00705040() -> u32),
+        entry!(0x00705050, fn_00705050() -> u32),
+        entry!(0x00705070, interface_create_dialog_menu(u32, u32, u32) -> u32),
+        entry!(0x007050d0, interface_in_dialog() -> u8),
+        entry!(0x00705100, fn_00705100() -> u8),
+        entry!(0x00705110, interface_set_dialog_pause(u8)),
+        entry!(0x00705190, interface_in_dialog_with() -> u32),
+        entry!(
+            0x00705210,
+            interface_show_subtitle(u32, u32, u32, u32, u32, u32, u32, u32, u8) -> u8
+        ),
+        entry!(0x007052f0, fn_007052f0(u32, u32, u32, u32, f32, u8) -> u8),
+        entry!(0x007053b0, fn_007053b0()),
+        entry!(0x007053f0, fn_007053f0()),
+        entry!(0x00705420, fn_00705420(u32, u32, u32, u8)),
+        entry!(0x007054f0, interface_create_sleep_menu(u8)),
+        entry!(0x007055c0, interface_close_sleep_menu()),
+        entry!(0x00705640, interface_create_vats_menu()),
+        entry!(0x007056f0, interface_update_sleeping() -> u8),
+        entry!(0x00705770, fn_00705770() -> u32),
+        entry!(0x00705780, interface_close_vats_menu()),
+        entry!(0x00705800, fn_00705800()),
+        entry!(0x00705830, fn_00705830(u32, u32, u8)),
+        entry!(0x00705870, interface_create_race_sex_menu(u32)),
+        entry!(0x007058c0, fn_007058c0(u32) -> u32),
+        entry!(0x007058e0, interface_last_minute_update()),
+        entry!(0x00705910, fn_00705910() -> u32),
+        entry!(0x00705950, fn_00705950() -> u32),
+        entry!(0x00705990, interface_get_pipboy() -> u32),
+        entry!(0x007059d0, fn_007059d0()),
+        entry!(0x00705a00, interface_is_in_pipboy_menu() -> u8),
+        entry!(0x00705a60, fn_00705a60()),
     ]
 }
 
@@ -1926,6 +2668,7 @@ mod tests {
             0x0103_a000,
             0x0106_e000,
             0x011d_8000,
+            0x011d_9000,
             0x011d_e000,
             0x011f_3000,
             0x011f_4000,
@@ -3806,5 +4549,755 @@ mod tests {
         e.mem.set_u8(manager, 0);
         e.call(0x0070_4af0, &[]);
         assert!(menu_trace(&e).is_empty());
+    }
+
+    // ---- 00704bc0 .. 00705a60 ----
+
+    /// Stands for the manager in the expected arguments of [`guarded`].
+    const MANAGER_MARK: u32 = u32::MAX;
+
+    /// Runs `wrapper(args)` three times: manager ready, manager flag clear
+    /// and no manager. `callee` must be called once, with `expected`
+    /// (`MANAGER_MARK` replaced by the manager), only in the first. Returns
+    /// the three `eax` results.
+    fn guarded(wrapper: u32, args: &[u32], callee: u32, expected: &[u32]) -> [u32; 3] {
+        let (mut e, manager) = ui_engine();
+        e.register(callee, |_, _| Ret {
+            eax: 0x1234,
+            ..Ret::default()
+        });
+        let ready = e.call(wrapper, args).u32();
+        let want: Vec<u32> = expected
+            .iter()
+            .map(|w| if *w == MANAGER_MARK { manager } else { *w })
+            .collect();
+        assert_eq!(logged(&e, callee), vec![want]);
+
+        e.mem.set_u8(manager, 0);
+        e.call_log = Some(vec![]);
+        let not_ready = e.call(wrapper, args).u32();
+        assert!(logged(&e, callee).is_empty());
+
+        let mut e = engine_without_manager();
+        e.register(callee, |_, _| Ret::default());
+        let none = e.call(wrapper, args).u32();
+        assert!(logged(&e, callee).is_empty());
+        [ready, not_ready, none]
+    }
+
+    /// A world with one menu of class `class`, a real object with a
+    /// destructor slot, and a cast double that succeeds only for
+    /// `cast_target`. The slot-0 double is at `0x03001000`.
+    fn menu_object_world(class: i32, cast_target: u32) -> (Engine, u32, u32) {
+        let (mut e, manager) = ui_engine();
+        let menu = e.mem.alloc(8);
+        e.put_vtable(0x0300_0000, &[0x0300_1000]);
+        e.mem.set_u32(menu, 0x0300_0000);
+        e.register(0x0300_1000, |_, _| Ret::default());
+        e.register_double(GET_MENU_BY_CLASS, move |_, a| Ret {
+            eax: if a[0] as i32 == class { 0x5000 } else { 0 },
+            ..Ret::default()
+        });
+        e.register(TILE_GET_MENU, |e, a| Ret {
+            eax: if a[0] == 0x5000 {
+                e.mem.u32(0x0126_f200)
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        e.mem.set_u32(0x0126_f200, menu);
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| Ret {
+            eax: if a[2] == MENU_TYPE && a[3] == cast_target {
+                a[0]
+            } else {
+                0
+            },
+            ..Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        (e, manager, menu)
+    }
+
+    #[test]
+    fn fn_00704bc0_updates_the_container_lists() {
+        let (mut e, _) = ui_engine();
+        e.register(CONTAINER_UPDATE_LISTS, |_, _| Ret::default());
+        e.call(0x0070_4bc0, &[]);
+        assert!(logged(&e, CONTAINER_UPDATE_LISTS).is_empty());
+        e.mem.set_u32(CONTAINER_MENU_GLOBAL, 0x7777);
+        e.call(0x0070_4bc0, &[]);
+        assert_eq!(logged(&e, CONTAINER_UPDATE_LISTS), vec![vec![0x7777, 0]]);
+    }
+
+    #[test]
+    fn fn_00704be0_creates_the_stats_menu_when_ready() {
+        assert_eq!(
+            guarded(0x0070_4be0, &[], STATS_MENU_CREATE, &[]),
+            [0x1234, 0, 0]
+        );
+    }
+
+    /// The Pipboy tail and the knob call of the stats menu.
+    fn stats_trace(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        let mut addrs = MENU_ADDRESSES.to_vec();
+        addrs.extend([STATS_MENU_CREATE, STATS_UPDATE_ALL, STATS_SET_KNOB_POSITION]);
+        trace(e, &addrs)
+    }
+
+    #[test]
+    fn set_stats_menu_visible_shows_the_stats_menu_and_fades_out_the_others() {
+        let (mut e, _) = menu_world(&[0x3eb, 0x3ea, 0x40b, 0x425, 0x3ff], true);
+        ignore(&mut e, &[STATS_UPDATE_ALL, STATS_SET_KNOB_POSITION]);
+        e.call(0x0070_4c10, &args![1u8, 0u8]);
+        let mut expected = vec![
+            (MENU_START_FADE_OUT, vec![menu_of(0x3ea)]),
+            (MENU_START_FADE_OUT, vec![menu_of(0x40b)]),
+            (REPAIR_RESET_MENU, vec![]),
+            (MENU_START_FADE_OUT, vec![menu_of(0x425)]),
+            (ITEM_MOD_RESET_MENU, vec![]),
+            (MENU_START_FADE_OUT, vec![menu_of(0x3ff)]),
+            set_trait(0x3eb),
+            (STATS_UPDATE_ALL, vec![menu_of(0x3eb)]),
+            (MENU_START_FADE_IN, vec![menu_of(0x3eb)]),
+        ];
+        expected.extend(pipboy_tail(1, Some(STATS_SET_KNOB_POSITION)));
+        assert_eq!(stats_trace(&e), expected);
+    }
+
+    #[test]
+    fn set_stats_menu_visible_creates_the_menu_when_missing() {
+        let (mut e, _) = menu_world(&[], false);
+        ignore(&mut e, &[STATS_UPDATE_ALL, STATS_SET_KNOB_POSITION]);
+        e.register(STATS_MENU_CREATE, |_, _| Ret {
+            eax: 0x5000,
+            ..Ret::default()
+        });
+        e.call(0x0070_4c10, &args![1u8, 0u8]);
+        let mut expected = vec![
+            (STATS_MENU_CREATE, vec![]),
+            set_trait(0x3eb),
+            (STATS_UPDATE_ALL, vec![0x5001]),
+            (MENU_START_FADE_IN, vec![0x5001]),
+        ];
+        expected.extend(pipboy_tail(1, None));
+        assert_eq!(stats_trace(&e), expected);
+    }
+
+    #[test]
+    fn set_stats_menu_visible_visible_and_hidden_cases() {
+        // Visible already and shown again: only the Pipboy tail.
+        let (mut e, _) = menu_world(&[0x3eb, 0x3ea], false);
+        ignore(&mut e, &[STATS_UPDATE_ALL, STATS_SET_KNOB_POSITION]);
+        make_visible(&mut e, 0x3eb);
+        e.call(0x0070_4c10, &args![1u8, 0u8]);
+        assert_eq!(stats_trace(&e), pipboy_tail(1, None));
+        // Hiding a visible one fades it out and does nothing else.
+        let (mut e, _) = menu_world(&[0x3eb, 0x3ea], false);
+        ignore(&mut e, &[STATS_UPDATE_ALL, STATS_SET_KNOB_POSITION]);
+        make_visible(&mut e, 0x3eb);
+        e.call(0x0070_4c10, &args![0u8, 0u8]);
+        assert_eq!(
+            stats_trace(&e),
+            vec![(MENU_START_FADE_OUT, vec![menu_of(0x3eb)])]
+        );
+        // Hiding a menu that is not visible: nothing.
+        let (mut e, _) = menu_world(&[0x3eb], false);
+        e.call(0x0070_4c10, &args![0u8, 0u8]);
+        assert!(stats_trace(&e).is_empty());
+        // Not ready: nothing.
+        let (mut e, manager) = menu_world(&[0x3eb], false);
+        e.mem.set_u8(manager, 0);
+        e.call(0x0070_4c10, &args![1u8, 0u8]);
+        assert!(stats_trace(&e).is_empty());
+    }
+
+    #[test]
+    fn fn_00704df0_reads_the_stats_menu_flag() {
+        let (mut e, _) = ui_engine();
+        assert_eq!(e.call(0x0070_4df0, &[]).u8(), 0);
+        make_visible(&mut e, 0x3eb);
+        assert_eq!(e.call(0x0070_4df0, &[]).u8(), 1);
+    }
+
+    #[test]
+    fn update_actor_value_updates_all_or_one_value() {
+        let (mut e, _, menu) = menu_object_world(0x3eb, STATS_MENU_TYPE);
+        ignore(
+            &mut e,
+            &[STATS_UPDATE_ALL_ACTOR_VALUES, STATS_UPDATE_ACTOR_VALUE],
+        );
+        stub!(e, MENU_STATE, 1);
+        // Not visible: nothing.
+        e.call(0x0070_4e10, &args![5u32]);
+        assert!(logged(&e, STATS_UPDATE_ACTOR_VALUE).is_empty());
+        make_visible(&mut e, 0x3eb);
+        e.call(0x0070_4e10, &args![0x4du32]);
+        e.call(0x0070_4e10, &args![5u32]);
+        assert_eq!(logged(&e, STATS_UPDATE_ALL_ACTOR_VALUES), vec![vec![menu]]);
+        assert_eq!(logged(&e, STATS_UPDATE_ACTOR_VALUE), vec![vec![menu, 5]]);
+        // The visible state bits do not match the mask: nothing.
+        stub!(e, MENU_STATE, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0070_4e10, &args![5u32]);
+        assert!(logged(&e, STATS_UPDATE_ACTOR_VALUE).is_empty());
+    }
+
+    #[test]
+    fn update_actor_value_needs_a_stats_menu_object() {
+        let (mut e, _, _) = menu_object_world(0x3eb, DIALOG_MENU_TYPE);
+        ignore(&mut e, &[STATS_UPDATE_ACTOR_VALUE]);
+        stub!(e, MENU_STATE, 1);
+        make_visible(&mut e, 0x3eb);
+        e.call(0x0070_4e10, &args![5u32]);
+        assert!(logged(&e, STATS_UPDATE_ACTOR_VALUE).is_empty());
+        let mut e = engine_without_manager();
+        e.call(0x0070_4e10, &args![5u32]);
+    }
+
+    /// Calls `CreateContainerMenu(reference, 1)` with the answers given:
+    /// slot `0x100`, the owner, `IsAnOwner`. Returns the mode that reached
+    /// `ContainerMenu::Create`.
+    fn container_mode(slot: u32, owner: u32, is_owner: bool, mode: u32) -> Vec<Vec<u32>> {
+        let (mut e, _) = ui_engine();
+        let mut slots = vec![0u32; 0x41];
+        slots[0x40] = 0x0300_2000;
+        e.put_vtable(0x0300_0000, &slots);
+        let reference = e.mem.alloc(8);
+        e.mem.set_u32(reference, 0x0300_0000);
+        e.mem.set_u32(OWNER_GLOBAL, 0x4242);
+        e.register_double(0x0300_2000, move |_, _| Ret {
+            eax: slot,
+            ..Ret::default()
+        });
+        e.register_double(REFR_GET_OWNER, move |_, _| Ret {
+            eax: owner,
+            ..Ret::default()
+        });
+        e.register_double(REFR_IS_AN_OWNER, move |_, _| Ret {
+            eax: is_owner as u32,
+            ..Ret::default()
+        });
+        stub!(e, CONTAINER_MENU_CREATE, 0x99);
+        assert_eq!(e.call(0x0070_4ed0, &args![reference, mode]).u32(), 0x99);
+        let owner_calls = logged(&e, REFR_IS_AN_OWNER);
+        assert!(owner_calls.iter().all(|c| *c == vec![reference, 0x4242, 1]));
+        logged(&e, CONTAINER_MENU_CREATE)
+            .into_iter()
+            .map(|c| c[1..].to_vec())
+            .collect()
+    }
+
+    #[test]
+    fn create_container_menu_downgrades_mode_one_for_foreign_owners() {
+        assert_eq!(container_mode(0, 1, false, 1), vec![vec![2]]);
+        assert_eq!(container_mode(1, 1, false, 1), vec![vec![1]]);
+        assert_eq!(container_mode(0, 0, false, 1), vec![vec![1]]);
+        assert_eq!(container_mode(0, 1, true, 1), vec![vec![1]]);
+        assert_eq!(container_mode(0, 1, false, 3), vec![vec![3]]);
+    }
+
+    #[test]
+    fn create_container_menu_needs_a_ready_manager() {
+        let mut e = engine_without_manager();
+        stub!(e, CONTAINER_MENU_CREATE, 0x99);
+        assert_eq!(e.call(0x0070_4ed0, &args![0x1000u32, 2u32]).u32(), 0);
+        assert!(logged(&e, CONTAINER_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn container_barter_and_recipe_wrappers_forward_when_ready() {
+        guarded(0x0070_4f50, &[], CONTAINER_MENU_CLOSE, &[]);
+        guarded(0x0070_4f80, &[7, 8], BARTER_MENU_CREATE, &[7, 8]);
+        guarded(0x0070_4fc0, &[9, 10], RECIPE_MENU_CREATE, &[9, 10]);
+    }
+
+    #[test]
+    fn menu_existence_tests() {
+        let (mut e, _) = menu_world(&[0x435], false);
+        assert!(e.call(0x0070_5000, &[]).bool());
+        assert!(!e.call(0x0070_5020, &[]).bool());
+        let (mut e, _) = menu_world(&[0x41d], false);
+        assert!(!e.call(0x0070_5000, &[]).bool());
+        assert!(e.call(0x0070_5020, &[]).bool());
+    }
+
+    #[test]
+    fn container_menu_field_reads_the_word_at_0x80() {
+        let (mut e, _) = ui_engine();
+        assert_eq!(e.call(0x0070_5050, &[]).u32(), 0);
+        assert_eq!(e.call(0x0070_5040, &[]).u32(), 0);
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object + 0x80, 0xabcd);
+        e.mem.set_u32(CONTAINER_MENU_GLOBAL, object);
+        assert_eq!(e.call(0x0070_5050, &[]).u32(), 0xabcd);
+        assert_eq!(e.call(0x0070_5040, &[]).u32(), 0xabcd);
+    }
+
+    #[test]
+    fn create_dialog_menu_resets_the_time_multiplier_first() {
+        let (mut e, manager) = ui_engine();
+        e.register(SET_GLOBAL_TIME_MULTIPLIER, |_, _| Ret::default());
+        stub!(e, DIALOG_MENU_CREATE, 0x55);
+        assert_eq!(e.call(0x0070_5070, &args![1u32, 2u32, 3u32]).u32(), 0x55);
+        assert_eq!(
+            logged(&e, SET_GLOBAL_TIME_MULTIPLIER),
+            vec![vec![GLOBAL_TIMER, 0x3f80_0000, 1]]
+        );
+        assert_eq!(logged(&e, DIALOG_MENU_CREATE), vec![vec![1, 2, 3]]);
+        // Not ready: the multiplier is still set, the menu not created.
+        e.mem.set_u8(manager, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0070_5070, &args![1u32, 2u32, 3u32]).u32(), 0);
+        assert_eq!(logged(&e, SET_GLOBAL_TIME_MULTIPLIER).len(), 1);
+        assert!(logged(&e, DIALOG_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn in_dialog_reads_the_flag_when_ready() {
+        let (mut e, manager) = ui_engine();
+        assert_eq!(e.call(0x0070_5100, &[]).u8(), 0);
+        e.mem.set_u8(IN_DIALOG_FLAG, 1);
+        assert_eq!(e.call(0x0070_5100, &[]).u8(), 1);
+        assert_eq!(e.call(0x0070_50d0, &[]).u8(), 1);
+        e.mem.set_u8(manager, 0);
+        assert_eq!(e.call(0x0070_50d0, &[]).u8(), 0);
+    }
+
+    #[test]
+    fn set_dialog_pause_needs_a_dialog_menu() {
+        let (mut e, _, menu) = menu_object_world(0x3f1, DIALOG_MENU_TYPE);
+        stub!(e, DIALOG_SET_PAUSE, 0);
+        e.call(0x0070_5110, &args![1u8]);
+        assert_eq!(logged(&e, DIALOG_SET_PAUSE), vec![vec![menu, 1]]);
+        let (mut e, _, _) = menu_object_world(0x3f1, STATS_MENU_TYPE);
+        stub!(e, DIALOG_SET_PAUSE, 0);
+        e.call(0x0070_5110, &args![1u8]);
+        assert!(logged(&e, DIALOG_SET_PAUSE).is_empty());
+        let (mut e, _, _) = menu_object_world(0x3eb, DIALOG_MENU_TYPE);
+        stub!(e, DIALOG_SET_PAUSE, 0);
+        e.call(0x0070_5110, &args![1u8]);
+        assert!(logged(&e, DIALOG_SET_PAUSE).is_empty());
+    }
+
+    #[test]
+    fn in_dialog_with_answers_the_dialog_menu_getter() {
+        let (mut e, _, menu) = menu_object_world(0x3f1, DIALOG_MENU_TYPE);
+        stub!(e, DIALOG_MENU_GETTER, 0x6677);
+        assert_eq!(e.call(0x0070_5190, &[]).u32(), 0x6677);
+        assert_eq!(logged(&e, DIALOG_MENU_GETTER), vec![vec![menu]]);
+        let (mut e, _, _) = menu_object_world(0x3f1, STATS_MENU_TYPE);
+        stub!(e, DIALOG_MENU_GETTER, 0x6677);
+        assert_eq!(e.call(0x0070_5190, &[]).u32(), 0);
+        assert!(logged(&e, DIALOG_MENU_GETTER).is_empty());
+    }
+
+    /// Doubles for the subtitle functions: the guard, the 12-byte copy
+    /// (word, byte, word; the padding stays zero) and its destructor.
+    fn subtitle_world() -> (Engine, u32) {
+        let (mut e, manager) = ui_engine();
+        ignore(
+            &mut e,
+            &[
+                SCOPE_GUARD_CTOR,
+                SCOPE_GUARD_DTOR,
+                SUBTITLE_VALUE_DTOR,
+                HUD_SHOW_SUBTITLE,
+                HUD_SHOW_SUBTITLE_TIMED,
+                HUD_HIDE_SUBTITLE,
+            ],
+        );
+        e.register(SUBTITLE_VALUE_COPY, |e, a| {
+            let (word, byte, last) = (e.mem.u32(a[1]), e.mem.u8(a[1] + 4), e.mem.u32(a[1] + 8));
+            e.mem.set_u32(a[0], word);
+            e.mem.set_u8(a[0] + 4, byte);
+            e.mem.set_u32(a[0] + 8, last);
+            Ret {
+                eax: a[0],
+                ..Ret::default()
+            }
+        });
+        (e, manager)
+    }
+
+    #[test]
+    fn show_subtitle_copies_the_value_and_always_returns_zero() {
+        let (mut e, _) = subtitle_world();
+        e.mem.set_u32(HUD_MAIN_MENU, 0x8000);
+        let args_ = args![
+            1u32,
+            0x1111_1111u32,
+            0x2222_2244u32,
+            0x3333_3333u32,
+            4u32,
+            5u32,
+            6u32,
+            7u32,
+            8u8
+        ];
+        assert_eq!(e.call(0x0070_5210, &args_).u32() & 0xff, 0);
+        assert_eq!(
+            logged(&e, HUD_SHOW_SUBTITLE),
+            vec![vec![
+                0x8000,
+                1,
+                0x1111_1111,
+                0x44,
+                0x3333_3333,
+                4,
+                5,
+                6,
+                7,
+                8
+            ]]
+        );
+        let guard = logged(&e, SCOPE_GUARD_CTOR);
+        assert_eq!(guard[0][1..], [0xd, 1, INTERFACE_CPP_PATH, 0x8ec]);
+        assert_eq!(logged(&e, SCOPE_GUARD_DTOR).len(), 1);
+        let dtor = logged(&e, SUBTITLE_VALUE_DTOR);
+        assert_eq!(dtor.len(), 1);
+        // No HUD main menu: guarded and destroyed, nothing shown.
+        e.mem.set_u32(HUD_MAIN_MENU, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0070_5210, &args_).u32() & 0xff, 0);
+        assert!(logged(&e, HUD_SHOW_SUBTITLE).is_empty());
+        assert_eq!(logged(&e, SCOPE_GUARD_DTOR).len(), 1);
+        assert_eq!(logged(&e, SUBTITLE_VALUE_DTOR).len(), 1);
+    }
+
+    #[test]
+    fn show_subtitle_needs_a_ready_manager() {
+        let (mut e, manager) = subtitle_world();
+        e.mem.set_u32(HUD_MAIN_MENU, 0x8000);
+        e.mem.set_u8(manager, 0);
+        e.call(
+            0x0070_5210,
+            &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u8],
+        );
+        assert!(logged(&e, HUD_SHOW_SUBTITLE).is_empty());
+    }
+
+    #[test]
+    fn fn_007052f0_passes_six_words_to_the_hud() {
+        let (mut e, manager) = subtitle_world();
+        e.mem.set_u32(HUD_MAIN_MENU, 0x8000);
+        let call = args![1u32, 2u32, 3u32, 4u32, 2.5f32, 9u8];
+        assert_eq!(e.call(0x0070_52f0, &call).u32() & 0xff, 0);
+        assert_eq!(
+            logged(&e, HUD_SHOW_SUBTITLE_TIMED),
+            vec![vec![0x8000, 1, 2, 3, 4, 2.5f32.to_bits(), 9]]
+        );
+        assert_eq!(
+            logged(&e, SCOPE_GUARD_CTOR)[0][1..],
+            [0xd, 1, INTERFACE_CPP_PATH, 0x901]
+        );
+        assert_eq!(logged(&e, SCOPE_GUARD_DTOR).len(), 1);
+        e.mem.set_u8(manager, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0070_52f0, &call);
+        assert!(logged(&e, HUD_SHOW_SUBTITLE_TIMED).is_empty());
+        assert_eq!(logged(&e, SCOPE_GUARD_DTOR).len(), 1);
+        e.mem.set_u8(manager, 1);
+        e.mem.set_u32(HUD_MAIN_MENU, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0070_52f0, &call);
+        assert!(logged(&e, HUD_SHOW_SUBTITLE_TIMED).is_empty());
+    }
+
+    #[test]
+    fn fn_007053b0_needs_the_hud_main_menu() {
+        let (mut e, manager) = subtitle_world();
+        e.call(0x0070_53b0, &[]);
+        assert!(logged(&e, HUD_HIDE_SUBTITLE).is_empty());
+        e.mem.set_u32(HUD_MAIN_MENU, 0x8000);
+        e.call(0x0070_53b0, &[]);
+        assert_eq!(logged(&e, HUD_HIDE_SUBTITLE), vec![vec![0x8000]]);
+        e.mem.set_u8(manager, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0070_53b0, &[]);
+        assert!(logged(&e, HUD_HIDE_SUBTITLE).is_empty());
+    }
+
+    #[test]
+    fn start_menu_wrappers_pass_their_constants() {
+        guarded(0x0070_53f0, &[], START_MENU_CREATE, &[0, 0]);
+        guarded(0x0070_5800, &[], START_MENU_CREATE, &[1, 1]);
+    }
+
+    /// Doubles for `SetRegionText`: the request is recorded in memory
+    /// (`0126f300`: region word, `+4` flag, `+8` first text bytes).
+    fn region_world() -> (Engine, u32) {
+        let (mut e, manager) = ui_engine();
+        e.register(FIRST_WORD, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register(STRING_DTOR, |e, a| {
+            let second = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(0x0126_f30c, second);
+            Ret::default()
+        });
+        e.register(STRING_COPY_BOUNDED, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            for (i, byte) in text.iter().enumerate() {
+                e.mem.set_u8(a[0] + i as u32, *byte);
+            }
+            e.mem.set_u8(a[0] + text.len() as u32, 0);
+            Ret::default()
+        });
+        e.register(HUD_SET_REGION_TEXT, |e, a| {
+            let region = e.mem.u32(a[0]);
+            let flag = e.mem.u8(a[0] + 0x108);
+            let text = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(0x0126_f300, region);
+            e.mem.set_u8(0x0126_f304, flag);
+            e.mem.set_u32(0x0126_f308, text);
+            Ret::default()
+        });
+        (e, manager)
+    }
+
+    #[test]
+    fn fn_00705420_builds_the_region_request() {
+        let (mut e, _) = region_world();
+        let text = e.mem.alloc(16);
+        for (i, b) in b"Vegas\0".iter().enumerate() {
+            e.mem.set_u8(text + i as u32, *b);
+        }
+        e.call(0x0070_5420, &args![0x77u32, text, 5u32, 1u8]);
+        assert_eq!(e.mem.u32(0x0126_f300), 0x77);
+        assert_eq!(e.mem.u8(0x0126_f304), 1);
+        assert_eq!(e.mem.u32(0x0126_f308), u32::from_le_bytes(*b"Vega"));
+        assert_eq!(logged(&e, STRING_COPY_BOUNDED)[0][1..], [0x104, text]);
+        assert_eq!(logged(&e, STRING_DTOR).len(), 1);
+        // The string argument handed to the destructor held the words.
+        assert_eq!(e.mem.u32(0x0126_f30c), 5);
+    }
+
+    #[test]
+    fn fn_00705420_uses_an_empty_text_for_a_null_string() {
+        let (mut e, _) = region_world();
+        e.call(0x0070_5420, &args![0x78u32, 0u32, 0u32, 0u8]);
+        assert_eq!(e.mem.u32(0x0126_f300), 0x78);
+        assert_eq!(e.mem.u32(0x0126_f308) & 0xff, 0);
+        assert!(logged(&e, STRING_COPY_BOUNDED).is_empty());
+        assert_eq!(logged(&e, STRING_DTOR).len(), 1);
+    }
+
+    #[test]
+    fn fn_00705420_still_destroys_the_string_when_not_ready() {
+        let (mut e, manager) = region_world();
+        e.mem.set_u8(manager, 0);
+        e.call(0x0070_5420, &args![0x79u32, 0u32, 0u32, 0u8]);
+        assert!(logged(&e, HUD_SET_REGION_TEXT).is_empty());
+        assert_eq!(logged(&e, STRING_DTOR).len(), 1);
+    }
+
+    #[test]
+    fn create_sleep_menu_destroys_an_existing_menu_first() {
+        let (mut e, _, menu) = menu_object_world(0x3f4, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, MANAGER_MODE_IS_ZERO, 1);
+        stub!(e, SLEEP_MENU_CREATE, 0);
+        e.call(0x0070_54f0, &args![1u8]);
+        assert_eq!(logged(&e, 0x0300_1000), vec![vec![menu, 1]]);
+        assert_eq!(logged(&e, SLEEP_MENU_CREATE), vec![vec![1]]);
+        // No sleep menu yet: created without a destroy.
+        let (mut e, _, _) = menu_object_world(0x3eb, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, MANAGER_MODE_IS_ZERO, 1);
+        stub!(e, SLEEP_MENU_CREATE, 0);
+        e.call(0x0070_54f0, &args![0u8]);
+        assert!(logged(&e, 0x0300_1000).is_empty());
+        assert_eq!(logged(&e, SLEEP_MENU_CREATE), vec![vec![0]]);
+        // The mode test fails: nothing.
+        let (mut e, _, _) = menu_object_world(0x3f4, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, MANAGER_MODE_IS_ZERO, 0);
+        stub!(e, SLEEP_MENU_CREATE, 0);
+        e.call(0x0070_54f0, &args![1u8]);
+        assert!(logged(&e, SLEEP_MENU_CREATE).is_empty());
+        assert!(logged(&e, 0x0300_1000).is_empty());
+    }
+
+    #[test]
+    fn close_sleep_menu_needs_a_sleep_wait_menu() {
+        let (mut e, _, _) = menu_object_world(0x3f4, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, SLEEP_MENU_CLOSE, 0);
+        e.call(0x0070_55c0, &[]);
+        assert_eq!(logged(&e, SLEEP_MENU_CLOSE), vec![Vec::<u32>::new()]);
+        let (mut e, _, _) = menu_object_world(0x3f4, VATS_MENU_TYPE);
+        stub!(e, SLEEP_MENU_CLOSE, 0);
+        e.call(0x0070_55c0, &[]);
+        assert!(logged(&e, SLEEP_MENU_CLOSE).is_empty());
+    }
+
+    #[test]
+    fn create_vats_menu_destroys_an_existing_menu_first() {
+        let (mut e, _, menu) = menu_object_world(0x420, VATS_MENU_TYPE);
+        stub!(e, VATS_MENU_CREATE, 0);
+        e.call(0x0070_5640, &[]);
+        assert_eq!(logged(&e, 0x0300_1000), vec![vec![menu, 1]]);
+        assert_eq!(logged(&e, VATS_MENU_CREATE).len(), 1);
+        let (mut e, _, _) = menu_object_world(0x3eb, VATS_MENU_TYPE);
+        stub!(e, VATS_MENU_CREATE, 0);
+        e.call(0x0070_5640, &[]);
+        assert!(logged(&e, 0x0300_1000).is_empty());
+        assert_eq!(logged(&e, VATS_MENU_CREATE).len(), 1);
+        let mut e = engine_without_manager();
+        stub!(e, VATS_MENU_CREATE, 0);
+        e.call(0x0070_5640, &[]);
+        assert!(logged(&e, VATS_MENU_CREATE).is_empty());
+    }
+
+    #[test]
+    fn close_vats_menu_needs_a_vats_menu() {
+        let (mut e, _, _) = menu_object_world(0x420, VATS_MENU_TYPE);
+        stub!(e, VATS_MENU_CLOSE, 0);
+        e.call(0x0070_5780, &[]);
+        assert_eq!(logged(&e, VATS_MENU_CLOSE).len(), 1);
+        let (mut e, _, _) = menu_object_world(0x420, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, VATS_MENU_CLOSE, 0);
+        e.call(0x0070_5780, &[]);
+        assert!(logged(&e, VATS_MENU_CLOSE).is_empty());
+    }
+
+    #[test]
+    fn update_sleeping_asks_the_sleep_wait_menu() {
+        assert_eq!(ui_engine().0.call(0x0070_5770, &[]).u32(), 0x3f4);
+        let (mut e, _, menu) = menu_object_world(0x3f4, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, SLEEP_UPDATE_SLEEPING, 1);
+        assert_eq!(e.call(0x0070_56f0, &[]).u8(), 1);
+        assert_eq!(logged(&e, SLEEP_UPDATE_SLEEPING), vec![vec![menu]]);
+        stub!(e, SLEEP_UPDATE_SLEEPING, 0);
+        assert_eq!(e.call(0x0070_56f0, &[]).u8(), 0);
+        // No such menu.
+        let (mut e, _, _) = menu_object_world(0x3eb, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, SLEEP_UPDATE_SLEEPING, 1);
+        assert_eq!(e.call(0x0070_56f0, &[]).u8(), 0);
+        assert!(logged(&e, SLEEP_UPDATE_SLEEPING).is_empty());
+        // Not ready.
+        let (mut e, manager, _) = menu_object_world(0x3f4, SLEEP_WAIT_MENU_TYPE);
+        stub!(e, SLEEP_UPDATE_SLEEPING, 1);
+        e.mem.set_u8(manager, 0);
+        assert_eq!(e.call(0x0070_56f0, &[]).u8(), 0);
+        assert!(logged(&e, SLEEP_UPDATE_SLEEPING).is_empty());
+    }
+
+    #[test]
+    fn fn_00705830_passes_three_words() {
+        guarded(0x0070_5830, &[3, 4, 1], LOCK_PICK_MENU_CREATE, &[3, 4, 1]);
+    }
+
+    /// A world for `CreateRaceSexMenu`: the counter word is at `0126f400`.
+    fn race_sex_world(counter: i32) -> Engine {
+        let (mut e, _) = ui_engine();
+        e.mem.set_u32(0x0126_f400, counter as u32);
+        e.register(COUNTER_ACCESSOR, |_, _| Ret {
+            eax: 0x0126_f400,
+            ..Ret::default()
+        });
+        stub!(e, DIALOG_SERVICE_START, 0);
+        stub!(e, RACE_SEX_MENU_CREATE, 0);
+        e
+    }
+
+    #[test]
+    fn create_race_sex_menu_defers_when_the_counter_is_above_one() {
+        let mut e = race_sex_world(2);
+        e.call(0x0070_5870, &args![0x42u32]);
+        assert_eq!(e.mem.u32(PENDING_MENU_KIND), 5);
+        assert_eq!(e.mem.u32(PENDING_MENU_ARGUMENT), 0x42);
+        assert!(logged(&e, RACE_SEX_MENU_CREATE).is_empty());
+        assert!(logged(&e, DIALOG_SERVICE_START).is_empty());
+    }
+
+    #[test]
+    fn create_race_sex_menu_creates_now_otherwise() {
+        // Counter 1: created at once.
+        let mut e = race_sex_world(1);
+        e.call(0x0070_5870, &args![0x42u32]);
+        assert_eq!(logged(&e, RACE_SEX_MENU_CREATE), vec![vec![0x42]]);
+        assert_eq!(e.mem.u32(PENDING_MENU_KIND), 0);
+        // Counter negative (signed compare): created at once.
+        let mut e = race_sex_world(-3);
+        e.call(0x0070_5870, &args![0x43u32]);
+        assert_eq!(logged(&e, RACE_SEX_MENU_CREATE), vec![vec![0x43]]);
+        // A menu already pending: created at once, pending unchanged.
+        let mut e = race_sex_world(5);
+        e.mem.set_u32(PENDING_MENU_KIND, 7);
+        e.call(0x0070_5870, &args![0x44u32]);
+        assert_eq!(logged(&e, RACE_SEX_MENU_CREATE), vec![vec![0x44]]);
+        assert_eq!(e.mem.u32(PENDING_MENU_KIND), 7);
+    }
+
+    #[test]
+    fn create_race_sex_menu_starts_the_dialog_service_first() {
+        let mut e = race_sex_world(1);
+        e.mem.set_u8(IN_DIALOG_FLAG, 1);
+        e.call(0x0070_5870, &args![0x42u32]);
+        let calls: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| *a)
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                0x0070_5870,
+                DIALOG_SERVICE_START,
+                COUNTER_ACCESSOR,
+                RACE_SEX_MENU_CREATE
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_007058c0_reads_the_word_at_0xc4() {
+        let (mut e, _) = ui_engine();
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object + 0xc4, 0x1357);
+        assert_eq!(e.call(0x0070_58c0, &args![object]).u32(), 0x1357);
+    }
+
+    #[test]
+    fn manager_forwarders_pass_the_manager() {
+        guarded(
+            0x0070_58e0,
+            &[],
+            MANAGER_LAST_MINUTE_UPDATE,
+            &[MANAGER_MARK],
+        );
+        guarded(0x0070_59d0, &[], MANAGER_CALL_A, &[MANAGER_MARK]);
+        guarded(0x0070_5a60, &[], MANAGER_CALL_B, &[MANAGER_MARK]);
+        assert_eq!(
+            guarded(0x0070_5910, &[], MANAGER_GETTER_A, &[MANAGER_MARK]),
+            [0x1234, 0, 0]
+        );
+        assert_eq!(
+            guarded(0x0070_5950, &[], MANAGER_GETTER_B, &[MANAGER_MARK]),
+            [0x1234, 0, 0]
+        );
+        assert_eq!(
+            guarded(0x0070_5990, &[], MANAGER_PIPBOY, &[MANAGER_MARK]),
+            [0x1234, 0, 0]
+        );
+    }
+
+    #[test]
+    fn is_in_pipboy_menu_accepts_modes_two_and_three() {
+        for (two, three, want) in [(0, 0, 0), (1, 0, 1), (0, 1, 1), (1, 1, 1)] {
+            let (mut e, _) = ui_engine();
+            e.register_double(MANAGER_MODE_IS_TWO, move |_, _| Ret {
+                eax: two,
+                ..Ret::default()
+            });
+            e.register_double(MANAGER_MODE_IS_THREE, move |_, _| Ret {
+                eax: three,
+                ..Ret::default()
+            });
+            assert_eq!(e.call(0x0070_5a00, &[]).u8(), want);
+        }
+        let mut e = engine_without_manager();
+        assert_eq!(e.call(0x0070_5a00, &[]).u8(), 0);
     }
 }
