@@ -47,418 +47,418 @@ use crate::types::NiFixedString;
 
 /// `NiPointer<T>::operator T*` (`00559450`): returns the pointer stored at
 /// the `NiPointer`'s address.
-const NI_POINTER_GET: u32 = 0x0055_9450;
+pub(crate) const NI_POINTER_GET: u32 = 0x0055_9450;
 /// `NiPointer<T>::operator=(T*)` (`0066b0d0`): releases the old object,
 /// stores and adds a reference to the new one; returns the `NiPointer`.
-const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
+pub(crate) const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
 /// `NiPointer<T>::NiPointer(T*)` (`00633c90`): stores the object and adds a
 /// reference.
-const NI_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+pub(crate) const NI_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
 /// `NiPointer<T>::~NiPointer` (`0045cec0`): releases the object.
-const NI_POINTER_DESTRUCT: u32 = 0x0045_cec0;
+pub(crate) const NI_POINTER_DESTRUCT: u32 = 0x0045_cec0;
 /// `MemoryManager` allocation, `__cdecl(size) -> block` (`00401000`).
-const MEMORY_ALLOC: u32 = 0x0040_1000;
+pub(crate) const MEMORY_ALLOC: u32 = 0x0040_1000;
 /// `MemoryManager` deallocation, `__cdecl(block)` (`00401030`).
-const MEMORY_FREE: u32 = 0x0040_1030;
+pub(crate) const MEMORY_FREE: u32 = 0x0040_1030;
 /// `strlen` through the game's wrapper (`0044a670`).
-const STRLEN: u32 = 0x0044_a670;
+pub(crate) const STRLEN: u32 = 0x0044_a670;
 /// `strcpy_s(destination, size, source)` through the game's wrapper (`00406d30`).
-const STRING_COPY: u32 = 0x0040_6d30;
+pub(crate) const STRING_COPY: u32 = 0x0040_6d30;
 /// `memcpy(destination, source, count)` through the game's wrapper (`00401460`).
-const MEMORY_COPY: u32 = 0x0040_1460;
+pub(crate) const MEMORY_COPY: u32 = 0x0040_1460;
 /// Address of the name slot of an object (`this + 8`; `00413f40`).
-const NAME_SLOT: u32 = 0x0041_3f40;
+pub(crate) const NAME_SLOT: u32 = 0x0041_3f40;
 /// The array-element address getter of `BSStream` (`00877a30`):
 /// `base + index * 4` of the array at `this`.
-const ARRAY_ELEMENT_ADDRESS: u32 = 0x0087_7a30;
+pub(crate) const ARRAY_ELEMENT_ADDRESS: u32 = 0x0087_7a30;
 /// The element-count getter of that array (`0084e3a0`): the dword at +0xC.
-const ARRAY_COUNT: u32 = 0x0084_e3a0;
+pub(crate) const ARRAY_COUNT: u32 = 0x0084_e3a0;
 /// `NiNode::NiNode(capacity)` (`00a5ecb0`).
-const NI_NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
+pub(crate) const NI_NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
 /// Allocator of `NiMemObject`-derived objects, `__cdecl(size) -> block`
 /// (`00aa13e0`).
-const NI_ALLOC: u32 = 0x00aa_13e0;
+pub(crate) const NI_ALLOC: u32 = 0x00aa_13e0;
 /// `NiAVObject::GetProperty(type)` (Xbox PDB, `00a59d30`).
-const GET_PROPERTY: u32 = 0x00a5_9d30;
+pub(crate) const GET_PROPERTY: u32 = 0x00a5_9d30;
 /// `NiAVObject::RemoveProperty_ov2(type)` (Xbox PDB, `00a5b230`).
-const REMOVE_PROPERTY: u32 = 0x00a5_b230;
+pub(crate) const REMOVE_PROPERTY: u32 = 0x00a5_b230;
 /// `RemoveEditorMarkers(node)` (Xbox PDB, `004b5d10`).
-const REMOVE_EDITOR_MARKERS: u32 = 0x004b_5d10;
+pub(crate) const REMOVE_EDITOR_MARKERS: u32 = 0x004b_5d10;
 /// `HasMorpherController(node)` (Xbox PDB, `004b5bf0`).
-const HAS_MORPHER_CONTROLLER: u32 = 0x004b_5bf0;
+pub(crate) const HAS_MORPHER_CONTROLLER: u32 = 0x004b_5bf0;
 /// `BSShaderManager::PrepareObject(node, flag, flag)` (Xbox PDB, `00b57e30`).
-const PREPARE_OBJECT: u32 = 0x00b5_7e30;
+pub(crate) const PREPARE_OBJECT: u32 = 0x00b5_7e30;
 /// `BSStream::FreeAllObjects` (Xbox PDB, `00c3b370`).
-const STREAM_FREE_ALL_OBJECTS: u32 = 0x00c3_b370;
+pub(crate) const STREAM_FREE_ALL_OBJECTS: u32 = 0x00c3_b370;
 /// The game's `printf`-style log (`005b5e40`), `__cdecl(format, ...)`.
-const LOG: u32 = 0x005b_5e40;
+pub(crate) const LOG: u32 = 0x005b_5e40;
 /// Run-time type check, `__cdecl(type descriptor, object) -> object or 0`
 /// (`00653270`).
-const DYNAMIC_CAST: u32 = 0x0065_3270;
+pub(crate) const DYNAMIC_CAST: u32 = 0x0065_3270;
 /// Reads the pointer an object `InitModel` cast holds (`00537bd0`, a
 /// `NiPointer` read in the land unit).
-const CAST_RESULT_POINTER: u32 = 0x0053_7bd0;
+pub(crate) const CAST_RESULT_POINTER: u32 = 0x0053_7bd0;
 /// Run-time type test, `__thiscall(object, type descriptor) -> bool`
 /// (`006532c0`).
-const IS_KIND_OF: u32 = 0x0065_32c0;
+pub(crate) const IS_KIND_OF: u32 = 0x0065_32c0;
 /// `TESAnimGroup::LoadAnimGroup(sequence, name)` (Xbox PDB, `005f3a20`).
-const LOAD_ANIM_GROUP: u32 = 0x005f_3a20;
+pub(crate) const LOAD_ANIM_GROUP: u32 = 0x005f_3a20;
 /// Builds the `NiControllerSequence` of a `KFModel`, `__cdecl(file, 0,
 /// NiPointer out)` (`004eeb60`).
-const LOAD_KF_SEQUENCE: u32 = 0x004e_eb60;
+pub(crate) const LOAD_KF_SEQUENCE: u32 = 0x004e_eb60;
 /// `KFModel` accessor returning its `spSequence` (`007fa950`).
-const KF_MODEL_SEQUENCE: u32 = 0x007f_a950;
+pub(crate) const KF_MODEL_SEQUENCE: u32 = 0x007f_a950;
 /// `NiFixedString::NiFixedString(const char*)` (`00438170`): stores the
 /// pooled handle, returns the string.
-const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+pub(crate) const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
 /// `NiFixedString::~NiFixedString` (`004381b0`).
-const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+pub(crate) const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
 /// Releases a `NiFixedString` handle (`004381d0`), `__cdecl(handle pointer)`.
-const FIXED_STRING_RELEASE: u32 = 0x0043_81d0;
+pub(crate) const FIXED_STRING_RELEASE: u32 = 0x0043_81d0;
 /// Address of the reference count of a pooled string, `__cdecl(handle
 /// pointer)` (`00438210`).
-const FIXED_STRING_REFCOUNT: u32 = 0x0043_8210;
+pub(crate) const FIXED_STRING_REFCOUNT: u32 = 0x0043_8210;
 /// `InterlockedIncrement` wrapper, `__cdecl(address)` (`0040b460`).
-const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
+pub(crate) const INTERLOCKED_INCREMENT: u32 = 0x0040_b460;
 /// `InterlockedDecrement` wrapper, `__cdecl(address)` (`004019a0`).
-const INTERLOCKED_DECREMENT: u32 = 0x0040_19a0;
+pub(crate) const INTERLOCKED_DECREMENT: u32 = 0x0040_19a0;
 /// `Sleep` wrapper, `__cdecl(milliseconds)` (`0040fca0`).
-const SLEEP: u32 = 0x0040_fca0;
+pub(crate) const SLEEP: u32 = 0x0040_fca0;
 /// `KERNEL32 InterlockedCompareExchange` (import slot).
-const INTERLOCKED_COMPARE_EXCHANGE: u32 = 0x00fd_f1bc;
+pub(crate) const INTERLOCKED_COMPARE_EXCHANGE: u32 = 0x00fd_f1bc;
 /// `strchr` (`00ec7690`).
-const STRCHR: u32 = 0x00ec_7690;
+pub(crate) const STRCHR: u32 = 0x00ec_7690;
 /// `Bip[0-9][0-9]`-style pattern match, `__cdecl(text, pattern) -> bool`
 /// (`00af3bd0`).
-const MATCHES_PATTERN: u32 = 0x00af_3bd0;
+pub(crate) const MATCHES_PATTERN: u32 = 0x00af_3bd0;
 /// `__thiscall(object, 1)` (`004534f0`): the call `0043b5b0` makes on the
 /// object embedded in the block at `this`.
-const DELETE_OBJECT: u32 = 0x0045_34f0;
+pub(crate) const DELETE_OBJECT: u32 = 0x0045_34f0;
 /// Returns the field at +8 of the object it is called on (`00620b80`, the
 /// same as `0044ddc0`).
-const REF_COUNT_OBJECT_POINTER: u32 = 0x0062_0b80;
+pub(crate) const REF_COUNT_OBJECT_POINTER: u32 = 0x0062_0b80;
 /// Returns `this + 0x10` (`00460140`).
-const HOLDER_VALUE: u32 = 0x0046_0140;
+pub(crate) const HOLDER_VALUE: u32 = 0x0046_0140;
 /// An empty function (`00483710`).
-const HOLDER_DESTRUCT: u32 = 0x0048_3710;
+pub(crate) const HOLDER_DESTRUCT: u32 = 0x0048_3710;
 /// Reads the field at +8 of an object (`0044ddc0`).
-const FIELD_AT_8: u32 = 0x0044_ddc0;
+pub(crate) const FIELD_AT_8: u32 = 0x0044_ddc0;
 /// Stores a pointer into the object it is called on (`008c71b0`).
-const STORE_POINTER: u32 = 0x008c_71b0;
+pub(crate) const STORE_POINTER: u32 = 0x008c_71b0;
 /// `NiAVObject::m_spCollisionObject` getter (`006838b0`).
-const COLLISION_OBJECT: u32 = 0x0068_38b0;
+pub(crate) const COLLISION_OBJECT: u32 = 0x0068_38b0;
 /// The array-size getter of `0043b480`'s array (`00658930`): the word at +0xA.
-const ARRAY_SIZE: u32 = 0x0065_8930;
+pub(crate) const ARRAY_SIZE: u32 = 0x0065_8930;
 
 /// `"Meshes\\Marker_Error.NIF"`.
-const MARKER_ERROR_NIF: u32 = 0x0101_667c;
+pub(crate) const MARKER_ERROR_NIF: u32 = 0x0101_667c;
 /// `"Bip[0-9][0-9]"`.
-const BIP_PATTERN: u32 = 0x0101_666c;
+pub(crate) const BIP_PATTERN: u32 = 0x0101_666c;
 /// `"MODELS: %s: Reexport '%s' to get rid of the ZBuffer and/or VertextColor
 /// property."`.
-const REEXPORT_WITH_FILE_MESSAGE: u32 = 0x0101_6618;
+pub(crate) const REEXPORT_WITH_FILE_MESSAGE: u32 = 0x0101_6618;
 /// `"MODELS: Reexport '%s' to get rid of the ZBuffer and/or VertextColor
 /// property."`.
-const REEXPORT_MESSAGE: u32 = 0x0101_65c8;
+pub(crate) const REEXPORT_MESSAGE: u32 = 0x0101_65c8;
 /// `"ANIMATION: Could not create ControllerManager Sequence for \"%s\".\r\n"`.
-const NO_SEQUENCE_MESSAGE: u32 = 0x0101_6698;
+pub(crate) const NO_SEQUENCE_MESSAGE: u32 = 0x0101_6698;
 
 /// `MessageHandler`'s disable-warning counter (a signed dword, never below 0).
-const DISABLE_WARNING_COUNT: u32 = 0x0120_2d6c;
+pub(crate) const DISABLE_WARNING_COUNT: u32 = 0x0120_2d6c;
 /// A byte flag `InitGunWobble` writes and `InitModel` reads (its meaning is
 /// not known).
-const GUN_WOBBLE_FLAG: u32 = 0x0118_5520;
+pub(crate) const GUN_WOBBLE_FLAG: u32 = 0x0118_5520;
 /// The pooled empty string handle `NiFixedString` leaves unreferenced.
-const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
+pub(crate) const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
 /// The word `0043b3b0` returns when it finds nothing (`0xFFFF`).
-const NOT_FOUND_INDEX: u32 = 0x0109_6320;
+pub(crate) const NOT_FOUND_INDEX: u32 = 0x0109_6320;
 /// `NiPointer` globals holding the shared properties `InitModel` compares
 /// against (the property types are `0043b290` and `00702440`).
-const SHARED_PROPERTY_FIRST: u32 = 0x011f_4444;
-const SHARED_PROPERTY_SECOND: u32 = 0x011f_4438;
+pub(crate) const SHARED_PROPERTY_FIRST: u32 = 0x011f_4444;
+pub(crate) const SHARED_PROPERTY_SECOND: u32 = 0x011f_4438;
 /// Type descriptor `InitModel` casts the root's child to (the class is not
 /// identified).
-const TYPE_DESCRIPTOR_011F36AC: u32 = 0x011f_36ac;
+pub(crate) const TYPE_DESCRIPTOR_011F36AC: u32 = 0x011f_36ac;
 /// Type descriptor `0043b7e0` tests the loaded sequence against (the class is
 /// not identified).
-const TYPE_DESCRIPTOR_011C7D74: u32 = 0x011c_7d74;
+pub(crate) const TYPE_DESCRIPTOR_011C7D74: u32 = 0x011c_7d74;
 /// Type descriptor `0043b610` casts to (`bhkCollisionObject`).
-const TYPE_DESCRIPTOR_BHK_COLLISION_OBJECT: u32 = 0x0120_43f8;
+pub(crate) const TYPE_DESCRIPTOR_BHK_COLLISION_OBJECT: u32 = 0x0120_43f8;
 /// The property type `0043b290` returns.
-const PROPERTY_TYPE_FIRST: u32 = 0xb;
+pub(crate) const PROPERTY_TYPE_FIRST: u32 = 0xb;
 /// Returns the second property type `InitModel` strips (`00702440`, in the
 /// interface unit).
-const PROPERTY_TYPE_SECOND_GETTER: u32 = 0x0070_2440;
+pub(crate) const PROPERTY_TYPE_SECOND_GETTER: u32 = 0x0070_2440;
 
 // --- Queued files (`0043bac0` onwards): `LoadedFile`, `QueuedTexture`, `QueuedModel`. ---
 
 /// `QueuedFileEntry::QueuedFileEntry(context)` (`00c3ce60`): the shared base
 /// constructor of the queued texture and model.
-const QUEUED_FILE_ENTRY_CONSTRUCT: u32 = 0x00c3_ce60;
+pub(crate) const QUEUED_FILE_ENTRY_CONSTRUCT: u32 = 0x00c3_ce60;
 /// `QueuedFileEntry` destructor body (`00c3cea0`).
-const QUEUED_FILE_ENTRY_DESTRUCT: u32 = 0x00c3_cea0;
+pub(crate) const QUEUED_FILE_ENTRY_DESTRUCT: u32 = 0x00c3_cea0;
 /// Copies a file name into `pFileName` (`00c3cee0`, `__thiscall(name)`).
-const QUEUED_FILE_ENTRY_SET_FILE_NAME: u32 = 0x00c3_cee0;
+pub(crate) const QUEUED_FILE_ENTRY_SET_FILE_NAME: u32 = 0x00c3_cee0;
 /// Looks the file entry of `pFileName` up (`00c3cf60`, `__thiscall(flag)`).
-const QUEUED_FILE_ENTRY_FIND_FILE_ENTRY: u32 = 0x00c3_cf60;
+pub(crate) const QUEUED_FILE_ENTRY_FIND_FILE_ENTRY: u32 = 0x00c3_cf60;
 /// Stores `pFileEntry` (`00c3cf40`, `__thiscall(file entry)`).
-const QUEUED_FILE_ENTRY_SET_FILE_ENTRY: u32 = 0x00c3_cf40;
+pub(crate) const QUEUED_FILE_ENTRY_SET_FILE_ENTRY: u32 = 0x00c3_cf40;
 /// `QueuedFileEntry::GetFile` (Xbox PDB, `00c3cff0`), `__thiscall(1, 2)`:
 /// opens the file of the entry and returns the `BSFile` (0 on failure).
-const QUEUED_FILE_ENTRY_GET_FILE: u32 = 0x00c3_cff0;
+pub(crate) const QUEUED_FILE_ENTRY_GET_FILE: u32 = 0x00c3_cff0;
 /// `QueuedFileEntry::GetDescription` (Xbox PDB, `00c3d0e0`),
 /// `__thiscall(buffer, size, kind text) -> bool`.
-const QUEUED_FILE_ENTRY_GET_DESCRIPTION: u32 = 0x00c3_d0e0;
+pub(crate) const QUEUED_FILE_ENTRY_GET_DESCRIPTION: u32 = 0x00c3_d0e0;
 /// `QueuedFile::Cancel` (Xbox PDB, `00c3cb70`), `__thiscall(2 arguments)`.
-const QUEUED_FILE_CANCEL: u32 = 0x00c3_cb70;
+pub(crate) const QUEUED_FILE_CANCEL: u32 = 0x00c3_cb70;
 /// Getter of `QueuedFileEntry::pFileEntry` (`0055b980`, `this + 0x2c`; the
 /// linker folded it with the same getter of the object unit).
-const QUEUED_FILE_ENTRY_GET_FILE_ENTRY: u32 = 0x0055_b980;
+pub(crate) const QUEUED_FILE_ENTRY_GET_FILE_ENTRY: u32 = 0x0055_b980;
 /// Getter of `QueuedFileEntry::pFileName` (`0045cd60`, `this + 0x28`).
-const QUEUED_FILE_ENTRY_GET_FILE_NAME: u32 = 0x0045_cd60;
+pub(crate) const QUEUED_FILE_ENTRY_GET_FILE_NAME: u32 = 0x0045_cd60;
 /// `BSFileEntry::iSize & 0x3fffffff` (`0062a100`).
-const FILE_ENTRY_GET_SIZE: u32 = 0x0062_a100;
+pub(crate) const FILE_ENTRY_GET_SIZE: u32 = 0x0062_a100;
 /// The archive that holds a file entry, `__cdecl(file entry, 2) -> archive`
 /// (`00af6910`, in the archive unit; 0 when there is none).
-const FILE_ENTRY_FIND_ARCHIVE: u32 = 0x00af_6910;
+pub(crate) const FILE_ENTRY_FIND_ARCHIVE: u32 = 0x00af_6910;
 /// `__thiscall(flag, byte)` helpers of this unit, `__cdecl(flag, byte
 /// pointer)`: set (non-zero `flag`) or clear one bit of the byte.
-const SET_FLAG_BIT_1: u32 = 0x0044_ae20;
-const SET_FLAG_BIT_2: u32 = 0x0044_ae60;
-const SET_FLAG_BIT_4: u32 = 0x0044_aea0;
+pub(crate) const SET_FLAG_BIT_1: u32 = 0x0044_ae20;
+pub(crate) const SET_FLAG_BIT_2: u32 = 0x0044_ae60;
+pub(crate) const SET_FLAG_BIT_4: u32 = 0x0044_aea0;
 /// `__cdecl(flags byte) -> bool`: whether bit 2 / bit 4 of the byte is set.
-const TEST_FLAG_BIT_2: u32 = 0x0044_ae50;
-const TEST_FLAG_BIT_4: u32 = 0x0044_ae90;
+pub(crate) const TEST_FLAG_BIT_2: u32 = 0x0044_ae50;
+pub(crate) const TEST_FLAG_BIT_4: u32 = 0x0044_ae90;
 /// `__thiscall(flag)` on a `QueuedTexture` (`0043e480`, [`fn_0043e480`]):
 /// sets or clears bit 1 of `cFlags`.
-const QUEUED_TEXTURE_SET_FLAG_1: u32 = 0x0043_e480;
+pub(crate) const QUEUED_TEXTURE_SET_FLAG_1: u32 = 0x0043_e480;
 /// `__thiscall()` on a `QueuedTexture` (`0043e530`, [`fn_0043e530`]): whether
 /// bit 1 of `cFlags` is set.
-const QUEUED_TEXTURE_TEST_FLAG_1: u32 = 0x0043_e530;
+pub(crate) const QUEUED_TEXTURE_TEST_FLAG_1: u32 = 0x0043_e530;
 /// The object at `011c3b3c`, whose methods `00448330`, `00448370`,
 /// `00448ed0` and `00448f50` (this unit, not translated yet) keep the maps
 /// of loaded files and of queued textures.
-const FILE_MAP_OWNER: u32 = 0x011c_3b3c;
+pub(crate) const FILE_MAP_OWNER: u32 = 0x011c_3b3c;
 /// `__thiscall(name, loaded file) -> bool` on [`FILE_MAP_OWNER`]: adds a
 /// `LoadedFile` to the map of loaded files.
-const FILE_MAP_ADD_LOADED_FILE: u32 = 0x0044_8330;
+pub(crate) const FILE_MAP_ADD_LOADED_FILE: u32 = 0x0044_8330;
 /// `__thiscall(name)` on [`FILE_MAP_OWNER`]: removes it again.
-const FILE_MAP_REMOVE_LOADED_FILE: u32 = 0x0044_8370;
+pub(crate) const FILE_MAP_REMOVE_LOADED_FILE: u32 = 0x0044_8370;
 /// `__thiscall(file entry, queued texture) -> bool` on [`FILE_MAP_OWNER`]:
 /// adds the texture to the map of queued textures by file entry.
-const FILE_MAP_ADD_QUEUED_TEXTURE: u32 = 0x0044_8ed0;
+pub(crate) const FILE_MAP_ADD_QUEUED_TEXTURE: u32 = 0x0044_8ed0;
 /// `__thiscall(file entry)` on [`FILE_MAP_OWNER`]: removes it.
-const FILE_MAP_REMOVE_QUEUED_TEXTURE: u32 = 0x0044_8f50;
+pub(crate) const FILE_MAP_REMOVE_QUEUED_TEXTURE: u32 = 0x0044_8f50;
 /// The object at `01202d98` (a task queue); slot `0x48` takes the queued
 /// texture to run.
-const TASK_QUEUE: u32 = 0x0120_2d98;
+pub(crate) const TASK_QUEUE: u32 = 0x0120_2d98;
 /// The object at `011f6388` that `LoadedFile`'s destructor reports to
 /// (slot `0x14`: `(severity, text, 0, 0, 0)`), 0 when there is none.
-const MESSAGE_SINK: u32 = 0x011f_6388;
+pub(crate) const MESSAGE_SINK: u32 = 0x011f_6388;
 /// `BSTexturePalette::pTexMapA` (Xbox PDB), `011f4468`: the texture map.
-const TEXTURE_MAP: u32 = 0x011f_4468;
+pub(crate) const TEXTURE_MAP: u32 = 0x011f_4468;
 /// The word `0043c4b0` returns (`011f4748`, a default texture setting).
-const DEFAULT_TEXTURE_SETTING: u32 = 0x011f_4748;
+pub(crate) const DEFAULT_TEXTURE_SETTING: u32 = 0x011f_4748;
 /// `BSTexturePalette::SetTexture` (Xbox PDB, `00a61c50`), `__cdecl(texture,
 /// file entry)`.
-const TEXTURE_PALETTE_SET_TEXTURE: u32 = 0x00a6_1c50;
+pub(crate) const TEXTURE_PALETTE_SET_TEXTURE: u32 = 0x00a6_1c50;
 /// `BSTexturePalette::GetTexture_ov2` (Xbox PDB, `00a61b90`), `__cdecl(file
 /// name, NiPointer out)`.
-const TEXTURE_PALETTE_GET_TEXTURE_BY_NAME: u32 = 0x00a6_1b90;
+pub(crate) const TEXTURE_PALETTE_GET_TEXTURE_BY_NAME: u32 = 0x00a6_1b90;
 /// Hash-bucket lookup of the texture map (`00a61a60`), `__thiscall(bucket,
 /// file entry, NiPointer out) -> bool`.
-const TEXTURE_MAP_FIND: u32 = 0x00a6_1a60;
+pub(crate) const TEXTURE_MAP_FIND: u32 = 0x00a6_1a60;
 /// Creates a texture from an open file, `__cdecl(NiFixedString*, file,
 /// setting, format preferences)` (`00a61040`, in the cube map unit).
-const CREATE_TEXTURE_FROM_FIXED_NAME: u32 = 0x00a6_1040;
+pub(crate) const CREATE_TEXTURE_FROM_FIXED_NAME: u32 = 0x00a6_1040;
 /// The engine map's `NiSourceCubeMap::Create` (`00a5fe30`), `__cdecl(file,
 /// name, format preferences, 1)`; `Run` takes it for names without `_e.dd`,
 /// so the map's name is doubtful.
-const CREATE_TEXTURE_FROM_FILE: u32 = 0x00a5_fe30;
+pub(crate) const CREATE_TEXTURE_FROM_FILE: u32 = 0x00a5_fe30;
 /// `strstr` (`00ec7750`), `__cdecl(text, pattern)`.
-const STRSTR: u32 = 0x00ec_7750;
+pub(crate) const STRSTR: u32 = 0x00ec_7750;
 /// `sprintf` (`00ec623a`), `__cdecl(buffer, format, ...)`.
-const SPRINTF: u32 = 0x00ec_623a;
+pub(crate) const SPRINTF: u32 = 0x00ec_623a;
 /// Path-normalizing copy, `__cdecl(name, buffer, size)` (`00af4200`).
-const NORMALIZE_PATH: u32 = 0x00af_4200;
+pub(crate) const NORMALIZE_PATH: u32 = 0x00af_4200;
 /// The texture's surface getter (`0059bb30`, `this + 0x24`; the engine map
 /// calls it `D3DTexture_LockRect`).
-const TEXTURE_GET_SURFACE: u32 = 0x0059_bb30;
+pub(crate) const TEXTURE_GET_SURFACE: u32 = 0x0059_bb30;
 /// The scope guard that sets the memory context for the rest of a function:
 /// `__thiscall(context, 1, source file, line)` and its destructor.
-const MEMORY_CONTEXT_ENTER: u32 = 0x0040_4eb0;
-const MEMORY_CONTEXT_LEAVE: u32 = 0x0040_4ee0;
+pub(crate) const MEMORY_CONTEXT_ENTER: u32 = 0x0040_4eb0;
+pub(crate) const MEMORY_CONTEXT_LEAVE: u32 = 0x0040_4ee0;
 /// Releases the `NiPointer<Model>` at `this` (`0040c110`).
-const MODEL_POINTER_RELEASE: u32 = 0x0040_c110;
+pub(crate) const MODEL_POINTER_RELEASE: u32 = 0x0040_c110;
 
 /// `QueuedTexture`'s virtual table (`01016788`) and `QueuedModel`'s
 /// (`01016890`).
-const QUEUED_TEXTURE_VTABLE: u32 = 0x0101_6788;
-const QUEUED_MODEL_VTABLE: u32 = 0x0101_6890;
+pub(crate) const QUEUED_TEXTURE_VTABLE: u32 = 0x0101_6788;
+pub(crate) const QUEUED_MODEL_VTABLE: u32 = 0x0101_6890;
 
 /// `"texture"`.
-const TEXTURE_WORD: u32 = 0x0101_6884;
+pub(crate) const TEXTURE_WORD: u32 = 0x0101_6884;
 /// `"_e.dd"`.
-const ENVIRONMENT_MAP_SUFFIX: u32 = 0x0101_6838;
+pub(crate) const ENVIRONMENT_MAP_SUFFIX: u32 = 0x0101_6838;
 /// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\ModelLoader.cpp"`.
-const MODEL_LOADER_SOURCE: u32 = 0x0101_6840;
+pub(crate) const MODEL_LOADER_SOURCE: u32 = 0x0101_6840;
 /// The source line the memory context scope of `Run` records.
-const RUN_SOURCE_LINE: u32 = 0x2b7;
+pub(crate) const RUN_SOURCE_LINE: u32 = 0x2b7;
 /// `"MODELS: Could not get file for texture %s."`.
-const NO_FILE_FOR_TEXTURE_NAME_MESSAGE: u32 = 0x0101_67b8;
+pub(crate) const NO_FILE_FOR_TEXTURE_NAME_MESSAGE: u32 = 0x0101_67b8;
 /// `"MODELS: Could not get file for texture with file entry offset %i and
 /// size %i."`.
-const NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE: u32 = 0x0101_67e8;
+pub(crate) const NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE: u32 = 0x0101_67e8;
 /// `"LoadedFile %s was loaded at %i and added to the map, but is being thrown
 /// away without being used"`.
-const LOADED_FILE_UNUSED_MESSAGE: u32 = 0x0101_6720;
+pub(crate) const LOADED_FILE_UNUSED_MESSAGE: u32 = 0x0101_6720;
 /// `"%s ref object at mem %i being destroyed with %i references\r\n"`.
-const LOADED_FILE_REFERENCES_MESSAGE: u32 = 0x0101_66dc;
+pub(crate) const LOADED_FILE_REFERENCES_MESSAGE: u32 = 0x0101_66dc;
 /// The format preferences object `Run` passes to the texture creators.
-const TEXTURE_FORMAT_PREFERENCES: u32 = 0x011a_9598;
+pub(crate) const TEXTURE_FORMAT_PREFERENCES: u32 = 0x011a_9598;
 
 // --- `QueuedModel` and the tree classes (`0043c890` onwards). ---
 
 /// `NiPointer<Model>::operator=(Model*)` (Xbox PDB `NiPointer<Model>::operator_`,
 /// `0044aed0`, in this unit, not translated yet), `__thiscall(model)` on the
 /// `NiPointer`.
-const MODEL_POINTER_ASSIGN: u32 = 0x0044_aed0;
+pub(crate) const MODEL_POINTER_ASSIGN: u32 = 0x0044_aed0;
 /// `QueuedFile::CheckFinished` (Xbox PDB, `00c3c930`).
-const QUEUED_FILE_CHECK_FINISHED: u32 = 0x00c3_c930;
+pub(crate) const QUEUED_FILE_CHECK_FINISHED: u32 = 0x00c3_c930;
 /// `QueuedFileEntry::GenerateKey` (Xbox PDB, `00c3d440`).
-const QUEUED_FILE_ENTRY_GENERATE_KEY: u32 = 0x00c3_d440;
+pub(crate) const QUEUED_FILE_ENTRY_GENERATE_KEY: u32 = 0x00c3_d440;
 /// `BSStream::Load` (Xbox PDB, `00c3a8a0`), `__thiscall(name, file)`: reads
 /// the stream from the open `BSFile`; false on failure.
-const BS_STREAM_LOAD: u32 = 0x00c3_a8a0;
+pub(crate) const BS_STREAM_LOAD: u32 = 0x00c3_a8a0;
 /// `NiStream::NiStream` (`00a66150`) and its destructor body (`00a65300`).
-const NI_STREAM_CONSTRUCT: u32 = 0x00a6_6150;
-const NI_STREAM_DESTRUCT: u32 = 0x00a6_5300;
+pub(crate) const NI_STREAM_CONSTRUCT: u32 = 0x00a6_6150;
+pub(crate) const NI_STREAM_DESTRUCT: u32 = 0x00a6_5300;
 /// `NiStreamSaveBinary<unsigned int>` (Xbox PDB, `0044adf0`),
 /// `__cdecl(stream, value pointer)`.
-const NI_STREAM_SAVE_BINARY_U32: u32 = 0x0044_adf0;
+pub(crate) const NI_STREAM_SAVE_BINARY_U32: u32 = 0x0044_adf0;
 /// `ModelLoader::FindModel` (Xbox PDB, `004472a0`) on [`FILE_MAP_OWNER`],
 /// `__thiscall(name, NiPointer<Model> out)`: gives the pointer the model of
 /// that name when the loader has it.
-const MODEL_LOADER_FIND_MODEL: u32 = 0x0044_72a0;
+pub(crate) const MODEL_LOADER_FIND_MODEL: u32 = 0x0044_72a0;
 /// Adds a model to the loader's map (`00447010`, in this unit, not
 /// translated yet), `__thiscall(name, model) -> bool` on [`FILE_MAP_OWNER`];
 /// false when the name is already there.
-const MODEL_LOADER_ADD_MODEL: u32 = 0x0044_7010;
+pub(crate) const MODEL_LOADER_ADD_MODEL: u32 = 0x0044_7010;
 /// `ModelLoader::QueueTexture_ov2` (Xbox PDB, `00443af0`) on
 /// [`FILE_MAP_OWNER`], `__thiscall(texture, key, parent queued file)`.
-const MODEL_LOADER_QUEUE_TEXTURE: u32 = 0x0044_3af0;
+pub(crate) const MODEL_LOADER_QUEUE_TEXTURE: u32 = 0x0044_3af0;
 /// `BGSTextureSet::QueueTextureSet` (Xbox PDB, `005930e0`),
 /// `__thiscall(key, parent queued file, 0)`.
-const QUEUE_TEXTURE_SET: u32 = 0x0059_30e0;
+pub(crate) const QUEUE_TEXTURE_SET: u32 = 0x0059_30e0;
 /// `__thiscall()` on a `TESModel` (`0048d150`): `this + 0xC`, the texture
 /// hash block `QueueMe_ov2` reads.
-const TES_MODEL_TEXTURE_BLOCK: u32 = 0x0048_d150;
+pub(crate) const TES_MODEL_TEXTURE_BLOCK: u32 = 0x0048_d150;
 /// `__thiscall()` getters of the texture hash block (`009373f0`: the byte at
 /// +0; `00726070`: the dword at +4, also the "next" link of the list nodes).
-const BYTE_AT_0: u32 = 0x0093_73f0;
-const FIELD_AT_4: u32 = 0x0072_6070;
+pub(crate) const BYTE_AT_0: u32 = 0x0093_73f0;
+pub(crate) const FIELD_AT_4: u32 = 0x0072_6070;
 /// List helpers of the texture set list: `00500940` returns `this + 0x18`
 /// (the first node), `006815c0` returns the node itself (its item is the
 /// first dword); the next node is [`FIELD_AT_4`].
-const LIST_FIRST_NODE: u32 = 0x0050_0940;
-const LIST_NODE_ITEM_ADDRESS: u32 = 0x0068_15c0;
+pub(crate) const LIST_FIRST_NODE: u32 = 0x0050_0940;
+pub(crate) const LIST_NODE_ITEM_ADDRESS: u32 = 0x0068_15c0;
 /// Whether the dword at +0xC (`eState`) is 0 (`0069b080`; the engine map
 /// files it under the navmesh code).
-const STATE_IS_ZERO: u32 = 0x0069_b080;
+pub(crate) const STATE_IS_ZERO: u32 = 0x0069_b080;
 /// The finished-child count of a `QueuedChildren` (`0044edb0`, named
 /// `BaseProcess::GetCurrentProcedureIndex` by the engine map but folded: it
 /// returns the dword at +0x10).
-const FINISHED_COUNT_GETTER: u32 = 0x0044_edb0;
+pub(crate) const FINISHED_COUNT_GETTER: u32 = 0x0044_edb0;
 /// `__cdecl(flags byte) -> bool` tests of the other bits of a queued file's
 /// flag byte, and the setter of bit 8 (`__cdecl(flag, byte pointer)`).
-const TEST_FLAG_BIT_1: u32 = 0x0044_ae10;
-const TEST_FLAG_BIT_8: u32 = 0x0044_af20;
-const TEST_FLAG_BIT_10: u32 = 0x0044_af60;
-const TEST_FLAG_BIT_20: u32 = 0x0044_afa0;
-const SET_FLAG_BIT_8: u32 = 0x0044_af30;
+pub(crate) const TEST_FLAG_BIT_1: u32 = 0x0044_ae10;
+pub(crate) const TEST_FLAG_BIT_8: u32 = 0x0044_af20;
+pub(crate) const TEST_FLAG_BIT_10: u32 = 0x0044_af60;
+pub(crate) const TEST_FLAG_BIT_20: u32 = 0x0044_afa0;
+pub(crate) const SET_FLAG_BIT_8: u32 = 0x0044_af30;
 /// `NiRefObject::IncRefCount` (`0092c870`): one more reference.
-const ADD_REFERENCE: u32 = 0x0092_c870;
+pub(crate) const ADD_REFERENCE: u32 = 0x0092_c870;
 /// `NiAVObject::Update(NiUpdateData*)` as `Finish` calls it (`00a59c60`,
 /// `__thiscall(update data)`).
-const NI_AV_OBJECT_UPDATE: u32 = 0x00a5_9c60;
+pub(crate) const NI_AV_OBJECT_UPDATE: u32 = 0x00a5_9c60;
 /// Radius of a `NiBound` (`0084d030`, the float at +0xC, returned in ST0).
-const BOUND_RADIUS: u32 = 0x0084_d030;
+pub(crate) const BOUND_RADIUS: u32 = 0x0084_d030;
 /// `TESObjectREFR::GetBoundMax` (Xbox PDB, `0056fc30`), `__cdecl(out, node)
 /// -> vector pointer`.
-const GET_BOUND_MAX: u32 = 0x0056_fc30;
+pub(crate) const GET_BOUND_MAX: u32 = 0x0056_fc30;
 /// Address of the value of a setting object (`00403e20`: `this + 4`, or a
 /// zero scratch float when `this` is 0).
-const SETTING_VALUE_POINTER: u32 = 0x0040_3e20;
+pub(crate) const SETTING_VALUE_POINTER: u32 = 0x0040_3e20;
 /// `QueuedModel::mfOverriddenVisualDistance` getter (`00792760`, in ST0).
-const OVERRIDDEN_VISUAL_DISTANCE: u32 = 0x0079_2760;
+pub(crate) const OVERRIDDEN_VISUAL_DISTANCE: u32 = 0x0079_2760;
 /// `BSFadeNode::SetRange` (Xbox PDB, `00b4dfd0`), `__thiscall(float, float)`.
-const FADE_NODE_SET_RANGE: u32 = 0x00b4_dfd0;
+pub(crate) const FADE_NODE_SET_RANGE: u32 = 0x00b4_dfd0;
 /// `BSFadeNode::SetLODMultType` (Xbox PDB, `00b4dec0`).
-const FADE_NODE_SET_LOD_MULT_TYPE: u32 = 0x00b4_dec0;
+pub(crate) const FADE_NODE_SET_LOD_MULT_TYPE: u32 = 0x00b4_dec0;
 /// The setting objects `Finish` reads: the world size in cells (`011c63cc`,
 /// +4 is the value), the scale of the visual distance of a model
 /// (`011c3be4`) and the scale of the fade range (`011c3bb8`).
-const CELL_COUNT_SETTING: u32 = 0x011c_63cc;
-const VISUAL_DISTANCE_SCALE_SETTING: u32 = 0x011c_3be4;
-const FADE_RANGE_SCALE_SETTING: u32 = 0x011c_3bb8;
+pub(crate) const CELL_COUNT_SETTING: u32 = 0x011c_63cc;
+pub(crate) const VISUAL_DISTANCE_SCALE_SETTING: u32 = 0x011c_3be4;
+pub(crate) const FADE_RANGE_SCALE_SETTING: u32 = 0x011c_3bb8;
 /// The zero scratch dword `0043d4d0` returns the address of when it has no
 /// object.
-const SCRATCH_ZERO: u32 = 0x0120_2800;
+pub(crate) const SCRATCH_ZERO: u32 = 0x0120_2800;
 /// The bound `NiAVObject::GetWorldBound` returns when the object has none.
-const EMPTY_WORLD_BOUND: u32 = 0x011f_4288;
+pub(crate) const EMPTY_WORLD_BOUND: u32 = 0x011f_4288;
 /// Doubles in `.rdata`: 0.001, 2048.0, 0.5 and 0.0.
-const SMALL_RADIUS: u32 = 0x0101_6978;
-const LOADED_AREA_MARGIN: u32 = 0x0101_6968;
-const HALF: u32 = 0x0101_1588;
-const ZERO: u32 = 0x0101_2060;
+pub(crate) const SMALL_RADIUS: u32 = 0x0101_6978;
+pub(crate) const LOADED_AREA_MARGIN: u32 = 0x0101_6968;
+pub(crate) const HALF: u32 = 0x0101_1588;
+pub(crate) const ZERO: u32 = 0x0101_2060;
 /// The file name of the model being loaded (`011f94c0`): `QueuedModel::Run`
 /// sets it while the stream loads and clears it afterwards.
-const LOADING_FILE_NAME: u32 = 0x011f_94c0;
+pub(crate) const LOADING_FILE_NAME: u32 = 0x011f_94c0;
 /// `TESObjectTREE::BuildDistant3D` (Xbox PDB, `0051cba0`), `__thiscall(1)`.
-const BUILD_DISTANT_3D: u32 = 0x0051_cba0;
+pub(crate) const BUILD_DISTANT_3D: u32 = 0x0051_cba0;
 /// Zeroes the three words of the object (`00b57e70`).
-const ZERO_THREE_WORDS: u32 = 0x00b5_7e70;
+pub(crate) const ZERO_THREE_WORDS: u32 = 0x00b5_7e70;
 /// Builds the instanced billboards (`00b59ae0`), `__cdecl(cell chunk, cell
 /// key, instanced node, out, locations, colors, count)`.
-const CREATE_BILLBOARD_INSTANCES: u32 = 0x00b5_9ae0;
+pub(crate) const CREATE_BILLBOARD_INSTANCES: u32 = 0x00b5_9ae0;
 /// The destructor body of `TREE_BILLBOARD_DATA` (`0051d400`).
-const TREE_BILLBOARD_DATA_DESTRUCT: u32 = 0x0051_d400;
+pub(crate) const TREE_BILLBOARD_DATA_DESTRUCT: u32 = 0x0051_d400;
 /// The smart pointer to a task: `__thiscall(task)` constructor that adds a
 /// reference (`00528cb0`), and its destructor (`0044cbf0`).
-const TASK_POINTER_CONSTRUCT: u32 = 0x0052_8cb0;
-const TASK_POINTER_DESTRUCT: u32 = 0x0044_cbf0;
+pub(crate) const TASK_POINTER_CONSTRUCT: u32 = 0x0052_8cb0;
+pub(crate) const TASK_POINTER_DESTRUCT: u32 = 0x0044_cbf0;
 /// Puts a task into the queue of its priority (`00449210`),
 /// `__thiscall(priority, task pointer)` on the table of queues at
 /// `IOManager + 0x64`.
-const QUEUE_TABLE_ADD: u32 = 0x0044_9210;
+pub(crate) const QUEUE_TABLE_ADD: u32 = 0x0044_9210;
 
 /// `BSStream`'s virtual table (`01016904`), `QueuedTreeBillboard`'s
 /// (`0101698c`) and `QueuedTreeModel`'s (`010169d4`).
-const BS_STREAM_VTABLE: u32 = 0x0101_6904;
-const QUEUED_TREE_BILLBOARD_VTABLE: u32 = 0x0101_698c;
-const QUEUED_TREE_MODEL_VTABLE: u32 = 0x0101_69d4;
+pub(crate) const BS_STREAM_VTABLE: u32 = 0x0101_6904;
+pub(crate) const QUEUED_TREE_BILLBOARD_VTABLE: u32 = 0x0101_698c;
+pub(crate) const QUEUED_TREE_MODEL_VTABLE: u32 = 0x0101_69d4;
 
 /// `"MODEL ERROR: Could not %s file '%s'."`, and its two verbs.
-const MODEL_ERROR_MESSAGE: u32 = 0x0101_68c4;
-const FIND_WORD: u32 = 0x0101_68ec;
-const LOAD_WORD: u32 = 0x0101_68f4;
+pub(crate) const MODEL_ERROR_MESSAGE: u32 = 0x0101_68c4;
+pub(crate) const FIND_WORD: u32 = 0x0101_68ec;
+pub(crate) const LOAD_WORD: u32 = 0x0101_68f4;
 /// `"model"` and `"Tree Billboard"`.
-const MODEL_WORD: u32 = 0x0101_6980;
-const TREE_BILLBOARD_WORD: u32 = 0x0101_69c0;
+pub(crate) const MODEL_WORD: u32 = 0x0101_6980;
+pub(crate) const TREE_BILLBOARD_WORD: u32 = 0x0101_69c0;
 /// The source lines the memory context scopes of `QueuedModel::Run` and
 /// `Finish` record.
-const MODEL_RUN_SOURCE_LINE: u32 = 0x3b8;
-const MODEL_FINISH_SOURCE_LINE: u32 = 0x3e5;
+pub(crate) const MODEL_RUN_SOURCE_LINE: u32 = 0x3b8;
+pub(crate) const MODEL_FINISH_SOURCE_LINE: u32 = 0x3e5;
 /// The `eContext` a queued tree model starts with (`0x1e`).
-const TREE_MODEL_CONTEXT: u32 = 0x1e;
+pub(crate) const TREE_MODEL_CONTEXT: u32 = 0x1e;
 
 /// The offsets in a thread's TLS block `QueuedTexture` uses: a byte flag
 /// (read by `0043c130`) and a word (`0043c410`/`0043c3f0`) that `Run` sets to
 /// 1 while it loads a texture whose flag bit 2 is set.
-const TLS_QUEUED_FLAG: u32 = 0x25c;
-const TLS_QUEUED_VALUE: u32 = 0x29c;
+pub(crate) const TLS_QUEUED_FLAG: u32 = 0x25c;
+pub(crate) const TLS_QUEUED_VALUE: u32 = 0x29c;
 /// Puts a queued task into state 5, done (`00449150`: `this + 0xC = 5`).
-const TASK_SET_DONE: u32 = 0x0044_9150;
+pub(crate) const TASK_SET_DONE: u32 = 0x0044_9150;
 
 layout! {
     /// `Model` (Xbox PDB), 0x18 bytes on the Xbox, 0x10 on PC (the two
@@ -643,28 +643,28 @@ layout! {
 
 /// The address of `Model::spObject3D`, which the game passes to the
 /// `NiPointer` functions.
-fn object_3d_pointer(model: Ptr<Model>) -> Ptr {
+pub(crate) fn object_3d_pointer(model: Ptr<Model>) -> Ptr {
     model.byte_add(Model::spObject3D.off)
 }
 
 /// The address of `KFModel::spSequence`.
-fn sequence_pointer(model: Ptr<KFModel>) -> Ptr {
+pub(crate) fn sequence_pointer(model: Ptr<KFModel>) -> Ptr {
     model.byte_add(KFModel::spSequence.off)
 }
 
 /// The address of `KFModel::spAnimGroup`.
-fn anim_group_pointer(model: Ptr<KFModel>) -> Ptr {
+pub(crate) fn anim_group_pointer(model: Ptr<KFModel>) -> Ptr {
     model.byte_add(KFModel::spAnimGroup.off)
 }
 
 /// `NiPointer::operator T*` on the `NiPointer` at `pointer`.
-fn ni_pointer_get(e: &mut Engine, pointer: Ptr) -> Ptr {
+pub(crate) fn ni_pointer_get(e: &mut Engine, pointer: Ptr) -> Ptr {
     e.call(NI_POINTER_GET, &args![pointer]).ptr()
 }
 
 /// Copies the NUL-terminated `name` into a fresh block of the memory manager
 /// (what the constructors do for `pFilename`).
-fn copy_name(e: &mut Engine, name: u32) -> u32 {
+pub(crate) fn copy_name(e: &mut Engine, name: u32) -> u32 {
     let size = e.call(STRLEN, &args![name]).u32().wrapping_add(1);
     let copy = e.call(MEMORY_ALLOC, &args![size]).u32();
     e.call(STRING_COPY, &args![copy, size, name]);
@@ -673,7 +673,7 @@ fn copy_name(e: &mut Engine, name: u32) -> u32 {
 
 /// A fresh `NiNode` for the model to hold (`operator new` then constructor,
 /// 0 when the allocation failed).
-fn new_ni_node(e: &mut Engine) -> u32 {
+pub(crate) fn new_ni_node(e: &mut Engine) -> u32 {
     let block = e.call(NI_ALLOC, &args![0xacu32]).u32();
     if block == 0 {
         0
@@ -1296,28 +1296,28 @@ pub fn fn_0043baa0(e: &mut Engine, this: Ptr, group: Ptr) -> Ptr {
 
 /// The address of `QueuedTexture::spTexture`, which the game passes to the
 /// `NiPointer` functions.
-fn texture_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
+pub(crate) fn texture_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
     texture.byte_add(QueuedTexture::spTexture.off)
 }
 
 /// The address of `QueuedModel::spModel`.
-fn model_pointer(model: Ptr<QueuedModel>) -> Ptr {
+pub(crate) fn model_pointer(model: Ptr<QueuedModel>) -> Ptr {
     model.byte_add(QueuedModel::spModel.off)
 }
 
 /// `QueuedFileEntry::pFileEntry` through the game's getter (`0055b980`).
-fn queued_file_entry(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
+pub(crate) fn queued_file_entry(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
     e.call(QUEUED_FILE_ENTRY_GET_FILE_ENTRY, &args![this]).u32()
 }
 
 /// `QueuedFileEntry::pFileName` through the game's getter (`0045cd60`).
-fn queued_file_name(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
+pub(crate) fn queued_file_name(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
     e.call(QUEUED_FILE_ENTRY_GET_FILE_NAME, &args![this]).u32()
 }
 
 /// The address of a queued texture's `cFlags` byte, which the game passes to
 /// the flag helpers.
-fn texture_flags_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
+pub(crate) fn texture_flags_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
     texture.byte_add(QueuedTexture::cFlags.off)
 }
 
@@ -1615,7 +1615,7 @@ pub fn queued_texture_run(e: &mut Engine, this: Ptr<QueuedTexture>) {
 }
 
 /// The body of [`queued_texture_run`] inside its memory context.
-fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedTexture>) {
+pub(crate) fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedTexture>) {
     let slot = texture_pointer(this);
     if queued_file_entry(e, this) != 0 {
         let file_entry = queued_file_entry(e, this);
@@ -1792,7 +1792,7 @@ pub fn queued_texture_finish(e: &mut Engine, this: Ptr<QueuedTexture>) {
 
 /// The common end of `Finish` and `Cancel`: a texture with a file entry that
 /// is in the map of queued textures (flag bit 4) is removed from it.
-fn leave_texture_map(e: &mut Engine, this: Ptr<QueuedTexture>) {
+pub(crate) fn leave_texture_map(e: &mut Engine, this: Ptr<QueuedTexture>) {
     if queued_file_entry(e, this) != 0 && fn_0043c630(e, this) {
         fn_0043c100(e, this, 0);
         let file_entry = queued_file_entry(e, this);
@@ -1912,13 +1912,13 @@ pub fn fn_0043c830(e: &mut Engine, this: Ptr<QueuedModel>) {
 }
 
 /// `QueuedFileEntry::pFileName` of a queued model (the getter `0045cd60`).
-fn model_file_name(e: &mut Engine, this: Ptr<QueuedModel>) -> u32 {
+pub(crate) fn model_file_name(e: &mut Engine, this: Ptr<QueuedModel>) -> u32 {
     e.call(QUEUED_FILE_ENTRY_GET_FILE_NAME, &args![this]).u32()
 }
 
 /// The address of a queued model's `cFlags` byte, which the game passes to
 /// the flag helpers.
-fn model_flags_pointer(model: Ptr<QueuedModel>) -> Ptr {
+pub(crate) fn model_flags_pointer(model: Ptr<QueuedModel>) -> Ptr {
     model.byte_add(QueuedModel::cFlags.off)
 }
 
@@ -2147,7 +2147,7 @@ pub fn queued_model_run(e: &mut Engine, this: Ptr<QueuedModel>) {
 }
 
 /// The body of [`queued_model_run`] inside its memory context.
-fn queued_model_run_in_context(e: &mut Engine, this: Ptr<QueuedModel>) {
+pub(crate) fn queued_model_run_in_context(e: &mut Engine, this: Ptr<QueuedModel>) {
     let name = model_file_name(e, this);
     if e.call(STRLEN, &args![name]).u32() == 0 {
         return;
@@ -2321,7 +2321,7 @@ pub fn queued_model_finish(e: &mut Engine, this: Ptr<QueuedModel>) {
 }
 
 /// The body of [`queued_model_finish`] inside its memory context.
-fn queued_model_finish_in_context(e: &mut Engine, this: Ptr<QueuedModel>) {
+pub(crate) fn queued_model_finish_in_context(e: &mut Engine, this: Ptr<QueuedModel>) {
     let slot = model_pointer(this);
     if !ni_pointer_get(e, slot).is_null() {
         if fn_0043d490(e, this) {
@@ -2369,7 +2369,7 @@ fn queued_model_finish_in_context(e: &mut Engine, this: Ptr<QueuedModel>) {
 ///
 /// The floating-point steps follow the x87 code: values are computed in
 /// `f64` and rounded to `f32` where the game stores a `float`.
-fn fade_range(e: &mut Engine, this: Ptr<QueuedModel>, fade_node: Ptr) {
+pub(crate) fn fade_range(e: &mut Engine, this: Ptr<QueuedModel>, fade_node: Ptr) {
     // The update record of the game's stack frame (12 bytes).
     e.with_stack(NiUpdateData::SIZE, |e, update| {
         fn_0043d410(e, update.cast(), 0.0, 0, 0);
@@ -2692,51 +2692,51 @@ pub fn fn_0043d850(
 /// (`__thiscall(reference, tree node)`, the same) and
 /// `BSTreeManager::RemoveBackgroundLoadedTree` (Xbox PDB, `00665be0`,
 /// `__thiscall(reference)`).
-const TREE_MANAGER: u32 = 0x011d_5c48;
-const TREE_MANAGER_BUILD_TREE: u32 = 0x0066_4f50;
-const TREE_MANAGER_STORE_TREE: u32 = 0x0066_5b80;
-const TREE_MANAGER_REMOVE_BACKGROUND_TREE: u32 = 0x0066_5be0;
+pub(crate) const TREE_MANAGER: u32 = 0x011d_5c48;
+pub(crate) const TREE_MANAGER_BUILD_TREE: u32 = 0x0066_4f50;
+pub(crate) const TREE_MANAGER_STORE_TREE: u32 = 0x0066_5b80;
+pub(crate) const TREE_MANAGER_REMOVE_BACKGROUND_TREE: u32 = 0x0066_5be0;
 /// The text of a `TESTexture` (`00408da0`, `this + 4` is a `BSStringT`): the
 /// string, or an empty string without one.
-const TEXTURE_TEXT: u32 = 0x0040_8da0;
+pub(crate) const TEXTURE_TEXT: u32 = 0x0040_8da0;
 /// `strcat_s(destination, size, source)` through the game's wrapper
 /// (`00406d50`).
-const STRING_APPEND: u32 = 0x0040_6d50;
+pub(crate) const STRING_APPEND: u32 = 0x0040_6d50;
 /// `ModelLoader::QueueTexture` (Xbox PDB, `004436c0`) on
 /// [`FILE_MAP_OWNER`], `__thiscall(file name, key, parent queued file)`.
-const MODEL_LOADER_QUEUE_TEXTURE_BY_NAME: u32 = 0x0044_36c0;
+pub(crate) const MODEL_LOADER_QUEUE_TEXTURE_BY_NAME: u32 = 0x0044_36c0;
 /// `ModelLoader::QueueModel` taking a `TESModel` (`00443d30`, no name in the
 /// engine map) on [`FILE_MAP_OWNER`], `__thiscall(TESModel, key, parent
 /// queued file, LOD multiplier, 1, 0, 0)`.
-const MODEL_LOADER_QUEUE_MODEL: u32 = 0x0044_3d30;
+pub(crate) const MODEL_LOADER_QUEUE_MODEL: u32 = 0x0044_3d30;
 /// `ModelLoader` method (`004463b0`, no name in the engine map) on
 /// [`FILE_MAP_OWNER`], `__thiscall(list of model names, 0, key, parent
 /// queued file, 0)`: queues every model of the list.
-const MODEL_LOADER_QUEUE_MODEL_LIST: u32 = 0x0044_63b0;
+pub(crate) const MODEL_LOADER_QUEUE_MODEL_LIST: u32 = 0x0044_63b0;
 /// `ModelLoader::QueueAnimations` (Xbox PDB, `00445a10`) on
 /// [`FILE_MAP_OWNER`], `__thiscall(animation list, key, parent queued file,
 /// 0, 1, 1)`.
-const MODEL_LOADER_QUEUE_ANIMATIONS: u32 = 0x0044_5a10;
+pub(crate) const MODEL_LOADER_QUEUE_ANIMATIONS: u32 = 0x0044_5a10;
 /// `TES::GetLODMult` (Xbox PDB, `0045c6b0`), `__cdecl(form) -> LOD
 /// multiplier`.
-const GET_LOD_MULT: u32 = 0x0045_c6b0;
+pub(crate) const GET_LOD_MULT: u32 = 0x0045_c6b0;
 /// `TESBipedModelForm::GetBipedTESModel_ov2` (Xbox PDB, `00481150`),
 /// `__thiscall(index) -> TESModel`.
-const GET_BIPED_TES_MODEL: u32 = 0x0048_1150;
+pub(crate) const GET_BIPED_TES_MODEL: u32 = 0x0048_1150;
 /// `TESNPC::BuildDefaultModelList` (Xbox PDB, `0060af90`), `__thiscall(1, 1)
 /// -> list`.
-const BUILD_DEFAULT_MODEL_LIST: u32 = 0x0060_af90;
+pub(crate) const BUILD_DEFAULT_MODEL_LIST: u32 = 0x0060_af90;
 /// Empties a list (`00470470`, releases every node after the first) and
 /// deletes it (`004702f0`, `__thiscall(flags)`: destructor, then the block
 /// when bit 0 of `flags` is set).
-const LIST_CLEAR: u32 = 0x0047_0470;
-const LIST_DELETE: u32 = 0x0047_02f0;
+pub(crate) const LIST_CLEAR: u32 = 0x0047_0470;
+pub(crate) const LIST_DELETE: u32 = 0x0047_02f0;
 /// Length of the string of the `TESModel` at `this` (`0048cee0`: the
 /// `BSStringT` at `this + 4`).
-const MODEL_NAME_LENGTH: u32 = 0x0048_cee0;
+pub(crate) const MODEL_NAME_LENGTH: u32 = 0x0048_cee0;
 /// `__thiscall(mask) -> bool` on an `EffectSetting` (`00403e60`): whether
 /// `iFlags` (`this + 0x58`) has any bit of `mask`.
-const EFFECT_SETTING_HAS_FLAG: u32 = 0x0040_3e60;
+pub(crate) const EFFECT_SETTING_HAS_FLAG: u32 = 0x0040_3e60;
 /// `EffectSetting` methods of its two queue counters (`+0xa8`, the Xbox PDB's
 /// `iEffectLoadedCount`, and `+0xac`, `iAssociatedItemLoadedCount`): the
 /// counter of the effect is negative while it is queued
@@ -2745,84 +2745,84 @@ const EFFECT_SETTING_HAS_FLAG: u32 = 0x0040_3e60;
 /// of the associated item is negative while it is queued (`004088a0`),
 /// positive once loaded (`00408880`), and `00408790` takes one from it the
 /// same way.
-const EFFECT_IS_QUEUED: u32 = 0x0040_8a20;
-const EFFECT_COUNT_DOWN: u32 = 0x0040_8970;
-const ASSOCIATED_ITEM_IS_QUEUED: u32 = 0x0040_88a0;
-const ASSOCIATED_ITEM_IS_LOADED: u32 = 0x0040_8880;
-const ASSOCIATED_ITEM_COUNT_DOWN: u32 = 0x0040_8790;
+pub(crate) const EFFECT_IS_QUEUED: u32 = 0x0040_8a20;
+pub(crate) const EFFECT_COUNT_DOWN: u32 = 0x0040_8970;
+pub(crate) const ASSOCIATED_ITEM_IS_QUEUED: u32 = 0x0040_88a0;
+pub(crate) const ASSOCIATED_ITEM_IS_LOADED: u32 = 0x0040_8880;
+pub(crate) const ASSOCIATED_ITEM_COUNT_DOWN: u32 = 0x0040_8790;
 /// `EffectSetting` getter of the associated item (`005f5f80`, `this + 0x60`,
 /// the Xbox PDB's `pAssociatedItem`).
-const EFFECT_ASSOCIATED_ITEM: u32 = 0x005f_5f80;
+pub(crate) const EFFECT_ASSOCIATED_ITEM: u32 = 0x005f_5f80;
 /// Form type byte of a form (`00401170`, `this + 4`).
-const FORM_TYPE: u32 = 0x0040_1170;
+pub(crate) const FORM_TYPE: u32 = 0x0040_1170;
 /// `EffectItem::pEffectSetting` getter (`00825c00`, `this + 0x14`).
-const EFFECT_ITEM_SETTING: u32 = 0x0082_5c00;
+pub(crate) const EFFECT_ITEM_SETTING: u32 = 0x0082_5c00;
 /// A test of an `EffectSetting` (`004064b0`, no name in the engine map): looks
 /// the dword at `this + 0x98` up in the 16-byte-entry table at `01183328`
 /// and tests its first dword against `0x7c`.
-const EFFECT_SETTING_IN_TABLE: u32 = 0x0040_64b0;
+pub(crate) const EFFECT_SETTING_IN_TABLE: u32 = 0x0040_64b0;
 /// Whether the list at `this` (a `BSSimpleList` head) has no item and no next
 /// node (`008256d0`).
-const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+pub(crate) const LIST_IS_EMPTY: u32 = 0x0082_56d0;
 /// Increments a global counter (`0040ab50`, the dword at `011c3438`).
-const COUNT_UNLOADED_ASSOCIATED_ITEM: u32 = 0x0040_ab50;
+pub(crate) const COUNT_UNLOADED_ASSOCIATED_ITEM: u32 = 0x0040_ab50;
 /// `MagicItem::FinishedLoading` (Xbox PDB, `0040ab70`).
-const MAGIC_ITEM_FINISHED_LOADING: u32 = 0x0040_ab70;
+pub(crate) const MAGIC_ITEM_FINISHED_LOADING: u32 = 0x0040_ab70;
 /// `__thiscall() -> bool` on a task (`00449110`): `eState >= 4`; and
 /// (`00449130`): `eState == 6`.
-const TASK_STATE_AT_LEAST_4: u32 = 0x0044_9110;
-const TASK_STATE_IS_6: u32 = 0x0044_9130;
+pub(crate) const TASK_STATE_AT_LEAST_4: u32 = 0x0044_9110;
+pub(crate) const TASK_STATE_IS_6: u32 = 0x0044_9130;
 /// `QueuedFile::QueuedFile(context)` (Xbox PDB, `00c3c590`) and the body of
 /// its destructor (`00c3c620`).
-const QUEUED_FILE_CONSTRUCT: u32 = 0x00c3_c590;
-const QUEUED_FILE_DESTRUCT: u32 = 0x00c3_c620;
+pub(crate) const QUEUED_FILE_CONSTRUCT: u32 = 0x00c3_c590;
+pub(crate) const QUEUED_FILE_DESTRUCT: u32 = 0x00c3_c620;
 /// The `NiPointer<KFModel>` functions (`0044afe0`, `0044b070`, `0044b030`;
 /// no names in the engine map): `__thiscall(model)` constructor,
 /// `__thiscall(model)` assignment (releases the old model, keeps the new) and
 /// the release the destructor does.
-const KF_POINTER_CONSTRUCT: u32 = 0x0044_afe0;
-const KF_POINTER_ASSIGN: u32 = 0x0044_b070;
-const KF_POINTER_RELEASE: u32 = 0x0044_b030;
+pub(crate) const KF_POINTER_CONSTRUCT: u32 = 0x0044_afe0;
+pub(crate) const KF_POINTER_ASSIGN: u32 = 0x0044_b070;
+pub(crate) const KF_POINTER_RELEASE: u32 = 0x0044_b030;
 /// `ModelLoader` methods of the map of `KFModel`s (no names in the engine
 /// map) on [`FILE_MAP_OWNER`]: `004483e0` is `__thiscall(name) -> KFModel`
 /// (0 when the map has none) and `00447040` `__thiscall(name, KFModel) ->
 /// bool` (false when the name is already there).
-const FIND_KF_MODEL: u32 = 0x0044_83e0;
-const ADD_KF_MODEL: u32 = 0x0044_7040;
+pub(crate) const FIND_KF_MODEL: u32 = 0x0044_83e0;
+pub(crate) const ADD_KF_MODEL: u32 = 0x0044_7040;
 /// `QueuedKF::QueueMe` (Xbox PDB, `00441e10`).
-const QUEUED_KF_QUEUE_ME: u32 = 0x0044_1e10;
+pub(crate) const QUEUED_KF_QUEUE_ME: u32 = 0x0044_1e10;
 /// `AnimIdle::Loaded` (Xbox PDB, `00496cd0`), `__thiscall(KFModel)`.
-const ANIM_IDLE_LOADED: u32 = 0x0049_6cd0;
+pub(crate) const ANIM_IDLE_LOADED: u32 = 0x0049_6cd0;
 /// `Animation` method (`00490fa0`, no name in the engine map),
 /// `__thiscall(KFModel)`: takes the loaded `KFModel` into the animation.
-const ANIMATION_KF_LOADED: u32 = 0x0049_0fa0;
+pub(crate) const ANIMATION_KF_LOADED: u32 = 0x0049_0fa0;
 
 /// The counters `IOTask::GenerateKey` takes its values from (`01202d9c` and
 /// `01202da0`; the Xbox PDB's statics `iStaticCounter` and `iStaticOffset`,
 /// which of the two is which is not confirmed).
-const KEY_COUNTER_FIRST: u32 = 0x0120_2d9c;
-const KEY_COUNTER_SECOND: u32 = 0x0120_2da0;
+pub(crate) const KEY_COUNTER_FIRST: u32 = 0x0120_2d9c;
+pub(crate) const KEY_COUNTER_SECOND: u32 = 0x0120_2da0;
 
 /// `QueuedMagicItem`'s (`01016a18`), `QueuedKF`'s (`01016a48`),
 /// `QueuedAnimIdle`'s (`01016a80`) and `QueuedReplacementKF`'s (`01016ac0`)
 /// virtual tables.
-const QUEUED_MAGIC_ITEM_VTABLE: u32 = 0x0101_6a18;
-const QUEUED_KF_VTABLE: u32 = 0x0101_6a48;
-const QUEUED_ANIM_IDLE_VTABLE: u32 = 0x0101_6a80;
-const QUEUED_REPLACEMENT_KF_VTABLE: u32 = 0x0101_6ac0;
+pub(crate) const QUEUED_MAGIC_ITEM_VTABLE: u32 = 0x0101_6a18;
+pub(crate) const QUEUED_KF_VTABLE: u32 = 0x0101_6a48;
+pub(crate) const QUEUED_ANIM_IDLE_VTABLE: u32 = 0x0101_6a80;
+pub(crate) const QUEUED_REPLACEMENT_KF_VTABLE: u32 = 0x0101_6ac0;
 /// `"tree model"`, `"KF"` and `"AnimIdle"`: the kind words of the
 /// descriptions.
-const TREE_MODEL_WORD: u32 = 0x0101_6a08;
-const KF_WORD: u32 = 0x0101_6a78;
-const ANIM_IDLE_WORD: u32 = 0x0101_6ab0;
+pub(crate) const TREE_MODEL_WORD: u32 = 0x0101_6a08;
+pub(crate) const KF_WORD: u32 = 0x0101_6a78;
+pub(crate) const ANIM_IDLE_WORD: u32 = 0x0101_6ab0;
 /// The source lines the memory context scopes of `QueuedTreeModel::Run` and
 /// `QueuedKF::Run` record, and the context of the second (`0x33`).
-const TREE_RUN_SOURCE_LINE: u32 = 0x476;
-const KF_RUN_SOURCE_LINE: u32 = 0x529;
-const KF_CONTEXT: u32 = 0x33;
+pub(crate) const TREE_RUN_SOURCE_LINE: u32 = 0x476;
+pub(crate) const KF_RUN_SOURCE_LINE: u32 = 0x529;
+pub(crate) const KF_CONTEXT: u32 = 0x33;
 /// Size of the path buffers of `QueuedTreeModel::QueueMe` (`strcpy_s` is
 /// told this size).
-const PATH_BUFFER_SIZE: u32 = 0x104;
+pub(crate) const PATH_BUFFER_SIZE: u32 = 0x104;
 
 layout! {
     /// `QueuedMagicItem` (Xbox PDB), 0x30 bytes: a `QueuedFile` and the magic
@@ -2896,20 +2896,20 @@ layout! {
 
 /// `QueuedFileEntry::pFileName` of a queued KF through the game's getter
 /// (`0045cd60`).
-fn kf_file_name(e: &mut Engine, this: Ptr<QueuedKF>) -> u32 {
+pub(crate) fn kf_file_name(e: &mut Engine, this: Ptr<QueuedKF>) -> u32 {
     queued_file_name(e, this.cast())
 }
 
 /// The address of `QueuedKF::spKFModel`, which the game passes to the
 /// `NiPointer` functions.
-fn kf_model_pointer(this: Ptr<QueuedKF>) -> Ptr {
+pub(crate) fn kf_model_pointer(this: Ptr<QueuedKF>) -> Ptr {
     this.byte_add(QueuedKF::spKFModel.off)
 }
 
 /// `ModelLoader::QueueModel` of `model` for the queued file `parent`, with
 /// the priority of the parent's key and the given LOD multiplier (the other
 /// three arguments are constant in every caller of this part).
-fn queue_model(e: &mut Engine, model: u32, parent: Ptr, lod_mult: u32) {
+pub(crate) fn queue_model(e: &mut Engine, model: u32, parent: Ptr, lod_mult: u32) {
     let key = fn_0043cc60(e, parent.cast()) as u32;
     let owner = e.global::<u32>(FILE_MAP_OWNER);
     e.call(
@@ -3212,7 +3212,7 @@ pub fn queued_magic_item_queue_me(e: &mut Engine, this: Ptr<QueuedMagicItem>) {
 /// with `0x40000` and form type `0x2b` the animations and the model at
 /// `+0xdc`. Each of these uses the item's LOD multiplier (`TES::GetLODMult`)
 /// where it queues a model.
-fn queue_associated_item(e: &mut Engine, task: Ptr, setting: u32) {
+pub(crate) fn queue_associated_item(e: &mut Engine, task: Ptr, setting: u32) {
     let item = e.call(EFFECT_ASSOCIATED_ITEM, &args![setting]).u32();
     if item == 0 {
         return;
@@ -3379,7 +3379,7 @@ pub fn queued_kf_run(e: &mut Engine, this: Ptr<QueuedKF>) {
 }
 
 /// The body of [`queued_kf_run`] inside its memory context.
-fn queued_kf_run_in_context(e: &mut Engine, this: Ptr<QueuedKF>) {
+pub(crate) fn queued_kf_run_in_context(e: &mut Engine, this: Ptr<QueuedKF>) {
     let slot = kf_model_pointer(this);
     let name = kf_file_name(e, this);
     let owner = e.global::<u32>(FILE_MAP_OWNER);
@@ -3712,87 +3712,87 @@ pub fn queued_replacement_kf_post_process(e: &mut Engine, this: Ptr<QueuedReplac
 // `0043fe40`.
 
 /// `"Replacement KF"`: the kind word of `QueuedReplacementKF::GetDescription`.
-const REPLACEMENT_KF_WORD: u32 = 0x0101_6af0;
+pub(crate) const REPLACEMENT_KF_WORD: u32 = 0x0101_6af0;
 /// `QueuedHead`'s (`01016b04`), `QueuedHelmet`'s (`01016b4c`) and
 /// `QueuedReference`'s (`01016ba4`) virtual tables.
-const QUEUED_HEAD_VTABLE: u32 = 0x0101_6b04;
-const QUEUED_HELMET_VTABLE: u32 = 0x0101_6b4c;
-const QUEUED_REFERENCE_VTABLE: u32 = 0x0101_6ba4;
+pub(crate) const QUEUED_HEAD_VTABLE: u32 = 0x0101_6b04;
+pub(crate) const QUEUED_HELMET_VTABLE: u32 = 0x0101_6b4c;
+pub(crate) const QUEUED_REFERENCE_VTABLE: u32 = 0x0101_6ba4;
 /// `"Queued head for NPC %s"` and `"Queued helmet for biped anim %08X"`.
-const QUEUED_HEAD_FORMAT: u32 = 0x0101_6b30;
-const QUEUED_HELMET_FORMAT: u32 = 0x0101_6b7c;
+pub(crate) const QUEUED_HEAD_FORMAT: u32 = 0x0101_6b30;
+pub(crate) const QUEUED_HELMET_FORMAT: u32 = 0x0101_6b7c;
 /// The memory contexts and source lines of the scopes of `QueuedHead::Run`
 /// (`0x37`, line `0x5f9`), `0043ed90` (`0x37`, line `0x613`) and
 /// `QueuedHelmet::CheckFinished` (`0x32`, line `0x690`).
-const HEAD_CONTEXT: u32 = 0x37;
-const HEAD_RUN_SOURCE_LINE: u32 = 0x5f9;
-const HEAD_SETUP_SOURCE_LINE: u32 = 0x613;
-const HELMET_CONTEXT: u32 = 0x32;
-const HELMET_CHECK_FINISHED_SOURCE_LINE: u32 = 0x690;
+pub(crate) const HEAD_CONTEXT: u32 = 0x37;
+pub(crate) const HEAD_RUN_SOURCE_LINE: u32 = 0x5f9;
+pub(crate) const HEAD_SETUP_SOURCE_LINE: u32 = 0x613;
+pub(crate) const HELMET_CONTEXT: u32 = 0x32;
+pub(crate) const HELMET_CHECK_FINISHED_SOURCE_LINE: u32 = 0x690;
 /// The number of entries in each of the three arrays of `NiPointer`s of a
 /// `QueuedHelmet` (`0x14`, the biped slots), and the pointer size.
-const HELMET_SLOT_COUNT: u32 = 0x14;
+pub(crate) const HELMET_SLOT_COUNT: u32 = 0x14;
 /// Offsets of the three arrays in a `QueuedHelmet` (Xbox PDB:
 /// `spQueuedHelmetModel`, `spHelmetFaceGenModel`, `spClonedHelmetNode`).
-const HELMET_MODELS_OFFSET: u32 = 0x2c;
-const HELMET_FACE_GEN_MODELS_OFFSET: u32 = 0x7c;
-const HELMET_CLONED_NODES_OFFSET: u32 = 0xcc;
+pub(crate) const HELMET_MODELS_OFFSET: u32 = 0x2c;
+pub(crate) const HELMET_FACE_GEN_MODELS_OFFSET: u32 = 0x7c;
+pub(crate) const HELMET_CLONED_NODES_OFFSET: u32 = 0xcc;
 /// `QueuedFile::spParent` (Xbox PDB) in every queued file.
-const QUEUED_FILE_PARENT_OFFSET: u32 = 0x1c;
+pub(crate) const QUEUED_FILE_PARENT_OFFSET: u32 = 0x1c;
 
 /// `sprintf_s(buffer, size, format, ...)` through the game's wrapper
 /// (`00406d00`), `__cdecl`.
-const FORMAT_STRING: u32 = 0x0040_6d00;
+pub(crate) const FORMAT_STRING: u32 = 0x0040_6d00;
 /// Returns the string of the name object it is called on (`00408da0`, named
 /// `MapMarkerData::GetLocationName` in the engine map): the string held by
 /// the `NiPointer` at +4, or the empty string at `01011584`.
-const NAME_OBJECT_STRING: u32 = 0x0040_8da0;
+pub(crate) const NAME_OBJECT_STRING: u32 = 0x0040_8da0;
 /// Enters (`00652140`) and leaves (`00652190`) a section of the face
 /// generation code: the first calls `004538e0(0)` on the object at
 /// `011d5a9c` and counts `011d59dc` up, the second calls `0082f1f0` on it
 /// and counts down. Neither takes an argument.
-const FACE_GEN_SECTION_ENTER: u32 = 0x0065_2140;
-const FACE_GEN_SECTION_LEAVE: u32 = 0x0065_2190;
+pub(crate) const FACE_GEN_SECTION_ENTER: u32 = 0x0065_2140;
+pub(crate) const FACE_GEN_SECTION_LEAVE: u32 = 0x0065_2190;
 /// `TESNPC::InitHead` (Xbox PDB, `00607370`), `__thiscall(biped node out,
 /// skinned node out)`.
-const NPC_INIT_HEAD: u32 = 0x0060_7370;
+pub(crate) const NPC_INIT_HEAD: u32 = 0x0060_7370;
 /// `TESNPC` method of `tesnpc.cpp` (`00607420`, no name in the engine map),
 /// `__thiscall(reference, argument, biped node, skinned node)` on the base
 /// form of the reference.
-const NPC_SETUP_HEAD: u32 = 0x0060_7420;
+pub(crate) const NPC_SETUP_HEAD: u32 = 0x0060_7420;
 /// `TESRace::KillEGTData` (Xbox PDB, `00613fd0`).
-const KILL_EGT_DATA: u32 = 0x0061_3fd0;
+pub(crate) const KILL_EGT_DATA: u32 = 0x0061_3fd0;
 /// Returns the dword at +0xC of the object it is called on (`0084e3a0`; for a
 /// form, its form ID).
-const FIELD_AT_C: u32 = 0x0084_e3a0;
+pub(crate) const FIELD_AT_C: u32 = 0x0084_e3a0;
 /// A function of `bsfacegenmanager.cpp` (`00657150`, no name in the engine
 /// map), `__cdecl(NPC, priority, task)`.
-const QUEUE_NPC_FACE_GEN: u32 = 0x0065_7150;
+pub(crate) const QUEUE_NPC_FACE_GEN: u32 = 0x0065_7150;
 /// `SetReferenceIDOnScenegraph(node, form ID)` (Xbox PDB, `004b6dc0`),
 /// `__cdecl`.
-const SET_REFERENCE_ID_ON_SCENEGRAPH: u32 = 0x004b_6dc0;
+pub(crate) const SET_REFERENCE_ID_ON_SCENEGRAPH: u32 = 0x004b_6dc0;
 /// The base form of a reference (`007af430`, `this + 0x20`; named
 /// `BGSSaveFormBuffer::GetForm` in the engine map).
-const REFERENCE_BASE_FORM: u32 = 0x007a_f430;
+pub(crate) const REFERENCE_BASE_FORM: u32 = 0x007a_f430;
 /// The `PlayerCharacter` singleton pointer and the `TES` singleton pointer.
-const PLAYER_CHARACTER: u32 = 0x011d_ea3c;
-const TES_GLOBAL: u32 = 0x011d_ea10;
+pub(crate) const PLAYER_CHARACTER: u32 = 0x011d_ea3c;
+pub(crate) const TES_GLOBAL: u32 = 0x011d_ea10;
 
 /// The `NiPointer` default constructors the vector constructors of
 /// `QueuedHelmet` call: `0043f060` (a task pointer, in this unit) for the
 /// models and `006694e0` (`NiPointer()`) for the face generation models and
 /// the cloned nodes.
-const HELMET_MODEL_POINTER_CONSTRUCT: u32 = 0x0043_f060;
-const NI_POINTER_DEFAULT_CONSTRUCT: u32 = 0x0066_94e0;
+pub(crate) const HELMET_MODEL_POINTER_CONSTRUCT: u32 = 0x0043_f060;
+pub(crate) const NI_POINTER_DEFAULT_CONSTRUCT: u32 = 0x0066_94e0;
 /// `_eh_vector_constructor_iterator_(array, size, count, constructor,
 /// destructor)` and `_eh_vector_destructor_iterator_(array, size, count,
 /// destructor)`.
-const VECTOR_CONSTRUCT: u32 = 0x00ec_782f;
-const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
+pub(crate) const VECTOR_CONSTRUCT: u32 = 0x00ec_782f;
+pub(crate) const VECTOR_DESTRUCT: u32 = 0x00ec_5fce;
 /// The constructor and destructor of the 0x20-byte elements `QueuedHelmet`'s
 /// `CheckFinished` builds four of on its stack (`00449610`, `00449680`).
-const FACE_COORD_CONSTRUCT: u32 = 0x0044_9610;
-const FACE_COORD_DESTRUCT: u32 = 0x0044_9680;
+pub(crate) const FACE_COORD_CONSTRUCT: u32 = 0x0044_9610;
+pub(crate) const FACE_COORD_DESTRUCT: u32 = 0x0044_9680;
 
 /// `BipedAnim` methods of `bipedanim.cpp`, all `__thiscall` on the
 /// `BipedAnim`: `004ae8a0(index) -> bool` (whether the slot at `+0x30 +
@@ -3801,63 +3801,63 @@ const FACE_COORD_DESTRUCT: u32 = 0x0044_9680;
 /// face generation model, 3D, index)` (Xbox PDB) and
 /// `BipedAnim::AttachHelmet(face generation model, cloned node, index)`
 /// (Xbox PDB).
-const BIPED_ANIM_SLOT_IN_USE: u32 = 0x004a_e8a0;
-const BIPED_ANIM_LOAD_FACE_GEN_MODEL: u32 = 0x004a_e790;
-const BIPED_ANIM_CLONE_HELMET: u32 = 0x004a_e910;
-const BIPED_ANIM_ATTACH_HELMET: u32 = 0x004a_eb20;
+pub(crate) const BIPED_ANIM_SLOT_IN_USE: u32 = 0x004a_e8a0;
+pub(crate) const BIPED_ANIM_LOAD_FACE_GEN_MODEL: u32 = 0x004a_e790;
+pub(crate) const BIPED_ANIM_CLONE_HELMET: u32 = 0x004a_e910;
+pub(crate) const BIPED_ANIM_ATTACH_HELMET: u32 = 0x004a_eb20;
 /// `ModelLoader` queueing methods, `__thiscall` on the loader: `00443dc0(
 /// model data, NiPointer<QueuedModel> slot, priority, parent task, 3, 1, 1,
 /// 1, 0.0)` and `ModelLoader::QueueEGMFile(model data, priority, parent
 /// task, -1)` (Xbox PDB).
-const MODEL_LOADER_QUEUE_HELMET_MODEL: u32 = 0x0044_3dc0;
-const MODEL_LOADER_QUEUE_EGM_FILE: u32 = 0x0044_7bf0;
+pub(crate) const MODEL_LOADER_QUEUE_HELMET_MODEL: u32 = 0x0044_3dc0;
+pub(crate) const MODEL_LOADER_QUEUE_EGM_FILE: u32 = 0x0044_7bf0;
 /// `QueuedModel` method (`004a8a90`): the `NiPointer<Model>` at +0x30
 /// dereferenced.
-const QUEUED_MODEL_GET_MODEL: u32 = 0x004a_8a90;
+pub(crate) const QUEUED_MODEL_GET_MODEL: u32 = 0x004a_8a90;
 /// A method of `tesobjectcell.cpp` (`005495f0`): the `NiPointer` at +0xB8 of
 /// the object dereferenced.
-const OBJECT_POINTER_AT_B8: u32 = 0x0054_95f0;
+pub(crate) const OBJECT_POINTER_AT_B8: u32 = 0x0054_95f0;
 /// `NiObject::CreateDeepCopy` (Xbox PDB, `00a5d510`), `__thiscall(object,
 /// NiPointer out)`.
-const CREATE_DEEP_COPY: u32 = 0x00a5_d510;
+pub(crate) const CREATE_DEEP_COPY: u32 = 0x00a5_d510;
 /// `TESNPC::GetFaceCoord` (Xbox PDB, `00603ad0`), `__thiscall(NPC, array of
 /// four 0x20-byte elements)`.
-const NPC_GET_FACE_COORD: u32 = 0x0060_3ad0;
+pub(crate) const NPC_GET_FACE_COORD: u32 = 0x0060_3ad0;
 /// A method of `bsfacegenmodel.cpp` (`0065a970`, no name in the engine map),
 /// `__thiscall(face generation model, coordinates, node, 0) -> bool`.
-const FACE_GEN_MODEL_APPLY_COORDS: u32 = 0x0065_a970;
+pub(crate) const FACE_GEN_MODEL_APPLY_COORDS: u32 = 0x0065_a970;
 /// The object whose byte `0043faf0` reads (`011d5a44`; which setting it is
 /// is not confirmed) and the function that gives the address of that byte
 /// (`00408d60`, `this + 4`, or the zero byte at `01202800` when `this` is
 /// null).
-const HELMET_ROTATION_SETTING: u32 = 0x011d_5a44;
-const SETTING_BYTE_POINTER: u32 = 0x0040_8d60;
+pub(crate) const HELMET_ROTATION_SETTING: u32 = 0x011d_5a44;
+pub(crate) const SETTING_BYTE_POINTER: u32 = 0x0040_8d60;
 /// `-pi / 2` as a `float` in the exe (`01016b78`): the angle
 /// `QueuedHelmet::CheckFinished` turns a cloned node by.
-const HELMET_ROTATION_ANGLE: u32 = 0x0101_6b78;
+pub(crate) const HELMET_ROTATION_ANGLE: u32 = 0x0101_6b78;
 /// A function of `navmeshsearchflee.cpp`'s range (`006a9540`) that returns
 /// `this + 0x34`, the local rotation matrix of an `NiAVObject`.
-const LOCAL_ROTATE_ADDRESS: u32 = 0x006a_9540;
+pub(crate) const LOCAL_ROTATE_ADDRESS: u32 = 0x006a_9540;
 /// `NiMatrix3` default constructor (`006815c0`): returns `this`.
-const MATRIX_CONSTRUCT: u32 = 0x0068_15c0;
+pub(crate) const MATRIX_CONSTRUCT: u32 = 0x0068_15c0;
 /// `sin` and `cos` of an angle through the game's helper (`004169a0`),
 /// `__cdecl(angle, sin out, cos out)` (`FSINCOS`).
-const SIN_COS: u32 = 0x0041_69a0;
+pub(crate) const SIN_COS: u32 = 0x0041_69a0;
 /// `TESObjectREFR` methods: `00570f70(node)` gives the reference its 3D,
 /// `008d6f30()` returns its parent cell (`this + 0x40`), `TESActorBase::
 /// SetStartsDead(flag)` (Xbox PDB, `00565210`) sets or clears bit
 /// `0x80000` of its flags.
-const REFERENCE_SET_3D: u32 = 0x0057_0f70;
-const REFERENCE_CELL: u32 = 0x008d_6f30;
-const SET_STARTS_DEAD: u32 = 0x0056_5210;
+pub(crate) const REFERENCE_SET_3D: u32 = 0x0057_0f70;
+pub(crate) const REFERENCE_CELL: u32 = 0x008d_6f30;
+pub(crate) const SET_STARTS_DEAD: u32 = 0x0056_5210;
 /// `TES` method of `tes.cpp` (`00451ef0`, in `tes.rs`): loads one reference
 /// into the scene, `__thiscall(reference, cell, source, flag)`.
-const TES_LOAD_REFERENCE: u32 = 0x0045_1ef0;
+pub(crate) const TES_LOAD_REFERENCE: u32 = 0x0045_1ef0;
 /// The TLS words `0043fcd0` reads (offsets in the thread's TLS block): the
 /// reference being worked on (`0x264`) and the 3D that goes with it
 /// (`0x260`).
-const TLS_REFERENCE: u32 = 0x264;
-const TLS_REFERENCE_3D: u32 = 0x260;
+pub(crate) const TLS_REFERENCE: u32 = 0x264;
+pub(crate) const TLS_REFERENCE_3D: u32 = 0x260;
 
 layout! {
     /// `QueuedHead` (Xbox PDB), 0x38 bytes: a `QueuedFile`, the NPC and the
@@ -3919,13 +3919,13 @@ layout! {
 
 /// The address of entry `index` of the array of `NiPointer`s that starts at
 /// `offset` in a `QueuedHelmet`.
-fn helmet_slot(this: Ptr<QueuedHelmet>, offset: u32, index: u32) -> Ptr {
+pub(crate) fn helmet_slot(this: Ptr<QueuedHelmet>, offset: u32, index: u32) -> Ptr {
     this.byte_add(offset + 4 * index)
 }
 
 /// The address of `QueuedHelmet::cFlags`, which the game passes to the flag
 /// helpers.
-fn helmet_flags_pointer(this: Ptr<QueuedHelmet>) -> Ptr {
+pub(crate) fn helmet_flags_pointer(this: Ptr<QueuedHelmet>) -> Ptr {
     this.byte_add(QueuedHelmet::cFlags.off)
 }
 
@@ -4504,16 +4504,16 @@ pub fn queued_helmet_check_finished(e: &mut Engine, this: Ptr<QueuedHelmet>) {
 /// the scope guard (0), a spare `NiPointer` (4: the deep copy), the
 /// `NiPointer` holding the copy given to a child (8), the four 0x20-byte face
 /// coordinates (0x10), the rotation matrix (0x90) and the product (0xB4).
-const HELMET_FRAME_SIZE: u32 = 0xd8;
-const HELMET_FRAME_SPARE_POINTER: u32 = 4;
-const HELMET_FRAME_COPY_POINTER: u32 = 8;
-const HELMET_FRAME_FACE_COORDS: u32 = 0x10;
-const HELMET_FRAME_ROTATION: u32 = 0x90;
-const HELMET_FRAME_PRODUCT: u32 = 0xb4;
+pub(crate) const HELMET_FRAME_SIZE: u32 = 0xd8;
+pub(crate) const HELMET_FRAME_SPARE_POINTER: u32 = 4;
+pub(crate) const HELMET_FRAME_COPY_POINTER: u32 = 8;
+pub(crate) const HELMET_FRAME_FACE_COORDS: u32 = 0x10;
+pub(crate) const HELMET_FRAME_ROTATION: u32 = 0x90;
+pub(crate) const HELMET_FRAME_PRODUCT: u32 = 0xb4;
 
 /// The body of the loop of [`queued_helmet_check_finished`] for biped slot
 /// `index`.
-fn helmet_clone_slot(e: &mut Engine, this: Ptr<QueuedHelmet>, frame: Ptr, index: u32) {
+pub(crate) fn helmet_clone_slot(e: &mut Engine, this: Ptr<QueuedHelmet>, frame: Ptr, index: u32) {
     let model_slot = helmet_slot(this, HELMET_MODELS_OFFSET, index);
     let face_slot = helmet_slot(this, HELMET_FACE_GEN_MODELS_OFFSET, index);
     let clone_slot = helmet_slot(this, HELMET_CLONED_NODES_OFFSET, index);
@@ -4576,7 +4576,7 @@ fn helmet_clone_slot(e: &mut Engine, this: Ptr<QueuedHelmet>, frame: Ptr, index:
 
 /// `LoadedModel` of a `NiPointer<QueuedModel>` slot: the `Model` of the
 /// queued model (`004a8a90`).
-fn loaded_model(e: &mut Engine, model_slot: Ptr) -> Ptr {
+pub(crate) fn loaded_model(e: &mut Engine, model_slot: Ptr) -> Ptr {
     let queued = ni_pointer_get(e, model_slot);
     e.call(QUEUED_MODEL_GET_MODEL, &args![queued]).ptr()
 }
@@ -4584,7 +4584,7 @@ fn loaded_model(e: &mut Engine, model_slot: Ptr) -> Ptr {
 /// Whether some child of the cloned node in `clone_slot` answers non-zero to
 /// the virtual function `0x18` and has a set `NiPointer` at +0xBC
 /// ([`fn_0043fad0`]).
-fn helmet_clone_has_marked_child(e: &mut Engine, clone_slot: Ptr) -> bool {
+pub(crate) fn helmet_clone_has_marked_child(e: &mut Engine, clone_slot: Ptr) -> bool {
     let mut child_index = 0u32;
     loop {
         let clone = ni_pointer_get(e, clone_slot);
@@ -4605,7 +4605,7 @@ fn helmet_clone_has_marked_child(e: &mut Engine, clone_slot: Ptr) -> bool {
 
 /// The NPC base form of the helmet's reference, when the biped animation has
 /// a reference whose base form is of type 0x2a.
-fn helmet_npc(e: &mut Engine, this: Ptr<QueuedHelmet>) -> Option<Ptr> {
+pub(crate) fn helmet_npc(e: &mut Engine, this: Ptr<QueuedHelmet>) -> Option<Ptr> {
     let biped = e.get(this, QueuedHelmet::pBipedAnim);
     if fn_0043f010(e, biped).is_null() {
         return None;
@@ -4629,7 +4629,13 @@ fn helmet_npc(e: &mut Engine, this: Ptr<QueuedHelmet>) -> Option<Ptr> {
 /// The body of the inner loop of [`queued_helmet_check_finished`] for a
 /// `child` of the cloned node: deep copy of its part, face coordinates, and
 /// the rotation of its local matrix.
-fn helmet_orient_child(e: &mut Engine, frame: Ptr, child: Ptr, npc: Ptr, face_model: Ptr) {
+pub(crate) fn helmet_orient_child(
+    e: &mut Engine,
+    frame: Ptr,
+    child: Ptr,
+    npc: Ptr,
+    face_model: Ptr,
+) {
     let face_coords = frame.byte_add(HELMET_FRAME_FACE_COORDS);
     let copy_pointer = frame.byte_add(HELMET_FRAME_COPY_POINTER);
     let spare_pointer = frame.byte_add(HELMET_FRAME_SPARE_POINTER);

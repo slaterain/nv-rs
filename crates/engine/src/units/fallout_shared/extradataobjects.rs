@@ -35,88 +35,88 @@ use crate::prelude::*;
 use crate::types::{BSSimpleArray, BSSimpleList, BSStringT};
 
 /// `operator new(size)` (cdecl, one stack argument).
-const OPERATOR_NEW: u32 = 0x0040_1000;
+pub(crate) const OPERATOR_NEW: u32 = 0x0040_1000;
 /// `operator delete(pointer)` (cdecl, one stack argument).
-const OPERATOR_DELETE: u32 = 0x0040_1030;
+pub(crate) const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// `BSExtraData::BSExtraData(type)` (the base constructor; `this`, then the
 /// extra-data type byte).
-const BS_EXTRA_DATA_CONSTRUCT: u32 = 0x0040_ec80;
+pub(crate) const BS_EXTRA_DATA_CONSTRUCT: u32 = 0x0040_ec80;
 /// `BSExtraData::~BSExtraData` (the base destructor body).
-const BS_EXTRA_DATA_DESTRUCT: u32 = 0x0040_ecb0;
+pub(crate) const BS_EXTRA_DATA_DESTRUCT: u32 = 0x0040_ecb0;
 /// `BSExtraData::Compare` (Xbox PDB; `this`, other): true when `other` is
 /// null or `004f1540` gives a different answer for the two.
-const BS_EXTRA_DATA_COMPARE: u32 = 0x0040_f700;
+pub(crate) const BS_EXTRA_DATA_COMPARE: u32 = 0x0040_f700;
 /// `BSSimpleArray<T,1024>::size` (the folded accessor: `this` is the array,
 /// the count is returned in EAX).
-const SIMPLE_ARRAY_SIZE: u32 = 0x0044_ddc0;
+pub(crate) const SIMPLE_ARRAY_SIZE: u32 = 0x0044_ddc0;
 /// `BSSimpleArray<T,1024>::operator[]` (`this` is the array, the index is
 /// the argument): the address of the element slot.
-const SIMPLE_ARRAY_AT: u32 = 0x006a_7ad0;
+pub(crate) const SIMPLE_ARRAY_AT: u32 = 0x006a_7ad0;
 /// `BSSimpleArray<BGSBodyPart_P_1024>::AddUninitialized` (Xbox PDB name of
 /// the folded body): appends the pointer stored at the address given and
 /// returns the index of the new slot.
-const SIMPLE_ARRAY_ADD: u32 = 0x007c_b2e0;
+pub(crate) const SIMPLE_ARRAY_ADD: u32 = 0x007c_b2e0;
 /// `BSSimpleArray<TESBoundObject_P_1024>::CompareBuffer<1024>` (Xbox PDB):
 /// whether the `this` array holds the same elements as the one given.
-const SIMPLE_ARRAY_COMPARE_BUFFER: u32 = 0x0043_87b0;
+pub(crate) const SIMPLE_ARRAY_COMPARE_BUFFER: u32 = 0x0043_87b0;
 /// `BSSimpleArray<T,1024>::Find` of the folded body (`this` is the array;
 /// the arguments are the address of the value, the first index to look at
 /// and a comparison function; the index found, or -1).
-const SIMPLE_ARRAY_FIND: u32 = 0x0071_9b20;
+pub(crate) const SIMPLE_ARRAY_FIND: u32 = 0x0071_9b20;
 /// The comparison function `00719b20` is given by `ExtraGuardedRefData`.
-const GUARD_COMPARE: u32 = 0x009a_3830;
+pub(crate) const GUARD_COMPARE: u32 = 0x009a_3830;
 /// The array's clear (`this` is the array, the argument says whether to free
 /// the buffer); `CompareBuffer`'s caller uses it to drop an array that
 /// duplicates an earlier one.
-const SIMPLE_ARRAY_CLEAR: u32 = 0x0084_54f0;
+pub(crate) const SIMPLE_ARRAY_CLEAR: u32 = 0x0084_54f0;
 /// `__RTDynamicCast(object, vfDelta, sourceType, targetType, isReference)`.
-const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(crate) const DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// `memcmp(a, b, size)`.
-const MEMCMP: u32 = 0x00ec_4835;
+pub(crate) const MEMCMP: u32 = 0x00ec_4835;
 /// `_ftol2_sse` (`00ec62c0`): truncates the float in ST0 to an integer in
 /// EAX. The uniform form has no ST0 argument, so the value is passed as an
 /// `f64` argument (two words, exact for every `float`).
-const FTOL: u32 = 0x00ec_62c0;
+pub(crate) const FTOL: u32 = 0x00ec_62c0;
 
 /// `RTTI Type Descriptor` of `BSExtraData`, the source type of the
 /// `dynamic_cast`s in the `Compare` methods.
-const BS_EXTRA_DATA_TYPE: u32 = 0x0118_3b2c;
+pub(crate) const BS_EXTRA_DATA_TYPE: u32 = 0x0118_3b2c;
 /// `RTTI Type Descriptor` of `ExtraStartingPosition`.
-const EXTRA_STARTING_POSITION_TYPE: u32 = 0x0118_4b10;
+pub(crate) const EXTRA_STARTING_POSITION_TYPE: u32 = 0x0118_4b10;
 /// `RTTI Type Descriptor` of `ExtraLock`.
-const EXTRA_LOCK_TYPE: u32 = 0x0118_4754;
+pub(crate) const EXTRA_LOCK_TYPE: u32 = 0x0118_4754;
 
 /// `0.0` (`double`), what `REFR_LOCK::IsBroken` compares the entry point's
 /// result with.
-const ZERO: u32 = 0x0101_2060;
+pub(crate) const ZERO: u32 = 0x0101_2060;
 /// The global holding the `PlayerCharacter` pointer (`PlayerCharacter::pSingleton`).
-const PLAYER: u32 = 0x011d_ea3c;
+pub(crate) const PLAYER: u32 = 0x011d_ea3c;
 
 /// `Actor::GetLevel` (returns the level in AX; `this` is the actor).
-const ACTOR_GET_LEVEL: u32 = 0x0087_f9f0;
+pub(crate) const ACTOR_GET_LEVEL: u32 = 0x0087_f9f0;
 /// `TESObjectREFR::GetCalcLevel(bool)` (Xbox PDB name).
-const REFR_GET_CALC_LEVEL: u32 = 0x0056_7e10;
+pub(crate) const REFR_GET_CALC_LEVEL: u32 = 0x0056_7e10;
 /// A float game-setting accessor: `this` is the setting (an exe global), the
 /// result is the address of its value.
-const SETTING_FLOAT_VALUE: u32 = 0x0040_3e20;
+pub(crate) const SETTING_FLOAT_VALUE: u32 = 0x0040_3e20;
 /// An integer game-setting accessor: `this` is the setting (an exe global),
 /// the result is the address of its value.
-const SETTING_INT_VALUE: u32 = 0x0043_d4d0;
+pub(crate) const SETTING_INT_VALUE: u32 = 0x0043_d4d0;
 /// `BGSEntryPoint::HandleEntryPoint(entryPoint, actor, result, ...)` (Xbox
 /// PDB name, cdecl).
-const HANDLE_ENTRY_POINT: u32 = 0x005e_58f0;
+pub(crate) const HANDLE_ENTRY_POINT: u32 = 0x005e_58f0;
 /// The entry point `REFR_LOCK::IsBroken` asks (its result tells whether the
 /// player's perks make a failed attempt count less).
-const ENTRY_POINT_LOCK_BROKEN: u32 = 0x20;
+pub(crate) const ENTRY_POINT_LOCK_BROKEN: u32 = 0x20;
 
 /// The float setting `REFR_LOCK::GetLevel` scales a leveled lock's level
 /// bonus by.
-const LEVELED_LOCK_SETTING: u32 = 0x011c_39b4;
+pub(crate) const LEVELED_LOCK_SETTING: u32 = 0x011c_39b4;
 /// The integer settings that hold the top of each lock difficulty bracket
 /// (very easy, easy, average, hard, very hard), and the one `00430bc0` also
 /// knows for the enumeration value 5 (key only). See
 /// `crates/world/src/locks.rs`.
-const LOCK_LEVEL_SETTINGS: [u32; 6] = [
+pub(crate) const LOCK_LEVEL_SETTINGS: [u32; 6] = [
     0x011c_3a4c,
     0x011c_3a30,
     0x011c_3a00,
@@ -126,439 +126,439 @@ const LOCK_LEVEL_SETTINGS: [u32; 6] = [
 ];
 
 /// `ExtraAnim`'s vtable.
-const EXTRA_ANIM_VTABLE: u32 = 0x0101_5b28;
+pub(crate) const EXTRA_ANIM_VTABLE: u32 = 0x0101_5b28;
 /// `ExtraDismemberedLimbs`'s vtable.
-const EXTRA_DISMEMBERED_LIMBS_VTABLE: u32 = 0x0101_5b34;
+pub(crate) const EXTRA_DISMEMBERED_LIMBS_VTABLE: u32 = 0x0101_5b34;
 /// `ExtraStartingPosition`'s vtable.
-const EXTRA_STARTING_POSITION_VTABLE: u32 = 0x0101_5b40;
+pub(crate) const EXTRA_STARTING_POSITION_VTABLE: u32 = 0x0101_5b40;
 /// The vtable of the `BSExtraData` subclass of type 0x49 built by `004308c0`.
-const EXTRA_TYPE_49_VTABLE: u32 = 0x0101_5b4c;
+pub(crate) const EXTRA_TYPE_49_VTABLE: u32 = 0x0101_5b4c;
 /// `ExtraLight`'s vtable.
-const EXTRA_LIGHT_VTABLE: u32 = 0x0101_5b58;
+pub(crate) const EXTRA_LIGHT_VTABLE: u32 = 0x0101_5b58;
 /// `ExtraLock`'s vtable.
-const EXTRA_LOCK_VTABLE: u32 = 0x0101_589c;
+pub(crate) const EXTRA_LOCK_VTABLE: u32 = 0x0101_589c;
 /// `ExtraFollower`'s vtable.
-const EXTRA_FOLLOWER_VTABLE: u32 = 0x0101_5b64;
+pub(crate) const EXTRA_FOLLOWER_VTABLE: u32 = 0x0101_5b64;
 /// `ExtraGuardedRefData`'s vtable.
-const EXTRA_GUARDED_REF_DATA_VTABLE: u32 = 0x0101_5b70;
+pub(crate) const EXTRA_GUARDED_REF_DATA_VTABLE: u32 = 0x0101_5b70;
 /// The vtable of the `BSExtraData` subclass of type 0x2e built by `004311f0`.
-const EXTRA_TYPE_2E_VTABLE: u32 = 0x0101_5b7c;
+pub(crate) const EXTRA_TYPE_2E_VTABLE: u32 = 0x0101_5b7c;
 /// `ExtraTeleport`'s vtable.
-const EXTRA_TELEPORT_VTABLE: u32 = 0x0101_58a8;
+pub(crate) const EXTRA_TELEPORT_VTABLE: u32 = 0x0101_58a8;
 
 /// Extra-data type bytes, as passed to the base constructor.
-const TYPE_DISMEMBERED_LIMBS: u32 = 0x5f;
-const TYPE_STARTING_POSITION: u32 = 0x0f;
-const TYPE_49: u32 = 0x49;
-const TYPE_LIGHT: u32 = 0x29;
-const TYPE_LOCK: u32 = 0x2a;
-const TYPE_FOLLOWER: u32 = 0x1d;
-const TYPE_GUARDED_REF_DATA: u32 = 0x7c;
-const TYPE_2E: u32 = 0x2e;
-const TYPE_TELEPORT: u32 = 0x2b;
-const TYPE_MAP_MARKER: u32 = 0x2c;
-const TYPE_AUDIO_MARKER: u32 = 0x90;
-const TYPE_AUDIO_BUOY_MARKER: u32 = 0x91;
-const TYPE_ACTION: u32 = 0x0e;
-const TYPE_CONTAINER_CHANGES: u32 = 0x15;
-const TYPE_ORIGINAL_REFERENCE: u32 = 0x20;
-const TYPE_OWNERSHIP: u32 = 0x21;
-const TYPE_GLOBAL: u32 = 0x22;
-const TYPE_RANK: u32 = 0x23;
-const TYPE_COUNT: u32 = 0x24;
-const TYPE_HEALTH: u32 = 0x25;
-const TYPE_USES: u32 = 0x26;
-const TYPE_TIME_LEFT: u32 = 0x27;
-const TYPE_CHARGE: u32 = 0x28;
+pub(crate) const TYPE_DISMEMBERED_LIMBS: u32 = 0x5f;
+pub(crate) const TYPE_STARTING_POSITION: u32 = 0x0f;
+pub(crate) const TYPE_49: u32 = 0x49;
+pub(crate) const TYPE_LIGHT: u32 = 0x29;
+pub(crate) const TYPE_LOCK: u32 = 0x2a;
+pub(crate) const TYPE_FOLLOWER: u32 = 0x1d;
+pub(crate) const TYPE_GUARDED_REF_DATA: u32 = 0x7c;
+pub(crate) const TYPE_2E: u32 = 0x2e;
+pub(crate) const TYPE_TELEPORT: u32 = 0x2b;
+pub(crate) const TYPE_MAP_MARKER: u32 = 0x2c;
+pub(crate) const TYPE_AUDIO_MARKER: u32 = 0x90;
+pub(crate) const TYPE_AUDIO_BUOY_MARKER: u32 = 0x91;
+pub(crate) const TYPE_ACTION: u32 = 0x0e;
+pub(crate) const TYPE_CONTAINER_CHANGES: u32 = 0x15;
+pub(crate) const TYPE_ORIGINAL_REFERENCE: u32 = 0x20;
+pub(crate) const TYPE_OWNERSHIP: u32 = 0x21;
+pub(crate) const TYPE_GLOBAL: u32 = 0x22;
+pub(crate) const TYPE_RANK: u32 = 0x23;
+pub(crate) const TYPE_COUNT: u32 = 0x24;
+pub(crate) const TYPE_HEALTH: u32 = 0x25;
+pub(crate) const TYPE_USES: u32 = 0x26;
+pub(crate) const TYPE_TIME_LEFT: u32 = 0x27;
+pub(crate) const TYPE_CHARGE: u32 = 0x28;
 
 /// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`.
-const EXTRA_TELEPORT_TYPE: u32 = 0x0118_4430;
-const EXTRA_MAP_MARKER_TYPE: u32 = 0x0118_45fc;
-const EXTRA_AUDIO_MARKER_TYPE: u32 = 0x0118_45dc;
-const EXTRA_AUDIO_BUOY_MARKER_TYPE: u32 = 0x0118_45b8;
-const EXTRA_ACTION_TYPE: u32 = 0x0118_4bc0;
-const EXTRA_ORIGINAL_REFERENCE_TYPE: u32 = 0x0118_4c00;
-const EXTRA_OWNERSHIP_TYPE: u32 = 0x0118_476c;
-const EXTRA_GLOBAL_TYPE: u32 = 0x0118_478c;
-const EXTRA_RANK_TYPE: u32 = 0x0118_47a8;
-const EXTRA_COUNT_TYPE: u32 = 0x0118_47c0;
-const EXTRA_LEVELED_ITEM_TYPE: u32 = 0x0118_4680;
-const EXTRA_HEALTH_TYPE: u32 = 0x0118_47dc;
-const EXTRA_HEALTH_PERC_TYPE: u32 = 0x0118_4208;
-const EXTRA_USES_TYPE: u32 = 0x0118_47f8;
-const EXTRA_TIME_LEFT_TYPE: u32 = 0x0118_4810;
+pub(crate) const EXTRA_TELEPORT_TYPE: u32 = 0x0118_4430;
+pub(crate) const EXTRA_MAP_MARKER_TYPE: u32 = 0x0118_45fc;
+pub(crate) const EXTRA_AUDIO_MARKER_TYPE: u32 = 0x0118_45dc;
+pub(crate) const EXTRA_AUDIO_BUOY_MARKER_TYPE: u32 = 0x0118_45b8;
+pub(crate) const EXTRA_ACTION_TYPE: u32 = 0x0118_4bc0;
+pub(crate) const EXTRA_ORIGINAL_REFERENCE_TYPE: u32 = 0x0118_4c00;
+pub(crate) const EXTRA_OWNERSHIP_TYPE: u32 = 0x0118_476c;
+pub(crate) const EXTRA_GLOBAL_TYPE: u32 = 0x0118_478c;
+pub(crate) const EXTRA_RANK_TYPE: u32 = 0x0118_47a8;
+pub(crate) const EXTRA_COUNT_TYPE: u32 = 0x0118_47c0;
+pub(crate) const EXTRA_LEVELED_ITEM_TYPE: u32 = 0x0118_4680;
+pub(crate) const EXTRA_HEALTH_TYPE: u32 = 0x0118_47dc;
+pub(crate) const EXTRA_HEALTH_PERC_TYPE: u32 = 0x0118_4208;
+pub(crate) const EXTRA_USES_TYPE: u32 = 0x0118_47f8;
+pub(crate) const EXTRA_TIME_LEFT_TYPE: u32 = 0x0118_4810;
 
 /// The vtables of the classes built by `00431360` to `00431f60`.
-const EXTRA_MAP_MARKER_VTABLE: u32 = 0x0101_5b88;
-const EXTRA_AUDIO_MARKER_VTABLE: u32 = 0x0101_5b94;
-const EXTRA_AUDIO_BUOY_MARKER_VTABLE: u32 = 0x0101_5ba0;
-const EXTRA_ACTION_VTABLE: u32 = 0x0101_5bac;
-const EXTRA_CONTAINER_CHANGES_VTABLE: u32 = 0x0101_5bb8;
-const EXTRA_ORIGINAL_REFERENCE_VTABLE: u32 = 0x0101_5bc4;
-const EXTRA_OWNERSHIP_VTABLE: u32 = 0x0101_58b4;
-const EXTRA_GLOBAL_VTABLE: u32 = 0x0101_58c0;
-const EXTRA_RANK_VTABLE: u32 = 0x0101_58cc;
-const EXTRA_COUNT_VTABLE: u32 = 0x0101_58d8;
-const EXTRA_HEALTH_VTABLE: u32 = 0x0101_58e4;
-const EXTRA_USES_VTABLE: u32 = 0x0101_58f0;
-const EXTRA_TIME_LEFT_VTABLE: u32 = 0x0101_58fc;
-const EXTRA_CHARGE_VTABLE: u32 = 0x0101_5908;
+pub(crate) const EXTRA_MAP_MARKER_VTABLE: u32 = 0x0101_5b88;
+pub(crate) const EXTRA_AUDIO_MARKER_VTABLE: u32 = 0x0101_5b94;
+pub(crate) const EXTRA_AUDIO_BUOY_MARKER_VTABLE: u32 = 0x0101_5ba0;
+pub(crate) const EXTRA_ACTION_VTABLE: u32 = 0x0101_5bac;
+pub(crate) const EXTRA_CONTAINER_CHANGES_VTABLE: u32 = 0x0101_5bb8;
+pub(crate) const EXTRA_ORIGINAL_REFERENCE_VTABLE: u32 = 0x0101_5bc4;
+pub(crate) const EXTRA_OWNERSHIP_VTABLE: u32 = 0x0101_58b4;
+pub(crate) const EXTRA_GLOBAL_VTABLE: u32 = 0x0101_58c0;
+pub(crate) const EXTRA_RANK_VTABLE: u32 = 0x0101_58cc;
+pub(crate) const EXTRA_COUNT_VTABLE: u32 = 0x0101_58d8;
+pub(crate) const EXTRA_HEALTH_VTABLE: u32 = 0x0101_58e4;
+pub(crate) const EXTRA_USES_VTABLE: u32 = 0x0101_58f0;
+pub(crate) const EXTRA_TIME_LEFT_VTABLE: u32 = 0x0101_58fc;
+pub(crate) const EXTRA_CHARGE_VTABLE: u32 = 0x0101_5908;
 
 /// `DoorTeleportData::Compare` (Xbox PDB; `this` is the data, the argument is
 /// the other data): true when the two differ.
-const DOOR_TELEPORT_DATA_COMPARE: u32 = 0x0043_a860;
+pub(crate) const DOOR_TELEPORT_DATA_COMPARE: u32 = 0x0043_a860;
 /// `MapMarkerData::Compare` (Xbox PDB; `this` is the data, the argument is
 /// the other data): true when the two differ.
-const MAP_MARKER_DATA_COMPARE: u32 = 0x0043_8e40;
+pub(crate) const MAP_MARKER_DATA_COMPARE: u32 = 0x0043_8e40;
 /// `AudioMarkerData::Compare` (Xbox PDB; `this` is the data, the argument is
 /// the other data): true when the two differ.
-const AUDIO_MARKER_DATA_COMPARE: u32 = 0x0058_97c0;
+pub(crate) const AUDIO_MARKER_DATA_COMPARE: u32 = 0x0058_97c0;
 /// A 15-byte folded body that ignores its argument and returns true (the
 /// engine map names it `DetailedActorPathHandler::IsDetailedPathHandler`);
 /// `ExtraAudioBuoyMarker::Compare` calls it with the two `AudioBuoyMarkerData`
 /// pointers (`this` is the first, the argument the second).
-const AUDIO_BUOY_DATA_COMPARE: u32 = 0x0040_1290;
+pub(crate) const AUDIO_BUOY_DATA_COMPARE: u32 = 0x0040_1290;
 /// Scalar deleting destructor of the `MapMarkerData` an `ExtraMapMarker` owns
 /// (`this` is the data, the argument says whether to free it).
-const MAP_MARKER_DATA_DELETE: u32 = 0x0041_9350;
+pub(crate) const MAP_MARKER_DATA_DELETE: u32 = 0x0041_9350;
 /// Scalar deleting destructor of the `AudioMarkerData` an `ExtraAudioMarker`
 /// owns (`this` is the data, the argument says whether to free it).
-const AUDIO_MARKER_DATA_DELETE: u32 = 0x0041_9480;
+pub(crate) const AUDIO_MARKER_DATA_DELETE: u32 = 0x0041_9480;
 /// Scalar deleting destructor of the `AudioBuoyMarkerData` an
 /// `ExtraAudioBuoyMarker` owns (in `racesexmenu.cpp` by address range; `this`
 /// is the data, the argument says whether to free it).
-const AUDIO_BUOY_DATA_DELETE: u32 = 0x007b_3fa0;
+pub(crate) const AUDIO_BUOY_DATA_DELETE: u32 = 0x007b_3fa0;
 /// The destructor body of the `InventoryChanges` an `ExtraContainerChanges`
 /// owns (in `inventorychanges.cpp`; `this` is the object).
-const INVENTORY_CHANGES_DESTRUCT: u32 = 0x004b_f150;
+pub(crate) const INVENTORY_CHANGES_DESTRUCT: u32 = 0x004b_f150;
 
 /// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`
 /// (second batch).
-const EXTRA_CHARGE_TYPE: u32 = 0x0118_482c;
-const EXTRA_SCRIPT_TYPE: u32 = 0x0118_4514;
-const EXTRA_WEAPON_MOD_FLAGS_TYPE: u32 = 0x0118_48d8;
-const EXTRA_MODDING_ITEM_TYPE: u32 = 0x0118_493c;
-const EXTRA_SCALE_TYPE: u32 = 0x0118_4848;
-const EXTRA_HOT_KEY_TYPE: u32 = 0x0118_4864;
-const EXTRA_SEED_TYPE: u32 = 0x0118_4c98;
-const EXTRA_PACKAGE_START_LOCATION_TYPE: u32 = 0x0118_448c;
+pub(crate) const EXTRA_CHARGE_TYPE: u32 = 0x0118_482c;
+pub(crate) const EXTRA_SCRIPT_TYPE: u32 = 0x0118_4514;
+pub(crate) const EXTRA_WEAPON_MOD_FLAGS_TYPE: u32 = 0x0118_48d8;
+pub(crate) const EXTRA_MODDING_ITEM_TYPE: u32 = 0x0118_493c;
+pub(crate) const EXTRA_SCALE_TYPE: u32 = 0x0118_4848;
+pub(crate) const EXTRA_HOT_KEY_TYPE: u32 = 0x0118_4864;
+pub(crate) const EXTRA_SEED_TYPE: u32 = 0x0118_4c98;
+pub(crate) const EXTRA_PACKAGE_START_LOCATION_TYPE: u32 = 0x0118_448c;
 
 /// The vtables of the classes built by `00432000` to `00432cb0`.
-const EXTRA_SCRIPT_VTABLE: u32 = 0x0101_5914;
-const EXTRA_SCALE_VTABLE: u32 = 0x0101_5920;
-const EXTRA_HOT_KEY_VTABLE: u32 = 0x0101_592c;
-const EXTRA_REFERENCE_POINTER_VTABLE: u32 = 0x0101_5938;
-const EXTRA_TRES_PASS_PACKAGE_VTABLE: u32 = 0x0101_5944;
-const EXTRA_LEVELED_ITEM_VTABLE: u32 = 0x0101_5950;
-const EXTRA_GHOST_VTABLE: u32 = 0x0101_5bd0;
-const EXTRA_WORN_VTABLE: u32 = 0x0101_5bdc;
-const EXTRA_WORN_LEFT_VTABLE: u32 = 0x0101_5be8;
-const EXTRA_CANNOT_WEAR_VTABLE: u32 = 0x0101_5bf4;
-const EXTRA_INFO_GENERAL_TOPIC_VTABLE: u32 = 0x0101_5c00;
-const EXTRA_SEED_VTABLE: u32 = 0x0101_5c0c;
-const EXTRA_PACKAGE_START_LOCATION_VTABLE: u32 = 0x0101_5c18;
-const EXTRA_PACKAGE_VTABLE: u32 = 0x0101_5c24;
-const EXTRA_PLAYER_CRIME_LIST_VTABLE: u32 = 0x0101_5c30;
-const EXTRA_PERSISTENT_CELL_VTABLE: u32 = 0x0101_5c3c;
-const EXTRA_RAG_DOLL_DATA_VTABLE: u32 = 0x0101_5c48;
+pub(crate) const EXTRA_SCRIPT_VTABLE: u32 = 0x0101_5914;
+pub(crate) const EXTRA_SCALE_VTABLE: u32 = 0x0101_5920;
+pub(crate) const EXTRA_HOT_KEY_VTABLE: u32 = 0x0101_592c;
+pub(crate) const EXTRA_REFERENCE_POINTER_VTABLE: u32 = 0x0101_5938;
+pub(crate) const EXTRA_TRES_PASS_PACKAGE_VTABLE: u32 = 0x0101_5944;
+pub(crate) const EXTRA_LEVELED_ITEM_VTABLE: u32 = 0x0101_5950;
+pub(crate) const EXTRA_GHOST_VTABLE: u32 = 0x0101_5bd0;
+pub(crate) const EXTRA_WORN_VTABLE: u32 = 0x0101_5bdc;
+pub(crate) const EXTRA_WORN_LEFT_VTABLE: u32 = 0x0101_5be8;
+pub(crate) const EXTRA_CANNOT_WEAR_VTABLE: u32 = 0x0101_5bf4;
+pub(crate) const EXTRA_INFO_GENERAL_TOPIC_VTABLE: u32 = 0x0101_5c00;
+pub(crate) const EXTRA_SEED_VTABLE: u32 = 0x0101_5c0c;
+pub(crate) const EXTRA_PACKAGE_START_LOCATION_VTABLE: u32 = 0x0101_5c18;
+pub(crate) const EXTRA_PACKAGE_VTABLE: u32 = 0x0101_5c24;
+pub(crate) const EXTRA_PLAYER_CRIME_LIST_VTABLE: u32 = 0x0101_5c30;
+pub(crate) const EXTRA_PERSISTENT_CELL_VTABLE: u32 = 0x0101_5c3c;
+pub(crate) const EXTRA_RAG_DOLL_DATA_VTABLE: u32 = 0x0101_5c48;
 
 /// Extra-data type bytes of the second batch.
-const TYPE_SCRIPT: u32 = 0x0d;
-const TYPE_SCALE: u32 = 0x30;
-const TYPE_GHOST: u32 = 0x1f;
-const TYPE_WORN: u32 = 0x16;
-const TYPE_WORN_LEFT: u32 = 0x17;
-const TYPE_CANNOT_WEAR: u32 = 0x3e;
-const TYPE_HOT_KEY: u32 = 0x4a;
-const TYPE_INFO_GENERAL_TOPIC: u32 = 0x4d;
-const TYPE_SEED: u32 = 0x31;
-const TYPE_PACKAGE_START_LOCATION: u32 = 0x18;
-const TYPE_REFERENCE_POINTER: u32 = 0x1c;
-const TYPE_PACKAGE: u32 = 0x19;
-const TYPE_TRES_PASS_PACKAGE: u32 = 0x1a;
-const TYPE_PLAYER_CRIME_LIST: u32 = 0x35;
-const TYPE_LEVELED_ITEM: u32 = 0x2f;
-const TYPE_PERSISTENT_CELL: u32 = 0x0c;
-const TYPE_RAG_DOLL_DATA: u32 = 0x14;
+pub(crate) const TYPE_SCRIPT: u32 = 0x0d;
+pub(crate) const TYPE_SCALE: u32 = 0x30;
+pub(crate) const TYPE_GHOST: u32 = 0x1f;
+pub(crate) const TYPE_WORN: u32 = 0x16;
+pub(crate) const TYPE_WORN_LEFT: u32 = 0x17;
+pub(crate) const TYPE_CANNOT_WEAR: u32 = 0x3e;
+pub(crate) const TYPE_HOT_KEY: u32 = 0x4a;
+pub(crate) const TYPE_INFO_GENERAL_TOPIC: u32 = 0x4d;
+pub(crate) const TYPE_SEED: u32 = 0x31;
+pub(crate) const TYPE_PACKAGE_START_LOCATION: u32 = 0x18;
+pub(crate) const TYPE_REFERENCE_POINTER: u32 = 0x1c;
+pub(crate) const TYPE_PACKAGE: u32 = 0x19;
+pub(crate) const TYPE_TRES_PASS_PACKAGE: u32 = 0x1a;
+pub(crate) const TYPE_PLAYER_CRIME_LIST: u32 = 0x35;
+pub(crate) const TYPE_LEVELED_ITEM: u32 = 0x2f;
+pub(crate) const TYPE_PERSISTENT_CELL: u32 = 0x0c;
+pub(crate) const TYPE_RAG_DOLL_DATA: u32 = 0x14;
 
 /// Scalar deleting destructor of the `ScriptLocals` an `ExtraScript` owns
 /// (in `extradatalist.cpp` by address range; `this` is the object, the
 /// argument says whether to free it).
-const SCRIPT_LOCALS_DELETE: u32 = 0x0041_af70;
+pub(crate) const SCRIPT_LOCALS_DELETE: u32 = 0x0041_af70;
 /// `MenuTopic::~MenuTopic` (Xbox PDB name; it is the scalar deleting
 /// destructor: `this` is the topic, the argument says whether to free it).
-const MENU_TOPIC_DELETE: u32 = 0x0042_5ff0;
+pub(crate) const MENU_TOPIC_DELETE: u32 = 0x0042_5ff0;
 /// The constructor of the 0x2c-byte `MenuTopic` an `ExtraInfoGeneralTopic`
 /// creates (`this` is the memory, the result is the object).
-const MENU_TOPIC_CONSTRUCT: u32 = 0x0083_da50;
+pub(crate) const MENU_TOPIC_CONSTRUCT: u32 = 0x0083_da50;
 /// The constructor of the `WORLD_LOCATION` member of
 /// `ExtraPackageStartLocation` (`this` is the member).
-const WORLD_LOCATION_CONSTRUCT: u32 = 0x006d_5320;
+pub(crate) const WORLD_LOCATION_CONSTRUCT: u32 = 0x006d_5320;
 /// `TESPackage::SetIsCreated(created)` (Xbox PDB name; `this` is the
 /// package).
-const PACKAGE_SET_IS_CREATED: u32 = 0x0067_4d70;
+pub(crate) const PACKAGE_SET_IS_CREATED: u32 = 0x0067_4d70;
 /// The global holding the `TESSaveLoadGame` object pointer (the singleton
 /// whose `DeleteForm` `ExtraTresPassPackage`'s destructor calls).
-const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+pub(crate) const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
 /// A 13-byte stub (`xor al, al`) the destructor of `ExtraTresPassPackage`
 /// calls on the save/load object: it always answers false.
-const SAVE_LOAD_GAME_ALWAYS_FALSE: u32 = 0x0047_c850;
+pub(crate) const SAVE_LOAD_GAME_ALWAYS_FALSE: u32 = 0x0047_c850;
 /// `TESSaveLoadGame::DeleteForm(form)` (Xbox PDB name; `this` is the
 /// save/load object).
-const SAVE_LOAD_GAME_DELETE_FORM: u32 = 0x0085_a2e0;
+pub(crate) const SAVE_LOAD_GAME_DELETE_FORM: u32 = 0x0085_a2e0;
 /// Adds the item held at the address given to the `BSSimpleList` (`this` is
 /// the list; an unplaced body, `005ae3d0`).
-const CRIME_LIST_ADD: u32 = 0x005a_e3d0;
+pub(crate) const CRIME_LIST_ADD: u32 = 0x005a_e3d0;
 /// The destructor body of the `RagDollData` an `ExtraRagDollData` owns (in
 /// `ragdolldata.cpp`; `this` is the object).
-const RAG_DOLL_DATA_DESTRUCT: u32 = 0x004d_9380;
+pub(crate) const RAG_DOLL_DATA_DESTRUCT: u32 = 0x004d_9380;
 
 /// `RagDollData::Compare` (Xbox PDB; `this` is the data, the argument the
 /// other data): true when the two differ.
-const RAG_DOLL_DATA_COMPARE: u32 = 0x004d_9780;
+pub(crate) const RAG_DOLL_DATA_COMPARE: u32 = 0x004d_9780;
 
 /// `RTTI Type Descriptor`s of the classes whose `Compare` or `Copy` casts
 /// `other` (third batch).
-const EXTRA_RAG_DOLL_DATA_TYPE: u32 = 0x0118_4cd4;
-const EXTRA_ENCOUNTER_ZONE_TYPE: u32 = 0x0118_4cf4;
-const EXTRA_ENABLE_STATE_PARENT_TYPE: u32 = 0x0118_4d7c;
-const EXTRA_RANDOM_TELEPORT_MARKER_TYPE: u32 = 0x0118_4dcc;
-const EXTRA_LINKED_REF_TYPE: u32 = 0x0118_4e1c;
-const EXTRA_ACTIVATE_REF_TYPE: u32 = 0x0118_4e84;
+pub(crate) const EXTRA_RAG_DOLL_DATA_TYPE: u32 = 0x0118_4cd4;
+pub(crate) const EXTRA_ENCOUNTER_ZONE_TYPE: u32 = 0x0118_4cf4;
+pub(crate) const EXTRA_ENABLE_STATE_PARENT_TYPE: u32 = 0x0118_4d7c;
+pub(crate) const EXTRA_RANDOM_TELEPORT_MARKER_TYPE: u32 = 0x0118_4dcc;
+pub(crate) const EXTRA_LINKED_REF_TYPE: u32 = 0x0118_4e1c;
+pub(crate) const EXTRA_ACTIVATE_REF_TYPE: u32 = 0x0118_4e84;
 
 /// The vtables of the classes built by `00432e60` to `00433ca0` (names from
 /// the RTTI type descriptors).
-const EXTRA_ENCOUNTER_ZONE_VTABLE: u32 = 0x0101_5c54;
-const EXTRA_USED_MARKERS_VTABLE: u32 = 0x0101_5c60;
-const EXTRA_RESERVED_MARKERS_VTABLE: u32 = 0x0101_5c6c;
-const EXTRA_RUN_ONCE_PACKS_VTABLE: u32 = 0x0101_5c78;
-const EXTRA_DISTANT_DATA_VTABLE: u32 = 0x0101_5c84;
-const EXTRA_ENABLE_STATE_PARENT_VTABLE: u32 = 0x0101_5c90;
-const EXTRA_ENABLE_STATE_CHILDREN_VTABLE: u32 = 0x0101_5c9c;
-const EXTRA_RANDOM_TELEPORT_MARKER_VTABLE: u32 = 0x0101_5ca8;
-const EXTRA_LINKED_REF_CHILDREN_VTABLE: u32 = 0x0101_5cb4;
-const EXTRA_LINKED_REF_VTABLE: u32 = 0x0101_5cc0;
-const EXTRA_ASH_PILE_REF_VTABLE: u32 = 0x0101_5ccc;
-const EXTRA_ACTIVATE_REF_CHILDREN_VTABLE: u32 = 0x0101_5cd8;
-const EXTRA_ACTIVATE_REF_VTABLE: u32 = 0x0101_5ce4;
-const EXTRA_DECAL_REFS_VTABLE: u32 = 0x0101_5cf0;
+pub(crate) const EXTRA_ENCOUNTER_ZONE_VTABLE: u32 = 0x0101_5c54;
+pub(crate) const EXTRA_USED_MARKERS_VTABLE: u32 = 0x0101_5c60;
+pub(crate) const EXTRA_RESERVED_MARKERS_VTABLE: u32 = 0x0101_5c6c;
+pub(crate) const EXTRA_RUN_ONCE_PACKS_VTABLE: u32 = 0x0101_5c78;
+pub(crate) const EXTRA_DISTANT_DATA_VTABLE: u32 = 0x0101_5c84;
+pub(crate) const EXTRA_ENABLE_STATE_PARENT_VTABLE: u32 = 0x0101_5c90;
+pub(crate) const EXTRA_ENABLE_STATE_CHILDREN_VTABLE: u32 = 0x0101_5c9c;
+pub(crate) const EXTRA_RANDOM_TELEPORT_MARKER_VTABLE: u32 = 0x0101_5ca8;
+pub(crate) const EXTRA_LINKED_REF_CHILDREN_VTABLE: u32 = 0x0101_5cb4;
+pub(crate) const EXTRA_LINKED_REF_VTABLE: u32 = 0x0101_5cc0;
+pub(crate) const EXTRA_ASH_PILE_REF_VTABLE: u32 = 0x0101_5ccc;
+pub(crate) const EXTRA_ACTIVATE_REF_CHILDREN_VTABLE: u32 = 0x0101_5cd8;
+pub(crate) const EXTRA_ACTIVATE_REF_VTABLE: u32 = 0x0101_5ce4;
+pub(crate) const EXTRA_DECAL_REFS_VTABLE: u32 = 0x0101_5cf0;
 
 /// Extra-data type bytes of the third batch.
-const TYPE_ENCOUNTER_ZONE: u32 = 0x74;
-const TYPE_USED_MARKERS: u32 = 0x12;
-const TYPE_RESERVED_MARKERS: u32 = 0x82;
-const TYPE_RUN_ONCE_PACKS: u32 = 0x1b;
-const TYPE_DISTANT_DATA: u32 = 0x13;
-const TYPE_ENABLE_STATE_PARENT: u32 = 0x37;
-const TYPE_ENABLE_STATE_CHILDREN: u32 = 0x38;
-const TYPE_RANDOM_TELEPORT_MARKER: u32 = 0x3b;
-const TYPE_LINKED_REF_CHILDREN: u32 = 0x52;
-const TYPE_LINKED_REF: u32 = 0x51;
-const TYPE_ASH_PILE_REF: u32 = 0x89;
-const TYPE_ACTIVATE_REF_CHILDREN: u32 = 0x54;
-const TYPE_ACTIVATE_REF: u32 = 0x53;
-const TYPE_DECAL_REFS: u32 = 0x57;
+pub(crate) const TYPE_ENCOUNTER_ZONE: u32 = 0x74;
+pub(crate) const TYPE_USED_MARKERS: u32 = 0x12;
+pub(crate) const TYPE_RESERVED_MARKERS: u32 = 0x82;
+pub(crate) const TYPE_RUN_ONCE_PACKS: u32 = 0x1b;
+pub(crate) const TYPE_DISTANT_DATA: u32 = 0x13;
+pub(crate) const TYPE_ENABLE_STATE_PARENT: u32 = 0x37;
+pub(crate) const TYPE_ENABLE_STATE_CHILDREN: u32 = 0x38;
+pub(crate) const TYPE_RANDOM_TELEPORT_MARKER: u32 = 0x3b;
+pub(crate) const TYPE_LINKED_REF_CHILDREN: u32 = 0x52;
+pub(crate) const TYPE_LINKED_REF: u32 = 0x51;
+pub(crate) const TYPE_ASH_PILE_REF: u32 = 0x89;
+pub(crate) const TYPE_ACTIVATE_REF_CHILDREN: u32 = 0x54;
+pub(crate) const TYPE_ACTIVATE_REF: u32 = 0x53;
+pub(crate) const TYPE_DECAL_REFS: u32 = 0x57;
 
 /// `BSSimpleList<T>`'s constructor (`this` is the head node: item and next
 /// are cleared).
-const SIMPLE_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+pub(crate) const SIMPLE_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
 /// `BSSimpleList<T>::Clear` (the engine map has no name; `this` is the head
 /// node: frees every node after the head and clears its item).
-const SIMPLE_LIST_CLEAR: u32 = 0x0047_0470;
+pub(crate) const SIMPLE_LIST_CLEAR: u32 = 0x0047_0470;
 /// The destructor body of a `BSSimpleList<T>` (`this` is the head node): it
 /// clears the list.
-const SIMPLE_LIST_DESTRUCT: u32 = 0x0046_ffb0;
+pub(crate) const SIMPLE_LIST_DESTRUCT: u32 = 0x0046_ffb0;
 /// `BSSimpleList<T>`'s scalar deleting destructor (`this` is the list, the
 /// argument says whether to free it).
-const SIMPLE_LIST_DELETE: u32 = 0x0047_02f0;
+pub(crate) const SIMPLE_LIST_DELETE: u32 = 0x0047_02f0;
 /// The address of the item slot of a list node (`this` is the node; returns
 /// `this`, the item is the first word).
-const SIMPLE_LIST_ITEM_SLOT: u32 = 0x0068_15c0;
+pub(crate) const SIMPLE_LIST_ITEM_SLOT: u32 = 0x0068_15c0;
 /// The next node of a list node (`this` is the node; null at the end).
-const SIMPLE_LIST_NEXT: u32 = 0x0072_6070;
+pub(crate) const SIMPLE_LIST_NEXT: u32 = 0x0072_6070;
 /// Whether a list node holds no item and has no successor (`this` is the
 /// node).
-const SIMPLE_LIST_IS_EMPTY: u32 = 0x0082_56d0;
+pub(crate) const SIMPLE_LIST_IS_EMPTY: u32 = 0x0082_56d0;
 /// Removes the head of a list (`this` is the head node): the next node's
 /// item and successor move into the head and the next node is deleted; the
 /// head's item is cleared when there is no next node.
-const SIMPLE_LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+pub(crate) const SIMPLE_LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
 /// Adds the item held at the address given as the new head of the list (`this`
 /// is the list; the same body as `CRIME_LIST_ADD`, which names it by its use
 /// in `ExtraPlayerCrimeList`).
-const SIMPLE_LIST_ADD_HEAD: u32 = CRIME_LIST_ADD;
+pub(crate) const SIMPLE_LIST_ADD_HEAD: u32 = CRIME_LIST_ADD;
 /// The number of non-empty nodes of a list (`this` is the head node;
 /// the engine map calls it `VATS::GetCount` by mistake).
-const SIMPLE_LIST_COUNT: u32 = 0x005a_e380;
+pub(crate) const SIMPLE_LIST_COUNT: u32 = 0x005a_e380;
 
 /// `NiPoint3::NiPoint3(x, y, z)` (Xbox PDB name of the folded body; `this`
 /// is the point, then three floats on the stack).
-const NI_POINT3_CONSTRUCT: u32 = 0x0041_6870;
+pub(crate) const NI_POINT3_CONSTRUCT: u32 = 0x0041_6870;
 /// The `float` constant `ExtraDistantData`'s constructor uses for the
 /// z component of its land normal.
-const DISTANT_DATA_NORMAL_Z: u32 = 0x0101_45a8;
+pub(crate) const DISTANT_DATA_NORMAL_Z: u32 = 0x0101_45a8;
 /// `BSStringT<char>::BSStringT` (`this` is the string: empties it).
-const BS_STRING_CONSTRUCT: u32 = 0x0040_37b0;
+pub(crate) const BS_STRING_CONSTRUCT: u32 = 0x0040_37b0;
 /// `BSStringT<char>::Set(source, length)` (`this` is the string; the source
 /// is a character pointer and the length 0 means all of it).
-const BS_STRING_SET: u32 = 0x0040_37f0;
+pub(crate) const BS_STRING_SET: u32 = 0x0040_37f0;
 /// `BSStringT<char>::Clear` (`this` is the string; `Set(0, 0)`).
-const BS_STRING_CLEAR: u32 = 0x0040_37d0;
+pub(crate) const BS_STRING_CLEAR: u32 = 0x0040_37d0;
 /// `BSStringT<char>::Set(other)` (Xbox PDB; `this` is the string, the
 /// argument the string to copy; in this unit, not yet translated).
-const BS_STRING_COPY: u32 = 0x0043_8470;
+pub(crate) const BS_STRING_COPY: u32 = 0x0043_8470;
 /// `BSStringT<char>::GetLength` (the folded body: the stored length, or the
 /// C string's length when that is 0xffff; `this` is the string).
-const BS_STRING_LENGTH: u32 = 0x0040_48e0;
+pub(crate) const BS_STRING_LENGTH: u32 = 0x0040_48e0;
 /// `BSStringT<char>::c_str` (`this` is the string: its character pointer).
-const BS_STRING_DATA: u32 = 0x0055_9450;
+pub(crate) const BS_STRING_DATA: u32 = 0x0055_9450;
 /// `strcmp(a, b)` (the wrapper; `00ec6da0` is the CRT function).
-const STRCMP: u32 = 0x0040_8b20;
+pub(crate) const STRCMP: u32 = 0x0040_8b20;
 /// `memcpy(destination, source, size)` (the wrapper around `00ec44d0`).
-const MEMCPY: u32 = 0x0040_1460;
+pub(crate) const MEMCPY: u32 = 0x0040_1460;
 /// The constructor of a `REF_ACTIVATE_DATA` (`this` is the 8-byte data:
 /// clears the reference and the delay).
-const REF_ACTIVATE_DATA_CONSTRUCT: u32 = 0x0041_4010;
+pub(crate) const REF_ACTIVATE_DATA_CONSTRUCT: u32 = 0x0041_4010;
 /// An empty C string in the exe's data (what `ExtraActivateRef`'s constructor sets
 /// its text to).
-const EMPTY_STRING: u32 = 0x0101_1584;
+pub(crate) const EMPTY_STRING: u32 = 0x0101_1584;
 
 /// Constructor of the `DismemberedLimbs` array member of
 /// `ExtraDismemberedLimbs` (`this` is the array). In this unit; not yet
 /// translated.
-const DISMEMBERED_LIMBS_ARRAY_CONSTRUCT: u32 = 0x0043_8570;
+pub(crate) const DISMEMBERED_LIMBS_ARRAY_CONSTRUCT: u32 = 0x0043_8570;
 /// Destructor of the same array. In this unit; not yet translated.
-const DISMEMBERED_LIMBS_ARRAY_DESTRUCT: u32 = 0x0043_85a0;
+pub(crate) const DISMEMBERED_LIMBS_ARRAY_DESTRUCT: u32 = 0x0043_85a0;
 /// Constructor of the `Guards` array member of `ExtraGuardedRefData`. In
 /// this unit; not yet translated.
-const GUARDS_ARRAY_CONSTRUCT: u32 = 0x0043_8660;
+pub(crate) const GUARDS_ARRAY_CONSTRUCT: u32 = 0x0043_8660;
 /// Destructor of the same array. In this unit; not yet translated.
-const GUARDS_ARRAY_DESTRUCT: u32 = 0x0043_8690;
+pub(crate) const GUARDS_ARRAY_DESTRUCT: u32 = 0x0043_8690;
 /// Constructor of a `DismemberedLimb` entry (`this` is the 0x14-byte block).
-const DISMEMBERED_LIMB_CONSTRUCT: u32 = 0x0042_c470;
+pub(crate) const DISMEMBERED_LIMB_CONSTRUCT: u32 = 0x0042_c470;
 /// Destructor body of the `ObjectArray` member of a `DismemberedLimb` (`this`
 /// is the array).
-const DISMEMBERED_LIMB_ARRAY_DESTRUCT: u32 = 0x0042_ff80;
+pub(crate) const DISMEMBERED_LIMB_ARRAY_DESTRUCT: u32 = 0x0042_ff80;
 /// `TESNPC::BuildObjectArray(reference, base, array)` (Xbox PDB name); `this`
 /// is what `004181e0` returns for the reference.
-const TESNPC_BUILD_OBJECT_ARRAY: u32 = 0x0060_5fc0;
+pub(crate) const TESNPC_BUILD_OBJECT_ARRAY: u32 = 0x0060_5fc0;
 /// Takes a reference and returns the object `TESNPC::BuildObjectArray` is
 /// called on (a 19-byte accessor in `extradatalist.cpp`).
-const REFR_NPC_ACCESSOR: u32 = 0x0041_81e0;
+pub(crate) const REFR_NPC_ACCESSOR: u32 = 0x0041_81e0;
 /// The constructor of the `FILE_POS_ROT` member of `ExtraStartingPosition`
 /// (`this` is the member).
-const FILE_POS_ROT_CONSTRUCT: u32 = 0x0069_2710;
+pub(crate) const FILE_POS_ROT_CONSTRUCT: u32 = 0x0069_2710;
 /// Deletes the animation an `ExtraAnim` owns (`this` is the animation, the
 /// argument says whether to free it).
-const ANIMATION_DELETE: u32 = 0x0041_8d20;
+pub(crate) const ANIMATION_DELETE: u32 = 0x0041_8d20;
 /// Deletes the light an `ExtraLight` owns (`this` is the light, the argument
 /// says whether to free it).
-const LIGHT_DELETE: u32 = 0x0041_8f10;
+pub(crate) const LIGHT_DELETE: u32 = 0x0041_8f10;
 /// Deletes the teleport data an `ExtraTeleport` owns (`this` is the data,
 /// the argument says whether to free it).
-const TELEPORT_DATA_DELETE: u32 = 0x0041_9220;
+pub(crate) const TELEPORT_DATA_DELETE: u32 = 0x0041_9220;
 /// Constructor of the 8-byte actor list an `ExtraFollower` owns.
-const ACTOR_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+pub(crate) const ACTOR_LIST_CONSTRUCT: u32 = 0x0096_a2d0;
 /// Clears the actor list (`this` is the list).
-const ACTOR_LIST_CLEAR: u32 = 0x0047_0470;
+pub(crate) const ACTOR_LIST_CLEAR: u32 = 0x0047_0470;
 /// Scalar deleting destructor of the actor list (`this` is the list, the
 /// argument says whether to free it).
-const ACTOR_LIST_DELETE: u32 = 0x0047_02f0;
+pub(crate) const ACTOR_LIST_DELETE: u32 = 0x0047_02f0;
 /// Returns the value `ExtraGuardedRefData::AddGuard` stores for a reference
 /// (`this` is the reference).
-const REFR_GUARD_VALUE: u32 = 0x0084_e3a0;
+pub(crate) const REFR_GUARD_VALUE: u32 = 0x0084_e3a0;
 /// `LookupFormByID(id)` (cdecl, one stack argument).
-const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
+pub(crate) const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
 /// Returns the process object a form's guard notification goes to (the
 /// engine map's `MiddleHighProcess::GetSavedAcquireObject`; `this` is the
 /// form).
-const FORM_PROCESS: u32 = 0x008d_8520;
+pub(crate) const FORM_PROCESS: u32 = 0x008d_8520;
 
 /// `RTTI Type Descriptor`s used by the fourth batch: the source and target of
 /// the `InitItem`s' cast of a looked-up form (`TESForm`, `TESObjectREFR`), and
 /// the classes whose `Compare` or `Copy` casts `other`.
-const TES_FORM_TYPE: u32 = 0x0118_3028;
-const TES_OBJECT_REFR_TYPE: u32 = 0x0118_41cc;
-const EXTRA_DECAL_REFS_TYPE: u32 = 0x0118_4ea4;
-const EXTRA_REFLECTED_REFS_TYPE: u32 = 0x0118_3fec;
-const EXTRA_REFLECTOR_REFS_TYPE: u32 = 0x0118_4010;
-const EXTRA_WATER_LIGHT_REFS_TYPE: u32 = 0x0118_4034;
-const EXTRA_LIT_WATER_REFS_TYPE: u32 = 0x0118_4058;
-const EXTRA_MERCHANT_CONTAINER_TYPE: u32 = 0x0118_4ec4;
-const EXTRA_LEV_CREA_MODIFIER_TYPE: u32 = 0x0118_4eec;
-const EXTRA_POISON_TYPE: u32 = 0x0118_461c;
-const EXTRA_LAST_FINISHED_SEQUENCE_TYPE: u32 = 0x0118_4408;
+pub(crate) const TES_FORM_TYPE: u32 = 0x0118_3028;
+pub(crate) const TES_OBJECT_REFR_TYPE: u32 = 0x0118_41cc;
+pub(crate) const EXTRA_DECAL_REFS_TYPE: u32 = 0x0118_4ea4;
+pub(crate) const EXTRA_REFLECTED_REFS_TYPE: u32 = 0x0118_3fec;
+pub(crate) const EXTRA_REFLECTOR_REFS_TYPE: u32 = 0x0118_4010;
+pub(crate) const EXTRA_WATER_LIGHT_REFS_TYPE: u32 = 0x0118_4034;
+pub(crate) const EXTRA_LIT_WATER_REFS_TYPE: u32 = 0x0118_4058;
+pub(crate) const EXTRA_MERCHANT_CONTAINER_TYPE: u32 = 0x0118_4ec4;
+pub(crate) const EXTRA_LEV_CREA_MODIFIER_TYPE: u32 = 0x0118_4eec;
+pub(crate) const EXTRA_POISON_TYPE: u32 = 0x0118_461c;
+pub(crate) const EXTRA_LAST_FINISHED_SEQUENCE_TYPE: u32 = 0x0118_4408;
 
 /// The vtables of the classes of the fourth batch (names from the RTTI
 /// type descriptors).
-const EXTRA_REFLECTED_REFS_VTABLE: u32 = 0x0101_4428;
-const EXTRA_REFLECTOR_REFS_VTABLE: u32 = 0x0101_4434;
-const EXTRA_WATER_LIGHT_REFS_VTABLE: u32 = 0x0101_4440;
-const EXTRA_LIT_WATER_REFS_VTABLE: u32 = 0x0101_444c;
-const EXTRA_MERCHANT_CONTAINER_VTABLE: u32 = 0x0101_5e04;
-const EXTRA_LEV_CREA_MODIFIER_VTABLE: u32 = 0x0101_5e10;
-const EXTRA_POISON_VTABLE: u32 = 0x0101_595c;
-const EXTRA_LAST_FINISHED_SEQUENCE_VTABLE: u32 = 0x0101_5e1c;
-const EXTRA_X_TARGET_VTABLE: u32 = 0x0101_5e28;
+pub(crate) const EXTRA_REFLECTED_REFS_VTABLE: u32 = 0x0101_4428;
+pub(crate) const EXTRA_REFLECTOR_REFS_VTABLE: u32 = 0x0101_4434;
+pub(crate) const EXTRA_WATER_LIGHT_REFS_VTABLE: u32 = 0x0101_4440;
+pub(crate) const EXTRA_LIT_WATER_REFS_VTABLE: u32 = 0x0101_444c;
+pub(crate) const EXTRA_MERCHANT_CONTAINER_VTABLE: u32 = 0x0101_5e04;
+pub(crate) const EXTRA_LEV_CREA_MODIFIER_VTABLE: u32 = 0x0101_5e10;
+pub(crate) const EXTRA_POISON_VTABLE: u32 = 0x0101_595c;
+pub(crate) const EXTRA_LAST_FINISHED_SEQUENCE_VTABLE: u32 = 0x0101_5e1c;
+pub(crate) const EXTRA_X_TARGET_VTABLE: u32 = 0x0101_5e28;
 
 /// Extra-data type bytes of the fourth batch.
-const TYPE_MERCHANT_CONTAINER: u32 = 0x3c;
-const TYPE_LEV_CREA_MODIFIER: u32 = 0x1e;
-const TYPE_POISON: u32 = 0x3f;
-const TYPE_LAST_FINISHED_SEQUENCE: u32 = 0x41;
-const TYPE_X_TARGET: u32 = 0x44;
+pub(crate) const TYPE_MERCHANT_CONTAINER: u32 = 0x3c;
+pub(crate) const TYPE_LEV_CREA_MODIFIER: u32 = 0x1e;
+pub(crate) const TYPE_POISON: u32 = 0x3f;
+pub(crate) const TYPE_LAST_FINISHED_SEQUENCE: u32 = 0x41;
+pub(crate) const TYPE_X_TARGET: u32 = 0x44;
 
 /// `LCM_NONE` (Xbox PDB `LEV_CREA_MODIFIER`; the others are `LCM_EASY` 0,
 /// `LCM_MEDIUM` 1, `LCM_HARD` 2, `LCM_BOSS` 3).
-const LEV_CREA_MODIFIER_NONE: u32 = 4;
+pub(crate) const LEV_CREA_MODIFIER_NONE: u32 = 4;
 /// The table of float-setting pointers, one per `LEV_CREA_MODIFIER` value
 /// below `LCM_NONE`, that `fn_004350c0` indexes.
-const LEV_CREA_SETTING_TABLE: u32 = 0x0118_4ab0;
+pub(crate) const LEV_CREA_SETTING_TABLE: u32 = 0x0118_4ab0;
 
 /// `TESForm::GetFile(index)` (Xbox PDB name; `this` is the form, the argument
 /// -1 asks for the last file that changed it).
-const FORM_GET_FILE: u32 = 0x0048_4e60;
+pub(crate) const FORM_GET_FILE: u32 = 0x0048_4e60;
 /// `TESForm::AddCompileIndex(formIdAddress, file)` (Xbox PDB name, cdecl, two
 /// stack arguments): adds the file's compile index to the form id held at the
 /// address given.
-const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+pub(crate) const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
 /// `TESObjectREFR::GetRefPersists` (Xbox PDB name; `this` is the reference).
-const REFR_GET_REF_PERSISTS: u32 = 0x0056_53d0;
+pub(crate) const REFR_GET_REF_PERSISTS: u32 = 0x0056_53d0;
 /// The accessor of a reference's extra-data list (`this + 0x44`, in
 /// `tesscriptfunctions.cpp` by address range; `this` is the reference, the
 /// result the address of the embedded list).
-const REFR_EXTRA_LIST: u32 = 0x005d_43c0;
+pub(crate) const REFR_EXTRA_LIST: u32 = 0x005d_43c0;
 /// The log function (cdecl, `format, ...`) the `InitItem`s report with.
-const MASTERFILE_LOG: u32 = 0x005b_5e40;
+pub(crate) const MASTERFILE_LOG: u32 = 0x005b_5e40;
 /// Two methods of `ExtraDataList` (in `extradatalist.cpp` by address range;
 /// `this` is the list, the arguments are a reference and a flag, 1 to add)
 /// that `ExtraReflectorRefs::InitItem` calls for effect flag bits 0 and 1.
-const REFLECTOR_ADD_FIRST: u32 = 0x0041_f4c0;
-const REFLECTOR_ADD_SECOND: u32 = 0x0041_f650;
+pub(crate) const REFLECTOR_ADD_FIRST: u32 = 0x0041_f4c0;
+pub(crate) const REFLECTOR_ADD_SECOND: u32 = 0x0041_f650;
 /// `ExtraDataList::SetWaterLightRef(reference, add)` (engine map name; `this`
 /// is the extra-data list).
-const WATER_LIGHT_REF_SET: u32 = 0x0041_f840;
+pub(crate) const WATER_LIGHT_REF_SET: u32 = 0x0041_f840;
 /// Removes from the list starting at `this` the first node whose item equals
 /// the word at the address given (in `highprocess.cpp` by address range).
-const SIMPLE_LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+pub(crate) const SIMPLE_LIST_REMOVE_ITEM: u32 = 0x0090_5330;
 /// Whether the list at `this` holds an item equal to the word at the address
 /// given (the engine map has no name for it).
-const SIMPLE_LIST_CONTAINS: u32 = 0x005f_65d0;
+pub(crate) const SIMPLE_LIST_CONTAINS: u32 = 0x005f_65d0;
 /// The constructor of a `REF_DECAL_DATA` (`this` is the 0x1c-byte block; it
 /// runs two folded `NiPoint3` constructors and returns `this`).
-const REF_DECAL_DATA_CONSTRUCT: u32 = 0x0055_a400;
+pub(crate) const REF_DECAL_DATA_CONSTRUCT: u32 = 0x0055_a400;
 /// `strlen(string)` (the wrapper around the CRT function `00ec6130`, cdecl).
-const STRLEN: u32 = 0x0044_a670;
+pub(crate) const STRLEN: u32 = 0x0044_a670;
 /// `strcpy_s(destination, size, source)` (the wrapper around `00ec65a6`,
 /// cdecl).
-const STRING_COPY_CHECKED: u32 = 0x0040_6d30;
+pub(crate) const STRING_COPY_CHECKED: u32 = 0x0040_6d30;
 
 /// The messages the `InitItem`s log (the format strings of `MASTERFILE_LOG`;
 /// each takes one form id).
-const MESSAGE_DECAL_NOT_FOUND: u32 = 0x0101_5cf8;
-const MESSAGE_REFLECTOR_NOT_FOUND: u32 = 0x0101_5d8c;
-const MESSAGE_NOT_PERSISTENT: u32 = 0x0101_5d30;
-const MESSAGE_LIT_WATER_NOT_FOUND: u32 = 0x0101_5dc8;
+pub(crate) const MESSAGE_DECAL_NOT_FOUND: u32 = 0x0101_5cf8;
+pub(crate) const MESSAGE_REFLECTOR_NOT_FOUND: u32 = 0x0101_5d8c;
+pub(crate) const MESSAGE_NOT_PERSISTENT: u32 = 0x0101_5d30;
+pub(crate) const MESSAGE_LIT_WATER_NOT_FOUND: u32 = 0x0101_5dc8;
 
 layout! {
     /// `NiPoint3` (Xbox PDB): three floats.
@@ -1084,35 +1084,35 @@ layout! {
 }
 
 /// The count of a `BSSimpleArray`.
-fn array_size(e: &mut Engine, array: Ptr<BSSimpleArray>) -> u32 {
+pub(crate) fn array_size(e: &mut Engine, array: Ptr<BSSimpleArray>) -> u32 {
     e.call(SIMPLE_ARRAY_SIZE, &args![array]).u32()
 }
 
 /// The address of slot `index` of a `BSSimpleArray`.
-fn array_slot(e: &mut Engine, array: Ptr<BSSimpleArray>, index: u32) -> Ptr {
+pub(crate) fn array_slot(e: &mut Engine, array: Ptr<BSSimpleArray>, index: u32) -> Ptr {
     e.call(SIMPLE_ARRAY_AT, &args![array, index]).ptr()
 }
 
 /// The pointer stored in slot `index` of a `BSSimpleArray` of pointers.
-fn array_pointer_at<T>(e: &mut Engine, array: Ptr<BSSimpleArray>, index: u32) -> Ptr<T> {
+pub(crate) fn array_pointer_at<T>(e: &mut Engine, array: Ptr<BSSimpleArray>, index: u32) -> Ptr<T> {
     let slot = array_slot(e, array, index);
     Ptr::new(e.mem.u32(slot.addr()))
 }
 
 /// `_ftol2_sse` on a `float`.
-fn float_to_int(e: &mut Engine, value: f32) -> i32 {
+pub(crate) fn float_to_int(e: &mut Engine, value: f32) -> i32 {
     e.call(FTOL, &args![value as f64]).i32()
 }
 
 /// The base constructor, the vtable store that follows it.
-fn construct_base(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) {
+pub(crate) fn construct_base(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) {
     e.call(BS_EXTRA_DATA_CONSTRUCT, &args![this, extra_type]);
     e.mem.set_u32(this.addr(), vtable);
 }
 
 /// `operator delete(this)` when bit 0 of `flags` is set (the tail of every
 /// scalar deleting destructor).
-fn delete_when_asked(e: &mut Engine, this: Ptr, flags: u32) {
+pub(crate) fn delete_when_asked(e: &mut Engine, this: Ptr, flags: u32) {
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
@@ -1123,7 +1123,7 @@ fn delete_when_asked(e: &mut Engine, this: Ptr, flags: u32) {
 /// means the answer is already true (`other` is not of that class, or the base
 /// says they differ); `Some(cast)` is `other` as the class, whose own fields
 /// remain to be compared.
-fn compare_prologue<T, U>(
+pub(crate) fn compare_prologue<T, U>(
     e: &mut Engine,
     this: Ptr<T>,
     other: Ptr,
@@ -1148,7 +1148,7 @@ fn compare_prologue<T, U>(
 /// at +0xc: resets the vtable, runs the owned object's scalar deleting
 /// destructor (`deleter`, with its flag set to 1) when there is one, then the
 /// base destructor. The exception-unwinding frame is not translated.
-fn destroy_owner(e: &mut Engine, this: Ptr, vtable: u32, deleter: u32) {
+pub(crate) fn destroy_owner(e: &mut Engine, this: Ptr, vtable: u32, deleter: u32) {
     e.mem.set_u32(this.addr(), vtable);
     let owned = Ptr::<()>::new(e.mem.u32(this.addr() + 0xc));
     if !owned.is_null() {
@@ -1474,7 +1474,7 @@ pub fn fn_00430780(
 }
 
 /// Copies three 32-bit words (a `NiPoint3`) bit for bit.
-fn copy_words(e: &mut Engine, from: u32, to: u32) {
+pub(crate) fn copy_words(e: &mut Engine, from: u32, to: u32) {
     for word in 0..3 {
         let value = e.mem.u32(from + 4 * word);
         e.mem.set_u32(to + 4 * word, value);
@@ -2874,7 +2874,7 @@ pub fn extra_tres_pass_package_destructor(e: &mut Engine, this: Ptr<ExtraTresPas
 /// constructor, then a newly allocated, constructed 8-byte list (null when the
 /// allocation fails) stored in `pCrime`. `ACTOR_LIST_CONSTRUCT` is the
 /// constructor of an empty `BSSimpleList` of any element type.
-fn construct_player_crime_list(e: &mut Engine, this: Ptr<ExtraPlayerCrimeList>) {
+pub(crate) fn construct_player_crime_list(e: &mut Engine, this: Ptr<ExtraPlayerCrimeList>) {
     construct_base(
         e,
         this.cast(),
@@ -3060,7 +3060,7 @@ pub fn fn_00432da0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// The `__RTDynamicCast` the `Compare` and `Copy` methods start with: `other`
 /// as the class with the RTTI descriptor `target_type`, null when it is not
 /// one.
-fn dynamic_cast_extra<U>(e: &mut Engine, other: Ptr, target_type: u32) -> Ptr<U> {
+pub(crate) fn dynamic_cast_extra<U>(e: &mut Engine, other: Ptr, target_type: u32) -> Ptr<U> {
     e.call(
         DYNAMIC_CAST,
         &args![other, 0u32, BS_EXTRA_DATA_TYPE, target_type, 0u32],
@@ -3069,25 +3069,25 @@ fn dynamic_cast_extra<U>(e: &mut Engine, other: Ptr, target_type: u32) -> Ptr<U>
 }
 
 /// Whether the list node holds no item and has no successor.
-fn list_node_is_empty(e: &mut Engine, node: Ptr<BSSimpleList>) -> bool {
+pub(crate) fn list_node_is_empty(e: &mut Engine, node: Ptr<BSSimpleList>) -> bool {
     e.call(SIMPLE_LIST_IS_EMPTY, &args![node]).bool()
 }
 
 /// The item of a list node (the word its item slot holds).
-fn list_node_item(e: &mut Engine, node: Ptr<BSSimpleList>) -> u32 {
+pub(crate) fn list_node_item(e: &mut Engine, node: Ptr<BSSimpleList>) -> u32 {
     let slot = e.call(SIMPLE_LIST_ITEM_SLOT, &args![node]).u32();
     e.mem.u32(slot)
 }
 
 /// The node after `node` (null at the end).
-fn list_node_next(e: &mut Engine, node: Ptr<BSSimpleList>) -> Ptr<BSSimpleList> {
+pub(crate) fn list_node_next(e: &mut Engine, node: Ptr<BSSimpleList>) -> Ptr<BSSimpleList> {
     e.call(SIMPLE_LIST_NEXT, &args![node]).ptr()
 }
 
 /// The constructor of a class that holds a list of its own at +0xc and
 /// nothing else: the base constructor, the vtable, then the list's
 /// constructor.
-fn construct_with_list(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) {
+pub(crate) fn construct_with_list(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) {
     construct_base(e, this, extra_type, vtable);
     e.call(
         SIMPLE_LIST_CONSTRUCT,
@@ -3098,7 +3098,7 @@ fn construct_with_list(e: &mut Engine, this: Ptr, extra_type: u32, vtable: u32) 
 /// The destructor body of the classes that hold a list at +0xc and free its
 /// nodes themselves: resets the vtable, runs the list's clear and its
 /// destructor body, then the base destructor.
-fn destroy_with_list(e: &mut Engine, this: Ptr, vtable: u32) {
+pub(crate) fn destroy_with_list(e: &mut Engine, this: Ptr, vtable: u32) {
     e.mem.set_u32(this.addr(), vtable);
     let list = Ptr::<BSSimpleList>::new(this.addr() + 0xc);
     e.call(SIMPLE_LIST_CLEAR, &args![list]);
@@ -3801,7 +3801,7 @@ pub fn fn_00433d40(e: &mut Engine, this: Ptr<ExtraDecalRefs>) {
 /// compile index, adds it to the form id held at `id_slot` (a word on the
 /// game's stack, modified in place), looks the form up and casts it to a
 /// `TESObjectREFR`. Returns the reference, or null when there is none.
-fn resolve_reference(e: &mut Engine, owner: Ptr, id_slot: Ptr) -> Ptr {
+pub(crate) fn resolve_reference(e: &mut Engine, owner: Ptr, id_slot: Ptr) -> Ptr {
     let file = e.call(FORM_GET_FILE, &args![owner, 0xffff_ffffu32]).u32();
     e.call(FORM_ADD_COMPILE_INDEX, &args![id_slot, file]);
     let id = e.mem.u32(id_slot.addr());
@@ -3818,7 +3818,7 @@ fn resolve_reference(e: &mut Engine, owner: Ptr, id_slot: Ptr) -> Ptr {
 /// entry (the pointer held at `item_slot`) is removed after `previous`, and
 /// the walk continues at the node after `previous`. The entry is then
 /// deleted. Returns the node the walk goes on with.
-fn drop_unresolved_entry(
+pub(crate) fn drop_unresolved_entry(
     e: &mut Engine,
     node: Ptr<BSSimpleList>,
     previous: Ptr<BSSimpleList>,
@@ -3992,7 +3992,7 @@ pub fn extra_lit_water_refs_init_item(e: &mut Engine, this: Ptr<ExtraLitWaterRef
 /// same number of entries, and every entry of `other_list` must have an entry
 /// of the same first word in `this` (`GetRefDecalData`) whose first
 /// `entry_size` bytes are equal. Returns true when they differ.
-fn entry_lists_differ(
+pub(crate) fn entry_lists_differ(
     e: &mut Engine,
     this: Ptr<ExtraDecalRefs>,
     other_list: Ptr<BSSimpleList>,
@@ -4143,7 +4143,7 @@ pub fn fn_00434480(
 /// (`ExtraReflectedRefs`, `ExtraReflectorRefs`): resets the vtable, deletes
 /// every entry, clears the list, runs the list's destructor body, then the
 /// base destructor. The exception-unwinding frame is not translated.
-fn destroy_with_owned_entries(e: &mut Engine, this: Ptr, vtable: u32) {
+pub(crate) fn destroy_with_owned_entries(e: &mut Engine, this: Ptr, vtable: u32) {
     e.mem.set_u32(this.addr(), vtable);
     let list = Ptr::<BSSimpleList>::new(this.addr() + 0xc);
     let mut node = list;
@@ -4206,7 +4206,11 @@ pub fn extra_reflected_refs_copy(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, 
 /// The loop of the reflected and reflector `Copy` methods: adds at the head of
 /// `list` a copy (8 bytes, built like `REF_REFLECTED_DATA`: the list-node
 /// constructor `0096a2d0` clears it) of each entry of `source`.
-fn copy_reference_entries(e: &mut Engine, list: Ptr<BSSimpleList>, source: Ptr<BSSimpleList>) {
+pub(crate) fn copy_reference_entries(
+    e: &mut Engine,
+    list: Ptr<BSSimpleList>,
+    source: Ptr<BSSimpleList>,
+) {
     let mut node = source;
     while !node.is_null() && !list_node_is_empty(e, node) {
         let item = list_node_item(e, node);
@@ -4297,7 +4301,7 @@ pub fn fn_00434950(e: &mut Engine, this: Ptr<ExtraWaterLightRefs>) {
 /// The `Compare` of the two reference-list classes `ExtraWaterLightRefs` and
 /// `ExtraLitWaterRefs` after their cast: true when the lists have a different
 /// number of entries or when an entry of the other list is not in this list.
-fn reference_lists_differ(
+pub(crate) fn reference_lists_differ(
     e: &mut Engine,
     this_list: Ptr<BSSimpleList>,
     other_list: Ptr<BSSimpleList>,

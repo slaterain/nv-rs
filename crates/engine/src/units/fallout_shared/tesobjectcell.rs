@@ -64,25 +64,25 @@ use crate::units::fallout_shared::tesobjectrefr::TESObjectREFR;
 
 /// A four-character chunk tag as the record reader compares it (the bytes
 /// in file order, read as a little-endian word).
-const fn tag(name: &[u8; 4]) -> u32 {
+pub(crate) const fn tag(name: &[u8; 4]) -> u32 {
     u32::from_le_bytes(*name)
 }
 
-const DATA: u32 = tag(b"DATA");
-const EXTERIOR_COORDINATES: u32 = tag(b"XCLC");
-const INTERIOR_LIGHTING: u32 = tag(b"XCLL");
-const WATER_HEIGHT: u32 = tag(b"XCLW");
-const LIGHTING_TEMPLATE_ID: u32 = tag(b"LTMP");
-const INHERITANCE_FLAGS: u32 = tag(b"LNAM");
-const WATER_NOISE_TEXTURE: u32 = tag(b"XNAM");
-const FULL_NAME: u32 = tag(b"FULL");
-const EDITOR_ID: u32 = tag(b"EDID");
-const OBJECT_BOUNDS: u32 = tag(b"OBND");
-const IMPACT_SWAP_FIRST: u32 = tag(b"IMPF");
-const IMPACT_SWAP_SECOND: u32 = tag(b"IMPS");
+pub(crate) const DATA: u32 = tag(b"DATA");
+pub(crate) const EXTERIOR_COORDINATES: u32 = tag(b"XCLC");
+pub(crate) const INTERIOR_LIGHTING: u32 = tag(b"XCLL");
+pub(crate) const WATER_HEIGHT: u32 = tag(b"XCLW");
+pub(crate) const LIGHTING_TEMPLATE_ID: u32 = tag(b"LTMP");
+pub(crate) const INHERITANCE_FLAGS: u32 = tag(b"LNAM");
+pub(crate) const WATER_NOISE_TEXTURE: u32 = tag(b"XNAM");
+pub(crate) const FULL_NAME: u32 = tag(b"FULL");
+pub(crate) const EDITOR_ID: u32 = tag(b"EDID");
+pub(crate) const OBJECT_BOUNDS: u32 = tag(b"OBND");
+pub(crate) const IMPACT_SWAP_FIRST: u32 = tag(b"IMPF");
+pub(crate) const IMPACT_SWAP_SECOND: u32 = tag(b"IMPS");
 
 /// The chunk tags `Load` hands to `ExtraDataList::Load`.
-const EXTRA_DATA_TAGS: [u32; 76] = [
+pub(crate) const EXTRA_DATA_TAGS: [u32; 76] = [
     tag(b"XPPA"),
     tag(b"XRGB"),
     tag(b"XGLB"),
@@ -162,291 +162,291 @@ const EXTRA_DATA_TAGS: [u32; 76] = [
 ];
 
 // Vtables the constructor and destructor store.
-const CELL_VTABLE: u32 = 0x0102_e9b4;
-const CELL_FULL_NAME_VTABLE: u32 = 0x0102_e9a0;
+pub(crate) const CELL_VTABLE: u32 = 0x0102_e9b4;
+pub(crate) const CELL_FULL_NAME_VTABLE: u32 = 0x0102_e9a0;
 
 // Form and cell accessors (see the header).
 /// `cFormType` (`+0x04`) of a form.
-const FORM_TYPE: u32 = 0x0040_1170;
+pub(crate) const FORM_TYPE: u32 = 0x0040_1170;
 /// `iFormFlags & 0x4000`.
-const FORM_FLAG_4000: u32 = 0x0040_77c0;
+pub(crate) const FORM_FLAG_4000: u32 = 0x0040_77c0;
 /// `iFormFlags & 0x20`.
-const FORM_FLAG_20: u32 = 0x0044_0d80;
+pub(crate) const FORM_FLAG_20: u32 = 0x0044_0d80;
 /// `iFormFlags & 0x2`.
-const FORM_FLAG_2: u32 = 0x0046_0340;
+pub(crate) const FORM_FLAG_2: u32 = 0x0046_0340;
 /// `iFormFlags & 0x8`.
-const FORM_FLAG_8: u32 = 0x0040_13e0;
+pub(crate) const FORM_FLAG_8: u32 = 0x0040_13e0;
 /// `iFormFlags` (`+0x08`).
-const FORM_FLAGS: u32 = 0x0044_ddc0;
+pub(crate) const FORM_FLAGS: u32 = 0x0044_ddc0;
 /// `iFormID` (`+0x0C`).
-const FORM_ID: u32 = 0x0084_e3a0;
+pub(crate) const FORM_ID: u32 = 0x0084_e3a0;
 /// `TESObjectCELL` "is interior": `cCellFlags & 1`.
-const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
+pub(crate) const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
 /// The cell's persistent flag: `iFormFlags & 0x400`.
-const CELL_PERSISTENT_FLAG: u32 = 0x0055_16c0;
+pub(crate) const CELL_PERSISTENT_FLAG: u32 = 0x0055_16c0;
 /// `TESObjectCELL::GetWorldSpace` (Xbox PDB): `pWorldSpace` for an exterior
 /// cell, null for an interior one.
-const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+pub(crate) const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
 /// The exterior data (`pCellData`) of an exterior cell, null for an interior.
-const CELL_EXTERIOR_DATA: u32 = 0x0054_45d0;
+pub(crate) const CELL_EXTERIOR_DATA: u32 = 0x0054_45d0;
 /// The interior data (`pCellData`) of an interior cell, null for an exterior.
-const CELL_INTERIOR_DATA: u32 = 0x0054_4600;
+pub(crate) const CELL_INTERIOR_DATA: u32 = 0x0054_4600;
 /// `TESObjectCELL::CreateCellData` (Xbox PDB).
-const CELL_CREATE_CELL_DATA: u32 = 0x0054_4630;
+pub(crate) const CELL_CREATE_CELL_DATA: u32 = 0x0054_4630;
 /// `TESObjectCELL::GetDataX` / `GetDataY` (Xbox PDB).
-const CELL_GET_DATA_X: u32 = 0x0054_4c30;
-const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
+pub(crate) const CELL_GET_DATA_X: u32 = 0x0054_4c30;
+pub(crate) const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
 /// Reads / writes the lighting template pointer (`+0xD8`).
-const CELL_GET_LIGHTING_TEMPLATE: u32 = 0x0055_8b40;
-const CELL_SET_LIGHTING_TEMPLATE: u32 = 0x0055_8b60;
+pub(crate) const CELL_GET_LIGHTING_TEMPLATE: u32 = 0x0055_8b40;
+pub(crate) const CELL_SET_LIGHTING_TEMPLATE: u32 = 0x0055_8b60;
 /// Reads the lighting-template inheritance flags (`+0xDC`).
-const CELL_GET_INHERITANCE_FLAGS: u32 = 0x0049_7280;
+pub(crate) const CELL_GET_INHERITANCE_FLAGS: u32 = 0x0049_7280;
 /// Writes the cell flags byte (`+0x24`).
-const CELL_SET_CELL_FLAGS: u32 = 0x0046_1310;
+pub(crate) const CELL_SET_CELL_FLAGS: u32 = 0x0046_1310;
 /// The cell's `ExtraDataList` (`this + 0x28`).
-const CELL_EXTRA_DATA_LIST: u32 = 0x0046_10d0;
+pub(crate) const CELL_EXTRA_DATA_LIST: u32 = 0x0046_10d0;
 /// `TESObjectCELL::SetLand` (Xbox PDB).
-const CELL_SET_LAND: u32 = 0x0054_70a0;
+pub(crate) const CELL_SET_LAND: u32 = 0x0054_70a0;
 /// `TESObjectCELL::AddReference` (Xbox PDB): `(reference, 0)`.
-const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
+pub(crate) const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
 /// Sets `fWaterHeight` (argument: the new value).
-const CELL_SET_WATER_HEIGHT: u32 = 0x0054_7440;
+pub(crate) const CELL_SET_WATER_HEIGHT: u32 = 0x0054_7440;
 /// Replaces the cell's `NavMeshArray` (`+0x64`), deleting the old one.
-const CELL_SET_NAV_MESHES: u32 = 0x0055_7760;
+pub(crate) const CELL_SET_NAV_MESHES: u32 = 0x0055_7760;
 /// Unidentified helpers the destructor and the loader call.
-const CELL_CLEAR_STATE: u32 = 0x0054_5c10;
-const CELL_RELEASE_STATE: u32 = 0x0054_cd20;
-const CELL_CLEAR_REFERENCES: u32 = 0x0054_5030;
-const CELL_ERASE: u32 = 0x0055_10b0;
-const CELL_SET_LOADED_MASTER_DATA: u32 = 0x0054_def0;
+pub(crate) const CELL_CLEAR_STATE: u32 = 0x0054_5c10;
+pub(crate) const CELL_RELEASE_STATE: u32 = 0x0054_cd20;
+pub(crate) const CELL_CLEAR_REFERENCES: u32 = 0x0054_5030;
+pub(crate) const CELL_ERASE: u32 = 0x0055_10b0;
+pub(crate) const CELL_SET_LOADED_MASTER_DATA: u32 = 0x0054_def0;
 /// The cell-ref lock (`this + 0x80`): enter (with the name string) and leave.
-const LOCK_ENTER: u32 = 0x0040_fbf0;
-const LOCK_LEAVE: u32 = 0x0040_fba0;
+pub(crate) const LOCK_ENTER: u32 = 0x0040_fbf0;
+pub(crate) const LOCK_LEAVE: u32 = 0x0040_fba0;
 /// `BSSimpleList` constructor, destructor body and clear (on a stack list)
 /// and the list-iterator accessors.
-const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
-const LIST_CLEAR: u32 = 0x0047_0470;
-const LIST_DESTRUCT: u32 = 0x0046_ffb0;
-const LIST_PUSH_FRONT: u32 = 0x005a_e3d0;
-const CELL_REFERENCE_LIST: u32 = 0x0096_04f0;
-const LIST_IS_END: u32 = 0x0082_56d0;
-const LIST_ITEM_ADDRESS: u32 = 0x0068_15c0;
-const LIST_NEXT: u32 = 0x0072_6070;
+pub(crate) const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+pub(crate) const LIST_CLEAR: u32 = 0x0047_0470;
+pub(crate) const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+pub(crate) const LIST_PUSH_FRONT: u32 = 0x005a_e3d0;
+pub(crate) const CELL_REFERENCE_LIST: u32 = 0x0096_04f0;
+pub(crate) const LIST_IS_END: u32 = 0x0082_56d0;
+pub(crate) const LIST_ITEM_ADDRESS: u32 = 0x0068_15c0;
+pub(crate) const LIST_NEXT: u32 = 0x0072_6070;
 /// Smart-pointer slot reader / constructor / assignment / destructor.
-const SLOT_GET: u32 = 0x0055_9450;
-const SLOT_CONSTRUCT: u32 = 0x0063_3c90;
-const SLOT_ASSIGN: u32 = 0x0066_b0d0;
-const SLOT_RELEASE: u32 = 0x0045_cec0;
+pub(crate) const SLOT_GET: u32 = 0x0055_9450;
+pub(crate) const SLOT_CONSTRUCT: u32 = 0x0063_3c90;
+pub(crate) const SLOT_ASSIGN: u32 = 0x0066_b0d0;
+pub(crate) const SLOT_RELEASE: u32 = 0x0045_cec0;
 /// Heap allocation / free through the memory manager.
-const ALLOCATE: u32 = 0x0040_1000;
-const DEALLOCATE: u32 = 0x0040_1030;
+pub(crate) const ALLOCATE: u32 = 0x0040_1000;
+pub(crate) const DEALLOCATE: u32 = 0x0040_1030;
 /// `memcpy(dest, source, count)` wrapper, CRT `memcmp` and `strlen`.
-const MEMORY_COPY: u32 = 0x0040_1460;
-const CRT_MEMCMP: u32 = 0x00ec_4835;
-const CRT_STRLEN: u32 = 0x00ec_6130;
+pub(crate) const MEMORY_COPY: u32 = 0x0040_1460;
+pub(crate) const CRT_MEMCMP: u32 = 0x00ec_4835;
+pub(crate) const CRT_STRLEN: u32 = 0x00ec_6130;
 /// `__RTDynamicCast(object, 0, from, to, 0)`.
-const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(crate) const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// `printf`-style diagnostic output (a stub that returns 0 in this build).
-const DEBUG_PRINT: u32 = 0x005b_5e40;
+pub(crate) const DEBUG_PRINT: u32 = 0x005b_5e40;
 /// `MessageHandler::IncDisableWarningCount(bool)` (Xbox PDB).
-const INC_DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
+pub(crate) const INC_DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
 
 // TESForm record helpers.
-const FORM_CONSTRUCT: u32 = 0x0048_3370;
-const FORM_DESTRUCT: u32 = 0x0048_3630;
+pub(crate) const FORM_CONSTRUCT: u32 = 0x0048_3370;
+pub(crate) const FORM_DESTRUCT: u32 = 0x0048_3630;
 /// Writes `cFormType` (`+0x04`); the constructor passes 0x39.
-const FORM_SET_FORM_TYPE: u32 = 0x004f_15a0;
+pub(crate) const FORM_SET_FORM_TYPE: u32 = 0x004f_15a0;
 /// Sets (non-zero argument) or clears `iFormFlags` bit 8.
-const FORM_SET_FLAG_8: u32 = 0x0048_4ab0;
-const FORM_START_FORM: u32 = 0x0048_55a0;
-const FORM_CLOSE_FORM: u32 = 0x0048_5680;
-const FORM_ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
-const FORM_ADD_CHUNK_WORD: u32 = 0x0048_5910;
-const FORM_ADD_CHUNK_DATA: u32 = 0x0048_5990;
-const FORM_ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
-const FORM_LOAD_FORM: u32 = 0x0048_5110;
-const FORM_GET_FILE: u32 = 0x0048_4e60;
-const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
-const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
-const FORM_COMPARE_FALLBACK: u32 = 0x0048_4020;
-const FORM_BELONGS_IN_GROUP_FALLBACK: u32 = 0x0048_4150;
-const FORM_BELONGS_IN_GROUP_INTERIOR: u32 = 0x0048_54e0;
-const FORM_DUPLICATE: u32 = 0x0048_67a0;
-const FORM_SAVE_TO_FILE: u32 = 0x0048_3d20;
-const FORM_LOOK_UP: u32 = 0x0048_39c0;
-const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
-const FORM_ID_IN_WORLD_SPACE: u32 = 0x0048_5be0;
+pub(crate) const FORM_SET_FLAG_8: u32 = 0x0048_4ab0;
+pub(crate) const FORM_START_FORM: u32 = 0x0048_55a0;
+pub(crate) const FORM_CLOSE_FORM: u32 = 0x0048_5680;
+pub(crate) const FORM_ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+pub(crate) const FORM_ADD_CHUNK_WORD: u32 = 0x0048_5910;
+pub(crate) const FORM_ADD_CHUNK_DATA: u32 = 0x0048_5990;
+pub(crate) const FORM_ADD_CHUNK_ARRAY: u32 = 0x0048_56f0;
+pub(crate) const FORM_LOAD_FORM: u32 = 0x0048_5110;
+pub(crate) const FORM_GET_FILE: u32 = 0x0048_4e60;
+pub(crate) const FORM_COPY_ALL_COMPONENTS: u32 = 0x0048_51b0;
+pub(crate) const FORM_COMPARE_ALL_COMPONENTS: u32 = 0x0048_5270;
+pub(crate) const FORM_COMPARE_FALLBACK: u32 = 0x0048_4020;
+pub(crate) const FORM_BELONGS_IN_GROUP_FALLBACK: u32 = 0x0048_4150;
+pub(crate) const FORM_BELONGS_IN_GROUP_INTERIOR: u32 = 0x0048_54e0;
+pub(crate) const FORM_DUPLICATE: u32 = 0x0048_67a0;
+pub(crate) const FORM_SAVE_TO_FILE: u32 = 0x0048_3d20;
+pub(crate) const FORM_LOOK_UP: u32 = 0x0048_39c0;
+pub(crate) const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+pub(crate) const FORM_ID_IN_WORLD_SPACE: u32 = 0x0048_5be0;
 /// `TESFullName::Save` / loader, and the full-name accessors.
-const FULL_NAME_SAVE: u32 = 0x0048_7010;
-const FULL_NAME_LOAD: u32 = 0x0048_7050;
-const FULL_NAME_LENGTH: u32 = 0x0048_cee0;
-const TEXT_GET_STRING: u32 = 0x0040_8da0;
-const FULL_NAME_SET: u32 = 0x0048_9100;
+pub(crate) const FULL_NAME_SAVE: u32 = 0x0048_7010;
+pub(crate) const FULL_NAME_LOAD: u32 = 0x0048_7050;
+pub(crate) const FULL_NAME_LENGTH: u32 = 0x0048_cee0;
+pub(crate) const TEXT_GET_STRING: u32 = 0x0040_8da0;
+pub(crate) const FULL_NAME_SET: u32 = 0x0048_9100;
 /// `TESTexture` constructor and destructor (the water noise texture).
-const TEXTURE_CONSTRUCT: u32 = 0x0048_e270;
-const TEXTURE_DESTRUCT: u32 = 0x0048_e2e0;
+pub(crate) const TEXTURE_CONSTRUCT: u32 = 0x0048_e270;
+pub(crate) const TEXTURE_DESTRUCT: u32 = 0x0048_e2e0;
 /// `ExtraDataList` constructor, destructor, `InitItem`, `Save`, `Load`,
 /// `CopyList`, `CompareList`, `RemoveNonPersistentCellData`,
 /// `GetRegionList`, `SetNorthRotation`, impact-swap data accessors.
-const EXTRA_LIST_CONSTRUCT: u32 = 0x0041_0360;
-const EXTRA_LIST_DESTRUCT: u32 = 0x0041_03b0;
-const EXTRA_LIST_INIT_ITEM: u32 = 0x0041_6be0;
-const EXTRA_LIST_SAVE: u32 = 0x0041_2970;
-const EXTRA_LIST_LOAD: u32 = 0x0041_44a0;
-const EXTRA_LIST_COPY_LIST: u32 = 0x0041_1ec0;
-const EXTRA_LIST_COMPARE_LIST: u32 = 0x0041_27e0;
-const EXTRA_LIST_REMOVE_NON_PERSISTENT: u32 = 0x0041_20b0;
-const EXTRA_LIST_GET_REGION_LIST: u32 = 0x0041_bce0;
-const EXTRA_LIST_SET_NORTH_ROTATION: u32 = 0x0042_1a70;
-const EXTRA_LIST_GET_IMPACT_SWAP: u32 = 0x0041_c460;
-const EXTRA_LIST_SET_IMPACT_SWAP: u32 = 0x0041_c390;
+pub(crate) const EXTRA_LIST_CONSTRUCT: u32 = 0x0041_0360;
+pub(crate) const EXTRA_LIST_DESTRUCT: u32 = 0x0041_03b0;
+pub(crate) const EXTRA_LIST_INIT_ITEM: u32 = 0x0041_6be0;
+pub(crate) const EXTRA_LIST_SAVE: u32 = 0x0041_2970;
+pub(crate) const EXTRA_LIST_LOAD: u32 = 0x0041_44a0;
+pub(crate) const EXTRA_LIST_COPY_LIST: u32 = 0x0041_1ec0;
+pub(crate) const EXTRA_LIST_COMPARE_LIST: u32 = 0x0041_27e0;
+pub(crate) const EXTRA_LIST_REMOVE_NON_PERSISTENT: u32 = 0x0041_20b0;
+pub(crate) const EXTRA_LIST_GET_REGION_LIST: u32 = 0x0041_bce0;
+pub(crate) const EXTRA_LIST_SET_NORTH_ROTATION: u32 = 0x0042_1a70;
+pub(crate) const EXTRA_LIST_GET_IMPACT_SWAP: u32 = 0x0041_c460;
+pub(crate) const EXTRA_LIST_SET_IMPACT_SWAP: u32 = 0x0041_c390;
 /// Impact swap data: constructor (size 0x15c), `Save`, loader.
-const IMPACT_SWAP_CONSTRUCT: u32 = 0x0058_efd0;
-const IMPACT_SWAP_SAVE: u32 = 0x0058_f080;
-const IMPACT_SWAP_LOAD: u32 = 0x0058_f180;
-const REGION_LIST_RELEASE: u32 = 0x004f_6640;
+pub(crate) const IMPACT_SWAP_CONSTRUCT: u32 = 0x0058_efd0;
+pub(crate) const IMPACT_SWAP_SAVE: u32 = 0x0058_f080;
+pub(crate) const IMPACT_SWAP_LOAD: u32 = 0x0058_f180;
+pub(crate) const REGION_LIST_RELEASE: u32 = 0x004f_6640;
 /// Endian swap of the cell data in memory: flag, exterior swap and interior
 /// swap.
-const ENDIAN_SWAP_ENABLED: u32 = 0x0040_1500;
-const SWAP_EXTERIOR_DATA: u32 = 0x0046_2230;
-const SWAP_INTERIOR_DATA: u32 = 0x0052_6790;
+pub(crate) const ENDIAN_SWAP_ENABLED: u32 = 0x0040_1500;
+pub(crate) const SWAP_EXTERIOR_DATA: u32 = 0x0046_2230;
+pub(crate) const SWAP_INTERIOR_DATA: u32 = 0x0052_6790;
 
 // TESFile accessors used by Save and Load.
-const FILE_IS_MASTER: u32 = 0x0047_1c20;
-const FILE_GET_FORM_TYPE: u32 = 0x0047_2660;
-const FILE_GET_CHUNK: u32 = 0x0047_26b0;
-const FILE_NEXT_CHUNK: u32 = 0x0047_26f0;
-const FILE_GET_CHUNK_DATA: u32 = 0x0047_27f0;
-const FILE_GET_CHUNK_DATA_SIZED: u32 = 0x0047_2890;
-const FILE_ADD_FORM: u32 = 0x0047_2fe0;
-const FILE_START_GROUP: u32 = 0x0047_3310;
-const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
-const FILE_SWAP_ENDIAN: u32 = 0x0040_1680;
-const FILE_MASTER_DATA: u32 = 0x0046_7bb0;
+pub(crate) const FILE_IS_MASTER: u32 = 0x0047_1c20;
+pub(crate) const FILE_GET_FORM_TYPE: u32 = 0x0047_2660;
+pub(crate) const FILE_GET_CHUNK: u32 = 0x0047_26b0;
+pub(crate) const FILE_NEXT_CHUNK: u32 = 0x0047_26f0;
+pub(crate) const FILE_GET_CHUNK_DATA: u32 = 0x0047_27f0;
+pub(crate) const FILE_GET_CHUNK_DATA_SIZED: u32 = 0x0047_2890;
+pub(crate) const FILE_ADD_FORM: u32 = 0x0047_2fe0;
+pub(crate) const FILE_START_GROUP: u32 = 0x0047_3310;
+pub(crate) const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
+pub(crate) const FILE_SWAP_ENDIAN: u32 = 0x0040_1680;
+pub(crate) const FILE_MASTER_DATA: u32 = 0x0046_7bb0;
 
 // NavMeshArray (`+0x64`) and its smart-pointer elements.
-const NAV_MESH_ARRAY_CONSTRUCT: u32 = 0x0046_94e0;
-const NAV_MESH_ARRAY_COUNT: u32 = 0x0062_0b80;
-const NAV_MESH_ARRAY_GET: u32 = 0x0046_4f60;
-const NAV_MESH_ARRAY_ADD: u32 = 0x0046_9500;
+pub(crate) const NAV_MESH_ARRAY_CONSTRUCT: u32 = 0x0046_94e0;
+pub(crate) const NAV_MESH_ARRAY_COUNT: u32 = 0x0062_0b80;
+pub(crate) const NAV_MESH_ARRAY_GET: u32 = 0x0046_4f60;
+pub(crate) const NAV_MESH_ARRAY_ADD: u32 = 0x0046_9500;
 /// `NiPointer<NavMesh>` helpers: constructor from a raw pointer, default
 /// constructor, assignment, copy constructor, destructor, raw pointer read.
-const NAV_POINTER_FROM_RAW: u32 = 0x0046_4fc0;
-const NAV_POINTER_CONSTRUCT: u32 = 0x0042_fb00;
-const NAV_POINTER_ASSIGN: u32 = 0x0042_f4c0;
-const NAV_POINTER_COPY: u32 = 0x0042_fa20;
-const NAV_POINTER_RELEASE: u32 = 0x0042_fa40;
-const NAV_POINTER_GET: u32 = 0x0045_8b50;
+pub(crate) const NAV_POINTER_FROM_RAW: u32 = 0x0046_4fc0;
+pub(crate) const NAV_POINTER_CONSTRUCT: u32 = 0x0042_fb00;
+pub(crate) const NAV_POINTER_ASSIGN: u32 = 0x0042_f4c0;
+pub(crate) const NAV_POINTER_COPY: u32 = 0x0042_fa20;
+pub(crate) const NAV_POINTER_RELEASE: u32 = 0x0042_fa40;
+pub(crate) const NAV_POINTER_GET: u32 = 0x0045_8b50;
 /// Returns the `NavMeshArray` pointer `this + 0x64` (`pNavMeshes`).
-const CELL_NAV_MESHES: u32 = 0x0070_ec90;
+pub(crate) const CELL_NAV_MESHES: u32 = 0x0070_ec90;
 
 // Save / load of the whole game (InitItem's tail).
-const GAME_LOADER_FLAG_SETTER: u32 = 0x0046_23f0;
-const GAME_LOAD_FORM: u32 = 0x0084_95d0;
-const GAME_LOAD_NOTIFY: u32 = 0x0085_8730;
-const GAME_FINISH_A: u32 = 0x0085_9690;
-const GAME_FINISH_B: u32 = 0x0085_8af0;
-const GAME_FINISH_C: u32 = 0x0085_f850;
-const GAME_FLAG_READ: u32 = 0x0047_c850;
-const GAME_FLAG_TEST: u32 = 0x0087_27b0;
-const GAME_FLAG_WRITE: u32 = 0x0045_34f0;
-const REFERENCE_PARENT_CELL: u32 = 0x008d_6f30;
-const SAVE_FORM_BUFFER_GET_FORM: u32 = 0x007a_f430;
-const REFERENCE_ROTATION: u32 = 0x0043_0830;
+pub(crate) const GAME_LOADER_FLAG_SETTER: u32 = 0x0046_23f0;
+pub(crate) const GAME_LOAD_FORM: u32 = 0x0084_95d0;
+pub(crate) const GAME_LOAD_NOTIFY: u32 = 0x0085_8730;
+pub(crate) const GAME_FINISH_A: u32 = 0x0085_9690;
+pub(crate) const GAME_FINISH_B: u32 = 0x0085_8af0;
+pub(crate) const GAME_FINISH_C: u32 = 0x0085_f850;
+pub(crate) const GAME_FLAG_READ: u32 = 0x0047_c850;
+pub(crate) const GAME_FLAG_TEST: u32 = 0x0087_27b0;
+pub(crate) const GAME_FLAG_WRITE: u32 = 0x0045_34f0;
+pub(crate) const REFERENCE_PARENT_CELL: u32 = 0x008d_6f30;
+pub(crate) const SAVE_FORM_BUFFER_GET_FORM: u32 = 0x007a_f430;
+pub(crate) const REFERENCE_ROTATION: u32 = 0x0043_0830;
 /// The thread's error count (`TLS + 0x2B8`): getter and setter.
-const ERROR_COUNT_GET: u32 = 0x0046_e8a0;
-const ERROR_COUNT_SET: u32 = 0x004f_ffe0;
+pub(crate) const ERROR_COUNT_GET: u32 = 0x0046_e8a0;
+pub(crate) const ERROR_COUNT_SET: u32 = 0x004f_ffe0;
 /// `TESObjectREFR::GetRefPersists` / `SetRefPersists(bool)` (Xbox PDB).
-const REFERENCE_GET_PERSISTS: u32 = 0x0056_53d0;
-const REFERENCE_SET_PERSISTS: u32 = 0x0056_5480;
+pub(crate) const REFERENCE_GET_PERSISTS: u32 = 0x0056_53d0;
+pub(crate) const REFERENCE_SET_PERSISTS: u32 = 0x0056_5480;
 /// `TESObjectLAND::SetCell` (Xbox PDB).
-const LAND_SET_CELL: u32 = 0x0053_40e0;
+pub(crate) const LAND_SET_CELL: u32 = 0x0053_40e0;
 /// `TESWorldSpace::ReleaseCell` (Xbox PDB).
-const WORLD_SPACE_RELEASE_CELL: u32 = 0x0058_7760;
+pub(crate) const WORLD_SPACE_RELEASE_CELL: u32 = 0x0058_7760;
 /// Packs two 16-bit block coordinates into one key.
-const PACK_BLOCK_COORDINATES: u32 = 0x0058_7410;
+pub(crate) const PACK_BLOCK_COORDINATES: u32 = 0x0058_7410;
 
 /// `TESFullName` constructor and destructor (the component at `this + 0x18`).
-const CELL_FULL_NAME_CONSTRUCT: u32 = 0x0040_2d00;
-const CELL_FULL_NAME_DESTRUCT: u32 = 0x0059_1300;
+pub(crate) const CELL_FULL_NAME_CONSTRUCT: u32 = 0x0040_2d00;
+pub(crate) const CELL_FULL_NAME_DESTRUCT: u32 = 0x0059_1300;
 /// Byte at `+0x61D` of the loader singleton.
-const LOADER_STATE_FLAG_61D: u32 = 0x0042_26e0;
+pub(crate) const LOADER_STATE_FLAG_61D: u32 = 0x0042_26e0;
 /// `NavMeshArray` destructor body: clears the elements, then the base.
-const NAV_MESH_ARRAY_CLEAR: u32 = 0x0069_bca0;
-const NAV_MESH_ARRAY_BASE_DESTRUCT: u32 = 0x0042_f830;
+pub(crate) const NAV_MESH_ARRAY_CLEAR: u32 = 0x0069_bca0;
+pub(crate) const NAV_MESH_ARRAY_BASE_DESTRUCT: u32 = 0x0042_f830;
 /// `NiTArray` operations on the local array of `SaveReferences`.
-const NI_ARRAY_CONSTRUCT: u32 = 0x0055_94b0;
-const NI_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
-const NI_ARRAY_SET_GROW_BY: u32 = 0x0055_9490;
-const NI_ARRAY_ADD: u32 = 0x0099_38d0;
-const NI_ARRAY_COMPACT: u32 = 0x0060_0bc0;
-const NI_ARRAY_COUNT: u32 = 0x0099_38b0;
-const NI_ARRAY_ELEMENT_ADDRESS: u32 = 0x0087_7a30;
-const NI_ARRAY_SET_AT: u32 = 0x0096_ae90;
-const NI_ARRAY_DESTRUCT: u32 = 0x0055_9460;
+pub(crate) const NI_ARRAY_CONSTRUCT: u32 = 0x0055_94b0;
+pub(crate) const NI_ARRAY_SET_SIZE: u32 = 0x0096_ad30;
+pub(crate) const NI_ARRAY_SET_GROW_BY: u32 = 0x0055_9490;
+pub(crate) const NI_ARRAY_ADD: u32 = 0x0099_38d0;
+pub(crate) const NI_ARRAY_COMPACT: u32 = 0x0060_0bc0;
+pub(crate) const NI_ARRAY_COUNT: u32 = 0x0099_38b0;
+pub(crate) const NI_ARRAY_ELEMENT_ADDRESS: u32 = 0x0087_7a30;
+pub(crate) const NI_ARRAY_SET_AT: u32 = 0x0096_ae90;
+pub(crate) const NI_ARRAY_DESTRUCT: u32 = 0x0055_9460;
 /// Tests cell flag 0x20 (`cCellFlags`).
-const CELL_FLAG_20: u32 = 0x0050_2180;
+pub(crate) const CELL_FLAG_20: u32 = 0x0050_2180;
 
 // Statics.
 /// `TESObjectCELL` statics `InitStatics` and `fn_00541c00` use.
-const STATIC_SETTINGS_SOURCE: u32 = 0x011f_426c;
-const STATIC_FLAG: u32 = 0x011c_a08c;
-const STATIC_POINTER_SLOT: u32 = 0x011c_a0d8;
-const STATIC_OBJECT: u32 = 0x011c_a088;
-const STATIC_SETTING_BLOCK: u32 = 0x011c_a094;
-const STATIC_RESET_WORD: u32 = 0x011c_c54c;
-const STATIC_SETTING_BUILDER: u32 = 0x0055_4010;
-const STATIC_SETTING_GET: u32 = 0x0040_3e20;
-const STATIC_SETTING_SET: u32 = 0x004e_d780;
-const STATIC_RELEASE_HELPER: u32 = 0x0062_42f0;
+pub(crate) const STATIC_SETTINGS_SOURCE: u32 = 0x011f_426c;
+pub(crate) const STATIC_FLAG: u32 = 0x011c_a08c;
+pub(crate) const STATIC_POINTER_SLOT: u32 = 0x011c_a0d8;
+pub(crate) const STATIC_OBJECT: u32 = 0x011c_a088;
+pub(crate) const STATIC_SETTING_BLOCK: u32 = 0x011c_a094;
+pub(crate) const STATIC_RESET_WORD: u32 = 0x011c_c54c;
+pub(crate) const STATIC_SETTING_BUILDER: u32 = 0x0055_4010;
+pub(crate) const STATIC_SETTING_GET: u32 = 0x0040_3e20;
+pub(crate) const STATIC_SETTING_SET: u32 = 0x004e_d780;
+pub(crate) const STATIC_RELEASE_HELPER: u32 = 0x0062_42f0;
 /// `2048.0` as a `double` and as a `float`.
-const SETTING_LIMIT_DOUBLE: u32 = 0x0101_6968;
-const SETTING_LIMIT_FLOAT: u32 = 0x0101_8bfc;
+pub(crate) const SETTING_LIMIT_DOUBLE: u32 = 0x0101_6968;
+pub(crate) const SETTING_LIMIT_FLOAT: u32 = 0x0101_8bfc;
 /// `FLT_MAX` (the default water height).
-const DEFAULT_WATER_HEIGHT: u32 = 0x0101_6970;
+pub(crate) const DEFAULT_WATER_HEIGHT: u32 = 0x0101_6970;
 /// `-1.0` as a `double` (the north rotation factor).
-const MINUS_ONE: u32 = 0x0101_a6b0;
+pub(crate) const MINUS_ONE: u32 = 0x0101_a6b0;
 /// `"TESObjectCELL::CellRefLockEnter()"`.
-const LOCK_NAME: u32 = 0x0102_eaec;
+pub(crate) const LOCK_NAME: u32 = 0x0102_eaec;
 
 // Globals read by the record code.
 /// The `GRUP` tag word of group headers, and the form ids of the persistent
 /// world / interior groups.
-const GROUP_TAG: u32 = 0x0118_7020;
-const EXTERIOR_PARENT_LABEL: u32 = 0x0118_7314;
-const INTERIOR_PARENT_LABEL: u32 = 0x0118_72b4;
-const PLAYER_HELPER_FORM: u32 = 0x011c_a254;
+pub(crate) const GROUP_TAG: u32 = 0x0118_7020;
+pub(crate) const EXTERIOR_PARENT_LABEL: u32 = 0x0118_7314;
+pub(crate) const INTERIOR_PARENT_LABEL: u32 = 0x0118_72b4;
+pub(crate) const PLAYER_HELPER_FORM: u32 = 0x011c_a254;
 /// Singleton pointers: the object `004226e0` / `00542d20` read, the game
 /// loader (`0046 23f0`, `008495d0`) and the save-game object.
-const LOADER_STATE_POINTER: u32 = 0x011c_3f2c;
-const GAME_LOADER_POINTER: u32 = 0x011d_df38;
-const SAVE_GAME_POINTER: u32 = 0x011d_e45c;
+pub(crate) const LOADER_STATE_POINTER: u32 = 0x011c_3f2c;
+pub(crate) const GAME_LOADER_POINTER: u32 = 0x011d_df38;
+pub(crate) const SAVE_GAME_POINTER: u32 = 0x011d_e45c;
 
 // Messages.
-const CELL_NAME_TOO_LONG: u32 = 0x0102_ece8;
-const INIT_ERRORS_EXTERIOR_WORLD: u32 = 0x0102_ec58;
-const INIT_ERRORS_EXTERIOR_UNKNOWN_WORLD: u32 = 0x0102_ebd0;
-const INIT_ERRORS_INTERIOR: u32 = 0x0102_eb60;
-const LIGHTING_TEMPLATE_MISSING: u32 = 0x0102_eb10;
+pub(crate) const CELL_NAME_TOO_LONG: u32 = 0x0102_ece8;
+pub(crate) const INIT_ERRORS_EXTERIOR_WORLD: u32 = 0x0102_ec58;
+pub(crate) const INIT_ERRORS_EXTERIOR_UNKNOWN_WORLD: u32 = 0x0102_ebd0;
+pub(crate) const INIT_ERRORS_INTERIOR: u32 = 0x0102_eb60;
+pub(crate) const LIGHTING_TEMPLATE_MISSING: u32 = 0x0102_eb10;
 
 // RTTI type descriptors passed to `__RTDynamicCast`.
 /// The source type of every cast (`TESForm`).
-const RTTI_TES_FORM: u32 = 0x0118_3028;
+pub(crate) const RTTI_TES_FORM: u32 = 0x0118_3028;
 /// Cast target: `TESObjectCELL` (cells cast to themselves in `Copy`).
-const RTTI_CELL: u32 = 0x0118_3fb4;
+pub(crate) const RTTI_CELL: u32 = 0x0118_3fb4;
 /// Cast target: `TESObjectLAND` (the duplicated land).
-const RTTI_LAND: u32 = 0x0118_ac10;
+pub(crate) const RTTI_LAND: u32 = 0x0118_ac10;
 /// Cast target: the nav mesh class whose `+0x24` holds its cell.
-const RTTI_NAV_MESH: u32 = 0x0118_b6b4;
+pub(crate) const RTTI_NAV_MESH: u32 = 0x0118_b6b4;
 /// Cast target: `TESObjectREFR`.
-const RTTI_REFERENCE: u32 = 0x0118_41cc;
+pub(crate) const RTTI_REFERENCE: u32 = 0x0118_41cc;
 /// Cast target for a lighting template.
-const RTTI_LIGHTING_TEMPLATE: u32 = 0x0118_a8d0;
+pub(crate) const RTTI_LIGHTING_TEMPLATE: u32 = 0x0118_a8d0;
 /// Cast target of the "world" group labels (`TESWorldSpace`).
-const RTTI_WORLD_SPACE: u32 = 0x0118_3fd0;
+pub(crate) const RTTI_WORLD_SPACE: u32 = 0x0118_3fd0;
 /// Cast target in `fn_00543230`: an object whose virtual slot 0 gives the
 /// cell it belongs to.
-const RTTI_CELL_OWNED: u32 = 0x0118_ac2c;
+pub(crate) const RTTI_CELL_OWNED: u32 = 0x0118_ac2c;
 
 layout! {
     /// `TESObjectCELL` (Xbox PDB), 0xC0 bytes on the Xbox, 0xE0 on the PC.
@@ -519,14 +519,14 @@ layout! {
 }
 
 /// Offsets of the sub-objects inside the cell that are other classes.
-const FULL_NAME_OFFSET: u32 = 0x18;
-const EXTRA_DATA_OFFSET: u32 = 0x28;
-const WATER_NOISE_TEXTURE_OFFSET: u32 = 0x58;
-const CELL_LOCK_OFFSET: u32 = 0x80;
-const REFERENCE_LIST_OFFSET: u32 = 0xac;
+pub(crate) const FULL_NAME_OFFSET: u32 = 0x18;
+pub(crate) const EXTRA_DATA_OFFSET: u32 = 0x28;
+pub(crate) const WATER_NOISE_TEXTURE_OFFSET: u32 = 0x58;
+pub(crate) const CELL_LOCK_OFFSET: u32 = 0x80;
+pub(crate) const REFERENCE_LIST_OFFSET: u32 = 0xac;
 
 /// `__RTDynamicCast` of `object` from `TESForm` to `target`.
-fn dynamic_cast(e: &mut Engine, object: Ptr, target: u32) -> Ptr {
+pub(crate) fn dynamic_cast(e: &mut Engine, object: Ptr, target: u32) -> Ptr {
     e.call(
         RT_DYNAMIC_CAST,
         &args![object, 0u32, RTTI_TES_FORM, target, 0u32],
@@ -534,65 +534,65 @@ fn dynamic_cast(e: &mut Engine, object: Ptr, target: u32) -> Ptr {
     .ptr()
 }
 
-fn is_interior(e: &mut Engine, cell: Ptr) -> bool {
+pub(crate) fn is_interior(e: &mut Engine, cell: Ptr) -> bool {
     e.call(CELL_IS_INTERIOR, &args![cell]).bool()
 }
 
-fn persistent_flag(e: &mut Engine, cell: Ptr) -> bool {
+pub(crate) fn persistent_flag(e: &mut Engine, cell: Ptr) -> bool {
     e.call(CELL_PERSISTENT_FLAG, &args![cell]).bool()
 }
 
-fn flag_4000(e: &mut Engine, form: Ptr) -> bool {
+pub(crate) fn flag_4000(e: &mut Engine, form: Ptr) -> bool {
     e.call(FORM_FLAG_4000, &args![form]).bool()
 }
 
-fn flag_20(e: &mut Engine, form: Ptr) -> bool {
+pub(crate) fn flag_20(e: &mut Engine, form: Ptr) -> bool {
     e.call(FORM_FLAG_20, &args![form]).bool()
 }
 
-fn flag_2(e: &mut Engine, form: Ptr) -> bool {
+pub(crate) fn flag_2(e: &mut Engine, form: Ptr) -> bool {
     e.call(FORM_FLAG_2, &args![form]).bool()
 }
 
-fn form_id(e: &mut Engine, form: Ptr) -> u32 {
+pub(crate) fn form_id(e: &mut Engine, form: Ptr) -> u32 {
     e.call(FORM_ID, &args![form]).u32()
 }
 
-fn world_space(e: &mut Engine, cell: Ptr) -> Ptr {
+pub(crate) fn world_space(e: &mut Engine, cell: Ptr) -> Ptr {
     e.call(CELL_GET_WORLD_SPACE, &args![cell]).ptr()
 }
 
-fn slot_get(e: &mut Engine, slot: Ptr) -> Ptr {
+pub(crate) fn slot_get(e: &mut Engine, slot: Ptr) -> Ptr {
     e.call(SLOT_GET, &args![slot]).ptr()
 }
 
-fn slot_assign(e: &mut Engine, slot: Ptr, value: Ptr) {
+pub(crate) fn slot_assign(e: &mut Engine, slot: Ptr, value: Ptr) {
     e.call(SLOT_ASSIGN, &args![slot, value]);
 }
 
 /// The cell's list of references (`this + 0xAC`), through its accessor.
-fn reference_list(e: &mut Engine, cell: Ptr) -> Ptr {
+pub(crate) fn reference_list(e: &mut Engine, cell: Ptr) -> Ptr {
     e.call(CELL_REFERENCE_LIST, &args![cell]).ptr()
 }
 
 /// One step of the `BSSimpleList` walk: false at the end of the list.
-fn list_is_end(e: &mut Engine, node: Ptr) -> bool {
+pub(crate) fn list_is_end(e: &mut Engine, node: Ptr) -> bool {
     node.is_null() || e.call(LIST_IS_END, &args![node]).bool()
 }
 
 /// The item of a list node (the word at the address the accessor returns).
-fn list_item(e: &mut Engine, node: Ptr) -> Ptr {
+pub(crate) fn list_item(e: &mut Engine, node: Ptr) -> Ptr {
     let address = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
     Ptr::new(e.mem.u32(address))
 }
 
-fn list_next(e: &mut Engine, node: Ptr) -> Ptr {
+pub(crate) fn list_next(e: &mut Engine, node: Ptr) -> Ptr {
     e.call(LIST_NEXT, &args![node]).ptr()
 }
 
 /// A group header as the group helpers read and write it: `[0]` the `GRUP`
 /// tag, `[1]` zero, `[2]` the label, `[3]` the group type, `[4]` zero.
-fn write_group_header(e: &mut Engine, header: Ptr, group_type: u32, label: u32) {
+pub(crate) fn write_group_header(e: &mut Engine, header: Ptr, group_type: u32, label: u32) {
     let tag = e.global::<u32>(GROUP_TAG);
     let at = header.addr();
     e.mem.set_u32(at, tag);
@@ -1013,7 +1013,7 @@ pub fn tes_object_cell_save(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr)
 }
 
 /// Starts the cell's group (type 6, label = the cell's form id) in `file`.
-fn start_cell_group(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr) {
+pub(crate) fn start_cell_group(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr) {
     e.with_stack(0x14, |e, header| {
         write_group_header(e, header, 6, 0);
         let id = e.call(FORM_ID, &args![this]).u32();
@@ -1116,13 +1116,13 @@ pub fn tes_object_cell_save_references(e: &mut Engine, this: Ptr<TESObjectCELL>,
 
 /// Element `index` of the local reference array, through the element-address
 /// accessor.
-fn array_element(e: &mut Engine, array: Ptr, index: u32) -> Ptr {
+pub(crate) fn array_element(e: &mut Engine, array: Ptr, index: u32) -> Ptr {
     let address = e.call(NI_ARRAY_ELEMENT_ADDRESS, &args![array, index]).u32();
     Ptr::new(e.mem.u32(address))
 }
 
 /// `SetAt(index, &value)` on the local reference array.
-fn set_array_element(e: &mut Engine, array: Ptr, index: u32, value: Ptr) {
+pub(crate) fn set_array_element(e: &mut Engine, array: Ptr, index: u32, value: Ptr) {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), value.addr());
         e.call(NI_ARRAY_SET_AT, &args![array, index, slot]);
@@ -1262,7 +1262,12 @@ pub fn fn_005422d0(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr) -> bool 
 }
 
 /// `Load`'s `DATA` chunk (see `fn_005422d0`).
-fn load_cell_flags(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr, master_data: u32) {
+pub(crate) fn load_cell_flags(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    file: Ptr,
+    master_data: u32,
+) {
     if e.call(FILE_CHUNK_SIZE, &args![file]).u32() == 4 {
         let mut word = 0u32;
         e.with_stack(4, |e, slot| {
@@ -1299,7 +1304,7 @@ fn load_cell_flags(e: &mut Engine, this: Ptr<TESObjectCELL>, file: Ptr, master_d
 /// `Load`'s `XCLC` / `XCLL` chunks: reads `size` bytes into the cell data
 /// block, swapping it before the read when the chunk is not exactly `size`
 /// bytes and the file needs swapping, and after it when it needs swapping.
-fn load_cell_data(e: &mut Engine, file: Ptr, data: Ptr, size: u32, swap: u32) {
+pub(crate) fn load_cell_data(e: &mut Engine, file: Ptr, data: Ptr, size: u32, swap: u32) {
     if data.is_null() {
         return;
     }
@@ -1373,7 +1378,7 @@ pub fn tes_object_cell_init_item(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 }
 
 /// The error message `InitItem` prints for a cell with errors.
-fn report_init_errors(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+pub(crate) fn report_init_errors(e: &mut Engine, this: Ptr<TESObjectCELL>) {
     let cell: Ptr = this.cast();
     let world = world_space(e, cell);
     if !is_interior(e, cell) {
@@ -1416,7 +1421,7 @@ fn report_init_errors(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 /// Looks the lighting template up by the id stored in `pLightingTemplate`
 /// (made file-relative with `TESForm::AddCompileIndex`) and stores the
 /// resolved object; warns when the id does not resolve.
-fn resolve_lighting_template(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+pub(crate) fn resolve_lighting_template(e: &mut Engine, this: Ptr<TESObjectCELL>) {
     let cell: Ptr = this.cast();
     if e.call(CELL_GET_LIGHTING_TEMPLATE, &args![cell]).u32() == 0 {
         return;
@@ -1442,7 +1447,7 @@ fn resolve_lighting_template(e: &mut Engine, this: Ptr<TESObjectCELL>) {
 }
 
 /// The reference and nav mesh walk at the end of `InitItem`.
-fn initialize_references(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+pub(crate) fn initialize_references(e: &mut Engine, this: Ptr<TESObjectCELL>) {
     let cell: Ptr = this.cast();
     let loader = Ptr::<()>::new(e.global::<u32>(GAME_LOADER_POINTER));
     let save_game = Ptr::<()>::new(e.global::<u32>(SAVE_GAME_POINTER));
@@ -1740,7 +1745,12 @@ pub fn tes_object_cell_create_duplicate_form(
 }
 
 /// The nav mesh part of `CreateDuplicateForm`.
-fn duplicate_nav_meshes(e: &mut Engine, this: Ptr<TESObjectCELL>, new_cell: Ptr, arg: u32) {
+pub(crate) fn duplicate_nav_meshes(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    new_cell: Ptr,
+    arg: u32,
+) {
     let memory = e.call(ALLOCATE, &args![0x10u32]).ptr::<()>();
     let array = if memory.is_null() {
         Ptr::NULL
@@ -2166,109 +2176,109 @@ pub fn fn_00544490(e: &mut Engine, this: Ptr) -> bool {
 // that field (a bit of `iLightingTemplateInheritanceFlags`).
 
 /// `TESWorldSpace` test of form flag 0x80000 (`iFormFlags`).
-const WORLD_SPACE_FLAG_80000: u32 = 0x0058_6230;
+pub(crate) const WORLD_SPACE_FLAG_80000: u32 = 0x0058_6230;
 /// `TESWorldSpace` test of bit 2 of the byte at `+0x4C`.
-const WORLD_SPACE_FLAG_4C_2: u32 = 0x0058_6210;
+pub(crate) const WORLD_SPACE_FLAG_4C_2: u32 = 0x0058_6210;
 /// `INTERIOR_DATA` constructor (a cell's interior data, 0x2C bytes).
-const INTERIOR_DATA_CONSTRUCT: u32 = 0x0052_6640;
+pub(crate) const INTERIOR_DATA_CONSTRUCT: u32 = 0x0052_6640;
 /// `EXTERIOR_DATA` constructor (a cell's exterior data, 0xC bytes).
-const EXTERIOR_DATA_CONSTRUCT: u32 = 0x0054_0720;
+pub(crate) const EXTERIOR_DATA_CONSTRUCT: u32 = 0x0054_0720;
 /// Whether the cell inherits a field of its lighting template: tests `mask`
 /// against `iLightingTemplateInheritanceFlags`.
-const CELL_INHERITS_LIGHTING_FIELD: u32 = 0x0055_8b80;
+pub(crate) const CELL_INHERITS_LIGHTING_FIELD: u32 = 0x0055_8b80;
 /// The lighting template's accessors for the fields the cell can inherit.
-const TEMPLATE_AMBIENT: u32 = WORD_AT_18;
-const TEMPLATE_DIRECTIONAL: u32 = 0x0044_1110;
-const TEMPLATE_FOG: u32 = 0x007a_f430;
-const TEMPLATE_FOG_NEAR: u32 = 0x0052_6ac0;
-const TEMPLATE_FOG_FAR: u32 = 0x0052_6ae0;
-const TEMPLATE_DIRECTIONAL_XY: u32 = 0x0055_b980;
-const TEMPLATE_DIRECTIONAL_Z: u32 = 0x0067_1d10;
-const TEMPLATE_CLIP_DISTANCE: u32 = 0x009a_9350;
-const TEMPLATE_FOG_POWER: u32 = 0x0059_8040;
+pub(crate) const TEMPLATE_AMBIENT: u32 = WORD_AT_18;
+pub(crate) const TEMPLATE_DIRECTIONAL: u32 = 0x0044_1110;
+pub(crate) const TEMPLATE_FOG: u32 = 0x007a_f430;
+pub(crate) const TEMPLATE_FOG_NEAR: u32 = 0x0052_6ac0;
+pub(crate) const TEMPLATE_FOG_FAR: u32 = 0x0052_6ae0;
+pub(crate) const TEMPLATE_DIRECTIONAL_XY: u32 = 0x0055_b980;
+pub(crate) const TEMPLATE_DIRECTIONAL_Z: u32 = 0x0067_1d10;
+pub(crate) const TEMPLATE_CLIP_DISTANCE: u32 = 0x009a_9350;
+pub(crate) const TEMPLATE_FOG_POWER: u32 = 0x0059_8040;
 /// `255.0` (`double`): the divisor that turns a colour byte into a float.
-const COLOUR_BYTE_SCALE: u32 = 0x0101_e568;
+pub(crate) const COLOUR_BYTE_SCALE: u32 = 0x0101_e568;
 /// `3000.0` (`double`): bound size above which an emittance reference is a
 /// large animated reference.
-const LARGE_BOUND_SIZE: u32 = 0x0102_ed48;
+pub(crate) const LARGE_BOUND_SIZE: u32 = 0x0102_ed48;
 /// `LOADED_CELL_DATA` constructors: the map constructors (hash size
 /// argument) and the matching destructors.
-const MAP_CONSTRUCT_REFERENCE_NODE: u32 = 0x0055_8d40;
-const MAP_CONSTRUCT_FORM_REFERENCE: u32 = 0x0055_8d70;
-const MAP_CONSTRUCT_MULTI_BOUND: u32 = 0x0055_8da0;
-const MAP_DESTRUCT_REFERENCE_NODE: u32 = 0x0055_8f20;
-const MAP_DESTRUCT_FORM_REFERENCE: u32 = 0x0055_9020;
-const MAP_DESTRUCT_MULTI_BOUND: u32 = 0x0055_91d0;
+pub(crate) const MAP_CONSTRUCT_REFERENCE_NODE: u32 = 0x0055_8d40;
+pub(crate) const MAP_CONSTRUCT_FORM_REFERENCE: u32 = 0x0055_8d70;
+pub(crate) const MAP_CONSTRUCT_MULTI_BOUND: u32 = 0x0055_8da0;
+pub(crate) const MAP_DESTRUCT_REFERENCE_NODE: u32 = 0x0055_8f20;
+pub(crate) const MAP_DESTRUCT_FORM_REFERENCE: u32 = 0x0055_9020;
+pub(crate) const MAP_DESTRUCT_MULTI_BOUND: u32 = 0x0055_91d0;
 /// `NiTMapBase` operations: `SetAt(key, value)`, `RemoveAt(key)`,
 /// `GetAt(key, &value)`, the first-slot iterator and
 /// `GetNext(&position, &key, &value)`.
-const MAP_SET_AT: u32 = 0x0084_4700;
-const MAP_REMOVE_AT: u32 = 0x0040_5430;
-const MAP_GET_AT: u32 = 0x006c_62d0;
-const MAP_FIRST_POSITION: u32 = 0x004b_9ba0;
-const MAP_GET_NEXT: u32 = 0x0055_9120;
+pub(crate) const MAP_SET_AT: u32 = 0x0084_4700;
+pub(crate) const MAP_REMOVE_AT: u32 = 0x0040_5430;
+pub(crate) const MAP_GET_AT: u32 = 0x006c_62d0;
+pub(crate) const MAP_FIRST_POSITION: u32 = 0x004b_9ba0;
+pub(crate) const MAP_GET_NEXT: u32 = 0x0055_9120;
 /// `SetAt(key, smart pointer by value)` on the multibound map.
-const MAP_SET_AT_MULTI_BOUND: u32 = 0x006c_6920;
+pub(crate) const MAP_SET_AT_MULTI_BOUND: u32 = 0x006c_6920;
 /// `BSSimpleList` operations: remove the item whose address is passed, and
 /// insert after a node; and `pop front` (removes the head).
-const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
-const LIST_INSERT_AFTER: u32 = 0x0090_5820;
-const LIST_POP_FRONT: u32 = 0x0063_f7b0;
+pub(crate) const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+pub(crate) const LIST_INSERT_AFTER: u32 = 0x0090_5820;
+pub(crate) const LIST_POP_FRONT: u32 = 0x0063_f7b0;
 /// The word at `+4` of an object (also the list-node `next` accessor).
-const WORD_AT_4: u32 = 0x0072_6070;
+pub(crate) const WORD_AT_4: u32 = 0x0072_6070;
 /// The word at `+0x18` of an object (the owner of the cell's 3D node).
-const WORD_AT_18: u32 = 0x0096_11e0;
+pub(crate) const WORD_AT_18: u32 = 0x0096_11e0;
 /// Reference predicates and accessors (`TESObjectREFR`).
-const REFERENCE_IS_MARKER_FORM: u32 = 0x0043_9f90;
-const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
-const REFERENCE_LINKED_NODE_OWNER: u32 = 0x0056_9ac0;
-const REFERENCE_EMITTANCE_SOURCE: u32 = 0x0056_9580;
-const REFERENCE_IS_SCRIPTED: u32 = 0x0056_56d0;
-const REFERENCE_IS_ACTIVATING_CHILDREN: u32 = 0x0056_a250;
-const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
-const REFERENCE_GET_MULTI_BOUND_ROOM: u32 = 0x0056_99b0;
-const REFERENCE_GET_MULTI_BOUND: u32 = 0x0056_9920;
-const REFERENCE_CLEAR_MULTI_BOUND: u32 = 0x0056_9990;
-const REFERENCE_GET_ORIENTATION: u32 = 0x0056_fa00;
+pub(crate) const REFERENCE_IS_MARKER_FORM: u32 = 0x0043_9f90;
+pub(crate) const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
+pub(crate) const REFERENCE_LINKED_NODE_OWNER: u32 = 0x0056_9ac0;
+pub(crate) const REFERENCE_EMITTANCE_SOURCE: u32 = 0x0056_9580;
+pub(crate) const REFERENCE_IS_SCRIPTED: u32 = 0x0056_56d0;
+pub(crate) const REFERENCE_IS_ACTIVATING_CHILDREN: u32 = 0x0056_a250;
+pub(crate) const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
+pub(crate) const REFERENCE_GET_MULTI_BOUND_ROOM: u32 = 0x0056_99b0;
+pub(crate) const REFERENCE_GET_MULTI_BOUND: u32 = 0x0056_9920;
+pub(crate) const REFERENCE_CLEAR_MULTI_BOUND: u32 = 0x0056_9990;
+pub(crate) const REFERENCE_GET_ORIENTATION: u32 = 0x0056_fa00;
 /// `TESBoundObject::GetBoundSize` (Xbox PDB), `float` in ST0.
-const FORM_GET_BOUND_SIZE: u32 = 0x0050_ebf0;
+pub(crate) const FORM_GET_BOUND_SIZE: u32 = 0x0050_ebf0;
 /// `cFormType` of a form (`00401170`) and the type of lights.
-const FORM_TYPE_LIGHT: u32 = 0x1e;
+pub(crate) const FORM_TYPE_LIGHT: u32 = 0x1e;
 /// `ExtraDataList::GetRoom` / `GetPrimitive` (Xbox PDB).
-const EXTRA_DATA_GET_ROOM: u32 = 0x0042_0ed0;
-const EXTRA_DATA_GET_PRIMITIVE: u32 = 0x0041_fbe0;
+pub(crate) const EXTRA_DATA_GET_ROOM: u32 = 0x0042_0ed0;
+pub(crate) const EXTRA_DATA_GET_PRIMITIVE: u32 = 0x0041_fbe0;
 /// Multibound node and multibound data accessors.
-const MULTI_BOUND_DATA_OF_ROOM: u32 = 0x0066_29f0;
-const MULTI_BOUND_SET_DATA: u32 = 0x0043_9920;
-const MULTI_BOUND_PRIMITIVE_SLOT: u32 = 0x0043_b230;
-const MULTI_BOUND_SET_PRIMITIVE: u32 = 0x004a_ddc0;
-const PRIMITIVE_SET_ROTATION: u32 = 0x0043_96b0;
+pub(crate) const MULTI_BOUND_DATA_OF_ROOM: u32 = 0x0066_29f0;
+pub(crate) const MULTI_BOUND_SET_DATA: u32 = 0x0043_9920;
+pub(crate) const MULTI_BOUND_PRIMITIVE_SLOT: u32 = 0x0043_b230;
+pub(crate) const MULTI_BOUND_SET_PRIMITIVE: u32 = 0x004a_ddc0;
+pub(crate) const PRIMITIVE_SET_ROTATION: u32 = 0x0043_96b0;
 /// Allocates a block for a node (cdecl `size`), and the
 /// `BSMultiBoundNode` constructor.
-const NODE_ALLOCATE: u32 = 0x00aa_13e0;
-const MULTI_BOUND_NODE_CONSTRUCT: u32 = 0x00c4_6970;
+pub(crate) const NODE_ALLOCATE: u32 = 0x00aa_13e0;
+pub(crate) const MULTI_BOUND_NODE_CONSTRUCT: u32 = 0x00c4_6970;
 /// `BSShaderManager::CloneMaterialPropertyRecurse` (Xbox PDB), cdecl.
-const CLONE_MATERIAL_PROPERTY: u32 = 0x00b5_7c60;
+pub(crate) const CLONE_MATERIAL_PROPERTY: u32 = 0x00b5_7c60;
 /// `NiAVObject::UpdateProperties` / `GetProperty` (Xbox PDB).
-const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
-const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+pub(crate) const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+pub(crate) const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
 /// Applies a property to a node (cdecl `(node, property)`).
-const SHADER_APPLY_PROPERTY: u32 = 0x00b5_5480;
+pub(crate) const SHADER_APPLY_PROPERTY: u32 = 0x00b5_5480;
 /// `TESWorldSpace` (`this`, cell): looks the cell's grid coordinates up in
 /// the map at `+0x68` of the world space and returns the entry (a list of
 /// references), 0 without the map or an entry.
-const WORLD_SPACE_CELL_REFERENCES: u32 = 0x0058_7870;
+pub(crate) const WORLD_SPACE_CELL_REFERENCES: u32 = 0x0058_7870;
 /// Tests bit 2 of the word at `+0x244` of the object it is called on (the
 /// game loader singleton at `011ddf38`).
-const LOADER_FLAG_244_2: u32 = 0x0042_ce10;
+pub(crate) const LOADER_FLAG_244_2: u32 = 0x0042_ce10;
 /// Run on the cell by `fn_00545030` before it asks the owner of the cell's
 /// 3D node to remove the node (a function of the unit's later range).
-const CELL_DETACH_LOADED_3D: u32 = 0x0054_5c10;
+pub(crate) const CELL_DETACH_LOADED_3D: u32 = 0x0054_5c10;
 /// The form pointer `fn_00545740` compares with a reference's base form (the
 /// other marker form, `011ca230`, is only tested by `00439f90`).
-const MARKER_FORM_SECOND: u32 = 0x011c_a238;
+pub(crate) const MARKER_FORM_SECOND: u32 = 0x011c_a238;
 /// Singleton whose `+0x760` word `fn_005453b0` falls back to.
-const EMITTANCE_FALLBACK_OWNER_POINTER: u32 = 0x011d_ea3c;
+pub(crate) const EMITTANCE_FALLBACK_OWNER_POINTER: u32 = 0x011d_ea3c;
 
 layout! {
     /// `EXTERIOR_DATA` (Xbox PDB), 0xC bytes: the data of an exterior cell.
@@ -2342,19 +2352,22 @@ layout! {
 }
 
 /// The address of the embedded sub-object `field` of a loaded-data block.
-fn loaded_part<U>(loaded: Ptr<LoadedCellData>, field: Field<LoadedCellData, Inline<U>>) -> Ptr {
+pub(crate) fn loaded_part<U>(
+    loaded: Ptr<LoadedCellData>,
+    field: Field<LoadedCellData, Inline<U>>,
+) -> Ptr {
     loaded.byte_add(field.off)
 }
 
 /// The cell's `pLoadedData`.
-fn loaded_data(e: &Engine, this: Ptr<TESObjectCELL>) -> Ptr<LoadedCellData> {
+pub(crate) fn loaded_data(e: &Engine, this: Ptr<TESObjectCELL>) -> Ptr<LoadedCellData> {
     e.get(this, TESObjectCELL::pLoadedData).cast()
 }
 
 /// Calls a list operation that takes the address of an item
 /// (`BSSimpleList::AddHead`, `Remove`, `InsertAfter`): the game passes the
 /// address of a local holding the item.
-fn list_operation(e: &mut Engine, function: u32, list: Ptr, item: Ptr) {
+pub(crate) fn list_operation(e: &mut Engine, function: u32, list: Ptr, item: Ptr) {
     e.with_stack(4, |e, slot| {
         e.mem.set_u32(slot.addr(), item.addr());
         e.call(function, &args![list, slot]);
@@ -2455,7 +2468,11 @@ pub fn tes_object_cell_create_cell_data(e: &mut Engine, this: Ptr<TESObjectCELL>
 /// The lighting template of the cell when the cell inherits the field
 /// selected by `mask` and has a template (the code asks for the template
 /// twice).
-fn inherited_template(e: &mut Engine, this: Ptr<TESObjectCELL>, mask: u32) -> Option<Ptr> {
+pub(crate) fn inherited_template(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    mask: u32,
+) -> Option<Ptr> {
     if e.call(CELL_INHERITS_LIGHTING_FIELD, &args![this, mask])
         .bool()
         && !e
@@ -2472,7 +2489,7 @@ fn inherited_template(e: &mut Engine, this: Ptr<TESObjectCELL>, mask: u32) -> Op
 /// A word of the interior data, or the lighting template's value for it
 /// (`template_accessor`) when the cell inherits it (`mask`); 0 for a cell
 /// without interior data.
-fn interior_word(
+pub(crate) fn interior_word(
     e: &mut Engine,
     this: Ptr<TESObjectCELL>,
     mask: u32,
@@ -2491,7 +2508,7 @@ fn interior_word(
 
 /// The `float` counterpart of [`interior_word`]; `missing` is the value for
 /// a cell without interior data.
-fn interior_float(
+pub(crate) fn interior_float(
     e: &mut Engine,
     this: Ptr<TESObjectCELL>,
     mask: u32,
@@ -2511,7 +2528,7 @@ fn interior_float(
 
 /// Writes the three channels of a packed colour (bytes 0, 1 and 2) as
 /// `float`s in `0..=1` at `out`.
-fn unpack_colour(e: &mut Engine, packed: u32, out: Ptr) {
+pub(crate) fn unpack_colour(e: &mut Engine, packed: u32, out: Ptr) {
     let scale: f64 = e.global(COLOUR_BYTE_SCALE);
     let channels = [packed & 0xff, (packed >> 8) & 0xff, (packed >> 16) & 0xff];
     for (i, channel) in channels.into_iter().enumerate() {
@@ -3300,144 +3317,144 @@ pub fn fn_00545960(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESO
 
 /// The child of the node the cell's `Get3D` returns, at the given index
 /// (`00456fc0`, `ret 4`): `0043b4a0(node, index)`.
-const CELL_CHILD_NODE: u32 = 0x0045_6fc0;
+pub(crate) const CELL_CHILD_NODE: u32 = 0x0045_6fc0;
 /// The allocation scope object (a 4-byte local): `(this, 0x1A or 0x1B, 1,
 /// file, line)`, and its destructor.
-const SCOPE_ENTER: u32 = 0x0040_4eb0;
-const SCOPE_LEAVE: u32 = 0x0040_4ee0;
+pub(crate) const SCOPE_ENTER: u32 = 0x0040_4eb0;
+pub(crate) const SCOPE_LEAVE: u32 = 0x0040_4ee0;
 /// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\TESObjectCELL.cpp"`.
-const SOURCE_FILE: u32 = 0x0102_ed68;
+pub(crate) const SOURCE_FILE: u32 = 0x0102_ed68;
 /// `"Shared Portal Geometry"`.
-const PORTAL_GEOMETRY_NAME: u32 = 0x0102_ed50;
+pub(crate) const PORTAL_GEOMETRY_NAME: u32 = 0x0102_ed50;
 /// Three zero floats, and the 3 x 3 identity matrix (nine floats).
-const ZERO_VECTOR: u32 = 0x011f_426c;
-const IDENTITY_MATRIX: u32 = 0x011a_9448;
+pub(crate) const ZERO_VECTOR: u32 = 0x011f_426c;
+pub(crate) const IDENTITY_MATRIX: u32 = 0x011a_9448;
 /// `NiNode` constructor (`(this, 0)`, 0xAC bytes).
-const NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
+pub(crate) const NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
 /// Copies the three words at the argument to `this + 0x58`, and the nine
 /// words at the argument to `this + 0x34` (the node's local translation and
 /// rotation).
-const NODE_SET_TRANSLATION: u32 = 0x0044_0460;
-const NODE_SET_ROTATION: u32 = 0x0043_fa80;
+pub(crate) const NODE_SET_TRANSLATION: u32 = 0x0044_0460;
+pub(crate) const NODE_SET_ROTATION: u32 = 0x0043_fa80;
 /// Sets or clears the bit given by the second argument in the word at
 /// `this + 0x30` (the node's flags): `(this, set, mask)`; `00450f90` is it
 /// with the mask 1.
-const NODE_SET_FLAG_BITS: u32 = 0x0043_b370;
-const NODE_SET_FLAG: u32 = 0x0045_0f90;
+pub(crate) const NODE_SET_FLAG_BITS: u32 = 0x0043_b370;
+pub(crate) const NODE_SET_FLAG: u32 = 0x0045_0f90;
 /// `NiNode::AttachChild(child, replace)` is the node's virtual slot `0xDC`.
-const NODE_ATTACH_CHILD_SLOT: u32 = 0xdc;
+pub(crate) const NODE_ATTACH_CHILD_SLOT: u32 = 0xdc;
 /// The 9-byte update data (`(this, time, byte, byte)`) and the node's
 /// update with it.
-const UPDATE_DATA_CONSTRUCT: u32 = 0x0043_d410;
-const NODE_UPDATE: u32 = 0x00a5_9c60;
+pub(crate) const UPDATE_DATA_CONSTRUCT: u32 = 0x0043_d410;
+pub(crate) const NODE_UPDATE: u32 = 0x00a5_9c60;
 /// `BSMultiBound` (0x10 bytes) and `BSMultiBoundAABB` (0x24 bytes)
 /// constructors.
-const MULTI_BOUND_CONSTRUCT: u32 = 0x00c3_5e00;
-const MULTI_BOUND_AABB_CONSTRUCT: u32 = 0x00c3_7ec0;
+pub(crate) const MULTI_BOUND_CONSTRUCT: u32 = 0x00c3_5e00;
+pub(crate) const MULTI_BOUND_AABB_CONSTRUCT: u32 = 0x00c3_7ec0;
 /// The fixed string constructor `(this, text)` (returns `this`), its
 /// destructor, and the node's set-name.
-const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
-const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
-const NODE_SET_NAME: u32 = 0x00a5_b950;
+pub(crate) const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+pub(crate) const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+pub(crate) const NODE_SET_NAME: u32 = 0x00a5_b950;
 /// `cCellState` setter (`(this, byte)`, `MOV [ECX+0x26],AL`).
-const CELL_SET_STATE: u32 = 0x0045_12a0;
+pub(crate) const CELL_SET_STATE: u32 = 0x0045_12a0;
 /// The work `Load3D` runs on the new cell 3D.
-const CELL_FINISH_3D: u32 = 0x0055_2dc0;
+pub(crate) const CELL_FINISH_3D: u32 = 0x0055_2dc0;
 /// `BGSSaveLoadGame::LoadCell` (Xbox PDB), `(loader, cell)`; and the loader's
 /// follow-up call `(loader, 0)`.
-const SAVE_LOAD_CELL: u32 = 0x0084_9b10;
-const LOADER_AFTER_LOAD: u32 = 0x0084_92b0;
+pub(crate) const SAVE_LOAD_CELL: u32 = 0x0084_9b10;
+pub(crate) const LOADER_AFTER_LOAD: u32 = 0x0084_92b0;
 /// `BSPortalGraph` constructor (0x78 bytes), and the world space's portal
 /// graph (`this + 0x6C` slot, built on first use).
-const PORTAL_GRAPH_CONSTRUCT: u32 = 0x00c5_a9d0;
-const WORLD_SPACE_PORTAL_GRAPH: u32 = 0x0058_31d0;
+pub(crate) const PORTAL_GRAPH_CONSTRUCT: u32 = 0x00c5_a9d0;
+pub(crate) const WORLD_SPACE_PORTAL_GRAPH: u32 = 0x0058_31d0;
 /// Releases the world space's portal graph slot (when its word at `+4` is 1).
-const WORLD_SPACE_RELEASE_PORTAL_GRAPH: u32 = 0x0058_3270;
+pub(crate) const WORLD_SPACE_RELEASE_PORTAL_GRAPH: u32 = 0x0058_3270;
 /// The entry `n` of the table at `011f91c8` (cdecl), the word at `+0x1E0` of
 /// that entry (the current portal graph), and its setter `(entry, graph)`.
-const GLOBAL_TABLE_ENTRY: u32 = 0x0045_0b80;
-const CURRENT_PORTAL_GRAPH: u32 = 0x0045_4b30;
-const SET_CURRENT_PORTAL_GRAPH: u32 = 0x00b5_ddf0;
+pub(crate) const GLOBAL_TABLE_ENTRY: u32 = 0x0045_0b80;
+pub(crate) const CURRENT_PORTAL_GRAPH: u32 = 0x0045_4b30;
+pub(crate) const SET_CURRENT_PORTAL_GRAPH: u32 = 0x00b5_ddf0;
 /// Extra data accessors on `ExtraDataList` (`this` = the list):
 /// the owner (extra data type 0x21), its setter, the ownership global
 /// (`ExtraDataList::GetGlobal`) and rank (`ExtraDataList::GetRank`), the
 /// detach time (type 0xB) and its setter, the extra data of type 1 and its
 /// reset, the one of type 0x74, 7 and 8, and the acoustic space (type 0x81).
-const EXTRA_LIST_GET_OWNER: u32 = 0x0041_8660;
-const EXTRA_LIST_SET_OWNER: u32 = 0x0041_9700;
-const EXTRA_LIST_GET_GLOBAL: u32 = 0x0041_8690;
-const EXTRA_LIST_GET_RANK: u32 = 0x0041_86c0;
-const EXTRA_LIST_GET_DETACH_TIME: u32 = 0x0042_1820;
-const EXTRA_LIST_SET_DETACH_TIME: u32 = 0x0042_1850;
-const EXTRA_LIST_GET_TYPE_1: u32 = 0x0041_b9a0;
-const EXTRA_LIST_RESET_TYPE_1: u32 = 0x0041_b8d0;
-const EXTRA_LIST_GET_TYPE_74: u32 = 0x0042_1c30;
-const EXTRA_LIST_GET_TYPE_7: u32 = 0x0041_bde0;
-const EXTRA_LIST_GET_TYPE_8: u32 = 0x0041_c260;
-const EXTRA_LIST_GET_ACOUSTIC_SPACE: u32 = 0x0041_c160;
-const EXTRA_LIST_SET_REGION_LIST: u32 = 0x0041_bbd0;
+pub(crate) const EXTRA_LIST_GET_OWNER: u32 = 0x0041_8660;
+pub(crate) const EXTRA_LIST_SET_OWNER: u32 = 0x0041_9700;
+pub(crate) const EXTRA_LIST_GET_GLOBAL: u32 = 0x0041_8690;
+pub(crate) const EXTRA_LIST_GET_RANK: u32 = 0x0041_86c0;
+pub(crate) const EXTRA_LIST_GET_DETACH_TIME: u32 = 0x0042_1820;
+pub(crate) const EXTRA_LIST_SET_DETACH_TIME: u32 = 0x0042_1850;
+pub(crate) const EXTRA_LIST_GET_TYPE_1: u32 = 0x0041_b9a0;
+pub(crate) const EXTRA_LIST_RESET_TYPE_1: u32 = 0x0041_b8d0;
+pub(crate) const EXTRA_LIST_GET_TYPE_74: u32 = 0x0042_1c30;
+pub(crate) const EXTRA_LIST_GET_TYPE_7: u32 = 0x0041_bde0;
+pub(crate) const EXTRA_LIST_GET_TYPE_8: u32 = 0x0041_c260;
+pub(crate) const EXTRA_LIST_GET_ACOUSTIC_SPACE: u32 = 0x0041_c160;
+pub(crate) const EXTRA_LIST_SET_REGION_LIST: u32 = 0x0041_bbd0;
 /// `TESRegionList` constructor `(this, 0)`, 0x10 bytes.
-const REGION_LIST_CONSTRUCT: u32 = 0x004f_6320;
+pub(crate) const REGION_LIST_CONSTRUCT: u32 = 0x004f_6320;
 /// `TESObjectLAND` constructor (0x2C bytes).
-const LAND_CONSTRUCT: u32 = 0x0053_3120;
+pub(crate) const LAND_CONSTRUCT: u32 = 0x0053_3120;
 /// The world space's accessors: the word at `+0x18` of a form is the
 /// owner's `WORD_AT_18`; the world space's owner-form (`00458400`), the
 /// default water height (`004536e0`, the float at `+0xCC`), and the three
 /// accessors used by `00546c20`, `005474b0` and `005475b0`.
-const WORLD_SPACE_OWNER_FORM: u32 = 0x0045_8400;
-const WORLD_SPACE_WATER_HEIGHT: u32 = 0x0045_36e0;
-const WORLD_SPACE_TYPE_7_VALUE: u32 = 0x0058_6150;
-const WORLD_SPACE_ACOUSTIC_VALUE: u32 = 0x0058_5fe0;
+pub(crate) const WORLD_SPACE_OWNER_FORM: u32 = 0x0045_8400;
+pub(crate) const WORLD_SPACE_WATER_HEIGHT: u32 = 0x0045_36e0;
+pub(crate) const WORLD_SPACE_TYPE_7_VALUE: u32 = 0x0058_6150;
+pub(crate) const WORLD_SPACE_ACOUSTIC_VALUE: u32 = 0x0058_5fe0;
 /// Tests bit 1 of `cCellFlags` (`004518e0`) and bit 7 (`00454b10`).
-const CELL_FLAG_2: u32 = 0x0045_18e0;
-const CELL_FLAG_80: u32 = 0x0045_4b10;
+pub(crate) const CELL_FLAG_2: u32 = 0x0045_18e0;
+pub(crate) const CELL_FLAG_80: u32 = 0x0045_4b10;
 /// The word at `+0xC4` of a cell (`pLoadedData`).
-const CELL_LOADED_DATA: u32 = 0x0070_58c0;
+pub(crate) const CELL_LOADED_DATA: u32 = 0x0070_58c0;
 /// `TESActorBaseData::GetFactionRank` (Xbox PDB): `(this, faction, flag)`.
-const ACTOR_BASE_GET_FACTION_RANK: u32 = 0x0047_d680;
+pub(crate) const ACTOR_BASE_GET_FACTION_RANK: u32 = 0x0047_d680;
 /// `0040eb10(a, b, c)` (cdecl, three floats): whether `a` and `b` differ by
 /// no more than `c`.
-const FLOAT_NEAR: u32 = 0x0040_eb10;
+pub(crate) const FLOAT_NEAR: u32 = 0x0040_eb10;
 /// Sets the radius (float at `+0xC`) of the bound `this` (`(this, radius)`),
 /// and copies three words and a radius into it (`(this, vector, radius)`);
 /// `006240d0` is the body `00546890` calls.
-const BOUND_SET_RADIUS: u32 = 0x0063_f790;
-const BOUND_SET_CENTER_AND_RADIUS: u32 = 0x004a_51d0;
-const BOUND_BASE_CONSTRUCT: u32 = 0x0062_40d0;
+pub(crate) const BOUND_SET_RADIUS: u32 = 0x0063_f790;
+pub(crate) const BOUND_SET_CENTER_AND_RADIUS: u32 = 0x004a_51d0;
+pub(crate) const BOUND_BASE_CONSTRUCT: u32 = 0x0062_40d0;
 /// `00867e30(this)`: the integer `00546c70` passes to `fn_00546b10`, computed
 /// from the object at `011de7b8`.
-const DETACH_TIME_SOURCE: u32 = 0x0086_7e30;
-const DETACH_TIME_SOURCE_OBJECT: u32 = 0x011d_e7b8;
+pub(crate) const DETACH_TIME_SOURCE: u32 = 0x0086_7e30;
+pub(crate) const DETACH_TIME_SOURCE_OBJECT: u32 = 0x011d_e7b8;
 /// The child of a node at an index (`(node, index)`, `ret 4`), and the
 /// address of the sub-object at `+0xC` of a multibound primitive.
-const NODE_CHILD_AT: u32 = 0x0043_b4a0;
-const PRIMITIVE_PART: u32 = 0x0048_d150;
+pub(crate) const NODE_CHILD_AT: u32 = 0x0043_b4a0;
+pub(crate) const PRIMITIVE_PART: u32 = 0x0048_d150;
 /// The owner `00546ca0`, `00546da0` and `00546ee0` compare the actor with.
-const ACTOR_SINGLETON_POINTER: u32 = 0x011d_ea3c;
+pub(crate) const ACTOR_SINGLETON_POINTER: u32 = 0x011d_ea3c;
 /// RTTI type descriptors of the ownership checks: the source types
 /// `00546ca0` casts the actor's form from and `00546ee0` casts the form
 /// from, and the two targets (the owner is a character base or a faction).
-const RTTI_OWNER_SOURCE_FORM: u32 = 0x0118_3108;
-const RTTI_OWNER_SOURCE_ARGUMENT: u32 = 0x0118_46e8;
-const RTTI_OWNER_CHARACTER: u32 = 0x0118_3a1c;
-const RTTI_OWNER_FACTION: u32 = 0x0118_4704;
+pub(crate) const RTTI_OWNER_SOURCE_FORM: u32 = 0x0118_3108;
+pub(crate) const RTTI_OWNER_SOURCE_ARGUMENT: u32 = 0x0118_46e8;
+pub(crate) const RTTI_OWNER_CHARACTER: u32 = 0x0118_3a1c;
+pub(crate) const RTTI_OWNER_FACTION: u32 = 0x0118_4704;
 /// The word at `011c9520` that `00546a90` returns.
-const OWNER_EXCLUDED_FORM: u32 = 0x011c_9520;
+pub(crate) const OWNER_EXCLUDED_FORM: u32 = 0x011c_9520;
 /// Statics of `fn_005474b0`: the guard word, a copy of the three words at
 /// `011f426c`, and the last value stored.
-const STATIC_RECORD_GUARD: u32 = 0x011c_a1d0;
-const STATIC_RECORD_COPY: u32 = 0x011c_a1c4;
-const STATIC_RECORD_LAST: u32 = 0x011c_a1c0;
+pub(crate) const STATIC_RECORD_GUARD: u32 = 0x011c_a1d0;
+pub(crate) const STATIC_RECORD_COPY: u32 = 0x011c_a1c4;
+pub(crate) const STATIC_RECORD_LAST: u32 = 0x011c_a1c0;
 /// `-FLT_MAX` (float); `FLT_MAX` as a double (the "unset" water height); and
 /// `0.001` (float).
-const LOWEST_FLOAT: u32 = 0x0101_5f5c;
-const UNSET_WATER_HEIGHT_DOUBLE: u32 = 0x0102_31b0;
-const WATER_HEIGHT_TOLERANCE: u32 = 0x0101_7d00;
+pub(crate) const LOWEST_FLOAT: u32 = 0x0101_5f5c;
+pub(crate) const UNSET_WATER_HEIGHT_DOUBLE: u32 = 0x0102_31b0;
+pub(crate) const WATER_HEIGHT_TOLERANCE: u32 = 0x0101_7d00;
 
 /// Allocates (cdecl `size`) and constructs a `NiNode` with the node
 /// constructor, as every `new NiNode` of `Load3D` does. Null when the
 /// allocation fails.
-fn new_ni_node(e: &mut Engine) -> Ptr {
+pub(crate) fn new_ni_node(e: &mut Engine) -> Ptr {
     let block = e.call(NODE_ALLOCATE, &args![0xacu32]).ptr::<()>();
     if block.is_null() {
         Ptr::NULL
@@ -3447,13 +3464,13 @@ fn new_ni_node(e: &mut Engine) -> Ptr {
 }
 
 /// `parent->AttachChild(child, true)` (virtual slot `0xDC`).
-fn attach_child(e: &mut Engine, parent: Ptr, child: Ptr) {
+pub(crate) fn attach_child(e: &mut Engine, parent: Ptr, child: Ptr) {
     e.vcall(parent.addr(), NODE_ATTACH_CHILD_SLOT, &args![child, 1u32]);
 }
 
 /// What `Load3D` does to a new node before it gets its flag: the two flag
 /// setters, in this order.
-fn prepare_node(e: &mut Engine, node: Ptr) {
+pub(crate) fn prepare_node(e: &mut Engine, node: Ptr) {
     fn_00546780(e, node, true);
     fn_005467c0(e, node, true);
 }
@@ -4061,7 +4078,7 @@ pub fn fn_00546ee0(e: &mut Engine, this: Ptr<TESObjectCELL>, form: Ptr) -> bool 
 
 /// `__RTDynamicCast` of `object` from the type descriptor `source` to
 /// `target`.
-fn cast_from(e: &mut Engine, object: Ptr, source: u32, target: u32) -> Ptr {
+pub(crate) fn cast_from(e: &mut Engine, object: Ptr, source: u32, target: u32) -> Ptr {
     e.call(RT_DYNAMIC_CAST, &args![object, 0u32, source, target, 0u32])
         .ptr()
 }
