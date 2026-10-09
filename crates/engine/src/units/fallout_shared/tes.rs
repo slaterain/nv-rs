@@ -36,6 +36,7 @@
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::BSSimpleList;
+use crate::units::fallout_shared::extradataobjects::NiPoint3;
 
 layout! {
     /// `TES` (Xbox PDB), 0xC4 bytes on both builds.
@@ -84,6 +85,11 @@ layout! {
         0x51 bRunningCellTests: bool,
         /// `bRunningCellTests2` (Xbox PDB).
         0x52 bRunningCellTests2: bool,
+        /// `pfnTACCallbackFunc` (Xbox PDB): the callback `TES::TestAllCells`
+        /// calls with each tested cell (set from mode 6 or 7).
+        0x54 pfnTACCallbackFunc: Ptr,
+        /// `pTACCallbackData` (Xbox PDB): the second word the callback gets.
+        0x58 pTACCallbackData: Ptr,
         /// `pTACRegionFilter` (Xbox PDB).
         0x5C pTACRegionFilter: Ptr,
         /// `bShowLANDborders` (Xbox PDB).
@@ -2043,13 +2049,13 @@ const CLEANUP_LOCK: u32 = 0x011f_4480;
 /// Byte read by `00452540`: whether texture purging is allowed at all.
 const PURGE_ALLOWED: u32 = 0x011c_70e9;
 /// Byte `00452480` returns.
-const BYTE_0119B8C8: u32 = 0x0119_b8c8;
+const FLAG_0119B8C8: u32 = 0x0119_b8c8;
 /// Byte stored by `00452e40`.
-const BYTE_011AF70C: u32 = 0x011a_f70c;
+const FLAG_011AF70C: u32 = 0x011a_f70c;
 /// Byte stored by `00454440`.
-const BYTE_011F9427: u32 = 0x011f_9427;
+const FLAG_011F9427: u32 = 0x011f_9427;
 /// Byte `00454450` sets to 1 (`0118 9625`).
-const BYTE_01189625: u32 = 0x0118_9625;
+const FLAG_01189625: u32 = 0x0118_9625;
 /// Byte `UpdateCurrentGridCell` sets while the grid centre has moved and
 /// `00454450` clears; read with [`GRID_FLAG_MOVED_COPY`].
 const GRID_FLAG_MOVED: u32 = 0x011c_3c0c;
@@ -2259,7 +2265,7 @@ pub fn fn_00452460(e: &mut Engine, form: Ptr, mask: u32) -> bool {
 // Translated from 00452480 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Returns the byte at `0119b8c8`.
 pub fn fn_00452480(e: &mut Engine) -> u8 {
-    e.global(BYTE_0119B8C8)
+    e.global(FLAG_0119B8C8)
 }
 
 // Translated from 00452490 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -2630,7 +2636,7 @@ pub fn fn_00452df0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
 // Translated from 00452e40 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a byte in `011af70c`.
 pub fn fn_00452e40(e: &mut Engine, value: u8) {
-    e.set_global(BYTE_011AF70C, value);
+    e.set_global(FLAG_011AF70C, value);
 }
 
 // Translated from 00452e50 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3415,7 +3421,7 @@ pub fn fn_00454420(e: &mut Engine, this: Ptr<TES>, index: i32) -> u32 {
 // Translated from 00454440 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Stores a byte in `011f9427`.
 pub fn fn_00454440(e: &mut Engine, value: u8) {
-    e.set_global(BYTE_011F9427, value);
+    e.set_global(FLAG_011F9427, value);
 }
 
 // Translated from 00454450 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -3623,7 +3629,7 @@ pub fn fn_00454450(e: &mut Engine, this: Ptr<TES>, pos: Ptr) {
         let world_space = e.get(this, TES::pWorldSpace);
         e.call(0x0045_4b50, &args![world_space]).u32()
     });
-    e.set_global(BYTE_01189625, 1u8);
+    e.set_global(FLAG_01189625, 1u8);
     store_grid_centre(e, this);
     copy_grid_centre_to_previous(e);
     let wind = fn_00452e70(e, 0);
@@ -3651,6 +3657,1738 @@ pub fn fn_00454ae0(e: &mut Engine) -> u8 {
 /// A `bool` setting's value: the byte `00408d60` finds in the setting `this`.
 pub fn fn_00454af0(e: &mut Engine, this: u32) -> u8 {
     setting_byte(e, this)
+}
+
+// ---------------------------------------------------------------------------
+// Session 4 (the next 40 functions, `00454b10` to `00457990`): the interior
+// and exterior cell buffers, the script and sound passes over the loaded
+// cells, the cell test run `TES::TestAllCells`, the texture-image cache
+// helpers, and the "land at a position" helpers.
+// ---------------------------------------------------------------------------
+
+/// `TESObjectCELL` test: bit 0 of the byte at +0x24 (`cCellFlags`; Xbox PDB
+/// `+0x34`), which the cell buffers and the world code treat as "interior".
+const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
+/// A `TESObjectCELL` test on `cell + 0x80` (through `005570b0`); the buffer
+/// code leaves a cell for which it is true where it is (neither unloaded nor
+/// replaced).
+const CELL_PINNED: u32 = 0x0055_7090;
+/// `TESObjectCELL::GetWorldSpace` (Xbox PDB): `TESWorldSpace*`.
+const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+/// `TESObjectCELL::RunScripts` (Xbox PDB): `(cell, 0, 0)`, a byte answer.
+const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
+/// `TESObjectCELL::GetLand` (Xbox PDB): the cell's `TESObjectLAND*`.
+const CELL_GET_LAND: u32 = 0x0054_6fb0;
+/// `TESObjectLAND::GetLandHeight` (Xbox PDB): `(land, pos, &height)`.
+const LAND_GET_LAND_HEIGHT: u32 = 0x0053_f180;
+/// `TESObjectREFR::RunScript` (Xbox PDB) on the player.
+const REFERENCE_RUN_SCRIPT: u32 = 0x0056_5870;
+/// `Sky::SetMode` (Xbox PDB): `(sky, mode)`.
+const SKY_SET_MODE: u32 = 0x0063_a3f0;
+/// Returns `this + 0x68` (`TES::pSky`; the map names it
+/// `MiddleHighProcess::GetSavedAcquireObject`, identical code).
+const TES_GET_SKY: u32 = 0x008d_8520;
+/// Returns the word at `this + 0xf8` of the sky (non-null while a sky is
+/// built).
+const SKY_GET_WORD_F8: u32 = 0x0047_6c90;
+/// Returns `this` itself (the address of a list node's item word: an empty
+/// constructor for a list item or a vector, and the item getter of a list
+/// node).
+const LIST_NODE_ITEM: u32 = 0x0068_15c0;
+/// Returns the next list node (`this + 4`).
+const LIST_NODE_NEXT: u32 = 0x0072_6070;
+/// The `TESDataHandler`'s first node of the world-space list (`this + 0x10`).
+const DATA_HANDLER_FIRST_WORLD_SPACE: u32 = 0x0046_0140;
+/// Runs the next script of the quest `this` (`TESQuest`, `fallout shared/tesquest.cpp`).
+const QUEST_RUN: u32 = 0x0060_d4d0;
+/// `Script::GetProcessScripts` (Xbox PDB): whether scripts run.
+const SCRIPT_GET_PROCESS_SCRIPTS: u32 = 0x005a_c740;
+/// Object `00455490` passes to `0040fbf0` and `0040fba0` around its script
+/// pass.
+const SCRIPT_PASS_OBJECT: u32 = 0x011f_11a0;
+/// Byte set while `00455490` runs (re-entrancy guard).
+const SCRIPT_PASS_RUNNING: u32 = 0x011c_3ed1;
+/// `thiscall(this, callback)`: stores `callback` at `this + 0x54` (the map
+/// calls it `IOManager::Pause`; identical code).
+const SET_TEST_CALLBACK: u32 = 0x005a_8040;
+/// Dword `00455680` clears.
+const COUNTER_011C56E8: u32 = 0x011c_56e8;
+/// `GridCellArray::Get` is `GRID_CELL_ARRAY_GET`; `GridCell` code behind the
+/// grid-wide passes: `004baba0` and `004bac20` (`gridcell.cpp`) take the grid
+/// array.
+const GRID_CELL_ARRAY_PASS_A: u32 = 0x004b_aba0;
+const GRID_CELL_ARRAY_PASS_B: u32 = 0x004b_ac20;
+/// The same passes for one cell (`tesobjectcell.cpp`): `00553820` and
+/// `005538e0` (`TESObjectCELL::UpdateRefSounds`, Xbox PDB).
+const CELL_PASS_A: u32 = 0x0055_3820;
+const CELL_PASS_B: u32 = 0x0055_38e0;
+/// `00553bf0` and `00553d00` (`tesobjectcell.cpp`): the per-cell versions of
+/// the two position tests `004570d0` and `004571c0`.
+const CELL_TEST_A: u32 = 0x0055_3bf0;
+const CELL_TEST_B: u32 = 0x0055_3d00;
+/// `memmove` (CRT, cdecl `(dest, source, bytes)`).
+const MEMMOVE: u32 = 0x00ec_7230;
+
+// Globals of `TES::TestAllCells`.
+
+/// `TestAllCells` state: base-object checks done.
+const TEST_BASE_OBJECTS_CHECKED: u32 = 0x011c_3ef4;
+/// The mode `TestAllCells` was started with.
+const TEST_MODE: u32 = 0x011c_3ef0;
+/// The current node of the data handler's world-space list (0 while the
+/// interiors are tested).
+const TEST_WORLD_SPACE_NODE: u32 = 0x011c_3eec;
+/// Count of interior cells (set from `00461960`).
+const TEST_INTERIOR_COUNT: u32 = 0x011c_3ee8;
+/// Set when the next world space has to be entered.
+const TEST_ENTER_WORLD_SPACE: u32 = 0x011c_3ee4;
+/// Index of the next interior cell.
+const TEST_INTERIOR_INDEX: u32 = 0x011c_3ee0;
+/// Current exterior cell x and y.
+const TEST_CELL_X: u32 = 0x011c_3edc;
+const TEST_CELL_Y: u32 = 0x011c_3ed8;
+/// Number of exterior cells tested.
+const TEST_EXTERIOR_COUNT: u32 = 0x011c_3ed4;
+/// Sign toggled by every `TestAllCells` turn (the mouse move it sends).
+const TEST_INPUT_SIGN: u32 = 0x0118_6080;
+/// Byte: whether `TestAllCells` writes its per-cell lines.
+const TEST_LOGGING: u32 = 0x0118_607c;
+/// Pointer to the output file name (`"TestAllCells.xls"`).
+const TEST_OUTPUT_FILE: u32 = 0x0118_6084;
+/// `"CELLS: ..."` line formats and texts the test prints.
+const TEST_TEXT_BASE_OBJECT_MODELS: u32 = 0x0101_7c50;
+const TEST_TEXT_BASE_OBJECT_ICONS: u32 = 0x0101_7c08;
+const TEST_TEXT_WORLD_SPACE: u32 = 0x0101_7bb8;
+const TEST_TEXT_INTERIORS: u32 = 0x0101_7b7c;
+const TEST_TEXT_EXTERIOR_LINE: u32 = 0x0101_7a70;
+const TEST_TEXT_EXTERIOR_ROW: u32 = 0x0101_7a48;
+const TEST_TEXT_INTERIOR_LINE: u32 = 0x0101_7af8;
+const TEST_TEXT_INTERIOR_ROW: u32 = 0x0101_7acc;
+/// `"test"`: world spaces and cells whose name starts with it are skipped.
+const TEST_PREFIX: u32 = 0x0101_7bfc;
+/// `"Y"` and `"N"`.
+const TEST_TEXT_YES: u32 = 0x0101_7b68;
+const TEST_TEXT_NO: u32 = 0x0101_7b64;
+/// A `float` (10.0 in the exe) `TestAllCells` passes to `00867a40` (a
+/// calendar function) on the object at [`OBJECT_011DE7B8`].
+const TEST_FLOAT_TEN: u32 = 0x0101_7b78;
+/// A `double` (1000.0 in the exe): `clock()` milliseconds per second.
+const TEST_DOUBLE_THOUSAND: u32 = 0x0101_7b70;
+/// A `double` (2048.0 in the exe): half a cell, added to the cell's corner.
+const TEST_DOUBLE_HALF_CELL: u32 = 0x0101_6968;
+/// A `double` (0.0 in the exe) the heights are compared with.
+const TEST_DOUBLE_ZERO: u32 = 0x0101_2060;
+/// A `NiPoint3` global (all zeros in the exe): the position the test starts
+/// from, the origin `NiPick::PickObjects` is given, and the first words of the
+/// output of `004573f0`.
+const NI_POINT3_ZERO: u32 = 0x011f_426c;
+/// The land query cache of `00457720`: x and y of the 128-unit column and the
+/// cached answer.
+const CACHED_LAND_COLUMN_X: u32 = 0x0118_608c;
+const CACHED_LAND_COLUMN_Y: u32 = 0x0118_6088;
+const CACHED_LAND_ANSWER: u32 = 0x011c_3ef8;
+/// The callback address stored by `TestAllCells` for modes 6 and 7.
+const TEST_CALLBACK: u32 = 0x0055_7dd0;
+/// `clock()` (CRT).
+const CRT_CLOCK: u32 = 0x00ec_7d50;
+/// Import slot of `SendInput`.
+const IMPORT_SEND_INPUT: u32 = 0x00fd_f2d4;
+/// `MessageHandler::IncDisableWarningCount` (Xbox PDB): `(flag)`.
+const MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
+/// `BSSystemFile::DeleteFileA` (Xbox PDB): `(path)`.
+const DELETE_FILE: u32 = 0x00af_f0b0;
+/// The debug print `_MESSAGE`-style function: `(format, ...)`, returns 0
+/// (its body only returns 0 in this build).
+const DEBUG_PRINT: u32 = 0x005b_5e40;
+/// `MessageHandler::Output` (Xbox PDB): `(file, format, ...)`, returns 0.
+const MESSAGE_HANDLER_OUTPUT: u32 = 0x00c3_c220;
+const DATA_HANDLER_CHECK_MODELS: u32 = 0x0046_ddb0;
+const DATA_HANDLER_CHECK_ICONS: u32 = 0x0046_ec10;
+const DATA_HANDLER_PREPARE_INTERIORS: u32 = 0x0046_19b0;
+const DATA_HANDLER_INTERIOR_COUNT: u32 = 0x0046_1960;
+const DATA_HANDLER_GET_INTERIOR: u32 = 0x0046_1980;
+const WORLD_SPACE_LOAD_CELL: u32 = 0x0058_5b30;
+/// The name of a form (`vtable + 0x130`; the text the test prints and compares with `"test"`).
+const FORM_SLOT_NAME: u32 = 0x130;
+/// `_strnicmp` through `004564f0`: `(a, b, count)`.
+const STRNICMP: u32 = 0x0045_64f0;
+const WORLD_SPACE_MIN_X: u32 = 0x0045_65f0;
+const WORLD_SPACE_MIN_Y: u32 = 0x0081_2870;
+const WORLD_SPACE_MAX_X: u32 = 0x009b_88a0;
+const WORLD_SPACE_MAX_Y: u32 = 0x009b_88c0;
+const CELL_HAS_FLAG_20: u32 = 0x0044_0d80;
+const CELL_GET_FIRST_REFR: u32 = 0x0054_cee0;
+const CELL_GET_REGION_LIST: u32 = 0x0054_7110;
+const REGION_LIST_CONTAINS: u32 = 0x005f_65d0;
+const REFERENCE_GET_WORLD_SPACE: u32 = 0x0057_5d70;
+const TIME_OBJECT_ADVANCE: u32 = 0x0086_7a40;
+const NI_POINT3_CONSTRUCT_FLOATS: u32 = 0x0041_6870;
+const CELL_GET_COC_PLACEMENT_INFO: u32 = 0x0054_cfd0;
+const POSITION_REQUEST_CONSTRUCT: u32 = 0x0045_6540;
+const PLAYER_ROTATION_GETTER: u32 = 0x0043_0830;
+const PLAYER_REQUEST_POSITION: u32 = 0x0093_be30;
+const PLAYER_HANDLE_POSITION_REQUEST: u32 = 0x0093_bea0;
+const IO_MANAGER_LOAD_QUEUED_PRIORITY: u32 = 0x0045_6520;
+const FRAME_SCOPE_BEGIN: u32 = 0x0087_8160;
+const FRAME_SCOPE_RELEASE: u32 = 0x0087_8250;
+const FRAME_SCOPE_END: u32 = 0x0087_8200;
+const TES_PURGE_UNUSED: u32 = 0x0045_39a0;
+const STRING_ARRAY_CONSTRUCT: u32 = 0x0040_37b0;
+const STRING_ARRAY_DESTRUCT: u32 = 0x0040_37d0;
+const SCENE_INFO_TOTALS: u32 = 0x004a_8bb0;
+const SCENE_INFO_BUILD_M_NUMBER: u32 = 0x004a_9120;
+const CELL_GET_ACTOR_HOLDER: u32 = 0x009d_9f20;
+const ACTOR_HOLDER_GET_FIELD_20: u32 = 0x0089_1170;
+const FIELD_IS_EMPTY: u32 = 0x0076_b610;
+const TEXTURE_LIST_HEAD: u32 = 0x0045_6510;
+const TEXTURE_IS_LOADED: u32 = 0x0059_bb30;
+const TEXTURE_LIST_NEXT: u32 = 0x0055_b980;
+const ACTOR_COUNT: u32 = 0x0096_bc50;
+const CELL_GET_LIGHT_COUNT: u32 = 0x0054_bb90;
+const SAVE_LOAD_GAME_TEST_ALL_CELLS: u32 = 0x0086_1f20;
+
+/// The address of slot `index` of the interior cell buffer.
+fn interior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
+    e.get(this, TES::pInteriorBuffer)
+        .addr()
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+/// The address of slot `index` of the exterior cell buffer.
+fn exterior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
+    e.get(this, TES::pExteriorBuffer)
+        .addr()
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+/// `TESDataHandler::UnloadCell` (`00462290`) on the data handler singleton.
+fn unload_cell(e: &mut Engine, cell: u32) {
+    let data_handler: u32 = e.global(DATA_HANDLER);
+    e.call(DATA_HANDLER_UNLOAD_CELL, &args![data_handler, cell]);
+}
+
+/// `uGridsToLoad * uGridsToLoad`, reading the setting twice as the code does.
+fn grids_squared(e: &mut Engine) -> u32 {
+    let first = e
+        .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
+        .u32();
+    let second = e
+        .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
+        .u32();
+    e.mem.u32(first).wrapping_mul(e.mem.u32(second))
+}
+
+// Translated from 00454b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 0x80 of the byte at `this + 0x24` of a `TESObjectCELL` (`cCellFlags`,
+/// Xbox PDB `+0x34`; bit 0 of the same byte is the interior test
+/// `00425fd0`). `00455400` and `TES::TES`'s cell switch use it to choose the
+/// sky mode of an interior cell.
+pub fn fn_00454b10(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x24) & 0x80 != 0
+}
+
+// Translated from 00454b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x1e0` (the cell `00454450` reads from the shadow
+/// scene node).
+pub fn fn_00454b30(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x1e0)
+}
+
+// Translated from 00454b48 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A single `INT3` byte, the alignment padding after `00454b30`. Nothing
+/// calls it; executing it raises a breakpoint exception, which is a panic here.
+pub fn fn_00454b48(_e: &mut Engine) {
+    panic!("INT3 at 00454b48: breakpoint exception (alignment padding, never called)");
+}
+
+// Translated from 00454b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `MapMarkerData::GetLocationName` (`00408da0`, Xbox PDB) on `this + 0xe0`
+/// (the `MapMarkerData` of a `TESWorldSpace`): the name text.
+pub fn fn_00454b50(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0040_8da0, &args![this.addr() + 0xe0]).u32()
+}
+
+// Translated from 00454b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at `this + 4` is non-null (`00453550` asks it of the
+/// terrain manager).
+pub fn fn_00454b70(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 4) != 0
+}
+
+// Translated from 00454b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::AddToBuffer` (Xbox PDB): puts a non-null `cell` into the interior
+/// cell buffer (`00454c20`) when it is an interior cell (`00425fd0`), else
+/// into the exterior buffer (`00454e70`).
+pub fn tes_add_to_buffer(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    if cell.is_null() {
+        return;
+    }
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        fn_00454c20(e, this, cell);
+    } else {
+        fn_00454e70(e, this, cell);
+    }
+}
+
+// Translated from 00454bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `cell` is one of the `uInterior Cell Buffer` slots of the interior
+/// cell buffer.
+pub fn fn_00454bd0(e: &mut Engine, this: Ptr<TES>, cell: Ptr) -> bool {
+    let mut index = 0u32;
+    while index < setting_uint(e, SETTING_INTERIOR_CELL_BUFFER) {
+        let slot = interior_slot(e, this, index);
+        if e.mem.u32(slot) == cell.addr() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+// Translated from 00454c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts `cell` at the front of the interior cell buffer. A cell already in
+/// the buffer moves to slot 0 (the slots before it shift up by one). A new
+/// cell shifts the whole buffer up by one: the last slot's cell, if any, is
+/// unloaded (`TESDataHandler::UnloadCell`, `00462290`) and lost, then
+/// `cell` takes slot 0.
+pub fn fn_00454c20(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    if fn_00454bd0(e, this, cell) {
+        let mut index = 0u32;
+        while index < setting_uint(e, SETTING_INTERIOR_CELL_BUFFER) {
+            let slot = interior_slot(e, this, index);
+            if e.mem.u32(slot) == cell.addr() {
+                while index != 0 {
+                    let from = interior_slot(e, this, index - 1);
+                    let value = e.mem.u32(from);
+                    let to = interior_slot(e, this, index);
+                    e.mem.set_u32(to, value);
+                    index -= 1;
+                }
+                let first = interior_slot(e, this, 0);
+                e.mem.set_u32(first, cell.addr());
+                return;
+            }
+            index += 1;
+        }
+    } else {
+        let last = setting_uint(e, SETTING_INTERIOR_CELL_BUFFER).wrapping_sub(1) as i32;
+        let mut index = last;
+        while index >= 0 {
+            if index == last {
+                let slot = interior_slot(e, this, index as u32);
+                let old = e.mem.u32(slot);
+                if old != 0 {
+                    unload_cell(e, old);
+                }
+            }
+            if index == 0 {
+                let first = interior_slot(e, this, 0);
+                e.mem.set_u32(first, 0);
+            } else {
+                let from = interior_slot(e, this, index as u32 - 1);
+                let value = e.mem.u32(from);
+                let to = interior_slot(e, this, index as u32);
+                e.mem.set_u32(to, value);
+            }
+            index -= 1;
+        }
+        let first = interior_slot(e, this, 0);
+        e.mem.set_u32(first, cell.addr());
+    }
+}
+
+// Translated from 00454d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unloads and empties every non-empty interior-buffer slot whose cell is
+/// not pinned (`00557090`); when `keep_current` is set the loaded interior
+/// cell (`00451... 005f36f0`) is also kept. Returns how many cells it
+/// unloaded.
+pub fn fn_00454d50(e: &mut Engine, this: Ptr<TES>, keep_current: u8) -> i32 {
+    let mut unloaded = 0i32;
+    let mut index = 0u32;
+    while index < setting_uint(e, SETTING_INTERIOR_CELL_BUFFER) {
+        let slot = interior_slot(e, this, index);
+        let cell = e.mem.u32(slot);
+        if cell != 0 {
+            let mut keep = false;
+            if keep_current != 0 && e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+                let buffer = e.get(this, TES::pInteriorBuffer).addr();
+                let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+                keep = e.mem.u32(buffer.wrapping_add(index.wrapping_mul(4))) == interior;
+            }
+            if !keep {
+                let slot = interior_slot(e, this, index);
+                let cell = e.mem.u32(slot);
+                if !e.call(CELL_PINNED, &args![cell]).bool() {
+                    let slot = interior_slot(e, this, index);
+                    let cell = e.mem.u32(slot);
+                    unload_cell(e, cell);
+                    let slot = interior_slot(e, this, index);
+                    e.mem.set_u32(slot, 0);
+                    unloaded += 1;
+                }
+            }
+        }
+        index += 1;
+    }
+    unloaded
+}
+
+// Translated from 00454e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `cell` is one of the `uExterior Cell Buffer` slots of the
+/// exterior cell buffer.
+pub fn fn_00454e20(e: &mut Engine, this: Ptr<TES>, cell: Ptr) -> bool {
+    let mut index = 0u32;
+    while index < setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER) {
+        let slot = exterior_slot(e, this, index);
+        if e.mem.u32(slot) == cell.addr() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+// Translated from 00454e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts `cell` into the exterior cell buffer. The buffer is sorted first
+/// (`TES::SortExteriorBuffer`, `00454fc0`). The cell is inserted at the front
+/// of the part of the buffer after the loaded square (the first
+/// `uGridsToLoad * uGridsToLoad` slots), or at slot 0 when it is pinned
+/// (`00450ff0`, `004523c0`) or the slot before the end of the square is
+/// empty; the cells from there on move one slot down until the old copy of
+/// `cell` is overwritten, and a cell pushed off the end is unloaded
+/// (`00462290`) and the grid string flag is set (`00452e50`).
+pub fn fn_00454e70(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    tes_sort_exterior_buffer(e, this);
+    let mut pinned = fn_00450ff0(e, cell) || fn_004523c0(e, cell);
+    let squared = grids_squared(e);
+    let before_end = exterior_slot(e, this, squared.wrapping_sub(1));
+    if e.mem.u32(before_end) == 0 {
+        pinned = true;
+    }
+    let mut carry = cell.addr();
+    let mut start = 0u32;
+    if !pinned {
+        let count = setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER);
+        let squared = grids_squared(e);
+        if count > squared {
+            start = grids_squared(e);
+        }
+    }
+    let mut index = start;
+    while index < setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER) {
+        let slot = exterior_slot(e, this, index);
+        let old = e.mem.u32(slot);
+        let slot = exterior_slot(e, this, index);
+        e.mem.set_u32(slot, carry);
+        if old == cell.addr() {
+            return;
+        }
+        carry = old;
+        index += 1;
+    }
+    if carry != 0 {
+        unload_cell(e, carry);
+        fn_00452e50(e, this);
+    }
+}
+
+// Translated from 00454fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::SortExteriorBuffer` (Xbox PDB): when the queued grid x differs from
+/// the current one, moves the cells of the exterior buffer (after the loaded
+/// square) that lie within half a `uGridsToLoad` of the queued cell in x and y
+/// before the ones that do not, keeping their order. (The test of the y
+/// coordinate compares `iCurrentQueuedY` with itself in the game's code, so
+/// only x decides.)
+pub fn tes_sort_exterior_buffer(e: &mut Engine, this: Ptr<TES>) {
+    let current_x = e.get(this, TES::iCurrentGridX);
+    let queued_x = e.get(this, TES::iCurrentQueuedX);
+    let queued_y_a = e.get(this, TES::iCurrentQueuedY);
+    let queued_y_b = e.get(this, TES::iCurrentQueuedY);
+    if current_x == queued_x && queued_y_a == queued_y_b {
+        return;
+    }
+    let squared = grids_squared(e);
+    let half = (setting_uint(e, SETTING_GRIDS_TO_LOAD) >> 1) as i32;
+    let mut start = 0u32;
+    let mut index = squared;
+    while index < setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER).wrapping_sub(1) {
+        let slot = exterior_slot(e, this, index);
+        let cell = e.mem.u32(slot);
+        if cell == 0 {
+            break;
+        }
+        let cell_x = e.call(CELL_GET_DATA_X, &args![cell]).i32();
+        let cell_y = e.call(CELL_GET_DATA_Y, &args![cell]).i32();
+        let delta_x = e.get(this, TES::iCurrentQueuedX).wrapping_sub(cell_x);
+        let delta_y = e.get(this, TES::iCurrentQueuedY).wrapping_sub(cell_y);
+        let near = delta_x >= half.wrapping_neg()
+            && delta_x <= half
+            && delta_y >= half.wrapping_neg()
+            && delta_y <= half;
+        if near && start != 0 {
+            let destination = exterior_slot(e, this, start + 1);
+            let source = exterior_slot(e, this, start);
+            e.call(
+                MEMMOVE,
+                &args![destination, source, (index - start).wrapping_mul(4)],
+            );
+            let slot = exterior_slot(e, this, start);
+            e.mem.set_u32(slot, cell);
+            index = start + 1;
+            start = 0;
+        } else {
+            start = index;
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00455130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `cell` (null: nothing) towards the end of its run in the exterior
+/// buffer: when it is found in the buffer, the following non-empty cells
+/// for which `00450ff0` is true move one slot down, and `cell` takes the
+/// slot after them. Stops at an empty slot before the cell.
+pub fn fn_00455130(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    if cell.is_null() {
+        return;
+    }
+    let mut index = 0i32;
+    let last = setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER) as i32 - 1;
+    while index < last {
+        let slot = exterior_slot(e, this, index as u32);
+        if cell.addr() == e.mem.u32(slot) {
+            while index < last {
+                let next_slot = exterior_slot(e, this, index as u32 + 1);
+                let next = e.mem.u32(next_slot);
+                if next == 0 || !fn_00450ff0(e, Ptr::new(next)) {
+                    break;
+                }
+                let slot = exterior_slot(e, this, index as u32);
+                e.mem.set_u32(slot, next);
+                index += 1;
+            }
+            let slot = exterior_slot(e, this, index as u32);
+            e.mem.set_u32(slot, cell.addr());
+            return;
+        }
+        let slot = exterior_slot(e, this, index as u32);
+        if e.mem.u32(slot) == 0 {
+            return;
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00455200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unloads and empties every exterior-buffer slot except the cells that are
+/// pinned (`00557090`), that are loaded when `loaded_only` is set
+/// (`TES::IsCellLoaded` with flag 1), or that belong to another world space
+/// than `world_space` (when that is non-null). Returns how many it
+/// unloaded. When slot 0 is then empty and a world space is set, the terrain
+/// manager is told (`006fce00`).
+pub fn fn_00455200(e: &mut Engine, this: Ptr<TES>, loaded_only: u8, world_space: Ptr) -> i32 {
+    let mut unloaded = 0i32;
+    let mut index = 0u32;
+    while index < setting_uint(e, SETTING_EXTERIOR_CELL_BUFFER) {
+        let slot = exterior_slot(e, this, index);
+        let cell = e.mem.u32(slot);
+        if cell != 0 {
+            let skip = (loaded_only != 0 && tes_is_cell_loaded(e, this, Ptr::new(cell), 1))
+                || e.call(CELL_PINNED, &args![cell]).bool()
+                || (!world_space.is_null()
+                    && e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32() != world_space.addr());
+            if !skip {
+                unload_cell(e, cell);
+                let slot = exterior_slot(e, this, index);
+                e.mem.set_u32(slot, 0);
+                unloaded += 1;
+            }
+        }
+        index += 1;
+    }
+    let first = exterior_slot(e, this, 0);
+    if e.mem.u32(first) == 0 && e.call(GET_WORLD_SPACE, &args![this]).u32() != 0 {
+        let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+        if e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32() != 0 {
+            let world_space = e.call(GET_WORLD_SPACE, &args![this]).u32();
+            let terrain = e.call(GET_TERRAIN_MANAGER, &args![world_space]).u32();
+            e.call(0x006f_ce00, &args![terrain]);
+        }
+    }
+    unloaded
+}
+
+// Translated from 00455330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes `cell` out of the interior cell buffer: when found, the cell is
+/// unloaded (`00462290`) and its slot emptied; then the slots after the
+/// search position shift down by one and the last slot is emptied (also
+/// when the cell was not found, in which case nothing shifts), and the grid
+/// string flag is set (`00452e50`).
+pub fn fn_00455330(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    let mut index = 0u32;
+    while index < setting_uint(e, SETTING_INTERIOR_CELL_BUFFER) {
+        let slot = interior_slot(e, this, index);
+        if cell.addr() == e.mem.u32(slot) {
+            unload_cell(e, cell.addr());
+            let slot = interior_slot(e, this, index);
+            e.mem.set_u32(slot, 0);
+            break;
+        }
+        index += 1;
+    }
+    while index < setting_uint(e, SETTING_INTERIOR_CELL_BUFFER).wrapping_sub(1) {
+        let from = interior_slot(e, this, index + 1);
+        let value = e.mem.u32(from);
+        let to = interior_slot(e, this, index);
+        e.mem.set_u32(to, value);
+        index += 1;
+    }
+    let count = setting_uint(e, SETTING_INTERIOR_CELL_BUFFER);
+    let last = interior_slot(e, this, count.wrapping_sub(1));
+    e.mem.set_u32(last, 0);
+    fn_00452e50(e, this);
+}
+
+// Translated from 00455400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Chooses the sky's mode for `cell` (when the sky is built, `00476c90`):
+/// 3 for no cell or an exterior cell, otherwise 2 when bit 0x80 of its
+/// `cCellFlags` is set (`00454b10`) and 1 when not; `Sky::SetMode`
+/// (`0063a3f0`).
+pub fn fn_00455400(e: &mut Engine, this: Ptr<TES>, cell: Ptr) {
+    let sky = e.call(TES_GET_SKY, &args![this]).u32();
+    if e.call(SKY_GET_WORD_F8, &args![sky]).u32() == 0 {
+        return;
+    }
+    let mode = if cell.is_null() || !e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        3u32
+    } else if fn_00454b10(e, cell) {
+        2
+    } else {
+        1
+    };
+    let sky = e.call(TES_GET_SKY, &args![this]).u32();
+    e.call(SKY_SET_MODE, &args![sky, mode]);
+}
+
+// Translated from 00455490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the scripts once (a byte guards against re-entry; nothing happens
+/// while `Script::GetProcessScripts` is false): the quests of the data
+/// handler's list that `00455620` accepts are run (`0060d4d0`); then the
+/// scripts of the loaded interior cell (`TESObjectCELL::RunScripts`), or,
+/// outside an interior, of the first cell of the loaded grid that
+/// `00450ff0` accepts and whose scripts ran (`0054c740` true); and finally
+/// the player's `RunScript` (`00565870`).
+pub fn fn_00455490(e: &mut Engine, this: Ptr<TES>) {
+    if e.global::<u8>(SCRIPT_PASS_RUNNING) != 0 {
+        return;
+    }
+    if !e.call(SCRIPT_GET_PROCESS_SCRIPTS, &args![]).bool() {
+        return;
+    }
+    e.set_global(SCRIPT_PASS_RUNNING, 1u8);
+    e.call(0x0040_fbf0, &args![SCRIPT_PASS_OBJECT, 0u32]);
+    let data_handler: u32 = e.global(DATA_HANDLER);
+    let mut node = fn_00455600(e, Ptr::new(data_handler));
+    while node != 0 {
+        let item_slot = e.call(LIST_NODE_ITEM, &args![node]).u32();
+        let quest = e.mem.u32(item_slot);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        if quest != 0 && fn_00455620(e, Ptr::new(quest)) {
+            e.call(QUEST_RUN, &args![quest]);
+        }
+    }
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+        e.call(CELL_RUN_SCRIPTS, &args![interior, 0u32, 0u32]);
+    } else {
+        let mut found = false;
+        let mut x = 0u32;
+        while x < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+            let mut y = 0u32;
+            while y < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+                let grid_cells = e.get(this, TES::pGridCellA);
+                let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+                let cell = e.mem.u32(slot);
+                if cell != 0
+                    && fn_00450ff0(e, Ptr::new(cell))
+                    && e.call(CELL_RUN_SCRIPTS, &args![cell, 0u32, 0u32]).bool()
+                {
+                    found = true;
+                    break;
+                }
+                y += 1;
+            }
+            if found {
+                break;
+            }
+            x += 1;
+        }
+    }
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    e.call(REFERENCE_RUN_SCRIPT, &args![player]);
+    e.call(0x0040_fba0, &args![SCRIPT_PASS_OBJECT]);
+    e.set_global(SCRIPT_PASS_RUNNING, 0u8);
+}
+
+// Translated from 00455600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x118` (of the data handler: the head of a list its
+/// callers walk).
+pub fn fn_00455600(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0x118)
+}
+
+// Translated from 00455620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 0 of the byte `005a8080(this)` (`this + 0x3c`) points at.
+pub fn fn_00455620(e: &mut Engine, this: Ptr) -> bool {
+    let flags = e.call(0x005a_8080, &args![this]).u32();
+    e.mem.u8(flags) & 1 != 0
+}
+
+// Translated from 00455640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the dword at `011c56e8` (`00455680`), then runs a pass over the
+/// loaded interior cell (`00553820`) or, without one, over the grid
+/// (`004baba0` on `pGridCellA`).
+pub fn fn_00455640(e: &mut Engine, this: Ptr<TES>) {
+    fn_00455680(e);
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+        e.call(CELL_PASS_A, &args![interior]);
+    } else {
+        let grid_cells = e.get(this, TES::pGridCellA);
+        e.call(GRID_CELL_ARRAY_PASS_A, &args![grid_cells]);
+    }
+}
+
+// Translated from 00455680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the dword at `011c56e8`.
+pub fn fn_00455680(e: &mut Engine) {
+    e.set_global(COUNTER_011C56E8, 0u32);
+}
+
+// Translated from 00455690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A pass over the loaded interior cell (`TESObjectCELL::UpdateRefSounds`,
+/// `005538e0`) or, without one, over the grid (`004bac20` on `pGridCellA`).
+pub fn fn_00455690(e: &mut Engine, this: Ptr<TES>) {
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+        e.call(CELL_PASS_B, &args![interior]);
+    } else {
+        let grid_cells = e.get(this, TES::pGridCellA);
+        e.call(GRID_CELL_ARRAY_PASS_B, &args![grid_cells]);
+    }
+}
+
+/// `_ftol2` of a world-space bound (a `float` getter's `ST0` result) shifted
+/// down to cell units.
+fn world_space_bound_in_cells(e: &mut Engine, getter: u32, world_space: u32) -> i32 {
+    let value = e.call(getter, &args![world_space]).f64();
+    e.call(FTOL, &args![value]).i32() >> 12
+}
+
+/// The name text of a form (`vtable + 0x130`) compared with `"test"` on four
+/// characters, as `TestAllCells` does to skip test cells and world spaces:
+/// true when the name does not start with it.
+fn test_name_differs(e: &mut Engine, form: u32) -> bool {
+    let name = e.vcall(form, FORM_SLOT_NAME, &args![]).u32();
+    e.call(STRNICMP, &args![name, TEST_PREFIX, 4u32]).i32() != 0
+}
+
+/// The item of a list node (`006815c0` returns the node's address; the item
+/// is its first word).
+fn list_node_item(e: &mut Engine, node: u32) -> u32 {
+    let address = e.call(LIST_NODE_ITEM, &args![node]).u32();
+    e.mem.u32(address)
+}
+
+/// The pointer to `"Y"` or `"N"` the test prints for the portals column.
+fn portals_text(portals: bool) -> u32 {
+    if portals {
+        TEST_TEXT_YES
+    } else {
+        TEST_TEXT_NO
+    }
+}
+
+// Translated from 004556d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::TestAllCells` (Xbox PDB): the debug run that loads every cell in
+/// turn and prints a line per cell. `mode` selects what is walked: -1 stops a
+/// running test (clears `bRunningCellTests`, the warning count and the region
+/// filter); 0 only runs the loop below; 1, 4, 5, 9 start at the first world
+/// space (4, 5 and 9 also set the "base objects checked" byte); 2 the
+/// interiors only; 3 the loaded world space; 6 and 7 behave as 1 and 2 and
+/// store the callback `0055 7dd0` (what the game calls "render test cell") at
+/// `TES + 0x54`. A fresh start (mode other than 0) deletes the output file
+/// and, once, prints the base-object model and icon checks
+/// (`TESDataHandler::CheckModels`, `CheckIcons`).
+///
+/// Each turn (while `bRunningCellTests` is set) sends a mouse-move input so
+/// the machine does not go idle, enters the next world space when asked
+/// (skipping names that start with `"test"`), then takes cells (an exterior
+/// cell by `TESWorldSpace::LoadCell` over the world space's cell rectangle,
+/// an interior by index) until one has references and passes the region
+/// filter. For that cell the player is placed (a position request,
+/// `RequestPositionPlayer`), the queued loads are run, the memory is trimmed
+/// and, when the logging byte is set, one line is printed with the cell
+/// name, the counts (textures, lights, actors, portals) and the time it took
+/// (to the debug print and to the output file); the callback at `TES + 0x54`
+/// then runs, and in modes 4 and 5 `TESSaveLoadGame::TestAllCells`. The run
+/// ends when the interior index reaches the interior count.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_test_all_cells(e: &mut Engine, this: Ptr<TES>, mode: i32) {
+    let mut mode = mode;
+    if mode == 4 || mode == 5 || mode == 9 {
+        e.set_global(TEST_BASE_OBJECTS_CHECKED, 1u8);
+    }
+    if (6..=7).contains(&mode) {
+        mode -= 5;
+        e.set_global(TEST_BASE_OBJECTS_CHECKED, 1u8);
+        e.call(SET_TEST_CALLBACK, &args![this, TEST_CALLBACK]);
+    }
+    let data_handler: u32 = e.global(DATA_HANDLER);
+    if mode == -1 {
+        e.set(this, TES::bRunningCellTests, false);
+        e.call(MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT, &args![0u32]);
+        e.set(this, TES::pTACRegionFilter, Ptr::new(0));
+    } else if mode != 0 {
+        e.set_global(TEST_MODE, mode as u32);
+        e.set(this, TES::bRunningCellTests, true);
+        e.call(MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT, &args![1u32]);
+        let output_file: u32 = e.global(TEST_OUTPUT_FILE);
+        e.call(DELETE_FILE, &args![output_file]);
+        if e.global::<u8>(TEST_BASE_OBJECTS_CHECKED) == 0 {
+            e.call(DEBUG_PRINT, &args![TEST_TEXT_BASE_OBJECT_MODELS]);
+            e.call(DATA_HANDLER_CHECK_MODELS, &args![data_handler, 0u32]);
+            e.call(DEBUG_PRINT, &args![TEST_TEXT_BASE_OBJECT_ICONS]);
+            e.call(DATA_HANDLER_CHECK_ICONS, &args![data_handler]);
+            e.set_global(TEST_BASE_OBJECTS_CHECKED, 1u8);
+        }
+        if matches!(mode, 1 | 4 | 5 | 9)
+            && e.global::<u32>(TEST_WORLD_SPACE_NODE) == 0
+            && e.global::<u32>(TEST_INTERIOR_COUNT) == 0
+        {
+            let first = e
+                .call(DATA_HANDLER_FIRST_WORLD_SPACE, &args![data_handler])
+                .u32();
+            e.set_global(TEST_WORLD_SPACE_NODE, first);
+            e.set_global(TEST_ENTER_WORLD_SPACE, 1u8);
+            start_interior_walk(e, data_handler);
+        } else if mode == 3 {
+            let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+            let current = e.get(this, TES::pWorldSpace).addr();
+            if node == 0 || list_node_item(e, node) != current {
+                let first = e
+                    .call(DATA_HANDLER_FIRST_WORLD_SPACE, &args![data_handler])
+                    .u32();
+                e.set_global(TEST_WORLD_SPACE_NODE, first);
+                while e.global::<u32>(TEST_WORLD_SPACE_NODE) != 0 {
+                    let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+                    let world_space = list_node_item(e, node);
+                    if world_space != 0 && world_space == e.get(this, TES::pWorldSpace).addr() {
+                        break;
+                    }
+                    let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+                    let next = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                    e.set_global(TEST_WORLD_SPACE_NODE, next);
+                }
+            }
+            if e.global::<u32>(TEST_WORLD_SPACE_NODE) != 0 {
+                e.set_global(TEST_ENTER_WORLD_SPACE, 1u8);
+                start_interior_walk(e, data_handler);
+            }
+        } else if mode == 2 {
+            if e.global::<u32>(TEST_WORLD_SPACE_NODE) != 0 {
+                e.set_global(TEST_WORLD_SPACE_NODE, 0u32);
+                e.set_global(TEST_ENTER_WORLD_SPACE, 0u8);
+            }
+            if e.global::<u32>(TEST_INTERIOR_COUNT) == 0 {
+                start_interior_walk(e, data_handler);
+            }
+        }
+    }
+    let mut again = true;
+    while again {
+        again = false;
+        if !e.get(this, TES::bRunningCellTests) {
+            continue;
+        }
+        if mode == 9 {
+            again = true;
+        }
+        let mut cell = 0u32;
+        let started = e.call(CRT_CLOCK, &args![]).u32();
+        // The mouse move that keeps the machine awake: an INPUT of type 0
+        // (mouse) with dwFlags 1 (MOUSEEVENTF_MOVE) and dx 2 or -1.
+        let sign: i32 = e.global(TEST_INPUT_SIGN);
+        e.with_stack(0x1c, |e, input| {
+            let delta_x: i32 = if sign > 0 { 2 } else { -1 };
+            e.mem.set_i32(input.addr() + 4, delta_x);
+            e.mem.set_u32(input.addr() + 0x10, 1);
+            e.call(IMPORT_SEND_INPUT, &args![1u32, input.addr(), 0x1cu32]);
+        });
+        let sign: i32 = e.global(TEST_INPUT_SIGN);
+        e.set_global(TEST_INPUT_SIGN, sign.wrapping_neg());
+        if e.global::<u8>(TEST_ENTER_WORLD_SPACE) != 0 {
+            if e.global::<u32>(TEST_WORLD_SPACE_NODE) != 0 {
+                let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+                let mut world_space = list_node_item(e, node);
+                while world_space != 0 {
+                    if !test_name_differs(e, world_space) {
+                        let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+                        let next = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                        e.set_global(TEST_WORLD_SPACE_NODE, next);
+                        world_space = if next != 0 {
+                            list_node_item(e, next)
+                        } else {
+                            0
+                        };
+                    } else {
+                        break;
+                    }
+                }
+                if world_space != 0 {
+                    e.call(SET_WORLD_SPACE, &args![this, world_space]);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let low_x = world_space_bound_in_cells(e, WORLD_SPACE_MIN_X, current);
+                    e.set_global(TEST_CELL_X, low_x);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let low_y = world_space_bound_in_cells(e, WORLD_SPACE_MIN_Y, current);
+                    e.set_global(TEST_CELL_Y, low_y);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let high_x = world_space_bound_in_cells(e, WORLD_SPACE_MAX_X, current);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let high_y = world_space_bound_in_cells(e, WORLD_SPACE_MAX_Y, current);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let name = e.vcall(current, FORM_SLOT_NAME, &args![]).u32();
+                    e.call(
+                        DEBUG_PRINT,
+                        &args![TEST_TEXT_WORLD_SPACE, name, low_x, low_y, high_x, high_y],
+                    );
+                }
+            }
+            e.set_global(TEST_ENTER_WORLD_SPACE, 0u8);
+        }
+        let mut found = false;
+        let mut finished = false;
+        while !found && e.global::<u8>(TEST_ENTER_WORLD_SPACE) == 0 && !finished {
+            if e.global::<u32>(TEST_WORLD_SPACE_NODE) != 0 {
+                let world_space = e.get(this, TES::pWorldSpace).addr();
+                let (x, y): (i32, i32) = (e.global(TEST_CELL_X), e.global(TEST_CELL_Y));
+                cell = e
+                    .call(WORLD_SPACE_LOAD_CELL, &args![world_space, x, y])
+                    .u32();
+                if cell != 0 {
+                    fn_00454e70(e, this, Ptr::new(cell));
+                }
+                let next_y = e.global::<i32>(TEST_CELL_Y).wrapping_add(1);
+                e.set_global(TEST_CELL_Y, next_y);
+                let current = e.get(this, TES::pWorldSpace).addr();
+                if next_y > world_space_bound_in_cells(e, WORLD_SPACE_MAX_Y, current) {
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    let low_y = world_space_bound_in_cells(e, WORLD_SPACE_MIN_Y, current);
+                    e.set_global(TEST_CELL_Y, low_y);
+                    let next_x = e.global::<i32>(TEST_CELL_X).wrapping_add(1);
+                    e.set_global(TEST_CELL_X, next_x);
+                    let current = e.get(this, TES::pWorldSpace).addr();
+                    if next_x > world_space_bound_in_cells(e, WORLD_SPACE_MAX_X, current) {
+                        let node: u32 = e.global(TEST_WORLD_SPACE_NODE);
+                        let next = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                        e.set_global(TEST_WORLD_SPACE_NODE, next);
+                        if next != 0 {
+                            e.set_global(TEST_ENTER_WORLD_SPACE, 1u8);
+                        }
+                    }
+                }
+            } else {
+                if e.global::<u32>(TEST_INTERIOR_INDEX) == 0 {
+                    e.call(DEBUG_PRINT, &args![TEST_TEXT_INTERIORS]);
+                }
+                let index: u32 = e.global(TEST_INTERIOR_INDEX);
+                cell = e
+                    .call(DATA_HANDLER_GET_INTERIOR, &args![data_handler, index])
+                    .u32();
+                e.set_global(TEST_INTERIOR_INDEX, index.wrapping_add(1));
+                while cell != 0 {
+                    if test_name_differs(e, cell) {
+                        break;
+                    }
+                    let index: u32 = e.global(TEST_INTERIOR_INDEX);
+                    cell = e
+                        .call(DATA_HANDLER_GET_INTERIOR, &args![data_handler, index])
+                        .u32();
+                    e.set_global(TEST_INTERIOR_INDEX, index.wrapping_add(1));
+                }
+                if cell == 0 {
+                    finished = true;
+                }
+            }
+            if cell != 0
+                && !e.call(CELL_HAS_FLAG_20, &args![cell]).bool()
+                && e.call(CELL_GET_FIRST_REFR, &args![cell]).u32() != 0
+            {
+                found = true;
+            }
+        }
+        if cell != 0 && found {
+            let regions = e.call(CELL_GET_REGION_LIST, &args![cell, 1u32]).u32();
+            if !e.get(this, TES::pTACRegionFilter).is_null()
+                && (regions == 0
+                    || !e
+                        .call(
+                            REGION_LIST_CONTAINS,
+                            &args![regions + 4, this.addr() + TES::pTACRegionFilter.off],
+                        )
+                        .bool())
+            {
+                found = false;
+            }
+        } else if e.global::<u8>(TEST_ENTER_WORLD_SPACE) != 0 {
+            let player: u32 = e.global(PLAYER_CHARACTER);
+            let player_world_space = e.call(REFERENCE_GET_WORLD_SPACE, &args![player]).u32();
+            if player_world_space != e.get(this, TES::pWorldSpace).addr() {
+                again = true;
+            }
+        }
+        if found {
+            test_visit_cell(e, this, cell, started);
+        }
+        if e.global::<u32>(TEST_INTERIOR_INDEX) >= e.global::<u32>(TEST_INTERIOR_COUNT) {
+            e.set_global(TEST_INTERIOR_COUNT, 0u32);
+            e.set(this, TES::bRunningCellTests, false);
+            e.call(MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT, &args![0u32]);
+            e.set(this, TES::pTACRegionFilter, Ptr::new(0));
+        }
+    }
+}
+
+/// What `TestAllCells` does to begin walking the interior cells: the data
+/// handler prepares its interior list (`004619b0`), the count comes from
+/// `00461960`, and the index restarts at 0.
+fn start_interior_walk(e: &mut Engine, data_handler: u32) {
+    e.call(DATA_HANDLER_PREPARE_INTERIORS, &args![data_handler]);
+    let count = e
+        .call(DATA_HANDLER_INTERIOR_COUNT, &args![data_handler])
+        .u32();
+    e.set_global(TEST_INTERIOR_COUNT, count);
+    e.set_global(TEST_INTERIOR_INDEX, 0u32);
+}
+
+/// The part of `TestAllCells` that runs for one chosen `cell`: places the
+/// player at it, loads, measures and prints (see [`tes_test_all_cells`]);
+/// `started` is the `clock()` value taken at the beginning of the turn.
+fn test_visit_cell(e: &mut Engine, this: Ptr<TES>, cell: u32, started: u32) {
+    let ten: f32 = e.global(TEST_FLOAT_TEN);
+    e.call(TIME_OBJECT_ADVANCE, &args![OBJECT_011DE7B8, ten]);
+    let position = e.mem.alloc(12);
+    for word in 0..3u32 {
+        let value: u32 = e.global(NI_POINT3_ZERO + 4 * word);
+        e.mem.set_u32(position + 4 * word, value);
+    }
+    let interior = e.call(CELL_IS_INTERIOR, &args![cell]).bool();
+    if !interior {
+        let half_cell: f64 = e.global(TEST_DOUBLE_HALF_CELL);
+        let y_corner = e.call(CELL_GET_DATA_Y, &args![cell]).i32().wrapping_shl(12);
+        let y = (y_corner as f64 + half_cell) as f32;
+        let x_corner = e.call(CELL_GET_DATA_X, &args![cell]).i32().wrapping_shl(12);
+        let x = (x_corner as f64 + half_cell) as f32;
+        let scratch = e.mem.alloc(12);
+        let made = e
+            .call(NI_POINT3_CONSTRUCT_FLOATS, &args![scratch, x, y, 0.0f32])
+            .u32();
+        for word in 0..3u32 {
+            let value = e.mem.u32(made + 4 * word);
+            e.mem.set_u32(position + 4 * word, value);
+        }
+        e.mem.free(scratch);
+    }
+    if interior {
+        e.call(CELL_LOAD_ALL_TEMP_DATA, &args![cell]);
+        let rotation = e.mem.alloc(12);
+        e.call(LIST_NODE_ITEM, &args![rotation]);
+        e.call(
+            CELL_GET_COC_PLACEMENT_INFO,
+            &args![cell, position, rotation],
+        );
+        fn_00453dc0(e, this, Ptr::new(cell), Ptr::new(position));
+        e.mem.free(rotation);
+    } else {
+        let height = e.mem.alloc(4);
+        if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+            fn_00454450(e, this, Ptr::new(position));
+        } else {
+            tes_update_current_grid_cell(e, this, Ptr::new(position), 0);
+        }
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(LAND_GET_LAND_HEIGHT, &args![land, position, height]);
+        let value = e.mem.f32(height);
+        let zero: f64 = e.global(TEST_DOUBLE_ZERO);
+        if value as f64 >= zero {
+            e.mem.set_f32(position + 8, value);
+        }
+        e.mem.free(height);
+    }
+    let size = 0x34u32;
+    let block = e.call(OPERATOR_NEW, &args![size]).u32();
+    let request = if block != 0 {
+        e.call(POSITION_REQUEST_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    for word in 0..3u32 {
+        let value = e.mem.u32(position + 4 * word);
+        e.mem.set_u32(request + 8 + 4 * word, value);
+    }
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    let rotation = e.call(PLAYER_ROTATION_GETTER, &args![player]).u32();
+    for word in 0..3u32 {
+        let value = e.mem.u32(rotation + 4 * word);
+        e.mem.set_u32(request + 0x14 + 4 * word, value);
+    }
+    e.mem.set_u8(request + 0x20, 1);
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        e.mem.set_u32(request + 4, cell);
+    } else {
+        let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+        e.mem.set_u32(request, world_space);
+    }
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    e.call(PLAYER_REQUEST_POSITION, &args![player, request]);
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    e.call(PLAYER_HANDLE_POSITION_REQUEST, &args![player]);
+    let io_manager: u32 = e.global(IO_MANAGER);
+    e.call(IO_MANAGER_LOAD_QUEUED_PRIORITY, &args![io_manager]);
+    let finished = e.call(CRT_CLOCK, &args![]).u32();
+    let thousand: f64 = e.global(TEST_DOUBLE_THOUSAND);
+    let elapsed = (finished.wrapping_sub(started) as i32 as f64 / thousand) as f32;
+    let scope = e.mem.alloc(12);
+    e.call(FRAME_SCOPE_BEGIN, &args![scope, 1u32, 1u32, 1u32]);
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    e.call(TES_PURGE_UNUSED, &args![tes_singleton, 1u32, 0u32]);
+    let released = e.mem.u8(scope + 5);
+    e.call(FRAME_SCOPE_RELEASE, &args![released]);
+    e.call(FRAME_SCOPE_END, &args![scope]);
+    e.mem.free(scope);
+    if e.global::<u8>(TEST_LOGGING) != 0 {
+        test_print_cell(e, cell, elapsed);
+    }
+    let callback = e.get(this, TES::pfnTACCallbackFunc).addr();
+    if callback != 0 {
+        let data = e.get(this, TES::pTACCallbackData).addr();
+        e.call(callback, &args![cell, data]);
+    }
+    let mode: u32 = e.global(TEST_MODE);
+    if mode == 4 || mode == 5 {
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        let mode: u32 = e.global(TEST_MODE);
+        e.call(SAVE_LOAD_GAME_TEST_ALL_CELLS, &args![save_load, mode]);
+    }
+    e.mem.free(position);
+}
+
+/// The logging block of `TestAllCells`: the scene totals, the counts, and
+/// the line printed to the debug output and appended to the output file
+/// (an interior cell and an exterior cell have different lines).
+fn test_print_cell(e: &mut Engine, cell: u32, elapsed: f32) {
+    let total_time = e.mem.alloc(4);
+    let second_value = e.mem.alloc(4);
+    let m_number = e.mem.alloc(12);
+    e.mem.set_f32(total_time, 0.0);
+    e.mem.set_u32(second_value, 0);
+    e.call(STRING_ARRAY_CONSTRUCT, &args![m_number]);
+    e.call(
+        SCENE_INFO_TOTALS,
+        &args![total_time, second_value, 1u32, 1u32],
+    );
+    let second_word = e.mem.u32(second_value);
+    e.call(
+        SCENE_INFO_BUILD_M_NUMBER,
+        &args![second_word, m_number, 0u32],
+    );
+    let mut portals = false;
+    let holder = e.call(CELL_GET_ACTOR_HOLDER, &args![cell]).u32();
+    if holder != 0 {
+        let field = e.call(ACTOR_HOLDER_GET_FIELD_20, &args![holder]).u32();
+        if !e.call(FIELD_IS_EMPTY, &args![field]).bool() {
+            portals = true;
+        }
+    }
+    let mut texture_total = 0u32;
+    let mut texture = e.call(TEXTURE_LIST_HEAD, &args![]).u32();
+    while texture != 0 {
+        if e.call(TEXTURE_IS_LOADED, &args![texture]).u32() != 0 {
+            let size = e.call(DEBUG_PRINT, &args![texture]).u32();
+            texture_total = texture_total.wrapping_add(size);
+        }
+        texture = e.call(TEXTURE_LIST_NEXT, &args![texture]).u32();
+    }
+    let texture_megabytes = texture_total >> 20;
+    let actors = e.call(ACTOR_COUNT, &args![OBJECT_011E0E80]).u32();
+    let total_time_value = e.mem.f32(total_time) as f64;
+    let elapsed = elapsed as f64;
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        let lights = e.call(CELL_GET_LIGHT_COUNT, &args![cell]).u32();
+        let m_number_text = e.call(NI_POINTER_GET, &args![m_number]).u32();
+        let name = e.vcall(cell, FORM_SLOT_NAME, &args![]).u32();
+        e.call(
+            DEBUG_PRINT,
+            &args![
+                TEST_TEXT_INTERIOR_LINE,
+                name,
+                m_number_text,
+                total_time_value,
+                elapsed,
+                lights,
+                portals_text(portals),
+                texture_megabytes,
+                actors
+            ],
+        );
+        let lights = e.call(CELL_GET_LIGHT_COUNT, &args![cell]).u32();
+        let m_number_text = e.call(NI_POINTER_GET, &args![m_number]).u32();
+        let name = e.vcall(cell, FORM_SLOT_NAME, &args![]).u32();
+        let output_file: u32 = e.global(TEST_OUTPUT_FILE);
+        e.call(
+            MESSAGE_HANDLER_OUTPUT,
+            &args![
+                output_file,
+                TEST_TEXT_INTERIOR_ROW,
+                name,
+                m_number_text,
+                total_time_value,
+                elapsed,
+                lights,
+                portals_text(portals),
+                texture_megabytes,
+                actors
+            ],
+        );
+    } else {
+        let count = e.global::<u32>(TEST_EXTERIOR_COUNT).wrapping_add(1);
+        e.set_global(TEST_EXTERIOR_COUNT, count);
+        for to_file in [false, true] {
+            let m_number_text = e.call(NI_POINTER_GET, &args![m_number]).u32();
+            let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+            let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+            let name = e.vcall(cell, FORM_SLOT_NAME, &args![]).u32();
+            if !to_file {
+                e.call(
+                    DEBUG_PRINT,
+                    &args![
+                        TEST_TEXT_EXTERIOR_LINE,
+                        name,
+                        x,
+                        y,
+                        m_number_text,
+                        total_time_value,
+                        elapsed,
+                        portals_text(portals),
+                        texture_megabytes,
+                        actors
+                    ],
+                );
+            } else {
+                let output_file: u32 = e.global(TEST_OUTPUT_FILE);
+                e.call(
+                    MESSAGE_HANDLER_OUTPUT,
+                    &args![
+                        output_file,
+                        TEST_TEXT_EXTERIOR_ROW,
+                        name,
+                        x,
+                        y,
+                        m_number_text,
+                        total_time_value,
+                        elapsed,
+                        portals_text(portals),
+                        texture_megabytes,
+                        actors
+                    ],
+                );
+            }
+        }
+    }
+    e.call(STRING_ARRAY_DESTRUCT, &args![m_number]);
+    e.mem.free(m_number);
+    e.mem.free(second_value);
+    e.mem.free(total_time);
+}
+
+// Translated from 00456670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetFaceCount` (Xbox PDB): the number of faces under `node`. Each
+/// child is held in a `NiPointer` for the visit; a child whose vtable slot
+/// `0xc` answers (a node) is counted recursively; otherwise one whose slot
+/// `0x1c` answers (a geometry object) adds the 16-bit count at `+0x40` of its
+/// data (`004567b0`), unless `all` is zero and `00456610` says to leave it out.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_get_face_count(e: &mut Engine, _this: Ptr<TES>, node: Ptr, all: u8) -> i32 {
+    if node.is_null() {
+        return 0;
+    }
+    let mut total = 0i32;
+    let mut index = 0u32;
+    while index < e.call(0x0043_b480, &args![node]).u32() {
+        let child = e.call(0x0043_b4a0, &args![node, index]).u32();
+        e.with_stack(4, |e, holder| {
+            e.call(NI_POINTER_CTOR, &args![holder, child]);
+            if e.call(NI_POINTER_GET, &args![holder]).u32() != 0 {
+                let object = e.call(NI_POINTER_GET, &args![holder]).u32();
+                if e.vcall(object, 0xc, &args![]).u32() != 0 {
+                    let inner = e.call(NI_POINTER_GET, &args![holder]);
+                    let faces = tes_get_face_count(e, _this, Ptr::new(inner.u32()), all);
+                    total = total.wrapping_add(faces);
+                } else {
+                    let object = e.call(NI_POINTER_GET, &args![holder]).u32();
+                    if e.vcall(object, 0x1c, &args![]).u32() != 0 {
+                        let geometry = e.call(NI_POINTER_GET, &args![holder]).u32();
+                        if all != 0 || !e.call(0x0045_6610, &args![geometry]).bool() {
+                            let faces = fn_004567b0(e, Ptr::new(geometry));
+                            total = total.wrapping_add(faces as i32);
+                        }
+                    }
+                }
+            }
+            e.call(NI_POINTER_DTOR, &args![holder]);
+        });
+        index += 1;
+    }
+    total
+}
+
+// Translated from 004567b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-bit count at `+0x40` of the object the `NiPointer` at `this + 0xb8`
+/// holds (`004567e0`).
+pub fn fn_004567b0(e: &mut Engine, this: Ptr) -> u16 {
+    let data = e.call(NI_POINTER_GET, &args![this.addr() + 0xb8]).u32();
+    fn_004567e0(e, Ptr::new(data))
+}
+
+// Translated from 004567e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-bit word at `this + 0x40`.
+pub fn fn_004567e0(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + 0x40)
+}
+
+// Translated from 00456800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::RemoveTextureImage` (Xbox PDB): looks the texture `name` up in the
+/// texture palette (`BSTexturePalette::GetTexture`, `00a61b90`) and removes it
+/// (`BSTexturePalette::RemoveTexture`, `00a61f30`) when only the palette and
+/// at most `extra_references` other holders keep it (the count at `+4` of
+/// the texture, `00726070`, is at most `extra_references + 2`). True when
+/// removed. (`this` is not used.)
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_remove_texture_image(
+    e: &mut Engine,
+    _this: Ptr<TES>,
+    name: Ptr,
+    extra_references: u32,
+) -> bool {
+    e.with_stack(4, |e, holder| {
+        e.call(NI_POINTER_CTOR, &args![holder, 0u32]);
+        e.call(0x00a6_1b90, &args![name, holder]);
+        let mut removed = false;
+        if e.call(NI_POINTER_GET, &args![holder]).u32() != 0 {
+            let texture = e.call(NI_POINTER_GET, &args![holder]).u32();
+            let count = e.call(LIST_NODE_NEXT, &args![texture]).u32();
+            if count <= extra_references.wrapping_add(2) {
+                let texture = e.call(NI_POINTER_GET, &args![holder]).u32();
+                e.call(0x00a6_1f30, &args![texture]);
+                removed = true;
+            }
+        }
+        e.call(NI_POINTER_DTOR, &args![holder]);
+        removed
+    })
+}
+
+// Translated from 004568c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::CreateTextureImage` (Xbox PDB): makes the `NiPointer` at `out` hold
+/// the texture file `name`. The palette is asked first (`00a61b90`); a
+/// texture already there is the answer. Otherwise, if the file exists
+/// (`FileFinder::Exist`, `00456a20`; `alternate` selects a different
+/// search mode, `(6, 2)` instead of `(0, 0xffff)`) or `quiet` is zero, a
+/// source texture is created (`NiSourceTexture::Create`) from the name
+/// through the texture format preferences at `011a9598`, stored in `out`
+/// and entered in the palette (`BSTexturePalette::SetTexture`, `00a61c50`).
+/// When the texture still could not be made and `quiet` is zero, the failure
+/// is printed. (`this` is not used.)
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_create_texture_image(
+    e: &mut Engine,
+    _this: Ptr<TES>,
+    name: Ptr,
+    out: Ptr,
+    quiet: u8,
+    alternate: u8,
+) {
+    let mut mode = 0u32;
+    let mut flags = 0xffffu32;
+    e.call(0x0066_b0d0, &args![out, 0u32]);
+    e.call(0x00a6_1b90, &args![name, out]);
+    if e.call(NI_POINTER_GET, &args![out]).u32() != 0 {
+        return;
+    }
+    e.with_stack(4, |e, holder| {
+        e.call(NI_POINTER_CTOR, &args![holder, 0u32]);
+        if alternate != 0 {
+            mode = 6;
+            flags = 2;
+        }
+        let found = e.call(0x0045_6a20, &args![name, 0u32, mode, flags]).u32();
+        if found == 0 && quiet != 0 {
+            e.call(NI_POINTER_DTOR, &args![holder]);
+            return;
+        }
+        e.with_stack(4, |e, fixed_string| {
+            let string = e.call(0x0043_8170, &args![fixed_string, name]).u32();
+            let texture = e
+                .call(0x00a5_fd70, &args![string, 0x011a_9598u32, 1u32, 0u32])
+                .u32();
+            e.call(0x0066_b0d0, &args![out, texture]);
+            e.call(0x0043_81b0, &args![fixed_string]);
+        });
+        if e.call(NI_POINTER_GET, &args![out]).u32() != 0 {
+            let texture = e.call(NI_POINTER_GET, &args![out]).u32();
+            e.call(0x00a6_1c50, &args![texture, 0u32]);
+        } else if quiet == 0 {
+            e.call(DEBUG_PRINT, &args![0x0101_7ca8u32, name]);
+        }
+        e.call(NI_POINTER_DTOR, &args![holder]);
+    });
+}
+
+// Translated from 00457070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetCurrentCell` (Xbox PDB): the loaded interior cell; without one,
+/// the centre cell of the grid (`00451900` at `iCurrentGridX`,
+/// `iCurrentGridY`), or null while either is `0x7fffffff` (none).
+pub fn tes_get_current_cell(e: &mut Engine, this: Ptr<TES>) -> u32 {
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+        return e.call(GET_INTERIOR_CELL, &args![this]).u32();
+    }
+    if e.get(this, TES::iCurrentGridX) == 0x7fff_ffff
+        || e.get(this, TES::iCurrentGridY) == 0x7fff_ffff
+    {
+        return 0;
+    }
+    let x = e.get(this, TES::iCurrentGridX);
+    let y = e.get(this, TES::iCurrentGridY);
+    fn_00451900(e, this, x, y)
+}
+
+// Translated from 004570d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Asks the cells of the loaded area (`00553bf0(cell, a, b, c, d)`): the
+/// interior cell alone (taken from the `TES` singleton, not from `this`), or,
+/// without one, every non-empty cell of the `uGridsToLoad` square, all of
+/// them. True when any answered true. False at once for a null `target`.
+pub fn fn_004570d0(
+    e: &mut Engine,
+    this: Ptr<TES>,
+    target: Ptr,
+    second: u32,
+    third: u32,
+    fourth: f32,
+) -> bool {
+    let mut result = false;
+    if target.is_null() {
+        return false;
+    }
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if e.call(GET_INTERIOR_CELL, &args![tes_singleton]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![tes_singleton]).u32();
+        return e
+            .call(CELL_TEST_A, &args![interior, target, second, third, fourth])
+            .bool();
+    }
+    let mut x = 0u32;
+    while x < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+        let mut y = 0u32;
+        while y < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            if cell != 0
+                && e.call(CELL_TEST_A, &args![cell, target, second, third, fourth])
+                    .bool()
+            {
+                result = true;
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+    result
+}
+
+// Translated from 004571c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `004570d0` with one more byte argument and `00553d00` on the cells,
+/// after a preparation of `target`: when `target` is non-null and `flag` is
+/// non-zero, `00705fc0(target, 0)` and `NiPick::PickObjects`
+/// (`00e98e20`, with the pick object at `011f426c` twice and 0) run on it.
+/// The `TES` singleton's interior cell is asked alone, else every non-empty
+/// cell of the grid; true when any answered true.
+pub fn fn_004571c0(
+    e: &mut Engine,
+    this: Ptr<TES>,
+    target: Ptr,
+    second: u32,
+    third: u32,
+    fourth: f32,
+    flag: u8,
+) -> bool {
+    let mut result = false;
+    if target.is_null() || flag == 0 {
+        return false;
+    }
+    e.call(0x0070_5fc0, &args![target, 0u32]);
+    e.call(
+        0x00e9_8e20,
+        &args![target, NI_POINT3_ZERO, NI_POINT3_ZERO, 0u32],
+    );
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if e.call(GET_INTERIOR_CELL, &args![tes_singleton]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![tes_singleton]).u32();
+        return e
+            .call(
+                CELL_TEST_B,
+                &args![interior, target, second, third, fourth, flag],
+            )
+            .bool();
+    }
+    let mut x = 0u32;
+    while x < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+        let mut y = 0u32;
+        while y < setting_uint(e, SETTING_GRIDS_TO_LOAD) {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            if cell != 0
+                && e.call(
+                    CELL_TEST_B,
+                    &args![cell, target, second, third, fourth, flag],
+                )
+                .bool()
+            {
+                result = true;
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+    result
+}
+
+/// The rounding fix of the position code: `rounded` (from `00406d90`) is
+/// moved one down when it is a multiple of 4096 and the exact `value` is
+/// below it (so a position on the border of a cell belongs to the cell below).
+fn adjust_rounded_position(rounded: i32, value: f32) -> i32 {
+    let mut remainder = (rounded as u32) & 0x8000_0fff;
+    if (remainder as i32) < 0 {
+        remainder = (remainder.wrapping_sub(1) | 0xffff_f000).wrapping_add(1);
+    }
+    if remainder == 0 && (value as f64) < rounded as f64 {
+        rounded - 1
+    } else {
+        rounded
+    }
+}
+
+/// The adjusted x and y of the position `pos` (two floats), both rounded
+/// before either is adjusted.
+fn rounded_position(e: &mut Engine, pos: Ptr) -> (i32, i32) {
+    let x_value = e.mem.f32(pos.addr());
+    let rounded_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x_value]).i32();
+    let y_value = e.mem.f32(pos.addr() + 4);
+    let rounded_y = e.call(FLOAT_TO_INT_ROUNDED, &args![y_value]).i32();
+    let x_value = e.mem.f32(pos.addr());
+    let y_value = e.mem.f32(pos.addr() + 4);
+    (
+        adjust_rounded_position(rounded_x, x_value),
+        adjust_rounded_position(rounded_y, y_value),
+    )
+}
+
+/// The loaded cell under the position `pos` (two floats), or 0: the cell at
+/// the adjusted rounded coordinates divided by 4096 (`00451900`), when
+/// `TES::IsCellLoaded` (on the `TES` singleton, flag 0) says it is loaded.
+fn loaded_cell_at(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
+    let (x, y) = rounded_position(e, pos);
+    let cell = fn_00451900(e, this, x >> 12, y >> 12);
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if cell != 0 && tes_is_cell_loaded(e, Ptr::new(tes_singleton), Ptr::new(cell), 0) {
+        cell
+    } else {
+        0
+    }
+}
+
+// Translated from 004572e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The land height at `pos` (two floats): `*out` is first set to the "no
+/// height" float at `01017824`; the cell under `pos` must be loaded
+/// (`TES::IsCellLoaded`), and `TESObjectLAND::GetLandHeight`
+/// (`0053f180`) of its land (`TESObjectCELL::GetLand`) answers in `*out`
+/// and as the byte result.
+pub fn fn_004572e0(e: &mut Engine, this: Ptr<TES>, pos: Ptr, out: Ptr) -> bool {
+    let (x, y) = rounded_position(e, pos);
+    let no_height: f32 = e.global(0x0101_7824);
+    e.mem.set_f32(out.addr(), no_height);
+    let cell = fn_00451900(e, this, x >> 12, y >> 12);
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if cell != 0 && tes_is_cell_loaded(e, Ptr::new(tes_singleton), Ptr::new(cell), 0) {
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(LAND_GET_LAND_HEIGHT, &args![land, pos, out]).bool()
+    } else {
+        false
+    }
+}
+
+// Translated from 004573f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `004572e0` for another `TESObjectLAND` query (`0053d2e0(land, pos, out,
+/// third)`): `out` (a `NiPoint3`) is first set to the three words at
+/// `011f426c` with z = 1.0, and the answer is that query's byte (false when
+/// the cell under `pos` is not loaded).
+pub fn fn_004573f0(e: &mut Engine, this: Ptr<TES>, pos: Ptr, out: Ptr, third: u32) -> bool {
+    let (x, y) = rounded_position(e, pos);
+    for word in 0..3u32 {
+        let value: u32 = e.global(NI_POINT3_ZERO + 4 * word);
+        e.mem.set_u32(out.addr() + 4 * word, value);
+    }
+    e.mem.set_f32(out.addr() + 8, 1.0);
+    let cell = fn_00451900(e, this, x >> 12, y >> 12);
+    let tes_singleton: u32 = e.global(TES_SINGLETON);
+    if cell != 0 && tes_is_cell_loaded(e, Ptr::new(tes_singleton), Ptr::new(cell), 0) {
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(0x0053_d2e0, &args![land, pos, out, third]).bool()
+    } else {
+        false
+    }
+}
+
+// Translated from 00457520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `004572e0` for a `TESObjectLAND` query with one output
+/// (`0053f570(land, pos, out)`); false when the cell under `pos` is not
+/// loaded.
+pub fn fn_00457520(e: &mut Engine, this: Ptr<TES>, pos: Ptr, third: u32) -> bool {
+    let cell = loaded_cell_at(e, this, pos);
+    if cell != 0 {
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(0x0053_f570, &args![land, pos, third]).bool()
+    } else {
+        false
+    }
+}
+
+// Translated from 00457620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `004572e0` for a `TESObjectLAND` query (`0053f0e0(land, pos)`) whose
+/// whole `eax` answer is returned; 0 when the cell under `pos` is not loaded.
+pub fn fn_00457620(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
+    let cell = loaded_cell_at(e, this, pos);
+    if cell != 0 {
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(0x0053_f0e0, &args![land, pos]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 00457720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The land query `0053a5e0` at `pos` (two floats), cached by the x of its
+/// 128-unit column: when the adjusted x rounded down to a multiple of 128
+/// equals the cached x at `0118608c`, the cached answer at `011c3ef8` is
+/// returned (the y is not compared); otherwise the cell under `pos`
+/// (`00451900`) is asked (`0053a5e0(land, pos)`) and a non-zero answer is
+/// cached with the x and y of the 128-unit column (`0118608c`, `01186088`).
+pub fn fn_00457720(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
+    let mut result = 0u32;
+    let (x, y) = rounded_position(e, pos);
+    let column_x = rounded_down_to_128(x);
+    let column_y = rounded_down_to_128(y);
+    if column_x == e.global::<i32>(CACHED_LAND_COLUMN_X) {
+        result = e.global(CACHED_LAND_ANSWER);
+    } else {
+        let cell = fn_00451900(e, this, x >> 12, y >> 12);
+        if cell != 0 {
+            let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+            result = e.call(0x0053_a5e0, &args![land, pos]).u32();
+            if result != 0 {
+                e.set_global(CACHED_LAND_ANSWER, result);
+                e.set_global(CACHED_LAND_COLUMN_X, column_x);
+                e.set_global(CACHED_LAND_COLUMN_Y, column_y);
+            }
+        }
+    }
+    result
+}
+
+/// `value` minus its remainder by 128 (the remainder has the sign of the
+/// value).
+fn rounded_down_to_128(value: i32) -> i32 {
+    let mut remainder = (value as u32) & 0x8000_007f;
+    if (remainder as i32) < 0 {
+        remainder = (remainder.wrapping_sub(1) | 0xffff_ff80).wrapping_add(1);
+    }
+    value.wrapping_sub(remainder as i32)
+}
+
+// Translated from 00457880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x1c` of what `00457720` finds at `pos` (`00541570`); 2 when
+/// it finds nothing.
+pub fn fn_00457880(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
+    let mut result = 2u32;
+    let found = fn_00457720(e, this, pos);
+    if found != 0 {
+        result = e.call(0x0054_1570, &args![found]).u32();
+    }
+    result
+}
+
+// Translated from 004578c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this -= other` on three floats (a `NiPoint3`); returns `this`.
+pub fn fn_004578c0(e: &mut Engine, this: Ptr<NiPoint3>, other: Ptr<NiPoint3>) -> Ptr<NiPoint3> {
+    let x = e.get(this, NiPoint3::x) as f64 - e.get(other, NiPoint3::x) as f64;
+    e.set(this, NiPoint3::x, x as f32);
+    let y = e.get(this, NiPoint3::y) as f64 - e.get(other, NiPoint3::y) as f64;
+    e.set(this, NiPoint3::y, y as f32);
+    let z = e.get(this, NiPoint3::z) as f64 - e.get(other, NiPoint3::z) as f64;
+    e.set(this, NiPoint3::z, z as f32);
+    this
+}
+
+// Translated from 00457910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint3::UnitizeGetLength` (Xbox PDB): scales `this` to length 1 and
+/// returns its old length; a vector whose length is at most the `double`
+/// at `01017cf8` (1e-6) (or not a number) becomes zero and the result is 0.
+pub fn ni_point3_unitize_get_length(e: &mut Engine, this: Ptr<NiPoint3>) -> f32 {
+    let length = fn_00457990(e, this) as f32;
+    let threshold: f64 = e.global(0x0101_7cf8);
+    if length as f64 > threshold {
+        let inverse = (1.0 / length as f64) as f32;
+        let x = e.get(this, NiPoint3::x) as f64 * inverse as f64;
+        e.set(this, NiPoint3::x, x as f32);
+        let y = e.get(this, NiPoint3::y) as f64 * inverse as f64;
+        e.set(this, NiPoint3::y, y as f32);
+        let z = e.get(this, NiPoint3::z) as f64 * inverse as f64;
+        e.set(this, NiPoint3::z, z as f32);
+        length
+    } else {
+        e.set(this, NiPoint3::x, 0.0);
+        e.set(this, NiPoint3::y, 0.0);
+        e.set(this, NiPoint3::z, 0.0);
+        0.0
+    }
+}
+
+// Translated from 00457990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The length of the three floats of `this`, from the squared sum rounded to
+/// a `float` and passed to `004579e0` (the square root); the result is that
+/// function's `ST0`.
+pub fn fn_00457990(e: &mut Engine, this: Ptr<NiPoint3>) -> f64 {
+    let x = e.get(this, NiPoint3::x) as f64;
+    let y = e.get(this, NiPoint3::y) as f64;
+    let z = e.get(this, NiPoint3::z) as f64;
+    let squared = (x * x + y * y + z * z) as f32;
+    e.call(0x0045_79e0, &args![squared]).f64()
 }
 
 /// This unit's translated functions, by exe address.
@@ -3788,6 +5526,64 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00454450, fn_00454450(Ptr<TES>, Ptr)),
         entry!(0x00454ae0, fn_00454ae0() -> u8),
         entry!(0x00454af0, fn_00454af0(u32) -> u8),
+        entry!(0x00454b10, fn_00454b10(Ptr) -> bool),
+        entry!(0x00454b30, fn_00454b30(Ptr) -> u32),
+        entry!(0x00454b48, fn_00454b48()),
+        entry!(0x00454b50, fn_00454b50(Ptr) -> u32),
+        entry!(0x00454b70, fn_00454b70(Ptr) -> bool),
+        entry!(0x00454b90, tes_add_to_buffer(Ptr<TES>, Ptr)),
+        entry!(0x00454bd0, fn_00454bd0(Ptr<TES>, Ptr) -> bool),
+        entry!(0x00454c20, fn_00454c20(Ptr<TES>, Ptr)),
+        entry!(0x00454d50, fn_00454d50(Ptr<TES>, u8) -> i32),
+        entry!(0x00454e20, fn_00454e20(Ptr<TES>, Ptr) -> bool),
+        entry!(0x00454e70, fn_00454e70(Ptr<TES>, Ptr)),
+        entry!(0x00454fc0, tes_sort_exterior_buffer(Ptr<TES>)),
+        entry!(0x00455130, fn_00455130(Ptr<TES>, Ptr)),
+        entry!(0x00455200, fn_00455200(Ptr<TES>, u8, Ptr) -> i32),
+        entry!(0x00455330, fn_00455330(Ptr<TES>, Ptr)),
+        entry!(0x00455400, fn_00455400(Ptr<TES>, Ptr)),
+        entry!(0x00455490, fn_00455490(Ptr<TES>)),
+        entry!(0x00455600, fn_00455600(Ptr) -> u32),
+        entry!(0x00455620, fn_00455620(Ptr) -> bool),
+        entry!(0x00455640, fn_00455640(Ptr<TES>)),
+        entry!(0x00455680, fn_00455680()),
+        entry!(0x00455690, fn_00455690(Ptr<TES>)),
+        entry!(0x004556d0, tes_test_all_cells(Ptr<TES>, i32)),
+        entry!(0x00456670, tes_get_face_count(Ptr<TES>, Ptr, u8) -> i32),
+        entry!(0x004567b0, fn_004567b0(Ptr) -> u16),
+        entry!(0x004567e0, fn_004567e0(Ptr) -> u16),
+        entry!(
+            0x00456800,
+            tes_remove_texture_image(Ptr<TES>, Ptr, u32) -> bool
+        ),
+        entry!(
+            0x004568c0,
+            tes_create_texture_image(Ptr<TES>, Ptr, Ptr, u8, u8)
+        ),
+        entry!(0x00457070, tes_get_current_cell(Ptr<TES>) -> u32),
+        entry!(
+            0x004570d0,
+            fn_004570d0(Ptr<TES>, Ptr, u32, u32, f32) -> bool
+        ),
+        entry!(
+            0x004571c0,
+            fn_004571c0(Ptr<TES>, Ptr, u32, u32, f32, u8) -> bool
+        ),
+        entry!(0x004572e0, fn_004572e0(Ptr<TES>, Ptr, Ptr) -> bool),
+        entry!(0x004573f0, fn_004573f0(Ptr<TES>, Ptr, Ptr, u32) -> bool),
+        entry!(0x00457520, fn_00457520(Ptr<TES>, Ptr, u32) -> bool),
+        entry!(0x00457620, fn_00457620(Ptr<TES>, Ptr) -> u32),
+        entry!(0x00457720, fn_00457720(Ptr<TES>, Ptr) -> u32),
+        entry!(0x00457880, fn_00457880(Ptr<TES>, Ptr) -> u32),
+        entry!(
+            0x004578c0,
+            fn_004578c0(Ptr<NiPoint3>, Ptr<NiPoint3>) -> Ptr<NiPoint3>
+        ),
+        entry!(
+            0x00457910,
+            ni_point3_unitize_get_length(Ptr<NiPoint3>) -> f32
+        ),
+        entry!(0x00457990, fn_00457990(Ptr<NiPoint3>) -> f64),
     ]
 }
 
@@ -6676,7 +8472,7 @@ mod tests {
             (GRID_CENTRE_REFERENCE, 8),
             (EXTERIOR_CELL_LOADER, 4),
             (PLAYER_CHARACTER, 4),
-            (BYTE_011AF70C, 1),
+            (FLAG_011AF70C, 1),
             (SAVE_LOAD_GAME, 4),
             (EXTERIOR_WORLD, 4),
             (FLOAT_CELL_EXTENT, 4),
@@ -6694,8 +8490,8 @@ mod tests {
             (FADER_MANAGER, 4),
             (MAIN_OBJECT, 4),
             (MOVIE_PLAYER, 4),
-            (BYTE_011F9427, 1),
-            (BYTE_01189625, 1),
+            (FLAG_011F9427, 1),
+            (FLAG_01189625, 1),
             (TIME_ACCUMULATOR, 4),
             (POINT_011A9478, 12),
             (COLLISION_LISTENER, 4),
@@ -6779,9 +8575,9 @@ mod tests {
     #[test]
     fn byte_getter_returns_the_global() {
         let mut e = Engine::new();
-        e.map(BYTE_0119B8C8, 1);
+        e.map(FLAG_0119B8C8, 1);
         assert_eq!(e.call(0x0045_2480, &args![]).u8(), 0);
-        e.set_global(BYTE_0119B8C8, 0x5au8);
+        e.set_global(FLAG_0119B8C8, 0x5au8);
         assert_eq!(e.call(0x0045_2480, &args![]).u8(), 0x5a);
     }
 
@@ -7153,7 +8949,7 @@ mod tests {
             vec![vec![0x7001, 0x8888, 0xf]]
         );
         // `00452e40(1)` is the last thing done.
-        assert_eq!(e.global::<u8>(BYTE_011AF70C), 1);
+        assert_eq!(e.global::<u8>(FLAG_011AF70C), 1);
         assert_eq!(count_calls(&log, 0x0052_8110), 1);
         assert_eq!(count_calls(&log, 0x0052_82d0), 0);
     }
@@ -7247,7 +9043,7 @@ mod tests {
         assert_eq!(e.get(tes, TES::iCurrentGridX), 12);
         assert_eq!(count_calls(&log, 0x0300_0010), 0);
         assert_eq!(count_calls(&log, TERRAIN_MANAGER_UPDATE), 0);
-        assert_eq!(e.global::<u8>(BYTE_011AF70C), 1);
+        assert_eq!(e.global::<u8>(FLAG_011AF70C), 1);
     }
 
     #[test]
@@ -7295,12 +9091,12 @@ mod tests {
     #[test]
     fn small_stores_write_their_globals() {
         let mut e = Engine::new();
-        e.map(BYTE_011AF70C, 1);
+        e.map(FLAG_011AF70C, 1);
         e.call(0x0045_2e40, &args![9u8]);
-        assert_eq!(e.global::<u8>(BYTE_011AF70C), 9);
-        e.map(BYTE_011F9427, 1);
+        assert_eq!(e.global::<u8>(FLAG_011AF70C), 9);
+        e.map(FLAG_011F9427, 1);
         e.call(0x0045_4440, &args![3u8]);
-        assert_eq!(e.global::<u8>(BYTE_011F9427), 3);
+        assert_eq!(e.global::<u8>(FLAG_011F9427), 3);
         let tes: Ptr<TES> = e.new_object();
         assert!(!e.get(tes, TES::bUpdateGridString));
         e.call(0x0045_2e50, &args![tes]);
@@ -8138,7 +9934,7 @@ mod tests {
             vec![vec![e.global(FADER_MANAGER), 1, 0.25f32.to_bits(), 1]]
         );
         // The new grid centre and flags.
-        assert_eq!(e.global::<u8>(BYTE_01189625), 1);
+        assert_eq!(e.global::<u8>(FLAG_01189625), 1);
         assert_eq!(e.global::<u8>(GRID_FLAG_MOVED), 0);
         assert_eq!(e.global::<u8>(GRID_FLAG_MOVED_COPY), 0);
         for base in [GRID_CENTRE, GRID_PREVIOUS_CENTRE] {
@@ -8203,4 +9999,2037 @@ mod tests {
         put_setting(&mut e, SETTING_HAVOK_DEBUG, 0u8);
         assert_eq!(e.call(0x0045_4ae0, &args![]).u8(), 0);
     }
+
+    // BEGIN SESSION 4 TESTS
+
+    // ------------------------------------------------------------------
+    // Session 4 (`00454b10` to `00457990`)
+    // ------------------------------------------------------------------
+
+    /// An engine for the cell buffer functions: the settings (`grids` as
+    /// `uGridsToLoad`, the buffer lengths from the slices), a `TES` whose
+    /// buffers hold `interior` and `exterior`, the data handler pointer
+    /// `0x6000`, and the unload and pin callees stubbed (nothing pinned,
+    /// no interior cell loaded).
+    fn buffers_engine(
+        grids: u32,
+        interior: &[u32],
+        exterior: &[u32],
+    ) -> (Engine, Ptr<TES>, u32, u32) {
+        let mut e = settings_engine();
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, grids);
+        put_setting(&mut e, SETTING_INTERIOR_CELL_BUFFER, interior.len() as u32);
+        put_setting(&mut e, SETTING_EXTERIOR_CELL_BUFFER, exterior.len() as u32);
+        let tes: Ptr<TES> = e.new_object();
+        let interior_table = buffer(&mut e, interior);
+        let exterior_table = buffer(&mut e, exterior);
+        e.set(tes, TES::pInteriorBuffer, Ptr::new(interior_table));
+        e.set(tes, TES::pExteriorBuffer, Ptr::new(exterior_table));
+        e.map(DATA_HANDLER, 4);
+        e.set_global(DATA_HANDLER, 0x6000u32);
+        noop(&mut e, &[DATA_HANDLER_UNLOAD_CELL]);
+        returns(&mut e, CELL_PINNED, 0);
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        (e, tes, interior_table, exterior_table)
+    }
+
+    /// A cell object whose `cCellState` byte (+0x26) is `state`.
+    fn cell_object(e: &mut Engine, state: u8) -> u32 {
+        let cell = e.mem.alloc(0x100);
+        e.mem.set_u8(cell + 0x26, state);
+        cell
+    }
+
+    /// The words of a buffer table.
+    fn words(e: &Engine, table: u32, count: u32) -> Vec<u32> {
+        (0..count).map(|i| e.mem.u32(table + 4 * i)).collect()
+    }
+
+    #[test]
+    fn cell_flags_bit_0x80_test() {
+        let mut e = Engine::new();
+        let cell = e.mem.alloc(0x40);
+        e.mem.set_u8(cell + 0x24, 0x7f);
+        assert!(!e.call(0x0045_4b10, &args![cell]).bool());
+        e.mem.set_u8(cell + 0x24, 0x81);
+        assert!(e.call(0x0045_4b10, &args![cell]).bool());
+    }
+
+    #[test]
+    fn word_at_0x1e0_is_returned() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x200);
+        e.mem.set_u32(object + 0x1e0, 0x1234);
+        assert_eq!(e.call(0x0045_4b30, &args![object]).u32(), 0x1234);
+    }
+
+    #[test]
+    #[should_panic(expected = "INT3")]
+    fn the_int3_padding_byte_raises_a_breakpoint() {
+        let mut e = Engine::new();
+        e.call(0x0045_4b48, &args![]);
+    }
+
+    #[test]
+    fn world_space_location_name_is_the_map_marker_name() {
+        let mut e = Engine::new();
+        returns(&mut e, 0x0040_8da0, 0x5555);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_4b50, &args![0x3000u32]).u32(), 0x5555);
+        });
+        assert_eq!(calls_to(&log, 0x0040_8da0), vec![vec![0x3000 + 0xe0]]);
+    }
+
+    #[test]
+    fn word_at_4_non_null_test() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        assert!(!e.call(0x0045_4b70, &args![object]).bool());
+        e.mem.set_u32(object + 4, 9);
+        assert!(e.call(0x0045_4b70, &args![object]).bool());
+    }
+
+    #[test]
+    fn add_to_buffer_sends_an_interior_cell_to_the_interior_buffer() {
+        let (mut e, tes, interior, exterior) = buffers_engine(1, &[0, 0, 0], &[0, 0, 0]);
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        let cell = cell_object(&mut e, 0);
+        e.call(0x0045_4b90, &args![tes, cell]);
+        assert_eq!(words(&e, interior, 3), vec![cell, 0, 0]);
+        assert_eq!(words(&e, exterior, 3), vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn add_to_buffer_sends_an_exterior_cell_to_the_exterior_buffer() {
+        let (mut e, tes, interior, exterior) = buffers_engine(1, &[0, 0, 0], &[0, 0, 0]);
+        let cell = cell_object(&mut e, 0);
+        e.call(0x0045_4b90, &args![tes, cell]);
+        assert_eq!(words(&e, interior, 3), vec![0, 0, 0]);
+        assert_eq!(words(&e, exterior, 3), vec![cell, 0, 0]);
+    }
+
+    #[test]
+    fn add_to_buffer_ignores_a_null_cell() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[7, 8, 9], &[0, 0, 0]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4b90, &args![tes, 0u32]);
+        });
+        assert_eq!(addresses(&log), vec![0x0045_4b90]);
+        assert_eq!(words(&e, interior, 3), vec![7, 8, 9]);
+    }
+
+    #[test]
+    fn interior_buffer_membership() {
+        let (mut e, tes, _, _) = buffers_engine(1, &[0x11, 0x22, 0x33], &[0; 3]);
+        assert!(e.call(0x0045_4bd0, &args![tes, 0x22u32]).bool());
+        assert!(!e.call(0x0045_4bd0, &args![tes, 0x44u32]).bool());
+    }
+
+    #[test]
+    fn a_new_interior_cell_pushes_the_buffer_down_and_unloads_the_last() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0x22, 0x33], &[0; 3]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4c20, &args![tes, 0x44u32]);
+        });
+        assert_eq!(words(&e, interior, 3), vec![0x44, 0x11, 0x22]);
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_UNLOAD_CELL),
+            vec![vec![0x6000, 0x33]]
+        );
+    }
+
+    #[test]
+    fn a_new_interior_cell_with_a_free_last_slot_unloads_nothing() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0x22, 0], &[0; 3]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4c20, &args![tes, 0x44u32]);
+        });
+        assert_eq!(words(&e, interior, 3), vec![0x44, 0x11, 0x22]);
+        assert_eq!(count_calls(&log, DATA_HANDLER_UNLOAD_CELL), 0);
+    }
+
+    #[test]
+    fn a_buffered_interior_cell_moves_to_the_front() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0x22, 0x33], &[0; 3]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4c20, &args![tes, 0x33u32]);
+        });
+        assert_eq!(words(&e, interior, 3), vec![0x33, 0x11, 0x22]);
+        assert_eq!(count_calls(&log, DATA_HANDLER_UNLOAD_CELL), 0);
+    }
+
+    #[test]
+    fn unloading_the_interior_buffer_keeps_pinned_cells_and_the_loaded_one() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0, 0x22, 0x33], &[0; 3]);
+        e.register_double(CELL_PINNED, |_, a| Ret {
+            eax: (a[0] == 0x33) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, GET_INTERIOR_CELL, 0x22);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_4d50, &args![tes, 1u32]).i32(), 1);
+        });
+        // 0x11 went; 0x22 is the loaded interior cell; 0x33 is pinned.
+        assert_eq!(words(&e, interior, 4), vec![0, 0, 0x22, 0x33]);
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_UNLOAD_CELL),
+            vec![vec![0x6000, 0x11]]
+        );
+    }
+
+    #[test]
+    fn unloading_the_interior_buffer_without_the_keep_flag_takes_the_loaded_cell_too() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0, 0x22, 0x33], &[0; 3]);
+        e.register_double(CELL_PINNED, |_, a| Ret {
+            eax: (a[0] == 0x33) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, GET_INTERIOR_CELL, 0x22);
+        assert_eq!(e.call(0x0045_4d50, &args![tes, 0u32]).i32(), 2);
+        assert_eq!(words(&e, interior, 4), vec![0, 0, 0, 0x33]);
+    }
+
+    #[test]
+    fn exterior_buffer_membership() {
+        let (mut e, tes, _, _) = buffers_engine(1, &[0; 3], &[0x11, 0x22, 0x33]);
+        assert!(e.call(0x0045_4e20, &args![tes, 0x33u32]).bool());
+        assert!(!e.call(0x0045_4e20, &args![tes, 0x44u32]).bool());
+    }
+
+    #[test]
+    fn a_new_exterior_cell_goes_after_the_loaded_square_and_pushes_the_rest_down() {
+        // 2 x 2 loaded square (4 slots), then two buffered cells; the last
+        // buffered cell falls off the end and is unloaded.
+        let a = cell_object_for_buffers();
+        let (mut e, tes, _, exterior) =
+            buffers_engine(2, &[0; 3], &[a[0], a[1], a[2], a[3], 0x2100, 0x2200]);
+        let cell = cell_object(&mut e, 3);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4e70, &args![tes, cell]);
+        });
+        assert_eq!(
+            words(&e, exterior, 6),
+            vec![a[0], a[1], a[2], a[3], cell, 0x2100]
+        );
+        let handler: u32 = e.global(DATA_HANDLER);
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_UNLOAD_CELL),
+            vec![vec![handler, 0x2200]]
+        );
+        assert!(e.get(tes, TES::bUpdateGridString));
+    }
+
+    /// Four stand-in cell pointers for the loaded-square slots.
+    fn cell_object_for_buffers() -> [u32; 4] {
+        [0x1000, 0x1100, 0x1200, 0x1300]
+    }
+
+    #[test]
+    fn an_exterior_cell_already_buffered_is_moved_up_without_an_unload() {
+        let a = cell_object_for_buffers();
+        let (mut e, tes, _, exterior) =
+            buffers_engine(2, &[0; 3], &[a[0], a[1], a[2], a[3], 0x2100, 0x2200]);
+        e.map(0x2200, 0x100);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4e70, &args![tes, 0x2200u32]);
+        });
+        // The cell takes the first slot after the square; the old copy at
+        // the end is the one overwritten.
+        assert_eq!(
+            words(&e, exterior, 6),
+            vec![a[0], a[1], a[2], a[3], 0x2200, 0x2100]
+        );
+        assert_eq!(count_calls(&log, DATA_HANDLER_UNLOAD_CELL), 0);
+    }
+
+    #[test]
+    fn a_pinned_exterior_cell_goes_to_the_front() {
+        let a = cell_object_for_buffers();
+        let (mut e, tes, _, exterior) =
+            buffers_engine(2, &[0; 3], &[a[0], a[1], a[2], a[3], 0x2100, 0]);
+        // State 6 makes `00450ff0` true.
+        let cell = cell_object(&mut e, 6);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4e70, &args![tes, cell]);
+        });
+        assert_eq!(
+            words(&e, exterior, 6),
+            vec![cell, a[0], a[1], a[2], a[3], 0x2100]
+        );
+        // The cell pushed off the end is the old slot 5, which was empty.
+        assert_eq!(count_calls(&log, DATA_HANDLER_UNLOAD_CELL), 0);
+    }
+
+    /// An engine for `TES::SortExteriorBuffer`: 3 x 3 loaded square (9
+    /// slots, half width 1), 13 exterior slots; cells `0x2100` (far),
+    /// `0x2200` (near) and `0x2300` (far) in slots 9 to 11; the queued
+    /// cell is (0, 0) and the current one is `current_x`.
+    fn sort_engine(current_x: i32) -> (Engine, Ptr<TES>, u32) {
+        let mut slots = vec![0x1000u32; 9];
+        slots.extend([0x2100, 0x2200, 0x2300, 0]);
+        let (mut e, tes, _, exterior) = buffers_engine(3, &[0; 3], &slots);
+        e.set(tes, TES::iCurrentGridX, current_x);
+        e.set(tes, TES::iCurrentQueuedX, 0);
+        e.set(tes, TES::iCurrentQueuedY, 0);
+        let positions = [(0x2100u32, 5, 5), (0x2200, 1, 0), (0x2300, 9, 9)];
+        e.register_double(CELL_GET_DATA_X, move |_, a| Ret {
+            eax: positions
+                .iter()
+                .find(|p| p.0 == a[0])
+                .map_or(0, |p| p.1 as u32),
+            ..Ret::default()
+        });
+        e.register_double(CELL_GET_DATA_Y, move |_, a| Ret {
+            eax: positions
+                .iter()
+                .find(|p| p.0 == a[0])
+                .map_or(0, |p| p.2 as u32),
+            ..Ret::default()
+        });
+        e.register_double(MEMMOVE, |e, a| {
+            let bytes = e.mem.bytes(a[1], a[2]);
+            e.mem.write(a[0], &bytes);
+            Ret::default()
+        });
+        (e, tes, exterior)
+    }
+
+    #[test]
+    fn sorting_moves_near_cells_before_far_ones() {
+        let (mut e, tes, exterior) = sort_engine(1);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_4fc0, &args![tes]);
+        });
+        assert_eq!(words(&e, exterior + 36, 4), vec![0x2200, 0x2100, 0x2300, 0]);
+        // One move: the far cell in slot 9 shifts up one slot (4 bytes).
+        let moves = calls_to(&log, MEMMOVE);
+        assert_eq!(moves, vec![vec![exterior + 40, exterior + 36, 4]]);
+    }
+
+    #[test]
+    fn sorting_does_nothing_while_the_queued_x_is_the_current_x() {
+        let (mut e, tes, exterior) = sort_engine(0);
+        e.call(0x0045_4fc0, &args![tes]);
+        assert_eq!(words(&e, exterior + 36, 4), vec![0x2100, 0x2200, 0x2300, 0]);
+    }
+
+    #[test]
+    fn a_buffered_exterior_cell_moves_past_the_run_of_loaded_ones() {
+        // Slots: other, cell, two cells for which `00450ff0` holds, empty.
+        let other = 0x2100;
+        let (mut e, tes, _, exterior) = buffers_engine(1, &[0; 3], &[0; 6]);
+        let cell = cell_object(&mut e, 0);
+        let first = cell_object(&mut e, 6);
+        let second = cell_object(&mut e, 6);
+        let table = [other, cell, first, second, 0, 0];
+        for (i, value) in table.iter().enumerate() {
+            e.mem.set_u32(exterior + 4 * i as u32, *value);
+        }
+        e.call(0x0045_5130, &args![tes, cell]);
+        assert_eq!(
+            words(&e, exterior, 6),
+            vec![other, first, second, cell, 0, 0]
+        );
+    }
+
+    #[test]
+    fn a_cell_behind_an_empty_exterior_slot_is_left_alone() {
+        let (mut e, tes, _, exterior) = buffers_engine(1, &[0; 3], &[0; 6]);
+        let cell = cell_object(&mut e, 0);
+        for (i, value) in [0, cell, 0, 0, 0, 0].iter().enumerate() {
+            e.mem.set_u32(exterior + 4 * i as u32, *value);
+        }
+        e.call(0x0045_5130, &args![tes, cell]);
+        assert_eq!(words(&e, exterior, 6), vec![0, cell, 0, 0, 0, 0]);
+        // A null cell does nothing either.
+        e.call(0x0045_5130, &args![tes, 0u32]);
+        assert_eq!(words(&e, exterior, 6), vec![0, cell, 0, 0, 0, 0]);
+    }
+
+    /// An engine for `00455200`: the exterior buffer holds `loaded` (state 6),
+    /// `plain` (state 3), `pinned` (state 3, pinned) and `foreign` (state 3,
+    /// another world space); the world space of the others is `0x7001`.
+    fn unload_all_engine() -> (Engine, Ptr<TES>, u32, [u32; 4]) {
+        let cells = [0x3000u32, 0x3100, 0x3200, 0x3300];
+        let (mut e, tes, _, exterior) = buffers_engine(1, &[0; 3], &cells);
+        for (cell, state) in cells.iter().zip([6u8, 3, 3, 3]) {
+            e.map(*cell, 0x100);
+            e.mem.set_u8(cell + 0x26, state);
+        }
+        let pinned = cells[2];
+        e.register_double(CELL_PINNED, move |_, a| Ret {
+            eax: (a[0] == pinned) as u32,
+            ..Ret::default()
+        });
+        let foreign = cells[3];
+        e.register_double(CELL_GET_WORLD_SPACE, move |_, a| Ret {
+            eax: if a[0] == foreign { 0x7002 } else { 0x7001 },
+            ..Ret::default()
+        });
+        returns(&mut e, GET_WORLD_SPACE, 0x7001);
+        returns(&mut e, GET_TERRAIN_MANAGER, 0x7100);
+        noop(&mut e, &[0x006f_ce00]);
+        (e, tes, exterior, cells)
+    }
+
+    #[test]
+    fn unloading_the_exterior_buffer_spares_loaded_pinned_and_foreign_cells() {
+        let (mut e, tes, exterior, cells) = unload_all_engine();
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_5200, &args![tes, 1u32, 0x7001u32]).i32(), 1);
+        });
+        assert_eq!(
+            words(&e, exterior, 4),
+            vec![cells[0], 0, cells[2], cells[3]]
+        );
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_UNLOAD_CELL),
+            vec![vec![0x6000, cells[1]]]
+        );
+        // Slot 0 is still set: the terrain manager is not told.
+        assert_eq!(count_calls(&log, 0x006f_ce00), 0);
+    }
+
+    #[test]
+    fn unloading_the_exterior_buffer_without_filters_takes_the_loaded_cell_and_tells_the_terrain() {
+        let (mut e, tes, exterior, cells) = unload_all_engine();
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_5200, &args![tes, 0u32, 0u32]).i32(), 3);
+        });
+        assert_eq!(words(&e, exterior, 4), vec![0, 0, cells[2], 0]);
+        assert_eq!(calls_to(&log, 0x006f_ce00), vec![vec![0x7100]]);
+    }
+
+    #[test]
+    fn removing_an_interior_cell_unloads_it_and_closes_the_gap() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0x22, 0x33], &[0; 3]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5330, &args![tes, 0x22u32]);
+        });
+        assert_eq!(words(&e, interior, 3), vec![0x11, 0x33, 0]);
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_UNLOAD_CELL),
+            vec![vec![0x6000, 0x22]]
+        );
+        assert!(e.get(tes, TES::bUpdateGridString));
+    }
+
+    #[test]
+    fn removing_a_missing_interior_cell_still_empties_the_last_slot() {
+        let (mut e, tes, interior, _) = buffers_engine(1, &[0x11, 0x22, 0x33], &[0; 3]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5330, &args![tes, 0x99u32]);
+        });
+        assert_eq!(words(&e, interior, 3), vec![0x11, 0x22, 0]);
+        assert_eq!(count_calls(&log, DATA_HANDLER_UNLOAD_CELL), 0);
+        assert!(e.get(tes, TES::bUpdateGridString));
+    }
+
+    /// An engine for `00455400`: a sky at `0x9000` whose word at +0xf8 is
+    /// `built`, recording the `SetMode` calls.
+    fn sky_engine(built: u32) -> Engine {
+        let mut e = Engine::new();
+        returns(&mut e, TES_GET_SKY, 0x9000);
+        returns(&mut e, SKY_GET_WORD_F8, built);
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        noop(&mut e, &[SKY_SET_MODE]);
+        e
+    }
+
+    #[test]
+    fn the_sky_mode_follows_the_cell() {
+        let mut e = sky_engine(1);
+        let tes = 0x4000u32;
+        let cell = e.mem.alloc(0x40);
+        let mode_of = |e: &mut Engine, cell: u32| {
+            let log = run_logged(e, |e| {
+                e.call(0x0045_5400, &args![tes, cell]);
+            });
+            calls_to(&log, SKY_SET_MODE)
+        };
+        assert_eq!(mode_of(&mut e, 0), vec![vec![0x9000, 3]]);
+        // An exterior cell.
+        assert_eq!(mode_of(&mut e, cell), vec![vec![0x9000, 3]]);
+        // An interior cell without and with the 0x80 flag.
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        assert_eq!(mode_of(&mut e, cell), vec![vec![0x9000, 1]]);
+        e.mem.set_u8(cell + 0x24, 0x80);
+        assert_eq!(mode_of(&mut e, cell), vec![vec![0x9000, 2]]);
+    }
+
+    #[test]
+    fn the_sky_mode_is_left_alone_while_no_sky_is_built() {
+        let mut e = sky_engine(0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5400, &args![0x4000u32, 0u32]);
+        });
+        assert_eq!(count_calls(&log, SKY_SET_MODE), 0);
+    }
+
+    /// An engine for `00455490`: two quests in the data handler's list (the
+    /// first accepted by `00455620`, the second not; the first list node is
+    /// embedded in the data handler at +0x118), a 2 x 2 grid of the cells
+    /// `0x3000`, `0x3100`, `0x3200`, `0x3300` (state 6, so `00450ff0` is true)
+    /// and the script calls stubbed; `TESObjectCELL::RunScripts` answers true
+    /// for `scripted`. Returns the engine, the `TES` and the first quest.
+    fn script_engine(scripted: u32) -> (Engine, Ptr<TES>, u32) {
+        let mut e = settings_engine();
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2u32);
+        e.map(SCRIPT_PASS_RUNNING, 4);
+        e.map(DATA_HANDLER, 4);
+        e.map(PLAYER_CHARACTER, 4);
+        let handler = e.mem.alloc(0x200);
+        e.set_global(DATA_HANDLER, handler);
+        e.set_global(PLAYER_CHARACTER, 0x6500u32);
+        let quest_a = e.mem.alloc(0x80);
+        let quest_b = e.mem.alloc(0x80);
+        e.mem.set_u8(quest_a + 0x3c, 1);
+        e.mem.set_u8(quest_b + 0x3c, 0);
+        let second_node = e.mem.alloc(8);
+        e.mem.set_u32(second_node, quest_b);
+        e.mem.set_u32(handler + 0x118, quest_a);
+        e.mem.set_u32(handler + 0x118 + 4, second_node);
+        e.register_double(LIST_NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register_double(LIST_NODE_NEXT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register_double(0x005a_8080, |_, a| Ret {
+            eax: a[0] + 0x3c,
+            ..Ret::default()
+        });
+        let tes: Ptr<TES> = e.new_object();
+        let cells = [0x3000u32, 0x3100, 0x3200, 0x3300];
+        let table = e.mem.alloc(16);
+        for (i, cell) in cells.iter().enumerate() {
+            e.map(*cell, 0x100);
+            e.mem.set_u8(cell + 0x26, 6);
+            e.mem.set_u32(table + 4 * i as u32, *cell);
+        }
+        e.set(tes, TES::pGridCellA, Ptr::new(0x6400));
+        e.register_double(GRID_CELL_ARRAY_GET, move |_, a| Ret {
+            eax: table + 4 * (a[1] * 2 + a[2]),
+            ..Ret::default()
+        });
+        returns(&mut e, SCRIPT_GET_PROCESS_SCRIPTS, 1);
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        e.register_double(CELL_RUN_SCRIPTS, move |_, a| Ret {
+            eax: (a[0] == scripted) as u32,
+            ..Ret::default()
+        });
+        noop(
+            &mut e,
+            &[0x0040_fbf0, 0x0040_fba0, QUEST_RUN, REFERENCE_RUN_SCRIPT],
+        );
+        (e, tes, quest_a)
+    }
+
+    #[test]
+    fn the_script_pass_runs_accepted_quests_and_stops_at_the_first_scripted_cell() {
+        let (mut e, tes, quest_a) = script_engine(0x3100);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5490, &args![tes]);
+        });
+        // Only the first quest (flag bit 0 set) runs.
+        assert_eq!(calls_to(&log, QUEST_RUN), vec![vec![quest_a]]);
+        // The grid is walked cell by cell; the walk stops at the cell whose
+        // scripts ran.
+        assert_eq!(
+            calls_to(&log, CELL_RUN_SCRIPTS),
+            vec![vec![0x3000, 0, 0], vec![0x3100, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, REFERENCE_RUN_SCRIPT), vec![vec![0x6500]]);
+        // The guard byte is back to zero and the pass object was entered and
+        // left.
+        assert_eq!(e.global::<u8>(SCRIPT_PASS_RUNNING), 0);
+        assert_eq!(
+            calls_to(&log, 0x0040_fbf0),
+            vec![vec![SCRIPT_PASS_OBJECT, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_fba0), vec![vec![SCRIPT_PASS_OBJECT]]);
+    }
+
+    #[test]
+    fn the_script_pass_walks_the_whole_grid_when_no_cell_ran_scripts() {
+        let (mut e, tes, _) = script_engine(0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5490, &args![tes]);
+        });
+        let cells: Vec<u32> = calls_to(&log, CELL_RUN_SCRIPTS)
+            .iter()
+            .map(|call| call[0])
+            .collect();
+        assert_eq!(cells, vec![0x3000, 0x3100, 0x3200, 0x3300]);
+    }
+
+    #[test]
+    fn the_script_pass_uses_the_loaded_interior_cell_alone() {
+        let (mut e, tes, _) = script_engine(0);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5490, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, CELL_RUN_SCRIPTS), vec![vec![0x6200, 0, 0]]);
+        assert_eq!(count_calls(&log, GRID_CELL_ARRAY_GET), 0);
+    }
+    #[test]
+    fn the_script_pass_waits_for_scripts_and_for_itself() {
+        let (mut e, tes, _) = script_engine(0);
+        returns(&mut e, SCRIPT_GET_PROCESS_SCRIPTS, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5490, &args![tes]);
+        });
+        assert_eq!(count_calls(&log, 0x0040_fbf0), 0);
+        returns(&mut e, SCRIPT_GET_PROCESS_SCRIPTS, 1);
+        e.set_global(SCRIPT_PASS_RUNNING, 1u8);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5490, &args![tes]);
+        });
+        assert_eq!(count_calls(&log, 0x0040_fbf0), 0);
+        assert_eq!(e.global::<u8>(SCRIPT_PASS_RUNNING), 1);
+    }
+
+    #[test]
+    fn the_data_handler_list_head_is_at_0x118() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0045_5600, &args![0x1000u32]).u32(), 0x1118);
+    }
+
+    #[test]
+    fn a_quest_is_accepted_by_bit_0_of_its_flag_byte() {
+        let mut e = Engine::new();
+        let flags = e.mem.alloc(8);
+        e.register_double(0x005a_8080, move |_, _| Ret {
+            eax: flags,
+            ..Ret::default()
+        });
+        assert!(!e.call(0x0045_5620, &args![0x1000u32]).bool());
+        e.mem.set_u8(flags, 0x03);
+        assert!(e.call(0x0045_5620, &args![0x1000u32]).bool());
+        e.mem.set_u8(flags, 0x02);
+        assert!(!e.call(0x0045_5620, &args![0x1000u32]).bool());
+    }
+
+    #[test]
+    fn the_first_grid_pass_goes_to_the_interior_cell_or_the_grid() {
+        let (mut e, tes, _, _) = buffers_engine(1, &[0; 3], &[0; 3]);
+        e.map(COUNTER_011C56E8, 4);
+        e.set_global(COUNTER_011C56E8, 77u32);
+        e.set(tes, TES::pGridCellA, Ptr::new(0x6400));
+        noop(&mut e, &[CELL_PASS_A, GRID_CELL_ARRAY_PASS_A]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5640, &args![tes]);
+        });
+        assert_eq!(e.global::<u32>(COUNTER_011C56E8), 0);
+        assert_eq!(calls_to(&log, GRID_CELL_ARRAY_PASS_A), vec![vec![0x6400]]);
+        assert_eq!(count_calls(&log, CELL_PASS_A), 0);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5640, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, CELL_PASS_A), vec![vec![0x6200]]);
+        assert_eq!(count_calls(&log, GRID_CELL_ARRAY_PASS_A), 0);
+    }
+
+    #[test]
+    fn the_counter_word_is_cleared() {
+        let mut e = Engine::new();
+        e.map(COUNTER_011C56E8, 4);
+        e.set_global(COUNTER_011C56E8, 5u32);
+        e.call(0x0045_5680, &args![]);
+        assert_eq!(e.global::<u32>(COUNTER_011C56E8), 0);
+    }
+
+    #[test]
+    fn the_second_grid_pass_goes_to_the_interior_cell_or_the_grid() {
+        let (mut e, tes, _, _) = buffers_engine(1, &[0; 3], &[0; 3]);
+        e.set(tes, TES::pGridCellA, Ptr::new(0x6400));
+        noop(&mut e, &[CELL_PASS_B, GRID_CELL_ARRAY_PASS_B]);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5690, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, GRID_CELL_ARRAY_PASS_B), vec![vec![0x6400]]);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_5690, &args![tes]);
+        });
+        assert_eq!(calls_to(&log, CELL_PASS_B), vec![vec![0x6200]]);
+    }
+
+    // ---- the texture image cache and the face count ----
+
+    /// `NiPointer` stand-ins: the constructor stores its argument in the
+    /// holder, the getter reads it, the destructor clears it.
+    fn install_ni_pointer(e: &mut Engine) {
+        e.register_double(NI_POINTER_CTOR, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register_double(NI_POINTER_GET, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        e.register_double(NI_POINTER_DTOR, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn the_face_count_sums_geometry_below_a_node_and_skips_hidden_geometry() {
+        let mut e = Engine::new();
+        install_ni_pointer(&mut e);
+        // Slot 0xc answers for nodes (their own address), slot 0x1c for
+        // geometry.
+        e.register_double(0x0300_0001, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        noop(&mut e, &[0x0300_0002]);
+        let node_a = object_with_slots(
+            &mut e,
+            0x0300_1000,
+            &[(0xc, 0x0300_0001), (0x1c, 0x0300_0002)],
+        );
+        let node_b = object_with_slots(
+            &mut e,
+            0x0300_1000,
+            &[(0xc, 0x0300_0001), (0x1c, 0x0300_0002)],
+        );
+        let geometry = |e: &mut Engine, faces: u16| {
+            let object =
+                object_with_slots(e, 0x0300_2000, &[(0xc, 0x0300_0002), (0x1c, 0x0300_0001)]);
+            let data = e.mem.alloc(0x80);
+            e.mem.set_u16(data + 0x40, faces);
+            e.mem.set_u32(object + 0xb8, data);
+            object
+        };
+        let shown = geometry(&mut e, 10);
+        let deeper = geometry(&mut e, 5);
+        let hidden = geometry(&mut e, 7);
+        let other = object_with_slots(
+            &mut e,
+            0x0300_3000,
+            &[(0xc, 0x0300_0002), (0x1c, 0x0300_0002)],
+        );
+        let children = vec![
+            (node_a, vec![node_b, shown, other]),
+            (node_b, vec![deeper, hidden]),
+        ];
+        let counts = children.clone();
+        e.register_double(0x0043_b480, move |_, a| Ret {
+            eax: counts
+                .iter()
+                .find(|c| c.0 == a[0])
+                .map_or(0, |c| c.1.len() as u32),
+            ..Ret::default()
+        });
+        e.register_double(0x0043_b4a0, move |_, a| Ret {
+            eax: children
+                .iter()
+                .find(|c| c.0 == a[0])
+                .map_or(0, |c| c.1[a[1] as usize]),
+            ..Ret::default()
+        });
+        e.register_double(0x0045_6610, move |_, a| Ret {
+            eax: (a[0] == hidden) as u32,
+            ..Ret::default()
+        });
+        let tes = 0x4000u32;
+        assert_eq!(e.call(0x0045_6670, &args![tes, node_a, 0u32]).i32(), 15);
+        // With the "all" flag the hidden geometry counts too.
+        assert_eq!(e.call(0x0045_6670, &args![tes, node_a, 1u32]).i32(), 22);
+        assert_eq!(e.call(0x0045_6670, &args![tes, 0u32, 1u32]).i32(), 0);
+    }
+
+    #[test]
+    fn the_geometry_face_count_is_read_through_the_data_pointer() {
+        let mut e = Engine::new();
+        install_getters(&mut e);
+        let geometry = e.mem.alloc(0x100);
+        let data = e.mem.alloc(0x80);
+        e.mem.set_u16(data + 0x40, 0xfffe);
+        e.mem.set_u32(geometry + 0xb8, data);
+        assert_eq!(e.call(0x0045_67b0, &args![geometry]).u16(), 0xfffe);
+    }
+
+    #[test]
+    fn the_data_face_count_is_the_word_at_0x40() {
+        let mut e = Engine::new();
+        let data = e.mem.alloc(0x80);
+        e.mem.set_u16(data + 0x40, 0x1234);
+        assert_eq!(e.call(0x0045_67e0, &args![data]).u16(), 0x1234);
+    }
+
+    /// An engine for the texture palette functions: a palette entry
+    /// `texture` (a block with the count `references` at +4) found under
+    /// `name`.
+    fn palette_engine(references: u32) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        install_ni_pointer(&mut e);
+        let texture = e.mem.alloc(0x40);
+        e.mem.set_u32(texture + 4, references);
+        e.register_double(LIST_NODE_NEXT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        let name = e.mem.alloc(16);
+        e.mem.set_cstr(name, b"tex.dds");
+        e.register_double(0x00a6_1b90, move |e, a| {
+            if a[0] == name {
+                e.mem.set_u32(a[1], texture);
+            }
+            Ret::default()
+        });
+        noop(&mut e, &[0x00a6_1f30]);
+        (e, name, texture)
+    }
+
+    #[test]
+    fn a_texture_nobody_else_holds_is_removed_from_the_palette() {
+        let (mut e, name, texture) = palette_engine(3);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_6800, &args![0x4000u32, name, 1u32]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x00a6_1f30), vec![vec![texture]]);
+        assert_eq!(count_calls(&log, NI_POINTER_DTOR), 1);
+    }
+
+    #[test]
+    fn a_texture_others_still_hold_stays_in_the_palette() {
+        let (mut e, name, _) = palette_engine(4);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_6800, &args![0x4000u32, name, 1u32]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x00a6_1f30), 0);
+        assert_eq!(count_calls(&log, NI_POINTER_DTOR), 1);
+    }
+
+    #[test]
+    fn a_texture_the_palette_does_not_know_is_not_removed() {
+        let (mut e, _, _) = palette_engine(3);
+        let other = e.mem.alloc(16);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e.call(0x0045_6800, &args![0x4000u32, other, 1u32]).bool());
+        });
+        assert_eq!(count_calls(&log, 0x00a6_1f30), 0);
+    }
+
+    /// An engine for `TES::CreateTextureImage`: the palette knows nothing,
+    /// `FileFinder::Exist` answers `exists`, the fixed-string constructor
+    /// returns its first argument, `NiSourceTexture::Create` returns
+    /// `created`; the assignment stores its second argument.
+    fn create_texture_engine(exists: u32, created: u32) -> (Engine, u32, u32) {
+        let mut e = Engine::new();
+        install_ni_pointer(&mut e);
+        e.register_double(0x0066_b0d0, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        noop(
+            &mut e,
+            &[0x00a6_1b90, 0x00a6_1c50, DEBUG_PRINT, 0x0043_81b0],
+        );
+        returns(&mut e, 0x0045_6a20, exists);
+        e.register_double(0x0043_8170, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        returns(&mut e, 0x00a5_fd70, created);
+        let name = e.mem.alloc(16);
+        e.mem.set_cstr(name, b"tex.dds");
+        let out = e.mem.alloc(8);
+        (e, name, out)
+    }
+
+    #[test]
+    fn a_texture_already_in_the_palette_is_not_created_again() {
+        let (mut e, name, out) = create_texture_engine(1, 0x5000);
+        e.register_double(0x00a6_1b90, move |e, a| {
+            e.mem.set_u32(a[1], 0x4444);
+            Ret::default()
+        });
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_68c0, &args![0x4000u32, name, out, 0u32, 0u32]);
+        });
+        assert_eq!(e.mem.u32(out), 0x4444);
+        assert_eq!(count_calls(&log, 0x0045_6a20), 0);
+        assert_eq!(count_calls(&log, 0x00a5_fd70), 0);
+    }
+
+    #[test]
+    fn an_existing_texture_file_is_created_and_entered_in_the_palette() {
+        let (mut e, name, out) = create_texture_engine(1, 0x5000);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_68c0, &args![0x4000u32, name, out, 1u32, 0u32]);
+        });
+        assert_eq!(e.mem.u32(out), 0x5000);
+        assert_eq!(calls_to(&log, 0x0045_6a20), vec![vec![name, 0, 0, 0xffff]]);
+        let create = calls_to(&log, 0x00a5_fd70);
+        assert_eq!(create.len(), 1);
+        assert_eq!(create[0][1..], [0x011a_9598, 1, 0]);
+        assert_eq!(calls_to(&log, 0x00a6_1c50), vec![vec![0x5000, 0]]);
+        assert_eq!(count_calls(&log, DEBUG_PRINT), 0);
+    }
+
+    #[test]
+    fn the_alternate_flag_changes_the_search_mode() {
+        let (mut e, name, out) = create_texture_engine(1, 0x5000);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_68c0, &args![0x4000u32, name, out, 0u32, 1u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0045_6a20), vec![vec![name, 0, 6, 2]]);
+    }
+
+    #[test]
+    fn a_missing_texture_file_is_skipped_when_quiet() {
+        let (mut e, name, out) = create_texture_engine(0, 0x5000);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_68c0, &args![0x4000u32, name, out, 1u32, 0u32]);
+        });
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(count_calls(&log, 0x00a5_fd70), 0);
+        assert_eq!(count_calls(&log, DEBUG_PRINT), 0);
+    }
+
+    #[test]
+    fn a_failed_texture_creation_is_reported_unless_quiet() {
+        let (mut e, name, out) = create_texture_engine(0, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_68c0, &args![0x4000u32, name, out, 0u32, 0u32]);
+        });
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(count_calls(&log, 0x00a6_1c50), 0);
+        assert_eq!(calls_to(&log, DEBUG_PRINT), vec![vec![0x0101_7ca8, name]]);
+    }
+
+    // ---- the current cell and the land helpers ----
+
+    #[test]
+    fn the_current_cell_is_the_interior_cell_or_the_grid_centre() {
+        let (mut e, tes, table) = grid_engine(3);
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        // No grid centre yet.
+        e.set(tes, TES::iCurrentGridX, 0x7fff_ffff);
+        e.set(tes, TES::iCurrentGridY, 4);
+        assert_eq!(e.call(0x0045_7070, &args![tes]).u32(), 0);
+        // The centre cell of the 3 x 3 square around (5, 6) is slot (1, 1).
+        e.set(tes, TES::iCurrentGridX, 5);
+        e.set(tes, TES::iCurrentGridY, 6);
+        put_cell(&mut e, table, 3, 1, 1, 0x7777);
+        assert_eq!(e.call(0x0045_7070, &args![tes]).u32(), 0x7777);
+        // A loaded interior cell wins.
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        assert_eq!(e.call(0x0045_7070, &args![tes]).u32(), 0x6200);
+    }
+
+    /// An engine for the cell tests of `004570d0`/`004571c0`: a 3 x 3 grid
+    /// with cells in slots (0, 1) and (2, 2), the `TES` singleton set, no
+    /// interior cell loaded.
+    fn cell_tests_engine() -> (Engine, Ptr<TES>) {
+        let (mut e, tes, table) = grid_engine(3);
+        put_cell(&mut e, table, 3, 0, 1, 0x3100);
+        put_cell(&mut e, table, 3, 2, 2, 0x3200);
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, tes.addr());
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        (e, tes)
+    }
+
+    #[test]
+    fn the_first_cell_test_asks_every_grid_cell() {
+        let (mut e, tes) = cell_tests_engine();
+        e.register_double(CELL_TEST_A, |_, a| Ret {
+            eax: (a[0] == 0x3200) as u32,
+            ..Ret::default()
+        });
+        let fourth = 2.5f32;
+        let log = run_logged(&mut e, |e| {
+            assert!(e
+                .call(0x0045_70d0, &args![tes, 0x8000u32, 1u32, 2u32, fourth])
+                .bool());
+        });
+        assert_eq!(
+            calls_to(&log, CELL_TEST_A),
+            vec![
+                vec![0x3100, 0x8000, 1, 2, fourth.to_bits()],
+                vec![0x3200, 0x8000, 1, 2, fourth.to_bits()],
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_cell_test_asks_only_the_interior_cell_when_there_is_one() {
+        let (mut e, tes) = cell_tests_engine();
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        returns(&mut e, CELL_TEST_A, 1);
+        let log = run_logged(&mut e, |e| {
+            assert!(e
+                .call(0x0045_70d0, &args![tes, 0x8000u32, 1u32, 2u32, 0.0f32])
+                .bool());
+        });
+        assert_eq!(count_calls(&log, CELL_TEST_A), 1);
+        assert_eq!(calls_to(&log, CELL_TEST_A)[0][0], 0x6200);
+        // Nothing to ask about without a target.
+        let log = run_logged(&mut e, |e| {
+            assert!(!e
+                .call(0x0045_70d0, &args![tes, 0u32, 1u32, 2u32, 0.0f32])
+                .bool());
+        });
+        assert_eq!(count_calls(&log, CELL_TEST_A), 0);
+    }
+
+    #[test]
+    fn the_second_cell_test_prepares_the_target_and_asks_every_grid_cell() {
+        let (mut e, tes) = cell_tests_engine();
+        noop(&mut e, &[0x0070_5fc0, 0x00e9_8e20]);
+        returns(&mut e, CELL_TEST_B, 0);
+        let log = run_logged(&mut e, |e| {
+            assert!(!e
+                .call(
+                    0x0045_71c0,
+                    &args![tes, 0x8000u32, 1u32, 2u32, 1.0f32, 1u32]
+                )
+                .bool());
+        });
+        assert_eq!(calls_to(&log, 0x0070_5fc0), vec![vec![0x8000, 0]]);
+        assert_eq!(
+            calls_to(&log, 0x00e9_8e20),
+            vec![vec![0x8000, NI_POINT3_ZERO, NI_POINT3_ZERO, 0]]
+        );
+        let asked = calls_to(&log, CELL_TEST_B);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[0], vec![0x3100, 0x8000, 1, 2, 1.0f32.to_bits(), 1]);
+        // Without the flag nothing is prepared or asked.
+        let log = run_logged(&mut e, |e| {
+            assert!(!e
+                .call(
+                    0x0045_71c0,
+                    &args![tes, 0x8000u32, 1u32, 2u32, 1.0f32, 0u32]
+                )
+                .bool());
+        });
+        assert_eq!(addresses(&log), vec![0x0045_71c0]);
+    }
+
+    #[test]
+    fn the_second_cell_test_uses_the_interior_cell_alone_and_answers_with_it() {
+        let (mut e, tes) = cell_tests_engine();
+        noop(&mut e, &[0x0070_5fc0, 0x00e9_8e20]);
+        returns(&mut e, GET_INTERIOR_CELL, 0x6200);
+        returns(&mut e, CELL_TEST_B, 1);
+        let log = run_logged(&mut e, |e| {
+            assert!(e
+                .call(
+                    0x0045_71c0,
+                    &args![tes, 0x8000u32, 1u32, 2u32, 1.0f32, 1u32]
+                )
+                .bool());
+        });
+        assert_eq!(count_calls(&log, CELL_TEST_B), 1);
+        assert_eq!(calls_to(&log, CELL_TEST_B)[0][0], 0x6200);
+    }
+
+    /// A position engine (5 x 5 grid around cell (10, 20), a cell whose
+    /// state is 3 (loaded for `TES::IsCellLoaded`) at the relative slot
+    /// (0, 0), i.e. grid cell (8, 18)) with the `TES` singleton set, the
+    /// land of every cell `0x9100` and `GetLandHeight` answering `height` in
+    /// `*out` and true.
+    fn land_engine(height: f32) -> (Engine, Ptr<TES>, u32) {
+        let (mut e, tes, table) = grid_engine(5);
+        install_float_to_int(&mut e);
+        returns(&mut e, GET_INTERIOR_CELL, 0);
+        e.set(tes, TES::iCurrentGridX, 10);
+        e.set(tes, TES::iCurrentGridY, 20);
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, tes.addr());
+        let cell = e.mem.alloc(0x100);
+        e.mem.set_u8(cell + 0x26, 3);
+        put_cell(&mut e, table, 5, 0, 0, cell);
+        returns(&mut e, CELL_GET_LAND, 0x9100);
+        e.register_double(LAND_GET_LAND_HEIGHT, move |e, a| {
+            e.mem.set_f32(a[2], height);
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        e.map(0x0101_7824, 4);
+        e.set_global(0x0101_7824, -2048.0f32);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        (e, tes, cell)
+    }
+
+    #[test]
+    fn the_land_height_is_asked_of_the_loaded_cell_under_the_position() {
+        let (mut e, tes, _) = land_engine(123.5);
+        let pos = position(&mut e, 8.0 * 4096.0 + 10.0, 18.0 * 4096.0 + 10.0);
+        let out = e.mem.alloc(4);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_72e0, &args![tes, pos, out]).bool());
+        });
+        assert_eq!(e.mem.f32(out), 123.5);
+        assert_eq!(
+            calls_to(&log, LAND_GET_LAND_HEIGHT),
+            vec![vec![0x9100, pos, out]]
+        );
+    }
+
+    #[test]
+    fn the_land_height_of_an_unloaded_cell_is_the_no_height_value() {
+        let (mut e, tes, cell) = land_engine(123.5);
+        e.mem.set_u8(cell + 0x26, 0);
+        let pos = position(&mut e, 8.0 * 4096.0 + 10.0, 18.0 * 4096.0 + 10.0);
+        let out = e.mem.alloc(4);
+        assert!(!e.call(0x0045_72e0, &args![tes, pos, out]).bool());
+        assert_eq!(e.mem.f32(out), -2048.0);
+        // Outside the grid there is no cell at all.
+        let far = position(&mut e, 100.0 * 4096.0, 100.0 * 4096.0);
+        assert!(!e.call(0x0045_72e0, &args![tes, far, out]).bool());
+    }
+
+    #[test]
+    fn a_position_on_a_cell_border_belongs_to_the_cell_below() {
+        let (mut e, tes, _) = land_engine(1.0);
+        let out = e.mem.alloc(4);
+        // Exactly on the border x = 8 * 4096: cell 8 (the slot (0, 0)).
+        let on_border = position(&mut e, 8.0 * 4096.0, 18.0 * 4096.0 + 1.0);
+        assert!(e.call(0x0045_72e0, &args![tes, on_border, out]).bool());
+        // Rounds up to the border from below: still cell 7, outside the grid.
+        let below = position(&mut e, 8.0 * 4096.0 - 0.25, 18.0 * 4096.0 + 1.0);
+        assert!(!e.call(0x0045_72e0, &args![tes, below, out]).bool());
+    }
+
+    #[test]
+    fn the_second_land_query_fills_its_output_first() {
+        let (mut e, tes, _) = land_engine(0.0);
+        e.map(NI_POINT3_ZERO, 12);
+        e.set_global(NI_POINT3_ZERO, 1.5f32);
+        e.set_global(NI_POINT3_ZERO + 4, 2.5f32);
+        e.register_double(0x0053_d2e0, |_, a| Ret {
+            eax: (a[3] == 9) as u32,
+            ..Ret::default()
+        });
+        let pos = position(&mut e, 8.0 * 4096.0 + 10.0, 18.0 * 4096.0 + 10.0);
+        let out = e.mem.alloc(12);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_73f0, &args![tes, pos, out, 9u32]).bool());
+        });
+        assert_eq!(e.mem.f32(out), 1.5);
+        assert_eq!(e.mem.f32(out + 4), 2.5);
+        assert_eq!(e.mem.f32(out + 8), 1.0);
+        assert_eq!(calls_to(&log, 0x0053_d2e0), vec![vec![0x9100, pos, out, 9]]);
+        assert!(!e.call(0x0045_73f0, &args![tes, pos, out, 8u32]).bool());
+    }
+
+    #[test]
+    fn the_third_land_query_answers_for_a_loaded_cell_only() {
+        let (mut e, tes, cell) = land_engine(0.0);
+        returns(&mut e, 0x0053_f570, 1);
+        let pos = position(&mut e, 8.0 * 4096.0 + 10.0, 18.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            assert!(e.call(0x0045_7520, &args![tes, pos, 7u32]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0053_f570), vec![vec![0x9100, pos, 7]]);
+        e.mem.set_u8(cell + 0x26, 0);
+        assert!(!e.call(0x0045_7520, &args![tes, pos, 7u32]).bool());
+    }
+
+    #[test]
+    fn the_fourth_land_query_returns_the_whole_answer() {
+        let (mut e, tes, cell) = land_engine(0.0);
+        returns(&mut e, 0x0053_f0e0, 0xabcd_1234);
+        let pos = position(&mut e, 8.0 * 4096.0 + 10.0, 18.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_7620, &args![tes, pos]).u32(), 0xabcd_1234);
+        });
+        assert_eq!(calls_to(&log, 0x0053_f0e0), vec![vec![0x9100, pos]]);
+        e.mem.set_u8(cell + 0x26, 0);
+        assert_eq!(e.call(0x0045_7620, &args![tes, pos]).u32(), 0);
+    }
+
+    /// The cache globals of `00457720`.
+    fn map_land_cache(e: &mut Engine, column_x: i32, answer: u32) {
+        e.map(CACHED_LAND_COLUMN_X, 4);
+        e.map(CACHED_LAND_COLUMN_Y, 4);
+        e.map(CACHED_LAND_ANSWER, 4);
+        e.set_global(CACHED_LAND_COLUMN_X, column_x);
+        e.set_global(CACHED_LAND_ANSWER, answer);
+    }
+
+    #[test]
+    fn the_cached_land_query_is_answered_from_the_cache_inside_a_column() {
+        let (mut e, tes, _) = land_engine(0.0);
+        // x = 8 * 4096 + 130: the column starts at +128.
+        map_land_cache(&mut e, 8 * 4096 + 128, 0x7777);
+        let pos = position(&mut e, 8.0 * 4096.0 + 130.0, 18.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_7720, &args![tes, pos]).u32(), 0x7777);
+        });
+        assert_eq!(count_calls(&log, 0x0053_a5e0), 0);
+    }
+
+    #[test]
+    fn a_new_land_query_is_asked_and_cached() {
+        let (mut e, tes, _) = land_engine(0.0);
+        map_land_cache(&mut e, 0, 0x7777);
+        returns(&mut e, 0x0053_a5e0, 0x8888);
+        let pos = position(&mut e, 8.0 * 4096.0 + 130.0, 18.0 * 4096.0 + 200.0);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_7720, &args![tes, pos]).u32(), 0x8888);
+        });
+        assert_eq!(calls_to(&log, 0x0053_a5e0), vec![vec![0x9100, pos]]);
+        assert_eq!(e.global::<i32>(CACHED_LAND_COLUMN_X), 8 * 4096 + 128);
+        assert_eq!(e.global::<i32>(CACHED_LAND_COLUMN_Y), 18 * 4096 + 128);
+        assert_eq!(e.global::<u32>(CACHED_LAND_ANSWER), 0x8888);
+    }
+
+    #[test]
+    fn an_empty_land_answer_or_a_missing_cell_is_not_cached() {
+        let (mut e, tes, _) = land_engine(0.0);
+        map_land_cache(&mut e, 0, 0x7777);
+        returns(&mut e, 0x0053_a5e0, 0);
+        let pos = position(&mut e, 8.0 * 4096.0 + 130.0, 18.0 * 4096.0 + 200.0);
+        assert_eq!(e.call(0x0045_7720, &args![tes, pos]).u32(), 0);
+        assert_eq!(e.global::<i32>(CACHED_LAND_COLUMN_X), 0);
+        let far = position(&mut e, 100.0 * 4096.0 + 130.0, 100.0 * 4096.0);
+        assert_eq!(e.call(0x0045_7720, &args![tes, far]).u32(), 0);
+        assert_eq!(e.global::<u32>(CACHED_LAND_ANSWER), 0x7777);
+    }
+
+    #[test]
+    fn negative_positions_are_rounded_toward_zero_for_the_column() {
+        let (mut e, tes, _) = land_engine(0.0);
+        map_land_cache(&mut e, -128, 0x4242);
+        // x = -130: remainder -2, column -128 (the cache hit).
+        let pos = position(&mut e, -130.0, 5.0);
+        assert_eq!(e.call(0x0045_7720, &args![tes, pos]).u32(), 0x4242);
+    }
+
+    #[test]
+    fn the_land_byte_is_read_from_what_the_cached_query_finds() {
+        let (mut e, tes, _) = land_engine(0.0);
+        map_land_cache(&mut e, 8 * 4096 + 128, 0x7777);
+        returns(&mut e, 0x0054_1570, 5);
+        let pos = position(&mut e, 8.0 * 4096.0 + 130.0, 18.0 * 4096.0 + 10.0);
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_7880, &args![tes, pos]).u32(), 5);
+        });
+        assert_eq!(calls_to(&log, 0x0054_1570), vec![vec![0x7777]]);
+        // Nothing found: 2.
+        e.set_global(CACHED_LAND_ANSWER, 0u32);
+        assert_eq!(e.call(0x0045_7880, &args![tes, pos]).u32(), 2);
+    }
+
+    // ---- three-float helpers ----
+
+    #[test]
+    fn point_subtraction_works_on_each_component() {
+        let mut e = Engine::new();
+        let a = e.mem.alloc(12);
+        let b = e.mem.alloc(12);
+        for (i, v) in [5.0f32, 3.0, -1.0].iter().enumerate() {
+            e.mem.set_f32(a + 4 * i as u32, *v);
+        }
+        for (i, v) in [1.0f32, 4.0, 0.5].iter().enumerate() {
+            e.mem.set_f32(b + 4 * i as u32, *v);
+        }
+        assert_eq!(e.call(0x0045_78c0, &args![a, b]).u32(), a);
+        assert_eq!(
+            [e.mem.f32(a), e.mem.f32(a + 4), e.mem.f32(a + 8)],
+            [4.0, -1.0, -1.5]
+        );
+    }
+
+    /// `004579e0` as a square root of its `float` argument.
+    fn install_sqrt(e: &mut Engine) {
+        e.register_double(0x0045_79e0, |_, a| Ret {
+            st0: (f32::from_bits(a[0]) as f64).sqrt(),
+            ..Ret::default()
+        });
+    }
+
+    #[test]
+    fn the_vector_length_passes_the_squared_sum_to_the_square_root() {
+        let mut e = Engine::new();
+        install_sqrt(&mut e);
+        let v = e.mem.alloc(12);
+        for (i, x) in [1.0f32, 2.0, 2.0].iter().enumerate() {
+            e.mem.set_f32(v + 4 * i as u32, *x);
+        }
+        let log = run_logged(&mut e, |e| {
+            assert_eq!(e.call(0x0045_7990, &args![v]).f64(), 3.0);
+        });
+        assert_eq!(calls_to(&log, 0x0045_79e0), vec![vec![9.0f32.to_bits()]]);
+    }
+
+    #[test]
+    fn unitizing_scales_to_length_one_and_returns_the_old_length() {
+        let mut e = Engine::new();
+        install_sqrt(&mut e);
+        e.map(0x0101_7cf8, 8);
+        e.set_global(0x0101_7cf8, 1e-6f64);
+        let v = e.mem.alloc(12);
+        for (i, x) in [3.0f32, 0.0, 4.0].iter().enumerate() {
+            e.mem.set_f32(v + 4 * i as u32, *x);
+        }
+        let length = e.call(0x0045_7910, &args![v]).f32();
+        assert_eq!(length, 5.0);
+        assert_eq!(e.mem.f32(v), 3.0 * 0.2f32);
+        assert_eq!(e.mem.f32(v + 4), 0.0);
+        assert_eq!(e.mem.f32(v + 8), 4.0 * 0.2f32);
+    }
+
+    #[test]
+    fn unitizing_a_tiny_vector_zeroes_it() {
+        let mut e = Engine::new();
+        install_sqrt(&mut e);
+        e.map(0x0101_7cf8, 8);
+        e.set_global(0x0101_7cf8, 1e-6f64);
+        let v = e.mem.alloc(12);
+        e.mem.set_f32(v, 1e-8);
+        e.mem.set_f32(v + 4, -1e-8);
+        e.mem.set_f32(v + 8, 0.0);
+        let length = e.call(0x0045_7910, &args![v]).f32();
+        assert_eq!(length, 0.0);
+        assert_eq!([e.mem.f32(v), e.mem.f32(v + 4), e.mem.f32(v + 8)], [0.0; 3]);
+    }
+
+    // ---- TES::TestAllCells ----
+
+    /// The `(dx, flags)` of every `SendInput` call.
+    type SentInputs = Rc<RefCell<Vec<(i32, u32)>>>;
+    /// A call log (`Engine::call_log`).
+    type CallLog = Vec<(u32, Vec<u32>)>;
+    /// The words of a captured position request.
+    type RequestWords = Rc<RefCell<Vec<u32>>>;
+
+    /// The name function of the test forms (vtable slot 0x130): the text
+    /// pointer stored at +0x80 of the form.
+    const TAC_NAME_FUNCTION: u32 = 0x0300_0130;
+
+    /// A form whose name (slot 0x130) is `name`.
+    fn named_form(e: &mut Engine, name: &str) -> u32 {
+        let form = object_with_slots(e, 0x0300_4000, &[(0x130, TAC_NAME_FUNCTION)]);
+        let text = e.mem.alloc(name.len() as u32 + 1);
+        e.mem.set_cstr(text, name.as_bytes());
+        e.mem.set_u32(form + 0x80, text);
+        form
+    }
+
+    /// A list node `[item, next]`.
+    fn list_node(e: &mut Engine, item: u32, next: u32) -> u32 {
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, item);
+        e.mem.set_u32(node + 4, next);
+        node
+    }
+
+    /// The globals and callees every `TestAllCells` test needs; returns the
+    /// inputs `SendInput` was given as `(dx, flags)`.
+    fn tac_common(e: &mut Engine) -> SentInputs {
+        for (addr, len) in [
+            (TEST_BASE_OBJECTS_CHECKED, 1),
+            (TEST_MODE, 4),
+            (TEST_WORLD_SPACE_NODE, 4),
+            (TEST_INTERIOR_COUNT, 4),
+            (TEST_ENTER_WORLD_SPACE, 1),
+            (TEST_INTERIOR_INDEX, 4),
+            (TEST_CELL_X, 4),
+            (TEST_CELL_Y, 4),
+            (TEST_EXTERIOR_COUNT, 4),
+            (TEST_INPUT_SIGN, 4),
+            (TEST_LOGGING, 1),
+            (TEST_OUTPUT_FILE, 4),
+            (TEST_FLOAT_TEN, 4),
+            (TEST_DOUBLE_THOUSAND, 8),
+            (TEST_DOUBLE_HALF_CELL, 8),
+            (TEST_DOUBLE_ZERO, 8),
+            (TEST_PREFIX, 8),
+            (NI_POINT3_ZERO, 12),
+            (DATA_HANDLER, 4),
+            (PLAYER_CHARACTER, 4),
+            (SAVE_LOAD_GAME, 4),
+            (TES_SINGLETON, 4),
+            (IO_MANAGER, 4),
+        ] {
+            e.map(addr, len);
+        }
+        for addr in [
+            TEST_BASE_OBJECTS_CHECKED,
+            TEST_MODE,
+            TEST_WORLD_SPACE_NODE,
+            TEST_INTERIOR_COUNT,
+            TEST_ENTER_WORLD_SPACE,
+            TEST_INTERIOR_INDEX,
+            TEST_CELL_X,
+            TEST_CELL_Y,
+            TEST_EXTERIOR_COUNT,
+            TEST_LOGGING,
+        ] {
+            e.set_global(addr, 0u32);
+        }
+        e.set_global(TEST_INPUT_SIGN, 1i32);
+        let file_name = e.mem.alloc(32);
+        e.mem.set_cstr(file_name, b"TestAllCells.xls");
+        e.set_global(TEST_OUTPUT_FILE, file_name);
+        e.mem.set_cstr(TEST_PREFIX, b"test");
+        e.set_global(TEST_FLOAT_TEN, 10.0f32);
+        e.set_global(TEST_DOUBLE_THOUSAND, 1000.0f64);
+        e.set_global(TEST_DOUBLE_HALF_CELL, 2048.0f64);
+        e.set_global(TEST_DOUBLE_ZERO, 0.0f64);
+        e.register_double(TAC_NAME_FUNCTION, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 0x80),
+            ..Ret::default()
+        });
+        e.register_double(STRNICMP, |e, a| {
+            let lower = |s: Vec<u8>| -> Vec<u8> {
+                s.iter()
+                    .take(a[2] as usize)
+                    .map(u8::to_ascii_lowercase)
+                    .collect()
+            };
+            let first = lower(e.mem.cstr(a[0]));
+            let second = lower(e.mem.cstr(a[1]));
+            Ret {
+                eax: (first != second) as u32,
+                ..Ret::default()
+            }
+        });
+        e.register_double(LIST_NODE_ITEM, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        e.register_double(LIST_NODE_NEXT, |e, a| Ret {
+            eax: e.mem.u32(a[0] + 4),
+            ..Ret::default()
+        });
+        e.register_double(SET_TEST_CALLBACK, |e, a| {
+            e.mem.set_u32(a[0] + 0x54, a[1]);
+            Ret::default()
+        });
+        e.register_double(SET_WORLD_SPACE, |e, a| {
+            e.mem.set_u32(a[0] + 0x88, a[1]);
+            Ret::default()
+        });
+        install_ftol(e);
+        let clock = Rc::new(RefCell::new(0u32));
+        e.register_double(CRT_CLOCK, move |_, _| {
+            *clock.borrow_mut() += 1500;
+            Ret {
+                eax: *clock.borrow(),
+                ..Ret::default()
+            }
+        });
+        let inputs = Rc::new(RefCell::new(Vec::new()));
+        let record = inputs.clone();
+        e.register_double(IMPORT_SEND_INPUT, move |e, a| {
+            assert_eq!((a[0], a[2]), (1, 0x1c));
+            let dx = e.mem.i32(a[1] + 4);
+            let flags = e.mem.u32(a[1] + 0x10);
+            assert_eq!(e.mem.u32(a[1]), 0, "mouse input");
+            record.borrow_mut().push((dx, flags));
+            Ret {
+                eax: 1,
+                ..Ret::default()
+            }
+        });
+        noop(
+            e,
+            &[
+                MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT,
+                DELETE_FILE,
+                DEBUG_PRINT,
+                MESSAGE_HANDLER_OUTPUT,
+                DATA_HANDLER_CHECK_MODELS,
+                DATA_HANDLER_CHECK_ICONS,
+                DATA_HANDLER_PREPARE_INTERIORS,
+            ],
+        );
+        returns(e, DATA_HANDLER_INTERIOR_COUNT, 0);
+        returns(e, DATA_HANDLER_FIRST_WORLD_SPACE, 0);
+        returns(e, DATA_HANDLER_GET_INTERIOR, 0);
+        returns(e, CELL_HAS_FLAG_20, 0);
+        returns(e, CELL_GET_FIRST_REFR, 1);
+        inputs
+    }
+
+    /// A `TestAllCells` engine without the cell-visiting machinery: settings,
+    /// a `TES` with buffers (1 x 1 grid, 3 exterior slots), everything the
+    /// loop uses stubbed.
+    fn tac_engine() -> (Engine, Ptr<TES>, u32, SentInputs) {
+        let (mut e, tes, _, exterior) = buffers_engine(1, &[0; 3], &[0; 3]);
+        let inputs = tac_common(&mut e);
+        // `buffers_engine` set the data handler pointer before the mapping
+        // of `tac_common` zeroed it.
+        e.set_global(DATA_HANDLER, 0x6000u32);
+        (e, tes, exterior, inputs)
+    }
+
+    #[test]
+    fn mode_minus_one_stops_a_running_test() {
+        let (mut e, tes, _, _) = tac_engine();
+        e.set(tes, TES::bRunningCellTests, true);
+        e.set(tes, TES::pTACRegionFilter, Ptr::new(0x8800));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, -1i32]);
+        });
+        assert!(!e.get(tes, TES::bRunningCellTests));
+        assert!(e.get(tes, TES::pTACRegionFilter).is_null());
+        assert_eq!(
+            addresses(&log),
+            vec![0x0045_56d0, MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT]
+        );
+        assert_eq!(
+            calls_to(&log, MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT),
+            vec![vec![0]]
+        );
+    }
+
+    #[test]
+    fn mode_zero_only_runs_the_loop() {
+        let (mut e, tes, _, inputs) = tac_engine();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 0i32]);
+        });
+        // Not running: nothing happens.
+        assert_eq!(addresses(&log), vec![0x0045_56d0]);
+        assert!(inputs.borrow().is_empty());
+    }
+
+    #[test]
+    fn modes_6_and_7_store_the_callback_and_run_as_modes_1_and_2() {
+        let (mut e, tes, _, _) = tac_engine();
+        e.call(0x0045_56d0, &args![tes, 6i32]);
+        assert_eq!(e.get(tes, TES::pfnTACCallbackFunc).addr(), TEST_CALLBACK);
+        assert_eq!(e.global::<u32>(TEST_MODE), 1);
+        // The base objects count as checked.
+        assert_eq!(e.global::<u8>(TEST_BASE_OBJECTS_CHECKED), 1);
+        e.call(0x0045_56d0, &args![tes, 7i32]);
+        assert_eq!(e.global::<u32>(TEST_MODE), 2);
+    }
+
+    #[test]
+    fn a_fresh_run_checks_the_base_objects_and_walks_the_interiors() {
+        let (mut e, tes, _, inputs) = tac_engine();
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 2i32]);
+        });
+        let relevant: Vec<u32> = addresses(&log)
+            .into_iter()
+            .filter(|a| {
+                [
+                    MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT,
+                    DELETE_FILE,
+                    DEBUG_PRINT,
+                    DATA_HANDLER_CHECK_MODELS,
+                    DATA_HANDLER_CHECK_ICONS,
+                    DATA_HANDLER_PREPARE_INTERIORS,
+                    DATA_HANDLER_INTERIOR_COUNT,
+                    DATA_HANDLER_GET_INTERIOR,
+                ]
+                .contains(a)
+            })
+            .collect();
+        assert_eq!(
+            relevant,
+            vec![
+                MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT,
+                DELETE_FILE,
+                DEBUG_PRINT,
+                DATA_HANDLER_CHECK_MODELS,
+                DEBUG_PRINT,
+                DATA_HANDLER_CHECK_ICONS,
+                DATA_HANDLER_PREPARE_INTERIORS,
+                DATA_HANDLER_INTERIOR_COUNT,
+                DEBUG_PRINT,
+                DATA_HANDLER_GET_INTERIOR,
+                MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT,
+            ]
+        );
+        let prints = calls_to(&log, DEBUG_PRINT);
+        assert_eq!(
+            prints,
+            vec![
+                vec![TEST_TEXT_BASE_OBJECT_MODELS],
+                vec![TEST_TEXT_BASE_OBJECT_ICONS],
+                vec![TEST_TEXT_INTERIORS],
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_CHECK_MODELS),
+            vec![vec![0x6000, 0]]
+        );
+        assert_eq!(calls_to(&log, DELETE_FILE).len(), 1);
+        // One mouse move was sent; the run ended since no interiors exist.
+        assert_eq!(*inputs.borrow(), vec![(2, 1)]);
+        assert!(!e.get(tes, TES::bRunningCellTests));
+        // The second run sends the opposite move and does not check again.
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 2i32]);
+        });
+        assert_eq!(*inputs.borrow(), vec![(2, 1), (-1, 1)]);
+        assert_eq!(count_calls(&log, DATA_HANDLER_CHECK_MODELS), 0);
+    }
+
+    /// A world space list `[Test world -> world]` where the world space
+    /// spans cells (-1, -1) to (0, 0); `load_cell` answers `cell` for (0, 0).
+    fn world_space_list(e: &mut Engine, cell: u32) -> (u32, u32) {
+        let skipped = named_form(e, "TestWorld");
+        let world = named_form(e, "Tamriel");
+        let second = list_node(e, world, 0);
+        let first = list_node(e, skipped, second);
+        returns(e, DATA_HANDLER_FIRST_WORLD_SPACE, first);
+        returns_float(e, WORLD_SPACE_MIN_X, -4096.0);
+        returns_float(e, WORLD_SPACE_MIN_Y, -4096.0);
+        returns_float(e, WORLD_SPACE_MAX_X, 0.0);
+        returns_float(e, WORLD_SPACE_MAX_Y, 0.0);
+        e.register_double(WORLD_SPACE_LOAD_CELL, move |_, a| Ret {
+            eax: if (a[1], a[2]) == (0, 0) { cell } else { 0 },
+            ..Ret::default()
+        });
+        (world, second)
+    }
+
+    #[test]
+    fn mode_1_walks_the_cells_of_the_first_real_world_space() {
+        let (mut e, tes, exterior, _) = tac_engine();
+        let cell = cell_object(&mut e, 0);
+        // The first reference check says "no references": the cell is
+        // buffered but not visited.
+        let (world, _) = world_space_list(&mut e, cell);
+        returns(&mut e, CELL_GET_FIRST_REFR, 0);
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 1i32]);
+        });
+        // The "test" world space was skipped; the next one entered.
+        assert_eq!(
+            calls_to(&log, SET_WORLD_SPACE),
+            vec![vec![tes.addr(), world]]
+        );
+        let name = e.mem.u32(world + 0x80);
+        let minus_one = (-1i32) as u32;
+        assert!(calls_to(&log, DEBUG_PRINT).contains(&vec![
+            TEST_TEXT_WORLD_SPACE,
+            name,
+            minus_one,
+            minus_one,
+            0,
+            0
+        ]));
+        let loads = calls_to(&log, WORLD_SPACE_LOAD_CELL);
+        let coords: Vec<(u32, u32)> = loads.iter().map(|l| (l[1], l[2])).collect();
+        assert_eq!(
+            coords,
+            vec![
+                (minus_one, minus_one),
+                (minus_one, 0),
+                (0, minus_one),
+                (0, 0)
+            ]
+        );
+        assert!(loads.iter().all(|l| l[0] == world));
+        // The loaded cell went into the exterior buffer.
+        assert_eq!(e.mem.u32(exterior), cell);
+        // The list is used up: the interiors follow.
+        assert_eq!(e.global::<u32>(TEST_WORLD_SPACE_NODE), 0);
+        assert!(calls_to(&log, DEBUG_PRINT).contains(&vec![TEST_TEXT_INTERIORS]));
+        assert_eq!(count_calls(&log, TIME_OBJECT_ADVANCE), 0);
+    }
+
+    #[test]
+    fn mode_3_finds_the_loaded_world_space_in_the_list() {
+        let (mut e, tes, _, _) = tac_engine();
+        let first = named_form(&mut e, "Other");
+        let second = named_form(&mut e, "Loaded");
+        let second_node = list_node(&mut e, second, 0);
+        let first_node = list_node(&mut e, first, second_node);
+        returns(&mut e, DATA_HANDLER_FIRST_WORLD_SPACE, first_node);
+        returns_float(&mut e, WORLD_SPACE_MIN_X, 0.0);
+        returns_float(&mut e, WORLD_SPACE_MIN_Y, 0.0);
+        returns_float(&mut e, WORLD_SPACE_MAX_X, 0.0);
+        returns_float(&mut e, WORLD_SPACE_MAX_Y, 0.0);
+        returns(&mut e, WORLD_SPACE_LOAD_CELL, 0);
+        e.set(tes, TES::pWorldSpace, Ptr::new(second));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 3i32]);
+        });
+        assert_eq!(
+            calls_to(&log, SET_WORLD_SPACE),
+            vec![vec![tes.addr(), second]]
+        );
+        assert_eq!(
+            calls_to(&log, WORLD_SPACE_LOAD_CELL),
+            vec![vec![second, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn mode_3_without_the_loaded_world_space_in_the_list_does_nothing() {
+        let (mut e, tes, _, inputs) = tac_engine();
+        let other = named_form(&mut e, "Other");
+        let node = list_node(&mut e, other, 0);
+        returns(&mut e, DATA_HANDLER_FIRST_WORLD_SPACE, node);
+        e.set(tes, TES::pWorldSpace, Ptr::new(0x1234_5678));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 3i32]);
+        });
+        assert_eq!(count_calls(&log, SET_WORLD_SPACE), 0);
+        assert_eq!(count_calls(&log, DATA_HANDLER_PREPARE_INTERIORS), 0);
+        assert_eq!(inputs.borrow().len(), 1);
+    }
+
+    /// An interior test: the interiors are `names`, every cell has
+    /// references, and the region filter is set; `contains` is what the
+    /// region test answers (`regions == 0` means no region list at all).
+    fn interior_filter_run(names: &[&str], regions: u32) -> (Engine, CallLog, Vec<u32>) {
+        let (mut e, tes, _, _) = tac_engine();
+        let cells: Vec<u32> = names.iter().map(|n| named_form(&mut e, n)).collect();
+        let table = cells.clone();
+        returns(&mut e, DATA_HANDLER_INTERIOR_COUNT, names.len() as u32);
+        e.register_double(DATA_HANDLER_GET_INTERIOR, move |_, a| Ret {
+            eax: table.get(a[1] as usize).copied().unwrap_or(0),
+            ..Ret::default()
+        });
+        returns(&mut e, CELL_GET_REGION_LIST, regions);
+        returns(&mut e, REGION_LIST_CONTAINS, 0);
+        e.set(tes, TES::pTACRegionFilter, Ptr::new(0x8800));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, 2i32]);
+        });
+        (e, log, cells)
+    }
+
+    #[test]
+    fn test_named_interiors_are_skipped_and_the_region_filter_applies() {
+        let (e, log, cells) = interior_filter_run(&["testRoom", "Vault"], 0x9900);
+        // Both interiors were asked for; only "Vault" was looked at further.
+        let asked = calls_to(&log, DATA_HANDLER_GET_INTERIOR);
+        assert_eq!(asked, vec![vec![0x6000, 0], vec![0x6000, 1]]);
+        assert_eq!(
+            calls_to(&log, CELL_GET_REGION_LIST),
+            vec![vec![cells[1], 1]]
+        );
+        // The filter (at TES + 0x5c) did not accept: the cell was not visited.
+        assert_eq!(
+            calls_to(&log, REGION_LIST_CONTAINS)
+                .iter()
+                .map(|c| c[0])
+                .collect::<Vec<_>>(),
+            vec![0x9904]
+        );
+        assert_eq!(count_calls(&log, TIME_OBJECT_ADVANCE), 0);
+        // The run ended: the filter was cleared.
+        let _ = e;
+    }
+
+    #[test]
+    fn an_interior_without_a_region_list_fails_the_region_filter() {
+        let (_, log, _) = interior_filter_run(&["Vault"], 0);
+        assert_eq!(count_calls(&log, REGION_LIST_CONTAINS), 0);
+        assert_eq!(count_calls(&log, TIME_OBJECT_ADVANCE), 0);
+    }
+
+    // ---- visiting a cell ----
+
+    /// Runs `TestAllCells(mode)` over one interior cell, which is also the
+    /// loaded interior cell, with the visiting machinery stubbed.
+    /// Returns the engine, the `TES`, the cell, the log, and the words of the
+    /// position request the player was given.
+    fn visit_run(mode: i32, logging: bool) -> (Engine, Ptr<TES>, u32, CallLog, RequestWords) {
+        let (mut e, tes, _) = switch_engine();
+        let _ = tac_common(&mut e);
+        let cell = named_form(&mut e, "Vault");
+        returns(&mut e, GET_INTERIOR_CELL, cell);
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        returns(&mut e, DATA_HANDLER_INTERIOR_COUNT, 1);
+        e.register_double(DATA_HANDLER_GET_INTERIOR, move |_, a| Ret {
+            eax: if a[1] == 0 { cell } else { 0 },
+            ..Ret::default()
+        });
+        e.set_global(TEST_LOGGING, logging as u8);
+        noop(
+            &mut e,
+            &[
+                TIME_OBJECT_ADVANCE,
+                CELL_LOAD_ALL_TEMP_DATA,
+                CELL_GET_COC_PLACEMENT_INFO,
+                PLAYER_REQUEST_POSITION,
+                PLAYER_HANDLE_POSITION_REQUEST,
+                IO_MANAGER_LOAD_QUEUED_PRIORITY,
+                TES_PURGE_UNUSED,
+                FRAME_SCOPE_RELEASE,
+                FRAME_SCOPE_END,
+                STRING_ARRAY_CONSTRUCT,
+                STRING_ARRAY_DESTRUCT,
+                SCENE_INFO_TOTALS,
+                SCENE_INFO_BUILD_M_NUMBER,
+                SAVE_LOAD_GAME_TEST_ALL_CELLS,
+            ],
+        );
+        e.register_double(OPERATOR_NEW, |e, a| Ret {
+            eax: e.mem.alloc(a[0]),
+            ..Ret::default()
+        });
+        e.register_double(POSITION_REQUEST_CONSTRUCT, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        let rotation = e.mem.alloc(12);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(rotation + 4 * i as u32, *v);
+        }
+        returns(&mut e, PLAYER_ROTATION_GETTER, rotation);
+        e.register_double(FRAME_SCOPE_BEGIN, |e, a| {
+            e.mem.set_u8(a[0] + 5, 1);
+            Ret::default()
+        });
+        if logging {
+            install_print_callees(&mut e);
+        }
+        // Remember the position request block when the player is given it.
+        let request = Rc::new(RefCell::new(Vec::new()));
+        let seen = request.clone();
+        e.register_double(PLAYER_REQUEST_POSITION, move |e, a| {
+            *seen.borrow_mut() = (0..0x34 / 4).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            Ret::default()
+        });
+        // The cell has references, the region filter accepts.
+        returns(&mut e, CELL_GET_REGION_LIST, 0x9900);
+        returns(&mut e, REGION_LIST_CONTAINS, 1);
+        e.set(tes, TES::pTACRegionFilter, Ptr::new(0x8800));
+        let callback = Rc::new(RefCell::new(Vec::new()));
+        let seen_callback = callback.clone();
+        e.register_double(0x0300_0200, move |_, a| {
+            seen_callback.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        e.set(tes, TES::pfnTACCallbackFunc, Ptr::new(0x0300_0200));
+        e.set(tes, TES::pTACCallbackData, Ptr::new(0x1234));
+        let log = run_logged(&mut e, |e| {
+            e.call(0x0045_56d0, &args![tes, mode]);
+        });
+        assert_eq!(*callback.borrow(), vec![vec![cell, 0x1234]]);
+        (e, tes, cell, log, request)
+    }
+
+    #[test]
+    fn a_visited_interior_cell_is_entered_and_the_player_is_placed_in_it() {
+        let (e, tes, cell, log, request) = visit_run(2, false);
+        // The calendar-like object is advanced by 10.0.
+        assert_eq!(
+            calls_to(&log, TIME_OBJECT_ADVANCE),
+            vec![vec![OBJECT_011DE7B8, 10.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&log, CELL_LOAD_ALL_TEMP_DATA), vec![vec![cell]]);
+        let placement = calls_to(&log, CELL_GET_COC_PLACEMENT_INFO);
+        assert_eq!(placement.len(), 1);
+        assert_eq!(placement[0][0], cell);
+        // The region filter test got the list + 4 and the address of the
+        // filter field.
+        assert_eq!(
+            calls_to(&log, REGION_LIST_CONTAINS),
+            vec![vec![0x9904, tes.addr() + 0x5c]]
+        );
+        // The request: position (zeros), the player's rotation, the flag,
+        // and the interior cell (no world space).
+        let words = request.borrow().clone();
+        assert_eq!(words[0], 0);
+        assert_eq!(words[1], cell);
+        assert_eq!(words[2..5], [0, 0, 0]);
+        assert_eq!(
+            words[5..8],
+            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()]
+        );
+        assert_eq!(words[8] & 0xff, 1);
+        // The order of the load steps.
+        let order: Vec<u32> = addresses(&log)
+            .into_iter()
+            .filter(|a| {
+                [
+                    PLAYER_REQUEST_POSITION,
+                    PLAYER_HANDLE_POSITION_REQUEST,
+                    IO_MANAGER_LOAD_QUEUED_PRIORITY,
+                    FRAME_SCOPE_BEGIN,
+                    TES_PURGE_UNUSED,
+                    FRAME_SCOPE_RELEASE,
+                    FRAME_SCOPE_END,
+                ]
+                .contains(a)
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                PLAYER_REQUEST_POSITION,
+                PLAYER_HANDLE_POSITION_REQUEST,
+                IO_MANAGER_LOAD_QUEUED_PRIORITY,
+                FRAME_SCOPE_BEGIN,
+                TES_PURGE_UNUSED,
+                FRAME_SCOPE_RELEASE,
+                FRAME_SCOPE_END,
+            ]
+        );
+        assert_eq!(calls_to(&log, TES_PURGE_UNUSED)[0][1..], [1, 0]);
+        // The byte the frame scope set at +5 is released.
+        assert_eq!(calls_to(&log, FRAME_SCOPE_RELEASE), vec![vec![1]]);
+        // Logging was off, and mode 2 does not call the save/load test.
+        assert_eq!(count_calls(&log, STRING_ARRAY_CONSTRUCT), 0);
+        assert_eq!(count_calls(&log, SAVE_LOAD_GAME_TEST_ALL_CELLS), 0);
+        // The test ended with the interior list.
+        assert!(!e.get(tes, TES::bRunningCellTests));
+    }
+
+    #[test]
+    fn modes_4_and_5_also_run_the_save_game_test_on_each_visited_cell() {
+        let (mut e, _, _, log, _) = visit_run(5, false);
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        assert_eq!(
+            calls_to(&log, SAVE_LOAD_GAME_TEST_ALL_CELLS),
+            vec![vec![save_load, 5]]
+        );
+        let _ = &mut e;
+    }
+
+    #[test]
+    fn a_visited_cell_prints_its_line_when_logging_is_on() {
+        let (_, _, cell, log, _) = visit_run(2, true);
+        assert_eq!(count_calls(&log, STRING_ARRAY_CONSTRUCT), 1);
+        assert_eq!(count_calls(&log, STRING_ARRAY_DESTRUCT), 1);
+        let interior_lines: Vec<_> = calls_to(&log, DEBUG_PRINT)
+            .into_iter()
+            .filter(|c| c[0] == TEST_TEXT_INTERIOR_LINE)
+            .collect();
+        assert_eq!(interior_lines.len(), 1);
+        assert_eq!(interior_lines[0].len(), 11);
+        let rows = calls_to(&log, MESSAGE_HANDLER_OUTPUT);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][1], TEST_TEXT_INTERIOR_ROW);
+        let _ = cell;
+    }
+
+    // ---- the per-cell line ----
+
+    /// `f64` as two argument words.
+    fn double_words(value: f64) -> [u32; 2] {
+        [value.to_bits() as u32, (value.to_bits() >> 32) as u32]
+    }
+
+    /// An engine for `test_print_cell`: the scene totals are 12.5 and 2.0
+    /// (as float bits), the M# text is "M1", the cell holds an actor holder
+    /// whose field is non-empty (portals), one texture of 5 MB, 4 lights, 7
+    /// actors.
+    fn print_engine() -> (Engine, u32, u32, u32) {
+        let mut e = Engine::new();
+        let _ = tac_common(&mut e);
+        let text = install_print_callees(&mut e);
+        let cell = named_form(&mut e, "Vault");
+        (e, cell, text, 0)
+    }
+
+    /// The callees of the logging block (see [`print_engine`]); returns the
+    /// M# text pointer.
+    fn install_print_callees(e: &mut Engine) -> u32 {
+        e.register_double(NI_POINTER_GET, |e, a| Ret {
+            eax: e.mem.u32(a[0]),
+            ..Ret::default()
+        });
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"M1");
+        e.register_double(SCENE_INFO_TOTALS, |e, a| {
+            e.mem.set_f32(a[0], 12.5);
+            e.mem.set_f32(a[1], 2.0);
+            Ret::default()
+        });
+        e.register_double(SCENE_INFO_BUILD_M_NUMBER, move |e, a| {
+            assert_eq!(a[0], 2.0f32.to_bits());
+            e.mem.set_u32(a[1], text);
+            Ret::default()
+        });
+        noop(e, &[STRING_ARRAY_CONSTRUCT, STRING_ARRAY_DESTRUCT]);
+        returns(e, CELL_GET_ACTOR_HOLDER, 0x7100);
+        returns(e, ACTOR_HOLDER_GET_FIELD_20, 0x7120);
+        returns(e, FIELD_IS_EMPTY, 0);
+        returns(e, TEXTURE_LIST_HEAD, 0x7200);
+        e.register_double(TEXTURE_IS_LOADED, |_, a| Ret {
+            eax: (a[0] == 0x7200) as u32,
+            ..Ret::default()
+        });
+        returns(e, TEXTURE_LIST_NEXT, 0);
+        e.register_double(DEBUG_PRINT, |_, a| Ret {
+            eax: if a[0] == 0x7200 { 5 << 20 } else { 0 },
+            ..Ret::default()
+        });
+        returns(e, ACTOR_COUNT, 7);
+        returns(e, CELL_GET_LIGHT_COUNT, 4);
+        text
+    }
+
+    #[test]
+    fn an_interior_cell_line_has_its_lights_portals_textures_and_actors() {
+        let (mut e, cell, text, _) = print_engine();
+        returns(&mut e, CELL_IS_INTERIOR, 1);
+        let name = e.mem.u32(cell + 0x80);
+        let output_file: u32 = e.global(TEST_OUTPUT_FILE);
+        let log = run_logged(&mut e, |e| test_print_cell(e, cell, 1.5));
+        let [total_lo, total_hi] = double_words(12.5);
+        let [time_lo, time_hi] = double_words(1.5);
+        let expected_tail = vec![total_lo, total_hi, time_lo, time_hi, 4, TEST_TEXT_YES, 5, 7];
+        let line: Vec<u32> = [
+            vec![TEST_TEXT_INTERIOR_LINE, name, text],
+            expected_tail.clone(),
+        ]
+        .concat();
+        assert!(calls_to(&log, DEBUG_PRINT).contains(&line));
+        let row: Vec<u32> = [
+            vec![output_file, TEST_TEXT_INTERIOR_ROW, name, text],
+            expected_tail,
+        ]
+        .concat();
+        assert_eq!(calls_to(&log, MESSAGE_HANDLER_OUTPUT), vec![row]);
+        // The texture total comes from the debug print of the texture.
+        assert!(calls_to(&log, DEBUG_PRINT).contains(&vec![0x7200]));
+    }
+
+    #[test]
+    fn an_exterior_cell_line_has_its_coordinates_and_counts_the_cell() {
+        let (mut e, cell, text, _) = print_engine();
+        returns(&mut e, CELL_IS_INTERIOR, 0);
+        returns(&mut e, CELL_GET_DATA_X, 3);
+        returns(&mut e, CELL_GET_DATA_Y, (-4i32) as u32);
+        // No portals: the actor holder field is empty.
+        returns(&mut e, FIELD_IS_EMPTY, 1);
+        let name = e.mem.u32(cell + 0x80);
+        let output_file: u32 = e.global(TEST_OUTPUT_FILE);
+        let log = run_logged(&mut e, |e| test_print_cell(e, cell, 0.5));
+        let [total_lo, total_hi] = double_words(12.5);
+        let [time_lo, time_hi] = double_words(0.5);
+        let tail = vec![
+            text,
+            total_lo,
+            total_hi,
+            time_lo,
+            time_hi,
+            TEST_TEXT_NO,
+            5,
+            7,
+        ];
+        let coordinates = vec![name, 3, (-4i32) as u32];
+        let line: Vec<u32> = [
+            vec![TEST_TEXT_EXTERIOR_LINE],
+            coordinates.clone(),
+            tail.clone(),
+        ]
+        .concat();
+        assert!(calls_to(&log, DEBUG_PRINT).contains(&line));
+        let row: Vec<u32> = [vec![output_file, TEST_TEXT_EXTERIOR_ROW], coordinates, tail].concat();
+        assert_eq!(calls_to(&log, MESSAGE_HANDLER_OUTPUT), vec![row]);
+        assert_eq!(e.global::<u32>(TEST_EXTERIOR_COUNT), 1);
+    }
+    // END SESSION 4 TESTS
 }
