@@ -9,9 +9,9 @@
 //! when the arguments do not parse. Bodies that never read a word
 //! (`005b5b90`, `005b5cc0`, ...) take no parameters here.
 //!
-//! Progress: the first 80 queue entries (`005b4b20` to `005b9520`) are
-//! translated. The next session continues at `005b9540`
-//! (`Script::ToggleSkyFunction`).
+//! Progress: the first 120 queue entries (`005b4b20` to `005ba750`) are
+//! translated. The next session continues at `005ba760`
+//! (`Script::ToggleDebugTextFunction`).
 //!
 //! Notes on the exe's code that the translations rely on:
 //! - Several tiny accessors are called by address and named here after what
@@ -957,6 +957,172 @@ const MSG_PROJECTILE_DEBUG_4: u32 = 0x0103_99f8;
 const MSG_PROJECTILE_DEBUG_5: u32 = 0x0103_99c0;
 /// `"Menus -> %s"`
 const MSG_MENUS: u32 = 0x0103_9ab8;
+
+// ---- Third batch (`005b9540` onward): callees, globals and strings ------------
+
+/// The `pSky` member of the `TES` (`TES::pSky`, Xbox PDB, `+0x68`, the same on
+/// PC): `*(this + 0x68)`. The engine map names this body
+/// `MiddleHighProcess::GetSavedAcquireObject` (identical code).
+const TES_GET_SKY: u32 = 0x008d_8520;
+/// `Sky::SetMode` (Xbox PDB), `thiscall` on the sky (`mode`).
+const SKY_SET_MODE: u32 = 0x0063_a3f0;
+/// `thiscall` on a cell: tests bit `0x80` of the byte at `this + 0x24` (PC
+/// offset).
+const CELL_TEST_FLAG_80: u32 = 0x0045_4b10;
+/// `thiscall` on a form: tests bit `0x10` of the flags dword at `this + 8`.
+const FORM_TEST_FLAG_10: u32 = 0x0050_d4a0;
+/// `thiscall` on a form (`set`): sets or clears bit `0x10` of the flags dword
+/// at `this + 8`.
+const FORM_SET_FLAG_10: u32 = 0x0069_3ef0;
+/// `thiscall` on the `TES`, no arguments: flips the byte [`FN_00456C70`]
+/// reads and passes the new value on to the setters that apply it.
+const FN_00456BE0: u32 = 0x0045_6be0;
+/// `cdecl`, no arguments: the byte at `011c3c0d` (the global collision flag).
+const FN_00456C70: u32 = 0x0045_6c70;
+/// `thiscall` on a reference, no arguments: the text of its name (the
+/// `%s` of the messages).
+const REFR_GET_NAME_TEXT: u32 = 0x0055_d520;
+
+// Tree leaves.
+/// `cdecl`, no arguments: `0051d740()` (a byte setting) and the byte at `+0x18`
+/// of the object [`FN_00664840`] returns.
+const FN_0054EE20: u32 = 0x0054_ee20;
+/// `cdecl` (`create`): the singleton in the global `011d5c48`, created when it
+/// is missing and `create` is non-zero.
+const FN_00664840: u32 = 0x0066_4840;
+
+// Wireframe.
+/// `cdecl` (`index`): the dword at `011f91c8 + index * 4`.
+const FN_00450B80: u32 = 0x0045_0b80;
+
+// Refraction, falloff and motion blur.
+/// `cdecl`, no arguments: the byte at `011f9180`.
+const FN_004DC0A0: u32 = 0x004d_c0a0;
+/// `cdecl` (`flag`): the dword at `011f91bc` when `flag` is non-zero,
+/// otherwise the one at `011f91c0`.
+const FN_004DC060: u32 = 0x004d_c060;
+/// `cdecl` (`a, b`), result in `ST0`: `b` when `b <= a` (or the two are
+/// unordered), otherwise `a`.
+const FLOAT_MIN: u32 = 0x0040_ebd0;
+/// `cdecl` (`a, b`), result in `ST0`: `a` when `b < a`, otherwise `b`.
+const FLOAT_MAX: u32 = 0x0040_4010;
+/// `BSShaderPPLightingProperty::SetRefractionRecurse` (Xbox PDB), `cdecl`
+/// (`property, enable, power, fire flag, fire period, 0`).
+const SET_REFRACTION_RECURSE: u32 = 0x00b6_8770;
+/// `BSShaderNoLightingProperty::SetFalloffRecurse` (Xbox PDB), `cdecl`
+/// (`property, falloff colour`).
+const SET_FALLOFF_RECURSE: u32 = 0x00b6_fa40;
+/// `BSShaderProperty::ToggleMotionBlurRecurse` (Xbox PDB), `cdecl`
+/// (`property`).
+const TOGGLE_MOTION_BLUR_RECURSE: u32 = 0x00ba_90a0;
+/// `thiscall` on a four-float colour (`out, scalar`): `out = *this * scalar`,
+/// returns `out`.
+const COLOUR_SCALE: u32 = 0x0053_2f60;
+/// `cdecl` (`float`), result in `ST0`: a conversion of an angle in radians
+/// (forwards to `004e4490`, which calls the runtime library on a `double`).
+const FN_004E4470: u32 = 0x004e_4470;
+/// Virtual slot of an `Actor` (`enable, power`): sets the refraction of the
+/// actor.
+const ACTOR_SET_REFRACTION_SLOT: u32 = 0x384;
+/// Virtual slot of a reference with no arguments: the object whose shader
+/// properties the commands change (and whose velocity `SetVel` changes).
+const REFR_GET_TARGET_SLOT: u32 = 0x1d0;
+/// Virtual slot of a reference with no arguments: the text of its name.
+const REFR_NAME_SLOT: u32 = 0x130;
+
+// Image space values (`004e3270` is the image space manager getter above).
+/// `thiscall` on the singleton [`GET_IMAGE_SPACE_MANAGER`] returns (`index`):
+/// the element at `index` of the array at `this + 4`
+/// (`*[ARRAY_ELEMENT_ADDRESS](this + 4, index)`).
+const IMAGE_SPACE_ARRAY_GET: u32 = 0x004e_bbc0;
+/// Takes nothing and does nothing but return 1 in `AL`.
+const FN_005D4A40: u32 = 0x005d_4a40;
+
+// Inverse kinematics and animation flags.
+/// `thiscall` (`this`): `this ? this + 4 : address of a static zero byte`, the
+/// address of the value byte of a global object.
+const GLOBAL_VALUE_ADDRESS: u32 = 0x0040_8d60;
+/// The global object whose value byte `00495580` reads: the foot IK flag.
+const FOOT_IK_OBJECT: u32 = 0x0126_7c30;
+/// The global object of the grab IK flag.
+const GRAB_IK_OBJECT: u32 = 0x0126_7c3c;
+/// The global object of the look IK flag.
+const LOOK_IK_OBJECT: u32 = 0x0126_7c48;
+/// `cdecl`, no arguments: the value byte of [`FOOT_IK_OBJECT`].
+const FOOT_IK_GET: u32 = 0x0049_5580;
+/// `cdecl`, no arguments: the value byte of the global object `01267c24`
+/// (the ragdoll animation flag).
+const RAGDOLL_ANIM_GET: u32 = 0x0055_24d0;
+/// `cdecl` (`value`): sets the value byte of that object.
+const RAGDOLL_ANIM_SET: u32 = 0x0045_6c90;
+/// `TESHavokUtilities::AddVelocity` (Xbox PDB), `cdecl` (`object, velocity,
+/// 1`).
+const ADD_VELOCITY: u32 = 0x0062_b8d0;
+/// Offset in an `Actor` (PC) of the pointer to the object that holds the foot,
+/// grab and look IK flags.
+const ACTOR_IK_DATA: u32 = 0xac;
+
+// Globals of the third batch.
+/// Byte: the sky flag.
+const SKY_FLAG: u32 = 0x011c_ae45;
+/// Byte: the wireframe flag.
+const WIREFRAME_FLAG: u32 = 0x011c_ae46;
+/// Byte: the AI detection stats flag.
+const DETECTION_STATS_FLAG: u32 = 0x011f_1222;
+/// Dword set by `ToggleDetectionStats`.
+const DETECTION_STATS_VALUE: u32 = 0x011f_1224;
+/// Byte flipped by `005ba6b0`.
+const FLAG_011F9FC2: u32 = 0x011f_9fc2;
+/// Byte: the Lite Brite flag.
+const LITE_BRITE_FLAG: u32 = 0x011f_91a7;
+/// The four-float colour `SetTargetFalloff` starts from (`this` of
+/// [`COLOUR_SCALE`]).
+const FALLOFF_BASE_COLOUR: u32 = 0x011a_9be0;
+/// `float` `-1.0`: the scalar applied to that colour, and so the "unset"
+/// value of each channel.
+const FLOAT_MINUS_ONE: u32 = 0x0101_2054;
+/// `float` `90.0`: the largest angle of the falloff angles.
+const FALLOFF_MAX_ANGLE: u32 = 0x0102_49d8;
+/// `double` `pi / 180`.
+const DOUBLE_DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+
+// Strings of the third batch.
+/// `"Sky -> %s"`
+const MSG_SKY: u32 = 0x0103_9ac4;
+/// `"Collision -> %s"`
+const MSG_COLLISION: u32 = 0x0103_9ad0;
+/// `"Ref '%s' Collision -> %s"`
+const MSG_REF_COLLISION: u32 = 0x0103_9ae0;
+/// `"Leaves -> %s"`
+const MSG_LEAVES: u32 = 0x0103_9afc;
+/// `"Wireframe -> %s"`
+const MSG_WIREFRAME: u32 = 0x0103_9b0c;
+/// `"AI Detection stats printing is  %s"`
+const MSG_DETECTION_STATS: u32 = 0x0103_9b1c;
+/// `"%s refraction has been set to %f"`
+const MSG_REFRACTION_SET: u32 = 0x0103_9b40;
+/// `"%s refraction fire has been set to %f, period of %d"`
+const MSG_REFRACTION_FIRE_SET: u32 = 0x0103_9b64;
+/// `"No Reference Selected"`
+const MSG_NO_REFERENCE: u32 = 0x0103_9b98;
+/// `"This function is no longer supported"`
+const MSG_NO_LONGER_SUPPORTED: u32 = 0x0103_9bb0;
+/// `"FootIK on REF %s %s"`
+const MSG_FOOT_IK_REF: u32 = 0x0103_9bd8;
+/// `"FootIK %s"`
+const MSG_FOOT_IK: u32 = 0x0103_9bec;
+/// `"GrabIK on REF %s %s"`
+const MSG_GRAB_IK_REF: u32 = 0x0103_9bf8;
+/// `"GrabIK %s"`
+const MSG_GRAB_IK: u32 = 0x0103_9c0c;
+/// `"LookIK on REF %s %s"`
+const MSG_LOOK_IK_REF: u32 = 0x0103_9c18;
+/// `"LookIK %s"`
+const MSG_LOOK_IK: u32 = 0x0103_9c2c;
+/// `"Ragdoll Animation %s"`
+const MSG_RAGDOLL_ANIMATION: u32 = 0x0103_9c38;
+/// `"Lite Brite -> %s"`
+const MSG_LITE_BRITE: u32 = 0x0103_9c50;
 
 // ---- Small helpers -------------------------------------------------------------
 
@@ -3438,6 +3604,665 @@ pub fn fn_005b9520(e: &mut Engine) -> bool {
     true
 }
 
+/// "On" or "Off" for a flag, the way the toggles print it (`"On"` for a
+/// non-zero flag).
+fn on_off(flag: bool) -> u32 {
+    if flag {
+        TEXT_ON_CAPITAL
+    } else {
+        TEXT_OFF_CAPITAL
+    }
+}
+
+/// `Sky::SetMode(mode)` on the sky of the `TES` (`TES::pSky`).
+fn set_sky_mode(e: &mut Engine, mode: u32) {
+    let tes = e.global::<u32>(GLOBAL_0011DEA10);
+    let sky = e.call(TES_GET_SKY, &args![tes]).u32();
+    e.call(SKY_SET_MODE, &args![sky, mode]);
+}
+
+// Translated from 005b9540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleSkyFunction` (Xbox PDB): flips the sky flag and, when the
+/// `TES` exists, sets the mode of its sky: 0 when the flag is now set;
+/// otherwise 3 without an interior cell (`005f36f0` of the `TES`), 2 when
+/// that cell has bit `0x80` set (`00454b10`) and 1 when it has not. Echoes
+/// "Sky -> Off" / "Sky -> On" (flag set / clear) when the TLS echo flag is
+/// set.
+pub fn script_toggle_sky_function(e: &mut Engine) -> bool {
+    let flag = e.global::<u8>(SKY_FLAG) ^ 1;
+    e.set_global(SKY_FLAG, flag);
+    if e.global::<u32>(GLOBAL_0011DEA10) != 0 {
+        if e.global::<u8>(SKY_FLAG) != 0 {
+            set_sky_mode(e, 0);
+        } else {
+            let tes = e.global::<u32>(GLOBAL_0011DEA10);
+            if e.call(FN_005F36F0, &args![tes]).u32() == 0 {
+                set_sky_mode(e, 3);
+            } else {
+                let tes = e.global::<u32>(GLOBAL_0011DEA10);
+                let cell = e.call(FN_005F36F0, &args![tes]).u32();
+                if e.call(CELL_TEST_FLAG_80, &args![cell]).bool() {
+                    set_sky_mode(e, 2);
+                } else {
+                    set_sky_mode(e, 1);
+                }
+            }
+        }
+    }
+    if echo_enabled(e) {
+        let state = on_off(e.global::<u8>(SKY_FLAG) == 0);
+        console_print(e, &args![MSG_SKY, state]);
+    }
+    true
+}
+
+// Translated from 005b9640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleCollisionFunction` (Xbox PDB). On a reference: inverts bit
+/// `0x10` of its flags (`0050d4a0`, `00693ef0`) and echoes "Ref '<name>'
+/// Collision -> Off" when the bit is now set, "On" when clear. Without a
+/// reference: `00456be0` on the `TES` and, when echoing, "Collision -> Off" if
+/// the global collision flag (`00456c70`) is set, "On" otherwise.
+pub fn script_toggle_collision_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !a.this_obj.is_null() {
+        let was_set = e.call(FORM_TEST_FLAG_10, &args![a.this_obj]).bool();
+        let now_set = !was_set;
+        e.call(FORM_SET_FLAG_10, &args![a.this_obj, u32::from(now_set)]);
+        if echo_enabled(e) {
+            let state = on_off(!now_set);
+            let name = e.call(REFR_GET_NAME_TEXT, &args![a.this_obj]).u32();
+            console_print(e, &args![MSG_REF_COLLISION, name, state]);
+        }
+    } else {
+        let tes = e.global::<u32>(GLOBAL_0011DEA10);
+        e.call(FN_00456BE0, &args![tes]);
+        if echo_enabled(e) {
+            let flag = e.call(FN_00456C70, &args![]).bool();
+            console_print(e, &args![MSG_COLLISION, on_off(!flag)]);
+        }
+    }
+    true
+}
+
+// Translated from 005b9720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleLeavesFunction` (Xbox PDB): sets the leaves flag
+/// ([`fn_005b97d0`]) to the opposite of what
+/// [`bs_tree_manager_are_leaves_visible`] says and echoes "Leaves -> On" or
+/// "Off" for the new state.
+pub fn script_toggle_leaves_function(e: &mut Engine) -> bool {
+    let visible = bs_tree_manager_are_leaves_visible(e);
+    fn_005b97d0(e, u8::from(!visible));
+    if echo_enabled(e) {
+        let visible = bs_tree_manager_are_leaves_visible(e);
+        console_print(e, &args![MSG_LEAVES, on_off(visible)]);
+    }
+    true
+}
+
+// Translated from 005b9790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTreeManager::AreLeavesVisible` (Xbox PDB): `0054ee20` says yes and the
+/// byte at `+0x19` of the object `00664840(1)` returns is set. (The body
+/// never reads `this`.)
+pub fn bs_tree_manager_are_leaves_visible(e: &mut Engine) -> bool {
+    if e.call(FN_0054EE20, &args![]).bool() {
+        let manager = e.call(FN_00664840, &args![1u32]).u32();
+        e.mem.u8(manager + 0x19) != 0
+    } else {
+        false
+    }
+}
+
+// Translated from 005b97d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `visible` in the byte at `+0x19` of the object `00664840(1)`
+/// returns (the byte [`bs_tree_manager_are_leaves_visible`] tests).
+pub fn fn_005b97d0(e: &mut Engine, visible: u8) {
+    let manager = e.call(FN_00664840, &args![1u32]).u32();
+    e.mem.set_u8(manager + 0x19, visible);
+}
+
+// Translated from 005b97f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleWireframeFunction` (Xbox PDB): flips the wireframe flag,
+/// calls `0045c670` (its result is not used), then [`fn_005b9870`] on the
+/// object `00450b80(0)` returns, and echoes "Wireframe -> On" or "Off".
+pub fn script_toggle_wireframe_function(e: &mut Engine) -> bool {
+    let flag = e.global::<u8>(WIREFRAME_FLAG) ^ 1;
+    e.set_global(WIREFRAME_FLAG, flag);
+    let _unused = e.call(FN_0045C670, &args![]).u32();
+    let target = e.call(FN_00450B80, &args![0u32]).u32();
+    fn_005b9870(e, Ptr::new(target));
+    if echo_enabled(e) {
+        let state = on_off(e.global::<u8>(WIREFRAME_FLAG) != 0);
+        console_print(e, &args![MSG_WIREFRAME, state]);
+    }
+    true
+}
+
+// Translated from 005b9870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Flips the byte at `this + 0x131` (0 becomes 1, anything else 0).
+pub fn fn_005b9870(e: &mut Engine, this: Ptr) {
+    let value = e.mem.u8(this.addr() + 0x131);
+    e.mem.set_u8(this.addr() + 0x131, u8::from(value == 0));
+}
+
+// Translated from 005b98a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleDetectionStats` (Xbox PDB): flips the detection stats flag
+/// (before the arguments are read), parses one integer into the dword
+/// `011f1224` and echoes "AI Detection stats printing is  On" or "Off".
+pub fn script_toggle_detection_stats(e: &mut Engine, a: ScriptArgs) -> bool {
+    let flag = e.global::<u8>(DETECTION_STATS_FLAG);
+    e.set_global(DETECTION_STATS_FLAG, u8::from(flag == 0));
+    let Some([value]) = a.parse_into(e, [0]) else {
+        return false;
+    };
+    e.set_global(DETECTION_STATS_VALUE, value);
+    if echo_enabled(e) {
+        let state = on_off(e.global::<u8>(DETECTION_STATS_FLAG) != 0);
+        console_print(e, &args![MSG_DETECTION_STATS, state]);
+    }
+    true
+}
+
+/// `00404010(0040ebd0(value, 1.0), 0.0)`: the value limited to 0..1.
+fn limit_unit(e: &mut Engine, value: f32) -> f32 {
+    let limited = e.call(FLOAT_MIN, &args![value, 1.0f32]).f32();
+    e.call(FLOAT_MAX, &args![limited, 0.0f32]).f32()
+}
+
+// Translated from 005b9950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTargetRefraction` (Xbox PDB): when [`fn_005b9b00`] allows it,
+/// parses one `float`, limits it to 0..1 and sets the refraction of the
+/// reference (the player when none is given): through slot `0x384` of an
+/// `Actor` (`enable, power`), otherwise on the shader property of the object
+/// slot `0x1d0` returns (`SetRefractionRecurse` three times: cleared, fire
+/// cleared, then the power). `enable` is "power > 0". Echoes "<name>
+/// refraction has been set to <power>".
+pub fn script_set_target_refraction(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !fn_005b9b00(e) {
+        return true;
+    }
+    let Some([power]) = a.parse_into(e, [0.0f32.to_bits()]) else {
+        return false;
+    };
+    let mut this_obj = a.this_obj;
+    if this_obj.is_null() {
+        this_obj = Ptr::new(player(e));
+    }
+    let power = limit_unit(e, f32::from_bits(power));
+    let enable = f64::from(power) > e.global::<f64>(DOUBLE_ZERO);
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+        )
+        .u32();
+    if actor != 0 {
+        e.vcall(actor, ACTOR_SET_REFRACTION_SLOT, &args![enable, power]);
+    } else {
+        let property = e
+            .vcall(this_obj.addr(), REFR_GET_TARGET_SLOT, &args![])
+            .u32();
+        if property != 0 {
+            e.call(
+                SET_REFRACTION_RECURSE,
+                &args![property, 0u32, 0.0f32, 0u32, 0.0f32, 0u32],
+            );
+            e.call(
+                SET_REFRACTION_RECURSE,
+                &args![property, 0u32, 0.0f32, 1u32, 0.0f32, 0u32],
+            );
+            e.call(
+                SET_REFRACTION_RECURSE,
+                &args![property, enable, power, 0u32, 0.0f32, 0u32],
+            );
+        }
+    }
+    if echo_enabled(e) {
+        let name = e.call(REFR_GET_NAME_TEXT, &args![this_obj]).u32();
+        console_print(e, &args![MSG_REFRACTION_SET, name, f64::from(power)]);
+    }
+    true
+}
+
+// Translated from 005b9b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the refraction commands may run: the byte `004dc0a0` returns is set
+/// and `004dc060(0)` is at least 2. (The body never reads `this`.)
+pub fn fn_005b9b00(e: &mut Engine) -> bool {
+    e.call(FN_004DC0A0, &args![]).bool() && e.call(FN_004DC060, &args![0u32]).i32() >= 2
+}
+
+// Translated from 005b9b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTargetRefractionFire` (Xbox PDB): when [`fn_005b9b00`] allows
+/// it, parses a `float` and an integer and, for a reference that is not an
+/// `Actor`, limits the power to 0..1 and calls `SetRefractionRecurse` on the
+/// shader property slot `0x1d0` returns (`enable = power > 0`, fire flag 1,
+/// the integer as the fire period). Echoes "<name> refraction fire has been
+/// set to <power>, period of <period>" when it did.
+pub fn script_set_target_refraction_fire(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !fn_005b9b00(e) {
+        return true;
+    }
+    let Some([power, period]) = a.parse_into(e, [0.0f32.to_bits(), 0]) else {
+        return false;
+    };
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![a.this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+        )
+        .u32();
+    if actor == 0 {
+        let power = limit_unit(e, f32::from_bits(power));
+        let enable = f64::from(power) > e.global::<f64>(DOUBLE_ZERO);
+        let property = e
+            .vcall(a.this_obj.addr(), REFR_GET_TARGET_SLOT, &args![])
+            .u32();
+        if property != 0 {
+            let fire_period = float_from_int(period as i32);
+            e.call(
+                SET_REFRACTION_RECURSE,
+                &args![property, enable, power, 1u32, fire_period, 0u32],
+            );
+            if echo_enabled(e) {
+                let name = e.call(REFR_GET_NAME_TEXT, &args![a.this_obj]).u32();
+                console_print(
+                    e,
+                    &args![MSG_REFRACTION_FIRE_SET, name, f64::from(power), period],
+                );
+            }
+        }
+    }
+    true
+}
+
+// Translated from 005b9c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTargetFalloff` (Xbox PDB): without a reference only echoes "No
+/// Reference Selected". Otherwise starts from the colour `011a9be0 * -1.0`
+/// (all channels -1.0, "unset"), parses four `float`s into its channels and
+/// converts every channel that was given: the first two are angles (limited
+/// to 0..90 degrees, to radians, then through [`fn_005b9e80`]), the last two
+/// are limited to 0..1. The colour goes to `SetFalloffRecurse` on the shader
+/// property slot `0x1d0` returns.
+pub fn script_set_target_falloff(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        if echo_enabled(e) {
+            console_print(e, &args![MSG_NO_REFERENCE]);
+        }
+        return true;
+    }
+    let scalar = e.global::<f32>(FLOAT_MINUS_ONE);
+    e.with_stack(16, |e, colour| {
+        let base = colour.addr();
+        e.call(COLOUR_SCALE, &args![FALLOFF_BASE_COLOUR, colour, scalar]);
+        if !a.parse(e, &[base, base + 4, base + 8, base + 12]) {
+            return false;
+        }
+        for channel in 0..4u32 {
+            let address = base + 4 * channel;
+            let value = e.mem.f32(address);
+            if f64::from(value) == e.global::<f64>(DOUBLE_MINUS_ONE) {
+                continue;
+            }
+            let is_angle = channel < 2;
+            let upper = if is_angle {
+                e.global::<f32>(FALLOFF_MAX_ANGLE)
+            } else {
+                1.0
+            };
+            let limited = e.call(FLOAT_MIN, &args![value, upper]).f32();
+            let mut result = e.call(FLOAT_MAX, &args![limited, 0.0f32]).f32();
+            if is_angle {
+                let factor = e.global::<f64>(DOUBLE_DEGREES_TO_RADIANS);
+                let radians = (f64::from(result) * factor) as f32;
+                result = fn_005b9e80(e, radians);
+            }
+            e.mem.set_f32(address, result);
+        }
+        let property = e
+            .vcall(a.this_obj.addr(), REFR_GET_TARGET_SLOT, &args![])
+            .u32();
+        if property != 0 {
+            e.call(SET_FALLOFF_RECURSE, &args![property, colour]);
+        }
+        true
+    })
+}
+
+// Translated from 005b9e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands its `float` to `004e4470` and returns that function's `float`
+/// result.
+pub fn fn_005b9e80(e: &mut Engine, value: f32) -> f32 {
+    e.call(FN_004E4470, &args![value]).f32()
+}
+
+// Translated from 005b9ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTargetDOF` (Xbox PDB): only echoes "This function is no
+/// longer supported".
+pub fn script_set_target_dof(e: &mut Engine) -> bool {
+    if echo_enabled(e) {
+        console_print(e, &args![MSG_NO_LONGER_SUPPORTED]);
+    }
+    true
+}
+
+// Translated from 005b9ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `005d4a40` (which does nothing but return 1) and returns true.
+pub fn fn_005b9ed0(e: &mut Engine) -> bool {
+    e.call(FN_005D4A40, &args![]);
+    true
+}
+
+// Translated from 005b9ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses one `float` and hands it to [`fn_005b9f50`] on the singleton
+/// `004e3270` returns.
+pub fn fn_005b9ef0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([value]) = a.parse_into(e, [0.0f32.to_bits()]) else {
+        return false;
+    };
+    let manager = e.call(GET_IMAGE_SPACE_MANAGER, &args![]).u32();
+    fn_005b9f50(e, Ptr::new(manager), f32::from_bits(value));
+    true
+}
+
+// Translated from 005b9f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes element 12 of the array at `this + 4` (`004ebbc0(this, 0xc)`) and
+/// gives it `value` ([`fn_005b9f80`]).
+pub fn fn_005b9f50(e: &mut Engine, this: Ptr, value: f32) {
+    let element = e.call(IMAGE_SPACE_ARRAY_GET, &args![this, 0xcu32]).u32();
+    fn_005b9f80(e, Ptr::new(element), value);
+}
+
+// Translated from 005b9f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `this + 5` and stores `value` in the `float` at
+/// `this + 0x58`.
+pub fn fn_005b9f80(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_u8(this.addr() + 5, 1);
+    e.mem.set_f32(this.addr() + 0x58, value);
+}
+
+// Translated from 005b9fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For a reference: `BSShaderProperty::ToggleMotionBlurRecurse` on the shader
+/// property slot `0x1d0` returns, when there is one.
+pub fn fn_005b9fa0(e: &mut Engine, a: ScriptArgs) -> bool {
+    if !a.this_obj.is_null() {
+        let property = e
+            .vcall(a.this_obj.addr(), REFR_GET_TARGET_SLOT, &args![])
+            .u32();
+        if property != 0 {
+            e.call(TOGGLE_MOTION_BLUR_RECURSE, &args![property]);
+        }
+    }
+    true
+}
+
+// Translated from 005b9fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleFootIK` (Xbox PDB). Without a reference: inverts the global
+/// foot IK flag (`00495580`, [`fn_005ba110`]) and echoes "FootIK On" / "Off".
+/// On an `Actor` that has the IK object (`+0xac`, PC offset): inverts its
+/// per-actor flag ([`fn_005ba180`], [`fn_005ba130`]) and echoes "FootIK on
+/// REF <name> On" / "Off".
+pub fn script_toggle_foot_ik(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        let flag = e.call(FOOT_IK_GET, &args![]).u8();
+        fn_005ba110(e, flag ^ 1);
+        if echo_enabled(e) {
+            let flag = e.call(FOOT_IK_GET, &args![]).u8();
+            console_print(e, &args![MSG_FOOT_IK, on_off(flag != 0)]);
+        }
+        return true;
+    }
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![a.this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+        )
+        .u32();
+    if actor != 0 && e.mem.u32(actor + ACTOR_IK_DATA) != 0 {
+        let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+        let flag = fn_005ba180(e, ik);
+        fn_005ba130(e, ik, flag ^ 1);
+        if echo_enabled(e) {
+            let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+            let state = on_off(fn_005ba180(e, ik) != 0);
+            let name = e.vcall(a.this_obj.addr(), REFR_NAME_SLOT, &args![]).u32();
+            console_print(e, &args![MSG_FOOT_IK_REF, name, state]);
+        }
+    }
+    true
+}
+
+// Translated from 005ba110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the value byte of the global foot IK object
+/// ([`FOOT_IK_OBJECT`], through `00408d60`).
+pub fn fn_005ba110(e: &mut Engine, value: u8) {
+    let address = e.call(GLOBAL_VALUE_ADDRESS, &args![FOOT_IK_OBJECT]).u32();
+    e.mem.set_u8(address, value);
+}
+
+// Translated from 005ba130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `this + 0x220` (the per-actor foot IK flag) to 1 when
+/// the byte at `this + 0x21f` and `value` are both non-zero, otherwise 0.
+pub fn fn_005ba130(e: &mut Engine, this: Ptr, value: u8) {
+    let allowed = e.mem.u8(this.addr() + 0x21f) != 0;
+    e.mem
+        .set_u8(this.addr() + 0x220, u8::from(allowed && value != 0));
+}
+
+// Translated from 005ba180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + 0x220` (the per-actor foot IK flag).
+pub fn fn_005ba180(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x220)
+}
+
+// Translated from 005ba1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleGrabIK` (Xbox PDB): as [`script_toggle_foot_ik`] for the
+/// grab IK flags ([`fn_005ba2d0`], [`fn_005ba2f0`] globally; `+0x21c` and
+/// `+0x21d` of the IK object per actor); echoes "GrabIK <state>" or
+/// "GrabIK on REF <name> <state>".
+pub fn script_toggle_grab_ik(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        let flag = fn_005ba2d0(e);
+        fn_005ba2f0(e, flag ^ 1);
+        if echo_enabled(e) {
+            let flag = fn_005ba2d0(e);
+            console_print(e, &args![MSG_GRAB_IK, on_off(flag != 0)]);
+        }
+        return true;
+    }
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![a.this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+        )
+        .u32();
+    if actor != 0 && e.mem.u32(actor + ACTOR_IK_DATA) != 0 {
+        let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+        let flag = fn_005ba360(e, ik);
+        fn_005ba310(e, ik, flag ^ 1);
+        if echo_enabled(e) {
+            let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+            let state = on_off(fn_005ba360(e, ik) != 0);
+            let name = e.vcall(a.this_obj.addr(), REFR_NAME_SLOT, &args![]).u32();
+            console_print(e, &args![MSG_GRAB_IK_REF, name, state]);
+        }
+    }
+    true
+}
+
+// Translated from 005ba2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The value byte of the global grab IK object ([`GRAB_IK_OBJECT`]).
+pub fn fn_005ba2d0(e: &mut Engine) -> u8 {
+    let address = e.call(GLOBAL_VALUE_ADDRESS, &args![GRAB_IK_OBJECT]).u32();
+    e.mem.u8(address)
+}
+
+// Translated from 005ba2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the value byte of the global grab IK object.
+pub fn fn_005ba2f0(e: &mut Engine, value: u8) {
+    let address = e.call(GLOBAL_VALUE_ADDRESS, &args![GRAB_IK_OBJECT]).u32();
+    e.mem.set_u8(address, value);
+}
+
+// Translated from 005ba310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `this + 0x21d` (the per-actor grab IK flag) to 1 when
+/// the byte at `this + 0x21c` and `value` are both non-zero, otherwise 0.
+pub fn fn_005ba310(e: &mut Engine, this: Ptr, value: u8) {
+    let allowed = e.mem.u8(this.addr() + 0x21c) != 0;
+    e.mem
+        .set_u8(this.addr() + 0x21d, u8::from(allowed && value != 0));
+}
+
+// Translated from 005ba360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + 0x21d` (the per-actor grab IK flag).
+pub fn fn_005ba360(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x21d)
+}
+
+// Translated from 005ba380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleLookIK` (Xbox PDB): as [`script_toggle_foot_ik`] for the
+/// look IK flags ([`fn_005ba4b0`], [`fn_005ba4d0`] globally; `+0xb0` and
+/// `+0xb1` of the IK object per actor); echoes "LookIK <state>" or "LookIK on
+/// REF <name> <state>".
+pub fn script_toggle_look_ik(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        let flag = fn_005ba4b0(e);
+        fn_005ba4d0(e, flag ^ 1);
+        if echo_enabled(e) {
+            let flag = fn_005ba4b0(e);
+            console_print(e, &args![MSG_LOOK_IK, on_off(flag != 0)]);
+        }
+        return true;
+    }
+    let actor = e
+        .call(
+            DYNAMIC_CAST,
+            &args![a.this_obj, 0u32, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0u32],
+        )
+        .u32();
+    if actor != 0 && e.mem.u32(actor + ACTOR_IK_DATA) != 0 {
+        let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+        let flag = fn_005ba540(e, ik);
+        fn_005ba4f0(e, ik, flag ^ 1);
+        if echo_enabled(e) {
+            let ik = Ptr::new(e.mem.u32(actor + ACTOR_IK_DATA));
+            let state = on_off(fn_005ba540(e, ik) != 0);
+            let name = e.vcall(a.this_obj.addr(), REFR_NAME_SLOT, &args![]).u32();
+            console_print(e, &args![MSG_LOOK_IK_REF, name, state]);
+        }
+    }
+    true
+}
+
+// Translated from 005ba4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The value byte of the global look IK object ([`LOOK_IK_OBJECT`]).
+pub fn fn_005ba4b0(e: &mut Engine) -> u8 {
+    let address = e.call(GLOBAL_VALUE_ADDRESS, &args![LOOK_IK_OBJECT]).u32();
+    e.mem.u8(address)
+}
+
+// Translated from 005ba4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the value byte of the global look IK object.
+pub fn fn_005ba4d0(e: &mut Engine, value: u8) {
+    let address = e.call(GLOBAL_VALUE_ADDRESS, &args![LOOK_IK_OBJECT]).u32();
+    e.mem.set_u8(address, value);
+}
+
+// Translated from 005ba4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `this + 0xb1` (the per-actor look IK flag) to 1 when
+/// the byte at `this + 0xb0` and `value` are both non-zero, otherwise 0.
+pub fn fn_005ba4f0(e: &mut Engine, this: Ptr, value: u8) {
+    let allowed = e.mem.u8(this.addr() + 0xb0) != 0;
+    e.mem
+        .set_u8(this.addr() + 0xb1, u8::from(allowed && value != 0));
+}
+
+// Translated from 005ba540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + 0xb1` (the per-actor look IK flag).
+pub fn fn_005ba540(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xb1)
+}
+
+// Translated from 005ba560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleRagdollAnim` (Xbox PDB): inverts the ragdoll animation
+/// flag (`005524d0` reads it, `00456c90` sets it) and echoes "Ragdoll
+/// Animation On" / "Off".
+pub fn script_toggle_ragdoll_anim(e: &mut Engine) -> bool {
+    let flag = e.call(RAGDOLL_ANIM_GET, &args![]).u8();
+    e.call(RAGDOLL_ANIM_SET, &args![u32::from(flag) ^ 1]);
+    if echo_enabled(e) {
+        let flag = e.call(RAGDOLL_ANIM_GET, &args![]).u8();
+        console_print(e, &args![MSG_RAGDOLL_ANIMATION, on_off(flag != 0)]);
+    }
+    true
+}
+
+// Translated from 005ba5d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetVelFunction` (Xbox PDB): parses an axis letter and a `float`;
+/// for a reference builds the vector (0, 0, 0), puts the value in the
+/// component named by the letter ('X', 'Y' or 'Z'; any other letter leaves
+/// the vector zero) and gives it to `TESHavokUtilities::AddVelocity` with the
+/// object slot `0x1d0` returns (and 1).
+pub fn script_set_vel_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([axis, value]) = a.parse_into(e, [0, 0.0f32.to_bits()]) else {
+        return false;
+    };
+    if !a.this_obj.is_null() {
+        with_point(e, 0.0, 0.0, 0.0, |e, vector| {
+            match axis as u8 {
+                b'X' => e.mem.set_u32(vector, value),
+                b'Y' => e.mem.set_u32(vector + 4, value),
+                b'Z' => e.mem.set_u32(vector + 8, value),
+                _ => {}
+            }
+            let target = e
+                .vcall(a.this_obj.addr(), REFR_GET_TARGET_SLOT, &args![])
+                .u32();
+            e.call(ADD_VELOCITY, &args![target, vector, 1u32]);
+        });
+    }
+    true
+}
+
+// Translated from 005ba690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When [`fn_005b9b00`] allows it, flips the byte `011f9fc2`
+/// ([`fn_005ba6b0`]).
+pub fn fn_005ba690(e: &mut Engine) -> bool {
+    if fn_005b9b00(e) {
+        fn_005ba6b0(e);
+    }
+    true
+}
+
+// Translated from 005ba6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Flips the byte `011f9fc2` (0 becomes 1, anything else 0).
+pub fn fn_005ba6b0(e: &mut Engine) {
+    let flag = e.global::<u8>(FLAG_011F9FC2);
+    e.set_global(FLAG_011F9FC2, u8::from(flag == 0));
+}
+
+// Translated from 005ba6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ToggleLiteBriteFunction` (Xbox PDB): flips the Lite Brite flag
+/// ([`fn_005ba740`], [`fn_005ba750`]) and echoes "Lite Brite -> On" or "Off".
+pub fn script_toggle_lite_brite_function(e: &mut Engine) -> bool {
+    let flag = fn_005ba740(e);
+    fn_005ba750(e, u8::from(flag == 0));
+    if echo_enabled(e) {
+        let flag = fn_005ba740(e);
+        console_print(e, &args![MSG_LITE_BRITE, on_off(flag != 0)]);
+    }
+    true
+}
+
+// Translated from 005ba740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The Lite Brite flag (byte global `011f91a7`).
+pub fn fn_005ba740(e: &mut Engine) -> u8 {
+    e.global::<u8>(LITE_BRITE_FLAG)
+}
+
+// Translated from 005ba750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the Lite Brite flag (byte global `011f91a7`).
+pub fn fn_005ba750(e: &mut Engine, value: u8) {
+    e.set_global(LITE_BRITE_FLAG, value);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3554,6 +4379,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005b9490, script_toggle_menus_function() -> bool),
         entry!(0x005b9500, fn_005b9500() -> bool),
         entry!(0x005b9520, fn_005b9520() -> bool),
+        entry!(0x005b9540, script_toggle_sky_function() -> bool),
+        entry!(
+            0x005b9640,
+            script_toggle_collision_function(ScriptArgs) -> bool
+        ),
+        entry!(0x005b9720, script_toggle_leaves_function() -> bool),
+        entry!(0x005b9790, bs_tree_manager_are_leaves_visible() -> bool),
+        entry!(0x005b97d0, fn_005b97d0(u8)),
+        entry!(0x005b97f0, script_toggle_wireframe_function() -> bool),
+        entry!(0x005b9870, fn_005b9870(Ptr)),
+        entry!(
+            0x005b98a0,
+            script_toggle_detection_stats(ScriptArgs) -> bool
+        ),
+        entry!(
+            0x005b9950,
+            script_set_target_refraction(ScriptArgs) -> bool
+        ),
+        entry!(0x005b9b00, fn_005b9b00() -> bool),
+        entry!(
+            0x005b9b40,
+            script_set_target_refraction_fire(ScriptArgs) -> bool
+        ),
+        entry!(0x005b9c90, script_set_target_falloff(ScriptArgs) -> bool),
+        entry!(0x005b9e80, fn_005b9e80(f32) -> f32),
+        entry!(0x005b9ea0, script_set_target_dof() -> bool),
+        entry!(0x005b9ed0, fn_005b9ed0() -> bool),
+        entry!(0x005b9ef0, fn_005b9ef0(ScriptArgs) -> bool),
+        entry!(0x005b9f50, fn_005b9f50(Ptr, f32)),
+        entry!(0x005b9f80, fn_005b9f80(Ptr, f32)),
+        entry!(0x005b9fa0, fn_005b9fa0(ScriptArgs) -> bool),
+        entry!(0x005b9fe0, script_toggle_foot_ik(ScriptArgs) -> bool),
+        entry!(0x005ba110, fn_005ba110(u8)),
+        entry!(0x005ba130, fn_005ba130(Ptr, u8)),
+        entry!(0x005ba180, fn_005ba180(Ptr) -> u8),
+        entry!(0x005ba1a0, script_toggle_grab_ik(ScriptArgs) -> bool),
+        entry!(0x005ba2d0, fn_005ba2d0() -> u8),
+        entry!(0x005ba2f0, fn_005ba2f0(u8)),
+        entry!(0x005ba310, fn_005ba310(Ptr, u8)),
+        entry!(0x005ba360, fn_005ba360(Ptr) -> u8),
+        entry!(0x005ba380, script_toggle_look_ik(ScriptArgs) -> bool),
+        entry!(0x005ba4b0, fn_005ba4b0() -> u8),
+        entry!(0x005ba4d0, fn_005ba4d0(u8)),
+        entry!(0x005ba4f0, fn_005ba4f0(Ptr, u8)),
+        entry!(0x005ba540, fn_005ba540(Ptr) -> u8),
+        entry!(0x005ba560, script_toggle_ragdoll_anim() -> bool),
+        entry!(0x005ba5d0, script_set_vel_function(ScriptArgs) -> bool),
+        entry!(0x005ba690, fn_005ba690() -> bool),
+        entry!(0x005ba6b0, fn_005ba6b0()),
+        entry!(
+            0x005ba6d0,
+            script_toggle_lite_brite_function() -> bool
+        ),
+        entry!(0x005ba740, fn_005ba740() -> u8),
+        entry!(0x005ba750, fn_005ba750(u8)),
     ]
 }
 
@@ -6687,5 +7567,730 @@ mod tests {
         start_log(&mut e);
         assert!(!e.call(0x005b_7b40, &args![script(0)]).bool());
         assert!(calls(&e, NI_ALLOC).is_empty());
+    }
+
+    // ---- Third batch (`005b9540` onward) ------------------------------------
+
+    /// `engine_b` plus the pages of the third batch's globals.
+    fn engine_c() -> Engine {
+        let mut e = engine_b();
+        for page in [0x0102_4000, 0x0126_7000] {
+            e.map(page, 0x1000);
+        }
+        e
+    }
+
+    /// The two words of a `double` argument.
+    fn f64_words(value: f64) -> [u32; 2] {
+        let bits = value.to_bits();
+        [bits as u32, (bits >> 32) as u32]
+    }
+
+    /// `FLOAT_MIN` and `FLOAT_MAX` behave like the exe's functions.
+    fn float_doubles(e: &mut Engine) {
+        e.register(FLOAT_MIN, |_, a| {
+            let (x, y) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            (if y <= x { y } else { x }).into_ret()
+        });
+        e.register(FLOAT_MAX, |_, a| {
+            let (x, y) = (f32::from_bits(a[0]), f32::from_bits(a[1]));
+            (if y < x { x } else { y }).into_ret()
+        });
+    }
+
+    /// `__RTDynamicCast` double: an object is an actor when the byte at
+    /// `+0xf0` is set.
+    fn cast_double(e: &mut Engine) {
+        e.register(DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[1..], [0, RTTI_TES_OBJECT_REFR, RTTI_ACTOR, 0]);
+            (if e.mem.u8(a[0] + 0xf0) != 0 { a[0] } else { 0 }).into_ret()
+        });
+    }
+
+    /// An object (0x100 bytes) with the given virtual slots, an actor when
+    /// `actor` is set.
+    fn reference(e: &mut Engine, slots: &[(u32, u32)], actor: bool) -> u32 {
+        let object = object_with(e, slots);
+        e.mem.set_u8(object + 0xf0, actor as u8);
+        object
+    }
+
+    /// The doubles that make [`fn_005b9b00`] answer `allowed`.
+    fn refraction_gate(e: &mut Engine, allowed: bool) {
+        e.register(FN_004DC0A0, |e, _| e.mem.u8(0x011f_9180).into_ret());
+        e.register(FN_004DC060, |e, a| {
+            e.mem
+                .u32(if a[0] != 0 { 0x011f_91bc } else { 0x011f_91c0 })
+                .into_ret()
+        });
+        e.mem.set_u8(0x011f_9180, allowed as u8);
+        e.mem.set_u32(0x011f_91c0, 2);
+    }
+
+    #[test]
+    fn sky_toggle_picks_the_mode_from_the_interior_cell() {
+        let mut e = engine_c();
+        e.set_global(GLOBAL_0011DEA10, 0x7000u32);
+        e.register(TES_GET_SKY, |_, a| {
+            assert_eq!(a, [0x7000]);
+            0x7100u32.into_ret()
+        });
+        accept(&mut e, &[SKY_SET_MODE, CONSOLE_PRINT]);
+        e.register(FN_005F36F0, |e, _| e.mem.u32(0x0126_8100).into_ret());
+        e.register(CELL_TEST_FLAG_80, |e, a| {
+            (e.mem.u8(a[0] + 0x24) & 0x80 != 0).into_ret()
+        });
+        let cell = e.mem.alloc(0x40);
+        // The flag becomes set: mode 0.
+        start_log(&mut e);
+        assert!(e.call(0x005b_9540, &args![]).bool());
+        assert_eq!(e.global::<u8>(SKY_FLAG), 1);
+        assert_eq!(calls(&e, SKY_SET_MODE), vec![vec![0x7100, 0]]);
+        assert!(printed(&e).is_empty());
+        // The flag becomes clear: no interior cell is mode 3, an interior
+        // cell with bit 0x80 mode 2, without it mode 1.
+        for (interior, bits, mode) in [(0, 0u8, 3u32), (cell, 0x80, 2), (cell, 0x7f, 1)] {
+            e.set_global(SKY_FLAG, 1u8);
+            e.mem.set_u32(0x0126_8100, interior);
+            e.mem.set_u8(cell + 0x24, bits);
+            start_log(&mut e);
+            assert!(e.call(0x005b_9540, &args![]).bool());
+            assert_eq!(e.global::<u8>(SKY_FLAG), 0);
+            assert_eq!(calls(&e, SKY_SET_MODE), vec![vec![0x7100, mode]]);
+        }
+        // With the echo flag the new state is printed; without a TES the sky
+        // is left alone.
+        set_echo(&mut e, true);
+        e.set_global(GLOBAL_0011DEA10, 0u32);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9540, &args![]).bool());
+        assert!(calls(&e, SKY_SET_MODE).is_empty());
+        assert_eq!(printed(&e), vec![vec![MSG_SKY, TEXT_OFF_CAPITAL]]);
+        assert!(e.call(0x005b_9540, &args![]).bool());
+        assert_eq!(printed(&e).last().unwrap(), &vec![MSG_SKY, TEXT_ON_CAPITAL]);
+    }
+
+    #[test]
+    fn collision_toggle_inverts_the_flag_of_a_reference_or_asks_the_tes() {
+        let mut e = engine_c();
+        e.register(FORM_TEST_FLAG_10, |e, a| {
+            (e.mem.u32(a[0] + 8) & 0x10 != 0).into_ret()
+        });
+        e.register(FORM_SET_FLAG_10, |e, a| {
+            let flags = e.mem.u32(a[0] + 8);
+            let flags = if a[1] as u8 != 0 {
+                flags | 0x10
+            } else {
+                flags & !0x10
+            };
+            e.mem.set_u32(a[0] + 8, flags);
+            Ret::default()
+        });
+        e.register(REFR_GET_NAME_TEXT, |_, _| 0x5555u32.into_ret());
+        accept(&mut e, &[CONSOLE_PRINT, FN_00456BE0]);
+        let form = e.mem.alloc(0x40);
+        e.mem.set_u32(form + 8, 0x3);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9640, &args![script(form)]).bool());
+        assert_eq!(e.mem.u32(form + 8), 0x13);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_9640, &args![script(form)]).bool());
+        assert_eq!(e.mem.u32(form + 8), 0x3);
+        assert_eq!(
+            printed(&e),
+            vec![vec![MSG_REF_COLLISION, 0x5555, TEXT_ON_CAPITAL]]
+        );
+        assert!(e.call(0x005b_9640, &args![script(form)]).bool());
+        assert_eq!(
+            printed(&e).last().unwrap(),
+            &vec![MSG_REF_COLLISION, 0x5555, TEXT_OFF_CAPITAL]
+        );
+        // No reference: the TES does it, the global flag is reported.
+        e.set_global(GLOBAL_0011DEA10, 0x7000u32);
+        e.register(FN_00456C70, |e, _| e.mem.u8(0x011c_3c0d).into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005b_9640, &args![script(0)]).bool());
+        assert_eq!(calls(&e, FN_00456BE0), vec![vec![0x7000]]);
+        assert_eq!(printed(&e), vec![vec![MSG_COLLISION, TEXT_ON_CAPITAL]]);
+        e.mem.set_u8(0x011c_3c0d, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9640, &args![script(0)]).bool());
+        assert_eq!(printed(&e), vec![vec![MSG_COLLISION, TEXT_OFF_CAPITAL]]);
+    }
+
+    #[test]
+    fn leaves_flag_accessors_and_toggle() {
+        let mut e = engine_c();
+        let manager = e.mem.alloc(0x40);
+        e.register_double(FN_00664840, move |_, a| {
+            assert_eq!(a, [1]);
+            manager.into_ret()
+        });
+        e.register(FN_0054EE20, |e, _| e.mem.u8(0x0126_8104).into_ret());
+        accept(&mut e, &[CONSOLE_PRINT]);
+        // `AreLeavesVisible`: needs both `0054ee20` and the manager byte.
+        for (gate, byte, visible) in [(0u8, 1u8, false), (1, 0, false), (1, 1, true)] {
+            e.mem.set_u8(0x0126_8104, gate);
+            e.mem.set_u8(manager + 0x19, byte);
+            assert_eq!(e.call(0x005b_9790, &args![]).bool(), visible);
+        }
+        e.call(0x005b_97d0, &args![0x35u32]);
+        assert_eq!(e.mem.u8(manager + 0x19), 0x35);
+        // The toggle writes the opposite of the visibility it read.
+        e.mem.set_u8(0x0126_8104, 1);
+        e.mem.set_u8(manager + 0x19, 1);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9720, &args![]).bool());
+        assert_eq!(e.mem.u8(manager + 0x19), 0);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_9720, &args![]).bool());
+        assert_eq!(e.mem.u8(manager + 0x19), 1);
+        assert_eq!(printed(&e), vec![vec![MSG_LEAVES, TEXT_ON_CAPITAL]]);
+        e.mem.set_u8(0x0126_8104, 0);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9720, &args![]).bool());
+        assert_eq!(e.mem.u8(manager + 0x19), 1);
+        assert_eq!(printed(&e), vec![vec![MSG_LEAVES, TEXT_OFF_CAPITAL]]);
+    }
+
+    #[test]
+    fn wireframe_toggle_flips_the_flag_of_the_renderer_object() {
+        let mut e = engine_c();
+        let target = e.mem.alloc(0x200);
+        e.register_double(FN_00450B80, move |_, a| {
+            assert_eq!(a, [0]);
+            target.into_ret()
+        });
+        accept(&mut e, &[FN_0045C670, CONSOLE_PRINT]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_97f0, &args![]).bool());
+        assert_eq!(e.global::<u8>(WIREFRAME_FLAG), 1);
+        assert_eq!(e.mem.u8(target + 0x131), 1);
+        assert_eq!(calls(&e, FN_0045C670).len(), 1);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_97f0, &args![]).bool());
+        assert_eq!(e.global::<u8>(WIREFRAME_FLAG), 0);
+        assert_eq!(e.mem.u8(target + 0x131), 0);
+        assert_eq!(printed(&e), vec![vec![MSG_WIREFRAME, TEXT_OFF_CAPITAL]]);
+        // The flip alone: any non-zero value becomes 0.
+        e.mem.set_u8(target + 0x131, 7);
+        e.call(0x005b_9870, &args![Ptr::<()>::new(target)]);
+        assert_eq!(e.mem.u8(target + 0x131), 0);
+        e.call(0x005b_9870, &args![Ptr::<()>::new(target)]);
+        assert_eq!(e.mem.u8(target + 0x131), 1);
+    }
+
+    #[test]
+    fn detection_stats_toggle_stores_its_argument() {
+        let mut e = engine_c();
+        accept(&mut e, &[CONSOLE_PRINT]);
+        parse_gives(&mut e, true, &[1234]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_98a0, &args![script(0)]).bool());
+        assert_eq!(e.global::<u8>(DETECTION_STATS_FLAG), 1);
+        assert_eq!(e.global::<u32>(DETECTION_STATS_VALUE), 1234);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_98a0, &args![script(0)]).bool());
+        assert_eq!(e.global::<u8>(DETECTION_STATS_FLAG), 0);
+        assert_eq!(
+            printed(&e),
+            vec![vec![MSG_DETECTION_STATS, TEXT_OFF_CAPITAL]]
+        );
+        // Arguments that do not parse: the flag was flipped, the value stays.
+        parse_gives(&mut e, false, &[99]);
+        start_log(&mut e);
+        assert!(!e.call(0x005b_98a0, &args![script(0)]).bool());
+        assert_eq!(e.global::<u8>(DETECTION_STATS_FLAG), 1);
+        assert_eq!(e.global::<u32>(DETECTION_STATS_VALUE), 1234);
+        assert!(printed(&e).is_empty());
+    }
+
+    #[test]
+    fn refraction_gate_needs_the_byte_and_at_least_two() {
+        let mut e = engine_c();
+        refraction_gate(&mut e, true);
+        assert!(e.call(0x005b_9b00, &args![]).bool());
+        e.mem.set_u32(0x011f_91c0, 1);
+        assert!(!e.call(0x005b_9b00, &args![]).bool());
+        e.mem.set_u32(0x011f_91c0, 0xffff_ffff);
+        assert!(!e.call(0x005b_9b00, &args![]).bool());
+        e.mem.set_u32(0x011f_91c0, 5);
+        e.mem.set_u8(0x011f_9180, 0);
+        assert!(!e.call(0x005b_9b00, &args![]).bool());
+    }
+
+    #[test]
+    fn set_target_refraction_applies_the_limited_power() {
+        const V_PROPERTY: u32 = 0x0900_0040;
+        const V_ACTOR_REFRACTION: u32 = 0x0900_0041;
+        let mut e = engine_c();
+        refraction_gate(&mut e, true);
+        float_doubles(&mut e);
+        cast_double(&mut e);
+        accept(
+            &mut e,
+            &[SET_REFRACTION_RECURSE, CONSOLE_PRINT, V_ACTOR_REFRACTION],
+        );
+        e.register(V_PROPERTY, |_, _| 0x6000u32.into_ret());
+        e.register(REFR_GET_NAME_TEXT, |_, _| 0x5555u32.into_ret());
+        let zero = 0.0f32.to_bits();
+        // Not an actor: the shader property is cleared, then set.
+        let plain = reference(&mut e, &[(0x1d0, V_PROPERTY)], false);
+        parse_gives(&mut e, true, &[1.5f32.to_bits()]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9950, &args![script(plain)]).bool());
+        assert_eq!(
+            calls(&e, SET_REFRACTION_RECURSE),
+            vec![
+                vec![0x6000, 0, zero, 0, zero, 0],
+                vec![0x6000, 0, zero, 1, zero, 0],
+                vec![0x6000, 1, 1.0f32.to_bits(), 0, zero, 0],
+            ]
+        );
+        assert!(printed(&e).is_empty());
+        // A negative power is limited to 0 and does not enable it.
+        parse_gives(&mut e, true, &[(-0.5f32).to_bits()]);
+        set_echo(&mut e, true);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9950, &args![script(plain)]).bool());
+        assert_eq!(
+            calls(&e, SET_REFRACTION_RECURSE)[2],
+            vec![0x6000, 0, zero, 0, zero, 0]
+        );
+        let [lo, hi] = f64_words(0.0);
+        assert_eq!(printed(&e), vec![vec![MSG_REFRACTION_SET, 0x5555, lo, hi]]);
+        // An actor gets the call through its own slot; without a reference
+        // the player is the target.
+        let actor = reference(&mut e, &[(0x384, V_ACTOR_REFRACTION)], true);
+        e.set_global(PLAYER, actor);
+        parse_gives(&mut e, true, &[0.25f32.to_bits()]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9950, &args![script(0)]).bool());
+        assert_eq!(
+            calls(&e, V_ACTOR_REFRACTION),
+            vec![vec![actor, 1, 0.25f32.to_bits()]]
+        );
+        assert!(calls(&e, SET_REFRACTION_RECURSE).is_empty());
+        let [lo, hi] = f64_words(0.25);
+        assert_eq!(printed(&e), vec![vec![MSG_REFRACTION_SET, 0x5555, lo, hi]]);
+        // Arguments that do not parse; the gate closed.
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005b_9950, &args![script(plain)]).bool());
+        refraction_gate(&mut e, false);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9950, &args![script(plain)]).bool());
+        assert!(calls(&e, PARSE_PARAMETERS).is_empty());
+    }
+
+    #[test]
+    fn set_target_refraction_fire_passes_the_period() {
+        const V_PROPERTY: u32 = 0x0900_0042;
+        let mut e = engine_c();
+        refraction_gate(&mut e, true);
+        float_doubles(&mut e);
+        cast_double(&mut e);
+        accept(&mut e, &[SET_REFRACTION_RECURSE, CONSOLE_PRINT]);
+        e.register(V_PROPERTY, |_, _| 0x6000u32.into_ret());
+        e.register(REFR_GET_NAME_TEXT, |_, _| 0x5555u32.into_ret());
+        let plain = reference(&mut e, &[(0x1d0, V_PROPERTY)], false);
+        parse_gives(&mut e, true, &[2.0f32.to_bits(), 3]);
+        set_echo(&mut e, true);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9b40, &args![script(plain)]).bool());
+        assert_eq!(
+            calls(&e, SET_REFRACTION_RECURSE),
+            vec![vec![0x6000, 1, 1.0f32.to_bits(), 1, 3.0f32.to_bits(), 0]]
+        );
+        let [lo, hi] = f64_words(1.0);
+        assert_eq!(
+            printed(&e),
+            vec![vec![MSG_REFRACTION_FIRE_SET, 0x5555, lo, hi, 3]]
+        );
+        // An actor is left alone.
+        let actor = reference(&mut e, &[(0x1d0, V_PROPERTY)], true);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9b40, &args![script(actor)]).bool());
+        assert!(calls(&e, SET_REFRACTION_RECURSE).is_empty());
+        // No shader property: nothing is applied or printed.
+        e.register(V_PROPERTY, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005b_9b40, &args![script(plain)]).bool());
+        assert!(calls(&e, SET_REFRACTION_RECURSE).is_empty());
+        assert!(printed(&e).is_empty());
+        // Bad arguments; the gate closed.
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005b_9b40, &args![script(plain)]).bool());
+        refraction_gate(&mut e, false);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9b40, &args![script(plain)]).bool());
+        assert!(calls(&e, PARSE_PARAMETERS).is_empty());
+    }
+
+    #[test]
+    fn set_target_falloff_converts_the_given_channels() {
+        const V_PROPERTY: u32 = 0x0900_0043;
+        let mut e = engine_c();
+        float_doubles(&mut e);
+        accept(&mut e, &[CONSOLE_PRINT]);
+        // The base colour is (1, 1, 1, 1); `-1.0` scales it to "unset".
+        e.mem.set_f32(FLOAT_MINUS_ONE, -1.0);
+        e.mem.set_f64(DOUBLE_MINUS_ONE, -1.0);
+        e.mem.set_f32(FALLOFF_MAX_ANGLE, 90.0);
+        e.mem
+            .set_f64(DOUBLE_DEGREES_TO_RADIANS, std::f64::consts::PI / 180.0);
+        for i in 0..4 {
+            e.mem.set_f32(FALLOFF_BASE_COLOUR + 4 * i, 1.0);
+        }
+        e.register(COLOUR_SCALE, |e, a| {
+            for i in 0..4 {
+                let value = e.mem.f32(a[0] + 4 * i) * f32::from_bits(a[2]);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            a[1].into_ret()
+        });
+        // The angle conversion `004e4470` is a double that doubles.
+        e.register(FN_004E4470, |_, a| (f32::from_bits(a[0]) * 2.0).into_ret());
+        let colours = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let record = colours.clone();
+        e.register_double(SET_FALLOFF_RECURSE, move |e, a| {
+            record.borrow_mut().push((
+                a[0],
+                (0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect::<Vec<_>>(),
+            ));
+            Ret::default()
+        });
+        e.register(V_PROPERTY, |_, _| 0x6000u32.into_ret());
+        let target = reference(&mut e, &[(0x1d0, V_PROPERTY)], false);
+        // 120 degrees is limited to 90; the second angle is not given; 0.5 is
+        // kept; 2.0 is limited to 1.
+        parse_gives(
+            &mut e,
+            true,
+            &[
+                120.0f32.to_bits(),
+                (-1.0f32).to_bits(),
+                0.5f32.to_bits(),
+                2.0f32.to_bits(),
+            ],
+        );
+        assert!(e.call(0x005b_9c90, &args![script(target)]).bool());
+        let radians = ((90.0f64 * (std::f64::consts::PI / 180.0)) as f32) * 2.0;
+        assert_eq!(
+            *colours.borrow(),
+            vec![(0x6000, vec![radians, -1.0, 0.5, 1.0])]
+        );
+        // A negative colour channel is limited to 0.
+        colours.borrow_mut().clear();
+        parse_gives(
+            &mut e,
+            true,
+            &[
+                (-1.0f32).to_bits(),
+                (-5.0f32).to_bits(),
+                (-0.5f32).to_bits(),
+                (-1.0f32).to_bits(),
+            ],
+        );
+        assert!(e.call(0x005b_9c90, &args![script(target)]).bool());
+        assert_eq!(
+            *colours.borrow(),
+            vec![(0x6000, vec![-1.0, 0.0, 0.0, -1.0])]
+        );
+        // Bad arguments: nothing is applied.
+        colours.borrow_mut().clear();
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005b_9c90, &args![script(target)]).bool());
+        assert!(colours.borrow().is_empty());
+        // No reference: only the message, and only when echoing.
+        start_log(&mut e);
+        assert!(e.call(0x005b_9c90, &args![script(0)]).bool());
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_9c90, &args![script(0)]).bool());
+        assert_eq!(printed(&e), vec![vec![MSG_NO_REFERENCE]]);
+        assert!(calls(&e, PARSE_PARAMETERS).is_empty());
+    }
+
+    #[test]
+    fn the_float_wrapper_and_the_unsupported_command() {
+        let mut e = engine_c();
+        e.register(FN_004E4470, |_, a| (f32::from_bits(a[0]) + 1.0).into_ret());
+        assert_eq!(e.call(0x005b_9e80, &args![2.5f32]).f32(), 3.5);
+        accept(&mut e, &[CONSOLE_PRINT, FN_005D4A40]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9ea0, &args![]).bool());
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_9ea0, &args![]).bool());
+        assert_eq!(printed(&e), vec![vec![MSG_NO_LONGER_SUPPORTED]]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9ed0, &args![]).bool());
+        assert_eq!(calls(&e, FN_005D4A40).len(), 1);
+    }
+
+    #[test]
+    fn image_space_value_command_stores_the_value_in_element_twelve() {
+        let mut e = engine_c();
+        let manager = e.mem.alloc(0x20);
+        let element = e.mem.alloc(0x80);
+        e.register_double(GET_IMAGE_SPACE_MANAGER, move |_, _| manager.into_ret());
+        e.register_double(IMAGE_SPACE_ARRAY_GET, move |_, a| {
+            assert_eq!(a, [manager, 0xc]);
+            element.into_ret()
+        });
+        parse_gives(&mut e, true, &[0.75f32.to_bits()]);
+        assert!(e.call(0x005b_9ef0, &args![script(0)]).bool());
+        assert_eq!(e.mem.u8(element + 5), 1);
+        assert_eq!(e.mem.f32(element + 0x58), 0.75);
+        // The two helpers on their own.
+        e.call(0x005b_9f50, &args![Ptr::<()>::new(manager), 1.25f32]);
+        assert_eq!(e.mem.f32(element + 0x58), 1.25);
+        e.mem.set_u8(element + 5, 0);
+        e.call(0x005b_9f80, &args![Ptr::<()>::new(element), 2.0f32]);
+        assert_eq!(e.mem.u8(element + 5), 1);
+        assert_eq!(e.mem.f32(element + 0x58), 2.0);
+        // Bad arguments: nothing is touched.
+        parse_gives(&mut e, false, &[]);
+        e.mem.set_u8(element + 5, 0);
+        assert!(!e.call(0x005b_9ef0, &args![script(0)]).bool());
+        assert_eq!(e.mem.u8(element + 5), 0);
+    }
+
+    #[test]
+    fn motion_blur_command_toggles_the_property_of_the_reference() {
+        const V_PROPERTY: u32 = 0x0900_0044;
+        let mut e = engine_c();
+        e.register(V_PROPERTY, |_, _| 0x6000u32.into_ret());
+        accept(&mut e, &[TOGGLE_MOTION_BLUR_RECURSE]);
+        let plain = reference(&mut e, &[(0x1d0, V_PROPERTY)], false);
+        start_log(&mut e);
+        assert!(e.call(0x005b_9fa0, &args![script(plain)]).bool());
+        assert_eq!(calls(&e, TOGGLE_MOTION_BLUR_RECURSE), vec![vec![0x6000]]);
+        // No property, no reference: nothing.
+        e.register(V_PROPERTY, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        assert!(e.call(0x005b_9fa0, &args![script(plain)]).bool());
+        assert!(e.call(0x005b_9fa0, &args![script(0)]).bool());
+        assert!(calls(&e, TOGGLE_MOTION_BLUR_RECURSE).is_empty());
+    }
+
+    /// The doubles of the IK commands: the global objects' value bytes are
+    /// at `object + 4` as `00408d60` returns them, and an actor `0x100` bytes
+    /// long whose IK object (at `+0xac`) is `0x300` bytes.
+    fn ik_engine() -> (Engine, u32, u32) {
+        const V_NAME: u32 = 0x0900_0050;
+        let mut e = engine_c();
+        cast_double(&mut e);
+        accept(&mut e, &[CONSOLE_PRINT]);
+        e.register(GLOBAL_VALUE_ADDRESS, |_, a| (a[0] + 4).into_ret());
+        e.register(FOOT_IK_GET, |e, _| e.mem.u8(FOOT_IK_OBJECT + 4).into_ret());
+        e.register(V_NAME, |_, _| 0x5555u32.into_ret());
+        let actor = reference(&mut e, &[(0x130, V_NAME)], true);
+        let ik = e.mem.alloc(0x300);
+        e.mem.set_u32(actor + 0xac, ik);
+        (e, actor, ik)
+    }
+
+    /// One IK command: the global flag flips with an echo, and an actor's
+    /// flag follows when the permission byte at `allow` is set.
+    fn check_ik_command(address: u32, global: u32, allow: u32, flag: u32, messages: (u32, u32)) {
+        let (mut e, actor, ik) = ik_engine();
+        // Global flag.
+        start_log(&mut e);
+        assert!(e.call(address, &args![script(0)]).bool());
+        assert_eq!(e.mem.u8(global + 4), 1);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(address, &args![script(0)]).bool());
+        assert_eq!(e.mem.u8(global + 4), 0);
+        assert_eq!(printed(&e), vec![vec![messages.0, TEXT_OFF_CAPITAL]]);
+        // An actor whose IK object does not allow the flag stays off.
+        start_log(&mut e);
+        assert!(e.call(address, &args![script(actor)]).bool());
+        assert_eq!(e.mem.u8(ik + flag), 0);
+        assert_eq!(
+            printed(&e),
+            vec![vec![messages.1, 0x5555, TEXT_OFF_CAPITAL]]
+        );
+        // With the permission it flips back and forth.
+        e.mem.set_u8(ik + allow, 1);
+        start_log(&mut e);
+        assert!(e.call(address, &args![script(actor)]).bool());
+        assert_eq!(e.mem.u8(ik + flag), 1);
+        assert_eq!(printed(&e), vec![vec![messages.1, 0x5555, TEXT_ON_CAPITAL]]);
+        assert!(e.call(address, &args![script(actor)]).bool());
+        assert_eq!(e.mem.u8(ik + flag), 0);
+        // A reference that is no actor, an actor without the IK object.
+        let plain = reference(&mut e, &[], false);
+        e.mem.set_u32(actor + 0xac, 0);
+        start_log(&mut e);
+        assert!(e.call(address, &args![script(plain)]).bool());
+        assert!(e.call(address, &args![script(actor)]).bool());
+        assert!(printed(&e).is_empty());
+    }
+
+    #[test]
+    fn foot_ik_toggle_flips_the_global_or_the_actor_flag() {
+        check_ik_command(
+            0x005b_9fe0,
+            FOOT_IK_OBJECT,
+            0x21f,
+            0x220,
+            (MSG_FOOT_IK, MSG_FOOT_IK_REF),
+        );
+        // The setters and getters on their own.
+        let (mut e, _, ik) = ik_engine();
+        e.call(0x005b_a110, &args![9u32]);
+        assert_eq!(e.mem.u8(FOOT_IK_OBJECT + 4), 9);
+        e.mem.set_u8(ik + 0x21f, 1);
+        e.call(0x005b_a130, &args![Ptr::<()>::new(ik), 5u32]);
+        assert_eq!(e.call(0x005b_a180, &args![Ptr::<()>::new(ik)]).u8(), 1);
+        e.call(0x005b_a130, &args![Ptr::<()>::new(ik), 0u32]);
+        assert_eq!(e.mem.u8(ik + 0x220), 0);
+    }
+
+    #[test]
+    fn grab_ik_toggle_flips_the_global_or_the_actor_flag() {
+        check_ik_command(
+            0x005b_a1a0,
+            GRAB_IK_OBJECT,
+            0x21c,
+            0x21d,
+            (MSG_GRAB_IK, MSG_GRAB_IK_REF),
+        );
+        let (mut e, _, ik) = ik_engine();
+        e.call(0x005b_a2f0, &args![4u32]);
+        assert_eq!(e.call(0x005b_a2d0, &args![]).u8(), 4);
+        assert_eq!(e.mem.u8(GRAB_IK_OBJECT + 4), 4);
+        e.mem.set_u8(ik + 0x21c, 1);
+        e.call(0x005b_a310, &args![Ptr::<()>::new(ik), 1u32]);
+        assert_eq!(e.call(0x005b_a360, &args![Ptr::<()>::new(ik)]).u8(), 1);
+        // Without the permission byte the flag is cleared.
+        e.mem.set_u8(ik + 0x21c, 0);
+        e.call(0x005b_a310, &args![Ptr::<()>::new(ik), 1u32]);
+        assert_eq!(e.mem.u8(ik + 0x21d), 0);
+    }
+
+    #[test]
+    fn look_ik_toggle_flips_the_global_or_the_actor_flag() {
+        check_ik_command(
+            0x005b_a380,
+            LOOK_IK_OBJECT,
+            0xb0,
+            0xb1,
+            (MSG_LOOK_IK, MSG_LOOK_IK_REF),
+        );
+        let (mut e, _, ik) = ik_engine();
+        e.call(0x005b_a4d0, &args![6u32]);
+        assert_eq!(e.call(0x005b_a4b0, &args![]).u8(), 6);
+        assert_eq!(e.mem.u8(LOOK_IK_OBJECT + 4), 6);
+        e.mem.set_u8(ik + 0xb0, 1);
+        e.call(0x005b_a4f0, &args![Ptr::<()>::new(ik), 1u32]);
+        assert_eq!(e.call(0x005b_a540, &args![Ptr::<()>::new(ik)]).u8(), 1);
+        e.call(0x005b_a4f0, &args![Ptr::<()>::new(ik), 0u32]);
+        assert_eq!(e.mem.u8(ik + 0xb1), 0);
+    }
+
+    #[test]
+    fn ragdoll_animation_toggle_inverts_the_flag() {
+        let mut e = engine_c();
+        accept(&mut e, &[CONSOLE_PRINT]);
+        e.register(RAGDOLL_ANIM_GET, |e, _| e.mem.u8(0x0126_7c28).into_ret());
+        e.register(RAGDOLL_ANIM_SET, |e, a| {
+            e.mem.set_u8(0x0126_7c28, a[0] as u8);
+            Ret::default()
+        });
+        start_log(&mut e);
+        assert!(e.call(0x005b_a560, &args![]).bool());
+        assert_eq!(e.mem.u8(0x0126_7c28), 1);
+        assert_eq!(calls(&e, RAGDOLL_ANIM_SET), vec![vec![1]]);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_a560, &args![]).bool());
+        assert_eq!(e.mem.u8(0x0126_7c28), 0);
+        assert_eq!(
+            printed(&e),
+            vec![vec![MSG_RAGDOLL_ANIMATION, TEXT_OFF_CAPITAL]]
+        );
+    }
+
+    #[test]
+    fn set_vel_puts_the_value_on_the_named_axis() {
+        const V_TARGET: u32 = 0x0900_0045;
+        let mut e = engine_c();
+        e.register(NI_POINT3_CONSTRUCT, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+        e.register(V_TARGET, |_, _| 0x6000u32.into_ret());
+        let velocities = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let record = velocities.clone();
+        e.register_double(ADD_VELOCITY, move |e, a| {
+            record.borrow_mut().push((
+                a[0],
+                [e.mem.f32(a[1]), e.mem.f32(a[1] + 4), e.mem.f32(a[1] + 8)],
+                a[2],
+            ));
+            Ret::default()
+        });
+        let target = reference(&mut e, &[(0x1d0, V_TARGET)], false);
+        for (axis, expected) in [
+            (b'X', [3.5, 0.0, 0.0]),
+            (b'Y', [0.0, 3.5, 0.0]),
+            (b'Z', [0.0, 0.0, 3.5]),
+            (b'Q', [0.0, 0.0, 0.0]),
+        ] {
+            velocities.borrow_mut().clear();
+            parse_gives(&mut e, true, &[u32::from(axis), 3.5f32.to_bits()]);
+            assert!(e.call(0x005b_a5d0, &args![script(target)]).bool());
+            assert_eq!(*velocities.borrow(), vec![(0x6000, expected, 1)]);
+        }
+        // No reference: nothing happens; bad arguments: false.
+        velocities.borrow_mut().clear();
+        assert!(e.call(0x005b_a5d0, &args![script(0)]).bool());
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005b_a5d0, &args![script(target)]).bool());
+        assert!(velocities.borrow().is_empty());
+    }
+
+    #[test]
+    fn flag_flip_command_needs_the_refraction_gate() {
+        let mut e = engine_c();
+        refraction_gate(&mut e, false);
+        assert!(e.call(0x005b_a690, &args![]).bool());
+        assert_eq!(e.global::<u8>(FLAG_011F9FC2), 0);
+        refraction_gate(&mut e, true);
+        assert!(e.call(0x005b_a690, &args![]).bool());
+        assert_eq!(e.global::<u8>(FLAG_011F9FC2), 1);
+        e.call(0x005b_a6b0, &args![]);
+        assert_eq!(e.global::<u8>(FLAG_011F9FC2), 0);
+        e.mem.set_u8(FLAG_011F9FC2, 7);
+        e.call(0x005b_a6b0, &args![]);
+        assert_eq!(e.global::<u8>(FLAG_011F9FC2), 0);
+    }
+
+    #[test]
+    fn lite_brite_toggle_and_accessors() {
+        let mut e = engine_c();
+        accept(&mut e, &[CONSOLE_PRINT]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_a6d0, &args![]).bool());
+        assert_eq!(e.call(0x005b_a740, &args![]).u8(), 1);
+        assert!(printed(&e).is_empty());
+        set_echo(&mut e, true);
+        assert!(e.call(0x005b_a6d0, &args![]).bool());
+        assert_eq!(e.global::<u8>(LITE_BRITE_FLAG), 0);
+        assert_eq!(printed(&e), vec![vec![MSG_LITE_BRITE, TEXT_OFF_CAPITAL]]);
+        e.call(0x005b_a750, &args![5u32]);
+        assert_eq!(e.global::<u8>(LITE_BRITE_FLAG), 5);
+        // Any non-zero value counts as set and is switched off.
+        assert!(e.call(0x005b_a6d0, &args![]).bool());
+        assert_eq!(e.global::<u8>(LITE_BRITE_FLAG), 0);
     }
 }
