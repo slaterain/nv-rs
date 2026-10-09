@@ -864,12 +864,10 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
   ([ADR-0006](adr/0006-engine-crate-memory-model.md), for maintainer review;
   [ENGINE_CRATE.md](ENGINE_CRATE.md)). Merged: #72 (Phase 0), #73 (crate).
 - 16 Sonnet agents in parallel, each in its own worktree under
-  `%USERPROFILE%
-v-reworkgentsNN`, one unit file (or unit part) each,
+  `%USERPROFILE%/nv-re/work/agents/aNN`, one unit file (or unit part) each,
   40 functions per session; the lead collects, checks (fmt, clippy -D
   warnings, all engine tests), commits and re-tasks (private scripts in
-  `%USERPROFILE%
-v-reworkphase0in`: `cycle.sh`, `task.sh`, `split.sh`).
+  `%USERPROFILE%/nv-re/work/phase0/bin`: `cycle.sh`, `task.sh`, `split.sh`).
   Decompiles come from a private read-only Ghidra server on the named copy
   (127.0.0.1:8090, `binstart-srv.ps1`).
 - Measured: about 6.7k to 11k Sonnet tokens per translated function,
