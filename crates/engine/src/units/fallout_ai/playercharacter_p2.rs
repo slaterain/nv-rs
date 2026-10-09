@@ -9,8 +9,14 @@
 //! the one-hour wait step (`0094df80`), `Load3D`, `ExportProgressData`,
 //! `RewardKarma` and the vanity-mode reset.
 //!
-//! Notes for the next session: this part continues at `00950110`
-//! (`PlayerCharacter::SetFirstPerson`).
+//! The second session covers `00950110` to `00952a20` (40 functions): the
+//! first-/third-person camera switch and its temporary variants,
+//! `Resurrect`, the animation and biped accessors, `CloneInventory3D`, the
+//! animation group player (`009520f0`), the first-person zoom (`00952290`),
+//! the god-mode flags, and the topic and quest lists.
+//!
+//! Notes for the next session: this part continues at `00952b30` (the
+//! functions from there to `0095d090`).
 //!
 //! Conventions: the `ActorValueOwner` sits at `PlayerCharacter + 0xa4` and the
 //! `MagicCaster` at `+0x88`, so a few functions receive those interior
@@ -332,6 +338,26 @@ layout! {
         0x658 bIsSleeping: bool,
         /// `b3rdPerson` (Xbox PDB).
         0x64a b3rdPerson: bool,
+        /// `bActually3rdPerson` (Xbox PDB).
+        0x64b bActually3rdPerson: u8,
+        /// `bWant3rdPerson` (Xbox PDB).
+        0x64c bWant3rdPerson: u8,
+        /// `bTemp3rdPerson` (Xbox PDB).
+        0x64d bTemp3rdPerson: u8,
+        /// `bTemp3rdPersonSwitchBack` (Xbox PDB).
+        0x64e bTemp3rdPersonSwitchBack: u8,
+        /// `bTemp1stPerson` (Xbox PDB).
+        0x64f bTemp1stPerson: u8,
+        /// `bTemp1stPersonSwitchBack` (Xbox PDB).
+        0x650 bTemp1stPersonSwitchBack: u8,
+        /// `fFOV` (Xbox PDB).
+        0x65c fFOV: f32,
+        /// `spInventoryPC` (Xbox PDB): `NiPointer<NiNode>`.
+        0x69c spInventoryPC: Ptr,
+        /// `pInventoryAnimation` (Xbox PDB): `Animation *`.
+        0x6a0 pInventoryAnimation: Ptr,
+        /// `pActiveQuest` (Xbox PDB): `TESQuest *`.
+        0x6b8 pActiveQuest: Ptr,
         /// `p1stPersonBipedAnim` (Xbox PDB): `BipedAnim *`.
         0x68c p1stPersonBipedAnim: Ptr,
         /// `p1stPersonAnimation` (Xbox PDB): `Animation *`.
@@ -2337,6 +2363,1563 @@ pub fn player_character_stop_vanity_mode(e: &mut Engine, _this: Ptr) {
     }
 }
 
+// ---------------------------------------------------------------------
+// Second session: the camera switch, the animations and the quest lists
+// (`00950110` to `00952a20`)
+// ---------------------------------------------------------------------
+
+/// The float setting copied into [`VANITY_RESTORED_VALUE`] by `SetFirstPerson`.
+const RESTORED_VALUE_SETTING_011CD614: u32 = 0x011c_d614;
+/// The float setting `ForceTemp3rdPerson` raises [`VANITY_RESTORED_VALUE`] to.
+const RESTORED_VALUE_SETTING_011CD498: u32 = 0x011c_d498;
+/// Three floats (a position) copied from the `Camera1st` node by `SetFirstPerson`.
+const CAMERA_POSITION_COPY: u32 = 0x011e_0808;
+/// Two flags that make `SetFirstPerson` apply the switch at once.
+const CAMERA_SWITCH_FLAG_011F21D0: u32 = 0x011f_21d0;
+const CAMERA_SWITCH_FLAG_011F21D1: u32 = 0x011f_21d1;
+/// `30.0` (`double`): the zoom value up to which `UpdateFirstPersonZoom` acts.
+const FIRST_PERSON_ZOOM_LIMIT: u32 = 0x0101_db88;
+/// The byte that keeps `UpdateTemp1stPerson` from testing the iron sights.
+const IRON_SIGHTS_SKIP_FLAG: u32 = 0x011e_0780;
+/// The byte `UpdateTemp1stPerson` sets when the temporary first person ends.
+const TEMP_FIRST_PERSON_ENDED: u32 = 0x011a_3b32;
+/// The global object that `0044ddc0` and `009c8cc0` are called on.
+const OBJECT_011F2250: u32 = 0x011f_2250;
+/// The depth counter that `00950930` raises while it updates the animations.
+const ANIMATION_UPDATE_DEPTH: u32 = 0x011e_07a8;
+/// `-1.0` (`float`).
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// `0.0`, `1.0` and `-1.0` as `double` constants of the exe.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+const ONE_DOUBLE: u32 = 0x0101_2070;
+const MINUS_ONE_DOUBLE: u32 = 0x0101_a6b0;
+/// The byte `00951900` returns and `00951910` sets, and the two words
+/// `00951920` and `00951930` return (names the clone looks nodes up by).
+const INVENTORY_CLONE_FLAG: u32 = 0x011f_a00c;
+const NODE_NAME_011C623C: u32 = 0x011c_623c;
+const NODE_NAME_011C6274: u32 = 0x011c_6274;
+/// The god-mode and demigod-mode bytes and the setting that forces both.
+const GOD_MODE_BYTE: u32 = 0x011e_07ba;
+const DEMIGOD_MODE_BYTE: u32 = 0x011e_07bb;
+const GOD_MODE_SETTING: u32 = 0x011e_0894;
+/// The float `00952290` moves towards its target, the angle it computes, and
+/// a float set to 1.0 before `Actor::UpdateAlpha` (`008c4640`).
+const ZOOM_FACTOR: u32 = 0x011a_3b68;
+const LOOK_ANGLE: u32 = 0x011e_0770;
+const INVENTORY_ALPHA: u32 = 0x011a_3b38;
+/// Settings read by `00952290`: the target when not zoomed (float), the
+/// duration of the zoom in and of the zoom out.
+const ZOOM_TARGET_SETTING: u32 = 0x011c_dcb0;
+const ZOOM_IN_SECONDS_SETTING: u32 = 0x011c_d620;
+const ZOOM_OUT_SECONDS_SETTING: u32 = 0x011c_de38;
+/// The table of animation group types (`0x24` bytes per entry): a byte at
+/// `+0` and a word at `+4`.
+const GROUP_TYPE_TABLE_FLAG: u32 = 0x0119_77dc;
+const GROUP_TYPE_TABLE_WORD: u32 = 0x0119_77e0;
+/// The table of 11 idle-folder names `CloneInventory3D` lists animations in
+/// (index 1 to 11).
+const IDLE_NAME_TABLE: u32 = 0x0119_77a4;
+/// Type information used by the dynamic cast `00653270`.
+const CAST_TYPE_011D5BF8: u32 = 0x011d_5bf8;
+/// The word handed to `00440460` on the inventory model.
+const INVENTORY_MODEL_ARGUMENT: u32 = 0x011f_426c;
+/// Strings of `CloneInventory3D`: the format of the model path, the idle
+/// file name, the folder names and the file-list formats.
+const FORMAT_MODEL_PATH: u32 = 0x0101_9f08;
+const TEXT_MT_IDLE: u32 = 0x0101_6fa0;
+const TEXT_MESHES: u32 = 0x0101_dccc;
+const FORMAT_DATA_PATH: u32 = 0x0101_fb74;
+const FORMAT_IDLE_PATH: u32 = 0x0108_b320;
+const FORMAT_IDLE_NAME: u32 = 0x0108_b314;
+const FORMAT_TORCH_IDLE_PATH: u32 = 0x0108_b2f8;
+const FORMAT_TORCH_IDLE_NAME: u32 = 0x0108_b2e8;
+
+/// The offsets of the lists of the player used by the quest code.
+const TOPIC_LIST: u32 = 0x6a8;
+const QUEST_LOG_LIST: u32 = 0x6b0;
+const QUEST_TARGET_LIST: u32 = 0x6c4;
+
+/// `NiPointer` dereference (`00559450`): the object the smart pointer at
+/// `slot` holds.
+fn pointer_target(e: &mut Engine, slot: u32) -> u32 {
+    e.call(0x0055_9450, &args![slot]).u32()
+}
+
+// Translated from 00950110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetFirstPerson` (Xbox PDB): `first_person` non-zero
+/// asks for the first person (`bWant3rdPerson` becomes 0, otherwise 1).
+/// Returns true when the wanted camera changed (the code compares the old
+/// `bWant3rdPerson` with the argument, which is equal exactly then). When the
+/// third person is wanted and slot `0x22c` of the player says yes, copies the
+/// restored-value setting `0x011cd614` to `0x011e0b5c`. Outside vanity mode,
+/// with a first-person model and a changed request for the third person
+/// (`bWant3rdPerson` set), copies the position of the `Camera1st` node and
+/// applies the model switch (`00951a10`); otherwise marks `b3rdPerson` when
+/// the model is in the state `00456610` tests and the first person is wanted.
+/// When the request changed and both camera-switch flags are set, copies the
+/// wanted camera to `b3rdPerson` and applies the switch at once.
+pub fn player_character_set_first_person(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    first_person: u8,
+) -> bool {
+    let player = this.addr();
+    let changed = e.get(this, PlayerCharacter::bWant3rdPerson) == first_person;
+    let want_third = u8::from(first_person == 0);
+    e.set(this, PlayerCharacter::bWant3rdPerson, want_third);
+    if want_third != 0 && e.vcall(player, 0x22c, &args![0u32]).bool() {
+        let at = e
+            .call(
+                SETTING_FLOAT_POINTER,
+                &args![RESTORED_VALUE_SETTING_011CD614],
+            )
+            .u32();
+        let value = e.mem.f32(at);
+        e.set_global(VANITY_RESTORED_VALUE, value);
+    }
+    let mut applied = false;
+    if e.global::<u8>(VANITY_ACTIVE) == 0
+        && pointer_target(e, player + 0x694) != 0
+        && e.get(this, PlayerCharacter::bWant3rdPerson) != 0
+        && changed
+    {
+        let camera = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+        let at = e.call(0x0045_bb80, &args![camera]).u32();
+        for word in 0..3u32 {
+            let value = e.mem.u32(at + 4 * word);
+            e.mem.set_u32(CAMERA_POSITION_COPY + 4 * word, value);
+        }
+        let hide = u8::from(e.get(this, PlayerCharacter::bWant3rdPerson) == 0);
+        fn_00951a10(e, this, hide);
+        applied = true;
+    }
+    if !applied && e.global::<u8>(VANITY_ACTIVE) == 0 && pointer_target(e, player + 0x694) != 0 {
+        let model = pointer_target(e, player + 0x694);
+        if e.call(0x0045_6610, &args![model]).bool()
+            && e.get(this, PlayerCharacter::bWant3rdPerson) == 0
+        {
+            e.set(this, PlayerCharacter::b3rdPerson, true);
+        }
+    }
+    if changed
+        && e.global::<u8>(CAMERA_SWITCH_FLAG_011F21D0) != 0
+        && e.global::<u8>(CAMERA_SWITCH_FLAG_011F21D1) != 0
+    {
+        // Copy of the byte at +0x64c to the byte at +0x64a (b3rdPerson).
+        let wanted = e.mem.u8(player + 0x64c);
+        e.mem.set_u8(player + 0x64a, wanted);
+        fn_00951a10(e, this, 1);
+    }
+    changed
+}
+
+// Translated from 00950290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateFirstPersonZoom` (Xbox PDB): when the wanted
+/// camera (`+0x64c`) differs from the current one (`+0x64a`) and the zoom
+/// value `0x011e07dc` is not above `30.0`, adopts it and, outside vanity
+/// mode and with a first-person model, applies the switch (`00951a10`).
+pub fn player_character_update_first_person_zoom(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    let wanted = e.get(this, PlayerCharacter::bWant3rdPerson);
+    if wanted == e.mem.u8(player + 0x64a) {
+        return;
+    }
+    let zoom = f64::from(e.global::<f32>(VANITY_VALUE_07DC));
+    let limit = e.global::<f64>(FIRST_PERSON_ZOOM_LIMIT);
+    if zoom > limit {
+        return;
+    }
+    e.mem.set_u8(player + 0x64a, wanted);
+    if e.global::<u8>(VANITY_ACTIVE) == 0
+        && pointer_target(e, player + 0x694) != 0
+        && e.mem.u8(player + 0x64a) == 0
+    {
+        fn_00951a10(e, this, 1);
+    }
+}
+
+// Translated from 00950340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ForceTemp3rdPerson` (Xbox PDB): does nothing (returns
+/// false) while a temporary camera is already forced (`005721e0`). Else
+/// sets `bTemp3rdPerson`; with `raise_restored_value` raises the restored
+/// value `0x011e0b5c` to the setting `0x011cd498` when that is larger; and,
+/// if the camera is in the first person (`b3rdPerson` 0), remembers to switch
+/// back and requests the third person (`SetFirstPerson(0)`), returning its
+/// result. Returns false when the player already is in the third person.
+pub fn player_character_force_temp_3rd_person(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    raise_restored_value: u8,
+) -> bool {
+    let player = this.addr();
+    if e.call(0x0057_21e0, &args![player]).bool() {
+        return false;
+    }
+    e.set(this, PlayerCharacter::bTemp3rdPerson, 1);
+    if raise_restored_value != 0 {
+        let at = e
+            .call(
+                SETTING_FLOAT_POINTER,
+                &args![RESTORED_VALUE_SETTING_011CD498],
+            )
+            .u32();
+        let setting = e.mem.f32(at);
+        let current = e.global::<f32>(VANITY_RESTORED_VALUE);
+        if setting > current {
+            let at = e
+                .call(
+                    SETTING_FLOAT_POINTER,
+                    &args![RESTORED_VALUE_SETTING_011CD498],
+                )
+                .u32();
+            let value = e.mem.f32(at);
+            e.set_global(VANITY_RESTORED_VALUE, value);
+        }
+    }
+    if e.mem.u8(player + 0x64a) != 0 {
+        return false;
+    }
+    e.set(this, PlayerCharacter::bTemp3rdPersonSwitchBack, 1);
+    player_character_set_first_person(e, this, 0)
+}
+
+// Translated from 009503d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateTemp3rdPerson` (Xbox PDB): ends the temporary
+/// third person when the process's slot `0x3e4` answers `-1`, slot `0x40c`
+/// answers 0 and neither vanity flag is set: clears `bTemp3rdPerson`,
+/// switches back to the first person if it was remembered, and forgets it.
+pub fn player_character_update_temp_3rd_person(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    if e.get(this, PlayerCharacter::bTemp3rdPerson) == 0 {
+        return;
+    }
+    let process = process_of(e, this);
+    if e.vcall(process, 0x3e4, &args![]).i32() != -1 {
+        return;
+    }
+    let process = process_of(e, this);
+    if e.vcall(process, 0x40c, &args![]).u32() == 0
+        && e.global::<u8>(VANITY_ACTIVE) == 0
+        && e.global::<u8>(VANITY_SAVED_FLAG) == 0
+    {
+        e.set(this, PlayerCharacter::bTemp3rdPerson, 0);
+        if e.get(this, PlayerCharacter::bTemp3rdPersonSwitchBack) != 0 {
+            player_character_set_first_person(e, this, 1);
+        }
+        e.set(this, PlayerCharacter::bTemp3rdPersonSwitchBack, 0);
+    }
+}
+
+// Translated from 00950460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ForceTemp1stPerson` (Xbox PDB): stops vanity mode, sets
+/// `bTemp1stPerson`, lowers the iron sights (when `keep_sights` is 0 and they
+/// are up) and the block, then either does nothing (returns false) or asks
+/// for the first person (`SetFirstPerson(1)`, remembered in
+/// `bTemp1stPersonSwitchBack`) and returns its result.
+pub fn player_character_force_temp_1st_person(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    keep_sights: u8,
+) -> bool {
+    let player = this.addr();
+    player_character_stop_vanity_mode(e, this.cast());
+    e.set(this, PlayerCharacter::bTemp1stPerson, 1);
+    if keep_sights == 0 && e.call(0x008b_bc10, &args![player]).bool() {
+        e.call(0x008b_b650, &args![player, 0u32, 0u32, 0u32]);
+    }
+    e.call(0x0089_4cc0, &args![player, 0u32]);
+    if keep_sights != 0 {
+        let model = fn_00950bb0(e, this, 0);
+        if e.call(0x0045_6610, &args![model]).bool() {
+            return false;
+        }
+    } else if e.mem.u8(player + 0x64a) == 0 {
+        let model = fn_00950bb0(e, this, 0);
+        if !e.call(0x0045_6610, &args![model]).bool() {
+            let model = fn_00950bb0(e, this, 0);
+            e.call(0x0045_0f90, &args![model, 1u32]);
+        }
+        return false;
+    }
+    e.set(this, PlayerCharacter::bTemp1stPersonSwitchBack, 1);
+    player_character_set_first_person(e, this, 1)
+}
+
+// Translated from 00950530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateTemp1stPerson` (Xbox PDB): ends the temporary
+/// first person (`bTemp1stPerson`) unless the Pipboy is active or
+/// `0044ddc0` on the global object answers 4, or the iron sights are up with
+/// a weapon that `0048cee0` accepts. Sets the "ended" byte and switches back
+/// (`SetFirstPerson(0)`) if it was remembered.
+pub fn player_character_update_temp_1st_person(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    if e.get(this, PlayerCharacter::bTemp1stPerson) == 0 {
+        return;
+    }
+    if e.call(0x0096_7ae0, &args![player]).bool() {
+        return;
+    }
+    if e.call(0x0044_ddc0, &args![OBJECT_011F2250]).u32() == 4 {
+        return;
+    }
+    if e.global::<u8>(IRON_SIGHTS_SKIP_FLAG) == 0 && e.call(0x008b_bc10, &args![player]).bool() {
+        let process = process_of(e, this);
+        if e.vcall(process, 0x148, &args![]).u32() != 0 {
+            let process = process_of(e, this);
+            let item = e.vcall(process, 0x148, &args![]).u32();
+            let form = e.call(0x0044_ddc0, &args![item]).u32();
+            let form = e.call(0x0050_4e60, &args![form]).u32();
+            if e.call(0x0048_cee0, &args![form]).u32() != 0 {
+                return;
+            }
+        }
+    }
+    e.set(this, PlayerCharacter::bTemp1stPerson, 0);
+    e.set_global(TEMP_FIRST_PERSON_ENDED, 1u8);
+    if e.get(this, PlayerCharacter::bTemp1stPersonSwitchBack) != 0 {
+        player_character_set_first_person(e, this, 0);
+    }
+    e.set(this, PlayerCharacter::bTemp1stPersonSwitchBack, 0);
+}
+
+// Translated from 00950610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the field of view `fFOV` (`+0x65c`), hands it to the scene
+/// graph's camera (`BSSceneGraph::SetCameraFOV`, Xbox PDB name of
+/// `00c52020`, on the object `0045c670` returns, with three zero flags) and
+/// to `00b54000`, and returns the stored value. `0045c670` is a plain
+/// `RET` in the exe: the four words the caller pushes stay on the stack for
+/// `00c52020`.
+pub fn fn_00950610(e: &mut Engine, this: Ptr<PlayerCharacter>, fov: f32) -> f32 {
+    e.set(this, PlayerCharacter::fFOV, fov);
+    let stored = e.get(this, PlayerCharacter::fFOV);
+    let scene = e.call(0x0045_c670, &args![]).u32();
+    e.call(0x00c5_2020, &args![scene, stored, 0u32, 0u32, 0u32]);
+    e.call(0x00b5_4000, &args![fov]);
+    e.get(this, PlayerCharacter::fFOV)
+}
+
+// Translated from 00950660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::Resurrect` (Xbox PDB): resets the health modifier,
+/// replaces the player's process by a new `HighProcess` (the old one is
+/// destroyed through its virtual destructor; the process lists are told
+/// twice), rebuilds the character controller's camera caster, and runs
+/// `Actor::Resurrect` (`0089f780`) and `InitAnimation` (`005659f0`). The
+/// three words the caller pushes are not read. C++ exception unwinding is not
+/// translated.
+pub fn player_character_resurrect(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) {
+    let player = this.addr();
+    e.set(this, PlayerCharacter::fHealthModifier, 0.0);
+    e.call(0x0070_4e10, &args![0x10u32]);
+    e.call(0x0040_fbf0, &args![PROCESS_LOCK, 0u32]);
+    let old = process_of(e, this);
+    if old != 0 {
+        e.vcall(old, 0, &args![1u32]);
+    }
+    let block = e.call(OPERATOR_NEW, &args![0xb4u32]).u32();
+    let base = if block != 0 {
+        e.call(0x0090_6dc0, &args![block]).u32()
+    } else {
+        0
+    };
+    e.set(this, PlayerCharacter::pCurrentProcess, Ptr::new(base));
+    let block = e.call(OPERATOR_NEW, &args![0x46cu32]).u32();
+    let high = if block != 0 {
+        e.call(0x008d_7510, &args![block]).u32()
+    } else {
+        0
+    };
+    let current = process_of(e, this);
+    e.vcall(high, 4, &args![current]);
+    let process_type = e.call(0x0093_1850, &args![player]).u32();
+    e.call(0x0096_d470, &args![PROCESS_LISTS, player, process_type]);
+    let old = process_of(e, this);
+    if old != 0 {
+        e.vcall(old, 0, &args![1u32]);
+    }
+    e.set(this, PlayerCharacter::pCurrentProcess, Ptr::new(high));
+    let process_type = e.call(0x0093_1850, &args![player]).u32();
+    e.call(0x0096_d470, &args![PROCESS_LISTS, player, process_type]);
+    e.call(0x0040_fba0, &args![PROCESS_LOCK]);
+    e.vcall(player, 0x1c4, &args![]);
+    let controller = e.call(0x0093_06d0, &args![player]).u32();
+    if controller != 0 {
+        let out = e.mem.alloc(4);
+        e.call(0x0070_c440, &args![controller, out]);
+        let value = e.call(0x004a_3a20, &args![out]).u32();
+        let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let caster = if block != 0 {
+            let at = e.call(SETTING_FLOAT_POINTER, &args![0x011e_0934u32]).u32();
+            let seconds = e.mem.f32(at);
+            e.call(0x0062_0850, &args![block, seconds, value]).u32()
+        } else {
+            0
+        };
+        e.mem.free(out);
+        e.mem.set_u32(player + 0x21c, caster);
+    } else {
+        e.mem.set_u32(player + 0x21c, 0);
+    }
+    e.call(0x0089_f780, &args![player, 0u32, 0u32, 0u32]);
+    e.call(0x0056_59f0, &args![player]);
+}
+
+// Translated from 009508b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Damages the equipment (`Actor::DamageEquipment` in the decompiler, the
+/// callee `00891360`) unless the player is in god mode (`IsGodMode`, which
+/// reads no `this`). Returns the callee's result, or false in god mode.
+pub fn fn_009508b0(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    first: u32,
+    amount: f32,
+    flag: u8,
+) -> bool {
+    if player_character_is_god_mode(e) != 0 {
+        return false;
+    }
+    e.call(0x0089_1360, &args![this, first, amount, flag])
+        .bool()
+}
+
+// Translated from 009508f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00898650(this, first, amount)` and then virtual slot `0x22c` with 0.
+pub fn fn_009508f0(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, amount: f32) {
+    e.call(0x0089_8650, &args![this, first, amount]);
+    e.vcall(this.addr(), 0x22c, &args![0u32]);
+}
+
+// Translated from 00950930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the animations of the player for one frame: the delta is the
+/// frame time (`0084d030` on the global timer object) times the player
+/// update multiplier (`VATS::GetPlayerUpdateMult`, Xbox PDB name of
+/// `009c8cc0`). Both animations (`GetAnimation(0)` and the first-person one
+/// at `+0x690`) get `Animation::Update(this, delta, -1.0)` (`00491180`), the
+/// process gets its slot `0x740` with the delta, and slot `0x178` of the
+/// player runs. A depth counter (`0x011e07a8`) is raised meanwhile.
+pub fn fn_00950930(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    let depth = e.global::<u8>(ANIMATION_UPDATE_DEPTH);
+    e.set_global(ANIMATION_UPDATE_DEPTH, depth.wrapping_add(1));
+    let frame = e.call(0x0084_d030, &args![TIMER_SOURCE_011F6394]).f64();
+    let multiplier = e.call(0x009c_8cc0, &args![OBJECT_011F2250]).f64();
+    let delta = (multiplier * frame) as f32;
+    let minus_one = e.global::<f32>(MINUS_ONE_FLOAT);
+    let animation = player_character_get_animation(e, this, 0);
+    if animation != 0 {
+        e.call(0x0049_1180, &args![animation, player, delta, minus_one]);
+    }
+    let first_person_animation = e.mem.u32(player + 0x690);
+    if first_person_animation != 0 {
+        e.call(
+            0x0049_1180,
+            &args![first_person_animation, player, delta, minus_one],
+        );
+    }
+    let process = process_of(e, this);
+    if process != 0 {
+        e.vcall(process, 0x740, &args![player, delta]);
+    }
+    e.vcall(player, 0x178, &args![]);
+    let depth = e.global::<u8>(ANIMATION_UPDATE_DEPTH);
+    e.set_global(ANIMATION_UPDATE_DEPTH, depth.wrapping_sub(1));
+}
+
+// Translated from 00950a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The animation to use: the inventory animation (`+0x6a0`) when there is
+/// one, else the first-person animation (`+0x690`) when the camera is in the
+/// first person and has one, else the player's own (`008b70d0`).
+pub fn fn_00950a10(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let player = this.addr();
+    let inventory = e.get(this, PlayerCharacter::pInventoryAnimation).addr();
+    if inventory != 0 {
+        return inventory;
+    }
+    let first_person = e.get(this, PlayerCharacter::p1stPersonAnimation).addr();
+    if e.mem.u8(player + 0x64a) == 0 && first_person != 0 {
+        return first_person;
+    }
+    e.call(0x008b_70d0, &args![player]).u32()
+}
+
+// Translated from 00950a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetAnimation` (Xbox PDB): the first-person animation
+/// (`+0x690`) when `first_person` is non-zero, else the player's own
+/// (`008b70d0`).
+pub fn player_character_get_animation(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    first_person: u8,
+) -> u32 {
+    if first_person != 0 {
+        e.get(this, PlayerCharacter::p1stPersonAnimation).addr()
+    } else {
+        e.call(0x008b_70d0, &args![this]).u32()
+    }
+}
+
+// Translated from 00950a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The biped to use: the first-person one (`+0x68c`) when the camera is in
+/// the first person and has one, else the player's own (`005d9f90`).
+pub fn fn_00950a90(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let player = this.addr();
+    let biped = e.get(this, PlayerCharacter::p1stPersonBipedAnim).addr();
+    if e.mem.u8(player + 0x64a) == 0 && biped != 0 {
+        biped
+    } else {
+        e.call(0x005d_9f90, &args![player]).u32()
+    }
+}
+
+// Translated from 00950ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetBiped(!result of 00524d10)`: the first-person biped when `00524d10`
+/// says no, the player's own otherwise.
+pub fn fn_00950ad0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let own = e.call(0x0052_4d10, &args![this]).bool();
+    player_character_get_biped(e, this, u8::from(!own))
+}
+
+// Translated from 00950b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetBiped` (Xbox PDB): the first-person biped (`+0x68c`)
+/// when `first_person` is non-zero, else the player's own (`005d9f90`).
+pub fn player_character_get_biped(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    first_person: u8,
+) -> u32 {
+    if first_person != 0 {
+        e.get(this, PlayerCharacter::p1stPersonBipedAnim).addr()
+    } else {
+        e.call(0x005d_9f90, &args![this]).u32()
+    }
+}
+
+// Translated from 00950b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::Is1stPersonBiped` (Xbox PDB): whether `biped` is the
+/// (non-null) first-person biped.
+pub fn player_character_is_1st_person_biped(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    biped: u32,
+) -> bool {
+    let own = e.get(this, PlayerCharacter::p1stPersonBipedAnim).addr();
+    own != 0 && own == biped
+}
+
+// Translated from 00950b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 3D of the camera: the first-person model (the `NiPointer` at `+0x694`)
+/// when the camera is in the first person and has one, else `0043fcd0`.
+pub fn fn_00950b60(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let player = this.addr();
+    if e.mem.u8(player + 0x64a) == 0 && pointer_target(e, player + 0x694) != 0 {
+        pointer_target(e, player + 0x694)
+    } else {
+        e.call(0x0043_fcd0, &args![player]).u32()
+    }
+}
+
+// Translated from 00950bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first-person model (`first_person` non-zero) or the player's own 3D
+/// (`0043fcd0`).
+pub fn fn_00950bb0(e: &mut Engine, this: Ptr<PlayerCharacter>, first_person: u8) -> u32 {
+    let player = this.addr();
+    if first_person != 0 {
+        pointer_target(e, player + 0x694)
+    } else {
+        e.call(0x0043_fcd0, &args![player]).u32()
+    }
+}
+
+// Translated from 00950be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetCurrent3D` (Xbox PDB): the player's own 3D
+/// (`0043fcd0`) when `00524d10` says yes, else the first-person model.
+pub fn player_character_get_current_3d(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let player = this.addr();
+    if e.call(0x0052_4d10, &args![player]).bool() {
+        e.call(0x0043_fcd0, &args![player]).u32()
+    } else {
+        pointer_target(e, player + 0x694)
+    }
+}
+
+// Translated from 00950c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::CloneInventory3D` (Xbox PDB). With `create` non-zero
+/// and no inventory model yet (the `NiPointer` at `+0x69c`), clones the
+/// player's own 3D into it: removes the forces and controllers, clones with
+/// a `NiCloningProcess`, culls it, gives it the properties and the matrix of
+/// the race, finds the nodes whose names the exe keeps and hides or shows
+/// them, builds an `Animation` (`+0x6a0`) from the idle files found next to
+/// the model (`Meshes` folder, the 11 idle names, plain and torch idles) and
+/// plays the first-person idle. With `create` 0 and a model present, destroys
+/// the animation, hides the two named nodes of the model, clears the pointer
+/// and destroys the object at `+0x6a4` (`00820bf0`). C++ exception unwinding
+/// and the stack cookie are not translated.
+pub fn player_character_clone_inventory_3d(e: &mut Engine, this: Ptr<PlayerCharacter>, create: u8) {
+    let player = this.addr();
+    let slot = player + 0x69c;
+    let present = pointer_target(e, slot) != 0;
+    if create != 0 {
+        if !present && clone_inventory_3d_create(e, this) {
+            return;
+        }
+    } else if present {
+        clone_inventory_3d_destroy(e, this);
+    }
+    pointer_target(e, slot);
+}
+
+/// The creating branch of `CloneInventory3D`. Returns true when it ended
+/// early (the model path has no folder), which skips the final
+/// `NiPointer` dereference.
+fn clone_inventory_3d_create(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    let player = this.addr();
+    let slot = player + 0x69c;
+    let saved_flag = fn_00951900(e);
+    fn_00951910(e, 1);
+    e.call(0x0097_4c30, &args![PROCESS_LISTS]);
+    e.call(0x0097_4420, &args![PROCESS_LISTS, 0.0f32]);
+    let controller = e.vcall(player, 0x1d0, &args![]).u32();
+    e.call(0x00cb_9650, &args![controller]);
+    let own = fn_00950bb0(e, this, 0);
+    e.call(0x00cb_9650, &args![own]);
+    let own = fn_00950bb0(e, this, 0);
+    let controllers = e.call(0x0043_b230, &args![own]).u32();
+    // `NiPointer` local: the controllers of the player's own 3D.
+    let kept_controllers = e.mem.alloc(4);
+    e.call(0x0063_3c90, &args![kept_controllers, controllers]);
+    e.call(0x00a5_c050, &args![own]);
+    // `NiCloningProcess` local, built with scale 1.0.
+    let cloning = e.mem.alloc(0x40);
+    e.call(0x004a_d050, &args![cloning, 1.0f32]);
+    let clone = e.call(0x00a5_d2c0, &args![own, cloning]).u32();
+    let clone_node = if clone != 0 {
+        e.vcall(clone, 0xc, &args![]).u32()
+    } else {
+        0
+    };
+    if clone_node != 0 {
+        let scene = e.call(0x0045_0b80, &args![1u32]).u32();
+        e.call(0x00b5_f150, &args![scene, clone_node, 0u32]);
+    }
+    let held = pointer_target(e, kept_controllers);
+    e.call(0x00a5_c000, &args![own, held]);
+    let clone_node = if clone != 0 {
+        e.vcall(clone, 0xc, &args![]).u32()
+    } else {
+        0
+    };
+    e.call(SMART_POINTER_ASSIGN, &args![slot, clone_node]);
+    let model = pointer_target(e, slot);
+    e.call(0x00a5_c050, &args![model]);
+    let model = pointer_target(e, slot);
+    e.call(0x0049_9160, &args![model]);
+    let property = e.call(0x0040_df90, &args![]).u32();
+    let model = pointer_target(e, slot);
+    e.call(0x00a5_b230, &args![model, property]);
+    let model = pointer_target(e, slot);
+    e.call(0x00a5_a040, &args![model]);
+    let model = pointer_target(e, slot);
+    e.call(0x00b6_bb30, &args![model, 1.0f32]);
+    let model = pointer_target(e, slot);
+    fn_00951940(e, this.cast(), model);
+    let model = pointer_target(e, slot);
+    e.call(0x0044_0460, &args![model, INVENTORY_MODEL_ARGUMENT]);
+    let model = pointer_target(e, slot);
+    let form = e.call(0x007a_f430, &args![player]).u32();
+    e.call(0x0060_62e0, &args![form, player, model]);
+    let matrix = e.mem.alloc(0x24);
+    let rotated_out = e.mem.alloc(0x24);
+    for word in 0..9u32 {
+        let value = e.mem.u32(LOAD_3D_MATRIX + 4 * word);
+        e.mem.set_u32(matrix + 4 * word, value);
+    }
+    let rotated = e
+        .call(0x0056_fac0, &args![player, rotated_out, matrix])
+        .u32();
+    let model = pointer_target(e, slot);
+    e.call(0x0043_fa80, &args![model, rotated]);
+    e.mem.free(rotated_out);
+    e.mem.free(matrix);
+    let block = e.call(0x00aa_13e0, &args![0x1c0u32]).u32();
+    let made = if block != 0 {
+        e.call(0x0064_9680, &args![block]).u32()
+    } else {
+        0
+    };
+    // `NiPointer` local holding the new object.
+    let holder = e.mem.alloc(4);
+    e.call(0x0063_3c90, &args![holder, made]);
+    let model = pointer_target(e, slot);
+    let name = e.call(0x008d_3f70, &args![]).u32();
+    let found = e.vcall(model, 0x9c, &args![name]).u32();
+    let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
+    if cast != 0 {
+        let held = pointer_target(e, holder);
+        e.vcall(cast, 0x104, &args![held]);
+    }
+    let model = pointer_target(e, slot);
+    let name = e.call(0x008d_3f80, &args![]).u32();
+    let found = e.vcall(model, 0x9c, &args![name]).u32();
+    let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
+    if cast != 0 {
+        let held = pointer_target(e, holder);
+        e.vcall(cast, 0x104, &args![held]);
+        e.call(0x0066_3050, &args![cast, 1u32]);
+    }
+    e.call(SMART_POINTER_ASSIGN, &args![holder, 0u32]);
+    // The children of the nodes named by `00951920` and `00499b70`.
+    for name_getter in [0u32, 1u32] {
+        let model = pointer_target(e, slot);
+        let name = if name_getter == 0 {
+            fn_00951920(e)
+        } else {
+            e.call(0x0049_9b70, &args![]).u32()
+        };
+        let found = e.vcall(model, 0x9c, &args![name]).u32();
+        let node = if found != 0 {
+            e.vcall(found, 0xc, &args![]).u32()
+        } else {
+            0
+        };
+        if node != 0 {
+            let mut index = 0u32;
+            while index < e.call(0x0043_b480, &args![node]).u32() {
+                e.vcall(node, 0xf0, &args![index]);
+                index += 1;
+            }
+        }
+    }
+    let model = pointer_target(e, slot);
+    e.call(0x00b6_8770, &args![model, 0u32, 0.0f32, 0u32, 0.0f32, 0u32]);
+    let block = e.call(OPERATOR_NEW, &args![0x13cu32]).u32();
+    let animation = if block != 0 {
+        e.call(0x0048_f810, &args![block]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(player + 0x6a0, animation);
+    e.call(0x007a_f430, &args![player]);
+    let model_name = e.call(0x0057_15d0, &args![player]).u32();
+    let folder = e.mem.alloc(0x104);
+    e.call(
+        0x0040_6d00,
+        &args![folder, 0x104u32, FORMAT_MODEL_PATH, model_name],
+    );
+    let separator = e.call(0x0040_ab30, &args![folder, 0x5cu32]).u32();
+    if separator == 0 {
+        e.mem.free(folder);
+        e.call(0x0045_cec0, &args![holder]);
+        e.call(0x004a_d270, &args![cloning]);
+        e.call(0x0045_cec0, &args![kept_controllers]);
+        e.mem.free(holder);
+        e.mem.free(cloning);
+        e.mem.free(kept_controllers);
+        return true;
+    }
+    let remaining = 0x104u32.wrapping_sub(separator.wrapping_sub(folder));
+    e.call(0x0040_6d30, &args![separator, remaining, TEXT_MT_IDLE]);
+    let path = e.mem.alloc(0x104);
+    e.call(
+        0x0040_6d00,
+        &args![path, 0x104u32, FORMAT_DATA_PATH, TEXT_MESHES, folder],
+    );
+    let model_name = e.call(0x0057_15d0, &args![player]).u32();
+    let loader = e.global::<u32>(MODEL_LOADER_POINTER);
+    let files = e
+        .call(0x0044_7300, &args![loader, path, model_name, 0u32])
+        .u32();
+    e.mem.set_u8(separator, 0);
+    for index in 1..12u32 {
+        let idle_name = e.mem.u32(IDLE_NAME_TABLE + 4 * index);
+        for (path_format, name_format) in [
+            (FORMAT_IDLE_PATH, FORMAT_IDLE_NAME),
+            (FORMAT_TORCH_IDLE_PATH, FORMAT_TORCH_IDLE_NAME),
+        ] {
+            e.call(
+                0x0040_6d00,
+                &args![path, 0x104u32, path_format, TEXT_MESHES, folder, idle_name],
+            );
+            let files_object = e.call(0x0050_f6e0, &args![]).u32();
+            let exists = e
+                .call(
+                    0x00af_e0d0,
+                    &args![files_object, path, 0u32, 0u32, 0xffff_ffffu32],
+                )
+                .u32();
+            if exists != 0 {
+                let copy = e.call(OPERATOR_NEW, &args![0x104u32]).u32();
+                let model_name = e.call(0x0057_15d0, &args![player]).u32();
+                e.call(0x0040_6d30, &args![copy, 0x104u32, model_name]);
+                let backslash = e.call(0x0040_ab30, &args![copy, 0x5cu32]).u32();
+                if backslash != 0 {
+                    let name_at = backslash + 1;
+                    let remaining =
+                        0x104u32.wrapping_sub(name_at.wrapping_sub(copy).wrapping_add(1));
+                    e.call(
+                        0x0040_6d00,
+                        &args![name_at, remaining, name_format, idle_name],
+                    );
+                    let word = e.mem.alloc(4);
+                    e.mem.set_u32(word, copy);
+                    e.call(0x0090_5820, &args![files, word]);
+                    e.mem.free(word);
+                }
+            }
+        }
+    }
+    let animation = e.mem.u32(player + 0x6a0);
+    let model = pointer_target(e, slot);
+    e.call(0x0048_ffd0, &args![animation, files, model, player, 1u32]);
+    let extra = e.call(0x005d_43c0, &args![player]).u32();
+    e.call(0x0041_8250, &args![extra]);
+    let model = pointer_target(e, slot);
+    e.vcall(model, 0xbc, &args![]);
+    if e.call(0x008d_8520, &args![player]).u32() != 0 {
+        let process = e.call(0x008d_8520, &args![player]).u32();
+        e.vcall(process, 0x580, &args![1u32, 0u32, 0u32]);
+    }
+    fn_00951910(e, saved_flag);
+    let model = pointer_target(e, slot);
+    let name = fn_00951930(e);
+    let found = e.vcall(model, 0x9c, &args![name]).u32();
+    if found != 0 {
+        e.call(0x0045_0f90, &args![found, 1u32]);
+    }
+    e.mem.free(path);
+    e.mem.free(folder);
+    e.call(0x0045_cec0, &args![holder]);
+    e.call(0x004a_d270, &args![cloning]);
+    e.call(0x0045_cec0, &args![kept_controllers]);
+    e.mem.free(holder);
+    e.mem.free(cloning);
+    e.mem.free(kept_controllers);
+    false
+}
+
+/// The destroying branch of `CloneInventory3D`.
+fn clone_inventory_3d_destroy(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    let slot = player + 0x69c;
+    let animation = e.get(this, PlayerCharacter::pInventoryAnimation).addr();
+    if animation != 0 {
+        e.call(DELETE_ANIMATION, &args![animation, 1u32]);
+    }
+    e.set(this, PlayerCharacter::pInventoryAnimation, Ptr::NULL);
+    for name_getter in [0x008d_3f70u32, 0x008d_3f80u32] {
+        let model = pointer_target(e, slot);
+        let name = e.call(name_getter, &args![]).u32();
+        let found = e.vcall(model, 0x9c, &args![name]).u32();
+        let cast = e.call(0x0065_3270, &args![CAST_TYPE_011D5BF8, found]).u32();
+        if cast != 0 {
+            e.call(0x0066_3050, &args![cast, 1u32]);
+        }
+    }
+    e.call(SMART_POINTER_ASSIGN, &args![slot, 0u32]);
+    let object = e.call(0x0082_0bf0, &args![player]).u32();
+    if object != 0 {
+        e.vcall(object, 0, &args![1u32]);
+        e.call(0x0092_9220, &args![player, 0u32]);
+    }
+}
+
+// Translated from 00951900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `0x011fa00c` (set around `CloneInventory3D`).
+pub fn fn_00951900(e: &mut Engine) -> u8 {
+    e.global::<u8>(INVENTORY_CLONE_FLAG)
+}
+
+// Translated from 00951910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte at `0x011fa00c`.
+pub fn fn_00951910(e: &mut Engine, value: u8) {
+    e.set_global(INVENTORY_CLONE_FLAG, value);
+}
+
+// Translated from 00951920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `0x011c623c` (a node name).
+pub fn fn_00951920(e: &mut Engine) -> u32 {
+    e.global::<u32>(NODE_NAME_011C623C)
+}
+
+// Translated from 00951930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `0x011c6274` (a node name).
+pub fn fn_00951930(e: &mut Engine) -> u32 {
+    e.global::<u32>(NODE_NAME_011C6274)
+}
+
+// Translated from 00951940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Strips a node tree for the inventory view: for `node` (a `NiNode`) and,
+/// recursively, every child: removes the controllers that `0043b300` does
+/// not accept (the table at `0x011f36ec`), clears the collision object
+/// (`NiAVObject::SetCollisionObject`, `0062bc90` with 0), and un-culls
+/// the child (`00450f90(child, 0)`); recursion goes through the child's
+/// virtual slot `0xc`. `ECX` (`this`) is not used.
+pub fn fn_00951940(e: &mut Engine, _this: Ptr, node: u32) {
+    if node == 0 {
+        return;
+    }
+    let mut controller = e.call(0x0043_b230, &args![node]).u32();
+    while controller != 0 {
+        let next = e.call(0x004a_8a90, &args![controller]).u32();
+        if !e
+            .call(0x0043_b300, &args![0x011f_36ecu32, controller])
+            .bool()
+        {
+            e.call(0x00a5_c480, &args![node, controller]);
+        }
+        controller = next;
+    }
+    e.call(0x0062_bc90, &args![node, 0u32]);
+    let mut index = 0u32;
+    while index < e.call(0x0043_b480, &args![node]).u32() {
+        let child = e.call(0x0043_b4a0, &args![node, index]).u32();
+        if child != 0 {
+            e.call(0x0045_0f90, &args![child, 0u32]);
+            let child_node = e.vcall(child, 0xc, &args![]).u32();
+            if child_node != 0 {
+                fn_00951940(e, _this, child_node);
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00951a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Switches the player between the first-person model and the player's own
+/// 3D: `hide_first_person` non-zero shows the own 3D. Does nothing unless
+/// both models exist, and (when `hide_first_person` is non-zero) the player
+/// cannot use the temporary camera (slot `0x22c`, `bTemp3rdPerson`).
+/// Culls and un-culls the two models, picks the scope visibility from the
+/// weapon (iron sights), places the first-person model's matrix, moves the
+/// weapon sounds (idle and attack handles) between the two, swaps the
+/// animation controllers' sequences when `008c4560` says so, lets the
+/// lighting follow (`008b0bd0`) and refreshes the process (slot `0x580`).
+/// C++ exception unwinding is not translated.
+pub fn fn_00951a10(e: &mut Engine, this: Ptr<PlayerCharacter>, hide_first_person: u8) {
+    let player = this.addr();
+    let flag = hide_first_person;
+    if fn_00950bb0(e, this, 1) == 0 || fn_00950bb0(e, this, 0) == 0 {
+        return;
+    }
+    if flag != 0
+        && (e.vcall(player, 0x22c, &args![0u32]).bool()
+            || e.get(this, PlayerCharacter::bTemp3rdPerson) != 0)
+    {
+        return;
+    }
+    let own = fn_00950bb0(e, this, 0);
+    let own_flag = e.call(0x0045_6610, &args![own]).u8();
+    let first = fn_00950bb0(e, this, 1);
+    let first_flag = e.call(0x0045_6610, &args![first]).u8();
+    if own_flag != first_flag {
+        if flag == 0 {
+            let own = fn_00950bb0(e, this, 0);
+            if e.call(0x0045_6610, &args![own]).u8() == 0 {
+                return;
+            }
+        }
+        if flag != 0 {
+            let first = fn_00950bb0(e, this, 1);
+            if e.call(0x0045_6610, &args![first]).u8() == 0 {
+                e.mem.set_u8(player + 0x64b, 0);
+                return;
+            }
+        }
+    }
+    let own = fn_00950bb0(e, this, 0);
+    e.call(0x0045_0f90, &args![own, u32::from(flag)]);
+    let mut show_scope = false;
+    let mut handled = false;
+    if flag != 0 && e.mem.u8(player + 0x64f) != 0 && e.call(0x008b_bc10, &args![player]).bool() {
+        let process = process_of(e, this);
+        if e.vcall(process, 0x148, &args![]).u32() != 0 {
+            let process = process_of(e, this);
+            let item = e.vcall(process, 0x148, &args![]).u32();
+            let form = e.call(0x0044_ddc0, &args![item]).u32();
+            let form = e.call(0x0050_4e60, &args![form]).u32();
+            if e.call(0x0048_cee0, &args![form]).u32() != 0 {
+                handled = true;
+                let process = process_of(e, this);
+                let item = e.vcall(process, 0x148, &args![]).u32();
+                let form = e.call(0x0044_ddc0, &args![item]).u32();
+                let local = e.mem.alloc(4);
+                e.mem.set_f32(local, 0.0);
+                if !e.call(0x004a_d030, &args![form]).bool() {
+                    show_scope = true;
+                } else {
+                    let process = process_of(e, this);
+                    let item = e.vcall(process, 0x148, &args![]).u32();
+                    if e.call(0x004b_d8d0, &args![item, 0xeu32, local]).bool() {
+                        show_scope = true;
+                    }
+                }
+                e.mem.free(local);
+            }
+        }
+    }
+    if show_scope {
+        e.call(0x0070_9c40, &args![1u32]);
+    }
+    if !handled {
+        let first = fn_00950bb0(e, this, 1);
+        e.call(0x0045_0f90, &args![first, u32::from(flag == 0)]);
+    }
+    e.mem.set_u8(player + 0x64b, u8::from(flag == 0));
+    if flag != 0 {
+        let own = fn_00950bb0(e, this, 0);
+        let argument = e.vcall(player, 0x1f4, &args![]).u32();
+        e.call(0x0044_0460, &args![own, argument]);
+        let rotation = e.mem.alloc(0x24);
+        let rotated_out = e.mem.alloc(0x24);
+        e.call(0x0068_15c0, &args![rotation]);
+        let angle = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
+        e.call(0x004a_0c90, &args![rotation, angle]);
+        let rotated = e
+            .call(0x0056_fac0, &args![player, rotated_out, rotation])
+            .u32();
+        e.call(0x0043_fa80, &args![own, rotated]);
+        e.set_global(INVENTORY_ALPHA, 1.0f32);
+        e.call(0x008c_4640, &args![player]);
+        let animation = player_character_get_animation(e, this, 0);
+        if animation != 0 {
+            e.call(0x0049_3900, &args![animation, player]);
+        } else {
+            let vector = e.mem.alloc(12);
+            e.call(0x0043_d410, &args![vector, 0.0f32, 0u32, 0u32]);
+            e.call(0x00a5_9c60, &args![own, vector]);
+            e.mem.free(vector);
+        }
+        e.mem.free(rotated_out);
+        e.mem.free(rotation);
+    }
+    // The weapon sounds: the idle and the attack handle of the extra data.
+    let handle = e.mem.alloc(12);
+    e.call(0x0041_a250, &args![handle]);
+    for getter in [0x0041_89c0u32, 0x0041_8a00u32] {
+        let extra = e.call(0x005d_43c0, &args![player]).u32();
+        e.call(getter, &args![extra, handle]);
+        if e.call(0x00ad_8ce0, &args![handle]).bool() {
+            e.call(0x00ad_8fa0, &args![handle, u32::from(flag != 0)]);
+        }
+    }
+    e.call(0x0048_3710, &args![handle]);
+    e.mem.free(handle);
+    e.vcall(player, 0x210, &args![0u32]);
+    if e.call(0x008c_4560, &args![player]).bool() {
+        let own_animation = player_character_get_animation(e, this, u8::from(flag == 0));
+        let other_animation = player_character_get_animation(e, this, flag);
+        let mut sequences = [0u32; 2];
+        for (index, animation) in [own_animation, other_animation].into_iter().enumerate() {
+            let manager = e.call(0x0049_6940, &args![animation]).u32();
+            let manager = e.call(0x0053_7bd0, &args![manager]).u32();
+            let name = e.call(0x0049_9b70, &args![]).u32();
+            let found = e.vcall(manager, 0x8c, &args![name]).u32();
+            sequences[index] = if found != 0 {
+                e.vcall(found, 0xc, &args![]).u32()
+            } else {
+                0
+            };
+        }
+        let (from, to) = (sequences[0], sequences[1]);
+        if from != 0 && to != 0 {
+            let mut index = 0u32;
+            while index < e.call(0x0043_b480, &args![from]).u32() {
+                let pointer = e.mem.alloc(4);
+                e.call(0x0063_3c90, &args![pointer, 0u32]);
+                e.vcall(from, 0xec, &args![index, pointer]);
+                if e.call(0x0052_aa80, &args![pointer, 0u32]).bool() {
+                    let target = pointer_target(e, pointer);
+                    e.vcall(to, 0xdc, &args![target, 1u32]);
+                }
+                e.call(0x0045_cec0, &args![pointer]);
+                e.mem.free(pointer);
+                index += 1;
+            }
+        }
+    }
+    let mut lighting = e.vcall(player, 0x1d0, &args![]).u32();
+    if flag != 0 {
+        lighting = e.call(0x0043_b4a0, &args![lighting, 0u32]).u32();
+    }
+    e.call(0x0048_3710, &args![player]);
+    e.call(0x008b_0bd0, &args![player, lighting]);
+    let process = e.call(0x008d_8520, &args![player]).u32();
+    e.vcall(process, 0x580, &args![1u32, 1u32, 0u32]);
+}
+
+// Translated from 009520f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Plays an animation group of the first-person animation: `group` (the
+/// high bit is dropped) must have a type (`005f2440` not `0xff`). If the
+/// type's table entry says so and the sequences of the first-person and the
+/// player's animation can be synchronised (`00495da0`), that is all.
+/// Otherwise plays the group itself when loaded, else its iron-sights
+/// variant `group - 3` when loaded, else the group the player's own
+/// selection returns (`00897910`) when its type is the same, or the
+/// iron-sights variant of it.
+pub fn fn_009520f0(e: &mut Engine, this: Ptr<PlayerCharacter>, group: u16, argument: u32) {
+    let player = this.addr();
+    let group = if group & 0x8000 != 0 {
+        group & 0x7fff
+    } else {
+        group
+    };
+    let group_type = e.call(0x005f_2440, &args![u32::from(group)]).u32();
+    if group_type == 0xff {
+        return;
+    }
+    let animation = player_character_get_animation(e, this, 1);
+    let entry = group_type.wrapping_mul(0x24);
+    let mut synchronised = false;
+    if e.mem.u8(GROUP_TYPE_TABLE_FLAG.wrapping_add(entry)) != 0 {
+        let own = player_character_get_animation(e, this, 0);
+        let word = e.mem.u32(GROUP_TYPE_TABLE_WORD.wrapping_add(entry));
+        let sequence = e.call(0x0049_1040, &args![own, word]).u32();
+        synchronised = e
+            .call(0x0049_5da0, &args![animation, sequence, u32::from(group)])
+            .u32()
+            != 0;
+    }
+    if synchronised {
+        return;
+    }
+    if e.call(0x0049_4710, &args![animation, u32::from(group)])
+        .bool()
+    {
+        e.call(
+            0x0049_4740,
+            &args![
+                animation,
+                u32::from(group),
+                argument,
+                0xffff_ffffu32,
+                0xffff_ffffu32
+            ],
+        );
+        return;
+    }
+    let lower = u32::from(group).wrapping_sub(3);
+    if e.call(0x005f_2720, &args![u32::from(group)]).bool()
+        && e.call(0x0049_4710, &args![animation, lower]).bool()
+    {
+        e.call(
+            0x0049_4740,
+            &args![animation, lower, argument, 0xffff_ffffu32, 0xffff_ffffu32],
+        );
+        return;
+    }
+    let weapon = e.call(0x008a_1710, &args![player, animation]).u32();
+    let chosen = e
+        .call(
+            0x0089_7910,
+            &args![player, group_type, 0u32, u32::from(weapon == 0)],
+        )
+        .u16();
+    let chosen_type = e.call(0x005f_2440, &args![u32::from(chosen)]).u32();
+    let plays = chosen_type == group_type
+        || (e.call(0x005f_2750, &args![group_type]).bool()
+            && e.call(0x005f_2440, &args![u32::from(chosen)]).u32() == group_type.wrapping_sub(3));
+    if plays {
+        e.call(
+            0x0049_4740,
+            &args![
+                animation,
+                u32::from(chosen),
+                argument,
+                0xffff_ffffu32,
+                0xffff_ffffu32
+            ],
+        );
+    }
+}
+
+// Translated from 00952290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves the first-person zoom factor (`0x011a3b68`) towards its target and
+/// orients the first-person model. The target is the setting `0x011cdcb0`,
+/// or `1.0` when the current animation group's type is in `0x18..=0xa8` (and
+/// the animation action is not 4), the Pipboy is active, or the iron sights
+/// are up. The factor moves by `frame time / duration * (target - factor)`
+/// (duration: setting `0x011cd620`, or `0x011cde38` when the target is
+/// `1.0`) and is clamped to the target. The look angle `0x011e0770` is the
+/// angle between the player's look direction and the horizontal
+/// (`004f6e40` of the clamped dot product), scaled by `1 - target`; the
+/// matrix of the model (or of the node `0x011e07cc`) is rebuilt from it.
+pub fn fn_00952290(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    let at = e
+        .call(SETTING_FLOAT_POINTER, &args![ZOOM_TARGET_SETTING])
+        .u32();
+    let mut target = e.mem.f32(at);
+    let animation = player_character_get_animation(e, this, 0);
+    if animation == 0 {
+        return;
+    }
+    let group = e.call(0x0043_01b0, &args![animation, 4u32]).u16();
+    let group_type = e.call(0x005f_2440, &args![u32::from(group)]).i32();
+    let action = e.call(0x008a_7570, &args![player]).i32();
+    if (action != 4 && (0x18..=0xa8).contains(&group_type))
+        || (action != 4 && e.call(0x0096_7ae0, &args![player]).bool())
+        || e.call(0x008b_bc10, &args![player]).bool()
+    {
+        target = 1.0;
+    }
+    let mut zoom = e.global::<f32>(ZOOM_FACTOR);
+    if target != zoom {
+        let at = e
+            .call(SETTING_FLOAT_POINTER, &args![ZOOM_IN_SECONDS_SETTING])
+            .u32();
+        let mut duration = e.mem.f32(at);
+        if f64::from(target) == e.global::<f64>(ONE_DOUBLE) {
+            let at = e
+                .call(SETTING_FLOAT_POINTER, &args![ZOOM_OUT_SECONDS_SETTING])
+                .u32();
+            duration = e.mem.f32(at);
+        }
+        let distance = f64::from(target) - f64::from(zoom);
+        let frame = e.call(0x0084_d030, &args![TIMER_SOURCE_011F6394]).f64();
+        let step = (frame / f64::from(duration) * distance) as f32;
+        zoom = (f64::from(zoom) + f64::from(step)) as f32;
+        e.set_global(ZOOM_FACTOR, zoom);
+        let zero = e.global::<f64>(ZERO_DOUBLE);
+        if (f64::from(step) < zero && target > zoom) || (f64::from(step) > zero && target < zoom) {
+            e.set_global(ZOOM_FACTOR, target);
+        }
+        target = e.global::<f32>(ZOOM_FACTOR);
+    }
+    // Matrices (9 floats), vectors (3 floats) and the temporaries the game
+    // keeps on its stack.
+    let matrix_a = e.mem.alloc(0x24);
+    let matrix_b = e.mem.alloc(0x24);
+    let matrix_c = e.mem.alloc(0x24);
+    let matrix_d = e.mem.alloc(0x24);
+    let scratch_1 = e.mem.alloc(0x24);
+    let scratch_2 = e.mem.alloc(0x24);
+    let up = e.mem.alloc(12);
+    let flat = e.mem.alloc(12);
+    let rotated_up = e.mem.alloc(12);
+    e.call(0x0068_15c0, &args![matrix_a]);
+    e.call(0x0068_15c0, &args![matrix_b]);
+    let pitch = e.vcall(player, 0x2bc, &args![0u32]).f64() as f32;
+    let node = e.global::<u32>(NODE_BY_EAD0_SLOT);
+    if node != 0 {
+        let look = e.call(0x0093_1d70, &args![player]).f32();
+        e.call(0x0052_4ac0, &args![matrix_a, look]);
+    } else {
+        e.call(0x004a_0c90, &args![matrix_a, pitch]);
+        let look = e.call(0x0093_1d70, &args![player]).f32();
+        e.call(0x0052_4ac0, &args![matrix_b, look]);
+        let product = e
+            .call(0x0043_f8d0, &args![matrix_a, scratch_1, matrix_b])
+            .u32();
+        copy_words(e, product, matrix_a, 9);
+    }
+    e.call(0x0041_6870, &args![up, 0.0f32, 1.0f32, 0.0f32]);
+    e.call(0x0068_15c0, &args![flat]);
+    let rotated = e.call(0x004b_4500, &args![matrix_a, rotated_up, up]).u32();
+    copy_words(e, rotated, up, 3);
+    copy_words(e, up, flat, 3);
+    e.mem.set_f32(flat + 8, 0.0);
+    let mut dot = e.call(0x004b_6190, &args![up, flat]).f32();
+    if f64::from(dot) < e.global::<f64>(MINUS_ONE_DOUBLE) {
+        dot = e.global::<f32>(MINUS_ONE_FLOAT);
+    }
+    if f64::from(dot) > e.global::<f64>(ONE_DOUBLE) {
+        dot = 1.0;
+    }
+    let angle = e.call(0x004f_6e40, &args![dot]).f32();
+    e.set_global(LOOK_ANGLE, angle);
+    let scaled = ((1.0 - f64::from(target)) * f64::from(angle)) as f32;
+    e.set_global(LOOK_ANGLE, scaled);
+    if e.mem.f32(up + 8) < e.mem.f32(flat + 8) {
+        let flipped = (f64::from(scaled) * e.global::<f64>(MINUS_ONE_DOUBLE)) as f32;
+        e.set_global(LOOK_ANGLE, flipped);
+    }
+    e.call(0x0068_15c0, &args![matrix_c]);
+    e.call(0x0068_15c0, &args![matrix_d]);
+    let angle = e.global::<f32>(LOOK_ANGLE);
+    e.call(0x0052_4ac0, &args![matrix_c, angle]);
+    copy_words(e, matrix_a, matrix_d, 9);
+    let product = e
+        .call(0x0043_f8d0, &args![matrix_d, scratch_2, matrix_c])
+        .u32();
+    copy_words(e, product, matrix_d, 9);
+    if node != 0 {
+        e.call(0x0043_fa80, &args![node, matrix_d]);
+        e.call(0x004a_0c90, &args![matrix_a, pitch]);
+        let model = pointer_target(e, player + 0x694);
+        e.call(0x0043_fa80, &args![model, matrix_a]);
+    } else {
+        let model = pointer_target(e, player + 0x694);
+        e.call(0x0043_fa80, &args![model, matrix_a]);
+    }
+    for block in [
+        matrix_a, matrix_b, matrix_c, matrix_d, scratch_1, scratch_2, up, flat, rotated_up,
+    ] {
+        e.mem.free(block);
+    }
+}
+
+/// Copies `count` words from `from` to `to` (`REP MOVSD`).
+fn copy_words(e: &mut Engine, from: u32, to: u32, count: u32) {
+    for word in 0..count {
+        let value = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to + 4 * word, value);
+    }
+}
+
+// Translated from 009526a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetGodMode` (Xbox PDB): stores the byte `0x011e07ba`.
+pub fn player_character_set_god_mode(e: &mut Engine, value: u8) {
+    e.set_global(GOD_MODE_BYTE, value);
+}
+
+// Translated from 009526b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsGodMode` (Xbox PDB): 1 when the boolean setting
+/// `0x011e0894` is on, else the byte `0x011e07ba`.
+pub fn player_character_is_god_mode(e: &mut Engine) -> u8 {
+    let at = e.call(0x0040_8d60, &args![GOD_MODE_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        1
+    } else {
+        e.global::<u8>(GOD_MODE_BYTE)
+    }
+}
+
+// Translated from 009526e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetDemigodMode` (Xbox PDB): stores the byte `0x011e07bb`.
+pub fn player_character_set_demigod_mode(e: &mut Engine, value: u8) {
+    e.set_global(DEMIGOD_MODE_BYTE, value);
+}
+
+// Translated from 009526f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsDemigodMode` (Xbox PDB): 1 when the boolean setting
+/// `0x011e0894` is on, else the byte `0x011e07bb`.
+pub fn player_character_is_demigod_mode(e: &mut Engine) -> u8 {
+    let at = e.call(0x0040_8d60, &args![GOD_MODE_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        1
+    } else {
+        e.global::<u8>(DEMIGOD_MODE_BYTE)
+    }
+}
+
+// Translated from 00952720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `IsGodMode()` (`this` is not used).
+pub fn fn_00952720(e: &mut Engine, _this: Ptr) -> u8 {
+    player_character_is_god_mode(e)
+}
+
+// Translated from 00952730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor value `actor_value` may change by `delta`. Always true
+/// unless slot `0x10` of the `MagicTarget` sub-object (`+0x94`) says yes;
+/// then a loss (`delta < 0`) is refused for actor value `0x10` and `0x19` to
+/// `0x1f`, and a gain (`delta > 0`) for `0x36`.
+pub fn fn_00952730(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor_value: i32,
+    delta: f32,
+) -> bool {
+    let target = this.addr() + MAGIC_TARGET;
+    if !e.vcall(target, 0x10, &args![]).bool() {
+        return true;
+    }
+    let zero = e.global::<f64>(ZERO_DOUBLE);
+    let delta = f64::from(delta);
+    if delta < zero {
+        !(actor_value == 0x10 || (actor_value > 0x18 && actor_value <= 0x1f))
+    } else {
+        !(delta > zero && actor_value == 0x36)
+    }
+}
+
+// Translated from 009527b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds every item of the list starting at `list` (a `BSSimpleList` node)
+/// to the player's topic list with `00952830(item, 0, 1)` (no refresh each
+/// time), and refreshes once (`0061a5a0(1, list head)`) if any was new.
+pub fn fn_009527b0(e: &mut Engine, this: Ptr<PlayerCharacter>, list: u32) {
+    if list == 0 {
+        return;
+    }
+    let mut added = false;
+    let mut node = list;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if fn_00952830(e, this, item, 0, 1) {
+            added = true;
+        }
+        node = list_next(e, node);
+    }
+    if added {
+        let head = e.call(0x0046_4e30, &args![this]).u32();
+        e.call(0x0061_a5a0, &args![1u32, head]);
+    }
+}
+
+// Translated from 00952830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `item` to the player's topic list (`+0x6a8`, whose head `00464e30`
+/// returns) unless it is null or already in it (`005ae3d0` appends it);
+/// when `refresh` is non-zero then refreshes the list (`0061a5a0(1, head)`).
+/// Returns whether it was added. The fourth word is not read.
+pub fn fn_00952830(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    item: u32,
+    refresh: u8,
+    _unused_3: u32,
+) -> bool {
+    if item == 0 {
+        return false;
+    }
+    let mut node = e.call(0x0046_4e30, &args![this]).u32();
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == item {
+            return false;
+        }
+        node = list_next(e, node);
+    }
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, item);
+    e.call(0x005a_e3d0, &args![this.addr() + TOPIC_LIST, word]);
+    e.mem.free(word);
+    if refresh != 0 {
+        let head = e.call(0x0046_4e30, &args![this]).u32();
+        e.call(0x0061_a5a0, &args![1u32, head]);
+    }
+    true
+}
+
+// Translated from 009528c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::AddQuestStageItem` (Xbox PDB): appends `item` to the
+/// quest log (`+0x6b0`). Returns false for a null item, or when the log
+/// already holds it and `0060d5e0` refuses the item's quest; otherwise
+/// true. When scripts are processed (`005ac740`) and `0060fd70(item)` says
+/// so, plays menu sound 9 and, if the item's quest is the player's
+/// (`005cbb50`) and has a parent world, passes that to `0060c9c0`.
+pub fn player_character_add_quest_stage_item(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    item: u32,
+) -> bool {
+    if item == 0 {
+        return false;
+    }
+    let player = this.addr();
+    let mut node = e.call(0x0060_da90, &args![player]).u32();
+    let mut _same_quest = false;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let entry = e.mem.u32(item_slot);
+        node = list_next(e, node);
+        if entry == item {
+            let quest = e.call(0x005e_3fa0, &args![entry]).u32();
+            if !e.call(0x0060_d5e0, &args![quest]).bool() {
+                return false;
+            }
+        }
+        let entry_quest = e.call(0x005e_3fa0, &args![entry]).u32();
+        let item_quest = e.call(0x005e_3fa0, &args![item]).u32();
+        if entry_quest == item_quest {
+            _same_quest = true;
+        }
+    }
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, item);
+    e.call(0x005a_e3d0, &args![player + QUEST_LOG_LIST, word]);
+    e.mem.free(word);
+    if !e.call(0x005a_c740, &args![]).bool() {
+        return true;
+    }
+    if e.call(0x0060_fd70, &args![item]).bool() {
+        e.call(0x0070_6f30, &args![9u32]);
+        let quest = e.call(0x005e_3fa0, &args![item]).u32();
+        let own = e.global::<u32>(PLAYER_POINTER);
+        let own_quest = e.call(0x005c_bb50, &args![own]).u32();
+        if quest == own_quest && e.call(0x004f_d380, &args![item]).u32() != 0 {
+            let parent = e.call(0x004f_d380, &args![item, 1u32]).u32();
+            e.call(0x0060_c9c0, &args![parent]);
+        }
+    }
+    true
+}
+
+// Translated from 009529d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetActiveQuest` (Xbox PDB): stores `pActiveQuest`
+/// (`+0x6b8`) when it differs; clearing it (a null quest) also clears the
+/// quest targets (`00470470` on `+0x6c4`).
+pub fn player_character_set_active_quest(e: &mut Engine, this: Ptr<PlayerCharacter>, quest: u32) {
+    let player = this.addr();
+    if quest != e.get(this, PlayerCharacter::pActiveQuest).addr() {
+        e.set(this, PlayerCharacter::pActiveQuest, Ptr::new(quest));
+        if quest == 0 {
+            e.call(LIST_CLEAR, &args![player + QUEST_TARGET_LIST]);
+        }
+    }
+}
+
+// Translated from 00952a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `target` to the list `0079bc30` returns when it is not in it yet and
+/// `005d43e0` of its `0044edb0` has a non-empty list (`008256d0`); if
+/// the `0044edb0` of `target` is the active quest's (`+0x6b8`), calls
+/// `005ec500(target, player + 0x6c4)`.
+pub fn fn_00952a20(e: &mut Engine, this: Ptr<PlayerCharacter>, target: u32) {
+    let player = this.addr();
+    let mut node = e.call(0x0079_bc30, &args![player]).u32();
+    let index = e.call(0x0044_edb0, &args![target]).u32();
+    let mut _seen_index = false;
+    let mut present = false;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let entry = e.mem.u32(item_slot);
+        if target == entry {
+            present = true;
+            break;
+        }
+        if !_seen_index && e.call(0x0044_edb0, &args![entry]).u32() == index {
+            _seen_index = true;
+        }
+        node = list_next(e, node);
+    }
+    let owner = e.call(0x0044_edb0, &args![target]).u32();
+    let mut worth_adding = false;
+    if e.call(0x005d_43e0, &args![owner]).u32() != 0 {
+        let owner = e.call(0x0044_edb0, &args![target]).u32();
+        let list = e.call(0x005d_43e0, &args![owner]).u32();
+        worth_adding = !e.call(LIST_IS_EMPTY, &args![list]).bool();
+    }
+    if worth_adding && !present {
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, target);
+        let list = e.call(0x0079_bc30, &args![player]).u32();
+        e.call(0x005a_e3d0, &args![list, word]);
+        e.mem.free(word);
+    }
+    let owner = e.call(0x0044_edb0, &args![target]).u32();
+    if owner == e.get(this, PlayerCharacter::pActiveQuest).addr() {
+        e.call(0x005e_c500, &args![target, player + QUEST_TARGET_LIST]);
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2410,6 +3993,97 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00950090, fn_00950090(Ptr) -> u8),
         entry!(0x009500a0, player_character_stop_vanity_mode(Ptr)),
+        entry!(
+            0x00950110,
+            player_character_set_first_person(Ptr<PlayerCharacter>, u8) -> bool
+        ),
+        entry!(
+            0x00950290,
+            player_character_update_first_person_zoom(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x00950340,
+            player_character_force_temp_3rd_person(Ptr<PlayerCharacter>, u8) -> bool
+        ),
+        entry!(
+            0x009503d0,
+            player_character_update_temp_3rd_person(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x00950460,
+            player_character_force_temp_1st_person(Ptr<PlayerCharacter>, u8) -> bool
+        ),
+        entry!(
+            0x00950530,
+            player_character_update_temp_1st_person(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00950610, fn_00950610(Ptr<PlayerCharacter>, f32) -> f32),
+        entry!(
+            0x00950660,
+            player_character_resurrect(Ptr<PlayerCharacter>, u32, u32, u32)
+        ),
+        entry!(
+            0x009508b0,
+            fn_009508b0(Ptr<PlayerCharacter>, u32, f32, u8) -> bool
+        ),
+        entry!(0x009508f0, fn_009508f0(Ptr<PlayerCharacter>, u32, f32)),
+        entry!(0x00950930, fn_00950930(Ptr<PlayerCharacter>)),
+        entry!(0x00950a10, fn_00950a10(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00950a60,
+            player_character_get_animation(Ptr<PlayerCharacter>, u8) -> u32
+        ),
+        entry!(0x00950a90, fn_00950a90(Ptr<PlayerCharacter>) -> u32),
+        entry!(0x00950ad0, fn_00950ad0(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00950b00,
+            player_character_get_biped(Ptr<PlayerCharacter>, u8) -> u32
+        ),
+        entry!(
+            0x00950b30,
+            player_character_is_1st_person_biped(Ptr<PlayerCharacter>, u32) -> bool
+        ),
+        entry!(0x00950b60, fn_00950b60(Ptr<PlayerCharacter>) -> u32),
+        entry!(0x00950bb0, fn_00950bb0(Ptr<PlayerCharacter>, u8) -> u32),
+        entry!(
+            0x00950be0,
+            player_character_get_current_3d(Ptr<PlayerCharacter>) -> u32
+        ),
+        entry!(
+            0x00950c20,
+            player_character_clone_inventory_3d(Ptr<PlayerCharacter>, u8)
+        ),
+        entry!(0x00951900, fn_00951900() -> u8),
+        entry!(0x00951910, fn_00951910(u8)),
+        entry!(0x00951920, fn_00951920() -> u32),
+        entry!(0x00951930, fn_00951930() -> u32),
+        entry!(0x00951940, fn_00951940(Ptr, u32)),
+        entry!(0x00951a10, fn_00951a10(Ptr<PlayerCharacter>, u8)),
+        entry!(0x009520f0, fn_009520f0(Ptr<PlayerCharacter>, u16, u32)),
+        entry!(0x00952290, fn_00952290(Ptr<PlayerCharacter>)),
+        entry!(0x009526a0, player_character_set_god_mode(u8)),
+        entry!(0x009526b0, player_character_is_god_mode() -> u8),
+        entry!(0x009526e0, player_character_set_demigod_mode(u8)),
+        entry!(0x009526f0, player_character_is_demigod_mode() -> u8),
+        entry!(0x00952720, fn_00952720(Ptr) -> u8),
+        entry!(
+            0x00952730,
+            fn_00952730(Ptr<PlayerCharacter>, i32, f32) -> bool
+        ),
+        entry!(0x009527b0, fn_009527b0(Ptr<PlayerCharacter>, u32)),
+        entry!(
+            0x00952830,
+            fn_00952830(Ptr<PlayerCharacter>, u32, u8, u32) -> bool
+        ),
+        entry!(
+            0x009528c0,
+            player_character_add_quest_stage_item(Ptr<PlayerCharacter>, u32) -> bool
+        ),
+        entry!(
+            0x009529d0,
+            player_character_set_active_quest(Ptr<PlayerCharacter>, u32)
+        ),
+        entry!(0x00952a20, fn_00952a20(Ptr<PlayerCharacter>, u32)),
     ]
 }
 
@@ -4916,5 +6590,1309 @@ mod tests {
         assert_eq!(tail[3], vec![vec![TEXT_UNKNOWN_LEVELLED]]);
         // The weapon line reports no weapon.
         assert_eq!(tail[5], vec![vec![TEXT_NO_WEAPON]]);
+    }
+
+    // ----- second session: camera switch, animations, quests -----
+
+    /// Makes `00559450` read the pointer at the address it is given, as the
+    /// dereference of a `NiPointer` does.
+    fn pointer_reads(e: &mut Engine) {
+        e.register(0x0055_9450, |e, a| eax(e.mem.u32(a[0])));
+    }
+
+    /// A block of words in the heap (at least four).
+    fn word_block(e: &mut Engine, words: &[u32]) -> u32 {
+        let block = e.mem.alloc(4 * words.len().max(4) as u32);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(block + 4 * i as u32, *word);
+        }
+        block
+    }
+
+    /// An object whose vtable slot `offset` is a double that answers `ret`.
+    fn object_with_slot(e: &mut Engine, offset: u32, ret: Ret) -> u32 {
+        let object = e.mem.alloc(16);
+        slot(e, object, offset, ret);
+        object
+    }
+
+    #[test]
+    fn asking_for_the_third_person_copies_the_restored_value() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(1));
+        let setting = word_block(&mut e, &[0]);
+        e.mem.set_f32(setting, 7.5);
+        double(&mut e, SETTING_FLOAT_POINTER, eax(setting));
+        assert!(player_character_set_first_person(&mut e, player, 0));
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 1);
+        assert_eq!(e.global::<f32>(VANITY_RESTORED_VALUE), 7.5);
+        // Asking for the first person changes it back; asking again changes
+        // nothing.
+        assert!(player_character_set_first_person(&mut e, player, 1));
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 0);
+        assert!(!player_character_set_first_person(&mut e, player, 1));
+    }
+
+    #[test]
+    fn the_first_person_model_receives_the_camera_position_and_the_switch() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_0100);
+        e.set_global(NODE_CAMERA_1ST_SLOT, 0x0600_0200u32);
+        let position = word_block(&mut e, &[0, 0, 0]);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        double(&mut e, 0x0045_bb80, eax(position));
+        start_log(&mut e);
+        assert!(player_character_set_first_person(&mut e, player, 0));
+        assert_eq!(calls_to(&e, 0x0045_bb80), vec![vec![0x0600_0200]]);
+        assert_eq!(e.global::<f32>(CAMERA_POSITION_COPY), 1.0);
+        assert_eq!(e.global::<f32>(CAMERA_POSITION_COPY + 4), 2.0);
+        assert_eq!(e.global::<f32>(CAMERA_POSITION_COPY + 8), 3.0);
+        // The switch (`00951a10`) looked for the player's own 3D.
+        assert!(!calls_to(&e, 0x0043_fcd0).is_empty());
+    }
+
+    #[test]
+    fn a_hidden_model_marks_the_player_as_third_person_when_the_first_is_asked_for() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_0100);
+        double(&mut e, 0x0045_6610, eax(1));
+        assert!(!player_character_set_first_person(&mut e, player, 1));
+        assert!(e.get(player, PlayerCharacter::b3rdPerson));
+        // With the model not hidden the flag stays clear.
+        let other = new_player(&mut e);
+        e.mem.set_u32(other.addr() + 0x694, 0x0600_0100);
+        double(&mut e, 0x0045_6610, eax(0));
+        player_character_set_first_person(&mut e, other, 1);
+        assert!(!e.get(other, PlayerCharacter::b3rdPerson));
+    }
+
+    #[test]
+    fn both_switch_flags_copy_the_wanted_camera_at_once() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        e.set_global(CAMERA_SWITCH_FLAG_011F21D0, 1u8);
+        e.set_global(CAMERA_SWITCH_FLAG_011F21D1, 1u8);
+        // The wanted camera changes from the third to the first person: the
+        // camera byte follows at once.
+        e.mem.set_u8(player.addr() + 0x64c, 1);
+        assert!(player_character_set_first_person(&mut e, player, 1));
+        assert_eq!(e.mem.u8(player.addr() + 0x64a), 0);
+        // With one flag clear the camera byte is left alone.
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        e.mem.set_u8(player.addr() + 0x64c, 1);
+        e.set_global(CAMERA_SWITCH_FLAG_011F21D1, 0u8);
+        player_character_set_first_person(&mut e, player, 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x64a), 1);
+    }
+
+    #[test]
+    fn the_zoom_update_adopts_the_wanted_camera_unless_the_zoom_is_large() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        e.set_global(FIRST_PERSON_ZOOM_LIMIT, 30.0f64);
+        let player = new_player(&mut e);
+        // Same camera: nothing.
+        start_log(&mut e);
+        player_character_update_first_person_zoom(&mut e, player);
+        assert!(calls_to(&e, 0x0055_9450).is_empty());
+        // Different camera, zoom above the limit: nothing.
+        e.mem.set_u8(player.addr() + 0x64c, 1);
+        e.set_global(VANITY_VALUE_07DC, 31.0f32);
+        player_character_update_first_person_zoom(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64a), 0);
+        // Zoom at the limit: adopted.
+        e.set_global(VANITY_VALUE_07DC, 30.0f32);
+        player_character_update_first_person_zoom(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64a), 1);
+        // Going back to the first person with a model applies the switch.
+        e.mem.set_u8(player.addr() + 0x64c, 0);
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_0100);
+        player_character_update_first_person_zoom(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64a), 0);
+        assert!(!calls_to(&e, 0x0043_fcd0).is_empty());
+    }
+
+    #[test]
+    fn forcing_the_temporary_third_person_switches_from_the_first_person() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        let setting = word_block(&mut e, &[0]);
+        e.mem.set_f32(setting, 9.0);
+        double(&mut e, SETTING_FLOAT_POINTER, eax(setting));
+        e.set_global(VANITY_RESTORED_VALUE, 3.0f32);
+        // Refused while a temporary camera is already forced.
+        double(&mut e, 0x0057_21e0, eax(1));
+        assert!(!player_character_force_temp_3rd_person(&mut e, player, 1));
+        assert_eq!(e.mem.u8(player.addr() + 0x64d), 0);
+        // In the first person: remembers to switch back and asks for the
+        // third person (SetFirstPerson(0) makes `bWant3rdPerson` 1).
+        double(&mut e, 0x0057_21e0, eax(0));
+        assert!(player_character_force_temp_3rd_person(&mut e, player, 1));
+        assert_eq!(e.mem.u8(player.addr() + 0x64d), 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x64e), 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 1);
+        assert_eq!(e.global::<f32>(VANITY_RESTORED_VALUE), 9.0);
+        // Already in the third person: only the flag; the restored value is
+        // not lowered.
+        let other = new_player(&mut e);
+        e.mem.set_u8(other.addr() + 0x64a, 1);
+        e.set_global(VANITY_RESTORED_VALUE, 12.0f32);
+        assert!(!player_character_force_temp_3rd_person(&mut e, other, 1));
+        assert_eq!(e.global::<f32>(VANITY_RESTORED_VALUE), 12.0);
+        assert_eq!(e.mem.u8(other.addr() + 0x64e), 0);
+    }
+
+    #[test]
+    fn the_temporary_third_person_ends_when_the_process_is_idle() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let process = e.mem.alloc(16);
+        slot(&mut e, process, 0x3e4, eax(0xffff_ffff));
+        slot(&mut e, process, 0x40c, eax(0));
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        // Not forced: nothing happens.
+        player_character_update_temp_3rd_person(&mut e, player);
+        // Forced, with the switch-back remembered; the vanity flag blocks it.
+        e.mem.set_u8(player.addr() + 0x64d, 1);
+        e.mem.set_u8(player.addr() + 0x64e, 1);
+        e.mem.set_u8(player.addr() + 0x64c, 1);
+        e.set_global(VANITY_SAVED_FLAG, 1u8);
+        player_character_update_temp_3rd_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64d), 1);
+        // Without it the temporary third person ends and the first person is
+        // asked for (`bWant3rdPerson` 0).
+        e.set_global(VANITY_SAVED_FLAG, 0u8);
+        player_character_update_temp_3rd_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64d), 0);
+        assert_eq!(e.mem.u8(player.addr() + 0x64e), 0);
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 0);
+    }
+
+    #[test]
+    fn forcing_the_temporary_first_person_lowers_the_sights_and_asks_for_the_first_person() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        double(&mut e, 0x008b_bc10, eax(1));
+        double(&mut e, 0x0043_fcd0, eax(0x0600_0300));
+        double(&mut e, 0x0045_6610, eax(0));
+        start_log(&mut e);
+        // In the first person already (`b3rdPerson` 0): the player's own 3D is
+        // un-culled and nothing else.
+        assert!(!player_character_force_temp_1st_person(&mut e, player, 0));
+        assert_eq!(e.mem.u8(player.addr() + 0x64f), 1);
+        assert_eq!(
+            calls_to(&e, 0x008b_b650),
+            vec![vec![player.addr(), 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x0089_4cc0), vec![vec![player.addr(), 0]]);
+        assert_eq!(calls_to(&e, 0x0045_0f90), vec![vec![0x0600_0300, 1]]);
+        assert_eq!(e.mem.u8(player.addr() + 0x650), 0);
+        // In the third person: switches.
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        player_character_force_temp_1st_person(&mut e, player, 0);
+        assert_eq!(e.mem.u8(player.addr() + 0x650), 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 0);
+    }
+
+    #[test]
+    fn forcing_the_temporary_first_person_with_the_sights_kept_checks_the_model_state() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_0100);
+        double(&mut e, 0x0045_6610, eax(1));
+        start_log(&mut e);
+        assert!(!player_character_force_temp_1st_person(&mut e, player, 1));
+        assert!(calls_to(&e, 0x008b_bc10).is_empty());
+        assert_eq!(e.mem.u8(player.addr() + 0x650), 0);
+        double(&mut e, 0x0045_6610, eax(0));
+        player_character_force_temp_1st_person(&mut e, player, 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x650), 1);
+    }
+
+    #[test]
+    fn the_temporary_first_person_ends_unless_the_pipboy_or_the_sights_hold_it() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x22c, eax(0));
+        let process = e.mem.alloc(16);
+        slot(&mut e, process, 0x148, eax(0x0600_0400));
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        e.mem.set_u8(player.addr() + 0x64f, 1);
+        e.mem.set_u8(player.addr() + 0x650, 1);
+        // The Pipboy is active.
+        double(&mut e, 0x0096_7ae0, eax(1));
+        player_character_update_temp_1st_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64f), 1);
+        // The sights are up and the weapon is accepted.
+        double(&mut e, 0x0096_7ae0, eax(0));
+        double(&mut e, 0x008b_bc10, eax(1));
+        double(&mut e, 0x0048_cee0, eax(1));
+        player_character_update_temp_1st_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64f), 1);
+        // Not accepted: ends, and switches back (SetFirstPerson(0)).
+        double(&mut e, 0x0048_cee0, eax(0));
+        player_character_update_temp_1st_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64f), 0);
+        assert_eq!(e.mem.u8(player.addr() + 0x650), 0);
+        assert_eq!(e.mem.u8(player.addr() + 0x64c), 1);
+        assert_eq!(e.global::<u8>(TEMP_FIRST_PERSON_ENDED), 1);
+        // The object test of 0044ddc0 answering 4 also holds it.
+        e.mem.set_u8(player.addr() + 0x64f, 1);
+        double(&mut e, 0x0044_ddc0, eax(4));
+        player_character_update_temp_1st_person(&mut e, player);
+        assert_eq!(e.mem.u8(player.addr() + 0x64f), 1);
+    }
+
+    #[test]
+    fn the_field_of_view_goes_to_the_camera_and_the_shader_manager() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x0045_c670, eax(0x0600_0500));
+        start_log(&mut e);
+        assert_eq!(fn_00950610(&mut e, player, 75.0), 75.0);
+        assert_eq!(e.get(player, PlayerCharacter::fFOV), 75.0);
+        assert_eq!(
+            calls_to(&e, 0x00c5_2020),
+            vec![vec![0x0600_0500, 75.0f32.to_bits(), 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x00b5_4000), vec![vec![75.0f32.to_bits()]]);
+    }
+
+    #[test]
+    fn resurrecting_replaces_the_process_and_rebuilds_the_camera_caster() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.set(player, PlayerCharacter::fHealthModifier, 5.0);
+        slot(&mut e, player.addr(), 0x1c4, eax(0));
+        let old = e.mem.alloc(16);
+        let destroyed = recording_slot(&mut e, old, 0, eax(0));
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(old));
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+        let base = e.mem.alloc(16);
+        let base_destroyed = recording_slot(&mut e, base, 0, eax(0));
+        double(&mut e, 0x0090_6dc0, eax(base));
+        let high = e.mem.alloc(16);
+        let adopted = recording_slot(&mut e, high, 4, eax(0));
+        double(&mut e, 0x008d_7510, eax(high));
+        double(&mut e, 0x0093_1850, eax(7));
+        double(&mut e, 0x0093_06d0, eax(0x0600_0700));
+        double(&mut e, 0x004a_3a20, eax(0x55));
+        double(&mut e, 0x0062_0850, eax(0x0600_0800));
+        let setting = word_block(&mut e, &[0]);
+        e.mem.set_f32(setting, 2.5);
+        double(&mut e, SETTING_FLOAT_POINTER, eax(setting));
+        start_log(&mut e);
+        player_character_resurrect(&mut e, player, 1, 2, 3);
+        assert_eq!(e.get(player, PlayerCharacter::fHealthModifier), 0.0);
+        assert_eq!(destroyed.borrow().len(), 1);
+        assert_eq!(destroyed.borrow()[0], vec![old, 1]);
+        // The new base process was handed to the new high process.
+        assert_eq!(adopted.borrow()[0], vec![high, base]);
+        // The temporary base process is destroyed once the new one is in.
+        assert_eq!(base_destroyed.borrow()[0], vec![base, 1]);
+        assert_eq!(e.get(player, PlayerCharacter::pCurrentProcess).addr(), high);
+        assert_eq!(
+            calls_to(&e, 0x0096_d470),
+            vec![vec![PROCESS_LISTS, player.addr(), 7]; 2]
+        );
+        assert_eq!(calls_to(&e, 0x0070_4e10), vec![vec![0x10]]);
+        let caster = calls_to(&e, 0x0062_0850);
+        assert_eq!(caster[0][1..], [2.5f32.to_bits(), 0x55]);
+        assert_eq!(e.mem.u32(player.addr() + 0x21c), 0x0600_0800);
+        assert_eq!(
+            calls_to(&e, 0x0089_f780),
+            vec![vec![player.addr(), 0, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x0056_59f0), vec![vec![player.addr()]]);
+        assert_eq!(calls_to(&e, 0x0040_fbf0), vec![vec![PROCESS_LOCK, 0]]);
+        assert_eq!(calls_to(&e, 0x0040_fba0), vec![vec![PROCESS_LOCK]]);
+    }
+
+    #[test]
+    fn resurrecting_without_a_controller_clears_the_camera_caster() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x1c4, eax(0));
+        e.mem.set_u32(player.addr() + 0x21c, 0x1234);
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+        let high = e.mem.alloc(16);
+        slot(&mut e, high, 4, eax(0));
+        double(&mut e, 0x008d_7510, eax(high));
+        start_log(&mut e);
+        player_character_resurrect(&mut e, player, 0, 0, 0);
+        assert_eq!(e.mem.u32(player.addr() + 0x21c), 0);
+        assert!(calls_to(&e, 0x0062_0850).is_empty());
+    }
+
+    #[test]
+    fn equipment_damage_is_skipped_in_god_mode() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let flag = word_block(&mut e, &[0]);
+        double(&mut e, 0x0040_8d60, eax(flag));
+        double(&mut e, 0x0089_1360, eax(1));
+        start_log(&mut e);
+        assert!(fn_009508b0(&mut e, player, 4, 2.5, 1));
+        assert_eq!(
+            calls_to(&e, 0x0089_1360),
+            vec![vec![player.addr(), 4, 2.5f32.to_bits(), 1]]
+        );
+        e.set_global(GOD_MODE_BYTE, 1u8);
+        assert!(!fn_009508b0(&mut e, player, 4, 2.5, 1));
+        assert_eq!(calls_to(&e, 0x0089_1360).len(), 1);
+    }
+
+    #[test]
+    fn the_forwarder_calls_the_callee_and_then_slot_22c() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let record = recording_slot(&mut e, player.addr(), 0x22c, eax(0));
+        start_log(&mut e);
+        fn_009508f0(&mut e, player, 9, 1.5);
+        assert_eq!(
+            calls_to(&e, 0x0089_8650),
+            vec![vec![player.addr(), 9, 1.5f32.to_bits()]]
+        );
+        assert_eq!(record.borrow()[0], vec![player.addr(), 0]);
+    }
+
+    #[test]
+    fn the_animation_update_scales_the_frame_time_and_runs_every_animation() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        double(&mut e, 0x0084_d030, st0(0.5));
+        double(&mut e, 0x009c_8cc0, st0(3.0));
+        double(&mut e, 0x008b_70d0, eax(0x0600_0900));
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_0a00);
+        let process = e.mem.alloc(16);
+        let process_update = recording_slot(&mut e, process, 0x740, eax(0));
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        let own_update = recording_slot(&mut e, player.addr(), 0x178, eax(0));
+        e.set_global(ANIMATION_UPDATE_DEPTH, 4u8);
+        start_log(&mut e);
+        fn_00950930(&mut e, player);
+        let delta = 1.5f32.to_bits();
+        let minus_one = (-1.0f32).to_bits();
+        assert_eq!(
+            calls_to(&e, 0x0049_1180),
+            vec![
+                vec![0x0600_0900, player.addr(), delta, minus_one],
+                vec![0x0600_0a00, player.addr(), delta, minus_one]
+            ]
+        );
+        assert_eq!(
+            process_update.borrow()[0],
+            vec![process, player.addr(), delta]
+        );
+        assert_eq!(own_update.borrow().len(), 1);
+        assert_eq!(e.global::<u8>(ANIMATION_UPDATE_DEPTH), 4);
+    }
+
+    #[test]
+    fn the_animation_update_skips_missing_animations_and_process() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        slot(&mut e, player.addr(), 0x178, eax(0));
+        start_log(&mut e);
+        fn_00950930(&mut e, player);
+        assert!(calls_to(&e, 0x0049_1180).is_empty());
+    }
+
+    #[test]
+    fn the_animation_choice_prefers_the_inventory_then_the_first_person_one() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x008b_70d0, eax(0x0600_0900));
+        assert_eq!(fn_00950a10(&mut e, player), 0x0600_0900);
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_0a00);
+        assert_eq!(fn_00950a10(&mut e, player), 0x0600_0a00);
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        assert_eq!(fn_00950a10(&mut e, player), 0x0600_0900);
+        e.mem.set_u32(player.addr() + 0x6a0, 0x0600_0b00);
+        assert_eq!(fn_00950a10(&mut e, player), 0x0600_0b00);
+    }
+
+    #[test]
+    fn get_animation_picks_by_the_argument() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x008b_70d0, eax(0x0600_0900));
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_0a00);
+        assert_eq!(
+            player_character_get_animation(&mut e, player, 0),
+            0x0600_0900
+        );
+        assert_eq!(
+            player_character_get_animation(&mut e, player, 1),
+            0x0600_0a00
+        );
+    }
+
+    #[test]
+    fn the_biped_helpers_pick_the_first_person_biped() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x005d_9f90, eax(0x0600_0c00));
+        assert_eq!(fn_00950a90(&mut e, player), 0x0600_0c00);
+        e.mem.set_u32(player.addr() + 0x68c, 0x0600_0d00);
+        assert_eq!(fn_00950a90(&mut e, player), 0x0600_0d00);
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        assert_eq!(fn_00950a90(&mut e, player), 0x0600_0c00);
+        assert_eq!(player_character_get_biped(&mut e, player, 1), 0x0600_0d00);
+        assert_eq!(player_character_get_biped(&mut e, player, 0), 0x0600_0c00);
+        // `00950ad0` asks 00524d10 and passes the opposite.
+        double(&mut e, 0x0052_4d10, eax(1));
+        assert_eq!(fn_00950ad0(&mut e, player), 0x0600_0c00);
+        double(&mut e, 0x0052_4d10, eax(0));
+        assert_eq!(fn_00950ad0(&mut e, player), 0x0600_0d00);
+        assert!(player_character_is_1st_person_biped(
+            &mut e,
+            player,
+            0x0600_0d00
+        ));
+        assert!(!player_character_is_1st_person_biped(
+            &mut e,
+            player,
+            0x0600_0e00
+        ));
+        let other = new_player(&mut e);
+        assert!(!player_character_is_1st_person_biped(&mut e, other, 0));
+    }
+
+    #[test]
+    fn the_3d_helpers_pick_the_first_person_model_or_the_players_own() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        double(&mut e, 0x0043_fcd0, eax(0x0600_0f00));
+        assert_eq!(fn_00950b60(&mut e, player), 0x0600_0f00);
+        assert_eq!(fn_00950bb0(&mut e, player, 0), 0x0600_0f00);
+        assert_eq!(fn_00950bb0(&mut e, player, 1), 0);
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_1000);
+        assert_eq!(fn_00950b60(&mut e, player), 0x0600_1000);
+        assert_eq!(fn_00950bb0(&mut e, player, 1), 0x0600_1000);
+        e.mem.set_u8(player.addr() + 0x64a, 1);
+        assert_eq!(fn_00950b60(&mut e, player), 0x0600_0f00);
+        double(&mut e, 0x0052_4d10, eax(1));
+        assert_eq!(player_character_get_current_3d(&mut e, player), 0x0600_0f00);
+        double(&mut e, 0x0052_4d10, eax(0));
+        assert_eq!(player_character_get_current_3d(&mut e, player), 0x0600_1000);
+    }
+
+    #[test]
+    fn the_inventory_clone_does_nothing_when_the_state_already_matches() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        let player = new_player(&mut e);
+        start_log(&mut e);
+        // Asking to destroy while there is no model, or to create while there
+        // is one: only the dereference of the pointer is made.
+        player_character_clone_inventory_3d(&mut e, player, 0);
+        e.mem.set_u32(player.addr() + 0x69c, 0x0600_1100);
+        player_character_clone_inventory_3d(&mut e, player, 1);
+        assert!(calls_to(&e, 0x0097_4c30).is_empty());
+        assert!(calls_to(&e, 0x0066_b0d0).is_empty());
+        assert_eq!(
+            calls_to(&e, 0x0055_9450),
+            vec![vec![player.addr() + 0x69c]; 4]
+        );
+    }
+
+    #[test]
+    fn the_inventory_model_is_destroyed_with_its_animation() {
+        let mut e = engine();
+        pointer_reads(&mut e);
+        e.register(SMART_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            eax(0)
+        });
+        let player = new_player(&mut e);
+        let model = object_with_slot(&mut e, 0x9c, eax(0x0600_1200));
+        e.mem.set_u32(player.addr() + 0x69c, model);
+        e.mem.set_u32(player.addr() + 0x6a0, 0x0600_1300);
+        double(&mut e, 0x008d_3f70, eax(1));
+        double(&mut e, 0x008d_3f80, eax(2));
+        double(&mut e, 0x0065_3270, eax(0x0600_1400));
+        let extra = e.mem.alloc(16);
+        let destroyed = recording_slot(&mut e, extra, 0, eax(0));
+        double(&mut e, 0x0082_0bf0, eax(extra));
+        start_log(&mut e);
+        player_character_clone_inventory_3d(&mut e, player, 0);
+        assert_eq!(calls_to(&e, DELETE_ANIMATION), vec![vec![0x0600_1300, 1]]);
+        assert_eq!(e.mem.u32(player.addr() + 0x6a0), 0);
+        assert_eq!(
+            calls_to(&e, 0x0066_3050),
+            vec![vec![0x0600_1400, 1], vec![0x0600_1400, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0065_3270),
+            vec![
+                vec![CAST_TYPE_011D5BF8, 0x0600_1200],
+                vec![CAST_TYPE_011D5BF8, 0x0600_1200]
+            ]
+        );
+        assert_eq!(e.mem.u32(player.addr() + 0x69c), 0);
+        assert_eq!(destroyed.borrow()[0], vec![extra, 1]);
+        assert_eq!(calls_to(&e, 0x0092_9220), vec![vec![player.addr(), 0]]);
+    }
+
+    /// Everything the creating branch of `CloneInventory3D` needs: returns
+    /// the player, the model (the clone) and the list of files.
+    fn clone_scenario(e: &mut Engine, separator_found: bool) -> (Ptr<PlayerCharacter>, u32, u32) {
+        pointer_reads(e);
+        e.register(SMART_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            eax(0)
+        });
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0].max(16))));
+        let player = new_player(e);
+        let model = e.mem.alloc(16);
+        slot(e, model, 0xbc, eax(0));
+        slot(e, model, 0x9c, eax(0));
+        let clone = e.mem.alloc(16);
+        slot(e, clone, 0xc, eax(model));
+        double(e, 0x0043_fcd0, eax(0x0600_1500));
+        double(e, 0x00a5_d2c0, eax(clone));
+        double(e, 0x0048_f810, eax(0x0600_1600));
+        double(e, 0x0044_7300, eax(0x0600_1700));
+        double(e, 0x00af_e0d0, eax(1));
+        if separator_found {
+            e.register(0x0040_ab30, |_, a| eax(a[0] + 8));
+        }
+        // The process lists object answers the player's slot `0x1d0` too.
+        slot(e, player.addr(), 0x1d0, eax(0x0600_1800));
+        slot(e, player.addr(), 0x1f4, eax(0));
+        e.set_global(INVENTORY_CLONE_FLAG, 5u8);
+        for i in 0..12u32 {
+            e.mem.set_u32(IDLE_NAME_TABLE + 4 * i, 0x0101_0000 + i);
+        }
+        (player, model, clone)
+    }
+
+    #[test]
+    fn the_inventory_clone_builds_the_model_and_lists_the_idle_files() {
+        let mut e = engine();
+        let (player, model, _) = clone_scenario(&mut e, true);
+        start_log(&mut e);
+        player_character_clone_inventory_3d(&mut e, player, 1);
+        assert_eq!(e.mem.u32(player.addr() + 0x69c), model);
+        assert_eq!(e.mem.u32(player.addr() + 0x6a0), 0x0600_1600);
+        // The flag byte is raised during the clone and restored at the end.
+        assert_eq!(calls_to(&e, 0x0097_4420), vec![vec![PROCESS_LISTS, 0]]);
+        assert_eq!(e.global::<u8>(INVENTORY_CLONE_FLAG), 5);
+        // The clone is made of the player's own 3D with a cloning process.
+        assert_eq!(calls_to(&e, 0x00a5_d2c0)[0][0], 0x0600_1500);
+        // Every idle name gets a plain and a torch entry.
+        assert_eq!(calls_to(&e, 0x0090_5820).len(), 22);
+        assert!(calls_to(&e, 0x0090_5820)
+            .iter()
+            .all(|a| a[0] == 0x0600_1700));
+        assert_eq!(
+            calls_to(&e, 0x0048_ffd0),
+            vec![vec![0x0600_1600, 0x0600_1700, model, player.addr(), 1]]
+        );
+        assert_eq!(calls_to(&e, 0x00af_e0d0).len(), 22);
+        assert_eq!(calls_to(&e, 0x00af_e0d0)[0][2..], [0, 0, 0xffff_ffff]);
+    }
+
+    #[test]
+    fn the_inventory_clone_stops_when_the_model_path_has_no_folder() {
+        let mut e = engine();
+        let (player, model, _) = clone_scenario(&mut e, false);
+        start_log(&mut e);
+        player_character_clone_inventory_3d(&mut e, player, 1);
+        assert_eq!(e.mem.u32(player.addr() + 0x69c), model);
+        assert!(calls_to(&e, 0x0044_7300).is_empty());
+        assert!(calls_to(&e, 0x0048_ffd0).is_empty());
+        // The flag byte was raised and stays so.
+        assert_eq!(e.global::<u8>(INVENTORY_CLONE_FLAG), 1);
+    }
+
+    #[test]
+    fn the_small_inventory_clone_accessors() {
+        let mut e = engine();
+        e.set_global(INVENTORY_CLONE_FLAG, 3u8);
+        assert_eq!(fn_00951900(&mut e), 3);
+        fn_00951910(&mut e, 7);
+        assert_eq!(e.global::<u8>(INVENTORY_CLONE_FLAG), 7);
+        e.set_global(NODE_NAME_011C623C, 0x1111u32);
+        e.set_global(NODE_NAME_011C6274, 0x2222u32);
+        assert_eq!(fn_00951920(&mut e), 0x1111);
+        assert_eq!(fn_00951930(&mut e), 0x2222);
+    }
+
+    #[test]
+    fn stripping_a_node_tree_removes_unwanted_controllers_and_recurses() {
+        let mut e = engine();
+        let node = 0x0600_2000;
+        // Every node has two controllers: the first is dropped, the second kept.
+        double(&mut e, 0x0043_b230, eax(0x0600_2300));
+        e.register(0x004a_8a90, |_, a| {
+            eax(if a[0] == 0x0600_2300 { 0x0600_2400 } else { 0 })
+        });
+        e.register(0x0043_b300, |_, a| eax(u32::from(a[1] == 0x0600_2400)));
+        // Only the top node has a child; the child answers `AsNode` with a
+        // grandchild node without children.
+        e.register(0x0043_b480, |_, a| eax(u32::from(a[0] == 0x0600_2000)));
+        let child = e.mem.alloc(16);
+        slot(&mut e, child, 0xc, eax(0x0600_2200));
+        e.register_double(0x0043_b4a0, move |_, _| eax(child));
+        start_log(&mut e);
+        fn_00951940(&mut e, Ptr::NULL, node);
+        assert_eq!(
+            calls_to(&e, 0x00a5_c480),
+            vec![vec![node, 0x0600_2300], vec![0x0600_2200, 0x0600_2300]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0062_bc90),
+            vec![vec![node, 0], vec![0x0600_2200, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x0045_0f90), vec![vec![child, 0]]);
+        start_log(&mut e);
+        fn_00951940(&mut e, Ptr::NULL, 0);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    const OWN_3D: u32 = 0x0600_3100;
+    const FIRST_PERSON_3D: u32 = 0x0600_3200;
+
+    /// A player with both models and the virtual slots `00951a10` uses.
+    fn switch_scenario(e: &mut Engine) -> Ptr<PlayerCharacter> {
+        pointer_reads(e);
+        let player = new_player(e);
+        slot(e, player.addr(), 0x22c, eax(0));
+        slot(e, player.addr(), 0x1f4, eax(0x77));
+        slot(e, player.addr(), 0x2bc, st0(0.25));
+        slot(e, player.addr(), 0x210, eax(0));
+        slot(e, player.addr(), 0x1d0, eax(0x0600_3300));
+        e.mem.set_u32(player.addr() + 0x694, FIRST_PERSON_3D);
+        double(e, 0x0043_fcd0, eax(OWN_3D));
+        double(e, 0x0056_fac0, eax(0));
+        e.set_global(INVENTORY_ALPHA, 0.0f32);
+        let process = e.mem.alloc(16);
+        slot(e, process, 0x580, eax(0));
+        double(e, 0x008d_8520, eax(process));
+        player
+    }
+
+    #[test]
+    fn showing_the_players_own_3d_culls_the_first_person_model() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        double(&mut e, 0x00ad_8ce0, eax(1));
+        let process = e.mem.alloc(16);
+        let refresh = recording_slot(&mut e, process, 0x580, eax(0));
+        double(&mut e, 0x008d_8520, eax(process));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 0);
+        assert_eq!(
+            calls_to(&e, 0x0045_0f90),
+            vec![vec![OWN_3D, 0], vec![FIRST_PERSON_3D, 1]]
+        );
+        assert_eq!(e.mem.u8(player.addr() + 0x64b), 1);
+        // Both weapon sounds are switched off.
+        let sound = calls_to(&e, 0x00ad_8fa0);
+        assert_eq!(sound.len(), 2);
+        assert!(sound.iter().all(|a| a[1] == 0));
+        assert_eq!(
+            calls_to(&e, 0x008b_0bd0),
+            vec![vec![player.addr(), 0x0600_3300]]
+        );
+        assert_eq!(refresh.borrow()[0], vec![process, 1, 1, 0]);
+        assert!(calls_to(&e, 0x0044_0460).is_empty());
+    }
+
+    #[test]
+    fn showing_the_first_person_model_places_it_and_plays_the_animation() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        double(&mut e, 0x00ad_8ce0, eax(1));
+        double(&mut e, 0x008b_70d0, eax(0x0600_3400));
+        double(&mut e, 0x0043_b4a0, eax(0x0600_3500));
+        let process = e.mem.alloc(16);
+        slot(&mut e, process, 0x580, eax(0));
+        double(&mut e, 0x008d_8520, eax(process));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert_eq!(
+            calls_to(&e, 0x0045_0f90),
+            vec![vec![OWN_3D, 1], vec![FIRST_PERSON_3D, 0]]
+        );
+        assert_eq!(e.mem.u8(player.addr() + 0x64b), 0);
+        assert_eq!(calls_to(&e, 0x0044_0460), vec![vec![OWN_3D, 0x77]]);
+        assert_eq!(calls_to(&e, 0x004a_0c90)[0][1], 0.25f32.to_bits());
+        assert_eq!(e.global::<f32>(INVENTORY_ALPHA), 1.0);
+        assert_eq!(
+            calls_to(&e, 0x0049_3900),
+            vec![vec![0x0600_3400, player.addr()]]
+        );
+        assert!(calls_to(&e, 0x00a5_9c60).is_empty());
+        assert!(calls_to(&e, 0x0043_d410).is_empty());
+        // The sounds are switched on, and the lighting follows the first child.
+        assert!(calls_to(&e, 0x00ad_8fa0).iter().all(|a| a[1] == 1));
+        assert_eq!(
+            calls_to(&e, 0x008b_0bd0),
+            vec![vec![player.addr(), 0x0600_3500]]
+        );
+        // Without an animation the model gets a zero vector instead.
+        double(&mut e, 0x008b_70d0, eax(0));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert!(calls_to(&e, 0x0049_3900).is_empty());
+        assert_eq!(calls_to(&e, 0x00a5_9c60).len(), 1);
+    }
+
+    #[test]
+    fn the_switch_does_nothing_without_both_models_or_when_the_temporary_camera_holds_it() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        e.mem.set_u32(player.addr() + 0x694, 0);
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 0);
+        assert!(calls_to(&e, 0x0045_0f90).is_empty());
+        e.mem.set_u32(player.addr() + 0x694, FIRST_PERSON_3D);
+        e.mem.set_u8(player.addr() + 0x64d, 1);
+        fn_00951a10(&mut e, player, 1);
+        assert!(calls_to(&e, 0x0045_0f90).is_empty());
+        // The same when the player cannot use the camera (slot 0x22c).
+        e.mem.set_u8(player.addr() + 0x64d, 0);
+        slot(&mut e, player.addr(), 0x22c, eax(1));
+        fn_00951a10(&mut e, player, 1);
+        assert!(calls_to(&e, 0x0045_0f90).is_empty());
+    }
+
+    #[test]
+    fn a_hidden_model_state_mismatch_stops_the_switch() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        // The player's own 3D is flagged, the first-person one is not.
+        e.register(0x0045_6610, |_, a| eax(u32::from(a[0] == OWN_3D)));
+        e.mem.set_u8(player.addr() + 0x64b, 1);
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert_eq!(e.mem.u8(player.addr() + 0x64b), 0);
+        assert!(calls_to(&e, 0x0045_0f90).is_empty());
+        // Switching the other way is allowed with the own 3D flagged.
+        fn_00951a10(&mut e, player, 0);
+        assert_eq!(calls_to(&e, 0x0045_0f90).len(), 2);
+        // With only the first-person model flagged it stops.
+        e.register(0x0045_6610, |_, a| eax(u32::from(a[0] == FIRST_PERSON_3D)));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 0);
+        assert!(calls_to(&e, 0x0045_0f90).is_empty());
+    }
+
+    #[test]
+    fn the_scope_is_shown_for_a_sighted_weapon_and_the_first_person_model_stays_culled() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        e.mem.set_u8(player.addr() + 0x64f, 1);
+        double(&mut e, 0x008b_bc10, eax(1));
+        let process = e.mem.alloc(16);
+        slot(&mut e, process, 0x148, eax(0x0600_3600));
+        slot(&mut e, process, 0x580, eax(0));
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        double(&mut e, 0x0048_cee0, eax(1));
+        double(&mut e, 0x004a_d030, eax(0));
+        double(&mut e, 0x008d_8520, eax(process));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert_eq!(calls_to(&e, 0x0070_9c40), vec![vec![1]]);
+        // The first-person model is not touched by the else branch.
+        assert_eq!(calls_to(&e, 0x0045_0f90), vec![vec![OWN_3D, 1]]);
+        // A scoped weapon with the mod effect missing shows no scope.
+        double(&mut e, 0x004a_d030, eax(1));
+        double(&mut e, 0x004b_d8d0, eax(0));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert!(calls_to(&e, 0x0070_9c40).is_empty());
+        assert_eq!(calls_to(&e, 0x004b_d8d0)[0][1], 0xe);
+        double(&mut e, 0x004b_d8d0, eax(1));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 1);
+        assert_eq!(calls_to(&e, 0x0070_9c40), vec![vec![1]]);
+    }
+
+    #[test]
+    fn the_animation_sequences_are_copied_to_the_other_animation() {
+        let mut e = engine();
+        let player = switch_scenario(&mut e);
+        double(&mut e, 0x008c_4560, eax(1));
+        double(&mut e, 0x008b_70d0, eax(0x0600_3700));
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_3800);
+        double(&mut e, 0x0053_7bd0, eax(0));
+        // Both animations lead to the same sequence list of one entry; the
+        // list's slot 0xec stores a `NiPointer` value, slot 0xdc receives it.
+        let sequences = e.mem.alloc(16);
+        let table = e.mem.alloc(0x800);
+        e.mem.set_u32(sequences, table);
+        e.register(0x0300_0100, |e, a| {
+            e.mem.set_u32(a[2], 0x0600_3900);
+            eax(0)
+        });
+        e.mem.set_u32(table + 0xec, 0x0300_0100);
+        let received = recording_slot(&mut e, sequences, 0xdc, eax(0));
+        let found = e.mem.alloc(16);
+        slot(&mut e, found, 0xc, eax(sequences));
+        let manager = e.mem.alloc(16);
+        slot(&mut e, manager, 0x8c, eax(found));
+        double(&mut e, 0x0053_7bd0, eax(manager));
+        e.register(0x0043_b480, |_, a| eax(u32::from(a[0] != 0)));
+        e.register(0x0052_aa80, |_, a| eax(u32::from(a[0] != 0)));
+        start_log(&mut e);
+        fn_00951a10(&mut e, player, 0);
+        assert_eq!(received.borrow().len(), 1);
+        assert_eq!(received.borrow()[0][1..], [0x0600_3900, 1]);
+        // The first-person animation is the source when the flag is 0.
+        assert_eq!(calls_to(&e, 0x0049_6940).len(), 2);
+    }
+
+    /// Sets the entry of the group type table.
+    fn group_entry(e: &mut Engine, group_type: u32, flag: u8, word: u32) {
+        e.mem
+            .set_u8(GROUP_TYPE_TABLE_FLAG + group_type * 0x24, flag);
+        e.mem
+            .set_u32(GROUP_TYPE_TABLE_WORD + group_type * 0x24, word);
+    }
+
+    #[test]
+    fn playing_a_group_ignores_groups_without_a_type() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x005f_2440, eax(0xff));
+        start_log(&mut e);
+        fn_009520f0(&mut e, player, 0x8005, 1);
+        // The high bit is dropped before the lookup.
+        assert_eq!(calls_to(&e, 0x005f_2440), vec![vec![5]]);
+        assert!(calls_to(&e, 0x0049_4740).is_empty());
+    }
+
+    #[test]
+    fn playing_a_group_prefers_a_synchronised_sequence_then_the_loaded_group() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x005f_2440, eax(3));
+        double(&mut e, 0x008b_70d0, eax(0x0600_4000));
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_4100);
+        group_entry(&mut e, 3, 1, 0x77);
+        double(&mut e, 0x0049_1040, eax(0x0600_4200));
+        double(&mut e, 0x0049_5da0, eax(1));
+        start_log(&mut e);
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert_eq!(calls_to(&e, 0x0049_1040), vec![vec![0x0600_4000, 0x77]]);
+        assert_eq!(
+            calls_to(&e, 0x0049_5da0),
+            vec![vec![0x0600_4100, 0x0600_4200, 9]]
+        );
+        assert!(calls_to(&e, 0x0049_4740).is_empty());
+        // Not synchronised, the group is loaded: it is played.
+        double(&mut e, 0x0049_5da0, eax(0));
+        double(&mut e, 0x0049_4710, eax(1));
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert_eq!(
+            calls_to(&e, 0x0049_4740),
+            vec![vec![0x0600_4100, 9, 0x55, 0xffff_ffff, 0xffff_ffff]]
+        );
+    }
+
+    #[test]
+    fn playing_a_group_falls_back_to_the_iron_sights_variant_or_the_selected_group() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        double(&mut e, 0x005f_2440, eax(3));
+        e.mem.set_u32(player.addr() + 0x690, 0x0600_4100);
+        // Iron-sights action whose lower group is loaded.
+        double(&mut e, 0x005f_2720, eax(1));
+        e.register(0x0049_4710, |_, a| eax(u32::from(a[1] == 6)));
+        start_log(&mut e);
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert_eq!(
+            calls_to(&e, 0x0049_4740),
+            vec![vec![0x0600_4100, 6, 0x55, 0xffff_ffff, 0xffff_ffff]]
+        );
+        // Nothing is loaded: the player's own selection (slot 0x00897910) is
+        // played when its type is the same.
+        double(&mut e, 0x005f_2720, eax(0));
+        double(&mut e, 0x0049_4710, eax(0));
+        double(&mut e, 0x008a_1710, eax(0));
+        double(&mut e, 0x0089_7910, eax(0x1234));
+        start_log(&mut e);
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert_eq!(
+            calls_to(&e, 0x0089_7910),
+            vec![vec![player.addr(), 3, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, 0x0049_4740),
+            vec![vec![0x0600_4100, 0x1234, 0x55, 0xffff_ffff, 0xffff_ffff]]
+        );
+        // A different type is refused unless it is the iron-sights variant.
+        e.register(0x005f_2440, |_, a| eax(if a[0] == 0x1234 { 8 } else { 3 }));
+        start_log(&mut e);
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert!(calls_to(&e, 0x0049_4740).is_empty());
+        double(&mut e, 0x005f_2750, eax(1));
+        e.register(0x005f_2440, |_, a| eax(if a[0] == 0x1234 { 0 } else { 3 }));
+        fn_009520f0(&mut e, player, 9, 0x55);
+        assert_eq!(calls_to(&e, 0x0049_4740).len(), 1);
+    }
+
+    /// The doubles `00952290` needs, with the zoom settings in the exe's data.
+    fn zoom_scenario(e: &mut Engine) -> Ptr<PlayerCharacter> {
+        pointer_reads(e);
+        e.register(SETTING_FLOAT_POINTER, |_, a| eax(a[0] + 4));
+        for (setting, value) in [
+            (ZOOM_TARGET_SETTING, 0.5f32),
+            (ZOOM_IN_SECONDS_SETTING, 2.0),
+            (ZOOM_OUT_SECONDS_SETTING, 1.0),
+        ] {
+            e.mem.set_f32(setting + 4, value);
+        }
+        e.set_global(ONE_DOUBLE, 1.0f64);
+        e.set_global(ZERO_DOUBLE, 0.0f64);
+        e.set_global(MINUS_ONE_DOUBLE, -1.0f64);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        let player = new_player(e);
+        slot(e, player.addr(), 0x2bc, st0(0.5));
+        e.mem.set_u32(player.addr() + 0x694, 0x0600_4300);
+        double(e, 0x008b_70d0, eax(0x0600_4400));
+        double(e, 0x0043_01b0, eax(0));
+        double(e, 0x005f_2440, eax(0));
+        double(e, 0x008a_7570, eax(0));
+        double(e, 0x0084_d030, st0(0.5));
+        double(e, 0x0093_1d70, st0(0.3));
+        double(e, 0x004f_6e40, st0(0.8));
+        let product = word_block(e, &[0; 9]);
+        double(e, 0x0043_f8d0, eax(product));
+        let rotated = word_block(e, &[0, 0, 0]);
+        double(e, 0x004b_4500, eax(rotated));
+        double(e, 0x004b_6190, st0(0.5));
+        player
+    }
+
+    #[test]
+    fn the_zoom_moves_towards_its_target_and_the_model_matrix_is_set() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        // A group type in 0x18..=0xa8 makes the target 1.0 (zoom out
+        // duration 1.0): 0.5 / 1.0 * (1.0 - 0.25).
+        double(&mut e, 0x005f_2440, eax(0x20));
+        e.set_global(ZOOM_FACTOR, 0.25f32);
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert_eq!(e.global::<f32>(ZOOM_FACTOR), 0.625);
+        // The look angle is (1 - target) * acos, the target being the new
+        // zoom factor.
+        assert_eq!(e.global::<f32>(LOOK_ANGLE), (1.0 - 0.625f32) * 0.8);
+        assert_eq!(calls_to(&e, 0x0043_fa80).len(), 1);
+        // The matrix goes to the first-person model.
+        assert_eq!(calls_to(&e, 0x0043_fa80)[0][0], 0x0600_4300);
+    }
+
+    #[test]
+    fn the_zoom_is_clamped_to_the_target() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        // Nothing in the animation: the target is the setting 0.5 and the
+        // factor is far below it with a long frame time.
+        double(&mut e, 0x0084_d030, st0(8.0));
+        e.set_global(ZOOM_FACTOR, 0.25f32);
+        fn_00952290(&mut e, player);
+        assert_eq!(e.global::<f32>(ZOOM_FACTOR), 0.5);
+        // Moving down from above the target clamps from below.
+        e.set_global(ZOOM_FACTOR, 1.0f32);
+        fn_00952290(&mut e, player);
+        assert_eq!(e.global::<f32>(ZOOM_FACTOR), 0.5);
+        // Equal to the target: no step is taken (the frame time is not asked).
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert!(calls_to(&e, 0x0084_d030).is_empty());
+    }
+
+    #[test]
+    fn the_zoom_target_is_one_for_the_pipboy_and_the_iron_sights() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        double(&mut e, 0x0084_d030, st0(0.0));
+        e.set_global(ZOOM_FACTOR, 0.5f32);
+        // The Pipboy makes the target 1.0, so the zoom-out duration is read
+        // (the factor stays: the frame time is 0).
+        double(&mut e, 0x0096_7ae0, eax(1));
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert_eq!(e.global::<f32>(ZOOM_FACTOR), 0.5);
+        assert!(calls_to(&e, SETTING_FLOAT_POINTER).contains(&vec![ZOOM_OUT_SECONDS_SETTING]));
+        // The Pipboy is not asked while the animation action is 4.
+        double(&mut e, 0x008a_7570, eax(4));
+        double(&mut e, 0x008b_bc10, eax(1));
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert!(calls_to(&e, 0x0096_7ae0).is_empty());
+        assert_eq!(calls_to(&e, 0x008b_bc10).len(), 1);
+    }
+
+    #[test]
+    fn the_zoom_does_nothing_without_an_animation() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        double(&mut e, 0x008b_70d0, eax(0));
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert!(calls_to(&e, 0x0043_fa80).is_empty());
+    }
+
+    #[test]
+    fn the_look_angle_flips_when_the_looking_vector_points_down() {
+        let mut e = engine();
+        let player = zoom_scenario(&mut e);
+        e.set_global(ZOOM_FACTOR, 0.5f32);
+        let down = word_block(&mut e, &[0, 0, 0]);
+        e.mem.set_f32(down + 8, -1.0);
+        double(&mut e, 0x004b_4500, eax(down));
+        fn_00952290(&mut e, player);
+        assert_eq!(e.global::<f32>(LOOK_ANGLE), -(0.5f32 * 0.8));
+        // A dot product outside [-1, 1] is clamped before the call.
+        double(&mut e, 0x004b_6190, st0(3.0));
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert_eq!(calls_to(&e, 0x004f_6e40), vec![vec![1.0f32.to_bits()]]);
+        double(&mut e, 0x004b_6190, st0(-3.0));
+        start_log(&mut e);
+        fn_00952290(&mut e, player);
+        assert_eq!(calls_to(&e, 0x004f_6e40), vec![vec![(-1.0f32).to_bits()]]);
+    }
+
+    #[test]
+    fn the_god_mode_bytes_and_the_setting() {
+        let mut e = engine();
+        let setting_value = word_block(&mut e, &[0]);
+        double(&mut e, 0x0040_8d60, eax(setting_value));
+        start_log(&mut e);
+        assert_eq!(player_character_is_god_mode(&mut e), 0);
+        assert_eq!(player_character_is_demigod_mode(&mut e), 0);
+        player_character_set_god_mode(&mut e, 1);
+        player_character_set_demigod_mode(&mut e, 1);
+        assert_eq!(e.global::<u8>(GOD_MODE_BYTE), 1);
+        assert_eq!(e.global::<u8>(DEMIGOD_MODE_BYTE), 1);
+        assert_eq!(player_character_is_god_mode(&mut e), 1);
+        assert_eq!(fn_00952720(&mut e, Ptr::NULL), 1);
+        player_character_set_god_mode(&mut e, 0);
+        player_character_set_demigod_mode(&mut e, 0);
+        assert_eq!(fn_00952720(&mut e, Ptr::NULL), 0);
+        // The setting turns both on.
+        e.mem.set_u8(setting_value, 1);
+        assert_eq!(player_character_is_god_mode(&mut e), 1);
+        assert_eq!(player_character_is_demigod_mode(&mut e), 1);
+        assert!(calls_to(&e, 0x0040_8d60)
+            .iter()
+            .all(|a| a == &vec![GOD_MODE_SETTING]));
+    }
+
+    #[test]
+    fn actor_value_changes_are_refused_for_a_protected_player() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let target = player.addr() + MAGIC_TARGET;
+        // The sub-object's slot 0x10 says no: everything is allowed.
+        slot(&mut e, target, 0x10, eax(0));
+        assert!(fn_00952730(&mut e, player, 0x10, -5.0));
+        // It says yes: health and the limb values cannot be lost, and the
+        // value 0x36 cannot be gained.
+        slot(&mut e, target, 0x10, eax(1));
+        assert!(!fn_00952730(&mut e, player, 0x10, -5.0));
+        assert!(fn_00952730(&mut e, player, 0x10, 5.0));
+        assert!(fn_00952730(&mut e, player, 0x18, -5.0));
+        assert!(!fn_00952730(&mut e, player, 0x19, -5.0));
+        assert!(!fn_00952730(&mut e, player, 0x1f, -5.0));
+        assert!(fn_00952730(&mut e, player, 0x20, -5.0));
+        assert!(!fn_00952730(&mut e, player, 0x36, 1.0));
+        assert!(fn_00952730(&mut e, player, 0x36, -1.0));
+        assert!(fn_00952730(&mut e, player, 0x36, 0.0));
+    }
+
+    /// Records the item stored in the word the list append `005ae3d0` is given.
+    fn record_appends(e: &mut Engine) -> Rc<RefCell<Vec<(u32, u32)>>> {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let record = seen.clone();
+        e.register_double(0x005a_e3d0, move |e, words| {
+            record.borrow_mut().push((words[0], e.mem.u32(words[1])));
+            eax(0)
+        });
+        seen
+    }
+
+    #[test]
+    fn a_topic_is_added_once_and_the_list_refreshed_on_request() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let second = node(&mut e, 0xb0b, 0);
+        let head = node(&mut e, 0xa0a, second);
+        double(&mut e, 0x0046_4e30, eax(head));
+        let appended = record_appends(&mut e);
+        start_log(&mut e);
+        assert!(!fn_00952830(&mut e, player, 0, 1, 1));
+        assert!(!fn_00952830(&mut e, player, 0xb0b, 1, 1));
+        assert!(appended.borrow().is_empty());
+        assert!(calls_to(&e, 0x0061_a5a0).is_empty());
+        assert!(fn_00952830(&mut e, player, 0xc0c, 0, 1));
+        assert_eq!(*appended.borrow(), vec![(player.addr() + 0x6a8, 0xc0c)]);
+        assert!(calls_to(&e, 0x0061_a5a0).is_empty());
+        assert!(fn_00952830(&mut e, player, 0xd0d, 1, 0));
+        assert_eq!(calls_to(&e, 0x0061_a5a0), vec![vec![1, head]]);
+    }
+
+    #[test]
+    fn a_list_of_topics_is_added_with_a_single_refresh() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        double(&mut e, 0x0046_4e30, eax(0));
+        let appended = record_appends(&mut e);
+        let second = node(&mut e, 0xb0b, 0);
+        let first = node(&mut e, 0xa0a, second);
+        start_log(&mut e);
+        fn_009527b0(&mut e, player, first);
+        assert_eq!(
+            *appended.borrow(),
+            vec![
+                (player.addr() + 0x6a8, 0xa0a),
+                (player.addr() + 0x6a8, 0xb0b)
+            ]
+        );
+        assert_eq!(calls_to(&e, 0x0061_a5a0), vec![vec![1, 0]]);
+        // A list whose topics are all known refreshes nothing.
+        let known = node(&mut e, 0xa0a, 0);
+        double(&mut e, 0x0046_4e30, eax(known));
+        start_log(&mut e);
+        fn_009527b0(&mut e, player, known);
+        assert!(calls_to(&e, 0x0061_a5a0).is_empty());
+        fn_009527b0(&mut e, player, 0);
+    }
+
+    #[test]
+    fn a_quest_stage_item_is_logged_and_may_play_the_menu_sound() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let appended = record_appends(&mut e);
+        assert!(!player_character_add_quest_stage_item(&mut e, player, 0));
+        // Not in the log; scripts are not processed: only appended.
+        let log = node(&mut e, 0xa0a, 0);
+        double(&mut e, 0x0060_da90, eax(log));
+        double(&mut e, 0x005a_c740, eax(0));
+        start_log(&mut e);
+        assert!(player_character_add_quest_stage_item(&mut e, player, 0xb0b));
+        assert_eq!(*appended.borrow(), vec![(player.addr() + 0x6b0, 0xb0b)]);
+        assert!(calls_to(&e, 0x0070_6f30).is_empty());
+        // Already in the log: refused when the quest says so.
+        double(&mut e, 0x0060_d5e0, eax(0));
+        assert!(!player_character_add_quest_stage_item(
+            &mut e, player, 0xa0a
+        ));
+        assert_eq!(appended.borrow().len(), 1);
+        double(&mut e, 0x0060_d5e0, eax(1));
+        assert!(player_character_add_quest_stage_item(&mut e, player, 0xa0a));
+        assert_eq!(appended.borrow().len(), 2);
+    }
+
+    #[test]
+    fn a_new_stage_of_the_players_quest_plays_the_sound_and_selects_the_parent_world() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        double(&mut e, 0x0060_da90, eax(0));
+        record_appends(&mut e);
+        double(&mut e, 0x005a_c740, eax(1));
+        double(&mut e, 0x0060_fd70, eax(1));
+        double(&mut e, 0x005e_3fa0, eax(0x77));
+        double(&mut e, 0x005c_bb50, eax(0x77));
+        double(&mut e, 0x004f_d380, eax(0x0600_5100));
+        start_log(&mut e);
+        assert!(player_character_add_quest_stage_item(&mut e, player, 0xb0b));
+        assert_eq!(calls_to(&e, 0x0070_6f30), vec![vec![9]]);
+        assert_eq!(calls_to(&e, 0x005c_bb50), vec![vec![0x0600_5000]]);
+        assert_eq!(calls_to(&e, 0x0060_c9c0), vec![vec![0x0600_5100]]);
+        // A different quest, or no parent world, stops after the sound.
+        double(&mut e, 0x005c_bb50, eax(0x78));
+        start_log(&mut e);
+        player_character_add_quest_stage_item(&mut e, player, 0xb0b);
+        assert!(calls_to(&e, 0x0060_c9c0).is_empty());
+        double(&mut e, 0x005c_bb50, eax(0x77));
+        double(&mut e, 0x004f_d380, eax(0));
+        player_character_add_quest_stage_item(&mut e, player, 0xb0b);
+        assert!(calls_to(&e, 0x0060_c9c0).is_empty());
+        // Items the script system does not want show nothing.
+        double(&mut e, 0x0060_fd70, eax(0));
+        start_log(&mut e);
+        assert!(player_character_add_quest_stage_item(&mut e, player, 0xb0b));
+        assert!(calls_to(&e, 0x0070_6f30).is_empty());
+    }
+
+    #[test]
+    fn the_active_quest_is_stored_and_clearing_it_clears_the_targets() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        start_log(&mut e);
+        player_character_set_active_quest(&mut e, player, 0x55);
+        assert_eq!(e.get(player, PlayerCharacter::pActiveQuest).addr(), 0x55);
+        assert!(calls_to(&e, LIST_CLEAR).is_empty());
+        player_character_set_active_quest(&mut e, player, 0x55);
+        player_character_set_active_quest(&mut e, player, 0);
+        assert_eq!(e.get(player, PlayerCharacter::pActiveQuest).addr(), 0);
+        assert_eq!(calls_to(&e, LIST_CLEAR), vec![vec![player.addr() + 0x6c4]]);
+        // Clearing again changes nothing.
+        player_character_set_active_quest(&mut e, player, 0);
+        assert_eq!(calls_to(&e, LIST_CLEAR).len(), 1);
+    }
+
+    #[test]
+    fn a_quest_target_is_added_when_its_quest_has_objectives_and_it_is_new() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let head = node(&mut e, 0xa0a, 0);
+        double(&mut e, 0x0079_bc30, eax(head));
+        double(&mut e, 0x0044_edb0, eax(0x77));
+        double(&mut e, 0x005d_43e0, eax(0x0600_5200));
+        double(&mut e, LIST_IS_EMPTY, eax(0));
+        let appended = record_appends(&mut e);
+        start_log(&mut e);
+        fn_00952a20(&mut e, player, 0xb0b);
+        assert_eq!(*appended.borrow(), vec![(head, 0xb0b)]);
+        assert!(calls_to(&e, 0x005e_c500).is_empty());
+        // Already present: not added again.
+        fn_00952a20(&mut e, player, 0xa0a);
+        assert_eq!(appended.borrow().len(), 1);
+        // An empty objective list, or none at all, adds nothing.
+        double(&mut e, LIST_IS_EMPTY, eax(1));
+        fn_00952a20(&mut e, player, 0xc0c);
+        double(&mut e, 0x005d_43e0, eax(0));
+        fn_00952a20(&mut e, player, 0xc0c);
+        assert_eq!(appended.borrow().len(), 1);
+        // The active quest's target is handed on.
+        e.set(player, PlayerCharacter::pActiveQuest, Ptr::new(0x77));
+        fn_00952a20(&mut e, player, 0xc0c);
+        assert_eq!(
+            calls_to(&e, 0x005e_c500),
+            vec![vec![0xc0c, player.addr() + 0x6c4]]
+        );
     }
 }
