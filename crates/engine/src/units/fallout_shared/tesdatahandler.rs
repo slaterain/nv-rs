@@ -15,7 +15,31 @@
 //! (`this + offset`, which the linker folded with identical accessors of
 //! other classes, so some of the addresses belong to other units), the
 //! flag getters and the scalar deleting destructors of the objects the
-//! handler owns. The next session continues at `00461270`.
+//! handler owns. Session 1 stops before `00461270`.
+//!
+//! Session 2 (the next 40 functions, `00461270` to `00462ec0`) holds
+//! `NewCell`, the lookups by form id and editor id (`GetSound`, `GetFaction`,
+//! `GetGlobal`, `GetCellByEditorID`, ...), the add-on node array
+//! (`GetAddonNode`, `AddAddonNode`), the interior cell array helpers,
+//! `GetCellFromWorldCoord`, `GetExtCellDataFromFileByEditorID`,
+//! `UnloadCell`, `004624b0` (the scan of the data directory for plugin
+//! files, whose Windows file-find imports are called by their import
+//! slots) and the small `TESFile`/stream helpers the compiler emitted next to
+//! them. The next session continues at `00462ee0` (`CreateThreadSafeFiles`).
+//!
+//! Notes for session 2:
+//! - The virtual at `0x130` of a `TESForm` is the editor id getter and takes
+//!   no argument: the decompiler hangs the following call's pushed argument on
+//!   it (`GetGlobal`, `GetCellByEditorID`, `AddAddonNode`). `0x134` sets the
+//!   editor id.
+//! - `0045dfc0`'s list is `listFiles`; a `TESFile` is 0x42C bytes and its
+//!   offsets used here are the Xbox PDB fields (`m_Filename` `+0x20`,
+//!   `m_Path` `+0x124`, `m_currentform` `+0x240`, `m_FileInfo` `+0x29c`,
+//!   `cSummary` `+0x418`, `bCached` `+0x428`), read at their offsets since
+//!   `tesfile.cpp` is another unit.
+//! - The tag words of the form stream (`0x01187020`, `0x01187314`,
+//!   `0x011872b4`) are initialised in the exe's data; the code compares them
+//!   and the translation reads them from memory, so tests set them.
 //!
 //! Notes for the next session:
 //! - A `BSSimpleList<T>` is 8 bytes: the head node (item at +0, next at +4)
@@ -23,9 +47,10 @@
 //!   node's item slot, `0063f7b0(list)` removes the head node, `00726070`
 //!   steps to the next node and `005ae3d0(list, &item)` adds an item.
 //! - Functions of this same unit that come later in the queue and are called
-//!   by address from the ones here: `00461820` (`AddAddonNode`),
-//!   `00461bc0` (`GetCellFromWorldCoord`), `00464e50` (`CleanUpBadForms`)
-//!   and `00464f30` (returns its argument). The engine map assigns no unit
+//!   by address from the ones here: `00464e50` (`CleanUpBadForms`) and
+//!   `00464f30` (returns its argument); `00461820` (`AddAddonNode`) and
+//!   `00461bc0` (`GetCellFromWorldCoord`) are translated in session 2. The
+//!   engine map assigns no unit
 //!   to the other list accessors `AddFormToDataHandler` reaches
 //!   (`00460fb0`, `00461070`, `004610d0`, `004610f0`, `00461110`,
 //!   `00461130`, `00461150`, `00461190`) nor to `004612b0` (the name of a
@@ -268,6 +293,262 @@ const TES_GET_EMBEDDED_OBJECT: u32 = 0x0043_b5d0;
 /// Called on that embedded object by `ClearData` (frees the chain of nodes at
 /// `+4`).
 const EMBEDDED_OBJECT_RESET: u32 = 0x004e_e920;
+
+// Session 2 (`00461270` to `00462ec0`): more callees and data.
+/// The `TESDataHandler` singleton (pointer variable), which some functions
+/// read instead of using their own `this`.
+const DATA_HANDLER_SINGLETON: u32 = 0x011c_3f2c;
+/// The `TESSaveLoadGame` singleton (pointer variable): `this` of
+/// `GetCreatedExteriorCellFormID`.
+const SAVE_LOAD_GAME_SINGLETON: u32 = 0x011d_e45c;
+/// An object (pointer variable) `UnloadCell` asks `0042ce10` about and hands
+/// to `004623f0`.
+const OBJECT_011DDF38: u32 = 0x011d_df38;
+/// The object (in the exe's data, not a pointer variable) whose `009740a0`
+/// `UnloadCell` calls with the cell.
+const OBJECT_011E0E80: u32 = 0x011e_0e80;
+/// Offset in the TLS block of the word whose bit 0 `004623f0` and `00462480`
+/// work on.
+const TLS_FLAG_WORD: u32 = 0x294;
+
+/// The allocation scope object the game keeps on its stack (4 bytes):
+/// `00404eb0` constructs it with (kind, 1, source file, line), `00404ee0`
+/// destroys it.
+const SCOPE_ENTER: u32 = 0x0040_4eb0;
+const SCOPE_LEAVE: u32 = 0x0040_4ee0;
+/// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\TESDataHandler.cpp"`.
+const SOURCE_FILE: u32 = 0x0101_86b8;
+
+/// `_stricmp(a, b)` (cdecl wrapper).
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+/// `_strcpy_s(destination, size, source)` (cdecl wrapper).
+const STRING_COPY_S: u32 = 0x0040_6d30;
+/// `sprintf_s(destination, size, format, ...)` (cdecl wrapper).
+const FORMAT_S: u32 = 0x0040_6d00;
+/// Converts the float on the stack to an integer (`FISTP`).
+const FLOAT_TO_INT: u32 = 0x0040_6d90;
+/// `_splitpath_s`, the body of `00462d40` (nine words).
+const SPLIT_PATH_S: u32 = 0x00ec_7f1e;
+
+/// `TESForm` lookup by form id (cdecl, one argument); null when the form is
+/// not in `TESForm::pAllForms`.
+const FORM_BY_ID: u32 = 0x0048_39c0;
+/// `TESForm::GetFormByEditorID(name)` (Xbox PDB, cdecl).
+const FORM_BY_EDITOR_ID: u32 = 0x0048_3a00;
+/// `TESForm::GetFormTypeFromFormString(type word)` (Xbox PDB, cdecl; answer
+/// in AL).
+const FORM_TYPE_FROM_STRING: u32 = 0x0048_6890;
+/// Virtual slot of `TESForm` that returns the editor id (no arguments), and
+/// the one that sets it.
+const FORM_VTABLE_GET_EDITOR_ID: u32 = 0x130;
+const FORM_VTABLE_SET_EDITOR_ID: u32 = 0x134;
+/// Virtual slot `NewCell` calls on the cell it keeps (no arguments) and the
+/// one it calls with (form id, 1).
+const CELL_VTABLE_SLOT_88: u32 = 0x88;
+const CELL_VTABLE_SET_FORM_ID: u32 = 0x128;
+
+/// The list-is-empty test (`this` is a list node: item and next are null).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `this` is a list node, the argument the address of a word holding an
+/// item: whether the chain from the node holds that item.
+const LIST_CONTAINS: u32 = 0x005f_65d0;
+/// The same arguments: removes the item from the chain.
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+/// The same arguments: appends the item at the end of the chain.
+const LIST_APPEND: u32 = 0x0090_5820;
+/// The next object of a `TESObject` list: the word at `+0x20`.
+const OBJECT_NEXT: u32 = 0x007a_f430;
+/// The element count (`+0xC`) of the cell array.
+const CELL_ARRAY_COUNT: u32 = 0x0099_38b0;
+/// Compacts the cell array (removes the holes).
+const CELL_ARRAY_COMPACT: u32 = 0x0060_0bc0;
+/// Stores an element at an index (`this` is the array; the index and the
+/// address of a word holding the element) and keeps the array's counts.
+const CELL_ARRAY_SET_AT: u32 = 0x0096_ae90;
+/// The sort key the cell sort compares (`this` is a cell).
+const CELL_SORT_KEY: u32 = 0x0045_1cb0;
+/// Appends an element (`this` is the add-on node array, the argument the
+/// address of a word holding the node); answers the index.
+const ADDON_NODE_ARRAY_ADD: u32 = 0x0099_38d0;
+/// Clears the entry at an index of the add-on node array.
+const ADDON_NODE_ARRAY_REMOVE_AT: u32 = 0x009e_98d0;
+/// The index of an add-on node (`+0x50`) and its setter (`this`, index).
+const ADDON_NODE_GET_INDEX: u32 = 0x0068_a830;
+const ADDON_NODE_SET_INDEX: u32 = 0x0058_e430;
+
+/// `TESObjectCELL`: constructor (`this`; the object is 0xE0 bytes),
+/// `SetInterior(flag)`, the setter of the byte at `+0x24` (the cell flags),
+/// `CreateCellData()` and `SetDataCoord(x, y)` (Xbox PDB for the named).
+const CELL_CONSTRUCT: u32 = 0x0054_15b0;
+const CELL_SET_INTERIOR: u32 = 0x0054_4300;
+const CELL_SET_FLAGS_BYTE: u32 = 0x0046_1310;
+const CELL_CREATE_CELL_DATA: u32 = 0x0054_4630;
+const CELL_SET_DATA_COORD: u32 = 0x0054_4c90;
+/// `TESObjectCELL::Detach(flag)`.
+const CELL_DETACH: u32 = 0x0055_2bd0;
+/// Sets the byte at `+0x26` of the cell.
+const CELL_SET_BYTE_26: u32 = 0x0045_12a0;
+/// Called by `UnloadCell` on the cell, in this order.
+const CELL_UNLOAD_STEP_1: u32 = 0x0055_08b0;
+const CELL_UNLOAD_STEP_2: u32 = 0x0054_b750;
+/// `GetLowestProcessMiddleLow()` and `SetLowestProcessToMiddleLow(flag)`.
+const CELL_GET_LOWEST_PROCESS: u32 = 0x0055_1620;
+const CELL_SET_LOWEST_PROCESS: u32 = 0x0055_1480;
+/// `UnloadCell` calls it with the cell and `!sleeping`.
+const CELL_SET_PROCESS_FLAG: u32 = 0x0054_af40;
+/// Whether bit 0 of the byte at `+0x24` is set (an interior cell).
+const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
+/// `TESObjectCELL::GetLand()` and `TESObjectLAND::UnLoadVertices()`.
+const CELL_GET_LAND: u32 = 0x0054_6fb0;
+const LAND_UNLOAD_VERTICES: u32 = 0x0053_6d80;
+const CELL_UNLOAD_STEP_3: u32 = 0x0054_6970;
+const CELL_UNLOAD_STEP_4: u32 = 0x0096_1f30;
+/// `TESObjectCELL::GetWorldSpace()`.
+const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+/// `009740a0(cell)` with the object at [`OBJECT_011E0E80`] as `this`.
+const OBJECT_011E0E80_STEP: u32 = 0x0097_40a0;
+/// Stores its argument in the byte at `0x01202df0`.
+const SET_BYTE_01202DF0: u32 = 0x0044_ada0;
+/// Whether bit 1 of the word at `+0x244` of the object is set.
+const OBJECT_011DDF38_TEST: u32 = 0x0042_ce10;
+/// `bClearingData` of the handler it is called on (`+0x61D`).
+const HANDLER_IS_CLEARING_DATA: u32 = 0x0042_26e0;
+/// `bSaveLoad` of the handler it is called on (`+0x61A`).
+const HANDLER_IS_SAVE_LOAD: u32 = 0x0045_16b0;
+/// `PlayerCharacter::IsSleepingorResting()` (Xbox PDB).
+const PLAYER_IS_SLEEPING_OR_RESTING: u32 = 0x0094_df60;
+
+/// `TESWorldSpace`: `GetCellFromCellCoord(x, y)`, `AddCell(cell)`, the lookup
+/// of a cell by editor id and `GetExtCellDataFromFileByEditorID(name, &x,
+/// &y)` (Xbox PDB for the named).
+const WORLD_GET_CELL: u32 = 0x0058_75a0;
+const WORLD_ADD_CELL: u32 = 0x0058_7670;
+const WORLD_FIND_CELL_BY_EDITOR_ID: u32 = 0x0058_8560;
+const WORLD_GET_EXT_CELL_DATA: u32 = 0x0058_5940;
+/// `TESWorldSpace::UnLoadCell(cell)` (Xbox PDB).
+const WORLD_UNLOAD_CELL: u32 = 0x0058_5e00;
+/// `TESSaveLoadGame::GetCreatedExteriorCellFormID(world id, x, y)` (Xbox PDB).
+const GET_CREATED_EXTERIOR_CELL_FORM_ID: u32 = 0x0086_1640;
+/// `TESNPC::InitValues(flag)` (Xbox PDB).
+const NPC_INIT_VALUES: u32 = 0x0060_3be0;
+/// Calls of the topic code.
+const TOPIC_LIST_FUNCTION: u32 = 0x0061_a380;
+const TOPIC_INFO_LIST_FUNCTION: u32 = 0x0061_f360;
+
+// `TESFile` (offsets are the Xbox PDB fields, checked against the PC code).
+/// `TESFile::OpenTES(this; 0, 0)`.
+const FILE_OPEN: u32 = 0x0047_0c70;
+/// `TESFile::TESFile(this; directory, file name, 0)`; the object is 0x42C
+/// bytes.
+const FILE_CONSTRUCT: u32 = 0x0047_0710;
+/// `TESFile::NextForm(flag)`.
+const FILE_NEXT_FORM: u32 = 0x0047_2150;
+/// Skips the rest of the current group (answer in AL).
+const FILE_SKIP_GROUP: u32 = 0x0047_3660;
+/// `TESFile::GetOptimizedFile` (answer in AL).
+const FILE_GET_OPTIMIZED: u32 = 0x0047_1ca0;
+/// `TESFile::GetIndexFile(index)`.
+const FILE_GET_INDEX_FILE: u32 = 0x0047_1a10;
+/// The count the loop over `GetIndexFile` runs to.
+const FILE_INDEX_COUNT: u32 = 0x0047_1ad0;
+/// `TESFile::GenIndexTable(list, flag)`.
+const FILE_GEN_INDEX_TABLE: u32 = 0x0047_1870;
+/// `cCompileIndex` (`+0x40C`).
+const FILE_COMPILE_INDEX: u32 = 0x0047_3250;
+/// `TESFile::GetTESChunk()`: the id of the current chunk.
+const FILE_GET_CHUNK_ID: u32 = 0x0047_26b0;
+/// Moves to the next chunk of the form; false when there is none (no name in
+/// the map).
+const FILE_NEXT_CHUNK: u32 = 0x0047_26f0;
+/// `m_actualChunkSize` (`+0x25C`).
+const FILE_CHUNK_SIZE: u32 = 0x0040_1660;
+/// `TESFile::GetChunkData(this; buffer, size)` (size 0: the whole chunk).
+const FILE_GET_CHUNK_DATA: u32 = 0x0047_2890;
+/// `bMustEndianConvert` (`+0x299`).
+const FILE_MUST_ENDIAN_CONVERT: u32 = 0x0040_1680;
+/// Sets bit 2 of the file's `m_Flags` (`+0x3E8`) when its argument is true
+/// (and clears bits 2 and 3 otherwise).
+const FILE_SET_FLAG_BIT_2: u32 = 0x0047_1d00;
+/// Opens the file's header and answers a status: 0 when it worked, else a
+/// code (2 when the file cannot be opened). No name in the map.
+const FILE_OPEN_HEADER: u32 = 0x0047_1400;
+/// `TESDataHandler::GetListFile(name)` (Xbox PDB).
+const GET_LIST_FILE: u32 = 0x0046_2f40;
+/// `TESDataHandler::IsDLCPackageName(name)` (Xbox PDB).
+const IS_DLC_PACKAGE_NAME: u32 = 0x0046_feb0;
+/// Initialises the 12-byte record read from a cell's `XCLC` chunk (two words
+/// and a byte).
+const COORDS_INIT: u32 = 0x0054_0720;
+/// Byte-swaps a word in place (`this` is the word's address; the second
+/// word is not read).
+const SWAP_WORD: u32 = 0x0040_1080;
+/// The record type words of the form stream, in the exe's data: the type of
+/// a group header, of the records the code casts to `TESWorldSpace`, and of
+/// the records with the editor id and `XCLC` coordinate chunks.
+const GROUP_TYPE_WORD: u32 = 0x0118_7020;
+const WORLD_TYPE_WORD: u32 = 0x0118_7314;
+const CELL_TYPE_WORD: u32 = 0x0118_72b4;
+/// Chunk ids: `EDID` and `XCLC` as little-endian words.
+const CHUNK_EDID: u32 = 0x4449_4445;
+const CHUNK_XCLC: u32 = 0x434c_4358;
+
+// Files and archives.
+/// `BSFile::BSFile(this; path, 0, 0x100, 1)`, `BSFile::Exist()` and
+/// `BSFile::~BSFile()` (Xbox PDB). The object is 0x158 bytes or more; the
+/// frame of `004624b0` leaves that much.
+const BSFILE_CONSTRUCT: u32 = 0x00b0_0260;
+const BSFILE_EXIST: u32 = 0x00af_fc60;
+const BSFILE_DESTRUCT: u32 = 0x00af_f240;
+/// The byte at `+0x2c` of the `BSFile` (answer in AL).
+const BSFILE_FLAG_2C: u32 = 0x0089_05f0;
+/// `FileFinder::Exist(name, buffer, 1, -1)` (Xbox PDB, cdecl).
+const FILE_FINDER_EXIST: u32 = 0x0045_6a20;
+/// `ArchiveManager::OpenArchive(name, 0, 0)` (Xbox PDB, cdecl).
+const OPEN_ARCHIVE: u32 = 0x00af_4be0;
+/// Windows imports (slots of the import table): `lstrcpyA`, `lstrcatA`,
+/// `FindFirstFileA`, `CompareFileTime`, `FindNextFileA`, `FindClose`.
+const LSTRCPY_A: u32 = 0x00fd_f078;
+const LSTRCAT_A: u32 = 0x00fd_f074;
+const FIND_FIRST_FILE_A: u32 = 0x00fd_f070;
+const COMPARE_FILE_TIME: u32 = 0x00fd_f06c;
+const FIND_NEXT_FILE_A: u32 = 0x00fd_f068;
+const FIND_CLOSE: u32 = 0x00fd_f064;
+/// `INVALID_HANDLE_VALUE`.
+const INVALID_HANDLE: u32 = 0xffff_ffff;
+/// `"Update.bsa"`, `"%s%s.NAM"`, `"*.esp"` and `"*.esm"`.
+const UPDATE_BSA: u32 = 0x0101_8804;
+const NAM_PATH_FORMAT: u32 = 0x0101_8810;
+const PATTERN_ESP: u32 = 0x0101_881c;
+const PATTERN_ESM: u32 = 0x0101_8824;
+/// `"CELLS: Trying to get exterior cell for invalid cell coordinate. Values
+/// must be between %i and %i."`.
+const INVALID_CELL_COORD_FORMAT: u32 = 0x0101_87a0;
+/// `"FORMS: Addon Node %08X \"%s\" is trying to use index %i, but Addon
+/// Node %08X \"%s\" already uses that index.  Addon Node %08X \"%s\" will be
+/// remapped to a new index."`.
+const ADDON_INDEX_CLASH_FORMAT: u32 = 0x0101_8700;
+/// The empty string `GetCellFromCellCoord` passes to `NewCell` as the cell's
+/// editor id.
+const EMPTY_STRING: u32 = 0x0101_1584;
+
+// Offsets in a `WIN32_FIND_DATAA` (0x140 bytes).
+const FIND_DATA_LAST_WRITE_TIME: u32 = 0x14;
+const FIND_DATA_SIZE_HIGH: u32 = 0x1c;
+const FIND_DATA_SIZE_LOW: u32 = 0x20;
+const FIND_DATA_FILE_NAME: u32 = 0x2c;
+
+// RTTI type descriptors for the casts of the session-2 functions.
+const NPC_TYPE_DESCRIPTOR: u32 = 0x0118_3a1c;
+const CLASS_TYPE_DESCRIPTOR: u32 = 0x0118_6424;
+const SOUND_TYPE_DESCRIPTOR: u32 = 0x0118_32fc;
+const FACTION_TYPE_DESCRIPTOR: u32 = 0x0118_4704;
+const REPUTATION_TYPE_DESCRIPTOR: u32 = 0x0118_64e4;
+const LOAD_SCREEN_TYPE_TYPE_DESCRIPTOR: u32 = 0x0118_6110;
+const TOPIC_TYPE_DESCRIPTOR: u32 = 0x0118_4720;
+const WORLD_SPACE_TYPE_DESCRIPTOR: u32 = 0x0118_3fd0;
+
+/// Sets a `BSStringT` (`this`, the text); answers `this`.
+const SUMMARY_SET: u32 = 0x0043_8390;
 
 layout! {
     /// `TESDataHandler` (Xbox PDB), 0x63C bytes on both builds. The lists
@@ -1399,6 +1680,1225 @@ pub fn fn_00461250(_e: &mut Engine, this: Ptr<TESDataHandler>) -> Ptr<BSSimpleLi
     this.at(TESDataHandler::listMessages)
 }
 
+// ---------------------------------------------------------------------------
+// Session 2: `00461270` to `00462ec0`.
+// ---------------------------------------------------------------------------
+
+/// Enters the allocation scope of a function (`kind` is the first argument
+/// of the scope constructor, `line` the source line of the scope): the
+/// 4-byte scope object the game keeps on its stack.
+fn scope_enter(e: &mut Engine, kind: u32, line: u32) -> Ptr {
+    let scope = Ptr::new(e.mem.alloc(4));
+    e.call(SCOPE_ENTER, &args![scope, kind, 1u32, SOURCE_FILE, line]);
+    scope
+}
+
+/// Destroys the scope object and frees its block.
+fn scope_leave(e: &mut Engine, scope: Ptr) {
+    e.call(SCOPE_LEAVE, &args![scope]);
+    e.mem.free(scope.addr());
+}
+
+/// The item of a list node: `*` of the item slot address `006815c0` returns.
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// Looks the form with `form_id` up and casts it to the class whose RTTI
+/// type descriptor is `target` (`__RTDynamicCast(form, 0, TESForm, target,
+/// 0)`).
+fn form_by_id_as(e: &mut Engine, form_id: u32, target: u32) -> Ptr {
+    let form = e.call(FORM_BY_ID, &args![form_id]).u32();
+    e.call(
+        DYNAMIC_CAST,
+        &args![form, 0u32, FORM_TYPE_DESCRIPTOR, target, 0u32],
+    )
+    .ptr()
+}
+
+// Translated from 00461270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of `listLightingTemplates` (`this + 0x1b0`).
+pub fn fn_00461270(_e: &mut Engine, this: Ptr<TESDataHandler>) -> Ptr<BSSimpleList> {
+    this.at(TESDataHandler::listLightingTemplates)
+}
+
+// Translated from 00461290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of `listLoadScreenTypes` (`this + 0x1c0`).
+pub fn fn_00461290(_e: &mut Engine, this: Ptr<TESDataHandler>) -> Ptr<BSSimpleList> {
+    this.at(TESDataHandler::listLoadScreenTypes)
+}
+
+// Translated from 00461330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::NewCell` (Xbox PDB): creates the exterior cell at (`x`,
+/// `y`) of `world`. Null when `world` is null. Otherwise it allocates a
+/// `TESObjectCELL` (0xE0 bytes) and constructs it, gives it the form id the
+/// save game created for that exterior cell (virtual `0x128`, arguments the
+/// id and 1, only if there is one) and the editor id `name` (virtual
+/// `0x134`, only if not null), makes it an exterior cell, sets the byte at
+/// `+0x24` to 2, creates its cell data and sets its coordinates, and adds
+/// it to the world space. If `AddCell` refuses, the cell is destroyed
+/// (virtual `0x10`, flag 1) and null returned; else virtual `0x88` is
+/// called on it and it is returned. `this` is not read. The allocation
+/// scope (kind `0x1a`, line `0x7dd`) is only entered when `world` is not
+/// null.
+pub fn tes_data_handler_new_cell(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    name: u32,
+    x: i32,
+    y: i32,
+    world: Ptr,
+) -> Ptr {
+    if world.is_null() {
+        return Ptr::NULL;
+    }
+    let scope = scope_enter(e, 0x1a, 0x7dd);
+    let block = e.call(OPERATOR_NEW, &args![0xe0u32]).u32();
+    let cell = if block != 0 {
+        e.call(CELL_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    let world_id = e.call(FORM_GET_ID, &args![world]).u32();
+    let save_load_game: u32 = e.global(SAVE_LOAD_GAME_SINGLETON);
+    let created_id = e
+        .call(
+            GET_CREATED_EXTERIOR_CELL_FORM_ID,
+            &args![save_load_game, world_id, x, y],
+        )
+        .u32();
+    if created_id != 0 {
+        e.vcall(cell, CELL_VTABLE_SET_FORM_ID, &args![created_id, 1u32]);
+    }
+    if name != 0 {
+        e.vcall(cell, FORM_VTABLE_SET_EDITOR_ID, &args![name]);
+    }
+    e.call(CELL_SET_INTERIOR, &args![cell, 0u32]);
+    e.call(CELL_SET_FLAGS_BYTE, &args![cell, 2u32]);
+    e.call(CELL_CREATE_CELL_DATA, &args![cell]);
+    e.call(CELL_SET_DATA_COORD, &args![cell, x, y]);
+    let added = e.call(WORLD_ADD_CELL, &args![world, cell]).bool();
+    let result = if added {
+        e.vcall(cell, CELL_VTABLE_SLOT_88, &args![]);
+        Ptr::new(cell)
+    } else {
+        if cell != 0 {
+            e.vcall(cell, FORM_VTABLE_DELETE, &args![1u32]);
+        }
+        Ptr::NULL
+    };
+    scope_leave(e, scope);
+    result
+}
+
+// Translated from 004614e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the handler's object list (`pObjectList`, then its first object,
+/// then each object's next one) and, for every object that casts to
+/// `TESNPC` and whose component at `+0x30` has bit `0x80` set in its word at
+/// `+4` (`00461560`), calls `TESNPC::InitValues(0)` (Xbox PDB).
+pub fn fn_004614e0(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let object_list = e.call(LIST_NEXT, &args![this]).u32();
+    let mut object = e.call(LIST_NEXT, &args![object_list]).u32();
+    while object != 0 {
+        let npc = e
+            .call(
+                DYNAMIC_CAST,
+                &args![
+                    object,
+                    0u32,
+                    OBJECT_TYPE_DESCRIPTOR,
+                    NPC_TYPE_DESCRIPTOR,
+                    0u32
+                ],
+            )
+            .u32();
+        if npc != 0 && fn_00461560(e, Ptr::new(npc + 0x30)) {
+            e.call(NPC_INIT_VALUES, &args![npc, 0u32]);
+        }
+        object = e.call(OBJECT_NEXT, &args![object]).u32();
+    }
+}
+
+// Translated from 00461560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x80` of the word at `this + 4` is set (`00461580` with
+/// `0x80`).
+pub fn fn_00461560(e: &mut Engine, this: Ptr) -> bool {
+    fn_00461580(e, this, 0x80)
+}
+
+// Translated from 00461580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at `this + 4` has any of the bits in `mask`.
+pub fn fn_00461580(e: &mut Engine, this: Ptr, mask: u32) -> bool {
+    e.mem.u32(this.addr() + 4) & mask != 0
+}
+
+// Translated from 004615a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The form with id `form_id`, cast to `TESClass` (null when there is none
+/// or it is another class). `this` is not read.
+pub fn fn_004615a0(e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> Ptr {
+    form_by_id_as(e, form_id, CLASS_TYPE_DESCRIPTOR)
+}
+
+// Translated from 004615d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetSound` (Xbox PDB): the form with id `form_id`, cast
+/// to `TESSound`.
+pub fn tes_data_handler_get_sound(e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> Ptr {
+    form_by_id_as(e, form_id, SOUND_TYPE_DESCRIPTOR)
+}
+
+// Translated from 00461600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetFaction` (Xbox PDB): the form with id `form_id`, cast
+/// to `TESFaction`.
+pub fn tes_data_handler_get_faction(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    form_id: u32,
+) -> Ptr {
+    form_by_id_as(e, form_id, FACTION_TYPE_DESCRIPTOR)
+}
+
+// Translated from 00461630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetReputation` (Xbox PDB): the form with id `form_id`,
+/// cast to `TESReputation`.
+pub fn tes_data_handler_get_reputation(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    form_id: u32,
+) -> Ptr {
+    form_by_id_as(e, form_id, REPUTATION_TYPE_DESCRIPTOR)
+}
+
+// Translated from 00461660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The form with id `form_id`, cast to `TESLoadScreenType`.
+pub fn fn_00461660(e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> Ptr {
+    form_by_id_as(e, form_id, LOAD_SCREEN_TYPE_TYPE_DESCRIPTOR)
+}
+
+// Translated from 00461690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetTopic` (Xbox PDB): the form with id `form_id`, cast
+/// to `TESTopic`.
+pub fn tes_data_handler_get_topic(e: &mut Engine, _this: Ptr<TESDataHandler>, form_id: u32) -> Ptr {
+    form_by_id_as(e, form_id, TOPIC_TYPE_DESCRIPTOR)
+}
+
+// Translated from 004616c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetSound` (Xbox PDB, overload by editor id): the form
+/// `TESForm::GetFormByEditorID` finds for `name`, if its type byte is `0xd`,
+/// else null. `this` is not read.
+pub fn tes_data_handler_get_sound_ov2(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    name: Ptr,
+) -> Ptr {
+    let form = e.call(FORM_BY_EDITOR_ID, &args![name]).u32();
+    if form != 0 && e.call(FORM_GET_TYPE, &args![form]).u32() == 0xd {
+        Ptr::new(form)
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 00461700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetGlobal` (Xbox PDB): the global in `listGlobals`
+/// whose editor id (virtual `0x130`, no arguments) equals `name` ignoring
+/// case; null if the list is empty or none does.
+pub fn tes_data_handler_get_global(e: &mut Engine, this: Ptr<TESDataHandler>, name: Ptr) -> Ptr {
+    let list = this.at(TESDataHandler::listGlobals);
+    if e.call(LIST_IS_EMPTY, &args![list]).bool() {
+        return Ptr::NULL;
+    }
+    let mut node = list.addr();
+    while node != 0 {
+        let item = list_item(e, node);
+        if item != 0 {
+            let editor_id = e.vcall(item, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+            if e.call(STRING_COMPARE, &args![editor_id, name]).i32() == 0 {
+                return Ptr::new(item);
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    Ptr::NULL
+}
+
+// Translated from 00461780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0061a380(argument, &listTopics, 1)` (cdecl) and returns its
+/// result.
+pub fn fn_00461780(e: &mut Engine, this: Ptr<TESDataHandler>, argument: u32) -> u32 {
+    e.call(
+        TOPIC_LIST_FUNCTION,
+        &args![argument, this.at(TESDataHandler::listTopics), 1u32],
+    )
+    .u32()
+}
+
+// Translated from 004617b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0061f360(argument, &listTopicInfos)` (cdecl) and returns its
+/// result.
+pub fn fn_004617b0(e: &mut Engine, this: Ptr<TESDataHandler>, argument: u32) -> u32 {
+    e.call(
+        TOPIC_INFO_LIST_FUNCTION,
+        &args![argument, this.at(TESDataHandler::listTopicInfos)],
+    )
+    .u32()
+}
+
+// Translated from 004617e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetAddonNode` (Xbox PDB): the node at `index` of
+/// `arrayAddonNodes`, or null when `index` is not below its size.
+pub fn tes_data_handler_get_addon_node(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    index: u32,
+) -> Ptr {
+    let nodes = this.at(TESDataHandler::arrayAddonNodes);
+    let size = e.call(ARRAY_SIZE, &args![nodes]).u32();
+    if index < size {
+        let slot = e.call(ARRAY_AT, &args![nodes, index]).u32();
+        Ptr::new(e.mem.u32(slot))
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 00461820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::AddAddonNode` (Xbox PDB): files an add-on node by its
+/// index (`+0x50`). Nothing for a null node. If the index is inside the
+/// array and another node already holds it, logs the clash (`FORMS: Addon
+/// Node ... will be remapped to a new index.`, with the form ids and editor
+/// ids of both) and treats the node as indexless (`0xffffffff`). A node
+/// without an index is appended to the array and given the index that
+/// answers; otherwise it is stored at its index (`SetAtGrow`).
+pub fn tes_data_handler_add_addon_node(e: &mut Engine, this: Ptr<TESDataHandler>, node: Ptr) {
+    if node.is_null() {
+        return;
+    }
+    let nodes = this.at(TESDataHandler::arrayAddonNodes);
+    let mut index = e.call(ADDON_NODE_GET_INDEX, &args![node]).u32();
+    let size = e.call(ARRAY_SIZE, &args![nodes]).u32();
+    if index < size {
+        let slot = e.call(ARRAY_AT, &args![nodes, index]).u32();
+        let existing = e.mem.u32(slot);
+        if existing != 0 && existing != node.addr() {
+            let node_name = e
+                .vcall(node.addr(), FORM_VTABLE_GET_EDITOR_ID, &args![])
+                .u32();
+            let node_id = e.call(FORM_GET_ID, &args![node]).u32();
+            let existing_name = e.vcall(existing, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+            let existing_id = e.call(FORM_GET_ID, &args![existing]).u32();
+            let node_name_again = e
+                .vcall(node.addr(), FORM_VTABLE_GET_EDITOR_ID, &args![])
+                .u32();
+            let node_id_again = e.call(FORM_GET_ID, &args![node]).u32();
+            e.call(
+                LOG_MESSAGE,
+                &args![
+                    ADDON_INDEX_CLASH_FORMAT,
+                    node_id_again,
+                    node_name_again,
+                    index,
+                    existing_id,
+                    existing_name,
+                    node_id,
+                    node_name
+                ],
+            );
+            index = 0xffff_ffff;
+        }
+    }
+    // The code keeps `node` in its parameter slot and passes that slot's
+    // address to the array functions.
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), node.addr());
+        if index == 0xffff_ffff {
+            let new_index = e.call(ADDON_NODE_ARRAY_ADD, &args![nodes, slot]).u32();
+            e.call(ADDON_NODE_SET_INDEX, &args![node, new_index]);
+        } else {
+            let node_index = e.call(ADDON_NODE_GET_INDEX, &args![node]).u32();
+            e.call(ARRAY_SET_AT_GROW, &args![nodes, node_index, slot]);
+        }
+    });
+}
+
+// Translated from 00461930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For a node that is not null, calls `009e98d0(arrayAddonNodes, node's
+/// index)`.
+pub fn fn_00461930(e: &mut Engine, this: Ptr<TESDataHandler>, node: Ptr) {
+    if node.is_null() {
+        return;
+    }
+    let index = e.call(ADDON_NODE_GET_INDEX, &args![node]).u32();
+    e.call(
+        ADDON_NODE_ARRAY_REMOVE_AT,
+        &args![this.at(TESDataHandler::arrayAddonNodes), index],
+    );
+}
+
+// Translated from 00461960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The element count (`+0xC`, as a word) of `arrayInteriorCells`.
+pub fn fn_00461960(e: &mut Engine, this: Ptr<TESDataHandler>) -> u32 {
+    e.call(
+        CELL_ARRAY_COUNT,
+        &args![this.at(TESDataHandler::arrayInteriorCells)],
+    )
+    .u32()
+}
+
+// Translated from 00461980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compacts `arrayInteriorCells` (`00600bc0`), then returns its element at
+/// `index`.
+pub fn fn_00461980(e: &mut Engine, this: Ptr<TESDataHandler>, index: u32) -> u32 {
+    let cells = this.at(TESDataHandler::arrayInteriorCells);
+    e.call(CELL_ARRAY_COMPACT, &args![cells]);
+    let slot = e.call(ARRAY_AT, &args![cells, index]).u32();
+    e.mem.u32(slot)
+}
+
+// Translated from 004619b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compacts `arrayInteriorCells`, then sorts it by selection: for each index
+/// it finds the smallest later (or equal) element by comparing the keys
+/// `00451cb0` gives (`_stricmp`; a null element is replaced by any element),
+/// and swaps it in with two `SetAt` calls.
+pub fn fn_004619b0(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let cells = this.at(TESDataHandler::arrayInteriorCells);
+    e.call(CELL_ARRAY_COMPACT, &args![cells]);
+    let count = e.call(CELL_ARRAY_COUNT, &args![cells]).i32();
+    let mut i = 0i32;
+    while i < count - 1 {
+        let slot = e.call(ARRAY_AT, &args![cells, i]).u32();
+        let original = e.mem.u32(slot);
+        let mut best = original;
+        let mut best_index = i;
+        let mut j = i + 1;
+        while j < count {
+            let slot = e.call(ARRAY_AT, &args![cells, j]).u32();
+            let candidate = e.mem.u32(slot);
+            if best != 0 && candidate != 0 {
+                let best_key = e.call(CELL_SORT_KEY, &args![best]).u32();
+                let candidate_key = e.call(CELL_SORT_KEY, &args![candidate]).u32();
+                if e.call(STRING_COMPARE, &args![candidate_key, best_key])
+                    .i32()
+                    < 0
+                {
+                    best = candidate;
+                    best_index = j;
+                }
+            } else if best == 0 {
+                best = candidate;
+                best_index = j;
+            }
+            j += 1;
+        }
+        if best != 0 && best != original {
+            e.with_stack(8, |e, words| {
+                let best_slot = words.addr();
+                let original_slot = words.addr() + 4;
+                e.mem.set_u32(best_slot, best);
+                e.mem.set_u32(original_slot, original);
+                e.call(CELL_ARRAY_SET_AT, &args![cells, i, best_slot]);
+                e.call(CELL_ARRAY_SET_AT, &args![cells, best_index, original_slot]);
+            });
+        }
+        i += 1;
+    }
+}
+
+// Translated from 00461ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetCellByEditorID` (Xbox PDB): null for a null `name`.
+/// Looks through `arrayInteriorCells` for the cell whose editor id (virtual
+/// `0x130`) equals `name` ignoring case, then asks each world space of
+/// `listWorldSpaces` (`00588560`) in turn; null if none has it.
+pub fn tes_data_handler_get_cell_by_editor_id(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    name: Ptr,
+) -> Ptr {
+    if name.is_null() {
+        return Ptr::NULL;
+    }
+    let cells = this.at(TESDataHandler::arrayInteriorCells);
+    let count = e.call(ARRAY_SIZE, &args![cells]).i32();
+    for index in 0..count {
+        let slot = e.call(ARRAY_AT, &args![cells, index]).u32();
+        let cell = e.mem.u32(slot);
+        let editor_id = e.vcall(cell, FORM_VTABLE_GET_EDITOR_ID, &args![]).u32();
+        if e.call(STRING_COMPARE, &args![editor_id, name]).i32() == 0 {
+            return Ptr::new(cell);
+        }
+    }
+    let mut node = fn_00460140(e, this).addr();
+    while node != 0 {
+        let world = list_item(e, node);
+        if world != 0 {
+            let cell = e
+                .call(WORLD_FIND_CELL_BY_EDITOR_ID, &args![world, name])
+                .u32();
+            if cell != 0 {
+                return Ptr::new(cell);
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    Ptr::NULL
+}
+
+// Translated from 00461bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetCellFromWorldCoord` (Xbox PDB): converts the world
+/// position (`x`, `y`) to an integer each (`00406d90`) and shifts it right
+/// by 12 (the 4096-unit cell size) for the cell coordinates, then returns
+/// `00461c20` of them.
+pub fn tes_data_handler_get_cell_from_world_coord(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    x: f32,
+    y: f32,
+    world: Ptr,
+    create: u8,
+) -> Ptr {
+    let cell_x = e.call(FLOAT_TO_INT, &args![x]).i32() >> 12;
+    let cell_y = e.call(FLOAT_TO_INT, &args![y]).i32() >> 12;
+    fn_00461c20(e, this, cell_x, cell_y, world, create)
+}
+
+// Translated from 00461c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The exterior cell at (`x`, `y`) of `world` (the first world space of
+/// `listWorldSpaces` when null; null when there is none). Coordinates
+/// outside -0x8000..0x7fff are logged (`CELLS: Trying to get exterior cell
+/// for invalid cell coordinate...`) and give null. Otherwise it asks the
+/// world space (`GetCellFromCellCoord`); if it has none, and `bSaveLoad` is
+/// clear and `create` is not zero, makes it with `NewCell`.
+pub fn fn_00461c20(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    x: i32,
+    y: i32,
+    world: Ptr,
+    create: u8,
+) -> Ptr {
+    let mut world = world;
+    if world.is_null() {
+        let worlds = fn_00460140(e, this).addr();
+        world = Ptr::new(list_item(e, worlds));
+        if world.is_null() {
+            return Ptr::NULL;
+        }
+    }
+    if x > 0x7fff || y > 0x7fff || x < -0x8000 || y < -0x8000 {
+        e.call(
+            LOG_MESSAGE,
+            &args![INVALID_CELL_COORD_FORMAT, 0xffff_8000u32, 0x7fffu32],
+        );
+        return Ptr::NULL;
+    }
+    let cell = e.call(WORLD_GET_CELL, &args![world, x, y]).u32();
+    if cell != 0 {
+        return Ptr::new(cell);
+    }
+    if !e.call(HANDLER_IS_SAVE_LOAD, &args![this]).bool() && create != 0 {
+        tes_data_handler_new_cell(e, this, EMPTY_STRING, x, y, world)
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 00461cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GetExtCellDataFromFileByEditorID` (Xbox PDB): finds the
+/// exterior cell named `name` and stores its coordinates in `out_x` and
+/// `out_y` (both zeroed first); returns the world space it belongs to, or
+/// null. Null or empty `name`: null.
+///
+/// - If any loaded file is "optimized" (`TESFile::GetOptimizedFile`), asks
+///   each world space of the singleton's `listWorldSpaces`
+///   (`TESWorldSpace::GetExtCellDataFromFileByEditorID`) until one answers
+///   true (the loop stops at an empty list node) and returns it.
+/// - Otherwise opens each loaded file in turn and scans its forms: it moves
+///   over the top groups until the group of the world records, then reads
+///   the world records (casting the form named by each record's id, with the
+///   file index of its master, to `TESWorldSpace`; the last one is the
+///   result) and cell records: a cell record's `EDID` chunk is compared with
+///   `name` and, when equal, its `XCLC` chunk gives the coordinates (the
+///   two words are byte-swapped when the file needs it). The file is closed
+///   after the scan; a match ends the search.
+///
+/// The scan is inside the allocation scope of kind `0x16`, line `0x1041`.
+pub fn tes_data_handler_get_ext_cell_data_from_file_by_editor_id(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    name: Ptr,
+    out_x: Ptr,
+    out_y: Ptr,
+) -> Ptr {
+    let scope = scope_enter(e, 0x16, 0x1041);
+    e.mem.set_u32(out_x.addr(), 0);
+    e.mem.set_u32(out_y.addr(), 0);
+    let mut result = 0;
+    if !name.is_null() && e.mem.u8(name.addr()) != 0 {
+        result = find_ext_cell_data(e, this, name, out_x, out_y);
+    }
+    scope_leave(e, scope);
+    Ptr::new(result)
+}
+
+/// The search of `GetExtCellDataFromFileByEditorID`; the world space or 0.
+fn find_ext_cell_data(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    name: Ptr,
+    out_x: Ptr,
+    out_y: Ptr,
+) -> u32 {
+    let file_index = this.at(TESDataHandler::pFileIndex).addr();
+    let mut optimized = false;
+    let mut index = 0;
+    while index < e.get(this, TESDataHandler::iNumCompile) {
+        let file = e.mem.u32(file_index + 4 * index);
+        if file != 0 && e.call(FILE_GET_OPTIMIZED, &args![file]).bool() {
+            optimized = true;
+            break;
+        }
+        index += 1;
+    }
+    if optimized {
+        let handler: u32 = e.global(DATA_HANDLER_SINGLETON);
+        let mut node = fn_00460140(e, Ptr::new(handler)).addr();
+        loop {
+            if node == 0 || e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                return 0;
+            }
+            let world = list_item(e, node);
+            node = e.call(LIST_NEXT, &args![node]).u32();
+            if e.call(WORLD_GET_EXT_CELL_DATA, &args![world, name, out_x, out_y])
+                .bool()
+            {
+                return world;
+            }
+        }
+    }
+    let mut index = 0;
+    while index < e.get(this, TESDataHandler::iNumCompile) {
+        let file = e.mem.u32(file_index + 4 * index);
+        index += 1;
+        if file == 0 || !e.call(FILE_OPEN, &args![file, 0u32, 0u32]).bool() {
+            continue;
+        }
+        let mut world = 0;
+        let found = scan_file_for_cell(e, file, name, out_x, out_y, &mut world);
+        e.call(FILE_CLOSE, &args![file]);
+        if found {
+            return world;
+        }
+    }
+    0
+}
+
+/// Scans the forms of an opened file for the cell named `name` (see
+/// `GetExtCellDataFromFileByEditorID`); true when the cell was found. The
+/// last world space cast is left in `world`.
+fn scan_file_for_cell(
+    e: &mut Engine,
+    file: u32,
+    name: Ptr,
+    out_x: Ptr,
+    out_y: Ptr,
+    world: &mut u32,
+) -> bool {
+    let file_ptr = Ptr::new(file);
+    let group_type: u32 = e.global(GROUP_TYPE_WORD);
+    let world_type: u32 = e.global(WORLD_TYPE_WORD);
+    let cell_type: u32 = e.global(CELL_TYPE_WORD);
+
+    // Move over the groups to the one of the world records.
+    let mut form = fn_00462270(e, file_ptr).addr();
+    let mut found_group = false;
+    while form != 0 && !found_group {
+        let advanced;
+        if e.mem.u32(form) == group_type {
+            if e.mem.u32(form + 0xc) == 0 && e.mem.u32(form + 8) == world_type {
+                found_group = true;
+                advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+            } else {
+                advanced = e.call(FILE_SKIP_GROUP, &args![file]).bool();
+            }
+        } else {
+            advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+        }
+        form = if advanced {
+            fn_00462270(e, file_ptr).addr()
+        } else {
+            0
+        };
+    }
+    if !found_group {
+        return false;
+    }
+
+    form = fn_00462270(e, file_ptr).addr();
+    let mut found = false;
+    while form != 0 && !found {
+        let mut advanced = false;
+        let record_type = e.mem.u32(form);
+        if record_type == world_type {
+            let mut form_id = e.mem.u32(form + 0xc);
+            let owner_index = form_id >> 24;
+            let mut owner = e
+                .call(FILE_GET_INDEX_FILE, &args![file, owner_index + 1])
+                .u32();
+            if owner == 0 {
+                owner = file;
+            }
+            form_id &= 0x00ff_ffff;
+            let compile_index = e.call(FILE_COMPILE_INDEX, &args![owner]).u8() as u32;
+            form_id |= compile_index << 24;
+            *world = form_by_id_as(e, form_id, WORLD_SPACE_TYPE_DESCRIPTOR).addr();
+            advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+        } else if record_type == cell_type {
+            let mut chunk = e.call(FILE_GET_CHUNK_ID, &args![file]).u32();
+            if chunk == CHUNK_EDID {
+                let size = e.call(FILE_CHUNK_SIZE, &args![file]).u32().wrapping_add(1);
+                let buffer = e.call(OPERATOR_NEW, &args![size]).u32();
+                e.call(MEMSET, &args![buffer, 0u32, size]);
+                e.call(FILE_GET_CHUNK_DATA, &args![file, buffer, 0u32]);
+                if e.call(STRING_COMPARE, &args![buffer, name]).i32() == 0 {
+                    found = true;
+                    while chunk != 0 {
+                        if chunk == CHUNK_XCLC {
+                            e.with_stack(12, |e, coordinates| {
+                                e.call(COORDS_INIT, &args![coordinates]);
+                                e.call(MEMSET, &args![coordinates, 0u32, 12u32]);
+                                e.call(FILE_GET_CHUNK_DATA, &args![file, coordinates, 12u32]);
+                                if e.call(FILE_MUST_ENDIAN_CONVERT, &args![file]).bool() {
+                                    fn_00462230(e, coordinates);
+                                }
+                                let x = e.mem.u32(coordinates.addr());
+                                let y = e.mem.u32(coordinates.addr() + 4);
+                                e.mem.set_u32(out_x.addr(), x);
+                                e.mem.set_u32(out_y.addr(), y);
+                            });
+                            chunk = 0;
+                        } else if e.call(FILE_NEXT_CHUNK, &args![file]).bool() {
+                            chunk = e.call(FILE_GET_CHUNK_ID, &args![file]).u32();
+                        } else {
+                            chunk = 0;
+                        }
+                    }
+                }
+                e.call(OPERATOR_DELETE, &args![buffer]);
+            }
+            advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+        } else if record_type == group_type {
+            match e.mem.u32(form + 0xc) {
+                0 => {
+                    if e.mem.u32(form + 8) == world_type {
+                        advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+                    } else {
+                        // The answer only decides to stop, which `advanced`
+                        // already does.
+                        let label = e.mem.u32(form + 8);
+                        e.call(FORM_TYPE_FROM_STRING, &args![label]);
+                    }
+                }
+                1 | 4 | 5 => {
+                    advanced = e.call(FILE_NEXT_FORM, &args![file, 1u32]).bool();
+                }
+                6 => {
+                    advanced = e.call(FILE_SKIP_GROUP, &args![file]).bool();
+                }
+                _ => {}
+            }
+        }
+        form = if advanced {
+            fn_00462270(e, file_ptr).addr()
+        } else {
+            0
+        };
+    }
+    found
+}
+
+// Translated from 00462230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the two words at `this` and `this + 4` (`00401080` on each).
+pub fn fn_00462230(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD, &args![this, 0u32]);
+    e.call(SWAP_WORD, &args![this.addr() + 4, 0u32]);
+}
+
+// Translated from 00462270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x240` of a `TESFile`: its `m_currentform` (Xbox
+/// PDB).
+pub fn fn_00462270(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x240)
+}
+
+// Translated from 00462290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::UnloadCell` (Xbox PDB): unloads `cell`, a no-op for a
+/// null cell or one with bit 5 of its flags set. In order: sets the byte at
+/// `0x01202df0`; if the object at `0x011ddf38` has bit 1 at `+0x244`, sets
+/// the thread flag with `004623f0(0)` and remembers its answer; detaches the
+/// cell (`TESObjectCELL::Detach(1)`); `009740a0`, the byte at `+0x26`, two
+/// more steps; clears the cell's lowest-process state while it reports it;
+/// unless the singleton handler is clearing data, tells the cell whether the
+/// player is not sleeping or resting (`0054af40`); for an exterior cell
+/// unloads the vertices of its land; `00546970`, `00961f30(0)`; for an
+/// exterior cell, `TESWorldSpace::UnLoadCell`; restores the thread flag
+/// from the remembered answer and clears the byte at `0x01202df0`.
+pub fn tes_data_handler_unload_cell(e: &mut Engine, _this: Ptr<TESDataHandler>, cell: Ptr) {
+    if cell.is_null() || e.call(FORM_HAS_FLAG_BIT_5, &args![cell]).bool() {
+        return;
+    }
+    e.call(SET_BYTE_01202DF0, &args![1u32]);
+    let mut remembered = 0u8;
+    let object: u32 = e.global(OBJECT_011DDF38);
+    if e.call(OBJECT_011DDF38_TEST, &args![object]).bool() {
+        remembered = fn_004623f0(e, Ptr::new(object), 0);
+    }
+    e.call(CELL_DETACH, &args![cell, 1u32]);
+    e.call(OBJECT_011E0E80_STEP, &args![OBJECT_011E0E80, cell]);
+    e.call(CELL_SET_BYTE_26, &args![cell, 1u32]);
+    e.call(CELL_UNLOAD_STEP_1, &args![cell]);
+    e.call(CELL_UNLOAD_STEP_2, &args![cell]);
+    while e.call(CELL_GET_LOWEST_PROCESS, &args![cell]).bool() {
+        e.call(CELL_SET_LOWEST_PROCESS, &args![cell, 0u32]);
+    }
+    let handler: u32 = e.global(DATA_HANDLER_SINGLETON);
+    if !e.call(HANDLER_IS_CLEARING_DATA, &args![handler]).bool() {
+        let player: u32 = e.global(PLAYER_SINGLETON);
+        let resting = e.call(PLAYER_IS_SLEEPING_OR_RESTING, &args![player]).bool();
+        e.call(CELL_SET_PROCESS_FLAG, &args![cell, !resting]);
+    }
+    if !e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+        e.call(LAND_UNLOAD_VERTICES, &args![land]);
+    }
+    e.call(CELL_UNLOAD_STEP_3, &args![cell]);
+    e.call(CELL_UNLOAD_STEP_4, &args![cell, 0u32]);
+    if !e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        let world = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+        e.call(WORLD_UNLOAD_CELL, &args![world, cell]);
+    }
+    let object: u32 = e.global(OBJECT_011DDF38);
+    if e.call(OBJECT_011DDF38_TEST, &args![object]).bool() {
+        fn_004623f0(e, Ptr::new(object), remembered);
+    }
+    e.call(SET_BYTE_01202DF0, &args![0u32]);
+}
+
+// Translated from 004623f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 0 of the word at `+0x294` of the TLS block: set when
+/// `flag` is 0, cleared otherwise. Returns what `00462480` said before the
+/// change. `this` is only passed on to `00462480`, which does not read it.
+pub fn fn_004623f0(e: &mut Engine, _this: Ptr, flag: u8) -> u8 {
+    let before = fn_00462480(e);
+    let word = e.tls() + TLS_FLAG_WORD;
+    let value = e.mem.u32(word);
+    let value = if flag == 0 { value | 1 } else { value & !1 };
+    e.mem.set_u32(word, value);
+    before as u8
+}
+
+// Translated from 00462480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 0 of the word at `+0x294` of the TLS block is clear. (Its
+/// `this` is saved but never read.)
+pub fn fn_00462480(e: &mut Engine) -> bool {
+    let word = e.tls() + TLS_FLAG_WORD;
+    e.mem.u32(word) & 1 == 0
+}
+
+/// The locals of `004624b0` in one block (the game's stack frame); the
+/// offsets are those of the frame, in the order of the code's buffers.
+const SCAN_SEARCH_DIRECTORY: u32 = 0x000;
+const SCAN_FIND_PATH: u32 = 0x104;
+const SCAN_FIND_DATA: u32 = 0x208;
+const SCAN_BASE_NAME: u32 = 0x348;
+const SCAN_EXTENSION: u32 = 0x44c;
+const SCAN_NAM_PATH: u32 = 0x45c;
+const SCAN_SUMMARY: u32 = 0x560;
+const SCAN_ARCHIVE_PATH: u32 = 0x664;
+const SCAN_STREAM: u32 = 0x768;
+const SCAN_FILE_SLOT: u32 = 0x8c0;
+const SCAN_OTHER_SLOT: u32 = 0x8c4;
+const SCAN_FRAME_SIZE: u32 = 0x8c8;
+
+// Translated from 004624b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scans the directory `directory` (a path ending with a separator) for
+/// plugin files and brings `listFiles` up to date; always returns true.
+/// Inside the allocation scope of kind `0x16`, line `0x1195`:
+/// 1. Each file already in `listFiles` is reopened for its header
+///    (`00471400`); the ones that fail are removed from the list. Every
+///    file is closed afterwards.
+/// 2. For `*.esm` and then `*.esp`: every non-empty file found that
+///    `GetListFile` does not know gets a new `TESFile` (closed again at
+///    once). If a `<name>.NAM` file sits next to it, its first 0x100 bytes
+///    become the file's summary (`+0x418`), bit 2 of its `m_Flags` is set
+///    and `bCached` (`+0x428`) is set. If the file name is a DLC package
+///    name, the matching bit of `cDLCFlags` is set. The file is then put in
+///    `listFiles` before the first listed file that was written at the same
+///    time or later (when both are masters or both are not), or before the
+///    first non-master when it is a master; failing both it goes to the
+///    end (`CompareFileTime` of the listed file's time with the new one's
+///    is not negative). (`LIST_ADD` puts the item
+///    before the node's current one.)
+/// 3. Files of `listFiles` that are not on disk any more are removed from
+///    the list and destroyed.
+/// 4. `Update.bsa` is opened as an archive if `FileFinder::Exist` finds it.
+/// 5. For each master file in the list, `GenIndexTable` is built and each of
+///    its masters (`GetIndexFile`) that the chain from that node holds is
+///    removed and added again at that node (the loop does not move on from
+///    a node where one was moved). Then the index table of every file is
+///    built and every file is closed (`00460360`).
+pub fn fn_004624b0(e: &mut Engine, this: Ptr<TESDataHandler>, directory: Ptr) -> bool {
+    let scope = scope_enter(e, 0x16, 0x1195);
+    e.with_stack(SCAN_FRAME_SIZE, |e, frame| {
+        scan_data_directory(e, this, directory, frame.addr());
+    });
+    scope_leave(e, scope);
+    true
+}
+
+/// The body of `004624b0`; `frame` is the block of its locals.
+fn scan_data_directory(e: &mut Engine, this: Ptr<TESDataHandler>, directory: Ptr, frame: u32) {
+    let search_directory = frame + SCAN_SEARCH_DIRECTORY;
+    let find_path = frame + SCAN_FIND_PATH;
+    let find_data = frame + SCAN_FIND_DATA;
+    let file_slot = frame + SCAN_FILE_SLOT;
+    e.call(STRING_COPY_S, &args![search_directory, 0x104u32, directory]);
+
+    // 1. Reopen the files already listed; drop the ones that fail.
+    let mut node = fn_0045dfc0(e, this).addr();
+    while node != 0 {
+        let file = list_item(e, node);
+        if file != 0 {
+            if e.call(FILE_OPEN_HEADER, &args![file]).u32() != 0 {
+                e.call(LIST_REMOVE_HEAD, &args![node]);
+            } else {
+                node = e.call(LIST_NEXT, &args![node]).u32();
+            }
+            e.call(FILE_CLOSE, &args![file]);
+        } else {
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+    }
+
+    // 2. The plugin files in the directory: masters first, then the others.
+    for pass in 0..2u32 {
+        e.call(LSTRCPY_A, &args![find_path, search_directory]);
+        let pattern = if pass == 0 { PATTERN_ESM } else { PATTERN_ESP };
+        e.call(LSTRCAT_A, &args![find_path, pattern]);
+        let handle = e
+            .call(FIND_FIRST_FILE_A, &args![find_path, find_data])
+            .u32();
+        if handle == INVALID_HANDLE {
+            continue;
+        }
+        loop {
+            let size_high = e.mem.u32(find_data + FIND_DATA_SIZE_HIGH);
+            let size_low = e.mem.u32(find_data + FIND_DATA_SIZE_LOW);
+            if size_high != 0 || size_low != 0 {
+                let known = e
+                    .call(GET_LIST_FILE, &args![this, find_data + FIND_DATA_FILE_NAME])
+                    .u32();
+                if known == 0 {
+                    add_plugin_file(e, this, directory, frame);
+                }
+            }
+            if e.call(FIND_NEXT_FILE_A, &args![handle, find_data]).u32() == 0 {
+                break;
+            }
+        }
+        e.call(FIND_CLOSE, &args![handle]);
+    }
+
+    // 3. Drop the listed files that are not on disk any more.
+    let mut node = fn_0045dfc0(e, this).addr();
+    let mut last = 0;
+    while node != 0 && list_item(e, node) != 0 {
+        let file = list_item(e, node);
+        e.mem.set_u32(file_slot, file);
+        let path = fn_00462e80(e, Ptr::new(file));
+        e.call(LSTRCPY_A, &args![find_path, path]);
+        let name = e.call(FILE_NAME, &args![file]).u32();
+        e.call(LSTRCAT_A, &args![find_path, name]);
+        let handle = e
+            .call(FIND_FIRST_FILE_A, &args![find_path, find_data])
+            .u32();
+        if handle == INVALID_HANDLE {
+            if e.call(LIST_NEXT, &args![node]).u32() != 0 || last == 0 {
+                e.call(LIST_REMOVE_HEAD, &args![node]);
+            } else {
+                e.call(LIST_REMOVE_ITEM, &args![last, file_slot]);
+                node = e.call(LIST_NEXT, &args![last]).u32();
+            }
+            if file != 0 {
+                fn_004601a0(e, Ptr::new(file), 1);
+            }
+        } else {
+            last = node;
+            node = e.call(LIST_NEXT, &args![node]).u32();
+            e.call(FIND_CLOSE, &args![handle]);
+        }
+    }
+
+    // 4. The update archive.
+    let archive_path = frame + SCAN_ARCHIVE_PATH;
+    if e.call(
+        FILE_FINDER_EXIST,
+        &args![UPDATE_BSA, archive_path, 1u32, 0xffff_ffffu32],
+    )
+    .u32()
+        != 0
+    {
+        e.call(OPEN_ARCHIVE, &args![UPDATE_BSA, 0u32, 0u32]);
+    }
+
+    // 5. Masters first: move each master of a master file up, then build the
+    // index tables and close every file.
+    let other_slot = frame + SCAN_OTHER_SLOT;
+    let mut node = fn_0045dfc0(e, this).addr();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let mut moved = false;
+        let file = list_item(e, node);
+        if e.call(FILE_GET_MASTER, &args![file]).bool() {
+            let files = fn_0045dfc0(e, this);
+            e.call(FILE_GEN_INDEX_TABLE, &args![file, files, 0u32]);
+            let mut index = 0;
+            while index < e.call(FILE_INDEX_COUNT, &args![file]).u32() {
+                let master = e.call(FILE_GET_INDEX_FILE, &args![file, index + 1]).u32();
+                e.mem.set_u32(other_slot, master);
+                if master != 0 && e.call(LIST_CONTAINS, &args![node, other_slot]).bool() {
+                    e.call(LIST_REMOVE_ITEM, &args![node, other_slot]);
+                    e.call(LIST_ADD, &args![node, other_slot]);
+                    moved = true;
+                }
+                index += 1;
+            }
+        }
+        if !moved {
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+    }
+    let mut node = fn_0045dfc0(e, this).addr();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let file = list_item(e, node);
+        let files = fn_0045dfc0(e, this);
+        e.call(FILE_GEN_INDEX_TABLE, &args![file, files, 0u32]);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    fn_00460360(e, this);
+}
+
+/// Part 2 of `004624b0` for one file found by `FindFirstFileA` /
+/// `FindNextFileA` (its data is at `frame + SCAN_FIND_DATA`): creates the
+/// `TESFile`, reads its `.NAM` summary, marks DLC packages and puts the
+/// file in `listFiles`.
+fn add_plugin_file(e: &mut Engine, this: Ptr<TESDataHandler>, directory: Ptr, frame: u32) {
+    let find_data = frame + SCAN_FIND_DATA;
+    let file_name = find_data + FIND_DATA_FILE_NAME;
+    let base_name = frame + SCAN_BASE_NAME;
+    let nam_path = frame + SCAN_NAM_PATH;
+    let summary = frame + SCAN_SUMMARY;
+    let stream = frame + SCAN_STREAM;
+    let file_slot = frame + SCAN_FILE_SLOT;
+
+    let block = e.call(OPERATOR_NEW, &args![0x42cu32]).u32();
+    let file = if block != 0 {
+        e.call(FILE_CONSTRUCT, &args![block, directory, file_name, 0u32])
+            .u32()
+    } else {
+        0
+    };
+    e.mem.set_u32(file_slot, file);
+    e.call(FILE_CLOSE, &args![file]);
+    fn_00462d40(
+        e,
+        Ptr::new(file_name),
+        Ptr::NULL,
+        0,
+        Ptr::NULL,
+        0,
+        Ptr::new(base_name),
+        0x104,
+        Ptr::new(frame + SCAN_EXTENSION),
+        0x10,
+    );
+    e.call(
+        FORMAT_S,
+        &args![nam_path, 0x104u32, NAM_PATH_FORMAT, directory, base_name],
+    );
+    e.call(
+        BSFILE_CONSTRUCT,
+        &args![stream, nam_path, 0u32, 0x100u32, 1u32],
+    );
+    if e.call(BSFILE_EXIST, &args![stream]).bool() && e.call(BSFILE_FLAG_2C, &args![stream]).bool()
+    {
+        let length = fn_00462d80(e, Ptr::new(stream), Ptr::new(summary), 0x100);
+        e.mem.set_u8(summary + length, 0);
+        fn_00462ec0(e, Ptr::new(file), Ptr::new(summary));
+        e.call(FILE_SET_FLAG_BIT_2, &args![file, 1u32]);
+        fn_00462e60(e, Ptr::new(file), 1);
+    }
+    let package = e.call(IS_DLC_PACKAGE_NAME, &args![this, base_name]).u32();
+    if package != 0 {
+        let mask = 1u32.wrapping_shl(package.wrapping_sub(1));
+        fn_00462e10(e, this, mask as u8, true);
+    }
+
+    // Put the file in the list: before the first listed file it is not
+    // "after" (see `004624b0`), else at the end.
+    let mut node = fn_0045dfc0(e, this).addr();
+    let mut previous = 0;
+    let mut inserted = false;
+    while node != 0 && list_item(e, node) != 0 {
+        let other = list_item(e, node);
+        let compare = if e.call(FILE_GET_MASTER, &args![other]).bool()
+            && e.call(FILE_GET_MASTER, &args![file]).bool()
+        {
+            true
+        } else if e.call(FILE_GET_MASTER, &args![other]).bool() {
+            false
+        } else {
+            !e.call(FILE_GET_MASTER, &args![file]).bool()
+        };
+        if compare {
+            let other_info = fn_00462ea0(e, Ptr::new(other)).addr();
+            let order = e
+                .call(
+                    COMPARE_FILE_TIME,
+                    &args![
+                        other_info + FIND_DATA_LAST_WRITE_TIME,
+                        find_data + FIND_DATA_LAST_WRITE_TIME
+                    ],
+                )
+                .i32();
+            if order >= 0 {
+                inserted = true;
+                e.call(LIST_ADD, &args![node, file_slot]);
+                break;
+            }
+        } else if e.call(FILE_GET_MASTER, &args![file]).bool() {
+            inserted = true;
+            e.call(LIST_ADD, &args![node, file_slot]);
+            break;
+        }
+        previous = node;
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    if !inserted {
+        if previous != 0 {
+            e.call(LIST_APPEND, &args![previous, file_slot]);
+        } else {
+            let files = fn_0045dfc0(e, this);
+            e.call(LIST_APPEND, &args![files, file_slot]);
+        }
+    }
+    e.call(BSFILE_DESTRUCT, &args![stream]);
+}
+
+// Translated from 00462d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_splitpath_s(path, drive, drive_size, dir, dir_size, name, name_size,
+/// ext, ext_size)` (cdecl, nine words): passes them on (`NiFilename::Splitpath`
+/// in the engine map) and returns its result.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00462d40(
+    e: &mut Engine,
+    path: Ptr,
+    drive: Ptr,
+    drive_size: u32,
+    directory: Ptr,
+    directory_size: u32,
+    name: Ptr,
+    name_size: u32,
+    extension: Ptr,
+    extension_size: u32,
+) -> i32 {
+    e.call(
+        SPLIT_PATH_S,
+        &args![
+            path,
+            drive,
+            drive_size,
+            directory,
+            directory_size,
+            name,
+            name_size,
+            extension,
+            extension_size
+        ],
+    )
+    .i32()
+}
+
+// Translated from 00462d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads `size` bytes into `buffer` through `00462dc0` with one component of
+/// size 1 (a local word holding 1, counted as 1 component). Returns the
+/// number it answers.
+pub fn fn_00462d80(e: &mut Engine, this: Ptr, buffer: Ptr, size: u32) -> u32 {
+    e.with_stack(4, |e, component| {
+        e.mem.set_u32(component.addr(), 1);
+        fn_00462dc0(e, this, buffer, size, component, 1)
+    })
+}
+
+// Translated from 00462dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The read of an `NiBinaryStream`: calls the function stored at `this + 8`
+/// (`m_pfnRead`, Xbox PDB; cdecl, with `this` as its first argument) with
+/// (`this`, `buffer`, `size`, `components`, `component_count`), adds the
+/// result to `m_uiAbsoluteCurrentPos` (`this + 4`) and returns it.
+pub fn fn_00462dc0(
+    e: &mut Engine,
+    this: Ptr,
+    buffer: Ptr,
+    size: u32,
+    components: Ptr,
+    component_count: u32,
+) -> u32 {
+    let read = e.mem.u32(this.addr() + 8);
+    let count = e
+        .call(
+            read,
+            &args![this, buffer, size, components, component_count],
+        )
+        .u32();
+    let position = e.mem.u32(this.addr() + 4);
+    e.mem.set_u32(this.addr() + 4, position.wrapping_add(count));
+    count
+}
+
+// Translated from 00462e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`set`) or clears the bits of `mask` in `cDLCFlags` (`this + 0`).
+/// Returns the new byte (it is left in AL).
+pub fn fn_00462e10(e: &mut Engine, this: Ptr<TESDataHandler>, mask: u8, set: bool) -> u8 {
+    let flags = e.get(this, TESDataHandler::cDLCFlags);
+    let flags = if set { flags | mask } else { flags & !mask };
+    e.set(this, TESDataHandler::cDLCFlags, flags);
+    flags
+}
+
+// Translated from 00462e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `this + 0x428` of a `TESFile` (`bCached`, Xbox PDB).
+pub fn fn_00462e60(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x428, value);
+}
+
+// Translated from 00462e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x124` of a `TESFile`: its `m_Path` (Xbox PDB).
+pub fn fn_00462e80(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x124)
+}
+
+// Translated from 00462ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x29c` of a `TESFile`: its `m_FileInfo`, a
+/// `WIN32_FIND_DATAA` (Xbox PDB).
+pub fn fn_00462ea0(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr() + 0x29c)
+}
+
+// Translated from 00462ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00438390(this + 0x418, text)`, the setter of the `BSStringT`
+/// `cSummary` (Xbox PDB) of a `TESFile`, and returns its result.
+pub fn fn_00462ec0(e: &mut Engine, this: Ptr, text: Ptr) -> Ptr {
+    e.call(SUMMARY_SET, &args![this.addr() + 0x418, text]).ptr()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1508,6 +3008,108 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00461250,
             fn_00461250(Ptr<TESDataHandler>) -> Ptr<BSSimpleList>
         ),
+        entry!(
+            0x00461270,
+            fn_00461270(Ptr<TESDataHandler>) -> Ptr<BSSimpleList>
+        ),
+        entry!(
+            0x00461290,
+            fn_00461290(Ptr<TESDataHandler>) -> Ptr<BSSimpleList>
+        ),
+        entry!(
+            0x00461330,
+            tes_data_handler_new_cell(Ptr<TESDataHandler>, u32, i32, i32, Ptr) -> Ptr
+        ),
+        entry!(0x004614e0, fn_004614e0(Ptr<TESDataHandler>)),
+        entry!(0x00461560, fn_00461560(Ptr) -> bool),
+        entry!(0x00461580, fn_00461580(Ptr, u32) -> bool),
+        entry!(0x004615a0, fn_004615a0(Ptr<TESDataHandler>, u32) -> Ptr),
+        entry!(
+            0x004615d0,
+            tes_data_handler_get_sound(Ptr<TESDataHandler>, u32) -> Ptr
+        ),
+        entry!(
+            0x00461600,
+            tes_data_handler_get_faction(Ptr<TESDataHandler>, u32) -> Ptr
+        ),
+        entry!(
+            0x00461630,
+            tes_data_handler_get_reputation(Ptr<TESDataHandler>, u32) -> Ptr
+        ),
+        entry!(0x00461660, fn_00461660(Ptr<TESDataHandler>, u32) -> Ptr),
+        entry!(
+            0x00461690,
+            tes_data_handler_get_topic(Ptr<TESDataHandler>, u32) -> Ptr
+        ),
+        entry!(
+            0x004616c0,
+            tes_data_handler_get_sound_ov2(Ptr<TESDataHandler>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00461700,
+            tes_data_handler_get_global(Ptr<TESDataHandler>, Ptr) -> Ptr
+        ),
+        entry!(0x00461780, fn_00461780(Ptr<TESDataHandler>, u32) -> u32),
+        entry!(0x004617b0, fn_004617b0(Ptr<TESDataHandler>, u32) -> u32),
+        entry!(
+            0x004617e0,
+            tes_data_handler_get_addon_node(Ptr<TESDataHandler>, u32) -> Ptr
+        ),
+        entry!(
+            0x00461820,
+            tes_data_handler_add_addon_node(Ptr<TESDataHandler>, Ptr)
+        ),
+        entry!(0x00461930, fn_00461930(Ptr<TESDataHandler>, Ptr)),
+        entry!(0x00461960, fn_00461960(Ptr<TESDataHandler>) -> u32),
+        entry!(0x00461980, fn_00461980(Ptr<TESDataHandler>, u32) -> u32),
+        entry!(0x004619b0, fn_004619b0(Ptr<TESDataHandler>)),
+        entry!(
+            0x00461ae0,
+            tes_data_handler_get_cell_by_editor_id(Ptr<TESDataHandler>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x00461bc0,
+            tes_data_handler_get_cell_from_world_coord(
+                Ptr<TESDataHandler>,
+                f32,
+                f32,
+                Ptr,
+                u8,
+            ) -> Ptr
+        ),
+        entry!(
+            0x00461c20,
+            fn_00461c20(Ptr<TESDataHandler>, i32, i32, Ptr, u8) -> Ptr
+        ),
+        entry!(
+            0x00461cf0,
+            tes_data_handler_get_ext_cell_data_from_file_by_editor_id(
+                Ptr<TESDataHandler>,
+                Ptr,
+                Ptr,
+                Ptr,
+            ) -> Ptr
+        ),
+        entry!(0x00462230, fn_00462230(Ptr)),
+        entry!(0x00462270, fn_00462270(Ptr) -> Ptr),
+        entry!(
+            0x00462290,
+            tes_data_handler_unload_cell(Ptr<TESDataHandler>, Ptr)
+        ),
+        entry!(0x004623f0, fn_004623f0(Ptr, u8) -> u8),
+        entry!(0x00462480, fn_00462480() -> bool),
+        entry!(0x004624b0, fn_004624b0(Ptr<TESDataHandler>, Ptr) -> bool),
+        entry!(
+            0x00462d40,
+            fn_00462d40(Ptr, Ptr, u32, Ptr, u32, Ptr, u32, Ptr, u32) -> i32
+        ),
+        entry!(0x00462d80, fn_00462d80(Ptr, Ptr, u32) -> u32),
+        entry!(0x00462dc0, fn_00462dc0(Ptr, Ptr, u32, Ptr, u32) -> u32),
+        entry!(0x00462e10, fn_00462e10(Ptr<TESDataHandler>, u8, bool) -> u8),
+        entry!(0x00462e60, fn_00462e60(Ptr, u8)),
+        entry!(0x00462e80, fn_00462e80(Ptr) -> Ptr),
+        entry!(0x00462ea0, fn_00462ea0(Ptr) -> Ptr),
+        entry!(0x00462ec0, fn_00462ec0(Ptr, Ptr) -> Ptr),
     ]
 }
 
@@ -3075,5 +4677,1745 @@ mod tests {
         assert!(addon < add, "the add-on node comes first");
         assert_eq!(log[addon].1, vec![this.addr(), form.addr()]);
         assert_eq!(log[add].1, vec![0x0b1, form.addr() + 0x1000]);
+    }
+
+    // ---------------------------------------------------------------
+    // Session 2 (`00461270` to `00462ec0`).
+    // ---------------------------------------------------------------
+
+    /// `engine()` plus the pages of the globals session 2 reads; the handler
+    /// singleton points at `this`.
+    fn engine2() -> (Engine, Ptr<TESDataHandler>) {
+        let (mut e, this) = engine();
+        for page in [0x011c_3000, 0x011d_d000, 0x0118_7000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DATA_HANDLER_SINGLETON, this.addr());
+        (e, this)
+    }
+
+    /// The accessors of the list nodes as the game has them: the item slot
+    /// of a node is the node, the next node is the word at +4, a node is
+    /// empty when both of its words are 0.
+    fn real_lists(e: &mut Engine) {
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+    }
+
+    /// Builds a list with its first node at `head` (inside the owner) and one
+    /// allocated node per further item; returns the node addresses.
+    fn build_list(e: &mut Engine, head: u32, items: &[u32]) -> Vec<u32> {
+        let mut nodes = vec![head];
+        for _ in 1..items.len() {
+            nodes.push(e.mem.alloc(8));
+        }
+        for (i, item) in items.iter().enumerate() {
+            e.mem.set_u32(nodes[i], *item);
+            let next = nodes.get(i + 1).copied().unwrap_or(0);
+            e.mem.set_u32(nodes[i] + 4, next);
+        }
+        nodes
+    }
+
+    /// `_stricmp` as the game has it (the sign of the comparison).
+    fn real_string_compare(e: &mut Engine) {
+        e.register(STRING_COMPARE, |e, a| {
+            let x = e.mem.cstr(a[0]).to_ascii_lowercase();
+            let y = e.mem.cstr(a[1]).to_ascii_lowercase();
+            ret(x.cmp(&y) as i32 as u32)
+        });
+    }
+
+    /// A C string in memory.
+    fn c_string(e: &mut Engine, text: &str) -> u32 {
+        let at = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.set_cstr(at, text.as_bytes());
+        at
+    }
+
+    const NAMED_VTABLE: u32 = 0x0200_0000;
+    const NAMED_EDITOR_ID: u32 = 0x0200_0130;
+
+    /// A form-like object: the form id at +0xC, the editor id's address at
+    /// +0x10, which the virtual `0x130` returns.
+    fn named_form(e: &mut Engine, name: &str, id: u32) -> u32 {
+        if !e.mem.is_mapped(NAMED_VTABLE) {
+            let mut table = vec![0x7fff_0000u32; 0x80];
+            table[0x130 / 4] = NAMED_EDITOR_ID;
+            e.put_vtable(NAMED_VTABLE, &table);
+            e.register(NAMED_EDITOR_ID, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        }
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u32(object, NAMED_VTABLE);
+        e.mem.set_u32(object + 0xc, id);
+        let text = c_string(e, name);
+        e.mem.set_u32(object + 0x10, text);
+        object
+    }
+
+    /// `ARRAY_SIZE` and `ARRAY_AT` over a table of words; returns the table.
+    fn word_array(e: &mut Engine, words: &[u32]) -> u32 {
+        let table = e.mem.alloc(4 * words.len().max(1) as u32);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(table + 4 * i as u32, *word);
+        }
+        let count = words.len() as u32;
+        e.register_double(ARRAY_SIZE, move |_, _| ret(count));
+        e.register_double(ARRAY_AT, move |_, a| ret(table + 4 * a[1]));
+        table
+    }
+
+    /// The addresses of the logged calls after the first (the one under
+    /// test).
+    fn call_order(e: &Engine) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .map(|(addr, _)| *addr)
+            .collect()
+    }
+
+    #[test]
+    fn accessor_00461270() {
+        check_accessor(0x0046_1270, 0x1b0);
+    }
+
+    #[test]
+    fn accessor_00461290() {
+        check_accessor(0x0046_1290, 0x1c0);
+    }
+
+    // `NewCell`.
+
+    /// The callees of `NewCell` with a cell whose virtual slots are doubles;
+    /// returns the cell.
+    fn new_cell_world(e: &mut Engine, add_cell_result: bool, created_id: u32) -> u32 {
+        let cell = object_with(
+            e,
+            0x0210_0000,
+            &[
+                (0x10, 0x0210_0010),
+                (0x88, 0x0210_0088),
+                (0x128, 0x0210_0128),
+                (0x134, 0x0210_0134),
+            ],
+        );
+        do_nothing(
+            e,
+            &[
+                0x0210_0010,
+                0x0210_0088,
+                0x0210_0128,
+                0x0210_0134,
+                SCOPE_ENTER,
+                SCOPE_LEAVE,
+                CELL_SET_INTERIOR,
+                CELL_SET_FLAGS_BYTE,
+                CELL_CREATE_CELL_DATA,
+                CELL_SET_DATA_COORD,
+            ],
+        );
+        e.register(OPERATOR_NEW, |_, _| ret(0x4400));
+        e.register_double(CELL_CONSTRUCT, move |_, _| ret(cell));
+        e.register(FORM_GET_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register_double(GET_CREATED_EXTERIOR_CELL_FORM_ID, move |_, _| {
+            ret(created_id)
+        });
+        e.register_double(WORLD_ADD_CELL, move |_, _| ret(add_cell_result as u32));
+        e.set_global(SAVE_LOAD_GAME_SINGLETON, 0x5a5a);
+        cell
+    }
+
+    #[test]
+    fn new_cell_makes_and_adds_an_exterior_cell() {
+        let (mut e, this) = engine2();
+        let cell = new_cell_world(&mut e, true, 0x00ab_cdef);
+        let world = e.mem.alloc(0x100);
+        e.mem.set_u32(world + 0xc, 0x3c);
+        start_log(&mut e);
+        let result = e.call(0x0046_1330, &args![this, 0x1234u32, 5i32, -3i32, world]);
+        assert_eq!(result.u32(), cell);
+        assert_eq!(
+            call_order(&e),
+            vec![
+                SCOPE_ENTER,
+                OPERATOR_NEW,
+                CELL_CONSTRUCT,
+                FORM_GET_ID,
+                GET_CREATED_EXTERIOR_CELL_FORM_ID,
+                0x0210_0128,
+                0x0210_0134,
+                CELL_SET_INTERIOR,
+                CELL_SET_FLAGS_BYTE,
+                CELL_CREATE_CELL_DATA,
+                CELL_SET_DATA_COORD,
+                WORLD_ADD_CELL,
+                0x0210_0088,
+                SCOPE_LEAVE,
+            ]
+        );
+        assert_eq!(
+            &calls(&e, SCOPE_ENTER)[0][1..],
+            &[0x1a, 1, SOURCE_FILE, 0x7dd]
+        );
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0xe0]]);
+        assert_eq!(calls(&e, CELL_CONSTRUCT), vec![vec![0x4400]]);
+        assert_eq!(
+            calls(&e, GET_CREATED_EXTERIOR_CELL_FORM_ID),
+            vec![vec![0x5a5a, 0x3c, 5, -3i32 as u32]]
+        );
+        assert_eq!(calls(&e, 0x0210_0128), vec![vec![cell, 0x00ab_cdef, 1]]);
+        assert_eq!(calls(&e, 0x0210_0134), vec![vec![cell, 0x1234]]);
+        assert_eq!(calls(&e, CELL_SET_INTERIOR), vec![vec![cell, 0]]);
+        assert_eq!(calls(&e, CELL_SET_FLAGS_BYTE), vec![vec![cell, 2]]);
+        assert_eq!(
+            calls(&e, CELL_SET_DATA_COORD),
+            vec![vec![cell, 5, -3i32 as u32]]
+        );
+        assert_eq!(calls(&e, WORLD_ADD_CELL), vec![vec![world, cell]]);
+    }
+
+    #[test]
+    fn new_cell_destroys_the_cell_the_world_refuses() {
+        let (mut e, this) = engine2();
+        let cell = new_cell_world(&mut e, false, 0);
+        let world = e.mem.alloc(0x100);
+        start_log(&mut e);
+        // No saved form id and no editor id: neither virtual is called.
+        let result = e.call(0x0046_1330, &args![this, 0u32, 1i32, 2i32, world]);
+        assert_eq!(result.u32(), 0);
+        assert!(calls(&e, 0x0210_0128).is_empty());
+        assert!(calls(&e, 0x0210_0134).is_empty());
+        assert!(calls(&e, 0x0210_0088).is_empty());
+        assert_eq!(calls(&e, 0x0210_0010), vec![vec![cell, 1]]);
+        assert_eq!(call_order(&e).last(), Some(&SCOPE_LEAVE));
+    }
+
+    #[test]
+    fn new_cell_without_a_world_does_nothing() {
+        let (mut e, this) = engine2();
+        new_cell_world(&mut e, true, 7);
+        start_log(&mut e);
+        let result = e.call(0x0046_1330, &args![this, 0u32, 1i32, 2i32, 0u32]);
+        assert_eq!(result.u32(), 0);
+        assert!(call_order(&e).is_empty(), "no scope, no allocation");
+    }
+
+    // The object list walk.
+
+    #[test]
+    fn init_values_runs_for_npcs_with_the_flag() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        e.register(OBJECT_NEXT, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        // this + 4 -> list object; list object + 4 -> first object; each
+        // object's next at +0x20.
+        let list_object = e.mem.alloc(0x10);
+        e.set(this, TESDataHandler::pObjectList, Ptr::new(list_object));
+        let objects: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x100)).collect();
+        e.mem.set_u32(list_object + 4, objects[0]);
+        e.mem.set_u32(objects[0] + 0x20, objects[1]);
+        e.mem.set_u32(objects[1] + 0x20, objects[2]);
+        // The cast: object 0 is no NPC, 1 is one with the flag, 2 one without.
+        let npcs: Vec<u32> = (0..2).map(|_| e.mem.alloc(0x100)).collect();
+        e.mem.set_u32(npcs[0] + 0x30 + 4, 0x80);
+        e.mem.set_u32(npcs[1] + 0x30 + 4, 0x7f);
+        let table = HashMap::from([(objects[1], npcs[0]), (objects[2], npcs[1])]);
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            ret(table.get(&a[0]).copied().unwrap_or(0))
+        });
+        do_nothing(&mut e, &[NPC_INIT_VALUES]);
+        start_log(&mut e);
+        e.call(0x0046_14e0, &args![this]);
+        assert_eq!(calls(&e, NPC_INIT_VALUES), vec![vec![npcs[0], 0]]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST)[0],
+            vec![
+                objects[0],
+                0,
+                OBJECT_TYPE_DESCRIPTOR,
+                NPC_TYPE_DESCRIPTOR,
+                0
+            ]
+        );
+        assert_eq!(calls(&e, DYNAMIC_CAST).len(), 3);
+    }
+
+    #[test]
+    fn mask_test_reads_the_word_at_plus_4() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 4, 0x0000_0180);
+        assert!(e.call(0x0046_1580, &args![object, 0x100u32]).bool());
+        assert!(e.call(0x0046_1580, &args![object, 0x180u32]).bool());
+        assert!(!e.call(0x0046_1580, &args![object, 0x7fu32]).bool());
+    }
+
+    #[test]
+    fn flag_0x80_test_uses_the_mask_0x80() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object + 4, 0x0000_0180);
+        assert!(e.call(0x0046_1560, &args![object]).bool());
+        e.mem.set_u32(object + 4, 0x7f);
+        assert!(!e.call(0x0046_1560, &args![object]).bool());
+    }
+
+    // The lookups by form id.
+
+    /// A lookup by id: the form is fetched by id and cast to the class of
+    /// `descriptor`.
+    fn check_cast_lookup(function: u32, descriptor: u32) {
+        let (mut e, this) = engine2();
+        e.register_double(FORM_BY_ID, |_, _| ret(0x5000));
+        e.register_double(DYNAMIC_CAST, |_, _| ret(0x5008));
+        start_log(&mut e);
+        let result = e.call(function, &args![this, 0x1234u32]);
+        assert_eq!(result.u32(), 0x5008);
+        assert_eq!(calls(&e, FORM_BY_ID), vec![vec![0x1234]]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![0x5000, 0, FORM_TYPE_DESCRIPTOR, descriptor, 0]]
+        );
+    }
+
+    #[test]
+    fn get_class_casts_to_tes_class() {
+        check_cast_lookup(0x0046_15a0, CLASS_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_sound_casts_to_tes_sound() {
+        check_cast_lookup(0x0046_15d0, SOUND_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_faction_casts_to_tes_faction() {
+        check_cast_lookup(0x0046_1600, FACTION_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_reputation_casts_to_tes_reputation() {
+        check_cast_lookup(0x0046_1630, REPUTATION_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_load_screen_type_casts_to_the_load_screen_type() {
+        check_cast_lookup(0x0046_1660, LOAD_SCREEN_TYPE_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_topic_casts_to_tes_topic() {
+        check_cast_lookup(0x0046_1690, TOPIC_TYPE_DESCRIPTOR);
+    }
+
+    #[test]
+    fn get_sound_by_editor_id_wants_form_type_0xd() {
+        let (mut e, this) = engine2();
+        let name = c_string(&mut e, "snd");
+        e.register_double(FORM_BY_EDITOR_ID, |_, _| ret(0x6000));
+        e.register_double(FORM_GET_TYPE, |_, _| ret(0xd));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_16c0, &args![this, name]).u32(), 0x6000);
+        assert_eq!(calls(&e, FORM_BY_EDITOR_ID), vec![vec![name]]);
+        assert_eq!(calls(&e, FORM_GET_TYPE), vec![vec![0x6000]]);
+        // Another form type.
+        e.register_double(FORM_GET_TYPE, |_, _| ret(0xe));
+        assert_eq!(e.call(0x0046_16c0, &args![this, name]).u32(), 0);
+        // No form at all: the type is not asked.
+        e.register_double(FORM_BY_EDITOR_ID, |_, _| ret(0));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_16c0, &args![this, name]).u32(), 0);
+        assert!(calls(&e, FORM_GET_TYPE).is_empty());
+    }
+
+    // `GetGlobal`.
+
+    #[test]
+    fn get_global_finds_the_global_by_editor_id() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        real_string_compare(&mut e);
+        let globals = named_form(&mut e, "GameYear", 1);
+        let timescale = named_form(&mut e, "TimeScale", 2);
+        build_list(
+            &mut e,
+            this.at(TESDataHandler::listGlobals).addr(),
+            &[0, globals, timescale],
+        );
+        // The first node has a null item and is skipped.
+        let name = c_string(&mut e, "timescale");
+        assert_eq!(e.call(0x0046_1700, &args![this, name]).u32(), timescale);
+        let name = c_string(&mut e, "Missing");
+        assert_eq!(e.call(0x0046_1700, &args![this, name]).u32(), 0);
+    }
+
+    #[test]
+    fn get_global_on_an_empty_list_is_null() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        start_log(&mut e);
+        let name = c_string(&mut e, "x");
+        assert_eq!(e.call(0x0046_1700, &args![this, name]).u32(), 0);
+        assert_eq!(
+            calls(&e, LIST_IS_EMPTY),
+            vec![vec![this.at(TESDataHandler::listGlobals).addr()]]
+        );
+        assert!(calls(&e, LIST_NEXT).is_empty());
+    }
+
+    // The two topic list calls.
+
+    #[test]
+    fn topic_list_call_passes_the_topic_list() {
+        let (mut e, this) = engine2();
+        e.register_double(TOPIC_LIST_FUNCTION, |_, _| ret(0x11));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_1780, &args![this, 0x77u32]).u32(), 0x11);
+        assert_eq!(
+            calls(&e, TOPIC_LIST_FUNCTION),
+            vec![vec![0x77, this.addr() + 0x108, 1]]
+        );
+    }
+
+    #[test]
+    fn topic_info_list_call_passes_the_topic_info_list() {
+        let (mut e, this) = engine2();
+        e.register_double(TOPIC_INFO_LIST_FUNCTION, |_, _| ret(0x22));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_17b0, &args![this, 0x88u32]).u32(), 0x22);
+        assert_eq!(
+            calls(&e, TOPIC_INFO_LIST_FUNCTION),
+            vec![vec![0x88, this.addr() + 0x110]]
+        );
+    }
+
+    // The add-on nodes.
+
+    #[test]
+    fn get_addon_node_is_bounded_by_the_array_size() {
+        let (mut e, this) = engine2();
+        word_array(&mut e, &[0xa1, 0xa2]);
+        assert_eq!(e.call(0x0046_17e0, &args![this, 1u32]).u32(), 0xa2);
+        assert_eq!(e.call(0x0046_17e0, &args![this, 2u32]).u32(), 0);
+        assert_eq!(e.call(0x0046_17e0, &args![this, 0xffff_ffffu32]).u32(), 0);
+    }
+
+    /// The callees of `AddAddonNode`: node indexes at +0x50, form ids at
+    /// +0xC, the array over `existing`, and recording doubles.
+    fn addon_engine(existing: &[u32]) -> (Engine, Ptr<TESDataHandler>) {
+        let (mut e, this) = engine2();
+        e.register(ADDON_NODE_GET_INDEX, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+        e.register(FORM_GET_ID, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        word_array(&mut e, existing);
+        do_nothing(
+            &mut e,
+            &[LOG_MESSAGE, ARRAY_SET_AT_GROW, ADDON_NODE_SET_INDEX],
+        );
+        e.register(ADDON_NODE_ARRAY_ADD, |_, _| ret(9));
+        (e, this)
+    }
+
+    #[test]
+    fn add_addon_node_stores_a_node_at_its_free_index() {
+        let (mut e, this) = addon_engine(&[0, 0, 0]);
+        let node = named_form(&mut e, "Node", 0x44);
+        e.mem.set_u32(node + 0x50, 2);
+        // The word the call gets holds the node.
+        let stored = Rc::new(RefCell::new(vec![]));
+        let shared = stored.clone();
+        e.register_double(ARRAY_SET_AT_GROW, move |e, a| {
+            shared.borrow_mut().push((a[0], a[1], e.mem.u32(a[2])));
+            Ret::default()
+        });
+        start_log(&mut e);
+        e.call(0x0046_1820, &args![this, node]);
+        let nodes = this.at(TESDataHandler::arrayAddonNodes).addr();
+        assert_eq!(*stored.borrow(), vec![(nodes, 2, node)]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+        assert!(calls(&e, ADDON_NODE_ARRAY_ADD).is_empty());
+    }
+
+    #[test]
+    fn add_addon_node_remaps_a_node_whose_index_is_taken() {
+        let (mut e, this) = addon_engine(&[0, 0]);
+        let other = named_form(&mut e, "Other", 0x33);
+        let node = named_form(&mut e, "Node", 0x44);
+        // Index 1 of the array holds `other`.
+        word_array(&mut e, &[0, other]);
+        e.mem.set_u32(node + 0x50, 1);
+        start_log(&mut e);
+        e.call(0x0046_1820, &args![this, node]);
+        let log = calls(&e, LOG_MESSAGE);
+        assert_eq!(log.len(), 1);
+        let node_name = e.mem.u32(node + 0x10);
+        let other_name = e.mem.u32(other + 0x10);
+        assert_eq!(
+            log[0],
+            vec![
+                ADDON_INDEX_CLASH_FORMAT,
+                0x44,
+                node_name,
+                1,
+                0x33,
+                other_name,
+                0x44,
+                node_name
+            ]
+        );
+        // Remapped: appended, then given the index that answers.
+        assert!(calls(&e, ARRAY_SET_AT_GROW).is_empty());
+        let nodes = this.at(TESDataHandler::arrayAddonNodes).addr();
+        let add = calls(&e, ADDON_NODE_ARRAY_ADD);
+        assert_eq!(add.len(), 1);
+        assert_eq!(add[0][0], nodes);
+        assert_eq!(calls(&e, ADDON_NODE_SET_INDEX), vec![vec![node, 9]]);
+    }
+
+    #[test]
+    fn add_addon_node_appends_a_node_without_an_index() {
+        let (mut e, this) = addon_engine(&[0, 0]);
+        let node = named_form(&mut e, "Node", 0x44);
+        e.mem.set_u32(node + 0x50, 0xffff_ffff);
+        start_log(&mut e);
+        e.call(0x0046_1820, &args![this, node]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+        assert!(calls(&e, ARRAY_SET_AT_GROW).is_empty());
+        assert_eq!(calls(&e, ADDON_NODE_SET_INDEX), vec![vec![node, 9]]);
+    }
+
+    #[test]
+    fn add_addon_node_ignores_a_null_node() {
+        let (mut e, this) = addon_engine(&[]);
+        start_log(&mut e);
+        e.call(0x0046_1820, &args![this, 0u32]);
+        assert!(call_order(&e).is_empty());
+    }
+
+    #[test]
+    fn remove_addon_node_clears_its_index() {
+        let (mut e, this) = engine2();
+        e.register(ADDON_NODE_GET_INDEX, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+        do_nothing(&mut e, &[ADDON_NODE_ARRAY_REMOVE_AT]);
+        let node = e.mem.alloc(0x100);
+        e.mem.set_u32(node + 0x50, 4);
+        start_log(&mut e);
+        e.call(0x0046_1930, &args![this, node]);
+        assert_eq!(
+            calls(&e, ADDON_NODE_ARRAY_REMOVE_AT),
+            vec![vec![this.addr() + 0x1ec, 4]]
+        );
+        start_log(&mut e);
+        e.call(0x0046_1930, &args![this, 0u32]);
+        assert!(call_order(&e).is_empty());
+    }
+
+    // The interior cell array.
+
+    #[test]
+    fn cell_count_asks_the_cell_array() {
+        let (mut e, this) = engine2();
+        e.register_double(CELL_ARRAY_COUNT, |_, _| ret(7));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_1960, &args![this]).u32(), 7);
+        assert_eq!(calls(&e, CELL_ARRAY_COUNT), vec![vec![this.addr() + 0x1dc]]);
+    }
+
+    #[test]
+    fn cell_at_compacts_the_array_first() {
+        let (mut e, this) = engine2();
+        word_array(&mut e, &[0xc1, 0xc2]);
+        do_nothing(&mut e, &[CELL_ARRAY_COMPACT]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_1980, &args![this, 1u32]).u32(), 0xc2);
+        assert_eq!(call_order(&e), vec![CELL_ARRAY_COMPACT, ARRAY_AT]);
+        assert_eq!(calls(&e, ARRAY_AT)[0][0], this.addr() + 0x1dc);
+    }
+
+    /// Sorts the cells with keys `keys` (0 for a null cell) and returns the
+    /// order the array ends in.
+    fn sorted_cells(keys: &[&str]) -> Vec<u32> {
+        let (mut e, this) = engine2();
+        real_string_compare(&mut e);
+        let cells: Vec<u32> = keys
+            .iter()
+            .map(|key| {
+                if key.is_empty() {
+                    0
+                } else {
+                    let cell = e.mem.alloc(0x20);
+                    let text = c_string(&mut e, key);
+                    e.mem.set_u32(cell + 0x10, text);
+                    cell
+                }
+            })
+            .collect();
+        let table = word_array(&mut e, &cells);
+        let count = cells.len() as u32;
+        e.register_double(CELL_ARRAY_COUNT, move |_, _| ret(count));
+        do_nothing(&mut e, &[CELL_ARRAY_COMPACT]);
+        e.register(CELL_SORT_KEY, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        // `SetAt(index, &value)` stores the word.
+        e.register_double(CELL_ARRAY_SET_AT, move |e, a| {
+            let value = e.mem.u32(a[2]);
+            e.mem.set_u32(table + 4 * a[1], value);
+            Ret::default()
+        });
+        e.call(0x0046_19b0, &args![this]);
+        let by_address: HashMap<u32, usize> =
+            cells.iter().enumerate().map(|(i, c)| (*c, i)).collect();
+        (0..cells.len() as u32)
+            .map(|i| by_address[&e.mem.u32(table + 4 * i)] as u32)
+            .collect()
+    }
+
+    #[test]
+    fn cell_sort_orders_the_cells_by_key() {
+        // Indexes into the input, in the order the array ends in.
+        assert_eq!(sorted_cells(&["b", "a", "c"]), vec![1, 0, 2]);
+        assert_eq!(sorted_cells(&["d", "c", "b", "a"]), vec![3, 2, 1, 0]);
+        assert_eq!(sorted_cells(&["a", "b"]), vec![0, 1]);
+    }
+
+    #[test]
+    fn cell_sort_puts_a_cell_in_front_of_a_null_slot() {
+        assert_eq!(sorted_cells(&["", "b", "a"]), vec![2, 1, 0]);
+    }
+
+    // Cells by editor id and by coordinates.
+
+    #[test]
+    fn get_cell_by_editor_id_looks_in_the_interior_cells_then_the_worlds() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        real_string_compare(&mut e);
+        let interior_a = named_form(&mut e, "VaultA", 1);
+        let interior_b = named_form(&mut e, "VaultB", 2);
+        word_array(&mut e, &[interior_a, interior_b]);
+        // Two world spaces: 0xd1 has no such cell, 0xd2 has.
+        build_list(
+            &mut e,
+            this.at(TESDataHandler::listWorldSpaces).addr(),
+            &[0xd1, 0xd2],
+        );
+        e.register_double(WORLD_FIND_CELL_BY_EDITOR_ID, |e, a| {
+            let name = e.mem.cstr(a[1]);
+            ret(if a[0] == 0xd2 && name == b"Outside" {
+                0xcc
+            } else {
+                0
+            })
+        });
+        let name = c_string(&mut e, "vaultb");
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_1ae0, &args![this, name]).u32(), interior_b);
+        assert!(calls(&e, WORLD_FIND_CELL_BY_EDITOR_ID).is_empty());
+        let name = c_string(&mut e, "Outside");
+        assert_eq!(e.call(0x0046_1ae0, &args![this, name]).u32(), 0xcc);
+        assert_eq!(
+            calls(&e, WORLD_FIND_CELL_BY_EDITOR_ID),
+            vec![vec![0xd1, name], vec![0xd2, name]]
+        );
+        let name = c_string(&mut e, "Nowhere");
+        assert_eq!(e.call(0x0046_1ae0, &args![this, name]).u32(), 0);
+    }
+
+    #[test]
+    fn get_cell_by_editor_id_of_a_null_name_is_null() {
+        let (mut e, this) = engine2();
+        start_log(&mut e);
+        assert_eq!(e.call(0x0046_1ae0, &args![this, 0u32]).u32(), 0);
+        assert!(call_order(&e).is_empty());
+    }
+
+    #[test]
+    fn world_coordinates_become_cell_coordinates() {
+        let (mut e, this) = engine2();
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register_double(WORLD_GET_CELL, |_, _| ret(0xce11));
+        e.register(HANDLER_IS_SAVE_LOAD, |_, _| ret(0));
+        start_log(&mut e);
+        let result = e.call(
+            0x0046_1bc0,
+            &args![this, 8192.0f32, -4097.0f32, 0x70u32, 0u8],
+        );
+        assert_eq!(result.u32(), 0xce11);
+        // 8192 >> 12 = 2; -4097 >> 12 = -2 (arithmetic shift).
+        assert_eq!(calls(&e, WORLD_GET_CELL), vec![vec![0x70, 2, -2i32 as u32]]);
+        assert_eq!(
+            calls(&e, FLOAT_TO_INT),
+            vec![vec![8192.0f32.to_bits()], vec![(-4097.0f32).to_bits()]]
+        );
+    }
+
+    #[test]
+    fn exterior_cell_lookup_uses_the_first_world_when_none_is_given() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        e.register_double(WORLD_GET_CELL, |_, _| ret(0xce11));
+        // No world space at all.
+        assert_eq!(
+            e.call(0x0046_1c20, &args![this, 1i32, 2i32, 0u32, 0u8])
+                .u32(),
+            0
+        );
+        build_list(
+            &mut e,
+            this.at(TESDataHandler::listWorldSpaces).addr(),
+            &[0xd1],
+        );
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1c20, &args![this, 1i32, 2i32, 0u32, 0u8])
+                .u32(),
+            0xce11
+        );
+        assert_eq!(calls(&e, WORLD_GET_CELL), vec![vec![0xd1, 1, 2]]);
+    }
+
+    #[test]
+    fn exterior_cell_lookup_rejects_coordinates_out_of_range() {
+        let (mut e, this) = engine2();
+        e.register_double(WORLD_GET_CELL, |_, _| ret(0xce11));
+        do_nothing(&mut e, &[LOG_MESSAGE]);
+        for (x, y) in [(0x8000, 0), (0, 0x8000), (-0x8001, 0), (0, -0x8001)] {
+            start_log(&mut e);
+            let result = e.call(0x0046_1c20, &args![this, x, y, 0x70u32, 1u8]);
+            assert_eq!(result.u32(), 0, "({x}, {y})");
+            assert_eq!(
+                calls(&e, LOG_MESSAGE),
+                vec![vec![INVALID_CELL_COORD_FORMAT, 0xffff_8000, 0x7fff]]
+            );
+            assert!(calls(&e, WORLD_GET_CELL).is_empty());
+        }
+        // The limits themselves are valid.
+        start_log(&mut e);
+        e.call(
+            0x0046_1c20,
+            &args![this, 0x7fffi32, -0x8000i32, 0x70u32, 0u8],
+        );
+        assert_eq!(calls(&e, WORLD_GET_CELL).len(), 1);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn exterior_cell_lookup_creates_a_missing_cell_when_asked() {
+        let (mut e, this) = engine2();
+        e.register(HANDLER_IS_SAVE_LOAD, |e, a| {
+            ret(e.mem.u8(a[0] + 0x61a) as u32)
+        });
+        e.register_double(WORLD_GET_CELL, |_, _| ret(0));
+        let cell = new_cell_world(&mut e, true, 0);
+        let world = e.mem.alloc(0x100);
+        // `create` clear: null, and no cell is made.
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1c20, &args![this, 3i32, 4i32, world, 0u8])
+                .u32(),
+            0
+        );
+        assert!(calls(&e, CELL_CONSTRUCT).is_empty());
+        // `create` set: `NewCell` with the empty editor id.
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1c20, &args![this, 3i32, 4i32, world, 1u8])
+                .u32(),
+            cell
+        );
+        assert_eq!(calls(&e, 0x0210_0134), vec![vec![cell, EMPTY_STRING]]);
+        assert_eq!(calls(&e, CELL_SET_DATA_COORD), vec![vec![cell, 3, 4]]);
+        // Loading a save game: never created.
+        e.set(this, TESDataHandler::bSaveLoad, true);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1c20, &args![this, 3i32, 4i32, world, 1u8])
+                .u32(),
+            0
+        );
+        assert!(calls(&e, CELL_CONSTRUCT).is_empty());
+    }
+
+    // `GetExtCellDataFromFileByEditorID`.
+
+    #[test]
+    fn ext_cell_data_of_an_empty_name_is_null_and_zeroes_the_outputs() {
+        let (mut e, this) = engine2();
+        do_nothing(&mut e, &[SCOPE_ENTER, SCOPE_LEAVE]);
+        let out = e.mem.alloc(8);
+        e.mem.set_u32(out, 5);
+        e.mem.set_u32(out + 4, 6);
+        let empty = c_string(&mut e, "");
+        start_log(&mut e);
+        let result = e.call(0x0046_1cf0, &args![this, empty, out, out + 4]);
+        assert_eq!(result.u32(), 0);
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (0, 0));
+        assert_eq!(
+            &calls(&e, SCOPE_ENTER)[0][1..],
+            &[0x16, 1, SOURCE_FILE, 0x1041]
+        );
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 1);
+        let result = e.call(0x0046_1cf0, &args![this, 0u32, out, out + 4]);
+        assert_eq!(result.u32(), 0);
+    }
+
+    #[test]
+    fn ext_cell_data_from_optimized_files_asks_the_world_spaces() {
+        let (mut e, this) = engine2();
+        real_lists(&mut e);
+        do_nothing(&mut e, &[SCOPE_ENTER, SCOPE_LEAVE]);
+        e.set(this, TESDataHandler::iNumCompile, 2);
+        let index = this.at(TESDataHandler::pFileIndex).addr();
+        e.mem.set_u32(index, 0);
+        e.mem.set_u32(index + 4, 0xf1);
+        e.register(FILE_GET_OPTIMIZED, |_, a| ret((a[0] == 0xf1) as u32));
+        build_list(
+            &mut e,
+            this.at(TESDataHandler::listWorldSpaces).addr(),
+            &[0xd1, 0xd2, 0xd3],
+        );
+        // World 0xd2 knows the cell and writes its coordinates.
+        e.register_double(WORLD_GET_EXT_CELL_DATA, |e, a| {
+            if a[0] == 0xd2 {
+                e.mem.set_u32(a[2], 11);
+                e.mem.set_u32(a[3], 12);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        let name = c_string(&mut e, "Goodsprings");
+        let out = e.mem.alloc(8);
+        start_log(&mut e);
+        let result = e.call(0x0046_1cf0, &args![this, name, out, out + 4]);
+        assert_eq!(result.u32(), 0xd2);
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (11, 12));
+        assert_eq!(
+            calls(&e, WORLD_GET_EXT_CELL_DATA),
+            vec![
+                vec![0xd1, name, out, out + 4],
+                vec![0xd2, name, out, out + 4]
+            ]
+        );
+        // No file is opened.
+        assert!(calls(&e, FILE_OPEN).is_empty());
+        // Nobody knows it: the list ends.
+        let name = c_string(&mut e, "Nowhere");
+        e.register_double(WORLD_GET_EXT_CELL_DATA, |_, _| ret(0));
+        assert_eq!(
+            e.call(0x0046_1cf0, &args![this, name, out, out + 4]).u32(),
+            0
+        );
+    }
+
+    /// One form of the scripted file: (type word, word at +8, word at +0xC).
+    type ScriptedForm = (u32, u32, u32);
+
+    /// The state of a scripted `TESFile`: `forms[current]` is what sits in
+    /// `m_currentform` (+0x240); `NextForm` and the group skip step it.
+    struct ScriptedFile {
+        forms: Vec<ScriptedForm>,
+        current: usize,
+        /// The chunk ids of the current cell record, in order.
+        chunks: Vec<u32>,
+        chunk: usize,
+    }
+
+    fn publish_current_form(e: &mut Engine, file: u32, script: &ScriptedFile) {
+        let (kind, label, extra) = script
+            .forms
+            .get(script.current)
+            .copied()
+            .unwrap_or((0, 0, 0));
+        e.mem.set_u32(file + 0x240, kind);
+        e.mem.set_u32(file + 0x248, label);
+        e.mem.set_u32(file + 0x24c, extra);
+    }
+
+    /// An engine with one opened file `0xf1`'s stand-in (a real block),
+    /// scripted to hold `forms`, whose cell records have the chunks
+    /// `chunks`. The record types are the exe's words 1 (group), 2 (world),
+    /// 3 (cell). Returns (engine, handler, file, shared script).
+    fn scan_engine(
+        forms: Vec<ScriptedForm>,
+        chunks: Vec<u32>,
+    ) -> (Engine, Ptr<TESDataHandler>, u32, Rc<RefCell<ScriptedFile>>) {
+        let (mut e, this) = engine2();
+        e.set_global(GROUP_TYPE_WORD, 1u32);
+        e.set_global(WORLD_TYPE_WORD, 2u32);
+        e.set_global(CELL_TYPE_WORD, 3u32);
+        do_nothing(&mut e, &[SCOPE_ENTER, SCOPE_LEAVE, FILE_CLOSE]);
+        e.set(this, TESDataHandler::iNumCompile, 1);
+        let file = e.mem.alloc(0x400);
+        e.mem
+            .set_u32(this.at(TESDataHandler::pFileIndex).addr(), file);
+        e.register(FILE_GET_OPTIMIZED, |_, _| ret(0));
+        e.register(FILE_OPEN, |_, _| ret(1));
+        real_string_compare(&mut e);
+        let script = Rc::new(RefCell::new(ScriptedFile {
+            forms,
+            current: 0,
+            chunks,
+            chunk: 0,
+        }));
+        publish_current_form(&mut e, file, &script.borrow());
+        // NextForm and the group skip step to the next form; true while there
+        // is one.
+        for addr in [FILE_NEXT_FORM, FILE_SKIP_GROUP] {
+            let shared = script.clone();
+            e.register_double(addr, move |e, a| {
+                let mut script = shared.borrow_mut();
+                script.current += 1;
+                script.chunk = 0;
+                publish_current_form(e, a[0], &script);
+                ret((script.current < script.forms.len()) as u32)
+            });
+        }
+        let shared = script.clone();
+        e.register_double(FILE_GET_CHUNK_ID, move |_, _| {
+            let script = shared.borrow();
+            ret(script.chunks.get(script.chunk).copied().unwrap_or(0))
+        });
+        let shared = script.clone();
+        e.register_double(FILE_NEXT_CHUNK, move |_, _| {
+            let mut script = shared.borrow_mut();
+            script.chunk += 1;
+            ret((script.chunk < script.chunks.len()) as u32)
+        });
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(OPERATOR_DELETE, |e, a| {
+            e.mem.free(a[0]);
+            Ret::default()
+        });
+        e.register(MEMSET, |e, a| {
+            for i in 0..a[2] {
+                e.mem.set_u8(a[0] + i, a[1] as u8);
+            }
+            Ret::default()
+        });
+        e.register(FILE_CHUNK_SIZE, |_, _| ret(4));
+        e.register(FILE_MUST_ENDIAN_CONVERT, |_, _| ret(0));
+        e.register(COORDS_INIT, |_, a| ret(a[0]));
+        // The owner's file index word 0 sits in the file named 0x777.
+        e.register(FILE_GET_INDEX_FILE, |_, _| ret(0x777));
+        e.register(FILE_COMPILE_INDEX, |_, a| {
+            ret(if a[0] == 0x777 { 5 } else { 0 })
+        });
+        e.register(FORM_BY_ID, |_, a| ret(a[0] + 0x1000_0000));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0] ^ 0x00ff_0000));
+        // The chunk data: EDID gives the name "Name", XCLC two words.
+        e.register(FILE_GET_CHUNK_DATA, |e, a| {
+            if a[2] == 0 {
+                e.mem.set_cstr(a[1], b"Name");
+            } else {
+                e.mem.set_u32(a[1], 5);
+                e.mem.set_u32(a[1] + 4, -3i32 as u32);
+            }
+            Ret::default()
+        });
+        (e, this, file, script)
+    }
+
+    /// The forms of a world: a group that is not the world one, the world
+    /// group, a world record, then a cell record.
+    fn world_forms() -> Vec<ScriptedForm> {
+        vec![
+            (1, 0x1111, 0),
+            (1, 2, 0),
+            (2, 0, 0x0100_0aaa),
+            (3, 0, 0x0100_0bbb),
+        ]
+    }
+
+    #[test]
+    fn ext_cell_data_is_read_from_the_file() {
+        let (mut e, this, file, _) =
+            scan_engine(world_forms(), vec![CHUNK_EDID, 0x4141, CHUNK_XCLC]);
+        let name = c_string(&mut e, "NAME");
+        let out = e.mem.alloc(8);
+        start_log(&mut e);
+        let result = e.call(0x0046_1cf0, &args![this, name, out, out + 4]);
+        // The world record's id: file index 1 + 1 -> file 0x777, whose
+        // compile index is 5: 0x05000aaa; the cast result is what
+        // `__RTDynamicCast` answers for the form `TESForm lookup` found.
+        assert_eq!(result.u32(), (0x0500_0aaa + 0x1000_0000) ^ 0x00ff_0000);
+        assert_eq!(
+            calls(&e, FILE_GET_INDEX_FILE),
+            vec![vec![file, 2]],
+            "the owner index is the id's high byte plus 1"
+        );
+        assert_eq!(calls(&e, FORM_BY_ID), vec![vec![0x0500_0aaa]]);
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                0x0500_0aaa + 0x1000_0000,
+                0,
+                FORM_TYPE_DESCRIPTOR,
+                WORLD_SPACE_TYPE_DESCRIPTOR,
+                0
+            ]]
+        );
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (5, -3i32 as u32));
+        // The file was opened with (0, 0) and closed.
+        assert_eq!(calls(&e, FILE_OPEN), vec![vec![file, 0, 0]]);
+        assert_eq!(calls(&e, FILE_CLOSE), vec![vec![file]]);
+        // The chunk buffer was one byte longer than the chunk, and freed.
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![5]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 1);
+        assert_eq!(calls(&e, FILE_GET_CHUNK_DATA).len(), 2);
+        assert_eq!(calls(&e, FILE_GET_CHUNK_DATA)[1][2], 12);
+    }
+
+    #[test]
+    fn ext_cell_data_swaps_the_coordinates_of_a_file_that_needs_it() {
+        let (mut e, this, _, _) = scan_engine(world_forms(), vec![CHUNK_EDID, CHUNK_XCLC]);
+        e.register(FILE_MUST_ENDIAN_CONVERT, |_, _| ret(1));
+        e.register(SWAP_WORD, |e, a| {
+            let word = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], word.swap_bytes());
+            Ret::default()
+        });
+        let name = c_string(&mut e, "name");
+        let out = e.mem.alloc(8);
+        e.call(0x0046_1cf0, &args![this, name, out, out + 4]);
+        assert_eq!(
+            (e.mem.u32(out), e.mem.u32(out + 4)),
+            (5u32.swap_bytes(), (-3i32 as u32).swap_bytes())
+        );
+    }
+
+    #[test]
+    fn ext_cell_data_of_a_cell_with_another_name_is_null() {
+        let (mut e, this, file, _) = scan_engine(world_forms(), vec![CHUNK_EDID, CHUNK_XCLC]);
+        let name = c_string(&mut e, "Other");
+        let out = e.mem.alloc(8);
+        start_log(&mut e);
+        let result = e.call(0x0046_1cf0, &args![this, name, out, out + 4]);
+        assert_eq!(result.u32(), 0);
+        assert_eq!((e.mem.u32(out), e.mem.u32(out + 4)), (0, 0));
+        // The file was scanned to the end and closed; only the name chunk
+        // was read.
+        assert_eq!(calls(&e, FILE_CLOSE), vec![vec![file]]);
+        assert_eq!(calls(&e, FILE_GET_CHUNK_DATA).len(), 1);
+    }
+
+    #[test]
+    fn ext_cell_data_skips_files_that_do_not_open_or_have_no_world_group() {
+        // No world group: the scan walks over the group and stops.
+        let (mut e, this, file, _) = scan_engine(vec![(1, 0x1111, 0), (1, 0x2222, 0)], vec![]);
+        let name = c_string(&mut e, "Name");
+        let out = e.mem.alloc(8);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1cf0, &args![this, name, out, out + 4]).u32(),
+            0
+        );
+        assert_eq!(
+            calls(&e, FILE_SKIP_GROUP).len(),
+            2,
+            "both groups, then the end"
+        );
+        assert_eq!(calls(&e, FILE_CLOSE), vec![vec![file]]);
+        // A file that does not open is passed over.
+        e.register(FILE_OPEN, |_, _| ret(0));
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1cf0, &args![this, name, out, out + 4]).u32(),
+            0
+        );
+        assert!(calls(&e, FILE_CLOSE).is_empty());
+    }
+
+    #[test]
+    fn ext_cell_data_walks_the_groups_inside_the_world_group() {
+        // After the world group: a type-4 group is stepped into, a type-0
+        // group of another label ends the scan.
+        let forms = vec![(1, 2, 0), (1, 0x77, 4), (1, 0x99, 0), (3, 0, 0x0100_0bbb)];
+        let (mut e, this, _, script) = scan_engine(forms, vec![CHUNK_EDID, CHUNK_XCLC]);
+        e.register(FORM_TYPE_FROM_STRING, |_, _| ret(0x50));
+        let name = c_string(&mut e, "Name");
+        let out = e.mem.alloc(8);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0046_1cf0, &args![this, name, out, out + 4]).u32(),
+            0
+        );
+        // Form 1 (type 4) steps on; form 2 (type 0, other label) asks the
+        // form type of its label and stops without stepping.
+        assert_eq!(calls(&e, FORM_TYPE_FROM_STRING), vec![vec![0x99]]);
+        assert_eq!(script.borrow().current, 2);
+    }
+
+    #[test]
+    fn byte_swap_swaps_two_words() {
+        let mut e = Engine::new();
+        e.register(SWAP_WORD, |_, _| Ret::default());
+        start_log(&mut e);
+        e.call(0x0046_2230, &args![0x4000u32]);
+        assert_eq!(
+            e.call_log.unwrap()[1..],
+            [(SWAP_WORD, vec![0x4000, 0]), (SWAP_WORD, vec![0x4004, 0])]
+        );
+    }
+
+    #[test]
+    fn current_form_is_at_plus_0x240() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0046_2270, &args![0x1000u32]).u32(), 0x1240);
+    }
+
+    // `UnloadCell` and the thread flag.
+
+    fn unload_engine(
+        interior: bool,
+        clearing: bool,
+        object_test: bool,
+    ) -> (Engine, Ptr<TESDataHandler>, u32) {
+        let (mut e, this) = engine2();
+        e.set_global(OBJECT_011DDF38, 0x3300u32);
+        e.set_global(PLAYER_SINGLETON, 0x4400u32);
+        do_nothing(
+            &mut e,
+            &[
+                SET_BYTE_01202DF0,
+                CELL_DETACH,
+                OBJECT_011E0E80_STEP,
+                CELL_SET_BYTE_26,
+                CELL_UNLOAD_STEP_1,
+                CELL_UNLOAD_STEP_2,
+                CELL_SET_LOWEST_PROCESS,
+                CELL_SET_PROCESS_FLAG,
+                LAND_UNLOAD_VERTICES,
+                CELL_UNLOAD_STEP_3,
+                CELL_UNLOAD_STEP_4,
+                WORLD_UNLOAD_CELL,
+            ],
+        );
+        e.register(FORM_HAS_FLAG_BIT_5, |_, _| ret(0));
+        e.register_double(OBJECT_011DDF38_TEST, move |_, _| ret(object_test as u32));
+        // The cell reports its lowest-process state twice, then not.
+        let mut remaining = 2;
+        e.register_double(CELL_GET_LOWEST_PROCESS, move |_, _| {
+            let reported = remaining > 0;
+            if reported {
+                remaining -= 1;
+            }
+            ret(reported as u32)
+        });
+        e.register_double(HANDLER_IS_CLEARING_DATA, move |_, _| ret(clearing as u32));
+        e.register(PLAYER_IS_SLEEPING_OR_RESTING, |_, _| ret(0));
+        e.register_double(CELL_IS_INTERIOR, move |_, _| ret(interior as u32));
+        e.register(CELL_GET_LAND, |_, _| ret(0x5500));
+        e.register(CELL_GET_WORLD_SPACE, |_, _| ret(0x6600));
+        let cell = e.mem.alloc(0x100);
+        (e, this, cell)
+    }
+
+    #[test]
+    fn unload_cell_runs_its_steps_in_the_games_order() {
+        let (mut e, this, cell) = unload_engine(false, false, false);
+        start_log(&mut e);
+        e.call(0x0046_2290, &args![this, cell]);
+        assert_eq!(
+            call_order(&e),
+            vec![
+                FORM_HAS_FLAG_BIT_5,
+                SET_BYTE_01202DF0,
+                OBJECT_011DDF38_TEST,
+                CELL_DETACH,
+                OBJECT_011E0E80_STEP,
+                CELL_SET_BYTE_26,
+                CELL_UNLOAD_STEP_1,
+                CELL_UNLOAD_STEP_2,
+                CELL_GET_LOWEST_PROCESS,
+                CELL_SET_LOWEST_PROCESS,
+                CELL_GET_LOWEST_PROCESS,
+                CELL_SET_LOWEST_PROCESS,
+                CELL_GET_LOWEST_PROCESS,
+                HANDLER_IS_CLEARING_DATA,
+                PLAYER_IS_SLEEPING_OR_RESTING,
+                CELL_SET_PROCESS_FLAG,
+                CELL_IS_INTERIOR,
+                CELL_GET_LAND,
+                LAND_UNLOAD_VERTICES,
+                CELL_UNLOAD_STEP_3,
+                CELL_UNLOAD_STEP_4,
+                CELL_IS_INTERIOR,
+                CELL_GET_WORLD_SPACE,
+                WORLD_UNLOAD_CELL,
+                OBJECT_011DDF38_TEST,
+                SET_BYTE_01202DF0,
+            ]
+        );
+        assert_eq!(calls(&e, SET_BYTE_01202DF0), vec![vec![1], vec![0]]);
+        assert_eq!(calls(&e, CELL_DETACH), vec![vec![cell, 1]]);
+        assert_eq!(
+            calls(&e, OBJECT_011E0E80_STEP),
+            vec![vec![OBJECT_011E0E80, cell]]
+        );
+        assert_eq!(calls(&e, CELL_SET_BYTE_26), vec![vec![cell, 1]]);
+        assert_eq!(calls(&e, CELL_SET_LOWEST_PROCESS), vec![vec![cell, 0]; 2]);
+        assert_eq!(calls(&e, PLAYER_IS_SLEEPING_OR_RESTING), vec![vec![0x4400]]);
+        // The player is not sleeping or resting: the flag is 1.
+        assert_eq!(calls(&e, CELL_SET_PROCESS_FLAG), vec![vec![cell, 1]]);
+        assert_eq!(calls(&e, LAND_UNLOAD_VERTICES), vec![vec![0x5500]]);
+        assert_eq!(calls(&e, CELL_UNLOAD_STEP_4), vec![vec![cell, 0]]);
+        assert_eq!(calls(&e, WORLD_UNLOAD_CELL), vec![vec![0x6600, cell]]);
+        assert_eq!(
+            calls(&e, HANDLER_IS_CLEARING_DATA),
+            vec![vec![this.addr()]],
+            "the singleton, which is `this` here"
+        );
+    }
+
+    #[test]
+    fn unload_cell_of_an_interior_cell_leaves_the_land_and_world_alone() {
+        let (mut e, this, cell) = unload_engine(true, true, false);
+        start_log(&mut e);
+        e.call(0x0046_2290, &args![this, cell]);
+        let order = call_order(&e);
+        // Clearing data: nobody asks the player.
+        for skipped in [
+            PLAYER_IS_SLEEPING_OR_RESTING,
+            CELL_SET_PROCESS_FLAG,
+            CELL_GET_LAND,
+            LAND_UNLOAD_VERTICES,
+            CELL_GET_WORLD_SPACE,
+            WORLD_UNLOAD_CELL,
+        ] {
+            assert!(!order.contains(&skipped), "{skipped:08x}");
+        }
+        assert!(order.contains(&CELL_UNLOAD_STEP_3));
+    }
+
+    #[test]
+    fn unload_cell_sets_the_thread_flag_around_the_work() {
+        let (mut e, this, cell) = unload_engine(true, false, true);
+        let word = e.tls() + TLS_FLAG_WORD;
+        let seen = Rc::new(RefCell::new(None));
+        let shared = seen.clone();
+        e.register_double(CELL_DETACH, move |e, _| {
+            *shared.borrow_mut() = Some(e.mem.u32(word) & 1);
+            Ret::default()
+        });
+        e.call(0x0046_2290, &args![this, cell]);
+        assert_eq!(*seen.borrow(), Some(1), "set while the cell is detached");
+        assert_eq!(e.mem.u32(word) & 1, 0, "restored at the end");
+    }
+
+    #[test]
+    fn unload_cell_ignores_null_and_flagged_cells() {
+        let (mut e, this, cell) = unload_engine(false, false, false);
+        start_log(&mut e);
+        e.call(0x0046_2290, &args![this, 0u32]);
+        assert!(call_order(&e).is_empty());
+        e.register(FORM_HAS_FLAG_BIT_5, |_, _| ret(1));
+        start_log(&mut e);
+        e.call(0x0046_2290, &args![this, cell]);
+        assert_eq!(call_order(&e), vec![FORM_HAS_FLAG_BIT_5]);
+    }
+
+    #[test]
+    fn thread_flag_setter_sets_and_clears_bit_0() {
+        let mut e = Engine::new();
+        let word = e.tls() + TLS_FLAG_WORD;
+        // Flag 0 sets the bit and answers what the test said before.
+        assert_eq!(e.call(0x0046_23f0, &args![0x1000u32, 0u8]).u8(), 1);
+        assert_eq!(e.mem.u32(word), 1);
+        assert_eq!(e.call(0x0046_23f0, &args![0x1000u32, 0u8]).u8(), 0);
+        e.mem.set_u32(word, 0xf1);
+        assert_eq!(e.call(0x0046_23f0, &args![0x1000u32, 1u8]).u8(), 0);
+        assert_eq!(e.mem.u32(word), 0xf0);
+        assert_eq!(e.call(0x0046_23f0, &args![0x1000u32, 1u8]).u8(), 1);
+    }
+
+    #[test]
+    fn thread_flag_test_says_whether_bit_0_is_clear() {
+        let mut e = Engine::new();
+        let word = e.tls() + TLS_FLAG_WORD;
+        assert!(e.call(0x0046_2480, &args![]).bool());
+        e.mem.set_u32(word, 1);
+        assert!(!e.call(0x0046_2480, &args![]).bool());
+        e.mem.set_u32(word, 0xfe);
+        assert!(e.call(0x0046_2480, &args![]).bool());
+    }
+
+    // The small accessors and wrappers.
+
+    #[test]
+    fn file_path_is_at_plus_0x124() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0046_2e80, &args![0x1000u32]).u32(), 0x1124);
+    }
+
+    #[test]
+    fn file_info_is_at_plus_0x29c() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0046_2ea0, &args![0x1000u32]).u32(), 0x129c);
+    }
+
+    #[test]
+    fn file_cached_flag_is_the_byte_at_plus_0x428() {
+        let mut e = Engine::new();
+        let file = e.mem.alloc(0x430);
+        e.call(0x0046_2e60, &args![file, 1u8]);
+        assert_eq!(e.mem.u8(file + 0x428), 1);
+        e.call(0x0046_2e60, &args![file, 0u8]);
+        assert_eq!(e.mem.u8(file + 0x428), 0);
+    }
+
+    #[test]
+    fn summary_setter_passes_the_string_at_plus_0x418() {
+        let mut e = Engine::new();
+        e.register_double(SUMMARY_SET, |_, a| ret(a[0]));
+        start_log(&mut e);
+        let result = e.call(0x0046_2ec0, &args![0x1000u32, 0x2000u32]);
+        assert_eq!(result.u32(), 0x1418);
+        assert_eq!(calls(&e, SUMMARY_SET), vec![vec![0x1418, 0x2000]]);
+    }
+
+    #[test]
+    fn dlc_flags_are_set_and_cleared_by_mask() {
+        let (mut e, this) = engine2();
+        assert_eq!(e.call(0x0046_2e10, &args![this, 0x02u8, true]).u8(), 0x02);
+        assert_eq!(e.call(0x0046_2e10, &args![this, 0x08u8, true]).u8(), 0x0a);
+        assert_eq!(e.get(this, TESDataHandler::cDLCFlags), 0x0a);
+        assert_eq!(e.call(0x0046_2e10, &args![this, 0x02u8, false]).u8(), 0x08);
+        assert_eq!(e.get(this, TESDataHandler::cDLCFlags), 0x08);
+    }
+
+    #[test]
+    fn splitpath_wrapper_passes_all_nine_words() {
+        let mut e = Engine::new();
+        e.register_double(SPLIT_PATH_S, |_, _| ret(22));
+        start_log(&mut e);
+        let result = e.call(
+            0x0046_2d40,
+            &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32, 7u32, 8u32, 9u32],
+        );
+        assert_eq!(result.i32(), 22);
+        assert_eq!(
+            calls(&e, SPLIT_PATH_S),
+            vec![vec![1, 2, 3, 4, 5, 6, 7, 8, 9]]
+        );
+    }
+
+    #[test]
+    fn stream_read_calls_the_function_pointer_and_advances_the_position() {
+        let mut e = Engine::new();
+        let stream = e.mem.alloc(0x20);
+        e.mem.set_u32(stream + 4, 100);
+        e.mem.set_u32(stream + 8, 0x0300_0000);
+        e.register(0x0300_0000, |_, _| ret(12));
+        let buffer = e.mem.alloc(0x20);
+        let components = e.mem.alloc(4);
+        start_log(&mut e);
+        let count = e.call(
+            0x0046_2dc0,
+            &args![stream, buffer, 0x40u32, components, 1u32],
+        );
+        assert_eq!(count.u32(), 12);
+        assert_eq!(e.mem.u32(stream + 4), 112);
+        assert_eq!(
+            calls(&e, 0x0300_0000),
+            vec![vec![stream, buffer, 0x40, components, 1]]
+        );
+    }
+
+    #[test]
+    fn stream_read_of_a_buffer_gives_one_component_of_size_one() {
+        let mut e = Engine::new();
+        let stream = e.mem.alloc(0x20);
+        e.mem.set_u32(stream + 8, 0x0300_0000);
+        let seen = Rc::new(RefCell::new(vec![]));
+        let shared = seen.clone();
+        e.register_double(0x0300_0000, move |e, a| {
+            // The component word is only valid during the call.
+            shared.borrow_mut().push((a.to_vec(), e.mem.u32(a[3])));
+            ret(7)
+        });
+        let buffer = e.mem.alloc(0x20);
+        assert_eq!(
+            e.call(0x0046_2d80, &args![stream, buffer, 0x100u32]).u32(),
+            7
+        );
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0[..3], [stream, buffer, 0x100]);
+        assert_eq!(seen[0].0[4], 1);
+        assert_eq!(seen[0].1, 1);
+        assert_eq!(e.mem.u32(stream + 4), 7);
+    }
+
+    // `004624b0`, the scan of the data directory.
+
+    const READ_STREAM: u32 = 0x0300_0100;
+    const DIRECTORY: &str = "Data\\";
+
+    /// What the doubles of `scan_env` recorded.
+    #[derive(Default)]
+    struct ScanLog {
+        /// (node, item) of each `LIST_ADD` and `LIST_APPEND`.
+        added: Vec<(u32, u32)>,
+        appended: Vec<(u32, u32)>,
+        removed_items: Vec<(u32, u32)>,
+        summary: Option<(u32, Vec<u8>)>,
+        nam_path: Option<Vec<u8>>,
+        created: Vec<u32>,
+    }
+
+    struct ScanEnv {
+        e: Engine,
+        this: Ptr<TESDataHandler>,
+        old_file: u32,
+        directory: u32,
+        log: Rc<RefCell<ScanLog>>,
+        file_time_order: Rc<RefCell<i32>>,
+        old_file_present: Rc<RefCell<bool>>,
+        header_status: Rc<RefCell<u32>>,
+    }
+
+    fn copy_c_string(e: &mut Engine, destination: u32, text: &[u8]) {
+        e.mem.set_cstr(destination, text);
+    }
+
+    /// Doubles for the callees of `004624b0` with one listed master file
+    /// `Old.esm`, and `New.esm` on disk (no `.esp`). The new file is a
+    /// master too (the byte at +0x3f0 of a file).
+    fn scan_env() -> ScanEnv {
+        let (mut e, this) = engine2();
+        e.map(0x0101_8000, 0x1000);
+        e.mem.set_cstr(PATTERN_ESM, b"*.esm");
+        e.mem.set_cstr(PATTERN_ESP, b"*.esp");
+        e.mem.set_cstr(UPDATE_BSA, b"Update.bsa");
+        e.mem.set_cstr(NAM_PATH_FORMAT, b"%s%s.NAM");
+        real_lists(&mut e);
+        let log = Rc::new(RefCell::new(ScanLog::default()));
+        let file_time_order = Rc::new(RefCell::new(-1));
+        let old_file_present = Rc::new(RefCell::new(true));
+        let header_status = Rc::new(RefCell::new(0u32));
+        do_nothing(
+            &mut e,
+            &[
+                SCOPE_ENTER,
+                SCOPE_LEAVE,
+                FILE_CLOSE,
+                FIND_CLOSE,
+                BSFILE_DESTRUCT,
+                FILE_SET_FLAG_BIT_2,
+                OPEN_ARCHIVE,
+                FILE_GEN_INDEX_TABLE,
+                BSFILE_CONSTRUCT,
+                FILE_DESTRUCT,
+                OPERATOR_DELETE,
+            ],
+        );
+        e.register(STRING_COPY_S, |e, a| {
+            let text = e.mem.cstr(a[2]);
+            copy_c_string(e, a[0], &text);
+            Ret::default()
+        });
+        e.register(LSTRCPY_A, |e, a| {
+            let text = e.mem.cstr(a[1]);
+            copy_c_string(e, a[0], &text);
+            ret(a[0])
+        });
+        e.register(LSTRCAT_A, |e, a| {
+            let mut text = e.mem.cstr(a[0]);
+            text.extend(e.mem.cstr(a[1]));
+            copy_c_string(e, a[0], &text);
+            ret(a[0])
+        });
+        let present = old_file_present.clone();
+        e.register_double(FIND_FIRST_FILE_A, move |e, a| {
+            let path = e.mem.cstr(a[0]);
+            if path.ends_with(b"*.esm") {
+                e.mem.set_u32(a[1] + FIND_DATA_SIZE_LOW, 100);
+                e.mem.set_u32(a[1] + FIND_DATA_SIZE_HIGH, 0);
+                copy_c_string(e, a[1] + FIND_DATA_FILE_NAME, b"New.esm");
+                ret(0x41)
+            } else if path.ends_with(b"*.esp") || (path.ends_with(b"Old.esm") && !*present.borrow())
+            {
+                ret(INVALID_HANDLE)
+            } else {
+                ret(0x42)
+            }
+        });
+        e.register(FILE_NAME, |_, a| ret(a[0] + 0x20));
+        e.register(FIND_NEXT_FILE_A, |_, _| ret(0));
+        e.register(GET_LIST_FILE, |_, _| ret(0));
+        let status = header_status.clone();
+        e.register_double(FILE_OPEN_HEADER, move |_, _| ret(*status.borrow()));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let shared = log.clone();
+        e.register_double(FILE_CONSTRUCT, move |e, a| {
+            let name = e.mem.cstr(a[2]);
+            let path = e.mem.cstr(a[1]);
+            copy_c_string(e, a[0] + 0x20, &name);
+            copy_c_string(e, a[0] + 0x124, &path);
+            e.mem.set_u8(a[0] + 0x3f0, name.ends_with(b".esm") as u8);
+            shared.borrow_mut().created.push(a[0]);
+            ret(a[0])
+        });
+        e.register(SPLIT_PATH_S, |e, a| {
+            let name = e.mem.cstr(a[0]);
+            let dot = name.iter().rposition(|c| *c == b'.').unwrap();
+            copy_c_string(e, a[5], &name[..dot]);
+            copy_c_string(e, a[7], &name[dot..]);
+            ret(0)
+        });
+        let shared = log.clone();
+        e.register_double(FORMAT_S, move |e, a| {
+            let mut text = e.mem.cstr(a[3]);
+            text.extend(e.mem.cstr(a[4]));
+            text.extend_from_slice(b".NAM");
+            copy_c_string(e, a[0], &text);
+            shared.borrow_mut().nam_path = Some(text);
+            ret(0)
+        });
+        e.register(BSFILE_EXIST, |_, _| ret(1));
+        e.register(BSFILE_FLAG_2C, |_, _| ret(1));
+        // The stream's read function, after the constructor double sets it.
+        e.register_double(BSFILE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 8, READ_STREAM);
+            ret(a[0])
+        });
+        e.register(READ_STREAM, |e, a| {
+            copy_c_string(e, a[1], b"Summary");
+            ret(7)
+        });
+        let shared = log.clone();
+        e.register_double(SUMMARY_SET, move |e, a| {
+            shared.borrow_mut().summary = Some((a[0], e.mem.cstr(a[1])));
+            ret(a[0])
+        });
+        e.register(IS_DLC_PACKAGE_NAME, |_, _| ret(2));
+        e.register(FILE_GET_MASTER, |e, a| ret(e.mem.u8(a[0] + 0x3f0) as u32));
+        let order = file_time_order.clone();
+        e.register_double(COMPARE_FILE_TIME, move |_, _| ret(*order.borrow() as u32));
+        let shared = log.clone();
+        e.register_double(LIST_ADD, move |e, a| {
+            let item = e.mem.u32(a[1]);
+            shared.borrow_mut().added.push((a[0], item));
+            Ret::default()
+        });
+        let shared = log.clone();
+        e.register_double(LIST_APPEND, move |e, a| {
+            let item = e.mem.u32(a[1]);
+            shared.borrow_mut().appended.push((a[0], item));
+            Ret::default()
+        });
+        let shared = log.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            let item = e.mem.u32(a[1]);
+            shared.borrow_mut().removed_items.push((a[0], item));
+            Ret::default()
+        });
+        // Removing the head node pulls the next one into it.
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        e.register(FILE_FINDER_EXIST, |_, _| ret(1));
+        e.register(FILE_INDEX_COUNT, |_, _| ret(0));
+        e.register(FILE_GET_INDEX_FILE, |_, _| ret(0));
+        let old_file = e.mem.alloc(0x430);
+        copy_c_string(&mut e, old_file + 0x20, b"Old.esm");
+        copy_c_string(&mut e, old_file + 0x124, DIRECTORY.as_bytes());
+        e.mem.set_u8(old_file + 0x3f0, 1);
+        build_list(
+            &mut e,
+            this.at(TESDataHandler::listFiles).addr(),
+            &[old_file],
+        );
+        let directory = c_string(&mut e, DIRECTORY);
+        ScanEnv {
+            e,
+            this,
+            old_file,
+            directory,
+            log,
+            file_time_order,
+            old_file_present,
+            header_status,
+        }
+    }
+
+    #[test]
+    fn scan_adds_a_new_master_file_at_the_end() {
+        let mut env = scan_env();
+        let (this, old_file, directory) = (env.this, env.old_file, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        start_log(&mut env.e);
+        assert!(env.e.call(0x0046_24b0, &args![this, directory]).bool());
+        let log = env.log.borrow();
+        let new_file = log.created[0];
+        assert_eq!(log.created.len(), 1, "only New.esm is unknown");
+        // The old file is older: the new one goes after it.
+        assert_eq!(log.appended, vec![(head, new_file)]);
+        assert!(log.added.is_empty());
+        assert_eq!(log.nam_path.as_deref(), Some(&b"Data\\New.NAM"[..]));
+        assert_eq!(
+            log.summary,
+            Some((new_file + 0x418, b"Summary".to_vec())),
+            "the summary read from the .NAM file"
+        );
+        let e = &env.e;
+        assert_eq!(e.mem.u8(new_file + 0x428), 1, "bCached");
+        assert_eq!(
+            calls(e, FILE_SET_FLAG_BIT_2),
+            vec![vec![new_file, 1]],
+            "bit 2 of m_Flags"
+        );
+        // DLC package 2: bit 1 of cDLCFlags.
+        assert_eq!(e.get(this, TESDataHandler::cDLCFlags), 2);
+        let constructed = calls(e, FILE_CONSTRUCT);
+        assert_eq!(constructed.len(), 1);
+        assert_eq!(&constructed[0][..2], &[new_file, directory]);
+        assert_eq!(e.mem.cstr(constructed[0][2]), b"New.esm");
+        assert_eq!(constructed[0][3], 0);
+        assert_eq!(
+            &calls(e, SCOPE_ENTER)[0][1..],
+            &[0x16, 1, SOURCE_FILE, 0x1195]
+        );
+        assert_eq!(calls(e, OPEN_ARCHIVE), vec![vec![UPDATE_BSA, 0, 0]]);
+        assert_eq!(
+            calls(e, FILE_FINDER_EXIST)[0][0],
+            UPDATE_BSA,
+            "Update.bsa is looked for"
+        );
+        // Both passes: *.esm first, then *.esp.
+        let searches: Vec<Vec<u8>> = calls(e, LSTRCAT_A)
+            .iter()
+            .take(2)
+            .map(|call| e.mem.cstr(call[1]))
+            .collect();
+        assert_eq!(searches, vec![b"*.esm".to_vec(), b"*.esp".to_vec()]);
+        // The old file is a master: its index table is built in both loops.
+        assert_eq!(
+            calls(e, FILE_GEN_INDEX_TABLE),
+            vec![vec![old_file, head, 0]; 2]
+        );
+        // Every listed file is closed at the end (and once at the start).
+        assert!(calls(e, FILE_CLOSE).contains(&vec![old_file]));
+    }
+
+    #[test]
+    fn scan_puts_a_new_file_before_a_listed_one_that_is_not_older() {
+        let mut env = scan_env();
+        *env.file_time_order.borrow_mut() = 1;
+        let (this, directory) = (env.this, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        let log = env.log.borrow();
+        let new_file = log.created[0];
+        assert_eq!(log.added, vec![(head, new_file)]);
+        assert!(log.appended.is_empty());
+    }
+
+    #[test]
+    fn scan_compares_the_write_times_of_the_listed_and_the_new_file() {
+        let mut env = scan_env();
+        env.e.call_log = Some(vec![]);
+        let (this, old_file, directory) = (env.this, env.old_file, env.directory);
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        let find_data = calls(&env.e, FIND_FIRST_FILE_A)[0][1];
+        assert_eq!(
+            calls(&env.e, COMPARE_FILE_TIME),
+            vec![vec![old_file + 0x29c + 0x14, find_data + 0x14]]
+        );
+    }
+
+    #[test]
+    fn scan_puts_a_new_master_before_a_listed_plugin() {
+        let mut env = scan_env();
+        // The listed file is not a master: the new master goes in front of
+        // it without comparing times.
+        env.e.mem.set_u8(env.old_file + 0x3f0, 0);
+        env.e.call_log = Some(vec![]);
+        let (this, directory) = (env.this, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        let log = env.log.borrow();
+        assert_eq!(log.added, vec![(head, log.created[0])]);
+        assert!(calls(&env.e, COMPARE_FILE_TIME).is_empty());
+    }
+
+    #[test]
+    fn scan_removes_listed_files_that_fail_to_open() {
+        let mut env = scan_env();
+        *env.header_status.borrow_mut() = 2;
+        env.e.call_log = Some(vec![]);
+        let (this, old_file, directory) = (env.this, env.old_file, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        assert_eq!(calls(&env.e, FILE_OPEN_HEADER), vec![vec![old_file]]);
+        assert_eq!(calls(&env.e, LIST_REMOVE_HEAD)[0], vec![head]);
+        // The list is empty, so the new file is simply appended to it.
+        let log = env.log.borrow();
+        assert_eq!(log.appended, vec![(head, log.created[0])]);
+    }
+
+    #[test]
+    fn scan_destroys_listed_files_that_are_gone_from_the_disk() {
+        let mut env = scan_env();
+        *env.old_file_present.borrow_mut() = false;
+        env.e.call_log = Some(vec![]);
+        let (this, old_file, directory) = (env.this, env.old_file, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        // The lookup was for the file's path plus name.
+        let lookups: Vec<Vec<u8>> = calls(&env.e, FIND_FIRST_FILE_A)
+            .iter()
+            .map(|call| env.e.mem.cstr(call[0]))
+            .collect();
+        assert!(lookups.contains(&b"Data\\Old.esm".to_vec()));
+        // It was the only node and nothing came before: head removal.
+        assert_eq!(calls(&env.e, LIST_REMOVE_HEAD), vec![vec![head]]);
+        assert_eq!(calls(&env.e, FILE_DESTRUCT), vec![vec![old_file]]);
+        assert_eq!(calls(&env.e, OPERATOR_DELETE), vec![vec![old_file]]);
+        // Nothing is left to index.
+        assert!(calls(&env.e, FILE_GEN_INDEX_TABLE).is_empty());
+    }
+
+    #[test]
+    fn scan_moves_the_masters_of_a_master_up_the_list() {
+        let mut env = scan_env();
+        // Old.esm has one master, 0x888, that the chain holds. The count
+        // answers 1 once, then 0.
+        let asked = Rc::new(RefCell::new(0u32));
+        let shared = asked.clone();
+        env.e.register_double(FILE_INDEX_COUNT, move |_, _| {
+            *shared.borrow_mut() += 1;
+            ret((*shared.borrow() == 1) as u32)
+        });
+        env.e.register(FILE_GET_INDEX_FILE, |_, _| ret(0x888));
+        env.e.register(LIST_CONTAINS, |_, _| ret(1));
+        env.e.call_log = Some(vec![]);
+        let (this, old_file, directory) = (env.this, env.old_file, env.directory);
+        let head = this.at(TESDataHandler::listFiles).addr();
+        env.e.call(0x0046_24b0, &args![this, directory]);
+        let log = env.log.borrow();
+        // Removed and added again at the node, with the master file's address
+        // in the word the call gets.
+        assert_eq!(log.removed_items, vec![(head, 0x888)]);
+        assert_eq!(log.added, vec![(head, 0x888)]);
+        assert_eq!(
+            calls(&env.e, FILE_GET_INDEX_FILE).first(),
+            Some(&vec![old_file, 1])
+        );
+        // The node was not advanced after a move: the file is visited again.
+        assert_eq!(calls(&env.e, FILE_GEN_INDEX_TABLE).len(), 3);
     }
 }
