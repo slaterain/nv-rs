@@ -4,25 +4,38 @@
 //! This unit holds `BaseExtraList` / `ExtraDataList` (the list of extra data
 //! hung on a reference, a cell or an inventory entry), the small
 //! `BSExtraData` subclasses whose constructors the compiler placed here, and
-//! the very large `ExtraDataList::AddExtraCopy`, `ExtraDataList::Load` and
-//! their neighbours. 624 functions in all: translated so far, in address
-//! order, `0040f680` to `00411e70` (the first 40 the queue listed).
+//! the very large `ExtraDataList::AddExtraCopy`, the save writer
+//! (`fn_00412970`), `ExtraDataList::Load` and `ExtraDataList::InitItem`.
+//! 624 functions in all: translated so far, in address order, `0040f680` to
+//! `00416be0` (the first 80 the queue listed, in two sessions).
 //!
-//! A later session continues at `00411ea0`. What it needs is up here:
+//! A later session continues at `004181c0` (the setter of the linked plane
+//! that `InitItem` calls; the callee list of `InitItem`, `Load` and the save
+//! writer shows the setters and getters that follow). What it needs is up
+//! here:
 //!
 //! - the layouts and the constants (the lock, the dirty counter, the thread
-//!   cache, the callees every function uses) below;
-//! - `00411ea0` (the `BSExtraData` subclass destructor `fn_00411e70` calls),
-//!   `00411ec0` `ExtraDataList::CopyList` and `00411f20`
-//!   `ExtraDataList::IsCopyableExtra` (called by address by `AddExtraCopy`);
+//!   cache, then, in the second block, the callees of the list operations,
+//!   the save writer, the loader and `InitItem`) below;
 //! - the type byte `cEtype` of an extra data is the index into the 21-byte
 //!   bitmap `iFlags` of the list (`fn_0040fee0` sets and clears a bit,
 //!   `base_extra_list_has_extra` tests it) and into the per-thread cache
-//!   (`fn_0040f9e0`, `fn_0040fa40`).
+//!   (`fn_0040f9e0`, `fn_0040fa40`);
+//! - the extra data types are `EXTRA_DATA_TYPE` of the Xbox PDB (`0x03`
+//!   `EXTRA_WATERTYPE`, `0x2A` `EXTRA_LOCK`, `0x53` `EXTRA_ACTIVATE_REF`,
+//!   ...); the save writer and the loader name the chunks by their four
+//!   letters (`chunk_tag(b"XCWT")`), and the tests build a list of extra
+//!   data with `list_with_payloads` and read what a function did from the
+//!   call log;
+//! - where an identical-code fold put a wrong name on a function in the
+//!   engine map (`BSSimpleList<REF_ACTIVATE_DATA_P>::AddHead` on `00414010`,
+//!   `ExtraDataList::SetRadiation` on the rank setter `004198a0`,
+//!   `D3DTexture_LockRect` on `0059bb30`, `VATS::GetCount` on `005ae380`),
+//!   the function is `fn_<addr>` or the callee is named after its body.
 //!
 //! The compiler's exception-unwinding frames (the `FS:[0]` chains of the
-//! constructors that build a `BSSimpleList`, of `AddExtraCopy`) are not
-//! translated.
+//! constructors that build a `BSSimpleList`, of `AddExtraCopy`, of the save
+//! writer, of `Load` and of `CopyListForReference`) are not translated.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -173,6 +186,318 @@ const VTABLE_EXTRA_WATER_LIGHT_REFS: u32 = 0x0101_4440;
 const VTABLE_EXTRA_LIT_WATER_REFS: u32 = 0x0101_444c;
 const VTABLE_EXTRA_TYPE_92: u32 = 0x0101_4458;
 
+// Second batch: lock names, callees and helpers (list operations, the save
+// writer `fn_00412970`, the loader `extra_data_list_load`, `InitItem`).
+
+/// `BSExtraData::~BSExtraData` (`0040ecb0`), run by the subclass destructors
+/// after they set their own vtable.
+const BS_EXTRA_DATA_DESTROY: u32 = 0x0040_ecb0;
+/// `_ftol2_sse` (`00ec62c0`): truncates the float in ST0 (a leading `f64`
+/// argument here).
+const FTOL: u32 = 0x00ec_62c0;
+
+const NAME_COPY_LIST: u32 = 0x0101_4468;
+const NAME_REMOVE_ALL_COPYABLE: u32 = 0x0101_4484;
+const NAME_REMOVE_NON_PERSISTENT: u32 = 0x0101_44ac;
+const NAME_COPY_LIST_FOR_CONTAINER: u32 = 0x0101_44dc;
+const NAME_DUPLICATE_FOR_CONTAINER: u32 = 0x0101_4504;
+const NAME_COPY_LIST_FOR_REFERENCE: u32 = 0x0101_4534;
+const NAME_COMPARE_LIST_FOR_CONTAINER: u32 = 0x0101_455c;
+const NAME_COMPARE_LIST: u32 = 0x0101_4588;
+
+/// The global word `RemoveNonPersistentCellData` passes as `this` to
+/// `fn_004121b0`, which does not use it.
+const THREAD_STATE_OWNER: u32 = 0x011d_df38;
+/// Offset in the TLS block of the word whose bit 2 `fn_004121b0` tests.
+const THREAD_FLAGS_OFFSET: u32 = 0x294;
+
+/// `ExtraDataList::GetScript` (`00418800`).
+const GET_SCRIPT: u32 = 0x0041_8800;
+/// `ExtraScript::ExtraScript(script)` (`00432000`, `this` = the new block).
+const EXTRA_SCRIPT_INIT: u32 = 0x0043_2000;
+/// `005abf60` on a script, whose result `00419f80` takes.
+const SCRIPT_GET_RESULT: u32 = 0x005a_bf60;
+/// `00419f80`: the list's setter for the script result (`AddExtraCopy` uses it
+/// for the second word of a type `0D` extra data).
+const EXTRA_DATA_LIST_SET_SCRIPT_RESULT: u32 = 0x0041_9f80;
+
+/// `Swap32(pointer, 0)` (`00401080`): byte-swaps the word at `pointer` in
+/// place (cdecl; the byte argument is not used).
+const SWAP_DWORD: u32 = 0x0040_1080;
+/// `Swap16(pointer, 0)` (`00407a90`).
+const SWAP_WORD: u32 = 0x0040_7a90;
+
+// The save writer's callees.
+/// `TESForm::iFormID` getter (`MOV EAX,[ECX+0x0C]`).
+const FORM_ID: u32 = 0x0084_e3a0;
+/// `TESForm::AddChunk(tag, word)`: one word, swapped first on a big-endian
+/// target.
+const ADD_CHUNK_WORD: u32 = 0x0048_5910;
+/// `TESForm::AddChunk(tag, byte)`.
+const ADD_CHUNK_BYTE: u32 = 0x0048_58f0;
+/// `TESForm::AddChunk(tag)`: a chunk without data.
+const ADD_CHUNK_EMPTY: u32 = 0x0048_56d0;
+/// `TESForm::__AddChunkData(tag, data, size)`.
+const ADD_CHUNK_DATA: u32 = 0x0048_5990;
+/// `TESForm::AddChunkArray_ov2(tag, data, count)` (`00485710`).
+const ADD_CHUNK_ARRAY: u32 = 0x0048_5710;
+/// `TESForm::AddChunkArray(tag, data, size)` (`004856f0`).
+const ADD_CHUNK_ARRAY_RAW: u32 = 0x0048_56f0;
+/// The save writer's big-endian flag (`MOV AL,[011c54ba]`).
+const IS_BIG_ENDIAN: u32 = 0x0040_1500;
+/// Byte-swap of the word at `this` (`Swap32`, `00503210`).
+const SWAP_WORD_AT: u32 = 0x0050_3210;
+/// Byte-swap of the word at `this + 4` (`0060ce80`).
+const SWAP_WORD_AT_4: u32 = 0x0060_ce80;
+/// Byte-swap of the words at `this` and `this + 4` (`00462230`).
+const SWAP_TWO_WORDS: u32 = 0x0046_2230;
+/// Count of the non-null items of a `BSSimpleList` (`005ae380`).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `BSSimpleList::IsEmpty`: no item and no next (`008256d0`).
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+/// `RagDollData::Save` (`004d93c0`).
+const RAGDOLL_DATA_SAVE: u32 = 0x004d_93c0;
+/// The teleport data's save (`0043a420`).
+const TELEPORT_DATA_SAVE: u32 = 0x0043_a420;
+/// The map marker data's save (`00438c10`).
+const MAP_MARKER_DATA_SAVE: u32 = 0x0043_8c10;
+/// The `GetSeed` of the list (`00418b40`): the type `0x31` byte, 0xFF if none.
+const EXTRA_DATA_LIST_GET_SEED: u32 = 0x0041_8b40;
+/// Constructor of the decal data (`0055a400`).
+const DECAL_DATA_INIT: u32 = 0x0055_a400;
+/// `BSSimpleList` node constructor (`0096a2d0`): item and next to 0.
+const SIMPLE_LIST_INIT: u32 = 0x0096_a2d0;
+/// Copy of the 8-byte member of the navmesh portal data (`0069a690`).
+const NAVMESH_PORTAL_COPY: u32 = 0x0069_a690;
+/// `MultiBoundMarkerData` save (`00438f90`).
+const MULTIBOUND_MARKER_DATA_SAVE: u32 = 0x0043_8f90;
+/// `PackageEventAction::Save` (`0067dc80`).
+const PACKAGE_EVENT_ACTION_SAVE: u32 = 0x0067_dc80;
+/// `BSOcclusionPlane` size member getter: the address `this + 0x14`.
+const PLANE_HALF_EXTENTS: u32 = 0x007d_6bb0;
+/// `NiMatrix3` to axis and angle (`00a58550`): `(matrix, &angle, &x, &y, &z)`.
+const MATRIX_TO_AXIS_ANGLE: u32 = 0x00a5_8550;
+/// `AudioMarkerData` save (`00589560`).
+const AUDIO_MARKER_DATA_SAVE: u32 = 0x0058_9560;
+/// `AudioBuoyMarkerData` save (`00483710`).
+const AUDIO_BUOY_MARKER_DATA_SAVE: u32 = 0x0048_3710;
+/// `BSStringT::GetLength` (`004048e0`).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+/// `ExtraDataList::GetActivateTextOverride(out)` (`0041ec80`): copies the
+/// activate text of the type `0x53` extra data (or an empty string) into
+/// `out` and returns `out`.
+const GET_ACTIVATE_TEXT: u32 = 0x0041_ec80;
+/// `BSStringT` destructor (`004037d0`).
+const STRING_DESTROY: u32 = 0x0040_37d0;
+/// Constructor of the package start location record (`006d5320`).
+const PATH_LOCATION_INIT: u32 = 0x006d_5320;
+
+// The loader's callees.
+/// `TESFile::GetTESChunk`: the type of the current chunk (`004726b0`).
+const GET_TES_CHUNK: u32 = 0x0047_26b0;
+/// `TESFile::GetChunkData(&value)`: reads the 4-byte value (`004727f0`).
+const GET_CHUNK_WORD: u32 = 0x0047_27f0;
+/// `TESFile::GetChunkData(buffer, size)` (`00472890`).
+const GET_CHUNK_DATA: u32 = 0x0047_2890;
+/// `TESFile::GetChunkDataSize` (`00401660`, `MOV EAX,[ECX+0x25C]`).
+const GET_CHUNK_SIZE: u32 = 0x0040_1660;
+/// The file's byte-swap flag (`00401680`, `MOV AL,[ECX+0x299]`).
+const FILE_NEEDS_SWAP: u32 = 0x0040_1680;
+/// `TESFile::NextChunk`-like skip to the next chunk (`004726f0`).
+const SKIP_CHUNK: u32 = 0x0047_26f0;
+/// `TESFile` file name field address, `this + 0x20` (`00891170`).
+const FILE_NAME: u32 = 0x0089_1170;
+/// `TESForm::AddCompileIndex(&id, file)` (`00485d50`, cdecl).
+const ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+/// The data handler singleton pointer (`011c3f2c`).
+const DATA_HANDLER: u32 = 0x011c_3f2c;
+/// `DataHandler::pRegionList` getter (`004169d0`, `MOV EAX,[ECX+0x1D8]`).
+const DATA_HANDLER_REGIONS: u32 = 0x0041_69d0;
+/// `TESRegionList::TESRegionList(bool)` (`004f6320`).
+const REGION_LIST_INIT: u32 = 0x004f_6320;
+/// Region of a `TESRegionList` by form id (`004f66c0`).
+const REGION_LIST_FIND: u32 = 0x004f_66c0;
+/// Adds a region to a `TESRegionList` (`004f6600`).
+const REGION_LIST_ADD: u32 = 0x004f_6600;
+/// `ExtraDataList::SetRegionList` (`0041bbd0`).
+const SET_REGION_LIST: u32 = 0x0041_bbd0;
+/// `"MASTERFILE: Invalid Extra Data - Region List in file \"%s\"."`
+const MESSAGE_BAD_REGION_LIST: u32 = 0x0101_45d8;
+/// `"MASTERFILE: Failed to load RagDoll Data."`
+const MESSAGE_BAD_RAGDOLL: u32 = 0x0101_45ac;
+/// The float default of the third distant-data value (`010145a8`).
+const LOD_DEFAULT: u32 = 0x0101_45a8;
+
+const SET_HEALTH: u32 = 0x0041_9970;
+const SET_USES: u32 = 0x0041_9a20;
+const SET_COUNT: u32 = 0x0041_9ad0;
+/// `ExtraDataList::GetAmmo` (`0042eb40`): the type `0x6E` extra data.
+const GET_AMMO: u32 = 0x0042_eb40;
+/// `ExtraDataList::SetAmmo(ammo, count)` (`0042eb60`).
+const SET_AMMO: u32 = 0x0042_eb60;
+const SET_SEED: u32 = 0x0041_ac30;
+/// `ExtraLock::ExtraLock(lock data)` (`00430c70`, `this` = the new block).
+const EXTRA_LOCK_INIT: u32 = 0x0043_0c70;
+/// `REFR_LOCK::SetLocked(bool)` (`00430a90`).
+const REFR_LOCK_SET_LOCKED: u32 = 0x0043_0a90;
+const SET_RADIO_DATA: u32 = 0x0041_8310;
+const GET_TELEPORT: u32 = 0x0041_8460;
+const DOOR_TELEPORT_DATA_INIT: u32 = 0x0043_a160;
+const SET_TELEPORT: u32 = 0x0041_9120;
+const DOOR_TELEPORT_DATA_LOAD: u32 = 0x0043_a4e0;
+const GET_MAP_MARKER: u32 = 0x0041_8490;
+const MAP_MARKER_DATA_INIT: u32 = 0x0043_8bb0;
+const SET_MAP_MARKER: u32 = 0x0041_9250;
+const MAP_MARKER_DATA_LOAD: u32 = 0x0043_8ca0;
+const GET_AUDIO_MARKER: u32 = 0x0041_84c0;
+const AUDIO_MARKER_DATA_INIT: u32 = 0x0058_9450;
+const SET_AUDIO_MARKER: u32 = 0x0041_9380;
+const AUDIO_MARKER_DATA_LOAD: u32 = 0x0058_9600;
+const GET_AUDIO_BUOY_MARKER: u32 = 0x0041_84f0;
+const AUDIO_BUOY_MARKER_DATA_INIT: u32 = 0x0068_0890;
+const SET_AUDIO_BUOY_MARKER: u32 = 0x0041_94b0;
+const AUDIO_BUOY_MARKER_DATA_LOAD: u32 = 0x0058_9890;
+const SET_PACKAGE_START_LOCATION: u32 = 0x0041_ad00;
+/// `ExtraRagDollData::ExtraRagDollData` (`00432cb0`).
+const EXTRA_RAGDOLL_DATA_INIT: u32 = 0x0043_2cb0;
+/// `RagDollData::RagDollData` (`004d9330`).
+const RAGDOLL_DATA_INIT: u32 = 0x004d_9330;
+/// `RagDollData::Load(file)` (`004d94a0`), true if it loaded.
+const RAGDOLL_DATA_LOAD: u32 = 0x004d_94a0;
+const SET_DISTANT_DATA: u32 = 0x0041_d950;
+const SET_ENABLE_STATE_PARENT: u32 = 0x0041_da40;
+const SET_ENABLE_STATE_FLAGS: u32 = 0x0041_dc70;
+/// Constructor of the type `0x53` extra data (`004338b0`, `0x20` bytes).
+const ACTIVATE_REF_INIT: u32 = 0x0043_38b0;
+/// `ExtraDataList::SetActivateTextOverride(char *)` (`0041ece0`).
+const SET_ACTIVATE_TEXT_OVERRIDE: u32 = 0x0041_ece0;
+/// `BSSimpleList::AddHead(&item)` (`005ae3d0`).
+const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+const ADD_DECAL_REF: u32 = 0x0041_f080;
+const MULTIBOUND_MARKER_DATA_INIT: u32 = 0x0043_8f50;
+const MULTIBOUND_MARKER_DATA_LOAD: u32 = 0x0043_8fc0;
+const SET_MULTIBOUND_DATA: u32 = 0x0042_1f30;
+const NAVMESH_PORTAL_INIT: u32 = 0x0069_2870;
+const NAVMESH_PORTAL_LOAD: u32 = 0x0069_dfd0;
+const SET_NAVMESH_PORTAL: u32 = 0x0042_e2c0;
+const NAVMESH_PORTAL_EXTRA_DESTROY: u32 = 0x0043_2f30;
+const ADD_REFLECTOR_REF: u32 = 0x0041_f1a0;
+const ADD_REFLECTED_REF: u32 = 0x0041_f330;
+const ADD_LIT_WATER_REF: u32 = 0x0041_f940;
+/// `BGSPrimitive` factory `(type, radii, color)` (`004a4e90`, cdecl).
+const PRIMITIVE_CREATE: u32 = 0x004a_4e90;
+const ADD_PRIMITIVE: u32 = 0x0041_fa60;
+/// Allocation of `0xFC` bytes for the occlusion plane (`00aa13e0`, cdecl).
+const ALLOCATE_ALIGNED: u32 = 0x00aa_13e0;
+/// `BSOcclusionPlane::BSOcclusionPlane` (`00c335d0`).
+const OCCLUSION_PLANE_INIT: u32 = 0x00c3_35d0;
+/// `NiMatrix3::MakeRotation(angle, x, y, z)` (`004168a0`).
+const MATRIX_MAKE_ROTATION: u32 = 0x0041_68a0;
+const SET_OCCLUSION_PLANE: u32 = 0x0042_2150;
+const PATROL_REF_DATA_INIT: u32 = 0x0067_c690;
+const SET_PATROL_REF_DATA: u32 = 0x0041_fc10;
+const SET_OCCLUSION_PLANE_REF_DATA: u32 = 0x0041_fec0;
+const SET_PORTAL_REF_DATA: u32 = 0x0042_0210;
+const SET_ROOM_REF_DATA: u32 = 0x0042_0440;
+const SET_COLLISION_DATA: u32 = 0x0042_0fd0;
+const GET_PATROL_REF_DATA: u32 = 0x0041_fe90;
+const PACKAGE_EVENT_ACTION_LOAD: u32 = 0x0067_dd20;
+const SET_IGNORED_BY_SANDBOX: u32 = 0x0042_f200;
+/// Stores its argument at `this + 0x0C` (`0041fd00`).
+const SET_SPECIAL_RENDER_WORD: u32 = 0x0041_fd00;
+/// `BGSSaveFormBuffer::GetForm` (`007af430`).
+const SAVE_BUFFER_GET_FORM: u32 = 0x007a_f430;
+/// `TESForm::GetFormType` (`00401170`, `MOVZX EAX,[ECX+4]`).
+const FORM_TYPE: u32 = 0x0040_1170;
+
+// InitItem's callees.
+const TES_FORM_GET_FILE: u32 = 0x0048_4e60;
+/// Form by id (`004839c0`, cdecl).
+const LOOKUP_FORM: u32 = 0x0048_39c0;
+/// `reference + 0x44`, the reference's embedded `ExtraDataList` (`005d43c0`).
+const REFERENCE_EXTRA_LIST: u32 = 0x005d_43c0;
+/// `TESObjectREFR::pBaseForm` getter (`004181e0`, via `007af430`: `+0x20`).
+const REFERENCE_BASE_FORM: u32 = 0x0041_81e0;
+const ACTOR_BASE_GET_HEALTH: u32 = 0x005f_0b00;
+const DOOR_TELEPORT_DATA_INIT_ITEM: u32 = 0x0043_a590;
+const MAP_MARKER_GET_VISIBLE: u32 = 0x0043_8ed0;
+const MAP_MARKER_GET_TRAVEL_LOC: u32 = 0x0043_8ef0;
+const MAP_MARKER_SET_TRAVEL_LOC: u32 = 0x0044_de80;
+const MAP_MARKER_GET_REPUTATION: u32 = 0x0044_edb0;
+const MAP_MARKER_SET_REPUTATION: u32 = 0x0043_7730;
+const DATA_HANDLER_GET_REPUTATION: u32 = 0x0046_1630;
+const CHECK_ENABLE_PARENT_LOOP: u32 = 0x0056_aac0;
+const ENABLE_PARENT_ADD_CHILD: u32 = 0x0041_dcd0;
+const LINKED_REF_ADD_CHILD: u32 = 0x0041_e530;
+const DECAL_REFS_INIT_ITEM: u32 = 0x0043_3db0;
+const REFLECTOR_REFS_INIT_ITEM: u32 = 0x0043_3ed0;
+const LIT_WATER_REFS_INIT_ITEM: u32 = 0x0043_4050;
+const REFERENCE_GET_INTERIOR: u32 = 0x0057_5d10;
+const PATROL_REF_DATA_INIT_ITEM: u32 = 0x0067_c6c0;
+const GET_OCCLUSION_PLANE: u32 = 0x0042_2120;
+const SET_LINKED_PLANE: u32 = 0x0041_81c0;
+const PORTAL_ADD_REFERENCE: u32 = 0x0042_0ce0;
+const LIST_SET_ITEM: u32 = 0x0072_6c60;
+const IMPACT_SWAP_INIT_ITEM: u32 = 0x0058_f210;
+const AUDIO_MARKER_GET_CONTROLLER: u32 = 0x0059_bb30;
+const AUDIO_MARKER_SET_CONTROLLER: u32 = 0x0070_37c0;
+const ADD_ACTIVATE_REF_CHILD: u32 = 0x0041_edd0;
+const LIST_REMOVE_AFTER: u32 = 0x0090_5330;
+const LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// Type descriptors for `__RTDynamicCast`: `TESKey` and the controller of an
+/// audio marker.
+const RTTI_TES_KEY: u32 = 0x0118_41b4;
+const RTTI_MEDIA_LOCATION_CONTROLLER: u32 = 0x0118_418c;
+
+const MESSAGE_RAGDOLL_ON_LIVE_ACTOR: u32 = 0x0101_4b88;
+const MESSAGE_LOCK_KEY_MISSING: u32 = 0x0101_5060;
+const MESSAGE_ENABLE_PARENT_MISSING: u32 = 0x0101_4c90;
+const MESSAGE_ENABLE_PARENT_LOOP: u32 = 0x0101_4c50;
+const MESSAGE_LINKED_REF_MISSING: u32 = 0x0101_4b28;
+const MESSAGE_EMPTY_DECALS: u32 = 0x0101_4890;
+const MESSAGE_MULTIBOUND_REF_MISSING: u32 = 0x0101_46b8;
+const MESSAGE_EMPTY_REFLECTOR_REFS: u32 = 0x0101_4684;
+const MESSAGE_EMITTANCE_SOURCE_MISSING: u32 = 0x0101_4728;
+const MESSAGE_RADIO_POSITION_MISSING: u32 = 0x0101_50f8;
+const MESSAGE_RADIO_POSITION_INTERIOR: u32 = 0x0101_50b0;
+const MESSAGE_PLANE_REF_MISSING: u32 = 0x0101_4ab8;
+const MESSAGE_NO_OCCLUSION_PLANE: u32 = 0x0101_4a80;
+const MESSAGE_PORTAL_REF_MISSING: u32 = 0x0101_4a18;
+const MESSAGE_PORTAL_ROOMS_SAME: u32 = 0x0101_49c0;
+const MESSAGE_PORTAL_ROOMS_NULL: u32 = 0x0101_4984;
+const MESSAGE_ROOM_REF_MISSING: u32 = 0x0101_4920;
+const MESSAGE_EMPTY_LIT_WATER: u32 = 0x0101_4658;
+const MESSAGE_CONTROLLER_MISSING: u32 = 0x0101_5000;
+const MESSAGE_ACTIVATE_REF_MISSING: u32 = 0x0101_48ec;
+const MESSAGE_EMPTY_ACTIVATE_PARENT: u32 = 0x0101_48b8;
+
+/// The four letters of a chunk name as the word the exe pushes
+/// (`chunk_tag(b"XCWT")` is `0x54574358`).
+const fn chunk_tag(name: &[u8; 4]) -> u32 {
+    u32::from_le_bytes(*name)
+}
+
+/// A `float` word loaded and stored through the x87 stack (`FLD`/`FSTP`):
+/// the same bits, except that a signalling NaN comes out quiet.
+fn x87_float_bits(bits: u32) -> u32 {
+    let is_nan = bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0;
+    if is_nan {
+        bits | 0x0040_0000
+    } else {
+        bits
+    }
+}
+
+/// Copies `bytes` bytes (a multiple of 4) from `source` to `target`.
+fn copy_block(e: &mut Engine, source: u32, target: u32, bytes: u32) {
+    for offset in (0..bytes).step_by(4) {
+        let word = e.mem.u32(source.wrapping_add(offset));
+        e.mem.set_u32(target.wrapping_add(offset), word);
+    }
+}
+
+/// Vtable of the type `0x5A` extra data.
+const VTABLE_EXTRA_TYPE_5A: u32 = 0x0101_4618;
 // ---------------------------------------------------------------------------
 // Helpers
 
@@ -1309,6 +1634,2387 @@ pub fn fn_00411e70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
     finish_scalar_deleting_destructor(e, this, flags)
 }
 
+// ---------------------------------------------------------------------------
+// Second batch: list operations, the save writer, structures
+
+// Translated from 00411ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the type `0x92` extra data (called by `fn_00411e70`): sets
+/// its vtable, then runs the `BSExtraData` destructor (`0040ecb0`).
+pub fn fn_00411ea0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_TYPE_92);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 00411ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::CopyList` (Xbox PDB): empties this list of its copyable
+/// extra data (`RemoveAllCopyableExtra`, deleting them), then adds a copy of
+/// every extra data of `source` (`AddExtraCopy`, which skips the ones
+/// `IsCopyableExtra` refuses). A null `source` only empties.
+pub fn extra_data_list_copy_list(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    source: Ptr<ExtraDataList>,
+) {
+    extra_data_list_remove_all_copyable_extra(e, this, true);
+    lock(e, NAME_COPY_LIST);
+    if !source.is_null() {
+        let mut current: Ptr<BSExtraData> = e.get(source, ExtraDataList::pHead).cast();
+        while !current.is_null() {
+            extra_data_list_add_extra_copy(e, this, current);
+            current = get_next(e, current);
+        }
+    }
+    unlock(e);
+}
+
+// Translated from 00411f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::IsCopyableExtra` (Xbox PDB): false for the extra data
+/// types a copy leaves out (`01`, `02`, `04`, `0C`, `0F`, `10`, `11`, `15`,
+/// `29`, `34`, `40`, `4B`, `52`, `54`, `55`, `58`: the jump table at
+/// `00411f70`), true for every other type and for a null `extra`.
+pub fn extra_data_list_is_copyable_extra(
+    e: &mut Engine,
+    _this: Ptr<ExtraDataList>,
+    extra: Ptr<BSExtraData>,
+) -> bool {
+    if extra.is_null() {
+        return true;
+    }
+    let extra_type = get_type(e, extra);
+    !matches!(
+        extra_type,
+        0x01 | 0x02
+            | 0x04
+            | 0x0c
+            | 0x0f
+            | 0x10
+            | 0x11
+            | 0x15
+            | 0x29
+            | 0x34
+            | 0x40
+            | 0x4b
+            | 0x52
+            | 0x54
+            | 0x55
+            | 0x58
+    )
+}
+
+// Translated from 00411fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::RemoveAllCopyableExtra` (Xbox PDB): unlinks every extra
+/// data `IsCopyableExtra` accepts, deleting it when `destroy` is set. The type
+/// bitmap is not touched.
+pub fn extra_data_list_remove_all_copyable_extra(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    destroy: bool,
+) {
+    lock(e, NAME_REMOVE_ALL_COPYABLE);
+    let mut next: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+    let mut kept: Ptr<BSExtraData> = Ptr::NULL;
+    base_extra_list_clear_last_extra_all(e, this.cast());
+    while !next.is_null() {
+        let current = next;
+        next = get_next(e, current);
+        if !extra_data_list_is_copyable_extra(e, this, current) {
+            kept = current;
+        } else {
+            if current == e.get(this, ExtraDataList::pHead).cast() {
+                e.set(this, ExtraDataList::pHead, next.cast());
+            }
+            if !kept.is_null() {
+                set_next(e, kept, next);
+            }
+            if destroy {
+                delete_extra(e, current);
+            }
+        }
+    }
+    unlock(e);
+}
+
+// Translated from 004120b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::RemoveNonPersistentCellData` (Xbox PDB): deletes every
+/// extra data of the list except type `04` (always kept) and types `01` and
+/// `02` (kept when `fn_004121b0` says so, that is when bit 2 of the thread
+/// word at TLS `+0x294` is set); every other type, and type 0, is unlinked and
+/// deleted. The type bitmap is not touched.
+pub fn extra_data_list_remove_non_persistent_cell_data(e: &mut Engine, this: Ptr<ExtraDataList>) {
+    lock(e, NAME_REMOVE_NON_PERSISTENT);
+    base_extra_list_clear_last_extra_all(e, this.cast());
+    let mut kept: Ptr<BSExtraData> = Ptr::NULL;
+    let mut next: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+    while !next.is_null() {
+        let current = next;
+        next = get_next(e, current);
+        let extra_type = get_type(e, current);
+        let keep = match extra_type {
+            1 | 2 => {
+                let thread_state = e.global::<u32>(THREAD_STATE_OWNER);
+                fn_004121b0(e, thread_state)
+            }
+            4 => true,
+            _ => false,
+        };
+        if keep {
+            kept = current;
+            continue;
+        }
+        if current == e.get(this, ExtraDataList::pHead).cast() {
+            e.set(this, ExtraDataList::pHead, next.cast());
+        }
+        if !kept.is_null() {
+            set_next(e, kept, next);
+        }
+        delete_extra(e, current);
+    }
+    unlock(e);
+}
+
+// Translated from 004121b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 2 of the thread-local word at `+0x294` of the TLS block (`this`, the
+/// global at `011ddf38`, is not used): the flag `RemoveNonPersistentCellData`
+/// consults.
+pub fn fn_004121b0(e: &mut Engine, _this: u32) -> bool {
+    let tls = e.tls();
+    e.mem.u32(tls + THREAD_FLAGS_OFFSET) & 4 != 0
+}
+
+// Translated from 004121e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::CopyListForContainer` (Xbox PDB): copies into this list the
+/// extra data of `source` that belong with an inventory item: type `0D` and
+/// the types `16`, `17`, `1C`, `21`, `22`, `23`, `25`, `26`, `27`, `28`, `2F`,
+/// `30`, `3F`, `47`, `4A`, `8D` (the jump table at `004122e4`). With
+/// `copy_only` false the copied extra data is also removed from `source`
+/// (type `0D` unlinked only, the others deleted, except type `30`), and the
+/// walk restarts from the new head.
+pub fn extra_data_list_copy_list_for_container(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    source: Ptr<ExtraDataList>,
+    copy_only: bool,
+) {
+    lock(e, NAME_COPY_LIST_FOR_CONTAINER);
+    let mut current: Ptr<BSExtraData> = e.get(source, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        let mut advance = true;
+        let extra_type = get_type(e, current);
+        match extra_type {
+            0x0d => {
+                extra_data_list_add_extra_copy(e, this, current);
+                if !copy_only {
+                    base_extra_list_remove_extra(e, source.cast(), current, false);
+                    current = e.get(source, ExtraDataList::pHead).cast();
+                    advance = false;
+                }
+            }
+            0x16 | 0x17 | 0x1c | 0x21 | 0x22 | 0x23 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2f | 0x30
+            | 0x3f | 0x47 | 0x4a | 0x8d => {
+                extra_data_list_add_extra_copy(e, this, current);
+                if get_type(e, current) != 0x30 && !copy_only {
+                    base_extra_list_remove_extra(e, source.cast(), current, true);
+                    current = e.get(source, ExtraDataList::pHead).cast();
+                    advance = false;
+                }
+            }
+            _ => {}
+        }
+        if !current.is_null() && advance {
+            current = get_next(e, current);
+        }
+    }
+    unlock(e);
+}
+
+// Translated from 00412380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::DuplicateExtraListForContainer` (Xbox PDB): like
+/// `CopyListForContainer` without removing anything from `source`, and with
+/// type `24` added to the copied types (`0D`, `16`, `17`, `1C`, `21` to `28`,
+/// `2F`, `30`, `3F`, `47`, `4A`, `8D`: the jump table at `00412404`).
+pub fn extra_data_list_duplicate_extra_list_for_container(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    source: Ptr<ExtraDataList>,
+) {
+    lock(e, NAME_DUPLICATE_FOR_CONTAINER);
+    let mut current: Ptr<BSExtraData> = e.get(source, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        let extra_type = get_type(e, current);
+        if matches!(
+            extra_type,
+            0x0d | 0x16
+                | 0x17
+                | 0x1c
+                | 0x21
+                | 0x22
+                | 0x23
+                | 0x24
+                | 0x25
+                | 0x26
+                | 0x27
+                | 0x28
+                | 0x2f
+                | 0x30
+                | 0x3f
+                | 0x47
+                | 0x4a
+                | 0x8d
+        ) {
+            extra_data_list_add_extra_copy(e, this, current);
+        }
+        current = get_next(e, current);
+    }
+    unlock(e);
+}
+
+// Translated from 00412490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::CopyListForReference` (Xbox PDB): copies into this list the
+/// extra data of `source` that a reference keeps when it is split: types
+/// `16`, `1C`, `21`, `22`, `23`, `25`, `26`, `27`, `28`, `2F`, `30`, `3F`,
+/// `8D` (copied; with `remove_from_source` also deleted from `source`, and the
+/// walk restarts from its head) and type `0D`, the script: with
+/// `remove_from_source` it is copied and unlinked from `source` (not deleted);
+/// without it a new `ExtraScript` (`0x14` bytes) is built from
+/// `source.GetScript()` (`00418800`), added to this list, and `00419f80` is
+/// given the result of `005abf60` on the script. The jump table is at
+/// `0041262c`. The compiler's exception-unwinding frame is not translated.
+pub fn extra_data_list_copy_list_for_reference(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    source: Ptr<ExtraDataList>,
+    remove_from_source: bool,
+) {
+    lock(e, NAME_COPY_LIST_FOR_REFERENCE);
+    let mut current: Ptr<BSExtraData> = e.get(source, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        let mut advance = true;
+        let extra_type = get_type(e, current);
+        match extra_type {
+            0x0d => {
+                if !remove_from_source {
+                    let script = e.call(GET_SCRIPT, &args![source]).u32();
+                    let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+                    let created = if block == 0 {
+                        0
+                    } else {
+                        e.call(EXTRA_SCRIPT_INIT, &args![block, script]).u32()
+                    };
+                    base_extra_list_add_extra(e, this.cast(), Ptr::new(created));
+                    let script = e.call(GET_SCRIPT, &args![source]).u32();
+                    let compiled = e.call(SCRIPT_GET_RESULT, &args![script]).u32();
+                    e.call(EXTRA_DATA_LIST_SET_SCRIPT_RESULT, &args![this, compiled]);
+                } else {
+                    extra_data_list_add_extra_copy(e, this, current);
+                    base_extra_list_remove_extra(e, source.cast(), current, false);
+                    current = e.get(source, ExtraDataList::pHead).cast();
+                    advance = false;
+                }
+            }
+            0x16 | 0x1c | 0x21 | 0x22 | 0x23 | 0x25 | 0x26 | 0x27 | 0x28 | 0x2f | 0x30 | 0x3f
+            | 0x8d => {
+                extra_data_list_add_extra_copy(e, this, current);
+                if remove_from_source {
+                    base_extra_list_remove_extra(e, source.cast(), current, true);
+                    current = e.get(source, ExtraDataList::pHead).cast();
+                }
+                advance = !remove_from_source;
+            }
+            _ => {}
+        }
+        if !current.is_null() && advance {
+            current = get_next(e, current);
+        }
+    }
+    unlock(e);
+}
+
+/// True when `list` has no extra data of the type of `extra`, or has one whose
+/// virtual `Compare` (slot `+4`) says it differs from `extra`.
+fn differs_from_extra_in(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra: Ptr<BSExtraData>,
+) -> bool {
+    let extra_type = get_type(e, extra);
+    let found = base_extra_list_get_extra_data(e, list.cast(), extra_type);
+    if found.is_null() {
+        return true;
+    }
+    e.vcall(found.addr(), 4, &args![extra]).bool()
+}
+
+// Translated from 004126c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::CompareListForContainer` (Xbox PDB): true when `other` (an
+/// inventory entry's list) differs from this list. Unless
+/// `allow_script_and_owner` is set, an extra data of type `0D` or `21` in
+/// `other` is a difference at once. With `skip_type_16`, type `16` is
+/// passed over. Types `24` and `4A` are always passed over; for each other
+/// extra data in `other` this list must hold one of the same type (else a
+/// difference) that `Compare`s equal.
+pub fn extra_data_list_compare_list_for_container(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    other: Ptr<ExtraDataList>,
+    allow_script_and_owner: bool,
+    skip_type_16: bool,
+) -> bool {
+    lock(e, NAME_COMPARE_LIST_FOR_CONTAINER);
+    let mut differs = false;
+    let mut current: Ptr<BSExtraData> = e.get(other, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        if !allow_script_and_owner {
+            if get_type(e, current) == 0x0d {
+                differs = true;
+                break;
+            }
+            if get_type(e, current) == 0x21 {
+                differs = true;
+                break;
+            }
+        }
+        if get_type(e, current) == 0x16 && skip_type_16 {
+            current = get_next(e, current);
+            continue;
+        }
+        if get_type(e, current) != 0x24 && get_type(e, current) != 0x4a {
+            let extra_type = get_type(e, current);
+            let found = base_extra_list_get_extra_data(e, this.cast(), extra_type);
+            if found.is_null() {
+                differs = true;
+                break;
+            }
+            if e.vcall(found.addr(), 4, &args![current]).bool() {
+                differs = true;
+                break;
+            }
+        }
+        current = get_next(e, current);
+    }
+    unlock(e);
+    differs
+}
+
+// Translated from 004127e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::CompareList` (Xbox PDB): true when the two lists differ in
+/// their copyable extra data. Every copyable extra data of `other` must have a
+/// `Compare`-equal counterpart of its type in this list; then the same the
+/// other way round; and when the two lists hold a different number of extra
+/// data, every copyable extra data of this list must exist in `other`.
+pub fn extra_data_list_compare_list(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    other: Ptr<ExtraDataList>,
+) -> bool {
+    lock(e, NAME_COMPARE_LIST);
+    let mut differs = false;
+    let mut current: Ptr<BSExtraData> = e.get(other, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        if extra_data_list_is_copyable_extra(e, this, current)
+            && differs_from_extra_in(e, this, current)
+        {
+            differs = true;
+            break;
+        }
+        current = get_next(e, current);
+    }
+    if !differs {
+        let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+        while !current.is_null() {
+            if extra_data_list_is_copyable_extra(e, this, current)
+                && differs_from_extra_in(e, other, current)
+            {
+                differs = true;
+                break;
+            }
+            current = get_next(e, current);
+        }
+    }
+    let this_count = base_extra_list_items_in_list(e, this.cast());
+    let other_count = base_extra_list_items_in_list(e, other.cast());
+    if this_count != other_count {
+        let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+        while !current.is_null() {
+            if extra_data_list_is_copyable_extra(e, this, current) {
+                let extra_type = get_type(e, current);
+                if base_extra_list_get_extra_data(e, other.cast(), extra_type).is_null() {
+                    differs = true;
+                    break;
+                }
+            }
+            current = get_next(e, current);
+        }
+    }
+    unlock(e);
+    differs
+}
+
+// ---------------------------------------------------------------------------
+// Small structures: copies, byte swaps, constructors
+
+// Translated from 00413f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the member at +8 of the object: for the save writer's
+/// occlusion plane, its centre (`kCenter`, Xbox PDB `BSOcclusionPlane`, three
+/// floats).
+pub fn fn_00413f40(_e: &mut Engine, this: u32) -> u32 {
+    this.wrapping_add(8)
+}
+
+// Translated from 00413f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 36 bytes (nine words, a 3x3 matrix) at +0x1c of the object to
+/// `out`: the rotation of an occlusion plane (`kRotation`, Xbox PDB, which
+/// puts it at +0x20). Returns `out`.
+pub fn fn_00413f60(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    copy_words(e, this.addr() + 0x1c, out.addr(), 0, 36);
+    out
+}
+
+// Translated from 00413f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 16 bytes (four words) at +8 of the object to `out`: the colour
+/// of a `BGSPrimitive` (`Color`, an `NiColorA`, Xbox PDB). Returns `out`.
+pub fn fn_00413f90(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    copy_words(e, this.addr() + 8, out.addr(), 0, 16);
+    out
+}
+
+// Translated from 00413fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 12 bytes (three words) at +0x18 of the object to `out`: the
+/// radii of a `BGSPrimitive` (`Radii`, an `NiPoint3`, Xbox PDB). Returns
+/// `out`.
+pub fn fn_00413fc0(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    copy_words(e, this.addr() + 0x18, out.addr(), 0, 12);
+    out
+}
+
+// Translated from 00413ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the `float` that `source` points at into the word at `this`
+/// (through the x87 stack, so a signalling NaN comes out quiet). Returns
+/// `this`.
+pub fn fn_00413ff0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let bits = x87_float_bits(e.mem.u32(source.addr()));
+    e.mem.set_u32(this.addr(), bits);
+    this
+}
+
+// Translated from 00414010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes a two-word structure to an empty list node: item 0, next 0.
+/// (The engine map names this `BSSimpleList<REF_ACTIVATE_DATA_P>::AddHead`
+/// because the linker folded identical code; the body is a constructor of a
+/// node with a null item and a null next.) Returns `this`.
+pub fn fn_00414010(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+/// Byte-swaps in place the words `[0, count)` of the structure at `this`
+/// with `Swap32(ptr, 0)` (`00401080`), in order.
+fn swap_words(e: &mut Engine, this: Ptr, count: u32) {
+    for index in 0..count {
+        e.call(SWAP_DWORD, &args![this.addr() + index * 4, 0u32]);
+    }
+}
+
+// Translated from 00414030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps (`Swap32`, `00401080`) the seven words at +0 to +0x18 of a
+/// `REF_DECAL_DATA` (`0x1c` bytes, Xbox PDB).
+pub fn fn_00414030(e: &mut Engine, this: Ptr) {
+    swap_words(e, this, 7);
+}
+
+// Translated from 004140f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the nine words (`0x24` bytes) of the occlusion plane record
+/// (extents, centre, axis, angle).
+pub fn fn_004140f0(e: &mut Engine, this: Ptr) {
+    swap_words(e, this, 9);
+}
+
+// Translated from 004141e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the word at +0 (`Swap32`) and the 16-bit value at +4
+/// (`Swap16`, `00407a90`).
+pub fn fn_004141e0(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_DWORD, &args![this, 0u32]);
+    e.call(SWAP_WORD, &args![this.addr() + 4, 0u32]);
+}
+
+// Translated from 00414220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the four words at +0 to +0x0c (the first of a `RADIO_DATA` or
+/// of a `WORLD_LOCATION`).
+pub fn fn_00414220(e: &mut Engine, this: Ptr) {
+    swap_words(e, this, 4);
+}
+
+// Translated from 00414290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps the eight words (`0x20` bytes) of the primitive record (radii,
+/// colour, type).
+pub fn fn_00414290(e: &mut Engine, this: Ptr) {
+    swap_words(e, this, 8);
+}
+
+// Translated from 00414370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Byte-swaps four words in a loop over an index (the occlusion plane
+/// reference record).
+pub fn fn_00414370(e: &mut Engine, this: Ptr) {
+    swap_words(e, this, 4);
+}
+
+// Translated from 004143c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes a two-word structure to zero (word 1 first, then word 0): the
+/// portal reference record. Returns `this`.
+pub fn fn_004143c0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr() + 4, 0);
+    e.mem.set_u32(this.addr(), 0);
+    this
+}
+
+// Translated from 004143f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 32-byte primitive record (radii as an `NiPoint3` at +0,
+/// colour as an `NiColorA` at +0x0c, type at +0x1c): the point's constructor
+/// does nothing, the colour's (`00414430`) stores four zeros. Returns `this`.
+pub fn fn_004143f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SIMPLE_LIST_ITEM, &args![this]);
+    fn_00414430(e, this.byte_add(0x0c), 0.0, 0.0, 0.0, 0.0);
+    this
+}
+
+// Translated from 00414430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores four `float`s at +0 to +0x0c (through the x87 stack): the
+/// constructor of an `NiColorA`. Returns `this`.
+pub fn fn_00414430(e: &mut Engine, this: Ptr, a: f32, b: f32, c: f32, d: f32) -> Ptr {
+    for (index, value) in [a, b, c, d].into_iter().enumerate() {
+        let bits = x87_float_bits(value.to_bits());
+        e.mem.set_u32(this.addr() + index as u32 * 4, bits);
+    }
+    this
+}
+
+// Translated from 00414470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 36-byte occlusion plane structure: only runs the
+/// do-nothing member constructors (`006815c0`) at +0, +8 and +0x14. Returns
+/// `this`.
+pub fn fn_00414470(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SIMPLE_LIST_ITEM, &args![this]);
+    e.call(SIMPLE_LIST_ITEM, &args![this.addr() + 8]);
+    e.call(SIMPLE_LIST_ITEM, &args![this.addr() + 0x14]);
+    this
+}
+
+// Translated from 00416870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores three `float`s at +0, +4 and +8 (through the x87 stack): the
+/// constructor of an `NiPoint3`. Returns `this`.
+pub fn fn_00416870(e: &mut Engine, this: Ptr, x: f32, y: f32, z: f32) -> Ptr {
+    for (index, value) in [x, y, z].into_iter().enumerate() {
+        let bits = x87_float_bits(value.to_bits());
+        e.mem.set_u32(this.addr() + index as u32 * 4, bits);
+    }
+    this
+}
+
+// Translated from 004169a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `sincos`: stores the sine of `angle` at `sine` and the cosine at `cosine`
+/// (both `float`). The code uses the x87 `FSINCOS`; the translation computes
+/// both in `f64` and rounds to `float`, which can differ from the extended
+/// precision result in the last bit.
+pub fn fn_004169a0(e: &mut Engine, angle: f32, sine: Ptr, cosine: Ptr) {
+    let angle = angle as f64;
+    e.mem.set_f32(sine.addr(), angle.sin() as f32);
+    e.mem.set_f32(cosine.addr(), angle.cos() as f32);
+}
+
+// Translated from 004169d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x1D8 of the object (the region list of the data handler
+/// singleton, read by the loader through `011c3f2c`).
+pub fn fn_004169d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x1d8)
+}
+
+/// The two flag bytes the setters of the occlusion plane set.
+const PLANE_DIRTY_VERTICES: u32 = 0xe4;
+const PLANE_DIRTY_PLANES: u32 = 0xe5;
+
+// Translated from 004169f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSOcclusionPlane` centre setter: copies the three words at `center` to
+/// +8 of the plane (`kCenter`, Xbox PDB), and marks the cached vertices
+/// (+0xE4) and planes (+0xE5) dirty.
+pub fn fn_004169f0(e: &mut Engine, this: Ptr, center: Ptr) {
+    copy_block(e, center.addr(), this.addr() + 8, 12);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_VERTICES, 1);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_PLANES, 1);
+}
+
+// Translated from 00416a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSOcclusionPlane` size setter: copies the two words at `half_extents` to
+/// +0x14 of the plane (`kHalfExtents`, Xbox PDB), and marks the cached
+/// vertices and planes dirty.
+pub fn fn_00416a30(e: &mut Engine, this: Ptr, half_extents: Ptr) {
+    let first = e.mem.u32(half_extents.addr());
+    let second = e.mem.u32(half_extents.addr() + 4);
+    e.mem.set_u32(this.addr() + 0x14, first);
+    e.mem.set_u32(this.addr() + 0x18, second);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_VERTICES, 1);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_PLANES, 1);
+}
+
+// Translated from 00416a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSOcclusionPlane` rotation setter: copies the nine words (a 3x3 matrix)
+/// at `rotation` to +0x1C of the plane (`kRotation`, Xbox PDB), and marks the
+/// cached vertices and planes dirty.
+pub fn fn_00416a70(e: &mut Engine, this: Ptr, rotation: Ptr) {
+    copy_block(e, rotation.addr(), this.addr() + 0x1c, 36);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_VERTICES, 1);
+    e.mem.set_u8(this.addr() + PLANE_DIRTY_PLANES, 1);
+}
+
+// Translated from 00416ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initializes an 8-byte structure (a word and a 16-bit value, the old
+/// navmesh portal record the loader reads) to zero. Returns `this`.
+pub fn fn_00416ab0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u16(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00416ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x5A` extra data (`0x14` bytes, the navmesh
+/// portal extra data): a `BSExtraData` whose member at +0x0C is copied (`word`
+/// then the 16-bit value in the low half of `short_part`) from the 8-byte
+/// value the caller passes by value (`0069a690`). Returns `this`. The
+/// compiler's exception-unwinding frame is not translated.
+pub fn fn_00416ad0(e: &mut Engine, this: Ptr, word: u32, short_part: u32) -> Ptr {
+    e.call(BS_EXTRA_DATA_INIT, &args![this, 0x5au32]);
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_TYPE_5A);
+    e.with_stack(8, |e, value| {
+        e.mem.set_u32(value.addr(), word);
+        e.mem.set_u32(value.addr() + 4, short_part);
+        e.call(NAVMESH_PORTAL_COPY, &args![this.addr() + 0x0c, value]);
+    });
+    this
+}
+
+// Translated from 00416b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `RADIO_DATA` structure (`0x10` bytes, Xbox PDB):
+/// `fRadius` 0.0, `eRangeType` 1, `fStaticPct` 0.0, `pPositionRef` null.
+/// Returns `this`.
+pub fn fn_00416b40(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 1);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 00416b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `RoomLinkedRefData` structure (`0x14` bytes, Xbox PDB):
+/// the two list heads (`PortalList` at +0 and `RoomList` at +8) are built
+/// with `0096a2d0`. Returns `this`. The compiler's exception-unwinding frame
+/// is not translated.
+pub fn fn_00416b80(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SIMPLE_LIST_INIT, &args![this]);
+    e.call(SIMPLE_LIST_INIT, &args![this.addr() + 8]);
+    this
+}
+
+// ---------------------------------------------------------------------------
+// The save writer
+
+/// Reads the form id of the form at `form` (`TESForm::iFormID`, +0x0C, via
+/// the getter `0084e3a0`).
+fn form_id(e: &mut Engine, form: u32) -> u32 {
+    e.call(FORM_ID, &args![form]).u32()
+}
+
+/// Adds a chunk holding one word (`TESForm::AddChunk(tag, value)`,
+/// `00485910`; the word is byte-swapped first on a big-endian target).
+fn add_chunk_word(e: &mut Engine, tag: u32, value: u32) {
+    e.call(ADD_CHUNK_WORD, &args![tag, value]);
+}
+
+/// Adds a chunk holding one byte (`004858f0`).
+fn add_chunk_byte(e: &mut Engine, tag: u32, value: u8) {
+    e.call(ADD_CHUNK_BYTE, &args![tag, value]);
+}
+
+/// Adds a chunk with no data (`004856d0`).
+fn add_chunk_empty(e: &mut Engine, tag: u32) {
+    e.call(ADD_CHUNK_EMPTY, &args![tag]);
+}
+
+/// Adds a chunk of `size` bytes at `data` (`TESForm::__AddChunkData`,
+/// `00485990`).
+fn add_chunk_data(e: &mut Engine, tag: u32, data: u32, size: u32) {
+    e.call(ADD_CHUNK_DATA, &args![tag, data, size]);
+}
+
+/// Adds a chunk holding `count` words at `data` (`TESForm::AddChunkArray`,
+/// `00485710`).
+fn add_chunk_array(e: &mut Engine, tag: u32, data: u32, count: u32) {
+    e.call(ADD_CHUNK_ARRAY, &args![tag, data, count]);
+}
+
+/// The save writer's "target is big-endian" flag (byte at `011c54ba`, read
+/// through `00401500`).
+fn is_big_endian(e: &mut Engine) -> bool {
+    e.call(IS_BIG_ENDIAN, &args![]).bool()
+}
+
+/// The item of a `BSSimpleList` node (`006815c0` returns the node's own
+/// address, the item is the word there).
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let slot = e.call(SIMPLE_LIST_ITEM, &args![node]).u32();
+    e.mem.u32(slot)
+}
+
+/// The next node of a `BSSimpleList` node (`00726070`).
+fn list_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(SIMPLE_LIST_NEXT, &args![node]).u32()
+}
+
+/// Adds the chunk `tag` with the form id of `form`.
+fn add_form_chunk(e: &mut Engine, tag: u32, form: u32) {
+    let id = form_id(e, form);
+    add_chunk_word(e, tag, id);
+}
+
+/// Adds the chunk `tag` with the form id of `form` when it is not null.
+fn add_optional_form_chunk(e: &mut Engine, tag: u32, form: u32) {
+    if form != 0 {
+        add_form_chunk(e, tag, form);
+    }
+}
+
+/// Adds `tag` for a structure at `data` of `size` bytes, byte-swapping it
+/// around the call with `swap` on a big-endian target.
+fn add_swapped_chunk_data(
+    e: &mut Engine,
+    tag: u32,
+    data: Ptr,
+    size: u32,
+    swap: fn(&mut Engine, Ptr),
+) {
+    if is_big_endian(e) {
+        swap(e, data);
+    }
+    add_chunk_data(e, tag, data.addr(), size);
+    if is_big_endian(e) {
+        swap(e, data);
+    }
+}
+
+/// Byte-swap of a single word at `this` (`Swap32`, `00503210`'s body).
+fn swap_word_at(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD_AT, &args![this]);
+}
+
+/// Byte-swap of the word at +4 (`0060ce80`, the lock structure's key).
+fn swap_word_at_4(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_WORD_AT_4, &args![this]);
+}
+
+/// Byte-swap of two words (`00462230`).
+fn swap_two_words(e: &mut Engine, this: Ptr) {
+    e.call(SWAP_TWO_WORDS, &args![this]);
+}
+
+// Translated from 00412970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The save writer of the list (Xbox name not in the map): walks the chain
+/// under the lock and, for each extra data of a type that is saved, adds the
+/// chunk(s) that `ExtraDataList::Load` (`004144a0`) reads back. The types
+/// are dispatched by the jump table at `00413dc8` (type `3` to `0x92`); the
+/// chunk names are the four letters the exe pushes (`b"XCWT"` is
+/// `0x54574358`). Forms are saved as their form id (`0084e3a0`); structures
+/// the game keeps in memory are copied to a local record, byte-swapped around
+/// the call when the target is big-endian (the flag at `011c54ba`; never set
+/// in the PC build) and added with `TESForm::__AddChunkData` (`00485990`).
+/// The compiler's exception-unwinding frame is not translated.
+pub fn fn_00412970(e: &mut Engine, this: Ptr<ExtraDataList>) {
+    lock(e, 0);
+    let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+    while !current.is_null() {
+        let extra_type = get_type(e, current);
+        save_extra_data(e, this, current, extra_type);
+        current = get_next(e, current);
+    }
+    unlock(e);
+}
+
+/// One arm of the save writer's switch.
+fn save_extra_data(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra: Ptr<BSExtraData>,
+    extra_type: u8,
+) {
+    // The word at +0x0C, which most of the arms use; the few arms of
+    // extra data without one (type 0x61, 0x80) never look at it, so it is
+    // read as 0 when that address is not mapped.
+    let mut word = [0u8; 4];
+    let value = match e.mem.try_read(extra.addr() + 0x0c, &mut word) {
+        Ok(()) => u32::from_le_bytes(word),
+        Err(_) => 0,
+    };
+    match extra_type {
+        // EXTRA_WATERTYPE
+        0x03 => add_form_chunk(e, chunk_tag(b"XCWT"), value),
+        // EXTRA_REGIONLIST: a list of regions saved as an array of form ids.
+        0x04 => {
+            let mut node = if value == 0 { 0 } else { value + 4 };
+            let count = e.call(LIST_COUNT, &args![node]).u32();
+            if count != 0 {
+                let size = count.saturating_mul(4);
+                let buffer = e.call(OPERATOR_NEW, &args![size]).u32();
+                let mut index = 0;
+                while node != 0 {
+                    let region = list_item(e, node);
+                    let id = form_id(e, region);
+                    e.mem.set_u32(buffer.wrapping_add(index * 4), id);
+                    index += 1;
+                    node = list_next(e, node);
+                }
+                add_chunk_array(e, chunk_tag(b"XCLR"), buffer, count);
+                e.call(OPERATOR_DELETE, &args![buffer]);
+            }
+        }
+        // EXTRA_CELLMUSICTYPE
+        0x07 => add_form_chunk(e, chunk_tag(b"XCMO"), value),
+        // EXTRA_CLIMATE
+        0x08 => add_form_chunk(e, chunk_tag(b"XCCM"), value),
+        // EXTRA_ACTION
+        0x0e => {
+            let action = e.mem.u8(extra.addr() + 0x0c);
+            add_chunk_word(e, chunk_tag(b"XACT"), action as u32);
+        }
+        // EXTRA_DISTANTDATA: three words.
+        0x13 => e.with_stack(12, |e, record| {
+            copy_block(e, extra.addr() + 0x0c, record.addr(), 12);
+            add_chunk_array(e, chunk_tag(b"XLOD"), record.addr(), 3);
+        }),
+        // EXTRA_RAGDOLLDATA: RagDollData::Save (`004d93c0`).
+        0x14 => {
+            e.call(RAGDOLL_DATA_SAVE, &args![value]);
+        }
+        // EXTRA_PACKAGESTARTLOC: WORLD_LOCATION (0x14 bytes): the location
+        // form as a form id, then the three words at +0x10 of the extra data;
+        // the last word (`fZRot`) is never set.
+        0x18 => e.with_stack(0x14, |e, record| {
+            e.call(PATH_LOCATION_INIT, &args![record]);
+            let id = form_id(e, value);
+            e.mem.set_u32(record.addr(), id);
+            copy_block(e, extra.addr() + 0x10, record.addr() + 4, 12);
+            add_swapped_chunk_data(e, chunk_tag(b"XPSL"), record, 0x14, fn_00414220);
+        }),
+        // EXTRA_LEVCREA_MOD
+        0x1e => add_chunk_word(e, chunk_tag(b"XLCM"), value),
+        // EXTRA_OWNERSHIP
+        0x21 => add_form_chunk(e, chunk_tag(b"XOWN"), value),
+        // EXTRA_GLOBAL
+        0x22 => add_form_chunk(e, chunk_tag(b"XGLB"), value),
+        // EXTRA_RANK
+        0x23 => add_chunk_word(e, chunk_tag(b"XRNK"), value),
+        // EXTRA_COUNT: a signed 16-bit value.
+        0x24 => {
+            let count = e.mem.i16(extra.addr() + 0x0c);
+            add_chunk_word(e, chunk_tag(b"XCNT"), count as i32 as u32);
+        }
+        // EXTRA_HEALTH: a float saved as an integer (`_ftol2`).
+        0x25 => {
+            let health = e.mem.f32(extra.addr() + 0x0c);
+            let whole = e.call(FTOL, &args![health as f64]).u32();
+            add_chunk_word(e, chunk_tag(b"XHLT"), whole);
+        }
+        // EXTRA_USES
+        0x26 => {
+            let uses = e.mem.u8(extra.addr() + 0x0c);
+            add_chunk_word(e, chunk_tag(b"XUSE"), uses as u32);
+        }
+        // EXTRA_TIMELEFT
+        0x27 => add_chunk_word(e, chunk_tag(b"XTIM"), x87_float_bits(value)),
+        // EXTRA_CHARGE
+        0x28 => add_chunk_word(e, chunk_tag(b"XCHG"), x87_float_bits(value)),
+        // EXTRA_LOCK: a REFR_LOCK (0x14 bytes) with the key as a form id.
+        0x2a => e.with_stack(0x14, |e, record| {
+            fn_00411b00(e, record);
+            let lock_data = value;
+            let flags = e.mem.u8(lock_data + 8);
+            e.mem.set_u8(record.addr() + 8, flags);
+            let base_level = e.mem.u8(lock_data);
+            e.mem.set_u8(record.addr(), base_level);
+            let key = e.mem.u32(lock_data + 4);
+            let key_id = if key == 0 { 0 } else { form_id(e, key) };
+            e.mem.set_u32(record.addr() + 4, key_id);
+            add_swapped_chunk_data(e, chunk_tag(b"XLOC"), record, 0x14, |e, record| {
+                swap_word_at_4(e, record)
+            });
+        }),
+        // EXTRA_TELEPORT
+        0x2b => {
+            e.call(TELEPORT_DATA_SAVE, &args![value]);
+        }
+        // EXTRA_MAPMARKER
+        0x2c => {
+            add_chunk_empty(e, chunk_tag(b"XMRK"));
+            e.call(MAP_MARKER_DATA_SAVE, &args![value]);
+        }
+        // EXTRA_SEED: the byte `GetSeed` (`00418b40`) returns for the list.
+        0x31 => {
+            let seed = e.call(EXTRA_DATA_LIST_GET_SEED, &args![list]).u8();
+            add_chunk_byte(e, chunk_tag(b"XSED"), seed);
+        }
+        // EXTRA_ENABLESTATEPARENT: the parent as a form id and its flags byte.
+        0x37 => {
+            if value != 0 {
+                e.with_stack(8, |e, record| {
+                    let id = form_id(e, value);
+                    e.mem.set_u32(record.addr(), id);
+                    let flags = e.mem.u8(extra.addr() + 0x10);
+                    e.mem.set_u8(record.addr() + 4, flags);
+                    add_swapped_chunk_data(e, chunk_tag(b"XESP"), record, 8, swap_word_at);
+                });
+            }
+        }
+        // EXTRA_TELEPORTMARKER
+        0x3b => add_optional_form_chunk(e, chunk_tag(b"XRTM"), value),
+        // EXTRA_MERCHANTCONTAINER
+        0x3c => add_optional_form_chunk(e, chunk_tag(b"XMRC"), value),
+        // EXTRA_POISON
+        0x3f => add_form_chunk(e, chunk_tag(b"XPSN"), value),
+        // EXTRA_XTARGET
+        0x44 => add_optional_form_chunk(e, chunk_tag(b"XTRG"), value),
+        // EXTRA_LINKED_REF
+        0x51 => add_optional_form_chunk(e, chunk_tag(b"XLKR"), value),
+        // EXTRA_ACTIVATE_REF
+        0x53 => save_activate_ref(e, list, extra),
+        // EXTRA_DECAL_REFS: each REF_DECAL_DATA (0x1c bytes) with the decal
+        // reference as a form id.
+        0x57 => {
+            let mut node = extra.addr() + 0x0c;
+            while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                let decal = list_item(e, node);
+                e.with_stack(0x1c, |e, record| {
+                    e.call(DECAL_DATA_INIT, &args![record]);
+                    e.call(MEMCPY, &args![record, decal, 0x1cu32]);
+                    let reference = e.mem.u32(decal);
+                    let id = form_id(e, reference);
+                    e.mem.set_u32(record.addr(), id);
+                    add_swapped_chunk_data(e, chunk_tag(b"XDCR"), record, 0x1c, fn_00414030);
+                });
+                node = list_next(e, node);
+            }
+        }
+        // EXTRA_IMAGESPACE
+        0x59 => add_form_chunk(e, chunk_tag(b"XCIM"), value),
+        // EXTRA_NAVMESH_PORTAL: an 8-byte copy of the member with the form id
+        // of its first word.
+        0x5a => {
+            let member = extra.addr() + 0x0c;
+            e.with_stack(8, |e, record| {
+                e.call(NAVMESH_PORTAL_COPY, &args![record, member]);
+                let first = e.mem.u32(member);
+                if first != 0 {
+                    let id = form_id(e, first);
+                    e.mem.set_u32(record.addr(), id);
+                    add_swapped_chunk_data(e, chunk_tag(b"XNDP"), record, 8, fn_004141e0);
+                }
+            });
+        }
+        // EXTRA_RADIUS
+        0x5c => add_chunk_word(e, chunk_tag(b"XRDS"), x87_float_bits(value)),
+        // EXTRA_RADIATION
+        0x5d => add_chunk_word(e, chunk_tag(b"XRAD"), x87_float_bits(value)),
+        // EXTRA_MULTIBOUND
+        0x61 => add_chunk_empty(e, chunk_tag(b"XMBP")),
+        // EXTRA_MULTIBOUND_DATA: MultiBoundMarkerData::Save (`00438f90`).
+        0x62 => {
+            if value != 0 {
+                e.call(MULTIBOUND_MARKER_DATA_SAVE, &args![value]);
+            }
+        }
+        // EXTRA_MULTIBOUND_REF
+        0x63 => add_optional_form_chunk(e, chunk_tag(b"XMBR"), value),
+        // EXTRA_REFLECTOR_REFS: each entry is a reference and a word (8
+        // bytes), saved with the reference as a form id.
+        0x66 => {
+            let mut node = extra.addr() + 0x0c;
+            while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                let data = list_item(e, node);
+                e.with_stack(8, |e, record| {
+                    e.call(SIMPLE_LIST_INIT, &args![record]);
+                    e.call(MEMCPY, &args![record, data, 8u32]);
+                    let reference = e.mem.u32(data);
+                    let id = form_id(e, reference);
+                    e.mem.set_u32(record.addr(), id);
+                    add_swapped_chunk_data(e, chunk_tag(b"XPWR"), record, 8, swap_two_words);
+                });
+                node = list_next(e, node);
+            }
+        }
+        // EXTRA_EMITTANCE_SOURCE
+        0x67 => add_optional_form_chunk(e, chunk_tag(b"XEMI"), value),
+        // EXTRA_RADIO_DATA: RADIO_DATA (0x10 bytes), the position reference
+        // at +0x0C swapped for its form id while it is written.
+        0x68 => {
+            let data = extra.addr() + 0x0c;
+            let position_ref = e.mem.u32(extra.addr() + 0x18);
+            if position_ref != 0 {
+                let id = form_id(e, position_ref);
+                e.mem.set_u32(data + 0x0c, id);
+            }
+            add_swapped_chunk_data(e, chunk_tag(b"XRDO"), Ptr::new(data), 0x10, fn_00414220);
+            e.mem.set_u32(data + 0x0c, position_ref);
+        }
+        // EXTRA_PRIMITIVE: radii, colour and type of the BGSPrimitive.
+        0x6b => e.with_stack(0x20, |e, record| {
+            fn_004143f0(e, record);
+            let primitive = Ptr::new(value);
+            e.with_stack(12, |e, radii| {
+                let radii = fn_00413fc0(e, primitive, radii);
+                copy_block(e, radii.addr(), record.addr(), 12);
+            });
+            e.with_stack(16, |e, color| {
+                let color = fn_00413f90(e, primitive, color);
+                copy_block(e, color.addr(), record.addr() + 0x0c, 16);
+            });
+            let primitive_type = list_next(e, value);
+            e.mem.set_u32(record.addr() + 0x1c, primitive_type);
+            add_swapped_chunk_data(e, chunk_tag(b"XPRM"), record, 0x20, fn_00414290);
+        }),
+        // EXTRA_AMMO: the ammo as a form id (0 if none), then the count word.
+        0x6e => {
+            let count = e.mem.u32(extra.addr() + 0x10);
+            let ammo_id = if value == 0 { 0 } else { form_id(e, value) };
+            add_chunk_word(e, chunk_tag(b"XAMT"), ammo_id);
+            add_chunk_word(e, chunk_tag(b"XAMC"), count);
+        }
+        // EXTRA_PATROL_REF_DATA: the time at the reference, then the
+        // PackageEventAction (`0067dc80`, tag `XPPA`).
+        0x6f => {
+            e.with_stack(4, |e, record| {
+                fn_00413ff0(e, record, Ptr::new(value));
+                add_swapped_chunk_data(e, chunk_tag(b"XPRD"), record, 4, swap_word_at);
+            });
+            e.call(
+                PACKAGE_EVENT_ACTION_SAVE,
+                &args![value.wrapping_add(4), chunk_tag(b"XPPA")],
+            );
+        }
+        // EXTRA_OCCLUSION_PLANE and EXTRA_PORTAL: the plane's half extents,
+        // centre and rotation as an axis and an angle.
+        0x71 => save_plane(e, extra, chunk_tag(b"XOCP")),
+        0x78 => save_plane(e, extra, chunk_tag(b"XPTL")),
+        // EXTRA_COLLISION_DATA: the word the extra data points at.
+        0x72 => {
+            let handle = Ptr::new(value);
+            if is_big_endian(e) {
+                swap_word_at(e, handle);
+            }
+            add_chunk_data(e, chunk_tag(b"XTRI"), value, 4);
+            if is_big_endian(e) {
+                swap_word_at(e, handle);
+            }
+        }
+        // EXTRA_ENCOUNTERZONE
+        0x74 => add_optional_form_chunk(e, chunk_tag(b"XEZN"), value),
+        // EXTRA_OCCLUSION_PLANE_REF_DATA: four linked references.
+        0x76 => e.with_stack(16, |e, record| {
+            fn_00411dc0(e, record);
+            for index in 0..4 {
+                let reference = e.mem.u32(value + index * 4);
+                let id = if reference == 0 {
+                    0
+                } else {
+                    form_id(e, reference)
+                };
+                e.mem.set_u32(record.addr() + index * 4, id);
+            }
+            add_swapped_chunk_data(e, chunk_tag(b"XORD"), record, 0x10, fn_00414370);
+        }),
+        // EXTRA_PORTAL_REF_DATA: two linked references.
+        0x77 => e.with_stack(8, |e, record| {
+            fn_004143c0(e, record);
+            for index in 0..2 {
+                let reference = e.mem.u32(value + index * 4);
+                let id = if reference == 0 {
+                    0
+                } else {
+                    form_id(e, reference)
+                };
+                e.mem.set_u32(record.addr() + index * 4, id);
+            }
+            add_swapped_chunk_data(e, chunk_tag(b"XPOD"), record, 8, swap_two_words);
+        }),
+        // EXTRA_HEALTH_PERC
+        0x7a => add_chunk_word(e, chunk_tag(b"XHLP"), x87_float_bits(value)),
+        // EXTRA_ROOM_REF_DATA: RoomLinkedRefData, the count of linked portals
+        // with the master flag in bit 16, then each linked room as a form id.
+        0x7b => {
+            let mut count = e.call(LIST_COUNT, &args![value + 8]).u32();
+            if e.mem.u8(value + 0x10) != 0 {
+                count |= 0x10000;
+            }
+            add_chunk_word(e, chunk_tag(b"XRMR"), count);
+            let mut node = value + 8;
+            while node != 0 && list_item(e, node) != 0 {
+                let room = list_item(e, node);
+                let id = form_id(e, room);
+                add_chunk_word(e, chunk_tag(b"XLRM"), id);
+                node = list_next(e, node);
+            }
+        }
+        // EXTRA_IGNORED_BY_SANDBOX
+        0x80 => add_chunk_empty(e, chunk_tag(b"XIBS")),
+        // EXTRA_CELL_ACOUSTIC_SPACE
+        0x81 => add_form_chunk(e, chunk_tag(b"XCAS"), value),
+        // EXTRA_LIT_WATER_REFS
+        0x85 => {
+            let mut node = extra.addr() + 0x0c;
+            while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+                let reference = list_item(e, node);
+                let id = form_id(e, reference);
+                add_chunk_word(e, chunk_tag(b"XLTW"), id);
+                node = list_next(e, node);
+            }
+        }
+        // EXTRA_WEAPON_MOD_SLOTS: the active slots byte.
+        0x8d => {
+            let slots = e.mem.u8(extra.addr() + 0x0c);
+            add_chunk_byte(e, chunk_tag(b"XHLT"), slots);
+        }
+        // EXTRA_AUDIOMARKER
+        0x90 => {
+            add_chunk_empty(e, chunk_tag(b"MMRK"));
+            e.call(AUDIO_MARKER_DATA_SAVE, &args![value]);
+        }
+        // EXTRA_AUDIOBUOYMARKER
+        0x91 => {
+            add_chunk_empty(e, chunk_tag(b"AMRK"));
+            e.call(AUDIO_BUOY_MARKER_DATA_SAVE, &args![value]);
+        }
+        // EXTRA_SPECIAL_RENDER_FLAGS: the form id getter applied to the extra
+        // data itself (so the word at +0x0C), then the float at +0x10.
+        0x92 => {
+            let id = form_id(e, extra.addr());
+            add_chunk_word(e, chunk_tag(b"XSRF"), id);
+            let second = payload(e, extra, 0x10);
+            add_chunk_word(e, chunk_tag(b"XSRD"), x87_float_bits(second));
+        }
+        _ => {}
+    }
+}
+
+/// `EXTRA_ACTIVATE_REF`: the flags byte (`XAPD`), each REF_ACTIVATE_DATA of
+/// the parent list (`XAPR`), then the activate text override (`XATO`).
+fn save_activate_ref(e: &mut Engine, list: Ptr<ExtraDataList>, extra: Ptr<BSExtraData>) {
+    let flags = e.mem.u8(extra.addr() + 0x14);
+    add_chunk_byte(e, chunk_tag(b"XAPD"), flags);
+    let mut node = extra.addr() + 0x0c;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let data = list_item(e, node);
+        node = list_next(e, node);
+        e.with_stack(8, |e, record| {
+            fn_00414010(e, record);
+            e.call(MEMCPY, &args![record, data, 8u32]);
+            let reference = e.mem.u32(record.addr());
+            let id = form_id(e, reference);
+            e.mem.set_u32(record.addr(), id);
+            add_swapped_chunk_data(e, chunk_tag(b"XAPR"), record, 8, swap_two_words);
+        });
+    }
+    let text = extra.addr() + 0x18;
+    if e.call(STRING_LENGTH, &args![text]).u32() != 0 {
+        // ActivateTextOverride, copied twice by `GetActivateTextOverride`
+        // (`0041ec80`): the first copy gives the length, the second the
+        // characters; the length + 1 stays on the stack as the array size.
+        e.with_stack(8, |e, first| {
+            e.with_stack(8, |e, second| {
+                let first = e.call(GET_ACTIVATE_TEXT, &args![list, first]).u32();
+                let length = e.call(STRING_LENGTH, &args![first]).u32();
+                let size = length.wrapping_add(1);
+                let second = e.call(GET_ACTIVATE_TEXT, &args![list, second]).u32();
+                let characters = e.call(READ_WORD, &args![second]).u32();
+                e.call(
+                    ADD_CHUNK_ARRAY_RAW,
+                    &args![chunk_tag(b"XATO"), characters, size],
+                );
+                e.call(STRING_DESTROY, &args![second]);
+                e.call(STRING_DESTROY, &args![first]);
+            });
+        });
+    }
+}
+
+/// `EXTRA_OCCLUSION_PLANE` / `EXTRA_PORTAL`: the record of nine words: the
+/// plane's half extents (two words), centre (three), then the rotation as an
+/// axis (three floats) and an angle from `NiMatrix3` (`00a58550`).
+fn save_plane(e: &mut Engine, extra: Ptr<BSExtraData>, tag: u32) {
+    e.with_stack(0x24, |e, record| {
+        fn_00414470(e, record);
+        let plane = e.call(READ_WORD, &args![extra.addr() + 0x0c]).u32();
+        let half_extents = e.call(PLANE_HALF_EXTENTS, &args![plane]).u32();
+        copy_block(e, half_extents, record.addr(), 8);
+        let center = fn_00413f40(e, plane);
+        copy_block(e, center, record.addr() + 8, 12);
+        e.with_stack(0x24, |e, matrix| {
+            let matrix = fn_00413f60(e, Ptr::new(plane), matrix);
+            e.call(
+                MATRIX_TO_AXIS_ANGLE,
+                &args![
+                    matrix,
+                    record.addr() + 0x20,
+                    record.addr() + 0x14,
+                    record.addr() + 0x18,
+                    record.addr() + 0x1c
+                ],
+            );
+        });
+        add_swapped_chunk_data(e, tag, record, 0x24, fn_004140f0);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// The loader
+
+/// Chunks whose data is one word handed to a setter of the list:
+/// `list.Setter(word)`. (chunk, setter)
+const LOAD_WORD_SETTERS: &[(&[u8; 4], u32)] = &[
+    (b"XACT", 0x0041_b3d0),
+    (b"XOWN", 0x0041_9700),
+    (b"XGLB", 0x0041_97d0),
+    (b"XRNK", 0x0041_98a0),
+    (b"XPSN", 0x0041_9d10),
+    (b"XCMO", 0x0041_bd10),
+    (b"XCAS", 0x0041_c090),
+    (b"XCCM", 0x0041_c190),
+    (b"XCIM", 0x0041_c290),
+    (b"XCWT", 0x0041_e160),
+    (b"XRTM", 0x0041_e250),
+    (b"XLKR", 0x0041_e440),
+    (b"XMRC", 0x0042_1430),
+    (b"XTRG", 0x0042_1b70),
+    (b"XEZN", 0x0042_1c60),
+    (b"XEMI", 0x0042_1d50),
+    (b"XMBR", 0x0042_1e40),
+    (b"XLCM", 0x0042_1540),
+];
+
+/// Chunks whose data is one `float` handed to a setter of the list (the value
+/// goes through the x87 stack). (chunk, setter)
+const LOAD_FLOAT_SETTERS: &[(&[u8; 4], u32)] = &[
+    (b"XHLP", 0x0041_b580),
+    (b"XTIM", 0x0041_9bb0),
+    (b"XCHG", 0x0041_9c60),
+    (b"XRDS", 0x0042_2220),
+    (b"XRAD", 0x0042_2350),
+];
+
+/// `TESFile::GetChunkData(file, &value)` (`004727f0`): reads the 4-byte
+/// value of the current chunk into a local that starts at zero.
+fn read_chunk_word(e: &mut Engine, file: Ptr) -> u32 {
+    e.with_stack(4, |e, local| {
+        e.call(GET_CHUNK_WORD, &args![file, local]);
+        e.mem.u32(local.addr())
+    })
+}
+
+/// `TESFile::GetChunkData(file, buffer, size)` (`00472890`).
+fn read_chunk_data(e: &mut Engine, file: Ptr, buffer: u32, size: u32) {
+    e.call(GET_CHUNK_DATA, &args![file, buffer, size]);
+}
+
+/// Whether the file's chunk data must be byte-swapped (the byte at `+0x299`
+/// of the `TESFile`, read through `00401680`).
+fn file_needs_swap(e: &mut Engine, file: Ptr) -> bool {
+    e.call(FILE_NEEDS_SWAP, &args![file]).bool()
+}
+
+/// `Swap32(address, 0)` (`00401080`).
+fn swap_dword_at(e: &mut Engine, address: u32) {
+    e.call(SWAP_DWORD, &args![address, 0u32]);
+}
+
+/// The activate-parent extra data (type `0x53`), created and added when the
+/// list has none (the `0x20`-byte constructor `004338b0`).
+fn get_or_add_activate_ref(e: &mut Engine, list: Ptr<ExtraDataList>) -> Ptr<BSExtraData> {
+    get_or_add_extra(e, list, 0x53, 0x20, |e, block| {
+        e.call(ACTIVATE_REF_INIT, &args![block]).u32()
+    })
+}
+
+/// A sub-object kept behind a getter/setter pair of the list (the teleport
+/// data, the map marker, the audio markers): the getter's result, or a new
+/// object of `size` bytes built by `construct` and given to the setter.
+fn get_or_make_member(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    getter: u32,
+    size: u32,
+    construct: u32,
+    setter: u32,
+) -> u32 {
+    let mut member = e.call(getter, &args![list]).u32();
+    if member == 0 {
+        member = new_object(e, size, |e, block| e.call(construct, &args![block]).u32());
+        e.call(setter, &args![list, member]);
+    }
+    member
+}
+
+// Translated from 004144a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::Load` (Xbox PDB): reads the extra data chunk the file is
+/// positioned at (`TESFile::GetTESChunk`, `004726b0`) and applies it to this
+/// list: the counterpart of the save writer `fn_00412970`. `file` is the
+/// `TESFile`, `buffer` the `BGSSaveFormBuffer` (its form, `+0x20`, is looked
+/// at by the `XPWR` and `XLTW` chunks, which are skipped for a form of type
+/// `0x23`). Chunks are matched by their four letters (`b"XCWT"` is
+/// `0x54574358`); the table at the top of this section covers those that are
+/// one word or one float for a setter, the rest are the arms of the `match`.
+/// A chunk this function does not know is ignored. The compiler's
+/// exception-unwinding frame is not translated.
+pub fn extra_data_list_load(e: &mut Engine, this: Ptr<ExtraDataList>, file: Ptr, buffer: Ptr) {
+    let chunk = e.call(GET_TES_CHUNK, &args![file]).u32();
+    let name = chunk.to_le_bytes();
+    if let Some(&(_, setter)) = LOAD_WORD_SETTERS.iter().find(|entry| *entry.0 == name) {
+        let word = read_chunk_word(e, file);
+        e.call(setter, &args![this, word]);
+        return;
+    }
+    if let Some(&(_, setter)) = LOAD_FLOAT_SETTERS.iter().find(|entry| *entry.0 == name) {
+        let value = x87_float_bits(read_chunk_word(e, file));
+        e.call(setter, &args![this, f32::from_bits(value)]);
+        return;
+    }
+    match &name {
+        // EXTRA_HEALTH: the file holds an integer, the setter takes a float.
+        b"XHLT" => {
+            let health = read_chunk_word(e, file) as i32;
+            e.call(SET_HEALTH, &args![this, health as f32]);
+        }
+        // EXTRA_USES
+        b"XUSE" => {
+            let uses = read_chunk_word(e, file) as u8;
+            e.call(SET_USES, &args![this, uses]);
+        }
+        // EXTRA_COUNT
+        b"XCNT" => {
+            let count = read_chunk_word(e, file) as u16;
+            e.call(SET_COUNT, &args![this, count]);
+        }
+        // EXTRA_AMMO, count: sets the count of the ammo the list already has.
+        b"XAMC" => {
+            let count = read_chunk_word(e, file);
+            if e.call(GET_AMMO, &args![this]).u32() != 0 {
+                let ammo = e.call(GET_AMMO, &args![this]).u32();
+                let ammo_form = e.mem.u32(ammo + 0x0c);
+                e.call(SET_AMMO, &args![this, ammo_form, count]);
+            }
+        }
+        // EXTRA_AMMO, the ammo form id with a count of 999.
+        b"XAMT" => {
+            let ammo_id = read_chunk_word(e, file);
+            e.call(SET_AMMO, &args![this, ammo_id, 0x3e7u32]);
+        }
+        // EXTRA_LOCK: a REFR_LOCK (0x14 bytes) read into the ExtraLock's.
+        b"XLOC" => {
+            let mut extra = base_extra_list_get_extra_data(e, this.cast(), 0x2a);
+            let lock_data;
+            if extra.is_null() {
+                let made = new_object(e, 0x14, |e, block| fn_00411b00(e, Ptr::new(block)).addr());
+                lock_data = made;
+                let created = new_object(e, 0x10, |e, block| {
+                    e.call(EXTRA_LOCK_INIT, &args![block, made]).u32()
+                });
+                extra = Ptr::new(created);
+                base_extra_list_add_extra(e, this.cast(), extra);
+            } else {
+                lock_data = e.mem.u32(extra.addr() + 0x0c);
+            }
+            read_chunk_data(e, file, lock_data, 0x14);
+            if file_needs_swap(e, file) {
+                swap_word_at_4(e, Ptr::new(lock_data));
+            }
+            e.call(REFR_LOCK_SET_LOCKED, &args![lock_data, 1u32]);
+        }
+        // EXTRA_RADIO_DATA: a RADIO_DATA (0x10 bytes) given to the setter.
+        b"XRDO" => e.with_stack(0x10, |e, radio| {
+            fn_00416b40(e, radio);
+            read_chunk_data(e, file, radio.addr(), 0x10);
+            if file_needs_swap(e, file) {
+                fn_00414220(e, radio);
+            }
+            e.call(SET_RADIO_DATA, &args![this, radio]);
+        }),
+        // EXTRA_TELEPORT
+        b"XTEL" => {
+            let teleport = get_or_make_member(
+                e,
+                this,
+                GET_TELEPORT,
+                0x20,
+                DOOR_TELEPORT_DATA_INIT,
+                SET_TELEPORT,
+            );
+            e.call(DOOR_TELEPORT_DATA_LOAD, &args![teleport, file]);
+        }
+        // EXTRA_MAPMARKER
+        b"XMRK" => {
+            let marker = get_or_make_member(
+                e,
+                this,
+                GET_MAP_MARKER,
+                0x14,
+                MAP_MARKER_DATA_INIT,
+                SET_MAP_MARKER,
+            );
+            e.call(MAP_MARKER_DATA_LOAD, &args![marker, file]);
+        }
+        // EXTRA_AUDIOMARKER
+        b"MMRK" => {
+            let marker = get_or_make_member(
+                e,
+                this,
+                GET_AUDIO_MARKER,
+                0x34,
+                AUDIO_MARKER_DATA_INIT,
+                SET_AUDIO_MARKER,
+            );
+            e.call(AUDIO_MARKER_DATA_LOAD, &args![marker, file]);
+        }
+        // EXTRA_AUDIOBUOYMARKER
+        b"AMRK" => {
+            let marker = get_or_make_member(
+                e,
+                this,
+                GET_AUDIO_BUOY_MARKER,
+                0x08,
+                AUDIO_BUOY_MARKER_DATA_INIT,
+                SET_AUDIO_BUOY_MARKER,
+            );
+            e.call(AUDIO_BUOY_MARKER_DATA_LOAD, &args![marker, file]);
+        }
+        // EXTRA_SEED: one byte, from a 4-byte chunk or a 1-byte one.
+        b"XSED" => {
+            let mut seed = 0u8;
+            if e.call(GET_CHUNK_SIZE, &args![file]).u32() == 4 {
+                seed = read_chunk_word(e, file) as u8;
+            } else {
+                e.with_stack(1, |e, local| {
+                    read_chunk_data(e, file, local.addr(), 1);
+                    seed = e.mem.u8(local.addr());
+                });
+            }
+            e.call(SET_SEED, &args![this, seed]);
+        }
+        // EXTRA_REGIONLIST: the region form ids, looked up in the data
+        // handler's region list and gathered in a new TESRegionList.
+        b"XCLR" => {
+            let size = e.call(GET_CHUNK_SIZE, &args![file]).u32();
+            let count = size >> 2;
+            if size % 4 != 0 {
+                let name = e.call(FILE_NAME, &args![file]).u32();
+                e.call(LOG_MESSAGE, &args![MESSAGE_BAD_REGION_LIST, name]);
+                return;
+            }
+            let region_list = new_object(e, 0x10, |e, block| {
+                e.call(REGION_LIST_INIT, &args![block, 0u32]).u32()
+            });
+            let ids = e.call(OPERATOR_NEW, &args![count.saturating_mul(4)]).u32();
+            read_chunk_data(e, file, ids, size);
+            let mut index = 0;
+            while index < count {
+                let slot = ids.wrapping_add(index * 4);
+                if file_needs_swap(e, file) {
+                    swap_dword_at(e, slot);
+                }
+                e.call(ADD_COMPILE_INDEX, &args![slot, file]);
+                let id = e.mem.u32(slot);
+                let data_handler = e.global::<u32>(DATA_HANDLER);
+                let known_regions = e.call(DATA_HANDLER_REGIONS, &args![data_handler]).u32();
+                let region = e.call(REGION_LIST_FIND, &args![known_regions, id]).u32();
+                if region != 0 {
+                    e.call(REGION_LIST_ADD, &args![region_list, region]);
+                }
+                index += 1;
+            }
+            e.call(SET_REGION_LIST, &args![this, region_list]);
+            e.call(OPERATOR_DELETE, &args![ids]);
+        }
+        // EXTRA_PACKAGESTARTLOC: a WORLD_LOCATION (0x14 bytes).
+        b"XPSL" => e.with_stack(0x14, |e, record| {
+            e.call(PATH_LOCATION_INIT, &args![record]);
+            e.call(MEMSET, &args![record, 0u32, 0x14u32]);
+            read_chunk_data(e, file, record.addr(), 0x14);
+            if file_needs_swap(e, file) {
+                fn_00414220(e, record);
+            }
+            let location = e.mem.u32(record.addr());
+            let z_rotation = x87_float_bits(e.mem.u32(record.addr() + 0x10));
+            e.call(
+                SET_PACKAGE_START_LOCATION,
+                &args![
+                    this,
+                    location,
+                    0u32,
+                    record.addr() + 4,
+                    f32::from_bits(z_rotation)
+                ],
+            );
+        }),
+        // EXTRA_RAGDOLLDATA (the two chunk names share the arm).
+        b"XRGD" | b"XRGB" => {
+            let mut extra = base_extra_list_get_extra_data(e, this.cast(), 0x14);
+            if extra.is_null() {
+                let created = new_object(e, 0x10, |e, block| {
+                    e.call(EXTRA_RAGDOLL_DATA_INIT, &args![block]).u32()
+                });
+                extra = Ptr::new(created);
+                let data = new_object(e, 0x14, |e, block| {
+                    e.call(RAGDOLL_DATA_INIT, &args![block]).u32()
+                });
+                e.mem.set_u32(extra.addr() + 0x0c, data);
+                base_extra_list_add_extra(e, this.cast(), extra);
+            }
+            let ragdoll = e.mem.u32(extra.addr() + 0x0c);
+            if !e.call(RAGDOLL_DATA_LOAD, &args![ragdoll, file]).bool() {
+                e.call(LOG_MESSAGE, &args![MESSAGE_BAD_RAGDOLL]);
+                base_extra_list_remove_extra(e, this.cast(), extra, true);
+            }
+        }
+        // EXTRA_DISTANTDATA: three floats (the first two zero, the third the
+        // constant at `010145a8` unless the chunk gives it).
+        b"XLOD" => e.with_stack(12, |e, local| {
+            let third = x87_float_bits(e.global::<u32>(LOD_DEFAULT));
+            fn_00416870(e, local, 0.0, 0.0, f32::from_bits(third));
+            read_chunk_data(e, file, local.addr(), 12);
+            if file_needs_swap(e, file) {
+                for index in 0..3 {
+                    swap_dword_at(e, local.addr() + index * 4);
+                }
+            }
+            e.call(SET_DISTANT_DATA, &args![this, local]);
+        }),
+        // EXTRA_ENABLESTATEPARENT: the parent's form id and its flags byte.
+        b"XESP" => e.with_stack(8, |e, local| {
+            e.call(MEMSET, &args![local, 0u32, 8u32]);
+            read_chunk_data(e, file, local.addr(), 8);
+            if file_needs_swap(e, file) {
+                swap_word_at(e, local);
+            }
+            let parent = e.mem.u32(local.addr());
+            e.call(SET_ENABLE_STATE_PARENT, &args![this, parent]);
+            let flags = e.mem.u8(local.addr() + 4);
+            e.call(SET_ENABLE_STATE_FLAGS, &args![this, flags]);
+        }),
+        // EXTRA_ACTIVATE_REF, the flags byte.
+        b"XAPD" => {
+            let extra = get_or_add_activate_ref(e, this);
+            if e.call(GET_CHUNK_SIZE, &args![file]).u32() == 4 {
+                let flags = read_chunk_word(e, file) as u8;
+                e.mem.set_u8(extra.addr() + 0x14, flags);
+            } else {
+                read_chunk_data(e, file, extra.addr() + 0x14, 1);
+            }
+        }
+        // EXTRA_ACTIVATE_REF, the text override.
+        b"XATO" => {
+            get_or_add_activate_ref(e, this);
+            let size = e.call(GET_CHUNK_SIZE, &args![file]).u32() as i32;
+            if size > 1 {
+                let text = e.call(OPERATOR_NEW, &args![size as u32]).u32();
+                read_chunk_data(e, file, text, size as u32);
+                e.call(SET_ACTIVATE_TEXT_OVERRIDE, &args![this, text]);
+                e.call(OPERATOR_DELETE, &args![text]);
+            }
+        }
+        // EXTRA_ACTIVATE_REF, one REF_ACTIVATE_DATA of the parent list.
+        b"XAPR" => {
+            let extra = get_or_add_activate_ref(e, this);
+            let data = new_object(e, 8, |e, block| fn_00414010(e, Ptr::new(block)).addr());
+            read_chunk_data(e, file, data, 8);
+            if file_needs_swap(e, file) {
+                swap_two_words(e, Ptr::new(data));
+            }
+            e.with_stack(4, |e, local| {
+                e.mem.set_u32(local.addr(), data);
+                e.call(LIST_ADD_HEAD, &args![extra.addr() + 0x0c, local]);
+            });
+        }
+        // EXTRA_ACTIVATE_REF, the old form of a parent list entry.
+        b"XACR" => {
+            let extra = get_or_add_activate_ref(e, this);
+            e.with_stack(0x0c, |e, old| {
+                e.call(MEMSET, &args![old, 0u32, 0x0cu32]);
+                read_chunk_data(e, file, old.addr(), 0x0c);
+                if file_needs_swap(e, file) {
+                    swap_dword_at(e, old.addr());
+                    swap_dword_at(e, old.addr() + 4);
+                }
+                let node = new_object(e, 8, |e, block| fn_00414010(e, Ptr::new(block)).addr());
+                let reference = e.mem.u32(old.addr());
+                e.mem.set_u32(node, reference);
+                let delay = x87_float_bits(e.mem.u32(old.addr() + 4));
+                e.mem.set_u32(node + 4, delay);
+                e.with_stack(4, |e, local| {
+                    e.mem.set_u32(local.addr(), node);
+                    e.call(LIST_ADD_HEAD, &args![extra.addr() + 0x0c, local]);
+                });
+                let flags = e.mem.u8(old.addr() + 8);
+                e.mem.set_u8(extra.addr() + 0x14, flags);
+            });
+        }
+        // EXTRA_DECAL_REFS: one REF_DECAL_DATA (0x1c bytes).
+        b"XDCR" => e.with_stack(0x1c, |e, decal| {
+            e.call(DECAL_DATA_INIT, &args![decal]);
+            e.call(MEMSET, &args![decal, 0u32, 0x1cu32]);
+            read_chunk_data(e, file, decal.addr(), 0x1c);
+            if file_needs_swap(e, file) {
+                fn_00414030(e, decal);
+            }
+            let reference = e.mem.u32(decal.addr());
+            e.call(
+                ADD_DECAL_REF,
+                &args![this, reference, decal.addr() + 4, decal.addr() + 0x10],
+            );
+        }),
+        // EXTRA_MULTIBOUND_DATA
+        b"XMBO" => {
+            let bound = new_object(e, 0x0c, |e, block| {
+                e.call(MULTIBOUND_MARKER_DATA_INIT, &args![block]).u32()
+            });
+            e.call(MULTIBOUND_MARKER_DATA_LOAD, &args![bound, file]);
+            e.call(SET_MULTIBOUND_DATA, &args![this, bound]);
+        }
+        // Skipped chunk.
+        b"XPCI" => {
+            e.call(SKIP_CHUNK, &args![file]);
+        }
+        // EXTRA_NAVMESH_PORTAL: the chunk is read whole and handed to the
+        // portal's own loader.
+        b"XNVP" => e.with_stack(8, |e, portal| {
+            e.call(NAVMESH_PORTAL_INIT, &args![portal]);
+            let size = e.call(GET_CHUNK_SIZE, &args![file]).u32();
+            let data = e.call(OPERATOR_NEW, &args![size]).u32();
+            read_chunk_data(e, file, data, size);
+            e.call(NAVMESH_PORTAL_LOAD, &args![portal, buffer, file, data]);
+            e.call(OPERATOR_DELETE, &args![data]);
+        }),
+        // EXTRA_NAVMESH_PORTAL, the old form: an 8-byte value turned into a
+        // type `0x5A` extra data on the stack and given to `0042e2c0`.
+        b"XNDP" => e.with_stack(8, |e, value| {
+            fn_00416ab0(e, value);
+            read_chunk_data(e, file, value.addr(), 8);
+            if file_needs_swap(e, file) {
+                fn_004141e0(e, value);
+            }
+            let first = e.mem.u32(value.addr());
+            let second = e.mem.u16(value.addr() + 4) as u32;
+            e.with_stack(0x14, |e, extra| {
+                fn_00416ad0(e, extra, first, second);
+                e.call(SET_NAVMESH_PORTAL, &args![this, extra]);
+                e.call(NAVMESH_PORTAL_EXTRA_DESTROY, &args![extra]);
+            });
+        }),
+        // EXTRA_PORTAL_REF_DATA (`XPWR`) and EXTRA_LIT_WATER_REFS (`XLTW`)
+        // saved in a form of type 0x23 are not loaded.
+        b"XPWR" => {
+            if !form_is_type_0x23(e, buffer) {
+                e.with_stack(8, |e, record| {
+                    e.call(SIMPLE_LIST_INIT, &args![record]);
+                    e.call(MEMSET, &args![record, 0u32, 8u32]);
+                    read_chunk_data(e, file, record.addr(), 8);
+                    if file_needs_swap(e, file) {
+                        swap_dword_at(e, record.addr());
+                        swap_dword_at(e, record.addr() + 4);
+                    }
+                    let first = e.mem.u32(record.addr());
+                    let flags = e.mem.u32(record.addr() + 4);
+                    if flags & 1 != 0 {
+                        e.call(ADD_REFLECTOR_REF, &args![this, first, 1u32]);
+                    }
+                    if flags & 2 != 0 {
+                        e.call(ADD_REFLECTED_REF, &args![this, first, 1u32]);
+                    }
+                });
+            }
+        }
+        b"XLTW" => {
+            if !form_is_type_0x23(e, buffer) {
+                let reference = read_chunk_word(e, file);
+                e.call(ADD_LIT_WATER_REF, &args![this, reference, 1u32]);
+            }
+        }
+        // EXTRA_PRIMITIVE: radii, colour and type.
+        b"XPRM" => e.with_stack(0x20, |e, record| {
+            fn_004143f0(e, record);
+            e.call(MEMSET, &args![record, 0u32, 0x20u32]);
+            read_chunk_data(e, file, record.addr(), 0x20);
+            if file_needs_swap(e, file) {
+                fn_00414290(e, record);
+            }
+            let primitive_type = e.mem.u32(record.addr() + 0x1c);
+            let primitive = e
+                .call(
+                    PRIMITIVE_CREATE,
+                    &args![primitive_type, record, record.addr() + 0x0c],
+                )
+                .u32();
+            if primitive != 0 {
+                e.call(ADD_PRIMITIVE, &args![this, primitive]);
+            }
+        }),
+        // EXTRA_OCCLUSION_PLANE: half extents, centre and axis-angle rotation
+        // build a BSOcclusionPlane (`0xFC` bytes) given to the setter.
+        b"XOCP" => e.with_stack(0x24, |e, record| {
+            fn_00414470(e, record);
+            e.call(MEMSET, &args![record, 0u32, 0x24u32]);
+            read_chunk_data(e, file, record.addr(), 0x24);
+            if file_needs_swap(e, file) {
+                fn_004140f0(e, record);
+            }
+            let block = e.call(ALLOCATE_ALIGNED, &args![0xfcu32]).u32();
+            let plane = if block == 0 {
+                0
+            } else {
+                e.call(OCCLUSION_PLANE_INIT, &args![block]).u32()
+            };
+            fn_00416a30(e, Ptr::new(plane), record);
+            fn_004169f0(e, Ptr::new(plane), record.byte_add(8));
+            e.with_stack(0x24, |e, matrix| {
+                e.call(SIMPLE_LIST_ITEM, &args![matrix]);
+                let angle = x87_float_bits(e.mem.u32(record.addr() + 0x20));
+                let axis_x = x87_float_bits(e.mem.u32(record.addr() + 0x14));
+                let axis_y = x87_float_bits(e.mem.u32(record.addr() + 0x18));
+                let axis_z = x87_float_bits(e.mem.u32(record.addr() + 0x1c));
+                e.call(
+                    MATRIX_MAKE_ROTATION,
+                    &args![
+                        matrix,
+                        f32::from_bits(angle),
+                        f32::from_bits(axis_x),
+                        f32::from_bits(axis_y),
+                        f32::from_bits(axis_z)
+                    ],
+                );
+                fn_00416a70(e, Ptr::new(plane), matrix);
+            });
+            e.call(SET_OCCLUSION_PLANE, &args![this, plane]);
+        }),
+        // EXTRA_PORTAL: the record is read and dropped.
+        b"XPTL" => e.with_stack(0x24, |e, record| {
+            fn_00414470(e, record);
+            e.call(MEMSET, &args![record, 0u32, 0x24u32]);
+            read_chunk_data(e, file, record.addr(), 0x24);
+            if file_needs_swap(e, file) {
+                fn_004140f0(e, record);
+            }
+        }),
+        // EXTRA_PATROL_REF_DATA, the time at the reference.
+        b"XPRD" => e.with_stack(4, |e, local| {
+            e.call(SIMPLE_LIST_ITEM, &args![local]);
+            read_chunk_data(e, file, local.addr(), 4);
+            if file_needs_swap(e, file) {
+                swap_word_at(e, local);
+            }
+            let patrol = new_object(e, 0x14, |e, block| {
+                e.call(PATROL_REF_DATA_INIT, &args![block, local]).u32()
+            });
+            e.call(SET_PATROL_REF_DATA, &args![this, patrol]);
+        }),
+        // EXTRA_OCCLUSION_PLANE_REF_DATA: four form ids.
+        b"XORD" => {
+            let data = new_object(e, 0x10, |e, block| fn_00411dc0(e, Ptr::new(block)).addr());
+            read_chunk_data(e, file, data, 0x10);
+            if file_needs_swap(e, file) {
+                fn_00414370(e, Ptr::new(data));
+            }
+            e.call(SET_OCCLUSION_PLANE_REF_DATA, &args![this, data]);
+        }
+        // EXTRA_PORTAL_REF_DATA: two form ids.
+        b"XPOD" => {
+            let data = new_object(e, 8, |e, block| fn_004143c0(e, Ptr::new(block)).addr());
+            read_chunk_data(e, file, data, 8);
+            if file_needs_swap(e, file) {
+                swap_two_words(e, Ptr::new(data));
+            }
+            e.call(SET_PORTAL_REF_DATA, &args![this, data]);
+        }
+        // EXTRA_ROOM_REF_DATA: the count of linked portals with the master
+        // flag in bit 16, then that many form ids (each in its own chunk).
+        b"XRMR" => {
+            let data = new_object(e, 0x14, |e, block| fn_00416b80(e, Ptr::new(block)).addr());
+            let word = read_chunk_word(e, file);
+            e.mem.set_u8(data + 0x10, (word >> 16) as u8);
+            let count = word & 0xffff;
+            let mut index = 0;
+            while index < count {
+                e.call(SKIP_CHUNK, &args![file]);
+                let room = read_chunk_word(e, file);
+                e.with_stack(4, |e, local| {
+                    e.mem.set_u32(local.addr(), room);
+                    e.call(LIST_ADD_HEAD, &args![data + 8, local]);
+                });
+                index += 1;
+            }
+            e.call(SET_ROOM_REF_DATA, &args![this, data]);
+        }
+        // EXTRA_COLLISION_DATA: one word.
+        b"XTRI" => {
+            let data = new_object(e, 4, |e, block| fn_00411e00(e, Ptr::new(block)).addr());
+            read_chunk_data(e, file, data, 4);
+            if file_needs_swap(e, file) {
+                swap_word_at(e, Ptr::new(data));
+            }
+            e.call(SET_COLLISION_DATA, &args![this, data]);
+        }
+        // EXTRA_PATROL_REF_DATA's PackageEventAction.
+        b"XPPA" => {
+            let patrol = e.call(GET_PATROL_REF_DATA, &args![this]).u32();
+            e.call(SKIP_CHUNK, &args![file]);
+            e.call(
+                PACKAGE_EVENT_ACTION_LOAD,
+                &args![patrol.wrapping_add(4), file],
+            );
+        }
+        // EXTRA_IGNORED_BY_SANDBOX
+        b"XIBS" => {
+            e.call(SET_IGNORED_BY_SANDBOX, &args![this, 1u32]);
+        }
+        // Type 0x92, the word at +0x0C.
+        b"XSRF" => {
+            let extra = get_or_add_special_render_flags(e, this);
+            let value = read_chunk_word(e, file);
+            e.call(SET_SPECIAL_RENDER_WORD, &args![extra, value]);
+        }
+        // Type 0x92, the float at +0x10.
+        b"XSRD" => {
+            let extra = get_or_add_special_render_flags(e, this);
+            let value = x87_float_bits(read_chunk_word(e, file));
+            e.mem.set_u32(extra.addr() + 0x10, value);
+        }
+        // Two chunks that are read into a byte and dropped.
+        b"XCMT" | b"XCET" => {
+            e.with_stack(1, |e, local| {
+                read_chunk_data(e, file, local.addr(), 1);
+            });
+        }
+        // Any other chunk is left alone.
+        _ => {}
+    }
+}
+
+/// The type `0x92` extra data, created (`fn_00411e40`, `0x14` bytes) and added
+/// when the list has none.
+fn get_or_add_special_render_flags(e: &mut Engine, list: Ptr<ExtraDataList>) -> Ptr<BSExtraData> {
+    let existing = base_extra_list_get_extra_data(e, list.cast(), 0x92);
+    if !existing.is_null() {
+        return existing;
+    }
+    let created = new_object(e, 0x14, |e, block| fn_00411e40(e, Ptr::new(block)).addr());
+    base_extra_list_add_extra(e, list.cast(), Ptr::new(created))
+}
+
+/// Whether the form of the save buffer (`BGSSaveFormBuffer::GetForm`,
+/// `007af430`) exists and has form type `0x23` (`TESForm::GetFormType`,
+/// `00401170`).
+fn form_is_type_0x23(e: &mut Engine, buffer: Ptr) -> bool {
+    let form = e.call(SAVE_BUFFER_GET_FORM, &args![buffer]).u32();
+    if form == 0 {
+        return false;
+    }
+    let form = e.call(SAVE_BUFFER_GET_FORM, &args![buffer]).u32();
+    e.call(FORM_TYPE, &args![form]).u32() == 0x23
+}
+
+// ---------------------------------------------------------------------------
+// InitItem
+
+/// Type descriptor of `TESForm` for `__RTDynamicCast` (the source type of
+/// every cast the master file fix-ups make).
+const RTTI_TES_FORM: u32 = 0x0118_3028;
+/// Type descriptor of `TESObjectREFR`.
+const RTTI_TES_OBJECT_REFR: u32 = 0x0118_41cc;
+
+/// The arms of `InitItem` that replace the form id at `+0x0C` of the extra
+/// data by the form it names and remove the extra data when there is none:
+/// (type, `__RTDynamicCast` target or 0 for no cast, message with the id).
+const INIT_ITEM_FORM_FIXUPS: &[(u8, u32, u32)] = &[
+    // EXTRA_WATERTYPE
+    (0x03, 0x0118_4118, 0x0101_4db0),
+    // EXTRA_CELLMUSICTYPE
+    (0x07, 0x0118_40fc, 0x0101_4d60),
+    // EXTRA_CLIMATE
+    (0x08, 0x0118_4170, 0x0101_4eb8),
+    // EXTRA_PACKAGESTARTLOC: the cell, not cast.
+    (0x18, 0, 0x0101_4cf0),
+    // EXTRA_OWNERSHIP: the owner, not cast.
+    (0x21, 0, 0x0101_4fa8),
+    // EXTRA_GLOBAL
+    (0x22, 0x0118_3ad4, 0x0101_4f50),
+    // EXTRA_TELEPORTMARKER
+    (0x3b, RTTI_TES_OBJECT_REFR, 0x0101_4be0),
+    // EXTRA_MERCHANTCONTAINER
+    (0x3c, RTTI_TES_OBJECT_REFR, 0x0101_4830),
+    // EXTRA_POISON
+    (0x3f, 0x0118_30cc, 0x0101_4f08),
+    // EXTRA_XTARGET
+    (0x44, RTTI_TES_OBJECT_REFR, 0x0101_47d8),
+    // EXTRA_IMAGESPACE
+    (0x59, 0x0118_4154, 0x0101_4e60),
+    // EXTRA_AMMO
+    (0x6e, 0x0118_40c4, 0x0101_4620),
+    // EXTRA_ENCOUNTERZONE
+    (0x74, 0x0118_40dc, 0x0101_4788),
+    // EXTRA_CELL_ACOUSTIC_SPACE
+    (0x81, 0x0118_4134, 0x0101_4e00),
+];
+
+/// `TESForm::AddCompileIndex(&id, file)` (`00485d50`, cdecl): turns an id as
+/// the file stores it into the id of the load order, in a local copy.
+fn add_compile_index(e: &mut Engine, id: u32, file: u32) -> u32 {
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), id);
+        e.call(ADD_COMPILE_INDEX, &args![local, file]);
+        e.mem.u32(local.addr())
+    })
+}
+
+/// `__RTDynamicCast(form, 0, TESForm, target, 0)`.
+fn dynamic_cast(e: &mut Engine, form: u32, target: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![form, 0u32, RTTI_TES_FORM, target, 0u32],
+    )
+    .u32()
+}
+
+/// The id as the file stores it becomes the form: `AddCompileIndex`, the
+/// lookup by id (`004839c0`) and, when `target` is not 0, the dynamic cast.
+/// Returns the id of the load order and the form.
+fn resolve_form_id(e: &mut Engine, file: u32, stored_id: u32, target: u32) -> (u32, u32) {
+    let id = add_compile_index(e, stored_id, file);
+    let form = e.call(LOOKUP_FORM, &args![id]).u32();
+    let form = if target == 0 {
+        form
+    } else {
+        dynamic_cast(e, form, target)
+    };
+    (id, form)
+}
+
+/// `RemoveExtra(extra, destroy)` on the list being fixed up.
+fn remove_and_delete(e: &mut Engine, list: Ptr<ExtraDataList>, extra: Ptr<BSExtraData>) {
+    base_extra_list_remove_extra(e, list.cast(), extra, true);
+}
+
+/// The `TESObjectREFR` embedded `ExtraDataList` (`005d43c0` gives
+/// `reference + 0x44`).
+fn reference_extra_list(e: &mut Engine, reference: u32) -> u32 {
+    e.call(REFERENCE_EXTRA_LIST, &args![reference]).u32()
+}
+
+// Translated from 00416be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::InitItem` (Xbox PDB): the fix-up of a list loaded from the
+/// master file, for the reference `reference`: walks the chain under the lock
+/// and, for each extra data of a type that holds form ids, replaces the id (as
+/// the file stores it, `TESForm::AddCompileIndex`) by the form it names; when
+/// the form is missing, the extra data is logged ("MASTERFILE: Unable to find
+/// ...") and removed. Some types also link the target reference back to this
+/// one (`LinkedRef`, `EnableStateParent`, the activate and portal lists).
+/// The types are dispatched by the jump table at `0041809c`; the arms that
+/// only resolve one id are the table [`INIT_ITEM_FORM_FIXUPS`].
+///
+/// The next extra data is read before each one is handled, so an extra data
+/// removed by its arm does not break the walk. The type `0x77` arm keeps
+/// reading the extra data it has just removed (as the game's code does).
+/// The compiler's exception-unwinding frame is not translated.
+pub fn extra_data_list_init_item(e: &mut Engine, this: Ptr<ExtraDataList>, reference: Ptr) {
+    lock(e, 0);
+    let mut current: Ptr<BSExtraData> = e.get(this, ExtraDataList::pHead).cast();
+    let file = e
+        .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
+        .u32();
+    while !current.is_null() {
+        let next = get_next(e, current);
+        let extra_type = get_type(e, current);
+        init_item_extra(e, this, reference, file, current, extra_type);
+        current = next;
+    }
+    unlock(e);
+}
+
+/// One arm of `InitItem`'s switch.
+fn init_item_extra(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    reference: Ptr,
+    file: u32,
+    extra: Ptr<BSExtraData>,
+    extra_type: u8,
+) {
+    if let Some(&(_, target, message)) = INIT_ITEM_FORM_FIXUPS
+        .iter()
+        .find(|entry| entry.0 == extra_type)
+    {
+        let stored = payload(e, extra, 0x0c);
+        let (id, form) = resolve_form_id(e, file, stored, target);
+        e.mem.set_u32(extra.addr() + 0x0c, form);
+        if form == 0 {
+            e.call(LOG_MESSAGE, &args![message, id]);
+            remove_and_delete(e, this, extra);
+        }
+        return;
+    }
+    match extra_type {
+        // EXTRA_RAGDOLLDATA: a living actor must not have one (only logged).
+        0x14 => {
+            if e.vcall(reference.addr(), 0x100, &args![]).bool() {
+                let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+                if base_form != 0 {
+                    let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+                    let health = e.call(ACTOR_BASE_GET_HEALTH, &args![base_form]).i32();
+                    if health > 0 {
+                        let id = form_id(e, reference.addr());
+                        e.call(LOG_MESSAGE, &args![MESSAGE_RAGDOLL_ON_LIVE_ACTOR, id]);
+                    }
+                }
+            }
+        }
+        // EXTRA_LOCK: the key becomes the TESKey (`00ec43fb` cast to
+        // 0x011841b4) or the lock is removed.
+        0x2a => {
+            let lock_data = payload(e, extra, 0x0c);
+            let mut remove = false;
+            let key = e.mem.u32(lock_data + 4);
+            if key != 0 {
+                let (id, resolved) = resolve_form_id(e, file, key, RTTI_TES_KEY);
+                e.mem.set_u32(lock_data + 4, resolved);
+                if resolved == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_LOCK_KEY_MISSING, id]);
+                    remove = true;
+                }
+            }
+            if remove {
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_TELEPORT: DoorTeleportData::InitItem decides.
+        0x2b => {
+            let teleport = payload(e, extra, 0x0c);
+            if !e
+                .call(DOOR_TELEPORT_DATA_INIT_ITEM, &args![teleport, reference])
+                .bool()
+            {
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_MAPMARKER: a travel location that is not visible is cleared;
+        // the reputation id becomes the reputation form.
+        0x2c => {
+            let marker = payload(e, extra, 0x0c);
+            if e.call(MAP_MARKER_GET_TRAVEL_LOC, &args![marker]).bool()
+                && !e.call(MAP_MARKER_GET_VISIBLE, &args![marker]).bool()
+            {
+                e.call(MAP_MARKER_SET_TRAVEL_LOC, &args![marker, 0u32]);
+            }
+            let reputation_id = e.call(MAP_MARKER_GET_REPUTATION, &args![marker]).u32();
+            if reputation_id != 0 {
+                let data_handler = e.global::<u32>(DATA_HANDLER);
+                let reputation = e
+                    .call(
+                        DATA_HANDLER_GET_REPUTATION,
+                        &args![data_handler, reputation_id],
+                    )
+                    .u32();
+                e.call(MAP_MARKER_SET_REPUTATION, &args![marker, reputation]);
+            }
+        }
+        // EXTRA_ENABLESTATEPARENT: the parent reference, and a check that the
+        // chain of parents does not loop back to `reference`.
+        0x37 => {
+            let stored = payload(e, extra, 0x0c);
+            let (id, parent) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+            e.mem.set_u32(extra.addr() + 0x0c, parent);
+            if parent == 0 {
+                e.call(LOG_MESSAGE, &args![MESSAGE_ENABLE_PARENT_MISSING, id]);
+                remove_and_delete(e, this, extra);
+            } else {
+                let as_reference = e
+                    .call(
+                        RT_DYNAMIC_CAST,
+                        &args![reference, 0u32, RTTI_TES_FORM, RTTI_TES_OBJECT_REFR, 0u32],
+                    )
+                    .u32();
+                if as_reference != 0
+                    && e.call(CHECK_ENABLE_PARENT_LOOP, &args![as_reference])
+                        .bool()
+                {
+                    let parent_list = reference_extra_list(e, parent);
+                    e.call(ENABLE_PARENT_ADD_CHILD, &args![parent_list, as_reference]);
+                } else {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_ENABLE_PARENT_LOOP]);
+                    remove_and_delete(e, this, extra);
+                }
+            }
+        }
+        // EXTRA_LINKED_REF: the linked reference, which is told about this one.
+        0x51 => {
+            let stored = payload(e, extra, 0x0c);
+            let (id, linked) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+            e.mem.set_u32(extra.addr() + 0x0c, linked);
+            if linked == 0 {
+                e.call(LOG_MESSAGE, &args![MESSAGE_LINKED_REF_MISSING, id]);
+                remove_and_delete(e, this, extra);
+            } else {
+                let linked_list = reference_extra_list(e, linked);
+                e.call(LINKED_REF_ADD_CHILD, &args![linked_list, reference]);
+            }
+        }
+        // EXTRA_ACTIVATE_REF
+        0x53 => init_activate_ref(e, this, reference, file, extra),
+        // EXTRA_DECAL_REFS
+        0x57 => {
+            e.call(DECAL_REFS_INIT_ITEM, &args![extra, reference]);
+            if e.call(LIST_IS_EMPTY, &args![extra.addr() + 0x0c]).bool() {
+                e.call(LOG_MESSAGE, &args![MESSAGE_EMPTY_DECALS]);
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_MULTIBOUND_REF: the multibound reference, which must not be
+        // the reference itself.
+        0x63 => {
+            let stored = payload(e, extra, 0x0c);
+            let (id, bound) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+            e.mem.set_u32(extra.addr() + 0x0c, bound);
+            if bound == reference.addr() {
+                e.mem.set_u32(extra.addr() + 0x0c, 0);
+            }
+            if e.mem.u32(extra.addr() + 0x0c) == 0 {
+                let reference_id = form_id(e, reference.addr());
+                e.call(
+                    LOG_MESSAGE,
+                    &args![MESSAGE_MULTIBOUND_REF_MISSING, id, reference_id],
+                );
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_REFLECTOR_REFS
+        0x66 => {
+            e.call(REFLECTOR_REFS_INIT_ITEM, &args![extra, reference]);
+            if e.call(LIST_IS_EMPTY, &args![extra.addr() + 0x0c]).bool() {
+                e.call(LOG_MESSAGE, &args![MESSAGE_EMPTY_REFLECTOR_REFS]);
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_EMITTANCE_SOURCE: a light (form type 0x1E) or an activator
+        // (form type 0x37) only.
+        0x67 => {
+            let stored = payload(e, extra, 0x0c);
+            let (id, source) = resolve_form_id(e, file, stored, 0);
+            e.mem.set_u32(extra.addr() + 0x0c, source);
+            if source != 0 {
+                let form_type = e.call(FORM_TYPE, &args![source]).u32();
+                if form_type != 0x1e && form_type != 0x37 {
+                    e.mem.set_u32(extra.addr() + 0x0c, 0);
+                }
+            }
+            if e.mem.u32(extra.addr() + 0x0c) == 0 {
+                e.call(LOG_MESSAGE, &args![MESSAGE_EMITTANCE_SOURCE_MISSING, id]);
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_RADIO_DATA: the position reference of the RADIO_DATA.
+        0x68 => {
+            let data = extra.addr() + 0x0c;
+            let stored = e.mem.u32(data + 0x0c);
+            if stored != 0 {
+                let radio_file = e
+                    .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
+                    .u32();
+                let (id, position) = resolve_form_id(e, radio_file, stored, RTTI_TES_OBJECT_REFR);
+                e.mem.set_u32(data + 0x0c, position);
+                if position == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_RADIO_POSITION_MISSING, id]);
+                } else if e.call(REFERENCE_GET_INTERIOR, &args![position]).bool() {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_RADIO_POSITION_INTERIOR, id]);
+                }
+            }
+        }
+        // EXTRA_PATROL_REF_DATA
+        0x6f => {
+            let patrol = e.call(GET_PATROL_REF_DATA, &args![this]).u32();
+            if patrol != 0 {
+                e.call(PATROL_REF_DATA_INIT_ITEM, &args![patrol, reference]);
+            }
+        }
+        // EXTRA_OCCLUSION_PLANE_REF_DATA: four linked references, each
+        // linked to the plane of its own list. (The id read from the table is
+        // overwritten with 0 before it is resolved, as the code does.)
+        0x76 => {
+            let table = payload(e, extra, 0x0c);
+            for index in 0..4u32 {
+                let _stored = e.mem.u32(table + index * 4);
+                let (id, linked) = resolve_form_id(e, file, 0, RTTI_TES_OBJECT_REFR);
+                e.mem.set_u32(table + index * 4, linked);
+                if id != 0 && e.mem.u32(table + index * 4) == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_PLANE_REF_MISSING, id]);
+                    remove_and_delete(e, this, extra);
+                    break;
+                }
+                let plane = e.call(GET_OCCLUSION_PLANE, &args![this]).u32();
+                if plane == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_NO_OCCLUSION_PLANE]);
+                } else {
+                    let linked = e.mem.u32(table + index * 4);
+                    if linked != 0 {
+                        let linked_list = reference_extra_list(e, linked);
+                        let linked_plane = e.call(GET_OCCLUSION_PLANE, &args![linked_list]).u32();
+                        e.call(SET_LINKED_PLANE, &args![plane, index, linked_plane]);
+                    }
+                }
+            }
+        }
+        // EXTRA_PORTAL_REF_DATA: two linked references.
+        0x77 => {
+            let data = extra;
+            for index in 0..2u32 {
+                let table = payload(e, data, 0x0c);
+                let stored = e.mem.u32(table + index * 4);
+                let (id, linked) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+                let table = payload(e, data, 0x0c);
+                e.mem.set_u32(table + index * 4, linked);
+                if id != 0 && e.mem.u32(table + index * 4) == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_PORTAL_REF_MISSING, id]);
+                    remove_and_delete(e, this, extra);
+                    break;
+                }
+            }
+            let table = payload(e, data, 0x0c);
+            if e.mem.u32(table) == e.mem.u32(table + 4) {
+                let first = e.mem.u32(table);
+                if first != 0 {
+                    let first_id = form_id(e, first);
+                    let reference_id = form_id(e, reference.addr());
+                    e.call(
+                        LOG_MESSAGE,
+                        &args![MESSAGE_PORTAL_ROOMS_SAME, reference_id, first_id],
+                    );
+                    let table = payload(e, data, 0x0c);
+                    e.mem.set_u32(table + 4, 0);
+                } else {
+                    let reference_id = form_id(e, reference.addr());
+                    e.call(LOG_MESSAGE, &args![MESSAGE_PORTAL_ROOMS_NULL, reference_id]);
+                }
+            }
+            for index in 0..2u32 {
+                let table = payload(e, data, 0x0c);
+                let linked = e.mem.u32(table + index * 4);
+                if linked != 0 {
+                    let linked_list = reference_extra_list(e, linked);
+                    e.call(PORTAL_ADD_REFERENCE, &args![linked_list, reference]);
+                }
+            }
+        }
+        // EXTRA_ROOM_REF_DATA: the linked rooms of the list at +8.
+        0x7b => {
+            let data = payload(e, extra, 0x0c);
+            let mut node = data + 8;
+            while node != 0 && list_item(e, node) != 0 {
+                let stored = list_item(e, node);
+                let (id, room) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+                if id != 0 && room == 0 {
+                    e.call(LOG_MESSAGE, &args![MESSAGE_ROOM_REF_MISSING, id]);
+                    remove_and_delete(e, this, extra);
+                    break;
+                }
+                if id != 0 {
+                    e.with_stack(4, |e, slot| {
+                        e.mem.set_u32(slot.addr(), room);
+                        e.call(LIST_SET_ITEM, &args![node, slot]);
+                    });
+                }
+                node = list_next(e, node);
+            }
+        }
+        // EXTRA_IMPACTSWAP
+        0x8c => {
+            let swap = payload(e, extra, 0x0c);
+            if swap != 0 {
+                e.call(IMPACT_SWAP_INIT_ITEM, &args![swap, reference]);
+            }
+        }
+        // EXTRA_LIT_WATER_REFS
+        0x85 => {
+            e.call(LIT_WATER_REFS_INIT_ITEM, &args![extra, reference]);
+            if e.call(LIST_IS_EMPTY, &args![extra.addr() + 0x0c]).bool() {
+                e.call(LOG_MESSAGE, &args![MESSAGE_EMPTY_LIT_WATER]);
+                remove_and_delete(e, this, extra);
+            }
+        }
+        // EXTRA_AUDIOMARKER: the controller id of the AudioMarkerData
+        // becomes the controller form.
+        0x90 => {
+            let marker = payload(e, extra, 0x0c);
+            let stored = e.call(AUDIO_MARKER_GET_CONTROLLER, &args![marker]).u32();
+            let controller_file = e
+                .call(TES_FORM_GET_FILE, &args![reference, 0xffff_ffffu32])
+                .u32();
+            let (id, controller) =
+                resolve_form_id(e, controller_file, stored, RTTI_MEDIA_LOCATION_CONTROLLER);
+            if controller != 0 {
+                e.call(AUDIO_MARKER_SET_CONTROLLER, &args![marker, id]);
+            } else {
+                e.call(LOG_MESSAGE, &args![MESSAGE_CONTROLLER_MISSING, id]);
+            }
+        }
+        // EXTRA_AUDIOBUOYMARKER: nothing is done (the word is read only).
+        0x91 => {}
+        _ => {}
+    }
+}
+
+/// `EXTRA_ACTIVATE_REF` of `InitItem`: resolves the reference of each
+/// REF_ACTIVATE_DATA of the parent list, drops the entries whose reference
+/// is gone (deleting their data) and tells the others' lists about this
+/// reference (`AddActivateRefChild`, `0041edd0`); an extra data left with no
+/// entries, no flags and no text is removed.
+fn init_activate_ref(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    reference: Ptr,
+    file: u32,
+    extra: Ptr<BSExtraData>,
+) {
+    let mut node = extra.addr() + 0x0c;
+    let mut previous = 0u32;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let data = list_item(e, node);
+        let stored = e.mem.u32(data);
+        let (id, activator) = resolve_form_id(e, file, stored, RTTI_TES_OBJECT_REFR);
+        e.mem.set_u32(data, activator);
+        if activator == 0 {
+            e.call(LOG_MESSAGE, &args![MESSAGE_ACTIVATE_REF_MISSING, id]);
+            if previous != 0 {
+                e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), data);
+                    e.call(LIST_REMOVE_AFTER, &args![previous, slot]);
+                });
+                node = list_next(e, previous);
+            } else {
+                e.call(LIST_REMOVE_HEAD, &args![node]);
+            }
+            e.call(OPERATOR_DELETE, &args![data]);
+        } else {
+            let activator_list = reference_extra_list(e, activator);
+            e.call(ADD_ACTIVATE_REF_CHILD, &args![activator_list, reference]);
+            previous = node;
+            node = list_next(e, node);
+        }
+    }
+    if e.call(LIST_IS_EMPTY, &args![extra.addr() + 0x0c]).bool()
+        && e.mem.u8(extra.addr() + 0x14) == 0
+        && e.call(STRING_LENGTH, &args![extra.addr() + 0x18]).u32() == 0
+    {
+        e.call(LOG_MESSAGE, &args![MESSAGE_EMPTY_ACTIVATE_PARENT]);
+        remove_and_delete(e, this, extra);
+    }
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1451,6 +4157,87 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00411e20, fn_00411e20(Ptr<BSExtraData>, u8) -> bool),
         entry!(0x00411e40, fn_00411e40(Ptr) -> Ptr),
         entry!(0x00411e70, fn_00411e70(Ptr, u32) -> Ptr),
+        entry!(0x00411ea0, fn_00411ea0(Ptr)),
+        entry!(
+            0x00411ec0,
+            extra_data_list_copy_list(Ptr<ExtraDataList>, Ptr<ExtraDataList>)
+        ),
+        entry!(
+            0x00411f20,
+            extra_data_list_is_copyable_extra(Ptr<ExtraDataList>, Ptr<BSExtraData>) -> bool
+        ),
+        entry!(
+            0x00411fd0,
+            extra_data_list_remove_all_copyable_extra(Ptr<ExtraDataList>, bool)
+        ),
+        entry!(
+            0x004120b0,
+            extra_data_list_remove_non_persistent_cell_data(Ptr<ExtraDataList>)
+        ),
+        entry!(0x004121b0, fn_004121b0(u32) -> bool),
+        entry!(
+            0x004121e0,
+            extra_data_list_copy_list_for_container(Ptr<ExtraDataList>, Ptr<ExtraDataList>, bool)
+        ),
+        entry!(
+            0x00412380,
+            extra_data_list_duplicate_extra_list_for_container(
+                Ptr<ExtraDataList>,
+                Ptr<ExtraDataList>,
+            )
+        ),
+        entry!(
+            0x00412490,
+            extra_data_list_copy_list_for_reference(Ptr<ExtraDataList>, Ptr<ExtraDataList>, bool)
+        ),
+        entry!(
+            0x004126c0,
+            extra_data_list_compare_list_for_container(
+                Ptr<ExtraDataList>,
+                Ptr<ExtraDataList>,
+                bool,
+                bool,
+            ) -> bool
+        ),
+        entry!(
+            0x004127e0,
+            extra_data_list_compare_list(Ptr<ExtraDataList>, Ptr<ExtraDataList>) -> bool
+        ),
+        entry!(0x00412970, fn_00412970(Ptr<ExtraDataList>)),
+        entry!(0x00413f40, fn_00413f40(u32) -> u32),
+        entry!(0x00413f60, fn_00413f60(Ptr, Ptr) -> Ptr),
+        entry!(0x00413f90, fn_00413f90(Ptr, Ptr) -> Ptr),
+        entry!(0x00413fc0, fn_00413fc0(Ptr, Ptr) -> Ptr),
+        entry!(0x00413ff0, fn_00413ff0(Ptr, Ptr) -> Ptr),
+        entry!(0x00414010, fn_00414010(Ptr) -> Ptr),
+        entry!(0x00414030, fn_00414030(Ptr)),
+        entry!(0x004140f0, fn_004140f0(Ptr)),
+        entry!(0x004141e0, fn_004141e0(Ptr)),
+        entry!(0x00414220, fn_00414220(Ptr)),
+        entry!(0x00414290, fn_00414290(Ptr)),
+        entry!(0x00414370, fn_00414370(Ptr)),
+        entry!(0x004143c0, fn_004143c0(Ptr) -> Ptr),
+        entry!(0x004143f0, fn_004143f0(Ptr) -> Ptr),
+        entry!(0x00414430, fn_00414430(Ptr, f32, f32, f32, f32) -> Ptr),
+        entry!(0x00414470, fn_00414470(Ptr) -> Ptr),
+        entry!(
+            0x004144a0,
+            extra_data_list_load(Ptr<ExtraDataList>, Ptr, Ptr)
+        ),
+        entry!(0x00416870, fn_00416870(Ptr, f32, f32, f32) -> Ptr),
+        entry!(0x004169a0, fn_004169a0(f32, Ptr, Ptr)),
+        entry!(0x004169d0, fn_004169d0(Ptr) -> u32),
+        entry!(0x004169f0, fn_004169f0(Ptr, Ptr)),
+        entry!(0x00416a30, fn_00416a30(Ptr, Ptr)),
+        entry!(0x00416a70, fn_00416a70(Ptr, Ptr)),
+        entry!(0x00416ab0, fn_00416ab0(Ptr) -> Ptr),
+        entry!(0x00416ad0, fn_00416ad0(Ptr, u32, u32) -> Ptr),
+        entry!(0x00416b40, fn_00416b40(Ptr) -> Ptr),
+        entry!(0x00416b80, fn_00416b80(Ptr) -> Ptr),
+        entry!(
+            0x00416be0,
+            extra_data_list_init_item(Ptr<ExtraDataList>, Ptr)
+        ),
     ]
 }
 
@@ -2923,5 +5710,3382 @@ mod tests {
         e.call(0x0041_1e70, &args![extra, 1u32]);
         let log = e.call_log.take().unwrap();
         assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![extra.addr()]]);
+    }
+
+    // === second batch ======================================================
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    type Shared<T> = Rc<RefCell<T>>;
+
+    /// The setters `AddExtraCopy` hands a copy to for the types the list
+    /// tests use (script `0D`, worn `16`, owner `21`, health-like float `30`,
+    /// count `24`, water `03`, music `07`), all stubs here.
+    const SCRIPT_SETTER_1: u32 = 0x0041_9ed0;
+    const SCRIPT_SETTER_2: u32 = 0x0041_9f80;
+    const WORN_SETTER: u32 = 0x0041_aa20;
+    const OWNER_SETTER: u32 = 0x0041_9700;
+    const FLOAT_30_SETTER: u32 = 0x0041_9fb0;
+    const COUNT_SETTER: u32 = 0x0041_9ad0;
+    const WATER_SETTER: u32 = 0x0041_e160;
+    const MUSIC_SETTER: u32 = 0x0041_bd10;
+    const COPY_SETTERS: [u32; 8] = [
+        SCRIPT_SETTER_1,
+        SCRIPT_SETTER_2,
+        WORN_SETTER,
+        OWNER_SETTER,
+        FLOAT_30_SETTER,
+        COUNT_SETTER,
+        WATER_SETTER,
+        MUSIC_SETTER,
+    ];
+
+    /// An engine where `AddExtraCopy` runs for real and the setters it calls
+    /// here are stubs.
+    fn list_engine() -> Engine {
+        let mut e = copy_engine();
+        for setter in COPY_SETTERS {
+            stub(&mut e, setter);
+        }
+        e
+    }
+
+    /// The copies a run made, as `(setter, arguments)` in order.
+    fn copies_made(log: &Log) -> Vec<(u32, Vec<u32>)> {
+        log.iter()
+            .filter(|(callee, _)| COPY_SETTERS.contains(callee))
+            .cloned()
+            .collect()
+    }
+
+    fn words(e: &Engine, address: u32, count: u32) -> Vec<u32> {
+        (0..count).map(|i| e.mem.u32(address + 4 * i)).collect()
+    }
+
+    fn as_extra_list(list: Ptr<BaseExtraList>) -> Ptr<ExtraDataList> {
+        list.cast()
+    }
+
+    /// Slot 1 of the test vtable is `Compare`: true when the words at +0x0C
+    /// differ.
+    const COMPARE: u32 = 0x0200_1008;
+
+    fn compare_engine() -> Engine {
+        let mut e = extra_engine();
+        e.mem.set_u32(VTABLE + 4, COMPARE);
+        e.register(COMPARE, |e, a| {
+            returns((e.mem.u32(a[0] + 0x0c) != e.mem.u32(a[1] + 0x0c)) as u32)
+        });
+        e
+    }
+
+    /// A list of extra data of the given `(type, word at +0x0C)`.
+    fn list_with_payloads(
+        e: &mut Engine,
+        entries: &[(u8, u32)],
+    ) -> (Ptr<ExtraDataList>, Vec<Ptr<BSExtraData>>) {
+        let types: Vec<u8> = entries.iter().map(|entry| entry.0).collect();
+        let (list, extras) = list_with(e, &types);
+        for (extra, entry) in extras.iter().zip(entries) {
+            e.mem.set_u32(extra.addr() + 0x0c, entry.1);
+        }
+        (as_extra_list(list), extras)
+    }
+
+    #[test]
+    fn type_92_destructor_sets_its_vtable_then_runs_the_base_destructor() {
+        let mut e = extra_engine();
+        stub(&mut e, BS_EXTRA_DATA_DESTROY);
+        let extra: Ptr = Ptr::new(e.mem.alloc(0x14));
+        e.mem.set_u32(extra.addr(), 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_1ea0, &args![extra]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_4458);
+        assert_eq!(
+            calls_to(&log, BS_EXTRA_DATA_DESTROY),
+            vec![vec![extra.addr()]]
+        );
+    }
+
+    #[test]
+    fn copy_list_empties_the_copyable_extra_data_then_copies_the_sources() {
+        let mut e = list_engine();
+        // 0x01 is not copyable and stays; 0x20 and 0x30 are removed.
+        let (list, extras) = list_with(&mut e, &[0x01, 0x20, 0x30]);
+        let (source, _) = list_with_payloads(&mut e, &[(0x03, 0x111), (0x07, 0x222)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_1ec0, &args![list, source]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list), vec![0x01]);
+        assert_eq!(deleted(&log), vec![extras[1].addr(), extras[2].addr()]);
+        assert_eq!(
+            copies_made(&log),
+            vec![
+                (WATER_SETTER, vec![list.addr(), 0x111]),
+                (MUSIC_SETTER, vec![list.addr(), 0x222])
+            ]
+        );
+        let names: Vec<u32> = calls_to(&log, LOCK).iter().map(|a| a[1]).collect();
+        assert_eq!(names[..2], [NAME_REMOVE_ALL_COPYABLE, NAME_COPY_LIST]);
+        assert_locked_and_released(&log);
+
+        // A null source only empties the list.
+        e.call_log = Some(vec![]);
+        e.call(0x0041_1ec0, &args![list, Ptr::<()>::NULL]);
+        let log = e.call_log.take().unwrap();
+        assert!(copies_made(&log).is_empty());
+        assert_eq!(chain_types(&e, list), vec![0x01]);
+    }
+    #[test]
+    fn copyability_is_false_exactly_for_the_jump_table_types() {
+        let mut e = extra_engine();
+        let list: Ptr<ExtraDataList> = e.new_object();
+        let refused = [
+            0x01, 0x02, 0x04, 0x0c, 0x0f, 0x10, 0x11, 0x15, 0x29, 0x34, 0x40, 0x4b, 0x52, 0x54,
+            0x55, 0x58,
+        ];
+        for extra_type in 0..=255u8 {
+            let extra = extra_of_type(&mut e, extra_type);
+            let copyable = e.call(0x0041_1f20, &args![list, extra]).bool();
+            assert_eq!(copyable, !refused.contains(&extra_type), "{extra_type:#x}");
+        }
+        assert!(e.call(0x0041_1f20, &args![list, Ptr::<()>::NULL]).bool());
+    }
+
+    #[test]
+    fn remove_all_copyable_unlinks_the_copyable_ones_and_deletes_on_request() {
+        let mut e = extra_engine();
+        let (list, extras) = list_with(&mut e, &[0x01, 0x20, 0x30, 0x4b, 0x40, 0x31]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_1fd0, &args![list, true]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list), vec![0x01, 0x4b, 0x40]);
+        assert_eq!(
+            deleted(&log),
+            vec![extras[1].addr(), extras[2].addr(), extras[5].addr()]
+        );
+        // The type bitmap is left alone; the caches and counters are reset.
+        assert!(base_extra_list_has_extra(&mut e, list, 0x20));
+        assert_eq!(e.global::<u32>(DIRTY), 1);
+        assert_locked_and_released(&log);
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_REMOVE_ALL_COPYABLE);
+
+        // Without `destroy`, a removed head is unlinked only.
+        let (list, _) = list_with(&mut e, &[0x20, 0x01, 0x30]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_1fd0, &args![list, false]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list), vec![0x01]);
+        assert!(deleted(&log).is_empty());
+    }
+
+    #[test]
+    fn remove_non_persistent_keeps_type_4_and_1_or_2_only_when_the_thread_flag_is_set() {
+        let mut e = extra_engine();
+        e.map(0x011d_d000, 0x1000);
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x294, 0);
+        let (list, extras) = list_with(&mut e, &[0x20, 0x04, 0x01, 0x02, 0x00, 0x30]);
+        e.call_log = Some(vec![]);
+        e.call(0x0041_20b0, &args![list]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(chain_types(&e, list), vec![0x04]);
+        assert_eq!(
+            deleted(&log),
+            [0usize, 2, 3, 4, 5].map(|i| extras[i].addr()).to_vec()
+        );
+        assert_locked_and_released(&log);
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_REMOVE_NON_PERSISTENT);
+
+        e.mem.set_u32(tls + 0x294, 4);
+        let (list, _) = list_with(&mut e, &[0x01, 0x20, 0x02, 0x03]);
+        e.call(0x0041_20b0, &args![list]);
+        assert_eq!(chain_types(&e, list), vec![0x01, 0x02]);
+    }
+
+    #[test]
+    fn thread_flag_is_bit_2_of_the_word_at_0x294() {
+        let mut e = extra_engine();
+        let tls = e.tls();
+        for (word, expected) in [(4u32, true), (3, false), (0xfffb, false), (0xffff, true)] {
+            e.mem.set_u32(tls + 0x294, word);
+            assert_eq!(e.call(0x0041_21b0, &args![0u32]).bool(), expected);
+        }
+    }
+
+    /// A source list for the container tests: script `0D` (words `0xa1` and
+    /// `0xa2`), worn `16`, float `30` (1.0), `20` (not a container type),
+    /// owner `21` (`0xb1`).
+    fn container_source(e: &mut Engine) -> (Ptr<ExtraDataList>, Vec<Ptr<BSExtraData>>) {
+        let (list, extras) = list_with(e, &[0x0d, 0x16, 0x30, 0x20, 0x21]);
+        e.mem.set_u32(extras[0].addr() + 0x0c, 0xa1);
+        e.mem.set_u32(extras[0].addr() + 0x10, 0xa2);
+        e.mem.set_u32(extras[2].addr() + 0x0c, 1.0f32.to_bits());
+        e.mem.set_u32(extras[4].addr() + 0x0c, 0xb1);
+        (as_extra_list(list), extras)
+    }
+
+    /// The copies of each element of [`container_source`] for target `t`.
+    fn copy_of_script(t: Ptr<ExtraDataList>) -> Vec<(u32, Vec<u32>)> {
+        vec![
+            (SCRIPT_SETTER_1, vec![t.addr(), 0xa1]),
+            (SCRIPT_SETTER_2, vec![t.addr(), 0xa2]),
+        ]
+    }
+    fn copy_of_worn(t: Ptr<ExtraDataList>) -> Vec<(u32, Vec<u32>)> {
+        vec![(WORN_SETTER, vec![t.addr(), 1, 0])]
+    }
+    fn copy_of_float(t: Ptr<ExtraDataList>) -> Vec<(u32, Vec<u32>)> {
+        vec![(FLOAT_30_SETTER, vec![t.addr(), 1.0f32.to_bits()])]
+    }
+    fn copy_of_owner(t: Ptr<ExtraDataList>) -> Vec<(u32, Vec<u32>)> {
+        vec![(OWNER_SETTER, vec![t.addr(), 0xb1])]
+    }
+
+    #[test]
+    fn copy_for_container_copies_the_container_types_and_can_move_them() {
+        let mut e = list_engine();
+        let (source, extras) = container_source(&mut e);
+        let target: Ptr<ExtraDataList> = e.new_object();
+
+        // Copy only: nothing leaves the source.
+        e.call_log = Some(vec![]);
+        e.call(0x0041_21e0, &args![target, source, true]);
+        let log = e.call_log.take().unwrap();
+        let expected = [
+            copy_of_script(target),
+            copy_of_worn(target),
+            copy_of_float(target),
+            copy_of_owner(target),
+        ]
+        .concat();
+        assert_eq!(copies_made(&log), expected);
+        assert_eq!(
+            chain_types(&e, source.cast()),
+            vec![0x0d, 0x16, 0x30, 0x20, 0x21]
+        );
+        assert!(deleted(&log).is_empty());
+
+        // Move: 0D is unlinked, the others deleted except 30, and the walk
+        // restarts from the head after each removal (so 30 is copied twice).
+        e.call_log = Some(vec![]);
+        e.call(0x0041_21e0, &args![target, source, false]);
+        let log = e.call_log.take().unwrap();
+        let expected = [
+            copy_of_script(target),
+            copy_of_worn(target),
+            copy_of_float(target),
+            copy_of_owner(target),
+            copy_of_float(target),
+        ]
+        .concat();
+        assert_eq!(copies_made(&log), expected);
+        assert_eq!(chain_types(&e, source.cast()), vec![0x30, 0x20]);
+        assert_eq!(deleted(&log), vec![extras[1].addr(), extras[4].addr()]);
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_COPY_LIST_FOR_CONTAINER);
+        assert_locked_and_released(&log);
+    }
+
+    #[test]
+    fn duplicate_for_container_copies_without_touching_the_source() {
+        let mut e = list_engine();
+        let (source, _) = list_with(&mut e, &[0x0d, 0x24, 0x20, 0x4b, 0x16]);
+        let target: Ptr<ExtraDataList> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0041_2380, &args![target, source]);
+        let log = e.call_log.take().unwrap();
+        // Type 24 (count) is copied here but not by `CopyListForContainer`.
+        let count_copy = (COUNT_SETTER, vec![target.addr(), 0]);
+        let expected = [
+            vec![
+                (SCRIPT_SETTER_1, vec![target.addr(), 0]),
+                (SCRIPT_SETTER_2, vec![target.addr(), 0]),
+            ],
+            vec![count_copy],
+            copy_of_worn(target),
+        ]
+        .concat();
+        assert_eq!(copies_made(&log), expected);
+        assert_eq!(
+            chain_types(&e, source.cast()),
+            vec![0x0d, 0x24, 0x20, 0x4b, 0x16]
+        );
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_DUPLICATE_FOR_CONTAINER);
+        assert_locked_and_released(&log);
+    }
+
+    #[test]
+    fn copy_for_reference_moves_the_kept_types_out_of_the_source() {
+        let mut e = list_engine();
+        let (source, extras) = container_source(&mut e);
+        let target: Ptr<ExtraDataList> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0041_2490, &args![target, source, true]);
+        let log = e.call_log.take().unwrap();
+        let expected = [
+            copy_of_script(target),
+            copy_of_worn(target),
+            copy_of_float(target),
+            copy_of_owner(target),
+        ]
+        .concat();
+        assert_eq!(copies_made(&log), expected);
+        assert_eq!(chain_types(&e, source.cast()), vec![0x20]);
+        // 0D is only unlinked; the others are deleted (here the walk
+        // restarts from the head after each one).
+        assert_eq!(
+            deleted(&log),
+            vec![extras[1].addr(), extras[2].addr(), extras[4].addr()]
+        );
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_COPY_LIST_FOR_REFERENCE);
+        assert_locked_and_released(&log);
+    }
+
+    #[test]
+    fn copy_for_reference_without_moving_keeps_the_source_and_makes_a_new_script() {
+        let mut e = list_engine();
+        e.register(GET_SCRIPT, |_, _| returns(0x5c01));
+        e.register(EXTRA_SCRIPT_INIT, |e, a| {
+            e.mem.set_u8(a[0] + 4, 0x0d);
+            e.mem.set_u32(a[0] + 0x0c, a[1]);
+            returns(a[0])
+        });
+        e.register(SCRIPT_GET_RESULT, |_, a| returns(a[0] + 0x100));
+        stub(&mut e, EXTRA_DATA_LIST_SET_SCRIPT_RESULT);
+        let types = [0x16, 0x0d, 0x20];
+        let (source, _) = list_with(&mut e, &types);
+        let target: Ptr<ExtraDataList> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0041_2490, &args![target, source, false]);
+        let log = e.call_log.take().unwrap();
+        // Only the 16 is copied (the final call is the script result setter,
+        // `00419f80`, which `AddExtraCopy` also uses for type 0D); the source
+        // keeps all three.
+        let mut expected = copy_of_worn(target);
+        expected.push((SCRIPT_SETTER_2, vec![target.addr(), 0x5c01 + 0x100]));
+        assert_eq!(copies_made(&log), expected);
+        assert_eq!(chain_types(&e, source.cast()), types.to_vec());
+        // The new script extra data (0x14 bytes) is in the target list.
+        assert_eq!(chain_types(&e, target.cast()), vec![0x0d]);
+        let created: Ptr<BSExtraData> = e.get(target, ExtraDataList::pHead).cast();
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        assert_eq!(
+            calls_to(&log, EXTRA_SCRIPT_INIT),
+            vec![vec![created.addr(), 0x5c01]]
+        );
+        assert_eq!(calls_to(&log, GET_SCRIPT).len(), 2);
+        assert_eq!(
+            calls_to(&log, EXTRA_DATA_LIST_SET_SCRIPT_RESULT),
+            vec![vec![target.addr(), 0x5c01 + 0x100]]
+        );
+    }
+    #[test]
+    fn compare_for_container_walks_the_other_list() {
+        let mut e = compare_engine();
+        let (this, _) = list_with_payloads(&mut e, &[(0x20, 5), (0x30, 7), (0x16, 1)]);
+        let compare = |e: &mut Engine, entries: &[(u8, u32)], script: bool, skip16: bool| {
+            let (other, _) = list_with_payloads(e, entries);
+            e.call(0x0041_26c0, &args![this, other, script, skip16])
+                .bool()
+        };
+        // Equal on the common types.
+        assert!(!compare(&mut e, &[(0x20, 5), (0x30, 7)], false, false));
+        // A different value, a type this list lacks, and ignored types 24, 4A.
+        assert!(compare(&mut e, &[(0x20, 5), (0x30, 8)], false, false));
+        assert!(compare(&mut e, &[(0x20, 5), (0x40, 7)], false, false));
+        assert!(!compare(
+            &mut e,
+            &[(0x24, 9), (0x4a, 9), (0x20, 5)],
+            false,
+            false
+        ));
+        // Script (0D) and owner (21): a difference at once unless allowed.
+        assert!(compare(&mut e, &[(0x0d, 1)], false, false));
+        assert!(compare(&mut e, &[(0x21, 1)], false, false));
+        assert!(compare(&mut e, &[(0x0d, 1)], true, false));
+        // Type 16 can be skipped.
+        assert!(compare(&mut e, &[(0x16, 2)], false, false));
+        assert!(!compare(&mut e, &[(0x16, 2)], false, true));
+        // Allowed owners are compared like the others.
+        let (this_with_owner, _) = list_with_payloads(&mut e, &[(0x21, 3)]);
+        let (other, _) = list_with_payloads(&mut e, &[(0x21, 3)]);
+        assert!(!e
+            .call(0x0041_26c0, &args![this_with_owner, other, true, false])
+            .bool());
+        // An empty list never differs; the lock is taken and released.
+        e.call_log = Some(vec![]);
+        let (empty, _) = list_with_payloads(&mut e, &[]);
+        assert!(!e
+            .call(0x0041_26c0, &args![this, empty, false, false])
+            .bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_COMPARE_LIST_FOR_CONTAINER);
+        assert_locked_and_released(&log);
+    }
+
+    #[test]
+    fn compare_list_compares_the_copyable_extra_data_both_ways() {
+        let mut e = compare_engine();
+        let (this, _) = list_with_payloads(&mut e, &[(0x20, 1), (0x30, 2)]);
+        let run = |e: &mut Engine, entries: &[(u8, u32)]| {
+            let (other, _) = list_with_payloads(e, entries);
+            e.call(0x0041_27e0, &args![this, other]).bool()
+        };
+        assert!(!run(&mut e, &[(0x20, 1), (0x30, 2)]));
+        // Not copyable extra data (01) only counts toward the item count.
+        assert!(!run(&mut e, &[(0x20, 1), (0x30, 2), (0x01, 9)]));
+        // A different payload, a missing type, an extra type.
+        assert!(run(&mut e, &[(0x20, 1), (0x30, 3)]));
+        assert!(run(&mut e, &[(0x20, 1)]));
+        assert!(run(&mut e, &[(0x20, 1), (0x30, 2), (0x41, 4)]));
+        // Equal counts, but a type missing on this side.
+        assert!(run(&mut e, &[(0x20, 1), (0x41, 2)]));
+        // Count mismatch with a copyable type of this list absent in the other.
+        let (this_one, _) = list_with_payloads(&mut e, &[(0x20, 1)]);
+        let (other, _) = list_with_payloads(&mut e, &[(0x01, 1), (0x02, 1)]);
+        assert!(e.call(0x0041_27e0, &args![this_one, other]).bool());
+        e.call_log = Some(vec![]);
+        let (other, _) = list_with_payloads(&mut e, &[(0x20, 1)]);
+        assert!(!e.call(0x0041_27e0, &args![this_one, other]).bool());
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, LOCK)[0][1], NAME_COMPARE_LIST);
+        assert_locked_and_released(&log);
+    }
+
+    // --- small structures --------------------------------------------------
+
+    /// An engine where `Swap32` and `Swap16` byte-swap in place.
+    fn swap_engine() -> Engine {
+        let mut e = extra_engine();
+        e.register(SWAP_DWORD, |e, a| {
+            let value = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], value.swap_bytes());
+            Ret::default()
+        });
+        e.register(SWAP_WORD, |e, a| {
+            let value = e.mem.u16(a[0]);
+            e.mem.set_u16(a[0], value.swap_bytes());
+            Ret::default()
+        });
+        e
+    }
+
+    /// Word `index` of a numbered block: all different, none a byte palindrome.
+    fn pattern(index: u32) -> u32 {
+        0x1000_0000 + (index + 1) * 0x0001_0203
+    }
+
+    /// A block of `count` words `pattern(0)`, `pattern(1)`, ... and 16 spare bytes.
+    fn numbered_block(e: &mut Engine, count: u32) -> Ptr {
+        let block: Ptr = Ptr::new(e.mem.alloc(count * 4 + 16));
+        for index in 0..count {
+            e.mem.set_u32(block.addr() + index * 4, pattern(index));
+        }
+        block
+    }
+
+    #[test]
+    fn address_of_the_member_at_8() {
+        let mut e = extra_engine();
+        assert_eq!(e.call(0x0041_3f40, &args![0x1000u32]).u32(), 0x1008);
+    }
+
+    #[test]
+    fn matrix_vector_and_colour_getters_copy_their_words() {
+        let mut e = extra_engine();
+        let object = numbered_block(&mut e, 16);
+        let out: Ptr = Ptr::new(e.mem.alloc(0x40));
+        // Nine words at +0x1c.
+        let result = e.call(0x0041_3f60, &args![object, out]).ptr::<()>();
+        assert_eq!(result, out);
+        let expected: Vec<u32> = (7..16).map(|n| pattern(n as u32)).collect();
+        assert_eq!(words(&e, out.addr(), 9), expected);
+        assert_eq!(e.mem.u32(out.addr() + 36), 0);
+        // Four words at +8.
+        let out: Ptr = Ptr::new(e.mem.alloc(0x40));
+        let result = e.call(0x0041_3f90, &args![object, out]).ptr::<()>();
+        assert_eq!(result, out);
+        let expected: Vec<u32> = (2..6).map(|n| pattern(n as u32)).collect();
+        assert_eq!(words(&e, out.addr(), 4), expected);
+        assert_eq!(e.mem.u32(out.addr() + 16), 0);
+        // Three words at +0x18.
+        let out: Ptr = Ptr::new(e.mem.alloc(0x40));
+        let result = e.call(0x0041_3fc0, &args![object, out]).ptr::<()>();
+        assert_eq!(result, out);
+        let expected: Vec<u32> = (6..9).map(|n| pattern(n as u32)).collect();
+        assert_eq!(words(&e, out.addr(), 3), expected);
+        assert_eq!(e.mem.u32(out.addr() + 12), 0);
+    }
+
+    #[test]
+    fn float_copy_goes_through_the_x87_stack() {
+        let mut e = extra_engine();
+        let source: Ptr = Ptr::new(e.mem.alloc(8));
+        let target: Ptr = Ptr::new(e.mem.alloc(8));
+        e.mem.set_f32(source.addr(), 1.5);
+        let result = e.call(0x0041_3ff0, &args![target, source]).ptr::<()>();
+        assert_eq!(result, target);
+        assert_eq!(e.mem.f32(target.addr()), 1.5);
+        // A signalling NaN comes out quiet; a quiet NaN and infinity do not change.
+        for (bits, expected) in [
+            (0x7f80_0001u32, 0x7fc0_0001u32),
+            (0xff80_0001, 0xffc0_0001),
+            (0x7fc0_0001, 0x7fc0_0001),
+            (0x7f80_0000, 0x7f80_0000),
+            (0x0000_0001, 0x0000_0001),
+        ] {
+            e.mem.set_u32(source.addr(), bits);
+            e.call(0x0041_3ff0, &args![target, source]);
+            assert_eq!(e.mem.u32(target.addr()), expected, "{bits:#x}");
+        }
+    }
+
+    #[test]
+    fn empty_node_and_zero_pairs() {
+        let mut e = extra_engine();
+        let node: Ptr = Ptr::new(e.mem.alloc(16));
+        e.mem.write(node.addr(), &[0xff; 16]);
+        let result = e.call(0x0041_4010, &args![node]).ptr::<()>();
+        assert_eq!(result, node);
+        assert_eq!(words(&e, node.addr(), 3), vec![0, 0, 0xffff_ffff]);
+        e.mem.write(node.addr(), &[0xff; 16]);
+        let result = e.call(0x0041_43c0, &args![node]).ptr::<()>();
+        assert_eq!(result, node);
+        assert_eq!(words(&e, node.addr(), 3), vec![0, 0, 0xffff_ffff]);
+    }
+
+    #[test]
+    fn byte_swaps_cover_the_words_of_their_structure() {
+        // (function, words swapped)
+        for (function, count) in [
+            (0x0041_4030u32, 7u32),
+            (0x0041_40f0, 9),
+            (0x0041_4220, 4),
+            (0x0041_4290, 8),
+            (0x0041_4370, 4),
+        ] {
+            let mut e = swap_engine();
+            let block = numbered_block(&mut e, 12);
+            e.call_log = Some(vec![]);
+            e.call(function, &args![block]);
+            let log = e.call_log.take().unwrap();
+            let swapped: Vec<u32> = calls_to(&log, SWAP_DWORD).iter().map(|a| a[0]).collect();
+            let expected: Vec<u32> = (0..count).map(|i| block.addr() + 4 * i).collect();
+            assert_eq!(swapped, expected, "{function:#x}");
+            assert!(calls_to(&log, SWAP_DWORD).iter().all(|a| a[1] == 0));
+            for index in 0..12 {
+                let original = pattern(index);
+                let expected = if index < count {
+                    original.swap_bytes()
+                } else {
+                    original
+                };
+                assert_eq!(e.mem.u32(block.addr() + 4 * index), expected);
+            }
+        }
+    }
+
+    #[test]
+    fn byte_swap_of_a_word_and_a_short() {
+        let mut e = swap_engine();
+        let block: Ptr = Ptr::new(e.mem.alloc(16));
+        e.mem.set_u32(block.addr(), 0x0102_0304);
+        e.mem.set_u32(block.addr() + 4, 0xaabb_ccdd);
+        e.call(0x0041_41e0, &args![block]);
+        assert_eq!(e.mem.u32(block.addr()), 0x0403_0201);
+        // Only the low 16 bits at +4 are swapped.
+        assert_eq!(e.mem.u32(block.addr() + 4), 0xaabb_ddcc);
+    }
+
+    #[test]
+    fn primitive_record_and_colour_constructors() {
+        let mut e = extra_engine();
+        let record: Ptr = Ptr::new(e.mem.alloc(0x24));
+        e.mem.write(record.addr(), &[0xff; 0x24]);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0041_43f0, &args![record]).ptr::<()>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, record);
+        // The colour at +0x0c is four zeros; the rest is untouched.
+        assert_eq!(words(&e, record.addr(), 9)[3..7], [0, 0, 0, 0]);
+        assert_eq!(e.mem.u32(record.addr()), 0xffff_ffff);
+        assert_eq!(e.mem.u32(record.addr() + 0x1c), 0xffff_ffff);
+        assert_eq!(calls_to(&log, SIMPLE_LIST_ITEM), vec![vec![record.addr()]]);
+
+        // Four floats through the x87 stack.
+        let target: Ptr = Ptr::new(e.mem.alloc(16));
+        let result = e
+            .call(
+                0x0041_4430,
+                &args![target, 1.0f32, 2.0f32, f32::from_bits(0x7f80_0001), -4.5f32],
+            )
+            .ptr::<()>();
+        assert_eq!(result, target);
+        assert_eq!(
+            words(&e, target.addr(), 4),
+            vec![
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                0x7fc0_0001,
+                (-4.5f32).to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn occlusion_plane_constructor_runs_three_member_constructors() {
+        let mut e = extra_engine();
+        let record: Ptr = Ptr::new(e.mem.alloc(0x30));
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0041_4470, &args![record]).ptr::<()>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, record);
+        assert_eq!(
+            calls_to(&log, SIMPLE_LIST_ITEM),
+            vec![
+                vec![record.addr()],
+                vec![record.addr() + 8],
+                vec![record.addr() + 0x14]
+            ]
+        );
+    }
+
+    #[test]
+    fn point_constructor_and_sincos() {
+        let mut e = extra_engine();
+        let point: Ptr = Ptr::new(e.mem.alloc(16));
+        let result = e
+            .call(
+                0x0041_6870,
+                &args![point, 1.0f32, -2.5f32, f32::from_bits(0xff80_0001)],
+            )
+            .ptr::<()>();
+        assert_eq!(result, point);
+        assert_eq!(
+            words(&e, point.addr(), 3),
+            vec![1.0f32.to_bits(), (-2.5f32).to_bits(), 0xffc0_0001]
+        );
+        assert_eq!(e.mem.u32(point.addr() + 12), 0);
+
+        let sine: Ptr = Ptr::new(e.mem.alloc(8));
+        let cosine: Ptr = Ptr::new(e.mem.alloc(8));
+        e.call(0x0041_69a0, &args![0.0f32, sine, cosine]);
+        assert_eq!(e.mem.f32(sine.addr()), 0.0);
+        assert_eq!(e.mem.f32(cosine.addr()), 1.0);
+        let angle = std::f32::consts::FRAC_PI_2;
+        e.call(0x0041_69a0, &args![angle, sine, cosine]);
+        assert_eq!(e.mem.f32(sine.addr()), 1.0);
+        assert_eq!(e.mem.f32(cosine.addr()), (angle as f64).cos() as f32);
+        e.call(0x0041_69a0, &args![-1.0f32, sine, cosine]);
+        assert_eq!(e.mem.f32(sine.addr()), ((-1.0f64).sin()) as f32);
+        assert_eq!(e.mem.f32(cosine.addr()), ((1.0f64).cos()) as f32);
+    }
+
+    #[test]
+    fn region_list_getter_reads_the_word_at_0x1d8() {
+        let mut e = extra_engine();
+        let object: Ptr = Ptr::new(e.mem.alloc(0x200));
+        e.mem.set_u32(object.addr() + 0x1d8, 0xcafe);
+        assert_eq!(e.call(0x0041_69d0, &args![object]).u32(), 0xcafe);
+    }
+
+    #[test]
+    fn occlusion_plane_setters_copy_and_mark_the_plane_dirty() {
+        let mut e = extra_engine();
+        let source = numbered_block(&mut e, 9);
+        for (function, offset, count) in [
+            (0x0041_69f0u32, 8u32, 3u32),
+            (0x0041_6a30, 0x14, 2),
+            (0x0041_6a70, 0x1c, 9),
+        ] {
+            let plane: Ptr = Ptr::new(e.mem.alloc(0x100));
+            e.call(function, &args![plane, source]);
+            let expected: Vec<u32> = (0..count).map(pattern).collect();
+            assert_eq!(words(&e, plane.addr() + offset, count), expected);
+            assert_eq!(e.mem.u32(plane.addr() + offset + count * 4), 0);
+            assert_eq!(e.mem.u8(plane.addr() + 0xe4), 1);
+            assert_eq!(e.mem.u8(plane.addr() + 0xe5), 1);
+            assert_eq!(e.mem.u8(plane.addr() + 0xe6), 0);
+        }
+    }
+
+    #[test]
+    fn short_record_constructor_clears_a_word_and_a_short() {
+        let mut e = extra_engine();
+        let record: Ptr = Ptr::new(e.mem.alloc(16));
+        e.mem.write(record.addr(), &[0xff; 16]);
+        let result = e.call(0x0041_6ab0, &args![record]).ptr::<()>();
+        assert_eq!(result, record);
+        assert_eq!(e.mem.u32(record.addr()), 0);
+        assert_eq!(e.mem.u16(record.addr() + 4), 0);
+        assert_eq!(e.mem.u16(record.addr() + 6), 0xffff);
+    }
+
+    #[test]
+    fn type_5a_constructor_copies_the_value_passed_by_value() {
+        let mut e = extra_engine();
+        e.register(NAVMESH_PORTAL_COPY, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u16(a[1] + 4);
+            e.mem.set_u32(a[0], first);
+            e.mem.set_u16(a[0] + 4, second);
+            returns(a[0])
+        });
+        let extra: Ptr = Ptr::new(e.mem.alloc(0x14));
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x0041_6ad0, &args![extra, 0x1234_5678u32, 0xdead_beefu32])
+            .ptr::<()>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, extra);
+        assert_eq!(e.mem.u8(extra.addr() + 4), 0x5a);
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_4618);
+        assert_eq!(e.mem.u32(extra.addr() + 0x0c), 0x1234_5678);
+        // Only the low 16 bits of the second word are copied.
+        assert_eq!(e.mem.u16(extra.addr() + 0x10), 0xbeef);
+        assert_eq!(e.mem.u16(extra.addr() + 0x12), 0);
+        let copy = calls_to(&log, NAVMESH_PORTAL_COPY);
+        assert_eq!(copy.len(), 1);
+        assert_eq!(copy[0][0], extra.addr() + 0x0c);
+    }
+
+    #[test]
+    fn radio_data_and_room_data_constructors() {
+        let mut e = extra_engine();
+        let radio: Ptr = Ptr::new(e.mem.alloc(0x14));
+        e.mem.write(radio.addr(), &[0xff; 0x14]);
+        let result = e.call(0x0041_6b40, &args![radio]).ptr::<()>();
+        assert_eq!(result, radio);
+        assert_eq!(words(&e, radio.addr(), 5), vec![0, 1, 0, 0, 0xffff_ffff]);
+
+        e.register(SIMPLE_LIST_INIT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            returns(a[0])
+        });
+        let room: Ptr = Ptr::new(e.mem.alloc(0x20));
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0041_6b80, &args![room]).ptr::<()>();
+        let log = e.call_log.take().unwrap();
+        assert_eq!(result, room);
+        assert_eq!(
+            calls_to(&log, SIMPLE_LIST_INIT),
+            vec![vec![room.addr()], vec![room.addr() + 8]]
+        );
+    }
+
+    // --- the save writer ---------------------------------------------------
+
+    /// `(chunk name, data)` in the order the writer added them.
+    type Chunks = Shared<Vec<(String, Vec<u8>)>>;
+
+    const BIG_ENDIAN_FLAG: u32 = 0x011c_54ba;
+
+    fn chunk_name(tag: u32) -> String {
+        String::from_utf8_lossy(&tag.to_le_bytes()).into_owned()
+    }
+
+    fn word_bytes(words: &[u32]) -> Vec<u8> {
+        words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    }
+
+    fn chunk(name: &str, data: Vec<u8>) -> (String, Vec<u8>) {
+        (name.to_string(), data)
+    }
+
+    /// An engine with working doubles for what the save writer calls: the
+    /// form id getter, the chunk adders (recording what was added), the
+    /// byte swaps, the big-endian flag (the byte at `011c54ba`) and the list
+    /// helpers.
+    fn save_engine() -> (Engine, Chunks) {
+        let mut e = swap_engine();
+        e.map(0x011c_5000, 0x1000);
+        let chunks: Chunks = Rc::default();
+        e.register(IS_BIG_ENDIAN, |e, _| {
+            returns(e.mem.u8(BIG_ENDIAN_FLAG) as u32)
+        });
+        e.register(FORM_ID, |e, a| returns(e.mem.u32(a[0] + 0x0c)));
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_WORD, move |_, a| {
+            log.borrow_mut()
+                .push(chunk(&chunk_name(a[0]), word_bytes(&[a[1]])));
+            Ret::default()
+        });
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_BYTE, move |_, a| {
+            log.borrow_mut()
+                .push(chunk(&chunk_name(a[0]), vec![a[1] as u8]));
+            Ret::default()
+        });
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_EMPTY, move |_, a| {
+            log.borrow_mut().push(chunk(&chunk_name(a[0]), vec![]));
+            Ret::default()
+        });
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_DATA, move |e, a| {
+            let data = e.mem.bytes(a[1], a[2]);
+            log.borrow_mut().push(chunk(&chunk_name(a[0]), data));
+            Ret::default()
+        });
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_ARRAY, move |e, a| {
+            let data = e.mem.bytes(a[1], a[2] * 4);
+            log.borrow_mut().push(chunk(&chunk_name(a[0]), data));
+            Ret::default()
+        });
+        let log = chunks.clone();
+        e.register_double(ADD_CHUNK_ARRAY_RAW, move |e, a| {
+            let data = e.mem.bytes(a[1], a[2]);
+            log.borrow_mut().push(chunk(&chunk_name(a[0]), data));
+            Ret::default()
+        });
+        e.register(SWAP_WORD_AT, |e, a| {
+            let value = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], value.swap_bytes());
+            Ret::default()
+        });
+        e.register(SWAP_WORD_AT_4, |e, a| {
+            let value = e.mem.u32(a[0] + 4);
+            e.mem.set_u32(a[0] + 4, value.swap_bytes());
+            Ret::default()
+        });
+        e.register(SWAP_TWO_WORDS, |e, a| {
+            for offset in [0, 4] {
+                let value = e.mem.u32(a[0] + offset);
+                e.mem.set_u32(a[0] + offset, value.swap_bytes());
+            }
+            Ret::default()
+        });
+        e.register(LIST_COUNT, |e, a| {
+            let mut count = 0;
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    count += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            returns(count)
+        });
+        e.register(LIST_IS_EMPTY, |e, a| {
+            returns((e.mem.u32(a[0] + 4) == 0 && e.mem.u32(a[0]) == 0) as u32)
+        });
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            returns(value as i32 as u32)
+        });
+        e.register(SIMPLE_LIST_INIT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            returns(a[0])
+        });
+        e.register(NAVMESH_PORTAL_COPY, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u16(a[1] + 4);
+            e.mem.set_u32(a[0], first);
+            e.mem.set_u16(a[0] + 4, second);
+            returns(a[0])
+        });
+        e.register(EXTRA_DATA_LIST_GET_SEED, |_, _| returns(0x7b));
+        e.register(STRING_LENGTH, |e, a| returns(e.mem.u16(a[0] + 4) as u32));
+        e.register(PLANE_HALF_EXTENTS, |_, a| returns(a[0] + 0x14));
+        for address in [
+            RAGDOLL_DATA_SAVE,
+            TELEPORT_DATA_SAVE,
+            MAP_MARKER_DATA_SAVE,
+            MULTIBOUND_MARKER_DATA_SAVE,
+            AUDIO_MARKER_DATA_SAVE,
+            AUDIO_BUOY_MARKER_DATA_SAVE,
+            PACKAGE_EVENT_ACTION_SAVE,
+            PATH_LOCATION_INIT,
+            DECAL_DATA_INIT,
+            STRING_DESTROY,
+        ] {
+            stub(&mut e, address);
+        }
+        (e, chunks)
+    }
+
+    /// A form (`TESForm`-like object) whose id is `id`.
+    fn form_with_id(e: &mut Engine, id: u32) -> u32 {
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u32(form + 0x0c, id);
+        form
+    }
+
+    /// An extra data of `extra_type` with the given `(offset, word)` pairs.
+    fn extra_with(e: &mut Engine, extra_type: u8, words: &[(u32, u32)]) -> Ptr<BSExtraData> {
+        let extra = extra_of_type(e, extra_type);
+        for &(offset, word) in words {
+            e.mem.set_u32(extra.addr() + offset, word);
+        }
+        extra
+    }
+
+    /// Links the extra data into a list and runs the save writer on it.
+    fn save_extras(e: &mut Engine, extras: &[Ptr<BSExtraData>]) {
+        let list: Ptr<ExtraDataList> = e.new_object();
+        for (index, extra) in extras.iter().enumerate() {
+            if let Some(next) = extras.get(index + 1) {
+                e.set(*extra, BSExtraData::pNext, next.cast());
+            }
+        }
+        if let Some(first) = extras.first() {
+            e.set(list, ExtraDataList::pHead, first.cast());
+        }
+        e.call(0x0041_2970, &args![list]);
+    }
+
+    /// Runs the save writer on one extra data and returns the chunks.
+    fn save_one(
+        e: &mut Engine,
+        chunks: &Chunks,
+        extra: Ptr<BSExtraData>,
+    ) -> Vec<(String, Vec<u8>)> {
+        chunks.borrow_mut().clear();
+        save_extras(e, &[extra]);
+        chunks.borrow().clone()
+    }
+
+    #[test]
+    fn save_writes_the_form_id_of_the_form_types() {
+        let (mut e, chunks) = save_engine();
+        let mut extras = vec![];
+        let cases = [
+            (0x03u8, "XCWT"),
+            (0x07, "XCMO"),
+            (0x08, "XCCM"),
+            (0x21, "XOWN"),
+            (0x22, "XGLB"),
+            (0x3f, "XPSN"),
+            (0x59, "XCIM"),
+            (0x81, "XCAS"),
+        ];
+        for (index, &(extra_type, _)) in cases.iter().enumerate() {
+            let form = form_with_id(&mut e, 0x1000 + index as u32);
+            extras.push(extra_with(&mut e, extra_type, &[(0x0c, form)]));
+        }
+        e.call_log = Some(vec![]);
+        save_extras(&mut e, &extras);
+        let log = e.call_log.take().unwrap();
+        let expected: Vec<_> = cases
+            .iter()
+            .enumerate()
+            .map(|(index, &(_, name))| chunk(name, word_bytes(&[0x1000 + index as u32])))
+            .collect();
+        assert_eq!(*chunks.borrow(), expected);
+        // One lock with no name, released at the end.
+        assert_eq!(calls_to(&log, LOCK), vec![vec![EXTRA_CRIT_SECTION, 0]]);
+        assert_locked_and_released(&log);
+    }
+
+    #[test]
+    fn save_skips_the_optional_forms_that_are_null() {
+        let (mut e, chunks) = save_engine();
+        let cases = [
+            (0x3bu8, "XRTM"),
+            (0x3c, "XMRC"),
+            (0x44, "XTRG"),
+            (0x51, "XLKR"),
+            (0x63, "XMBR"),
+            (0x67, "XEMI"),
+            (0x74, "XEZN"),
+        ];
+        for &(extra_type, name) in &cases {
+            let null = extra_with(&mut e, extra_type, &[(0x0c, 0)]);
+            assert!(save_one(&mut e, &chunks, null).is_empty(), "{name}");
+            let form = form_with_id(&mut e, 0x77);
+            let extra = extra_with(&mut e, extra_type, &[(0x0c, form)]);
+            assert_eq!(
+                save_one(&mut e, &chunks, extra),
+                vec![chunk(name, word_bytes(&[0x77]))],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_writes_the_scalar_types() {
+        let (mut e, chunks) = save_engine();
+        let bits = |value: f32| value.to_bits();
+        let cases: Vec<(u8, u32, &str, Vec<u8>)> = vec![
+            (0x0e, 0x1234_5678, "XACT", word_bytes(&[0x78])),
+            (0x1e, 0xdead_beef, "XLCM", word_bytes(&[0xdead_beef])),
+            (0x23, 0x0000_0007, "XRNK", word_bytes(&[7])),
+            (0x24, 0x0000_fffe, "XCNT", word_bytes(&[0xffff_fffe])),
+            (0x25, bits(12.75), "XHLT", word_bytes(&[12])),
+            (0x25, bits(-3.5), "XHLT", word_bytes(&[-3i32 as u32])),
+            (0x26, 0x1234_5609, "XUSE", word_bytes(&[9])),
+            (0x27, bits(2.5), "XTIM", word_bytes(&[bits(2.5)])),
+            (0x28, 0x7f80_0001, "XCHG", word_bytes(&[0x7fc0_0001])),
+            (0x5c, bits(-1.25), "XRDS", word_bytes(&[bits(-1.25)])),
+            (0x5d, bits(0.5), "XRAD", word_bytes(&[bits(0.5)])),
+            (0x7a, 0xff80_0001, "XHLP", word_bytes(&[0xffc0_0001])),
+            (0x8d, 0xffff_ff05, "XHLT", vec![5]),
+        ];
+        for (extra_type, word, name, data) in cases {
+            let extra = extra_with(&mut e, extra_type, &[(0x0c, word)]);
+            assert_eq!(
+                save_one(&mut e, &chunks, extra),
+                vec![chunk(name, data)],
+                "type {extra_type:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_writes_the_region_list_as_an_array_of_form_ids() {
+        let (mut e, chunks) = save_engine();
+        // The extra data points at an object whose list starts at +4.
+        let region_list = e.mem.alloc(0x20);
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let (form_a, form_b) = (form_with_id(&mut e, 0xa1), form_with_id(&mut e, 0xb2));
+        e.mem.set_u32(region_list + 4, form_a);
+        e.mem.set_u32(region_list + 8, first);
+        e.mem.set_u32(first, form_b);
+        e.mem.set_u32(first + 4, second);
+        e.mem.set_u32(second, 0);
+        // (the third node has no item: counted as no region, but the walk
+        // would ask it for a form id, so the list ends before it)
+        e.mem.set_u32(first + 4, 0);
+        let extra = extra_with(&mut e, 0x04, &[(0x0c, region_list)]);
+        e.call_log = Some(vec![]);
+        let saved = save_one(&mut e, &chunks, extra);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(saved, vec![chunk("XCLR", word_bytes(&[0xa1, 0xb2]))]);
+        // The 8-byte buffer is freed after the chunk is added.
+        let size = calls_to(&log, OPERATOR_NEW);
+        assert_eq!(size, vec![vec![8]]);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE).len(), 1);
+
+        // No regions (an empty first node), or no list at all: nothing.
+        let empty_list = e.mem.alloc(0x20);
+        let extra = extra_with(&mut e, 0x04, &[(0x0c, empty_list)]);
+        assert!(save_one(&mut e, &chunks, extra).is_empty());
+        let extra = extra_with(&mut e, 0x04, &[(0x0c, 0)]);
+        assert!(save_one(&mut e, &chunks, extra).is_empty());
+    }
+
+    #[test]
+    fn save_writes_the_distant_data_as_three_words() {
+        let (mut e, chunks) = save_engine();
+        let extra = extra_with(&mut e, 0x13, &[(0x0c, 1), (0x10, 2), (0x14, 3)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XLOD", word_bytes(&[1, 2, 3]))]
+        );
+    }
+
+    #[test]
+    fn save_hands_the_member_to_the_saver_of_its_class() {
+        let (mut e, chunks) = save_engine();
+        for (extra_type, name, saver) in [
+            (0x14u8, None, RAGDOLL_DATA_SAVE),
+            (0x2b, None, TELEPORT_DATA_SAVE),
+            (0x2c, Some("XMRK"), MAP_MARKER_DATA_SAVE),
+            (0x90, Some("MMRK"), AUDIO_MARKER_DATA_SAVE),
+            (0x91, Some("AMRK"), AUDIO_BUOY_MARKER_DATA_SAVE),
+        ] {
+            let extra = extra_with(&mut e, extra_type, &[(0x0c, 0x4242)]);
+            e.call_log = Some(vec![]);
+            let saved = save_one(&mut e, &chunks, extra);
+            let log = e.call_log.take().unwrap();
+            let expected: Vec<_> = name.map(|n| chunk(n, vec![])).into_iter().collect();
+            assert_eq!(saved, expected, "type {extra_type:#x}");
+            assert_eq!(calls_to(&log, saver), vec![vec![0x4242]]);
+        }
+        // The multibound data is only saved when there is some.
+        let extra = extra_with(&mut e, 0x62, &[(0x0c, 0)]);
+        e.call_log = Some(vec![]);
+        save_one(&mut e, &chunks, extra);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, MULTIBOUND_MARKER_DATA_SAVE).is_empty());
+        let extra = extra_with(&mut e, 0x62, &[(0x0c, 0x99)]);
+        e.call_log = Some(vec![]);
+        save_one(&mut e, &chunks, extra);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, MULTIBOUND_MARKER_DATA_SAVE),
+            vec![vec![0x99]]
+        );
+    }
+
+    #[test]
+    fn save_writes_the_chunks_without_data() {
+        let (mut e, chunks) = save_engine();
+        for (extra_type, name) in [(0x61u8, "XMBP"), (0x80, "XIBS")] {
+            let extra = extra_of_type(&mut e, extra_type);
+            assert_eq!(save_one(&mut e, &chunks, extra), vec![chunk(name, vec![])]);
+        }
+        // Types that are not saved leave nothing.
+        for extra_type in [0x00u8, 0x05, 0x0b, 0x43, 0x93, 0xff] {
+            let extra = extra_of_type(&mut e, extra_type);
+            assert!(save_one(&mut e, &chunks, extra).is_empty());
+        }
+        // The seed byte comes from `GetSeed`.
+        let extra = extra_of_type(&mut e, 0x31);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XSED", vec![0x7b])]
+        );
+    }
+
+    #[test]
+    fn save_package_start_location_is_five_words_with_the_cell_as_a_form_id() {
+        let (mut e, chunks) = save_engine();
+        let cell = form_with_id(&mut e, 0xce11);
+        let extra = extra_with(
+            &mut e,
+            0x18,
+            &[(0x0c, cell), (0x10, 0x11), (0x14, 0x22), (0x18, 0x33)],
+        );
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XPSL", word_bytes(&[0xce11, 0x11, 0x22, 0x33, 0]))]
+        );
+        // On a big-endian target the first four words are swapped.
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        let swapped: Vec<u32> = [0xce11u32, 0x11, 0x22, 0x33]
+            .iter()
+            .map(|w| w.swap_bytes())
+            .collect();
+        assert_eq!(
+            saved,
+            vec![chunk(
+                "XPSL",
+                [word_bytes(&swapped), word_bytes(&[0])].concat()
+            )]
+        );
+    }
+
+    #[test]
+    fn save_lock_copies_the_level_flags_and_key_id() {
+        let (mut e, chunks) = save_engine();
+        let key = form_with_id(&mut e, 0x4b);
+        let lock_data = e.mem.alloc(0x14);
+        e.mem.set_u8(lock_data, 0x55);
+        e.mem.set_u32(lock_data + 4, key);
+        e.mem.set_u8(lock_data + 8, 0x99);
+        e.mem.set_u32(lock_data + 0x0c, 0x1111);
+        e.mem.set_u32(lock_data + 0x10, 0x2222);
+        let extra = extra_with(&mut e, 0x2a, &[(0x0c, lock_data)]);
+        // The tries and times unlocked are not copied.
+        let mut expected = vec![0x55, 0, 0, 0];
+        expected.extend(word_bytes(&[0x4b]));
+        expected.extend([0x99, 0, 0, 0]);
+        expected.extend(word_bytes(&[0, 0]));
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XLOC", expected)]
+        );
+
+        // No key: 0. Big-endian: only the key id is swapped.
+        e.mem.set_u32(lock_data + 4, 0);
+        let mut expected = vec![0x55, 0, 0, 0];
+        expected.extend(word_bytes(&[0]));
+        expected.extend([0x99, 0, 0, 0]);
+        expected.extend(word_bytes(&[0, 0]));
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XLOC", expected)]
+        );
+        e.mem.set_u32(lock_data + 4, key);
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1[4..8], 0x4bu32.swap_bytes().to_le_bytes());
+        assert_eq!(saved[0].1[0], 0x55);
+    }
+
+    #[test]
+    fn save_enable_state_parent_is_the_form_id_and_the_flags_byte() {
+        let (mut e, chunks) = save_engine();
+        let parent = form_with_id(&mut e, 0x9a);
+        let extra = extra_with(&mut e, 0x37, &[(0x0c, parent), (0x10, 0x0102_0304)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk(
+                "XESP",
+                [word_bytes(&[0x9a]), vec![4, 0, 0, 0]].concat()
+            )]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1[..4], 0x9au32.swap_bytes().to_le_bytes());
+        // No parent: nothing.
+        e.set_global(BIG_ENDIAN_FLAG, 0u8);
+        let orphan = extra_with(&mut e, 0x37, &[(0x0c, 0)]);
+        assert!(save_one(&mut e, &chunks, orphan).is_empty());
+    }
+
+    /// An inline list head at `extra + 0x0c` with the given item pointers
+    /// (nodes after the first are allocated).
+    fn put_inline_list(e: &mut Engine, extra: Ptr<BSExtraData>, items: &[u32]) {
+        let mut node = extra.addr() + 0x0c;
+        for (index, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if index + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+    }
+
+    #[test]
+    fn save_decal_refs_writes_one_record_per_decal() {
+        let (mut e, chunks) = save_engine();
+        let first_ref = form_with_id(&mut e, 0xd1);
+        let second_ref = form_with_id(&mut e, 0xd2);
+        let first = e.mem.alloc(0x1c);
+        let second = e.mem.alloc(0x1c);
+        e.mem.set_u32(first, first_ref);
+        e.mem.set_u32(second, second_ref);
+        for index in 1..7 {
+            e.mem.set_u32(first + 4 * index, 0x100 + index);
+            e.mem.set_u32(second + 4 * index, 0x200 + index);
+        }
+        let extra = extra_of_type(&mut e, 0x57);
+        put_inline_list(&mut e, extra, &[first, second]);
+        let record = |id: u32, base: u32| {
+            let mut words = vec![id];
+            words.extend((1..7).map(|index| base + index));
+            chunk("XDCR", word_bytes(&words))
+        };
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![record(0xd1, 0x100), record(0xd2, 0x200)]
+        );
+        // Big-endian: all seven words are swapped.
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1[..4], 0xd1u32.swap_bytes().to_le_bytes());
+        assert_eq!(saved[0].1[24..], 0x106u32.swap_bytes().to_le_bytes());
+        // An empty list writes nothing.
+        e.set_global(BIG_ENDIAN_FLAG, 0u8);
+        let empty = extra_of_type(&mut e, 0x57);
+        assert!(save_one(&mut e, &chunks, empty).is_empty());
+    }
+
+    #[test]
+    fn save_reflector_refs_and_lit_water_refs_walk_their_lists() {
+        let (mut e, chunks) = save_engine();
+        let reference = form_with_id(&mut e, 0x71);
+        let pair = e.mem.alloc(8);
+        e.mem.set_u32(pair, reference);
+        e.mem.set_u32(pair + 4, 0x5eed);
+        let extra = extra_of_type(&mut e, 0x66);
+        put_inline_list(&mut e, extra, &[pair]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XPWR", word_bytes(&[0x71, 0x5eed]))]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(
+            saved[0].1,
+            word_bytes(&[0x71u32.swap_bytes(), 0x5eedu32.swap_bytes()])
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 0u8);
+
+        let (water_a, water_b) = (form_with_id(&mut e, 0xa), form_with_id(&mut e, 0xb));
+        let extra = extra_of_type(&mut e, 0x85);
+        put_inline_list(&mut e, extra, &[water_a, water_b]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![
+                chunk("XLTW", word_bytes(&[0xa])),
+                chunk("XLTW", word_bytes(&[0xb]))
+            ]
+        );
+    }
+
+    #[test]
+    fn save_radio_data_swaps_the_position_reference_for_its_form_id() {
+        let (mut e, chunks) = save_engine();
+        let position = form_with_id(&mut e, 0xf00d);
+        let extra = extra_with(
+            &mut e,
+            0x68,
+            &[
+                (0x0c, 0x1111),
+                (0x10, 0x2222),
+                (0x14, 0x3333),
+                (0x18, position),
+            ],
+        );
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XRDO", word_bytes(&[0x1111, 0x2222, 0x3333, 0xf00d]))]
+        );
+        // The extra data gets its reference back.
+        assert_eq!(e.mem.u32(extra.addr() + 0x18), position);
+        // No position reference: the word stays 0.
+        e.mem.set_u32(extra.addr() + 0x18, 0);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XRDO", word_bytes(&[0x1111, 0x2222, 0x3333, 0]))]
+        );
+    }
+
+    #[test]
+    fn save_primitive_is_radii_colour_and_type() {
+        let (mut e, chunks) = save_engine();
+        let primitive = e.mem.alloc(0x40);
+        e.mem.set_u32(primitive + 4, 3);
+        for index in 0..4 {
+            e.mem.set_u32(primitive + 8 + 4 * index, 0xc0 + index);
+        }
+        for index in 0..3 {
+            e.mem.set_u32(primitive + 0x18 + 4 * index, 0xa0 + index);
+        }
+        let extra = extra_with(&mut e, 0x6b, &[(0x0c, primitive)]);
+        let expected = [0xa0, 0xa1, 0xa2, 0xc0, 0xc1, 0xc2, 0xc3, 3];
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XPRM", word_bytes(&expected))]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let swapped: Vec<u32> = expected.iter().map(|w: &u32| w.swap_bytes()).collect();
+        assert_eq!(save_one(&mut e, &chunks, extra)[0].1, word_bytes(&swapped));
+    }
+
+    #[test]
+    fn save_ammo_writes_the_form_id_then_the_count() {
+        let (mut e, chunks) = save_engine();
+        let ammo = form_with_id(&mut e, 0xa44);
+        let extra = extra_with(&mut e, 0x6e, &[(0x0c, ammo), (0x10, 25)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![
+                chunk("XAMT", word_bytes(&[0xa44])),
+                chunk("XAMC", word_bytes(&[25]))
+            ]
+        );
+        let extra = extra_with(&mut e, 0x6e, &[(0x0c, 0), (0x10, 7)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![
+                chunk("XAMT", word_bytes(&[0])),
+                chunk("XAMC", word_bytes(&[7]))
+            ]
+        );
+    }
+
+    #[test]
+    fn save_patrol_data_writes_the_time_and_hands_over_the_package_action() {
+        let (mut e, chunks) = save_engine();
+        let patrol = e.mem.alloc(0x20);
+        e.mem.set_f32(patrol, 6.5);
+        let extra = extra_with(&mut e, 0x6f, &[(0x0c, patrol)]);
+        e.call_log = Some(vec![]);
+        let saved = save_one(&mut e, &chunks, extra);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(saved, vec![chunk("XPRD", word_bytes(&[6.5f32.to_bits()]))]);
+        assert_eq!(
+            calls_to(&log, PACKAGE_EVENT_ACTION_SAVE),
+            vec![vec![patrol + 4, 0x4150_5058]]
+        );
+    }
+
+    #[test]
+    fn save_planes_write_extents_centre_and_axis_angle() {
+        let (mut e, chunks) = save_engine();
+        e.register(MATRIX_TO_AXIS_ANGLE, |e, a| {
+            // (matrix, angle, x, y, z)
+            e.mem.set_f32(a[1], 0.75);
+            e.mem.set_f32(a[2], 1.0);
+            e.mem.set_f32(a[3], 0.0);
+            e.mem.set_f32(a[4], -1.0);
+            returns(1)
+        });
+        let plane = e.mem.alloc(0x100);
+        e.mem.set_u32(plane + 0x14, 0xe1);
+        e.mem.set_u32(plane + 0x18, 0xe2);
+        for index in 0..3 {
+            e.mem.set_u32(plane + 8 + 4 * index, 0xc0 + index);
+        }
+        for index in 0..9 {
+            e.mem.set_u32(plane + 0x1c + 4 * index, 0x500 + index);
+        }
+        let expected = [
+            0xe1,
+            0xe2,
+            0xc0,
+            0xc1,
+            0xc2,
+            1.0f32.to_bits(),
+            0.0f32.to_bits(),
+            (-1.0f32).to_bits(),
+            0.75f32.to_bits(),
+        ];
+        for (extra_type, name) in [(0x71u8, "XOCP"), (0x78, "XPTL")] {
+            let extra = extra_with(&mut e, extra_type, &[(0x0c, plane)]);
+            e.call_log = Some(vec![]);
+            let saved = save_one(&mut e, &chunks, extra);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(saved, vec![chunk(name, word_bytes(&expected))]);
+            // The matrix handed over is a copy of the nine words at +0x1c.
+            let angles = calls_to(&log, MATRIX_TO_AXIS_ANGLE);
+            assert_eq!(angles.len(), 1);
+            assert_ne!(angles[0][0], plane + 0x1c);
+        }
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let extra = extra_with(&mut e, 0x71, &[(0x0c, plane)]);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1[..4], 0xe1u32.swap_bytes().to_le_bytes());
+        assert_eq!(
+            saved[0].1[32..],
+            0.75f32.to_bits().swap_bytes().to_le_bytes()
+        );
+    }
+
+    #[test]
+    fn save_collision_data_swaps_the_word_in_place_around_the_chunk() {
+        let (mut e, chunks) = save_engine();
+        let word = e.mem.alloc(8);
+        e.mem.set_u32(word, 0x0102_0304);
+        let extra = extra_with(&mut e, 0x72, &[(0x0c, word)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XTRI", word_bytes(&[0x0102_0304]))]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XTRI", word_bytes(&[0x0403_0201]))]
+        );
+        assert_eq!(e.mem.u32(word), 0x0102_0304);
+    }
+
+    #[test]
+    fn save_linked_reference_tables_write_form_ids_or_zero() {
+        let (mut e, chunks) = save_engine();
+        let (a, c) = (form_with_id(&mut e, 0x1a), form_with_id(&mut e, 0x1c));
+        let table = e.mem.alloc(16);
+        for (index, form) in [a, 0, c, 0].iter().enumerate() {
+            e.mem.set_u32(table + 4 * index as u32, *form);
+        }
+        let extra = extra_with(&mut e, 0x76, &[(0x0c, table)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XORD", word_bytes(&[0x1a, 0, 0x1c, 0]))]
+        );
+        let pair = e.mem.alloc(8);
+        e.mem.set_u32(pair, a);
+        let extra = extra_with(&mut e, 0x77, &[(0x0c, pair)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk("XPOD", word_bytes(&[0x1a, 0]))]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1, word_bytes(&[0x1au32.swap_bytes(), 0]));
+    }
+
+    #[test]
+    fn save_room_data_writes_the_count_with_the_master_flag_then_each_room() {
+        let (mut e, chunks) = save_engine();
+        let (room_a, room_b) = (form_with_id(&mut e, 0x2a), form_with_id(&mut e, 0x2b));
+        let data = e.mem.alloc(0x20);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(data + 8, room_a);
+        e.mem.set_u32(data + 12, second);
+        e.mem.set_u32(second, room_b);
+        let extra = extra_with(&mut e, 0x7b, &[(0x0c, data)]);
+        let expected = vec![
+            chunk("XRMR", word_bytes(&[2])),
+            chunk("XLRM", word_bytes(&[0x2a])),
+            chunk("XLRM", word_bytes(&[0x2b])),
+        ];
+        assert_eq!(save_one(&mut e, &chunks, extra), expected);
+        // The master flag (byte at +0x10) goes to bit 16 of the count.
+        e.mem.set_u8(data + 0x10, 1);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0], chunk("XRMR", word_bytes(&[0x1_0002])));
+        // An item that is null ends the walk.
+        e.mem.set_u32(second, 0);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved.len(), 2);
+    }
+
+    #[test]
+    fn save_activate_ref_writes_flags_entries_and_the_text_override() {
+        let (mut e, chunks) = save_engine();
+        let (ref_a, ref_b) = (form_with_id(&mut e, 0xaa), form_with_id(&mut e, 0xbb));
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(first, ref_a);
+        e.mem.set_u32(first + 4, 0x1);
+        e.mem.set_u32(second, ref_b);
+        e.mem.set_u32(second + 4, 0x2);
+        let extra = extra_of_type(&mut e, 0x53);
+        put_inline_list(&mut e, extra, &[first, second]);
+        e.mem.set_u8(extra.addr() + 0x14, 0x80);
+        let expected = vec![
+            chunk("XAPD", vec![0x80]),
+            chunk("XAPR", word_bytes(&[0xaa, 1])),
+            chunk("XAPR", word_bytes(&[0xbb, 2])),
+        ];
+        assert_eq!(save_one(&mut e, &chunks, extra), expected);
+
+        // With a text override: copied twice by the list's accessor.
+        let text = e.mem.alloc(8);
+        e.mem.set_cstr(text, b"Hi!");
+        e.mem.set_u16(extra.addr() + 0x18 + 4, 3);
+        e.register_double(GET_ACTIVATE_TEXT, move |e, a| {
+            e.mem.set_u32(a[1], text);
+            e.mem.set_u16(a[1] + 4, 3);
+            returns(a[1])
+        });
+        e.call_log = Some(vec![]);
+        let saved = save_one(&mut e, &chunks, extra);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(saved.len(), 4);
+        assert_eq!(saved[3], chunk("XATO", b"Hi!\0".to_vec()));
+        assert_eq!(calls_to(&log, GET_ACTIVATE_TEXT).len(), 2);
+        assert_eq!(calls_to(&log, STRING_DESTROY).len(), 2);
+    }
+
+    #[test]
+    fn save_navmesh_portal_writes_the_member_with_its_form_id() {
+        let (mut e, chunks) = save_engine();
+        let target = form_with_id(&mut e, 0x7a);
+        let extra = extra_with(&mut e, 0x5a, &[(0x0c, target), (0x10, 0x0002_0009)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![chunk(
+                "XNDP",
+                [word_bytes(&[0x7a]), vec![9, 0, 0, 0]].concat()
+            )]
+        );
+        e.set_global(BIG_ENDIAN_FLAG, 1u8);
+        let saved = save_one(&mut e, &chunks, extra);
+        assert_eq!(saved[0].1[..4], 0x7au32.swap_bytes().to_le_bytes());
+        assert_eq!(saved[0].1[4..6], 0x0009u16.swap_bytes().to_le_bytes());
+        // No target: nothing is written.
+        let empty = extra_with(&mut e, 0x5a, &[(0x0c, 0)]);
+        assert!(save_one(&mut e, &chunks, empty).is_empty());
+    }
+
+    #[test]
+    fn save_type_92_writes_the_word_and_the_float() {
+        let (mut e, chunks) = save_engine();
+        let extra = extra_with(&mut e, 0x92, &[(0x0c, 0x1234), (0x10, 0x7f80_0001)]);
+        assert_eq!(
+            save_one(&mut e, &chunks, extra),
+            vec![
+                chunk("XSRF", word_bytes(&[0x1234])),
+                chunk("XSRD", word_bytes(&[0x7fc0_0001]))
+            ]
+        );
+    }
+
+    // --- the loader ----------------------------------------------------------
+
+    use std::collections::VecDeque;
+
+    /// What the test `TESFile` offers the loader.
+    #[derive(Default)]
+    struct FileState {
+        /// The current chunk (four letters).
+        chunk: [u8; 4],
+        /// The words `GetChunkData(&value)` hands out in turn.
+        words: VecDeque<u32>,
+        /// The bytes `GetChunkData(buffer, size)` copies (as many as asked).
+        data: Vec<u8>,
+        /// The size of the current chunk.
+        size: u32,
+        /// The file's byte-swap flag.
+        swap: bool,
+    }
+
+    /// The loader's `this`, the test `TESFile` and the engine.
+    struct Loader {
+        e: Engine,
+        state: Shared<FileState>,
+        file: Ptr,
+        list: Ptr<ExtraDataList>,
+    }
+
+    impl Loader {
+        fn new() -> Loader {
+            let mut e = swap_engine();
+            e.map(0x0101_4000, 0x1000);
+            e.set_global(LOD_DEFAULT, 0.97f32);
+            let state: Shared<FileState> = Rc::default();
+            let file: Ptr = Ptr::new(e.mem.alloc(0x300));
+            let shared = state.clone();
+            e.register_double(GET_TES_CHUNK, move |_, _| {
+                returns(u32::from_le_bytes(shared.borrow().chunk))
+            });
+            let shared = state.clone();
+            e.register_double(GET_CHUNK_WORD, move |e, a| {
+                let word = shared.borrow_mut().words.pop_front().unwrap_or(0);
+                e.mem.set_u32(a[1], word);
+                returns(1)
+            });
+            let shared = state.clone();
+            e.register_double(GET_CHUNK_DATA, move |e, a| {
+                let data = shared.borrow().data.clone();
+                let count = (a[2] as usize).min(data.len());
+                e.mem.write(a[1], &data[..count]);
+                returns(1)
+            });
+            let shared = state.clone();
+            e.register_double(GET_CHUNK_SIZE, move |_, _| returns(shared.borrow().size));
+            let shared = state.clone();
+            e.register_double(FILE_NEEDS_SWAP, move |_, _| {
+                returns(shared.borrow().swap as u32)
+            });
+            e.register(SWAP_WORD_AT, |e, a| {
+                let value = e.mem.u32(a[0]);
+                e.mem.set_u32(a[0], value.swap_bytes());
+                Ret::default()
+            });
+            e.register(SWAP_WORD_AT_4, |e, a| {
+                let value = e.mem.u32(a[0] + 4);
+                e.mem.set_u32(a[0] + 4, value.swap_bytes());
+                Ret::default()
+            });
+            e.register(SWAP_TWO_WORDS, |e, a| {
+                for offset in [0, 4] {
+                    let value = e.mem.u32(a[0] + offset);
+                    e.mem.set_u32(a[0] + offset, value.swap_bytes());
+                }
+                Ret::default()
+            });
+            let list = e.new_object();
+            Loader {
+                e,
+                state,
+                file,
+                list,
+            }
+        }
+
+        /// Loads one chunk whose `GetChunkData(&value)` words, bytes and size
+        /// are given; returns the calls made.
+        fn run(&mut self, chunk: &[u8; 4], words: &[u32], data: &[u8], size: u32) -> Log {
+            self.run_with_buffer(chunk, words, data, size, Ptr::NULL)
+        }
+
+        fn run_with_buffer(
+            &mut self,
+            chunk: &[u8; 4],
+            words: &[u32],
+            data: &[u8],
+            size: u32,
+            buffer: Ptr,
+        ) -> Log {
+            {
+                let mut state = self.state.borrow_mut();
+                state.chunk = *chunk;
+                state.words = words.iter().copied().collect();
+                state.data = data.to_vec();
+                state.size = size;
+            }
+            self.e.call_log = Some(vec![]);
+            self.e
+                .call(0x0041_44a0, &args![self.list, self.file, buffer]);
+            self.e.call_log.take().unwrap()
+        }
+
+        fn swapping(&self, swap: bool) {
+            self.state.borrow_mut().swap = swap;
+        }
+    }
+
+    /// A double for `address` that records its arguments and `count` words at
+    /// the pointer in argument `index` (as they are when it is called).
+    fn capture_block(
+        e: &mut Engine,
+        address: u32,
+        index: usize,
+        count: u32,
+    ) -> Shared<Vec<(Vec<u32>, Vec<u32>)>> {
+        let seen: Shared<Vec<(Vec<u32>, Vec<u32>)>> = Rc::default();
+        let log = seen.clone();
+        e.register_double(address, move |e, a| {
+            let block = words(e, a[index], count);
+            log.borrow_mut().push((a.to_vec(), block));
+            Ret::default()
+        });
+        seen
+    }
+
+    fn bytes_of(words: &[u32]) -> Vec<u8> {
+        word_bytes(words)
+    }
+
+    #[test]
+    fn load_hands_one_word_to_the_setter_of_each_word_chunk() {
+        for &(name, setter) in LOAD_WORD_SETTERS {
+            let mut l = Loader::new();
+            stub(&mut l.e, setter);
+            let log = l.run(name, &[0x1234_5678], &[], 4);
+            assert_eq!(
+                calls_to(&log, setter),
+                vec![vec![l.list.addr(), 0x1234_5678]],
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+    }
+
+    #[test]
+    fn load_hands_one_float_to_the_setter_of_each_float_chunk() {
+        for &(name, setter) in LOAD_FLOAT_SETTERS {
+            let mut l = Loader::new();
+            stub(&mut l.e, setter);
+            let log = l.run(name, &[2.5f32.to_bits()], &[], 4);
+            assert_eq!(
+                calls_to(&log, setter),
+                vec![vec![l.list.addr(), 2.5f32.to_bits()]]
+            );
+            // A signalling NaN comes back quiet (x87 load and store).
+            let log = l.run(name, &[0x7f80_0001], &[], 4);
+            assert_eq!(
+                calls_to(&log, setter),
+                vec![vec![l.list.addr(), 0x7fc0_0001]]
+            );
+            // The local starts at 0.0 when the file gives nothing.
+            let log = l.run(name, &[], &[], 4);
+            assert_eq!(calls_to(&log, setter), vec![vec![l.list.addr(), 0]]);
+        }
+    }
+
+    #[test]
+    fn load_health_uses_and_count_convert_the_word() {
+        let mut l = Loader::new();
+        for setter in [SET_HEALTH, SET_USES, SET_COUNT] {
+            stub(&mut l.e, setter);
+        }
+        // The file holds an integer; the setter takes a float.
+        let log = l.run(b"XHLT", &[0xffff_fffd], &[], 4);
+        assert_eq!(
+            calls_to(&log, SET_HEALTH),
+            vec![vec![l.list.addr(), (-3.0f32).to_bits()]]
+        );
+        let log = l.run(b"XHLT", &[16_777_217], &[], 4);
+        assert_eq!(
+            calls_to(&log, SET_HEALTH),
+            vec![vec![l.list.addr(), 16_777_216.0f32.to_bits()]]
+        );
+        let log = l.run(b"XUSE", &[0x1234_5609], &[], 4);
+        assert_eq!(calls_to(&log, SET_USES), vec![vec![l.list.addr(), 9]]);
+        let log = l.run(b"XCNT", &[0x1234_ff02], &[], 4);
+        assert_eq!(calls_to(&log, SET_COUNT), vec![vec![l.list.addr(), 0xff02]]);
+    }
+
+    #[test]
+    fn load_ammo_chunks_set_the_count_or_the_ammo_and_999() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_AMMO);
+        let ammo_extra: Ptr = Ptr::new(l.e.mem.alloc(0x20));
+        l.e.mem.set_u32(ammo_extra.addr() + 0x0c, 0xa44);
+        let found = Rc::new(RefCell::new(0u32));
+        let shared = found.clone();
+        l.e.register_double(GET_AMMO, move |_, _| returns(*shared.borrow()));
+        // XAMC: nothing without an ammo extra data.
+        let log = l.run(b"XAMC", &[33], &[], 4);
+        assert!(calls_to(&log, SET_AMMO).is_empty());
+        *found.borrow_mut() = ammo_extra.addr();
+        let log = l.run(b"XAMC", &[33], &[], 4);
+        assert_eq!(
+            calls_to(&log, SET_AMMO),
+            vec![vec![l.list.addr(), 0xa44, 33]]
+        );
+        // XAMT: the ammo id with a count of 999.
+        let log = l.run(b"XAMT", &[0xa55], &[], 4);
+        assert_eq!(
+            calls_to(&log, SET_AMMO),
+            vec![vec![l.list.addr(), 0xa55, 0x3e7]]
+        );
+    }
+
+    #[test]
+    fn load_lock_reads_a_refr_lock_into_a_new_or_the_existing_extra_data() {
+        let mut l = Loader::new();
+        l.e.register(EXTRA_LOCK_INIT, |e, a| {
+            e.mem.set_u8(a[0] + 4, 0x2a);
+            e.mem.set_u32(a[0] + 0x0c, a[1]);
+            returns(a[0])
+        });
+        stub(&mut l.e, REFR_LOCK_SET_LOCKED);
+        let data: Vec<u8> = (1..=20).collect();
+        let log = l.run(b"XLOC", &[], &data, 0x14);
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x2a]);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        let lock_data = l.e.mem.u32(extra.addr() + 0x0c);
+        assert_eq!(l.e.mem.bytes(lock_data, 0x14), data);
+        // The lock data (0x14) and the extra data (0x10) were allocated.
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14], vec![0x10]]);
+        assert_eq!(
+            calls_to(&log, REFR_LOCK_SET_LOCKED),
+            vec![vec![lock_data, 1]]
+        );
+        assert!(calls_to(&log, SWAP_WORD_AT_4).is_empty());
+
+        // Again: the lock data of the extra data is reused, and swapped first
+        // on a file that needs it.
+        l.swapping(true);
+        let log = l.run(b"XLOC", &[], &[0xff; 0x14], 0x14);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x2a]);
+        assert_eq!(l.e.mem.u32(lock_data + 4), 0xffff_ffff);
+        assert_eq!(calls_to(&log, SWAP_WORD_AT_4), vec![vec![lock_data]]);
+    }
+
+    #[test]
+    fn load_radio_data_starts_from_its_defaults() {
+        let mut l = Loader::new();
+        let seen = capture_block(&mut l.e, SET_RADIO_DATA, 1, 4);
+        let log = l.run(b"XRDO", &[], &[], 0x10);
+        assert_eq!(seen.borrow()[0].1, vec![0, 1, 0, 0]);
+        assert!(calls_to(&log, SWAP_DWORD).is_empty());
+        l.swapping(true);
+        let data = bytes_of(&[0x0102_0304, 2, 0x0a0b_0c0d, 0x1111_2222]);
+        l.run(b"XRDO", &[], &data, 0x10);
+        assert_eq!(
+            seen.borrow()[1].1,
+            vec![0x0403_0201, 0x0200_0000, 0x0d0c_0b0a, 0x2222_1111]
+        );
+        assert_eq!(seen.borrow()[1].0[0], l.list.addr());
+    }
+
+    #[test]
+    fn load_members_are_built_when_missing_and_then_loaded() {
+        // (chunk, getter, size, constructor, setter, loader)
+        let cases = [
+            (
+                b"XTEL",
+                GET_TELEPORT,
+                0x20,
+                DOOR_TELEPORT_DATA_INIT,
+                SET_TELEPORT,
+                DOOR_TELEPORT_DATA_LOAD,
+            ),
+            (
+                b"XMRK",
+                GET_MAP_MARKER,
+                0x14,
+                MAP_MARKER_DATA_INIT,
+                SET_MAP_MARKER,
+                MAP_MARKER_DATA_LOAD,
+            ),
+            (
+                b"MMRK",
+                GET_AUDIO_MARKER,
+                0x34,
+                AUDIO_MARKER_DATA_INIT,
+                SET_AUDIO_MARKER,
+                AUDIO_MARKER_DATA_LOAD,
+            ),
+            (
+                b"AMRK",
+                GET_AUDIO_BUOY_MARKER,
+                0x08,
+                AUDIO_BUOY_MARKER_DATA_INIT,
+                SET_AUDIO_BUOY_MARKER,
+                AUDIO_BUOY_MARKER_DATA_LOAD,
+            ),
+        ];
+        for (name, getter, size, constructor, setter, loader) in cases {
+            let mut l = Loader::new();
+            let existing = Rc::new(RefCell::new(0u32));
+            let shared = existing.clone();
+            l.e.register_double(getter, move |_, _| returns(*shared.borrow()));
+            l.e.register(constructor, |_, a| returns(a[0]));
+            stub(&mut l.e, setter);
+            stub(&mut l.e, loader);
+            let log = l.run(name, &[], &[], 0);
+            let made = calls_to(&log, constructor);
+            assert_eq!(made.len(), 1);
+            assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![size]]);
+            assert_eq!(
+                calls_to(&log, setter),
+                vec![vec![l.list.addr(), made[0][0]]]
+            );
+            assert_eq!(
+                calls_to(&log, loader),
+                vec![vec![made[0][0], l.file.addr()]]
+            );
+
+            // An existing member is loaded in place.
+            *existing.borrow_mut() = 0x7777;
+            let log = l.run(name, &[], &[], 0);
+            assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+            assert!(calls_to(&log, setter).is_empty());
+            assert_eq!(calls_to(&log, loader), vec![vec![0x7777, l.file.addr()]]);
+        }
+    }
+
+    #[test]
+    fn load_seed_is_a_byte_from_a_word_or_a_one_byte_chunk() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_SEED);
+        let log = l.run(b"XSED", &[0x1234_56ab], &[], 4);
+        assert_eq!(calls_to(&log, SET_SEED), vec![vec![l.list.addr(), 0xab]]);
+        let log = l.run(b"XSED", &[0x1234_56ab], &[0x42], 1);
+        assert_eq!(calls_to(&log, SET_SEED), vec![vec![l.list.addr(), 0x42]]);
+        let log = l.run(b"XSED", &[], &[], 1);
+        assert_eq!(calls_to(&log, SET_SEED), vec![vec![l.list.addr(), 0]]);
+    }
+
+    #[test]
+    fn load_region_list_gathers_the_known_regions() {
+        let mut l = Loader::new();
+        l.e.set_global(DATA_HANDLER, 0x1111u32);
+        l.e.register(REGION_LIST_INIT, |_, a| returns(a[0]));
+        l.e.register(DATA_HANDLER_REGIONS, |_, a| returns(a[0] + 0x1000));
+        // The file's ids become ids of the load order (+0x0100_0000).
+        l.e.register(ADD_COMPILE_INDEX, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id + 0x0100_0000);
+            Ret::default()
+        });
+        // Only id 0x0100_0002 is a known region.
+        l.e.register(REGION_LIST_FIND, |_, a| {
+            returns(if a[1] == 0x0100_0002 { 0x5e91 } else { 0 })
+        });
+        stub(&mut l.e, REGION_LIST_ADD);
+        stub(&mut l.e, SET_REGION_LIST);
+        let data = bytes_of(&[1, 2, 3]);
+        let log = l.run(b"XCLR", &[], &data, 12);
+        let region_list = calls_to(&log, REGION_LIST_INIT);
+        assert_eq!(region_list.len(), 1);
+        assert_eq!(region_list[0][1], 0);
+        assert_eq!(
+            calls_to(&log, REGION_LIST_FIND),
+            vec![
+                vec![0x1111 + 0x1000, 0x0100_0001],
+                vec![0x1111 + 0x1000, 0x0100_0002],
+                vec![0x1111 + 0x1000, 0x0100_0003]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, REGION_LIST_ADD),
+            vec![vec![region_list[0][0], 0x5e91]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_REGION_LIST),
+            vec![vec![l.list.addr(), region_list[0][0]]]
+        );
+        // The buffer of three ids is allocated and freed.
+        let buffer = calls_to(&log, OPERATOR_NEW);
+        assert_eq!(buffer.last().unwrap(), &vec![12]);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE).len(), 1);
+
+        // A file that needs it has each id swapped first.
+        l.swapping(true);
+        let log = l.run(b"XCLR", &[], &bytes_of(&[0x0100_0000]), 4);
+        assert_eq!(calls_to(&log, SWAP_DWORD).len(), 1);
+        assert_eq!(calls_to(&log, ADD_COMPILE_INDEX).len(), 1);
+    }
+
+    #[test]
+    fn load_region_list_of_a_bad_size_only_logs_the_file_name() {
+        let mut l = Loader::new();
+        l.e.register(FILE_NAME, |_, a| returns(a[0] + 0x20));
+        stub(&mut l.e, LOG_MESSAGE);
+        let log = l.run(b"XCLR", &[], &[], 6);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_BAD_REGION_LIST, l.file.addr() + 0x20]]
+        );
+        assert!(calls_to(&log, REGION_LIST_INIT).is_empty());
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn load_package_start_location_passes_the_record_to_the_setter() {
+        let mut l = Loader::new();
+        stub(&mut l.e, PATH_LOCATION_INIT);
+        let seen = capture_block(&mut l.e, SET_PACKAGE_START_LOCATION, 3, 3);
+        let data = bytes_of(&[0xce11, 1, 2, 3, 0x7f80_0001]);
+        l.run(b"XPSL", &[], &data, 0x14);
+        let (args, block) = seen.borrow()[0].clone();
+        assert_eq!(args[..3], [l.list.addr(), 0xce11, 0]);
+        assert_eq!(block, vec![1, 2, 3]);
+        // The z rotation word goes through the x87 stack.
+        assert_eq!(args[4], 0x7fc0_0001);
+        // On a big-endian file the first four words are swapped.
+        l.swapping(true);
+        l.run(b"XPSL", &[], &data, 0x14);
+        let (args, block) = seen.borrow()[1].clone();
+        assert_eq!(args[1], 0xce11u32.swap_bytes());
+        assert_eq!(
+            block,
+            vec![1u32.swap_bytes(), 2u32.swap_bytes(), 3u32.swap_bytes()]
+        );
+        assert_eq!(args[4], 0x7fc0_0001);
+    }
+
+    #[test]
+    fn load_ragdoll_is_built_once_and_removed_when_it_fails() {
+        let mut l = Loader::new();
+        l.e.register(EXTRA_RAGDOLL_DATA_INIT, |e, a| {
+            e.mem.set_u32(a[0], VTABLE);
+            e.mem.set_u8(a[0] + 4, 0x14);
+            returns(a[0])
+        });
+        l.e.register(RAGDOLL_DATA_INIT, |_, a| returns(a[0]));
+        stub(&mut l.e, LOG_MESSAGE);
+        let loads = Rc::new(RefCell::new(true));
+        let shared = loads.clone();
+        l.e.register_double(RAGDOLL_DATA_LOAD, move |_, _| {
+            returns(*shared.borrow() as u32)
+        });
+        let log = l.run(b"XRGD", &[], &[], 0);
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x14]);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        let ragdoll = l.e.mem.u32(extra.addr() + 0x0c);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10], vec![0x14]]);
+        assert_eq!(
+            calls_to(&log, RAGDOLL_DATA_LOAD),
+            vec![vec![ragdoll, l.file.addr()]]
+        );
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+
+        // The other chunk name reaches the same code; the existing extra data
+        // is used, and a failed load removes (and deletes) it.
+        *loads.borrow_mut() = false;
+        let log = l.run(b"XRGB", &[], &[], 0);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(calls_to(&log, LOG_MESSAGE), vec![vec![MESSAGE_BAD_RAGDOLL]]);
+        assert_eq!(deleted(&log), vec![extra.addr()]);
+        assert!(chain_types(&l.e, l.list.cast()).is_empty());
+    }
+
+    #[test]
+    fn load_distant_data_defaults_its_third_float() {
+        let mut l = Loader::new();
+        let seen = capture_block(&mut l.e, SET_DISTANT_DATA, 1, 3);
+        l.run(b"XLOD", &[], &[], 12);
+        assert_eq!(seen.borrow()[0].1, vec![0, 0, 0.97f32.to_bits()]);
+        let data = bytes_of(&[1, 2, 3]);
+        let log = l.run(b"XLOD", &[], &data, 12);
+        assert_eq!(seen.borrow()[1].1, vec![1, 2, 3]);
+        assert!(calls_to(&log, SWAP_DWORD).is_empty());
+        l.swapping(true);
+        let log = l.run(b"XLOD", &[], &data, 12);
+        assert_eq!(calls_to(&log, SWAP_DWORD).len(), 3);
+        assert_eq!(
+            seen.borrow()[2].1,
+            vec![1u32.swap_bytes(), 2u32.swap_bytes(), 3u32.swap_bytes()]
+        );
+    }
+
+    #[test]
+    fn load_enable_state_parent_hands_the_id_and_the_flags_byte() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_ENABLE_STATE_PARENT);
+        stub(&mut l.e, SET_ENABLE_STATE_FLAGS);
+        let mut data = bytes_of(&[0x0102_0304]);
+        data.extend([0x81, 0xee, 0xee, 0xee]);
+        let log = l.run(b"XESP", &[], &data, 8);
+        assert_eq!(
+            calls_to(&log, SET_ENABLE_STATE_PARENT),
+            vec![vec![l.list.addr(), 0x0102_0304]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_ENABLE_STATE_FLAGS),
+            vec![vec![l.list.addr(), 0x81]]
+        );
+        l.swapping(true);
+        let log = l.run(b"XESP", &[], &data, 8);
+        assert_eq!(
+            calls_to(&log, SET_ENABLE_STATE_PARENT),
+            vec![vec![l.list.addr(), 0x0403_0201]]
+        );
+    }
+
+    fn activate_engine() -> Loader {
+        let mut l = Loader::new();
+        l.e.register(ACTIVATE_REF_INIT, |e, a| {
+            e.mem.set_u8(a[0] + 4, 0x53);
+            returns(a[0])
+        });
+        l
+    }
+
+    #[test]
+    fn load_activate_flags_use_a_word_or_a_byte_chunk() {
+        let mut l = activate_engine();
+        let log = l.run(b"XAPD", &[0x1234_5680], &[], 4);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x20]]);
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x53]);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        assert_eq!(l.e.mem.u8(extra.addr() + 0x14), 0x80);
+        // Existing extra data, a one-byte chunk.
+        let log = l.run(b"XAPD", &[], &[0x42], 1);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(l.e.mem.u8(extra.addr() + 0x14), 0x42);
+    }
+
+    #[test]
+    fn load_activate_text_override_is_read_whole_and_freed() {
+        let mut l = activate_engine();
+        let texts: Shared<Vec<Vec<u8>>> = Rc::default();
+        let log = texts.clone();
+        l.e.register_double(SET_ACTIVATE_TEXT_OVERRIDE, move |e, a| {
+            log.borrow_mut().push(e.mem.cstr(a[1]));
+            Ret::default()
+        });
+        let run = l.run(b"XATO", &[], b"Use\0", 4);
+        assert_eq!(*texts.borrow(), vec![b"Use".to_vec()]);
+        let buffer = calls_to(&run, SET_ACTIVATE_TEXT_OVERRIDE)[0][1];
+        assert_eq!(calls_to(&run, OPERATOR_DELETE), vec![vec![buffer]]);
+        // Sizes up to 1 read nothing, but the extra data is still ensured.
+        let mut l = activate_engine();
+        stub(&mut l.e, SET_ACTIVATE_TEXT_OVERRIDE);
+        let run = l.run(b"XATO", &[], b"\0", 1);
+        assert!(calls_to(&run, SET_ACTIVATE_TEXT_OVERRIDE).is_empty());
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x53]);
+    }
+
+    #[test]
+    fn load_activate_entries_are_added_to_the_parent_list() {
+        let mut l = activate_engine();
+        let seen = capture_block(&mut l.e, LIST_ADD_HEAD, 1, 1);
+        // XAPR: 8 bytes, [reference id, delay].
+        l.run(b"XAPR", &[], &bytes_of(&[0xaa, 0xbb]), 8);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        let (args, block) = seen.borrow()[0].clone();
+        assert_eq!(args[0], extra.addr() + 0x0c);
+        assert_eq!(words(&l.e, block[0], 2), vec![0xaa, 0xbb]);
+        l.swapping(true);
+        l.run(b"XAPR", &[], &bytes_of(&[0xaa, 0xbb]), 8);
+        let (_, block) = seen.borrow()[1].clone();
+        assert_eq!(
+            words(&l.e, block[0], 2),
+            vec![0xaau32.swap_bytes(), 0xbbu32.swap_bytes()]
+        );
+        l.swapping(false);
+
+        // XACR: the old record [reference id, delay, flags byte].
+        let mut old = bytes_of(&[0x5a, 0x7f80_0001]);
+        old.extend([0x09, 0, 0, 0]);
+        l.run(b"XACR", &[], &old, 12);
+        let (args, block) = seen.borrow()[2].clone();
+        assert_eq!(args[0], extra.addr() + 0x0c);
+        // The delay is a float, so a signalling NaN comes back quiet.
+        assert_eq!(words(&l.e, block[0], 2), vec![0x5a, 0x7fc0_0001]);
+        assert_eq!(l.e.mem.u8(extra.addr() + 0x14), 9);
+        l.swapping(true);
+        l.run(b"XACR", &[], &old, 12);
+        let (_, block) = seen.borrow()[3].clone();
+        assert_eq!(l.e.mem.u32(block[0]), 0x5au32.swap_bytes());
+    }
+
+    #[test]
+    fn load_decal_adds_the_reference_with_its_intersection_and_normal() {
+        let mut l = Loader::new();
+        stub(&mut l.e, DECAL_DATA_INIT);
+        let seen = capture_block(&mut l.e, ADD_DECAL_REF, 2, 3);
+        let data = bytes_of(&[0xde, 1, 2, 3, 4, 5, 6]);
+        l.run(b"XDCR", &[], &data, 0x1c);
+        let (args, block) = seen.borrow()[0].clone();
+        assert_eq!(args[..2], [l.list.addr(), 0xde]);
+        assert_eq!(args[3] - args[2], 12);
+        assert_eq!(block, vec![1, 2, 3]);
+        assert_eq!(words(&l.e, args[3], 3), vec![4, 5, 6]);
+        l.swapping(true);
+        let log = l.run(b"XDCR", &[], &data, 0x1c);
+        assert_eq!(calls_to(&log, SWAP_DWORD).len(), 7);
+        assert_eq!(seen.borrow()[1].0[1], 0xdeu32.swap_bytes());
+    }
+
+    #[test]
+    fn load_multibound_data_is_built_loaded_and_set() {
+        let mut l = Loader::new();
+        l.e.register(MULTIBOUND_MARKER_DATA_INIT, |_, a| returns(a[0]));
+        stub(&mut l.e, MULTIBOUND_MARKER_DATA_LOAD);
+        stub(&mut l.e, SET_MULTIBOUND_DATA);
+        let log = l.run(b"XMBO", &[], &[], 0);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x0c]]);
+        let bound = calls_to(&log, MULTIBOUND_MARKER_DATA_INIT)[0][0];
+        assert_eq!(
+            calls_to(&log, MULTIBOUND_MARKER_DATA_LOAD),
+            vec![vec![bound, l.file.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_MULTIBOUND_DATA),
+            vec![vec![l.list.addr(), bound]]
+        );
+    }
+
+    #[test]
+    fn load_skips_and_drops_the_chunks_nothing_uses() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SKIP_CHUNK);
+        let log = l.run(b"XPCI", &[], &[], 0);
+        assert_eq!(calls_to(&log, SKIP_CHUNK), vec![vec![l.file.addr()]]);
+        for name in [b"XCMT", b"XCET"] {
+            let log = l.run(name, &[], &[0x33], 1);
+            assert_eq!(
+                calls_to(&log, GET_CHUNK_DATA).len(),
+                1,
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+        // PTL: the plane record is read and dropped.
+        let log = l.run(b"XPTL", &[], &[0u8; 0x24], 0x24);
+        assert_eq!(calls_to(&log, GET_CHUNK_DATA).len(), 1);
+        assert_eq!(chain_types(&l.e, l.list.cast()), Vec::<u8>::new());
+        // An unknown chunk and no chunk at all do nothing.
+        let log = l.run(b"ZZZZ", &[], &[], 0);
+        assert_eq!(log.len(), 2);
+        let log = l.run(&[0; 4], &[], &[], 0);
+        assert_eq!(log.len(), 2);
+    }
+
+    #[test]
+    fn load_navmesh_portal_chunk_goes_to_the_portal_loader() {
+        let mut l = Loader::new();
+        stub(&mut l.e, NAVMESH_PORTAL_INIT);
+        stub(&mut l.e, NAVMESH_PORTAL_LOAD);
+        let buffer: Ptr = Ptr::new(l.e.mem.alloc(0x30));
+        let log = l.run_with_buffer(b"XNVP", &[], &[1, 2, 3, 4, 5, 6], 6, buffer);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![6]]);
+        let load = calls_to(&log, NAVMESH_PORTAL_LOAD);
+        assert_eq!(load.len(), 1);
+        assert_eq!(load[0][1..3], [buffer.addr(), l.file.addr()]);
+        let data = load[0][3];
+        assert_eq!(l.e.mem.bytes(data, 6), vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+    }
+
+    #[test]
+    fn load_old_navmesh_portal_builds_a_type_5a_extra_data_on_the_stack() {
+        let mut l = Loader::new();
+        l.e.register(NAVMESH_PORTAL_COPY, |e, a| {
+            let first = e.mem.u32(a[1]);
+            let second = e.mem.u16(a[1] + 4);
+            e.mem.set_u32(a[0], first);
+            e.mem.set_u16(a[0] + 4, second);
+            returns(a[0])
+        });
+        stub(&mut l.e, NAVMESH_PORTAL_EXTRA_DESTROY);
+        let seen = capture_block(&mut l.e, SET_NAVMESH_PORTAL, 1, 5);
+        let data = bytes_of(&[0x0102_0304, 0x0000_0506]);
+        let log = l.run(b"XNDP", &[], &data, 8);
+        let (args, block) = seen.borrow()[0].clone();
+        assert_eq!(args[0], l.list.addr());
+        // [vtable, type + padding, next, word, short]
+        assert_eq!(block[0], 0x0101_4618);
+        assert_eq!(block[1] & 0xff, 0x5a);
+        assert_eq!(block[3], 0x0102_0304);
+        assert_eq!(block[4] & 0xffff, 0x0506);
+        assert_eq!(
+            calls_to(&log, NAVMESH_PORTAL_EXTRA_DESTROY),
+            vec![vec![args[1]]]
+        );
+        // Swapped for a file that needs it: the word and the short.
+        l.swapping(true);
+        l.run(b"XNDP", &[], &data, 8);
+        let (_, block) = seen.borrow()[1].clone();
+        assert_eq!(block[3], 0x0403_0201);
+        assert_eq!(block[4] & 0xffff, 0x0605);
+    }
+
+    /// The save buffer's form, as `BGSSaveFormBuffer::GetForm` finds it.
+    fn buffer_with_form(l: &mut Loader, form_type: Option<u8>) -> Ptr {
+        let form = Rc::new(RefCell::new(0u32));
+        if let Some(form_type) = form_type {
+            let block = l.e.mem.alloc(0x20);
+            l.e.mem.set_u8(block + 4, form_type);
+            *form.borrow_mut() = block;
+        }
+        let shared = form.clone();
+        l.e.register_double(SAVE_BUFFER_GET_FORM, move |_, _| returns(*shared.borrow()));
+        l.e.register(FORM_TYPE, |e, a| returns(e.mem.u8(a[0] + 4) as u32));
+        Ptr::new(l.e.mem.alloc(0x30))
+    }
+
+    #[test]
+    fn load_reflector_and_water_chunks_are_skipped_for_forms_of_type_0x23() {
+        for (form_type, loaded) in [(None, true), (Some(0x20u8), true), (Some(0x23), false)] {
+            let mut l = Loader::new();
+            let buffer = buffer_with_form(&mut l, form_type);
+            stub(&mut l.e, SIMPLE_LIST_INIT);
+            for setter in [ADD_REFLECTOR_REF, ADD_REFLECTED_REF, ADD_LIT_WATER_REF] {
+                stub(&mut l.e, setter);
+            }
+            // XPWR: [reference id, flags]; both flags set both setters.
+            let log = l.run_with_buffer(b"XPWR", &[], &bytes_of(&[0x77, 3]), 8, buffer);
+            let reflector = calls_to(&log, ADD_REFLECTOR_REF);
+            let reflected = calls_to(&log, ADD_REFLECTED_REF);
+            assert_eq!(reflector.len(), loaded as usize);
+            assert_eq!(reflected.len(), loaded as usize);
+            if loaded {
+                assert_eq!(reflector[0], vec![l.list.addr(), 0x77, 1]);
+                assert_eq!(reflected[0], vec![l.list.addr(), 0x77, 1]);
+            }
+            // XLTW: one word.
+            let log = l.run_with_buffer(b"XLTW", &[0x88], &[], 4, buffer);
+            let water = calls_to(&log, ADD_LIT_WATER_REF);
+            assert_eq!(water.len(), loaded as usize);
+            if loaded {
+                assert_eq!(water[0], vec![l.list.addr(), 0x88, 1]);
+            }
+        }
+    }
+
+    #[test]
+    fn load_reflector_flags_pick_the_setters_and_swap_on_demand() {
+        let mut l = Loader::new();
+        let buffer = buffer_with_form(&mut l, None);
+        stub(&mut l.e, SIMPLE_LIST_INIT);
+        stub(&mut l.e, ADD_REFLECTOR_REF);
+        stub(&mut l.e, ADD_REFLECTED_REF);
+        for (flags, first, second) in [(0u32, 0, 0), (1, 1, 0), (2, 0, 1)] {
+            let log = l.run_with_buffer(b"XPWR", &[], &bytes_of(&[0x77, flags]), 8, buffer);
+            assert_eq!(calls_to(&log, ADD_REFLECTOR_REF).len(), first);
+            assert_eq!(calls_to(&log, ADD_REFLECTED_REF).len(), second);
+        }
+        l.swapping(true);
+        let log = l.run_with_buffer(
+            b"XPWR",
+            &[],
+            &bytes_of(&[0x77, 1u32.swap_bytes()]),
+            8,
+            buffer,
+        );
+        assert_eq!(calls_to(&log, SWAP_DWORD).len(), 2);
+        assert_eq!(
+            calls_to(&log, ADD_REFLECTOR_REF),
+            vec![vec![l.list.addr(), 0x77u32.swap_bytes(), 1]]
+        );
+    }
+
+    #[test]
+    fn load_primitive_is_created_from_the_record_and_added() {
+        let mut l = Loader::new();
+        let made = Rc::new(RefCell::new(0x9999u32));
+        let shared = made.clone();
+        let seen: Shared<Vec<(Vec<u32>, Vec<u32>)>> = Rc::default();
+        let log = seen.clone();
+        l.e.register_double(PRIMITIVE_CREATE, move |e, a| {
+            log.borrow_mut().push((a.to_vec(), words(e, a[1], 8)));
+            returns(*shared.borrow())
+        });
+        stub(&mut l.e, ADD_PRIMITIVE);
+        // [radii x3][colour x4][type]
+        let data = bytes_of(&[1, 2, 3, 4, 5, 6, 7, 3]);
+        let log = l.run(b"XPRM", &[], &data, 0x20);
+        let (args, record) = seen.borrow()[0].clone();
+        assert_eq!(args[0], 3);
+        assert_eq!(args[2] - args[1], 0x0c);
+        assert_eq!(record, vec![1, 2, 3, 4, 5, 6, 7, 3]);
+        assert_eq!(
+            calls_to(&log, ADD_PRIMITIVE),
+            vec![vec![l.list.addr(), 0x9999]]
+        );
+        // Nothing is added when the factory gives none.
+        *made.borrow_mut() = 0;
+        let log = l.run(b"XPRM", &[], &data, 0x20);
+        assert!(calls_to(&log, ADD_PRIMITIVE).is_empty());
+        l.swapping(true);
+        l.run(b"XPRM", &[], &data, 0x20);
+        assert_eq!(seen.borrow()[2].0[0], 3u32.swap_bytes());
+    }
+
+    #[test]
+    fn load_occlusion_plane_is_built_from_the_record() {
+        let mut l = Loader::new();
+        l.e.register(ALLOCATE_ALIGNED, |e, a| returns(e.mem.alloc(a[0])));
+        l.e.register(OCCLUSION_PLANE_INIT, |_, a| returns(a[0]));
+        // MakeRotation(matrix, angle, x, y, z): put them in the first words.
+        l.e.register(MATRIX_MAKE_ROTATION, |e, a| {
+            for (index, word) in a[1..5].iter().enumerate() {
+                e.mem.set_u32(a[0] + 4 * index as u32, *word);
+            }
+            Ret::default()
+        });
+        stub(&mut l.e, SET_OCCLUSION_PLANE);
+        // [extents x2][centre x3][axis x3][angle]
+        let data = bytes_of(&[
+            0xe1,
+            0xe2,
+            0xc1,
+            0xc2,
+            0xc3,
+            1.0f32.to_bits(),
+            2.0f32.to_bits(),
+            3.0f32.to_bits(),
+            0.5f32.to_bits(),
+        ]);
+        let log = l.run(b"XOCP", &[], &data, 0x24);
+        let plane = calls_to(&log, SET_OCCLUSION_PLANE)[0][1];
+        assert_eq!(calls_to(&log, ALLOCATE_ALIGNED), vec![vec![0xfc]]);
+        assert_eq!(words(&l.e, plane + 0x14, 2), vec![0xe1, 0xe2]);
+        assert_eq!(words(&l.e, plane + 8, 3), vec![0xc1, 0xc2, 0xc3]);
+        // The rotation: angle first, then the axis.
+        assert_eq!(
+            words(&l.e, plane + 0x1c, 5),
+            vec![
+                0.5f32.to_bits(),
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0
+            ]
+        );
+        assert_eq!(l.e.mem.u8(plane + 0xe4), 1);
+        assert_eq!(l.e.mem.u8(plane + 0xe5), 1);
+        assert_eq!(l.e.mem.u8(plane + 0xe6), 0);
+        assert_eq!(
+            calls_to(&log, SET_OCCLUSION_PLANE),
+            vec![vec![l.list.addr(), plane]]
+        );
+    }
+
+    #[test]
+    fn load_patrol_data_takes_its_float_by_pointer_and_the_package_action_follows() {
+        let mut l = Loader::new();
+        let seen: Shared<Vec<u32>> = Rc::default();
+        let log = seen.clone();
+        l.e.register_double(PATROL_REF_DATA_INIT, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[1]));
+            returns(a[0])
+        });
+        stub(&mut l.e, SET_PATROL_REF_DATA);
+        let log = l.run(b"XPRD", &[], &bytes_of(&[0x0102_0304]), 4);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        let created = calls_to(&log, PATROL_REF_DATA_INIT)[0][0];
+        assert_eq!(
+            calls_to(&log, SET_PATROL_REF_DATA),
+            vec![vec![l.list.addr(), created]]
+        );
+        l.swapping(true);
+        l.run(b"XPRD", &[], &bytes_of(&[0x0102_0304]), 4);
+        assert_eq!(*seen.borrow(), vec![0x0102_0304, 0x0403_0201]);
+
+        // XPPA: the PackageEventAction of the patrol data (at +4).
+        let patrol: Ptr = Ptr::new(l.e.mem.alloc(0x20));
+        l.e.register_double(GET_PATROL_REF_DATA, move |_, _| returns(patrol.addr()));
+        stub(&mut l.e, SKIP_CHUNK);
+        stub(&mut l.e, PACKAGE_EVENT_ACTION_LOAD);
+        let log = l.run(b"XPPA", &[], &[], 0);
+        assert_eq!(
+            calls_to(&log, PACKAGE_EVENT_ACTION_LOAD),
+            vec![vec![patrol.addr() + 4, l.file.addr()]]
+        );
+        assert_eq!(calls_to(&log, SKIP_CHUNK).len(), 1);
+    }
+    #[test]
+    fn load_reference_tables_are_read_into_new_blocks() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_OCCLUSION_PLANE_REF_DATA);
+        stub(&mut l.e, SET_PORTAL_REF_DATA);
+        stub(&mut l.e, SET_COLLISION_DATA);
+        let data = bytes_of(&[1, 2, 3, 4]);
+        let log = l.run(b"XORD", &[], &data, 16);
+        let set = calls_to(&log, SET_OCCLUSION_PLANE_REF_DATA);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        assert_eq!(words(&l.e, set[0][1], 4), vec![1, 2, 3, 4]);
+        let log = l.run(b"XPOD", &[], &data, 8);
+        let set = calls_to(&log, SET_PORTAL_REF_DATA);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![8]]);
+        assert_eq!(words(&l.e, set[0][1], 2), vec![1, 2]);
+        let log = l.run(b"XTRI", &[], &data, 4);
+        let set = calls_to(&log, SET_COLLISION_DATA);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![4]]);
+        assert_eq!(words(&l.e, set[0][1], 1), vec![1]);
+        // A swapping file: four words, two words, one word.
+        l.swapping(true);
+        let log = l.run(b"XORD", &[], &data, 16);
+        let set = calls_to(&log, SET_OCCLUSION_PLANE_REF_DATA);
+        assert_eq!(l.e.mem.u32(set[0][1] + 12), 4u32.swap_bytes());
+        let log = l.run(b"XPOD", &[], &data, 8);
+        let set = calls_to(&log, SET_PORTAL_REF_DATA);
+        assert_eq!(
+            words(&l.e, set[0][1], 2),
+            vec![1u32.swap_bytes(), 2u32.swap_bytes()]
+        );
+        let log = l.run(b"XTRI", &[], &data, 4);
+        let set = calls_to(&log, SET_COLLISION_DATA);
+        assert_eq!(l.e.mem.u32(set[0][1]), 1u32.swap_bytes());
+    }
+
+    #[test]
+    fn load_room_data_reads_a_count_then_one_form_id_per_chunk() {
+        let mut l = Loader::new();
+        l.e.register(SIMPLE_LIST_INIT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            returns(a[0])
+        });
+        stub(&mut l.e, SKIP_CHUNK);
+        let seen = capture_block(&mut l.e, LIST_ADD_HEAD, 1, 1);
+        stub(&mut l.e, SET_ROOM_REF_DATA);
+        let log = l.run(b"XRMR", &[0x0003_0002, 0x31, 0x32], &[], 4);
+        let set = calls_to(&log, SET_ROOM_REF_DATA);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        let data = set[0][1];
+        // The master flag byte is bits 16-23 of the first word.
+        assert_eq!(l.e.mem.u8(data + 0x10), 3);
+        let added: Vec<(u32, u32)> = seen
+            .borrow()
+            .iter()
+            .map(|(args, block)| (args[0], block[0]))
+            .collect();
+        assert_eq!(added, vec![(data + 8, 0x31), (data + 8, 0x32)]);
+        assert_eq!(calls_to(&log, SKIP_CHUNK).len(), 2);
+    }
+
+    #[test]
+    fn load_type_92_chunks_create_the_extra_data_once() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_SPECIAL_RENDER_WORD);
+        let log = l.run(b"XSRF", &[0x1234], &[], 4);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        assert_eq!(chain_types(&l.e, l.list.cast()), vec![0x92]);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        assert_eq!(
+            calls_to(&log, SET_SPECIAL_RENDER_WORD),
+            vec![vec![extra.addr(), 0x1234]]
+        );
+        let log = l.run(b"XSRD", &[0x7f80_0001], &[], 4);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(l.e.mem.u32(extra.addr() + 0x10), 0x7fc0_0001);
+        // XSRD alone also creates it.
+        let mut l = Loader::new();
+        let log = l.run(b"XSRD", &[2.0f32.to_bits()], &[], 4);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        let extra: Ptr<BSExtraData> = l.e.get(l.list, ExtraDataList::pHead).cast();
+        assert_eq!(l.e.mem.u32(extra.addr() + 0x10), 2.0f32.to_bits());
+    }
+
+    #[test]
+    fn load_ignored_by_sandbox_sets_the_flag() {
+        let mut l = Loader::new();
+        stub(&mut l.e, SET_IGNORED_BY_SANDBOX);
+        let log = l.run(b"XIBS", &[], &[], 0);
+        assert_eq!(
+            calls_to(&log, SET_IGNORED_BY_SANDBOX),
+            vec![vec![l.list.addr(), 1]]
+        );
+    }
+
+    // --- InitItem --------------------------------------------------------------
+
+    use std::collections::{HashMap, HashSet};
+
+    /// What the fix-up looks up and which casts fail.
+    #[derive(Default)]
+    struct InitState {
+        /// Form by (load order) id.
+        forms: HashMap<u32, u32>,
+        /// `(form, target)` casts that give null.
+        bad_casts: HashSet<(u32, u32)>,
+        /// What the reference's virtual slot `+0x100` answers.
+        is_actor: bool,
+    }
+
+    /// The id a file id becomes in the test (`AddCompileIndex` adds 0x1000 to
+    /// every id but 0).
+    fn compiled(id: u32) -> u32 {
+        if id == 0 {
+            0
+        } else {
+            id + 0x1000
+        }
+    }
+
+    const ACTOR_CHECK: u32 = 0x0200_2000;
+    const REFERENCE_VTABLE: u32 = 0x0300_0000;
+
+    /// An engine with doubles for what `InitItem` calls on every extra data,
+    /// the reference it fixes up and the state the doubles read.
+    fn init_engine() -> (Engine, Shared<InitState>, Ptr) {
+        let mut e = extra_engine();
+        let state: Shared<InitState> = Rc::default();
+        e.register(TES_FORM_GET_FILE, |_, _| returns(0xf11e));
+        e.register(ADD_COMPILE_INDEX, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], compiled(id));
+            Ret::default()
+        });
+        let shared = state.clone();
+        e.register_double(LOOKUP_FORM, move |_, a| {
+            returns(shared.borrow().forms.get(&a[0]).copied().unwrap_or(0))
+        });
+        let shared = state.clone();
+        e.register_double(RT_DYNAMIC_CAST, move |_, a| {
+            let failed = a[0] == 0 || shared.borrow().bad_casts.contains(&(a[0], a[3]));
+            returns(if failed { 0 } else { a[0] })
+        });
+        let shared = state.clone();
+        e.register_double(ACTOR_CHECK, move |_, _| {
+            returns(shared.borrow().is_actor as u32)
+        });
+        let mut slots = vec![0; 0x41];
+        slots[0x100 / 4] = ACTOR_CHECK;
+        e.put_vtable(REFERENCE_VTABLE, &slots);
+        stub(&mut e, LOG_MESSAGE);
+        e.register(REFERENCE_EXTRA_LIST, |_, a| returns(a[0] + 0x44));
+        e.register(FORM_ID, |e, a| returns(e.mem.u32(a[0] + 0x0c)));
+        let reference: Ptr = Ptr::new(e.mem.alloc(0x100));
+        e.mem.set_u32(reference.addr(), REFERENCE_VTABLE);
+        e.mem.set_u32(reference.addr() + 0x0c, 0xbeef);
+        (e, state, reference)
+    }
+
+    /// A form object (0x100 bytes, so that `+0x44` is inside it) with an id.
+    fn init_form(e: &mut Engine, state: &Shared<InitState>, file_id: u32) -> u32 {
+        let form = e.mem.alloc(0x100);
+        e.mem.set_u32(form + 0x0c, compiled(file_id));
+        state.borrow_mut().forms.insert(compiled(file_id), form);
+        form
+    }
+
+    fn run_init(e: &mut Engine, list: Ptr<ExtraDataList>, reference: Ptr) -> Log {
+        e.call_log = Some(vec![]);
+        e.call(0x0041_6be0, &args![list, reference]);
+        e.call_log.take().unwrap()
+    }
+
+    #[test]
+    fn init_item_resolves_the_simple_form_ids_and_removes_the_missing_ones() {
+        for &(extra_type, target, message) in INIT_ITEM_FORM_FIXUPS {
+            let (mut e, state, reference) = init_engine();
+            let form = init_form(&mut e, &state, 5);
+            let (list, extras) = list_with_payloads(&mut e, &[(extra_type, 5)]);
+            let log = run_init(&mut e, list, reference);
+            assert_eq!(
+                e.mem.u32(extras[0].addr() + 0x0c),
+                form,
+                "type {extra_type:#x}"
+            );
+            assert_eq!(chain_types(&e, list.cast()), vec![extra_type]);
+            assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+            // The file id is compiled first, then looked up, then cast.
+            assert_eq!(calls_to(&log, LOOKUP_FORM), vec![vec![compiled(5)]]);
+            let casts = calls_to(&log, RT_DYNAMIC_CAST);
+            if target == 0 {
+                assert!(casts.is_empty());
+            } else {
+                assert_eq!(casts, vec![vec![form, 0, RTTI_TES_FORM, target, 0]]);
+            }
+            // The file name call happens once, for the reference.
+            assert_eq!(
+                calls_to(&log, TES_FORM_GET_FILE),
+                vec![vec![reference.addr(), 0xffff_ffff]]
+            );
+
+            // A missing form: logged with the compiled id, extra data removed.
+            let (list, extras) = list_with_payloads(&mut e, &[(extra_type, 6)]);
+            let log = run_init(&mut e, list, reference);
+            assert_eq!(
+                calls_to(&log, LOG_MESSAGE),
+                vec![vec![message, compiled(6)]],
+                "type {extra_type:#x}"
+            );
+            assert!(chain_types(&e, list.cast()).is_empty());
+            assert_eq!(deleted(&log), vec![extras[0].addr()]);
+            assert_eq!(e.mem.u32(extras[0].addr() + 0x0c), 0);
+
+            // A form of the wrong class (the cast gives null): the same.
+            if target != 0 {
+                state.borrow_mut().bad_casts.insert((form, target));
+                let (list, _) = list_with_payloads(&mut e, &[(extra_type, 5)]);
+                let log = run_init(&mut e, list, reference);
+                assert_eq!(
+                    calls_to(&log, LOG_MESSAGE),
+                    vec![vec![message, compiled(5)]]
+                );
+                assert!(chain_types(&e, list.cast()).is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn init_item_walks_the_whole_list_even_when_an_extra_data_removes_itself() {
+        let (mut e, state, reference) = init_engine();
+        let form = init_form(&mut e, &state, 5);
+        // 0x03 (missing, removed), 0x20 (not handled), 0x07 (found), 0x61.
+        let (list, extras) =
+            list_with_payloads(&mut e, &[(0x03, 99), (0x20, 1), (0x07, 5), (0x61, 2)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x20, 0x07, 0x61]);
+        assert_eq!(e.mem.u32(extras[2].addr() + 0x0c), form);
+        assert_eq!(e.mem.u32(extras[1].addr() + 0x0c), 1);
+        assert_eq!(e.mem.u32(extras[3].addr() + 0x0c), 2);
+        assert_eq!(calls_to(&log, LOCK)[0], vec![EXTRA_CRIT_SECTION, 0]);
+        assert_locked_and_released(&log);
+        // An empty list only locks.
+        let (empty, _) = list_with_payloads(&mut e, &[]);
+        let log = run_init(&mut e, empty, reference);
+        assert_eq!(calls_to(&log, LOCK).len(), 1);
+        assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+    }
+
+    #[test]
+    fn init_item_logs_a_ragdoll_on_a_living_actor() {
+        let (mut e, state, reference) = init_engine();
+        e.register(REFERENCE_BASE_FORM, |_, a| returns(a[0] + 0x20));
+        let base = reference.addr() + 0x20;
+        let health = Rc::new(RefCell::new(5i32));
+        let shared = health.clone();
+        e.register_double(ACTOR_BASE_GET_HEALTH, move |_, _| {
+            returns(*shared.borrow() as u32)
+        });
+        let (list, _) = list_with_payloads(&mut e, &[(0x14, 0)]);
+        // Not an actor.
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        assert!(calls_to(&log, ACTOR_BASE_GET_HEALTH).is_empty());
+        // An actor with health 5: logged with its id; the extra data stays.
+        state.borrow_mut().is_actor = true;
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_RAGDOLL_ON_LIVE_ACTOR, 0xbeef]]
+        );
+        assert_eq!(calls_to(&log, ACTOR_BASE_GET_HEALTH), vec![vec![base]]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x14]);
+        // Health 0 or less: nothing logged.
+        *health.borrow_mut() = 0;
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        *health.borrow_mut() = -4;
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        // No base form: not even asked.
+        e.register(REFERENCE_BASE_FORM, |_, _| returns(0));
+        *health.borrow_mut() = 9;
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, ACTOR_BASE_GET_HEALTH).is_empty());
+    }
+
+    #[test]
+    fn init_item_lock_resolves_the_key_or_removes_the_lock() {
+        let (mut e, state, reference) = init_engine();
+        let key = init_form(&mut e, &state, 0x4b);
+        let lock_data = e.mem.alloc(0x14);
+        e.mem.set_u32(lock_data + 4, 0x4b);
+        let (list, _) = list_with_payloads(&mut e, &[(0x2a, lock_data)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(e.mem.u32(lock_data + 4), key);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x2a]);
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            vec![vec![key, 0, RTTI_TES_FORM, RTTI_TES_KEY, 0]]
+        );
+        // A key that is not there.
+        e.mem.set_u32(lock_data + 4, 0x4c);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_LOCK_KEY_MISSING, compiled(0x4c)]]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+        // No key: nothing to do.
+        e.mem.set_u32(lock_data + 4, 0);
+        let (list, _) = list_with_payloads(&mut e, &[(0x2a, lock_data)]);
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x2a]);
+    }
+
+    #[test]
+    fn init_item_teleport_data_decides_whether_the_extra_data_stays() {
+        let (mut e, _state, reference) = init_engine();
+        let accept = Rc::new(RefCell::new(true));
+        let shared = accept.clone();
+        e.register_double(DOOR_TELEPORT_DATA_INIT_ITEM, move |_, _| {
+            returns(*shared.borrow() as u32)
+        });
+        let (list, _) = list_with_payloads(&mut e, &[(0x2b, 0x7e1)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, DOOR_TELEPORT_DATA_INIT_ITEM),
+            vec![vec![0x7e1, reference.addr()]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x2b]);
+        *accept.borrow_mut() = false;
+        let log = run_init(&mut e, list, reference);
+        assert!(chain_types(&e, list.cast()).is_empty());
+        assert_eq!(deleted(&log).len(), 1);
+    }
+
+    #[test]
+    fn init_item_map_marker_clears_a_hidden_travel_location_and_resolves_the_reputation() {
+        let (mut e, _state, reference) = init_engine();
+        e.set_global(DATA_HANDLER, 0x4444u32);
+        let travel = Rc::new(RefCell::new((true, false, 0u32)));
+        let shared = travel.clone();
+        e.register_double(MAP_MARKER_GET_TRAVEL_LOC, move |_, _| {
+            returns(shared.borrow().0 as u32)
+        });
+        let shared = travel.clone();
+        e.register_double(MAP_MARKER_GET_VISIBLE, move |_, _| {
+            returns(shared.borrow().1 as u32)
+        });
+        let shared = travel.clone();
+        e.register_double(MAP_MARKER_GET_REPUTATION, move |_, _| {
+            returns(shared.borrow().2)
+        });
+        stub(&mut e, MAP_MARKER_SET_TRAVEL_LOC);
+        stub(&mut e, MAP_MARKER_SET_REPUTATION);
+        e.register(DATA_HANDLER_GET_REPUTATION, |_, a| returns(a[1] + 0x100));
+        let (list, _) = list_with_payloads(&mut e, &[(0x2c, 0x3a3)]);
+        // A travel location that is not visible is cleared.
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, MAP_MARKER_SET_TRAVEL_LOC),
+            vec![vec![0x3a3, 0]]
+        );
+        assert!(calls_to(&log, DATA_HANDLER_GET_REPUTATION).is_empty());
+        // Visible: kept. No travel location: not even asked if visible.
+        travel.borrow_mut().1 = true;
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, MAP_MARKER_SET_TRAVEL_LOC).is_empty());
+        travel.borrow_mut().0 = false;
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, MAP_MARKER_GET_VISIBLE).is_empty());
+        // A reputation id becomes the reputation.
+        travel.borrow_mut().2 = 0x55;
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, DATA_HANDLER_GET_REPUTATION),
+            vec![vec![0x4444, 0x55]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_MARKER_SET_REPUTATION),
+            vec![vec![0x3a3, 0x155]]
+        );
+    }
+
+    #[test]
+    fn init_item_enable_state_parent_checks_the_parent_chain() {
+        let (mut e, state, reference) = init_engine();
+        let parent = init_form(&mut e, &state, 0x9);
+        stub(&mut e, ENABLE_PARENT_ADD_CHILD);
+        let looped = Rc::new(RefCell::new(false));
+        let shared = looped.clone();
+        e.register_double(CHECK_ENABLE_PARENT_LOOP, move |_, _| {
+            returns(!*shared.borrow() as u32)
+        });
+        let (list, _) = list_with_payloads(&mut e, &[(0x37, 9)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x37]);
+        assert_eq!(
+            calls_to(&log, ENABLE_PARENT_ADD_CHILD),
+            vec![vec![parent + 0x44, reference.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, CHECK_ENABLE_PARENT_LOOP),
+            vec![vec![reference.addr()]]
+        );
+        // The parent chain loops back: logged, removed.
+        *looped.borrow_mut() = true;
+        let (list, _) = list_with_payloads(&mut e, &[(0x37, 9)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_ENABLE_PARENT_LOOP]]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+        // The reference is not a TESObjectREFR: the same.
+        *looped.borrow_mut() = false;
+        state
+            .borrow_mut()
+            .bad_casts
+            .insert((reference.addr(), RTTI_TES_OBJECT_REFR));
+        let (list, _) = list_with_payloads(&mut e, &[(0x37, 9)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_ENABLE_PARENT_LOOP]]
+        );
+        assert!(calls_to(&log, CHECK_ENABLE_PARENT_LOOP).is_empty());
+        // The parent is missing.
+        let (list, _) = list_with_payloads(&mut e, &[(0x37, 77)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_ENABLE_PARENT_MISSING, compiled(77)]]
+        );
+    }
+
+    #[test]
+    fn init_item_linked_ref_tells_the_target_about_the_reference() {
+        let (mut e, state, reference) = init_engine();
+        let target = init_form(&mut e, &state, 0x11);
+        stub(&mut e, LINKED_REF_ADD_CHILD);
+        let (list, _) = list_with_payloads(&mut e, &[(0x51, 0x11)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LINKED_REF_ADD_CHILD),
+            vec![vec![target + 0x44, reference.addr()]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x51]);
+        let (list, _) = list_with_payloads(&mut e, &[(0x51, 0x12)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_LINKED_REF_MISSING, compiled(0x12)]]
+        );
+        assert!(calls_to(&log, LINKED_REF_ADD_CHILD).is_empty());
+    }
+
+    /// An activate parent extra data with one entry per form id (0 for one
+    /// that cannot be found); returns it with the entry data blocks.
+    fn activate_extra(
+        e: &mut Engine,
+        ids: &[u32],
+        flags: u8,
+    ) -> (Ptr<ExtraDataList>, Ptr<BSExtraData>, Vec<u32>) {
+        let (list, extras) = list_with_payloads(e, &[(0x53, 0)]);
+        let extra = extras[0];
+        let mut data_blocks = vec![];
+        let mut node = extra.addr() + 0x0c;
+        for (index, id) in ids.iter().enumerate() {
+            let data = e.mem.alloc(8);
+            e.mem.set_u32(data, *id);
+            data_blocks.push(data);
+            e.mem.set_u32(node, data);
+            if index + 1 < ids.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        e.mem.set_u8(extra.addr() + 0x14, flags);
+        (list, extra, data_blocks)
+    }
+
+    /// Doubles for the list helpers of the activate arm: removal after a
+    /// node unlinks the next one; removal at the head pulls the next node's
+    /// item and link up.
+    fn list_removal_doubles(e: &mut Engine) {
+        e.register(LIST_REMOVE_AFTER, |e, a| {
+            let removed = e.mem.u32(a[0] + 4);
+            let after = e.mem.u32(removed + 4);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let item = if next == 0 { 0 } else { e.mem.u32(next) };
+            let after = if next == 0 { 0 } else { e.mem.u32(next + 4) };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        e.register(LIST_IS_EMPTY, |e, a| {
+            returns((e.mem.u32(a[0] + 4) == 0 && e.mem.u32(a[0]) == 0) as u32)
+        });
+        e.register(STRING_LENGTH, |e, a| returns(e.mem.u16(a[0] + 4) as u32));
+    }
+
+    #[test]
+    fn init_item_activate_ref_drops_the_entries_whose_reference_is_gone() {
+        let (mut e, state, reference) = init_engine();
+        list_removal_doubles(&mut e);
+        stub(&mut e, ADD_ACTIVATE_REF_CHILD);
+        let (ref_a, ref_c) = (
+            init_form(&mut e, &state, 0xa),
+            init_form(&mut e, &state, 0xc),
+        );
+        // Resolved, missing (after a resolved one), resolved.
+        let (list, extra, blocks) = activate_extra(&mut e, &[0xa, 0xb, 0xc], 0);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, ADD_ACTIVATE_REF_CHILD),
+            vec![
+                vec![ref_a + 0x44, reference.addr()],
+                vec![ref_c + 0x44, reference.addr()]
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE)[0],
+            vec![MESSAGE_ACTIVATE_REF_MISSING, compiled(0xb)]
+        );
+        // The entry's data block is freed; the others got their form.
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![blocks[1]]]);
+        assert_eq!(e.mem.u32(blocks[0]), ref_a);
+        assert_eq!(e.mem.u32(blocks[2]), ref_c);
+        // Two entries remain in the list; the extra data stays.
+        let first = extra.addr() + 0x0c;
+        let second = e.mem.u32(first + 4);
+        assert_eq!(e.mem.u32(second), blocks[2]);
+        assert_eq!(e.mem.u32(second + 4), 0);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x53]);
+        assert_eq!(calls_to(&log, LIST_REMOVE_AFTER).len(), 1);
+        assert!(calls_to(&log, LIST_REMOVE_HEAD).is_empty());
+    }
+
+    #[test]
+    fn init_item_activate_ref_removes_a_missing_head_and_an_empty_extra_data() {
+        let (mut e, state, reference) = init_engine();
+        list_removal_doubles(&mut e);
+        stub(&mut e, ADD_ACTIVATE_REF_CHILD);
+        let ref_c = init_form(&mut e, &state, 0xc);
+        // The first entry is missing: removed at the head, the next one moves up.
+        let (list, _, blocks) = activate_extra(&mut e, &[0xb, 0xc], 0);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(calls_to(&log, LIST_REMOVE_HEAD).len(), 1);
+        assert!(calls_to(&log, LIST_REMOVE_AFTER).is_empty());
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![blocks[0]]]);
+        assert_eq!(
+            calls_to(&log, ADD_ACTIVATE_REF_CHILD),
+            vec![vec![ref_c + 0x44, reference.addr()]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x53]);
+
+        // Everything missing, no flags, no text: logged and removed.
+        let (list, _, _) = activate_extra(&mut e, &[0xb], 0);
+        let log = run_init(&mut e, list, reference);
+        let messages: Vec<u32> = calls_to(&log, LOG_MESSAGE).iter().map(|a| a[0]).collect();
+        assert_eq!(
+            messages,
+            vec![MESSAGE_ACTIVATE_REF_MISSING, MESSAGE_EMPTY_ACTIVATE_PARENT]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+
+        // With a flag byte, or with a text override, it stays.
+        let (list, _, _) = activate_extra(&mut e, &[0xb], 1);
+        run_init(&mut e, list, reference);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x53]);
+        let (list, extra, _) = activate_extra(&mut e, &[0xb], 0);
+        e.mem.set_u16(extra.addr() + 0x18 + 4, 2);
+        run_init(&mut e, list, reference);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x53]);
+    }
+
+    #[test]
+    fn init_item_empty_list_extra_data_are_removed() {
+        for (extra_type, init, message) in [
+            (0x57u8, DECAL_REFS_INIT_ITEM, MESSAGE_EMPTY_DECALS),
+            (0x66, REFLECTOR_REFS_INIT_ITEM, MESSAGE_EMPTY_REFLECTOR_REFS),
+            (0x85, LIT_WATER_REFS_INIT_ITEM, MESSAGE_EMPTY_LIT_WATER),
+        ] {
+            let (mut e, _state, reference) = init_engine();
+            stub(&mut e, init);
+            e.register(LIST_IS_EMPTY, |e, a| {
+                returns((e.mem.u32(a[0] + 4) == 0 && e.mem.u32(a[0]) == 0) as u32)
+            });
+            let (list, extras) = list_with_payloads(&mut e, &[(extra_type, 0)]);
+            let log = run_init(&mut e, list, reference);
+            assert_eq!(
+                calls_to(&log, init),
+                vec![vec![extras[0].addr(), reference.addr()]]
+            );
+            assert_eq!(calls_to(&log, LOG_MESSAGE), vec![vec![message]]);
+            assert!(chain_types(&e, list.cast()).is_empty());
+            // With an entry it stays.
+            let (list, _) = list_with_payloads(&mut e, &[(extra_type, 0x1234)]);
+            let log = run_init(&mut e, list, reference);
+            assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+            assert_eq!(chain_types(&e, list.cast()), vec![extra_type]);
+            assert_eq!(calls_to(&log, init).len(), 1);
+        }
+    }
+
+    #[test]
+    fn init_item_multibound_ref_may_not_be_the_reference_itself() {
+        let (mut e, state, reference) = init_engine();
+        let bound = init_form(&mut e, &state, 0x20);
+        state
+            .borrow_mut()
+            .forms
+            .insert(compiled(0x21), reference.addr());
+        let (list, extras) = list_with_payloads(&mut e, &[(0x63, 0x20)]);
+        run_init(&mut e, list, reference);
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x0c), bound);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x63]);
+        // The reference itself: cleared, logged with both ids, removed.
+        let (list, _) = list_with_payloads(&mut e, &[(0x63, 0x21)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_MULTIBOUND_REF_MISSING, compiled(0x21), 0xbeef]]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+    }
+
+    #[test]
+    fn init_item_emittance_source_must_be_a_light_or_an_activator() {
+        let (mut e, state, reference) = init_engine();
+        for (form_type, kept) in [(0x1eu8, true), (0x37, true), (0x20, false)] {
+            let form = init_form(&mut e, &state, 0x30);
+            e.mem.set_u8(form + 4, form_type);
+            e.register(FORM_TYPE, |e, a| returns(e.mem.u8(a[0] + 4) as u32));
+            let (list, extras) = list_with_payloads(&mut e, &[(0x67, 0x30)]);
+            let log = run_init(&mut e, list, reference);
+            assert_eq!(chain_types(&e, list.cast()).len(), kept as usize);
+            if kept {
+                assert_eq!(e.mem.u32(extras[0].addr() + 0x0c), form);
+                assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+            } else {
+                assert_eq!(
+                    calls_to(&log, LOG_MESSAGE),
+                    vec![vec![MESSAGE_EMITTANCE_SOURCE_MISSING, compiled(0x30)]]
+                );
+            }
+            // No class check by a cast for this type.
+            assert!(calls_to(&log, RT_DYNAMIC_CAST).is_empty());
+        }
+        // A missing form is never asked for its type.
+        let (list, _) = list_with_payloads(&mut e, &[(0x67, 0x31)]);
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, FORM_TYPE).is_empty());
+        assert_eq!(calls_to(&log, LOG_MESSAGE).len(), 1);
+    }
+
+    #[test]
+    fn init_item_radio_data_resolves_the_position_reference_only_logging_problems() {
+        let (mut e, state, reference) = init_engine();
+        let position = init_form(&mut e, &state, 0x40);
+        let interior = Rc::new(RefCell::new(false));
+        let shared = interior.clone();
+        e.register_double(REFERENCE_GET_INTERIOR, move |_, _| {
+            returns(*shared.borrow() as u32)
+        });
+        let (list, extras) = list_with_payloads(&mut e, &[(0x68, 0)]);
+        // The position reference is at +0x18 (RADIO_DATA +0x0C).
+        e.mem.set_u32(extras[0].addr() + 0x18, 0x40);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x18), position);
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x68]);
+        // An interior reference is logged; the extra data stays.
+        *interior.borrow_mut() = true;
+        e.mem.set_u32(extras[0].addr() + 0x18, 0x40);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_RADIO_POSITION_INTERIOR, compiled(0x40)]]
+        );
+        // A missing one is logged, the word becomes 0; still not removed.
+        e.mem.set_u32(extras[0].addr() + 0x18, 0x41);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_RADIO_POSITION_MISSING, compiled(0x41)]]
+        );
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x18), 0);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x68]);
+        // No position reference: nothing is looked up.
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+    }
+
+    #[test]
+    fn init_item_patrol_data_is_initialised_when_there_is_some() {
+        let (mut e, _state, reference) = init_engine();
+        let patrol = Rc::new(RefCell::new(0u32));
+        let shared = patrol.clone();
+        e.register_double(GET_PATROL_REF_DATA, move |_, _| returns(*shared.borrow()));
+        stub(&mut e, PATROL_REF_DATA_INIT_ITEM);
+        let (list, _) = list_with_payloads(&mut e, &[(0x6f, 0)]);
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, PATROL_REF_DATA_INIT_ITEM).is_empty());
+        *patrol.borrow_mut() = 0x7a7a;
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, PATROL_REF_DATA_INIT_ITEM),
+            vec![vec![0x7a7a, reference.addr()]]
+        );
+    }
+
+    #[test]
+    fn init_item_occlusion_plane_refs_keep_the_game_s_zero_id_quirk() {
+        let (mut e, state, reference) = init_engine();
+        // The id read from each table slot is discarded: id 0 is compiled
+        // and looked up whatever the table says.
+        let zero_form = init_form(&mut e, &state, 0);
+        state.borrow_mut().forms.insert(0, zero_form);
+        let table = e.mem.alloc(16);
+        for index in 0..4 {
+            e.mem.set_u32(table + 4 * index, 0x300 + index);
+        }
+        let (list, _) = list_with_payloads(&mut e, &[(0x76, table)]);
+        // No plane in this list: logged once per slot.
+        e.register(GET_OCCLUSION_PLANE, |_, _| returns(0));
+        stub(&mut e, SET_LINKED_PLANE);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOOKUP_FORM),
+            vec![vec![0], vec![0], vec![0], vec![0]]
+        );
+        let messages: Vec<u32> = calls_to(&log, LOG_MESSAGE).iter().map(|a| a[0]).collect();
+        assert_eq!(messages, vec![MESSAGE_NO_OCCLUSION_PLANE; 4]);
+        assert_eq!(words(&e, table, 4), vec![zero_form; 4]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x76]);
+    }
+
+    #[test]
+    fn init_item_occlusion_plane_refs_link_the_planes_of_the_targets() {
+        let (mut e, state, reference) = init_engine();
+        let zero_form = init_form(&mut e, &state, 0);
+        state.borrow_mut().forms.insert(0, zero_form);
+        let table = e.mem.alloc(16);
+        let (list, _) = list_with_payloads(&mut e, &[(0x76, table)]);
+        e.register(GET_OCCLUSION_PLANE, |_, a| returns(a[0] + 0x10));
+        stub(&mut e, SET_LINKED_PLANE);
+        run_init(&mut e, list, reference);
+        let log = run_init(&mut e, list, reference);
+        // The plane of the list is `this + 0x10` here; each slot links the
+        // plane of its target's list (`target + 0x44 + 0x10`).
+        let links = calls_to(&log, SET_LINKED_PLANE);
+        assert_eq!(links.len(), 4);
+        for (index, link) in links.iter().enumerate() {
+            assert_eq!(link[0], list.addr() + 0x10);
+            assert_eq!(link[1], index as u32);
+            assert_eq!(link[2], zero_form + 0x44 + 0x10);
+        }
+    }
+
+    #[test]
+    fn init_item_portal_refs_fix_the_pair_and_link_both_targets() {
+        let (mut e, state, reference) = init_engine();
+        let (room_a, room_b) = (
+            init_form(&mut e, &state, 0xa),
+            init_form(&mut e, &state, 0xb),
+        );
+        stub(&mut e, PORTAL_ADD_REFERENCE);
+        let table = e.mem.alloc(8);
+        e.mem.set_u32(table, 0xa);
+        e.mem.set_u32(table + 4, 0xb);
+        let (list, _) = list_with_payloads(&mut e, &[(0x77, table)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(words(&e, table, 2), vec![room_a, room_b]);
+        assert_eq!(
+            calls_to(&log, PORTAL_ADD_REFERENCE),
+            vec![
+                vec![room_a + 0x44, reference.addr()],
+                vec![room_b + 0x44, reference.addr()]
+            ]
+        );
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+
+        // Both rooms the same: logged with both ids, the second one cleared.
+        e.mem.set_u32(table, 0xa);
+        e.mem.set_u32(table + 4, 0xa);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_PORTAL_ROOMS_SAME, 0xbeef, compiled(0xa)]]
+        );
+        assert_eq!(words(&e, table, 2), vec![room_a, 0]);
+        assert_eq!(
+            calls_to(&log, PORTAL_ADD_REFERENCE),
+            vec![vec![room_a + 0x44, reference.addr()]]
+        );
+
+        // Both null: logged; nothing linked.
+        e.mem.set_u32(table, 0);
+        e.mem.set_u32(table + 4, 0);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_PORTAL_ROOMS_NULL, 0xbeef]]
+        );
+        assert!(calls_to(&log, PORTAL_ADD_REFERENCE).is_empty());
+
+        // A room that is not there: logged and the extra data removed.
+        e.mem.set_u32(table, 0xc);
+        e.mem.set_u32(table + 4, 0xb);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE)[0],
+            vec![MESSAGE_PORTAL_REF_MISSING, compiled(0xc)]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+    }
+
+    #[test]
+    fn init_item_room_refs_replace_each_linked_room_in_the_list() {
+        let (mut e, state, reference) = init_engine();
+        let (room_a, room_b) = (
+            init_form(&mut e, &state, 0xa),
+            init_form(&mut e, &state, 0xb),
+        );
+        e.register(LIST_SET_ITEM, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            Ret::default()
+        });
+        let data = e.mem.alloc(0x20);
+        let second = e.mem.alloc(8);
+        e.mem.set_u32(data + 8, 0xa);
+        e.mem.set_u32(data + 12, second);
+        e.mem.set_u32(second, 0xb);
+        let (list, _) = list_with_payloads(&mut e, &[(0x7b, data)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(e.mem.u32(data + 8), room_a);
+        assert_eq!(e.mem.u32(second), room_b);
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x7b]);
+        // A room that cannot be found removes the extra data and stops.
+        e.mem.set_u32(data + 8, 0xa);
+        e.mem.set_u32(second, 0xc);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_ROOM_REF_MISSING, compiled(0xc)]]
+        );
+        assert!(chain_types(&e, list.cast()).is_empty());
+        assert_eq!(calls_to(&log, LIST_SET_ITEM).len(), 1);
+    }
+
+    #[test]
+    fn init_item_impact_swap_and_audio_markers() {
+        let (mut e, state, reference) = init_engine();
+        stub(&mut e, IMPACT_SWAP_INIT_ITEM);
+        let (list, _) = list_with_payloads(&mut e, &[(0x8c, 0), (0x91, 0x55)]);
+        let log = run_init(&mut e, list, reference);
+        assert!(calls_to(&log, IMPACT_SWAP_INIT_ITEM).is_empty());
+        let (list, _) = list_with_payloads(&mut e, &[(0x8c, 0x6a6a)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, IMPACT_SWAP_INIT_ITEM),
+            vec![vec![0x6a6a, reference.addr()]]
+        );
+
+        // The audio marker's controller id becomes the controller's.
+        let controller = init_form(&mut e, &state, 0x77);
+        let stored = Rc::new(RefCell::new(0x77u32));
+        let shared = stored.clone();
+        e.register_double(AUDIO_MARKER_GET_CONTROLLER, move |_, _| {
+            returns(*shared.borrow())
+        });
+        stub(&mut e, AUDIO_MARKER_SET_CONTROLLER);
+        let (list, _) = list_with_payloads(&mut e, &[(0x90, 0x9a9a)]);
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            vec![vec![
+                controller,
+                0,
+                RTTI_TES_FORM,
+                RTTI_MEDIA_LOCATION_CONTROLLER,
+                0
+            ]]
+        );
+        assert_eq!(
+            calls_to(&log, AUDIO_MARKER_SET_CONTROLLER),
+            vec![vec![0x9a9a, compiled(0x77)]]
+        );
+        // A controller that is not there is only logged.
+        *stored.borrow_mut() = 0x78;
+        let log = run_init(&mut e, list, reference);
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![MESSAGE_CONTROLLER_MISSING, compiled(0x78)]]
+        );
+        assert!(calls_to(&log, AUDIO_MARKER_SET_CONTROLLER).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x90]);
     }
 }
