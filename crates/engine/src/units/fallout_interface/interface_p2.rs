@@ -3,7 +3,7 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::interface`]; anything public there may be used here.
 //!
-//! This session covers `00705a90`..`00706cb0`. As in the first part, most
+//! This part covers `00705a90`..`00707870` so far. As in the first part, most
 //! functions are static `Interface::` wrappers over the interface manager
 //! (`InterfaceManager`, Xbox PDB): `004b7210` returns the manager and
 //! `009373f0` reads its `bFirstInit` byte; a wrapper does nothing unless the
@@ -141,6 +141,39 @@ const TRAIT_OBJECT_TRAIT_ID: u32 = 0x011d_9eac;
 const FINISH_FLAG: u32 = 0x011d_8a85;
 /// The object `00953060` is called on, in `00706ae0`.
 const FINISH_OBJECT: u32 = 0x011d_ea3c;
+/// The `float` at `0106ec38` (an aspect ratio).
+const ASPECT_RATIO_CONSTANT: u32 = 0x0106_ec38;
+/// The table of `0x1c` pointers (`011d51d0`) `00707330` searches.
+const TEXT_TABLE: u32 = 0x011d_51d0;
+/// The object (`011dea3c`) the player-name, race and sex texts come from.
+const TEXT_OWNER: u32 = 0x011d_ea3c;
+/// `"%.2f"`.
+const FLOAT_FORMAT: u32 = 0x0103_0018;
+/// `"%i"`.
+const INTEGER_FORMAT: u32 = 0x0102_0774;
+/// `"PCName"`, `"PCRace"`, `"PCSex"`, `"PCSexPronoun"`, `"PCSexPossessive"`.
+const PC_NAME_TEXT: u32 = 0x0106_ec6c;
+const PC_RACE_TEXT: u32 = 0x0106_ec64;
+const PC_SEX_TEXT: u32 = 0x0106_ec5c;
+const PC_SEX_PRONOUN_TEXT: u32 = 0x0106_ec4c;
+const PC_SEX_POSSESSIVE_TEXT: u32 = 0x0106_ec3c;
+/// `":LANGUAGE"`.
+const LANGUAGE_SUFFIX: u32 = 0x0106_ec84;
+/// `"&true;"` and `"&false;"`.
+const TRUE_TEXT: u32 = 0x0106_ec7c;
+const FALSE_TEXT: u32 = 0x0106_ec74;
+/// The model loader (`011c3b3c`), and the byte (`011d8908`) that makes
+/// `00707660` load without it.
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+const LOADER_DISABLED: u32 = 0x011d_8908;
+/// The temporary model (`011d890c`) `00707660` builds and `00707820` frees.
+const TEMP_MODEL: u32 = 0x011d_890c;
+/// Bytes of the `BSStream` `00707660` keeps on its stack.
+const BS_STREAM_SIZE: u32 = 0x5e0;
+/// Bytes of the cloning process `00707870` keeps on its stack.
+const CLONING_PROCESS_SIZE: u32 = 0x20;
+/// The object (`011dea10`) whose deep copy `00707870` calls.
+const DEEP_COPY_OWNER: u32 = 0x011d_ea10;
 
 /// The manager now (each wrapper asks for it again where the game does).
 fn manager(e: &mut Engine) -> u32 {
@@ -844,6 +877,547 @@ pub fn fn_00706cb0(e: &mut Engine, this: u32) {
     e.mem.set_u32(this + 0xbc, 0);
 }
 
+// Translated from 00706cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetMenusRoot` (Xbox PDB): `00586150` on the manager.
+pub fn interface_get_menus_root(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.call(0x0058_6150, &args![current]).u32()
+}
+
+// Translated from 00706cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `004fd400` on the manager (a getter; its body is not part of this unit).
+pub fn fn_00706cf0(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.call(0x004f_d400, &args![current]).u32()
+}
+
+// Translated from 00706d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetDebugTextRoot` (Xbox PDB): `005e3fc0` on the manager.
+pub fn interface_get_debug_text_root(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.call(0x005e_3fc0, &args![current]).u32()
+}
+
+// Translated from 00706d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetInterfaceRoot` (Xbox PDB): `004fb070` on the manager.
+pub fn interface_get_interface_root(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.call(0x004f_b070, &args![current]).u32()
+}
+
+// Translated from 00706d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::AttachDefaultAlphaProperty` (Xbox PDB): takes the property
+/// `006629f0` returns for the manager and attaches it to `node` with
+/// `NiAVObject::AttachProperty` (`00439410`).
+pub fn interface_attach_default_alpha_property(e: &mut Engine, node: u32) {
+    let current = manager(e);
+    let property = e.call(0x0066_29f0, &args![current]).u32();
+    e.call(0x0043_9410, &args![node, property]);
+}
+
+// Translated from 00706d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetFirstChanceTextureRelease` (Xbox PDB): the byte at
+/// `+0xec` of the manager (see `00706d90`).
+pub fn interface_get_first_chance_texture_release(e: &mut Engine) -> u8 {
+    let current = manager(e);
+    fn_00706d90(e, current)
+}
+
+// Translated from 00706d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0xec` of `this` (the manager's first-chance texture
+/// release flag, which `00703960` sets).
+pub fn fn_00706d90(e: &mut Engine, this: u32) -> u8 {
+    e.mem.u8(this + 0xec)
+}
+
+// Translated from 00706db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00703960(manager, value)`: sets the manager's byte at `+0xec`.
+pub fn fn_00706db0(e: &mut Engine, value: u8) {
+    let current = manager(e);
+    e.call(0x0070_3960, &args![current, value]);
+}
+
+// Translated from 00706dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte in the manager's byte at `+0xdc`.
+pub fn fn_00706dd0(e: &mut Engine, value: u8) {
+    let current = manager(e);
+    e.mem.set_u8(current + 0xdc, value);
+}
+
+// Translated from 00706df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetScreenHeight` (Xbox PDB): the `float` `00715da0` returns
+/// in `ST0`.
+pub fn interface_get_screen_height(e: &mut Engine) -> f32 {
+    e.call(0x0071_5da0, &[]).f32()
+}
+
+// Translated from 00706e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetScreenWidth` (Xbox PDB): the `float`
+/// `InterfaceManager::GetScreenWidth` (`00715d40`) returns in `ST0`.
+pub fn interface_get_screen_width(e: &mut Engine) -> f32 {
+    e.call(0x0071_5d40, &[]).f32()
+}
+
+// Translated from 00706e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetRealScreenHeight` (Xbox PDB): `00706e20`.
+pub fn interface_get_real_screen_height(e: &mut Engine) -> f32 {
+    fn_00706e20(e)
+}
+
+// Translated from 00706e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The renderer's integer `004dc200` (the word at `01189480`) as a float
+/// in `ST0`.
+pub fn fn_00706e20(e: &mut Engine) -> f32 {
+    e.call(0x004d_c200, &[]).i32() as f32
+}
+
+// Translated from 00706e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetRealScreenWidth` (Xbox PDB): `00706e50`.
+pub fn interface_get_real_screen_width(e: &mut Engine) -> f32 {
+    fn_00706e50(e)
+}
+
+// Translated from 00706e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The renderer's integer `004dc1f0` as a float in `ST0`.
+pub fn fn_00706e50(e: &mut Engine) -> f32 {
+    e.call(0x004d_c1f0, &[]).i32() as f32
+}
+
+// Translated from 00706e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::GetScreenAspectRatio` (Xbox PDB): the manager's `float` at
+/// `+0x4d0`.
+pub fn interface_get_screen_aspect_ratio(e: &mut Engine) -> f32 {
+    let current = manager(e);
+    e.mem.f32(current + 0x4d0)
+}
+
+// Translated from 00706e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` constant at `0106ec38` (an aspect ratio).
+pub fn fn_00706e80(e: &mut Engine) -> f32 {
+    e.global::<f32>(ASPECT_RATIO_CONSTANT)
+}
+
+// Translated from 00706e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A float from virtual calls on the object `0043c4b0` returns: the
+/// constant of `00706e80` times (slot `0x90` of one result of that object's
+/// slot `0xc8`, called with 0) divided by (slot `0x8c` of another result of
+/// the same call, called with 0), the two counts read as unsigned.
+pub fn fn_00706e90(e: &mut Engine) -> f32 {
+    let object = e.call(0x0043_c4b0, &[]).u32();
+    let first = e.vcall(object, 0xc8, &[]).u32();
+    let second = e.vcall(object, 0xc8, &[]).u32();
+    let divisor = e.vcall(second, 0x8c, &args![0u32]).u32() as f64;
+    let dividend = e.vcall(first, 0x90, &args![0u32]).u32() as f64;
+    let ratio = dividend / divisor;
+    let base = fn_00706e80(e) as f64;
+    (base * ratio) as f32
+}
+
+// Translated from 00706f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constant `0x3ec`.
+pub fn fn_00706f20(_e: &mut Engine) -> u32 {
+    0x3ec
+}
+
+// Translated from 00706f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::PlayMenuSound` (Xbox PDB): `InterfaceManager::PlayMenuSound`
+/// (`00717280`, `cdecl`) with the sound id.
+pub fn interface_play_menu_sound(e: &mut Engine, sound: u32) {
+    e.call(0x0071_7280, &args![sound]);
+}
+
+// Translated from 00706f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::NewTimer` (Xbox PDB): `InterfaceManager::NewTimer`
+/// (`007164c0`, `cdecl`) with the word and the `float`.
+pub fn interface_new_timer(e: &mut Engine, id: u32, seconds: f32) {
+    e.call(0x0071_64c0, &args![id, seconds]);
+}
+
+// Translated from 00706f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::UpdateAllTimers` (Xbox PDB): `InterfaceManager::
+/// UpdateAllTimers` (`00716320`) on the manager.
+pub fn interface_update_all_timers(e: &mut Engine) {
+    let current = manager(e);
+    e.call(0x0071_6320, &args![current]);
+}
+
+// Translated from 00706f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::ClearTimer` (Xbox PDB): `InterfaceManager::ClearTimer`
+/// (`007165d0`, `cdecl`, finds the manager itself) with the timer id. The
+/// game also calls `004b7210` first and ignores the result.
+pub fn interface_clear_timer(e: &mut Engine, id: u32) {
+    manager(e);
+    e.call(0x0071_65d0, &args![id]);
+}
+
+// Translated from 00706fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::AddToEnterStack` (Xbox PDB): `InterfaceManager::
+/// AddToEnterStack` (`00714d90`) on the manager.
+pub fn interface_add_to_enter_stack(e: &mut Engine, menu_id: u32) -> u32 {
+    let current = manager(e);
+    e.call(0x0071_4d90, &args![current, menu_id]).u32()
+}
+
+// Translated from 00706fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::PopFromEnterStack` (Xbox PDB): `InterfaceManager::
+/// PopFromEnterStack` (`00714fd0`) on the manager, with the menu id and a
+/// byte flag.
+pub fn interface_pop_from_enter_stack(e: &mut Engine, menu_id: u32, flag: u8) -> u32 {
+    let current = manager(e);
+    e.call(0x0071_4fd0, &args![current, menu_id, flag]).u32()
+}
+
+// Translated from 00706ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::SetCurrentFocusTarget` (Xbox PDB): `InterfaceManager::
+/// SetCurrentFocusTarget` (`00715860`) on the manager with the tile, the
+/// word `0xfc3` and the flag 1.
+pub fn interface_set_current_focus_target(e: &mut Engine, tile: u32) {
+    let current = manager(e);
+    e.call(0x0071_5860, &args![current, tile, 0xfc3u32, 1u32]);
+}
+
+// Translated from 00707010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::RecursiveFade` (Xbox PDB): `InterfaceManager::RecursiveFade`
+/// (`00712450`) on the manager with the tile and the two floats.
+pub fn interface_recursive_fade(e: &mut Engine, tile: u32, from: f32, to: f32) {
+    let current = manager(e);
+    e.call(0x0071_2450, &args![current, tile, from, to]);
+}
+
+// Translated from 00707040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The manager's word at `+0xcc`.
+pub fn fn_00707040(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.mem.u32(current + 0xcc)
+}
+
+// Translated from 00707050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word in the manager's `+0xcc`.
+pub fn fn_00707050(e: &mut Engine, value: u32) {
+    let current = manager(e);
+    e.mem.set_u32(current + 0xcc, value);
+}
+
+// Translated from 00707070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The manager's word at `+0xd0`.
+pub fn fn_00707070(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.mem.u32(current + 0xd0)
+}
+
+// Translated from 00707080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word in the manager's `+0xd0`.
+pub fn fn_00707080(e: &mut Engine, value: u32) {
+    let current = manager(e);
+    e.mem.set_u32(current + 0xd0, value);
+}
+
+// Translated from 007070a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0045cd60` on the manager (a getter; its body is not part of this unit).
+pub fn fn_007070a0(e: &mut Engine) -> u32 {
+    let current = manager(e);
+    e.call(0x0045_cd60, &args![current]).u32()
+}
+
+/// The bounded string copy (`00406d30`: destination, size, source) the
+/// text replacement uses.
+fn copy_text(e: &mut Engine, dest: u32, size: u32, src: u32) {
+    e.call(0x0040_6d30, &args![dest, size, src]);
+}
+
+/// Whether the constant `name` equals the string at `label` (`00404dc0`
+/// returns 0 for equal).
+fn name_is(e: &mut Engine, name: u32, label: u32) -> bool {
+    e.call(0x0040_4dc0, &args![name, label]).i32() == 0
+}
+
+// Translated from 007070c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::FindTextReplacementString` (Xbox PDB): writes into `dest`
+/// (`size` bytes) the text that replaces the constant `name` and returns
+/// whether it found one. In order, the first that applies wins:
+///
+/// 1. a name `00707330` knows (an index below `0x1c`):
+///    `GetControlPushTextFor(index, dest, flag)`;
+/// 2. a form with that editor ID (`00483a00`) whose type byte (`+4`) is 6:
+///    its value, formatted as `"%.2f"` when its byte at `+0x20` is `'f'` and
+///    as `"%i"` otherwise;
+/// 3. `"PCName"` (`0055d520` on the object in `011dea3c`), `"PCRace"`
+///    (`0087f6c0`), `"PCSex"`, `"PCSexPronoun"` and `"PCSexPossessive"`
+///    (a string of the tables at `0119b354`, `0119b364`, `0119b35c`,
+///    indexed by `0087f4c0`), each compared with `00404dc0`;
+/// 4. `007073d0` (a game-setting lookup).
+///
+/// The result is false for a null or empty name, buffer or size.
+pub fn interface_find_text_replacement_string(
+    e: &mut Engine,
+    name: u32,
+    dest: u32,
+    size: u32,
+    flag: u8,
+) -> bool {
+    if name == 0 || e.mem.u8(name) == 0 || dest == 0 || size == 0 {
+        return false;
+    }
+    let mut found = false;
+    let index = fn_00707330(e, name);
+    if index < 0x1c {
+        e.call(0x0070_39b0, &args![index, dest, flag]);
+        found = true;
+    }
+    if !found {
+        let form = e.call(0x0048_3a00, &args![name]).u32();
+        if form != 0 && e.call(0x0040_1170, &args![form]).u32() == 6 {
+            let kind = e.call(0x0052_9ea0, &args![form]).u32() as u8 as i8;
+            let value = e.call(0x0052_6ac0, &args![form]).f32();
+            if kind == 0x66 {
+                e.call(0x0040_6d00, &args![dest, size, FLOAT_FORMAT, value as f64]);
+            } else {
+                let whole = float_to_int(e, value);
+                e.call(0x0040_6d00, &args![dest, size, INTEGER_FORMAT, whole]);
+            }
+            found = true;
+        }
+    }
+    if !found && name_is(e, name, PC_NAME_TEXT) {
+        let owner = e.mem.u32(TEXT_OWNER);
+        let text = e.call(0x0055_d520, &args![owner]).u32();
+        copy_text(e, dest, size, text);
+        found = true;
+    }
+    if !found && name_is(e, name, PC_RACE_TEXT) {
+        let owner = e.mem.u32(TEXT_OWNER);
+        let text = e.call(0x0087_f6c0, &args![owner]).u32();
+        copy_text(e, dest, size, text);
+        found = true;
+    }
+    for (label, table) in [
+        (PC_SEX_TEXT, 0x0119_b354u32),
+        (PC_SEX_PRONOUN_TEXT, 0x0119_b364),
+        (PC_SEX_POSSESSIVE_TEXT, 0x0119_b35c),
+    ] {
+        if !found && name_is(e, name, label) {
+            let owner = e.mem.u32(TEXT_OWNER);
+            let which = e.call(0x0087_f4c0, &args![owner]).u32();
+            let entry = e.mem.u32(table.wrapping_add(which.wrapping_mul(4)));
+            let text = e.call(0x0040_3df0, &args![entry]).u32();
+            copy_text(e, dest, size, text);
+            found = true;
+        }
+    }
+    if !found {
+        found = fn_007073d0(e, name, dest);
+    }
+    found
+}
+
+// Translated from 00707330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::MatchTextReplaceConstantToGameSettings` (Xbox PDB): the
+/// index in the table of `0x1c` pointers at `011d51d0` of the entry equal to
+/// the game setting `name` (`004f8a30` on the object `00404a70` returns),
+/// else of the first whose `00403df0` text matches `name` by `00469880`;
+/// `0x1c` when none does.
+///
+/// `00404a70` and `004f8a30` are called as the game calls them: the first
+/// leaves `name` on the stack for the second.
+pub fn fn_00707330(e: &mut Engine, name: u32) -> i32 {
+    let settings = e.call(0x0040_4a70, &[]).u32();
+    let wanted = e.call(0x004f_8a30, &args![settings, name]).u32();
+    let mut index = 0u32;
+    while index < 0x1c && e.mem.u32(TEXT_TABLE + 4 * index) != wanted {
+        index += 1;
+    }
+    if index == 0x1c {
+        index = 0;
+        while index < 0x1c {
+            let entry = e.mem.u32(TEXT_TABLE + 4 * index);
+            let text = e.call(0x0040_3df0, &args![entry]).u32();
+            if e.call(0x0046_9880, &args![text, name]).i32() == 0 {
+                break;
+            }
+            index += 1;
+        }
+    }
+    index as i32
+}
+
+// Translated from 007073d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::TestConstantForGameSettings` (Xbox PDB): looks the constant
+/// `name` up as a game setting and writes its value as text into `dest`;
+/// false (and nothing written) when `name` is null or empty or no setting
+/// is found.
+///
+/// A leading `&` and then a leading `-` are skipped, the rest is copied into
+/// a `0x104`-byte buffer and a trailing `;` is cut. The setting is looked up
+/// by `004f8a30` (on the object `00404a70` returns); when it is missing,
+/// `":LANGUAGE"` is appended and `005e02b0` (on the object `0044f560`
+/// returns) tries again. The first letter of the buffer gives the type: `s`
+/// copies the setting's text, `i` formats its integer with `"%i"`, `f`
+/// formats its float, also with `"%i"` (as the exe does), and `b` copies
+/// `"&true;"` when its byte is 1 and `"&false;"` otherwise. The stack cookie
+/// check is not translated.
+pub fn fn_007073d0(e: &mut Engine, name: u32, dest: u32) -> bool {
+    if name == 0 || e.mem.u8(name) == 0 {
+        return false;
+    }
+    e.with_stack(0x104, |e, buffer| {
+        let buffer = buffer.addr();
+        let mut skip = 0u32;
+        if e.mem.u8(name) == b'&' {
+            skip += 1;
+        }
+        if e.mem.u8(name + skip) == b'-' {
+            skip += 1;
+        }
+        e.call(0x0040_6d30, &args![buffer, 0x104u32, name + skip]);
+        let length = e.call(0x0044_a670, &args![buffer]).u32();
+        if e.mem.u8(buffer + length.wrapping_sub(1)) == b';' {
+            let length = e.call(0x0044_a670, &args![buffer]).u32();
+            e.mem.set_u8(buffer + length.wrapping_sub(1), 0);
+        }
+        let settings = e.call(0x0040_4a70, &[]).u32();
+        let mut setting = e.call(0x004f_8a30, &args![settings, buffer]).u32();
+        if setting == 0 {
+            e.call(0x0040_6d50, &args![buffer, 0x104u32, LANGUAGE_SUFFIX]);
+            let owner = e.call(0x0044_f560, &[]).u32();
+            setting = e.call(0x005e_02b0, &args![owner, buffer]).u32();
+        }
+        if setting == 0 {
+            return false;
+        }
+        match e.mem.u8(buffer) {
+            b's' | b'S' => {
+                let text = e.call(0x0040_3df0, &args![setting]).u32();
+                e.call(0x0040_46f0, &args![dest, text]);
+            }
+            b'i' | b'I' => {
+                let slot = e.call(0x0043_d4d0, &args![setting]).u32();
+                let value = e.mem.u32(slot);
+                e.call(0x00ec_623a, &args![buffer, INTEGER_FORMAT, value]);
+                e.call(0x0040_46f0, &args![dest, buffer]);
+            }
+            b'f' | b'F' => {
+                let slot = e.call(0x0040_3e20, &args![setting]).u32();
+                let value = e.mem.f32(slot) as f64;
+                e.call(0x00ec_623a, &args![buffer, INTEGER_FORMAT, value]);
+                e.call(0x0040_46f0, &args![dest, buffer]);
+            }
+            b'b' | b'B' => {
+                let slot = e.call(0x0040_8d60, &args![setting]).u32();
+                let text = if e.mem.u8(slot) == 1 {
+                    TRUE_TEXT
+                } else {
+                    FALSE_TEXT
+                };
+                e.call(0x0040_46f0, &args![dest, text]);
+            }
+            _ => {}
+        }
+        true
+    })
+}
+
+// Translated from 00707640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::ReleaseModelFile` (Xbox PDB): when the model loader
+/// (`011c3b3c`) exists, `0045a5e0(loader, model)` (releases the model).
+pub fn interface_release_model_file(e: &mut Engine, model: u32) {
+    let loader = e.mem.u32(MODEL_LOADER);
+    if loader != 0 {
+        e.call(0x0045_a5e0, &args![loader, model]);
+    }
+}
+
+// Translated from 00707660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::LoadModelFile` (Xbox PDB): loads the model file `path` and
+/// returns the model (0 when there is none). The byte at `loaded_by_loader`
+/// is set to 1 when the model loader (`011c3b3c`) did it.
+///
+/// With a loader and the byte `011d8908` clear, `ModelLoader::LoadFile`
+/// (`00447080`) does everything. Otherwise, if the file exists
+/// (`FileFinder::Exist`, `00456a20`) it is read into a `BSStream` on the
+/// stack; the previous temporary model in `011d890c` is destroyed, a new
+/// 0x10-byte `Model` (`0043aaf0`) is built from the stream, kept in
+/// `011d890c`, and `0043b230` on it gives the result. The compiler's
+/// exception-unwinding frame and stack cookie are not translated.
+pub fn interface_load_model_file(e: &mut Engine, path: u32, loaded_by_loader: u32) -> u32 {
+    e.mem.set_u8(loaded_by_loader, 0);
+    let loader = e.mem.u32(MODEL_LOADER);
+    if loader != 0 && e.mem.u8(LOADER_DISABLED) == 0 {
+        e.mem.set_u8(loaded_by_loader, 1);
+        return e
+            .call(
+                0x0044_7080,
+                &args![loader, path, 0u32, 1u32, 0u32, 0u32, 0u32],
+            )
+            .u32();
+    }
+    if e.call(0x0045_6a20, &args![path, 0u32, 0u32, -1i32]).u32() == 0 {
+        return 0;
+    }
+    e.with_stack(BS_STREAM_SIZE, |e, stream| {
+        let stream = stream.addr();
+        e.call(0x0043_cfd0, &args![stream]);
+        let loaded = e.call(0x00c3_a8a0, &args![stream, path, 0u32]).bool();
+        if !loaded {
+            e.call(0x0043_d090, &args![stream]);
+            return 0;
+        }
+        let previous = e.mem.u32(TEMP_MODEL);
+        if previous != 0 {
+            e.call(0x0044_31f0, &args![previous, 1u32]);
+        }
+        let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+        let model = if block != 0 {
+            e.call(0x0043_aaf0, &args![block, path, stream, 1u32, 0u32])
+                .u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(TEMP_MODEL, model);
+        let result = e.call(0x0043_b230, &args![model]).u32();
+        e.call(0x0043_d090, &args![stream]);
+        result
+    })
+}
+
+// Translated from 00707820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::ClearTempModel` (Xbox PDB): destroys the model in `011d890c`
+/// (`004431f0(model, 1)`) if there is one and clears the pointer.
+pub fn interface_clear_temp_model(e: &mut Engine) {
+    let model = e.mem.u32(TEMP_MODEL);
+    if model != 0 {
+        e.call(0x0044_31f0, &args![model, 1u32]);
+    }
+    e.mem.set_u32(TEMP_MODEL, 0);
+}
+
+// Translated from 00707860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `0x101dccc` of a string in the exe (`"Meshes"`).
+pub fn fn_00707860(_e: &mut Engine) -> u32 {
+    0x0101_dccc
+}
+
+// Translated from 00707870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Interface::CopyOrDeepCopyNode` (Xbox PDB): copies the node, with a
+/// cloning-process object (`004ad050`, scale 1.0, destroyed by `004ad270`)
+/// on the stack. A node `004b5bf0` accepts is copied by
+/// `TES::CreateDeepCopySameTextures` (`00457ba0`, on the object in
+/// `011dea10`); any other by `NiObject::Clone` (`00a5d2c0`). The compiler's
+/// exception-unwinding frame is not translated.
+pub fn interface_copy_or_deep_copy_node(e: &mut Engine, node: u32) -> u32 {
+    e.with_stack(CLONING_PROCESS_SIZE, |e, process| {
+        let process = process.addr();
+        e.call(0x004a_d050, &args![process, 1.0f32]);
+        let copy = if e.call(0x004b_5bf0, &args![node]).bool() {
+            let owner = e.mem.u32(DEEP_COPY_OWNER);
+            e.call(0x0045_7ba0, &args![owner, node, process]).u32()
+        } else {
+            e.call(0x00a5_d2c0, &args![node, process]).u32()
+        };
+        e.call(0x004a_d270, &args![process]);
+        copy
+    })
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -887,6 +1461,49 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00706b90, fn_00706b90(u32)),
         entry!(0x00706c20, interface_tile_is_being_deleted(u32)),
         entry!(0x00706cb0, fn_00706cb0(u32)),
+        entry!(0x00706cd0, interface_get_menus_root() -> u32),
+        entry!(0x00706cf0, fn_00706cf0() -> u32),
+        entry!(0x00706d10, interface_get_debug_text_root() -> u32),
+        entry!(0x00706d30, interface_get_interface_root() -> u32),
+        entry!(0x00706d50, interface_attach_default_alpha_property(u32)),
+        entry!(0x00706d70, interface_get_first_chance_texture_release() -> u8),
+        entry!(0x00706d90, fn_00706d90(u32) -> u8),
+        entry!(0x00706db0, fn_00706db0(u8)),
+        entry!(0x00706dd0, fn_00706dd0(u8)),
+        entry!(0x00706df0, interface_get_screen_height() -> f32),
+        entry!(0x00706e00, interface_get_screen_width() -> f32),
+        entry!(0x00706e10, interface_get_real_screen_height() -> f32),
+        entry!(0x00706e20, fn_00706e20() -> f32),
+        entry!(0x00706e40, interface_get_real_screen_width() -> f32),
+        entry!(0x00706e50, fn_00706e50() -> f32),
+        entry!(0x00706e70, interface_get_screen_aspect_ratio() -> f32),
+        entry!(0x00706e80, fn_00706e80() -> f32),
+        entry!(0x00706e90, fn_00706e90() -> f32),
+        entry!(0x00706f20, fn_00706f20() -> u32),
+        entry!(0x00706f30, interface_play_menu_sound(u32)),
+        entry!(0x00706f50, interface_new_timer(u32, f32)),
+        entry!(0x00706f70, interface_update_all_timers()),
+        entry!(0x00706f90, interface_clear_timer(u32)),
+        entry!(0x00706fb0, interface_add_to_enter_stack(u32) -> u32),
+        entry!(0x00706fd0, interface_pop_from_enter_stack(u32, u8) -> u32),
+        entry!(0x00706ff0, interface_set_current_focus_target(u32)),
+        entry!(0x00707010, interface_recursive_fade(u32, f32, f32)),
+        entry!(0x00707040, fn_00707040() -> u32),
+        entry!(0x00707050, fn_00707050(u32)),
+        entry!(0x00707070, fn_00707070() -> u32),
+        entry!(0x00707080, fn_00707080(u32)),
+        entry!(0x007070a0, fn_007070a0() -> u32),
+        entry!(
+            0x007070c0,
+            interface_find_text_replacement_string(u32, u32, u32, u8) -> bool
+        ),
+        entry!(0x00707330, fn_00707330(u32) -> i32),
+        entry!(0x007073d0, fn_007073d0(u32, u32) -> bool),
+        entry!(0x00707640, interface_release_model_file(u32)),
+        entry!(0x00707660, interface_load_model_file(u32, u32) -> u32),
+        entry!(0x00707820, interface_clear_temp_model()),
+        entry!(0x00707860, fn_00707860() -> u32),
+        entry!(0x00707870, interface_copy_or_deep_copy_node(u32) -> u32),
     ]
 }
 
@@ -1929,5 +2546,716 @@ mod tests {
         e.mem.set_u32(manager + 0xbc, 9);
         e.call(0x0070_6cb0, &args![manager]);
         assert_eq!(e.mem.u32(manager + 0xbc), 0);
+    }
+
+    // ---- 00706cd0 .. 00707870 ----
+
+    fn float_ret(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// An engine as `ui_engine` with the pages the text and model code reads
+    /// mapped too.
+    fn text_engine() -> (Engine, u32) {
+        let (mut e, manager) = ui_engine();
+        for page in [
+            0x0106_e000,
+            0x0101_d000,
+            0x0119_b000,
+            0x011c_3000,
+            0x011c_8000,
+            0x011d_5000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        (e, manager)
+    }
+
+    /// A zero-terminated string in fresh memory.
+    fn put_text(e: &mut Engine, text: &str) -> u32 {
+        let at = e.mem.alloc(text.len() as u32 + 1);
+        for (i, byte) in text.bytes().enumerate() {
+            e.mem.set_u8(at + i as u32, byte);
+        }
+        e.mem.set_u8(at + text.len() as u32, 0);
+        at
+    }
+
+    /// The string at `at`.
+    fn text_at(e: &Engine, at: u32) -> String {
+        let mut out = String::new();
+        let mut i = 0;
+        while e.mem.u8(at + i) != 0 {
+            out.push(e.mem.u8(at + i) as char);
+            i += 1;
+        }
+        out
+    }
+
+    /// A getter that passes the manager to `callee` and returns its result.
+    fn check_manager_getter(wrapper: u32, callee: u32) {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, callee, 0x55);
+        assert_eq!(e.call(wrapper, &[]).u32(), 0x55);
+        assert_eq!(logged(&e, callee), vec![vec![manager]]);
+    }
+
+    #[test]
+    fn get_menus_root_asks_the_manager() {
+        check_manager_getter(0x0070_6cd0, 0x0058_6150);
+    }
+
+    #[test]
+    fn fn_00706cf0_asks_the_manager() {
+        check_manager_getter(0x0070_6cf0, 0x004f_d400);
+    }
+
+    #[test]
+    fn get_debug_text_root_asks_the_manager() {
+        check_manager_getter(0x0070_6d10, 0x005e_3fc0);
+    }
+
+    #[test]
+    fn get_interface_root_asks_the_manager() {
+        check_manager_getter(0x0070_6d30, 0x004f_b070);
+    }
+
+    #[test]
+    fn attach_default_alpha_property_attaches_the_managers_property() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0066_29f0, 0x77);
+        stub(&mut e, 0x0043_9410, 0);
+        e.call(0x0070_6d50, &args![0x1234u32]);
+        assert_eq!(logged(&e, 0x0066_29f0), vec![vec![manager]]);
+        assert_eq!(logged(&e, 0x0043_9410), vec![vec![0x1234, 0x77]]);
+    }
+
+    #[test]
+    fn get_first_chance_texture_release_reads_the_managers_byte() {
+        let (mut e, manager) = ui_engine();
+        e.mem.set_u8(manager + 0xec, 1);
+        assert_eq!(e.call(0x0070_6d70, &[]).u8(), 1);
+        e.mem.set_u8(manager + 0xec, 0);
+        assert_eq!(e.call(0x0070_6d70, &[]).u8(), 0);
+    }
+
+    #[test]
+    fn fn_00706d90_reads_the_byte_at_ec() {
+        let (mut e, _) = ui_engine();
+        let object = e.mem.alloc(0x100);
+        e.mem.set_u8(object + 0xec, 9);
+        assert_eq!(e.call(0x0070_6d90, &args![object]).u8(), 9);
+    }
+
+    #[test]
+    fn fn_00706db0_passes_the_byte_to_the_setter() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0070_3960, 0);
+        e.call(0x0070_6db0, &args![0xabu32]);
+        assert_eq!(logged(&e, 0x0070_3960), vec![vec![manager, 0xab]]);
+    }
+
+    #[test]
+    fn fn_00706dd0_stores_only_a_byte_without_the_ready_check() {
+        let (mut e, manager) = ui_engine();
+        e.mem.set_u8(manager, 0);
+        e.mem.set_u32(manager + 0xdc, 0x1122_3344);
+        e.call(0x0070_6dd0, &args![0x5u32]);
+        assert_eq!(e.mem.u32(manager + 0xdc), 0x1122_3305);
+    }
+
+    #[test]
+    fn screen_height_and_width_return_the_managers_floats() {
+        let (mut e, _) = ui_engine();
+        e.register(0x0071_5da0, |_, _| float_ret(1080.0));
+        e.register(0x0071_5d40, |_, _| float_ret(1920.0));
+        assert_eq!(e.call(0x0070_6df0, &[]).f32(), 1080.0);
+        assert_eq!(e.call(0x0070_6e00, &[]).f32(), 1920.0);
+    }
+
+    #[test]
+    fn real_screen_height_is_the_renderers_integer_as_a_float() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, 0x004d_c200, 1050);
+        assert_eq!(e.call(0x0070_6e20, &[]).f32(), 1050.0);
+        assert_eq!(e.call(0x0070_6e10, &[]).f32(), 1050.0);
+    }
+
+    #[test]
+    fn real_screen_width_is_the_renderers_integer_as_a_float() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, 0x004d_c1f0, 1680);
+        assert_eq!(e.call(0x0070_6e50, &[]).f32(), 1680.0);
+        assert_eq!(e.call(0x0070_6e40, &[]).f32(), 1680.0);
+    }
+
+    #[test]
+    fn screen_aspect_ratio_reads_the_managers_float() {
+        let (mut e, manager) = ui_engine();
+        e.mem.set_f32(manager + 0x4d0, 1.75);
+        assert_eq!(e.call(0x0070_6e70, &[]).f32(), 1.75);
+    }
+
+    #[test]
+    fn fn_00706e80_reads_the_constant() {
+        let (mut e, _) = text_engine();
+        e.set_global(ASPECT_RATIO_CONSTANT, 1.5f32);
+        assert_eq!(e.call(0x0070_6e80, &[]).f32(), 1.5);
+    }
+
+    #[test]
+    fn fn_00706e90_scales_the_constant_by_the_two_counts() {
+        let (mut e, _) = text_engine();
+        e.set_global(ASPECT_RATIO_CONSTANT, 2.0f32);
+        // Two objects with their own tables: the result of slot 0xc8 is
+        // the object itself, slot 0x8c gives 400 and slot 0x90 gives 1000.
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x0200_2000);
+        e.put_vtable(0x0200_2000, &[0u32; 0x40]);
+        e.mem.set_u32(0x0200_2000 + 0xc8, 0x0200_0001);
+        e.mem.set_u32(0x0200_2000 + 0x8c, 0x0200_0002);
+        e.mem.set_u32(0x0200_2000 + 0x90, 0x0200_0003);
+        stub(&mut e, 0x0043_c4b0, object);
+        stub(&mut e, 0x0200_0001, object);
+        stub(&mut e, 0x0200_0002, 400);
+        stub(&mut e, 0x0200_0003, 1000);
+        // 2.0 * (1000 / 400).
+        assert_eq!(e.call(0x0070_6e90, &[]).f32(), 5.0);
+        assert_eq!(logged(&e, 0x0200_0002), vec![vec![object, 0]]);
+        assert_eq!(logged(&e, 0x0200_0003), vec![vec![object, 0]]);
+    }
+
+    #[test]
+    fn fn_00706f20_returns_0x3ec() {
+        let (mut e, _) = ui_engine();
+        assert_eq!(e.call(0x0070_6f20, &[]).u32(), 0x3ec);
+    }
+
+    #[test]
+    fn play_menu_sound_forwards_the_sound() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, 0x0071_7280, 0);
+        e.call(0x0070_6f30, &args![0x42u32]);
+        assert_eq!(logged(&e, 0x0071_7280), vec![vec![0x42]]);
+    }
+
+    #[test]
+    fn new_timer_forwards_the_float() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, 0x0071_64c0, 0);
+        e.call(0x0070_6f50, &args![3u32, 2.5f32]);
+        assert_eq!(logged(&e, 0x0071_64c0), vec![vec![3, 2.5f32.to_bits()]]);
+    }
+
+    #[test]
+    fn update_all_timers_runs_on_the_manager() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0071_6320, 0);
+        e.call(0x0070_6f70, &[]);
+        assert_eq!(logged(&e, 0x0071_6320), vec![vec![manager]]);
+    }
+
+    #[test]
+    fn clear_timer_forwards_the_id_without_the_manager() {
+        let (mut e, _) = ui_engine();
+        stub(&mut e, 0x0071_65d0, 0);
+        e.call(0x0070_6f90, &args![8u32]);
+        assert_eq!(logged(&e, 0x0071_65d0), vec![vec![8]]);
+    }
+
+    #[test]
+    fn add_to_enter_stack_returns_the_managers_result() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0071_4d90, 5);
+        assert_eq!(e.call(0x0070_6fb0, &args![3u32]).u32(), 5);
+        assert_eq!(logged(&e, 0x0071_4d90), vec![vec![manager, 3]]);
+    }
+
+    #[test]
+    fn pop_from_enter_stack_passes_the_id_and_the_byte() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0071_4fd0, 1);
+        assert_eq!(e.call(0x0070_6fd0, &args![0x3eau32, 1u32]).u32(), 1);
+        assert_eq!(logged(&e, 0x0071_4fd0), vec![vec![manager, 0x3ea, 1]]);
+    }
+
+    #[test]
+    fn set_current_focus_target_adds_the_constant_arguments() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0071_5860, 0);
+        e.call(0x0070_6ff0, &args![0x99u32]);
+        assert_eq!(logged(&e, 0x0071_5860), vec![vec![manager, 0x99, 0xfc3, 1]]);
+    }
+
+    #[test]
+    fn recursive_fade_passes_the_tile_and_both_floats() {
+        let (mut e, manager) = ui_engine();
+        stub(&mut e, 0x0071_2450, 0);
+        e.call(0x0070_7010, &args![0x99u32, 0.5f32, 1.0f32]);
+        assert_eq!(
+            logged(&e, 0x0071_2450),
+            vec![vec![manager, 0x99, 0.5f32.to_bits(), 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn manager_slot_words_are_read_and_written() {
+        let (mut e, manager) = ui_engine();
+        e.mem.set_u32(manager + 0xcc, 11);
+        e.mem.set_u32(manager + 0xd0, 22);
+        assert_eq!(e.call(0x0070_7040, &[]).u32(), 11);
+        assert_eq!(e.call(0x0070_7070, &[]).u32(), 22);
+        e.call(0x0070_7050, &args![33u32]);
+        e.call(0x0070_7080, &args![44u32]);
+        assert_eq!(e.mem.u32(manager + 0xcc), 33);
+        assert_eq!(e.mem.u32(manager + 0xd0), 44);
+    }
+
+    #[test]
+    fn fn_007070a0_asks_the_manager() {
+        check_manager_getter(0x0070_70a0, 0x0045_cd60);
+    }
+
+    /// Doubles for the lookups of `FindTextReplacementString` that every
+    /// test needs: no known index, no form with that editor ID, names that
+    /// never equal a label.
+    fn find_text_engine() -> Engine {
+        let (mut e, _) = text_engine();
+        // `00707330`: the settings object, no setting, entries of the table
+        // that match nothing.
+        stub(&mut e, 0x0040_4a70, 0);
+        stub(&mut e, 0x004f_8a30, 0xdead);
+        stub(&mut e, 0x0040_3df0, 0);
+        stub(&mut e, 0x0046_9880, 1);
+        stub(&mut e, 0x0048_3a00, 0);
+        stub(&mut e, 0x0040_4dc0, 1);
+        e.set_global(TEXT_OWNER, 0x7000u32);
+        e
+    }
+
+    #[test]
+    fn find_text_replacement_string_rejects_empty_input() {
+        let mut e = find_text_engine();
+        let name = put_text(&mut e, "PCName");
+        let empty = put_text(&mut e, "");
+        let dest = e.mem.alloc(32);
+        for (n, d, s) in [
+            (0, dest, 32),
+            (empty, dest, 32),
+            (name, 0, 32),
+            (name, dest, 0),
+        ] {
+            let words = args![n, d, s, 0u32];
+            assert!(!e.call(0x0070_70c0, &words).bool());
+        }
+        // Only the top-level calls: nothing was looked up.
+        assert!(e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .all(|(a, _)| *a == 0x0070_70c0));
+    }
+
+    #[test]
+    fn find_text_replacement_string_uses_a_known_index() {
+        let mut e = find_text_engine();
+        // The first table entry equals the setting.
+        e.set_global(TEXT_TABLE, 0x5000u32);
+        stub(&mut e, 0x004f_8a30, 0x5000);
+        stub(&mut e, 0x0070_39b0, 0);
+        let name = put_text(&mut e, "Jump");
+        let dest = e.mem.alloc(32);
+        assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 1u32]).bool());
+        assert_eq!(logged(&e, 0x0070_39b0), vec![vec![0, dest, 1]]);
+        assert!(logged(&e, 0x0048_3a00).is_empty());
+    }
+
+    #[test]
+    fn find_text_replacement_string_formats_a_global_value() {
+        let mut e = find_text_engine();
+        stub(&mut e, 0x0048_3a00, 0x6000);
+        stub(&mut e, 0x0040_1170, 6);
+        stub(&mut e, 0x0040_6d00, 0);
+        e.register(0x0052_6ac0, |_, _| float_ret(3.75));
+        // A float global ('f'), then an integer one.
+        stub(&mut e, 0x0052_9ea0, 0x66);
+        let name = put_text(&mut e, "Gravity");
+        let dest = e.mem.alloc(32);
+        assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+        let mut expected = vec![dest, 32, FLOAT_FORMAT];
+        expected.extend_from_slice(&args![3.75f64]);
+        assert_eq!(logged(&e, 0x0040_6d00), vec![expected]);
+
+        stub(&mut e, 0x0052_9ea0, 0x73);
+        stub(&mut e, 0x00ec_62c0, 3);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+        assert_eq!(
+            logged(&e, 0x0040_6d00),
+            vec![vec![dest, 32, INTEGER_FORMAT, 3]]
+        );
+    }
+
+    #[test]
+    fn find_text_replacement_string_skips_a_form_of_another_type() {
+        let mut e = find_text_engine();
+        stub(&mut e, 0x0048_3a00, 0x6000);
+        stub(&mut e, 0x0040_1170, 5);
+        // The game-setting lookup (`007073d0`) runs for real on its helpers.
+        stub(&mut e, 0x0040_6d30, 0);
+        stub(&mut e, 0x0044_a670, 5);
+        let name = put_text(&mut e, "Thing");
+        let dest = e.mem.alloc(32);
+        // Falls through to the game-setting lookup, which finds a setting
+        // (`004f8a30`) whose type letter is unknown: found, nothing written.
+        assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+        assert!(logged(&e, 0x0040_6d00).is_empty());
+        assert_eq!(logged(&e, 0x004f_8a30).len(), 2);
+    }
+
+    #[test]
+    fn find_text_replacement_string_copies_the_player_texts() {
+        let mut e = find_text_engine();
+        stub(&mut e, 0x0040_6d30, 0);
+        stub(&mut e, 0x0055_d520, 0x111);
+        stub(&mut e, 0x0087_f6c0, 0x222);
+        stub(&mut e, 0x0087_f4c0, 2);
+        e.set_global(0x0119_b354u32 + 8, 0xa000u32);
+        e.set_global(0x0119_b364u32 + 8, 0xb000u32);
+        e.set_global(0x0119_b35cu32 + 8, 0xc000u32);
+        e.register(0x0040_3df0, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        // `00404dc0` is 0 only for the label the test is checking.
+        let dest = e.mem.alloc(32);
+        let name = put_text(&mut e, "X");
+        for (label, source) in [
+            (PC_NAME_TEXT, 0x111),
+            (PC_RACE_TEXT, 0x222),
+            (PC_SEX_TEXT, 0xa001),
+            (PC_SEX_PRONOUN_TEXT, 0xb001),
+            (PC_SEX_POSSESSIVE_TEXT, 0xc001),
+        ] {
+            e.register_double(0x0040_4dc0, move |_, a| Ret {
+                eax: (a[1] != label) as u32,
+                ..Ret::default()
+            });
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+            assert_eq!(logged(&e, 0x0040_6d30), vec![vec![dest, 32, source]]);
+        }
+    }
+
+    #[test]
+    fn find_text_replacement_string_asks_the_owner_for_the_player_name() {
+        let mut e = find_text_engine();
+        stub(&mut e, 0x0040_6d30, 0);
+        stub(&mut e, 0x0055_d520, 0x111);
+        e.register_double(0x0040_4dc0, |_, a| Ret {
+            eax: (a[1] != PC_NAME_TEXT) as u32,
+            ..Ret::default()
+        });
+        let name = put_text(&mut e, "PCName");
+        let dest = e.mem.alloc(32);
+        assert!(e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+        assert_eq!(logged(&e, 0x0055_d520), vec![vec![0x7000]]);
+    }
+
+    #[test]
+    fn find_text_replacement_string_falls_back_to_the_game_setting_lookup() {
+        let mut e = find_text_engine();
+        let name = put_text(&mut e, "sTest");
+        let dest = e.mem.alloc(32);
+        for i in 0..0x1c {
+            e.set_global(TEXT_TABLE + 4 * i, 0x5000 + i);
+        }
+        stub(&mut e, 0x004f_8a30, 0);
+        stub(&mut e, 0x0040_6d30, 0);
+        stub(&mut e, 0x0044_a670, 5);
+        stub(&mut e, 0x0040_6d50, 0);
+        stub(&mut e, 0x0044_f560, 0);
+        stub(&mut e, 0x005e_02b0, 0);
+        assert!(!e.call(0x0070_70c0, &args![name, dest, 32u32, 0u32]).bool());
+    }
+
+    #[test]
+    fn match_text_replace_constant_finds_an_equal_setting_or_a_matching_text() {
+        let (mut e, _) = text_engine();
+        stub(&mut e, 0x0040_4a70, 0x300);
+        e.register(0x004f_8a30, |_, a| Ret {
+            eax: if a[1] == 0x77 { 0x5004 } else { 0 },
+            ..Ret::default()
+        });
+        for i in 0..0x1c {
+            e.set_global(TEXT_TABLE + 4 * i, 0x5000 + i);
+        }
+        // Found by the setting: entry 4 is `0x5004`.
+        assert_eq!(e.call(0x0070_7330, &args![0x77u32]).i32(), 4);
+        // Not found: the texts are compared; entry 6's text matches.
+        e.register(0x0046_9880, |_, a| Ret {
+            eax: (a[0] != 0x5006) as u32,
+            ..Ret::default()
+        });
+        e.register(0x0040_3df0, |_, a| Ret {
+            eax: a[0],
+            ..Ret::default()
+        });
+        assert_eq!(e.call(0x0070_7330, &args![0x78u32]).i32(), 6);
+        // Nothing matches.
+        stub(&mut e, 0x0046_9880, 1);
+        assert_eq!(e.call(0x0070_7330, &args![0x78u32]).i32(), 0x1c);
+    }
+
+    /// Doubles for `007073d0`'s helpers: the copy and length functions work
+    /// on real memory so the buffer is the game's.
+    fn setting_engine() -> Engine {
+        let (mut e, _) = text_engine();
+        e.register(0x0040_6d30, |e, a| {
+            let mut i = 0;
+            loop {
+                let byte = e.mem.u8(a[2] + i);
+                e.mem.set_u8(a[0] + i, byte);
+                if byte == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            Ret::default()
+        });
+        e.register(0x0044_a670, |e, a| {
+            let mut i = 0;
+            while e.mem.u8(a[0] + i) != 0 {
+                i += 1;
+            }
+            Ret {
+                eax: i,
+                ..Ret::default()
+            }
+        });
+        e.register(0x0040_46f0, |e, a| {
+            let mut i = 0;
+            loop {
+                let byte = e.mem.u8(a[1] + i);
+                e.mem.set_u8(a[0] + i, byte);
+                if byte == 0 {
+                    break;
+                }
+                i += 1;
+            }
+            Ret::default()
+        });
+        stub(&mut e, 0x0040_4a70, 0);
+        stub(&mut e, 0x0040_6d50, 0);
+        stub(&mut e, 0x0044_f560, 0);
+        e
+    }
+
+    #[test]
+    fn test_constant_for_game_settings_rejects_empty_names() {
+        let mut e = setting_engine();
+        let empty = put_text(&mut e, "");
+        let dest = e.mem.alloc(32);
+        assert!(!e.call(0x0070_73d0, &args![0u32, dest]).bool());
+        assert!(!e.call(0x0070_73d0, &args![empty, dest]).bool());
+    }
+
+    #[test]
+    fn test_constant_for_game_settings_writes_each_type() {
+        let mut e = setting_engine();
+        let setting = e.mem.alloc(16);
+        let value_slot = e.mem.alloc(8);
+        stub(&mut e, 0x004f_8a30, setting);
+        let text = put_text(&mut e, "hello");
+        e.mem.set_u32(value_slot, 42);
+        stub(&mut e, 0x0040_3df0, text);
+        stub(&mut e, 0x0043_d4d0, value_slot);
+        stub(&mut e, 0x0040_3e20, value_slot);
+        stub(&mut e, 0x0040_8d60, value_slot);
+        e.register(0x00ec_623a, |e, a| {
+            // Formats the first value as decimal text.
+            let digits = format!("{}", a[2]);
+            for (i, byte) in digits.bytes().enumerate() {
+                e.mem.set_u8(a[0] + i as u32, byte);
+            }
+            e.mem.set_u8(a[0] + digits.len() as u32, 0);
+            Ret::default()
+        });
+        let dest = e.mem.alloc(0x100);
+
+        // `s`: the setting's text, after skipping `&-` and cutting `;`.
+        let name = put_text(&mut e, "&-sName;");
+        assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+        assert_eq!(text_at(&e, dest), "hello");
+        // `i`: formatted integer.
+        let name = put_text(&mut e, "iCount");
+        assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+        assert_eq!(text_at(&e, dest), "42");
+        // `f`: the float goes to the formatter as a double (and, as in the
+        // exe, with the integer format).
+        e.mem.set_f32(value_slot, 1.0);
+        let name = put_text(&mut e, "fScale");
+        assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+        let formats = logged(&e, 0x00ec_623a);
+        assert_eq!(formats.len(), 2);
+        assert_eq!(formats[1][1..], [INTEGER_FORMAT, 0, 0x3ff0_0000]);
+        // `b`: true when the byte is 1, false otherwise.
+        e.mem.set_u32(value_slot, 1);
+        let name = put_text(&mut e, "bFlag");
+        let copy_log = |e: &mut Engine| {
+            e.call_log = Some(vec![]);
+            assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+            logged(e, 0x0040_46f0)
+        };
+        assert_eq!(copy_log(&mut e), vec![vec![dest, TRUE_TEXT]]);
+        e.mem.set_u32(value_slot, 0);
+        assert_eq!(copy_log(&mut e), vec![vec![dest, FALSE_TEXT]]);
+        // Any other letter: found, nothing written.
+        let name = put_text(&mut e, "xOther");
+        assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+    }
+
+    #[test]
+    fn test_constant_for_game_settings_retries_with_the_language_suffix() {
+        let mut e = setting_engine();
+        let setting = e.mem.alloc(16);
+        let text = put_text(&mut e, "translated");
+        stub(&mut e, 0x0040_3df0, text);
+        stub(&mut e, 0x004f_8a30, 0);
+        stub(&mut e, 0x005e_02b0, setting);
+        let dest = e.mem.alloc(0x100);
+        let name = put_text(&mut e, "sGreeting");
+        assert!(e.call(0x0070_73d0, &args![name, dest]).bool());
+        assert_eq!(text_at(&e, dest), "translated");
+        assert_eq!(logged(&e, 0x0040_6d50).len(), 1);
+        assert_eq!(logged(&e, 0x0040_6d50)[0][2], LANGUAGE_SUFFIX);
+
+        // Missing in both lookups: false, nothing written.
+        stub(&mut e, 0x005e_02b0, 0);
+        e.mem.set_u8(dest, b'z');
+        assert!(!e.call(0x0070_73d0, &args![name, dest]).bool());
+        assert_eq!(e.mem.u8(dest), b'z');
+    }
+
+    #[test]
+    fn release_model_file_needs_the_loader() {
+        let (mut e, _) = text_engine();
+        stub(&mut e, 0x0045_a5e0, 0);
+        e.call(0x0070_7640, &args![0x44u32]);
+        assert!(logged(&e, 0x0045_a5e0).is_empty());
+        e.set_global(MODEL_LOADER, 0x9000u32);
+        e.call(0x0070_7640, &args![0x44u32]);
+        assert_eq!(logged(&e, 0x0045_a5e0), vec![vec![0x9000, 0x44]]);
+    }
+
+    #[test]
+    fn load_model_file_uses_the_loader_when_it_can() {
+        let (mut e, _) = text_engine();
+        e.set_global(MODEL_LOADER, 0x9000u32);
+        stub(&mut e, 0x0044_7080, 0xaaa);
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, 7);
+        assert_eq!(e.call(0x0070_7660, &args![0x44u32, flag]).u32(), 0xaaa);
+        assert_eq!(e.mem.u8(flag), 1);
+        assert_eq!(
+            logged(&e, 0x0044_7080),
+            vec![vec![0x9000, 0x44, 0, 1, 0, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn load_model_file_builds_a_temporary_model_from_a_stream() {
+        let (mut e, _) = text_engine();
+        let flag = e.mem.alloc(4);
+        stub(&mut e, 0x0045_6a20, 1);
+        stub(&mut e, 0x0043_cfd0, 0);
+        stub(&mut e, 0x00c3_a8a0, 1);
+        stub(&mut e, 0x0043_d090, 0);
+        stub(&mut e, 0x0044_31f0, 0);
+        stub(&mut e, OPERATOR_NEW, 0xb00);
+        stub(&mut e, 0x0043_aaf0, 0xb00);
+        stub(&mut e, 0x0043_b230, 0xc0de);
+        // The old temporary model is destroyed first.
+        e.set_global(TEMP_MODEL, 0x1111u32);
+        e.mem.set_u8(flag, 5);
+        assert_eq!(e.call(0x0070_7660, &args![0x44u32, flag]).u32(), 0xc0de);
+        assert_eq!(e.mem.u8(flag), 0);
+        assert_eq!(e.global::<u32>(TEMP_MODEL), 0xb00);
+        assert_eq!(logged(&e, 0x0044_31f0), vec![vec![0x1111, 1]]);
+        assert_eq!(logged(&e, 0x0045_6a20), vec![vec![0x44, 0, 0, u32::MAX]]);
+        let build = &logged(&e, 0x0043_aaf0)[0];
+        assert_eq!(build[0], 0xb00);
+        assert_eq!(build[1], 0x44);
+        assert_eq!((build[3], build[4]), (1, 0));
+        assert_eq!(logged(&e, 0x0043_d090).len(), 1);
+    }
+
+    #[test]
+    fn load_model_file_stops_without_the_file_or_when_the_stream_fails() {
+        let (mut e, _) = text_engine();
+        let flag = e.mem.alloc(4);
+        // The loader exists but the byte forces the slow path; no file.
+        e.set_global(MODEL_LOADER, 0x9000u32);
+        e.mem.set_u8(LOADER_DISABLED, 1);
+        stub(&mut e, 0x0045_6a20, 0);
+        assert_eq!(e.call(0x0070_7660, &args![0x44u32, flag]).u32(), 0);
+        assert_eq!(e.mem.u8(flag), 0);
+
+        // The file exists but the stream cannot load it.
+        stub(&mut e, 0x0045_6a20, 1);
+        stub(&mut e, 0x0043_cfd0, 0);
+        stub(&mut e, 0x00c3_a8a0, 0);
+        stub(&mut e, 0x0043_d090, 0);
+        e.set_global(TEMP_MODEL, 0x1111u32);
+        assert_eq!(e.call(0x0070_7660, &args![0x44u32, flag]).u32(), 0);
+        assert_eq!(e.global::<u32>(TEMP_MODEL), 0x1111);
+        assert_eq!(logged(&e, 0x0043_d090).len(), 1);
+    }
+
+    #[test]
+    fn clear_temp_model_destroys_the_model_and_clears_the_pointer() {
+        let (mut e, _) = text_engine();
+        stub(&mut e, 0x0044_31f0, 0);
+        e.call(0x0070_7820, &[]);
+        assert!(logged(&e, 0x0044_31f0).is_empty());
+        e.set_global(TEMP_MODEL, 0x1111u32);
+        e.call(0x0070_7820, &[]);
+        assert_eq!(logged(&e, 0x0044_31f0), vec![vec![0x1111, 1]]);
+        assert_eq!(e.global::<u32>(TEMP_MODEL), 0);
+    }
+
+    #[test]
+    fn fn_00707860_returns_the_meshes_string_address() {
+        let (mut e, _) = ui_engine();
+        assert_eq!(e.call(0x0070_7860, &[]).u32(), 0x0101_dccc);
+    }
+
+    #[test]
+    fn copy_or_deep_copy_node_picks_the_copy_by_node_kind() {
+        let (mut e, _) = text_engine();
+        stub(&mut e, 0x004a_d050, 0);
+        stub(&mut e, 0x004a_d270, 0);
+        stub(&mut e, 0x0045_7ba0, 0xdee9);
+        stub(&mut e, 0x00a5_d2c0, 0xc10e);
+        e.set_global(DEEP_COPY_OWNER, 0x9100u32);
+        stub(&mut e, 0x004b_5bf0, 1);
+        assert_eq!(e.call(0x0070_7870, &args![0x55u32]).u32(), 0xdee9);
+        let deep = logged(&e, 0x0045_7ba0);
+        assert_eq!(deep[0][0], 0x9100);
+        assert_eq!(deep[0][1], 0x55);
+        let process = deep[0][2];
+        assert_eq!(
+            logged(&e, 0x004a_d050),
+            vec![vec![process, 1.0f32.to_bits()]]
+        );
+        assert_eq!(logged(&e, 0x004a_d270), vec![vec![process]]);
+
+        stub(&mut e, 0x004b_5bf0, 0);
+        assert_eq!(e.call(0x0070_7870, &args![0x55u32]).u32(), 0xc10e);
+        assert_eq!(logged(&e, 0x00a5_d2c0)[0][0], 0x55);
     }
 }
