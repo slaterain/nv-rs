@@ -9,7 +9,9 @@
 //! `BSFadeNodeCuller` constructors. The second covers `008731a0` to
 //! `00877260`: the world pass with the scene sorting, the 1st-person and
 //! menu passes, the frame wind-down, and the archive, start-cell and
-//! player-placement setup; the next one continues at `00877430`.
+//! player-placement setup. The third covers `00877430` to `00877f90`, the
+//! end of the range: the teardown to the main menu, the sky setup, and the
+//! small `NiTArray`, message-queue and registry-setting helpers.
 //!
 //! Conventions of the compiled code, used throughout:
 //!
@@ -35,6 +37,7 @@
 use super::main::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTArray;
 
 // ---------------------------------------------------------------------------
 // Callees outside this file, by exe address.
@@ -163,6 +166,8 @@ const IMPORT_SET_WINDOW_POS: u32 = 0x00fd_f2a4;
 const IMPORT_DEBUG_BREAK: u32 = 0x00fd_f0c8;
 
 // Globals.
+/// The global holding the registry-settings collection (`RegSettingCollection`).
+const REG_SETTING_COLLECTION: u32 = 0x0120_4368;
 /// The `Main` object.
 const MAIN_OBJECT: u32 = 0x011d_ea0c;
 /// The pointer in `0x011dea10` (the world / cell grid owner).
@@ -4226,6 +4231,489 @@ pub fn fn_00877260(e: &mut Engine, x: u32, y: u32, z: u32) {
     });
 }
 
+// Translated from 00877430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::KillMenuBGTexture` (Xbox PDB). If the `NiPointer` global
+/// `0x011ded3c` (the menu-background render target) holds a texture,
+/// returns it to the texture manager (`BSTextureManager::ReturnRenderedTexture`,
+/// `00b6da10`, Xbox PDB, on the object of `004a0ea0`), clears the pointer
+/// (`0066b0d0`) and calls `007123f0` (a float, 0) and `007123a0` (a word, 0)
+/// on the object `004e3270` returns. Always clears the byte at `0x011dea29`.
+pub fn main_kill_menu_bg_texture(e: &mut Engine, _this: Ptr) {
+    let texture = pointer_get(e, MENU_TARGET_POINTER);
+    if texture != 0 {
+        let manager = e.call(GET_GLOBAL_011F91A8, &args![]).u32();
+        e.call(0x00b6_da10, &args![manager, texture]);
+        e.call(NI_POINTER_ASSIGN, &args![MENU_TARGET_POINTER, 0u32]);
+        let object = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
+        e.call(0x0071_23f0, &args![object, 0.0f32]);
+        let object = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
+        e.call(0x0071_23a0, &args![object, 0u32]);
+    }
+    e.mem.set_u8(0x011d_ea29, 0);
+}
+
+// Translated from 008774a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tears the running game down to the main menu. `this` is an object whose
+/// byte at `+4` is read (`004f1540`) and written back at the end
+/// (`004f15a0`); `call_interface_step` (one stack word, read as a byte)
+/// decides whether `007053f0` runs near the end. In order: saves that byte
+/// and clears it; fades out the player's sound (`00877700`); calls
+/// `007d6bd0` with 0 on the object of the global `0x011ddf38` (remembering
+/// its byte result); ends all sounds of type -1 (`00ad8780` on the object
+/// `00453a70` returns); disables the Pipboy radio (`008324e0`); removes the
+/// player from his cell (`008d6f30` gives the cell, `0054ca90`); lets the
+/// player's two nodes (`00950bb0` with 1 and 0) tell their owner (vtable
+/// slot `0xc`, then slot `0xe8` of the owner's `009611e0` object); resets
+/// the world object (`004539a0`, `007037c0` and `0061cc40` with
+/// `0x7fffffff`), the obstacle manager (`006c0720`, `006c09f0`), the
+/// garbage collector (`00868d70`), `00c459d0`, the player (vtable slot
+/// `0x1cc`), the `0x011ddf38` object (`0084a840`), the process lists
+/// (`00970d50`), the data handler (`004614e0`), the shader manager
+/// (`00b4f5c0`, `00b631d0`), `Error`, the support menus (`00706320`) and
+/// the world (`0045ac80`); then calls `007d6bd0` again with the remembered
+/// result, resets the `Main` object (`008776e0`) and writes the saved
+/// byte back.
+pub fn fn_008774a0(e: &mut Engine, this: Ptr, call_interface_step: u8) {
+    let saved_byte = e.call(0x004f_1540, &args![this]).u32() & 0xff;
+    e.call(0x004f_15a0, &args![this, 0u32]);
+    let player = e.mem.u32(PLAYER_OBJECT);
+    fn_00877700(e, Ptr::new(player));
+    let object: u32 = e.global(0x011d_df38);
+    let remembered = e.call(0x007d_6bd0, &args![object, 0u32]).u32() & 0xff;
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    e.call(0x00ad_8780, &args![audio, 0xffff_ffffu32]);
+    e.call(0x0083_24e0, &args![0u32]);
+    let player = e.mem.u32(PLAYER_OBJECT);
+    if e.call(0x008d_6f30, &args![player]).u32() != 0 {
+        let player = e.mem.u32(PLAYER_OBJECT);
+        let cell = e.call(0x008d_6f30, &args![player]).u32();
+        e.call(0x0054_ca90, &args![cell, player]);
+    }
+    for flag in [1u32, 0] {
+        let player = e.mem.u32(PLAYER_OBJECT);
+        let node = e.call(GET_PLAYER_NODE, &args![player, flag]).u32();
+        let owner = if node != 0 {
+            e.vcall(node, 0xc, &args![]).u32()
+        } else {
+            0
+        };
+        if owner != 0 && e.call(0x0096_11e0, &args![owner]).u32() != 0 {
+            let target = e.call(0x0096_11e0, &args![owner]).u32();
+            e.vcall(target, 0xe8, &args![node]);
+        }
+    }
+    let world = e.mem.u32(WORLD_OBJECT);
+    e.call(0x0045_39a0, &args![world, 0u32, 0u32]);
+    e.call(0x0070_37c0, &args![world, 0x7fff_ffffu32]);
+    e.call(0x0061_cc40, &args![world, 0x7fff_ffffu32]);
+    let manager = e.call(0x006c_0720, &args![]).u32();
+    e.call(0x006c_09f0, &args![manager]);
+    e.call(0x0086_8d70, &args![0u32]);
+    e.call(0x00c4_59d0, &args![0u32]);
+    let player = e.mem.u32(PLAYER_OBJECT);
+    e.vcall(player, 0x1cc, &args![0u32, 0u32]);
+    let object: u32 = e.global(0x011d_df38);
+    e.call(0x0084_a840, &args![object]);
+    e.call(0x0097_0d50, &args![0x011e_0e80u32]);
+    let data_handler: u32 = e.global(0x011c_3f2c);
+    e.call(0x0046_14e0, &args![data_handler]);
+    let shader_manager = e.call(0x00b4_f5c0, &args![]).u32();
+    e.call(0x00b6_31d0, &args![shader_manager]);
+    e.call(ERROR_LOG, &args![]);
+    e.call(0x0070_6320, &args![0u32]);
+    let world = e.mem.u32(WORLD_OBJECT);
+    e.call(0x0045_ac80, &args![world]);
+    if call_interface_step != 0 {
+        e.call(0x0070_53f0, &args![]);
+    }
+    let object: u32 = e.global(0x011d_df38);
+    e.call(0x007d_6bd0, &args![object, remembered]);
+    let main_object = e.mem.u32(MAIN_OBJECT);
+    fn_008776e0(e, Ptr::new(main_object));
+    let main_object = e.mem.u32(MAIN_OBJECT);
+    e.call(0x004f_15a0, &args![main_object, saved_byte]);
+}
+
+// Translated from 008776e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the bytes at `+2` and `+5` of the `Main` object.
+pub fn fn_008776e0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 2, 0);
+    e.mem.set_u8(this.addr() + 5, 0);
+}
+
+// Translated from 00877700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fades out and releases the sound handle at `this + 0x77c` over 1000
+/// milliseconds (`BSSoundHandle::FadeOutAndRelease`, `00ad8da0`, Xbox PDB).
+pub fn fn_00877700(e: &mut Engine, this: Ptr) {
+    e.call(0x00ad_8da0, &args![this.addr() + 0x77c, 0x3e8u32]);
+}
+
+// Translated from 00877720 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this` is ignored; returns `Controls::GetInstance` (`007fdf30`, Xbox PDB).
+pub fn fn_00877720(e: &mut Engine, _this: Ptr) -> Ptr {
+    e.call(CONTROLS_GET_INSTANCE, &args![]).ptr()
+}
+
+// Translated from 00877730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::InitSky` (Xbox PDB). Inside a profiler scope (kind `0x21`, line
+/// `0x26bd`): logs the message at `0x01082ec0` (`Error`), initialises the
+/// sky object of the global `0x011dea20` (`Sky::Initialize`, `0063a630`,
+/// Xbox PDB) with the `NiPointer`s `0x011deb34` and `0x011deb00`, sets the
+/// sun light (vtable slot `0xdc` of the `0x011deda4` object, then
+/// `ShadowSceneNode::SetSunLight`, `00b5aac0`), updates the properties of
+/// the `0x011deb34` node and hands `00b8b200` the byte setting
+/// `0x011deadc`; when that setting is non-zero builds a 0x24-byte property
+/// object (`0049ec80`, then `0049ed90` with 1, `0049ede0` with 2,
+/// `0050f9a0` with `0xff`) and attaches it to the `0x011deb34` node
+/// (`NiAVObject::AttachProperty`, `00439410`). Finally gives both nodes a
+/// zero position (`00a59c60`), updates the sun node's properties and
+/// prepares both objects (`BSShaderManager::PrepareObject`, `00b57e30`).
+/// (The exception frame is left out.)
+pub fn main_init_sky(e: &mut Engine, _this: Ptr) {
+    with_profile_scope(e, 0x21, 0x26bd, |e| {
+        e.call(ERROR_LOG, &args![0x0108_2ec0u32]);
+        let node_a = pointer_get(e, 0x011d_eb00);
+        let node_b = pointer_get(e, 0x011d_eb34);
+        let sky: u32 = e.global(0x011d_ea20);
+        e.call(0x0063_a630, &args![sky, node_b, node_a]);
+        let sun = pointer_get(e, 0x011d_eda4);
+        let sky: u32 = e.global(0x011d_ea20);
+        let sky_part = e.call(0x0045_cd60, &args![sky]).u32();
+        let light = e.call(0x0043_b230, &args![sky_part]).u32();
+        e.vcall(sun, 0xdc, &args![light, 1u32]);
+        let sky: u32 = e.global(0x011d_ea20);
+        let sun_light = e.call(0x0045_05a0, &args![sky]).u32();
+        let scene = e.call(INDEXED_GLOBAL, &args![0u32]).u32();
+        e.call(0x00b5_aac0, &args![scene, sun_light]);
+        let node_b = pointer_get(e, 0x011d_eb34);
+        e.call(0x00a5_a040, &args![node_b]);
+        let setting = setting_byte(e, 0x011d_eadc);
+        let target = e.call(GET_GLOBAL_011F91AC, &args![]).u32();
+        e.call(0x00b8_b200, &args![target, setting as u32]);
+        if setting_byte(e, 0x011d_eadc) != 0 {
+            let block = e.call(0x00aa_13e0, &args![0x24u32]).u32();
+            let property = if block != 0 {
+                e.call(0x0049_ec80, &args![block]).u32()
+            } else {
+                0
+            };
+            e.call(0x0049_ed90, &args![property, 1u32]);
+            e.call(0x0049_ede0, &args![property, 2u32]);
+            e.call(0x0050_f9a0, &args![property, 0xffu32]);
+            let node_b = pointer_get(e, 0x011d_eb34);
+            e.call(0x0043_9410, &args![node_b, property]);
+        }
+        e.with_stack(0x20, |e, frame| {
+            let first = frame.addr();
+            let second = frame.addr() + 0x10;
+            e.call(POINT3_CTOR, &args![first, 0.0f32, 0u32, 0u32]);
+            let node_b = pointer_get(e, 0x011d_eb34);
+            e.call(0x00a5_9c60, &args![node_b, first]);
+            let sun = pointer_get(e, 0x011d_eda4);
+            e.call(0x00a5_a040, &args![sun]);
+            e.call(POINT3_CTOR, &args![second, 0.0f32, 0u32, 0u32]);
+            let sun = pointer_get(e, 0x011d_eda4);
+            e.call(0x00a5_9c60, &args![sun, second]);
+        });
+        let node_b = pointer_get(e, 0x011d_eb34);
+        e.call(0x00b5_7e30, &args![node_b, 0u32, 0u32]);
+        let sky: u32 = e.global(0x011d_ea20);
+        let sky_part = e.call(0x0045_cd60, &args![sky]).u32();
+        let light = e.call(0x0043_b230, &args![sky_part]).u32();
+        e.call(0x00b5_7e30, &args![light, 0u32, 0u32]);
+    });
+}
+
+// Translated from 00877950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates the registry-settings collection if needed (`00877960`) and
+/// returns the global `0x01204368` that holds it.
+pub fn fn_00877950(e: &mut Engine) -> u32 {
+    fn_00877960(e);
+    e.global(REG_SETTING_COLLECTION)
+}
+
+// Translated from 00877960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// If the global `0x01204368` is empty, allocates a 0x114-byte
+/// `RegSettingCollection`, constructs it (`008779f0`) and stores it there
+/// (the exception-handling frame of the compiled function is left out).
+pub fn fn_00877960(e: &mut Engine) {
+    if e.global::<u32>(REG_SETTING_COLLECTION) == 0 {
+        let block = e.call(ALLOCATE_OBJECT, &args![0x114u32]).u32();
+        let collection = if block != 0 {
+            fn_008779f0(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.set_global(REG_SETTING_COLLECTION, collection);
+    }
+}
+
+// Translated from 008779f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RegSettingCollection` constructor: the base constructor (`0044f700`),
+/// then the vtable `0x01082ed8`. Returns `this`.
+pub fn fn_008779f0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0044_f700, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0108_2ed8);
+    this
+}
+
+// Translated from 00877a10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0044f650` on `this` (the base-class destructor body of the
+/// `RegSettingCollection`) and returns its result.
+pub fn fn_00877a10(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0044_f650, &args![this]).u32()
+}
+
+// Translated from 00877a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<T *>` element address: `m_pBase + index * 4`.
+pub fn fn_00877a30(e: &mut Engine, this: Ptr<NiTArray>, index: u32) -> u32 {
+    e.get(this, NiTArray::m_pBase)
+        .wrapping_add(index.wrapping_mul(4))
+}
+
+// Translated from 00877a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<T *>::Add`: stores the value (a pointer to the word) at the
+/// array's end (`m_usSize`) with `00877e10` and returns the index used.
+pub fn fn_00877a50(e: &mut Engine, this: Ptr<NiTArray>, value_slot: u32) -> u32 {
+    let end = e.get(this, NiTArray::m_usSize) as u32;
+    fn_00877e10(e, this, end, value_slot)
+}
+
+// Translated from 00877a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonScrapHeapMessageQueue<BSPackedTask>` constructor: the base
+/// constructor (`00877d80`), the vtable `0x01082f04`, the scrap heap in
+/// `+8`, an empty head at `+0xc` and the tail `+0x10` pointing at the head
+/// slot. Returns `this`.
+pub fn fn_00877a80(e: &mut Engine, this: Ptr, scrap_heap: u32) -> Ptr {
+    fn_00877d80(e, this);
+    let at = this.addr();
+    e.mem.set_u32(at, 0x0108_2f04);
+    e.mem.set_u32(at + 8, scrap_heap);
+    e.mem.set_u32(at + 0xc, 0);
+    e.mem.set_u32(at + 0x10, at + 0xc);
+    this
+}
+
+// Translated from 00877ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `BSTCommonScrapHeapMessageQueue<BSPackedTask>`: sets
+/// its vtable (`0x01082f04`), pops every queued task (`006ec390`, the
+/// identical `TryPop` body, into a 0x20-byte local) until it fails, then
+/// runs the base destructor body (`00877b40`). (The stack-cookie check and
+/// the exception frame are left out.)
+pub fn fn_00877ac0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_2f04);
+    e.with_stack(0x20, |e, task| {
+        while e.call(0x006e_c390, &args![this, task]).u32() & 0xff != 0 {}
+    });
+    fn_00877b40(e, this);
+}
+
+// Translated from 00877b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `BSTCommonMessageQueue<BSPackedTask>`: sets the
+/// vtable `0x01082f24`, then runs `00877b60`.
+pub fn fn_00877b40(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_2f24);
+    fn_00877b60(e, this);
+}
+
+// Translated from 00877b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of `BSTMessageQueue<BSPackedTask>`: sets the vtable
+/// `0x01082f44`.
+pub fn fn_00877b60(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0108_2f44);
+}
+
+// Translated from 00877b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonMessageQueue<BSPackedTask>` scalar deleting destructor: the
+/// body (`00877b40`), then frees `this` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_00877b80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00877b40(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 00877bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTMessageQueue<BSPackedTask>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the body (`00877b60`), then frees `this` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn fn_00877bb0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00877b60(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 00877be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonScrapHeapMessageQueue<BSPackedTask>::DoTryPush` (Xbox PDB):
+/// takes a 0x24-byte node from the scrap heap at `+8` (`ScrapHeap::Allocate`,
+/// `00aa54a0`, size `0x24`, the alignment word of `0x010a2720`), constructs
+/// it in place (`006e6da0`, `00877db0`), copies the 32-byte task into the
+/// node at `+4` and appends the node to the list (head `+0xc`, tail
+/// `+0x10`). Always returns true. (The exception frame is left out.)
+pub fn fn_00877be0(e: &mut Engine, this: Ptr, task: u32) -> bool {
+    let at = this.addr();
+    let heap = e.mem.u32(at + 8);
+    let alignment: u32 = e.global(0x010a_2720);
+    let node = e.call(0x00aa_54a0, &args![heap, 0x24u32, alignment]).u32();
+    let placed = e.call(0x006e_6da0, &args![0x24u32, node]).u32();
+    if placed != 0 {
+        fn_00877db0(e, Ptr::new(placed));
+    }
+    for word in 0..8 {
+        let value = e.mem.u32(task + word * 4);
+        e.mem.set_u32(node + 4 + word * 4, value);
+    }
+    if e.mem.u32(at + 0xc) == 0 {
+        e.mem.set_u32(at + 0x10, at + 0xc);
+    }
+    let tail = e.mem.u32(at + 0x10);
+    e.mem.set_u32(tail, node);
+    e.mem.set_u32(node, 0);
+    e.mem.set_u32(at + 0x10, node);
+    true
+}
+
+// Translated from 00877cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonScrapHeapMessageQueue<BSPackedTask>::DoTryPop` (Xbox PDB):
+/// with an empty list returns false; otherwise copies the head node's
+/// 32-byte task to `out`, unlinks the head, destroys it (`007b3fa0` with 0),
+/// gives it back to the scrap heap (`ScrapHeap::Deallocate`, `00aa5610`) and
+/// returns true.
+pub fn fn_00877cc0(e: &mut Engine, this: Ptr, out: u32) -> bool {
+    let at = this.addr();
+    let head = e.mem.u32(at + 0xc);
+    if head == 0 {
+        return false;
+    }
+    for word in 0..8 {
+        let value = e.mem.u32(head + 4 + word * 4);
+        e.mem.set_u32(out + word * 4, value);
+    }
+    let next = e.mem.u32(head);
+    e.mem.set_u32(at + 0xc, next);
+    e.call(0x007b_3fa0, &args![head, 0u32]);
+    let heap = e.mem.u32(at + 8);
+    e.call(0x00aa_5610, &args![heap, head]);
+    true
+}
+
+// Translated from 00877d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `+0x40` to 1.
+pub fn fn_00877d30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x40, 1);
+}
+
+// Translated from 00877d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonScrapHeapMessageQueue<BSPackedTask>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the destructor body (`00877ac0`), then frees `this` when bit
+/// 0 of `flags` is set. Returns `this`.
+pub fn fn_00877d50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00877ac0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 00877d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTCommonMessageQueue<BSPackedTask>` constructor: the base constructor
+/// (`00877df0`), the vtable `0x01082f24` and a zero word at `+4`. Returns
+/// `this`.
+pub fn fn_00877d80(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00877df0(e, this);
+    e.mem.set_u32(this.addr(), 0x0108_2f24);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 00877db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a queue node: the next pointer (`+0`) and the 32-byte
+/// task (`+4`) are zeroed. Returns `this`.
+pub fn fn_00877db0(e: &mut Engine, this: Ptr) -> Ptr {
+    for word in 0..9 {
+        e.mem.set_u32(this.addr() + word * 4, 0);
+    }
+    this
+}
+
+// Translated from 00877df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTMessageQueue<BSPackedTask>` constructor: the vtable `0x01082f44`.
+/// Returns `this`.
+pub fn fn_00877df0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0108_2f44);
+    this
+}
+
+// Translated from 00877e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<T *>` store with growth: when `index` is at or past the
+/// capacity (`m_usMaxSize`), resizes to `m_usGrowBy + index` (`0096ad30`);
+/// then stores the word at `value_slot` at `index` (`00877e50`). Returns
+/// `index`.
+pub fn fn_00877e10(e: &mut Engine, this: Ptr<NiTArray>, index: u32, value_slot: u32) -> u32 {
+    let capacity = e.get(this, NiTArray::m_usMaxSize) as u32;
+    if index >= capacity {
+        let grow_by = e.get(this, NiTArray::m_usGrowBy) as u32;
+        e.call(0x0096_ad30, &args![this, grow_by.wrapping_add(index)]);
+    }
+    fn_00877e50(e, this, index, value_slot);
+    index
+}
+
+// Translated from 00877e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<T *>::SetAt` body: stores the word at `value_slot` at `index`,
+/// keeping `m_usSize` (one past the highest index) and `m_usESize` (the
+/// number of elements different from the null word at `0x01011d78`) right.
+pub fn fn_00877e50(e: &mut Engine, this: Ptr<NiTArray>, index: u32, value_slot: u32) {
+    let null: u32 = e.global(0x0101_1d78);
+    let value = e.mem.u32(value_slot);
+    let size = e.get(this, NiTArray::m_usSize) as u32;
+    let base = e.get(this, NiTArray::m_pBase);
+    let element = base.wrapping_add(index.wrapping_mul(4));
+    let count = e.get(this, NiTArray::m_usESize);
+    if index >= size {
+        e.set(this, NiTArray::m_usSize, index.wrapping_add(1) as u16);
+        if value != null {
+            e.set(this, NiTArray::m_usESize, count.wrapping_add(1));
+        }
+    } else if value != null {
+        if e.mem.u32(element) == null {
+            e.set(this, NiTArray::m_usESize, count.wrapping_add(1));
+        }
+    } else if e.mem.u32(element) != null {
+        e.set(this, NiTArray::m_usESize, count.wrapping_sub(1));
+    }
+    e.mem.set_u32(element, value);
+}
+
+// Translated from 00877f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingT<RegSettingCollection>` constructor: the base constructor
+/// (`00404920`, with the two stack words), the vtable `0x010839ac`, then
+/// registers `this` with the collection (vtable slot `4` of what `00877950`
+/// returns). Returns `this`. (The exception frame is left out.)
+pub fn fn_00877f10(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ptr {
+    e.call(0x0040_4920, &args![this, first, second]);
+    e.mem.set_u32(this.addr(), 0x0108_39ac);
+    let collection = fn_00877950(e);
+    e.vcall(collection, 4, &args![this]);
+    this
+}
+
+// Translated from 00877f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SettingT<RegSettingCollection>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the destructor body (`00877fc0`, outside this range), then frees
+/// `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00877f90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0087_7fc0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4312,6 +4800,35 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00876d20, main_init_archive()),
         entry!(0x00876dd0, main_init_start_cell(u32, u32)),
         entry!(0x00877260, fn_00877260(u32, u32, u32)),
+        entry!(0x00877430, main_kill_menu_bg_texture(Ptr)),
+        entry!(0x008774a0, fn_008774a0(Ptr, u8)),
+        entry!(0x008776e0, fn_008776e0(Ptr)),
+        entry!(0x00877700, fn_00877700(Ptr)),
+        entry!(0x00877720, fn_00877720(Ptr) -> Ptr),
+        entry!(0x00877730, main_init_sky(Ptr)),
+        entry!(0x00877950, fn_00877950() -> u32),
+        entry!(0x00877960, fn_00877960()),
+        entry!(0x008779f0, fn_008779f0(Ptr) -> Ptr),
+        entry!(0x00877a10, fn_00877a10(Ptr) -> u32),
+        entry!(0x00877a30, fn_00877a30(Ptr<NiTArray>, u32) -> u32),
+        entry!(0x00877a50, fn_00877a50(Ptr<NiTArray>, u32) -> u32),
+        entry!(0x00877a80, fn_00877a80(Ptr, u32) -> Ptr),
+        entry!(0x00877ac0, fn_00877ac0(Ptr)),
+        entry!(0x00877b40, fn_00877b40(Ptr)),
+        entry!(0x00877b60, fn_00877b60(Ptr)),
+        entry!(0x00877b80, fn_00877b80(Ptr, u32) -> Ptr),
+        entry!(0x00877bb0, fn_00877bb0(Ptr, u32) -> Ptr),
+        entry!(0x00877be0, fn_00877be0(Ptr, u32) -> bool),
+        entry!(0x00877cc0, fn_00877cc0(Ptr, u32) -> bool),
+        entry!(0x00877d30, fn_00877d30(Ptr)),
+        entry!(0x00877d50, fn_00877d50(Ptr, u32) -> Ptr),
+        entry!(0x00877d80, fn_00877d80(Ptr) -> Ptr),
+        entry!(0x00877db0, fn_00877db0(Ptr) -> Ptr),
+        entry!(0x00877df0, fn_00877df0(Ptr) -> Ptr),
+        entry!(0x00877e10, fn_00877e10(Ptr<NiTArray>, u32, u32) -> u32),
+        entry!(0x00877e50, fn_00877e50(Ptr<NiTArray>, u32, u32)),
+        entry!(0x00877f10, fn_00877f10(Ptr, u32, u32) -> Ptr),
+        entry!(0x00877f90, fn_00877f90(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -9349,5 +9866,641 @@ mod tests_second {
         assert!(calls_to(&log, 0x0054_cfd0).is_empty());
         assert!(calls_to(&log, 0x0054_8230).is_empty());
         assert_eq!(calls_to(&log, 0x0056_5730), vec![vec![player]]);
+    }
+}
+
+#[cfg(test)]
+mod tests_third {
+    //! Tests of `00877430` to `00877f90`. Every callee outside this file
+    //! has a test double (an unlisted callee panics as an open function).
+    use super::*;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    use std::rc::Rc;
+
+    type Log = Vec<(u32, Vec<u32>)>;
+
+    /// The engine with data pages mapped and a double for each listed
+    /// callee, returning the value set for it (default 0) in `eax`.
+    struct Rig {
+        e: Engine,
+        returns: Rc<RefCell<HashMap<u32, u32>>>,
+        next_slot_target: u32,
+    }
+
+    impl Rig {
+        fn new(callees: &[u32]) -> Rig {
+            let mut e = Engine::new();
+            for page in (0x0100_0000u32..0x0130_0000).step_by(0x1000) {
+                e.map(page, 0x1000);
+            }
+            let returns: Rc<RefCell<HashMap<u32, u32>>> = Rc::new(RefCell::new(HashMap::new()));
+            for &addr in callees {
+                let table = returns.clone();
+                e.register_double(addr, move |_, _| Ret {
+                    eax: table.borrow().get(&addr).copied().unwrap_or(0),
+                    ..Ret::default()
+                });
+            }
+            e.register_double(POINTER_GET, |e, a| Ret {
+                eax: e.mem.u32(a[0]),
+                ..Ret::default()
+            });
+            Rig {
+                e,
+                returns,
+                next_slot_target: 0x00f1_0000,
+            }
+        }
+
+        fn set(&mut self, addr: u32, value: u32) {
+            self.returns.borrow_mut().insert(addr, value);
+        }
+
+        /// An object whose vtable slots (offset, result) are doubles.
+        fn object_with_slots(&mut self, slots: &[(u32, u32)]) -> u32 {
+            let object = self.e.mem.alloc(0x40);
+            let vtable = self.e.mem.alloc(0x400);
+            self.e.mem.set_u32(object, vtable);
+            for &(offset, result) in slots {
+                let target = self.next_slot_target;
+                self.next_slot_target += 0x10;
+                self.e.register_double(target, move |_, _| Ret {
+                    eax: result,
+                    ..Ret::default()
+                });
+                self.e.mem.set_u32(vtable + offset, target);
+            }
+            object
+        }
+
+        /// Runs `addr` and returns its result and the calls it made.
+        fn run(&mut self, addr: u32, args: &[u32]) -> (Ret, Log) {
+            self.e.call_log = Some(vec![]);
+            let ret = self.e.call(addr, args);
+            let mut log = self.e.call_log.take().unwrap();
+            log.remove(0);
+            log.retain(|(addr, _)| *addr != POINTER_GET);
+            (ret, log)
+        }
+    }
+
+    fn calls_to(log: &Log, addr: u32) -> Vec<Vec<u32>> {
+        log.iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    fn addrs(log: &Log) -> Vec<u32> {
+        log.iter().map(|(addr, _)| *addr).collect()
+    }
+
+    #[test]
+    fn kill_menu_bg_texture_returns_the_texture_and_clears_the_pointer() {
+        let mut r = Rig::new(&[
+            0x004a_0ea0,
+            0x004e_3270,
+            0x00b6_da10,
+            0x0066_b0d0,
+            0x0071_23f0,
+            0x0071_23a0,
+        ]);
+        r.e.mem.set_u32(MENU_TARGET_POINTER, 0x5000);
+        r.e.mem.set_u8(0x011d_ea29, 1);
+        r.set(0x004a_0ea0, 0x6000);
+        r.set(0x004e_3270, 0x7000);
+        let (_, log) = r.run(0x0087_7430, &args![0u32]);
+        assert_eq!(
+            log,
+            vec![
+                (0x004a_0ea0, vec![]),
+                (0x00b6_da10, vec![0x6000, 0x5000]),
+                (0x0066_b0d0, vec![MENU_TARGET_POINTER, 0]),
+                (0x004e_3270, vec![]),
+                (0x0071_23f0, vec![0x7000, 0]),
+                (0x004e_3270, vec![]),
+                (0x0071_23a0, vec![0x7000, 0]),
+            ]
+        );
+        assert_eq!(r.e.mem.u8(0x011d_ea29), 0);
+    }
+
+    #[test]
+    fn kill_menu_bg_texture_without_a_texture_only_clears_the_byte() {
+        let mut r = Rig::new(&[]);
+        r.e.mem.set_u8(0x011d_ea29, 1);
+        let (_, log) = r.run(0x0087_7430, &args![0u32]);
+        assert!(log.is_empty());
+        assert_eq!(r.e.mem.u8(0x011d_ea29), 0);
+    }
+
+    const TEARDOWN_CALLEES: &[u32] = &[
+        0x004f_1540,
+        0x004f_15a0,
+        0x00ad_8da0,
+        0x007d_6bd0,
+        0x0045_3a70,
+        0x00ad_8780,
+        0x0083_24e0,
+        0x008d_6f30,
+        0x0054_ca90,
+        0x0095_0bb0,
+        0x0096_11e0,
+        0x0045_39a0,
+        0x0070_37c0,
+        0x0061_cc40,
+        0x006c_0720,
+        0x006c_09f0,
+        0x0086_8d70,
+        0x00c4_59d0,
+        0x0084_a840,
+        0x0097_0d50,
+        0x0046_14e0,
+        0x00b4_f5c0,
+        0x00b6_31d0,
+        0x0040_fbe0,
+        0x0070_6320,
+        0x0045_ac80,
+        0x0070_53f0,
+    ];
+
+    fn teardown_rig() -> (Rig, u32) {
+        let mut r = Rig::new(TEARDOWN_CALLEES);
+        r.e.map(0x3000, 0x1000);
+        let player = r.object_with_slots(&[(0x1cc, 0)]);
+        r.e.set_global(PLAYER_OBJECT, player);
+        r.e.set_global(WORLD_OBJECT, 0x3200u32);
+        r.e.set_global(MAIN_OBJECT, 0x3300u32);
+        r.e.set_global(0x011d_df38u32, 0x3100u32);
+        r.e.set_global(0x011c_3f2cu32, 0x3400u32);
+        r.e.mem.set_u8(0x3300 + 2, 1);
+        r.set(0x004f_1540, 0x1_07);
+        r.set(0x007d_6bd0, 0x1_01);
+        r.set(0x0045_3a70, 0x4100);
+        r.set(0x006c_0720, 0x4200);
+        r.set(0x00b4_f5c0, 0x4300);
+        (r, player)
+    }
+
+    #[test]
+    fn teardown_runs_every_step_and_restores_the_saved_bytes() {
+        let (mut r, player) = teardown_rig();
+        r.set(0x008d_6f30, 0x4400);
+        let owner_node = r.object_with_slots(&[(0xc, 0x4500)]);
+        let owner_target = r.object_with_slots(&[(0xe8, 0)]);
+        r.set(0x0095_0bb0, owner_node);
+        r.set(0x0096_11e0, owner_target);
+        let (_, log) = r.run(0x0087_74a0, &args![0x3000u32, 1u32]);
+        assert_eq!(calls_to(&log, 0x004f_1540), vec![vec![0x3000]]);
+        assert_eq!(
+            calls_to(&log, 0x004f_15a0),
+            vec![vec![0x3000, 0], vec![0x3300, 7]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x00ad_8da0),
+            vec![vec![player + 0x77c, 0x3e8]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x007d_6bd0),
+            vec![vec![0x3100, 0], vec![0x3100, 1]]
+        );
+        assert_eq!(calls_to(&log, 0x00ad_8780), vec![vec![0x4100, 0xffff_ffff]]);
+        assert_eq!(calls_to(&log, 0x0083_24e0), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x0054_ca90), vec![vec![0x4400, player]]);
+        assert_eq!(
+            calls_to(&log, 0x0095_0bb0),
+            vec![vec![player, 1], vec![player, 0]]
+        );
+        // Each node's owner, then the owner's target is told about the node.
+        assert_eq!(calls_to(&log, 0x0096_11e0).len(), 4);
+        assert_eq!(
+            calls_to(&log, r.e.mem.u32(r.e.mem.u32(owner_target) + 0xe8)).len(),
+            2
+        );
+        assert_eq!(calls_to(&log, 0x0045_39a0), vec![vec![0x3200, 0, 0]]);
+        assert_eq!(calls_to(&log, 0x0070_37c0), vec![vec![0x3200, 0x7fff_ffff]]);
+        assert_eq!(calls_to(&log, 0x0061_cc40), vec![vec![0x3200, 0x7fff_ffff]]);
+        assert_eq!(calls_to(&log, 0x006c_09f0), vec![vec![0x4200]]);
+        assert_eq!(calls_to(&log, 0x0086_8d70), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x00c4_59d0), vec![vec![0]]);
+        assert_eq!(
+            calls_to(&log, r.e.mem.u32(r.e.mem.u32(player) + 0x1cc)),
+            vec![vec![player, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0084_a840), vec![vec![0x3100]]);
+        assert_eq!(calls_to(&log, 0x0097_0d50), vec![vec![0x011e_0e80]]);
+        assert_eq!(calls_to(&log, 0x0046_14e0), vec![vec![0x3400]]);
+        assert_eq!(calls_to(&log, 0x00b6_31d0), vec![vec![0x4300]]);
+        assert_eq!(calls_to(&log, 0x0040_fbe0), vec![vec![]]);
+        assert_eq!(calls_to(&log, 0x0070_6320), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x0045_ac80), vec![vec![0x3200]]);
+        assert_eq!(calls_to(&log, 0x0070_53f0), vec![vec![]]);
+        // The main object's bytes are cleared before the saved byte is written.
+        assert_eq!(r.e.mem.u8(0x3300 + 2), 0);
+        assert_eq!(addrs(&log).last(), Some(&0x004f_15a0));
+    }
+
+    #[test]
+    fn teardown_skips_the_cell_removal_nodes_and_optional_step_when_absent() {
+        let (mut r, player) = teardown_rig();
+        let (_, log) = r.run(0x0087_74a0, &args![0x3000u32, 0u32]);
+        assert_eq!(calls_to(&log, 0x008d_6f30), vec![vec![player]]);
+        assert!(calls_to(&log, 0x0054_ca90).is_empty());
+        assert_eq!(calls_to(&log, 0x0095_0bb0).len(), 2);
+        assert!(calls_to(&log, 0x0096_11e0).is_empty());
+        assert!(calls_to(&log, 0x0070_53f0).is_empty());
+    }
+
+    #[test]
+    fn main_flags_and_sound_fade() {
+        let mut r = Rig::new(&[0x00ad_8da0, 0x007f_df30]);
+        r.e.map(0x3000, 0x1000);
+        r.e.mem.set_u8(0x3002, 1);
+        r.e.mem.set_u8(0x3005, 1);
+        r.run(0x0087_76e0, &args![0x3000u32]);
+        assert_eq!((r.e.mem.u8(0x3002), r.e.mem.u8(0x3005)), (0, 0));
+        let (_, log) = r.run(0x0087_7700, &args![0x3000u32]);
+        assert_eq!(log, vec![(0x00ad_8da0, vec![0x377c, 0x3e8])]);
+        r.set(0x007f_df30, 0x9000);
+        let (ret, _) = r.run(0x0087_7720, &args![0u32]);
+        assert_eq!(ret.u32(), 0x9000);
+    }
+
+    const SKY_CALLEES: &[u32] = &[
+        0x0040_4eb0,
+        0x0040_4ee0,
+        0x0040_fbe0,
+        0x0063_a630,
+        0x0045_cd60,
+        0x0043_b230,
+        0x0045_05a0,
+        0x0045_0b80,
+        0x00b5_aac0,
+        0x00a5_a040,
+        0x0040_8d60,
+        0x004e_3270,
+        0x00b8_b200,
+        0x00aa_13e0,
+        0x0049_ec80,
+        0x0049_ed90,
+        0x0049_ede0,
+        0x0050_f9a0,
+        0x0043_9410,
+        0x0043_d410,
+        0x00a5_9c60,
+        0x00b5_7e30,
+    ];
+
+    fn sky_rig(setting: u8) -> (Rig, u32) {
+        let mut r = Rig::new(SKY_CALLEES);
+        let sun = r.object_with_slots(&[(0xdc, 0)]);
+        r.e.mem.set_u32(0x011d_eda4, sun);
+        r.e.mem.set_u32(0x011d_eb00, 0xa000);
+        r.e.mem.set_u32(0x011d_eb34, 0xb000);
+        r.e.set_global(0x011d_ea20u32, 0xc000u32);
+        let flag = r.e.mem.alloc(8);
+        r.e.mem.set_u8(flag, setting);
+        r.set(0x0040_8d60, flag);
+        r.set(0x0045_cd60, 0xc100);
+        r.set(0x0043_b230, 0xc200);
+        r.set(0x0045_05a0, 0xc300);
+        r.set(0x0045_0b80, 0xc400);
+        r.set(0x004e_3270, 0xc500);
+        r.set(0x00aa_13e0, 0xd000);
+        r.set(0x0049_ec80, 0xd100);
+        (r, sun)
+    }
+
+    #[test]
+    fn init_sky_with_the_setting_attaches_the_property() {
+        let (mut r, sun) = sky_rig(1);
+        let (_, log) = r.run(0x0087_7730, &args![0u32]);
+        let guard = calls_to(&log, 0x0040_4eb0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0040_4eb0),
+            vec![vec![guard, 0x21, 1, SOURCE_FILE_NAME, 0x26bd]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_fbe0), vec![vec![0x0108_2ec0]]);
+        assert_eq!(
+            calls_to(&log, 0x0063_a630),
+            vec![vec![0xc000, 0xb000, 0xa000]]
+        );
+        let slot = r.e.mem.u32(r.e.mem.u32(sun) + 0xdc);
+        assert_eq!(calls_to(&log, slot), vec![vec![sun, 0xc200, 1]]);
+        assert_eq!(calls_to(&log, 0x00b5_aac0), vec![vec![0xc400, 0xc300]]);
+        assert_eq!(calls_to(&log, 0x00b8_b200), vec![vec![0xc500, 1]]);
+        assert_eq!(calls_to(&log, 0x00aa_13e0), vec![vec![0x24]]);
+        assert_eq!(calls_to(&log, 0x0049_ec80), vec![vec![0xd000]]);
+        assert_eq!(calls_to(&log, 0x0049_ed90), vec![vec![0xd100, 1]]);
+        assert_eq!(calls_to(&log, 0x0049_ede0), vec![vec![0xd100, 2]]);
+        assert_eq!(calls_to(&log, 0x0050_f9a0), vec![vec![0xd100, 0xff]]);
+        assert_eq!(calls_to(&log, 0x0043_9410), vec![vec![0xb000, 0xd100]]);
+        let points: Vec<u32> = calls_to(&log, 0x0043_d410).iter().map(|a| a[0]).collect();
+        assert_eq!(
+            calls_to(&log, 0x00a5_9c60),
+            vec![vec![0xb000, points[0]], vec![sun, points[1]]]
+        );
+        assert_eq!(calls_to(&log, 0x00a5_a040), vec![vec![0xb000], vec![sun]]);
+        assert_eq!(
+            calls_to(&log, 0x00b5_7e30),
+            vec![vec![0xb000, 0, 0], vec![0xc200, 0, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0040_4ee0), vec![vec![guard]]);
+    }
+
+    #[test]
+    fn init_sky_without_the_setting_skips_the_property() {
+        let (mut r, _) = sky_rig(0);
+        let (_, log) = r.run(0x0087_7730, &args![0u32]);
+        assert!(calls_to(&log, 0x00aa_13e0).is_empty());
+        assert!(calls_to(&log, 0x0043_9410).is_empty());
+        assert_eq!(calls_to(&log, 0x00b8_b200), vec![vec![0xc500, 0]]);
+        assert_eq!(calls_to(&log, 0x00b5_7e30).len(), 2);
+    }
+
+    #[test]
+    fn registry_collection_is_created_once() {
+        let mut r = Rig::new(&[0x0040_1000, 0x0044_f700]);
+        r.set(0x0040_1000, 0x5000);
+        r.e.map(0x5000, 0x1000);
+        let (_, log) = r.run(0x0087_7960, &args![]);
+        assert_eq!(
+            log,
+            vec![(0x0040_1000, vec![0x114]), (0x0044_f700, vec![0x5000])]
+        );
+        assert_eq!(r.e.global::<u32>(0x0120_4368), 0x5000);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2ed8);
+        let (_, log) = r.run(0x0087_7960, &args![]);
+        assert!(log.is_empty());
+        let (ret, log) = r.run(0x0087_7950, &args![]);
+        assert!(log.is_empty());
+        assert_eq!(ret.u32(), 0x5000);
+    }
+
+    #[test]
+    fn registry_collection_stays_empty_when_the_allocation_fails() {
+        let mut r = Rig::new(&[0x0040_1000, 0x0044_f700]);
+        let (_, log) = r.run(0x0087_7960, &args![]);
+        assert_eq!(addrs(&log), vec![0x0040_1000]);
+        assert_eq!(r.e.global::<u32>(0x0120_4368), 0);
+    }
+
+    #[test]
+    fn registry_collection_constructor_and_base_destructor_call() {
+        let mut r = Rig::new(&[0x0044_f700, 0x0044_f650]);
+        r.e.map(0x5000, 0x1000);
+        r.set(0x0044_f650, 77);
+        let (ret, _) = r.run(0x0087_79f0, &args![0x5000u32]);
+        assert_eq!(ret.u32(), 0x5000);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2ed8);
+        let (ret, log) = r.run(0x0087_7a10, &args![0x5000u32]);
+        assert_eq!(ret.u32(), 77);
+        assert_eq!(log, vec![(0x0044_f650, vec![0x5000])]);
+    }
+
+    /// An `NiTArray` of four slots at 0x5000, elements at 0x5100.
+    fn array_rig() -> Rig {
+        let mut r = Rig::new(&[0x0096_ad30]);
+        r.e.map(0x5000, 0x1000);
+        r.e.mem.set_u32(0x5004, 0x5100);
+        r.e.mem.set_u16(0x5008, 4);
+        r.e.mem.set_u16(0x500e, 3);
+        r
+    }
+
+    #[test]
+    fn array_element_address() {
+        let mut r = array_rig();
+        assert_eq!(r.run(0x0087_7a30, &args![0x5000u32, 3u32]).0.u32(), 0x510c);
+    }
+
+    #[test]
+    fn array_set_at_counts_elements_and_size() {
+        let mut r = array_rig();
+        r.e.map(0x6000, 0x1000);
+        // Past the end with a value: size and element count grow.
+        r.e.mem.set_u32(0x6000, 0x1234);
+        r.run(0x0087_7e50, &args![0x5000u32, 2u32, 0x6000u32]);
+        assert_eq!(r.e.mem.u16(0x500a), 3);
+        assert_eq!(r.e.mem.u16(0x500c), 1);
+        assert_eq!(r.e.mem.u32(0x5108), 0x1234);
+        // Past the end with the null word: size grows only.
+        r.e.mem.set_u32(0x6004, 0);
+        r.run(0x0087_7e50, &args![0x5000u32, 3u32, 0x6004u32]);
+        assert_eq!(r.e.mem.u16(0x500a), 4);
+        assert_eq!(r.e.mem.u16(0x500c), 1);
+        // Inside: filling an empty slot counts, replacing does not.
+        r.run(0x0087_7e50, &args![0x5000u32, 1u32, 0x6000u32]);
+        assert_eq!(r.e.mem.u16(0x500c), 2);
+        r.e.mem.set_u32(0x6008, 0x99);
+        r.run(0x0087_7e50, &args![0x5000u32, 1u32, 0x6008u32]);
+        assert_eq!(r.e.mem.u16(0x500c), 2);
+        assert_eq!(r.e.mem.u32(0x5104), 0x99);
+        // Inside: clearing a filled slot counts down; clearing an empty one does not.
+        r.run(0x0087_7e50, &args![0x5000u32, 1u32, 0x6004u32]);
+        assert_eq!(r.e.mem.u16(0x500c), 1);
+        r.run(0x0087_7e50, &args![0x5000u32, 1u32, 0x6004u32]);
+        assert_eq!(r.e.mem.u16(0x500c), 1);
+    }
+
+    #[test]
+    fn array_set_at_grow_resizes_only_past_the_capacity() {
+        let mut r = array_rig();
+        r.e.map(0x6000, 0x1000);
+        r.e.mem.set_u32(0x6000, 0x55);
+        let (ret, log) = r.run(0x0087_7e10, &args![0x5000u32, 2u32, 0x6000u32]);
+        assert_eq!(ret.u32(), 2);
+        assert!(log.is_empty());
+        let (ret, log) = r.run(0x0087_7e10, &args![0x5000u32, 4u32, 0x6000u32]);
+        assert_eq!(ret.u32(), 4);
+        assert_eq!(log, vec![(0x0096_ad30, vec![0x5000, 7])]);
+    }
+
+    #[test]
+    fn array_add_stores_at_the_end() {
+        let mut r = array_rig();
+        r.e.map(0x6000, 0x1000);
+        r.e.mem.set_u16(0x500a, 2);
+        r.e.mem.set_u32(0x6000, 0x55);
+        let (ret, _) = r.run(0x0087_7a50, &args![0x5000u32, 0x6000u32]);
+        assert_eq!(ret.u32(), 2);
+        assert_eq!(r.e.mem.u32(0x5108), 0x55);
+        assert_eq!(r.e.mem.u16(0x500a), 3);
+    }
+
+    #[test]
+    fn queue_constructors_set_vtables_and_links() {
+        let mut r = Rig::new(&[]);
+        r.e.map(0x5000, 0x1000);
+        r.run(0x0087_7df0, &args![0x5000u32]);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f44);
+        r.e.mem.set_u32(0x5004, 9);
+        r.run(0x0087_7d80, &args![0x5000u32]);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f24);
+        assert_eq!(r.e.mem.u32(0x5004), 0);
+        r.e.mem.set_u32(0x500c, 9);
+        let (ret, _) = r.run(0x0087_7a80, &args![0x5000u32, 0x7777u32]);
+        assert_eq!(ret.u32(), 0x5000);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f04);
+        assert_eq!(r.e.mem.u32(0x5008), 0x7777);
+        assert_eq!(r.e.mem.u32(0x500c), 0);
+        assert_eq!(r.e.mem.u32(0x5010), 0x500c);
+    }
+
+    #[test]
+    fn queue_destructor_bodies_step_down_the_vtables() {
+        let mut r = Rig::new(&[]);
+        r.e.map(0x5000, 0x1000);
+        r.run(0x0087_7b60, &args![0x5000u32]);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f44);
+        r.run(0x0087_7b40, &args![0x5000u32]);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f44);
+    }
+
+    #[test]
+    fn queue_destructor_drains_the_tasks_first() {
+        let mut r = Rig::new(&[0x006e_c390]);
+        r.e.map(0x5000, 0x1000);
+        let calls = Rc::new(RefCell::new(0u32));
+        let counter = calls.clone();
+        r.e.register_double(0x006e_c390, move |_, _| {
+            let mut n = counter.borrow_mut();
+            *n += 1;
+            Ret {
+                eax: if *n < 3 { 0x100 | 1 } else { 0x100 },
+                ..Ret::default()
+            }
+        });
+        r.run(0x0087_7ac0, &args![0x5000u32]);
+        // Only the low byte counts as success: two pops, then the empty one.
+        assert_eq!(*calls.borrow(), 3);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_2f44);
+    }
+
+    #[test]
+    fn deleting_destructors_free_only_when_asked() {
+        for (addr, vtable) in [
+            (0x0087_7b80u32, 0x0108_2f44u32),
+            (0x0087_7bb0, 0x0108_2f44),
+            (0x0087_7d50, 0x0108_2f44),
+        ] {
+            let mut r = Rig::new(&[0x006e_c390, 0x0040_1030]);
+            r.e.map(0x5000, 0x1000);
+            let (ret, log) = r.run(addr, &args![0x5000u32, 0u32]);
+            assert_eq!(ret.u32(), 0x5000);
+            assert!(calls_to(&log, 0x0040_1030).is_empty());
+            let (ret, log) = r.run(addr, &args![0x5000u32, 1u32]);
+            assert_eq!(ret.u32(), 0x5000);
+            assert_eq!(calls_to(&log, 0x0040_1030), vec![vec![0x5000]]);
+            assert_eq!(r.e.mem.u32(0x5000), vtable);
+        }
+    }
+
+    #[test]
+    fn push_appends_nodes_to_the_list() {
+        let mut r = Rig::new(&[0x00aa_54a0, 0x006e_6da0]);
+        r.e.map(0x5000, 0x1000);
+        r.e.mem.set_u32(0x010a_2720, 4);
+        r.e.mem.set_u32(0x5008, 0x7000);
+        r.e.mem.set_u32(0x5010, 0x500c);
+        for word in 0..8 {
+            r.e.mem.set_u32(0x5100 + word * 4, 0x10 + word);
+            r.e.mem.set_u32(0x5200 + word * 4, 0x20 + word);
+        }
+        r.set(0x00aa_54a0, 0x5300);
+        r.set(0x006e_6da0, 0x5300);
+        let (ret, log) = r.run(0x0087_7be0, &args![0x5000u32, 0x5100u32]);
+        assert!(ret.bool());
+        assert_eq!(calls_to(&log, 0x00aa_54a0), vec![vec![0x7000, 0x24, 4]]);
+        assert_eq!(calls_to(&log, 0x006e_6da0), vec![vec![0x24, 0x5300]]);
+        assert_eq!(r.e.mem.u32(0x500c), 0x5300);
+        assert_eq!(r.e.mem.u32(0x5010), 0x5300);
+        assert_eq!(r.e.mem.u32(0x5300), 0);
+        assert_eq!(r.e.mem.u32(0x5304), 0x10);
+        assert_eq!(r.e.mem.u32(0x5320), 0x17);
+        // A second node is linked after the first.
+        r.set(0x00aa_54a0, 0x5400);
+        r.set(0x006e_6da0, 0x5400);
+        r.run(0x0087_7be0, &args![0x5000u32, 0x5200u32]);
+        assert_eq!(r.e.mem.u32(0x5300), 0x5400);
+        assert_eq!(r.e.mem.u32(0x5010), 0x5400);
+        assert_eq!(r.e.mem.u32(0x500c), 0x5300);
+        assert_eq!(r.e.mem.u32(0x5404), 0x20);
+    }
+
+    #[test]
+    fn pop_takes_the_head_and_returns_it_to_the_heap() {
+        let mut r = Rig::new(&[0x007b_3fa0, 0x00aa_5610]);
+        r.e.map(0x5000, 0x1000);
+        r.e.mem.set_u32(0x5008, 0x7000);
+        // Two nodes: 0x5300 -> 0x5400.
+        r.e.mem.set_u32(0x500c, 0x5300);
+        r.e.mem.set_u32(0x5300, 0x5400);
+        r.e.mem.set_u32(0x5304, 0xaa);
+        r.e.mem.set_u32(0x5324, 0xbb);
+        let (ret, log) = r.run(0x0087_7cc0, &args![0x5000u32, 0x5600u32]);
+        assert!(ret.bool());
+        assert_eq!(r.e.mem.u32(0x5600), 0xaa);
+        assert_eq!(r.e.mem.u32(0x500c), 0x5400);
+        assert_eq!(
+            log,
+            vec![
+                (0x007b_3fa0, vec![0x5300, 0]),
+                (0x00aa_5610, vec![0x7000, 0x5300])
+            ]
+        );
+        // An empty list pops nothing.
+        r.e.mem.set_u32(0x500c, 0);
+        let (ret, log) = r.run(0x0087_7cc0, &args![0x5000u32, 0x5600u32]);
+        assert!(!ret.bool());
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn small_queue_helpers() {
+        let mut r = Rig::new(&[]);
+        r.e.map(0x5000, 0x1000);
+        r.e.mem.set_u32(0x5004, 7);
+        r.run(0x0087_7d30, &args![0x5000u32]);
+        assert_eq!(r.e.mem.u8(0x5040), 1);
+        for word in 0..9 {
+            r.e.mem.set_u32(0x5100 + word * 4, 0xffff_ffff);
+        }
+        r.e.mem.set_u32(0x5124, 0xffff_ffff);
+        let (ret, _) = r.run(0x0087_7db0, &args![0x5100u32]);
+        assert_eq!(ret.u32(), 0x5100);
+        for word in 0..9 {
+            assert_eq!(r.e.mem.u32(0x5100 + word * 4), 0);
+        }
+        // The word after the node is untouched.
+        assert_eq!(r.e.mem.u32(0x5124), 0xffff_ffff);
+    }
+
+    #[test]
+    fn setting_constructor_registers_with_the_collection() {
+        let mut r = Rig::new(&[0x0040_4920]);
+        r.e.map(0x5000, 0x1000);
+        let collection = r.object_with_slots(&[(4, 0)]);
+        r.e.set_global(0x0120_4368u32, collection);
+        let (ret, log) = r.run(0x0087_7f10, &args![0x5000u32, 0x11u32, 0x22u32]);
+        assert_eq!(ret.u32(), 0x5000);
+        assert_eq!(r.e.mem.u32(0x5000), 0x0108_39ac);
+        assert_eq!(calls_to(&log, 0x0040_4920), vec![vec![0x5000, 0x11, 0x22]]);
+        let slot = r.e.mem.u32(r.e.mem.u32(collection) + 4);
+        assert_eq!(calls_to(&log, slot), vec![vec![collection, 0x5000]]);
+    }
+
+    #[test]
+    fn setting_deleting_destructor_calls_the_body_then_frees() {
+        let mut r = Rig::new(&[0x0087_7fc0, 0x0040_1030]);
+        let (ret, log) = r.run(0x0087_7f90, &args![0x5000u32, 1u32]);
+        assert_eq!(ret.u32(), 0x5000);
+        assert_eq!(
+            log,
+            vec![(0x0087_7fc0, vec![0x5000]), (0x0040_1030, vec![0x5000])]
+        );
+        let (_, log) = r.run(0x0087_7f90, &args![0x5000u32, 0u32]);
+        assert_eq!(log, vec![(0x0087_7fc0, vec![0x5000])]);
     }
 }
