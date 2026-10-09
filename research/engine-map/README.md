@@ -7,7 +7,8 @@ It is Phase 0 of [docs/ENGINE_PORT_PLAN.md](../../docs/ENGINE_PORT_PLAN.md)
 and the input of the function ledger ([scripts/ledger](../../scripts/ledger),
 [docs/LEDGER.md](../../docs/LEDGER.md)).
 
-`engine_map.tsv` here is the committed result. It holds only addresses,
+`engine_map.tsv` here is the committed result, with `frame.tsv` (the
+per-frame call tree, "Frame table" below). They hold only addresses,
 sizes, Xbox PDB names, Xbox addresses, source-unit paths and subsystems
 (ADR-0002). No decompiled code, strings, bytes or databases. Everything
 below runs on private inputs, and its intermediate files stay in the private
@@ -41,6 +42,9 @@ Ghidra project (private copy)         Xbox PDB + PowerPC image
         +-------------- match -----------+   names.csv -> NvImportNameMap.java (writes, copy)
                           |
                          map  ------------>  engine_map.tsv  -> scripts/ledger -> docs/LEDGER.md
+                                                   |                    ^
+                         frame <-------------------+                    |
+                           +--------------->  frame.tsv  ---------------+
 ```
 
 1. **Complete the function set** on a private copy of the analyzed project
@@ -64,18 +68,66 @@ Ghidra project (private copy)         Xbox PDB + PowerPC image
    `addi`/load pairs).
 4. **Match**: `cargo run --release --bin match -- <pc-dir> <xb-dir> <out>`
    (tiers below) writes `matches.tsv` and `names.csv`.
-5. **Map**: `cargo run --release --bin map -- <pc-dir> <xb-dir> <out> engine_map.tsv`.
-6. **Names into Ghidra**: `NvImportNameMap.java` with `names.csv` on the
+. **Frame**: `cargo run --release --bin frame -- <pc-dir> <xb-dir> engine_map.tsv frame.tsv [<report>]`
+   writes the call tree of the per-frame function (below, "Frame table").
+7. **Names into Ghidra**: `NvImportNameMap.java` with `names.csv` on the
    private copy (dry run, then real run; `research/ghidra/README.md`
    section 2). On 2026-10-09: 17,405 applied, 191 left as conflicts with
    existing Function ID names (not forced), 4 unchanged.
 
-All six steps run with one command, `.\scripts\engine-map.ps1` (69 s on the
+All seven steps run with one command, `.\scripts\engine-map.ps1` (69 s on the
 maintainer's machine; `-FreshProject` copies the source project again and
 redoes step 1, which is needed whenever the matcher's names change, because
 the import does not overwrite names it set before). After Rust changes only
 the ledger needs to run:
 `cargo run --release --manifest-path scripts/ledger/Cargo.toml`.
+
+## Frame table
+
+`frame.tsv` is the call tree of `Main::OnIdle` (Xbox PDB; PC `0086e650`,
+Xbox `8269f3c8`), the function `main` (`0086a850`) calls once per frame
+([docs/FRAME_SKELETON.md](../../docs/FRAME_SKELETON.md)). Depth 0 is
+`Main::OnIdle`, depth 1 its calls, down to depth 3; one row per call site in
+call order, so a function called twice has two rows and two subtrees. Only
+direct calls appear: calls through a vtable or a function pointer (the Havok
+step, the AI task threads) do not; FRAME_SKELETON.md traces those by hand.
+
+| Column | Meaning |
+| --- | --- |
+| `seq` | row number (depth-first order) |
+| `depth` | 0 to 3 |
+| `call` | position of the call in its caller's PC call list (1-based) |
+| `address` | PC entry point of the called function |
+| `name`, `xbox` | Xbox PDB name and address |
+| `name_tier` | the map's tier (`vt`, `str`, `cg`, `fid`), or `frame`, `align-sim`, `align-gap` (below) |
+| `unit`, `subsystem` | from the engine map |
+| `note` | `recursive`: already on the path above, not expanded again |
+
+Names the map does not have come from two places:
+
+- `frame`: pairs confirmed by hand for the frame (`CONFIRMED` in
+  `src/bin/frame.rs`), each with its evidence from the exe in
+  FRAME_SKELETON.md's stage table.
+- Alignment: where a caller's Xbox counterpart is known, its PC and Xbox
+  call lists are aligned on calls already paired; inside the gaps, calls
+  whose own callees and strings overlap in two or more members pair in order
+  (`align-sim`), and a gap of exactly one call on each side pairs those two
+  (`align-gap`). A proposal is kept only when every call site of the PC
+  function agrees and no other PC function is proposed for the same Xbox
+  function; kept pairs feed the next round. These are leads, not checked
+  over the whole exe.
+
+The ledger does not read a status from this table: it computes one per row
+from the Rust sources and prints the coverage per depth, and the depth-1
+list, in [docs/LEDGER.md](../../docs/LEDGER.md) ("Frame").
+
+On 2026-10-09: 6,692 rows (1 / 143 / 1,575 / 4,973 at depths 0 to 3);
+named 1 / 84 / 461 / 1,449, of which `frame` 1 / 42 / 25 / 20 and
+alignment 0 / 1 / 24 / 93.
+
+The optional fifth argument writes the root's alignment (both call lists
+merged, with the Xbox calls the PC lacks); it stays private with the other
+intermediate files.
 
 ## Name tiers
 

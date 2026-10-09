@@ -414,6 +414,113 @@ fn render(funcs: &[Func], header: &[String], unmapped: usize, cites: usize) -> S
     s
 }
 
+/// One call site of the frame tree (`research/engine-map/frame.tsv`).
+struct FrameRow {
+    depth: usize,
+    addr: u32,
+    name: String,
+}
+
+/// Reads the frame table; a missing file gives no rows.
+fn load_frame(path: &Path) -> Result<Vec<FrameRow>, String> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Ok(Vec::new());
+    };
+    let mut cols: Vec<&str> = Vec::new();
+    let mut out = Vec::new();
+    for line in text.lines().filter(|l| !l.starts_with('#')) {
+        let f: Vec<&str> = line.split('\t').collect();
+        if cols.is_empty() {
+            cols = f;
+            continue;
+        }
+        let get = |k: &str| {
+            cols.iter()
+                .position(|c| *c == k)
+                .and_then(|i| f.get(i))
+                .copied()
+                .unwrap_or("")
+        };
+        out.push(FrameRow {
+            depth: get("depth").parse().map_err(|e| format!("{line}: {e}"))?,
+            addr: u32::from_str_radix(get("address"), 16).map_err(|e| format!("{line}: {e}"))?,
+            name: get("name").to_string(),
+        });
+    }
+    Ok(out)
+}
+
+/// Status of a frame row: its function's ledger status (an address that is
+/// no function's entry counts as `open`).
+fn frame_status(funcs: &[Func], addr: u32) -> &'static str {
+    match funcs.binary_search_by_key(&addr, |f| f.addr) {
+        Ok(i) => funcs[i].status(),
+        Err(_) => "open",
+    }
+}
+
+/// The "Frame" section: coverage of the `Main::OnIdle` tree per depth, and
+/// the depth-1 calls with their status.
+fn render_frame(funcs: &[Func], rows: &[FrameRow]) -> String {
+    let mut s = String::new();
+    if rows.is_empty() {
+        return s;
+    }
+    let _ = writeln!(
+        s,
+        "\n## Frame\n\n\
+         The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame \
+         function, from `research/engine-map/frame.tsv` (docs/FRAME_SKELETON.md): direct \
+         calls in call order to depth 3, one row per call site, so a function called twice \
+         counts twice. Statuses as above.\n"
+    );
+    let _ = writeln!(
+        s,
+        "| Depth | Call sites | Functions | translated | traced | platform | library | open |\n\
+         | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
+    );
+    let mut depths: BTreeMap<usize, ([usize; 5], BTreeSet<u32>)> = BTreeMap::new();
+    for r in rows {
+        let e = depths.entry(r.depth).or_default();
+        let st = frame_status(funcs, r.addr);
+        e.0[STATUSES.iter().position(|x| *x == st).unwrap()] += 1;
+        e.1.insert(r.addr);
+    }
+    for (d, (by, fs)) in &depths {
+        let _ = writeln!(
+            s,
+            "| {d} | {} | {} | {} | {} | {} | {} | {} |",
+            by.iter().sum::<usize>(),
+            fs.len(),
+            by[0],
+            by[1],
+            by[2],
+            by[3],
+            by[4]
+        );
+    }
+    let _ = writeln!(
+        s,
+        "\nThe calls of `Main::OnIdle` itself (depth 1), in order:\n\n\
+         | # | Address | Name (Xbox PDB) | Status |\n| ---: | --- | --- | --- |"
+    );
+    for (i, r) in rows.iter().filter(|r| r.depth == 1).enumerate() {
+        let _ = writeln!(
+            s,
+            "| {} | `{:08x}` | {} | {} |",
+            i + 1,
+            r.addr,
+            if r.name.is_empty() {
+                "-".to_string()
+            } else {
+                format!("`{}`", r.name)
+            },
+            frame_status(funcs, r.addr)
+        );
+    }
+    s
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let check = args.iter().any(|a| a == "--check");
@@ -518,7 +625,14 @@ fn main() {
         }
         _ => {}
     }
-    let md = render(&funcs, &header, unmapped.len(), cited.len());
+    let frame = match load_frame(&root.join("research/engine-map/frame.tsv")) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ledger: frame.tsv: {e}");
+            std::process::exit(2);
+        }
+    };
+    let md = render(&funcs, &header, unmapped.len(), cited.len()) + &render_frame(&funcs, &frame);
     let out = root.join("docs/LEDGER.md");
     if check {
         let cur = fs::read_to_string(&out).unwrap_or_default();
@@ -561,45 +675,6 @@ fn main() {
         funcs.len(),
         cited.len()
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn finds_addresses() {
-        assert_eq!(
-            addresses("`bhkWorld::Update` (`00c6ae70`)"),
-            vec![0x00c6ae70]
-        );
-        assert_eq!(addresses("FUN_00c6ae70 0x00c6ae70"), vec![0x00c6ae70]);
-        assert_eq!(addresses("a00c6ae70 00c6ae701"), Vec::<u32>::new());
-        // Data (.rdata) and values outside .text are not functions.
-        assert_eq!(addresses("01017d00 00001234"), Vec::<u32>::new());
-    }
-
-    #[test]
-    fn marker_lines_translate() {
-        let text = "/// `x` (`00c90e60`) traced\n\
-                    // Translated from 00c95a80 and 00c90e60 (decompiled, FalloutNV.exe 1.4.0.525)\n\
-                    /// the finder (`00afe220`,\n\
-                    /// decompiled, FalloutNV.exe 1.4.0.525): wraps\n";
-        let got = scan(text);
-        assert!(got.contains(&(0x00c90e60, Cite::Traced, 1)));
-        assert!(got.contains(&(0x00c95a80, Cite::Translated, 2)));
-        assert!(got.contains(&(0x00c90e60, Cite::Translated, 2)));
-        assert!(got
-            .iter()
-            .any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
-    }
-
-    #[test]
-    fn statuses() {
-        assert_eq!(base_status("LIBCMT"), "library");
-        assert_eq!(base_status("NiXenonRenderer"), "platform");
-        assert_eq!(base_status("Havok SDK"), "open");
-    }
 }
 
 /// `queue`: functions the engine crate does not have yet, per unit
@@ -646,5 +721,103 @@ fn queue(funcs: &[Func], args: &[String]) {
     for ((sub, unit), (n, bytes)) in rows {
         let (d, s) = units::module_of(unit, sub);
         println!("{unit}\t{sub}\t{n}\t{bytes}\tunits/{d}/{s}.rs");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_addresses() {
+        assert_eq!(
+            addresses("`bhkWorld::Update` (`00c6ae70`)"),
+            vec![0x00c6ae70]
+        );
+        assert_eq!(addresses("FUN_00c6ae70 0x00c6ae70"), vec![0x00c6ae70]);
+        assert_eq!(addresses("a00c6ae70 00c6ae701"), Vec::<u32>::new());
+        // Data (.rdata) and values outside .text are not functions.
+        assert_eq!(addresses("01017d00 00001234"), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn marker_lines_translate() {
+        let text = "/// `x` (`00c90e60`) traced\n\
+                    // Translated from 00c95a80 and 00c90e60 (decompiled, FalloutNV.exe 1.4.0.525)\n\
+                    /// the finder (`00afe220`,\n\
+                    /// decompiled, FalloutNV.exe 1.4.0.525): wraps\n";
+        let got = scan(text);
+        assert!(got.contains(&(0x00c90e60, Cite::Traced, 1)));
+        assert!(got.contains(&(0x00c95a80, Cite::Translated, 2)));
+        assert!(got.contains(&(0x00c90e60, Cite::Translated, 2)));
+        assert!(got
+            .iter()
+            .any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
+    }
+
+    fn func(addr: u32, subsystem: &str) -> Func {
+        Func {
+            addr,
+            size: 16,
+            name: String::new(),
+            tier: String::new(),
+            unit: String::new(),
+            subsystem: subsystem.into(),
+            placed: String::new(),
+            translated: BTreeSet::new(),
+            replaced: BTreeSet::new(),
+            traced: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn frame_coverage_per_depth() {
+        let mut funcs = vec![
+            func(0x0086e650, "fallout/misc"),
+            func(0x00a00000, "fallout/ai"),
+            func(0x00b00000, "LIBCMT"),
+            func(0x00c00000, "BSShader"),
+        ];
+        funcs[1]
+            .translated
+            .insert("crates/engine/src/x.rs:1".into());
+        let dir = std::env::temp_dir().join(format!("ledger-frame-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("frame.tsv");
+        fs::write(
+            &path,
+            "# provenance\n\
+             seq\tdepth\tcall\taddress\tname\tname_tier\txbox\tunit\tsubsystem\tnote\n\
+             1\t0\t0\t0086e650\tMain::OnIdle\tframe\t8269f3c8\t\t\t\n\
+             2\t1\t1\t00a00000\tA::B\tcg\t82000000\t\t\t\n\
+             3\t2\t1\t00b00000\t\t\t\t\t\t\n\
+             4\t1\t2\t00a00000\tA::B\tcg\t82000000\t\t\t\n\
+             5\t1\t3\t00c00000\t\t\t\t\t\t\n\
+             6\t1\t4\t00d00000\t\t\t\t\t\t\n",
+        )
+        .unwrap();
+        let rows = load_frame(&path).unwrap();
+        fs::remove_dir_all(&dir).unwrap();
+        assert_eq!(rows.len(), 6);
+        let md = render_frame(&funcs, &rows);
+        // Depth 1: four call sites, three functions; the repeat counts twice;
+        // 00d00000 is no function's entry and counts as open.
+        assert!(md.contains("| 0 | 1 | 1 | 0 | 0 | 0 | 0 | 1 |"), "{md}");
+        assert!(md.contains("| 1 | 4 | 3 | 2 | 0 | 1 | 0 | 1 |"), "{md}");
+        assert!(md.contains("| 2 | 1 | 1 | 0 | 0 | 0 | 1 | 0 |"), "{md}");
+        assert!(
+            md.contains("| 2 | `00a00000` | `A::B` | translated |"),
+            "{md}"
+        );
+        assert!(md.contains("| 4 | `00d00000` | - | open |"), "{md}");
+        assert!(render_frame(&funcs, &[]).is_empty());
+        assert!(load_frame(&dir.join("missing.tsv")).unwrap().is_empty());
+    }
+
+    #[test]
+    fn statuses() {
+        assert_eq!(base_status("LIBCMT"), "library");
+        assert_eq!(base_status("NiXenonRenderer"), "platform");
+        assert_eq!(base_status("Havok SDK"), "open");
     }
 }

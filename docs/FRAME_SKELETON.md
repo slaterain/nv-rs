@@ -1,48 +1,261 @@
 # Phase 1: the frame skeleton (proposal)
 
 Drafted 2026-10-09 at the end of Phase 0 ([ENGINE_PORT_PLAN.md](ENGINE_PORT_PLAN.md),
-[LEDGER.md](LEDGER.md)). Nothing here is implemented yet. Names are from the
-Xbox 360 prototype (Xbox PDB, ADR-0002), PC addresses from
-`research/engine-map/engine_map.tsv`.
+[LEDGER.md](LEDGER.md)); PR 1 (the frame map) done 2026-10-09, the rest is
+not implemented yet. Names are from the Xbox 360 prototype (Xbox PDB,
+ADR-0002), PC addresses from `research/engine-map/engine_map.tsv` and
+`research/engine-map/frame.tsv`.
 
 ## The entry point
 
 The frame is `Main::OnIdle` (Xbox PDB): PC `0086e650`, 2,272 bytes, called
-once per frame from `main` (`0086a850`, matched by its strings). It was not
-named by the matcher; it is the only PC function that calls both
-`Main::OnIdle_UpdatePlayer` (`0086f940`) and `Main::OnIdle_PollControls`
-(`0086f390`), and its 143 call sites line up with the Xbox `Main::OnIdle`
-(`8269f3c8`, 143 calls without the PowerPC register save helpers) apart
-from profiling timers and debug-only calls. The PC version polls the
-keyboard directly (`GetAsyncKeyState`, six calls).
+once per frame from `main` (`0086a850`, matched by its strings; the call is
+at `0086b3e3`, its only caller). It was not named by the matcher; it is the
+only PC function that calls both `Main::OnIdle_UpdatePlayer` (`0086f940`)
+and `Main::OnIdle_PollControls` (`0086f390`), and its 143 call sites line
+up with the Xbox `Main::OnIdle` (`8269f3c8`, 142 calls without the PowerPC
+register save helpers) apart from profiling timers and debug-only calls.
+The PC version polls the keyboard directly (`GetAsyncKeyState`, six calls).
 
 ## Its order (Xbox PDB names, PC addresses where matched)
 
 Grouped into stages for readability; the order inside each stage is the
-call order. `?` means not matched yet; Phase 1's first PR fills these from
-the PC call list.
+call order. Plain addresses come from the engine map; **bold** ones were
+paired for the frame in Phase 1 PR 1 (evidence below; `CONFIRMED` in
+`research/engine-map/src/bin/frame.rs`); *lead* marks a pairing by
+position only; `?` means no PC counterpart was found. The full tree to
+depth 3 is `research/engine-map/frame.tsv`, its coverage in
+[LEDGER.md](LEDGER.md) ("Frame").
+
+"Threads" below is the setting `iNumHWThreads:General` (`011c3ea4`, name
+string at `0101801c`, static default 1 from `00f38360`), read through
+`0043d4d0`. `main` sets it to `GetSystemInfo`'s processor count
+(`0086a950`-`0086a966`) and raises 1 to 2 (`0086a977`-`0086a990`); whether
+the INI can lower it afterwards is not traced. With threads > 1 `main`
+creates the AI linear task threads (`0086b117`-`0086b12d`, below).
 
 | Stage | Calls in order |
 | --- | --- |
-| 1. Frame start | `Main::UpdateTextures` ?, menu state queries (`Interface::IsInMenuMode` `00702360`, `IsPipboyOpening` `00709bc0`, `InDialog` `007050d0`, `FaderManager::IsFaderVisible` `00701450`, `IsConsoleVisible` `00703d50`, `GetCurrentRenderedMenu` `00707ad0`, `GetPipboy` `00705990`), `MemoryLevelManager::RunNonDestructiveFree` ? |
-| 2. Player | `Main::OnIdle_UpdatePlayer` `0086f940`, `Main::OnIdle_UpdateImageSpace` `0086fd90` |
-| 3. Housekeeping | `Pathing::ProfilePathing` `006da7c0`, `BGSSaveLoadManager::UpdateQueuedSaves` `00851d90`, `BSConsoleCommand::PollForCommands`, `Main::OnIdle_FixActorBones`, `Main::OnIdle_UpdateMessageBox`, `Main::OnIdle_UpdateTimer`, `Main::OnIdle_PollControls` `0086f390`, `IOManager::UpdateQueue`, `LoadingMenu::SuspendBackgroundThread` `0078cfc0`, `TES::ShowLoadingMenu`, `Main::OnIdle_ScaleLOD`, `BSTextureManager::Update`, `Main::OnIdle_HandleMenuBackground` `0086f450`, `FaderManager::UpdateFaders` `007011d0`, `ScreenSplatter::Update`, `ScreenCustomSplatter::Update` |
-| 4. World and time | `NiParallelUpdateTaskManager::BeginUpdate`, `TES::TestAllCells` `004556d0`, `Calendar::Update` `00867a40`, `TES::RunAnimations`, `ProcessLists::RunActorScripts`, `ProcessLists::UpdateRadiationList`, `ProcessLists::ChangeProcessLevelTempList` `0096eb40`, `ProcessLists::UpdateFollowerTempList`, `MemoryLevelManager::CheckMemoryLevel`, `BSTexturePalette::PurgeUnusedTextures` `00a61cd0`, `GarbageCollector::Update` `00868850`, `GarbageCollector::ClearTempEffects` `00868d10`, `BSTreeManager::Update` `006652e0`, `Main::OnIdle_UpdateCurrentGridCell` |
-| 5. Interface and scene | `Interface::PreIdleStuff`, `Interface::Idle`, `Interface::PostIdleStuff`, `Main::DisplayDebugText`, `BGSDecalManager::UpdateDecals`, `BSSceneGraph::SetCameraFOV` `00c52020`, `BSShaderManager::SetFOV`, `TES::ResetAllMultiBoundNodes`, `ShadowSceneNode::UpdateOcclusionPlaneVisibility` `00b5ac90`, `TES::UpdateMultiBoundVisibility` |
-| 6. AI threads start | `AILinearTaskThreadManager::SetMainRendering`, `StartThreads`, `AITaskManager::StartTasksDuringRendering`, `Main::OnIdle_UpdateAnimationsAndEffects`, `Interface::PreIdleStuff`/`Idle`/`PostIdleStuff` again, `Interface::LastMinuteUpdate` `007058e0`, `PathManager::Update`, `NavMeshRender::Update`, `NavMeshObstacleManager::Update`, `CombatManager::Update`, `NiParallelUpdateTaskManager::EndUpdate`, `Interface::UpdateSleeping` `007056f0` |
-| 7. Render | `Main::RenderMenuBackground` `00871dc0`, `CheckWithinMultiBoundTask::DoAttachments`, `ShadowSceneNode::ProcessAllQueuedLights`, `XGamerProfile::Update`, `Main::Swap`, `Main::PostSwapProcess` |
-| 8. Threads join | `AILinearTaskThreadManager::WaitForThreads`, `AITaskManager::WaitForTasksDuringRendering`, `Main::UpdateNonRenderSafeAITasks` `0086f6a0`, `Main::OnIdle_PostThreadsProcess`, `Interface::OpenConsole` `00703e10`, `Script::ClearOptimizations`, `ScriptLocals::ClearOptimizations` |
+| 1. Frame start | `Main::UpdateTextures` ? (the PC's first call, `0086a830`, only returns 0), menu state queries (`Interface::IsInMenuMode` `00702360`, `IsPipboyOpening` `00709bc0`, `InDialog` `007050d0`, `FaderManager::IsFaderVisible` **`00701450`**, `IsConsoleVisible` `00703d50`, `GetCurrentRenderedMenu` `00707ad0`, `GetPipboy` `00705990`), `MemoryLevelManager::RunNonDestructiveFree` **`008782b0`** |
+| 2. Player | `Main::OnIdle_UpdatePlayer` `0086f940`; PC only: the Steam API object (`006ff580`) and `SteamAPI_RunCallbacks` (`006ff860`); `Main::OnIdle_UpdateImageSpace` `0086fd90` |
+| 3. Housekeeping | `Pathing::ProfilePathing` `006da7c0`, `BGSSaveLoadManager::UpdateQueuedSaves` `00851d90`, `BSConsoleCommand::PollForCommands` ?, `Main::OnIdle_FixActorBones` **`0086f190`**, `Main::OnIdle_UpdateMessageBox` ?, PC only: a requested `Sleep` of up to 20 ms (`004e1610`), `Main::OnIdle_UpdateTimer` **`0086f260`**, `Main::OnIdle_PollControls` `0086f390`, `IOManager::UpdateQueue` **`00c3dbf0`**, `LoadingMenu::SuspendBackgroundThread` `0078cfc0`, `Interface::IsInGameLoadingMenuOpen` `00705ea0`, `TES::ShowLoadingMenu` **`00457d70`**, `Main::OnIdle_ScaleLOD` **`0086efe0`**, `BSTextureManager::Update` *lead* `00b6dd00`, `Main::OnIdle_HandleMenuBackground` `0086f450`, `FaderManager::UpdateFaders` **`007011d0`**, `ScreenSplatter::Update` **`004e0110`**, `ScreenCustomSplatter::Update` **`004de600`** |
+| 4. World and time | `NiParallelUpdateTaskManager::BeginUpdate` *lead* `00a81a20`, `TES::TestAllCells` `004556d0`, `Calendar::Update` **`00867a40`**, `TES::RunAnimations` **`00455640`** (threads = 1 only), `ProcessLists::RunActorScripts` **`00978550`**, `ProcessLists::UpdateRadiationList` **`009777a0`**, `ProcessLists::ChangeProcessLevelTempList` `0096eb40`, `ProcessLists::UpdateFollowerTempList` **`0096e9b0`**, `MemoryLevelManager::CheckMemoryLevel` ?, `BSTexturePalette::PurgeUnusedTextures` `00a61cd0`, `GarbageCollector::Update` `00868850`, `GarbageCollector::ClearTempEffects` `00868d10`, `BSTreeManager::Update` **`006652e0`**, `Main::OnIdle_UpdateCurrentGridCell` **`0086fbe0`** |
+| 5. Interface and scene | `Main::OnIdle_DoInterfaceIdle` **`0086fd70`** (threads = 1 only; it calls `Interface::PreIdleStuff` **`007027e0`**, `Interface::Idle` **`00702810`**, `Interface::PostIdleStuff` **`00702840`**), `Main::DisplayDebugText` ?, `BGSDecalManager::GetInstance` **`0049fef0`**, `BGSDecalManager::UpdateDecals` **`0049fff0`**, `BSSceneGraph::SetCameraFOV` `00c52020`, `BSShaderManager::SetFOV` **`00b54000`**, `TES::ResetAllMultiBoundNodes` **`0045bc80`**, `ShadowSceneNode::UpdateOcclusionPlaneVisibility` `00b5ac90`, `TES::UpdateMultiBoundVisibility` **`0045b070`** |
+| 6. AI threads start | threads > 1: `AILinearTaskThreadManager::SetMainRendering` **`008c80e0`**, `StartThreads` **`008c78c0`**; threads = 1: `AITaskManager::StartTasksDuringRendering` **`008ca070`**; then `Main::OnIdle_UpdateAnimationsAndEffects` **`0086fc60`**, `Main::OnIdle_DoInterfaceIdle` **`0086fd70`** again (threads > 1), `Interface::LastMinuteUpdate` `007058e0`, `PathManager::Update` **`006ebc50`**, `NavMeshRender::Update` **`006a61b0`**, `NavMeshObstacleManager::Update` **`006c3640`** and `CombatManager::Update` **`00991500`** (both threads = 1 only), `NiParallelUpdateTaskManager::EndUpdate` *lead* `00a81a80`, `Interface::UpdateSleeping` `007056f0` |
+| 7. Render | `Main::RenderMenuBackground` `00871dc0`, `CheckWithinMultiBoundTask::DoAttachments` *lead* `0057ab70`, `ShadowSceneNode::ProcessAllQueuedLights` *lead* `00b60040`, `XGamerProfile::Update` ? (the PC calls `TESActorBaseData::GetAlignmentForKarma` `0047e040` there), `Main::Swap` **`0086ff70`**, `Main::PostSwapProcess` **`008705d0`** |
+| 8. Threads join | threads > 1: `AILinearTaskThreadManager::WaitForThreads` **`008c7990`**; threads = 1: `AITaskManager::WaitForTasksDuringRendering` *lead* `008ca300`; `Main::UpdateNonRenderSafeAITasks` `0086f6a0`, `Main::OnIdle_PostThreadsProcess` **`00870610`**, `Interface::OpenConsole` `00703e10`, `Script::ClearOptimizations` **`005ae270`**, `ScriptLocals::ClearOptimizations` **`005a9d60`**; PC only: `00a29680`, the frame time (`0084d030`), `00950090`, `00aa7290` |
 
-Not visible at this level: the Havok step. `bhkWorld::Update` (`00c6ae70`)
-is called only through its vtable; where the frame reaches it (the AI task
-threads, `TES::RunAnimations` or the player update) is the first thing
-Phase 1 traces. The same holds for actor updates, which run in the AI tasks
-started in stage 6 and joined in stage 8.
+The remaining `?` rows are Xbox debug calls the PC does not make at this
+level (`BSConsoleCommand::PollForCommands`, `Main::DisplayDebugText`,
+`XGamerProfile::Update`) or were not found (`Main::UpdateTextures`,
+`Main::OnIdle_UpdateMessageBox`, `MemoryLevelManager::CheckMemoryLevel`).
+The Xbox build also brackets most stages with `BSPerformanceTimerInternal`
+start/stop calls, which the PC build does not make.
 
-Today the ledger marks 14 of the 143 PC call sites `traced` (the
-`Interface` queries, the menu background, the fader update, the calendar and
-others), none `translated`; everything else in this list is `open` or
-`platform`.
+### Evidence for the pairs
+
+Each pair compares the PC function's direct calls (names from the engine
+map), strings and unit with the Xbox function's.
+
+- `FaderManager::IsFaderVisible` `00701450`: the only call between
+  `InDialog` and `IsConsoleVisible`, both times, on both sides; `Main::Swap` calls
+  it twice on both sides; unit `fadermanager.cpp`.
+- `MemoryLevelManager::RunNonDestructiveFree` `008782b0`: calls
+  `BSFaceGenManager::GetModelCache` three times and `Tile::GetMenuByClass`,
+  as the Xbox function does; next to
+  `MemoryLevelManager::FreeReleasedObjects` (`00878250`).
+- `Main::OnIdle_FixActorBones` `0086f190`: calls
+  `MobileObject::GetCurrentProcessType` and twice an empty function
+  (`00483710`) where the Xbox calls the empty `RemoteLog::OnConnected` twice.
+- `Main::OnIdle_UpdateTimer` `0086f260`: calls `bhkWorld::SetDeltaTime`
+  (`00c66760`, docs/PHYSICS.md) and a `bstimer.cpp` function (`00aa4e40`),
+  as the Xbox one calls `BSTimer::Update` and `bhkWorld::SetDeltaTime`.
+- `IOManager::UpdateQueue` `00c3dbf0`: calls `BSPrecisionTimer::GetTimer`
+  twice and an `iomanager.obj` function (`00c3e420`).
+- `TES::ShowLoadingMenu` `00457d70`: 8 shared callees and strings; `Main::Swap`
+  calls it on both sides.
+- `Main::OnIdle_ScaleLOD` `0086efe0`: calls `TES::GetWorldSpace` twice and a
+  `tesworldspace.cpp` function (`00586390`).
+- `FaderManager::UpdateFaders` `007011d0`: the same `FaderManager.cpp`
+  source-path string.
+- `ScreenSplatter::Update` `004e0110` and `ScreenCustomSplatter::Update`
+  `004de600`: both call `NiObjectNET::GetExtraData`; the second calls
+  `004b3ab0` twice and the first once, as the Xbox custom splatter calls
+  `FLerp` twice and the plain one once.
+- `Calendar::Update` `00867a40`: unit `calendar.cpp`; calls `004b10d0`, a
+  12-entry lookup by month, where the Xbox calls `Date::GetDaysInMonth`.
+- `TES::RunAnimations` `00455640`: calls `00553820` (`tesobjectcell.cpp`)
+  and `004baba0` (`gridcell.cpp`, which calls `GridCellArray::Get` and
+  `00553820`), as the Xbox one calls `TESObjectCELL::RunAnimations` and
+  `GridCellArray::RunAnimations` (so `00553820` and `004baba0` are those
+  two).
+- `ProcessLists::RunActorScripts` `00978550`: calls
+  `TESObjectREFR::RunScript`.
+- `ProcessLists::UpdateRadiationList` `009777a0`: `ExtraDataList::GetRadius`,
+  `GetDistanceFromReference`, `Actor::GetRadiationResistanceMult`,
+  `ShouldActorAvoidRadiation`, `HighProcess::AddAvoidPathingArea` and more,
+  in the Xbox order.
+- `ProcessLists::UpdateFollowerTempList` `0096e9b0`:
+  `Actor::GetCurrentPackageTarget` twice, `Actor::AddFollower`.
+- `BSTreeManager::Update` `006652e0`: `CSpeedTreeRT::SetCamera`, unit
+  `bstreemanager.cpp`.
+- `Main::OnIdle_UpdateCurrentGridCell` `0086fbe0`:
+  `TES::UpdateCurrentGridCell`, `TESObjectREFR::GetWorldSpace`,
+  `TES::GetWorldSpace`.
+- `Main::OnIdle_DoInterfaceIdle` `0086fd70`: calls three wrappers
+  (`007027e0`, `00702810`, `00702840`, which call
+  `InterfaceManager::PreIdleStuff`, `InterfaceManager::Idle` and
+  `00711ea0`), as the Xbox one calls `Interface::PreIdleStuff`, `Idle` and
+  `PostIdleStuff`; it is also the first call of the combined AI thread
+  function (`008c7bd0`), as on the Xbox.
+- `BGSDecalManager::GetInstance` `0049fef0`: allocates (`00401000`) and
+  constructs (`0049fcd0`); `UpdateDecals` `0049fff0`: calls
+  `BGSDecalManager::UpdateSimpleDecals`.
+- `BSShaderManager::SetFOV` `00b54000`: two sine/cosine pairs (`00eca0a0`,
+  `00ec9f70`) as the Xbox `sin`/`cos`; unit `bsshadermanager.cpp`.
+- `TES::ResetAllMultiBoundNodes` `0045bc80`: `BSCompoundFrustum::SetCamera`,
+  `TESWorldSpace::GetTerrainManager`, `GridCellArray::Get`.
+- `TES::UpdateMultiBoundVisibility` `0045b070`: `nicullingprocess.cpp`
+  functions (`00a69400`, `00a694a0`), `GetTerrainManager`,
+  `GridCellArray::Get`, `shadowscenenode.cpp` functions.
+- `AITaskManager::StartTasksDuringRendering` `008ca070`: unit
+  `aitaskmanager.cpp`, calls `MobileObjectTaskletData::RunToCompletion`
+  twice, as the Xbox one does.
+- `AILinearTaskThreadManager::SetMainRendering` `008c80e0`: the last call of
+  `Main::Swap` on both sides. `StartThreads` `008c78c0` resets the 12 + 8
+  event handles of the thread manager (`011dfa50`, returned by `00713d80`),
+  sets the flag `011dfa19` and releases each thread slot's semaphore
+  (`008c9fb0`, `ReleaseSemaphore`), as the Xbox `StartThreads` calls
+  `ReleaseSemaphore`; `WaitForThreads` `008c7990` waits on each slot
+  (`008c7490`, `WaitForSingleObject`, as on the Xbox) and clears the flag.
+- `Main::OnIdle_UpdateAnimationsAndEffects` `0086fc60`:
+  `ProcessLists::UpdateTempEffects` `00974420` (threads < 2) or
+  `UpdateTempEffectsParallel` `009746c0` (which calls `00974420`, as on the
+  Xbox), then `TES::UpdateCellAnimations` `00453550` or
+  `TES::UpdateCellMainThread` `004537c0`, then
+  `BSParticleSystemManager::UpdateParallel` (`00c50610`,
+  `bsparticlesystemmanager.obj`).
+- `TES::UpdateCellAnimations` `00453550`: wind (`00c468c0` in
+  `bswindmodifier.obj`, `00c74550` in BSHavok) where the Xbox calls
+  `BSWindModifier::SetWind` and `bhkWindListener::SetWind`;
+  `TES::LockHavokUpdateMT` (`00453860`) before and after
+  `TESObjectCELL::UpdateManagedNodes` (`00551890`) or
+  `GridCellArray::UpdateManagedNodes` (`004ba9a0`); `TaskQueueInterface`
+  (`0087aa90`), `focollisionlistener.cpp` (`00623640`),
+  `Interface::InDialog`, `Sky::Update`, `TES::UpdateCellMainThread`,
+  `processlists.cpp` (`00975080`): all in the Xbox order.
+- `PathManager::Update` `006ebc50` (`pathmanager.cpp`) and
+  `NavMeshRender::Update` `006a61b0` (`navmeshrender.cpp`): unit, and
+  position after `PathManager::QInstance`.
+- `NavMeshObstacleManager::GetInstance`/`Update` `006c0720`/`006c3640` and
+  `CombatManager::Update` `00991500`: callee overlap, and the same calls in
+  the combined AI thread function as on the Xbox.
+- `Main::Swap` `0086ff70`: 11 shared callees and strings (`Main::RenderMenuBackground`,
+  `FaderManager::RemoveFader`, `Main::KillMenuBGTexture`,
+  `MTRenderingSystem::SetThreadStage`, `Main::UpdateOffscreenInterface`,
+  `Interface::IsMenuIDVisible` eight times and others).
+- `Main::PostSwapProcess` `008705d0`: calls
+  `Main::OnIdle_UpdateProcessLists`.
+- `Main::OnIdle_PostThreadsProcess` `00870610`: 4 shared callees and strings.
+- `Script::ClearOptimizations` `005ae270`,
+  `ScriptLocals::ClearOptimizations` `005a9d60`: the last two game calls of
+  `Main::OnIdle` and of the AI thread functions, as on the Xbox.
+
+Leads by position only: `00b6dd00` (`BSShader`, next to
+`BSTextureManager::ReturnRenderedTexture` `00b6da10`); `00a81a20` and
+`00a81a80` (`NiMain`, each behind a test, where `BeginUpdate` and
+`EndUpdate` stand); `0057ab70` and `00b60040` (after
+`RenderMenuBackground`; `00b60040` calls one function, as
+`ProcessAllQueuedLights` calls `ProcessQueuedLights`); `008ca300` (the
+only call between the threads-join branch and `UpdateNonRenderSafeAITasks`).
+
+## The Havok step
+
+`bhkWorld::Update` (`00c6ae70`) is slot `+0xc4` of the `bhkWorld` vtable
+(`010c40b4`, slot at `010c4178`) and of the `bhkWorldM` vtable (`010c69f4`,
+slot at `010c6ab8`). Three code sites call slot `+0xc4` on a world:
+
+- `00554780` (`tesobjectcell.cpp`), on the exterior world in the global
+  `011ca0d8`. `TESObjectCELL::InitStatics` (`00541b80`) stores there the
+  world that `00554010` creates with `00c99ff0`, which writes the
+  `bhkWorldM` vtable `010c69f4` (`00c9a00c`).
+- `TESObjectCELL::UpdateManagedNodes` (`00551890`, call at `005518df`), on
+  the cell's own world from `004543c0` (cell byte `+0x24` bit 0 set:
+  `0041b9a0` on the cell's extra data at `+0x28`; clear: `00451010`, the
+  global `011ca0d8`), only when that bit is set and `00450ff0` holds
+  (`00450fd0` returns 6).
+- `00554010` itself, once, right after creating the world (`0055450b`).
+
+The per-frame path is `TES::UpdateCellAnimations` (`00453550`; `this` is
+`[011dea10]` at the call from `0086fc60`). It adds the frame time to `011c3c08` and, between
+`TES::LockHavokUpdateMT(1)` and `(0)` (`00453860`, a critical section only
+when threads ≠ 1), calls either `TESObjectCELL::UpdateManagedNodes`
+(`00551890`) on the cell at `this+0x34` when there is one, or
+`GridCellArray::UpdateManagedNodes` (`004ba9a0`, on `this+0x8`). The
+latter steps the exterior world first (`00554780`) and then runs
+`00551890` on every loaded grid cell (`GridCellArray::Get`); those cells
+have bit 0 clear, so the exterior world is stepped once per frame.
+
+`TES::UpdateCellAnimations` has three callers:
+
+- `Main::OnIdle_UpdateAnimationsAndEffects` (`0086fc60`, call at
+  `0086fd08`) when threads = 1 and the menu flag `011dea2b` (set at the start of
+  the frame from `IsInMenuMode`/`IsPipboyOpening`) is clear (otherwise it calls
+  `TES::UpdateCellMainThread` `004537c0`);
+- the combined AI linear task thread function `008c7bd0` (`008c7d03`);
+- AI linear task thread 2's function `008c7f50` (`008c803d`).
+
+So with threads > 1, which `main` makes the normal case on PC, the Havok
+step runs on an AI linear task thread between `StartThreads` (stage 6) and
+`WaitForThreads` (stage 8), after that thread's actor updates.
+
+## The actor updates
+
+`AILinearTaskThreadManager::CreateThreads` (`008c7290`, called from `main`
+at `0086b12d` when threads > 1) creates one thread on `008c7bd0` ("AI Linear
+Task Thread", string `0108561c`) when threads ≤ 2, else two, on `008c7da0`
+("AI Linear Task Thread 1", `0108564c`) and `008c7f50` ("AI Linear Task
+Thread 2", `01085634`). Their call lists line up with the Xbox
+`AILinearTaskThreadManager::AIThreadCombined`, `AIThread1TaskFunc` and
+`AIThread2TaskFunc`. `008c7bd0` calls, in order (Xbox PDB names from that
+alignment; leads unless bold in the table above):
+
+`Main::OnIdle_DoInterfaceIdle` **`0086fd70`**,
+`TaskQueueInterface::ThreadBeginInput` (`004537b0`, `0087a6b0`),
+`CombatManager::Update` **`00991500`**,
+`ProcessLists::RunActorAnimationUpdates` `0096cca0`,
+`ProcessLists::ParallelActorAnimationMovementUpdates` `0096cda0`,
+`TES::RunAnimations` **`00455640`**,
+`ProcessLists::RunActorMagicUpdates` `009784c0`,
+`CombatManager::UpdateCombatants` `00991dc0`,
+`ProcessLists::UpdateHighListPackages` `0096bcd0`,
+`ProcessLists::UpdatePlayerFollowers` `0096d520`,
+`ProcessLists::RunDetectionForAllActors` `0096c330`,
+`ProcessLists::UpdateActorsMovement` `0096db30`,
+`ProcessLists::RunActorUpdates` `0096c7c0`,
+`ProcessLists::RunActorRagdollAnimationUpdates` `0096cb50`,
+`BGSDestructibleObjectForm::UpdateDestructibleObjects` `004772f0`,
+`TES::UpdateCellAnimations` **`00453550`** (the Havok step),
+`NavMeshObstacleManager::GetInstance`/`Update` **`006c0720`**/**`006c3640`**,
+`TaskQueueInterface::ThreadEndInput` (`004537b0`, `0087a6d0`),
+`Script::ClearOptimizations` **`005ae270`**,
+`ScriptLocals::ClearOptimizations` **`005a9d60`**. Between the groups it
+signals and waits on thread stages (`00713d80` with `008c79e0`, `008c7a70`
+or `008c7d80`). `008c7f50` runs the detection, movement, ragdoll,
+destructible, cell-animation and script-clearing calls of that list;
+`008c7da0` calls the combat, animation, magic, package, follower and
+actor-update ones (callers of each from `get_xrefs_to`). `ProcessLists::RunActorUpdates` (`0096c7c0`) has no
+caller besides `008c7bd0` and `008c7da0`.
+
+The threads = 1 path (`008ca070`, the AI task queue with
+`MobileObjectTaskletData::RunToCompletion`) is not followed further here.
+
+## Coverage today
+
+[LEDGER.md](LEDGER.md) ("Frame") counts the rows of `frame.tsv` by status
+whenever it is regenerated. On 2026-10-09, after the rolling translation
+batches up to #81, of the 143 depth-1 call sites 22 are `translated`, 37
+`traced`, 5 `platform` and 79 `open`.
 
 ## PR sequence
 
@@ -55,7 +268,10 @@ acceptance routes, as in B1.
    coverage in LEDGER.md. Pair the remaining `?` rows by aligning the PC
    and Xbox call lists (the two are close to identical here). Trace where
    the Havok step and the actor updates are called from (vtable calls and
-   the AI task lists). No Rust behaviour changes.
+   the AI task lists). No Rust behaviour changes. *Done*: the ledger
+   computes the status instead of the table storing it (it would go
+   stale); 38 depth-1 functions (42 call sites) newly paired, the rest
+   listed above.
 2. **`world::frame`.** Translate `0086e650`'s control flow: which stages run
    in menu mode, while loading, with the console or Pip-Boy open, in
    V.A.T.S. and while sleeping, as an ordered `FrameStep` list. Each step

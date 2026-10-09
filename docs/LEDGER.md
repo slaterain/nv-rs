@@ -120,3 +120,162 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | xaudio2 | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 | - |
 
 `done` is translated plus traced as a share of the subsystem; it is left out (`-`) for platform and library subsystems.
+
+## Frame
+
+The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame function, from `research/engine-map/frame.tsv` (docs/FRAME_SKELETON.md): direct calls in call order to depth 3, one row per call site, so a function called twice counts twice. Statuses as above.
+
+| Depth | Call sites | Functions | translated | traced | platform | library | open |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 0 | 1 | 1 | 0 | 1 | 0 | 0 | 0 |
+| 1 | 143 | 117 | 22 | 37 | 5 | 0 | 79 |
+| 2 | 1575 | 583 | 378 | 755 | 44 | 4 | 394 |
+| 3 | 4973 | 1303 | 1060 | 2443 | 208 | 26 | 1236 |
+
+The calls of `Main::OnIdle` itself (depth 1), in order:
+
+| # | Address | Name (Xbox PDB) | Status |
+| ---: | --- | --- | --- |
+| 1 | `0086a830` | - | open |
+| 2 | `00af2640` | `BSSystemUtility::QInstance` | platform |
+| 3 | `00702360` | `Interface::IsInMenuMode` | traced |
+| 4 | `00709bc0` | `Interface::IsPipboyOpening` | traced |
+| 5 | `007050d0` | `Interface::InDialog` | open |
+| 6 | `00701450` | `FaderManager::IsFaderVisible` | open |
+| 7 | `00703d50` | `Interface::IsConsoleVisible` | traced |
+| 8 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | open |
+| 9 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | open |
+| 10 | `00705990` | `Interface::GetPipboy` | traced |
+| 11 | `004b7210` | - | traced |
+| 12 | `00424940` | - | translated |
+| 13 | `008782b0` | `MemoryLevelManager::RunNonDestructiveFree` | open |
+| 14 | `0086f940` | `Main::OnIdle_UpdatePlayer` | open |
+| 15 | `006ff580` | - | open |
+| 16 | `006ff860` | - | open |
+| 17 | `0086fd90` | `Main::OnIdle_UpdateImageSpace` | open |
+| 18 | `00702360` | `Interface::IsInMenuMode` | traced |
+| 19 | `00709bc0` | `Interface::IsPipboyOpening` | traced |
+| 20 | `007050d0` | `Interface::InDialog` | open |
+| 21 | `00701450` | `FaderManager::IsFaderVisible` | open |
+| 22 | `00703d50` | `Interface::IsConsoleVisible` | traced |
+| 23 | `008d6f30` | - | traced |
+| 24 | `006da7c0` | `Pathing::ProfilePathing` | open |
+| 25 | `00851d90` | `BGSSaveLoadManager::UpdateQueuedSaves` | open |
+| 26 | `0086ef30` | - | open |
+| 27 | `0086ef90` | - | open |
+| 28 | `0086f190` | `Main::OnIdle_FixActorBones` | open |
+| 29 | `00483710` | - | traced |
+| 30 | `004e1610` | - | open |
+| 31 | `0086ef40` | - | open |
+| 32 | `0086f260` | `Main::OnIdle_UpdateTimer` | traced |
+| 33 | `0086f390` | `Main::OnIdle_PollControls` | open |
+| 34 | `00c3dbf0` | `IOManager::UpdateQueue` | open |
+| 35 | `0086efa0` | - | open |
+| 36 | `0070edf0` | `XUserInterface::XUIIsUp` | traced |
+| 37 | `0078cfc0` | `LoadingMenu::SuspendBackgroundThread` | open |
+| 38 | `00705ea0` | `Interface::IsInGameLoadingMenuOpen` | open |
+| 39 | `00457d70` | `TES::ShowLoadingMenu` | translated |
+| 40 | `0086efe0` | `Main::OnIdle_ScaleLOD` | open |
+| 41 | `00524c90` | - | open |
+| 42 | `004a0ea0` | - | open |
+| 43 | `00b6dd00` | - | platform |
+| 44 | `0086f450` | `Main::OnIdle_HandleMenuBackground` | traced |
+| 45 | `007011d0` | `FaderManager::UpdateFaders` | traced |
+| 46 | `004e0110` | `ScreenSplatter::Update` | open |
+| 47 | `004de600` | `ScreenCustomSplatter::Update` | open |
+| 48 | `00683a60` | - | open |
+| 49 | `00a81a20` | - | open |
+| 50 | `00451530` | - | translated |
+| 51 | `0086ef70` | - | open |
+| 52 | `004556d0` | `TES::TestAllCells` | translated |
+| 53 | `00559450` | - | traced |
+| 54 | `0084d030` | - | traced |
+| 55 | `0084d030` | - | traced |
+| 56 | `00867a40` | `Calendar::Update` | translated |
+| 57 | `0043d4d0` | - | translated |
+| 58 | `00455640` | `TES::RunAnimations` | translated |
+| 59 | `0040fbf0` | - | traced |
+| 60 | `00978550` | `ProcessLists::RunActorScripts` | open |
+| 61 | `0043d4d0` | - | translated |
+| 62 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
+| 63 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | open |
+| 64 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | open |
+| 65 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
+| 66 | `008d0600` | `ProcessLists::PrintLists` | traced |
+| 67 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | open |
+| 68 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | open |
+| 69 | `0040fba0` | - | traced |
+| 70 | `00446ef0` | - | translated |
+| 71 | `00878080` | - | traced |
+| 72 | `0086ef60` | - | open |
+| 73 | `00a61cd0` | `BSTexturePalette::PurgeUnusedTextures` | traced |
+| 74 | `00868850` | `GarbageCollector::Update` | translated |
+| 75 | `00868d10` | `GarbageCollector::ClearTempEffects` | translated |
+| 76 | `00524c90` | - | open |
+| 77 | `006652e0` | `BSTreeManager::Update` | open |
+| 78 | `0086fbe0` | `Main::OnIdle_UpdateCurrentGridCell` | open |
+| 79 | `0043d4d0` | - | translated |
+| 80 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | open |
+| 81 | `00483710` | - | traced |
+| 82 | `0049fef0` | `BGSDecalManager::GetInstance` | open |
+| 83 | `0049fff0` | `BGSDecalManager::UpdateDecals` | open |
+| 84 | `00524c90` | - | open |
+| 85 | `00712e60` | - | open |
+| 86 | `0044ddc0` | - | traced |
+| 87 | `00710ab0` | - | open |
+| 88 | `0045c670` | - | translated |
+| 89 | `00c52020` | `BSSceneGraph::SetCameraFOV` | open |
+| 90 | `00710ab0` | - | open |
+| 91 | `00b54000` | `BSShaderManager::SetFOV` | platform |
+| 92 | `00559450` | - | traced |
+| 93 | `006629f0` | `BSFaceGenNiNode::GetAnimationData` | traced |
+| 94 | `0045bc80` | `TES::ResetAllMultiBoundNodes` | translated |
+| 95 | `00450b80` | - | translated |
+| 96 | `00b5ac90` | `ShadowSceneNode::UpdateOcclusionPlaneVisibility` | platform |
+| 97 | `0045b070` | `TES::UpdateMultiBoundVisibility` | translated |
+| 98 | `0043d4d0` | - | translated |
+| 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | open |
+| 100 | `00713d80` | - | open |
+| 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | open |
+| 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | open |
+| 103 | `0086fc60` | `Main::OnIdle_UpdateAnimationsAndEffects` | open |
+| 104 | `0043d4d0` | - | translated |
+| 105 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | open |
+| 106 | `00702360` | `Interface::IsInMenuMode` | traced |
+| 107 | `007058e0` | `Interface::LastMinuteUpdate` | open |
+| 108 | `0047d0b0` | `PathManager::QInstance` | open |
+| 109 | `006ebc50` | `PathManager::Update` | open |
+| 110 | `00552ba0` | - | translated |
+| 111 | `006a61b0` | `NavMeshRender::Update` | open |
+| 112 | `0043d4d0` | - | translated |
+| 113 | `00408d60` | - | traced |
+| 114 | `006c0720` | `NavMeshObstacleManager::GetInstance` | traced |
+| 115 | `006c3640` | `NavMeshObstacleManager::Update` | open |
+| 116 | `00991500` | `CombatManager::Update` | open |
+| 117 | `00714a00` | - | open |
+| 118 | `00a81a80` | - | open |
+| 119 | `007023c0` | `Interface::GetTopMenuID` | traced |
+| 120 | `007056f0` | `Interface::UpdateSleeping` | open |
+| 121 | `00871dc0` | `Main::RenderMenuBackground` | traced |
+| 122 | `0057ab70` | - | translated |
+| 123 | `00b60040` | - | platform |
+| 124 | `0047e040` | `TESActorBaseData::GetAlignmentForKarma` | traced |
+| 125 | `0086ff70` | `Main::Swap` | traced |
+| 126 | `008705d0` | `Main::PostSwapProcess` | open |
+| 127 | `004dc360` | - | traced |
+| 128 | `0043d4d0` | - | translated |
+| 129 | `00713d80` | - | open |
+| 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | open |
+| 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | open |
+| 132 | `0086f6a0` | `Main::UpdateNonRenderSafeAITasks` | open |
+| 133 | `00870610` | `Main::OnIdle_PostThreadsProcess` | open |
+| 134 | `0070ed10` | - | open |
+| 135 | `0070ed20` | - | open |
+| 136 | `00703e10` | `Interface::OpenConsole` | open |
+| 137 | `00a29680` | - | traced |
+| 138 | `005ae270` | `Script::ClearOptimizations` | open |
+| 139 | `005a9d60` | `ScriptLocals::ClearOptimizations` | open |
+| 140 | `0084d030` | - | traced |
+| 141 | `00702360` | `Interface::IsInMenuMode` | traced |
+| 142 | `00950090` | - | open |
+| 143 | `00aa7290` | - | open |

@@ -1,5 +1,6 @@
-# Rebuilds research/engine-map/engine_map.tsv and docs/LEDGER.md from the
-# private inputs (research/engine-map/README.md). Run from the repository root:
+# Rebuilds research/engine-map/engine_map.tsv, research/engine-map/frame.tsv and
+# docs/LEDGER.md from the private inputs (research/engine-map/README.md). Run
+# from the repository root:
 #
 #   .\scripts\engine-map.ps1                 # reuse the named project copy
 #   .\scripts\engine-map.ps1 -FreshProject   # copy the source project again first
@@ -83,6 +84,8 @@ $Cargo = Join-Path $Repo 'research\engine-map\Cargo.toml'
 Invoke-Checked 'xbox' { cargo run --release -q --manifest-path $Cargo --bin xbox -- $Pdb $XboxExe "$Work\xb" }
 Invoke-Checked 'match' { cargo run --release -q --manifest-path $Cargo --bin match -- "$Work\pc" "$Work\xb" "$Work\match" }
 Invoke-Checked 'map' { cargo run --release -q --manifest-path $Cargo --bin map -- "$Work\pc" "$Work\xb" "$Work\match" (Join-Path $Repo 'research\engine-map\engine_map.tsv') }
+# The frame tree (Main::OnIdle to depth 3); the root's alignment for review stays private.
+Invoke-Checked 'frame' { cargo run --release -q --manifest-path $Cargo --bin frame -- "$Work\pc" "$Work\xb" (Join-Path $Repo 'research\engine-map\engine_map.tsv') (Join-Path $Repo 'research\engine-map\frame.tsv') "$Work\frame-root.tsv" }
 
 # Names into the private copy: dry run first (one rejected row aborts it).
 Invoke-Ghidra "$Work\names-dry.log" -Script NvImportNameMap.java `

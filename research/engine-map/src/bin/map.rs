@@ -31,6 +31,7 @@
 //!     subsystem; only the subsystem is set.
 //!   - `init`, `atexit`: the compiler-generated tail of `.text` (see below).
 //!   - `none`: not placed.
+//!
 //!   `report.txt` holds hold-out checks for `range` and `calls`: hide every
 //!   other named function, place it the same way, compare.
 //!
@@ -254,7 +255,7 @@ fn main() -> R<()> {
     let (mut r_unit, mut r_unit_ok, mut r_sub, mut r_sub_ok) = (0, 0, 0, 0);
     let (mut c_n, mut c_ok) = (0, 0);
     let even_known =
-        |c: usize| (c % 2 == 0 && out[c].placed == "name").then(|| out[c].unit.clone());
+        |c: usize| (c.is_multiple_of(2) && out[c].placed == "name").then(|| out[c].unit.clone());
     for &i in named.iter().filter(|i| *i % 2 == 1) {
         match by_range(&even, i, &out) {
             Some((u, _, true)) => {

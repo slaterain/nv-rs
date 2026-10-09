@@ -878,6 +878,22 @@ The maintainer set a one-week fast track (about 1.9 billion tokens).
 - Next action: keep the slots cycling; merge a rolling PR whenever CI
   passes; then Phase 1 wiring from FRAME_SKELETON.md.
 
+### Phase 1 PR 1: frame map (`claude/phase1-frame-map`, 2026-10-09)
+
+- Evidence: `research/engine-map/frame.tsv` (the `Main::OnIdle` tree to
+  depth 3, 6,692 call sites) from the new `frame` step; LEDGER.md "Frame"
+  counts it by status (depth 1: 22 translated, 37 traced, 5 platform,
+  79 open). FRAME_SKELETON.md: 38 more depth-1 functions paired with
+  evidence, the Havok step traced to `TES::UpdateCellAnimations`
+  (`00453550`) on the AI linear task threads, and the actor updates to
+  the thread functions `008c7bd0`/`008c7da0`/`008c7f50`.
+- Files: `research/engine-map/src/bin/frame.rs`, `src/names.rs` (shared
+  with `match.rs`), `frame.tsv`, README; `scripts/engine-map.ps1`;
+  `scripts/ledger/src/main.rs`; `docs/LEDGER.md`; `docs/FRAME_SKELETON.md`.
+- Open: the threads = 1 path (`008ca070`) and whether the INI can lower
+  `iNumHWThreads`; six `?` rows and six position-only leads.
+- Next action: PR 2 (`world::frame`, the control flow of `0086e650`).
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,
