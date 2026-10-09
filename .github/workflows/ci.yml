@@ -38,3 +38,30 @@ jobs:
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           cargo clippy --locked --workspace --all-targets -- -D warnings
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
+  check-linux:
+    name: check linux (${{ matrix.workspace }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        workspace: [core, viewer]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install Bevy's system libraries
+        if: matrix.workspace == 'viewer'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - name: Install stable Rust tools
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+      - name: Check the Linux acceptance script
+        if: matrix.workspace == 'core'
+        run: shellcheck scripts/acceptance.sh
+      - name: Check formatting, tests and lints
+        working-directory: ${{ matrix.workspace == 'viewer' && 'viewer' || '.' }}
+        run: |
+          cargo fmt --all -- --check
+          cargo test --locked --workspace
+          cargo clippy --locked --workspace --all-targets -- -D warnings

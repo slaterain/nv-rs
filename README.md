@@ -4,7 +4,7 @@
 [![Engine](https://img.shields.io/badge/Engine-Bevy_0.16-blue.svg)](https://bevyengine.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE-MIT)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE-APACHE)
-[![Platform](https://img.shields.io/badge/Platform-Windows-purple.svg)](docs/PLAYTESTING.md)
+[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-purple.svg)](docs/PLAYTESTING.md)
 [![Status](https://img.shields.io/badge/Status-experimental-lightgrey.svg)](docs/MILESTONES.md)
 
 A from-scratch reimplementation of **Fallout: New Vegas** in **Rust** with the
@@ -115,7 +115,8 @@ in [docs/TASKS.md](docs/TASKS.md).
 Download a Windows x64 ZIP from
 [Releases](https://github.com/slaterain/nv-rs/releases), extract it, and run
 `Play.cmd`. Point it at your own `Fallout New Vegas\Data` folder. Read
-[docs/PLAYTESTING.md](docs/PLAYTESTING.md) first.
+[docs/PLAYTESTING.md](docs/PLAYTESTING.md) first. On Linux, build from
+source (below); the playtest guide has a Linux section.
 
 ### Build from source
 
@@ -139,8 +140,15 @@ acceptance routes (Windows, PowerShell):
 powershell -File scripts\acceptance.ps1 -Data "<path to Fallout New Vegas\Data>" -Build
 ```
 
-Windows is the tested platform; a macOS / Metal port is being worked on in
-a fork.
+On Linux, the same routes (`--headless` runs them in gamescope's headless
+backend, with no window):
+
+```sh
+scripts/acceptance.sh --data "<path to Fallout New Vegas/Data>" --build
+```
+
+Windows and Linux (native, Vulkan) are the tested platforms; a macOS /
+Metal port is being worked on in a fork.
 
 ---
 

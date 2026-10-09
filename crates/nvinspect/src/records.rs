@@ -526,7 +526,7 @@ pub fn run_folder(
     options: &Options,
 ) -> Result<(), CliError> {
     let command = parse_command(command, rest)?;
-    let (active, active_list) = active_plugins(options)?;
+    let (active, active_list) = active_plugins(options, data_dir)?;
     let started = Instant::now();
     let order = LoadOrder::from_data_dir(data_dir, &active)?;
     if !matches!(command, Command::Info) {
@@ -599,7 +599,7 @@ pub fn run_folder(
 }
 
 /// Which plugins to load, and a description of where that choice came from.
-fn active_plugins(options: &Options) -> Result<(ActivePlugins, String), CliError> {
+fn active_plugins(options: &Options, data_dir: &Path) -> Result<(ActivePlugins, String), CliError> {
     if options.official {
         return Ok((
             ActivePlugins::OfficialOnly,
@@ -608,7 +608,7 @@ fn active_plugins(options: &Options) -> Result<(ActivePlugins, String), CliError
     }
     let path = match &options.plugins_txt {
         Some(path) => Some(path.clone()),
-        None => default_plugins_txt(),
+        None => default_plugins_txt().or_else(|| assets::proton_plugins_txt(data_dir)),
     };
     let Some(path) = path else {
         return Ok((
