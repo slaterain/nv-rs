@@ -13,9 +13,11 @@
 //! the location" tests (`00676390`, `006768d0`), `IsActorAtRefTarget`,
 //! `IsTargetAtLocation`, `IsTargetAtSecondLocation`,
 //! `CalculateProcedureType`, the follow-target search (`006780e0` and its
-//! callback), the two radius functions and the schedule day test. The next
-//! session continues with the first `open` function after `00678ec0`
-//! (`00678fd0`).
+//! callback), the two radius functions and the schedule day test. The
+//! third session translated the last 13, `00678fd0` to `0067acf0`: the save
+//! size, the old and new save/load/init-load functions, the form-flag
+//! hooks, `GetObjectTypeFromForm`, `FormMatchesPackageObjectType` and the
+//! package-data constructor. The unit is complete.
 //!
 //! ## Layout (PC build)
 //!
@@ -476,6 +478,89 @@ layout! {
         0x7C uiRefCount: u32,
     }
 }
+
+/// Save and load: the save/load game object (a global pointer) and its
+/// methods. `UseSaveGameBlocks`, the stream position (`00825c00`), the raw
+/// save (`008579b0(ptr, size)`) and load (`008579e0(ptr, size)`), the
+/// current-form words (`004fd3c0` loading, `004fd3e0` saving) and the
+/// version byte (`008df040`).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
+const SAVE_POSITION: u32 = 0x0082_5c00;
+const SAVE_BYTES: u32 = 0x0085_79b0;
+const LOAD_BYTES: u32 = 0x0085_79e0;
+const CURRENT_LOAD_FORM: u32 = 0x004f_d3c0;
+const CURRENT_SAVE_FORM: u32 = 0x004f_d3e0;
+const LOAD_VERSION: u32 = 0x008d_f040;
+/// `00408d60(object)`: the address of a flag byte; the "log the save sizes"
+/// flag lives behind `SAVE_SIZE_LOG_OBJECT`.
+const FLAG_BYTE_ADDRESS: u32 = 0x0040_8d60;
+const SAVE_SIZE_LOG_OBJECT: u32 = 0x011d_e4e8;
+/// `Error(format, ...)` (cdecl) and the save/load logger (the same body as
+/// `LOG_FORM_WARNING`, cdecl).
+const ERROR_LOG: u32 = 0x0040_fbe0;
+const SAVE_LOAD_LOG: u32 = LOG_FORM_WARNING;
+/// `TESForm::SaveGameDataOLD(ptr, size)`, `TESForm::LoadGameDataOLD(ptr,
+/// size)` (Xbox PDB), `TESForm::LoadGame(flags, extra)` (Xbox PDB) and the
+/// matching clear of `fn_00679760` (`004534f0(flags)`).
+const FORM_SAVE_DATA_OLD: u32 = 0x0048_4ce0;
+const FORM_LOAD_DATA_OLD: u32 = 0x0048_4d00;
+const FORM_LOAD_GAME: u32 = 0x0048_4c50;
+const FORM_CLEAR_FLAGS: u32 = 0x0045_34f0;
+/// Save buffer methods: `00865e50(ptr, size, 0)` writes, `00864980(ptr,
+/// size)` reads. The two flag tests `00428110(tmp, mask)` / `0042ce30(tmp,
+/// mask)` return an object whose `004280f0()` is the answer.
+const BUFFER_SAVE_DATA: u32 = 0x0086_5e50;
+const BUFFER_LOAD_DATA: u32 = 0x0086_4980;
+const BUFFER_FLAG_OBJECT_A: u32 = 0x0042_8110;
+const BUFFER_FLAG_OBJECT_B: u32 = 0x0042_ce30;
+const BUFFER_FLAG_TEST: u32 = 0x0042_80f0;
+/// `PackageLocation` / `PackageTarget` save/load methods: save size,
+/// `SaveGame()` (old), `LoadGame()` (old), the unnamed one `fn_006796c0`
+/// calls, `SaveGame(buffer)`, `LoadGame(buffer)`, `InitLoadGame(buffer)`.
+const LOCATION_GET_SAVE_SIZE: u32 = 0x0067_f990;
+const LOCATION_SAVE_OLD: u32 = 0x0067_fa00;
+const LOCATION_LOAD_OLD: u32 = 0x0067_faa0;
+const LOCATION_AFTER_LOAD: u32 = 0x0067_fb20;
+const LOCATION_SAVE_BUFFER: u32 = 0x0067_fb60;
+const LOCATION_LOAD_BUFFER: u32 = 0x0067_fbe0;
+const LOCATION_INIT_LOAD_BUFFER: u32 = 0x0067_fc50;
+const TARGET_GET_SAVE_SIZE: u32 = 0x0068_0520;
+const TARGET_SAVE_OLD: u32 = 0x0068_0590;
+const TARGET_LOAD_OLD: u32 = 0x0068_0640;
+const TARGET_AFTER_LOAD: u32 = 0x0068_06e0;
+const TARGET_SAVE_BUFFER: u32 = 0x0068_0720;
+const TARGET_LOAD_BUFFER: u32 = 0x0068_07b0;
+const TARGET_INIT_LOAD_BUFFER: u32 = 0x0068_0830;
+/// Package-data object slots: `SaveGame(buffer)`, `LoadGame(buffer)`,
+/// `InitLoadGame(buffer)`.
+const SLOT_DATA_SAVE: u32 = 0x14;
+const SLOT_DATA_LOAD: u32 = 0x18;
+const SLOT_DATA_INIT_LOAD: u32 = 0x1c;
+/// The `BLOK` tag that opens a save game block.
+const BLOCK_TAG: u32 = 0x424c_4f4b;
+/// Form flags and the bits of `iPackFlags` the package keeps for them
+/// (`fn_00679700`, `fn_00679760`, `fn_00679b10`).
+const FORM_FLAG_HIGH: u32 = 0x8000_0000;
+const FORM_FLAG_NEXT: u32 = 0x4000_0000;
+const PACK_FLAG_FOR_HIGH: u32 = 0x8000;
+const PACK_FLAG_FOR_NEXT: u32 = 0x1_0000;
+/// The `+0x3c` member of some forms: slot 4 of its vtable answers a flag
+/// (`GetObjectTypeFromForm` and `FormMatchesPackageObjectType`).
+const FORM_MEMBER_3C: u32 = 0x3c;
+const SLOT_MEMBER_FLAG: u32 = 0x04;
+/// Tests on a form of type 0x28: `006450c0` and `004c0c30`; and on the
+/// `+0x24` member of a form of type 0x14 (the effect item list):
+/// `00405f30`, `00405fe0` and `00406090`.
+const FORM_TEST_SIXTEEN: u32 = 0x0064_50c0;
+const FORM_TEST_SEVENTEEN: u32 = 0x004c_0c30;
+const EFFECT_LIST_TEST_TARGET: u32 = 0x0040_5f30;
+const EFFECT_LIST_TEST_TOUCH: u32 = 0x0040_5fe0;
+const EFFECT_LIST_TEST_THIRD: u32 = 0x0040_6090;
+const FORM_MEMBER_24: u32 = 0x24;
+/// Base constructor called by `fn_0067acf0`, and the vtable it stores.
+const DATA_BASE_CONSTRUCTOR: u32 = 0x0067_ad20;
+const DATA_BASE_VTABLE: u32 = 0x0106_8860;
 
 /// A `PackageLocation*`, `PackageTarget*` or package-data pointer: the
 /// classes belong to other units, so the pointer is untyped here.
@@ -3807,6 +3892,596 @@ pub fn tes_package_is_target_an_actor(
     result
 }
 
+/// The save/load game object.
+fn save_load_game(e: &mut Engine) -> u32 {
+    e.global::<u32>(SAVE_LOAD_GAME)
+}
+
+/// Whether the "log the save sizes" flag byte is set.
+fn save_size_logging(e: &mut Engine) -> bool {
+    let flag = e
+        .call(FLAG_BYTE_ADDRESS, &args![SAVE_SIZE_LOG_OBJECT])
+        .u32();
+    e.mem.u8(flag) != 0
+}
+
+/// The form of the record the save/load object keeps for the form being
+/// saved or loaded (`current`, whose first word is the form ID).
+fn lookup_current(e: &mut Engine, current: u32) -> u32 {
+    let form_id = e.mem.u32(current);
+    e.call(LOOKUP_FORM, &args![form_id]).u32()
+}
+
+/// The `Error` message of the save size and save functions: with the form
+/// being saved (`current`) its id, name and flags, otherwise only the size
+/// and the source position.
+fn log_save_size(e: &mut Engine, saved: u32, current: u32, line: u32, formats: (u32, u32)) {
+    if current != 0 {
+        let form = lookup_current(e, current);
+        let form_id = e.mem.u32(current);
+        // The 0x130 virtual returns the `%s` of the message.
+        let name = e.vcall(form, SLOT_FORM_NAME, &args![]).u32();
+        let flags = e.mem.u32(current + 5);
+        e.call(
+            ERROR_LOG,
+            &args![
+                formats.0,
+                saved,
+                form_id,
+                name,
+                flags,
+                line,
+                PACKAGE_SOURCE_FILE
+            ],
+        );
+    } else {
+        e.call(
+            ERROR_LOG,
+            &args![formats.1, saved, line, PACKAGE_SOURCE_FILE],
+        );
+    }
+}
+
+// Translated from 00678fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The package's save size (a 16-bit size; its trace message says
+/// `GetSaveSize`): 6 more bytes when save game blocks are used, 13 for the
+/// form data, the save size of the location and of the target when there
+/// are some, and 4 for the trailing word. With the size logging flag set
+/// the size is reported through `Error`.
+pub fn fn_00678fd0(e: &mut Engine, this: Ptr<TESPackage>) -> u16 {
+    let save = save_load_game(e);
+    let mut size: u16 = 0;
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    size = size.wrapping_add(0xc);
+    size = size.wrapping_add(1);
+    let location = e.get(this, TESPackage::pPackLoc);
+    if !location.is_null() {
+        size = size.wrapping_add(e.call(LOCATION_GET_SAVE_SIZE, &args![location]).u16());
+    }
+    let target = e.get(this, TESPackage::pPackTarg);
+    if !target.is_null() {
+        size = size.wrapping_add(e.call(TARGET_GET_SAVE_SIZE, &args![target]).u16());
+    }
+    size = size.wrapping_add(4);
+    if save_size_logging(e) {
+        let current = e.call(CURRENT_SAVE_FORM, &args![save]).u32();
+        // "GetSaveSize(): %-5i for form %08X %s with flags %08X ending at
+        // line %i in file %s", or without the form part.
+        log_save_size(e, size as u32, current, 0x1d51, (0x0101_2cb0, 0x0101_2c78));
+    }
+    size
+}
+
+// Translated from 00679120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The package's old save (no buffer argument; its trace message says
+/// `SaveGame`): with save game blocks the `BLOK` tag and a 16-bit length
+/// (patched at the end), the 12 bytes at +0x1c, a byte of which parts
+/// exist (1 location, 2 target) through `TESForm::SaveGameDataOLD`, the
+/// location and target saves and the word at +0x18. With the logging flag
+/// set the bytes written are reported through `Error`; a block over 0xFFFF
+/// bytes is reported through `005b5e40`.
+pub fn fn_00679120(e: &mut Engine, this: Ptr<TESPackage>) {
+    let save = save_load_game(e);
+    let mut start = e.call(SAVE_POSITION, &args![save]).u32();
+    if save_size_logging(e) {
+        start = e.call(SAVE_POSITION, &args![save]).u32();
+    }
+    // Locals of the game's frame passed by address: the tag (+0), the
+    // 16-bit block length (+4) and the part flags (+8).
+    e.with_stack(0x10, |e, locals| {
+        let (tag, length_slot, parts) = (locals.addr(), locals.addr() + 4, locals.addr() + 8);
+        let mut block = 0u32;
+        e.mem.set_u16(length_slot, 0);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            e.mem.set_u32(tag, BLOCK_TAG);
+            e.call(SAVE_BYTES, &args![save, tag, 4u32]);
+            block = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(SAVE_BYTES, &args![save, length_slot, 2u32]);
+        }
+        e.call(SAVE_BYTES, &args![save, this.addr() + 0x1c, 0xcu32]);
+        let mut flags = 0u8;
+        if !e.get(this, TESPackage::pPackLoc).is_null() {
+            flags |= 1;
+        }
+        if !e.get(this, TESPackage::pPackTarg).is_null() {
+            flags |= 2;
+        }
+        e.mem.set_u8(parts, flags);
+        e.call(FORM_SAVE_DATA_OLD, &args![this, parts, 1u32]);
+        let location = e.get(this, TESPackage::pPackLoc);
+        if !location.is_null() {
+            e.call(LOCATION_SAVE_OLD, &args![location]);
+        }
+        let target = e.get(this, TESPackage::pPackTarg);
+        if !target.is_null() {
+            e.call(TARGET_SAVE_OLD, &args![target]);
+        }
+        e.call(SAVE_BYTES, &args![save, this.addr() + 0x18, 4u32]);
+        if save_size_logging(e) {
+            let end = e.call(SAVE_POSITION, &args![save]).u32();
+            let current = e.call(CURRENT_SAVE_FORM, &args![save]).u32();
+            // "SaveGame(): %-5i for form %08X %s with flags %08X ending at
+            // line %i in file %s", or without the form part.
+            log_save_size(
+                e,
+                end.wrapping_sub(start),
+                current,
+                0x1d6e,
+                (0x0101_53a0, 0x0101_536c),
+            );
+        }
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            let end = e.call(SAVE_POSITION, &args![save]).u32();
+            if end > block.wrapping_add(0xffff) {
+                e.call(
+                    SAVE_LOAD_LOG,
+                    &args![0x0101_5318u32, PACKAGE_SOURCE_FILE, 0x1d6eu32],
+                );
+            }
+            e.mem.set_u16(block, end.wrapping_sub(block) as u16);
+        }
+    });
+}
+
+/// A `LoadGame` message of `005b5e40`: with the form being loaded (`form`,
+/// looked up from the record `current`) the arguments are the format, the
+/// byte count if the message has one, the source file and line, the form
+/// ID, its name, the version byte (+9) and the flags (+5) of the record;
+/// without one, the format, the count, the file, the line and the version
+/// of the save/load object.
+fn log_load_message(
+    e: &mut Engine,
+    (save, current, form): (u32, u32, u32),
+    (format_with_form, format_without): (u32, u32),
+    amount: Option<u32>,
+    line: u32,
+) {
+    let mut words: Vec<u32> = vec![];
+    if current != 0 {
+        let form_id = e.mem.u32(current);
+        let name = e.vcall(form, SLOT_FORM_NAME, &args![]).u32();
+        let version = e.mem.u8(current + 9) as u32;
+        let flags = e.mem.u32(current + 5);
+        words.push(format_with_form);
+        words.extend(amount);
+        words.extend([PACKAGE_SOURCE_FILE, line, form_id, name, version, flags]);
+    } else {
+        let version = e.call(LOAD_VERSION, &args![save]).u8() as u32;
+        words.push(format_without);
+        words.extend(amount);
+        words.extend([PACKAGE_SOURCE_FILE, line, version]);
+    }
+    e.call(SAVE_LOAD_LOG, &words);
+}
+
+// Translated from 00679340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::LoadGame` (Xbox PDB), the old form: reads what
+/// `fn_00679120` wrote. With save game blocks the `BLOK` tag is checked (a
+/// wrong tag is logged through `005b5e40`) and the 16-bit length read; then
+/// the 12 bytes at +0x1c, the part flags (`TESForm::LoadGameDataOLD`), a
+/// new location and a new target when flagged (each loaded with its old
+/// `LoadGame`) and the word at +0x18. The block length is checked against
+/// the bytes read (overrun and underrun are logged). The C++ exception
+/// frame is not translated.
+pub fn tes_package_load_game(e: &mut Engine, this: Ptr<TESPackage>) {
+    let save = save_load_game(e);
+    // Locals: the tag (+0), the 16-bit length (+4), the part flags (+8).
+    e.with_stack(0x10, |e, locals| {
+        let (tag, length_slot, parts) = (locals.addr(), locals.addr() + 4, locals.addr() + 8);
+        let mut block = 0u32;
+        e.mem.set_u16(length_slot, 0);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            e.call(LOAD_BYTES, &args![save, tag, 4u32]);
+            if e.mem.u32(tag) != BLOCK_TAG {
+                let current = e.call(CURRENT_LOAD_FORM, &args![save]).u32();
+                let form = if current != 0 {
+                    lookup_current(e, current)
+                } else {
+                    0
+                };
+                // "SAVELOAD: (LoadGame Buffer error) Block Header is
+                // incorrect in file %s on line %i. ..."
+                log_load_message(
+                    e,
+                    (save, current, form),
+                    (0x0101_5718, 0x0101_56a8),
+                    None,
+                    0x1d74,
+                );
+            }
+            block = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(LOAD_BYTES, &args![save, length_slot, 2u32]);
+        }
+        e.call(LOAD_BYTES, &args![save, this.addr() + 0x1c, 0xcu32]);
+        e.call(FORM_LOAD_DATA_OLD, &args![this, parts, 1u32]);
+        let flags = e.mem.u8(parts);
+        if flags & 1 != 0 {
+            let made = new_location(e);
+            e.set(this, TESPackage::pPackLoc, made);
+            e.call(LOCATION_LOAD_OLD, &args![made]);
+        }
+        if flags & 2 != 0 {
+            let made = new_target(e);
+            e.set(this, TESPackage::pPackTarg, made);
+            e.call(TARGET_LOAD_OLD, &args![made]);
+        }
+        e.call(LOAD_BYTES, &args![save, this.addr() + 0x18, 4u32]);
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save]).bool() {
+            let position = e.call(SAVE_POSITION, &args![save]).u32();
+            let current = e.call(CURRENT_LOAD_FORM, &args![save]).u32();
+            let form = if current != 0 {
+                lookup_current(e, current)
+            } else {
+                0
+            };
+            let expected = (e.mem.u16(length_slot) as u32).wrapping_add(block);
+            let context = (save, current, form);
+            // "SAVELOAD: LoadGame Buffer overrun of %i bytes in file %s on
+            // line %i. ..." and the underrun message.
+            if position > expected {
+                let amount = Some(position.wrapping_sub(expected));
+                log_load_message(e, context, (0x0101_5588, 0x0101_54a0), amount, 0x1d8b);
+            } else if position < expected {
+                let amount = Some(expected.wrapping_sub(position));
+                log_load_message(e, context, (0x0101_5500, 0x0101_5440), amount, 0x1d8b);
+            }
+        }
+    });
+}
+
+// Translated from 006796c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs the unnamed post-load step of the location and of the target
+/// (`0067fb20`, `006806e0`) when the package has them.
+pub fn fn_006796c0(e: &mut Engine, this: Ptr<TESPackage>) {
+    let location = e.get(this, TESPackage::pPackLoc);
+    if !location.is_null() {
+        e.call(LOCATION_AFTER_LOAD, &args![location]);
+    }
+    let target = e.get(this, TESPackage::pPackTarg);
+    if !target.is_null() {
+        e.call(TARGET_AFTER_LOAD, &args![target]);
+    }
+}
+
+// Translated from 00679700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESForm::LoadGame(flags, extra)`, then the form flag 0x80000000 sets
+/// bit 0x8000 of `iPackFlags` and the form flag 0x40000000 sets bit
+/// 0x10000.
+pub fn fn_00679700(e: &mut Engine, this: Ptr<TESPackage>, flags: u32, extra: u32) {
+    e.call(FORM_LOAD_GAME, &args![this, flags, extra]);
+    if flags & FORM_FLAG_HIGH != 0 {
+        let pack = e.get(this, TESPackage::iPackFlags);
+        e.set(this, TESPackage::iPackFlags, pack | PACK_FLAG_FOR_HIGH);
+    }
+    if flags & FORM_FLAG_NEXT != 0 {
+        let pack = e.get(this, TESPackage::iPackFlags);
+        e.set(this, TESPackage::iPackFlags, pack | PACK_FLAG_FOR_NEXT);
+    }
+}
+
+// Translated from 00679760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The reverse of `fn_00679700`: `004534f0(flags)` on the form, then the
+/// form flag 0x80000000 clears bit 0x8000 of `iPackFlags` and the form flag
+/// 0x40000000 clears bit 0x10000.
+pub fn fn_00679760(e: &mut Engine, this: Ptr<TESPackage>, flags: u32) {
+    e.call(FORM_CLEAR_FLAGS, &args![this, flags]);
+    if flags & FORM_FLAG_HIGH != 0 {
+        let pack = e.get(this, TESPackage::iPackFlags);
+        e.set(this, TESPackage::iPackFlags, pack & !PACK_FLAG_FOR_HIGH);
+    }
+    if flags & FORM_FLAG_NEXT != 0 {
+        let pack = e.get(this, TESPackage::iPackFlags);
+        e.set(this, TESPackage::iPackFlags, pack & !PACK_FLAG_FOR_NEXT);
+    }
+}
+
+// Translated from 006797c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::SaveGame` (Xbox PDB): only for a package with a dynamic
+/// form ID. Writes the 12 bytes at +0x1c, a byte of which parts exist (1
+/// location, 2 target, 4 data object), each part's `SaveGame(buffer)` (the
+/// data object's through slot 0x14) and the word at +0x18, all into the
+/// save buffer `buffer`.
+pub fn tes_package_save_game(e: &mut Engine, this: Ptr<TESPackage>, buffer: u32) {
+    if !has_dynamic_form_id(e, this) {
+        return;
+    }
+    e.call(
+        BUFFER_SAVE_DATA,
+        &args![buffer, this.addr() + 0x1c, 0xcu32, 0u32],
+    );
+    let mut flags = 0u8;
+    if !e.get(this, TESPackage::pPackLoc).is_null() {
+        flags |= 1;
+    }
+    if !e.get(this, TESPackage::pPackTarg).is_null() {
+        flags |= 2;
+    }
+    if !e.get(this, TESPackage::pPackData).is_null() {
+        flags |= 4;
+    }
+    e.with_stack(4, |e, parts| {
+        e.mem.set_u8(parts.addr(), flags);
+        e.call(BUFFER_SAVE_DATA, &args![buffer, parts, 1u32, 0u32]);
+    });
+    let location = e.get(this, TESPackage::pPackLoc);
+    if !location.is_null() {
+        e.call(LOCATION_SAVE_BUFFER, &args![location, buffer]);
+    }
+    let target = e.get(this, TESPackage::pPackTarg);
+    if !target.is_null() {
+        e.call(TARGET_SAVE_BUFFER, &args![target, buffer]);
+    }
+    let data = e.get(this, TESPackage::pPackData);
+    if !data.is_null() {
+        e.vcall(data.addr(), SLOT_DATA_SAVE, &args![buffer]);
+    }
+    e.call(
+        BUFFER_SAVE_DATA,
+        &args![buffer, this.addr() + 0x18, 4u32, 0u32],
+    );
+}
+
+// Translated from 006798c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::LoadGame` (Xbox PDB, second overload), reading from the
+/// load buffer `buffer`. For a package with a dynamic form ID: the 12
+/// bytes at +0x1c, the part flags, a new location and a new target when
+/// flagged (each loaded with `LoadGame(buffer)`), the data object's
+/// `LoadGame` through slot 0x18 (the object must exist already) and the
+/// word at +0x18. For another form ID only the two form flag tests on the
+/// buffer (`00428110` / `004280f0`) run, which set bit 0x8000 and 0x10000
+/// of `iPackFlags`. The C++ exception frame is not translated.
+pub fn tes_package_load_game_ov2(e: &mut Engine, this: Ptr<TESPackage>, buffer: u32) {
+    if !has_dynamic_form_id(e, this) {
+        for (mask, bit) in [
+            (FORM_FLAG_HIGH, PACK_FLAG_FOR_HIGH),
+            (FORM_FLAG_NEXT, PACK_FLAG_FOR_NEXT),
+        ] {
+            let set = e.with_stack(4, |e, slot| {
+                let object = e
+                    .call(BUFFER_FLAG_OBJECT_A, &args![buffer, slot, mask])
+                    .u32();
+                e.call(BUFFER_FLAG_TEST, &args![object]).bool()
+            });
+            if set {
+                let pack = e.get(this, TESPackage::iPackFlags);
+                e.set(this, TESPackage::iPackFlags, pack | bit);
+            }
+        }
+        return;
+    }
+    e.call(BUFFER_LOAD_DATA, &args![buffer, this.addr() + 0x1c, 0xcu32]);
+    let flags = e.with_stack(4, |e, parts| {
+        e.mem.set_u8(parts.addr(), 0);
+        e.call(BUFFER_LOAD_DATA, &args![buffer, parts, 1u32]);
+        e.mem.u8(parts.addr())
+    });
+    if flags & 1 != 0 {
+        let made = new_location(e);
+        e.set(this, TESPackage::pPackLoc, made);
+        e.call(LOCATION_LOAD_BUFFER, &args![made, buffer]);
+    }
+    if flags & 2 != 0 {
+        let made = new_target(e);
+        e.set(this, TESPackage::pPackTarg, made);
+        e.call(TARGET_LOAD_BUFFER, &args![made, buffer]);
+    }
+    if flags & 4 != 0 {
+        let data = e.get(this, TESPackage::pPackData);
+        e.vcall(data.addr(), SLOT_DATA_LOAD, &args![buffer]);
+    }
+    e.call(BUFFER_LOAD_DATA, &args![buffer, this.addr() + 0x18, 4u32]);
+}
+
+// Translated from 00679a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::InitLoadGame` (Xbox PDB): for a package with a dynamic form
+/// ID, `InitLoadGame(buffer)` of the location, the target and the data
+/// object (slot 0x1c) when the package has them.
+pub fn tes_package_init_load_game(e: &mut Engine, this: Ptr<TESPackage>, buffer: u32) {
+    if !has_dynamic_form_id(e, this) {
+        return;
+    }
+    let location = e.get(this, TESPackage::pPackLoc);
+    if !location.is_null() {
+        e.call(LOCATION_INIT_LOAD_BUFFER, &args![location, buffer]);
+    }
+    let target = e.get(this, TESPackage::pPackTarg);
+    if !target.is_null() {
+        e.call(TARGET_INIT_LOAD_BUFFER, &args![target, buffer]);
+    }
+    let data = e.get(this, TESPackage::pPackData);
+    if !data.is_null() {
+        e.vcall(data.addr(), SLOT_DATA_INIT_LOAD, &args![buffer]);
+    }
+}
+
+// Translated from 00679b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For a package whose form ID is not a dynamic one: clears bit 0x8000 of
+/// `iPackFlags` when the buffer's flag test `0042ce30(tmp, 0x80000000)` /
+/// `004280f0` holds, and bit 0x10000 for the test with `0x40000000`. The
+/// counterpart of the second branch of `tes_package_load_game_ov2`.
+pub fn fn_00679b10(e: &mut Engine, this: Ptr<TESPackage>, buffer: u32) {
+    if has_dynamic_form_id(e, this) {
+        return;
+    }
+    for (mask, bit) in [
+        (FORM_FLAG_HIGH, PACK_FLAG_FOR_HIGH),
+        (FORM_FLAG_NEXT, PACK_FLAG_FOR_NEXT),
+    ] {
+        let set = e.with_stack(4, |e, slot| {
+            let object = e
+                .call(BUFFER_FLAG_OBJECT_B, &args![buffer, slot, mask])
+                .u32();
+            e.call(BUFFER_FLAG_TEST, &args![object]).bool()
+        });
+        if set {
+            let pack = e.get(this, TESPackage::iPackFlags);
+            e.set(this, TESPackage::iPackFlags, pack & !bit);
+        }
+    }
+}
+
+// Translated from 00679ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::GetObjectTypeFromForm` (Xbox PDB): the package object type
+/// (0 for none) of a form, from its form type: 0x14 gives 0x18, 0x15 gives
+/// 1, 0x18 to 0x1c give 2 to 6, 0x1d gives 7 (0x12 when the `+0x3c`
+/// member's slot 4 answers true), 0x1e gives 8, 0x1f, 0x32, 0x67, 0x6c,
+/// 0x73 and 0x74 give 9, 0x26 and 0x27 give 10 and 11, 0x28 gives 0xc (0x16
+/// when `006450c0` holds, else 0x17 when `004c0c30` holds), 0x29 to 0x2b
+/// give 0xd to 0xf, 0x2e gives 0x10 and 0x2f gives 0x11 (0x12 when the
+/// `+0x3c` member answers true).
+pub fn tes_package_get_object_type_from_form(e: &mut Engine, form: Object) -> i32 {
+    if form.is_null() {
+        return 0;
+    }
+    let member_flag = |e: &mut Engine| {
+        e.vcall(form.addr() + FORM_MEMBER_3C, SLOT_MEMBER_FLAG, &args![])
+            .bool()
+    };
+    match e.call(GET_FORM_TYPE, &args![form]).u32() {
+        0x14 => 0x18,
+        0x15 => 1,
+        0x18 => 2,
+        0x19 => 3,
+        0x1a => 4,
+        0x1b => 5,
+        0x1c => 6,
+        0x1d => {
+            if member_flag(e) {
+                0x12
+            } else {
+                7
+            }
+        }
+        0x1e => 8,
+        0x1f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74 => 9,
+        0x26 => 10,
+        0x27 => 0xb,
+        0x28 => {
+            if e.call(FORM_TEST_SIXTEEN, &args![form]).bool() {
+                0x16
+            } else if e.call(FORM_TEST_SEVENTEEN, &args![form]).bool() {
+                0x17
+            } else {
+                0xc
+            }
+        }
+        0x29 => 0xd,
+        0x2a => 0xe,
+        0x2b => 0xf,
+        0x2e => 0x10,
+        0x2f => {
+            if member_flag(e) {
+                0x12
+            } else {
+                0x11
+            }
+        }
+        _ => 0,
+    }
+}
+
+// Translated from 00679e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESPackage::FormMatchesPackageObjectType` (Xbox PDB): whether a form
+/// satisfies a package object type. Both must be non-null/non-zero. By the
+/// form type: 0x14 matches 0x18, and 0x19, 0x1a, 0x1b when the effect item
+/// list at `+0x24` has the target effect, the touch effect or answers the
+/// third test (`00406090`); 0x15, 0x19, 0x1b, 0x1c, 0x1e, 0x26, 0x27 and
+/// 0x2e match 1, 3, 5, 6, 8, 10, 11 and 0x10; 0x18 and 0x29 match 2 and
+/// 0xd and 0x13, 0x14; 0x1a matches 4 and 0x14; 0x1d matches 7, and 0x12
+/// when the `+0x3c` member answers true; 0x1f, 0x32, 0x67, 0x6c, 0x73 and
+/// 0x74 match 9; 0x28 matches 0xc, 0x13, 0x14, and 0x16 / 0x17 when
+/// `006450c0` / `004c0c30` hold; 0x2a and 0x2b match 0xe / 0xf and 0x1c;
+/// 0x2f matches 0x11, and 0x12 when the `+0x3c` member answers true.
+pub fn tes_package_form_matches_package_object_type(
+    e: &mut Engine,
+    form: Object,
+    object_type: i32,
+) -> bool {
+    if form.is_null() || object_type == 0 {
+        return false;
+    }
+    let member_flag = |e: &mut Engine| {
+        e.vcall(form.addr() + FORM_MEMBER_3C, SLOT_MEMBER_FLAG, &args![])
+            .bool()
+    };
+    let wide_range = (0x13..=0x14).contains(&object_type);
+    match e.call(GET_FORM_TYPE, &args![form]).u32() {
+        0x14 => {
+            if object_type == 0x18 {
+                true
+            } else if (0x19..=0x1b).contains(&object_type) {
+                let list = form.addr() + FORM_MEMBER_24;
+                match object_type {
+                    0x19 => e.call(EFFECT_LIST_TEST_TARGET, &args![list]).bool(),
+                    0x1a => e.call(EFFECT_LIST_TEST_TOUCH, &args![list]).bool(),
+                    _ => e.call(EFFECT_LIST_TEST_THIRD, &args![list]).bool(),
+                }
+            } else {
+                false
+            }
+        }
+        0x15 => object_type == 1,
+        0x18 => object_type == 2 || wide_range,
+        0x19 => object_type == 3,
+        0x1a => object_type == 4 || object_type == 0x14,
+        0x1b => object_type == 5,
+        0x1c => object_type == 6,
+        0x1d => object_type == 7 || (object_type == 0x12 && member_flag(e)),
+        0x1e => object_type == 8,
+        0x1f | 0x32 | 0x67 | 0x6c | 0x73 | 0x74 => object_type == 9,
+        0x26 => object_type == 10,
+        0x27 => object_type == 0xb,
+        0x28 => match object_type {
+            0xc | 0x13 | 0x14 => true,
+            0x16 | 0x17 => {
+                (e.call(FORM_TEST_SIXTEEN, &args![form]).bool() && object_type == 0x16)
+                    || (e.call(FORM_TEST_SEVENTEEN, &args![form]).bool() && object_type == 0x17)
+            }
+            _ => false,
+        },
+        0x29 => object_type == 0xd || wide_range,
+        0x2a => object_type == 0xe || object_type == 0x1c,
+        0x2b => object_type == 0xf || object_type == 0x1c,
+        0x2e => object_type == 0x10,
+        0x2f => object_type == 0x11 || (object_type == 0x12 && member_flag(e)),
+        _ => false,
+    }
+}
+
+// Translated from 0067acf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a package-data object: the base constructor
+/// (`0067ad20`), then the vtable of the object (`01068860`) and a zero in
+/// the word at +4. Returns `this`.
+pub fn fn_0067acf0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(DATA_BASE_CONSTRUCTOR, &args![this]);
+    e.mem.set_u32(this.addr(), DATA_BASE_VTABLE);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4022,6 +4697,25 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00678ec0,
             tes_package_is_target_an_actor(Ptr<TESPackage>, Ptr) -> bool
         ),
+        entry!(0x00678fd0, fn_00678fd0(Ptr<TESPackage>) -> u16),
+        entry!(0x00679120, fn_00679120(Ptr<TESPackage>)),
+        entry!(0x00679340, tes_package_load_game(Ptr<TESPackage>)),
+        entry!(0x006796c0, fn_006796c0(Ptr<TESPackage>)),
+        entry!(0x00679700, fn_00679700(Ptr<TESPackage>, u32, u32)),
+        entry!(0x00679760, fn_00679760(Ptr<TESPackage>, u32)),
+        entry!(0x006797c0, tes_package_save_game(Ptr<TESPackage>, u32)),
+        entry!(0x006798c0, tes_package_load_game_ov2(Ptr<TESPackage>, u32)),
+        entry!(0x00679a90, tes_package_init_load_game(Ptr<TESPackage>, u32)),
+        entry!(0x00679b10, fn_00679b10(Ptr<TESPackage>, u32)),
+        entry!(
+            0x00679ba0,
+            tes_package_get_object_type_from_form(Ptr) -> i32
+        ),
+        entry!(
+            0x00679e00,
+            tes_package_form_matches_package_object_type(Ptr, i32) -> bool
+        ),
+        entry!(0x0067acf0, fn_0067acf0(Ptr) -> Ptr),
     ]
 }
 
@@ -4033,13 +4727,13 @@ mod tests {
 
     /// Vtable of the fake package-data objects: slot 0 (`FAKE_DELETE`) and
     /// slot 0x10 (`FAKE_INIT_ITEM`).
-    const DATA_VTABLE: u32 = 0x0130_0000;
+    pub(super) const DATA_VTABLE: u32 = 0x0130_0000;
     const FAKE_DELETE: u32 = 0x7000_0000;
     const FAKE_INIT_ITEM: u32 = 0x7000_0010;
     /// Vtable of the test package: slot 0x130 gives the form name.
     const PACKAGE_VTABLE: u32 = 0x0130_1000;
     const FAKE_NAME: u32 = 0x7000_0130;
-    const NAME_POINTER: u32 = 0x0aa0_0001;
+    pub(super) const NAME_POINTER: u32 = 0x0aa0_0001;
 
     /// Constructors and the small data objects' constructors: they return
     /// their `this`.
@@ -4051,7 +4745,7 @@ mod tests {
         0x0067_bfd0,
         0x0067_bbf0,
         0x0067_b950,
-        0x0067_acf0,
+        DATA_BASE_CONSTRUCTOR,
         0x0067_c770,
         0x0067_c3f0,
         0x009e_dbc0,
@@ -4148,7 +4842,7 @@ mod tests {
     }
 
     /// A data object with the fake vtable.
-    fn data_object(e: &mut Engine, size: u32) -> u32 {
+    pub(super) fn data_object(e: &mut Engine, size: u32) -> u32 {
         let d = e.mem.alloc(size);
         e.mem.set_u32(d, DATA_VTABLE);
         d
@@ -7697,5 +8391,792 @@ mod second_batch_tests {
         // A target of another kind: false.
         let p = follow_package(&mut e, 0, 6, person);
         assert!(!call(&mut e, p, actor));
+    }
+}
+
+#[cfg(test)]
+mod third_batch_tests {
+    use super::tests::{calls_to, data_object, engine, log_on, package, DATA_VTABLE, NAME_POINTER};
+    use super::*;
+
+    // ------------------------------------------------------------------
+    // Save and load (`00678fd0` to `0067acf0`)
+    // ------------------------------------------------------------------
+
+    /// The save/load game object, its byte stream and the cells the doubles
+    /// share (the test engine's memory is sparse; these pages are ours).
+    const SAVE_OBJECT: u32 = 0x0131_0000;
+    const STREAM: u32 = 0x0131_2000;
+    const LOG_FLAG: u32 = 0x0131_0200;
+    const SCRATCH: u32 = 0x0131_0300;
+    /// The record of the form being saved or loaded: ID, flags, version.
+    const RECORD: u32 = 0x0131_0400;
+    const FORM_OBJECT_VTABLE: u32 = 0x0131_0800;
+    const FAKE_MEMBER_FLAG: u32 = 0x7000_0204;
+    const FAKE_BUFFER: u32 = 0x0131_0900;
+
+    /// The first batch's engine plus the save/load doubles: the stream is
+    /// `STREAM`, its position is the word at `SAVE_OBJECT + 0x14`, save game
+    /// blocks are on when the byte at `SAVE_OBJECT + 0x20` is set.
+    fn save_engine() -> Engine {
+        let mut e = engine();
+        e.map(0x011d_e000, 0x1000);
+        e.map(0x0131_0000, 0x1000);
+        e.map(STREAM, 0x2_0000);
+        e.set_global(SAVE_LOAD_GAME, SAVE_OBJECT);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        e.mem.write(STREAM, &[0xee; 0x100]);
+        e.register(USE_SAVE_GAME_BLOCKS, |e, _| {
+            (e.mem.u8(SAVE_OBJECT + 0x20) != 0).into_ret()
+        });
+        e.register(SAVE_POSITION, |e, _| {
+            e.mem.u32(SAVE_OBJECT + 0x14).into_ret()
+        });
+        e.register(FLAG_BYTE_ADDRESS, |_, _| LOG_FLAG.into_ret());
+        e.register(CURRENT_SAVE_FORM, |e, _| {
+            e.mem.u32(SAVE_OBJECT + 0x88).into_ret()
+        });
+        e.register(CURRENT_LOAD_FORM, |e, _| {
+            e.mem.u32(SAVE_OBJECT + 0x84).into_ret()
+        });
+        e.register(LOAD_VERSION, |e, _| e.mem.u8(SAVE_OBJECT + 0x30).into_ret());
+        for address in [ERROR_LOG, SAVE_LOAD_LOG] {
+            e.register(address, |_, _| Ret::default());
+        }
+        // The stream writers and readers: (save or buffer, ptr, size).
+        for address in [SAVE_BYTES, BUFFER_SAVE_DATA] {
+            e.register(address, |e, a| {
+                let position = e.mem.u32(SAVE_OBJECT + 0x14);
+                let data = e.mem.bytes(a[1], a[2]);
+                e.mem.write(position, &data);
+                e.mem.set_u32(SAVE_OBJECT + 0x14, position + a[2]);
+                Ret::default()
+            });
+        }
+        for address in [LOAD_BYTES, BUFFER_LOAD_DATA] {
+            e.register(address, |e, a| {
+                let position = e.mem.u32(SAVE_OBJECT + 0x14);
+                let data = e.mem.bytes(position, a[2]);
+                e.mem.write(a[1], &data);
+                e.mem.set_u32(SAVE_OBJECT + 0x14, position + a[2]);
+                Ret::default()
+            });
+        }
+        e.register(FORM_SAVE_DATA_OLD, |e, a| {
+            // The part flags the package computed.
+            e.mem.set_u8(SCRATCH, e.mem.u8(a[1]));
+            Ret::default()
+        });
+        e.register(FORM_LOAD_DATA_OLD, |e, a| {
+            // The part flags the saved data holds.
+            e.mem.set_u8(a[1], e.mem.u8(SCRATCH + 1));
+            Ret::default()
+        });
+        e.register(LOOKUP_FORM, |e, _| {
+            let named = e.mem.u32(SCRATCH + 0x10);
+            named.into_ret()
+        });
+        for address in [
+            LOCATION_SAVE_OLD,
+            LOCATION_LOAD_OLD,
+            LOCATION_AFTER_LOAD,
+            LOCATION_SAVE_BUFFER,
+            LOCATION_LOAD_BUFFER,
+            LOCATION_INIT_LOAD_BUFFER,
+            TARGET_SAVE_OLD,
+            TARGET_LOAD_OLD,
+            TARGET_AFTER_LOAD,
+            TARGET_SAVE_BUFFER,
+            TARGET_LOAD_BUFFER,
+            TARGET_INIT_LOAD_BUFFER,
+            FORM_LOAD_GAME,
+            FORM_CLEAR_FLAGS,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(LOCATION_GET_SAVE_SIZE, |_, _| 0x30u32.into_ret());
+        e.register(TARGET_GET_SAVE_SIZE, |_, _| 0x500u32.into_ret());
+        // The form named in the log messages.
+        let named = package(&mut e, 0);
+        e.mem.set_u32(SCRATCH + 0x10, named.addr());
+        e
+    }
+
+    /// A record `RECORD` of the form being saved/loaded.
+    fn set_record(e: &mut Engine, slot: u32) {
+        e.mem.set_u32(RECORD, 0x0100_0014);
+        e.mem.set_u32(RECORD + 5, 0x20);
+        e.mem.set_u8(RECORD + 9, 3);
+        e.mem.set_u32(SAVE_OBJECT + slot, RECORD);
+    }
+
+    fn make_dynamic(e: &mut Engine) {
+        e.register(IS_DYNAMIC_FORM_ID, |_, _| true.into_ret());
+    }
+
+    #[test]
+    fn save_size_adds_the_parts() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        // 13 for the form data and 4 for the trailing word.
+        assert_eq!(e.call(0x00678fd0, &args![p]).u16(), 17);
+        // Save game blocks add the 4 byte tag and the 2 byte length.
+        e.mem.set_u8(SAVE_OBJECT + 0x20, 1);
+        assert_eq!(e.call(0x00678fd0, &args![p]).u16(), 23);
+        // The location and the target add their sizes (0x30 and 0x500).
+        let location = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        assert_eq!(e.call(0x00678fd0, &args![p]).u16(), 23 + 0x30);
+        let target = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackTarg, Ptr::new(target));
+        log_on(&mut e);
+        assert_eq!(e.call(0x00678fd0, &args![p]).u16(), 23 + 0x30 + 0x500);
+        assert_eq!(calls_to(&e, LOCATION_GET_SAVE_SIZE), [[location]]);
+        assert_eq!(calls_to(&e, TARGET_GET_SAVE_SIZE), [[target]]);
+        assert!(calls_to(&e, ERROR_LOG).is_empty());
+    }
+
+    #[test]
+    fn save_size_logging_reports_with_or_without_the_form() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        e.mem.set_u8(LOG_FLAG, 1);
+        log_on(&mut e);
+        e.call(0x00678fd0, &args![p]);
+        assert_eq!(
+            calls_to(&e, ERROR_LOG),
+            [[0x0101_2c78, 17, 0x1d51, PACKAGE_SOURCE_FILE]]
+        );
+        set_record(&mut e, 0x88);
+        log_on(&mut e);
+        e.call(0x00678fd0, &args![p]);
+        assert_eq!(
+            calls_to(&e, ERROR_LOG),
+            [[
+                0x0101_2cb0,
+                17,
+                0x0100_0014,
+                NAME_POINTER,
+                0x20,
+                0x1d51,
+                PACKAGE_SOURCE_FILE
+            ]]
+        );
+        assert_eq!(calls_to(&e, LOOKUP_FORM), [[0x0100_0014]]);
+    }
+
+    #[test]
+    fn old_save_writes_the_block_and_patches_the_length() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        e.mem.set_u8(SAVE_OBJECT + 0x20, 1);
+        e.mem.set_u32(p.addr() + 0x18, 0xaabb_ccdd);
+        e.mem.write(p.addr() + 0x1c, &[7; 12]);
+        let location = e.mem.alloc(16);
+        let target = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        e.set(p, TESPackage::pPackTarg, Ptr::new(target));
+        log_on(&mut e);
+        e.call(0x00679120, &args![p]);
+        // Tag, 16-bit length, the 12 bytes, the word at +0x18.
+        assert_eq!(e.mem.u32(STREAM), 0x424c_4f4b);
+        assert_eq!(e.mem.bytes(STREAM + 6, 12), vec![7; 12]);
+        assert_eq!(e.mem.u32(STREAM + 18), 0xaabb_ccdd);
+        assert_eq!(e.mem.u32(SAVE_OBJECT + 0x14), STREAM + 22);
+        // The length counts from the length field itself to the end.
+        assert_eq!(e.mem.u16(STREAM + 4), 18);
+        // Both parts present: flags 3.
+        assert_eq!(e.mem.u8(SCRATCH), 3);
+        assert_eq!(calls_to(&e, FORM_SAVE_DATA_OLD).len(), 1);
+        assert_eq!(calls_to(&e, LOCATION_SAVE_OLD), [[location]]);
+        assert_eq!(calls_to(&e, TARGET_SAVE_OLD), [[target]]);
+        assert!(calls_to(&e, ERROR_LOG).is_empty());
+        // Without parts and without blocks: flags 0 and the bare bytes.
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        e.mem.set_u8(SCRATCH, 9);
+        log_on(&mut e);
+        e.call(0x00679120, &args![p]);
+        assert_eq!(e.mem.u8(SCRATCH), 0);
+        assert_eq!(e.mem.u32(SAVE_OBJECT + 0x14), STREAM + 16);
+        assert!(calls_to(&e, LOCATION_SAVE_OLD).is_empty());
+        assert!(calls_to(&e, TARGET_SAVE_OLD).is_empty());
+    }
+
+    #[test]
+    fn old_save_logs_the_size_and_the_oversized_block() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        e.mem.set_u8(LOG_FLAG, 1);
+        log_on(&mut e);
+        e.call(0x00679120, &args![p]);
+        assert_eq!(
+            calls_to(&e, ERROR_LOG),
+            [[0x0101_536c, 16, 0x1d6e, PACKAGE_SOURCE_FILE]]
+        );
+        set_record(&mut e, 0x88);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        log_on(&mut e);
+        e.call(0x00679120, &args![p]);
+        assert_eq!(
+            calls_to(&e, ERROR_LOG),
+            [[
+                0x0101_53a0,
+                16,
+                0x0100_0014,
+                NAME_POINTER,
+                0x20,
+                0x1d6e,
+                PACKAGE_SOURCE_FILE
+            ]]
+        );
+        // A block longer than 0xFFFF bytes: the logger is told.
+        e.mem.set_u8(LOG_FLAG, 0);
+        e.mem.set_u8(SAVE_OBJECT + 0x20, 1);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        let location = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        e.register(LOCATION_SAVE_OLD, |e, _| {
+            let position = e.mem.u32(SAVE_OBJECT + 0x14);
+            e.mem.set_u32(SAVE_OBJECT + 0x14, position + 0x1_0000);
+            Ret::default()
+        });
+        log_on(&mut e);
+        e.call(0x00679120, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[0x0101_5318, PACKAGE_SOURCE_FILE, 0x1d6e]]
+        );
+    }
+
+    /// Writes a saved package into the stream: the tag and length when the
+    /// blocks are on, the 12 bytes and the word at +0x18.
+    fn put_saved_package(e: &mut Engine, blocks: bool, length: u16) {
+        e.mem.set_u8(SAVE_OBJECT + 0x20, blocks as u8);
+        let mut at = STREAM;
+        if blocks {
+            e.mem.set_u32(at, 0x424c_4f4b);
+            e.mem.set_u16(at + 4, length);
+            at += 6;
+        }
+        e.mem.write(at, &[9; 12]);
+        e.mem.set_u32(at + 12, 0x1122_3344);
+    }
+
+    #[test]
+    fn old_load_reads_the_parts() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        put_saved_package(&mut e, true, 18);
+        e.mem.set_u8(SCRATCH + 1, 3);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(e.mem.bytes(p.addr() + 0x1c, 12), vec![9; 12]);
+        assert_eq!(e.mem.u32(p.addr() + 0x18), 0x1122_3344);
+        let location = e.get(p, TESPackage::pPackLoc);
+        let target = e.get(p, TESPackage::pPackTarg);
+        assert!(!location.is_null() && !target.is_null());
+        assert_eq!(calls_to(&e, LOCATION_LOAD_OLD), [[location.addr()]]);
+        assert_eq!(calls_to(&e, TARGET_LOAD_OLD), [[target.addr()]]);
+        assert_eq!(calls_to(&e, OPERATOR_NEW)[0], [LOCATION_SIZE]);
+        assert_eq!(calls_to(&e, OPERATOR_NEW)[1], [TARGET_SIZE]);
+        // The block length matches the bytes read: nothing is logged.
+        assert!(calls_to(&e, SAVE_LOAD_LOG).is_empty());
+        // Flags 1 and 2 pick one part each; flags 0 none.
+        for (flags, location_made, target_made) in
+            [(1u8, true, false), (2, false, true), (0, false, false)]
+        {
+            let mut e = save_engine();
+            let p = package(&mut e, 0);
+            put_saved_package(&mut e, false, 0);
+            e.mem.set_u8(SCRATCH + 1, flags);
+            e.call(0x00679340, &args![p]);
+            assert_eq!(!e.get(p, TESPackage::pPackLoc).is_null(), location_made);
+            assert_eq!(!e.get(p, TESPackage::pPackTarg).is_null(), target_made);
+        }
+    }
+
+    #[test]
+    fn old_load_reports_a_wrong_tag_and_a_wrong_length() {
+        // A wrong tag, no form loading: the version of the save object.
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        put_saved_package(&mut e, true, 18);
+        e.mem.set_u32(STREAM, 0x1234_5678);
+        e.mem.set_u8(SAVE_OBJECT + 0x30, 5);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[0x0101_56a8, PACKAGE_SOURCE_FILE, 0x1d74, 5]]
+        );
+        // With a form being loaded: its id, name, version and flags.
+        set_record(&mut e, 0x84);
+        put_saved_package(&mut e, true, 18);
+        e.mem.set_u32(STREAM, 0x1234_5678);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[
+                0x0101_5718,
+                PACKAGE_SOURCE_FILE,
+                0x1d74,
+                0x0100_0014,
+                NAME_POINTER,
+                3,
+                0x20
+            ]]
+        );
+        // The block says 16 bytes but 18 were read: an overrun of 2 bytes.
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        put_saved_package(&mut e, true, 16);
+        e.mem.set_u8(SAVE_OBJECT + 0x30, 5);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[0x0101_54a0, 2, PACKAGE_SOURCE_FILE, 0x1d8b, 5]]
+        );
+        // The block says 20: an underrun of 2 bytes, with the form named.
+        set_record(&mut e, 0x84);
+        put_saved_package(&mut e, true, 20);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[
+                0x0101_5500,
+                2,
+                PACKAGE_SOURCE_FILE,
+                0x1d8b,
+                0x0100_0014,
+                NAME_POINTER,
+                3,
+                0x20
+            ]]
+        );
+        // And the same two with a form for the overrun, without for the
+        // underrun.
+        put_saved_package(&mut e, true, 16);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(calls_to(&e, SAVE_LOAD_LOG)[0][0], 0x0101_5588);
+        e.mem.set_u32(SAVE_OBJECT + 0x84, 0);
+        put_saved_package(&mut e, true, 20);
+        e.mem.set_u32(SAVE_OBJECT + 0x14, STREAM);
+        log_on(&mut e);
+        e.call(0x00679340, &args![p]);
+        assert_eq!(
+            calls_to(&e, SAVE_LOAD_LOG),
+            [[0x0101_5440, 2, PACKAGE_SOURCE_FILE, 0x1d8b, 5]]
+        );
+    }
+
+    #[test]
+    fn post_load_step_runs_for_the_parts_that_exist() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        log_on(&mut e);
+        e.call(0x006796c0, &args![p]);
+        assert!(calls_to(&e, LOCATION_AFTER_LOAD).is_empty());
+        assert!(calls_to(&e, TARGET_AFTER_LOAD).is_empty());
+        let location = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        log_on(&mut e);
+        e.call(0x006796c0, &args![p]);
+        assert_eq!(calls_to(&e, LOCATION_AFTER_LOAD), [[location]]);
+        assert!(calls_to(&e, TARGET_AFTER_LOAD).is_empty());
+        let target = e.mem.alloc(16);
+        e.set(p, TESPackage::pPackTarg, Ptr::new(target));
+        log_on(&mut e);
+        e.call(0x006796c0, &args![p]);
+        assert_eq!(calls_to(&e, TARGET_AFTER_LOAD), [[target]]);
+    }
+
+    #[test]
+    fn form_flags_map_to_package_flag_bits() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        log_on(&mut e);
+        e.call(0x00679700, &args![p, 0x8000_0000u32, 0x55u32]);
+        assert_eq!(
+            calls_to(&e, FORM_LOAD_GAME),
+            [[p.addr(), 0x8000_0000, 0x55]]
+        );
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 0x8000);
+        e.call(0x00679700, &args![p, 0x4000_0000u32, 0u32]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 0x1_8000);
+        // Other flags change nothing.
+        let q = package(&mut e, 0);
+        e.call(0x00679700, &args![q, 0x3fff_ffffu32, 0u32]);
+        assert_eq!(e.get(q, TESPackage::iPackFlags), 0);
+        // The clearing counterpart.
+        e.set(p, TESPackage::iPackFlags, 0x1_8005);
+        log_on(&mut e);
+        e.call(0x00679760, &args![p, 0x8000_0000u32]);
+        assert_eq!(calls_to(&e, FORM_CLEAR_FLAGS), [[p.addr(), 0x8000_0000]]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 0x1_0005);
+        e.call(0x00679760, &args![p, 0xc000_0000u32]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 5);
+        e.call(0x00679760, &args![p, 0x1u32]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 5);
+    }
+
+    #[test]
+    fn save_writes_only_for_a_dynamic_form() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        log_on(&mut e);
+        e.call(0x006797c0, &args![p, FAKE_BUFFER]);
+        assert!(calls_to(&e, BUFFER_SAVE_DATA).is_empty());
+        make_dynamic(&mut e);
+        e.mem.set_u32(p.addr() + 0x18, 0xa1b2_c3d4);
+        e.mem.write(p.addr() + 0x1c, &[5; 12]);
+        let location = e.mem.alloc(16);
+        let target = e.mem.alloc(16);
+        let data = data_object(&mut e, 16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        e.set(p, TESPackage::pPackTarg, Ptr::new(target));
+        e.set(p, TESPackage::pPackData, Ptr::new(data));
+        e.register(FAKE_DATA_SAVE, |_, _| Ret::default());
+        e.mem.set_u32(DATA_VTABLE + 0x14, FAKE_DATA_SAVE);
+        log_on(&mut e);
+        e.call(0x006797c0, &args![p, FAKE_BUFFER]);
+        // 12 bytes, the part flags (7), the word.
+        assert_eq!(e.mem.bytes(STREAM, 12), vec![5; 12]);
+        assert_eq!(e.mem.u8(STREAM + 12), 7);
+        assert_eq!(e.mem.u32(STREAM + 13), 0xa1b2_c3d4);
+        assert_eq!(
+            calls_to(&e, LOCATION_SAVE_BUFFER),
+            [[location, FAKE_BUFFER]]
+        );
+        assert_eq!(calls_to(&e, TARGET_SAVE_BUFFER), [[target, FAKE_BUFFER]]);
+        assert_eq!(calls_to(&e, FAKE_DATA_SAVE), [[data, FAKE_BUFFER]]);
+        assert_eq!(calls_to(&e, BUFFER_SAVE_DATA).len(), 3);
+        assert_eq!(calls_to(&e, BUFFER_SAVE_DATA)[1][2..], [1, 0]);
+        // Without parts the flag byte is 0.
+        let mut e = save_engine();
+        make_dynamic(&mut e);
+        let q = package(&mut e, 0);
+        e.call(0x006797c0, &args![q, FAKE_BUFFER]);
+        assert_eq!(e.mem.u8(STREAM + 12), 0);
+    }
+
+    const FAKE_DATA_SAVE: u32 = 0x7000_0014;
+    const FAKE_DATA_LOAD: u32 = 0x7000_0018;
+    const FAKE_DATA_INIT_LOAD: u32 = 0x7000_001c;
+
+    #[test]
+    fn load_from_the_buffer_reads_the_parts() {
+        let mut e = save_engine();
+        make_dynamic(&mut e);
+        let p = package(&mut e, 0);
+        let data = data_object(&mut e, 16);
+        e.set(p, TESPackage::pPackData, Ptr::new(data));
+        e.mem.set_u32(DATA_VTABLE + 0x18, FAKE_DATA_LOAD);
+        e.register(FAKE_DATA_LOAD, |_, _| Ret::default());
+        e.mem.write(STREAM, &[4; 12]);
+        e.mem.set_u8(STREAM + 12, 7);
+        e.mem.set_u32(STREAM + 13, 0x0102_0304);
+        log_on(&mut e);
+        e.call(0x006798c0, &args![p, FAKE_BUFFER]);
+        assert_eq!(e.mem.bytes(p.addr() + 0x1c, 12), vec![4; 12]);
+        assert_eq!(e.mem.u32(p.addr() + 0x18), 0x0102_0304);
+        let location = e.get(p, TESPackage::pPackLoc);
+        let target = e.get(p, TESPackage::pPackTarg);
+        assert_eq!(
+            calls_to(&e, LOCATION_LOAD_BUFFER),
+            [[location.addr(), FAKE_BUFFER]]
+        );
+        assert_eq!(
+            calls_to(&e, TARGET_LOAD_BUFFER),
+            [[target.addr(), FAKE_BUFFER]]
+        );
+        assert_eq!(calls_to(&e, FAKE_DATA_LOAD), [[data, FAKE_BUFFER]]);
+        // No part flags: nothing created.
+        let mut e = save_engine();
+        make_dynamic(&mut e);
+        let q = package(&mut e, 0);
+        e.mem.write(STREAM, &[4; 12]);
+        e.mem.set_u8(STREAM + 12, 0);
+        e.call(0x006798c0, &args![q, FAKE_BUFFER]);
+        assert!(e.get(q, TESPackage::pPackLoc).is_null());
+        assert!(e.get(q, TESPackage::pPackTarg).is_null());
+    }
+
+    #[test]
+    fn load_from_the_buffer_of_a_static_form_tests_the_flags() {
+        let mut e = save_engine();
+        // The flag tests answer true for the masks in the scratch word.
+        e.register(BUFFER_FLAG_OBJECT_A, |_, a| a[2].into_ret());
+        e.register(BUFFER_FLAG_OBJECT_B, |_, a| a[2].into_ret());
+        e.register(BUFFER_FLAG_TEST, |e, a| {
+            (e.mem.u32(SCRATCH + 8) & a[0] != 0).into_ret()
+        });
+        let p = package(&mut e, 0);
+        log_on(&mut e);
+        e.call(0x006798c0, &args![p, FAKE_BUFFER]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 0);
+        assert_eq!(
+            calls_to(&e, BUFFER_FLAG_OBJECT_A),
+            [
+                [
+                    FAKE_BUFFER,
+                    calls_to(&e, BUFFER_FLAG_OBJECT_A)[0][1],
+                    0x8000_0000
+                ],
+                [
+                    FAKE_BUFFER,
+                    calls_to(&e, BUFFER_FLAG_OBJECT_A)[1][1],
+                    0x4000_0000
+                ]
+            ]
+        );
+        assert!(calls_to(&e, BUFFER_LOAD_DATA).is_empty());
+        e.mem.set_u32(SCRATCH + 8, 0x8000_0000);
+        e.call(0x006798c0, &args![p, FAKE_BUFFER]);
+        assert_eq!(e.get(p, TESPackage::iPackFlags), 0x8000);
+        e.mem.set_u32(SCRATCH + 8, 0x4000_0000);
+        let q = package(&mut e, 0);
+        e.call(0x006798c0, &args![q, FAKE_BUFFER]);
+        assert_eq!(e.get(q, TESPackage::iPackFlags), 0x1_0000);
+        // The clearing twin, `00679b10`.
+        e.mem.set_u32(SCRATCH + 8, 0xc000_0000);
+        e.set(q, TESPackage::iPackFlags, 0x1_8007);
+        e.call(0x00679b10, &args![q, FAKE_BUFFER]);
+        assert_eq!(e.get(q, TESPackage::iPackFlags), 7);
+        e.mem.set_u32(SCRATCH + 8, 0x8000_0000);
+        e.set(q, TESPackage::iPackFlags, 0x1_8007);
+        e.call(0x00679b10, &args![q, FAKE_BUFFER]);
+        assert_eq!(e.get(q, TESPackage::iPackFlags), 0x1_0007);
+        // A dynamic form is left alone.
+        make_dynamic(&mut e);
+        e.mem.set_u32(SCRATCH + 8, 0xc000_0000);
+        e.set(q, TESPackage::iPackFlags, 0x1_8007);
+        log_on(&mut e);
+        e.call(0x00679b10, &args![q, FAKE_BUFFER]);
+        assert_eq!(e.get(q, TESPackage::iPackFlags), 0x1_8007);
+        assert!(calls_to(&e, BUFFER_FLAG_OBJECT_B).is_empty());
+    }
+
+    #[test]
+    fn init_load_calls_the_parts_of_a_dynamic_form() {
+        let mut e = save_engine();
+        let p = package(&mut e, 0);
+        let location = e.mem.alloc(16);
+        let target = e.mem.alloc(16);
+        let data = data_object(&mut e, 16);
+        e.set(p, TESPackage::pPackLoc, Ptr::new(location));
+        e.set(p, TESPackage::pPackTarg, Ptr::new(target));
+        e.set(p, TESPackage::pPackData, Ptr::new(data));
+        e.mem.set_u32(DATA_VTABLE + 0x1c, FAKE_DATA_INIT_LOAD);
+        e.register(FAKE_DATA_INIT_LOAD, |_, _| Ret::default());
+        log_on(&mut e);
+        e.call(0x00679a90, &args![p, FAKE_BUFFER]);
+        assert!(calls_to(&e, LOCATION_INIT_LOAD_BUFFER).is_empty());
+        make_dynamic(&mut e);
+        log_on(&mut e);
+        e.call(0x00679a90, &args![p, FAKE_BUFFER]);
+        assert_eq!(
+            calls_to(&e, LOCATION_INIT_LOAD_BUFFER),
+            [[location, FAKE_BUFFER]]
+        );
+        assert_eq!(
+            calls_to(&e, TARGET_INIT_LOAD_BUFFER),
+            [[target, FAKE_BUFFER]]
+        );
+        assert_eq!(calls_to(&e, FAKE_DATA_INIT_LOAD), [[data, FAKE_BUFFER]]);
+        // A package without parts calls nothing.
+        let q = package(&mut e, 0);
+        log_on(&mut e);
+        e.call(0x00679a90, &args![q, FAKE_BUFFER]);
+        assert!(calls_to(&e, TARGET_INIT_LOAD_BUFFER).is_empty());
+    }
+
+    /// A form block of the given type, with the `+0x3c` member answering
+    /// `member` through slot 4 of its vtable.
+    fn typed_form(e: &mut Engine, kind: u8, member: bool) -> u32 {
+        let f = e.mem.alloc(0x80);
+        e.mem.set_u8(f + 4, kind);
+        e.put_vtable(FORM_OBJECT_VTABLE, &[0, FAKE_MEMBER_FLAG]);
+        e.mem.set_u32(f + 0x3c, FORM_OBJECT_VTABLE);
+        e.mem.set_u8(f + 0x40, member as u8);
+        f
+    }
+
+    fn type_engine() -> Engine {
+        let mut e = save_engine();
+        e.register(GET_FORM_TYPE, |e, a| (e.mem.u8(a[0] + 4) as u32).into_ret());
+        // The member's flag lives in the byte after its vtable pointer.
+        e.register(FAKE_MEMBER_FLAG, |e, a| {
+            (e.mem.u8(a[0] + 4) != 0).into_ret()
+        });
+        // 0x28 tests: the byte at +0x50 (sixteen) and +0x51 (seventeen).
+        e.register(FORM_TEST_SIXTEEN, |e, a| {
+            (e.mem.u8(a[0] + 0x50) != 0).into_ret()
+        });
+        e.register(FORM_TEST_SEVENTEEN, |e, a| {
+            (e.mem.u8(a[0] + 0x51) != 0).into_ret()
+        });
+        // The effect list tests answer with the byte at +0, +1, +2 of the
+        // list (the form + 0x24).
+        e.register(EFFECT_LIST_TEST_TARGET, |e, a| {
+            (e.mem.u8(a[0]) != 0).into_ret()
+        });
+        e.register(EFFECT_LIST_TEST_TOUCH, |e, a| {
+            (e.mem.u8(a[0] + 1) != 0).into_ret()
+        });
+        e.register(EFFECT_LIST_TEST_THIRD, |e, a| {
+            (e.mem.u8(a[0] + 2) != 0).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn object_type_from_the_form_type() {
+        let mut e = type_engine();
+        let expected: [(u8, i32); 24] = [
+            (0x14, 0x18),
+            (0x15, 1),
+            (0x18, 2),
+            (0x19, 3),
+            (0x1a, 4),
+            (0x1b, 5),
+            (0x1c, 6),
+            (0x1e, 8),
+            (0x1f, 9),
+            (0x32, 9),
+            (0x67, 9),
+            (0x6c, 9),
+            (0x73, 9),
+            (0x74, 9),
+            (0x26, 10),
+            (0x27, 11),
+            (0x29, 0xd),
+            (0x2a, 0xe),
+            (0x2b, 0xf),
+            (0x2e, 0x10),
+            (0x13, 0),
+            (0x16, 0),
+            (0x2c, 0),
+            (0x70, 0),
+        ];
+        for (kind, object_type) in expected {
+            let f = typed_form(&mut e, kind, false);
+            assert_eq!(
+                e.call(0x00679ba0, &args![f]).i32(),
+                object_type,
+                "form type {kind:#x}"
+            );
+        }
+        // No form: 0 and nothing is read.
+        log_on(&mut e);
+        assert_eq!(e.call(0x00679ba0, &args![0u32]).i32(), 0);
+        assert!(calls_to(&e, GET_FORM_TYPE).is_empty());
+        // Types 0x1d and 0x2f ask the `+0x3c` member.
+        for (kind, plain) in [(0x1du8, 7), (0x2f, 0x11)] {
+            let a = typed_form(&mut e, kind, false);
+            assert_eq!(e.call(0x00679ba0, &args![a]).i32(), plain);
+            let b = typed_form(&mut e, kind, true);
+            assert_eq!(e.call(0x00679ba0, &args![b]).i32(), 0x12);
+        }
+        // Type 0x28: 0xc, or 0x16 / 0x17 by the two tests (0x16 first).
+        let f = typed_form(&mut e, 0x28, false);
+        assert_eq!(e.call(0x00679ba0, &args![f]).i32(), 0xc);
+        e.mem.set_u8(f + 0x51, 1);
+        assert_eq!(e.call(0x00679ba0, &args![f]).i32(), 0x17);
+        e.mem.set_u8(f + 0x50, 1);
+        assert_eq!(e.call(0x00679ba0, &args![f]).i32(), 0x16);
+    }
+
+    #[test]
+    fn form_matches_object_types() {
+        let mut e = type_engine();
+        let matches = |e: &mut Engine, form: u32, object_type: i32| {
+            e.call(0x00679e00, &args![form, object_type]).bool()
+        };
+        // The fixed pairs: form type and the object types it matches.
+        let table: [(u8, &[i32]); 21] = [
+            (0x15, &[1]),
+            (0x18, &[2, 0x13, 0x14]),
+            (0x19, &[3]),
+            (0x1a, &[4, 0x14]),
+            (0x1b, &[5]),
+            (0x1c, &[6]),
+            (0x1e, &[8]),
+            (0x1f, &[9]),
+            (0x32, &[9]),
+            (0x67, &[9]),
+            (0x6c, &[9]),
+            (0x73, &[9]),
+            (0x74, &[9]),
+            (0x26, &[10]),
+            (0x27, &[11]),
+            (0x29, &[0xd, 0x13, 0x14]),
+            (0x2a, &[0xe, 0x1c]),
+            (0x2b, &[0xf, 0x1c]),
+            (0x2e, &[0x10]),
+            (0x14, &[0x18]),
+            (0x2f, &[0x11]),
+        ];
+        for (kind, accepted) in table {
+            let f = typed_form(&mut e, kind, false);
+            for object_type in 1..0x20 {
+                assert_eq!(
+                    matches(&mut e, f, object_type),
+                    accepted.contains(&object_type),
+                    "form type {kind:#x}, object type {object_type:#x}"
+                );
+            }
+        }
+        // Nothing for a null form or a zero object type.
+        let f = typed_form(&mut e, 0x15, false);
+        assert!(!matches(&mut e, 0, 1));
+        assert!(!matches(&mut e, f, 0));
+        // 0x1d: 7, and 0x12 when the member answers.
+        let no = typed_form(&mut e, 0x1d, false);
+        let yes = typed_form(&mut e, 0x1d, true);
+        assert!(matches(&mut e, no, 7) && matches(&mut e, yes, 7));
+        assert!(!matches(&mut e, no, 0x12) && matches(&mut e, yes, 0x12));
+        let no = typed_form(&mut e, 0x2f, false);
+        let yes = typed_form(&mut e, 0x2f, true);
+        assert!(!matches(&mut e, no, 0x12) && matches(&mut e, yes, 0x12));
+        // 0x28: 0xc, 0x13, 0x14 always; 0x16 / 0x17 by their own test.
+        let f = typed_form(&mut e, 0x28, false);
+        for object_type in [0xc, 0x13, 0x14] {
+            assert!(matches(&mut e, f, object_type));
+        }
+        assert!(!matches(&mut e, f, 0x16) && !matches(&mut e, f, 0x17));
+        e.mem.set_u8(f + 0x50, 1);
+        assert!(matches(&mut e, f, 0x16) && !matches(&mut e, f, 0x17));
+        e.mem.set_u8(f + 0x50, 0);
+        e.mem.set_u8(f + 0x51, 1);
+        assert!(!matches(&mut e, f, 0x16) && matches(&mut e, f, 0x17));
+        assert!(!matches(&mut e, f, 0x15));
+        // 0x14: 0x19, 0x1a and 0x1b by the effect list tests at +0x24.
+        let f = typed_form(&mut e, 0x14, false);
+        for (object_type, byte) in [(0x19, 0u32), (0x1a, 1), (0x1b, 2)] {
+            assert!(!matches(&mut e, f, object_type));
+            e.mem.set_u8(f + 0x24 + byte, 1);
+            assert!(matches(&mut e, f, object_type));
+        }
+        assert!(!matches(&mut e, f, 0x1c));
+    }
+
+    #[test]
+    fn data_object_constructor_sets_vtable_and_clears_the_word() {
+        let mut e = save_engine();
+        let object = e.mem.alloc(16);
+        e.mem.set_u32(object + 4, 0x55);
+        log_on(&mut e);
+        assert_eq!(e.call(0x0067acf0, &args![object]).u32(), object);
+        assert_eq!(calls_to(&e, DATA_BASE_CONSTRUCTOR), [[object]]);
+        assert_eq!(e.mem.u32(object), DATA_BASE_VTABLE);
+        assert_eq!(e.mem.u32(object + 4), 0);
     }
 }
