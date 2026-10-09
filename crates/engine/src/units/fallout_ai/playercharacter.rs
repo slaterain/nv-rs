@@ -6848,6 +6848,4314 @@ fn set_zero_vector_global(e: &mut Engine) {
     set_zero_vector(e, 0x011e_0808);
 }
 
+// Translated from 00944300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `fTimeSinceLastAmmoRegenTick` (Xbox PDB).
+pub fn fn_00944300(e: &mut Engine, this: Ptr<PlayerCharacter>) -> f32 {
+    e.get(this, PlayerCharacter::fTimeSinceLastAmmoRegenTick)
+}
+
+// Translated from 00944320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the word at `+0x688` of the player (between `fBlockActivateTimer`
+/// and `p1stPersonBipedAnim`; no field of the Xbox PDB layout is known there).
+pub fn fn_00944320(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    e.mem.u32(at(this, 0x688))
+}
+
+// Translated from 00944340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `bBlockActivate` (Xbox PDB).
+pub fn fn_00944340(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    e.get(this, PlayerCharacter::bBlockActivate)
+}
+
+// Translated from 00944360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `bCanWait` (Xbox PDB).
+pub fn fn_00944360(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    e.get(this, PlayerCharacter::bCanWait)
+}
+
+// Translated from 00944380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `fCounterAttackTimer` (Xbox PDB).
+pub fn fn_00944380(e: &mut Engine, this: Ptr<PlayerCharacter>, value: f32) {
+    e.set(this, PlayerCharacter::fCounterAttackTimer, value);
+}
+
+// Translated from 009443a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `fCounterAttackTimer` (Xbox PDB).
+pub fn fn_009443a0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> f32 {
+    e.get(this, PlayerCharacter::fCounterAttackTimer)
+}
+
+// Translated from 009443c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether either of the two global flag bytes `011dea2b` and `011dea29` is
+/// set. (The method's `this` is saved but never read.)
+pub fn fn_009443c0(e: &mut Engine) -> bool {
+    e.mem.u8(0x011d_ea2b) != 0 || e.mem.u8(0x011d_ea29) != 0
+}
+
+// Translated from 009443f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the float global `011ac3a4`.
+pub fn fn_009443f0(e: &mut Engine) -> f32 {
+    e.global::<f32>(0x011a_c3a4)
+}
+
+// Translated from 00944400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the flag test `00621270` (the word at `+4` of its object ANDed
+/// with the argument) is nonzero for the mask `0x400`, on the member at
+/// `+0x410`.
+pub fn fn_00944400(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x0062_1270, &args![at_ptr(this, 0x410), 0x400u32])
+        .u32()
+        != 0
+}
+
+// Translated from 00944430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Same as [`fn_00944400`] for the mask `0x20000`.
+pub fn fn_00944430(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x0062_1270, &args![at_ptr(this, 0x410), 0x20000u32])
+        .u32()
+        != 0
+}
+
+// Translated from 00944460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A random number between two bounds from the global `BSRandom`: gets the
+/// generator with `00476c00` (which takes no argument) and calls
+/// [`fn_00944480`] on it with the two words, which the compiled code leaves
+/// on the stack for it.
+pub fn fn_00944460(e: &mut Engine, low: i32, high: i32) -> i32 {
+    let random = e.call(0x0047_6c00, &args![]).u32();
+    fn_00944480(e, Ptr::new(random), low, high)
+}
+
+// Translated from 00944480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `low` plus `BSRandom::UnsignedInt` (Xbox PDB, `00aa5230`) of
+/// `high - low`, drawn from the generator `this`.
+pub fn fn_00944480(e: &mut Engine, this: Ptr, low: i32, high: i32) -> i32 {
+    let span = high.wrapping_sub(low);
+    let drawn = e.call(0x00aa_5230, &args![this, span]).i32();
+    drawn.wrapping_add(low)
+}
+
+// Translated from 009444a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `+0x204` of the object the global `011d96c0` points
+/// to (0 when it is null).
+pub fn fn_009444a0(e: &mut Engine) -> u8 {
+    let object = e.global::<u32>(0x011d_96c0);
+    if object == 0 {
+        0
+    } else {
+        e.mem.u8(object + 0x204)
+    }
+}
+
+// Translated from 009444d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdatePlayerCombat` (Xbox PDB): drops the combat group
+/// when it is no longer live (`005a4320`, then `009869a0` with the player),
+/// advances or clears `fCombatTimer`, and sets `bPlayerInCombat` and
+/// `bAllCombatTargetsSearching` from the combat manager's combatant count
+/// (`009931c0`).
+pub fn player_character_update_player_combat(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    time_step: f32,
+) {
+    let group = e.get(this, PlayerCharacter::pCombatGroup);
+    if group != Ptr::NULL {
+        let alive = e.call(0x005a_4320, &args![group]).u32();
+        if alive == 0 {
+            e.call(0x0098_69a0, &args![group, this]);
+            e.set(this, PlayerCharacter::pCombatGroup, Ptr::NULL);
+        }
+    }
+    if e.get(this, PlayerCharacter::pCombatGroup) == Ptr::NULL {
+        e.set(this, PlayerCharacter::fCombatTimer, 0.0);
+    } else {
+        let timer = e.get(this, PlayerCharacter::fCombatTimer);
+        e.set(
+            this,
+            PlayerCharacter::fCombatTimer,
+            (timer as f64 + time_step as f64) as f32,
+        );
+    }
+    let manager = e.global::<u32>(COMBAT_MANAGER);
+    let target = e.global::<u32>(0x011d_ea3c);
+    let (count, searching) = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        let count = e.call(0x0099_31c0, &args![manager, target, slot]).u32();
+        (count, e.mem.u32(slot.addr()))
+    });
+    if count > 0 {
+        e.set(this, PlayerCharacter::bPlayerInCombat, true);
+        e.set(
+            this,
+            PlayerCharacter::bAllCombatTargetsSearching,
+            count == searching,
+        );
+    } else {
+        e.set(this, PlayerCharacter::bPlayerInCombat, false);
+        e.set(this, PlayerCharacter::bAllCombatTargetsSearching, false);
+    }
+}
+
+layout! {
+    /// A 0x1A0-byte object the player's update code drives (the constructor
+    /// allocates two; `009445b0` and `0095de30` use them): a table of 100
+    /// floats, an end value, the two endpoints of a remapping, the time left
+    /// and the duration. Its class name is not known; the field names
+    /// describe how the code uses them.
+    pub struct TimedCurve: 0x1A0 {
+        /// The table of 100 eased fractions that `00946020` remaps from
+        /// `[0, 1]` to `from..to` (400 bytes).
+        0x000 samples: Inline<()>,
+        /// The value `00946190` returns once the curve is over (what stores
+        /// it is not confirmed).
+        0x18C end_value: f32,
+        /// First endpoint given to `00946020`.
+        0x190 from: f32,
+        /// Second endpoint given to `00946020`.
+        0x194 to: f32,
+        /// Time left (`00939880` clears it).
+        0x198 remaining: f32,
+        /// Total duration given to `00946020`.
+        0x19C duration: f32,
+    }
+}
+
+/// The address of sample `index` of a [`TimedCurve`].
+fn curve_sample(this: Ptr<TimedCurve>, index: u32) -> u32 {
+    this.addr().wrapping_add(index.wrapping_mul(4))
+}
+
+// Translated from 00946020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts a [`TimedCurve`]: fills the 100-entry table with an eased ramp
+/// (two mirrored halves of 50: `ramp / 99` and `(99 - ramp) / 99`, the ramp
+/// advancing by a step that itself grows each time, constants `0102d934` and
+/// `01018144`), remaps every entry through `004b3ab0` from `[0, 1]` to
+/// `from..to`, and stores the endpoints and the duration (the time left
+/// starts at the duration). Always returns true: a test the compiler folded
+/// makes the failure path unreachable.
+pub fn timed_curve_start(
+    e: &mut Engine,
+    this: Ptr<TimedCurve>,
+    from: f32,
+    to: f32,
+    duration: f32,
+) -> bool {
+    let mut ramp = 0.0f32;
+    let mut step = e.global::<f32>(0x0102_d934);
+    let growth = e.global::<f32>(0x0101_8144);
+    let scale = e.global::<f64>(0x0107_5d30);
+    for i in 0..0x32u32 {
+        e.mem
+            .set_f32(curve_sample(this, i), (ramp as f64 / scale) as f32);
+        e.mem.set_f32(
+            curve_sample(this, 99 - i),
+            ((scale - ramp as f64) / scale) as f32,
+        );
+        ramp = (ramp as f64 + step as f64) as f32;
+        step = (step as f64 + growth as f64) as f32;
+    }
+    for i in 0..100u32 {
+        let sample = e.mem.f32(curve_sample(this, i));
+        let mapped = e
+            .call(0x004b_3ab0, &args![from, to, 0.0f32, 1.0f32, sample])
+            .f32();
+        e.mem.set_f32(curve_sample(this, i), mapped);
+    }
+    e.set(this, TimedCurve::from, from);
+    e.set(this, TimedCurve::to, to);
+    e.set(this, TimedCurve::duration, duration);
+    e.set(this, TimedCurve::remaining, duration);
+    true
+}
+
+// Translated from 00946140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Advances a [`TimedCurve`]: subtracts `time_step` from the time left and
+/// returns whether it is now at or below zero.
+pub fn timed_curve_advance(e: &mut Engine, this: Ptr<TimedCurve>, time_step: f32) -> bool {
+    let remaining = e.get(this, TimedCurve::remaining);
+    let remaining = (remaining as f64 - time_step as f64) as f32;
+    e.set(this, TimedCurve::remaining, remaining);
+    remaining <= 0.0
+}
+
+// Translated from 00946190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Current value of a [`TimedCurve`]. The table index is
+/// `ftol(00406cc0((duration - max(remaining, 0)) / duration * 99))`; at index
+/// 99 or beyond, or when the time is used up, the result is `end_value`,
+/// otherwise the remap (`004b3ab0`) of the two neighbouring table entries
+/// over `0..duration` at `duration - remaining`.
+pub fn timed_curve_value(e: &mut Engine, this: Ptr<TimedCurve>) -> f32 {
+    let remaining = e.get(this, TimedCurve::remaining);
+    let left = e.call(0x0040_4010, &args![remaining, 0.0f32]).f32();
+    let duration = e.get(this, TimedCurve::duration);
+    let scale = e.global::<f64>(0x0107_5d30);
+    let position = (((duration as f64 - left as f64) / duration as f64) * scale) as f32;
+    let rounded = e.call(0x0040_6cc0, &args![position]).f64();
+    let index = e.call(FTOL, &args![rounded]).i32();
+    if index >= 99 {
+        return e.get(this, TimedCurve::end_value);
+    }
+    let remaining = e.get(this, TimedCurve::remaining);
+    if remaining <= 0.0 {
+        return e.get(this, TimedCurve::end_value);
+    }
+    let duration = e.get(this, TimedCurve::duration);
+    let elapsed = (duration as f64 - remaining as f64) as f32;
+    let low = e.mem.f32(curve_sample(this, index as u32));
+    let high = e
+        .mem
+        .f32(curve_sample(this, (index as u32).wrapping_add(1)));
+    e.call(0x004b_3ab0, &args![low, high, 0.0f32, duration, elapsed])
+        .f32()
+}
+
+// Translated from 00946280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the time left of a [`TimedCurve`] is at or below zero.
+pub fn timed_curve_is_over(e: &mut Engine, this: Ptr<TimedCurve>) -> bool {
+    e.get(this, TimedCurve::remaining) <= 0.0
+}
+
+/// The address `offset` bytes into an untyped object.
+fn at_ptr(this: Ptr, offset: u32) -> u32 {
+    this.addr().wrapping_add(offset)
+}
+
+// Translated from 009462c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::AmmoSwapHelper` (Xbox PDB): cycles the equipped weapon's
+/// ammunition to the next type the player carries. `pCurrentProcess`
+/// (`+0x68`) slot `0x148` gives the equipped item change, `0044ddc0` turns
+/// it into the weapon; the weapon's ammo list (`+0xA4`) is walked from
+/// `00500940(00474a40(..))`, wrapping to the start, past the current ammo
+/// (`00525980`) until an entry the player has a stack of is found (the
+/// player's `00576260` and the stack count `00726070` > 0). With
+/// `keep_current` set and the current ammo still in stock nothing changes.
+/// The found ammo replaces the equipped item (slot `0x168`; its hotkey,
+/// `004bd7a0`, is carried over with `004bfb70`), and the player's slot
+/// `0x3EC` is called with the weapon, the draw state (2 when `draw` is set and
+/// the weapon is drawn, `008a16d0`) and whether `004bda70` (the mod effect
+/// check) holds.
+///
+/// The compiler's exception-unwinding state writes are not translated.
+pub fn player_character_ammo_swap_helper(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    draw: bool,
+    keep_current: bool,
+) {
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    if process == 0 {
+        return;
+    }
+    if e.vcall(process, 0x148, &args![]).u32() == 0 {
+        return;
+    }
+    let equipped = e.vcall(process, 0x148, &args![]).u32();
+    let weapon = if equipped != 0 {
+        e.call(0x0044_ddc0, &args![equipped]).u32()
+    } else {
+        0
+    };
+    if weapon == 0 {
+        return;
+    }
+    let ammo_list = weapon.wrapping_add(0xa4);
+    if e.call(0x0047_4a40, &args![ammo_list]).u32() == 0 {
+        return;
+    }
+    let first = e.call(0x0047_4a40, &args![ammo_list]).u32();
+    let mut node = e.call(0x0050_0940, &args![first]).u32();
+    let player_actor = e.global::<u32>(0x011d_ea3c);
+    let mut current = e.call(0x0052_5980, &args![weapon, player_actor]).u32();
+    let mut candidate = 0u32;
+    let mut found = false;
+    let mut seen_current = false;
+    if current != 0 && node != 0 {
+        let in_list = e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), current);
+            e.call(0x005f_65d0, &args![node, slot]).bool()
+        });
+        if !in_list {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            if process != 0 {
+                e.vcall(process, 0x168, &args![0u32]);
+            }
+            current = 0;
+        }
+    }
+    let mut item = e.call(0x0057_6260, &args![this, current, 0u32]).u32();
+    if keep_current && current != 0 && item != 0 && e.call(0x0072_6070, &args![item]).i32() > 0 {
+        e.call(0x0044_59e0, &args![item, 1u32]);
+        return;
+    }
+    if item != 0 {
+        e.call(0x0044_59e0, &args![item, 1u32]);
+    }
+    item = 0;
+    loop {
+        if node == 0 {
+            break;
+        }
+        let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+        candidate = e.mem.u32(slot);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+        if current == candidate {
+            if seen_current {
+                break;
+            }
+            seen_current = true;
+        } else if seen_current || current == 0 {
+            item = e.call(0x0057_6260, &args![this, candidate, 0u32]).u32();
+            if item != 0 && e.call(0x0072_6070, &args![item]).i32() > 0 {
+                found = true;
+                break;
+            }
+        }
+        let at_end = if node != 0 {
+            let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+            e.mem.u32(slot) == 0
+        } else {
+            true
+        };
+        if at_end {
+            let first = e.call(0x0047_4a40, &args![ammo_list]).u32();
+            node = e.call(0x0050_0940, &args![first]).u32();
+        }
+    }
+    if found {
+        let hotkey = e.call(0x004b_d7a0, &args![equipped]).i32();
+        if hotkey >= 0 {
+            let hotkey = e.call(0x004b_d7a0, &args![equipped]).u32();
+            e.call(0x004b_fb70, &args![this, hotkey, candidate]);
+        }
+        let changes = e.call(0x004b_f220, &args![this]).u32();
+        let count = e.call(0x004c_8f30, &args![changes, candidate]).u32();
+        let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+        let new_item = if block != 0 {
+            e.call(0x004b_c550, &args![block, candidate, count]).u32()
+        } else {
+            0
+        };
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        e.vcall(process, 0x168, &args![new_item]);
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let state = e.vcall(process, 0x14c, &args![]).u32();
+        e.call(0x006e_cd40, &args![state, 0u32]);
+        let draw_state = if draw && e.call(0x008a_16d0, &args![this]).bool() {
+            2u32
+        } else {
+            0
+        };
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let equipped_now = e.vcall(process, 0x148, &args![]).u32();
+        let mod_active = e.call(0x004b_da70, &args![equipped_now, 2u32]).u8();
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let equipped_now = e.vcall(process, 0x148, &args![]).u32();
+        let object = e.call(0x0044_ddc0, &args![equipped_now]).u32();
+        e.vcall(
+            this.addr(),
+            0x3ec,
+            &args![object, draw_state, mod_active as u32, !draw as u32],
+        );
+    }
+    if item != 0 {
+        e.call(0x0044_59e0, &args![item, 1u32]);
+    }
+}
+
+// Translated from 00947b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::CheckBorderRegion` (Xbox PDB): when the game setting
+/// byte at `011e08e0` is on and `00451530` on the global `011dea10` is
+/// false, decides whether the player stands inside the playable area:
+/// `bInBorderContainedCell` counts as inside; with border regions (`+0x7B0`)
+/// the player's position (`00436aa0`, turned into a 2D point by `004f7030`)
+/// is tested against every region's entries with `004f8360`; without them the
+/// player is inside unless the world space (`00575d70`) has a border region
+/// (`00586260`). Inside records the position (`SetLastKnownGoodPosition`),
+/// outside returns the player to the last good one (`0094dbe0`).
+pub fn player_character_check_border_region(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let setting = e.call(SETTING_BYTE_GETTER, &args![0x011e_08e0u32]).u32();
+    if e.mem.u8(setting) == 0 {
+        return;
+    }
+    let object = e.global::<u32>(0x011d_ea10);
+    if e.call(0x0045_1530, &args![object]).u8() != 0 {
+        return;
+    }
+    let mut inside = false;
+    if e.get(this, PlayerCharacter::bInBorderContainedCell) {
+        inside = true;
+    } else if e.get(this, PlayerCharacter::pBorderRegions) != Ptr::NULL {
+        let position = e.call(0x0043_6aa0, &args![this]).u32();
+        e.with_stack(8, |e, point| {
+            e.call(0x004f_7030, &args![point, position]);
+            let regions = e.get(this, PlayerCharacter::pBorderRegions);
+            let count = e.call(0x0065_8930, &args![regions]).u32();
+            let mut index = 0u32;
+            while index < count {
+                let regions = e.get(this, PlayerCharacter::pBorderRegions);
+                let entry = e.call(0x0087_7a30, &args![regions, index]).u32();
+                let region = e.mem.u32(entry);
+                if e.call(0x0044_0d80, &args![region]).u8() == 0 {
+                    let mut list = e.call(0x0044_1110, &args![region]).u32();
+                    while !inside && list != 0 && e.call(0x0082_56d0, &args![list]).u8() == 0 {
+                        let slot = e.call(LIST_ITEM_ADDRESS, &args![list]).u32();
+                        let border = e.mem.u32(slot);
+                        if e.call(0x004f_8360, &args![border, point]).u8() != 0 {
+                            inside = true;
+                        }
+                        list = e.call(LIST_NEXT, &args![list]).u32();
+                    }
+                }
+                if inside {
+                    break;
+                }
+                index += 1;
+            }
+        });
+    } else {
+        let world_space = e.call(0x0057_5d70, &args![this]).u32();
+        if world_space == 0 || e.call(0x0058_6260, &args![world_space]).u8() == 0 {
+            inside = true;
+        }
+    }
+    if inside {
+        player_character_set_last_known_good_position(e, this);
+    } else {
+        e.call(0x0094_dbe0, &args![this, 0u32]);
+    }
+}
+
+// Translated from 00947c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetLastKnownGoodPosition` (Xbox PDB): copies the
+/// player's position (`00436aa0`) into `LastKnownGoodPosition` and stores in
+/// `pLastKnownGoodLocation` the world space of the parent cell
+/// (`008d6f30`, then `0054ddd0`) or, when there is none, the parent cell
+/// itself.
+pub fn player_character_set_last_known_good_position(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let position = e.call(0x0043_6aa0, &args![this]).u32();
+    let target = member(this, PlayerCharacter::LastKnownGoodPosition);
+    for i in 0..3 {
+        let word = e.mem.u32(position + 4 * i);
+        e.mem.set_u32(target + 4 * i, word);
+    }
+    let location = if e.call(0x008d_6f30, &args![this]).u32() != 0 {
+        let cell = e.call(0x008d_6f30, &args![this]).u32();
+        if e.call(0x0054_ddd0, &args![cell]).u32() != 0 {
+            let cell = e.call(0x008d_6f30, &args![this]).u32();
+            e.call(0x0054_ddd0, &args![cell]).u32()
+        } else {
+            e.call(0x008d_6f30, &args![this]).u32()
+        }
+    } else {
+        e.call(0x008d_6f30, &args![this]).u32()
+    };
+    e.set(
+        this,
+        PlayerCharacter::pLastKnownGoodLocation,
+        Ptr::new(location),
+    );
+}
+
+/// Deletes every item of the `BSSimpleList` at `list` with `operator delete`,
+/// then clears the list (`00470470`): the shared body of the two "clear a
+/// list of heap structs" functions.
+fn delete_list_items(e: &mut Engine, list: u32) {
+    let mut node = list;
+    while node != 0 {
+        let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(slot);
+        e.call(OPERATOR_DELETE, &args![item]);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    e.call(LIST_CLEAR, &args![list]);
+}
+
+/// Clears and, when it is not null, deletes the temporary list `list` the
+/// way the compiler does for a local `BSSimpleList *`.
+fn release_temporary_list(e: &mut Engine, list: u32) {
+    e.call(LIST_CLEAR, &args![list]);
+    if list != 0 {
+        e.call(LIST_DELETING_DESTRUCT, &args![list, 1u32]);
+    }
+}
+
+// Translated from 00947d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees every `AudioMarkerList` entry (`operator delete`), clears the list
+/// and resets `pClosestAudioMarkerInfo`.
+pub fn fn_00947d10(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    delete_list_items(e, member(this, PlayerCharacter::AudioMarkerList));
+    e.set(this, PlayerCharacter::pClosestAudioMarkerInfo, Ptr::NULL);
+}
+
+// Translated from 00947d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Rebuilds `AudioMarkerList`: clears it, takes the marker references of the
+/// player's world space (`005883c0(worldSpace, 1)`) or, outside any, of the
+/// parent cell (`008d6f30` fills a fresh list with `0054b8c0`), wraps every
+/// non-null reference in an 8-byte entry (`00948000`) and appends the entry
+/// with `005ae3d0` when its second word is set, else frees it.
+///
+/// The compiler's exception-unwinding state writes are not translated.
+pub fn fn_00947d80(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let world_space = e.call(0x0057_5d70, &args![this]).u32();
+    fn_00947d10(e, this);
+    let list = if world_space != 0 {
+        e.call(0x0058_83c0, &args![world_space, 1u32]).u32()
+    } else {
+        let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let list = if block != 0 {
+            e.call(LIST_CONSTRUCT, &args![block]).u32()
+        } else {
+            0
+        };
+        let cell = e.call(0x008d_6f30, &args![this]).u32();
+        if cell != 0 {
+            e.call(0x0054_b8c0, &args![cell, list]);
+        }
+        list
+    };
+    let mut node = list;
+    while node != 0 {
+        let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+        let reference = e.mem.u32(slot);
+        if reference != 0 {
+            let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            let entry = if block != 0 {
+                e.call(0x0094_8000, &args![block, reference]).u32()
+            } else {
+                0
+            };
+            if e.mem.u32(entry.wrapping_add(4)) != 0 {
+                e.with_stack(4, |e, holder| {
+                    e.mem.set_u32(holder.addr(), entry);
+                    e.call(
+                        0x005a_e3d0,
+                        &args![member(this, PlayerCharacter::AudioMarkerList), holder],
+                    );
+                });
+            } else {
+                e.call(OPERATOR_DELETE, &args![entry]);
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    release_temporary_list(e, list);
+}
+
+// Translated from 00948000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 8-byte audio marker entry: stores `reference` and, when
+/// it is not null, the value `00569080` returns for it. Returns the entry.
+pub fn fn_00948000(e: &mut Engine, this: Ptr, reference: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), reference);
+    if reference != 0 {
+        let value = e.call(0x0056_9080, &args![reference]).u32();
+        e.mem.set_u32(this.addr() + 4, value);
+    }
+    this
+}
+
+// Translated from 00948030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the address of the player's `MapMarkerList` (`+0x7C8`).
+pub fn fn_00948030(_e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    member(this, PlayerCharacter::MapMarkerList)
+}
+
+// Translated from 00948050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ClearMapMarkerStructList` (Xbox PDB): frees every
+/// `MapMarkerList` entry, clears the list and resets `pMapWorld`.
+pub fn player_character_clear_map_marker_struct_list(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    delete_list_items(e, member(this, PlayerCharacter::MapMarkerList));
+    e.set(this, PlayerCharacter::pMapWorld, Ptr::NULL);
+}
+
+// Translated from 009480c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ResetMapMarkerStructList` (Xbox PDB): when the player's
+/// world space differs from `pMapWorld`, clears the list and (for a world
+/// space) refills it from the world space's map marker references
+/// (`005882a0(worldSpace, 1)`): each non-null reference gets an 8-byte entry
+/// {`00569060(reference)`, reference}, appended (`005ae3d0`) when its first
+/// word is set, else freed. `pMapWorld` becomes the world space.
+pub fn player_character_reset_map_marker_struct_list(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let world_space = e.call(0x0057_5d70, &args![this]).u32();
+    if e.get(this, PlayerCharacter::pMapWorld).addr() == world_space {
+        return;
+    }
+    player_character_clear_map_marker_struct_list(e, this);
+    if world_space != 0 {
+        let list = e.call(0x0058_82a0, &args![world_space, 1u32]).u32();
+        let mut node = list;
+        while node != 0 {
+            let slot = e.call(LIST_ITEM_ADDRESS, &args![node]).u32();
+            let reference = e.mem.u32(slot);
+            if reference != 0 {
+                let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+                let data = e.call(0x0056_9060, &args![reference]).u32();
+                e.mem.set_u32(entry, data);
+                e.mem.set_u32(entry + 4, reference);
+                if e.mem.u32(entry) != 0 {
+                    e.with_stack(4, |e, holder| {
+                        e.mem.set_u32(holder.addr(), entry);
+                        e.call(
+                            0x005a_e3d0,
+                            &args![member(this, PlayerCharacter::MapMarkerList), holder],
+                        );
+                    });
+                } else {
+                    e.call(OPERATOR_DELETE, &args![entry]);
+                }
+            }
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        release_temporary_list(e, list);
+    }
+    e.set(this, PlayerCharacter::pMapWorld, Ptr::new(world_space));
+}
+
+// Translated from 009481d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Re-synchronises the two player animations (`00950a60` for index 0 and 1)
+/// while the process says (slots `0x1A8` and `0x454` of `pCurrentProcess`)
+/// and the anim action (`008a7570`) is 5: when `0070f490(first, 4)` is 1,
+/// both animations skip an update (`008eeaa0(4)`), then each animation with
+/// a `00491040(4)` object gets that object's time
+/// (`005f3780(0048f7f0(object, 1))` minus `00639aa0(object)`) passed to
+/// `00966a00`.
+pub fn fn_009481d0(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let first = e.call(0x0095_0a60, &args![this, 0u32]).u32();
+    let second = e.call(0x0095_0a60, &args![this, 1u32]).u32();
+    if first == 0 || second == 0 {
+        return;
+    }
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    if e.vcall(process, 0x1a8, &args![]).u8() == 0 {
+        return;
+    }
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    if e.vcall(process, 0x454, &args![]).u8() == 0 {
+        return;
+    }
+    if e.call(0x008a_7570, &args![this]).u32() != 5 {
+        return;
+    }
+    if e.call(0x0070_f490, &args![first, 4u32]).u32() != 1 {
+        return;
+    }
+    e.call(0x008e_eaa0, &args![first, 4u32]);
+    e.call(0x008e_eaa0, &args![second, 4u32]);
+    for animation in [first, second] {
+        let object = e.call(0x0049_1040, &args![animation, 4u32]).u32();
+        if object != 0 {
+            let holder = e.call(0x0048_f7f0, &args![object, 1u32]).u32();
+            let time = e.call(0x005f_3780, &args![holder]).f64();
+            let base = e.call(0x0063_9aa0, &args![object]).f64();
+            let delta = (time - base) as f32;
+            e.call(0x0096_6a00, &args![animation, delta]);
+        }
+    }
+}
+
+// Translated from 0094a070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns `(float at +0x30 - float at +0x2C) / float at +0x28` of its object.
+pub fn fn_0094a070(e: &mut Engine, this: Ptr) -> f32 {
+    let high = e.mem.f32(at_ptr(this, 0x30)) as f64;
+    let low = e.mem.f32(at_ptr(this, 0x2c)) as f64;
+    let span = e.mem.f32(at_ptr(this, 0x28)) as f64;
+    ((high - low) / span) as f32
+}
+
+// Translated from 0094a0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `+0x198` of its object.
+pub fn fn_0094a0a0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(at_ptr(this, 0x198))
+}
+
+// Translated from 0094c380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00621370(this, 0)`.
+pub fn fn_0094c380(e: &mut Engine, this: Ptr) {
+    e.call(0x0062_1370, &args![this, 0u32]);
+}
+
+// Translated from 0094c3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the object the global `011d96c0` points to exists, stores
+/// `scale * (float game setting at 011d9748)` into its float at `+0x274`.
+pub fn fn_0094c3a0(e: &mut Engine, scale: f32) {
+    let object = e.global::<u32>(0x011d_96c0);
+    if object != 0 {
+        let setting = e.call(SETTING_FLOAT_GETTER, &args![0x011d_9748u32]).u32();
+        let value = e.mem.f32(setting);
+        e.mem
+            .set_f32(object + 0x274, (scale as f64 * value as f64) as f32);
+    }
+}
+
+// Translated from 0094c3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads an actor value modifier of the player: `kind` 0 selects
+/// `TemporaryActorValueModifiers`, 1 `ScriptActorValueModifiers`, 2 the
+/// damage modifiers (`fHealthModifier` for actor value 0x10,
+/// `DamageActorValueModifiers` otherwise); any other `kind` gives 0.
+pub fn fn_0094c3d0(e: &mut Engine, this: Ptr<PlayerCharacter>, kind: u32, actor_value: u32) -> f32 {
+    match kind {
+        0 => e.mem.f32(at(this, 0x244 + actor_value.wrapping_mul(4))),
+        1 => e.mem.f32(at(this, 0x378 + actor_value.wrapping_mul(4))),
+        2 => {
+            if actor_value == 0x10 {
+                e.get(this, PlayerCharacter::fHealthModifier)
+            } else {
+                e.mem.f32(at(this, 0x4b0 + actor_value.wrapping_mul(4)))
+            }
+        }
+        _ => 0.0,
+    }
+}
+
+// Translated from 0094c460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorValueOwner` base override: the temporary modifier (kind 0) of the
+/// player for `actor_value`; `this` is the `ActorValueOwner` subobject
+/// (`PlayerCharacter + 0xA4`). The float result stays in `ST0` from
+/// [`fn_0094c3d0`].
+pub fn fn_0094c460(e: &mut Engine, this: Ptr, actor_value: u32) -> f32 {
+    let player = Ptr::new(this.addr().wrapping_sub(ACTOR_VALUE_OWNER_BASE));
+    fn_0094c3d0(e, player, 0, actor_value)
+}
+
+/// Global pointer to the actor the look code of modes 1 to 3 turns the player
+/// towards, and (`011a59f0`) the body part index it is aimed at.
+const LOOK_TARGET_ACTOR: u32 = 0x011f_21cc;
+const LOOK_TARGET_PART: u32 = 0x011a_59f0;
+/// The actor the look state (below) was last built for.
+const LAST_LOOK_TARGET: u32 = 0x011e_0be0;
+/// Bit 0: `LOOK_CENTER` initialised; bit 1: `LOOK_LAST_HEIGHT` initialised.
+const LOOK_FLAGS: u32 = 0x011e_0bdc;
+/// The three floats of the aim point of the target (centre of its body parts).
+const LOOK_CENTER: u32 = 0x011e_0bd0;
+/// The last height (z) the camera was aimed at.
+const LOOK_LAST_HEIGHT: u32 = 0x011e_0bcc;
+/// Float added to the height of the aim point.
+const LOOK_HEIGHT_OFFSET: u32 = 0x011e_075c;
+/// Globals holding pointers to the two [`TimedCurve`] objects (heading, then
+/// pitch) that smooth the look.
+const HEADING_CURVE: u32 = 0x011e_0774;
+const PITCH_CURVE: u32 = 0x011e_0760;
+/// Byte global: set while the smoothed look is used.
+const SMOOTH_LOOK_ENABLED: u32 = 0x011a_3b31;
+/// Byte globals tested by the look input code (`011e07b8`: the player is in a
+/// mode with a free camera, `011e07c1`: the analog input is a second stick).
+const FREE_CAMERA_FLAG: u32 = 0x011e_07b8;
+const SECOND_STICK_FLAG: u32 = 0x011e_07c1;
+/// Floats the look input code keeps: the zoom distance (`011e0b5c`) and the
+/// two accumulated angles (`011e0b60`, `011e0b58`); and the heading and pitch
+/// of the player when the input was last handled (`011e076c`, `011e0764`).
+const ZOOM_DISTANCE: u32 = 0x011e_0b5c;
+const ACCUMULATED_YAW: u32 = 0x011e_0b60;
+const ACCUMULATED_PITCH: u32 = 0x011e_0b58;
+const LAST_HEADING: u32 = 0x011e_076c;
+const LAST_PITCH: u32 = 0x011e_0764;
+/// Float global set to a turn speed estimate while the player turns.
+const TURN_SPEED: u32 = 0x011a_3b40;
+/// `NiCamera::WorldPtToScreenPt`'s tolerance (a float in the exe).
+const SCREEN_TOLERANCE: u32 = 0x0107_18c0;
+
+/// The three words copied from the `NiPoint3` the node getter `0045bb80`
+/// returns for `node`.
+fn node_position(e: &mut Engine, node: u32) -> [u32; 3] {
+    let position = e.call(0x0045_bb80, &args![node]).u32();
+    read_words(e, position)
+}
+
+/// `NiAVObject::GetObjectByName(root, name)` of the part `part` (a body part
+/// data entry): the node named by `0043b230(part)` under the 3D root of
+/// `actor` (slot `0x1D0`).
+fn body_part_node(e: &mut Engine, actor: u32, part: u32) -> u32 {
+    let name = e.call(0x0043_b230, &args![part]).u32();
+    let root = e.vcall(actor, 0x1d0, &args![]).u32();
+    e.call(0x004a_ae30, &args![root, name]).u32()
+}
+
+/// Projects `position` (three words in the frame) to the screen with
+/// `NiCamera::WorldPtToScreenPt` (`00a6fc50`) on the camera chain
+/// `006629f0(0045c670())`; the two outputs are the screen x and y.
+fn project_to_screen(e: &mut Engine, position: u32, screen: u32) {
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let tolerance = e.global::<f32>(SCREEN_TOLERANCE);
+    e.call(
+        0x00a6_fc50,
+        &args![space, position, screen, screen + 4, tolerance],
+    );
+}
+
+/// `GetAngleToProjectedPoint` (`009a8af0`) from the camera position to
+/// `target`: returns the angles (x: pitch, z: heading) in the order the
+/// callee writes them.
+fn angles_from_camera(e: &mut Engine, target: [u32; 3]) -> [f32; 3] {
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let position = e.call(0x0045_bb80, &args![space]).u32();
+    let origin = read_words(e, position);
+    e.with_stack(12, |e, out| {
+        e.call(
+            0x009a_8af0,
+            &args![out, origin[0], origin[1], origin[2], target[0], target[1], target[2]],
+        );
+        read_floats(e, out.addr())
+    })
+}
+
+/// Brings `angle` into `[-pi, pi]` by adding or subtracting `2 pi` (the
+/// double constants at `0101ff40`, `0101ff48` and `0101ff58`), rounding to a
+/// float at each step.
+fn wrap_angle(e: &mut Engine, angle: f32) -> f32 {
+    let pi = e.global::<f64>(0x0101_ff40);
+    let two_pi = e.global::<f64>(0x0101_ff48);
+    let minus_pi = e.global::<f64>(0x0101_ff58);
+    let mut angle = angle;
+    while angle as f64 > pi {
+        angle = (angle as f64 - two_pi) as f32;
+    }
+    while (angle as f64) < minus_pi {
+        angle = (angle as f64 + two_pi) as f32;
+    }
+    angle
+}
+
+/// Truncates like `_ftol2_sse` (`00ec62c0`).
+fn truncate(e: &mut Engine, value: f64) -> i32 {
+    e.call(FTOL, &args![value]).i32()
+}
+
+/// A game setting that holds an integer (`0043d4d0`).
+fn setting_int(e: &mut Engine, setting: u32) -> i32 {
+    let value = e.call(SETTING_INT_GETTER, &args![setting]).u32();
+    e.mem.i32(value)
+}
+
+// Translated from 009445b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player's look handling, called with the frame time, whether the aim
+/// button is down and a pointer to the 16-bit input flag word to update. The
+/// mode of the `VATS` object (`0044ddc0`) selects what happens, and the
+/// result is whether look input was used:
+///
+/// - mode 0, the free look: reads the analog look input, turns the player
+///   (`0x931d30`/`0x931e50`) and handles the zoom ([`apply_look_input`]);
+/// - modes 1 to 3, the VATS camera: [`follow_look_target`];
+/// - mode 4, the VATS camera on an action's target:
+///   [`look_at_vats_action_target`];
+/// - any other mode does nothing and returns 0.
+pub fn fn_009445b0(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    time_step: f32,
+    aim_pressed: bool,
+    flags: Ptr,
+    _unused_4: u32,
+) -> u8 {
+    match e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() {
+        0 => apply_look_input(e, this, time_step, aim_pressed, flags),
+        1..=3 => {
+            follow_look_target(e, this, time_step);
+            0
+        }
+        4 => look_at_vats_action_target(e, this, flags),
+        _ => 0,
+    }
+}
+
+/// Mode 4 of [`fn_009445b0`]: the current VATS action (`009c71c0`) names a
+/// target actor (`+0xC`) and a body part (`+0x10`, -1 for none). The aim
+/// point is the part's node when the actor is an actor (slot `0x100`) with
+/// body part data, else the centre of its 3D world bound, else its position
+/// (slot `0x1F4`); an actor with process slot `0x1A8` set is aimed higher by
+/// `572380` times a setting. `009a88e0` turns that point into angles that are
+/// stored with slot `0x2C4` (heading) and `SetLooking` (pitch). Finally the
+/// VATS object is updated (`009c7240`) and the input flags get the player's
+/// `008846e0` bits masked with `0xCC00`. The result is always 1.
+///
+/// The temporary `NiPoint3` constructor calls (`006815c0`, which return
+/// their argument) are omitted.
+fn look_at_vats_action_target(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: Ptr) -> u8 {
+    let mut target = 0u32;
+    let mut body_part = 0xffff_ffffu32;
+    if e.call(0x009c_71c0, &args![VATS_OBJECT]).u32() != 0 {
+        let action = e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
+        target = e.mem.u32(action + 0xc);
+        let action = e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
+        body_part = e.mem.u32(action + 0x10);
+    }
+    if target != 0 {
+        let root = e.vcall(target, 0x1d0, &args![]).u32();
+        let mut aim = [0u32; 3];
+        let mut found = false;
+        if body_part != 0xffff_ffff && e.vcall(target, 0x100, &args![]).u8() != 0 {
+            let owner = e.call(0x0041_81e0, &args![target]).u32();
+            let data = e.vcall(owner, 0x180, &args![]).u32();
+            if data != 0 {
+                let part = e.call(0x005e_5130, &args![data, body_part]).u32();
+                if part != 0 {
+                    let node = body_part_node(e, target, part);
+                    if node != 0 {
+                        aim = node_position(e, node);
+                        found = true;
+                    }
+                }
+            }
+        }
+        if !found {
+            if root != 0 {
+                let bound = e.call(0x0043_d450, &args![root]).u32();
+                let centre = e.call(LIST_ITEM_ADDRESS, &args![bound]).u32();
+                aim = read_words(e, centre);
+            } else {
+                let position = e.vcall(target, 0x1f4, &args![]).u32();
+                aim = read_words(e, position);
+            }
+        }
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        if e.vcall(process, 0x1a8, &args![]).u8() != 0 {
+            let height = e.with_stack(12, |e, point| {
+                for (i, word) in aim.iter().enumerate() {
+                    e.mem.set_u32(point.addr() + 4 * i as u32, *word);
+                }
+                e.call(0x0057_2380, &args![this, point]).f64()
+            });
+            let scale = setting_float(e, 0x011c_e768);
+            let raised = scale as f64 * height + f32::from_bits(aim[2]) as f64;
+            aim[2] = (raised as f32).to_bits();
+        }
+        let angles = e.with_stack(12, |e, out| {
+            e.call(0x009a_88e0, &args![out, this, aim[0], aim[1], aim[2]]);
+            read_floats(e, out.addr())
+        });
+        e.vcall(this.addr(), 0x2c4, &args![angles[2]]);
+        e.call(0x0093_1d90, &args![this, angles[0]]);
+    }
+    e.call(0x009c_7240, &args![VATS_OBJECT]);
+    let bits = e.call(0x0088_46e0, &args![this]).u32();
+    e.mem.set_u16(flags.addr(), (bits & 0xcc00) as u16);
+    1
+}
+
+/// Modes 1 to 3 of [`fn_009445b0`]: smoothly turns the player to look at the
+/// VATS target actor (`011f21cc`) with two [`TimedCurve`] objects (heading
+/// `011e0774`, pitch `011e0760`).
+///
+/// First `0095de30(time_step)` runs. Without a target nothing else happens.
+/// The aim point is the target's world position (3D root slot `0x1D0` through
+/// `0045bb80`, or slot `0x1F4` without a 3D root). For an actor (slot
+/// `0x100`) it is replaced by the average position of the target's body part
+/// nodes ([`LOOK_CENTER`], rebuilt when the target changed: just the torso,
+/// part 1, when it is closer than the global `011a3b60`, otherwise all 15
+/// parts), and moved up by [`LOOK_HEIGHT_OFFSET`], which is set from the
+/// screen positions of the parts in mode 2 with the VATS menu open, or from
+/// the aimed body part or the acquire object. The angles from the camera to
+/// the final point (`GetAngleToProjectedPoint_ov2`) are wrapped to within pi
+/// of the player's heading and pitch; when the point changed the two curves
+/// are restarted from the current heading and pitch with a duration from a
+/// setting (`0x11d48dc` for mode 1; mode 2 `0x11d4588`, or `0x11d4a2c` once
+/// the target was already looked at; the float `01016264` otherwise); the
+/// curves are advanced by `0084d030(0x11f6394)`, and the player's heading
+/// (slot `0x2C4`) and pitch (`SetLooking`) are set from them. Finally
+/// `007f3bd0` is told whether both curves are over with the smooth look
+/// enabled.
+///
+/// The temporary `NiPoint3` constructor calls (`006815c0`, which return
+/// their argument) are omitted.
+fn follow_look_target(e: &mut Engine, this: Ptr<PlayerCharacter>, time_step: f32) {
+    let actor = e.global::<u32>(LOOK_TARGET_ACTOR);
+    let part_index = e.global::<u32>(LOOK_TARGET_PART);
+    e.call(0x0095_de30, &args![this, time_step]);
+    if actor == 0 {
+        return;
+    }
+    let heading_curve = Ptr::<TimedCurve>::new(e.global::<u32>(HEADING_CURVE));
+    let pitch_curve = Ptr::<TimedCurve>::new(e.global::<u32>(PITCH_CURVE));
+    let root = e.vcall(actor, 0x1d0, &args![]).u32();
+    let mut changed = false;
+    let mut saved_offset = 0.0f32;
+    let mut same_target = true;
+    if e.global::<u32>(LOOK_TARGET_ACTOR) != e.global::<u32>(LAST_LOOK_TARGET) {
+        let current = e.global::<u32>(LOOK_TARGET_ACTOR);
+        e.set_global(LAST_LOOK_TARGET, current);
+        changed = true;
+        same_target = false;
+        if e.vcall(actor, 0x100, &args![]).u8() != 0 {
+            e.set_global(LOOK_HEIGHT_OFFSET, 0.0f32);
+            saved_offset = e.global::<f32>(LOOK_HEIGHT_OFFSET);
+        } else {
+            e.set_global(LOOK_HEIGHT_OFFSET, 0.0f32);
+        }
+    }
+    let mut aim;
+    if root != 0 {
+        let node = e.vcall(actor, 0x1d0, &args![]).u32();
+        aim = node_position(e, node);
+        if e.vcall(actor, 0x100, &args![]).u8() != 0 {
+            aim = aim_at_actor(e, this, actor, part_index, changed, saved_offset);
+            let height = f32::from_bits(aim[2]);
+            let offset = e.global::<f32>(LOOK_HEIGHT_OFFSET);
+            aim[2] = ((height as f64 + offset as f64) as f32).to_bits();
+        }
+    } else {
+        let position = e.vcall(actor, 0x1f4, &args![]).u32();
+        aim = read_words(e, position);
+    }
+    let height = f32::from_bits(aim[2]);
+    if e.global::<u32>(LOOK_FLAGS) & 2 == 0 {
+        let flags = e.global::<u32>(LOOK_FLAGS);
+        e.set_global(LOOK_FLAGS, flags | 2);
+        e.set_global(LOOK_LAST_HEIGHT, height);
+    }
+    if e.global::<f32>(LOOK_LAST_HEIGHT) != height
+        && timed_curve_is_over(e, heading_curve)
+        && timed_curve_is_over(e, pitch_curve)
+    {
+        e.set_global(LOOK_LAST_HEIGHT, height);
+        changed = true;
+    }
+    let mut angles = angles_from_camera(e, aim);
+    let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+    let mut heading_error = (angles[2] as f64 - heading as f64) as f32;
+    let pitch = e.call(0x0093_1d70, &args![this]).f32();
+    let mut pitch_error = (angles[0] as f64 - pitch as f64) as f32;
+    heading_error = wrap_angle(e, heading_error);
+    pitch_error = wrap_angle(e, pitch_error);
+    let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+    angles[2] = (heading as f64 + heading_error as f64) as f32;
+    let pitch = e.call(0x0093_1d70, &args![this]).f32();
+    angles[0] = (pitch as f64 + pitch_error as f64) as f32;
+    if changed {
+        let mode = e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32();
+        let duration = if mode == 1 {
+            setting_float(e, 0x011d_48dc)
+        } else if mode == 2 {
+            if same_target {
+                setting_float(e, 0x011d_4588)
+            } else {
+                setting_float(e, 0x011d_4a2c)
+            }
+        } else {
+            e.global::<f32>(0x0101_6264)
+        };
+        let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+        timed_curve_start(e, heading_curve, heading, angles[2], duration);
+        let pitch = e.call(0x0093_1d70, &args![this]).f32();
+        timed_curve_start(e, pitch_curve, pitch, angles[0], duration);
+    }
+    let step = e.call(0x0084_d030, &args![0x011f_6394u32]).f32();
+    timed_curve_advance(e, heading_curve, step);
+    let step = e.call(0x0084_d030, &args![0x011f_6394u32]).f32();
+    timed_curve_advance(e, pitch_curve, step);
+    let new_heading = timed_curve_value(e, heading_curve);
+    let new_pitch = timed_curve_value(e, pitch_curve);
+    e.vcall(this.addr(), 0x2c4, &args![new_heading]);
+    e.call(0x0093_1d90, &args![this, new_pitch]);
+    let running = timed_curve_is_over(e, heading_curve)
+        && timed_curve_is_over(e, pitch_curve)
+        && e.mem.u8(SMOOTH_LOOK_ENABLED) != 0;
+    e.call(0x007f_3bd0, &args![running as u32]);
+}
+
+/// The part of [`follow_look_target`] for an actor target (slot `0x100`):
+/// rebuilds the aim point [`LOOK_CENTER`] when `changed`, then returns the
+/// aim point (the centre, moved by the screen-space adjustments of
+/// [`LOOK_HEIGHT_OFFSET`]).
+fn aim_at_actor(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    part_index: u32,
+    changed: bool,
+    saved_offset: f32,
+) -> [u32; 3] {
+    if e.global::<u32>(LOOK_FLAGS) & 1 == 0 {
+        let flags = e.global::<u32>(LOOK_FLAGS);
+        e.set_global(LOOK_FLAGS, flags | 1);
+        for i in 0..3 {
+            let word = e.mem.u32(ZERO_VECTOR + 4 * i);
+            e.mem.set_u32(LOOK_CENTER + 4 * i, word);
+        }
+    }
+    if changed {
+        rebuild_look_center(e, actor);
+    }
+    let aim = read_words(e, LOOK_CENTER);
+    let mut covered = false;
+    let input = e.call(0x004b_7210, &args![]).u32();
+    let curves_idle = |e: &mut Engine| {
+        timed_curve_is_over(e, Ptr::new(e.global::<u32>(HEADING_CURVE)))
+            && timed_curve_is_over(e, Ptr::new(e.global::<u32>(PITCH_CURVE)))
+    };
+    if e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 2
+        && e.call(0x0075_5680, &args![input]).u8() != 0
+        && curves_idle(e)
+    {
+        e.call(0x0074_7d00, &args![input]);
+        let selected = e.call(0x0073_b020, &args![input]).i32();
+        if selected >= 0 {
+            let menu_value = e.call(0x0071_5da0, &args![]).f64();
+            let selected_value = selected as f64;
+            if menu_value >= selected_value {
+                let threshold = setting_float(e, 0x011c_e8b8);
+                let divisor = e.call(0x0071_5da0, &args![]).f64();
+                let ratio = (selected_value / divisor) as f32;
+                covered = true;
+                let mut highest = 0.0f32;
+                let mut lowest = 0.0f32;
+                let owner = e.call(0x0041_81e0, &args![actor]).u32();
+                let data = e.vcall(owner, 0x180, &args![]).u32();
+                let parts = e.call(0x006a_9540, &args![data]).u32();
+                for index in 0..15u32 {
+                    if e.mem.u32(parts + 4 * index) == 0 {
+                        continue;
+                    }
+                    let part = e.call(0x005e_50f0, &args![data, index]).u32();
+                    let node = body_part_node(e, actor, part);
+                    if node == 0 {
+                        continue;
+                    }
+                    e.with_stack(12, |e, screen| {
+                        let position = e.call(0x0045_bb80, &args![node]).u32();
+                        project_to_screen(e, position, screen.addr());
+                    });
+                    let position = e.call(0x0045_bb80, &args![node]).u32();
+                    let part_height = e.mem.f32(position + 8);
+                    if highest == 0.0 || highest < part_height {
+                        highest = part_height;
+                    }
+                    if lowest == 0.0 || part_height < lowest {
+                        lowest = part_height;
+                    }
+                }
+                let angles = angles_from_camera(e, aim);
+                let height = f32::from_bits(aim[2]);
+                if threshold > ratio {
+                    e.set_global(LOOK_HEIGHT_OFFSET, (highest as f64 - height as f64) as f32);
+                } else if ratio as f64 > 1.0 - threshold as f64 {
+                    e.set_global(LOOK_HEIGHT_OFFSET, (lowest as f64 - height as f64) as f32);
+                } else {
+                    let looking = e.call(0x0093_1d70, &args![this]).f32();
+                    let mut keep = angles[0] < looking && (ratio as f64) < threshold as f64 * 2.0;
+                    if !keep {
+                        let looking = e.call(0x0093_1d70, &args![this]).f32();
+                        keep = angles[0] > looking && (ratio as f64) > 1.0 - threshold as f64 * 2.0;
+                    }
+                    if keep {
+                        e.set_global(LOOK_HEIGHT_OFFSET, saved_offset);
+                    } else {
+                        covered = false;
+                    }
+                }
+            }
+        }
+    }
+    if !covered
+        && e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() != 3
+        && e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() != 1
+        && e.mem.u8(SMOOTH_LOOK_ENABLED) != 0
+        && curves_idle(e)
+    {
+        let owner = e.call(0x0041_81e0, &args![actor]).u32();
+        let data = e.vcall(owner, 0x180, &args![]).u32();
+        if data != 0 {
+            let part = e.call(0x005e_5130, &args![data, part_index]).u32();
+            let mut acquired = 0u32;
+            let current = e.global::<u32>(LOOK_TARGET_ACTOR);
+            if e.vcall(current, 0x100, &args![]).u8() != 0 {
+                let process = e.call(0x008d_8520, &args![current]).u32();
+                let current = e.global::<u32>(LOOK_TARGET_ACTOR);
+                let object = e.vcall(current, 0x1e8, &args![]).u32();
+                acquired = e.vcall(process, 0x190, &args![object]).u32();
+            }
+            let node = if part != 0 {
+                body_part_node(e, actor, part)
+            } else {
+                acquired
+            };
+            if node != 0 {
+                let target = node_position(e, node);
+                let outputs = e.with_stack(20, |e, frame| {
+                    for (i, word) in target.iter().enumerate() {
+                        e.mem.set_u32(frame.addr() + 8 + 4 * i as u32, *word);
+                    }
+                    project_to_screen(e, frame.addr() + 8, frame.addr());
+                    e.mem.f32(frame.addr() + 4)
+                });
+                let threshold = setting_float(e, 0x011c_ef2c);
+                let doubled = threshold as f64 + threshold as f64;
+                if (outputs as f64) < doubled || (outputs as f64) > 1.0 - doubled {
+                    let offset = f32::from_bits(target[2]) as f64 - f32::from_bits(aim[2]) as f64;
+                    e.set_global(LOOK_HEIGHT_OFFSET, offset as f32);
+                }
+            }
+        }
+    }
+    aim
+}
+
+/// Rebuilds [`LOOK_CENTER`] for `actor`: the sum of the positions of its
+/// body part nodes divided by their count. When the torso node (part 1) is
+/// within the distance `011a3b60` of the player it alone counts, otherwise
+/// every one of the 15 parts that has a node.
+fn rebuild_look_center(e: &mut Engine, actor: u32) {
+    let owner = e.call(0x0041_81e0, &args![actor]).u32();
+    let data = e.vcall(owner, 0x180, &args![]).u32();
+    let parts = e.call(0x006a_9540, &args![data]).u32();
+    e.with_stack(0x30, |e, frame| {
+        let sum = frame.addr();
+        let point = sum + 12;
+        let quotient = sum + 24;
+        let difference = sum + 36;
+        for i in 0..3 {
+            let word = e.mem.u32(ZERO_VECTOR + 4 * i);
+            e.mem.set_u32(sum + 4 * i, word);
+        }
+        let mut count = 0u32;
+        let mut torso = 0u32;
+        if e.mem.u32(parts + 4) != 0 {
+            let part = e.call(0x005e_50f0, &args![data, 1u32]).u32();
+            torso = body_part_node(e, actor, part);
+        }
+        let mut only_torso = false;
+        if torso != 0 {
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let root = e.vcall(player, 0x1d0, &args![]).u32();
+            let player_position = e.call(0x0045_bb80, &args![root]).u32();
+            let torso_position = e.call(0x0045_bb80, &args![torso]).u32();
+            let offset = e
+                .call(
+                    0x0043_9ef0,
+                    &args![torso_position, difference, player_position],
+                )
+                .u32();
+            let distance = e.call(0x0045_7990, &args![offset]).f64();
+            let limit = e.mem.i32(0x011a_3b60) as f64;
+            if distance < limit {
+                only_torso = true;
+                count += 1;
+                let words = node_position(e, torso);
+                for (i, word) in words.iter().enumerate() {
+                    e.mem.set_u32(point + 4 * i as u32, *word);
+                }
+                e.call(0x0063_c8a0, &args![sum, point]);
+            }
+        }
+        if !only_torso {
+            for index in 0..15u32 {
+                if e.mem.u32(parts + 4 * index) == 0 {
+                    continue;
+                }
+                let part = e.call(0x005e_50f0, &args![data, index]).u32();
+                let node = body_part_node(e, actor, part);
+                if node != 0 {
+                    count += 1;
+                    let words = node_position(e, node);
+                    for (i, word) in words.iter().enumerate() {
+                        e.mem.set_u32(point + 4 * i as u32, *word);
+                    }
+                    e.call(0x0063_c8a0, &args![sum, point]);
+                }
+            }
+        }
+        if count != 0 {
+            let average = e
+                .call(0x0053_d280, &args![sum, quotient, count as f32])
+                .u32();
+            let words = read_words(e, average);
+            for (i, word) in words.iter().enumerate() {
+                e.mem.set_u32(LOOK_CENTER + 4 * i as u32, *word);
+            }
+        }
+    });
+}
+
+/// Mode 0 of [`fn_009445b0`]: reads the look input and applies it.
+///
+/// Returns 0 at once while the player is AI controlled (`0093a740`).
+/// Otherwise it clears [`LAST_LOOK_TARGET`] and [`LOOK_HEIGHT_OFFSET`], and
+/// scales the frame time by the player animation's `004e3d00` value (animation
+/// `00950a60` of `004eaf60 == 0`). The input state (`00877720` of the global
+/// at `011dea0c`) gives the yaw, pitch and zoom steps: with the analog
+/// code (`004b71d0`) from the sticks (`00a23390` for the two axes, dead zone
+/// 0x21F1, with a normalised response curve shaped by the settings
+/// `011e0a90`, `011e08a0`, `011e0818`, `011e0928`, `011e08b8` when the
+/// second stick flag is off), otherwise from `00a239e0` for 1, 2 and 3. The
+/// pitch is inverted by the byte setting `011e0a5c`, and everything is
+/// cleared while `005a03f0(this, 2)` holds.
+///
+/// A zoom step (when the Pipboy is not active) changes the zoom distance
+/// [`ZOOM_DISTANCE`], switches to first or third person, and clamps it. Then
+/// the player's heading and pitch are remembered, and the yaw and pitch steps
+/// are applied: in the free camera modes by accumulating angles, otherwise
+/// by turning the player (`00931d30`, `00931e50`, or the sitting heading
+/// delta in mode 4 of slot `0x214`) and setting bits `0x10` / `0x20` of the
+/// input flag word. The result is 1 when any step was non-zero (and in the
+/// non-free-camera zoom case).
+///
+/// The compiler's temporary `NiPoint3` constructor calls (`006815c0`) are
+/// omitted.
+fn apply_look_input(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    time_step: f32,
+    aim_pressed: bool,
+    flags: Ptr,
+) -> u8 {
+    if fn_0093a740(e, this) {
+        return 0;
+    }
+    let mut result = 0u8;
+    let holder = e.global::<u32>(0x011d_ea0c);
+    let input = e.call(0x0087_7720, &args![holder]).u32();
+    e.set_global(LAST_LOOK_TARGET, 0u32);
+    e.set_global(LOOK_HEIGHT_OFFSET, 0.0f32);
+    let mut yaw: i32;
+    let mut pitch = 0i32;
+    let mut zoom = 0i32;
+    let unflipped = e.call(0x004e_af60, &args![this]).u8() == 0;
+    let animation = e.call(0x0095_0a60, &args![this, unflipped as u32]).u32();
+    let animation_scale = e.call(0x004e_3d00, &args![animation]).f64();
+    let time_step = (animation_scale * time_step as f64) as f32;
+    e.call(0x004b_7210, &args![]);
+    if e.call(0x004b_71d0, &args![]).u8() != 0 {
+        if e.mem.u8(SECOND_STICK_FLAG) != 0 {
+            let mut right_x = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
+            if e.call(0x00ec_7d40, &args![right_x]).i32() < 0x21f1 {
+                right_x = 0;
+            }
+            let response = e.global::<f64>(0x0101_ffa0);
+            zoom = truncate(e, right_x as f64 * response * time_step as f64);
+            yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+                yaw = 0;
+            }
+            yaw /= 5;
+            if yaw != 0 || zoom != 0 {
+                let zoom_size = e.call(0x00ec_7d40, &args![right_x]).i32();
+                let yaw_size = e.call(0x00ec_7d40, &args![yaw]).i32();
+                if zoom_size > yaw_size {
+                    yaw = 0;
+                } else {
+                    zoom = 0;
+                }
+            }
+        } else {
+            yaw = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
+            pitch = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
+            if e.call(0x00ec_7d40, &args![yaw]).i32() < 0x21f1 {
+                yaw = 0;
+            }
+            if e.call(0x00ec_7d40, &args![pitch]).i32() < 0x21f1 {
+                pitch = 0;
+            }
+        }
+        if yaw != 0 || pitch != 0 {
+            let mut yaw_negative = false;
+            if yaw < 0 {
+                yaw = yaw.wrapping_neg();
+                yaw_negative = true;
+            }
+            let mut pitch_up = true;
+            if pitch < 0 {
+                pitch = pitch.wrapping_neg();
+                pitch_up = false;
+            }
+            let range = e.global::<f64>(0x0102_9790);
+            let (stick_x, stick_y, mut length) = e.with_stack(12, |e, vector| {
+                let x = (yaw as f64 / range) as f32;
+                let y = (pitch as f64 / range) as f32;
+                e.mem.set_f32(vector.addr(), x);
+                e.mem.set_f32(vector.addr() + 4, y);
+                e.mem.set_f32(vector.addr() + 8, 0.0);
+                (x, y, e.call(0x0045_7990, &args![vector]).f32())
+            });
+            if length as f64 > e.global::<f64>(0x0101_2070) {
+                length = 1.0;
+            }
+            let unit_x = (stick_x as f64 / length as f64) as f32;
+            let unit_y = (stick_y as f64 / length as f64) as f32;
+            let mut yaw_curve = 1.0f32;
+            let mut pitch_curve = 1.0f32;
+            let mut step = 0;
+            while step < setting_int(e, 0x011e_0a90) {
+                yaw_curve = (yaw_curve as f64 * length as f64) as f32;
+                step += 1;
+            }
+            let mut step = 0;
+            while step < setting_int(e, 0x011e_08a0) {
+                pitch_curve = (pitch_curve as f64 * length as f64) as f32;
+                step += 1;
+            }
+            let floor = setting_float(e, 0x011e_0818);
+            let yaw_speed = setting_float(e, 0x011e_0928);
+            let pitch_speed = setting_float(e, 0x011e_08b8);
+            if yaw_curve < floor {
+                yaw_curve = floor;
+            }
+            if pitch_curve < floor {
+                pitch_curve = floor;
+            }
+            yaw = truncate(
+                e,
+                yaw_curve as f64 * unit_x as f64 * yaw_speed as f64 * time_step as f64,
+            );
+            pitch = truncate(
+                e,
+                pitch_curve as f64 * unit_y as f64 * pitch_speed as f64 * time_step as f64,
+            );
+            if yaw_negative {
+                yaw = yaw.wrapping_neg();
+            }
+            if pitch_up {
+                pitch = pitch.wrapping_neg();
+            }
+        }
+    } else {
+        yaw = e.call(0x00a2_39e0, &args![input, 1u32]).i32();
+        pitch = e.call(0x00a2_39e0, &args![input, 2u32]).i32();
+        zoom = e.call(0x00a2_39e0, &args![input, 3u32]).i32();
+    }
+    let invert = e.call(SETTING_BYTE_GETTER, &args![0x011e_0a5cu32]).u32();
+    if e.mem.u8(invert) != 0 {
+        pitch = pitch.wrapping_neg();
+    }
+    if e.call(0x005a_03f0, &args![this, 2u32]).u8() != 0 {
+        yaw = 0;
+        pitch = 0;
+        zoom = 0;
+    }
+    if zoom != 0 && e.call(0x0096_7ae0, &args![this]).u8() == 0 {
+        if e.mem.u8(FREE_CAMERA_FLAG) == 0 {
+            result = 1;
+        }
+        if e.mem.u8(FREE_CAMERA_FLAG) != 0 || e.get(this, PlayerCharacter::b3rdPerson) {
+            let distance = e.global::<f32>(ZOOM_DISTANCE) as f64;
+            let scaled = zoom as f64 / e.global::<f64>(0x0107_18b8) * distance;
+            let setting = if zoom > 0 { 0x011c_dc98 } else { 0x011c_d2ac };
+            let speed = setting_float(e, setting);
+            e.set_global(ZOOM_DISTANCE, (distance - speed as f64 * scaled) as f32);
+            let in_first_person = e.vcall(this.addr(), 0x22c, &args![0u32]).u8() != 0;
+            if in_first_person {
+                let limit = setting_float(e, 0x011c_d614);
+                if e.global::<f32>(ZOOM_DISTANCE) < limit {
+                    let limit = setting_float(e, 0x011c_d614);
+                    e.set_global(ZOOM_DISTANCE, limit);
+                }
+            } else {
+                let limit = setting_float(e, 0x011c_da94);
+                if e.global::<f32>(ZOOM_DISTANCE) < limit {
+                    if !fn_0093a740(e, this)
+                        && e.mem.u8(FREE_CAMERA_FLAG) == 0
+                        && !e.get(this, PlayerCharacter::bTemp3rdPerson)
+                        && e.call(0x005a_03f0, &args![this, 0x10u32]).u8() == 0
+                    {
+                        e.call(0x0095_0110, &args![this, 1u32]);
+                    }
+                    let limit = setting_float(e, 0x011c_da94);
+                    e.set_global(ZOOM_DISTANCE, limit);
+                }
+            }
+            let mut ceiling = setting_float(e, 0x011c_d568);
+            if e.mem.u8(FREE_CAMERA_FLAG) != 0 {
+                ceiling = setting_float(e, 0x011c_de14);
+            }
+            if ceiling < e.global::<f32>(ZOOM_DISTANCE) {
+                e.set_global(ZOOM_DISTANCE, ceiling);
+            }
+        }
+        if !fn_0093a740(e, this)
+            && !e.get(this, PlayerCharacter::bTemp1stPerson)
+            && !e.get(this, PlayerCharacter::b3rdPerson)
+            && zoom < 0
+            && e.call(0x005a_03f0, &args![this, 0x10u32]).u8() == 0
+        {
+            e.call(0x0095_0110, &args![this, 0u32]);
+        }
+    }
+    let view_limit = setting_float(e, 0x0120_315c);
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    let view_distance = e.call(0x0099_e040, &args![camera]).f32();
+    let mut view_scale = 1.0f32;
+    if view_limit > view_distance {
+        view_scale = (view_distance as f64 / view_limit as f64) as f32;
+    }
+    let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+    e.set_global(LAST_HEADING, heading);
+    let pitch_now = e.call(0x0093_1d70, &args![this]).f32();
+    e.set_global(LAST_PITCH, pitch_now);
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    if (e.mem.u8(FREE_CAMERA_FLAG) != 0 || e.mem.u8(SECOND_STICK_FLAG) != 0)
+        && e.vcall(process, 0x610, &args![]).u32() == 0
+    {
+        let step = yaw as f64 * e.global::<f64>(0x0102_3128);
+        let speed = setting_float(e, 0x011c_dd90);
+        let turned =
+            speed as f64 * step * time_step as f64 + e.global::<f32>(ACCUMULATED_YAW) as f64;
+        e.set_global(ACCUMULATED_YAW, turned as f32);
+        if e.call(0x004b_71d0, &args![]).u8() == 0 {
+            let step = pitch as f64 * e.global::<f64>(0x0102_3128);
+            let speed = setting_float(e, 0x011c_d444);
+            let turned =
+                speed as f64 * step * time_step as f64 + e.global::<f32>(ACCUMULATED_PITCH) as f64;
+            e.set_global(ACCUMULATED_PITCH, turned as f32);
+        }
+    } else {
+        if yaw != 0 || aim_pressed {
+            let sensitivity = setting_float(e, 0x011e_0a6c);
+            let turn = (sensitivity as f64 * yaw as f64) as f32;
+            if flags != Ptr::NULL {
+                if yaw != 0 && turn < 0.0 {
+                    or_word(e, flags.addr(), 0x10);
+                } else if yaw != 0 {
+                    or_word(e, flags.addr(), 0x20);
+                }
+            }
+            if e.call(0x004f_8960, &args![this]).u32() == 0
+                && e.call(0x008a_7570, &args![this]).u32() != 0xa
+                && !fn_0093a740(e, this)
+            {
+                let turn_mode = e.vcall(this.addr(), 0x214, &args![]).u32();
+                if turn_mode == 4 {
+                    let delta = e.get(this, PlayerCharacter::fSitHeadingDelta);
+                    let delta = (delta as f64 + turn as f64) as f32;
+                    e.set(this, PlayerCharacter::fSitHeadingDelta, delta);
+                    if (delta as f64) < e.global::<f64>(0x0108_b098) {
+                        let low = e.global::<f32>(0x0101_6b78);
+                        e.set(this, PlayerCharacter::fSitHeadingDelta, low);
+                    } else {
+                        let delta = e.get(this, PlayerCharacter::fSitHeadingDelta);
+                        if delta as f64 > e.global::<f64>(0x0103_0f38) {
+                            let high = e.global::<f32>(0x0101_ff38);
+                            e.set(this, PlayerCharacter::fSitHeadingDelta, high);
+                        }
+                    }
+                    if aim_pressed {
+                        let speed = e.global::<f32>(0x0101_6088);
+                        e.set_global(TURN_SPEED, speed);
+                    }
+                } else if turn_mode == 0 {
+                    let magnitude = e.call(0x0040_8860, &args![turn]).f64();
+                    let sensitivity = setting_float(e, 0x011e_0a6c);
+                    let divisor = sensitivity as f64 * e.global::<f64>(0x0103_56d8);
+                    e.set_global(TURN_SPEED, (magnitude / divisor) as f32);
+                    if e.global::<f32>(TURN_SPEED) as f64 > e.global::<f64>(0x0101_6ff0) {
+                        let speed = e.global::<f32>(0x0101_6088);
+                        e.set_global(TURN_SPEED, speed);
+                    }
+                    let scaled = (turn as f64 * view_scale as f64) as f32;
+                    e.call(0x0093_1d30, &args![this, scaled]);
+                }
+            }
+        }
+        if pitch != 0 {
+            let sensitivity = setting_float(e, 0x011e_0a6c);
+            let turn = (sensitivity as f64 * pitch as f64 * view_scale as f64) as f32;
+            e.call(0x0093_1e50, &args![this, turn]);
+        }
+    }
+    if yaw != 0 || pitch != 0 || zoom != 0 {
+        result = 1;
+    }
+    result
+}
+
+/// Size of the frame of [`fn_009466d0`]: the game keeps these locals on its
+/// stack and passes their addresses.
+const INPUT_FRAME_SIZE: u32 = 0x100;
+/// Offsets in that frame: the profiling scope object; the 16-bit input flag
+/// word; the 3x3 matrix copied from the camera; the two direction vectors; the
+/// scratch point; the sound handle; the query point.
+const INPUT_GUARD: u32 = 0x00;
+const INPUT_FLAGS: u32 = 0x20;
+const INPUT_MATRIX: u32 = 0x28;
+const INPUT_AXIS_FORWARD: u32 = 0x50;
+const INPUT_AXIS_SIDE: u32 = 0x5c;
+const INPUT_SCRATCH_POINT: u32 = 0x68;
+const INPUT_SOUND_HANDLE: u32 = 0x74;
+const INPUT_QUERY_POINT: u32 = 0x80;
+
+/// A global flag byte (`011e0bec`) set once the weapon-draw input was
+/// handled, and the float (`011e07e0`) that times the draw button hold.
+const DRAW_INPUT_HANDLED: u32 = 0x011e_0bec;
+const DRAW_BUTTON_TIMER: u32 = 0x011e_07e0;
+/// The float global (`011a3b3c`) the movement stick sets (up to 1).
+const MOVE_SPEED_FACTOR: u32 = 0x011a_3b3c;
+/// The object (`011de134`) the save and load hotkeys call.
+const SAVE_LOAD_MANAGER: u32 = 0x011d_e134;
+
+/// Whether the input state `input` reports the button `button` in `state`
+/// (`00a24660`).
+fn button_state(e: &mut Engine, input: u32, button: u32, state: u32) -> bool {
+    e.call(0x00a2_4660, &args![input, button, state]).u32() != 0
+}
+
+/// Plays the sound called `name` once: `QInstance` (`00453a70`),
+/// `GetSoundHandleByName` into the handle at `handle`, `BSSoundHandle::Play`,
+/// then destroys the handle.
+fn play_sound_once(e: &mut Engine, handle: u32, name: u32) {
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    let found = e
+        .call(
+            AUDIO_GET_SOUND_HANDLE_BY_NAME,
+            &args![audio, handle, name, 0x0004_0102u32],
+        )
+        .u32();
+    e.call(SOUND_HANDLE_PLAY, &args![found, 0u32]);
+    e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+}
+
+/// The weapon draw button is held and nothing else is happening to the actor
+/// (the part of the input code after its timer was advanced): once per press
+/// it either sheathes the weapon (`008a6840(this, 0)`) when the button was
+/// held longer than the setting `011cdfcc`, or there is no weapon or the
+/// weapon has no ammunition and `008a6970` says it is out, or draws it
+/// (`008a6840(this, 1)`) unless the actor's `008846e0` bits have `0x800`.
+fn draw_button_held(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon_kind: u32) {
+    if e.mem.u8(DRAW_INPUT_HANDLED) != 0 {
+        return;
+    }
+    let threshold = setting_float(e, 0x011c_dfcc);
+    let timer = e.global::<f32>(DRAW_BUTTON_TIMER);
+    let mut sheathe = (threshold as f64) < timer as f64;
+    if !sheathe {
+        if weapon_kind == 0 {
+            sheathe = true;
+        } else {
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            sheathe = e.call(0x0052_5980, &args![weapon_kind, player]).u32() == 0;
+        }
+    }
+    if sheathe && e.call(0x008a_6970, &args![this]).u8() != 0 {
+        e.call(0x008a_6840, &args![this, 0u32]);
+        e.mem.set_u8(DRAW_INPUT_HANDLED, 1);
+        return;
+    }
+    if e.call(0x008a_6970, &args![this]).u8() != 0 {
+        return;
+    }
+    let bits = e.call(0x0088_46e0, &args![this]).u32();
+    if bits & 0x800 == 0 {
+        e.call(0x008a_6840, &args![this, 1u32]);
+    }
+    e.mem.set_u8(DRAW_INPUT_HANDLED, 1);
+}
+
+/// The sneak button was pressed (state 1 of button 8): when nothing blocks
+/// it (slots `0x234`, `0x22c(0)`, `0x230`, `00437bf0`, `00437bd0` all false
+/// and `0x214` zero) toggles bit `0x400` of the flag word at `flags`, plays
+/// "NPCHumanCrouchUp" (bit was set) or "NPCHumanCrouchDown" and calls slot
+/// `0x340` with 0xB or 0xA.
+fn sneak_toggle(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32, handle: u32) {
+    if e.vcall(this.addr(), 0x234, &args![]).u8() == 0
+        && e.vcall(this.addr(), 0x22c, &args![0u32]).u8() == 0
+        && e.vcall(this.addr(), 0x230, &args![]).u8() == 0
+        && e.call(0x0043_7bf0, &args![this]).u8() == 0
+        && e.call(0x0043_7bd0, &args![this]).u8() == 0
+        && e.vcall(this.addr(), 0x214, &args![]).u32() == 0
+    {
+        let mut state = 0xbu32;
+        let word = e.mem.u16(flags);
+        if word & 0x400 != 0 {
+            e.mem.set_u16(flags, word & 0xfbff);
+            play_sound_once(e, handle, 0x0108_b064);
+        } else {
+            e.mem.set_u16(flags, word | 0x400);
+            state = 0xa;
+            play_sound_once(e, handle, 0x0108_b050);
+        }
+        e.vcall(this.addr(), 0x340, &args![state]);
+    }
+}
+
+/// The aim (button 6) and block handling of [`fn_009466d0`], with the actor
+/// not blocked and not grabbing: slot `0x3F8` of the process decides whether
+/// `00948310` runs, else `011e07ac`/`011e07b0` are cleared. With the aim
+/// button down (states 1 or 0) and no iron sights, not in the process's
+/// `0x3E4` state 7, and the weapon drawn: while the Pipboy is not active and
+/// slot `0x3F8` holds it raises the iron sights (`Actor::SetIronSights`)
+/// when the weapon is drawn, the equipped kind is set and `006450c0` of it is
+/// false, otherwise blocks (`Actor::SetBlock(1)`). With the button released
+/// (state 2, or not down, or the Pipboy active) it lowers them.
+fn aim_and_block_input(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32, weapon_kind: u32) {
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    if e.vcall(process, 0x3f8, &args![]).u8() != 0 {
+        fn_00948310(e, this);
+    } else {
+        e.set_global(0x011e_07ac, 0u32);
+        e.set_global(0x011e_07b0, 0.0f32);
+    }
+    let mut aiming = false;
+    if button_state(e, input, 6, 1) || button_state(e, input, 6, 0) {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let state = e.vcall(process, 0x3e4, &args![]).u32();
+        if state != 7
+            && e.call(0x008b_bc10, &args![this]).u8() == 0
+            && e.call(0x008a_16d0, &args![this]).u8() != 0
+        {
+            aiming = true;
+        }
+    }
+    if aiming {
+        if e.call(0x0096_7ae0, &args![this]).u8() == 0 {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            if e.vcall(process, 0x3f8, &args![]).u8() != 0 {
+                if e.call(0x008a_16d0, &args![this]).u8() != 0
+                    && weapon_kind != 0
+                    && e.call(0x0064_50c0, &args![weapon_kind]).u8() == 0
+                {
+                    e.call(0x008b_b650, &args![this, 1u32, 0u32, 0u32]);
+                } else {
+                    e.call(0x0089_4cc0, &args![this, 1u32]);
+                }
+            }
+        }
+    } else if button_state(e, input, 6, 2)
+        || !button_state(e, input, 6, 0)
+        || e.call(0x0096_7ae0, &args![this]).u8() != 0
+    {
+        let mut lower = e.call(0x008b_bc10, &args![this]).u8() != 0;
+        if !lower {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            lower = e.vcall(process, 0x3e4, &args![]).u32() == 7;
+        }
+        if lower {
+            e.call(0x008b_b650, &args![this, 0u32, 0u32, 0u32]);
+            e.call(0x0089_4cc0, &args![this, 0u32]);
+        }
+    }
+}
+
+/// The attack button (12, state 1) handling of [`fn_009466d0`]: unless the
+/// actor is in the animation action 0xB or the attack group
+/// (`vcall 0x1E4(4)` -> `004301b0` -> `TESAnimGroup::IsPowerAttackAction`) is
+/// a power attack, works out whether the attack can start (`008849c0` and
+/// `005a2030` false) and whether the character controller (`009306d0`) is
+/// moving (through `00944400` and slot `0x254`, or `00894f90` of the flag
+/// byte while the aim button is down and nothing is selected in the menu),
+/// runs `0095f6a0` and, when both hold, `00944400` again.
+fn attack_input(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32, flags: u32) {
+    let group = e.vcall(this.addr(), 0x1e4, &args![4u32]).u32();
+    let action = e.call(0x0043_01b0, &args![group]).u16();
+    if e.call(0x005f_2670, &args![action as u32]).u8() != 0 {
+        return;
+    }
+    if e.call(0x008a_7570, &args![this]).u32() == 0xb {
+        return;
+    }
+    let can_start = !(e.call(0x0088_49c0, &args![this]).u8() != 0
+        || e.call(0x005a_2030, &args![this]).u8() != 0);
+    let mut moving = false;
+    let aim_down = button_state(e, input, 6, 0);
+    let blocked = e.call(0x0089_4d60, &args![this]).u8() != 0;
+    if aim_down {
+        let menu_ref = e.call(0x0070_3350, &args![]).u32();
+        let mask = e.mem.u16(flags) | 0xf;
+        if menu_ref == 0 && mask != 0 {
+            let controller = e.call(0x0093_06d0, &args![this]).u32();
+            if e.call(0x005c_0880, &args![controller]).u32() == 0 {
+                let flag_byte = e.mem.u8(flags) as u32;
+                let value = e.call(0x0089_4f90, &args![this, flag_byte]).u32();
+                moving = value != 0xff;
+            }
+        } else if !blocked {
+            let controller = e.call(0x0093_06d0, &args![this]).u32();
+            if fn_00944400(e, Ptr::new(controller)) {
+                moving = e.vcall(this.addr(), 0x254, &args![]).u32() != 0;
+            }
+        }
+    } else {
+        let controller = e.call(0x0093_06d0, &args![this]).u32();
+        if fn_00944400(e, Ptr::new(controller)) {
+            moving = e.vcall(this.addr(), 0x254, &args![]).u32() != 0;
+        }
+    }
+    e.call(0x0095_f6a0, &args![this]);
+    if can_start && moving {
+        let controller = e.call(0x0093_06d0, &args![this]).u32();
+        fn_00944400(e, Ptr::new(controller));
+    }
+}
+
+/// The activate button (5, state 1) handling of [`fn_009466d0`], when no
+/// menu is open, the actor is not blocked by `0x234` and the drop spring
+/// (`0095 13c0`) is not holding something: finds the reference under the
+/// cursor (`00703350`) and, unless it is furniture used with iron sights, a
+/// dynamic-cast object (`00ec43fb`) that `008ce390` rejects, or an actor
+/// whose acquire object (`008d8520`) is in state 5 or 6 (slot `0x610`), clears
+/// the info (`Interface::SetInfoForRef`) and activates it
+/// (`TESObjectREFR::Activate`), falling back to the process's slot `0x4C8`
+/// object when that did not activate anything.
+fn activate_input(e: &mut Engine, this: Ptr<PlayerCharacter>, input: u32, drop_held: bool) {
+    if !(button_state(e, input, 5, 1)
+        && e.call(0x0070_2360, &args![]).u8() == 0
+        && e.call(0x005a_03f0, &args![this, 1u32]).u8() == 0
+        && e.vcall(this.addr(), 0x234, &args![]).u8() == 0
+        && !drop_held)
+    {
+        return;
+    }
+    let reference = e.call(0x0070_3350, &args![]).u32();
+    let mut activate_fallback = true;
+    let mut skip = false;
+    if reference != 0
+        && e.call(0x0056_8680, &args![reference]).u8() != 0
+        && e.call(0x008b_bc10, &args![this]).u8() != 0
+    {
+        skip = true;
+    }
+    if reference != 0 && e.vcall(reference, 0x224, &args![]).u8() != 0 {
+        let cast = e
+            .call(
+                0x00ec_43fb,
+                &args![reference, 0u32, 0x0118_41ccu32, 0x011a_28e0u32, 0u32],
+            )
+            .u32();
+        if cast != 0 && e.call(0x008c_e390, &args![cast]).u32() == 0 {
+            skip = true;
+        }
+    }
+    if reference != 0 && e.vcall(reference, 0x100, &args![]).u8() != 0 {
+        let acquire = e.call(0x008d_8520, &args![reference]).u32();
+        if e.vcall(acquire, 0x610, &args![]).u32() == 5
+            || e.vcall(acquire, 0x610, &args![]).u32() == 6
+        {
+            skip = true;
+        }
+    }
+    if skip {
+        return;
+    }
+    e.call(0x0070_62e0, &args![0u32, 0u32, 0u32]);
+    if reference != 0
+        && e.call(0x0057_3170, &args![reference, this, 0u32, 0u32, 1u32])
+            .u8()
+            != 0
+    {
+        activate_fallback = false;
+    }
+    if activate_fallback {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        if e.vcall(process, 0x4c8, &args![]).u32() != 0 {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            let target = e.vcall(process, 0x4c8, &args![]).u32();
+            e.call(0x0057_3170, &args![target, this, 0u32, 0u32, 1u32]);
+        }
+    }
+}
+
+// Translated from 009466d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player's per-frame input handling, called with the frame time and
+/// whether to skip the player controls (which leaves only the save and load
+/// hotkeys). In a profiling scope (`00404eb0`, file `PlayerCharacter.cpp`
+/// line 0x17A3) it:
+///
+/// - clears the drop angle modifiers and `bOnElevator`, runs
+///   [`player_character_update_ufo_camera`] and reads the two analog axes
+///   (`00a23390` with 7 and 8) when `004b71d0` holds;
+/// - with the controls active: tells the acquire object of the process about
+///   the player (slot `0xD4`) when `b3rdPerson`, builds the movement flag word
+///   from the actor's `008846e0` bits masked with `0xCC00`, runs the look
+///   handling ([`fn_009445b0`]) unless the VATS mode is 0, remembers the
+///   heading and pitch, handles the weapon draw button
+///   ([`draw_button_held`]), the auto-move toggle, the sneak toggle
+///   ([`sneak_toggle`]), builds the movement axes from the camera matrix,
+///   applies the analog axes to `011a3b3c`/`011a3b40`, passes the flag word
+///   to the mover (`pMover` at `+0x190`, slots `0xC` and `0x14`), handles the
+///   aim, block ([`aim_and_block_input`]) and attack ([`attack_input`])
+///   buttons, picks the animations, activates ([`activate_input`]), updates
+///   the animation movement and the muzzle flash;
+/// - in all cases handles the save (`0x19`) and load (`0x1A`) hotkeys with the
+///   guard bytes `011e0be5` and `011e0be4`.
+///
+/// The byte local the original sets in several places (at `EBP-0xD`) is never
+/// read and is not kept; the compiler's exception-unwinding state writes and
+/// the NiPoint3 temporary constructor calls (`006815c0`, which return their
+/// argument) are not translated.
+pub fn fn_009466d0(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    time_step: f32,
+    skip_controls: bool,
+) {
+    e.with_stack(INPUT_FRAME_SIZE, |e, frame| {
+        input_in_frame(e, this, time_step, skip_controls, frame.addr());
+    });
+}
+
+#[allow(clippy::cognitive_complexity)]
+fn input_in_frame(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    time_step: f32,
+    skip_controls: bool,
+    frame: u32,
+) {
+    let guard = frame + INPUT_GUARD;
+    let flags = frame + INPUT_FLAGS;
+    e.call(
+        0x0040_4eb0,
+        &args![guard, 0x34u32, 1u32, UPDATE_GUARD_FILE, 0x17a3u32],
+    );
+    let main = e.global::<u32>(MAIN_SINGLETON);
+    let input = e.call(0x0087_7720, &args![main]).u32();
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let weapon_kind = if e.vcall(process, 0x148, &args![]).u32() != 0 {
+        let item = e.vcall(process, 0x148, &args![]).u32();
+        e.call(0x0044_ddc0, &args![item]).u32()
+    } else {
+        0
+    };
+    e.mem.set_u16(flags, 0);
+    e.set(this, PlayerCharacter::fDropAngleMod, 0.0);
+    e.set(this, PlayerCharacter::fLastDropAngleMod, 0.0);
+    e.set(this, PlayerCharacter::bOnElevator, false);
+    player_character_update_ufo_camera(e, this);
+    let mut stick_x = 0i32;
+    let mut stick_y = 0i32;
+    e.call(0x004b_7210, &args![]);
+    if e.call(0x004b_71d0, &args![]).u8() != 0 {
+        stick_x = e.call(0x00a2_3390, &args![input, 0u32, 7u32]).i32();
+        stick_y = e.call(0x00a2_3390, &args![input, 0u32, 8u32]).i32();
+    }
+    if !skip_controls {
+        if e.get(this, PlayerCharacter::b3rdPerson) {
+            let acquire = e.call(0x008d_8520, &args![this]).u32();
+            e.vcall(acquire, 0xd4, &args![this]);
+        }
+        let bits = e.call(0x0088_46e0, &args![this]).u32() as u16;
+        e.mem.set_u16(flags, bits & 0xcc00);
+        if e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() != 0 {
+            fn_009445b0(e, this, time_step, false, Ptr::new(flags), 0);
+        }
+        let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+        e.set_global(LAST_HEADING, heading);
+        let pitch = e.call(0x0093_1d70, &args![this]).f32();
+        e.set_global(LAST_PITCH, pitch);
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        let player_process = e.mem.u32(player + ACTOR_CURRENT_PROCESS);
+        if e.vcall(player_process, 0x22c, &args![]).u32() != 0 {
+            let player_process = e.mem.u32(player + ACTOR_CURRENT_PROCESS);
+            e.vcall(player_process, 0x234, &args![]);
+        }
+        let player_process = e.mem.u32(player + ACTOR_CURRENT_PROCESS);
+        if e.vcall(player_process, 0x20c, &args![]).u32() != 0 {
+            let player_process = e.mem.u32(player + ACTOR_CURRENT_PROCESS);
+            e.vcall(player_process, 0x214, &args![]);
+        }
+        // The weapon draw button.
+        if button_state(e, input, 7, 1) || button_state(e, input, 7, 0) {
+            if e.call(0x005a_03f0, &args![this, 8u32]).u8() == 0 {
+                let timer = e.global::<f32>(DRAW_BUTTON_TIMER);
+                e.set_global(DRAW_BUTTON_TIMER, (timer as f64 + time_step as f64) as f32);
+                if e.call(0x0088_43a0, &args![this]).u8() != 0
+                    && e.call(0x008a_7570, &args![this]).u32() == 0xffff_ffff
+                {
+                    draw_button_held(e, this, weapon_kind);
+                }
+            }
+        } else if !button_state(e, input, 7, 2) {
+            e.set_global(DRAW_BUTTON_TIMER, 0.0f32);
+            e.mem.set_u8(DRAW_INPUT_HANDLED, 0);
+        }
+        // The auto-move toggle.
+        if button_state(e, input, 0xb, 1) {
+            let toggled = !e.get(this, PlayerCharacter::bAutoMove);
+            e.set(this, PlayerCharacter::bAutoMove, toggled);
+        }
+        if e.get(this, PlayerCharacter::bAutoMove) {
+            if button_state(e, input, 0, 0)
+                || button_state(e, input, 1, 0)
+                || button_state(e, input, 3, 0)
+                || button_state(e, input, 2, 0)
+            {
+                e.set(this, PlayerCharacter::bAutoMove, false);
+            } else {
+                e.call(0x00a2_4280, &args![input, 0u32]);
+            }
+        }
+        // The sneak toggle.
+        let mut sneak_pressed = false;
+        if button_state(e, input, 8, 1) {
+            sneak_toggle(e, this, flags, frame + INPUT_SOUND_HANDLE);
+            sneak_pressed = true;
+        }
+        // The movement axes from the camera matrix.
+        let cell = e.call(0x0055_8310, &args![camera]).u32();
+        let matrix = e.call(0x006a_9540, &args![cell]).u32();
+        for i in 0..9 {
+            let word = e.mem.u32(matrix + 4 * i);
+            e.mem.set_u32(frame + INPUT_MATRIX + 4 * i, word);
+        }
+        let position = e.call(0x0043_6aa0, &args![this]).u32();
+        let position = read_words(e, position);
+        let forward = frame + INPUT_AXIS_FORWARD;
+        let side = frame + INPUT_AXIS_SIDE;
+        let unit_x = e
+            .call(
+                0x0041_6870,
+                &args![frame + INPUT_SCRATCH_POINT, 1.0f32, 0.0f32, 0.0f32],
+            )
+            .u32();
+        let unit_x = read_words(e, unit_x);
+        for (i, word) in unit_x.iter().enumerate() {
+            e.mem.set_u32(side + 4 * i as u32, *word);
+        }
+        e.call(0x0043_9f50, &args![frame + INPUT_MATRIX, 1u32, forward]);
+        if e.call(0x0050_d4a0, &args![this]).u8() == 0 {
+            e.mem.set_f32(forward + 8, 0.0);
+            e.call(0x004a_0c10, &args![forward]);
+        } else {
+            e.call(0x0043_9f50, &args![frame + INPUT_MATRIX, 0u32, side]);
+        }
+        let mut drop_held = false;
+        if e.get(this, PlayerCharacter::eGrabType) == 2 {
+            drop_held = e.call(0x0096_13c0, &args![this, time_step]).u8() != 0;
+        }
+        // The analog axes 7 and 8 (the camera stick and the move stick).
+        if stick_x != 0 {
+            if stick_x > 0 {
+                e.call(0x00a2_4280, &args![input, 3u32]);
+            } else if stick_x < 0 {
+                e.call(0x00a2_4280, &args![input, 2u32]);
+            }
+            let size = e.call(0x00ec_7d40, &args![stick_x]).i32();
+            let scale = setting_float(e, 0x011e_0964);
+            e.set_global(TURN_SPEED, (scale as f64 * size as f64) as f32);
+            if e.global::<f32>(TURN_SPEED) as f64 > e.global::<f64>(0x0101_6ff0) {
+                let limit = e.global::<f32>(0x0101_6088);
+                e.set_global(TURN_SPEED, limit);
+            }
+        }
+        let size_y = e.call(0x00ec_7d40, &args![stick_y]).i32();
+        let size_x = e.call(0x00ec_7d40, &args![stick_x]).i32();
+        if size_y < size_x {
+            let size_x = e.call(0x00ec_7d40, &args![stick_x]).i32();
+            let factor = size_x as f64 * e.global::<f64>(0x0108_b048);
+            e.set_global(MOVE_SPEED_FACTOR, factor as f32);
+            if stick_x < 0 {
+                or_word(e, flags, 4);
+            } else {
+                or_word(e, flags, 8);
+            }
+        } else if stick_y != 0 {
+            if stick_y < 0 {
+                e.call(0x00a2_4280, &args![input, 0u32]);
+            } else if stick_y > 0 {
+                e.call(0x00a2_4280, &args![input, 1u32]);
+            }
+            let size_y = e.call(0x00ec_7d40, &args![stick_y]).i32();
+            let factor = size_y as f64 * e.global::<f64>(0x0108_b048);
+            e.set_global(MOVE_SPEED_FACTOR, factor as f32);
+        }
+        if e.global::<f32>(MOVE_SPEED_FACTOR) as f64 > e.global::<f64>(0x0101_2070) {
+            e.set_global(MOVE_SPEED_FACTOR, 1.0f32);
+        }
+        let speed = e.call(0x008a_0b10, &args![this]).f32();
+        let factor = e.global::<f32>(MOVE_SPEED_FACTOR);
+        let scaled = (speed as f64 * factor as f64) as f32;
+        e.call(0x0043_9180, &args![side, scaled]);
+        let factor = e.global::<f32>(MOVE_SPEED_FACTOR);
+        let scaled = (speed as f64 * factor as f64) as f32;
+        e.call(0x0043_9180, &args![forward, scaled]);
+        let mover = e.mem.u32(at(this, 0x190));
+        let word = e.mem.u16(flags) as u32;
+        e.vcall(mover, 0xc, &args![word]);
+        if sneak_pressed {
+            e.call(0x0088_4f80, &args![this]);
+        }
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        let blocked = e.vcall(this.addr(), 0x230, &args![]).u8() != 0
+            || e.vcall(this.addr(), 0x234, &args![]).u8() != 0
+            || e.call(0x004f_8960, &args![this]).u32() != 0
+            || e.call(0x008a_7570, &args![this]).u32() == 0xa
+            || e.vcall(this.addr(), 0x214, &args![]).u32() != 0;
+        if blocked || e.call(0x005a_03f0, &args![this, 1u32]).u8() != 0 {
+            let mover = e.mem.u32(at(this, 0x190));
+            e.call(0x009e_a360, &args![mover, 0x33fu32, 0u32]);
+        }
+        if !blocked && e.call(0x005a_03f0, &args![this, 8u32]).u8() == 0 {
+            if e.get(this, PlayerCharacter::eGrabType) == 2
+                || e.get(this, PlayerCharacter::eGrabType) == 3
+            {
+                e.set_global(0x011e_07ac, 0u32);
+                e.set_global(0x011e_07b0, 0.0f32);
+            } else {
+                aim_and_block_input(e, this, input, weapon_kind);
+            }
+            if button_state(e, input, 0xc, 1) && e.vcall(this.addr(), 0x358, &args![]).u8() == 0 {
+                attack_input(e, this, input, flags);
+            }
+        }
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        e.vcall(this.addr(), 0x1e0, &args![]);
+        let turn_speed = e.global::<f32>(TURN_SPEED);
+        let move_speed = e.global::<f32>(MOVE_SPEED_FACTOR);
+        e.call(0x0089_5110, &args![this, move_speed, turn_speed]);
+        let actually = e.get(this, PlayerCharacter::bActually3rdPerson);
+        e.set(this, PlayerCharacter::b3rdPerson, actually);
+        if e.call(0x005a_1e50, &args![this]).u8() != 0 {
+            e.call(0x0094_df80, &args![this]);
+        }
+        e.call(0x0069_3ef0, &args![this, 0u32]);
+        let mover = e.mem.u32(at(this, 0x190));
+        e.call(0x009e_a570, &args![mover, side]);
+        let mover = e.mem.u32(at(this, 0x190));
+        e.vcall(mover, 0x14, &args![time_step]);
+        activate_input(e, this, input, drop_held);
+        if e.global::<u32>(0x011e_07ec) != 0 {
+            let count = e.global::<u32>(0x011e_0be8);
+            e.set_global(0x011e_0be8, count.wrapping_add(1));
+            if count < 0x14 {
+                let query = frame + INPUT_QUERY_POINT;
+                for (i, word) in position.iter().enumerate() {
+                    e.mem.set_u32(query + 4 * i as u32, *word);
+                }
+                let up = e.global::<f64>(0x0102_e430);
+                let across = e.global::<f64>(0x0102_40c0);
+                let z = e.mem.f32(query + 8) as f64 + up;
+                e.mem.set_f32(query + 8, z as f32);
+                let y = e.mem.f32(query + 4) as f64 + across;
+                e.mem.set_f32(query + 4, y as f32);
+                let x = e.mem.f32(query) as f64 + across;
+                e.mem.set_f32(query, x as f32);
+                let object = e.global::<u32>(0x011e_07ec);
+                e.call(0x0056_10f0, &args![object, query]);
+                let object = e.global::<u32>(0x011e_07ec);
+                e.call(0x0056_15d0, &args![object, 0x011f_426cu32]);
+            }
+        }
+        if e.vcall(this.addr(), 0x22c, &args![0u32]).u8() == 0
+            && e.vcall(this.addr(), 0x2e8, &args![]).u8() == 0
+        {
+            e.call(0x008c_3c40, &args![this, 0u32, 0u32]);
+        }
+        let third_person = e.call(0x0095_0a60, &args![this, 0u32]).u32();
+        let first_person = e.call(0x0095_0a60, &args![this, 1u32]).u32();
+        let regen = fn_009442a0(e, Ptr::new(third_person));
+        e.call(0x0089_50f0, &args![first_person, regen]);
+        let weight = e.call(0x0050_8070, &args![third_person]).f32();
+        e.call(0x004c_0c90, &args![first_person, weight]);
+        for _ in 0..2 {
+            let flipped = !e.get(this, PlayerCharacter::b3rdPerson);
+            e.set(this, PlayerCharacter::b3rdPerson, flipped);
+            e.call(0x008d_3550, &args![this, time_step]);
+            let using_first = !e.get(this, PlayerCharacter::b3rdPerson);
+            let animation = e.call(0x0095_0a60, &args![this, using_first as u32]).u32();
+            e.call(0x0088_85e0, &args![this, animation, time_step]);
+        }
+        e.call(0x008b_a600, &args![this]);
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        if e.vcall(process, 0x6b8, &args![]).u32() != 0 {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            let flash = e.vcall(process, 0x6b8, &args![]).u32();
+            e.call(0x009b_b080, &args![flash, time_step, this]);
+        }
+    }
+    if button_state(e, input, 0x19, 1) && e.mem.u8(0x011e_0be5) == 0 {
+        e.mem.set_u8(0x011e_0be5, 1);
+        let manager = e.global::<u32>(SAVE_LOAD_MANAGER);
+        e.call(0x0085_09a0, &args![manager]);
+        e.mem.set_u8(0x011e_0be5, 0);
+    }
+    if button_state(e, input, 0x1a, 1) && e.mem.u8(0x011e_0be4) == 0 {
+        e.mem.set_u8(0x011e_0be4, 1);
+        let manager = e.global::<u32>(SAVE_LOAD_MANAGER);
+        e.call(0x0085_09f0, &args![manager]);
+        e.mem.set_u8(0x011e_0be4, 0);
+    }
+    e.call(0x0040_4ee0, &args![guard]);
+}
+/// Size and offsets of the frame of [`player_character_update_ufo_camera`]:
+/// the two rotation matrices and their product (36 bytes each), the move
+/// vector, and two scratch points.
+const UFO_FRAME_SIZE: u32 = 0xc0;
+const UFO_MATRIX_Z: u32 = 0x00;
+const UFO_MATRIX_X: u32 = 0x24;
+const UFO_MATRIX_PRODUCT: u32 = 0x48;
+const UFO_MOVE: u32 = 0x6c;
+const UFO_SCRATCH: u32 = 0x78;
+const UFO_ORIGIN: u32 = 0x84;
+
+/// Zeroes `value` when `|value|` (`00408820`, taking the integer as a float)
+/// is not above the dead zone 7849.0 (the double at `010718f0`).
+fn ufo_dead_zone(e: &mut Engine, value: i32) -> i32 {
+    let size = e.call(0x0040_8820, &args![value as f32]).f64();
+    if size <= e.global::<f64>(0x0107_18f0) {
+        0
+    } else {
+        value
+    }
+}
+
+// Translated from 0094a8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateUFOCamera` (Xbox PDB): the free ("UFO") camera.
+/// Reads the input (`00877720`): the look axes 9 and 10 (dead zone 7849) turn
+/// `fUFOCameraHeading` and `fUFOCameraPitch` (scaled by the setting at
+/// `011e0a6c`, and divided by 1500 / -1500 with the analog code
+/// `004b71d0`), the pitch inverted by the byte setting `011e0a5c`. A heading
+/// and a pitch rotation matrix are multiplied (`NiMatrix3::operator*`); the
+/// move vector comes from the axes 7 and 8 (dead zone, over 32767, times 15)
+/// or the direction keys (+-10 on y for buttons 0 and 1, on x for 3 and 2;
+/// button 9 replaces it with `0045bb20(vector, 2.0)`); it is scaled by the
+/// elapsed time since the last call (`00457fe0` milliseconds, at most one
+/// second, times 10), rotated by the matrix (`004b4500`), scaled by the
+/// setting `011e090c` and added to `UFOCameraPos`. The camera object
+/// (`0045c670`) then gets the position, rotation and an update, and the
+/// world space's terrain manager (`00586170`) is updated with
+/// `UFOCameraPos` and 0xF, and its morph parameters.
+///
+/// The NiPoint3 and NiMatrix3 temporary constructor calls (`006815c0`, which
+/// return their argument) are not translated.
+pub fn player_character_update_ufo_camera(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    e.with_stack(UFO_FRAME_SIZE, |e, frame| {
+        ufo_camera_in_frame(e, this, frame.addr());
+    });
+}
+
+fn ufo_camera_in_frame(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: u32) {
+    let main = e.global::<u32>(MAIN_SINGLETON);
+    let input = e.call(0x0087_7720, &args![main]).u32();
+    let mut look_x;
+    let mut look_y;
+    e.call(0x004b_7210, &args![]);
+    if e.call(0x004b_71d0, &args![]).u8() != 0 {
+        look_x = e.call(0x00a2_3390, &args![input, 0u32, 9u32]).i32();
+        look_y = e.call(0x00a2_3390, &args![input, 0u32, 0xau32]).i32();
+        look_x = ufo_dead_zone(e, look_x);
+        look_y = ufo_dead_zone(e, look_y);
+    } else {
+        look_x = e.call(0x00a2_39e0, &args![input, 1u32]).i32();
+        look_y = e.call(0x00a2_39e0, &args![input, 2u32]).i32();
+    }
+    let invert = e.call(SETTING_BYTE_GETTER, &args![0x011e_0a5cu32]).u32();
+    if e.mem.u8(invert) != 0 {
+        look_y = look_y.wrapping_neg();
+    }
+    e.call(0x004b_7210, &args![]);
+    if e.call(0x004b_71d0, &args![]).u8() != 0 {
+        let heading_step =
+            setting_float(e, 0x011e_0a6c) as f64 * look_x as f64 / e.global::<f64>(0x0107_37c8);
+        let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
+        e.set(
+            this,
+            PlayerCharacter::fUFOCameraHeading,
+            (heading_step + heading as f64) as f32,
+        );
+        let pitch_step =
+            setting_float(e, 0x011e_0a6c) as f64 * look_y as f64 / e.global::<f64>(0x0108_b0a8);
+        let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
+        e.set(
+            this,
+            PlayerCharacter::fUFOCameraPitch,
+            (pitch_step + pitch as f64) as f32,
+        );
+    } else {
+        let heading_step = setting_float(e, 0x011e_0a6c) as f64 * look_x as f64;
+        let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
+        e.set(
+            this,
+            PlayerCharacter::fUFOCameraHeading,
+            (heading_step + heading as f64) as f32,
+        );
+        let pitch_step = setting_float(e, 0x011e_0a6c) as f64 * look_y as f64;
+        let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
+        e.set(
+            this,
+            PlayerCharacter::fUFOCameraPitch,
+            (pitch_step + pitch as f64) as f32,
+        );
+    }
+    let matrix_z = frame + UFO_MATRIX_Z;
+    let matrix_x = frame + UFO_MATRIX_X;
+    let product = frame + UFO_MATRIX_PRODUCT;
+    let heading = e.get(this, PlayerCharacter::fUFOCameraHeading);
+    e.call(0x004a_0c90, &args![matrix_z, heading]);
+    let pitch = e.get(this, PlayerCharacter::fUFOCameraPitch);
+    e.call(0x0052_4ac0, &args![matrix_x, pitch]);
+    e.call(0x0043_f8d0, &args![matrix_z, product, matrix_x]);
+    let movement = frame + UFO_MOVE;
+    for i in 0..3 {
+        let word = e.mem.u32(ZERO_VECTOR + 4 * i);
+        e.mem.set_u32(movement + 4 * i, word);
+    }
+    e.call(0x004b_7210, &args![]);
+    if e.call(0x004b_71d0, &args![]).u8() != 0 {
+        let mut stick_x = e.call(0x00a2_3390, &args![input, 0u32, 7u32]).i32();
+        let mut stick_y = e.call(0x00a2_3390, &args![input, 0u32, 8u32]).i32();
+        stick_x = ufo_dead_zone(e, stick_x);
+        let range = e.global::<f64>(0x0102_9790);
+        let move_x = (stick_x as f64 / range) as f32;
+        stick_y = ufo_dead_zone(e, stick_y);
+        let move_y = (stick_y as f64 / range) as f32;
+        let speed = e.global::<f64>(0x0101_5a38);
+        let x = (move_x as f64 * speed + e.mem.f32(movement) as f64) as f32;
+        e.mem.set_f32(movement, x);
+        let y = (move_y as f64 * speed + e.mem.f32(movement + 4) as f64) as f32;
+        e.mem.set_f32(movement + 4, y);
+    } else {
+        let step = e.global::<f64>(0x0102_0758);
+        if button_state(e, input, 0, 0) {
+            let y = (e.mem.f32(movement + 4) as f64 + step) as f32;
+            e.mem.set_f32(movement + 4, y);
+        }
+        if button_state(e, input, 1, 0) {
+            let y = (e.mem.f32(movement + 4) as f64 - step) as f32;
+            e.mem.set_f32(movement + 4, y);
+        }
+        if button_state(e, input, 3, 0) {
+            let x = (e.mem.f32(movement) as f64 + step) as f32;
+            e.mem.set_f32(movement, x);
+        }
+        if button_state(e, input, 2, 0) {
+            let x = (e.mem.f32(movement) as f64 - step) as f32;
+            e.mem.set_f32(movement, x);
+        }
+        if button_state(e, input, 9, 0) {
+            let factor = e.global::<f32>(0x0101_62c0);
+            let scaled = e
+                .call(0x0045_bb20, &args![movement, frame + UFO_ORIGIN, factor])
+                .u32();
+            let words = read_words(e, scaled);
+            for (i, word) in words.iter().enumerate() {
+                e.mem.set_u32(movement + 4 * i as u32, *word);
+            }
+        }
+    }
+    let now = e.call(0x0045_7fe0, &args![]).u32();
+    let mut elapsed = 0.0f32;
+    let last = e.global::<u32>(0x011e_0bf8);
+    if last != 0 {
+        elapsed = (now.wrapping_sub(last) as f64 / e.global::<f64>(0x0101_7b70)) as f32;
+        elapsed = e.call(0x0040_ebd0, &args![elapsed, 1.0f32]).f32();
+    }
+    e.set_global(0x011e_0bf8, now);
+    let scale = (elapsed as f64 * e.global::<f64>(0x0102_0758)) as f32;
+    e.call(0x0043_9180, &args![movement, scale]);
+    let rotated = e
+        .call(0x004b_4500, &args![product, frame + UFO_ORIGIN, movement])
+        .u32();
+    let words = read_words(e, rotated);
+    for (i, word) in words.iter().enumerate() {
+        e.mem.set_u32(movement + 4 * i as u32, *word);
+    }
+    let speed = setting_float(e, 0x011e_090c);
+    e.call(0x0043_9180, &args![movement, speed]);
+    let position = member(this, PlayerCharacter::UFOCameraPos);
+    e.call(0x0063_c8a0, &args![position, movement]);
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    let node = e.call(0x0055_8310, &args![camera]).u32();
+    e.call(0x0044_0460, &args![node, position]);
+    let node = e.call(0x0055_8310, &args![camera]).u32();
+    e.call(0x0043_fa80, &args![node, product]);
+    let scratch = frame + UFO_SCRATCH;
+    e.call(0x0043_d410, &args![scratch, 0.0f32, 0u32, 0u32]);
+    let node = e.call(0x0055_8310, &args![camera]).u32();
+    e.call(0x00a5_9c60, &args![node, scratch]);
+    if e.call(0x0057_5d70, &args![this]).u32() != 0 {
+        let world_space = e.call(0x0057_5d70, &args![this]).u32();
+        if e.call(0x0058_6170, &args![world_space]).u32() != 0 {
+            let world_space = e.call(0x0057_5d70, &args![this]).u32();
+            let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+            e.call(0x006f_ca90, &args![terrain, position, 0xfu32]);
+            let world_space = e.call(0x0057_5d70, &args![this]).u32();
+            let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+            e.call(0x006f_cdb0, &args![terrain, position]);
+        }
+    }
+}
+
+/// Globals of the attack input code: the queued attack (`011e07ac`: 0 none,
+/// 1 normal, 2 power), the hold timer of a pending attack (`011e07b0`, float),
+/// the latch bytes `011e07a9` (button consumed) and `011e07aa` (repeat), the
+/// byte `011e0783`, the VATS attack delay counter (`011e0bf4`) and the word
+/// `011e0bf0`; and the `CombatDialogueManager` (`011f1708`).
+const ATTACK_QUEUED: u32 = 0x011e_07ac;
+const ATTACK_HOLD_TIMER: u32 = 0x011e_07b0;
+const ATTACK_BUTTON_LATCH: u32 = 0x011e_07a9;
+const ATTACK_REPEAT_LATCH: u32 = 0x011e_07aa;
+const ATTACK_RELEASE_BYTE: u32 = 0x011e_0783;
+const VATS_ATTACK_DELAY: u32 = 0x011e_0bf4;
+const ATTACK_COUNTER: u32 = 0x011e_0bf0;
+const COMBAT_DIALOGUE_MANAGER: u32 = 0x011f_1708;
+
+/// Whether the `slot` of the player's process (`pCurrentProcess`) reports
+/// true (its low byte).
+fn process_flag(e: &mut Engine, this: Ptr<PlayerCharacter>, slot: u32) -> bool {
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    e.vcall(process, slot, &args![]).u8() != 0
+}
+
+/// The animation group word of animation `animation` in slot `slot`
+/// (`004301b0`).
+fn animation_group(e: &mut Engine, animation: u32, slot: u32) -> u32 {
+    e.call(0x0043_01b0, &args![animation, slot]).u16() as u32
+}
+
+/// The attack animation group `0051f5f0` gives for the weapon, or `None`
+/// without a weapon or when it gives 0xFF.
+fn weapon_attack_group(e: &mut Engine, weapon: u32) -> Option<u32> {
+    if weapon != 0 && e.call(0x0051_f5f0, &args![weapon]).u32() != 0xff {
+        Some(e.call(0x0051_f5f0, &args![weapon]).u32())
+    } else {
+        None
+    }
+}
+
+/// The attack group for the animation type `00495e40` reports for
+/// animation `animation`: the types 0x33 to 0x38 give 0x26, 0x2C, 0x32, 0x38,
+/// 0x3E and 0x44, type 0x6C gives 0x1A, and any other the weapon's own group
+/// or 0x20.
+fn typed_attack_group(e: &mut Engine, animation: u32, weapon: u32) -> u32 {
+    let kind = e.call(0x0049_5e40, &args![animation, 0u32]).u8() as i8 as i32;
+    match kind {
+        0x33 => 0x26,
+        0x34 => 0x2c,
+        0x35 => 0x32,
+        0x36 => 0x38,
+        0x37 => 0x3e,
+        0x38 => 0x44,
+        0x6c => 0x1a,
+        _ => weapon_attack_group(e, weapon).unwrap_or(0x20),
+    }
+}
+
+/// An entry point value of the player (`BGSEntryPoint::HandleEntryPoint`
+/// with the entry point `entry` and the player, starting from 0.0).
+fn entry_point_value(e: &mut Engine, entry: u32) -> f32 {
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    e.with_stack(4, |e, value| {
+        e.mem.set_f32(value.addr(), 0.0);
+        e.call(0x005e_58f0, &args![entry, player, value]);
+        e.mem.f32(value.addr())
+    })
+}
+
+/// The VATS part of [`fn_00948310`] (mode 4): clears the queued attack,
+/// gets the current action (`009c71c0`) and, when no delay is counting down
+/// (`011e0bf4`, which it decrements), the action is an attack
+/// (`ActionPoints::IsAttackAction`, byte `+8` set, `+6` and `+0x24` clear) and
+/// the animation and weapon conditions hold, sets the delay to 3, presses
+/// button 4 (`00a24280`) and decrements the action's counter byte (`+8`) for
+/// the action kinds 0, 1, 2, 0x10, 0x11, 0x14 and 0x15. Returns the action.
+fn vats_attack_step(e: &mut Engine, anim0: u32, input: u32, weapon: u32) -> u32 {
+    e.set_global(ATTACK_QUEUED, 0u32);
+    let action = e.call(0x009c_71c0, &args![VATS_OBJECT]).u32();
+    let delay = e.global::<u32>(VATS_ATTACK_DELAY);
+    if delay != 0 {
+        e.set_global(VATS_ATTACK_DELAY, delay.wrapping_sub(1));
+        return action;
+    }
+    if action == 0 {
+        return action;
+    }
+    let kind = e.mem.u32(action);
+    if e.call(0x0066_dde0, &args![kind]).u8() == 0
+        || e.mem.u8(action + 8) == 0
+        || e.mem.u8(action + 6) != 0
+        || e.mem.u8(action + 0x24) != 0
+    {
+        return action;
+    }
+    let melee = weapon != 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0;
+    if !melee {
+        let group = animation_group(e, anim0, 4);
+        if e.call(0x005f_2440, &args![group]).i32() != 0x11 {
+            let group = animation_group(e, anim0, 4);
+            if e.call(0x005f_2440, &args![group]).i32() != 0x14 {
+                return action;
+            }
+        }
+        let current = e.call(0x0049_1040, &args![anim0, 4u32]).u32();
+        if e.call(0x0080_41a0, &args![current]).u32() != 1 {
+            return action;
+        }
+        for slot in [5u32, 6u32] {
+            if e.call(0x0049_1040, &args![anim0, slot]).u32() != 0 {
+                let other = e.call(0x0049_1040, &args![anim0, slot]).u32();
+                if e.call(0x0080_41a0, &args![other]).u32() != 1 {
+                    return action;
+                }
+            }
+        }
+    }
+    let mut allowed = false;
+    let mut check_idle = false;
+    if e.call(0x0059_bb30, &args![VATS_OBJECT]).u32() != 0 {
+        check_idle = true;
+    } else if (weapon != 0 && e.call(0x0064_50c0, &args![weapon]).u8() == 0)
+        || e.call(0x0044_edb0, &args![VATS_OBJECT]).u32() == 0
+    {
+        allowed = true;
+    } else {
+        let procedure = e.call(0x0044_edb0, &args![VATS_OBJECT]).u32();
+        if e.call(0x0058_d630, &args![procedure]).u8() == 0 {
+            allowed = true;
+        } else {
+            let distance = e.call(0x004a_7bd0, &args![VATS_OBJECT]).f64();
+            if distance <= 0.0 {
+                check_idle = true;
+            } else {
+                allowed = true;
+            }
+        }
+    }
+    if check_idle && e.call(0x0049_81f0, &args![anim0]).u8() != 0 {
+        let part = e.call(0x0059_bb30, &args![VATS_OBJECT]).u32();
+        if e.call(0x0049_8d30, &args![anim0, part]).u8() == 0 {
+            allowed = true;
+        }
+    }
+    if !allowed {
+        return action;
+    }
+    e.call(0x00a2_4280, &args![input, 4u32]);
+    if weapon != 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
+        return action;
+    }
+    e.set_global(VATS_ATTACK_DELAY, 3u32);
+    match e.mem.u32(action) {
+        0 | 1 | 2 | 0x10 | 0x11 | 0x14 | 0x15 => {
+            let count = e.mem.u8(action + 8);
+            e.mem.set_u8(action + 8, count.wrapping_sub(1));
+        }
+        _ => {}
+    }
+    action
+}
+
+/// The "queued attack" branch of [`fn_00948310`] (`011e07ac` nonzero): picks
+/// the attack group for the queued attack from the current animation
+/// (attack, power attack), the process flags (slots `0x1B0`, `0x1A8`,
+/// `0x1B4`, `0x1AC`) and the weapon; returns the new group or `group`
+/// unchanged.
+fn queued_attack_group(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    anim0: u32,
+    weapon: u32,
+    group: u32,
+) -> u32 {
+    let mut group = group;
+    let queued = e.global::<u32>(ATTACK_QUEUED);
+    let current = animation_group(e, anim0, 4);
+    if e.call(0x005f_2540, &args![current]).u8() != 0 {
+        let current = animation_group(e, anim0, 4);
+        if e.call(0x005f_2670, &args![current]).u8() != 0 {
+            return group;
+        }
+        if process_flag(e, this, 0x1b0) {
+            let action = e.call(0x008a_7570, &args![this]).u32();
+            let held = action == 5 || e.call(0x008a_7570, &args![this]).u32() == 6;
+            if held && e.call(0x0070_f490, &args![anim0, 4u32]).i32() <= 2 {
+                return group;
+            }
+            if let Some(found) = weapon_attack_group(e, weapon) {
+                group = found;
+            } else if process_flag(e, this, 0x1a8) || process_flag(e, this, 0x1b4) {
+                group = 0x72;
+            } else if process_flag(e, this, 0x1ac) {
+                group = 0x66;
+            }
+            e.set(this, PlayerCharacter::fProjectileReleaseTimer, 0.0);
+        } else if e.call(0x0070_f490, &args![anim0, 4u32]).i32() == 3 {
+            if queued == 1 {
+                group = typed_attack_group(e, anim0, weapon);
+            } else if queued == 2 {
+                group = 0x5c;
+            }
+        }
+    } else if process_flag(e, this, 0x1b0) {
+        let action = e.call(0x008a_7570, &args![this]).u32();
+        if action != 4 || e.call(0x0070_f490, &args![anim0, 4u32]).i32() > 2 {
+            if let Some(found) = weapon_attack_group(e, weapon) {
+                group = found;
+            } else if process_flag(e, this, 0x1a8) || process_flag(e, this, 0x1b4) {
+                group = 0x72;
+            } else {
+                group = 0x66;
+            }
+            e.set(this, PlayerCharacter::fProjectileReleaseTimer, 0.0);
+        }
+    } else if queued == 1 {
+        group = weapon_attack_group(e, weapon).unwrap_or(0x20);
+    } else if queued == 2 {
+        group = 0x5c;
+    }
+    group
+}
+
+/// A new press of the attack button while the actor is reloading (animation
+/// action 0x11): returns false (the whole function returns 0) when the
+/// magazine item (process slot `0x14C`) is empty. Otherwise it works out the
+/// stance and direction from the movement bits (`008846e0`), queues the
+/// equip of the next round (`Actor::QueueEquipObject`) while the clip
+/// (`GetFormClipRounds`) is not full and the player carries enough
+/// (`InventoryChanges::GetObjectCount`), then picks the reload animation
+/// (`TESAnimGroup::AnimGroup`, `Animation::PickBestAnimation`) and plays it
+/// (`Animation::PlayGroup`), sets the anim action (`Actor::SetAnimAction`)
+/// and calls slot `0x4B0` of the player.
+fn reload_attack(e: &mut Engine, this: Ptr<PlayerCharacter>, anim0: u32, weapon: u32) -> bool {
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let magazine = e.vcall(process, 0x14c, &args![]).u32();
+    if magazine != 0 && e.call(0x0072_6070, &args![magazine]).u32() == 0 {
+        return false;
+    }
+    let bits = e.call(0x0088_46e0, &args![this]).u32() as u16;
+    let mut stance = 0u32;
+    if bits & 0x800 != 0 {
+        stance = 2;
+    } else if bits & 0x2000 != 0 {
+        stance = 3;
+    } else if bits & 0x400 != 0 {
+        stance = 1;
+    }
+    let mut direction = 0xffu32;
+    if bits & 0x200 != 0 {
+        if bits & 1 != 0 {
+            direction = 7;
+        } else if bits & 2 != 0 {
+            direction = 8;
+        } else if bits & 4 != 0 {
+            direction = 9;
+        } else if bits & 8 != 0 {
+            direction = 10;
+        }
+    } else if bits & 1 != 0 {
+        direction = 3;
+    } else if bits & 2 != 0 {
+        direction = 4;
+    } else if bits & 4 != 0 {
+        direction = 5;
+    } else if bits & 8 != 0 {
+        direction = 6;
+    }
+    let mut next = 0i32;
+    let mut capacity = 0i32;
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let magazine = e.vcall(process, 0x14c, &args![]).u32();
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let equipped = e.vcall(process, 0x148, &args![]).u32();
+    let changes = e.call(0x004b_f220, &args![this]).u32();
+    if equipped != 0 {
+        let modified = e.call(0x004b_da70, &args![equipped, 2u32]).u8();
+        capacity = e.call(0x004f_e160, &args![weapon, modified as u32]).i32();
+    }
+    let mut carried = 0i32;
+    if changes != 0 {
+        let item = e.call(0x0044_ddc0, &args![magazine]).u32();
+        carried = e.call(0x004c_8f30, &args![changes, item]).i32();
+    }
+    if magazine != 0 {
+        next = e.call(0x0072_6070, &args![magazine]).i32().wrapping_add(1);
+    }
+    if magazine != 0 && next <= carried && next < capacity {
+        let item = e.call(0x0044_ddc0, &args![magazine]).u32();
+        e.call(
+            0x0088_c650,
+            &args![this, item, next, 0u32, 1u32, 0u32, 0u32],
+        );
+    }
+    let rapid =
+        e.call(0x008b_a3e0, &args![this]).u8() != 0 || e.call(0x008b_a410, &args![this]).u8() != 0;
+    let group = e
+        .call(0x005f_2370, &args![stance, 0u32, direction, rapid as u32])
+        .u16();
+    let pick = e.call(0x0049_5740, &args![anim0, group as u32, 0u32]).u16();
+    if pick != 0xff {
+        let player_animation = e.call(0x0095_0a60, &args![this, 0u32]).u32();
+        e.call(
+            0x0049_4740,
+            &args![player_animation, pick as u32, 1u32, 1u32, 4u32],
+        );
+        let player_animation = e.call(0x0095_0a60, &args![this, 0u32]).u32();
+        let object = e.call(0x0049_1040, &args![player_animation, 4u32]).u32();
+        e.call(0x008a_73e0, &args![this, 0xffff_ffffu32, object]);
+        e.vcall(this.addr(), 0x4b0, &args![pick as u32, 1u32]);
+    }
+    true
+}
+
+/// A new press of the attack button for a non-melee weapon with an attack
+/// animation underway that is not a power attack: queues the next attack
+/// (`011e07ac` = 1) unless the weapon has no ammunition (`GetCurrentAmmo` 0
+/// and `00474a80` of its ammo list false) or, with ammunition, unless the
+/// animation (`00598040`, `0094a070`, `00495e40`) still has time to run.
+fn queue_next_attack(e: &mut Engine, anim0: u32, weapon: u32) {
+    if weapon == 0 {
+        e.set_global(ATTACK_QUEUED, 1u32);
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    let ammo = e.call(0x0052_5980, &args![weapon, player]).u32();
+    let has_ammo = if ammo != 0 {
+        true
+    } else {
+        e.call(0x0047_4a80, &args![weapon + 0xa4]).u8() != 0
+    };
+    if !has_ammo {
+        e.set_global(ATTACK_QUEUED, 1u32);
+        return;
+    }
+    let current = e.call(0x0049_1040, &args![anim0, 4u32]).u32();
+    let start = e.call(0x0059_8040, &args![current]).f32();
+    let current = e.call(0x0049_1040, &args![anim0, 4u32]).u32();
+    let end = fn_0094a070(e, Ptr::new(current));
+    let now = e.with_stack(4, |e, slot| {
+        e.mem.set_f32(slot.addr(), 0.0);
+        e.call(0x0049_5e40, &args![anim0, slot]);
+        e.mem.f32(slot.addr())
+    });
+    if e.call(0x0052_4b40, &args![weapon]).u8() == 0
+        && (now <= start || ((end as f64 - start as f64) < 0.5))
+    {
+        e.set_global(ATTACK_QUEUED, 1u32);
+    }
+}
+
+/// The reaction of the attack button for a non-queued attack (the
+/// `GetFormClipRounds`-free path): the process flag `0x1A8` gives group
+/// 0x72 and state 2, `0x1AC` group 0x66 and state 4, `0x1B4` group 0x72 and
+/// state 3, each replaced by the weapon's own group and each telling
+/// `00963eb0(state, 3.0, 0)` and setting the release timer to 10 in VATS
+/// (mode 4) or 0; none of them gives group 0x20 (or the weapon's).
+fn ranged_attack_reaction(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    weapon: u32,
+    vats: bool,
+    group: &mut u32,
+) {
+    let states: [(u32, u32, u32); 3] = [(0x1a8, 2, 0x72), (0x1ac, 4, 0x66), (0x1b4, 3, 0x72)];
+    for (slot, state, default) in states {
+        if process_flag(e, this, slot) {
+            *group = weapon_attack_group(e, weapon).unwrap_or(default);
+            let speed = e.global::<f32>(0x0101_7718);
+            e.call(0x0096_3eb0, &args![this, state, speed, 0u32]);
+            let timer = if vats {
+                e.global::<f32>(0x0101_7b78)
+            } else {
+                0.0
+            };
+            e.set(this, PlayerCharacter::fProjectileReleaseTimer, timer);
+            return;
+        }
+    }
+    *group = weapon_attack_group(e, weapon).unwrap_or(0x20);
+}
+
+/// The attack button held (state 0) with the weapon out (slot `0x454`,
+/// `008a6970`) and the latch clear: advances the projectile release timer
+/// while charging a thrown or mine attack (process slots `0x1A8` / `0x1B4`
+/// with action 5 or 6 early in its animation), clears the VATS action's
+/// counter when the weapon has no rounds left, and for the "main" weapon
+/// cases tells `00963eb0` and sets the group; then, unless the player is
+/// blocked (slot `0x358`) and the hold timer passed the setting `011cdda8`,
+/// queues the next attack (`011e07ac` 1 or 2) or the unarmed power attack
+/// (group 0x5C).
+#[allow(clippy::too_many_arguments)]
+fn held_attack(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    anim0: u32,
+    weapon: u32,
+    action: u32,
+    vats: bool,
+    time_step: f32,
+    ready: &mut bool,
+    group: &mut u32,
+) {
+    let player = e.global::<u32>(PLAYER_SINGLETON);
+    if process_flag(e, this, 0x1a8) || process_flag(e, this, 0x1b4) {
+        let state = e.call(0x008a_7570, &args![this]).u32();
+        let throwing = state == 5 || e.call(0x008a_7570, &args![this]).u32() == 6;
+        if throwing && e.call(0x0070_f490, &args![anim0, 4u32]).i32() <= 2 {
+            let timer = e.get(this, PlayerCharacter::fProjectileReleaseTimer);
+            e.set(
+                this,
+                PlayerCharacter::fProjectileReleaseTimer,
+                (timer as f64 + time_step as f64) as f32,
+            );
+        }
+    }
+    if action != 0 && weapon != 0 && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let magazine = e.vcall(process, 0x14c, &args![]).u32();
+        if e.call(0x0072_6070, &args![magazine]).u32() == 0 {
+            e.mem.set_u8(action + 8, 0);
+        }
+    }
+    let mut main = false;
+    if weapon != 0 {
+        let ammo = e.call(0x0052_5980, &args![weapon, player]).u32();
+        let mut recheck = true;
+        if ammo == 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
+            main = true;
+            recheck = false;
+        }
+        if recheck && e.call(0x0052_5980, &args![weapon, player]).u32() != 0 {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            main = e.vcall(process, 0x14c, &args![]).u32() != 0;
+        }
+    }
+    if main {
+        let two = e.global::<f32>(0x0101_62c0);
+        e.call(0x0096_3eb0, &args![this, 3u32, two, 0u32]);
+        if e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
+            let mut ready_for_group = true;
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            let hand = e.vcall(process, 0x438, &args![this]).u8();
+            let current = animation_group(e, anim0, 4);
+            if e.call(0x005f_25d0, &args![current]).u8() == 0 {
+                *ready = true;
+            } else {
+                let step = e.call(0x0070_f490, &args![anim0, 4u32]).i32();
+                if step == 1 {
+                    *ready = true;
+                } else {
+                    ready_for_group = false;
+                }
+            }
+            if hand != 0 && ready_for_group {
+                let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                e.vcall(process, 0x43c, &args![hand as u32]);
+                *group = typed_attack_group(e, anim0, weapon);
+            }
+        }
+    } else {
+        let speed = e.global::<f32>(0x0101_7718);
+        if process_flag(e, this, 0x1a8) {
+            e.call(0x0096_3eb0, &args![this, 2u32, speed, 0u32]);
+        } else if process_flag(e, this, 0x1ac) {
+            e.call(0x0096_3eb0, &args![this, 4u32, speed, 0u32]);
+        } else if process_flag(e, this, 0x1b4) {
+            e.call(0x0096_3eb0, &args![this, 3u32, speed, 0u32]);
+        } else {
+            let one_and_a_half = e.global::<f32>(0x0101_6088);
+            e.call(0x0096_3eb0, &args![this, 1u32, one_and_a_half, 0u32]);
+        }
+        let current = animation_group(e, anim0, 4);
+        if e.call(0x005f_2670, &args![current]).u8() == 0
+            && e.global::<u32>(ATTACK_QUEUED) != 2
+            && !process_flag(e, this, 0x1b0)
+        {
+            let timer = e.global::<f32>(ATTACK_HOLD_TIMER);
+            e.set_global(ATTACK_HOLD_TIMER, (timer as f64 + time_step as f64) as f32);
+        }
+    }
+    let _ = vats;
+    let blocked = e.vcall(this.addr(), 0x358, &args![]).u8() != 0;
+    if !blocked {
+        let limit = setting_float(e, 0x011c_dda8);
+        let held = e.global::<f32>(ATTACK_HOLD_TIMER);
+        if (limit as f64) < held as f64 {
+            if e.call(0x005a_2030, &args![this]).u8() != 0 {
+                e.set_global(ATTACK_QUEUED, 1u32);
+            } else {
+                let current = animation_group(e, anim0, 4);
+                let mut power = false;
+                if e.call(0x005f_2540, &args![current]).u8() != 0 {
+                    let object = e.call(0x0049_1040, &args![anim0, 4u32]).u32();
+                    let looping = e.call(0x0049_3800, &args![anim0, object]).f64();
+                    if looping > 0.0 {
+                        e.set_global(ATTACK_QUEUED, 2u32);
+                        power = true;
+                    }
+                }
+                if !power {
+                    *group = 0x5c;
+                }
+            }
+            e.set_global(ATTACK_HOLD_TIMER, 0.0f32);
+        }
+    }
+}
+
+/// Nothing pressed or held for the attack button (the last branch of the
+/// button handling). The draw button (button 7) released (state 2) while the
+/// weapon is out, with the draw timer (`011e07e0`) running and below the
+/// setting `011cdfcc` and an item equipped (slot `0x148`), while the action
+/// is none or the animation step is 3: for the RockIt launcher queues a menu
+/// (`Interface::QueueMenuCreate`), otherwise re-equips the weapon (slot
+/// `0x3EC`) when its ammunition regeneration rate (`00709430`) is not
+/// positive; slot `0x6E0` is told 0. Otherwise a released attack animation
+/// ends the attack (slot `0x6E0`) and sets the byte `011e0783` from the
+/// animation step.
+fn released_attack(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    input: u32,
+    anim0: u32,
+    weapon: u32,
+    ready: &mut bool,
+) {
+    let draw_timer = e.global::<f32>(DRAW_BUTTON_TIMER);
+    if button_state(e, input, 7, 2)
+        && process_flag(e, this, 0x454)
+        && draw_timer != 0.0
+        && {
+            let limit = setting_float(e, 0x011c_dfcc);
+            (limit as f64) > e.global::<f32>(DRAW_BUTTON_TIMER) as f64
+        }
+        && {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            e.vcall(process, 0x148, &args![]).u32() != 0
+        }
+    {
+        let action = e.call(0x008a_7570, &args![this]).u32();
+        if action == 0xffff_ffff || e.call(0x0070_f490, &args![anim0, 4u32]).i32() == 3 {
+            if e.call(0x0047_4a80, &args![weapon.wrapping_add(0xa4)]).u8() != 0 {
+                e.call(0x0070_9470, &args![1u32, 0u32, 0u32, 0u32, 4u32, 0u32]);
+            } else {
+                let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                let item = e.vcall(process, 0x148, &args![]).u32();
+                let modified = e.call(0x004b_da70, &args![item, 6u32]).u8();
+                let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                let item = e.vcall(process, 0x148, &args![]).u32();
+                let object = e.call(0x0044_ddc0, &args![item]).u32();
+                let rate = e.call(0x0070_9430, &args![object, modified as u32]).f64();
+                if rate <= 0.0 {
+                    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                    let item = e.vcall(process, 0x148, &args![]).u32();
+                    let modified = e.call(0x004b_da70, &args![item, 2u32]).u8();
+                    e.vcall(
+                        this.addr(),
+                        0x3ec,
+                        &args![weapon, 2u32, modified as u32, 0u32],
+                    );
+                }
+            }
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            e.vcall(process, 0x6e0, &args![0u32]);
+            *ready = false;
+        }
+        return;
+    }
+    let group = animation_group(e, anim0, 4);
+    if e.call(0x005f_2540, &args![group]).u8() != 0
+        && (button_state(e, input, 4, 2) || !button_state(e, input, 4, 0))
+    {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        e.vcall(process, 0x6e0, &args![0u32]);
+        *ready = false;
+        let group = animation_group(e, anim0, 4);
+        if e.call(0x005f_25d0, &args![group]).u8() != 0 {
+            let step = e.call(0x0070_f490, &args![anim0, 4u32]).i32();
+            e.mem.set_u8(ATTACK_RELEASE_BYTE, (step < 1) as u8);
+        }
+    }
+}
+
+/// The power attack group of [`fn_00948310`] (the group was 0x5C): with
+/// `004997b0` false and one of the actor values 0x1D and 0x1E positive it
+/// becomes the directional group 0x5D to 0x60 from the movement bits
+/// (`008846e0`; 0x5D is replaced by the weapon's `0094a0a0` unless that is
+/// 0xFF), and with `bound` (no weapon, or the bound weapon `0x2D`) the perk
+/// groups 0x61, 0x62, 0x64 and 0x65 when the entry points 0x3D, 0x3E, 0x41
+/// and 0x42 are positive. Otherwise, with `bound`, entry point 0x3F positive
+/// gives 0x63. Returns the group.
+fn power_attack_group(e: &mut Engine, this: Ptr<PlayerCharacter>, weapon: u32, bound: bool) -> u32 {
+    let mut group = 0x5cu32;
+    let mut directional = false;
+    if e.call(0x0049_97b0, &args![this]).u8() == 0 {
+        let owner = this.addr().wrapping_add(ACTOR_VALUE_OWNER_BASE);
+        if e.vcall(owner, 0xc, &args![0x1du32]).f64() > 0.0
+            || e.vcall(owner, 0xc, &args![0x1eu32]).f64() > 0.0
+        {
+            directional = true;
+        }
+    }
+    if directional {
+        let bits = e.call(0x0088_46e0, &args![this]).u32() as u16;
+        if bits & 1 != 0 {
+            group = 0x5d;
+        } else if bits & 2 != 0 {
+            group = 0x5e;
+        } else if bits & 4 != 0 {
+            group = 0x5f;
+        } else if bits & 8 != 0 {
+            group = 0x60;
+        }
+        if group == 0x5d && weapon != 0 && e.call(0x0094_a0a0, &args![weapon]).u32() != 0xff {
+            group = e.call(0x0094_a0a0, &args![weapon]).u32();
+        }
+        if bound {
+            let forward = entry_point_value(e, 0x3d);
+            let backward = entry_point_value(e, 0x3e);
+            let left = entry_point_value(e, 0x41);
+            let right = entry_point_value(e, 0x42);
+            if group == 0x5d && forward > 0.0 {
+                group = 0x61;
+            } else if group == 0x5e && backward > 0.0 {
+                group = 0x62;
+            } else if group == 0x5f && left > 0.0 {
+                group = 0x64;
+            } else if group == 0x60 && right > 0.0 {
+                group = 0x65;
+            }
+        }
+    } else if bound {
+        let value = entry_point_value(e, 0x3f);
+        if value > 0.0 {
+            group = 0x63;
+        }
+    }
+    group
+}
+
+/// The end of [`fn_00948310`] while the attack button is down and the weapon
+/// is out: unless the weapon is a ranged one without ammunition or the
+/// animation is not an attack (or is a power attack), an attack is queued or
+/// the VATS mode is on, it looks at the animation's loop value
+/// (`TESAnimGroup::IsJumpingLoopAnim`): with process slot `0x1A8` it
+/// re-synchronises ([`fn_009481d0`]) when the repeat latch is set;
+/// otherwise, when the loop value is not positive or
+/// `LowProcess::GetGenericLocation` is not 1, and the player is not blocked
+/// (slot `0x358`), both animations skip an update (`Animation::SkipUpdate`).
+fn sync_attack_animation(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    anim0: u32,
+    anim1: u32,
+    weapon: u32,
+    vats: bool,
+) {
+    if weapon != 0 && e.call(0x0064_50c0, &args![weapon]).u8() == 0 && !process_flag(e, this, 0x1a8)
+    {
+        return;
+    }
+    if weapon != 0 {
+        let player = e.global::<u32>(PLAYER_SINGLETON);
+        if e.call(0x0052_5980, &args![weapon, player]).u32() == 0
+            && e.call(0x0052_4b40, &args![weapon]).u8() != 0
+        {
+            return;
+        }
+    }
+    let group = animation_group(e, anim0, 4);
+    if e.call(0x005f_2540, &args![group]).u8() == 0 {
+        return;
+    }
+    let group = animation_group(e, anim0, 4);
+    if e.call(0x005f_2670, &args![group]).u8() != 0 {
+        return;
+    }
+    if e.global::<u32>(ATTACK_QUEUED) != 0 || vats {
+        return;
+    }
+    let object = e.call(0x0049_1040, &args![anim0, 4u32]).u32();
+    let looping = e.call(0x0049_3800, &args![anim0, object]).f32();
+    if process_flag(e, this, 0x1a8) {
+        if e.mem.u8(ATTACK_REPEAT_LATCH) != 0 {
+            fn_009481d0(e, this);
+        }
+        return;
+    }
+    let skip = if looping <= 0.0 {
+        true
+    } else {
+        e.call(0x0080_41a0, &args![object]).u32() != 1
+    };
+    if skip && e.vcall(this.addr(), 0x358, &args![]).u8() == 0 {
+        e.call(0x008e_eaa0, &args![anim0, 4u32]);
+        e.call(0x008e_eaa0, &args![anim1, 4u32]);
+    }
+}
+
+// Translated from 00948310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player's attack button handling (called from [`fn_009466d0`]): works
+/// out which attack animation group to start (`0xFF` for none) from the
+/// attack button (button 4: state 1 pressed, 0 held, 2 released) and the
+/// weapon, then starts it with `Actor::StartAttack` (`00893a40`). Returns
+/// whether an attack input was handled.
+///
+/// - In VATS (mode 4 of the `VATS` object) [`vats_attack_step`] runs, and
+///   the group is overridden by the action kind (0x10: 0x5D or the weapon's
+///   `0094a0a0` group if it is a power attack, else 0x5C; 0x11: 0x38; 0x14:
+///   0x3E; 0x15: 0xA9).
+/// - A queued attack (`011e07ac`) selects its group in
+///   [`queued_attack_group`].
+/// - A new press ([`reload_attack`] while reloading, else the next queued
+///   attack or the weapon reaction), a held button ([`held_attack`]) or a
+///   release ([`released_attack`]) set the group and the flags.
+/// - A group of 0x5C is replaced by [`power_attack_group`]; with the bound
+///   weapon (none, or `008d85e0` = 0x2D) a positive `fCounterAttackTimer`
+///   (`009443a0`) and entry point 0x40 give 0xA8.
+/// - Finally [`sync_attack_animation`] keeps the animation in step while the
+///   button is down.
+///
+/// The byte local the original keeps at `EBP-5` is never read and is not
+/// kept.
+pub fn fn_00948310(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    let mut group = 0xffu32;
+    let anim0 = e.call(0x0095_0a60, &args![this, 0u32]).u32();
+    let anim1 = e.call(0x0095_0a60, &args![this, 1u32]).u32();
+    let main = e.global::<u32>(MAIN_SINGLETON);
+    let input = e.call(0x0087_7720, &args![main]).u32();
+    let mut handled = false;
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let weapon = if e.vcall(process, 0x148, &args![]).u32() != 0 {
+        let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+        let item = e.vcall(process, 0x148, &args![]).u32();
+        e.call(0x0044_ddc0, &args![item]).u32()
+    } else {
+        0
+    };
+    let vats = e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 4;
+    let mut action = 0u32;
+    let step = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
+    let multiplier = e.call(0x009c_8cc0, &args![VATS_OBJECT]).f64();
+    let time_step = (multiplier * step) as f32;
+    if vats {
+        action = vats_attack_step(e, anim0, input, weapon);
+    } else {
+        e.set_global(VATS_ATTACK_DELAY, 0u32);
+    }
+    if process_flag(e, this, 0x3f0) {
+        e.set_global(ATTACK_QUEUED, 0u32);
+        e.call(0x00a2_4280, &args![input, 4u32]);
+    }
+    let mut ready = false;
+    'select: {
+        if e.global::<u32>(ATTACK_QUEUED) != 0 {
+            group = queued_attack_group(e, this, anim0, weapon, group);
+            break 'select;
+        }
+        if button_state(e, input, 4, 1) && e.mem.u8(ATTACK_BUTTON_LATCH) == 0 {
+            if !process_flag(e, this, 0x454) {
+                let bits = e.call(0x0088_46e0, &args![this]).u32();
+                if bits & 0x800 == 0 {
+                    e.call(0x008a_6840, &args![this, 1u32]);
+                }
+            } else if e.call(0x008a_7570, &args![this]).u32() == 0x11 {
+                if !reload_attack(e, this, anim0, weapon) {
+                    return false;
+                }
+            } else {
+                let current = animation_group(e, anim0, 4);
+                let attacking = e.call(0x005f_2540, &args![current]).u8() != 0;
+                if attacking && (weapon == 0 || e.call(0x0052_4b40, &args![weapon]).u8() == 0) {
+                    if !process_flag(e, this, 0x1b0) {
+                        let mut skip = false;
+                        if e.call(0x0049_97b0, &args![this]).u8() != 0 {
+                            let current = animation_group(e, anim0, 4);
+                            skip = e.call(0x005f_2670, &args![current]).u8() != 0;
+                        }
+                        if !skip {
+                            queue_next_attack(e, anim0, weapon);
+                        }
+                    }
+                } else {
+                    e.mem.set_u8(ATTACK_RELEASE_BYTE, 0);
+                    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                    e.vcall(process, 0x434, &args![1u32]);
+                    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                    e.vcall(process, 0x43c, &args![1u32]);
+                    if weapon != 0 {
+                        ready = true;
+                    }
+                    if weapon != 0 && e.call(0x0052_4b40, &args![weapon]).u8() != 0 {
+                        let kind = e.call(0x0051_f5f0, &args![weapon]).u32();
+                        if e.call(0x005f_25d0, &args![kind]).u8() == 0 {
+                            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+                            e.vcall(process, 0x3f4, &args![1u32]);
+                        }
+                    }
+                    let mut thrown_kind = false;
+                    if weapon != 0 {
+                        let kind = e.call(0x0051_f5f0, &args![weapon]).u32();
+                        thrown_kind = e.call(0x005f_25d0, &args![kind]).u8() != 0;
+                    }
+                    if !thrown_kind {
+                        ranged_attack_reaction(e, this, weapon, vats, &mut group);
+                    }
+                }
+            }
+            e.set_global(ATTACK_HOLD_TIMER, 0.0f32);
+            handled = true;
+            break 'select;
+        }
+        if button_state(e, input, 4, 0)
+            && process_flag(e, this, 0x454)
+            && e.call(0x008a_6970, &args![this]).u8() != 0
+            && e.mem.u8(ATTACK_BUTTON_LATCH) == 0
+        {
+            held_attack(
+                e, this, anim0, weapon, action, vats, time_step, &mut ready, &mut group,
+            );
+            handled = true;
+            break 'select;
+        }
+        released_attack(e, this, input, anim0, weapon, &mut ready);
+    }
+    // ---- 009498cf: start the chosen attack ----
+    if group != 0xff {
+        if (weapon == 0 || e.call(0x0064_50c0, &args![weapon]).u8() != 0)
+            && e.call(0x008a_7570, &args![this]).u32() == 7
+        {
+            e.call(0x0089_4cc0, &args![this, 0u32]);
+        }
+        if e.call(0x0049_97b0, &args![this]).u8() != 0
+            && (weapon == 0
+                || (e.call(0x0064_50c0, &args![weapon]).u8() != 0
+                    && e.call(0x0052_4b40, &args![weapon]).u8() == 0))
+            && e.call(0x005a_2030, &args![this]).u8() == 0
+        {
+            group = 0x5c;
+        }
+        let mut dialogue = false;
+        let bound = weapon == 0 || e.call(0x008d_85e0, &args![weapon]).u32() == 0x2d;
+        if bound {
+            let timer = fn_009443a0(e, this);
+            if timer as f64 > 0.0 && entry_point_value(e, 0x40) > 0.0 {
+                group = 0xa8;
+            }
+        }
+        if group == 0x5c {
+            group = power_attack_group(e, this, weapon, bound);
+            let setting = setting_float(e, 0x011c_e3d8);
+            if e.call(0x004d_ff00, &args![setting]).u8() != 0 {
+                dialogue = true;
+            }
+        }
+        if vats && action != 0 {
+            let kind = e.mem.u32(action);
+            if kind == 0x10 {
+                group = 0x5d;
+                if weapon != 0 && e.call(0x0094_a0a0, &args![weapon]).u32() != 0 {
+                    group = e.call(0x0094_a0a0, &args![weapon]).u32();
+                }
+                if e.call(0x005f_2670, &args![group & 0xffff]).u8() == 0 {
+                    group = 0x5c;
+                }
+            } else if kind == 0x11 && e.call(0x0049_97b0, &args![this]).u8() == 0 {
+                group = 0x38;
+            } else if kind == 0x14 {
+                group = 0x3e;
+            } else if kind == 0x15 {
+                group = 0xa9;
+            }
+        }
+        let started = e.call(0x0089_3a40, &args![this, group]).u8() != 0;
+        if started
+            && weapon != 0
+            && (e.call(0x0052_4b40, &args![weapon]).u8() != 0 || e.mem.u32(at(this, 0x1a0)) != 0)
+            && ready
+        {
+            let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+            e.vcall(process, 0x6e0, &args![1u32]);
+        }
+        if started && dialogue {
+            let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.call(
+                0x0098_39b0,
+                &args![manager, player, 0u32, 2u32, 1u32, 0u32, 0u32],
+            );
+        }
+        e.set_global(ATTACK_QUEUED, 0u32);
+        e.mem.set_u8(ATTACK_REPEAT_LATCH, 1);
+        e.set_global(ATTACK_COUNTER, 0u32);
+    }
+    // ---- 00949d93: keep the attack animation in step with the button ----
+    if (button_state(e, input, 4, 0) || button_state(e, input, 4, 1))
+        && process_flag(e, this, 0x454)
+        && e.mem.u8(ATTACK_BUTTON_LATCH) == 0
+    {
+        sync_attack_animation(e, this, anim0, anim1, weapon, vats);
+    } else {
+        e.mem.set_u8(ATTACK_REPEAT_LATCH, 0);
+        if e.call(0x008a_7570, &args![this]).u32() == 0xffff_ffff {
+            e.mem.set_u8(ATTACK_BUTTON_LATCH, 0);
+        }
+    }
+    handled
+}
+/// Size and offsets of the frame of [`fn_0094a0c0`]: the working copy of the
+/// camera position, three scratch points for the smoothing, the unit
+/// vector from the anchor to the camera, the two copies for the camera
+/// caster, its result structure, and the vectors of the distance update.
+const CAMERA_FRAME_SIZE: u32 = 0x120;
+const CAMERA_CURRENT: u32 = 0x00;
+const CAMERA_SMOOTH_A: u32 = 0x0c;
+const CAMERA_SMOOTH_B: u32 = 0x18;
+const CAMERA_SMOOTH_C: u32 = 0x24;
+const CAMERA_UNIT: u32 = 0x30;
+const CAMERA_PICK_DIRECTION: u32 = 0x3c;
+const CAMERA_PICK_ORIGIN: u32 = 0x48;
+const CAMERA_PICK_RESULT: u32 = 0x54;
+const CAMERA_SCALED_A: u32 = 0xd4;
+const CAMERA_TARGET: u32 = 0xe0;
+const CAMERA_SCALED_B: u32 = 0xec;
+const CAMERA_FINAL: u32 = 0xf8;
+const CAMERA_TRAVEL: u32 = 0x104;
+const CAMERA_TRAVEL_ANCHOR: u32 = 0x110;
+
+/// The smoothed camera position (three floats, `011e0808`).
+const CAMERA_SMOOTHED: u32 = 0x011e_0808;
+/// The camera distance (float, `011e0768`) that
+/// [`fn_0094a0c0`] moves towards its target value.
+const CAMERA_DISTANCE: u32 = 0x011e_0768;
+/// A byte global (`011e07c3`): the distance snaps to the target next time.
+const CAMERA_SNAP: u32 = 0x011e_07c3;
+/// A byte global (`011e07c2`) set when the camera caster hit something far
+/// closer than the wanted distance.
+const CAMERA_BLOCKED: u32 = 0x011e_07c2;
+/// The float (`011a3b38`) that fades the player in and out when the camera
+/// is close, and a byte (`011a3b32`) that stops the fade-out.
+const PLAYER_FADE: u32 = 0x011a_3b38;
+const PLAYER_FADE_LATCH: u32 = 0x011a_3b32;
+
+/// Copies the three words at `source` to `destination`.
+fn copy_point(e: &mut Engine, destination: u32, source: u32) {
+    for i in 0..3 {
+        let word = e.mem.u32(source + 4 * i);
+        e.mem.set_u32(destination + 4 * i, word);
+    }
+}
+
+// Translated from 0094a0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves the third-person camera along the line from `anchor` (the point
+/// the camera looks at) to `position` (in and out: the camera position):
+/// the distance [`CAMERA_DISTANCE`] is brought towards the distance of the
+/// current position, limited by the zoom settings, the camera caster's hit
+/// (`CameraCaster::Pick`, which also sets [`CAMERA_BLOCKED`]), the player's
+/// view toggling (`bWant3rdPerson` against `b3rdPerson`) and the VATS mode,
+/// and the player is faded out when the camera is too close to him
+/// (`Actor::UpdateAlpha`). `snap` (or [`CAMERA_SNAP`]) puts the distance
+/// there at once. `position` receives the new camera position
+/// (`anchor + unit * distance`).
+///
+/// The compiler's stack cookie check is not translated.
+pub fn fn_0094a0c0(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    position: Ptr,
+    anchor: Ptr,
+    snap: bool,
+) {
+    e.with_stack(CAMERA_FRAME_SIZE, |e, frame| {
+        camera_distance_in_frame(e, this, position.addr(), anchor.addr(), snap, frame.addr());
+    });
+}
+
+#[allow(clippy::cognitive_complexity)]
+fn camera_distance_in_frame(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    position: u32,
+    anchor: u32,
+    snap: bool,
+    frame: u32,
+) {
+    let current = frame + CAMERA_CURRENT;
+    // The mode: wanted minus current third-person flag, as a signed byte.
+    let mut mode = (e.mem.u8(at(this, 0x64c)) as i32 - e.mem.u8(at(this, 0x64a)) as i32) as i8;
+    let mut blend = 1.0f32;
+    if mode != 0 {
+        if snap || e.mem.u8(CAMERA_SNAP) != 0 {
+            mode = 0;
+        } else {
+            let base = e.call(SETTING_FLOAT_GETTER, &args![0x011c_cfd8u32]).u32();
+            let near = setting_float(e, 0x011c_da94);
+            let from_near = e.global::<f32>(ZOOM_DISTANCE) as f64 - near as f64;
+            let far = setting_float(e, 0x011c_de14);
+            let near = setting_float(e, 0x011c_da94);
+            let ratio = from_near / (far as f64 - near as f64);
+            let scale = setting_float(e, 0x011c_dd60);
+            blend = (scale as f64 * ratio + e.mem.f32(base) as f64) as f32;
+        }
+    }
+    copy_point(e, current, position);
+    if snap || e.mem.u8(CAMERA_SNAP) != 0 {
+        copy_point(e, CAMERA_SMOOTHED, current);
+    } else if e.mem.u8(0x011e_07b9) != 0 {
+        let step = e.call(0x0084_d030, &args![0x011f_6394u32]).f32();
+        let rate = setting_float(e, 0x011c_d3d8);
+        let moved = e
+            .call(
+                0x0043_9ef0,
+                &args![current, frame + CAMERA_SMOOTH_A, CAMERA_SMOOTHED],
+            )
+            .u32();
+        let scaled = e
+            .call(0x0045_bb20, &args![moved, frame + CAMERA_SMOOTH_B, rate])
+            .u32();
+        let scaled = e
+            .call(0x0045_bb20, &args![scaled, frame + CAMERA_SMOOTH_C, step])
+            .u32();
+        e.call(0x0063_c8a0, &args![CAMERA_SMOOTHED, scaled]);
+        copy_point(e, current, CAMERA_SMOOTHED);
+    } else {
+        copy_point(e, CAMERA_SMOOTHED, current);
+    }
+    let unit = frame + CAMERA_UNIT;
+    e.call(0x0043_9ef0, &args![current, unit, anchor]);
+    let mut length = e.call(0x0045_7910, &args![unit]).f32();
+    e.mem.set_u8(CAMERA_BLOCKED, 0);
+    let caster = e.mem.u32(at(this, 0x21c));
+    if caster != 0 {
+        let pick_direction = frame + CAMERA_PICK_DIRECTION;
+        let pick_origin = frame + CAMERA_PICK_ORIGIN;
+        let result = frame + CAMERA_PICK_RESULT;
+        copy_point(e, pick_direction, anchor);
+        copy_point(e, pick_origin, current);
+        e.call(0x0062_1c40, &args![result]);
+        if e.call(0x0062_1440, &args![caster]).u32() == 0 {
+            let controller = e.call(0x0093_06d0, &args![this]).u32();
+            let shape = if controller != 0 {
+                let controller = e.call(0x0093_06d0, &args![this]).u32();
+                e.call(0x0062_1ad0, &args![controller]).u32()
+            } else {
+                0
+            };
+            e.call(0x0062_1370, &args![caster, shape]);
+        }
+        if e.call(
+            0x0062_0bc0,
+            &args![caster, pick_direction, pick_origin, result],
+        )
+        .u8()
+            != 0
+        {
+            e.call(0x0045_78c0, &args![pick_origin, pick_direction]);
+            let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
+            if length as f64 - hit > e.global::<f64>(0x0101_1590) {
+                e.mem.set_u8(CAMERA_BLOCKED, 1);
+            }
+            let hit = e.call(0x0045_7990, &args![pick_origin]).f64();
+            let margin = setting_float(e, 0x011e_0934);
+            length = (hit - margin as f64 * e.global::<f64>(0x0101_1588)) as f32;
+        }
+    }
+    let rate = setting_float(e, 0x011c_d288);
+    let elapsed = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
+    let step = ((elapsed * rate as f64) * blend as f64) as f32;
+    let mut ceiling = setting_float(e, 0x011c_d568);
+    if e.mem.u8(FREE_CAMERA_FLAG) != 0 {
+        ceiling = setting_float(e, 0x011c_de14);
+    }
+    if mode != 0 {
+        let direction = mode as i32 as f64;
+        let mut stepped = false;
+        if mode == 1 {
+            let wanted = direction * step as f64 + e.global::<f32>(CAMERA_DISTANCE) as f64;
+            if (length as f64) < wanted {
+                e.set_global(CAMERA_DISTANCE, length);
+                e.set_global(0x011e_07dc, 0.0f32);
+                mode = 0;
+                stepped = true;
+            }
+        }
+        if !stepped {
+            let moved = mode as i32 as f64 * step as f64 + e.global::<f32>(CAMERA_DISTANCE) as f64;
+            e.set_global(CAMERA_DISTANCE, moved as f32);
+        }
+        let distance = e.global::<f32>(CAMERA_DISTANCE);
+        if ceiling < distance {
+            e.set_global(CAMERA_DISTANCE, ceiling);
+            e.set_global(0x011e_07dc, 0.0f32);
+            mode = 0;
+        } else if e.global::<f32>(CAMERA_DISTANCE) < 0.0 {
+            e.set_global(CAMERA_DISTANCE, 0.0f32);
+            e.set_global(0x011e_07dc, 0.0f32);
+            mode = 0;
+        }
+    } else if snap || e.mem.u8(CAMERA_SNAP) != 0 {
+        e.set_global(CAMERA_DISTANCE, length);
+        e.mem.set_u8(CAMERA_SNAP, 0);
+    } else {
+        let distance = e.global::<f32>(CAMERA_DISTANCE);
+        if distance >= length || (length as f64) < distance as f64 + step as f64 {
+            e.set_global(CAMERA_DISTANCE, length);
+        } else {
+            e.set_global(CAMERA_DISTANCE, (distance as f64 + step as f64) as f32);
+        }
+        if e.mem.u8(CAMERA_BLOCKED) == 0 {
+            let near = setting_float(e, 0x011c_da94);
+            if (near as f64) > e.global::<f32>(CAMERA_DISTANCE) as f64 {
+                let near = setting_float(e, 0x011c_da94);
+                e.set_global(CAMERA_DISTANCE, near);
+            }
+        }
+        if ceiling < e.global::<f32>(CAMERA_DISTANCE) {
+            e.set_global(CAMERA_DISTANCE, ceiling);
+        }
+    }
+    let distance = e.global::<f32>(CAMERA_DISTANCE);
+    let scaled = e
+        .call(0x0045_bb20, &args![unit, frame + CAMERA_SCALED_A, distance])
+        .u32();
+    let target = frame + CAMERA_TARGET;
+    e.call(0x0043_9e90, &args![anchor, target, scaled]);
+    let mut obstructed = false;
+    if mode != 0 || e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 4 {
+        if mode < 0 {
+            let limit = setting_float(e, 0x011e_0a84);
+            if (limit as f64) > e.global::<f32>(CAMERA_DISTANCE) as f64 {
+                e.set_global(CAMERA_DISTANCE, 0.0f32);
+                e.set_global(0x011e_07dc, 0.0f32);
+                mode = 0;
+            }
+        } else {
+            let limit = setting_float(e, 0x011e_0a84);
+            if (limit as f64) > e.global::<f32>(CAMERA_DISTANCE) as f64 {
+                let limit = setting_float(e, 0x011e_0a84);
+                e.set_global(CAMERA_DISTANCE, limit);
+            }
+        }
+    } else if e.call(0x0070_2680, &args![0x40cu32, 0u32]).u8() == 0
+        && e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() != 4
+    {
+        let controller = e.call(0x0093_06d0, &args![this]).u32();
+        let height = e.call(0x0088_53a0, &args![this]).f64();
+        let above = (height - e.global::<f64>(0x0108_b0a0)) as f32;
+        let margin = setting_float(e, 0x011e_09c8);
+        if e.call(
+            0x0062_14d0,
+            &args![caster, controller, target, margin, above],
+        )
+        .u8()
+            != 0
+        {
+            obstructed = true;
+        }
+    }
+    if obstructed && !e.get(this, PlayerCharacter::bTemp3rdPerson) {
+        let fade = e.global::<f32>(PLAYER_FADE);
+        if fade as f64 > 0.0 && e.mem.u8(PLAYER_FADE_LATCH) == 0 {
+            let elapsed = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
+            let faded = fade as f64 - elapsed * e.global::<f64>(0x0101_db80);
+            e.set_global(PLAYER_FADE, faded as f32);
+            if e.global::<f32>(PLAYER_FADE) < 0.0 {
+                e.set_global(PLAYER_FADE, 0.0f32);
+            }
+            e.call(0x008c_4640, &args![this]);
+        }
+    } else {
+        let fade = e.global::<f32>(PLAYER_FADE);
+        if (fade as f64) < 1.0 {
+            let elapsed = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
+            let faded =
+                elapsed * e.global::<f64>(0x0101_db80) + e.global::<f32>(PLAYER_FADE) as f64;
+            e.set_global(PLAYER_FADE, faded as f32);
+            if e.global::<f32>(PLAYER_FADE) as f64 > 1.0
+                || mode != 0
+                || e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 4
+            {
+                e.set_global(PLAYER_FADE, 1.0f32);
+            }
+            e.call(0x008c_4640, &args![this]);
+        }
+        e.mem.set_u8(PLAYER_FADE_LATCH, 0);
+    }
+    let distance = e.global::<f32>(CAMERA_DISTANCE);
+    let scaled = e
+        .call(0x0045_bb20, &args![unit, frame + CAMERA_SCALED_B, distance])
+        .u32();
+    let placed = frame + CAMERA_FINAL;
+    e.call(0x0043_9e90, &args![anchor, placed, scaled]);
+    if mode != 0 {
+        let travel = frame + CAMERA_TRAVEL;
+        e.call(0x0043_9ef0, &args![position, travel, placed]);
+        let moved = e.call(0x0045_7990, &args![travel]).f64();
+        let elapsed = e.call(0x0084_d030, &args![0x011f_6394u32]).f64();
+        e.set_global(0x011e_07dc, (moved / elapsed) as f32);
+        if mode == -1 {
+            let world = e.global::<u32>(0x011e_07d0);
+            let point = e.call(0x0045_bb80, &args![world]).u32();
+            let anchor_travel = frame + CAMERA_TRAVEL_ANCHOR;
+            e.call(0x0043_9ef0, &args![position, anchor_travel, point]);
+            let travelled = e.call(0x0045_7990, &args![travel]).f64();
+            let to_anchor = e.call(0x0045_7990, &args![anchor_travel]).f64();
+            if to_anchor <= travelled {
+                e.set_global(0x011e_07dc, 0.0f32);
+                e.set_global(CAMERA_DISTANCE, 0.0f32);
+            }
+        }
+    }
+    copy_point(e, position, placed);
+}
+/// The camera node object (`011e0c20`, built by `00a712f0` on first use) the
+/// player's camera update positions and orients.
+const CAMERA_NODE: u32 = 0x011e_0c20;
+/// The "up" vector of `NiCamera::LookAtWorldPoint`.
+const CAMERA_UP_VECTOR: u32 = 0x011a_9484;
+/// Static-initialisation flags of [`player_character_update_camera`]: bit 0:
+/// the camera node was built; bits 1, 2 and 3: the three cached points below
+/// were set to zero.
+const CAMERA_STATIC_FLAGS: u32 = 0x011e_0d34;
+/// The point the terrain / listener code last saw (`011e0c14`), its
+/// direction (`011e0c08`) and the point of the last terrain update
+/// (`011e0bfc`).
+const LISTENER_POINT: u32 = 0x011e_0c14;
+const LISTENER_DIRECTION: u32 = 0x011e_0c08;
+const TERRAIN_POINT: u32 = 0x011e_0bfc;
+
+/// Layout of the frame of [`player_character_update_camera`]: persistent
+/// matrices and points first, then a bump area for the temporaries the
+/// compiled code keeps on its stack.
+const CAMERA_UPDATE_FRAME_SIZE: u32 = 0xa00;
+const CU_ROTATION: u32 = 0x000;
+const CU_PITCH_ROTATION: u32 = 0x024;
+const CU_HEADING_ROTATION: u32 = 0x048;
+const CU_POSITION: u32 = 0x06c;
+const CU_EYE: u32 = 0x078;
+const CU_CAMERA_POINT: u32 = 0x084;
+const CU_ANCHOR: u32 = 0x090;
+const CU_VECTOR_A: u32 = 0x09c;
+const CU_VECTOR_B: u32 = 0x0a8;
+const CU_LOOK_AT: u32 = 0x0b4;
+const CU_EULER: u32 = 0x0c0;
+const CU_QUATERNION: u32 = 0x0cc;
+const CU_SCRATCH_START: u32 = 0x100;
+
+/// The frame of [`player_character_update_camera`] with its bump allocator
+/// for the temporaries.
+struct CameraFrame {
+    base: u32,
+    next: u32,
+}
+
+impl CameraFrame {
+    fn at(&self, offset: u32) -> u32 {
+        self.base + offset
+    }
+
+    /// A fresh 12-byte point.
+    fn point(&mut self) -> u32 {
+        let address = self.base + self.next;
+        self.next += 12;
+        address
+    }
+
+    /// A fresh 36-byte matrix.
+    fn matrix(&mut self) -> u32 {
+        let address = self.base + self.next;
+        self.next += 36;
+        address
+    }
+}
+
+/// `NiPoint3` subtraction (`00439ef0`): `out = a - b`; returns `out`.
+fn point_sub(e: &mut Engine, a: u32, out: u32, b: u32) -> u32 {
+    e.call(0x0043_9ef0, &args![a, out, b]).u32()
+}
+
+/// `NiPoint3` addition (`00439e90`): `out = a + b`; returns `out`.
+fn point_add(e: &mut Engine, a: u32, out: u32, b: u32) -> u32 {
+    e.call(0x0043_9e90, &args![a, out, b]).u32()
+}
+
+/// `NiPoint3` scaling (`0045bb20`): `out = a * factor`; returns `out`.
+fn point_scale(e: &mut Engine, a: u32, out: u32, factor: f32) -> u32 {
+    e.call(0x0045_bb20, &args![a, out, factor]).u32()
+}
+
+/// `NiMatrix3 * NiPoint3` (`004b4500`): `out = matrix * point`.
+fn matrix_point(e: &mut Engine, matrix: u32, out: u32, point: u32) -> u32 {
+    e.call(0x004b_4500, &args![matrix, out, point]).u32()
+}
+
+/// `NiPoint3::NiPoint3(x, y, z)` (`00416870`) into `at`; returns `at`.
+fn point_new(e: &mut Engine, at: u32, x: f32, y: f32, z: f32) -> u32 {
+    e.call(0x0041_6870, &args![at, x, y, z]).u32()
+}
+
+/// Copies `count` words from `source` to `destination`.
+fn copy_words(e: &mut Engine, destination: u32, source: u32, count: u32) {
+    for i in 0..count {
+        let word = e.mem.u32(source + 4 * i);
+        e.mem.set_u32(destination + 4 * i, word);
+    }
+}
+
+/// `matrix = matrix * other` through `NiMatrix3::operator*` (`0043f8d0`)
+/// into a temporary, copied back.
+fn matrix_multiply_into(e: &mut Engine, frame: &mut CameraFrame, matrix: u32, other: u32) {
+    let out = frame.matrix();
+    let result = e.call(0x0043_f8d0, &args![matrix, out, other]).u32();
+    copy_words(e, matrix, result, 9);
+}
+
+/// Rebuilds the rotation from the camera node's matrix: copies the node's
+/// matrix (`006a9540` of [`CAMERA_NODE`]) into the pitch matrix and, for each
+/// of its three vectors (`00476930`), stores them with the components
+/// rotated (`007133b0(index, z, x, y)`) into the rotation matrix.
+fn rotation_from_camera_node(e: &mut Engine, frame: &mut CameraFrame) {
+    let matrix = e.call(0x006a_9540, &args![CAMERA_NODE]).u32();
+    copy_words(e, frame.at(CU_PITCH_ROTATION), matrix, 9);
+    extract_axes(e, frame);
+}
+
+/// The vector-by-vector copy of `rotation_from_camera_node`.
+fn extract_axes(e: &mut Engine, frame: &mut CameraFrame) {
+    let euler = frame.at(CU_EULER);
+    for index in 0..3u32 {
+        e.call(
+            0x0047_6930,
+            &args![frame.at(CU_PITCH_ROTATION), index, euler],
+        );
+        let x = e.mem.u32(euler);
+        let y = e.mem.u32(euler + 4);
+        let z = e.mem.u32(euler + 8);
+        e.call(0x0071_33b0, &args![frame.at(CU_ROTATION), index, z, x, y]);
+    }
+}
+
+/// Moves the camera node to `position` with the rotation `rotation`, then
+/// updates it: `440460` (translate), `43fa80` (rotate), `00a59c60` with a zero
+/// point (`0043d410`). `node` is the object `558310` returns for the camera,
+/// or [`CAMERA_NODE`].
+fn place_camera_node(
+    e: &mut Engine,
+    frame: &mut CameraFrame,
+    node: u32,
+    position: u32,
+    rotation: Option<u32>,
+) {
+    e.call(0x0044_0460, &args![node, position]);
+    if let Some(rotation) = rotation {
+        e.call(0x0043_fa80, &args![node, rotation]);
+    }
+    let zero = frame.point();
+    e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
+    e.call(0x00a5_9c60, &args![node, zero]);
+}
+
+// Translated from 0094ae40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::UpdateCamera` (Xbox PDB): places the camera for the
+/// frame. `snap` makes the third-person distance jump to its target
+/// ([`fn_0094a0c0`]) and forces the listener and terrain updates;
+/// `skip_terrain` skips the terrain manager update.
+///
+/// It records the player's heading and pitch (`011e076c`, `011e0764`), sets
+/// the camera field of view from `fWorldFOV`, and then builds the camera
+/// rotation (`rotation`) and position (`position`) in one of three ways:
+///
+/// - VATS mode 4 with `bWant3rdPerson` set: the camera node is placed at the
+///   smoothed position (`011e0808`), looks at the VATS target point
+///   (`009c8ac0`), and the rotation is taken from the node;
+/// - first person (`b3rdPerson` clear, no free camera, no change of view
+///   wanted): the heading and pitch rotations are multiplied; in dialogue the
+///   dialogue rotation of the global at `011e07d0` is applied, the camera
+///   follows the head node (`011e07d4`) by the weight of the animation
+///   (`496550`), the first person node (`011e07d8`) is placed, and the camera
+///   caster is told (`0094c380`);
+/// - otherwise the third-person camera: the eye point from the biped, offset
+///   by the zoom and shoulder vectors rotated by the camera rotation and
+///   passed through [`fn_0094a0c0`] for the distance and collision, the
+///   shoulder offset stored in `kCamera3rdPersonShoulderOffset` and the
+///   camera node looking at the eye (`NiCamera::LookAtWorldPoint`).
+///
+/// Then (unless the VATS camera shot is not initialised) the camera node
+/// gets the position and rotation, scaled by the animation's shake
+/// (`008d1b30`, applied through Euler angles); the audio listener is moved
+/// and oriented, its underwater flag set from the submerge level; the
+/// listener and terrain reference points are refreshed when the camera
+/// moved more than 64 / 512 units or turned (the terrain manager is updated
+/// and its morph parameters); `Cached1stPersonCameraPos`,
+/// `CachedWorldCameraPos` and the camera rigid body (`ApplyHardKeyframe`)
+/// are updated, and finally `UpdateFirstPersonZoom` (`00950290`) runs.
+///
+/// The compiler's exception-unwinding state writes, the static
+/// initialisation of the camera node (its constructor `00a712f0` and
+/// `atexit` registration `00fd9b90` are called the first time) and the NiPoint3
+/// / NiMatrix3 temporary constructor calls (`006815c0`, which return their
+/// argument) are not translated.
+pub fn player_character_update_camera(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    snap: bool,
+    skip_terrain: bool,
+) {
+    e.with_stack(CAMERA_UPDATE_FRAME_SIZE, |e, base| {
+        let mut frame = CameraFrame {
+            base: base.addr(),
+            next: CU_SCRATCH_START,
+        };
+        update_camera_in_frame(e, this, snap, skip_terrain, &mut frame);
+    });
+}
+
+fn update_camera_in_frame(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    snap: bool,
+    skip_terrain: bool,
+    frame: &mut CameraFrame,
+) {
+    let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+    e.set_global(LAST_HEADING, heading);
+    let pitch = e.call(0x0093_1d70, &args![this]).f32();
+    e.set_global(LAST_PITCH, pitch);
+    let camera = e.call(0x0045_c670, &args![]).u32();
+    e.set_global(0x011a_3b64, 1.0f32);
+    let flags = e.global::<u32>(CAMERA_STATIC_FLAGS);
+    if flags & 1 == 0 {
+        e.set_global(CAMERA_STATIC_FLAGS, flags | 1);
+        e.call(0x00a7_12f0, &args![CAMERA_NODE]);
+        e.call(0x00ec_658f, &args![0x00fd_9b90u32]);
+    }
+    let fov = e.get(this, PlayerCharacter::fWorldFOV);
+    let scene = e.call(0x0045_c670, &args![]).u32();
+    e.call(0x00c5_2020, &args![scene, fov, 0u32, 0u32, 0u32]);
+    let fov = e.get(this, PlayerCharacter::fWorldFOV);
+    e.call(0x00b5_4000, &args![fov]);
+    if e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 4
+        && e.get(this, PlayerCharacter::bWant3rdPerson)
+    {
+        vats_camera(e, frame);
+    } else if !e.get(this, PlayerCharacter::b3rdPerson)
+        && e.mem.u8(FREE_CAMERA_FLAG) == 0
+        && e.get(this, PlayerCharacter::bWant3rdPerson) == e.get(this, PlayerCharacter::b3rdPerson)
+    {
+        first_person_camera(e, this, frame);
+    } else {
+        third_person_camera(e, this, snap, frame);
+    }
+    camera_tail(e, this, camera, snap, skip_terrain, frame);
+}
+
+/// The VATS camera (mode 4 with the third person wanted) of
+/// [`player_character_update_camera`].
+fn vats_camera(e: &mut Engine, frame: &mut CameraFrame) {
+    let position = frame.at(CU_POSITION);
+    copy_words(e, position, 0x011e_0808, 3);
+    place_camera_node(e, frame, CAMERA_NODE, position, None);
+    let out = frame.point();
+    let target = e.call(0x009c_8ac0, &args![VATS_OBJECT, out]).u32();
+    e.call(0x00a7_01b0, &args![CAMERA_NODE, target, CAMERA_UP_VECTOR]);
+    rotation_from_camera_node(e, frame);
+    let offset = frame.matrix();
+    let x = e.global::<f32>(0x011c_a738);
+    let y = e.global::<f32>(0x011c_a73c);
+    let z = e.global::<f32>(0x011c_a740);
+    e.call(0x00a5_9540, &args![offset, x, y, z]);
+    let rotation = frame.at(CU_ROTATION);
+    matrix_multiply_into(e, frame, rotation, offset);
+}
+
+/// The first-person camera of [`player_character_update_camera`].
+fn first_person_camera(e: &mut Engine, this: Ptr<PlayerCharacter>, frame: &mut CameraFrame) {
+    let rotation = frame.at(CU_ROTATION);
+    let pitch_rotation = frame.at(CU_PITCH_ROTATION);
+    let heading = e.global::<f32>(LAST_HEADING);
+    e.call(0x004a_0c90, &args![rotation, heading]);
+    let pitch = e.global::<f32>(LAST_PITCH);
+    e.call(0x0052_4ac0, &args![pitch_rotation, pitch]);
+    matrix_multiply_into(e, frame, rotation, pitch_rotation);
+    if e.call(0x0093_3840, &args![this]).u8() == 0 {
+        let tilt = frame.matrix();
+        let angle = -e.global::<f32>(0x011e_0770);
+        e.call(0x0052_4ac0, &args![tilt, angle]);
+        let dialogue = e.global::<u32>(0x011e_07d0);
+        let matrix = e.call(0x0046_1130, &args![dialogue]).u32();
+        copy_words(e, pitch_rotation, matrix, 9);
+        let out = frame.matrix();
+        let product = e.call(0x0043_f8d0, &args![pitch_rotation, out, tilt]).u32();
+        copy_words(e, rotation, product, 9);
+    }
+    let position = frame.at(CU_POSITION);
+    let target = e.global::<u32>(0x011e_07d0);
+    if target != 0 {
+        let point = e.call(0x0045_bb80, &args![target]).u32();
+        copy_words(e, position, point, 3);
+    }
+    let process = e.mem.u32(at(this, ACTOR_CURRENT_PROCESS));
+    let biped = e.call(0x0095_0b00, &args![this, 0u32]).u32();
+    let animation = e.call(0x004a_b230, &args![biped, 0u32]).u32();
+    let item = e.vcall(process, 0x1b8, &args![]).u32();
+    let weight = e.call(0x0049_6550, &args![item, animation]).f32();
+    if weight < 1.0 {
+        let head = e.global::<u32>(0x011e_07d4);
+        let head_point = e.call(0x0045_bb80, &args![head]).u32();
+        let offset = frame.point();
+        point_sub(e, head_point, offset, position);
+        let setting = setting_float(e, 0x011c_da28);
+        let scale = (setting as f64 * weight as f64) as f32;
+        e.call(0x0043_9180, &args![offset, scale]);
+        e.call(0x0063_c8a0, &args![position, offset]);
+        let first_person = e.global::<u32>(0x011e_07d8);
+        if first_person != 0 {
+            let node = e.call(0x0055_9450, &args![at(this, 0x694)]).u32();
+            let matrix = e.call(0x006a_9540, &args![node]).u32();
+            let rotated = frame.point();
+            let local = e.call(0x004b_3ae0, &args![rotated, offset, matrix]).u32();
+            let base = e.call(0x0043_c490, &args![first_person]).u32();
+            let placed = frame.point();
+            let moved = point_add(e, base, placed, local);
+            let _ = moved;
+            place_camera_node(e, frame, first_person, moved, None);
+        }
+    }
+    let caster = e.mem.u32(at(this, 0x21c));
+    if caster != 0
+        && e.call(0x0062_1440, &args![caster]).u32() != 0
+        && e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() != 4
+    {
+        fn_0094c380(e, Ptr::new(caster));
+    }
+}
+
+/// The third-person camera of [`player_character_update_camera`].
+fn third_person_camera(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    snap: bool,
+    frame: &mut CameraFrame,
+) {
+    let rotation = frame.at(CU_ROTATION);
+    let pitch_rotation = frame.at(CU_PITCH_ROTATION);
+    let heading_rotation = frame.at(CU_HEADING_ROTATION);
+    let eye = frame.at(CU_EYE);
+    let camera_point = frame.at(CU_CAMERA_POINT);
+    let anchor = frame.at(CU_ANCHOR);
+    let vector_a = frame.at(CU_VECTOR_A);
+    let vector_b = frame.at(CU_VECTOR_B);
+    let look_at = frame.at(CU_LOOK_AT);
+    let position = frame.at(CU_POSITION);
+    let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
+    let head = e.call(0x0045_bb80, &args![biped]).u32();
+    copy_words(e, eye, head, 3);
+    let far = e.global::<f32>(0x0101_3974);
+    if e.mem.u8(0x011e_07b9) != 0 {
+        let angle = e.global::<f32>(0x011e_08fc);
+        let two_pi = e.global::<f64>(0x0101_ff48);
+        if angle < 0.0 {
+            e.set_global(0x011e_08fc, (angle as f64 + two_pi) as f32);
+        } else if angle as f64 > two_pi {
+            e.set_global(0x011e_08fc, (angle as f64 - two_pi) as f32);
+        }
+        let heading = e.vcall(this.addr(), 0x2bc, &args![0u32]).f32();
+        let turned = (heading as f64 + e.global::<f32>(0x011e_08fc) as f64) as f32;
+        e.call(0x004a_0c90, &args![rotation, turned]);
+        let pitch = e.global::<f32>(0x011e_08f4);
+        e.call(0x0052_4ac0, &args![pitch_rotation, pitch]);
+        let scale = e.call(0x0056_7400, &args![this]).f64();
+        let height = scale * e.global::<f64>(0x0101_7a40) + e.mem.f32(eye + 8) as f64;
+        e.mem.set_f32(eye + 8, height as f32);
+    } else {
+        let fov = e.get(this, PlayerCharacter::f3rdPersonFOV);
+        let scene = e.call(0x0045_c670, &args![]).u32();
+        e.call(0x00c5_2020, &args![scene, fov, 0u32, 0u32, 0u32]);
+        let fov = e.get(this, PlayerCharacter::f3rdPersonFOV);
+        e.call(0x00b5_4000, &args![fov]);
+        let turned =
+            (e.global::<f32>(LAST_HEADING) as f64 + e.global::<f32>(ACCUMULATED_YAW) as f64) as f32;
+        e.call(0x004a_0c90, &args![rotation, turned]);
+        let tilted =
+            (e.global::<f32>(LAST_PITCH) as f64 + e.global::<f32>(ACCUMULATED_PITCH) as f64) as f32;
+        e.call(0x0052_4ac0, &args![pitch_rotation, tilted]);
+        let eye_height = e.get(this, PlayerCharacter::fEyeHeight);
+        let faded = eye_height as f64 * e.global::<f32>(0x011a_3b64) as f64;
+        let scale = e.call(0x0056_7400, &args![this]).f64();
+        let raised = scale * faded + e.mem.f32(eye + 8) as f64;
+        e.mem.set_f32(eye + 8, raised as f32);
+        let player_point = e.global::<u32>(0x011e_07d0);
+        let first = e.call(0x0045_bb80, &args![player_point]).u32();
+        let head_point = e.global::<u32>(0x011e_07d4);
+        let second = e.call(0x0045_bb80, &args![head_point]).u32();
+        let offset = (e.mem.f32(first + 8) as f64 - e.mem.f32(second + 8) as f64) as f32;
+        let raised = e.mem.f32(eye + 8) as f64 + offset as f64;
+        e.mem.set_f32(eye + 8, raised as f32);
+    }
+    // The zoom-in blend factor.
+    let mut blend = 1.0f32;
+    if setting_float(e, 0x011c_d844) as f64 > 0.0 {
+        let limit = setting_float(e, 0x011c_d844);
+        let zoom = e.global::<f32>(ZOOM_DISTANCE);
+        blend = (1.0 - zoom as f64 / limit as f64) as f32;
+        if blend < 0.0 {
+            blend = 0.0;
+        }
+    }
+    // Vector A: the shoulder offset scaled by the blend; vector B: the
+    // look-at offset.
+    let across = setting_float(e, 0x011c_dc44);
+    let side = setting_float(e, 0x011c_dc5c);
+    let temporary = frame.point();
+    let built = point_new(e, temporary, side, 0.0, across);
+    point_scale(e, built, vector_a, blend);
+    let across = setting_float(e, 0x011c_dc44);
+    let zoom = e.global::<f32>(ZOOM_DISTANCE);
+    let depth = (-(zoom as f64) + far as f64) as f32;
+    let side = setting_float(e, 0x011c_dc5c);
+    point_new(e, vector_b, side, depth, across);
+    let direction = (e.mem.u8(at(this, 0x64c)) as i32 - e.mem.u8(at(this, 0x64a)) as i32) as i8;
+    matrix_multiply_into(e, frame, rotation, pitch_rotation);
+    let zoom = e.global::<f32>(ZOOM_DISTANCE);
+    let back = frame.point();
+    let behind = point_new(e, back, 0.0, -zoom, 0.0);
+    let out = frame.point();
+    let behind = point_add(e, behind, out, vector_a);
+    let out = frame.point();
+    let rotated = matrix_point(e, rotation, out, behind);
+    let out = frame.point();
+    let wanted = point_add(e, eye, out, rotated);
+    copy_words(e, camera_point, wanted, 3);
+    let out = frame.point();
+    let rotated = matrix_point(e, rotation, out, vector_b);
+    point_add(e, eye, look_at, rotated);
+    e.call(0x0095_edf0, &args![this]);
+    let out = frame.point();
+    let rotated = matrix_point(e, rotation, out, vector_a);
+    e.call(0x0063_c8a0, &args![eye, rotated]);
+    let height = e.mem.f32(eye + 8);
+    let player_x = e.mem.f32(at(this, 0x30));
+    let player_y = e.mem.f32(at(this, 0x34));
+    point_new(e, anchor, player_x, player_y, height);
+    fn_0094a0c0(e, this, Ptr::new(camera_point), Ptr::new(anchor), snap);
+    let out = frame.point();
+    let rotated = matrix_point(e, rotation, out, vector_a);
+    e.call(0x0045_78c0, &args![eye, rotated]);
+    copy_words(e, position, camera_point, 3);
+    let out = frame.point();
+    let target = point_add(e, eye, out, vector_b);
+    copy_words(e, vector_b, target, 3);
+    let out = frame.point();
+    let offset = matrix_point(e, rotation, out, vector_a);
+    let shoulder = member(this, PlayerCharacter::kCamera3rdPersonShoulderOffset);
+    copy_words(e, shoulder, offset, 3);
+    if blend as f64 > 0.0 {
+        e.call(
+            0x004a_0c90,
+            &args![heading_rotation, e.global::<f32>(LAST_HEADING)],
+        );
+        let queued = e.global::<f32>(0x011e_07c8);
+        if queued as f64 > 0.0 {
+            let limit = setting_float(e, 0x011c_de8c);
+            let mut ratio = (queued as f64 / limit as f64) as f32;
+            if ratio as f64 > 1.0 {
+                ratio = 1.0;
+            }
+            let z = setting_float(e, 0x011c_d31c);
+            let y = setting_float(e, 0x011c_dfb4);
+            let x = setting_float(e, 0x011c_da34);
+            let temporary = frame.point();
+            let built = point_new(e, temporary, x, y, z);
+            let out = frame.point();
+            let scaled = point_scale(e, built, out, ratio);
+            copy_words(e, vector_a, scaled, 3);
+            let rest = (1.0 - ratio as f64) as f32;
+            let z = setting_float(e, 0x011c_d174);
+            let y = setting_float(e, 0x011c_df50);
+            let x = setting_float(e, 0x011c_d780);
+            let temporary = frame.point();
+            let built = point_new(e, temporary, x, y, z);
+            let out = frame.point();
+            let scaled = point_scale(e, built, out, rest);
+            e.call(0x0063_c8a0, &args![vector_a, scaled]);
+        } else if direction != 0
+            || (e.mem.u8(CAMERA_BLOCKED) != 0 && e.mem.u8(FREE_CAMERA_FLAG) == 0)
+        {
+            let z = setting_float(e, 0x011c_d174);
+            let y = setting_float(e, 0x011c_df50);
+            let x = setting_float(e, 0x011c_d780);
+            let temporary = frame.point();
+            let built = point_new(e, temporary, x, y, z);
+            copy_words(e, vector_a, built, 3);
+        } else {
+            let z = setting_float(e, 0x011c_d31c);
+            let y = setting_float(e, 0x011c_dfb4);
+            let x = setting_float(e, 0x011c_da34);
+            let temporary = frame.point();
+            let built = point_new(e, temporary, x, y, z);
+            copy_words(e, vector_a, built, 3);
+        }
+        let pitch = e.global::<f32>(LAST_PITCH);
+        e.call(0x0052_4ac0, &args![pitch_rotation, pitch]);
+        let out = frame.point();
+        let moved = matrix_point(e, pitch_rotation, out, vector_a);
+        copy_words(e, vector_a, moved, 3);
+        let out = frame.point();
+        let moved = matrix_point(e, heading_rotation, out, vector_a);
+        copy_words(e, vector_a, moved, 3);
+        let reduction = setting_float(e, 0x011c_ddfc);
+        let rest = (1.0 - reduction as f64) as f32;
+        let out = frame.point();
+        let scaled = point_scale(e, vector_a, out, rest);
+        e.call(0x0063_c8a0, &args![eye, scaled]);
+    }
+    place_camera_node(e, frame, CAMERA_NODE, position, None);
+    if e.mem.u8(0x011e_07b9) != 0 {
+        e.call(0x00a7_01b0, &args![CAMERA_NODE, eye, CAMERA_UP_VECTOR]);
+    } else {
+        e.call(0x00a7_01b0, &args![CAMERA_NODE, look_at, CAMERA_UP_VECTOR]);
+    }
+    rotation_from_camera_node(e, frame);
+}
+
+/// The common end of [`player_character_update_camera`]: places the camera
+/// node, updates the audio listener, the listener / terrain reference
+/// points and the terrain, the cached camera positions and the camera rigid
+/// body.
+fn camera_tail(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    camera: u32,
+    snap: bool,
+    skip_terrain: bool,
+    frame: &mut CameraFrame,
+) {
+    let position = frame.at(CU_POSITION);
+    let rotation = frame.at(CU_ROTATION);
+    let mut place = true;
+    if e.call(0x0044_ddc0, &args![VATS_OBJECT]).u32() == 4 {
+        let procedure = e.call(0x0044_edb0, &args![VATS_OBJECT]).u32();
+        if procedure == 0 {
+            place = false;
+        } else {
+            let procedure = e.call(0x0044_edb0, &args![VATS_OBJECT]).u32();
+            if e.call(0x0058_d630, &args![procedure]).u8() == 0 {
+                place = false;
+            }
+        }
+    }
+    if place {
+        let matrix = frame.matrix();
+        let owner = e.call(0x008b_70d0, &args![this]).u32();
+        let animation_scale = e.call(0x0045_3700, &args![owner]).f32();
+        let shake = e.call(0x008d_1b30, &args![animation_scale, matrix]).f32();
+        if shake as f64 > 0.0 {
+            let angles = frame.point();
+            e.call(0x00a5_92c0, &args![matrix, angles, angles + 4, angles + 8]);
+            let x = (e.mem.f32(angles) as f64 * shake as f64) as f32;
+            let y = (e.mem.f32(angles + 4) as f64 * shake as f64) as f32;
+            let z = (e.mem.f32(angles + 8) as f64 * shake as f64) as f32;
+            e.call(0x00a5_9540, &args![matrix, x, y, z]);
+            matrix_multiply_into(e, frame, rotation, matrix);
+            fn_0094c3a0(e, shake);
+        }
+        let node = e.call(0x0055_8310, &args![camera]).u32();
+        e.call(0x0044_0460, &args![node, position]);
+        let node = e.call(0x0055_8310, &args![camera]).u32();
+        e.call(0x0043_fa80, &args![node, rotation]);
+        let zero = frame.point();
+        e.call(0x0043_d410, &args![zero, 0.0f32, 0u32, 0u32]);
+        let node = e.call(0x0055_8310, &args![camera]).u32();
+        e.call(0x00a5_9c60, &args![node, zero]);
+    }
+    // ---- the audio listener ----
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    let [px, py, pz] = read_words(e, position);
+    e.call(0x00ad_78b0, &args![audio, px, py, pz]);
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let scratch = frame.point();
+    let forward = e.call(0x004e_9c10, &args![space, scratch]).u32();
+    let forward = read_words(e, forward);
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let scratch = frame.point();
+    let up = e.call(0x0045_bba0, &args![space, scratch]).u32();
+    let up = read_words(e, up);
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    e.call(
+        0x00ad_7940,
+        &args![audio, up[0], up[1], up[2], forward[0], forward[1], forward[2]],
+    );
+    let cell = e.call(0x008d_6f30, &args![this]).u32();
+    if cell != 0 {
+        let level = e.call(0x0088_5560, &args![this, pz, cell]).f64();
+        let underwater = level >= e.global::<f64>(0x0108_b0b0);
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        e.call(0x00ad_7990, &args![audio, underwater as u32]);
+    }
+    for (bit, destination) in [
+        (2u32, LISTENER_POINT),
+        (4, LISTENER_DIRECTION),
+        (8, TERRAIN_POINT),
+    ] {
+        let flags = e.global::<u32>(CAMERA_STATIC_FLAGS);
+        if flags & bit == 0 {
+            e.set_global(CAMERA_STATIC_FLAGS, flags | bit);
+            copy_words(e, destination, ZERO_VECTOR, 3);
+        }
+    }
+    // ---- how far the camera moved since the listener / terrain points ----
+    let (x, y) = (f32::from_bits(px), f32::from_bits(py));
+    let flat = frame.point();
+    let built = point_new(e, flat, x, y, 0.0);
+    let out = frame.point();
+    let difference = point_sub(e, built, out, LISTENER_POINT);
+    let length = e.call(0x0045_7990, &args![difference]).f32();
+    let moved = e.call(0x0040_8860, &args![length]).f32();
+    let flat = frame.point();
+    let built = point_new(e, flat, x, y, 0.0);
+    let out = frame.point();
+    let difference = point_sub(e, built, out, TERRAIN_POINT);
+    let length = e.call(0x0045_7990, &args![difference]).f32();
+    let terrain_moved = e.call(0x0040_8860, &args![length]).f32();
+    let facing = frame.point();
+    copy_words(e, facing, ZERO_VECTOR, 3);
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let bounds = e.call(0x0045_bbe0, &args![space]).u32();
+    let log_input = e.mem.f32(bounds + 4);
+    let logarithm = e.call(0x004b_1460, &args![log_input]).f64();
+    let size = e.call(0x0050_8070, &args![space]).f64();
+    let ratio = (logarithm / size) as f32;
+    let threshold = (1.0 - ratio as f64 / e.global::<f64>(0x0102_40b0)) as f32;
+    let scratch = frame.point();
+    let direction = e.call(0x0045_bba0, &args![space, scratch]).u32();
+    copy_words(e, facing, direction, 3);
+    e.call(0x004a_0c10, &args![facing]);
+    let alignment = e
+        .call(0x004b_6190, &args![LISTENER_DIRECTION, facing])
+        .f32();
+    if moved as f64 > e.global::<f64>(0x0102_40c0) || (threshold as f64) > alignment as f64 || snap
+    {
+        let adjusted = e.call(0x005d_c270, &args![threshold]).f32();
+        let [dx, dy, dz] = read_words(e, facing);
+        e.call(0x0057_d0a0, &args![px, py, pz, dx, dy, dz, adjusted]);
+        let flat = frame.point();
+        let built = point_new(e, flat, x, y, 0.0);
+        copy_words(e, LISTENER_POINT, built, 3);
+        copy_words(e, LISTENER_DIRECTION, facing, 3);
+    }
+    // ---- the terrain manager ----
+    if !skip_terrain && e.call(0x0057_5d70, &args![this]).u32() != 0 {
+        let world_space = e.call(0x0057_5d70, &args![this]).u32();
+        let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+        if e.call(0x0097_4d90, &args![terrain]).u8() != 0 {
+            let place = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            let world_space = e.call(0x0057_5d70, &args![this]).u32();
+            let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+            e.call(0x006f_ca90, &args![terrain, place, 0xfu32]);
+        } else if terrain_moved as f64 > e.global::<f64>(0x0102_8338) || snap {
+            let place = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+            let world_space = e.call(0x0057_5d70, &args![this]).u32();
+            let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+            e.call(0x006f_ca90, &args![terrain, place, 0xfu32]);
+            let flat = frame.point();
+            let built = point_new(e, flat, x, y, 0.0);
+            copy_words(e, TERRAIN_POINT, built, 3);
+        }
+        let place = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        let world_space = e.call(0x0057_5d70, &args![this]).u32();
+        let terrain = e.call(0x0058_6170, &args![world_space]).u32();
+        e.call(0x006f_cdb0, &args![terrain, place]);
+    }
+    // ---- cached positions and the camera rigid body ----
+    let player_point = e.global::<u32>(0x011e_07d0);
+    if player_point != 0 {
+        let point = e.call(0x0045_bb80, &args![player_point]).u32();
+        let cached = member(this, PlayerCharacter::Cached1stPersonCameraPos);
+        copy_words(e, cached, point, 3);
+    }
+    let quaternion = frame.at(CU_QUATERNION);
+    copy_words(e, quaternion, 0x011a_9ea4, 4);
+    let space = e.call(0x0066_29f0, &args![camera]).u32();
+    let point = e.call(0x0045_bb80, &args![space]).u32();
+    let cached = member(this, PlayerCharacter::CachedWorldCameraPos);
+    copy_words(e, cached, point, 3);
+    let rigid_body = e
+        .call(
+            0x0055_9450,
+            &args![member(this, PlayerCharacter::spCameraRigidBody)],
+        )
+        .u32();
+    e.call(0x00c8_e160, &args![rigid_body, cached, quaternion, 0u32]);
+    e.call(0x0095_0290, &args![this]);
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -7014,6 +11322,85 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x009442a0, fn_009442a0(Ptr) -> f32),
         entry!(0x009442c0, fn_009442c0(Ptr) -> bool),
         entry!(0x009442e0, fn_009442e0(Ptr<PlayerCharacter>, f32)),
+        entry!(0x00944300, fn_00944300(Ptr<PlayerCharacter>) -> f32),
+        entry!(0x00944320, fn_00944320(Ptr<PlayerCharacter>) -> u32),
+        entry!(0x00944340, fn_00944340(Ptr<PlayerCharacter>) -> bool),
+        entry!(0x00944360, fn_00944360(Ptr<PlayerCharacter>) -> bool),
+        entry!(0x00944380, fn_00944380(Ptr<PlayerCharacter>, f32)),
+        entry!(0x009443a0, fn_009443a0(Ptr<PlayerCharacter>) -> f32),
+        entry!(0x009443c0, fn_009443c0() -> bool),
+        entry!(0x009443f0, fn_009443f0() -> f32),
+        entry!(0x00944400, fn_00944400(Ptr) -> bool),
+        entry!(0x00944430, fn_00944430(Ptr) -> bool),
+        entry!(0x00944460, fn_00944460(i32, i32) -> i32),
+        entry!(0x00944480, fn_00944480(Ptr, i32, i32) -> i32),
+        entry!(0x009444a0, fn_009444a0() -> u8),
+        entry!(
+            0x009444d0,
+            player_character_update_player_combat(Ptr<PlayerCharacter>, f32)
+        ),
+        entry!(
+            0x00946020,
+            timed_curve_start(Ptr<TimedCurve>, f32, f32, f32) -> bool
+        ),
+        entry!(
+            0x00946140,
+            timed_curve_advance(Ptr<TimedCurve>, f32) -> bool
+        ),
+        entry!(0x00946190, timed_curve_value(Ptr<TimedCurve>) -> f32),
+        entry!(0x00946280, timed_curve_is_over(Ptr<TimedCurve>) -> bool),
+        entry!(
+            0x009462c0,
+            player_character_ammo_swap_helper(Ptr<PlayerCharacter>, bool, bool)
+        ),
+        entry!(
+            0x00947b10,
+            player_character_check_border_region(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x00947c90,
+            player_character_set_last_known_good_position(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00947d10, fn_00947d10(Ptr<PlayerCharacter>)),
+        entry!(0x00947d80, fn_00947d80(Ptr<PlayerCharacter>)),
+        entry!(0x00948000, fn_00948000(Ptr, u32) -> Ptr),
+        entry!(0x00948030, fn_00948030(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00948050,
+            player_character_clear_map_marker_struct_list(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x009480c0,
+            player_character_reset_map_marker_struct_list(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x009481d0, fn_009481d0(Ptr<PlayerCharacter>)),
+        entry!(0x0094a070, fn_0094a070(Ptr) -> f32),
+        entry!(0x0094a0a0, fn_0094a0a0(Ptr) -> u8),
+        entry!(0x0094c380, fn_0094c380(Ptr)),
+        entry!(0x0094c3a0, fn_0094c3a0(f32)),
+        entry!(
+            0x0094c3d0,
+            fn_0094c3d0(Ptr<PlayerCharacter>, u32, u32) -> f32
+        ),
+        entry!(0x0094c460, fn_0094c460(Ptr, u32) -> f32),
+        entry!(
+            0x009445b0,
+            fn_009445b0(Ptr<PlayerCharacter>, f32, bool, Ptr, u32) -> u8
+        ),
+        entry!(0x009466d0, fn_009466d0(Ptr<PlayerCharacter>, f32, bool)),
+        entry!(
+            0x0094a8c0,
+            player_character_update_ufo_camera(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00948310, fn_00948310(Ptr<PlayerCharacter>) -> bool),
+        entry!(
+            0x0094a0c0,
+            fn_0094a0c0(Ptr<PlayerCharacter>, Ptr, Ptr, bool)
+        ),
+        entry!(
+            0x0094ae40,
+            player_character_update_camera(Ptr<PlayerCharacter>, bool, bool)
+        ),
     ]
 }
 
@@ -11764,5 +16151,2670 @@ mod tests {
             vec![vec![this.addr(), 0.25f32.to_bits()]]
         );
         assert_eq!(called(&e, 0x0055_5c20).len(), 1);
+    }
+
+    // ---- tests of 00944300 .. 0094c460 (the third batch of this file) ----
+
+    /// Maps the parts of the exe's data the translations of this batch read
+    /// (settings objects and constants), zeroed.
+    fn map_exe_data(e: &mut Engine) {
+        e.map(0x0101_0000, 0x3_0000);
+        e.map(0x0107_0000, 0x2_0000);
+        e.map(0x011a_0000, 0x6_0000);
+        e.map(0x0120_0000, 0x1_0000);
+    }
+
+    /// Writes the double and float constants of the exe that this batch's
+    /// functions read.
+    fn exe_constants(e: &mut Engine) {
+        map_exe_data(e);
+        let pi = std::f32::consts::PI as f64;
+        for (addr, value) in [
+            (0x0101_2070u32, 1.0f64),
+            (0x0101_ff40, pi),
+            (0x0101_ff48, 2.0 * pi),
+            (0x0101_ff58, -pi),
+            (0x0101_ffa0, 0.1f32 as f64),
+            (0x0102_9790, 32767.0),
+            (0x0107_18b8, 120.0),
+            (0x0102_3128, 0.017453292f32 as f64),
+            (0x0108_b098, -(std::f32::consts::FRAC_PI_2 as f64)),
+            (0x0103_0f38, std::f32::consts::FRAC_PI_2 as f64),
+            (0x0103_56d8, 24.0),
+            (0x0101_6ff0, 1.5),
+            (0x0107_5d30, 99.0),
+            (0x0107_18f0, 7849.0),
+            (0x0107_37c8, 1500.0),
+            (0x0108_b0a8, -1500.0),
+            (0x0101_5a38, 15.0),
+            (0x0102_0758, 10.0),
+            (0x0101_7b70, 1000.0),
+            (0x0101_1590, 2.0),
+            (0x0101_1588, 0.5),
+            (0x0108_b0a0, 124.0),
+            (0x0101_db80, 4.0),
+            (0x0108_b048, 0.02f32 as f64),
+            (0x0101_7a40, 100.0),
+            (0x0102_e430, 128.0),
+            (0x0102_40c0, 64.0),
+            (0x0102_40b0, 8.0),
+            (0x0102_8338, 512.0),
+            (0x0108_b0b0, 0.04f32 as f64),
+        ] {
+            e.set_global(addr, value);
+        }
+        for (addr, value) in [
+            (0x0101_6264u32, 0.75f32),
+            (0x0107_18c0, 1.0e-5),
+            (0x0101_6b78, -std::f32::consts::FRAC_PI_2),
+            (0x0101_ff38, std::f32::consts::FRAC_PI_2),
+            (0x0101_6088, 1.5),
+            (0x0101_7718, 3.0),
+            (0x0101_7b78, 10.0),
+            (0x0101_62c0, 2.0),
+            (0x0102_d934, 0.02),
+            (0x0101_8144, 0.04),
+            (0x0101_3974, 1000.0),
+        ] {
+            e.set_global(addr, value);
+        }
+        e.set_global(0x011a_3b60, 300i32);
+    }
+
+    /// Doubles that make the setting getters return their own argument: the
+    /// test writes the setting value at the setting's address.
+    fn settings_by_address(e: &mut Engine) {
+        for addr in [
+            SETTING_FLOAT_GETTER,
+            SETTING_BYTE_GETTER,
+            SETTING_INT_GETTER,
+        ] {
+            e.register(addr, |_, a| int(a[0]));
+        }
+    }
+
+    /// The identity double of the list-item getter and the list-next
+    /// walker over `{item, next}` nodes.
+    fn list_walkers(e: &mut Engine) {
+        e.register(LIST_ITEM_ADDRESS, |_, a| int(a[0]));
+        e.register(LIST_NEXT, |e, a| int(e.mem.u32(a[0] + 4)));
+    }
+
+    /// Builds a chain of `{item, next}` nodes; returns the first node.
+    fn node_chain(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0u32;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    #[test]
+    fn fn_00944300_returns_the_ammo_regen_tick_time() {
+        let mut e = engine();
+        let this = player(&mut e);
+        e.set(this, PlayerCharacter::fTimeSinceLastAmmoRegenTick, 1.5);
+        assert_eq!(e.call(0x0094_4300, &args![this]).f32(), 1.5);
+    }
+
+    #[test]
+    fn fn_00944320_returns_the_word_at_0x688() {
+        let mut e = engine();
+        let this = player(&mut e);
+        e.mem.set_u32(this.addr() + 0x688, 0x1234);
+        assert_eq!(e.call(0x0094_4320, &args![this]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn fn_00944340_and_00944360_return_the_block_activate_and_can_wait_flags() {
+        let mut e = engine();
+        let this = player(&mut e);
+        assert!(!e.call(0x0094_4340, &args![this]).bool());
+        assert!(!e.call(0x0094_4360, &args![this]).bool());
+        e.set(this, PlayerCharacter::bBlockActivate, true);
+        e.set(this, PlayerCharacter::bCanWait, true);
+        assert!(e.call(0x0094_4340, &args![this]).bool());
+        assert!(e.call(0x0094_4360, &args![this]).bool());
+    }
+
+    #[test]
+    fn fn_00944380_and_009443a0_store_and_return_the_counter_attack_timer() {
+        let mut e = engine();
+        let this = player(&mut e);
+        e.call(0x0094_4380, &args![this, 2.5f32]);
+        assert_eq!(e.get(this, PlayerCharacter::fCounterAttackTimer), 2.5);
+        assert_eq!(e.call(0x0094_43a0, &args![this]).f32(), 2.5);
+    }
+
+    #[test]
+    fn fn_009443c0_is_true_when_either_global_flag_is_set() {
+        let mut e = engine();
+        map_exe_data(&mut e);
+        assert!(!e.call(0x0094_43c0, &args![]).bool());
+        e.mem.set_u8(0x011d_ea2b, 1);
+        assert!(e.call(0x0094_43c0, &args![]).bool());
+        e.mem.set_u8(0x011d_ea2b, 0);
+        e.mem.set_u8(0x011d_ea29, 1);
+        assert!(e.call(0x0094_43c0, &args![]).bool());
+    }
+
+    #[test]
+    fn fn_009443f0_returns_the_float_global() {
+        let mut e = engine();
+        map_exe_data(&mut e);
+        e.set_global(0x011a_c3a4, 3.5f32);
+        assert_eq!(e.call(0x0094_43f0, &args![]).f32(), 3.5);
+    }
+
+    #[test]
+    fn fn_00944400_and_00944430_test_the_flags_of_the_member_with_their_masks() {
+        let mut e = engine();
+        e.register(0x0062_1270, |_, a| int(a[1] & 0x20000));
+        let this = Ptr::<()>::new(0x5000);
+        assert!(!e.call(0x0094_4400, &args![this]).bool());
+        assert!(e.call(0x0094_4430, &args![this]).bool());
+        assert_eq!(
+            called(&e, 0x0062_1270),
+            vec![vec![0x5410, 0x400], vec![0x5410, 0x20000]]
+        );
+    }
+
+    #[test]
+    fn fn_00944460_draws_between_its_bounds_with_the_global_generator() {
+        let mut e = engine();
+        e.register(0x0047_6c00, |_, _| int(0x2000));
+        e.register(0x00aa_5230, |_, a| int(a[1] / 2));
+        // low + draw(high - low), the generator `this` first.
+        assert_eq!(
+            e.call(0x0094_4460, &args![0x5dci32, 0x7d0i32]).i32(),
+            0x5dc + 0xfa
+        );
+        assert_eq!(called(&e, 0x00aa_5230), vec![vec![0x2000, 0x1f4]]);
+        assert_eq!(
+            e.call(0x0094_4480, &args![0x3000u32, 10i32, 30i32]).i32(),
+            20
+        );
+    }
+
+    #[test]
+    fn fn_009444a0_reads_a_byte_of_the_global_object_or_zero() {
+        let mut e = engine();
+        map_exe_data(&mut e);
+        assert_eq!(e.call(0x0094_44a0, &args![]).u8(), 0);
+        let object = e.mem.alloc(0x300);
+        e.mem.set_u8(object + 0x204, 7);
+        e.set_global(0x011d_96c0, object);
+        assert_eq!(e.call(0x0094_44a0, &args![]).u8(), 7);
+    }
+
+    /// The combat manager and the group of the update-player-combat test.
+    fn combat_world(e: &mut Engine, alive: u32, count: u32, searching: u32) {
+        map_exe_data(e);
+        e.set_global(0x011f_1958, 0x7700u32);
+        e.set_global(0x011d_ea3c, 0x7800u32);
+        e.register_double(0x005a_4320, move |_, _| int(alive));
+        stub(e, &[0x0098_69a0]);
+        e.register_double(0x0099_31c0, move |e, a| {
+            e.mem.set_u32(a[2], searching);
+            int(count)
+        });
+    }
+
+    #[test]
+    fn update_player_combat_drops_a_dead_group_and_resets_the_timer() {
+        let mut e = engine();
+        combat_world(&mut e, 0, 0, 0);
+        let this = player(&mut e);
+        e.set(this, PlayerCharacter::pCombatGroup, Ptr::new(0x9000));
+        e.set(this, PlayerCharacter::fCombatTimer, 3.0);
+        e.set(this, PlayerCharacter::bPlayerInCombat, true);
+        e.call(0x0094_44d0, &args![this, 0.5f32]);
+        assert_eq!(called(&e, 0x0098_69a0), vec![vec![0x9000, this.addr()]]);
+        assert_eq!(e.get(this, PlayerCharacter::pCombatGroup), Ptr::NULL);
+        assert_eq!(e.get(this, PlayerCharacter::fCombatTimer), 0.0);
+        assert!(!e.get(this, PlayerCharacter::bPlayerInCombat));
+        assert!(!e.get(this, PlayerCharacter::bAllCombatTargetsSearching));
+        assert_eq!(called(&e, 0x0099_31c0)[0][..2], [0x7700, 0x7800]);
+    }
+
+    #[test]
+    fn update_player_combat_counts_up_while_the_group_lives_and_flags_combat() {
+        let mut e = engine();
+        combat_world(&mut e, 1, 3, 3);
+        let this = player(&mut e);
+        e.set(this, PlayerCharacter::pCombatGroup, Ptr::new(0x9000));
+        e.set(this, PlayerCharacter::fCombatTimer, 1.0);
+        e.call(0x0094_44d0, &args![this, 0.5f32]);
+        assert_eq!(e.get(this, PlayerCharacter::fCombatTimer), 1.5);
+        assert!(called(&e, 0x0098_69a0).is_empty());
+        assert!(e.get(this, PlayerCharacter::bPlayerInCombat));
+        assert!(e.get(this, PlayerCharacter::bAllCombatTargetsSearching));
+        // Not every combatant is searching.
+        let mut e = engine();
+        combat_world(&mut e, 1, 3, 2);
+        let this = player(&mut e);
+        e.call(0x0094_44d0, &args![this, 0.5f32]);
+        assert!(e.get(this, PlayerCharacter::bPlayerInCombat));
+        assert!(!e.get(this, PlayerCharacter::bAllCombatTargetsSearching));
+    }
+
+    /// An engine with the exe constants and doubles for the curve helpers:
+    /// `004b3ab0` maps by adding 100 to its last argument, `00404010` is the
+    /// larger of its two floats, `00406cc0` returns its argument, `ftol`
+    /// truncates.
+    fn curve_world() -> Engine {
+        let mut e = engine();
+        exe_constants(&mut e);
+        e.register(0x004b_3ab0, |_, a| {
+            float(f32::from_bits(a[4]) as f64 + 100.0)
+        });
+        e.register(0x0040_4010, |_, a| {
+            float(f32::from_bits(a[0]).max(f32::from_bits(a[1])) as f64)
+        });
+        e.register(0x0040_6cc0, |_, a| float(f32::from_bits(a[0]) as f64));
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            int(value as i32 as u32)
+        });
+        e
+    }
+
+    #[test]
+    fn timed_curve_start_fills_the_eased_table_and_remaps_it() {
+        let mut e = curve_world();
+        let curve = e.new_object::<TimedCurve>();
+        assert!(e
+            .call(0x0094_6020, &args![curve, 5.0f32, 9.0f32, 2.0f32])
+            .bool());
+        let sample = |e: &Engine, i: u32| e.mem.f32(curve.addr() + 4 * i);
+        // sample[0] = 0 / 99, sample[99] = (99 - 0) / 99 = 1, then +100 from the double.
+        assert_eq!(sample(&e, 0), 100.0);
+        assert_eq!(sample(&e, 99), 101.0);
+        // The ramp grows: sample[1] = 0.02 / 99, mirrored at 98.
+        assert!((sample(&e, 1) - (100.0 + 0.02 / 99.0)).abs() < 1e-4);
+        assert!(sample(&e, 49) > sample(&e, 1));
+        assert_eq!(called(&e, 0x004b_3ab0).len(), 100);
+        assert_eq!(
+            called(&e, 0x004b_3ab0)[0][..4],
+            [5.0f32.to_bits(), 9.0f32.to_bits(), 0, 1.0f32.to_bits()]
+        );
+        assert_eq!(e.get(curve, TimedCurve::from), 5.0);
+        assert_eq!(e.get(curve, TimedCurve::to), 9.0);
+        assert_eq!(e.get(curve, TimedCurve::duration), 2.0);
+        assert_eq!(e.get(curve, TimedCurve::remaining), 2.0);
+    }
+
+    #[test]
+    fn timed_curve_advance_reports_when_the_time_is_used_up() {
+        let mut e = engine();
+        let curve = e.new_object::<TimedCurve>();
+        e.set(curve, TimedCurve::remaining, 1.0);
+        assert!(!e.call(0x0094_6140, &args![curve, 0.25f32]).bool());
+        assert_eq!(e.get(curve, TimedCurve::remaining), 0.75);
+        assert!(e.call(0x0094_6140, &args![curve, 1.0f32]).bool());
+        assert_eq!(e.get(curve, TimedCurve::remaining), -0.25);
+    }
+
+    #[test]
+    fn timed_curve_value_interpolates_the_table_or_returns_the_end_value() {
+        let mut e = curve_world();
+        let curve = e.new_object::<TimedCurve>();
+        e.set(curve, TimedCurve::end_value, 42.0);
+        e.set(curve, TimedCurve::duration, 10.0);
+        e.set(curve, TimedCurve::remaining, 5.0);
+        // Halfway: position (10 - 5) / 10 * 99 = 49.5 -> index 49.
+        e.mem.set_f32(curve.addr() + 4 * 49, 7.0);
+        e.mem.set_f32(curve.addr() + 4 * 50, 8.0);
+        assert_eq!(e.call(0x0094_6190, &args![curve]).f32(), 105.0);
+        // (a, b, 0, duration, duration - remaining)
+        assert_eq!(
+            called(&e, 0x004b_3ab0)[0],
+            vec![
+                7.0f32.to_bits(),
+                8.0f32.to_bits(),
+                0,
+                10.0f32.to_bits(),
+                5.0f32.to_bits()
+            ]
+        );
+        // Used up: the end value, without the remap.
+        e.set(curve, TimedCurve::remaining, -1.0);
+        assert_eq!(e.call(0x0094_6190, &args![curve]).f32(), 42.0);
+        // Index 99 or more: the end value too.
+        e.set(curve, TimedCurve::remaining, 0.5);
+        e.set(curve, TimedCurve::duration, 0.5);
+        e.set(curve, TimedCurve::remaining, 1.0e-9);
+        assert_eq!(e.call(0x0094_6190, &args![curve]).f32(), 42.0);
+        assert_eq!(called(&e, 0x004b_3ab0).len(), 1);
+    }
+
+    #[test]
+    fn timed_curve_is_over_tests_the_time_left() {
+        let mut e = engine();
+        let curve = e.new_object::<TimedCurve>();
+        e.set(curve, TimedCurve::remaining, 0.5);
+        assert!(!e.call(0x0094_6280, &args![curve]).bool());
+        e.set(curve, TimedCurve::remaining, 0.0);
+        assert!(e.call(0x0094_6280, &args![curve]).bool());
+    }
+
+    #[test]
+    fn fn_0094a070_divides_the_span_by_the_length() {
+        let mut e = engine();
+        let object = Ptr::<()>::new(e.mem.alloc(0x40));
+        e.mem.set_f32(object.addr() + 0x30, 7.0);
+        e.mem.set_f32(object.addr() + 0x2c, 1.0);
+        e.mem.set_f32(object.addr() + 0x28, 4.0);
+        assert_eq!(e.call(0x0094_a070, &args![object]).f32(), 1.5);
+    }
+
+    #[test]
+    fn fn_0094a0a0_returns_the_byte_at_0x198() {
+        let mut e = engine();
+        let object = Ptr::<()>::new(e.mem.alloc(0x1a0));
+        e.mem.set_u8(object.addr() + 0x198, 0x5c);
+        assert_eq!(e.call(0x0094_a0a0, &args![object]).u8(), 0x5c);
+    }
+
+    #[test]
+    fn fn_0094c380_calls_the_flag_function_with_zero() {
+        let mut e = engine();
+        stub(&mut e, &[0x0062_1370]);
+        e.call(0x0094_c380, &args![0x4400u32]);
+        assert_eq!(called(&e, 0x0062_1370), vec![vec![0x4400, 0]]);
+    }
+
+    #[test]
+    fn fn_0094c3a0_scales_the_setting_into_the_global_object() {
+        let mut e = engine();
+        map_exe_data(&mut e);
+        settings_by_address(&mut e);
+        // Without the object nothing happens.
+        e.call(0x0094_c3a0, &args![2.0f32]);
+        let object = e.mem.alloc(0x300);
+        e.set_global(0x011d_96c0, object);
+        e.set_global(0x011d_9748, 1.5f32);
+        e.call(0x0094_c3a0, &args![2.0f32]);
+        assert_eq!(e.mem.f32(object + 0x274), 3.0);
+    }
+
+    #[test]
+    fn fn_0094c3d0_and_0094c460_select_the_actor_value_modifier() {
+        let mut e = engine();
+        let this = player(&mut e);
+        e.mem.set_f32(this.addr() + 0x244 + 4 * 5, 1.0);
+        e.mem.set_f32(this.addr() + 0x378 + 4 * 5, 2.0);
+        e.mem.set_f32(this.addr() + 0x4b0 + 4 * 5, 3.0);
+        e.set(this, PlayerCharacter::fHealthModifier, 4.0);
+        assert_eq!(e.call(0x0094_c3d0, &args![this, 0u32, 5u32]).f32(), 1.0);
+        assert_eq!(e.call(0x0094_c3d0, &args![this, 1u32, 5u32]).f32(), 2.0);
+        assert_eq!(e.call(0x0094_c3d0, &args![this, 2u32, 5u32]).f32(), 3.0);
+        assert_eq!(e.call(0x0094_c3d0, &args![this, 2u32, 0x10u32]).f32(), 4.0);
+        assert_eq!(e.call(0x0094_c3d0, &args![this, 3u32, 5u32]).f32(), 0.0);
+        // The ActorValueOwner override reads kind 0 through the subobject.
+        let owner = Ptr::<()>::new(this.addr() + 0xa4);
+        assert_eq!(e.call(0x0094_c460, &args![owner, 5u32]).f32(), 1.0);
+    }
+
+    /// A process-like object whose vtable slots (byte offset, answer) return
+    /// the given words; the doubles live at `0x00b0_0000 + base_offset +
+    /// slot`.
+    fn answering_object(e: &mut Engine, vtable: u32, slots: &[(u32, u32)]) -> u32 {
+        let mut table = Vec::new();
+        for (slot, answer) in slots {
+            let target = 0x00b0_0000 + (vtable & 0xf_ffff) / 0x10 + slot;
+            let answer = *answer;
+            e.register_double(target, move |_, _| int(answer));
+            table.push((*slot, target));
+        }
+        object(e, vtable, &table).addr()
+    }
+
+    /// The calls (arguments after `this`) a vtable slot of an object built by
+    /// [`answering_object`] received.
+    fn slot_calls(e: &Engine, vtable: u32, slot: u32) -> Vec<Vec<u32>> {
+        called(e, 0x00b0_0000 + (vtable & 0xf_ffff) / 0x10 + slot)
+    }
+
+    /// Doubles every callee of `border_region_world` and gives the player a
+    /// position pointer.
+    fn border_world(e: &mut Engine, setting_on: bool) -> Ptr<PlayerCharacter> {
+        map_exe_data(e);
+        settings_by_address(e);
+        list_walkers(e);
+        stub(
+            e,
+            &[
+                0x0044_0d80,
+                0x0044_1110,
+                0x0045_1530,
+                0x004f_7030,
+                0x004f_8360,
+                0x0057_5d70,
+                0x0058_6260,
+                0x0065_8930,
+                0x0072_6070,
+                0x0082_56d0,
+                0x0087_7a30,
+                0x0094_dbe0,
+                0x008d_6f30,
+                0x0054_ddd0,
+            ],
+        );
+        e.mem.set_u8(0x011e_08e0, setting_on as u8);
+        let this = player(e);
+        let position = e.mem.alloc(12);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(position + 4 * i as u32, *v);
+        }
+        e.register_double(0x0043_6aa0, move |_, _| int(position));
+        this
+    }
+
+    #[test]
+    fn check_border_region_does_nothing_with_the_setting_off() {
+        let mut e = engine();
+        let this = border_world(&mut e, false);
+        e.call(0x0094_7b10, &args![this]);
+        assert!(called(&e, 0x0094_dbe0).is_empty());
+        assert!(called(&e, 0x0043_6aa0).is_empty());
+    }
+
+    #[test]
+    fn check_border_region_inside_a_contained_cell_records_the_position() {
+        let mut e = engine();
+        let this = border_world(&mut e, true);
+        e.set(this, PlayerCharacter::bInBorderContainedCell, true);
+        e.register(0x008d_6f30, |_, _| int(0));
+        e.call(0x0094_7b10, &args![this]);
+        assert_eq!(
+            read_floats(&e, member(this, PlayerCharacter::LastKnownGoodPosition)),
+            [1.0, 2.0, 3.0]
+        );
+        assert!(called(&e, 0x0094_dbe0).is_empty());
+    }
+
+    #[test]
+    fn check_border_region_without_regions_is_inside_unless_the_world_space_has_borders() {
+        let mut e = engine();
+        let this = border_world(&mut e, true);
+        // No world space: inside.
+        e.call(0x0094_7b10, &args![this]);
+        assert!(called(&e, 0x0094_dbe0).is_empty());
+        // A world space with a border region: outside, back to the last good position.
+        e.register(0x0057_5d70, |_, _| int(0x7000));
+        e.register(0x0058_6260, |_, _| int(1));
+        e.call(0x0094_7b10, &args![this]);
+        assert_eq!(called(&e, 0x0094_dbe0), vec![vec![this.addr(), 0]]);
+    }
+
+    #[test]
+    fn check_border_region_tests_the_point_against_each_region_entry() {
+        let mut e = engine();
+        let this = border_world(&mut e, true);
+        let region = e.mem.alloc(8);
+        let region_slot = e.mem.alloc(4);
+        e.mem.set_u32(region_slot, region);
+        let entry = e.mem.alloc(8);
+        let entries = node_chain(&mut e, &[entry]);
+        e.set(this, PlayerCharacter::pBorderRegions, Ptr::new(0x6000));
+        e.register(0x0065_8930, |_, _| int(1));
+        e.register_double(0x0087_7a30, move |_, _| int(region_slot));
+        e.register_double(0x0044_1110, move |_, _| int(entries));
+        // Not inside any entry: outside.
+        e.call(0x0094_7b10, &args![this]);
+        assert_eq!(called(&e, 0x0094_dbe0).len(), 1);
+        assert_eq!(called(&e, 0x004f_8360)[0][0], entry);
+        // Inside the entry: the position is recorded and nothing moves.
+        e.register(0x004f_8360, |_, _| int(1));
+        e.call(0x0094_7b10, &args![this]);
+        assert_eq!(called(&e, 0x0094_dbe0).len(), 1);
+        assert_eq!(
+            read_floats(&e, member(this, PlayerCharacter::LastKnownGoodPosition)),
+            [1.0, 2.0, 3.0]
+        );
+    }
+
+    #[test]
+    fn set_last_known_good_position_prefers_the_world_space_of_the_parent_cell() {
+        let mut e = engine();
+        let this = border_world(&mut e, true);
+        e.register(0x008d_6f30, |_, _| int(0x1111));
+        e.register(0x0054_ddd0, |_, _| int(0x2222));
+        e.call(0x0094_7c90, &args![this]);
+        assert_eq!(
+            e.get(this, PlayerCharacter::pLastKnownGoodLocation),
+            Ptr::new(0x2222)
+        );
+        // Without a world space the cell itself is stored.
+        e.register(0x0054_ddd0, |_, _| int(0));
+        e.call(0x0094_7c90, &args![this]);
+        assert_eq!(
+            e.get(this, PlayerCharacter::pLastKnownGoodLocation),
+            Ptr::new(0x1111)
+        );
+        // Without a cell: whatever `008d6f30` returns (null).
+        e.register(0x008d_6f30, |_, _| int(0));
+        e.call(0x0094_7c90, &args![this]);
+        assert_eq!(
+            e.get(this, PlayerCharacter::pLastKnownGoodLocation),
+            Ptr::NULL
+        );
+    }
+
+    /// Doubles for the list-clearing helpers: `operator delete` records its
+    /// argument.
+    fn list_world(e: &mut Engine) {
+        list_walkers(e);
+        stub(e, &[LIST_CLEAR, LIST_DELETING_DESTRUCT, LIST_CONSTRUCT]);
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(OPERATOR_NEW, |e, a| int(e.mem.alloc(a[0])));
+    }
+
+    /// Writes `items` into the embedded list at `head` (the head node holds
+    /// the first item, the others are heap nodes).
+    fn embedded_list(e: &mut Engine, head: u32, items: &[u32]) {
+        e.mem.set_u32(head, items[0]);
+        let rest = node_chain(e, &items[1..]);
+        e.mem.set_u32(head + 4, rest);
+    }
+
+    #[test]
+    fn the_audio_marker_list_is_freed_and_cleared() {
+        let mut e = engine();
+        list_world(&mut e);
+        let this = player(&mut e);
+        let head = member(this, PlayerCharacter::AudioMarkerList);
+        embedded_list(&mut e, head, &[0xa1, 0xa2]);
+        e.set(this, PlayerCharacter::pClosestAudioMarkerInfo, Ptr::new(5));
+        e.call(0x0094_7d10, &args![this]);
+        assert_eq!(called(&e, OPERATOR_DELETE), vec![vec![0xa1], vec![0xa2]]);
+        assert_eq!(called(&e, LIST_CLEAR), vec![vec![head]]);
+        assert_eq!(
+            e.get(this, PlayerCharacter::pClosestAudioMarkerInfo),
+            Ptr::NULL
+        );
+    }
+
+    #[test]
+    fn the_map_marker_list_is_freed_and_cleared() {
+        let mut e = engine();
+        list_world(&mut e);
+        let this = player(&mut e);
+        let head = member(this, PlayerCharacter::MapMarkerList);
+        embedded_list(&mut e, head, &[0xb1, 0xb2, 0xb3]);
+        e.set(this, PlayerCharacter::pMapWorld, Ptr::new(5));
+        e.call(0x0094_8050, &args![this]);
+        assert_eq!(
+            called(&e, OPERATOR_DELETE),
+            vec![vec![0xb1], vec![0xb2], vec![0xb3]]
+        );
+        assert_eq!(e.get(this, PlayerCharacter::pMapWorld), Ptr::NULL);
+        assert_eq!(e.call(0x0094_8030, &args![this]).u32(), head);
+    }
+
+    #[test]
+    fn the_audio_marker_entry_stores_the_reference_and_its_value() {
+        let mut e = engine();
+        e.register(0x0056_9080, |_, a| int(a[0] + 1));
+        let entry = Ptr::<()>::new(e.mem.alloc(8));
+        assert_eq!(
+            e.call(0x0094_8000, &args![entry, 0x500u32]).ptr::<()>(),
+            entry
+        );
+        assert_eq!(e.mem.u32(entry.addr()), 0x500);
+        assert_eq!(e.mem.u32(entry.addr() + 4), 0x501);
+        // A null reference stores nothing else.
+        let other = Ptr::<()>::new(e.mem.alloc(8));
+        e.mem.set_u32(other.addr() + 4, 0x77);
+        e.call(0x0094_8000, &args![other, 0u32]);
+        assert_eq!(e.mem.u32(other.addr()), 0);
+        assert_eq!(e.mem.u32(other.addr() + 4), 0x77);
+    }
+
+    #[test]
+    fn rebuilding_the_audio_markers_keeps_the_entries_with_a_second_word() {
+        let mut e = engine();
+        list_world(&mut e);
+        stub(
+            &mut e,
+            &[
+                0x0054_b8c0,
+                0x0057_5d70,
+                0x0058_83c0,
+                0x005a_e3d0,
+                0x008d_6f30,
+            ],
+        );
+        let this = player(&mut e);
+        let references = node_chain(&mut e, &[0x100, 0, 0x200]);
+        e.register(0x0057_5d70, |_, _| int(0x7000));
+        e.register_double(0x0058_83c0, move |_, _| int(references));
+        // 0x100 has a value, 0x200 has none.
+        e.register(0x0056_9080, |_, a| int(if a[0] == 0x100 { 9 } else { 0 }));
+        e.call(0x0094_7d80, &args![this]);
+        // One entry was added to the list, one freed; the temporary list is
+        // cleared and deleted.
+        let appended = called(&e, 0x005a_e3d0);
+        assert_eq!(appended.len(), 1);
+        assert_eq!(
+            appended[0][0],
+            member(this, PlayerCharacter::AudioMarkerList)
+        );
+        let deletes = called(&e, OPERATOR_DELETE);
+        assert_eq!(deletes.len(), 2); // the old head item and the entry of 0x200
+        assert_eq!(
+            called(&e, LIST_DELETING_DESTRUCT),
+            vec![vec![references, 1]]
+        );
+        // Without a world space the cell supplies the references.
+        e.call_log = Some(vec![]);
+        e.register(0x0057_5d70, |_, _| int(0));
+        e.register(0x008d_6f30, |_, _| int(0x4000));
+        e.call(0x0094_7d80, &args![this]);
+        assert_eq!(called(&e, 0x0054_b8c0).len(), 1);
+        assert_eq!(called(&e, 0x0054_b8c0)[0][0], 0x4000);
+        assert!(called(&e, 0x0058_83c0).is_empty());
+    }
+
+    #[test]
+    fn resetting_the_map_markers_rebuilds_them_when_the_world_space_changed() {
+        let mut e = engine();
+        list_world(&mut e);
+        stub(&mut e, &[0x0057_5d70, 0x0058_82a0, 0x005a_e3d0]);
+        let this = player(&mut e);
+        e.register(0x0057_5d70, |_, _| int(0x7000));
+        let markers = node_chain(&mut e, &[0x100, 0x200, 0]);
+        e.register_double(0x0058_82a0, move |_, _| int(markers));
+        e.register(0x0056_9060, |_, a| int(if a[0] == 0x100 { 5 } else { 0 }));
+        e.call(0x0094_80c0, &args![this]);
+        assert_eq!(e.get(this, PlayerCharacter::pMapWorld), Ptr::new(0x7000));
+        // The entry of 0x100 was appended, the one of 0x200 freed.
+        assert_eq!(called(&e, 0x005a_e3d0).len(), 1);
+        assert_eq!(called(&e, LIST_DELETING_DESTRUCT), vec![vec![markers, 1]]);
+        // Unchanged world space: nothing more happens.
+        e.call_log = Some(vec![]);
+        e.call(0x0094_80c0, &args![this]);
+        assert_eq!(call_addresses(&e), vec![0x0094_80c0, 0x0057_5d70]);
+    }
+
+    #[test]
+    fn fn_009481d0_resynchronises_the_two_animations() {
+        let mut e = engine();
+        stub(
+            &mut e,
+            &[
+                0x0048_f7f0,
+                0x0049_1040,
+                0x005f_3780,
+                0x0063_9aa0,
+                0x0070_f490,
+                0x008a_7570,
+            ],
+        );
+        stub(&mut e, &[0x008e_eaa0, 0x0096_6a00]);
+        let this = player(&mut e);
+        let process = answering_object(&mut e, 0x0262_0000, &[(0x1a8, 1), (0x454, 1)]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        e.register_double(0x0095_0a60, |_, a| int(0xa00 + a[1]));
+        e.register(0x008a_7570, |_, _| int(5));
+        e.register(0x0070_f490, |_, _| int(1));
+        e.register(0x0049_1040, |_, a| int(a[0] + 0x10));
+        e.register(0x0048_f7f0, |_, a| int(a[0] + 0x20));
+        e.register(0x005f_3780, |_, _| float(3.0));
+        e.register(0x0063_9aa0, |_, _| float(1.0));
+        e.call(0x0094_81d0, &args![this]);
+        assert_eq!(
+            called(&e, 0x008e_eaa0),
+            vec![vec![0xa00, 4], vec![0xa01, 4]]
+        );
+        assert_eq!(
+            called(&e, 0x0096_6a00),
+            vec![vec![0xa00, 2.0f32.to_bits()], vec![0xa01, 2.0f32.to_bits()]]
+        );
+        // Another animation action: nothing.
+        e.call_log = Some(vec![]);
+        e.register(0x008a_7570, |_, _| int(4));
+        e.call(0x0094_81d0, &args![this]);
+        assert!(called(&e, 0x0096_6a00).is_empty());
+    }
+
+    /// Every callee of `00948310` outside this file.
+    const ATTACK_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0043_01b0,
+        0x0044_ddc0,
+        0x0044_edb0,
+        0x0047_4a80,
+        0x0049_1040,
+        0x0049_3800,
+        0x0049_4740,
+        0x0049_5740,
+        0x0049_5e40,
+        0x0049_81f0,
+        0x0049_8d30,
+        0x0049_97b0,
+        0x004a_7bd0,
+        0x004b_da70,
+        0x004b_f220,
+        0x004c_8f30,
+        0x004d_ff00,
+        0x004f_e160,
+        0x0051_f5f0,
+        0x0052_4b40,
+        0x0052_5980,
+        0x0058_d630,
+        0x0059_8040,
+        0x0059_bb30,
+        0x005a_2030,
+        0x005e_58f0,
+        0x005f_2370,
+        0x005f_2440,
+        0x005f_2540,
+        0x005f_25d0,
+        0x005f_2670,
+        0x0064_50c0,
+        0x0066_dde0,
+        0x0070_9430,
+        0x0070_9470,
+        0x0070_f490,
+        0x0072_6070,
+        0x0080_41a0,
+        0x0084_d030,
+        0x0087_7720,
+        0x0088_46e0,
+        0x0088_c650,
+        0x0089_3a40,
+        0x0089_4cc0,
+        0x008a_6840,
+        0x008a_6970,
+        0x008a_73e0,
+        0x008a_7570,
+        0x008b_a3e0,
+        0x008b_a410,
+        0x008d_85e0,
+        0x008e_eaa0,
+        0x0095_0a60,
+        0x0096_3eb0,
+        0x0098_39b0,
+        0x009c_71c0,
+        0x009c_8cc0,
+        0x00a2_4280,
+        0x00a2_4660,
+    ];
+
+    /// A world for `00948310`: every outside callee answers 0, the input
+    /// object is `0x1000`, the animations are `0xa00 + index`, one frame is
+    /// 0.5 s with the VATS multiplier 2, and the player's process is an
+    /// object whose slots answer 0 unless `slots` says otherwise.
+    fn attack_world(e: &mut Engine, vtable: u32, slots: &[(u32, u32)]) -> Ptr<PlayerCharacter> {
+        exe_constants(e);
+        stub(e, ATTACK_CALLEES);
+        settings_by_address(e);
+        e.register(0x0087_7720, |_, _| int(0x1000));
+        e.register(0x0095_0a60, |_, a| int(0xa00 + a[1]));
+        e.register(0x0084_d030, |_, _| float(0.5));
+        e.register(0x009c_8cc0, |_, _| float(2.0));
+        e.set_global(0x011d_ea3c, 0x7a00u32);
+        let this = player(e);
+        let mut all: Vec<(u32, u32)> = [
+            0x148u32, 0x14c, 0x1a8, 0x1ac, 0x1b0, 0x1b4, 0x3f0, 0x3f4, 0x434, 0x438, 0x43c, 0x454,
+            0x6e0,
+        ]
+        .iter()
+        .map(|slot| (*slot, 0))
+        .collect();
+        all.extend_from_slice(slots);
+        let process = answering_object(e, vtable, &all);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        this
+    }
+
+    /// Makes the button state query answer true for exactly the given
+    /// (button, state) pair.
+    fn only_button(e: &mut Engine, button: u32, state: u32) {
+        e.register_double(0x00a2_4660, move |_, a| {
+            int((a[1] == button && a[2] == state) as u32)
+        });
+    }
+
+    #[test]
+    fn a_new_attack_press_without_the_weapon_out_draws_it() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        only_button(&mut e, 4, 1);
+        assert!(e.call(0x0094_8310, &args![this]).bool());
+        assert_eq!(called(&e, 0x008a_6840), vec![vec![this.addr(), 1]]);
+        assert!(called(&e, 0x0089_3a40).is_empty());
+        assert_eq!(e.global::<f32>(ATTACK_HOLD_TIMER), 0.0);
+    }
+
+    #[test]
+    fn a_new_press_while_reloading_with_an_empty_magazine_stops_early() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x454, 1), (0x14c, 0x5200)]);
+        only_button(&mut e, 4, 1);
+        e.register(0x008a_7570, |_, _| int(0x11));
+        assert!(!e.call(0x0094_8310, &args![this]).bool());
+        assert_eq!(called(&e, 0x0072_6070), vec![vec![0x5200]]);
+        assert!(called(&e, 0x0089_3a40).is_empty());
+    }
+
+    #[test]
+    fn a_new_press_while_reloading_queues_the_next_round_and_plays_the_reload() {
+        let mut e = engine();
+        let this = attack_world(
+            &mut e,
+            0x0265_0000,
+            &[(0x454, 1), (0x14c, 0x5200), (0x148, 0x5300)],
+        );
+        player_slots(&mut e, this, 0.0);
+        only_button(&mut e, 4, 1);
+        e.register(0x008a_7570, |_, _| int(0x11));
+        e.register(0x0072_6070, |_, _| int(2)); // two rounds in the magazine
+        e.register(0x0088_46e0, |_, _| int(0x401)); // crouching, moving: bits 0x400 | 1
+        e.register(0x0044_ddc0, |_, a| {
+            int(if a[0] == 0x5200 { 0x5210 } else { 0x5310 })
+        });
+        e.register(0x004f_e160, |_, _| int(10)); // clip size
+        e.register(0x004c_8f30, |_, _| int(8)); // rounds carried
+        e.register(0x004b_f220, |_, _| int(0x5400));
+        e.register(0x005f_2370, |_, _| int(0x77));
+        e.register(0x0049_5740, |_, _| int(0x33));
+        e.register(0x0049_1040, |_, _| int(0x5500));
+        assert!(e.call(0x0094_8310, &args![this]).bool());
+        // The next round is queued: (item, count 3, 0, 1, 0, 0).
+        assert_eq!(
+            called(&e, 0x0088_c650),
+            vec![vec![this.addr(), 0x5210, 3, 0, 1, 0, 0]]
+        );
+        // The animation group is built from the stance (crouch 1) and direction (3).
+        assert_eq!(called(&e, 0x005f_2370), vec![vec![1, 0, 3, 0]]);
+        assert_eq!(called(&e, 0x0049_5740), vec![vec![0xa00, 0x77, 0]]);
+        assert_eq!(called(&e, 0x0049_4740), vec![vec![0xa00, 0x33, 1, 1, 4]]);
+        assert_eq!(
+            called(&e, 0x008a_73e0),
+            vec![vec![this.addr(), 0xffff_ffff, 0x5500]]
+        );
+    }
+
+    /// The vtable of the player for the slot `0x3EC` and `0x4B0` calls, and
+    /// the `ActorValueOwner` subobject slot `0xC` answering `value`.
+    fn player_slots(e: &mut Engine, this: Ptr<PlayerCharacter>, value: f64) {
+        e.register_double(0x00b0_03ec, |_, _| Ret::default());
+        e.register_double(0x00b0_04b0, |_, _| Ret::default());
+        put_vtable(
+            e,
+            this.addr(),
+            0x0266_0000,
+            &[(0x3ec, 0x00b0_03ec), (0x4b0, 0x00b0_04b0)],
+        );
+        e.register_double(0x00b0_000c, move |_, _| float(value));
+        put_vtable(e, this.addr() + 0xa4, 0x0267_0000, &[(0xc, 0x00b0_000c)]);
+    }
+
+    #[test]
+    fn a_queued_power_attack_becomes_the_directional_perk_attack_and_starts() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        player_slots(&mut e, this, 5.0);
+        e.set_global(ATTACK_QUEUED, 2u32);
+        e.register(0x0088_46e0, |_, _| int(1)); // moving forward: group 0x5d
+        e.register(0x005e_58f0, |e, a| {
+            e.mem.set_f32(a[2], 1.0);
+            Ret::default()
+        });
+        e.register(0x0089_3a40, |_, _| int(1));
+        e.register(0x004d_ff00, |_, _| int(1)); // the dialogue check
+        assert!(!e.call(0x0094_8310, &args![this]).bool());
+        // 0x5d with a positive entry point 0x3d: 0x61.
+        assert_eq!(called(&e, 0x0089_3a40), vec![vec![this.addr(), 0x61]]);
+        assert_eq!(
+            called(&e, 0x0098_39b0),
+            vec![vec![0, 0x7a00, 0, 2, 1, 0, 0]]
+        );
+        assert_eq!(e.global::<u32>(ATTACK_QUEUED), 0);
+        // The repeat latch was set by the start and cleared again because no
+        // attack button is down.
+        assert_eq!(e.mem.u8(ATTACK_REPEAT_LATCH), 0);
+        assert_eq!(e.global::<u32>(ATTACK_COUNTER), 0);
+    }
+
+    #[test]
+    fn the_vats_attack_step_decrements_the_action_counter_and_picks_the_action_group() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x454, 1)]);
+        player_slots(&mut e, this, 0.0);
+        only_button(&mut e, 4, 1);
+        let action = e.mem.alloc(0x40);
+        e.mem.set_u32(action, 0x10);
+        e.mem.set_u8(action + 8, 3);
+        e.register(0x0044_ddc0, |_, a| int((a[0] == VATS_OBJECT) as u32 * 4));
+        e.register_double(0x009c_71c0, move |_, _| int(action));
+        e.register(0x0066_dde0, |_, _| int(1));
+        e.register(0x005f_2440, |_, _| int(0x11));
+        e.register(0x0049_1040, |_, a| int(if a[1] == 4 { 0x5500 } else { 0 }));
+        e.register(0x0080_41a0, |_, _| int(1));
+        e.register(0x0089_3a40, |_, _| int(1));
+        e.register(0x005f_2670, |_, _| int(1));
+        e.call(0x0094_8310, &args![this]);
+        assert_eq!(e.mem.u8(action + 8), 2);
+        assert_eq!(e.global::<u32>(VATS_ATTACK_DELAY), 3);
+        assert_eq!(called(&e, 0x00a2_4280), vec![vec![0x1000, 4]]);
+        // Kind 0x10 without a weapon: group 0x5d (a power attack), started.
+        assert_eq!(called(&e, 0x0089_3a40), vec![vec![this.addr(), 0x5d]]);
+        // The next frame only counts the delay down.
+        e.call_log = Some(vec![]);
+        e.call(0x0094_8310, &args![this]);
+        assert_eq!(e.global::<u32>(VATS_ATTACK_DELAY), 2);
+        assert_eq!(e.mem.u8(action + 8), 2);
+    }
+
+    /// The ammo swap world: an ammo list [A, B] on the weapon, A current.
+    fn ammo_world(e: &mut Engine) -> (Ptr<PlayerCharacter>, [u32; 2]) {
+        exe_constants(e);
+        list_walkers(e);
+        stub(
+            e,
+            &[
+                0x0044_59e0,
+                0x0047_4a40,
+                0x004b_c550,
+                0x004b_d7a0,
+                0x004b_da70,
+                0x004b_f220,
+                0x004b_fb70,
+                0x004c_8f30,
+                0x0050_0940,
+                0x0052_5980,
+                0x0057_6260,
+                0x005f_65d0,
+                0x006e_cd40,
+                0x008a_16d0,
+            ],
+        );
+        e.register(0x0040_1000, |e, a| int(e.mem.alloc(a[0])));
+        e.set_global(0x011d_ea3c, 0x7a00u32);
+        let this = player(e);
+        let process = answering_object(
+            e,
+            0x0268_0000,
+            &[(0x148, 0x5100), (0x168, 0), (0x14c, 0x5200)],
+        );
+        e.mem.set_u32(this.addr() + 0x68, process);
+        e.register_double(0x00b0_03ec, |_, _| Ret::default());
+        put_vtable(e, this.addr(), 0x0269_0000, &[(0x3ec, 0x00b0_03ec)]);
+        let ammo = node_chain(e, &[0xa1, 0xb2]);
+        e.register(0x0044_ddc0, |_, a| {
+            int(if a[0] == 0x5100 { 0x6000 } else { 0x6100 })
+        });
+        e.register(0x0047_4a40, |_, _| int(0x6200));
+        e.register_double(0x0050_0940, move |_, _| int(ammo));
+        e.register(0x0052_5980, |_, _| int(0xa1));
+        e.register(0x005f_65d0, |_, _| int(1));
+        // Item changes: one per ammo form, both with stacks.
+        // The item changes are real objects: the count is at +4 (`00726070`,
+        // which is also the list walker).
+        let item_a = e.mem.alloc(8);
+        let item_b = e.mem.alloc(8);
+        e.mem.set_u32(item_a + 4, 3);
+        e.mem.set_u32(item_b + 4, 3);
+        e.register_double(0x0057_6260, move |_, a| {
+            int(if a[1] == 0xa1 { item_a } else { item_b })
+        });
+        e.register(0x004b_d7a0, |_, _| int(2));
+        e.register(0x004b_f220, |_, _| int(0x7300));
+        e.register(0x004c_8f30, |_, _| int(9));
+        e.register(0x004b_c550, |_, _| int(0x7400));
+        e.register(0x008a_16d0, |_, _| int(1));
+        (this, [item_a, item_b])
+    }
+
+    #[test]
+    fn ammo_swap_equips_the_next_ammo_the_player_has() {
+        let mut e = engine();
+        let (this, [item_a, item_b]) = ammo_world(&mut e);
+        e.call(0x0094_62c0, &args![this, true, false]);
+        // The unused item change of the current ammo and the found one are freed.
+        assert_eq!(
+            called(&e, 0x0044_59e0),
+            vec![vec![item_a, 1], vec![item_b, 1]]
+        );
+        // The hotkey moves to the new ammo, the new item change replaces the old.
+        assert_eq!(called(&e, 0x004b_fb70), vec![vec![this.addr(), 2, 0xb2]]);
+        assert_eq!(called(&e, 0x004b_c550)[0][1..], [0xb2, 9]);
+        let process = e.mem.u32(this.addr() + 0x68);
+        assert_eq!(
+            slot_calls(&e, 0x0268_0000, 0x168),
+            vec![vec![process, 0x7400]]
+        );
+        // The player is told: (weapon object, drawn state 2, mod flag, not-draw 0).
+        let slot = called(&e, 0x00b0_03ec);
+        assert_eq!(slot, vec![vec![this.addr(), 0x6000, 2, 0, 0]]);
+    }
+
+    #[test]
+    fn ammo_swap_keeps_the_current_ammo_when_asked_and_still_in_stock() {
+        let mut e = engine();
+        let (this, [item_a, _]) = ammo_world(&mut e);
+        e.call(0x0094_62c0, &args![this, false, true]);
+        assert_eq!(called(&e, 0x0044_59e0), vec![vec![item_a, 1]]);
+        assert!(called(&e, 0x004b_fb70).is_empty());
+        assert!(called(&e, 0x00b0_03ec).is_empty());
+        assert!(slot_calls(&e, 0x0268_0000, 0x168).is_empty());
+    }
+
+    #[test]
+    fn ammo_swap_needs_a_process_with_an_equipped_weapon() {
+        let mut e = engine();
+        let (this, _) = ammo_world(&mut e);
+        e.mem.set_u32(this.addr() + 0x68, 0);
+        e.call(0x0094_62c0, &args![this, true, false]);
+        assert_eq!(call_addresses(&e), vec![0x0094_62c0]);
+    }
+
+    /// Every callee of `009445b0` outside this file, and of the curve
+    /// helpers it uses.
+    const LOOK_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0040_4010,
+        0x0040_6cc0,
+        0x0040_8860,
+        0x0040_8d60,
+        0x0041_81e0,
+        0x0043_9ef0,
+        0x0043_b230,
+        0x0043_d450,
+        0x0043_d4d0,
+        0x0044_ddc0,
+        0x0045_7990,
+        0x0045_bb80,
+        0x0045_c670,
+        0x004a_ae30,
+        0x004b_3ab0,
+        0x004b_71d0,
+        0x004b_7210,
+        0x004e_3d00,
+        0x004e_af60,
+        0x004f_8960,
+        0x0053_d280,
+        0x0057_2380,
+        0x005a_03f0,
+        0x005e_50f0,
+        0x005e_5130,
+        0x0063_c8a0,
+        0x0066_29f0,
+        0x0068_15c0,
+        0x006a_9540,
+        0x0071_5da0,
+        0x0073_b020,
+        0x0074_7d00,
+        0x0075_5680,
+        0x007f_3bd0,
+        0x0084_d030,
+        0x0087_7720,
+        0x0088_46e0,
+        0x008a_7570,
+        0x008d_8520,
+        0x0093_1d30,
+        0x0093_1d70,
+        0x0093_1d90,
+        0x0093_1e50,
+        0x0095_0110,
+        0x0095_0a60,
+        0x0095_de30,
+        0x0096_7ae0,
+        0x0099_e040,
+        0x009a_88e0,
+        0x009a_8af0,
+        0x009c_71c0,
+        0x009c_7240,
+        0x00a2_3390,
+        0x00a2_39e0,
+        0x00a6_fc50,
+        0x00ec_62c0,
+        0x00ec_7d40,
+    ];
+
+    /// A real `004b3ab0`: remaps `t` from `[t0, t1]` to `[a, b]`.
+    fn remap_double(e: &mut Engine) {
+        e.register(0x004b_3ab0, |_, a| {
+            let f = |i: usize| f32::from_bits(a[i]) as f64;
+            float(f(0) + (f(1) - f(0)) * (f(4) - f(2)) / (f(3) - f(2)))
+        });
+    }
+
+    /// A world for `009445b0`: the VATS mode is `mode`, the exe data is
+    /// mapped, every outside callee answers 0 and the setting getters return
+    /// their own address. The player's vtable answers slots `0x2bc` (heading
+    /// 0), `0x214` (0) and records `0x2c4`.
+    fn look_world(mode: u32) -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        exe_constants(&mut e);
+        stub(&mut e, LOOK_CALLEES);
+        settings_by_address(&mut e);
+        remap_double(&mut e);
+        e.register_double(0x0044_ddc0, move |_, _| int(mode));
+        e.register(FTOL, |_, a| {
+            int(f64::from_bits(a[0] as u64 | (a[1] as u64) << 32) as i32 as u32)
+        });
+        e.register(0x0040_4010, |_, a| {
+            float(f32::from_bits(a[0]).max(f32::from_bits(a[1])) as f64)
+        });
+        e.register(0x0040_6cc0, |_, a| float(f32::from_bits(a[0]) as f64));
+        let this = player(&mut e);
+        e.register_double(0x00b0_02bc, |_, _| float(0.0));
+        e.register_double(0x00b0_0214, |_, _| int(0));
+        e.register_double(0x00b0_02c4, |_, _| Ret::default());
+        put_vtable(
+            &mut e,
+            this.addr(),
+            0x026a_0000,
+            &[
+                (0x2bc, 0x00b0_02bc),
+                (0x214, 0x00b0_0214),
+                (0x2c4, 0x00b0_02c4),
+            ],
+        );
+        let process = answering_object(&mut e, 0x026b_0000, &[(0x1a8, 0)]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        (e, this)
+    }
+
+    #[test]
+    fn the_look_handler_ignores_unknown_modes() {
+        let (mut e, this) = look_world(9);
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        assert_eq!(
+            e.call(0x0094_45b0, &args![this, 0.1f32, false, flags, 0u32])
+                .u8(),
+            0
+        );
+        assert_eq!(call_addresses(&e), vec![0x0094_45b0, 0x0044_ddc0]);
+    }
+
+    #[test]
+    fn the_look_handler_does_nothing_while_the_ai_controls_the_player() {
+        let (mut e, this) = look_world(0);
+        e.set(this, PlayerCharacter::bAiControlledToPos, true);
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        assert_eq!(
+            e.call(0x0094_45b0, &args![this, 0.1f32, false, flags, 0u32])
+                .u8(),
+            0
+        );
+        assert!(called(&e, 0x0087_7720).is_empty());
+    }
+
+    #[test]
+    fn the_free_look_turns_the_player_by_the_input_and_sets_the_turn_flag() {
+        let (mut e, this) = look_world(0);
+        // Digital input: yaw 100, no pitch, no zoom.
+        e.register(0x00a2_39e0, |_, a| int(if a[1] == 1 { 100 } else { 0 }));
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0040_8860, |_, a| float(f32::from_bits(a[0]).abs() as f64));
+        e.register(0x0099_e040, |_, _| float(1.0));
+        e.register(0x004e_3d00, |_, _| float(1.0));
+        e.register(0x0045_c670, |_, _| int(0x6000));
+        e.set_global(0x011e_0a6c, 2.0f32); // look sensitivity
+        e.set_global(0x0120_315c, 2.0f32); // the view limit: half the limit is available
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        e.mem.set_u16(flags.addr(), 0x0001);
+        let result = e
+            .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
+            .u8();
+        assert_eq!(result, 1);
+        // turn = 2.0 * 100; the flag for a right turn is added.
+        assert_eq!(e.mem.u16(flags.addr()), 0x0021);
+        // The player turns by turn * (view / limit = 0.5).
+        assert_eq!(
+            called(&e, 0x0093_1d30),
+            vec![vec![this.addr(), 100.0f32.to_bits()]]
+        );
+        // The turn speed estimate is clamped to the constant 1.5.
+        assert_eq!(e.global::<f32>(TURN_SPEED), 1.5);
+        assert_eq!(e.global::<f32>(LAST_HEADING), 0.0);
+    }
+
+    #[test]
+    fn the_free_look_inverts_the_pitch_and_zooms_in_the_third_person() {
+        let (mut e, this) = look_world(0);
+        // Digital input: no yaw, pitch 10, zoom 120.
+        e.register(0x00a2_39e0, |_, a| {
+            int(match a[1] {
+                2 => 10,
+                3 => 120,
+                _ => 0,
+            })
+        });
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0099_e040, |_, _| float(1.0));
+        e.register(0x004e_3d00, |_, _| float(1.0));
+        e.register(0x0045_c670, |_, _| int(0x6000));
+        e.set_global(0x011e_0a6c, 3.0f32);
+        e.set_global(0x0120_315c, 1.0f32);
+        e.mem.set_u8(0x011e_0a5c, 1); // the invert-pitch setting
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        e.set_global(ZOOM_DISTANCE, 100.0f32);
+        e.set_global(0x011c_dc98, 0.5f32); // zoom-in speed
+        e.set_global(0x011c_d568, 500.0f32); // the largest distance
+        e.set_global(0x011c_d614, 1.0f32);
+        e.set_global(0x011c_da94, 10.0f32);
+        e.register_double(0x00b0_022c, |_, _| int(1)); // slot 0x22c: first person?
+        put_vtable(
+            &mut e,
+            this.addr(),
+            0x026a_0000,
+            &[
+                (0x2bc, 0x00b0_02bc),
+                (0x214, 0x00b0_0214),
+                (0x2c4, 0x00b0_02c4),
+                (0x22c, 0x00b0_022c),
+            ],
+        );
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        let result = e
+            .call(0x0094_45b0, &args![this, 0.5f32, false, flags, 0u32])
+            .u8();
+        // Zoom 120 / 120 = 1 * distance 100 * speed 0.5 = 50 less.
+        assert_eq!(e.global::<f32>(ZOOM_DISTANCE), 50.0);
+        // The pitch step (10 * 3.0 * view scale 1.0) is applied inverted.
+        assert_eq!(
+            called(&e, 0x0093_1e50),
+            vec![vec![this.addr(), (-30.0f32).to_bits()]]
+        );
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn the_vats_target_camera_aims_at_the_target_and_masks_the_input_flags() {
+        let (mut e, this) = look_world(4);
+        let target_pos = e.mem.alloc(12);
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_f32(target_pos + 4 * i as u32, *v);
+        }
+        let target = answering_object(
+            &mut e,
+            0x026c_0000,
+            &[(0x1d0, 0), (0x1f4, target_pos), (0x100, 0)],
+        );
+        let action = e.mem.alloc(0x20);
+        e.mem.set_u32(action + 0xc, target);
+        e.mem.set_u32(action + 0x10, 0xffff_ffff);
+        e.register_double(0x009c_71c0, move |_, _| int(action));
+        e.register_double(0x009a_88e0, |e, a| {
+            for (i, v) in [0.25f32, 0.0, 0.75].iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * i as u32, *v);
+            }
+            Ret::default()
+        });
+        e.register(0x0088_46e0, |_, _| int(0xffff));
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        let result = e
+            .call(0x0094_45b0, &args![this, 0.1f32, true, flags, 0u32])
+            .u8();
+        assert_eq!(result, 1);
+        // The angles come from the target position: (out, player, x, y, z).
+        let angles = &called(&e, 0x009a_88e0)[0];
+        assert_eq!(angles[1], this.addr());
+        assert_eq!(
+            angles[2..],
+            [10.0f32.to_bits(), 20.0f32.to_bits(), 30.0f32.to_bits()]
+        );
+        // Heading through slot 0x2C4, pitch through SetLooking.
+        assert_eq!(
+            called(&e, 0x00b0_02c4),
+            vec![vec![this.addr(), 0.75f32.to_bits()]]
+        );
+        assert_eq!(
+            called(&e, 0x0093_1d90),
+            vec![vec![this.addr(), 0.25f32.to_bits()]]
+        );
+        assert_eq!(called(&e, 0x009c_7240), vec![vec![VATS_OBJECT]]);
+        assert_eq!(e.mem.u16(flags.addr()), 0xcc00);
+    }
+
+    #[test]
+    fn the_follow_camera_without_a_target_only_runs_its_pre_update() {
+        let (mut e, this) = look_world(2);
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        assert_eq!(
+            e.call(0x0094_45b0, &args![this, 0.1f32, false, flags, 0u32])
+                .u8(),
+            0
+        );
+        assert_eq!(
+            called(&e, 0x0095_de30),
+            vec![vec![this.addr(), 0.1f32.to_bits()]]
+        );
+        assert!(called(&e, 0x009a_8af0).is_empty());
+    }
+
+    #[test]
+    fn the_follow_camera_turns_the_player_towards_a_target_with_two_curves() {
+        let (mut e, this) = look_world(1);
+        let heading_curve = e.new_object::<TimedCurve>();
+        let pitch_curve = e.new_object::<TimedCurve>();
+        e.set_global(HEADING_CURVE, heading_curve.addr());
+        e.set_global(PITCH_CURVE, pitch_curve.addr());
+        // A target without a 3D root and not an actor, at a position.
+        let target_pos = e.mem.alloc(12);
+        let target = answering_object(
+            &mut e,
+            0x026c_0000,
+            &[(0x1d0, 0), (0x1f4, target_pos), (0x100, 0)],
+        );
+        e.set_global(LOOK_TARGET_ACTOR, target);
+        e.register_double(0x009a_8af0, |e, a| {
+            // angles: x (pitch) 0.5, z (heading) 1.0.
+            for (i, v) in [0.5f32, 0.0, 1.0].iter().enumerate() {
+                e.mem.set_f32(a[0] + 4 * i as u32, *v);
+            }
+            Ret::default()
+        });
+        e.register(0x0084_d030, |_, _| float(0.25));
+        e.register(0x0045_bb80, |_, _| int(0x011a_0000));
+        e.set_global(0x011d_48dc, 2.0f32); // the duration for mode 1
+        e.set_global(SMOOTH_LOOK_ENABLED, 1u8);
+        let flags = Ptr::<()>::new(e.mem.alloc(4));
+        let result = e
+            .call(0x0094_45b0, &args![this, 0.1f32, false, flags, 0u32])
+            .u8();
+        assert_eq!(result, 0);
+        // Both curves were restarted over the setting's duration and advanced one step.
+        assert_eq!(e.get(heading_curve, TimedCurve::duration), 2.0);
+        assert_eq!(e.get(heading_curve, TimedCurve::to), 1.0);
+        assert_eq!(e.get(pitch_curve, TimedCurve::to), 0.5);
+        assert_eq!(e.get(heading_curve, TimedCurve::remaining), 1.75);
+        // The player's heading and pitch are set from the curves, between the
+        // start (0) and the target.
+        let heading = f32::from_bits(called(&e, 0x00b0_02c4)[0][1]);
+        let pitch = f32::from_bits(called(&e, 0x0093_1d90)[0][1]);
+        assert!(heading > 0.0 && heading < 1.0, "heading {heading}");
+        assert!(pitch > 0.0 && pitch < 0.5, "pitch {pitch}");
+        // The VATS menu is told 0: the curves are not over yet.
+        assert_eq!(called(&e, 0x007f_3bd0), vec![vec![0]]);
+        assert_eq!(e.global::<u32>(LAST_LOOK_TARGET), target);
+    }
+
+    /// Every callee of `009466d0` outside this file.
+    const INPUT_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0040_4eb0,
+        0x0040_4ee0,
+        0x0041_6870,
+        0x0043_01b0,
+        0x0043_6aa0,
+        0x0043_7bd0,
+        0x0043_7bf0,
+        0x0043_9180,
+        0x0043_9f50,
+        0x0044_ddc0,
+        0x0045_3a70,
+        0x0045_c670,
+        0x0048_3710,
+        0x004a_0c10,
+        0x004b_71d0,
+        0x004b_7210,
+        0x004c_0c90,
+        0x004f_8960,
+        0x0050_8070,
+        0x0050_d4a0,
+        0x0052_5980,
+        0x0055_8310,
+        0x0056_10f0,
+        0x0056_15d0,
+        0x0056_8680,
+        0x0057_3170,
+        0x005a_03f0,
+        0x005a_1e50,
+        0x005a_2030,
+        0x005c_0880,
+        0x005f_2670,
+        0x0064_50c0,
+        0x0068_15c0,
+        0x0069_3ef0,
+        0x006a_9540,
+        0x0070_2360,
+        0x0070_3350,
+        0x0070_62e0,
+        0x0085_09a0,
+        0x0085_09f0,
+        0x0087_7720,
+        0x0088_43a0,
+        0x0088_46e0,
+        0x0088_49c0,
+        0x0088_4f80,
+        0x0088_85e0,
+        0x0089_4cc0,
+        0x0089_4d60,
+        0x0089_4f90,
+        0x0089_50f0,
+        0x0089_5110,
+        0x008a_0b10,
+        0x008a_16d0,
+        0x008a_6840,
+        0x008a_6970,
+        0x008a_7570,
+        0x008b_a600,
+        0x008b_b650,
+        0x008b_bc10,
+        0x008c_3c40,
+        0x008c_e390,
+        0x008d_3550,
+        0x008d_8520,
+        0x0093_06d0,
+        0x0093_1d70,
+        0x0094_df80,
+        0x0095_0a60,
+        0x0095_f6a0,
+        0x0096_13c0,
+        0x0096_7ae0,
+        0x009b_b080,
+        0x009e_a360,
+        0x009e_a570,
+        0x00a2_3390,
+        0x00a2_4280,
+        0x00a2_4660,
+        0x00ad_7550,
+        0x00ad_8830,
+        0x00ec_43fb,
+        0x00ec_7d40,
+    ];
+
+    /// Every callee of `0094a8c0` and of `009481d0` outside this file.
+    const UFO_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0040_8820,
+        0x0040_8d60,
+        0x0040_ebd0,
+        0x0043_9180,
+        0x0043_d410,
+        0x0043_f8d0,
+        0x0043_fa80,
+        0x0044_0460,
+        0x0045_7fe0,
+        0x0045_bb20,
+        0x0045_c670,
+        0x004a_0c90,
+        0x004b_4500,
+        0x004b_71d0,
+        0x004b_7210,
+        0x0052_4ac0,
+        0x0055_8310,
+        0x0057_5d70,
+        0x0058_6170,
+        0x0063_c8a0,
+        0x0068_15c0,
+        0x006f_ca90,
+        0x006f_cdb0,
+        0x0087_7720,
+        0x00a2_3390,
+        0x00a2_39e0,
+        0x00a2_4660,
+        0x00a5_9c60,
+        0x0048_f7f0,
+        0x0049_1040,
+        0x005f_3780,
+        0x0063_9aa0,
+        0x0070_f490,
+        0x008a_7570,
+        0x008e_eaa0,
+        0x0095_0a60,
+        0x0096_6a00,
+    ];
+
+    /// The address of the double behind slot `slot` of the table at `base`
+    /// (see [`zero_table`]).
+    fn slot_target(base: u32, slot: u32) -> u32 {
+        0x00b0_0000 + (base & 0xf_ffff) / 0x10 + slot
+    }
+
+    /// A vtable at `base` whose every slot (0 to 0x7FC) answers 0, except the
+    /// given ones; the doubles are found with [`slot_target`].
+    fn zero_table(e: &mut Engine, base: u32, answers: &[(u32, u32)]) {
+        let mut slots = Vec::new();
+        for slot in (0..0x800u32).step_by(4) {
+            let target = slot_target(base, slot);
+            e.register(target, |_, _| Ret::default());
+            slots.push((slot, target));
+        }
+        for (slot, answer) in answers {
+            let answer = *answer;
+            e.register_double(slot_target(base, *slot), move |_, _| int(answer));
+        }
+        vtable_only(e, base, &slots);
+    }
+
+    /// An object with a [`zero_table`] vtable.
+    fn zero_object(e: &mut Engine, base: u32, answers: &[(u32, u32)]) -> u32 {
+        zero_table(e, base, answers);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, base);
+        object
+    }
+
+    /// The world of `009466d0`: every outside callee answers 0, the settings
+    /// are by address, the player has a zero vtable, a process and a mover
+    /// that answer 0, and is the player singleton.
+    fn input_world() -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        exe_constants(&mut e);
+        for table in [INPUT_CALLEES, ATTACK_CALLEES, LOOK_CALLEES, UFO_CALLEES] {
+            stub(&mut e, table);
+        }
+        settings_by_address(&mut e);
+        e.register(0x0087_7720, |_, _| int(0x1000));
+        let animations = [e.mem.alloc(0x400), e.mem.alloc(0x400)];
+        e.register_double(0x0095_0a60, move |_, a| {
+            int(animations[(a[1] != 0) as usize])
+        });
+        e.register(0x0084_d030, |_, _| float(0.5));
+        e.register(0x00ec_7d40, |_, a| int((a[0] as i32).unsigned_abs()));
+        e.register(0x0045_3a70, |_, _| int(0x4600));
+        e.register(0x00ad_7550, |_, a| int(a[1]));
+        // The point arithmetic returns its output buffer.
+        for addr in [0x0045_bb20, 0x0043_9e90, 0x0043_9ef0, 0x004b_4500] {
+            e.register(addr, |_, a| int(a[1]));
+        }
+        e.register(0x0041_6870, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            int(a[0])
+        });
+        e.register(0x0055_8310, |_, _| int(0x011a_0000));
+        e.register(0x006a_9540, |_, a| int(a[0]));
+        e.register(0x0043_6aa0, |_, _| int(0x011a_0100));
+        e.register(0x0045_bb80, |_, _| int(0x011a_0200));
+        let this = player(&mut e);
+        zero_table(&mut e, 0x0270_0000, &[]);
+        e.mem.set_u32(this.addr(), 0x0270_0000);
+        let process = zero_object(&mut e, 0x0271_0000, &[]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        let mover = zero_object(&mut e, 0x0272_0000, &[]);
+        e.mem.set_u32(this.addr() + 0x190, mover);
+        e.set_global(0x011d_ea3c, this.addr());
+        e.set_global(0x011d_e134, 0x4500u32);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    /// Makes the button query true for the given (button, state) pairs.
+    fn buttons(e: &mut Engine, pressed: &'static [(u32, u32)]) {
+        e.register_double(0x00a2_4660, move |_, a| {
+            int(pressed.iter().any(|(b, s)| a[1] == *b && a[2] == *s) as u32)
+        });
+    }
+
+    #[test]
+    fn the_input_handler_with_the_controls_skipped_only_runs_the_hotkeys() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(0x19, 1), (0x1a, 1)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, true]);
+        assert_eq!(called(&e, 0x0085_09a0), vec![vec![0x4500]]);
+        assert_eq!(called(&e, 0x0085_09f0), vec![vec![0x4500]]);
+        assert_eq!(e.mem.u8(0x011e_0be5), 0);
+        assert_eq!(e.mem.u8(0x011e_0be4), 0);
+        // The profiling scope opens and closes around it.
+        let open = called(&e, 0x0040_4eb0);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0][1..], [0x34, 1, UPDATE_GUARD_FILE, 0x17a3]);
+        assert_eq!(called(&e, 0x0040_4ee0), vec![vec![open[0][0]]]);
+        // No player control ran.
+        assert!(called(&e, 0x0088_46e0).is_empty());
+        // The UFO camera still ran first (it reads the look axes).
+        assert!(!called(&e, 0x0087_7720).is_empty());
+    }
+
+    #[test]
+    fn the_hotkeys_do_not_run_again_while_their_guard_is_set() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(0x19, 1), (0x1a, 1)]);
+        e.mem.set_u8(0x011e_0be5, 1);
+        e.mem.set_u8(0x011e_0be4, 1);
+        e.call(0x0094_66d0, &args![this, 0.5f32, true]);
+        assert!(called(&e, 0x0085_09a0).is_empty());
+        assert!(called(&e, 0x0085_09f0).is_empty());
+    }
+
+    #[test]
+    fn the_sneak_button_toggles_the_crouch_flag_and_plays_a_sound() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(8, 1)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        // Crouching down: "NPCHumanCrouchDown", state 0xA, flag 0x400 to the mover.
+        assert_eq!(called(&e, 0x00ad_7550)[0][2..], [0x0108_b050, 0x0004_0102]);
+        assert_eq!(
+            called(&e, slot_target(0x0270_0000, 0x340)),
+            vec![vec![this.addr(), 0xa]]
+        );
+        assert_eq!(called(&e, slot_target(0x0272_0000, 0xc))[0][1], 0x400);
+        assert_eq!(called(&e, 0x0088_4f80), vec![vec![this.addr()]]);
+        assert_eq!(called(&e, 0x0048_3710).len(), 1);
+        // Standing up again.
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(8, 1)]);
+        e.register(0x0088_46e0, |_, _| int(0x400));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x00ad_7550)[0][2..], [0x0108_b064, 0x0004_0102]);
+        assert_eq!(
+            called(&e, slot_target(0x0270_0000, 0x340)),
+            vec![vec![this.addr(), 0xb]]
+        );
+        assert_eq!(called(&e, slot_target(0x0272_0000, 0xc))[0][1], 0);
+    }
+
+    #[test]
+    fn the_sneak_button_does_nothing_while_something_blocks_it() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(8, 1)]);
+        zero_table(&mut e, 0x0270_0000, &[(0x234, 1)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert!(called(&e, 0x00ad_7550).is_empty());
+        assert!(called(&e, slot_target(0x0270_0000, 0x340)).is_empty());
+        // The button still counts as handled.
+        assert_eq!(called(&e, 0x0088_4f80).len(), 1);
+    }
+
+    #[test]
+    fn the_auto_move_button_toggles_auto_move_and_any_direction_cancels_it() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(0xb, 1)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert!(e.get(this, PlayerCharacter::bAutoMove));
+        // Auto-move keeps pressing forward (button 0).
+        assert!(called(&e, 0x00a2_4280).contains(&vec![0x1000, 0]));
+        // A direction key cancels it.
+        buttons(&mut e, &[(1, 0)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert!(!e.get(this, PlayerCharacter::bAutoMove));
+    }
+
+    #[test]
+    fn the_analog_move_stick_sets_the_move_speed_factor_and_the_direction_bits() {
+        let (mut e, this) = input_world();
+        e.register(0x004b_71d0, |_, _| int(1));
+        e.register(0x00a2_3390, |_, a| {
+            int(if a[2] == 7 { (-12000i32) as u32 } else { 0 })
+        });
+        e.register(0x008a_0b10, |_, _| float(3.0));
+        e.set_global(0x011e_0964, 1.0e-4f32);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        // Stick x is negative: button 2 pressed for the input, bit 4 of the flags.
+        assert!(called(&e, 0x00a2_4280).contains(&vec![0x1000, 2]));
+        assert!((e.global::<f32>(TURN_SPEED) - 1.2).abs() < 1e-5);
+        // 12000 * 0.02 is clamped to 1.
+        assert_eq!(e.global::<f32>(MOVE_SPEED_FACTOR), 1.0);
+        assert_eq!(called(&e, slot_target(0x0272_0000, 0xc))[0][1], 4);
+        // Both movement vectors are scaled by the speed.
+        let scaled = called(&e, 0x0043_9180);
+        let last = scaled.len();
+        assert_eq!(scaled[last - 2][1], 3.0f32.to_bits());
+        assert_eq!(scaled[last - 1][1], 3.0f32.to_bits());
+    }
+
+    #[test]
+    fn the_aim_button_raises_the_iron_sights_of_a_drawn_weapon() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(6, 1)]);
+        let process = zero_object(&mut e, 0x0273_0000, &[(0x148, 0x5100), (0x3f8, 1)]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        e.register(0x0044_ddc0, |_, a| {
+            int(if a[0] == 0x5100 { 0x6000 } else { 0 })
+        });
+        e.register(0x008a_16d0, |_, _| int(1));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x008b_b650), vec![vec![this.addr(), 1, 0, 0]]);
+        assert!(called(&e, 0x0089_4cc0).is_empty());
+        // Releasing it lowers both again.
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(6, 2)]);
+        e.register(0x008b_bc10, |_, _| int(1));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x008b_b650), vec![vec![this.addr(), 0, 0, 0]]);
+        assert_eq!(called(&e, 0x0089_4cc0), vec![vec![this.addr(), 0]]);
+    }
+
+    #[test]
+    fn the_activate_button_activates_the_reference_under_the_cursor() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(5, 1)]);
+        let reference = zero_object(&mut e, 0x0274_0000, &[]);
+        e.register_double(0x0070_3350, move |_, _| int(reference));
+        e.register(0x0057_3170, |_, _| int(1));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x0070_62e0), vec![vec![0, 0, 0]]);
+        assert_eq!(
+            called(&e, 0x0057_3170),
+            vec![vec![reference, this.addr(), 0, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn the_activate_button_falls_back_to_the_process_object() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(5, 1)]);
+        let process = zero_object(&mut e, 0x0273_0000, &[(0x4c8, 0x5900)]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        // No reference: activate what the process offers.
+        assert_eq!(
+            called(&e, 0x0057_3170),
+            vec![vec![0x5900, this.addr(), 0, 0, 1]]
+        );
+    }
+
+    #[test]
+    fn the_activate_button_does_nothing_while_a_menu_is_open() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(5, 1)]);
+        e.register(0x0070_2360, |_, _| int(1));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert!(called(&e, 0x0070_62e0).is_empty());
+        assert!(called(&e, 0x0057_3170).is_empty());
+    }
+
+    #[test]
+    fn the_attack_button_checks_the_controller_when_moving() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(0xc, 1)]);
+        e.register(0x0093_06d0, |_, _| int(0x5a00));
+        e.register(0x0062_1270, |_, _| int(1));
+        zero_table(&mut e, 0x0270_0000, &[(0x254, 1)]);
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x0095_f6a0), vec![vec![this.addr()]]);
+        // Once to decide it moves and once more because it can start.
+        assert_eq!(called(&e, 0x0062_1270).len(), 2);
+    }
+
+    #[test]
+    fn holding_the_draw_button_long_enough_sheathes_the_weapon() {
+        let (mut e, this) = input_world();
+        buttons(&mut e, &[(7, 0)]);
+        e.register(0x0088_43a0, |_, _| int(1));
+        e.register(0x008a_7570, |_, _| int(0xffff_ffff));
+        e.register(0x008a_6970, |_, _| int(1));
+        e.set_global(0x011c_dfcc, 0.5f32); // the hold time
+        e.call(0x0094_66d0, &args![this, 0.6f32, false]);
+        assert_eq!(e.global::<f32>(DRAW_BUTTON_TIMER), 0.6);
+        assert_eq!(called(&e, 0x008a_6840), vec![vec![this.addr(), 0]]);
+        assert_eq!(e.mem.u8(DRAW_INPUT_HANDLED), 1);
+    }
+
+    #[test]
+    fn the_look_handler_runs_unless_the_vats_mode_is_zero() {
+        let (mut e, this) = input_world();
+        e.register(0x0044_ddc0, |_, _| int(9));
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        // Mode 9: the mode query, then the look handler asks again.
+        assert_eq!(called(&e, 0x0044_ddc0), vec![vec![VATS_OBJECT]; 2]);
+        let (mut e, this) = input_world();
+        e.call(0x0094_66d0, &args![this, 0.5f32, false]);
+        assert_eq!(called(&e, 0x0044_ddc0), vec![vec![VATS_OBJECT]]);
+    }
+
+    /// Every callee of `0094a0c0` outside this file.
+    const CAMERA_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0043_9e90,
+        0x0043_9ef0,
+        0x0044_ddc0,
+        0x0045_78c0,
+        0x0045_7910,
+        0x0045_7990,
+        0x0045_bb20,
+        0x0045_bb80,
+        0x0062_0bc0,
+        0x0062_1370,
+        0x0062_1440,
+        0x0062_14d0,
+        0x0062_1ad0,
+        0x0062_1c40,
+        0x0063_c8a0,
+        0x0068_15c0,
+        0x0070_2680,
+        0x0084_d030,
+        0x0088_53a0,
+        0x008c_4640,
+        0x0093_06d0,
+        0x00ec_408c,
+    ];
+
+    /// Every callee of `0094ae40` outside this file.
+    const UPDATE_CAMERA_CALLEES: &[u32] = &[
+        0x0040_3e20,
+        0x0040_8860,
+        0x0041_6870,
+        0x0043_9180,
+        0x0043_9e90,
+        0x0043_9ef0,
+        0x0043_c490,
+        0x0043_d410,
+        0x0043_f8d0,
+        0x0043_fa80,
+        0x0044_0460,
+        0x0044_ddc0,
+        0x0044_edb0,
+        0x0045_3700,
+        0x0045_3a70,
+        0x0045_78c0,
+        0x0045_7990,
+        0x0045_bb20,
+        0x0045_bb80,
+        0x0045_bba0,
+        0x0045_bbe0,
+        0x0045_c670,
+        0x0046_1130,
+        0x0047_6930,
+        0x0049_6550,
+        0x004a_0c10,
+        0x004a_0c90,
+        0x004a_b230,
+        0x004b_1460,
+        0x004b_3ae0,
+        0x004b_4500,
+        0x004b_6190,
+        0x004e_9c10,
+        0x0050_8070,
+        0x0052_4ac0,
+        0x0055_8310,
+        0x0055_9450,
+        0x0056_7400,
+        0x0057_5d70,
+        0x0057_d0a0,
+        0x0058_6170,
+        0x0058_d630,
+        0x005d_c270,
+        0x0062_1440,
+        0x0063_c8a0,
+        0x0066_29f0,
+        0x0068_15c0,
+        0x006a_9540,
+        0x006f_ca90,
+        0x006f_cdb0,
+        0x0071_33b0,
+        0x0088_5560,
+        0x008b_70d0,
+        0x008d_1b30,
+        0x008d_6f30,
+        0x0093_1d70,
+        0x0093_3840,
+        0x0095_0290,
+        0x0095_0b00,
+        0x0095_0bb0,
+        0x0095_edf0,
+        0x0097_4d90,
+        0x009c_8ac0,
+        0x00a5_92c0,
+        0x00a5_9540,
+        0x00a5_9c60,
+        0x00a7_01b0,
+        0x00a7_12f0,
+        0x00ad_78b0,
+        0x00ad_7940,
+        0x00ad_7990,
+        0x00b5_4000,
+        0x00c5_2020,
+        0x00c8_e160,
+        0x00ec_658f,
+    ];
+
+    /// Real `NiPoint3` arithmetic on guest memory for the camera tests:
+    /// subtraction, addition, scaling (output buffer first), the in-place
+    /// forms, the length, the unitise-and-length, and the constructor.
+    fn vector_math(e: &mut Engine) {
+        fn load(e: &Engine, p: u32) -> [f64; 3] {
+            [
+                e.mem.f32(p) as f64,
+                e.mem.f32(p + 4) as f64,
+                e.mem.f32(p + 8) as f64,
+            ]
+        }
+        fn store(e: &mut Engine, p: u32, v: [f64; 3]) {
+            for (i, x) in v.iter().enumerate() {
+                e.mem.set_f32(p + 4 * i as u32, *x as f32);
+            }
+        }
+        e.register(0x0043_9ef0, |e, a| {
+            let (x, y) = (load(e, a[0]), load(e, a[2]));
+            store(e, a[1], [x[0] - y[0], x[1] - y[1], x[2] - y[2]]);
+            int(a[1])
+        });
+        e.register(0x0043_9e90, |e, a| {
+            let (x, y) = (load(e, a[0]), load(e, a[2]));
+            store(e, a[1], [x[0] + y[0], x[1] + y[1], x[2] + y[2]]);
+            int(a[1])
+        });
+        e.register(0x0045_bb20, |e, a| {
+            let (x, f) = (load(e, a[0]), f32::from_bits(a[2]) as f64);
+            store(e, a[1], [x[0] * f, x[1] * f, x[2] * f]);
+            int(a[1])
+        });
+        e.register(0x0043_9180, |e, a| {
+            let (x, f) = (load(e, a[0]), f32::from_bits(a[1]) as f64);
+            store(e, a[0], [x[0] * f, x[1] * f, x[2] * f]);
+            int(a[0])
+        });
+        e.register(0x0063_c8a0, |e, a| {
+            let (x, y) = (load(e, a[0]), load(e, a[1]));
+            store(e, a[0], [x[0] + y[0], x[1] + y[1], x[2] + y[2]]);
+            int(a[0])
+        });
+        e.register(0x0045_78c0, |e, a| {
+            let (x, y) = (load(e, a[0]), load(e, a[1]));
+            store(e, a[0], [x[0] - y[0], x[1] - y[1], x[2] - y[2]]);
+            int(a[0])
+        });
+        e.register(0x0045_7990, |e, a| {
+            let x = load(e, a[0]);
+            float((x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt())
+        });
+        e.register(0x0045_7910, |e, a| {
+            let x = load(e, a[0]);
+            let length = (x[0] * x[0] + x[1] * x[1] + x[2] * x[2]).sqrt();
+            if length > 0.0 {
+                store(e, a[0], [x[0] / length, x[1] / length, x[2] / length]);
+            }
+            float(length)
+        });
+        e.register(0x0041_6870, |e, a| {
+            for i in 1..4 {
+                e.mem.set_u32(a[0] + 4 * (i - 1), a[i as usize]);
+            }
+            int(a[0])
+        });
+        // The matrix-vector product with the identity matrix.
+        e.register(0x004b_4500, |e, a| {
+            let v = load(e, a[2]);
+            store(e, a[1], v);
+            int(a[1])
+        });
+    }
+
+    /// Stubs that return a pointer into zeroed memory (a point, a matrix, a
+    /// node) for the camera tests.
+    fn pointer_stubs(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            e.register(*addr, |_, _| int(0x011a_0300));
+        }
+    }
+
+    fn camera_distance_world() -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        exe_constants(&mut e);
+        stub(&mut e, CAMERA_CALLEES);
+        settings_by_address(&mut e);
+        vector_math(&mut e);
+        e.register(0x0084_d030, |_, _| float(0.1));
+        let this = player(&mut e);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    /// Calls `0094a0c0` with the camera at `camera` and the anchor at `anchor`;
+    /// returns the camera position after the call.
+    fn move_camera(
+        e: &mut Engine,
+        this: Ptr<PlayerCharacter>,
+        camera: [f32; 3],
+        anchor: [f32; 3],
+        snap: bool,
+    ) -> [f32; 3] {
+        let position = e.mem.alloc(12);
+        let anchor_at = e.mem.alloc(12);
+        for i in 0..3 {
+            e.mem.set_f32(position + 4 * i as u32, camera[i]);
+            e.mem.set_f32(anchor_at + 4 * i as u32, anchor[i]);
+        }
+        e.call(
+            0x0094_a0c0,
+            &args![
+                this,
+                Ptr::<()>::new(position),
+                Ptr::<()>::new(anchor_at),
+                snap
+            ],
+        );
+        read_floats(e, position)
+    }
+
+    #[test]
+    fn the_camera_distance_moves_towards_the_wanted_distance_by_one_step() {
+        let (mut e, this) = camera_distance_world();
+        e.set_global(CAMERA_DISTANCE, 5.0f32);
+        e.set_global(0x011c_d288, 10.0f32); // rate: step = 10 * 0.1
+        e.set_global(0x011c_d568, 100.0f32); // the largest distance
+        e.set_global(0x011c_da94, 2.0f32); // the smallest
+        e.set_global(PLAYER_FADE, 1.0f32);
+        let position = move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+        // The camera is further than the distance (5 + 1): it moves 1 closer.
+        assert_eq!(e.global::<f32>(CAMERA_DISTANCE), 6.0);
+        assert_eq!(position, [6.0, 0.0, 0.0]);
+        assert_eq!(read_floats(&e, CAMERA_SMOOTHED), [8.0, 0.0, 0.0]);
+        // Nothing hides the player: the fade stays full.
+        assert!(called(&e, 0x008c_4640).is_empty());
+    }
+
+    #[test]
+    fn the_camera_distance_snaps_to_the_current_distance_when_asked() {
+        let (mut e, this) = camera_distance_world();
+        e.set_global(CAMERA_DISTANCE, 5.0f32);
+        e.set_global(0x011c_d568, 100.0f32);
+        e.set_global(PLAYER_FADE, 1.0f32);
+        let position = move_camera(&mut e, this, [0.0, 8.0, 0.0], [0.0, 0.0, 0.0], true);
+        // The camera is at distance 8; the distance snaps there; the wanted
+        // distance is not limited by the step.
+        assert_eq!(e.global::<f32>(CAMERA_DISTANCE), 8.0);
+        assert_eq!(position, [0.0, 8.0, 0.0]);
+    }
+
+    #[test]
+    fn a_camera_caster_hit_shortens_the_distance_and_marks_the_view_blocked() {
+        let (mut e, this) = camera_distance_world();
+        e.set_global(CAMERA_DISTANCE, 5.0f32);
+        e.set_global(0x011c_d288, 1000.0f32);
+        e.set_global(0x011c_d568, 100.0f32);
+        e.set_global(0x011c_da94, 1.0f32);
+        e.set_global(0x011e_0934, 1.0f32); // the margin: half of it is kept free
+        e.set_global(PLAYER_FADE, 1.0f32);
+        let caster = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x21c, caster);
+        e.register(0x0062_0bc0, |_, _| int(1));
+        // The hit point is 3 units away; the camera at 8 units.
+        e.register(0x0045_7990, |_, _| float(3.0));
+        let position = move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+        // length 8 - 3 > 2: blocked; the distance becomes 3 - 0.5 = 2.5 and the
+        // camera is placed there.
+        assert_eq!(e.mem.u8(CAMERA_BLOCKED), 1);
+        assert_eq!(e.global::<f32>(CAMERA_DISTANCE), 2.5);
+        assert_eq!(position, [2.5, 0.0, 0.0]);
+        assert_eq!(called(&e, 0x0062_0bc0).len(), 1);
+        // Without a world the caster is given the controller's shape (null here).
+        assert_eq!(called(&e, 0x0062_1370), vec![vec![caster, 0]]);
+    }
+
+    #[test]
+    fn the_camera_distance_zooms_out_with_the_third_person_toggle() {
+        let (mut e, this) = camera_distance_world();
+        // The player wants the third person but is in the first: mode +1.
+        e.set(this, PlayerCharacter::bWant3rdPerson, true);
+        e.set_global(CAMERA_DISTANCE, 1.0f32);
+        e.set_global(ZOOM_DISTANCE, 5.0f32);
+        e.set_global(0x011c_da94, 1.0f32); // near
+        e.set_global(0x011c_de14, 11.0f32); // far
+        e.set_global(0x011c_dd60, 4.0f32); // blend scale
+        e.set_global(0x011c_cfd8, 0.0f32); // blend base
+        e.set_global(0x011c_d288, 1.0f32);
+        e.set_global(0x011c_d568, 100.0f32);
+        e.set_global(PLAYER_FADE, 1.0f32);
+        let position = move_camera(&mut e, this, [20.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+        // blend = 4 * ((5 - 1) / (11 - 1)) = 1.6; step = 0.1 * 1 * 1.6 = 0.16.
+        let distance = e.global::<f32>(CAMERA_DISTANCE);
+        assert!((distance - 1.16).abs() < 1e-5, "distance {distance}");
+        assert!((position[0] - 1.16).abs() < 1e-5);
+        // Travelling: the speed estimate is the distance moved over the frame time.
+        assert!(e.global::<f32>(0x011e_07dc) > 0.0);
+    }
+
+    #[test]
+    fn the_player_fades_out_when_the_camera_is_obstructed() {
+        let (mut e, this) = camera_distance_world();
+        e.set_global(CAMERA_DISTANCE, 5.0f32);
+        e.set_global(0x011c_d568, 100.0f32);
+        e.set_global(PLAYER_FADE, 1.0f32);
+        let caster = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x21c, caster);
+        e.register(0x0062_14d0, |_, _| int(1));
+        move_camera(&mut e, this, [8.0, 0.0, 0.0], [0.0, 0.0, 0.0], false);
+        // 1.0 - 0.1 * 4.
+        assert!((e.global::<f32>(PLAYER_FADE) - 0.6).abs() < 1e-6);
+        assert_eq!(called(&e, 0x008c_4640), vec![vec![this.addr()]]);
+    }
+
+    fn ufo_world() -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        exe_constants(&mut e);
+        stub(&mut e, UFO_CALLEES);
+        settings_by_address(&mut e);
+        vector_math(&mut e);
+        e.register(0x0087_7720, |_, _| int(0x1000));
+        e.register(0x0045_c670, |_, _| int(0x4800));
+        e.register(0x0055_8310, |_, a| int(a[0] + 1));
+        let this = player(&mut e);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    #[test]
+    fn the_ufo_camera_turns_with_the_look_axes_and_moves_with_the_keys() {
+        let (mut e, this) = ufo_world();
+        e.register(0x00a2_39e0, |_, a| int(if a[1] == 1 { 50 } else { 20 }));
+        e.register(0x00a2_4660, |_, a| int((a[1] == 0 && a[2] == 0) as u32));
+        e.set_global(0x011e_0a6c, 0.1f32); // look speed
+        e.set_global(0x011e_090c, 2.0f32); // move speed
+        e.register(0x0045_7fe0, |_, _| int(5000));
+        e.set_global(0x011e_0bf8, 4000u32);
+        e.register(0x0040_ebd0, |_, a| {
+            float(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
+        });
+        e.register(0x0057_5d70, |_, _| int(0x7000));
+        e.register(0x0058_6170, |_, _| int(0x7100));
+        e.call(0x0094_a8c0, &args![this]);
+        // heading += 0.1 * 50; pitch += 0.1 * 20.
+        assert!((e.get(this, PlayerCharacter::fUFOCameraHeading) - 5.0).abs() < 1e-6);
+        assert!((e.get(this, PlayerCharacter::fUFOCameraPitch) - 2.0).abs() < 1e-6);
+        // Key 0 moves along y by 10, times the elapsed second (<= 1) times 10,
+        // times the move speed 2.
+        assert_eq!(
+            read_floats(&e, member(this, PlayerCharacter::UFOCameraPos)),
+            [0.0, 200.0, 0.0]
+        );
+        assert_eq!(e.global::<u32>(0x011e_0bf8), 5000);
+        // The camera node follows and the terrain manager is updated.
+        assert_eq!(called(&e, 0x0044_0460).len(), 1);
+        assert_eq!(
+            called(&e, 0x006f_ca90),
+            vec![vec![
+                0x7100,
+                member(this, PlayerCharacter::UFOCameraPos),
+                0xf
+            ]]
+        );
+        assert_eq!(called(&e, 0x006f_cdb0).len(), 1);
+    }
+
+    /// The world of `0094ae40`: all outside callees answer 0 or point into
+    /// zeroed memory, point arithmetic is real, the player's vtable gives a
+    /// heading of 1.5, a pitch of 0.25 and the position pointer
+    /// `011a0300`, and the world space has no cell.
+    fn update_camera_world() -> (Engine, Ptr<PlayerCharacter>) {
+        let mut e = engine();
+        exe_constants(&mut e);
+        stub(&mut e, UPDATE_CAMERA_CALLEES);
+        stub(&mut e, CAMERA_CALLEES);
+        settings_by_address(&mut e);
+        vector_math(&mut e);
+        pointer_stubs(
+            &mut e,
+            &[
+                0x0045_bb80,
+                0x0045_bba0,
+                0x0045_bbe0,
+                0x004e_9c10,
+                0x004b_3ae0,
+                0x0043_c490,
+                0x0046_1130,
+                0x0055_8310,
+                0x0055_9450,
+                0x0066_29f0,
+            ],
+        );
+        e.register(0x006a_9540, |_, a| int(a[0]));
+        e.register(0x0043_f8d0, |_, a| int(a[1]));
+        e.register(0x0045_c670, |_, _| int(0x011a_4000));
+        e.register(0x0045_3a70, |_, _| int(0x4600));
+        e.register(0x0084_d030, |_, _| float(0.1));
+        e.register(0x0093_1d70, |_, _| float(0.25));
+        let this = player(&mut e);
+        e.set(this, PlayerCharacter::fWorldFOV, 75.0);
+        e.set(this, PlayerCharacter::f3rdPersonFOV, 60.0);
+        zero_table(&mut e, 0x0275_0000, &[(0x1f4, 0x011a_0300)]);
+        e.register_double(slot_target(0x0275_0000, 0x2bc), |_, _| float(1.5));
+        e.mem.set_u32(this.addr(), 0x0275_0000);
+        let process = zero_object(&mut e, 0x0276_0000, &[(0x1b8, 0x011a_0300)]);
+        e.mem.set_u32(this.addr() + 0x68, process);
+        e.call_log = Some(vec![]);
+        (e, this)
+    }
+
+    /// Makes `addr`'s double copy the three words at its second argument to
+    /// the scratch point `011a5000 + 12 * slot`.
+    fn record_point(e: &mut Engine, addr: u32, slot: u32) {
+        e.register_double(addr, move |e, a| {
+            for i in 0..3 {
+                let word = e.mem.u32(a[1] + 4 * i);
+                e.mem.set_u32(0x011a_5000 + 12 * slot + 4 * i, word);
+            }
+            Ret::default()
+        });
+    }
+
+    #[test]
+    fn the_camera_update_in_first_person_follows_the_player_rotation() {
+        let (mut e, this) = update_camera_world();
+        e.call(0x0094_ae40, &args![this, false, false]);
+        // The heading and pitch are remembered and make the two rotations.
+        assert_eq!(e.global::<f32>(LAST_HEADING), 1.5);
+        assert_eq!(e.global::<f32>(LAST_PITCH), 0.25);
+        assert_eq!(called(&e, 0x004a_0c90)[0][1], 1.5f32.to_bits());
+        assert_eq!(called(&e, 0x0052_4ac0)[0][1], 0.25f32.to_bits());
+        // The field of view comes from fWorldFOV; the static camera node is built once.
+        assert_eq!(
+            called(&e, 0x00c5_2020),
+            vec![vec![0x011a_4000, 75.0f32.to_bits(), 0, 0, 0]]
+        );
+        assert_eq!(called(&e, 0x00b5_4000), vec![vec![75.0f32.to_bits()]]);
+        assert_eq!(called(&e, 0x00a7_12f0), vec![vec![CAMERA_NODE]]);
+        assert_eq!(called(&e, 0x00ec_658f), vec![vec![0x00fd_9b90]]);
+        // The fade factor and the caster hook.
+        assert_eq!(e.global::<f32>(0x011a_3b64), 1.0);
+        // The end of the frame: the first person zoom update.
+        assert_eq!(called(&e, 0x0095_0290), vec![vec![this.addr()]]);
+        // The rigid body is moved to the cached world camera position.
+        let cached = member(this, PlayerCharacter::CachedWorldCameraPos);
+        let body = called(&e, 0x00c8_e160);
+        assert_eq!(body.len(), 1);
+        assert_eq!(body[0][1], cached);
+        assert_eq!(body[0][3], 0);
+        // A second call does not rebuild the camera node.
+        e.call(0x0094_ae40, &args![this, false, false]);
+        assert_eq!(called(&e, 0x00a7_12f0).len(), 1);
+    }
+
+    #[test]
+    fn the_camera_update_tells_the_caster_in_first_person_unless_in_vats() {
+        let (mut e, this) = update_camera_world();
+        let caster = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x21c, caster);
+        e.register(0x0062_1440, |_, _| int(1));
+        e.call(0x0094_ae40, &args![this, false, false]);
+        assert_eq!(called(&e, 0x0062_1370), vec![vec![caster, 0]]);
+    }
+
+    #[test]
+    fn the_camera_update_in_the_vats_camera_looks_at_the_vats_point() {
+        let (mut e, this) = update_camera_world();
+        e.register(0x0044_ddc0, |_, _| int(4));
+        e.set(this, PlayerCharacter::bWant3rdPerson, true);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(0x011e_0808 + 4 * i as u32, *v);
+        }
+        record_point(&mut e, 0x0044_0460, 0);
+        e.register(0x009c_8ac0, |_, _| int(0x5555));
+        e.call(0x0094_ae40, &args![this, false, false]);
+        // The node is placed at the smoothed camera position and looks at the VATS point.
+        assert_eq!(called(&e, 0x0044_0460)[0][0], CAMERA_NODE);
+        assert_eq!(read_floats(&e, 0x011a_5000), [1.0, 2.0, 3.0]);
+        assert_eq!(
+            called(&e, 0x00a7_01b0),
+            vec![vec![CAMERA_NODE, 0x5555, CAMERA_UP_VECTOR]]
+        );
+        // The rotation is read back from the node three times.
+        assert_eq!(called(&e, 0x0047_6930).len(), 3);
+        assert_eq!(called(&e, 0x0071_33b0).len(), 3);
+    }
+
+    #[test]
+    fn the_camera_update_in_third_person_offsets_the_camera_and_stores_the_shoulder() {
+        let (mut e, this) = update_camera_world();
+        e.set(this, PlayerCharacter::b3rdPerson, true);
+        e.set(this, PlayerCharacter::bWant3rdPerson, true);
+        e.set_global(0x011c_dc44, 1.0f32); // the shoulder offset: up
+        e.set_global(0x011c_dc5c, 2.0f32); // the shoulder offset: sideways
+        e.set_global(CAMERA_DISTANCE, 1.0f32);
+        e.set_global(0x011c_d568, 100.0f32);
+        e.call(0x0094_ae40, &args![this, true, false]);
+        // The field of view is set twice: the world one, then the third person one.
+        let fov: Vec<u32> = called(&e, 0x00c5_2020).iter().map(|c| c[1]).collect();
+        assert_eq!(fov, vec![75.0f32.to_bits(), 60.0f32.to_bits()]);
+        // The shoulder offset (identity rotation): (side, 0, up) scaled by 1.
+        assert_eq!(
+            read_floats(
+                &e,
+                member(this, PlayerCharacter::kCamera3rdPersonShoulderOffset)
+            ),
+            [2.0, 0.0, 1.0]
+        );
+        // The distance code ran and the node looks at the look-at point.
+        assert_eq!(called(&e, 0x0045_7910).len(), 1);
+        let look = &called(&e, 0x00a7_01b0)[0];
+        assert_eq!(look[0], CAMERA_NODE);
+        assert_eq!(look[2], CAMERA_UP_VECTOR);
+        // The listener and the terrain are refreshed with `snap`.
+        assert_eq!(called(&e, 0x0057_d0a0).len(), 1);
+    }
+
+    #[test]
+    fn the_camera_update_sets_the_listener_underwater_flag_from_the_submerge_level() {
+        let (mut e, this) = update_camera_world();
+        e.register(0x008d_6f30, |_, _| int(0x4000));
+        e.register(0x0088_5560, |_, _| float(0.5));
+        e.call(0x0094_ae40, &args![this, false, false]);
+        assert_eq!(called(&e, 0x00ad_7990), vec![vec![0x4600, 1]]);
+        e.register(0x0088_5560, |_, _| float(0.01));
+        e.call(0x0094_ae40, &args![this, false, false]);
+        assert_eq!(called(&e, 0x00ad_7990)[1], vec![0x4600, 0]);
+        // The listener position and orientation are always set.
+        assert_eq!(called(&e, 0x00ad_78b0).len(), 2);
+        assert_eq!(called(&e, 0x00ad_7940).len(), 2);
+    }
+
+    #[test]
+    fn the_camera_update_refreshes_the_terrain_unless_told_not_to() {
+        let (mut e, this) = update_camera_world();
+        e.register(0x0057_5d70, |_, _| int(0x7000));
+        e.register(0x0058_6170, |_, _| int(0x7100));
+        e.register(0x0097_4d90, |_, _| int(1));
+        e.call(0x0094_ae40, &args![this, false, false]);
+        assert_eq!(
+            called(&e, 0x006f_ca90),
+            vec![vec![0x7100, 0x011a_0300, 0xf]]
+        );
+        assert_eq!(called(&e, 0x006f_cdb0), vec![vec![0x7100, 0x011a_0300]]);
+        // skip_terrain: no update at all.
+        e.call_log = Some(vec![]);
+        e.call(0x0094_ae40, &args![this, false, true]);
+        assert!(called(&e, 0x006f_ca90).is_empty());
+        assert!(called(&e, 0x006f_cdb0).is_empty());
+    }
+
+    #[test]
+    fn the_camera_update_applies_the_camera_shake_through_euler_angles() {
+        let (mut e, this) = update_camera_world();
+        e.register(0x008d_1b30, |_, _| float(0.5));
+        e.register(0x00a5_92c0, |e, a| {
+            for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+                e.mem.set_f32(a[1 + i], *v);
+            }
+            Ret::default()
+        });
+        e.call(0x0094_ae40, &args![this, false, false]);
+        // x, y and z angles halved.
+        assert_eq!(
+            called(&e, 0x00a5_9540)[0][1..],
+            [0.5f32.to_bits(), 1.0f32.to_bits(), 1.5f32.to_bits()]
+        );
+    }
+
+    #[test]
+    fn the_typed_attack_group_maps_animation_types_and_falls_back_to_the_weapon() {
+        let mut e = engine();
+        e.register(0x0049_5e40, |_, _| int(0x35));
+        assert_eq!(typed_attack_group(&mut e, 0xa00, 0), 0x32);
+        for (kind, group) in [
+            (0x33u32, 0x26u32),
+            (0x34, 0x2c),
+            (0x36, 0x38),
+            (0x37, 0x3e),
+            (0x38, 0x44),
+            (0x6c, 0x1a),
+        ] {
+            e.register_double(0x0049_5e40, move |_, _| int(kind));
+            assert_eq!(typed_attack_group(&mut e, 0xa00, 0), group);
+        }
+        // Another type: the weapon's own group when it has one, else 0x20.
+        e.register(0x0049_5e40, |_, _| int(0x10));
+        assert_eq!(typed_attack_group(&mut e, 0xa00, 0), 0x20);
+        e.register(0x0051_f5f0, |_, _| int(0x41));
+        assert_eq!(typed_attack_group(&mut e, 0xa00, 0x6000), 0x41);
+        e.register(0x0051_f5f0, |_, _| int(0xff));
+        assert_eq!(typed_attack_group(&mut e, 0xa00, 0x6000), 0x20);
+    }
+
+    #[test]
+    fn a_queued_attack_picks_its_group_from_the_weapon_or_the_power_attack() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        // No attack animation: queued 1 gives the weapon group (0x20 without one),
+        // queued 2 the unarmed power attack.
+        e.set_global(ATTACK_QUEUED, 1u32);
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0, 0xff), 0x20);
+        e.register(0x0051_f5f0, |_, _| int(0x30));
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0x6000, 0xff), 0x30);
+        e.set_global(ATTACK_QUEUED, 2u32);
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0x6000, 0xff), 0x5c);
+        // A power attack underway leaves the group alone.
+        e.register(0x005f_2540, |_, _| int(1));
+        e.register(0x005f_2670, |_, _| int(1));
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0x6000, 0xff), 0xff);
+    }
+
+    #[test]
+    fn a_queued_attack_during_a_melee_attack_waits_for_the_swing_to_progress() {
+        let mut e = engine();
+        // Slot 0x1b0 (melee) and slot 0x1ac true.
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x1b0, 1), (0x1ac, 1)]);
+        e.set_global(ATTACK_QUEUED, 1u32);
+        e.register(0x005f_2540, |_, _| int(1));
+        e.register(0x008a_7570, |_, _| int(5));
+        e.register(0x0070_f490, |_, _| int(2));
+        e.set(this, PlayerCharacter::fProjectileReleaseTimer, 4.0);
+        // Early in the swing (step <= 2): nothing changes.
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0, 0xff), 0xff);
+        assert_eq!(e.get(this, PlayerCharacter::fProjectileReleaseTimer), 4.0);
+        // Later in the swing the group is chosen and the release timer cleared.
+        e.register(0x0070_f490, |_, _| int(3));
+        assert_eq!(queued_attack_group(&mut e, this, 0xa00, 0, 0xff), 0x66);
+        assert_eq!(e.get(this, PlayerCharacter::fProjectileReleaseTimer), 0.0);
+    }
+
+    #[test]
+    fn the_next_attack_is_queued_unless_the_swing_still_has_time() {
+        let mut e = engine();
+        attack_world(&mut e, 0x0265_0000, &[]);
+        // No weapon: queued at once.
+        queue_next_attack(&mut e, 0xa00, 0);
+        assert_eq!(e.global::<u32>(ATTACK_QUEUED), 1);
+        // A weapon with ammunition and a swing with 3 s left of 4: not queued.
+        e.set_global(ATTACK_QUEUED, 0u32);
+        e.register(0x0052_5980, |_, _| int(0xa1));
+        e.register(0x0059_8040, |_, _| float(1.0));
+        e.register(0x0049_5e40, |e, a| {
+            e.mem.set_f32(a[1], 4.0);
+            Ret::default()
+        });
+        e.register(0x0049_1040, |_, _| int(0x0120_0000));
+        e.mem.set_f32(0x0120_0000 + 0x30, 5.0);
+        e.mem.set_f32(0x0120_0000 + 0x2c, 0.0);
+        e.mem.set_f32(0x0120_0000 + 0x28, 1.0);
+        // now (4.0) > start (1.0) and end - start = 5 - 1 >= 0.5: not queued.
+        queue_next_attack(&mut e, 0xa00, 0x6000);
+        assert_eq!(e.global::<u32>(ATTACK_QUEUED), 0);
+        // Nearly at the start of the swing (now <= start): queued.
+        e.register(0x0059_8040, |_, _| float(9.0));
+        queue_next_attack(&mut e, 0xa00, 0x6000);
+        assert_eq!(e.global::<u32>(ATTACK_QUEUED), 1);
+    }
+
+    #[test]
+    fn the_ranged_reaction_picks_the_group_by_the_process_flag() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x1ac, 1)]);
+        let mut group = 0xffu32;
+        ranged_attack_reaction(&mut e, this, 0, true, &mut group);
+        // Slot 0x1ac: group 0x66 and the state 4, release timer 10 in VATS.
+        assert_eq!(group, 0x66);
+        assert_eq!(
+            called(&e, 0x0096_3eb0),
+            vec![vec![this.addr(), 4, 3.0f32.to_bits(), 0]]
+        );
+        assert_eq!(e.get(this, PlayerCharacter::fProjectileReleaseTimer), 10.0);
+        // No flag: the default group 0x20 and no reaction call.
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        let mut group = 0xffu32;
+        ranged_attack_reaction(&mut e, this, 0, false, &mut group);
+        assert_eq!(group, 0x20);
+        assert!(called(&e, 0x0096_3eb0).is_empty());
+    }
+
+    #[test]
+    fn holding_attack_with_a_charged_timer_starts_the_unarmed_power_attack() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        zero_table(&mut e, 0x0270_0000, &[]);
+        e.mem.set_u32(this.addr(), 0x0270_0000);
+        e.set_global(0x011c_dda8, 0.5f32); // the charge time
+        let mut ready = false;
+        let mut group = 0xffu32;
+        held_attack(
+            &mut e, this, 0xa00, 0, 0, false, 1.0, &mut ready, &mut group,
+        );
+        // Without a weapon the unarmed state (1.5) is told and the timer runs.
+        assert_eq!(
+            called(&e, 0x0096_3eb0),
+            vec![vec![this.addr(), 1, 1.5f32.to_bits(), 0]]
+        );
+        // The timer passed the charge time: the unarmed power attack, timer cleared.
+        assert_eq!(group, 0x5c);
+        assert_eq!(e.global::<f32>(ATTACK_HOLD_TIMER), 0.0);
+        // A shorter hold only advances the timer.
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        zero_table(&mut e, 0x0270_0000, &[]);
+        e.mem.set_u32(this.addr(), 0x0270_0000);
+        e.set_global(0x011c_dda8, 5.0f32);
+        let mut group = 0xffu32;
+        held_attack(
+            &mut e, this, 0xa00, 0, 0, false, 1.0, &mut ready, &mut group,
+        );
+        assert_eq!(group, 0xff);
+        assert_eq!(e.global::<f32>(ATTACK_HOLD_TIMER), 1.0);
+    }
+
+    #[test]
+    fn releasing_the_draw_button_for_the_rockit_launcher_queues_a_menu() {
+        let mut e = engine();
+        let this = attack_world(
+            &mut e,
+            0x0265_0000,
+            &[(0x454, 1), (0x148, 0x5100), (0x6e0, 0)],
+        );
+        e.register_double(0x00a2_4660, |_, a| int((a[1] == 7 && a[2] == 2) as u32));
+        e.set_global(DRAW_BUTTON_TIMER, 0.3f32);
+        e.set_global(0x011c_dfcc, 0.5f32);
+        e.register(0x008a_7570, |_, _| int(0xffff_ffff));
+        e.register(0x0047_4a80, |_, _| int(1));
+        let mut ready = true;
+        released_attack(&mut e, this, 0x1000, 0xa00, 0x6000, &mut ready);
+        assert_eq!(called(&e, 0x0047_4a80), vec![vec![0x6000 + 0xa4]]);
+        assert_eq!(called(&e, 0x0070_9470), vec![vec![1, 0, 0, 0, 4, 0]]);
+        assert!(!ready);
+    }
+
+    #[test]
+    fn releasing_the_attack_button_ends_the_attack_animation_and_sets_the_release_byte() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[(0x6e0, 0)]);
+        e.register(0x005f_2540, |_, _| int(1));
+        e.register(0x005f_25d0, |_, _| int(1));
+        e.register(0x0070_f490, |_, _| int(0));
+        e.register_double(0x00a2_4660, |_, a| int((a[1] == 4 && a[2] == 2) as u32));
+        let mut ready = true;
+        released_attack(&mut e, this, 0x1000, 0xa00, 0, &mut ready);
+        assert!(!ready);
+        assert_eq!(e.mem.u8(ATTACK_RELEASE_BYTE), 1);
+    }
+
+    #[test]
+    fn the_power_attack_group_follows_the_movement_direction_and_the_perks() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        player_slots(&mut e, this, 5.0);
+        e.register(0x0088_46e0, |_, _| int(2)); // moving back: group 0x5e
+        assert_eq!(power_attack_group(&mut e, this, 0, false), 0x5e);
+        // Bound weapon with a positive entry point: the perk variant.
+        e.register(0x005e_58f0, |e, a| {
+            e.mem.set_f32(a[2], 1.0);
+            Ret::default()
+        });
+        assert_eq!(power_attack_group(&mut e, this, 0, true), 0x62);
+        // Without the actor values the entry point 0x3F can still replace 0x5C.
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        player_slots(&mut e, this, 0.0);
+        assert_eq!(power_attack_group(&mut e, this, 0, true), 0x5c);
+        e.register(0x005e_58f0, |e, a| {
+            e.mem.set_f32(a[2], 1.0);
+            Ret::default()
+        });
+        assert_eq!(power_attack_group(&mut e, this, 0, true), 0x63);
+        assert_eq!(power_attack_group(&mut e, this, 0, false), 0x5c);
+    }
+
+    #[test]
+    fn the_attack_animation_sync_skips_updates_unless_the_loop_is_running() {
+        let mut e = engine();
+        let this = attack_world(&mut e, 0x0265_0000, &[]);
+        zero_table(&mut e, 0x0270_0000, &[]);
+        e.mem.set_u32(this.addr(), 0x0270_0000);
+        e.register(0x005f_2540, |_, _| int(1));
+        e.register(0x0049_1040, |_, _| int(0x5500));
+        e.register(0x0049_3800, |_, _| float(0.0));
+        sync_attack_animation(&mut e, this, 0xa00, 0xa01, 0, false);
+        assert_eq!(
+            called(&e, 0x008e_eaa0),
+            vec![vec![0xa00, 4], vec![0xa01, 4]]
+        );
+        // A running loop with the generic location 1 does not skip.
+        e.call_log = Some(vec![]);
+        e.register(0x0049_3800, |_, _| float(1.0));
+        e.register(0x0080_41a0, |_, _| int(1));
+        sync_attack_animation(&mut e, this, 0xa00, 0xa01, 0, false);
+        assert!(called(&e, 0x008e_eaa0).is_empty());
+        // With VATS on nothing happens.
+        e.register(0x0049_3800, |_, _| float(0.0));
+        sync_attack_animation(&mut e, this, 0xa00, 0xa01, 0, true);
+        assert!(called(&e, 0x008e_eaa0).is_empty());
+    }
+
+    #[test]
+    fn the_look_center_of_a_target_averages_its_body_part_nodes() {
+        let mut e = engine();
+        exe_constants(&mut e);
+        vector_math(&mut e);
+        stub(
+            &mut e,
+            &[
+                0x0041_81e0,
+                0x0043_b230,
+                0x0044_ddc0,
+                0x0045_c670,
+                0x004a_ae30,
+                0x005e_50f0,
+            ],
+        );
+        e.register(0x0063_c8a0, |e, a| {
+            for i in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, sum);
+            }
+            int(a[0])
+        });
+        e.register(0x0053_d280, |e, a| {
+            let count = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) / count;
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            int(a[1])
+        });
+        // The actor's body part data: slot 0x180 of the owner object; the part
+        // table has parts 1 and 2 only. Each node sits at (index, 0, 0).
+        let owner = zero_object(&mut e, 0x0277_0000, &[(0x180, 0x6100)]);
+        e.register_double(0x0041_81e0, move |_, _| int(owner));
+        let table = e.mem.alloc(64);
+        e.mem.set_u32(table + 4, 1);
+        e.mem.set_u32(table + 8, 1);
+        e.register_double(0x006a_9540, move |_, _| int(table));
+        let nodes = [e.mem.alloc(0xa0), e.mem.alloc(0xa0), e.mem.alloc(0xa0)];
+        e.mem.set_f32(nodes[1] + 0x8c, 1.0);
+        e.mem.set_f32(nodes[2] + 0x8c, 3.0);
+        e.register(0x005e_50f0, |_, a| int(a[1]));
+        e.register(0x0043_b230, |_, a| int(a[0]));
+        e.register_double(0x004a_ae30, move |_, a| int(nodes[a[1] as usize]));
+        e.register(0x0045_bb80, |_, a| int(a[0] + 0x8c));
+        // The torso (part 1) is far away: all parts are averaged.
+        let player_object = zero_object(&mut e, 0x0278_0000, &[(0x1d0, 0x0120_1000)]);
+        e.set_global(PLAYER_SINGLETON, player_object);
+        e.register(0x0045_7990, |_, _| float(1000.0));
+        let actor = zero_object(&mut e, 0x0279_0000, &[(0x1d0, 0x7000)]);
+        rebuild_look_center(&mut e, actor);
+        // Parts 1 and 2: (1 + 3) / 2 = 2 on x.
+        assert_eq!(read_floats(&e, LOOK_CENTER), [2.0, 0.0, 0.0]);
     }
 }
