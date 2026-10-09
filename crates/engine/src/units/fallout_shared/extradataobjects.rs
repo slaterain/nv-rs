@@ -7,11 +7,16 @@
 //! `ExtraLight`, `ExtraLock`, `ExtraFollower`, `ExtraGuardedRefData`,
 //! `ExtraTeleport`, ...), in address order, together with `REFR_LOCK`.
 //!
-//! Translated so far: the first 40 functions of the queue (`004300f0` to
-//! `00431260`). The next session continues at `004312f0`
-//! (`ExtraTeleport::Compare`).
+//! Translated so far: the first 80 functions of the queue (`004300f0` to
+//! `00431f60`). The next session continues at `00431f90`
+//! (`ExtraCharge::Compare`).
 //!
 //! Notes for the next session:
+//! - The layouts of the simple one-field classes (`ExtraRank`, `ExtraCount`,
+//!   `ExtraUses`, `ExtraHealth`, ...) are declared below with the Xbox PDB
+//!   names; `compare_prologue` is the cast-and-base-compare start every
+//!   `Compare` shares and `destroy_owner` the destructor body of the classes
+//!   that own one object through the pointer at +0xc.
 //! - Every destructor and constructor here is compiled without inlining: the
 //!   base `BSExtraData` constructor (`0040ec80`, takes the extra-data type
 //!   byte) and destructor (`0040ecb0`) are separate calls, the vtable pointer
@@ -151,6 +156,81 @@ const TYPE_FOLLOWER: u32 = 0x1d;
 const TYPE_GUARDED_REF_DATA: u32 = 0x7c;
 const TYPE_2E: u32 = 0x2e;
 const TYPE_TELEPORT: u32 = 0x2b;
+const TYPE_MAP_MARKER: u32 = 0x2c;
+const TYPE_AUDIO_MARKER: u32 = 0x90;
+const TYPE_AUDIO_BUOY_MARKER: u32 = 0x91;
+const TYPE_ACTION: u32 = 0x0e;
+const TYPE_CONTAINER_CHANGES: u32 = 0x15;
+const TYPE_ORIGINAL_REFERENCE: u32 = 0x20;
+const TYPE_OWNERSHIP: u32 = 0x21;
+const TYPE_GLOBAL: u32 = 0x22;
+const TYPE_RANK: u32 = 0x23;
+const TYPE_COUNT: u32 = 0x24;
+const TYPE_HEALTH: u32 = 0x25;
+const TYPE_USES: u32 = 0x26;
+const TYPE_TIME_LEFT: u32 = 0x27;
+const TYPE_CHARGE: u32 = 0x28;
+
+/// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`.
+const EXTRA_TELEPORT_TYPE: u32 = 0x0118_4430;
+const EXTRA_MAP_MARKER_TYPE: u32 = 0x0118_45fc;
+const EXTRA_AUDIO_MARKER_TYPE: u32 = 0x0118_45dc;
+const EXTRA_AUDIO_BUOY_MARKER_TYPE: u32 = 0x0118_45b8;
+const EXTRA_ACTION_TYPE: u32 = 0x0118_4bc0;
+const EXTRA_ORIGINAL_REFERENCE_TYPE: u32 = 0x0118_4c00;
+const EXTRA_OWNERSHIP_TYPE: u32 = 0x0118_476c;
+const EXTRA_GLOBAL_TYPE: u32 = 0x0118_478c;
+const EXTRA_RANK_TYPE: u32 = 0x0118_47a8;
+const EXTRA_COUNT_TYPE: u32 = 0x0118_47c0;
+const EXTRA_LEVELED_ITEM_TYPE: u32 = 0x0118_4680;
+const EXTRA_HEALTH_TYPE: u32 = 0x0118_47dc;
+const EXTRA_HEALTH_PERC_TYPE: u32 = 0x0118_4208;
+const EXTRA_USES_TYPE: u32 = 0x0118_47f8;
+const EXTRA_TIME_LEFT_TYPE: u32 = 0x0118_4810;
+
+/// The vtables of the classes built by `00431360` to `00431f60`.
+const EXTRA_MAP_MARKER_VTABLE: u32 = 0x0101_5b88;
+const EXTRA_AUDIO_MARKER_VTABLE: u32 = 0x0101_5b94;
+const EXTRA_AUDIO_BUOY_MARKER_VTABLE: u32 = 0x0101_5ba0;
+const EXTRA_ACTION_VTABLE: u32 = 0x0101_5bac;
+const EXTRA_CONTAINER_CHANGES_VTABLE: u32 = 0x0101_5bb8;
+const EXTRA_ORIGINAL_REFERENCE_VTABLE: u32 = 0x0101_5bc4;
+const EXTRA_OWNERSHIP_VTABLE: u32 = 0x0101_58b4;
+const EXTRA_GLOBAL_VTABLE: u32 = 0x0101_58c0;
+const EXTRA_RANK_VTABLE: u32 = 0x0101_58cc;
+const EXTRA_COUNT_VTABLE: u32 = 0x0101_58d8;
+const EXTRA_HEALTH_VTABLE: u32 = 0x0101_58e4;
+const EXTRA_USES_VTABLE: u32 = 0x0101_58f0;
+const EXTRA_TIME_LEFT_VTABLE: u32 = 0x0101_58fc;
+const EXTRA_CHARGE_VTABLE: u32 = 0x0101_5908;
+
+/// `DoorTeleportData::Compare` (Xbox PDB; `this` is the data, the argument is
+/// the other data): true when the two differ.
+const DOOR_TELEPORT_DATA_COMPARE: u32 = 0x0043_a860;
+/// `MapMarkerData::Compare` (Xbox PDB; `this` is the data, the argument is
+/// the other data): true when the two differ.
+const MAP_MARKER_DATA_COMPARE: u32 = 0x0043_8e40;
+/// `AudioMarkerData::Compare` (Xbox PDB; `this` is the data, the argument is
+/// the other data): true when the two differ.
+const AUDIO_MARKER_DATA_COMPARE: u32 = 0x0058_97c0;
+/// A 15-byte folded body that ignores its argument and returns true (the
+/// engine map names it `DetailedActorPathHandler::IsDetailedPathHandler`);
+/// `ExtraAudioBuoyMarker::Compare` calls it with the two `AudioBuoyMarkerData`
+/// pointers (`this` is the first, the argument the second).
+const AUDIO_BUOY_DATA_COMPARE: u32 = 0x0040_1290;
+/// Scalar deleting destructor of the `MapMarkerData` an `ExtraMapMarker` owns
+/// (`this` is the data, the argument says whether to free it).
+const MAP_MARKER_DATA_DELETE: u32 = 0x0041_9350;
+/// Scalar deleting destructor of the `AudioMarkerData` an `ExtraAudioMarker`
+/// owns (`this` is the data, the argument says whether to free it).
+const AUDIO_MARKER_DATA_DELETE: u32 = 0x0041_9480;
+/// Scalar deleting destructor of the `AudioBuoyMarkerData` an
+/// `ExtraAudioBuoyMarker` owns (in `racesexmenu.cpp` by address range; `this`
+/// is the data, the argument says whether to free it).
+const AUDIO_BUOY_DATA_DELETE: u32 = 0x007b_3fa0;
+/// The destructor body of the `InventoryChanges` an `ExtraContainerChanges`
+/// owns (in `inventorychanges.cpp`; `this` is the object).
+const INVENTORY_CHANGES_DESTRUCT: u32 = 0x004b_f150;
 
 /// Constructor of the `DismemberedLimbs` array member of
 /// `ExtraDismemberedLimbs` (`this` is the array). In this unit; not yet
@@ -326,6 +406,106 @@ layout! {
         /// `pData` (Xbox PDB): the teleport data, owned.
         0x0C pData: Ptr,
     }
+
+    /// `ExtraMapMarker` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraMapMarker: 0x10 {
+        /// `pMapData` (Xbox PDB): `MapMarkerData*`, owned.
+        0x0C pMapData: Ptr,
+    }
+
+    /// `ExtraAudioMarker` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraAudioMarker: 0x10 {
+        /// `pAudioData` (Xbox PDB): `AudioMarkerData*`, owned.
+        0x0C pAudioData: Ptr,
+    }
+
+    /// `ExtraAudioBuoyMarker` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraAudioBuoyMarker: 0x10 {
+        /// `pAudioBuoyData` (Xbox PDB): `AudioBuoyMarkerData*`, owned.
+        0x0C pAudioBuoyData: Ptr,
+    }
+
+    /// `ExtraAction` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraAction: 0x14 {
+        /// `eAction` (Xbox PDB).
+        0x0C eAction: u8,
+        /// `pActionRef` (Xbox PDB): `TESObjectREFR*`.
+        0x10 pActionRef: Ptr,
+    }
+
+    /// `ExtraContainerChanges` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraContainerChanges: 0x10 {
+        /// `pChanges` (Xbox PDB): `InventoryChanges*`, owned.
+        0x0C pChanges: Ptr,
+    }
+
+    /// `ExtraOriginalReference` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraOriginalReference: 0x10 {
+        /// `pReference` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pReference: Ptr,
+    }
+
+    /// `ExtraOwnership` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraOwnership: 0x10 {
+        /// `pOwner` (Xbox PDB): `TESForm*`.
+        0x0C pOwner: Ptr,
+    }
+
+    /// `ExtraGlobal` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraGlobal: 0x10 {
+        /// `pGlobal` (Xbox PDB): `TESGlobal*`.
+        0x0C pGlobal: Ptr,
+    }
+
+    /// `ExtraRank` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRank: 0x10 {
+        /// `iRank` (Xbox PDB).
+        0x0C iRank: i32,
+    }
+
+    /// `ExtraCount` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraCount: 0x10 {
+        /// `iCount` (Xbox PDB): a signed 16-bit count.
+        0x0C iCount: i16,
+    }
+
+    /// `ExtraLeveledItem` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraLeveledItem: 0x14 {
+        /// `iIndex` (Xbox PDB).
+        0x0C iIndex: i32,
+        /// `bdefault` (Xbox PDB).
+        0x10 bdefault: bool,
+    }
+
+    /// `ExtraHealth` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraHealth: 0x10 {
+        /// `fHealth` (Xbox PDB).
+        0x0C fHealth: f32,
+    }
+
+    /// `ExtraHealthPerc` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraHealthPerc: 0x10 {
+        /// `fHealthPerc` (Xbox PDB).
+        0x0C fHealthPerc: f32,
+    }
+
+    /// `ExtraUses` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraUses: 0x10 {
+        /// `cUses` (Xbox PDB).
+        0x0C cUses: u8,
+    }
+
+    /// `ExtraTimeLeft` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraTimeLeft: 0x10 {
+        /// `fTime` (Xbox PDB).
+        0x0C fTime: f32,
+    }
+
+    /// `ExtraCharge` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraCharge: 0x10 {
+        /// `fCharge` (Xbox PDB).
+        0x0C fCharge: f32,
+    }
 }
 
 /// The count of a `BSSimpleArray`.
@@ -361,6 +541,45 @@ fn delete_when_asked(e: &mut Engine, this: Ptr, flags: u32) {
     if flags & 1 != 0 {
         e.call(OPERATOR_DELETE, &args![this]);
     }
+}
+
+/// The start every `Compare` below shares: casts `other` to the class with
+/// the RTTI descriptor `target_type` and asks `BSExtraData::Compare`. `None`
+/// means the answer is already true (`other` is not of that class, or the base
+/// says they differ); `Some(cast)` is `other` as the class, whose own fields
+/// remain to be compared.
+fn compare_prologue<T, U>(
+    e: &mut Engine,
+    this: Ptr<T>,
+    other: Ptr,
+    target_type: u32,
+) -> Option<Ptr<U>> {
+    let cast: Ptr<U> = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, BS_EXTRA_DATA_TYPE, target_type, 0u32],
+        )
+        .ptr();
+    if cast.is_null() {
+        return None;
+    }
+    if e.call(BS_EXTRA_DATA_COMPARE, &args![this, other]).bool() {
+        return None;
+    }
+    Some(cast)
+}
+
+/// The destructor body of the classes that own one object through the pointer
+/// at +0xc: resets the vtable, runs the owned object's scalar deleting
+/// destructor (`deleter`, with its flag set to 1) when there is one, then the
+/// base destructor. The exception-unwinding frame is not translated.
+fn destroy_owner(e: &mut Engine, this: Ptr, vtable: u32, deleter: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    let owned = Ptr::<()>::new(e.mem.u32(this.addr() + 0xc));
+    if !owned.is_null() {
+        e.call(deleter, &args![owned, 1u32]);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
 
 // Translated from 004300f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -1137,6 +1356,514 @@ pub fn fn_00431260(e: &mut Engine, this: Ptr<ExtraTeleport>) {
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
 
+// Translated from 004312f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTeleport::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraTeleport`, when `BSExtraData::Compare` returns true, or when
+/// `DoorTeleportData::Compare` (Xbox PDB) says the two teleport data differ.
+pub fn extra_teleport_compare(e: &mut Engine, this: Ptr<ExtraTeleport>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraTeleport>(e, this, other, EXTRA_TELEPORT_TYPE)
+    else {
+        return true;
+    };
+    let mine = e.get(this, ExtraTeleport::pData);
+    let theirs = e.get(cast, ExtraTeleport::pData);
+    e.call(DOOR_TELEPORT_DATA_COMPARE, &args![mine, theirs])
+        .bool()
+}
+
+// Translated from 00431360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMapMarker`'s constructor (the engine map has no name for it; the class
+/// is the one whose vtable `01015b88` it stores): extra-data type 0x2c, taking
+/// ownership of `data`. Returns `this`.
+pub fn fn_00431360(e: &mut Engine, this: Ptr<ExtraMapMarker>, data: Ptr) -> Ptr<ExtraMapMarker> {
+    construct_base(e, this.cast(), TYPE_MAP_MARKER, EXTRA_MAP_MARKER_VTABLE);
+    e.set(this, ExtraMapMarker::pMapData, data);
+    this
+}
+
+// Translated from 00431390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMapMarker::_scalar_deleting_destructor_` (Xbox PDB): the destructor,
+/// then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_map_marker_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraMapMarker>,
+    flags: u32,
+) -> Ptr<ExtraMapMarker> {
+    fn_004313c0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004313c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMapMarker`'s destructor body (the engine map has no name for it):
+/// resets the vtable, runs the destructor of the owned `MapMarkerData`
+/// (`00419350`) if there is one, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004313c0(e: &mut Engine, this: Ptr<ExtraMapMarker>) {
+    destroy_owner(
+        e,
+        this.cast(),
+        EXTRA_MAP_MARKER_VTABLE,
+        MAP_MARKER_DATA_DELETE,
+    );
+}
+
+// Translated from 00431450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMapMarker::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraMapMarker`, when `BSExtraData::Compare` returns true, or when
+/// `MapMarkerData::Compare` (Xbox PDB) says the two map data differ.
+pub fn extra_map_marker_compare(e: &mut Engine, this: Ptr<ExtraMapMarker>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraMapMarker>(e, this, other, EXTRA_MAP_MARKER_TYPE)
+    else {
+        return true;
+    };
+    let mine = e.get(this, ExtraMapMarker::pMapData);
+    let theirs = e.get(cast, ExtraMapMarker::pMapData);
+    e.call(MAP_MARKER_DATA_COMPARE, &args![mine, theirs]).bool()
+}
+
+// Translated from 004314c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioMarker`'s constructor (the engine map has no name for it; the
+/// class is the one whose vtable `01015b94` it stores): extra-data type 0x90,
+/// taking ownership of `data`. Returns `this`.
+pub fn fn_004314c0(
+    e: &mut Engine,
+    this: Ptr<ExtraAudioMarker>,
+    data: Ptr,
+) -> Ptr<ExtraAudioMarker> {
+    construct_base(e, this.cast(), TYPE_AUDIO_MARKER, EXTRA_AUDIO_MARKER_VTABLE);
+    e.set(this, ExtraAudioMarker::pAudioData, data);
+    this
+}
+
+// Translated from 004314f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioMarker::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_audio_marker_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraAudioMarker>,
+    flags: u32,
+) -> Ptr<ExtraAudioMarker> {
+    fn_00431520(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00431520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioMarker`'s destructor body (the engine map has no name for it):
+/// resets the vtable, runs the destructor of the owned `AudioMarkerData`
+/// (`00419480`) if there is one, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00431520(e: &mut Engine, this: Ptr<ExtraAudioMarker>) {
+    destroy_owner(
+        e,
+        this.cast(),
+        EXTRA_AUDIO_MARKER_VTABLE,
+        AUDIO_MARKER_DATA_DELETE,
+    );
+}
+
+// Translated from 004315b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioMarker::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraAudioMarker`, when `BSExtraData::Compare` returns true, or when
+/// `AudioMarkerData::Compare` (Xbox PDB) says the two audio data differ.
+pub fn extra_audio_marker_compare(e: &mut Engine, this: Ptr<ExtraAudioMarker>, other: Ptr) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraAudioMarker>(e, this, other, EXTRA_AUDIO_MARKER_TYPE)
+    else {
+        return true;
+    };
+    let mine = e.get(this, ExtraAudioMarker::pAudioData);
+    let theirs = e.get(cast, ExtraAudioMarker::pAudioData);
+    e.call(AUDIO_MARKER_DATA_COMPARE, &args![mine, theirs])
+        .bool()
+}
+
+// Translated from 00431620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioBuoyMarker`'s constructor (the engine map has no name for it;
+/// the class is the one whose vtable `01015ba0` it stores): extra-data type
+/// 0x91, taking ownership of `data`. Returns `this`.
+pub fn fn_00431620(
+    e: &mut Engine,
+    this: Ptr<ExtraAudioBuoyMarker>,
+    data: Ptr,
+) -> Ptr<ExtraAudioBuoyMarker> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_AUDIO_BUOY_MARKER,
+        EXTRA_AUDIO_BUOY_MARKER_VTABLE,
+    );
+    e.set(this, ExtraAudioBuoyMarker::pAudioBuoyData, data);
+    this
+}
+
+// Translated from 00431650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioBuoyMarker::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_audio_buoy_marker_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraAudioBuoyMarker>,
+    flags: u32,
+) -> Ptr<ExtraAudioBuoyMarker> {
+    fn_00431680(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00431680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioBuoyMarker`'s destructor body (the engine map has no name for
+/// it): resets the vtable, runs the destructor of the owned
+/// `AudioBuoyMarkerData` (`007b3fa0`) if there is one, then the base
+/// destructor. The exception-unwinding frame is not translated.
+pub fn fn_00431680(e: &mut Engine, this: Ptr<ExtraAudioBuoyMarker>) {
+    destroy_owner(
+        e,
+        this.cast(),
+        EXTRA_AUDIO_BUOY_MARKER_VTABLE,
+        AUDIO_BUOY_DATA_DELETE,
+    );
+}
+
+// Translated from 00431710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAudioBuoyMarker::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraAudioBuoyMarker`, when `BSExtraData::Compare` returns true, or when
+/// the folded body `00401290` (which returns true whatever it is given) says
+/// the two buoy data differ; so, past the first two tests, it is always true.
+pub fn extra_audio_buoy_marker_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraAudioBuoyMarker>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraAudioBuoyMarker>(e, this, other, EXTRA_AUDIO_BUOY_MARKER_TYPE)
+    else {
+        return true;
+    };
+    let mine = e.get(this, ExtraAudioBuoyMarker::pAudioBuoyData);
+    let theirs = e.get(cast, ExtraAudioBuoyMarker::pAudioBuoyData);
+    e.call(AUDIO_BUOY_DATA_COMPARE, &args![mine, theirs]).bool()
+}
+
+// Translated from 00431780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAction`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015bac` it stores): extra-data type 0x0e, `eAction`
+/// set to 1 (only that byte) and `pActionRef` cleared. Returns `this`.
+pub fn fn_00431780(e: &mut Engine, this: Ptr<ExtraAction>) -> Ptr<ExtraAction> {
+    construct_base(e, this.cast(), TYPE_ACTION, EXTRA_ACTION_VTABLE);
+    e.set(this, ExtraAction::eAction, 1);
+    e.set(this, ExtraAction::pActionRef, Ptr::NULL);
+    this
+}
+
+// Translated from 004317c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAction::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraAction`, when `BSExtraData::Compare` returns true, or when
+/// `eAction` differs.
+pub fn extra_action_compare(e: &mut Engine, this: Ptr<ExtraAction>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraAction>(e, this, other, EXTRA_ACTION_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraAction::eAction) != e.get(cast, ExtraAction::eAction)
+}
+
+// Translated from 00431830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraContainerChanges`'s constructor (the engine map has no name for it;
+/// the class is the one whose vtable `01015bb8` it stores): extra-data type
+/// 0x15, taking ownership of `changes`. Returns `this`.
+pub fn fn_00431830(
+    e: &mut Engine,
+    this: Ptr<ExtraContainerChanges>,
+    changes: Ptr,
+) -> Ptr<ExtraContainerChanges> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_CONTAINER_CHANGES,
+        EXTRA_CONTAINER_CHANGES_VTABLE,
+    );
+    e.set(this, ExtraContainerChanges::pChanges, changes);
+    this
+}
+
+// Translated from 00431860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraContainerChanges::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_container_changes_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraContainerChanges>,
+    flags: u32,
+) -> Ptr<ExtraContainerChanges> {
+    fn_00431890(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00431890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraContainerChanges`'s destructor body (the engine map has no name for
+/// it): resets the vtable, runs the scalar deleting destructor of the owned
+/// `InventoryChanges` (`00431920`, with its flag set to 1) if there is one,
+/// then the base destructor. The exception-unwinding frame is not translated.
+pub fn fn_00431890(e: &mut Engine, this: Ptr<ExtraContainerChanges>) {
+    e.mem.set_u32(this.addr(), EXTRA_CONTAINER_CHANGES_VTABLE);
+    let changes = e.get(this, ExtraContainerChanges::pChanges);
+    if !changes.is_null() {
+        fn_00431920(e, changes, 1);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00431920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the object `ExtraContainerChanges::pChanges`
+/// points at (an `InventoryChanges` by the Xbox PDB's field type; the engine
+/// map has no name for it): its destructor body (`004bf150`), then
+/// `operator delete` when `flags & 1`. Returns `this`.
+pub fn fn_00431920(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(INVENTORY_CHANGES_DESTRUCT, &args![this]);
+    delete_when_asked(e, this, flags);
+    this
+}
+
+// Translated from 00431950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOriginalReference`'s constructor (the engine map has no name for it;
+/// the class is the one whose vtable `01015bc4` it stores): extra-data type
+/// 0x20, storing `reference`. Returns `this`.
+pub fn fn_00431950(
+    e: &mut Engine,
+    this: Ptr<ExtraOriginalReference>,
+    reference: Ptr,
+) -> Ptr<ExtraOriginalReference> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_ORIGINAL_REFERENCE,
+        EXTRA_ORIGINAL_REFERENCE_VTABLE,
+    );
+    e.set(this, ExtraOriginalReference::pReference, reference);
+    this
+}
+
+// Translated from 00431980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOriginalReference`'s scalar deleting destructor (the engine map has no
+/// name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_00431980(
+    e: &mut Engine,
+    this: Ptr<ExtraOriginalReference>,
+    flags: u32,
+) -> Ptr<ExtraOriginalReference> {
+    fn_004319b0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004319b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOriginalReference`'s destructor body (the engine map has no name for
+/// it): resets the vtable, then runs the base destructor.
+pub fn fn_004319b0(e: &mut Engine, this: Ptr<ExtraOriginalReference>) {
+    e.mem.set_u32(this.addr(), EXTRA_ORIGINAL_REFERENCE_VTABLE);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 004319d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOriginalReference::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraOriginalReference`, when `BSExtraData::Compare` returns true, or when
+/// `pReference` differs.
+pub fn extra_original_reference_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraOriginalReference>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraOriginalReference>(
+        e,
+        this,
+        other,
+        EXTRA_ORIGINAL_REFERENCE_TYPE,
+    ) else {
+        return true;
+    };
+    e.get(this, ExtraOriginalReference::pReference)
+        != e.get(cast, ExtraOriginalReference::pReference)
+}
+
+// Translated from 00431a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOwnership`'s constructor (the engine map has no name for it; the class
+/// is the one whose vtable `010158b4` it stores): extra-data type 0x21,
+/// storing `owner`. Returns `this`.
+pub fn fn_00431a40(e: &mut Engine, this: Ptr<ExtraOwnership>, owner: Ptr) -> Ptr<ExtraOwnership> {
+    construct_base(e, this.cast(), TYPE_OWNERSHIP, EXTRA_OWNERSHIP_VTABLE);
+    e.set(this, ExtraOwnership::pOwner, owner);
+    this
+}
+
+// Translated from 00431a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraOwnership::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraOwnership`, when `BSExtraData::Compare` returns true, or when
+/// `pOwner` differs.
+pub fn extra_ownership_compare(e: &mut Engine, this: Ptr<ExtraOwnership>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraOwnership>(e, this, other, EXTRA_OWNERSHIP_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraOwnership::pOwner) != e.get(cast, ExtraOwnership::pOwner)
+}
+
+// Translated from 00431ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraGlobal`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `010158c0` it stores): extra-data type 0x22, storing
+/// `global`. Returns `this`.
+pub fn fn_00431ae0(e: &mut Engine, this: Ptr<ExtraGlobal>, global: Ptr) -> Ptr<ExtraGlobal> {
+    construct_base(e, this.cast(), TYPE_GLOBAL, EXTRA_GLOBAL_VTABLE);
+    e.set(this, ExtraGlobal::pGlobal, global);
+    this
+}
+
+// Translated from 00431b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraGlobal::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraGlobal`, when `BSExtraData::Compare` returns true, or when `pGlobal`
+/// differs.
+pub fn extra_global_compare(e: &mut Engine, this: Ptr<ExtraGlobal>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraGlobal>(e, this, other, EXTRA_GLOBAL_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraGlobal::pGlobal) != e.get(cast, ExtraGlobal::pGlobal)
+}
+
+// Translated from 00431b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRank`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `010158cc` it stores): extra-data type 0x23, storing
+/// `rank`. Returns `this`.
+pub fn fn_00431b80(e: &mut Engine, this: Ptr<ExtraRank>, rank: i32) -> Ptr<ExtraRank> {
+    construct_base(e, this.cast(), TYPE_RANK, EXTRA_RANK_VTABLE);
+    e.set(this, ExtraRank::iRank, rank);
+    this
+}
+
+// Translated from 00431bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRank::Compare` (Xbox PDB): true when `other` is not an `ExtraRank`,
+/// when `BSExtraData::Compare` returns true, or when `iRank` differs.
+pub fn extra_rank_compare(e: &mut Engine, this: Ptr<ExtraRank>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraRank>(e, this, other, EXTRA_RANK_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraRank::iRank) != e.get(cast, ExtraRank::iRank)
+}
+
+// Translated from 00431c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCount`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `010158d8` it stores): extra-data type 0x24, storing
+/// the 16-bit `count` (the two bytes above it are left alone). Returns `this`.
+pub fn fn_00431c20(e: &mut Engine, this: Ptr<ExtraCount>, count: i16) -> Ptr<ExtraCount> {
+    construct_base(e, this.cast(), TYPE_COUNT, EXTRA_COUNT_VTABLE);
+    e.set(this, ExtraCount::iCount, count);
+    this
+}
+
+// Translated from 00431c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCount::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraCount`, when `BSExtraData::Compare` returns true, or when `iCount`
+/// differs.
+pub fn extra_count_compare(e: &mut Engine, this: Ptr<ExtraCount>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraCount>(e, this, other, EXTRA_COUNT_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraCount::iCount) != e.get(cast, ExtraCount::iCount)
+}
+
+// Translated from 00431cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLeveledItem::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraLeveledItem` or when `BSExtraData::Compare` returns true; the
+/// object's own fields (`iIndex`, `bdefault`) are not compared.
+pub fn extra_leveled_item_compare(e: &mut Engine, this: Ptr<ExtraLeveledItem>, other: Ptr) -> bool {
+    compare_prologue::<_, ExtraLeveledItem>(e, this, other, EXTRA_LEVELED_ITEM_TYPE).is_none()
+}
+
+// Translated from 00431d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHealth`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `010158e4` it stores): extra-data type 0x25, storing
+/// `health`. Returns `this`.
+pub fn fn_00431d10(e: &mut Engine, this: Ptr<ExtraHealth>, health: f32) -> Ptr<ExtraHealth> {
+    construct_base(e, this.cast(), TYPE_HEALTH, EXTRA_HEALTH_VTABLE);
+    e.set(this, ExtraHealth::fHealth, health);
+    this
+}
+
+// Translated from 00431d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHealth::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraHealth`, when `BSExtraData::Compare` returns true, or when `fHealth`
+/// differs (as `float`s: a NaN differs from everything, `0.0` equals `-0.0`).
+pub fn extra_health_compare(e: &mut Engine, this: Ptr<ExtraHealth>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraHealth>(e, this, other, EXTRA_HEALTH_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraHealth::fHealth) != e.get(cast, ExtraHealth::fHealth)
+}
+
+// Translated from 00431db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHealthPerc::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraHealthPerc`, when `BSExtraData::Compare` returns true, or when
+/// `fHealthPerc` differs (as `float`s: a NaN differs from everything, `0.0`
+/// equals `-0.0`).
+pub fn extra_health_perc_compare(e: &mut Engine, this: Ptr<ExtraHealthPerc>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraHealthPerc>(e, this, other, EXTRA_HEALTH_PERC_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraHealthPerc::fHealthPerc) != e.get(cast, ExtraHealthPerc::fHealthPerc)
+}
+
+// Translated from 00431e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraUses`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `010158f0` it stores): extra-data type 0x26, storing
+/// the byte `uses` (the three bytes above it are left alone). Returns `this`.
+pub fn fn_00431e20(e: &mut Engine, this: Ptr<ExtraUses>, uses: u8) -> Ptr<ExtraUses> {
+    construct_base(e, this.cast(), TYPE_USES, EXTRA_USES_VTABLE);
+    e.set(this, ExtraUses::cUses, uses);
+    this
+}
+
+// Translated from 00431e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraUses::Compare` (Xbox PDB): true when `other` is not an `ExtraUses`,
+/// when `BSExtraData::Compare` returns true, or when `cUses` differs.
+pub fn extra_uses_compare(e: &mut Engine, this: Ptr<ExtraUses>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraUses>(e, this, other, EXTRA_USES_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraUses::cUses) != e.get(cast, ExtraUses::cUses)
+}
+
+// Translated from 00431ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTimeLeft`'s constructor (the engine map has no name for it; the class
+/// is the one whose vtable `010158fc` it stores): extra-data type 0x27,
+/// storing `time`. Returns `this`.
+pub fn fn_00431ec0(e: &mut Engine, this: Ptr<ExtraTimeLeft>, time: f32) -> Ptr<ExtraTimeLeft> {
+    construct_base(e, this.cast(), TYPE_TIME_LEFT, EXTRA_TIME_LEFT_VTABLE);
+    e.set(this, ExtraTimeLeft::fTime, time);
+    this
+}
+
+// Translated from 00431ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTimeLeft::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraTimeLeft`, when `BSExtraData::Compare` returns true, or when `fTime`
+/// differs (as `float`s: a NaN differs from everything, `0.0` equals `-0.0`).
+pub fn extra_time_left_compare(e: &mut Engine, this: Ptr<ExtraTimeLeft>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraTimeLeft>(e, this, other, EXTRA_TIME_LEFT_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraTimeLeft::fTime) != e.get(cast, ExtraTimeLeft::fTime)
+}
+
+// Translated from 00431f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCharge`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015908` it stores): extra-data type 0x28, storing
+/// `charge`. Returns `this`.
+pub fn fn_00431f60(e: &mut Engine, this: Ptr<ExtraCharge>, charge: f32) -> Ptr<ExtraCharge> {
+    construct_base(e, this.cast(), TYPE_CHARGE, EXTRA_CHARGE_VTABLE);
+    e.set(this, ExtraCharge::fCharge, charge);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1268,6 +1995,156 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00431230(Ptr<ExtraTeleport>, Ptr) -> Ptr<ExtraTeleport>
         ),
         entry!(0x00431260, fn_00431260(Ptr<ExtraTeleport>)),
+        entry!(
+            0x004312f0,
+            extra_teleport_compare(Ptr<ExtraTeleport>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431360,
+            fn_00431360(Ptr<ExtraMapMarker>, Ptr) -> Ptr<ExtraMapMarker>
+        ),
+        entry!(
+            0x00431390,
+            extra_map_marker_scalar_deleting_destructor(
+                Ptr<ExtraMapMarker>,
+                u32,
+            ) -> Ptr<ExtraMapMarker>
+        ),
+        entry!(0x004313c0, fn_004313c0(Ptr<ExtraMapMarker>)),
+        entry!(
+            0x00431450,
+            extra_map_marker_compare(Ptr<ExtraMapMarker>, Ptr) -> bool
+        ),
+        entry!(
+            0x004314c0,
+            fn_004314c0(Ptr<ExtraAudioMarker>, Ptr) -> Ptr<ExtraAudioMarker>
+        ),
+        entry!(
+            0x004314f0,
+            extra_audio_marker_scalar_deleting_destructor(
+                Ptr<ExtraAudioMarker>,
+                u32,
+            ) -> Ptr<ExtraAudioMarker>
+        ),
+        entry!(0x00431520, fn_00431520(Ptr<ExtraAudioMarker>)),
+        entry!(
+            0x004315b0,
+            extra_audio_marker_compare(Ptr<ExtraAudioMarker>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431620,
+            fn_00431620(Ptr<ExtraAudioBuoyMarker>, Ptr) -> Ptr<ExtraAudioBuoyMarker>
+        ),
+        entry!(
+            0x00431650,
+            extra_audio_buoy_marker_scalar_deleting_destructor(
+                Ptr<ExtraAudioBuoyMarker>,
+                u32,
+            )
+                -> Ptr<ExtraAudioBuoyMarker>
+        ),
+        entry!(0x00431680, fn_00431680(Ptr<ExtraAudioBuoyMarker>)),
+        entry!(
+            0x00431710,
+            extra_audio_buoy_marker_compare(Ptr<ExtraAudioBuoyMarker>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431780,
+            fn_00431780(Ptr<ExtraAction>) -> Ptr<ExtraAction>
+        ),
+        entry!(
+            0x004317c0,
+            extra_action_compare(Ptr<ExtraAction>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431830,
+            fn_00431830(Ptr<ExtraContainerChanges>, Ptr) -> Ptr<ExtraContainerChanges>
+        ),
+        entry!(
+            0x00431860,
+            extra_container_changes_scalar_deleting_destructor(
+                Ptr<ExtraContainerChanges>,
+                u32,
+            )
+                -> Ptr<ExtraContainerChanges>
+        ),
+        entry!(0x00431890, fn_00431890(Ptr<ExtraContainerChanges>)),
+        entry!(0x00431920, fn_00431920(Ptr, u32) -> Ptr),
+        entry!(
+            0x00431950,
+            fn_00431950(Ptr<ExtraOriginalReference>, Ptr) -> Ptr<ExtraOriginalReference>
+        ),
+        entry!(
+            0x00431980,
+            fn_00431980(Ptr<ExtraOriginalReference>, u32) -> Ptr<ExtraOriginalReference>
+        ),
+        entry!(0x004319b0, fn_004319b0(Ptr<ExtraOriginalReference>)),
+        entry!(
+            0x004319d0,
+            extra_original_reference_compare(Ptr<ExtraOriginalReference>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431a40,
+            fn_00431a40(Ptr<ExtraOwnership>, Ptr) -> Ptr<ExtraOwnership>
+        ),
+        entry!(
+            0x00431a70,
+            extra_ownership_compare(Ptr<ExtraOwnership>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431ae0,
+            fn_00431ae0(Ptr<ExtraGlobal>, Ptr) -> Ptr<ExtraGlobal>
+        ),
+        entry!(
+            0x00431b10,
+            extra_global_compare(Ptr<ExtraGlobal>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431b80,
+            fn_00431b80(Ptr<ExtraRank>, i32) -> Ptr<ExtraRank>
+        ),
+        entry!(0x00431bb0, extra_rank_compare(Ptr<ExtraRank>, Ptr) -> bool),
+        entry!(
+            0x00431c20,
+            fn_00431c20(Ptr<ExtraCount>, i16) -> Ptr<ExtraCount>
+        ),
+        entry!(
+            0x00431c50,
+            extra_count_compare(Ptr<ExtraCount>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431cc0,
+            extra_leveled_item_compare(Ptr<ExtraLeveledItem>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431d10,
+            fn_00431d10(Ptr<ExtraHealth>, f32) -> Ptr<ExtraHealth>
+        ),
+        entry!(
+            0x00431d40,
+            extra_health_compare(Ptr<ExtraHealth>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431db0,
+            extra_health_perc_compare(Ptr<ExtraHealthPerc>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431e20,
+            fn_00431e20(Ptr<ExtraUses>, u8) -> Ptr<ExtraUses>
+        ),
+        entry!(0x00431e50, extra_uses_compare(Ptr<ExtraUses>, Ptr) -> bool),
+        entry!(
+            0x00431ec0,
+            fn_00431ec0(Ptr<ExtraTimeLeft>, f32) -> Ptr<ExtraTimeLeft>
+        ),
+        entry!(
+            0x00431ef0,
+            extra_time_left_compare(Ptr<ExtraTimeLeft>, Ptr) -> bool
+        ),
+        entry!(
+            0x00431f60,
+            fn_00431f60(Ptr<ExtraCharge>, f32) -> Ptr<ExtraCharge>
+        ),
     ]
 }
 
@@ -2516,5 +3393,503 @@ mod tests {
         start_log(&mut e);
         e.call(0x0043_1260, &args![bare]);
         assert!(calls(&e, TELEPORT_DATA_DELETE).is_empty());
+    }
+
+    // ---- the simple extra-data classes (`004312f0` to `00431f60`) ----
+
+    /// A constructor taking one word that is stored at +0xc: the object is
+    /// returned, has the type byte and vtable, and holds the word; the other
+    /// words of the object (here 0xaa-filled) are left alone.
+    fn check_word_constructor(addr: u32, extra_type: u8, vtable: u32, size: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(size);
+        for offset in (0x0c..size).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        start_log(&mut e);
+        assert_eq!(
+            e.call(addr, &args![Ptr::<()>::new(this), 0x1234_5678u32])
+                .u32(),
+            this
+        );
+        assert_eq!(calls(&e, BS_EXTRA_DATA_CONSTRUCT).len(), 1);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.u32(this + 0xc), 0x1234_5678);
+        for offset in (0x10..size).step_by(4) {
+            assert_eq!(e.mem.u32(this + offset), 0xaaaa_aaaa);
+        }
+    }
+
+    fn extra_type_of(e: &Engine, extra: u32) -> u8 {
+        extra_type(e, extra)
+    }
+
+    /// A scalar deleting destructor: runs the destructor body (the base
+    /// destructor shows it), frees only when bit 0 of the flags is set.
+    fn check_scalar_deleting_destructor(addr: u32, vtable: u32, size: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(size);
+        start_log(&mut e);
+        assert_eq!(e.call(addr, &args![Ptr::<()>::new(this), 2u32]).u32(), this);
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(e.call(addr, &args![Ptr::<()>::new(this), 3u32]).u32(), this);
+        assert_eq!(e.mem.block_size(this), None);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT).len(), 2);
+    }
+
+    /// The destructor body of a class owning one object at +0xc: the owned
+    /// object's deleter runs with flag 1 only when the pointer is set.
+    fn check_owner_destructor(addr: u32, vtable: u32, deleter: u32) {
+        let mut e = extra_engine();
+        e.register(deleter, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0x7777);
+        start_log(&mut e);
+        e.call(addr, &args![Ptr::<()>::new(this)]);
+        assert_eq!(calls(&e, deleter), vec![vec![0x7777, 1]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(vtable_of(&e, this), vtable);
+        let bare = e.mem.alloc(0x10);
+        start_log(&mut e);
+        e.call(addr, &args![Ptr::<()>::new(bare)]);
+        assert!(calls(&e, deleter).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![bare]]);
+        assert_eq!(vtable_of(&e, bare), vtable);
+    }
+
+    /// The two exits every `Compare` starts with: `other` is not of the class
+    /// (true, and nothing else is called), and the base says they differ
+    /// (true, after the base was asked about `this` and `other`).
+    fn check_compare_start(addr: u32, target_type: u32, size: u32) {
+        let mut e = compare_engine(false, false);
+        let this = e.mem.alloc(size);
+        let other = e.mem.alloc(size);
+        start_log(&mut e);
+        assert!(e
+            .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+            .bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+        );
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+
+        let mut e = compare_engine(true, true);
+        let this = e.mem.alloc(size);
+        let other = e.mem.alloc(size);
+        start_log(&mut e);
+        assert!(e
+            .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+            .bool());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_COMPARE), vec![vec![this, other]]);
+    }
+
+    /// A `Compare` that ends with the value at +0xc of `width` bytes (1, 2 or
+    /// 4) and nothing else: equal values give false, different ones true.
+    /// Bytes above the value are filled differently in the two objects and
+    /// must not matter.
+    fn check_value_compare(addr: u32, target_type: u32, width: u32, equal: u32, different: u32) {
+        check_compare_start(addr, target_type, 0x10);
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        let set = |e: &mut Engine, object: u32, value: u32, filler: u8| {
+            for offset in 0..4 {
+                e.mem.set_u8(object + 0xc + offset, filler);
+            }
+            match width {
+                1 => e.mem.set_u8(object + 0xc, value as u8),
+                2 => e.mem.set_u16(object + 0xc, value as u16),
+                _ => e.mem.set_u32(object + 0xc, value),
+            }
+        };
+        set(&mut e, this, equal, 0x11);
+        set(&mut e, other, equal, 0x22);
+        let compare = |e: &mut Engine| {
+            e.call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+                .bool()
+        };
+        assert!(!compare(&mut e));
+        set(&mut e, other, different, 0x22);
+        assert!(compare(&mut e));
+    }
+
+    #[test]
+    fn teleport_compare_asks_the_teleport_data() {
+        check_compare_start(0x0043_12f0, EXTRA_TELEPORT_TYPE, 0x10);
+        for answer in [false, true] {
+            let mut e = compare_engine(true, false);
+            e.register_double(DOOR_TELEPORT_DATA_COMPARE, move |_, _| ret(answer as u32));
+            let this: Ptr<ExtraTeleport> = e.new_object();
+            let other: Ptr<ExtraTeleport> = e.new_object();
+            e.set(this, ExtraTeleport::pData, Ptr::new(0x1111));
+            e.set(other, ExtraTeleport::pData, Ptr::new(0x2222));
+            start_log(&mut e);
+            assert_eq!(e.call(0x0043_12f0, &args![this, other]).bool(), answer);
+            assert_eq!(
+                calls(&e, DOOR_TELEPORT_DATA_COMPARE),
+                vec![vec![0x1111, 0x2222]]
+            );
+        }
+    }
+
+    /// The `Compare` of a class whose own data are compared by a callee given
+    /// the two data pointers at +0xc.
+    fn check_data_compare(addr: u32, target_type: u32, callee: u32) {
+        check_compare_start(addr, target_type, 0x10);
+        for answer in [false, true] {
+            let mut e = compare_engine(true, false);
+            e.register_double(callee, move |_, _| ret(answer as u32));
+            let this = e.mem.alloc(0x10);
+            let other = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 0xc, 0x1111);
+            e.mem.set_u32(other + 0xc, 0x2222);
+            start_log(&mut e);
+            let result = e
+                .call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+                .bool();
+            assert_eq!(result, answer);
+            assert_eq!(calls(&e, callee), vec![vec![0x1111, 0x2222]]);
+        }
+    }
+
+    #[test]
+    fn map_marker_constructor_takes_the_data() {
+        check_word_constructor(0x0043_1360, 0x2c, EXTRA_MAP_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn map_marker_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_1390, EXTRA_MAP_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn map_marker_destructor_deletes_the_map_data_when_there_is_some() {
+        check_owner_destructor(0x0043_13c0, EXTRA_MAP_MARKER_VTABLE, MAP_MARKER_DATA_DELETE);
+    }
+
+    #[test]
+    fn map_marker_compare_asks_the_map_data() {
+        check_data_compare(0x0043_1450, EXTRA_MAP_MARKER_TYPE, MAP_MARKER_DATA_COMPARE);
+    }
+
+    #[test]
+    fn audio_marker_constructor_takes_the_data() {
+        check_word_constructor(0x0043_14c0, 0x90, EXTRA_AUDIO_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn audio_marker_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_14f0, EXTRA_AUDIO_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn audio_marker_destructor_deletes_the_audio_data_when_there_is_some() {
+        check_owner_destructor(
+            0x0043_1520,
+            EXTRA_AUDIO_MARKER_VTABLE,
+            AUDIO_MARKER_DATA_DELETE,
+        );
+    }
+
+    #[test]
+    fn audio_marker_compare_asks_the_audio_data() {
+        check_data_compare(
+            0x0043_15b0,
+            EXTRA_AUDIO_MARKER_TYPE,
+            AUDIO_MARKER_DATA_COMPARE,
+        );
+    }
+
+    #[test]
+    fn audio_buoy_marker_constructor_takes_the_data() {
+        check_word_constructor(0x0043_1620, 0x91, EXTRA_AUDIO_BUOY_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn audio_buoy_marker_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_1650, EXTRA_AUDIO_BUOY_MARKER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn audio_buoy_marker_destructor_deletes_the_buoy_data_when_there_is_some() {
+        check_owner_destructor(
+            0x0043_1680,
+            EXTRA_AUDIO_BUOY_MARKER_VTABLE,
+            AUDIO_BUOY_DATA_DELETE,
+        );
+    }
+
+    #[test]
+    fn audio_buoy_marker_compare_asks_the_folded_body() {
+        check_data_compare(
+            0x0043_1710,
+            EXTRA_AUDIO_BUOY_MARKER_TYPE,
+            AUDIO_BUOY_DATA_COMPARE,
+        );
+    }
+
+    #[test]
+    fn action_constructor_sets_the_default_action() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraAction> = e.new_object();
+        e.mem.set_u32(this.addr() + 0xc, 0xaaaa_aaaa);
+        e.mem.set_u32(this.addr() + 0x10, 0xbbbb_bbbb);
+        let back = e.call(0x0043_1780, &args![this]).ptr::<ExtraAction>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x0e);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_ACTION_VTABLE);
+        // Only the byte is written.
+        assert_eq!(e.mem.u32(this.addr() + 0xc), 0xaaaa_aa01);
+        assert_eq!(e.get(this, ExtraAction::eAction), 1);
+        assert!(e.get(this, ExtraAction::pActionRef).is_null());
+    }
+
+    #[test]
+    fn action_compare_checks_the_action_byte_only() {
+        check_value_compare(0x0043_17c0, EXTRA_ACTION_TYPE, 1, 5, 6);
+        // The reference at +0x10 is not compared.
+        let mut e = compare_engine(true, false);
+        let this: Ptr<ExtraAction> = e.new_object();
+        let other: Ptr<ExtraAction> = e.new_object();
+        e.set(this, ExtraAction::pActionRef, Ptr::new(0x10));
+        e.set(other, ExtraAction::pActionRef, Ptr::new(0x20));
+        assert!(!e.call(0x0043_17c0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn container_changes_constructor_takes_the_changes() {
+        check_word_constructor(0x0043_1830, 0x15, EXTRA_CONTAINER_CHANGES_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn container_changes_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_1860, EXTRA_CONTAINER_CHANGES_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn container_changes_destructor_destroys_the_changes_when_there_are_some() {
+        let mut e = extra_engine();
+        e.register(INVENTORY_CHANGES_DESTRUCT, |_, _| Ret::default());
+        let changes = e.mem.alloc(0x20);
+        let this: Ptr<ExtraContainerChanges> = e.new_object();
+        e.set(this, ExtraContainerChanges::pChanges, Ptr::new(changes));
+        start_log(&mut e);
+        e.call(0x0043_1890, &args![this]);
+        // The owned object's scalar deleting destructor: its body, then the
+        // free.
+        assert_eq!(calls(&e, INVENTORY_CHANGES_DESTRUCT), vec![vec![changes]]);
+        assert_eq!(e.mem.block_size(changes), None);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_CONTAINER_CHANGES_VTABLE);
+
+        let bare: Ptr<ExtraContainerChanges> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0043_1890, &args![bare]);
+        assert!(calls(&e, INVENTORY_CHANGES_DESTRUCT).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn inventory_changes_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = extra_engine();
+        e.register(INVENTORY_CHANGES_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0043_1920, &args![Ptr::<()>::new(this), 0u32])
+                .u32(),
+            this
+        );
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(
+            e.call(0x0043_1920, &args![Ptr::<()>::new(this), 1u32])
+                .u32(),
+            this
+        );
+        assert_eq!(e.mem.block_size(this), None);
+        assert_eq!(
+            calls(&e, INVENTORY_CHANGES_DESTRUCT),
+            vec![vec![this], vec![this]]
+        );
+    }
+
+    #[test]
+    fn original_reference_constructor_takes_the_reference() {
+        check_word_constructor(0x0043_1950, 0x20, EXTRA_ORIGINAL_REFERENCE_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn original_reference_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_1980, EXTRA_ORIGINAL_REFERENCE_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn original_reference_destructor_resets_the_vtable() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraOriginalReference> = e.new_object();
+        e.mem.set_u32(this.addr(), 0x1234);
+        start_log(&mut e);
+        e.call(0x0043_19b0, &args![this]);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_ORIGINAL_REFERENCE_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn original_reference_compare_checks_the_reference() {
+        check_value_compare(
+            0x0043_19d0,
+            EXTRA_ORIGINAL_REFERENCE_TYPE,
+            4,
+            0x4000,
+            0x4004,
+        );
+    }
+
+    #[test]
+    fn ownership_constructor_takes_the_owner() {
+        check_word_constructor(0x0043_1a40, 0x21, EXTRA_OWNERSHIP_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn ownership_compare_checks_the_owner() {
+        check_value_compare(0x0043_1a70, EXTRA_OWNERSHIP_TYPE, 4, 0x4000, 0x4004);
+    }
+
+    #[test]
+    fn global_constructor_takes_the_global() {
+        check_word_constructor(0x0043_1ae0, 0x22, EXTRA_GLOBAL_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn global_compare_checks_the_global() {
+        check_value_compare(0x0043_1b10, EXTRA_GLOBAL_TYPE, 4, 0x4000, 0x4004);
+    }
+
+    #[test]
+    fn rank_constructor_takes_the_rank() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraRank> = e.new_object();
+        let back = e.call(0x0043_1b80, &args![this, -3i32]).ptr::<ExtraRank>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x23);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_RANK_VTABLE);
+        assert_eq!(e.get(this, ExtraRank::iRank), -3);
+    }
+
+    #[test]
+    fn rank_compare_checks_the_rank() {
+        check_value_compare(0x0043_1bb0, EXTRA_RANK_TYPE, 4, 2, 0xffff_ffff);
+    }
+
+    #[test]
+    fn count_constructor_stores_only_the_16_bit_count() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraCount> = e.new_object();
+        e.mem.set_u32(this.addr() + 0xc, 0xaaaa_aaaa);
+        let back = e.call(0x0043_1c20, &args![this, -2i16]).ptr::<ExtraCount>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x24);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_COUNT_VTABLE);
+        assert_eq!(e.get(this, ExtraCount::iCount), -2);
+        assert_eq!(e.mem.u32(this.addr() + 0xc), 0xaaaa_fffe);
+    }
+
+    #[test]
+    fn count_compare_checks_the_16_bit_count() {
+        check_value_compare(0x0043_1c50, EXTRA_COUNT_TYPE, 2, 7, 0x8007);
+    }
+
+    #[test]
+    fn leveled_item_compare_ignores_the_fields() {
+        check_compare_start(0x0043_1cc0, EXTRA_LEVELED_ITEM_TYPE, 0x14);
+        let mut e = compare_engine(true, false);
+        let this: Ptr<ExtraLeveledItem> = e.new_object();
+        let other: Ptr<ExtraLeveledItem> = e.new_object();
+        e.set(this, ExtraLeveledItem::iIndex, 1);
+        e.set(other, ExtraLeveledItem::iIndex, 2);
+        e.set(this, ExtraLeveledItem::bdefault, true);
+        assert!(!e.call(0x0043_1cc0, &args![this, other]).bool());
+    }
+
+    /// A `float` constructor.
+    fn check_float_constructor(addr: u32, extra_type: u8, vtable: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        let back = e.call(addr, &args![Ptr::<()>::new(this), 12.5f32]).u32();
+        assert_eq!(back, this);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.f32(this + 0xc), 12.5);
+    }
+
+    /// A `Compare` of one `float` at +0xc, with `==` semantics (NaN differs
+    /// from itself, zero equals negative zero).
+    fn check_float_compare(addr: u32, target_type: u32) {
+        check_compare_start(addr, target_type, 0x10);
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        let compare = |e: &mut Engine, mine: f32, theirs: f32| {
+            e.mem.set_f32(this + 0xc, mine);
+            e.mem.set_f32(other + 0xc, theirs);
+            e.call(addr, &args![Ptr::<()>::new(this), Ptr::<()>::new(other)])
+                .bool()
+        };
+        assert!(!compare(&mut e, 1.5, 1.5));
+        assert!(compare(&mut e, 1.5, 2.5));
+        assert!(!compare(&mut e, 0.0, -0.0));
+        assert!(compare(&mut e, f32::NAN, f32::NAN));
+        assert!(compare(&mut e, f32::NAN, 1.0));
+    }
+
+    #[test]
+    fn health_constructor_takes_the_health() {
+        check_float_constructor(0x0043_1d10, 0x25, EXTRA_HEALTH_VTABLE);
+    }
+
+    #[test]
+    fn health_compare_checks_the_health_as_a_float() {
+        check_float_compare(0x0043_1d40, EXTRA_HEALTH_TYPE);
+    }
+
+    #[test]
+    fn health_perc_compare_checks_the_percentage_as_a_float() {
+        check_float_compare(0x0043_1db0, EXTRA_HEALTH_PERC_TYPE);
+    }
+
+    #[test]
+    fn uses_constructor_stores_only_the_byte() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraUses> = e.new_object();
+        e.mem.set_u32(this.addr() + 0xc, 0xaaaa_aaaa);
+        let back = e.call(0x0043_1e20, &args![this, 9u8]).ptr::<ExtraUses>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x26);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_USES_VTABLE);
+        assert_eq!(e.mem.u32(this.addr() + 0xc), 0xaaaa_aa09);
+    }
+
+    #[test]
+    fn uses_compare_checks_the_use_count_byte() {
+        check_value_compare(0x0043_1e50, EXTRA_USES_TYPE, 1, 4, 5);
+    }
+
+    #[test]
+    fn time_left_constructor_takes_the_time() {
+        check_float_constructor(0x0043_1ec0, 0x27, EXTRA_TIME_LEFT_VTABLE);
+    }
+
+    #[test]
+    fn time_left_compare_checks_the_time_as_a_float() {
+        check_float_compare(0x0043_1ef0, EXTRA_TIME_LEFT_TYPE);
+    }
+
+    #[test]
+    fn charge_constructor_takes_the_charge() {
+        check_float_constructor(0x0043_1f60, 0x28, EXTRA_CHARGE_VTABLE);
     }
 }
