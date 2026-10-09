@@ -17,8 +17,15 @@
 //! key searches, `ClearGroup`, the transform and accumulation root resets,
 //! `GetTESAnimGroup`, and the `AnimIdle` class (constructor, destructors,
 //! `Loaded`, the state steps and the save and load functions, laid out by
-//! [`AnimIdle`] below) with `SpecialIdleQueue`. The next session continues
-//! at `00498030` (`SpecialIdleReplace`).
+//! [`AnimIdle`] below) with `SpecialIdleQueue`.
+//! Session 4 (b0010) covers `00498030` to `0049c050`, the next 40: the special
+//! idle functions (`SpecialIdleReplace`, `SpecialIdleFree`, `AnimIdleFree` and
+//! the `SpecialIdleWorking` family), `ClearBlendInterps`,
+//! `ClearControllersInterpolators`, `ReloadTargets`, `BlendOut`, the animation's
+//! save and load functions (`SaveGame`, `SaveAnimation`, the load game side and
+//! the buffer variants), `UpdateBipOnly`, and the small sequence helpers up to
+//! the `NiTPointerMap` constructor. The next session continues at `0049c080`
+//! (the map's scalar deleting destructor).
 //!
 //! The 8 slots of `Animation` (`group`, `action`, `loopCount`, `nextGroup`,
 //! `nextLoops`, `pCurrentSequence` are arrays of 8) are indexed by the slot
@@ -694,6 +701,147 @@ const QUATERNION_STORE_AT_4: u32 = 0x004f_5d90;
 const SLOT_DETACH_CHILD: u32 = 0xe8;
 const WORD_AT_14: u32 = 0x0082_5c00;
 const SEQUENCE_SAVE_BASE_SIZE: u32 = 0x004e_faa0;
+
+// ---- Callees and data of the fourth session (`00498030` onward) ----------------------
+//
+// Several of these bodies are folded getters and setters, so each constant says
+// what the body does and on which object it is called (`ECX`, the first argument
+// in the uniform form).
+
+/// `006fa820(idle)`: the word at +0x10 of an idle (`spKFModel`, the pointer a
+/// `NiPointer<KFModel>` holds). `008d7dc0(idle, actor)` stores `actor` at +0x34
+/// of the idle (`pActor`); the maps name it `LowProcess::SetItemBeingUsed`, a
+/// folded name.
+const IDLE_KF_MODEL: u32 = 0x006f_a820;
+const IDLE_SET_ACTOR: u32 = 0x008d_7dc0;
+/// Two getters of an idle form: `005ff770(form)` is a byte computed from the
+/// bytes at +0x39 and +0x3a, `004d8a00(form)` the 16-bit word at +0x3c.
+const IDLE_FORM_BYTE: u32 = 0x005f_f770;
+const IDLE_FORM_WORD: u32 = 0x004d_8a00;
+/// The byte at +0x61d of the data handler (`004226e0`, `ECX` = the object in
+/// `DATA_HANDLER`).
+const DATA_HANDLER_FLAG: u32 = 0x0042_26e0;
+/// `Actor` method `008b28c0(actor, type, animation)`.
+const ACTOR_START_ANIMATION: u32 = 0x008b_28c0;
+/// `TESAnimGroup::IsIronSightsAction_ov2` (Xbox PDB), `__cdecl(group type)`.
+const GROUP_TYPE_IS_IRON_SIGHTS: u32 = 0x005f_2750;
+/// The virtual slots of an actor's process that `LoadGame`, `SaveGame` and
+/// `BlendOut` use (the slot numbers are the byte offsets into the vtable; the
+/// bodies are not named by the maps), and of the actor itself.
+const SLOT_PROCESS_RELOAD: u32 = 0x4dc;
+const SLOT_PROCESS_BYTE: u32 = 0x454;
+const SLOT_PROCESS_SET_BIPED: u32 = 0x1cc;
+const SLOT_PROCESS_NOTIFY: u32 = 0x1d8;
+const SLOT_PROCESS_REFRESH: u32 = 0x61c;
+const SLOT_PROCESS_SET_HELD: u32 = 0x3ec;
+const SLOT_PROCESS_HELD_PHASE: u32 = 0x3e4;
+const SLOT_ACTOR_FLAG_22C: u32 = 0x22c;
+const SLOT_ACTOR_FLAG_2E8: u32 = 0x2e8;
+const SLOT_ACTOR_BIPED: u32 = 0x1e8;
+/// The sub-object at +0x88 of an actor and its virtual slot 0x34, which the
+/// save and load functions ask before they look for the controller sequence.
+const ACTOR_SUB_OBJECT: u32 = 0x88;
+const SLOT_SUB_OBJECT_CHECK: u32 = 0x34;
+/// Virtual slots of the save game buffers: slot 8 (`BGSSaveGameBuffer`) and
+/// slot 0xc (`BGSLoadGameBuffer`) give the actor the buffer belongs to.
+const SLOT_SAVE_BUFFER_OWNER: u32 = 0x8;
+const SLOT_LOAD_BUFFER_OWNER: u32 = 0xc;
+
+/// `PlayerCharacter::GetBiped` (Xbox PDB): `00950b00(player, first, animation,
+/// player)`.
+const PLAYER_BIPED: u32 = 0x0095_0b00;
+
+/// Controller and node helpers: `00a6e960(object)` (the object the manager's
+/// palette is cast to with `RTTI_PALETTE_KIND`), `00a30160(controller)` (a
+/// `NiMultiTargetTransformController` method, per the map), the virtual slot
+/// 0xc8 of the controller kind `ClearControllersInterpolators` casts to, and
+/// `0045bc00(object, index)` (the pointer at `index` of the array at +0x9c).
+const RTTI_PALETTE_KIND: u32 = 0x011f_4a04;
+const PALETTE_OBJECT_RESET: u32 = 0x00a6_e960;
+const CONTROLLER_RESET: u32 = 0x00a3_0160;
+const SLOT_CONTROLLER_CLEAR: u32 = 0xc8;
+const NODE_ARRAY_ELEMENT: u32 = 0x0045_bc00;
+const SLOT_NODE_AS_NODE: u32 = 0xc;
+/// Sequence helpers (`ECX` = the `BSAnimGroupSequence`): `004efa50` clears the
+/// interpolator pointers (+8 of every 16-byte entry of the array at +0x14),
+/// `004eedd0(sequence, root, count)` and `004eee00(sequence)` re-aim a
+/// sequence, `00a32c70(sequence, root)` attaches it (`NiControllerSequence`
+/// per the map), `004efc90(sequence, buffer, time)` saves it into a
+/// `BGSSaveGameBuffer`, `004efd10(sequence, buffer, time)` loads it from a
+/// `BGSLoadGameBuffer`, `004eeb00` is `BSAnimGroupSequence::~BSAnimGroupSequence`
+/// (Xbox PDB) and `00a34ba0(sequence, time, flag)` is
+/// `NiControllerSequence::Update` (Xbox PDB).
+const SEQUENCE_CLEAR_INTERPOLATORS: u32 = 0x004e_fa50;
+const SEQUENCE_RETARGET: u32 = 0x004e_edd0;
+const SEQUENCE_PREPARE: u32 = 0x004e_ee00;
+const SEQUENCE_ATTACH: u32 = 0x00a3_2c70;
+const SEQUENCE_SAVE_TO_BUFFER: u32 = 0x004e_fc90;
+const SEQUENCE_LOAD_FROM_BUFFER: u32 = 0x004e_fd10;
+const SEQUENCE_DESTRUCT: u32 = 0x004e_eb00;
+const SEQUENCE_UPDATE: u32 = 0x00a3_4ba0;
+/// The `NiRTTI` the save and load functions cast an object's controller to
+/// (`0043b230` gives the controller), `0047a520(object, key)` looks up the
+/// sequence in it, and the two keys come from the globals read by
+/// `fn_00499b70` and `fn_00499b80`.
+const RTTI_SAVED_CONTROLLER: u32 = 0x011f_36ac;
+const SEQUENCE_LOOKUP: u32 = 0x0047_a520;
+const SAVED_SEQUENCE_KEY_GLOBAL: u32 = 0x011c_61bc;
+const SAVED_SEQUENCE_LOOKUP_GLOBAL: u32 = 0x011c_61c0;
+/// Float accessors: `00621b00(object)` reads and `00621b20(object, value)`
+/// writes the `float` at +0x10, `00639aa0(sequence)` and `0098adb0(sequence,
+/// value)` the one at +0x48, `0081c470(light, 1, value)` is
+/// `MagicLight::Fade` (Xbox PDB).
+const FLOAT_AT_10: u32 = 0x0062_1b00;
+const SET_FLOAT_AT_10: u32 = 0x0062_1b20;
+const FLOAT_AT_48: u32 = 0x0063_9aa0;
+const SET_FLOAT_AT_48: u32 = 0x0098_adb0;
+const LIGHT_FADE: u32 = 0x0081_c470;
+/// `0047aa40(manager, flag)`: a method of the controller manager that takes a
+/// byte (it calls `0047aa60(manager, flag, 8)`).
+const MANAGER_SET_FLAG: u32 = 0x0047_aa40;
+/// `00726070(object)`: the word at +4 (the next node of a `BSSimpleList`, or a
+/// field of the actor's sub-object).
+const WORD_AT_4: u32 = 0x0072_6070;
+/// `BSBipNode::UpdateBipOnly` (Xbox PDB): `004efe80(root, time, accumRoot)`, and
+/// `004f05c0(root, object)` (a method of the animation root).
+const BIP_NODE_UPDATE_BIP_ONLY: u32 = 0x004e_fe80;
+const ROOT_NODE_NOTIFY: u32 = 0x004f_05c0;
+/// `bhkUtilFunctions` (Xbox PDB): `FindNextCollisionObject(node)` and
+/// `SetCOUseVel(flag, node)` (`__cdecl`), and `0047b470(object)`, whether a
+/// collision object is flagged.
+const FIND_NEXT_COLLISION_OBJECT: u32 = 0x00c8_02d0;
+const COLLISION_OBJECT_FLAGGED: u32 = 0x0047_b470;
+const SET_CO_USE_VEL: u32 = 0x00c8_0330;
+/// Save buffer methods (`ECX` = the `BGSSaveGameBuffer` or `BGSLoadGameBuffer`):
+/// `SaveFormID_ov2(formID, 0)`, `StartVariableSizedValue()`,
+/// `SaveVariableSizedValue_ov2(count, start)`, `LoadVariableSizedValue()`,
+/// `LoadFormID()` (reads an ID), `LoadFormID_ov2(&id)` (a byte, set when the ID
+/// is missing from the save) and the replay delay list push `005ae3d0(list,
+/// &item)`.
+const SAVE_BUFFER_FORM_ID: u32 = 0x0086_5df0;
+const SAVE_BUFFER_START_VARIABLE: u32 = 0x0086_5f20;
+const SAVE_BUFFER_END_VARIABLE: u32 = 0x0086_5ff0;
+const LOAD_BUFFER_VARIABLE: u32 = 0x0086_4a60;
+const LOAD_BUFFER_FORM_ID: u32 = 0x0086_48a0;
+const LOAD_BUFFER_FORM_ID_FOUND: u32 = 0x0086_48e0;
+const REPLAY_LIST_PUSH: u32 = 0x005a_e3d0;
+/// `0085f010(save game object, pointer, count)`, which `fn_0049ab00` runs for
+/// the bytes it reads.
+const SAVE_GAME_CONSUME: u32 = 0x0085_f010;
+/// The base constructor of `NiTPointerMap` (`0049c100(map, hashSize)`) and the
+/// map's vtable; the base constructor of `NiControllerSequence`
+/// (`00a316a0`) and the vtable of `BSAnimGroupSequence`.
+const MAP_BASE_CONSTRUCT: u32 = 0x0049_c100;
+const VTABLE_ANIM_SEQUENCE_MAP: u32 = 0x0101_ded0;
+const SEQUENCE_BASE_CONSTRUCT: u32 = 0x00a3_16a0;
+const VTABLE_ANIM_GROUP_SEQUENCE: u32 = 0x0101_de3c;
+const ANIM_GROUP_SEQUENCE_SIZE: u32 = 0x78;
+/// Format strings of the fourth session's messages (`.rdata`).
+const LOG_IDLE_FREE_JUST_STARTED: u32 = 0x0101_dd78;
+const LOG_SAVE_NULL_SEQUENCE: u32 = 0x0101_ddc8;
+/// Doubles: `0.75` and `1000.0`.
+const DOUBLE_THREE_QUARTERS: u32 = 0x0101_de30;
+const DOUBLE_THOUSAND: u32 = 0x0101_7b70;
 
 // ---- Data used by the functions ----------------------------------------------
 
@@ -5582,40 +5730,7 @@ pub fn fn_004974c0(e: &mut Engine, _unused_0: u32, idle: Ptr<AnimIdle>) -> u16 {
 /// function wrote since `start`: the part of [`fn_004975e0`] after the
 /// payload.
 fn log_saved_size(e: &mut Engine, start: u32) {
-    let diagnostics = e
-        .call(SETTING_BYTE_ADDRESS, &args![SAVE_DIAGNOSTICS_OBJECT])
-        .u32();
-    if e.mem.u8(diagnostics) == 0 {
-        return;
-    }
-    let save = e.global::<u32>(SAVE_GAME_OBJECT);
-    let end = e.call(SAVE_POSITION, &args![save]).u32();
-    let save = e.global::<u32>(SAVE_GAME_OBJECT);
-    let record = e.call(SAVE_RECORD_WRITTEN, &args![save]).u32();
-    let written = end.wrapping_sub(start);
-    if record != 0 {
-        let form_id = e.mem.u32(record);
-        let kind = e.call(FORM_BY_ID, &args![form_id]).u32();
-        let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
-        let flags = e.mem.u32(record + 5);
-        e.call(
-            ERROR_LOG,
-            &args![
-                LOG_SAVE_GAME_FORM,
-                written,
-                form_id,
-                name,
-                flags,
-                0x120eu32,
-                SOURCE_FILE
-            ],
-        );
-    } else {
-        e.call(
-            ERROR_LOG,
-            &args![LOG_SAVE_GAME, written, 0x120eu32, SOURCE_FILE],
-        );
-    }
+    log_written_since(e, start, 0x120e, LOG_SAVE_GAME_FORM, LOG_SAVE_GAME);
 }
 
 // Translated from 004975e0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -6020,6 +6135,2202 @@ pub fn fn_00497f20(
     });
 }
 
+// ---- Special idles, fourth session (`00498030` onward) ----------------------------------
+
+/// The address of the `NiPointer<AnimIdle>` field `offset` of an animation.
+fn idle_field(this: Ptr<Animation>, offset: u32) -> u32 {
+    this.addr() + offset
+}
+
+/// The idle held in the `NiPointer<AnimIdle>` field `offset` of an animation.
+fn idle_in(e: &mut Engine, this: Ptr<Animation>, offset: u32) -> Ptr<AnimIdle> {
+    Ptr::new(ni_pointer_get(e, idle_field(this, offset)))
+}
+
+/// The state (`eFlags`) of an idle, read through `0044ddc0`.
+fn idle_state(e: &mut Engine, idle: Ptr<AnimIdle>) -> u32 {
+    e.call(WORD_AT_8, &args![idle]).u32()
+}
+
+// Translated from 00498030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleReplace` (Xbox PDB): builds an idle for `idle_form`
+/// and `actor` in `section` (play type 0) and stores it as the queued idle
+/// (`spAnimIdleQueued`, +0x128). While the flag object `FLAG_OBJECT_GLOBAL`
+/// says so (`0042ce10`) the idle is built without an animation and with the
+/// `load_kf` flag set, otherwise it is built for this animation without it.
+/// Then runs [`animation_special_idle_replace_ov2`]. The scope guard of source
+/// line 0x12bd is kept; the compiler's exception frame is not translated.
+pub fn animation_special_idle_replace(
+    e: &mut Engine,
+    this: Ptr<Animation>,
+    idle_form: Ptr,
+    actor: Ptr,
+    section: u32,
+) {
+    with_scope_guard(e, 0x12bd, |e| {
+        let flag_object: u32 = e.global(FLAG_OBJECT_GLOBAL);
+        let (load_kf, animation) = if e.call(FLAG_OBJECT_CHECK, &args![flag_object]).bool() {
+            (1u8, Ptr::NULL)
+        } else {
+            (0u8, Ptr::new(this.addr()))
+        };
+        let block = e.call(NI_OPERATOR_NEW, &args![0x38u32]).u32();
+        let mut idle = Ptr::<AnimIdle>::NULL;
+        if block != 0 {
+            idle = anim_idle_constructor(
+                e,
+                Ptr::new(block),
+                idle_form,
+                section,
+                0,
+                actor,
+                load_kf,
+                animation,
+            );
+        }
+        e.call(
+            NI_POINTER_SET,
+            &args![idle_field(this, Animation::spAnimIdleQueued.off), idle],
+        );
+        animation_special_idle_replace_ov2(e, this);
+    });
+}
+
+// Translated from 00498170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleReplace_ov2` (Xbox PDB): when the queued idle
+/// (`spAnimIdleQueued`) is loaded (state 1), adds its KF model to the
+/// animation (`AddAnimation(model, 0)`); if that worked, drops the queued
+/// idle and returns true, otherwise false.
+pub fn animation_special_idle_replace_ov2(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let queued = Animation::spAnimIdleQueued.off;
+    if idle_in(e, this, queued).addr() != 0 {
+        let idle = idle_in(e, this, queued);
+        if idle_state(e, idle) == 1 {
+            let idle = idle_in(e, this, queued);
+            let kf = e.call(IDLE_KF_MODEL, &args![idle]).u32();
+            if animation_add_animation(e, this, kf, false) {
+                e.call(NI_POINTER_SET, &args![idle_field(this, queued), 0u32]);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 004981f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleLoaded` (Xbox PDB): whether the current idle
+/// (`spAnimIdle`, +0x124) exists and is loaded (state 1).
+pub fn animation_special_idle_loaded(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let current = Animation::spAnimIdle.off;
+    if idle_in(e, this, current).addr() == 0 {
+        return false;
+    }
+    let idle = idle_in(e, this, current);
+    idle_state(e, idle) == 1
+}
+
+// Translated from 00498230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs [`fn_00498290`]; when it worked, hands the current idle `actor` (the
+/// idle's `pActor`, `008d7dc0`) and tells the actor to play the idle's
+/// sequence (`SetAnimAction(0xd, sequence)`). Returns whether it worked. The
+/// map has no name for it.
+pub fn fn_00498230(e: &mut Engine, this: Ptr<Animation>, actor: Ptr) -> bool {
+    if !fn_00498290(e, this) {
+        return false;
+    }
+    let current = Animation::spAnimIdle.off;
+    let idle = idle_in(e, this, current);
+    e.call(IDLE_SET_ACTOR, &args![idle, actor]);
+    let idle = idle_in(e, this, current);
+    let sequence = fn_00490e40(e, idle.cast()).addr();
+    e.call(ACTOR_SET_ANIM_ACTION, &args![actor, 0xdu32, sequence]);
+    true
+}
+
+// Translated from 00498290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts the loaded current idle (the map has no name for it). First clears
+/// the queued idle: one that is not loaded (state other than 1) makes this
+/// return false, a loaded one is freed with `SpecialIdleFree(0, 1)`. Then the
+/// current idle must be loaded. Adds its KF model to the animation; when that
+/// fails (or the model has no group), marks the idle done (state 3) and, when
+/// its play type is 2 or 3, frees it (`SpecialIdleFree(1, 0)`), returning
+/// false. Otherwise plays the model's group (`PlayGroup`: in the idle's
+/// section, mode 1, with no loop count for section 0 and a group of type 1,
+/// otherwise with the idle form's byte as the loop count); a failed play ends
+/// like a failed add. When it started a sequence, queues a replay delay
+/// (idle form, `IDLE_FORM_WORD` as seconds) when the idle form's word is not
+/// 0, moves the idle to state 2 with the sequence ([`fn_00496fe0`]) and
+/// returns true.
+pub fn fn_00498290(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let a = this.addr();
+    let queued = Animation::spAnimIdleQueued.off;
+    let current = Animation::spAnimIdle.off;
+    if idle_in(e, this, queued).addr() != 0 {
+        let idle = idle_in(e, this, queued);
+        if idle_state(e, idle) != 1 {
+            return false;
+        }
+        animation_special_idle_free(e, this, 0, 1);
+    }
+    if idle_in(e, this, current).addr() == 0 {
+        return false;
+    }
+    let idle = idle_in(e, this, current);
+    if idle_state(e, idle) != 1 {
+        return false;
+    }
+    let idle = idle_in(e, this, current);
+    let kf = e.call(IDLE_KF_MODEL, &args![idle]).u32();
+    let mut started = 0u32;
+    let mut loaded = false;
+    if kf != 0 && animation_add_animation(e, this, kf, false) {
+        loaded = e.call(KF_MODEL_ANIM_GROUP, &args![kf]).u32() != 0;
+    }
+    if loaded {
+        let mut played = false;
+        let idle = idle_in(e, this, current);
+        if e.call(WORD_AT_14, &args![idle]).u32() == 0 {
+            let idle = idle_in(e, this, current);
+            let model = e.call(IDLE_KF_MODEL, &args![idle]).u32();
+            let group = e.call(KF_MODEL_ANIM_GROUP, &args![model]).u32();
+            if e.call(ANIM_GROUP_SEQUENCE_TYPE, &args![group]).i32() == 1 {
+                let idle = idle_in(e, this, current);
+                let section = e.call(WORD_AT_14, &args![idle]).i32();
+                let group = e.call(KF_MODEL_ANIM_GROUP, &args![kf]).u32();
+                let group_type = e.call(ANIM_GROUP_SEQUENCE_TYPE, &args![group]).u16();
+                started = animation_play_group(e, this, group_type, 1, -1, section);
+                played = true;
+            }
+        }
+        if !played {
+            let idle = idle_in(e, this, current);
+            let section = e.call(WORD_AT_14, &args![idle]).i32();
+            let idle = idle_in(e, this, current);
+            let form = e.call(IDLE_FORM_OF, &args![idle]).u32();
+            let loops = e.call(IDLE_FORM_BYTE, &args![form]).u8();
+            let group = e.call(KF_MODEL_ANIM_GROUP, &args![kf]).u32();
+            let group_type = e.call(ANIM_GROUP_SEQUENCE_TYPE, &args![group]).u16();
+            started = animation_play_group(e, this, group_type, 1, loops as i32, section);
+        }
+    }
+    if started != 0 {
+        let idle = idle_in(e, this, current);
+        let form = e.call(IDLE_FORM_OF, &args![idle]).u32();
+        let delay = e.call(IDLE_FORM_WORD, &args![form]).u16();
+        if delay > 0 {
+            let item = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            e.with_stack(4, |e, cell| {
+                e.mem.set_u32(cell.addr(), item);
+                let idle = idle_in(e, this, current);
+                let form = e.call(IDLE_FORM_OF, &args![idle]).u32();
+                e.mem.set_u32(item, form);
+                let idle = idle_in(e, this, current);
+                let form = e.call(IDLE_FORM_OF, &args![idle]).u32();
+                let delay = e.call(IDLE_FORM_WORD, &args![form]).u16();
+                e.mem.set_f32(item + 4, delay as f32);
+                e.call(
+                    SIMPLE_LIST_PUSH_BACK,
+                    &args![a + Animation::replayDelayList.off, cell],
+                );
+            });
+        }
+        let idle = idle_in(e, this, current);
+        fn_00496fe0(e, idle, Ptr::new(started));
+        return true;
+    }
+    // The failed path.
+    let idle = idle_in(e, this, current);
+    e.call(IDLE_SET_WORD_8, &args![idle, 3u32]);
+    let idle = idle_in(e, this, current);
+    let play_type = e.call(WORD_AT_C, &args![idle]).u32();
+    if play_type == 2 {
+        animation_special_idle_free(e, this, 1, 0);
+    } else {
+        let idle = idle_in(e, this, current);
+        if e.call(WORD_AT_C, &args![idle]).u32() == 3 {
+            animation_special_idle_free(e, this, 1, 0);
+        }
+    }
+    false
+}
+
+// Translated from 004985b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdlePlaying` (Xbox PDB): whether the current idle
+/// exists and is playing (state 2).
+pub fn animation_special_idle_playing(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let current = Animation::spAnimIdle.off;
+    if idle_in(e, this, current).addr() == 0 {
+        return false;
+    }
+    let idle = idle_in(e, this, current);
+    idle_state(e, idle) == 2
+}
+
+// Translated from 004985f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleDonePlaying` (Xbox PDB): true when no idle is
+/// queued and either there is no current idle or it holds a sequence and is
+/// done (state 3).
+pub fn animation_special_idle_done_playing(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let current = Animation::spAnimIdle.off;
+    if idle_in(e, this, Animation::spAnimIdleQueued.off).addr() != 0 {
+        return false;
+    }
+    if idle_in(e, this, current).addr() == 0 {
+        return true;
+    }
+    let idle = idle_in(e, this, current);
+    if fn_00490e40(e, idle.cast()).addr() == 0 {
+        return false;
+    }
+    let idle = idle_in(e, this, current);
+    idle_state(e, idle) == 3
+}
+
+// Translated from 00498670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::AnimIdleFree` (Xbox PDB): frees the idle held in the
+/// `NiPointer<AnimIdle>` at `idle_ref` (one of the animation's idle fields).
+/// Looks up the map entry for the idle's model group; an entry whose
+/// current sequence is not the idle's is ignored (as if there were none). With
+/// no entry the idle's sequence is kept in a local `NiPointer`. When the idle's
+/// sequence is current in the idle's section, clears that section
+/// (`ClearGroup(section, 0)`). Unless the animation is shut down, removes the
+/// sequence from the controller manager (and forgets it as the last movement
+/// sequence). Then releases the idle (`fn_00496a50`), empties `idle_ref`, and
+/// removes the map entry (deleting the entry through virtual slot 0), or the
+/// map key when there is neither an entry nor a held sequence. The compiler's
+/// exception frame is not translated.
+pub fn animation_anim_idle_free(e: &mut Engine, this: Ptr<Animation>, idle_ref: Ptr) {
+    let a = this.addr();
+    let idle = ni_pointer_get(e, idle_ref.addr());
+    let kf = e.call(IDLE_KF_MODEL, &args![idle]).u32();
+    let mut entry = 0u32;
+    let mut key: u16 = 0xff;
+    e.with_stack(8, |e, cells| {
+        let held = cells.addr();
+        let cell = cells.addr() + 4;
+        e.mem.set_u32(cell, 0);
+        e.call(NI_POINTER_INIT, &args![held, 0u32]);
+        if kf != 0 && e.call(KF_MODEL_ANIM_GROUP, &args![kf]).u32() != 0 {
+            let group = e.call(KF_MODEL_ANIM_GROUP, &args![kf]).u32();
+            key = e.call(ANIM_GROUP_ID, &args![group]).u16();
+            let map = e.get(this, Animation::pAnimSequenceMap).addr();
+            e.call(MAP_GET_AT, &args![map, key, cell]);
+            entry = e.mem.u32(cell);
+            let mut mismatch = false;
+            if entry != 0 {
+                let sequence = e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32();
+                let idle = ni_pointer_get(e, idle_ref.addr());
+                if sequence != fn_00490e40(e, Ptr::new(idle)).addr() {
+                    entry = 0;
+                    mismatch = true;
+                }
+            }
+            if !mismatch {
+                let idle = ni_pointer_get(e, idle_ref.addr());
+                let slot = e.call(WORD_AT_14, &args![idle]).u32();
+                let idle = ni_pointer_get(e, idle_ref.addr());
+                let sequence = fn_00490e40(e, Ptr::new(idle)).addr();
+                if e.mem.u32(current_sequence_at(this, slot)) == sequence {
+                    let idle = ni_pointer_get(e, idle_ref.addr());
+                    let slot = e.call(WORD_AT_14, &args![idle]).i32();
+                    animation_clear_group(e, this, slot, 0.0);
+                }
+            }
+        }
+        if entry == 0 {
+            let idle = ni_pointer_get(e, idle_ref.addr());
+            let sequence = fn_00490e40(e, Ptr::new(idle));
+            e.call(NI_POINTER_SET, &args![held, sequence]);
+        }
+        if !e.get(this, Animation::bShutDown) {
+            if entry != 0 {
+                let sequence = e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32();
+                if sequence == e.get(this, Animation::pLastMovementSequence).addr() {
+                    e.set(this, Animation::pLastMovementSequence, Ptr::NULL);
+                }
+                let sequence = e.vcall(entry, 0x10, &args![0xffff_ffffu32]).u32();
+                let manager = ni_pointer_get(e, a + Animation::spManager.off);
+                e.call(MANAGER_REMOVE_SEQUENCE, &args![manager, sequence]);
+            } else if ni_pointer_get(e, held) != 0 {
+                let last = e.get(this, Animation::pLastMovementSequence).addr();
+                if e.call(NODE_ACCEPTS_OBJECT, &args![held, last]).bool() {
+                    e.set(this, Animation::pLastMovementSequence, Ptr::NULL);
+                }
+                let sequence = ni_pointer_get(e, held);
+                let manager = ni_pointer_get(e, a + Animation::spManager.off);
+                e.call(MANAGER_REMOVE_SEQUENCE, &args![manager, sequence]);
+            }
+        }
+        let idle = ni_pointer_get(e, idle_ref.addr());
+        fn_00496a50(e, Ptr::new(idle));
+        e.call(NI_POINTER_SET, &args![idle_ref, 0u32]);
+        if entry != 0 {
+            let map = e.get(this, Animation::pAnimSequenceMap).addr();
+            e.call(MAP_REMOVE_AT, &args![map, key]);
+            // The entry's scalar deleting destructor (slot 0, flags 1).
+            e.vcall(entry, 0, &args![1u32]);
+            entry = 0;
+        }
+        if ni_pointer_get(e, held) == 0 && entry == 0 {
+            let map = e.get(this, Animation::pAnimSequenceMap).addr();
+            e.call(MAP_REMOVE_AT, &args![map, key]);
+        }
+        e.call(NI_POINTER_RELEASE, &args![held]);
+    });
+}
+
+/// The first half of `SpecialIdleFree` for the idle in the field `field`
+/// (the `NiPointer<AnimIdle>` at that offset): when the idle's sequence is the
+/// current sequence of its slot (section 0x14 is slot 1, 0x15 slot 4), either
+/// forgets the sequence (`immediate`) or blends the section out. Returns false
+/// when the sequence just started (state 2 or 5, nothing is freed then). The
+/// idle that sits in `spAnimIdle` is blended out with the raw section, the
+/// queued one with the slot; `raw_section` says which.
+fn special_idle_blend_out(
+    e: &mut Engine,
+    this: Ptr<Animation>,
+    field: u32,
+    raw_section: bool,
+    immediate: u8,
+) -> bool {
+    let idle = idle_in(e, this, field);
+    let mut slot = e.call(WORD_AT_14, &args![idle]).i32();
+    if slot == 0x14 {
+        slot = 1;
+    } else if slot == 0x15 {
+        slot = 4;
+    }
+    let idle = idle_in(e, this, field);
+    if fn_00490e40(e, idle.cast()).addr() != 0 {
+        let idle = idle_in(e, this, field);
+        let sequence = fn_00490e40(e, idle.cast()).addr();
+        if e.mem.u32(current_sequence_at(this, slot as u32)) == sequence {
+            if immediate != 0 {
+                e.mem.set_u32(current_sequence_at(this, slot as u32), 0);
+            } else {
+                let idle = idle_in(e, this, field);
+                let sequence = fn_00490e40(e, idle.cast()).addr();
+                let state = e.call(SEQUENCE_STATE, &args![sequence]).i32();
+                if state == 2 || state == 5 {
+                    let idle = idle_in(e, this, field);
+                    let sequence = fn_00490e40(e, idle.cast()).addr();
+                    let name = object_name(e, sequence);
+                    e.call(LOG, &args![LOG_IDLE_FREE_JUST_STARTED, name]);
+                    return false;
+                }
+                let target = if raw_section {
+                    let idle = idle_in(e, this, field);
+                    e.call(WORD_AT_14, &args![idle]).i32()
+                } else {
+                    slot
+                };
+                animation_blend_out(e, this, target, 0);
+            }
+        }
+    }
+    true
+}
+
+/// The second half of `SpecialIdleFree` for the idle in the field `field`:
+/// unless `immediate`, parks it in the first free "free when inactive" place
+/// (+0x12c, then +0x130) to wait for its sequence to stop; otherwise (or when
+/// both places are taken) frees it with [`animation_anim_idle_free`].
+fn special_idle_park_or_free(e: &mut Engine, this: Ptr<Animation>, field: u32, immediate: u8) {
+    let source = idle_field(this, field);
+    for place in [
+        Animation::spAnimIdleFreeWhenInactiveA.off,
+        Animation::spAnimIdleFreeWhenInactiveA.off + 4,
+    ] {
+        if immediate == 0 && idle_in(e, this, place).addr() == 0 {
+            e.call(NI_POINTER_COPY, &args![idle_field(this, place), source]);
+            e.call(NI_POINTER_SET, &args![source, 0u32]);
+            return;
+        }
+    }
+    animation_anim_idle_free(e, this, Ptr::new(source));
+}
+
+// Translated from 00498910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleFree` (Xbox PDB), `(free_queued, immediate)`: ends
+/// the current idle (`spAnimIdle`): blends its section out, or with
+/// `immediate` just forgets its sequence, and then parks it to wait for its
+/// sequence to stop or frees it. Stops (frees nothing more) with a log
+/// message when the idle's sequence just started. Then, when `free_queued` is
+/// set and an idle is queued, does the same for the queued idle (blending out
+/// with the slot instead of the raw section); otherwise the queued idle (or
+/// none) becomes the current idle.
+pub fn animation_special_idle_free(
+    e: &mut Engine,
+    this: Ptr<Animation>,
+    free_queued: u8,
+    immediate: u8,
+) {
+    let current = Animation::spAnimIdle.off;
+    let queued = Animation::spAnimIdleQueued.off;
+    if idle_in(e, this, current).addr() != 0 {
+        if !special_idle_blend_out(e, this, current, true, immediate) {
+            return;
+        }
+        special_idle_park_or_free(e, this, current, immediate);
+    }
+    if free_queued != 0 && idle_in(e, this, queued).addr() != 0 {
+        if !special_idle_blend_out(e, this, queued, false, immediate) {
+            return;
+        }
+        special_idle_park_or_free(e, this, queued, immediate);
+    } else {
+        e.call(
+            NI_POINTER_COPY,
+            &args![idle_field(this, current), idle_field(this, queued)],
+        );
+        e.call(NI_POINTER_SET, &args![idle_field(this, queued), 0u32]);
+    }
+}
+
+// Translated from 00498cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sequence of the current idle (`spAnimIdle`), or 0 without an idle; the
+/// map has no name for it.
+pub fn fn_00498cf0(e: &mut Engine, this: Ptr<Animation>) -> Ptr {
+    let current = Animation::spAnimIdle.off;
+    if idle_in(e, this, current).addr() == 0 {
+        return Ptr::NULL;
+    }
+    let idle = idle_in(e, this, current);
+    fn_00490e40(e, idle.cast())
+}
+
+// Translated from 00498d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleWorking` (Xbox PDB): whether an idle of the idle
+/// form `form` is at work: the current or the queued idle with that form that
+/// is not loaded (state other than 1), or one of the two parking places
+/// holding an idle with that form, or (while the `VATS_OBJECT` word at +8 is
+/// 4) holding any sequence.
+pub fn animation_special_idle_working(e: &mut Engine, this: Ptr<Animation>, form: Ptr) -> bool {
+    for offset in [Animation::spAnimIdle.off, Animation::spAnimIdleQueued.off] {
+        if idle_in(e, this, offset).addr() != 0 {
+            let idle = idle_in(e, this, offset);
+            if e.call(IDLE_FORM_OF, &args![idle]).u32() == form.addr() {
+                let idle = idle_in(e, this, offset);
+                if idle_state(e, idle) != 1 {
+                    return true;
+                }
+            }
+        }
+    }
+    for offset in [
+        Animation::spAnimIdleFreeWhenInactiveA.off,
+        Animation::spAnimIdleFreeWhenInactiveA.off + 4,
+    ] {
+        if idle_in(e, this, offset).addr() != 0 {
+            let idle = idle_in(e, this, offset);
+            if e.call(IDLE_FORM_OF, &args![idle]).u32() == form.addr() {
+                return true;
+            }
+            if e.call(WORD_AT_8, &args![VATS_OBJECT]).u32() == 4 {
+                let idle = idle_in(e, this, offset);
+                if fn_00490e40(e, idle.cast()).addr() != 0 {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+// Translated from 00498ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleWorking_ov2` (Xbox PDB): whether one of the four
+/// idles (current, queued and the two parking places) holds `sequence`.
+pub fn animation_special_idle_working_ov2(
+    e: &mut Engine,
+    this: Ptr<Animation>,
+    sequence: Ptr,
+) -> bool {
+    for offset in [
+        Animation::spAnimIdle.off,
+        Animation::spAnimIdleQueued.off,
+        Animation::spAnimIdleFreeWhenInactiveA.off,
+        Animation::spAnimIdleFreeWhenInactiveA.off + 4,
+    ] {
+        if idle_in(e, this, offset).addr() != 0 {
+            let idle = idle_in(e, this, offset);
+            if fn_00490e40(e, idle.cast()) == sequence {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 00498f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SpecialIdleWorking_ov3` (Xbox PDB): whether the special idles
+/// are busy: the current idle has no sequence yet and is not done (state 3),
+/// or its sequence just started (state 2 or 5); or the queued idle has no
+/// sequence, or its sequence just started.
+pub fn animation_special_idle_working_ov3(e: &mut Engine, this: Ptr<Animation>) -> bool {
+    let current = Animation::spAnimIdle.off;
+    let queued = Animation::spAnimIdleQueued.off;
+    if idle_in(e, this, current).addr() != 0 {
+        let idle = idle_in(e, this, current);
+        if fn_00490e40(e, idle.cast()).addr() == 0 {
+            let idle = idle_in(e, this, current);
+            return idle_state(e, idle) != 3;
+        }
+        let idle = idle_in(e, this, current);
+        let sequence = fn_00490e40(e, idle.cast()).addr();
+        let state = e.call(SEQUENCE_STATE, &args![sequence]).i32();
+        if state == 2 || state == 5 {
+            return true;
+        }
+    }
+    if idle_in(e, this, queued).addr() != 0 {
+        let idle = idle_in(e, this, queued);
+        if fn_00490e40(e, idle.cast()).addr() == 0 {
+            return true;
+        }
+        let idle = idle_in(e, this, queued);
+        let sequence = fn_00490e40(e, idle.cast()).addr();
+        let state = e.call(SEQUENCE_STATE, &args![sequence]).i32();
+        if state == 2 || state == 5 {
+            return true;
+        }
+    }
+    false
+}
+
+// ---- Clearing and reloading ------------------------------------------------------------
+
+/// The controller manager of an animation (the `NiPointer` at +0xd8).
+fn manager_of(e: &mut Engine, this: Ptr<Animation>) -> Ptr<NiControllerManager> {
+    Ptr::new(ni_pointer_get(e, this.addr() + Animation::spManager.off))
+}
+
+// Translated from 00499080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::ClearBlendInterps` (Xbox PDB): with a controller manager,
+/// clears the interpolators of every `BSAnimGroupSequence` it holds
+/// (`004efa50`); then releases the models still queued in `kfModelList`
+/// (twice each, as the game does) and empties the list.
+pub fn animation_clear_blend_interps(e: &mut Engine, this: Ptr<Animation>) {
+    if manager_of(e, this).addr() == 0 {
+        return;
+    }
+    let manager = manager_of(e, this);
+    let count = fn_00495d00(e, manager);
+    for index in 0..count {
+        let manager = manager_of(e, this);
+        let sequence = ni_controller_manager_get_sequence_at(e, manager, index);
+        let cast = e
+            .call(DYNAMIC_CAST, &args![RTTI_ANIM_GROUP_SEQUENCE, sequence])
+            .u32();
+        if cast != 0 {
+            e.call(SEQUENCE_CLEAR_INTERPOLATORS, &args![cast]);
+        }
+    }
+    let list = this.addr() + Animation::kfModelList.off;
+    while e.call(MODEL_QUEUE_NOT_EMPTY, &args![this]).bool() {
+        let cell = e.call(RECORD_ADDRESS, &args![list]).u32();
+        let model = e.mem.u32(cell);
+        e.call(KF_MODEL_RELEASE, &args![model]);
+        e.call(KF_MODEL_RELEASE, &args![model]);
+        e.call(SIMPLE_LIST_POP_FRONT, &args![list]);
+    }
+}
+
+// Translated from 00499160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::ClearControllersInterpolators` (Xbox PDB), `__cdecl(node)`:
+/// for every controller of `node` (and recursively of its children), a
+/// controller of the `RTTI_CONTROLLER_KIND` kind gets its virtual slot 0xc8
+/// called with (0, 0), and otherwise one of the `RTTI_CONTROLLER_FIRST` kind
+/// gets `00a30160`.
+pub fn animation_clear_controllers_interpolators(e: &mut Engine, node: Ptr) {
+    if node.is_null() {
+        return;
+    }
+    let mut controller = e.call(OBJECT_CONTROLLERS, &args![node]).u32();
+    while controller != 0 {
+        let kind = e
+            .call(DYNAMIC_CAST, &args![RTTI_CONTROLLER_KIND, controller])
+            .u32();
+        if kind != 0 {
+            e.vcall(kind, SLOT_CONTROLLER_CLEAR, &args![0u32, 0u32]);
+        } else {
+            let first = e
+                .call(DYNAMIC_CAST, &args![RTTI_CONTROLLER_FIRST, controller])
+                .u32();
+            if first != 0 {
+                e.call(CONTROLLER_RESET, &args![first]);
+            }
+        }
+        controller = e.call(CONTROLLER_NEXT, &args![controller]).u32();
+    }
+    let as_node = e.vcall(node.addr(), SLOT_NODE_AS_NODE, &args![]).u32();
+    if as_node != 0 {
+        let mut index = 0u32;
+        while index < e.call(NODE_CHILD_COUNT, &args![as_node]).u32() {
+            let child = e.call(NODE_CHILD_AT, &args![as_node, index]).ptr::<()>();
+            animation_clear_controllers_interpolators(e, child);
+            index += 1;
+        }
+    }
+}
+
+// Translated from 00499240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::ReloadTargets` (Xbox PDB): with a controller manager, resets
+/// the manager's palette object (when it casts to `RTTI_PALETTE_KIND`),
+/// removes the two controllers (`RTTI_CONTROLLER_FIRST` and `_SECOND`) from
+/// the animation root and deactivates every sequence. Then finds the largest
+/// object count among the manager's sequences and re-aims each sequence: with
+/// `retarget` set, a sequence is given the root and that count (`004eedd0`)
+/// when the root has no first controller yet, and unless its name starts with
+/// `"__"` it is attached to the root (`00a32c70`); without it the sequence is
+/// prepared (`004eee00`) and re-aimed. Finally activates the sequence of
+/// every slot that has one.
+pub fn animation_reload_targets(e: &mut Engine, this: Ptr<Animation>, retarget: u8) {
+    let a = this.addr();
+    if manager_of(e, this).addr() == 0 {
+        return;
+    }
+    let manager = manager_of(e, this);
+    let palette = e.call(MANAGER_PALETTE, &args![manager]).u32();
+    if palette != 0 {
+        let cast = e
+            .call(DYNAMIC_CAST, &args![RTTI_PALETTE_KIND, palette])
+            .u32();
+        if cast != 0 {
+            e.call(PALETTE_OBJECT_RESET, &args![cast]);
+        }
+    }
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    let first = e
+        .call(GET_CONTROLLER, &args![root, RTTI_CONTROLLER_FIRST])
+        .u32();
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    let second = e
+        .call(GET_CONTROLLER, &args![root, RTTI_CONTROLLER_SECOND])
+        .u32();
+    if first != 0 {
+        let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+        e.call(REMOVE_CONTROLLER, &args![root, first]);
+    }
+    if second != 0 {
+        let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+        e.call(REMOVE_CONTROLLER, &args![root, second]);
+    }
+    let manager = manager_of(e, this);
+    ni_controller_manager_deactivate_all(e, manager, 0.0);
+    let mut largest = 0u32;
+    let mut index = 0u32;
+    loop {
+        let manager = manager_of(e, this);
+        if index >= fn_00495d00(e, manager) {
+            break;
+        }
+        let manager = manager_of(e, this);
+        let sequence = ni_controller_manager_get_sequence_at(e, manager, index);
+        if !sequence.is_null() && e.call(WORD_AT_C, &args![sequence]).u32() > largest {
+            largest = e.call(WORD_AT_C, &args![sequence]).u32();
+        }
+        index += 1;
+    }
+    index = 0;
+    loop {
+        let manager = manager_of(e, this);
+        if index >= fn_00495d00(e, manager) {
+            break;
+        }
+        let manager = manager_of(e, this);
+        let sequence = ni_controller_manager_get_sequence_at(e, manager, index).addr();
+        if sequence != 0 {
+            if retarget != 0 {
+                let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+                let controller = e
+                    .call(GET_CONTROLLER, &args![root, RTTI_CONTROLLER_FIRST])
+                    .u32();
+                if controller == 0 && largest != 0 {
+                    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+                    e.call(SEQUENCE_RETARGET, &args![sequence, root, largest]);
+                }
+                let name = object_name(e, sequence);
+                if e.mem.u16(name) != 0x5f5f {
+                    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+                    e.call(SEQUENCE_ATTACH, &args![sequence, root]);
+                }
+            } else {
+                e.call(SEQUENCE_PREPARE, &args![sequence]);
+                let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+                e.call(SEQUENCE_RETARGET, &args![sequence, root, largest]);
+            }
+        }
+        index += 1;
+    }
+    for slot in 0..8u32 {
+        let sequence = e.mem.u32(current_sequence_at(this, slot));
+        if sequence != 0 {
+            let manager = manager_of(e, this);
+            e.call(
+                MANAGER_ACTIVATE,
+                &args![manager, sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+            );
+        }
+    }
+}
+
+// Translated from 004994f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::BlendOut` (Xbox PDB): blends the group in `slot` out (0x14 is
+/// slot 1, 0x15 slot 4). Slot 1 resets `movementDelta` to the zero vector. The
+/// blend time is 0 without a sequence in the slot (or while `cSkipNextBlend`
+/// is set); otherwise the blend-time setting, or the group's byte
+/// (`fn_00495520`, in 1/30 s) when it is not 0, divided by the movement-scale
+/// setting. For an actor holding a drawn weapon (slot 4 or section 0x14, and
+/// not while the data handler's flag byte is set) the blend may be skipped
+/// (`do_clear` false) for slot 4: it clears slots 5 and 6 itself, with the
+/// blend time raised to 0.5 when the actor's anim action is 9 or 0x11, it is
+/// not the player and the time is below 0.5, depending on the group's move
+/// type and `fn_004997b0`. Then clears the slot (`ClearGroup(slot, time)`) and
+/// tells the actor to start the anim action of the sequence its process holds
+/// (type from the held sequence's group, 3 less for an iron sights action) when
+/// `flag` is set, the anim action is 2 and the process holds one, or action
+/// 0x11 otherwise.
+pub fn animation_blend_out(e: &mut Engine, this: Ptr<Animation>, slot: i32, flag: u8) {
+    let a = this.addr();
+    let mapped = match slot {
+        0x14 => 1,
+        0x15 => 4,
+        other => other,
+    };
+    let actor = e.get(this, Animation::pActorRef).addr();
+    if mapped == 1 {
+        for i in 0..3u32 {
+            let word = e.mem.u32(ZERO_VECTOR + 4 * i);
+            e.mem
+                .set_u32(a + Animation::movementDelta.off + 4 * i, word);
+        }
+    }
+    let mut time = 0.0f32;
+    let sequence = e.mem.u32(current_sequence_at(this, mapped as u32));
+    if sequence != 0 && e.get(this, Animation::cSkipNextBlend) as i8 == 0 {
+        time = float_setting(e, SETTING_BLEND_TIME);
+        let group = fn_0048f7f0(e, Ptr::new(sequence));
+        let speed = fn_00495520(e, group) as i8;
+        if speed != 0 {
+            time = (speed as f64 / double_constant(e, DOUBLE_THIRTY)) as f32;
+        }
+        let scale = float_setting(e, SETTING_MOVEMENT_SCALE);
+        time = (time as f64 / scale as f64) as f32;
+    }
+    let mut clear_slot = true;
+    let mut start_held = false;
+    let mut start_plain = false;
+    let drawn = e.get(this, Animation::pActorRef).addr() != 0
+        && (mapped == 4 || slot == 0x14)
+        && e.call(ACTOR_IS_WEAPON_DRAWN, &args![actor]).bool()
+        && {
+            let handler: u32 = e.global(DATA_HANDLER);
+            !e.call(DATA_HANDLER_FLAG, &args![handler]).bool()
+        };
+    if drawn {
+        let mut held = false;
+        if flag != 0 && e.call(ACTOR_GET_ANIM_ACTION, &args![actor]).i32() == 2 {
+            let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            if e.vcall(process, SLOT_PROCESS_HELD_OBJECT, &args![]).u32() != 0 {
+                held = true;
+            }
+        }
+        if held {
+            start_held = true;
+        } else {
+            start_plain = true;
+        }
+        if mapped == 4 {
+            clear_slot = false;
+            let player: u32 = e.global(PLAYER_SINGLETON);
+            if (e.call(ACTOR_GET_ANIM_ACTION, &args![actor]).i32() == 9
+                || e.call(ACTOR_GET_ANIM_ACTION, &args![actor]).i32() == 0x11)
+                && actor != player
+                && (time as f64) < double_constant(e, DOUBLE_HALF)
+            {
+                let group = fn_0048f7f0(e, Ptr::new(sequence));
+                let move_type = e.call(GROUP_MOVE_TYPE, &args![group]).i32();
+                let weapon_flag = fn_004997b0(e, Ptr::new(actor));
+                if move_type == 1 {
+                    if !weapon_flag {
+                        time = e.global::<f32>(FLOAT_HALF);
+                    }
+                } else if weapon_flag {
+                    time = e.global::<f32>(FLOAT_HALF);
+                }
+            }
+            animation_clear_group(e, this, 5, time);
+            animation_clear_group(e, this, 6, time);
+        }
+    }
+    if clear_slot {
+        animation_clear_group(e, this, slot, time);
+    }
+    if start_held {
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        let held = e.vcall(process, SLOT_PROCESS_HELD_OBJECT, &args![]).u32();
+        let group = fn_0048f7f0(e, Ptr::new(held));
+        let mut group_type = e.call(ANIM_GROUP_SEQUENCE_TYPE, &args![group]).u16() as u32;
+        if e.call(GROUP_TYPE_IS_IRON_SIGHTS, &args![group_type]).bool() {
+            group_type = group_type.wrapping_sub(3);
+        }
+        e.call(ACTOR_START_ANIMATION, &args![actor, group_type, this]);
+    } else if start_plain {
+        e.call(ACTOR_START_ANIMATION, &args![actor, 0x11u32, this]);
+    }
+}
+
+// Translated from 004997b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the actor's flag bits (`008846e0`) have 0x400 set and 0x800
+/// clear; the map has no name for it.
+pub fn fn_004997b0(e: &mut Engine, actor: Ptr) -> bool {
+    if e.call(ACTOR_FLAGS_WORD, &args![actor]).u32() & 0x400 != 0 {
+        return e.call(ACTOR_FLAGS_WORD, &args![actor]).u32() & 0x800 == 0;
+    }
+    false
+}
+
+// ---- Saving and loading the animation ---------------------------------------------------
+
+/// Whether group slot `index` of an animation holds a group (neither `0xff`
+/// nor `0xffff`).
+fn slot_in_use(e: &Engine, this: Ptr<Animation>, index: u32) -> bool {
+    let group = e.mem.u16(group_at(this, index));
+    group != 0xff && group != 0xffff
+}
+
+/// Whether `actor` (a `TESObjectREFR*`) answers its virtual slot 0x100 (the
+/// game keeps it as the owner of the idles it saves, or null).
+fn idle_owner(e: &mut Engine, actor: Ptr) -> Ptr {
+    if !actor.is_null() && e.vcall(actor.addr(), SLOT_HAS_PROCESS, &args![]).bool() {
+        actor
+    } else {
+        Ptr::NULL
+    }
+}
+
+/// The sequence the save and load functions look for on the owner: when the
+/// owner's sub-object (+0x88, virtual slot 0x34) answers, takes the
+/// controller manager's palette, asks it (virtual slot 0x8c) for the object of
+/// `fn_00499b70`, walks to the first child of that node, casts its controller
+/// to `RTTI_SAVED_CONTROLLER` and looks the sequence up there with
+/// `fn_00499b80`. Returns the controller object cast and the sequence, each 0
+/// when not found (the sequence is 0 whenever the controller is).
+fn saved_sequence(e: &mut Engine, this: Ptr<Animation>, owner: Ptr) -> (u32, u32) {
+    let sub = owner.addr() + ACTOR_SUB_OBJECT;
+    if e.vcall(sub, SLOT_SUB_OBJECT_CHECK, &args![]).u32() == 0 {
+        return (0, 0);
+    }
+    let manager = fn_00496940(e, this);
+    let palette = e.call(MANAGER_PALETTE, &args![manager]).u32();
+    let key = fn_00499b70(e);
+    let object = e.vcall(palette, 0x8c, &args![key]).u32();
+    if object == 0 {
+        return (0, 0);
+    }
+    let node = e.vcall(object, SLOT_NODE_AS_NODE, &args![]).u32();
+    if node == 0 {
+        return (0, 0);
+    }
+    let child = e.call(NODE_ARRAY_ELEMENT, &args![node, 0u32]).u32();
+    if child == 0 {
+        return (0, 0);
+    }
+    let controller = e.call(OBJECT_CONTROLLERS, &args![child]).u32();
+    let cast = e
+        .call(DYNAMIC_CAST, &args![RTTI_SAVED_CONTROLLER, controller])
+        .u32();
+    if cast == 0 {
+        return (0, 0);
+    }
+    let lookup = fn_00499b80(e);
+    let sequence = e.call(SEQUENCE_LOOKUP, &args![cast, lookup]).u32();
+    (cast, sequence)
+}
+
+// Translated from 004997f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation`'s save size for `actor` (the map has no name for it): 26 bytes
+/// (32 while the game saves in blocks), 17 more for each used group slot plus
+/// the save size of its sequence (`004efb10`), the save size of the current
+/// idle ([`fn_004974c0`], the queued one when there is one), 1 (2 from save
+/// version 0x40), and for an actor whose sub-object answers, the save size of
+/// the sequence found by `saved_sequence` plus 4. Logs the size with `Error`
+/// (source line 0x15b8) while the diagnostics setting is on.
+pub fn fn_004997f0(e: &mut Engine, this: Ptr<Animation>, actor: Ptr) -> u16 {
+    let mut size: u16 = 0;
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    if e.call(SAVE_USES_BLOCKS, &args![save]).bool() {
+        size = size.wrapping_add(4).wrapping_add(2);
+    }
+    for step in [4u16, 4, 0xc, 4, 1, 1] {
+        size = size.wrapping_add(step);
+    }
+    for index in 0..8u32 {
+        if slot_in_use(e, this, index) {
+            for step in [2u16, 4, 4, 2, 4, 1] {
+                size = size.wrapping_add(step);
+            }
+            let sequence = e.mem.u32(current_sequence_at(this, index));
+            if sequence != 0 {
+                let own = e.call(SEQUENCE_SAVE_SIZE, &args![sequence]).u16();
+                size = size.wrapping_add(own);
+            }
+        }
+    }
+    let owner = idle_owner(e, actor);
+    let idle = if ni_pointer_get(e, idle_field(this, Animation::spAnimIdleQueued.off)) != 0 {
+        ni_pointer_get(e, idle_field(this, Animation::spAnimIdleQueued.off))
+    } else {
+        ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off))
+    };
+    let own = fn_004974c0(e, owner.addr(), Ptr::new(idle));
+    size = size.wrapping_add(own);
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    size = size.wrapping_add(1);
+    if e.call(SAVE_BYTE_80, &args![save]).u8() >= 0x40 {
+        size = size.wrapping_add(1);
+    }
+    let (_, sequence) = saved_sequence(e, this, owner);
+    if sequence != 0 {
+        let own = e.call(SEQUENCE_SAVE_SIZE, &args![sequence]).u16();
+        size = size.wrapping_add(own).wrapping_add(4);
+    }
+    let diagnostics = e
+        .call(SETTING_BYTE_ADDRESS, &args![SAVE_DIAGNOSTICS_OBJECT])
+        .u32();
+    if e.mem.u8(diagnostics) != 0 {
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        let record = e.call(SAVE_RECORD_WRITTEN, &args![save]).u32();
+        let written = size as u32;
+        if record != 0 {
+            let form_id = e.mem.u32(record);
+            let kind = e.call(FORM_BY_ID, &args![form_id]).u32();
+            let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
+            let flags = e.mem.u32(record + 5);
+            e.call(
+                ERROR_LOG,
+                &args![
+                    LOG_SAVE_SIZE_FORM,
+                    written,
+                    form_id,
+                    name,
+                    flags,
+                    0x15b8u32,
+                    SOURCE_FILE
+                ],
+            );
+        } else {
+            e.call(
+                ERROR_LOG,
+                &args![LOG_SAVE_SIZE, written, 0x15b8u32, SOURCE_FILE],
+            );
+        }
+    }
+    size
+}
+
+// Translated from 00499b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The global at `011c61bc` (the key `saved_sequence` asks the palette for);
+/// the map has no name for it.
+pub fn fn_00499b70(e: &mut Engine) -> u32 {
+    e.global(SAVED_SEQUENCE_KEY_GLOBAL)
+}
+
+// Translated from 00499b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The global at `011c61c0` (the key `saved_sequence` looks the sequence up
+/// with); the map has no name for it.
+pub fn fn_00499b80(e: &mut Engine) -> u32 {
+    e.global(SAVED_SEQUENCE_LOOKUP_GLOBAL)
+}
+
+/// Logs how many bytes a save or load function wrote since `start`, when the
+/// diagnostics setting is on: with the record being written (its form ID,
+/// the form type's name and flags) when there is one. `line` is the source
+/// line the game names, `form_format` and `plain_format` the two formats.
+fn log_written_since(e: &mut Engine, start: u32, line: u32, form_format: u32, plain_format: u32) {
+    let diagnostics = e
+        .call(SETTING_BYTE_ADDRESS, &args![SAVE_DIAGNOSTICS_OBJECT])
+        .u32();
+    if e.mem.u8(diagnostics) == 0 {
+        return;
+    }
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    let end = e.call(SAVE_POSITION, &args![save]).u32();
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    let record = e.call(SAVE_RECORD_WRITTEN, &args![save]).u32();
+    let written = end.wrapping_sub(start);
+    if record != 0 {
+        let form_id = e.mem.u32(record);
+        let kind = e.call(FORM_BY_ID, &args![form_id]).u32();
+        let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
+        let flags = e.mem.u32(record + 5);
+        e.call(
+            ERROR_LOG,
+            &args![
+                form_format,
+                written,
+                form_id,
+                name,
+                flags,
+                line,
+                SOURCE_FILE
+            ],
+        );
+    } else {
+        e.call(ERROR_LOG, &args![plain_format, written, line, SOURCE_FILE]);
+    }
+}
+
+/// At the end of a save function: when the game saves in blocks, patches the
+/// 16-bit length at `block_start` (a block longer than 0xffff is logged) with
+/// the bytes written since.
+fn finish_save_block(e: &mut Engine, block_start: u32, line: u32) {
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    if e.call(SAVE_USES_BLOCKS, &args![save]).bool() {
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        let end = e.call(SAVE_POSITION, &args![save]).u32();
+        if end > block_start.wrapping_add(0xffff) {
+            e.call(LOG, &args![LOG_SAVE_BLOCK_TOO_BIG, SOURCE_FILE, line]);
+        }
+        e.mem
+            .set_u16(block_start, end.wrapping_sub(block_start) as u16);
+    }
+}
+
+// Translated from 00499b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SaveGame` (Xbox PDB): writes the animation to the save game
+/// for `actor`. Inside a save block when blocks are in use (the tag `"KOLB"`
+/// and a 16-bit length patched in at the end), then the speeds (+0x10c,
+/// +0x110), `movementDelta` (12 bytes), `m_fLooking`, `cSkipUpdate`, a mask
+/// byte of the used group slots and, for each used slot, its group, action,
+/// loop count, next group and next loops, a selector byte (the sequence's index
+/// in its map entry, 0xff without an entry, 0xfe with a null sequence, which is
+/// logged) and the sequence ([`SEQUENCE_SAVE`]). Then the queued idle (or the
+/// current one, [`fn_004975e0`]), `cSkipNextBlend`, and for an actor whose
+/// sub-object answers a flag byte (from save version 0x40), the controller
+/// sequence found by `saved_sequence` and a `float` of the actor's sub-object.
+/// Logs the size written (source line 0x1628) while the diagnostics setting is
+/// on.
+pub fn animation_save_game(e: &mut Engine, this: Ptr<Animation>, actor: Ptr) {
+    let a = this.addr();
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    let mut start = e.call(SAVE_POSITION, &args![save]).u32();
+    let diagnostics = e
+        .call(SETTING_BYTE_ADDRESS, &args![SAVE_DIAGNOSTICS_OBJECT])
+        .u32();
+    if e.mem.u8(diagnostics) != 0 {
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        start = e.call(SAVE_POSITION, &args![save]).u32();
+    }
+    let mut block_start = 0u32;
+    e.with_stack(0x10, |e, cells| {
+        let tag = cells.addr();
+        let length = cells.addr() + 4;
+        let mask = cells.addr() + 8;
+        let selector = cells.addr() + 9;
+        let flag = cells.addr() + 10;
+        let value = cells.addr() + 12;
+        e.mem.set_u16(length, 0);
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        if e.call(SAVE_USES_BLOCKS, &args![save]).bool() {
+            e.mem.set_u32(tag, SAVE_BLOCK_TAG);
+            e.call(SAVE_WRITE, &args![save, tag, 4u32]);
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            block_start = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(SAVE_WRITE, &args![save, length, 2u32]);
+        }
+        for (offset, size) in [
+            (0x10cu32, 4u32),
+            (0x110, 4),
+            (0x10, 0xc),
+            (0x48, 4),
+            (0xcc, 1),
+        ] {
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            e.call(SAVE_WRITE, &args![save, a + offset, size]);
+        }
+        e.mem.set_u8(mask, 0);
+        for index in 0..8u32 {
+            if slot_in_use(e, this, index) {
+                let bits = e.mem.u8(mask) | (1u8 << index);
+                e.mem.set_u8(mask, bits);
+            }
+        }
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        e.call(SAVE_WRITE, &args![save, mask, 1u32]);
+        for index in 0..8u32 {
+            if !slot_in_use(e, this, index) {
+                continue;
+            }
+            for (address, size) in [
+                (group_at(this, index), 2u32),
+                (action_at(this, index), 4),
+                (loop_count_at(this, index), 4),
+                (next_group_at(this, index), 2),
+                (next_loops_at(this, index), 4),
+            ] {
+                let save = e.global::<u32>(SAVE_GAME_OBJECT);
+                e.call(SAVE_WRITE, &args![save, address, size]);
+            }
+            e.mem.set_u8(selector, 0xff);
+            let key = e.mem.u16(group_at(this, index));
+            let found = sequence_map_get(e, this, key);
+            if let Some(entry) = found {
+                let sequence = e.mem.u32(current_sequence_at(this, index));
+                let chosen = e.vcall(entry, 0x18, &args![sequence]).u8();
+                e.mem.set_u8(selector, chosen);
+            }
+            if e.mem.u32(current_sequence_at(this, index)) == 0 {
+                let id = e.call(WORD_AT_C, &args![actor]).u32();
+                let name = e.vcall(actor.addr(), SLOT_FORM_TYPE_NAME, &args![]).u32();
+                let group = e.mem.u16(group_at(this, index)) as u32;
+                let action = e.mem.u32(action_at(this, index));
+                e.call(
+                    LOG,
+                    &args![LOG_SAVE_NULL_SEQUENCE, name, id, index, group, action],
+                );
+                e.mem.set_u8(selector, 0xfe);
+            }
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            e.call(SAVE_WRITE, &args![save, selector, 1u32]);
+            let sequence = e.mem.u32(current_sequence_at(this, index));
+            if sequence != 0 {
+                let time = e.get(this, Animation::time);
+                e.call(SEQUENCE_SAVE, &args![sequence, time]);
+            }
+        }
+        let owner = idle_owner(e, actor);
+        let queued = ni_pointer_get(e, idle_field(this, Animation::spAnimIdleQueued.off));
+        let idle = if queued != 0 {
+            queued
+        } else {
+            ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off))
+        };
+        let time = e.get(this, Animation::time);
+        fn_004975e0(e, owner.addr(), Ptr::new(idle), this, time);
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        e.call(
+            SAVE_WRITE,
+            &args![save, a + Animation::cSkipNextBlend.off, 1u32],
+        );
+        e.mem.set_u8(flag, 0);
+        let (_, sequence) = saved_sequence(e, this, owner);
+        if sequence != 0 {
+            e.mem.set_u8(flag, 1);
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            if e.call(SAVE_BYTE_80, &args![save]).u8() >= 0x40 {
+                e.call(SAVE_WRITE, &args![save, flag, 1u32]);
+            }
+            let time = e.get(this, Animation::time);
+            e.call(SEQUENCE_SAVE, &args![sequence, time]);
+            let sub = owner.addr() + ACTOR_SUB_OBJECT;
+            let object = e.call(WORD_AT_4, &args![sub]).u32();
+            e.mem.set_f32(value, 0.0);
+            if object != 0 {
+                let amount = e.call(FLOAT_AT_10, &args![object]).f32();
+                e.mem.set_f32(value, amount);
+            }
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            e.call(SAVE_WRITE, &args![save, value, 4u32]);
+        }
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        if e.call(SAVE_BYTE_80, &args![save]).u8() >= 0x40 && e.mem.u8(flag) == 0 {
+            e.call(SAVE_WRITE, &args![save, flag, 1u32]);
+        }
+    });
+    log_written_since(e, start, 0x1628, LOG_SAVE_GAME_FORM, LOG_SAVE_GAME);
+    finish_save_block(e, block_start, 0x1628);
+}
+
+// Translated from 0049a1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the animation back from the save game for `actor` (the mirror of
+/// [`animation_save_game`]; the map has no name for it). Checks the block tag
+/// and reads the block length when blocks are in use, reads the fields and the
+/// groups (each used slot is started again with [`animation_force_section`],
+/// with `cSkipNextBlend` set; a slot that does not come back is cleared and
+/// the bytes of its sequence skipped), then the current idle and, below save
+/// version 0x4c, the queued one ([`fn_004977e0`]). Clears the last slot's
+/// sequence when the current idle is loaded, reads `cSkipNextBlend` and, from
+/// the flag byte on, the controller sequence of `saved_sequence`: it is
+/// activated, loaded and a light fade set from it; without it the
+/// bytes are skipped. Then runs `UpdateBipOnly` and logs a block that was not
+/// read exactly (source lines 0x1630 and 0x16ac).
+pub fn fn_0049a1c0(e: &mut Engine, this: Ptr<Animation>, actor: Ptr) {
+    let a = this.addr();
+    let save = e.global::<u32>(SAVE_GAME_OBJECT);
+    let mut block_start = 0u32;
+    let mut block_length = 0u16;
+    e.with_stack(0x10, |e, cells| {
+        let tag = cells.addr();
+        let length = cells.addr() + 4;
+        let mask = cells.addr() + 6;
+        let selector = cells.addr() + 7;
+        let flag = cells.addr() + 8;
+        let value = cells.addr() + 12;
+        e.mem.set_u16(length, 0);
+        if e.call(SAVE_USES_BLOCKS, &args![save]).bool() {
+            e.call(SAVE_READ, &args![save, tag, 4u32]);
+            if e.mem.u32(tag) != SAVE_BLOCK_TAG {
+                let record = e.call(SAVE_RECORD_READ, &args![save]).u32();
+                if record != 0 {
+                    let record_id = e.mem.u32(record);
+                    let kind = e.call(FORM_BY_ID, &args![record_id]).u32();
+                    let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
+                    let flags = e.mem.u32(record + 5);
+                    let extra = e.mem.u8(record + 9) as u32;
+                    e.call(
+                        LOG,
+                        &args![
+                            LOG_LOAD_NO_BLOCK_FORM,
+                            SOURCE_FILE,
+                            0x1630u32,
+                            record_id,
+                            name,
+                            extra,
+                            flags
+                        ],
+                    );
+                } else {
+                    let version = e.call(SAVE_BYTE_80, &args![save]).u8() as u32;
+                    e.call(
+                        LOG,
+                        &args![LOG_LOAD_NO_BLOCK, SOURCE_FILE, 0x1630u32, version],
+                    );
+                }
+            }
+            block_start = e.call(SAVE_POSITION, &args![save]).u32();
+            e.call(SAVE_READ, &args![save, length, 2u32]);
+        }
+        let owner = idle_owner(e, actor);
+        for (offset, size) in [
+            (0x10cu32, 4u32),
+            (0x110, 4),
+            (0x10, 0xc),
+            (0x48, 4),
+            (0xcc, 1),
+        ] {
+            e.call(SAVE_READ, &args![save, a + offset, size]);
+        }
+        e.call(SAVE_READ, &args![save, mask, 1u32]);
+        for index in 0..8u32 {
+            if (e.mem.u8(mask) as i8 as i32) & (1 << index) == 0 {
+                continue;
+            }
+            for (address, size) in [
+                (group_at(this, index), 2u32),
+                (action_at(this, index), 4),
+                (loop_count_at(this, index), 4),
+                (next_group_at(this, index), 2),
+                (next_loops_at(this, index), 4),
+            ] {
+                e.call(SAVE_READ, &args![save, address, size]);
+            }
+            e.call(SAVE_READ, &args![save, selector, 1u32]);
+            e.mem.set_u32(current_sequence_at(this, index), 0);
+            if e.mem.u8(selector) as i8 != -2 {
+                fn_004974a0(e, this);
+                let group = e.mem.u16(group_at(this, index));
+                let action = e.mem.i32(action_at(this, index));
+                let time = e.get(this, Animation::time);
+                let chosen = e.mem.u8(selector);
+                animation_force_section(e, this, index as i32, group, action, time, chosen);
+                let sequence = e.mem.u32(current_sequence_at(this, index));
+                if sequence == 0 {
+                    let skip = e.call(SEQUENCE_SAVE_BASE_SIZE, &args![]).u16() as u32;
+                    e.call(SAVE_SKIP, &args![save, skip]);
+                    animation_clear_group(e, this, index as i32, 0.0);
+                } else {
+                    let time = e.get(this, Animation::time);
+                    e.call(SEQUENCE_LOAD, &args![sequence, time]);
+                }
+            }
+        }
+        let time = e.get(this, Animation::time);
+        let idle = fn_004977e0(e, owner, this, time);
+        e.call(
+            NI_POINTER_SET,
+            &args![idle_field(this, Animation::spAnimIdle.off), idle],
+        );
+        if e.call(SAVE_BYTE_80, &args![save]).u8() < 0x4c {
+            let time = e.get(this, Animation::time);
+            let idle = fn_004977e0(e, owner, this, time);
+            e.call(
+                NI_POINTER_SET,
+                &args![idle_field(this, Animation::spAnimIdleQueued.off), idle],
+            );
+        }
+        if ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off)) != 0 {
+            let idle = idle_in(e, this, Animation::spAnimIdle.off);
+            if idle_state(e, idle) == 1 {
+                e.mem.set_u32(current_sequence_at(this, 7), 0);
+            }
+        }
+        e.call(
+            SAVE_READ,
+            &args![save, a + Animation::cSkipNextBlend.off, 1u32],
+        );
+        e.mem.set_u8(flag, 1);
+        if e.call(SAVE_BYTE_80, &args![save]).u8() >= 0x40 {
+            e.call(SAVE_READ, &args![save, flag, 1u32]);
+        }
+        if e.mem.u8(flag) != 0 {
+            let mut found = false;
+            let (controller, sequence) = saved_sequence(e, this, owner);
+            if sequence != 0 {
+                ni_controller_manager_deactivate_all(e, Ptr::new(controller), 0.0);
+                e.call(
+                    MANAGER_ACTIVATE,
+                    &args![controller, sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+                );
+                e.call(MANAGER_SET_FLAG, &args![controller, 1u32]);
+                let time = e.get(this, Animation::time);
+                e.call(SEQUENCE_LOAD, &args![sequence, time]);
+                e.call(SAVE_READ, &args![save, value, 4u32]);
+                let sub = owner.addr() + ACTOR_SUB_OBJECT;
+                let object = e.call(WORD_AT_4, &args![sub]).u32();
+                if object != 0 {
+                    let end = e.call(SEQUENCE_END_TIME, &args![sequence]).f64();
+                    let fade = (end * double_constant(e, DOUBLE_THREE_QUARTERS)) as f32;
+                    e.call(LIGHT_FADE, &args![object, 1u32, fade]);
+                    let amount = e.mem.f32(value);
+                    e.call(SET_FLOAT_AT_10, &args![object, amount]);
+                }
+                found = true;
+            }
+            if e.call(SAVE_BYTE_80, &args![save]).u8() >= 0x40 && !found {
+                let skip = e.call(SEQUENCE_SAVE_BASE_SIZE, &args![]).u16() as u32;
+                e.call(SAVE_SKIP, &args![save, skip + 4]);
+            }
+        }
+        let time = e.get(this, Animation::time);
+        animation_update_bip_only(e, this, time, Ptr::new(a + 0x1c), 1);
+        block_length = e.mem.u16(length);
+    });
+    if e.call(SAVE_USES_BLOCKS, &args![save]).bool() {
+        let end = e.call(SAVE_POSITION, &args![save]).u32();
+        let record = e.call(SAVE_RECORD_READ, &args![save]).u32();
+        let expected = (block_length as u32).wrapping_add(block_start);
+        if record != 0 {
+            let record_id = e.mem.u32(record);
+            let kind = e.call(FORM_BY_ID, &args![record_id]).u32();
+            let flags = e.mem.u32(record + 5);
+            let extra = e.mem.u8(record + 9) as u32;
+            if expected < end {
+                let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
+                e.call(
+                    LOG,
+                    &args![
+                        LOG_LOAD_LONG_FORM,
+                        end.wrapping_sub(expected),
+                        SOURCE_FILE,
+                        0x16acu32,
+                        record_id,
+                        name,
+                        extra,
+                        flags
+                    ],
+                );
+            } else if end < expected {
+                let name = e.vcall(kind, SLOT_FORM_TYPE_NAME, &args![]).u32();
+                e.call(
+                    LOG,
+                    &args![
+                        LOG_LOAD_SHORT_FORM,
+                        expected.wrapping_sub(end),
+                        SOURCE_FILE,
+                        0x16acu32,
+                        record_id,
+                        name,
+                        extra,
+                        flags
+                    ],
+                );
+            }
+        } else if expected < end {
+            let version = e.call(SAVE_BYTE_80, &args![save]).u8() as u32;
+            e.call(
+                LOG,
+                &args![
+                    LOG_LOAD_LONG,
+                    end.wrapping_sub(expected),
+                    SOURCE_FILE,
+                    0x16acu32,
+                    version
+                ],
+            );
+        } else if end < expected {
+            let version = e.call(SAVE_BYTE_80, &args![save]).u8() as u32;
+            e.call(
+                LOG,
+                &args![
+                    LOG_LOAD_SHORT,
+                    expected.wrapping_sub(end),
+                    SOURCE_FILE,
+                    0x16acu32,
+                    version
+                ],
+            );
+        }
+    }
+}
+
+/// Frees the special idles (current and queued) and empties the last slot, the
+/// way `fn_0049a920` and `fn_0049bb70` begin: `ClearGroup(0x14, 0)`,
+/// [`fn_00496280`], frees and empties both idle fields and clears slot 7.
+fn clear_idles_and_slot_7(e: &mut Engine, this: Ptr<Animation>) {
+    animation_clear_group(e, this, 0x14, 0.0);
+    fn_00496280(e, this);
+    for offset in [Animation::spAnimIdle.off, Animation::spAnimIdleQueued.off] {
+        if idle_in(e, this, offset).addr() != 0 {
+            animation_anim_idle_free(e, this, Ptr::new(idle_field(this, offset)));
+        }
+        e.call(NI_POINTER_SET, &args![idle_field(this, offset), 0u32]);
+    }
+    e.mem.set_u32(current_sequence_at(this, 7), 0);
+    animation_clear_group(e, this, 7, 0.0);
+    if manager_of(e, this).addr() != 0 {
+        let manager = manager_of(e, this);
+        ni_controller_manager_deactivate_all(e, manager, 0.0);
+    }
+}
+
+// Translated from 0049a920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the animation (the map has no name for it): clears the groups and
+/// idles ([`clear_idles_and_slot_7`] steps), then clears the controller
+/// interpolators of the animation root (`pAnimRoot`, read through
+/// `005585e0`), the blend interpolators and reloads the targets with the flag
+/// set.
+pub fn fn_0049a920(e: &mut Engine, this: Ptr<Animation>) {
+    clear_idles_and_slot_7(e, this);
+    let root = e.call(KF_MODEL_ANIM_GROUP, &args![this]).ptr::<()>();
+    animation_clear_controllers_interpolators(e, root);
+    animation_clear_blend_interps(e, this);
+    animation_reload_targets(e, this, 1);
+}
+
+// Translated from 0049aa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of bytes `SaveAnimation` writes for `actor` and `animation`
+/// (`__cdecl`; the map has no name for it): 2, plus [`fn_004997f0`] when there
+/// is an animation and the actor's virtual slot 0x22c (argument 0) says no.
+pub fn fn_0049aa20(e: &mut Engine, actor: Ptr, animation: Ptr<Animation>) -> u16 {
+    let mut size: u16 = 2;
+    if !animation.is_null()
+        && !e
+            .vcall(actor.addr(), SLOT_ACTOR_FLAG_22C, &args![0u32])
+            .bool()
+    {
+        let own = fn_004997f0(e, animation, actor);
+        size = size.wrapping_add(own);
+    }
+    size
+}
+
+// Translated from 0049aa80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SaveAnimation` (Xbox PDB), `__cdecl(actor, animation)`: writes
+/// the 16-bit save size ([`fn_004997f0`], 0 without an animation or when the
+/// actor's virtual slot 0x22c says yes) and then the animation
+/// ([`animation_save_game`]).
+pub fn animation_save_animation(e: &mut Engine, actor: Ptr, animation: Ptr<Animation>) {
+    let mut size: u16 = 0;
+    if !animation.is_null()
+        && !e
+            .vcall(actor.addr(), SLOT_ACTOR_FLAG_22C, &args![0u32])
+            .bool()
+    {
+        size = fn_004997f0(e, animation, actor);
+    }
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u16(cell.addr(), size);
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        e.call(SAVE_WRITE, &args![save, cell, 2u32]);
+    });
+    if !animation.is_null()
+        && !e
+            .vcall(actor.addr(), SLOT_ACTOR_FLAG_22C, &args![0u32])
+            .bool()
+    {
+        animation_save_game(e, animation, actor);
+    }
+}
+
+// Translated from 0049ab00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads a 16-bit length from the save game (`__cdecl`) and, when it is not 0,
+/// has the save game object consume that many bytes into `destination`
+/// (`0085f010`); the map has no name for it.
+pub fn fn_0049ab00(e: &mut Engine, destination: Ptr) {
+    e.with_stack(4, |e, cell| {
+        let save = e.global::<u32>(SAVE_GAME_OBJECT);
+        e.call(SAVE_READ, &args![save, cell, 2u32]);
+        let length = e.mem.u16(cell.addr());
+        if length != 0 {
+            let save = e.global::<u32>(SAVE_GAME_OBJECT);
+            e.call(SAVE_GAME_CONSUME, &args![save, destination, length as u32]);
+        }
+    });
+}
+
+// Translated from 0049ab40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the animation into a `BGSSaveGameBuffer` (the map has no name for
+/// it): the speeds, `movementDelta`, `m_fLooking`, `cSkipUpdate`, `time`,
+/// `sQueuedReloadGroup`, the replay delay list as a variable-sized value (a
+/// form ID and a 4-byte delay each), the queued idle's (or the current one's)
+/// form ID and, for an idle form, its state as a variable-sized value
+/// ([`fn_00497bc0`]), a mask of the group slots to save (all used slots except
+/// the one that holds the idle's sequence when an idle is queued), and for
+/// each of those slots its group, action, next group, loop count, next loops,
+/// the selector byte (as in [`animation_save_game`], 0xfe for a null
+/// sequence, without the log) and the sequence (`004efc90`). Ends with
+/// `cSkipNextBlend`, the 16-bit value of the actor's process (virtual slot
+/// 0x3e4) and the slot numbers of the sequence its process holds and of the
+/// idle's sequence (0xff for none).
+pub fn fn_0049ab40(e: &mut Engine, this: Ptr<Animation>, buffer: Ptr) {
+    let a = this.addr();
+    let owner = e
+        .vcall(buffer.addr(), SLOT_SAVE_BUFFER_OWNER, &args![])
+        .u32();
+    for (offset, size) in [
+        (0x10cu32, 4u32),
+        (0x110, 4),
+        (0x10, 0xc),
+        (0x48, 4),
+        (0xcc, 1),
+        (0xd4, 4),
+        (0x122, 2),
+    ] {
+        e.call(SAVE_BUFFER_FIELD, &args![buffer, a + offset, size, 0u32]);
+    }
+    let mut count = 0u32;
+    let start = e.call(SAVE_BUFFER_START_VARIABLE, &args![buffer]).u32();
+    let mut node = a + Animation::replayDelayList.off;
+    while node != 0 {
+        let cell = e.call(RECORD_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(cell);
+        if item != 0 {
+            let form = e.mem.u32(item);
+            e.call(SAVE_BUFFER_FORM_ID, &args![buffer, form, 0u32]);
+            e.call(SAVE_BUFFER_FIELD, &args![buffer, item + 4, 4u32, 0u32]);
+            count += 1;
+        }
+        node = e.call(WORD_AT_4, &args![node]).u32();
+    }
+    e.call(SAVE_BUFFER_END_VARIABLE, &args![buffer, count, start]);
+    let queued = idle_field(this, Animation::spAnimIdleQueued.off);
+    let idle_ref = if ni_pointer_get(e, queued) != 0 {
+        queued
+    } else {
+        idle_field(this, Animation::spAnimIdle.off)
+    };
+    let idle = ni_pointer_get(e, idle_ref);
+    let form = if idle != 0 {
+        e.call(IDLE_FORM_OF, &args![idle]).u32()
+    } else {
+        0
+    };
+    e.call(SAVE_BUFFER_FORM_ID, &args![buffer, form, 0u32]);
+    if idle != 0 && e.call(IDLE_FORM_OF, &args![idle]).u32() != 0 {
+        let start = e.call(SAVE_BUFFER_START_VARIABLE, &args![buffer]).u32();
+        let before = e.call(WORD_AT_C, &args![buffer]).u32();
+        fn_00497bc0(e, Ptr::new(idle), buffer, a);
+        let after = e.call(WORD_AT_C, &args![buffer]).u32();
+        e.call(
+            SAVE_BUFFER_END_VARIABLE,
+            &args![buffer, after.wrapping_sub(before), start],
+        );
+    }
+    let mut idle_sequence = 0u32;
+    if ni_pointer_get(e, queued) != 0
+        && ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off)) != 0
+    {
+        let current = ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off));
+        idle_sequence = fn_00490e40(e, Ptr::new(current)).addr();
+    }
+    let included = |e: &Engine, index: u32| {
+        !(idle_sequence != 0 && e.mem.u32(current_sequence_at(this, index)) == idle_sequence)
+            && slot_in_use(e, this, index)
+    };
+    e.with_stack(0x10, |e, cells| {
+        let mask = cells.addr();
+        let selector = cells.addr() + 1;
+        let held_slot = cells.addr() + 2;
+        let idle_slot = cells.addr() + 3;
+        let phase = cells.addr() + 4;
+        e.mem.set_u8(mask, 0);
+        for index in 0..8u32 {
+            if included(e, index) {
+                let bits = e.mem.u8(mask) | (1u8 << index);
+                e.mem.set_u8(mask, bits);
+            }
+        }
+        e.call(SAVE_BUFFER_FIELD, &args![buffer, mask, 1u32, 0u32]);
+        e.mem.set_u8(held_slot, 0xff);
+        let process = e.call(ACTOR_PROCESS, &args![owner]).u32();
+        let word = e.vcall(process, SLOT_PROCESS_HELD_PHASE, &args![]).u16();
+        e.mem.set_u16(phase, word);
+        let process = e.call(ACTOR_PROCESS, &args![owner]).u32();
+        let held = e.vcall(process, SLOT_PROCESS_HELD_OBJECT, &args![]).u32();
+        e.mem.set_u8(idle_slot, 0xff);
+        let own_sequence = if idle != 0 {
+            fn_00490e40(e, Ptr::new(idle)).addr()
+        } else {
+            0
+        };
+        for index in 0..8u32 {
+            if !included(e, index) {
+                continue;
+            }
+            for (address, size) in [
+                (group_at(this, index), 2u32),
+                (action_at(this, index), 4),
+                (next_group_at(this, index), 2),
+                (loop_count_at(this, index), 4),
+                (next_loops_at(this, index), 4),
+            ] {
+                e.call(SAVE_BUFFER_FIELD, &args![buffer, address, size, 0u32]);
+            }
+            e.mem.set_u8(selector, 0xff);
+            let key = e.mem.u16(group_at(this, index));
+            if let Some(entry) = sequence_map_get(e, this, key) {
+                let sequence = e.mem.u32(current_sequence_at(this, index));
+                let chosen = e.vcall(entry, 0x18, &args![sequence]).u8();
+                e.mem.set_u8(selector, chosen);
+            }
+            let sequence = e.mem.u32(current_sequence_at(this, index));
+            if sequence == 0 {
+                e.mem.set_u8(selector, 0xfe);
+            }
+            e.call(SAVE_BUFFER_FIELD, &args![buffer, selector, 1u32, 0u32]);
+            if sequence != 0 {
+                let time = e.get(this, Animation::time);
+                e.call(SEQUENCE_SAVE_TO_BUFFER, &args![sequence, buffer, time]);
+            }
+            if sequence == held {
+                e.mem.set_u8(held_slot, index as u8);
+            }
+            if sequence == own_sequence {
+                e.mem.set_u8(idle_slot, index as u8);
+            }
+        }
+        e.call(
+            SAVE_BUFFER_FIELD,
+            &args![buffer, a + Animation::cSkipNextBlend.off, 1u32, 0u32],
+        );
+        e.call(SAVE_BUFFER_FIELD, &args![buffer, phase, 2u32, 0u32]);
+        e.call(SAVE_BUFFER_FIELD, &args![buffer, held_slot, 1u32, 0u32]);
+        e.call(SAVE_BUFFER_FIELD, &args![buffer, idle_slot, 1u32, 0u32]);
+    });
+}
+
+// Translated from 0049b050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the animation back from a `BGSLoadGameBuffer` (the mirror of
+/// [`fn_0049ab40`]; the map has no name for it). Without an animation root it
+/// does nothing. Adds the queued models, then has the actor's process
+/// (virtual slot 0x4dc) take the animation, plays the idle-start group
+/// 0xe0 in section 0x14 for the actors whose virtual slots 0x22c or 0x2e8
+/// say so, hands the player's or the actor's biped to the process (slot 0x1cc),
+/// notifies it (slots 0x1d8 and 0x61c), and updates the root. Clears the
+/// groups, reads the fields, the replay delays (each a form cast to `TESIdleForm`
+/// and a 4-byte delay), the idle (a new idle in section 7 whose state is read by
+/// [`fn_00497c10`]; unknown forms are skipped), then the used slots (a slot
+/// that does not come back is loaded into a throw-away
+/// `BSAnimGroupSequence` and cleared), `cSkipNextBlend`, the phase and the
+/// slot numbers of the held sequence and of the idle's sequence. Finally updates
+/// the bip nodes.
+pub fn fn_0049b050(e: &mut Engine, this: Ptr<Animation>, buffer: Ptr) {
+    let a = this.addr();
+    if ni_pointer_get(e, a + Animation::pAnimRoot.off) == 0 {
+        return;
+    }
+    let actor = e
+        .vcall(buffer.addr(), SLOT_LOAD_BUFFER_OWNER, &args![])
+        .u32();
+    let list = a + Animation::kfModelList.off;
+    while !e.call(SIMPLE_LIST_IS_EMPTY, &args![list]).bool() {
+        let cell = e.call(RECORD_ADDRESS, &args![list]).u32();
+        let model = e.mem.u32(cell);
+        animation_add_animation(e, this, model, false);
+        e.call(KF_MODEL_RELEASE, &args![model]);
+        e.call(SIMPLE_LIST_POP_FRONT, &args![list]);
+    }
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(process, SLOT_PROCESS_RELOAD, &args![actor, this]);
+    if e.vcall(actor, SLOT_ACTOR_FLAG_22C, &args![0u32]).bool()
+        || e.vcall(actor, SLOT_ACTOR_FLAG_2E8, &args![]).bool()
+    {
+        animation_force_section(e, this, 0x14, 0xe0, -1, 0.0, 0xff);
+    }
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    let byte = e.vcall(process, SLOT_PROCESS_BYTE, &args![]).u8();
+    fn_004974a0(e, this);
+    let player: u32 = e.global(PLAYER_SINGLETON);
+    if actor == player {
+        if e.call(PLAYER_GET_ANIMATION, &args![player, 1u32]).u32() == a {
+            let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            let biped = e
+                .call(PLAYER_BIPED, &args![player, 1u32, this, player])
+                .u32();
+            e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+        } else {
+            let process = e.call(ACTOR_PROCESS, &args![player]).u32();
+            let biped = e
+                .call(PLAYER_BIPED, &args![player, 0u32, this, player])
+                .u32();
+            e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+        }
+    } else {
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        let biped = e.vcall(actor, SLOT_ACTOR_BIPED, &args![this, actor]).u32();
+        e.vcall(process, SLOT_PROCESS_SET_BIPED, &args![byte, biped]);
+    }
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(process, SLOT_PROCESS_NOTIFY, &args![actor]);
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(process, SLOT_PROCESS_REFRESH, &args![]);
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    e.vcall(process, SLOT_PROCESS_SET_HELD, &args![0xffff_ffffu32, 0u32]);
+    for index in 0..8u32 {
+        let sequence = e.mem.u32(current_sequence_at(this, index));
+        if sequence != 0 {
+            let begin = e.call(FLOAT_AT_48, &args![sequence]).f32();
+            let end = e.call(SEQUENCE_END_TIME, &args![sequence]).f64();
+            let total = (end + begin as f64) as f32;
+            e.call(SET_FLOAT_AT_48, &args![sequence, total]);
+        }
+    }
+    let time = e.get(this, Animation::time);
+    animation_update_bip_only(e, this, time, Ptr::new(a + 0x1c), 1);
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    let time = e.get(this, Animation::time);
+    e.call(BIP_UPDATE_ALL_BUT_BIP, &args![root, time]);
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    let collision = e.call(FIND_NEXT_COLLISION_OBJECT, &args![root]).u32();
+    let flagged = if collision != 0 {
+        e.call(COLLISION_OBJECT_FLAGGED, &args![collision]).u8()
+    } else {
+        0
+    };
+    if flagged != 0 {
+        let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+        e.call(SET_CO_USE_VEL, &args![0u32, root]);
+    }
+    animation_update_scene_graph_no_controller(e, this);
+    if flagged != 0 {
+        let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+        e.call(SET_CO_USE_VEL, &args![flagged as u32, root]);
+    }
+    animation_clear_group(e, this, 0x14, 0.0);
+    fn_00496280(e, this);
+    if manager_of(e, this).addr() != 0 {
+        let manager = manager_of(e, this);
+        ni_controller_manager_deactivate_all(e, manager, 0.0);
+    }
+    for (offset, size) in [
+        (0x10cu32, 4u32),
+        (0x110, 4),
+        (0x10, 0xc),
+        (0x48, 4),
+        (0xcc, 1),
+        (0xd4, 4),
+        (0x122, 2),
+    ] {
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, a + offset, size]);
+    }
+    let count = e.call(LOAD_BUFFER_VARIABLE, &args![buffer]).u32();
+    for _ in 0..count {
+        let item = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let id = e.call(LOAD_BUFFER_FORM_ID, &args![buffer]).u32();
+        let form = e.call(FORM_BY_ID, &args![id]).u32();
+        let idle_form = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![
+                    form,
+                    0u32,
+                    TYPE_DESCRIPTOR_FORM,
+                    TYPE_DESCRIPTOR_IDLE_FORM,
+                    0u32
+                ],
+            )
+            .u32();
+        e.mem.set_u32(item, idle_form);
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, item + 4, 4u32]);
+        e.with_stack(4, |e, cell| {
+            e.mem.set_u32(cell.addr(), item);
+            e.call(
+                REPLAY_LIST_PUSH,
+                &args![a + Animation::replayDelayList.off, cell],
+            );
+        });
+    }
+    // The idle: a form ID, then its state.
+    let mut id = 0u32;
+    let found = e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), 0);
+        let found = e.call(LOAD_BUFFER_FORM_ID_FOUND, &args![buffer, cell]).u8();
+        id = e.mem.u32(cell.addr());
+        found
+    });
+    if found != 0 {
+        let length = e.call(LOAD_BUFFER_VARIABLE, &args![buffer]).u32();
+        fn_0049bb50(e, buffer, length);
+    } else if id != 0 {
+        let form = e.call(FORM_BY_ID, &args![id]).u32();
+        let idle_form = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![
+                    form,
+                    0u32,
+                    TYPE_DESCRIPTOR_FORM,
+                    TYPE_DESCRIPTOR_IDLE_FORM,
+                    0u32
+                ],
+            )
+            .u32();
+        if idle_form == 0 {
+            let length = e.call(LOAD_BUFFER_VARIABLE, &args![buffer]).u32();
+            fn_0049bb50(e, buffer, length);
+        } else {
+            e.call(LOAD_BUFFER_VARIABLE, &args![buffer]);
+            let block = e.call(NI_OPERATOR_NEW, &args![0x38u32]).u32();
+            let mut idle = Ptr::<AnimIdle>::NULL;
+            if block != 0 {
+                idle = anim_idle_constructor(
+                    e,
+                    Ptr::new(block),
+                    Ptr::new(idle_form),
+                    7,
+                    1,
+                    Ptr::new(actor),
+                    1,
+                    Ptr::NULL,
+                );
+            }
+            e.call(
+                NI_POINTER_SET,
+                &args![idle_field(this, Animation::spAnimIdle.off), idle],
+            );
+            let idle = idle_in(e, this, Animation::spAnimIdle.off);
+            fn_00497c10(e, idle, buffer, this);
+        }
+    }
+    e.with_stack(0x10, |e, cells| {
+        let mask = cells.addr();
+        let selector = cells.addr() + 1;
+        let phase = cells.addr() + 2;
+        let held_slot = cells.addr() + 4;
+        let idle_slot = cells.addr() + 5;
+        e.mem.set_u8(mask, 0);
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, mask, 1u32]);
+        for index in 0..8u32 {
+            if (e.mem.u8(mask) as i8 as i32) & (1 << index) == 0 {
+                continue;
+            }
+            for (address, size) in [
+                (group_at(this, index), 2u32),
+                (action_at(this, index), 4),
+                (next_group_at(this, index), 2),
+                (loop_count_at(this, index), 4),
+                (next_loops_at(this, index), 4),
+            ] {
+                e.call(LOAD_BUFFER_FIELD, &args![buffer, address, size]);
+            }
+            e.mem.set_u32(current_sequence_at(this, index), 0);
+            e.mem.set_u8(selector, 0xff);
+            e.call(LOAD_BUFFER_FIELD, &args![buffer, selector, 1u32]);
+            if e.mem.u8(selector) as i8 != -2 {
+                fn_004974a0(e, this);
+                let group = e.mem.u16(group_at(this, index));
+                let action = e.mem.i32(action_at(this, index));
+                let time = e.get(this, Animation::time);
+                let chosen = e.mem.u8(selector);
+                animation_force_section(e, this, index as i32, group, action, time, chosen);
+                let sequence = e.mem.u32(current_sequence_at(this, index));
+                let time = e.get(this, Animation::time);
+                if sequence != 0 {
+                    e.call(SEQUENCE_LOAD_FROM_BUFFER, &args![sequence, buffer, time]);
+                } else {
+                    e.with_stack(ANIM_GROUP_SEQUENCE_SIZE, |e, temporary| {
+                        fn_0049baa0(e, temporary);
+                        e.call(SEQUENCE_LOAD_FROM_BUFFER, &args![temporary, buffer, time]);
+                        animation_clear_group(e, this, index as i32, 0.0);
+                        e.call(SEQUENCE_DESTRUCT, &args![temporary]);
+                    });
+                }
+            }
+        }
+        e.call(
+            LOAD_BUFFER_FIELD,
+            &args![buffer, a + Animation::cSkipNextBlend.off, 1u32],
+        );
+        e.mem.set_u16(phase, 0xffff);
+        e.mem.set_u8(held_slot, 0xff);
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, phase, 2u32]);
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, held_slot, 1u32]);
+        let held_index = e.mem.u8(held_slot) as i8;
+        if held_index != -1 {
+            let held = e.mem.u32(current_sequence_at(this, held_index as u32));
+            if held != 0 {
+                let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+                let phase_value = e.mem.u16(phase) as i16 as i32;
+                e.vcall(process, SLOT_PROCESS_SET_HELD, &args![phase_value, held]);
+            }
+        }
+        e.mem.set_u8(idle_slot, 0xff);
+        e.call(LOAD_BUFFER_FIELD, &args![buffer, idle_slot, 1u32]);
+        if ni_pointer_get(e, idle_field(this, Animation::spAnimIdle.off)) != 0 {
+            let idle_index = e.mem.u8(idle_slot) as i8;
+            if idle_index != -1 {
+                let sequence = e.mem.u32(current_sequence_at(this, idle_index as u32));
+                let idle = idle_in(e, this, Animation::spAnimIdle.off);
+                fn_004970e0(e, idle, Ptr::new(sequence));
+            }
+            let idle = idle_in(e, this, Animation::spAnimIdle.off);
+            if idle_state(e, idle) == 1 {
+                fn_004974a0(e, this);
+                fn_00498290(e, this);
+            }
+        }
+    });
+    let time = e.get(this, Animation::time);
+    animation_update_bip_only(e, this, time, Ptr::new(a + 0x1c), 1);
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    let time = e.get(this, Animation::time);
+    e.call(BIP_UPDATE_ALL_BUT_BIP, &args![root, time]);
+}
+
+// ---- BSAnimGroupSequence and small helpers ---------------------------------------------
+
+// Translated from 0049baa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAnimGroupSequence`'s default constructor (the map has no name for it):
+/// the `NiControllerSequence` base constructor (`00a316a0`), the
+/// `BSAnimGroupSequence` vtable, and an empty `spAnimGroup` (+0x74). Returns
+/// `this`. The compiler's exception frame is not translated.
+pub fn fn_0049baa0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(SEQUENCE_BASE_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), VTABLE_ANIM_GROUP_SEQUENCE);
+    e.call(
+        NI_POINTER_INIT,
+        &args![this.addr() + BSAnimGroupSequence::spAnimGroup.off, 0u32],
+    );
+    this
+}
+
+// Translated from 0049bb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAnimGroupSequence::GetRTTI` (Xbox PDB): the class's `NiRTTI`
+/// (`RTTI_ANIM_GROUP_SEQUENCE`).
+pub fn bs_anim_group_sequence_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    RTTI_ANIM_GROUP_SEQUENCE
+}
+
+// Translated from 0049bb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSAnimGroupSequence::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor (`004eeb00`), then `NiMemObject::operator delete(this, 0x78)`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn bs_anim_group_sequence_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(SEQUENCE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(NI_OPERATOR_DELETE, &args![this, ANIM_GROUP_SEQUENCE_SIZE]);
+    }
+    this
+}
+
+// Translated from 0049bb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `count` to the word at +0xc of a load game buffer (it skips `count`
+/// bytes; the linker folded the body with `ExternalStatistics::
+/// IncrementDequeuedTaskCounter`, whose name the map gives it).
+pub fn fn_0049bb50(e: &mut Engine, this: Ptr, count: u32) {
+    let field = this.addr() + 0xc;
+    let value = e.mem.u32(field).wrapping_add(count);
+    e.mem.set_u32(field, value);
+}
+
+// Translated from 0049bb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the animation (the map has no name for it, the declared word after
+/// `this` is never read): `cSkipNextBlend` cleared, then the groups and idles
+/// ([`clear_idles_and_slot_7`] steps), and the replay delays freed and the list
+/// emptied.
+pub fn fn_0049bb70(e: &mut Engine, this: Ptr<Animation>, _unused_0: u32) {
+    e.set(this, Animation::cSkipNextBlend, 0u8);
+    clear_idles_and_slot_7(e, this);
+    let list = this.addr() + Animation::replayDelayList.off;
+    let mut node = list;
+    while node != 0 {
+        let cell = e.call(RECORD_ADDRESS, &args![node]).u32();
+        let item = e.mem.u32(cell);
+        e.call(OPERATOR_DELETE, &args![item]);
+        node = e.call(WORD_AT_4, &args![node]).u32();
+    }
+    e.call(SIMPLE_LIST_CLEAR, &args![list]);
+}
+
+// Translated from 0049bca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::UpdateBipOnly` (Xbox PDB), `(time, out, _)`: moves the
+/// accumulation root to `AccumRootTranslate` (+0x1c), updates the bip nodes
+/// of the animation root (`BSBipNode::UpdateBipOnly(time, accumRoot)`) and,
+/// with an accumulation root, copies its world translation (three words) to
+/// `out` when `out` is not null and moves the root back to the zero vector.
+/// The third word is never read.
+pub fn animation_update_bip_only(
+    e: &mut Engine,
+    this: Ptr<Animation>,
+    time: f32,
+    out: Ptr,
+    _unused_2: u32,
+) {
+    let a = this.addr();
+    let accum_root = e.get(this, Animation::pAccumRoot).addr();
+    if accum_root != 0 {
+        e.call(
+            NODE_SET_WORLD_TRANSLATION,
+            &args![accum_root, a + Animation::AccumRootTranslate.off],
+        );
+    }
+    let accum_root = e.get(this, Animation::pAccumRoot).addr();
+    let root = ni_pointer_get(e, a + Animation::pAnimRoot.off);
+    e.call(BIP_NODE_UPDATE_BIP_ONLY, &args![root, time, accum_root]);
+    let accum_root = e.get(this, Animation::pAccumRoot).addr();
+    if accum_root != 0 {
+        if !out.is_null() {
+            let translation = e.call(NODE_WORLD_TRANSLATION, &args![accum_root]).u32();
+            for i in 0..3u32 {
+                let word = e.mem.u32(translation + 4 * i);
+                e.mem.set_u32(out.addr() + 4 * i, word);
+            }
+        }
+        let accum_root = e.get(this, Animation::pAccumRoot).addr();
+        e.call(NODE_SET_WORLD_TRANSLATION, &args![accum_root, ZERO_VECTOR]);
+    }
+}
+
+// Translated from 0049bd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of models queued in `kfModelList` (+0x104); the map has no name
+/// for it.
+pub fn fn_0049bd30(e: &mut Engine, this: Ptr<Animation>) -> u32 {
+    let list = this.addr() + Animation::kfModelList.off;
+    let mut count = 0u32;
+    if !e.call(SIMPLE_LIST_IS_EMPTY, &args![list]).bool() {
+        let mut node = list;
+        while node != 0 {
+            count += 1;
+            node = e.call(WORD_AT_4, &args![node]).u32();
+        }
+    }
+    count
+}
+
+// Translated from 0049bd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands `object` to the animation root (`004f05c0(root, object)`) when the
+/// animation has a root (`pAnimRoot`, read through `005585e0`); the linker
+/// folded the body with `CHtmlView::OnStatusTextChange`, whose name the map
+/// gives it.
+pub fn fn_0049bd90(e: &mut Engine, this: Ptr<Animation>, object: Ptr) {
+    let root = e.call(KF_MODEL_ANIM_GROUP, &args![this]).u32();
+    if root != 0 {
+        e.call(ROOT_NODE_NOTIFY, &args![root, object]);
+    }
+}
+
+// Translated from 0049bdc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drives the group 0xe1 in slot 3 with `weight` (the map has no name for
+/// it). A weight of exactly 0 updates the slot's sequence to time 0 and clears
+/// the slot. Otherwise starts the group when the slot is empty (and updates the
+/// new sequence to its begin time plus `time`), and while the slot's sequence
+/// is in state 1 stores a time between its begin and end times in
+/// `fLipTime` (+0xd4, begin + (end - begin) * weight) and sets the sequence's
+/// phase to `fLipTime - time`.
+pub fn fn_0049bdc0(e: &mut Engine, this: Ptr<Animation>, weight: f32) {
+    let slot_3 = current_sequence_at(this, 3);
+    if weight == 0.0 {
+        let sequence = e.mem.u32(slot_3);
+        if sequence != 0 {
+            e.call(SEQUENCE_UPDATE, &args![sequence, 0.0f32, 1u32]);
+            animation_clear_group(e, this, 3, 0.0);
+        }
+        return;
+    }
+    if e.mem.u32(slot_3) == 0 {
+        animation_play_group(e, this, 0xe1, 1, -1, -1);
+        let sequence = e.mem.u32(slot_3);
+        if sequence != 0 {
+            let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+            let time = e.get(this, Animation::time);
+            let moment = (begin as f64 + time as f64) as f32;
+            e.call(SEQUENCE_UPDATE, &args![sequence, moment, 1u32]);
+        }
+    }
+    let sequence = e.mem.u32(slot_3);
+    if sequence != 0 && e.call(SEQUENCE_STATE, &args![sequence]).i32() == 1 {
+        let end = e.call(SEQUENCE_END_TIME, &args![sequence]).f64();
+        let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+        let span = (end - begin as f64) as f32;
+        let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+        let lip_time = (begin as f64 + span as f64 * weight as f64) as f32;
+        e.set(this, Animation::fLipTime, lip_time);
+        let time = e.get(this, Animation::time);
+        let phase = (lip_time as f64 - time as f64) as f32;
+        e.call(SEQUENCE_SET_PHASE, &args![sequence, phase, 1u32]);
+    }
+}
+
+// Translated from 0049bf10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drives a sequence on a controller manager by `weight` (`__cdecl(weight,
+/// manager, sequence)`; the map has no name for it). Does nothing without
+/// both. A weight of exactly 0 resets a sequence in state 1 (phase 0, update
+/// to time 0). Otherwise a sequence in state 0 is activated and updated to its
+/// begin time plus the time in seconds `TIME_SCALE_OBJECT` keeps in
+/// milliseconds at +0x14, and a sequence in state 1 gets the phase
+/// begin + (end - begin) * weight minus that time.
+pub fn fn_0049bf10(e: &mut Engine, weight: f32, manager: Ptr, sequence: Ptr) {
+    if manager.is_null() || sequence.is_null() {
+        return;
+    }
+    let sequence = sequence.addr();
+    if weight == 0.0 {
+        if e.call(SEQUENCE_STATE, &args![sequence]).i32() == 1 {
+            e.call(SEQUENCE_SET_PHASE, &args![sequence, 0.0f32, 1u32]);
+            e.call(SEQUENCE_UPDATE, &args![sequence, 0.0f32, 1u32]);
+        }
+        return;
+    }
+    if e.call(SEQUENCE_STATE, &args![sequence]).i32() == 0 {
+        e.call(MANAGER_SET_FLAG, &args![manager, 1u32]);
+        e.call(
+            MANAGER_ACTIVATE,
+            &args![manager, sequence, 0u32, 0u32, 1.0f32, 0.0f32, 0u32],
+        );
+        let milliseconds = e.call(WORD_AT_14, &args![TIME_SCALE_OBJECT]).u32();
+        let seconds = milliseconds as f64 / double_constant(e, DOUBLE_THOUSAND);
+        let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+        let moment = (begin as f64 + seconds) as f32;
+        e.call(SEQUENCE_UPDATE, &args![sequence, moment, 1u32]);
+    }
+    if e.call(SEQUENCE_STATE, &args![sequence]).i32() == 1 {
+        let end = e.call(SEQUENCE_END_TIME, &args![sequence]).f64();
+        let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+        let span = (end - begin as f64) as f32;
+        let begin = e.call(SEQUENCE_BEGIN_TIME, &args![sequence]).f32();
+        let target = (begin as f64 + span as f64 * weight as f64) as f32;
+        let milliseconds = e.call(WORD_AT_14, &args![TIME_SCALE_OBJECT]).u32();
+        let seconds = milliseconds as f64 / double_constant(e, DOUBLE_THOUSAND);
+        let phase = (target as f64 - seconds) as f32;
+        e.call(SEQUENCE_SET_PHASE, &args![sequence, phase, 1u32]);
+    }
+}
+
+// Translated from 0049c050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of `NiTPointerMap<unsigned short, AnimSequenceBase*>`
+/// (`pAnimSequenceMap`'s class): the base constructor with the hash size
+/// (`0049c100`), then the class's vtable. Returns `this`.
+pub fn fn_0049c050(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    e.call(MAP_BASE_CONSTRUCT, &args![this, hash_size]);
+    e.mem.set_u32(this.addr(), VTABLE_ANIM_SEQUENCE_MAP);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -6283,6 +8594,82 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             animation_special_idle_queue(Ptr<Animation>, Ptr, u32)
         ),
         entry!(0x00497f20, fn_00497f20(Ptr<Animation>, Ptr, Ptr, i32, u32)),
+        entry!(
+            0x00498030,
+            animation_special_idle_replace(Ptr<Animation>, Ptr, Ptr, u32)
+        ),
+        entry!(
+            0x00498170,
+            animation_special_idle_replace_ov2(Ptr<Animation>) -> bool
+        ),
+        entry!(
+            0x004981f0,
+            animation_special_idle_loaded(Ptr<Animation>) -> bool
+        ),
+        entry!(0x00498230, fn_00498230(Ptr<Animation>, Ptr) -> bool),
+        entry!(0x00498290, fn_00498290(Ptr<Animation>) -> bool),
+        entry!(
+            0x004985b0,
+            animation_special_idle_playing(Ptr<Animation>) -> bool
+        ),
+        entry!(
+            0x004985f0,
+            animation_special_idle_done_playing(Ptr<Animation>) -> bool
+        ),
+        entry!(0x00498670, animation_anim_idle_free(Ptr<Animation>, Ptr)),
+        entry!(
+            0x00498910,
+            animation_special_idle_free(Ptr<Animation>, u8, u8)
+        ),
+        entry!(0x00498cf0, fn_00498cf0(Ptr<Animation>) -> Ptr),
+        entry!(
+            0x00498d30,
+            animation_special_idle_working(Ptr<Animation>, Ptr) -> bool
+        ),
+        entry!(
+            0x00498ea0,
+            animation_special_idle_working_ov2(Ptr<Animation>, Ptr) -> bool
+        ),
+        entry!(
+            0x00498f80,
+            animation_special_idle_working_ov3(Ptr<Animation>) -> bool
+        ),
+        entry!(0x00499080, animation_clear_blend_interps(Ptr<Animation>)),
+        entry!(0x00499160, animation_clear_controllers_interpolators(Ptr)),
+        entry!(0x00499240, animation_reload_targets(Ptr<Animation>, u8)),
+        entry!(0x004994f0, animation_blend_out(Ptr<Animation>, i32, u8)),
+        entry!(0x004997b0, fn_004997b0(Ptr) -> bool),
+        entry!(0x004997f0, fn_004997f0(Ptr<Animation>, Ptr) -> u16),
+        entry!(0x00499b70, fn_00499b70() -> u32),
+        entry!(0x00499b80, fn_00499b80() -> u32),
+        entry!(0x00499b90, animation_save_game(Ptr<Animation>, Ptr)),
+        entry!(0x0049a1c0, fn_0049a1c0(Ptr<Animation>, Ptr)),
+        entry!(0x0049a920, fn_0049a920(Ptr<Animation>)),
+        entry!(0x0049aa20, fn_0049aa20(Ptr, Ptr<Animation>) -> u16),
+        entry!(0x0049aa80, animation_save_animation(Ptr, Ptr<Animation>)),
+        entry!(0x0049ab00, fn_0049ab00(Ptr)),
+        entry!(0x0049ab40, fn_0049ab40(Ptr<Animation>, Ptr)),
+        entry!(0x0049b050, fn_0049b050(Ptr<Animation>, Ptr)),
+        entry!(0x0049baa0, fn_0049baa0(Ptr) -> Ptr),
+        entry!(
+            0x0049bb10,
+            bs_anim_group_sequence_get_rtti(Ptr) -> u32
+        ),
+        entry!(
+            0x0049bb20,
+            bs_anim_group_sequence_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0049bb50, fn_0049bb50(Ptr, u32)),
+        entry!(0x0049bb70, fn_0049bb70(Ptr<Animation>, u32)),
+        entry!(
+            0x0049bca0,
+            animation_update_bip_only(Ptr<Animation>, f32, Ptr, u32)
+        ),
+        entry!(0x0049bd30, fn_0049bd30(Ptr<Animation>) -> u32),
+        entry!(0x0049bd90, fn_0049bd90(Ptr<Animation>, Ptr)),
+        entry!(0x0049bdc0, fn_0049bdc0(Ptr<Animation>, f32)),
+        entry!(0x0049bf10, fn_0049bf10(f32, Ptr, Ptr)),
+        entry!(0x0049c050, fn_0049c050(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -12205,5 +14592,2460 @@ mod tests {
                 "section {section}"
             );
         }
+    }
+
+    // ---- Fourth session (`00498030` onward) ---------------------------------------------
+
+    /// `engine_two()` plus doubles for the getters the special idle functions
+    /// go through: the state (+8), play type (+0xc), section (+0x14), idle form
+    /// (+0x2c) and KF model (+0x10) of an idle, the state of a sequence (+0x44)
+    /// and the copy of a `NiPointer`.
+    fn idle_engine() -> Engine {
+        let mut e = engine_two();
+        e.register(WORD_AT_4, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(WORD_AT_14, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+        e.register(IDLE_FORM_OF, |e, a| ret(e.mem.u32(a[0] + 0x2c)));
+        e.register(IDLE_KF_MODEL, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(LOG, |_, _| Ret::default());
+        e.register(NI_POINTER_COPY, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret(a[0])
+        });
+        e.register(PIPBOY_QUERY, |_, _| ret(0));
+        e.register(KF_MODEL_ANIM_GROUP, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(SETTING_FLOAT_ADDRESS, |e, a| {
+            // The blend time setting reads 0.5, every other float setting 2.0.
+            let cell = e.global::<u32>(0x011c_5000);
+            e.mem.set_f32(cell, 0.5);
+            e.mem.set_f32(cell + 4, 2.0);
+            ret(if a[0] == SETTING_BLEND_TIME {
+                cell
+            } else {
+                cell + 4
+            })
+        });
+        let cell = e.mem.alloc(8);
+        e.set_global(0x011c_5000, cell);
+        e
+    }
+
+    /// An idle with the given state, play type, section and sequence.
+    fn fake_idle(e: &mut Engine, state: u32, kind: u32, section: u32, sequence: u32) -> u32 {
+        let idle = e.mem.alloc(0x38);
+        e.mem.set_u32(idle + 8, state);
+        e.mem.set_u32(idle + 0xc, kind);
+        e.mem.set_u32(idle + 0x14, section);
+        e.mem.set_u32(idle + 0x18, sequence);
+        idle
+    }
+
+    /// Stores the four idle fields: current, queued and the two parking places.
+    fn put_idles(e: &mut Engine, this: Ptr<Animation>, idles: [u32; 4]) {
+        for (i, idle) in idles.iter().enumerate() {
+            e.mem.set_u32(this.addr() + 0x124 + 4 * i as u32, *idle);
+        }
+    }
+
+    fn idle_fields(e: &Engine, this: Ptr<Animation>) -> [u32; 4] {
+        let mut fields = [0; 4];
+        for (i, field) in fields.iter_mut().enumerate() {
+            *field = e.mem.u32(this.addr() + 0x124 + 4 * i as u32);
+        }
+        fields
+    }
+
+    /// A KF model object (the animation group at +8) for a group made by
+    /// `group_with_id`, whose id is added to the animation's sequence map with
+    /// the sequence `sequence`: `AddAnimation` then finds the sequence in the
+    /// map, with that group, and has nothing to do. Returns the model.
+    fn addable_model(e: &mut Engine, this: Ptr<Animation>, id: u16, sequence: u32) -> u32 {
+        let group = e.mem.u32(sequence + 0x74);
+        assert_eq!(e.mem.u16(group + 0x10), id);
+        let map = if this.addr() != 0 && e.get(this, Animation::pAnimSequenceMap).addr() != 0 {
+            e.get(this, Animation::pAnimSequenceMap).addr()
+        } else {
+            map_for(e, this)
+        };
+        let entry = map_entry(e, sequence, true);
+        map_add(e, map, id as u32, entry);
+        let kf = e.mem.alloc(0x20);
+        e.mem.set_u32(kf + 8, group);
+        kf
+    }
+
+    #[test]
+    fn special_idle_replace_builds_the_queued_idle() {
+        // The flag object decides how the idle is built.
+        for (flag, load_kf) in [(0u32, false), (1, true)] {
+            let mut b = idle_build(0, false);
+            idle_getters_for_build(&mut b.e);
+            b.e.set_global(FLAG_OBJECT_GLOBAL, 0x7000u32);
+            b.e.register_double(FLAG_OBJECT_CHECK, move |_, _| ret(flag));
+            let this: Ptr<Animation> = b.e.new_object();
+            let (idle_form, actor) = (b.idle_form, b.actor);
+            start_log(&mut b.e);
+            b.e.call(0x0049_8030, &args![this, idle_form, actor, 5u32]);
+            let log = end_log(&mut b.e);
+            let idle = Ptr::<AnimIdle>::new(b.e.mem.u32(this.addr() + 0x128));
+            assert_ne!(idle.addr(), 0);
+            assert_eq!(b.e.get(idle, AnimIdle::eSection), 5);
+            assert_eq!(b.e.get(idle, AnimIdle::eType), 0);
+            assert_eq!(b.e.get(idle, AnimIdle::pActor).addr(), actor);
+            let owner = b.e.get(idle, AnimIdle::pAnimation).addr();
+            assert_eq!(owner, if load_kf { 0 } else { this.addr() });
+            assert_eq!(
+                arguments_of(&log, MODEL_LOADER_LOAD_KF).len(),
+                load_kf as usize
+            );
+            assert_eq!(
+                arguments_of(&log, MODEL_LOADER_LOAD_IDLE_KF).len(),
+                !load_kf as usize
+            );
+            assert_eq!(
+                arguments_of(&log, SCOPE_GUARD_CTOR)[0][1..],
+                [SCOPE_GUARD_TAG, 1, SOURCE_FILE, 0x12bd]
+            );
+        }
+    }
+
+    /// The state and play type doubles `idle_build` engines lack.
+    fn idle_getters_for_build(e: &mut Engine) {
+        e.register(WORD_AT_8, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(WORD_AT_C, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(WORD_AT_14, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+        e.register(IDLE_KF_MODEL, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(KF_MODEL_ANIM_GROUP, |e, a| ret(e.mem.u32(a[0] + 8)));
+    }
+
+    #[test]
+    fn special_idle_replace_ov2_adds_the_loaded_queued_idle_and_drops_it() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        // No queued idle.
+        assert!(!e.call(0x0049_8170, &args![this]).bool());
+        // A queued idle that is not loaded.
+        let idle = fake_idle(&mut e, 0, 0, 0, 0);
+        put_idles(&mut e, this, [0, idle, 0, 0]);
+        assert!(!e.call(0x0049_8170, &args![this]).bool());
+        // Loaded, but its model has no group: AddAnimation fails and the idle stays.
+        e.mem.set_u32(idle + 8, 1);
+        let kf = e.mem.alloc(0x20);
+        e.mem.set_u32(idle + 0x10, kf);
+        assert!(!e.call(0x0049_8170, &args![this]).bool());
+        assert_eq!(idle_fields(&e, this)[1], idle);
+        // The model's group is known to the animation: added, the idle is dropped.
+        let group = group_with_id(&mut e, 1);
+        let sequence = sequence_with_group(&mut e, 0, group);
+        let kf = addable_model(&mut e, this, 1, sequence);
+        e.mem.set_u32(idle + 0x10, kf);
+        start_log(&mut e);
+        assert!(e.call(0x0049_8170, &args![this]).bool());
+        let log = end_log(&mut e);
+        assert_eq!(idle_fields(&e, this)[1], 0);
+        assert_eq!(arguments_of(&log, IDLE_KF_MODEL), [[idle]]);
+    }
+
+    #[test]
+    fn special_idle_loaded_needs_a_current_idle_in_state_1() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        assert!(!e.call(0x0049_81f0, &args![this]).bool());
+        for (state, expected) in [(0, false), (1, true), (2, false)] {
+            let idle = fake_idle(&mut e, state, 0, 0, 0);
+            put_idles(&mut e, this, [idle, 0, 0, 0]);
+            assert_eq!(e.call(0x0049_81f0, &args![this]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn special_idle_playing_needs_a_current_idle_in_state_2() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        assert!(!e.call(0x0049_85b0, &args![this]).bool());
+        for (state, expected) in [(0, false), (1, false), (2, true)] {
+            let idle = fake_idle(&mut e, state, 0, 0, 0);
+            put_idles(&mut e, this, [idle, 0, 0, 0]);
+            assert_eq!(e.call(0x0049_85b0, &args![this]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn special_idle_done_playing_follows_the_queue_and_the_state() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        // Nothing at all: done.
+        assert!(e.call(0x0049_85f0, &args![this]).bool());
+        // A queued idle: not done.
+        let queued = fake_idle(&mut e, 1, 0, 0, 0);
+        put_idles(&mut e, this, [0, queued, 0, 0]);
+        assert!(!e.call(0x0049_85f0, &args![this]).bool());
+        // A current idle without a sequence: not done; with one, done in state 3.
+        let idle = fake_idle(&mut e, 3, 0, 0, 0);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        assert!(!e.call(0x0049_85f0, &args![this]).bool());
+        e.mem.set_u32(idle + 0x18, 0x5000);
+        assert!(e.call(0x0049_85f0, &args![this]).bool());
+        e.mem.set_u32(idle + 8, 2);
+        assert!(!e.call(0x0049_85f0, &args![this]).bool());
+    }
+
+    #[test]
+    fn current_idle_sequence_is_the_sequence_of_the_current_idle() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        assert_eq!(e.call(0x0049_8cf0, &args![this]).u32(), 0);
+        let idle = fake_idle(&mut e, 1, 0, 0, 0x5000);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        assert_eq!(e.call(0x0049_8cf0, &args![this]).u32(), 0x5000);
+    }
+
+    #[test]
+    fn special_idle_working_looks_at_the_forms_and_states_of_the_idles() {
+        let mut e = idle_engine();
+        e.register(WORD_AT_8, |e, a| ret(e.mem.u32(a[0] + 8)));
+        let this: Ptr<Animation> = e.new_object();
+        let form = 0x6000u32;
+        e.map(0x011f_2000, 0x1000);
+        assert!(!e.call(0x0049_8d30, &args![this, form]).bool());
+        // The current idle of the form works unless it is only loaded.
+        let idle = fake_idle(&mut e, 1, 0, 0, 0);
+        e.mem.set_u32(idle + 0x2c, form);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        assert!(!e.call(0x0049_8d30, &args![this, form]).bool());
+        e.mem.set_u32(idle + 8, 2);
+        assert!(e.call(0x0049_8d30, &args![this, form]).bool());
+        assert!(!e.call(0x0049_8d30, &args![this, 0x7000u32]).bool());
+        // The same goes for the queued idle.
+        put_idles(&mut e, this, [0, idle, 0, 0]);
+        assert!(e.call(0x0049_8d30, &args![this, form]).bool());
+        // A parked idle of the form counts whatever its state is; another
+        // parked idle counts only while the VATS word is 4 and it has a sequence.
+        let parked = fake_idle(&mut e, 1, 0, 0, 0);
+        e.mem.set_u32(parked + 0x2c, form);
+        put_idles(&mut e, this, [0, 0, parked, 0]);
+        assert!(e.call(0x0049_8d30, &args![this, form]).bool());
+        let other = fake_idle(&mut e, 1, 0, 0, 0x5000);
+        put_idles(&mut e, this, [0, 0, 0, other]);
+        assert!(!e.call(0x0049_8d30, &args![this, form]).bool());
+        e.mem.set_u32(VATS_OBJECT + 8, 4);
+        assert!(e.call(0x0049_8d30, &args![this, form]).bool());
+        e.mem.set_u32(other + 0x18, 0);
+        assert!(!e.call(0x0049_8d30, &args![this, form]).bool());
+    }
+
+    #[test]
+    fn special_idle_working_ov2_asks_the_four_idles_for_the_sequence() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        assert!(!e.call(0x0049_8ea0, &args![this, 0x5000u32]).bool());
+        let mut idles = [0u32; 4];
+        for (i, idle) in idles.iter_mut().enumerate() {
+            *idle = fake_idle(&mut e, 1, 0, 0, 0x5000 + i as u32);
+        }
+        put_idles(&mut e, this, idles);
+        for i in 0..4u32 {
+            assert!(e.call(0x0049_8ea0, &args![this, 0x5000 + i]).bool());
+        }
+        assert!(!e.call(0x0049_8ea0, &args![this, 0x5004u32]).bool());
+    }
+
+    #[test]
+    fn special_idle_working_ov3_is_true_while_an_idle_starts_or_is_unfinished() {
+        let mut e = idle_engine();
+        e.register(WORD_AT_8, |e, a| ret(e.mem.u32(a[0] + 8)));
+        let this: Ptr<Animation> = e.new_object();
+        assert!(!e.call(0x0049_8f80, &args![this]).bool());
+        // A current idle without a sequence: working unless it is done.
+        let idle = fake_idle(&mut e, 1, 0, 0, 0);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        assert!(e.call(0x0049_8f80, &args![this]).bool());
+        e.mem.set_u32(idle + 8, 3);
+        assert!(!e.call(0x0049_8f80, &args![this]).bool());
+        // With a sequence: working while the sequence just started (2 or 5).
+        let sequence = e.mem.alloc(0x80);
+        e.mem.set_u32(idle + 0x18, sequence);
+        for (state, expected) in [(0, false), (2, true), (5, true), (1, false)] {
+            e.mem.set_u32(sequence + 0x44, state);
+            assert_eq!(e.call(0x0049_8f80, &args![this]).bool(), expected);
+        }
+        // The queued idle: working without a sequence, or while it just started.
+        let queued = fake_idle(&mut e, 1, 0, 0, 0);
+        put_idles(&mut e, this, [0, queued, 0, 0]);
+        assert!(e.call(0x0049_8f80, &args![this]).bool());
+        e.mem.set_u32(queued + 0x18, sequence);
+        for (state, expected) in [(0, false), (2, true), (5, true)] {
+            e.mem.set_u32(sequence + 0x44, state);
+            assert_eq!(e.call(0x0049_8f80, &args![this]).bool(), expected);
+        }
+    }
+
+    /// An animation with a controller manager (+0xd8) and a sequence map, and
+    /// doubles for the calls the idle functions make to remove things from them.
+    fn managed_animation(e: &mut Engine) -> (Ptr<Animation>, u32, u32) {
+        let this: Ptr<Animation> = e.new_object();
+        let manager = e.mem.alloc(0x80);
+        e.mem.set_u32(this.addr() + 0xd8, manager);
+        let map = map_for(e, this);
+        e.register(MANAGER_REMOVE_SEQUENCE, |_, _| Ret::default());
+        e.register(MAP_REMOVE_AT, |_, _| ret(1));
+        e.register(NODE_ACCEPTS_OBJECT, |_, a| ret((a[1] != 0) as u32));
+        e.register(MENU_MODE_TYPE, |_, _| ret(0));
+        (this, manager, map)
+    }
+
+    /// A sequence in state `state` whose group has the id `id`, named
+    /// `"seq.kf"`.
+    fn named_sequence(e: &mut Engine, state: u32, id: u16) -> u32 {
+        let group = group_with_id(e, id);
+        let sequence = sequence_with_group(e, state, group);
+        let name = cstring(e, "seq.kf");
+        e.mem.set_u32(sequence + 8, name);
+        sequence
+    }
+
+    #[test]
+    fn anim_idle_free_without_a_map_entry_removes_the_held_sequence() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        let sequence = named_sequence(&mut e, 0, 3);
+        let idle = fake_idle(&mut e, 1, 0, 3, sequence);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        e.mem.set_u32(this.addr() + 0x100, 0x7777);
+        start_log(&mut e);
+        e.call(0x0049_8670, &args![this, this.addr() + 0x124]);
+        let log = end_log(&mut e);
+        // The sequence is taken out of the manager and forgotten as the last
+        // movement sequence (the double accepts any non-null object).
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + 0x100), 0);
+        // The idle field is emptied; the local pointer is released; nothing is
+        // removed from the map as the held sequence is still set.
+        assert_eq!(idle_fields(&e, this), [0; 4]);
+        assert_eq!(arguments_of(&log, NI_POINTER_RELEASE).len(), 1);
+        assert!(arguments_of(&log, MAP_REMOVE_AT).is_empty());
+        // A shut down animation leaves the manager alone.
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        e.set(this, Animation::bShutDown, true);
+        start_log(&mut e);
+        e.call(0x0049_8670, &args![this, this.addr() + 0x124]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, MANAGER_REMOVE_SEQUENCE).is_empty());
+        // An idle without a sequence removes the map key 0xff instead.
+        let bare = fake_idle(&mut e, 1, 0, 3, 0);
+        put_idles(&mut e, this, [bare, 0, 0, 0]);
+        start_log(&mut e);
+        e.call(0x0049_8670, &args![this, this.addr() + 0x124]);
+        let log = end_log(&mut e);
+        let map = e.get(this, Animation::pAnimSequenceMap).addr();
+        assert_eq!(arguments_of(&log, MAP_REMOVE_AT), [[map, 0xff]]);
+    }
+
+    #[test]
+    fn anim_idle_free_with_a_matching_map_entry_deletes_the_entry() {
+        let mut e = idle_engine();
+        let (this, manager, map) = managed_animation(&mut e);
+        let sequence = named_sequence(&mut e, 0, 7);
+        let kf = addable_model(&mut e, this, 7, sequence);
+        let entry = e.mem.u32(map + 8);
+        // The entry's scalar deleting destructor (slot 0).
+        e.register(0x00f1_0000, |_, _| Ret::default());
+        let vtable = e.mem.u32(entry);
+        e.mem.set_u32(vtable, 0x00f1_0000);
+        let idle = fake_idle(&mut e, 1, 0, 3, sequence);
+        e.mem.set_u32(idle + 0x10, kf);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        e.mem.set_u32(this.addr() + 0xe0 + 12, sequence);
+        e.mem.set_u32(this.addr() + 0x100, sequence);
+        start_log(&mut e);
+        e.call(0x0049_8670, &args![this, this.addr() + 0x124]);
+        let log = end_log(&mut e);
+        // Slot 3 held the idle's sequence: it is cleared.
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 12), 0);
+        assert_eq!(e.mem.u16(this.addr() + 0x4c + 6), 0xff);
+        // The sequence is removed from the manager and forgotten; the map entry
+        // is removed and deleted.
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + 0x100), 0);
+        // The key is removed twice: once with the entry, and once more as there
+        // is neither an entry nor a held sequence any more.
+        assert_eq!(arguments_of(&log, MAP_REMOVE_AT), [[map, 7], [map, 7]]);
+        assert_eq!(arguments_of(&log, 0x00f1_0000), [[entry, 1]]);
+        assert_eq!(idle_fields(&e, this), [0; 4]);
+        // An entry whose sequence is another one is ignored.
+        let other = named_sequence(&mut e, 0, 7);
+        let vtable = e.mem.u32(entry);
+        let _ = vtable;
+        e.mem.set_u32(entry + 4, other);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        start_log(&mut e);
+        e.call(0x0049_8670, &args![this, this.addr() + 0x124]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, 0x00f1_0000).is_empty());
+        assert!(arguments_of(&log, MAP_REMOVE_AT).is_empty());
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+    }
+
+    /// A current idle whose sequence plays in slot `slot`.
+    fn playing_idle(e: &mut Engine, this: Ptr<Animation>, section: u32, state: u32) -> (u32, u32) {
+        let sequence = named_sequence(e, state, 3);
+        let idle = fake_idle(e, 1, 0, section, sequence);
+        let slot = match section {
+            0x14 => 1,
+            0x15 => 4,
+            other => other,
+        };
+        e.mem.set_u32(this.addr() + 0xe0 + 4 * slot, sequence);
+        (idle, sequence)
+    }
+
+    #[test]
+    fn special_idle_free_blends_the_current_idle_out_and_parks_it() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let (idle, _sequence) = playing_idle(&mut e, this, 2, 0);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        start_log(&mut e);
+        e.call(0x0049_8910, &args![this, 0u32, 0u32]);
+        let log = end_log(&mut e);
+        // The section is blended out (the slot is cleared) and the idle is parked
+        // in the first waiting place; the queued idle (none) takes its place.
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 8), 0);
+        assert_eq!(idle_fields(&e, this), [0, 0, idle, 0]);
+        assert_eq!(
+            arguments_of(&log, NI_POINTER_COPY)[0],
+            [this.addr() + 0x12c, this.addr() + 0x124]
+        );
+        // Section 0x14 is blended out as slot 1, which resets the movement.
+        let (this, _, _) = managed_animation(&mut e);
+        let (idle, _) = playing_idle(&mut e, this, 0x14, 0);
+        put_idles(&mut e, this, [idle, 0, 0x1111, 0]);
+        e.mem.set_f32(this.addr() + 0x10, 1.0);
+        e.call(0x0049_8910, &args![this, 0u32, 0u32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x10), 0.0);
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 4), 0);
+        assert_eq!(idle_fields(&e, this), [0, 0, 0x1111, idle]);
+    }
+
+    #[test]
+    fn special_idle_free_with_immediate_forgets_the_sequence_and_frees_the_idle() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        let (idle, sequence) = playing_idle(&mut e, this, 2, 0);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        start_log(&mut e);
+        e.call(0x0049_8910, &args![this, 0u32, 1u32]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 8), 0);
+        // Freed on the spot: removed from the manager, nothing parked.
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+        assert_eq!(idle_fields(&e, this), [0; 4]);
+    }
+
+    #[test]
+    fn special_idle_free_gives_up_on_an_idle_that_just_started() {
+        for state in [2, 5] {
+            let mut e = idle_engine();
+            let (this, _manager, _map) = managed_animation(&mut e);
+            let (idle, sequence) = playing_idle(&mut e, this, 2, state);
+            put_idles(&mut e, this, [idle, 0, 0, 0]);
+            start_log(&mut e);
+            e.call(0x0049_8910, &args![this, 0u32, 0u32]);
+            let log = end_log(&mut e);
+            let name = e.mem.u32(sequence + 8);
+            assert_eq!(
+                arguments_of(&log, LOG),
+                [[LOG_IDLE_FREE_JUST_STARTED, name]]
+            );
+            assert_eq!(idle_fields(&e, this), [idle, 0, 0, 0]);
+            assert_eq!(e.mem.u32(this.addr() + 0xe0 + 8), sequence);
+        }
+    }
+
+    #[test]
+    fn special_idle_free_frees_the_idle_when_both_waiting_places_are_taken() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        let (idle, sequence) = playing_idle(&mut e, this, 2, 0);
+        put_idles(&mut e, this, [idle, 0, 0x1111, 0x2222]);
+        start_log(&mut e);
+        e.call(0x0049_8910, &args![this, 0u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+        assert_eq!(idle_fields(&e, this), [0, 0, 0x1111, 0x2222]);
+    }
+
+    #[test]
+    fn special_idle_free_handles_the_queued_idle() {
+        // Without `free_queued` the queued idle becomes the current one.
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let queued = fake_idle(&mut e, 1, 0, 0, 0);
+        put_idles(&mut e, this, [0, queued, 0, 0]);
+        e.call(0x0049_8910, &args![this, 0u32, 0u32]);
+        assert_eq!(idle_fields(&e, this), [queued, 0, 0, 0]);
+        // With it, the queued idle is blended out by slot and parked.
+        let (this, _, _) = managed_animation(&mut e);
+        let (queued, _sequence) = playing_idle(&mut e, this, 0x15, 0);
+        put_idles(&mut e, this, [0, queued, 0, 0]);
+        e.call(0x0049_8910, &args![this, 1u32, 0u32]);
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 16), 0);
+        assert_eq!(idle_fields(&e, this), [0, 0, queued, 0]);
+        // A queued idle that just started is kept and stops the function.
+        let (this, _, _) = managed_animation(&mut e);
+        let (queued, _) = playing_idle(&mut e, this, 3, 5);
+        put_idles(&mut e, this, [0, queued, 0, 0]);
+        e.call(0x0049_8910, &args![this, 1u32, 0u32]);
+        assert_eq!(idle_fields(&e, this), [0, queued, 0, 0]);
+    }
+
+    /// The state `fn_00498290` needs to start the current idle: a model whose
+    /// group the animation already knows, a sequence that plays in slot 0 (so
+    /// `StartGroup` returns it at once) and doubles for the idle form's getters.
+    struct IdleStart {
+        e: Engine,
+        this: Ptr<Animation>,
+        idle: u32,
+        sequence: u32,
+        form: u32,
+    }
+
+    fn idle_start() -> IdleStart {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        set_type(&mut e, 1, 0, 4);
+        let sequence = named_sequence(&mut e, 1, 1);
+        let kf = addable_model(&mut e, this, 1, sequence);
+        e.mem.set_u32(this.addr() + 0xe0, sequence);
+        e.register(UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.register(SPECIAL_IDLE_WORKING, |_, _| ret(0));
+        e.register(IS_IN_MENU_MODE, |_, _| ret(0));
+        e.register(IDLE_FORM_BYTE, |e, a| ret(e.mem.u8(a[0] + 0x39) as u32));
+        e.register(IDLE_FORM_WORD, |e, a| ret(e.mem.u16(a[0] + 0x3c) as u32));
+        e.register(IDLE_SET_WORD_8, |e, a| {
+            e.mem.set_u32(a[0] + 8, a[1]);
+            Ret::default()
+        });
+        e.register(IDLE_SET_ACTOR, |e, a| {
+            e.mem.set_u32(a[0] + 0x34, a[1]);
+            Ret::default()
+        });
+        e.register(ACTOR_SET_ANIM_ACTION, |_, _| Ret::default());
+        e.register(SIMPLE_LIST_PUSH_BACK, |e, a| {
+            // Record the pushed item at a fixed place.
+            let item = e.mem.u32(a[1]);
+            let form = e.mem.u32(item);
+            let delay = e.mem.u32(item + 4);
+            e.mem.set_u32(0x011c_5100, form);
+            e.mem.set_u32(0x011c_5104, delay);
+            e.mem.set_u32(0x011c_5108, a[0]);
+            Ret::default()
+        });
+        let form = e.mem.alloc(0x80);
+        let idle = fake_idle(&mut e, 1, 1, 0, 0);
+        e.mem.set_u32(idle + 0x10, kf);
+        e.mem.set_u32(idle + 0x2c, form);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        IdleStart {
+            e,
+            this,
+            idle,
+            sequence,
+            form,
+        }
+    }
+
+    #[test]
+    fn fn_00498290_starts_the_loaded_idle() {
+        let mut f = idle_start();
+        let (this, idle, sequence) = (f.this, f.idle, f.sequence);
+        let e = &mut f.e;
+        assert!(e.call(0x0049_8290, &args![this]).bool());
+        // The idle plays the sequence the group started.
+        assert_eq!(e.mem.u32(idle + 8), 2);
+        assert_eq!(e.mem.u32(idle + 0x18), sequence);
+        // No replay delay: the idle form's word is 0.
+        assert_eq!(e.mem.u32(0x011c_5108), 0);
+    }
+
+    #[test]
+    fn fn_00498290_queues_a_replay_delay_for_the_idle_form() {
+        let mut f = idle_start();
+        let (this, form) = (f.this, f.form);
+        let e = &mut f.e;
+        e.mem.set_u16(form + 0x3c, 5);
+        assert!(e.call(0x0049_8290, &args![this]).bool());
+        assert_eq!(e.mem.u32(0x011c_5100), form);
+        assert_eq!(e.mem.f32(0x011c_5104), 5.0);
+        assert_eq!(e.mem.u32(0x011c_5108), this.addr() + 0x134);
+    }
+
+    #[test]
+    fn fn_00498290_plays_other_sections_with_the_loop_byte_of_the_form() {
+        let mut f = idle_start();
+        let (this, idle, form, sequence) = (f.this, f.idle, f.form, f.sequence);
+        let e = &mut f.e;
+        e.mem.set_u32(idle + 0x14, 3);
+        e.mem.set_u8(form + 0x39, 4);
+        // A category 1 group takes the loop count.
+        set_type(e, 1, 0, 1);
+        assert!(e.call(0x0049_8290, &args![this]).bool());
+        assert_eq!(e.mem.u32(idle + 0x18), sequence);
+        // The loop count of the slot is the form's byte.
+        assert_eq!(e.mem.i32(this.addr() + 0x7c + 12), 4);
+    }
+
+    #[test]
+    fn fn_00498290_gives_up_on_a_model_it_cannot_add() {
+        let mut f = idle_start();
+        let (this, idle) = (f.this, f.idle);
+        let e = &mut f.e;
+        // The model has no group.
+        let kf = e.mem.alloc(0x20);
+        e.mem.set_u32(idle + 0x10, kf);
+        assert!(!e.call(0x0049_8290, &args![this]).bool());
+        // The idle is done; a play type of 1 leaves it where it is.
+        assert_eq!(e.mem.u32(idle + 8), 3);
+        assert_eq!(idle_fields(e, this), [idle, 0, 0, 0]);
+        // A play type of 2 or 3 frees the idle (parked, as its sequence is empty).
+        for kind in [2, 3] {
+            e.mem.set_u32(idle + 0xc, kind);
+            put_idles(e, this, [idle, 0, 0, 0]);
+            e.mem.set_u32(idle + 8, 1);
+            assert!(!e.call(0x0049_8290, &args![this]).bool());
+            assert_eq!(idle_fields(e, this), [0, 0, idle, 0]);
+            e.mem.set_u32(this.addr() + 0x12c, 0);
+        }
+    }
+
+    #[test]
+    fn fn_00498290_needs_a_loaded_current_idle() {
+        let mut f = idle_start();
+        let (this, idle) = (f.this, f.idle);
+        let e = &mut f.e;
+        e.mem.set_u32(idle + 8, 0);
+        assert!(!e.call(0x0049_8290, &args![this]).bool());
+        put_idles(e, this, [0, 0, 0, 0]);
+        assert!(!e.call(0x0049_8290, &args![this]).bool());
+        // A queued idle that is not loaded stops it as well.
+        let queued = fake_idle(e, 0, 0, 0, 0);
+        put_idles(e, this, [idle, queued, 0, 0]);
+        e.mem.set_u32(idle + 8, 1);
+        assert!(!e.call(0x0049_8290, &args![this]).bool());
+        assert_eq!(idle_fields(e, this), [idle, queued, 0, 0]);
+        // A loaded queued idle replaces the current one, which is started.
+        e.mem.set_u32(queued + 8, 1);
+        let kf = e.mem.u32(idle + 0x10);
+        let form = e.mem.u32(idle + 0x2c);
+        e.mem.set_u32(queued + 0x10, kf);
+        e.mem.set_u32(queued + 0x2c, form);
+        e.mem.set_u32(queued + 0xc, 1);
+        put_idles(e, this, [0, queued, 0, 0]);
+        assert!(e.call(0x0049_8290, &args![this]).bool());
+        assert_eq!(idle_fields(e, this)[..2], [queued, 0]);
+    }
+
+    #[test]
+    fn fn_00498230_hands_the_actor_to_the_started_idle() {
+        let mut f = idle_start();
+        let (this, idle, sequence) = (f.this, f.idle, f.sequence);
+        let e = &mut f.e;
+        let actor = e.mem.alloc(0x40);
+        e.register_double(ACTOR_SET_ANIM_ACTION, move |e, a| {
+            e.mem.set_u32(0x011c_5110, a[0]);
+            e.mem.set_u32(0x011c_5114, a[1]);
+            e.mem.set_u32(0x011c_5118, a[2]);
+            Ret::default()
+        });
+        assert!(e.call(0x0049_8230, &args![this, actor]).bool());
+        assert_eq!(e.mem.u32(idle + 0x34), actor);
+        assert_eq!(
+            [
+                e.mem.u32(0x011c_5110),
+                e.mem.u32(0x011c_5114),
+                e.mem.u32(0x011c_5118)
+            ],
+            [actor, 0xd, sequence]
+        );
+        // Nothing to start: false, and the actor is left alone.
+        put_idles(e, this, [0, 0, 0, 0]);
+        e.mem.set_u32(0x011c_5110, 0);
+        assert!(!e.call(0x0049_8230, &args![this, actor]).bool());
+        assert_eq!(e.mem.u32(0x011c_5110), 0);
+    }
+
+    /// A controller manager (the one of `this`, made if needed) whose sequence
+    /// array holds `sequences` (the array at +0x34: the elements and the count).
+    fn manager_with_sequences(e: &mut Engine, this: Ptr<Animation>, sequences: &[u32]) -> u32 {
+        let mut manager = e.mem.u32(this.addr() + 0xd8);
+        if manager == 0 {
+            manager = e.mem.alloc(0x80);
+            e.mem.set_u32(this.addr() + 0xd8, manager);
+        }
+        let elements = e.mem.alloc(4 * sequences.len() as u32 + 4);
+        for (i, sequence) in sequences.iter().enumerate() {
+            e.mem.set_u32(elements + 4 * i as u32, *sequence);
+        }
+        e.mem.set_u32(manager + 0x34, elements);
+        e.mem.set_u32(manager + 0x38, sequences.len() as u32);
+        e.register(SEQUENCE_ARRAY_COUNT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(SEQUENCE_ARRAY_ELEMENT, |e, a| {
+            ret(e.mem.u32(a[0]) + 4 * a[1])
+        });
+        manager
+    }
+
+    /// `kfModelList` (embedded in the animation at +0x104) holding `models`,
+    /// and the doubles of the `BSSimpleList` accessors.
+    fn kf_model_list(e: &mut Engine, this: Ptr<Animation>, models: &[u32]) {
+        let list = make_simple_list(e, models);
+        let (item, next) = (e.mem.u32(list), e.mem.u32(list + 4));
+        e.mem.set_u32(this.addr() + 0x104, item);
+        e.mem.set_u32(this.addr() + 0x108, next);
+        e.register(MODEL_QUEUE_NOT_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0] + 0x104) != 0 || e.mem.u32(a[0] + 0x108) != 0) as u32)
+        });
+    }
+
+    #[test]
+    fn clear_blend_interps_clears_the_sequences_and_releases_the_queued_models() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        // Without a manager nothing happens.
+        e.call(0x0049_9080, &args![this]);
+        let first = e.mem.alloc(0x80);
+        let second = e.mem.alloc(0x80);
+        e.mem.set_u32(first + 0x70, 1);
+        manager_with_sequences(&mut e, this, &[first, second]);
+        e.register(DYNAMIC_CAST, |e, a| {
+            assert_eq!(a[0], RTTI_ANIM_GROUP_SEQUENCE);
+            ret(if e.mem.u32(a[1] + 0x70) == 1 { a[1] } else { 0 })
+        });
+        e.register(SEQUENCE_CLEAR_INTERPOLATORS, |_, _| Ret::default());
+        e.register(KF_MODEL_RELEASE, |_, _| Ret::default());
+        kf_model_list(&mut e, this, &[0x1111, 0x2222]);
+        start_log(&mut e);
+        e.call(0x0049_9080, &args![this]);
+        let log = end_log(&mut e);
+        // Only the object that casts to a sequence is cleared.
+        assert_eq!(arguments_of(&log, SEQUENCE_CLEAR_INTERPOLATORS), [[first]]);
+        // Each queued model is released twice and the list ends up empty.
+        let releases: Vec<u32> = arguments_of(&log, KF_MODEL_RELEASE)
+            .iter()
+            .map(|words| words[0])
+            .collect();
+        assert_eq!(releases, [0x1111, 0x1111, 0x2222, 0x2222]);
+        assert_eq!(e.mem.u32(this.addr() + 0x104), 0);
+        assert_eq!(e.mem.u32(this.addr() + 0x108), 0);
+    }
+
+    #[test]
+    fn clear_controllers_interpolators_walks_the_controllers_and_the_children() {
+        let mut e = idle_engine();
+        e.register(OBJECT_CONTROLLERS, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+        e.register(CONTROLLER_NEXT, |e, a| ret(e.mem.u32(a[0] + 0x30)));
+        e.register(DYNAMIC_CAST, |e, a| {
+            let kind = e.mem.u32(a[1] + 0x40);
+            let matches = (a[0] == RTTI_CONTROLLER_KIND && kind == 1)
+                || (a[0] == RTTI_CONTROLLER_FIRST && kind == 2);
+            ret(if matches { a[1] } else { 0 })
+        });
+        e.register(CONTROLLER_RESET, |_, _| Ret::default());
+        e.register(0x00f2_00c8, |_, _| Ret::default());
+        e.register(0x00f2_000c, |e, a| ret(e.mem.u32(a[0] + 0x60)));
+        e.register(NODE_CHILD_COUNT, |e, a| ret(e.mem.u32(a[0] + 0x9c)));
+        e.register(NODE_CHILD_AT, |e, a| ret(e.mem.u32(a[0] + 0xa0 + 4 * a[1])));
+        let controller = |e: &mut Engine, kind: u32| {
+            let object = object_with_vtable(e, 0x80, &[(0xc8, 0x00f2_00c8)]);
+            e.mem.set_u32(object + 0x40, kind);
+            object
+        };
+        let node = |e: &mut Engine| object_with_vtable(e, 0x100, &[(0xc, 0x00f2_000c)]);
+        // The root has a kind-1 controller, an unrelated one and a kind-2 one;
+        // its only child has a kind-2 controller and is not a node itself.
+        let (kind_one, other, kind_two) = (
+            controller(&mut e, 1),
+            controller(&mut e, 0),
+            controller(&mut e, 2),
+        );
+        e.mem.set_u32(kind_one + 0x30, other);
+        e.mem.set_u32(other + 0x30, kind_two);
+        let root = node(&mut e);
+        e.mem.set_u32(root + 0x50, kind_one);
+        e.mem.set_u32(root + 0x60, root);
+        let child_controller = controller(&mut e, 2);
+        let child = node(&mut e);
+        e.mem.set_u32(child + 0x50, child_controller);
+        e.mem.set_u32(root + 0x9c, 1);
+        e.mem.set_u32(root + 0xa0, child);
+        start_log(&mut e);
+        e.call(0x0049_9160, &args![0u32]);
+        e.call(0x0049_9160, &args![root]);
+        let log = end_log(&mut e);
+        // The kind-1 controller gets its slot 0xc8 called with (0, 0); the
+        // kind-2 controllers of the root and of the child are reset.
+        assert_eq!(arguments_of(&log, 0x00f2_00c8), [[kind_one, 0, 0]]);
+        assert_eq!(
+            arguments_of(&log, CONTROLLER_RESET),
+            [[kind_two], [child_controller]]
+        );
+    }
+
+    #[test]
+    fn reload_targets_retargets_every_sequence_of_the_manager() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        // Without a manager nothing happens.
+        e.call(0x0049_9240, &args![this, 1u32]);
+        let (first, second) = (named_sequence(&mut e, 0, 1), named_sequence(&mut e, 0, 2));
+        e.mem.set_u32(first + 0xc, 3);
+        e.mem.set_u32(second + 0xc, 5);
+        let hidden = cstring(&mut e, "__hidden");
+        e.mem.set_u32(second + 8, hidden);
+        let manager = manager_with_sequences(&mut e, this, &[first, second]);
+        let root = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 8, root);
+        e.register(MANAGER_PALETTE, |_, _| ret(0x9000));
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == RTTI_PALETTE_KIND { a[1] } else { 0 })
+        });
+        e.register(PALETTE_OBJECT_RESET, |_, _| Ret::default());
+        e.register(GET_CONTROLLER, |e, a| {
+            // The root holds the two controllers; the first one is removed.
+            let first = e.mem.u32(a[0]);
+            let second = e.mem.u32(a[0] + 4);
+            ret(if a[1] == RTTI_CONTROLLER_FIRST {
+                first
+            } else {
+                second
+            })
+        });
+        e.register(REMOVE_CONTROLLER, |e, a| {
+            if a[1] == e.mem.u32(a[0]) {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        e.register(SEQUENCE_RETARGET, |_, _| Ret::default());
+        e.register(SEQUENCE_ATTACH, |_, _| Ret::default());
+        e.register(SEQUENCE_PREPARE, |_, _| Ret::default());
+        e.register(MANAGER_ACTIVATE, |_, _| Ret::default());
+        e.mem.set_u32(root, 0xc1);
+        e.mem.set_u32(root + 4, 0xc2);
+        let current = e.mem.alloc(0x80);
+        e.mem.set_u32(this.addr() + 0xe0 + 8, current);
+        start_log(&mut e);
+        e.call(0x0049_9240, &args![this, 1u32]);
+        let log = end_log(&mut e);
+        // The palette object is reset and both controllers are removed.
+        assert_eq!(arguments_of(&log, PALETTE_OBJECT_RESET), [[0x9000]]);
+        assert_eq!(
+            arguments_of(&log, REMOVE_CONTROLLER),
+            [[root, 0xc1], [root, 0xc2]]
+        );
+        // The first controller is gone, so every sequence gets the root and the
+        // largest object count (5), and the one named "__..." is not attached.
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_RETARGET),
+            [[first, root, 5], [second, root, 5]]
+        );
+        assert_eq!(arguments_of(&log, SEQUENCE_ATTACH), [[first, root]]);
+        assert!(arguments_of(&log, SEQUENCE_PREPARE).is_empty());
+        // The sequence in a slot is activated again.
+        assert_eq!(
+            arguments_of(&log, MANAGER_ACTIVATE),
+            [[manager, current, 0, 0, 1.0f32.to_bits(), 0, 0]]
+        );
+        // Without the flag the sequences are prepared and re-aimed instead.
+        start_log(&mut e);
+        e.call(0x0049_9240, &args![this, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, SEQUENCE_PREPARE), [[first], [second]]);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_RETARGET),
+            [[first, root, 5], [second, root, 5]]
+        );
+        assert!(arguments_of(&log, SEQUENCE_ATTACH).is_empty());
+    }
+
+    /// The doubles `BlendOut` goes through for an actor: whether a weapon is
+    /// drawn (+0x10 of the actor), its anim action (+0x20), the process (+0x68)
+    /// and the move type of a group (+0x30).
+    fn blend_actor(e: &mut Engine) -> u32 {
+        e.register(ACTOR_IS_WEAPON_DRAWN, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(ACTOR_GET_ANIM_ACTION, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(DATA_HANDLER_FLAG, |_, _| ret(0));
+        e.register(GROUP_MOVE_TYPE, |e, a| ret(e.mem.u32(a[0] + 0x30)));
+        e.register(ACTOR_FLAGS_WORD, |e, a| ret(e.mem.u32(a[0] + 0x40)));
+        e.register(ACTOR_START_ANIMATION, |_, _| Ret::default());
+        e.register(MANAGER_DEACTIVATE, |_, _| Ret::default());
+        e.register(SEQUENCE_WORD_58, |_, _| ret(0));
+        e.register(GROUP_TYPE_IS_IRON_SIGHTS, |_, a| ret((a[0] == 0x44) as u32));
+        e.set_global(DATA_HANDLER, 0x6000u32);
+        let process = object_with_vtable(e, 0x400, &[(SLOT_PROCESS_HELD_OBJECT, 0x00f2_03e8)]);
+        e.register(0x00f2_03e8, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let actor = e.mem.alloc(0x100);
+        e.mem.set_u32(actor + 0x10, 1);
+        e.mem.set_u32(actor + 0x68, process);
+        actor
+    }
+
+    #[test]
+    fn blend_out_clears_the_slot_with_the_blend_time() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        blend_actor(&mut e);
+        // Slot 2 holds a sequence in state 1; its group has a byte of 30 (1 s),
+        // divided by the movement scale 2.0.
+        let sequence = named_sequence(&mut e, 1, 3);
+        let group = e.mem.u32(sequence + 0x74);
+        e.mem.set_u8(group + 0x29, 30);
+        e.mem.set_u32(this.addr() + 0xe0 + 8, sequence);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 2u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, MANAGER_DEACTIVATE),
+            [[manager, sequence, 0.5f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 8), 0);
+        // Without the group's byte the blend time setting is used (0.5 / 2.0).
+        e.mem.set_u8(group + 0x29, 0);
+        e.mem.set_u32(this.addr() + 0xe0 + 8, sequence);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 2u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, MANAGER_DEACTIVATE),
+            [[manager, sequence, 0.25f32.to_bits()]]
+        );
+        // `cSkipNextBlend` makes it 0.
+        e.mem.set_u32(this.addr() + 0xe0 + 8, sequence);
+        e.set(this, Animation::cSkipNextBlend, 1u8);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 2u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, MANAGER_DEACTIVATE),
+            [[manager, sequence, 0]]
+        );
+    }
+
+    #[test]
+    fn blend_out_of_the_movement_slot_resets_the_movement() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        blend_actor(&mut e);
+        e.mem.set_f32(this.addr() + 0x10, 2.0);
+        e.call(0x0049_94f0, &args![this, 0x14u32, 0u32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x10), 0.0);
+        e.mem.set_f32(this.addr() + 0x10, 2.0);
+        e.call(0x0049_94f0, &args![this, 2u32, 0u32]);
+        assert_eq!(e.mem.f32(this.addr() + 0x10), 2.0);
+    }
+
+    #[test]
+    fn blend_out_of_the_weapon_slot_starts_the_actors_animation() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        let actor = blend_actor(&mut e);
+        e.set(this, Animation::pActorRef, Ptr::new(actor));
+        // Slots 4, 5 and 6 hold sequences in state 1.
+        let mut sequences = [0u32; 3];
+        for (i, sequence) in sequences.iter_mut().enumerate() {
+            *sequence = named_sequence(&mut e, 1, 3);
+            e.mem
+                .set_u32(this.addr() + 0xe0 + 16 + 4 * i as u32, *sequence);
+        }
+        // The anim action is 9, the actor is not the player and the blend time
+        // (0.25) is short: with move type 1 and no flag 0x400 the time becomes
+        // 0.5 for slots 5 and 6, and the actor starts the plain animation 0x11.
+        e.mem.set_u32(actor + 0x20, 9);
+        let group = e.mem.u32(sequences[0] + 0x74);
+        e.mem.set_u32(group + 0x30, 1);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 4u32, 0u32]);
+        let log = end_log(&mut e);
+        let deactivations = arguments_of(&log, MANAGER_DEACTIVATE);
+        assert_eq!(
+            deactivations,
+            [
+                [manager, sequences[1], 0.5f32.to_bits()],
+                [manager, sequences[2], 0.5f32.to_bits()]
+            ]
+        );
+        assert_eq!(
+            arguments_of(&log, ACTOR_START_ANIMATION),
+            [[actor, 0x11, this.addr()]]
+        );
+        // Slot 4 itself stays: the weapon slot is cleared by its own ladder, not
+        // by this call (the drawn weapon skips it).
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 16), sequences[0]);
+    }
+
+    #[test]
+    fn blend_out_with_the_flag_restarts_the_held_animation() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let actor = blend_actor(&mut e);
+        e.set(this, Animation::pActorRef, Ptr::new(actor));
+        // The anim action is 2 and the process holds a sequence whose group has
+        // type 0x44, an iron sights action: the actor starts type 0x41.
+        e.mem.set_u32(actor + 0x20, 2);
+        let held = named_sequence(&mut e, 0, 0x44);
+        let process = e.mem.u32(actor + 0x68);
+        e.mem.set_u32(process + 0x10, held);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 0x14u32, 1u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, ACTOR_START_ANIMATION),
+            [[actor, 0x41, this.addr()]]
+        );
+        // Without a held sequence it is the plain animation.
+        e.mem.set_u32(process + 0x10, 0);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 0x14u32, 1u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, ACTOR_START_ANIMATION),
+            [[actor, 0x11, this.addr()]]
+        );
+        // No drawn weapon: nothing is started.
+        e.mem.set_u32(actor + 0x10, 0);
+        start_log(&mut e);
+        e.call(0x0049_94f0, &args![this, 0x14u32, 1u32]);
+        assert!(arguments_of(&end_log(&mut e), ACTOR_START_ANIMATION).is_empty());
+    }
+
+    #[test]
+    fn fn_004997b0_wants_flag_0x400_without_0x800() {
+        let mut e = idle_engine();
+        e.register(ACTOR_FLAGS_WORD, |e, a| ret(e.mem.u32(a[0])));
+        let actor = e.mem.alloc(8);
+        for (flags, expected) in [(0, false), (0x400, true), (0x800, false), (0xc00, false)] {
+            e.mem.set_u32(actor, flags);
+            assert_eq!(e.call(0x0049_97b0, &args![actor]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn the_saved_sequence_keys_are_two_globals() {
+        let mut e = Engine::new();
+        e.map(0x011c_6000, 0x1000);
+        e.set_global(SAVED_SEQUENCE_KEY_GLOBAL, 0x1234u32);
+        e.set_global(SAVED_SEQUENCE_LOOKUP_GLOBAL, 0x5678u32);
+        assert_eq!(e.call(0x0049_9b70, &args![]).u32(), 0x1234);
+        assert_eq!(e.call(0x0049_9b80, &args![]).u32(), 0x5678);
+    }
+
+    /// The save game object's doubles. Writes append to a buffer in game memory
+    /// (`out`, with its length in `len`); reads take their bytes from `input`
+    /// (advancing `pos`); `blocks` and `version` are the save game's, `diag` is
+    /// the diagnostics byte and `record` the pointer to the record being
+    /// written or read.
+    struct SaveIo {
+        out: u32,
+        len: u32,
+        pos: u32,
+        diag: u32,
+        record: u32,
+    }
+
+    fn save_io(e: &mut Engine, blocks: bool, version: u32, reading: bool, input: &[u8]) -> SaveIo {
+        e.map(0x011c_6000, 0x1000);
+        e.set_global(SAVE_GAME_OBJECT, 0x7000u32);
+        let out = e.mem.alloc(0x400);
+        let len = e.mem.alloc(4);
+        let inp = e.mem.alloc(0x400);
+        e.mem.write(inp, input);
+        let pos = e.mem.alloc(4);
+        let diag = e.mem.alloc(4);
+        let record = e.mem.alloc(4);
+        let write = move |e: &mut Engine, a: &[u32]| {
+            let n = e.mem.u32(len);
+            for k in 0..a[2] {
+                let byte = e.mem.u8(a[1] + k);
+                e.mem.set_u8(out + n + k, byte);
+            }
+            e.mem.set_u32(len, n + a[2]);
+            Ret::default()
+        };
+        e.register_double(SAVE_WRITE, write);
+        e.register_double(SAVE_FORM_ID, write);
+        e.register_double(SAVE_POSITION, move |e, _| {
+            ret(if reading {
+                inp + e.mem.u32(pos)
+            } else {
+                out + e.mem.u32(len)
+            })
+        });
+        let read = move |e: &mut Engine, a: &[u32]| {
+            let n = e.mem.u32(pos);
+            for k in 0..a[2] {
+                let byte = e.mem.u8(inp + n + k);
+                e.mem.set_u8(a[1] + k, byte);
+            }
+            e.mem.set_u32(pos, n + a[2]);
+            ret(0)
+        };
+        e.register_double(SAVE_READ, read);
+        e.register_double(LOAD_FORM_ID, read);
+        e.register_double(SAVE_SKIP, move |e, a| {
+            let n = e.mem.u32(pos);
+            e.mem.set_u32(pos, n + a[1]);
+            Ret::default()
+        });
+        e.register_double(SAVE_USES_BLOCKS, move |_, _| ret(blocks as u32));
+        e.register_double(SAVE_BYTE_80, move |_, _| ret(version));
+        e.register_double(SETTING_BYTE_ADDRESS, move |_, _| ret(diag));
+        e.register_double(SAVE_RECORD_WRITTEN, move |e, _| ret(e.mem.u32(record)));
+        e.register_double(SAVE_RECORD_READ, move |e, _| ret(e.mem.u32(record)));
+        e.register(ERROR_LOG, |_, _| Ret::default());
+        e.register(SEQUENCE_SAVE_BASE_SIZE, |_, _| ret(0x20));
+        SaveIo {
+            out,
+            len,
+            pos,
+            diag,
+            record,
+        }
+    }
+
+    /// What the save functions wrote so far.
+    fn written(e: &Engine, io: &SaveIo) -> Vec<u8> {
+        (0..e.mem.u32(io.len))
+            .map(|i| e.mem.u8(io.out + i))
+            .collect()
+    }
+
+    /// An actor for the save and load functions: it has a process (slot 0x100),
+    /// answers slot 0x22c with `false`, has the form ID `0x1234` and the type
+    /// name `0xabcdef`, and its sub-object (+0x88) answers slot 0x34 with
+    /// `answers`. When it does, the animation's controller chain finds
+    /// `sequence`, held by the controller object that is returned too; the
+    /// light at +0x8c of the actor has its float at +0x10.
+    fn saved_actor(
+        e: &mut Engine,
+        this: Ptr<Animation>,
+        answers: bool,
+        sequence: u32,
+    ) -> (u32, u32) {
+        e.register(0x00f3_0100, |_, _| ret(1));
+        e.register(0x00f3_0130, |_, _| ret(0x00ab_cdef));
+        e.register(0x00f3_022c, |_, _| ret(0));
+        e.register(0x00f3_0034, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x00f3_008c, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x00f3_000c, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let actor = object_with_vtable(
+            e,
+            0x200,
+            &[
+                (0x100, 0x00f3_0100),
+                (0x130, 0x00f3_0130),
+                (0x22c, 0x00f3_022c),
+            ],
+        );
+        e.mem.set_u32(actor + 0xc, 0x1234);
+        let sub_vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(sub_vtable + 0x34, 0x00f3_0034);
+        e.mem.set_u32(actor + 0x88, sub_vtable);
+        e.mem.set_u32(actor + 0x98, answers as u32);
+        let light = e.mem.alloc(0x40);
+        e.mem.set_f32(light + 0x10, 0.75);
+        e.mem.set_u32(actor + 0x8c, light);
+        // The chain: manager -> palette -> object -> node -> child -> controller.
+        let mut manager = e.mem.u32(this.addr() + 0xd8);
+        if manager == 0 {
+            manager = e.mem.alloc(0x80);
+            e.mem.set_u32(this.addr() + 0xd8, manager);
+        }
+        let palette = object_with_vtable(e, 0x40, &[(0x8c, 0x00f3_008c)]);
+        let object = object_with_vtable(e, 0x40, &[(0xc, 0x00f3_000c)]);
+        let node = e.mem.alloc(0x40);
+        let child = e.mem.alloc(0x40);
+        let controller = e.mem.alloc(0x80);
+        e.mem.set_u32(manager + 0x10, palette);
+        e.mem.set_u32(palette + 0x10, object);
+        e.mem.set_u32(object + 0x10, node);
+        e.mem.set_u32(node + 0x20, child);
+        e.mem.set_u32(child + 0x20, controller);
+        e.mem.set_u32(controller + 0x30, sequence);
+        e.register(MANAGER_PALETTE, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(NODE_ARRAY_ELEMENT, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(OBJECT_CONTROLLERS, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(DYNAMIC_CAST, |_, a| {
+            ret(if a[0] == RTTI_SAVED_CONTROLLER {
+                a[1]
+            } else {
+                0
+            })
+        });
+        e.register(SEQUENCE_LOOKUP, |e, a| ret(e.mem.u32(a[0] + 0x30)));
+        e.set_global(SAVED_SEQUENCE_KEY_GLOBAL, 0x1111u32);
+        e.set_global(SAVED_SEQUENCE_LOOKUP_GLOBAL, 0x2222u32);
+        (actor, controller)
+    }
+
+    /// Empties every group slot of an animation.
+    fn empty_groups(e: &mut Engine, this: Ptr<Animation>) {
+        for i in 0..8 {
+            e.mem.set_u16(group_at(this, i), 0xff);
+        }
+    }
+
+    #[test]
+    fn fn_004997f0_adds_up_the_saved_parts() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let io = save_io(&mut e, false, 0x3f, false, &[]);
+        e.register(SEQUENCE_SAVE_SIZE, |_, a| {
+            ret(if a[0] == 0x5555 { 0x10 } else { 0x20 })
+        });
+        let (actor, _controller) = saved_actor(&mut e, this, false, 0);
+        empty_groups(&mut e, this);
+        e.mem.set_u16(group_at(this, 0), 5);
+        e.mem.set_u32(current_sequence_at(this, 0), 0x5555);
+        e.mem.set_u16(group_at(this, 2), 6);
+        // 26 fixed bytes, 17 for each of the two used slots, the 16 bytes of
+        // the sequence, 4 for the idle (none) and 1.
+        let size = |e: &mut Engine| e.call(0x0049_97f0, &args![this, actor]).u16();
+        assert_eq!(size(&mut e), 26 + 34 + 16 + 4 + 1);
+        // From save version 0x40 on there is one more.
+        e.register_double(SAVE_BYTE_80, |_, _| ret(0x40));
+        assert_eq!(size(&mut e), 26 + 34 + 16 + 4 + 2);
+        // The queued idle is the one sized, with its form and sequence.
+        let idle = fake_idle(&mut e, 1, 0, 0, 0x6666);
+        e.mem.set_u32(idle + 0x2c, 0x7000);
+        put_idles(&mut e, this, [0, idle, 0, 0]);
+        // 4 + 2, then the idle's own 13 + 0x20 + 1.
+        assert_eq!(size(&mut e), 26 + 34 + 16 + 4 + 2 + 2 + 13 + 0x20 + 1);
+        put_idles(&mut e, this, [0; 4]);
+        // An actor whose sub-object answers adds the sequence found and 4.
+        let (actor, _controller) = saved_actor(&mut e, this, true, 0x7777);
+        assert_eq!(
+            e.call(0x0049_97f0, &args![this, actor]).u16(),
+            26 + 34 + 16 + 4 + 2 + 0x20 + 4
+        );
+        // The diagnostics setting logs the size (no record: the plain format).
+        e.mem.set_u32(io.diag, 1);
+        e.call_log = Some(vec![]);
+        let total = e.call(0x0049_97f0, &args![this, actor]).u16();
+        let log = peek_log(&e);
+        // (The idle size function logs as well, with its own source line.)
+        assert_eq!(
+            arguments_of(&log, ERROR_LOG).last().cloned(),
+            Some(vec![LOG_SAVE_SIZE, total as u32, 0x15b8, SOURCE_FILE])
+        );
+        // With a record: its form ID, the form type's name and its flags.
+        let record = e.mem.alloc(0x10);
+        e.mem.set_u32(record, 0x4321);
+        e.mem.set_u32(record + 5, 0x99);
+        e.mem.set_u32(io.record, record);
+        let kind = object_with_vtable(&mut e, 0x200, &[(SLOT_FORM_TYPE_NAME, 0x00f3_0130)]);
+        e.register(FORM_BY_ID, |e, _| ret(e.mem.u32(0x011c_6100)));
+        e.mem.set_u32(0x011c_6100, kind);
+        e.call_log = Some(vec![]);
+        e.call(0x0049_97f0, &args![this, actor]);
+        let log = peek_log(&e);
+        assert_eq!(
+            arguments_of(&log, ERROR_LOG).last().cloned(),
+            Some(vec![
+                LOG_SAVE_SIZE_FORM,
+                total as u32,
+                0x4321,
+                0x00ab_cdef,
+                0x99,
+                0x15b8,
+                SOURCE_FILE
+            ])
+        );
+        // Saving in blocks adds 6, and the idle's size another 6.
+        e.register(SAVE_USES_BLOCKS, |_, _| ret(1));
+        e.mem.set_u32(io.diag, 0);
+        assert_eq!(e.call(0x0049_97f0, &args![this, actor]).u16(), total + 12);
+    }
+
+    /// The little-endian bytes of the given parts, for the expected streams.
+    fn bytes_of(parts: &[&[u8]]) -> Vec<u8> {
+        parts.iter().flat_map(|p| p.iter().copied()).collect()
+    }
+
+    /// An animation with the fields `SaveGame` and `LoadGame` store: speeds,
+    /// movement delta, looking and skip update, and one used slot (1) with
+    /// the group 5.
+    fn saved_animation(e: &mut Engine) -> (Ptr<Animation>, u32) {
+        let (this, _manager, map) = managed_animation(e);
+        empty_groups(e, this);
+        let a = this.addr();
+        e.mem.set_f32(a + 0x10c, 1.5);
+        e.mem.set_f32(a + 0x110, 2.5);
+        for (i, value) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(a + 0x10 + 4 * i as u32, *value);
+        }
+        e.mem.set_f32(a + 0x48, 0.25);
+        e.mem.set_u8(a + 0xcc, 7);
+        e.mem.set_u8(a + 0x120, 1);
+        e.set(this, Animation::time, 3.5f32);
+        e.mem.set_u16(group_at(this, 1), 5);
+        e.mem.set_i32(action_at(this, 1), 0x11);
+        e.mem.set_i32(loop_count_at(this, 1), 3);
+        e.mem.set_u16(next_group_at(this, 1), 0x22);
+        e.mem.set_i32(next_loops_at(this, 1), 4);
+        (this, map)
+    }
+
+    /// The bytes `saved_animation`'s fixed fields and slot 1 take in a save,
+    /// with `selector` as the slot's selector byte.
+    fn saved_bytes(selector: u8) -> Vec<u8> {
+        bytes_of(&[
+            &1.5f32.to_le_bytes(),
+            &2.5f32.to_le_bytes(),
+            &1.0f32.to_le_bytes(),
+            &2.0f32.to_le_bytes(),
+            &3.0f32.to_le_bytes(),
+            &0.25f32.to_le_bytes(),
+            &[7, 0b10],
+            &5u16.to_le_bytes(),
+            &0x11u32.to_le_bytes(),
+            &3u32.to_le_bytes(),
+            &0x22u16.to_le_bytes(),
+            &4u32.to_le_bytes(),
+            &[selector],
+        ])
+    }
+
+    #[test]
+    fn save_game_writes_the_fields_and_the_used_slots() {
+        let mut e = idle_engine();
+        let (this, map) = saved_animation(&mut e);
+        let io = save_io(&mut e, false, 0x3f, false, &[]);
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.register(SEQUENCE_SAVE, |_, _| Ret::default());
+        // The map entry of group 5 says the sequence has the selector 9.
+        let entry = map_entry(&mut e, 0x5555, true);
+        e.register(0x00f1_0018, |_, _| ret(9));
+        let vtable = e.mem.u32(entry);
+        e.mem.set_u32(vtable + 0x18, 0x00f1_0018);
+        map_add(&mut e, map, 5, entry);
+        e.mem.set_u32(current_sequence_at(this, 1), 0x5555);
+        start_log(&mut e);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let log = end_log(&mut e);
+        // Fields, mask, slot 1, the idle's form ID (0: no idle) and
+        // `cSkipNextBlend`.
+        let mut expected = saved_bytes(9);
+        expected.extend([0, 0, 0, 0, 1]);
+        assert_eq!(written(&e, &io), expected);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_SAVE),
+            [[0x5555, 3.5f32.to_bits()]]
+        );
+        // A null sequence is logged and saved with the selector 0xfe.
+        e.mem.set_u32(current_sequence_at(this, 1), 0);
+        e.mem.set_u32(io.len, 0);
+        start_log(&mut e);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let log = end_log(&mut e);
+        let mut expected = saved_bytes(0xfe);
+        expected.extend([0, 0, 0, 0, 1]);
+        assert_eq!(written(&e, &io), expected);
+        assert_eq!(
+            arguments_of(&log, LOG),
+            [[LOG_SAVE_NULL_SEQUENCE, 0x00ab_cdef, 0x1234, 1, 5, 0x11]]
+        );
+        assert!(arguments_of(&log, SEQUENCE_SAVE).is_empty());
+    }
+
+    #[test]
+    fn save_game_saves_the_controller_sequence_from_version_0x40() {
+        let mut e = idle_engine();
+        let (this, _map) = saved_animation(&mut e);
+        e.mem.set_u16(group_at(this, 1), 0xff);
+        let io = save_io(&mut e, false, 0x40, false, &[]);
+        e.register(SEQUENCE_SAVE, |_, _| Ret::default());
+        e.register(FLOAT_AT_10, |e, a| e.mem.f32(a[0] + 0x10).into_ret());
+        // An actor whose sub-object does not answer: a zero flag byte.
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let bytes = written(&e, &io);
+        assert_eq!(bytes[bytes.len() - 2..], [1, 0]);
+        // One that answers: the flag, the sequence and the light's float.
+        let (actor, _) = saved_actor(&mut e, this, true, 0x8888);
+        e.mem.set_u32(io.len, 0);
+        start_log(&mut e);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let log = end_log(&mut e);
+        let bytes = written(&e, &io);
+        let mut tail = vec![1u8, 1];
+        tail.extend(0.75f32.to_le_bytes());
+        assert_eq!(bytes[bytes.len() - 6..], tail[..]);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_SAVE),
+            [[0x8888, 3.5f32.to_bits()]]
+        );
+        // Before version 0x40 the flag byte is not written.
+        e.register_double(SAVE_BYTE_80, |_, _| ret(0x3f));
+        e.mem.set_u32(io.len, 0);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let bytes = written(&e, &io);
+        let mut tail = vec![1u8];
+        tail.extend(0.75f32.to_le_bytes());
+        assert_eq!(bytes[bytes.len() - 5..], tail[..]);
+    }
+
+    #[test]
+    fn save_game_saves_in_a_block_and_logs_its_size() {
+        let mut e = idle_engine();
+        let (this, _map) = saved_animation(&mut e);
+        let io = save_io(&mut e, true, 0x3f, false, &[]);
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.register(SEQUENCE_SAVE, |_, _| Ret::default());
+        e.call(0x0049_9b90, &args![this, actor]);
+        let bytes = written(&e, &io);
+        // The block tag, then a length that counts from itself to the end.
+        assert_eq!(bytes[..4], *b"KOLB");
+        let length = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+        assert_eq!(length, bytes.len() - 4);
+        // With the diagnostics setting on, the size written is logged (no
+        // record: the plain format, source line 0x1628).
+        e.mem.set_u32(io.diag, 1);
+        e.mem.set_u32(io.len, 0);
+        start_log(&mut e);
+        e.call(0x0049_9b90, &args![this, actor]);
+        let log = end_log(&mut e);
+        let size = e.mem.u32(io.len);
+        let ours: Vec<_> = arguments_of(&log, ERROR_LOG)
+            .into_iter()
+            .filter(|words| words[2] == 0x1628)
+            .collect();
+        assert_eq!(ours, [[LOG_SAVE_GAME, size, 0x1628, SOURCE_FILE]]);
+    }
+
+    #[test]
+    fn fn_0049a1c0_reads_the_fields_and_empties_slots_that_did_not_come_back() {
+        let mut e = idle_engine();
+        let (this, _) = saved_animation(&mut e);
+        // Everything is cleared before: the loader must write it all.
+        for offset in [0x10c, 0x110, 0x10, 0x14, 0x18, 0x48, 0xcc] {
+            e.mem.set_u32(this.addr() + offset, 0);
+        }
+        e.mem.set_u16(group_at(this, 1), 0xff);
+        e.mem.set_u32(current_sequence_at(this, 1), 0x9999);
+        let mut stream = saved_bytes(0xfe);
+        stream.extend([0u8; 8]);
+        stream.push(1);
+        let io = save_io(&mut e, false, 0x3f, true, &stream);
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.register(SEQUENCE_LOAD, |_, _| Ret::default());
+        e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.mem.set_u32(this.addr() + 0x120, 0);
+        e.call(0x0049_a1c0, &args![this, actor]);
+        let a = this.addr();
+        assert_eq!(e.mem.f32(a + 0x10c), 1.5);
+        assert_eq!(e.mem.f32(a + 0x110), 2.5);
+        assert_eq!(e.mem.f32(a + 0x10), 1.0);
+        assert_eq!(e.mem.f32(a + 0x18), 3.0);
+        assert_eq!(e.mem.f32(a + 0x48), 0.25);
+        assert_eq!(e.mem.u8(a + 0xcc), 7);
+        assert_eq!(e.mem.u16(group_at(this, 1)), 5);
+        assert_eq!(e.mem.i32(action_at(this, 1)), 0x11);
+        assert_eq!(e.mem.i32(loop_count_at(this, 1)), 3);
+        assert_eq!(e.mem.u16(next_group_at(this, 1)), 0x22);
+        assert_eq!(e.mem.i32(next_loops_at(this, 1)), 4);
+        // The slot comes back empty (selector -2), and `cSkipNextBlend` is read.
+        assert_eq!(e.mem.u32(current_sequence_at(this, 1)), 0);
+        assert_eq!(e.mem.u8(a + 0x120), 1);
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+    }
+
+    #[test]
+    fn fn_0049a1c0_forces_the_section_and_skips_the_bytes_of_a_missing_sequence() {
+        let mut e = idle_engine();
+        let (this, _) = saved_animation(&mut e);
+        e.mem.set_u16(group_at(this, 1), 0xff);
+        // Selector 0xff: the group is forced; the map does not know it, so no
+        // sequence comes back: the bytes the sequence would take (0x20) are
+        // skipped and the slot is cleared.
+        let mut stream = saved_bytes(0xff);
+        stream.extend([0xeeu8; 0x20]);
+        stream.extend([0u8; 8]);
+        stream.push(1);
+        let io = save_io(&mut e, false, 0x3f, true, &stream);
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.register(SEQUENCE_LOAD, |_, _| Ret::default());
+        start_log(&mut e);
+        e.call(0x0049_a1c0, &args![this, actor]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+        assert_eq!(e.mem.u16(group_at(this, 1)), 0xff);
+        assert_eq!(e.mem.i32(action_at(this, 1)), -1);
+        assert_eq!(e.mem.u8(this.addr() + 0x120), 1);
+        assert!(arguments_of(&log, SEQUENCE_LOAD).is_empty());
+    }
+
+    #[test]
+    fn fn_0049a1c0_loads_the_sequence_of_a_group_it_started() {
+        // `StartGroup_ov2`'s fixture: group 1 plays in slot 1 and the sequence
+        // is not playing yet, so forcing the group puts it into the slot.
+        let mut f = start_fixture();
+        let (this, sequence) = (f.this, f.sequence);
+        let e = &mut f.e;
+        let map = map_for(e, this);
+        let entry = map_entry(e, sequence, true);
+        map_add(e, map, 1, entry);
+        e.register(LOG, |_, _| Ret::default());
+        let stream = bytes_of(&[
+            &[0u8; 8],
+            &[0u8; 12],
+            &[0u8; 4],
+            &[0, 0b10],
+            &1u16.to_le_bytes(),
+            &5u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &0xffu16.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &[0],
+            &[0u8; 8],
+            &[1],
+        ]);
+        let io = save_io(e, false, 0x3f, true, &stream);
+        let (actor, _) = saved_actor(e, this, false, 0);
+        e.register(SEQUENCE_LOAD, |_, _| Ret::default());
+        e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+        start_log(e);
+        e.call(0x0049_a1c0, &args![this, actor]);
+        let log = end_log(e);
+        // The sequence was started in the slot and its saved state is loaded.
+        assert_eq!(e.mem.u32(this.addr() + 0xe0 + 4), sequence);
+        // (`ForceSection` stores the saved action after the start.)
+        assert_eq!(e.mem.i32(this.addr() + 0x5c + 4), 5);
+        assert_eq!(arguments_of(&log, SEQUENCE_LOAD), [[sequence, 0]]);
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+    }
+
+    /// A save stream with no group, two empty idles and `cSkipNextBlend`, for
+    /// the controller sequence tests; `tail` follows.
+    fn bare_stream(tail: &[u8]) -> Vec<u8> {
+        bytes_of(&[
+            &1.5f32.to_le_bytes(),
+            &2.5f32.to_le_bytes(),
+            &[0u8; 12],
+            &0.25f32.to_le_bytes(),
+            &[7, 0],
+            &[0u8; 8],
+            &[1],
+            tail,
+        ])
+    }
+
+    #[test]
+    fn fn_0049a1c0_restores_the_controller_sequence_and_the_light() {
+        let mut e = idle_engine();
+        let (this, _) = saved_animation(&mut e);
+        e.mem.set_u16(group_at(this, 1), 0xff);
+        let sequence = e.mem.alloc(0x80);
+        e.mem.set_f32(sequence + 0x30, 4.0);
+        // Before version 0x40 the controller sequence is always there: its
+        // light value follows.
+        e.set_global(DOUBLE_THREE_QUARTERS, 0.75f64);
+        let stream = bare_stream(&0.5f32.to_le_bytes());
+        let io = save_io(&mut e, false, 0x3f, true, &stream);
+        let (actor, controller) = saved_actor(&mut e, this, true, sequence);
+        e.register(MANAGER_ACTIVATE, |_, _| Ret::default());
+        e.register(MANAGER_SET_FLAG, |_, _| Ret::default());
+        for address in [
+            SEQUENCE_LOAD,
+            LIGHT_FADE,
+            SET_FLOAT_AT_10,
+            BIP_NODE_UPDATE_BIP_ONLY,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        start_log(&mut e);
+        e.call(0x0049_a1c0, &args![this, actor]);
+        let log = end_log(&mut e);
+        let light = e.mem.u32(actor + 0x8c);
+        assert_eq!(
+            arguments_of(&log, MANAGER_ACTIVATE),
+            [[controller, sequence, 0, 0, 1.0f32.to_bits(), 0, 0]]
+        );
+        assert_eq!(arguments_of(&log, MANAGER_SET_FLAG), [[controller, 1]]);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_LOAD),
+            [[sequence, 3.5f32.to_bits()]]
+        );
+        // The light fades over three quarters of the sequence's length, and its
+        // float is the value read from the save.
+        assert_eq!(
+            arguments_of(&log, LIGHT_FADE),
+            [[light, 1, 3.0f32.to_bits()]]
+        );
+        assert_eq!(
+            arguments_of(&log, SET_FLOAT_AT_10),
+            [[light, 0.5f32.to_bits()]]
+        );
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+    }
+
+    #[test]
+    fn fn_0049a1c0_skips_the_controller_sequence_it_cannot_restore() {
+        // From version 0x40 a zero flag byte means there is none.
+        let mut e = idle_engine();
+        let (this, _) = saved_animation(&mut e);
+        e.mem.set_u16(group_at(this, 1), 0xff);
+        let stream = bare_stream(&[0]);
+        let io = save_io(&mut e, false, 0x40, true, &stream);
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.call(0x0049_a1c0, &args![this, actor]);
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+        // A set flag with no sequence found skips the bytes it would have
+        // taken: the sequence's base size (0x20) and 4.
+        let mut stream = bare_stream(&[1]);
+        stream.extend([0u8; 0x24]);
+        let io = save_io(&mut e, false, 0x40, true, &stream);
+        e.call(0x0049_a1c0, &args![this, actor]);
+        assert_eq!(e.mem.u32(io.pos) as usize, stream.len());
+    }
+
+    #[test]
+    fn fn_0049a1c0_checks_the_block_it_reads() {
+        let build = |tag: &[u8; 4], length: u16| {
+            // The block, version 0x4c: the fields (25 bytes), the mask, one idle
+            // block (tag, its length 6 and a zero form ID), `cSkipNextBlend`
+            // and the flag byte (0).
+            let mut stream = tag.to_vec();
+            stream.extend(length.to_le_bytes());
+            stream.extend([0u8; 25]);
+            stream.push(0);
+            stream.extend(*b"KOLB");
+            stream.extend(6u16.to_le_bytes());
+            stream.extend([0u8; 4]);
+            stream.extend([1, 0]);
+            stream
+        };
+        let run = |tag: &[u8; 4], length: u16| {
+            let mut e = idle_engine();
+            let (this, _) = saved_animation(&mut e);
+            e.mem.set_u16(group_at(this, 1), 0xff);
+            let stream = build(tag, length);
+            let _io = save_io(&mut e, true, 0x4c, true, &stream);
+            let (actor, _) = saved_actor(&mut e, this, false, 0);
+            e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+            start_log(&mut e);
+            e.call(0x0049_a1c0, &args![this, actor]);
+            end_log(&mut e)
+        };
+        // The block is read exactly: no message.
+        assert!(arguments_of(&run(b"KOLB", 40), LOG).is_empty());
+        // One byte more than the block says (overrun) or less (underrun).
+        assert_eq!(
+            arguments_of(&run(b"KOLB", 39), LOG),
+            [[LOG_LOAD_LONG, 1, SOURCE_FILE, 0x16ac, 0x4c]]
+        );
+        assert_eq!(
+            arguments_of(&run(b"KOLB", 41), LOG),
+            [[LOG_LOAD_SHORT, 1, SOURCE_FILE, 0x16ac, 0x4c]]
+        );
+        // A wrong tag is logged.
+        let logged = arguments_of(&run(b"XXXX", 40), LOG);
+        assert_eq!(logged[0], [LOG_LOAD_NO_BLOCK, SOURCE_FILE, 0x1630, 0x4c]);
+    }
+
+    #[test]
+    fn fn_0049a920_resets_the_groups_idles_and_controllers() {
+        let mut e = idle_engine();
+        let (this, manager, _map) = managed_animation(&mut e);
+        manager_with_sequences(&mut e, this, &[]);
+        kf_model_list(&mut e, this, &[]);
+        // The animation root, a node that is not a node (slot 0xc gives 0).
+        e.register(0x00f2_000c, |_, _| ret(0));
+        let root = object_with_vtable(&mut e, 0x100, &[(0xc, 0x00f2_000c)]);
+        e.mem.set_u32(this.addr() + 8, root);
+        e.register(OBJECT_CONTROLLERS, |_, _| ret(0));
+        e.register(GET_CONTROLLER, |_, _| ret(0));
+        e.register(MANAGER_PALETTE, |_, _| ret(0));
+        let (idle, sequence) = playing_idle(&mut e, this, 2, 0);
+        let queued = fake_idle(&mut e, 1, 0, 3, 0);
+        put_idles(&mut e, this, [idle, queued, 0, 0]);
+        let stale = e.mem.alloc(0x80);
+        e.mem.set_u32(this.addr() + 0xfc, stale);
+        start_log(&mut e);
+        e.call(0x0049_a920, &args![this]);
+        let log = end_log(&mut e);
+        // Both idles are freed and emptied, the last slot and the ladder's
+        // slots are cleared.
+        assert_eq!(idle_fields(&e, this), [0; 4]);
+        assert_eq!(e.mem.u32(this.addr() + 0xfc), 0);
+        assert_eq!(e.mem.u32(current_sequence_at(this, 2)), 0);
+        assert_eq!(
+            arguments_of(&log, MANAGER_REMOVE_SEQUENCE),
+            [[manager, sequence]]
+        );
+        // Then the controllers of the animation root are cleared.
+        assert_eq!(arguments_of(&log, OBJECT_CONTROLLERS), [[root]]);
+    }
+
+    #[test]
+    fn fn_0049aa20_is_the_size_of_what_save_animation_writes() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let _io = save_io(&mut e, false, 0x3f, false, &[]);
+        e.register(SEQUENCE_SAVE_SIZE, |_, _| ret(0x20));
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        empty_groups(&mut e, this);
+        let size = e.call(0x0049_97f0, &args![this, actor]).u16();
+        assert_eq!(e.call(0x0049_aa20, &args![actor, this]).u16(), size + 2);
+        // Without an animation, or for an actor whose slot 0x22c says yes,
+        // there are only the two size bytes.
+        assert_eq!(e.call(0x0049_aa20, &args![actor, 0u32]).u16(), 2);
+        e.register(0x00f3_022c, |_, _| ret(1));
+        assert_eq!(e.call(0x0049_aa20, &args![actor, this]).u16(), 2);
+    }
+
+    #[test]
+    fn save_animation_writes_the_size_and_the_animation() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        let io = save_io(&mut e, false, 0x3f, false, &[]);
+        e.register(SEQUENCE_SAVE_SIZE, |_, _| ret(0x20));
+        e.register(SEQUENCE_SAVE, |_, _| Ret::default());
+        let (actor, _) = saved_actor(&mut e, this, false, 0);
+        empty_groups(&mut e, this);
+        let size = e.call(0x0049_97f0, &args![this, actor]).u16();
+        e.call(0x0049_aa80, &args![actor, this]);
+        let bytes = written(&e, &io);
+        assert_eq!(bytes[..2], size.to_le_bytes());
+        // The animation's fields follow (the save game function ran).
+        assert!(bytes.len() > 2);
+        assert_eq!(bytes[2..6], 0u32.to_le_bytes());
+        // No animation: a zero size and nothing else.
+        e.mem.set_u32(io.len, 0);
+        e.call(0x0049_aa80, &args![actor, 0u32]);
+        assert_eq!(written(&e, &io), [0, 0]);
+        // An actor whose slot 0x22c says yes: a zero size as well.
+        e.register(0x00f3_022c, |_, _| ret(1));
+        e.mem.set_u32(io.len, 0);
+        e.call(0x0049_aa80, &args![actor, this]);
+        assert_eq!(written(&e, &io), [0, 0]);
+    }
+
+    #[test]
+    fn fn_0049ab00_has_the_save_game_consume_the_length_it_reads() {
+        let mut e = idle_engine();
+        let io = save_io(&mut e, false, 0x3f, true, &[3, 0, 0, 0]);
+        e.register(SAVE_GAME_CONSUME, |_, _| Ret::default());
+        start_log(&mut e);
+        e.call(0x0049_ab00, &args![0x5000u32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, SAVE_GAME_CONSUME), [[0x7000, 0x5000, 3]]);
+        assert_eq!(e.mem.u32(io.pos), 2);
+        // A length of 0 consumes nothing.
+        e.mem.set_u32(io.pos, 2);
+        start_log(&mut e);
+        e.call(0x0049_ab00, &args![0x5000u32]);
+        assert!(arguments_of(&end_log(&mut e), SAVE_GAME_CONSUME).is_empty());
+    }
+
+    /// The doubles of a `BGSSaveGameBuffer` and a `BGSLoadGameBuffer`: the
+    /// buffer object (virtual slots 8 and 0xc give the owner stored at +0x10;
+    /// the word at +0xc counts the bytes written), and the stream the writes go
+    /// to (`out`, `len`) or the reads come from (`input`, `pos`). Returns the
+    /// buffer, `out`, `len` and `pos`.
+    fn buffer_io(e: &mut Engine, owner: u32, input: &[u8]) -> (u32, u32, u32, u32) {
+        e.register(0x00f4_0008, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x00f4_000c, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let buffer = object_with_vtable(e, 0x60, &[(8, 0x00f4_0008), (0xc, 0x00f4_000c)]);
+        e.mem.set_u32(buffer + 0x10, owner);
+        let out = e.mem.alloc(0x400);
+        let len = e.mem.alloc(4);
+        let inp = e.mem.alloc(0x400);
+        e.mem.write(inp, input);
+        let pos = e.mem.alloc(4);
+        e.register_double(SAVE_BUFFER_FIELD, move |e, a| {
+            let n = e.mem.u32(len);
+            for k in 0..a[2] {
+                let byte = e.mem.u8(a[1] + k);
+                e.mem.set_u8(out + n + k, byte);
+            }
+            e.mem.set_u32(len, n + a[2]);
+            let counted = e.mem.u32(a[0] + 0xc);
+            e.mem.set_u32(a[0] + 0xc, counted + a[2]);
+            Ret::default()
+        });
+        e.register_double(SAVE_BUFFER_FORM_ID, move |e, a| {
+            let n = e.mem.u32(len);
+            e.mem.set_u32(out + n, a[1]);
+            e.mem.set_u32(len, n + 4);
+            let counted = e.mem.u32(a[0] + 0xc);
+            e.mem.set_u32(a[0] + 0xc, counted + 4);
+            Ret::default()
+        });
+        e.register(SAVE_BUFFER_START_VARIABLE, |_, _| ret(0x7700));
+        e.register_double(SAVE_BUFFER_END_VARIABLE, move |e, a| {
+            let n = e.mem.u32(len);
+            e.mem.set_u32(out + n, a[1]);
+            e.mem.set_u32(len, n + 4);
+            Ret::default()
+        });
+        e.register_double(LOAD_BUFFER_FIELD, move |e, a| {
+            let n = e.mem.u32(pos);
+            for k in 0..a[2] {
+                let byte = e.mem.u8(inp + n + k);
+                e.mem.set_u8(a[1] + k, byte);
+            }
+            e.mem.set_u32(pos, n + a[2]);
+            Ret::default()
+        });
+        (buffer, out, len, pos)
+    }
+
+    /// A process with the given virtual slots (all doubles that return what the
+    /// object holds at +0x10).
+    fn process_with_slots(e: &mut Engine, slots: &[u32]) -> u32 {
+        let mut entries = vec![];
+        for slot in slots {
+            entries.push((*slot, 0x00f5_0000 + *slot));
+            e.register(0x00f5_0000 + *slot, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        }
+        object_with_vtable(e, 0x400, &entries)
+    }
+
+    #[test]
+    fn fn_0049ab40_saves_the_animation_into_a_buffer() {
+        let mut e = idle_engine();
+        let (this, map) = saved_animation(&mut e);
+        let a = this.addr();
+        e.mem.set_u32(a + 0xd4, 0x0bad_f00d);
+        e.mem.set_u16(a + 0x122, 0x77);
+        // The actor and its process: the 16-bit value (slot 0x3e4) and the held
+        // sequence (slot 0x3e8).
+        let process = process_with_slots(&mut e, &[0x3e4, 0x3e8]);
+        let actor = e.mem.alloc(0x100);
+        e.mem.set_u32(actor + 0x68, process);
+        let (buffer, out, len, _pos) = buffer_io(&mut e, actor, &[]);
+        // The held sequence is the one of slot 1; slot 3 plays the current
+        // idle's sequence, which is left out because an idle is queued.
+        let (sequence, shared) = (0x5555, 0x6666);
+        e.mem.set_u32(process + 0x10, sequence);
+        e.mem.set_u32(current_sequence_at(this, 1), sequence);
+        e.mem.set_u16(group_at(this, 3), 8);
+        e.mem.set_u32(current_sequence_at(this, 3), shared);
+        let entry = map_entry(&mut e, sequence, true);
+        e.register(0x00f1_0018, |_, _| ret(9));
+        let vtable = e.mem.u32(entry);
+        e.mem.set_u32(vtable + 0x18, 0x00f1_0018);
+        map_add(&mut e, map, 5, entry);
+        e.register(SEQUENCE_SAVE_TO_BUFFER, |_, _| Ret::default());
+        // The replay delay list: one item {form, delay}.
+        let item = e.mem.alloc(8);
+        e.mem.set_u32(item, 0xaa00_0001);
+        e.mem.set_f32(item + 4, 6.0);
+        e.mem.set_u32(a + 0x134, item);
+        e.mem.set_u32(a + 0x138, 0);
+        e.register(RECORD_ADDRESS, |_, a| ret(a[0]));
+        // The queued idle has the form 0x7007 and no sequence; the current idle
+        // plays the shared sequence.
+        let queued = fake_idle(&mut e, 1, 2, 7, 0);
+        e.mem.set_u32(queued + 0x2c, 0x7007);
+        let current = fake_idle(&mut e, 1, 0, 3, shared);
+        put_idles(&mut e, this, [current, queued, 0, 0]);
+        start_log(&mut e);
+        e.call(0x0049_ab40, &args![this, buffer]);
+        let log = end_log(&mut e);
+        let bytes: Vec<u8> = (0..e.mem.u32(len)).map(|i| e.mem.u8(out + i)).collect();
+        let expected = bytes_of(&[
+            &1.5f32.to_le_bytes(),
+            &2.5f32.to_le_bytes(),
+            &1.0f32.to_le_bytes(),
+            &2.0f32.to_le_bytes(),
+            &3.0f32.to_le_bytes(),
+            &0.25f32.to_le_bytes(),
+            &[7],
+            &0x0bad_f00du32.to_le_bytes(),
+            &0x77u16.to_le_bytes(),
+            // The replay delay list: the item, then the count.
+            &0xaa00_0001u32.to_le_bytes(),
+            &6.0f32.to_le_bytes(),
+            &1u32.to_le_bytes(),
+            // The queued idle's form, then its state (as a sized value).
+            &0x7007u32.to_le_bytes(),
+            &1u32.to_le_bytes(),
+            &2u32.to_le_bytes(),
+            &7u32.to_le_bytes(),
+            &12u32.to_le_bytes(),
+            // The mask (slot 1 only), slot 1, `cSkipNextBlend`, the process's
+            // value, the held sequence's slot and the idle's (none).
+            &[0b10],
+            &5u16.to_le_bytes(),
+            &0x11u32.to_le_bytes(),
+            &0x22u16.to_le_bytes(),
+            &3u32.to_le_bytes(),
+            &4u32.to_le_bytes(),
+            &[9],
+            &[1],
+            &0x5555u16.to_le_bytes(),
+            &[1],
+            &[0xff],
+        ]);
+        // (The process's 16-bit value is what the double returns at +0x10, the
+        // held sequence's low word.)
+        assert_eq!(bytes, expected);
+        assert_eq!(
+            arguments_of(&log, SAVE_BUFFER_END_VARIABLE),
+            [[buffer, 1, 0x7700], [buffer, 12, 0x7700]]
+        );
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_SAVE_TO_BUFFER),
+            [[sequence, buffer, 3.5f32.to_bits()]]
+        );
+    }
+
+    /// The doubles `fn_0049b050` needs besides the stream: an actor (with a
+    /// process) for the load buffer, the replay list and the idle form lookups.
+    /// `variables` are the values `LoadVariableSizedValue` returns in turn,
+    /// `found` and `id` what `LoadFormID_ov2` reports, and `cast` what the
+    /// `TESIdleForm` cast gives. Returns the buffer, the actor, the process
+    /// and the stream position cell.
+    fn load_scene(
+        e: &mut Engine,
+        input: &[u8],
+        variables: Vec<u32>,
+        found: u32,
+        id: u32,
+        cast: u32,
+    ) -> (u32, u32, u32, u32) {
+        e.register(0x00f6_022c, |_, _| ret(0));
+        e.register(0x00f6_02e8, |_, _| ret(0));
+        e.register(0x00f6_01e8, |_, _| ret(0xb1b1));
+        let actor = object_with_vtable(
+            e,
+            0x200,
+            &[
+                (0x22c, 0x00f6_022c),
+                (0x2e8, 0x00f6_02e8),
+                (0x1e8, 0x00f6_01e8),
+            ],
+        );
+        let process = process_with_slots(e, &[0x4dc, 0x454, 0x1cc, 0x1d8, 0x61c, 0x3ec]);
+        e.mem.set_u32(process + 0x10, 0x5a);
+        e.mem.set_u32(actor + 0x68, process);
+        e.register(ACTOR_PROCESS, |e, a| ret(e.mem.u32(a[0] + 0x68)));
+        let (buffer, _out, _len, pos) = buffer_io(e, actor, input);
+        let mut values = variables.into_iter();
+        e.register_double(LOAD_BUFFER_VARIABLE, move |_, _| {
+            ret(values.next().unwrap_or(0))
+        });
+        e.register(LOAD_BUFFER_FORM_ID, |_, _| ret(0xf1));
+        e.register_double(LOAD_BUFFER_FORM_ID_FOUND, move |e, a| {
+            e.mem.set_u32(a[1], id);
+            ret(found)
+        });
+        e.register(FORM_BY_ID, |_, a| ret(0x00ab_0000 + a[0]));
+        e.register_double(RT_DYNAMIC_CAST, move |_, _| ret(cast));
+        e.register(REPLAY_LIST_PUSH, |e, a| {
+            let item = e.mem.u32(a[1]);
+            let form = e.mem.u32(item);
+            let delay = e.mem.u32(item + 4);
+            e.mem.set_u32(0x011c_5100, form);
+            e.mem.set_u32(0x011c_5104, delay);
+            e.mem.set_u32(0x011c_5108, a[0]);
+            Ret::default()
+        });
+        for address in [
+            BIP_NODE_UPDATE_BIP_ONLY,
+            BIP_UPDATE_ALL_BUT_BIP,
+            SEQUENCE_LOAD_FROM_BUFFER,
+            SEQUENCE_DESTRUCT,
+            SET_FLOAT_AT_48,
+            SEQUENCE_BASE_CONSTRUCT,
+            MODEL_LOADER_DROP_IDLE,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(FLOAT_AT_48, |e, a| e.mem.f32(a[0] + 0x48).into_ret());
+        e.register(FIND_NEXT_COLLISION_OBJECT, |_, _| ret(0));
+        e.register(MENU_MODE_TYPE, |_, _| ret(0));
+        e.register(WORD_AT_4, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(KF_MODEL_RELEASE, |_, _| Ret::default());
+        (buffer, actor, process, pos)
+    }
+
+    /// The stream of `fn_0049b050` up to the idle: the 31 bytes of fields and
+    /// one replay delay value.
+    fn load_fields(replay_delay: u32) -> Vec<u8> {
+        let mut stream = vec![0u8; 31];
+        stream.extend(replay_delay.to_le_bytes());
+        stream
+    }
+
+    #[test]
+    fn fn_0049b050_does_nothing_without_an_animation_root() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        let (buffer, _actor, _process, _pos) = load_scene(&mut e, &[], vec![], 0, 0, 0);
+        start_log(&mut e);
+        e.call(0x0049_b050, &args![this, buffer]);
+        assert!(arguments_of(&end_log(&mut e), ACTOR_PROCESS).is_empty());
+    }
+
+    #[test]
+    fn fn_0049b050_restores_the_groups_the_delays_and_the_held_sequence() {
+        let mut f = start_fixture();
+        let (this, sequence) = (f.this, f.sequence);
+        let e = &mut f.e;
+        let a = this.addr();
+        let map = map_for(e, this);
+        let entry = map_entry(e, sequence, true);
+        map_add(e, map, 1, entry);
+        e.register(KF_MODEL_ANIM_GROUP, |e, k| ret(e.mem.u32(k[0] + 8)));
+        e.register(MANAGER_REMOVE_SEQUENCE, |_, _| Ret::default());
+        // Two queued models (without a group: nothing to add), and a sequence in
+        // slot 0 that gets its end time added to its float at +0x48.
+        let (first, second) = (e.mem.alloc(0x20), e.mem.alloc(0x20));
+        kf_model_list(e, this, &[first, second]);
+        let playing = e.mem.alloc(0x80);
+        e.mem.set_f32(playing + 0x48, 1.5);
+        e.mem.set_f32(playing + 0x30, 4.0);
+        e.mem.set_u32(current_sequence_at(this, 0), playing);
+        e.set(this, Animation::time, 2.0f32);
+        // The stream: fields, one replay delay (value 9), no idle, the mask (slots 1
+        // and 2), slot 1 (group 1, started from the map), slot 2 (group 7, unknown:
+        // a throw-away sequence loads its bytes), `cSkipNextBlend`, the phase -2,
+        // the held slot 1 and no idle sequence.
+        let mut stream = load_fields(9);
+        stream.push(0b110);
+        stream.extend(bytes_of(&[
+            &1u16.to_le_bytes(),
+            &5u32.to_le_bytes(),
+            &0xffu16.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &[0],
+            &7u16.to_le_bytes(),
+            &6u32.to_le_bytes(),
+            &0xffu16.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &0u32.to_le_bytes(),
+            &[0xff],
+            &[1],
+            &0xfffeu16.to_le_bytes(),
+            &[1],
+            &[0xff],
+        ]));
+        let (buffer, actor, process, _pos) = load_scene(e, &stream, vec![1, 0], 0, 0, 0x00cd_0001);
+        // (The first value 1 is the number of delays; the stream has one.)
+        // The idle is absent: no form ID (0).
+        let _ = actor;
+        e.mem.set_u32(a + 0x120, 0);
+        start_log(e);
+        e.call(0x0049_b050, &args![this, buffer]);
+        let log = end_log(e);
+        // The queued models are released.
+        assert_eq!(arguments_of(&log, KF_MODEL_RELEASE), [[first], [second]]);
+        // The process takes the animation, hands out the biped and refreshes.
+        let player: u32 = e.global(PLAYER_SINGLETON);
+        let _ = player;
+        assert_eq!(arguments_of(&log, 0x00f5_04dc), [[process, actor, a]]);
+        assert_eq!(arguments_of(&log, 0x00f5_01cc), [[process, 0x5a, 0xb1b1]]);
+        assert_eq!(arguments_of(&log, 0x00f5_01d8), [[process, actor]]);
+        assert_eq!(arguments_of(&log, 0x00f5_061c), [[process]]);
+        // The held sequence is the sequence of slot 1 with the phase -2.
+        let held = e.mem.u32(current_sequence_at(this, 1));
+        assert_eq!(held, sequence);
+        assert_eq!(
+            arguments_of(&log, 0x00f5_03ec),
+            [[process, 0xffff_ffff, 0], [process, 0xffff_fffe, sequence]]
+        );
+        // The delay is queued with the idle form the cast gave.
+        assert_eq!(e.mem.u32(0x011c_5100), 0x00cd_0001);
+        assert_eq!(e.mem.u32(0x011c_5108), a + 0x134);
+        // The slots: groups and actions are read, slot 1 loads its sequence from
+        // the buffer, slot 2's bytes go into a throw-away sequence.
+        assert_eq!(e.mem.u16(group_at(this, 1)), 1);
+        // (Slot 2 came back without a sequence: it is cleared again.)
+        assert_eq!(e.mem.u16(group_at(this, 2)), 0xff);
+        assert_eq!(e.mem.i32(action_at(this, 1)), 5);
+        assert_eq!(e.mem.i32(action_at(this, 2)), -1);
+        let loads = arguments_of(&log, SEQUENCE_LOAD_FROM_BUFFER);
+        assert_eq!(loads.len(), 2);
+        assert_eq!(loads[0], [sequence, buffer, 2.0f32.to_bits()]);
+        let temporary = loads[1][0];
+        assert_eq!(arguments_of(&log, SEQUENCE_BASE_CONSTRUCT), [[temporary]]);
+        assert_eq!(arguments_of(&log, SEQUENCE_DESTRUCT), [[temporary]]);
+        // The sequence of slot 0 had its end time added to the float at +0x48.
+        assert_eq!(
+            arguments_of(&log, SET_FLOAT_AT_48),
+            [[playing, 5.5f32.to_bits()]]
+        );
+        // The bip nodes of the root are updated before and after.
+        let root = e.mem.u32(a + 8);
+        assert_eq!(
+            arguments_of(&log, BIP_UPDATE_ALL_BUT_BIP),
+            [[root, 2.0f32.to_bits()], [root, 2.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn fn_0049b050_skips_an_idle_it_cannot_use() {
+        // The stream: fields, no delays, the idle record, the mask (0) and the
+        // three trailing values.
+        let tail = [0u8, 1, 0xff, 0xff, 0xff, 0xff];
+        let mut stream = load_fields(0);
+        stream.truncate(31);
+        stream.extend(tail);
+        let run = |found: u32, id: u32, cast: u32| {
+            let mut f = start_fixture();
+            let this = f.this;
+            let e = &mut f.e;
+            e.register(KF_MODEL_ANIM_GROUP, |e, k| ret(e.mem.u32(k[0] + 8)));
+            kf_model_list(e, this, &[]);
+            let (buffer, _actor, _process, _pos) =
+                load_scene(e, &stream, vec![0, 7], found, id, cast);
+            e.call(0x0049_b050, &args![this, buffer]);
+            (e.mem.u32(buffer + 0xc), idle_fields(e, this))
+        };
+        // The form ID is missing from the save: the 7 bytes are skipped.
+        assert_eq!(run(1, 0xf1, 0).0, 7);
+        // The ID is there but is not an idle form: skipped as well.
+        assert_eq!(run(0, 0xf1, 0).0, 7);
+        // No ID at all: nothing is read or skipped.
+        let (skipped, idles) = run(0, 0, 0x00cd_0001);
+        assert_eq!(skipped, 0);
+        assert_eq!(idles, [0; 4]);
+    }
+
+    #[test]
+    fn fn_0049b050_builds_the_idle_it_finds_in_the_save() {
+        let mut b = idle_build(0, false);
+        let idle_form = b.idle_form;
+        let e = &mut b.e;
+        let (this, _manager, _map) = managed_animation(e);
+        e.register(WORD_AT_C, |e, a| ret(e.mem.u32(a[0] + 0xc)));
+        e.register(WORD_AT_8, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.map(0x011e_0000, 0x1000);
+        e.set_global(PLAYER_SINGLETON, 0x3000_0000u32);
+        e.register(SEQUENCE_STATE, |e, a| ret(e.mem.u32(a[0] + 0x44)));
+        e.register(MODEL_LOADER_LOAD_KF, |_, _| ret(0));
+        kf_model_list(e, this, &[]);
+        let root = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 8, root);
+        // The stream: fields, no delays, the idle's state (3), play type (2) and
+        // section (5) read by `fn_00497c10`, the empty mask and the trailing values.
+        let mut stream = vec![0u8; 31];
+        for word in [3u32, 2, 5] {
+            stream.extend(word.to_le_bytes());
+        }
+        stream.extend([0u8, 1, 0xff, 0xff, 0xff, 0xff]);
+        let (buffer, actor, _process, _pos) =
+            load_scene(e, &stream, vec![0, 12], 0, 0xf1, idle_form);
+        start_log(e);
+        e.call(0x0049_b050, &args![this, buffer]);
+        let log = end_log(e);
+        let idle = idle_fields(e, this)[0];
+        assert_ne!(idle, 0);
+        let idle = Ptr::<AnimIdle>::new(idle);
+        // Built for the actor in section 7 with play type 1, then given the
+        // state, play type and section of the save.
+        assert_eq!(e.get(idle, AnimIdle::pActor).addr(), actor);
+        assert_eq!(e.get(idle, AnimIdle::pIdleForm).addr(), idle_form);
+        assert_eq!(e.get(idle, AnimIdle::eFlags), 3);
+        assert_eq!(e.get(idle, AnimIdle::eType), 2);
+        assert_eq!(e.get(idle, AnimIdle::eSection), 5);
+        // The length value is read and ignored; the KF is loaded, not queued.
+        assert_eq!(arguments_of(&log, MODEL_LOADER_LOAD_KF).len(), 1);
+        assert!(arguments_of(&log, MODEL_LOADER_LOAD_IDLE_KF).is_empty());
+    }
+
+    #[test]
+    fn fn_0049baa0_builds_an_empty_group_sequence() {
+        let mut e = engine_two();
+        e.register(SEQUENCE_BASE_CONSTRUCT, |_, _| Ret::default());
+        let object = e.mem.alloc(ANIM_GROUP_SEQUENCE_SIZE);
+        e.mem.set_u32(object + 0x74, 0x5555);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_baa0, &args![object]).u32(), object);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, SEQUENCE_BASE_CONSTRUCT), [[object]]);
+        assert_eq!(e.mem.u32(object), VTABLE_ANIM_GROUP_SEQUENCE);
+        assert_eq!(e.mem.u32(object + 0x74), 0);
+    }
+
+    #[test]
+    fn group_sequence_get_rtti_returns_the_class_rtti() {
+        let mut e = engine_two();
+        assert_eq!(
+            e.call(0x0049_bb10, &args![0x1234u32]).u32(),
+            RTTI_ANIM_GROUP_SEQUENCE
+        );
+    }
+
+    #[test]
+    fn group_sequence_scalar_deleting_destructor_deletes_when_asked() {
+        let mut e = engine_two();
+        e.register(SEQUENCE_DESTRUCT, |_, _| Ret::default());
+        e.register(NI_OPERATOR_DELETE, |_, _| Ret::default());
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_bb20, &args![0x4000u32, 0u32]).u32(), 0x4000);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, SEQUENCE_DESTRUCT), [[0x4000]]);
+        assert!(arguments_of(&log, NI_OPERATOR_DELETE).is_empty());
+        start_log(&mut e);
+        e.call(0x0049_bb20, &args![0x4000u32, 1u32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, NI_OPERATOR_DELETE), [[0x4000, 0x78]]);
+    }
+
+    #[test]
+    fn fn_0049bb50_adds_the_count_to_the_word_at_0xc() {
+        let mut e = Engine::new();
+        let buffer = e.mem.alloc(0x20);
+        e.mem.set_u32(buffer + 0xc, 100);
+        e.call(0x0049_bb50, &args![buffer, 23u32]);
+        assert_eq!(e.mem.u32(buffer + 0xc), 123);
+    }
+
+    #[test]
+    fn fn_0049bb70_frees_the_idles_and_the_replay_delays() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        manager_with_sequences(&mut e, this, &[]);
+        e.register(SIMPLE_LIST_ITEM, |_, a| ret(a[0]));
+        e.register(SIMPLE_LIST_CLEAR, |_, _| Ret::default());
+        e.register(GET_CONTROLLER, |_, _| ret(0));
+        e.mem.set_u8(this.addr() + 0x120, 1);
+        let stale = e.mem.alloc(0x80);
+        e.mem.set_u32(this.addr() + 0xfc, stale);
+        let (idle, _sequence) = playing_idle(&mut e, this, 2, 0);
+        put_idles(&mut e, this, [idle, 0, 0, 0]);
+        // Two replay delays: {item0, next} and {item1, 0}.
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, 0xd1);
+        e.mem.set_u32(this.addr() + 0x134, 0xd0);
+        e.mem.set_u32(this.addr() + 0x138, node);
+        start_log(&mut e);
+        e.call(0x0049_bb70, &args![this, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u8(this.addr() + 0x120), 0);
+        assert_eq!(idle_fields(&e, this), [0; 4]);
+        assert_eq!(e.mem.u32(this.addr() + 0xfc), 0);
+        assert_eq!(arguments_of(&log, OPERATOR_DELETE), [[0xd0], [0xd1]]);
+        assert_eq!(
+            arguments_of(&log, SIMPLE_LIST_CLEAR),
+            [[this.addr() + 0x134]]
+        );
+    }
+
+    #[test]
+    fn update_bip_only_updates_the_bip_nodes_and_reports_the_accumulation_translation() {
+        let mut e = engine_two();
+        e.register(NODE_SET_WORLD_TRANSLATION, |_, _| Ret::default());
+        e.register(BIP_NODE_UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.register(NODE_WORLD_TRANSLATION, |_, a| ret(a[0] + 0x58));
+        let this: Ptr<Animation> = e.new_object();
+        let (root, accum) = (e.mem.alloc(0x40), e.mem.alloc(0x80));
+        e.mem.set_u32(this.addr() + 8, root);
+        e.mem.set_u32(this.addr() + 0xc, accum);
+        for (i, value) in [4.0f32, 5.0, 6.0].iter().enumerate() {
+            e.mem.set_f32(accum + 0x58 + 4 * i as u32, *value);
+        }
+        let out = e.mem.alloc(12);
+        start_log(&mut e);
+        e.call(0x0049_bca0, &args![this, 0.5f32, out, 1u32]);
+        let log = end_log(&mut e);
+        // The root is moved to `AccumRootTranslate`, the bip nodes are updated
+        // with it, the translation is handed out and the root is moved back.
+        assert_eq!(
+            arguments_of(&log, NODE_SET_WORLD_TRANSLATION),
+            [[accum, this.addr() + 0x1c], [accum, ZERO_VECTOR]]
+        );
+        assert_eq!(
+            arguments_of(&log, BIP_NODE_UPDATE_BIP_ONLY),
+            [[root, 0.5f32.to_bits(), accum]]
+        );
+        assert_eq!(
+            [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+            [4.0, 5.0, 6.0]
+        );
+        // Without an output pointer nothing is copied; without an accumulation
+        // root only the bip nodes are updated.
+        e.mem.set_f32(out, 9.0);
+        e.call(0x0049_bca0, &args![this, 0.5f32, 0u32, 1u32]);
+        assert_eq!(e.mem.f32(out), 9.0);
+        e.mem.set_u32(this.addr() + 0xc, 0);
+        start_log(&mut e);
+        e.call(0x0049_bca0, &args![this, 0.5f32, out, 1u32]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, NODE_SET_WORLD_TRANSLATION).is_empty());
+        assert_eq!(
+            arguments_of(&log, BIP_NODE_UPDATE_BIP_ONLY),
+            [[root, 0.5f32.to_bits(), 0]]
+        );
+    }
+
+    #[test]
+    fn fn_0049bd30_counts_the_queued_models() {
+        let mut e = idle_engine();
+        let this: Ptr<Animation> = e.new_object();
+        kf_model_list(&mut e, this, &[]);
+        e.register(SIMPLE_LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        assert_eq!(e.call(0x0049_bd30, &args![this]).u32(), 0);
+        kf_model_list(&mut e, this, &[0x11, 0x22, 0x33]);
+        e.register(SIMPLE_LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        assert_eq!(e.call(0x0049_bd30, &args![this]).u32(), 3);
+    }
+
+    #[test]
+    fn fn_0049bd90_hands_an_object_to_the_animation_root() {
+        let mut e = idle_engine();
+        e.register(ROOT_NODE_NOTIFY, |_, _| Ret::default());
+        let this: Ptr<Animation> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0049_bd90, &args![this, 0x5000u32]);
+        assert!(arguments_of(&end_log(&mut e), ROOT_NODE_NOTIFY).is_empty());
+        e.mem.set_u32(this.addr() + 8, 0x6000);
+        start_log(&mut e);
+        e.call(0x0049_bd90, &args![this, 0x5000u32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, ROOT_NODE_NOTIFY), [[0x6000, 0x5000]]);
+    }
+
+    #[test]
+    fn fn_0049bdc0_drives_the_group_in_slot_3_by_weight() {
+        let mut e = idle_engine();
+        let (this, _manager, _map) = managed_animation(&mut e);
+        e.register(SEQUENCE_UPDATE, |_, _| Ret::default());
+        e.register(SEQUENCE_SET_PHASE, |_, _| Ret::default());
+        e.register(UPDATE_BIP_ONLY, |_, _| Ret::default());
+        e.register(SEQUENCE_BEGIN_TIME, |e, a| {
+            e.mem.f32(a[0] + 0x2c).into_ret()
+        });
+        // Weight 0 with a sequence: update it to time 0 and clear the slot.
+        let sequence = e.mem.alloc(0x80);
+        e.mem.set_u32(current_sequence_at(this, 3), sequence);
+        start_log(&mut e);
+        e.call(0x0049_bdc0, &args![this, 0.0f32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, SEQUENCE_UPDATE), [[sequence, 0, 1]]);
+        assert_eq!(e.mem.u32(current_sequence_at(this, 3)), 0);
+        // Weight 0 with an empty slot does nothing.
+        start_log(&mut e);
+        e.call(0x0049_bdc0, &args![this, 0.0f32]);
+        assert!(called(&mut e).is_empty());
+        // A sequence in state 1 gets a lip time between its begin (1.0) and end
+        // (3.0) times by the weight, and the phase is that minus the time.
+        e.mem.set_u32(sequence + 0x44, 1);
+        e.mem.set_f32(sequence + 0x2c, 1.0);
+        e.mem.set_f32(sequence + 0x30, 3.0);
+        e.mem.set_u32(current_sequence_at(this, 3), sequence);
+        e.set(this, Animation::time, 0.5f32);
+        start_log(&mut e);
+        e.call(0x0049_bdc0, &args![this, 0.25f32]);
+        let log = end_log(&mut e);
+        assert_eq!(e.get(this, Animation::fLipTime), 1.5);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_SET_PHASE),
+            [[sequence, 1.0f32.to_bits(), 1]]
+        );
+        // Any other state leaves the lip time alone.
+        e.mem.set_u32(sequence + 0x44, 2);
+        e.set(this, Animation::fLipTime, 0.0f32);
+        e.call(0x0049_bdc0, &args![this, 0.25f32]);
+        assert_eq!(e.get(this, Animation::fLipTime), 0.0);
+        // An empty slot starts the group 0xe1: the map does not know it, so
+        // nothing else happens.
+        e.mem.set_u32(current_sequence_at(this, 3), 0);
+        start_log(&mut e);
+        e.call(0x0049_bdc0, &args![this, 0.25f32]);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, SEQUENCE_UPDATE).is_empty());
+    }
+
+    #[test]
+    fn fn_0049bf10_drives_a_sequence_on_a_manager() {
+        let mut e = idle_engine();
+        e.register(SEQUENCE_UPDATE, |_, _| Ret::default());
+        e.register(MANAGER_SET_FLAG, |_, _| Ret::default());
+        e.register(MANAGER_ACTIVATE, |_, _| Ret::default());
+        e.register(SEQUENCE_BEGIN_TIME, |e, a| {
+            e.mem.f32(a[0] + 0x2c).into_ret()
+        });
+        e.register(SEQUENCE_SET_PHASE, |_, _| Ret::default());
+        e.map(0x011f_6000, 0x1000);
+        e.set_global(DOUBLE_THOUSAND, 1000.0f64);
+        // The time scale object keeps 1500 milliseconds at +0x14.
+        e.mem.set_u32(TIME_SCALE_OBJECT + 0x14, 1500);
+        let manager = e.mem.alloc(0x40);
+        let sequence = e.mem.alloc(0x80);
+        e.mem.set_f32(sequence + 0x2c, 1.0);
+        e.mem.set_f32(sequence + 0x30, 3.0);
+        let call = |e: &mut Engine, weight: f32, manager: u32, sequence: u32| {
+            start_log(e);
+            e.call(0x0049_bf10, &args![weight, manager, sequence]);
+            end_log(e)
+        };
+        // Without a manager or a sequence nothing happens.
+        assert!(call(&mut e, 0.5, 0, sequence).is_empty());
+        assert!(call(&mut e, 0.5, manager, 0).is_empty());
+        // Weight 0: a sequence in state 1 is reset.
+        e.mem.set_u32(sequence + 0x44, 1);
+        let log = call(&mut e, 0.0, manager, sequence);
+        assert_eq!(arguments_of(&log, SEQUENCE_SET_PHASE), [[sequence, 0, 1]]);
+        assert_eq!(arguments_of(&log, SEQUENCE_UPDATE), [[sequence, 0, 1]]);
+        e.mem.set_u32(sequence + 0x44, 0);
+        let log = call(&mut e, 0.0, manager, sequence);
+        assert!(arguments_of(&log, SEQUENCE_UPDATE).is_empty());
+        // A sequence in state 0 is activated and updated to begin + 1.5 s.
+        let log = call(&mut e, 0.5, manager, sequence);
+        assert_eq!(arguments_of(&log, MANAGER_SET_FLAG), [[manager, 1]]);
+        assert_eq!(
+            arguments_of(&log, MANAGER_ACTIVATE),
+            [[manager, sequence, 0, 0, 1.0f32.to_bits(), 0, 0]]
+        );
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_UPDATE),
+            [[sequence, 2.5f32.to_bits(), 1]]
+        );
+        // In state 1 the phase is begin + (end - begin) * weight - 1.5 s.
+        e.mem.set_u32(sequence + 0x44, 1);
+        let log = call(&mut e, 0.5, manager, sequence);
+        assert_eq!(
+            arguments_of(&log, SEQUENCE_SET_PHASE),
+            [[sequence, 0.5f32.to_bits(), 1]]
+        );
+        assert!(arguments_of(&log, MANAGER_ACTIVATE).is_empty());
+    }
+
+    #[test]
+    fn fn_0049c050_builds_the_sequence_map() {
+        let mut e = engine_two();
+        e.register(MAP_BASE_CONSTRUCT, |_, _| Ret::default());
+        let object = e.mem.alloc(0x20);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_c050, &args![object, 37u32]).u32(), object);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, MAP_BASE_CONSTRUCT), [[object, 37]]);
+        assert_eq!(e.mem.u32(object), VTABLE_ANIM_SEQUENCE_MAP);
     }
 }
