@@ -1916,6 +1916,849 @@ fn actor_frame_update(e: &mut Engine, this: Ptr<Actor>, delta: f32) {
     e.call(0x0048_3710, &args![handle]);
     e.mem.free(block);
 }
+
+/// `ActorMover` (Xbox PDB) of the actor: `pActorMover` (PC +0x190).
+fn actor_mover(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    e.get(this, Actor::pActorMover)
+}
+
+/// `ActorMover::bStopMovementNextUpdate` (Xbox PDB +0x72), `bFaceTargetPoint`
+/// (+0x73) and `bWaitingForPath` (+0x74): byte fields of the mover.
+const MOVER_STOP_MOVEMENT_NEXT_UPDATE: u32 = 0x72;
+const MOVER_FACE_TARGET_POINT: u32 = 0x73;
+const MOVER_WAITING_FOR_PATH: u32 = 0x74;
+
+// Translated from 008b3820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentPathingRequest` (Xbox PDB): `006838b0` of the
+/// `ActorMover`, its result passed through.
+pub fn actor_get_current_pathing_request(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x0068_38b0, &args![mover]).u32()
+}
+
+// Translated from 008b3840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentPathfindingGoal` (Xbox PDB): `009de2b0` of the
+/// `ActorMover`, its result passed through.
+pub fn actor_get_current_pathfinding_goal(e: &mut Engine, this: Ptr<Actor>, goal: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e2b0, &args![mover, goal]).u32()
+}
+
+// Translated from 008b3860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009de330` of the `ActorMover`, its result passed through.
+pub fn fn_008b3860(e: &mut Engine, this: Ptr<Actor>, argument: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e330, &args![mover, argument]).u32()
+}
+
+// Translated from 008b3880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::BuildRequest` (Xbox PDB): `009dbc90` with the actor as its first
+/// word; when the actor's in-combat byte (`00493bb0`) is set, `008ad8f0(target, 0)`
+/// follows on the first argument.
+#[allow(clippy::too_many_arguments)]
+pub fn actor_build_request(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    target: u32,
+    second: u32,
+    third: u32,
+    fourth: u32,
+    value: f32,
+    last: u32,
+) {
+    e.call(
+        0x009d_bc90,
+        &args![this, target, second, third, fourth, value, last],
+    );
+    if e.call(ACTOR_IS_IN_COMBAT, &args![this]).u8() != 0 {
+        e.call(0x008a_d8f0, &args![target, 0u32]);
+    }
+}
+
+// Translated from 008b38d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::BuildRequest_ov2` (Xbox PDB): resolves the cell and world space
+/// from `place` (the actor's own, `008d6f30` and `TESObjectREFR::GetWorldSpace`
+/// `00575d70`, when 0; `place` itself when its form kind (`00401170`) is `0x39`
+/// for the first or `0x41` for the second) and builds the request with
+/// [`actor_build_request`].
+pub fn actor_build_request_ov2(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    target: u32,
+    second: u32,
+    place: u32,
+    value: f32,
+    last: u32,
+) {
+    let mut first_place = 0;
+    let mut second_place = 0;
+    if place == 0 {
+        first_place = e.call(0x008d_6f30, &args![this]).u32();
+        second_place = e.call(0x0057_5d70, &args![this]).u32();
+    } else if e.call(0x0040_1170, &args![place]).u32() == 0x39 {
+        first_place = place;
+    } else if e.call(0x0040_1170, &args![place]).u32() == 0x41 {
+        second_place = place;
+    }
+    actor_build_request(
+        e,
+        this,
+        target,
+        second,
+        first_place,
+        second_place,
+        value,
+        last,
+    );
+}
+
+// Translated from 008b3960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsPathValid` (Xbox PDB): `ActorMover::IsPathValid` (`009de3e0`).
+pub fn actor_is_path_valid(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e3e0, &args![mover]).u32()
+}
+
+// Translated from 008b3980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009dcab0` of the `ActorMover`, its result passed through.
+pub fn fn_008b3980(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_cab0, &args![mover]).u32()
+}
+
+// Translated from 008b39a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009de110` of the `ActorMover`, its result passed through.
+pub fn fn_008b39a0(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e110, &args![mover, first, second]).u32()
+}
+
+// Translated from 008b39d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetFailedPathDestination` (Xbox PDB):
+/// `ActorMover::GetFailedPathDestination` (`009de460`).
+pub fn actor_get_failed_path_destination(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e460, &args![mover]).u32()
+}
+
+// Translated from 008b39f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetMoveMode` (Xbox PDB): slot 4 of the `ActorMover`
+/// (`SetMoveModePreference`).
+pub fn actor_set_move_mode(e: &mut Engine, this: Ptr<Actor>, mode: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.vcall(mover.addr(), 0x4, &args![mode]).u32()
+}
+
+// Translated from 008b3a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ForceMoveMode` (Xbox PDB): slot `0xC` of the `ActorMover`.
+pub fn actor_force_move_mode(e: &mut Engine, this: Ptr<Actor>, mode: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.vcall(mover.addr(), 0xc, &args![mode]).u32()
+}
+
+// Translated from 008b3a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearForcedMoveMode` (Xbox PDB): slot `0x10` of the `ActorMover`.
+pub fn actor_clear_forced_move_mode(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.vcall(mover.addr(), 0x10, &args![]).u32()
+}
+
+// Translated from 008b3a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearMoveMode` (Xbox PDB): slot 8 of the `ActorMover`
+/// (`ClearMoveModePreference`), one stack argument.
+pub fn actor_clear_move_mode(e: &mut Engine, this: Ptr<Actor>, argument: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.vcall(mover.addr(), 0x8, &args![argument]).u32()
+}
+
+// Translated from 008b3ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::StopMoving` (Xbox PDB): `ActorMover::StopMoving` (`009dd0a0`).
+pub fn actor_stop_moving(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_d0a0, &args![mover]).u32()
+}
+
+// Translated from 008b3ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ForceStopMoving` (Xbox PDB): `ActorMover::ForceStopMoving`
+/// (`009dd0c0`).
+pub fn actor_force_stop_moving(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_d0c0, &args![mover]).u32()
+}
+
+// Translated from 008b3af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs [`fn_008b3b10`] on the actor's `ActorMover`.
+pub fn fn_008b3af0(e: &mut Engine, this: Ptr<Actor>) {
+    let mover = actor_mover(e, this);
+    fn_008b3b10(e, mover);
+}
+
+// Translated from 008b3b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover` (`this`): clears `bStopMovementNextUpdate` (Xbox PDB +0x72).
+pub fn fn_008b3b10(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u8(this.addr() + MOVER_STOP_MOVEMENT_NEXT_UPDATE, 0);
+}
+
+// Translated from 008b3b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes a 12-byte vector to `out` and returns `out`: with `value <= 0.0`
+/// the 12 bytes `00436aa0` of the actor returns, otherwise the result of
+/// `009dcc80(mover, out, value)`.
+pub fn fn_008b3b30(e: &mut Engine, this: Ptr<Actor>, out: Ptr, value: f32) -> Ptr {
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if f64::from(value) <= zero {
+        let source = e.call(0x0043_6aa0, &args![this]).u32();
+        for offset in [0, 4, 8] {
+            let word = e.mem.u32(source + offset);
+            e.mem.set_u32(out.addr() + offset, word);
+        }
+    } else {
+        let mover = actor_mover(e, this);
+        e.call(0x009d_cc80, &args![mover, out, value]);
+    }
+    out
+}
+
+// Translated from 008b3b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0097f2f0` of the `ActorMover`, its result passed through.
+pub fn fn_008b3b90(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x0097_f2f0, &args![mover]).u32()
+}
+
+// Translated from 008b3bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsPathingComplete` (Xbox PDB): `ActorMover::IsPathingComplete`
+/// (`009dcd40`).
+pub fn actor_is_pathing_complete(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_cd40, &args![mover]).u32()
+}
+
+// Translated from 008b3bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsPathing` (Xbox PDB): `ActorMover::IsPathing` (`009dcdb0`).
+pub fn actor_is_pathing(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_cdb0, &args![mover]).u32()
+}
+
+// Translated from 008b3bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsWaitingOnPath` (Xbox PDB): [`fn_008b3c10`] on the actor's
+/// `ActorMover`.
+pub fn actor_is_waiting_on_path(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let mover = actor_mover(e, this);
+    fn_008b3c10(e, mover)
+}
+
+// Translated from 008b3c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover` (`this`): `bWaitingForPath` (Xbox PDB +0x74).
+pub fn fn_008b3c10(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + MOVER_WAITING_FOR_PATH)
+}
+
+// Translated from 008b3c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsRotating` (Xbox PDB): `ActorMover::IsRotating` (`009ddb50`).
+pub fn actor_is_rotating(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_db50, &args![mover]).u32()
+}
+
+// Translated from 008b3c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009dcb30` of the `ActorMover`, its result passed through.
+pub fn fn_008b3c50(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_cb30, &args![mover]).u32()
+}
+
+// Translated from 008b3c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_008b3c90`] on the actor's `ActorMover`.
+pub fn fn_008b3c70(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let mover = actor_mover(e, this);
+    fn_008b3c90(e, mover)
+}
+
+// Translated from 008b3c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover` (`this`): `bStopMovementNextUpdate` (Xbox PDB +0x72).
+pub fn fn_008b3c90(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + MOVER_STOP_MOVEMENT_NEXT_UPDATE)
+}
+
+// Translated from 008b3cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `009de3a0` of the `ActorMover`, its result passed through.
+pub fn fn_008b3cb0(e: &mut Engine, this: Ptr<Actor>, argument: u32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e3a0, &args![mover, argument]).u32()
+}
+
+// Translated from 008b3cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetLookAtTarget` (Xbox PDB): `ActorMover::SetLookAtTarget`
+/// (`009de160`) with the point's three floats.
+pub fn actor_set_look_at_target(e: &mut Engine, this: Ptr<Actor>, x: f32, y: f32, z: f32) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e160, &args![mover, x, y, z]).u32()
+}
+
+// Translated from 008b3d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ActorMover` (`this`): `bFaceTargetPoint` (Xbox PDB +0x73).
+pub fn fn_008b3d10(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + MOVER_FACE_TARGET_POINT)
+}
+
+// Translated from 008b3d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearLookAtTarget` (Xbox PDB): `ActorMover::ClearLookAtTarget`
+/// (`009de230`).
+pub fn actor_clear_look_at_target(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x009d_e230, &args![mover]).u32()
+}
+
+// Translated from 008b3d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00460140` of the `ActorMover`, its result passed through.
+pub fn fn_008b3d50(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = actor_mover(e, this);
+    e.call(0x0046_0140, &args![mover]).u32()
+}
+
+/// `Actor::Dismember` (Xbox PDB): `(this, hit, actor value, body part, first extra,
+/// second extra, chance, limit, flag)`.
+const ACTOR_DISMEMBER: u32 = 0x008b_4d10;
+/// The `ModelLoader` instance (`ModelLoader::LoadFile`'s `this`).
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+
+// Translated from 008b3d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor's `0043fcd0` handle is used for a ray test along the direction
+/// from the first point to the second (both passed by value, three floats
+/// each): the segment is `512.0` long (`010231a0`), starts half of it (times
+/// `01016248`) before the second point and goes along the normalised
+/// direction (`00439ef0` subtracts, `00525340` normalises, `0045bb20`
+/// scales); `008cfbc0` runs it. When that finds nothing a second test
+/// (`00c806b0`, with a `006240d0` object configured by `008a50f0` and
+/// `008a50d0(0102226c)`) is made and its hit is turned into an object
+/// through `004ae750`, `004b5a20` and `0044ddc0`. Returns the result of
+/// slot `0xC` of that object (0 without one). The compiler's stack
+/// protector is not modelled.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008b3d70(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    first_x: f32,
+    first_y: f32,
+    first_z: f32,
+    second_x: f32,
+    second_y: f32,
+    second_z: f32,
+) -> u32 {
+    let world = e.call(0x0043_fcd0, &args![this]).u32();
+    e.with_stack(0x80, |e, block| {
+        let first = block.addr();
+        let second = first + 0x0c;
+        let direction = first + 0x18;
+        let scaled = first + 0x24;
+        let halved = first + 0x30;
+        let start = first + 0x3c;
+        let length = first + 0x48;
+        let query = first + 0x50;
+        let point_copy = first + 0x70;
+        e.mem.set_f32(first, first_x);
+        e.mem.set_f32(first + 4, first_y);
+        e.mem.set_f32(first + 8, first_z);
+        e.mem.set_f32(second, second_x);
+        e.mem.set_f32(second + 4, second_y);
+        e.mem.set_f32(second + 8, second_z);
+        e.call(0x0043_9ef0, &args![second, direction, first]);
+        e.call(0x0052_5340, &args![direction]);
+        let segment: f32 = e.global(0x0102_31a0);
+        e.mem.set_f32(length, segment);
+        e.call(0x0045_bb20, &args![direction, scaled, segment]);
+        let half: f32 = e.global(0x0101_6248);
+        e.call(0x0045_bb20, &args![scaled, halved, half]);
+        e.call(0x0043_9ef0, &args![second, start, halved]);
+        let mut ray = vec![world];
+        ray.extend((0..3).map(|word| e.mem.u32(start + 4 * word)));
+        ray.extend((0..3).map(|word| e.mem.u32(direction + 4 * word)));
+        ray.extend([length, 0]);
+        let mut found = e.call(0x008c_fbc0, &ray).u32();
+        if found == 0 {
+            e.call(0x0062_40d0, &args![query]);
+            e.call(0x0068_15c0, &args![point_copy]);
+            e.call(0x004a_3e00, &args![point_copy, second]);
+            e.call(0x008a_50f0, &args![query, point_copy]);
+            let radius: f32 = e.global(0x0102_226c);
+            e.call(0x008a_50d0, &args![query, radius]);
+            let hit = e.call(0x00c8_06b0, &args![world, query, 0u32]).u32();
+            if hit != 0 {
+                let proxy = e.call(0x004a_e750, &args![hit]).u32();
+                let owner = e.call(0x004b_5a20, &args![proxy]).u32();
+                if owner != 0 {
+                    found = e.call(0x0044_ddc0, &args![owner]).u32();
+                }
+            }
+        }
+        if found != 0 {
+            e.vcall(found, 0xc, &args![]).u32()
+        } else {
+            0
+        }
+    })
+}
+
+// Translated from 008b3ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds which of the process's 15 slots (virtual slot `0x6D0` of the
+/// process, index 0 to 14) holds `node` or one of its parents (`009611e0`),
+/// walking up until the actor's own slot `0x1D0` object; `0xE` when a parent
+/// equals the process's slot `0x190` answer for the actor's slot `0x1E8`;
+/// -1 when nothing matches or the actor has no process.
+pub fn fn_008b3ef0(e: &mut Engine, this: Ptr<Actor>, node: u32) -> i32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if node == 0 || process == 0 {
+        return -1;
+    }
+    let stop = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    let mut current = node;
+    let key = e.vcall(this.addr(), 0x1e8, &args![]).u32();
+    let target = e.vcall(process, 0x190, &args![key]).u32();
+    while current != 0 && current != stop {
+        if e.call(0x0096_11e0, &args![current]).u32() == target {
+            return 0xe;
+        }
+        for index in 0..0xf_u32 {
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            if e.vcall(process, 0x6d0, &args![index]).u32() == current {
+                return index as i32;
+            }
+        }
+        current = e.call(0x0096_11e0, &args![current]).u32();
+    }
+    -1
+}
+
+// Translated from 008b3fe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Spawns the model of a destroyed body part (a dismemberment piece).
+/// The body part `part_index` of the actor's body part data (`004181e0` then
+/// slot `0x180` of the result; `BGSBodyPartData::GetBodyPart` `005e50f0`) is
+/// used when the actor has a parent cell (`008d6f30`) and the part passes
+/// [`fn_008b4360`].
+///
+/// With `spawn_effects` set: a part that has `005e3fa0` triggers `009ac9c0`
+/// (an explosion; arguments: that value, 0, 0, the actor's `008d6f30`, the
+/// three floats at `impact + 0x24`, the nine words at `reference + 0x68`);
+/// and a part with an object at `+0x68` (`008d8520`) and a non-zero
+/// [`fn_008b4380`] calls `004fa6f0` on that object with the actor's scale
+/// (`TESObjectREFR::GetScale`) times `009b0bd0` of the part.
+///
+/// When the part has a model path (`005d8a70`/`0048cee0`) and `reference` is
+/// not 0, the model is loaded (`ModelLoader::LoadFile`, `00447080`), cloned
+/// (`NiObject::Clone`, `00a5d2c0`) and placed: its local transform is
+/// `inverse(actor reference transform, 008b42e0) * (reference + 0x68)`
+/// (`0062c250`), set through `00440460`, `0043fa80` and the scale
+/// `00440490(LowProcess::GetTrackedDamage)`. The model is released
+/// afterwards (`0045a5e0`). Returns the clone, or 0. The compiler's
+/// exception frame is not modelled.
+pub fn fn_008b3fe0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    part_index: u32,
+    reference: u32,
+    impact: u32,
+    spawn_effects: bool,
+) -> u32 {
+    let mut clone = 0;
+    let base_form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(base_form, 0x180, &args![]).u32();
+    if body_parts == 0 || e.call(0x008d_6f30, &args![this]).u32() == 0 {
+        return clone;
+    }
+    let part = e.call(0x005e_50f0, &args![body_parts, part_index]).u32();
+    if part == 0 || !fn_008b4360(e, Ptr::new(part)) {
+        return clone;
+    }
+    if spawn_effects {
+        if e.call(0x005e_3fa0, &args![part]).u32() != 0 {
+            let source = e.call(0x0046_1130, &args![reference]).u32();
+            let matrix: Vec<u32> = (0..9).map(|word| e.mem.u32(source + 4 * word)).collect();
+            let impact_position: Vec<u32> = (0..3)
+                .map(|word| e.mem.u32(impact + 0x24 + 4 * word))
+                .collect();
+            let place = e.call(0x008d_6f30, &args![this]).u32();
+            let value = e.call(0x005e_3fa0, &args![part]).u32();
+            let mut words = vec![value, 0, 0, place];
+            words.extend(impact_position);
+            words.extend(matrix);
+            e.call(0x009a_c9c0, &words);
+        }
+        let object = e.call(ACTOR_GET_PROCESS, &args![part]).u32();
+        if object != 0 && fn_008b4380(e, Ptr::new(part)) != 0 {
+            let scale = e.call(0x0056_7400, &args![this]).f64();
+            let factor = e.call(0x009b_0bd0, &args![part]).f64();
+            let value = (factor * scale) as f32;
+            let count = fn_008b4380(e, Ptr::new(part)) as u32;
+            let place = e.call(0x008d_6f30, &args![this]).u32();
+            let object = e.call(ACTOR_GET_PROCESS, &args![part]).u32();
+            e.call(
+                0x004f_a6f0,
+                &args![object, place, impact + 0x24, count, value],
+            );
+        }
+    }
+    let path_owner = e.call(0x005d_8a70, &args![part]).u32();
+    if e.call(0x0048_cee0, &args![path_owner]).u32() == 0 || reference == 0 {
+        return clone;
+    }
+    let path_owner = e.call(0x005d_8a70, &args![part]).u32();
+    let path = e
+        .vcall(path_owner, 0x14, &args![0u32, 1u32, 0u32, 0u32, 0u32])
+        .u32();
+    let loader = e.global::<u32>(MODEL_LOADER);
+    let model = e.call(0x0044_7080, &args![loader, path]).u32();
+    if model != 0 {
+        clone = e.with_stack(0x100, |e, block| {
+            let first_transform = block.addr();
+            let second_transform = first_transform + 0x40;
+            let scratch = first_transform + 0x80;
+            let cloning = first_transform + 0xc0;
+            e.call(0x004a_d050, &args![cloning, 1.0f32]);
+            let clone = e.call(0x00a5_d2c0, &args![model, cloning]).u32();
+            e.call(0x0047_6a80, &args![first_transform]);
+            e.call(0x0047_6a80, &args![second_transform]);
+            let owner = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+            let owner_transform = e.call(0x0046_1130, &args![owner]).u32();
+            fn_008b42e0(e, Ptr::new(owner_transform), Ptr::new(first_transform));
+            let reference_transform = e.call(0x0046_1130, &args![reference]).u32();
+            let composed = e
+                .call(
+                    0x0062_c250,
+                    &args![first_transform, scratch, reference_transform],
+                )
+                .u32();
+            for word in 0..13 {
+                let value = e.mem.u32(composed + 4 * word);
+                e.mem.set_u32(second_transform + 4 * word, value);
+            }
+            e.call(0x0044_0460, &args![clone, second_transform + 0x24]);
+            e.call(0x0043_fa80, &args![clone, second_transform]);
+            let tracked = e.call(0x009b_88c0, &args![part]).f64() as f32;
+            e.call(0x0044_0490, &args![clone, tracked]);
+            e.call(0x004a_d270, &args![cloning]);
+            clone
+        });
+    }
+    let path_owner = e.call(0x005d_8a70, &args![part]).u32();
+    let path = e.vcall(path_owner, 0x14, &args![]).u32();
+    let loader = e.global::<u32>(MODEL_LOADER);
+    e.call(0x0045_a5e0, &args![loader, path]);
+    clone
+}
+
+// Translated from 008b42e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTransform` inverse: `dest` becomes the inverse of `this`. The rotation
+/// is `NiMatrix3::Inverse_ov2` (`004b46a0`), the scale (`+0x30`) is
+/// `1.0 / this.scale`, and the translation (`+0x24`) is `004a3760` of the
+/// new scale and `dest.rotation` (`004b4500`) applied to `004a0bd0` of
+/// `this`'s translation.
+pub fn fn_008b42e0(e: &mut Engine, this: Ptr, dest: Ptr) {
+    e.call(0x004b_46a0, &args![this, dest]);
+    let scale = e.mem.f32(this.addr() + 0x30);
+    let inverse_scale = (1.0 / f64::from(scale)) as f32;
+    e.mem.set_f32(dest.addr() + 0x30, inverse_scale);
+    e.with_stack(0x30, |e, scratch| {
+        let first = scratch.addr();
+        let negated = e.call(0x004a_0bd0, &args![this.addr() + 0x24, first]).u32();
+        let rotated = e
+            .call(0x004b_4500, &args![dest, first + 0x0c, negated])
+            .u32();
+        let scaled = e
+            .call(0x004a_3760, &args![first + 0x18, inverse_scale, rotated])
+            .u32();
+        for offset in [0, 4, 8] {
+            let word = e.mem.u32(scaled + offset);
+            e.mem.set_u32(dest.addr() + 0x24 + offset, word);
+        }
+    });
+}
+
+// Translated from 008b4360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part (`BGSBodyPartData` entry, `this`): flag `0x08` of the byte at `+0x60`.
+pub fn fn_008b4360(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x60) & 0x08 != 0
+}
+
+// Translated from 008b4380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part (`this`): the byte at `+0x66`.
+pub fn fn_008b4380(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x66)
+}
+
+// Translated from 008b4cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Body part (`this`): flag `0x40` of the byte at `+0x60`.
+pub fn fn_008b4cd0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x60) & 0x40 != 0
+}
+
+/// Number of dismemberment calls left this frame: the counter at
+/// `011e077c` is bumped on every use of [`fn_008b43a0`] and compared with the
+/// setting at `011e0a10`.
+const DISMEMBER_COUNTER: u32 = 0x011e_077c;
+const DISMEMBER_LIMIT_SETTING: u32 = 0x011e_0a10;
+/// Setting whose byte, when non-zero, stops humanoid creatures from being dismembered.
+const DISMEMBER_BLOCK_SETTING: u32 = 0x011d_f7f8;
+const DISMEMBER_SETTING_LIMB_CHANCE: u32 = 0x011c_f18c;
+const DISMEMBER_SETTING_FIRST_PART: u32 = 0x011c_e188;
+const DISMEMBER_SETTING_OTHER_PART: u32 = 0x011c_fe90;
+const DISMEMBER_SETTING_ROLL: u32 = 0x011c_e2b4;
+const DISMEMBER_SETTING_ROLLED_PART: u32 = 0x011c_ee3c;
+
+/// The value behind a setting object (`0043d4d0` returns its address).
+fn setting_value(e: &mut Engine, setting: u32) -> u32 {
+    let address = e.call(0x0043_d4d0, &args![setting]).u32();
+    e.mem.u32(address)
+}
+
+/// Frame offsets (from the frame pointer) of the four 7-entry arrays of
+/// [`fn_008b43a0`]. The original keeps them on the stack side by side and
+/// can write one entry past the end; the frame is kept as one block so the
+/// overlap is the same.
+const DISMEMBER_PARTS: i32 = -0x20;
+const DISMEMBER_VALUES: i32 = -0x7c;
+const DISMEMBER_CHANCE: i32 = -0x5c;
+const DISMEMBER_LIMIT: i32 = -0x40;
+
+fn frame_index(base: i32, entry: u32) -> usize {
+    ((0xdc + base + 4 * entry as i32) / 4) as usize
+}
+
+/// One list entry of [`fn_008b43a0`]: body part, actor value, two numbers.
+fn dismember_push(frame: &mut [u32; 0x37], count: u32, entry: [u32; 4]) {
+    frame[frame_index(DISMEMBER_PARTS, count)] = entry[0];
+    frame[frame_index(DISMEMBER_VALUES, count)] = entry[1];
+    frame[frame_index(DISMEMBER_CHANCE, count)] = entry[2];
+    frame[frame_index(DISMEMBER_LIMIT, count)] = entry[3];
+}
+
+/// `BGSBodyPartData` entry test of `008b43a0`: the entry has flag `0x08`,
+/// flag `0x40` and a byte `008b4cf0` of at least 100.
+fn body_part_is_severable(e: &mut Engine, part: u32) -> bool {
+    fn_008b4360(e, Ptr::new(part))
+        && fn_008b4cd0(e, Ptr::new(part))
+        && e.call(0x008b_4cf0, &args![part]).u8() >= 100
+}
+
+// Translated from 008b43a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks the body parts to dismember for a hit and calls `Actor::Dismember`
+/// (`008b4d10`) for each; `hit` is the hit record (its fields at 0, 8 and
+/// `0x10` are the attacker, a part list owner and a body part index).
+///
+/// Nothing happens for a humanoid creature or an actor whose slot `0x218`
+/// answers true while the setting at `011df7f8` is non-zero, without body
+/// part data (`004181e0` slot `0x180`), without a hit, or when the per-frame
+/// counter `011e077c` has reached the setting at `011e0a10`; otherwise the
+/// counter is bumped and up to 7 entries (part, actor value `ToActorValue(4,
+/// i)`, and two numbers) are collected: from the hit's body part and the
+/// actor values (slot 8 of the `MagicTarget` at `+0xA4`) when the attacker's
+/// value `0x37` is positive, from the list owner's list when its slot `0x220`
+/// answers true, else from the hit's body part alone. With no entry
+/// `Dismember` is called once with -1 for part and value; entries with value
+/// `0x1a` are dismembered with flag `0x40` of the hit temporarily set
+/// (`00407e00`) when the roll flag was set and the flag was not already.
+pub fn fn_008b43a0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    hit: u32,
+    first_extra: u32,
+    second_extra: u32,
+) {
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let cast = e
+        .call(
+            0x00ec_43fb,
+            &args![form, 0u32, 0x0118_46e8u32, 0x0118_3a00u32, 0u32],
+        )
+        .u32();
+    let humanoid = cast != 0 && e.call(0x005f_bf20, &args![cast]).bool();
+    if humanoid || e.vcall(this.addr(), 0x218, &args![]).bool() {
+        let setting = e.call(0x0040_8d60, &args![DISMEMBER_BLOCK_SETTING]).u32();
+        if e.mem.u8(setting) != 0 {
+            return;
+        }
+    }
+    let form = e.call(0x0041_81e0, &args![this]).u32();
+    let body_parts = e.vcall(form, 0x180, &args![]).u32();
+    if body_parts == 0 || hit == 0 {
+        return;
+    }
+    let limit = setting_value(e, DISMEMBER_LIMIT_SETTING) as i32;
+    let counter = e.global::<u32>(DISMEMBER_COUNTER) as i32;
+    if counter >= limit {
+        return;
+    }
+    let counter = e.global::<u32>(DISMEMBER_COUNTER);
+    e.set_global::<u32>(DISMEMBER_COUNTER, counter.wrapping_add(1));
+
+    let magic_target = this.addr() + 0xa4;
+    let mut frame = [0u32; 0x37];
+    for entry in 0..7 {
+        frame[frame_index(DISMEMBER_PARTS, entry)] = u32::MAX;
+        frame[frame_index(DISMEMBER_VALUES, entry)] = u32::MAX;
+        frame[frame_index(DISMEMBER_CHANCE, entry)] = 0;
+        frame[frame_index(DISMEMBER_LIMIT, entry)] = 0;
+    }
+    let mut count: u32 = 0;
+    let mut rolled = false;
+    let hit_attacker = e.mem.u32(hit);
+    let hit_list_owner = e.mem.u32(hit + 8);
+    let hit_part = e.mem.u32(hit + 0x10);
+
+    if hit_attacker != 0 && e.vcall(hit_attacker + 0xa4, 8, &args![0x37u32]).i32() > 0 {
+        let mut chosen_value: i32 = -1;
+        let part = e.call(0x005e_50f0, &args![body_parts, hit_part]).u32();
+        e.vcall(magic_target, 8, &args![0x1au32]);
+        let mut forced_part: u32 = u32::MAX;
+        let mut severable: bool;
+        if part != 0 {
+            let flag_set = e.call(0x0058_cba0, &args![hit, 0x40u32]).bool();
+            severable = if flag_set && fn_008b4360(e, Ptr::new(part)) {
+                true
+            } else {
+                body_part_is_severable(e, part)
+            };
+            let value = e.call(0x005e_5190, &args![part]).u8() as i8 as i32;
+            if value == 0x1a {
+                let take = if severable {
+                    true
+                } else if fn_008b4360(e, Ptr::new(part)) {
+                    let roll = e.call(0x0048_7f50, &args![]).u32() % 100;
+                    roll < setting_value(e, DISMEMBER_SETTING_LIMB_CHANCE)
+                } else {
+                    false
+                };
+                if take {
+                    forced_part = e.call(0x005e_5300, &args![part]).u32();
+                    rolled = true;
+                }
+            } else if count == 0 {
+                chosen_value = e.call(0x005e_5190, &args![part]).u8() as i8 as i32;
+                let limit = if severable {
+                    100
+                } else {
+                    setting_value(e, DISMEMBER_SETTING_FIRST_PART)
+                };
+                dismember_push(
+                    &mut frame,
+                    count,
+                    [hit_part, chosen_value as u32, 100, limit],
+                );
+                count += 1;
+            }
+        }
+        let mut index: u32 = 0;
+        while index < 7 && count < 7 {
+            let value = e.call(0x0066_ec10, &args![4u32, index & 0xff]).u32() as i32;
+            if value != chosen_value && value != -1 && value != 0x1a {
+                let part = e.call(0x005e_5130, &args![body_parts, value as u32]).u32();
+                if part != 0 {
+                    severable = e.call(0x0058_cba0, &args![hit, 0x40u32]).bool()
+                        || body_part_is_severable(e, part);
+                    let current = e.vcall(magic_target, 8, &args![value as u32]).i32();
+                    if current <= 0 {
+                        let chosen = e.call(0x005e_5300, &args![part]).u32();
+                        let limit = if severable {
+                            100
+                        } else {
+                            setting_value(e, DISMEMBER_SETTING_OTHER_PART)
+                        };
+                        dismember_push(&mut frame, count, [chosen, value as u32, 100, limit]);
+                        count += 1;
+                    } else if severable
+                        || rolled
+                        || e.call(0x0048_7f50, &args![]).u32() % 100
+                            <= setting_value(e, DISMEMBER_SETTING_ROLL)
+                    {
+                        let chosen = e.call(0x005e_5300, &args![part]).u32();
+                        let limit = if severable {
+                            100
+                        } else {
+                            setting_value(e, DISMEMBER_SETTING_ROLLED_PART)
+                        };
+                        dismember_push(&mut frame, count, [chosen, value as u32, 100, limit]);
+                        count += 1;
+                    }
+                }
+            }
+            index += 1;
+        }
+        if rolled && forced_part != u32::MAX {
+            dismember_push(&mut frame, count, [forced_part, 0x1a, 100, 100]);
+            count += 1;
+        }
+    } else if hit_list_owner != 0 && e.vcall(hit_list_owner, 0x220, &args![]).bool() {
+        let mut node = e.call(0x009b_1720, &args![hit_list_owner, this]).u32();
+        while node != 0 && !e.call(0x0082_56d0, &args![node]).bool() && count < 7 {
+            let slot = e.call(0x0068_15c0, &args![node]).u32();
+            let entry = e.mem.u32(slot);
+            node = e.call(0x0072_6070, &args![node]).u32();
+            let part_key = e.mem.u32(entry);
+            let part = e.call(0x005e_50f0, &args![body_parts, part_key]).u32();
+            if part != 0 && e.mem.u32(entry) != 0 {
+                let chosen = e.mem.u32(entry);
+                let value = e.call(0x005e_5190, &args![part]).u8() as i8 as i32;
+                frame[frame_index(DISMEMBER_PARTS, count)] = chosen;
+                frame[frame_index(DISMEMBER_VALUES, count)] = value as u32;
+                count += 1;
+            }
+        }
+    } else {
+        let part = e.call(0x005e_50f0, &args![body_parts, hit_part]).u32();
+        let severable = part != 0 && body_part_is_severable(e, part);
+        if part != 0 && (severable || hit_part != 0) {
+            let value = e.call(0x005e_5190, &args![part]).u8() as i8 as i32;
+            if value != -1 && e.vcall(magic_target, 8, &args![value as u32]).i32() <= 0 {
+                frame[frame_index(DISMEMBER_PARTS, count)] = hit_part;
+                frame[frame_index(DISMEMBER_VALUES, count)] = value as u32;
+                count += 1;
+            }
+        }
+    }
+
+    if count == 0 {
+        e.call(
+            ACTOR_DISMEMBER,
+            &args![
+                this,
+                hit,
+                u32::MAX,
+                u32::MAX,
+                first_extra,
+                second_extra,
+                0u32,
+                0u32,
+                0u32
+            ],
+        );
+    }
+    for entry in 0..count {
+        let part = frame[frame_index(DISMEMBER_PARTS, entry)];
+        let value = frame[frame_index(DISMEMBER_VALUES, entry)];
+        if part == u32::MAX || value == u32::MAX {
+            continue;
+        }
+        let call_words = args![
+            this,
+            hit,
+            value,
+            part,
+            first_extra,
+            second_extra,
+            frame[frame_index(DISMEMBER_CHANCE, entry)],
+            frame[frame_index(DISMEMBER_LIMIT, entry)],
+            rolled as u32
+        ];
+        if rolled && value == 0x1a && !e.call(0x0058_cba0, &args![hit, 0x40u32]).bool() {
+            e.call(0x0040_7e00, &args![hit, 0x40u32, 1u32]);
+            e.call(ACTOR_DISMEMBER, &call_words);
+            e.call(0x0040_7e00, &args![hit, 0x40u32, 0u32]);
+        } else {
+            e.call(ACTOR_DISMEMBER, &call_words);
+        }
+    }
+}
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1994,6 +2837,70 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_008b3750(Ptr<Actor>, u32, u32, u32, f32, f32, u32)
         ),
         entry!(0x008b37c0, fn_008b37c0(Ptr<Actor>, u32, f32, u32)),
+        entry!(
+            0x008b3820,
+            actor_get_current_pathing_request(Ptr<Actor>) -> u32
+        ),
+        entry!(
+            0x008b3840,
+            actor_get_current_pathfinding_goal(Ptr<Actor>, u32) -> u32
+        ),
+        entry!(0x008b3860, fn_008b3860(Ptr<Actor>, u32) -> u32),
+        entry!(
+            0x008b3880,
+            actor_build_request(Ptr<Actor>, u32, u32, u32, u32, f32, u32)
+        ),
+        entry!(
+            0x008b38d0,
+            actor_build_request_ov2(Ptr<Actor>, u32, u32, u32, f32, u32)
+        ),
+        entry!(0x008b3960, actor_is_path_valid(Ptr<Actor>) -> u32),
+        entry!(0x008b3980, fn_008b3980(Ptr<Actor>) -> u32),
+        entry!(0x008b39a0, fn_008b39a0(Ptr<Actor>, u32, u32) -> u32),
+        entry!(
+            0x008b39d0,
+            actor_get_failed_path_destination(Ptr<Actor>) -> u32
+        ),
+        entry!(0x008b39f0, actor_set_move_mode(Ptr<Actor>, u32) -> u32),
+        entry!(0x008b3a20, actor_force_move_mode(Ptr<Actor>, u32) -> u32),
+        entry!(0x008b3a50, actor_clear_forced_move_mode(Ptr<Actor>) -> u32),
+        entry!(0x008b3a80, actor_clear_move_mode(Ptr<Actor>, u32) -> u32),
+        entry!(0x008b3ab0, actor_stop_moving(Ptr<Actor>) -> u32),
+        entry!(0x008b3ad0, actor_force_stop_moving(Ptr<Actor>) -> u32),
+        entry!(0x008b3af0, fn_008b3af0(Ptr<Actor>)),
+        entry!(0x008b3b10, fn_008b3b10(Ptr)),
+        entry!(0x008b3b30, fn_008b3b30(Ptr<Actor>, Ptr, f32) -> Ptr),
+        entry!(0x008b3b90, fn_008b3b90(Ptr<Actor>) -> u32),
+        entry!(0x008b3bb0, actor_is_pathing_complete(Ptr<Actor>) -> u32),
+        entry!(0x008b3bd0, actor_is_pathing(Ptr<Actor>) -> u32),
+        entry!(0x008b3bf0, actor_is_waiting_on_path(Ptr<Actor>) -> u8),
+        entry!(0x008b3c10, fn_008b3c10(Ptr) -> u8),
+        entry!(0x008b3c30, actor_is_rotating(Ptr<Actor>) -> u32),
+        entry!(0x008b3c50, fn_008b3c50(Ptr<Actor>) -> u32),
+        entry!(0x008b3c70, fn_008b3c70(Ptr<Actor>) -> u8),
+        entry!(0x008b3c90, fn_008b3c90(Ptr) -> u8),
+        entry!(0x008b3cb0, fn_008b3cb0(Ptr<Actor>, u32) -> u32),
+        entry!(
+            0x008b3cd0,
+            actor_set_look_at_target(Ptr<Actor>, f32, f32, f32) -> u32
+        ),
+        entry!(0x008b3d10, fn_008b3d10(Ptr) -> u8),
+        entry!(0x008b3d30, actor_clear_look_at_target(Ptr<Actor>) -> u32),
+        entry!(0x008b3d50, fn_008b3d50(Ptr<Actor>) -> u32),
+        entry!(
+            0x008b3d70,
+            fn_008b3d70(Ptr<Actor>, f32, f32, f32, f32, f32, f32) -> u32
+        ),
+        entry!(0x008b3ef0, fn_008b3ef0(Ptr<Actor>, u32) -> i32),
+        entry!(
+            0x008b3fe0,
+            fn_008b3fe0(Ptr<Actor>, u32, u32, u32, bool) -> u32
+        ),
+        entry!(0x008b42e0, fn_008b42e0(Ptr, Ptr)),
+        entry!(0x008b4360, fn_008b4360(Ptr) -> bool),
+        entry!(0x008b4380, fn_008b4380(Ptr) -> u8),
+        entry!(0x008b43a0, fn_008b43a0(Ptr<Actor>, u32, u32, u32)),
+        entry!(0x008b4cd0, fn_008b4cd0(Ptr) -> bool),
     ]
 }
 
@@ -4673,5 +5580,1043 @@ mod tests {
         w.e.call(0x008b_3230, &args![this, 0.5f32]);
         w.answer(this.addr(), 0x21c, 0);
         w.e.call(0x008b_3230, &args![this, 0.5f32]);
+    }
+
+    // ---- 008b3820 .. 008b4cd0 ------------------------------------------
+
+    type Calls = Vec<(u32, Vec<u32>)>;
+    type SlotCalls = Rc<std::cell::RefCell<Vec<(u32, u32, Vec<u32>)>>>;
+    type SlotAnswers = Rc<std::cell::RefCell<std::collections::HashMap<(u32, u32), u32>>>;
+
+    /// An engine whose objects share one vtable: each of `slots` points at a
+    /// double that logs `(object, slot, arguments)` and answers what was set
+    /// with [`Scene::answer`] (default 0).
+    struct Scene {
+        e: Engine,
+        calls: SlotCalls,
+        answers: SlotAnswers,
+        vtable: u32,
+    }
+
+    fn scene(slots: &[u32]) -> Scene {
+        let (mut e, _) = engine();
+        let calls: SlotCalls = Default::default();
+        let answers: SlotAnswers = Default::default();
+        let vtable = e.mem.alloc(0x800);
+        for &slot in slots {
+            let (calls, answers) = (calls.clone(), answers.clone());
+            let target = 0x0f30_0000 + slot;
+            e.mem.set_u32(vtable + slot, target);
+            e.register_double(target, move |_, a| {
+                calls.borrow_mut().push((a[0], slot, a[1..].to_vec()));
+                int(answers.borrow().get(&(a[0], slot)).copied().unwrap_or(0))
+            });
+        }
+        Scene {
+            e,
+            calls,
+            answers,
+            vtable,
+        }
+    }
+
+    impl Scene {
+        fn object(&mut self, size: u32) -> u32 {
+            let object = self.e.mem.alloc(size);
+            self.e.mem.set_u32(object, self.vtable);
+            object
+        }
+
+        fn actor(&mut self) -> Ptr<Actor> {
+            let actor = self.object(0x1b4);
+            self.e.mem.set_u32(actor + 0xa4, self.vtable);
+            Ptr::new(actor)
+        }
+
+        fn answer(&self, object: u32, slot: u32, value: u32) {
+            self.answers.borrow_mut().insert((object, slot), value);
+        }
+
+        fn slot_calls(&self) -> Vec<(u32, u32, Vec<u32>)> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    /// Runs `address` on an actor whose mover is a plain block; the
+    /// callee `target` answers 0x1234. Checks that `target` receives the
+    /// mover and `words` and that its answer is returned.
+    fn assert_mover_thunk(address: u32, target: u32, words: &[u32]) {
+        let (mut e, _) = engine();
+        let actor = e.new_object::<Actor>();
+        let mover = e.mem.alloc(0xa8);
+        e.mem.set_u32(actor.addr() + 0x190, mover);
+        e.register(target, |_, _| int(0x1234));
+        e.call_log = Some(vec![]);
+        let mut all = vec![actor.addr()];
+        all.extend_from_slice(words);
+        let result = e.call(address, &all).u32();
+        let log = e.call_log.take().unwrap();
+        let mut expected = vec![mover];
+        expected.extend_from_slice(words);
+        assert_eq!(log[1], (target, expected));
+        assert_eq!(log.len(), 2);
+        assert_eq!(result, 0x1234);
+    }
+
+    /// Like [`assert_mover_thunk`] for a thunk of virtual slot `slot` of the mover.
+    fn assert_mover_slot_thunk(address: u32, slot: u32, words: &[u32]) {
+        let mut s = scene(&[slot]);
+        let actor = s.actor();
+        let mover = s.object(0xa8);
+        s.e.mem.set_u32(actor.addr() + 0x190, mover);
+        s.answer(mover, slot, 0x4321);
+        let mut all = vec![actor.addr()];
+        all.extend_from_slice(words);
+        assert_eq!(s.e.call(address, &all).u32(), 0x4321);
+        assert_eq!(s.slot_calls(), vec![(mover, slot, words.to_vec())]);
+    }
+
+    #[test]
+    fn get_current_pathing_request_asks_the_mover() {
+        assert_mover_thunk(0x008b_3820, 0x0068_38b0, &[]);
+    }
+
+    #[test]
+    fn get_current_pathfinding_goal_passes_its_argument() {
+        assert_mover_thunk(0x008b_3840, 0x009d_e2b0, &[0x77]);
+    }
+
+    #[test]
+    fn thunk_008b3860_passes_its_argument() {
+        assert_mover_thunk(0x008b_3860, 0x009d_e330, &[0x78]);
+    }
+
+    #[test]
+    fn build_request_follows_up_only_in_combat() {
+        for combat in [0u32, 1] {
+            let (mut e, _) = engine();
+            let actor = e.new_object::<Actor>();
+            e.register(0x009d_bc90, |_, _| int(0));
+            e.register_double(ACTOR_IS_IN_COMBAT, move |_, _| int(combat));
+            e.register(0x008a_d8f0, |_, _| int(0));
+            e.call_log = Some(vec![]);
+            e.call(
+                0x008b_3880,
+                &args![actor, 0x11u32, 0x22u32, 0x33u32, 0x44u32, 1.5f32, 0x66u32],
+            );
+            let log = e.call_log.take().unwrap();
+            assert_eq!(
+                log[1],
+                (
+                    0x009d_bc90,
+                    vec![actor.addr(), 0x11, 0x22, 0x33, 0x44, 1.5f32.to_bits(), 0x66]
+                )
+            );
+            assert_eq!(log[2].0, ACTOR_IS_IN_COMBAT);
+            if combat == 1 {
+                assert_eq!(log[3], (0x008a_d8f0, vec![0x11, 0]));
+            } else {
+                assert_eq!(log.len(), 3);
+            }
+        }
+    }
+
+    #[test]
+    fn build_request_ov2_picks_cell_or_world_space() {
+        // (place, expected first place, expected second place)
+        for (place, first, second) in [
+            (0u32, 0xce11u32, 0x3du32),
+            (0x1001, 0x1001, 0),
+            (0x1002, 0, 0x1002),
+            (0x1003, 0, 0),
+        ] {
+            let (mut e, _) = engine();
+            let actor = e.new_object::<Actor>();
+            e.register(0x009d_bc90, |_, _| int(0));
+            e.register(ACTOR_IS_IN_COMBAT, |_, _| int(0));
+            e.register(0x008d_6f30, |_, _| int(0xce11));
+            e.register(0x0057_5d70, |_, _| int(0x3d));
+            e.register(0x0040_1170, |_, a| {
+                int(match a[0] {
+                    0x1001 => 0x39,
+                    0x1002 => 0x41,
+                    _ => 0x40,
+                })
+            });
+            e.call_log = Some(vec![]);
+            e.call(
+                0x008b_38d0,
+                &args![actor, 0x11u32, 0x22u32, place, 2.5f32, 0x66u32],
+            );
+            let log = e.call_log.take().unwrap();
+            let request = log.iter().find(|c| c.0 == 0x009d_bc90).unwrap();
+            assert_eq!(
+                request.1,
+                vec![
+                    actor.addr(),
+                    0x11,
+                    0x22,
+                    first,
+                    second,
+                    2.5f32.to_bits(),
+                    0x66
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn is_path_valid_asks_the_mover() {
+        assert_mover_thunk(0x008b_3960, 0x009d_e3e0, &[]);
+    }
+
+    #[test]
+    fn thunk_008b3980_asks_the_mover() {
+        assert_mover_thunk(0x008b_3980, 0x009d_cab0, &[]);
+    }
+
+    #[test]
+    fn thunk_008b39a0_passes_both_arguments() {
+        assert_mover_thunk(0x008b_39a0, 0x009d_e110, &[5, 6]);
+    }
+
+    #[test]
+    fn get_failed_path_destination_asks_the_mover() {
+        assert_mover_thunk(0x008b_39d0, 0x009d_e460, &[]);
+    }
+
+    #[test]
+    fn set_move_mode_uses_slot_4() {
+        assert_mover_slot_thunk(0x008b_39f0, 0x4, &[3]);
+    }
+
+    #[test]
+    fn force_move_mode_uses_slot_c() {
+        assert_mover_slot_thunk(0x008b_3a20, 0xc, &[3]);
+    }
+
+    #[test]
+    fn clear_forced_move_mode_uses_slot_10() {
+        assert_mover_slot_thunk(0x008b_3a50, 0x10, &[]);
+    }
+
+    #[test]
+    fn clear_move_mode_uses_slot_8() {
+        assert_mover_slot_thunk(0x008b_3a80, 0x8, &[9]);
+    }
+
+    #[test]
+    fn stop_moving_asks_the_mover() {
+        assert_mover_thunk(0x008b_3ab0, 0x009d_d0a0, &[]);
+    }
+
+    #[test]
+    fn force_stop_moving_asks_the_mover() {
+        assert_mover_thunk(0x008b_3ad0, 0x009d_d0c0, &[]);
+    }
+
+    #[test]
+    fn mover_stop_flag_is_cleared() {
+        let (mut e, _) = engine();
+        let actor = e.new_object::<Actor>();
+        let mover = e.mem.alloc(0xa8);
+        e.mem.set_u8(mover + 0x72, 1);
+        e.mem.set_u32(actor.addr() + 0x190, mover);
+        e.call(0x008b_3af0, &args![actor]);
+        assert_eq!(e.mem.u8(mover + 0x72), 0);
+        e.mem.set_u8(mover + 0x72, 1);
+        e.call(0x008b_3b10, &args![Ptr::<()>::new(mover)]);
+        assert_eq!(e.mem.u8(mover + 0x72), 0);
+    }
+
+    #[test]
+    fn vector_comes_from_the_actor_or_the_mover() {
+        // Zero or negative: the actor's own vector.
+        for value in [0.0f32, -2.0] {
+            let (mut e, _) = engine();
+            let actor = e.new_object::<Actor>();
+            let source = e.mem.alloc(12);
+            for (i, bits) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+                e.mem.set_f32(source + 4 * i as u32, *bits);
+            }
+            e.register_double(0x0043_6aa0, move |_, _| int(source));
+            e.register(0x009d_cc80, |_, _| panic!("mover is not asked"));
+            let out = e.mem.alloc(12);
+            let result = e.call(0x008b_3b30, &args![actor, out, value]).u32();
+            assert_eq!(result, out);
+            assert_eq!(
+                [e.mem.f32(out), e.mem.f32(out + 4), e.mem.f32(out + 8)],
+                [1.0, 2.0, 3.0]
+            );
+        }
+        // Positive: the mover fills it.
+        let (mut e, _) = engine();
+        let actor = e.new_object::<Actor>();
+        let mover = e.mem.alloc(0xa8);
+        e.mem.set_u32(actor.addr() + 0x190, mover);
+        e.register(0x0043_6aa0, |_, _| panic!("actor is not asked"));
+        e.register(0x009d_cc80, |_, _| int(0));
+        let out = e.mem.alloc(12);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x008b_3b30, &args![actor, out, 0.5f32]).u32();
+        assert_eq!(result, out);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x009d_cc80, vec![mover, out, 0.5f32.to_bits()]));
+    }
+
+    #[test]
+    fn thunk_008b3b90_asks_the_mover() {
+        assert_mover_thunk(0x008b_3b90, 0x0097_f2f0, &[]);
+    }
+
+    #[test]
+    fn is_pathing_complete_asks_the_mover() {
+        assert_mover_thunk(0x008b_3bb0, 0x009d_cd40, &[]);
+    }
+
+    #[test]
+    fn is_pathing_asks_the_mover() {
+        assert_mover_thunk(0x008b_3bd0, 0x009d_cdb0, &[]);
+    }
+
+    #[test]
+    fn mover_flags_are_bytes() {
+        let (mut e, _) = engine();
+        let actor = e.new_object::<Actor>();
+        let mover = e.mem.alloc(0xa8);
+        e.mem.set_u32(actor.addr() + 0x190, mover);
+        e.mem.set_u8(mover + 0x72, 0x11);
+        e.mem.set_u8(mover + 0x73, 0x22);
+        e.mem.set_u8(mover + 0x74, 0x33);
+        let mover_ptr = Ptr::<()>::new(mover);
+        assert_eq!(e.call(0x008b_3bf0, &args![actor]).u8(), 0x33);
+        assert_eq!(e.call(0x008b_3c10, &args![mover_ptr]).u8(), 0x33);
+        assert_eq!(e.call(0x008b_3c70, &args![actor]).u8(), 0x11);
+        assert_eq!(e.call(0x008b_3c90, &args![mover_ptr]).u8(), 0x11);
+        assert_eq!(e.call(0x008b_3d10, &args![mover_ptr]).u8(), 0x22);
+    }
+
+    #[test]
+    fn is_rotating_asks_the_mover() {
+        assert_mover_thunk(0x008b_3c30, 0x009d_db50, &[]);
+    }
+
+    #[test]
+    fn thunk_008b3c50_asks_the_mover() {
+        assert_mover_thunk(0x008b_3c50, 0x009d_cb30, &[]);
+    }
+
+    #[test]
+    fn thunk_008b3cb0_passes_its_argument() {
+        assert_mover_thunk(0x008b_3cb0, 0x009d_e3a0, &[0x44]);
+    }
+
+    #[test]
+    fn set_look_at_target_passes_the_three_floats() {
+        assert_mover_thunk(
+            0x008b_3cd0,
+            0x009d_e160,
+            &[1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits()],
+        );
+    }
+
+    #[test]
+    fn clear_look_at_target_asks_the_mover() {
+        assert_mover_thunk(0x008b_3d30, 0x009d_e230, &[]);
+    }
+
+    #[test]
+    fn thunk_008b3d50_asks_the_mover() {
+        assert_mover_thunk(0x008b_3d50, 0x0046_0140, &[]);
+    }
+
+    /// Doubles for the vector helpers of `008b3d70`: subtraction, scaling
+    /// and normalisation are done on the actual floats.
+    fn ray_engine() -> (Engine, Ptr<Actor>) {
+        let (mut e, actor) = engine();
+        for page in [0x0102_3000, 0x0101_6000, 0x0102_2000] {
+            e.map(page, 0x1000);
+        }
+        e.set_global::<f32>(0x0102_31a0, 512.0);
+        e.set_global::<f32>(0x0101_6248, 0.5);
+        e.set_global::<f32>(0x0102_226c, 7.0);
+        e.register(0x0043_fcd0, |_, _| int(0xa01d));
+        e.register(0x0043_9ef0, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            int(a[1])
+        });
+        e.register(0x0052_5340, |e, a| {
+            let v: Vec<f32> = (0..3).map(|i| e.mem.f32(a[0] + 4 * i)).collect();
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            for i in 0..3 {
+                e.mem.set_f32(a[0] + 4 * i, v[i as usize] / length);
+            }
+            Ret::default()
+        });
+        e.register(0x0045_bb20, |e, a| {
+            let factor = f32::from_bits(a[2]);
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i) * factor;
+                e.mem.set_f32(a[1] + 4 * i, value);
+            }
+            int(a[1])
+        });
+        (e, actor)
+    }
+
+    #[test]
+    fn ray_hit_releases_through_slot_c() {
+        let (mut e, actor) = ray_engine();
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0xc, 0x0f31_000c);
+        let hit = e.mem.alloc(0x10);
+        e.mem.set_u32(hit, vtable);
+        e.register(0x0f31_000c, |_, _| int(0x55));
+        e.register_double(0x008c_fbc0, move |e, a| {
+            // world, start (3), direction (3), length pointer, 0
+            assert_eq!(a[0], 0xa01d);
+            assert_eq!(f32::from_bits(a[1]), -253.0);
+            assert_eq!(f32::from_bits(a[4]), 1.0);
+            assert_eq!(e.mem.f32(a[7]), 512.0);
+            assert_eq!(a[8], 0);
+            int(hit)
+        });
+        e.register(0x0062_40d0, |_, _| panic!("no second test after a hit"));
+        let result = e.call(
+            0x008b_3d70,
+            &args![actor, 0f32, 0f32, 0f32, 3.0f32, 0f32, 0f32],
+        );
+        assert_eq!(result.u32(), 0x55);
+    }
+
+    #[test]
+    fn ray_without_hit_tries_the_second_test() {
+        let (mut e, actor) = ray_engine();
+        let vtable = e.mem.alloc(0x40);
+        e.mem.set_u32(vtable + 0xc, 0x0f31_000c);
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(object, vtable);
+        e.register(0x0f31_000c, |_, _| int(0x66));
+        e.register(0x008c_fbc0, |_, _| int(0));
+        e.register(0x0062_40d0, |_, _| Ret::default());
+        e.register(0x0068_15c0, |_, _| Ret::default());
+        e.register(0x004a_3e00, |_, _| Ret::default());
+        e.register(0x008a_50f0, |_, _| Ret::default());
+        e.register(0x008a_50d0, |_, a| {
+            assert_eq!(f32::from_bits(a[1]), 7.0);
+            Ret::default()
+        });
+        e.register(0x00c8_06b0, |_, a| {
+            assert_eq!(a[0], 0xa01d);
+            int(0x1111)
+        });
+        e.register(0x004a_e750, |_, a| {
+            assert_eq!(a[0], 0x1111);
+            int(0x2222)
+        });
+        e.register(0x004b_5a20, |_, a| {
+            assert_eq!(a[0], 0x2222);
+            int(0x3333)
+        });
+        e.register_double(0x0044_ddc0, move |_, a| {
+            assert_eq!(a[0], 0x3333);
+            int(object)
+        });
+        e.call_log = Some(vec![]);
+        let result = e.call(
+            0x008b_3d70,
+            &args![actor, 0f32, 0f32, 0f32, 3.0f32, 0f32, 0f32],
+        );
+        assert_eq!(result.u32(), 0x66);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log.iter().map(|c| c.0).collect();
+        assert_eq!(
+            &order[order.len() - 10..],
+            [
+                0x0062_40d0,
+                0x0068_15c0,
+                0x004a_3e00,
+                0x008a_50f0,
+                0x008a_50d0,
+                0x00c8_06b0,
+                0x004a_e750,
+                0x004b_5a20,
+                0x0044_ddc0,
+                0x0f31_000c
+            ]
+        );
+    }
+
+    #[test]
+    fn ray_with_no_object_returns_zero() {
+        let (mut e, actor) = ray_engine();
+        e.register(0x008c_fbc0, |_, _| int(0));
+        e.register(0x0062_40d0, |_, _| Ret::default());
+        e.register(0x0068_15c0, |_, _| Ret::default());
+        e.register(0x004a_3e00, |_, _| Ret::default());
+        e.register(0x008a_50f0, |_, _| Ret::default());
+        e.register(0x008a_50d0, |_, _| Ret::default());
+        e.register(0x00c8_06b0, |_, _| int(0));
+        let result = e.call(
+            0x008b_3d70,
+            &args![actor, 0f32, 0f32, 0f32, 3.0f32, 0f32, 0f32],
+        );
+        assert_eq!(result.u32(), 0);
+    }
+
+    #[test]
+    fn body_part_index_walks_up_the_parents() {
+        let mut s = scene(&[0x1d0, 0x1e8, 0x190, 0x6d0]);
+        let actor = s.actor();
+        let process = s.object(0x800);
+        s.e.mem.set_u32(actor.addr() + 0x68, process);
+        let stop = 0x5555;
+        s.answer(actor.addr(), 0x1d0, stop);
+        s.answer(actor.addr(), 0x1e8, 0x9);
+        s.answer(process, 0x190, 0x200);
+        // Parent chain: 100 -> 150 -> 0.
+        s.e.register(0x0096_11e0, |_, a| {
+            int(match a[0] {
+                100 => 150,
+                _ => 0,
+            })
+        });
+        // Index 7 of the process holds node 150.
+        s.e.register_double(0x0f30_06d0, move |_, a| {
+            int(if a[1] == 7 { 150 } else { 0 })
+        });
+        assert_eq!(s.e.call(0x008b_3ef0, &args![actor, 100u32]).i32(), 7);
+        // A parent equal to the process's answer for the actor's slot 0x1E8 gives 0xE.
+        s.answer(process, 0x190, 150);
+        assert_eq!(s.e.call(0x008b_3ef0, &args![actor, 100u32]).i32(), 0xe);
+        // Reaching the actor's own object, an empty node, or no process: -1.
+        assert_eq!(s.e.call(0x008b_3ef0, &args![actor, stop]).i32(), -1);
+        assert_eq!(s.e.call(0x008b_3ef0, &args![actor, 0u32]).i32(), -1);
+        s.e.mem.set_u32(actor.addr() + 0x68, 0);
+        assert_eq!(s.e.call(0x008b_3ef0, &args![actor, 100u32]).i32(), -1);
+    }
+
+    #[test]
+    fn transform_inverse_inverts_scale_and_translation() {
+        let (mut e, _) = engine();
+        let this = e.mem.alloc(0x34);
+        let dest = e.mem.alloc(0x34);
+        e.mem.set_f32(this + 0x30, 4.0);
+        let negated = e.mem.alloc(12);
+        let rotated = e.mem.alloc(12);
+        let scaled = e.mem.alloc(12);
+        for (i, v) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+            e.mem.set_f32(scaled + 4 * i as u32, *v);
+        }
+        e.register(0x004b_46a0, |_, _| Ret::default());
+        e.register_double(0x004a_0bd0, move |_, a| {
+            assert_eq!(a[0], this + 0x24);
+            int(negated)
+        });
+        e.register_double(0x004b_4500, move |_, a| {
+            assert_eq!((a[0], a[2]), (dest, negated));
+            int(rotated)
+        });
+        e.register_double(0x004a_3760, move |_, a| {
+            assert_eq!(f32::from_bits(a[1]), 0.25);
+            assert_eq!(a[2], rotated);
+            int(scaled)
+        });
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008b_42e0,
+            &args![Ptr::<()>::new(this), Ptr::<()>::new(dest)],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(log[1], (0x004b_46a0, vec![this, dest]));
+        assert_eq!(e.mem.f32(dest + 0x30), 0.25);
+        assert_eq!(
+            [
+                e.mem.f32(dest + 0x24),
+                e.mem.f32(dest + 0x28),
+                e.mem.f32(dest + 0x2c)
+            ],
+            [7.0, 8.0, 9.0]
+        );
+    }
+
+    #[test]
+    fn body_part_flags_and_byte() {
+        let (mut e, _) = engine();
+        let part = e.mem.alloc(0x80);
+        let part_ptr = Ptr::<()>::new(part);
+        assert!(!e.call(0x008b_4360, &args![part_ptr]).bool());
+        assert!(!e.call(0x008b_4cd0, &args![part_ptr]).bool());
+        e.mem.set_u8(part + 0x60, 0x08);
+        assert!(e.call(0x008b_4360, &args![part_ptr]).bool());
+        assert!(!e.call(0x008b_4cd0, &args![part_ptr]).bool());
+        e.mem.set_u8(part + 0x60, 0x40);
+        assert!(!e.call(0x008b_4360, &args![part_ptr]).bool());
+        assert!(e.call(0x008b_4cd0, &args![part_ptr]).bool());
+        e.mem.set_u8(part + 0x66, 0x5a);
+        assert_eq!(e.call(0x008b_4380, &args![part_ptr]).u8(), 0x5a);
+    }
+
+    /// The world of the `008b3fe0` tests: every callee is a double.
+    struct Spawn {
+        s: Scene,
+        actor: Ptr<Actor>,
+        part: u32,
+        reference: u32,
+        impact: u32,
+        clone: u32,
+    }
+
+    fn spawn_world() -> Spawn {
+        let mut s = scene(&[0x180, 0x1d0, 0x14]);
+        let actor = s.actor();
+        let form = s.object(0x20);
+        let owner = s.object(0x100);
+        let path_owner = s.object(0x20);
+        s.answer(form, 0x180, 0xb0d1);
+        s.answer(actor.addr(), 0x1d0, owner);
+        s.answer(path_owner, 0x14, 0x9a7);
+        let part = s.e.mem.alloc(0x80);
+        s.e.mem.set_u8(part + 0x60, 0x08);
+        s.e.mem.set_u8(part + 0x66, 3);
+        let reference = s.e.mem.alloc(0x100);
+        let impact = s.e.mem.alloc(0x40);
+        for i in 0..9 {
+            s.e.mem.set_u32(reference + 0x68 + 4 * i, 0x100 + i);
+        }
+        for i in 0..3 {
+            s.e.mem.set_u32(impact + 0x24 + 4 * i, 0x200 + i);
+        }
+        let e = &mut s.e;
+        e.map(0x011c_3000, 0x1000);
+        e.set_global::<u32>(MODEL_LOADER, 0xa0ad);
+        e.register_double(0x0041_81e0, move |_, _| int(form));
+        e.register(0x008d_6f30, |_, _| int(0xce11));
+        e.register_double(0x005e_50f0, move |_, a| {
+            assert_eq!(a[0], 0xb0d1);
+            int(part)
+        });
+        e.register(0x005e_3fa0, |_, _| int(0x77));
+        e.register(0x0046_1130, |_, a| int(a[0] + 0x68));
+        e.register(0x009a_c9c0, |_, _| Ret::default());
+        e.register(ACTOR_GET_PROCESS, |_, _| int(0xb1));
+        e.register(0x0056_7400, |_, _| float(2.0));
+        e.register(0x009b_0bd0, |_, _| float(3.0));
+        e.register(0x004f_a6f0, |_, _| Ret::default());
+        e.register_double(0x005d_8a70, move |_, _| int(path_owner));
+        e.register(0x0048_cee0, |_, _| int(1));
+        e.register(0x0044_7080, |_, _| int(0x30d1));
+        e.register(0x004a_d050, |_, _| Ret::default());
+        e.register(0x00a5_d2c0, |_, _| int(0xc10e));
+        e.register(0x0047_6a80, |_, _| Ret::default());
+        e.register(0x004b_46a0, |_, _| Ret::default());
+        e.register(0x004a_0bd0, |_, _| int(0x1000));
+        e.register(0x004b_4500, |_, _| int(0x2000));
+        let scaled_buffer = e.mem.alloc(12);
+        e.register_double(0x004a_3760, move |_, _| int(scaled_buffer));
+        let composed = e.mem.alloc(0x34);
+        for i in 0..13 {
+            e.mem.set_u32(composed + 4 * i, 0x300 + i);
+        }
+        e.register_double(0x0062_c250, move |_, _| int(composed));
+        e.register(0x0044_0460, |_, _| Ret::default());
+        e.register(0x0043_fa80, |_, _| Ret::default());
+        e.register(0x009b_88c0, |_, _| float(0.5));
+        e.register(0x0044_0490, |_, _| Ret::default());
+        e.register(0x004a_d270, |_, _| Ret::default());
+        e.register(0x0045_a5e0, |_, _| Ret::default());
+        Spawn {
+            s,
+            actor,
+            part,
+            reference,
+            impact,
+            clone: 0xc10e,
+        }
+    }
+
+    #[test]
+    fn spawn_part_model_runs_the_whole_chain() {
+        let mut w = spawn_world();
+        let e = &mut w.s.e;
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(
+                0x008b_3fe0,
+                &args![w.actor, 5u32, w.reference, w.impact, true],
+            )
+            .u32();
+        assert_eq!(result, w.clone);
+        let log = e.call_log.take().unwrap();
+        let order: Vec<u32> = log.iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x008b_3fe0,
+                0x0041_81e0,
+                0x0f30_0180,
+                0x008d_6f30,
+                0x005e_50f0,
+                0x005e_3fa0,
+                0x0046_1130,
+                0x008d_6f30,
+                0x005e_3fa0,
+                0x009a_c9c0,
+                ACTOR_GET_PROCESS,
+                0x0056_7400,
+                0x009b_0bd0,
+                0x008d_6f30,
+                ACTOR_GET_PROCESS,
+                0x004f_a6f0,
+                0x005d_8a70,
+                0x0048_cee0,
+                0x005d_8a70,
+                0x0f30_0014,
+                0x0044_7080,
+                0x004a_d050,
+                0x00a5_d2c0,
+                0x0047_6a80,
+                0x0047_6a80,
+                0x0f30_01d0,
+                0x0046_1130,
+                0x004b_46a0,
+                0x004a_0bd0,
+                0x004b_4500,
+                0x004a_3760,
+                0x0046_1130,
+                0x0062_c250,
+                0x0044_0460,
+                0x0043_fa80,
+                0x009b_88c0,
+                0x0044_0490,
+                0x004a_d270,
+                0x005d_8a70,
+                0x0f30_0014,
+                0x0045_a5e0,
+            ]
+        );
+        let explosion = &log[order.iter().position(|a| *a == 0x009a_c9c0).unwrap()].1;
+        let mut expected = vec![0x77, 0, 0, 0xce11, 0x200, 0x201, 0x202];
+        expected.extend((0..9).map(|i| 0x100 + i));
+        assert_eq!(explosion, &expected);
+        let placed = &log[order.iter().position(|a| *a == 0x004f_a6f0).unwrap()].1;
+        assert_eq!(
+            placed,
+            &vec![0xb1, 0xce11, w.impact + 0x24, 3, 6.0f32.to_bits()]
+        );
+        let clone_scale = &log[order.iter().position(|a| *a == 0x0044_0490).unwrap()].1;
+        assert_eq!(clone_scale, &vec![w.clone, 0.5f32.to_bits()]);
+        let _ = w.part;
+    }
+
+    #[test]
+    fn spawn_part_model_stops_early() {
+        // No effects and no reference: the model is not touched.
+        let mut w = spawn_world();
+        let e = &mut w.s.e;
+        e.register(0x0044_7080, |_, _| panic!("no model without a reference"));
+        e.call_log = Some(vec![]);
+        let result = e
+            .call(0x008b_3fe0, &args![w.actor, 5u32, 0u32, w.impact, false])
+            .u32();
+        assert_eq!(result, 0);
+        let order: Vec<u32> = e.call_log.take().unwrap().iter().map(|c| c.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x008b_3fe0,
+                0x0041_81e0,
+                0x0f30_0180,
+                0x008d_6f30,
+                0x005e_50f0,
+                0x005d_8a70,
+                0x0048_cee0
+            ]
+        );
+        // A part without flag 0x08 stops before anything else.
+        e.mem.set_u8(w.part + 0x60, 0);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008b_3fe0,
+            &args![w.actor, 5u32, w.reference, w.impact, true],
+        );
+        assert_eq!(e.call_log.take().unwrap().len(), 5);
+        // No cell: nothing after the body part data.
+        e.register(0x008d_6f30, |_, _| int(0));
+        e.call_log = Some(vec![]);
+        e.call(
+            0x008b_3fe0,
+            &args![w.actor, 5u32, w.reference, w.impact, true],
+        );
+        assert_eq!(e.call_log.take().unwrap().len(), 4);
+    }
+
+    /// The world of the `008b43a0` tests.
+    struct Dismember {
+        s: Scene,
+        actor: Ptr<Actor>,
+        hit: u32,
+        parts: Rc<std::cell::RefCell<std::collections::HashMap<u32, u32>>>,
+    }
+
+    /// Settings (by the object `0043d4d0` is given) and their values.
+    const DISMEMBER_SETTINGS: [(u32, u32); 7] = [
+        (DISMEMBER_LIMIT_SETTING, 10),
+        (DISMEMBER_SETTING_LIMB_CHANCE, 50),
+        (DISMEMBER_SETTING_FIRST_PART, 40),
+        (DISMEMBER_SETTING_OTHER_PART, 41),
+        (DISMEMBER_SETTING_ROLL, 60),
+        (DISMEMBER_SETTING_ROLLED_PART, 42),
+        (DISMEMBER_BLOCK_SETTING, 0),
+    ];
+
+    fn dismember_world() -> Dismember {
+        let mut s = scene(&[0x218, 0x180, 0x220, 8, 0x1d0]);
+        let actor = s.actor();
+        let form = s.object(0x20);
+        s.answer(form, 0x180, 0xb0d1);
+        let hit = s.e.mem.alloc(0x20);
+        let e = &mut s.e;
+        e.map(0x011e_0000, 0x1000);
+        e.set_global::<u32>(DISMEMBER_COUNTER, 0);
+        let mut pointers = std::collections::HashMap::new();
+        for (setting, value) in DISMEMBER_SETTINGS {
+            let cell = e.mem.alloc(4);
+            e.mem.set_u32(cell, value);
+            pointers.insert(setting, cell);
+        }
+        e.register_double(0x0043_d4d0, move |_, a| int(pointers[&a[0]]));
+        e.register_double(0x0041_81e0, move |_, _| int(form));
+        e.register(0x00ec_43fb, |_, _| int(0));
+        e.register(0x005f_bf20, |_, _| int(0));
+        e.register(0x0040_8d60, |_, a| int(a[0]));
+        let parts: Rc<std::cell::RefCell<std::collections::HashMap<u32, u32>>> = Default::default();
+        let by_key = parts.clone();
+        e.register_double(0x005e_50f0, move |_, a| {
+            int(by_key.borrow().get(&a[1]).copied().unwrap_or(0))
+        });
+        let by_value = parts.clone();
+        e.register_double(0x005e_5130, move |_, a| {
+            int(by_value
+                .borrow()
+                .get(&(0x1000 + a[1]))
+                .copied()
+                .unwrap_or(0))
+        });
+        // Part kind: the byte at +0x61 is the actor value, the dword at +0x70 its body part.
+        e.register(0x005e_5190, |e, a| int(e.mem.u8(a[0] + 0x61) as u32));
+        e.register(0x005e_5300, |e, a| int(e.mem.u32(a[0] + 0x70)));
+        e.register(0x008b_4cf0, |e, a| int(e.mem.u8(a[0] + 0x62) as u32));
+        e.register(0x0058_cba0, |_, _| int(0));
+        e.register(0x0048_7f50, |_, _| int(250));
+        e.register(0x0066_ec10, |_, a| {
+            assert_eq!(a[0], 4);
+            int(10 + a[1])
+        });
+        e.register(0x0040_7e00, |_, _| Ret::default());
+        e.register(ACTOR_DISMEMBER, |_, _| Ret::default());
+        Dismember {
+            s,
+            actor,
+            hit,
+            parts,
+        }
+    }
+
+    impl Dismember {
+        /// A body part with the given actor value byte, part number and 4cf0 byte.
+        fn part(&mut self, value: u8, number: u32, severable: u8, flags: u8) -> u32 {
+            let part = self.s.e.mem.alloc(0x80);
+            self.s.e.mem.set_u8(part + 0x60, flags);
+            self.s.e.mem.set_u8(part + 0x61, value);
+            self.s.e.mem.set_u8(part + 0x62, severable);
+            self.s.e.mem.set_u32(part + 0x70, number);
+            part
+        }
+
+        fn run(&mut self) -> Calls {
+            self.s.e.call_log = Some(vec![]);
+            let actor = self.actor;
+            let hit = self.hit;
+            self.s
+                .e
+                .call(0x008b_43a0, &args![actor, hit, 0xaau32, 0xbbu32]);
+            self.s.e.call_log.take().unwrap()
+        }
+    }
+
+    fn dismember_calls(log: &Calls) -> Calls {
+        log.iter()
+            .filter(|c| c.0 == ACTOR_DISMEMBER || c.0 == 0x0040_7e00)
+            .cloned()
+            .collect()
+    }
+
+    #[test]
+    fn dismember_stops_early_and_counts() {
+        let mut w = dismember_world();
+        // A creature that cannot be dismembered while the setting says so.
+        w.s.answer(w.actor.addr(), 0x218, 1);
+        let blocked = w.s.e.mem.alloc(4);
+        w.s.e.mem.set_u8(blocked, 1);
+        w.s.e.register_double(0x0040_8d60, move |_, _| int(blocked));
+        let log = w.run();
+        assert_eq!(log.last().unwrap().0, 0x0040_8d60);
+        assert_eq!(w.s.e.global::<u32>(DISMEMBER_COUNTER), 0);
+        // No body part data.
+        let mut w = dismember_world();
+        let form = w.s.object(0x20);
+        w.s.e.register_double(0x0041_81e0, move |_, _| int(form));
+        let log = w.run();
+        assert_eq!(log.last().unwrap().0, 0x0f30_0180);
+        // Without a hit.
+        let mut w = dismember_world();
+        w.hit = 0;
+        let log = w.run();
+        assert_eq!(log.last().unwrap().0, 0x0f30_0180);
+        // The counter has reached the limit.
+        let mut w = dismember_world();
+        w.s.e.set_global::<u32>(DISMEMBER_COUNTER, 10);
+        let log = w.run();
+        assert!(dismember_calls(&log).is_empty());
+        assert_eq!(w.s.e.global::<u32>(DISMEMBER_COUNTER), 10);
+        // Otherwise it counts up.
+        let mut w = dismember_world();
+        w.run();
+        assert_eq!(w.s.e.global::<u32>(DISMEMBER_COUNTER), 1);
+    }
+
+    #[test]
+    fn dismember_without_candidates_dismembers_nothing_specific() {
+        let mut w = dismember_world();
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log),
+            vec![(
+                ACTOR_DISMEMBER,
+                vec![
+                    w.actor.addr(),
+                    w.hit,
+                    u32::MAX,
+                    u32::MAX,
+                    0xaa,
+                    0xbb,
+                    0,
+                    0,
+                    0
+                ]
+            )]
+        );
+    }
+
+    #[test]
+    fn dismember_single_part_of_the_hit() {
+        let mut w = dismember_world();
+        let part = w.part(9, 0x33, 0, 0);
+        w.parts.borrow_mut().insert(3, part);
+        w.s.e.mem.set_u32(w.hit + 0x10, 3);
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log),
+            vec![(
+                ACTOR_DISMEMBER,
+                vec![w.actor.addr(), w.hit, 9, 3, 0xaa, 0xbb, 0, 0, 0]
+            )]
+        );
+        // The attacker's value already above zero: nothing is added.
+        w.s.answer(w.actor.addr() + 0xa4, 8, 1);
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log)[0].1[2..4],
+            [u32::MAX, u32::MAX],
+            "no candidate, so the general call"
+        );
+    }
+
+    #[test]
+    fn dismember_with_a_strong_attacker_picks_the_hit_part_and_another() {
+        let mut w = dismember_world();
+        let attacker = w.s.object(0x100);
+        w.s.answer(attacker + 0xa4, 8, 5);
+        // Slot 8 is also the actor's value lookup; the attacker's and the
+        // actor's answers are keyed by object.
+        w.s.e.mem.set_u32(attacker + 0xa4, w.s.vtable);
+        w.s.e.mem.set_u32(w.hit, attacker);
+        // The hit's part: not severable; actor value 5.
+        let hit_part = w.part(5, 0x51, 0, 0);
+        w.parts.borrow_mut().insert(3, hit_part);
+        w.s.e.mem.set_u32(w.hit + 0x10, 3);
+        // Another part for the actor value 11 (the second index).
+        let other = w.part(0, 0x52, 0, 0);
+        w.parts.borrow_mut().insert(0x1000 + 11, other);
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log),
+            vec![
+                (
+                    ACTOR_DISMEMBER,
+                    vec![w.actor.addr(), w.hit, 5, 3, 0xaa, 0xbb, 100, 40, 0]
+                ),
+                (
+                    ACTOR_DISMEMBER,
+                    vec![w.actor.addr(), w.hit, 11, 0x52, 0xaa, 0xbb, 100, 41, 0]
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn dismember_head_roll_sets_the_flag_around_the_call() {
+        let mut w = dismember_world();
+        let attacker = w.s.object(0x100);
+        w.s.answer(attacker + 0xa4, 8, 5);
+        let vtable = w.s.vtable;
+        w.s.e.mem.set_u32(attacker + 0xa4, vtable);
+        w.s.e.mem.set_u32(w.hit, attacker);
+        // The hit's part is the head (value 0x1a) and severable (flags 0x08 | 0x40, byte >= 100).
+        let head = w.part(0x1a, 0x61, 100, 0x48);
+        w.parts.borrow_mut().insert(3, head);
+        w.s.e.mem.set_u32(w.hit + 0x10, 3);
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log),
+            vec![
+                (0x0040_7e00, vec![w.hit, 0x40, 1]),
+                (
+                    ACTOR_DISMEMBER,
+                    vec![w.actor.addr(), w.hit, 0x1a, 0x61, 0xaa, 0xbb, 100, 100, 1]
+                ),
+                (0x0040_7e00, vec![w.hit, 0x40, 0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn dismember_from_a_part_list() {
+        let mut w = dismember_world();
+        let owner = w.s.object(0x40);
+        w.s.answer(owner, 0x220, 1);
+        w.s.e.mem.set_u32(w.hit + 8, owner);
+        let part = w.part(7, 0x71, 0, 0);
+        w.parts.borrow_mut().insert(0x1234, part);
+        let entry = w.s.e.mem.alloc(4);
+        w.s.e.mem.set_u32(entry, 0x1234);
+        let slot = w.s.e.mem.alloc(4);
+        w.s.e.mem.set_u32(slot, entry);
+        w.s.e.register(0x009b_1720, |_, _| int(0xa1));
+        w.s.e.register(0x0082_56d0, |_, _| int(0));
+        w.s.e.register_double(0x0068_15c0, move |_, _| int(slot));
+        w.s.e.register(0x0072_6070, |_, _| int(0));
+        let log = w.run();
+        assert_eq!(
+            dismember_calls(&log),
+            vec![(
+                ACTOR_DISMEMBER,
+                vec![w.actor.addr(), w.hit, 7, 0x1234, 0xaa, 0xbb, 0, 0, 0]
+            )]
+        );
     }
 }
