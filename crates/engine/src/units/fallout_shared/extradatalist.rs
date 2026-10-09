@@ -7,15 +7,16 @@
 //! the very large `ExtraDataList::AddExtraCopy`, the save writer
 //! (`fn_00412970`), `ExtraDataList::Load` and `ExtraDataList::InitItem`.
 //! 624 functions in all: translated so far, in address order, `0040f680` to
-//! `00418a80` (the first 120 the queue listed, in three sessions; the third
+//! `0041a540` (the first 120 the queue listed, in three sessions; the third
 //! also did `004168a0`, the rotation matrix builder, which the first two
 //! left, and the single-value getters and setters of `004181c0` to
-//! `00418a80`).
+//! `00418a80`; the fourth did the last 40 of the address range up to
+//! `0041a6a0`, `00418ab0` to `0041a540`: the worn, seed, weapon mod,
+//! animation, lock, teleport, marker, count, health, script, scale and sound
+//! getters and setters, with the destructors of the data they replace).
 //!
-//! A later session continues at `00418ab0` (`ExtraDataList::GetWorn`; the
-//! getters and setters of the extra data types go on in address order, and
-//! the callee lists of `InitItem`, `Load` and the save writer name the
-//! setters that follow). What it needs is up here:
+//! The functions from `0041a6a0` on belong to the other part files of the
+//! unit. What a translator of this file needs is up here:
 //!
 //! - the layouts and the constants (the lock, the dirty counter, the thread
 //!   cache, then, in the second block, the callees of the list operations,
@@ -4506,6 +4507,871 @@ pub fn fn_00418a80(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
     base_extra_list_has_extra(e, this.cast(), EXTRA_GHOST)
 }
 
+// ---------------------------------------------------------------------------
+// Fourth batch: `00418ab0` to `0041a540` (the getters and setters of the
+// worn, seed, weapon mod, animation, lock, teleport, marker, count, health,
+// script, scale and sound extra data).
+
+/// Extra data types (`EXTRA_DATA_TYPE` of the Xbox PDB; the number is the
+/// `cEtype` byte the PC code uses) of this batch.
+const EXTRA_SCRIPT: u8 = 0x0d;
+const EXTRA_ACTION: u8 = 0x0e;
+const EXTRA_STARTING_POSITION: u8 = 0x0f;
+const EXTRA_ANIM: u8 = 0x10;
+const EXTRA_CONTAINER_CHANGES: u8 = 0x15;
+const EXTRA_WORN: u8 = 0x16;
+const EXTRA_WORN_LEFT: u8 = 0x17;
+const EXTRA_PACKAGE_START_LOCATION: u8 = 0x18;
+const EXTRA_OWNERSHIP: u8 = 0x21;
+const EXTRA_GLOBAL: u8 = 0x22;
+const EXTRA_RANK: u8 = 0x23;
+const EXTRA_COUNT: u8 = 0x24;
+const EXTRA_HEALTH: u8 = 0x25;
+const EXTRA_USES: u8 = 0x26;
+const EXTRA_TIME_LEFT: u8 = 0x27;
+const EXTRA_CHARGE: u8 = 0x28;
+const EXTRA_LOCK: u8 = 0x2a;
+const EXTRA_TELEPORT: u8 = 0x2b;
+const EXTRA_MAP_MARKER: u8 = 0x2c;
+const EXTRA_SCALE: u8 = 0x30;
+const EXTRA_SEED: u8 = 0x31;
+const EXTRA_CAN_NOT_WEAR: u8 = 0x3e;
+const EXTRA_POISON: u8 = 0x3f;
+const EXTRA_TYPE_46: u8 = 0x46;
+const EXTRA_CREATURE_AWAKE_SOUND: u8 = 0x7d;
+const EXTRA_WEAPON_IDLE_SOUND: u8 = 0x83;
+const EXTRA_WEAPON_ATTACK_SOUND: u8 = 0x86;
+const EXTRA_CREATURE_MOVEMENT_SOUND: u8 = 0x8a;
+const EXTRA_WEAPON_MOD_SLOTS: u8 = 0x8d;
+const EXTRA_AUDIO_MARKER: u8 = 0x90;
+const EXTRA_AUDIO_BUOY_MARKER: u8 = 0x91;
+
+/// Constructors of the extra data these setters build (`this` = the new
+/// block; the other words are the value the setter was given).
+const EXTRA_ANIM_INIT: u32 = 0x0043_00c0;
+const EXTRA_STARTING_POSITION_INIT: u32 = 0x0043_0780;
+const EXTRA_TELEPORT_INIT: u32 = 0x0043_1230;
+const EXTRA_MAP_MARKER_INIT: u32 = 0x0043_1360;
+const EXTRA_AUDIO_MARKER_INIT: u32 = 0x0043_14c0;
+const EXTRA_AUDIO_BUOY_MARKER_INIT: u32 = 0x0043_1620;
+const EXTRA_ACTION_INIT: u32 = 0x0043_1780;
+const EXTRA_CONTAINER_CHANGES_INIT: u32 = 0x0043_1830;
+const EXTRA_OWNERSHIP_INIT: u32 = 0x0043_1a40;
+const EXTRA_GLOBAL_INIT: u32 = 0x0043_1ae0;
+const EXTRA_RANK_INIT: u32 = 0x0043_1b80;
+const EXTRA_COUNT_INIT: u32 = 0x0043_1c20;
+const EXTRA_HEALTH_INIT: u32 = 0x0043_1d10;
+const EXTRA_USES_INIT: u32 = 0x0043_1e20;
+const EXTRA_TIME_LEFT_INIT: u32 = 0x0043_1ec0;
+const EXTRA_CHARGE_INIT: u32 = 0x0043_1f60;
+const EXTRA_SCALE_INIT: u32 = 0x0043_2220;
+const EXTRA_POISON_INIT: u32 = 0x0043_5150;
+const EXTRA_ITEM_DROPPER_INIT: u32 = 0x0043_5ec0;
+/// Constructors of the four sound extra data; each takes a `BSSoundHandle`
+/// by value (three words).
+const EXTRA_CREATURE_AWAKE_SOUND_INIT: u32 = 0x0043_61e0;
+const EXTRA_CREATURE_MOVEMENT_SOUND_INIT: u32 = 0x0043_6300;
+const EXTRA_WEAPON_IDLE_SOUND_INIT: u32 = 0x0043_6420;
+const EXTRA_WEAPON_ATTACK_SOUND_INIT: u32 = 0x0043_6540;
+
+/// The scalar deleting destructor `00418d20` of the object an `ExtraAnim`
+/// holds (`this`, then flags: bit 0 deletes the block).
+const ANIM_SCALAR_DELETING_DESTRUCTOR: u32 = 0x0041_8d20;
+/// The destructor `fn_00419220` runs on the teleport data before it deletes.
+const TELEPORT_DATA_DESTRUCTOR: u32 = 0x0066_65a0;
+/// The destructor `fn_00419350` runs on the map marker data.
+const MAP_MARKER_DATA_DESTRUCTOR: u32 = 0x0043_8bf0;
+/// The destructor `fn_00419480` runs on the audio marker data.
+const AUDIO_MARKER_DATA_DESTRUCTOR: u32 = 0x0058_9500;
+/// The scalar deleting destructor of the object an `ExtraAudioBuoyMarker`
+/// holds (`this`, then flags).
+const AUDIO_BUOY_MARKER_DATA_SCALAR_DELETING_DESTRUCTOR: u32 = 0x007b_3fa0;
+/// `TESObjectREFR::SetTargeted(bool)` (`this` = the reference).
+const REFERENCE_SET_TARGETED: u32 = 0x0056_4db0;
+/// `BSSoundHandle::~BSSoundHandle` (`00483710`, an empty function).
+const SOUND_HANDLE_DESTRUCTOR: u32 = 0x0048_3710;
+/// `1.0` as a `double` in the exe's read-only data: the value the scale
+/// setter compares with.
+const ONE_DOUBLE: u32 = 0x0101_2070;
+
+/// A new extra data of `size` bytes, built by the constructor at `construct`
+/// (`this` = the block, then `construct_args`) and added to the list. As in
+/// the code, a failed allocation gives a null extra data that is added
+/// anyway. Returns the extra data.
+fn add_new_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    size: u32,
+    construct: u32,
+    construct_args: &[u32],
+) -> Ptr<BSExtraData> {
+    let extra = new_object(e, size, |e, block| {
+        let mut words = vec![block];
+        words.extend_from_slice(construct_args);
+        e.call(construct, &words).u32()
+    });
+    base_extra_list_add_extra(e, list.cast(), Ptr::new(extra));
+    Ptr::new(extra)
+}
+
+/// The shape of the plain setters: when the list has an extra data of
+/// `extra_type`, `store` writes the value into it; otherwise one of `size`
+/// bytes is built from `construct_word` by `construct` and added.
+fn set_or_add_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra_type: u8,
+    size: u32,
+    construct: u32,
+    construct_word: u32,
+    store: impl FnOnce(&mut Engine, Ptr<BSExtraData>),
+) {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        add_new_extra(e, list, size, construct, &[construct_word]);
+    } else {
+        store(e, extra);
+    }
+}
+
+/// The shape of the setters whose value `none` means "no extra data":
+/// an existing extra data is deleted for `none` and overwritten (the word
+/// at +0x0C) otherwise; a missing one is built (a `0x10`-byte extra data)
+/// unless the value is `none`.
+fn set_or_remove_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra_type: u8,
+    construct: u32,
+    value: u32,
+    none: u32,
+) {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        if value != none {
+            add_new_extra(e, list, 0x10, construct, &[value]);
+        }
+    } else if value == none {
+        base_extra_list_remove_extra(e, list.cast(), extra, true);
+    } else {
+        e.mem.set_u32(extra.addr() + 0x0c, value);
+    }
+}
+
+/// The shape of the setters of a pointer the extra data owns (teleport, map
+/// marker, audio marker, audio buoy marker): a null `value` deletes an
+/// existing extra data, a non-null one replaces the held pointer (after
+/// `destroy_old` ran on a non-null old one) or builds the extra data. The
+/// result is the extra data; after a deletion it is the deleted one when
+/// `keep_deleted` (the teleport setter) and null otherwise.
+fn set_owned_pointer_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra_type: u8,
+    construct: u32,
+    value: u32,
+    keep_deleted: bool,
+    destroy_old: impl FnOnce(&mut Engine, u32),
+) -> Ptr<BSExtraData> {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        if value == 0 {
+            return Ptr::NULL;
+        }
+        return add_new_extra(e, list, 0x10, construct, &[value]);
+    }
+    if value == 0 {
+        base_extra_list_remove_extra(e, list.cast(), extra, true);
+        return if keep_deleted { extra } else { Ptr::NULL };
+    }
+    let old = payload(e, extra, 0x0c);
+    if old != 0 {
+        destroy_old(e, old);
+    }
+    e.mem.set_u32(extra.addr() + 0x0c, value);
+    extra
+}
+
+// Translated from 00418ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetWorn` (Xbox PDB): with `left_only` set, whether the list
+/// has a type `0x17` extra data (`EXTRA_WORN_LEFT`); otherwise whether it has
+/// a type `0x16` (`EXTRA_WORN`) or a type `0x17` one.
+pub fn extra_data_list_get_worn(e: &mut Engine, this: Ptr<ExtraDataList>, left_only: bool) -> bool {
+    if left_only {
+        return base_extra_list_has_extra(e, this.cast(), EXTRA_WORN_LEFT);
+    }
+    base_extra_list_has_extra(e, this.cast(), EXTRA_WORN)
+        || base_extra_list_has_extra(e, this.cast(), EXTRA_WORN_LEFT)
+}
+
+// Translated from 00418b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetCanNotWear` (Xbox PDB): whether the list has a type
+/// `0x3E` extra data (`EXTRA_CANNOTWEAR` in the Xbox enum).
+pub fn extra_data_list_get_can_not_wear(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
+    base_extra_list_has_extra(e, this.cast(), EXTRA_CAN_NOT_WEAR)
+}
+
+// Translated from 00418b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `iSeed` (a byte) of the type `0x31` extra data (`ExtraSeed`, `EXTRA_SEED`
+/// in the Xbox enum), or `0xFF` when the list has none.
+pub fn fn_00418b40(e: &mut Engine, this: Ptr<ExtraDataList>) -> u8 {
+    let extra = find_extra(e, this, EXTRA_SEED);
+    if extra.is_null() {
+        0xff
+    } else {
+        e.mem.u8(extra.addr() + 0x0c)
+    }
+}
+
+// Translated from 00418b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetPackageStartLocation` (Xbox PDB): the address of the
+/// record at +0x0C of the type `0x18` extra data (`EXTRA_PACKAGESTARTLOC` in
+/// the Xbox enum), or 0.
+pub fn extra_data_list_get_package_start_location(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    let extra = find_extra(e, this, EXTRA_PACKAGE_START_LOCATION);
+    if extra.is_null() {
+        0
+    } else {
+        extra.addr() + 0x0c
+    }
+}
+
+// Translated from 00418ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::HasWeaponMods` (Xbox PDB): false when the list has no type
+/// `0x8D` extra data (`EXTRA_WEAPON_MOD_SLOTS` in the Xbox enum); otherwise
+/// whether the byte at +0x0C of it is nonzero (`fn_00418be0`).
+pub fn extra_data_list_has_weapon_mods(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
+    let extra = find_extra(e, this, EXTRA_WEAPON_MOD_SLOTS);
+    if extra.is_null() {
+        false
+    } else {
+        fn_00418be0(e, extra)
+    }
+}
+
+// Translated from 00418be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the byte at +0x0C of the extra data is nonzero.
+pub fn fn_00418be0(e: &mut Engine, this: Ptr<BSExtraData>) -> bool {
+    e.mem.u8(this.addr() + 0x0c) != 0
+}
+
+// Translated from 00418c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetWeaponModSlotActive` (Xbox PDB): false when the list has
+/// no type `0x8D` extra data; otherwise `fn_00411e20` (the mask test) on it
+/// with `slot`.
+pub fn extra_data_list_get_weapon_mod_slot_active(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    slot: u8,
+) -> bool {
+    let extra = find_extra(e, this, EXTRA_WEAPON_MOD_SLOTS);
+    if extra.is_null() {
+        false
+    } else {
+        fn_00411e20(e, extra, slot)
+    }
+}
+
+// Translated from 00418c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetAnimPtr` (Xbox PDB): sets the animation of the type
+/// `0x10` extra data (`ExtraAnim`, `pAnimation` at +0x0C). An existing one
+/// first runs the destructor `00418d20` (with flags 1) on the animation it
+/// held, when it held one, then takes the new pointer; otherwise an
+/// `ExtraAnim` (`0x10` bytes, built by `004300c0`) is added. Returns the extra
+/// data. The compiler's exception-unwinding frame is not translated.
+pub fn extra_data_list_set_anim_ptr(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    animation: u32,
+) -> Ptr<BSExtraData> {
+    let extra = find_extra(e, this, EXTRA_ANIM);
+    if extra.is_null() {
+        return add_new_extra(e, this, 0x10, EXTRA_ANIM_INIT, &[animation]);
+    }
+    let old = payload(e, extra, 0x0c);
+    if old != 0 {
+        e.call(ANIM_SCALAR_DELETING_DESTRUCTOR, &args![old, 1u32]);
+    }
+    e.mem.set_u32(extra.addr() + 0x0c, animation);
+    extra
+}
+
+// Translated from 00418d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The type `0x0F` extra data (`ExtraStartingPosition`, `0x24` bytes, a
+/// `FILE_POS_ROT` at +0x0C): returns the list's own when it has one (the
+/// argument is not used then); otherwise builds one from `position` with
+/// `00430780`, adds it and returns it.
+pub fn fn_00418d50(e: &mut Engine, this: Ptr<ExtraDataList>, position: Ptr) -> Ptr<BSExtraData> {
+    let extra = find_extra(e, this, EXTRA_STARTING_POSITION);
+    if !extra.is_null() {
+        return extra;
+    }
+    add_new_extra(
+        e,
+        this,
+        0x24,
+        EXTRA_STARTING_POSITION_INIT,
+        &[position.addr()],
+    )
+}
+
+// Translated from 00419050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetLockPtr` (Xbox PDB): sets the `REFR_LOCK` of the type
+/// `0x2A` extra data (`ExtraLock`, `pLock` at +0x0C). An existing one deletes
+/// the block it held (`operator delete`, called even for a null pointer) and
+/// takes the new one; otherwise an `ExtraLock` (`0x10` bytes, `00430c70`) is
+/// added. Returns the extra data.
+pub fn extra_data_list_set_lock_ptr(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    lock: u32,
+) -> Ptr<BSExtraData> {
+    let extra = find_extra(e, this, EXTRA_LOCK);
+    if extra.is_null() {
+        return add_new_extra(e, this, 0x10, EXTRA_LOCK_INIT, &[lock]);
+    }
+    let old = payload(e, extra, 0x0c);
+    e.call(OPERATOR_DELETE, &args![old]);
+    e.mem.set_u32(extra.addr() + 0x0c, lock);
+    extra
+}
+
+// Translated from 00419120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the teleport data of the type `0x2B` extra data (`ExtraTeleport`,
+/// `pTeleportData`, a `DoorTeleportData*`, at +0x0C). A null `data` deletes an
+/// existing extra data and returns that (deleted) extra data, or returns null
+/// when there is none; a non-null `data` replaces the held pointer, first
+/// running `fn_00419220` (flags 1) on the old one when it is non-null, or
+/// builds an `ExtraTeleport` (`0x10` bytes, `00431230`) and adds it. Returns
+/// the extra data.
+pub fn fn_00419120(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<BSExtraData> {
+    set_owned_pointer_extra(
+        e,
+        this,
+        EXTRA_TELEPORT,
+        EXTRA_TELEPORT_INIT,
+        data,
+        true,
+        |e, old| {
+            fn_00419220(e, Ptr::new(old), 1);
+        },
+    )
+}
+
+// Translated from 00419220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the teleport data the type `0x2B` extra data
+/// holds: runs `006665a0` on `this`, then deletes the block when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00419220(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(TELEPORT_DATA_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00419250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the map marker data of the type `0x2C` extra data (`ExtraMapMarker`,
+/// `pMapData`, a `MapMarkerData*`, at +0x0C). A null `data` deletes an
+/// existing extra data; a non-null one replaces the held pointer, first
+/// running `fn_00419350` (flags 1) on the old one when it is non-null, or
+/// builds an `ExtraMapMarker` (`0x10` bytes, `00431360`) and adds it. Returns
+/// the extra data, or null after a deletion or when there is none.
+pub fn fn_00419250(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<BSExtraData> {
+    set_owned_pointer_extra(
+        e,
+        this,
+        EXTRA_MAP_MARKER,
+        EXTRA_MAP_MARKER_INIT,
+        data,
+        false,
+        |e, old| {
+            fn_00419350(e, Ptr::new(old), 1);
+        },
+    )
+}
+
+// Translated from 00419350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the map marker data the type `0x2C` extra
+/// data holds: runs `00438bf0` on `this`, then deletes the block when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00419350(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(MAP_MARKER_DATA_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00419380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the audio marker data of the type `0x90` extra data
+/// (`ExtraAudioMarker`, `pAudioData`, an `AudioMarkerData*`, at +0x0C). A null
+/// `data` deletes an existing extra data; a non-null one replaces the held
+/// pointer, first running `fn_00419480` (flags 1) on the old one when it is
+/// non-null, or builds an `ExtraAudioMarker` (`0x10` bytes, `004314c0`) and
+/// adds it. Returns the extra data, or null after a deletion or when there is
+/// none.
+pub fn fn_00419380(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<BSExtraData> {
+    set_owned_pointer_extra(
+        e,
+        this,
+        EXTRA_AUDIO_MARKER,
+        EXTRA_AUDIO_MARKER_INIT,
+        data,
+        false,
+        |e, old| {
+            fn_00419480(e, Ptr::new(old), 1);
+        },
+    )
+}
+
+// Translated from 00419480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the audio marker data the type `0x90` extra
+/// data holds: runs `00589500` on `this`, then deletes the block when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00419480(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(AUDIO_MARKER_DATA_DESTRUCTOR, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004194b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the data of the type `0x91` extra data (`ExtraAudioBuoyMarker`,
+/// `pAudioBuoyData`, an `AudioBuoyMarkerData*`, at +0x0C). A null `data`
+/// deletes an existing extra data; a non-null one replaces the held pointer,
+/// first running the scalar deleting destructor `007b3fa0` (flags 1) on the
+/// old one when it is non-null, or builds an `ExtraAudioBuoyMarker` (`0x10`
+/// bytes, `00431620`) and adds it. Returns the extra data, or null after a
+/// deletion or when there is none.
+pub fn fn_004194b0(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) -> Ptr<BSExtraData> {
+    set_owned_pointer_extra(
+        e,
+        this,
+        EXTRA_AUDIO_BUOY_MARKER,
+        EXTRA_AUDIO_BUOY_MARKER_INIT,
+        data,
+        false,
+        |e, old| {
+            e.call(
+                AUDIO_BUOY_MARKER_DATA_SCALAR_DELETING_DESTRUCTOR,
+                &args![old, 1u32],
+            );
+        },
+    )
+}
+
+// Translated from 004195b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The type `0x0E` extra data (`ExtraAction`, `0x14` bytes: `eAction` at +0x0C,
+/// `pActionRef` at +0x10): returns the list's own when it has one; otherwise
+/// builds one with `00431780` (no argument), adds it and returns it.
+pub fn fn_004195b0(e: &mut Engine, this: Ptr<ExtraDataList>) -> Ptr<BSExtraData> {
+    let extra = find_extra(e, this, EXTRA_ACTION);
+    if !extra.is_null() {
+        return extra;
+    }
+    add_new_extra(e, this, 0x14, EXTRA_ACTION_INIT, &[])
+}
+
+// Translated from 00419650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetContainerChanges` (Xbox PDB): does nothing for a null
+/// `changes`; otherwise stores it (`pChanges` at +0x0C) in the type `0x15`
+/// extra data (`ExtraContainerChanges`), or builds one (`0x10` bytes,
+/// `00431830`) and adds it. A null value never removes the extra data.
+pub fn extra_data_list_set_container_changes(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    changes: u32,
+) {
+    if changes == 0 {
+        return;
+    }
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_CONTAINER_CHANGES,
+        0x10,
+        EXTRA_CONTAINER_CHANGES_INIT,
+        changes,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, changes),
+    );
+}
+
+// Translated from 00419700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the owner of the type `0x21` extra data (`ExtraOwnership`, `pOwner` at
+/// +0x0C): a null `owner` deletes an existing extra data (and builds none),
+/// otherwise the pointer is stored, or an `ExtraOwnership` (`0x10` bytes,
+/// `00431a40`) is added.
+pub fn fn_00419700(e: &mut Engine, this: Ptr<ExtraDataList>, owner: u32) {
+    set_or_remove_extra(e, this, EXTRA_OWNERSHIP, EXTRA_OWNERSHIP_INIT, owner, 0);
+}
+
+// Translated from 004197d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the global of the type `0x22` extra data (`ExtraGlobal`, `pGlobal` at
+/// +0x0C): a null `global` deletes an existing extra data (and builds none),
+/// otherwise the pointer is stored, or an `ExtraGlobal` (`0x10` bytes,
+/// `00431ae0`) is added.
+pub fn fn_004197d0(e: &mut Engine, this: Ptr<ExtraDataList>, global: u32) {
+    set_or_remove_extra(e, this, EXTRA_GLOBAL, EXTRA_GLOBAL_INIT, global, 0);
+}
+
+// Translated from 004198a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `iRank` of the type `0x23` extra data (`ExtraRank`): `-1` deletes an
+/// existing extra data (and builds none), any other value is stored, or an
+/// `ExtraRank` (`0x10` bytes, `00431b80`) is added. The engine map names this
+/// body `ExtraDataList::SetRadiation`; it sets the rank (the getter at
+/// `004186c0` reads the same type and defaults to -1).
+pub fn fn_004198a0(e: &mut Engine, this: Ptr<ExtraDataList>, rank: i32) {
+    set_or_remove_extra(e, this, EXTRA_RANK, EXTRA_RANK_INIT, rank as u32, u32::MAX);
+}
+
+// Translated from 00419970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetHealth` (Xbox PDB): stores `health` (`fHealth` at +0x0C)
+/// in the type `0x25` extra data (`ExtraHealth`), or builds one (`0x10` bytes,
+/// `00431d10`) and adds it. The float goes through the x87 stack on the way,
+/// so a signalling NaN comes out quiet.
+pub fn extra_data_list_set_health(e: &mut Engine, this: Ptr<ExtraDataList>, health: f32) {
+    let bits = x87_float_bits(health.to_bits());
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_HEALTH,
+        0x10,
+        EXTRA_HEALTH_INIT,
+        bits,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, bits),
+    );
+}
+
+// Translated from 00419a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `uses` (`cUses`, a byte at +0x0C) in the type `0x26` extra data
+/// (`ExtraUses`), or builds one (`0x10` bytes, `00431e20`, given the byte
+/// zero-extended) and adds it.
+pub fn fn_00419a20(e: &mut Engine, this: Ptr<ExtraDataList>, uses: u8) {
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_USES,
+        0x10,
+        EXTRA_USES_INIT,
+        uses as u32,
+        |e, extra| e.mem.set_u8(extra.addr() + 0x0c, uses),
+    );
+}
+
+// Translated from 00419ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetCount` (Xbox PDB): a `count` of 0 or 1 deletes an
+/// existing type `0x24` extra data (`ExtraCount`) and builds none; any other
+/// value is stored (`iCount`, a `short` at +0x0C) or builds an `ExtraCount`
+/// (`0x10` bytes, `00431c20`, given the value zero-extended) and adds it.
+pub fn extra_data_list_set_count(e: &mut Engine, this: Ptr<ExtraDataList>, count: i16) {
+    let extra = find_extra(e, this, EXTRA_COUNT);
+    if count == 0 || count == 1 {
+        if !extra.is_null() {
+            base_extra_list_remove_extra(e, this.cast(), extra, true);
+        }
+    } else if extra.is_null() {
+        add_new_extra(e, this, 0x10, EXTRA_COUNT_INIT, &[count as u16 as u32]);
+    } else {
+        e.mem.set_u16(extra.addr() + 0x0c, count as u16);
+    }
+}
+
+// Translated from 00419bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `time_left` (`fTime` at +0x0C) in the type `0x27` extra data
+/// (`ExtraTimeLeft`), or builds one (`0x10` bytes, `00431ec0`) and adds it.
+/// The float goes through the x87 stack on the way, so a signalling NaN comes
+/// out quiet.
+pub fn fn_00419bb0(e: &mut Engine, this: Ptr<ExtraDataList>, time_left: f32) {
+    let bits = x87_float_bits(time_left.to_bits());
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_TIME_LEFT,
+        0x10,
+        EXTRA_TIME_LEFT_INIT,
+        bits,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, bits),
+    );
+}
+
+// Translated from 00419c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `charge` (`fCharge` at +0x0C) in the type `0x28` extra data
+/// (`ExtraCharge`), or builds one (`0x10` bytes, `00431f60`) and adds it. The
+/// float goes through the x87 stack on the way, so a signalling NaN comes out
+/// quiet.
+pub fn fn_00419c60(e: &mut Engine, this: Ptr<ExtraDataList>, charge: f32) {
+    let bits = x87_float_bits(charge.to_bits());
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_CHARGE,
+        0x10,
+        EXTRA_CHARGE_INIT,
+        bits,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, bits),
+    );
+}
+
+// Translated from 00419d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `poison` (`pPoison` at +0x0C) in the type `0x3F` extra data
+/// (`ExtraPoison`), or builds one (`0x10` bytes, `00435150`) and adds it. The
+/// engine map names this body `ExtraDataList::SetRank`; it sets the poison
+/// (the getter at `004187d0` reads the same type).
+pub fn fn_00419d10(e: &mut Engine, this: Ptr<ExtraDataList>, poison: u32) {
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_POISON,
+        0x10,
+        EXTRA_POISON_INIT,
+        poison,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, poison),
+    );
+}
+
+// Translated from 00419dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetItemDropper` (Xbox PDB): sets the reference of the type
+/// `0x46` extra data (the Xbox enum has `EXTRA_ITEMDROPPER` at `0x39` and
+/// `EXTRA_HEAD_TRACK_TARGET` at `0x46`; this code and
+/// `ExtraDataList::GetHeadTrackTargetExtra` both use `0x46`). A null `dropper`
+/// deletes an existing extra data and does nothing more. Otherwise, and also
+/// for a null `dropper` when there is none (an extra data holding null is
+/// built), the reference is stored in the existing extra data or in a new one
+/// (`0x10` bytes, `00435ec0`); then a non-null `dropper` gets
+/// `TESObjectREFR::SetTargeted(true)` (`00564db0`).
+pub fn extra_data_list_set_item_dropper(e: &mut Engine, this: Ptr<ExtraDataList>, dropper: u32) {
+    let extra = find_extra(e, this, EXTRA_TYPE_46);
+    if dropper == 0 && !extra.is_null() {
+        base_extra_list_remove_extra(e, this.cast(), extra, true);
+        return;
+    }
+    if extra.is_null() {
+        add_new_extra(e, this, 0x10, EXTRA_ITEM_DROPPER_INIT, &[dropper]);
+    } else {
+        e.mem.set_u32(extra.addr() + 0x0c, dropper);
+    }
+    if dropper != 0 {
+        e.call(REFERENCE_SET_TARGETED, &args![dropper, 1u32]);
+    }
+}
+
+// Translated from 00419ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetHeadTrackTargetExtra` (Xbox PDB): the word at +0x0C of
+/// the type `0x46` extra data, or 0.
+pub fn extra_data_list_get_head_track_target_extra(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+) -> u32 {
+    extra_word_or(e, this, EXTRA_TYPE_46, 0)
+}
+
+// Translated from 00419ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetScript` (Xbox PDB): stores `script` (`pScript` at
+/// +0x0C) in the type `0x0D` extra data (`ExtraScript`), or builds one (`0x14`
+/// bytes, `00432000`) and adds it.
+pub fn extra_data_list_set_script(e: &mut Engine, this: Ptr<ExtraDataList>, script: u32) {
+    set_or_add_extra(
+        e,
+        this,
+        EXTRA_SCRIPT,
+        0x14,
+        EXTRA_SCRIPT_INIT,
+        script,
+        |e, extra| e.mem.set_u32(extra.addr() + 0x0c, script),
+    );
+}
+
+// Translated from 00419f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `locals` (`pScriptVars` at +0x10) in the type `0x0D` extra data
+/// (`ExtraScript`) when the list has one; does nothing otherwise.
+pub fn fn_00419f80(e: &mut Engine, this: Ptr<ExtraDataList>, locals: u32) {
+    let extra = find_extra(e, this, EXTRA_SCRIPT);
+    if !extra.is_null() {
+        e.mem.set_u32(extra.addr() + 0x10, locals);
+    }
+}
+
+// Translated from 00419fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetScale` (Xbox PDB): a `scale` equal to the `double` 1.0
+/// at `01012070` deletes an existing type `0x30` extra data (`ExtraScale`) and
+/// builds none; any other value (a NaN included) is stored (`fScale` at
+/// +0x0C) or builds an `ExtraScale` (`0x10` bytes, `00432220`) and adds it.
+/// The float goes through the x87 stack on the way, so a signalling NaN comes
+/// out quiet.
+pub fn extra_data_list_set_scale(e: &mut Engine, this: Ptr<ExtraDataList>, scale: f32) {
+    let extra = find_extra(e, this, EXTRA_SCALE);
+    let is_one = scale as f64 == e.mem.f64(ONE_DOUBLE);
+    let bits = x87_float_bits(scale.to_bits());
+    if extra.is_null() {
+        if !is_one {
+            add_new_extra(e, this, 0x10, EXTRA_SCALE_INIT, &[bits]);
+        }
+    } else if is_one {
+        base_extra_list_remove_extra(e, this.cast(), extra, true);
+    } else {
+        e.mem.set_u32(extra.addr() + 0x0c, bits);
+    }
+}
+
+/// The body of the four sound setters. With an extra data of `extra_type`
+/// in the list: a sound handle whose id equals that of an empty handle
+/// (`fn_0041a1f0` against a fresh `fn_0041a250` handle) deletes the extra
+/// data, any other is copied into it (`fn_00418900`, the `BSSoundHandle` at
+/// +0x0C). Without one, a non-empty handle (`fn_0041a220`) builds an extra
+/// data of `0x18` bytes with `construct`, which takes the handle by value (a
+/// copy made by `fn_00418900` on the stack, three words), and adds it; an
+/// empty handle does nothing. The temporary empty handles are destroyed by
+/// `00483710`.
+fn set_sound_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra_type: u8,
+    construct: u32,
+    sound: Ptr<BSSoundHandle>,
+) {
+    let extra = find_extra(e, list, extra_type);
+    if !extra.is_null() {
+        let is_empty = e.with_stack(0x0c, |e, empty| {
+            fn_0041a250(e, empty);
+            let equal = fn_0041a1f0(e, sound.cast(), empty);
+            e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
+            equal
+        });
+        if is_empty {
+            base_extra_list_remove_extra(e, list.cast(), extra, true);
+        } else {
+            fn_00418900(e, Ptr::new(extra.addr() + 0x0c), sound.cast());
+        }
+        return;
+    }
+    let differs = e.with_stack(0x0c, |e, empty| {
+        fn_0041a250(e, empty);
+        let differs = fn_0041a220(e, sound.cast(), empty);
+        e.call(SOUND_HANDLE_DESTRUCTOR, &args![empty]);
+        differs
+    });
+    if !differs {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x18u32]).u32();
+    let new_extra = if block == 0 {
+        0
+    } else {
+        // The handle is passed by value: a copy on the stack, three words.
+        let words = e.with_stack(0x0c, |e, copy| {
+            fn_00418900(e, copy, sound.cast());
+            [
+                e.mem.u32(copy.addr()),
+                e.mem.u32(copy.addr() + 4),
+                e.mem.u32(copy.addr() + 8),
+            ]
+        });
+        e.call(construct, &args![block, words[0], words[1], words[2]])
+            .u32()
+    };
+    base_extra_list_add_extra(e, list.cast(), Ptr::new(new_extra));
+}
+
+// Translated from 0041a090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetCreatureAwakeSound` (Xbox PDB): sets the `BSSoundHandle`
+/// at +0x0C of the type `0x7D` extra data (`ExtraCreatureAwakeSound`, `0x18`
+/// bytes, built by `004361e0`); see `set_sound_extra` for the cases. `sound`
+/// is a pointer to the handle.
+pub fn extra_data_list_set_creature_awake_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    sound: Ptr<BSSoundHandle>,
+) {
+    set_sound_extra(
+        e,
+        this,
+        EXTRA_CREATURE_AWAKE_SOUND,
+        EXTRA_CREATURE_AWAKE_SOUND_INIT,
+        sound,
+    );
+}
+
+// Translated from 0041a1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the sound handle `this` and `other` have the same `iSoundID`
+/// (each read through `00559450`, `other` first); the other fields are not
+/// compared.
+pub fn fn_0041a1f0(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let other_id = e.call(READ_WORD, &args![other]).u32();
+    let this_id = e.call(READ_WORD, &args![this]).u32();
+    other_id == this_id
+}
+
+// Translated from 0041a220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the sound handle `this` and `other` have different `iSoundID`s
+/// (each read through `00559450`, `other` first).
+pub fn fn_0041a220(e: &mut Engine, this: Ptr, other: Ptr) -> bool {
+    let other_id = e.call(READ_WORD, &args![other]).u32();
+    let this_id = e.call(READ_WORD, &args![this]).u32();
+    other_id != this_id
+}
+
+// Translated from 0041a250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Default constructor of a `BSSoundHandle` (as `fn_004188d0`): `iSoundID`
+/// 0xFFFFFFFF, `bAssumeSuccess` false, `eState` 0. Returns `this`.
+pub fn fn_0041a250(e: &mut Engine, this: Ptr) -> Ptr {
+    let handle: Ptr<BSSoundHandle> = this.cast();
+    e.set(handle, BSSoundHandle::iSoundID, 0xffff_ffff);
+    e.set(handle, BSSoundHandle::bAssumeSuccess, 0);
+    e.set(handle, BSSoundHandle::eState, 0);
+    this
+}
+
+// Translated from 0041a280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// As `ExtraDataList::SetCreatureAwakeSound`, for the type `0x8A` extra data
+/// (`EXTRA_CREATURE_MOVEMENT_SOUND` in the Xbox enum, built by `00436300`).
+pub fn fn_0041a280(e: &mut Engine, this: Ptr<ExtraDataList>, sound: Ptr<BSSoundHandle>) {
+    set_sound_extra(
+        e,
+        this,
+        EXTRA_CREATURE_MOVEMENT_SOUND,
+        EXTRA_CREATURE_MOVEMENT_SOUND_INIT,
+        sound,
+    );
+}
+
+// Translated from 0041a3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetWeaponIdleSound` (Xbox PDB): as
+/// `ExtraDataList::SetCreatureAwakeSound`, for the type `0x83` extra data
+/// (`EXTRA_WEAPON_IDLE_SOUND` in the Xbox enum, built by `00436420`).
+pub fn extra_data_list_set_weapon_idle_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    sound: Ptr<BSSoundHandle>,
+) {
+    set_sound_extra(
+        e,
+        this,
+        EXTRA_WEAPON_IDLE_SOUND,
+        EXTRA_WEAPON_IDLE_SOUND_INIT,
+        sound,
+    );
+}
+
+// Translated from 0041a540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetWeaponAttackSound` (Xbox PDB): as
+/// `ExtraDataList::SetCreatureAwakeSound`, for the type `0x86` extra data
+/// (`EXTRA_WEAPON_ATTACK_SOUND` in the Xbox enum, built by `00436540`).
+pub fn extra_data_list_set_weapon_attack_sound(
+    e: &mut Engine,
+    this: Ptr<ExtraDataList>,
+    sound: Ptr<BSSoundHandle>,
+) {
+    set_sound_extra(
+        e,
+        this,
+        EXTRA_WEAPON_ATTACK_SOUND,
+        EXTRA_WEAPON_ATTACK_SOUND_INIT,
+        sound,
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4829,6 +5695,118 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             extra_data_list_get_activate_loop_sound(Ptr<ExtraDataList>, Ptr) -> Ptr
         ),
         entry!(0x00418a80, fn_00418a80(Ptr<ExtraDataList>) -> bool),
+        entry!(
+            0x00418ab0,
+            extra_data_list_get_worn(Ptr<ExtraDataList>, bool) -> bool
+        ),
+        entry!(
+            0x00418b10,
+            extra_data_list_get_can_not_wear(Ptr<ExtraDataList>) -> bool
+        ),
+        entry!(0x00418b40, fn_00418b40(Ptr<ExtraDataList>) -> u8),
+        entry!(
+            0x00418b70,
+            extra_data_list_get_package_start_location(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00418ba0,
+            extra_data_list_has_weapon_mods(Ptr<ExtraDataList>) -> bool
+        ),
+        entry!(0x00418be0, fn_00418be0(Ptr<BSExtraData>) -> bool),
+        entry!(
+            0x00418c00,
+            extra_data_list_get_weapon_mod_slot_active(Ptr<ExtraDataList>, u8) -> bool
+        ),
+        entry!(
+            0x00418c40,
+            extra_data_list_set_anim_ptr(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00418d50,
+            fn_00418d50(Ptr<ExtraDataList>, Ptr) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00419050,
+            extra_data_list_set_lock_ptr(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00419120,
+            fn_00419120(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(0x00419220, fn_00419220(Ptr, u32) -> Ptr),
+        entry!(
+            0x00419250,
+            fn_00419250(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(0x00419350, fn_00419350(Ptr, u32) -> Ptr),
+        entry!(
+            0x00419380,
+            fn_00419380(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(0x00419480, fn_00419480(Ptr, u32) -> Ptr),
+        entry!(
+            0x004194b0,
+            fn_004194b0(Ptr<ExtraDataList>, u32) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x004195b0,
+            fn_004195b0(Ptr<ExtraDataList>) -> Ptr<BSExtraData>
+        ),
+        entry!(
+            0x00419650,
+            extra_data_list_set_container_changes(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(0x00419700, fn_00419700(Ptr<ExtraDataList>, u32)),
+        entry!(0x004197d0, fn_004197d0(Ptr<ExtraDataList>, u32)),
+        entry!(0x004198a0, fn_004198a0(Ptr<ExtraDataList>, i32)),
+        entry!(
+            0x00419970,
+            extra_data_list_set_health(Ptr<ExtraDataList>, f32)
+        ),
+        entry!(0x00419a20, fn_00419a20(Ptr<ExtraDataList>, u8)),
+        entry!(
+            0x00419ad0,
+            extra_data_list_set_count(Ptr<ExtraDataList>, i16)
+        ),
+        entry!(0x00419bb0, fn_00419bb0(Ptr<ExtraDataList>, f32)),
+        entry!(0x00419c60, fn_00419c60(Ptr<ExtraDataList>, f32)),
+        entry!(0x00419d10, fn_00419d10(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x00419dc0,
+            extra_data_list_set_item_dropper(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(
+            0x00419ea0,
+            extra_data_list_get_head_track_target_extra(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00419ed0,
+            extra_data_list_set_script(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(0x00419f80, fn_00419f80(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x00419fb0,
+            extra_data_list_set_scale(Ptr<ExtraDataList>, f32)
+        ),
+        entry!(
+            0x0041a090,
+            extra_data_list_set_creature_awake_sound(Ptr<ExtraDataList>, Ptr<BSSoundHandle>)
+        ),
+        entry!(0x0041a1f0, fn_0041a1f0(Ptr, Ptr) -> bool),
+        entry!(0x0041a220, fn_0041a220(Ptr, Ptr) -> bool),
+        entry!(0x0041a250, fn_0041a250(Ptr) -> Ptr),
+        entry!(
+            0x0041a280,
+            fn_0041a280(Ptr<ExtraDataList>, Ptr<BSSoundHandle>)
+        ),
+        entry!(
+            0x0041a3e0,
+            extra_data_list_set_weapon_idle_sound(Ptr<ExtraDataList>, Ptr<BSSoundHandle>)
+        ),
+        entry!(
+            0x0041a540,
+            extra_data_list_set_weapon_attack_sound(Ptr<ExtraDataList>, Ptr<BSSoundHandle>)
+        ),
     ]
 }
 
@@ -10189,5 +11167,894 @@ mod tests {
         assert!(e.call(0x0041_8a80, &args![list]).bool());
         let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
         assert!(!e.call(0x0041_8a80, &args![list]).bool());
+    }
+
+    // -----------------------------------------------------------------------
+    // Fourth batch: `00418ab0` to `0041a540`.
+
+    /// The extra data constructors the setters call, with the type each sets.
+    const CONSTRUCTORS: &[(u32, u8)] = &[
+        (EXTRA_ANIM_INIT, 0x10),
+        (EXTRA_STARTING_POSITION_INIT, 0x0f),
+        (EXTRA_LOCK_INIT, 0x2a),
+        (EXTRA_TELEPORT_INIT, 0x2b),
+        (EXTRA_MAP_MARKER_INIT, 0x2c),
+        (EXTRA_AUDIO_MARKER_INIT, 0x90),
+        (EXTRA_AUDIO_BUOY_MARKER_INIT, 0x91),
+        (EXTRA_ACTION_INIT, 0x0e),
+        (EXTRA_CONTAINER_CHANGES_INIT, 0x15),
+        (EXTRA_OWNERSHIP_INIT, 0x21),
+        (EXTRA_GLOBAL_INIT, 0x22),
+        (EXTRA_RANK_INIT, 0x23),
+        (EXTRA_COUNT_INIT, 0x24),
+        (EXTRA_HEALTH_INIT, 0x25),
+        (EXTRA_USES_INIT, 0x26),
+        (EXTRA_TIME_LEFT_INIT, 0x27),
+        (EXTRA_CHARGE_INIT, 0x28),
+        (EXTRA_SCALE_INIT, 0x30),
+        (EXTRA_POISON_INIT, 0x3f),
+        (EXTRA_ITEM_DROPPER_INIT, 0x46),
+        (EXTRA_SCRIPT_INIT, 0x0d),
+        (EXTRA_CREATURE_AWAKE_SOUND_INIT, 0x7d),
+        (EXTRA_CREATURE_MOVEMENT_SOUND_INIT, 0x8a),
+        (EXTRA_WEAPON_IDLE_SOUND_INIT, 0x83),
+        (EXTRA_WEAPON_ATTACK_SOUND_INIT, 0x86),
+    ];
+
+    /// `getter_engine` plus: constructor doubles that set the vtable, the
+    /// type and the argument words at +0x0C, +0x10 and +0x14; stubs for the
+    /// destructors and `SetTargeted`; and the exe's `1.0` double.
+    fn setter_engine() -> Engine {
+        let mut e = getter_engine();
+        e.mem.set_f64(ONE_DOUBLE, 1.0);
+        for &(address, extra_type) in CONSTRUCTORS {
+            e.register_double(address, move |e, a| {
+                e.mem.set_u32(a[0], VTABLE);
+                e.mem.set_u8(a[0] + 4, extra_type);
+                e.mem.set_u32(a[0] + 8, 0);
+                for (index, word) in a[1..].iter().enumerate() {
+                    e.mem.set_u32(a[0] + 0x0c + 4 * index as u32, *word);
+                }
+                returns(a[0])
+            });
+        }
+        for address in [
+            ANIM_SCALAR_DELETING_DESTRUCTOR,
+            TELEPORT_DATA_DESTRUCTOR,
+            MAP_MARKER_DATA_DESTRUCTOR,
+            AUDIO_MARKER_DATA_DESTRUCTOR,
+            AUDIO_BUOY_MARKER_DATA_SCALAR_DELETING_DESTRUCTOR,
+            REFERENCE_SET_TARGETED,
+            SOUND_HANDLE_DESTRUCTOR,
+        ] {
+            stub(&mut e, address);
+        }
+        e
+    }
+
+    /// Runs `call` on the engine with the call log on and returns the log.
+    fn logged(e: &mut Engine, call: impl FnOnce(&mut Engine)) -> Log {
+        e.call_log = Some(vec![]);
+        call(e);
+        e.call_log.take().unwrap()
+    }
+
+    /// The size passed to `operator new` in the log, once.
+    fn allocated_size(log: &Log) -> u32 {
+        let sizes = calls_to(log, OPERATOR_NEW);
+        assert_eq!(sizes.len(), 1);
+        sizes[0][0]
+    }
+
+    /// The types in the list's chain, sorted (some types are added at the head
+    /// of the chain, the others at the end).
+    fn sorted_types(e: &Engine, list: Ptr<ExtraDataList>) -> Vec<u8> {
+        let mut types = chain_types(e, list.cast());
+        types.sort();
+        types
+    }
+
+    /// The word at +0x0C of the extra data of `extra_type` in the list.
+    fn payload_of(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> u32 {
+        let extra = find_extra(e, list, extra_type);
+        assert!(!extra.is_null());
+        e.mem.u32(extra.addr() + 0x0c)
+    }
+
+    #[test]
+    fn worn_getter_distinguishes_the_left_flag() {
+        let mut e = setter_engine();
+        let (right, _) = list_with_payloads(&mut e, &[(0x16, 0)]);
+        assert!(e.call(0x0041_8ab0, &args![right, false]).bool());
+        assert!(!e.call(0x0041_8ab0, &args![right, true]).bool());
+        let (left, _) = list_with_payloads(&mut e, &[(0x17, 0)]);
+        assert!(e.call(0x0041_8ab0, &args![left, false]).bool());
+        assert!(e.call(0x0041_8ab0, &args![left, true]).bool());
+        let (none, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        assert!(!e.call(0x0041_8ab0, &args![none, false]).bool());
+        assert!(!e.call(0x0041_8ab0, &args![none, true]).bool());
+    }
+
+    #[test]
+    fn can_not_wear_tests_the_type_bit() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0), (0x3e, 0)]);
+        assert!(e.call(0x0041_8b10, &args![list]).bool());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        assert!(!e.call(0x0041_8b10, &args![list]).bool());
+    }
+
+    #[test]
+    fn seed_getter_is_a_byte_and_defaults_to_ff() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0), (0x31, 0x1122_3344)]);
+        assert_eq!(e.call(0x0041_8b40, &args![list]).u8(), 0x44);
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        assert_eq!(e.call(0x0041_8b40, &args![list]).u8(), 0xff);
+    }
+
+    #[test]
+    fn package_start_location_is_the_address_of_the_record() {
+        let mut e = setter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x01, 0), (0x18, 0)]);
+        assert_eq!(
+            e.call(0x0041_8b70, &args![list]).u32(),
+            extras[1].addr() + 0x0c
+        );
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        assert_eq!(e.call(0x0041_8b70, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn weapon_mods_need_the_extra_data_and_a_nonzero_byte() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x8d, 0x0000_0001)]);
+        assert!(e.call(0x0041_8ba0, &args![list]).bool());
+        // Only the byte counts.
+        let (list, _) = list_with_payloads(&mut e, &[(0x8d, 0x0000_0100)]);
+        assert!(!e.call(0x0041_8ba0, &args![list]).bool());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 1)]);
+        assert!(!e.call(0x0041_8ba0, &args![list]).bool());
+    }
+
+    #[test]
+    fn nonzero_byte_test_of_an_extra_data() {
+        let mut e = setter_engine();
+        let (_, extras) = list_with_payloads(&mut e, &[(0x8d, 0x0000_0200), (0x8d, 0x0000_0002)]);
+        assert!(!e.call(0x0041_8be0, &args![extras[0]]).bool());
+        assert!(e.call(0x0041_8be0, &args![extras[1]]).bool());
+    }
+
+    #[test]
+    fn weapon_mod_slot_active_masks_the_byte() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x8d, 0b0101)]);
+        assert!(e.call(0x0041_8c00, &args![list, 4u32]).bool());
+        assert!(!e.call(0x0041_8c00, &args![list, 2u32]).bool());
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0b0101)]);
+        assert!(!e.call(0x0041_8c00, &args![list, 4u32]).bool());
+    }
+
+    #[test]
+    fn anim_setter_builds_or_replaces_the_animation() {
+        let mut e = setter_engine();
+        // No extra data: built and added.
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        let mut result: Ptr = Ptr::NULL;
+        let log = logged(&mut e, |e| {
+            result = e.call(0x0041_8c40, &args![list, 0x7000u32]).ptr();
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(
+            calls_to(&log, EXTRA_ANIM_INIT),
+            vec![vec![result.addr(), 0x7000]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01, 0x10]);
+        assert_eq!(payload_of(&mut e, list, 0x10), 0x7000);
+        // An existing one with an animation: the old one is destroyed first.
+        let log = logged(&mut e, |e| {
+            let again = e.call(0x0041_8c40, &args![list, 0x8000u32]).ptr::<()>();
+            assert_eq!(again, result.cast());
+        });
+        assert_eq!(
+            calls_to(&log, ANIM_SCALAR_DELETING_DESTRUCTOR),
+            vec![vec![0x7000, 1]]
+        );
+        assert_eq!(payload_of(&mut e, list, 0x10), 0x8000);
+        // An existing one without: nothing to destroy.
+        let (list, _) = list_with_payloads(&mut e, &[(0x10, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_8c40, &args![list, 0x9000u32]);
+        });
+        assert!(calls_to(&log, ANIM_SCALAR_DELETING_DESTRUCTOR).is_empty());
+        assert_eq!(payload_of(&mut e, list, 0x10), 0x9000);
+    }
+
+    #[test]
+    fn starting_position_is_built_once() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let mut first: Ptr = Ptr::NULL;
+        let log = logged(&mut e, |e| {
+            first = e.call(0x0041_8d50, &args![list, 0x5555u32]).ptr();
+        });
+        assert_eq!(allocated_size(&log), 0x24);
+        assert_eq!(
+            calls_to(&log, EXTRA_STARTING_POSITION_INIT),
+            vec![vec![first.addr(), 0x5555]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x0f]);
+        // With one in the list, it is returned and the argument is ignored.
+        let log = logged(&mut e, |e| {
+            let second = e.call(0x0041_8d50, &args![list, 0x6666u32]).ptr::<()>();
+            assert_eq!(second, first.cast());
+        });
+        assert!(calls_to(&log, EXTRA_STARTING_POSITION_INIT).is_empty());
+        assert_eq!(payload_of(&mut e, list, 0x0f), 0x5555);
+    }
+
+    #[test]
+    fn lock_setter_deletes_the_old_lock_even_when_null() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9050, &args![list, 0x7000u32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x2a]);
+        assert_eq!(payload_of(&mut e, list, 0x2a), 0x7000);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        // Replaced: the old block is deleted.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9050, &args![list, 0x8000u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![0x7000]]);
+        assert_eq!(payload_of(&mut e, list, 0x2a), 0x8000);
+        // A null old lock is still handed to `operator delete`.
+        let (list, _) = list_with_payloads(&mut e, &[(0x2a, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9050, &args![list, 0u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![0]]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x2a]);
+    }
+
+    /// Checks one of the owned-pointer setters (`address`, extra data type
+    /// `extra_type`, built by `construct`): nothing for null with no extra
+    /// data; built for a value; the old value destroyed through
+    /// `destroy` (called with its arguments) on replacement, not when the
+    /// old one is null; deleted for null. Returns what the setter returned
+    /// for the null value on an existing extra data.
+    fn check_owned_pointer_setter(
+        address: u32,
+        extra_type: u8,
+        construct: u32,
+        destroy: impl Fn(&Log, u32),
+    ) -> Ptr<BSExtraData> {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        // Null and nothing there: nothing.
+        let log = logged(&mut e, |e| {
+            assert!(e.call(address, &args![list, 0u32]).ptr::<()>().is_null());
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        // A value and nothing there: built and added.
+        let mut built: Ptr = Ptr::NULL;
+        let log = logged(&mut e, |e| {
+            built = e.call(address, &args![list, 0x7000u32]).ptr();
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(calls_to(&log, construct), vec![vec![built.addr(), 0x7000]]);
+        assert_eq!(sorted_types(&e, list), vec![0x01, extra_type]);
+        // Replaced: the old data is destroyed, the new one stored.
+        let log = logged(&mut e, |e| {
+            let again = e.call(address, &args![list, 0x8000u32]).ptr::<()>();
+            assert_eq!(again, built.cast());
+        });
+        destroy(&log, 0x7000);
+        assert_eq!(payload_of(&mut e, list, extra_type), 0x8000);
+        // An old null pointer is not destroyed.
+        let (other, _) = list_with_payloads(&mut e, &[(extra_type, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![other, 0x9000u32]);
+        });
+        destroy(&log, 0);
+        assert_eq!(payload_of(&mut e, other, extra_type), 0x9000);
+        // Null: the extra data is deleted.
+        let mut returned: Ptr<BSExtraData> = Ptr::NULL;
+        let log = logged(&mut e, |e| {
+            returned = e.call(address, &args![list, 0u32]).ptr();
+        });
+        assert_eq!(deleted(&log), vec![built.addr()]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        returned
+    }
+
+    /// `destroy` check of the setters that run a scalar deleting destructor
+    /// of the file (`destructor` called, then the block deleted) on a
+    /// non-null old pointer.
+    fn destroyed_through(destructor: u32) -> impl Fn(&Log, u32) {
+        move |log, old| {
+            if old == 0 {
+                assert!(calls_to(log, destructor).is_empty());
+                assert!(calls_to(log, OPERATOR_DELETE).is_empty());
+            } else {
+                assert_eq!(calls_to(log, destructor), vec![vec![old]]);
+                assert_eq!(calls_to(log, OPERATOR_DELETE), vec![vec![old]]);
+            }
+        }
+    }
+
+    #[test]
+    fn teleport_setter_returns_the_deleted_extra_data() {
+        let mut e = setter_engine();
+        let returned = check_owned_pointer_setter(
+            0x0041_9120,
+            0x2b,
+            EXTRA_TELEPORT_INIT,
+            destroyed_through(TELEPORT_DATA_DESTRUCTOR),
+        );
+        // The result after a deletion is the (deleted) extra data, not null.
+        assert!(!returned.is_null());
+        let (list, extras) = list_with_payloads(&mut e, &[(0x2b, 0x44)]);
+        let result = e.call(0x0041_9120, &args![list, 0u32]).ptr::<()>();
+        assert_eq!(result, extras[0].cast());
+    }
+
+    #[test]
+    fn teleport_data_destructor_deletes_on_flag() {
+        let mut e = setter_engine();
+        let block: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0041_9220, &args![block, 1u32]).ptr::<()>(), block);
+        });
+        assert_eq!(
+            calls_to(&log, TELEPORT_DATA_DESTRUCTOR),
+            vec![vec![block.addr()]]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![block.addr()]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9220, &args![block, 0u32]);
+        });
+        assert_eq!(calls_to(&log, TELEPORT_DATA_DESTRUCTOR).len(), 1);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        // Only bit 0 counts.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9220, &args![block, 2u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn map_marker_setter_returns_null_after_deleting() {
+        let returned = check_owned_pointer_setter(
+            0x0041_9250,
+            0x2c,
+            EXTRA_MAP_MARKER_INIT,
+            destroyed_through(MAP_MARKER_DATA_DESTRUCTOR),
+        );
+        assert!(returned.is_null());
+    }
+
+    #[test]
+    fn map_marker_data_destructor_deletes_on_flag() {
+        let mut e = setter_engine();
+        let block: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0041_9350, &args![block, 1u32]).ptr::<()>(), block);
+        });
+        assert_eq!(
+            calls_to(&log, MAP_MARKER_DATA_DESTRUCTOR),
+            vec![vec![block.addr()]]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![block.addr()]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9350, &args![block, 0u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn audio_marker_setter_returns_null_after_deleting() {
+        let returned = check_owned_pointer_setter(
+            0x0041_9380,
+            0x90,
+            EXTRA_AUDIO_MARKER_INIT,
+            destroyed_through(AUDIO_MARKER_DATA_DESTRUCTOR),
+        );
+        assert!(returned.is_null());
+    }
+
+    #[test]
+    fn audio_marker_data_destructor_deletes_on_flag() {
+        let mut e = setter_engine();
+        let block: Ptr = Ptr::new(e.mem.alloc(0x10));
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0041_9480, &args![block, 1u32]).ptr::<()>(), block);
+        });
+        assert_eq!(
+            calls_to(&log, AUDIO_MARKER_DATA_DESTRUCTOR),
+            vec![vec![block.addr()]]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![block.addr()]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9480, &args![block, 0u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn audio_buoy_marker_setter_uses_the_scalar_deleting_destructor() {
+        let returned = check_owned_pointer_setter(
+            0x0041_94b0,
+            0x91,
+            EXTRA_AUDIO_BUOY_MARKER_INIT,
+            |log, old| {
+                let calls = calls_to(log, AUDIO_BUOY_MARKER_DATA_SCALAR_DELETING_DESTRUCTOR);
+                if old == 0 {
+                    assert!(calls.is_empty());
+                } else {
+                    assert_eq!(calls, vec![vec![old, 1]]);
+                }
+                // The setter does not delete the block itself.
+                assert!(calls_to(log, OPERATOR_DELETE).is_empty());
+            },
+        );
+        assert!(returned.is_null());
+    }
+
+    #[test]
+    fn action_extra_data_is_built_once_without_arguments() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let mut first: Ptr = Ptr::NULL;
+        let log = logged(&mut e, |e| {
+            first = e.call(0x0041_95b0, &args![list]).ptr();
+        });
+        assert_eq!(allocated_size(&log), 0x14);
+        assert_eq!(calls_to(&log, EXTRA_ACTION_INIT), vec![vec![first.addr()]]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x0e]);
+        let log = logged(&mut e, |e| {
+            let second = e.call(0x0041_95b0, &args![list]).ptr::<()>();
+            assert_eq!(second, first.cast());
+        });
+        assert!(calls_to(&log, EXTRA_ACTION_INIT).is_empty());
+    }
+
+    #[test]
+    fn container_changes_setter_ignores_null() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        e.call(0x0041_9650, &args![list, 0u32]);
+        assert!(chain_types(&e, list.cast()).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9650, &args![list, 0x7000u32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x15]);
+        assert_eq!(payload_of(&mut e, list, 0x15), 0x7000);
+        e.call(0x0041_9650, &args![list, 0x8000u32]);
+        assert_eq!(payload_of(&mut e, list, 0x15), 0x8000);
+        // A null value leaves the existing extra data alone.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9650, &args![list, 0u32]);
+        });
+        assert!(deleted(&log).is_empty());
+        assert_eq!(payload_of(&mut e, list, 0x15), 0x8000);
+    }
+
+    /// Checks a setter (`address`, extra data type `extra_type`, built by
+    /// `construct`) of a word where `none` removes the extra data.
+    fn check_removing_setter(address: u32, extra_type: u8, construct: u32, none: u32) {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        // `none` and nothing there: nothing is built.
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, none]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        // A value and nothing there: built and added.
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, 0x1234u32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(calls_to(&log, construct).len(), 1);
+        assert_eq!(calls_to(&log, construct)[0][1], 0x1234);
+        assert_eq!(sorted_types(&e, list), vec![0x01, extra_type]);
+        // Overwritten.
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, 0x5678u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(deleted(&log).is_empty());
+        assert_eq!(payload_of(&mut e, list, extra_type), 0x5678);
+        // `none`: deleted.
+        let extra = find_extra(&mut e, list, extra_type);
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, none]);
+        });
+        assert_eq!(deleted(&log), vec![extra.addr()]);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+    }
+
+    #[test]
+    fn owner_setter_removes_on_null() {
+        check_removing_setter(0x0041_9700, 0x21, EXTRA_OWNERSHIP_INIT, 0);
+    }
+
+    #[test]
+    fn global_setter_removes_on_null() {
+        check_removing_setter(0x0041_97d0, 0x22, EXTRA_GLOBAL_INIT, 0);
+    }
+
+    #[test]
+    fn rank_setter_removes_on_minus_one() {
+        check_removing_setter(0x0041_98a0, 0x23, EXTRA_RANK_INIT, 0xffff_ffff);
+        // Zero is a rank like any other.
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x23, 5)]);
+        e.call(0x0041_98a0, &args![list, 0u32]);
+        assert_eq!(payload_of(&mut e, list, 0x23), 0);
+    }
+
+    /// Checks a setter (`address`, `extra_type`, built by `construct` with
+    /// `size` bytes) that stores the word `bits` at +0x0C and never removes.
+    fn check_plain_setter(address: u32, extra_type: u8, construct: u32, size: u32, bits: u32) {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, bits]);
+        });
+        assert_eq!(allocated_size(&log), size);
+        assert_eq!(calls_to(&log, construct).len(), 1);
+        assert_eq!(calls_to(&log, construct)[0][1], bits);
+        assert_eq!(sorted_types(&e, list), vec![0x01, extra_type]);
+        assert_eq!(payload_of(&mut e, list, extra_type), bits);
+        // An existing extra data takes the value without a new one.
+        let (list, _) = list_with_payloads(&mut e, &[(extra_type, 0x77)]);
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, bits]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(payload_of(&mut e, list, extra_type), bits);
+        // A zero value is stored, not a removal.
+        e.call(address, &args![list, 0u32]);
+        assert_eq!(chain_types(&e, list.cast()), vec![extra_type]);
+        assert_eq!(payload_of(&mut e, list, extra_type), 0);
+    }
+
+    #[test]
+    fn health_setter_stores_the_float() {
+        check_plain_setter(
+            0x0041_9970,
+            0x25,
+            EXTRA_HEALTH_INIT,
+            0x10,
+            75.5f32.to_bits(),
+        );
+    }
+
+    #[test]
+    fn float_setters_quiet_a_signalling_nan() {
+        for (address, extra_type) in [
+            (0x0041_9970u32, 0x25u8),
+            (0x0041_9bb0, 0x27),
+            (0x0041_9c60, 0x28),
+        ] {
+            let mut e = setter_engine();
+            let (list, _) = list_with_payloads(&mut e, &[(extra_type, 0)]);
+            e.call(address, &args![list, 0x7f80_0001u32]);
+            assert_eq!(payload_of(&mut e, list, extra_type), 0x7fc0_0001);
+            let (list, _) = list_with_payloads(&mut e, &[]);
+            let log = logged(&mut e, |e| {
+                e.call(address, &args![list, 0x7f80_0001u32]);
+            });
+            assert_eq!(
+                calls_to(
+                    &log,
+                    CONSTRUCTORS.iter().find(|c| c.1 == extra_type).unwrap().0
+                )[0][1],
+                0x7fc0_0001
+            );
+        }
+    }
+
+    #[test]
+    fn uses_setter_stores_a_byte() {
+        let mut e = setter_engine();
+        let (list, _) = list_with_payloads(&mut e, &[(0x26, 0xaabb_ccdd)]);
+        e.call(0x0041_9a20, &args![list, 0x0000_1207u32]);
+        // The byte is replaced, the rest of the word is not.
+        assert_eq!(payload_of(&mut e, list, 0x26), 0xaabb_cc07);
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9a20, &args![list, 0x0000_1207u32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        // The constructor gets the byte, zero-extended.
+        assert_eq!(calls_to(&log, EXTRA_USES_INIT)[0][1], 0x07);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x26]);
+        assert_eq!(payload_of(&mut e, list, 0x26), 0x07);
+    }
+
+    #[test]
+    fn count_setter_removes_for_zero_and_one() {
+        let mut e = setter_engine();
+        // 0 and 1: nothing is built.
+        for count in [0u32, 1] {
+            let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+            let log = logged(&mut e, |e| {
+                e.call(0x0041_9ad0, &args![list, count]);
+            });
+            assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+            assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        }
+        // 0 and 1: an existing extra data is deleted.
+        for count in [0u32, 1] {
+            let (list, extras) = list_with_payloads(&mut e, &[(0x01, 0), (0x24, 9)]);
+            let log = logged(&mut e, |e| {
+                e.call(0x0041_9ad0, &args![list, count]);
+            });
+            assert_eq!(deleted(&log), vec![extras[1].addr()]);
+            assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+        }
+        // Other values: built with the value zero-extended; a negative count
+        // is a count.
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9ad0, &args![list, -2i16]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(calls_to(&log, EXTRA_COUNT_INIT)[0][1], 0xfffe);
+        assert_eq!(chain_types(&e, list.cast()), vec![0x24]);
+        // Stored: only the short.
+        let (list, _) = list_with_payloads(&mut e, &[(0x24, 0x1234_5678)]);
+        e.call(0x0041_9ad0, &args![list, 5u32]);
+        assert_eq!(payload_of(&mut e, list, 0x24), 0x1234_0005);
+    }
+
+    #[test]
+    fn time_left_setter_stores_the_float() {
+        check_plain_setter(
+            0x0041_9bb0,
+            0x27,
+            EXTRA_TIME_LEFT_INIT,
+            0x10,
+            12.25f32.to_bits(),
+        );
+    }
+
+    #[test]
+    fn charge_setter_stores_the_float() {
+        check_plain_setter(
+            0x0041_9c60,
+            0x28,
+            EXTRA_CHARGE_INIT,
+            0x10,
+            300.0f32.to_bits(),
+        );
+    }
+
+    #[test]
+    fn poison_setter_stores_the_pointer() {
+        check_plain_setter(0x0041_9d10, 0x3f, EXTRA_POISON_INIT, 0x10, 0x00a0_0000);
+    }
+
+    #[test]
+    fn item_dropper_setter_marks_the_reference_targeted() {
+        let mut e = setter_engine();
+        // Built: the constructor, then `SetTargeted(true)` on the reference.
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9dc0, &args![list, 0x7000u32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(calls_to(&log, EXTRA_ITEM_DROPPER_INIT)[0][1], 0x7000);
+        assert_eq!(
+            calls_to(&log, REFERENCE_SET_TARGETED),
+            vec![vec![0x7000, 1]]
+        );
+        assert_eq!(chain_types(&e, list.cast()), vec![0x46]);
+        // Replaced.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9dc0, &args![list, 0x8000u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(
+            calls_to(&log, REFERENCE_SET_TARGETED),
+            vec![vec![0x8000, 1]]
+        );
+        assert_eq!(payload_of(&mut e, list, 0x46), 0x8000);
+        // Null: the extra data is deleted and nothing is targeted.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9dc0, &args![list, 0u32]);
+        });
+        assert_eq!(deleted(&log).len(), 1);
+        assert!(calls_to(&log, REFERENCE_SET_TARGETED).is_empty());
+        assert!(chain_types(&e, list.cast()).is_empty());
+        // Null with nothing there: an extra data holding null is built.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9dc0, &args![list, 0u32]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_ITEM_DROPPER_INIT)[0][1], 0);
+        assert!(calls_to(&log, REFERENCE_SET_TARGETED).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x46]);
+    }
+
+    #[test]
+    fn head_track_target_getter_reads_type_0x46() {
+        check_word_getter(0x0041_9ea0, 0x46, 0);
+    }
+
+    #[test]
+    fn script_setter_stores_or_builds_a_script_extra_data() {
+        check_plain_setter(0x0041_9ed0, 0x0d, EXTRA_SCRIPT_INIT, 0x14, 0x00b0_0000);
+    }
+
+    #[test]
+    fn script_locals_setter_needs_an_existing_script_extra_data() {
+        let mut e = setter_engine();
+        let (list, extras) = list_with_payloads(&mut e, &[(0x0d, 0x1111)]);
+        e.call(0x0041_9f80, &args![list, 0x2222u32]);
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x10), 0x2222);
+        assert_eq!(e.mem.u32(extras[0].addr() + 0x0c), 0x1111);
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9f80, &args![list, 0x2222u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x01]);
+    }
+
+    #[test]
+    fn scale_setter_removes_for_exactly_one() {
+        let mut e = setter_engine();
+        // 1.0 and nothing there: nothing is built.
+        let (list, _) = list_with_payloads(&mut e, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9fb0, &args![list, 1.0f32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        // Another value: built.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9fb0, &args![list, 1.5f32]);
+        });
+        assert_eq!(allocated_size(&log), 0x10);
+        assert_eq!(calls_to(&log, EXTRA_SCALE_INIT)[0][1], 1.5f32.to_bits());
+        assert_eq!(chain_types(&e, list.cast()), vec![0x30]);
+        // Stored.
+        e.call(0x0041_9fb0, &args![list, 0.25f32]);
+        assert_eq!(payload_of(&mut e, list, 0x30), 0.25f32.to_bits());
+        // 1.0: deleted.
+        let extra = find_extra(&mut e, list, 0x30);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9fb0, &args![list, 1.0f32]);
+        });
+        assert_eq!(deleted(&log), vec![extra.addr()]);
+        assert!(chain_types(&e, list.cast()).is_empty());
+        // The 1.0 is the double in the exe's data.
+        e.mem.set_f64(ONE_DOUBLE, 2.0);
+        let (list, _) = list_with_payloads(&mut e, &[(0x30, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_9fb0, &args![list, 2.0f32]);
+        });
+        assert_eq!(deleted(&log).len(), 1);
+        // A NaN is not one: it is stored (quieted).
+        let (list, _) = list_with_payloads(&mut e, &[(0x30, 0)]);
+        e.call(0x0041_9fb0, &args![list, f32::from_bits(0x7f80_0001)]);
+        assert_eq!(payload_of(&mut e, list, 0x30), 0x7fc0_0001);
+    }
+
+    #[test]
+    fn sound_handle_comparisons_look_at_the_id_only() {
+        let mut e = setter_engine();
+        let a: Ptr = Ptr::new(e.mem.alloc(0x0c));
+        let b: Ptr = Ptr::new(e.mem.alloc(0x0c));
+        e.mem.set_u32(a.addr(), 7);
+        e.mem.set_u8(a.addr() + 4, 1);
+        e.mem.set_u32(a.addr() + 8, 3);
+        e.mem.set_u32(b.addr(), 7);
+        assert!(e.call(0x0041_a1f0, &args![a, b]).bool());
+        assert!(!e.call(0x0041_a220, &args![a, b]).bool());
+        e.mem.set_u32(b.addr(), 8);
+        assert!(!e.call(0x0041_a1f0, &args![a, b]).bool());
+        assert!(e.call(0x0041_a220, &args![a, b]).bool());
+        // Both read the word through the helper, the argument first.
+        let log = logged(&mut e, |e| {
+            e.call(0x0041_a1f0, &args![a, b]);
+        });
+        assert_eq!(
+            calls_to(&log, READ_WORD),
+            vec![vec![b.addr()], vec![a.addr()]]
+        );
+    }
+
+    #[test]
+    fn empty_sound_handle_default_constructor() {
+        let mut e = setter_engine();
+        let handle: Ptr = Ptr::new(e.mem.alloc(0x10));
+        e.mem.write(handle.addr(), &[0x33; 0x10]);
+        let result = e.call(0x0041_a250, &args![handle]).ptr::<()>();
+        assert_eq!(result, handle);
+        assert_eq!(e.mem.u32(handle.addr()), 0xffff_ffff);
+        assert_eq!(e.mem.u8(handle.addr() + 4), 0);
+        assert_eq!(e.mem.u32(handle.addr() + 8), 0);
+        assert_eq!(e.mem.u8(handle.addr() + 5), 0x33);
+    }
+
+    /// Checks a sound setter (`address`, `extra_type`, built by `construct`)
+    /// with a non-empty handle, a replacement, an empty handle on an
+    /// existing and on a missing extra data.
+    fn check_sound_setter(address: u32, extra_type: u8, construct: u32) {
+        let mut e = setter_engine();
+        let handle: Ptr = Ptr::new(e.mem.alloc(0x0c));
+        e.mem.set_u32(handle.addr(), 0x99);
+        e.mem.set_u8(handle.addr() + 4, 1);
+        e.mem.set_u32(handle.addr() + 8, 4);
+        // Missing, non-empty: built with a by-value copy of the handle.
+        let (list, _) = list_with_payloads(&mut e, &[(0x01, 0)]);
+        let mut built = None;
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, handle]);
+            built = Some(find_extra(e, list, extra_type));
+        });
+        let built = built.unwrap();
+        assert_eq!(allocated_size(&log), 0x18);
+        assert_eq!(
+            calls_to(&log, construct),
+            vec![vec![built.addr(), 0x99, 1, 4]]
+        );
+        // The empty handle that was compared with is destroyed.
+        assert_eq!(calls_to(&log, SOUND_HANDLE_DESTRUCTOR).len(), 1);
+        assert_eq!(sorted_types(&e, list), vec![0x01, extra_type]);
+        // Existing, non-empty: the handle is copied, the padding is not.
+        let (list, extras) = list_with_payloads(&mut e, &[(extra_type, 0x55)]);
+        e.mem.set_u8(extras[0].addr() + 0x11, 0x77);
+        e.call(address, &args![list, handle]);
+        assert_eq!(
+            (
+                e.mem.u32(extras[0].addr() + 0x0c),
+                e.mem.u8(extras[0].addr() + 0x10),
+                e.mem.u8(extras[0].addr() + 0x11),
+                e.mem.u32(extras[0].addr() + 0x14)
+            ),
+            (0x99, 1, 0x77, 4)
+        );
+        // Existing, empty (only the id counts): deleted.
+        e.mem.set_u32(handle.addr(), 0xffff_ffff);
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, handle]);
+        });
+        assert_eq!(deleted(&log), vec![extras[0].addr()]);
+        assert_eq!(calls_to(&log, SOUND_HANDLE_DESTRUCTOR).len(), 1);
+        assert!(chain_types(&e, list.cast()).is_empty());
+        // Missing, empty: nothing.
+        let log = logged(&mut e, |e| {
+            e.call(address, &args![list, handle]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(chain_types(&e, list.cast()).is_empty());
+    }
+
+    #[test]
+    fn creature_awake_sound_setter() {
+        check_sound_setter(0x0041_a090, 0x7d, EXTRA_CREATURE_AWAKE_SOUND_INIT);
+    }
+
+    #[test]
+    fn creature_movement_sound_setter() {
+        check_sound_setter(0x0041_a280, 0x8a, EXTRA_CREATURE_MOVEMENT_SOUND_INIT);
+    }
+
+    #[test]
+    fn weapon_idle_sound_setter() {
+        check_sound_setter(0x0041_a3e0, 0x83, EXTRA_WEAPON_IDLE_SOUND_INIT);
+    }
+
+    #[test]
+    fn weapon_attack_sound_setter() {
+        check_sound_setter(0x0041_a540, 0x86, EXTRA_WEAPON_ATTACK_SOUND_INIT);
     }
 }
