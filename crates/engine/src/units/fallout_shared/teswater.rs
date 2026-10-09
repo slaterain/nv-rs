@@ -5,10 +5,16 @@
 //! at), `PlaceableWaterGroup` and the small accessors the water code is
 //! built from. It has 166 functions, `004e21b0` to `004edd80`.
 //!
-//! Translated so far: the first 80 functions of the queue (`004e21b0` to
-//! `004e7ff0`). The next session continues at `004e8000` (the 41st open
-//! function of the second session's queue; `004e8030`, the water-reference
-//! 3D lookup this unit's code calls by address, is in the next batch).
+//! Translated so far: the first 120 functions of the queue (`004e21b0` to
+//! `004eb510`). The next session continues at `004eb540` (the world
+//! reflection finish, `FINISH_WORLD_REFLECTIONS`); `004ed290`
+//! (`InitializeGreyTexture`) and `004ecef0` are called by address until then.
+//! Third session (`004e8000` to `004eb510`): the wading water (ripples,
+//! displacement simulation, wading camera), the three reflection setups and
+//! the interior finish; the layouts of `WadingWaterData` and the extra
+//! `WaterShaderProperty` fields are above, the new callee constants under
+//! "third session". A few reads the game does unguarded (an empty group list in
+//! `004e8ec0`, no world space in `004eaa00`/`004eaf80`) fault here as there.
 //!
 //! Notes for the next session:
 //! - `00559450` is both `NiPointer<T>::operator T*` and
@@ -492,6 +498,271 @@ const ANIMATION_DATA_TARGET: u32 = 0x0043_b230;
 const NODE_IN_RANGE_OF_VIEWER: u32 = 0x004b_5fc0;
 
 // ---------------------------------------------------------------------------
+// Callees and globals of the functions from `004e8000` on (third session).
+
+/// What `fn_004e8000` runs on the water root node before it drops it (the
+/// body calls `004dffa0` on `this + 0x9c`; the engine map has no name).
+const WATER_ROOT_RELEASE_STEP: u32 = 0x004d_ef90;
+/// `[this] + 8`: the address of the first item of an `NiTPointerList` (the
+/// engine map has no name).
+const LIST_FIRST_ITEM_SLOT: u32 = 0x0073_ac90;
+/// A `WaterShaderProperty` method (`this`, the new property); the engine map
+/// has no name.
+const WATER_PROPERTY_METHOD_00B6AB20: u32 = 0x00b6_ab20;
+/// `BSRenderedTexture::GetTexture(this, index)` (Xbox PDB name).
+const RENDERED_TEXTURE_GET_TEXTURE: u32 = 0x004b_c320;
+/// `NiPoint3::operator-(this, out, other)`: `out = this - other` (returns
+/// `out`; it builds the result with `NiPoint3::NiPoint3`).
+const POINT3_SUBTRACT: u32 = 0x0043_9ef0;
+/// `NiPoint3::Length(this)` (ST0).
+const POINT3_LENGTH: u32 = 0x0045_7990;
+/// Appends the eight-byte element `*element` (an `NiPoint2`) to the array
+/// at `this` (`this`, `&element`; the engine map has no name).
+const POINT2_ARRAY_APPEND: u32 = 0x006d_b840;
+/// `cdecl(a, b, c, d, value)`: `(b - a) * ((value - c) / (d - c)) + a`, the
+/// linear map of `value` from the range `c..d` onto `a..b` (ST0).
+const LINEAR_MAP: u32 = 0x004b_3ab0;
+/// `TESWaterSystem::InitializeGreyTexture(this)` (Xbox PDB name; next
+/// session): returns the rendered texture the wading height map starts as.
+const INITIALIZE_GREY_TEXTURE: u32 = 0x004e_d290;
+/// `NiTMapBase<TESObjectREFR *, ...>::SetAt(this, key, value)` (the engine
+/// map names the body after a combat-threat map instance).
+const MAP_SET_AT: u32 = 0x0084_4700;
+/// `TESObjectREFR`-derived actor virtual at +0x22c, called with 0 (a
+/// `bool` result): the wading-water code skips the actors it answers true
+/// for.
+const ACTOR_SKIP_VIRTUAL: u32 = 0x22c;
+/// `cdecl(value)`: the float wrapper (`0x00406cc0`) around the CRT function
+/// at `0x00ec6940`, which rounds down.
+const FLOAT_FLOOR: u32 = 0x0040_6cc0;
+/// `cdecl(index)`: the word at `0x011f91c8 + 4 * index`.
+const RENDER_TABLE_ENTRY: u32 = 0x0045_0b80;
+/// `cdecl(index)`: `[0x011f91c0]` for 0, `[0x011f91bc]` otherwise.
+const RENDER_SETTING_ENTRY: u32 = 0x004d_c060;
+/// Returns the word at `0x011f4748` (`cdecl`, no arguments): the object the
+/// camera data are handed to.
+const RENDER_GLOBAL_OBJECT: u32 = 0x0043_c4b0;
+/// `(this, name, value)`: whether the render object answers `name` with
+/// `value` (its byte at +0x208 is compared); `004a0dd0` and `004e9c90` ask it
+/// about `"SetCameraData"`.
+const RENDER_OBJECT_CHECK: u32 = 0x004a_0e10;
+/// `(this, camera data)`: asks `004a0e10` about the string at `0x0101e2c8`,
+/// then calls the object's virtual at +0x190 with the argument.
+const RENDER_OBJECT_SET_CAMERA_DATA: u32 = 0x004a_0dd0;
+/// `NiCamera::NiCamera(this)` (the camera object is 0x114 bytes).
+const CAMERA_CONSTRUCT: u32 = 0x00a7_12f0;
+/// `NiCamera::~NiCamera(this)`.
+const CAMERA_DESTRUCT: u32 = 0x00a6_fae0;
+/// `NiCamera::SetViewFrustum(this, &frustum)` (Xbox PDB name).
+const CAMERA_SET_VIEW_FRUSTUM: u32 = 0x00a6_faf0;
+/// `NiCamera::LookAtWorldPoint(this, &point, &up)` (Xbox PDB name).
+const CAMERA_LOOK_AT_WORLD_POINT: u32 = 0x00a7_01b0;
+/// `this + 0x100` of the camera (the view frustum) and `this + 0xdc` (the
+/// world-to-camera data `NiCullingProcess` takes).
+const CAMERA_FRUSTUM_ADDRESS: u32 = 0x004a_0d10;
+const CAMERA_PLANES_ADDRESS: u32 = 0x0045_bbe0;
+/// `NiFrustum::NiFrustum(this, ortho)` (Xbox PDB name; 0x1c bytes).
+const FRUSTUM_CONSTRUCT: u32 = 0x00a7_1b70;
+/// `BSCullingProcess::BSCullingProcess(this, 0)` and
+/// `BSCullingProcess::~BSCullingProcess(this)` (Xbox PDB name); the object
+/// is at most 0xcc bytes on the stack.
+const CULLING_PROCESS_CONSTRUCT: u32 = 0x004a_0eb0;
+const CULLING_PROCESS_DESTRUCT: u32 = 0x004a_0f60;
+const CULLING_PROCESS_SIZE: u32 = 0xd0;
+/// Stores its argument (a camera) at `this + 0xc` (the engine map's name,
+/// `NonActorMagicCaster::SetCurrentSpell`, belongs to a folded copy).
+const CULLING_PROCESS_SET_CAMERA: u32 = 0x0041_fd00;
+/// `(this, camera planes)`: `nicullingprocess.cpp`; ends by setting the
+/// word at +0x8c to `0x3f`.
+const CULLING_PROCESS_SET_PLANES: u32 = 0x00a6_94a0;
+/// `BSShaderAccumulator::BSShaderAccumulator(this, 99, 1, 0x2f7)` (Xbox PDB
+/// name; 0x280 bytes).
+const ACCUMULATOR_CONSTRUCT: u32 = 0x00b6_60d0;
+/// Stores its argument at `this + 0x194` and `this + 0x19c` of the
+/// accumulator.
+const ACCUMULATOR_SET_WORD_194: u32 = 0x004a_1020;
+const ACCUMULATOR_SET_WORD_19C: u32 = 0x004a_1040;
+/// Stores its byte argument at `this + 0x84` of the accumulator
+/// (`bAccumulate`, Xbox PDB).
+const ACCUMULATOR_SET_ACCUMULATE: u32 = 0x004b_c4a0;
+/// The accumulator's virtual at +0x8c, called with the camera.
+const ACCUMULATOR_SET_CAMERA_VIRTUAL: u32 = 0x8c;
+/// `BSUtilities::ReflectCameraAboutArbitraryPlane(camera, &plane,
+/// reflected camera)` (Xbox PDB name; cdecl).
+const REFLECT_CAMERA_ABOUT_PLANE: u32 = 0x00c4_bf40;
+/// `MTRenderingSystem::AddAccumTask(this, camera, 0, 0, static objects,
+/// dynamic objects, accumulator, 4, stage, 0)` (Xbox PDB name),
+/// `MTRenderingSystem::SetThreadStage(this, 0, stage)` (Xbox PDB name) and
+/// the engine map's unnamed `(this, 1, stage)` between them.
+const MT_ADD_ACCUM_TASK: u32 = 0x00ba_3390;
+const MT_SET_THREAD_STAGE: u32 = 0x00ba_30f0;
+const MT_SET_THREAD_STAGE_ONE: u32 = 0x00ba_3130;
+/// The `NiPointer` member at +4 (read through `00559450`), here of the sky
+/// (`TES + 0x68`, `pSky`, Xbox PDB).
+const SKY_OBJECT_POINTER: u32 = 0x007f_a950;
+/// `TES + 0x68` (`pSky`, Xbox PDB), read through the folded accessor the
+/// engine map names `MiddleHighProcess::GetSavedAcquireObject`.
+const TES_GET_SKY: u32 = 0x008d_8520;
+/// `this + 0x20` (the address of three floats).
+const COLOR_FACTOR_ADDRESS: u32 = 0x0089_1170;
+/// `NiPointer` read at `0x011deb7c`.
+const POINTER_STATIC_011DEB7C: u32 = 0x0045_c670;
+/// `TESWorldSpace::GetTerrainManager(this)` (Xbox PDB name).
+const WORLD_SPACE_GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+/// Whether the current world space has a terrain manager that answers
+/// `00759d80` (byte result).
+const TERRAIN_READY: u32 = 0x006f_d150;
+/// Terrain helpers the reflection passes call around their object lists:
+/// they call `006fb5d0()`, `006fb640()`, `006fd1d0(1)` and `006fd1d0(0)`
+/// (no engine-map names).
+const TERRAIN_STEP_FIRST: u32 = 0x006f_d1a0;
+const TERRAIN_STEP_SECOND: u32 = 0x006f_d1b0;
+const TERRAIN_TOGGLE_ONE: u32 = 0x006f_d1c0;
+const TERRAIN_TOGGLE_ZERO: u32 = 0x006f_d1e0;
+/// `(this = TES, x, y)`: the address of the grid cell slot (`0` when out of
+/// range).
+const TES_GRID_CELL_SLOT: u32 = 0x0045_7050;
+/// `(this = cell, index)`: child `index` of the cell's 3D node of kind 2.
+const CELL_NODE_CHILD: u32 = 0x0045_c9a0;
+/// `bool` test on the reference (`564e60`, folded; flag `0x8000` of the
+/// form or of its base form's `564e40` test): the reflection passes skip the
+/// references it answers true for outside interiors.
+const REFERENCE_IS_EXCLUDED: u32 = 0x0056_4e60;
+/// `this`: the next node of a `BSSimpleList`-style node (`[this + 4]`).
+const NODE_NEXT: u32 = 0x0072_6070;
+/// `(camera, accumulator, 0)` (cdecl): draws the accumulated scene into the
+/// current target.
+const RENDER_ACCUMULATED_SCENE: u32 = 0x00b6_c0d0;
+/// `(7 words, cdecl)`: a render state call; the water code passes `(1, 0
+/// x 6)` and `(0 x 7)`.
+const RENDER_STATE_SET: u32 = 0x00b9_8280;
+/// `ImageSpaceManager::RenderEffect`-like call: `this`, 0x20, renderer,
+/// texture, texture, 0, 1 (the engine map names only the unit).
+const IMAGE_SPACE_RENDER_DISPLACEMENT: u32 = 0x00b9_7550;
+/// `BSBatchRenderer::RenderPassImmediately(pass, count, 0, 0, 0)` (Xbox PDB
+/// name; cdecl) and the property method that returns a geometry's render
+/// pass (`this` is the property, then the geometry).
+const RENDER_PASS_IMMEDIATELY: u32 = 0x00b9_94f0;
+const PROPERTY_RENDER_PASS: u32 = 0x00b6_9f30;
+/// `TESWaterSystem` method of the next session; `this`, a plane as four words
+/// (normal, then minus the constant), 0.
+const REFLECTION_PLANE_SETUP: u32 = 0x004e_cef0;
+
+/// Settings the third session reads.
+/// `bUseWaterDisplacements:Water`, `bUseBulletWaterDisplacements:Water`,
+/// `fWadingWaterQuadSize:Water`, `bForceHighDetailLandReflections:Water`
+/// and `bReflectExplosions:Water`.
+const SETTING_USE_WATER_DISPLACEMENTS: u32 = 0x011c_7ac4;
+const SETTING_USE_BULLET_WATER_DISPLACEMENTS: u32 = 0x011c_7c80;
+const SETTING_WADING_WATER_QUAD_SIZE: u32 = 0x011c_7b54;
+const SETTING_FORCE_HIGH_DETAIL_LAND_REFLECTIONS: u32 = 0x011c_7cc0;
+const SETTING_REFLECT_EXPLOSIONS: u32 = 0x011c_7ae8;
+/// The unsigned setting the `TES` grid loops count to (a cell grid width);
+/// its initializer was not found.
+const SETTING_GRID_SIZE: u32 = 0x011c_63cc;
+
+/// Globals.
+/// `NiPointer<NiCamera>` and `NiPointer<BSShaderAccumulator>` statics of the
+/// world and sky reflections (`PlaceableWaterGroup::spWorldReflectionCamera`,
+/// `spWorldReflectionSorter`, `spSkyReflectionCamera`, `spSkyReflectionSorter`
+/// in the Xbox PDB, matched by use) and the four object lists
+/// (`StaticWorldReflectiveObjects`, `DynamicWorldReflectiveObjects`,
+/// `StaticSkyReflectiveObjects`, `DynamicSkyReflectiveObjects`, matched by
+/// the order `004e19c0` clears them in).
+const WORLD_REFLECTION_CAMERA: u32 = 0x011c_7b44;
+const WORLD_REFLECTION_SORTER: u32 = 0x011c_7cb8;
+const SKY_REFLECTION_CAMERA: u32 = 0x011c_7cbc;
+const SKY_REFLECTION_SORTER: u32 = 0x011c_7be8;
+const STATIC_WORLD_REFLECTIVE_OBJECTS: u32 = 0x011c_7ce4;
+const DYNAMIC_WORLD_REFLECTIVE_OBJECTS: u32 = 0x011c_7b80;
+const STATIC_SKY_REFLECTIVE_OBJECTS: u32 = 0x011c_7bcc;
+const DYNAMIC_SKY_REFLECTIVE_OBJECTS: u32 = 0x011c_7c30;
+/// `PlaceableWaterGroup::ExplosionsList` (Xbox PDB static; matched by use:
+/// the explosion code adds to it and `bReflectExplosions` gates the read).
+const EXPLOSIONS_LIST: u32 = 0x011c_7b8c;
+/// The statics `004ea9a0`, `004ea9c0` and `004ea9e0` read through
+/// `NiPointer` (terrain objects; not matched to a name).
+const TERRAIN_POINTER_A: u32 = 0x011d_86a8;
+const TERRAIN_POINTER_B: u32 = 0x011d_8690;
+const TERRAIN_POINTER_C: u32 = 0x011d_86bc;
+/// The two `NiPoint2` arrays the displacement passes fill (and
+/// `fn_004e8ec0` clears after its image-space pass).
+const DISPLACEMENT_POINTS_A: u32 = 0x011a_da00;
+const DISPLACEMENT_POINTS_B: u32 = 0x011a_da10;
+/// Bytes: `0x011fffec` is set when the wading height map is created,
+/// `0x011fffed` while the displacement image-space pass runs, `0x01200000` is
+/// cleared when the wading geometry is released, `0x011ad832` makes
+/// `fn_004e8ec0` render the wading geometry, `0x011ff375` is set while it
+/// does.
+const WADING_MAP_CREATED_FLAG: u32 = 0x011f_ffec;
+const DISPLACEMENT_PASS_FLAG: u32 = 0x011f_ffed;
+const DISPLACEMENT_ACTIVE_FLAG: u32 = 0x0120_0000;
+const DISPLACEMENT_RENDER_FLAG: u32 = 0x011a_d832;
+const WADING_RENDER_ACTIVE_FLAG: u32 = 0x011f_f375;
+/// The floats `fn_004e8ec0` publishes for the displacement shader: four
+/// constants (copied from the exe's `0.4`, `0.6`, `0.97` and `0.01`) and the
+/// two offsets.
+const DISPLACEMENT_CONSTANTS: u32 = 0x0120_0014;
+const DISPLACEMENT_SHIFT_X: u32 = 0x0120_0024;
+const DISPLACEMENT_SHIFT_Y: u32 = 0x0120_0028;
+const DISPLACEMENT_CONSTANT_SOURCES: [u32; 4] =
+    [0x0102_31a8, 0x0101_8180, 0x0102_31a4, 0x0101_3ea4];
+/// A word `004eb510` lowers by its argument.
+const COUNTER_011FFA14: u32 = 0x011f_fa14;
+/// `0.0` / `0.1` constants: the camera's near plane of the wading camera
+/// (float), `4.0` and `50.0` (doubles), `-FLT_MAX`'s positive twin as float
+/// and double.
+const WADING_NEAR_PLANE: u32 = 0x0101_e2bc;
+const FOUR: u32 = 0x0101_db80;
+const FIFTY: u32 = 0x0101_e2c0;
+const HIGHEST_FLOAT: u32 = 0x0101_6970;
+const HIGHEST_FLOAT_AS_DOUBLE: u32 = 0x0102_31b0;
+/// The four floats the displacement mapping uses: `-0.5`, `0.5`, `-512.0`,
+/// `512.0` (read in that order by the game).
+const MAP_LOW: u32 = 0x0102_295c;
+const MAP_HIGH: u32 = 0x0101_6248;
+const MAP_SOURCE_LOW: u32 = 0x0102_319c;
+const MAP_SOURCE_HIGH: u32 = 0x0102_31a0;
+/// The `NiPoint3` `(0, 0, 1)` the wading camera looks up with.
+const UP_VECTOR: u32 = 0x011a_9478;
+/// A `NiPoint3` of three zero words.
+const ZERO_POINT3: u32 = 0x011f_426c;
+
+/// `NiCamera`... `TESWater.cpp` lines the allocation scopes use.
+const REFLECTION_SCOPE_LINE_GROUP: u32 = 0xefb;
+const REFLECTION_SCOPE_LINE_WORLD: u32 = 0xfe3;
+const REFLECTION_SCOPE_LINE_SKY: u32 = 0x1054;
+const REFLECTION_SCOPE_LINE_FINISH: u32 = 0x1082;
+
+/// The camera's local translate (`this + 0x58`, an address) and the rotation
+/// accessors: `00439f50(this = matrix, column, &out)` copies a column of a
+/// `NiMatrix3`, `0045bba0(this = camera, &out)` copies column 0 of the
+/// camera's rotation.
+const NODE_LOCAL_TRANSLATE_ADDRESS: u32 = 0x0043_c490;
+const MATRIX_COLUMN: u32 = 0x0043_9f50;
+const CAMERA_COLUMN_ZERO: u32 = 0x0045_bba0;
+/// `"SetCameraData"` and the render object's virtual `fn_004e9c90` calls.
+const SET_CAMERA_DATA_NAME: u32 = 0x0102_31b8;
+const RENDER_OBJECT_SET_CAMERA_DATA_VIRTUAL: u32 = 0x18c;
+/// The 16-bit flag word `fn_004e9ce0` edits.
+const BIT_FLAGS_011F941C: u32 = 0x011f_941c;
+/// The address of the multithreaded rendering system's static object.
+const MT_RENDERING_SYSTEM: u32 = 0x0120_0088;
+/// Returns the byte of `bUseWaterShader:Water` (no engine-map name).
+const WATER_SHADER_ENABLED: u32 = 0x004e_2160;
+/// `(this = actor, &location, cell, 1.0)`: whether the actor passes the
+/// water test at that location (`actor.cpp`, no name), and `(this = actor)`:
+/// `(0x008846e0(this) & 0xf) != 0`.
+const ACTOR_IN_WATER_TEST: u32 = 0x0088_5520;
+const ACTOR_STATE_TEST: u32 = 0x0049_38e0;
+/// The form flag masks the accessors from `004ea8b0` on test.
+const FORM_FLAG_0004: u32 = 0x0000_0004;
+const FORM_FLAG_0008: u32 = 0x0000_0008;
+const FORM_FLAG_0010: u32 = 0x0000_0010;
+const FORM_FLAG_0020: u32 = 0x0000_0020;
+const FORM_FLAG_0040: u32 = 0x0000_0040;
+
+// ---------------------------------------------------------------------------
 // Globals.
 
 /// The `TES*` (`TES + 0x34` is `pInteriorCell`).
@@ -708,6 +979,9 @@ layout! {
         /// `iAccumulationCount` (Xbox PDB): the running stage number
         /// `UpdatePlaceableWater` hands to each pass it sets up.
         0x00 iAccumulationCount: i32,
+        /// `iGlobalGetWaterGeometryCount` (Xbox PDB): `fn_004e8030` counts its
+        /// calls here.
+        0x04 iGlobalGetWaterGeometryCount: i32,
         /// `spWaterHeightMapTexture` (Xbox PDB): `NiPointer<BSRenderedTexture>`.
         0x08 spWaterHeightMapTexture: u32,
         /// `spWaterNormalMapTexture` (Xbox PDB): `NiPointer<BSRenderedTexture>`.
@@ -736,6 +1010,10 @@ layout! {
         0x7c WadingWaterMap: Inline<NiTPointerMap>,
         /// `WaterSound` (Xbox PDB).
         0x8c WaterSound: Inline<BSSoundHandle>,
+        /// `fTimeSinceLastRipplePlaced` (Xbox PDB).
+        0x98 fTimeSinceLastRipplePlaced: f32,
+        /// `bCull3rdPerson` (Xbox PDB).
+        0x9c bCull3rdPerson: bool,
     }
 
     /// `PlaceableWaterGroup` (Xbox PDB), 0xB0 bytes on the Xbox; the fields
@@ -767,14 +1045,24 @@ layout! {
         0x5f bRenderGroupReflections: bool,
         /// `bRenderSilhouetteReflections` (Xbox PDB).
         0x60 bRenderSilhouetteReflections: bool,
+        /// `StaticReflectiveObjects` (Xbox PDB).
+        0x64 StaticReflectiveObjects: Inline<NiTPointerList>,
+        /// `DynamicReflectiveObjects` (Xbox PDB).
+        0x70 DynamicReflectiveObjects: Inline<NiTPointerList>,
         /// `StaticDepthObjects` (Xbox PDB).
         0x7c StaticDepthObjects: Inline<NiTPointerList>,
         /// `DynamicDepthObjects` (Xbox PDB).
         0x88 DynamicDepthObjects: Inline<NiTPointerList>,
+        /// `spGroupReflectionSorter` (Xbox PDB): `NiPointer<BSShaderAccumulator>`.
+        0x94 spGroupReflectionSorter: u32,
+        /// `spDepthSorter` (Xbox PDB): `NiPointer<BSShaderAccumulator>`.
+        0x98 spDepthSorter: u32,
         /// `iReflectionThreadStage` (Xbox PDB).
         0x9c iReflectionThreadStage: i32,
         /// `iDepthThreadStage` (Xbox PDB).
         0xa0 iDepthThreadStage: i32,
+        /// `spReflectionCamera` (Xbox PDB): `NiPointer<NiCamera>`.
+        0xa4 spReflectionCamera: u32,
         /// `spDepthCamera` (Xbox PDB): `NiPointer<NiCamera>`.
         0xa8 spDepthCamera: u32,
         /// `iStencilBitMask` (Xbox PDB); the code reads it as a 32-bit word
@@ -791,10 +1079,16 @@ layout! {
     pub struct WaterShaderProperty: 0x150 {
         /// `pRenderPassList` (Xbox PDB, `BSShaderProperty`).
         0x3c pRenderPassList: Ptr,
+        /// `bDisplacement` (Xbox PDB; Xbox +0x68).
+        0x60 bDisplacement: bool,
         /// `bFullReflections` (Xbox PDB; Xbox +0x6a).
         0x62 bFullReflections: bool,
         /// `bDepth` (Xbox PDB; Xbox +0x6b).
         0x63 bDepth: bool,
+        /// `fBlendRadius` (Xbox PDB; Xbox +0x74).
+        0x6c fBlendRadius: f32,
+        /// `fBlendNormalsAmount` (Xbox PDB; Xbox +0x78).
+        0x70 fBlendNormalsAmount: f32,
         /// `fFogFar` (Xbox PDB; Xbox +0x7c).
         0x74 fFogFar: f32,
         /// `fFogRange` (Xbox PDB; Xbox +0x80).
@@ -807,6 +1101,8 @@ layout! {
         0x81 bRefractions: bool,
         /// `bObjectTexCoords` (Xbox PDB; Xbox +0x8a).
         0x82 bObjectTexCoords: bool,
+        /// `iStencilMask` (Xbox PDB; Xbox +0x8c).
+        0x84 iStencilMask: u32,
         /// `pShallowColor` (Xbox PDB; Xbox +0x90).
         0x88 pShallowColor: Inline<NiColorA>,
         /// `pDeepColor` (Xbox PDB; Xbox +0xa0).
@@ -841,6 +1137,29 @@ layout! {
         0x140 spRefractionMap: u32,
         /// `spDepthMap` (Xbox PDB; Xbox +0x14c).
         0x144 spDepthMap: u32,
+        /// `spDisplacementNormalMap` (Xbox PDB; Xbox +0x150):
+        /// `NiPointer<NiTexture>`.
+        0x148 spDisplacementNormalMap: u32,
+    }
+
+    /// `WadingWaterData` (Xbox PDB), 0x1c bytes: what the wading-water
+    /// update keeps per water reference. The two `NiPoint2` members and the
+    /// `NiPoint3` are listed as floats.
+    pub struct WadingWaterData: 0x1c {
+        /// `fDisplaceOffset` (Xbox PDB, `NiPoint2`): x.
+        0x00 fDisplaceOffsetX: f32,
+        /// `fDisplaceOffset` y.
+        0x04 fDisplaceOffsetY: f32,
+        /// `fLastDisplaceOffset` (Xbox PDB, `NiPoint2`): x.
+        0x08 fLastDisplaceOffsetX: f32,
+        /// `fLastDisplaceOffset` y.
+        0x0c fLastDisplaceOffsetY: f32,
+        /// `fLastPosition` (Xbox PDB, `NiPoint3`): x.
+        0x10 fLastPositionX: f32,
+        /// `fLastPosition` y.
+        0x14 fLastPositionY: f32,
+        /// `fLastPosition` z.
+        0x18 fLastPositionZ: f32,
     }
 
     /// `TESWaterForm` (Xbox PDB): the fields the water update code touches
@@ -4225,6 +4544,1949 @@ pub fn fn_004e7ff0(e: &mut Engine) -> u32 {
     e.call(NI_POINTER_GET, &args![WATER_ROOT_SLOT]).u32()
 }
 
+// ---------------------------------------------------------------------------
+// Helpers of the functions from `004e8000` on (third session).
+
+/// Whether `test` is true for an item of an `NiTPointerList`: the same walk
+/// as `for_each_list_item` (the next position first, then the item), but it
+/// stops at the first item `test` accepts.
+fn any_list_item(
+    e: &mut Engine,
+    list: u32,
+    mut test: impl FnMut(&mut Engine, u32) -> bool,
+) -> bool {
+    let mut position = pointer_in_slot(e, list);
+    while position != 0 {
+        let next = e.call(LIST_NEXT_POSITION, &args![list, position]).u32();
+        let slot = e.call(LIST_ITEM_SLOT, &args![list, position]).u32();
+        let item = e.mem.u32(slot);
+        if test(e, item) {
+            return true;
+        }
+        position = next;
+    }
+    false
+}
+
+/// `004b3ab0` applied to the displacement offsets: maps `value` from the
+/// range `-512..512` onto `-0.5..0.5` (the four floats are read from the exe
+/// in the order the game pushes them).
+fn map_displacement(e: &mut Engine, value: f32) -> f32 {
+    let low = e.global::<f32>(MAP_LOW);
+    let high = e.global::<f32>(MAP_HIGH);
+    let source_low = e.global::<f32>(MAP_SOURCE_LOW);
+    let source_high = e.global::<f32>(MAP_SOURCE_HIGH);
+    e.call(
+        LINEAR_MAP,
+        &args![low, high, source_low, source_high, value],
+    )
+    .f32()
+}
+
+/// `value / 2.0` computed in extended precision and stored as a `float`.
+fn half_of(e: &mut Engine, value: f32) -> f32 {
+    let two = e.global::<f64>(TWO);
+    (value as f64 / two) as f32
+}
+
+/// `a - b` computed in extended precision and stored as a `float`.
+fn float_difference(a: f32, b: f32) -> f32 {
+    (a as f64 - b as f64) as f32
+}
+
+/// Allocates (`NiAlloc`) and constructs an `NiCamera` and stores it in the
+/// `NiPointer` slot (null when the allocation fails).
+fn assign_new_camera(e: &mut Engine, slot: u32) {
+    let memory = e.call(NI_ALLOC, &args![0x114u32]).u32();
+    let camera = if memory == 0 {
+        0
+    } else {
+        e.call(CAMERA_CONSTRUCT, &args![memory]).u32()
+    };
+    assign_slot(e, slot, camera);
+}
+
+/// The same for a `BSShaderAccumulator` (0x280 bytes).
+fn assign_new_accumulator(e: &mut Engine, slot: u32) {
+    let memory = e.call(NI_ALLOC, &args![0x280u32]).u32();
+    let accumulator = if memory == 0 {
+        0
+    } else {
+        e.call(ACCUMULATOR_CONSTRUCT, &args![memory, 99u32, 1u32, 0x2f7u32])
+            .u32()
+    };
+    assign_slot(e, slot, accumulator);
+}
+
+/// What every reflection setup does to its accumulator once the camera is
+/// in place: the render-table word 0 into +0x194, `fn_004ea860(1)`, the
+/// camera into the accumulator's virtual at +0x8c, and `bAccumulate`.
+fn prepare_accumulator(e: &mut Engine, sorter_slot: u32, camera_slot: u32) {
+    let table_entry = e.call(RENDER_TABLE_ENTRY, &args![0u32]).u32();
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_WORD_194, &args![accumulator, table_entry]);
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    fn_004ea860(e, accumulator, 1);
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    e.vcall(accumulator, ACCUMULATOR_SET_CAMERA_VIRTUAL, &args![camera]);
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_ACCUMULATE, &args![accumulator, 1u32]);
+}
+
+/// The silhouette colour of an accumulator: +0x19c is set to 0xf, and the
+/// colour is the sky's three floats times the three floats `fn_004ea980`
+/// leads to, with alpha 1.0.
+fn set_silhouette_color(e: &mut Engine, sorter_slot: u32) {
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_WORD_19C, &args![accumulator, 0xfu32]);
+    let tes = e.global::<u32>(TES_POINTER);
+    let sky = e.call(TES_GET_SKY, &args![tes]).u32();
+    let sky_color = fn_004ea950(e, sky);
+    let color: Vec<f32> = (0..3).map(|i| e.mem.f32(sky_color + 4 * i)).collect();
+    let table_entry = e.call(RENDER_TABLE_ENTRY, &args![0u32]).u32();
+    let holder = fn_004ea980(e, table_entry);
+    let factor_address = e.call(COLOR_FACTOR_ADDRESS, &args![holder]).u32();
+    let factor: Vec<f32> = (0..3).map(|i| e.mem.f32(factor_address + 4 * i)).collect();
+    e.with_stack(0x10, |e, value| {
+        e.call(
+            NI_POINT4_CONSTRUCT,
+            &args![
+                value,
+                color[0] * factor[0],
+                color[1] * factor[1],
+                color[2] * factor[2],
+                1.0f32
+            ],
+        );
+        let accumulator = pointer_in_slot(e, sorter_slot);
+        fn_004ea880(e, accumulator, value.addr());
+    });
+}
+
+/// Hands the accumulator's work to the multithreaded renderer: the
+/// `AddAccumTask` and `SetThreadStage` calls that end every reflection
+/// setup.
+fn add_accumulator_task(
+    e: &mut Engine,
+    camera_slot: u32,
+    static_objects: u32,
+    dynamic_objects: u32,
+    sorter_slot: u32,
+    stage: i32,
+) {
+    let accumulator = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    let renderer = fn_004ea970(e);
+    e.call(
+        MT_ADD_ACCUM_TASK,
+        &args![
+            renderer,
+            camera,
+            0u32,
+            0u32,
+            static_objects,
+            dynamic_objects,
+            accumulator,
+            4u32,
+            stage,
+            0u32
+        ],
+    );
+    let renderer = fn_004ea970(e);
+    e.call(MT_SET_THREAD_STAGE, &args![renderer, 0u32, stage]);
+}
+
+/// Builds the reflection plane the world and sky setups use: normal `(0, 0,
+/// 1)` through `(0, 0, h)` with `h` the world space's water height, into
+/// `plane` (0x10 bytes) with `normal` and `point` (0xc bytes each) as
+/// scratch.
+fn build_world_water_plane(e: &mut Engine, plane: u32, normal: u32, point: u32) {
+    e.call(NI_POINT3_CONSTRUCT, &args![normal, 0.0f32, 0.0f32, 1.0f32]);
+    let tes = e.global::<u32>(TES_POINTER);
+    let world_space = e.call(TES_GET_WORLD_SPACE, &args![tes]).u32();
+    let height = e.call(WORLD_SPACE_WATER_HEIGHT, &args![world_space]).f32();
+    e.call(NI_POINT3_CONSTRUCT, &args![point, 0.0f32, 0.0f32, height]);
+    e.call(NI_PLANE_CONSTRUCT, &args![plane, normal, point]);
+}
+
+/// `TES::GetWorldSpace` on the `TES` global.
+fn current_world_space(e: &mut Engine) -> u32 {
+    let tes = e.global::<u32>(TES_POINTER);
+    e.call(TES_GET_WORLD_SPACE, &args![tes]).u32()
+}
+
+// ---------------------------------------------------------------------------
+// Translated functions, third session (`004e8000` on).
+
+// Translated from 004e8000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drops the water root node (`spWaterRoot`, the static `NiPointer` at
+/// `0x011c7c28`): when there is one, `004def90` runs on it, and the slot is
+/// set to null.
+pub fn fn_004e8000(e: &mut Engine) {
+    if pointer_in_slot(e, WATER_ROOT_SLOT) != 0 {
+        let root = pointer_in_slot(e, WATER_ROOT_SLOT);
+        e.call(WATER_ROOT_RELEASE_STEP, &args![root]);
+    }
+    assign_slot(e, WATER_ROOT_SLOT, 0);
+}
+
+// Translated from 004e8030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The geometry of a water reference (no Xbox PDB name; the counter it
+/// raises is the one the Xbox PDB calls `iGlobalGetWaterGeometryCount`): the
+/// reference's 3D object must be a node whose first child is a node; the
+/// result is that child's first child, or, when the reference's base form
+/// has the form flag `0x40000000`, the first child of the child's first
+/// child (null when that is not a node). Null when any step fails.
+pub fn fn_004e8030(e: &mut Engine, this: Ptr<TESWaterSystem>, reference: u32) -> u32 {
+    if reference == 0 || reference_node(e, reference) == 0 {
+        return 0;
+    }
+    let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    let count = e.get(this, TESWaterSystem::iGlobalGetWaterGeometryCount);
+    e.set(
+        this,
+        TESWaterSystem::iGlobalGetWaterGeometryCount,
+        count.wrapping_add(1),
+    );
+    if reference_node(e, reference) == 0 {
+        return 0;
+    }
+    let node = reference_node(e, reference);
+    if e.vcall(node, NODE_IS_NODE_VIRTUAL, &[]).u32() == 0 {
+        return 0;
+    }
+    let node = reference_node(e, reference);
+    let child = e.call(NODE_FIRST_CHILD, &args![node, 0u32]).u32();
+    if child == 0 || e.vcall(child, NODE_IS_NODE_VIRTUAL, &[]).u32() == 0 {
+        return 0;
+    }
+    let grandchild = e.call(NODE_FIRST_CHILD, &args![child, 0u32]).u32();
+    if base_form == 0 || !e.call(FORM_FLAG_TEST_40000000, &args![base_form]).bool() {
+        return grandchild;
+    }
+    if grandchild != 0 && e.vcall(grandchild, NODE_IS_NODE_VIRTUAL, &[]).u32() != 0 {
+        return e.call(NODE_FIRST_CHILD, &args![grandchild, 0u32]).u32();
+    }
+    0
+}
+
+// Translated from 004e8160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates the wading-water geometry of `group` (no Xbox PDB name): a square
+/// quad of side `size` (`fn_004e7730` with texture scale 1, normals and
+/// colours) in an `NiTriShape` at the player's position, hung on the water
+/// root node, with a new `WaterShaderProperty` (displacement on, blend radius
+/// and blend-normals amount 1.0, the group's stencil mask, the group's noise
+/// map and the shared depth and wading height maps). When the group's first
+/// water reference has a water shader property, that property is handed the
+/// new one (`00b6ab20`). Resets `fTimeSinceLastRipplePlaced` and returns the
+/// shape.
+///
+/// The word after `group` (the callers pass the water root) is not read.
+pub fn fn_004e8160(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+    _unused_2: u32,
+    size: f32,
+) -> u32 {
+    let data = fn_004e7730(e, this, size, 0x200, 1, true, true);
+    let shape = fn_004e7680(e, this.addr(), data);
+    e.with_stack(0x0c, |e, origin| {
+        e.call(NI_POINT3_CONSTRUCT, &args![origin, 0.0f32, 0.0f32, 0.0f32]);
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        if player == 0 {
+            e.call(NODE_SET_LOCAL_TRANSLATE, &args![shape, origin]);
+        } else {
+            let position = e.call(PLAYER_POSITION, &args![player]).u32();
+            e.call(NODE_SET_LOCAL_TRANSLATE, &args![shape, position]);
+        }
+    });
+    let root = fn_004e7ff0(e);
+    e.vcall(root, NODE_ATTACH_CHILD, &args![shape, 1u32]);
+    let memory = e.call(NI_ALLOC, &args![0x150u32]).u32();
+    let property: Ptr<WaterShaderProperty> = if memory == 0 {
+        Ptr::new(0)
+    } else {
+        e.call(WATER_SHADER_PROPERTY_CONSTRUCT, &args![memory])
+            .ptr()
+    };
+    e.call(NODE_ATTACH_PROPERTY, &args![shape, property]);
+    e.call(SHADER_MANAGER_PREPARE_OBJECT, &args![shape, 0u32, 0u32]);
+    e.set(property, WaterShaderProperty::fBlendNormalsAmount, 1.0);
+
+    let first_slot = e
+        .call(
+            LIST_FIRST_ITEM_SLOT,
+            &args![group.at(PlaceableWaterGroup::PlaceableWaterList)],
+        )
+        .u32();
+    let first_reference = e.mem.u32(first_slot);
+    if first_reference != 0 {
+        let geometry = fn_004e8030(e, this, first_reference);
+        if geometry != 0 {
+            let owner = e.call(NODE_OWNER, &args![geometry]).u32();
+            if owner != 0 && e.call(OWNER_TYPE, &args![owner]).u32() == WATER_OWNER_TYPE {
+                let other = water_shader_property(e, geometry);
+                e.call(WATER_PROPERTY_METHOD_00B6AB20, &args![other, property]);
+            }
+        }
+    }
+
+    assign_group_reflection_map(e, property, group);
+    e.call(
+        NI_POINTER_ASSIGN_FROM,
+        &args![
+            address_of(property, WaterShaderProperty::spDepthMap),
+            DEPTH_MAP
+        ],
+    );
+    let water_type = e.get(group, PlaceableWaterGroup::pWaterType);
+    e.call(
+        NI_POINTER_ASSIGN_FROM,
+        &args![
+            address_of(property, WaterShaderProperty::spNoiseNormalMap),
+            address_of(
+                water_type.cast::<TESWaterForm>(),
+                TESWaterForm::spNoiseNormalMap
+            )
+        ],
+    );
+    let height_map = pointer_in_slot(e, WADING_WATER_HEIGHT_MAP);
+    let texture = e
+        .call(RENDERED_TEXTURE_GET_TEXTURE, &args![height_map, 0u32])
+        .u32();
+    assign_slot(
+        e,
+        address_of(property, WaterShaderProperty::spDisplacementNormalMap),
+        texture,
+    );
+    e.set(property, WaterShaderProperty::bDisplacement, true);
+    e.set(property, WaterShaderProperty::fBlendRadius, 1.0);
+    let stencil_mask = e.get(group, PlaceableWaterGroup::iStencilBitMask);
+    e.set(property, WaterShaderProperty::iStencilMask, stencil_mask);
+    e.set(this, TESWaterSystem::fTimeSinceLastRipplePlaced, 0.0);
+    shape
+}
+
+// Translated from 004e83e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the player, or an actor in the group's `ActorsInWaterList` that
+/// the actor virtual at +0x22c (called with 0) does not skip, is within
+/// `fWadingWaterQuadSize` of the player on the ground plane (the heights are
+/// zeroed before the distance is taken). The word before `group` (`this`) is
+/// not read.
+pub fn fn_004e83e0(e: &mut Engine, _unused_0: u32, group: Ptr<PlaceableWaterGroup>) -> bool {
+    let actors = group.at(PlaceableWaterGroup::ActorsInWaterList).addr();
+    any_list_item(e, actors, |e, actor| {
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        if player == actor {
+            return true;
+        }
+        if e.vcall(actor, ACTOR_SKIP_VIRTUAL, &args![0u32]).bool() {
+            return false;
+        }
+        e.with_stack(0x24, |e, frame| {
+            let frame = frame.addr();
+            let player_point = frame;
+            let actor_point = frame + 0x0c;
+            let difference = frame + 0x18;
+            let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+            copy_words(e, position, player_point, 3);
+            let position = e.vcall(actor, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+            copy_words(e, position, actor_point, 3);
+            e.mem.set_f32(player_point + 8, 0.0);
+            e.mem.set_f32(actor_point + 8, 0.0);
+            let result = e
+                .call(
+                    POINT3_SUBTRACT,
+                    &args![player_point, difference, actor_point],
+                )
+                .u32();
+            let distance = e.call(POINT3_LENGTH, &args![result]).f32();
+            let limit = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+            distance <= limit
+        })
+    })
+}
+
+// Translated from 004e8510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterSystem::AddRipple` (Xbox PDB): a ripple at `(x, y)` on the water
+/// plane at `height`. Does nothing unless `bUseBulletWaterDisplacements` and
+/// `bUseWaterDisplacements` are on and the point is within
+/// `fWadingWaterQuadSize` of the player. Every group within
+/// `fWaterGroupHeightRange` of `height` that has no wading geometry yet gets
+/// one (creating the wading height map first when there is none), at the
+/// player's position and the group's height. The offset from the player is
+/// mapped to `-0.5..0.5` and, shifted by `size / 2` in both directions, put
+/// into the two displacement arrays.
+pub fn tes_water_system_add_ripple(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    x: f32,
+    y: f32,
+    height: f32,
+    size: f32,
+) {
+    if !setting_flag(e, SETTING_USE_BULLET_WATER_DISPLACEMENTS) {
+        return;
+    }
+    if !setting_flag(e, SETTING_USE_WATER_DISPLACEMENTS) {
+        return;
+    }
+    e.with_stack(0x30, |e, frame| {
+        let frame = frame.addr();
+        let player_point = frame;
+        let ripple_point = frame + 0x08;
+        let difference = frame + 0x10;
+        let first_offset = frame + 0x18;
+        let second_offset = frame + 0x20;
+        e.call(ADDRESS_OF_THIS, &args![player_point]);
+        e.call(ADDRESS_OF_THIS, &args![ripple_point]);
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let word = e.mem.u32(position);
+        e.mem.set_u32(player_point, word);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let word = e.mem.u32(position + 4);
+        e.mem.set_u32(player_point + 4, word);
+        e.mem.set_f32(ripple_point, x);
+        e.mem.set_f32(ripple_point + 4, y);
+        let separation = fn_004e8880(e, player_point, difference, ripple_point);
+        let distance = e.call(POINT2_LENGTH, &args![separation]).f32();
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        // Not within the quad size (an unordered distance counts as outside).
+        if !matches!(
+            distance.partial_cmp(&quad_size),
+            Some(std::cmp::Ordering::Less | std::cmp::Ordering::Equal)
+        ) {
+            return;
+        }
+
+        let group_list = this.at(TESWaterSystem::PlaceableWaterGroupList).addr();
+        for_each_list_item(e, group_list, |e, item| {
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+            let range = setting_float(e, SETTING_WATER_GROUP_HEIGHT_RANGE);
+            let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+            let constant = plane_constant(e, plane);
+            if !e.call(FLOATS_NEAR, &args![constant, height, range]).bool() {
+                return;
+            }
+            let geometry_slot = address_of(group, PlaceableWaterGroup::spWadingWaterGeometry);
+            if pointer_in_slot(e, geometry_slot) != 0 {
+                return;
+            }
+            if pointer_in_slot(e, WADING_WATER_HEIGHT_MAP) == 0 {
+                let texture = e.call(INITIALIZE_GREY_TEXTURE, &args![this]).u32();
+                assign_slot(e, WADING_WATER_HEIGHT_MAP, texture);
+                e.set_global(WADING_MAP_CREATED_FLAG, 1u8);
+            }
+            let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+            let root = fn_004e7ff0(e);
+            let geometry = fn_004e8160(e, this, group, root, quad_size);
+            assign_slot(e, geometry_slot, geometry);
+            e.with_stack(0x0c, |e, spot| {
+                let spot = spot.addr();
+                let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+                copy_words(e, position, spot, 3);
+                let constant = plane_constant(e, plane);
+                e.mem.set_f32(spot + 8, constant);
+                let node = pointer_in_slot(e, geometry_slot);
+                e.call(NODE_SET_LOCAL_TRANSLATE, &args![node, spot]);
+            });
+            e.with_stack(0x10, |e, update_data| {
+                e.call(
+                    UPDATE_DATA_CONSTRUCT,
+                    &args![update_data, 0.0f32, 0u32, 0u32],
+                );
+                let node = pointer_in_slot(e, geometry_slot);
+                e.call(NODE_UPDATE, &args![node, update_data]);
+            });
+        });
+
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_x = e.mem.f32(position);
+        e.mem.set_f32(ripple_point, float_difference(x, player_x));
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_y = e.mem.f32(position + 4);
+        e.mem
+            .set_f32(ripple_point + 4, float_difference(y, player_y));
+        let mapped = e.mem.f32(ripple_point);
+        let mapped = map_displacement(e, mapped);
+        e.mem.set_f32(ripple_point, mapped);
+        let mapped = e.mem.f32(ripple_point + 4);
+        let mapped = map_displacement(e, mapped);
+        e.mem.set_f32(ripple_point + 4, mapped);
+
+        let half = half_of(e, size);
+        let offset = e
+            .call(NI_POINT2_CONSTRUCT, &args![first_offset, half, half])
+            .u32();
+        fn_004e88d0(e, ripple_point, offset);
+        e.call(
+            POINT2_ARRAY_APPEND,
+            &args![DISPLACEMENT_POINTS_A, ripple_point],
+        );
+        let half = half_of(e, size);
+        let offset = e
+            .call(NI_POINT2_CONSTRUCT, &args![second_offset, half, half])
+            .u32();
+        fn_004e8910(e, ripple_point, offset);
+        e.call(
+            POINT2_ARRAY_APPEND,
+            &args![DISPLACEMENT_POINTS_B, ripple_point],
+        );
+    });
+}
+
+// Translated from 004e8880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint2` subtraction (no Xbox PDB name): `out = this - other`; returns
+/// `out`.
+pub fn fn_004e8880(e: &mut Engine, this: u32, out: u32, other: u32) -> u32 {
+    let x = float_difference(e.mem.f32(this), e.mem.f32(other));
+    let y = float_difference(e.mem.f32(this + 4), e.mem.f32(other + 4));
+    e.mem.set_f32(out, x);
+    e.mem.set_f32(out + 4, y);
+    out
+}
+
+// Translated from 004e88d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint2` addition (no Xbox PDB name): `this += other`; returns `this`.
+pub fn fn_004e88d0(e: &mut Engine, this: u32, other: u32) -> u32 {
+    let x = (e.mem.f32(this) as f64 + e.mem.f32(other) as f64) as f32;
+    e.mem.set_f32(this, x);
+    let y = (e.mem.f32(this + 4) as f64 + e.mem.f32(other + 4) as f64) as f32;
+    e.mem.set_f32(this + 4, y);
+    this
+}
+
+// Translated from 004e8910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint2` subtraction in place (no Xbox PDB name): `this -= other`;
+/// returns `this`.
+pub fn fn_004e8910(e: &mut Engine, this: u32, other: u32) -> u32 {
+    let x = float_difference(e.mem.f32(this), e.mem.f32(other));
+    e.mem.set_f32(this, x);
+    let y = float_difference(e.mem.f32(this + 4), e.mem.f32(other + 4));
+    e.mem.set_f32(this + 4, y);
+    this
+}
+
+// Translated from 004e8950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `bUseWaterDisplacements` is on and some group passes
+/// `fn_004e83e0` (no Xbox PDB name).
+pub fn fn_004e8950(e: &mut Engine, this: Ptr<TESWaterSystem>) -> bool {
+    if fn_004e89e0(e) == 0 {
+        return false;
+    }
+    let group_list = this.at(TESWaterSystem::PlaceableWaterGroupList).addr();
+    any_list_item(e, group_list, |e, group| {
+        fn_004e83e0(e, this.addr(), Ptr::new(group))
+    })
+}
+
+// Translated from 004e89e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte of the `bUseWaterDisplacements:Water` setting.
+pub fn fn_004e89e0(e: &mut Engine) -> u8 {
+    let value = e
+        .call(SETTING_VALUE, &args![SETTING_USE_WATER_DISPLACEMENTS])
+        .u32();
+    e.mem.u8(value)
+}
+
+// Translated from 004e8a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The wading-water update (no Xbox PDB name; the exception-unwinding frame
+/// is not translated): unless the current interior cell has no water, every
+/// rendered group whose actor list is not empty and which passes
+/// `fn_004e83e0` handles its actors. An actor that is not in the water
+/// (`00885520` on its location, its parent cell and 1.0) and passes `004938e0`
+/// gets a `WadingWaterData` in the `WadingWaterMap` (created, with the
+/// group's wading geometry, when it has none) holding its position and the
+/// displacement offsets from the player, mapped to `-0.5..0.5`; any other
+/// actor loses its entry.
+pub fn fn_004e8a00(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    let tes = e.global::<u32>(TES_POINTER);
+    let interior_cell = e.call(TES_GET_INTERIOR_CELL, &args![tes]).u32();
+    if interior_cell != 0 && !e.call(CELL_HAS_WATER, &args![interior_cell]).bool() {
+        return;
+    }
+    let group_list = this.at(TESWaterSystem::PlaceableWaterGroupList).addr();
+    for_each_list_item(e, group_list, |e, item| {
+        let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+        if !e.get(group, PlaceableWaterGroup::bRenderGroup) {
+            return;
+        }
+        let actors = group.at(PlaceableWaterGroup::ActorsInWaterList).addr();
+        if e.call(LIST_IS_EMPTY, &args![actors]).bool() {
+            return;
+        }
+        if !fn_004e83e0(e, this.addr(), group) {
+            return;
+        }
+        for_each_list_item(e, actors, |e, actor| {
+            update_wading_actor(e, this, group, actor);
+        });
+    });
+}
+
+/// One actor of `fn_004e8a00`.
+fn update_wading_actor(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+    actor: u32,
+) {
+    let map = address_of(this, TESWaterSystem::WadingWaterMap);
+    let cell = e.call(REFERENCE_PARENT_CELL, &args![actor]).u32();
+    let location = e.vcall(actor, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+    let in_water = e
+        .call(ACTOR_IN_WATER_TEST, &args![actor, location, cell, 1.0f32])
+        .bool();
+    if in_water || !e.call(ACTOR_STATE_TEST, &args![actor]).bool() {
+        e.with_stack(4, |e, out| {
+            if e.call(WADING_MAP_GET, &args![map, actor, out]).bool() {
+                e.call(WADING_MAP_REMOVE, &args![map, actor]);
+            }
+        });
+        return;
+    }
+
+    let geometry_slot = address_of(group, PlaceableWaterGroup::spWadingWaterGeometry);
+    if pointer_in_slot(e, geometry_slot) == 0 {
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        let root = fn_004e7ff0(e);
+        let geometry = fn_004e8160(e, this, group, root, quad_size);
+        assign_slot(e, geometry_slot, geometry);
+    }
+    let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+    e.with_stack(0x30, |e, frame| {
+        let frame = frame.addr();
+        let player_position = frame;
+        let actor_position = frame + 0x0c;
+        let item_slot = frame + 0x18;
+        let first_offset = frame + 0x1c;
+        let second_offset = frame + 0x24;
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        copy_words(e, position, player_position, 3);
+        let position = e.vcall(actor, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        copy_words(e, position, actor_position, 3);
+        let constant = plane_constant(e, plane);
+        e.mem.set_f32(actor_position + 8, constant);
+        let found = e.call(WADING_MAP_GET, &args![map, actor, item_slot]).bool();
+        let mut item = e.mem.u32(item_slot);
+        if !found {
+            let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
+            item = if memory == 0 {
+                0
+            } else {
+                fn_004e8e40(e, Ptr::new(memory)).addr()
+            };
+            copy_words(e, actor_position, item + 0x10, 3);
+            e.call(MAP_SET_AT, &args![map, actor, item]);
+        }
+        e.call(ADDRESS_OF_THIS, &args![first_offset]);
+        e.call(ADDRESS_OF_THIS, &args![second_offset]);
+        let data: Ptr<WadingWaterData> = Ptr::new(item);
+        let player_x = e.mem.f32(player_position);
+        let player_y = e.mem.f32(player_position + 4);
+        let first_x = float_difference(e.mem.f32(actor_position), player_x);
+        let first_y = float_difference(e.mem.f32(actor_position + 4), player_y);
+        let last_x = e.get(data, WadingWaterData::fLastPositionX);
+        let last_y = e.get(data, WadingWaterData::fLastPositionY);
+        let second_x = float_difference(last_x, player_x);
+        let second_y = float_difference(last_y, player_y);
+        copy_words(e, actor_position, item + 0x10, 3);
+        let mapped = map_displacement(e, first_x);
+        e.set(data, WadingWaterData::fDisplaceOffsetX, mapped);
+        let mapped = map_displacement(e, first_y);
+        e.set(data, WadingWaterData::fDisplaceOffsetY, mapped);
+        let mapped = map_displacement(e, second_x);
+        e.set(data, WadingWaterData::fLastDisplaceOffsetX, mapped);
+        let mapped = map_displacement(e, second_y);
+        e.set(data, WadingWaterData::fLastDisplaceOffsetY, mapped);
+    });
+}
+
+// Translated from 004e8e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `WadingWaterData::WadingWaterData` (Xbox PDB class, no name in the
+/// engine map): runs the `NiPoint2` / `NiPoint3` default constructors on
+/// the members, sets both `NiPoint2` members to the zero point at
+/// `0x011f4980` and `fLastPosition` to the zero point at `0x011f426c`.
+pub fn fn_004e8e40(e: &mut Engine, this: Ptr<WadingWaterData>) -> Ptr<WadingWaterData> {
+    let address = this.addr();
+    e.call(ADDRESS_OF_THIS, &args![address]);
+    e.call(ADDRESS_OF_THIS, &args![address + 8]);
+    e.call(ADDRESS_OF_THIS, &args![address + 0x10]);
+    copy_words(e, ZERO_POINT2, address, 2);
+    copy_words(e, ZERO_POINT2, address + 8, 2);
+    copy_words(e, ZERO_POINT3, address + 0x10, 3);
+    this
+}
+
+// Translated from 004e8ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterSystem::UpdateWaterDisplacementSimulation` (Xbox PDB). While
+/// `fTimeSinceLastRipplePlaced` is below 10.0 it renders the wading height
+/// map: resets the render target when the renderer is outside a frame
+/// (`fn_004e9510`), creates the grey height map when there is none, stops the
+/// offscreen render into render-target mode 6, renders the wading geometry
+/// (`fn_004e9550`) when the byte at `0x011ad832` asks for it, and moves each
+/// group's wading geometry to the player (snapped to a 4.0 grid when the
+/// player moved more than 4.0 from the geometry of the first group that has
+/// one), refreshing the stencil mask and textures of its shader property. It
+/// then publishes the displacement shader constants, fills the two
+/// displacement arrays from the `WadingWaterMap`, advances the timer (or
+/// resets it when no displacement was added) and renders the displacement
+/// image-space effect. Otherwise it detaches the wading geometry of every
+/// group and gives the height map back.
+pub fn tes_water_system_update_water_displacement_simulation(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+) {
+    let elapsed = e.get(this, TESWaterSystem::fTimeSinceLastRipplePlaced);
+    let limit = e.global::<f64>(TEN);
+    let group_list = this.at(TESWaterSystem::PlaceableWaterGroupList).addr();
+    // Not below 10.0 (an unordered timer counts as over, as the game's compare does).
+    if !matches!(
+        (elapsed as f64).partial_cmp(&limit),
+        Some(std::cmp::Ordering::Less)
+    ) {
+        // The simulation is over: detach the geometry and give the map back.
+        for_each_list_item(e, group_list, |e, item| {
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+            let geometry_slot = address_of(group, PlaceableWaterGroup::spWadingWaterGeometry);
+            if pointer_in_slot(e, geometry_slot) == 0 {
+                return;
+            }
+            let root = fn_004e7ff0(e);
+            let geometry = pointer_in_slot(e, geometry_slot);
+            e.vcall(root, NODE_DETACH_CHILD, &args![geometry]);
+            assign_slot(e, geometry_slot, 0);
+        });
+        if return_rendered_texture(e, WADING_WATER_HEIGHT_MAP) {
+            assign_slot(e, WADING_WATER_HEIGHT_MAP, 0);
+        }
+        e.set_global(DISPLACEMENT_ACTIVE_FLAG, 0u8);
+        return;
+    }
+
+    if !fn_004e9510(e) {
+        e.call(RENDER_TARGET_RESET, &[]);
+    }
+    if pointer_in_slot(e, WADING_WATER_HEIGHT_MAP) == 0 {
+        let texture = e.call(INITIALIZE_GREY_TEXTURE, &args![this]).u32();
+        assign_slot(e, WADING_WATER_HEIGHT_MAP, texture);
+        e.set_global(WADING_MAP_CREATED_FLAG, 1u8);
+    }
+    let height_map = pointer_in_slot(e, WADING_WATER_HEIGHT_MAP);
+    let stopped = e.call(RENDERED_TEXTURE_STOP, &args![height_map]).u32();
+    e.call(RENDER_TARGET_SET, &args![6u32, stopped]);
+    if e.global::<u8>(DISPLACEMENT_RENDER_FLAG) != 0 {
+        fn_004e9550(e, this);
+    }
+    if !fn_004e9510(e) {
+        e.call(RENDER_TARGET_RESET, &[]);
+    }
+
+    // The first group with wading geometry (or the last group). The game
+    // reads the item of the first position before it tests the position, so an
+    // empty list reads address 8.
+    let mut position = pointer_in_slot(e, group_list);
+    let slot = e.call(LIST_ITEM_SLOT, &args![group_list, position]).u32();
+    let mut group_address = e.mem.u32(slot);
+    while position != 0
+        && pointer_in_slot(
+            e,
+            group_address + PlaceableWaterGroup::spWadingWaterGeometry.off,
+        ) == 0
+    {
+        let next = e
+            .call(LIST_NEXT_POSITION, &args![group_list, position])
+            .u32();
+        let slot = e.call(LIST_ITEM_SLOT, &args![group_list, position]).u32();
+        group_address = e.mem.u32(slot);
+        position = next;
+    }
+
+    let player = e.global::<u32>(PLAYER_CHARACTER);
+    e.with_stack(0x40, |e, frame| {
+        let frame = frame.addr();
+        let player_point = frame;
+        let geometry_point = frame + 0x0c;
+        let difference = frame + 0x18;
+        let update_data = frame + 0x20;
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        copy_words(e, position, player_point, 3);
+        e.call(ADDRESS_OF_THIS, &args![geometry_point]);
+        let first_geometry_slot = group_address + PlaceableWaterGroup::spWadingWaterGeometry.off;
+        if pointer_in_slot(e, first_geometry_slot) != 0 {
+            let node = pointer_in_slot(e, first_geometry_slot);
+            let translate = e.call(NODE_LOCAL_TRANSLATE_ADDRESS, &args![node]).u32();
+            copy_words(e, translate, geometry_point, 3);
+        } else {
+            copy_words(e, player_point, geometry_point, 3);
+        }
+        e.call(ADDRESS_OF_THIS, &args![difference]);
+        let difference_x = float_difference(e.mem.f32(player_point), e.mem.f32(geometry_point));
+        let difference_y =
+            float_difference(e.mem.f32(player_point + 4), e.mem.f32(geometry_point + 4));
+        e.mem.set_f32(difference, difference_x);
+        e.mem.set_f32(difference + 4, difference_y);
+        let mut moved = false;
+        let grid = e.global::<f64>(FOUR);
+        let far_x = e.call(FLOAT_ABS, &args![difference_x]).f32();
+        let far_y = if far_x as f64 > grid {
+            0.0
+        } else {
+            e.call(FLOAT_ABS, &args![difference_y]).f32()
+        };
+        if far_x as f64 > grid || far_y as f64 > grid {
+            moved = true;
+            for offset in [0, 4] {
+                let coordinate = e.mem.f32(player_point + offset);
+                let scaled = (coordinate as f64 / grid) as f32;
+                let floored = e.call(FLOAT_FLOOR, &args![scaled]).f32();
+                e.mem
+                    .set_f32(player_point + offset, (floored as f64 * grid) as f32);
+            }
+        }
+
+        for_each_list_item(e, group_list, |e, item| {
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+            let geometry_slot = address_of(group, PlaceableWaterGroup::spWadingWaterGeometry);
+            if pointer_in_slot(e, geometry_slot) == 0 {
+                return;
+            }
+            let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+            let constant = plane_constant(e, plane);
+            e.mem.set_f32(player_point + 8, constant);
+            if moved {
+                let node = pointer_in_slot(e, geometry_slot);
+                e.call(NODE_SET_LOCAL_TRANSLATE, &args![node, player_point]);
+                e.call(
+                    UPDATE_DATA_CONSTRUCT,
+                    &args![update_data, 0.0f32, 0u32, 0u32],
+                );
+                let node = pointer_in_slot(e, geometry_slot);
+                e.call(NODE_UPDATE, &args![node, update_data]);
+            }
+            let node = pointer_in_slot(e, geometry_slot);
+            let property = water_shader_property(e, node);
+            let stencil_mask = e.get(group, PlaceableWaterGroup::iStencilBitMask);
+            e.set(property, WaterShaderProperty::iStencilMask, stencil_mask);
+            e.call(
+                NI_POINTER_ASSIGN_FROM,
+                &args![
+                    address_of(property, WaterShaderProperty::spDepthMap),
+                    DEPTH_MAP
+                ],
+            );
+            let water_type = e.get(group, PlaceableWaterGroup::pWaterType);
+            e.call(
+                NI_POINTER_ASSIGN_FROM,
+                &args![
+                    address_of(property, WaterShaderProperty::spNoiseNormalMap),
+                    address_of(
+                        water_type.cast::<TESWaterForm>(),
+                        TESWaterForm::spNoiseNormalMap
+                    )
+                ],
+            );
+            let height_map = pointer_in_slot(e, WADING_WATER_HEIGHT_MAP);
+            let texture = e
+                .call(RENDERED_TEXTURE_GET_TEXTURE, &args![height_map, 0u32])
+                .u32();
+            assign_slot(
+                e,
+                address_of(property, WaterShaderProperty::spDisplacementNormalMap),
+                texture,
+            );
+        });
+
+        if moved {
+            for (offset, shift) in [(0, DISPLACEMENT_SHIFT_X), (4, DISPLACEMENT_SHIFT_Y)] {
+                let moved_by = float_difference(
+                    e.mem.f32(player_point + offset),
+                    e.mem.f32(geometry_point + offset),
+                );
+                let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+                let half = half_of(e, quad_size);
+                let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+                let negative_half = -half_of(e, quad_size);
+                let low = e.global::<f32>(MAP_LOW);
+                let high = e.global::<f32>(MAP_HIGH);
+                // The y shift is mapped onto the reversed range.
+                let (first, second) = if offset == 0 {
+                    (low, high)
+                } else {
+                    (high, low)
+                };
+                let shifted = e
+                    .call(
+                        LINEAR_MAP,
+                        &args![first, second, negative_half, half, moved_by],
+                    )
+                    .f32();
+                e.set_global(shift, shifted);
+            }
+        } else {
+            e.set_global(DISPLACEMENT_SHIFT_X, 0.0f32);
+            e.set_global(DISPLACEMENT_SHIFT_Y, 0.0f32);
+        }
+
+        if e.call(RENDER_SETTING_ENTRY, &args![0u32]).i32() >= 2 {
+            e.set_global(DISPLACEMENT_PASS_FLAG, 1u8);
+            for (i, source) in DISPLACEMENT_CONSTANT_SOURCES.into_iter().enumerate() {
+                let value = e.global::<f32>(source);
+                e.set_global(DISPLACEMENT_CONSTANTS + 4 * i as u32, value);
+            }
+            let map = address_of(this, TESWaterSystem::WadingWaterMap);
+            e.with_stack(0x0c, |e, locals| {
+                let locals = locals.addr();
+                let first = e.call(ZONE_MAP_FIRST, &args![map]).u32();
+                e.mem.set_u32(locals, first);
+                while e.mem.u32(locals) != 0 {
+                    e.mem.set_u32(locals + 4, 0);
+                    e.mem.set_u32(locals + 8, 0);
+                    e.call(
+                        ZONE_MAP_GET_NEXT,
+                        &args![map, locals, locals + 4, locals + 8],
+                    );
+                    let data = e.mem.u32(locals + 8);
+                    e.call(POINT2_ARRAY_APPEND, &args![DISPLACEMENT_POINTS_A, data]);
+                    e.call(POINT2_ARRAY_APPEND, &args![DISPLACEMENT_POINTS_B, data + 8]);
+                }
+            });
+            if e.call(LIST_COUNT, &args![DISPLACEMENT_POINTS_A]).u32() == 0 {
+                e.set(this, TESWaterSystem::fTimeSinceLastRipplePlaced, 0.0);
+            } else {
+                let step = e.call(FLOAT_TABLE_ENTRY, &args![1u32]).f32();
+                let timer = e.get(this, TESWaterSystem::fTimeSinceLastRipplePlaced);
+                e.set(
+                    this,
+                    TESWaterSystem::fTimeSinceLastRipplePlaced,
+                    (step as f64 + timer as f64) as f32,
+                );
+            }
+            let first = pointer_in_slot(e, WADING_WATER_HEIGHT_MAP);
+            let second = pointer_in_slot(e, WADING_WATER_HEIGHT_MAP);
+            let renderer = e.call(RENDERER, &[]).u32();
+            let manager = fn_004e3270(e);
+            e.call(
+                IMAGE_SPACE_RENDER_DISPLACEMENT,
+                &args![manager, 0x20u32, renderer, second, first, 0u32, 1u32],
+            );
+            e.set_global(DISPLACEMENT_PASS_FLAG, 0u8);
+        }
+    });
+}
+
+// Translated from 004e9510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at +0x200 of the object `0x011f4748` holds is zero
+/// (`fn_004e9530` of it).
+pub fn fn_004e9510(e: &mut Engine) -> bool {
+    let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+    fn_004e9530(e, object) == 0
+}
+
+// Translated from 004e9530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x200`.
+pub fn fn_004e9530(e: &mut Engine, this: u32) -> u32 {
+    e.mem.u32(this + 0x200)
+}
+
+// Translated from 004e9550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Renders the wading geometry (no Xbox PDB name; the exception-unwinding
+/// frame is not translated): builds an orthographic `NiCamera` (frustum
+/// `fWadingWaterQuadSize` wide, near plane from the exe, far plane the
+/// distance between the lowest and highest group plane plus 100.0) 50.0 above
+/// the highest group plane at the player's x and y, looking at the player's x
+/// and y on that plane, makes it the render object's camera data and, for
+/// every water reference of every group whose cell kind is 6 and whose
+/// geometry's water shader property has owner type `0xd`, forces the property's
+/// stencil mask to 1 and draws the reference's render pass immediately when it
+/// is in range of the camera.
+///
+/// A local `NiPoint3` the game fills from `0x011f426c` is never read and is
+/// left out.
+pub fn fn_004e9550(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    e.with_stack(0x150 + CULLING_PROCESS_SIZE + 0x20, |e, frame| {
+        let frame = frame.addr();
+        let camera = frame;
+        let update_data = frame + 0x120;
+        let frustum = frame + 0x130;
+        let culling = frame + 0x150;
+        let eye_point = culling + CULLING_PROCESS_SIZE;
+        let target_point = eye_point + 0x10;
+        e.call(CAMERA_CONSTRUCT, &args![camera]);
+
+        // The highest and lowest group plane.
+        let highest = e.global::<f32>(HIGHEST_FLOAT);
+        let highest_as_double = e.global::<f64>(HIGHEST_FLOAT_AS_DOUBLE);
+        let mut top = highest;
+        let mut bottom = highest;
+        let group_list = this.at(TESWaterSystem::PlaceableWaterGroupList).addr();
+        for_each_list_item(e, group_list, |e, item| {
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+            let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+            let constant = plane_constant(e, plane);
+            if top < constant || top as f64 == highest_as_double {
+                top = constant;
+            }
+            if constant < bottom || bottom as f64 == highest_as_double {
+                bottom = constant;
+            }
+        });
+
+        e.call(FRUSTUM_CONSTRUCT, &args![frustum, 0u32]);
+        e.mem.set_u8(frustum + 0x18, 1);
+        let near_plane = e.global::<f32>(WADING_NEAR_PLANE);
+        e.mem.set_f32(frustum + 0x10, near_plane);
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        let left = -half_of(e, quad_size);
+        e.mem.set_f32(frustum, left);
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        let right = half_of(e, quad_size);
+        e.mem.set_f32(frustum + 4, right);
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        let upper = half_of(e, quad_size);
+        e.mem.set_f32(frustum + 8, upper);
+        let quad_size = setting_float(e, SETTING_WADING_WATER_QUAD_SIZE);
+        let lower = -half_of(e, quad_size);
+        e.mem.set_f32(frustum + 0x0c, lower);
+        let span = float_difference(bottom, top);
+        let span = e.call(FLOAT_ABS, &args![span]).f32();
+        let hundred = e.global::<f64>(ONE_HUNDRED);
+        e.mem
+            .set_f32(frustum + 0x14, (span as f64 + hundred) as f32);
+
+        // The camera sits above the highest plane at the player's x and y.
+        let fifty = e.global::<f64>(FIFTY);
+        let eye_height = (top as f64 + fifty) as f32;
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_y = e.mem.f32(position + 4);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_x = e.mem.f32(position);
+        let eye = e
+            .call(
+                NI_POINT3_CONSTRUCT,
+                &args![eye_point, player_x, player_y, eye_height],
+            )
+            .u32();
+        e.call(NODE_SET_LOCAL_TRANSLATE, &args![camera, eye]);
+        e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, frustum]);
+        e.call(
+            UPDATE_DATA_CONSTRUCT,
+            &args![update_data, 0.0f32, 0u32, 0u32],
+        );
+        e.call(NODE_UPDATE, &args![camera, update_data]);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_y = e.mem.f32(position + 4);
+        let position = e.vcall(player, REFERENCE_GET_LOCATION_VIRTUAL, &[]).u32();
+        let player_x = e.mem.f32(position);
+        e.call(
+            NI_POINT3_CONSTRUCT,
+            &args![target_point, player_x, player_y, top],
+        );
+        e.call(
+            CAMERA_LOOK_AT_WORLD_POINT,
+            &args![camera, target_point, UP_VECTOR],
+        );
+        let frustum_address = e.call(CAMERA_FRUSTUM_ADDRESS, &args![camera]).u32();
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        e.call(
+            RENDER_OBJECT_SET_CAMERA_DATA,
+            &args![object, frustum_address],
+        );
+        e.set_global(WADING_RENDER_ACTIVE_FLAG, 1u8);
+        e.call(CULLING_PROCESS_CONSTRUCT, &args![culling, 0u32]);
+        e.call(CULLING_PROCESS_SET_CAMERA, &args![culling, camera]);
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        fn_004e9bb0(e, object, camera);
+        let planes = e.call(CAMERA_PLANES_ADDRESS, &args![camera]).u32();
+        e.call(CULLING_PROCESS_SET_PLANES, &args![culling, planes]);
+
+        for_each_list_item(e, group_list, |e, item| {
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(item);
+            let references = group.at(PlaceableWaterGroup::PlaceableWaterList).addr();
+            for_each_list_item(e, references, |e, reference| {
+                draw_wading_reference(e, this, camera, reference);
+            });
+        });
+
+        e.call(CULLING_PROCESS_SET_CAMERA, &args![culling, 0u32]);
+        fn_004e9ce0(e, 0, 0);
+        e.set_global(WADING_RENDER_ACTIVE_FLAG, 0u8);
+        e.call(CULLING_PROCESS_DESTRUCT, &args![culling]);
+        e.call(CAMERA_DESTRUCT, &args![camera]);
+    });
+}
+
+/// One water reference of `fn_004e9550`.
+fn draw_wading_reference(e: &mut Engine, this: Ptr<TESWaterSystem>, camera: u32, reference: u32) {
+    if reference == 0 {
+        return;
+    }
+    if e.call(REFERENCE_PARENT_CELL, &args![reference]).u32() == 0 {
+        return;
+    }
+    let cell = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+    if !e.call(CELL_BYTE_IS_SIX, &args![cell]).bool() {
+        return;
+    }
+    let geometry = fn_004e8030(e, this, reference);
+    if geometry == 0 {
+        return;
+    }
+    let owner = e.call(NODE_OWNER, &args![geometry]).u32();
+    if owner == 0 || e.call(OWNER_TYPE, &args![owner]).u32() != WATER_OWNER_TYPE {
+        return;
+    }
+    let property = water_shader_property(e, geometry);
+    let saved_mask = e.get(property, WaterShaderProperty::iStencilMask);
+    e.set(property, WaterShaderProperty::iStencilMask, 1);
+    if fn_004e62e0(e, 0, reference, camera)
+        && !property.is_null()
+        && e.call(PROPERTY_RENDER_PASS, &args![property, geometry])
+            .u32()
+            != 0
+    {
+        let pass = e
+            .call(PROPERTY_RENDER_PASS, &args![property, geometry])
+            .u32();
+        let count = e.mem.u16(pass + 4) as u32;
+        e.call(
+            RENDER_PASS_IMMEDIATELY,
+            &args![pass, count, 0u32, 0u32, 0u32],
+        );
+    }
+    e.set(property, WaterShaderProperty::iStencilMask, saved_mask);
+}
+
+// Translated from 004e9bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands the camera to the render object `this` (no Xbox PDB name): its
+/// world translate, the three columns of its rotation and its two data
+/// blocks (`004a0d10` and `0045bbe0`) go to `fn_004e9c90`.
+pub fn fn_004e9bb0(e: &mut Engine, this: u32, camera: u32) {
+    e.with_stack(0x24, |e, columns| {
+        let columns = columns.addr();
+        let frustum = e.call(CAMERA_FRUSTUM_ADDRESS, &args![camera]).u32();
+        let planes = e.call(CAMERA_PLANES_ADDRESS, &args![camera]).u32();
+        let column_two = fn_004e9c50(e, camera, columns);
+        let column_one = fn_004e9c10(e, camera, columns + 0x0c);
+        let column_zero = e
+            .call(CAMERA_COLUMN_ZERO, &args![camera, columns + 0x18])
+            .u32();
+        let translate = e.call(NODE_WORLD_TRANSLATE, &args![camera]).u32();
+        fn_004e9c90(
+            e,
+            this,
+            translate,
+            column_zero,
+            column_one,
+            column_two,
+            planes,
+            frustum,
+        );
+    });
+}
+
+// Translated from 004e9c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Column 1 of the camera's rotation matrix (`this + 0x68`) into `out`
+/// (`NiMatrix3::GetCol`-style `00439f50`); returns `out`.
+pub fn fn_004e9c10(e: &mut Engine, this: u32, out: u32) -> u32 {
+    rotation_column(e, this, 1, out)
+}
+
+// Translated from 004e9c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Column 2 of the camera's rotation matrix (`this + 0x68`) into `out`;
+/// returns `out`.
+pub fn fn_004e9c50(e: &mut Engine, this: u32, out: u32) -> u32 {
+    rotation_column(e, this, 2, out)
+}
+
+/// The body of `fn_004e9c10` and `fn_004e9c50`: a local `NiPoint3` is
+/// constructed, filled by `00439f50(column, &local)` on `this + 0x68` and
+/// copied to `out`.
+fn rotation_column(e: &mut Engine, this: u32, column: u32, out: u32) -> u32 {
+    e.with_stack(0x0c, |e, local| {
+        let local = local.addr();
+        e.call(ADDRESS_OF_THIS, &args![local]);
+        e.call(MATRIX_COLUMN, &args![this + 0x68, column, local]);
+        copy_words(e, local, out, 3);
+    });
+    out
+}
+
+// Translated from 004e9c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes the camera data on (no Xbox PDB name): when the render object `this`
+/// answers `004a0e10("SetCameraData", 1)` it calls its virtual at +0x18c with
+/// the six words.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_004e9c90(
+    e: &mut Engine,
+    this: u32,
+    translate: u32,
+    column_zero: u32,
+    column_one: u32,
+    column_two: u32,
+    planes: u32,
+    frustum: u32,
+) {
+    if !e
+        .call(
+            RENDER_OBJECT_CHECK,
+            &args![this, SET_CAMERA_DATA_NAME, 1u32],
+        )
+        .bool()
+    {
+        return;
+    }
+    e.vcall(
+        this,
+        RENDER_OBJECT_SET_CAMERA_DATA_VIRTUAL,
+        &args![
+            translate,
+            column_zero,
+            column_one,
+            column_two,
+            planes,
+            frustum
+        ],
+    );
+}
+
+// Translated from 004e9ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`enabled` non-zero) or clears bit `index % 16` of the 16-bit word
+/// at `0x011f941c` (cdecl).
+pub fn fn_004e9ce0(e: &mut Engine, index: u32, enabled: u8) {
+    let bit = 1u32 << (index % 16);
+    let flags = e.global::<u16>(BIT_FLAGS_011F941C) as u32;
+    let flags = if enabled != 0 {
+        flags | bit
+    } else {
+        flags & !bit
+    };
+    e.set_global(BIT_FLAGS_011F941C, flags as u16);
+}
+
+// Translated from 004e9d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets up the reflection of one group (no Xbox PDB name; the
+/// exception-unwinding frame is not translated). Within an allocation scope
+/// of `TESWater.cpp` line `0xefb`, when `bUseWaterShader` is on and there is a
+/// `viewer` camera: makes the group's reflection camera by reflecting the
+/// viewer about the group's plane, makes the group's reflection accumulator
+/// (when it has none) and prepares it, sets its silhouette colour when the
+/// group has silhouette reflections, and fills the group's static and dynamic
+/// reflective object lists (the sky, the land LOD children of the loaded
+/// grid, the terrain objects, the objects the group's water references
+/// reflect, the explosions) as the form flags of the water references and the
+/// INI settings ask. `low_detail` (the caller passes 0 for high detail
+/// reflections or in an interior) keeps the land, reflected references and
+/// the object lists of the whole reference list out. The task is then handed
+/// to the multithreaded renderer.
+pub fn fn_004e9d40(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+    low_detail: bool,
+) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            ALLOCATION_SCOPE_CONSTRUCT,
+            &args![
+                scope,
+                0x1du32,
+                1u32,
+                TESWATER_SOURCE_PATH,
+                REFLECTION_SCOPE_LINE_GROUP
+            ],
+        );
+        setup_group_reflections(e, this, viewer, group, low_detail);
+        e.call(ALLOCATION_SCOPE_DESTRUCT, &args![scope]);
+    });
+}
+
+/// The body of `fn_004e9d40`.
+fn setup_group_reflections(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+    low_detail: bool,
+) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || viewer == 0 {
+        return;
+    }
+    let camera_slot = address_of(group, PlaceableWaterGroup::spReflectionCamera);
+    let sorter_slot = address_of(group, PlaceableWaterGroup::spGroupReflectionSorter);
+    assign_new_camera(e, camera_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+    e.call(REFLECT_CAMERA_ABOUT_PLANE, &args![viewer, plane, camera]);
+    if pointer_in_slot(e, sorter_slot) == 0 {
+        assign_new_accumulator(e, sorter_slot);
+    }
+    prepare_accumulator(e, sorter_slot, camera_slot);
+    if e.get(group, PlaceableWaterGroup::bRenderSilhouetteReflections) {
+        set_silhouette_color(e, sorter_slot);
+    }
+
+    let static_objects = group
+        .at(PlaceableWaterGroup::StaticReflectiveObjects)
+        .addr();
+    let dynamic_objects = group
+        .at(PlaceableWaterGroup::DynamicReflectiveObjects)
+        .addr();
+    e.call(LIST_REMOVE_ALL, &args![static_objects]);
+    e.call(LIST_REMOVE_ALL, &args![dynamic_objects]);
+    let references = group.at(PlaceableWaterGroup::PlaceableWaterList).addr();
+    let reflected_refs_map = address_of(this, TESWaterSystem::ReflectionRefMap);
+    let mut sky_added = false;
+    let mut land_added = false;
+    let mut terrain_a_added = false;
+    let mut terrain_b_added = false;
+    let mut terrain_c_added = false;
+    e.with_stack(4, |e, position_slot| {
+        let position_slot = position_slot.addr();
+        let first = pointer_in_slot(e, references);
+        e.mem.set_u32(position_slot, first);
+        while e.mem.u32(position_slot) != 0 {
+            let item = e
+                .call(LIST_NEXT_ITEM, &args![references, position_slot])
+                .u32();
+            let reference = e.mem.u32(item);
+            let base_form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+            if reference == 0 {
+                continue;
+            }
+            // Which references count: a reference in a cell of kind 6, or one
+            // whose base form has the flag `0x08000000` outside interiors.
+            let cell = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+            let cell_kind_six = cell != 0 && {
+                let cell = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+                e.call(CELL_BYTE_IS_SIX, &args![cell]).bool()
+            };
+            if !cell_kind_six && (base_form == 0 || !fn_004e32c0(e, base_form) || in_interior(e)) {
+                continue;
+            }
+            let geometry = fn_004e8030(e, this, reference);
+            let mut property = 0;
+            if geometry != 0 {
+                let candidate = e.call(NODE_GET_PROPERTY, &args![geometry, 3u32]).u32();
+                if e.call(IS_KIND_OF, &args![WATER_SHADER_PROPERTY_RTTI, candidate])
+                    .bool()
+                {
+                    property = candidate;
+                }
+            }
+            if property == 0 {
+                continue;
+            }
+            e.call(
+                NI_POINTER_ASSIGN_FROM,
+                &args![
+                    property + WaterShaderProperty::spReflectionMap.off,
+                    address_of(group, PlaceableWaterGroup::spGroupReflectionMap)
+                ],
+            );
+
+            if base_form != 0 && fn_004ea930(e, base_form) && !sky_added {
+                sky_added = true;
+                let tes = e.global::<u32>(TES_POINTER);
+                let sky = e.call(TES_GET_SKY, &args![tes]).u32();
+                let sky_objects = e.call(SKY_OBJECT_POINTER, &args![sky]).u32();
+                list_add_head(e, static_objects, sky_objects);
+            }
+
+            if !low_detail
+                && (setting_flag(e, SETTING_FORCE_HIGH_DETAIL_LAND_REFLECTIONS)
+                    || (base_form != 0
+                        && fn_004ea8b0(e, base_form)
+                        && !land_added
+                        && !in_interior(e)))
+            {
+                land_added = true;
+                let mut x = 0;
+                while x < setting_int(e, SETTING_GRID_SIZE) {
+                    let mut y = 0;
+                    while y < setting_int(e, SETTING_GRID_SIZE) {
+                        let tes = e.global::<u32>(TES_POINTER);
+                        let slot = e.call(TES_GRID_CELL_SLOT, &args![tes, x, y]).u32();
+                        let grid_cell = e.mem.u32(slot);
+                        if grid_cell != 0 {
+                            for index in 0..4u32 {
+                                let grid_cell = e.mem.u32(slot);
+                                let child = e.call(CELL_NODE_CHILD, &args![grid_cell, index]).u32();
+                                list_add_head(e, static_objects, child);
+                            }
+                        }
+                        y += 1;
+                    }
+                    x += 1;
+                }
+            }
+
+            if current_world_space(e) != 0 {
+                let world_space = current_world_space(e);
+                let terrain = e
+                    .call(WORLD_SPACE_GET_TERRAIN_MANAGER, &args![world_space])
+                    .u32();
+                if terrain != 0 {
+                    let terrain_ready = e.call(TERRAIN_READY, &[]).bool();
+                    if !in_interior(e) && terrain_ready {
+                        e.call(TERRAIN_STEP_FIRST, &[]);
+                        if base_form != 0 && fn_004ea8d0(e, base_form) && !terrain_a_added {
+                            terrain_a_added = true;
+                            add_terrain_object(e, terrain, fn_004ea9a0, static_objects);
+                        }
+                        e.call(TERRAIN_STEP_SECOND, &[]);
+                        if base_form != 0 && fn_004ea8f0(e, base_form) && !terrain_b_added {
+                            terrain_b_added = true;
+                            add_terrain_object(e, terrain, fn_004ea9c0, static_objects);
+                        }
+                        if base_form != 0 && fn_004ea910(e, base_form) && !terrain_c_added {
+                            terrain_c_added = true;
+                            add_terrain_object(e, terrain, fn_004ea9e0, static_objects);
+                        }
+                    }
+                }
+            }
+
+            if !low_detail && fn_004e62e0(e, this.addr(), reference, viewer) {
+                let extra_data = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+                let mut reflected = e
+                    .call(EXTRA_DATA_LIST_GET_REFLECTED_REFS, &args![extra_data])
+                    .u32();
+                while reflected != 0 && !e.call(WORDS_ARE_ZERO, &args![reflected]).bool() {
+                    let entry = e.call(ADDRESS_OF_THIS, &args![reflected]).u32();
+                    let data = e.mem.u32(entry);
+                    if e.mem.u32(data + 4) & 1 != 0 {
+                        let entry = e.call(ADDRESS_OF_THIS, &args![reflected]).u32();
+                        let data = e.mem.u32(entry);
+                        let object = e.mem.u32(data);
+                        add_reflected_reference(
+                            e,
+                            reflected_refs_map,
+                            static_objects,
+                            object,
+                            true,
+                        );
+                    }
+                    reflected = e.call(NODE_NEXT, &args![reflected]).u32();
+                }
+            }
+
+            if !in_interior(e)
+                && !low_detail
+                && base_form != 0
+                && e.call(FORM_FLAG_TEST_40000000, &args![base_form]).bool()
+            {
+                let mut node = fn_004e3260(e);
+                while node != 0 && !e.call(WORDS_ARE_ZERO, &args![node]).bool() {
+                    let entry = e.call(ADDRESS_OF_THIS, &args![node]).u32();
+                    let object = e.mem.u32(entry);
+                    if object != 0 {
+                        add_reflected_reference(
+                            e,
+                            reflected_refs_map,
+                            static_objects,
+                            object,
+                            false,
+                        );
+                    }
+                    node = e.call(NODE_NEXT, &args![node]).u32();
+                }
+            }
+        }
+    });
+
+    if setting_flag(e, SETTING_REFLECT_EXPLOSIONS) {
+        // Only the first explosion is looked at (the game's loop has no
+        // second iteration).
+        let position = pointer_in_slot(e, EXPLOSIONS_LIST);
+        let _next = e
+            .call(LIST_NEXT_POSITION, &args![EXPLOSIONS_LIST, position])
+            .u32();
+        if position != 0 {
+            let slot = e
+                .call(LIST_ITEM_SLOT, &args![EXPLOSIONS_LIST, position])
+                .u32();
+            let explosion = e.mem.u32(slot);
+            if reference_node(e, explosion) != 0 {
+                let found = e.with_stack(4, |e, out| {
+                    e.mem.set_u32(out.addr(), explosion);
+                    e.call(WADING_MAP_GET, &args![reflected_refs_map, explosion, out])
+                        .bool()
+                });
+                if !found {
+                    let node = reference_node(e, explosion);
+                    list_add_head(e, dynamic_objects, node);
+                    e.call(MAP_SET_AT, &args![reflected_refs_map, explosion, explosion]);
+                }
+            }
+        }
+    }
+
+    let stage = e.get(group, PlaceableWaterGroup::iReflectionThreadStage);
+    add_accumulator_task(
+        e,
+        camera_slot,
+        static_objects,
+        dynamic_objects,
+        sorter_slot,
+        stage.wrapping_add(1),
+    );
+}
+
+/// Adds the 3D object of a terrain accessor's result (`fn_004ea9a0`,
+/// `fn_004ea9c0` or `fn_004ea9e0` on the terrain manager) to `list`, when
+/// the current cell is not an interior, there is a world space and the
+/// result is not null.
+fn add_terrain_object(
+    e: &mut Engine,
+    terrain: u32,
+    accessor: fn(&mut Engine, u32) -> u32,
+    list: u32,
+) {
+    if in_interior(e) || current_world_space(e) == 0 {
+        return;
+    }
+    if accessor(e, terrain) == 0 {
+        return;
+    }
+    let object = accessor(e, terrain);
+    list_add_head(e, list, object);
+}
+
+/// A reflected reference of `fn_004e9d40`: when it has a 3D object and
+/// `ReflectionRefMap` does not have it yet, its 3D object goes to `list` and
+/// the reference into the map. Outside interiors the references `00564e60`
+/// excludes are left out; `interior_kept` makes the game's first group of
+/// callers keep every reference in an interior (it tests the interior first
+/// and again before the exclusion test), the second group tests the exclusion
+/// only.
+fn add_reflected_reference(e: &mut Engine, map: u32, list: u32, object: u32, interior_kept: bool) {
+    if reference_node(e, object) == 0 {
+        return;
+    }
+    let found = e.with_stack(4, |e, out| {
+        e.mem.set_u32(out.addr(), object);
+        e.call(WADING_MAP_GET, &args![map, object, out]).bool()
+    });
+    if found {
+        return;
+    }
+    if interior_kept {
+        if !in_interior(e) {
+            if in_interior(e) {
+                return;
+            }
+            if e.call(REFERENCE_IS_EXCLUDED, &args![object]).bool() {
+                return;
+            }
+        }
+    } else if e.call(REFERENCE_IS_EXCLUDED, &args![object]).bool() {
+        return;
+    }
+    let node = reference_node(e, object);
+    list_add_head(e, list, node);
+    e.call(MAP_SET_AT, &args![map, object, object]);
+}
+
+// Translated from 004ea860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `this + 0x164` (of a `BSShaderAccumulator`;
+/// no Xbox PDB name).
+pub fn fn_004ea860(e: &mut Engine, this: u32, value: u8) {
+    e.mem.set_u8(this + 0x164, value);
+}
+
+// Translated from 004ea880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the four words at `color` to `this + 0x154` (of a
+/// `BSShaderAccumulator`; no Xbox PDB name).
+pub fn fn_004ea880(e: &mut Engine, this: u32, color: u32) {
+    copy_words(e, color, this + 0x154, 4);
+}
+
+// Translated from 004ea8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `4` is set in the form flags.
+pub fn fn_004ea8b0(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0004)
+}
+
+// Translated from 004ea8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `8` is set in the form flags.
+pub fn fn_004ea8d0(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0008)
+}
+
+// Translated from 004ea8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x10` is set in the form flags.
+pub fn fn_004ea8f0(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0010)
+}
+
+// Translated from 004ea910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x20` is set in the form flags.
+pub fn fn_004ea910(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0020)
+}
+
+// Translated from 004ea930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x40` is set in the form flags.
+pub fn fn_004ea930(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0040)
+}
+
+// Translated from 004ea950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the member at `this + 0x60` (the `Sky`'s three floats the
+/// silhouette colour starts from).
+pub fn fn_004ea950(_e: &mut Engine, this: u32) -> u32 {
+    this + 0x60
+}
+
+// Translated from 004ea970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the multithreaded rendering system's static object,
+/// `0x01200088`.
+pub fn fn_004ea970(_e: &mut Engine) -> u32 {
+    MT_RENDERING_SYSTEM
+}
+
+// Translated from 004ea980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPointer` member at `this + 0x134`, through `00559450`.
+pub fn fn_004ea980(e: &mut Engine, this: u32) -> u32 {
+    pointer_in_slot(e, this + 0x134)
+}
+
+// Translated from 004ea9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPointer` static at `0x011d86a8`, through `00559450`. `this` is not
+/// read.
+pub fn fn_004ea9a0(e: &mut Engine, _unused_0: u32) -> u32 {
+    pointer_in_slot(e, TERRAIN_POINTER_A)
+}
+
+// Translated from 004ea9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPointer` static at `0x011d8690`, through `00559450`. `this` is not
+/// read.
+pub fn fn_004ea9c0(e: &mut Engine, _unused_0: u32) -> u32 {
+    pointer_in_slot(e, TERRAIN_POINTER_B)
+}
+
+// Translated from 004ea9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiPointer` static at `0x011d86bc`, through `00559450`. `this` is not
+/// read.
+pub fn fn_004ea9e0(e: &mut Engine, _unused_0: u32) -> u32 {
+    pointer_in_slot(e, TERRAIN_POINTER_C)
+}
+
+// Translated from 004eaa00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `UpdatePlaceableWater`'s world reflection setup (no Xbox PDB name; the
+/// exception-unwinding frame is not translated). Within an allocation scope
+/// of `TESWater.cpp` line `0xfe3`, when `bUseWaterShader` is on and there is
+/// a `viewer`: makes the world reflection camera by reflecting the viewer
+/// about the plane through the world space's water height, makes the world
+/// reflection accumulator (when it has none) and prepares it, sets the
+/// silhouette colour when `bAutoWaterSilhouetteReflections` or
+/// `bForceLowDetailReflections` is on, and fills the static and dynamic world
+/// object lists: with `bForceHighDetailReflections` the player's 3D object is
+/// culled (and `bCull3rdPerson` set) when the player is in third person and
+/// the `NiPointer` at `0x011deb7c` is added; otherwise the sky's objects and
+/// the terrain objects are. The task goes to the multithreaded renderer with
+/// the world reflection thread stage plus one.
+pub fn fn_004eaa00(e: &mut Engine, this: Ptr<TESWaterSystem>, viewer: u32) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            ALLOCATION_SCOPE_CONSTRUCT,
+            &args![
+                scope,
+                0x1du32,
+                1u32,
+                TESWATER_SOURCE_PATH,
+                REFLECTION_SCOPE_LINE_WORLD
+            ],
+        );
+        setup_world_reflections(e, this, viewer);
+        e.call(ALLOCATION_SCOPE_DESTRUCT, &args![scope]);
+    });
+}
+
+/// The body of `fn_004eaa00`.
+fn setup_world_reflections(e: &mut Engine, this: Ptr<TESWaterSystem>, viewer: u32) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || viewer == 0 {
+        return;
+    }
+    assign_new_camera(e, WORLD_REFLECTION_CAMERA);
+    e.with_stack(0x34, |e, scratch| {
+        let scratch = scratch.addr();
+        build_world_water_plane(e, scratch, scratch + 0x10, scratch + 0x1c);
+        let camera = pointer_in_slot(e, WORLD_REFLECTION_CAMERA);
+        e.call(REFLECT_CAMERA_ABOUT_PLANE, &args![viewer, scratch, camera]);
+    });
+    if pointer_in_slot(e, WORLD_REFLECTION_SORTER) == 0 {
+        assign_new_accumulator(e, WORLD_REFLECTION_SORTER);
+    }
+    prepare_accumulator(e, WORLD_REFLECTION_SORTER, WORLD_REFLECTION_CAMERA);
+    if setting_flag(e, SETTING_AUTO_SILHOUETTE_REFLECTIONS)
+        || setting_flag(e, SETTING_FORCE_LOW_DETAIL_REFLECTIONS)
+    {
+        set_silhouette_color(e, WORLD_REFLECTION_SORTER);
+    }
+    e.call(LIST_REMOVE_ALL, &args![STATIC_WORLD_REFLECTIVE_OBJECTS]);
+    e.call(LIST_REMOVE_ALL, &args![DYNAMIC_WORLD_REFLECTIVE_OBJECTS]);
+    let static_objects = STATIC_WORLD_REFLECTIVE_OBJECTS;
+    if setting_flag(e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS) {
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        if fn_004eaf60(e, player) == 0 {
+            e.set(this, TESWaterSystem::bCull3rdPerson, true);
+            let node = reference_node(e, player);
+            e.call(NODE_SET_CULLED, &args![node, 1u32]);
+        }
+        if current_world_space(e) != 0 {
+            let object = e.call(POINTER_STATIC_011DEB7C, &[]).u32();
+            list_add_head(e, static_objects, object);
+        }
+    } else {
+        let tes = e.global::<u32>(TES_POINTER);
+        let sky = e.call(TES_GET_SKY, &args![tes]).u32();
+        let sky_objects = e.call(SKY_OBJECT_POINTER, &args![sky]).u32();
+        list_add_head(e, static_objects, sky_objects);
+        if current_world_space(e) != 0 {
+            let world_space = current_world_space(e);
+            let terrain = e
+                .call(WORLD_SPACE_GET_TERRAIN_MANAGER, &args![world_space])
+                .u32();
+            if terrain != 0 {
+                let terrain_ready = e.call(TERRAIN_READY, &[]).bool();
+                if !in_interior(e) && terrain_ready {
+                    e.call(TERRAIN_STEP_FIRST, &[]);
+                    add_terrain_object(e, terrain, fn_004ea9a0, static_objects);
+                    e.call(TERRAIN_STEP_SECOND, &[]);
+                    add_terrain_object(e, terrain, fn_004ea9c0, static_objects);
+                    add_terrain_object(e, terrain, fn_004ea9e0, static_objects);
+                }
+            }
+        }
+    }
+    let stage = e.global::<i32>(WORLD_REFLECTION_THREAD_STAGE);
+    add_accumulator_task(
+        e,
+        WORLD_REFLECTION_CAMERA,
+        STATIC_WORLD_REFLECTIVE_OBJECTS,
+        DYNAMIC_WORLD_REFLECTIVE_OBJECTS,
+        WORLD_REFLECTION_SORTER,
+        stage.wrapping_add(1),
+    );
+}
+
+// Translated from 004eaf60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `this + 0x64a` (of the player; the world reflection setup
+/// culls the player's 3D object when it is clear).
+pub fn fn_004eaf60(e: &mut Engine, this: u32) -> u8 {
+    e.mem.u8(this + 0x64a)
+}
+
+// Translated from 004eaf80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `UpdatePlaceableWater`'s sky reflection setup (no Xbox PDB name; the
+/// exception-unwinding frame is not translated): `fn_004eaa00` for the sky
+/// camera, accumulator and lists, within the allocation scope of
+/// `TESWater.cpp` line `0x1054`, without silhouette colour, with only the
+/// sky's objects in the static list and with the sky reflection thread
+/// stage plus one.
+pub fn fn_004eaf80(e: &mut Engine, _unused_0: u32, viewer: u32) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            ALLOCATION_SCOPE_CONSTRUCT,
+            &args![
+                scope,
+                0x1du32,
+                1u32,
+                TESWATER_SOURCE_PATH,
+                REFLECTION_SCOPE_LINE_SKY
+            ],
+        );
+        setup_sky_reflections(e, viewer);
+        e.call(ALLOCATION_SCOPE_DESTRUCT, &args![scope]);
+    });
+}
+
+/// The body of `fn_004eaf80`.
+fn setup_sky_reflections(e: &mut Engine, viewer: u32) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || viewer == 0 {
+        return;
+    }
+    assign_new_camera(e, SKY_REFLECTION_CAMERA);
+    e.with_stack(0x34, |e, scratch| {
+        let scratch = scratch.addr();
+        build_world_water_plane(e, scratch, scratch + 0x10, scratch + 0x1c);
+        let camera = pointer_in_slot(e, SKY_REFLECTION_CAMERA);
+        e.call(REFLECT_CAMERA_ABOUT_PLANE, &args![viewer, scratch, camera]);
+    });
+    if pointer_in_slot(e, SKY_REFLECTION_SORTER) == 0 {
+        assign_new_accumulator(e, SKY_REFLECTION_SORTER);
+    }
+    prepare_accumulator(e, SKY_REFLECTION_SORTER, SKY_REFLECTION_CAMERA);
+    e.call(LIST_REMOVE_ALL, &args![STATIC_SKY_REFLECTIVE_OBJECTS]);
+    e.call(LIST_REMOVE_ALL, &args![DYNAMIC_SKY_REFLECTIVE_OBJECTS]);
+    let tes = e.global::<u32>(TES_POINTER);
+    let sky = e.call(TES_GET_SKY, &args![tes]).u32();
+    let sky_objects = e.call(SKY_OBJECT_POINTER, &args![sky]).u32();
+    list_add_head(e, STATIC_SKY_REFLECTIVE_OBJECTS, sky_objects);
+    let stage = e.global::<i32>(SKY_REFLECTION_THREAD_STAGE);
+    add_accumulator_task(
+        e,
+        SKY_REFLECTION_CAMERA,
+        STATIC_SKY_REFLECTIVE_OBJECTS,
+        DYNAMIC_SKY_REFLECTIVE_OBJECTS,
+        SKY_REFLECTION_SORTER,
+        stage.wrapping_add(1),
+    );
+}
+
+// Translated from 004eb220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finishes the reflection of a group in an interior (no Xbox PDB name; the
+/// exception-unwinding frame is not translated). Within an allocation scope
+/// of `TESWater.cpp` line `0x1082`, when `bUseWaterShader` is on and the group
+/// has a reflection camera: clears the renderer's clear-colour alpha, creates
+/// the group's reflection texture when it has none, stops the offscreen
+/// render of it into render-target mode 7, hands the camera to the render
+/// object, runs `fn_004ecef0` with the reflection plane (its normal and the
+/// negated constant), draws the group's accumulated scene, resets the render
+/// target, restores the clear colour and drops the camera.
+pub fn fn_004eb220(e: &mut Engine, this: Ptr<TESWaterSystem>, group: Ptr<PlaceableWaterGroup>) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            ALLOCATION_SCOPE_CONSTRUCT,
+            &args![
+                scope,
+                0x1du32,
+                1u32,
+                TESWATER_SOURCE_PATH,
+                REFLECTION_SCOPE_LINE_FINISH
+            ],
+        );
+        finish_group_interior(e, this, group);
+        e.call(ALLOCATION_SCOPE_DESTRUCT, &args![scope]);
+    });
+}
+
+/// The body of `fn_004eb220`.
+fn finish_group_interior(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() {
+        return;
+    }
+    let camera_slot = address_of(group, PlaceableWaterGroup::spReflectionCamera);
+    if pointer_in_slot(e, camera_slot) == 0 {
+        return;
+    }
+    let map_slot = address_of(group, PlaceableWaterGroup::spGroupReflectionMap);
+    let sorter_slot = address_of(group, PlaceableWaterGroup::spGroupReflectionSorter);
+    e.with_stack(0x20, |e, colors| {
+        let colors = colors.addr();
+        let original = colors;
+        let transparent = colors + 0x10;
+        e.call(
+            NI_POINT4_CONSTRUCT,
+            &args![original, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+        );
+        let renderer = e.call(RENDERER, &[]).u32();
+        e.vcall(renderer, RENDERER_GET_CLEAR_COLOR, &args![original]);
+        copy_words(e, original, transparent, 4);
+        e.mem.set_f32(transparent + 12, 0.0);
+        let renderer = e.call(RENDERER, &[]).u32();
+        e.vcall(renderer, RENDERER_SET_CLEAR_COLOR, &args![transparent]);
+
+        if pointer_in_slot(e, map_slot) == 0 {
+            let renderer = e.call(RENDERER, &[]).u32();
+            let manager = e.call(TEXTURE_MANAGER, &[]).u32();
+            let texture = e
+                .call(
+                    CREATE_RENDERED_TEXTURE,
+                    &args![manager, renderer, 9u32, 0u32, 0u32, 0u32],
+                )
+                .u32();
+            assign_slot(e, map_slot, texture);
+        }
+        let terrain_ready = e.call(TERRAIN_READY, &[]).bool();
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ONE, &[]);
+        }
+        let texture = pointer_in_slot(e, map_slot);
+        let stopped = e.call(RENDERED_TEXTURE_STOP, &args![texture]).u32();
+        e.call(RENDER_TARGET_SET, &args![7u32, stopped]);
+        let camera = pointer_in_slot(e, camera_slot);
+        let frustum = e.call(CAMERA_FRUSTUM_ADDRESS, &args![camera]).u32();
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        e.call(RENDER_OBJECT_SET_CAMERA_DATA, &args![object, frustum]);
+        let stage = e
+            .get(group, PlaceableWaterGroup::iReflectionThreadStage)
+            .wrapping_add(1);
+        let renderer = fn_004ea970(e);
+        e.call(MT_SET_THREAD_STAGE_ONE, &args![renderer, 1u32, stage]);
+        let camera = pointer_in_slot(e, camera_slot);
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        fn_004e9bb0(e, object, camera);
+
+        let plane = group.at(PlaceableWaterGroup::ReflectWaterPlane).addr();
+        let constant = plane_constant(e, plane);
+        let negated = -constant;
+        let normal_z = {
+            let normal = e.call(ADDRESS_OF_THIS, &args![plane]).u32();
+            e.mem.f32(normal + 8)
+        };
+        let normal_y = {
+            let normal = e.call(ADDRESS_OF_THIS, &args![plane]).u32();
+            e.mem.f32(normal + 4)
+        };
+        let normal_x = {
+            let normal = e.call(ADDRESS_OF_THIS, &args![plane]).u32();
+            e.mem.f32(normal)
+        };
+        e.with_stack(0x10, |e, vector| {
+            let vector = vector.addr();
+            e.call(
+                NI_POINT4_CONSTRUCT,
+                &args![vector, normal_x, normal_y, normal_z, negated],
+            );
+            let words: Vec<u32> = (0..4).map(|i| e.mem.u32(vector + 4 * i)).collect();
+            e.call(
+                REFLECTION_PLANE_SETUP,
+                &args![this, words[0], words[1], words[2], words[3], 0u32],
+            );
+        });
+        e.call(
+            RENDER_STATE_SET,
+            &args![1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+        );
+        let sorter = pointer_in_slot(e, sorter_slot);
+        let camera = pointer_in_slot(e, camera_slot);
+        e.call(RENDER_ACCUMULATED_SCENE, &args![camera, sorter, 0u32]);
+        fn_004eb510(e, 0);
+        e.call(RENDER_TARGET_RESET, &[]);
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ZERO, &[]);
+        }
+        let renderer = e.call(RENDERER, &[]).u32();
+        e.vcall(renderer, RENDERER_SET_CLEAR_COLOR, &args![original]);
+        assign_slot(e, camera_slot, 0);
+    });
+}
+
+// Translated from 004eb510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers the word at `0x011ffa14` by `amount`, then makes the render state
+/// call `00b98280(0, 0, 0, 0, 0, 0, 0)` (cdecl).
+pub fn fn_004eb510(e: &mut Engine, amount: u32) {
+    let counter = e.global::<u32>(COUNTER_011FFA14);
+    e.set_global(COUNTER_011FFA14, counter.wrapping_sub(amount));
+    e.call(
+        RENDER_STATE_SET,
+        &args![0u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4381,6 +6643,67 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_water_system_create_quad_data(u32, f32, f32, u32, u32, bool, bool) -> u32
         ),
         entry!(0x004e7ff0, fn_004e7ff0() -> u32),
+        entry!(0x004e8000, fn_004e8000()),
+        entry!(0x004e8030, fn_004e8030(Ptr<TESWaterSystem>, u32) -> u32),
+        entry!(
+            0x004e8160,
+            fn_004e8160(Ptr<TESWaterSystem>, Ptr<PlaceableWaterGroup>, u32, f32) -> u32
+        ),
+        entry!(
+            0x004e83e0,
+            fn_004e83e0(u32, Ptr<PlaceableWaterGroup>) -> bool
+        ),
+        entry!(
+            0x004e8510,
+            tes_water_system_add_ripple(Ptr<TESWaterSystem>, f32, f32, f32, f32)
+        ),
+        entry!(0x004e8880, fn_004e8880(u32, u32, u32) -> u32),
+        entry!(0x004e88d0, fn_004e88d0(u32, u32) -> u32),
+        entry!(0x004e8910, fn_004e8910(u32, u32) -> u32),
+        entry!(0x004e8950, fn_004e8950(Ptr<TESWaterSystem>) -> bool),
+        entry!(0x004e89e0, fn_004e89e0() -> u8),
+        entry!(0x004e8a00, fn_004e8a00(Ptr<TESWaterSystem>)),
+        entry!(
+            0x004e8e40,
+            fn_004e8e40(Ptr<WadingWaterData>) -> Ptr<WadingWaterData>
+        ),
+        entry!(
+            0x004e8ec0,
+            tes_water_system_update_water_displacement_simulation(Ptr<TESWaterSystem>)
+        ),
+        entry!(0x004e9510, fn_004e9510() -> bool),
+        entry!(0x004e9530, fn_004e9530(u32) -> u32),
+        entry!(0x004e9550, fn_004e9550(Ptr<TESWaterSystem>)),
+        entry!(0x004e9bb0, fn_004e9bb0(u32, u32)),
+        entry!(0x004e9c10, fn_004e9c10(u32, u32) -> u32),
+        entry!(0x004e9c50, fn_004e9c50(u32, u32) -> u32),
+        entry!(0x004e9c90, fn_004e9c90(u32, u32, u32, u32, u32, u32, u32)),
+        entry!(0x004e9ce0, fn_004e9ce0(u32, u8)),
+        entry!(
+            0x004e9d40,
+            fn_004e9d40(Ptr<TESWaterSystem>, u32, Ptr<PlaceableWaterGroup>, bool)
+        ),
+        entry!(0x004ea860, fn_004ea860(u32, u8)),
+        entry!(0x004ea880, fn_004ea880(u32, u32)),
+        entry!(0x004ea8b0, fn_004ea8b0(u32) -> bool),
+        entry!(0x004ea8d0, fn_004ea8d0(u32) -> bool),
+        entry!(0x004ea8f0, fn_004ea8f0(u32) -> bool),
+        entry!(0x004ea910, fn_004ea910(u32) -> bool),
+        entry!(0x004ea930, fn_004ea930(u32) -> bool),
+        entry!(0x004ea950, fn_004ea950(u32) -> u32),
+        entry!(0x004ea970, fn_004ea970() -> u32),
+        entry!(0x004ea980, fn_004ea980(u32) -> u32),
+        entry!(0x004ea9a0, fn_004ea9a0(u32) -> u32),
+        entry!(0x004ea9c0, fn_004ea9c0(u32) -> u32),
+        entry!(0x004ea9e0, fn_004ea9e0(u32) -> u32),
+        entry!(0x004eaa00, fn_004eaa00(Ptr<TESWaterSystem>, u32)),
+        entry!(0x004eaf60, fn_004eaf60(u32) -> u8),
+        entry!(0x004eaf80, fn_004eaf80(u32, u32)),
+        entry!(
+            0x004eb220,
+            fn_004eb220(Ptr<TESWaterSystem>, Ptr<PlaceableWaterGroup>)
+        ),
+        entry!(0x004eb510, fn_004eb510(u32)),
     ]
 }
 
@@ -6186,11 +8509,11 @@ mod tests {
     mod second_session {
         use super::*;
 
-        fn word(value: f32) -> u32 {
+        pub(super) fn word(value: f32) -> u32 {
             value.to_bits()
         }
 
-        fn float_arg(a: &[u32], index: usize) -> f32 {
+        pub(super) fn float_arg(a: &[u32], index: usize) -> f32 {
             f32::from_bits(a[index])
         }
 
@@ -6208,22 +8531,22 @@ mod tests {
 
         // Fields of the test reference (the doubles read them).
         /// The 3D node `Get3D` returns.
-        const REF_NODE: u32 = 0x90;
+        pub(super) const REF_NODE: u32 = 0x90;
         /// The node `004e8030` returns.
-        const REF_WATER_NODE: u32 = 0x94;
+        pub(super) const REF_WATER_NODE: u32 = 0x94;
         /// Answer of `IsActor`.
-        const REF_IS_ACTOR: u32 = 0x9c;
+        pub(super) const REF_IS_ACTOR: u32 = 0x9c;
         /// Answer of the `+0x160` virtual.
-        const REF_SKIP_ADJUST: u32 = 0xa0;
+        pub(super) const REF_SKIP_ADJUST: u32 = 0xa0;
         /// Set by `Set3D`: the node and the flag.
-        const REF_SET_3D_NODE: u32 = 0xa4;
-        const REF_SET_3D_FLAG: u32 = 0xa8;
+        pub(super) const REF_SET_3D_NODE: u32 = 0xa4;
+        pub(super) const REF_SET_3D_FLAG: u32 = 0xa8;
         /// The location `GetLocationOnReference` returns (a point inside the
         /// object).
-        const REF_LOCATION: u32 = 0xb0;
+        pub(super) const REF_LOCATION: u32 = 0xb0;
         /// The base form, the cell (at +0x20 and +0x40 as in `water_engine`).
-        const REF_BASE_FORM: u32 = 0x20;
-        const REF_CELL: u32 = 0x40;
+        pub(super) const REF_BASE_FORM: u32 = 0x20;
+        pub(super) const REF_CELL: u32 = 0x40;
         /// The form flags and water form of the test base form.
         const FORM_FLAGS: u32 = BASE_FORM_FLAGS;
         const FORM_WATER: u32 = BASE_FORM_WATER_FORM;
@@ -6380,7 +8703,7 @@ mod tests {
 
         /// The engine for this batch: the shared doubles of the first
         /// session plus math, list and reference-virtual doubles.
-        fn engine() -> Engine {
+        pub(super) fn engine() -> Engine {
             let mut e = water_engine();
             // `water_engine` stands in for the range test (`004e62e0`); the real
             // one is under test here.
@@ -6470,14 +8793,14 @@ mod tests {
         }
 
         /// A reference with the second vtable, its base form, no node.
-        fn reference(e: &mut Engine) -> u32 {
+        pub(super) fn reference(e: &mut Engine) -> u32 {
             let reference = object(e, REFERENCE2_VTABLE, 0x100);
             let base_form = object(e, BASE_FORM_VTABLE, 0x40);
             e.mem.set_u32(reference + REF_BASE_FORM, base_form);
             reference
         }
 
-        fn node(e: &mut Engine) -> u32 {
+        pub(super) fn node(e: &mut Engine) -> u32 {
             let node = object(e, NODE2_VTABLE, 0x200);
             // World translate (+0x8c) and rotation (+0x68, identity).
             for i in 0..9 {
@@ -6489,7 +8812,7 @@ mod tests {
 
         /// A water group at `height` with the up normal and `water_type`,
         /// not yet in any list.
-        fn group(e: &mut Engine, height: f32, water_type: u32) -> u32 {
+        pub(super) fn group(e: &mut Engine, height: f32, water_type: u32) -> u32 {
             let group = e.mem.alloc(0xb0);
             e.mem.set_u32(group, water_type);
             e.mem.set_f32(group + 0x04 + 8, 1.0);
@@ -6497,7 +8820,7 @@ mod tests {
             group
         }
 
-        fn list_items(e: &Engine, list: u32) -> Vec<u32> {
+        pub(super) fn list_items(e: &Engine, list: u32) -> Vec<u32> {
             let mut items = vec![];
             let mut node = e.mem.u32(list);
             while node != 0 {
@@ -6720,7 +9043,7 @@ mod tests {
         }
 
         /// Registers doubles that do nothing and return 0.
-        fn quiet(e: &mut Engine, addresses: &[u32]) {
+        pub(super) fn quiet(e: &mut Engine, addresses: &[u32]) {
             for address in addresses {
                 e.register(*address, |_, _| Ret::default());
             }
@@ -8616,12 +10939,12 @@ mod tests {
 
         // --- CreateQuadData --------------------------------------------------
 
-        struct Quad {
-            e: Engine,
+        pub(super) struct Quad {
+            pub(super) e: Engine,
         }
 
         /// The doubles for the allocations and constructors of the quad.
-        fn quad() -> Quad {
+        pub(super) fn quad() -> Quad {
             let mut e = engine();
             e.register(ALLOCATION_SCOPE_CONSTRUCT, |_, a| ret(a[0]));
             quiet(
@@ -8861,6 +11184,2353 @@ mod tests {
                 q.floats(uvs, 8),
                 vec![2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 2.0, 2.0]
             );
+        }
+    }
+
+    /// The tests of the functions from `004e8000` on (third session).
+    mod third_session {
+        use super::second_session::{
+            float_arg, group, list_items, node, quad, quiet, reference, REF_BASE_FORM, REF_CELL,
+            REF_LOCATION, REF_NODE,
+        };
+        use super::*;
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use std::rc::Rc;
+
+        const ACTOR_VTABLE: u32 = 0x0200_9000;
+        const NOT_A_NODE_VTABLE: u32 = 0x0200_a000;
+        const ACTOR_SKIP_DOUBLE: u32 = 0x0300_0201;
+        const NOT_A_NODE_DOUBLE: u32 = 0x0300_0202;
+        const ACTOR_LOCATION_DOUBLE: u32 = 0x0300_0203;
+        const GREY_TEXTURE: u32 = 0x0e00_0001;
+        const RENDER_OBJECT_VTABLE: u32 = 0x0200_b000;
+        const RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE: u32 = 0x0300_0204;
+        /// The word the render object accessor `0043c4b0` returns.
+        const RENDER_OBJECT_GLOBAL: u32 = 0x011f_4748;
+        /// The doubles of the node virtuals `NODE_ATTACH_CHILD` and `NODE_DETACH_CHILD`.
+        const ATTACH_CHILD_DOUBLE_ADDRESS: u32 = 0x0300_0105;
+        const DETACH_CHILD_DOUBLE_ADDRESS: u32 = 0x0300_0106;
+
+        // Fields of the test objects (the doubles read them).
+        /// Actor: answers of the `+0x22c` virtual, `00885520` and `004938e0`.
+        const ACTOR_SKIP: u32 = 0xc0;
+        const ACTOR_IN_WATER: u32 = 0xc4;
+        const ACTOR_STATE: u32 = 0xc5;
+        /// Node: the first child (`NODE_FIRST_CHILD` reads `+0xd0 + 4 * index`),
+        /// the local translate (+0x58) and the answer of the range test.
+        const CHILD: u32 = 0xd0;
+        const NODE_LOCAL: u32 = 0x58;
+        const NODE_RANGE: u32 = 0xf0;
+        /// Node (the geometry): the owner's `+0xc0`, the property at +0xa0 and
+        /// the owner's type at +0x68 are those `water_engine` reads.
+        const GEOMETRY_PROPERTY: u32 = 0xa0;
+        const GEOMETRY_OWNER: u32 = 0xc0;
+
+        /// The engine for the third batch: the allocation doubles of the quad
+        /// tests, math and renderer doubles, and the pages the exe globals
+        /// sit on.
+        fn engine() -> Engine {
+            let mut e = quad().e;
+            for page in [
+                0x0101_6000,
+                0x0101_8000,
+                0x0101_d000,
+                0x0102_2000,
+                0x011c_6000,
+                0x011d_8000,
+            ] {
+                e.map(page, 0x1000);
+            }
+            e.set_global(FOUR, 4.0f64);
+            e.set_global(FIFTY, 50.0f64);
+            e.set_global(HIGHEST_FLOAT, f32::MAX);
+            e.set_global(HIGHEST_FLOAT_AS_DOUBLE, f32::MAX as f64);
+            e.set_global(WADING_NEAR_PLANE, 0.1f32);
+            e.set_global(MAP_LOW, -0.5f32);
+            e.set_global(MAP_HIGH, 0.5f32);
+            e.set_global(MAP_SOURCE_LOW, -512.0f32);
+            e.set_global(MAP_SOURCE_HIGH, 512.0f32);
+            for (source, value) in DISPLACEMENT_CONSTANT_SOURCES
+                .into_iter()
+                .zip([0.4f32, 0.6, 0.97, 0.01])
+            {
+                e.set_global(source, value);
+            }
+            e.register(LINEAR_MAP, |_, a| {
+                let (low, high) = (float_arg(a, 0), float_arg(a, 1));
+                let (source_low, source_high) = (float_arg(a, 2), float_arg(a, 3));
+                let value = float_arg(a, 4);
+                ((high - low) * ((value - source_low) / (source_high - source_low)) + low)
+                    .into_ret()
+            });
+            e.register(FLOAT_ABS, |_, a| float_arg(a, 0).abs().into_ret());
+            e.register(FLOAT_FLOOR, |_, a| float_arg(a, 0).floor().into_ret());
+            e.register(POINT3_SUBTRACT, |e, a| {
+                for i in 0..3 {
+                    let value = e.mem.f32(a[0] + 4 * i) - e.mem.f32(a[2] + 4 * i);
+                    e.mem.set_f32(a[1] + 4 * i, value);
+                }
+                ret(a[1])
+            });
+            e.register(POINT3_LENGTH, |e, a| {
+                let sum: f32 = (0..3).map(|i| e.mem.f32(a[0] + 4 * i).powi(2)).sum();
+                sum.sqrt().into_ret()
+            });
+            e.register(POINT2_LENGTH, |e, a| {
+                let sum: f32 = (0..2).map(|i| e.mem.f32(a[0] + 4 * i).powi(2)).sum();
+                sum.sqrt().into_ret()
+            });
+            e.register(LIST_FIRST_ITEM_SLOT, |e, a| ret(e.mem.u32(a[0]) + 8));
+            e.register(NODE_FIRST_CHILD, |e, a| {
+                ret(e.mem.u32(a[0] + CHILD + 4 * a[1]))
+            });
+            e.register(NODE_LOCAL_TRANSLATE_ADDRESS, |_, a| ret(a[0] + NODE_LOCAL));
+            e.register(PLAYER_POSITION, |_, a| ret(a[0] + REF_LOCATION));
+            e.register(INITIALIZE_GREY_TEXTURE, |_, _| ret(GREY_TEXTURE));
+            e.register(RENDERED_TEXTURE_GET_TEXTURE, |_, a| ret(a[0] + 0x10));
+            e.register(NODE_IN_RANGE_OF_VIEWER, |e, a| {
+                ret(e.mem.u8(a[0] + NODE_RANGE) as u32)
+            });
+            e.register(IS_KIND_OF, |_, a| {
+                ret((a[0] == WATER_SHADER_PROPERTY_RTTI && a[1] != 0) as u32)
+            });
+            e.register(TRI_SHAPE_CONSTRUCT, |_, a| ret(a[0]));
+            e.register(CELL_HAS_WATER, |e, a| {
+                ret(((e.mem.u8(a[0] + 0x24) & 2) != 0) as u32)
+            });
+            e.register(WATER_SHADER_ENABLED, |_, _| ret(1));
+            e.register(TES_GET_WORLD_SPACE, |e, a| ret(e.mem.u32(a[0] + 0x50)));
+            e.register(ACTOR_IN_WATER_TEST, |e, a| {
+                ret(e.mem.u8(a[0] + ACTOR_IN_WATER) as u32)
+            });
+            e.register(ACTOR_STATE_TEST, |e, a| {
+                ret(e.mem.u8(a[0] + ACTOR_STATE) as u32)
+            });
+            e.register(ACTOR_SKIP_DOUBLE, |e, a| {
+                ret(e.mem.u8(a[0] + ACTOR_SKIP) as u32)
+            });
+            e.register(ACTOR_LOCATION_DOUBLE, |_, a| ret(a[0] + REF_LOCATION));
+            e.register(NOT_A_NODE_DOUBLE, |_, _| ret(0));
+            vtable(
+                &mut e,
+                ACTOR_VTABLE,
+                &[
+                    (REFERENCE_GET_3D, REFERENCE_GET_3D_DOUBLE),
+                    (REFERENCE_GET_LOCATION_VIRTUAL, ACTOR_LOCATION_DOUBLE),
+                    (ACTOR_SKIP_VIRTUAL, ACTOR_SKIP_DOUBLE),
+                ],
+            );
+            vtable(
+                &mut e,
+                NOT_A_NODE_VTABLE,
+                &[(NODE_IS_NODE_VIRTUAL, NOT_A_NODE_DOUBLE)],
+            );
+            e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+            let renderer = object(&mut e, RENDERER_VTABLE, 0x100);
+            e.register_double(RENDERER, move |_, _| ret(renderer));
+            e.register(TEXTURE_MANAGER, |_, _| ret(0x0aaa_0000));
+            e.register(RENDERED_TEXTURE_STOP, |_, a| ret(a[0] + 1));
+            e.register(RENDER_SETTING_ENTRY, |_, _| ret(2));
+            e.register(ZONE_MAP_FIRST, |_, _| ret(0));
+            e.register(FLOAT_TABLE_ENTRY, |_, _| 0.5f32.into_ret());
+            let render_object = object(&mut e, RENDER_OBJECT_VTABLE, 0x300);
+            e.set_global(RENDER_OBJECT_GLOBAL, render_object);
+            e.register(RENDER_GLOBAL_OBJECT, |e, _| {
+                ret(e.global(RENDER_OBJECT_GLOBAL))
+            });
+            e.register(RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE, |_, _| Ret::default());
+            vtable(
+                &mut e,
+                RENDER_OBJECT_VTABLE,
+                &[(
+                    RENDER_OBJECT_SET_CAMERA_DATA_VIRTUAL,
+                    RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE,
+                )],
+            );
+            quiet(
+                &mut e,
+                &[
+                    RENDER_TARGET_RESET,
+                    RENDER_TARGET_SET,
+                    CAMERA_CONSTRUCT,
+                    CAMERA_DESTRUCT,
+                    FRUSTUM_CONSTRUCT,
+                    CULLING_PROCESS_CONSTRUCT,
+                    CULLING_PROCESS_DESTRUCT,
+                    CULLING_PROCESS_SET_CAMERA,
+                    CULLING_PROCESS_SET_PLANES,
+                    CAMERA_SET_VIEW_FRUSTUM,
+                    CAMERA_LOOK_AT_WORLD_POINT,
+                    RENDER_OBJECT_SET_CAMERA_DATA,
+                    IMAGE_SPACE_RENDER_DISPLACEMENT,
+                ],
+            );
+            e.register(CAMERA_FRUSTUM_ADDRESS, |_, a| ret(a[0] + 0x100));
+            e.register(CAMERA_PLANES_ADDRESS, |_, a| ret(a[0] + 0xdc));
+            e.register(CAMERA_COLUMN_ZERO, |e, a| {
+                for i in 0..3 {
+                    e.mem.set_f32(a[1] + 4 * i, 10.0 + i as f32);
+                }
+                ret(a[1])
+            });
+            e.register(MATRIX_COLUMN, |e, a| {
+                for i in 0..3 {
+                    e.mem.set_f32(a[2] + 4 * i, 20.0 * a[1] as f32 + i as f32);
+                }
+                Ret::default()
+            });
+            e.register(RENDER_OBJECT_CHECK, |_, _| ret(1));
+            // `water_engine` stands in for the water geometry lookup; the real one
+            // is under test here.
+            for (address, function) in funcs() {
+                if address == WATER_REFERENCE_3D {
+                    e.register(address, function);
+                }
+            }
+            e
+        }
+
+        /// A test actor: its location is `REF_LOCATION`.
+        fn actor(e: &mut Engine, x: f32, y: f32, z: f32) -> u32 {
+            let actor = object(e, ACTOR_VTABLE, 0x100);
+            for (i, value) in [x, y, z].into_iter().enumerate() {
+                e.mem.set_f32(actor + REF_LOCATION + 4 * i as u32, value);
+            }
+            actor
+        }
+
+        /// Makes a player at the location and installs it as the global.
+        fn player_at(e: &mut Engine, x: f32, y: f32, z: f32) -> u32 {
+            let player = reference(e);
+            for (i, value) in [x, y, z].into_iter().enumerate() {
+                e.mem.set_f32(player + REF_LOCATION + 4 * i as u32, value);
+            }
+            e.set_global(PLAYER_CHARACTER, player);
+            player
+        }
+
+        /// Sets a float setting's value (`SETTING_FLOAT_VALUE` reads +4).
+        fn set_float_setting(e: &mut Engine, setting: u32, value: f32) {
+            e.set_global(setting + 4, value);
+        }
+
+        /// A water system with `groups` in its group list.
+        fn system_with(e: &mut Engine, groups: &[u32]) -> Ptr<TESWaterSystem> {
+            let system = e.new_object::<TESWaterSystem>();
+            fill_list(e, system.addr() + 0x3c, groups);
+            system
+        }
+
+        // --- 004e8000 ---------------------------------------------------------
+
+        #[test]
+        fn the_water_root_is_released_and_its_slot_cleared() {
+            let mut e = engine();
+            quiet(&mut e, &[WATER_ROOT_RELEASE_STEP]);
+            e.set_global(WATER_ROOT_SLOT, 0x7777u32);
+            start_log(&mut e);
+            e.call(0x004e_8000, &[]);
+            assert_eq!(calls(&e, WATER_ROOT_RELEASE_STEP), vec![vec![0x7777]]);
+            assert_eq!(calls(&e, NI_POINTER_ASSIGN), vec![vec![WATER_ROOT_SLOT, 0]]);
+            assert_eq!(e.global::<u32>(WATER_ROOT_SLOT), 0);
+            // Without a root nothing is released, the slot is still assigned.
+            start_log(&mut e);
+            e.call(0x004e_8000, &[]);
+            assert!(calls(&e, WATER_ROOT_RELEASE_STEP).is_empty());
+            assert_eq!(calls(&e, NI_POINTER_ASSIGN).len(), 1);
+        }
+
+        // --- 004e8030 ---------------------------------------------------------
+
+        /// A reference whose 3D node has a child with a child with a child:
+        /// `(reference, child, grandchild, great grandchild)`.
+        fn geometry_chain(e: &mut Engine) -> (u32, u32, u32, u32) {
+            let reference = reference(e);
+            let top = node(e);
+            let child = node(e);
+            let grandchild = node(e);
+            let great = node(e);
+            e.mem.set_u32(reference + REF_NODE, top);
+            e.mem.set_u32(top + CHILD, child);
+            e.mem.set_u32(child + CHILD, grandchild);
+            e.mem.set_u32(grandchild + CHILD, great);
+            (reference, child, grandchild, great)
+        }
+
+        fn geometry_of(e: &mut Engine, system: Ptr<TESWaterSystem>, reference: u32) -> u32 {
+            e.call(0x004e_8030, &args![system, reference]).u32()
+        }
+
+        #[test]
+        fn the_water_geometry_is_the_first_child_of_the_first_child() {
+            let mut e = engine();
+            let system = e.new_object::<TESWaterSystem>();
+            let (reference, _, grandchild, _) = geometry_chain(&mut e);
+            assert_eq!(geometry_of(&mut e, system, reference), grandchild);
+            assert_eq!(
+                e.get(system, TESWaterSystem::iGlobalGetWaterGeometryCount),
+                1
+            );
+            geometry_of(&mut e, system, reference);
+            assert_eq!(
+                e.get(system, TESWaterSystem::iGlobalGetWaterGeometryCount),
+                2
+            );
+        }
+
+        #[test]
+        fn the_40000000_flag_goes_one_level_deeper() {
+            let mut e = engine();
+            let system = e.new_object::<TESWaterSystem>();
+            let (reference, _, _, great) = geometry_chain(&mut e);
+            let base_form = e.mem.u32(reference + 0x20);
+            e.mem.set_u32(base_form + BASE_FORM_FLAGS, 0x4000_0000);
+            assert_eq!(geometry_of(&mut e, system, reference), great);
+            // A grandchild that is not a node gives null.
+            let (reference, _, grandchild, _) = geometry_chain(&mut e);
+            let base_form = e.mem.u32(reference + 0x20);
+            e.mem.set_u32(base_form + BASE_FORM_FLAGS, 0x4000_0000);
+            e.mem.set_u32(grandchild, NOT_A_NODE_VTABLE);
+            assert_eq!(geometry_of(&mut e, system, reference), 0);
+        }
+
+        #[test]
+        fn a_missing_reference_node_or_child_gives_null() {
+            let mut e = engine();
+            let system = e.new_object::<TESWaterSystem>();
+            assert_eq!(geometry_of(&mut e, system, 0), 0);
+            // No 3D object: null, and the counter is not raised.
+            let bare = reference(&mut e);
+            assert_eq!(geometry_of(&mut e, system, bare), 0);
+            assert_eq!(
+                e.get(system, TESWaterSystem::iGlobalGetWaterGeometryCount),
+                0
+            );
+            // A first child that is not a node.
+            let (reference, child, _, _) = geometry_chain(&mut e);
+            e.mem.set_u32(child, NOT_A_NODE_VTABLE);
+            assert_eq!(geometry_of(&mut e, system, reference), 0);
+            // No child at all.
+            let (reference, child, _, _) = geometry_chain(&mut e);
+            let top = e.mem.u32(reference + REF_NODE);
+            let _ = child;
+            e.mem.set_u32(top + CHILD, 0);
+            assert_eq!(geometry_of(&mut e, system, reference), 0);
+            // The reference's node is not a node.
+            let (reference, _, _, _) = geometry_chain(&mut e);
+            let top = e.mem.u32(reference + REF_NODE);
+            e.mem.set_u32(top, NOT_A_NODE_VTABLE);
+            assert_eq!(geometry_of(&mut e, system, reference), 0);
+        }
+
+        // --- a water system with one group, for the wading-water tests -----------
+
+        type Translations = Rc<RefCell<Vec<(u32, [f32; 3])>>>;
+
+        struct Wading {
+            e: Engine,
+            system: Ptr<TESWaterSystem>,
+            group: Ptr<PlaceableWaterGroup>,
+            root: u32,
+            /// The geometry of the group's water reference and the property
+            /// it already has.
+            other_property: u32,
+            /// The group's water reference and its geometry.
+            water_reference: u32,
+            geometry: u32,
+            /// The calls of `NODE_SET_LOCAL_TRANSLATE`: node and position.
+            translations: Translations,
+            /// The `WadingWaterMap` the map doubles keep (key to value).
+            map: Rc<RefCell<HashMap<u32, u32>>>,
+        }
+
+        /// A system with one group whose plane is at `height`, one water
+        /// reference (with a geometry that has a water shader property of its
+        /// own), the player at `(10, 20, 0)`, the water root node and doubles
+        /// for the wading map.
+        fn wading(height: f32) -> Wading {
+            let mut e = engine();
+            quiet(
+                &mut e,
+                &[
+                    NODE_UPDATE,
+                    UPDATE_DATA_CONSTRUCT,
+                    NODE_ATTACH_PROPERTY,
+                    SHADER_MANAGER_PREPARE_OBJECT,
+                    WATER_PROPERTY_METHOD_00B6AB20,
+                    RETURN_RENDERED_TEXTURE,
+                ],
+            );
+            e.register(WATER_SHADER_PROPERTY_CONSTRUCT, |_, a| ret(a[0]));
+            let translations: Translations = Rc::default();
+            {
+                let log = translations.clone();
+                e.register_double(NODE_SET_LOCAL_TRANSLATE, move |e, a| {
+                    let point = [e.mem.f32(a[1]), e.mem.f32(a[1] + 4), e.mem.f32(a[1] + 8)];
+                    log.borrow_mut().push((a[0], point));
+                    Ret::default()
+                });
+            }
+            let map: Rc<RefCell<HashMap<u32, u32>>> = Rc::default();
+            {
+                let entries = map.clone();
+                e.register_double(WADING_MAP_GET, move |e, a| {
+                    match entries.borrow().get(&a[1]) {
+                        Some(value) => {
+                            e.mem.set_u32(a[2], *value);
+                            ret(1)
+                        }
+                        None => ret(0),
+                    }
+                });
+                let entries = map.clone();
+                e.register_double(MAP_SET_AT, move |_, a| {
+                    entries.borrow_mut().insert(a[1], a[2]);
+                    Ret::default()
+                });
+                let entries = map.clone();
+                e.register_double(WADING_MAP_REMOVE, move |_, a| {
+                    entries.borrow_mut().remove(&a[1]);
+                    ret(1)
+                });
+            }
+            let root = node(&mut e);
+            e.set_global(WATER_ROOT_SLOT, root);
+            let water_type = e.mem.alloc(0x200);
+            e.mem.set_u32(water_type + 0x30, 0x0e00_0002);
+            let group_address = group(&mut e, height, water_type);
+            let group: Ptr<PlaceableWaterGroup> = Ptr::new(group_address);
+            e.set(group, PlaceableWaterGroup::iStencilBitMask, 0x55);
+            e.set(
+                group,
+                PlaceableWaterGroup::bGroupAtWorldSpaceWaterHeight,
+                true,
+            );
+            e.set(group, PlaceableWaterGroup::bRenderGroup, true);
+            // The water reference of the group, with an owner of type 0xd.
+            let (water_reference, _, geometry, _) = geometry_chain(&mut e);
+            let owner = e.mem.alloc(0x100);
+            e.mem.set_u32(owner + 0x68, WATER_OWNER_TYPE);
+            e.mem.set_u32(geometry + GEOMETRY_OWNER, owner);
+            let other_property = e.mem.alloc(0x150);
+            e.mem.set_u32(other_property + 0x84, 7);
+            e.mem.set_u32(geometry + GEOMETRY_PROPERTY, other_property);
+            fill_list(&mut e, group_address + 0x24, &[water_reference]);
+            let system = system_with(&mut e, &[group_address]);
+            e.set_global(DEPTH_MAP, 0x0e00_0003u32);
+            e.set_global(WORLD_REFLECTION_MAP, 0x0e00_0004u32);
+            e.set_global(SKY_REFLECTION_MAP, 0x0e00_0005u32);
+            e.set_global(WADING_WATER_HEIGHT_MAP, 0x0e00_0100u32);
+            player_at(&mut e, 10.0, 20.0, 0.0);
+            set_float_setting(&mut e, SETTING_WADING_WATER_QUAD_SIZE, 100.0);
+            set_float_setting(&mut e, SETTING_WATER_GROUP_HEIGHT_RANGE, 5.0);
+            set_setting(&mut e, SETTING_USE_BULLET_WATER_DISPLACEMENTS, true);
+            set_setting(&mut e, SETTING_USE_WATER_DISPLACEMENTS, true);
+            Wading {
+                e,
+                system,
+                group,
+                root,
+                other_property,
+                water_reference,
+                geometry,
+                translations,
+                map,
+            }
+        }
+
+        fn floats_at(e: &Engine, address: u32, count: u32) -> Vec<f32> {
+            (0..count).map(|i| e.mem.f32(address + 4 * i)).collect()
+        }
+
+        // --- 004e8160 -----------------------------------------------------------
+
+        #[test]
+        fn the_wading_geometry_is_a_quad_on_the_water_root_with_its_own_property() {
+            let mut w = wading(7.0);
+            w.e.set(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced, 5.0);
+            start_log(&mut w.e);
+            let shape =
+                w.e.call(0x004e_8160, &args![w.system, w.group, w.root, 64.0f32])
+                    .u32();
+            assert_ne!(shape, 0);
+            // The quad: side 64, with normals and colours.
+            let data = calls(&w.e, TRI_SHAPE_CONSTRUCT)[0][1];
+            assert_eq!(
+                floats_at(&w.e, w.e.mem.u32(data + 4), 3),
+                vec![32.0, 32.0, 0.0]
+            );
+            assert_ne!(w.e.mem.u32(data + 8), 0, "normals");
+            assert_ne!(w.e.mem.u32(data + 12), 0, "colours");
+            // It sits at the player and hangs on the root.
+            assert_eq!(w.translations.borrow()[0], (shape, [10.0, 20.0, 0.0]));
+            assert_eq!(
+                calls(&w.e, ATTACH_CHILD_DOUBLE_ADDRESS),
+                vec![vec![w.root, shape, 1]]
+            );
+            // The property.
+            let property = calls(&w.e, WATER_SHADER_PROPERTY_CONSTRUCT)[0][0];
+            let property_ptr: Ptr<WaterShaderProperty> = Ptr::new(property);
+            assert_eq!(
+                calls(&w.e, NODE_ATTACH_PROPERTY),
+                vec![vec![shape, property]]
+            );
+            assert_eq!(
+                calls(&w.e, SHADER_MANAGER_PREPARE_OBJECT),
+                vec![vec![shape, 0, 0]]
+            );
+            assert!(w.e.get(property_ptr, WaterShaderProperty::bDisplacement));
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::fBlendRadius),
+                1.0
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::fBlendNormalsAmount),
+                1.0
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::iStencilMask),
+                0x55
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::spDepthMap),
+                0x0e00_0003
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::spNoiseNormalMap),
+                0x0e00_0002
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::spReflectionMap),
+                0x0e00_0004,
+                "the group is at the world height"
+            );
+            assert_eq!(
+                w.e.get(property_ptr, WaterShaderProperty::spDisplacementNormalMap),
+                0x0e00_0110
+            );
+            // The property of the first water reference's geometry is told about it.
+            assert_eq!(
+                calls(&w.e, WATER_PROPERTY_METHOD_00B6AB20),
+                vec![vec![w.other_property, property]]
+            );
+            assert_eq!(
+                w.e.get(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced),
+                0.0
+            );
+        }
+
+        #[test]
+        fn without_a_player_the_wading_geometry_is_at_the_origin() {
+            let mut w = wading(7.0);
+            w.e.set_global(PLAYER_CHARACTER, 0u32);
+            // The group's reference has no 3D object: no property method call.
+            let bare = reference(&mut w.e);
+            fill_list(&mut w.e, w.group.addr() + 0x24, &[bare]);
+            // The sky reflection map is used away from the world height.
+            w.e.set(
+                w.group,
+                PlaceableWaterGroup::bGroupAtWorldSpaceWaterHeight,
+                false,
+            );
+            start_log(&mut w.e);
+            let shape =
+                w.e.call(0x004e_8160, &args![w.system, w.group, w.root, 8.0f32])
+                    .u32();
+            assert_eq!(w.translations.borrow()[0], (shape, [0.0, 0.0, 0.0]));
+            assert!(calls(&w.e, WATER_PROPERTY_METHOD_00B6AB20).is_empty());
+            let property = calls(&w.e, WATER_SHADER_PROPERTY_CONSTRUCT)[0][0];
+            assert_eq!(
+                w.e.get(
+                    Ptr::<WaterShaderProperty>::new(property),
+                    WaterShaderProperty::spReflectionMap
+                ),
+                0x0e00_0005
+            );
+        }
+
+        // --- 004e83e0 -----------------------------------------------------------
+
+        fn actors_near(e: &mut Engine, actors: &[u32]) -> bool {
+            let group_address = group(e, 0.0, 0);
+            fill_list(e, group_address + 0x3c, actors);
+            e.call(0x004e_83e0, &args![0x1234u32, group_address]).bool()
+        }
+
+        #[test]
+        fn the_player_in_the_group_is_always_near() {
+            let mut e = engine();
+            let player = player_at(&mut e, 0.0, 0.0, 0.0);
+            let far = actor(&mut e, 1000.0, 0.0, 0.0);
+            set_float_setting(&mut e, SETTING_WADING_WATER_QUAD_SIZE, 1.0);
+            assert!(actors_near(&mut e, &[far, player]));
+            assert!(!actors_near(&mut e, &[far]));
+            assert!(!actors_near(&mut e, &[]));
+        }
+
+        #[test]
+        fn an_actor_is_near_when_it_is_within_the_quad_size_ignoring_heights() {
+            let mut e = engine();
+            player_at(&mut e, 0.0, 0.0, 0.0);
+            set_float_setting(&mut e, SETTING_WADING_WATER_QUAD_SIZE, 10.0);
+            let exactly = actor(&mut e, 6.0, 8.0, 500.0);
+            assert!(
+                actors_near(&mut e, &[exactly]),
+                "distance 10, heights ignored"
+            );
+            let beyond = actor(&mut e, 6.0, 8.5, 0.0);
+            assert!(!actors_near(&mut e, &[beyond]));
+            // The second actor of the list is looked at too.
+            assert!(actors_near(&mut e, &[beyond, exactly]));
+        }
+
+        #[test]
+        fn an_actor_the_virtual_skips_is_not_near() {
+            let mut e = engine();
+            player_at(&mut e, 0.0, 0.0, 0.0);
+            set_float_setting(&mut e, SETTING_WADING_WATER_QUAD_SIZE, 10.0);
+            let skipped = actor(&mut e, 1.0, 1.0, 0.0);
+            e.mem.set_u8(skipped + ACTOR_SKIP, 1);
+            assert!(!actors_near(&mut e, &[skipped]));
+        }
+
+        // --- 004e8510 -----------------------------------------------------------
+
+        type Points = Rc<RefCell<Vec<(u32, f32, f32)>>>;
+
+        /// Records the elements put into the displacement arrays.
+        fn record_points(e: &mut Engine) -> Points {
+            let points: Points = Rc::default();
+            let log = points.clone();
+            e.register_double(POINT2_ARRAY_APPEND, move |e, a| {
+                log.borrow_mut()
+                    .push((a[0], e.mem.f32(a[1]), e.mem.f32(a[1] + 4)));
+                Ret::default()
+            });
+            points
+        }
+
+        fn add_ripple(w: &mut Wading, x: f32, y: f32, height: f32, size: f32) {
+            start_log(&mut w.e);
+            w.e.call(0x004e_8510, &args![w.system, x, y, height, size]);
+        }
+
+        #[test]
+        fn a_ripple_near_the_player_creates_the_geometry_and_fills_the_arrays() {
+            let mut w = wading(50.0);
+            let points = record_points(&mut w.e);
+            w.e.set_global(WADING_WATER_HEIGHT_MAP, 0u32);
+            add_ripple(&mut w, 13.0, 24.0, 52.0, 4.0);
+            // The grey height map was created, the geometry too.
+            assert_eq!(w.e.global::<u32>(WADING_WATER_HEIGHT_MAP), GREY_TEXTURE);
+            assert_eq!(w.e.global::<u8>(WADING_MAP_CREATED_FLAG), 1);
+            let geometry = w.e.get(w.group, PlaceableWaterGroup::spWadingWaterGeometry);
+            assert_ne!(geometry, 0);
+            // The geometry is put at the player's x and y and the group's height.
+            let translations = w.translations.borrow().clone();
+            assert_eq!(translations[0], (geometry, [10.0, 20.0, 0.0]));
+            assert_eq!(translations[1], (geometry, [10.0, 20.0, 50.0]));
+            assert_eq!(calls(&w.e, NODE_UPDATE)[0][0], geometry);
+            // The offset (3, 4) maps to 3/1024 and 4/1024; the first array gets it
+            // plus half the size, the second the same offset again.
+            assert_eq!(
+                *points.borrow(),
+                vec![
+                    (
+                        DISPLACEMENT_POINTS_A,
+                        2.0 + 3.0 / 1024.0,
+                        2.0 + 4.0 / 1024.0
+                    ),
+                    (DISPLACEMENT_POINTS_B, 3.0 / 1024.0, 4.0 / 1024.0),
+                ]
+            );
+        }
+
+        #[test]
+        fn a_ripple_keeps_the_geometry_a_group_already_has() {
+            let mut w = wading(50.0);
+            let points = record_points(&mut w.e);
+            w.e.set(w.group, PlaceableWaterGroup::spWadingWaterGeometry, 0x5151);
+            add_ripple(&mut w, 13.0, 24.0, 52.0, 4.0);
+            assert!(w.translations.borrow().is_empty());
+            assert_eq!(
+                w.e.get(w.group, PlaceableWaterGroup::spWadingWaterGeometry),
+                0x5151
+            );
+            assert_eq!(points.borrow().len(), 2);
+        }
+
+        #[test]
+        fn a_ripple_far_from_the_group_height_creates_no_geometry() {
+            let mut w = wading(50.0);
+            let points = record_points(&mut w.e);
+            add_ripple(&mut w, 13.0, 24.0, 60.0, 4.0);
+            assert_eq!(
+                w.e.get(w.group, PlaceableWaterGroup::spWadingWaterGeometry),
+                0
+            );
+            assert!(w.translations.borrow().is_empty());
+            assert_eq!(points.borrow().len(), 2, "the arrays are filled anyway");
+        }
+
+        #[test]
+        fn a_ripple_beyond_the_quad_size_or_with_the_settings_off_does_nothing() {
+            let mut w = wading(50.0);
+            let points = record_points(&mut w.e);
+            add_ripple(&mut w, 200.0, 20.0, 50.0, 4.0);
+            assert!(points.borrow().is_empty());
+            assert!(calls(&w.e, FLOATS_NEAR).is_empty());
+            set_setting(&mut w.e, SETTING_USE_WATER_DISPLACEMENTS, false);
+            add_ripple(&mut w, 13.0, 24.0, 50.0, 4.0);
+            assert!(points.borrow().is_empty());
+            assert!(calls(&w.e, POINT2_LENGTH).is_empty());
+            set_setting(&mut w.e, SETTING_USE_WATER_DISPLACEMENTS, true);
+            set_setting(&mut w.e, SETTING_USE_BULLET_WATER_DISPLACEMENTS, false);
+            add_ripple(&mut w, 13.0, 24.0, 50.0, 4.0);
+            assert!(points.borrow().is_empty());
+            assert_eq!(calls(&w.e, SETTING_VALUE).len(), 1);
+        }
+
+        // --- the NiPoint2 operators ---------------------------------------------
+
+        #[test]
+        fn point2_subtraction_writes_the_difference_to_out() {
+            let mut e = engine();
+            let block = e.mem.alloc(0x20);
+            e.mem.set_f32(block, 5.0);
+            e.mem.set_f32(block + 4, 1.5);
+            e.mem.set_f32(block + 8, 2.0);
+            e.mem.set_f32(block + 12, 4.0);
+            let out = block + 0x10;
+            assert_eq!(
+                e.call(0x004e_8880, &args![block, out, block + 8]).u32(),
+                out
+            );
+            assert_eq!(floats_at(&e, out, 2), vec![3.0, -2.5]);
+            assert_eq!(floats_at(&e, block, 4), vec![5.0, 1.5, 2.0, 4.0]);
+        }
+
+        #[test]
+        fn point2_addition_and_subtraction_work_in_place() {
+            let mut e = engine();
+            let block = e.mem.alloc(0x10);
+            e.mem.set_f32(block, 1.0);
+            e.mem.set_f32(block + 4, 2.0);
+            e.mem.set_f32(block + 8, 0.25);
+            e.mem.set_f32(block + 12, -4.0);
+            assert_eq!(e.call(0x004e_88d0, &args![block, block + 8]).u32(), block);
+            assert_eq!(floats_at(&e, block, 2), vec![1.25, -2.0]);
+            assert_eq!(e.call(0x004e_8910, &args![block, block + 8]).u32(), block);
+            assert_eq!(floats_at(&e, block, 2), vec![1.0, 2.0]);
+            assert_eq!(floats_at(&e, block + 8, 2), vec![0.25, -4.0]);
+        }
+
+        // --- 004e8950, 004e89e0 -------------------------------------------------
+
+        #[test]
+        fn the_displacement_setting_byte_is_read() {
+            let mut e = engine();
+            set_setting(&mut e, SETTING_USE_WATER_DISPLACEMENTS, true);
+            assert_eq!(e.call(0x004e_89e0, &[]).u8(), 1);
+            set_setting(&mut e, SETTING_USE_WATER_DISPLACEMENTS, false);
+            assert_eq!(e.call(0x004e_89e0, &[]).u8(), 0);
+        }
+
+        #[test]
+        fn displacements_are_active_when_the_setting_is_on_and_a_group_has_a_near_actor() {
+            let mut e = engine();
+            let player = player_at(&mut e, 0.0, 0.0, 0.0);
+            set_float_setting(&mut e, SETTING_WADING_WATER_QUAD_SIZE, 10.0);
+            let far = actor(&mut e, 1000.0, 0.0, 0.0);
+            let empty = group(&mut e, 0.0, 0);
+            let without = group(&mut e, 0.0, 0);
+            fill_list(&mut e, without + 0x3c, &[far]);
+            let with = group(&mut e, 0.0, 0);
+            fill_list(&mut e, with + 0x3c, &[far, player]);
+            set_setting(&mut e, SETTING_USE_WATER_DISPLACEMENTS, true);
+            let system = system_with(&mut e, &[empty, without]);
+            assert!(!e.call(0x004e_8950, &args![system]).bool());
+            let system = system_with(&mut e, &[empty, without, with]);
+            assert!(e.call(0x004e_8950, &args![system]).bool());
+            // With the setting off the groups are not looked at.
+            set_setting(&mut e, SETTING_USE_WATER_DISPLACEMENTS, false);
+            start_log(&mut e);
+            assert!(!e.call(0x004e_8950, &args![system]).bool());
+            assert!(calls(&e, LIST_NEXT_POSITION).is_empty());
+        }
+
+        // --- 004e8e40 -----------------------------------------------------------
+
+        #[test]
+        fn wading_water_data_starts_at_the_zero_points() {
+            let mut e = engine();
+            let data = e.mem.alloc(0x1c);
+            for i in 0..7 {
+                e.mem.set_u32(data + 4 * i, 0xdead_beef);
+            }
+            e.set_global(ZERO_POINT2, 0.5f32);
+            e.set_global(ZERO_POINT2 + 4, 0.25f32);
+            for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+                e.set_global(ZERO_POINT3 + 4 * i as u32, value);
+            }
+            start_log(&mut e);
+            assert_eq!(e.call(0x004e_8e40, &args![data]).u32(), data);
+            assert_eq!(
+                floats_at(&e, data, 7),
+                vec![0.5, 0.25, 0.5, 0.25, 1.0, 2.0, 3.0]
+            );
+            assert_eq!(
+                calls(&e, ADDRESS_OF_THIS),
+                vec![vec![data], vec![data + 8], vec![data + 0x10]]
+            );
+        }
+
+        // --- 004e8a00 -----------------------------------------------------------
+
+        /// A wading scene with the player at the origin, the group's plane at
+        /// 2.0 and one actor at `(8, -4, 7)` in the group's actor list.
+        fn wading_actor() -> (Wading, u32) {
+            let mut w = wading(2.0);
+            player_at(&mut w.e, 0.0, 0.0, 0.0);
+            let actor = actor(&mut w.e, 8.0, -4.0, 7.0);
+            w.e.mem.set_u8(actor + ACTOR_STATE, 1);
+            fill_list(&mut w.e, w.group.addr() + 0x3c, &[actor]);
+            (w, actor)
+        }
+
+        fn update_wading(w: &mut Wading) {
+            start_log(&mut w.e);
+            w.e.call(0x004e_8a00, &args![w.system]);
+        }
+
+        fn wading_data(w: &Wading, actor: u32) -> Ptr<WadingWaterData> {
+            Ptr::new(*w.map.borrow().get(&actor).expect("an entry for the actor"))
+        }
+
+        #[test]
+        fn an_actor_out_of_the_water_gets_displacement_offsets_from_the_player() {
+            let (mut w, actor) = wading_actor();
+            update_wading(&mut w);
+            // The group got its wading geometry.
+            assert_ne!(
+                w.e.get(w.group, PlaceableWaterGroup::spWadingWaterGeometry),
+                0
+            );
+            // The actor's data: the offsets from the player mapped to -0.5..0.5,
+            // a last offset equal to it (the entry starts with its last position at
+            // the current one), and the position at the group height.
+            let data = wading_data(&w, actor);
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fDisplaceOffsetX),
+                8.0 / 1024.0
+            );
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fDisplaceOffsetY),
+                -4.0 / 1024.0
+            );
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fLastDisplaceOffsetX),
+                8.0 / 1024.0
+            );
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fLastDisplaceOffsetY),
+                -4.0 / 1024.0
+            );
+            assert_eq!(w.e.get(data, WadingWaterData::fLastPositionX), 8.0);
+            assert_eq!(w.e.get(data, WadingWaterData::fLastPositionY), -4.0);
+            assert_eq!(w.e.get(data, WadingWaterData::fLastPositionZ), 2.0);
+            // The water test asked about the actor's location, parent cell and 1.0.
+            let test = calls(&w.e, ACTOR_IN_WATER_TEST);
+            assert_eq!(test.len(), 1);
+            assert_eq!(test[0][0], actor);
+            assert_eq!(test[0][1], actor + REF_LOCATION);
+            assert_eq!(test[0][3], 1.0f32.to_bits());
+        }
+
+        #[test]
+        fn a_second_update_keeps_the_entry_and_remembers_the_last_position() {
+            let (mut w, actor) = wading_actor();
+            update_wading(&mut w);
+            let data = wading_data(&w, actor);
+            w.e.mem.set_f32(actor + REF_LOCATION, 10.0);
+            update_wading(&mut w);
+            assert_eq!(wading_data(&w, actor).addr(), data.addr());
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fDisplaceOffsetX),
+                10.0 / 1024.0
+            );
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fLastDisplaceOffsetX),
+                8.0 / 1024.0
+            );
+            assert_eq!(
+                w.e.get(data, WadingWaterData::fLastDisplaceOffsetY),
+                -4.0 / 1024.0
+            );
+            assert_eq!(w.e.get(data, WadingWaterData::fLastPositionX), 10.0);
+            // The geometry exists already: no second quad.
+            assert!(calls(&w.e, TRI_SHAPE_CONSTRUCT).is_empty());
+        }
+
+        #[test]
+        fn an_actor_in_the_water_or_in_a_state_the_test_refuses_loses_its_entry() {
+            let (mut w, actor) = wading_actor();
+            update_wading(&mut w);
+            assert_eq!(w.map.borrow().len(), 1);
+            w.e.mem.set_u8(actor + ACTOR_IN_WATER, 1);
+            update_wading(&mut w);
+            assert!(w.map.borrow().is_empty());
+            // The state test is asked only for an actor that is not in the water.
+            assert!(calls(&w.e, ACTOR_STATE_TEST).is_empty());
+            w.e.mem.set_u8(actor + ACTOR_IN_WATER, 0);
+            update_wading(&mut w);
+            assert_eq!(w.map.borrow().len(), 1);
+            w.e.mem.set_u8(actor + ACTOR_STATE, 0);
+            update_wading(&mut w);
+            assert!(w.map.borrow().is_empty());
+        }
+
+        #[test]
+        fn nothing_is_updated_without_a_rendered_group_with_a_near_actor() {
+            // A group that is not rendered.
+            let (mut w, _) = wading_actor();
+            w.e.set(w.group, PlaceableWaterGroup::bRenderGroup, false);
+            update_wading(&mut w);
+            assert!(calls(&w.e, ACTOR_IN_WATER_TEST).is_empty());
+            // An actor list that is empty.
+            let (mut w, _) = wading_actor();
+            fill_list(&mut w.e, w.group.addr() + 0x3c, &[]);
+            update_wading(&mut w);
+            assert!(calls(&w.e, ACTOR_IN_WATER_TEST).is_empty());
+            // An actor beyond the quad size.
+            let (mut w, _) = wading_actor();
+            set_float_setting(&mut w.e, SETTING_WADING_WATER_QUAD_SIZE, 1.0);
+            update_wading(&mut w);
+            assert!(calls(&w.e, ACTOR_IN_WATER_TEST).is_empty());
+            assert!(w.map.borrow().is_empty());
+        }
+
+        #[test]
+        fn in_an_interior_without_water_nothing_is_updated() {
+            let (mut w, _) = wading_actor();
+            let cell = w.e.mem.alloc(0x40);
+            let tes = w.e.global::<u32>(TES_POINTER);
+            w.e.mem.set_u32(tes + 0x34, cell);
+            update_wading(&mut w);
+            assert!(calls(&w.e, LIST_IS_EMPTY).is_empty());
+            // With water in the interior cell the update runs.
+            w.e.mem.set_u8(cell + 0x24, 2);
+            update_wading(&mut w);
+            assert_eq!(w.map.borrow().len(), 1);
+        }
+
+        // --- 004e8ec0 -----------------------------------------------------------
+
+        /// The wading scene with a geometry on the group, its property and the
+        /// geometry's local translate at `(3, 0, 0)`; the player at `(x, 0, 0)`.
+        fn simulation(player_x: f32) -> (Wading, u32, u32) {
+            let mut w = wading(6.0);
+            player_at(&mut w.e, player_x, 0.0, 0.0);
+            let geometry = node(&mut w.e);
+            w.e.mem.set_f32(geometry + NODE_LOCAL, 3.0);
+            let property = w.e.mem.alloc(0x150);
+            w.e.mem.set_u32(geometry + GEOMETRY_PROPERTY, property);
+            w.e.set(
+                w.group,
+                PlaceableWaterGroup::spWadingWaterGeometry,
+                geometry,
+            );
+            w.e.set(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced, 1.0);
+            (w, geometry, property)
+        }
+
+        fn simulate(w: &mut Wading) {
+            start_log(&mut w.e);
+            w.e.call(0x004e_8ec0, &args![w.system]);
+        }
+
+        #[test]
+        fn a_player_who_moved_far_drags_the_geometry_along_on_a_four_unit_grid() {
+            let (mut w, geometry, property) = simulation(10.0);
+            simulate(&mut w);
+            // The player x is snapped to the grid: floor(10 / 4) * 4 = 8.
+            assert_eq!(*w.translations.borrow(), vec![(geometry, [8.0, 0.0, 6.0])]);
+            assert_eq!(calls(&w.e, NODE_UPDATE)[0][0], geometry);
+            // The shift is the move mapped onto the quad: 8 - 3 along x, 0 along y.
+            let shift = (1.0f32 * ((5.0f32 + 50.0) / 100.0)) + -0.5;
+            assert_eq!(w.e.global::<f32>(DISPLACEMENT_SHIFT_X), shift);
+            assert_eq!(w.e.global::<f32>(DISPLACEMENT_SHIFT_Y), 0.0);
+            // The property follows the group.
+            let property: Ptr<WaterShaderProperty> = Ptr::new(property);
+            assert_eq!(w.e.get(property, WaterShaderProperty::iStencilMask), 0x55);
+            assert_eq!(
+                w.e.get(property, WaterShaderProperty::spDepthMap),
+                0x0e00_0003
+            );
+            assert_eq!(
+                w.e.get(property, WaterShaderProperty::spNoiseNormalMap),
+                0x0e00_0002
+            );
+            assert_eq!(
+                w.e.get(property, WaterShaderProperty::spDisplacementNormalMap),
+                0x0e00_0110
+            );
+            // The displacement pass ran and left its flag clear.
+            assert_eq!(calls(&w.e, IMAGE_SPACE_RENDER_DISPLACEMENT).len(), 1);
+            assert_eq!(w.e.global::<u8>(DISPLACEMENT_PASS_FLAG), 0);
+        }
+
+        #[test]
+        fn a_player_who_stays_near_leaves_the_geometry_where_it_is() {
+            let (mut w, _, _) = simulation(5.0);
+            simulate(&mut w);
+            assert!(w.translations.borrow().is_empty());
+            assert!(calls(&w.e, NODE_UPDATE).is_empty());
+            assert_eq!(w.e.global::<f32>(DISPLACEMENT_SHIFT_X), 0.0);
+            assert_eq!(w.e.global::<f32>(DISPLACEMENT_SHIFT_Y), 0.0);
+        }
+
+        #[test]
+        fn the_displacement_constants_and_the_wading_offsets_are_published() {
+            let (mut w, _, _) = simulation(5.0);
+            let points = record_points(&mut w.e);
+            // One wading entry: the data's two points go into the two arrays.
+            let data = w.e.mem.alloc(0x1c);
+            for (i, value) in [1.0f32, 2.0, 3.0, 4.0].into_iter().enumerate() {
+                w.e.mem.set_f32(data + 4 * i as u32, value);
+            }
+            w.e.register(ZONE_MAP_FIRST, |_, _| ret(1));
+            w.e.register_double(ZONE_MAP_GET_NEXT, move |e, a| {
+                e.mem.set_u32(a[1], 0);
+                e.mem.set_u32(a[3], data);
+                Ret::default()
+            });
+            // A count of one in the first array advances the timer.
+            w.e.set_global(DISPLACEMENT_POINTS_A + 8, 1u32);
+            simulate(&mut w);
+            assert_eq!(
+                *points.borrow(),
+                vec![
+                    (DISPLACEMENT_POINTS_A, 1.0, 2.0),
+                    (DISPLACEMENT_POINTS_B, 3.0, 4.0)
+                ]
+            );
+            assert_eq!(
+                floats_at(&w.e, DISPLACEMENT_CONSTANTS, 4),
+                vec![0.4, 0.6, 0.97, 0.01]
+            );
+            assert_eq!(
+                w.e.get(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced),
+                1.5
+            );
+            let render = calls(&w.e, IMAGE_SPACE_RENDER_DISPLACEMENT);
+            assert_eq!(render[0][1], 0x20);
+            assert_ne!(render[0][2], 0, "the renderer");
+            assert_eq!(render[0][3..], [0x0e00_0100, 0x0e00_0100, 0, 1]);
+            // Without entries the count stays zero and the timer restarts.
+            w.e.register(ZONE_MAP_FIRST, |_, _| ret(0));
+            w.e.set_global(DISPLACEMENT_POINTS_A + 8, 0u32);
+            simulate(&mut w);
+            assert_eq!(
+                w.e.get(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced),
+                0.0
+            );
+        }
+
+        #[test]
+        fn the_simulation_is_skipped_without_the_renderer_setting_two() {
+            let (mut w, _, _) = simulation(5.0);
+            w.e.register(RENDER_SETTING_ENTRY, |_, _| ret(1));
+            simulate(&mut w);
+            assert!(calls(&w.e, IMAGE_SPACE_RENDER_DISPLACEMENT).is_empty());
+            assert_eq!(w.e.global::<u8>(DISPLACEMENT_PASS_FLAG), 0);
+            // The height map was stopped into render target mode 6.
+            assert_eq!(
+                calls(&w.e, RENDER_TARGET_SET),
+                vec![vec![6, 0x0e00_0100 + 1]]
+            );
+        }
+
+        #[test]
+        fn the_render_target_is_reset_outside_a_frame_and_the_geometry_rendered_on_request() {
+            let (mut w, _, _) = simulation(5.0);
+            w.e.set_global(WADING_WATER_HEIGHT_MAP, 0u32);
+            let render_object = w.e.global::<u32>(RENDER_OBJECT_GLOBAL);
+            w.e.mem.set_u32(render_object + 0x200, 1);
+            w.e.set_global(DISPLACEMENT_RENDER_FLAG, 1u8);
+            // The geometry render needs only the doubles of the wading camera;
+            // it is looked at in its own tests.
+            quiet(&mut w.e, &[ATTACH_CHILD_DOUBLE_ADDRESS]);
+            simulate(&mut w);
+            // Once before and once after the optional render.
+            assert_eq!(calls(&w.e, RENDER_TARGET_RESET).len(), 2);
+            // The missing height map was created.
+            assert_eq!(w.e.global::<u32>(WADING_WATER_HEIGHT_MAP), GREY_TEXTURE);
+            assert_eq!(w.e.global::<u8>(WADING_MAP_CREATED_FLAG), 1);
+            assert_eq!(calls(&w.e, CAMERA_CONSTRUCT).len(), 1);
+        }
+
+        #[test]
+        fn after_ten_units_of_time_the_geometry_is_detached_and_the_map_returned() {
+            let (mut w, geometry, _) = simulation(5.0);
+            w.e.set(w.system, TESWaterSystem::fTimeSinceLastRipplePlaced, 10.0);
+            w.e.set_global(DISPLACEMENT_ACTIVE_FLAG, 1u8);
+            // A second group without geometry is left alone.
+            let other = group(&mut w.e, 3.0, 0);
+            let groups = [w.group.addr(), other];
+            fill_list(&mut w.e, w.system.addr() + 0x3c, &groups);
+            simulate(&mut w);
+            assert_eq!(
+                calls(&w.e, DETACH_CHILD_DOUBLE_ADDRESS),
+                vec![vec![w.root, geometry]]
+            );
+            assert_eq!(
+                w.e.get(w.group, PlaceableWaterGroup::spWadingWaterGeometry),
+                0
+            );
+            assert_eq!(
+                calls(&w.e, RETURN_RENDERED_TEXTURE),
+                vec![vec![0x0aaa_0000, 0x0e00_0100]]
+            );
+            assert_eq!(w.e.global::<u32>(WADING_WATER_HEIGHT_MAP), 0);
+            assert_eq!(w.e.global::<u8>(DISPLACEMENT_ACTIVE_FLAG), 0);
+            // Nothing of the simulation ran.
+            assert!(calls(&w.e, RENDER_TARGET_SET).is_empty());
+        }
+
+        // --- 004e9510, 004e9530 -------------------------------------------------
+
+        #[test]
+        fn the_renderer_is_inside_a_frame_when_its_word_at_0x200_is_nonzero() {
+            let mut e = engine();
+            let render_object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+            assert!(e.call(0x004e_9510, &[]).bool());
+            e.mem.set_u32(render_object + 0x200, 5);
+            assert!(!e.call(0x004e_9510, &[]).bool());
+            assert_eq!(e.call(0x004e_9530, &args![render_object]).u32(), 5);
+        }
+
+        // --- 004e9550 -----------------------------------------------------------
+
+        /// What the wading camera doubles saw.
+        #[derive(Default)]
+        struct CameraLog {
+            frustum: Vec<f32>,
+            ortho: u8,
+            look_at: Vec<f32>,
+            drawn: Vec<(u32, u32, u32)>,
+        }
+
+        /// A scene for the wading camera: two groups (planes 10 and 4), the
+        /// first with a water reference in a cell of kind 6 that is in range.
+        fn camera_scene() -> (Wading, Rc<RefCell<CameraLog>>) {
+            let mut w = wading(10.0);
+            let second = group(&mut w.e, 4.0, 0);
+            let first = w.group.addr();
+            fill_list(&mut w.e, w.system.addr() + 0x3c, &[first, second]);
+            let cell = w.e.mem.alloc(0x40);
+            w.e.mem.set_u8(cell + 0x26, 6);
+            w.e.mem.set_u32(w.water_reference + REF_CELL, cell);
+            let top = w.e.mem.u32(w.water_reference + REF_NODE);
+            w.e.mem.set_u8(top + NODE_RANGE, 1);
+            let log = Rc::new(RefCell::new(CameraLog::default()));
+            let frustum_log = log.clone();
+            w.e.register_double(CAMERA_SET_VIEW_FRUSTUM, move |e, a| {
+                let mut log = frustum_log.borrow_mut();
+                log.frustum = (0..6).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+                log.ortho = e.mem.u8(a[1] + 0x18);
+                Ret::default()
+            });
+            let look_at_log = log.clone();
+            w.e.register_double(CAMERA_LOOK_AT_WORLD_POINT, move |e, a| {
+                look_at_log.borrow_mut().look_at =
+                    (0..3).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+                assert_eq!(a[2], UP_VECTOR);
+                Ret::default()
+            });
+            let drawn_log = log.clone();
+            let property = w.other_property;
+            w.e.register_double(RENDER_PASS_IMMEDIATELY, move |e, a| {
+                drawn_log
+                    .borrow_mut()
+                    .drawn
+                    .push((a[0], a[1], e.mem.u32(property + 0x84)));
+                Ret::default()
+            });
+            w.e.register(PROPERTY_RENDER_PASS, |e, _| {
+                let pass = e.mem.alloc(0x20);
+                e.mem.set_u16(pass + 4, 3);
+                ret(pass)
+            });
+            w.e.set_global(BIT_FLAGS_011F941C, 0xffffu16);
+            (w, log)
+        }
+
+        fn render_wading(w: &mut Wading) {
+            start_log(&mut w.e);
+            w.e.call(0x004e_9550, &args![w.system]);
+        }
+
+        #[test]
+        fn the_wading_camera_looks_down_from_above_the_highest_group() {
+            let (mut w, log) = camera_scene();
+            render_wading(&mut w);
+            let camera = calls(&w.e, CAMERA_CONSTRUCT)[0][0];
+            // Above the highest plane (10 + 50) at the player's x and y.
+            assert_eq!(*w.translations.borrow(), vec![(camera, [10.0, 20.0, 60.0])]);
+            assert_eq!(log.borrow().look_at, vec![10.0, 20.0, 10.0]);
+            // Orthographic, half the quad size (100) each way, 0.1 to
+            // |4 - 10| + 100 away.
+            assert_eq!(
+                log.borrow().frustum,
+                vec![-50.0, 50.0, 50.0, -50.0, 0.1, 106.0]
+            );
+            assert_eq!(log.borrow().ortho, 1);
+            assert_eq!(calls(&w.e, FRUSTUM_CONSTRUCT)[0][1], 0);
+            // The camera is made the render object's, the culling process works
+            // for it and the camera and process are destroyed again.
+            let object = w.e.global::<u32>(RENDER_OBJECT_GLOBAL);
+            assert_eq!(
+                calls(&w.e, RENDER_OBJECT_SET_CAMERA_DATA),
+                vec![vec![object, camera + 0x100]]
+            );
+            let culling = calls(&w.e, CULLING_PROCESS_CONSTRUCT)[0][0];
+            assert_eq!(
+                calls(&w.e, CULLING_PROCESS_SET_CAMERA),
+                vec![vec![culling, camera], vec![culling, 0]]
+            );
+            assert_eq!(
+                calls(&w.e, CULLING_PROCESS_SET_PLANES),
+                vec![vec![culling, camera + 0xdc]]
+            );
+            assert_eq!(calls(&w.e, CULLING_PROCESS_DESTRUCT), vec![vec![culling]]);
+            assert_eq!(calls(&w.e, CAMERA_DESTRUCT), vec![vec![camera]]);
+            // The camera data went to the render object's virtual.
+            assert_eq!(calls(&w.e, RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE).len(), 1);
+            assert_eq!(w.e.global::<u8>(WADING_RENDER_ACTIVE_FLAG), 0);
+            assert_eq!(w.e.global::<u16>(BIT_FLAGS_011F941C), 0xfffe);
+        }
+
+        #[test]
+        fn a_water_reference_in_range_is_drawn_at_once_with_stencil_mask_one() {
+            let (mut w, log) = camera_scene();
+            render_wading(&mut w);
+            let drawn = log.borrow().drawn.clone();
+            assert_eq!(drawn.len(), 1);
+            assert_eq!(drawn[0].1, 3, "the pass count");
+            assert_eq!(drawn[0].2, 1, "the stencil mask while drawing");
+            assert_eq!(w.e.mem.u32(w.other_property + 0x84), 7, "restored");
+            let request = calls(&w.e, RENDER_PASS_IMMEDIATELY);
+            assert_eq!(request[0][2..], [0, 0, 0]);
+        }
+
+        #[test]
+        fn a_reference_out_of_range_is_not_drawn_but_its_mask_is_restored() {
+            let (mut w, log) = camera_scene();
+            let top = w.e.mem.u32(w.water_reference + REF_NODE);
+            w.e.mem.set_u8(top + NODE_RANGE, 0);
+            render_wading(&mut w);
+            assert!(log.borrow().drawn.is_empty());
+            assert!(calls(&w.e, PROPERTY_RENDER_PASS).is_empty());
+            assert_eq!(w.e.mem.u32(w.other_property + 0x84), 7);
+        }
+
+        #[test]
+        fn references_in_other_cells_or_with_other_owners_are_left_alone() {
+            let (mut w, log) = camera_scene();
+            // A cell of another kind.
+            let cell = w.e.mem.u32(w.water_reference + REF_CELL);
+            w.e.mem.set_u8(cell + 0x26, 5);
+            render_wading(&mut w);
+            assert!(calls(&w.e, NODE_GET_PROPERTY).is_empty());
+            // No cell at all.
+            w.e.mem.set_u32(w.water_reference + REF_CELL, 0);
+            render_wading(&mut w);
+            assert!(calls(&w.e, CELL_BYTE_IS_SIX).is_empty());
+            // An owner of another type.
+            w.e.mem.set_u32(w.water_reference + REF_CELL, cell);
+            w.e.mem.set_u8(cell + 0x26, 6);
+            let owner = w.e.mem.u32(w.geometry + GEOMETRY_OWNER);
+            w.e.mem.set_u32(owner + 0x68, WATER_OWNER_TYPE + 1);
+            render_wading(&mut w);
+            assert!(calls(&w.e, NODE_GET_PROPERTY).is_empty());
+            assert!(log.borrow().drawn.is_empty());
+        }
+
+        // --- 004e9bb0, 004e9c10, 004e9c50, 004e9c90, 004e9ce0 --------------------
+
+        #[test]
+        fn the_rotation_columns_are_copied_through_a_local_point() {
+            let mut e = engine();
+            let out = e.mem.alloc(0x20);
+            start_log(&mut e);
+            assert_eq!(e.call(0x004e_9c10, &args![0x4000u32, out]).u32(), out);
+            assert_eq!(floats_at(&e, out, 3), vec![20.0, 21.0, 22.0]);
+            assert_eq!(
+                e.call(0x004e_9c50, &args![0x4000u32, out + 0x10]).u32(),
+                out + 0x10
+            );
+            assert_eq!(floats_at(&e, out + 0x10, 3), vec![40.0, 41.0, 42.0]);
+            let columns = calls(&e, MATRIX_COLUMN);
+            assert_eq!(columns[0][..2], [0x4000 + 0x68, 1]);
+            assert_eq!(columns[1][..2], [0x4000 + 0x68, 2]);
+            assert_eq!(calls(&e, ADDRESS_OF_THIS).len(), 2);
+        }
+
+        #[test]
+        fn the_camera_data_goes_to_the_render_object_with_the_camera_columns() {
+            let mut e = engine();
+            let camera = e.mem.alloc(0x120);
+            let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+            let seen: Rc<RefCell<Vec<Vec<f32>>>> = Rc::default();
+            let words: Rc<RefCell<Vec<u32>>> = Rc::default();
+            {
+                let seen = seen.clone();
+                let words = words.clone();
+                e.register_double(RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE, move |e, a| {
+                    *words.borrow_mut() = a.to_vec();
+                    // The three columns, passed by address.
+                    *seen.borrow_mut() = (2..5)
+                        .map(|i| (0..3).map(|j| e.mem.f32(a[i] + 4 * j)).collect())
+                        .collect();
+                    Ret::default()
+                });
+            }
+            e.call(0x004e_9bb0, &args![object, camera]);
+            let words = words.borrow().clone();
+            assert_eq!(words[0], object);
+            assert_eq!(words[1], camera + 0x8c, "the world translate");
+            assert_eq!(words[5], camera + 0xdc);
+            assert_eq!(words[6], camera + 0x100);
+            assert_eq!(
+                *seen.borrow(),
+                vec![
+                    vec![10.0, 11.0, 12.0],
+                    vec![20.0, 21.0, 22.0],
+                    vec![40.0, 41.0, 42.0]
+                ]
+            );
+        }
+
+        #[test]
+        fn camera_data_is_only_passed_on_when_the_render_object_asks_for_it() {
+            let mut e = engine();
+            let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+            start_log(&mut e);
+            e.call(
+                0x004e_9c90,
+                &args![object, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32],
+            );
+            assert_eq!(
+                calls(&e, RENDER_OBJECT_CHECK),
+                vec![vec![object, SET_CAMERA_DATA_NAME, 1]]
+            );
+            assert_eq!(
+                calls(&e, RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE),
+                vec![vec![object, 1, 2, 3, 4, 5, 6]]
+            );
+            e.register(RENDER_OBJECT_CHECK, |_, _| ret(0));
+            start_log(&mut e);
+            e.call(
+                0x004e_9c90,
+                &args![object, 1u32, 2u32, 3u32, 4u32, 5u32, 6u32],
+            );
+            assert!(calls(&e, RENDER_OBJECT_SET_CAMERA_DATA_DOUBLE).is_empty());
+        }
+
+        #[test]
+        fn a_bit_of_the_flag_word_is_set_or_cleared_by_index_modulo_sixteen() {
+            let mut e = engine();
+            e.set_global(BIT_FLAGS_011F941C, 0u16);
+            e.call(0x004e_9ce0, &args![3u32, 1u32]);
+            assert_eq!(e.global::<u16>(BIT_FLAGS_011F941C), 0x0008);
+            e.call(0x004e_9ce0, &args![16u32 + 5, 1u32]);
+            assert_eq!(e.global::<u16>(BIT_FLAGS_011F941C), 0x0028);
+            e.call(0x004e_9ce0, &args![3u32, 0u32]);
+            assert_eq!(e.global::<u16>(BIT_FLAGS_011F941C), 0x0020);
+            e.call(0x004e_9ce0, &args![15u32, 7u32]);
+            assert_eq!(e.global::<u16>(BIT_FLAGS_011F941C), 0x8020);
+            e.call(0x004e_9ce0, &args![0u32, 0u32]);
+            assert_eq!(
+                e.global::<u16>(BIT_FLAGS_011F941C),
+                0x8020,
+                "clearing a clear bit"
+            );
+        }
+
+        // --- the small accessors ------------------------------------------------
+
+        #[test]
+        fn accumulator_setters_store_their_arguments() {
+            let mut e = engine();
+            let accumulator = e.mem.alloc(0x280);
+            e.call(0x004e_a860, &args![accumulator, 1u32]);
+            assert_eq!(e.mem.u8(accumulator + 0x164), 1);
+            e.call(0x004e_a860, &args![accumulator, 0x1ffu32]);
+            assert_eq!(e.mem.u8(accumulator + 0x164), 0xff);
+            let color = e.mem.alloc(0x10);
+            for (i, value) in [0.1f32, 0.2, 0.3, 0.4].into_iter().enumerate() {
+                e.mem.set_f32(color + 4 * i as u32, value);
+            }
+            e.call(0x004e_a880, &args![accumulator, color]);
+            assert_eq!(
+                floats_at(&e, accumulator + 0x154, 4),
+                vec![0.1, 0.2, 0.3, 0.4]
+            );
+        }
+
+        fn check_flag_accessor(address: u32, mask: u32) {
+            let mut e = engine();
+            let form = e.mem.alloc(0x40);
+            e.mem.set_u32(form + BASE_FORM_FLAGS, mask);
+            start_log(&mut e);
+            assert!(e.call(address, &args![form]).bool());
+            assert_eq!(calls(&e, FORM_FLAG_TEST), vec![vec![form, mask]]);
+            e.mem.set_u32(form + BASE_FORM_FLAGS, !mask);
+            assert!(!e.call(address, &args![form]).bool());
+        }
+
+        #[test]
+        fn form_flag_accessors_test_one_bit_each() {
+            check_flag_accessor(0x004e_a8b0, 0x04);
+            check_flag_accessor(0x004e_a8d0, 0x08);
+            check_flag_accessor(0x004e_a8f0, 0x10);
+            check_flag_accessor(0x004e_a910, 0x20);
+            check_flag_accessor(0x004e_a930, 0x40);
+        }
+
+        #[test]
+        fn address_accessors_return_members_and_statics() {
+            let mut e = engine();
+            // The sky colour address, the rendering system's static and the
+            // pointer members.
+            assert_eq!(e.call(0x004e_a950, &args![0x1000u32]).u32(), 0x1060);
+            assert_eq!(e.call(0x004e_a970, &[]).u32(), MT_RENDERING_SYSTEM);
+            let holder = e.mem.alloc(0x140);
+            e.mem.set_u32(holder + 0x134, 0x6677);
+            assert_eq!(e.call(0x004e_a980, &args![holder]).u32(), 0x6677);
+            e.set_global(TERRAIN_POINTER_A, 0xaaaau32);
+            e.set_global(TERRAIN_POINTER_B, 0xbbbbu32);
+            e.set_global(TERRAIN_POINTER_C, 0xccccu32);
+            assert_eq!(e.call(0x004e_a9a0, &args![0x1u32]).u32(), 0xaaaa);
+            assert_eq!(e.call(0x004e_a9c0, &args![0x1u32]).u32(), 0xbbbb);
+            assert_eq!(e.call(0x004e_a9e0, &args![0x1u32]).u32(), 0xcccc);
+            let player = e.mem.alloc(0x700);
+            e.mem.set_u8(player + 0x64a, 3);
+            assert_eq!(e.call(0x004e_af60, &args![player]).u8(), 3);
+        }
+
+        #[test]
+        fn the_counter_is_lowered_and_the_render_state_called_with_zeros() {
+            let mut e = engine();
+            quiet(&mut e, &[RENDER_STATE_SET]);
+            e.set_global(COUNTER_011FFA14, 10u32);
+            start_log(&mut e);
+            e.call(0x004e_b510, &args![3u32]);
+            assert_eq!(e.global::<u32>(COUNTER_011FFA14), 7);
+            assert_eq!(calls(&e, RENDER_STATE_SET), vec![vec![0; 7]]);
+        }
+
+        // --- 004e9d40, 004eaa00, 004eaf80 ---------------------------------------
+
+        const ACCUMULATOR_VTABLE: u32 = 0x0200_c000;
+        const ACCUMULATOR_CAMERA_DOUBLE: u32 = 0x0300_0205;
+        /// The `NiPointer` the sky holds at +4 (`SKY_OBJECT_POINTER`).
+        const SKY_OBJECTS: u32 = 0x5151;
+        /// The statics `fn_004ea9a0`, `fn_004ea9c0` and `fn_004ea9e0` read.
+        const TERRAIN_A: u32 = 0xaaa1;
+        const TERRAIN_B: u32 = 0xbbb2;
+        const TERRAIN_C: u32 = 0xccc3;
+        /// The 3D objects `NODE_FIRST_CHILD`-less doubles give the grid cells:
+        /// child `i` of the cell at address `a` is `a * 16 + i`.
+        const GRID_CELL_A: u32 = 0x40;
+        const GRID_CELL_B: u32 = 0x80;
+
+        struct Reflection {
+            w: Wading,
+            viewer: u32,
+            base_form: u32,
+            /// The render table entry (`RENDER_TABLE_ENTRY` returns it).
+            table_entry: u32,
+            /// The calls `REFLECT_CAMERA_ABOUT_PLANE` and the virtual at +0x8c
+            /// of the accumulators saw.
+            accumulator_cameras: Rc<RefCell<Vec<(u32, u32)>>>,
+        }
+
+        /// The wading scene (one group at height 10, one water reference in a
+        /// cell of kind 6, with a water shader property) plus the doubles of
+        /// the reflection setups: a sky, a world space with a terrain manager,
+        /// a 2 by 2 cell grid and a viewer.
+        fn reflection() -> Reflection {
+            let mut w = wading(10.0);
+            let e = &mut w.e;
+            e.register(CAMERA_CONSTRUCT, |_, a| ret(a[0]));
+            e.register(ACCUMULATOR_CONSTRUCT, |e, a| {
+                e.mem.set_u32(a[0], ACCUMULATOR_VTABLE);
+                ret(a[0])
+            });
+            let accumulator_cameras: Rc<RefCell<Vec<(u32, u32)>>> = Rc::default();
+            {
+                let log = accumulator_cameras.clone();
+                e.register_double(ACCUMULATOR_CAMERA_DOUBLE, move |_, a| {
+                    log.borrow_mut().push((a[0], a[1]));
+                    Ret::default()
+                });
+            }
+            vtable(
+                e,
+                ACCUMULATOR_VTABLE,
+                &[(ACCUMULATOR_SET_CAMERA_VIRTUAL, ACCUMULATOR_CAMERA_DOUBLE)],
+            );
+            quiet(
+                e,
+                &[
+                    REFLECT_CAMERA_ABOUT_PLANE,
+                    ACCUMULATOR_SET_WORD_194,
+                    ACCUMULATOR_SET_WORD_19C,
+                    ACCUMULATOR_SET_ACCUMULATE,
+                    MT_ADD_ACCUM_TASK,
+                    MT_SET_THREAD_STAGE,
+                    MT_SET_THREAD_STAGE_ONE,
+                    TERRAIN_STEP_FIRST,
+                    TERRAIN_STEP_SECOND,
+                    TERRAIN_TOGGLE_ONE,
+                    TERRAIN_TOGGLE_ZERO,
+                ],
+            );
+            e.register(LIST_REMOVE_ALL, |e, a| {
+                for i in 0..3 {
+                    e.mem.set_u32(a[0] + 4 * i, 0);
+                }
+                Ret::default()
+            });
+            e.register(TES_GET_SKY, |e, a| ret(e.mem.u32(a[0] + 0x68)));
+            e.register(SKY_OBJECT_POINTER, |e, a| ret(e.mem.u32(a[0] + 4)));
+            e.register(TERRAIN_READY, |_, _| ret(1));
+            e.register(COLOR_FACTOR_ADDRESS, |_, a| ret(a[0] + 0x20));
+            e.register(WORLD_SPACE_GET_TERRAIN_MANAGER, |e, a| {
+                ret(e.mem.u32(a[0] + 0x3c))
+            });
+            e.register(NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+            e.register(REFERENCE_IS_EXCLUDED, |e, a| {
+                ret(e.mem.u8(a[0] + 0xc8) as u32)
+            });
+            // The render table entry leads to the three factors at +0x20.
+            let holder = e.mem.alloc(0x200);
+            let factors = e.mem.alloc(0x40);
+            e.mem.set_u32(holder + 0x134, factors);
+            for (i, value) in [2.0f32, 4.0, 0.5].into_iter().enumerate() {
+                e.mem.set_f32(factors + 0x20 + 4 * i as u32, value);
+            }
+            e.register_double(RENDER_TABLE_ENTRY, move |_, _| ret(holder));
+            e.register(TES_GRID_CELL_SLOT, |e, a| {
+                // Cells (0, 0) and (1, 1) exist.
+                let cells = e.global::<u32>(0x011d_8800);
+                if a[1] == a[2] {
+                    ret(cells + 4 * a[1])
+                } else {
+                    ret(cells + 8)
+                }
+            });
+            e.register(CELL_NODE_CHILD, |_, a| ret(a[0] * 16 + a[1]));
+            e.map(0x011c_a000, 0x1000);
+            let cells = e.mem.alloc(0x10);
+            e.mem.set_u32(cells, GRID_CELL_A);
+            e.mem.set_u32(cells + 4, GRID_CELL_B);
+            e.set_global(0x011d_8800u32, cells);
+            set_int_setting(e, SETTING_GRID_SIZE, 2);
+            e.set_global(TERRAIN_POINTER_A, TERRAIN_A);
+            e.set_global(TERRAIN_POINTER_B, TERRAIN_B);
+            e.set_global(TERRAIN_POINTER_C, TERRAIN_C);
+            // The sky, with its colour and the objects it holds.
+            let sky = e.mem.alloc(0x100);
+            e.mem.set_u32(sky + 4, SKY_OBJECTS);
+            for (i, value) in [0.5f32, 0.25, 1.0].into_iter().enumerate() {
+                e.mem.set_f32(sky + 0x60 + 4 * i as u32, value);
+            }
+            let tes = e.global::<u32>(TES_POINTER);
+            e.mem.set_u32(tes + 0x68, sky);
+            // The world space and its terrain manager.
+            let world_space = e.mem.alloc(0x100);
+            let terrain = e.mem.alloc(0x10);
+            e.mem.set_u32(world_space + 0x3c, terrain);
+            e.mem.set_u32(tes + 0x50, world_space);
+            // The water reference: in a cell of kind 6, in range.
+            let cell = e.mem.alloc(0x40);
+            e.mem.set_u8(cell + 0x26, 6);
+            e.mem.set_u32(w.water_reference + REF_CELL, cell);
+            let base_form = e.mem.u32(w.water_reference + REF_BASE_FORM);
+            let viewer = e.mem.alloc(0x100);
+            let top = e.mem.u32(w.water_reference + REF_NODE);
+            e.mem.set_u8(top + NODE_RANGE, 1);
+            Reflection {
+                w,
+                viewer,
+                base_form,
+                table_entry: holder,
+                accumulator_cameras,
+            }
+        }
+
+        fn set_int_setting(e: &mut Engine, setting: u32, value: u32) {
+            e.set_global(setting + 4, value);
+        }
+
+        impl Reflection {
+            fn set_flags(&mut self, flags: u32) {
+                self.w
+                    .e
+                    .mem
+                    .set_u32(self.base_form + BASE_FORM_FLAGS, flags);
+            }
+
+            fn run(&mut self, low_detail: bool) {
+                start_log(&mut self.w.e);
+                self.w.e.call(
+                    0x004e_9d40,
+                    &args![self.w.system, self.viewer, self.w.group, low_detail],
+                );
+            }
+
+            fn static_objects(&self) -> Vec<u32> {
+                list_items(&self.w.e, self.w.group.addr() + 0x64)
+            }
+
+            fn dynamic_objects(&self) -> Vec<u32> {
+                list_items(&self.w.e, self.w.group.addr() + 0x70)
+            }
+        }
+
+        #[test]
+        fn the_group_reflection_makes_a_camera_and_an_accumulator_and_hands_them_over() {
+            let mut r = reflection();
+            r.set_flags(0x40);
+            r.w.e
+                .set(r.w.group, PlaceableWaterGroup::iReflectionThreadStage, 4);
+            r.run(false);
+            let group = r.w.group;
+            let camera = r.w.e.get(group, PlaceableWaterGroup::spReflectionCamera);
+            let accumulator =
+                r.w.e
+                    .get(group, PlaceableWaterGroup::spGroupReflectionSorter);
+            assert_ne!(camera, 0);
+            assert_ne!(accumulator, 0);
+            // The viewer is reflected about the group's plane into the new camera.
+            assert_eq!(
+                calls(&r.w.e, REFLECT_CAMERA_ABOUT_PLANE),
+                vec![vec![r.viewer, group.addr() + 4, camera]]
+            );
+            // The accumulator was prepared: the render table word, the byte at
+            // +0x164, the camera and `bAccumulate`.
+            assert_eq!(
+                calls(&r.w.e, ACCUMULATOR_SET_WORD_194),
+                vec![vec![accumulator, r.table_entry]]
+            );
+            assert_eq!(r.w.e.mem.u8(accumulator + 0x164), 1);
+            assert_eq!(*r.accumulator_cameras.borrow(), vec![(accumulator, camera)]);
+            assert_eq!(
+                calls(&r.w.e, ACCUMULATOR_SET_ACCUMULATE),
+                vec![vec![accumulator, 1]]
+            );
+            // The task: camera, the two lists, the accumulator, 4 and stage 5.
+            let renderer = MT_RENDERING_SYSTEM;
+            assert_eq!(
+                calls(&r.w.e, MT_ADD_ACCUM_TASK),
+                vec![vec![
+                    renderer,
+                    camera,
+                    0,
+                    0,
+                    group.addr() + 0x64,
+                    group.addr() + 0x70,
+                    accumulator,
+                    4,
+                    5,
+                    0
+                ]]
+            );
+            assert_eq!(
+                calls(&r.w.e, MT_SET_THREAD_STAGE),
+                vec![vec![renderer, 0, 5]]
+            );
+            // The scope of `TESWater.cpp` line 0xefb is opened and closed.
+            let scope = calls(&r.w.e, ALLOCATION_SCOPE_CONSTRUCT);
+            assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0xefb]);
+            assert_eq!(
+                calls(&r.w.e, ALLOCATION_SCOPE_DESTRUCT),
+                vec![vec![scope[0][0]]]
+            );
+        }
+
+        #[test]
+        fn the_reference_properties_take_the_group_reflection_map_and_the_sky_is_listed_once() {
+            let mut r = reflection();
+            r.set_flags(0x40);
+            // A second reference with the same base form.
+            let (second, _, geometry, _) = geometry_chain(&mut r.w.e);
+            let property = r.w.e.mem.alloc(0x150);
+            r.w.e.mem.set_u32(geometry + GEOMETRY_PROPERTY, property);
+            r.w.e.mem.set_u32(second + REF_BASE_FORM, r.base_form);
+            let cell = r.w.e.mem.u32(r.w.water_reference + REF_CELL);
+            r.w.e.mem.set_u32(second + REF_CELL, cell);
+            let first = r.w.water_reference;
+            fill_list(&mut r.w.e, r.w.group.addr() + 0x24, &[first, second]);
+            r.w.e.mem.set_u32(r.w.group.addr() + 0x54, 0x0e00_0099);
+            r.run(false);
+            // Both properties are pointed at the group's reflection map.
+            for property in [r.w.other_property, property] {
+                assert_eq!(
+                    r.w.e.get(
+                        Ptr::<WaterShaderProperty>::new(property),
+                        WaterShaderProperty::spReflectionMap
+                    ),
+                    0x0e00_0099,
+                    "the group's own reflection map"
+                );
+            }
+            // The sky's objects only once, whatever the number of references.
+            assert_eq!(r.static_objects(), vec![SKY_OBJECTS]);
+        }
+
+        #[test]
+        fn a_group_with_silhouette_reflections_gets_the_sky_colour() {
+            let mut r = reflection();
+            r.set_flags(0);
+            r.w.e.set(
+                r.w.group,
+                PlaceableWaterGroup::bRenderSilhouetteReflections,
+                true,
+            );
+            r.run(false);
+            let accumulator =
+                r.w.e
+                    .get(r.w.group, PlaceableWaterGroup::spGroupReflectionSorter);
+            assert_eq!(
+                calls(&r.w.e, ACCUMULATOR_SET_WORD_19C),
+                vec![vec![accumulator, 0xf]]
+            );
+            assert_eq!(
+                floats_at(&r.w.e, accumulator + 0x154, 4),
+                vec![1.0, 1.0, 0.5, 1.0]
+            );
+            // A group without them keeps the colour.
+            let mut r = reflection();
+            r.run(false);
+            assert!(calls(&r.w.e, ACCUMULATOR_SET_WORD_19C).is_empty());
+        }
+
+        #[test]
+        fn the_land_children_of_the_loaded_grid_are_added_unless_the_detail_is_low() {
+            let mut r = reflection();
+            r.set_flags(0x04);
+            r.run(false);
+            // Cells (0, 0) and (1, 1) exist; each gives its four children, the
+            // newest first in the list.
+            let mut expected = vec![];
+            for cell in [GRID_CELL_A, GRID_CELL_B] {
+                for i in 0..4 {
+                    expected.push(cell * 16 + i);
+                }
+            }
+            expected.reverse();
+            assert_eq!(r.static_objects(), expected);
+            // Low detail leaves them out.
+            let mut r = reflection();
+            r.set_flags(0x04);
+            r.run(true);
+            assert!(r.static_objects().is_empty());
+            // So does an interior.
+            let mut r = reflection();
+            r.set_flags(0x04);
+            let tes = r.w.e.global::<u32>(TES_POINTER);
+            r.w.e.mem.set_u32(tes + 0x34, 0x77);
+            r.run(false);
+            assert!(r.static_objects().is_empty());
+            // The setting adds them whatever the form flags say.
+            let mut r = reflection();
+            r.set_flags(0);
+            set_setting(&mut r.w.e, SETTING_FORCE_HIGH_DETAIL_LAND_REFLECTIONS, true);
+            r.run(false);
+            assert_eq!(r.static_objects().len(), 8);
+        }
+
+        #[test]
+        fn the_terrain_objects_are_added_once_each_by_their_flags() {
+            let mut r = reflection();
+            r.set_flags(0x08 | 0x10 | 0x20);
+            // A second reference with the same flags adds nothing more.
+            let (second, _, geometry, _) = geometry_chain(&mut r.w.e);
+            let property = r.w.e.mem.alloc(0x150);
+            r.w.e.mem.set_u32(geometry + GEOMETRY_PROPERTY, property);
+            r.w.e.mem.set_u32(second + REF_BASE_FORM, r.base_form);
+            let cell = r.w.e.mem.u32(r.w.water_reference + REF_CELL);
+            r.w.e.mem.set_u32(second + REF_CELL, cell);
+            let first = r.w.water_reference;
+            fill_list(&mut r.w.e, r.w.group.addr() + 0x24, &[first, second]);
+            r.run(false);
+            assert_eq!(r.static_objects(), vec![TERRAIN_C, TERRAIN_B, TERRAIN_A]);
+            // The terrain helpers run around the first two.
+            assert_eq!(calls(&r.w.e, TERRAIN_STEP_FIRST).len(), 2);
+            assert_eq!(calls(&r.w.e, TERRAIN_STEP_SECOND).len(), 2);
+            // Without a ready terrain nothing is added.
+            let mut r = reflection();
+            r.set_flags(0x08 | 0x10 | 0x20);
+            r.w.e.register(TERRAIN_READY, |_, _| ret(0));
+            r.run(false);
+            assert!(r.static_objects().is_empty());
+        }
+
+        #[test]
+        fn a_reference_outside_the_exterior_cell_counts_only_with_the_08000000_flag() {
+            let mut r = reflection();
+            r.set_flags(0x40);
+            let cell = r.w.e.mem.u32(r.w.water_reference + REF_CELL);
+            r.w.e.mem.set_u8(cell + 0x26, 5);
+            r.run(false);
+            assert!(r.static_objects().is_empty(), "wrong cell kind, no flag");
+            assert!(calls(&r.w.e, NODE_GET_PROPERTY).is_empty());
+            r.set_flags(0x40 | 0x0800_0000);
+            r.run(false);
+            assert_eq!(r.static_objects(), vec![SKY_OBJECTS]);
+            // In an interior the flag does not help.
+            let tes = r.w.e.global::<u32>(TES_POINTER);
+            r.w.e.mem.set_u32(tes + 0x34, 0x77);
+            let group = r.w.group;
+            r.w.e.mem.set_u32(group.addr() + 0x64, 0);
+            r.w.e.mem.set_u32(group.addr() + 0x68, 0);
+            r.w.e.mem.set_u32(group.addr() + 0x6c, 0);
+            r.run(false);
+            assert!(r.static_objects().is_empty());
+            // A reference whose geometry has no water shader property is skipped.
+            let mut r = reflection();
+            r.set_flags(0x40);
+            r.w.e.mem.set_u32(r.w.geometry + GEOMETRY_PROPERTY, 0);
+            r.run(false);
+            assert!(r.static_objects().is_empty());
+            assert!(calls(&r.w.e, NI_POINTER_ASSIGN_FROM).is_empty());
+        }
+
+        /// A reflected-references list node `{entry, next}` whose entry is
+        /// `{reference, flags}`.
+        fn reflected_node(e: &mut Engine, reference: u32, flags: u32, next: u32) -> u32 {
+            let entry = e.mem.alloc(8);
+            e.mem.set_u32(entry, reference);
+            e.mem.set_u32(entry + 4, flags);
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, entry);
+            e.mem.set_u32(node + 4, next);
+            node
+        }
+
+        /// A reference with a 3D object.
+        fn reflected_reference(e: &mut Engine) -> u32 {
+            let reflected = reference(e);
+            let top = node(e);
+            e.mem.set_u32(reflected + REF_NODE, top);
+            reflected
+        }
+
+        #[test]
+        fn references_the_reference_reflects_are_listed_and_remembered() {
+            let mut r = reflection();
+            r.set_flags(0);
+            let listed = reflected_reference(&mut r.w.e);
+            let ignored = reflected_reference(&mut r.w.e);
+            let known = reflected_reference(&mut r.w.e);
+            let excluded = reflected_reference(&mut r.w.e);
+            r.w.e.mem.set_u8(excluded + 0xc8, 1);
+            r.w.map.borrow_mut().insert(known, known);
+            let last = reflected_node(&mut r.w.e, excluded, 1, 0);
+            let third = reflected_node(&mut r.w.e, known, 1, last);
+            let second = reflected_node(&mut r.w.e, ignored, 0, third);
+            let first = reflected_node(&mut r.w.e, listed, 1, second);
+            r.w.e.mem.set_u32(r.w.water_reference + 0x44, first);
+            r.run(false);
+            // Only the reflected reference the map did not know, that is not
+            // excluded and whose entry has the flag, is listed, with the map.
+            let listed_node = r.w.e.mem.u32(listed + REF_NODE);
+            assert_eq!(r.static_objects(), vec![listed_node]);
+            assert_eq!(r.w.map.borrow().get(&listed), Some(&listed));
+            assert!(!r.w.map.borrow().contains_key(&ignored));
+            assert!(!r.w.map.borrow().contains_key(&excluded));
+            // In an interior the excluded reference is listed too.
+            let mut r = reflection();
+            r.set_flags(0);
+            let excluded = reflected_reference(&mut r.w.e);
+            r.w.e.mem.set_u8(excluded + 0xc8, 1);
+            let only = reflected_node(&mut r.w.e, excluded, 1, 0);
+            r.w.e.mem.set_u32(r.w.water_reference + 0x44, only);
+            let tes = r.w.e.global::<u32>(TES_POINTER);
+            r.w.e.mem.set_u32(tes + 0x34, 0x77);
+            r.run(false);
+            assert_eq!(r.static_objects().len(), 1);
+            // Low detail does not look at them at all.
+            let mut r = reflection();
+            r.set_flags(0);
+            let listed = reflected_reference(&mut r.w.e);
+            let only = reflected_node(&mut r.w.e, listed, 1, 0);
+            r.w.e.mem.set_u32(r.w.water_reference + 0x44, only);
+            r.run(true);
+            assert!(r.static_objects().is_empty());
+        }
+
+        #[test]
+        fn the_static_water_object_list_is_walked_for_the_40000000_flag() {
+            let mut r = reflection();
+            r.set_flags(0x4000_0000);
+            // The flag moves the geometry one level deeper.
+            let deeper = r.w.e.mem.u32(r.w.geometry + CHILD);
+            let property = r.w.e.mem.alloc(0x150);
+            r.w.e.mem.set_u32(deeper + GEOMETRY_PROPERTY, property);
+            let listed = reflected_reference(&mut r.w.e);
+            let excluded = reflected_reference(&mut r.w.e);
+            r.w.e.mem.set_u8(excluded + 0xc8, 1);
+            // The static object at 0x011ca13c: nodes `{reference, next}`.
+            let second = r.w.e.mem.alloc(8);
+            r.w.e.mem.set_u32(second, excluded);
+            r.w.e.mem.set_u32(WATER_OBJECT_011CA13C, listed);
+            r.w.e.mem.set_u32(WATER_OBJECT_011CA13C + 4, second);
+            r.run(false);
+            let node_of_listed = r.w.e.mem.u32(listed + REF_NODE);
+            assert_eq!(r.static_objects(), vec![node_of_listed]);
+            assert!(r.w.map.borrow().contains_key(&listed));
+            assert!(!r.w.map.borrow().contains_key(&excluded));
+        }
+
+        #[test]
+        fn only_the_first_explosion_is_reflected_when_the_setting_is_on() {
+            let mut r = reflection();
+            r.set_flags(0);
+            let explosion = reflected_reference(&mut r.w.e);
+            let later = reflected_reference(&mut r.w.e);
+            fill_list(&mut r.w.e, EXPLOSIONS_LIST, &[explosion, later]);
+            r.run(false);
+            assert!(r.dynamic_objects().is_empty(), "the setting is off");
+            set_setting(&mut r.w.e, SETTING_REFLECT_EXPLOSIONS, true);
+            r.run(false);
+            let node_of_explosion = r.w.e.mem.u32(explosion + REF_NODE);
+            assert_eq!(r.dynamic_objects(), vec![node_of_explosion]);
+            assert!(r.w.map.borrow().contains_key(&explosion));
+            assert!(!r.w.map.borrow().contains_key(&later));
+            // A known explosion is not listed again.
+            r.run(false);
+            assert!(r.dynamic_objects().is_empty());
+        }
+
+        #[test]
+        fn nothing_is_set_up_without_the_water_shader_or_a_viewer() {
+            let mut r = reflection();
+            r.set_flags(0x40);
+            r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+            r.run(false);
+            assert!(calls(&r.w.e, NI_ALLOC).is_empty());
+            // The scope is still opened and closed.
+            assert_eq!(calls(&r.w.e, ALLOCATION_SCOPE_CONSTRUCT).len(), 1);
+            assert_eq!(calls(&r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            let mut r = reflection();
+            r.viewer = 0;
+            r.run(false);
+            assert!(calls(&r.w.e, NI_ALLOC).is_empty());
+            assert!(calls(&r.w.e, MT_ADD_ACCUM_TASK).is_empty());
+        }
+
+        /// The world and sky reflection setups: the `Reflection` scene with
+        /// the world space's water height at 8.0 and a recorder for the
+        /// reflection plane.
+        struct WorldReflection {
+            r: Reflection,
+            /// The plane `REFLECT_CAMERA_ABOUT_PLANE` was given (floats).
+            plane: Rc<RefCell<Vec<f32>>>,
+        }
+
+        fn world_reflection() -> WorldReflection {
+            let mut r = reflection();
+            let tes = r.w.e.global::<u32>(TES_POINTER);
+            let world_space = r.w.e.mem.u32(tes + 0x50);
+            r.w.e.mem.set_f32(world_space + 0x7c, 8.0);
+            r.w.e.register(WORLD_SPACE_WATER_HEIGHT, |e, a| {
+                e.mem.f32(a[0] + 0x7c).into_ret()
+            });
+            let plane: Rc<RefCell<Vec<f32>>> = Rc::default();
+            let log = plane.clone();
+            r.w.e
+                .register_double(REFLECT_CAMERA_ABOUT_PLANE, move |e, a| {
+                    *log.borrow_mut() = (0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+                    Ret::default()
+                });
+            r.w.e.set_global(WORLD_REFLECTION_THREAD_STAGE, 3u32);
+            r.w.e.set_global(SKY_REFLECTION_THREAD_STAGE, 6u32);
+            WorldReflection { r, plane }
+        }
+
+        impl WorldReflection {
+            fn world(&mut self) {
+                start_log(&mut self.r.w.e);
+                let system = self.r.w.system;
+                let viewer = self.r.viewer;
+                self.r.w.e.call(0x004e_aa00, &args![system, viewer]);
+            }
+
+            fn sky(&mut self) {
+                start_log(&mut self.r.w.e);
+                let system = self.r.w.system;
+                let viewer = self.r.viewer;
+                self.r.w.e.call(0x004e_af80, &args![system, viewer]);
+            }
+
+            fn items(&self, list: u32) -> Vec<u32> {
+                list_items(&self.r.w.e, list)
+            }
+        }
+
+        #[test]
+        fn the_world_reflection_reflects_the_viewer_about_the_water_plane_and_lists_the_sky_and_terrain(
+        ) {
+            let mut w = world_reflection();
+            w.world();
+            let e = &w.r.w.e;
+            let camera = e.global::<u32>(WORLD_REFLECTION_CAMERA);
+            let accumulator = e.global::<u32>(WORLD_REFLECTION_SORTER);
+            assert_ne!(camera, 0);
+            assert_ne!(accumulator, 0);
+            // The plane through (0, 0, 8) with the normal (0, 0, 1).
+            assert_eq!(*w.plane.borrow(), vec![0.0, 0.0, 1.0, 8.0]);
+            assert_eq!(calls(e, REFLECT_CAMERA_ABOUT_PLANE)[0][0], w.r.viewer);
+            assert_eq!(
+                *w.r.accumulator_cameras.borrow(),
+                vec![(accumulator, camera)]
+            );
+            // The sky first, then the three terrain objects (newest first).
+            assert_eq!(
+                w.items(STATIC_WORLD_REFLECTIVE_OBJECTS),
+                vec![TERRAIN_C, TERRAIN_B, TERRAIN_A, SKY_OBJECTS]
+            );
+            assert!(w.items(DYNAMIC_WORLD_REFLECTIVE_OBJECTS).is_empty());
+            // The task for stage 3 + 1.
+            assert_eq!(
+                calls(e, MT_ADD_ACCUM_TASK),
+                vec![vec![
+                    MT_RENDERING_SYSTEM,
+                    camera,
+                    0,
+                    0,
+                    STATIC_WORLD_REFLECTIVE_OBJECTS,
+                    DYNAMIC_WORLD_REFLECTIVE_OBJECTS,
+                    accumulator,
+                    4,
+                    4,
+                    0
+                ]]
+            );
+            assert_eq!(
+                calls(e, MT_SET_THREAD_STAGE),
+                vec![vec![MT_RENDERING_SYSTEM, 0, 4]]
+            );
+            let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+            assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0xfe3]);
+            assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            // Without the silhouette settings the colour is left alone.
+            assert!(calls(e, ACCUMULATOR_SET_WORD_19C).is_empty());
+        }
+
+        #[test]
+        fn the_world_reflection_in_an_interior_lists_only_the_sky() {
+            let mut w = world_reflection();
+            let tes = w.r.w.e.global::<u32>(TES_POINTER);
+            w.r.w.e.mem.set_u32(tes + 0x34, 0x77);
+            w.world();
+            assert_eq!(w.items(STATIC_WORLD_REFLECTIVE_OBJECTS), vec![SKY_OBJECTS]);
+        }
+
+        #[test]
+        fn the_world_reflection_has_a_silhouette_colour_with_either_setting() {
+            for setting in [
+                SETTING_AUTO_SILHOUETTE_REFLECTIONS,
+                SETTING_FORCE_LOW_DETAIL_REFLECTIONS,
+            ] {
+                let mut w = world_reflection();
+                set_setting(&mut w.r.w.e, setting, true);
+                w.world();
+                let accumulator = w.r.w.e.global::<u32>(WORLD_REFLECTION_SORTER);
+                assert_eq!(
+                    calls(&w.r.w.e, ACCUMULATOR_SET_WORD_19C),
+                    vec![vec![accumulator, 0xf]]
+                );
+            }
+        }
+
+        #[test]
+        fn forced_high_detail_culls_the_third_person_player_and_lists_one_object() {
+            let mut w = world_reflection();
+            set_setting(&mut w.r.w.e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS, true);
+            let player = object(&mut w.r.w.e, ACTOR_VTABLE, 0x700);
+            let player_node = node(&mut w.r.w.e);
+            w.r.w.e.mem.set_u32(player + REF_NODE, player_node);
+            w.r.w.e.set_global(PLAYER_CHARACTER, player);
+            w.r.w
+                .e
+                .register(POINTER_STATIC_011DEB7C, |_, _| ret(0x6161));
+            w.r.w.e.register(NODE_SET_CULLED, |e, a| {
+                e.mem.set_u32(a[0] + 0x30, a[1]);
+                Ret::default()
+            });
+            w.world();
+            assert!(w.r.w.e.get(w.r.w.system, TESWaterSystem::bCull3rdPerson));
+            assert_eq!(w.r.w.e.mem.u32(player_node + 0x30), 1);
+            assert_eq!(w.items(STATIC_WORLD_REFLECTIVE_OBJECTS), vec![0x6161]);
+            // A player in first person is not culled.
+            let mut w = world_reflection();
+            set_setting(&mut w.r.w.e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS, true);
+            let player = object(&mut w.r.w.e, ACTOR_VTABLE, 0x700);
+            w.r.w.e.mem.set_u8(player + 0x64a, 1);
+            w.r.w.e.set_global(PLAYER_CHARACTER, player);
+            w.r.w
+                .e
+                .register(POINTER_STATIC_011DEB7C, |_, _| ret(0x6161));
+            w.world();
+            assert!(!w.r.w.e.get(w.r.w.system, TESWaterSystem::bCull3rdPerson));
+            assert_eq!(w.items(STATIC_WORLD_REFLECTIVE_OBJECTS), vec![0x6161]);
+        }
+
+        #[test]
+        fn the_world_reflection_needs_the_water_shader_and_a_viewer() {
+            let mut w = world_reflection();
+            w.r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+            w.world();
+            assert!(calls(&w.r.w.e, NI_ALLOC).is_empty());
+            assert_eq!(calls(&w.r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            let mut w = world_reflection();
+            w.r.viewer = 0;
+            w.world();
+            assert!(calls(&w.r.w.e, MT_ADD_ACCUM_TASK).is_empty());
+        }
+
+        #[test]
+        fn the_sky_reflection_uses_its_own_camera_accumulator_and_lists() {
+            let mut w = world_reflection();
+            set_setting(&mut w.r.w.e, SETTING_AUTO_SILHOUETTE_REFLECTIONS, true);
+            w.sky();
+            let e = &w.r.w.e;
+            let camera = e.global::<u32>(SKY_REFLECTION_CAMERA);
+            let accumulator = e.global::<u32>(SKY_REFLECTION_SORTER);
+            assert_ne!(camera, 0);
+            assert_ne!(accumulator, 0);
+            assert_eq!(e.global::<u32>(WORLD_REFLECTION_CAMERA), 0);
+            assert_eq!(*w.plane.borrow(), vec![0.0, 0.0, 1.0, 8.0]);
+            assert_eq!(
+                *w.r.accumulator_cameras.borrow(),
+                vec![(accumulator, camera)]
+            );
+            assert_eq!(w.items(STATIC_SKY_REFLECTIVE_OBJECTS), vec![SKY_OBJECTS]);
+            assert!(w.items(DYNAMIC_SKY_REFLECTIVE_OBJECTS).is_empty());
+            assert_eq!(
+                calls(e, MT_ADD_ACCUM_TASK),
+                vec![vec![
+                    MT_RENDERING_SYSTEM,
+                    camera,
+                    0,
+                    0,
+                    STATIC_SKY_REFLECTIVE_OBJECTS,
+                    DYNAMIC_SKY_REFLECTIVE_OBJECTS,
+                    accumulator,
+                    4,
+                    7,
+                    0
+                ]]
+            );
+            assert_eq!(
+                calls(e, MT_SET_THREAD_STAGE),
+                vec![vec![MT_RENDERING_SYSTEM, 0, 7]]
+            );
+            let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+            assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x1054]);
+            // The sky setup never sets a silhouette colour.
+            assert!(calls(e, ACCUMULATOR_SET_WORD_19C).is_empty());
+        }
+
+        #[test]
+        fn the_sky_reflection_needs_the_water_shader_and_a_viewer() {
+            let mut w = world_reflection();
+            w.r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+            w.sky();
+            assert!(calls(&w.r.w.e, NI_ALLOC).is_empty());
+            let mut w = world_reflection();
+            w.r.viewer = 0;
+            w.sky();
+            assert!(calls(&w.r.w.e, MT_ADD_ACCUM_TASK).is_empty());
+        }
+
+        // --- 004eb220 -----------------------------------------------------------
+
+        /// What `fn_004eb220` told the renderer: the clear colours set.
+        struct Finish {
+            r: Reflection,
+            clear_colors: Rc<RefCell<Vec<Vec<f32>>>>,
+            plane_setup: Rc<RefCell<Vec<Vec<u32>>>>,
+            camera: u32,
+        }
+
+        fn finish() -> Finish {
+            let mut r = reflection();
+            let clear_colors: Rc<RefCell<Vec<Vec<f32>>>> = Rc::default();
+            let log = clear_colors.clone();
+            r.w.e
+                .register_double(RENDERER_SET_COLOR_DOUBLE, move |e, a| {
+                    log.borrow_mut()
+                        .push((0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect());
+                    Ret::default()
+                });
+            let plane_setup: Rc<RefCell<Vec<Vec<u32>>>> = Rc::default();
+            let log = plane_setup.clone();
+            r.w.e.register_double(REFLECTION_PLANE_SETUP, move |_, a| {
+                log.borrow_mut().push(a.to_vec());
+                Ret::default()
+            });
+            quiet(
+                &mut r.w.e,
+                &[
+                    RENDER_STATE_SET,
+                    RENDER_ACCUMULATED_SCENE,
+                    RENDER_OBJECT_SET_CAMERA_DATA,
+                ],
+            );
+            r.w.e
+                .register(CREATE_RENDERED_TEXTURE, |_, _| ret(0x0e00_0777));
+            let camera = r.w.e.mem.alloc(0x120);
+            let group = r.w.group;
+            r.w.e
+                .set(group, PlaceableWaterGroup::spReflectionCamera, camera);
+            r.w.e
+                .set(group, PlaceableWaterGroup::spGroupReflectionSorter, 0x4242);
+            r.w.e
+                .set(group, PlaceableWaterGroup::iReflectionThreadStage, 9);
+            r.w.e.set_global(COUNTER_011FFA14, 5u32);
+            Finish {
+                r,
+                clear_colors,
+                plane_setup,
+                camera,
+            }
+        }
+
+        impl Finish {
+            fn run(&mut self) {
+                start_log(&mut self.r.w.e);
+                let system = self.r.w.system;
+                let group = self.r.w.group;
+                self.r.w.e.call(0x004e_b220, &args![system, group]);
+            }
+        }
+
+        #[test]
+        fn finishing_an_interior_group_renders_its_reflection_texture() {
+            let mut f = finish();
+            f.run();
+            let e = &f.r.w.e;
+            let group = f.r.w.group;
+            // The clear colour alpha is 0 while the group is rendered, then restored.
+            assert_eq!(
+                *f.clear_colors.borrow(),
+                vec![vec![0.1, 0.2, 0.3, 0.0], vec![0.1, 0.2, 0.3, 0.4]]
+            );
+            // The reflection texture is created with 9 and stopped into mode 7.
+            let renderer = calls(e, RENDERER).len();
+            assert!(renderer > 0);
+            assert_eq!(
+                calls(e, CREATE_RENDERED_TEXTURE)[0][0],
+                0x0aaa_0000,
+                "the texture manager"
+            );
+            assert_eq!(calls(e, CREATE_RENDERED_TEXTURE)[0][2..], [9, 0, 0, 0]);
+            assert_eq!(
+                e.get(group, PlaceableWaterGroup::spGroupReflectionMap),
+                0x0e00_0777
+            );
+            assert_eq!(calls(e, RENDER_TARGET_SET), vec![vec![7, 0x0e00_0778]]);
+            // The camera data, the thread stage and the plane.
+            assert_eq!(
+                calls(e, RENDER_OBJECT_SET_CAMERA_DATA),
+                vec![vec![
+                    e.global::<u32>(RENDER_OBJECT_GLOBAL),
+                    f.camera + 0x100
+                ]]
+            );
+            assert_eq!(
+                calls(e, MT_SET_THREAD_STAGE_ONE),
+                vec![vec![MT_RENDERING_SYSTEM, 1, 10]]
+            );
+            // The plane (0, 0, 1) and the negated constant 10, then 0.
+            let setup = f.plane_setup.borrow().clone();
+            assert_eq!(setup.len(), 1);
+            assert_eq!(setup[0][0], f.r.w.system.addr());
+            assert_eq!(
+                setup[0][1..],
+                [
+                    0.0f32.to_bits(),
+                    0.0f32.to_bits(),
+                    1.0f32.to_bits(),
+                    (-10.0f32).to_bits(),
+                    0
+                ]
+            );
+            // The accumulated scene is drawn with the group's camera and sorter,
+            // the render target reset and the camera dropped.
+            assert_eq!(
+                calls(e, RENDER_ACCUMULATED_SCENE),
+                vec![vec![f.camera, 0x4242, 0]]
+            );
+            assert_eq!(
+                calls(e, RENDER_STATE_SET),
+                vec![vec![1, 0, 0, 0, 0, 0, 0], vec![0; 7]]
+            );
+            assert_eq!(e.global::<u32>(COUNTER_011FFA14), 5);
+            assert_eq!(calls(e, RENDER_TARGET_RESET).len(), 1);
+            assert_eq!(e.get(group, PlaceableWaterGroup::spReflectionCamera), 0);
+            // Terrain helper calls around it.
+            assert_eq!(calls(e, TERRAIN_TOGGLE_ONE).len(), 1);
+            assert_eq!(calls(e, TERRAIN_TOGGLE_ZERO).len(), 1);
+            let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+            assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x1082]);
+            assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+        }
+
+        #[test]
+        fn an_existing_reflection_texture_is_kept_and_no_terrain_toggles_in_an_interior() {
+            let mut f = finish();
+            let group = f.r.w.group;
+            f.r.w.e.set(
+                group,
+                PlaceableWaterGroup::spGroupReflectionMap,
+                0x0e00_0123,
+            );
+            let tes = f.r.w.e.global::<u32>(TES_POINTER);
+            f.r.w.e.mem.set_u32(tes + 0x34, 0x77);
+            f.run();
+            assert!(calls(&f.r.w.e, CREATE_RENDERED_TEXTURE).is_empty());
+            assert_eq!(
+                calls(&f.r.w.e, RENDER_TARGET_SET),
+                vec![vec![7, 0x0e00_0124]]
+            );
+            assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ONE).is_empty());
+            assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ZERO).is_empty());
+        }
+
+        #[test]
+        fn a_group_without_a_reflection_camera_or_without_the_water_shader_is_left_alone() {
+            let mut f = finish();
+            let group = f.r.w.group;
+            f.r.w
+                .e
+                .set(group, PlaceableWaterGroup::spReflectionCamera, 0);
+            f.run();
+            assert!(f.clear_colors.borrow().is_empty());
+            assert!(calls(&f.r.w.e, RENDER_TARGET_SET).is_empty());
+            let mut f = finish();
+            f.r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+            f.run();
+            assert!(f.clear_colors.borrow().is_empty());
+            assert_eq!(calls(&f.r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
         }
     }
 }
