@@ -82,6 +82,12 @@
 //!   `TESRegionList::GetDerivedData(kind, point, world)`; `PUSH 0` before
 //!   `BSStringT` text getters belongs to the `Set(text, 0)` call.
 //!
+//! Third session (22 functions, `00588c50` to `00589420`, the end of the unit):
+//! the `OFFSET_DATA` constructor and map teardown, the border region point
+//! test (`fn_00588d10`), `AdjustMapMarkerCoord`, and the three `NiTMapBase`
+//! instances (constructors, destructors and scalar deleting destructors, base
+//! and derived). The unit is complete.
+//!
 //! Not translated: the compiler's exception-unwinding frames (`FS:[0]`
 //! chains and state variables) of `Load`, `InitItem`, `Copy`,
 //! `LoadCell`, `CreateDuplicateForm`, the location name, the grass function,
@@ -92,6 +98,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::NiTPointerMap;
 
 /// A four-character chunk tag as the record reader compares it (the bytes
 /// in file order, read as a little-endian word).
@@ -742,6 +749,52 @@ const FORM_NAME_TEXT: u32 = 0x0050_a550;
 /// Messages: invalid cell coordinate (two integers), cell already exists.
 const MSG_INVALID_CELL_COORD: u32 = 0x0101_87a0;
 const MSG_CELL_EXISTS: u32 = 0x0103_1f6c;
+// ---- Callees and data of the third session (00588c50 to 00589420) ----------
+
+/// The `NiTMapBase` family of this unit (0x10 bytes: vtable, bucket count,
+/// bucket array, item count). The three instances the world space uses have
+/// each a base class vtable and a derived one (slot 0 is the scalar
+/// deleting destructor, read from the exe's data):
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned int,
+/// BSSimpleList<TESObjectREFR *> *>` (`0103200c`, derived `01031fac`),
+/// `NiTMapBase<DFALL<NiTMapItem<TESFile *, OFFSET_DATA *> >, TESFile *,
+/// OFFSET_DATA *>` (`0103202c`, derived `01031fcc`) and
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, int, TESObjectCELL *>`
+/// (`0103204c`, derived `01031fec`).
+const LIST_MAP_BASE_VTABLE: u32 = 0x0103_200c;
+const LIST_MAP_VTABLE: u32 = 0x0103_1fac;
+const OFFSET_MAP_BASE_VTABLE: u32 = 0x0103_202c;
+const OFFSET_MAP_VTABLE: u32 = 0x0103_1fcc;
+const CELL_MAP_BASE_VTABLE: u32 = 0x0103_204c;
+const CELL_MAP_VTABLE: u32 = 0x0103_1fec;
+/// `NiAlloc(size)` (`00aa1070`, `__cdecl`: the bucket array) and
+/// `NiFree(pointer)` (`00aa10f0`, `__cdecl`, null allowed).
+const NI_ALLOC: u32 = 0x00aa_1070;
+const NI_FREE: u32 = 0x00aa_10f0;
+/// The probe of a point the region entries are tested against (`004f7070`,
+/// `__thiscall(this, x, y)`, 8 bytes; `004f7030` is the same from a
+/// pointer), and the test of a region entry for flag `0x40` of `+8`
+/// (`00549580`).
+const REGION_POINT_BUILD_XY: u32 = 0x004f_7070;
+const REGION_ENTRY_FLAG_40: u32 = 0x0054_9580;
+/// The world map offset getters of a world space (`__thiscall`, a float in
+/// ST0): `fMapScale` (`006ca4e0`, `+0x90`), `fMapOffsetX` (`00644930`,
+/// `+0x94`) and `fMapOffsetY` (`008d01e0`, `+0x98`).
+const MAP_SCALE: u32 = 0x006c_a4e0;
+const MAP_OFFSET_X: u32 = 0x0064_4930;
+const MAP_OFFSET_Y: u32 = 0x008d_01e0;
+/// `NiPoint3` operations (`__thiscall`, in `multiboundmarkerdata.cpp`'s
+/// range): `*= scalar` (`00439180`, returns this), `a - b` into the first
+/// stack argument (`00439ef0`) and `a + b` (`00439e90`), both returning that
+/// argument.
+const POINT3_SCALE: u32 = 0x0043_9180;
+const POINT3_SUBTRACT: u32 = 0x0043_9ef0;
+const POINT3_ADD: u32 = 0x0043_9e90;
+/// The float `0.5` (`01016248`) and the double `1.0` (`01012070`) of
+/// `AdjustMapMarkerCoord`; the double `0.0` is `DOUBLE_ZERO`.
+const FLOAT_HALF: u32 = 0x0101_6248;
+const DOUBLE_ONE: u32 = 0x0101_2070;
+
 // ---- Helpers ---------------------------------------------------------------
 
 /// `TESForm::GetFile(index)` of a form.
@@ -3637,6 +3690,322 @@ pub fn tes_world_space_create_offset_data(
     }
     Ptr::new(data)
 }
+// ---- Third session: 00588c50 to 00589420 ----------------------------------------
+
+// Translated from 00588c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::OFFSET_DATA` constructor (unnamed in the Xbox PDB): runs
+/// the folded constructors of the two `NiPoint2` members (`+4` and `+0xC`,
+/// which do nothing) and returns `this`. The caller sets the fields.
+pub fn fn_00588c50(e: &mut Engine, this: Ptr<OffsetData>) -> Ptr<OffsetData> {
+    e.call(LOCAL_STRUCT_CONSTRUCT, &args![this.addr() + 4]);
+    e.call(LOCAL_STRUCT_CONSTRUCT, &args![this.addr() + 0xC]);
+    this
+}
+
+// Translated from 00588c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the world space's offset data map (`+0xB0`): frees every
+/// `OFFSET_DATA`'s cell offset table and the `OFFSET_DATA` itself, then
+/// `RemoveAll`s the map.
+pub fn fn_00588c80(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    let map = this.at(TESWorldSpace::OffsetDataMap).addr();
+    let mut position = e.call(MAP_FIRST_POS, &args![map]).u32();
+    while position != 0 {
+        let (next, _key, data) = map_get_next(e, map, position);
+        position = next;
+        let table = e.mem.u32(data);
+        e.call(MEMORY_FREE, &args![table]);
+        e.call(MEMORY_FREE, &args![data]);
+    }
+    e.call(MAP_REMOVE_ALL, &args![map]);
+}
+
+// Translated from 00588d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the point (two floats at `point`) is covered by the world
+/// space's border region: true when the world space has no border region
+/// flag at all, else true when some region entry of this world space has a
+/// region in its list that contains the point.
+pub fn fn_00588d10(e: &mut Engine, this: Ptr<TESWorldSpace>, point: Ptr) -> bool {
+    if !tes_world_space_get_has_border_region(e, this) {
+        return true;
+    }
+    let x = e.mem.u32(point.addr());
+    let y = e.mem.u32(point.addr() + 4);
+    let handler = e.global::<u32>(DATA_HANDLER_POINTER);
+    let mut covered = false;
+    e.with_stack(8, |e, probe| {
+        e.call(REGION_POINT_BUILD_XY, &args![probe, x, y]);
+        let list = e.call(DATA_HANDLER_LIST_1D8, &args![handler]).u32();
+        let mut node = if list != 0 { list + 4 } else { 0 };
+        while node != 0 {
+            let item_at = e.call(LIST_NODE_ITEM, &args![node]).u32();
+            if e.mem.u32(item_at) == 0 {
+                break;
+            }
+            let entry = list_item(e, node);
+            if e.call(REGION_ENTRY_FLAG_40, &args![entry]).bool()
+                && !e.call(REGION_ENTRY_FLAG_20, &args![entry]).bool()
+                && e.call(REFERENCE_BASE_FORM, &args![entry]).u32() == this.addr()
+            {
+                let mut entries = e.call(REGION_ENTRY_LIST, &args![entry]).u32();
+                while entries != 0 && list_item(e, entries) != 0 {
+                    let candidate = list_item(e, entries);
+                    if e.call(REGION_POINT_IN_ENTRY, &args![candidate, probe])
+                        .bool()
+                    {
+                        covered = true;
+                    }
+                    entries = list_next(e, entries);
+                }
+            }
+            node = list_next(e, node);
+        }
+    });
+    covered
+}
+
+// Translated from 00588e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AdjustMapMarkerCoord` (Xbox PDB): converts the position
+/// (three floats at `coords`) between world and map space. With `to_map`
+/// set it first subtracts the map offsets (x, y); then, when the map scale
+/// is neither 1 nor 0, it recentres on the middle of the minimum and maximum
+/// coordinates, scales by the scale (or its inverse when `to_map` is set)
+/// and moves back; without `to_map` it finally adds the map offsets.
+pub fn tes_world_space_adjust_map_marker_coord(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    coords: Ptr,
+    to_map: u8,
+) {
+    let at = coords.addr();
+    if to_map != 0 {
+        let offset_x = e.call(MAP_OFFSET_X, &args![this]).f64();
+        let x = f32::from_bits(e.mem.u32(at)) as f64;
+        e.mem.set_u32(at, ((x - offset_x) as f32).to_bits());
+        let offset_y = e.call(MAP_OFFSET_Y, &args![this]).f64();
+        let y = f32::from_bits(e.mem.u32(at + 4)) as f64;
+        e.mem.set_u32(at + 4, ((y - offset_y) as f32).to_bits());
+    }
+    let scale = e.call(MAP_SCALE, &args![this]).f64();
+    if scale != e.global::<f64>(DOUBLE_ONE) && scale != e.global::<f64>(DOUBLE_ZERO) {
+        // The middle point is three stack words: the sum of the minimum and
+        // maximum coordinates (z is 0), halved.
+        let minimum_x = e.get(this, TESWorldSpace::MinimumCoords_x) as f64;
+        let maximum_x = e.get(this, TESWorldSpace::MaximumCoords_x) as f64;
+        let minimum_y = e.get(this, TESWorldSpace::MinimumCoords_y) as f64;
+        let maximum_y = e.get(this, TESWorldSpace::MaximumCoords_y) as f64;
+        let half = e.global::<f32>(FLOAT_HALF);
+        let factor = if to_map == 0 { scale } else { 1.0 / scale } as f32;
+        e.with_stack(12, |e, middle| {
+            e.call(LOCAL_STRUCT_CONSTRUCT, &args![middle]);
+            let m = middle.addr();
+            e.mem.set_u32(m, ((minimum_x + maximum_x) as f32).to_bits());
+            e.mem
+                .set_u32(m + 4, ((minimum_y + maximum_y) as f32).to_bits());
+            e.mem.set_u32(m + 8, 0);
+            e.call(POINT3_SCALE, &args![middle, half]);
+            e.with_stack(12, |e, relative| {
+                e.call(POINT3_SUBTRACT, &args![coords, relative, middle]);
+                e.call(POINT3_SCALE, &args![relative, factor]);
+                e.with_stack(12, |e, moved| {
+                    let result = e.call(POINT3_ADD, &args![middle, moved, relative]).u32();
+                    for word in 0..3 {
+                        let value = e.mem.u32(result + word * 4);
+                        e.mem.set_u32(at + word * 4, value);
+                    }
+                });
+            });
+        });
+    }
+    if to_map == 0 {
+        let offset_x = e.call(MAP_OFFSET_X, &args![this]).f64();
+        let x = f32::from_bits(e.mem.u32(at)) as f64;
+        e.mem.set_u32(at, ((offset_x + x) as f32).to_bits());
+        let offset_y = e.call(MAP_OFFSET_Y, &args![this]).f64();
+        let y = f32::from_bits(e.mem.u32(at + 4)) as f64;
+        e.mem.set_u32(at + 4, ((offset_y + y) as f32).to_bits());
+    }
+}
+
+/// The body shared by the three `NiTMapBase` constructors: the vtable, the
+/// bucket count, an empty item count and a zeroed bucket array.
+fn map_base_construct(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32, vtable: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), vtable);
+    e.set(this, NiTPointerMap::m_uiHashSize, buckets);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let table = e.call(NI_ALLOC, &args![buckets << 2]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, table);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(MEMSET, &args![table, 0u32, buckets << 2]);
+    this.cast()
+}
+
+// Translated from 005890c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase` constructor of the `unsigned int` to list map
+/// (`0103200c`), with its bucket count.
+pub fn fn_005890c0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    map_base_construct(e, this, buckets, LIST_MAP_BASE_VTABLE)
+}
+
+// Translated from 005891c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase` constructor of the `TESFile *` to `OFFSET_DATA *` map
+/// (`0103202c`); see [`fn_005890c0`].
+pub fn fn_005891c0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    map_base_construct(e, this, buckets, OFFSET_MAP_BASE_VTABLE)
+}
+
+// Translated from 005892c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `NiTMapBase` constructor of the `int` to cell map (`0103204c`); see
+/// [`fn_005890c0`].
+pub fn fn_005892c0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    map_base_construct(e, this, buckets, CELL_MAP_BASE_VTABLE)
+}
+
+// Translated from 00588fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the `NiTPointerMap<unsigned int,
+/// BSSimpleList<TESObjectREFR *> *>` with its bucket count: the base
+/// constructor, then the derived vtable.
+pub fn fn_00588fa0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    fn_005890c0(e, this, buckets);
+    e.mem.set_u32(this.addr(), LIST_MAP_VTABLE);
+    this.cast()
+}
+
+// Translated from 00588fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the `NiTMap<TESFile *, TESWorldSpace::OFFSET_DATA *>`
+/// with its bucket count.
+pub fn fn_00588fd0(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    fn_005891c0(e, this, buckets);
+    e.mem.set_u32(this.addr(), OFFSET_MAP_VTABLE);
+    this.cast()
+}
+
+// Translated from 00589000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the `NiTPointerMap<int, TESObjectCELL *>` with its
+/// bucket count.
+pub fn fn_00589000(e: &mut Engine, this: Ptr<NiTPointerMap>, buckets: u32) -> Ptr {
+    fn_005892c0(e, this, buckets);
+    e.mem.set_u32(this.addr(), CELL_MAP_VTABLE);
+    this.cast()
+}
+
+/// The base class destructor body: sets the base vtable, removes every item
+/// and frees the bucket array.
+fn map_base_destroy(e: &mut Engine, this: Ptr<NiTPointerMap>, vtable: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(NI_FREE, &args![table]);
+}
+
+/// The scalar deleting wrapper: frees the object when bit 0 of `flags` is
+/// set; returns `this`.
+fn delete_if_asked(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this.cast()
+}
+
+// Translated from 00589190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTMapBase` of the `unsigned int` to list map
+/// (the C++ exception frame is left out).
+pub fn fn_00589190(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    map_base_destroy(e, this, LIST_MAP_BASE_VTABLE);
+}
+
+// Translated from 00589290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTMapBase` of the `TESFile *` to `OFFSET_DATA *`
+/// map.
+pub fn fn_00589290(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    map_base_destroy(e, this, OFFSET_MAP_BASE_VTABLE);
+}
+
+// Translated from 00589390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTMapBase` of the `int` to cell map.
+pub fn fn_00589390(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    map_base_destroy(e, this, CELL_MAP_BASE_VTABLE);
+}
+
+// Translated from 00589130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTPointerMap<unsigned int,
+/// BSSimpleList<TESObjectREFR *> *>`: sets the derived vtable, removes every
+/// item, then runs the base destructor (the C++ exception frame and its
+/// stack cookie are left out).
+pub fn fn_00589130(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), LIST_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00589190(e, this);
+}
+
+// Translated from 00589230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTMap<TESFile *, TESWorldSpace::OFFSET_DATA *>`;
+/// see [`fn_00589130`].
+pub fn fn_00589230(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), OFFSET_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00589290(e, this);
+}
+
+// Translated from 00589330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTPointerMap<int, TESObjectCELL *>`; see
+/// [`fn_00589130`].
+pub fn fn_00589330(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), CELL_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00589390(e, this);
+}
+
+// Translated from 00589030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<unsigned int, BSSimpleList<TESObjectREFR *> *>::
+/// scalar deleting destructor` (Xbox PDB): the destructor, then the free
+/// when bit 0 of `flags` is set.
+pub fn fn_00589030(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589130(e, this);
+    delete_if_asked(e, this, flags)
+}
+
+// Translated from 00589060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<TESFile *, TESWorldSpace::OFFSET_DATA *>::scalar deleting
+/// destructor` (Xbox PDB); see [`fn_00589030`].
+pub fn fn_00589060(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589230(e, this);
+    delete_if_asked(e, this, flags)
+}
+
+// Translated from 00589090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<int, TESObjectCELL *>::scalar deleting destructor` (Xbox
+/// PDB); see [`fn_00589030`].
+pub fn fn_00589090(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589330(e, this);
+    delete_if_asked(e, this, flags)
+}
+
+// Translated from 005893c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned int,
+/// BSSimpleList<TESObjectREFR *> *>::scalar deleting destructor` (Xbox
+/// PDB): the base destructor, then the free when bit 0 of `flags` is set.
+pub fn fn_005893c0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589190(e, this);
+    delete_if_asked(e, this, flags)
+}
+
+// Translated from 005893f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<TESFile *, OFFSET_DATA *> >, TESFile *,
+/// OFFSET_DATA *>::scalar deleting destructor` (Xbox PDB); see
+/// [`fn_005893c0`].
+pub fn fn_005893f0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589290(e, this);
+    delete_if_asked(e, this, flags)
+}
+
+// Translated from 00589420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, int, TESObjectCELL *>::
+/// scalar deleting destructor` (Xbox PDB); see [`fn_005893c0`].
+pub fn fn_00589420(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr {
+    fn_00589390(e, this);
+    delete_if_asked(e, this, flags)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3820,6 +4189,31 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00588b00,
             tes_world_space_create_offset_data(Ptr<TESWorldSpace>, Ptr) -> Ptr<OffsetData>
         ),
+        entry!(0x00588c50, fn_00588c50(Ptr<OffsetData>) -> Ptr<OffsetData>),
+        entry!(0x00588c80, fn_00588c80(Ptr<TESWorldSpace>)),
+        entry!(0x00588d10, fn_00588d10(Ptr<TESWorldSpace>, Ptr) -> bool),
+        entry!(
+            0x00588e40,
+            tes_world_space_adjust_map_marker_coord(Ptr<TESWorldSpace>, Ptr, u8)
+        ),
+        entry!(0x00588fa0, fn_00588fa0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00588fd0, fn_00588fd0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589000, fn_00589000(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589030, fn_00589030(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589060, fn_00589060(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589090, fn_00589090(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x005890c0, fn_005890c0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589130, fn_00589130(Ptr<NiTPointerMap>)),
+        entry!(0x00589190, fn_00589190(Ptr<NiTPointerMap>)),
+        entry!(0x005891c0, fn_005891c0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589230, fn_00589230(Ptr<NiTPointerMap>)),
+        entry!(0x00589290, fn_00589290(Ptr<NiTPointerMap>)),
+        entry!(0x005892c0, fn_005892c0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589330, fn_00589330(Ptr<NiTPointerMap>)),
+        entry!(0x00589390, fn_00589390(Ptr<NiTPointerMap>)),
+        entry!(0x005893c0, fn_005893c0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x005893f0, fn_005893f0(Ptr<NiTPointerMap>, u32) -> Ptr),
+        entry!(0x00589420, fn_00589420(Ptr<NiTPointerMap>, u32) -> Ptr),
     ]
 }
 
@@ -8533,5 +8927,403 @@ mod tests {
         assert_eq!(e.call(0x0058_8b00, &args![w, files[1]]).u32(), data.addr());
         assert_eq!(e.call(0x0058_8b00, &args![w, files[0]]).u32(), data.addr());
         assert_eq!(table.borrow().len(), 1);
+    }
+
+    // ---- Third session: 00588c50 to 00589420 --------------------------------
+
+    #[test]
+    fn offset_data_constructor_runs_the_point_constructors_and_returns_this() {
+        let mut e = engine();
+        noop(&mut e, LOCAL_STRUCT_CONSTRUCT);
+        logged(&mut e);
+        let data = e.mem.alloc(OFFSET_DATA_SIZE);
+        assert_eq!(e.call(0x0058_8c50, &args![data]).u32(), data);
+        assert_eq!(
+            calls_to(&e, LOCAL_STRUCT_CONSTRUCT),
+            [[data + 4], [data + 0xC]]
+        );
+    }
+
+    #[test]
+    fn clearing_the_offset_data_map_frees_every_table_and_record() {
+        let mut e = engine();
+        let table = install_maps(&mut e);
+        noop(&mut e, MEMORY_FREE);
+        let w = world(&mut e);
+        let map = w.addr() + 0xB0;
+        let mut blocks = vec![];
+        for key in [0x10u32, 0x20] {
+            let data = e.mem.alloc(OFFSET_DATA_SIZE);
+            let cells = e.mem.alloc(16);
+            e.mem.set_u32(data, cells);
+            table.borrow_mut().push((map, key, data));
+            blocks.push((cells, data));
+        }
+        logged(&mut e);
+        e.call(0x0058_8c80, &args![w]);
+        let freed: Vec<u32> = calls_to(&e, MEMORY_FREE).iter().map(|a| a[0]).collect();
+        assert_eq!(freed, [blocks[0].0, blocks[0].1, blocks[1].0, blocks[1].1]);
+        // RemoveAll ran last and emptied the map.
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL), [[map]]);
+        assert!(table.borrow().is_empty());
+    }
+
+    #[test]
+    fn clearing_an_empty_offset_data_map_only_removes_all() {
+        let mut e = engine();
+        install_maps(&mut e);
+        noop(&mut e, MEMORY_FREE);
+        let w = world(&mut e);
+        logged(&mut e);
+        e.call(0x0058_8c80, &args![w]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+        assert_eq!(calls_to(&e, MAP_REMOVE_ALL).len(), 1);
+    }
+
+    /// The border region test: a data handler list of region entries
+    /// (flags at `+8`, the world space at `+0x20`, a list of regions at
+    /// `+0x1c`; a region "contains" the point when its first word is 1).
+    struct BorderCase {
+        e: Engine,
+        w: Ptr<TESWorldSpace>,
+        point: u32,
+        tail: u32,
+    }
+
+    fn border_case() -> BorderCase {
+        let mut e = engine();
+        install_lists(&mut e);
+        let handler = e.mem.alloc(0x700);
+        set_word(&mut e, DATA_HANDLER_POINTER, handler);
+        e.register(DATA_HANDLER_LIST_1D8, |e, a| ret(e.mem.u32(a[0] + 0x1d8)));
+        e.register(REGION_ENTRY_FLAG_40, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x40 != 0) as u32)
+        });
+        e.register(REGION_ENTRY_FLAG_20, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x20 != 0) as u32)
+        });
+        e.register(REFERENCE_BASE_FORM, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(REGION_ENTRY_LIST, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+        e.register(REGION_POINT_IN_ENTRY, |e, a| {
+            ret((e.mem.u32(a[0]) == 1) as u32)
+        });
+        e.register(REGION_POINT_BUILD_XY, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            ret(a[0])
+        });
+        let w = world(&mut e);
+        e.set(w, TESWorldSpace::cFlags, 8);
+        let point = e.mem.alloc(8);
+        e.mem.set_f32(point, 3.0);
+        e.mem.set_f32(point + 4, 4.0);
+        // The list object: the node is at +4 (item) and +8 (next).
+        let tail = e.mem.alloc(0x10);
+        e.mem.set_u32(handler + 0x1d8, tail);
+        BorderCase { e, w, point, tail }
+    }
+
+    /// A region entry for `world` with one region whose first word is
+    /// `region_word`.
+    fn border_entry(e: &mut Engine, flags: u32, world: u32, region_word: u32) -> u32 {
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry + 8, flags);
+        e.mem.set_u32(entry + 0x20, world);
+        let region = e.mem.alloc(8);
+        e.mem.set_u32(region, region_word);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list, region);
+        e.mem.set_u32(entry + 0x1c, list);
+        entry
+    }
+
+    #[test]
+    fn a_world_space_without_a_border_region_covers_every_point() {
+        let mut c = border_case();
+        c.e.set(c.w, TESWorldSpace::cFlags, 0);
+        c.e.call_log = Some(vec![]);
+        assert!(c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+        assert!(calls_to(&c.e, REGION_POINT_BUILD_XY).is_empty());
+    }
+
+    #[test]
+    fn a_border_region_covers_the_point_when_an_entry_region_contains_it() {
+        let mut c = border_case();
+        let entry = border_entry(&mut c.e, 0x40, c.w.addr(), 1);
+        c.e.mem.set_u32(c.tail + 4, entry);
+        c.e.call_log = Some(vec![]);
+        assert!(c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+        // The probe holds the point's x and y.
+        let probe = calls_to(&c.e, REGION_POINT_BUILD_XY)[0][0];
+        assert_eq!(c.e.mem.f32(probe), 3.0);
+        assert_eq!(c.e.mem.f32(probe + 4), 4.0);
+    }
+
+    #[test]
+    fn a_border_region_misses_the_point_when_no_entry_qualifies() {
+        // The region does not contain the point.
+        let mut c = border_case();
+        let entry = border_entry(&mut c.e, 0x40, c.w.addr(), 0);
+        c.e.mem.set_u32(c.tail + 4, entry);
+        assert!(!c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+        // The entry belongs to another world space.
+        let mut c = border_case();
+        let entry = border_entry(&mut c.e, 0x40, 0x1234, 1);
+        c.e.mem.set_u32(c.tail + 4, entry);
+        assert!(!c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+        // The entry lacks flag 0x40, or has flag 0x20.
+        for flags in [0u32, 0x60] {
+            let mut c = border_case();
+            let entry = border_entry(&mut c.e, flags, c.w.addr(), 1);
+            c.e.mem.set_u32(c.tail + 4, entry);
+            assert!(!c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+        }
+        // No entries at all.
+        let mut c = border_case();
+        assert!(!c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+    }
+
+    #[test]
+    fn a_border_region_looks_past_entries_that_do_not_qualify() {
+        let mut c = border_case();
+        let other = border_entry(&mut c.e, 0, c.w.addr(), 1);
+        let good = border_entry(&mut c.e, 0x40, c.w.addr(), 1);
+        let second = c.e.mem.alloc(8);
+        c.e.mem.set_u32(second, good);
+        c.e.mem.set_u32(c.tail + 4, other);
+        c.e.mem.set_u32(c.tail + 8, second);
+        assert!(c.e.call(0x0058_8d10, &args![c.w, c.point]).bool());
+    }
+
+    /// Doubles for the map marker conversion: the world map data getters
+    /// (`+0x90`, `+0x94`, `+0x98`), the float 0.5 and the `NiPoint3`
+    /// operations on three floats.
+    fn coord_engine(scale: f32, offset_x: f32, offset_y: f32) -> (Engine, Ptr<TESWorldSpace>) {
+        let mut e = engine();
+        set_double(&mut e, DOUBLE_ONE, 1.0);
+        set_double(&mut e, DOUBLE_ZERO, 0.0);
+        set_word(&mut e, FLOAT_HALF, 0.5f32.to_bits());
+        noop(&mut e, LOCAL_STRUCT_CONSTRUCT);
+        e.register(MAP_SCALE, |e, a| ret_float(e.mem.f32(a[0] + 0x90)));
+        e.register(MAP_OFFSET_X, |e, a| ret_float(e.mem.f32(a[0] + 0x94)));
+        e.register(MAP_OFFSET_Y, |e, a| ret_float(e.mem.f32(a[0] + 0x98)));
+        e.register(POINT3_SCALE, |e, a| {
+            let factor = f32::from_bits(a[1]);
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + i * 4);
+                e.mem.set_f32(a[0] + i * 4, v * factor);
+            }
+            ret(a[0])
+        });
+        e.register(POINT3_SUBTRACT, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + i * 4) - e.mem.f32(a[2] + i * 4);
+                e.mem.set_f32(a[1] + i * 4, v);
+            }
+            ret(a[1])
+        });
+        e.register(POINT3_ADD, |e, a| {
+            for i in 0..3 {
+                let v = e.mem.f32(a[0] + i * 4) + e.mem.f32(a[2] + i * 4);
+                e.mem.set_f32(a[1] + i * 4, v);
+            }
+            ret(a[1])
+        });
+        let w = world(&mut e);
+        e.mem.set_f32(w.addr() + 0x90, scale);
+        e.mem.set_f32(w.addr() + 0x94, offset_x);
+        e.mem.set_f32(w.addr() + 0x98, offset_y);
+        e.set(w, TESWorldSpace::MinimumCoords_x, -100.0);
+        e.set(w, TESWorldSpace::MinimumCoords_y, -200.0);
+        e.set(w, TESWorldSpace::MaximumCoords_x, 300.0);
+        e.set(w, TESWorldSpace::MaximumCoords_y, 400.0);
+        (e, w)
+    }
+
+    fn adjust_coords(e: &mut Engine, w: Ptr<TESWorldSpace>, to_map: u8) -> [f32; 3] {
+        let coords = e.mem.alloc(12);
+        for (i, v) in [10.0f32, 20.0, 5.0].iter().enumerate() {
+            e.mem.set_f32(coords + i as u32 * 4, *v);
+        }
+        e.call(0x0058_8e40, &args![w, coords, to_map as u32]);
+        [
+            e.mem.f32(coords),
+            e.mem.f32(coords + 4),
+            e.mem.f32(coords + 8),
+        ]
+    }
+
+    #[test]
+    fn map_scale_one_or_zero_only_shifts_by_the_offsets() {
+        for scale in [1.0f32, 0.0] {
+            let (mut e, w) = coord_engine(scale, 1.0, 2.0);
+            assert_eq!(adjust_coords(&mut e, w, 0), [11.0, 22.0, 5.0]);
+            let (mut e, w) = coord_engine(scale, 1.0, 2.0);
+            assert_eq!(adjust_coords(&mut e, w, 1), [9.0, 18.0, 5.0]);
+        }
+    }
+
+    #[test]
+    fn map_marker_to_world_scales_about_the_middle_then_adds_the_offsets() {
+        // The middle is (100, 100); the point is 90 left and 80 below it,
+        // doubled, and moved back: (-80, -60), then the offsets.
+        let (mut e, w) = coord_engine(2.0, 1.0, 2.0);
+        assert_eq!(adjust_coords(&mut e, w, 0), [-79.0, -58.0, 10.0]);
+    }
+
+    #[test]
+    fn map_marker_to_map_subtracts_the_offsets_then_scales_by_the_inverse() {
+        let (mut e, w) = coord_engine(2.0, 1.0, 2.0);
+        assert_eq!(adjust_coords(&mut e, w, 1), [54.5, 59.0, 2.5]);
+    }
+
+    /// What the doubles of the map classes saw, in order: `RemoveAll`
+    /// records the vtable the map has at that moment.
+    type MapEvents = Rc<RefCell<Vec<(&'static str, u32, u32)>>>;
+
+    fn map_class_engine() -> (Engine, MapEvents) {
+        let mut e = engine();
+        let events: MapEvents = Rc::default();
+        let log = events.clone();
+        e.register_double(NI_ALLOC, move |e, a| {
+            log.borrow_mut().push(("alloc", a[0], 0));
+            ret(e.mem.alloc(a[0]))
+        });
+        let log = events.clone();
+        e.register_double(MEMSET, move |_, a| {
+            log.borrow_mut().push(("memset", a[1], a[2]));
+            ret(a[0])
+        });
+        let log = events.clone();
+        e.register_double(MAP_REMOVE_ALL, move |e, a| {
+            log.borrow_mut().push(("remove_all", e.mem.u32(a[0]), 0));
+            Ret::default()
+        });
+        let log = events.clone();
+        e.register_double(NI_FREE, move |_, a| {
+            log.borrow_mut().push(("ni_free", a[0], 0));
+            Ret::default()
+        });
+        let log = events.clone();
+        e.register_double(MEMORY_FREE, move |_, a| {
+            log.borrow_mut().push(("free", a[0], 0));
+            Ret::default()
+        });
+        (e, events)
+    }
+
+    /// Per map class: the derived constructor and vtable, the base
+    /// constructor and vtable, the derived and base destructors.
+    const MAP_CLASSES: [(u32, u32, u32, u32, u32, u32); 3] = [
+        (
+            0x0058_8fa0,
+            LIST_MAP_VTABLE,
+            0x0058_90c0,
+            LIST_MAP_BASE_VTABLE,
+            0x0058_9130,
+            0x0058_9190,
+        ),
+        (
+            0x0058_8fd0,
+            OFFSET_MAP_VTABLE,
+            0x0058_91c0,
+            OFFSET_MAP_BASE_VTABLE,
+            0x0058_9230,
+            0x0058_9290,
+        ),
+        (
+            0x0058_9000,
+            CELL_MAP_VTABLE,
+            0x0058_92c0,
+            CELL_MAP_BASE_VTABLE,
+            0x0058_9330,
+            0x0058_9390,
+        ),
+    ];
+
+    #[test]
+    fn map_constructors_zero_the_buckets_and_set_the_vtable() {
+        for (derived, derived_vtable, base, base_vtable, _, _) in MAP_CLASSES {
+            for (constructor, vtable) in [(base, base_vtable), (derived, derived_vtable)] {
+                let (mut e, events) = map_class_engine();
+                let map = e.new_object::<NiTPointerMap>();
+                let got = e
+                    .call(constructor, &args![map, 0x25u32])
+                    .ptr::<NiTPointerMap>();
+                assert_eq!(got, map);
+                assert_eq!(e.mem.u32(map.addr()), vtable);
+                assert_eq!(e.get(map, NiTPointerMap::m_uiHashSize), 0x25);
+                assert_eq!(e.get(map, NiTPointerMap::m_uiCount), 0);
+                let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+                assert!(e.mem.block_size(table).unwrap() >= 0x94);
+                assert_eq!(*events.borrow(), [("alloc", 0x94, 0), ("memset", 0, 0x94)]);
+            }
+        }
+    }
+
+    #[test]
+    fn map_destructors_empty_the_map_and_free_the_buckets() {
+        for (derived, derived_vtable, base, base_vtable, derived_destructor, base_destructor) in
+            MAP_CLASSES
+        {
+            // The derived destructor: RemoveAll under the derived vtable,
+            // then the base destructor's own.
+            let (mut e, events) = map_class_engine();
+            let map = e.new_object::<NiTPointerMap>();
+            e.call(derived, &args![map, 4u32]);
+            let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+            events.borrow_mut().clear();
+            e.call(derived_destructor, &args![map]);
+            assert_eq!(
+                *events.borrow(),
+                [
+                    ("remove_all", derived_vtable, 0),
+                    ("remove_all", base_vtable, 0),
+                    ("ni_free", table, 0)
+                ]
+            );
+            assert_eq!(e.mem.u32(map.addr()), base_vtable);
+            // The base destructor alone.
+            let (mut e, events) = map_class_engine();
+            let map = e.new_object::<NiTPointerMap>();
+            e.call(base, &args![map, 4u32]);
+            let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+            events.borrow_mut().clear();
+            e.call(base_destructor, &args![map]);
+            assert_eq!(
+                *events.borrow(),
+                [("remove_all", base_vtable, 0), ("ni_free", table, 0)]
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_the_object_only_when_asked() {
+        // (derived scalar deleting destructor, base scalar deleting
+        // destructor) per class.
+        let pairs = [
+            (0x0058_9030u32, 0x0058_93c0u32),
+            (0x0058_9060, 0x0058_93f0),
+            (0x0058_9090, 0x0058_9420),
+        ];
+        for (derived, base) in pairs {
+            for destructor in [derived, base] {
+                let (mut e, events) = map_class_engine();
+                let map = e.new_object::<NiTPointerMap>();
+                e.set(map, NiTPointerMap::m_ppkHashTable, 0x4444);
+                // Flag 0: destroyed, kept.
+                assert_eq!(e.call(destructor, &args![map, 0u32]).u32(), map.addr());
+                assert!(events.borrow().iter().all(|ev| ev.0 != "free"));
+                assert_eq!(events.borrow().last().unwrap().0, "ni_free");
+                // Flag 1: destroyed, then freed.
+                events.borrow_mut().clear();
+                assert_eq!(e.call(destructor, &args![map, 1u32]).u32(), map.addr());
+                assert_eq!(*events.borrow().last().unwrap(), ("free", map.addr(), 0));
+                // Only bit 0 counts.
+                events.borrow_mut().clear();
+                e.call(destructor, &args![map, 2u32]);
+                assert!(events.borrow().iter().all(|ev| ev.0 != "free"));
+            }
+        }
     }
 }
