@@ -89,11 +89,10 @@ pub fn regenerate(units: &Path) -> Result<usize, String> {
     }
     let mut s = String::from(HEADER);
     s.push_str("//! Translated units, one folder per subsystem (docs/ENGINE_CRATE.md).\n\n");
-    for t in &top {
-        let _ = writeln!(s, "pub mod {t};");
-    }
-    for sub in subs.keys() {
-        let _ = writeln!(s, "pub mod {sub};");
+    let mut mods: Vec<&String> = top.iter().chain(subs.keys()).collect();
+    mods.sort();
+    for m in mods {
+        let _ = writeln!(s, "pub mod {m};");
     }
     let _ = writeln!(s, "\n/// Every registered function of every unit.");
     let _ = writeln!(s, "pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {{");

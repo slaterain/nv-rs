@@ -550,8 +550,8 @@ mod tests {
     }
 }
 
-/// `queue`: open game functions per unit (unit, functions, bytes), largest
-/// first. `queue <unit>`: that unit's functions (address, size, status,
+/// `queue`: functions still to translate (`open` or `traced`) per unit
+/// (unit, subsystem, functions, bytes, file), largest first. `queue <unit>`: that unit's functions (address, size, status,
 /// name), the work list for one translator.
 fn queue(funcs: &[Func], args: &[String]) {
     if let Some(unit) = args.first() {
@@ -561,7 +561,10 @@ fn queue(funcs: &[Func], args: &[String]) {
         return;
     }
     let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
-    for f in funcs.iter().filter(|f| f.status() == "open" && !f.unit.is_empty()) {
+    for f in funcs
+        .iter()
+        .filter(|f| matches!(f.status(), "open" | "traced") && !f.unit.is_empty())
+    {
         let e = per.entry((&f.subsystem, &f.unit)).or_default();
         e.0 += 1;
         e.1 += f.size as u64;
