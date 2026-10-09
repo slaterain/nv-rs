@@ -8,15 +8,21 @@
 //! The first batch holds the 40 functions from `00563d80` to `00567400`: the
 //! sequence save/load helpers of a reference's controller manager, the
 //! reference factory, the form-flag accessors (persistent, targeted, ...),
-//! `InitScript`, `RunScript`, `InitAnimation` and `BuildKFFileList`. The next
-//! session continues in the second batch (see below).
+//! `InitScript`, `RunScript`, `InitAnimation` and `BuildKFFileList`.
 //!
 //! The second batch holds the 40 functions from `00567470` to `00568fa0`: the
 //! scale setter, the ownership accessors (owner, global, rank, evil faction),
 //! the encounter zone and calc level, the furniture marker accessors
 //! (used / reserved bits, first free, closest free, marker at index), the
-//! radius, and the teleport extras. The next session continues with the next
-//! open function after `00568fa0` in address order (`00569000`).
+//! radius, and the teleport extras.
+//!
+//! The third batch holds the last 40 functions of the range, `00569000` to
+//! `0056a4a0`: the teleport rotation, the lock accessors (`AddLock`,
+//! `GetLock`, `Lock`, `UnLock`), the emittance check, the multi-bound
+//! accessors, the linked-reference list accessors, the link and activate
+//! line drawing, the activate children timers and the decal creation. With
+//! it every function of the range from `00563d80` up to `0056a860` is
+//! translated.
 //!
 //! # Conventions of the exe worth knowing
 //!
@@ -3132,6 +3138,1240 @@ pub fn tes_object_refr_get_linked_door_teleport_position(
     NO_DOOR_POSITION
 }
 
+// ---------------------------------------------------------------------------
+// Third batch: the functions from `00569000` to `0056a4a0`.
+
+/// Callees and data of the third batch, by exe address.
+///
+/// The list getters (`this` is the reference's `ExtraDataList`): two
+/// unnamed pointer getters (`00418490`, which the reference's
+/// `GetMapMarkerData` returns, and `004184c0`), the lock record pointer of a
+/// reference (`00569140`, `ExtraDataList::GetLock`) and the setter of the
+/// lock (`00419050`, `ExtraDataList::SetLockPtr`).
+const EXTRA_GET_MAP_MARKER_DATA: u32 = 0x0041_8490;
+const EXTRA_GET_UNNAMED_B: u32 = 0x0041_84c0;
+const LOCK_OF_REFERENCE: u32 = 0x0056_9140;
+const EXTRA_SET_LOCK: u32 = 0x0041_9050;
+/// The lock extra data constructor (`00411b00`, 0x14 bytes from
+/// `operator new`), `REFR_LOCK::GetLevel(lock, reference)` (`00430a10`),
+/// `REFR_LOCK::SetLocked(lock, flag)` (`00430a90`), the extra data of a
+/// reference by kind (`00527080(reference, kind)`; kind `0x2a` is the lock),
+/// the container's unlock body (`00517360`) and
+/// `TESObjectREFR::AddLockChange` (`005789b0`).
+const LOCK_CONSTRUCT: u32 = 0x0041_1b00;
+const LOCK_EXTRA_SIZE: u32 = 0x14;
+const LOCK_GET_LEVEL: u32 = 0x0043_0a10;
+const LOCK_SET_LOCKED: u32 = 0x0043_0a90;
+const EXTRA_OF_REFERENCE: u32 = 0x0052_7080;
+const EXTRA_KIND_LOCK: u32 = 0x2a;
+const LOCK_EXTRA_UNLOCK: u32 = 0x0051_7360;
+const ADD_LOCK_CHANGE: u32 = 0x0057_89b0;
+/// The rotation record of a door's teleport data (`00460140`).
+const LINKED_DOOR_ROTATION: u32 = 0x0046_0140;
+/// The byte of the list that `fn_005692d0` and `fn_00569350` pass on to the
+/// base form (`00418b40`, set by `0041ac30`); the form type those two
+/// functions require in the base form is `0x25`.
+const EXTRA_GET_BYTE: u32 = 0x0041_8b40;
+const EXTRA_SET_BYTE: u32 = 0x0041_ac30;
+const BASE_FORM_TYPE_WITH_BYTE: u32 = 0x25;
+/// `ExtraDataList::GetXTarget` (`00421b40`), and the two forms in globals
+/// (`011ca244`, `011ca248`) `fn_005693d0` compares the base form with.
+const EXTRA_GET_X_TARGET: u32 = 0x0042_1b40;
+const GLOBAL_TARGET_FORM_A: u32 = 0x011c_a244;
+const GLOBAL_TARGET_FORM_B: u32 = 0x011c_a248;
+/// The emittance helpers: the property type the search asks for
+/// (`00438220`, no arguments), `NiAVObject::GetProperty(node, type)`
+/// (`00a59d30`), the property kind test (`004a2020(property, kind)`, kind
+/// `0x1d`), a node's child count (`0043b480`) and child at an index
+/// (`0043b4a0`), the list's emittance flag (`00421d20`) and the message
+/// format the check logs (`01030028`).
+const EMITTANCE_PROPERTY_TYPE: u32 = 0x0043_8220;
+const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+const PROPERTY_IS_KIND: u32 = 0x004a_2020;
+const EMITTANCE_PROPERTY_KIND: u32 = 0x1d;
+const NODE_CHILD_COUNT: u32 = 0x0043_b480;
+const NODE_CHILD_AT: u32 = 0x0043_b4a0;
+const EXTRA_HAS_EMITTANCE: u32 = 0x0042_1d20;
+const EMITTANCE_MESSAGE: u32 = 0x0103_0028;
+/// Virtual slots of the reference and of 3D objects: `Get3D` (`+0x1d0`),
+/// the node cast of a 3D object (`+0xc`, null when it is not a node), a name
+/// getter of the reference (`+0x130`, used for the log), the position getter
+/// (`+0x1f4`), and the form-changed notification (`+0x4c`).
+const SLOT_GET_3D: u32 = 0x1d0;
+const SLOT_AS_NODE: u32 = 0xc;
+const SLOT_NAME: u32 = 0x130;
+const SLOT_POSITION: u32 = 0x1f4;
+const SLOT_MARK_CHANGED: u32 = 0x4c;
+/// The base form type of the emittance check (`0x1e`).
+const EMITTANCE_FORM_TYPE: u32 = 0x1e;
+/// `fn_005695a0`: a test of a 3D object (`004b2960`), its world bound
+/// (`0043d450`) and the controller slot (`+0x98`) that must answer 2.
+const NODE_IS_VALID: u32 = 0x004b_2960;
+const NODE_WORLD_BOUND: u32 = 0x0043_d450;
+const SLOT_BOUND_TEST: u32 = 0x98;
+const BOUND_TEST_INSIDE: u32 = 2;
+/// `fn_00569670`: the "is kind of" test (`0045bad0(record, object)`, cdecl,
+/// with the record at `011c7d34`), the two casts' records (`011f4acc`,
+/// `011f4428`; the cast is `CHECKED_CAST`), and the object `005495f0` gives
+/// for the first kind, with its range functions: the cursor constructor
+/// (`00534550`), `a67360(range, 1)`, the fill (`00a67410(range, cursor)`),
+/// the release (`00a673d0`), the point count (`00456650`, a word), the
+/// point reader (`00534570(cursor, index, out)`) and the point transform
+/// (`00461130`, then `00524c40(this, out, point)`), the child count of the
+/// second kind (`00453470`).
+const KIND_TEST: u32 = 0x0045_bad0;
+const KIND_RECORD_TEST: u32 = 0x011c_7d34;
+const CAST_RECORD_POINTS: u32 = 0x011f_4acc;
+const CAST_RECORD_GROUP: u32 = 0x011f_4428;
+const POINTS_RANGE_OF: u32 = 0x0054_95f0;
+const CURSOR_CONSTRUCT: u32 = 0x0053_4550;
+const RANGE_BEGIN: u32 = 0x00a6_7360;
+const RANGE_FILL: u32 = 0x00a6_7410;
+const RANGE_END: u32 = 0x00a6_73d0;
+const POINTS_COUNT: u32 = 0x0045_6650;
+const CURSOR_READ_POINT: u32 = 0x0053_4570;
+const POINTS_TRANSFORM_OF: u32 = 0x0046_1130;
+const TRANSFORM_POINT: u32 = 0x0052_4c40;
+const GROUP_CHILD_COUNT: u32 = 0x0045_3470;
+const SLOT_VISIT_POINT: u32 = 0x8c;
+/// The multi-bound functions: "has multi-bound data" (`00439f90`), the list's
+/// two accessors (`00421f00`, the multi-bound reference getter used by
+/// `fn_00569840`; `00422020` get and `00422050` set the multi-bound), the
+/// creator (`00439490`, cdecl, the reference), the room creator (`004396e0`,
+/// cdecl), the list's room functions (`00420810` master flag, `00420ed0`
+/// room, `00420f00` set room, `004207e0` the room's linked reference list,
+/// `00420c10(list, reference)` links two rooms), the primitive
+/// (`0041fbe0`), its centre copy (`00413fc0(primitive, out)`), the half
+/// extent address (`00500940`), the vector comparison (`00439090(this,
+/// other)`, true when they differ), the vector copy (`0098ddd0(this,
+/// source)`) and the default half extent record (`011c3ae4`).
+const HAS_MULTI_BOUND_DATA: u32 = 0x0043_9f90;
+const EXTRA_GET_MULTI_BOUND_REFERENCE: u32 = 0x0042_1f00;
+const EXTRA_GET_MULTI_BOUND: u32 = 0x0042_2020;
+const EXTRA_SET_MULTI_BOUND: u32 = 0x0042_2050;
+const CREATE_MULTI_BOUND: u32 = 0x0043_9490;
+const CREATE_ROOM: u32 = 0x0043_96e0;
+const EXTRA_GET_ROOM_IS_MASTER: u32 = 0x0042_0810;
+const EXTRA_GET_ROOM: u32 = 0x0042_0ed0;
+const EXTRA_SET_ROOM: u32 = 0x0042_0f00;
+const EXTRA_GET_ROOM_LINKED: u32 = 0x0042_07e0;
+const EXTRA_LINK_ROOM: u32 = 0x0042_0c10;
+const EXTRA_GET_PRIMITIVE: u32 = 0x0041_fbe0;
+const PRIMITIVE_CENTRE: u32 = 0x0041_3fc0;
+const PRIMITIVE_HALF_EXTENT: u32 = 0x0050_0940;
+const VECTORS_DIFFER: u32 = 0x0043_9090;
+const VECTOR_COPY: u32 = 0x0098_ddd0;
+const DEFAULT_HALF_EXTENT: u32 = 0x011c_3ae4;
+/// The list functions of the link and activate chains: the list's
+/// "linked reference" getter and setter pairs (`00421e10`, `00421e40`;
+/// `0041e220`, `0041e250`; `0041e410`, `0041e440`), the linked children list
+/// (`0041e500`), the activate parent list (`0041e780`), the activate
+/// children list (`0041eda0`), the activate timer (`0041f020` get,
+/// `0041eff0` set), the child timer (`0041e9e0(list, reference)`, a float),
+/// and the decal list (`0041f050`).
+const EXTRA_GET_LINK_A: u32 = 0x0042_1e10;
+const EXTRA_SET_LINK_A: u32 = 0x0042_1e40;
+const EXTRA_GET_LINK_B: u32 = 0x0041_e220;
+const EXTRA_SET_LINK_B: u32 = 0x0041_e250;
+const EXTRA_GET_LINK_C: u32 = 0x0041_e410;
+const EXTRA_SET_LINK_C: u32 = 0x0041_e440;
+const EXTRA_GET_LINKED_CHILDREN: u32 = 0x0041_e500;
+const EXTRA_GET_ACTIVATE_PARENTS: u32 = 0x0041_e780;
+const EXTRA_GET_ACTIVATE_CHILDREN: u32 = 0x0041_eda0;
+const EXTRA_GET_ACTIVATE_TIMER: u32 = 0x0041_f020;
+const EXTRA_SET_ACTIVATE_TIMER: u32 = 0x0041_eff0;
+const EXTRA_GET_CHILD_TIMER: u32 = 0x0041_e9e0;
+const EXTRA_GET_DECALS: u32 = 0x0041_f050;
+const EXTRA_SET_THREE_WORDS: u32 = 0x0041_f080;
+/// The link drawing: the visited set (`0057c440(set, 0x25)` constructor,
+/// `0057c850(set, reference, out byte)` find, `005594e0(set, reference,
+/// byte)` insert, `00438af0` remove all, `0057c780` destructor; 0x10
+/// bytes), the node names (`"LinkLine"` at `01030088`, `"ActivateLine"` at
+/// `01030094`), `NiFixedString` is `FIXED_STRING_CONSTRUCT` /
+/// `FIXED_STRING_DESTRUCT`, a node's child by name (virtual `+0x9c`),
+/// remove child (`+0xe8`), attach child (`+0xdc(child, flag)`).
+const VISITED_CONSTRUCT: u32 = 0x0057_c440;
+const VISITED_FIND: u32 = 0x0057_c850;
+const VISITED_INSERT: u32 = 0x0055_94e0;
+const VISITED_REMOVE_ALL: u32 = 0x0043_8af0;
+const VISITED_DESTRUCT: u32 = 0x0057_c780;
+const VISITED_SIZE: u32 = 0x10;
+const VISITED_BUCKETS: u32 = 0x25;
+const LINK_LINE_NAME: u32 = 0x0103_0088;
+const ACTIVATE_LINE_NAME: u32 = 0x0103_0094;
+const SLOT_FIND_CHILD: u32 = 0x9c;
+const SLOT_REMOVE_CHILD: u32 = 0xe8;
+const SLOT_ATTACH_CHILD: u32 = 0xdc;
+/// The activate line: the line's temp effects removal (`004def90`), the
+/// vector maths of `NiMatrix3` (`Inverse` is `004b45b0(matrix, out)`; the
+/// product with a vector is `004b4500(matrix, out, vector)`), the vector
+/// scale (`0045bb20(vector, out, factor)`), the colour constructor
+/// (`00414430(colour, r, g, b, a)`), the line maker (`004b3890`, cdecl:
+/// start, end colour, end, start colour, 1), the `NiNode`-sized allocation
+/// (`00aa13e0(0xac)`, cdecl), its constructor (`00a5ecb0(object, 0)`), the
+/// name setter (`00a5b950(object, name)`) and `NiAVObject::UpdateProperties`
+/// (`00a5a040`).
+const REMOVE_ALL_EFFECTS: u32 = 0x004d_ef90;
+const MATRIX_INVERSE: u32 = 0x004b_45b0;
+const MATRIX_TIMES_VECTOR: u32 = 0x004b_4500;
+const VECTOR_SCALE: u32 = 0x0045_bb20;
+const COLOUR_CONSTRUCT: u32 = 0x0041_4430;
+const MAKE_LINE: u32 = 0x004b_3890;
+const NI_ALLOCATE: u32 = 0x00aa_13e0;
+const LINE_NODE_SIZE: u32 = 0xac;
+const LINE_NODE_CONSTRUCT: u32 = 0x00a5_ecb0;
+const SET_NODE_NAME: u32 = 0x00a5_b950;
+const UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// `TESObjectREFR::Activate(reference, activator, 0, 0, 1)` (`00573170`) and
+/// `TESObjectCELL::AddActivatingRef(cell, reference)` (`005455c0`), the two
+/// forms in globals `fn_0056a290` compares the base form with, and the form
+/// flag bit `fn_0056a380` clears through `+0x4c`.
+const ACTIVATE_REFERENCE: u32 = 0x0057_3170;
+const CELL_ADD_ACTIVATING_REF: u32 = 0x0054_55c0;
+const GLOBAL_ACTIVATOR_FORM_A: u32 = 0x011c_a27c;
+const GLOBAL_ACTIVATOR_FORM_B: u32 = 0x011c_a280;
+const ACTIVATING_CHANGED_FLAG: u32 = 0x0400_0000;
+/// The decals: `fn_0056a8d0` (refresh), the decal data constructor
+/// (`004a37b0`, a 0x80 byte record), the smart pointer functions
+/// (`00633c90(pointer, 0)` constructor, `0045cec0` destructor), the
+/// "is this a worn kind" test (`0056a860`) and the helper that gives the
+/// holder object (`0056a880`), the random float (`00476b70(a, b)`, cdecl),
+/// the holder's float getters (`006b9130`, `006a7f50`, `00488d50`,
+/// `00621b00`, `0047c860`), its flag getters (`004a41a0`, `004a4160`,
+/// `004a4120`, `004a4200`) and distance (`004a7bd0`), the colour maker
+/// (`00416870(out, r, g, b)`) and the decal manager entry (`004a3fe0(cell,
+/// data, 4, 0)`).
+const DECAL_REFRESH: u32 = 0x0056_a8d0;
+const DECAL_DATA_CONSTRUCT: u32 = 0x004a_37b0;
+const DECAL_DATA_SIZE: u32 = 0x80;
+const SMART_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+const SMART_POINTER_DESTRUCT: u32 = 0x0045_cec0;
+const DECAL_HAS_HOLDER: u32 = 0x0056_a860;
+const DECAL_HOLDER: u32 = 0x0056_a880;
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+const HOLDER_FLOAT_A: u32 = 0x006b_9130;
+const HOLDER_FLOAT_B: u32 = 0x006a_7f50;
+const HOLDER_FLOAT_C: u32 = 0x0048_8d50;
+const HOLDER_FLOAT_D: u32 = 0x0062_1b00;
+const HOLDER_FLOAT_E: u32 = 0x0047_c860;
+const HOLDER_FLOAT_F: u32 = 0x0084_d030;
+const HOLDER_FLAG_A: u32 = 0x004a_41a0;
+const HOLDER_FLAG_B: u32 = 0x004a_4160;
+const HOLDER_FLAG_C: u32 = 0x004a_4120;
+const HOLDER_FLAG_D: u32 = 0x004a_4200;
+const HOLDER_DISTANCE: u32 = 0x004a_7bd0;
+const MAKE_COLOUR: u32 = 0x0041_6870;
+const DECAL_MANAGER_ADD: u32 = 0x004a_3fe0;
+const BYTE_DIVISOR: u32 = 0x0101_e568;
+const DECAL_FLOAT_40_DEFAULT: u32 = 0x0101_e574;
+const DECAL_FLOAT_58_SOURCE: u32 = 0x0102_49d8;
+const DECAL_SIZE_FACTOR: u32 = 0x0102_e430;
+/// Offsets inside the decal data record the decal function fills (the
+/// constructor writes the rest).
+const DECAL_FIRST_VECTOR: u32 = 0x00;
+const DECAL_SECOND_VECTOR: u32 = 0x0c;
+const DECAL_NODE: u32 = 0x28;
+const DECAL_BASE_FORM: u32 = 0x30;
+const DECAL_FLOAT_38: u32 = 0x38;
+const DECAL_FLOAT_3C: u32 = 0x3c;
+const DECAL_FLOAT_40: u32 = 0x40;
+const DECAL_FLOAT_58: u32 = 0x58;
+const DECAL_FLOAT_4C: u32 = 0x4c;
+const DECAL_FLOAT_54: u32 = 0x54;
+const DECAL_COLOUR: u32 = 0x60;
+const DECAL_BYTE_70: u32 = 0x70;
+const DECAL_BYTE_72: u32 = 0x72;
+const DECAL_BYTE_73: u32 = 0x73;
+const DECAL_FLAG_A: u32 = 0x74;
+const DECAL_FLAG_B: u32 = 0x75;
+const DECAL_FLAG_D: u32 = 0x76;
+/// The reference's decal list entries: the position (+4) and rotation
+/// (+0x10) of a decal record, whose first dword is the decal reference.
+const DECAL_RECORD_POSITION: u32 = 0x04;
+const DECAL_RECORD_ROTATION: u32 = 0x10;
+
+/// Copies the three dwords at `from` to `to`.
+fn copy_vector(e: &mut Engine, from: u32, to: u32) {
+    for i in 0..3 {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+}
+
+// Translated from 00569000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetLinkedDoorTeleportRotation` (Xbox PDB): as the
+/// position, but the rotation record (`00460140`) of the linked door's
+/// teleport data; else the record at `011f426c`.
+pub fn tes_object_refr_get_linked_door_teleport_rotation(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+) -> u32 {
+    let link = fn_00568e50(e, this);
+    if link != 0 {
+        let door = e.call(READ_FIRST_DWORD, &args![link]).u32();
+        if door != 0 {
+            let door_link = fn_00568e50(e, Ptr::new(door));
+            if door_link != 0 {
+                return e.call(LINKED_DOOR_ROTATION, &args![door_link]).u32();
+            }
+        }
+    }
+    ZERO_VECTOR
+}
+
+// Translated from 00569060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetMapMarkerData` (Xbox PDB): the list's map marker data
+/// (`00418490`).
+pub fn tes_object_refr_get_map_marker_data(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_GET_MAP_MARKER_DATA, &args![list]).u32()
+}
+
+// Translated from 00569080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the sibling of `GetMapMarkerData`, the list's
+/// pointer from the unnamed getter `004184c0`.
+pub fn fn_00569080(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_GET_UNNAMED_B, &args![list]).u32()
+}
+
+// Translated from 005690a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::AddLock` (Xbox PDB): the reference's lock
+/// (`00569140`); when it has none a lock extra data (0x14 bytes, constructor
+/// `00411b00`) is created and stored in the list (`00419050`). A failed
+/// allocation is carried on as a null lock, as the code does; the unwinding
+/// frame is not translated.
+pub fn tes_object_refr_add_lock(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    let mut lock = e.call(LOCK_OF_REFERENCE, &args![me]).u32();
+    if lock == 0 {
+        let block = e.call(OPERATOR_NEW, &args![LOCK_EXTRA_SIZE]).u32();
+        lock = if block == 0 {
+            0
+        } else {
+            e.call(LOCK_CONSTRUCT, &args![block]).u32()
+        };
+        let list = extra_list(e, me);
+        e.call(EXTRA_SET_LOCK, &args![list, lock]);
+    }
+    lock
+}
+
+// Translated from 00569160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetLock` (Xbox PDB): the reference's lock (`00569140`);
+/// without one, the lock of the door its teleport data links to.
+pub fn tes_object_refr_get_lock(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let mut lock = e.call(LOCK_OF_REFERENCE, &args![this.addr()]).u32();
+    if lock == 0 {
+        let link = fn_00568e50(e, this);
+        if link != 0 && e.call(READ_FIRST_DWORD, &args![link]).u32() != 0 {
+            let door = e.call(READ_FIRST_DWORD, &args![link]).u32();
+            lock = e.call(LOCK_OF_REFERENCE, &args![door]).u32();
+        }
+    }
+    lock
+}
+
+// Translated from 005691b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetLockLevel` (Xbox PDB): 0 without a lock, else
+/// `REFR_LOCK::GetLevel` (`00430a10`) of it for this reference.
+pub fn tes_object_refr_get_lock_level(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let lock = tes_object_refr_get_lock(e, this);
+    if lock == 0 {
+        return 0;
+    }
+    e.call(LOCK_GET_LEVEL, &args![lock, this.addr()]).u32()
+}
+
+// Translated from 005691f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetExtraLock` (Xbox PDB): the reference's lock extra data
+/// (kind `0x2a`, `00527080`); without one, that of the door its teleport
+/// data links to (recursively).
+pub fn tes_object_refr_get_extra_lock(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let mut lock = e
+        .call(EXTRA_OF_REFERENCE, &args![this.addr(), EXTRA_KIND_LOCK])
+        .u32();
+    if lock == 0 {
+        let link = fn_00568e50(e, this);
+        if link != 0 && e.call(READ_FIRST_DWORD, &args![link]).u32() != 0 {
+            let door = e.call(READ_FIRST_DWORD, &args![link]).u32();
+            lock = tes_object_refr_get_extra_lock(e, Ptr::new(door));
+        }
+    }
+    lock
+}
+
+// Translated from 00569250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::Lock` (Xbox PDB): sets the lock extra data locked
+/// (`00569280`) and records the change (`AddLockChange`, `005789b0`); does
+/// nothing without a lock.
+pub fn tes_object_refr_lock(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let lock = tes_object_refr_get_extra_lock(e, this);
+    if lock != 0 {
+        fn_00569280(e, Ptr::new(lock));
+        e.call(ADD_LOCK_CHANGE, &args![this.addr()]);
+    }
+}
+
+// Translated from 00569280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: `REFR_LOCK::SetLocked(true)` (`00430a90`) on
+/// the lock record the lock extra data holds at +0xc.
+pub fn fn_00569280(e: &mut Engine, this: Ptr) {
+    let record = e.mem.u32(this.addr() + 0xc);
+    e.call(LOCK_SET_LOCKED, &args![record, 1u32]);
+}
+
+// Translated from 005692a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::UnLock` (Xbox PDB): unlocks the lock extra data
+/// (`00517360`) and records the change; does nothing without a lock.
+pub fn tes_object_refr_un_lock(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let lock = tes_object_refr_get_extra_lock(e, this);
+    if lock != 0 {
+        e.call(LOCK_EXTRA_UNLOCK, &args![lock]);
+        e.call(ADD_LOCK_CHANGE, &args![this.addr()]);
+    }
+}
+
+// Translated from 005692d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: when the base form is of type `0x25`, its
+/// virtual `+0x188` called with the list's byte (`00418b40`); else 0.
+pub fn fn_005692d0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    let mut result = 0;
+    if base_type(e, me) == Some(BASE_FORM_TYPE_WITH_BYTE) {
+        let base = e.call(GET_BASE_FORM, &args![me]).u32();
+        if base != 0 {
+            let list = extra_list(e, me);
+            let value = e.call(EXTRA_GET_BYTE, &args![list]).u8();
+            result = e.vcall(base, 0x188, &args![value]).u32();
+        }
+    }
+    result
+}
+
+// Translated from 00569350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the setter of the above. With a list, and a
+/// base form that has none or is of type `0x25`, the base form's virtual
+/// `+0x184` is called with `value` and its byte result is stored in the
+/// list (`0041ac30`).
+pub fn fn_00569350(e: &mut Engine, this: Ptr<TESObjectREFR>, value: u32) {
+    let me = this.addr();
+    if extra_list(e, me) == 0 {
+        return;
+    }
+    if let Some(kind) = base_type(e, me) {
+        if kind != BASE_FORM_TYPE_WITH_BYTE {
+            return;
+        }
+    }
+    let base = e.call(GET_BASE_FORM, &args![me]).u32();
+    if base != 0 {
+        let stored = e.vcall(base, 0x184, &args![value]).u8();
+        let list = extra_list(e, me);
+        e.call(EXTRA_SET_BYTE, &args![list, stored]);
+    }
+}
+
+// Translated from 005693d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: when the base form is one of the two forms in
+/// the globals `011ca244` and `011ca248`, the list's `GetXTarget`
+/// (`00421b40`); else 0.
+pub fn fn_005693d0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    let first = e.call(GET_BASE_FORM, &args![me]).u32();
+    if first != e.global::<u32>(GLOBAL_TARGET_FORM_A) {
+        let second = e.call(GET_BASE_FORM, &args![me]).u32();
+        if second != e.global::<u32>(GLOBAL_TARGET_FORM_B) {
+            return 0;
+        }
+    }
+    let list = extra_list(e, me);
+    e.call(EXTRA_GET_X_TARGET, &args![list]).u32()
+}
+
+// Translated from 00569410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FindEmittanceProperty` (Xbox PDB), cdecl: whether the 3D object has the
+/// emittance property (the property of the type `00438220` gives, of kind
+/// `0x1d`), or any node below it does (recursively through the children of
+/// the node cast, virtual `+0xc`).
+pub fn find_emittance_property(e: &mut Engine, node: Ptr) -> bool {
+    let node = node.addr();
+    if node == 0 {
+        return false;
+    }
+    let property_type = e.call(EMITTANCE_PROPERTY_TYPE, &args![]).u32();
+    let property = e.call(NODE_GET_PROPERTY, &args![node, property_type]).u32();
+    if property != 0
+        && e.call(PROPERTY_IS_KIND, &args![property, EMITTANCE_PROPERTY_KIND])
+            .bool()
+    {
+        return true;
+    }
+    let as_node = e.vcall(node, SLOT_AS_NODE, &args![]).u32();
+    if as_node != 0 {
+        let count = e.call(NODE_CHILD_COUNT, &args![as_node]).u32();
+        for index in 0..count {
+            let child = e.call(NODE_CHILD_AT, &args![as_node, index]).u32();
+            if find_emittance_property(e, Ptr::new(child)) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Translated from 005694c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::CheckUsesExternalEmittance` (Xbox PDB): false without a
+/// base form; true for a base form of type `0x1e` whose list has emittance
+/// data (`00569580`); otherwise whether the loaded 3D (virtual `+0x1d0`)
+/// supports emittance (`FindEmittanceProperty`). When it does not but the
+/// reference has explicit emittance data, the mismatch is logged with the
+/// name (virtual `+0x130`) and form ID.
+pub fn tes_object_refr_check_uses_external_emittance(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+) -> bool {
+    let me = this.addr();
+    let Some(kind) = base_type(e, me) else {
+        return false;
+    };
+    if kind == EMITTANCE_FORM_TYPE && fn_00569580(e, this) != 0 {
+        return true;
+    }
+    let mut found = false;
+    if e.vcall(me, SLOT_GET_3D, &args![]).u32() != 0 {
+        let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+        found = find_emittance_property(e, Ptr::new(node));
+        if !found && fn_00569580(e, this) != 0 {
+            let id = e.call(FORM_ID, &args![me]).u32();
+            let name = e.vcall(me, SLOT_NAME, &args![]).u32();
+            e.call(LOG_MESSAGE, &args![EMITTANCE_MESSAGE, name, id]);
+        }
+    }
+    found
+}
+
+// Translated from 00569580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the list's emittance flag (`00421d20`).
+pub fn fn_00569580(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_HAS_EMITTANCE, &args![list]).u32()
+}
+
+// Translated from 005695a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: whether the loaded 3D passes `004b2960`, is
+/// not null, and the virtual `+0x98` of `other`'s controller (`0043b230`)
+/// answers 2 for the 3D's world bound (`0043d450`).
+pub fn fn_005695a0(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr) -> bool {
+    let node = e.vcall(this.addr(), SLOT_GET_3D, &args![]).u32();
+    if e.call(NODE_IS_VALID, &args![node]).u32() == 0 || node == 0 {
+        return false;
+    }
+    let controller = e.call(GET_CONTROLLER, &args![other.addr()]).u32();
+    let bound = e.call(NODE_WORLD_BOUND, &args![node]).u32();
+    e.vcall(controller, SLOT_BOUND_TEST, &args![bound]).u32() == BOUND_TEST_INSIDE
+}
+
+// Translated from 00569620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: copies the position (virtual `+0x1f4`) of the
+/// reference to a local and hands it to `other`'s virtual `+0x8c`.
+pub fn fn_00569620(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr) {
+    let position = e.vcall(this.addr(), SLOT_POSITION, &args![]).u32();
+    e.with_stack(0xc, |e, copy| {
+        copy_vector(e, position, copy.addr());
+        e.vcall(other.addr(), SLOT_VISIT_POINT, &args![copy.addr()]);
+    });
+}
+
+// Translated from 00569670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB, cdecl: walks the object `object`: when it is
+/// of the kind `011c7d34` the byte at `found` is the result; when it casts
+/// to the points kind (record `011f4acc`), `*found = 1` and each of its
+/// points, transformed (`00461130`, `00524c40`), is handed to the visitor's
+/// virtual `+0x8c` (a point it refuses ends the walk with 0 when `stop` is
+/// set); when it casts to the group kind (`011f4428`) every child is walked
+/// the same way and a 0 from one ends it. The result is `*found`. The
+/// counter of accepted points the exe keeps is never read and not kept.
+pub fn fn_00569670(e: &mut Engine, object: Ptr, visitor: Ptr, found: Ptr, stop: u8) -> u8 {
+    let (object, visitor, found) = (object.addr(), visitor.addr(), found.addr());
+    if e.call(KIND_TEST, &args![KIND_RECORD_TEST, object]).bool() {
+        return e.mem.u8(found);
+    }
+    let points = e
+        .call(CHECKED_CAST, &args![CAST_RECORD_POINTS, object])
+        .u32();
+    if points != 0 {
+        e.mem.set_u8(found, 1);
+        let range = e.call(POINTS_RANGE_OF, &args![points]).u32();
+        let early = e.with_stack(0x30, |e, block| -> Option<u8> {
+            let cursor = block.addr();
+            let point = cursor + 0x10;
+            let transformed = cursor + 0x20;
+            e.call(CURSOR_CONSTRUCT, &args![cursor]);
+            if !e.call(RANGE_BEGIN, &args![range, 1u32]).bool() {
+                return Some(0);
+            }
+            e.call(RANGE_FILL, &args![range, cursor]);
+            let mut index = 0i32;
+            while index < i32::from(e.call(POINTS_COUNT, &args![points]).u16()) {
+                copy_vector(e, ZERO_VECTOR, point);
+                e.call(CURSOR_READ_POINT, &args![cursor, index, point]);
+                let transform = e.call(POINTS_TRANSFORM_OF, &args![points]).u32();
+                let result = e
+                    .call(TRANSFORM_POINT, &args![transform, transformed, point])
+                    .u32();
+                copy_vector(e, result, point);
+                if !e.vcall(visitor, SLOT_VISIT_POINT, &args![point]).bool() && stop != 0 {
+                    e.call(RANGE_END, &args![range]);
+                    return Some(0);
+                }
+                index += 1;
+            }
+            e.call(RANGE_END, &args![range]);
+            if stop == 0 {
+                return Some(0);
+            }
+            None
+        });
+        if let Some(result) = early {
+            return result;
+        }
+    }
+    let group = e
+        .call(CHECKED_CAST, &args![CAST_RECORD_GROUP, object])
+        .u32();
+    if group != 0 {
+        let mut index = 0u32;
+        while index < e.call(GROUP_CHILD_COUNT, &args![group]).u32() {
+            let child = e.call(NODE_CHILD_AT, &args![group, index]).u32();
+            if fn_00569670(e, Ptr::new(child), Ptr::new(visitor), Ptr::new(found), stop) == 0 {
+                return 0;
+            }
+            index += 1;
+        }
+    }
+    e.mem.u8(found)
+}
+
+// Translated from 00569840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: for a reference with multi-bound data
+/// (`00439f90`), the list's multi-bound reference (`00421f00`); else 0.
+pub fn fn_00569840(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    if !e.call(HAS_MULTI_BOUND_DATA, &args![me]).bool() {
+        return 0;
+    }
+    let list = extra_list(e, me);
+    e.call(EXTRA_GET_MULTI_BOUND_REFERENCE, &args![list]).u32()
+}
+
+// Translated from 00569880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetMultiBoundHalfExtent` (Xbox PDB): the address of the
+/// half extent vector. With a primitive in the list that is the primitive's
+/// (`00500940`), after the multi-bound reference (`00569840`), when it
+/// exists and its vector differs from the primitive's centre, is given the
+/// centre; without a primitive it is the multi-bound reference's own record,
+/// and without both the default record at `011c3ae4`.
+pub fn tes_object_refr_get_multi_bound_half_extent(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+) -> u32 {
+    let me = this.addr();
+    let bound = fn_00569840(e, this);
+    let list = extra_list(e, me);
+    let primitive = e.call(EXTRA_GET_PRIMITIVE, &args![list]).u32();
+    if primitive == 0 {
+        if bound != 0 {
+            return e.call(LIST_ITEM_SLOT, &args![bound]).u32();
+        }
+        return fn_00569910(e);
+    }
+    if bound != 0 {
+        e.with_stack(0x18, |e, buffers| {
+            let first = e
+                .call(PRIMITIVE_CENTRE, &args![primitive, buffers.addr()])
+                .u32();
+            let slot = e.call(LIST_ITEM_SLOT, &args![bound]).u32();
+            if e.call(VECTORS_DIFFER, &args![slot, first]).bool() {
+                let second = e
+                    .call(PRIMITIVE_CENTRE, &args![primitive, buffers.addr() + 0xc])
+                    .u32();
+                e.call(VECTOR_COPY, &args![bound, second]);
+            }
+        });
+    }
+    e.call(PRIMITIVE_HALF_EXTENT, &args![primitive]).u32()
+}
+
+// Translated from 00569910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the address of the default half extent record
+/// (`011c3ae4`).
+pub fn fn_00569910(_e: &mut Engine) -> u32 {
+    DEFAULT_HALF_EXTENT
+}
+
+// Translated from 00569920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetMultiBound` (Xbox PDB): null for a reference without
+/// multi-bound data (`00439f90`) or a deleted one; otherwise the list's
+/// multi-bound (`00422020`), created for the reference
+/// (`MultiBoundMarkerData::CreateMultiBoundForRef`, `00439490`) and stored
+/// (`00422050`) when it has none.
+pub fn tes_object_refr_get_multi_bound(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    if !e.call(HAS_MULTI_BOUND_DATA, &args![me]).bool() {
+        return 0;
+    }
+    if e.call(FORM_IS_DELETED, &args![me]).bool() {
+        return 0;
+    }
+    let list = extra_list(e, me);
+    let mut bound = e.call(EXTRA_GET_MULTI_BOUND, &args![list]).u32();
+    if bound == 0 {
+        bound = e.call(CREATE_MULTI_BOUND, &args![me]).u32();
+        let list = extra_list(e, me);
+        e.call(EXTRA_SET_MULTI_BOUND, &args![list, bound]);
+    }
+    bound
+}
+
+// Translated from 00569990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB (the map's name for this address belongs to
+/// folded library code): clears the list's multi-bound (`00422050(list,
+/// 0)`).
+pub fn fn_00569990(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_SET_MULTI_BOUND, &args![list, 0u32]);
+}
+
+// Translated from 005699b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetMultiBoundRoom` (Xbox PDB): null for a reference
+/// without multi-bound data or a deleted one, or whose list is not a room
+/// master (`00420810`); otherwise the list's room (`00420ed0`). A room that
+/// does not exist yet is created (`004396e0`), stored (`00420f00`) and
+/// linked both ways (`00420c10`) with every reference of the room's linked
+/// reference list (`004207e0`, nodes from +8) that is not null.
+pub fn tes_object_refr_get_multi_bound_room(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let me = this.addr();
+    if !e.call(HAS_MULTI_BOUND_DATA, &args![me]).bool() {
+        return 0;
+    }
+    if e.call(FORM_IS_DELETED, &args![me]).bool() {
+        return 0;
+    }
+    let list = extra_list(e, me);
+    if !e.call(EXTRA_GET_ROOM_IS_MASTER, &args![list]).bool() {
+        return 0;
+    }
+    let list = extra_list(e, me);
+    let mut room = e.call(EXTRA_GET_ROOM, &args![list]).u32();
+    if room == 0 {
+        room = e.call(CREATE_ROOM, &args![me]).u32();
+        let list = extra_list(e, me);
+        e.call(EXTRA_SET_ROOM, &args![list, room]);
+        let list = extra_list(e, me);
+        let linked = e.call(EXTRA_GET_ROOM_LINKED, &args![list]).u32();
+        if linked != 0 {
+            let mut node = linked + 8;
+            while node != 0 {
+                let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+                if e.mem.u32(slot) == 0 {
+                    break;
+                }
+                let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+                let other = e.mem.u32(slot);
+                let other_list = extra_list(e, other);
+                e.call(EXTRA_LINK_ROOM, &args![other_list, me]);
+                let own_list = extra_list(e, me);
+                e.call(EXTRA_LINK_ROOM, &args![own_list, other]);
+                node = e.call(LIST_NEXT, &args![node]).u32();
+            }
+        }
+    }
+    room
+}
+
+// Translated from 00569ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the first linked reference getter of the list
+/// (`00421e10`).
+pub fn fn_00569ac0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_GET_LINK_A, &args![list]).u32()
+}
+
+// Translated from 00569ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: stores `other` with the list's setter
+/// (`00421e40`) unless it is this reference, or is not null and has no
+/// multi-bound data (`00439f90`).
+pub fn fn_00569ae0(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr<TESObjectREFR>) {
+    let (me, other) = (this.addr(), other.addr());
+    if other != 0 && !e.call(HAS_MULTI_BOUND_DATA, &args![other]).bool() {
+        return;
+    }
+    if me != other {
+        let list = extra_list(e, me);
+        e.call(EXTRA_SET_LINK_A, &args![list, other]);
+    }
+}
+
+// Translated from 00569b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the second linked reference getter of the list
+/// (`0041e220`).
+pub fn fn_00569b20(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_GET_LINK_B, &args![list]).u32()
+}
+
+// Translated from 00569b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: stores `other` with the list's setter
+/// (`0041e250`) unless it is not null and does not persist.
+pub fn fn_00569b40(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr<TESObjectREFR>) {
+    if other.addr() != 0 && !tes_object_refr_get_ref_persists(e, other) {
+        return;
+    }
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_SET_LINK_B, &args![list, other.addr()]);
+}
+
+// Translated from 00569b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: the third linked reference getter of the list
+/// (`0041e410`): the reference the link line goes to.
+pub fn fn_00569b80(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_GET_LINK_C, &args![list]).u32()
+}
+
+// Translated from 00569ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: stores `other` with the list's setter
+/// (`0041e440`) unless it is not null and does not persist.
+pub fn fn_00569ba0(e: &mut Engine, this: Ptr<TESObjectREFR>, other: Ptr<TESObjectREFR>) {
+    if other.addr() != 0 && !tes_object_refr_get_ref_persists(e, other) {
+        return;
+    }
+    let list = extra_list(e, this.addr());
+    e.call(EXTRA_SET_LINK_C, &args![list, other.addr()]);
+}
+
+// Translated from 00569be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::DrawRefLink` (Xbox PDB): removes the `"LinkLine"` child
+/// (virtual `+0x9c` by `NiFixedString`, removal `+0xe8`) from the node cast
+/// (virtual `+0xc`) of the loaded 3D (virtual `+0x1d0`). The byte the callers
+/// pass is never read. The unwinding frame is not translated.
+pub fn tes_object_refr_draw_ref_link(e: &mut Engine, this: Ptr<TESObjectREFR>, _unused_1: u8) {
+    let node = e.vcall(this.addr(), SLOT_GET_3D, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let as_node = e.vcall(node, SLOT_AS_NODE, &args![]).u32();
+    if as_node == 0 {
+        return;
+    }
+    let child = e.with_stack(4, |e, fixed| {
+        let name = e
+            .call(FIXED_STRING_CONSTRUCT, &args![fixed, LINK_LINE_NAME])
+            .u32();
+        let child = e.vcall(as_node, SLOT_FIND_CHILD, &args![name]).u32();
+        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        child
+    });
+    if child != 0 {
+        e.vcall(as_node, SLOT_REMOVE_CHILD, &args![child]);
+    }
+}
+
+// Translated from 00569cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::RedrawRefLinks` (Xbox PDB): a reference already in the
+/// visited set (`visited`, or a set of its own when null) is skipped;
+/// otherwise it is added (`005594e0`, with the byte the failed lookup left
+/// in the exe's stack slot; zero here), its link line is removed
+/// (`DrawRefLink`) and the walk goes on through the reference its list
+/// links to (`00569b80`) and the linked children (`0041e500`, nodes until an
+/// empty one). The set is emptied and destroyed at the end. The unwinding
+/// frame is not translated.
+pub fn tes_object_refr_redraw_ref_links(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    flag: u8,
+    visited: Ptr,
+) {
+    let me = this.addr();
+    e.with_stack(VISITED_SIZE + 4, |e, block| {
+        let own = block.addr();
+        let byte = own + VISITED_SIZE;
+        e.call(VISITED_CONSTRUCT, &args![own, VISITED_BUCKETS]);
+        let visited = if visited.addr() == 0 {
+            own
+        } else {
+            visited.addr()
+        };
+        if e.call(VISITED_FIND, &args![visited, me, byte]).bool() {
+            e.call(VISITED_DESTRUCT, &args![own]);
+            return;
+        }
+        let stored = e.mem.u8(byte);
+        e.call(VISITED_INSERT, &args![visited, me, stored]);
+        let target = fn_00569b80(e, this);
+        if target != 0 {
+            tes_object_refr_draw_ref_link(e, this, flag);
+            tes_object_refr_redraw_ref_links(e, Ptr::new(target), flag, Ptr::new(visited));
+        }
+        let list = extra_list(e, me);
+        let mut node = e.call(EXTRA_GET_LINKED_CHILDREN, &args![list]).u32();
+        while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            let child = e.mem.u32(slot);
+            tes_object_refr_draw_ref_link(e, Ptr::new(child), flag);
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            let child = e.mem.u32(slot);
+            tes_object_refr_redraw_ref_links(e, Ptr::new(child), flag, Ptr::new(visited));
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        e.call(VISITED_REMOVE_ALL, &args![own]);
+        e.call(VISITED_DESTRUCT, &args![own]);
+    });
+}
+
+// Translated from 00569df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::DrawActivateRefLink` (Xbox PDB): on the node cast of the
+/// loaded 3D, looks up the `"ActivateLine"` child; an existing one has its
+/// effects removed (`004def90`) and, when `draw` is 0, is removed from the
+/// node. With `draw` set, for every reference in the activate parent list
+/// (`0041e780`) a line from this reference to it is made: the offset of the
+/// positions (`00439ef0`) is taken into this reference's frame (inverse of
+/// its orientation, then divided by its scale), and `004b3890` makes the
+/// line geometry (black start colour, white end colour); a missing child
+/// node is created (0xac bytes, `00a5ecb0`, named `"ActivateLine"`) and
+/// attached once, and each line is attached to it. When anything was drawn
+/// the node's properties are updated (`00a5a040`) and given a velocity
+/// record of 0.0. The unwinding frames are not translated.
+pub fn tes_object_refr_draw_activate_ref_link(e: &mut Engine, this: Ptr<TESObjectREFR>, draw: u8) {
+    let me = this.addr();
+    let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let as_node = e.vcall(node, SLOT_AS_NODE, &args![]).u32();
+    if as_node == 0 {
+        return;
+    }
+    let mut drawn = false;
+    let line = e.with_stack(4, |e, fixed| {
+        let name = e
+            .call(FIXED_STRING_CONSTRUCT, &args![fixed, ACTIVATE_LINE_NAME])
+            .u32();
+        let line = e.vcall(as_node, SLOT_FIND_CHILD, &args![name]).u32();
+        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        line
+    });
+    let mut line_node = if line == 0 {
+        0
+    } else {
+        e.vcall(line, SLOT_AS_NODE, &args![]).u32()
+    };
+    if line_node != 0 {
+        e.call(REMOVE_ALL_EFFECTS, &args![line_node]);
+        if draw == 0 {
+            e.vcall(as_node, SLOT_REMOVE_CHILD, &args![line_node]);
+            line_node = 0;
+        }
+    }
+    if draw != 0 {
+        let list = extra_list(e, me);
+        let mut entry = e.call(EXTRA_GET_ACTIVATE_PARENTS, &args![list]).u32();
+        while entry != 0 && !e.call(LIST_IS_EMPTY, &args![entry]).bool() {
+            let slot = e.call(LIST_ITEM_SLOT, &args![entry]).u32();
+            let record = e.mem.u32(slot);
+            let target = e.mem.u32(record);
+            entry = e.call(LIST_NEXT, &args![entry]).u32();
+            // The locals of the exe's frame, in one block: the offset vector,
+            // the orientation and its inverse, two vector results, the two
+            // colours, the zero vector and the velocity record.
+            let made = e.with_stack(0xe0, |e, block| {
+                let block = block.addr();
+                let offset = block;
+                let orientation = block + 0x10;
+                let inverse = block + 0x40;
+                let result_a = block + 0x70;
+                let result_b = block + 0x80;
+                let colour_a = block + 0x90;
+                let colour_b = block + 0xa0;
+                let zero = block + 0xb0;
+                copy_vector(e, ZERO_VECTOR, zero);
+                let own_position = e.vcall(me, SLOT_POSITION, &args![]).u32();
+                let target_position = e.vcall(target, SLOT_POSITION, &args![]).u32();
+                e.call(
+                    VECTOR_DIFFERENCE,
+                    &args![target_position, offset, own_position],
+                );
+                e.call(GET_ORIENTATION, &args![me, orientation]);
+                e.call(MATRIX_INVERSE, &args![orientation, inverse]);
+                let rotated = e
+                    .call(MATRIX_TIMES_VECTOR, &args![inverse, result_a, offset])
+                    .u32();
+                copy_vector(e, rotated, offset);
+                let scale = tes_object_refr_get_scale(e, this);
+                let factor = (1.0f64 / f64::from(scale)) as f32;
+                let scaled = e.call(VECTOR_SCALE, &args![offset, result_b, factor]).u32();
+                copy_vector(e, scaled, offset);
+                let start = e
+                    .call(
+                        COLOUR_CONSTRUCT,
+                        &args![colour_a, 0.0f32, 0.0f32, 0.0f32, 1.0f32],
+                    )
+                    .u32();
+                let end = e
+                    .call(
+                        COLOUR_CONSTRUCT,
+                        &args![colour_b, 1.0f32, 1.0f32, 1.0f32, 1.0f32],
+                    )
+                    .u32();
+                e.call(MAKE_LINE, &args![zero, end, offset, start, 1u32])
+                    .u32()
+            });
+            if line_node == 0 {
+                let block = e.call(NI_ALLOCATE, &args![LINE_NODE_SIZE]).u32();
+                line_node = if block == 0 {
+                    0
+                } else {
+                    e.call(LINE_NODE_CONSTRUCT, &args![block, 0u32]).u32()
+                };
+                e.with_stack(4, |e, fixed| {
+                    let name = e
+                        .call(FIXED_STRING_CONSTRUCT, &args![fixed, ACTIVATE_LINE_NAME])
+                        .u32();
+                    e.call(SET_NODE_NAME, &args![line_node, name]);
+                    e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+                });
+                e.vcall(as_node, SLOT_ATTACH_CHILD, &args![line_node, 1u32]);
+            }
+            e.vcall(line_node, SLOT_ATTACH_CHILD, &args![made, 1u32]);
+            drawn = true;
+        }
+    }
+    if drawn {
+        e.call(UPDATE_PROPERTIES, &args![as_node]);
+        set_velocity(e, as_node, 0.0, 0, 0);
+    }
+}
+
+// Translated from 0056a1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::RedrawActivateRefLinks` (Xbox PDB): draws this
+/// reference's activate links and those of each of its activate children
+/// (`0041eda0`, nodes until an empty one).
+pub fn tes_object_refr_redraw_activate_ref_links(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    draw: u8,
+) {
+    tes_object_refr_draw_activate_ref_link(e, this, draw);
+    let list = extra_list(e, this.addr());
+    let mut node = e.call(EXTRA_GET_ACTIVATE_CHILDREN, &args![list]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        let record = e.mem.u32(slot);
+        let child = e.mem.u32(record);
+        tes_object_refr_draw_activate_ref_link(e, Ptr::new(child), draw);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 0056a250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::IsActivatingChildren` (Xbox PDB): whether the list's
+/// activate children timer (`0041f020`) is greater than 0.0 (the `double` at
+/// `01012060`); a NaN is not.
+pub fn tes_object_refr_is_activating_children(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    let list = extra_list(e, this.addr());
+    let timer = e.call(EXTRA_GET_ACTIVATE_TIMER, &args![list]).f32();
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    f64::from(timer) > zero
+}
+
+// Translated from 0056a290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: for every activate child record (`0041eda0`)
+/// the child's timer for this reference (`0041e9e0`) is stored at +4 of the
+/// record; a timer of 0.0 or less (a child that is due) activates the child
+/// (`TESObjectREFR::Activate(child, activator, 0, 0, 1)`; the activator is
+/// `activator` when this reference's base form is one of the two forms in
+/// `011ca27c`/`011ca280`, else this reference); a greater (or NaN) timer
+/// leaves the child waiting, and then the parent cell is told to keep this
+/// reference activating (`005455c0`).
+pub fn fn_0056a290(e: &mut Engine, this: Ptr<TESObjectREFR>, activator: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    let mut waiting = false;
+    let list = extra_list(e, me);
+    let mut node = e.call(EXTRA_GET_ACTIVATE_CHILDREN, &args![list]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        let record = e.mem.u32(slot);
+        let child = e.mem.u32(record);
+        let child_list = extra_list(e, child);
+        let timer = e.call(EXTRA_GET_CHILD_TIMER, &args![child_list, me]).f32();
+        e.mem.set_f32(record + 4, timer);
+        let timer = f64::from(e.mem.f32(record + 4));
+        let zero: f64 = e.global(ZERO_DOUBLE);
+        if timer <= zero {
+            let first = e.call(GET_BASE_FORM, &args![me]).u32();
+            let by_activator = first == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_A) || {
+                let second = e.call(GET_BASE_FORM, &args![me]).u32();
+                second == e.global::<u32>(GLOBAL_ACTIVATOR_FORM_B)
+            };
+            let who = if by_activator { activator.addr() } else { me };
+            e.call(ACTIVATE_REFERENCE, &args![child, who, 0u32, 0u32, 1u32]);
+        } else {
+            waiting = true;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    if waiting {
+        let cell = e.call(GET_PARENT_CELL, &args![me]).u32();
+        e.call(CELL_ADD_ACTIVATING_REF, &args![cell, me]);
+    }
+}
+
+// Translated from 0056a380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::UpdateChildActivates` (Xbox PDB): advances the activate
+/// children timer by the frame time (`0084d030` on `011f6394`). Each child
+/// record (`0041eda0`) whose time (+4) is after the old timer is activated
+/// (`Activate(child, this, 0, 0, 1)`) when it is not after the new timer,
+/// else the update stays pending. When nothing is pending the reference is
+/// told (virtual `+0x4c`, `0x4000000`) and the timer restarts from 0.0; the
+/// timer is stored (`0041eff0`). Returns whether children are still pending.
+pub fn tes_object_refr_update_child_activates(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    let me = this.addr();
+    let mut pending = false;
+    let frame_time = e.call(FRAME_TIME, &args![FRAME_TIME_OBJECT]).f32();
+    let list = extra_list(e, me);
+    let mut node = e.call(EXTRA_GET_ACTIVATE_CHILDREN, &args![list]).u32();
+    let list = extra_list(e, me);
+    let timer = e.call(EXTRA_GET_ACTIVATE_TIMER, &args![list]).f32();
+    let mut new_timer = (f64::from(timer) + f64::from(frame_time)) as f32;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        let record = e.mem.u32(slot);
+        let due = e.mem.f32(record + 4);
+        if timer < due {
+            if new_timer >= due {
+                let child = e.mem.u32(record);
+                e.call(ACTIVATE_REFERENCE, &args![child, me, 0u32, 0u32, 1u32]);
+            } else {
+                pending = true;
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    if !pending {
+        e.vcall(me, SLOT_MARK_CHANGED, &args![ACTIVATING_CHANGED_FLAG]);
+        new_timer = 0.0;
+    }
+    let list = extra_list(e, me);
+    e.call(EXTRA_SET_ACTIVATE_TIMER, &args![list, new_timer]);
+    pending
+}
+
+// Translated from 0056a470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: when `first` is not 0, the list's three-word
+/// setter (`0041f080(first, second, third)`).
+pub fn fn_0056a470(e: &mut Engine, this: Ptr<TESObjectREFR>, first: u32, second: u32, third: u32) {
+    if first != 0 {
+        let list = extra_list(e, this.addr());
+        e.call(EXTRA_SET_THREE_WORDS, &args![list, first, second, third]);
+    }
+}
+
+// Translated from 0056a4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Not named in the Xbox PDB: refreshes the decals (`0056a8d0`), then for
+/// every decal reference record of the list (`0041f050`) fills a decal data
+/// record (`004a37b0`, 0x80 bytes) and hands it to the parent cell's decal
+/// manager (`004a3fe0(cell, data, 4, 0)`). The record takes the position
+/// and rotation from the decal record (+4, +0x10), the 3D of this reference
+/// and the decal reference's base form. With a holder (`0056a860`) the size
+/// comes from random floats, the colour from the bytes of the holder's base
+/// form, and the flags and karma from the holder; without one the size is
+/// the quotient of the base form's virtuals `+0x98` and `+0x94` (an
+/// unsigned division, as the exe does), times 128.0 and the decal
+/// reference's scale. The unwinding frames are not translated.
+pub fn fn_0056a4a0(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    e.call(DECAL_REFRESH, &args![me]);
+    let list = extra_list(e, me);
+    let mut node = e.call(EXTRA_GET_DECALS, &args![list]).u32();
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        let decal = e.mem.u32(slot);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+        e.with_stack(DECAL_DATA_SIZE + 0x20, |e, block| {
+            let data = block.addr();
+            let pointer = data + DECAL_DATA_SIZE;
+            e.call(DECAL_DATA_CONSTRUCT, &args![data]);
+            copy_vector(e, decal + DECAL_RECORD_POSITION, data + DECAL_FIRST_VECTOR);
+            copy_vector(e, decal + DECAL_RECORD_ROTATION, data + DECAL_SECOND_VECTOR);
+            let node_3d = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+            e.mem.set_u32(data + DECAL_NODE, node_3d);
+            let decal_reference = e.mem.u32(decal);
+            let base = e.call(GET_BASE_FORM, &args![decal_reference]).u32();
+            e.mem.set_u32(data + DECAL_BASE_FORM, base);
+            e.call(SMART_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+            e.vcall(base + 0x30, 0x90, &args![0u32, pointer]);
+            let model = e.call(READ_FIRST_DWORD, &args![pointer]).u32();
+            if e.call(DECAL_HAS_HOLDER, &args![base]).bool() {
+                let holder = e.call(DECAL_HOLDER, &args![base]).u32();
+                let a = e.call(HOLDER_FLOAT_A, &args![holder]).f32();
+                let b = e.call(HOLDER_FLOAT_B, &args![holder]).f32();
+                let width = e.call(RANDOM_FLOAT, &args![b, a]).f32();
+                e.mem.set_f32(data + DECAL_FLOAT_38, width);
+                let c = e.call(HOLDER_FLOAT_F, &args![holder]).f32();
+                let d = e.call(HOLDER_FLOAT_C, &args![holder]).f32();
+                let height = e.call(RANDOM_FLOAT, &args![d, c]).f32();
+                e.mem.set_f32(data + DECAL_FLOAT_3C, height);
+                let divisor: f64 = e.global(BYTE_DIVISOR);
+                let form = e.call(GET_BASE_FORM, &args![holder]).u32();
+                let high = (f64::from((form >> 16) & 0xff) / divisor) as f32;
+                let form = e.call(GET_BASE_FORM, &args![holder]).u32();
+                let middle = (f64::from(((form & 0xffff) >> 8) & 0xff) / divisor) as f32;
+                let form = e.call(GET_BASE_FORM, &args![holder]).u32();
+                let low = (f64::from(form & 0xff) / divisor) as f32;
+                let colour = e
+                    .call(MAKE_COLOUR, &args![pointer + 0x10, low, middle, high])
+                    .u32();
+                copy_vector(e, colour, data + DECAL_COLOUR);
+                let depth = e.call(HOLDER_FLOAT_D, &args![holder]).f32();
+                e.mem.set_f32(data + DECAL_FLOAT_40, depth);
+                let karma = e.call(HOLDER_FLOAT_E, &args![holder]).f32();
+                e.mem.set_f32(data + DECAL_FLOAT_54, karma);
+                let flag_a = e.call(HOLDER_FLAG_A, &args![holder]).u8();
+                e.mem.set_u8(data + DECAL_FLAG_A, flag_a);
+                let flag_b = e.call(HOLDER_FLAG_B, &args![holder]).u8();
+                e.mem.set_u8(data + DECAL_FLAG_B, flag_b);
+                if e.call(HOLDER_FLAG_C, &args![holder]).bool() {
+                    e.mem.set_u8(data + DECAL_BYTE_73, 1);
+                    let distance = e.call(HOLDER_DISTANCE, &args![holder]).f32();
+                    e.mem.set_f32(data + DECAL_FLOAT_4C, distance);
+                    let flag_d = e.call(HOLDER_FLAG_D, &args![holder]).u8();
+                    e.mem.set_u8(data + DECAL_FLAG_D, flag_d);
+                }
+            } else {
+                let width = e.vcall(model, 0x98, &args![]).u32();
+                let height = e.vcall(model, 0x94, &args![]).u32();
+                // A zero divisor faults in the exe; here it panics.
+                let cells = (width / height) as f32;
+                let scale = tes_object_refr_get_scale(e, Ptr::new(decal_reference));
+                let factor: f64 = e.global(DECAL_SIZE_FACTOR);
+                let size = ((f64::from(cells) * factor) * f64::from(scale)) as f32;
+                e.mem.set_f32(data + DECAL_FLOAT_38, size);
+                e.mem.set_f32(data + DECAL_FLOAT_3C, size);
+                let depth: f32 = e.global(DECAL_FLOAT_40_DEFAULT);
+                e.mem.set_f32(data + DECAL_FLOAT_40, depth);
+            }
+            let lifetime: f32 = e.global(DECAL_FLOAT_58_SOURCE);
+            e.mem.set_f32(data + DECAL_FLOAT_58, lifetime);
+            e.mem.set_u8(data + DECAL_BYTE_70, 0xff);
+            e.mem.set_u8(data + DECAL_BYTE_72, 0);
+            let cell = e.call(GET_PARENT_CELL, &args![me]).u32();
+            e.call(DECAL_MANAGER_ADD, &args![cell, data, 4u32, 0u32]);
+            e.call(SMART_POINTER_DESTRUCT, &args![pointer]);
+        });
+    }
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3331,6 +4571,106 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00568fa0,
             tes_object_refr_get_linked_door_teleport_position(Ptr<TESObjectREFR>) -> u32
         ),
+        entry!(
+            0x00569000,
+            tes_object_refr_get_linked_door_teleport_rotation(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(
+            0x00569060,
+            tes_object_refr_get_map_marker_data(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00569080, fn_00569080(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x005690a0,
+            tes_object_refr_add_lock(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(
+            0x00569160,
+            tes_object_refr_get_lock(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(
+            0x005691b0,
+            tes_object_refr_get_lock_level(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(
+            0x005691f0,
+            tes_object_refr_get_extra_lock(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00569250, tes_object_refr_lock(Ptr<TESObjectREFR>)),
+        entry!(0x00569280, fn_00569280(Ptr)),
+        entry!(0x005692a0, tes_object_refr_un_lock(Ptr<TESObjectREFR>)),
+        entry!(0x005692d0, fn_005692d0(Ptr<TESObjectREFR>) -> u32),
+        entry!(0x00569350, fn_00569350(Ptr<TESObjectREFR>, u32)),
+        entry!(0x005693d0, fn_005693d0(Ptr<TESObjectREFR>) -> u32),
+        entry!(0x00569410, find_emittance_property(Ptr) -> bool),
+        entry!(
+            0x005694c0,
+            tes_object_refr_check_uses_external_emittance(Ptr<TESObjectREFR>) -> bool
+        ),
+        entry!(0x00569580, fn_00569580(Ptr<TESObjectREFR>) -> u32),
+        entry!(0x005695a0, fn_005695a0(Ptr<TESObjectREFR>, Ptr) -> bool),
+        entry!(0x00569620, fn_00569620(Ptr<TESObjectREFR>, Ptr)),
+        entry!(0x00569670, fn_00569670(Ptr, Ptr, Ptr, u8) -> u8),
+        entry!(0x00569840, fn_00569840(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x00569880,
+            tes_object_refr_get_multi_bound_half_extent(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00569910, fn_00569910() -> u32),
+        entry!(
+            0x00569920,
+            tes_object_refr_get_multi_bound(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00569990, fn_00569990(Ptr<TESObjectREFR>)),
+        entry!(
+            0x005699b0,
+            tes_object_refr_get_multi_bound_room(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00569ac0, fn_00569ac0(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x00569ae0,
+            fn_00569ae0(Ptr<TESObjectREFR>, Ptr<TESObjectREFR>)
+        ),
+        entry!(0x00569b20, fn_00569b20(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x00569b40,
+            fn_00569b40(Ptr<TESObjectREFR>, Ptr<TESObjectREFR>)
+        ),
+        entry!(0x00569b80, fn_00569b80(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x00569ba0,
+            fn_00569ba0(Ptr<TESObjectREFR>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x00569be0,
+            tes_object_refr_draw_ref_link(Ptr<TESObjectREFR>, u8)
+        ),
+        entry!(
+            0x00569cb0,
+            tes_object_refr_redraw_ref_links(Ptr<TESObjectREFR>, u8, Ptr)
+        ),
+        entry!(
+            0x00569df0,
+            tes_object_refr_draw_activate_ref_link(Ptr<TESObjectREFR>, u8)
+        ),
+        entry!(
+            0x0056a1e0,
+            tes_object_refr_redraw_activate_ref_links(Ptr<TESObjectREFR>, u8)
+        ),
+        entry!(
+            0x0056a250,
+            tes_object_refr_is_activating_children(Ptr<TESObjectREFR>) -> bool
+        ),
+        entry!(
+            0x0056a290,
+            fn_0056a290(Ptr<TESObjectREFR>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x0056a380,
+            tes_object_refr_update_child_activates(Ptr<TESObjectREFR>) -> bool
+        ),
+        entry!(0x0056a470, fn_0056a470(Ptr<TESObjectREFR>, u32, u32, u32)),
+        entry!(0x0056a4a0, fn_0056a4a0(Ptr<TESObjectREFR>)),
     ]
 }
 
@@ -7566,5 +8906,1546 @@ mod tests {
         let door_link = e.mem.alloc(0x20);
         e.mem.set_u32(door.addr() + LIST_LINK, door_link);
         assert_eq!(position(&mut e), door_link + 4);
+    }
+
+    // ======================================================================
+    // Third batch: 00569000 .. 0056a4a0.
+
+    /// Where the doubles of this batch keep the answers of the extra list
+    /// accessors, relative to the list (`reference + 0x44`): the third link,
+    /// the activate children, activate parents, linked children and decal
+    /// lists, the emittance flag, the activate timer, the multi-bound
+    /// answers and the primitive.
+    const L_LINK_C: u32 = 0x38;
+    const L_ACTIVATE_CHILDREN: u32 = 0x3c;
+    const L_ACTIVATE_PARENTS: u32 = 0x40;
+    const L_LINKED_CHILDREN: u32 = 0x44;
+    const L_DECALS: u32 = 0x48;
+    const L_EMITTANCE: u32 = 0x4c;
+    /// Relative to the reference: its lock (`00569140`), its lock extra data,
+    /// the name its virtual `+0x130` gives, its multi-bound answers.
+    const R_LOCK: u32 = 0x90;
+    const R_EXTRA_LOCK: u32 = 0x94;
+    const R_NAME: u32 = 0x98;
+    const R_HAS_MULTI_BOUND: u32 = 0x9c;
+    const R_MULTI_BOUND: u32 = 0xa0;
+    const R_PRIMITIVE: u32 = 0xa4;
+    const R_ROOM: u32 = 0xa8;
+    const R_ROOM_MASTER: u32 = 0xac;
+    const R_ROOM_LINKED: u32 = 0xb0;
+
+    fn set_list(e: &mut Engine, refr: Ptr<TESObjectREFR>, offset: u32, value: u32) {
+        e.mem.set_u32(refr.addr() + 0x44 + offset, value);
+    }
+
+    fn self_slot(_: &mut Engine, a: &[u32]) -> Ret {
+        a[0].into_ret()
+    }
+
+    /// An engine for this batch: the ownership accessors, the list helpers
+    /// (a node is `[item, next]`; it is empty when its item is 0) and the
+    /// pages of the globals it reads.
+    fn third_engine() -> Engine {
+        let mut e = ownership_engine();
+        for page in [
+            0x011c_a000,
+            0x011f_4000,
+            0x0101_e000,
+            0x0102_4000,
+            0x0102_e000,
+            0x011f_6000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.register(LIST_ITEM_SLOT, |_, a| a[0].into_ret());
+        e.register(LIST_NEXT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(LIST_IS_EMPTY, |e, a| (e.mem.u32(a[0]) == 0).into_ret());
+        e
+    }
+
+    /// A reference over a base form of `kind` (ID 0x1234) whose virtuals
+    /// answer: Get3D (`+0x1d0`) the dword at `OWN_NODE`, the position
+    /// (`+0x1f4`) `data.Location`, the name (`+0x130`) the dword at
+    /// `R_NAME`; `+0x48` and `+0x4c` do nothing. The reference's own ID is
+    /// 0x5678.
+    fn third_refr(e: &mut Engine, kind: u8) -> Ptr<TESObjectREFR> {
+        let base = form(e, kind, 0x1234, 0);
+        let slots: [(u32, AbiFn); 5] = [
+            (0x1d0, slot_value::<OWN_NODE>),
+            (0x1f4, location_slot),
+            (0x130, slot_value::<R_NAME>),
+            (0x48, noop_slot),
+            (0x4c, noop_slot),
+        ];
+        let refr = refr_with(e, base, 0, &slots);
+        e.mem.set_u32(refr.addr() + 0xc, 0x5678);
+        refr
+    }
+
+    /// A list of nodes `[item, next]` over `items`; its head, 0 when empty.
+    fn list_of(e: &mut Engine, items: &[u32]) -> u32 {
+        let mut next = 0;
+        for item in items.iter().rev() {
+            let node = e.mem.alloc(8);
+            e.mem.set_u32(node, *item);
+            e.mem.set_u32(node + 4, next);
+            next = node;
+        }
+        next
+    }
+
+    /// A record `[reference, float]`, the entry of the activate children
+    /// lists (and the decal list for `fn_0056a4a0`).
+    fn record_of(e: &mut Engine, reference: u32, due: f32) -> u32 {
+        let record = e.mem.alloc(0x20);
+        e.mem.set_u32(record, reference);
+        e.mem.set_f32(record + 4, due);
+        record
+    }
+
+    // ---- 00569000, 00569060, 00569080 --------------------------------------
+
+    #[test]
+    fn linked_door_rotation_follows_two_teleport_links() {
+        let mut e = ownership_engine();
+        e.register(LINKED_DOOR_ROTATION, |_, a| (a[0] + 8).into_ret());
+        let refr = ownership_refr(&mut e, 0x40);
+        let door = ownership_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let rotation = |e: &mut Engine| e.call(0x0056_9000, &args![refr]).u32();
+        // nothing linked: the zero vector record
+        assert_eq!(rotation(&mut e), ZERO_VECTOR);
+        let link = e.mem.alloc(0x20);
+        e.mem.set_u32(me + LIST_LINK, link);
+        assert_eq!(rotation(&mut e), ZERO_VECTOR);
+        // the door has no teleport data of its own
+        e.mem.set_u32(link, door.addr());
+        assert_eq!(rotation(&mut e), ZERO_VECTOR);
+        // it has: its rotation record
+        let door_link = e.mem.alloc(0x20);
+        e.mem.set_u32(door.addr() + LIST_LINK, door_link);
+        assert_eq!(rotation(&mut e), door_link + 8);
+    }
+
+    #[test]
+    fn map_marker_data_and_its_sibling_read_the_list() {
+        let mut e = engine();
+        e.register(EXTRA_GET_MAP_MARKER_DATA, |_, a| (a[0] + 1).into_ret());
+        e.register(EXTRA_GET_UNNAMED_B, |_, a| (a[0] + 2).into_ret());
+        let refr = refr_of_kind(&mut e, 0x40);
+        let list = refr.addr() + 0x44;
+        assert_eq!(e.call(0x0056_9060, &args![refr]).u32(), list + 1);
+        assert_eq!(e.call(0x0056_9080, &args![refr]).u32(), list + 2);
+    }
+
+    // ---- 005690a0 .. 005692d0: the lock -------------------------------------
+
+    #[test]
+    fn add_lock_creates_a_lock_only_when_there_is_none() {
+        let mut e = third_engine();
+        e.register(LOCK_OF_REFERENCE, |e, a| {
+            e.mem.u32(a[0] + R_LOCK).into_ret()
+        });
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(LOCK_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0xc0de);
+            a[0].into_ret()
+        });
+        e.register(EXTRA_SET_LOCK, |e, a| {
+            e.mem.set_u32(a[0] - 0x44 + R_LOCK, a[1]);
+            Ret::default()
+        });
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // an existing lock is returned as it is
+        e.mem.set_u32(me + R_LOCK, 0x555);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_90a0, &args![refr]).u32(), 0x555);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        // none: a 0x14 byte lock is made, constructed and stored
+        e.mem.set_u32(me + R_LOCK, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_90a0, &args![refr]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14]]);
+        let lock = e.mem.u32(me + R_LOCK);
+        assert_ne!(lock, 0);
+        assert_eq!(e.mem.u32(lock), 0xc0de);
+        assert_eq!(calls_to(&log, EXTRA_SET_LOCK), vec![vec![me + 0x44, lock]]);
+        // a failed allocation is carried on as a null lock
+        e.mem.set_u32(me + R_LOCK, 0);
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_90a0, &args![refr]).u32(), 0);
+        });
+        assert!(calls_to(&log, LOCK_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, EXTRA_SET_LOCK), vec![vec![me + 0x44, 0]]);
+    }
+
+    #[test]
+    fn get_lock_falls_back_to_the_linked_door() {
+        let mut e = third_engine();
+        e.register(LOCK_OF_REFERENCE, |e, a| {
+            e.mem.u32(a[0] + R_LOCK).into_ret()
+        });
+        let refr = third_refr(&mut e, 0x40);
+        let door = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // own lock first
+        e.mem.set_u32(me + R_LOCK, 0x111);
+        assert_eq!(e.call(0x0056_9160, &args![refr]).u32(), 0x111);
+        e.mem.set_u32(me + R_LOCK, 0);
+        // no teleport data
+        assert_eq!(e.call(0x0056_9160, &args![refr]).u32(), 0);
+        // teleport data whose door is null
+        let link = e.mem.alloc(0x20);
+        e.mem.set_u32(me + LIST_LINK, link);
+        assert_eq!(e.call(0x0056_9160, &args![refr]).u32(), 0);
+        // a door: its lock
+        e.mem.set_u32(link, door.addr());
+        e.mem.set_u32(door.addr() + R_LOCK, 0x222);
+        assert_eq!(e.call(0x0056_9160, &args![refr]).u32(), 0x222);
+    }
+
+    #[test]
+    fn get_lock_level_asks_the_lock_for_this_reference() {
+        let mut e = third_engine();
+        e.register(LOCK_OF_REFERENCE, |e, a| {
+            e.mem.u32(a[0] + R_LOCK).into_ret()
+        });
+        e.register(LOCK_GET_LEVEL, |_, a| (a[0] + a[1]).into_ret());
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_91b0, &args![refr]).u32(), 0);
+        });
+        assert!(calls_to(&log, LOCK_GET_LEVEL).is_empty());
+        e.mem.set_u32(me + R_LOCK, 0x100);
+        assert_eq!(e.call(0x0056_91b0, &args![refr]).u32(), 0x100 + me);
+    }
+
+    #[test]
+    fn get_extra_lock_follows_the_linked_door() {
+        let mut e = third_engine();
+        e.register(EXTRA_OF_REFERENCE, |e, a| {
+            if a[1] == 0x2a {
+                e.mem.u32(a[0] + R_EXTRA_LOCK).into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        let refr = third_refr(&mut e, 0x40);
+        let door = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let link = e.mem.alloc(0x20);
+        e.mem.set_u32(me + LIST_LINK, link);
+        e.mem.set_u32(link, door.addr());
+        assert_eq!(e.call(0x0056_91f0, &args![refr]).u32(), 0);
+        e.mem.set_u32(door.addr() + R_EXTRA_LOCK, 0x333);
+        assert_eq!(e.call(0x0056_91f0, &args![refr]).u32(), 0x333);
+        // its own comes first
+        e.mem.set_u32(me + R_EXTRA_LOCK, 0x444);
+        assert_eq!(e.call(0x0056_91f0, &args![refr]).u32(), 0x444);
+    }
+
+    #[test]
+    fn lock_and_unlock_act_on_the_lock_extra_data() {
+        let mut e = third_engine();
+        e.register(EXTRA_OF_REFERENCE, |e, a| {
+            e.mem.u32(a[0] + R_EXTRA_LOCK).into_ret()
+        });
+        stub(
+            &mut e,
+            &[LOCK_SET_LOCKED, LOCK_EXTRA_UNLOCK, ADD_LOCK_CHANGE],
+        );
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // without lock extra data nothing happens
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9250, &args![refr]);
+            e.call(0x0056_92a0, &args![refr]);
+        });
+        assert!(calls_to(&log, LOCK_SET_LOCKED).is_empty());
+        assert!(calls_to(&log, LOCK_EXTRA_UNLOCK).is_empty());
+        assert!(calls_to(&log, ADD_LOCK_CHANGE).is_empty());
+        // with it: locked through the record at +0xc, or unlocked, and noted
+        let extra = e.mem.alloc(0x20);
+        e.mem.set_u32(extra + 0xc, 0x777);
+        e.mem.set_u32(me + R_EXTRA_LOCK, extra);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9250, &args![refr]);
+        });
+        assert_eq!(calls_to(&log, LOCK_SET_LOCKED), vec![vec![0x777, 1]]);
+        assert_eq!(calls_to(&log, ADD_LOCK_CHANGE), vec![vec![me]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_92a0, &args![refr]);
+        });
+        assert_eq!(calls_to(&log, LOCK_EXTRA_UNLOCK), vec![vec![extra]]);
+        assert_eq!(calls_to(&log, ADD_LOCK_CHANGE), vec![vec![me]]);
+        // the helper on its own
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9280, &args![extra]);
+        });
+        assert_eq!(calls_to(&log, LOCK_SET_LOCKED), vec![vec![0x777, 1]]);
+    }
+
+    // ---- 005692d0, 00569350, 005693d0 --------------------------------------
+
+    /// A reference over a base form of `kind` with a vtable giving the
+    /// getter (`+0x188`: argument + 100) and setter (`+0x184`: argument * 2).
+    fn health_refr(e: &mut Engine, kind: u8) -> Ptr<TESObjectREFR> {
+        let base = object_with_vtable(
+            e,
+            0x100,
+            &[
+                (0x188, |_, a| (a[1] + 100).into_ret()),
+                (0x184, |_, a| (a[1] * 2).into_ret()),
+            ],
+        );
+        e.mem.set_u8(base + 4, kind);
+        refr_with(e, base, 0, &[])
+    }
+
+    #[test]
+    fn base_form_byte_getter_asks_forms_of_type_0x25() {
+        let mut e = third_engine();
+        returns(&mut e, EXTRA_GET_BYTE, 5);
+        let health = health_refr(&mut e, 0x25);
+        assert_eq!(e.call(0x0056_92d0, &args![health]).u32(), 105);
+        let other = health_refr(&mut e, 0x24);
+        assert_eq!(e.call(0x0056_92d0, &args![other]).u32(), 0);
+        let bare = refr_with(&mut e, 0, 0, &[]);
+        assert_eq!(e.call(0x0056_92d0, &args![bare]).u32(), 0);
+    }
+
+    #[test]
+    fn base_form_byte_setter_stores_the_forms_answer() {
+        let mut e = third_engine();
+        stub(&mut e, &[EXTRA_SET_BYTE]);
+        let health = health_refr(&mut e, 0x25);
+        let list = health.addr() + 0x44;
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9350, &args![health, 0x21u32]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_SET_BYTE), vec![vec![list, 0x42]]);
+        // another type of base form: nothing
+        let other = health_refr(&mut e, 0x24);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9350, &args![other, 0x21u32]);
+        });
+        assert!(calls_to(&log, EXTRA_SET_BYTE).is_empty());
+        // no base form: nothing to ask
+        let bare = refr_with(&mut e, 0, 0, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9350, &args![bare, 0x21u32]);
+        });
+        assert!(calls_to(&log, EXTRA_SET_BYTE).is_empty());
+        // no list
+        let nulled = health.addr();
+        e.register_double(GET_EXTRA_LIST, move |_, a| {
+            if a[0] == nulled {
+                Ret::default()
+            } else {
+                (a[0] + 0x44).into_ret()
+            }
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9350, &args![health, 0x21u32]);
+        });
+        assert!(calls_to(&log, EXTRA_SET_BYTE).is_empty());
+    }
+
+    #[test]
+    fn x_target_is_read_for_the_two_globals_forms_only() {
+        let mut e = third_engine();
+        returns(&mut e, EXTRA_GET_X_TARGET, 0x1234);
+        let first = form(&mut e, 0x40, 1, 0);
+        let second = form(&mut e, 0x40, 2, 0);
+        let third = form(&mut e, 0x40, 3, 0);
+        e.set_global(GLOBAL_TARGET_FORM_A, first);
+        e.set_global(GLOBAL_TARGET_FORM_B, second);
+        let refr = refr_with(&mut e, first, 0, &[]);
+        assert_eq!(e.call(0x0056_93d0, &args![refr]).u32(), 0x1234);
+        let refr = refr_with(&mut e, second, 0, &[]);
+        assert_eq!(e.call(0x0056_93d0, &args![refr]).u32(), 0x1234);
+        let refr = refr_with(&mut e, third, 0, &[]);
+        assert_eq!(e.call(0x0056_93d0, &args![refr]).u32(), 0);
+    }
+
+    // ---- 00569410, 005694c0, 00569580 --------------------------------------
+
+    /// A 3D node for the emittance search: +0x20 its property, +0x24 its
+    /// child count, +0x28.. its children; its virtual `+0xc` gives itself
+    /// when `is_node`.
+    fn emittance_node(e: &mut Engine, has_property: bool, is_node: bool, children: &[u32]) -> u32 {
+        let node = if is_node {
+            object_with_vtable(e, 0x100, &[(0xc, self_slot)])
+        } else {
+            object_with_vtable(e, 0x100, &[(0xc, noop_slot)])
+        };
+        e.mem.set_u32(node + 0x20, u32::from(has_property));
+        e.mem.set_u32(node + 0x24, children.len() as u32);
+        for (i, child) in children.iter().enumerate() {
+            e.mem.set_u32(node + 0x28 + 4 * i as u32, *child);
+        }
+        node
+    }
+
+    fn emittance_engine() -> Engine {
+        let mut e = third_engine();
+        returns(&mut e, EMITTANCE_PROPERTY_TYPE, 9);
+        e.register(NODE_GET_PROPERTY, |e, a| {
+            // the property is the node's +0x20 word when the type matches
+            if a[1] == 9 {
+                e.mem.u32(a[0] + 0x20).into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        e.register(PROPERTY_IS_KIND, |_, a| {
+            (a[1] == 0x1d && a[0] == 1).into_ret()
+        });
+        e.register(NODE_CHILD_COUNT, |e, a| e.mem.u32(a[0] + 0x24).into_ret());
+        e.register(NODE_CHILD_AT, |e, a| {
+            e.mem.u32(a[0] + 0x28 + 4 * a[1]).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn emittance_search_looks_at_the_node_then_its_children() {
+        let mut e = emittance_engine();
+        // null
+        assert!(!e.call(0x0056_9410, &args![0u32]).bool());
+        // the node itself has the property: its children are not asked
+        let child = emittance_node(&mut e, true, false, &[]);
+        let node = emittance_node(&mut e, true, true, &[child]);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0056_9410, &args![node]).bool());
+        });
+        assert!(calls_to(&log, NODE_CHILD_COUNT).is_empty());
+        // a child has it
+        let leaf = emittance_node(&mut e, false, false, &[]);
+        let node = emittance_node(&mut e, false, true, &[leaf, child]);
+        assert!(e.call(0x0056_9410, &args![node]).bool());
+        // a grandchild has it
+        let middle = emittance_node(&mut e, false, true, &[child]);
+        let node = emittance_node(&mut e, false, true, &[middle]);
+        assert!(e.call(0x0056_9410, &args![node]).bool());
+        // nothing has it
+        let leaf = emittance_node(&mut e, false, false, &[]);
+        let plain = emittance_node(&mut e, false, true, &[leaf]);
+        assert!(!e.call(0x0056_9410, &args![plain]).bool());
+        // a node that does not cast to a node is not searched below
+        let not_a_node = emittance_node(&mut e, false, false, &[child]);
+        assert!(!e.call(0x0056_9410, &args![not_a_node]).bool());
+    }
+
+    #[test]
+    fn emittance_flag_is_the_lists() {
+        let mut e = third_engine();
+        e.register(EXTRA_HAS_EMITTANCE, |e, a| {
+            e.mem.u32(a[0] + L_EMITTANCE).into_ret()
+        });
+        let refr = third_refr(&mut e, 0x40);
+        assert_eq!(e.call(0x0056_9580, &args![refr]).u32(), 0);
+        set_list(&mut e, refr, L_EMITTANCE, 1);
+        assert_eq!(e.call(0x0056_9580, &args![refr]).u32(), 1);
+    }
+
+    #[test]
+    fn external_emittance_check_covers_the_forms_and_the_3d() {
+        let mut e = emittance_engine();
+        e.register(EXTRA_HAS_EMITTANCE, |e, a| {
+            e.mem.u32(a[0] + L_EMITTANCE).into_ret()
+        });
+        stub(&mut e, &[LOG_MESSAGE]);
+        let name = cstr(&mut e, "Thing");
+        // no base form: false
+        let bare = refr_with(&mut e, 0, 0, &[]);
+        assert!(!e.call(0x0056_94c0, &args![bare]).bool());
+        // base form type 0x1e with emittance data: true at once
+        let refr = third_refr(&mut e, 0x1e);
+        set_list(&mut e, refr, L_EMITTANCE, 1);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0056_94c0, &args![refr]).bool());
+        });
+        assert!(calls_to(&log, NODE_GET_PROPERTY).is_empty());
+        // any other type without a 3D: false, silently
+        let refr = third_refr(&mut e, 0x40);
+        e.mem.set_u32(refr.addr() + R_NAME, name);
+        set_list(&mut e, refr, L_EMITTANCE, 1);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0056_94c0, &args![refr]).bool());
+        });
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        // a 3D without the property while the data exists: false and logged
+        let plain = emittance_node(&mut e, false, true, &[]);
+        e.mem.set_u32(refr.addr() + OWN_NODE, plain);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0056_94c0, &args![refr]).bool());
+        });
+        assert_eq!(
+            calls_to(&log, LOG_MESSAGE),
+            vec![vec![EMITTANCE_MESSAGE, name, 0x5678]]
+        );
+        // without the data: false, silently
+        set_list(&mut e, refr, L_EMITTANCE, 0);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0056_94c0, &args![refr]).bool());
+        });
+        assert!(calls_to(&log, LOG_MESSAGE).is_empty());
+        // a 3D with the property: true
+        let lit = emittance_node(&mut e, true, true, &[]);
+        e.mem.set_u32(refr.addr() + OWN_NODE, lit);
+        assert!(e.call(0x0056_94c0, &args![refr]).bool());
+    }
+
+    // ---- 005695a0, 00569620 -------------------------------------------------
+
+    #[test]
+    fn bound_test_needs_a_valid_3d_and_the_answer_two() {
+        let mut e = third_engine();
+        e.register(NODE_IS_VALID, |_, a| (a[0] & 1).into_ret());
+        e.register(GET_CONTROLLER, |_, a| a[0].into_ret());
+        e.register(NODE_WORLD_BOUND, |_, a| (a[0] + 0x10).into_ret());
+        let refr = third_refr(&mut e, 0x40);
+        let controller =
+            object_with_vtable(&mut e, 0x100, &[(0x98, |e, a| e.mem.u32(a[1]).into_ret())]);
+        // no 3D
+        assert!(!e.call(0x0056_95a0, &args![refr, controller]).bool());
+        // a 3D that is not valid (even address)
+        let node = e.mem.alloc(0x40);
+        let even = node & !1;
+        e.mem.set_u32(refr.addr() + OWN_NODE, even);
+        assert!(!e.call(0x0056_95a0, &args![refr, controller]).bool());
+        // a valid one: the controller's answer for the world bound decides
+        let odd = even | 1;
+        e.mem.set_u32(refr.addr() + OWN_NODE, odd);
+        e.mem.set_u32(odd + 0x10, 2);
+        assert!(e.call(0x0056_95a0, &args![refr, controller]).bool());
+        e.mem.set_u32(odd + 0x10, 1);
+        assert!(!e.call(0x0056_95a0, &args![refr, controller]).bool());
+    }
+
+    #[test]
+    fn position_is_copied_to_the_other_object() {
+        let mut e = third_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let other = object_with_vtable(
+            &mut e,
+            0x100,
+            &[(0x8c, |e, a| {
+                for i in 0..3 {
+                    let word = e.mem.u32(a[1] + 4 * i);
+                    e.mem.set_u32(a[0] + 0x20 + 4 * i, word);
+                }
+                Ret::default()
+            })],
+        );
+        for i in 0..3 {
+            e.mem.set_u32(refr.addr() + 0x30 + 4 * i, 0x10 + i);
+        }
+        e.call(0x0056_9620, &args![refr, other]);
+        assert_eq!(e.mem.u32(other + 0x20), 0x10);
+        assert_eq!(e.mem.u32(other + 0x24), 0x11);
+        assert_eq!(e.mem.u32(other + 0x28), 0x12);
+    }
+
+    // ---- 00569670 -----------------------------------------------------------
+
+    /// An object for the walk: +0 the "skipped kind" flag, +4 the cast
+    /// record it answers to, +8 the range (its first dword: begin works),
+    /// +0xc the point count, +0x10 the child count, +0x14.. the children.
+    fn walk_object(e: &mut Engine, kind: u32, cast: u32, points: u32, children: &[u32]) -> u32 {
+        let object = e.mem.alloc(0x80);
+        e.mem.set_u32(object, kind);
+        e.mem.set_u32(object + 4, cast);
+        e.mem.set_u32(object + 8, 1);
+        e.mem.set_u32(object + 0xc, points);
+        e.mem.set_u32(object + 0x10, children.len() as u32);
+        for (i, child) in children.iter().enumerate() {
+            e.mem.set_u32(object + 0x14 + 4 * i as u32, *child);
+        }
+        object
+    }
+
+    fn walk_engine() -> Engine {
+        let mut e = third_engine();
+        e.register(KIND_TEST, |e, a| (e.mem.u32(a[1]) == 1).into_ret());
+        e.register(CHECKED_CAST, |e, a| {
+            if e.mem.u32(a[1] + 4) == a[0] {
+                a[1].into_ret()
+            } else {
+                Ret::default()
+            }
+        });
+        e.register(POINTS_RANGE_OF, |_, a| (a[0] + 8).into_ret());
+        e.register(CURSOR_CONSTRUCT, |_, _| Ret::default());
+        e.register(RANGE_BEGIN, |e, a| e.mem.u32(a[0]).into_ret());
+        stub(&mut e, &[RANGE_FILL, RANGE_END]);
+        e.register(POINTS_COUNT, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(CURSOR_READ_POINT, |e, a| {
+            e.mem.set_u32(a[2], a[1]);
+            Ret::default()
+        });
+        e.register(POINTS_TRANSFORM_OF, |_, a| a[0].into_ret());
+        // the transform adds 1000 to the first word
+        e.register(TRANSFORM_POINT, |e, a| {
+            let first = e.mem.u32(a[2]);
+            e.mem.set_u32(a[1], first + 1000);
+            a[1].into_ret()
+        });
+        e.register(GROUP_CHILD_COUNT, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(NODE_CHILD_AT, |e, a| {
+            e.mem.u32(a[0] + 0x14 + 4 * a[1]).into_ret()
+        });
+        e
+    }
+
+    /// A visitor that records the first word of each point it gets (from
+    /// +0x28) and refuses the point whose word is the dword at +0x20.
+    fn visitor(e: &mut Engine, refuse: u32) -> u32 {
+        let visitor = object_with_vtable(
+            e,
+            0x100,
+            &[(0x8c, |e, a| {
+                let word = e.mem.u32(a[1]);
+                let count = e.mem.u32(a[0] + 0x24);
+                e.mem.set_u32(a[0] + 0x28 + 4 * count, word);
+                e.mem.set_u32(a[0] + 0x24, count + 1);
+                (word != e.mem.u32(a[0] + 0x20)).into_ret()
+            })],
+        );
+        e.mem.set_u32(visitor + 0x20, refuse);
+        visitor
+    }
+
+    fn seen(e: &Engine, visitor: u32) -> Vec<u32> {
+        (0..e.mem.u32(visitor + 0x24))
+            .map(|i| e.mem.u32(visitor + 0x28 + 4 * i))
+            .collect()
+    }
+
+    #[test]
+    fn walk_of_the_skipped_kind_returns_the_found_byte() {
+        let mut e = walk_engine();
+        let object = walk_object(&mut e, 1, CAST_RECORD_POINTS, 3, &[]);
+        let visitor = visitor(&mut e, 0);
+        let found = e.mem.alloc(4);
+        e.mem.set_u8(found, 7);
+        assert_eq!(
+            e.call(0x0056_9670, &args![object, visitor, found, 1u32])
+                .u8(),
+            7
+        );
+        assert!(seen(&e, visitor).is_empty());
+    }
+
+    #[test]
+    fn walk_hands_the_transformed_points_to_the_visitor() {
+        let mut e = walk_engine();
+        let object = walk_object(&mut e, 0, CAST_RECORD_POINTS, 3, &[]);
+        let found = e.mem.alloc(4);
+        // all accepted
+        let accepting = visitor(&mut e, 99);
+        let log = logged(&mut e, |e| {
+            assert_eq!(
+                e.call(0x0056_9670, &args![object, accepting, found, 1u32])
+                    .u8(),
+                1
+            );
+        });
+        assert_eq!(seen(&e, accepting), vec![1000, 1001, 1002]);
+        assert_eq!(calls_to(&log, RANGE_BEGIN).len(), 1);
+        assert_eq!(calls_to(&log, RANGE_END).len(), 1);
+        // one refused with stop set: the walk ends with 0 at that point
+        let refusing = visitor(&mut e, 1001);
+        e.mem.set_u8(found, 0);
+        assert_eq!(
+            e.call(0x0056_9670, &args![object, refusing, found, 1u32])
+                .u8(),
+            0
+        );
+        assert_eq!(seen(&e, refusing), vec![1000, 1001]);
+        // without stop every point is visited, and the walk answers 0
+        let refusing = visitor(&mut e, 1001);
+        assert_eq!(
+            e.call(0x0056_9670, &args![object, refusing, found, 0u32])
+                .u8(),
+            0
+        );
+        assert_eq!(seen(&e, refusing), vec![1000, 1001, 1002]);
+        assert_eq!(e.mem.u8(found), 1);
+        // the range cannot begin
+        e.mem.set_u32(object + 8, 0);
+        let accepting = visitor(&mut e, 99);
+        assert_eq!(
+            e.call(0x0056_9670, &args![object, accepting, found, 1u32])
+                .u8(),
+            0
+        );
+        assert!(seen(&e, accepting).is_empty());
+    }
+
+    #[test]
+    fn walk_goes_through_the_children_of_a_group() {
+        let mut e = walk_engine();
+        let found = e.mem.alloc(4);
+        e.mem.set_u8(found, 3);
+        let skipped = walk_object(&mut e, 1, 0, 0, &[]);
+        let two_points = walk_object(&mut e, 0, CAST_RECORD_POINTS, 2, &[]);
+        let group = walk_object(&mut e, 0, CAST_RECORD_GROUP, 0, &[skipped, two_points]);
+        let accepting = visitor(&mut e, 99);
+        assert_eq!(
+            e.call(0x0056_9670, &args![group, accepting, found, 1u32])
+                .u8(),
+            1
+        );
+        assert_eq!(seen(&e, accepting), vec![1000, 1001]);
+        // a child that answers 0 ends the group's walk
+        let refusing = visitor(&mut e, 1000);
+        let group = walk_object(&mut e, 0, CAST_RECORD_GROUP, 0, &[two_points, skipped]);
+        assert_eq!(
+            e.call(0x0056_9670, &args![group, refusing, found, 1u32])
+                .u8(),
+            0
+        );
+        assert_eq!(seen(&e, refusing), vec![1000]);
+        // an object of neither kind is just the found byte
+        let plain = walk_object(&mut e, 0, 0, 0, &[]);
+        e.mem.set_u8(found, 9);
+        assert_eq!(
+            e.call(0x0056_9670, &args![plain, accepting, found, 1u32])
+                .u8(),
+            9
+        );
+    }
+
+    // ---- 00569840 .. 00569ba0: multi-bound and list accessors ---------------
+
+    fn multi_bound_engine() -> Engine {
+        let mut e = third_engine();
+        e.register(HAS_MULTI_BOUND_DATA, |e, a| {
+            e.mem.u32(a[0] + R_HAS_MULTI_BOUND).into_ret()
+        });
+        e.register(EXTRA_GET_MULTI_BOUND_REFERENCE, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_MULTI_BOUND).into_ret()
+        });
+        e.register(EXTRA_GET_MULTI_BOUND, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_MULTI_BOUND).into_ret()
+        });
+        e.register(EXTRA_SET_MULTI_BOUND, |e, a| {
+            e.mem.set_u32(a[0] - 0x44 + R_MULTI_BOUND, a[1]);
+            Ret::default()
+        });
+        e.register(EXTRA_GET_PRIMITIVE, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_PRIMITIVE).into_ret()
+        });
+        e.register(EXTRA_GET_ROOM_IS_MASTER, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_ROOM_MASTER).into_ret()
+        });
+        e.register(EXTRA_GET_ROOM, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_ROOM).into_ret()
+        });
+        e.register(EXTRA_SET_ROOM, |e, a| {
+            e.mem.set_u32(a[0] - 0x44 + R_ROOM, a[1]);
+            Ret::default()
+        });
+        e.register(EXTRA_GET_ROOM_LINKED, |e, a| {
+            e.mem.u32(a[0] - 0x44 + R_ROOM_LINKED).into_ret()
+        });
+        e
+    }
+
+    #[test]
+    fn multi_bound_reference_needs_multi_bound_data() {
+        let mut e = multi_bound_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        e.mem.set_u32(me + R_MULTI_BOUND, 0x4242);
+        assert_eq!(e.call(0x0056_9840, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + R_HAS_MULTI_BOUND, 1);
+        assert_eq!(e.call(0x0056_9840, &args![refr]).u32(), 0x4242);
+    }
+
+    #[test]
+    fn half_extent_comes_from_the_primitive_the_reference_or_the_default() {
+        let mut e = multi_bound_engine();
+        e.register(PRIMITIVE_CENTRE, |e, a| {
+            e.mem.set_u32(a[1], 0xce);
+            a[1].into_ret()
+        });
+        e.register(PRIMITIVE_HALF_EXTENT, |_, a| (a[0] + 0x18).into_ret());
+        e.register(VECTORS_DIFFER, |e, a| {
+            (e.mem.u32(a[0]) != e.mem.u32(a[1])).into_ret()
+        });
+        e.register(VECTOR_COPY, |e, a| {
+            let word = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], word);
+            Ret::default()
+        });
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // nothing: the default record
+        assert_eq!(e.call(0x0056_9880, &args![refr]).u32(), DEFAULT_HALF_EXTENT);
+        // only the multi-bound reference: its own record (the node itself)
+        let bound = e.mem.alloc(0x20);
+        e.mem.set_u32(me + R_HAS_MULTI_BOUND, 1);
+        e.mem.set_u32(me + R_MULTI_BOUND, bound);
+        assert_eq!(e.call(0x0056_9880, &args![refr]).u32(), bound);
+        // a primitive alone: its half extent
+        let primitive = e.mem.alloc(0x40);
+        e.mem.set_u32(me + R_PRIMITIVE, primitive);
+        e.mem.set_u32(me + R_MULTI_BOUND, 0);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_9880, &args![refr]).u32(), primitive + 0x18);
+        });
+        assert!(calls_to(&log, VECTOR_COPY).is_empty());
+        // both: a differing centre is copied into the reference's record
+        e.mem.set_u32(me + R_MULTI_BOUND, bound);
+        e.mem.set_u32(bound, 0x1);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_9880, &args![refr]).u32(), primitive + 0x18);
+        });
+        assert_eq!(calls_to(&log, VECTOR_COPY).len(), 1);
+        assert_eq!(e.mem.u32(bound), 0xce);
+        // an equal one is left alone
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9880, &args![refr]);
+        });
+        assert!(calls_to(&log, VECTOR_COPY).is_empty());
+        assert_eq!(e.call(0x0056_9910, &args![]).u32(), DEFAULT_HALF_EXTENT);
+    }
+
+    #[test]
+    fn multi_bound_is_created_once() {
+        let mut e = multi_bound_engine();
+        e.register(CREATE_MULTI_BOUND, |_, _| 0x9999u32.into_ret());
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // without multi-bound data
+        assert_eq!(e.call(0x0056_9920, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + R_HAS_MULTI_BOUND, 1);
+        // deleted
+        e.mem.set_u32(me + 8, 0x20);
+        assert_eq!(e.call(0x0056_9920, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + 8, 0);
+        // none yet: created and stored
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_9920, &args![refr]).u32(), 0x9999);
+        });
+        assert_eq!(calls_to(&log, CREATE_MULTI_BOUND), vec![vec![me]]);
+        assert_eq!(e.mem.u32(me + R_MULTI_BOUND), 0x9999);
+        // it exists: no new one
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_9920, &args![refr]).u32(), 0x9999);
+        });
+        assert!(calls_to(&log, CREATE_MULTI_BOUND).is_empty());
+        // clearing
+        e.call(0x0056_9990, &args![refr]);
+        assert_eq!(e.mem.u32(me + R_MULTI_BOUND), 0);
+    }
+
+    #[test]
+    fn multi_bound_room_is_created_and_linked_with_the_listed_references() {
+        let mut e = multi_bound_engine();
+        e.register(CREATE_ROOM, |_, _| 0x7007u32.into_ret());
+        stub(&mut e, &[EXTRA_LINK_ROOM]);
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let other_a = third_refr(&mut e, 0x40).addr();
+        let other_b = third_refr(&mut e, 0x40).addr();
+        // without multi-bound data, deleted, or not a room master
+        assert_eq!(e.call(0x0056_99b0, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + R_HAS_MULTI_BOUND, 1);
+        e.mem.set_u32(me + 8, 0x20);
+        assert_eq!(e.call(0x0056_99b0, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + 8, 0);
+        assert_eq!(e.call(0x0056_99b0, &args![refr]).u32(), 0);
+        e.mem.set_u32(me + R_ROOM_MASTER, 1);
+        // an existing room is returned as it is
+        e.mem.set_u32(me + R_ROOM, 0x6006);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_99b0, &args![refr]).u32(), 0x6006);
+        });
+        assert!(calls_to(&log, CREATE_ROOM).is_empty());
+        e.mem.set_u32(me + R_ROOM, 0);
+        // none: made, stored, and every reference of the linked list (its
+        // nodes start at +8) linked both ways; a null item ends the walk
+        let nodes = list_of(&mut e, &[other_a, other_b, 0, other_a]);
+        let linked = e.mem.alloc(0x20);
+        // the list is embedded at +8 of the linked data
+        e.mem.set_u32(linked + 8, e.mem.u32(nodes));
+        e.mem.set_u32(linked + 12, e.mem.u32(nodes + 4));
+        e.mem.set_u32(me + R_ROOM_LINKED, linked);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0056_99b0, &args![refr]).u32(), 0x7007);
+        });
+        assert_eq!(e.mem.u32(me + R_ROOM), 0x7007);
+        assert_eq!(calls_to(&log, CREATE_ROOM), vec![vec![me]]);
+        assert_eq!(
+            calls_to(&log, EXTRA_LINK_ROOM),
+            vec![
+                vec![other_a + 0x44, me],
+                vec![me + 0x44, other_a],
+                vec![other_b + 0x44, me],
+                vec![me + 0x44, other_b],
+            ]
+        );
+    }
+
+    #[test]
+    fn linked_reference_accessors_use_their_list_functions() {
+        let mut e = multi_bound_engine();
+        returns(&mut e, EXTRA_GET_LINK_A, 0xa1);
+        returns(&mut e, EXTRA_GET_LINK_B, 0xb1);
+        returns(&mut e, EXTRA_GET_LINK_C, 0xc1);
+        stub(
+            &mut e,
+            &[EXTRA_SET_LINK_A, EXTRA_SET_LINK_B, EXTRA_SET_LINK_C],
+        );
+        returns(&mut e, 0x0048_4e60, 0);
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let list = me + 0x44;
+        assert_eq!(e.call(0x0056_9ac0, &args![refr]).u32(), 0xa1);
+        assert_eq!(e.call(0x0056_9b20, &args![refr]).u32(), 0xb1);
+        assert_eq!(e.call(0x0056_9b80, &args![refr]).u32(), 0xc1);
+        // 00569ae0: stores another reference only if it has multi-bound data
+        // and is not this one; null is stored too
+        let other = third_refr(&mut e, 0x40).addr();
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9ae0, &args![refr, other]);
+            e.call(0x0056_9ae0, &args![refr, 0u32]);
+            e.call(0x0056_9ae0, &args![refr, me]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_A), vec![vec![list, 0]]);
+        e.mem.set_u32(other + R_HAS_MULTI_BOUND, 1);
+        e.mem.set_u32(me + R_HAS_MULTI_BOUND, 1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9ae0, &args![refr, other]);
+            e.call(0x0056_9ae0, &args![refr, me]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_A), vec![vec![list, other]]);
+        // 00569b40 and 00569ba0: stored unless a non-null reference does not
+        // persist (form flag 0x400)
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9b40, &args![refr, other]);
+            e.call(0x0056_9ba0, &args![refr, other]);
+            e.call(0x0056_9b40, &args![refr, 0u32]);
+            e.call(0x0056_9ba0, &args![refr, 0u32]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_B), vec![vec![list, 0]]);
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_C), vec![vec![list, 0]]);
+        e.mem.set_u32(other + 8, 0x400);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9b40, &args![refr, other]);
+            e.call(0x0056_9ba0, &args![refr, other]);
+        });
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_B), vec![vec![list, other]]);
+        assert_eq!(calls_to(&log, EXTRA_SET_LINK_C), vec![vec![list, other]]);
+    }
+
+    // ---- 00569be0, 00569cb0: the link line ---------------------------------
+
+    /// A node whose children lookup (`+0x9c`) answers the dword at +0x30
+    /// and whose casts (`+0xc`) answer itself; its removals and
+    /// attachments are logged through their slot addresses.
+    fn line_node(e: &mut Engine, child: u32) -> u32 {
+        let node = object_with_vtable(
+            e,
+            0x100,
+            &[
+                (0xc, self_slot),
+                (0x9c, slot_value::<0x30>),
+                (0xe8, noop_slot),
+                (0xdc, noop_slot),
+            ],
+        );
+        e.mem.set_u32(node + 0x30, child);
+        node
+    }
+
+    fn line_engine() -> Engine {
+        let mut e = third_engine();
+        e.register(FIXED_STRING_CONSTRUCT, |_, a| a[1].into_ret());
+        stub(&mut e, &[FIXED_STRING_DESTRUCT]);
+        e
+    }
+
+    #[test]
+    fn draw_ref_link_removes_the_link_line_child() {
+        let mut e = line_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        // no 3D
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9be0, &args![refr, 1u32]);
+        });
+        assert!(calls_to(&log, FIXED_STRING_CONSTRUCT).is_empty());
+        // a node without the child: looked up by name, nothing removed
+        let node = line_node(&mut e, 0);
+        e.mem.set_u32(me + OWN_NODE, node);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9be0, &args![refr, 1u32]);
+        });
+        assert_eq!(calls_to(&log, FIXED_STRING_CONSTRUCT)[0][1], LINK_LINE_NAME);
+        assert!(calls_to(&log, slot_address(&e, node, 0xe8)).is_empty());
+        assert_eq!(calls_to(&log, FIXED_STRING_DESTRUCT).len(), 1);
+        // with it: removed
+        e.mem.set_u32(node + 0x30, 0x1ee);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9be0, &args![refr, 1u32]);
+        });
+        assert_eq!(
+            calls_to(&log, slot_address(&e, node, 0xe8)),
+            vec![vec![node, 0x1ee]]
+        );
+    }
+
+    /// The doubles of the visited set: the object is `[count, entries...]`.
+    fn visited_set(e: &mut Engine) {
+        e.register(VISITED_CONSTRUCT, |_, _| Ret::default());
+        e.register(VISITED_FIND, |e, a| {
+            let count = e.mem.u32(a[0]);
+            (0..count)
+                .any(|i| e.mem.u32(a[0] + 4 + 4 * i) == a[1])
+                .into_ret()
+        });
+        e.register(VISITED_INSERT, |e, a| {
+            let count = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0] + 4 + 4 * count, a[1]);
+            e.mem.set_u32(a[0], count + 1);
+            Ret::default()
+        });
+        stub(e, &[VISITED_REMOVE_ALL, VISITED_DESTRUCT]);
+    }
+
+    #[test]
+    fn redraw_ref_links_walks_the_link_and_the_children_once() {
+        let mut e = line_engine();
+        visited_set(&mut e);
+        e.register(EXTRA_GET_LINK_C, |e, a| {
+            e.mem.u32(a[0] + L_LINK_C).into_ret()
+        });
+        e.register(EXTRA_GET_LINKED_CHILDREN, |e, a| {
+            e.mem.u32(a[0] + L_LINKED_CHILDREN).into_ret()
+        });
+        let a = third_refr(&mut e, 0x40);
+        let b = third_refr(&mut e, 0x40);
+        let c = third_refr(&mut e, 0x40);
+        let mut nodes = vec![];
+        for refr in [a, b, c] {
+            let node = line_node(&mut e, 0x1ee);
+            e.mem.set_u32(refr.addr() + OWN_NODE, node);
+            nodes.push(node);
+        }
+        // a links to b; c is a linked child of a
+        set_list(&mut e, a, L_LINK_C, b.addr());
+        let children = list_of(&mut e, &[c.addr()]);
+        set_list(&mut e, a, L_LINKED_CHILDREN, children);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9cb0, &args![a, 1u32, 0u32]);
+        });
+        // a and c have their line removed (b links to nothing)
+        let removed: Vec<u32> = nodes
+            .iter()
+            .map(|node| calls_to(&log, slot_address(&e, *node, 0xe8)).len() as u32)
+            .collect();
+        assert_eq!(removed, vec![1, 0, 1]);
+        // each reference once, in walking order
+        let inserted: Vec<u32> = calls_to(&log, VISITED_INSERT)
+            .iter()
+            .map(|args| args[1])
+            .collect();
+        assert_eq!(inserted, vec![a.addr(), b.addr(), c.addr()]);
+        // every frame builds, empties and destroys its own set
+        assert_eq!(calls_to(&log, VISITED_CONSTRUCT).len(), 3);
+        assert_eq!(calls_to(&log, VISITED_REMOVE_ALL).len(), 3);
+        assert_eq!(calls_to(&log, VISITED_DESTRUCT).len(), 3);
+        assert_eq!(calls_to(&log, VISITED_CONSTRUCT)[0][1], VISITED_BUCKETS);
+        // a reference already in the given set is skipped
+        let set = e.mem.alloc(0x40);
+        e.mem.set_u32(set, 1);
+        e.mem.set_u32(set + 4, a.addr());
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9cb0, &args![a, 1u32, set]);
+        });
+        assert!(calls_to(&log, VISITED_INSERT).is_empty());
+        assert_eq!(calls_to(&log, VISITED_DESTRUCT).len(), 1);
+        assert!(calls_to(&log, VISITED_REMOVE_ALL).is_empty());
+    }
+
+    // ---- 00569df0, 0056a1e0: the activate line ------------------------------
+
+    fn activate_engine() -> Engine {
+        let mut e = line_engine();
+        e.register(EXTRA_GET_ACTIVATE_PARENTS, |e, a| {
+            e.mem.u32(a[0] + L_ACTIVATE_PARENTS).into_ret()
+        });
+        e.register(EXTRA_GET_ACTIVATE_CHILDREN, |e, a| {
+            e.mem.u32(a[0] + L_ACTIVATE_CHILDREN).into_ret()
+        });
+        stub(
+            &mut e,
+            &[
+                REMOVE_ALL_EFFECTS,
+                UPDATE_PROPERTIES,
+                GET_ORIENTATION,
+                MATRIX_INVERSE,
+                VECTOR_DIFFERENCE,
+                MAKE_VELOCITY,
+                SET_3D_VELOCITY,
+                SET_NODE_NAME,
+            ],
+        );
+        e.register(MATRIX_TIMES_VECTOR, |_, a| a[1].into_ret());
+        e.register(VECTOR_SCALE, |_, a| a[1].into_ret());
+        e.register(COLOUR_CONSTRUCT, |_, a| a[0].into_ret());
+        returns(&mut e, MAKE_LINE, 0xbeef);
+        e
+    }
+
+    #[test]
+    fn activate_line_without_drawing_removes_an_existing_line() {
+        let mut e = activate_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let line = line_node(&mut e, 0);
+        let node = line_node(&mut e, line);
+        e.mem.set_u32(me + OWN_NODE, node);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9df0, &args![refr, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, FIXED_STRING_CONSTRUCT)[0][1],
+            ACTIVATE_LINE_NAME
+        );
+        assert_eq!(calls_to(&log, REMOVE_ALL_EFFECTS), vec![vec![line]]);
+        assert_eq!(
+            calls_to(&log, slot_address(&e, node, 0xe8)),
+            vec![vec![node, line]]
+        );
+        assert!(calls_to(&log, UPDATE_PROPERTIES).is_empty());
+        // no 3D: nothing at all
+        e.mem.set_u32(me + OWN_NODE, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9df0, &args![refr, 1u32]);
+        });
+        assert!(calls_to(&log, FIXED_STRING_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn activate_line_is_made_for_every_parent() {
+        let mut e = activate_engine();
+        let refr = third_refr(&mut e, 0x40);
+        let target = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        e.mem.set_f32(me + 0x3c, 2.0);
+        let node = line_node(&mut e, 0);
+        e.mem.set_u32(me + OWN_NODE, node);
+        // no parents: nothing drawn, no update
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9df0, &args![refr, 1u32]);
+        });
+        assert!(calls_to(&log, UPDATE_PROPERTIES).is_empty());
+        // one parent and no line yet: the line node is created, named and
+        // attached once, the line geometry attached to it
+        let created = line_node(&mut e, 0);
+        e.register(NI_ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register_double(LINE_NODE_CONSTRUCT, move |_, _| Ret {
+            eax: created,
+            ..Ret::default()
+        });
+        let record = record_of(&mut e, target.addr(), 0.0);
+        let parents = list_of(&mut e, &[record]);
+        set_list(&mut e, refr, L_ACTIVATE_PARENTS, parents);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9df0, &args![refr, 1u32]);
+        });
+        assert_eq!(calls_to(&log, NI_ALLOCATE), vec![vec![LINE_NODE_SIZE]]);
+        assert_eq!(
+            calls_to(&log, SET_NODE_NAME),
+            vec![vec![created, ACTIVATE_LINE_NAME]]
+        );
+        assert_eq!(
+            calls_to(&log, slot_address(&e, node, 0xdc)),
+            vec![vec![node, created, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, slot_address(&e, created, 0xdc)),
+            vec![vec![created, 0xbeef, 1]]
+        );
+        // the offset is divided by the scale (1 / 2.0)
+        assert_eq!(calls_to(&log, VECTOR_SCALE)[0][2], 0.5f32.to_bits());
+        // the line is made from the zero vector, the white and black ends
+        let line_args = &calls_to(&log, MAKE_LINE)[0];
+        assert_eq!(line_args.len(), 5);
+        assert_eq!(line_args[4], 1);
+        assert_eq!(calls_to(&log, COLOUR_CONSTRUCT).len(), 2);
+        assert_eq!(
+            calls_to(&log, COLOUR_CONSTRUCT)[0][1..],
+            [
+                0.0f32.to_bits(),
+                0.0f32.to_bits(),
+                0.0f32.to_bits(),
+                1.0f32.to_bits()
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, COLOUR_CONSTRUCT)[1][1..],
+            [1.0f32.to_bits(); 4]
+        );
+        // the 3D is updated and given a velocity record of 0.0
+        assert_eq!(calls_to(&log, UPDATE_PROPERTIES), vec![vec![node]]);
+        assert_eq!(
+            calls_to(&log, MAKE_VELOCITY)[0][1..],
+            [0.0f32.to_bits(), 0, 0]
+        );
+        assert_eq!(calls_to(&log, SET_3D_VELOCITY).len(), 1);
+        // with a line already there, no new node is made
+        let line = line_node(&mut e, 0);
+        e.mem.set_u32(node + 0x30, line);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_9df0, &args![refr, 1u32]);
+        });
+        assert!(calls_to(&log, NI_ALLOCATE).is_empty());
+        assert_eq!(calls_to(&log, REMOVE_ALL_EFFECTS), vec![vec![line]]);
+        assert_eq!(
+            calls_to(&log, slot_address(&e, line, 0xdc)),
+            vec![vec![line, 0xbeef, 1]]
+        );
+    }
+
+    #[test]
+    fn redraw_activate_links_covers_the_children() {
+        let mut e = activate_engine();
+        let parent = third_refr(&mut e, 0x40);
+        let child = third_refr(&mut e, 0x40);
+        let mut lines = vec![];
+        for refr in [parent, child] {
+            let line = line_node(&mut e, 0);
+            let node = line_node(&mut e, line);
+            e.mem.set_u32(refr.addr() + OWN_NODE, node);
+            lines.push(line);
+        }
+        let record = record_of(&mut e, child.addr(), 0.0);
+        let children = list_of(&mut e, &[record]);
+        set_list(&mut e, parent, L_ACTIVATE_CHILDREN, children);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_a1e0, &args![parent, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, REMOVE_ALL_EFFECTS),
+            vec![vec![lines[0]], vec![lines[1]]]
+        );
+    }
+
+    // ---- 0056a250, 0056a290, 0056a380, 0056a470 -----------------------------
+
+    #[test]
+    fn activating_children_means_a_positive_timer() {
+        let mut e = third_engine();
+        let refr = third_refr(&mut e, 0x40);
+        returns_float(&mut e, EXTRA_GET_ACTIVATE_TIMER, 1.5);
+        assert!(e.call(0x0056_a250, &args![refr]).bool());
+        returns_float(&mut e, EXTRA_GET_ACTIVATE_TIMER, 0.0);
+        assert!(!e.call(0x0056_a250, &args![refr]).bool());
+        returns_float(&mut e, EXTRA_GET_ACTIVATE_TIMER, -1.0);
+        assert!(!e.call(0x0056_a250, &args![refr]).bool());
+        returns_float(&mut e, EXTRA_GET_ACTIVATE_TIMER, f32::NAN);
+        assert!(!e.call(0x0056_a250, &args![refr]).bool());
+    }
+
+    #[test]
+    fn due_children_are_activated_and_the_others_keep_the_cell_watching() {
+        let mut e = activate_engine();
+        stub(&mut e, &[ACTIVATE_REFERENCE, CELL_ADD_ACTIVATING_REF]);
+        let refr = third_refr(&mut e, 0x40);
+        let activator = third_refr(&mut e, 0x40);
+        let cell = e.mem.alloc(0x20);
+        e.mem.set_u32(refr.addr() + REFR_CELL, cell);
+        let due = third_refr(&mut e, 0x40);
+        let waiting = third_refr(&mut e, 0x40);
+        let records = [
+            record_of(&mut e, due.addr(), 0.0),
+            record_of(&mut e, waiting.addr(), 0.0),
+        ];
+        let children = list_of(&mut e, &records);
+        set_list(&mut e, refr, L_ACTIVATE_CHILDREN, children);
+        let mut timers = vec![-1.0f32, 2.5].into_iter();
+        e.register_double(EXTRA_GET_CHILD_TIMER, move |_, _| Ret {
+            st0: f64::from(timers.next().unwrap()),
+            ..Ret::default()
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_a290, &args![refr, activator]);
+        });
+        // the timers are stored in the records
+        assert_eq!(e.mem.f32(records[0] + 4), -1.0);
+        assert_eq!(e.mem.f32(records[1] + 4), 2.5);
+        // the due child is activated by this reference; the cell is told
+        assert_eq!(
+            calls_to(&log, ACTIVATE_REFERENCE),
+            vec![vec![due.addr(), refr.addr(), 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, CELL_ADD_ACTIVATING_REF),
+            vec![vec![cell, refr.addr()]]
+        );
+        // the timer is asked of each child's list for this reference
+        // (0.0 counts as due, and the activator form changes the activator)
+        let special = form(&mut e, 0x40, 9, 0);
+        e.set_global(GLOBAL_ACTIVATOR_FORM_B, special);
+        e.mem.set_u32(refr.addr() + 0x20, special);
+        let mut timers = vec![0.0f32].into_iter();
+        e.register_double(EXTRA_GET_CHILD_TIMER, move |_, _| Ret {
+            st0: f64::from(timers.next().unwrap()),
+            ..Ret::default()
+        });
+        let children = list_of(&mut e, &records[..1]);
+        set_list(&mut e, refr, L_ACTIVATE_CHILDREN, children);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_a290, &args![refr, activator]);
+        });
+        assert_eq!(
+            calls_to(&log, ACTIVATE_REFERENCE),
+            vec![vec![due.addr(), activator.addr(), 0, 0, 1]]
+        );
+        assert!(calls_to(&log, CELL_ADD_ACTIVATING_REF).is_empty());
+    }
+
+    #[test]
+    fn child_activates_advance_the_timer_by_the_frame_time() {
+        let mut e = activate_engine();
+        stub(&mut e, &[ACTIVATE_REFERENCE]);
+        stub(&mut e, &[EXTRA_SET_ACTIVATE_TIMER]);
+        returns_float(&mut e, FRAME_TIME, 0.5);
+        returns_float(&mut e, EXTRA_GET_ACTIVATE_TIMER, 1.0);
+        let refr = third_refr(&mut e, 0x40);
+        let me = refr.addr();
+        let old = third_refr(&mut e, 0x40);
+        let due = third_refr(&mut e, 0x40);
+        let later = third_refr(&mut e, 0x40);
+        let records = [
+            record_of(&mut e, old.addr(), 0.5),
+            record_of(&mut e, due.addr(), 1.25),
+            record_of(&mut e, later.addr(), 2.0),
+        ];
+        let children = list_of(&mut e, &records);
+        set_list(&mut e, refr, L_ACTIVATE_CHILDREN, children);
+        // the old one is skipped, the due one activated, the later one keeps
+        // the update pending and the timer moves on to 1.5
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0056_a380, &args![refr]).bool());
+        });
+        assert_eq!(
+            calls_to(&log, ACTIVATE_REFERENCE),
+            vec![vec![due.addr(), me, 0, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_SET_ACTIVATE_TIMER),
+            vec![vec![me + 0x44, 1.5f32.to_bits()]]
+        );
+        assert!(calls_to(&log, slot_address(&e, me, 0x4c)).is_empty());
+        // nothing pending: the reference is told and the timer restarts
+        let children = list_of(&mut e, &records[..2]);
+        set_list(&mut e, refr, L_ACTIVATE_CHILDREN, children);
+        let log = logged(&mut e, |e| {
+            assert!(!e.call(0x0056_a380, &args![refr]).bool());
+        });
+        assert_eq!(
+            calls_to(&log, slot_address(&e, me, 0x4c)),
+            vec![vec![me, 0x0400_0000]]
+        );
+        assert_eq!(
+            calls_to(&log, EXTRA_SET_ACTIVATE_TIMER),
+            vec![vec![me + 0x44, 0.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn three_word_setter_ignores_a_null_first_word() {
+        let mut e = third_engine();
+        stub(&mut e, &[EXTRA_SET_THREE_WORDS]);
+        let refr = third_refr(&mut e, 0x40);
+        let list = refr.addr() + 0x44;
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_a470, &args![refr, 0u32, 2u32, 3u32]);
+            e.call(0x0056_a470, &args![refr, 1u32, 2u32, 3u32]);
+        });
+        assert_eq!(
+            calls_to(&log, EXTRA_SET_THREE_WORDS),
+            vec![vec![list, 1, 2, 3]]
+        );
+    }
+
+    // ---- 0056a4a0: decals ----------------------------------------------------
+
+    /// Everything the decal function reads, with the decal manager entry
+    /// double copying the 0x80 byte data record to `kept`. Returns the
+    /// engine, the reference, the decal reference, the base form of the
+    /// decal reference and `kept`.
+    fn decal_fixture() -> (Engine, Ptr<TESObjectREFR>, Ptr<TESObjectREFR>, u32, u32) {
+        let mut e = activate_engine();
+        e.set_global(BYTE_DIVISOR, 255.0f64);
+        e.set_global(DECAL_FLOAT_40_DEFAULT, 48.0f32);
+        e.set_global(DECAL_FLOAT_58_SOURCE, 90.0f32);
+        e.set_global(DECAL_SIZE_FACTOR, 128.0f64);
+        stub(
+            &mut e,
+            &[
+                DECAL_REFRESH,
+                DECAL_DATA_CONSTRUCT,
+                SMART_POINTER_CONSTRUCT,
+                SMART_POINTER_DESTRUCT,
+            ],
+        );
+        e.register(EXTRA_GET_DECALS, |e, a| {
+            e.mem.u32(a[0] + L_DECALS).into_ret()
+        });
+        e.register(DECAL_HAS_HOLDER, |e, a| {
+            (e.mem.u32(a[0] + 0x80) != 0).into_ret()
+        });
+        e.register(DECAL_HOLDER, |e, a| e.mem.u32(a[0] + 0x80).into_ret());
+        let kept = e.mem.alloc(0x80);
+        e.register_double(DECAL_MANAGER_ADD, move |e, a| {
+            for i in 0..0x20 {
+                let word = e.mem.u32(a[1] + 4 * i);
+                e.mem.set_u32(kept + 4 * i, word);
+            }
+            Ret::default()
+        });
+        let refr = third_refr(&mut e, 0x40);
+        let node = line_node(&mut e, 0);
+        e.mem.set_u32(refr.addr() + OWN_NODE, node);
+        let cell = e.mem.alloc(0x20);
+        e.mem.set_u32(refr.addr() + REFR_CELL, cell);
+        // the decal reference: scale 2.0; its base form fills the model
+        // pointer through the virtual at +0x90 of its +0x30 subobject
+        let decal_reference = third_refr(&mut e, 0x40);
+        e.mem.set_f32(decal_reference.addr() + 0x3c, 2.0);
+        let model = object_with_vtable(
+            &mut e,
+            0x100,
+            &[
+                (0x98, |_, _| 640u32.into_ret()),
+                (0x94, |_, _| 128u32.into_ret()),
+            ],
+        );
+        let base = e.mem.alloc(0x200);
+        let subobject_vtable = e.mem.alloc(0x200);
+        let fill = fake_function(&mut e, |e, a| {
+            let model = e.mem.u32(a[0] + 0x10);
+            e.mem.set_u32(a[2], model);
+            Ret::default()
+        });
+        e.mem.set_u32(subobject_vtable + 0x90, fill);
+        e.mem.set_u32(base + 0x30, subobject_vtable);
+        e.mem.set_u32(base + 0x40, model);
+        e.mem.set_u32(decal_reference.addr() + 0x20, base);
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u32(record, decal_reference.addr());
+        for i in 0..3 {
+            e.mem.set_f32(record + 4 + 4 * i, 10.0 + i as f32);
+            e.mem.set_f32(record + 0x10 + 4 * i, 20.0 + i as f32);
+        }
+        let decals = list_of(&mut e, &[record]);
+        set_list(&mut e, refr, L_DECALS, decals);
+        (e, refr, decal_reference, base, kept)
+    }
+
+    #[test]
+    fn decal_without_a_holder_is_sized_from_the_model_and_the_scale() {
+        let (mut e, refr, decal_reference, base, kept) = decal_fixture();
+        let node = e.mem.u32(refr.addr() + OWN_NODE);
+        let cell = e.mem.u32(refr.addr() + REFR_CELL);
+        let log = logged(&mut e, |e| {
+            e.call(0x0056_a4a0, &args![refr]);
+        });
+        assert_eq!(calls_to(&log, DECAL_REFRESH).len(), 1);
+        assert_eq!(
+            calls_to(&log, DECAL_MANAGER_ADD)[0][0],
+            cell,
+            "the parent cell's manager"
+        );
+        assert_eq!(calls_to(&log, DECAL_MANAGER_ADD)[0][2..], [4, 0]);
+        // position and rotation come from the decal record
+        assert_eq!(e.mem.f32(kept), 10.0);
+        assert_eq!(e.mem.f32(kept + 8), 12.0);
+        assert_eq!(e.mem.f32(kept + 0xc), 20.0);
+        assert_eq!(e.mem.f32(kept + 0x14), 22.0);
+        assert_eq!(e.mem.u32(kept + DECAL_NODE), node);
+        assert_eq!(e.mem.u32(kept + DECAL_BASE_FORM), base);
+        // (640 / 128) * 128.0 * 2.0
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_38), 1280.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_3C), 1280.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_40), 48.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_58), 90.0);
+        assert_eq!(e.mem.u8(kept + DECAL_BYTE_70), 0xff);
+        assert_eq!(e.mem.u8(kept + DECAL_BYTE_72), 0);
+        let _ = decal_reference;
+        // the smart pointer is built and released around it
+        assert_eq!(calls_to(&log, SMART_POINTER_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn decal_with_a_holder_takes_its_values() {
+        let (mut e, refr, _decal_reference, base, kept) = decal_fixture();
+        // the holder answers the floats and flags, the base form dword gives
+        // the colour bytes
+        let holder = e.mem.alloc(0x80);
+        e.mem.set_u32(base + 0x80, holder);
+        e.mem.set_u32(holder + 0x20, 0x00ff_8040);
+        returns_float(&mut e, HOLDER_FLOAT_A, 1.0);
+        returns_float(&mut e, HOLDER_FLOAT_B, 3.0);
+        returns_float(&mut e, HOLDER_FLOAT_F, 5.0);
+        returns_float(&mut e, HOLDER_FLOAT_C, 7.0);
+        returns_float(&mut e, HOLDER_FLOAT_D, 9.0);
+        returns_float(&mut e, HOLDER_FLOAT_E, -2.0);
+        returns_float(&mut e, HOLDER_DISTANCE, 4.5);
+        e.register(RANDOM_FLOAT, |_, a| Ret {
+            st0: f64::from(f32::from_bits(a[0]) * 100.0 + f32::from_bits(a[1])),
+            ..Ret::default()
+        });
+        returns(&mut e, HOLDER_FLAG_A, 1);
+        returns(&mut e, HOLDER_FLAG_B, 2);
+        returns(&mut e, HOLDER_FLAG_C, 1);
+        returns(&mut e, HOLDER_FLAG_D, 3);
+        e.register(MAKE_COLOUR, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+        e.call(0x0056_a4a0, &args![refr]);
+        // the random floats take (second getter, first getter) and (the
+        // fourth, the third)
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_38), 301.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_3C), 705.0);
+        // the colour is (low, middle, high) byte / 255
+        assert_eq!(
+            e.mem.f32(kept + DECAL_COLOUR),
+            (f64::from(0x40) / 255.0) as f32
+        );
+        assert_eq!(
+            e.mem.f32(kept + DECAL_COLOUR + 4),
+            (f64::from(0x80) / 255.0) as f32
+        );
+        assert_eq!(e.mem.f32(kept + DECAL_COLOUR + 8), 1.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_40), 9.0);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_54), -2.0);
+        assert_eq!(e.mem.u8(kept + DECAL_FLAG_A), 1);
+        assert_eq!(e.mem.u8(kept + DECAL_FLAG_B), 2);
+        assert_eq!(e.mem.u8(kept + DECAL_BYTE_73), 1);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_4C), 4.5);
+        assert_eq!(e.mem.u8(kept + DECAL_FLAG_D), 3);
+        assert_eq!(e.mem.f32(kept + DECAL_FLOAT_58), 90.0);
+        // without the distance flag the distance and its flags stay
+        returns(&mut e, HOLDER_FLAG_C, 0);
+        e.call(0x0056_a4a0, &args![refr]);
+        assert_eq!(e.mem.u8(kept + DECAL_BYTE_73), 0);
     }
 }
