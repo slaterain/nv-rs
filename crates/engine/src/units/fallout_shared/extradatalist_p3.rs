@@ -21,7 +21,13 @@
 //! Ghidra's function list know, found by following calls: `0041fcd0`
 //! (constructor of the patrol reference data), `0041fdb0` and `00420060`
 //! (the destructors of the patrol and the occlusion plane reference data).
-//! The next session continues at `004202d0`.
+//! The third session did the last 40 and the two unlisted destructors found
+//! by following calls (`004203b0`, `00420630`), `004202d0` to `004213c0`: the
+//! portal reference data (`0x77`, with the portal words `00420a60`,
+//! `00420bc0`), the room reference data (`0x7B`, its linked data, the master
+//! room search), the portal and the room (`0x78`, `0x79`), the collision data
+//! (`0x72`), the actor package data (`0x70`) and the guarded reference data
+//! (`0x7C`). The range is complete.
 //!
 //! The type numbers are `EXTRA_DATA_TYPE` of the Xbox PDB (`0x37`
 //! `EXTRA_ENABLESTATEPARENT`, `0x3B` `EXTRA_TELEPORTMARKER`, `0x51`
@@ -90,6 +96,44 @@ layout! {
     pub struct ExtraOcclusionPlaneRefData: 0x10 {
         /// `pData` (Xbox PDB): `OcclusionPlaneLinkedRefData*`, 0x10 bytes.
         0x0C pData: Ptr,
+    }
+
+    /// `ExtraPortalRefData` (Xbox PDB), type `0x77`, 0x10 bytes: owns its
+    /// data, two words (the references of the portal).
+    pub struct ExtraPortalRefData: 0x10 {
+        /// `pData` (Xbox PDB): `PortalLinkedRefData*`, 8 bytes
+        /// (`pLinkedRefs`, two `TESObjectREFR*` on PC).
+        0x0C pData: Ptr,
+    }
+
+    /// `ExtraRoomRefData` (Xbox PDB), type `0x7B`, 0x10 bytes: owns its data.
+    pub struct ExtraRoomRefData: 0x10 {
+        /// `pData` (Xbox PDB): `RoomLinkedRefData*`.
+        0x0C pData: Ptr,
+    }
+
+    /// `RoomLinkedRefData` (Xbox PDB), 0x14 bytes.
+    pub struct RoomLinkedRefData: 0x14 {
+        /// `PortalList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x00 PortalList: Inline<BSSimpleList>,
+        /// `RoomList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x08 RoomList: Inline<BSSimpleList>,
+        /// `cMaster` (Xbox PDB): the room is a master room.
+        0x10 cMaster: u8,
+    }
+
+    /// `ExtraCollisionData` (Xbox PDB), type `0x72`, 0x10 bytes: owns its
+    /// collision data (freed with `operator delete`).
+    pub struct ExtraCollisionData: 0x10 {
+        /// `pCollisionData` (Xbox PDB): `CollisionData*`.
+        0x0C pCollisionData: Ptr,
+    }
+
+    /// `ExtraPackageData` (Xbox PDB), type `0x70`, 0x10 bytes: the Xbox PDB
+    /// names the extra data class of `SetActorPackageData` so.
+    pub struct ExtraPackageData: 0x10 {
+        /// `pActorPackageData` (Xbox PDB): `ActorPackageData*`.
+        0x0C pActorPackageData: Ptr,
     }
 }
 
@@ -199,8 +243,7 @@ const EXTRA_WATER_LIGHT_REFS_TYPE: u8 = 0x84;
 const EXTRA_LIT_WATER_REFS_TYPE: u8 = 0x85;
 
 /// Constructors of the extra data and of the data they own (`this` = the new
-/// block): in `extradataobjects.cpp`, `extradatalist.cpp` and (the portal
-/// reference data, the next function of this unit to translate) this part.
+/// block): in `extradataobjects.cpp` and `extradatalist.cpp`.
 const ACTIVATE_REF_CHILDREN_INIT: u32 = 0x0043_3790;
 const DECAL_REFS_INIT: u32 = 0x0043_3ca0;
 const REFLECTED_REFS_INIT: u32 = 0x0041_1b40;
@@ -209,7 +252,6 @@ const WATER_LIGHT_REFS_INIT: u32 = 0x0041_1c80;
 const LIT_WATER_REFS_INIT: u32 = 0x0041_1d20;
 /// Constructor of the four-word `OcclusionPlaneLinkedRefData` (`00411dc0`).
 const OCCLUSION_PLANE_DATA_INIT: u32 = 0x0041_1dc0;
-const PORTAL_REF_DATA_INIT: u32 = 0x0042_02d0;
 
 /// `ExtraDecalRefs` method (`00434480`) that adds, or updates, the decal
 /// of a reference: `(this, reference, intersect*, normal*)`.
@@ -249,6 +291,67 @@ const NO_TIMER: u32 = 0x0101_2054;
 const VTABLE_EXTRA_PRIMITIVE: u32 = 0x0101_51b4;
 const VTABLE_EXTRA_PATROL_REF_DATA: u32 = 0x0101_51c0;
 const VTABLE_EXTRA_OCCLUSION_PLANE_REF_DATA: u32 = 0x0101_51cc;
+
+/// Vtables set by the constructors `004202d0`, `00420500`, `00421090` and
+/// `00421280`.
+const VTABLE_EXTRA_PORTAL_REF_DATA: u32 = 0x0101_51d8;
+const VTABLE_EXTRA_ROOM_REF_DATA: u32 = 0x0101_51e4;
+const VTABLE_EXTRA_COLLISION_DATA: u32 = 0x0101_51f0;
+const VTABLE_EXTRA_PACKAGE_DATA: u32 = 0x0101_51fc;
+
+/// `ExtraPackageData` (`EXTRA_PACKAGE_DATA`).
+const EXTRA_PACKAGE_DATA_TYPE: u8 = 0x70;
+/// `ExtraCollisionData` (`EXTRA_COLLISION_DATA`).
+const EXTRA_COLLISION_DATA_TYPE: u8 = 0x72;
+/// `ExtraPortal` (`EXTRA_PORTAL`): holds a `NiPointer<BSPortal>` at +0x0C.
+const EXTRA_PORTAL_TYPE: u8 = 0x78;
+/// `ExtraRoom` (`EXTRA_ROOM`): holds a `NiPointer<BSMultiBoundRoom>` at
+/// +0x0C.
+const EXTRA_ROOM_TYPE: u8 = 0x79;
+/// `ExtraRoomRefData` (`EXTRA_ROOM_REF_DATA`).
+const EXTRA_ROOM_REF_DATA_TYPE: u8 = 0x7b;
+/// `ExtraGuardedRefData` (`EXTRA_GUARDED_REF_DATA`).
+const EXTRA_GUARDED_REF_DATA_TYPE: u8 = 0x7c;
+
+/// Constructors of this session (`this` = the new block): the portal
+/// linked data (8 bytes, `004143c0`), the room linked data (0x14 bytes,
+/// `00416b80`), `ExtraPortal` (`00435820`), `ExtraRoom` (`004358a0`) and
+/// `ExtraGuardedRefData` (0x1c bytes, `00430f30`).
+const PORTAL_LINKED_DATA_INIT: u32 = 0x0041_43c0;
+const ROOM_LINKED_DATA_INIT: u32 = 0x0041_6b80;
+const EXTRA_PORTAL_INIT: u32 = 0x0043_5820;
+const EXTRA_ROOM_INIT: u32 = 0x0043_58a0;
+const EXTRA_GUARDED_REF_DATA_INIT: u32 = 0x0043_0f30;
+/// `ExtraGuardedRefData::AddGuard(guard)` (Xbox PDB, `004310d0`).
+const GUARDED_REF_DATA_ADD_GUARD: u32 = 0x0043_10d0;
+/// Method of `ExtraGuardedRefData` (`00431120`) taking two words, called by
+/// `004213c0`; the engine map gives it no name.
+const GUARDED_REF_DATA_TWO_WORDS: u32 = 0x0043_1120;
+/// Destructor body of the two `BSSimpleList`s of a `RoomLinkedRefData`
+/// (`0046ffb0`, `this` = the list).
+const LIST_DESTROY: u32 = 0x0046_ffb0;
+/// `NiPointer<T>::operator=(T*)` (`0066b0d0`): `this` is the address of the
+/// pointer; references the new object and releases the old one.
+const NI_POINTER_ASSIGN: u32 = 0x0066_b0d0;
+/// `TESObjectREFR` to its `ExtraDataList` (`005d43c0`, `this + 0x44`).
+const REFERENCE_EXTRA_LIST: u32 = 0x005d_43c0;
+/// Constructor of the `NiTMap<TESObjectREFR *, bool>` visited set of
+/// `GetMasterRoom` (`0042f4e0(this, hash size)`) and its destructor body
+/// (`0042fe80(this)`); the set is 0x10 bytes.
+const VISITED_SET_INIT: u32 = 0x0042_f4e0;
+const VISITED_SET_DESTROY: u32 = 0x0042_fe80;
+/// `NiTMap::GetAt(key, &value)` (`0057c850`): true and `value` set when
+/// the key is there.
+const VISITED_SET_FIND: u32 = 0x0057_c850;
+/// `NiTMap::SetAt(key, value)` (`0084d310`).
+const VISITED_SET_INSERT: u32 = 0x0084_d310;
+/// `009707f0(this, room)`: stores `room` at `this + 0xFC` of a portal.
+const PORTAL_SET_FIRST_ROOM: u32 = 0x0097_07f0;
+
+/// Offsets of the two lists of a `RoomLinkedRefData` (`PortalList`,
+/// `RoomList`).
+const ROOM_DATA_PORTAL_LIST: u32 = 0x00;
+const ROOM_DATA_ROOM_LIST: u32 = 0x08;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1786,8 +1889,685 @@ pub fn fn_00420160(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32, ind
 /// not translated.
 pub fn fn_00420210(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) {
     replace_extra_holding_word(e, this, EXTRA_PORTAL_REF_DATA_TYPE, data, |e, block| {
-        e.call(PORTAL_REF_DATA_INIT, &args![block]).u32()
+        fn_004202d0(e, Ptr::new(block)).addr()
     });
+}
+
+/// The value (+0x0C) of the `NiPointer` of the extra data of `extra_type`
+/// (`ExtraPortal`, `ExtraRoom`), read through `00559450`, or 0 when the list
+/// has none.
+fn ni_pointer_extra_value(e: &mut Engine, list: Ptr<ExtraDataList>, extra_type: u8) -> u32 {
+    let extra = find_extra(e, list, extra_type);
+    if extra.is_null() {
+        0
+    } else {
+        e.call(READ_WORD, &args![extra.addr() + 0x0c]).u32()
+    }
+}
+
+/// The shape of `SetPortal` and `SetRoom`: a null `value` deletes the extra
+/// data of `extra_type` (by type); otherwise the `NiPointer` at +0x0C of the
+/// existing one is assigned (`0066b0d0`), or a new `0x10`-byte one is built
+/// by `construct`, assigned and added. As in the code, a failed allocation
+/// still assigns at `0 + 0x0C` and adds a null extra data.
+fn set_ni_pointer_extra(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    extra_type: u8,
+    construct: u32,
+    value: u32,
+) {
+    if value == 0 {
+        remove_extra_by_type(e, list, extra_type);
+        return;
+    }
+    let extra = find_extra(e, list, extra_type);
+    if !extra.is_null() {
+        e.call(NI_POINTER_ASSIGN, &args![extra.addr() + 0x0c, value]);
+    } else {
+        let built = new_object(e, 0x10, construct);
+        e.call(NI_POINTER_ASSIGN, &args![built.wrapping_add(0x0c), value]);
+        add_extra(e, list, Ptr::new(built));
+    }
+}
+
+/// The shape of the adders to a list of the room reference data
+/// (`00420c10`, `00420ce0`): when the list has no room reference data and
+/// `reference` is not null, a `0x14`-byte `RoomLinkedRefData` is built
+/// (`00416b80`) and set (`00420440`); then `reference` (the list functions
+/// take the address of the argument) is put at the head of the list at
+/// `list_offset` of the data unless the list already holds it. With no data
+/// (a null `reference` and none before) the code goes on with a null data
+/// pointer; the model panics at the first read where the game would crash.
+fn add_to_room_data_list(
+    e: &mut Engine,
+    list: Ptr<ExtraDataList>,
+    list_offset: u32,
+    reference: u32,
+) {
+    if extra_data_list_get_room_linked_ref_data(e, list) == 0 && reference != 0 {
+        let data = new_object(e, 0x14, ROOM_LINKED_DATA_INIT);
+        fn_00420440(e, list, data);
+    }
+    let head = extra_data_list_get_room_linked_ref_data(e, list).wrapping_add(list_offset);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), reference);
+        if !e.call(LIST_CONTAINS, &args![head, slot]).bool() {
+            e.call(LIST_ADD_HEAD, &args![head, slot]);
+        }
+    });
+}
+
+// Translated from 004202d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraPortalRefData` (type `0x77`): the base constructor
+/// (`0040ec80`) with the type and the vtable `010151d8`; `pData` is left as
+/// it is (the setter `0041fd00` fills it). No Xbox PDB name. Returns `this`.
+pub fn fn_004202d0(e: &mut Engine, this: Ptr<ExtraPortalRefData>) -> Ptr<ExtraPortalRefData> {
+    e.call(
+        BS_EXTRA_DATA_INIT,
+        &args![this, EXTRA_PORTAL_REF_DATA_TYPE as u32],
+    );
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_PORTAL_REF_DATA);
+    this
+}
+
+// Translated from 00420300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPortalRefData::Compare` (Xbox PDB): true when the two differ. Two
+/// extra data without data are equal; one without differs; otherwise they
+/// differ when either of the two words of the data differs.
+pub fn extra_portal_ref_data_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraPortalRefData>,
+    other: Ptr<ExtraPortalRefData>,
+) -> bool {
+    let mine = e.get(this, ExtraPortalRefData::pData);
+    let theirs = e.get(other, ExtraPortalRefData::pData);
+    if mine.is_null() && theirs.is_null() {
+        return false;
+    }
+    if mine.is_null() || theirs.is_null() {
+        return true;
+    }
+    (0..2).any(|index| e.mem.u32(mine.addr() + 4 * index) != e.mem.u32(theirs.addr() + 4 * index))
+}
+
+// Translated from 00420380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPortalRefData::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor (`004203b0`) and frees the object when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn extra_portal_ref_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraPortalRefData>,
+    flags: u32,
+) -> Ptr<ExtraPortalRefData> {
+    fn_004203b0(e, this);
+    finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
+}
+
+// Translated from 004203b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `ExtraPortalRefData` (called by `00420380`; not in the
+/// engine map nor in Ghidra's function list): sets its vtable, frees the
+/// data with `004200c0` (the same body as for the occlusion plane data:
+/// plain `operator delete`, then `pData` = null), then runs the
+/// `BSExtraData` destructor (`0040ecb0`). The exception-unwinding frame is
+/// not translated.
+pub fn fn_004203b0(e: &mut Engine, this: Ptr<ExtraPortalRefData>) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_PORTAL_REF_DATA);
+    fn_004200c0(e, this.cast());
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 00420410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `pData` of the type `0x77` extra data (`ExtraPortalRefData`), or 0. No
+/// Xbox PDB name.
+pub fn fn_00420410(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or_zero(e, this, EXTRA_PORTAL_REF_DATA_TYPE)
+}
+
+// Translated from 00420440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the room reference data: the type `0x7B` extra data
+/// (`ExtraRoomRefData`) is deleted when there is one, then, for a non-null
+/// `room_data`, a new one (`0x10` bytes, constructor `00420500`) is given it
+/// (`0041fd00`) and added. No Xbox PDB name. The exception-unwinding frame is
+/// not translated.
+pub fn fn_00420440(e: &mut Engine, this: Ptr<ExtraDataList>, room_data: u32) {
+    replace_extra_holding_word(e, this, EXTRA_ROOM_REF_DATA_TYPE, room_data, |e, block| {
+        fn_00420500(e, Ptr::new(block)).addr()
+    });
+}
+
+// Translated from 00420500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraRoomRefData` (type `0x7B`): the base constructor
+/// (`0040ec80`) with the type and the vtable `010151e4`; `pData` is left as
+/// it is (the setter `0041fd00` fills it). No Xbox PDB name. Returns `this`.
+pub fn fn_00420500(e: &mut Engine, this: Ptr<ExtraRoomRefData>) -> Ptr<ExtraRoomRefData> {
+    e.call(
+        BS_EXTRA_DATA_INIT,
+        &args![this, EXTRA_ROOM_REF_DATA_TYPE as u32],
+    );
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_ROOM_REF_DATA);
+    this
+}
+
+// Translated from 00420530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRoomRefData::Compare` (Xbox PDB): true when the two differ. Two
+/// extra data without data are equal; one without differs; otherwise the
+/// master flags (`cMaster`) must be equal and the two `RoomList`s must hold
+/// the same items in the same order.
+pub fn extra_room_ref_data_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraRoomRefData>,
+    other: Ptr<ExtraRoomRefData>,
+) -> bool {
+    let mine = e.get(this, ExtraRoomRefData::pData);
+    let theirs = e.get(other, ExtraRoomRefData::pData);
+    if mine.is_null() && theirs.is_null() {
+        return false;
+    }
+    if mine.is_null() || theirs.is_null() {
+        return true;
+    }
+    let mine: Ptr<RoomLinkedRefData> = mine.cast();
+    let theirs: Ptr<RoomLinkedRefData> = theirs.cast();
+    if e.get(mine, RoomLinkedRefData::cMaster) != e.get(theirs, RoomLinkedRefData::cMaster) {
+        return true;
+    }
+    let mut mine_node = mine.addr() + ROOM_DATA_ROOM_LIST;
+    let mut theirs_node = theirs.addr() + ROOM_DATA_ROOM_LIST;
+    while mine_node != 0 && theirs_node != 0 {
+        let mine_slot = e.call(LIST_ITEM_SLOT, &args![mine_node]).u32();
+        let theirs_slot = e.call(LIST_ITEM_SLOT, &args![theirs_node]).u32();
+        if e.mem.u32(mine_slot) != e.mem.u32(theirs_slot) {
+            return true;
+        }
+        mine_node = e.call(LIST_NEXT, &args![mine_node]).u32();
+        theirs_node = e.call(LIST_NEXT, &args![theirs_node]).u32();
+    }
+    mine_node != 0 || theirs_node != 0
+}
+
+// Translated from 00420600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRoomRefData::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor (`00420630`) and frees the object when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn extra_room_ref_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraRoomRefData>,
+    flags: u32,
+) -> Ptr<ExtraRoomRefData> {
+    fn_00420630(e, this);
+    finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
+}
+
+// Translated from 00420630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `ExtraRoomRefData` (called by `00420600`; not in the engine
+/// map nor in Ghidra's function list): sets its vtable, deletes the data
+/// (`00420690`), then runs the `BSExtraData` destructor (`0040ecb0`). The
+/// exception-unwinding frame is not translated.
+pub fn fn_00420630(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_ROOM_REF_DATA);
+    fn_00420690(e, this);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 00420690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deletes the `RoomLinkedRefData` of an `ExtraRoomRefData` through its
+/// scalar deleting destructor (`004206e0`, argument 1) when there is one,
+/// and sets `pData` to null. No Xbox PDB name.
+pub fn fn_00420690(e: &mut Engine, this: Ptr<ExtraRoomRefData>) {
+    let data = e.get(this, ExtraRoomRefData::pData);
+    if !data.is_null() {
+        fn_004206e0(e, data.cast(), 1);
+    }
+    e.set(this, ExtraRoomRefData::pData, Ptr::NULL);
+}
+
+// Translated from 004206e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of `RoomLinkedRefData` (the compiler emitted a
+/// copy in this unit; Ghidra's library matcher names it
+/// `_AsyncTaskCollection`, wrongly): runs the destructor (`00420710`) and
+/// frees the object when bit 0 of `flags` is set. Returns `this`. No Xbox
+/// PDB name.
+pub fn fn_004206e0(e: &mut Engine, this: Ptr<RoomLinkedRefData>, flags: u32) -> Ptr {
+    fn_00420710(e, this);
+    finish_scalar_deleting_destructor(e, this.cast(), flags)
+}
+
+// Translated from 00420710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `RoomLinkedRefData` (Ghidra's library matcher names it
+/// `_AsyncTaskCollection::~_AsyncTaskCollection`, wrongly): destroys the
+/// `RoomList` (+0x08), then the `PortalList` (+0x00), both with `0046ffb0`.
+/// The exception-unwinding frame is not translated. No Xbox PDB name.
+pub fn fn_00420710(e: &mut Engine, this: Ptr<RoomLinkedRefData>) {
+    e.call(LIST_DESTROY, &args![this.addr() + ROOM_DATA_ROOM_LIST]);
+    e.call(LIST_DESTROY, &args![this.addr() + ROOM_DATA_PORTAL_LIST]);
+}
+
+// Translated from 00420770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the `RoomList` (+0x08) of the room reference data of the
+/// list (`004207e0`), or 0 when the list has none. No Xbox PDB name (Ghidra's
+/// library matcher names it `UMSSchedulerProxy::GetUnblockNotifications`,
+/// wrongly).
+pub fn fn_00420770(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    let data = extra_data_list_get_room_linked_ref_data(e, this);
+    if data == 0 {
+        0
+    } else {
+        data.wrapping_add(ROOM_DATA_ROOM_LIST)
+    }
+}
+
+// Translated from 004207b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetRoomLinkedRefData` (`004207e0`) with the result masked by itself
+/// (`-(x != 0) & x`, which is `x`). No Xbox PDB name.
+pub fn fn_004207b0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_data_list_get_room_linked_ref_data(e, this)
+}
+
+// Translated from 004207e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetRoomLinkedRefData` (Xbox PDB): `pData` of the type
+/// `0x7B` extra data (`ExtraRoomRefData`), or 0.
+pub fn extra_data_list_get_room_linked_ref_data(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or_zero(e, this, EXTRA_ROOM_REF_DATA_TYPE)
+}
+
+// Translated from 00420810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetRoomIsMaster` (Xbox PDB): true when the list has no
+/// room reference data, or its `cMaster` flag is set, or its `RoomList` is
+/// empty (`008256d0`).
+pub fn extra_data_list_get_room_is_master(e: &mut Engine, this: Ptr<ExtraDataList>) -> bool {
+    let extra = find_extra(e, this, EXTRA_ROOM_REF_DATA_TYPE);
+    if extra.is_null() {
+        return true;
+    }
+    let data: Ptr<RoomLinkedRefData> = Ptr::new(e.mem.u32(extra.addr() + 0x0c));
+    if e.get(data, RoomLinkedRefData::cMaster) != 0 {
+        return true;
+    }
+    e.call(LIST_IS_EMPTY, &args![data.addr() + ROOM_DATA_ROOM_LIST])
+        .bool()
+}
+
+// Translated from 00420870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetRoomIsMaster` (Xbox PDB): stores `master` (as 0 or 1)
+/// in `cMaster` of the room reference data; nothing when the list has no
+/// room reference data. The data itself is not checked.
+pub fn extra_data_list_set_room_is_master(e: &mut Engine, this: Ptr<ExtraDataList>, master: bool) {
+    let extra = find_extra(e, this, EXTRA_ROOM_REF_DATA_TYPE);
+    if !extra.is_null() {
+        let data: Ptr<RoomLinkedRefData> = Ptr::new(e.mem.u32(extra.addr() + 0x0c));
+        e.set(data, RoomLinkedRefData::cMaster, master as u8);
+    }
+}
+
+// Translated from 004208b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetMasterRoom` (Xbox PDB): the reference of the master
+/// room this room leads to, or 0. 0 when the list has no room reference
+/// data or is itself a master room (`GetRoomIsMaster`); otherwise the search
+/// `00420950` runs with a fresh visited set (a 0x10-byte
+/// `NiTMap<TESObjectREFR *, bool>` local, hash size `0x25`: constructor
+/// `0042f4e0`, destructor `0042fe80`). The exception-unwinding frame is not
+/// translated.
+pub fn extra_data_list_get_master_room(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    let extra = find_extra(e, this, EXTRA_ROOM_REF_DATA_TYPE);
+    if extra.is_null() {
+        return 0;
+    }
+    if extra_data_list_get_room_is_master(e, this) {
+        return 0;
+    }
+    e.with_stack(0x10, |e, visited| {
+        e.call(VISITED_SET_INIT, &args![visited, 0x25u32]);
+        let master = fn_00420950(e, this, visited);
+        e.call(VISITED_SET_DESTROY, &args![visited]);
+        master
+    })
+}
+
+// Translated from 00420950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The search of `GetMasterRoom` (no Xbox PDB name; the visited set is the
+/// stack argument): 0 when the list has no room reference data. First the
+/// first reference of the `RoomList` (stopping at a null one) whose own
+/// extra data list answers `GetRoomIsMaster` is the result. Then each
+/// reference of the `RoomList` (same stop) not yet in the visited set
+/// (`0057c850`) is recorded (`0084d310`) and searched in its own extra data
+/// list (`005d43c0`), recursively; the first non-null answer is the result.
+/// The flag the lookup writes only when it finds the key is a local the code
+/// never initialises; the model gives 0.
+pub fn fn_00420950(e: &mut Engine, this: Ptr<ExtraDataList>, visited: Ptr) -> u32 {
+    let extra = find_extra(e, this, EXTRA_ROOM_REF_DATA_TYPE);
+    if extra.is_null() {
+        return 0;
+    }
+    let mut node = e.mem.u32(extra.addr() + 0x0c) + ROOM_DATA_ROOM_LIST;
+    while node != 0 {
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+        let room = e.mem.u32(slot);
+        let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+        if extra_data_list_get_room_is_master(e, room_list) {
+            return room;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    let mut node = e.mem.u32(extra.addr() + 0x0c) + ROOM_DATA_ROOM_LIST;
+    e.with_stack(4, |e, seen| {
+        while node != 0 {
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            if e.mem.u32(slot) == 0 {
+                break;
+            }
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            let room = e.mem.u32(slot);
+            if !e.call(VISITED_SET_FIND, &args![visited, room, seen]).bool() {
+                let seen_value = e.mem.u8(seen.addr()) as u32;
+                e.call(VISITED_SET_INSERT, &args![visited, room, seen_value]);
+                let room_list = e.call(REFERENCE_EXTRA_LIST, &args![room]).ptr();
+                let found = fn_00420950(e, room_list, visited);
+                if found != 0 {
+                    return found;
+                }
+            }
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        0
+    })
+}
+
+// Translated from 00420a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `reference` as word `index` of the portal reference data
+/// (`ExtraPortalRefData`, built first when the list has none and
+/// `reference` is not null: 8 bytes, constructor `004143c0`, set with
+/// `00420210`; the word is stored whatever the value, a null one clears it,
+/// when the list has data) and passes the room of the reference to the
+/// portal (`ExtraPortal`, `00420dd0`): the room of the master room of
+/// `reference` (`GetMasterRoom` of its extra data list, `005d43c0`), or of
+/// `reference` itself when it has none, or 0. Index 0 goes to the portal's
+/// first room (`009707f0`), index 1 to its second (`00420ba0`); another
+/// index only stores the word. No Xbox PDB name. The exception-unwinding
+/// frame is not translated.
+pub fn fn_00420a60(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32, reference: u32) {
+    if fn_00420410(e, this) == 0 && reference != 0 {
+        let data = new_object(e, 8, PORTAL_LINKED_DATA_INIT);
+        fn_00420210(e, this, data);
+    }
+    let data = fn_00420410(e, this);
+    if data != 0 {
+        e.mem
+            .set_u32(data.wrapping_add((index as u32).wrapping_mul(4)), reference);
+    }
+    let portal = fn_00420dd0(e, this);
+    let master = if reference == 0 {
+        0
+    } else {
+        let list = e.call(REFERENCE_EXTRA_LIST, &args![reference]).ptr();
+        extra_data_list_get_master_room(e, list)
+    };
+    let room_reference = if master == 0 { reference } else { master };
+    let room = if room_reference == 0 {
+        0
+    } else {
+        let list = e.call(REFERENCE_EXTRA_LIST, &args![room_reference]).ptr();
+        extra_data_list_get_room(e, list)
+    };
+    if portal != 0 {
+        if index == 0 {
+            e.call(PORTAL_SET_FIRST_ROOM, &args![portal, room]);
+        }
+        if index == 1 {
+            fn_00420ba0(e, Ptr::new(portal), room);
+        }
+    }
+}
+
+// Translated from 00420ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `room` at `this + 0x100` of a portal (the second room; the first
+/// is at `+0xFC`, `009707f0`; the Xbox PDB's `BSPortal::pMultiBoundRoom`
+/// array sits elsewhere in that build). No Xbox PDB name.
+pub fn fn_00420ba0(e: &mut Engine, this: Ptr, room: u32) {
+    e.mem.set_u32(this.addr() + 0x100, room);
+}
+
+// Translated from 00420bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Word `index` of the portal reference data of the list, or 0 when the list
+/// has no type `0x77` extra data or it has no data. The index is not checked
+/// against the two words. No Xbox PDB name.
+pub fn fn_00420bc0(e: &mut Engine, this: Ptr<ExtraDataList>, index: i32) -> u32 {
+    let data = fn_00420410(e, this);
+    if data == 0 {
+        0
+    } else {
+        e.mem.u32(data.wrapping_add((index as u32).wrapping_mul(4)))
+    }
+}
+
+// Translated from 00420c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `reference` to the `RoomList` of the room reference data (+0x08
+/// of the data), building the data first when the list has none. No Xbox
+/// PDB name. The exception-unwinding frame is not translated.
+pub fn fn_00420c10(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
+    add_to_room_data_list(e, this, ROOM_DATA_ROOM_LIST, reference);
+}
+
+// Translated from 00420ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `reference` to the `PortalList` of the room reference data (+0x00 of
+/// the data), building the data first when the list has none. No Xbox PDB
+/// name. The exception-unwinding frame is not translated.
+pub fn fn_00420ce0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
+    add_to_room_data_list(e, this, ROOM_DATA_PORTAL_LIST, reference);
+}
+
+// Translated from 00420da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `reference` from the `PortalList` (+0x00 of the data) of the room
+/// reference data (`00905330`, given the address of the argument); nothing
+/// when the list has none. No Xbox PDB name.
+pub fn fn_00420da0(e: &mut Engine, this: Ptr<ExtraDataList>, reference: u32) {
+    let data = extra_data_list_get_room_linked_ref_data(e, this);
+    if data != 0 {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), reference);
+            e.call(LIST_REMOVE_ITEM, &args![data, slot]);
+        });
+    }
+}
+
+// Translated from 00420dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The portal (`NiPointer<BSPortal>` at +0x0C, read through `00559450`) of
+/// the type `0x78` extra data (`ExtraPortal`), or 0; the getter that goes
+/// with `SetPortal`. No Xbox PDB name.
+pub fn fn_00420dd0(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    ni_pointer_extra_value(e, this, EXTRA_PORTAL_TYPE)
+}
+
+// Translated from 00420e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetPortal` (Xbox PDB): a null `portal` deletes the type
+/// `0x78` extra data (`ExtraPortal`) by type; otherwise the `NiPointer` of the
+/// existing one is assigned (`0066b0d0`), or a new `0x10`-byte one
+/// (constructor `00435820`) is assigned and added. The exception-unwinding
+/// frame is not translated.
+pub fn extra_data_list_set_portal(e: &mut Engine, this: Ptr<ExtraDataList>, portal: u32) {
+    set_ni_pointer_extra(e, this, EXTRA_PORTAL_TYPE, EXTRA_PORTAL_INIT, portal);
+}
+
+// Translated from 00420ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetRoom` (Xbox PDB): the room (`NiPointer<BSMultiBoundRoom>`
+/// at +0x0C, read through `00559450`) of the type `0x79` extra data
+/// (`ExtraRoom`), or 0.
+pub fn extra_data_list_get_room(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    ni_pointer_extra_value(e, this, EXTRA_ROOM_TYPE)
+}
+
+// Translated from 00420f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetRoom` (Xbox PDB): like `SetPortal` for the type `0x79`
+/// extra data (`ExtraRoom`, constructor `004358a0`). The exception-unwinding
+/// frame is not translated.
+pub fn extra_data_list_set_room(e: &mut Engine, this: Ptr<ExtraDataList>, room: u32) {
+    set_ni_pointer_extra(e, this, EXTRA_ROOM_TYPE, EXTRA_ROOM_INIT, room);
+}
+
+// Translated from 00420fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the collision data: the type `0x72` extra data
+/// (`ExtraCollisionData`) is deleted when there is one, then, for a non-null
+/// `collision_data`, a new one (`0x10` bytes, constructor `00421090`) is
+/// given it (`0041fd00`) and added. No Xbox PDB name. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00420fd0(e: &mut Engine, this: Ptr<ExtraDataList>, collision_data: u32) {
+    replace_extra_holding_word(
+        e,
+        this,
+        EXTRA_COLLISION_DATA_TYPE,
+        collision_data,
+        |e, block| fn_00421090(e, Ptr::new(block)).addr(),
+    );
+}
+
+// Translated from 00421090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraCollisionData` (type `0x72`): the base constructor
+/// (`0040ec80`) with the type and the vtable `010151f0`; `pCollisionData` is
+/// left as it is (the setter `0041fd00` fills it). No Xbox PDB name. Returns
+/// `this`.
+pub fn fn_00421090(e: &mut Engine, this: Ptr<ExtraCollisionData>) -> Ptr<ExtraCollisionData> {
+    e.call(
+        BS_EXTRA_DATA_INIT,
+        &args![this, EXTRA_COLLISION_DATA_TYPE as u32],
+    );
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_COLLISION_DATA);
+    this
+}
+
+// Translated from 004210c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCollisionData::Compare` (Xbox PDB): true when the two differ. Two
+/// extra data without collision data are equal; one without differs;
+/// otherwise the word each collision data starts with (read through
+/// `00559450`, `this` first) is compared.
+pub fn extra_collision_data_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraCollisionData>,
+    other: Ptr<ExtraCollisionData>,
+) -> bool {
+    let mine = e.get(this, ExtraCollisionData::pCollisionData);
+    let theirs = e.get(other, ExtraCollisionData::pCollisionData);
+    if mine.is_null() && theirs.is_null() {
+        return false;
+    }
+    if mine.is_null() || theirs.is_null() {
+        return true;
+    }
+    let mine_word = e.call(READ_WORD, &args![mine]).u32();
+    let theirs_word = e.call(READ_WORD, &args![theirs]).u32();
+    mine_word != theirs_word
+}
+
+// Translated from 00421130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCollisionData::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor (`00421160`) and frees the object when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn extra_collision_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraCollisionData>,
+    flags: u32,
+) -> Ptr<ExtraCollisionData> {
+    fn_00421160(e, this);
+    finish_scalar_deleting_destructor(e, this.cast(), flags).cast()
+}
+
+// Translated from 00421160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `ExtraCollisionData`: sets its vtable, frees the collision
+/// data with `operator delete` (null or not), then runs the `BSExtraData`
+/// destructor (`0040ecb0`). No Xbox PDB name.
+pub fn fn_00421160(e: &mut Engine, this: Ptr<ExtraCollisionData>) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_COLLISION_DATA);
+    let collision_data = e.get(this, ExtraCollisionData::pCollisionData);
+    e.call(OPERATOR_DELETE, &args![collision_data]);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 004211a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetCollisionData` (Xbox PDB): `pCollisionData` of the type
+/// `0x72` extra data (`ExtraCollisionData`), or 0.
+pub fn extra_data_list_get_collision_data(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or_zero(e, this, EXTRA_COLLISION_DATA_TYPE)
+}
+
+// Translated from 004211d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::SetActorPackageData` (Xbox PDB): stores `data` in
+/// `pActorPackageData` of the type `0x70` extra data (`ExtraPackageData`), or
+/// adds a new one (`0x10` bytes, constructor `00421280`) holding it. A null
+/// `data` is stored like any other. The exception-unwinding frame is not
+/// translated.
+pub fn extra_data_list_set_actor_package_data(e: &mut Engine, this: Ptr<ExtraDataList>, data: u32) {
+    let extra = find_extra(e, this, EXTRA_PACKAGE_DATA_TYPE);
+    if !extra.is_null() {
+        e.mem.set_u32(extra.addr() + 0x0c, data);
+    } else {
+        let built = new_built(e, 0x10, |e, block| {
+            fn_00421280(e, Ptr::new(block), data).addr()
+        });
+        add_extra(e, this, Ptr::new(built));
+    }
+}
+
+// Translated from 00421280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraPackageData` (type `0x70`): the base constructor
+/// (`0040ec80`) with the type, the vtable `010151fc`, and `pActorPackageData`
+/// = `data`. No Xbox PDB name. Returns `this`.
+pub fn fn_00421280(
+    e: &mut Engine,
+    this: Ptr<ExtraPackageData>,
+    data: u32,
+) -> Ptr<ExtraPackageData> {
+    e.call(
+        BS_EXTRA_DATA_INIT,
+        &args![this, EXTRA_PACKAGE_DATA_TYPE as u32],
+    );
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_PACKAGE_DATA);
+    e.set(this, ExtraPackageData::pActorPackageData, Ptr::new(data));
+    this
+}
+
+// Translated from 004212b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::GetActorPackageData` (Xbox PDB): `pActorPackageData` of
+/// the type `0x70` extra data (`ExtraPackageData`), or 0.
+pub fn extra_data_list_get_actor_package_data(e: &mut Engine, this: Ptr<ExtraDataList>) -> u32 {
+    extra_word_or_zero(e, this, EXTRA_PACKAGE_DATA_TYPE)
+}
+
+// Translated from 004212e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::RemoveActorPackageData` (Xbox PDB): deletes the type
+/// `0x70` extra data (`ExtraPackageData`) when the list has one.
+pub fn extra_data_list_remove_actor_package_data(e: &mut Engine, this: Ptr<ExtraDataList>) {
+    let extra = find_extra(e, this, EXTRA_PACKAGE_DATA_TYPE);
+    if !extra.is_null() {
+        remove_extra(e, this, extra);
+    }
+}
+
+// Translated from 00421310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::AddGuard` (Xbox PDB): finds the type `0x7C` extra data
+/// (`ExtraGuardedRefData`) or builds one (`0x1c` bytes, constructor
+/// `00430f30`) and adds it, then gives it `guard`
+/// (`ExtraGuardedRefData::AddGuard`, `004310d0`). The exception-unwinding
+/// frame is not translated.
+pub fn extra_data_list_add_guard(e: &mut Engine, this: Ptr<ExtraDataList>, guard: u32) {
+    let mut extra = find_extra(e, this, EXTRA_GUARDED_REF_DATA_TYPE);
+    if extra.is_null() {
+        extra = Ptr::new(new_object(e, 0x1c, EXTRA_GUARDED_REF_DATA_INIT));
+        add_extra(e, this, extra);
+    }
+    e.call(GUARDED_REF_DATA_ADD_GUARD, &args![extra, guard]);
+}
+
+// Translated from 004213c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives its two words to the method `00431120` of the type `0x7C` extra data
+/// (`ExtraGuardedRefData`) when the list has one. No Xbox PDB name.
+pub fn fn_004213c0(e: &mut Engine, this: Ptr<ExtraDataList>, first: u32, second: u32) {
+    let extra = find_extra(e, this, EXTRA_GUARDED_REF_DATA_TYPE);
+    if !extra.is_null() {
+        e.call(GUARDED_REF_DATA_TWO_WORDS, &args![extra, first, second]);
+    }
 }
 
 /// This part's translated functions, by exe address.
@@ -2002,6 +2782,124 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00420130, fn_00420130(Ptr<ExtraDataList>, i32) -> u32),
         entry!(0x00420160, fn_00420160(Ptr<ExtraDataList>, u32, i32)),
         entry!(0x00420210, fn_00420210(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x004202d0,
+            fn_004202d0(Ptr<ExtraPortalRefData>) -> Ptr<ExtraPortalRefData>
+        ),
+        entry!(
+            0x00420300,
+            extra_portal_ref_data_compare(Ptr<ExtraPortalRefData>, Ptr<ExtraPortalRefData>) -> bool
+        ),
+        entry!(
+            0x00420380,
+            extra_portal_ref_data_scalar_deleting_destructor(
+                Ptr<ExtraPortalRefData>,
+                u32,
+            )
+                -> Ptr<ExtraPortalRefData>
+        ),
+        entry!(0x004203b0, fn_004203b0(Ptr<ExtraPortalRefData>)),
+        entry!(0x00420410, fn_00420410(Ptr<ExtraDataList>) -> u32),
+        entry!(0x00420440, fn_00420440(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x00420500,
+            fn_00420500(Ptr<ExtraRoomRefData>) -> Ptr<ExtraRoomRefData>
+        ),
+        entry!(
+            0x00420530,
+            extra_room_ref_data_compare(Ptr<ExtraRoomRefData>, Ptr<ExtraRoomRefData>) -> bool
+        ),
+        entry!(
+            0x00420600,
+            extra_room_ref_data_scalar_deleting_destructor(
+                Ptr<ExtraRoomRefData>,
+                u32,
+            ) -> Ptr<ExtraRoomRefData>
+        ),
+        entry!(0x00420630, fn_00420630(Ptr<ExtraRoomRefData>)),
+        entry!(0x00420690, fn_00420690(Ptr<ExtraRoomRefData>)),
+        entry!(0x004206e0, fn_004206e0(Ptr<RoomLinkedRefData>, u32) -> Ptr),
+        entry!(0x00420710, fn_00420710(Ptr<RoomLinkedRefData>)),
+        entry!(0x00420770, fn_00420770(Ptr<ExtraDataList>) -> u32),
+        entry!(0x004207b0, fn_004207b0(Ptr<ExtraDataList>) -> u32),
+        entry!(
+            0x004207e0,
+            extra_data_list_get_room_linked_ref_data(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00420810,
+            extra_data_list_get_room_is_master(Ptr<ExtraDataList>) -> bool
+        ),
+        entry!(
+            0x00420870,
+            extra_data_list_set_room_is_master(Ptr<ExtraDataList>, bool)
+        ),
+        entry!(
+            0x004208b0,
+            extra_data_list_get_master_room(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(0x00420950, fn_00420950(Ptr<ExtraDataList>, Ptr) -> u32),
+        entry!(0x00420a60, fn_00420a60(Ptr<ExtraDataList>, i32, u32)),
+        entry!(0x00420ba0, fn_00420ba0(Ptr, u32)),
+        entry!(0x00420bc0, fn_00420bc0(Ptr<ExtraDataList>, i32) -> u32),
+        entry!(0x00420c10, fn_00420c10(Ptr<ExtraDataList>, u32)),
+        entry!(0x00420ce0, fn_00420ce0(Ptr<ExtraDataList>, u32)),
+        entry!(0x00420da0, fn_00420da0(Ptr<ExtraDataList>, u32)),
+        entry!(0x00420dd0, fn_00420dd0(Ptr<ExtraDataList>) -> u32),
+        entry!(
+            0x00420e00,
+            extra_data_list_set_portal(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(
+            0x00420ed0,
+            extra_data_list_get_room(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x00420f00,
+            extra_data_list_set_room(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(0x00420fd0, fn_00420fd0(Ptr<ExtraDataList>, u32)),
+        entry!(
+            0x00421090,
+            fn_00421090(Ptr<ExtraCollisionData>) -> Ptr<ExtraCollisionData>
+        ),
+        entry!(
+            0x004210c0,
+            extra_collision_data_compare(Ptr<ExtraCollisionData>, Ptr<ExtraCollisionData>) -> bool
+        ),
+        entry!(
+            0x00421130,
+            extra_collision_data_scalar_deleting_destructor(
+                Ptr<ExtraCollisionData>,
+                u32,
+            ) -> Ptr<ExtraCollisionData>
+        ),
+        entry!(0x00421160, fn_00421160(Ptr<ExtraCollisionData>)),
+        entry!(
+            0x004211a0,
+            extra_data_list_get_collision_data(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x004211d0,
+            extra_data_list_set_actor_package_data(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(
+            0x00421280,
+            fn_00421280(Ptr<ExtraPackageData>, u32) -> Ptr<ExtraPackageData>
+        ),
+        entry!(
+            0x004212b0,
+            extra_data_list_get_actor_package_data(Ptr<ExtraDataList>) -> u32
+        ),
+        entry!(
+            0x004212e0,
+            extra_data_list_remove_actor_package_data(Ptr<ExtraDataList>)
+        ),
+        entry!(
+            0x00421310,
+            extra_data_list_add_guard(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(0x004213c0, fn_004213c0(Ptr<ExtraDataList>, u32, u32)),
     ]
 }
 
@@ -3083,7 +3981,6 @@ mod tests {
         constructor_double(&mut e, REFLECTOR_REFS_INIT, 0x66);
         constructor_double(&mut e, WATER_LIGHT_REFS_INIT, 0x84);
         constructor_double(&mut e, LIT_WATER_REFS_INIT, 0x85);
-        constructor_double(&mut e, PORTAL_REF_DATA_INIT, 0x77);
         e.register(LIST_NODE_INIT, |_, a| returns(a[0]));
         e.register(OCCLUSION_PLANE_DATA_INIT, |_, a| returns(a[0]));
         e.register(STORE_WORD_AT_0C, |e, a| {
@@ -4092,7 +4989,7 @@ mod tests {
         let first = extra_of(&e, list, 0x77);
         assert_ne!(first, 0);
         assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
-        assert_eq!(calls_to(&log, PORTAL_REF_DATA_INIT).len(), 1);
+        assert_eq!(e.mem.u32(first), 0x0101_51d8);
         assert_eq!(e.mem.u32(first + 0x0c), 0xd001);
         let log = logged(&mut e, |e| {
             e.call(0x00420210, &args![list, 0xd002u32]);
@@ -4104,5 +5001,981 @@ mod tests {
         assert_eq!(e.mem.u32(extra_of(&e, list, 0x77) + 0x0c), 0xd002);
         e.call(0x00420210, &args![list, 0u32]);
         assert_eq!(extra_of(&e, list, 0x77), 0);
+    }
+
+    // Third session: 004202d0 to 004213c0.
+
+    /// The engine of the second session with the callees of the third.
+    fn engine_c() -> Engine {
+        let mut e = engine_b();
+        constructor_double(&mut e, EXTRA_PORTAL_INIT, 0x78);
+        constructor_double(&mut e, EXTRA_ROOM_INIT, 0x79);
+        constructor_double(&mut e, EXTRA_GUARDED_REF_DATA_INIT, 0x7c);
+        e.register(PORTAL_LINKED_DATA_INIT, |_, a| returns(a[0]));
+        e.register(ROOM_LINKED_DATA_INIT, |_, a| returns(a[0]));
+        e.register(LIST_DESTROY, |_, _| Ret::default());
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(READ_WORD, |e, a| returns(e.mem.u32(a[0])));
+        e.register(REFERENCE_EXTRA_LIST, |_, a| returns(a[0] + 0x44));
+        e.register(PORTAL_SET_FIRST_ROOM, |e, a| {
+            e.mem.set_u32(a[0] + 0xfc, a[1]);
+            Ret::default()
+        });
+        e.register(GUARDED_REF_DATA_ADD_GUARD, |_, _| Ret::default());
+        e.register(GUARDED_REF_DATA_TWO_WORDS, |_, _| Ret::default());
+        e.register(VISITED_SET_INIT, |_, a| returns(a[0]));
+        e.register(VISITED_SET_DESTROY, |_, _| Ret::default());
+        // The visited set: the keys recorded, shared by the two doubles.
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(u32, u32)>::new()));
+        let finder = seen.clone();
+        e.register_double(VISITED_SET_FIND, move |e, a| {
+            let found = finder
+                .borrow()
+                .iter()
+                .find(|(key, _)| *key == a[1])
+                .copied();
+            if let Some((_, value)) = found {
+                e.mem.set_u8(a[2], value as u8);
+            }
+            returns(found.is_some() as u32)
+        });
+        e.register_double(VISITED_SET_INSERT, move |_, a| {
+            seen.borrow_mut().push((a[1], a[2]));
+            Ret::default()
+        });
+        e
+    }
+
+    /// A room linked data (0x14 bytes) with the given master flag whose
+    /// `RoomList` holds `rooms` (the first in the head node, the others in
+    /// nodes of their own).
+    fn new_room_data(e: &mut Engine, master: u8, rooms: &[u32]) -> u32 {
+        let data = e.mem.alloc(0x14);
+        e.mem.set_u8(data + 0x10, master);
+        let mut node = data + 8;
+        for (position, room) in rooms.iter().enumerate() {
+            e.mem.set_u32(node, *room);
+            if position + 1 < rooms.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        data
+    }
+
+    /// A reference whose extra data list (at +0x44, as `005d43c0` gives it)
+    /// has a room reference data holding `data`; the list's address.
+    fn new_reference_with_room_data(e: &mut Engine, data: u32) -> (u32, Ptr<ExtraDataList>) {
+        let reference = e.mem.alloc(0x500);
+        let list = Ptr::new(reference + 0x44);
+        let extra = put_extra(e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        (reference, list)
+    }
+
+    // 004202d0, 00420300, 00420380, 004203b0, 00420410: the portal
+    // reference data.
+
+    #[test]
+    fn portal_ref_data_constructor() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraPortalRefData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x004202d0, &args![extra]).u32(), extra.addr());
+        });
+        assert_eq!(
+            calls_to(&log, BS_EXTRA_DATA_INIT),
+            vec![vec![extra.addr(), 0x77]]
+        );
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51d8);
+    }
+
+    #[test]
+    fn portal_ref_data_compare_looks_at_two_words() {
+        let mut e = engine_c();
+        let this: Ptr<ExtraPortalRefData> = e.new_object();
+        let other: Ptr<ExtraPortalRefData> = e.new_object();
+        assert!(!e.call(0x00420300, &args![this, other]).bool());
+        let mine = e.mem.alloc(0x10);
+        let theirs = e.mem.alloc(0x10);
+        e.set(this, ExtraPortalRefData::pData, Ptr::new(mine));
+        assert!(e.call(0x00420300, &args![this, other]).bool());
+        e.set(this, ExtraPortalRefData::pData, Ptr::NULL);
+        e.set(other, ExtraPortalRefData::pData, Ptr::new(theirs));
+        assert!(e.call(0x00420300, &args![this, other]).bool());
+        e.set(this, ExtraPortalRefData::pData, Ptr::new(mine));
+        assert!(!e.call(0x00420300, &args![this, other]).bool());
+        for word in 0..2 {
+            e.mem.set_u32(theirs + 4 * word, 1);
+            assert!(e.call(0x00420300, &args![this, other]).bool());
+            e.mem.set_u32(theirs + 4 * word, 0);
+        }
+        // The third word is not part of the comparison.
+        e.mem.set_u32(theirs + 8, 1);
+        assert!(!e.call(0x00420300, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn portal_ref_data_scalar_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraPortalRefData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420380, &args![extra, 0u32]).u32(), extra.addr());
+        });
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_DESTROY).len(), 1);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420380, &args![extra, 1u32]).u32(), extra.addr());
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![extra.addr()]]);
+    }
+
+    #[test]
+    fn portal_ref_data_destructor_frees_the_data_then_the_base() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraPortalRefData> = e.new_object();
+        let data = e.mem.alloc(8);
+        e.set(extra, ExtraPortalRefData::pData, Ptr::new(data));
+        let log = logged(&mut e, |e| {
+            e.call(0x004203b0, &args![extra]);
+        });
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51d8);
+        let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
+        assert_eq!(
+            order,
+            vec![0x004203b0, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+        assert_eq!(e.get(extra, ExtraPortalRefData::pData).addr(), 0);
+    }
+
+    #[test]
+    fn portal_ref_data_getter() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        assert_eq!(e.call(0x00420410, &args![list]).u32(), 0);
+        let extra = put_extra(&mut e, list, 0x77);
+        e.mem.set_u32(extra + 0x0c, 0xd101);
+        assert_eq!(e.call(0x00420410, &args![list]).u32(), 0xd101);
+    }
+
+    // 00420440, 00420500, 00420530, 00420600, 00420630, 00420690, 004206e0,
+    // 00420710: the room reference data.
+
+    #[test]
+    fn room_ref_data_setter_replaces_the_extra_data() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420440, &args![list, 0u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x00420440, &args![list, 0xe001u32]);
+        });
+        let first = extra_of(&e, list, 0x7b);
+        assert_ne!(first, 0);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        assert_eq!(e.mem.u32(first), 0x0101_51e4);
+        assert_eq!(e.mem.u32(first + 0x0c), 0xe001);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420440, &args![list, 0xe002u32]);
+        });
+        assert_eq!(
+            calls_to(&log, REMOVE_EXTRA),
+            vec![vec![list.addr(), first, 1]]
+        );
+        assert_eq!(e.mem.u32(extra_of(&e, list, 0x7b) + 0x0c), 0xe002);
+        e.call(0x00420440, &args![list, 0u32]);
+        assert_eq!(extra_of(&e, list, 0x7b), 0);
+    }
+
+    #[test]
+    fn room_ref_data_constructor() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraRoomRefData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420500, &args![extra]).u32(), extra.addr());
+        });
+        assert_eq!(
+            calls_to(&log, BS_EXTRA_DATA_INIT),
+            vec![vec![extra.addr(), 0x7b]]
+        );
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51e4);
+    }
+
+    #[test]
+    fn room_ref_data_compare_looks_at_the_flag_and_the_room_list() {
+        let mut e = engine_c();
+        let this: Ptr<ExtraRoomRefData> = e.new_object();
+        let other: Ptr<ExtraRoomRefData> = e.new_object();
+        // Both without data: equal. One without: different.
+        assert!(!e.call(0x00420530, &args![this, other]).bool());
+        let mine = new_room_data(&mut e, 0, &[0x11, 0x12]);
+        e.set(this, ExtraRoomRefData::pData, Ptr::new(mine));
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+        e.set(this, ExtraRoomRefData::pData, Ptr::NULL);
+        e.set(other, ExtraRoomRefData::pData, Ptr::new(mine));
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+        // The same items in the same order: equal.
+        let theirs = new_room_data(&mut e, 0, &[0x11, 0x12]);
+        e.set(this, ExtraRoomRefData::pData, Ptr::new(mine));
+        e.set(other, ExtraRoomRefData::pData, Ptr::new(theirs));
+        assert!(!e.call(0x00420530, &args![this, other]).bool());
+        // Another master flag.
+        e.mem.set_u8(theirs + 0x10, 1);
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+        // Another item, a shorter list, a longer list.
+        let other_item = new_room_data(&mut e, 0, &[0x11, 0x13]);
+        e.set(other, ExtraRoomRefData::pData, Ptr::new(other_item));
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+        let shorter = new_room_data(&mut e, 0, &[0x11]);
+        e.set(other, ExtraRoomRefData::pData, Ptr::new(shorter));
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+        let longer = new_room_data(&mut e, 0, &[0x11, 0x12, 0x14]);
+        e.set(other, ExtraRoomRefData::pData, Ptr::new(longer));
+        assert!(e.call(0x00420530, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn room_ref_data_scalar_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraRoomRefData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420600, &args![extra, 0u32]).u32(), extra.addr());
+        });
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_DESTROY).len(), 1);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420600, &args![extra, 1u32]).u32(), extra.addr());
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![extra.addr()]]);
+    }
+
+    #[test]
+    fn room_ref_data_destructor_deletes_the_data_then_the_base() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraRoomRefData> = e.new_object();
+        let data = e.mem.alloc(0x14);
+        e.set(extra, ExtraRoomRefData::pData, Ptr::new(data));
+        let log = logged(&mut e, |e| {
+            e.call(0x00420630, &args![extra]);
+        });
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51e4);
+        let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x00420630,
+                LIST_DESTROY,
+                LIST_DESTROY,
+                OPERATOR_DELETE,
+                BS_EXTRA_DATA_DESTROY
+            ]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+        assert_eq!(e.get(extra, ExtraRoomRefData::pData).addr(), 0);
+    }
+
+    #[test]
+    fn room_ref_data_cleanup_deletes_only_what_is_there() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraRoomRefData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            e.call(0x00420690, &args![extra]);
+        });
+        assert!(log.iter().all(|(callee, _)| *callee == 0x00420690));
+        let data = e.mem.alloc(0x14);
+        e.set(extra, ExtraRoomRefData::pData, Ptr::new(data));
+        let log = logged(&mut e, |e| {
+            e.call(0x00420690, &args![extra]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+        assert_eq!(e.get(extra, ExtraRoomRefData::pData).addr(), 0);
+    }
+
+    #[test]
+    fn room_linked_data_scalar_deleting_destructor_destroys_the_lists() {
+        let mut e = engine_c();
+        let data = e.mem.alloc(0x14);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x004206e0, &args![data, 0u32]).u32(), data);
+        });
+        // The room list first, then the portal list.
+        assert_eq!(
+            calls_to(&log, LIST_DESTROY),
+            vec![vec![data + 8], vec![data]]
+        );
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x004206e0, &args![data, 3u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+    }
+
+    #[test]
+    fn room_linked_data_destructor_destroys_room_list_then_portal_list() {
+        let mut e = engine_c();
+        let data = e.mem.alloc(0x14);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420710, &args![data]);
+        });
+        assert_eq!(
+            calls_to(&log, LIST_DESTROY),
+            vec![vec![data + 8], vec![data]]
+        );
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    // 00420770, 004207b0, 004207e0, 00420810, 00420870: the accessors of the
+    // room reference data.
+
+    #[test]
+    fn room_linked_data_getters() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        for address in [0x00420770u32, 0x004207b0, 0x004207e0] {
+            assert_eq!(e.call(address, &args![list]).u32(), 0);
+        }
+        let extra = put_extra(&mut e, list, 0x7b);
+        let data = e.mem.alloc(0x14);
+        e.mem.set_u32(extra + 0x0c, data);
+        assert_eq!(e.call(0x004207e0, &args![list]).u32(), data);
+        assert_eq!(e.call(0x004207b0, &args![list]).u32(), data);
+        // The room list is the second list of the data.
+        assert_eq!(e.call(0x00420770, &args![list]).u32(), data + 8);
+        // An extra data without data gives 0 for both.
+        e.mem.set_u32(extra + 0x0c, 0);
+        assert_eq!(e.call(0x00420770, &args![list]).u32(), 0);
+        assert_eq!(e.call(0x004207e0, &args![list]).u32(), 0);
+    }
+
+    #[test]
+    fn room_is_master_getter() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // No room reference data: master.
+        assert!(e.call(0x00420810, &args![list]).bool());
+        let data = new_room_data(&mut e, 0, &[0x21]);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        // Flag clear and a non-empty room list: not master.
+        assert!(!e.call(0x00420810, &args![list]).bool());
+        // Flag set: master.
+        e.mem.set_u8(data + 0x10, 1);
+        assert!(e.call(0x00420810, &args![list]).bool());
+        // Flag clear and an empty room list: master.
+        let empty = new_room_data(&mut e, 0, &[]);
+        e.mem.set_u32(extra + 0x0c, empty);
+        assert!(e.call(0x00420810, &args![list]).bool());
+    }
+
+    #[test]
+    fn room_is_master_setter() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // No room reference data: nothing happens.
+        e.call(0x00420870, &args![list, true]);
+        let data = e.mem.alloc(0x14);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        e.call(0x00420870, &args![list, true]);
+        assert_eq!(e.mem.u8(data + 0x10), 1);
+        // Only the low byte of the argument counts, and the flag is 0 or 1.
+        e.call(0x00420870, &args![list, 0x0100_0000u32]);
+        assert_eq!(e.mem.u8(data + 0x10), 0);
+        e.call(0x00420870, &args![list, 0x80u32]);
+        assert_eq!(e.mem.u8(data + 0x10), 1);
+    }
+
+    // 004208b0, 00420950: the master room search.
+
+    #[test]
+    fn master_room_is_zero_without_data_or_for_a_master() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x004208b0, &args![list]).u32(), 0);
+        });
+        assert!(calls_to(&log, VISITED_SET_INIT).is_empty());
+        let data = new_room_data(&mut e, 1, &[0x31]);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x004208b0, &args![list]).u32(), 0);
+        });
+        assert!(calls_to(&log, VISITED_SET_INIT).is_empty());
+    }
+
+    #[test]
+    fn master_room_searches_with_a_fresh_visited_set() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // A master room, and a room that is not (its room list is not empty).
+        let master_data = new_room_data(&mut e, 1, &[]);
+        let (master, _) = new_reference_with_room_data(&mut e, master_data);
+        let data = new_room_data(&mut e, 0, &[master]);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x004208b0, &args![list]).u32(), master);
+        });
+        let init = calls_to(&log, VISITED_SET_INIT);
+        assert_eq!(init.len(), 1);
+        assert_eq!(init[0][1], 0x25);
+        assert_eq!(calls_to(&log, VISITED_SET_DESTROY), vec![vec![init[0][0]]]);
+    }
+
+    #[test]
+    fn master_room_search_takes_the_first_master_of_the_room_list() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let plain_data = new_room_data(&mut e, 0, &[0x41]);
+        let (plain, _) = new_reference_with_room_data(&mut e, plain_data);
+        let master_data = new_room_data(&mut e, 1, &[]);
+        let (master, _) = new_reference_with_room_data(&mut e, master_data);
+        let data = new_room_data(&mut e, 0, &[plain, master]);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        let visited = e.mem.alloc(0x10);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420950, &args![list, visited]).u32(), master);
+        });
+        // Found by the first pass: the visited set is not used.
+        assert!(calls_to(&log, VISITED_SET_FIND).is_empty());
+    }
+
+    #[test]
+    fn master_room_search_follows_unvisited_rooms_once() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // `via` is not a master; its room list leads to a master.
+        let master_data = new_room_data(&mut e, 1, &[]);
+        let (master, _) = new_reference_with_room_data(&mut e, master_data);
+        let via_data = new_room_data(&mut e, 0, &[master]);
+        let (via, _) = new_reference_with_room_data(&mut e, via_data);
+        let data = new_room_data(&mut e, 0, &[via]);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        let visited = e.mem.alloc(0x10);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420950, &args![list, visited]).u32(), master);
+        });
+        assert_eq!(
+            calls_to(&log, VISITED_SET_INSERT),
+            vec![vec![visited, via, 0]]
+        );
+        // A second search finds `via` in the set and does not follow it.
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00420950, &args![list, visited]).u32(), 0);
+        });
+        assert!(calls_to(&log, VISITED_SET_INSERT).is_empty());
+        assert_eq!(calls_to(&log, VISITED_SET_FIND).len(), 1);
+    }
+
+    #[test]
+    fn master_room_search_without_data_is_zero() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let visited = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x00420950, &args![list, visited]).u32(), 0);
+    }
+
+    // 00420a60, 00420ba0, 00420bc0: the portal words.
+
+    #[test]
+    fn portal_word_setter_stores_the_word_and_the_room() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let portal = e.mem.alloc(0x200);
+        let portal_extra = put_extra(&mut e, list, 0x78);
+        e.mem.set_u32(portal_extra + 0x0c, portal);
+        // The reference has a room of its own and no room reference data.
+        let reference = e.mem.alloc(0x500);
+        let room_extra = put_extra(&mut e, Ptr::new(reference + 0x44), 0x79);
+        e.mem.set_u32(room_extra + 0x0c, 0x5001);
+        // Index 0: the portal data is built (8 bytes), the first room set.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420a60, &args![list, 0u32, reference]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![8], vec![0x10]]);
+        assert_eq!(calls_to(&log, PORTAL_LINKED_DATA_INIT).len(), 1);
+        let data = e.mem.u32(extra_of(&e, list, 0x77) + 0x0c);
+        assert_eq!(e.mem.u32(data), reference);
+        assert_eq!(
+            calls_to(&log, PORTAL_SET_FIRST_ROOM),
+            vec![vec![portal, 0x5001]]
+        );
+        assert_eq!(e.mem.u32(portal + 0x100), 0);
+        // Index 1: the second room, at +0x100 of the portal.
+        e.call(0x00420a60, &args![list, 1u32, reference]);
+        assert_eq!(e.mem.u32(data + 4), reference);
+        assert_eq!(e.mem.u32(portal + 0x100), 0x5001);
+        // A null reference clears the word and the first room.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420a60, &args![list, 0u32, 0u32]);
+        });
+        assert_eq!(e.mem.u32(data), 0);
+        assert_eq!(calls_to(&log, PORTAL_SET_FIRST_ROOM), vec![vec![portal, 0]]);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn portal_word_setter_without_portal_or_data() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // A null reference with no data: nothing built, nothing stored.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420a60, &args![list, 1u32, 0u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(extra_of(&e, list, 0x77), 0);
+        // No portal: the data is built and stored, no room handed on.
+        let reference = e.mem.alloc(0x500);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420a60, &args![list, 1u32, reference]);
+        });
+        assert!(calls_to(&log, PORTAL_SET_FIRST_ROOM).is_empty());
+        let data = e.mem.u32(extra_of(&e, list, 0x77) + 0x0c);
+        assert_eq!(e.mem.u32(data + 4), reference);
+    }
+
+    #[test]
+    fn portal_word_setter_hands_on_the_room_of_the_master_room() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let portal = e.mem.alloc(0x200);
+        let portal_extra = put_extra(&mut e, list, 0x78);
+        e.mem.set_u32(portal_extra + 0x0c, portal);
+        // The reference is not a master; its room list leads to a master
+        // room, whose room is the one given to the portal.
+        let master_data = new_room_data(&mut e, 1, &[]);
+        let (master, master_list) = new_reference_with_room_data(&mut e, master_data);
+        let master_room = put_extra(&mut e, master_list, 0x79);
+        e.mem.set_u32(master_room + 0x0c, 0x5002);
+        let data = new_room_data(&mut e, 0, &[master]);
+        let (reference, _) = new_reference_with_room_data(&mut e, data);
+        let room_extra = put_extra(&mut e, Ptr::new(reference + 0x44), 0x79);
+        e.mem.set_u32(room_extra + 0x0c, 0x5001);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420a60, &args![list, 0u32, reference]);
+        });
+        assert_eq!(
+            calls_to(&log, PORTAL_SET_FIRST_ROOM),
+            vec![vec![portal, 0x5002]]
+        );
+    }
+
+    #[test]
+    fn portal_second_room_setter() {
+        let mut e = engine_c();
+        let portal = e.mem.alloc(0x200);
+        e.call(0x00420ba0, &args![portal, 0x6001u32]);
+        assert_eq!(e.mem.u32(portal + 0x100), 0x6001);
+        assert_eq!(e.mem.u32(portal + 0xfc), 0);
+    }
+
+    #[test]
+    fn portal_word_getter() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        assert_eq!(e.call(0x00420bc0, &args![list, 1u32]).u32(), 0);
+        let extra = put_extra(&mut e, list, 0x77);
+        // An extra data without data gives 0 too.
+        assert_eq!(e.call(0x00420bc0, &args![list, 1u32]).u32(), 0);
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(extra + 0x0c, data);
+        e.mem.set_u32(data, 0x7001);
+        e.mem.set_u32(data + 4, 0x7002);
+        assert_eq!(e.call(0x00420bc0, &args![list, 0u32]).u32(), 0x7001);
+        assert_eq!(e.call(0x00420bc0, &args![list, 1u32]).u32(), 0x7002);
+    }
+
+    // 00420c10, 00420ce0, 00420da0: the lists of the room reference data.
+
+    #[test]
+    fn room_list_adder_builds_the_data_and_adds_once() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // A null reference with no data would run on with a null data
+        // pointer (the game crashes there): not tried. A reference builds
+        // the 0x14-byte data and puts the reference at the head of the room
+        // list.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420c10, &args![list, 0x8001u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x14], vec![0x10]]);
+        assert_eq!(calls_to(&log, ROOM_LINKED_DATA_INIT).len(), 1);
+        let data = e.mem.u32(extra_of(&e, list, 0x7b) + 0x0c);
+        assert_ne!(data, 0);
+        assert_eq!(e.mem.u32(data + 8), 0x8001);
+        assert_eq!(e.mem.u32(data), 0);
+        // The data is there: no new one; a reference already in the list
+        // is not added again.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420c10, &args![list, 0x8001u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, LIST_ADD_HEAD).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x00420c10, &args![list, 0x8002u32]);
+        });
+        assert_eq!(calls_to(&log, LIST_ADD_HEAD).len(), 1);
+        assert_eq!(e.mem.u32(data + 8), 0x8002);
+        // A null reference with data is added like any other.
+        e.call(0x00420c10, &args![list, 0u32]);
+        assert_eq!(e.mem.u32(data + 8), 0);
+    }
+
+    #[test]
+    fn portal_list_adder_works_on_the_first_list() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420ce0, &args![list, 0x8101u32]);
+        });
+        assert_eq!(calls_to(&log, ROOM_LINKED_DATA_INIT).len(), 1);
+        let data = e.mem.u32(extra_of(&e, list, 0x7b) + 0x0c);
+        assert_eq!(e.mem.u32(data), 0x8101);
+        assert_eq!(e.mem.u32(data + 8), 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420ce0, &args![list, 0x8101u32]);
+        });
+        assert!(calls_to(&log, LIST_ADD_HEAD).is_empty());
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        e.call(0x00420ce0, &args![list, 0x8102u32]);
+        assert_eq!(e.mem.u32(data), 0x8102);
+    }
+
+    #[test]
+    fn portal_list_remover_works_on_the_first_list() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // No data: nothing is called.
+        let log = logged(&mut e, |e| {
+            e.call(0x00420da0, &args![list, 0x8201u32]);
+        });
+        assert!(calls_to(&log, LIST_REMOVE_ITEM).is_empty());
+        let data = new_room_data(&mut e, 0, &[0x8301]);
+        e.mem.set_u32(data, 0x8201);
+        let extra = put_extra(&mut e, list, 0x7b);
+        e.mem.set_u32(extra + 0x0c, data);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420da0, &args![list, 0x8201u32]);
+        });
+        let calls = calls_to(&log, LIST_REMOVE_ITEM);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][0], data);
+        assert_eq!(e.mem.u32(data), 0);
+        // The room list is not touched.
+        assert_eq!(e.mem.u32(data + 8), 0x8301);
+    }
+
+    // 00420dd0, 00420e00, 00420ed0, 00420f00: the portal and the room.
+
+    #[test]
+    fn portal_and_room_getters_read_the_pointer() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        assert_eq!(e.call(0x00420dd0, &args![list]).u32(), 0);
+        assert_eq!(e.call(0x00420ed0, &args![list]).u32(), 0);
+        let portal = put_extra(&mut e, list, 0x78);
+        let room = put_extra(&mut e, list, 0x79);
+        e.mem.set_u32(portal + 0x0c, 0x9001);
+        e.mem.set_u32(room + 0x0c, 0x9002);
+        assert_eq!(e.call(0x00420dd0, &args![list]).u32(), 0x9001);
+        assert_eq!(e.call(0x00420ed0, &args![list]).u32(), 0x9002);
+    }
+
+    /// The shape of `SetPortal` and `SetRoom`: `setter` for the extra data of
+    /// `extra_type`.
+    fn check_pointer_setter(setter: u32, extra_type: u8) {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        // A null value with nothing there removes by type.
+        let log = logged(&mut e, |e| {
+            e.call(setter, &args![list, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, REMOVE_EXTRA_BY_TYPE),
+            vec![vec![list.addr(), extra_type as u32]]
+        );
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        // A value builds a 0x10-byte extra data, assigns and adds it.
+        let log = logged(&mut e, |e| {
+            e.call(setter, &args![list, 0xa001u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        let extra = extra_of(&e, list, extra_type);
+        assert_ne!(extra, 0);
+        assert_eq!(
+            calls_to(&log, NI_POINTER_ASSIGN),
+            vec![vec![extra + 0x0c, 0xa001]]
+        );
+        assert_eq!(e.mem.u32(extra + 0x0c), 0xa001);
+        // With one there, only the pointer is assigned.
+        let log = logged(&mut e, |e| {
+            e.call(setter, &args![list, 0xa002u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, ADD_EXTRA).is_empty());
+        assert_eq!(extra_of(&e, list, extra_type), extra);
+        assert_eq!(e.mem.u32(extra + 0x0c), 0xa002);
+        // A null value removes it (by type, not through its address).
+        let log = logged(&mut e, |e| {
+            e.call(setter, &args![list, 0u32]);
+        });
+        assert_eq!(calls_to(&log, REMOVE_EXTRA_BY_TYPE).len(), 1);
+        assert!(calls_to(&log, REMOVE_EXTRA).is_empty());
+        assert_eq!(extra_of(&e, list, extra_type), 0);
+    }
+
+    #[test]
+    fn portal_setter() {
+        check_pointer_setter(0x00420e00, 0x78);
+    }
+
+    #[test]
+    fn room_setter() {
+        check_pointer_setter(0x00420f00, 0x79);
+    }
+
+    // 00420fd0, 00421090, 004210c0, 00421130, 00421160, 004211a0: the
+    // collision data.
+
+    #[test]
+    fn collision_data_setter_replaces_the_extra_data() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420fd0, &args![list, 0u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x00420fd0, &args![list, 0xb001u32]);
+        });
+        let first = extra_of(&e, list, 0x72);
+        assert_ne!(first, 0);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        assert_eq!(e.mem.u32(first), 0x0101_51f0);
+        assert_eq!(e.mem.u32(first + 0x0c), 0xb001);
+        let log = logged(&mut e, |e| {
+            e.call(0x00420fd0, &args![list, 0xb002u32]);
+        });
+        assert_eq!(
+            calls_to(&log, REMOVE_EXTRA),
+            vec![vec![list.addr(), first, 1]]
+        );
+        assert_eq!(e.mem.u32(extra_of(&e, list, 0x72) + 0x0c), 0xb002);
+        e.call(0x00420fd0, &args![list, 0u32]);
+        assert_eq!(extra_of(&e, list, 0x72), 0);
+    }
+
+    #[test]
+    fn collision_data_constructor() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraCollisionData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00421090, &args![extra]).u32(), extra.addr());
+        });
+        assert_eq!(
+            calls_to(&log, BS_EXTRA_DATA_INIT),
+            vec![vec![extra.addr(), 0x72]]
+        );
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51f0);
+    }
+
+    #[test]
+    fn collision_data_compare_looks_at_the_first_word() {
+        let mut e = engine_c();
+        let this: Ptr<ExtraCollisionData> = e.new_object();
+        let other: Ptr<ExtraCollisionData> = e.new_object();
+        assert!(!e.call(0x004210c0, &args![this, other]).bool());
+        let mine = e.mem.alloc(0x10);
+        let theirs = e.mem.alloc(0x10);
+        e.set(this, ExtraCollisionData::pCollisionData, Ptr::new(mine));
+        assert!(e.call(0x004210c0, &args![this, other]).bool());
+        e.set(this, ExtraCollisionData::pCollisionData, Ptr::NULL);
+        e.set(other, ExtraCollisionData::pCollisionData, Ptr::new(theirs));
+        assert!(e.call(0x004210c0, &args![this, other]).bool());
+        e.set(this, ExtraCollisionData::pCollisionData, Ptr::new(mine));
+        // Different blocks starting with the same word are equal.
+        assert!(!e.call(0x004210c0, &args![this, other]).bool());
+        e.mem.set_u32(theirs, 5);
+        assert!(e.call(0x004210c0, &args![this, other]).bool());
+        // Only the first word counts.
+        e.mem.set_u32(theirs, 0);
+        e.mem.set_u32(theirs + 4, 5);
+        assert!(!e.call(0x004210c0, &args![this, other]).bool());
+    }
+
+    #[test]
+    fn collision_data_scalar_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraCollisionData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00421130, &args![extra, 0u32]).u32(), extra.addr());
+        });
+        // The destructor deletes the collision data (here null).
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![0]]);
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_DESTROY).len(), 1);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x00421130, &args![extra, 1u32]).u32(), extra.addr());
+        });
+        assert_eq!(
+            calls_to(&log, OPERATOR_DELETE),
+            vec![vec![0], vec![extra.addr()]]
+        );
+    }
+
+    #[test]
+    fn collision_data_destructor_deletes_the_data_then_the_base() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraCollisionData> = e.new_object();
+        let data = e.mem.alloc(0x10);
+        e.set(extra, ExtraCollisionData::pCollisionData, Ptr::new(data));
+        let log = logged(&mut e, |e| {
+            e.call(0x00421160, &args![extra]);
+        });
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51f0);
+        let order: Vec<u32> = log.iter().map(|(callee, _)| *callee).collect();
+        assert_eq!(
+            order,
+            vec![0x00421160, OPERATOR_DELETE, BS_EXTRA_DATA_DESTROY]
+        );
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![data]]);
+    }
+
+    #[test]
+    fn collision_data_getter() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        assert_eq!(e.call(0x004211a0, &args![list]).u32(), 0);
+        let extra = put_extra(&mut e, list, 0x72);
+        e.mem.set_u32(extra + 0x0c, 0xb101);
+        assert_eq!(e.call(0x004211a0, &args![list]).u32(), 0xb101);
+    }
+
+    // 004211d0, 00421280, 004212b0, 004212e0: the actor package data.
+
+    #[test]
+    fn actor_package_data_setter_updates_or_adds() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x004211d0, &args![list, 0xc001u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x10]]);
+        let extra = extra_of(&e, list, 0x70);
+        assert_ne!(extra, 0);
+        assert_eq!(e.mem.u32(extra), 0x0101_51fc);
+        assert_eq!(e.mem.u32(extra + 0x0c), 0xc001);
+        // With one there, the word is overwritten, a null one included.
+        let log = logged(&mut e, |e| {
+            e.call(0x004211d0, &args![list, 0xc002u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, ADD_EXTRA).is_empty());
+        assert_eq!(e.mem.u32(extra + 0x0c), 0xc002);
+        e.call(0x004211d0, &args![list, 0u32]);
+        assert_eq!(extra_of(&e, list, 0x70), extra);
+        assert_eq!(e.mem.u32(extra + 0x0c), 0);
+        // With none, a null value still builds one.
+        let other = new_list(&mut e);
+        e.call(0x004211d0, &args![other, 0u32]);
+        assert_ne!(extra_of(&e, other, 0x70), 0);
+    }
+
+    #[test]
+    fn actor_package_data_constructor() {
+        let mut e = engine_c();
+        let extra: Ptr<ExtraPackageData> = e.new_object();
+        let log = logged(&mut e, |e| {
+            assert_eq!(
+                e.call(0x00421280, &args![extra, 0xc101u32]).u32(),
+                extra.addr()
+            );
+        });
+        assert_eq!(
+            calls_to(&log, BS_EXTRA_DATA_INIT),
+            vec![vec![extra.addr(), 0x70]]
+        );
+        assert_eq!(e.mem.u32(extra.addr()), 0x0101_51fc);
+        assert_eq!(
+            e.get(extra, ExtraPackageData::pActorPackageData).addr(),
+            0xc101
+        );
+    }
+
+    #[test]
+    fn actor_package_data_getter_and_remover() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        assert_eq!(e.call(0x004212b0, &args![list]).u32(), 0);
+        // Removing with none does nothing.
+        let log = logged(&mut e, |e| {
+            e.call(0x004212e0, &args![list]);
+        });
+        assert!(calls_to(&log, REMOVE_EXTRA).is_empty());
+        let extra = put_extra(&mut e, list, 0x70);
+        e.mem.set_u32(extra + 0x0c, 0xc201);
+        assert_eq!(e.call(0x004212b0, &args![list]).u32(), 0xc201);
+        let log = logged(&mut e, |e| {
+            e.call(0x004212e0, &args![list]);
+        });
+        assert_eq!(
+            calls_to(&log, REMOVE_EXTRA),
+            vec![vec![list.addr(), extra, 1]]
+        );
+        assert_eq!(extra_of(&e, list, 0x70), 0);
+    }
+
+    // 00421310, 004213c0: the guarded reference data.
+
+    #[test]
+    fn add_guard_builds_the_extra_data_once() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x00421310, &args![list, 0xd001u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x1c]]);
+        let extra = extra_of(&e, list, 0x7c);
+        assert_ne!(extra, 0);
+        assert_eq!(
+            calls_to(&log, GUARDED_REF_DATA_ADD_GUARD),
+            vec![vec![extra, 0xd001]]
+        );
+        let log = logged(&mut e, |e| {
+            e.call(0x00421310, &args![list, 0xd002u32]);
+        });
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, ADD_EXTRA).is_empty());
+        assert_eq!(
+            calls_to(&log, GUARDED_REF_DATA_ADD_GUARD),
+            vec![vec![extra, 0xd002]]
+        );
+    }
+
+    #[test]
+    fn guarded_ref_data_forwarder_needs_the_extra_data() {
+        let mut e = engine_c();
+        let list = new_list(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(0x004213c0, &args![list, 1u32, 2u32]);
+        });
+        assert!(calls_to(&log, GUARDED_REF_DATA_TWO_WORDS).is_empty());
+        let extra = put_extra(&mut e, list, 0x7c);
+        let log = logged(&mut e, |e| {
+            e.call(0x004213c0, &args![list, 1u32, 2u32]);
+        });
+        assert_eq!(
+            calls_to(&log, GUARDED_REF_DATA_TWO_WORDS),
+            vec![vec![extra, 1, 2]]
+        );
     }
 }
