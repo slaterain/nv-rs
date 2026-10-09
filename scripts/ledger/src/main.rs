@@ -88,6 +88,16 @@ struct Func {
 }
 
 impl Func {
+    /// Translated or replaced inside `crates/engine`: the engine has it. A
+    /// translation elsewhere (an older marker in `crates/world`) still
+    /// needs its engine version.
+    fn in_engine(&self) -> bool {
+        self.translated
+            .iter()
+            .chain(&self.replaced)
+            .any(|l| l.starts_with("crates/engine/"))
+    }
+
     fn status(&self) -> &'static str {
         if !self.translated.is_empty() {
             "translated"
@@ -583,22 +593,22 @@ mod tests {
     }
 }
 
-/// `queue`: functions still to translate (`open` or `traced`) per unit
+/// `queue`: functions the engine crate does not have yet, per unit
 /// (unit, subsystem, functions, bytes, file), largest first. `queue <unit>`: that unit's functions (address, size, status,
 /// name), the work list for one translator.
 fn queue(funcs: &[Func], args: &[String]) {
     if let Some(unit) = args.first() {
         for f in funcs.iter().filter(|f| &f.unit == unit) {
-            println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, f.status(), f.name);
+            let st = if f.in_engine() { "done" } else { f.status() };
+            println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, st, f.name);
         }
         return;
     }
     let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
-    for f in funcs.iter().filter(|f| {
-        matches!(f.status(), "open" | "traced")
-            && !f.unit.is_empty()
-            && base_status(&f.subsystem) == "open"
-    }) {
+    for f in funcs
+        .iter()
+        .filter(|f| !f.in_engine() && !f.unit.is_empty() && base_status(&f.subsystem) == "open")
+    {
         let e = per.entry((&f.subsystem, &f.unit)).or_default();
         e.0 += 1;
         e.1 += f.size as u64;
