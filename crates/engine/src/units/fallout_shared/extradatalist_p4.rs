@@ -3,8 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::extradatalist`]; anything public there may be used here.
 //!
-//! Translated so far, in address order: the 80 functions from `00421400` to
-//! `0042c6d0`. The first 40 (to `00422640`) are the getters and setters of
+//! Translated so far, in address order: the 120 functions from `00421400` to
+//! `0042dd70`. The first 40 (to `00422640`) are the getters and setters of
 //! single extra data (the merchant container, the leveled creature modifier
 //! and original base, the cell detach time, the seen data, the north
 //! rotation, the X target, the encounter zone, the emittance source, the
@@ -17,7 +17,11 @@
 //! format (`SaveGame_ov2`, `LoadGame_ov2`), the helpers of the save buffer
 //! (`00428070` to `00428130`) and the constructors and destructors of the
 //! lock, teleport, ownership, global, rank, count, health and uses extra data
-//! (`0042c470` to `0042c6d0`). The next function to translate is `0042c700`.
+//! (`0042c470` to `0042c6d0`). The last 40 are the constructors and destructors of
+//! the extra data of the types `0x27` to `0x8F` (`0042c700` to `0042cd70`), the
+//! small buffer accessors (`0042cde0` to `0042ce90`), the fix-up after the
+//! buffered load (`0042ceb0`), `FinishLoadGame` (`0042d9e0`), the clean-up
+//! (`0042dae0`) and `0042dd70`. The range is complete.
 //!
 //! The save functions test the change flags with masks that are the constant
 //! 0 in this build (`AND reg,0`); the Xbox arms behind them never run and are
@@ -3998,6 +4002,889 @@ fn load_leveled_creature(
         e.vcall(creature, 0x10, &args![1u32]);
     }
 }
+// ---------------------------------------------------------------------------
+// Ninth block: constructors and destructors of the extra data of the types
+// 0x0D to 0x8F, the helpers of the save buffer, and the fix-ups that follow a
+// load
+
+/// Vtables the constructors of this block set.
+const VTABLE_EXTRA_TIME_LEFT: u32 = 0x0101_58fc;
+const VTABLE_EXTRA_CHARGE: u32 = 0x0101_5908;
+const VTABLE_EXTRA_SCRIPT: u32 = 0x0101_5914;
+const VTABLE_EXTRA_SCALE: u32 = 0x0101_5920;
+const VTABLE_EXTRA_HOT_KEY: u32 = 0x0101_592c;
+const VTABLE_EXTRA_REFERENCE_POINTER: u32 = 0x0101_5938;
+const VTABLE_EXTRA_TRESPASS_PACKAGE: u32 = 0x0101_5944;
+const VTABLE_EXTRA_LEVELED_ITEM: u32 = 0x0101_5950;
+const VTABLE_EXTRA_POISON: u32 = 0x0101_595c;
+const VTABLE_EXTRA_HEAD_TRACK_TARGET: u32 = 0x0101_5968;
+const VTABLE_EXTRA_NO_RUMORS: u32 = 0x0101_5974;
+const VTABLE_EXTRA_OBJECT_HEALTH: u32 = 0x0101_5184;
+const VTABLE_EXTRA_MODEL_SWAP: u32 = 0x0101_5980;
+const VTABLE_EXTRA_ACTOR_CAUSE: u32 = 0x0101_598c;
+const VTABLE_EXTRA_AMMO: u32 = 0x0101_5998;
+const VTABLE_EXTRA_PACKAGE_DATA: u32 = 0x0101_51fc;
+const VTABLE_EXTRA_WEAPON_MOD_SLOTS: u32 = 0x0101_59a4;
+const VTABLE_EXTRA_SECURITRON_FACE: u32 = 0x0101_59b0;
+
+/// Extra data types constructed here (`EXTRA_DATA_TYPE`, Xbox PDB).
+const EXTRA_TIMELEFT: u8 = 0x27;
+const EXTRA_SCRIPT: u8 = 0x0d;
+const EXTRA_HOT_KEY: u8 = 0x4a;
+const EXTRA_REFERENCE_POINTER: u8 = 0x1c;
+const EXTRA_TRESPASS_PACKAGE: u8 = 0x1a;
+const EXTRA_LEVELITEM: u8 = 0x2f;
+const EXTRA_HEAD_TRACK_TARGET: u8 = 0x46;
+const EXTRA_OBJECT_HEALTH: u8 = 0x56;
+const EXTRA_MODEL_SWAP: u8 = 0x5b;
+const EXTRA_ACTOR_CAUSE: u8 = 0x60;
+const EXTRA_AMMO: u8 = 0x6e;
+const EXTRA_PACKAGE_DATA: u8 = 0x70;
+const EXTRA_WEAPON_MOD_SLOTS: u8 = 0x8d;
+const EXTRA_SECURITRON_FACE: u8 = 0x8f;
+/// The other types the fix-ups read.
+const EXTRA_MAGICCASTER: u8 = 0x32;
+const EXTRA_MAGICTARGET: u8 = 0x33;
+const EXTRA_ITEMDROPPER: u8 = 0x39;
+const EXTRA_MERCHANTCONTAINER: u8 = 0x3c;
+const EXTRA_PACKAGE: u8 = 0x19;
+const EXTRA_TALKING_ACTOR: u8 = 0x55;
+const EXTRA_DISMEMBERED_LIMBS: u8 = 0x5f;
+const EXTRA_OPENCLOSEACTIVATE_REF: u8 = 0x6c;
+const EXTRA_SAY_TO_TOPIC_INFO: u8 = 0x75;
+const EXTRA_ASHPILE_REF: u8 = 0x89;
+const EXTRA_PLAYERCRIMELIST: u8 = 0x35;
+
+/// Destructors called by the scalar deleting destructors of this block
+/// (`this` the extra data): `ExtraScript` (`00432040`),
+/// `ExtraTresPassPackage` (`00432900`), `ExtraHeadingTarget` (`00435ef0`).
+const EXTRA_SCRIPT_DESTROY: u32 = 0x0043_2040;
+const EXTRA_TRESPASS_PACKAGE_DESTROY: u32 = 0x0043_2900;
+const EXTRA_HEADING_TARGET_DESTROY: u32 = 0x0043_5ef0;
+/// Member of the actor cause extra data at +0x0C: `0042f730(this, 0)` builds
+/// it and `0042f760(this)` lets go of it (the destructor body); the value is
+/// assigned with `0042f780` ([`ASSIGN_HANDLE_AT`]).
+const ACTOR_CAUSE_MEMBER_INIT: u32 = 0x0042_f730;
+const ACTOR_CAUSE_MEMBER_RELEASE: u32 = 0x0042_f760;
+/// String members at +0x0C and +0x14 of the securitron face extra data:
+/// the constructor (`004037b0`) and the destructor (`004037d0`).
+const STRING_MEMBER_INIT: u32 = 0x0040_37b0;
+const STRING_MEMBER_DESTROY: u32 = 0x0040_37d0;
+/// The `float` that `0042cc10` copies (`01012054`).
+const FLOAT_COPIED_BY_RECORD_INIT: u32 = 0x0101_2054;
+/// The word `0042ce00` gives (`011c6444`).
+const WORD_GIVEN_BY_GETTER: u32 = 0x011c_6444;
+
+/// `__RTDynamicCast` targets used by the fix-up: the type descriptors of
+/// `TESScriptableForm` and `MobileObject`.
+const RTTI_TES_SCRIPTABLE_FORM: u32 = 0x0118_3254;
+const RTTI_MOBILE_OBJECT: u32 = 0x0118_4920;
+
+/// `ExtraDataList::GetModelSwap` (`0042e250`), `GetItemDropper`
+/// (`0041de00`) and `RemoveDroppedItem` (`0041e0d0`, this the dropper's
+/// list, the reference given) (Xbox PDB).
+const GET_MODEL_SWAP: u32 = 0x0042_e250;
+const GET_ITEM_DROPPER: u32 = 0x0041_de00;
+const REMOVE_DROPPED_ITEM: u32 = 0x0041_e0d0;
+/// `ExtraDataList::SetActivateChildrenTimer(float)` (Xbox PDB).
+const SET_ACTIVATE_CHILDREN_TIMER: u32 = 0x0041_eff0;
+/// `ExtraDataList::GetScriptLocals` (Xbox PDB) and the locals' fix-up
+/// (`005aa090(locals, buffer)`).
+const GET_SCRIPT_LOCALS: u32 = 0x0041_8830;
+const SCRIPT_LOCALS_FINISH_LOAD: u32 = 0x005a_a090;
+/// `0084e3a0(form)`: the word at +0x0C of a form (read by the code as a
+/// handle). It is declared with no parameter; the callers push one word.
+const FORM_WORD_0C: u32 = 0x0084_e3a0;
+/// The object at `011c3f2c` (read as a word) whose `00469860(value)`
+/// ([`FORM_ID_IS_FILE_FORM`]) is true when the value is below `0xFF000000`.
+const FILE_FORM_TESTER: u32 = 0x011c_3f2c;
+/// `00936a20(handle, flag)` (cdecl): the Xbox PDB names it
+/// `MobileObject::SayToCallBack`.
+const MOBILE_OBJECT_SAY_TO_CALL_BACK: u32 = 0x0093_6a20;
+/// `ActiveEffect::FinishLoadActiveEffectList(buffer, list)` (Xbox PDB,
+/// cdecl).
+const FINISH_LOAD_ACTIVE_EFFECT_LIST: u32 = 0x0080_6b50;
+/// `00806b00(buffer, list)` (cdecl): the fix-up of the list of the type `0x33`
+/// extra data after its form ids were resolved.
+const RESOLVE_ACTIVE_EFFECT_LIST: u32 = 0x0080_6b00;
+/// `MagicTarget::GetMagicTargetByNumericID` (Xbox PDB, cdecl).
+const MAGIC_TARGET_FROM_ID: u32 = 0x0082_5550;
+/// `TESPackage::CalculateProcedureType` (Xbox PDB, `this` the package, the
+/// extra data's +0x14 given) and the test `009611e0` before it.
+const PACKAGE_CALCULATE_PROCEDURE_TYPE: u32 = 0x0067_77b0;
+const PACKAGE_PROCEDURE_TYPE: u32 = 0x0096_11e0;
+/// `ExtraDataList::GetPackageExtra` (Xbox PDB).
+const GET_PACKAGE_EXTRA: u32 = 0x0041_cb10;
+/// `0041e340(list, owner)`: the fix-up of the list a type `0x89` extra data
+/// points at.
+const ASHPILE_LIST_FIX: u32 = 0x0041_e340;
+/// `009eb9c0(item, owner)`, run for each item of the type `0x35` list.
+const PLAYER_CRIME_ITEM_FIX: u32 = 0x009e_b9c0;
+/// `00835fe0(teleport data, buffer)`.
+const TELEPORT_DATA_FINISH_LOAD: u32 = 0x0083_5fe0;
+
+// Translated from 0042c700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x27` extra data (`EXTRA_TIMELEFT`, vtable
+/// `010158fc`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042c700(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_TIMELEFT, VTABLE_EXTRA_TIME_LEFT);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x28` extra data (`EXTRA_CHARGE`, vtable
+/// `01015908`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042c730(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_CHARGE, VTABLE_EXTRA_CHARGE);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x0D` extra data (`EXTRA_SCRIPT`, vtable
+/// `01015914`): the words at +0x0C and +0x10 are 0. Returns `this`.
+pub fn fn_0042c760(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_SCRIPT, VTABLE_EXTRA_SCRIPT);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 0042c7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScript::_scalar_deleting_destructor_` (Xbox PDB): the destructor
+/// (`00432040`), then `operator delete` when bit 0 of `flags` is set. Returns
+/// `this`.
+pub fn extra_script_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(EXTRA_SCRIPT_DESTROY, &args![this]);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042c7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x30` extra data (`EXTRA_SCALE`, vtable
+/// `01015920`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042c7d0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_SCALE, VTABLE_EXTRA_SCALE);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x4A` extra data (`EXTRA_HOT_KEY`, vtable
+/// `0101592c`): the byte at +0x0C is 0. Returns `this`.
+pub fn fn_0042c800(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_HOT_KEY, VTABLE_EXTRA_HOT_KEY);
+    e.mem.set_u8(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x1C` extra data (`EXTRA_REFERENCE_POINTER`,
+/// vtable `01015938`): the reference at +0x0C is null. Returns `this`.
+pub fn fn_0042c830(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(
+        e,
+        this,
+        EXTRA_REFERENCE_POINTER,
+        VTABLE_EXTRA_REFERENCE_POINTER,
+    );
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x1A` extra data (`EXTRA_TRESPASS_PACKAGE`,
+/// vtable `01015944`): the package at +0x0C is null. Returns `this`.
+pub fn fn_0042c860(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(
+        e,
+        this,
+        EXTRA_TRESPASS_PACKAGE,
+        VTABLE_EXTRA_TRESPASS_PACKAGE,
+    );
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTresPassPackage::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor (`00432900`), then `operator delete` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn extra_tres_pass_package_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(EXTRA_TRESPASS_PACKAGE_DESTROY, &args![this]);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042c8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x2F` extra data (`EXTRA_LEVELITEM`, vtable
+/// `01015950`): the word at +0x0C is 0 and the byte at +0x10 is 0. Returns
+/// `this`.
+pub fn fn_0042c8c0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_LEVELITEM, VTABLE_EXTRA_LEVELED_ITEM);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    e.mem.set_u8(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 0042c900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x3F` extra data (`EXTRA_POISON`, vtable
+/// `0101595c`): the word at +0x0C is 0. Returns `this`.
+pub fn fn_0042c900(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_POISON, VTABLE_EXTRA_POISON);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x46` extra data (`EXTRA_HEAD_TRACK_TARGET`,
+/// vtable `01015968`): the word at +0x0C is 0. Returns `this`.
+pub fn fn_0042c930(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(
+        e,
+        this,
+        EXTRA_HEAD_TRACK_TARGET,
+        VTABLE_EXTRA_HEAD_TRACK_TARGET,
+    );
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHeadingTarget::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor (`00435ef0`), then `operator delete` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn extra_heading_target_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(EXTRA_HEADING_TARGET_DESTROY, &args![this]);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042c990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x4E` extra data (`EXTRA_NO_RUMORS`, vtable
+/// `01015974`): the byte at +0x0C is 0. Returns `this`.
+pub fn fn_0042c990(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_NO_RUMORS, VTABLE_EXTRA_NO_RUMORS);
+    e.mem.set_u8(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x56` extra data (`EXTRA_OBJECT_HEALTH`, vtable
+/// `01015184`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042c9c0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_OBJECT_HEALTH, VTABLE_EXTRA_OBJECT_HEALTH);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042c9f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x5B` extra data (`EXTRA_MODEL_SWAP`, vtable
+/// `01015980`): the words at +0x0C and +0x10 are 0. Returns `this`.
+pub fn fn_0042c9f0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_MODEL_SWAP, VTABLE_EXTRA_MODEL_SWAP);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 0042ca30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraRadius`, the type `0x5C` extra data (vtable
+/// `01015208`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042ca30(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_RADIUS, VTABLE_EXTRA_RADIUS);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042ca60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraRadiation`, the type `0x5D` extra data (vtable
+/// `01015214`): the `float` at +0x0C is 0.0 (`FLDZ`). Returns `this`.
+pub fn fn_0042ca60(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_RADIATION, VTABLE_EXTRA_RADIATION);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042ca90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraActorCause`, the type `0x60` extra data (vtable
+/// `0101598c`): builds the member at +0x0C (`0042f730`, given 0). The
+/// compiler's exception-unwinding frame is not translated. Returns `this`.
+pub fn fn_0042ca90(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_ACTOR_CAUSE, VTABLE_EXTRA_ACTOR_CAUSE);
+    e.call(ACTOR_CAUSE_MEMBER_INIT, &args![this.addr() + 0x0c, 0u32]);
+    this
+}
+
+// Translated from 0042cb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraActorCause::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor ([`fn_0042cb30`]), then `operator delete` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn extra_actor_cause_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0042cb30(e, this);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042cb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `ExtraActorCause`: sets its vtable (`0101598c`), assigns 0
+/// to the member at +0x0C (`0042f780`), releases it (`0042f760`) and runs the
+/// `BSExtraData` destructor (`0040ecb0`). The compiler's exception-unwinding
+/// frame is not translated.
+pub fn fn_0042cb30(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_ACTOR_CAUSE);
+    e.call(ASSIGN_HANDLE_AT, &args![this.addr() + 0x0c, 0u32]);
+    e.call(ACTOR_CAUSE_MEMBER_RELEASE, &args![this.addr() + 0x0c]);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 0042cba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x6E` extra data (`EXTRA_AMMO`, vtable
+/// `01015998`): the words at +0x0C and +0x10 are 0. Returns `this`.
+pub fn fn_0042cba0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_AMMO, VTABLE_EXTRA_AMMO);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 0042cbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x70` extra data (`EXTRA_PACKAGE_DATA`, vtable
+/// `010151fc`): the object at +0x0C is null. Returns `this`.
+pub fn fn_0042cbe0(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(e, this, EXTRA_PACKAGE_DATA, VTABLE_EXTRA_PACKAGE_DATA);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042cc10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a three-word record: the word at +0 is 0, the word at +4 is
+/// -1 and the `float` at +8 is the one at `01012054` (loaded and stored
+/// through the x87 stack, so a signalling NaN would come out quiet). Returns
+/// `this`.
+pub fn fn_0042cc10(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0xffff_ffff);
+    let value = e.mem.u32(FLOAT_COPIED_BY_RECORD_INIT);
+    e.mem.set_u32(this.addr() + 8, x87_float_bits(value));
+    this
+}
+
+// Translated from 0042cc40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x8D` extra data (`EXTRA_WEAPON_MOD_SLOTS`,
+/// vtable `010159a4`): the byte at +0x0C is 0. Returns `this`.
+pub fn fn_0042cc40(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_extra(
+        e,
+        this,
+        EXTRA_WEAPON_MOD_SLOTS,
+        VTABLE_EXTRA_WEAPON_MOD_SLOTS,
+    );
+    e.mem.set_u8(this.addr() + 0x0c, 0);
+    this
+}
+
+// Translated from 0042cc70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the type `0x8D` extra data: the destructor
+/// ([`fn_0042cca0`]), then `operator delete` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_0042cc70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0042cca0(e, this);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042cca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the type `0x8D` extra data: sets its vtable (`010159a4`)
+/// and runs the `BSExtraData` destructor (`0040ecb0`).
+pub fn fn_0042cca0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_WEAPON_MOD_SLOTS);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 0042ccc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of `ExtraSecuritronFace`, the type `0x8F` extra data (vtable
+/// `010159b0`): builds the string members at +0x0C and +0x14 (`004037b0`).
+/// The compiler's exception-unwinding frame is not translated. Returns `this`.
+pub fn fn_0042ccc0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(
+        BS_EXTRA_DATA_INIT,
+        &args![this, EXTRA_SECURITRON_FACE as u32],
+    );
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_SECURITRON_FACE);
+    e.call(STRING_MEMBER_INIT, &args![this.addr() + 0x0c]);
+    e.call(STRING_MEMBER_INIT, &args![this.addr() + 0x14]);
+    this
+}
+
+// Translated from 0042cd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSecuritronFace::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor ([`fn_0042cd70`]), then `operator delete` when bit 0 of `flags`
+/// is set. Returns `this`.
+pub fn extra_securitron_face_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0042cd70(e, this);
+    finish_scalar_deleting_destructor(e, this, flags)
+}
+
+// Translated from 0042cd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of `ExtraSecuritronFace`: sets its vtable (`010159b0`),
+/// destroys the string members at +0x14 and +0x0C (`004037d0`) and runs the
+/// `BSExtraData` destructor (`0040ecb0`). The compiler's exception-unwinding
+/// frame is not translated.
+pub fn fn_0042cd70(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_SECURITRON_FACE);
+    e.call(STRING_MEMBER_DESTROY, &args![this.addr() + 0x14]);
+    e.call(STRING_MEMBER_DESTROY, &args![this.addr() + 0x0c]);
+    e.call(BS_EXTRA_DATA_DESTROY, &args![this]);
+}
+
+// Translated from 0042cde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleList::IsEmpty` (`008256d0`) of the node the word at `this` points
+/// at; the answer is the low byte of the result.
+pub fn fn_0042cde0(e: &mut Engine, this: Ptr) -> bool {
+    let node = e.mem.u32(this.addr());
+    e.call(LIST_IS_EMPTY, &args![node]).bool()
+}
+
+// Translated from 0042ce00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c6444`.
+pub fn fn_0042ce00(e: &mut Engine) -> u32 {
+    e.mem.u32(WORD_GIVEN_BY_GETTER)
+}
+
+// Translated from 0042ce10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 1 of the word at +0x244 of the object it is called on is set.
+pub fn fn_0042ce10(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x244) & 2 != 0
+}
+
+// Translated from 0042ce30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the word at +0x2C of the object it is called on (a save buffer's
+/// word of flags) in `out`. Returns `out`.
+pub fn fn_0042ce30(e: &mut Engine, this: Ptr, out: Ptr) -> Ptr {
+    let word = e.mem.u32(this.addr() + 0x2c);
+    e.mem.set_u32(out.addr(), word);
+    out
+}
+
+// Translated from 0042ce50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` non-zero) or clears bit 3 (`0x8`) of the word at +0x28 of the
+/// object it is called on.
+pub fn fn_0042ce50(e: &mut Engine, this: Ptr, flag: u8) {
+    let word = e.mem.u32(this.addr() + 0x28);
+    let word = if flag != 0 { word | 8 } else { word & !8 };
+    e.mem.set_u32(this.addr() + 0x28, word);
+}
+
+// Translated from 0042ce90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 3 (`0x8`) of the word at +0x28 of the object it is called on
+/// is set.
+pub fn fn_0042ce90(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x28) & 8 != 0
+}
+
+/// Whether the save kind of the buffer (`00428110`) is in the mask the table
+/// at `01183d30` has for the extra data type (the exe reads the entry by its
+/// address); `004280f0` tests the mask.
+fn buffer_allows(e: &mut Engine, buffer: u32, extra_type: u8) -> bool {
+    let mask = e.mem.u32(SAVE_KIND_TABLE + extra_type as u32 * 4);
+    e.with_stack(4, |e, out| {
+        let kind = fn_00428110(e, Ptr::new(buffer), out);
+        fn_004280f0(e, kind, mask)
+    })
+}
+
+/// The form with the id `id` cast to `target`; null for an id of 0 (the exe
+/// tests the id before looking it up).
+fn form_or_null(e: &mut Engine, id: u32, target: u32) -> u32 {
+    if id == 0 {
+        0
+    } else {
+        form_as(e, id, target)
+    }
+}
+
+/// Replaces the form id at `offset` of the extra data by the form it names
+/// cast to `target` (null when there is none). Returns the form.
+fn resolve_word(e: &mut Engine, extra: Ptr<BSExtraData>, offset: u32, target: u32) -> u32 {
+    let id = e.mem.u32(extra.addr() + offset);
+    let form = form_or_null(e, id, target);
+    e.mem.set_u32(extra.addr() + offset, form);
+    form
+}
+
+// Translated from 0042ceb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The fix-up of a list after the buffered loader read it: `buffer` is the
+/// `BGSLoadGameBuffer`, `form` the form the list belongs to (called by
+/// `004bef60` and `00562660`). The buffer is asked for its reference
+/// (virtual `+8`) and its owner (virtual `+0x0C`). For each type below whose
+/// mask in the table at `01183d30` has the buffer's save kind, the form ids
+/// the extra data holds become the forms they name (`004839c0` and a dynamic
+/// cast, null when there is none): the type `0x1C` reference; the type
+/// `0x0D` (script) is removed unless the list it holds is the owner's base
+/// form's list at +0xF4 (or, without an owner, `form` cast to
+/// `TESScriptableForm`); then, with a reference: the types `0x6C` (removed
+/// when its reference is gone), `0x32` (magic item, magic target by id,
+/// reference), `0x33` (reference, then the active effect list), `0x39`
+/// (removed when the reference is gone, else the list of that reference is
+/// fixed), `0x55`; with an owner: the types `0x19` (package and reference;
+/// removed with no package, else the procedure type is computed when the
+/// package has none), `0x1D` (followers: those that are no actor are removed
+/// from the list; when the buffer's version byte is below `0x0E` the player is
+/// removed), `0x70`, `0x3C`, `0x1A`, `0x46`, `0x5F` (the form, no cast),
+/// `0x89` and `0x35`; with a reference but no owner: the type `0x2B` extra
+/// data's teleport data is finished (`00835fe0`).
+pub fn fn_0042ceb0(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32, form: u32) {
+    let reference = e.vcall(buffer, 8, &args![]).u32();
+    let owner = e.vcall(buffer, 0x0c, &args![]).u32();
+    if buffer_allows(e, buffer, EXTRA_REFERENCE_POINTER) {
+        let extra = find_extra(e, this, EXTRA_REFERENCE_POINTER);
+        if !extra.is_null() {
+            resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_SCRIPT) {
+        let extra = find_extra(e, this, EXTRA_SCRIPT);
+        if !extra.is_null() && form != 0 {
+            let mut list = 0;
+            if owner == 0 {
+                list = dynamic_cast(e, form, RTTI_TES_SCRIPTABLE_FORM);
+            } else {
+                let base = e.call(REFERENCE_BASE_FORM, &args![owner]).u32();
+                if base != 0 {
+                    list = base + 0xf4;
+                }
+            }
+            let held = e.mem.u32(extra.addr() + 0x0c);
+            if list == 0 || held == 0 || list_next(e, list) != held {
+                remove_extra(e, this, EXTRA_SCRIPT);
+            }
+        }
+    }
+    if reference == 0 {
+        return;
+    }
+    if buffer_allows(e, buffer, EXTRA_OPENCLOSEACTIVATE_REF) {
+        let extra = find_extra(e, this, EXTRA_OPENCLOSEACTIVATE_REF);
+        if !extra.is_null() && resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR) == 0 {
+            remove_extra(e, this, EXTRA_OPENCLOSEACTIVATE_REF);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_MAGICCASTER) {
+        let extra = find_extra(e, this, EXTRA_MAGICCASTER);
+        if !extra.is_null() {
+            let id = e.mem.u32(extra.addr() + 0x18);
+            let item = if id == 0 {
+                0
+            } else {
+                e.call(MAGIC_ITEM_FROM_FORM, &args![id]).u32()
+            };
+            e.mem.set_u32(extra.addr() + 0x18, item);
+            let id = e.mem.u32(extra.addr() + 0x1c);
+            let target = if id == 0 {
+                0
+            } else {
+                e.call(MAGIC_TARGET_FROM_ID, &args![id]).u32()
+            };
+            e.mem.set_u32(extra.addr() + 0x1c, target);
+            resolve_word(e, extra, 0x20, RTTI_TES_OBJECT_REFR);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_MAGICTARGET) {
+        let extra = find_extra(e, this, EXTRA_MAGICTARGET);
+        if !extra.is_null() {
+            resolve_word(e, extra, 0x1c, RTTI_TES_OBJECT_REFR);
+            e.call(
+                RESOLVE_ACTIVE_EFFECT_LIST,
+                &args![buffer, extra.addr() + 0x20],
+            );
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_ITEMDROPPER) {
+        let extra = find_extra(e, this, EXTRA_ITEMDROPPER);
+        if !extra.is_null() {
+            let dropper = resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR);
+            if dropper == 0 {
+                remove_extra(e, this, EXTRA_ITEMDROPPER);
+            } else {
+                // The `PUSH reference` before `005d43c0` belongs to the
+                // second call.
+                let list = reference_extra_list(e, dropper);
+                e.call(ADD_DROPPED_ITEM_LIST_ENTRY, &args![list, reference]);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_TALKING_ACTOR) {
+        let extra = find_extra(e, this, EXTRA_TALKING_ACTOR);
+        if !extra.is_null() {
+            resolve_word(e, extra, 0x0c, RTTI_MOBILE_OBJECT);
+        }
+    }
+    if owner == 0 {
+        if buffer_allows(e, buffer, EXTRA_TELEPORT) {
+            let extra = find_extra(e, this, EXTRA_TELEPORT);
+            if !extra.is_null() {
+                let data = e.mem.u32(extra.addr() + 0x0c);
+                e.call(TELEPORT_DATA_FINISH_LOAD, &args![data, buffer]);
+            }
+        }
+        return;
+    }
+    if buffer_allows(e, buffer, EXTRA_PACKAGE) {
+        let extra = find_extra(e, this, EXTRA_PACKAGE);
+        if !extra.is_null() {
+            let package = resolve_word(e, extra, 0x0c, RTTI_TES_PACKAGE);
+            let target = resolve_word(e, extra, 0x14, RTTI_TES_OBJECT_REFR);
+            if package == 0 {
+                remove_extra(e, this, EXTRA_PACKAGE);
+            } else if e.call(PACKAGE_PROCEDURE_TYPE, &args![package]).u32() == 0xffff_ffff {
+                e.call(PACKAGE_CALCULATE_PROCEDURE_TYPE, &args![package, target]);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_FOLLOWER) {
+        let extra = find_extra(e, this, EXTRA_FOLLOWER);
+        if !extra.is_null() {
+            fix_followers(e, extra.addr());
+            if buffer_version(e, buffer) < 0x0e {
+                let player = e.global::<u32>(PLAYER_SINGLETON);
+                extra_data_list_remove_follower(e, this, player);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_PACKAGE_DATA) {
+        let extra = find_extra(e, this, EXTRA_PACKAGE_DATA);
+        if !extra.is_null() {
+            let object = e.mem.u32(extra.addr() + 0x0c);
+            if object != 0 {
+                // The result is not used.
+                e.call(GET_PACKAGE_EXTRA, &args![this]);
+                e.vcall(object, 0x14, &args![buffer]);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_MERCHANTCONTAINER) {
+        let extra = find_extra(e, this, EXTRA_MERCHANTCONTAINER);
+        if !extra.is_null() {
+            resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_TRESPASS_PACKAGE) {
+        let extra = find_extra(e, this, EXTRA_TRESPASS_PACKAGE);
+        if !extra.is_null() {
+            let object = e.mem.u32(extra.addr() + 0x0c);
+            if object != 0 {
+                e.vcall(object, 0x64, &args![buffer]);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_HEAD_TRACK_TARGET) {
+        let extra = find_extra(e, this, EXTRA_HEAD_TRACK_TARGET);
+        if !extra.is_null() {
+            resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_DISMEMBERED_LIMBS) {
+        let extra = find_extra(e, this, EXTRA_DISMEMBERED_LIMBS);
+        if !extra.is_null() {
+            let id = e.mem.u32(extra.addr() + 0x14);
+            let found = if id == 0 {
+                0
+            } else {
+                e.call(LOOKUP_FORM, &args![id]).u32()
+            };
+            e.mem.set_u32(extra.addr() + 0x14, found);
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_ASHPILE_REF) {
+        let extra = find_extra(e, this, EXTRA_ASHPILE_REF);
+        if !extra.is_null() {
+            let target = resolve_word(e, extra, 0x0c, RTTI_TES_OBJECT_REFR);
+            if target != 0 {
+                let list = reference_extra_list(e, target);
+                e.call(ASHPILE_LIST_FIX, &args![list, owner]);
+            }
+        }
+    }
+    if buffer_allows(e, buffer, EXTRA_PLAYERCRIMELIST) {
+        let extra = find_extra(e, this, EXTRA_PLAYERCRIMELIST);
+        if !extra.is_null() {
+            let mut node = e.mem.u32(extra.addr() + 0x0c);
+            while node != 0 {
+                let item = list_item(e, node);
+                if item != 0 {
+                    e.call(PLAYER_CRIME_ITEM_FIX, &args![item, owner]);
+                }
+                node = list_next(e, node);
+            }
+        }
+    }
+}
+
+/// The followers of the type `0x1D` extra data (the list its +0x0C points at)
+/// become the actors they name: each item is looked up and cast to `Actor`
+/// and written back to the node (`00726c60`); a node whose item is null or no
+/// actor is removed (after the previous node, `00905330`, or, at the head,
+/// `0063f7b0`).
+fn fix_followers(e: &mut Engine, extra: u32) {
+    let mut node = e.mem.u32(extra + 0x0c);
+    let mut previous = 0u32;
+    while node != 0 && !e.call(LIST_IS_EMPTY, &args![node]).bool() {
+        let id = list_item(e, node);
+        let actor = form_or_null(e, id, RTTI_ACTOR);
+        if actor != 0 {
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), actor);
+                e.call(LIST_SET_ITEM, &args![node, slot]);
+            });
+            previous = node;
+            node = list_next(e, node);
+        } else if previous == 0 {
+            e.call(LIST_REMOVE_HEAD, &args![node]);
+        } else {
+            let slot = e.call(SIMPLE_LIST_ITEM, &args![node]).u32();
+            e.call(LIST_REMOVE_ITEM, &args![previous, slot]);
+            node = list_next(e, previous);
+        }
+    }
+}
+
+// Translated from 0042d9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList::FinishLoadGame` (Xbox PDB), `buffer` the load buffer: the
+/// buffer is asked for its reference (virtual `+8`). When the buffer's save
+/// kind is in the mask of the type `0x75` extra data, the list has it and
+/// there is a reference: if the reference's virtual `+0xFC` says no, the byte
+/// at +0x18 of the extra data is set to 1; otherwise `00936a20` is called with
+/// the reference's word at +0x0C (`0084e3a0`) and 1 when the extra data's
+/// words at +0x10 and +0x0C are both non-zero, else 0. Then, with a reference,
+/// when the buffer's kind is in the mask of the type `0x33` extra data and the
+/// list has it, its active effect list at +0x20 is finished
+/// (`ActiveEffect::FinishLoadActiveEffectList`, `00806b50`).
+pub fn extra_data_list_finish_load_game(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32) {
+    let reference = e.vcall(buffer, 8, &args![]).u32();
+    if buffer_allows(e, buffer, EXTRA_SAY_TO_TOPIC_INFO) {
+        let extra = find_extra(e, this, EXTRA_SAY_TO_TOPIC_INFO);
+        if !extra.is_null() && reference != 0 {
+            if !e.vcall(reference, 0xfc, &args![]).bool() {
+                e.mem.set_u8(extra.addr() + 0x18, 1);
+            } else {
+                // The word pushed before `0084e3a0` is not read by it.
+                let handle = e.call(FORM_WORD_0C, &args![reference]).u32();
+                let both =
+                    e.mem.u32(extra.addr() + 0x10) != 0 && e.mem.u32(extra.addr() + 0x0c) != 0;
+                e.call(MOBILE_OBJECT_SAY_TO_CALL_BACK, &args![handle, both as u32]);
+            }
+        }
+    }
+    if reference != 0 && buffer_allows(e, buffer, EXTRA_MAGICTARGET) {
+        let extra = find_extra(e, this, EXTRA_MAGICTARGET);
+        if !extra.is_null() {
+            e.call(
+                FINISH_LOAD_ACTIVE_EFFECT_LIST,
+                &args![buffer, extra.addr() + 0x20],
+            );
+        }
+    }
+}
+
+// Translated from 0042dae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The clean-up of a list when the buffer `buffer` has been loaded (called by
+/// `005629a0`). The buffer is asked for its reference (virtual `+8`). With a
+/// reference: the buffer's owner is asked (virtual `+0x0C`, not used); a model
+/// swap on the list (`0042e250`) is undone by the reference's virtual
+/// `+0x1CC` (0, 1); the type `0x56` extra data sets the self damage of the
+/// reference to 0 (`00477ce0`); the dropper of an item dropper (`0041de00`)
+/// has this reference removed from its dropped item list (`0041e0d0`); the
+/// map marker (`00418490`) is passed to `0042dd70`; when the buffer's word at
+/// +0x2C has bit `0x4000000` the activate children timer is reset
+/// (`0041eff0`, 0.0); the script locals (`00418830`) are finished
+/// (`005aa090`). Then every extra data type of the table at `01183d30` whose
+/// mask has a bit of the buffer's word at +0x2C is removed from the list,
+/// except the types `0x0D`, `0x2C`, `0x2E`, `0x49`, `0x54`, `0x5F`, `0x90` and
+/// `0x91` (the arms of the compiler's switch) and those whose mask has bit
+/// `0x40000000` when the reference is no file form (`00469860` on its word at
+/// +0x0C; false without a reference).
+pub fn fn_0042dae0(e: &mut Engine, this: Ptr<ExtraDataList>, buffer: u32) {
+    let reference = e.vcall(buffer, 8, &args![]).u32();
+    if reference != 0 {
+        e.vcall(buffer, 0x0c, &args![]);
+        if e.call(GET_MODEL_SWAP, &args![this]).u32() != 0 {
+            e.vcall(reference, 0x1cc, &args![0u32, 1u32]);
+        }
+        if !find_extra(e, this, EXTRA_OBJECT_HEALTH).is_null() {
+            e.call(SET_SELF_DAMAGE, &args![reference, 0u32]);
+        }
+        let dropper = e.call(GET_ITEM_DROPPER, &args![this]).u32();
+        if dropper != 0 {
+            // The `PUSH reference` before `005d43c0` belongs to
+            // `RemoveDroppedItem`.
+            let list = reference_extra_list(e, dropper);
+            e.call(REMOVE_DROPPED_ITEM, &args![list, reference]);
+        }
+        let marker = e.call(GET_MAP_MARKER, &args![this]).u32();
+        if marker != 0 {
+            fn_0042dd70(e, Ptr::new(marker));
+        }
+        let timer_flag = e.with_stack(4, |e, out| {
+            let word = fn_0042ce30(e, Ptr::new(buffer), out);
+            fn_004280f0(e, word, 0x0400_0000)
+        });
+        if timer_flag {
+            e.call(SET_ACTIVATE_CHILDREN_TIMER, &args![this, 0u32]);
+        }
+        let locals = e.call(GET_SCRIPT_LOCALS, &args![this]).u32();
+        if locals != 0 {
+            e.call(SCRIPT_LOCALS_FINISH_LOAD, &args![locals, buffer]);
+        }
+    }
+    let is_file_form = if reference == 0 {
+        false
+    } else {
+        let handle = e.call(FORM_WORD_0C, &args![reference]).u32();
+        let tester = e.global::<u32>(FILE_FORM_TESTER);
+        e.call(FORM_ID_IS_FILE_FORM, &args![tester, handle]).u8() != 0
+    };
+    for extra_type in 0..0x93u32 {
+        let mask = e.mem.u32(SAVE_KIND_TABLE + extra_type * 4);
+        let mut remove = false;
+        if mask != 0 {
+            remove = e.with_stack(4, |e, out| {
+                let word = fn_0042ce30(e, Ptr::new(buffer), out);
+                fn_004280f0(e, word, mask)
+            });
+        }
+        if !is_file_form && remove && mask & 0x4000_0000 != 0 {
+            remove = false;
+        }
+        if remove
+            && matches!(
+                extra_type,
+                0x0d | 0x2c | 0x2e | 0x49 | 0x54 | 0x5f | 0x90 | 0x91
+            )
+        {
+            remove = false;
+        }
+        if remove {
+            remove_extra(e, this, extra_type as u8);
+        }
+    }
+}
+
+// Translated from 0042dd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the byte at +0x0D of the object it is called on to +0x0C.
+pub fn fn_0042dd70(e: &mut Engine, this: Ptr) {
+    let value = e.mem.u8(this.addr() + 0x0d);
+    e.mem.set_u8(this.addr() + 0x0c, value);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4186,6 +5073,64 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00428150,
             extra_data_list_load_game_ov2(Ptr<ExtraDataList>, u32)
         ),
+        entry!(0x0042c700, fn_0042c700(Ptr) -> Ptr),
+        entry!(0x0042c730, fn_0042c730(Ptr) -> Ptr),
+        entry!(0x0042c760, fn_0042c760(Ptr) -> Ptr),
+        entry!(
+            0x0042c7a0,
+            extra_script_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042c7d0, fn_0042c7d0(Ptr) -> Ptr),
+        entry!(0x0042c800, fn_0042c800(Ptr) -> Ptr),
+        entry!(0x0042c830, fn_0042c830(Ptr) -> Ptr),
+        entry!(0x0042c860, fn_0042c860(Ptr) -> Ptr),
+        entry!(
+            0x0042c890,
+            extra_tres_pass_package_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042c8c0, fn_0042c8c0(Ptr) -> Ptr),
+        entry!(0x0042c900, fn_0042c900(Ptr) -> Ptr),
+        entry!(0x0042c930, fn_0042c930(Ptr) -> Ptr),
+        entry!(
+            0x0042c960,
+            extra_heading_target_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042c990, fn_0042c990(Ptr) -> Ptr),
+        entry!(0x0042c9c0, fn_0042c9c0(Ptr) -> Ptr),
+        entry!(0x0042c9f0, fn_0042c9f0(Ptr) -> Ptr),
+        entry!(0x0042ca30, fn_0042ca30(Ptr) -> Ptr),
+        entry!(0x0042ca60, fn_0042ca60(Ptr) -> Ptr),
+        entry!(0x0042ca90, fn_0042ca90(Ptr) -> Ptr),
+        entry!(
+            0x0042cb00,
+            extra_actor_cause_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042cb30, fn_0042cb30(Ptr)),
+        entry!(0x0042cba0, fn_0042cba0(Ptr) -> Ptr),
+        entry!(0x0042cbe0, fn_0042cbe0(Ptr) -> Ptr),
+        entry!(0x0042cc10, fn_0042cc10(Ptr) -> Ptr),
+        entry!(0x0042cc40, fn_0042cc40(Ptr) -> Ptr),
+        entry!(0x0042cc70, fn_0042cc70(Ptr, u32) -> Ptr),
+        entry!(0x0042cca0, fn_0042cca0(Ptr)),
+        entry!(0x0042ccc0, fn_0042ccc0(Ptr) -> Ptr),
+        entry!(
+            0x0042cd40,
+            extra_securitron_face_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042cd70, fn_0042cd70(Ptr)),
+        entry!(0x0042cde0, fn_0042cde0(Ptr) -> bool),
+        entry!(0x0042ce00, fn_0042ce00() -> u32),
+        entry!(0x0042ce10, fn_0042ce10(Ptr) -> bool),
+        entry!(0x0042ce30, fn_0042ce30(Ptr, Ptr) -> Ptr),
+        entry!(0x0042ce50, fn_0042ce50(Ptr, u8)),
+        entry!(0x0042ce90, fn_0042ce90(Ptr) -> bool),
+        entry!(0x0042ceb0, fn_0042ceb0(Ptr<ExtraDataList>, u32, u32)),
+        entry!(
+            0x0042d9e0,
+            extra_data_list_finish_load_game(Ptr<ExtraDataList>, u32)
+        ),
+        entry!(0x0042dae0, fn_0042dae0(Ptr<ExtraDataList>, u32)),
+        entry!(0x0042dd70, fn_0042dd70(Ptr)),
     ]
 }
 
@@ -7964,5 +8909,806 @@ mod tests {
             vec![vec![buffer, 0], vec![buffer, 3]]
         );
         assert_eq!(e.mem.u32(buffer + 0x17), 0x0800_0022);
+    }
+
+    // ---- the constructors, destructors and fix-ups from 0042c700 ----
+
+    fn sorted_types(e: &Engine, list: Ptr<ExtraDataList>) -> Vec<u8> {
+        let mut types = chain_types(e, list);
+        types.sort();
+        types
+    }
+
+    #[test]
+    fn extra_data_constructors_of_the_ninth_block() {
+        // (constructor, type, vtable, the members it zeroes: offset, size)
+        type Case = (u32, u8, u32, &'static [(u32, u32)]);
+        let cases: &[Case] = &[
+            (0x0042_c700, 0x27, 0x0101_58fc, &[(0x0c, 4)]),
+            (0x0042_c730, 0x28, 0x0101_5908, &[(0x0c, 4)]),
+            (0x0042_c760, 0x0d, 0x0101_5914, &[(0x0c, 4), (0x10, 4)]),
+            (0x0042_c7d0, 0x30, 0x0101_5920, &[(0x0c, 4)]),
+            (0x0042_c800, 0x4a, 0x0101_592c, &[(0x0c, 1)]),
+            (0x0042_c830, 0x1c, 0x0101_5938, &[(0x0c, 4)]),
+            (0x0042_c860, 0x1a, 0x0101_5944, &[(0x0c, 4)]),
+            (0x0042_c8c0, 0x2f, 0x0101_5950, &[(0x0c, 4), (0x10, 1)]),
+            (0x0042_c900, 0x3f, 0x0101_595c, &[(0x0c, 4)]),
+            (0x0042_c930, 0x46, 0x0101_5968, &[(0x0c, 4)]),
+            (0x0042_c990, 0x4e, 0x0101_5974, &[(0x0c, 1)]),
+            (0x0042_c9c0, 0x56, 0x0101_5184, &[(0x0c, 4)]),
+            (0x0042_c9f0, 0x5b, 0x0101_5980, &[(0x0c, 4), (0x10, 4)]),
+            (0x0042_ca30, 0x5c, 0x0101_5208, &[(0x0c, 4)]),
+            (0x0042_ca60, 0x5d, 0x0101_5214, &[(0x0c, 4)]),
+            (0x0042_cba0, 0x6e, 0x0101_5998, &[(0x0c, 4), (0x10, 4)]),
+            (0x0042_cbe0, 0x70, 0x0101_51fc, &[(0x0c, 4)]),
+            (0x0042_cc40, 0x8d, 0x0101_59a4, &[(0x0c, 1)]),
+        ];
+        for &(address, extra_type, vtable, members) in cases {
+            let mut e = engine();
+            let object = e.mem.alloc(0x20);
+            for offset in 0..0x20 {
+                e.mem.set_u8(object + offset, 0xff);
+            }
+            assert_eq!(e.call(address, &args![object]).u32(), object);
+            assert_eq!(e.mem.u32(object), vtable, "{address:#x}");
+            assert_eq!(e.mem.u8(object + 4), extra_type, "{address:#x}");
+            assert_eq!(e.mem.u32(object + 8), 0, "{address:#x}");
+            for offset in 0x0c..0x20 {
+                let inside = members
+                    .iter()
+                    .any(|&(start, size)| offset >= start && offset < start + size);
+                let expected = if inside { 0 } else { 0xff };
+                assert_eq!(
+                    e.mem.u8(object + offset),
+                    expected,
+                    "{address:#x} +{offset:#x}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_call_theirs_and_free_on_request() {
+        for (address, destroy) in [
+            (0x0042_c7a0u32, EXTRA_SCRIPT_DESTROY),
+            (0x0042_c890, EXTRA_TRESPASS_PACKAGE_DESTROY),
+            (0x0042_c960, EXTRA_HEADING_TARGET_DESTROY),
+        ] {
+            let mut e = engine();
+            stub(&mut e, destroy);
+            let object = e.mem.alloc(0x10);
+            let log = logged(&mut e, |e| {
+                assert_eq!(e.call(address, &args![object, 0u32]).u32(), object);
+            });
+            assert_eq!(calls_to(&log, destroy), vec![vec![object]]);
+            assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+            let log = logged(&mut e, |e| {
+                e.call(address, &args![object, 1u32]);
+            });
+            assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![object]]);
+        }
+    }
+
+    #[test]
+    fn actor_cause_constructor_builds_its_member() {
+        let mut e = engine();
+        stub(&mut e, ACTOR_CAUSE_MEMBER_INIT);
+        let object = e.mem.alloc(0x20);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042_ca90, &args![object]).u32(), object);
+        });
+        assert_eq!(e.mem.u32(object), VTABLE_EXTRA_ACTOR_CAUSE);
+        assert_eq!(e.mem.u8(object + 4), EXTRA_ACTOR_CAUSE);
+        assert_eq!(
+            calls_to(&log, ACTOR_CAUSE_MEMBER_INIT),
+            vec![vec![object + 0x0c, 0]]
+        );
+    }
+
+    #[test]
+    fn actor_cause_destructor_assigns_releases_and_runs_the_base() {
+        let mut e = engine();
+        stub(&mut e, ASSIGN_HANDLE_AT);
+        stub(&mut e, ACTOR_CAUSE_MEMBER_RELEASE);
+        stub(&mut e, BS_EXTRA_DATA_DESTROY);
+        let object = e.mem.alloc(0x20);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042_cb00, &args![object, 1u32]).u32(), object);
+        });
+        assert_eq!(e.mem.u32(object), VTABLE_EXTRA_ACTOR_CAUSE);
+        let order: Vec<u32> = log.iter().map(|call| call.0).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x0042_cb00,
+                ASSIGN_HANDLE_AT,
+                ACTOR_CAUSE_MEMBER_RELEASE,
+                BS_EXTRA_DATA_DESTROY,
+                OPERATOR_DELETE
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, ASSIGN_HANDLE_AT),
+            vec![vec![object + 0x0c, 0]]
+        );
+        assert_eq!(
+            calls_to(&log, ACTOR_CAUSE_MEMBER_RELEASE),
+            vec![vec![object + 0x0c]]
+        );
+        // Called on its own, the destructor frees nothing.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_cb30, &args![object]);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn weapon_mod_slots_destructors() {
+        let mut e = engine();
+        stub(&mut e, BS_EXTRA_DATA_DESTROY);
+        let object = e.mem.alloc(0x20);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_cca0, &args![object]);
+        });
+        assert_eq!(e.mem.u32(object), VTABLE_EXTRA_WEAPON_MOD_SLOTS);
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_DESTROY), vec![vec![object]]);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042_cc70, &args![object, 1u32]).u32(), object);
+        });
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_DESTROY), vec![vec![object]]);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![object]]);
+    }
+
+    #[test]
+    fn securitron_face_constructor_and_destructors() {
+        let mut e = engine();
+        stub(&mut e, STRING_MEMBER_INIT);
+        stub(&mut e, STRING_MEMBER_DESTROY);
+        stub(&mut e, BS_EXTRA_DATA_DESTROY);
+        let object = e.mem.alloc(0x20);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042_ccc0, &args![object]).u32(), object);
+        });
+        assert_eq!(e.mem.u32(object), VTABLE_EXTRA_SECURITRON_FACE);
+        assert_eq!(e.mem.u8(object + 4), EXTRA_SECURITRON_FACE);
+        assert_eq!(
+            calls_to(&log, STRING_MEMBER_INIT),
+            vec![vec![object + 0x0c], vec![object + 0x14]]
+        );
+        e.mem.set_u32(object, 0);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042_cd40, &args![object, 1u32]).u32(), object);
+        });
+        assert_eq!(e.mem.u32(object), VTABLE_EXTRA_SECURITRON_FACE);
+        // The second string goes first, then the base, then the memory.
+        let order: Vec<(u32, Vec<u32>)> = log.into_iter().skip(1).collect();
+        assert_eq!(
+            order,
+            vec![
+                (STRING_MEMBER_DESTROY, vec![object + 0x14]),
+                (STRING_MEMBER_DESTROY, vec![object + 0x0c]),
+                (BS_EXTRA_DATA_DESTROY, vec![object]),
+                (OPERATOR_DELETE, vec![object]),
+            ]
+        );
+    }
+
+    #[test]
+    fn record_constructor_copies_the_float_through_the_x87_stack() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x10);
+        e.mem.set_u32(FLOAT_COPIED_BY_RECORD_INIT, 0xbf80_0000);
+        assert_eq!(e.call(0x0042_cc10, &args![object]).u32(), object);
+        assert_eq!(e.mem.u32(object), 0);
+        assert_eq!(e.mem.u32(object + 4), 0xffff_ffff);
+        assert_eq!(e.mem.u32(object + 8), 0xbf80_0000);
+        // A signalling NaN comes out quiet.
+        e.mem.set_u32(FLOAT_COPIED_BY_RECORD_INIT, 0x7fa0_0001);
+        e.call(0x0042_cc10, &args![object]);
+        assert_eq!(e.mem.u32(object + 8), 0x7fe0_0001);
+    }
+
+    #[test]
+    fn small_accessors_of_the_buffer_and_the_list_node() {
+        let mut e = engine();
+        // 0042cde0: IsEmpty of the node the word points at.
+        e.register(LIST_IS_EMPTY, |_, a| returns((a[0] == 0x1111) as u32));
+        let holder = e.mem.alloc(8);
+        e.mem.set_u32(holder, 0x1111);
+        assert!(e.call(0x0042_cde0, &args![holder]).bool());
+        e.mem.set_u32(holder, 0x2222);
+        assert!(!e.call(0x0042_cde0, &args![holder]).bool());
+        // 0042ce00
+        e.map(0x011c_6000, 0x1000);
+        e.mem.set_u32(WORD_GIVEN_BY_GETTER, 0xcafe);
+        assert_eq!(e.call(0x0042_ce00, &args![]).u32(), 0xcafe);
+        // 0042ce10, 0042ce30, 0042ce50, 0042ce90, 0042dd70
+        let object = e.mem.alloc(0x300);
+        assert!(!e.call(0x0042_ce10, &args![object]).bool());
+        e.mem.set_u32(object + 0x244, 0b101);
+        assert!(!e.call(0x0042_ce10, &args![object]).bool());
+        e.mem.set_u32(object + 0x244, 0b110);
+        assert!(e.call(0x0042_ce10, &args![object]).bool());
+        let out = e.mem.alloc(8);
+        e.mem.set_u32(object + 0x2c, 0x1234_5678);
+        assert_eq!(e.call(0x0042_ce30, &args![object, out]).u32(), out);
+        assert_eq!(e.mem.u32(out), 0x1234_5678);
+        e.mem.set_u32(object + 0x28, 0xf0);
+        assert!(!e.call(0x0042_ce90, &args![object]).bool());
+        e.call(0x0042_ce50, &args![object, 1u32]);
+        assert_eq!(e.mem.u32(object + 0x28), 0xf8);
+        assert!(e.call(0x0042_ce90, &args![object]).bool());
+        e.call(0x0042_ce50, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object + 0x28), 0xf0);
+        e.mem.set_u8(object + 0x0c, 1);
+        e.mem.set_u8(object + 0x0d, 9);
+        e.call(0x0042_dd70, &args![object]);
+        assert_eq!(e.mem.u8(object + 0x0c), 9);
+    }
+
+    // The buffer double of the fix-ups: virtual 0 gives the version byte
+    // (the word at +0x38), virtual 8 the reference (+0x30), virtual 0xC the
+    // owner (+0x34); the save kind (+0x17) is 2 and the buffer's flags word
+    // (+0x2C) is 4.
+    const BUFFER_VERSION: u32 = 0x0200_6000;
+    const BUFFER_REFERENCE: u32 = 0x0200_6008;
+    const BUFFER_OWNER: u32 = 0x0200_600c;
+
+    fn fixup_engine(reference: u32, owner: u32, version: u32) -> (Engine, u32, Ptr<ExtraDataList>) {
+        let mut e = engine();
+        e.map(SAVE_KIND_TABLE, 0x300);
+        e.register(BUFFER_VERSION, |e, a| returns(e.mem.u32(a[0] + 0x38)));
+        e.register(BUFFER_REFERENCE, |e, a| returns(e.mem.u32(a[0] + 0x30)));
+        e.register(BUFFER_OWNER, |e, a| returns(e.mem.u32(a[0] + 0x34)));
+        let buffer = object_with_slots(
+            &mut e,
+            &[
+                (0, BUFFER_VERSION),
+                (8, BUFFER_REFERENCE),
+                (0x0c, BUFFER_OWNER),
+            ],
+        );
+        e.mem.set_u32(buffer + 0x17, 2);
+        e.mem.set_u32(buffer + 0x2c, 4);
+        e.mem.set_u32(buffer + 0x30, reference);
+        e.mem.set_u32(buffer + 0x34, owner);
+        e.mem.set_u32(buffer + 0x38, version);
+        // Ids below 0x8000 name forms; the form of an id is the id itself and
+        // the casts give it back, except that an `Actor` cast fails from
+        // 0x4000.
+        e.register(LOOKUP_FORM, |_, a| {
+            returns(if a[0] < 0x8000 { a[0] } else { 0 })
+        });
+        e.register(RT_DYNAMIC_CAST, |_, a| {
+            returns(if a[3] == RTTI_ACTOR && a[0] >= 0x4000 {
+                0
+            } else {
+                a[0]
+            })
+        });
+        e.register(REFERENCE_EXTRA_LIST, |_, a| returns(a[0] + 0x44));
+        let list = new_list(&mut e);
+        (e, buffer, list)
+    }
+
+    fn allow(e: &mut Engine, extra_type: u8, mask: u32) {
+        e.mem.set_u32(SAVE_KIND_TABLE + extra_type as u32 * 4, mask);
+    }
+
+    /// The extra data of `extra_type` of the list, with the word at +0x0C.
+    fn extra_with_words(
+        e: &mut Engine,
+        list: Ptr<ExtraDataList>,
+        extra_type: u8,
+        words: &[(u32, u32)],
+    ) -> Ptr<BSExtraData> {
+        let extra = add(e, list, extra_type, 0);
+        for &(offset, word) in words {
+            e.mem.set_u32(extra.addr() + offset, word);
+        }
+        extra
+    }
+
+    /// A chain of list nodes `(item, next)` holding `items`; gives the nodes.
+    fn node_chain(e: &mut Engine, items: &[u32]) -> Vec<u32> {
+        let nodes: Vec<u32> = items.iter().map(|_| e.mem.alloc(8)).collect();
+        for (index, &item) in items.iter().enumerate() {
+            e.mem.set_u32(nodes[index], item);
+            let next = nodes.get(index + 1).copied().unwrap_or(0);
+            e.mem.set_u32(nodes[index] + 4, next);
+        }
+        nodes
+    }
+
+    #[test]
+    fn finish_load_game_marks_or_calls_back_the_say_to_topic_extra_data() {
+        for (answer, words, expected_call) in [
+            (1u32, (0x10u32, 0x20u32), Some(1u32)),
+            (1, (0x10, 0), Some(0)),
+            (1, (0, 0x20), Some(0)),
+            (0, (0x10, 0x20), None),
+        ] {
+            let reference = 0x5000;
+            let (mut e, buffer, list) = fixup_engine(reference, 0, 0);
+            allow(&mut e, 0x75, 2);
+            let object = object_with_slots(&mut e, &[(0xfc, 0x0200_7000)]);
+            e.mem.set_u32(buffer + 0x30, object);
+            e.register_double(0x0200_7000, move |_, _| returns(answer));
+            e.register(FORM_WORD_0C, |_, _| returns(0xabc));
+            stub(&mut e, MOBILE_OBJECT_SAY_TO_CALL_BACK);
+            let extra = extra_with_words(&mut e, list, 0x75, &[(0x0c, words.1), (0x10, words.0)]);
+            let log = logged(&mut e, |e| {
+                e.call(0x0042_d9e0, &args![list, buffer]);
+            });
+            match expected_call {
+                Some(flag) => {
+                    assert_eq!(
+                        calls_to(&log, MOBILE_OBJECT_SAY_TO_CALL_BACK),
+                        vec![vec![0xabc, flag]]
+                    );
+                    assert_eq!(e.mem.u8(extra.addr() + 0x18), 0);
+                }
+                None => {
+                    assert!(calls_to(&log, MOBILE_OBJECT_SAY_TO_CALL_BACK).is_empty());
+                    assert_eq!(e.mem.u8(extra.addr() + 0x18), 1);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn finish_load_game_needs_a_reference_and_a_matching_save_kind() {
+        // Without a reference nothing happens, even with the extra data.
+        let (mut e, buffer, list) = fixup_engine(0, 0, 0);
+        allow(&mut e, 0x75, 2);
+        allow(&mut e, 0x33, 2);
+        stub(&mut e, MOBILE_OBJECT_SAY_TO_CALL_BACK);
+        stub(&mut e, FINISH_LOAD_ACTIVE_EFFECT_LIST);
+        extra_with_words(&mut e, list, 0x75, &[(0x0c, 1), (0x10, 1)]);
+        extra_with_words(&mut e, list, 0x33, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_d9e0, &args![list, buffer]);
+        });
+        assert!(calls_to(&log, MOBILE_OBJECT_SAY_TO_CALL_BACK).is_empty());
+        assert!(calls_to(&log, FINISH_LOAD_ACTIVE_EFFECT_LIST).is_empty());
+        // With a reference, the active effect list of the type 0x33 extra
+        // data is finished; a save kind outside its mask stops it.
+        let object = object_with_slots(&mut e, &[(0xfc, 0x0200_7000)]);
+        e.register(0x0200_7000, |_, _| returns(1));
+        e.register(FORM_WORD_0C, |_, _| returns(0xabc));
+        e.mem.set_u32(buffer + 0x30, object);
+        let extra = find_extra(&mut e, list, 0x33);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_d9e0, &args![list, buffer]);
+        });
+        assert_eq!(
+            calls_to(&log, FINISH_LOAD_ACTIVE_EFFECT_LIST),
+            vec![vec![buffer, extra.addr() + 0x20]]
+        );
+        allow(&mut e, 0x33, 1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_d9e0, &args![list, buffer]);
+        });
+        assert!(calls_to(&log, FINISH_LOAD_ACTIVE_EFFECT_LIST).is_empty());
+    }
+
+    #[test]
+    fn clean_up_runs_the_reference_steps_and_removes_the_masked_types() {
+        let reference_slots = [(0xfc, 0x0200_7000), (0x1cc, 0x0200_7004)];
+        let (mut e, buffer, list) = fixup_engine(0, 0, 0);
+        let reference = object_with_slots(&mut e, &reference_slots);
+        e.mem.set_u32(buffer + 0x30, reference);
+        e.mem.set_u32(buffer + 0x2c, 0x0400_0004);
+        stub(&mut e, 0x0200_7004);
+        e.register(GET_MODEL_SWAP, |_, _| returns(1));
+        stub(&mut e, SET_SELF_DAMAGE);
+        e.register(GET_ITEM_DROPPER, |_, _| returns(0x6000));
+        stub(&mut e, REMOVE_DROPPED_ITEM);
+        let marker = e.mem.alloc(0x10);
+        e.mem.set_u8(marker + 0x0d, 5);
+        e.register_double(GET_MAP_MARKER, move |_, _| returns(marker));
+        stub(&mut e, SET_ACTIVATE_CHILDREN_TIMER);
+        e.register(GET_SCRIPT_LOCALS, |_, _| returns(0x7000));
+        stub(&mut e, SCRIPT_LOCALS_FINISH_LOAD);
+        e.register(FORM_WORD_0C, |_, _| returns(0x0abc));
+        e.register(FORM_ID_IS_FILE_FORM, |_, a| {
+            returns((a[1] < 0xff00_0000) as u32)
+        });
+        e.mem.set_u32(buffer + 0x38, 0);
+        // The 0x56 extra data is there, so the self damage is reset; the
+        // types: 0x05 (buffer kind in its mask), 0x0D (kept by the switch),
+        // 0x10 (file forms only), 0x20 (mask outside the buffer's flags).
+        extra_with_words(&mut e, list, 0x56, &[]);
+        for (extra_type, mask) in [
+            (0x05u8, 0x0400_0000u32),
+            (0x0d, 0x0400_0000),
+            (0x10, 0x4400_0000),
+            (0x20, 0x0000_0001),
+        ] {
+            allow(&mut e, extra_type, mask);
+            extra_with_words(&mut e, list, extra_type, &[]);
+        }
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_dae0, &args![list, buffer]);
+        });
+        assert_eq!(calls_to(&log, 0x0200_7004), vec![vec![reference, 0, 1]]);
+        assert_eq!(calls_to(&log, SET_SELF_DAMAGE), vec![vec![reference, 0]]);
+        assert_eq!(
+            calls_to(&log, REMOVE_DROPPED_ITEM),
+            vec![vec![0x6044, reference]]
+        );
+        assert_eq!(e.mem.u8(marker + 0x0c), 5);
+        assert_eq!(
+            calls_to(&log, SET_ACTIVATE_CHILDREN_TIMER),
+            vec![vec![list.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&log, SCRIPT_LOCALS_FINISH_LOAD),
+            vec![vec![0x7000, buffer]]
+        );
+        // A file form: the type 0x10 extra data goes too; the 0x0D one stays.
+        let mut types = sorted_types(&e, list);
+        types.sort();
+        assert_eq!(types, vec![0x0d, 0x20, 0x56]);
+    }
+
+    #[test]
+    fn clean_up_keeps_the_file_form_only_types_of_a_runtime_reference() {
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0, 0);
+        let reference = object_with_slots(&mut e, &[(0xfc, 0x0200_7000)]);
+        e.mem.set_u32(buffer + 0x30, reference);
+        e.mem.set_u32(buffer + 0x2c, 0x0400_0004);
+        e.register(GET_MODEL_SWAP, |_, _| returns(0));
+        e.register(GET_ITEM_DROPPER, |_, _| returns(0));
+        e.register(GET_MAP_MARKER, |_, _| returns(0));
+        e.register(GET_SCRIPT_LOCALS, |_, _| returns(0));
+        stub(&mut e, SET_ACTIVATE_CHILDREN_TIMER);
+        // The word of a runtime reference is 0xFF000010: not a file form.
+        e.register(FORM_WORD_0C, |_, _| returns(0xff00_0010));
+        e.register(FORM_ID_IS_FILE_FORM, |_, a| {
+            returns((a[1] < 0xff00_0000) as u32)
+        });
+        allow(&mut e, 0x10, 0x4400_0000);
+        allow(&mut e, 0x11, 0x0000_0004);
+        extra_with_words(&mut e, list, 0x10, &[]);
+        extra_with_words(&mut e, list, 0x11, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_dae0, &args![list, buffer]);
+        });
+        assert_eq!(sorted_types(&e, list), vec![0x10]);
+        assert_eq!(
+            calls_to(&log, SET_ACTIVATE_CHILDREN_TIMER),
+            vec![vec![list.addr(), 0]]
+        );
+        // Without a reference only the removal loop runs.
+        let (mut e, buffer, list) = fixup_engine(0, 0, 0);
+        e.mem.set_u32(buffer + 0x2c, 4);
+        allow(&mut e, 0x10, 0x4000_0004);
+        allow(&mut e, 0x11, 0x0000_0004);
+        extra_with_words(&mut e, list, 0x10, &[]);
+        extra_with_words(&mut e, list, 0x11, &[]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_dae0, &args![list, buffer]);
+        });
+        assert_eq!(sorted_types(&e, list), vec![0x10]);
+        assert!(calls_to(&log, GET_MODEL_SWAP).is_empty());
+    }
+
+    #[test]
+    fn fix_up_resolves_the_reference_pointer_and_checks_the_script() {
+        let (mut e, buffer, list) = fixup_engine(0, 0, 0);
+        allow(&mut e, 0x1c, 2);
+        allow(&mut e, 0x0d, 2);
+        let pointer = extra_with_words(&mut e, list, 0x1c, &[(0x0c, 0x1234)]);
+        // The script's list is the next node of the scriptable form's.
+        let scriptable = e.mem.alloc(0x10);
+        e.mem.set_u32(scriptable + 4, 0x4444);
+        let script = extra_with_words(&mut e, list, 0x0d, &[(0x0c, 0x4444)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, scriptable]);
+        });
+        assert_eq!(e.mem.u32(pointer.addr() + 0x0c), 0x1234);
+        assert_eq!(
+            calls_to(&log, RT_DYNAMIC_CAST),
+            vec![
+                vec![0x1234, 0, RTTI_TES_FORM, RTTI_TES_OBJECT_REFR, 0],
+                vec![scriptable, 0, RTTI_TES_FORM, RTTI_TES_SCRIPTABLE_FORM, 0]
+            ]
+        );
+        assert_eq!(sorted_types(&e, list), vec![0x0d, 0x1c]);
+        // Another list in the script extra data removes it.
+        e.mem.set_u32(script.addr() + 0x0c, 0x5555);
+        e.call(0x0042_ceb0, &args![list, buffer, scriptable]);
+        assert_eq!(sorted_types(&e, list), vec![0x1c]);
+        // An id that names no form leaves null; no id looks nothing up.
+        e.mem.set_u32(pointer.addr() + 0x0c, 0x9000);
+        e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        assert_eq!(e.mem.u32(pointer.addr() + 0x0c), 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        assert!(calls_to(&log, LOOKUP_FORM).is_empty());
+    }
+
+    #[test]
+    fn fix_up_takes_the_script_list_of_the_owners_base_form() {
+        let owner = 0x6000;
+        let (mut e, buffer, list) = fixup_engine(0, owner, 0);
+        allow(&mut e, 0x0d, 2);
+        let base = e.mem.alloc(0x200);
+        e.mem.set_u32(base + 0xf4 + 4, 0x4444);
+        e.register_double(REFERENCE_BASE_FORM, move |_, _| returns(base));
+        extra_with_words(&mut e, list, 0x0d, &[(0x0c, 0x4444)]);
+        e.call(0x0042_ceb0, &args![list, buffer, 0x7000u32]);
+        assert_eq!(sorted_types(&e, list), vec![0x0d]);
+        e.mem.set_u32(base + 0xf4 + 4, 0x4445);
+        e.call(0x0042_ceb0, &args![list, buffer, 0x7000u32]);
+        assert!(sorted_types(&e, list).is_empty());
+        // No base form: removed too.
+        let (mut e, buffer, list) = fixup_engine(0, owner, 0);
+        allow(&mut e, 0x0d, 2);
+        e.register(REFERENCE_BASE_FORM, |_, _| returns(0));
+        extra_with_words(&mut e, list, 0x0d, &[(0x0c, 0x4444)]);
+        e.call(0x0042_ceb0, &args![list, buffer, 0x7000u32]);
+        assert!(sorted_types(&e, list).is_empty());
+    }
+
+    #[test]
+    fn fix_up_with_a_reference_and_no_owner() {
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0, 0);
+        for extra_type in [0x6c, 0x32, 0x33, 0x39, 0x55, 0x2b] {
+            allow(&mut e, extra_type, 2);
+        }
+        e.register(MAGIC_ITEM_FROM_FORM, |_, a| returns(a[0] + 1));
+        e.register(MAGIC_TARGET_FROM_ID, |_, a| returns(a[0] + 2));
+        stub(&mut e, RESOLVE_ACTIVE_EFFECT_LIST);
+        stub(&mut e, ADD_DROPPED_ITEM_LIST_ENTRY);
+        stub(&mut e, TELEPORT_DATA_FINISH_LOAD);
+        extra_with_words(&mut e, list, 0x6c, &[(0x0c, 0x9000)]);
+        let caster = extra_with_words(
+            &mut e,
+            list,
+            0x32,
+            &[(0x18, 0x100), (0x1c, 0x200), (0x20, 0x300)],
+        );
+        let target = extra_with_words(&mut e, list, 0x33, &[(0x1c, 0x400)]);
+        let dropper = extra_with_words(&mut e, list, 0x39, &[(0x0c, 0x500)]);
+        let talking = extra_with_words(&mut e, list, 0x55, &[(0x0c, 0x600)]);
+        extra_with_words(&mut e, list, 0x2b, &[(0x0c, 0x7700)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        assert!(!sorted_types(&e, list).contains(&0x6c));
+        assert_eq!(e.mem.u32(caster.addr() + 0x18), 0x101);
+        assert_eq!(e.mem.u32(caster.addr() + 0x1c), 0x202);
+        assert_eq!(e.mem.u32(caster.addr() + 0x20), 0x300);
+        assert_eq!(e.mem.u32(target.addr() + 0x1c), 0x400);
+        assert_eq!(
+            calls_to(&log, RESOLVE_ACTIVE_EFFECT_LIST),
+            vec![vec![buffer, target.addr() + 0x20]]
+        );
+        assert_eq!(e.mem.u32(dropper.addr() + 0x0c), 0x500);
+        assert_eq!(
+            calls_to(&log, ADD_DROPPED_ITEM_LIST_ENTRY),
+            vec![vec![0x544, 0x5000]]
+        );
+        assert_eq!(e.mem.u32(talking.addr() + 0x0c), 0x600);
+        assert!(calls_to(&log, RT_DYNAMIC_CAST)
+            .iter()
+            .any(|c| c[3] == RTTI_MOBILE_OBJECT));
+        assert_eq!(
+            calls_to(&log, TELEPORT_DATA_FINISH_LOAD),
+            vec![vec![0x7700, buffer]]
+        );
+        // A dropper that is gone removes its extra data; zero ids stay zero.
+        e.mem.set_u32(dropper.addr() + 0x0c, 0x9001);
+        e.mem.set_u32(caster.addr() + 0x18, 0);
+        e.mem.set_u32(caster.addr() + 0x1c, 0);
+        e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        assert!(!sorted_types(&e, list).contains(&0x39));
+        assert_eq!(e.mem.u32(caster.addr() + 0x18), 0);
+        assert_eq!(e.mem.u32(caster.addr() + 0x1c), 0);
+    }
+
+    #[test]
+    fn fix_up_without_a_reference_stops_after_the_script() {
+        let (mut e, buffer, list) = fixup_engine(0, 0x6000, 0);
+        allow(&mut e, 0x6c, 2);
+        allow(&mut e, 0x3c, 2);
+        extra_with_words(&mut e, list, 0x6c, &[(0x0c, 0x9000)]);
+        extra_with_words(&mut e, list, 0x3c, &[(0x0c, 0x9000)]);
+        e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        // Neither is touched.
+        assert_eq!(sorted_types(&e, list), vec![0x3c, 0x6c]);
+        assert_eq!(word_of(&mut e, list, 0x6c), 0x9000);
+    }
+
+    #[test]
+    fn fix_up_package_and_owner_arms() {
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0x6000, 0x20);
+        for extra_type in [0x19, 0x70, 0x3c, 0x1a, 0x46, 0x5f, 0x89, 0x35] {
+            allow(&mut e, extra_type, 2);
+        }
+        stub(&mut e, PACKAGE_CALCULATE_PROCEDURE_TYPE);
+        e.register(PACKAGE_PROCEDURE_TYPE, |_, _| returns(0xffff_ffff));
+        stub(&mut e, GET_PACKAGE_EXTRA);
+        stub(&mut e, ASHPILE_LIST_FIX);
+        stub(&mut e, PLAYER_CRIME_ITEM_FIX);
+        stub(&mut e, 0x0200_7010);
+        stub(&mut e, 0x0200_7014);
+        let package_object = object_with_slots(&mut e, &[(0x14, 0x0200_7010)]);
+        let trespass_object = object_with_slots(&mut e, &[(0x64, 0x0200_7014)]);
+        let package = extra_with_words(&mut e, list, 0x19, &[(0x0c, 0x100), (0x14, 0x200)]);
+        let data = extra_with_words(&mut e, list, 0x70, &[(0x0c, package_object)]);
+        let merchant = extra_with_words(&mut e, list, 0x3c, &[(0x0c, 0x300)]);
+        extra_with_words(&mut e, list, 0x1a, &[(0x0c, trespass_object)]);
+        let head = extra_with_words(&mut e, list, 0x46, &[(0x0c, 0x400)]);
+        let limbs = extra_with_words(&mut e, list, 0x5f, &[(0x14, 0x500)]);
+        let ashpile = extra_with_words(&mut e, list, 0x89, &[(0x0c, 0x600)]);
+        let crimes = extra_with_words(&mut e, list, 0x35, &[]);
+        let nodes = node_chain(&mut e, &[0x11, 0, 0x12]);
+        e.mem.set_u32(crimes.addr() + 0x0c, nodes[0]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        let _ = (data, merchant, head);
+        // The procedure type is computed with the package and the reference.
+        assert_eq!(e.mem.u32(package.addr() + 0x0c), 0x100);
+        assert_eq!(
+            calls_to(&log, PACKAGE_CALCULATE_PROCEDURE_TYPE),
+            vec![vec![0x100, 0x200]]
+        );
+        assert_eq!(calls_to(&log, GET_PACKAGE_EXTRA), vec![vec![list.addr()]]);
+        assert_eq!(
+            calls_to(&log, 0x0200_7010),
+            vec![vec![package_object, buffer]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0200_7014),
+            vec![vec![trespass_object, buffer]]
+        );
+        // The dismembered limbs' form is looked up, without a cast.
+        assert_eq!(e.mem.u32(limbs.addr() + 0x14), 0x500);
+        assert!(calls_to(&log, RT_DYNAMIC_CAST)
+            .iter()
+            .all(|cast| cast[0] != 0x500));
+        assert_eq!(calls_to(&log, ASHPILE_LIST_FIX), vec![vec![0x644, 0x6000]]);
+        assert_eq!(e.mem.u32(ashpile.addr() + 0x0c), 0x600);
+        assert_eq!(
+            calls_to(&log, PLAYER_CRIME_ITEM_FIX),
+            vec![vec![0x11, 0x6000], vec![0x12, 0x6000]]
+        );
+    }
+
+    #[test]
+    fn fix_up_package_arm_removes_a_package_that_is_gone_or_known() {
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0x6000, 0x20);
+        allow(&mut e, 0x19, 2);
+        stub(&mut e, PACKAGE_CALCULATE_PROCEDURE_TYPE);
+        e.register(PACKAGE_PROCEDURE_TYPE, |_, _| returns(5));
+        extra_with_words(&mut e, list, 0x19, &[(0x0c, 0x100), (0x14, 0x200)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        // A known procedure type is not computed again.
+        assert!(calls_to(&log, PACKAGE_CALCULATE_PROCEDURE_TYPE).is_empty());
+        assert_eq!(sorted_types(&e, list), vec![0x19]);
+        let package_extra = find_extra(&mut e, list, 0x19);
+        e.mem.set_u32(package_extra.addr() + 0x0c, 0x9000);
+        e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        assert!(sorted_types(&e, list).is_empty());
+    }
+
+    #[test]
+    fn fix_up_followers_keeps_actors_and_removes_the_others() {
+        // Followers 0x10, 0x4001 (no actor), 0x20, 0x4002 (no actor): version
+        // 0x20 does not remove the player.
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0x6000, 0x20);
+        allow(&mut e, EXTRA_FOLLOWER, 2);
+        e.register(SAVE_LOAD_UNAVAILABLE, |_, _| returns(1));
+        e.register(LIST_IS_EMPTY, |e, a| {
+            returns((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        e.register(LIST_SET_ITEM, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if item != 0 {
+                e.mem.set_u32(a[0], item);
+            }
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_ITEM, |e, a| {
+            let wanted = e.mem.u32(a[1]);
+            let head = a[0];
+            let (mut node, mut previous) = (head, head);
+            while node != 0 && e.mem.u32(node) != wanted {
+                previous = node;
+                node = e.mem.u32(node + 4);
+            }
+            if node == head {
+                let next = e.mem.u32(head + 4);
+                if next == 0 {
+                    e.mem.set_u32(head, 0);
+                } else {
+                    let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                    e.mem.set_u32(head, item);
+                    e.mem.set_u32(head + 4, after);
+                }
+            } else if node != 0 {
+                let after = e.mem.u32(node + 4);
+                e.mem.set_u32(previous + 4, after);
+            }
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let (item, after) = if next == 0 {
+                (0, 0)
+            } else {
+                (e.mem.u32(next), e.mem.u32(next + 4))
+            };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        e.register(SIMPLE_LIST_ITEM, |_, a| returns(a[0]));
+        let nodes = node_chain(&mut e, &[0x10, 0x4001, 0x20, 0x4002]);
+        extra_with_words(&mut e, list, EXTRA_FOLLOWER, &[(0x0c, nodes[0])]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        // The remaining chain is 0x10 -> 0x20.
+        let first = word_of(&mut e, list, EXTRA_FOLLOWER);
+        assert_eq!(first, nodes[0]);
+        assert_eq!(e.mem.u32(nodes[0]), 0x10);
+        let second = e.mem.u32(nodes[0] + 4);
+        assert_eq!(e.mem.u32(second), 0x20);
+        assert_eq!(e.mem.u32(second + 4), 0);
+        // The player (0x7777) is only removed below version 0x0E.
+        let removals = calls_to(&log, LIST_REMOVE_ITEM);
+        assert_eq!(removals.len(), 2);
+        // An older save removes the player too.
+        e.mem.set_u32(buffer + 0x38, 0x0d);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        let removals = calls_to(&log, LIST_REMOVE_ITEM);
+        assert_eq!(removals.len(), 1);
+        assert_eq!(removals[0][0], nodes[0]);
+    }
+
+    #[test]
+    fn fix_up_followers_removes_a_head_that_is_no_actor() {
+        let (mut e, buffer, list) = fixup_engine(0x5000, 0x6000, 0x20);
+        allow(&mut e, EXTRA_FOLLOWER, 2);
+        e.register(SAVE_LOAD_UNAVAILABLE, |_, _| returns(1));
+        e.register(LIST_IS_EMPTY, |e, a| {
+            returns((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        e.register(LIST_SET_ITEM, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], item);
+            Ret::default()
+        });
+        e.register(LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let (item, after) = if next == 0 {
+                (0, 0)
+            } else {
+                (e.mem.u32(next), e.mem.u32(next + 4))
+            };
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            Ret::default()
+        });
+        let nodes = node_chain(&mut e, &[0x4001, 0x30]);
+        extra_with_words(&mut e, list, EXTRA_FOLLOWER, &[(0x0c, nodes[0])]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042_ceb0, &args![list, buffer, 0u32]);
+        });
+        // The head took the next node's item and link.
+        assert_eq!(e.mem.u32(nodes[0]), 0x30);
+        assert_eq!(e.mem.u32(nodes[0] + 4), 0);
+        assert_eq!(calls_to(&log, LIST_REMOVE_HEAD), vec![vec![nodes[0]]]);
     }
 }
