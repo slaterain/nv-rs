@@ -310,6 +310,14 @@ const COMBAT_CONTROLLER_GET_FLAG: u32 = 0x0098_1420;
 const COMBAT_CONTROLLER_GET_GROUP: u32 = 0x004f_b070;
 const COMBAT_GROUP_FILL_TARGET_ARRAY: u32 = 0x0098_6760;
 const COMBAT_GROUP_FILL_MEMBER_ARRAY: u32 = 0x0098_6b00;
+const FIND_FIRST_COLLISION_OBJECT: u32 = 0x004b_5260;
+const COLLISION_OBJECT_GET_TARGET: u32 = 0x006f_a820;
+const HIT_SOUND_REQUEST_CONSTRUCTOR: u32 = 0x0062_40d0;
+const TARGET_OBJECT_GET_OBJECT: u32 = 0x004a_e6a0;
+const OBJECT_GET_KIND: u32 = 0x0062_05a0;
+const IMPACT_MIXER_PLAY_COLLISION_SOUND: u32 = 0x0083_7550;
+/// The constant `0.5f` stored in the sound request.
+const HALF_FLOAT: u32 = 0x0101_6248;
 /// The vtable of `BSSimpleArray<Actor *, 1024>` (RTTI `.?AV?$BSSimpleArray@PAVActor@@$0EAA@@@`).
 const SIMPLE_ARRAY_VTABLE: u32 = 0x0108_4fec;
 /// The format `"%s  attacking %s no one cared"`.
@@ -1915,6 +1923,67 @@ pub fn bs_simple_array_actor_scalar_deleting_destructor(
     this
 }
 
+// Translated from 008cfad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::FakeWeaponHitSound` (Xbox PDB): when the actor has a loaded 3D
+/// object (virtual `+0x1d0`) and its word at `+0x88` points at a record whose
+/// first word is 1, finds the first collision object under it and, if that has
+/// a target, plays an impact sound described by a 0x24-byte request on the stack.
+#[allow(clippy::too_many_arguments)]
+pub fn actor_fake_weapon_hit_sound(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    strength: f32,
+    position_x: u32,
+    position_y: u32,
+    position_z: u32,
+    offset: u32,
+    flag: u8,
+) {
+    let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let record = e.mem.u32(this.addr() + 0x88);
+    if record == 0 || e.mem.u32(record) != 1 {
+        return;
+    }
+    let collision = e.call(FIND_FIRST_COLLISION_OBJECT, &args![node]).u32();
+    let target = if collision != 0 {
+        e.call(COLLISION_OBJECT_GET_TARGET, &args![collision]).u32()
+    } else {
+        0
+    };
+    if target == 0 {
+        return;
+    }
+    e.with_stack(0x24, |e, request| {
+        let base = request.addr();
+        e.call(HIT_SOUND_REQUEST_CONSTRUCTOR, &args![base]);
+        let half = e.global::<f32>(HALF_FLOAT);
+        e.mem.set_f32(base + 0x10, half);
+        e.mem.set_u32(base + 0x1c, target);
+        e.mem.set_u32(base + 0x20, offset);
+        let object = e.call(TARGET_OBJECT_GET_OBJECT, &args![target]).u32();
+        let kind = e.call(OBJECT_GET_KIND, &args![object]).u32() as u8;
+        e.mem.set_u8(base + 0x14, kind);
+        e.mem.set_u8(base + 0x15, flag);
+        e.mem.set_u32(base, position_x);
+        e.mem.set_u32(base + 4, position_y);
+        e.mem.set_u32(base + 8, position_z);
+        e.mem.set_f32(base + 0xc, strength);
+        e.mem.set_u32(base + 0x18, this.addr().wrapping_add(offset));
+        e.call(IMPACT_MIXER_PLAY_COLLISION_SOUND, &args![base]);
+    });
+}
+
+// Translated from 008e2680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::DoesFly` (Xbox PDB name on the map; the callers `Move`,
+/// `LoadCharController` and `ProcessFollow` pass a process object, so the
+/// name is a folded one): stores the word at `+0x3f0`.
+pub fn fn_008e2680(e: &mut Engine, this: Ptr, value: u32) {
+    e.mem.set_u32(this.addr() + 0x3f0, value);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1967,6 +2036,11 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x008c1c80,
             bs_simple_array_actor_scalar_deleting_destructor(Ptr, u32) -> Ptr
         ),
+        entry!(
+            0x008cfad0,
+            actor_fake_weapon_hit_sound(Ptr<Actor>, f32, u32, u32, u32, u32, u8)
+        ),
+        entry!(0x008e2680, fn_008e2680(Ptr, u32)),
     ]
 }
 
@@ -2097,6 +2171,12 @@ mod tests {
         COMBAT_CONTROLLER_GET_GROUP,
         COMBAT_GROUP_FILL_TARGET_ARRAY,
         COMBAT_GROUP_FILL_MEMBER_ARRAY,
+        FIND_FIRST_COLLISION_OBJECT,
+        COLLISION_OBJECT_GET_TARGET,
+        HIT_SOUND_REQUEST_CONSTRUCTOR,
+        TARGET_OBJECT_GET_OBJECT,
+        OBJECT_GET_KIND,
+        IMPACT_MIXER_PLAY_COLLISION_SOUND,
     ];
 
     fn eax(value: u32) -> Ret {
@@ -3985,5 +4065,90 @@ mod tests {
         assert!(calls_to(&e, OPERATOR_DELETE).is_empty());
         bs_simple_array_actor_scalar_deleting_destructor(&mut e, Ptr::new(array), 1);
         assert_eq!(calls_to(&e, OPERATOR_DELETE), vec![vec![array]]);
+    }
+
+    // ---- 008cfad0 / 008e2680 -------------------------------------------
+
+    /// An actor whose virtual `+0x1d0` answers `node` and whose `+0x88` word
+    /// points at a record starting with `record_kind`.
+    fn hit_sound_actor(e: &mut Engine, node: u32, record_kind: u32) -> Ptr<Actor> {
+        let actor = new_actor(e);
+        let table = e.mem.alloc(0x200);
+        e.mem.set_u32(table + 0x1d0, 0x0900_0000);
+        e.mem.set_u32(actor.addr(), table);
+        e.register_double(0x0900_0000, move |_, _| eax(node));
+        let record = e.mem.alloc(8);
+        e.mem.set_u32(record, record_kind);
+        e.mem.set_u32(actor.addr() + 0x88, record);
+        actor
+    }
+
+    #[test]
+    fn hit_sound_needs_a_node_and_a_record_of_kind_one() {
+        let mut e = engine();
+        let actor = hit_sound_actor(&mut e, 0, 1);
+        log_calls(&mut e);
+        actor_fake_weapon_hit_sound(&mut e, actor, 1.0, 1, 2, 3, 4, 5);
+        assert!(calls_to(&e, FIND_FIRST_COLLISION_OBJECT).is_empty());
+        let actor = hit_sound_actor(&mut e, 0x77, 2);
+        actor_fake_weapon_hit_sound(&mut e, actor, 1.0, 1, 2, 3, 4, 5);
+        assert!(calls_to(&e, FIND_FIRST_COLLISION_OBJECT).is_empty());
+        e.mem.set_u32(actor.addr() + 0x88, 0);
+        actor_fake_weapon_hit_sound(&mut e, actor, 1.0, 1, 2, 3, 4, 5);
+        assert!(calls_to(&e, FIND_FIRST_COLLISION_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn hit_sound_without_collision_target_plays_nothing() {
+        let mut e = engine();
+        let actor = hit_sound_actor(&mut e, 0x77, 1);
+        log_calls(&mut e);
+        actor_fake_weapon_hit_sound(&mut e, actor, 1.0, 1, 2, 3, 4, 5);
+        assert_eq!(calls_to(&e, FIND_FIRST_COLLISION_OBJECT), vec![vec![0x77]]);
+        assert!(calls_to(&e, COLLISION_OBJECT_GET_TARGET).is_empty());
+        e.register(FIND_FIRST_COLLISION_OBJECT, |_, _| eax(0x88));
+        actor_fake_weapon_hit_sound(&mut e, actor, 1.0, 1, 2, 3, 4, 5);
+        assert_eq!(calls_to(&e, COLLISION_OBJECT_GET_TARGET), vec![vec![0x88]]);
+        assert!(calls_to(&e, IMPACT_MIXER_PLAY_COLLISION_SOUND).is_empty());
+    }
+
+    #[test]
+    fn hit_sound_fills_the_request() {
+        let mut e = engine();
+        e.map(0x0101_6000, 0x1000);
+        e.set_global(HALF_FLOAT, 0.5f32);
+        let actor = hit_sound_actor(&mut e, 0x77, 1);
+        e.register(FIND_FIRST_COLLISION_OBJECT, |_, _| eax(0x88));
+        e.register(COLLISION_OBJECT_GET_TARGET, |_, _| eax(0x99));
+        e.register(TARGET_OBJECT_GET_OBJECT, |_, _| eax(0xaa));
+        e.register(OBJECT_GET_KIND, |_, a| {
+            eax(if a[0] == 0xaa { 0x13 } else { 0 })
+        });
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        let sink = seen.clone();
+        e.register_double(IMPACT_MIXER_PLAY_COLLISION_SOUND, move |e, a| {
+            let words: Vec<u32> = (0..9).map(|i| e.mem.u32(a[0] + 4 * i)).collect();
+            sink.lock().unwrap().push(words);
+            Ret::default()
+        });
+        actor_fake_weapon_hit_sound(&mut e, actor, 2.0, 0x11, 0x22, 0x33, 0x40, 1);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        let w = &seen[0];
+        assert_eq!(&w[0..3], &[0x11, 0x22, 0x33]);
+        assert_eq!(f32::from_bits(w[3]), 2.0);
+        assert_eq!(f32::from_bits(w[4]), 0.5);
+        assert_eq!(w[5], 0x0113);
+        assert_eq!(w[6], actor.addr() + 0x40);
+        assert_eq!(w[7], 0x99);
+        assert_eq!(w[8], 0x40);
+    }
+
+    #[test]
+    fn does_fly_stores_the_word() {
+        let mut e = engine();
+        let process = e.mem.alloc(0x400);
+        fn_008e2680(&mut e, Ptr::new(process), 7);
+        assert_eq!(e.mem.u32(process + 0x3f0), 7);
     }
 }
