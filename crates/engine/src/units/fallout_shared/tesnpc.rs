@@ -17,8 +17,9 @@
 //! functions in address order):
 //! - Session 1 (b0016) holds the constructor `00601170` to the function at
 //!   `00605d50`. Session 2 (b0016) holds `TESNPC::ReplaceRefModel` `00605d70`
-//!   to `0060b1f0` (the block starts at the line "Session 2" below); the next
-//!   session continues at `0060b210`.
+//!   to `0060b1f0` (the block starts at the line "Session 2" below). Session 3
+//!   (b0016) holds `0060b210` to `0060bed0`, the end of the unit (the block
+//!   starts at the line "Session 3" below): nothing is left to translate here.
 //! - A pushed word that stays on the stack across a nested call belongs to the
 //!   OUTER call (`PUSH a; CALL getter; MOV ECX,EAX; CALL method` passes `a` to
 //!   `method`, and a getter whose `RET` has no number takes nothing): check the
@@ -5333,6 +5334,780 @@ impl Activation {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Session 3: the tail of the unit (0060b210 to 0060bed0)
+//
+// The functions from `0060b340` on are the compiler's instances of the
+// `FR2MatrixVTC<float>` (a `std::vector<float>` plus rows and columns) and of
+// the Gamebryo / Bethesda arrays the NPC owns, in the order the exe emitted
+// them. Every wrapper that takes the address of its own argument
+// (`0065fe40(&arg)` returns the word the pointer points to) keeps its words in
+// game memory (`with_argument_words`); the "tag" words the exe pushes for
+// overload selection (`0065e750` returns an uninitialised stack byte) are
+// passed on as the exe passes them and never read by anyone.
+
+/// `std::vector` iterator (`FR2MatrixVTC<float>`'s `iterator`, 8 bytes): the
+/// word at `+0` is the container proxy (a pointer to a word holding the
+/// container), the word at `+4` the element pointer.
+/// `GetSize` of the matrix vector (`00662820`, thiscall): `(last - first) >> 2`.
+const VECTOR_SIZE: u32 = 0x0066_2820;
+/// `max_size` of the matrix vector (`0044a2c0`, thiscall).
+const VECTOR_MAX_SIZE: u32 = 0x0044_a2c0;
+/// `allocate(count)` of the vector's allocator (`0044abd0`, thiscall on the
+/// allocator at `this + 8`).
+const VECTOR_ALLOCATE: u32 = 0x0044_abd0;
+/// `_Destroy(first, last)` (`0065f2b0`, thiscall on the vector).
+const VECTOR_DESTROY: u32 = 0x0065_f2b0;
+/// `deallocate(pointer, count)` of the vector's allocator (`0064df10`).
+const VECTOR_DEALLOCATE: u32 = 0x0064_df10;
+/// `_Xlen`: throws `length_error` (`0065f640`).
+const VECTOR_LENGTH_ERROR: u32 = 0x0065_f640;
+/// `begin(out)` (`0044a170`, thiscall) and `end(out)` (`0065f550`).
+const VECTOR_BEGIN: u32 = 0x0044_a170;
+const VECTOR_END: u32 = 0x0065_f550;
+/// `erase(out, first.proxy, first.pointer, last.proxy, last.pointer)`
+/// (`0044a1a0`, thiscall, five words).
+const VECTOR_ERASE: u32 = 0x0044_a1a0;
+/// Checked access `&element[index]` (`006578b0`, thiscall).
+const VECTOR_ELEMENT_ADDRESS: u32 = 0x0065_78b0;
+/// `_invalid_parameter` (`00ec7c56`), the checked iterators' failure.
+const INVALID_PARAMETER: u32 = 0x00ec_7c56;
+/// Overload-selection tag function (`0065e750`): returns an uninitialised byte.
+const OVERLOAD_TAG: u32 = 0x0065_e750;
+/// Returns its first argument (`0065fd70`).
+const RETURN_FIRST_ARGUMENT: u32 = 0x0065_fd70;
+/// Returns the word its argument points to (`0065fe40`, unchecked iterator).
+const UNWRAP_ITERATOR: u32 = 0x0065_fe40;
+/// `_Uninitialized_copy(first, last, destination, allocator, tag, tag)` (`0060c270`).
+const UNINITIALIZED_COPY: u32 = 0x0060_c270;
+/// `_Copy_backward(first, last, destinationEnd, ...)` (`0060c290`).
+const COPY_BACKWARD: u32 = 0x0060_c290;
+/// `_Uninitialized_fill_n(first, count, valuePointer)` (`0060c2e0`).
+const UNINITIALIZED_FILL: u32 = 0x0060_c2e0;
+/// `NiTPrimitiveArray<FaceGenUndo *>::SetSize`-like growth (`0060bef0`).
+const ARRAY_GROW: u32 = 0x0060_bef0;
+/// Store at an index of the `NiTArray` (`0060c120`).
+const ARRAY_STORE: u32 = 0x0060_c120;
+/// Frees a block (`00401030`, cdecl).
+const FREE_BLOCK: u32 = 0x0040_1030;
+/// The memory manager singleton getter (`00401020`) and
+/// `MemoryManager::GetThreadScrapHeap` (`00aa42e0`, Xbox PDB).
+const MEMORY_MANAGER: u32 = 0x0040_1020;
+const GET_THREAD_SCRAP_HEAP: u32 = 0x00aa_42e0;
+
+/// Vtables of the arrays the NPC uses (RTTI: `NiTArray<FaceGenUndo *>`,
+/// `NiTPrimitiveArray<FaceGenUndo *>`, `BSScrapArray<BGSHeadPart *, 1024>`,
+/// `BSSimpleArray<BGSHeadPart *, 1024>`).
+const VTABLE_NI_T_ARRAY: u32 = 0x0104_aae0;
+const VTABLE_NI_T_PRIMITIVE_ARRAY: u32 = 0x0104_aae8;
+const VTABLE_BS_SCRAP_ARRAY: u32 = 0x0104_aaf0;
+const VTABLE_BS_SIMPLE_ARRAY: u32 = 0x0104_ab04;
+
+/// What an x87 `FLD float` / `FSTP float` round trip does to a float's bits:
+/// a signalling NaN comes back quiet.
+fn x87_float_round_trip(bits: u32) -> u32 {
+    if bits & 0x7f80_0000 == 0x7f80_0000 && bits & 0x007f_ffff != 0 {
+        bits | 0x0040_0000
+    } else {
+        bits
+    }
+}
+
+/// Runs `body` with `words` stored one after the other in game memory (the
+/// exe's wrappers take the address of their own arguments); `extra` more
+/// zeroed bytes follow for locals. The closure receives the address of the
+/// first word.
+fn with_argument_words<R>(
+    e: &mut Engine,
+    words: &[u32],
+    extra: u32,
+    body: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    e.with_stack(words.len() as u32 * 4 + extra, |e, block| {
+        let base = block.addr();
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(base + 4 * i as u32, *word);
+        }
+        for i in 0..extra {
+            e.mem.set_u8(base + words.len() as u32 * 4 + i, 0);
+        }
+        body(e, base)
+    })
+}
+
+/// `*mut (element pointers)` read through the exe's `0065fe40` wrapper.
+fn unwrap_iterator(e: &mut Engine, pointer_to_word: u32) -> u32 {
+    e.call(UNWRAP_ITERATOR, &args![pointer_to_word]).u32()
+}
+
+/// The overload tag byte the exe's `0065e750` returns.
+fn overload_tag(e: &mut Engine, pointers: &[u32]) -> u32 {
+    e.call(OVERLOAD_TAG, pointers).u32() & 0xff
+}
+
+layout! {
+    /// `FR2MatrixVTC<float>` (Xbox PDB: `data` vector, `nrows`, `ncols`), `0x20`
+    /// bytes on PC: the `std::vector<float>` is `0x18` bytes there (its
+    /// allocator sits at `+8`, `_Myfirst` / `_Mylast` / `_Myend` at `+0xc`,
+    /// `+0x10`, `+0x14`), then the row and column counts.
+    pub struct Fr2Matrix: 0x20 {
+        /// `std::vector::_Myfirst` of `data`.
+        0x0C first: u32,
+        /// `std::vector::_Mylast` of `data`.
+        0x10 last: u32,
+        /// `std::vector::_Myend` of `data`.
+        0x14 end_of_storage: u32,
+        /// `nrows` (Xbox PDB).
+        0x18 nrows: u32,
+        /// `ncols` (Xbox PDB).
+        0x1C ncols: u32,
+    }
+}
+
+// Translated from 0060b210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESActorBaseData::SetFlagBit(0x1000, flag, 1)` on an actor-base
+/// component (the `0x1000` bit, the counterpart of `fn_0060b1f0`'s test).
+pub fn fn_0060b210(e: &mut Engine, this: Ptr, flag: u8) {
+    e.call(0x0047_dd50, &args![this, 0x1000u32, flag as u32, 1u32]);
+}
+
+// Translated from 0060b240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives the NPC a new race (the `TESRaceForm` component, `006ecd40`) unless it
+/// already has it. The change flag `0x2000000` is cleared (virtual `0x4c`) when
+/// the new race is the original race (which is then forgotten) and set
+/// (virtual `0x48`) otherwise, the first race being remembered as the original
+/// one; a height that followed the old race follows the new one; `actor` (when
+/// not null) is refreshed through `008b78c0(actor, 0)`.
+pub fn fn_0060b240(e: &mut Engine, this: Ptr<TESNPC>, race: Ptr, actor: Ptr) {
+    let base = this.addr();
+    let current = e.call(GET_WORD_AT_4, &args![base + COMPONENT_RACE]).u32();
+    if race.addr() == current {
+        return;
+    }
+    let race_height = tesnpc_get_race_height(e, this);
+    let follows_race = f64::from(e.get(this, TESNPC::fHeight)) == f64::from(race_height);
+    if e.get(this, TESNPC::pOriginalRace).addr() == race.addr() {
+        e.call(SET_WORD_AT_4, &args![base + COMPONENT_RACE, race]);
+        e.set(this, TESNPC::pOriginalRace, Ptr::NULL);
+        e.vcall(base, 0x4c, &args![0x200_0000u32]);
+    } else {
+        e.call(SET_WORD_AT_4, &args![base + COMPONENT_RACE, race]);
+        e.vcall(base, 0x48, &args![0x200_0000u32]);
+        if e.get(this, TESNPC::pOriginalRace).is_null() {
+            e.set(this, TESNPC::pOriginalRace, Ptr::new(current));
+        }
+    }
+    if follows_race {
+        let height = tesnpc_get_race_height(e, this);
+        e.set(this, TESNPC::fHeight, height);
+    }
+    if !actor.is_null() {
+        e.call(0x008b_78c0, &args![actor, 0u32]);
+    }
+}
+
+// Translated from 0060b340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FR2MatrixVTC<float>::Resize`-like body (the map's name
+/// `std::vector<float>::resize` is another instance folded onto it): stores
+/// the row and column counts and resizes the vector to `rows * columns`
+/// elements filled with 0.0 (`fn_0060b3f0`).
+pub fn fn_0060b340(e: &mut Engine, this: Ptr<Fr2Matrix>, rows: u32, columns: u32) {
+    e.set(this, Fr2Matrix::nrows, rows);
+    e.set(this, Fr2Matrix::ncols, columns);
+    fn_0060b3f0(e, this, rows.wrapping_mul(columns));
+}
+
+// Translated from 0060b370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FR2MatrixVTC<float>::operator[]`: writes into `out` the row view
+/// (`RowT`: pointer to the row's first element, then the column count) of row
+/// `row`, through the row constructor `004b0680`, and returns `out`.
+pub fn fn_0060b370(e: &mut Engine, this: Ptr<Fr2Matrix>, out: Ptr, row: u32) -> Ptr {
+    let columns = e.get(this, Fr2Matrix::ncols);
+    let data = e.call(VECTOR_ELEMENT_ADDRESS, &args![this, 0u32]).u32();
+    let row_start = data.wrapping_add(
+        row.wrapping_mul(e.get(this, Fr2Matrix::ncols))
+            .wrapping_mul(4),
+    );
+    e.call(0x004b_0680, &args![out, row_start, columns]);
+    out
+}
+
+// Translated from 0060b3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Zeroes the matrix: `memset(&data[0], 0, rows * columns * 4)`.
+pub fn fn_0060b3b0(e: &mut Engine, this: Ptr<Fr2Matrix>) {
+    let size = e
+        .get(this, Fr2Matrix::nrows)
+        .wrapping_mul(e.get(this, Fr2Matrix::ncols))
+        .wrapping_mul(4);
+    let data = e.call(VECTOR_ELEMENT_ADDRESS, &args![this, 0u32]).u32();
+    e.call(MEMSET, &args![data, 0u32, size]);
+}
+
+// Translated from 0060b3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::resize(count)`: `resize(count, 0.0f)`.
+pub fn fn_0060b3f0(e: &mut Engine, this: Ptr<Fr2Matrix>, count: u32) {
+    fn_0060b410(e, this, count, 0.0);
+}
+
+// Translated from 0060b410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::resize(count, value)`: grows with `_Insert_n` at `end()`
+/// (`fn_0060b4d0`) or erases from `begin() + count` to `end()`.
+pub fn fn_0060b410(e: &mut Engine, this: Ptr<Fr2Matrix>, count: u32, value: f32) {
+    // The value is taken by reference: it lives in game memory. The rest of
+    // the frame holds the iterators (8 bytes each): end, begin, the sum, the
+    // erase result.
+    e.with_stack(0x28, |e, frame| {
+        let f = frame.addr();
+        e.mem.set_f32(f, value);
+        let size = e.call(VECTOR_SIZE, &args![this]).u32();
+        if size < count {
+            let end = e.call(VECTOR_END, &args![this, f + 8]).u32();
+            let proxy = e.mem.u32(end);
+            let position = e.mem.u32(end + 4);
+            let size = e.call(VECTOR_SIZE, &args![this]).u32();
+            fn_0060b4d0(
+                e,
+                this,
+                proxy,
+                position,
+                count.wrapping_sub(size),
+                Ptr::new(f),
+            );
+        } else {
+            let size = e.call(VECTOR_SIZE, &args![this]).u32();
+            if count < size {
+                let end = e.call(VECTOR_END, &args![this, f + 8]).u32();
+                let end_proxy = e.mem.u32(end);
+                let end_position = e.mem.u32(end + 4);
+                let begin = e.call(VECTOR_BEGIN, &args![this, f + 0x10]).u32();
+                let target = fn_0060b820(e, Ptr::new(begin), Ptr::new(f + 0x18), count);
+                let proxy = e.mem.u32(target.addr());
+                let position = e.mem.u32(target.addr() + 4);
+                e.call(
+                    VECTOR_ERASE,
+                    &args![this, f + 0x20, proxy, position, end_proxy, end_position],
+                );
+            }
+        }
+    });
+}
+
+// Translated from 0060b4d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::_Insert_n(where, count, &value)`: inserts `count` copies of
+/// the float `value` points to at the element pointer `where_pointer`. Throws
+/// (`0065f640`) when the size would pass `max_size`; reallocates to 1.5 times
+/// the capacity (or to the exact size when that is larger) when the capacity is
+/// too small, otherwise shifts the tail up (three cases: the tail is shorter
+/// than `count`, or not). The exception-unwinding frame is not translated.
+///
+/// `_unused_1` is the iterator's proxy word, never read.
+pub fn fn_0060b4d0(
+    e: &mut Engine,
+    this: Ptr<Fr2Matrix>,
+    _unused_1: u32,
+    where_pointer: u32,
+    count: u32,
+    value: Ptr,
+) {
+    let base = this.addr();
+    let mut capacity = fn_0060b860(e, this);
+    if count == 0 {
+        return;
+    }
+    let size = e.call(VECTOR_SIZE, &args![this]).u32();
+    let max_size = e.call(VECTOR_MAX_SIZE, &args![this]).u32();
+    if max_size.wrapping_sub(size) < count {
+        e.call(VECTOR_LENGTH_ERROR, &args![]);
+        return;
+    }
+    let size = e.call(VECTOR_SIZE, &args![this]).u32();
+    if capacity < size.wrapping_add(count) {
+        // Reallocate.
+        let half = capacity >> 1;
+        let max_size = e.call(VECTOR_MAX_SIZE, &args![this]).u32();
+        capacity = if max_size.wrapping_sub(half) < capacity {
+            0
+        } else {
+            (capacity >> 1).wrapping_add(capacity)
+        };
+        let size = e.call(VECTOR_SIZE, &args![this]).u32();
+        if capacity < size.wrapping_add(count) {
+            let size = e.call(VECTOR_SIZE, &args![this]).u32();
+            capacity = size.wrapping_add(count);
+        }
+        let buffer = e.call(VECTOR_ALLOCATE, &args![base + 8, capacity]).u32();
+        let first = e.get(this, Fr2Matrix::first);
+        let cursor = fn_0060bb40(e, this, first, where_pointer, buffer);
+        let cursor = fn_0060b8a0(e, this, cursor, count, value);
+        let last = e.get(this, Fr2Matrix::last);
+        fn_0060bb40(e, this, where_pointer, last, cursor);
+        let new_size = e.call(VECTOR_SIZE, &args![this]).u32().wrapping_add(count);
+        let old_first = e.get(this, Fr2Matrix::first);
+        if old_first != 0 {
+            let old_last = e.get(this, Fr2Matrix::last);
+            e.call(VECTOR_DESTROY, &args![this, old_first, old_last]);
+            let first = e.get(this, Fr2Matrix::first);
+            let old_capacity =
+                ((e.get(this, Fr2Matrix::end_of_storage).wrapping_sub(first)) as i32 >> 2) as u32;
+            e.call(
+                VECTOR_DEALLOCATE,
+                &args![base + 8, e.get(this, Fr2Matrix::first), old_capacity],
+            );
+        }
+        e.set(
+            this,
+            Fr2Matrix::end_of_storage,
+            buffer.wrapping_add(capacity.wrapping_mul(4)),
+        );
+        e.set(
+            this,
+            Fr2Matrix::last,
+            buffer.wrapping_add(new_size.wrapping_mul(4)),
+        );
+        e.set(this, Fr2Matrix::first, buffer);
+        return;
+    }
+    let last = e.get(this, Fr2Matrix::last);
+    let tail = (last.wrapping_sub(where_pointer) as i32 >> 2) as u32;
+    // The value is copied through the x87 before the elements move (it may
+    // live inside the vector).
+    let copy = x87_float_round_trip(e.mem.u32(value.addr()));
+    e.with_stack(4, |e, slot| {
+        let slot = slot.addr();
+        e.mem.set_u32(slot, copy);
+        if tail < count {
+            let last = e.get(this, Fr2Matrix::last);
+            fn_0060bb40(
+                e,
+                this,
+                where_pointer,
+                last,
+                where_pointer.wrapping_add(count.wrapping_mul(4)),
+            );
+            let last = e.get(this, Fr2Matrix::last);
+            let existing =
+                (e.get(this, Fr2Matrix::last).wrapping_sub(where_pointer) as i32 >> 2) as u32;
+            fn_0060b8a0(e, this, last, count.wrapping_sub(existing), Ptr::new(slot));
+            let new_last = e
+                .get(this, Fr2Matrix::last)
+                .wrapping_add(count.wrapping_mul(4));
+            e.set(this, Fr2Matrix::last, new_last);
+            fn_0060bb70(
+                e,
+                where_pointer,
+                new_last.wrapping_sub(count.wrapping_mul(4)),
+                slot,
+            );
+        } else {
+            let last = e.get(this, Fr2Matrix::last);
+            let old_tail_start = last.wrapping_sub(count.wrapping_mul(4));
+            let destination = e.get(this, Fr2Matrix::last);
+            let new_last = fn_0060bb40(e, this, old_tail_start, last, destination);
+            e.set(this, Fr2Matrix::last, new_last);
+            fn_0060bba0(e, where_pointer, old_tail_start, last);
+            fn_0060bb70(
+                e,
+                where_pointer,
+                where_pointer.wrapping_add(count.wrapping_mul(4)),
+                slot,
+            );
+        }
+    });
+}
+
+// Translated from 0060b820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Iterator addition (`operator+`): copies the iterator at `this` (8 bytes:
+/// proxy, element pointer), advances the copy by `count` elements
+/// (`fn_0060b8e0`), stores it in `out` and returns `out`.
+pub fn fn_0060b820(e: &mut Engine, this: Ptr, out: Ptr, count: u32) -> Ptr {
+    let proxy = e.mem.u32(this.addr());
+    let position = e.mem.u32(this.addr() + 4);
+    e.with_stack(8, |e, copy| {
+        e.mem.set_u32(copy.addr(), proxy);
+        e.mem.set_u32(copy.addr() + 4, position);
+        let moved = fn_0060b8e0(e, copy, count);
+        let moved_proxy = e.mem.u32(moved.addr());
+        let moved_position = e.mem.u32(moved.addr() + 4);
+        e.mem.set_u32(out.addr(), moved_proxy);
+        e.mem.set_u32(out.addr() + 4, moved_position);
+    });
+    out
+}
+
+// Translated from 0060b860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::capacity()`: 0 without a buffer, else
+/// `(_Myend - _Myfirst) >> 2`.
+pub fn fn_0060b860(e: &mut Engine, this: Ptr<Fr2Matrix>) -> u32 {
+    if e.get(this, Fr2Matrix::first) == 0 {
+        0
+    } else {
+        (e.get(this, Fr2Matrix::end_of_storage)
+            .wrapping_sub(e.get(this, Fr2Matrix::first)) as i32
+            >> 2) as u32
+    }
+}
+
+// Translated from 0060b8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::_Ufill(destination, count, &value)`: fills `count` floats at
+/// `destination` with the allocator at `this + 8` (`fn_0060bc10`) and returns
+/// the address after them.
+pub fn fn_0060b8a0(
+    e: &mut Engine,
+    this: Ptr<Fr2Matrix>,
+    destination: u32,
+    count: u32,
+    value: Ptr,
+) -> u32 {
+    fn_0060bc10(e, destination, count, value.addr(), this.addr() + 8);
+    destination.wrapping_add(count.wrapping_mul(4))
+}
+
+// Translated from 0060b8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Iterator `operator+=`: advances by `count` (`fn_0060b900`) and returns
+/// the iterator.
+pub fn fn_0060b8e0(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    fn_0060b900(e, this, count);
+    this
+}
+
+// Translated from 0060b900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Checked iterator advance: `_invalid_parameter` (`00ec7c56`) when the
+/// iterator has no container (`005ca4f0`) or when the new element pointer
+/// leaves `[first, last]` of its container (`fn_0060b980`), then adds `count *
+/// 4` to the element pointer.
+pub fn fn_0060b900(e: &mut Engine, this: Ptr, count: u32) -> Ptr {
+    let base = this.addr();
+    if !e.call(0x005c_a4f0, &args![this]).bool() {
+        e.call(INVALID_PARAMETER, &args![]);
+    }
+    let target = e.mem.u32(base + 4).wrapping_add(count.wrapping_mul(4));
+    let container = fn_0060b980(e, this);
+    let mut invalid = target > e.mem.u32(container + 0x10);
+    if !invalid {
+        let target = e.mem.u32(base + 4).wrapping_add(count.wrapping_mul(4));
+        let container = fn_0060b980(e, this);
+        invalid = target < e.mem.u32(container + 0xc);
+    }
+    if invalid {
+        e.call(INVALID_PARAMETER, &args![]);
+    }
+    let moved = e.mem.u32(base + 4).wrapping_add(count.wrapping_mul(4));
+    e.mem.set_u32(base + 4, moved);
+    this
+}
+
+// Translated from 0060b980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The container of a checked iterator: 0 without a proxy, else the word the
+/// proxy points to (`00559450`).
+pub fn fn_0060b980(e: &mut Engine, this: Ptr) -> u32 {
+    let proxy = e.mem.u32(this.addr());
+    if proxy == 0 {
+        0
+    } else {
+        e.call(GET_FIRST_WORD, &args![proxy]).u32()
+    }
+}
+
+// Translated from 0060b9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the `NiTArray<FaceGenUndo *, ...>` base (the same
+/// code serves the `basic_streambuf` destructors of the CRT, hence the
+/// library name in the map): restores the base vtable and frees the buffer
+/// (`004ede70`).
+pub fn fn_0060b9b0(e: &mut Engine, this: Ptr<NiTArray>) {
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_ARRAY);
+    let buffer = e.get(this, NiTArray::m_pBase);
+    e.call(0x004e_de70, &args![buffer]);
+}
+
+// Translated from 0060b9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPrimitiveArray<FaceGenUndo *>` constructor (the NPC's
+/// `FaceGenUndoStates`): the `NiTArray` constructor (`fn_0060bd20`), then the
+/// derived vtable. The two words are the maximum size and the growth step.
+pub fn fn_0060b9e0(
+    e: &mut Engine,
+    this: Ptr<NiTArray>,
+    max_size: u32,
+    grow_by: u32,
+) -> Ptr<NiTArray> {
+    fn_0060bd20(e, this, max_size as u16, grow_by as u16);
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_PRIMITIVE_ARRAY);
+    this
+}
+
+// Translated from 0060ba10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray::Add(value)`: stores `value` at index `m_usSize` (`fn_0060bd90`)
+/// and returns that index.
+pub fn fn_0060ba10(e: &mut Engine, this: Ptr<NiTArray>, value: u32) -> u32 {
+    let index = u32::from(e.get(this, NiTArray::m_usSize));
+    fn_0060bd90(e, this, index, value)
+}
+
+// Translated from 0060ba40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<BGSHeadPart *, 1024>` constructor: the `BSSimpleArray` base
+/// (`fn_0060bdd0`), the scrap-array vtable, the thread's scrap heap
+/// (`MemoryManager::GetThreadScrapHeap`) at `+0x10`, and the base's
+/// `006b3eb0(0, 0)` again. The exception-unwinding frame is not translated.
+pub fn fn_0060ba40(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0060bdd0(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_BS_SCRAP_ARRAY);
+    let manager = e.call(MEMORY_MANAGER, &args![]).u32();
+    let heap = e.call(GET_THREAD_SCRAP_HEAP, &args![manager]).u32();
+    e.mem.set_u32(this.addr() + 0x10, heap);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0060bac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BGSHeadPart *, 1024>` destructor: restores its vtable and
+/// releases the buffer (`008454f0(this, 1)`).
+pub fn fn_0060bac0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_BS_SIMPLE_ARRAY);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 0060bae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<BGSHeadPart *, 1024>` destructor: its own vtable, the buffer
+/// release (`008454f0(this, 1)`), then the `BSSimpleArray` destructor
+/// (`fn_0060bac0`). The exception-unwinding frame is not translated.
+pub fn fn_0060bae0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_BS_SCRAP_ARRAY);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+    fn_0060bac0(e, this);
+}
+
+// Translated from 0060bb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `vector<float>::_Ucopy(first, last, destination)`: `fn_0060be00` with
+/// the allocator at `this + 8`; returns the end of the copy.
+pub fn fn_0060bb40(
+    e: &mut Engine,
+    this: Ptr<Fr2Matrix>,
+    first: u32,
+    last: u32,
+    destination: u32,
+) -> u32 {
+    fn_0060be00(e, first, last, destination, this.addr() + 8)
+}
+
+// Translated from 0060bb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `fill(first, last, &value)` with unchecked iterators: unwraps both ends
+/// (`0065fe40`) and runs `fn_0060be50`.
+pub fn fn_0060bb70(e: &mut Engine, first: u32, last: u32, value: u32) {
+    with_argument_words(e, &[first, last], 0, |e, words| {
+        let last_unwrapped = unwrap_iterator(e, words + 4);
+        let first_unwrapped = unwrap_iterator(e, words);
+        fn_0060be50(e, first_unwrapped, last_unwrapped, value);
+    });
+}
+
+// Translated from 0060bba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `copy_backward(first, last, destinationEnd)` with unchecked iterators:
+/// picks the overload tag (`0065e750`, `0065fd70`), unwraps both ends and runs
+/// `fn_0060be80`.
+pub fn fn_0060bba0(e: &mut Engine, first: u32, last: u32, destination_end: u32) {
+    with_argument_words(e, &[first, last, destination_end], 4, |e, words| {
+        let tag = overload_tag(e, &[words + 8]);
+        let local = e
+            .call(
+                RETURN_FIRST_ARGUMENT,
+                &args![words + 12, words, words + 8, tag, 0u32],
+            )
+            .u32();
+        let local_tag = u32::from(e.mem.u8(local));
+        let last_unwrapped = unwrap_iterator(e, words + 4);
+        let first_unwrapped = unwrap_iterator(e, words);
+        fn_0060be80(
+            e,
+            first_unwrapped,
+            last_unwrapped,
+            destination_end,
+            local_tag,
+            tag,
+            0,
+        );
+    });
+}
+
+// Translated from 0060bc10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Uninitialized_fill_n(first, count, &value, allocator)`: takes the overload
+/// tag (`0065e750`) and runs `fn_0060bed0`.
+pub fn fn_0060bc10(e: &mut Engine, first: u32, count: u32, value: u32, allocator: u32) {
+    with_argument_words(e, &[first], 0, |e, words| {
+        let tag = overload_tag(e, &[words, words]);
+        fn_0060bed0(e, first, count, value, allocator, tag, 0);
+    });
+}
+
+// Translated from 0060bc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the `NiTArray<FaceGenUndo *>` vtable: runs
+/// `fn_0060b9b0` and, with bit 0 of `flags`, frees the object (`00401030`).
+pub fn fn_0060bc60(e: &mut Engine, this: Ptr<NiTArray>, flags: u32) -> Ptr<NiTArray> {
+    fn_0060b9b0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 0060bc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the `NiTPrimitiveArray<FaceGenUndo *>` vtable:
+/// the destructor body `006013a0`, then the free with bit 0 of `flags`.
+pub fn fn_0060bc90(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0060_13a0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 0060bcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BGSHeadPart *, 1024>::scalar deleting destructor` (Xbox
+/// PDB): `fn_0060bac0`, then the free with bit 0 of `flags`.
+pub fn bs_simple_array_bgs_head_part_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0060bac0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 0060bcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSScrapArray<BGSHeadPart *, 1024>::scalar deleting destructor` (Xbox PDB):
+/// `fn_0060bae0`, then the free with bit 0 of `flags`.
+pub fn bs_scrap_array_bgs_head_part_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0060bae0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_BLOCK, &args![this]);
+    }
+    this
+}
+
+// Translated from 0060bd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray<FaceGenUndo *, ...>` constructor: base vtable, maximum size,
+/// growth step, no elements, and a buffer of `max_size` words (`0096afc0`)
+/// unless the maximum size is 0.
+pub fn fn_0060bd20(
+    e: &mut Engine,
+    this: Ptr<NiTArray>,
+    max_size: u16,
+    grow_by: u16,
+) -> Ptr<NiTArray> {
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_ARRAY);
+    e.set(this, NiTArray::m_usMaxSize, max_size);
+    e.set(this, NiTArray::m_usGrowBy, grow_by);
+    e.set(this, NiTArray::m_usSize, 0);
+    e.set(this, NiTArray::m_usESize, 0);
+    if max_size != 0 {
+        let buffer = e.call(0x0096_afc0, &args![u32::from(max_size)]).u32();
+        e.set(this, NiTArray::m_pBase, buffer);
+    } else {
+        e.set(this, NiTArray::m_pBase, 0);
+    }
+    this
+}
+
+// Translated from 0060bd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTArray::SetAt(index, value)` with growth: when `index` is not below
+/// the maximum size, the array grows to `index + growBy` first (`0060bef0`);
+/// then the element is stored (`0060c120`). Returns `index`.
+pub fn fn_0060bd90(e: &mut Engine, this: Ptr<NiTArray>, index: u32, value: u32) -> u32 {
+    if index >= u32::from(e.get(this, NiTArray::m_usMaxSize)) {
+        let new_size = u32::from(e.get(this, NiTArray::m_usGrowBy)).wrapping_add(index);
+        e.call(ARRAY_GROW, &args![this, new_size]);
+    }
+    e.call(ARRAY_STORE, &args![this, index, value]);
+    index
+}
+
+// Translated from 0060bdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<BGSHeadPart *, 1024>` constructor: its vtable and
+/// `006b3eb0(0, 0)`.
+pub fn fn_0060bdd0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_BS_SIMPLE_ARRAY);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0060be00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Uninitialized_copy(first, last, destination, allocator)` with unchecked
+/// iterators: takes the overload tag (`0065e750`), unwraps both ends and runs
+/// `0060c270`; returns its result (the end of the copy).
+pub fn fn_0060be00(e: &mut Engine, first: u32, last: u32, destination: u32, allocator: u32) -> u32 {
+    with_argument_words(e, &[first, last, destination], 0, |e, words| {
+        let tag = overload_tag(e, &[words + 8]);
+        let last_unwrapped = unwrap_iterator(e, words + 4);
+        let first_unwrapped = unwrap_iterator(e, words);
+        e.call(
+            UNINITIALIZED_COPY,
+            &args![
+                first_unwrapped,
+                last_unwrapped,
+                destination,
+                allocator,
+                tag,
+                0u32
+            ],
+        )
+        .u32()
+    })
+}
+
+// Translated from 0060be50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `for (p = first; p != last; ++p) *p = *value;` on floats, each copy
+/// going through the x87 (`FLD` / `FSTP`).
+pub fn fn_0060be50(e: &mut Engine, first: u32, last: u32, value: u32) {
+    let mut pointer = first;
+    while pointer != last {
+        let bits = x87_float_round_trip(e.mem.u32(value));
+        e.mem.set_u32(pointer, bits);
+        pointer = pointer.wrapping_add(4);
+    }
+}
+
+// Translated from 0060be80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Copy_backward(first, last, destinationEnd, ...)` with unchecked iterators:
+/// takes the overload tag (`0065e750(&first, &destinationEnd)`) and runs
+/// `0060c290`. `tag_byte` is read as a byte; the last two words are never read.
+pub fn fn_0060be80(
+    e: &mut Engine,
+    first: u32,
+    last: u32,
+    destination_end: u32,
+    tag_byte: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    with_argument_words(e, &[first, last, destination_end], 0, |e, words| {
+        let tag = overload_tag(e, &[words, words + 8]);
+        e.call(
+            COPY_BACKWARD,
+            &args![first, last, destination_end, tag_byte & 0xff, tag, 0u32],
+        );
+    });
+}
+
+// Translated from 0060bed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_Uninitialized_fill_n` dispatch: forwards the first three words to
+/// `0060c2e0`. The last three words (allocator and two tags) are never read.
+pub fn fn_0060bed0(
+    e: &mut Engine,
+    first: u32,
+    count: u32,
+    value: u32,
+    _unused_4: u32,
+    _unused_5: u32,
+    _unused_6: u32,
+) {
+    e.call(UNINITIALIZED_FILL, &args![first, count, value]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5443,6 +6218,59 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0060b1d0, fn_0060b1d0(Ptr) -> u32),
         entry!(0x0060b1f0, fn_0060b1f0(Ptr) -> u32),
+        entry!(0x0060b210, fn_0060b210(Ptr, u8)),
+        entry!(0x0060b240, fn_0060b240(Ptr<TESNPC>, Ptr, Ptr)),
+        entry!(0x0060b340, fn_0060b340(Ptr<Fr2Matrix>, u32, u32)),
+        entry!(0x0060b370, fn_0060b370(Ptr<Fr2Matrix>, Ptr, u32) -> Ptr),
+        entry!(0x0060b3b0, fn_0060b3b0(Ptr<Fr2Matrix>)),
+        entry!(0x0060b3f0, fn_0060b3f0(Ptr<Fr2Matrix>, u32)),
+        entry!(0x0060b410, fn_0060b410(Ptr<Fr2Matrix>, u32, f32)),
+        entry!(0x0060b4d0, fn_0060b4d0(Ptr<Fr2Matrix>, u32, u32, u32, Ptr)),
+        entry!(0x0060b820, fn_0060b820(Ptr, Ptr, u32) -> Ptr),
+        entry!(0x0060b860, fn_0060b860(Ptr<Fr2Matrix>) -> u32),
+        entry!(
+            0x0060b8a0,
+            fn_0060b8a0(Ptr<Fr2Matrix>, u32, u32, Ptr) -> u32
+        ),
+        entry!(0x0060b8e0, fn_0060b8e0(Ptr, u32) -> Ptr),
+        entry!(0x0060b900, fn_0060b900(Ptr, u32) -> Ptr),
+        entry!(0x0060b980, fn_0060b980(Ptr) -> u32),
+        entry!(0x0060b9b0, fn_0060b9b0(Ptr<NiTArray>)),
+        entry!(
+            0x0060b9e0,
+            fn_0060b9e0(Ptr<NiTArray>, u32, u32) -> Ptr<NiTArray>
+        ),
+        entry!(0x0060ba10, fn_0060ba10(Ptr<NiTArray>, u32) -> u32),
+        entry!(0x0060ba40, fn_0060ba40(Ptr) -> Ptr),
+        entry!(0x0060bac0, fn_0060bac0(Ptr)),
+        entry!(0x0060bae0, fn_0060bae0(Ptr)),
+        entry!(
+            0x0060bb40,
+            fn_0060bb40(Ptr<Fr2Matrix>, u32, u32, u32) -> u32
+        ),
+        entry!(0x0060bb70, fn_0060bb70(u32, u32, u32)),
+        entry!(0x0060bba0, fn_0060bba0(u32, u32, u32)),
+        entry!(0x0060bc10, fn_0060bc10(u32, u32, u32, u32)),
+        entry!(0x0060bc60, fn_0060bc60(Ptr<NiTArray>, u32) -> Ptr<NiTArray>),
+        entry!(0x0060bc90, fn_0060bc90(Ptr, u32) -> Ptr),
+        entry!(
+            0x0060bcc0,
+            bs_simple_array_bgs_head_part_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0060bcf0,
+            bs_scrap_array_bgs_head_part_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x0060bd20,
+            fn_0060bd20(Ptr<NiTArray>, u16, u16) -> Ptr<NiTArray>
+        ),
+        entry!(0x0060bd90, fn_0060bd90(Ptr<NiTArray>, u32, u32) -> u32),
+        entry!(0x0060bdd0, fn_0060bdd0(Ptr) -> Ptr),
+        entry!(0x0060be00, fn_0060be00(u32, u32, u32, u32) -> u32),
+        entry!(0x0060be50, fn_0060be50(u32, u32, u32)),
+        entry!(0x0060be80, fn_0060be80(u32, u32, u32, u32, u32, u32)),
+        entry!(0x0060bed0, fn_0060bed0(u32, u32, u32, u32, u32, u32)),
     ]
 }
 
@@ -11100,4 +11928,762 @@ mod tests {
         assert!(calls(&mut w.e, 0x0070_52f0).is_empty());
     }
     // END second-block tests
+}
+
+/// Tests of the third block of functions (`0060b210` to `0060bed0`).
+#[cfg(test)]
+mod tests_block_three {
+    use super::*;
+
+    fn ret(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    /// Every callee outside this block is a double that returns zero, except
+    /// those that model a `std::vector<float>`, its checked iterators and the
+    /// copy / fill primitives, which behave like the exe's.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for addr in [
+            0x0047_dd50u32,
+            VECTOR_ERASE,
+            VECTOR_DESTROY,
+            VECTOR_DEALLOCATE,
+            VECTOR_LENGTH_ERROR,
+            INVALID_PARAMETER,
+            0x008b_78c0,
+            0x004b_0680,
+            MEMSET,
+            0x004e_de70,
+            0x0096_afc0,
+            ARRAY_GROW,
+            ARRAY_STORE,
+            0x006b_3eb0,
+            0x0084_54f0,
+            FREE_BLOCK,
+            0x0060_13a0,
+            MEMORY_MANAGER,
+            GET_THREAD_SCRAP_HEAP,
+            NPC_GET_RACE,
+            GET_SEX,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e.register(OVERLOAD_TAG, |_, _| ret(0));
+        e.register(RETURN_FIRST_ARGUMENT, |_, a| ret(a[0]));
+        e.register(UNWRAP_ITERATOR, |e, a| ret(e.mem.u32(a[0])));
+        e.register(GET_FIRST_WORD, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x005c_a4f0, |e, a| ret((e.mem.u32(a[0]) != 0) as u32));
+        e.register(GET_WORD_AT_4, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(SET_WORD_AT_4, |e, a| {
+            e.mem.set_u32(a[0] + 4, a[1]);
+            Ret::default()
+        });
+        e.register(VECTOR_SIZE, |e, a| {
+            ret((e.mem.u32(a[0] + 0x10).wrapping_sub(e.mem.u32(a[0] + 0xc)) as i32 >> 2) as u32)
+        });
+        e.register(VECTOR_MAX_SIZE, |_, _| ret(0x3fff_ffff));
+        e.register(VECTOR_ALLOCATE, |e, a| ret(e.mem.alloc(a[1] * 4)));
+        e.register(VECTOR_ELEMENT_ADDRESS, |e, a| {
+            ret(e.mem.u32(a[0] + 0xc) + a[1] * 4)
+        });
+        // end(out): {container, last}; begin(out): {container, first}.
+        e.register(VECTOR_END, |e, a| {
+            let proxy = e.mem.u32(a[0]);
+            e.mem.set_u32(a[1], proxy);
+            let last = e.mem.u32(a[0] + 0x10);
+            e.mem.set_u32(a[1] + 4, last);
+            ret(a[1])
+        });
+        e.register(VECTOR_BEGIN, |e, a| {
+            let proxy = e.mem.u32(a[0]);
+            e.mem.set_u32(a[1], proxy);
+            let first = e.mem.u32(a[0] + 0xc);
+            e.mem.set_u32(a[1] + 4, first);
+            ret(a[1])
+        });
+        e.register(UNINITIALIZED_COPY, |e, a| {
+            let bytes = e.mem.bytes(a[0], a[1] - a[0]);
+            e.mem.write(a[2], &bytes);
+            ret(a[2] + (a[1] - a[0]))
+        });
+        e.register(COPY_BACKWARD, |e, a| {
+            let size = a[1] - a[0];
+            let bytes = e.mem.bytes(a[0], size);
+            e.mem.write(a[2] - size, &bytes);
+            ret(a[2] - size)
+        });
+        e.register(UNINITIALIZED_FILL, |e, a| {
+            for i in 0..a[1] {
+                let word = e.mem.u32(a[2]);
+                e.mem.set_u32(a[0] + 4 * i, word);
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    fn started(e: &mut Engine) {
+        e.call_log = Some(vec![]);
+    }
+
+    fn calls(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, args)| args.clone())
+            .collect()
+    }
+
+    /// A matrix whose vector holds `values` in a buffer of `capacity` floats.
+    fn matrix(e: &mut Engine, values: &[f32], capacity: u32) -> Ptr<Fr2Matrix> {
+        let m: Ptr<Fr2Matrix> = e.new_object();
+        let proxy = e.mem.alloc(4);
+        e.mem.set_u32(proxy, m.addr());
+        e.mem.set_u32(m.addr(), proxy);
+        if capacity != 0 {
+            let buffer = e.mem.alloc(capacity * 4);
+            for (i, v) in values.iter().enumerate() {
+                e.mem.set_f32(buffer + 4 * i as u32, *v);
+            }
+            e.set(m, Fr2Matrix::first, buffer);
+            e.set(m, Fr2Matrix::last, buffer + 4 * values.len() as u32);
+            e.set(m, Fr2Matrix::end_of_storage, buffer + 4 * capacity);
+        }
+        m
+    }
+
+    fn elements(e: &Engine, m: Ptr<Fr2Matrix>) -> Vec<f32> {
+        let first = e.get(m, Fr2Matrix::first);
+        let last = e.get(m, Fr2Matrix::last);
+        (first..last).step_by(4).map(|p| e.mem.f32(p)).collect()
+    }
+
+    fn float_cell(e: &mut Engine, value: f32) -> Ptr {
+        let cell = e.mem.alloc(4);
+        e.mem.set_f32(cell, value);
+        Ptr::new(cell)
+    }
+
+    fn new_npc(e: &mut Engine) -> Ptr<TESNPC> {
+        let npc: Ptr<TESNPC> = e.new_object();
+        e.set(npc, TESNPC::cFormType, 0x2a);
+        npc
+    }
+
+    #[test]
+    fn flag_bit_0x1000_is_set_through_the_actor_base_setter() {
+        let mut e = engine();
+        started(&mut e);
+        fn_0060b210(&mut e, Ptr::new(0x1234), 1);
+        assert_eq!(calls(&e, 0x0047_dd50), vec![vec![0x1234, 0x1000, 1, 1]]);
+    }
+
+    /// An NPC of race 0 (male height 1.0; race 1 has 2.0, race 2 has 3.0)
+    /// with the given height and original race.
+    fn race_world(height: f32, original: u32) -> (Engine, Ptr<TESNPC>, [u32; 3], u32) {
+        let mut e = engine();
+        e.register(NPC_GET_RACE, |e, a| ret(e.mem.u32(a[0] + 0x110)));
+        let npc = new_npc(&mut e);
+        let mut races = [0u32; 3];
+        for (i, race) in races.iter_mut().enumerate() {
+            *race = e.mem.alloc(0x80);
+            e.mem.set_f32(*race + 0x60, 1.0 + i as f32);
+        }
+        e.mem.set_u32(npc.addr() + COMPONENT_RACE + 4, races[0]);
+        e.set(npc, TESNPC::fHeight, height);
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(original));
+        let table = 0x0c30_0000;
+        e.put_vtable(table, &[0; 0x20]);
+        e.mem.set_u32(table + 0x48, 0x0c31_0048);
+        e.mem.set_u32(table + 0x4c, 0x0c31_004c);
+        e.mem.set_u32(npc.addr(), table);
+        for target in [0x0c31_0048u32, 0x0c31_004c] {
+            e.register(target, |_, _| Ret::default());
+        }
+        let actor = e.mem.alloc(0x10);
+        (e, npc, races, actor)
+    }
+
+    #[test]
+    fn race_change_to_the_same_race_does_nothing() {
+        let (mut e, npc, races, actor) = race_world(1.0, 0);
+        started(&mut e);
+        fn_0060b240(&mut e, npc, Ptr::new(races[0]), Ptr::new(actor));
+        assert!(calls(&e, SET_WORD_AT_4).is_empty());
+        assert!(calls(&e, 0x008b_78c0).is_empty());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn race_change_remembers_the_first_race_and_moves_a_following_height() {
+        let (mut e, npc, races, actor) = race_world(1.0, 0);
+        started(&mut e);
+        fn_0060b240(&mut e, npc, Ptr::new(races[1]), Ptr::new(actor));
+        assert_eq!(
+            calls(&e, SET_WORD_AT_4),
+            vec![vec![npc.addr() + COMPONENT_RACE, races[1]]]
+        );
+        assert_eq!(calls(&e, 0x0c31_0048), vec![vec![npc.addr(), 0x200_0000]]);
+        assert!(calls(&e, 0x0c31_004c).is_empty());
+        assert_eq!(e.get(npc, TESNPC::pOriginalRace).addr(), races[0]);
+        // The height was the old race's (1.0), so it now follows the new one.
+        assert_eq!(e.get(npc, TESNPC::fHeight), 2.0);
+        assert_eq!(calls(&e, 0x008b_78c0), vec![vec![actor, 0]]);
+    }
+
+    #[test]
+    fn race_change_keeps_the_original_race_and_a_custom_height() {
+        let (mut e, npc, races, _) = race_world(1.75, 0);
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(races[2]));
+        started(&mut e);
+        fn_0060b240(&mut e, npc, Ptr::new(races[1]), Ptr::NULL);
+        assert_eq!(e.get(npc, TESNPC::pOriginalRace).addr(), races[2]);
+        assert_eq!(e.get(npc, TESNPC::fHeight), 1.75);
+        assert!(calls(&e, 0x008b_78c0).is_empty());
+    }
+
+    #[test]
+    fn race_change_back_to_the_original_race_clears_it_and_the_flag() {
+        let (mut e, npc, races, actor) = race_world(1.0, 0);
+        e.set(npc, TESNPC::pOriginalRace, Ptr::new(races[1]));
+        started(&mut e);
+        fn_0060b240(&mut e, npc, Ptr::new(races[1]), Ptr::new(actor));
+        assert!(e.get(npc, TESNPC::pOriginalRace).is_null());
+        assert_eq!(calls(&e, 0x0c31_004c), vec![vec![npc.addr(), 0x200_0000]]);
+        assert!(calls(&e, 0x0c31_0048).is_empty());
+        assert_eq!(e.mem.u32(npc.addr() + COMPONENT_RACE + 4), races[1]);
+    }
+
+    #[test]
+    fn matrix_resize_stores_the_counts_and_zero_fills() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[], 0);
+        fn_0060b340(&mut e, m, 2, 3);
+        assert_eq!(e.get(m, Fr2Matrix::nrows), 2);
+        assert_eq!(e.get(m, Fr2Matrix::ncols), 3);
+        assert_eq!(elements(&e, m), vec![0.0; 6]);
+    }
+
+    #[test]
+    fn matrix_row_view_points_into_the_data_with_the_column_count() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[0.0; 6], 6);
+        e.set(m, Fr2Matrix::nrows, 2);
+        e.set(m, Fr2Matrix::ncols, 3);
+        let out = e.mem.alloc(8);
+        started(&mut e);
+        let result = fn_0060b370(&mut e, m, Ptr::new(out), 1);
+        assert_eq!(result.addr(), out);
+        let first = e.get(m, Fr2Matrix::first);
+        assert_eq!(calls(&e, 0x004b_0680), vec![vec![out, first + 12, 3]]);
+    }
+
+    #[test]
+    fn matrix_clear_zeroes_rows_times_columns_floats() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0; 6], 6);
+        e.set(m, Fr2Matrix::nrows, 2);
+        e.set(m, Fr2Matrix::ncols, 3);
+        started(&mut e);
+        fn_0060b3b0(&mut e, m);
+        let first = e.get(m, Fr2Matrix::first);
+        assert_eq!(calls(&e, MEMSET), vec![vec![first, 0, 24]]);
+    }
+
+    #[test]
+    fn resize_to_the_same_size_does_nothing() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0], 2);
+        started(&mut e);
+        fn_0060b3f0(&mut e, m, 2);
+        assert_eq!(elements(&e, m), vec![1.0, 2.0]);
+        assert!(calls(&e, VECTOR_END).is_empty());
+        assert!(calls(&e, VECTOR_ERASE).is_empty());
+    }
+
+    #[test]
+    fn resize_up_appends_the_value() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0], 2);
+        fn_0060b410(&mut e, m, 4, 7.5);
+        assert_eq!(elements(&e, m), vec![1.0, 2.0, 7.5, 7.5]);
+        // Zero fill through `fn_0060b3f0`.
+        let m = matrix(&mut e, &[1.0], 4);
+        fn_0060b3f0(&mut e, m, 3);
+        assert_eq!(elements(&e, m), vec![1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn resize_down_erases_from_begin_plus_count_to_end() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0, 4.0], 4);
+        let first = e.get(m, Fr2Matrix::first);
+        let last = e.get(m, Fr2Matrix::last);
+        started(&mut e);
+        fn_0060b410(&mut e, m, 1, 0.0);
+        let erase = calls(&e, VECTOR_ERASE);
+        assert_eq!(erase.len(), 1);
+        // (this, out, first.proxy, first.pointer, last.proxy, last.pointer)
+        assert_eq!(erase[0][0], m.addr());
+        let proxy = e.mem.u32(m.addr());
+        assert_eq!(&erase[0][2..], &[proxy, first + 4, proxy, last]);
+    }
+
+    #[test]
+    fn insert_of_nothing_does_nothing() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0], 2);
+        let value = float_cell(&mut e, 5.0);
+        let first = e.get(m, Fr2Matrix::first);
+        fn_0060b4d0(&mut e, m, 0, first, 0, value);
+        assert_eq!(elements(&e, m), vec![1.0]);
+    }
+
+    #[test]
+    fn insert_that_would_pass_the_maximum_size_throws() {
+        let mut e = engine();
+        e.register(VECTOR_MAX_SIZE, |_, _| ret(2));
+        let m = matrix(&mut e, &[1.0, 2.0], 4);
+        let value = float_cell(&mut e, 5.0);
+        let first = e.get(m, Fr2Matrix::first);
+        started(&mut e);
+        fn_0060b4d0(&mut e, m, 0, first, 1, value);
+        assert_eq!(calls(&e, VECTOR_LENGTH_ERROR).len(), 1);
+        assert_eq!(elements(&e, m), vec![1.0, 2.0]);
+    }
+
+    #[test]
+    fn insert_reallocates_to_one_and_a_half_times_or_the_exact_size() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0], 3);
+        let value = float_cell(&mut e, 9.0);
+        let old_first = e.get(m, Fr2Matrix::first);
+        let old_last = e.get(m, Fr2Matrix::last);
+        started(&mut e);
+        fn_0060b4d0(&mut e, m, 0, old_first + 4, 2, value);
+        assert_eq!(elements(&e, m), vec![1.0, 9.0, 9.0, 2.0, 3.0]);
+        // 3 + 3/2 = 4 is too small for 5 elements: the exact size is used.
+        assert_eq!(
+            e.get(m, Fr2Matrix::end_of_storage) - e.get(m, Fr2Matrix::first),
+            20
+        );
+        assert_eq!(
+            calls(&e, VECTOR_DESTROY),
+            vec![vec![m.addr(), old_first, old_last]]
+        );
+        assert_eq!(
+            calls(&e, VECTOR_DEALLOCATE),
+            vec![vec![m.addr() + 8, old_first, 3]]
+        );
+        // A larger capacity grows by half.
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0, 4.0], 4);
+        let first = e.get(m, Fr2Matrix::first);
+        fn_0060b4d0(&mut e, m, 0, first, 1, value);
+        assert_eq!(elements(&e, m), vec![9.0, 1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(
+            e.get(m, Fr2Matrix::end_of_storage) - e.get(m, Fr2Matrix::first),
+            24
+        );
+        // An empty vector has nothing to destroy.
+        let m = matrix(&mut e, &[], 0);
+        started(&mut e);
+        fn_0060b4d0(&mut e, m, 0, 0, 2, value);
+        assert_eq!(elements(&e, m), vec![9.0, 9.0]);
+        assert!(calls(&e, VECTOR_DESTROY).is_empty());
+    }
+
+    #[test]
+    fn insert_with_a_short_tail_fills_past_the_old_end() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0], 8);
+        let value = float_cell(&mut e, 5.0);
+        let first = e.get(m, Fr2Matrix::first);
+        fn_0060b4d0(&mut e, m, 0, first + 8, 5, value);
+        assert_eq!(
+            elements(&e, m),
+            vec![1.0, 2.0, 5.0, 5.0, 5.0, 5.0, 5.0, 3.0]
+        );
+        // At the end: the tail is empty.
+        let m = matrix(&mut e, &[1.0], 4);
+        let last = e.get(m, Fr2Matrix::last);
+        fn_0060b4d0(&mut e, m, 0, last, 2, value);
+        assert_eq!(elements(&e, m), vec![1.0, 5.0, 5.0]);
+    }
+
+    #[test]
+    fn insert_with_a_long_tail_shifts_it_up() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0, 4.0], 8);
+        let value = float_cell(&mut e, 6.0);
+        let first = e.get(m, Fr2Matrix::first);
+        fn_0060b4d0(&mut e, m, 0, first + 4, 2, value);
+        assert_eq!(elements(&e, m), vec![1.0, 6.0, 6.0, 2.0, 3.0, 4.0]);
+    }
+
+    #[test]
+    fn insert_copies_the_value_before_moving_elements_that_hold_it() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0, 3.0, 4.0], 8);
+        let first = e.get(m, Fr2Matrix::first);
+        // The value is the element at index 2.
+        fn_0060b4d0(&mut e, m, 0, first, 2, Ptr::new(first + 8));
+        assert_eq!(elements(&e, m), vec![3.0, 3.0, 1.0, 2.0, 3.0, 4.0]);
+    }
+
+    /// An iterator (`proxy`, element pointer at the start of a `count`-float
+    /// container): returns (iterator, container, first element).
+    fn iterator_world(e: &mut Engine, count: u32) -> (u32, u32, u32) {
+        let container = matrix(e, &vec![0.0; count as usize], count).addr();
+        let proxy = e.mem.alloc(4);
+        e.mem.set_u32(proxy, container);
+        let iterator = e.mem.alloc(8);
+        e.mem.set_u32(iterator, proxy);
+        let first = e.mem.u32(container + 0xc);
+        e.mem.set_u32(iterator + 4, first);
+        (iterator, container, first)
+    }
+
+    #[test]
+    fn iterator_copy_plus_count_leaves_the_original() {
+        let mut e = engine();
+        let (iterator, _, first) = iterator_world(&mut e, 3);
+        let out = e.mem.alloc(8);
+        let moved = fn_0060b820(&mut e, Ptr::new(iterator), Ptr::new(out), 2);
+        assert_eq!(moved.addr(), out);
+        assert_eq!(e.mem.u32(out + 4), first + 8);
+        assert_eq!(e.mem.u32(out), e.mem.u32(iterator));
+        assert_eq!(e.mem.u32(iterator + 4), first);
+    }
+
+    #[test]
+    fn capacity_is_zero_without_a_buffer_and_the_span_with_one() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[], 0);
+        assert_eq!(fn_0060b860(&mut e, m), 0);
+        let m = matrix(&mut e, &[1.0], 5);
+        assert_eq!(fn_0060b860(&mut e, m), 5);
+    }
+
+    #[test]
+    fn fill_n_fills_through_the_allocator_and_returns_the_end() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[], 0);
+        let buffer = e.mem.alloc(12);
+        let value = float_cell(&mut e, 2.5);
+        started(&mut e);
+        let end = fn_0060b8a0(&mut e, m, buffer, 3, value);
+        assert_eq!(end, buffer + 12);
+        assert_eq!(e.mem.f32(buffer + 8), 2.5);
+        assert_eq!(
+            calls(&e, UNINITIALIZED_FILL),
+            vec![vec![buffer, 3, value.addr()]]
+        );
+    }
+
+    #[test]
+    fn iterator_plus_equals_advances_and_returns_itself() {
+        let mut e = engine();
+        let (iterator, _, first) = iterator_world(&mut e, 3);
+        let result = fn_0060b8e0(&mut e, Ptr::new(iterator), 1);
+        assert_eq!(result.addr(), iterator);
+        assert_eq!(e.mem.u32(iterator + 4), first + 4);
+    }
+
+    #[test]
+    fn checked_advance_accepts_the_range_and_rejects_outside_it() {
+        let mut e = engine();
+        let (iterator, _, first) = iterator_world(&mut e, 3);
+        started(&mut e);
+        fn_0060b900(&mut e, Ptr::new(iterator), 3);
+        assert_eq!(e.mem.u32(iterator + 4), first + 12);
+        assert!(calls(&e, INVALID_PARAMETER).is_empty());
+        // One past the end.
+        fn_0060b900(&mut e, Ptr::new(iterator), 1);
+        assert_eq!(calls(&e, INVALID_PARAMETER).len(), 1);
+        // Before the beginning.
+        let (iterator, _, _) = iterator_world(&mut e, 3);
+        started(&mut e);
+        fn_0060b900(&mut e, Ptr::new(iterator), u32::MAX);
+        assert_eq!(calls(&e, INVALID_PARAMETER).len(), 1);
+    }
+
+    #[test]
+    fn checked_advance_rejects_an_iterator_without_a_container() {
+        let mut e = engine();
+        let (iterator, _, _) = iterator_world(&mut e, 3);
+        e.register(0x005c_a4f0, |_, _| ret(0));
+        started(&mut e);
+        fn_0060b900(&mut e, Ptr::new(iterator), 0);
+        assert_eq!(calls(&e, INVALID_PARAMETER).len(), 1);
+    }
+
+    #[test]
+    fn container_of_an_iterator_is_null_without_a_proxy() {
+        let mut e = engine();
+        let (iterator, container, _) = iterator_world(&mut e, 1);
+        assert_eq!(fn_0060b980(&mut e, Ptr::new(iterator)), container);
+        e.mem.set_u32(iterator, 0);
+        assert_eq!(fn_0060b980(&mut e, Ptr::new(iterator)), 0);
+    }
+
+    #[test]
+    fn array_base_destructor_restores_the_vtable_and_frees_the_buffer() {
+        let mut e = engine();
+        let array: Ptr<NiTArray> = e.new_object();
+        e.set(array, NiTArray::m_pBase, 0x7000);
+        started(&mut e);
+        fn_0060b9b0(&mut e, array);
+        assert_eq!(e.mem.u32(array.addr()), VTABLE_NI_T_ARRAY);
+        assert_eq!(calls(&e, 0x004e_de70), vec![vec![0x7000]]);
+    }
+
+    #[test]
+    fn primitive_array_constructor_adds_its_vtable_to_the_base_constructor() {
+        let mut e = engine();
+        e.register(0x0096_afc0, |e, _| ret(e.mem.alloc(16)));
+        let array: Ptr<NiTArray> = e.new_object();
+        let result = fn_0060b9e0(&mut e, array, 4, 2);
+        assert_eq!(result, array);
+        assert_eq!(e.mem.u32(array.addr()), VTABLE_NI_T_PRIMITIVE_ARRAY);
+        assert_eq!(e.get(array, NiTArray::m_usMaxSize), 4);
+        assert_eq!(e.get(array, NiTArray::m_usGrowBy), 2);
+        assert_ne!(e.get(array, NiTArray::m_pBase), 0);
+    }
+
+    #[test]
+    fn array_add_stores_at_the_current_size() {
+        let mut e = engine();
+        let array: Ptr<NiTArray> = e.new_object();
+        e.set(array, NiTArray::m_usMaxSize, 8);
+        e.set(array, NiTArray::m_usSize, 3);
+        started(&mut e);
+        let index = fn_0060ba10(&mut e, array, 0x55);
+        assert_eq!(index, 3);
+        assert_eq!(calls(&e, ARRAY_STORE), vec![vec![array.addr(), 3, 0x55]]);
+        assert!(calls(&e, ARRAY_GROW).is_empty());
+    }
+
+    #[test]
+    fn scrap_array_constructor_takes_the_thread_scrap_heap() {
+        let mut e = engine();
+        e.register(MEMORY_MANAGER, |_, _| ret(0x4444));
+        e.register(GET_THREAD_SCRAP_HEAP, |_, a| ret(a[0] + 1));
+        let array = e.mem.alloc(0x14);
+        started(&mut e);
+        let result = fn_0060ba40(&mut e, Ptr::new(array));
+        assert_eq!(result.addr(), array);
+        assert_eq!(e.mem.u32(array), VTABLE_BS_SCRAP_ARRAY);
+        assert_eq!(e.mem.u32(array + 0x10), 0x4445);
+        assert_eq!(
+            calls(&e, 0x006b_3eb0),
+            vec![vec![array, 0, 0], vec![array, 0, 0]]
+        );
+    }
+
+    #[test]
+    fn simple_array_destructor_and_constructor() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x10);
+        started(&mut e);
+        assert_eq!(fn_0060bdd0(&mut e, Ptr::new(array)).addr(), array);
+        assert_eq!(e.mem.u32(array), VTABLE_BS_SIMPLE_ARRAY);
+        assert_eq!(calls(&e, 0x006b_3eb0), vec![vec![array, 0, 0]]);
+        e.mem.set_u32(array, 0);
+        fn_0060bac0(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array), VTABLE_BS_SIMPLE_ARRAY);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![array, 1]]);
+    }
+
+    #[test]
+    fn scrap_array_destructor_runs_the_base_destructor_last() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x14);
+        started(&mut e);
+        fn_0060bae0(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array), VTABLE_BS_SIMPLE_ARRAY);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![array, 1], vec![array, 1]]);
+    }
+
+    #[test]
+    fn uninitialized_copy_wrapper_unwraps_and_forwards_the_allocator() {
+        let mut e = engine();
+        let m = matrix(&mut e, &[1.0, 2.0], 2);
+        let first = e.get(m, Fr2Matrix::first);
+        let last = e.get(m, Fr2Matrix::last);
+        let destination = e.mem.alloc(8);
+        started(&mut e);
+        let end = fn_0060bb40(&mut e, m, first, last, destination);
+        assert_eq!(end, destination + 8);
+        assert_eq!(e.mem.f32(destination + 4), 2.0);
+        assert_eq!(
+            calls(&e, UNINITIALIZED_COPY),
+            vec![vec![first, last, destination, m.addr() + 8, 0, 0]]
+        );
+        assert_eq!(calls(&e, UNWRAP_ITERATOR).len(), 2);
+    }
+
+    #[test]
+    fn fill_wrapper_unwraps_both_ends() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(8);
+        let value = float_cell(&mut e, 4.0);
+        started(&mut e);
+        fn_0060bb70(&mut e, buffer, buffer + 8, value.addr());
+        assert_eq!(e.mem.f32(buffer), 4.0);
+        assert_eq!(e.mem.f32(buffer + 4), 4.0);
+        assert_eq!(calls(&e, UNWRAP_ITERATOR).len(), 2);
+    }
+
+    #[test]
+    fn copy_backward_wrapper_unwraps_and_tags() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(16);
+        e.mem.set_f32(buffer, 1.0);
+        e.mem.set_f32(buffer + 4, 2.0);
+        started(&mut e);
+        fn_0060bba0(&mut e, buffer, buffer + 8, buffer + 16);
+        assert_eq!(e.mem.f32(buffer + 8), 1.0);
+        assert_eq!(e.mem.f32(buffer + 12), 2.0);
+        assert_eq!(
+            calls(&e, COPY_BACKWARD),
+            vec![vec![buffer, buffer + 8, buffer + 16, 0, 0, 0]]
+        );
+        assert_eq!(calls(&e, RETURN_FIRST_ARGUMENT).len(), 1);
+    }
+
+    #[test]
+    fn fill_n_wrapper_takes_the_tag_of_its_first_argument() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(8);
+        let value = float_cell(&mut e, 1.5);
+        started(&mut e);
+        fn_0060bc10(&mut e, buffer, 2, value.addr(), 0x300);
+        assert_eq!(e.mem.f32(buffer + 4), 1.5);
+        let tags = calls(&e, OVERLOAD_TAG);
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0][0], tags[0][1]);
+        assert_eq!(
+            calls(&e, UNINITIALIZED_FILL),
+            vec![vec![buffer, 2, value.addr()]]
+        );
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_only_with_bit_zero() {
+        let mut e = engine();
+        let array: Ptr<NiTArray> = e.new_object();
+        started(&mut e);
+        assert_eq!(fn_0060bc60(&mut e, array, 0), array);
+        assert!(calls(&e, FREE_BLOCK).is_empty());
+        fn_0060bc60(&mut e, array, 1);
+        assert_eq!(calls(&e, FREE_BLOCK), vec![vec![array.addr()]]);
+        let (second, third, fourth) = (e.mem.alloc(0x14), e.mem.alloc(0x14), e.mem.alloc(0x14));
+        started(&mut e);
+        fn_0060bc90(&mut e, Ptr::new(second), 3);
+        assert_eq!(calls(&e, 0x0060_13a0), vec![vec![second]]);
+        assert_eq!(calls(&e, FREE_BLOCK), vec![vec![second]]);
+        started(&mut e);
+        bs_simple_array_bgs_head_part_scalar_deleting_destructor(&mut e, Ptr::new(third), 0);
+        assert_eq!(calls(&e, 0x0084_54f0), vec![vec![third, 1]]);
+        assert!(calls(&e, FREE_BLOCK).is_empty());
+        bs_scrap_array_bgs_head_part_scalar_deleting_destructor(&mut e, Ptr::new(fourth), 1);
+        assert_eq!(calls(&e, FREE_BLOCK), vec![vec![fourth]]);
+    }
+
+    #[test]
+    fn array_constructor_allocates_only_for_a_nonzero_maximum_size() {
+        let mut e = engine();
+        e.register(0x0096_afc0, |_, a| ret(0x9000 + a[0]));
+        let array: Ptr<NiTArray> = e.new_object();
+        e.set(array, NiTArray::m_usSize, 7);
+        fn_0060bd20(&mut e, array, 5, 2);
+        assert_eq!(e.mem.u32(array.addr()), VTABLE_NI_T_ARRAY);
+        assert_eq!(e.get(array, NiTArray::m_pBase), 0x9005);
+        assert_eq!(e.get(array, NiTArray::m_usSize), 0);
+        assert_eq!(e.get(array, NiTArray::m_usESize), 0);
+        fn_0060bd20(&mut e, array, 0, 2);
+        assert_eq!(e.get(array, NiTArray::m_pBase), 0);
+    }
+
+    #[test]
+    fn array_store_grows_first_when_the_index_is_past_the_maximum() {
+        let mut e = engine();
+        let array: Ptr<NiTArray> = e.new_object();
+        e.set(array, NiTArray::m_usMaxSize, 4);
+        e.set(array, NiTArray::m_usGrowBy, 3);
+        started(&mut e);
+        assert_eq!(fn_0060bd90(&mut e, array, 3, 0xaa), 3);
+        assert!(calls(&e, ARRAY_GROW).is_empty());
+        assert_eq!(fn_0060bd90(&mut e, array, 4, 0xbb), 4);
+        assert_eq!(calls(&e, ARRAY_GROW), vec![vec![array.addr(), 7]]);
+        assert_eq!(calls(&e, ARRAY_STORE).len(), 2);
+    }
+
+    #[test]
+    fn uninitialized_copy_dispatch_forwards_six_words() {
+        let mut e = engine();
+        e.register(OVERLOAD_TAG, |_, _| ret(0x1ab));
+        started(&mut e);
+        let end = fn_0060be00(&mut e, 0x10, 0x10, 0x20, 0x30);
+        assert_eq!(end, 0x20);
+        assert_eq!(
+            calls(&e, UNINITIALIZED_COPY),
+            vec![vec![0x10, 0x10, 0x20, 0x30, 0xab, 0]]
+        );
+    }
+
+    #[test]
+    fn float_fill_copies_through_the_x87_and_quiets_signalling_nans() {
+        let mut e = engine();
+        let buffer = e.mem.alloc(12);
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(value, 0x7f80_0001);
+        fn_0060be50(&mut e, buffer, buffer + 12, value);
+        assert_eq!(e.mem.u32(buffer), 0x7fc0_0001);
+        assert_eq!(e.mem.u32(buffer + 8), 0x7fc0_0001);
+        // Ordinary values are kept bit for bit; an empty range writes nothing.
+        e.mem.set_f32(value, -3.5);
+        fn_0060be50(&mut e, buffer, buffer + 4, value);
+        assert_eq!(e.mem.f32(buffer), -3.5);
+        assert_eq!(e.mem.u32(buffer + 4), 0x7fc0_0001);
+        fn_0060be50(&mut e, buffer, buffer, value);
+    }
+
+    #[test]
+    fn copy_backward_dispatch_reads_the_tag_byte_and_forwards_six_words() {
+        let mut e = engine();
+        e.register(OVERLOAD_TAG, |_, _| ret(0x2cd));
+        started(&mut e);
+        e.register(UNINITIALIZED_FILL, |_, _| Ret::default());
+        e.register(COPY_BACKWARD, |_, _| Ret::default());
+        fn_0060be80(&mut e, 0x10, 0x18, 0x40, 0x1ee, 7, 8);
+        assert_eq!(
+            calls(&e, COPY_BACKWARD),
+            vec![vec![0x10, 0x18, 0x40, 0xee, 0xcd, 0]]
+        );
+    }
+
+    #[test]
+    fn fill_n_dispatch_forwards_three_words() {
+        let mut e = engine();
+        e.register(UNINITIALIZED_FILL, |_, _| Ret::default());
+        started(&mut e);
+        fn_0060bed0(&mut e, 0x10, 2, 0x30, 1, 2, 3);
+        assert_eq!(calls(&e, UNINITIALIZED_FILL), vec![vec![0x10, 2, 0x30]]);
+    }
+
+    #[test]
+    fn the_translations_are_registered_under_their_addresses() {
+        let mut e = Engine::new();
+        assert!(e.is_translated(0x0060_b340));
+        assert!(e.is_translated(0x0060_bed0));
+        let m = matrix(&mut e, &[], 0);
+        assert_eq!(e.call(0x0060_b860, &args![m]).u32(), 0);
+    }
 }
