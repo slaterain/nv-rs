@@ -9,8 +9,14 @@
 //! Notes for the next session (session 1 translated the first 40 functions
 //! of the queue, `00470650` to `00472660`; session 2 the next 40, `004726b0`
 //! to `00473d00`, adding [`FormGroup`] (the 0x1C-byte entry of
-//! `m_grouplist`) and the helpers `seek_from_end` and `count_form`; the
-//! queue continues at `00473d20`). Session 1 still reaches `GetTESChunk`,
+//! `m_grouplist`) and the helpers `seek_from_end` and `count_form`;
+//! session 3 the last 25, `00473d20` to `00474880`: the unit is finished.
+//! It uses [`NiTPointerMap`] and [`NiTArray`] from `crate::types` for the
+//! file maps and the key array; the global file map and its user count are
+//! at [`GLOBAL_FILE_MAP`] and [`GLOBAL_FILE_MAP_USERS`]. Earlier code still
+//! reaches `DecompressCurrentForm` and the thread-safe map constructor
+//! `004744a0` by address (tests double them); that works unchanged.
+//! Session 1 still reaches `GetTESChunk`,
 //! `ReadFormHeader`, `ReadChunkHeader`, `CloseAllOpenGroups` and
 //! `FreeDecompressedForm` by address (their tests put doubles there);
 //! that works unchanged now that they are translated:
@@ -47,7 +53,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::{BSSimpleList, BSStringT};
+use crate::types::{BSSimpleList, BSStringT, NiTArray, NiTPointerMap};
 
 /// `BSSimpleList` node accessor (`006815c0`, returns its `ECX`): the node's
 /// own address, which is the address of its item slot.
@@ -222,6 +228,78 @@ const MESSAGE_CREATE_GROUP_FAILED: u32 = 0x0101_a198;
 const MESSAGE_VERSION_TOO_HIGH: u32 = 0x0101_a1d4;
 /// The `double` 1.34 (the highest header version this exe loads).
 const HIGHEST_HEADER_VERSION: u32 = 0x0101_a208;
+
+// Callees and data of the third session (`00473d20` to `00474880`): the
+// global file-key map, the zlib stream and the container helpers.
+/// The global map from a key (a temporary id) to a `TESFile`, created by
+/// [`fn_00473f20`] and destroyed when the last file registered in it goes.
+const GLOBAL_FILE_MAP: u32 = 0x011c_40b0;
+/// How many files are registered in [`GLOBAL_FILE_MAP`].
+const GLOBAL_FILE_MAP_USERS: u32 = 0x011c_40b4;
+/// `m_Flags` bit 5 (0x20): this file is registered in [`GLOBAL_FILE_MAP`].
+const FLAG_REGISTERED: u32 = 0x20;
+/// The map's remove-by-key (`00405430`, `(map; key)`), the key array's
+/// element accessor (`00877a30`, `(array; index)`: the address of the
+/// element slot) and its `SetAtGrow` (`00470000`, `(array; index,
+/// &element)`, the element passed by address).
+const FILE_MAP_REMOVE_AT: u32 = 0x0040_5430;
+const KEY_ARRAY_ELEMENT: u32 = 0x0087_7a30;
+const KEY_ARRAY_SET_AT_GROW: u32 = 0x0047_0000;
+/// The scope guard around the decompression: `00404eb0(guard; kind, 1,
+/// source file, line)` and `00404ee0(guard)`.
+const SCOPE_GUARD_OPEN: u32 = 0x0040_4eb0;
+const SCOPE_GUARD_CLOSE: u32 = 0x0040_4ee0;
+const SCOPE_GUARD_KIND: u32 = 0x30;
+const SOURCE_FILE_NAME: u32 = 0x0101_a2e0;
+const DECOMPRESS_LINE: u32 = 0xf8e;
+/// zlib 1.2.1 (`inflateInit_(stream, version, stream size)`,
+/// `inflate(stream, flush)`, `inflateEnd(stream)`), all cdecl; the version
+/// string and the size of a `z_stream`.
+const INFLATE_INIT: u32 = 0x00b4_3fe0;
+const INFLATE: u32 = 0x00b4_4000;
+const INFLATE_END: u32 = 0x00b4_5db0;
+const ZLIB_VERSION: u32 = 0x0101_a29c;
+const Z_STREAM_SIZE: u32 = 0x38;
+/// Size of the inflate state area the game reserves on its stack.
+const INFLATE_STATE_SIZE: u32 = 7084;
+/// zlib return codes the decompression tells apart.
+const Z_STREAM_END: i32 = 1;
+const Z_NEED_DICT: i32 = 2;
+const Z_STREAM_ERROR: i32 = -2;
+const Z_DATA_ERROR: i32 = -3;
+const Z_MEM_ERROR: i32 = -4;
+const MESSAGE_COMPRESSED_READ_FAILED: u32 = 0x0101_a2a4;
+const MESSAGE_INFLATE_INIT_FAILED: u32 = 0x0101_a268;
+const MESSAGE_INFLATE_FAILED: u32 = 0x0101_a240;
+const MESSAGE_INFLATE_NOT_TERMINATED: u32 = 0x0101_a210;
+/// The memory manager: `00401020()` answers the singleton, whose
+/// `Allocate(size)` is `00aa3e40` and `Deallocate(block)` `00aa4060`.
+const MEMORY_MANAGER_GET: u32 = 0x0040_1020;
+const MEMORY_MANAGER_ALLOCATE: u32 = 0x00aa_3e40;
+const MEMORY_MANAGER_DEALLOCATE: u32 = 0x00aa_4060;
+/// Allocation of a byte count and release of a block (`00aa1070(bytes)`,
+/// `00aa10f0(block)`), cdecl.
+const ALLOCATE_BLOCK: u32 = 0x00aa_1070;
+const FREE_BLOCK: u32 = 0x00aa_10f0;
+/// Allocation of `count` pointers (`0096afc0(count)`) and release of an
+/// array's elements (`004ede70(block)`), cdecl.
+const ALLOCATE_POINTERS: u32 = 0x0096_afc0;
+const FREE_ARRAY_ELEMENTS: u32 = 0x004e_de70;
+/// Vtables the container constructors store: the `NiTPointerMap` family
+/// (`NiTMapBase<NiTPointerAllocator>` base, then the derived class), the
+/// `NiTMap` family, and the key array's base and derived classes.
+const VTABLE_POINTER_MAP: u32 = 0x0101_a324;
+const VTABLE_POINTER_MAP_BASE: u32 = 0x0101_a364;
+const VTABLE_MAP: u32 = 0x0101_a344;
+const VTABLE_MAP_BASE: u32 = 0x0101_a384;
+const VTABLE_KEY_ARRAY_BASE: u32 = 0x0101_a3a4;
+const VTABLE_KEY_ARRAY: u32 = 0x0101_a3ac;
+/// The zlib allocation and release hooks of the decompression
+/// ([`fn_00474460`], [`fn_00474480`]), stored in the `z_stream`.
+const ZALLOC_HOOK: u32 = 0x0047_4460;
+const ZFREE_HOOK: u32 = 0x0047_4480;
+/// Bucket count of the global file map.
+const GLOBAL_FILE_MAP_BUCKETS: u32 = 0x3e9;
 
 /// The word at this address is the `whence` the code passes to `BSFile`'s
 /// seek (0 in the exe).
@@ -2335,6 +2413,512 @@ pub fn fn_00473d00(_e: &mut Engine, _unused_this: Ptr, _unused_1: u32, _unused_2
     true
 }
 
+// Translated from 00473d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets or clears bit 5 (0x20) of `m_Flags`: the file is registered in the
+/// global file map.
+pub fn fn_00473d20(e: &mut Engine, this: Ptr<TESFile>, on: bool) {
+    if on {
+        modify_flags(e, this, FLAG_REGISTERED, 0);
+    } else {
+        modify_flags(e, this, 0, FLAG_REGISTERED);
+    }
+}
+
+// Translated from 00473d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 5 (0x20) of `m_Flags`: the file is registered in the global file map.
+pub fn fn_00473d70(e: &mut Engine, this: Ptr<TESFile>) -> bool {
+    flag_is_set(e, this, FLAG_REGISTERED)
+}
+
+// Translated from 00473d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Unregisters the file from the global file map. Does nothing unless bit 5
+/// of `m_Flags` is set; clears it and counts the file out. When it was the
+/// last registered file the map is cleared, deleted through its virtual
+/// destructor and forgotten; otherwise every key whose value is this file is
+/// collected into a temporary key array and removed from the map. The
+/// compiler's exception-unwinding frame is not translated.
+pub fn fn_00473d90(e: &mut Engine, this: Ptr<TESFile>) {
+    if !fn_00473d70(e, this) {
+        return;
+    }
+    fn_00473d20(e, this, false);
+    let users = e.global::<u32>(GLOBAL_FILE_MAP_USERS).wrapping_sub(1);
+    e.set_global(GLOBAL_FILE_MAP_USERS, users);
+    if users == 0 {
+        let map: u32 = e.global(GLOBAL_FILE_MAP);
+        e.call(THREAD_FILE_MAP_CLEAR, &args![map]);
+        let map: u32 = e.global(GLOBAL_FILE_MAP);
+        if map != 0 {
+            e.vcall(map, 0, &args![1u32]);
+        }
+        e.set_global(GLOBAL_FILE_MAP, 0u32);
+        return;
+    }
+    // The game's locals: the key array (0x10 bytes), the iteration position,
+    // the key and the value.
+    e.with_stack(0x20, |e, block| {
+        let array = block.cast::<NiTArray>();
+        let position = block.byte_add(0x10);
+        let key = block.byte_add(0x14);
+        let value = block.byte_add(0x18);
+        fn_00474790(e, array, 100, 100);
+        let mut count = 0u32;
+        let map: u32 = e.global(GLOBAL_FILE_MAP);
+        let first = e.call(THREAD_FILE_MAP_BEGIN, &args![map]).u32();
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            e.mem.set_u32(value.addr(), 0);
+            e.mem.set_u32(key.addr(), 0);
+            let map: u32 = e.global(GLOBAL_FILE_MAP);
+            e.call(THREAD_FILE_MAP_NEXT, &args![map, position, key, value]);
+            if e.mem.u32(value.addr()) == this.addr() {
+                e.call(KEY_ARRAY_SET_AT_GROW, &args![array, count, key]);
+                count += 1;
+            }
+        }
+        for index in 0..count {
+            let slot = e.call(KEY_ARRAY_ELEMENT, &args![array, index]).u32();
+            let removed_key = e.mem.u32(slot);
+            let map: u32 = e.global(GLOBAL_FILE_MAP);
+            e.call(FILE_MAP_REMOVE_AT, &args![map, removed_key]);
+        }
+        fn_00473f00(e, array);
+    });
+}
+
+// Translated from 00473f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the key array of [`fn_00473d90`] (a call of the base
+/// destructor [`fn_00474760`]).
+pub fn fn_00473f00(e: &mut Engine, this: Ptr<NiTArray>) {
+    fn_00474760(e, this);
+}
+
+// Translated from 00473f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Registers `file` in the global file map under `key`: creates the map
+/// (0x3E9 buckets) first when there is none, stores the pair, and, when the
+/// file was not yet marked as registered, marks it and counts it in.
+/// cdecl; the compiler's exception-unwinding frame is not translated.
+pub fn fn_00473f20(e: &mut Engine, key: u32, file: Ptr<TESFile>) {
+    if e.global::<u32>(GLOBAL_FILE_MAP) == 0 {
+        let block = e.call(OPERATOR_NEW, &args![0x10u32]).u32();
+        let map = if block != 0 {
+            fn_004744d0(e, Ptr::new(block), GLOBAL_FILE_MAP_BUCKETS).addr()
+        } else {
+            0
+        };
+        e.set_global(GLOBAL_FILE_MAP, map);
+    }
+    let map: u32 = e.global(GLOBAL_FILE_MAP);
+    e.call(THREAD_FILE_MAP_SET_AT, &args![map, key, file]);
+    if !fn_00473d70(e, file) {
+        fn_00473d20(e, file, true);
+        let users = e.global::<u32>(GLOBAL_FILE_MAP_USERS).wrapping_add(1);
+        e.set_global(GLOBAL_FILE_MAP_USERS, users);
+    }
+}
+
+// Translated from 00473ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True unless `key` is registered in the global file map to a file other
+/// than the root of `file`'s parent chain (`file` itself when it has no
+/// parent). True when there is no map, `key` is 0, or the key is unknown or
+/// maps to 0. cdecl.
+pub fn fn_00473ff0(e: &mut Engine, key: u32, file: Ptr<TESFile>) -> bool {
+    let map: u32 = e.global(GLOBAL_FILE_MAP);
+    if map == 0 || key == 0 {
+        return true;
+    }
+    let (found, registered) = e.with_stack(4, |e, slot| {
+        let found = e
+            .call(THREAD_FILE_MAP_LOOKUP, &args![map, key, slot])
+            .bool();
+        (found, e.mem.u32(slot.addr()))
+    });
+    if !found || registered == 0 {
+        return true;
+    }
+    let mut expected = fn_00473c70(e, file).addr();
+    if expected == 0 {
+        expected = file.addr();
+    }
+    registered == expected
+}
+
+// Translated from 00474060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::GetFileForTempID` (Xbox PDB): the file registered under `key`
+/// in the global file map, or 0 (also without a map). cdecl.
+pub fn tes_file_get_file_for_temp_id(e: &mut Engine, key: u32) -> u32 {
+    let map: u32 = e.global(GLOBAL_FILE_MAP);
+    if map == 0 {
+        return 0;
+    }
+    e.with_stack(4, |e, slot| {
+        if e.call(THREAD_FILE_MAP_LOOKUP, &args![map, key, slot])
+            .bool()
+        {
+            e.mem.u32(slot.addr())
+        } else {
+            0
+        }
+    })
+}
+
+// Translated from 004740a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESFile::DecompressCurrentForm` (Xbox PDB): inflates the current
+/// compressed record into a new `pDecompressedFormBuffer`. Works only on a
+/// record with data whose tag is not the header-only tag at
+/// [`RECORD_TAG_01187020`], that [`fn_00472100`] calls compressed and whose
+/// tag names a form type: reads `length` bytes of the record into a scratch
+/// buffer (a word with the decompressed size, converted from the file's byte
+/// order when needed, then the zlib data), allocates the decompressed
+/// buffer and inflates into it with zlib 1.2.1 (allocator hooks
+/// [`fn_00474460`] and [`fn_00474480`]). Any failure (short read, zlib
+/// error, stream that does not terminate) is logged, frees the decompressed
+/// buffer and leaves the file without one. The scratch buffer is always
+/// released. The memory-context scope guard (`00404eb0`) wraps all of it;
+/// the compiler's exception-unwinding frame is not translated.
+pub fn tes_file_decompress_current_form(e: &mut Engine, this: Ptr<TESFile>) {
+    // The game's locals: the guard (4 bytes), the size word (4), the
+    // `z_stream` (0x38) and the inflate state area.
+    e.with_stack(8 + Z_STREAM_SIZE + INFLATE_STATE_SIZE, |e, block| {
+        e.call(
+            SCOPE_GUARD_OPEN,
+            &args![
+                block,
+                SCOPE_GUARD_KIND,
+                1u32,
+                SOURCE_FILE_NAME,
+                DECOMPRESS_LINE
+            ],
+        );
+        decompress_current_form_inner(e, this, block);
+        e.call(SCOPE_GUARD_CLOSE, &args![block]);
+    });
+}
+
+/// The body of [`tes_file_decompress_current_form`], inside the scope guard.
+fn decompress_current_form_inner(e: &mut Engine, this: Ptr<TESFile>, block: Ptr) {
+    let size_word = block.byte_add(4);
+    let stream = block.byte_add(8);
+    let state_area = block.byte_add(8 + Z_STREAM_SIZE);
+    let form = this.at(TESFile::m_currentform);
+    if e.get(form, Form::length) == 0 {
+        return;
+    }
+    let header_only_tag: u32 = e.global(RECORD_TAG_01187020);
+    if e.get(form, Form::form) == header_only_tag || !fn_00472100(e, this) {
+        return;
+    }
+    let tag = e.get(form, Form::form);
+    let form_type = e.call(TYPE_FROM_FORM_TAG, &args![tag]).u32() as u8;
+    if form_type == 0 {
+        return;
+    }
+    let length = e.get(form, Form::length);
+    let raw = e.call(OPERATOR_NEW, &args![length.wrapping_add(1)]).u32();
+    if raw == 0 {
+        return;
+    }
+    let file = e.get(this, TESFile::m_pFile);
+    let read = e.call(BSFILE_READ, &args![file, raw, length]).u32();
+    if read != e.get(form, Form::length) {
+        log(e, &args![MESSAGE_COMPRESSED_READ_FAILED]);
+        delete(e, raw);
+        return;
+    }
+    // The first word of the data is the decompressed size.
+    let first = e.mem.u32(raw);
+    e.mem.set_u32(size_word.addr(), first);
+    let compressed = raw + 4;
+    if e.call(MUST_ENDIAN_CONVERT, &args![this]).bool() {
+        e.call(SWAP_U32, &args![size_word, 0u32]);
+    }
+    let decompressed_size = e.mem.u32(size_word.addr());
+    let terminator = raw + e.get(form, Form::length);
+    e.mem.set_u8(terminator, 0);
+    let output = e.call(OPERATOR_NEW, &args![decompressed_size]).u32();
+    e.set(this, TESFile::pDecompressedFormBuffer, Ptr::new(output));
+    e.set(
+        this,
+        TESFile::iDecompressedFormBufferSize,
+        decompressed_size,
+    );
+    // `z_stream`: next_in +0, avail_in +4, next_out +0xC, avail_out +0x10,
+    // state +0x1C, zalloc +0x20, zfree +0x24, opaque +0x28.
+    e.mem.set_u32(stream.addr() + 0x20, ZALLOC_HOOK);
+    e.mem.set_u32(stream.addr() + 0x24, ZFREE_HOOK);
+    e.mem.set_u32(stream.addr() + 0x28, 0);
+    e.mem.set_u32(stream.addr() + 0x04, 0);
+    e.mem.set_u32(stream.addr(), 0);
+    e.mem.set_u32(stream.addr() + 0x1C, state_area.addr());
+    let init = e
+        .call(INFLATE_INIT, &args![stream, ZLIB_VERSION, Z_STREAM_SIZE])
+        .u32() as i32;
+    if init != 0 {
+        inflate_failed(e, this, raw, stream, MESSAGE_INFLATE_INIT_FAILED);
+        return;
+    }
+    let packed_size = e.get(form, Form::length);
+    e.mem
+        .set_u32(stream.addr() + 0x04, packed_size.wrapping_sub(4));
+    e.mem.set_u32(stream.addr(), compressed);
+    e.mem.set_u32(stream.addr() + 0x10, decompressed_size);
+    let output = e.get(this, TESFile::pDecompressedFormBuffer).addr();
+    e.mem.set_u32(stream.addr() + 0x0C, output);
+    let result = e.call(INFLATE, &args![stream, 0u32]).u32() as i32;
+    if matches!(
+        result,
+        Z_STREAM_ERROR | Z_NEED_DICT | Z_DATA_ERROR | Z_MEM_ERROR
+    ) {
+        inflate_failed(e, this, raw, stream, MESSAGE_INFLATE_FAILED);
+        return;
+    }
+    if result != Z_STREAM_END {
+        inflate_failed(e, this, raw, stream, MESSAGE_INFLATE_NOT_TERMINATED);
+        return;
+    }
+    e.call(INFLATE_END, &args![stream]);
+    delete(e, raw);
+}
+
+/// The failure exit of the decompression: ends the zlib stream, logs
+/// `message`, frees the decompressed buffer and the scratch buffer.
+fn inflate_failed(e: &mut Engine, this: Ptr<TESFile>, raw: u32, stream: Ptr, message: u32) {
+    e.call(INFLATE_END, &args![stream]);
+    log(e, &args![message]);
+    fn_00473960(e, this);
+    delete(e, raw);
+}
+
+// Translated from 00474460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The zlib allocation hook of [`tes_file_decompress_current_form`]
+/// (`zalloc(opaque, items, size)`): `items * size` bytes from the memory
+/// manager. The opaque word is not read.
+pub fn fn_00474460(e: &mut Engine, _unused_opaque: u32, items: u32, size: u32) -> u32 {
+    let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+    e.call(
+        MEMORY_MANAGER_ALLOCATE,
+        &args![manager, items.wrapping_mul(size)],
+    )
+    .u32()
+}
+
+// Translated from 00474480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The zlib release hook (`zfree(opaque, block)`): gives `block` back to
+/// the memory manager. The opaque word is not read.
+pub fn fn_00474480(e: &mut Engine, _unused_opaque: u32, block: u32) {
+    let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+    e.call(MEMORY_MANAGER_DEALLOCATE, &args![manager, block]);
+}
+
+// Translated from 004744a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `NiTPointerMap` of the per-thread file copies (the
+/// thread-safe file map): base constructor with `hash_size` buckets, then
+/// its own vtable. Answers `this`.
+pub fn fn_004744a0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    fn_00474560(e, this, hash_size);
+    e.mem.set_u32(this.addr(), VTABLE_POINTER_MAP);
+    this
+}
+
+// Translated from 004744d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `NiTMap` of the global file map: base constructor with
+/// `hash_size` buckets, then its own vtable. Answers `this`.
+pub fn fn_004744d0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    fn_00474660(e, this, hash_size);
+    e.mem.set_u32(this.addr(), VTABLE_MAP);
+    this
+}
+
+// Translated from 00474500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<unsigned int, TESFile *>::_scalar_deleting_destructor_`
+/// (Xbox PDB): destroys the map ([`fn_004745d0`]) and, when bit 0 of
+/// `flags` is set, frees it. Answers `this`.
+pub fn ni_t_pointer_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_004745d0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00474530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned int, TESFile *>::_scalar_deleting_destructor_` (Xbox
+/// PDB): destroys the map ([`fn_004746d0`]) and, when bit 0 of `flags` is
+/// set, frees it. Answers `this`.
+pub fn ni_t_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_004746d0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+/// The shared body of the two map base constructors: stores `vtable`, the
+/// bucket count and a zero item count, and allocates the bucket array
+/// (`hash_size` pointers) cleared to zero.
+fn construct_map_base(e: &mut Engine, this: Ptr<NiTPointerMap>, vtable: u32, hash_size: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    e.set(this, NiTPointerMap::m_uiHashSize, hash_size);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let bytes = hash_size.wrapping_shl(2);
+    let buckets = e.call(ALLOCATE_BLOCK, &args![bytes]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, buckets);
+    let buckets = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let bytes = e.get(this, NiTPointerMap::m_uiHashSize).wrapping_shl(2);
+    e.call(MEMSET, &args![buckets, 0u32, bytes]);
+}
+
+// Translated from 00474560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of [`fn_004744a0`]'s map
+/// (`NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned int, TESFile *>`):
+/// see [`construct_map_base`]. Answers `this`.
+pub fn fn_00474560(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_base(e, this, VTABLE_POINTER_MAP_BASE, hash_size);
+    this
+}
+
+// Translated from 004745d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of [`fn_004744a0`]'s map: sets its vtable, clears it
+/// (`00438af0`), then runs the base destructor [`fn_00474630`]. (The
+/// decompiler's `ctype<char>` name is a folded destructor.) The compiler's
+/// exception-unwinding frame is not translated.
+pub fn fn_004745d0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_POINTER_MAP);
+    e.call(THREAD_FILE_MAP_CLEAR, &args![this]);
+    fn_00474630(e, this);
+}
+
+// Translated from 00474630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base destructor of [`fn_004744a0`]'s map: sets the base vtable, clears
+/// the map (`00438af0`) and frees the bucket array.
+pub fn fn_00474630(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_POINTER_MAP_BASE);
+    e.call(THREAD_FILE_MAP_CLEAR, &args![this]);
+    let buckets = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(FREE_BLOCK, &args![buckets]);
+}
+
+// Translated from 00474660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of [`fn_004744d0`]'s map
+/// (`NiTMapBase<DFALL<NiTMapItem<unsigned int, TESFile *>>, ...>`): see
+/// [`construct_map_base`]. Answers `this`.
+pub fn fn_00474660(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_base(e, this, VTABLE_MAP_BASE, hash_size);
+    this
+}
+
+// Translated from 004746d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of [`fn_004744d0`]'s map: sets its vtable, clears it
+/// (`00438af0`), then runs the base destructor [`fn_00474730`]. The
+/// compiler's exception-unwinding frame is not translated.
+pub fn fn_004746d0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_MAP);
+    e.call(THREAD_FILE_MAP_CLEAR, &args![this]);
+    fn_00474730(e, this);
+}
+
+// Translated from 00474730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base destructor of [`fn_004744d0`]'s map: sets the base vtable, clears
+/// the map (`00438af0`) and frees the bucket array.
+pub fn fn_00474730(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_MAP_BASE);
+    e.call(THREAD_FILE_MAP_CLEAR, &args![this]);
+    let buckets = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(FREE_BLOCK, &args![buckets]);
+}
+
+// Translated from 00474760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the key array (`std::basic_streambuf` is the decompiler's
+/// wrong name for a folded destructor): sets the base vtable and releases
+/// the element block (`004ede70`).
+pub fn fn_00474760(e: &mut Engine, this: Ptr<NiTArray>) {
+    e.mem.set_u32(this.addr(), VTABLE_KEY_ARRAY_BASE);
+    let elements = e.get(this, NiTArray::m_pBase);
+    e.call(FREE_ARRAY_ELEMENTS, &args![elements]);
+}
+
+// Translated from 00474790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the key array of [`fn_00473d90`]: base constructor
+/// [`fn_00474880`] with `(max_size, grow_by)`, then its own vtable. Answers
+/// `this`.
+pub fn fn_00474790(
+    e: &mut Engine,
+    this: Ptr<NiTArray>,
+    max_size: u32,
+    grow_by: u32,
+) -> Ptr<NiTArray> {
+    fn_00474880(e, this, max_size, grow_by);
+    e.mem.set_u32(this.addr(), VTABLE_KEY_ARRAY);
+    this
+}
+
+// Translated from 004747c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned int, TESFile *>::
+/// _scalar_deleting_destructor_` (Xbox PDB): the base destructor
+/// [`fn_00474630`] and, when bit 0 of `flags` is set, the release of the
+/// object. Answers `this`.
+pub fn ni_t_map_base_pointer_allocator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_00474630(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 004747f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned int, TESFile *>>, unsigned int,
+/// TESFile *>::_scalar_deleting_destructor_` (Xbox PDB): the base destructor
+/// [`fn_00474730`] and, when bit 0 of `flags` is set, the release of the
+/// object. Answers `this`.
+pub fn ni_t_map_base_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_00474730(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00474880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base constructor of the key array: stores the base vtable, `max_size`
+/// and `grow_by` (both 16-bit), zero size and element count, and allocates
+/// room for `max_size` pointers (none when `max_size` is 0). Answers `this`.
+pub fn fn_00474880(
+    e: &mut Engine,
+    this: Ptr<NiTArray>,
+    max_size: u32,
+    grow_by: u32,
+) -> Ptr<NiTArray> {
+    e.mem.set_u32(this.addr(), VTABLE_KEY_ARRAY_BASE);
+    e.set(this, NiTArray::m_usMaxSize, max_size as u16);
+    e.set(this, NiTArray::m_usGrowBy, grow_by as u16);
+    e.set(this, NiTArray::m_usSize, 0);
+    e.set(this, NiTArray::m_usESize, 0);
+    let max = e.get(this, NiTArray::m_usMaxSize);
+    if max == 0 {
+        e.set(this, NiTArray::m_pBase, 0);
+    } else {
+        let elements = e.call(ALLOCATE_POINTERS, &args![max as u32]).u32();
+        e.set(this, NiTArray::m_pBase, elements);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2460,6 +3044,68 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00473cb0, fn_00473cb0(Ptr<TESFile>, Ptr<TESFile>)),
         entry!(0x00473ce0, fn_00473ce0(Ptr<TESFile>, u32)),
         entry!(0x00473d00, fn_00473d00(Ptr, u32, u32) -> bool),
+        entry!(0x00473d20, fn_00473d20(Ptr<TESFile>, bool)),
+        entry!(0x00473d70, fn_00473d70(Ptr<TESFile>) -> bool),
+        entry!(0x00473d90, fn_00473d90(Ptr<TESFile>)),
+        entry!(0x00473f00, fn_00473f00(Ptr<NiTArray>)),
+        entry!(0x00473f20, fn_00473f20(u32, Ptr<TESFile>)),
+        entry!(0x00473ff0, fn_00473ff0(u32, Ptr<TESFile>) -> bool),
+        entry!(0x00474060, tes_file_get_file_for_temp_id(u32) -> u32),
+        entry!(0x004740a0, tes_file_decompress_current_form(Ptr<TESFile>)),
+        entry!(0x00474460, fn_00474460(u32, u32, u32) -> u32),
+        entry!(0x00474480, fn_00474480(u32, u32)),
+        entry!(
+            0x004744a0,
+            fn_004744a0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x004744d0,
+            fn_004744d0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00474500,
+            ni_t_pointer_map_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00474530,
+            ni_t_map_scalar_deleting_destructor(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00474560,
+            fn_00474560(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x004745d0, fn_004745d0(Ptr<NiTPointerMap>)),
+        entry!(0x00474630, fn_00474630(Ptr<NiTPointerMap>)),
+        entry!(
+            0x00474660,
+            fn_00474660(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x004746d0, fn_004746d0(Ptr<NiTPointerMap>)),
+        entry!(0x00474730, fn_00474730(Ptr<NiTPointerMap>)),
+        entry!(0x00474760, fn_00474760(Ptr<NiTArray>)),
+        entry!(
+            0x00474790,
+            fn_00474790(Ptr<NiTArray>, u32, u32) -> Ptr<NiTArray>
+        ),
+        entry!(
+            0x004747c0,
+            ni_t_map_base_pointer_allocator_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32,
+            )
+                -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x004747f0,
+            ni_t_map_base_scalar_deleting_destructor(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00474880,
+            fn_00474880(Ptr<NiTArray>, u32, u32) -> Ptr<NiTArray>
+        ),
     ]
 }
 
@@ -5225,5 +5871,547 @@ mod tests {
     fn the_always_true_method_ignores_its_arguments() {
         let mut e = engine2();
         assert!(e.call(0x0047_3d00, &args![0u32, 1u32, 2u32]).bool());
+    }
+
+    // Tests of the third session (`00473d20` to `00474880`).
+
+    /// The vtable of the fake global map: slot 0 is the deleting destructor.
+    const MAP_VTABLE: u32 = 0x0200_2000;
+    const MAP_DESTRUCTOR: u32 = 0x7100_0100;
+    /// Where the tests keep what their doubles saw.
+    const SEEN: u32 = CONFIG + 0x100;
+
+    /// An engine with the page of the global map pointer, the scope guard
+    /// and the allocation callees doubled.
+    fn engine3() -> Engine {
+        let mut e = engine2();
+        for page in [0x011c_4000, MAP_VTABLE] {
+            e.map(page, 0x1000);
+        }
+        e.register(SCOPE_GUARD_OPEN, |_, _| Ret::default());
+        e.register(SCOPE_GUARD_CLOSE, |_, _| Ret::default());
+        e.register(ALLOCATE_BLOCK, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(FREE_BLOCK, |e, a| {
+            e.mem.free(a[0]);
+            Ret::default()
+        });
+        e.register(ALLOCATE_POINTERS, |e, a| ret(e.mem.alloc(a[0] * 4)));
+        e.register(FREE_ARRAY_ELEMENTS, |e, a| e.call(FREE_BLOCK, &a[..1]));
+        e.register(THREAD_FILE_MAP_CLEAR, |_, _| Ret::default());
+        e.put_vtable(MAP_VTABLE, &[MAP_DESTRUCTOR]);
+        e
+    }
+
+    /// Doubles for the key array: `SetAtGrow` stores the element the
+    /// pointer points to; `00877a30` answers the slot's address.
+    fn key_array_doubles(e: &mut Engine) {
+        e.register(KEY_ARRAY_SET_AT_GROW, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            let element = e.mem.u32(a[2]);
+            e.mem.set_u32(base + 4 * a[1], element);
+            ret(a[1])
+        });
+        e.register(KEY_ARRAY_ELEMENT, |e, a| {
+            let base = e.mem.u32(a[0] + 4);
+            ret(base + 4 * a[1])
+        });
+    }
+
+    /// A fake global map holding `entries` (key, file); iteration doubles
+    /// walk them. Sets the global pointer to a map object with the fake
+    /// vtable and returns it.
+    fn global_map(e: &mut Engine, entries: Vec<(u32, u32)>) -> u32 {
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map, MAP_VTABLE);
+        e.set_global(GLOBAL_FILE_MAP, map);
+        let walk = entries.clone();
+        e.register_double(THREAD_FILE_MAP_BEGIN, move |_, _| {
+            ret(if walk.is_empty() { 0 } else { 1 })
+        });
+        let walk = entries.clone();
+        e.register_double(THREAD_FILE_MAP_NEXT, move |e, a| {
+            let index = e.mem.u32(a[1]) as usize - 1;
+            e.mem.set_u32(a[2], walk[index].0);
+            e.mem.set_u32(a[3], walk[index].1);
+            let next = if index + 1 < walk.len() { index + 2 } else { 0 };
+            e.mem.set_u32(a[1], next as u32);
+            Ret::default()
+        });
+        e.register_double(THREAD_FILE_MAP_LOOKUP, move |e, a| {
+            match entries.iter().find(|(key, _)| *key == a[1]) {
+                Some((_, file)) => {
+                    e.mem.set_u32(a[2], *file);
+                    ret(1)
+                }
+                None => ret(0),
+            }
+        });
+        map
+    }
+
+    #[test]
+    fn registered_bit_is_bit_five() {
+        let mut e = engine3();
+        let file = new_file(&mut e);
+        assert!(!e.call(0x0047_3d70, &args![file]).bool());
+        e.call(0x0047_3d20, &args![file, true]);
+        assert_eq!(e.get(file, TESFile::m_Flags), 0x20);
+        assert!(e.call(0x0047_3d70, &args![file]).bool());
+        e.set(file, TESFile::m_Flags, 0xffff_ffff);
+        e.call(0x0047_3d20, &args![file, false]);
+        assert_eq!(e.get(file, TESFile::m_Flags), 0xffff_ffdf);
+        assert!(!e.call(0x0047_3d70, &args![file]).bool());
+    }
+
+    #[test]
+    fn unregistering_an_unregistered_file_does_nothing() {
+        let mut e = engine3();
+        let file = new_file(&mut e);
+        e.set_global(GLOBAL_FILE_MAP_USERS, 3u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3d90, &args![file]);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 3);
+        assert_eq!(e.call_log.take().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn unregistering_the_last_file_deletes_the_map() {
+        let mut e = engine3();
+        let file = new_file(&mut e);
+        e.set(file, TESFile::m_Flags, 0x20);
+        let map = global_map(&mut e, vec![]);
+        e.set_global(GLOBAL_FILE_MAP_USERS, 1u32);
+        e.register(MAP_DESTRUCTOR, |e, a| {
+            e.mem.set_u32(SEEN, a[0]);
+            e.mem.set_u32(SEEN + 4, a[1]);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3d90, &args![file]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(file, TESFile::m_Flags), 0);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 0);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP), 0);
+        assert_eq!(calls_to(&log, THREAD_FILE_MAP_CLEAR), vec![vec![map]]);
+        assert_eq!(e.mem.u32(SEEN), map);
+        assert_eq!(e.mem.u32(SEEN + 4), 1);
+        assert!(calls_to(&log, FILE_MAP_REMOVE_AT).is_empty());
+    }
+
+    #[test]
+    fn unregistering_one_of_several_removes_only_its_keys() {
+        let mut e = engine3();
+        key_array_doubles(&mut e);
+        e.register(FILE_MAP_REMOVE_AT, |_, _| Ret::default());
+        let file = new_file(&mut e);
+        let other = new_file(&mut e);
+        e.set(file, TESFile::m_Flags, 0x20 | 0x01);
+        let map = global_map(
+            &mut e,
+            vec![
+                (11, file.addr()),
+                (12, other.addr()),
+                (13, file.addr()),
+                (14, 0),
+            ],
+        );
+        e.set_global(GLOBAL_FILE_MAP_USERS, 2u32);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3d90, &args![file]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.get(file, TESFile::m_Flags), 0x01);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 1);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP), map);
+        assert_eq!(
+            calls_to(&log, FILE_MAP_REMOVE_AT),
+            vec![vec![map, 11], vec![map, 13]]
+        );
+        assert!(calls_to(&log, THREAD_FILE_MAP_CLEAR).is_empty());
+    }
+
+    #[test]
+    fn registering_creates_the_map_and_counts_the_file_once() {
+        let mut e = engine3();
+        let file = new_file(&mut e);
+        e.register(THREAD_FILE_MAP_SET_AT, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3f20, &args![77u32, file]);
+        let map = e.global::<u32>(GLOBAL_FILE_MAP);
+        assert_ne!(map, 0);
+        assert_eq!(e.mem.u32(map), VTABLE_MAP);
+        assert_eq!(e.mem.u32(map + 4), 0x3e9);
+        assert_ne!(e.mem.u32(map + 8), 0);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 1);
+        assert!(e.call(0x0047_3d70, &args![file]).bool());
+        // A second key for the same file: same map, same count.
+        e.call(0x0047_3f20, &args![78u32, file]);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP), map);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 1);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, THREAD_FILE_MAP_SET_AT),
+            vec![vec![map, 77, file.addr()], vec![map, 78, file.addr()]]
+        );
+    }
+
+    #[test]
+    fn registering_a_second_file_counts_it() {
+        let mut e = engine3();
+        let first = new_file(&mut e);
+        let second = new_file(&mut e);
+        e.register(THREAD_FILE_MAP_SET_AT, |_, _| Ret::default());
+        e.call(0x0047_3f20, &args![1u32, first]);
+        e.call(0x0047_3f20, &args![2u32, second]);
+        assert_eq!(e.global::<u32>(GLOBAL_FILE_MAP_USERS), 2);
+    }
+
+    #[test]
+    fn key_check_passes_without_a_map_a_key_or_an_entry() {
+        let mut e = engine3();
+        let file = new_file(&mut e);
+        // No map.
+        assert!(e.call(0x0047_3ff0, &args![5u32, file]).bool());
+        // A map, but key 0.
+        global_map(&mut e, vec![(5, 0x1234)]);
+        assert!(e.call(0x0047_3ff0, &args![0u32, file]).bool());
+        // Unknown key, and a key that maps to 0.
+        assert!(e.call(0x0047_3ff0, &args![6u32, file]).bool());
+        global_map(&mut e, vec![(5, 0)]);
+        assert!(e.call(0x0047_3ff0, &args![5u32, file]).bool());
+    }
+
+    #[test]
+    fn key_check_compares_with_the_root_of_the_parent_chain() {
+        let mut e = engine3();
+        let root = new_file(&mut e);
+        let leaf = new_file(&mut e);
+        e.set(leaf, TESFile::pThreadSafeParent, root.cast());
+        global_map(&mut e, vec![(5, root.addr())]);
+        assert!(e.call(0x0047_3ff0, &args![5u32, leaf]).bool());
+        global_map(&mut e, vec![(5, 0x9999)]);
+        assert!(!e.call(0x0047_3ff0, &args![5u32, leaf]).bool());
+        global_map(&mut e, vec![(5, root.addr())]);
+        assert!(e.call(0x0047_3ff0, &args![5u32, root]).bool());
+        global_map(&mut e, vec![(5, leaf.addr())]);
+        assert!(!e.call(0x0047_3ff0, &args![5u32, root]).bool());
+    }
+
+    #[test]
+    fn file_for_a_temporary_id() {
+        let mut e = engine3();
+        // No map: 0.
+        assert_eq!(e.call(0x0047_4060, &args![5u32]).u32(), 0);
+        global_map(&mut e, vec![(5, 0x4321)]);
+        assert_eq!(e.call(0x0047_4060, &args![5u32]).u32(), 0x4321);
+        assert_eq!(e.call(0x0047_4060, &args![6u32]).u32(), 0);
+    }
+
+    /// A file at the start of a compressed record of `length` bytes whose
+    /// data is `data` (size word first).
+    fn compressed_file(e: &mut Engine, length: u32, data: Vec<u8>) -> Ptr<TESFile> {
+        let (file, _) = open_file(e);
+        set_tag(e, file, TAG_RECORD, length, RECORD_FLAG_COMPRESSED);
+        serve_reads(e, data);
+        file
+    }
+
+    /// Doubles for zlib: `init` is what `inflateInit_` answers, `inflate`
+    /// what `inflate` answers; `inflate` also writes `unpacked` to the
+    /// output and copies the stream words to [`SEEN`].
+    fn zlib_doubles(e: &mut Engine, init: i32, inflate: i32, unpacked: &'static [u8]) {
+        e.register_double(INFLATE_INIT, move |e, a| {
+            for i in 0..14 {
+                let word = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(SEEN + 0x40 + 4 * i, word);
+            }
+            ret(init as u32)
+        });
+        e.register_double(INFLATE, move |e, a| {
+            for i in 0..14 {
+                let word = e.mem.u32(a[0] + 4 * i);
+                e.mem.set_u32(SEEN + 4 * i, word);
+            }
+            let output = e.mem.u32(a[0] + 0x0c);
+            e.mem.write(output, unpacked);
+            ret(inflate as u32)
+        });
+        e.register(INFLATE_END, |_, _| Ret::default());
+    }
+
+    #[test]
+    fn decompressing_inflates_the_record_into_a_new_buffer() {
+        let mut e = engine3();
+        zlib_doubles(&mut e, 0, 1, b"hello");
+        let mut data = 5u32.to_le_bytes().to_vec();
+        data.extend_from_slice(&[0xaa; 8]);
+        let file = compressed_file(&mut e, 12, data);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_40a0, &args![file]);
+        let log = e.call_log.take().unwrap();
+        let buffer = e.get(file, TESFile::pDecompressedFormBuffer);
+        assert!(!buffer.is_null());
+        assert_eq!(e.get(file, TESFile::iDecompressedFormBufferSize), 5);
+        assert_eq!(e.mem.bytes(buffer.addr(), 5), b"hello");
+        // The stream as `inflate` saw it: next_in, avail_in, next_out,
+        // avail_out, the allocator hooks and the version/size given to init.
+        assert_eq!(e.mem.u32(SEEN + 4), 8);
+        assert_eq!(e.mem.u32(SEEN + 0x0c), buffer.addr());
+        assert_eq!(e.mem.u32(SEEN + 0x10), 5);
+        assert_eq!(e.mem.u32(SEEN + 0x20), 0x0047_4460);
+        assert_eq!(e.mem.u32(SEEN + 0x24), 0x0047_4480);
+        assert_eq!(e.mem.u32(SEEN + 0x28), 0);
+        assert_ne!(e.mem.u32(SEEN + 0x1c), 0);
+        let scratch = e.mem.u32(SEEN) - 4;
+        assert_eq!(e.mem.u8(scratch + 12), 0, "terminator after the data");
+        let init = calls_to(&log, INFLATE_INIT);
+        assert_eq!(init.len(), 1);
+        assert_eq!(init[0][1..], [ZLIB_VERSION, 0x38]);
+        assert_eq!(calls_to(&log, INFLATE_END).len(), 1);
+        assert_eq!(calls_to(&log, INFLATE)[0][1], 0);
+        assert_eq!(
+            calls_to(&log, SCOPE_GUARD_OPEN)[0][1..],
+            [0x30, 1, SOURCE_FILE_NAME, 0xf8e]
+        );
+        assert_eq!(calls_to(&log, SCOPE_GUARD_CLOSE).len(), 1);
+        assert!(calls_to(&log, LOG).is_empty());
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![scratch]]);
+    }
+
+    #[test]
+    fn decompressing_swaps_the_size_word_of_a_foreign_file() {
+        let mut e = engine3();
+        zlib_doubles(&mut e, 0, 1, b"hi");
+        let mut data = 2u32.to_be_bytes().to_vec();
+        data.extend_from_slice(&[0xaa; 4]);
+        let file = compressed_file(&mut e, 8, data);
+        e.set(file, TESFile::bMustEndianConvert, true);
+        e.call(0x0047_40a0, &args![file]);
+        assert_eq!(e.get(file, TESFile::iDecompressedFormBufferSize), 2);
+        assert_eq!(e.mem.u32(SEEN + 4), 4);
+    }
+
+    #[test]
+    fn decompressing_skips_records_that_are_not_compressed() {
+        let mut e = engine3();
+        zlib_doubles(&mut e, 0, 1, b"x");
+        let file = compressed_file(&mut e, 12, vec![0; 12]);
+        e.call_log = Some(vec![]);
+        // No data.
+        set_tag(&mut e, file, TAG_RECORD, 0, RECORD_FLAG_COMPRESSED);
+        e.call(0x0047_40a0, &args![file]);
+        // The header-only tag.
+        set_tag(&mut e, file, TAG_HEADER_ONLY, 12, RECORD_FLAG_COMPRESSED);
+        e.call(0x0047_40a0, &args![file]);
+        // Not flagged compressed.
+        set_tag(&mut e, file, TAG_RECORD, 12, 0);
+        e.call(0x0047_40a0, &args![file]);
+        // A tag without a form type.
+        set_tag(&mut e, file, TAG_RECORD, 12, RECORD_FLAG_COMPRESSED);
+        e.register(TYPE_FROM_FORM_TAG, |_, _| ret(0));
+        e.call(0x0047_40a0, &args![file]);
+        let log = e.call_log.take().unwrap();
+        assert!(calls_to(&log, BSFILE_READ).is_empty());
+        assert!(e.get(file, TESFile::pDecompressedFormBuffer).is_null());
+        // Every attempt still opened and closed the scope guard.
+        assert_eq!(calls_to(&log, SCOPE_GUARD_OPEN).len(), 4);
+        assert_eq!(calls_to(&log, SCOPE_GUARD_CLOSE).len(), 4);
+    }
+
+    #[test]
+    fn decompressing_reports_a_short_read() {
+        let mut e = engine3();
+        zlib_doubles(&mut e, 0, 1, b"x");
+        let file = compressed_file(&mut e, 12, vec![1, 0, 0, 0, 7]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_40a0, &args![file]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            calls_to(&log, LOG),
+            vec![vec![MESSAGE_COMPRESSED_READ_FAILED]]
+        );
+        assert!(calls_to(&log, INFLATE_INIT).is_empty());
+        assert!(e.get(file, TESFile::pDecompressedFormBuffer).is_null());
+        assert_eq!(calls_to(&log, OPERATOR_DELETE).len(), 1);
+    }
+
+    #[test]
+    fn decompressing_reports_zlib_failures_and_drops_the_buffer() {
+        let cases: [(i32, i32, u32); 6] = [
+            (-2, 0, MESSAGE_INFLATE_INIT_FAILED),
+            (0, -2, MESSAGE_INFLATE_FAILED),
+            (0, 2, MESSAGE_INFLATE_FAILED),
+            (0, -3, MESSAGE_INFLATE_FAILED),
+            (0, -4, MESSAGE_INFLATE_FAILED),
+            (0, 0, MESSAGE_INFLATE_NOT_TERMINATED),
+        ];
+        for (init, inflate, message) in cases {
+            let mut e = engine3();
+            zlib_doubles(&mut e, init, inflate, b"x");
+            let mut data = 5u32.to_le_bytes().to_vec();
+            data.extend_from_slice(&[0; 8]);
+            let file = compressed_file(&mut e, 12, data);
+            e.call_log = Some(vec![]);
+            e.call(0x0047_40a0, &args![file]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(calls_to(&log, LOG), vec![vec![message]], "{init} {inflate}");
+            assert_eq!(calls_to(&log, INFLATE_END).len(), 1);
+            assert!(e.get(file, TESFile::pDecompressedFormBuffer).is_null());
+            assert_eq!(e.get(file, TESFile::iDecompressedFormBufferSize), 0);
+            // The decompressed buffer and the scratch buffer were freed.
+            assert_eq!(calls_to(&log, OPERATOR_DELETE).len(), 2);
+            assert_eq!(calls_to(&log, SCOPE_GUARD_CLOSE).len(), 1);
+        }
+    }
+
+    #[test]
+    fn zlib_hooks_use_the_memory_manager() {
+        let mut e = engine3();
+        e.call_log = Some(vec![]);
+        let block = e.call(0x0047_4460, &args![0u32, 3u32, 8u32]).u32();
+        assert_ne!(block, 0);
+        e.call(0x0047_4480, &args![0u32, block]);
+        let log = e.call_log.take().unwrap();
+        let manager = e.call(MEMORY_MANAGER_GET, &args![]).u32();
+        assert_eq!(
+            calls_to(&log, MEMORY_MANAGER_ALLOCATE),
+            vec![vec![manager, 24]]
+        );
+        assert_eq!(
+            calls_to(&log, MEMORY_MANAGER_DEALLOCATE),
+            vec![vec![manager, block]]
+        );
+    }
+
+    #[test]
+    fn map_constructors_store_vtable_size_and_cleared_buckets() {
+        let mut e = engine3();
+        for (constructor, vtable, base_vtable) in [
+            (0x0047_44a0u32, VTABLE_POINTER_MAP, VTABLE_POINTER_MAP_BASE),
+            (0x0047_44d0, VTABLE_MAP, VTABLE_MAP_BASE),
+        ] {
+            let map = e.mem.alloc(0x10);
+            assert_eq!(e.call(constructor, &args![map, 0x25u32]).u32(), map);
+            assert_eq!(e.mem.u32(map), vtable);
+            assert_eq!(e.mem.u32(map + 4), 0x25);
+            assert_eq!(e.mem.u32(map + 0xc), 0);
+            let buckets = e.mem.u32(map + 8);
+            assert!(e.mem.bytes(buckets, 0x25 * 4).iter().all(|b| *b == 0));
+            // The base constructors alone store the base vtable.
+            let base = e.mem.alloc(0x10);
+            let base_constructor = if vtable == VTABLE_MAP {
+                0x0047_4660u32
+            } else {
+                0x0047_4560
+            };
+            e.call(base_constructor, &args![base, 7u32]);
+            assert_eq!(e.mem.u32(base), base_vtable);
+            assert_eq!(e.mem.u32(base + 4), 7);
+        }
+    }
+
+    #[test]
+    fn map_destructors_clear_and_free_the_buckets() {
+        let mut e = engine3();
+        for (constructor, destructor, base_destructor, vtable, base_vtable) in [
+            (
+                0x0047_44a0u32,
+                0x0047_45d0u32,
+                0x0047_4630u32,
+                VTABLE_POINTER_MAP,
+                VTABLE_POINTER_MAP_BASE,
+            ),
+            (
+                0x0047_44d0,
+                0x0047_46d0,
+                0x0047_4730,
+                VTABLE_MAP,
+                VTABLE_MAP_BASE,
+            ),
+        ] {
+            let map = e.mem.alloc(0x10);
+            e.call(constructor, &args![map, 5u32]);
+            let buckets = e.mem.u32(map + 8);
+            e.call_log = Some(vec![]);
+            e.call(destructor, &args![map]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(map), base_vtable);
+            // The destructor clears the map, and so does the base destructor.
+            assert_eq!(
+                calls_to(&log, THREAD_FILE_MAP_CLEAR),
+                vec![vec![map], vec![map]]
+            );
+            assert_eq!(calls_to(&log, FREE_BLOCK), vec![vec![buckets]]);
+            // The base destructor alone.
+            let other = e.mem.alloc(0x10);
+            e.call(constructor, &args![other, 5u32]);
+            e.mem.set_u32(other, vtable);
+            e.call(base_destructor, &args![other]);
+            assert_eq!(e.mem.u32(other), base_vtable);
+        }
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_free_only_when_asked() {
+        let mut e = engine3();
+        for address in [0x0047_4500u32, 0x0047_4530, 0x0047_47c0, 0x0047_47f0] {
+            let (constructor, hash) = if address == 0x0047_4500 || address == 0x0047_47c0 {
+                (0x0047_44a0u32, 3u32)
+            } else {
+                (0x0047_44d0, 3)
+            };
+            let map = e.mem.alloc(0x10);
+            e.call(constructor, &args![map, hash]);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![map, 0u32]).u32(), map);
+            assert!(calls_to(&e.call_log.take().unwrap(), OPERATOR_DELETE).is_empty());
+            e.call(constructor, &args![map, hash]);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![map, 1u32]).u32(), map);
+            assert_eq!(
+                calls_to(&e.call_log.take().unwrap(), OPERATOR_DELETE),
+                vec![vec![map]]
+            );
+        }
+    }
+
+    #[test]
+    fn key_array_constructors_and_destructor() {
+        let mut e = engine3();
+        let array = e.mem.alloc(0x10);
+        assert_eq!(
+            e.call(0x0047_4790, &args![array, 100u32, 50u32]).u32(),
+            array
+        );
+        assert_eq!(e.mem.u32(array), VTABLE_KEY_ARRAY);
+        let elements = e.mem.u32(array + 4);
+        assert_ne!(elements, 0);
+        assert_eq!(e.mem.u16(array + 8), 100);
+        assert_eq!(e.mem.u16(array + 0xa), 0);
+        assert_eq!(e.mem.u16(array + 0xc), 0);
+        assert_eq!(e.mem.u16(array + 0xe), 50);
+        // The base constructor: only the base vtable; the 16-bit fields
+        // take the low half of the words.
+        let base = e.mem.alloc(0x10);
+        e.call(0x0047_4880, &args![base, 0x1_0004u32, 2u32]);
+        assert_eq!(e.mem.u32(base), VTABLE_KEY_ARRAY_BASE);
+        assert_eq!(e.mem.u16(base + 8), 4);
+        // No room: no element block.
+        let empty = e.mem.alloc(0x10);
+        e.mem.set_u32(empty + 4, 0xdead);
+        e.call(0x0047_4790, &args![empty, 0u32, 8u32]);
+        assert_eq!(e.mem.u32(empty + 4), 0);
+        // The destructors.
+        e.call_log = Some(vec![]);
+        e.call(0x0047_3f00, &args![array]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(array), VTABLE_KEY_ARRAY_BASE);
+        assert_eq!(calls_to(&log, FREE_ARRAY_ELEMENTS), vec![vec![elements]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_4760, &args![base]);
+        assert_eq!(
+            calls_to(&e.call_log.take().unwrap(), FREE_ARRAY_ELEMENTS).len(),
+            1
+        );
     }
 }
