@@ -117,6 +117,45 @@ fn base(order: &esm::LoadOrder, reference: FormId) -> Option<FormId> {
     world::scripting::base_of(order, reference)
 }
 
+/// The sounds a container's model makes opening or closing: the `Sound:`
+/// text keys of its `Open` / `Close` sequence (`004eef00`, as a door's).
+/// Most containers (lockers, ammunition boxes, cabinets, footlockers…) have
+/// no `SNAM` / `QNAM` of their own (`0075baf0` reads only those): their
+/// sounds are in their model's animation, played when the animation runs.
+/// (The lid or door itself isn't animated yet; the sound is.)
+fn model_sounds(game: &Game, reference: FormId, opening: bool) -> Vec<FormId> {
+    let order = &game.order;
+    let Some(rr) = base(order, reference).and_then(|b| order.get(b)) else {
+        return Vec::new();
+    };
+    if rr.entry.header.kind.as_bytes() != b"CONT" {
+        return Vec::new();
+    }
+    let Some(model) = rr
+        .record()
+        .ok()
+        .and_then(|r| r.get(esm::sig::MODL).map(|s| s.zstring()))
+    else {
+        return Vec::new();
+    };
+    let Some(bytes) = game.assets.read(&assets::mesh_path(&model)).ok().flatten() else {
+        return Vec::new();
+    };
+    let wanted = if opening { "open" } else { "close" };
+    let Some(sequences) = nif::Nif::parse(bytes).ok().and_then(|n| n.sequences().ok()) else {
+        return Vec::new();
+    };
+    sequences
+        .iter()
+        .filter(|s| s.name.eq_ignore_ascii_case(wanted))
+        .flat_map(|s| s.text_keys.iter())
+        .filter_map(|(_, text)| crate::doors::text_key_sound(order, text))
+        .inspect(|s| {
+            println!("Container {reference}: its model's {wanted} sequence plays sound {s}.")
+        })
+        .collect()
+}
+
 /// Opens the container menu for a request.
 pub fn open(screen: &mut Screen, game: &Game, state: &mut GameState, request: Menu) -> Vec<FormId> {
     let order = &game.order;
@@ -163,6 +202,9 @@ pub fn open(screen: &mut Screen, game: &Game, state: &mut GameState, request: Me
         base(order, reference).and_then(|b| world::sound::container_sound(order, b, true))
     {
         sounds.push(s);
+    }
+    if mode != 3 {
+        sounds.extend(model_sounds(game, reference, true));
     }
     screen
         .open
@@ -342,6 +384,7 @@ pub fn after(
                     {
                         sounds.push(s);
                     }
+                    sounds.extend(model_sounds(game, reference, false));
                     Runner::new(order, scripts, state).run_event(reference, "onclose", PLAYER_REF);
                 }
             }

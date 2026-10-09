@@ -434,6 +434,10 @@ struct Arm {
     weapon: Option<(FormId, String)>,
     female: bool,
     lighting: u64,
+    /// Frames since it was built: it is shown once its screen has its
+    /// picture (or a few frames have gone), the arm it replaces kept
+    /// until then, so changing what's worn doesn't blink the arm out.
+    waited: u8,
     holder: Entity,
     root: Entity,
     joints: Vec<Entity>,
@@ -591,6 +595,8 @@ pub struct Pipboy {
     material: Option<Handle<ScreenMaterial>>,
     hum: Option<Entity>,
     arm: Option<Arm>,
+    /// Arms replaced, kept until the new one is ready.
+    retired: Vec<Entity>,
     /// A menu and page to show once filled.
     pending: Option<(Section, Option<usize>)>,
     /// The model's button the mouse button went down on (`011a0ba0`,
@@ -1479,10 +1485,34 @@ fn pipboy_keys(
             Action::Sound(name) => sound(order, &mut requests, &name),
             Action::Equip(form) => {
                 let item = FormId(form);
-                if state.is_equipped(PLAYER_REF, item) {
+                // Translated from 00780d60 (decompiled, FalloutNV.exe
+                // 1.4.0.525): `0088c790` takes it off, `0088c650` puts it
+                // on, both with their sound flag set; the player's sound
+                // is `008aded0` -> `008adcf0` (down on taking off, up on
+                // putting on: the item's own `ZNAM` / `YNAM`, else its
+                // type's `UIItem...`). A refused equip (a broken item)
+                // returns before it.
+                let was_worn = state.is_equipped(PLAYER_REF, item);
+                if was_worn {
                     state.unequip_item(order, PLAYER_REF, item);
                 } else {
                     state.equip(order, PLAYER_REF, item);
+                }
+                if state.is_equipped(PLAYER_REF, item) != was_worn {
+                    println!(
+                        "Pip-Boy: {item} {}.",
+                        if was_worn { "taken off" } else { "equipped" }
+                    );
+                    if let Some(s) = world::sound::item_sound(order, item, !was_worn) {
+                        println!(
+                            "Pip-Boy: sound {s} ({:?}).",
+                            order
+                                .get(s)
+                                .and_then(|r| r.record().ok())
+                                .and_then(|r| r.editor_id())
+                        );
+                        requests.0.push(s);
+                    }
                 }
             }
             Action::Use(form) => {
@@ -1492,10 +1522,16 @@ fn pipboy_keys(
                     // A book's own notice (its skill raised) is the
                     // game's.
                     // (`sSkillIncreasedNum`, type 1: very happy.)
-                    Some(k) if &k == b"BOOK" => say(
-                        world::items::read_book(order, state, item).unwrap_or_default(),
-                        world::message_icon::for_setting("sSkillIncreasedNum"),
-                    ),
+                    // Read: `UIItemGenericUp` (`0088c830` case 0x19:
+                    // `008aded0(book, 1, 1)`; the sound flag set, so not
+                    // the book's own).
+                    Some(k) if &k == b"BOOK" => {
+                        say(
+                            world::items::read_book(order, state, item).unwrap_or_default(),
+                            world::message_icon::for_setting("sSkillIncreasedNum"),
+                        );
+                        sound(order, &mut requests, "UIItemGenericUp");
+                    }
                     // Aid: no notice (the viewer's own line on the
                     // console only).
                     _ => {
@@ -2176,8 +2212,16 @@ pub(crate) fn update_pipboy(
         }
     }
     if let Some(arm) = pipboy.arm.as_ref() {
+        let ready = arm.screen.is_none() || arm.waited >= 3;
+        if ready {
+            for old in pipboy.retired.drain(..) {
+                if let Ok(mut e) = commands.get_entity(old) {
+                    e.despawn();
+                }
+            }
+        }
         if let Ok(mut v) = visibility.get_mut(arm.holder) {
-            let want = if shown {
+            let want = if shown && ready {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
@@ -2559,9 +2603,7 @@ pub(crate) fn update_pipboy(
     });
     if rebuild {
         if let Some(old) = pipboy.arm.take() {
-            if let Ok(mut e) = commands.get_entity(old.holder) {
-                e.despawn();
-            }
+            pipboy.retired.push(old.holder);
         }
         pipboy.arm = build_arm(
             &mut commands,
@@ -2588,6 +2630,7 @@ pub(crate) fn update_pipboy(
             arm.screen = None;
         }
     }
+    arm.waited = arm.waited.saturating_add(1);
     pose_arm(arm, raise_at, camera_transform, projection, &mut transforms);
     draw_knobs(arm, &pipboy.knobs, &mut spawner.meshes, &mesh_handles);
 }
@@ -2826,6 +2869,7 @@ fn build_arm(
         weapon: weapon.map(|(id, model, _)| (id, model)),
         female,
         lighting: lighting_changes,
+        waited: 0,
         holder,
         root,
         joints,

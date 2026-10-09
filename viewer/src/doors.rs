@@ -177,7 +177,7 @@ pub fn update_doors(
 
 /// The sound a `sound:` text key names (`004eef00`: the word after
 /// `Sound: `, looked up by editor ID), if it's one.
-fn text_key_sound(order: &esm::LoadOrder, text: &str) -> Option<FormId> {
+pub(crate) fn text_key_sound(order: &esm::LoadOrder, text: &str) -> Option<FormId> {
     let rest = text
         .get(..6)
         .filter(|head| head.eq_ignore_ascii_case("sound:"))

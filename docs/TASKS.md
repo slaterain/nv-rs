@@ -398,3 +398,5 @@ which are all in `main` now. Work found that isn't in `main`:
   procedural audio synthesizer for tests). These aren't traced from the
   game, so they can't be merged as they are; anything traced from them is
   welcome as its own pull request.
+
+**B34. Pip-Boy equip sounds, the arm blinking, silent containers** (playtest 33/34). Done on `claude/pipboy-equip`: ITEMS equip / take off play the item's sound (`008aded0` / `008adcf0`), a read book `UIItemGenericUp`; the Pip-Boy arm rebuilt on equipping keeps the old one until the new one is ready (it blinked out); containers without `SNAM` / `QNAM` (lockers, ammunition boxes, footlockers) play their model's `Open` / `Close` sequence sound keys. Details in docs/PIPBOY.md ("Equip sounds, the arm's swap, container sounds"). Not done: the container's lid / door animation; the arm's swap not seen frame by frame; the "bug out" the maintainer saw couldn't be pinned down beyond the arm blink (lists, highlight and scrolling behaved with long lists).
