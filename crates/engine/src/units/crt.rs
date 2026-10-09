@@ -170,6 +170,19 @@ pub fn stricmp(e: &mut Engine, a: Ptr, b: Ptr) -> i32 {
     cmp_bytes(&x, &y)
 }
 
+// Platform: replaces 00ec7ec0 (__strnicmp, LIBCMT; C locale)
+pub fn strnicmp(e: &mut Engine, a: Ptr, b: Ptr, n: u32) -> i32 {
+    let low = |s: Vec<u8>| -> Vec<u8> {
+        s.iter()
+            .take(n as usize)
+            .map(u8::to_ascii_lowercase)
+            .collect()
+    };
+    let x = low(e.mem.cstr(a.addr()));
+    let y = low(e.mem.cstr(b.addr()));
+    cmp_bytes(&x, &y)
+}
+
 // Platform: replaces 00ec7690 (strchr, LIBCMT)
 pub fn strchr(e: &mut Engine, s: Ptr, c: i32) -> Ptr {
     let bytes = e.mem.cstr(s.addr());
@@ -412,6 +425,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00ec8d5f, strncpy_s(Ptr, u32, Ptr, u32) -> i32),
         entry!(0x00ec8a19, strncmp(Ptr, Ptr, u32) -> i32),
         entry!(0x00ec68e4, stricmp(Ptr, Ptr) -> i32),
+        entry!(0x00ec7ec0, strnicmp(Ptr, Ptr, u32) -> i32),
         entry!(0x00ec7690, strchr(Ptr, i32) -> Ptr),
         entry!(0x00ec67aa, tolower(i32) -> i32),
         entry!(0x00eca7f4, toupper(i32) -> i32),
@@ -451,6 +465,7 @@ mod tests {
         assert_eq!(e.call(0x00ec_68e4, &args![a, b]).i32(), 0);
         assert_eq!(e.call(0x00ec_8a19, &args![a, b, 1u32]).i32(), 0);
         assert!(e.call(0x00ec_8a19, &args![a, b, 2u32]).i32() > 0);
+        assert_eq!(e.call(0x00ec_7ec0, &args![a, b, 11u32]).i32(), 0);
         let o = e.call(0x00ec_7690, &args![a, b'p' as i32]).u32();
         assert_eq!(o, a.addr() + 5);
         let buf: Ptr = Ptr::new(e.mem.alloc(8));
