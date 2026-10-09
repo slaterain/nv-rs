@@ -856,6 +856,30 @@ v-reworkphase0`. The shared
   [FRAME_SKELETON.md](FRAME_SKELETON.md); restart the shared server on the
   named copy when convenient.
 
+### Translation push (`claude/engine-crate`, from 2026-10-09 night)
+
+The maintainer set a one-week fast track (about 1.9 billion tokens).
+
+- Architecture: `crates/engine` on a model of the game's memory
+  ([ADR-0006](adr/0006-engine-crate-memory-model.md), for maintainer review;
+  [ENGINE_CRATE.md](ENGINE_CRATE.md)). Merged: #72 (Phase 0), #73 (crate).
+- 16 Sonnet agents in parallel, each in its own worktree under
+  `%USERPROFILE%
+v-reworkgentsNN`, one unit file (or unit part) each,
+  40 functions per session; the lead collects, checks (fmt, clippy -D
+  warnings, all engine tests), commits and re-tasks (private scripts in
+  `%USERPROFILE%
+v-reworkphase0in`: `cycle.sh`, `task.sh`, `split.sh`).
+  Decompiles come from a private read-only Ghidra server on the named copy
+  (127.0.0.1:8090, `binstart-srv.ps1`).
+- Measured: about 6.7k to 11k Sonnet tokens per translated function,
+  15 to 30 minutes per 40-function session.
+- Files: every unit file under `crates/engine/src/units` has one owner at a
+  time (the slot's task file says which). `units/platform.rs`,
+  `units/crt.rs`, `types.rs` and the engine core are lead-owned.
+- Next action: keep the slots cycling; merge a rolling PR whenever CI
+  passes; then Phase 1 wiring from FRAME_SKELETON.md.
+
 ## Deferred
 
 Cosmetic material/lighting discrepancies, isolated facial polish, sun glare,
