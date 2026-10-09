@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 8069 | 12.2% |
-| traced | 4510 | 6.8% |
-| platform | 3436 | 5.2% |
+| translated | 8228 | 12.4% |
+| traced | 4507 | 6.8% |
+| platform | 3424 | 5.2% |
 | library | 21918 | 33.1% |
-| open | 28326 | 42.8% |
+| open | 28182 | 42.5% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 12194 (30.1%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 12338 (30.4%) are translated or traced.
 
-Rust cites 12924 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 13080 distinct `.text` addresses; 58 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,27 +70,27 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 62 | 0 | 21272 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6060 | 1009 | 0 | 0 | 3401 | 67.5% |
+| fallout shared | 10470 | 2065 | 3149 | 6100 | 997 | 0 | 0 | 3373 | 67.8% |
 | Havok SDK | 6591 | 1555 | 3499 | 53 | 75 | 0 | 0 | 6463 | 1.9% |
-| fallout/ai | 4849 | 1475 | 1888 | 1089 | 700 | 0 | 0 | 3060 | 36.9% |
-| fallout/interface | 2645 | 991 | 1247 | 423 | 773 | 0 | 0 | 1449 | 45.2% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 371 | 1 | 0 | 1951 | 17.0% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 78 | 139 | 0 | 0 | 1571 | 12.1% |
+| fallout/ai | 4849 | 1475 | 1888 | 1168 | 690 | 0 | 0 | 2991 | 38.3% |
+| fallout/interface | 2645 | 991 | 1247 | 463 | 761 | 0 | 0 | 1421 | 46.3% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 372 | 1 | 0 | 1950 | 17.1% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 78 | 143 | 0 | 0 | 1567 | 12.4% |
 | NiMain | 1619 | 261 | 1134 | 3 | 72 | 0 | 0 | 1544 | 4.6% |
-| BSHavok | 1615 | 316 | 1134 | 22 | 131 | 0 | 0 | 1462 | 9.5% |
-| BSShader | 1549 | 608 | 350 | 0 | 127 | 1422 | 0 | 0 | - |
+| BSHavok | 1615 | 316 | 1134 | 22 | 133 | 0 | 0 | 1460 | 9.6% |
+| BSShader | 1549 | 608 | 350 | 0 | 139 | 1410 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
-| fallout/misc | 1045 | 171 | 353 | 271 | 130 | 0 | 0 | 644 | 38.4% |
-| BSMain | 991 | 192 | 478 | 0 | 60 | 0 | 0 | 931 | 6.1% |
+| fallout/misc | 1045 | 171 | 353 | 271 | 133 | 0 | 0 | 641 | 38.7% |
+| BSMain | 991 | 192 | 478 | 0 | 61 | 0 | 0 | 930 | 6.2% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 7 | 55 | 0 | 0 | 643 | 8.8% |
+| fallout/magic | 705 | 162 | 378 | 7 | 62 | 0 | 0 | 636 | 9.8% |
 | LIBCMT | 682 | 124 | 503 | 0 | 21 | 31 | 630 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
 | fallout shared/havok | 478 | 60 | 110 | 7 | 64 | 0 | 0 | 407 | 14.9% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 55 | 0 | 0 | 378 | 12.7% |
-| BSMenu | 361 | 136 | 221 | 1 | 85 | 0 | 0 | 275 | 23.8% |
+| BSMenu | 361 | 136 | 221 | 1 | 86 | 0 | 0 | 274 | 24.1% |
 | BSAudio | 304 | 75 | 141 | 0 | 31 | 0 | 0 | 273 | 10.2% |
 | fallout shared/magic | 296 | 43 | 83 | 5 | 68 | 0 | 0 | 223 | 24.7% |
 | BSSystem | 275 | 54 | 36 | 1 | 35 | 239 | 0 | 0 | - |
@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 79 | 35 | 3 | 0 | 26 |
-| 2 | 1575 | 583 | 849 | 467 | 25 | 4 | 230 |
-| 3 | 4973 | 1303 | 2737 | 1268 | 163 | 26 | 779 |
+| 1 | 143 | 117 | 88 | 28 | 3 | 0 | 24 |
+| 2 | 1575 | 583 | 860 | 469 | 25 | 4 | 217 |
+| 3 | 4973 | 1303 | 2768 | 1261 | 162 | 26 | 756 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -198,12 +198,12 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 60 | `00978550` | `ProcessLists::RunActorScripts` | open |
 | 61 | `0043d4d0` | - | translated |
 | 62 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
-| 63 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | traced |
-| 64 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | open |
+| 63 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | translated |
+| 64 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | translated |
 | 65 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
-| 66 | `008d0600` | `ProcessLists::PrintLists` | traced |
-| 67 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | traced |
-| 68 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | open |
+| 66 | `008d0600` | `ProcessLists::PrintLists` | translated |
+| 67 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | translated |
+| 68 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | translated |
 | 69 | `0040fba0` | - | translated |
 | 70 | `00446ef0` | - | translated |
 | 71 | `00878080` | - | traced |
@@ -220,7 +220,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 82 | `0049fef0` | `BGSDecalManager::GetInstance` | open |
 | 83 | `0049fff0` | `BGSDecalManager::UpdateDecals` | open |
 | 84 | `00524c90` | - | traced |
-| 85 | `00712e60` | - | traced |
+| 85 | `00712e60` | - | translated |
 | 86 | `0044ddc0` | - | translated |
 | 87 | `00710ab0` | - | translated |
 | 88 | `0045c670` | - | translated |
@@ -235,7 +235,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 97 | `0045b070` | `TES::UpdateMultiBoundVisibility` | translated |
 | 98 | `0043d4d0` | - | translated |
 | 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | open |
-| 100 | `00713d80` | - | traced |
+| 100 | `00713d80` | - | translated |
 | 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | open |
 | 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | traced |
 | 103 | `0086fc60` | `Main::OnIdle_UpdateAnimationsAndEffects` | translated |
@@ -252,7 +252,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 114 | `006c0720` | `NavMeshObstacleManager::GetInstance` | translated |
 | 115 | `006c3640` | `NavMeshObstacleManager::Update` | open |
 | 116 | `00991500` | `CombatManager::Update` | open |
-| 117 | `00714a00` | - | traced |
+| 117 | `00714a00` | - | translated |
 | 118 | `00a81a80` | - | traced |
 | 119 | `007023c0` | `Interface::GetTopMenuID` | translated |
 | 120 | `007056f0` | `Interface::UpdateSleeping` | translated |
@@ -264,7 +264,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 126 | `008705d0` | `Main::PostSwapProcess` | translated |
 | 127 | `004dc360` | - | translated |
 | 128 | `0043d4d0` | - | translated |
-| 129 | `00713d80` | - | traced |
+| 129 | `00713d80` | - | translated |
 | 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | open |
 | 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | traced |
 | 132 | `0086f6a0` | `Main::UpdateNonRenderSafeAITasks` | translated |
