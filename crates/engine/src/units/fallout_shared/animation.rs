@@ -24,8 +24,12 @@
 //! `ClearControllersInterpolators`, `ReloadTargets`, `BlendOut`, the animation's
 //! save and load functions (`SaveGame`, `SaveAnimation`, the load game side and
 //! the buffer variants), `UpdateBipOnly`, and the small sequence helpers up to
-//! the `NiTPointerMap` constructor. The next session continues at `0049c080`
-//! (the map's scalar deleting destructor).
+//! the `NiTPointerMap` constructor.
+//! Session 5 (b0010) finishes the unit: the sequence map's destructors,
+//! `SetAt`, `GetAt`, `GetNext`, `SetValue` and base constructor (`0049c080` to
+//! `0049c5a0`), the two folded `NiQuatTransform` getters (`0058cb00`,
+//! `00a3f9e0`) with `0058cb60`, and `Animation::SkipUpdate` (`008eeaa0`). Only
+//! `00f39c20` (`Animation::SpecialIdleAuto`, a `library` initializer) is left.
 //!
 //! The 8 slots of `Animation` (`group`, `action`, `loopCount`, `nextGroup`,
 //! `nextLoops`, `pCurrentSequence` are arrays of 8) are indexed by the slot
@@ -54,7 +58,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::BSSimpleList;
+use crate::types::{BSSimpleList, NiTPointerMap};
 use crate::units::fallout_shared::extradataobjects::NiPoint3;
 
 // ---- Callees outside this unit ---------------------------------------------
@@ -8331,6 +8335,253 @@ pub fn fn_0049c050(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
     this
 }
 
+// ---- Fifth session: the sequence map's classes and the tail ------------------
+
+/// `NiTMapBase` base class vtable (the one `0049c100` and `0049c570` set; the
+/// derived `NiTPointerMap` instance's is [`VTABLE_ANIM_SEQUENCE_MAP`]), the
+/// array allocator and its release, and the list helpers `0049c0b0` uses.
+const VTABLE_MAP_BASE: u32 = 0x0101_def0;
+const ARRAY_ALLOC: u32 = 0x00aa_1070;
+const ARRAY_FREE: u32 = 0x00aa_10f0;
+const LIST_FIND_NODE: u32 = 0x0049_c680;
+const LIST_REMOVE_NODE: u32 = 0x0049_c5d0;
+
+// Translated from 0049c080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<unsigned short, AnimSequenceBase*>::scalar deleting
+/// destructor` (Xbox PDB): the destructor `0049c510`, then `operator delete`
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0049c080(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_0049c510(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0049c0b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTList::Remove` by item address: looks the list node holding a value
+/// equal to the word at `item` up (`0049c680(item, 0)`) and removes it
+/// (`0049c5d0`, which returns the removed value); without such a node the
+/// result is the word at `item` itself.
+pub fn fn_0049c0b0(e: &mut Engine, this: Ptr, item: Ptr) -> u32 {
+    let node = e.call(LIST_FIND_NODE, &args![this, item, 0u32]).u32();
+    if node != 0 {
+        e.with_stack(4, |e, cell| {
+            e.mem.set_u32(cell.addr(), node);
+            e.call(LIST_REMOVE_NODE, &args![this, cell]).u32()
+        })
+    } else {
+        e.mem.u32(item.addr())
+    }
+}
+
+// Translated from 0049c100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of the `NiTPointerMap<unsigned short,
+/// AnimSequenceBase*>`: the base vtable, the bucket count, an empty item
+/// count, and a bucket array of `hash_size` words, zeroed. Returns `this`.
+pub fn fn_0049c100(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    e.mem.set_u32(this.addr(), VTABLE_MAP_BASE);
+    e.set(this, NiTPointerMap::m_uiHashSize, hash_size);
+    e.set(this, NiTPointerMap::m_uiCount, 0);
+    let bytes = hash_size.wrapping_shl(2);
+    let table = e.call(ARRAY_ALLOC, &args![bytes]).u32();
+    e.set(this, NiTPointerMap::m_ppkHashTable, table);
+    e.call(MEMSET, &args![table, 0u32, bytes]);
+    this
+}
+
+// Translated from 0049c170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned short,
+/// AnimSequenceBase*>::SetAt`: walks the bucket the hash (vtable slot 4)
+/// picks; a node whose key the comparison (slot 8) calls equal gets the new
+/// value (+8); otherwise a node from the allocator (slot 0x14) is filled
+/// (`SetValue`, slot 0xc), linked at the head of the bucket, and counted.
+pub fn fn_0049c170(e: &mut Engine, this: Ptr<NiTPointerMap>, key: u16, value: u32) {
+    let index = e.vcall(this.addr(), 4, &args![key]).u32();
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let bucket = table.wrapping_add(index.wrapping_mul(4));
+    let mut node = e.mem.u32(bucket);
+    while node != 0 {
+        let node_key = e.mem.u16(node + 4);
+        if e.vcall(this.addr(), 8, &args![key, node_key]).bool() {
+            e.mem.set_u32(node + 8, value);
+            return;
+        }
+        node = e.mem.u32(node);
+    }
+    let fresh = e.vcall(this.addr(), 0x14, &args![]).u32();
+    e.vcall(this.addr(), 0xc, &args![fresh, key, value]);
+    // The bucket array is read again, as the code does after the calls.
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let bucket = table.wrapping_add(index.wrapping_mul(4));
+    let head = e.mem.u32(bucket);
+    e.mem.set_u32(fresh, head);
+    e.mem.set_u32(bucket, fresh);
+    let count = e.get(this, NiTPointerMap::m_uiCount);
+    e.set(this, NiTPointerMap::m_uiCount, count.wrapping_add(1));
+}
+
+// Translated from 0049c390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned short,
+/// AnimSequenceBase*>::GetAt` (Xbox PDB): the value (+8) of the node in the
+/// key's bucket whose key the comparison (vtable slot 8) accepts is stored at
+/// `value_out`; false when there is none.
+pub fn fn_0049c390(e: &mut Engine, this: Ptr<NiTPointerMap>, key: u16, value_out: Ptr) -> bool {
+    let index = e.vcall(this.addr(), 4, &args![key]).u32();
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let mut node = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    while node != 0 {
+        let node_key = e.mem.u16(node + 4);
+        if e.vcall(this.addr(), 8, &args![key, node_key]).bool() {
+            let value = e.mem.u32(node + 8);
+            e.mem.set_u32(value_out.addr(), value);
+            return true;
+        }
+        node = e.mem.u32(node);
+    }
+    false
+}
+
+// Translated from 0049c410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., unsigned short, AnimSequenceBase*>::GetNext`: gives the
+/// key (`u16`) and value of the node at the position `*position`, then moves
+/// the position to the next node of its bucket, or to the first node of the
+/// next non-empty bucket (the hash of the key plus one onwards), or to null.
+pub fn fn_0049c410(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    position: Ptr,
+    key_out: Ptr,
+    value_out: Ptr,
+) {
+    let node = e.mem.u32(position.addr());
+    let key = e.mem.u16(node + 4);
+    e.mem.set_u16(key_out.addr(), key);
+    let value = e.mem.u32(node + 8);
+    e.mem.set_u32(value_out.addr(), value);
+    let next = e.mem.u32(node);
+    if next != 0 {
+        e.mem.set_u32(position.addr(), next);
+        return;
+    }
+    let mut index = e.vcall(this.addr(), 4, &args![key]).u32().wrapping_add(1);
+    loop {
+        if index >= e.get(this, NiTPointerMap::m_uiHashSize) {
+            e.mem.set_u32(position.addr(), 0);
+            return;
+        }
+        let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+        let head = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        if head != 0 {
+            e.mem.set_u32(position.addr(), head);
+            return;
+        }
+        index = index.wrapping_add(1);
+    }
+}
+
+// Translated from 0049c4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., unsigned short, AnimSequenceBase*>::SetValue` (Xbox PDB):
+/// fills a map node (`node`, the first stack word; `ECX` is not read) with
+/// its key (+4, `u16`) and value (+8).
+pub fn fn_0049c4e0(e: &mut Engine, _this: Ptr, node: Ptr, key: u16, value: u32) {
+    e.mem.set_u16(node.addr() + 4, key);
+    e.mem.set_u32(node.addr() + 8, value);
+}
+
+// Translated from 0049c510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of `NiTPointerMap<unsigned short, AnimSequenceBase*>`:
+/// its vtable, `RemoveAll` (`00438af0`), then the base destructor
+/// (`0049c570`). The exception-unwinding frame is not translated.
+pub fn fn_0049c510(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_ANIM_SEQUENCE_MAP);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_0049c570(e, this);
+}
+
+// Translated from 0049c570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base destructor of the map (`NiTMapBase`): the base vtable,
+/// `RemoveAll` (`00438af0`), and the release of the bucket array.
+pub fn fn_0049c570(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), VTABLE_MAP_BASE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(ARRAY_FREE, &args![table]);
+}
+
+// Translated from 0049c5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>, unsigned short,
+/// AnimSequenceBase*>::scalar deleting destructor` (Xbox PDB): the base
+/// destructor `0049c570`, then `operator delete` when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn fn_0049c5a0(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_0049c570(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0058cb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the four values of the object the pointer at `this + 0x2c` holds
+/// (the map names it `NiQuatTransform::SetTranslate`, a folded name; the body
+/// is a getter): `fn_0058cb60` on that object writes them to the three out
+/// pointers and returns the fourth. Without the object the outs are zero
+/// (the third one a byte) and the result 0.
+pub fn fn_0058cb00(e: &mut Engine, this: Ptr, out_a: Ptr, out_b: Ptr, out_c: Ptr) -> u32 {
+    let field = this.addr() + 0x2c;
+    if e.call(READ_WORD, &args![field]).u32() == 0 {
+        e.mem.set_u32(out_a.addr(), 0);
+        e.mem.set_u32(out_b.addr(), 0);
+        e.mem.set_u8(out_c.addr(), 0);
+        return 0;
+    }
+    let object = e.call(READ_WORD, &args![field]).ptr();
+    fn_0058cb60(e, object, out_a, out_b, out_c)
+}
+
+// Translated from 0058cb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Getter: the `u16` at +8 (zero-extended) to `out_a`, the word at +0x10 to
+/// `out_b`, the byte at +0x1c to `out_c`; returns the word at +0x20.
+pub fn fn_0058cb60(e: &mut Engine, this: Ptr, out_a: Ptr, out_b: Ptr, out_c: Ptr) -> u32 {
+    let a = this.addr();
+    let first = e.mem.u16(a + 8) as u32;
+    e.mem.set_u32(out_a.addr(), first);
+    let second = e.mem.u32(a + 0x10);
+    e.mem.set_u32(out_b.addr(), second);
+    let third = e.mem.u8(a + 0x1c);
+    e.mem.set_u8(out_c.addr(), third);
+    e.mem.u32(a + 0x20)
+}
+
+// Translated from 008eeaa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Animation::SkipUpdate` (Xbox PDB): stores `value` in `cSkipUpdate`.
+pub fn animation_skip_update(e: &mut Engine, this: Ptr<Animation>, value: u8) {
+    e.set(this, Animation::cSkipUpdate, value);
+}
+
+// Translated from 00a3f9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The map names it `NiQuatTransform::SetRotate` (a folded name; the body is
+/// a getter). Like `fn_0058cb60`, on the object the pointer at `this + 0x2c`
+/// holds, with its fields 0x0c (`u16`), 0x18, 0x1e (byte) and 0x28; without
+/// the object the outs are zero and the result 0.
+pub fn fn_00a3f9e0(e: &mut Engine, this: Ptr, out_a: Ptr, out_b: Ptr, out_c: Ptr) -> u32 {
+    let object = e.mem.u32(this.addr() + 0x2c);
+    if object == 0 {
+        e.mem.set_u32(out_a.addr(), 0);
+        e.mem.set_u32(out_b.addr(), 0);
+        e.mem.set_u8(out_c.addr(), 0);
+        return 0;
+    }
+    let first = e.mem.u16(object + 0xc) as u32;
+    e.mem.set_u32(out_a.addr(), first);
+    let second = e.mem.u32(object + 0x18);
+    e.mem.set_u32(out_b.addr(), second);
+    let third = e.mem.u8(object + 0x1e);
+    e.mem.set_u8(out_c.addr(), third);
+    e.mem.u32(object + 0x28)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -8670,6 +8921,32 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0049bdc0, fn_0049bdc0(Ptr<Animation>, f32)),
         entry!(0x0049bf10, fn_0049bf10(f32, Ptr, Ptr)),
         entry!(0x0049c050, fn_0049c050(Ptr, u32) -> Ptr),
+        entry!(
+            0x0049c080,
+            fn_0049c080(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0049c0b0, fn_0049c0b0(Ptr, Ptr) -> u32),
+        entry!(
+            0x0049c100,
+            fn_0049c100(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0049c170, fn_0049c170(Ptr<NiTPointerMap>, u16, u32)),
+        entry!(
+            0x0049c390,
+            fn_0049c390(Ptr<NiTPointerMap>, u16, Ptr) -> bool
+        ),
+        entry!(0x0049c410, fn_0049c410(Ptr<NiTPointerMap>, Ptr, Ptr, Ptr)),
+        entry!(0x0049c4e0, fn_0049c4e0(Ptr, Ptr, u16, u32)),
+        entry!(0x0049c510, fn_0049c510(Ptr<NiTPointerMap>)),
+        entry!(0x0049c570, fn_0049c570(Ptr<NiTPointerMap>)),
+        entry!(
+            0x0049c5a0,
+            fn_0049c5a0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0058cb00, fn_0058cb00(Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x0058cb60, fn_0058cb60(Ptr, Ptr, Ptr, Ptr) -> u32),
+        entry!(0x008eeaa0, animation_skip_update(Ptr<Animation>, u8)),
+        entry!(0x00a3f9e0, fn_00a3f9e0(Ptr, Ptr, Ptr, Ptr) -> u32),
     ]
 }
 
@@ -17047,5 +17324,312 @@ mod tests {
         let log = end_log(&mut e);
         assert_eq!(arguments_of(&log, MAP_BASE_CONSTRUCT), [[object, 37]]);
         assert_eq!(e.mem.u32(object), VTABLE_ANIM_SEQUENCE_MAP);
+    }
+
+    // ---- Fifth session: the sequence map and the tail ------------------------------
+
+    /// A map of `size` buckets whose vtable has the slots the map code calls: the
+    /// hash (`key % size`), the comparison (equal words), the node allocator, and
+    /// the real `SetValue` (`0049c4e0`). Returns the map.
+    fn bucket_map(e: &mut Engine, size: u32) -> u32 {
+        e.register(0x00f1_0004, |e, a| ret(a[1] % e.mem.u32(a[0] + 4)));
+        e.register(0x00f1_0008, |_, a| ret((a[1] == a[2]) as u32));
+        e.register(0x00f1_0014, |e, _| ret(e.mem.alloc(12)));
+        let map = object_with_vtable(
+            e,
+            0x10,
+            &[
+                (4, 0x00f1_0004),
+                (8, 0x00f1_0008),
+                (0x14, 0x00f1_0014),
+                (0xc, 0x0049_c4e0),
+            ],
+        );
+        let table = e.mem.alloc(size * 4);
+        e.mem.set_u32(map + 4, size);
+        e.mem.set_u32(map + 8, table);
+        map
+    }
+
+    /// Stores `value` under `key` with `SetAt` and returns nothing.
+    fn set_at(e: &mut Engine, map: u32, key: u32, value: u32) {
+        e.call(0x0049_c170, &args![map, key, value]);
+    }
+
+    /// `GetAt` of `key`: the value, or `None`.
+    fn get_at(e: &mut Engine, map: u32, key: u32) -> Option<u32> {
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0xdead_beef);
+        if e.call(0x0049_c390, &args![map, key, out]).bool() {
+            Some(e.mem.u32(out))
+        } else {
+            None
+        }
+    }
+
+    #[test]
+    fn fn_0049c170_adds_a_node_replaces_a_value_and_chains_a_collision() {
+        let mut e = engine();
+        let map = bucket_map(&mut e, 4);
+        set_at(&mut e, map, 5, 0x500);
+        assert_eq!(e.mem.u32(map + 0xc), 1);
+        // The node is in bucket 1 with the key and value `SetValue` wrote.
+        let table = e.mem.u32(map + 8);
+        let node = e.mem.u32(table + 4);
+        assert_eq!(e.mem.u16(node + 4), 5);
+        assert_eq!(e.mem.u32(node + 8), 0x500);
+        assert_eq!(e.mem.u32(node), 0);
+        // The same key replaces the value and does not count again.
+        set_at(&mut e, map, 5, 0x501);
+        assert_eq!(e.mem.u32(map + 0xc), 1);
+        assert_eq!(e.mem.u32(node + 8), 0x501);
+        // Key 9 hashes to bucket 1 too: it becomes the head, linking the old one.
+        set_at(&mut e, map, 9, 0x900);
+        assert_eq!(e.mem.u32(map + 0xc), 2);
+        let head = e.mem.u32(table + 4);
+        assert_ne!(head, node);
+        assert_eq!(e.mem.u32(head), node);
+        assert_eq!(e.mem.u16(head + 4), 9);
+    }
+
+    #[test]
+    fn fn_0049c390_finds_values_in_a_chain_and_reports_a_miss() {
+        let mut e = engine();
+        let map = bucket_map(&mut e, 4);
+        set_at(&mut e, map, 5, 0x500);
+        set_at(&mut e, map, 9, 0x900);
+        assert_eq!(get_at(&mut e, map, 5), Some(0x500));
+        assert_eq!(get_at(&mut e, map, 9), Some(0x900));
+        // Same bucket, absent key; and an empty bucket.
+        assert_eq!(get_at(&mut e, map, 13), None);
+        assert_eq!(get_at(&mut e, map, 2), None);
+        // A miss leaves the out word alone.
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 77);
+        assert!(!e.call(0x0049_c390, &args![map, 2u32, out]).bool());
+        assert_eq!(e.mem.u32(out), 77);
+    }
+
+    #[test]
+    fn fn_0049c410_walks_a_chain_then_the_next_buckets_then_ends() {
+        let mut e = engine();
+        let map = bucket_map(&mut e, 4);
+        set_at(&mut e, map, 5, 0x500);
+        set_at(&mut e, map, 9, 0x900);
+        set_at(&mut e, map, 3, 0x300);
+        let table = e.mem.u32(map + 8);
+        let position = e.mem.alloc(4);
+        let key = e.mem.alloc(4);
+        let value = e.mem.alloc(4);
+        e.mem.set_u32(key, 0xffff_ffff);
+        // Start at bucket 1's head (key 9): next is key 5 in the same bucket.
+        let first = e.mem.u32(table + 4);
+        let second = e.mem.u32(first);
+        e.mem.set_u32(position, first);
+        e.call(0x0049_c410, &args![map, position, key, value]);
+        // Only the low half of the key word is written.
+        assert_eq!(e.mem.u32(key), 0xffff_0009);
+        assert_eq!(e.mem.u32(value), 0x900);
+        assert_eq!(e.mem.u32(position), second);
+        // Key 5 ends the chain: buckets 2 is empty, bucket 3 holds key 3.
+        e.call(0x0049_c410, &args![map, position, key, value]);
+        assert_eq!(e.mem.u16(key), 5);
+        assert_eq!(e.mem.u32(value), 0x500);
+        assert_eq!(e.mem.u32(position), e.mem.u32(table + 12));
+        // Key 3 is in the last bucket: the position becomes null.
+        e.call(0x0049_c410, &args![map, position, key, value]);
+        assert_eq!(e.mem.u16(key), 3);
+        assert_eq!(e.mem.u32(value), 0x300);
+        assert_eq!(e.mem.u32(position), 0);
+    }
+
+    #[test]
+    fn fn_0049c4e0_fills_the_node_without_touching_the_rest() {
+        let mut e = engine();
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node, 0x1111);
+        e.mem.set_u16(node + 6, 0x7777);
+        e.call(0x0049_c4e0, &args![0u32, node, 0x1234_5678u32, 0xabcdu32]);
+        assert_eq!(e.mem.u16(node + 4), 0x5678);
+        assert_eq!(e.mem.u32(node + 8), 0xabcd);
+        assert_eq!(e.mem.u32(node), 0x1111);
+        assert_eq!(e.mem.u16(node + 6), 0x7777);
+    }
+
+    #[test]
+    fn fn_0049c100_allocates_and_clears_the_buckets() {
+        let mut e = engine();
+        e.register(ARRAY_ALLOC, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(MEMSET, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 0xc, 99);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_c100, &args![map, 37u32]).u32(), map);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(map), VTABLE_MAP_BASE);
+        assert_eq!(e.mem.u32(map + 4), 37);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        let table = e.mem.u32(map + 8);
+        assert_ne!(table, 0);
+        assert_eq!(arguments_of(&log, ARRAY_ALLOC), [[148]]);
+        assert_eq!(arguments_of(&log, MEMSET), [[table, 0, 148]]);
+    }
+
+    #[test]
+    fn destructors_reset_the_vtables_and_release_the_buckets() {
+        let mut e = engine();
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(ARRAY_FREE, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x4444_0000);
+        // 0049c570: the base destructor.
+        start_log(&mut e);
+        e.call(0x0049_c570, &args![map]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(map), VTABLE_MAP_BASE);
+        assert_eq!(arguments_of(&log, MAP_REMOVE_ALL), [[map]]);
+        assert_eq!(arguments_of(&log, ARRAY_FREE), [[0x4444_0000]]);
+        // 0049c510: its own vtable first (the base destructor then overwrites it).
+        start_log(&mut e);
+        e.call(0x0049_c510, &args![map]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, MAP_REMOVE_ALL).len(), 2);
+        assert_eq!(arguments_of(&log, ARRAY_FREE).len(), 1);
+        assert!(arguments_of(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn scalar_deleting_destructors_delete_only_with_bit_zero() {
+        let mut e = engine();
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(ARRAY_FREE, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        for address in [0x0049_c080u32, 0x0049_c5a0] {
+            start_log(&mut e);
+            assert_eq!(e.call(address, &args![map, 2u32]).u32(), map);
+            let log = end_log(&mut e);
+            assert!(arguments_of(&log, OPERATOR_DELETE).is_empty());
+            assert_eq!(arguments_of(&log, ARRAY_FREE).len(), 1);
+            start_log(&mut e);
+            assert_eq!(e.call(address, &args![map, 1u32]).u32(), map);
+            let log = end_log(&mut e);
+            assert_eq!(arguments_of(&log, OPERATOR_DELETE), [[map]]);
+            assert_eq!(arguments_of(&log, ARRAY_FREE).len(), 1);
+        }
+    }
+
+    #[test]
+    fn fn_0049c0b0_removes_the_found_node_or_returns_the_item_word() {
+        let mut e = engine();
+        e.register(LIST_FIND_NODE, |e, a| {
+            ret(if e.mem.u32(a[1]) == 7 { 0x5555_0000 } else { 0 })
+        });
+        e.register(LIST_REMOVE_NODE, |e, a| ret(e.mem.u32(a[1]) + 1));
+        let list = e.mem.alloc(0xc);
+        let item = e.mem.alloc(4);
+        // Found: the remove function gets the address of a cell holding the node.
+        e.mem.set_u32(item, 7);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_c0b0, &args![list, item]).u32(), 0x5555_0001);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, LIST_FIND_NODE), [[list, item, 0]]);
+        assert_eq!(arguments_of(&log, LIST_REMOVE_NODE).len(), 1);
+        // Not found: the item's own word comes back and nothing is removed.
+        e.mem.set_u32(item, 8);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0049_c0b0, &args![list, item]).u32(), 8);
+        let log = end_log(&mut e);
+        assert!(arguments_of(&log, LIST_REMOVE_NODE).is_empty());
+    }
+
+    #[test]
+    fn fn_0058cb60_copies_four_fields() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x30);
+        e.mem.set_u32(object + 8, 0xaaaa_1234);
+        e.mem.set_u32(object + 0x10, 0x1000_0001);
+        e.mem.set_u8(object + 0x1c, 0x9c);
+        e.mem.set_u32(object + 0x20, 0x2000_0002);
+        let outs = e.mem.alloc(12);
+        e.mem.set_u32(outs + 8, 0xffff_ffff);
+        let result = e.call(0x0058_cb60, &args![object, outs, outs + 4, outs + 8]);
+        assert_eq!(result.u32(), 0x2000_0002);
+        assert_eq!(e.mem.u32(outs), 0x1234);
+        assert_eq!(e.mem.u32(outs + 4), 0x1000_0001);
+        // The third out is a byte.
+        assert_eq!(e.mem.u32(outs + 8), 0xffff_ff9c);
+    }
+
+    #[test]
+    fn fn_0058cb00_reads_through_the_pointer_at_0x2c() {
+        let mut e = engine();
+        e.register(READ_WORD, |e, a| ret(e.mem.u32(a[0])));
+        let owner = e.mem.alloc(0x40);
+        let outs = e.mem.alloc(12);
+        e.mem.set_u32(outs, 5);
+        e.mem.set_u32(outs + 4, 6);
+        e.mem.set_u32(outs + 8, 0xffff_ffff);
+        // No object: zeros, the third out only a byte.
+        assert_eq!(
+            e.call(0x0058_cb00, &args![owner, outs, outs + 4, outs + 8])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(outs), 0);
+        assert_eq!(e.mem.u32(outs + 4), 0);
+        assert_eq!(e.mem.u32(outs + 8), 0xffff_ff00);
+        // With an object the fields come from it.
+        let object = e.mem.alloc(0x30);
+        e.mem.set_u16(object + 8, 0x0102);
+        e.mem.set_u32(object + 0x10, 0x33);
+        e.mem.set_u8(object + 0x1c, 4);
+        e.mem.set_u32(object + 0x20, 0x55);
+        e.mem.set_u32(owner + 0x2c, object);
+        let result = e.call(0x0058_cb00, &args![owner, outs, outs + 4, outs + 8]);
+        assert_eq!(result.u32(), 0x55);
+        assert_eq!(e.mem.u32(outs), 0x0102);
+        assert_eq!(e.mem.u32(outs + 4), 0x33);
+        assert_eq!(e.mem.u8(outs + 8), 4);
+    }
+
+    #[test]
+    fn fn_00a3f9e0_reads_the_object_at_0x2c_or_zeros() {
+        let mut e = engine();
+        let owner = e.mem.alloc(0x40);
+        let outs = e.mem.alloc(12);
+        e.mem.set_u32(outs, 5);
+        e.mem.set_u32(outs + 4, 6);
+        e.mem.set_u32(outs + 8, 0xffff_ffff);
+        assert_eq!(
+            e.call(0x00a3_f9e0, &args![owner, outs, outs + 4, outs + 8])
+                .u32(),
+            0
+        );
+        assert_eq!(e.mem.u32(outs), 0);
+        assert_eq!(e.mem.u32(outs + 4), 0);
+        assert_eq!(e.mem.u32(outs + 8), 0xffff_ff00);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + 0xc, 0xbbbb_0102);
+        e.mem.set_u32(object + 0x18, 0x66);
+        e.mem.set_u8(object + 0x1e, 7);
+        e.mem.set_u32(object + 0x28, 0x88);
+        e.mem.set_u32(owner + 0x2c, object);
+        let result = e.call(0x00a3_f9e0, &args![owner, outs, outs + 4, outs + 8]);
+        assert_eq!(result.u32(), 0x88);
+        assert_eq!(e.mem.u32(outs), 0x0102);
+        assert_eq!(e.mem.u32(outs + 4), 0x66);
+        assert_eq!(e.mem.u8(outs + 8), 7);
+    }
+
+    #[test]
+    fn animation_skip_update_stores_the_byte() {
+        let mut e = engine();
+        let this = e.new_object::<Animation>();
+        e.mem.set_u8(this.addr() + 0xcd, 0x5a);
+        e.call(0x008e_eaa0, &args![this, 0x14u32]);
+        assert_eq!(e.mem.u8(this.addr() + 0xcc), 0x14);
+        assert_eq!(e.mem.u8(this.addr() + 0xcd), 0x5a);
     }
 }
