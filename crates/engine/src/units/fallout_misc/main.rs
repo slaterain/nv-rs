@@ -2496,6 +2496,1225 @@ pub fn fn_0086e580(e: &mut Engine) -> u8 {
     setting_byte(e, 0x011c_712c) as u8
 }
 
+// ---------------------------------------------------------------------------------------------
+// The per-frame idle update (`0086e650`) and the small functions around it.
+// ---------------------------------------------------------------------------------------------
+
+/// `Main::bFlyCamera` and `Main::bFreezeTime` (Xbox PDB): byte flags at +6 and +7 of the `Main`
+/// object.
+const MAIN_FLY_CAMERA: u32 = 6;
+const MAIN_FREEZE_TIME: u32 = 7;
+/// The four byte flags the idle update refreshes from the interface: a menu is up
+/// (`Interface::IsInMenuMode` or `Interface::IsPipboyOpening`), the dialog test (`007050d0`),
+/// the fader test (`00701450` with 1) and the console test (`Interface::IsConsoleVisible`).
+const IN_MENU_FLAG: u32 = 0x011d_ea2b;
+const IN_DIALOG_FLAG: u32 = 0x011d_ea2c;
+const FADER_ONE_FLAG: u32 = 0x011d_ea2d;
+const CONSOLE_VISIBLE_FLAG: u32 = 0x011d_ea2e;
+/// A byte flag several steps of the idle update read (the byte `00525420` returns is the one
+/// after it, `011dea2a`).
+const SCENE_FLAG_29: u32 = 0x011d_ea29;
+/// The fader manager object (`00701450`, `007010e0`, ... are called on it).
+const FADER_MANAGER: u32 = 0x011d_8804;
+/// The `ProcessLists` instance (the methods at `0096....` are called on it).
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// The data handler object the cell lookups (`00461bc0`) are called on.
+const DATA_HANDLER_OBJECT: u32 = 0x011c_3f2c;
+/// The idle update's frame counter.
+const FRAME_COUNTER: u32 = 0x011a_2fe0;
+/// `0044ddc0` is called on this object: it returns the word at +8.
+const MODE_OBJECT: u32 = 0x011f_2250;
+/// Reads the holder at [`SCENE_GRAPH_HOLDER`] and passes its value to `006629f0` (cdecl, no
+/// argument).
+const SCENE_DATA_GETTER: u32 = 0x0052_4c90;
+/// The actor value the idle update asks the player for (virtual method +8 of the object at
+/// +0xA4) before turning it into an alignment.
+const KARMA_ACTOR_VALUE: u32 = 0x17;
+/// `GetAsyncKeyState` (import slot).
+pub(crate) const API_GET_ASYNC_KEY_STATE: u32 = 0x00fd_f308;
+/// `CreateDirectoryA` (import slot).
+pub(crate) const API_CREATE_DIRECTORY: u32 = 0x00fd_f0b8;
+
+/// Reads a byte flag of the `Main` object.
+fn main_flag(e: &Engine, this: Ptr, offset: u32) -> bool {
+    e.mem.u8(this.addr() + offset) != 0
+}
+
+/// Reads a byte global as a flag.
+fn byte_flag(e: &Engine, address: u32) -> bool {
+    e.global::<u8>(address) != 0
+}
+
+/// The processor-count setting as the signed number the code compares.
+fn processor_count(e: &mut Engine) -> i32 {
+    let address = e
+        .call(SETTING_INT_PTR, &args![PROCESSOR_COUNT_SETTING])
+        .u32();
+    e.mem.u32(address) as i32
+}
+
+/// The seconds of the timer at [`TIMER`] (`0084d030`, a `float` in `ST0`).
+fn timer_seconds(e: &mut Engine) -> f32 {
+    e.call(TIMER_GET_SECONDS, &args![TIMER]).f32()
+}
+
+/// The frame seconds of the timer at [`TIMER`] (`007013e0`, a `float` in `ST0`).
+fn timer_frame_seconds(e: &mut Engine) -> f32 {
+    e.call(0x0070_13e0, &args![TIMER]).f32()
+}
+
+/// Reads the `float` a setting object (`00403e20`) points at.
+fn float_setting(e: &mut Engine, setting: u32) -> f32 {
+    let address = e.call(0x0040_3e20, &args![setting]).u32();
+    e.mem.f32(address)
+}
+
+/// `GetAsyncKeyState(virtual_key)`: whether the key is down (the high bit of the result).
+fn key_is_down(e: &mut Engine, virtual_key: u32) -> bool {
+    e.call(API_GET_ASYNC_KEY_STATE, &args![virtual_key]).u16() & 0x8000 != 0
+}
+
+/// Calls `Interface::IsTopMenuID` (`00702450`, cdecl).
+fn is_top_menu(e: &mut Engine, menu_id: u32) -> bool {
+    e.call(0x0070_2450, &args![menu_id]).u8() != 0
+}
+
+/// Calls `Interface::IsMenuIDVisible` (`00702680`, cdecl: menu id, then a second word).
+fn is_menu_visible(e: &mut Engine, menu_id: u32, second: u32) -> bool {
+    e.call(0x0070_2680, &args![menu_id, second]).u8() != 0
+}
+
+/// Refreshes the four interface flags: the menu flag is 1 when `Interface::IsInMenuMode` or
+/// `Interface::IsPipboyOpening` says so (the second is only asked when the first says no).
+fn refresh_interface_flags(e: &mut Engine) {
+    let in_menu =
+        e.call(IS_IN_MENU_MODE, &args![]).u8() != 0 || e.call(0x0070_9bc0, &args![]).u8() != 0;
+    e.set_global(IN_MENU_FLAG, in_menu as u8);
+    let in_dialog = e.call(0x0070_50d0, &args![]).u8();
+    e.set_global(IN_DIALOG_FLAG, in_dialog);
+    let fader = e.global::<u32>(FADER_MANAGER);
+    let fader_one = e.call(0x0070_1450, &args![fader, 1u32]).u8();
+    e.set_global(FADER_ONE_FLAG, fader_one);
+    let console = e.call(0x0070_3d50, &args![]).u8();
+    e.set_global(CONSOLE_VISIBLE_FLAG, console);
+}
+
+/// The test the idle update repeats before the world-facing steps: no menu is up (or the fader
+/// flag is set), the console is not visible and the time is not frozen.
+fn world_steps_allowed(e: &Engine, this: Ptr) -> bool {
+    (!byte_flag(e, IN_MENU_FLAG) || byte_flag(e, FADER_ONE_FLAG))
+        && !byte_flag(e, CONSOLE_VISIBLE_FLAG)
+        && !main_flag(e, this, MAIN_FREEZE_TIME)
+}
+
+// Translated from 0086e5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7180`.
+pub fn fn_0086e5a0(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7180) as u8
+}
+
+// Translated from 0086e5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7368`.
+pub fn fn_0086e5c0(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7368) as u8
+}
+
+// Translated from 0086e5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7380`.
+pub fn fn_0086e5e0(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7380) as u8
+}
+
+// Translated from 0086e600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte setting at `011c7550`.
+pub fn fn_0086e600(e: &mut Engine) -> u8 {
+    setting_byte(e, 0x011c_7550) as u8
+}
+
+// Translated from 0086e620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a word in the global at `011f9644`.
+pub fn fn_0086e620(e: &mut Engine, value: u32) {
+    e.set_global(0x011f_9644, value);
+}
+
+// Translated from 0086e630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the holder at `011d86bc` hold `value` (`0066b0d0`).
+pub fn fn_0086e630(e: &mut Engine, value: u32) {
+    pointer_set(e, 0x011d_86bc, value);
+}
+
+// Translated from 0086e650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The per-frame idle update of the `Main` object: refreshes the interface flags, updates the
+/// player, the controls, the process lists, the cells, the menus, the renderer and the audio, in
+/// the order the game does, and counts the frames. `this` is the `Main` object.
+pub fn fn_0086e650(e: &mut Engine, this: Ptr) {
+    let frame_budget = e.global::<u32>(0x011a_3010);
+    fn_0086a830(e, this.addr(), frame_budget);
+    // Alt+Tab: skip the whole update.
+    if key_is_down(e, 9) && key_is_down(e, 0x12) {
+        return;
+    }
+    let system = e.call(0x00af_2640, &args![]).u32();
+    e.vcall(system, 0x0c, &args![]);
+
+    refresh_interface_flags(e);
+    // A rendered menu other than the Pipboy is up.
+    let other_menu = if e.call(0x0070_7ad0, &args![]).u32() != 0 {
+        let menu = e.call(0x0070_7ad0, &args![]).u32();
+        let pipboy = e.call(0x0070_5990, &args![]).u32();
+        menu != pipboy
+    } else {
+        false
+    };
+    let object = e.call(0x004b_7210, &args![]).u32();
+    let kind = e.call(0x0042_4940, &args![object]).u8() as i8;
+    if kind == 3 && !other_menu {
+        e.call(0x0087_82b0, &args![]);
+    }
+    main_on_idle_update_player(e, this);
+    let helper = e.call(0x006f_f580, &args![]).u32();
+    e.call(0x006f_f860, &args![helper]);
+    let running = !byte_flag(e, IN_MENU_FLAG) && !main_flag(e, this, MAIN_FREEZE_TIME);
+    main_on_idle_update_image_space(e, this, running as u8);
+
+    refresh_interface_flags(e);
+    if byte_flag(e, 0x011d_eefc) {
+        // `Pathing::ProfilePathing(process, value of virtual +0x1f4, 2, 100)` (cdecl).
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        let value = e.vcall(player, 0x1f4, &args![]).u32();
+        let process = e.call(0x008d_6f30, &args![player]).u32();
+        e.call(0x006d_a7c0, &args![process, value, 2u32, 100u32]);
+    }
+    let saves = e.global::<u32>(0x011d_e134);
+    e.call(0x0085_1d90, &args![saves]);
+    fn_0086ef30(e);
+    fn_0086ef90(e);
+    fn_0086f190(e, this);
+    e.call(0x0048_3710, &args![this]);
+    e.call(0x004e_1610, &args![]);
+    let frames = e.global::<u32>(FRAME_COUNTER);
+    e.set_global(FRAME_COUNTER, frames.wrapping_add(1));
+    e.set_global(0x011d_f674, 0u32);
+    if !byte_flag(e, IN_MENU_FLAG) {
+        fn_0086ef40(e);
+    }
+    fn_0086f260(e, this);
+    main_on_idle_poll_controls(e, this);
+    let input = e.global::<u32>(0x0120_2d98);
+    e.call(0x00c3_dbf0, &args![input]);
+    if fn_0086efa0(e) == 0 {
+        if e.call(0x0070_edf0, &args![]).u8() != 0 {
+            e.call(0x0078_cfc0, &args![]);
+        } else if e.call(0x0070_5ea0, &args![]).u8() != 0 {
+            let tes = e.global::<u32>(TES_OBJECT);
+            e.call(0x0045_7d70, &args![tes, 0u32, 0u32, 0u32]);
+        }
+    }
+    fn_0086efe0(e, this);
+    let menu = byte_flag(e, IN_MENU_FLAG) as u32;
+    let scene_data = e.call(SCENE_DATA_GETTER, &args![]).u32();
+    let manager = e.call(0x004a_0ea0, &args![]).u32();
+    e.call(0x00b6_dd00, &args![manager, scene_data, menu]);
+    main_on_idle_handle_menu_background(e, this);
+    let fader = e.global::<u32>(FADER_MANAGER);
+    e.call(0x0070_11d0, &args![fader, 1u32]);
+    if !byte_flag(e, IN_MENU_FLAG) && !main_flag(e, this, MAIN_FREEZE_TIME) {
+        e.call(0x004e_0110, &args![]);
+        e.call(0x004d_e600, &args![]);
+    }
+    if e.call(0x0068_3a60, &args![]).u32() != 0 {
+        e.call(0x00a8_1a20, &args![]);
+    }
+    if !byte_flag(e, IN_MENU_FLAG) && !main_flag(e, this, MAIN_FREEZE_TIME) {
+        let tes = e.global::<u32>(TES_OBJECT);
+        if e.call(0x0045_1530, &args![tes]).u8() != 0 && fn_0086ef70(e, Ptr::new(tes)) == 0 {
+            e.call(0x0045_56d0, &args![tes, 0u32]);
+        }
+        let scene = e.call(POINTER_GET, &args![SCENE_GRAPH_HOLDER]).u32();
+        let seconds = timer_seconds(e);
+        e.vcall(scene, 0x104, &args![seconds]);
+        let seconds = timer_seconds(e);
+        e.call(0x0086_7a40, &args![CALENDAR, seconds]);
+        if processor_count(e) == 1 {
+            let tes = e.global::<u32>(TES_OBJECT);
+            e.call(0x0045_5640, &args![tes]);
+        }
+    }
+    e.call(0x0040_fbf0, &args![0x011f_11a0u32, 0u32]);
+    e.call(0x0097_8550, &args![PROCESS_LISTS]);
+    if processor_count(e) == 1 {
+        if (!byte_flag(e, IN_MENU_FLAG) || byte_flag(e, FADER_ONE_FLAG))
+            && !byte_flag(e, CONSOLE_VISIBLE_FLAG)
+            && !main_flag(e, this, MAIN_FREEZE_TIME)
+        {
+            e.call(0x0097_77a0, &args![PROCESS_LISTS]);
+            e.call(0x008d_0600, &args![PROCESS_LISTS, 0.0f32, 0u32]);
+            e.call(0x0096_eb40, &args![PROCESS_LISTS]);
+            e.call(0x0096_e9b0, &args![PROCESS_LISTS]);
+        }
+    } else if world_steps_allowed(e, this) {
+        e.call(0x0097_77a0, &args![PROCESS_LISTS]);
+        e.call(0x0096_eb40, &args![PROCESS_LISTS]);
+        e.call(0x0096_e9b0, &args![PROCESS_LISTS]);
+    }
+    e.call(0x0040_fba0, &args![0x011f_11a0u32]);
+    let object = e.call(0x0044_6ef0, &args![]).u32();
+    e.call(0x0087_8080, &args![object, 1u32]);
+    if fn_0086ef60(e) != 0 {
+        e.call(0x00a6_1cd0, &args![]);
+    }
+    e.call(0x0086_8850, &args![]);
+    e.call(0x0086_8d10, &args![]);
+    let paused = byte_flag(e, IN_MENU_FLAG) || main_flag(e, this, MAIN_FREEZE_TIME);
+    let scene_data = e.call(SCENE_DATA_GETTER, &args![]).u32();
+    e.call(0x0066_52e0, &args![scene_data, paused as u32]);
+    fn_0086fbe0(e, this);
+    if processor_count(e) == 1 {
+        fn_0086fd70(e, this);
+    }
+    e.call(0x0048_3710, &args![this]);
+    let object = e.call(0x0049_fef0, &args![]).u32();
+    e.call(0x0049_fff0, &args![object]);
+    let scene_data = e.call(SCENE_DATA_GETTER, &args![]).u32();
+    e.call(0x0071_2e60, &args![scene_data, 0x011a_d840u32]);
+    if e.call(0x0044_ddc0, &args![MODE_OBJECT]).u32() != 4 {
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        let field_of_view = e.call(0x0071_0ab0, &args![player]).f32();
+        let scene = e.call(0x0045_c670, &args![]).u32();
+        e.call(0x00c5_2020, &args![scene, field_of_view, 0u32, 0u32, 1u32]);
+    }
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let field_of_view = e.call(0x0071_0ab0, &args![player]).f32();
+    e.call(0x00b5_4000, &args![field_of_view]);
+    let scene = e.call(POINTER_GET, &args![SCENE_GRAPH_HOLDER]).u32();
+    // The game also keeps a local that is always 0 here and would be preferred when set.
+    let animation_data = e.call(0x0066_29f0, &args![scene]).u32();
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_bc80, &args![tes, 1u32, 1u32]);
+    let object = e.call(0x0045_0b80, &args![0u32]).u32();
+    e.call(0x00b5_ac90, &args![object, animation_data]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_b070, &args![tes, animation_data]);
+    let render_world = (!byte_flag(e, IN_MENU_FLAG) || byte_flag(e, FADER_ONE_FLAG))
+        && !byte_flag(e, CONSOLE_VISIBLE_FLAG)
+        && !main_flag(e, this, MAIN_FREEZE_TIME);
+    if render_world {
+        if processor_count(e) > 1 {
+            e.call(0x008c_80e0, &args![1u32]);
+            let object = e.call(0x0071_3d80, &args![]).u32();
+            e.call(0x008c_78c0, &args![object]);
+        } else {
+            e.call(0x008c_a070, &args![0x011e_0fe0u32]);
+        }
+    }
+    fn_0086fc60(e, this);
+    if processor_count(e) > 1 && !render_world {
+        fn_0086fd70(e, this);
+        if e.call(IS_IN_MENU_MODE, &args![]).u8() != 0 {
+            e.call(0x0070_58e0, &args![]);
+        }
+    }
+    if !main_flag(e, this, MAIN_FREEZE_TIME) {
+        let object = e.call(0x0047_d0b0, &args![]).u32();
+        e.call(0x006e_bc50, &args![object]);
+    }
+    let object = e.call(0x0055_2ba0, &args![]).u32();
+    e.call(0x006a_61b0, &args![object]);
+    if processor_count(e) == 1 {
+        let address = e.call(SETTING_BYTE_PTR, &args![0x011d_73e4u32]).u32();
+        if e.mem.u8(address) != 0 {
+            let object = e.call(0x006c_0720, &args![]).u32();
+            e.call(0x006c_3640, &args![object]);
+        }
+        let hold = byte_flag(e, IN_MENU_FLAG)
+            || byte_flag(e, FADER_ONE_FLAG)
+            || main_flag(e, this, MAIN_FREEZE_TIME);
+        let object = e.global::<u32>(0x011f_1958);
+        e.call(0x0099_1500, &args![object, hold as u32]);
+    }
+    if e.call(0x0071_4a00, &args![]).u8() != 0 {
+        e.call(0x00a8_1a80, &args![]);
+    }
+    if e.call(0x0070_23c0, &args![]).u32() == 0x3f4 && e.call(0x0070_56f0, &args![]).u8() != 0 {
+        e.call(0x0087_1dc0, &args![this]);
+    }
+    e.call(0x0057_ab70, &args![]);
+    e.call(0x00b6_0040, &args![]);
+    // The karma of the player turned into an alignment (cdecl, one `float`); the result is
+    // stored in a local the function never reads.
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let karma = e.vcall(player + 0xa4, 8, &args![KARMA_ACTOR_VALUE]).i32();
+    e.call(0x0047_e040, &args![karma as f32]);
+    fn_0086ff70(e, this);
+    e.call(0x0087_05d0, &args![this]);
+    if byte_flag(e, 0x011c_6fbb) {
+        e.call(0x004d_c360, &args![]);
+        e.set_global(0x011c_6fbb, 0u8);
+    }
+    if world_steps_allowed(e, this) {
+        if processor_count(e) > 1 {
+            let object = e.call(0x0071_3d80, &args![]).u32();
+            e.call(0x008c_7990, &args![object]);
+        } else {
+            e.call(0x008c_a300, &args![0x011e_0fe0u32]);
+        }
+    }
+    main_update_non_render_safe_ai_tasks(e, this);
+    e.call(0x0087_0610, &args![this]);
+    if e.call(0x0070_ed10, &args![]).u8() != 0 {
+        e.call(0x0070_ed20, &args![0u32]);
+        e.call(0x0070_3e10, &args![]);
+    }
+    e.call(0x00a2_9680, &args![]);
+    e.call(0x005a_e270, &args![]);
+    e.call(0x005a_9d60, &args![]);
+    // Seconds gathered since the 256-step counter last ticked.
+    let seconds = timer_seconds(e) as f64;
+    let accumulated = (seconds + e.global::<f32>(0x011d_eef8) as f64) as f32;
+    e.set_global(0x011d_eef8, accumulated);
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let tick = e.call(IS_IN_MENU_MODE, &args![]).u8() != 0
+        || (player != 0 && e.call(0x0095_0090, &args![player]).u8() != 0)
+        || (accumulated as f64) >= e.global::<f64>(0x0103_57e8);
+    if tick {
+        e.set_global(0x011d_eef8, 0.0f32);
+        let step = e.global::<u8>(0x011d_eef5);
+        e.set_global(0x011d_eef5, step.wrapping_add(1));
+        e.call(0x00aa_7290, &args![step as u32]);
+        // The game also resets the counter when it reaches 0x100, which a byte never does.
+    }
+}
+
+// Translated from 0086ef30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the byte at `012677a2`.
+pub fn fn_0086ef30(e: &mut Engine) {
+    e.set_global(0x0126_77a2, 0u8);
+}
+
+// Translated from 0086ef40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds one to the word at `011f9138`.
+pub fn fn_0086ef40(e: &mut Engine) {
+    let value = e.global::<u32>(0x011f_9138);
+    e.set_global(0x011f_9138, value.wrapping_add(1));
+}
+
+// Translated from 0086ef60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `011f4461`.
+pub fn fn_0086ef60(e: &mut Engine) -> u8 {
+    e.global::<u8>(0x011f_4461)
+}
+
+// Translated from 0086ef70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at +0x52 of `this`.
+pub fn fn_0086ef70(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x52)
+}
+
+// Translated from 0086ef90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `0.0` in the `float` at `01267c1c`.
+pub fn fn_0086ef90(e: &mut Engine) {
+    e.set_global(0x0126_7c1c, 0.0f32);
+}
+
+// Translated from 0086efa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// 1 when the object at `011daac0` exists and its method `004a4080(0x10000)` says yes, else 0.
+pub fn fn_0086efa0(e: &mut Engine) -> u8 {
+    let object = e.global::<u32>(0x011d_aac0);
+    if object != 0 && e.call(0x004a_4080, &args![object, 0x1_0000u32]).u8() != 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// The three `float` setting objects [`fn_0086efe0`] hands to its setters, or `None` for the
+/// default `1.0` triple.
+fn light_settings(e: &mut Engine) -> Option<[u32; 3]> {
+    if e.call(0x0052_5420, &args![]).u8() != 0 {
+        return Some([0x011d_ec24, 0x011d_eb10, 0x011d_ed8c]);
+    }
+    let tes = e.global::<u32>(TES_OBJECT);
+    if e.call(0x004f_d3e0, &args![tes]).u32() != 0 {
+        let tes = e.global::<u32>(TES_OBJECT);
+        let world_space = e.call(0x004f_d3e0, &args![tes]).u32();
+        if e.call(0x0058_6390, &args![world_space, 1u32]).u32() != 0 {
+            return Some([0x011d_ec7c, 0x011d_ee54, 0x011d_ed98]);
+        }
+    }
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    if player != 0 && e.call(0x008d_6f30, &args![player]).u32() != 0 {
+        let process = e.call(0x008d_6f30, &args![player]).u32();
+        if e.call(0x0042_5fd0, &args![process]).u8() != 0 {
+            return Some([0x011d_ea80, 0x011d_eddc, 0x011d_ecc8]);
+        }
+    }
+    None
+}
+
+// Translated from 0086efe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks one of three triples of `float` settings and hands them to the setters
+/// [`fn_0086f160`], [`fn_0086f170`] and [`fn_0086f180`]: the first when `00525420` says so, the
+/// second when the current world space (`004fd3e0`, then `00586390(.., 1)`) qualifies, the
+/// third when the player's object `008d6f30` returns exists and `00425fd0` says yes; otherwise
+/// `1.0` three times.
+pub fn fn_0086efe0(e: &mut Engine, _this: Ptr) {
+    match light_settings(e) {
+        Some([first, second, third]) => {
+            let value = float_setting(e, first);
+            fn_0086f160(e, value);
+            let value = float_setting(e, second);
+            fn_0086f170(e, value);
+            let value = float_setting(e, third);
+            fn_0086f180(e, value);
+        }
+        None => {
+            fn_0086f160(e, 1.0);
+            fn_0086f170(e, 1.0);
+            fn_0086f180(e, 1.0);
+        }
+    }
+}
+
+// Translated from 0086f160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` in the global at `011ad804`.
+pub fn fn_0086f160(e: &mut Engine, value: f32) {
+    e.set_global(0x011a_d804, value);
+}
+
+// Translated from 0086f170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` in the global at `011ad800`.
+pub fn fn_0086f170(e: &mut Engine, value: f32) {
+    e.set_global(0x011a_d800, value);
+}
+
+// Translated from 0086f180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` in the global at `011ad7fc`.
+pub fn fn_0086f180(e: &mut Engine, value: f32) {
+    e.set_global(0x011a_d7fc, value);
+}
+
+// Translated from 0086f190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// While a menu is up (the flag at `011dea2b`), the first call after it came up runs through the
+/// list `00717e50` returns for [`PROCESS_LISTS`]: for every entry that exists, whose current
+/// process type (`MobileObject::GetCurrentProcessType`, `00931850`) is 0 and whose virtual
+/// method at +0x1d0 answers non-zero, calls `00483710` on the object `008d8520` returns; then
+/// the same for the player. Without a menu it only re-arms the flag at `011deefd`.
+pub fn fn_0086f190(e: &mut Engine, _this: Ptr) {
+    if !byte_flag(e, IN_MENU_FLAG) {
+        e.set_global(0x011d_eefd, 1u8);
+        return;
+    }
+    if byte_flag(e, 0x011d_eefd) {
+        let list = e.call(0x0071_7e50, &args![PROCESS_LISTS]).u32();
+        let mut index = 0u32;
+        while index < e.call(0x005b_e5c0, &args![list, 0u32]).u32() {
+            let actor = e.call(0x0096_8670, &args![list, index]).u32();
+            if actor != 0
+                && e.call(0x0093_1850, &args![actor]).u32() == 0
+                && e.vcall(actor, 0x1d0, &args![]).u32() != 0
+            {
+                let object = e.call(0x008d_8520, &args![actor]).u32();
+                e.call(0x0048_3710, &args![object]);
+            }
+            index += 1;
+        }
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        let object = e.call(0x008d_8520, &args![player]).u32();
+        e.call(0x0048_3710, &args![object]);
+    }
+    e.set_global(0x011d_eefd, 0u8);
+}
+
+// Translated from 0086f260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the timer: sets its mode from the byte setting at `011dedbc` (`008a8150`), starts the
+/// frame clock unless a menu is up (`00aa4e40`), copies a `float` setting (`011d1320`) to
+/// `011afe60`, runs the physics step `00c66760(seconds, 00525420(), mode == 4)`, refreshes the
+/// values with [`fn_0086f330`] and stores in `011dea30` the seconds times the scale setting
+/// `011c5724` (0 while a menu is up).
+pub fn fn_0086f260(e: &mut Engine, _this: Ptr) {
+    let address = e.call(SETTING_BYTE_PTR, &args![0x011d_edbcu32]).u32();
+    let mode_byte = e.mem.u8(address) as u32;
+    e.call(0x008a_8150, &args![TIMER, mode_byte]);
+    if !byte_flag(e, IN_MENU_FLAG) {
+        e.call(0x00aa_4e40, &args![]);
+    }
+    e.call(0x0077_1520, &args![TIMER]);
+    let value = float_setting(e, 0x011d_1320);
+    e.set_global(0x011a_fe60, value);
+    let mode = e.call(0x0044_ddc0, &args![MODE_OBJECT]).u32();
+    let stepping = (mode == 4) as u32;
+    let flag = e.call(0x0052_5420, &args![]).u8() as u32;
+    let seconds = timer_seconds(e);
+    e.call(0x00c6_6760, &args![seconds, flag, stepping]);
+    fn_0086f330(e);
+    let scaled = if byte_flag(e, IN_MENU_FLAG) {
+        0.0
+    } else {
+        let seconds = timer_seconds(e) as f64;
+        let scale = float_setting(e, 0x011c_5724) as f64;
+        (scale * seconds) as f32
+    };
+    e.set_global(0x011d_ea30, scaled);
+}
+
+// Translated from 0086f330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fills the four `float`s at `011f940c` with `f(0)` .. `f(3)`, where `f` is the function whose
+/// address is stored at `011f91f0` (cdecl, one index, result in `ST0`); 0.0 without one.
+pub fn fn_0086f330(e: &mut Engine) {
+    for index in 0..4u32 {
+        let function = e.global::<u32>(0x011f_91f0);
+        let value = if function != 0 {
+            e.call(function, &args![index]).f32()
+        } else {
+            0.0
+        };
+        e.set_global(0x011f_940c + index * 4, value);
+    }
+}
+
+// Translated from 0086f390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::OnIdle_PollControls` (Xbox PDB): polls the controls (`00a23010`) and tells them the
+/// frame time (`00a257c0`); then, unless the camera flies, the player's virtual method +0x22c
+/// says no, the Pipboy test passes, neither the menu 0x3e9 is visible nor `004a4040` says yes,
+/// clears the user actions (`00a253d0`).
+pub fn main_on_idle_poll_controls(e: &mut Engine, this: Ptr) {
+    let controls = e.call(0x007f_df30, &args![]).u32();
+    e.call(0x00a2_3010, &args![controls]);
+    let seconds = timer_frame_seconds(e);
+    let controls = e.call(0x007f_df30, &args![]).u32();
+    e.call(0x00a2_57c0, &args![controls, seconds]);
+    if main_flag(e, this, MAIN_FLY_CAMERA) {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    if e.vcall(player, 0x22c, &args![0u32]).u8() != 0 {
+        return;
+    }
+    let mode = e.call(0x0044_ddc0, &args![MODE_OBJECT]).u32();
+    let proceed = if mode == 4 && e.call(0x007d_1360, &args![player]).u8() == 0 {
+        true
+    } else {
+        e.call(0x0070_9bc0, &args![]).u8() != 0
+    };
+    if !proceed {
+        return;
+    }
+    if is_menu_visible(e, 0x3e9, 0) {
+        return;
+    }
+    if e.call(0x004a_4040, &args![]).u8() != 0 {
+        return;
+    }
+    let controls = e.call(0x007f_df30, &args![]).u32();
+    e.call(0x00a2_53d0, &args![controls]);
+}
+
+// Translated from 0086f450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::OnIdle_HandleMenuBackground` (Xbox PDB): while a menu is up and none of the menus that
+/// bring their own background is open, renders the menu background (`00871dc0`) if the byte at
+/// `011dea28` is set; otherwise, when the byte at `011dea29` is set and no menu that needs the
+/// background is shown, kills the menu background texture (`00877430`).
+pub fn main_on_idle_handle_menu_background(e: &mut Engine, this: Ptr) {
+    if byte_flag(e, IN_MENU_FLAG)
+        && !is_top_menu(e, 0x3f1)
+        && e.call(0x0070_edf0, &args![]).u8() == 0
+        && !is_menu_visible(e, 0x420, 0xb)
+        && !is_menu_visible(e, 0x3e9, 0xb)
+        && e.call(0x0070_5a00, &args![]).u8() == 0
+        && e.call(0x0070_3d50, &args![]).u8() == 0
+        && !byte_flag(e, SCENE_FLAG_29)
+        && byte_flag(e, SCENE_FLAG_BYTE)
+    {
+        e.call(0x0087_1dc0, &args![this]);
+        return;
+    }
+    if !byte_flag(e, SCENE_FLAG_29) {
+        return;
+    }
+    let background_may_go = !byte_flag(e, IN_MENU_FLAG)
+        || e.call(0x0070_edf0, &args![]).u8() != 0
+        || (e.call(0x0070_3d50, &args![]).u8() != 0 && e.call(0x0070_79b0, &args![]).u8() == 0)
+        || is_top_menu(e, 0x3f1)
+        || is_top_menu(e, 0x420);
+    if !background_may_go {
+        return;
+    }
+    let fader = e.global::<u32>(FADER_MANAGER);
+    if e.call(0x0070_14a0, &args![fader, 1u32]).u8() != 0 {
+        return;
+    }
+    for menu_id in [0x41e, 0x3f6, 0x424, 0x432, 0x438, 0x439, 0x43a, 0x43b] {
+        if is_menu_visible(e, menu_id, 0) {
+            return;
+        }
+    }
+    e.call(0x0087_7430, &args![this]);
+}
+
+// Translated from 0086f640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the audio: `00ad7740(audio, 1)` on the object `00453a70` returns, then
+/// `00832ad0(0)`, `0082fb70` and `0082d7c0`.
+pub fn fn_0086f640(e: &mut Engine, _this: Ptr) {
+    let audio = e.call(0x0045_3a70, &args![]).u32();
+    e.call(0x00ad_7740, &args![audio, 1u32]);
+    e.call(0x0083_2ad0, &args![0u32]);
+    e.call(0x0082_fb70, &args![]);
+    e.call(0x0082_d7c0, &args![]);
+}
+
+// Translated from 0086f670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the bytes at `012682f8`, `011df678` and `011dea2a`, then calls `005a38e0` and
+/// `00455490` on the object at [`TES_OBJECT`].
+pub fn fn_0086f670(e: &mut Engine, _this: Ptr) {
+    e.set_global(0x0126_82f8, 0u8);
+    e.set_global(0x011d_f678, 0u8);
+    e.set_global(0x011d_ea2a, 0u8);
+    e.call(0x005a_38e0, &args![]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_5490, &args![tes]);
+}
+
+// Translated from 0086f6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::UpdateNonRenderSafeAITasks` (Xbox PDB): resets a dialog menu's timer when a dialog is
+/// open, then updates the process lists, the Pipboy and the task managers for the frame.
+pub fn main_update_non_render_safe_ai_tasks(e: &mut Engine, this: Ptr) {
+    if e.call(0x0070_50d0, &args![]).u8() != 0
+        && e.call(0x0070_3d50, &args![]).u8() == 0
+        && fn_0086f860(e) == 0
+    {
+        let dialog = e.call(0x0076_24d0, &args![]).u32();
+        if dialog != 0 && e.vcall(dialog, 0x100, &args![]).u8() != 0 {
+            e.vcall(dialog, 0x404, &args![0.0f32]);
+        }
+    }
+    e.call(0x0096_c240, &args![PROCESS_LISTS, 0.0f32]);
+    if processor_count(e) > 1 {
+        e.call(0x0096_c970, &args![PROCESS_LISTS]);
+    } else {
+        e.call(0x0096_c860, &args![PROCESS_LISTS]);
+    }
+    e.call(0x0096_c710, &args![PROCESS_LISTS]);
+    let seconds = timer_seconds(e);
+    e.call(0x0097_81d0, &args![PROCESS_LISTS, seconds]);
+    let pipboy = e.call(0x0070_5990, &args![]).u32();
+    if fn_0086f840(e, Ptr::new(pipboy)) != 0 {
+        e.call(0x007f_a990, &args![pipboy]);
+    }
+    if processor_count(e) > 1 {
+        e.call(0x0054_ae30, &args![]);
+        let object = e.call(0x0045_37b0, &args![]).u32();
+        e.call(0x0087_a6d0, &args![object]);
+        let object = e.call(0x0045_37b0, &args![]).u32();
+        e.call(0x0087_a790, &args![object]);
+        e.call(0x0055_2570, &args![]);
+        let value = e.global::<f32>(0x011c_3c08);
+        fn_0086f830(e, value);
+        let object = e.call(0x0045_37b0, &args![]).u32();
+        e.call(0x0087_a6b0, &args![object]);
+    }
+    let address = e.call(SETTING_INT_PTR, &args![0x011d_10d4u32]).u32();
+    let value = e.mem.u32(address);
+    e.call(0x0070_34c0, &args![value]);
+    e.call(0x0070_3490, &args![]);
+    let hold = byte_flag(e, IN_MENU_FLAG)
+        || byte_flag(e, FADER_ONE_FLAG)
+        || main_flag(e, this, MAIN_FREEZE_TIME);
+    let object = e.global::<u32>(0x011f_1958);
+    e.call(0x0099_1600, &args![object, hold as u32]);
+}
+
+// Translated from 0086f830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a `float` in the global at `011c40ec`.
+pub fn fn_0086f830(e: &mut Engine, value: f32) {
+    e.set_global(0x011c_40ec, value);
+}
+
+// Translated from 0086f840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at +0x16c of `this`.
+pub fn fn_0086f840(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x16c)
+}
+
+// Translated from 0086f860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at +0x131 of the object at `011d9510`, or 0 without one.
+pub fn fn_0086f860(e: &mut Engine) -> u8 {
+    let object = e.global::<u32>(0x011d_9510);
+    if object != 0 {
+        e.mem.u8(object + 0x131)
+    } else {
+        0
+    }
+}
+
+// Translated from 0086f890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::OnIdle_UpdateProcessLists` (Xbox PDB): with one processor runs `0096eb40` on the
+/// process lists first; then, when the world steps are allowed, runs `008c94e0` and `00991dc0`
+/// (with one processor) and `ProcessLists::UpdateProcessLists` (`0096d810`); otherwise, while a
+/// menu is up or time is frozen, `PlayerCharacter::UpdateAutoAimActor` (`00964260`).
+pub fn main_on_idle_update_process_lists(e: &mut Engine, this: Ptr) {
+    if processor_count(e) == 1 {
+        e.call(0x0096_eb40, &args![PROCESS_LISTS]);
+    }
+    if world_steps_allowed(e, this) {
+        if processor_count(e) == 1 {
+            e.call(0x008c_94e0, &args![0x011e_0fe0u32]);
+            let object = e.global::<u32>(0x011f_1958);
+            e.call(0x0099_1dc0, &args![object]);
+        }
+        e.call(0x0096_d810, &args![PROCESS_LISTS]);
+    } else if byte_flag(e, IN_MENU_FLAG) || main_flag(e, this, MAIN_FREEZE_TIME) {
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        e.call(0x0096_4260, &args![player]);
+    }
+}
+
+// Translated from 0086f940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::OnIdle_UpdatePlayer` (Xbox PDB): lets the player handle a position request
+/// (`0093bea0`); else, while a menu is up without the Pipboy opening, runs `009481d0`; else with
+/// the fly camera updates the player (`009466d0`); otherwise runs the player's per-frame step
+/// (virtual +0x2f8 with the VATS time multiplier) and, when the player stands in a cell that is
+/// not interior and not yet loaded (`00550200`), finds the cell under it (`00461bc0`), points
+/// the current-cell tracker at the position (`00452580`), attaches the player to that cell
+/// (`00548230`) and notifies the shader accumulator (`00b655b0`).
+pub fn main_on_idle_update_player(e: &mut Engine, this: Ptr) {
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    if e.call(0x0093_bea0, &args![player]).u8() != 0 {
+        return;
+    }
+    if byte_flag(e, IN_MENU_FLAG) && e.call(0x0070_9bc0, &args![]).u8() == 0 {
+        e.call(0x0094_81d0, &args![player]);
+        return;
+    }
+    if main_flag(e, this, MAIN_FLY_CAMERA) {
+        if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
+            let freeze = e.mem.u8(this.addr() + MAIN_FREEZE_TIME) as u32;
+            let seconds = timer_seconds(e);
+            e.call(0x0094_66d0, &args![player, seconds, freeze]);
+        }
+        return;
+    }
+    if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
+        let depth = e.global::<u8>(0x011e_07a8);
+        e.set_global(0x011e_07a8, depth.wrapping_add(1));
+        let seconds = timer_seconds(e) as f64;
+        let multiplier = e.call(0x009c_8cc0, &args![MODE_OBJECT]).f32() as f64;
+        let step = (multiplier * seconds) as f32;
+        e.vcall(player, 0x2f8, &args![step]);
+        let depth = e.global::<u8>(0x011e_07a8);
+        e.set_global(0x011e_07a8, depth.wrapping_sub(1));
+    }
+    let cell = e.call(0x008d_6f30, &args![player]).u32();
+    let position = e.call(0x0043_6aa0, &args![player]).u32();
+    let coordinates = [
+        e.mem.u32(position),
+        e.mem.u32(position + 4),
+        e.mem.u32(position + 8),
+    ];
+    if cell == 0 || e.call(0x0042_5fd0, &args![cell]).u8() != 0 {
+        return;
+    }
+    e.with_stack(12, |e, buffer| {
+        for (index, word) in coordinates.iter().enumerate() {
+            e.mem.set_u32(buffer.addr() + index as u32 * 4, *word);
+        }
+        if e.call(0x0055_0200, &args![cell, buffer]).u8() != 0 {
+            return;
+        }
+        let world_space = e.call(0x0054_ddd0, &args![cell]).u32();
+        let handler = e.global::<u32>(DATA_HANDLER_OBJECT);
+        let grid_cell = e
+            .call(
+                0x0046_1bc0,
+                &args![
+                    handler,
+                    f32::from_bits(coordinates[0]),
+                    f32::from_bits(coordinates[1]),
+                    world_space,
+                    1u32
+                ],
+            )
+            .u32();
+        if grid_cell == 0 {
+            return;
+        }
+        if e.call(0x0045_0fb0, &args![grid_cell]).u8() == 0
+            && e.call(0x0045_0ff0, &args![grid_cell]).u8() == 0
+        {
+            let tes = e.global::<u32>(TES_OBJECT);
+            e.call(0x0045_2580, &args![tes, buffer, 1u32]);
+            let tes = e.global::<u32>(TES_OBJECT);
+            if e.call(0x0045_1530, &args![tes]).u8() != 0 {
+                e.call(0x0045_7d70, &args![tes, 0u32, 0u32, 0u32]);
+            }
+        }
+        fn_0086fba0(e, 1);
+        fn_0086fbc0(e, Ptr::new(player), 1);
+        e.call(0x0054_8230, &args![grid_cell, player, 0u32]);
+        let acoustic_space = e.call(0x0054_7590, &args![grid_cell]).u32();
+        fn_0086fbb0(e, acoustic_space);
+        fn_0086fbc0(e, Ptr::new(player), 0);
+        fn_0086fba0(e, 0);
+        let accumulator = e.call(0x00b4_f5c0, &args![]).u32();
+        if accumulator != 0 {
+            e.call(0x00b6_55b0, &args![accumulator]);
+        }
+    });
+}
+
+// Translated from 0086fba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte in the global at `011dcfa6`.
+pub fn fn_0086fba0(e: &mut Engine, value: u8) {
+    e.set_global(0x011d_cfa6, value);
+}
+
+// Translated from 0086fbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a word in the global at `011dcfb8`.
+pub fn fn_0086fbb0(e: &mut Engine, value: u32) {
+    e.set_global(0x011d_cfb8, value);
+}
+
+// Translated from 0086fbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte at +0x5f9 of `this` (the player).
+pub fn fn_0086fbc0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x5f9, value);
+}
+
+// Translated from 0086fbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// While no menu is up, the byte at `011d8907` is clear and time is not frozen: points the
+/// current-cell tracker (`00452580`) at the player's position (`00436aa0`) and, when it has a
+/// cell (`00451530`) and `005f36f0` says there is none, refreshes the player's world space
+/// (`00575d70`) and the tracker's (`004fd3e0`).
+pub fn fn_0086fbe0(e: &mut Engine, this: Ptr) {
+    if byte_flag(e, IN_MENU_FLAG)
+        || byte_flag(e, 0x011d_8907)
+        || main_flag(e, this, MAIN_FREEZE_TIME)
+    {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let position = e.call(0x0043_6aa0, &args![player]).u32();
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x0045_2580, &args![tes, position, 1u32]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    if e.call(0x0045_1530, &args![tes]).u8() == 0 {
+        return;
+    }
+    if e.call(0x005f_36f0, &args![tes]).u32() != 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    e.call(0x0057_5d70, &args![player]);
+    let tes = e.global::<u32>(TES_OBJECT);
+    e.call(0x004f_d3e0, &args![tes]);
+}
+
+// Translated from 0086fc60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When time is not frozen and (no menu is up, or a dialog or the fader flag is set): updates the
+/// process lists for the frame (`009746c0` with several processors, `00974420` otherwise), the
+/// current cell (`00453550` with the scaled seconds at `011dea30` with one processor and no
+/// menu, `004537c0` otherwise) and the particle systems, with a temporary object built by
+/// `0043d410(seconds, 1, 0)`.
+pub fn fn_0086fc60(e: &mut Engine, this: Ptr) {
+    let active =
+        !byte_flag(e, IN_MENU_FLAG) || byte_flag(e, IN_DIALOG_FLAG) || byte_flag(e, FADER_ONE_FLAG);
+    if !active || main_flag(e, this, MAIN_FREEZE_TIME) {
+        return;
+    }
+    let seconds = timer_seconds(e);
+    if processor_count(e) > 1 {
+        e.call(0x0097_46c0, &args![PROCESS_LISTS, seconds]);
+    } else {
+        e.call(0x0097_4420, &args![PROCESS_LISTS, seconds]);
+    }
+    let tes = e.global::<u32>(TES_OBJECT);
+    if processor_count(e) == 1 && !byte_flag(e, IN_MENU_FLAG) {
+        let scaled = e.global::<f32>(0x011d_ea30);
+        e.call(0x0045_3550, &args![tes, scaled]);
+    } else {
+        e.call(0x0045_37c0, &args![tes]);
+    }
+    let scaled = e.global::<f32>(0x011d_ea30);
+    e.with_stack(12, |e, buffer| {
+        e.call(0x0043_d410, &args![buffer, scaled, 1u32, 0u32]);
+        // The game tests the processor count again here, but both arms run the same two calls.
+        let holder = e.call(0x0045_a190, &args![buffer]).u32();
+        e.call(0x00c5_0610, &args![holder]);
+    });
+}
+
+// Translated from 0086fd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `007027e0`, `00702810` and `00702840`.
+pub fn fn_0086fd70(e: &mut Engine, _this: Ptr) {
+    e.call(0x0070_27e0, &args![]);
+    e.call(0x0070_2810, &args![]);
+    e.call(0x0070_2840, &args![]);
+}
+
+// Translated from 0086fd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Main::OnIdle_UpdateImageSpace` (Xbox PDB): updates the image-space manager (`00b8b500`,
+/// `00b8b9a0`), adds the seconds to the shader time when `running` ([`fn_0086ff50`]), then walks
+/// the list `0043b5d0` returns for the current cell: nodes whose virtual +0x8c says yes are
+/// taken out of the list (`00633c90` builds a temporary, `00631620` removes it); every fourth
+/// node counted by its byte at +8 ends a batch (`00b8aea0` when none of the batch had a positive
+/// value at virtual +0x90, then `00b8ccb0`); the manager is finished with `00b8d020` and
+/// `00b8b440(0)`.
+///
+/// Not translated: the exception-unwinding state of the frame (the temporary built by
+/// `00633c90` is destroyed by `0045cec0` on the normal path).
+pub fn main_on_idle_update_image_space(e: &mut Engine, _this: Ptr, running: u8) {
+    let manager = e.call(0x004e_3270, &args![]).u32();
+    e.call(0x00b8_b500, &args![manager]);
+    let manager = e.call(0x004e_3270, &args![]).u32();
+    e.call(0x00b8_b9a0, &args![manager]);
+    if running != 0 {
+        let seconds = timer_seconds(e);
+        fn_0086ff50(e, seconds);
+    }
+    let tes = e.global::<u32>(TES_OBJECT);
+    let mut list = e.call(0x0043_b5d0, &args![tes]).u32();
+    let mut counted = 0u32;
+    let mut positive = 0u32;
+    while list != 0 {
+        let holder = e.call(0x0068_15c0, &args![list]).u32();
+        let node = e.call(POINTER_GET, &args![holder]).u32();
+        if node != 0 {
+            if e.mem.u8(node + 8) != 0 {
+                counted += 1;
+            }
+            if e.vcall(node, 0x8c, &args![]).u8() != 0 {
+                let current = list;
+                e.with_stack(4, |e, temporary| {
+                    e.call(0x0063_3c90, &args![temporary, node]);
+                    e.call(0x0063_1620, &args![current, temporary]);
+                    e.call(0x0045_cec0, &args![temporary]);
+                });
+                continue;
+            }
+            if fn_0086ff40(e) != 0 {
+                e.vcall(node, 0x90, &args![]);
+                let value = e.call(TIMER_GET_SECONDS, &args![node]).f32() as f64;
+                if value > e.global::<f64>(0x0101_2060) && e.mem.u8(node + 8) != 0 {
+                    positive += 1;
+                }
+            }
+        }
+        list = e.call(0x0072_6070, &args![list]).u32();
+        if counted == 4 {
+            if positive == 0 {
+                let manager = e.call(0x004e_3270, &args![]).u32();
+                e.call(0x00b8_aea0, &args![manager]);
+            }
+            let manager = e.call(0x004e_3270, &args![]).u32();
+            e.call(0x00b8_ccb0, &args![manager]);
+            counted = 0;
+        }
+    }
+    let manager = e.call(0x004e_3270, &args![]).u32();
+    e.call(0x00b8_d020, &args![manager]);
+    let manager = e.call(0x004e_3270, &args![]).u32();
+    e.call(0x00b8_b440, &args![manager, 0u32]);
+}
+
+// Translated from 0086ff40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `0118abb0`.
+pub fn fn_0086ff40(e: &mut Engine) -> u8 {
+    e.global::<u8>(0x0118_abb0)
+}
+
+// Translated from 0086ff50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `seconds` to the `float` at `011c96fc`.
+pub fn fn_0086ff50(e: &mut Engine, seconds: f32) {
+    let total = e.global::<f32>(0x011c_96fc) as f64 + seconds as f64;
+    e.set_global(0x011c_96fc, total as f32);
+}
+
+/// The eight menus whose being visible stops the frame's world update in [`fn_0086ff70`].
+const COVERING_MENUS: [u32; 8] = [0x41e, 0x3f6, 0x424, 0x432, 0x438, 0x439, 0x43a, 0x43b];
+
+// Translated from 0086ff70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second half of the idle update (rendering and menus): flushes the renderer, redraws the
+/// menu background after a menu change, ages the fade-in counter (`011def00`/`011def04`) and
+/// then, depending on whether the game world or a menu is shown, runs the world update
+/// (`008706b0`) or the menu update (`00871a50`, `00872940`, `00874b90`); toggles a debug
+/// counter on the keys of the actions 0x1e / 0x9d (making a numbered directory); and closes the
+/// frame (`00c458f0`, ...).
+///
+/// Not translated: the stack-cookie check at the end (`00ec408c`).
+pub fn fn_0086ff70(e: &mut Engine, this: Ptr) {
+    let me = this.addr();
+    let renderer = e.call(GET_RENDERER, &args![]).u32();
+    e.call(0x004a_0370, &args![renderer]);
+    if byte_flag(e, 0x011d_890a) {
+        e.set_global(0x011d_890a, 0u8);
+        let player = e.global::<u32>(PLAYER_OBJECT);
+        let target = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
+        let saved_first = e.call(0x0045_6610, &args![target]).u8();
+        let target = e.call(0x0095_0bb0, &args![player, 0u32]).u32();
+        let saved_second = e.call(0x0045_6610, &args![target]).u8();
+        let target = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
+        e.call(0x0045_0f90, &args![target, 1u32]);
+        let target = e.call(0x0095_0bb0, &args![player, 0u32]).u32();
+        e.call(0x0045_0f90, &args![target, 1u32]);
+        e.call(0x0087_1dc0, &args![me]);
+        let target = e.call(0x0095_0bb0, &args![player, 1u32]).u32();
+        e.call(0x0045_0f90, &args![target, saved_first as u32]);
+        let target = e.call(0x0095_0bb0, &args![player, 0u32]).u32();
+        e.call(0x0045_0f90, &args![target, saved_second as u32]);
+    }
+    let renderer_again = e.call(GET_RENDERER, &args![]).u32();
+    e.call(0x0055_85e0, &args![renderer_again]);
+    e.call(0x00a2_9680, &args![]);
+    e.call(ERROR_LOG, &args![]);
+    let threads = e.call(0x004e_a970, &args![]).u32();
+    e.call(0x00ba_2f30, &args![threads]);
+    if byte_flag(e, 0x011c_6fb8) {
+        e.call(0x004d_cef0, &args![]);
+    }
+    let fader = e.global::<u32>(FADER_MANAGER);
+    if e.call(0x0070_1450, &args![fader, 1u32]).u8() != 0
+        || e.call(0x0070_1450, &args![fader, 2u32]).u8() != 0
+    {
+        if e.global::<u32>(0x011d_ef04) == 0 {
+            let tes = e.global::<u32>(TES_OBJECT);
+            e.call(0x0045_7d70, &args![tes, 0u32, 0u32, 0u32]);
+            e.call(ERROR_LOG, &args![]);
+            e.call(0x0096_cfa0, &args![PROCESS_LISTS]);
+        }
+        let seconds = timer_frame_seconds(e) as f64;
+        let elapsed = (seconds + e.global::<f32>(0x011d_ef00) as f64) as f32;
+        e.set_global(0x011d_ef00, elapsed);
+        let frames = e.global::<u32>(0x011d_ef04).wrapping_add(1);
+        e.set_global(0x011d_ef04, frames);
+        if (elapsed as f64) >= e.global::<f64>(0x0101_2070) && frames as i32 >= 10 {
+            let fader = e.global::<u32>(FADER_MANAGER);
+            e.call(0x0070_10e0, &args![fader, 1u32, 0u32]);
+            e.call(0x0070_10e0, &args![fader, 2u32, 0u32]);
+            let object = e.global::<u32>(0x011d_e45c);
+            e.call(0x0045_34f0, &args![object, 0u32]);
+            let object = e.global::<u32>(0x011d_e45c);
+            if e.call(0x0047_c850, &args![object]).u8() != 0 {
+                let object = e.global::<u32>(0x011d_e45c);
+                e.call(0x0045_34f0, &args![object, 0u32]);
+                let object = e.global::<u32>(0x011d_e45c);
+                e.call(0x0048_3710, &args![object]);
+            }
+            e.call(0x0087_7430, &args![me]);
+        }
+    } else {
+        e.set_global(0x011d_ef00, 0.0f32);
+        e.set_global(0x011d_ef04, 0u32);
+    }
+    // A render target the game keeps in a local that nothing ever sets.
+    let pending_target = 0u32;
+    let player = e.global::<u32>(PLAYER_OBJECT);
+    let fader = e.global::<u32>(FADER_MANAGER);
+    let tes = e.global::<u32>(TES_OBJECT);
+    if !byte_flag(e, SCENE_FLAG_29)
+        && e.call(0x0070_edf0, &args![]).u8() == 0
+        && e.vcall(player, 0x1d0, &args![]).u32() != 0
+        && e.call(0x0070_1400, &args![fader, 1u32]).u8() == 0
+    {
+        if e.call(0x005f_36f0, &args![tes]).u32() == 0 {
+            let world_space = e.call(0x004f_d3e0, &args![tes]).u32();
+            let cell_data = e.call(0x0054_8210, &args![world_space]).u32();
+            if (e.mem.u8(cell_data) as i8) != 0 && e.call(0x0044_ddc0, &args![tes]).u32() != 0 {
+                e.call(0x0044_ddc0, &args![tes]);
+                if e.call(0x0087_05c0, &args![]).u8() != 0 {
+                    let mode = e.call(0x0044_ddc0, &args![tes]).u32();
+                    e.call(0x004b_af10, &args![mode]);
+                }
+            }
+        }
+        e.call(0x0087_06b0, &args![me, 0u32, 0u32, 0u32]);
+    } else {
+        let rendered = e.call(0x0070_79b0, &args![]).u8() != 0;
+        let menu_up = (!rendered && e.call(IS_IN_MENU_MODE, &args![]).u8() != 0)
+            || is_menu_visible(e, 0x3f5, 0);
+        if menu_up {
+            for stage in 1..0x17u32 {
+                let threads = e.call(0x004e_a970, &args![]).u32();
+                e.call(0x00ba_30f0, &args![threads, 0u32, stage]);
+                let threads = e.call(0x004e_a970, &args![]).u32();
+                e.call(0x00ba_3130, &args![threads, 1u32, stage]);
+            }
+            e.call(0x0087_1a50, &args![me]);
+            let covered = COVERING_MENUS
+                .into_iter()
+                .any(|menu_id| is_menu_visible(e, menu_id, 0));
+            if covered {
+                e.call(0x0087_2940, &args![me, 0u32]);
+            } else if e.call(POINTER_GET, &args![0x011d_ed3cu32]).u32() != 0 {
+                let flag = e.call(0x004d_c310, &args![]).u8() as u32;
+                let manager = e.call(0x004e_3270, &args![]).u32();
+                e.call(0x0087_4b90, &args![me, manager, renderer, flag, 0u32]);
+            }
+        } else if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
+            let rendered = e.call(0x0070_79b0, &args![]).u8() as u32;
+            e.call(0x0087_06b0, &args![me, 0u32, rendered, 0u32]);
+        }
+    }
+    if e.call(0x005d_4a40, &args![]).u8() == 1 {
+        e.call(0x00b5_5a10, &args![]);
+    }
+    e.call(0x0070_9b40, &args![]);
+    let holder_value = e.call(POINTER_GET, &args![0x011d_ec64u32]).u32();
+    e.call(0x0070_28b0, &args![pending_target, holder_value]);
+    let threads = e.call(0x004e_a970, &args![]).u32();
+    e.call(0x00ba_2fa0, &args![threads]);
+    if e.call(POINTER_GET, &args![0x011d_ec64u32]).u32() != 0 {
+        let value = e.call(POINTER_GET, &args![0x011d_ec64u32]).u32();
+        let manager = e.call(0x004a_0ea0, &args![]).u32();
+        e.call(0x00b6_da10, &args![manager, value]);
+        pointer_set(e, 0x011d_ec64, 0);
+    }
+    let controls = e.call(0x007f_df30, &args![]).u32();
+    if e.call(0x00a2_4660, &args![controls, 0x1eu32, 1u32]).u32() != 0 {
+        let controls = e.call(0x007f_df30, &args![]).u32();
+        let pressed = e.call(0x00a2_4180, &args![controls, 0x9du32, 0u32]).u32() != 0;
+        if pressed || byte_flag(e, 0x011d_ea40) {
+            let shown = !byte_flag(e, 0x011d_ea40);
+            e.set_global(0x011d_ea40, shown as u8);
+            if shown {
+                e.set_global(0x011d_ea44, 0u32);
+                let address = e.call(SETTING_INT_PTR, &args![0x011d_eeccu32]).u32();
+                let count = e.mem.u32(address);
+                e.call(0x0045_ce80, &args![0x011d_eeccu32, count.wrapping_add(1)]);
+                let address = e.call(SETTING_INT_PTR, &args![0x011d_eeccu32]).u32();
+                let count = e.mem.u32(address);
+                let text = e.call(0x0040_3df0, &args![0x011d_eb04u32]).u32();
+                e.with_stack(0x104, |e, buffer| {
+                    e.call(
+                        0x0040_6d00,
+                        &args![buffer, 0x104u32, 0x0108_2ca4u32, text, count],
+                    );
+                    e.call(API_CREATE_DIRECTORY, &args![buffer, 0u32]);
+                });
+                let address = e.call(SETTING_INT_PTR, &args![0x011d_ee00u32]).u32();
+                let value = e.mem.u32(address);
+                fn_0086d4c0(e, Ptr::new(TIMER), value);
+            } else {
+                fn_0086d4c0(e, Ptr::new(TIMER), 0);
+            }
+        } else {
+            e.call(0x0087_8860, &args![0u32]);
+        }
+    }
+    e.call(0x00c4_58f0, &args![]);
+    if e.call(0x004e_9530, &args![renderer]).u32() != 0 {
+        e.call(0x00b6_b730, &args![]);
+    }
+    if pending_target != 0 {
+        let manager = e.call(0x004a_0ea0, &args![]).u32();
+        e.call(0x00b6_da10, &args![manager, pending_target]);
+    }
+    let holder_value = e.call(POINTER_GET, &args![SCENE_GRAPH_HOLDER]).u32();
+    e.call(0x00c5_1f20, &args![holder_value]);
+    e.call(0x004a_03c0, &args![renderer]);
+    if processor_count(e) > 1 {
+        e.call(0x008c_80e0, &args![0u32]);
+    }
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2579,6 +3798,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0086e540, fn_0086e540() -> u8),
         entry!(0x0086e560, fn_0086e560() -> u8),
         entry!(0x0086e580, fn_0086e580() -> u8),
+        entry!(0x0086e5a0, fn_0086e5a0() -> u8),
+        entry!(0x0086e5c0, fn_0086e5c0() -> u8),
+        entry!(0x0086e5e0, fn_0086e5e0() -> u8),
+        entry!(0x0086e600, fn_0086e600() -> u8),
+        entry!(0x0086e620, fn_0086e620(u32)),
+        entry!(0x0086e630, fn_0086e630(u32)),
+        entry!(0x0086e650, fn_0086e650(Ptr)),
+        entry!(0x0086ef30, fn_0086ef30()),
+        entry!(0x0086ef40, fn_0086ef40()),
+        entry!(0x0086ef60, fn_0086ef60() -> u8),
+        entry!(0x0086ef70, fn_0086ef70(Ptr) -> u8),
+        entry!(0x0086ef90, fn_0086ef90()),
+        entry!(0x0086efa0, fn_0086efa0() -> u8),
+        entry!(0x0086efe0, fn_0086efe0(Ptr)),
+        entry!(0x0086f160, fn_0086f160(f32)),
+        entry!(0x0086f170, fn_0086f170(f32)),
+        entry!(0x0086f180, fn_0086f180(f32)),
+        entry!(0x0086f190, fn_0086f190(Ptr)),
+        entry!(0x0086f260, fn_0086f260(Ptr)),
+        entry!(0x0086f330, fn_0086f330()),
+        entry!(0x0086f390, main_on_idle_poll_controls(Ptr)),
+        entry!(0x0086f450, main_on_idle_handle_menu_background(Ptr)),
+        entry!(0x0086f640, fn_0086f640(Ptr)),
+        entry!(0x0086f670, fn_0086f670(Ptr)),
+        entry!(0x0086f6a0, main_update_non_render_safe_ai_tasks(Ptr)),
+        entry!(0x0086f830, fn_0086f830(f32)),
+        entry!(0x0086f840, fn_0086f840(Ptr) -> u8),
+        entry!(0x0086f860, fn_0086f860() -> u8),
+        entry!(0x0086f890, main_on_idle_update_process_lists(Ptr)),
+        entry!(0x0086f940, main_on_idle_update_player(Ptr)),
+        entry!(0x0086fba0, fn_0086fba0(u8)),
+        entry!(0x0086fbb0, fn_0086fbb0(u32)),
+        entry!(0x0086fbc0, fn_0086fbc0(Ptr, u8)),
+        entry!(0x0086fbe0, fn_0086fbe0(Ptr)),
+        entry!(0x0086fc60, fn_0086fc60(Ptr)),
+        entry!(0x0086fd70, fn_0086fd70(Ptr)),
+        entry!(0x0086fd90, main_on_idle_update_image_space(Ptr, u8)),
+        entry!(0x0086ff40, fn_0086ff40() -> u8),
+        entry!(0x0086ff50, fn_0086ff50(f32)),
+        entry!(0x0086ff70, fn_0086ff70(Ptr)),
     ]
 }
 
@@ -5627,5 +6886,1879 @@ mod tests {
         assert_eq!(e.call(0x0086_e540, &args![]).u8(), 11);
         assert_eq!(e.call(0x0086_e560, &args![]).u8(), 22);
         assert_eq!(e.call(0x0086_e580, &args![]).u8(), 33);
+    }
+
+    /// Every callee of the idle-update functions that lives outside this file.
+    const IDLE_CALLEES: [u32; 228] = [
+        0x0040_3df0,
+        0x0040_3e20,
+        0x0040_6d00,
+        0x0040_fba0,
+        0x0040_fbf0,
+        0x0042_4940,
+        0x0042_5fd0,
+        0x0043_6aa0,
+        0x0043_b5d0,
+        0x0043_d410,
+        0x0044_6ef0,
+        0x0044_ddc0,
+        0x0045_0b80,
+        0x0045_0f90,
+        0x0045_0fb0,
+        0x0045_0ff0,
+        0x0045_1530,
+        0x0045_2580,
+        0x0045_34f0,
+        0x0045_3550,
+        0x0045_37b0,
+        0x0045_37c0,
+        0x0045_3a70,
+        0x0045_5490,
+        0x0045_5640,
+        0x0045_56d0,
+        0x0045_6610,
+        0x0045_7d70,
+        0x0045_a190,
+        0x0045_b070,
+        0x0045_bc80,
+        0x0045_c670,
+        0x0045_ce80,
+        0x0045_cec0,
+        0x0046_1bc0,
+        0x0047_c850,
+        0x0047_d0b0,
+        0x0047_e040,
+        0x0048_3710,
+        0x0049_fef0,
+        0x0049_fff0,
+        0x004a_0370,
+        0x004a_03c0,
+        0x004a_0ea0,
+        0x004a_4040,
+        0x004a_4080,
+        0x004b_7210,
+        0x004b_af10,
+        0x004d_c310,
+        0x004d_c360,
+        0x004d_cef0,
+        0x004d_e600,
+        0x004e_0110,
+        0x004e_1610,
+        0x004e_3270,
+        0x004e_9530,
+        0x004e_a970,
+        0x004f_d3e0,
+        0x0052_4c90,
+        0x0052_5420,
+        0x0054_7590,
+        0x0054_8210,
+        0x0054_8230,
+        0x0054_ae30,
+        0x0054_ddd0,
+        0x0055_0200,
+        0x0055_2570,
+        0x0055_2ba0,
+        0x0055_85e0,
+        0x0057_5d70,
+        0x0057_ab70,
+        0x0058_6390,
+        0x005a_38e0,
+        0x005a_9d60,
+        0x005a_e270,
+        0x005b_e5c0,
+        0x005d_4a40,
+        0x005f_36f0,
+        0x0063_1620,
+        0x0063_3c90,
+        0x0066_29f0,
+        0x0066_52e0,
+        0x0068_15c0,
+        0x0068_3a60,
+        0x006a_61b0,
+        0x006c_0720,
+        0x006c_3640,
+        0x006d_a7c0,
+        0x006e_bc50,
+        0x006f_f580,
+        0x006f_f860,
+        0x0070_10e0,
+        0x0070_11d0,
+        0x0070_13e0,
+        0x0070_1400,
+        0x0070_1450,
+        0x0070_14a0,
+        0x0070_23c0,
+        0x0070_2450,
+        0x0070_2680,
+        0x0070_27e0,
+        0x0070_2810,
+        0x0070_2840,
+        0x0070_28b0,
+        0x0070_3490,
+        0x0070_34c0,
+        0x0070_3d50,
+        0x0070_3e10,
+        0x0070_50d0,
+        0x0070_56f0,
+        0x0070_58e0,
+        0x0070_5990,
+        0x0070_5a00,
+        0x0070_5ea0,
+        0x0070_79b0,
+        0x0070_7ad0,
+        0x0070_9b40,
+        0x0070_9bc0,
+        0x0070_ed10,
+        0x0070_ed20,
+        0x0070_edf0,
+        0x0071_0ab0,
+        0x0071_2e60,
+        0x0071_3d80,
+        0x0071_4a00,
+        0x0071_7e50,
+        0x0072_6070,
+        0x0076_24d0,
+        0x0077_1520,
+        0x0078_cfc0,
+        0x007d_1360,
+        0x007f_a990,
+        0x007f_df30,
+        0x0082_d7c0,
+        0x0082_fb70,
+        0x0083_2ad0,
+        0x0085_1d90,
+        0x0086_7a40,
+        0x0086_8850,
+        0x0086_8d10,
+        0x0087_05c0,
+        0x0087_05d0,
+        0x0087_0610,
+        0x0087_06b0,
+        0x0087_1a50,
+        0x0087_1dc0,
+        0x0087_2940,
+        0x0087_4b90,
+        0x0087_7430,
+        0x0087_8080,
+        0x0087_82b0,
+        0x0087_8860,
+        0x0087_a6b0,
+        0x0087_a6d0,
+        0x0087_a790,
+        0x008a_8150,
+        0x008c_78c0,
+        0x008c_7990,
+        0x008c_80e0,
+        0x008c_94e0,
+        0x008c_a070,
+        0x008c_a300,
+        0x008d_0600,
+        0x008d_6f30,
+        0x008d_8520,
+        0x0093_1850,
+        0x0093_bea0,
+        0x0094_66d0,
+        0x0094_81d0,
+        0x0095_0090,
+        0x0095_0bb0,
+        0x0096_4260,
+        0x0096_8670,
+        0x0096_c240,
+        0x0096_c710,
+        0x0096_c860,
+        0x0096_c970,
+        0x0096_cfa0,
+        0x0096_d810,
+        0x0096_e9b0,
+        0x0096_eb40,
+        0x0097_4420,
+        0x0097_46c0,
+        0x0097_77a0,
+        0x0097_81d0,
+        0x0097_8550,
+        0x0099_1500,
+        0x0099_1600,
+        0x0099_1dc0,
+        0x009c_8cc0,
+        0x00a2_3010,
+        0x00a2_4180,
+        0x00a2_4660,
+        0x00a2_53d0,
+        0x00a2_57c0,
+        0x00a2_9680,
+        0x00a6_1cd0,
+        0x00a8_1a20,
+        0x00a8_1a80,
+        0x00aa_4e40,
+        0x00aa_7290,
+        0x00ad_7740,
+        0x00af_2640,
+        0x00b4_f5c0,
+        0x00b5_4000,
+        0x00b5_5a10,
+        0x00b5_ac90,
+        0x00b6_0040,
+        0x00b6_55b0,
+        0x00b6_b730,
+        0x00b6_da10,
+        0x00b6_dd00,
+        0x00b8_aea0,
+        0x00b8_b440,
+        0x00b8_b500,
+        0x00b8_b9a0,
+        0x00b8_ccb0,
+        0x00b8_d020,
+        0x00ba_2f30,
+        0x00ba_2fa0,
+        0x00ba_30f0,
+        0x00ba_3130,
+        0x00c3_dbf0,
+        0x00c4_58f0,
+        0x00c5_0610,
+        0x00c5_1f20,
+        0x00c5_2020,
+        0x00c6_6760,
+    ];
+
+    /// The idle update's functions (`0086e5a0` .. `0086ff70`).
+    mod idle {
+        use super::*;
+
+        /// A function address registered as a double that answers 1.
+        const YES: u32 = 0x0000_2000;
+        /// An object whose vtable (large enough for the idle update's slots) has the given
+        /// (byte offset, function) slots.
+        fn object_with_vtable(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+            let table = e.mem.alloc(0x500);
+            for (offset, function) in slots {
+                e.mem.set_u32(table + offset, *function);
+            }
+            let object = e.mem.alloc(0x700);
+            e.mem.set_u32(object, table);
+            object
+        }
+
+        fn idle_engine() -> Engine {
+            let mut e = engine();
+            let extra = [
+                API_GET_ASYNC_KEY_STATE,
+                API_CREATE_DIRECTORY,
+                IS_IN_MENU_MODE,
+                GET_RENDERER,
+                ERROR_LOG,
+            ];
+            for address in IDLE_CALLEES.iter().copied().chain(extra) {
+                e.register(address, |_, _| Ret::default());
+            }
+            e.register(YES, |_, _| 1u32.into_ret());
+            e.register(POINTER_GET, |e, a| e.mem.u32(a[0]).into_ret());
+            e.register(POINTER_SET, |e, a| {
+                e.mem.set_u32(a[0], a[1]);
+                Ret::default()
+            });
+            let system = object_with_vtable(&mut e, &[(0xc, NOTHING)]);
+            e.register_double(0x00af_2640, move |_, _| system.into_ret());
+            let slots = [
+                (8, NOTHING),
+                (0x1d0, NOTHING),
+                (0x1f4, NOTHING),
+                (0x22c, NOTHING),
+                (0x2f8, NOTHING),
+            ];
+            let player = object_with_vtable(&mut e, &slots);
+            let table = e.mem.u32(player);
+            e.mem.set_u32(player + 0xa4, table);
+            e.set_global(PLAYER_OBJECT, player);
+            let scene = object_with_vtable(&mut e, &[(0x104, NOTHING)]);
+            e.mem.set_u32(SCENE_GRAPH_HOLDER, scene);
+            // The Pipboy, the player's position and the cell's flag byte are objects with zeroed
+            // fields, and the setting objects are their own float cells.
+            let pipboy = e.mem.alloc(0x200);
+            e.register_double(0x0070_5990, move |_, _| pipboy.into_ret());
+            let position = e.mem.alloc(12);
+            e.register_double(0x0043_6aa0, move |_, _| position.into_ret());
+            let cell_flags = e.mem.alloc(4);
+            e.register_double(0x0054_8210, move |_, _| cell_flags.into_ret());
+            e.register(0x0040_3e20, |_, a| a[0].into_ret());
+            for (address, function) in funcs() {
+                e.register(address, function);
+            }
+            e
+        }
+
+        fn main_object(e: &mut Engine) -> Ptr {
+            Ptr::new(e.mem.alloc(0xb4))
+        }
+
+        fn set_processors(e: &mut Engine, count: u32) {
+            e.mem.set_u32(ZERO_WORD, count);
+        }
+
+        fn floats(e: &mut Engine, address: u32, value: f32) {
+            e.mem.set_f32(address, value);
+        }
+
+        // ----- small functions ---------------------------------------------------------------
+
+        fn check_byte_getter(function: u32, setting: u32) {
+            let mut e = engine();
+            e.register_double(SETTING_BYTE_PTR, move |_, a| {
+                assert_eq!(a[0], setting);
+                ZERO_BYTE.into_ret()
+            });
+            e.mem.set_u8(ZERO_BYTE, 0x5a);
+            assert_eq!(e.call(function, &args![]).u8(), 0x5a);
+        }
+
+        #[test]
+        fn byte_setting_0086e5a0_reads_011c7180() {
+            check_byte_getter(0x0086_e5a0, 0x011c_7180);
+        }
+
+        #[test]
+        fn byte_setting_0086e5c0_reads_011c7368() {
+            check_byte_getter(0x0086_e5c0, 0x011c_7368);
+        }
+
+        #[test]
+        fn byte_setting_0086e5e0_reads_011c7380() {
+            check_byte_getter(0x0086_e5e0, 0x011c_7380);
+        }
+
+        #[test]
+        fn byte_setting_0086e600_reads_011c7550() {
+            check_byte_getter(0x0086_e600, 0x011c_7550);
+        }
+
+        #[test]
+        fn word_setter_0086e620_stores_its_argument() {
+            let mut e = engine();
+            e.call(0x0086_e620, &args![0xcafe_f00du32]);
+            assert_eq!(e.global::<u32>(0x011f_9644), 0xcafe_f00d);
+        }
+
+        #[test]
+        fn holder_setter_0086e630_assigns_the_holder_at_011d86bc() {
+            let mut e = engine();
+            let seen = recorder(&mut e, POINTER_SET, 0);
+            e.call(0x0086_e630, &args![0x4321u32]);
+            assert_eq!(*seen.borrow(), vec![vec![0x011d_86bc, 0x4321]]);
+        }
+
+        #[test]
+        fn clearing_setter_0086ef30_zeroes_its_byte() {
+            let mut e = engine();
+            e.set_global(0x0126_77a2, 9u8);
+            e.call(0x0086_ef30, &args![]);
+            assert_eq!(e.global::<u8>(0x0126_77a2), 0);
+        }
+
+        #[test]
+        fn counter_0086ef40_adds_one() {
+            let mut e = engine();
+            e.set_global(0x011f_9138, 41u32);
+            e.call(0x0086_ef40, &args![]);
+            assert_eq!(e.global::<u32>(0x011f_9138), 42);
+        }
+
+        #[test]
+        fn getter_0086ef60_returns_its_byte() {
+            let mut e = engine();
+            e.set_global(0x011f_4461, 3u8);
+            assert_eq!(e.call(0x0086_ef60, &args![]).u8(), 3);
+        }
+
+        #[test]
+        fn getter_0086ef70_reads_offset_0x52() {
+            let mut e = engine();
+            let object = e.mem.alloc(0x80);
+            e.mem.set_u8(object + 0x52, 7);
+            assert_eq!(e.call(0x0086_ef70, &args![object]).u8(), 7);
+        }
+
+        #[test]
+        fn clearing_setter_0086ef90_zeroes_its_float() {
+            let mut e = engine();
+            e.set_global(0x0126_7c1c, 5.5f32);
+            e.call(0x0086_ef90, &args![]);
+            assert_eq!(e.global::<f32>(0x0126_7c1c), 0.0);
+        }
+
+        #[test]
+        fn object_test_0086efa0_needs_the_object_and_its_yes() {
+            let mut e = engine();
+            // No object: 0 without asking.
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(0x0086_efa0, &args![]).u8(), 0);
+            assert!(calls_to(&take_log(&mut e), 0x004a_4080).is_empty());
+            // An object that says no, then yes.
+            e.set_global(0x011d_aac0, 0x5000u32);
+            let seen = recorder(&mut e, 0x004a_4080, 0);
+            assert_eq!(e.call(0x0086_efa0, &args![]).u8(), 0);
+            e.register(0x004a_4080, |_, _| 1u32.into_ret());
+            assert_eq!(e.call(0x0086_efa0, &args![]).u8(), 1);
+            assert_eq!(*seen.borrow(), vec![vec![0x5000, 0x1_0000]]);
+        }
+
+        #[test]
+        fn float_setters_store_their_arguments() {
+            let mut e = engine();
+            e.call(0x0086_f160, &args![1.5f32]);
+            e.call(0x0086_f170, &args![2.5f32]);
+            e.call(0x0086_f180, &args![3.5f32]);
+            assert_eq!(e.global::<f32>(0x011a_d804), 1.5);
+            assert_eq!(e.global::<f32>(0x011a_d800), 2.5);
+            assert_eq!(e.global::<f32>(0x011a_d7fc), 3.5);
+            e.call(0x0086_f830, &args![4.5f32]);
+            assert_eq!(e.global::<f32>(0x011c_40ec), 4.5);
+        }
+
+        #[test]
+        fn getter_0086f840_reads_offset_0x16c() {
+            let mut e = engine();
+            let object = e.mem.alloc(0x200);
+            e.mem.set_u8(object + 0x16c, 1);
+            assert_eq!(e.call(0x0086_f840, &args![object]).u8(), 1);
+        }
+
+        #[test]
+        fn getter_0086f860_reads_the_object_or_answers_zero() {
+            let mut e = engine();
+            assert_eq!(e.call(0x0086_f860, &args![]).u8(), 0);
+            let object = e.mem.alloc(0x200);
+            e.mem.set_u8(object + 0x131, 4);
+            e.set_global(0x011d_9510, object);
+            assert_eq!(e.call(0x0086_f860, &args![]).u8(), 4);
+        }
+
+        #[test]
+        fn getter_0086ff40_returns_its_byte() {
+            let mut e = engine();
+            e.set_global(0x0118_abb0, 1u8);
+            assert_eq!(e.call(0x0086_ff40, &args![]).u8(), 1);
+        }
+
+        #[test]
+        fn adder_0086ff50_adds_seconds_to_the_float() {
+            let mut e = engine();
+            e.set_global(0x011c_96fc, 1.25f32);
+            e.call(0x0086_ff50, &args![0.5f32]);
+            assert_eq!(e.global::<f32>(0x011c_96fc), 1.75);
+        }
+
+        #[test]
+        fn player_byte_setters_store_where_the_game_does() {
+            let mut e = engine();
+            e.call(0x0086_fba0, &args![1u8]);
+            assert_eq!(e.global::<u8>(0x011d_cfa6), 1);
+            e.call(0x0086_fbb0, &args![0x77u32]);
+            assert_eq!(e.global::<u32>(0x011d_cfb8), 0x77);
+            let player = e.mem.alloc(0x600);
+            e.call(0x0086_fbc0, &args![player, 1u8]);
+            assert_eq!(e.mem.u8(player + 0x5f9), 1);
+        }
+
+        #[test]
+        fn sequence_0086fd70_runs_the_three_interface_calls() {
+            let mut e = idle_engine();
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd70, &args![0u32]);
+            let log = take_log(&mut e);
+            let addresses: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+            assert_eq!(
+                addresses,
+                vec![0x0086_fd70, 0x0070_27e0, 0x0070_2810, 0x0070_2840]
+            );
+        }
+
+        #[test]
+        fn audio_update_0086f640_passes_the_audio_object() {
+            let mut e = idle_engine();
+            e.register(0x0045_3a70, |_, _| 0x1234u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f640, &args![0u32]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x00ad_7740), vec![vec![0x1234, 1]]);
+            assert_eq!(calls_to(&log, 0x0083_2ad0), vec![vec![0]]);
+            assert!(position(&log, 0x0083_2ad0) < position(&log, 0x0082_fb70));
+            assert!(position(&log, 0x0082_fb70) < position(&log, 0x0082_d7c0));
+        }
+
+        #[test]
+        fn reset_0086f670_clears_bytes_and_calls_the_cell_object() {
+            let mut e = idle_engine();
+            for address in [0x0126_82f8u32, 0x011d_f678, 0x011d_ea2a] {
+                e.set_global(address, 1u8);
+            }
+            e.set_global(TES_OBJECT, 0x6000u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f670, &args![0u32]);
+            let log = take_log(&mut e);
+            for address in [0x0126_82f8u32, 0x011d_f678, 0x011d_ea2a] {
+                assert_eq!(e.global::<u8>(address), 0);
+            }
+            assert_eq!(calls_to(&log, 0x0045_5490), vec![vec![0x6000]]);
+            assert!(position(&log, 0x005a_38e0) < position(&log, 0x0045_5490));
+        }
+
+        // ----- lights and counters -----------------------------------------------------------
+
+        fn light_engine() -> Engine {
+            let mut e = idle_engine();
+            // Setting objects are their own float cells.
+            e.register(0x0040_3e20, |_, a| a[0].into_ret());
+            for (address, value) in [
+                (0x011d_ec24u32, 1.0f32),
+                (0x011d_eb10, 2.0),
+                (0x011d_ed8c, 3.0),
+                (0x011d_ec7c, 4.0),
+                (0x011d_ee54, 5.0),
+                (0x011d_ed98, 6.0),
+                (0x011d_ea80, 7.0),
+                (0x011d_eddc, 8.0),
+                (0x011d_ecc8, 9.0),
+            ] {
+                floats(&mut e, address, value);
+            }
+            e.set_global(PLAYER_OBJECT, 0x7000u32);
+            e
+        }
+
+        fn lights(e: &Engine) -> [f32; 3] {
+            [
+                e.global::<f32>(0x011a_d804),
+                e.global::<f32>(0x011a_d800),
+                e.global::<f32>(0x011a_d7fc),
+            ]
+        }
+
+        #[test]
+        fn lights_0086efe0_first_triple_when_00525420_says_so() {
+            let mut e = light_engine();
+            e.register(0x0052_5420, |_, _| 1u32.into_ret());
+            e.call(0x0086_efe0, &args![0u32]);
+            assert_eq!(lights(&e), [1.0, 2.0, 3.0]);
+        }
+
+        #[test]
+        fn lights_0086efe0_second_triple_for_a_qualifying_world_space() {
+            let mut e = light_engine();
+            e.register(0x004f_d3e0, |_, _| 0x8000u32.into_ret());
+            let seen = recorder(&mut e, 0x0058_6390, 1);
+            e.call(0x0086_efe0, &args![0u32]);
+            assert_eq!(lights(&e), [4.0, 5.0, 6.0]);
+            assert_eq!(*seen.borrow(), vec![vec![0x8000, 1]]);
+        }
+
+        #[test]
+        fn lights_0086efe0_third_triple_for_the_players_process() {
+            let mut e = light_engine();
+            e.register(0x008d_6f30, |_, _| 0x9000u32.into_ret());
+            let seen = recorder(&mut e, 0x0042_5fd0, 1);
+            e.call(0x0086_efe0, &args![0u32]);
+            assert_eq!(lights(&e), [7.0, 8.0, 9.0]);
+            assert_eq!(*seen.borrow(), vec![vec![0x9000]]);
+        }
+
+        #[test]
+        fn lights_0086efe0_default_is_one_three_times() {
+            let mut e = light_engine();
+            // A world space that the second test rejects, and a process that is not wanted.
+            e.register(0x004f_d3e0, |_, _| 0x8000u32.into_ret());
+            e.register(0x008d_6f30, |_, _| 0x9000u32.into_ret());
+            e.call(0x0086_efe0, &args![0u32]);
+            assert_eq!(lights(&e), [1.0, 1.0, 1.0]);
+            // Without a player the process is not even asked for.
+            e.set_global(PLAYER_OBJECT, 0u32);
+            e.set_global(0x011a_d804, 0.0f32);
+            e.call(0x0086_efe0, &args![0u32]);
+            assert_eq!(lights(&e), [1.0, 1.0, 1.0]);
+        }
+
+        // ----- 0086f190 ----------------------------------------------------------------------
+
+        #[test]
+        fn menu_actors_0086f190_rearms_without_a_menu() {
+            let mut e = idle_engine();
+            e.call(0x0086_f190, &args![0u32]);
+            assert_eq!(e.global::<u8>(0x011d_eefd), 1);
+        }
+
+        #[test]
+        fn menu_actors_0086f190_visits_listed_actors_once() {
+            let mut e = idle_engine();
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.set_global(0x011d_eefd, 1u8);
+            e.set_global(PLAYER_OBJECT, 0xaa0u32);
+            e.register(0x0071_7e50, |_, _| 0x4000u32.into_ret());
+            e.register(0x005b_e5c0, |_, _| 3u32.into_ret());
+            let wanted = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            let unwanted = object_with_vtable(&mut e, &[(0x1d0, NOTHING)]);
+            e.register_double(0x0096_8670, move |_, a| match a[1] {
+                0 => wanted.into_ret(),
+                1 => 0u32.into_ret(),
+                _ => unwanted.into_ret(),
+            });
+            e.register(0x008d_8520, |_, a| (a[0] + 1).into_ret());
+            e.register(0x0093_1850, |_, _| 0u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f190, &args![0u32]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0048_3710),
+                vec![vec![wanted + 1], vec![0xaa1]]
+            );
+            assert_eq!(calls_to(&log, 0x005b_e5c0).len(), 4);
+            assert_eq!(e.global::<u8>(0x011d_eefd), 0);
+        }
+
+        #[test]
+        fn menu_actors_0086f190_skips_actors_with_a_process_type() {
+            let mut e = idle_engine();
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.set_global(0x011d_eefd, 1u8);
+            e.set_global(PLAYER_OBJECT, 0xaa0u32);
+            e.register(0x005b_e5c0, |_, _| 1u32.into_ret());
+            let actor = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            e.register_double(0x0096_8670, move |_, _| actor.into_ret());
+            e.register(0x0093_1850, |_, _| 5u32.into_ret());
+            e.register(0x008d_8520, |_, a| a[0].into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f190, &args![0u32]);
+            // Only the player is visited.
+            assert_eq!(calls_to(&take_log(&mut e), 0x0048_3710), vec![vec![0xaa0]]);
+        }
+
+        // ----- 0086f260 / 0086f330 -----------------------------------------------------------
+
+        fn timer_engine() -> Engine {
+            let mut e = idle_engine();
+            e.register(0x0040_3e20, |_, a| a[0].into_ret());
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(2.0));
+            floats(&mut e, 0x011d_1320, 7.0);
+            floats(&mut e, 0x011c_5724, 0.5);
+            e
+        }
+
+        #[test]
+        fn timer_update_0086f260_runs_the_physics_step_and_scales_the_seconds() {
+            let mut e = timer_engine();
+            e.register(0x0044_ddc0, |_, _| 4u32.into_ret());
+            e.register(0x0052_5420, |_, _| 1u32.into_ret());
+            e.mem.set_u8(ZERO_BYTE, 6);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f260, &args![0u32]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x008a_8150), vec![vec![TIMER, 6]]);
+            assert_eq!(calls_to(&log, 0x00aa_4e40).len(), 1);
+            assert_eq!(calls_to(&log, 0x0077_1520), vec![vec![TIMER]]);
+            assert_eq!(
+                calls_to(&log, 0x00c6_6760),
+                vec![vec![2.0f32.to_bits(), 1, 1]]
+            );
+            assert_eq!(e.global::<f32>(0x011a_fe60), 7.0);
+            assert_eq!(e.global::<f32>(0x011d_ea30), 1.0);
+        }
+
+        #[test]
+        fn timer_update_0086f260_in_a_menu_skips_the_clock_and_zeroes_the_scale() {
+            let mut e = timer_engine();
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.set_global(0x011d_ea30, 5.0f32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f260, &args![0u32]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x00aa_4e40).is_empty());
+            assert_eq!(
+                calls_to(&log, 0x00c6_6760),
+                vec![vec![2.0f32.to_bits(), 0, 0]]
+            );
+            assert_eq!(e.global::<f32>(0x011d_ea30), 0.0);
+        }
+
+        #[test]
+        fn timer_values_0086f330_ask_the_function_for_each_index() {
+            let mut e = idle_engine();
+            e.register(0x0300_0000, |_, a| ret_f32(a[0] as f32 * 1.5));
+            e.set_global(0x011f_91f0, 0x0300_0000u32);
+            e.call(0x0086_f330, &args![]);
+            for index in 0..4u32 {
+                assert_eq!(e.global::<f32>(0x011f_940c + index * 4), index as f32 * 1.5);
+            }
+            // Without a function the values are 0.0.
+            e.set_global(0x011f_91f0, 0u32);
+            e.call(0x0086_f330, &args![]);
+            for index in 0..4u32 {
+                assert_eq!(e.global::<f32>(0x011f_940c + index * 4), 0.0);
+            }
+        }
+
+        // ----- 0086f390 ----------------------------------------------------------------------
+
+        fn poll_engine() -> (Engine, Ptr) {
+            let mut e = idle_engine();
+            e.register(0x007f_df30, |_, _| 0x5100u32.into_ret());
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(0.25));
+            e.register(0x0070_13e0, |_, _| ret_f32(0.125));
+            let main = main_object(&mut e);
+            (e, main)
+        }
+
+        #[test]
+        fn poll_controls_0086f390_polls_and_clears_the_user_actions() {
+            let (mut e, main) = poll_engine();
+            // The Pipboy test passes (mode is not 4).
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x00a2_3010), vec![vec![0x5100]]);
+            assert_eq!(
+                calls_to(&log, 0x00a2_57c0),
+                vec![vec![0x5100, 0.125f32.to_bits()]]
+            );
+            assert_eq!(calls_to(&log, 0x00a2_53d0), vec![vec![0x5100]]);
+            assert_eq!(calls_to(&log, 0x0070_2680), vec![vec![0x3e9, 0]]);
+        }
+
+        #[test]
+        fn poll_controls_0086f390_does_not_clear_while_the_camera_flies() {
+            let (mut e, main) = poll_engine();
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.mem.set_u8(main.addr() + MAIN_FLY_CAMERA, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x00a2_3010).len(), 1);
+            assert!(calls_to(&log, 0x00a2_53d0).is_empty());
+        }
+
+        #[test]
+        fn poll_controls_0086f390_stops_at_each_blocking_test() {
+            // The player's method +0x22c says yes.
+            let (mut e, main) = poll_engine();
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            let player = object_with_vtable(&mut e, &[(0x22c, YES)]);
+            e.set_global(PLAYER_OBJECT, player);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x00a2_53d0).is_empty());
+            // Mode 4 with the start-menu test saying yes needs the Pipboy test, which says no.
+            let (mut e, main) = poll_engine();
+            e.register(0x0044_ddc0, |_, _| 4u32.into_ret());
+            e.register(0x007d_1360, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x00a2_53d0).is_empty());
+            // Mode 4 with the start-menu test saying no goes on.
+            let (mut e, main) = poll_engine();
+            e.register(0x0044_ddc0, |_, _| 4u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00a2_53d0).len(), 1);
+            // The menu 0x3e9 being visible, and `004a4040` saying yes, each stop it.
+            let (mut e, main) = poll_engine();
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.register(0x0070_2680, |_, a| (a[0] == 0x3e9).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x00a2_53d0).is_empty());
+            let (mut e, main) = poll_engine();
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.register(0x004a_4040, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f390, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x00a2_53d0).is_empty());
+        }
+
+        // ----- 0086f450 ----------------------------------------------------------------------
+
+        #[test]
+        fn menu_background_0086f450_renders_when_nothing_else_covers_it() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.set_global(SCENE_FLAG_BYTE, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0087_1dc0), vec![vec![main.addr()]]);
+            assert!(calls_to(&log, 0x0087_7430).is_empty());
+            // The menu 0x420 being visible (second word 0xb) blocks it.
+            e.register(0x0070_2680, |_, a| {
+                (a[0] == 0x420 && a[1] == 0xb).into_ret()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0087_1dc0).is_empty());
+        }
+
+        #[test]
+        fn menu_background_0086f450_kills_the_texture_when_no_menu_is_up() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(SCENE_FLAG_29, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0087_7430), vec![vec![main.addr()]]);
+            assert_eq!(calls_to(&log, 0x0070_14a0), vec![vec![0, 1]]);
+            // All eight covering menus are asked, in order.
+            let asked: Vec<u32> = calls_to(&log, 0x0070_2680).iter().map(|a| a[0]).collect();
+            assert_eq!(
+                asked,
+                vec![0x41e, 0x3f6, 0x424, 0x432, 0x438, 0x439, 0x43a, 0x43b]
+            );
+        }
+
+        #[test]
+        fn menu_background_0086f450_without_the_flag_does_nothing() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0087_7430).is_empty());
+        }
+
+        #[test]
+        fn menu_background_0086f450_in_a_menu_needs_a_top_menu_to_kill_the_texture() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(SCENE_FLAG_29, 1u8);
+            e.set_global(IN_MENU_FLAG, 1u8);
+            // In a menu with nothing special: the background stays.
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0087_7430).is_empty());
+            // The top menu being 0x420 lets it go.
+            e.register(0x0070_2450, |_, a| (a[0] == 0x420).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0087_7430).len(), 1);
+            // So does the console being visible while no rendered menu is up.
+            e.register(0x0070_2450, |_, _| Ret::default());
+            e.register(0x0070_3d50, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0087_7430).len(), 1);
+            // A fader that is active blocks it.
+            e.register(0x0070_14a0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f450, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0087_7430).is_empty());
+        }
+
+        // ----- 0086f6a0 / 0086f890 -----------------------------------------------------------
+
+        #[test]
+        fn ai_tasks_0086f6a0_updates_lists_by_processor_count() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(0.5));
+            let pipboy = e.mem.alloc(0x200);
+            e.register_double(0x0070_5990, move |_, _| pipboy.into_ret());
+            e.mem.set_u32(ZERO_WORD, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f6a0, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0096_c240), vec![vec![PROCESS_LISTS, 0]]);
+            assert_eq!(calls_to(&log, 0x0096_c860).len(), 1);
+            assert!(calls_to(&log, 0x0096_c970).is_empty());
+            assert_eq!(calls_to(&log, 0x0096_c710).len(), 1);
+            assert_eq!(
+                calls_to(&log, 0x0097_81d0),
+                vec![vec![PROCESS_LISTS, 0.5f32.to_bits()]]
+            );
+            assert!(calls_to(&log, 0x0054_ae30).is_empty());
+            assert_eq!(calls_to(&log, 0x0099_1600), vec![vec![0, 0]]);
+        }
+
+        #[test]
+        fn ai_tasks_0086f6a0_with_several_processors_runs_the_task_managers() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 2);
+            floats(&mut e, 0x011c_3c08, 9.5);
+            e.register(0x0045_37b0, |_, _| 0x7700u32.into_ret());
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f6a0, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0096_c970).len(), 1);
+            assert!(calls_to(&log, 0x0096_c860).is_empty());
+            assert_eq!(calls_to(&log, 0x0054_ae30).len(), 1);
+            assert_eq!(calls_to(&log, 0x0087_a6d0), vec![vec![0x7700]]);
+            assert_eq!(calls_to(&log, 0x0087_a790), vec![vec![0x7700]]);
+            assert_eq!(calls_to(&log, 0x0087_a6b0), vec![vec![0x7700]]);
+            assert_eq!(e.global::<f32>(0x011c_40ec), 9.5);
+            // The menu flag makes the hold flag 1.
+            assert_eq!(calls_to(&log, 0x0099_1600), vec![vec![0, 1]]);
+        }
+
+        #[test]
+        fn ai_tasks_0086f6a0_resets_the_dialog_timer_for_an_open_dialog() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0070_50d0, |_, _| 1u32.into_ret());
+            let seen = recorder(&mut e, 0x0000_2100, 0);
+            let dialog = object_with_vtable(&mut e, &[(0x100, YES), (0x404, 0x0000_2100)]);
+            e.register_double(0x0076_24d0, move |_, _| dialog.into_ret());
+            e.call(0x0086_f6a0, &args![main]);
+            assert_eq!(*seen.borrow(), vec![vec![dialog, 0]]);
+            // A byte at +0x131 of the object at 011d9510 suppresses it.
+            let object = e.mem.alloc(0x200);
+            e.mem.set_u8(object + 0x131, 1);
+            e.set_global(0x011d_9510, object);
+            e.call(0x0086_f6a0, &args![main]);
+            assert_eq!(seen.borrow().len(), 1);
+        }
+
+        #[test]
+        fn process_lists_0086f890_runs_the_lists_when_allowed() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f890, &args![main]);
+            let log = take_log(&mut e);
+            let order: Vec<u32> = [0x0096_eb40, 0x008c_94e0, 0x0099_1dc0, 0x0096_d810]
+                .iter()
+                .map(|a| position(&log, *a) as u32)
+                .collect();
+            assert!(order.windows(2).all(|w| w[0] < w[1]));
+            assert!(calls_to(&log, 0x0096_4260).is_empty());
+        }
+
+        #[test]
+        fn process_lists_0086f890_updates_the_player_while_a_menu_blocks() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 2);
+            e.set_global(IN_MENU_FLAG, 1u8);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f890, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0096_4260), vec![vec![player]]);
+            assert!(calls_to(&log, 0x0096_d810).is_empty());
+            assert!(calls_to(&log, 0x0096_eb40).is_empty());
+            // Frozen time with no menu does the same; neither does nothing.
+            e.set_global(IN_MENU_FLAG, 0u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f890, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0096_d810).len(), 1);
+            e.mem.set_u8(main.addr() + MAIN_FREEZE_TIME, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f890, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0096_4260).len(), 1);
+        }
+
+        // ----- 0086f940 ----------------------------------------------------------------------
+
+        #[test]
+        fn update_player_0086f940_stops_after_a_position_request() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0093_bea0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(log.len(), 2);
+        }
+
+        #[test]
+        fn update_player_0086f940_in_a_menu_runs_009481d0() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(IN_MENU_FLAG, 1u8);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0094_81d0), vec![vec![player]]);
+            // With the Pipboy opening it does not.
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0094_81d0).is_empty());
+        }
+
+        #[test]
+        fn update_player_0086f940_fly_camera_updates_with_the_freeze_flag() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.mem.set_u8(main.addr() + MAIN_FLY_CAMERA, 1);
+            e.mem.set_u8(main.addr() + MAIN_FREEZE_TIME, 1);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(0.75));
+            let player = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            e.set_global(PLAYER_OBJECT, player);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0094_66d0),
+                vec![vec![player, 0.75f32.to_bits(), 1]]
+            );
+            assert!(calls_to(&log, 0x0045_2580).is_empty());
+        }
+
+        #[test]
+        fn update_player_0086f940_steps_the_player_with_the_vats_multiplier() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(0.5));
+            e.register(0x009c_8cc0, |_, _| ret_f32(3.0));
+            let depth_seen = Rc::new(RefCell::new(Vec::new()));
+            let depth_record = depth_seen.clone();
+            e.register_double(0x0000_2200, move |e, a| {
+                depth_record
+                    .borrow_mut()
+                    .push((a.to_vec(), e.global::<u8>(0x011e_07a8)));
+                Ret::default()
+            });
+            let player = object_with_vtable(&mut e, &[(0x1d0, YES), (0x2f8, 0x0000_2200)]);
+            e.set_global(PLAYER_OBJECT, player);
+            e.set_global(0x011e_07a8, 4u8);
+            e.call(0x0086_f940, &args![main]);
+            assert_eq!(
+                *depth_seen.borrow(),
+                vec![(vec![player, 1.5f32.to_bits()], 5u8)]
+            );
+            assert_eq!(e.global::<u8>(0x011e_07a8), 4);
+        }
+
+        fn cell_engine() -> (Engine, u32, Ptr) {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            e.set_global(DATA_HANDLER_OBJECT, 0x6200u32);
+            let position = e.mem.alloc(12);
+            e.mem.set_f32(position, 10.0);
+            e.mem.set_f32(position + 4, 20.0);
+            e.mem.set_f32(position + 8, 30.0);
+            e.register_double(0x0043_6aa0, move |_, _| position.into_ret());
+            e.register(0x008d_6f30, |_, _| 0x700u32.into_ret());
+            e.register(0x0054_ddd0, |_, _| 0x55u32.into_ret());
+            e.register(0x0046_1bc0, |_, _| 0x800u32.into_ret());
+            e.register(0x0054_7590, |_, _| 0x99u32.into_ret());
+            e.register(0x00b4_f5c0, |_, _| 0x1111u32.into_ret());
+            (e, player, main)
+        }
+
+        #[test]
+        fn update_player_0086f940_loads_the_cell_under_the_player() {
+            let (mut e, player, main) = cell_engine();
+            let tracker = recorder(&mut e, 0x0045_2580, 0);
+            let order = Rc::new(RefCell::new(Vec::new()));
+            let flag_order = order.clone();
+            e.register_double(0x0054_8230, move |e, a| {
+                flag_order.borrow_mut().push((
+                    a.to_vec(),
+                    e.global::<u8>(0x011d_cfa6),
+                    e.mem.u8(a[1] + 0x5f9),
+                ));
+                Ret::default()
+            });
+            e.register(0x0045_1530, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0046_1bc0),
+                vec![vec![0x6200, 10.0f32.to_bits(), 20.0f32.to_bits(), 0x55, 1]]
+            );
+            let tracker = tracker.borrow();
+            assert_eq!(tracker.len(), 1);
+            assert_eq!((tracker[0][0], tracker[0][2]), (0x6100, 1));
+            assert_eq!(calls_to(&log, 0x0045_7d70), vec![vec![0x6100, 0, 0, 0]]);
+            // While the cell is attached the two flags are set; afterwards they are cleared.
+            assert_eq!(*order.borrow(), vec![(vec![0x800, player, 0], 1, 1)]);
+            assert_eq!(e.global::<u8>(0x011d_cfa6), 0);
+            assert_eq!(e.mem.u8(player + 0x5f9), 0);
+            assert_eq!(e.global::<u32>(0x011d_cfb8), 0x99);
+            assert_eq!(calls_to(&log, 0x00b6_55b0), vec![vec![0x1111]]);
+        }
+
+        #[test]
+        fn update_player_0086f940_leaves_a_loaded_or_interior_cell_alone() {
+            let (mut e, _player, main) = cell_engine();
+            e.register(0x0055_0200, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0046_1bc0).is_empty());
+            let (mut e, _player, main) = cell_engine();
+            e.register(0x0042_5fd0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x0055_0200).is_empty());
+            // No grid cell found: nothing is attached.
+            let (mut e, _player, main) = cell_engine();
+            e.register(0x0046_1bc0, |_, _| Ret::default());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0054_8230).is_empty());
+            // A grid cell that is already loaded is attached without moving the tracker.
+            let (mut e, _player, main) = cell_engine();
+            e.register(0x0045_0fb0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_f940, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x0045_2580).is_empty());
+            assert_eq!(calls_to(&log, 0x0054_8230).len(), 1);
+        }
+
+        // ----- 0086fbe0 / 0086fc60 -----------------------------------------------------------
+
+        #[test]
+        fn player_cell_0086fbe0_refreshes_the_world_spaces() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            e.register(0x0043_6aa0, |_, _| 0x3300u32.into_ret());
+            e.register(0x0045_1530, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fbe0, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0045_2580), vec![vec![0x6100, 0x3300, 1]]);
+            assert_eq!(calls_to(&log, 0x0057_5d70), vec![vec![player]]);
+            assert_eq!(calls_to(&log, 0x004f_d3e0), vec![vec![0x6100]]);
+        }
+
+        #[test]
+        fn player_cell_0086fbe0_stops_at_each_condition() {
+            // A menu, the byte at 011d8907 and frozen time all stop it before anything is called.
+            for stop in 0..3 {
+                let mut e = idle_engine();
+                let main = main_object(&mut e);
+                match stop {
+                    0 => e.set_global(IN_MENU_FLAG, 1u8),
+                    1 => e.set_global(0x011d_8907, 1u8),
+                    _ => e.mem.set_u8(main.addr() + MAIN_FREEZE_TIME, 1),
+                }
+                e.call_log = Some(vec![]);
+                e.call(0x0086_fbe0, &args![main]);
+                assert_eq!(take_log(&mut e).len(), 1);
+            }
+            // No cell: the tracker is moved but nothing else happens.
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fbe0, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0045_2580).len(), 1);
+            assert!(calls_to(&log, 0x0057_5d70).is_empty());
+            // A cell that `005f36f0` already knows leaves the world spaces alone.
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0045_1530, |_, _| 1u32.into_ret());
+            e.register(0x005f_36f0, |_, _| 5u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fbe0, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0057_5d70).is_empty());
+        }
+
+        #[test]
+        fn frame_update_0086fc60_scales_the_cell_update_with_one_processor() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 1);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            e.set_global(0x011d_ea30, 0.5f32);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(2.0));
+            e.register(0x0045_a190, |_, a| (a[0] + 4).into_ret());
+            let built = recorder(&mut e, 0x0043_d410, 0);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fc60, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0097_4420),
+                vec![vec![PROCESS_LISTS, 2.0f32.to_bits()]]
+            );
+            assert_eq!(
+                calls_to(&log, 0x0045_3550),
+                vec![vec![0x6100, 0.5f32.to_bits()]]
+            );
+            let built = built.borrow();
+            assert_eq!(built.len(), 1);
+            assert_eq!(built[0][1..], [0.5f32.to_bits(), 1, 0]);
+            let holder = calls_to(&log, 0x0045_a190)[0][0] + 4;
+            assert_eq!(calls_to(&log, 0x00c5_0610), vec![vec![holder]]);
+        }
+
+        #[test]
+        fn frame_update_0086fc60_uses_the_other_calls_with_several_processors() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 2);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fc60, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0097_46c0).len(), 1);
+            assert!(calls_to(&log, 0x0097_4420).is_empty());
+            assert_eq!(calls_to(&log, 0x0045_37c0), vec![vec![0x6100]]);
+            assert!(calls_to(&log, 0x0045_3550).is_empty());
+        }
+
+        #[test]
+        fn frame_update_0086fc60_waits_for_a_dialog_or_fader_flag_in_a_menu() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(IN_MENU_FLAG, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fc60, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0097_4420).is_empty());
+            e.set_global(IN_DIALOG_FLAG, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fc60, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0097_4420).len(), 1);
+            // Frozen time always stops it.
+            e.mem.set_u8(main.addr() + MAIN_FREEZE_TIME, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fc60, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0097_4420).is_empty());
+        }
+
+        // ----- 0086fd90 ----------------------------------------------------------------------
+
+        /// A list of `count` nodes: a list entry holds its node at +0, and `00726070` follows the
+        /// chain. Returns the first entry and the nodes.
+        fn node_list(e: &mut Engine, count: usize, slots: &[(u32, u32)]) -> (u32, Vec<u32>) {
+            let entries: Vec<u32> = (0..count).map(|_| e.mem.alloc(8)).collect();
+            let mut nodes = Vec::new();
+            for entry in &entries {
+                let node = object_with_vtable(e, slots);
+                e.mem.set_u8(node + 8, 1);
+                e.mem.set_u32(*entry, node);
+                nodes.push(node);
+            }
+            let chain = entries.clone();
+            e.register_double(0x0072_6070, move |_, a| {
+                let at = chain.iter().position(|entry| *entry == a[0]).unwrap();
+                chain.get(at + 1).copied().unwrap_or(0).into_ret()
+            });
+            e.register(0x0068_15c0, |_, a| a[0].into_ret());
+            let first = entries[0];
+            e.register_double(0x0043_b5d0, move |_, _| first.into_ret());
+            (first, nodes)
+        }
+
+        #[test]
+        fn image_space_0086fd90_adds_seconds_only_when_running() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(0.5));
+            e.set_global(0x011c_96fc, 1.0f32);
+            e.call(0x0086_fd90, &args![main, 0u8]);
+            assert_eq!(e.global::<f32>(0x011c_96fc), 1.0);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd90, &args![main, 1u8]);
+            let log = take_log(&mut e);
+            assert_eq!(e.global::<f32>(0x011c_96fc), 1.5);
+            // The manager is brought up, finished, and the fader value asked with zero.
+            assert!(position(&log, 0x00b8_b500) < position(&log, 0x00b8_b9a0));
+            assert!(position(&log, 0x00b8_d020) < position(&log, 0x00b8_b440));
+            assert_eq!(calls_to(&log, 0x00b8_b440).len(), 1);
+        }
+
+        #[test]
+        fn image_space_0086fd90_takes_removable_nodes_out_of_the_list() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let removals = Rc::new(RefCell::new(0));
+            let counter = removals.clone();
+            e.register_double(0x0000_2300, move |_, _| {
+                let mut count = counter.borrow_mut();
+                *count += 1;
+                (*count == 1).into_ret()
+            });
+            let (first, nodes) = node_list(&mut e, 1, &[(0x8c, 0x0000_2300), (0x90, NOTHING)]);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd90, &args![main, 0u8]);
+            let log = take_log(&mut e);
+            // The first visit removes the node (temporary built from it, removal from the list
+            // entry), the entry is then visited again and kept.
+            let built = calls_to(&log, 0x0063_3c90);
+            assert_eq!(built.len(), 1);
+            assert_eq!(built[0][1], nodes[0]);
+            assert_eq!(calls_to(&log, 0x0063_1620), vec![vec![first, built[0][0]]]);
+            assert_eq!(calls_to(&log, 0x0045_cec0), vec![vec![built[0][0]]]);
+            assert_eq!(*removals.borrow(), 2);
+        }
+
+        #[test]
+        fn image_space_0086fd90_ends_a_batch_after_four_counted_nodes() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let (_, _) = node_list(&mut e, 4, &[(0x8c, NOTHING), (0x90, NOTHING)]);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd90, &args![main, 0u8]);
+            let log = take_log(&mut e);
+            // No node had a positive value: the batch starts with 00b8aea0, then 00b8ccb0.
+            assert_eq!(calls_to(&log, 0x00b8_aea0).len(), 1);
+            assert_eq!(calls_to(&log, 0x00b8_ccb0).len(), 1);
+            assert!(position(&log, 0x00b8_aea0) < position(&log, 0x00b8_ccb0));
+            assert_eq!(calls_to(&log, 0x0072_6070).len(), 4);
+        }
+
+        #[test]
+        fn image_space_0086fd90_skips_the_first_call_when_a_node_has_a_positive_value() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let (_, _) = node_list(&mut e, 4, &[(0x8c, NOTHING), (0x90, NOTHING)]);
+            e.set_global(0x0118_abb0, 1u8);
+            e.mem.set_f64(0x0101_2060, 0.0);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(1.0));
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd90, &args![main, 0u8]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x00b8_aea0).is_empty());
+            assert_eq!(calls_to(&log, 0x00b8_ccb0).len(), 1);
+            // A value that is not above the limit does not count.
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let (_, _) = node_list(&mut e, 4, &[(0x8c, NOTHING), (0x90, NOTHING)]);
+            e.set_global(0x0118_abb0, 1u8);
+            e.mem.set_f64(0x0101_2060, 1.0);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(1.0));
+            e.call_log = Some(vec![]);
+            e.call(0x0086_fd90, &args![main, 0u8]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00b8_aea0).len(), 1);
+        }
+
+        // ----- 0086ff70 ----------------------------------------------------------------------
+
+        #[test]
+        fn frame_end_0086ff70_redraws_the_menu_background_once() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(0x011d_890a, 1u8);
+            e.register(0x0095_0bb0, |_, a| (0x100 + a[1]).into_ret());
+            e.register(0x0045_6610, |_, a| (a[0] & 0xff).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(e.global::<u8>(0x011d_890a), 0);
+            assert_eq!(
+                calls_to(&log, 0x0045_0f90),
+                vec![
+                    vec![0x101, 1],
+                    vec![0x100, 1],
+                    vec![0x101, 1],
+                    vec![0x100, 0]
+                ]
+            );
+            let render = position(&log, 0x0087_1dc0);
+            assert_eq!(calls_to(&log, 0x0087_1dc0), vec![vec![main.addr()]]);
+            assert!(render > position(&log, 0x0045_6610));
+            // Without the flag nothing of this happens.
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0045_0f90).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_ages_the_fade_counter_and_removes_the_faders() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0070_1450, |_, a| (a[1] == 1).into_ret());
+            e.register(0x0070_13e0, |_, _| ret_f32(0.5));
+            e.mem.set_f64(0x0101_2070, 1.0);
+            e.set_global(0x011d_e45c, 0x7100u32);
+            e.register(0x0047_c850, |_, _| 1u32.into_ret());
+            let fader = e.global::<u32>(FADER_MANAGER);
+            e.call_log = Some(vec![]);
+            // The first frame also resets the process lists.
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0096_cfa0).len(), 1);
+            assert_eq!(e.global::<u32>(0x011d_ef04), 1);
+            assert_eq!(e.global::<f32>(0x011d_ef00), 0.5);
+            assert!(calls_to(&log, 0x0070_10e0).is_empty());
+            // Once a second and ten frames have passed the faders are removed.
+            e.set_global(0x011d_ef04, 9u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0070_10e0),
+                vec![vec![fader, 1, 0], vec![fader, 2, 0]]
+            );
+            assert_eq!(
+                calls_to(&log, 0x0045_34f0),
+                vec![vec![0x7100, 0], vec![0x7100, 0]]
+            );
+            assert_eq!(calls_to(&log, 0x0048_3710), vec![vec![0x7100]]);
+            assert_eq!(calls_to(&log, 0x0087_7430), vec![vec![main.addr()]]);
+            assert!(calls_to(&log, 0x0096_cfa0).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_resets_the_fade_counter_without_faders() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(0x011d_ef00, 3.0f32);
+            e.set_global(0x011d_ef04, 8u32);
+            e.call(0x0086_ff70, &args![main]);
+            assert_eq!(e.global::<f32>(0x011d_ef00), 0.0);
+            assert_eq!(e.global::<u32>(0x011d_ef04), 0);
+        }
+
+        #[test]
+        fn frame_end_0086ff70_world_path_updates_the_world() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            e.set_global(PLAYER_OBJECT, player);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0087_06b0),
+                vec![vec![main.addr(), 0, 0, 0]]
+            );
+            assert!(calls_to(&log, 0x0087_1a50).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_world_path_loads_the_map_when_the_cell_has_one() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            e.set_global(PLAYER_OBJECT, player);
+            e.set_global(TES_OBJECT, 0x6100u32);
+            let cell_data = e.mem.alloc(4);
+            e.mem.set_u8(cell_data, 0x80);
+            e.register(0x004f_d3e0, |_, _| 0x5555u32.into_ret());
+            e.register_double(0x0054_8210, move |_, _| cell_data.into_ret());
+            e.register(0x0044_ddc0, |_, _| 0x66u32.into_ret());
+            e.register(0x0087_05c0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0054_8210), vec![vec![0x5555]]);
+            assert_eq!(calls_to(&log, 0x004b_af10), vec![vec![0x66]]);
+        }
+
+        #[test]
+        fn frame_end_0086ff70_menu_path_runs_the_stages_and_the_menu_update() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(IS_IN_MENU_MODE, |_, _| 1u32.into_ret());
+            e.register(0x004e_a970, |_, _| 0x1200u32.into_ret());
+            e.register(0x004e_3270, |_, _| 0x1300u32.into_ret());
+            e.register(0x004d_c310, |_, _| 1u32.into_ret());
+            e.register(GET_RENDERER, |_, _| 0x1400u32.into_ret());
+            e.mem.set_u32(0x011d_ed3c, 0x1500);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            let first_stages = calls_to(&log, 0x00ba_30f0);
+            assert_eq!(first_stages.len(), 22);
+            assert_eq!(first_stages[0], vec![0x1200, 0, 1]);
+            assert_eq!(first_stages[21], vec![0x1200, 0, 22]);
+            let second_stages = calls_to(&log, 0x00ba_3130);
+            assert_eq!(second_stages.len(), 22);
+            assert_eq!(second_stages[0], vec![0x1200, 1, 1]);
+            assert_eq!(calls_to(&log, 0x0087_1a50), vec![vec![main.addr()]]);
+            assert_eq!(
+                calls_to(&log, 0x0087_4b90),
+                vec![vec![main.addr(), 0x1300, 0x1400, 1, 0]]
+            );
+            assert!(calls_to(&log, 0x0087_2940).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_menu_path_with_a_covering_menu_runs_00872940() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(IS_IN_MENU_MODE, |_, _| 1u32.into_ret());
+            e.register(0x0070_2680, |_, a| (a[0] == 0x438).into_ret());
+            e.mem.set_u32(0x011d_ed3c, 0x1500);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0087_2940), vec![vec![main.addr(), 0]]);
+            assert!(calls_to(&log, 0x0087_4b90).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_menu_path_when_the_menu_0x3f5_is_visible_without_menu_mode() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0070_2680, |_, a| (a[0] == 0x3f5).into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0087_1a50).len(), 1);
+            // A rendered menu makes the menu-mode test not count.
+            let mut e = idle_engine();
+            e.register(IS_IN_MENU_MODE, |_, _| 1u32.into_ret());
+            e.register(0x0070_79b0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x0087_1a50).is_empty());
+            // Nor does the world update run: the player's virtual +0x1d0 says no.
+            assert!(calls_to(&log, 0x0087_06b0).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_non_menu_path_passes_the_rendered_menu_test() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = object_with_vtable(&mut e, &[(0x1d0, YES)]);
+            e.set_global(PLAYER_OBJECT, player);
+            // The world test fails because the byte at 011dea29 is set; no menu is up, so the
+            // rendered-menu test is passed on.
+            e.set_global(SCENE_FLAG_29, 1u8);
+            e.register(0x0070_79b0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x0087_06b0),
+                vec![vec![main.addr(), 0, 1, 0]]
+            );
+        }
+
+        #[test]
+        fn frame_end_0086ff70_closes_the_frame() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 2);
+            e.register(GET_RENDERER, |_, _| 0x1400u32.into_ret());
+            e.register(0x004e_9530, |_, _| 1u32.into_ret());
+            e.register(0x005d_4a40, |_, _| 1u32.into_ret());
+            e.set_global(0x011c_6fb8, 1u8);
+            e.mem.set_u32(0x011d_ec64, 0x4343);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x004a_0370), vec![vec![0x1400]]);
+            assert_eq!(calls_to(&log, 0x0055_85e0), vec![vec![0x1400]]);
+            assert_eq!(calls_to(&log, 0x004d_cef0).len(), 1);
+            assert_eq!(calls_to(&log, 0x00b5_5a10).len(), 1);
+            assert_eq!(calls_to(&log, 0x0070_28b0), vec![vec![0, 0x4343]]);
+            // The holder at 011dec64 is handed to 00b6da10 and cleared.
+            assert_eq!(calls_to(&log, 0x00b6_da10), vec![vec![0, 0x4343]]);
+            assert_eq!(e.mem.u32(0x011d_ec64), 0);
+            assert_eq!(calls_to(&log, 0x00b6_b730).len(), 1);
+            assert_eq!(calls_to(&log, 0x004a_03c0), vec![vec![0x1400]]);
+            assert_eq!(calls_to(&log, 0x008c_80e0), vec![vec![0]]);
+            let last = log.last().unwrap();
+            assert_eq!(last.0, 0x008c_80e0);
+        }
+
+        #[test]
+        fn frame_end_0086ff70_toggles_the_debug_counter_and_makes_a_directory() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x007f_df30, |_, _| 0x5100u32.into_ret());
+            e.register(0x00a2_4660, |_, _| 1u32.into_ret());
+            e.register(0x00a2_4180, |_, a| (a[2] == 0).into_ret());
+            e.register(0x0040_3df0, |_, _| 0x0107_0000u32.into_ret());
+            e.mem.set_u32(ZERO_WORD, 7);
+            let text = recorder(&mut e, 0x0040_6d00, 0);
+            let made = recorder(&mut e, API_CREATE_DIRECTORY, 0);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(e.global::<u8>(0x011d_ea40), 1);
+            assert_eq!(e.global::<u32>(0x011d_ea44), 0);
+            // The setting is raised by one and then read again for the text.
+            assert_eq!(calls_to(&log, 0x0045_ce80), vec![vec![0x011d_eecc, 8]]);
+            let text = text.borrow();
+            assert_eq!(text.len(), 1);
+            assert_eq!(text[0][1..], [0x104, 0x0108_2ca4, 0x0107_0000, 7]);
+            let made = made.borrow();
+            assert_eq!(made.len(), 1);
+            assert_eq!((made[0][0], made[0][1]), (text[0][0], 0));
+            // The timer object is told the value of the setting at 011dee00.
+            assert_eq!(calls_to(&log, 0x00a2_4660), vec![vec![0x5100, 0x1e, 1]]);
+            // Pressed again, the counter turns off.
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            assert_eq!(e.global::<u8>(0x011d_ea40), 0);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x0040_6d00).is_empty());
+        }
+
+        #[test]
+        fn frame_end_0086ff70_without_the_second_key_it_calls_00878860() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x00a2_4660, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(calls_to(&log, 0x0087_8860), vec![vec![0]]);
+            assert_eq!(e.global::<u8>(0x011d_ea40), 0);
+            // Without the first key nothing happens.
+            let mut e = idle_engine();
+            e.call_log = Some(vec![]);
+            e.call(0x0086_ff70, &args![main]);
+            assert!(calls_to(&take_log(&mut e), 0x0087_8860).is_empty());
+        }
+
+        // ----- 0086e650 ----------------------------------------------------------------------
+
+        #[test]
+        fn idle_update_0086e650_does_nothing_when_alt_and_tab_are_down() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(API_GET_ASYNC_KEY_STATE, |_, _| 0x8000u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            let addresses: Vec<(u32, Vec<u32>)> = log;
+            assert_eq!(
+                addresses,
+                vec![
+                    (0x0086_e650, vec![main.addr()]),
+                    (API_GET_ASYNC_KEY_STATE, vec![9]),
+                    (API_GET_ASYNC_KEY_STATE, vec![0x12]),
+                ]
+            );
+        }
+
+        #[test]
+        fn idle_update_0086e650_tab_alone_does_not_skip_the_frame() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(API_GET_ASYNC_KEY_STATE, |_, a| {
+                if a[0] == 9 { 0x8000u32 } else { 0 }.into_ret()
+            });
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00af_2640).len(), 1);
+        }
+
+        #[test]
+        fn idle_update_0086e650_runs_the_steps_in_order_and_counts_the_frame() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.set_global(0x011a_2fe0, 10u32);
+            e.set_global(0x011d_f674, 5u32);
+            e.set_global(0x011f_9138, 2u32);
+            e.set_global(0x0126_77a2, 1u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            let order = [
+                0x00af_2640u32, // the system object
+                0x0093_bea0,    // player update
+                0x00b8_b500,    // image space
+                0x0085_1d90,    // queued saves
+                0x00a2_3010,    // controls poll
+                0x00c3_dbf0,
+                0x00b6_dd00,
+                0x0097_8550,
+                0x0086_8850, // garbage collector
+                0x0066_52e0,
+                0x004a_0370, // second half
+                0x0087_05d0,
+                0x0087_0610,
+                0x005a_9d60,
+            ];
+            let positions: Vec<usize> = order.iter().map(|a| position(&log, *a)).collect();
+            assert!(positions.windows(2).all(|w| w[0] < w[1]), "{positions:?}");
+            assert_eq!(e.global::<u32>(0x011a_2fe0), 11);
+            assert_eq!(e.global::<u32>(0x011d_f674), 0);
+            assert_eq!(e.global::<u32>(0x011f_9138), 3);
+            assert_eq!(e.global::<u8>(0x0126_77a2), 0);
+            assert_eq!(e.global::<u8>(IN_MENU_FLAG), 0);
+        }
+
+        #[test]
+        fn idle_update_0086e650_refreshes_the_interface_flags_twice() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.register(0x0070_50d0, |_, _| 5u32.into_ret());
+            e.register(0x0070_1450, |_, a| (a[1] + 1).into_ret());
+            e.register(0x0070_3d50, |_, _| 3u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(e.global::<u8>(IN_MENU_FLAG), 1);
+            assert_eq!(e.global::<u8>(IN_DIALOG_FLAG), 5);
+            assert_eq!(e.global::<u8>(FADER_ONE_FLAG), 2);
+            assert_eq!(e.global::<u8>(CONSOLE_VISIBLE_FLAG), 3);
+            let log = take_log(&mut e);
+            // Two refreshes, and the dialog test of the AI task step.
+            assert_eq!(calls_to(&log, 0x0070_50d0).len(), 3);
+            // In a menu the frame counter at 011f9138 does not move.
+            assert_eq!(e.global::<u32>(0x011f_9138), 0);
+        }
+
+        #[test]
+        fn interface_flags_ask_the_pipboy_only_when_the_menu_test_says_no() {
+            let mut e = idle_engine();
+            e.register(IS_IN_MENU_MODE, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            refresh_interface_flags(&mut e);
+            assert_eq!(e.global::<u8>(IN_MENU_FLAG), 1);
+            assert!(calls_to(&take_log(&mut e), 0x0070_9bc0).is_empty());
+            e.register(IS_IN_MENU_MODE, |_, _| Ret::default());
+            e.register(0x0070_9bc0, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            refresh_interface_flags(&mut e);
+            assert_eq!(e.global::<u8>(IN_MENU_FLAG), 1);
+            assert_eq!(calls_to(&take_log(&mut e), 0x0070_9bc0).len(), 1);
+            e.register(0x0070_9bc0, |_, _| Ret::default());
+            refresh_interface_flags(&mut e);
+            assert_eq!(e.global::<u8>(IN_MENU_FLAG), 0);
+        }
+
+        #[test]
+        fn idle_update_0086e650_profiles_the_pathing_when_the_flag_is_set() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            e.set_global(0x011d_eefc, 1u8);
+            e.register(0x0000_2400, |_, _| 0x321u32.into_ret());
+            let table = e.mem.u32(player);
+            e.mem.set_u32(table + 0x1f4, 0x0000_2400);
+            e.register(0x008d_6f30, |_, _| 0x654u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x006d_a7c0),
+                vec![vec![0x654, 0x321, 2, 100]]
+            );
+        }
+
+        #[test]
+        fn idle_update_0086e650_ends_with_the_256_step_counter() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(TIMER_GET_SECONDS, |_, _| ret_f32(1.0));
+            e.mem.set_f64(0x0103_57e8, 45.0);
+            e.set_global(0x011d_eef5, 7u8);
+            e.call_log = Some(vec![]);
+            // 1.0 + 0.0 < 45: nothing happens, the seconds are kept.
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(e.global::<f32>(0x011d_eef8), 1.0);
+            assert_eq!(e.global::<u8>(0x011d_eef5), 7);
+            assert!(calls_to(&take_log(&mut e), 0x00aa_7290).is_empty());
+            // Past 45 seconds the counter ticks and the byte (the old value) is passed on.
+            e.set_global(0x011d_eef8, 44.5f32);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(e.global::<f32>(0x011d_eef8), 0.0);
+            assert_eq!(e.global::<u8>(0x011d_eef5), 8);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00aa_7290), vec![vec![7]]);
+            // The byte wraps.
+            e.set_global(0x011d_eef8, 50.0f32);
+            e.set_global(0x011d_eef5, 255u8);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(e.global::<u8>(0x011d_eef5), 0);
+        }
+
+        #[test]
+        fn idle_update_0086e650_ticks_in_a_menu_and_when_the_player_asks() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(IS_IN_MENU_MODE, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00aa_7290).len(), 1);
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0095_0090, |_, _| 1u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(calls_to(&take_log(&mut e), 0x00aa_7290).len(), 1);
+        }
+
+        #[test]
+        fn idle_update_0086e650_passes_the_karma_as_a_float() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            let player = e.global::<u32>(PLAYER_OBJECT);
+            let table = e.mem.u32(player);
+            e.mem.set_u32(table + 8, 0x0000_2500);
+            e.register(0x0000_2500, |_, a| {
+                assert_eq!(a[1], 0x17);
+                50u32.into_ret()
+            });
+            let alignment = recorder(&mut e, 0x0047_e040, 0);
+            e.call(0x0086_e650, &args![main]);
+            assert_eq!(*alignment.borrow(), vec![vec![50.0f32.to_bits()]]);
+        }
+
+        #[test]
+        fn idle_update_0086e650_world_steps_depend_on_the_processor_count() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 1);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            // One processor: the lists are printed, the cell is tested and the AI manager is
+            // updated through 008ca070 / 008ca300.
+            assert_eq!(calls_to(&log, 0x008d_0600), vec![vec![PROCESS_LISTS, 0, 0]]);
+            assert_eq!(calls_to(&log, 0x008c_a070), vec![vec![0x011e_0fe0]]);
+            assert_eq!(calls_to(&log, 0x008c_a300), vec![vec![0x011e_0fe0]]);
+            assert!(calls_to(&log, 0x008c_80e0).is_empty());
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            set_processors(&mut e, 4);
+            e.register(0x0071_3d80, |_, _| 0x6d80u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x008d_0600).is_empty());
+            assert_eq!(calls_to(&log, 0x008c_80e0), vec![vec![1], vec![0]]);
+            assert_eq!(calls_to(&log, 0x008c_78c0), vec![vec![0x6d80]]);
+            assert_eq!(calls_to(&log, 0x008c_7990), vec![vec![0x6d80]]);
+        }
+
+        #[test]
+        fn idle_update_0086e650_sets_the_field_of_view_unless_the_mode_is_4() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0071_0ab0, |_, _| ret_f32(75.0));
+            e.register(0x0045_c670, |_, _| 0x6c67u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            assert_eq!(
+                calls_to(&log, 0x00c5_2020),
+                vec![vec![0x6c67, 75.0f32.to_bits(), 0, 0, 1]]
+            );
+            assert_eq!(calls_to(&log, 0x00b5_4000), vec![vec![75.0f32.to_bits()]]);
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0044_ddc0, |_, _| 4u32.into_ret());
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            assert!(calls_to(&log, 0x00c5_2020).is_empty());
+            assert_eq!(calls_to(&log, 0x00b5_4000).len(), 1);
+        }
+
+        #[test]
+        fn idle_update_0086e650_hands_the_scene_data_to_the_image_space_calls() {
+            let mut e = idle_engine();
+            let main = main_object(&mut e);
+            e.register(0x0066_29f0, |_, a| (a[0] + 1).into_ret());
+            e.register(0x004a_0ea0, |_, _| 0x0e0au32.into_ret());
+            e.set_global(IN_MENU_FLAG, 0u8);
+            e.call_log = Some(vec![]);
+            e.call(0x0086_e650, &args![main]);
+            let log = take_log(&mut e);
+            let scene = e.mem.u32(SCENE_GRAPH_HOLDER);
+            // 00524c90 reads the holder; it is a double here, so only the callers are checked.
+            assert_eq!(calls_to(&log, 0x00b6_dd00).len(), 1);
+            assert_eq!(calls_to(&log, 0x00b6_dd00)[0][0], 0x0e0a);
+            assert_eq!(calls_to(&log, 0x00b6_dd00)[0][2], 0);
+            assert_eq!(calls_to(&log, 0x0066_29f0), vec![vec![scene]]);
+            assert_eq!(calls_to(&log, 0x0045_b070)[0][1], scene + 1);
+        }
     }
 }
