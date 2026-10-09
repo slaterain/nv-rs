@@ -2,8 +2,10 @@
 //! Translated units, one folder per subsystem (docs/ENGINE_CRATE.md).
 
 pub mod platform;
+pub mod fallout_misc;
 
 /// Every registered function of every unit.
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(platform::funcs());
+    fallout_misc::funcs(out);
 }
