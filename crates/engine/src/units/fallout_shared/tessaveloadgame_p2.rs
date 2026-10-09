@@ -3,8 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tessaveloadgame`]; anything public there may be used here.
 //!
-//! State of this file (first session): the 40 functions from `008616f0` to
-//! `008637a0`. The next session continues at `008637d0`.
+//! State of this file (second session, complete): the 32 functions from
+//! `008637d0` to `008641d0`, after the 40 of the first session (`008616f0` to
+//! `008637a0`). The range is finished.
 //!
 //! - `008616f0` to `00861d10`: whether saving is allowed, the created base
 //!   objects list (adding to it, saving it), the numeric id and world space
@@ -20,7 +21,11 @@
 //!   references in cells that have been detached for long;
 //! - `008632a0`: adding a form to the init item array;
 //! - `00863360` to `008637a0`: constructors and destructors of the
-//!   `NiTPointerMap` instances the unit uses.
+//!   `NiTPointerMap` instances the unit uses;
+//! - `008637d0` to `008641d0`: the rest of the map instances (root
+//!   constructors and destructors, the `unsigned char` keyed map's `SetAt`,
+//!   `GetAt`, `GetNext`, scalar deleting destructors) and the
+//!   `NiTLargePrimitiveArray` constructors, destructor, `Add` and cleanup.
 //!
 //! Not translated: the compiler's exception-unwinding frames (`FS:[0]`
 //! chains, state variables) and the stack-cookie checks. The locals the game
@@ -39,6 +44,23 @@ use super::tessaveloadgame::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 use crate::types::NiTPointerMap;
+
+layout! {
+    /// `NiTLargePrimitiveArray<T>` (Xbox PDB), 0x18 bytes: vtable, element
+    /// block and its sizes.
+    pub struct NiTLargePrimitiveArray: 0x18 {
+        /// `m_pBase` (Xbox PDB): the element block.
+        0x04 m_pBase: u32,
+        /// `m_uiMaxSize` (Xbox PDB).
+        0x08 m_uiMaxSize: u32,
+        /// `m_uiSize` (Xbox PDB): the number of used slots.
+        0x0C m_uiSize: u32,
+        /// `m_uiESize` (Xbox PDB): the number of elements.
+        0x10 m_uiESize: u32,
+        /// `m_uiGrowBy` (Xbox PDB).
+        0x14 m_uiGrowBy: u32,
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Fields of `TESSaveLoadGame` the main file's layout lacks (offsets as in the
@@ -195,16 +217,33 @@ const STATS_LIST_MAP_VTABLE: u32 = 0x0108_1ef0;
 /// The vtables of the two root layers (`008635d0`, `008636d0`).
 const CHANGES_MAP_ROOT_VTABLE: u32 = 0x0108_1ef8;
 const INTERIOR_MAP_ROOT_VTABLE: u32 = 0x0108_1f18;
-/// Root constructors `(this, hash size)` and destructors of the other map
-/// instances, outside this session's range.
-const EXTERIOR_MAP_ROOT_CONSTRUCT: u32 = 0x0086_37d0;
-const NUMERIC_ID_MAP_ROOT_CONSTRUCT: u32 = 0x0086_38f0;
-const STATS_MAP_ROOT_CONSTRUCT: u32 = 0x0086_39f0;
+/// The vtables of the other root layers and of the arrays (`008637d0`,
+/// `008638f0`, `008639f0`, `00863e30`, `00863d60`, `00863e00`, `00864160`).
+const EXTERIOR_MAP_ROOT_VTABLE: u32 = 0x0108_1f38;
+const NUMERIC_ID_MAP_ROOT_VTABLE: u32 = 0x0108_1f58;
+const STATS_MAP_ROOT_VTABLE: u32 = 0x0108_1f78;
+const FORM_ARRAY_VTABLE: u32 = 0x0108_1f98;
+const FORM_ARRAY_DERIVED_VTABLE: u32 = 0x0108_1fa0;
+const LOCAL_MAP_ROOT_VTABLE: u32 = 0x0108_1fa8;
+const ARRAY_BASE_VTABLE: u32 = 0x0108_1fc8;
+/// Slots of the `NiTMapBase` vtable: `KeyToHashIndex(key)`,
+/// `IsKeysEqual(key, key)`, `SetValue(item, key, value)` and `NewItem()`.
+const MAP_SLOT_KEY_TO_HASH_INDEX: u32 = 0x04;
+const MAP_SLOT_IS_KEYS_EQUAL: u32 = 0x08;
+const MAP_SLOT_SET_VALUE: u32 = 0x0C;
+const MAP_SLOT_NEW_ITEM: u32 = 0x14;
+/// `004ede70(block)` (cdecl): releases the element block of an array.
+/// `0096afc0(bytes)` (cdecl): allocates it.
+const ARRAY_FREE_BLOCK: u32 = 0x004e_de70;
+const ARRAY_ALLOC_BLOCK: u32 = 0x0096_afc0;
+/// `00864100(this)`, which `fn_008640e0` runs (the array's destructor body),
+/// and `00864240(this, size, item)`, the array's insertion.
+const ARRAY_DESTRUCT_BODY: u32 = 0x0086_4100;
+const ARRAY_ADD_AT: u32 = 0x0086_4240;
+/// The constructor and destructor of the map `fn_008627b0` keeps on its
+/// stack (`00863e30`, `00863ea0`), reached by address from `fn_00863450`,
+/// `fn_00863570` and `fn_008627b0`.
 const LOCAL_MAP_ROOT_CONSTRUCT: u32 = 0x0086_3e30;
-const STATS_LIST_MAP_ROOT_CONSTRUCT: u32 = 0x0086_4160;
-const EXTERIOR_MAP_DESTRUCT: u32 = 0x0086_3860;
-const NUMERIC_ID_MAP_DESTRUCT: u32 = 0x0086_3960;
-const STATS_MAP_DESTRUCT: u32 = 0x0086_3cd0;
 const LOCAL_MAP_DESTRUCT: u32 = 0x0086_3ea0;
 /// `NiAlloc(size)` / `NiFree(block)` (`00aa1070`, `00aa10f0`, `cdecl`).
 const NI_ALLOC: u32 = 0x00aa_1070;
@@ -1311,7 +1350,7 @@ pub fn fn_00863390(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> 
 /// The constructor of the map of `ExteriorCellNewReferencesMap` (vtable
 /// `01081e70`): the root constructor `008637d0`, then the vtable.
 pub fn fn_008633c0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
-    e.call(EXTERIOR_MAP_ROOT_CONSTRUCT, &args![this, hash_size]);
+    fn_008637d0(e, this, hash_size);
     e.mem.set_u32(this.addr(), EXTERIOR_MAP_BASE_VTABLE);
     this
 }
@@ -1320,7 +1359,7 @@ pub fn fn_008633c0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> 
 /// The constructor of the map of `NumericIDBufferMap` (vtable `01081e90`):
 /// the root constructor `008638f0`, then the vtable.
 pub fn fn_008633f0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
-    e.call(NUMERIC_ID_MAP_ROOT_CONSTRUCT, &args![this, hash_size]);
+    fn_008638f0(e, this, hash_size);
     e.mem.set_u32(this.addr(), NUMERIC_ID_MAP_BASE_VTABLE);
     this
 }
@@ -1329,7 +1368,7 @@ pub fn fn_008633f0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> 
 /// The constructor of `SaveStats`'s map (vtable `01081eb0`): the root
 /// constructor `008639f0`, then the vtable.
 pub fn fn_00863420(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
-    e.call(STATS_MAP_ROOT_CONSTRUCT, &args![this, hash_size]);
+    fn_008639f0(e, this, hash_size);
     e.mem.set_u32(this.addr(), STATS_MAP_BASE_VTABLE);
     this
 }
@@ -1384,7 +1423,7 @@ pub fn ni_t_pointer_map_unsigned_int_bs_simple_list_exterior_cell_reference_data
     this: Ptr<NiTPointerMap>,
     flags: u32,
 ) -> Ptr<NiTPointerMap> {
-    e.call(EXTERIOR_MAP_DESTRUCT, &args![this]);
+    fn_00863860(e, this);
     if flags & 1 != 0 {
         delete(e, this.addr());
     }
@@ -1400,7 +1439,7 @@ pub fn ni_t_pointer_map_unsigned_int_void_p_scalar_deleting_destructor(
     this: Ptr<NiTPointerMap>,
     flags: u32,
 ) -> Ptr<NiTPointerMap> {
-    e.call(NUMERIC_ID_MAP_DESTRUCT, &args![this]);
+    fn_00863960(e, this);
     if flags & 1 != 0 {
         delete(e, this.addr());
     }
@@ -1416,7 +1455,7 @@ pub fn ni_t_pointer_map_unsigned_char_bs_simple_list_load_form_header_p_scalar_d
     this: Ptr<NiTPointerMap>,
     flags: u32,
 ) -> Ptr<NiTPointerMap> {
-    e.call(STATS_MAP_DESTRUCT, &args![this]);
+    fn_00863cd0(e, this);
     if flags & 1 != 0 {
         delete(e, this.addr());
     }
@@ -1439,7 +1478,7 @@ pub fn fn_00863570(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
 /// A map constructor with two arguments (vtable `01081ef0`): the root
 /// constructor `00864160(this, first, second)`, then the vtable.
 pub fn fn_008635a0(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ptr {
-    e.call(STATS_LIST_MAP_ROOT_CONSTRUCT, &args![this, first, second]);
+    fn_00864160(e, this, first, second);
     e.mem.set_u32(this.addr(), STATS_LIST_MAP_VTABLE);
     this
 }
@@ -1514,6 +1553,469 @@ pub fn fn_008637a0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
     e.call(MAP_REMOVE_ALL, &args![this]);
     let table = e.get(this, NiTPointerMap::m_ppkHashTable);
     e.call(NI_FREE, &args![table]);
+}
+
+// Translated from 008637d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root constructor of the exterior cells' map: `fn_008635d0` with the
+/// vtable `01081f38`.
+pub fn fn_008637d0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_root(e, this, hash_size, EXTERIOR_MAP_ROOT_VTABLE)
+}
+
+// Translated from 00863840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SetValue` of a map with `unsigned int` keys and pointer values (the
+/// engine map has no name for it): stores `key` at `+4` and `value` at `+8`
+/// of the entry `item`.
+pub fn fn_00863840(e: &mut Engine, _this: Ptr<NiTPointerMap>, item: Ptr, key: u32, value: u32) {
+    e.mem.set_u32(item.addr() + 4, key);
+    e.mem.set_u32(item.addr() + 8, value);
+}
+
+// Translated from 00863860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the exterior cells' map: vtable `01081e70`, `RemoveAll`
+/// (`00438af0`), then the root destructor `008638c0`. Not translated: the
+/// exception frame.
+pub fn fn_00863860(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), EXTERIOR_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_008638c0(e, this);
+}
+
+// Translated from 008638c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root destructor of the exterior cells' map: vtable `01081f38`,
+/// `RemoveAll`, then `NiFree` of the bucket array.
+pub fn fn_008638c0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    destruct_map_root(e, this, EXTERIOR_MAP_ROOT_VTABLE);
+}
+
+/// Shared by the root destructors: sets the root vtable, empties the map and
+/// frees the bucket array.
+fn destruct_map_root(e: &mut Engine, this: Ptr<NiTPointerMap>, vtable: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(NI_FREE, &args![table]);
+}
+
+// Translated from 008638f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root constructor of the numeric id buffer map: `fn_008635d0` with the
+/// vtable `01081f58`.
+pub fn fn_008638f0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_root(e, this, hash_size, NUMERIC_ID_MAP_ROOT_VTABLE)
+}
+
+// Translated from 00863960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the numeric id buffer map: vtable `01081e90`,
+/// `RemoveAll`, then the root destructor `008639c0`. Not translated: the
+/// exception frame.
+pub fn fn_00863960(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), NUMERIC_ID_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_008639c0(e, this);
+}
+
+// Translated from 008639c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root destructor of the numeric id buffer map: vtable `01081f58`,
+/// `RemoveAll`, then `NiFree` of the bucket array.
+pub fn fn_008639c0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    destruct_map_root(e, this, NUMERIC_ID_MAP_ROOT_VTABLE);
+}
+
+// Translated from 008639f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root constructor of the map with `unsigned char` keys: `fn_008635d0`
+/// with the vtable `01081f78`.
+pub fn fn_008639f0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_root(e, this, hash_size, STATS_MAP_ROOT_VTABLE)
+}
+
+// Translated from 00863a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SetAt` of the map with `unsigned char` keys (`NiTMapBase<..., unsigned
+/// char, BSSimpleList<LoadFormHeader *> *>`; the engine map has no name for
+/// it): sets the value of `key`, adding an entry at the head of its bucket
+/// when the key is new. Virtual slots used: `KeyToHashIndex` (4),
+/// `IsKeysEqual` (8), `SetValue` (0xC), `NewItem` (0x14).
+pub fn fn_00863a60(e: &mut Engine, this: Ptr<NiTPointerMap>, key: u8, value: u32) {
+    let index = e
+        .vcall(this.addr(), MAP_SLOT_KEY_TO_HASH_INDEX, &args![key as u32])
+        .u32();
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let mut item = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    while item != 0 {
+        // The entry's next is at +0, its key byte at +4, its value at +8.
+        let item_key = e.mem.u8(item + 4) as u32;
+        let equal = e
+            .vcall(
+                this.addr(),
+                MAP_SLOT_IS_KEYS_EQUAL,
+                &args![key as u32, item_key],
+            )
+            .bool();
+        if equal {
+            e.mem.set_u32(item + 8, value);
+            return;
+        }
+        item = e.mem.u32(item);
+    }
+    let item = e.vcall(this.addr(), MAP_SLOT_NEW_ITEM, &args![]).u32();
+    e.vcall(
+        this.addr(),
+        MAP_SLOT_SET_VALUE,
+        &args![item, key as u32, value],
+    );
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let slot = table.wrapping_add(index.wrapping_mul(4));
+    let head = e.mem.u32(slot);
+    e.mem.set_u32(item, head);
+    e.mem.set_u32(slot, item);
+    let count = e.get(this, NiTPointerMap::m_uiCount);
+    e.set(this, NiTPointerMap::m_uiCount, count.wrapping_add(1));
+}
+
+// Translated from 00863b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetAt` of the map with `unsigned char` keys (the engine map has no name
+/// for it): looks `key` up in its bucket; when found stores the value
+/// through `value_out` and returns true.
+pub fn fn_00863b40(e: &mut Engine, this: Ptr<NiTPointerMap>, key: u8, value_out: Ptr) -> bool {
+    let index = e
+        .vcall(this.addr(), MAP_SLOT_KEY_TO_HASH_INDEX, &args![key as u32])
+        .u32();
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    let mut item = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+    while item != 0 {
+        let item_key = e.mem.u8(item + 4) as u32;
+        let equal = e
+            .vcall(
+                this.addr(),
+                MAP_SLOT_IS_KEYS_EQUAL,
+                &args![key as u32, item_key],
+            )
+            .bool();
+        if equal {
+            let value = e.mem.u32(item + 8);
+            e.mem.set_u32(value_out.addr(), value);
+            return true;
+        }
+        item = e.mem.u32(item);
+    }
+    false
+}
+
+// Translated from 00863bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetNext` of the map with `unsigned char` keys (by the body): gives the
+/// key and value of the entry `*position` and moves `*position` to the next
+/// entry (the next of its bucket, else the first of the following non-empty
+/// bucket, else null).
+pub fn fn_00863bc0(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    position: Ptr,
+    key_out: Ptr,
+    value_out: Ptr,
+) {
+    let item = e.mem.u32(position.addr());
+    let key = e.mem.u8(item + 4);
+    e.mem.set_u8(key_out.addr(), key);
+    let value = e.mem.u32(item + 8);
+    e.mem.set_u32(value_out.addr(), value);
+    let next = e.mem.u32(item);
+    if next != 0 {
+        e.mem.set_u32(position.addr(), next);
+        return;
+    }
+    let mut index = e
+        .vcall(this.addr(), MAP_SLOT_KEY_TO_HASH_INDEX, &args![key as u32])
+        .u32()
+        .wrapping_add(1);
+    while index < e.get(this, NiTPointerMap::m_uiHashSize) {
+        let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+        let entry = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        if entry != 0 {
+            e.mem.set_u32(position.addr(), entry);
+            return;
+        }
+        index += 1;
+    }
+    e.mem.set_u32(position.addr(), 0);
+}
+
+// Translated from 00863c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned char,
+/// BSSimpleList<LoadFormHeader *> *>::KeyToHashIndex` (Xbox PDB): the key
+/// modulo the bucket count (a zero bucket count would fault the CPU).
+pub fn ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_key_to_hash_index(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    key: u8,
+) -> u32 {
+    let hash_size = e.get(this, NiTPointerMap::m_uiHashSize);
+    key as u32 % hash_size
+}
+
+// Translated from 00863c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned char,
+/// BSSimpleList<LoadFormHeader *> *>::IsKeysEqual` (Xbox PDB): the two key
+/// bytes are equal.
+pub fn ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_is_keys_equal(
+    _e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    first: u8,
+    second: u8,
+) -> bool {
+    first == second
+}
+
+// Translated from 00863cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned char,
+/// BSSimpleList<LoadFormHeader *> *>::SetValue` (Xbox PDB): stores the key
+/// byte at `+4` and the value at `+8` of the entry `item`.
+pub fn ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_set_value(
+    e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    item: Ptr,
+    key: u8,
+    value: u32,
+) {
+    e.mem.set_u8(item.addr() + 4, key);
+    e.mem.set_u32(item.addr() + 8, value);
+}
+
+// Translated from 00863cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the map with `unsigned char` keys: vtable `01081eb0`,
+/// `RemoveAll`, then the root destructor `00863d30`. Not translated: the
+/// exception frame.
+pub fn fn_00863cd0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), STATS_MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00863d30(e, this);
+}
+
+// Translated from 00863d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root destructor of the map with `unsigned char` keys: vtable
+/// `01081f78`, `RemoveAll`, then `NiFree` of the bucket array.
+pub fn fn_00863d30(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    destruct_map_root(e, this, STATS_MAP_ROOT_VTABLE);
+}
+
+// Translated from 00863d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the `NiTLargePrimitiveArray<FormAndFlags *>`: vtable
+/// `01081f98`, then the element block (`m_pBase`) is released (`004ede70`).
+pub fn fn_00863d60(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>) {
+    e.mem.set_u32(this.addr(), FORM_ARRAY_VTABLE);
+    let base = e.get(this, NiTLargePrimitiveArray::m_pBase);
+    e.call(ARRAY_FREE_BLOCK, &args![base]);
+}
+
+// Translated from 00863d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Add` of the `NiTLargePrimitiveArray<FormAndFlags *>` (the engine map has
+/// no name for it): `00864240(this, m_uiSize, item)` appends `item` at the
+/// current size.
+pub fn fn_00863d90(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>, item: u32) {
+    let size = e.get(this, NiTLargePrimitiveArray::m_uiSize);
+    e.call(ARRAY_ADD_AT, &args![this, size, item]);
+}
+
+// Translated from 00863db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The cleanup of the `NiTLargePrimitiveArray<FormAndFlags *>` before it is
+/// deleted: the first `m_uiSize` element slots are set to null, then the
+/// size and the effective size are zero.
+pub fn fn_00863db0(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>) {
+    let base = e.get(this, NiTLargePrimitiveArray::m_pBase);
+    let mut index = 0u32;
+    while index < e.get(this, NiTLargePrimitiveArray::m_uiSize) {
+        e.mem.set_u32(base.wrapping_add(index.wrapping_mul(4)), 0);
+        index += 1;
+    }
+    e.set(this, NiTLargePrimitiveArray::m_uiSize, 0);
+    e.set(this, NiTLargePrimitiveArray::m_uiESize, 0);
+}
+
+// Translated from 00863e00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the `NiTLargePrimitiveArray<FormAndFlags *>`: the
+/// base constructor `008641d0(max size, grow by)`, then the vtable
+/// `01081fa0`.
+pub fn fn_00863e00(
+    e: &mut Engine,
+    this: Ptr<NiTLargePrimitiveArray>,
+    max_size: u32,
+    grow_by: u32,
+) -> Ptr<NiTLargePrimitiveArray> {
+    fn_008641d0(e, this, max_size, grow_by);
+    e.mem.set_u32(this.addr(), FORM_ARRAY_DERIVED_VTABLE);
+    this
+}
+
+// Translated from 00863e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root constructor of the map `fn_008627b0` keeps on its stack:
+/// `fn_008635d0` with the vtable `01081fa8`.
+pub fn fn_00863e30(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_root(e, this, hash_size, LOCAL_MAP_ROOT_VTABLE)
+}
+
+// Translated from 00863ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of the map `fn_008627b0` keeps on its stack: vtable
+/// `01081ed0`, `RemoveAll`, then the root destructor `00863f00`. Not
+/// translated: the exception frame.
+pub fn fn_00863ea0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), LOCAL_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00863f00(e, this);
+}
+
+// Translated from 00863f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The root destructor of the map `fn_008627b0` keeps on its stack: vtable
+/// `01081fa8`, `RemoveAll`, then `NiFree` of the bucket array.
+pub fn fn_00863f00(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    destruct_map_root(e, this, LOCAL_MAP_ROOT_VTABLE);
+}
+
+// Translated from 00863f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the `NiTLargePrimitiveArray`: its
+/// destructor body `008640e0`, then the block is freed when bit 0 of `flags`
+/// is set.
+pub fn fn_00863f30(
+    e: &mut Engine,
+    this: Ptr<NiTLargePrimitiveArray>,
+    flags: u32,
+) -> Ptr<NiTLargePrimitiveArray> {
+    fn_008640e0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00863f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,ChangeData *>::
+/// scalar deleting destructor` (Xbox PDB): the root destructor `008636a0`,
+/// then the block is freed when bit 0 of `flags` is set.
+pub fn ni_t_map_base_unsigned_int_change_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_008636a0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00863f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,
+/// BSSimpleList<unsigned int> *>::scalar deleting destructor` (Xbox PDB): the
+/// root destructor `008637a0`, then the block is freed when bit 0 of `flags`
+/// is set.
+pub fn ni_t_map_base_unsigned_int_bs_simple_list_unsigned_int_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_008637a0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00863fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,
+/// BSSimpleList<ExteriorCellReferenceData *> *>::scalar deleting destructor`
+/// (Xbox PDB): the root destructor `008638c0`, then the block is freed when
+/// bit 0 of `flags` is set.
+pub fn ni_t_map_base_unsigned_int_bs_simple_list_exterior_cell_reference_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_008638c0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00863ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned int,void *>::
+/// scalar deleting destructor` (Xbox PDB): the root destructor `008639c0`,
+/// then the block is freed when bit 0 of `flags` is set.
+pub fn ni_t_map_base_unsigned_int_void_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_008639c0(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 00864020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned int>,unsigned char,
+/// BSSimpleList<LoadFormHeader *> *>::scalar deleting destructor` (Xbox PDB):
+/// the root destructor `00863d30`, then the block is freed when bit 0 of
+/// `flags` is set.
+pub fn ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTPointerMap>,
+    flags: u32,
+) -> Ptr<NiTPointerMap> {
+    fn_00863d30(e, this);
+    if flags & 1 != 0 {
+        delete(e, this.addr());
+    }
+    this
+}
+
+// Translated from 008640e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of the `NiTLargePrimitiveArray`: runs `00864100` on
+/// the object.
+pub fn fn_008640e0(e: &mut Engine, this: Ptr<NiTLargePrimitiveArray>) {
+    e.call(ARRAY_DESTRUCT_BODY, &args![this]);
+}
+
+// Translated from 00864160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of a `NiTLargePrimitiveArray` (vtable `01081fc8`):
+/// `m_uiMaxSize` and `m_uiGrowBy` are the arguments, the size and effective
+/// size are zero and the element block is allocated (`0096afc0`, with
+/// `max_size` as the code passes it) unless `max_size` is 0.
+pub fn fn_00864160(e: &mut Engine, this: Ptr, max_size: u32, grow_by: u32) -> Ptr {
+    construct_large_array(e, this.cast(), max_size, grow_by, ARRAY_BASE_VTABLE).cast()
+}
+
+// Translated from 008641d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of the `NiTLargePrimitiveArray<FormAndFlags *>`:
+/// as `fn_00864160` with the vtable `01081f98`.
+pub fn fn_008641d0(
+    e: &mut Engine,
+    this: Ptr<NiTLargePrimitiveArray>,
+    max_size: u32,
+    grow_by: u32,
+) -> Ptr<NiTLargePrimitiveArray> {
+    construct_large_array(e, this, max_size, grow_by, FORM_ARRAY_VTABLE)
+}
+
+/// Shared by `fn_00864160` and `fn_008641d0` (identical code, another
+/// vtable).
+fn construct_large_array(
+    e: &mut Engine,
+    this: Ptr<NiTLargePrimitiveArray>,
+    max_size: u32,
+    grow_by: u32,
+    vtable: u32,
+) -> Ptr<NiTLargePrimitiveArray> {
+    e.mem.set_u32(this.addr(), vtable);
+    e.set(this, NiTLargePrimitiveArray::m_uiMaxSize, max_size);
+    e.set(this, NiTLargePrimitiveArray::m_uiGrowBy, grow_by);
+    e.set(this, NiTLargePrimitiveArray::m_uiSize, 0);
+    e.set(this, NiTLargePrimitiveArray::m_uiESize, 0);
+    let base = if max_size > 0 {
+        e.call(ARRAY_ALLOC_BLOCK, &args![max_size]).u32()
+    } else {
+        0
+    };
+    e.set(this, NiTLargePrimitiveArray::m_pBase, base);
+    this
 }
 
 /// This part's translated functions, by exe address.
@@ -1631,6 +2133,110 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x00863740, fn_00863740(Ptr<NiTPointerMap>)),
         entry!(0x008637a0, fn_008637a0(Ptr<NiTPointerMap>)),
+        entry!(
+            0x008637d0,
+            fn_008637d0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00863840, fn_00863840(Ptr<NiTPointerMap>, Ptr, u32, u32)),
+        entry!(0x00863860, fn_00863860(Ptr<NiTPointerMap>)),
+        entry!(0x008638c0, fn_008638c0(Ptr<NiTPointerMap>)),
+        entry!(
+            0x008638f0,
+            fn_008638f0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00863960, fn_00863960(Ptr<NiTPointerMap>)),
+        entry!(0x008639c0, fn_008639c0(Ptr<NiTPointerMap>)),
+        entry!(
+            0x008639f0,
+            fn_008639f0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00863a60, fn_00863a60(Ptr<NiTPointerMap>, u8, u32)),
+        entry!(0x00863b40, fn_00863b40(Ptr<NiTPointerMap>, u8, Ptr) -> bool),
+        entry!(0x00863bc0, fn_00863bc0(Ptr<NiTPointerMap>, Ptr, Ptr, Ptr)),
+        entry!(
+            0x00863c70,
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_key_to_hash_index(
+                Ptr<NiTPointerMap>,
+                u8
+            ) -> u32
+        ),
+        entry!(
+            0x00863c90,
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_is_keys_equal(
+                Ptr<NiTPointerMap>,
+                u8,
+                u8
+            ) -> bool
+        ),
+        entry!(
+            0x00863cb0,
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_set_value(
+                Ptr<NiTPointerMap>,
+                Ptr,
+                u8,
+                u32
+            )
+        ),
+        entry!(0x00863cd0, fn_00863cd0(Ptr<NiTPointerMap>)),
+        entry!(0x00863d30, fn_00863d30(Ptr<NiTPointerMap>)),
+        entry!(0x00863d60, fn_00863d60(Ptr<NiTLargePrimitiveArray>)),
+        entry!(0x00863d90, fn_00863d90(Ptr<NiTLargePrimitiveArray>, u32)),
+        entry!(0x00863db0, fn_00863db0(Ptr<NiTLargePrimitiveArray>)),
+        entry!(
+            0x00863e00,
+            fn_00863e00(Ptr<NiTLargePrimitiveArray>, u32, u32) -> Ptr<NiTLargePrimitiveArray>
+        ),
+        entry!(
+            0x00863e30,
+            fn_00863e30(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x00863ea0, fn_00863ea0(Ptr<NiTPointerMap>)),
+        entry!(0x00863f00, fn_00863f00(Ptr<NiTPointerMap>)),
+        entry!(
+            0x00863f30,
+            fn_00863f30(Ptr<NiTLargePrimitiveArray>, u32) -> Ptr<NiTLargePrimitiveArray>
+        ),
+        entry!(
+            0x00863f60,
+            ni_t_map_base_unsigned_int_change_data_p_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00863f90,
+            ni_t_map_base_unsigned_int_bs_simple_list_unsigned_int_p_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00863fc0,
+            ni_t_map_base_unsigned_int_bs_simple_list_exterior_cell_reference_data_p_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00863ff0,
+            ni_t_map_base_unsigned_int_void_p_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00864020,
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_scalar_deleting_destructor(
+                Ptr<NiTPointerMap>,
+                u32
+            ) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x008640e0, fn_008640e0(Ptr<NiTLargePrimitiveArray>)),
+        entry!(0x00864160, fn_00864160(Ptr, u32, u32) -> Ptr),
+        entry!(
+            0x008641d0,
+            fn_008641d0(Ptr<NiTLargePrimitiveArray>, u32, u32) -> Ptr<NiTLargePrimitiveArray>
+        ),
     ]
 }
 
@@ -3324,27 +3930,41 @@ mod tests {
         assert_eq!(e.mem.u32(other.addr()), INTERIOR_MAP_BASE_VTABLE);
         assert_eq!(e.get(other, NiTPointerMap::m_uiHashSize), 0x11);
 
-        // The others call their root constructor by address.
-        let constructors: [(u32, u32, Constructor); 3] = [
-            (
-                EXTERIOR_MAP_ROOT_CONSTRUCT,
-                EXTERIOR_MAP_BASE_VTABLE,
-                fn_008633c0,
-            ),
-            (
-                NUMERIC_ID_MAP_ROOT_CONSTRUCT,
-                NUMERIC_ID_MAP_BASE_VTABLE,
-                fn_008633f0,
-            ),
-            (STATS_MAP_ROOT_CONSTRUCT, STATS_MAP_BASE_VTABLE, fn_00863420),
+        let constructors: [(Constructor, u32); 3] = [
+            (fn_008633c0, EXTERIOR_MAP_BASE_VTABLE),
+            (fn_008633f0, NUMERIC_ID_MAP_BASE_VTABLE),
+            (fn_00863420, STATS_MAP_BASE_VTABLE),
         ];
-        for (root, vtable, constructor) in constructors {
+        for (constructor, vtable) in constructors {
             let mut e = game();
-            stub(&mut e, root);
+            install_bucket_allocation(&mut e);
             let map = map_block(&mut e);
             assert_eq!(constructor(&mut e, map, 0x25), map);
-            assert_eq!(calls_to(&e, root), vec![vec![map.addr(), 0x25]]);
             assert_eq!(e.mem.u32(map.addr()), vtable);
+            assert_eq!(e.get(map, NiTPointerMap::m_uiHashSize), 0x25);
+            assert_eq!(calls_to(&e, NI_ALLOC), vec![vec![0x94]]);
+        }
+    }
+
+    #[test]
+    fn the_other_root_constructors_set_their_own_vtable() {
+        let roots: [(Constructor, u32); 4] = [
+            (fn_008637d0, EXTERIOR_MAP_ROOT_VTABLE),
+            (fn_008638f0, NUMERIC_ID_MAP_ROOT_VTABLE),
+            (fn_008639f0, STATS_MAP_ROOT_VTABLE),
+            (fn_00863e30, LOCAL_MAP_ROOT_VTABLE),
+        ];
+        for (root, vtable) in roots {
+            let mut e = game();
+            install_bucket_allocation(&mut e);
+            let map = map_block(&mut e);
+            e.set(map, NiTPointerMap::m_uiCount, 9);
+            assert_eq!(root(&mut e, map, 0x10), map);
+            assert_eq!(e.mem.u32(map.addr()), vtable);
+            assert_eq!(e.get(map, NiTPointerMap::m_uiHashSize), 0x10);
+            assert_eq!(e.get(map, NiTPointerMap::m_uiCount), 0);
+            let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+            assert_eq!(calls_to(&e, MEMSET), vec![vec![table, 0, 0x40]]);
         }
     }
 
@@ -3352,8 +3972,8 @@ mod tests {
     fn the_stack_map_constructors_pass_their_arguments_on() {
         let mut e = game();
         stub(&mut e, LOCAL_MAP_ROOT_CONSTRUCT);
-        stub(&mut e, STATS_LIST_MAP_ROOT_CONSTRUCT);
-        let map = map_block(&mut e).cast::<()>();
+        e.register(ARRAY_ALLOC_BLOCK, |e, a| returns(e.mem.alloc(a[0])));
+        let map = Ptr::<()>::new(e.mem.alloc(0x18));
         assert_eq!(fn_00863450(&mut e, map, 0x25), map);
         assert_eq!(
             calls_to(&e, LOCAL_MAP_ROOT_CONSTRUCT),
@@ -3361,11 +3981,10 @@ mod tests {
         );
         assert_eq!(e.mem.u32(map.addr()), LOCAL_MAP_VTABLE);
         assert_eq!(fn_008635a0(&mut e, map, 7, 8), map);
-        assert_eq!(
-            calls_to(&e, STATS_LIST_MAP_ROOT_CONSTRUCT),
-            vec![vec![map.addr(), 7, 8]]
-        );
+        assert_eq!(calls_to(&e, ARRAY_ALLOC_BLOCK), vec![vec![7]]);
         assert_eq!(e.mem.u32(map.addr()), STATS_LIST_MAP_VTABLE);
+        assert_eq!(e.mem.u32(map.addr() + 8), 7);
+        assert_eq!(e.mem.u32(map.addr() + 0x14), 8);
     }
 
     #[test]
@@ -3413,19 +4032,20 @@ mod tests {
                 assert_eq!(e.mem.block_size(map.addr()).is_none(), flags == 1);
             }
         }
-        // The others call their destructor by address.
+        // The ones of the other root layers.
         let others: [(Scalar, u32); 3] = [
-            (ni_t_pointer_map_unsigned_int_bs_simple_list_exterior_cell_reference_data_p_scalar_deleting_destructor, EXTERIOR_MAP_DESTRUCT),
-            (ni_t_pointer_map_unsigned_int_void_p_scalar_deleting_destructor, NUMERIC_ID_MAP_DESTRUCT),
-            (ni_t_pointer_map_unsigned_char_bs_simple_list_load_form_header_p_scalar_deleting_destructor, STATS_MAP_DESTRUCT),
+            (ni_t_pointer_map_unsigned_int_bs_simple_list_exterior_cell_reference_data_p_scalar_deleting_destructor, EXTERIOR_MAP_ROOT_VTABLE),
+            (ni_t_pointer_map_unsigned_int_void_p_scalar_deleting_destructor, NUMERIC_ID_MAP_ROOT_VTABLE),
+            (ni_t_pointer_map_unsigned_char_bs_simple_list_load_form_header_p_scalar_deleting_destructor, STATS_MAP_ROOT_VTABLE),
         ];
-        for (destroy, destructor) in others {
+        for (destroy, root) in others {
             for flags in [0u32, 1] {
                 let mut e = game();
-                stub(&mut e, destructor);
+                stub(&mut e, MAP_REMOVE_ALL);
+                stub(&mut e, NI_FREE);
                 let map = map_block(&mut e);
                 assert_eq!(destroy(&mut e, map, flags), map);
-                assert_eq!(calls_to(&e, destructor), vec![vec![map.addr()]]);
+                assert_eq!(e.mem.u32(map.addr()), root);
                 assert_eq!(e.mem.block_size(map.addr()).is_none(), flags == 1);
             }
         }
@@ -3441,5 +4061,305 @@ mod tests {
             assert_eq!(calls_to(&e, LOCAL_MAP_DESTRUCT), vec![vec![map.addr()]]);
             assert_eq!(e.mem.block_size(map.addr()).is_none(), flags == 1);
         }
+    }
+
+    const BYTE_MAP_VTABLE: u32 = 0x0391_0000;
+    const BYTE_MAP_FUNCTIONS: u32 = 0x0391_1000;
+
+    /// A map with `unsigned char` keys and `buckets` buckets whose vtable
+    /// holds the real `KeyToHashIndex`, `IsKeysEqual`, `SetValue` and a
+    /// `NewItem` that allocates a 12-byte entry.
+    fn byte_map(e: &mut Engine, buckets: u32) -> Ptr<NiTPointerMap> {
+        e.put_vtable(
+            BYTE_MAP_VTABLE,
+            &[
+                0,
+                BYTE_MAP_FUNCTIONS,
+                BYTE_MAP_FUNCTIONS + 4,
+                BYTE_MAP_FUNCTIONS + 8,
+                0,
+                BYTE_MAP_FUNCTIONS + 12,
+            ],
+        );
+        e.register(BYTE_MAP_FUNCTIONS, |e, a| {
+            returns(
+                ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_key_to_hash_index(
+                    e,
+                    Ptr::new(a[0]),
+                    a[1] as u8,
+                ),
+            )
+        });
+        e.register(BYTE_MAP_FUNCTIONS + 4, |e, a| {
+            returns(
+                ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_is_keys_equal(
+                    e,
+                    Ptr::new(a[0]),
+                    a[1] as u8,
+                    a[2] as u8,
+                ) as u32,
+            )
+        });
+        e.register(BYTE_MAP_FUNCTIONS + 8, |e, a| {
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_set_value(
+                e,
+                Ptr::new(a[0]),
+                Ptr::new(a[1]),
+                a[2] as u8,
+                a[3],
+            );
+            Ret::default()
+        });
+        e.register(BYTE_MAP_FUNCTIONS + 12, |e, _| returns(e.mem.alloc(12)));
+        let map = map_block(e);
+        e.mem.set_u32(map.addr(), BYTE_MAP_VTABLE);
+        e.set(map, NiTPointerMap::m_uiHashSize, buckets);
+        let table = e.mem.alloc(buckets * 4);
+        e.set(map, NiTPointerMap::m_ppkHashTable, table);
+        map
+    }
+
+    #[test]
+    fn the_byte_key_methods_hash_compare_and_store() {
+        let mut e = game();
+        let map = byte_map(&mut e, 7);
+        assert_eq!(
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_key_to_hash_index(
+                &mut e, map, 0xFF
+            ),
+            0xFF % 7
+        );
+        assert!(
+            ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_is_keys_equal(
+                &mut e, map, 3, 3
+            )
+        );
+        assert!(
+            !ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_is_keys_equal(
+                &mut e, map, 3, 4
+            )
+        );
+        let item = Ptr::new(e.mem.alloc(12));
+        ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_set_value(
+            &mut e, map, item, 0x41, 0x1234,
+        );
+        assert_eq!(e.mem.u8(item.addr() + 4), 0x41);
+        assert_eq!(e.mem.u32(item.addr() + 8), 0x1234);
+    }
+
+    #[test]
+    fn set_at_adds_new_keys_to_the_bucket_head_and_replaces_known_ones() {
+        let mut e = game();
+        let map = byte_map(&mut e, 4);
+        // Keys 1 and 5 share bucket 1.
+        fn_00863a60(&mut e, map, 1, 0x100);
+        fn_00863a60(&mut e, map, 5, 0x500);
+        assert_eq!(e.get(map, NiTPointerMap::m_uiCount), 2);
+        let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+        let head = e.mem.u32(table + 4);
+        assert_eq!(e.mem.u8(head + 4), 5);
+        let second = e.mem.u32(head);
+        assert_eq!(e.mem.u8(second + 4), 1);
+        assert_eq!(e.mem.u32(second), 0);
+
+        // A known key only changes the value.
+        fn_00863a60(&mut e, map, 1, 0x111);
+        assert_eq!(e.get(map, NiTPointerMap::m_uiCount), 2);
+        assert_eq!(e.mem.u32(second + 8), 0x111);
+        assert_eq!(e.mem.u32(head + 8), 0x500);
+    }
+
+    #[test]
+    fn get_at_finds_a_key_in_its_bucket_chain() {
+        let mut e = game();
+        let map = byte_map(&mut e, 4);
+        fn_00863a60(&mut e, map, 1, 0x100);
+        fn_00863a60(&mut e, map, 5, 0x500);
+        let out = Ptr::new(e.mem.alloc(4));
+        e.mem.set_u32(out.addr(), 0xdead);
+        assert!(fn_00863b40(&mut e, map, 1, out));
+        assert_eq!(e.mem.u32(out.addr()), 0x100);
+        assert!(fn_00863b40(&mut e, map, 5, out));
+        assert_eq!(e.mem.u32(out.addr()), 0x500);
+        e.mem.set_u32(out.addr(), 0xdead);
+        // Empty bucket, and a bucket whose chain lacks the key.
+        assert!(!fn_00863b40(&mut e, map, 2, out));
+        assert!(!fn_00863b40(&mut e, map, 9, out));
+        assert_eq!(e.mem.u32(out.addr()), 0xdead);
+    }
+
+    #[test]
+    fn get_next_walks_chains_then_buckets_then_ends() {
+        let mut e = game();
+        let map = byte_map(&mut e, 4);
+        fn_00863a60(&mut e, map, 1, 0x100);
+        fn_00863a60(&mut e, map, 5, 0x500);
+        fn_00863a60(&mut e, map, 3, 0x300);
+        let position = Ptr::new(e.mem.alloc(4));
+        let key = Ptr::new(e.mem.alloc(4));
+        let value = Ptr::new(e.mem.alloc(4));
+        let table = e.get(map, NiTPointerMap::m_ppkHashTable);
+        let first = e.mem.u32(table + 4);
+        e.mem.set_u32(position.addr(), first);
+        let mut seen = vec![];
+        while e.mem.u32(position.addr()) != 0 {
+            fn_00863bc0(&mut e, map, position, key, value);
+            seen.push((e.mem.u8(key.addr()), e.mem.u32(value.addr())));
+        }
+        assert_eq!(seen, vec![(5, 0x500), (1, 0x100), (3, 0x300)]);
+    }
+
+    #[test]
+    fn the_extra_destructors_set_their_vtable_and_free_the_buckets() {
+        type Destructor = fn(&mut Engine, Ptr<NiTPointerMap>);
+        let destructors: [(Destructor, u32, usize); 8] = [
+            (fn_008638c0, EXTERIOR_MAP_ROOT_VTABLE, 1),
+            (fn_008639c0, NUMERIC_ID_MAP_ROOT_VTABLE, 1),
+            (fn_00863d30, STATS_MAP_ROOT_VTABLE, 1),
+            (fn_00863f00, LOCAL_MAP_ROOT_VTABLE, 1),
+            (fn_00863860, EXTERIOR_MAP_ROOT_VTABLE, 2),
+            (fn_00863960, NUMERIC_ID_MAP_ROOT_VTABLE, 2),
+            (fn_00863cd0, STATS_MAP_ROOT_VTABLE, 2),
+            (fn_00863ea0, LOCAL_MAP_ROOT_VTABLE, 2),
+        ];
+        for (destructor, root, removals) in destructors {
+            let mut e = game();
+            stub(&mut e, MAP_REMOVE_ALL);
+            stub(&mut e, NI_FREE);
+            let map = map_block(&mut e);
+            e.set(map, NiTPointerMap::m_ppkHashTable, 0x0999_0000);
+            destructor(&mut e, map);
+            assert_eq!(e.mem.u32(map.addr()), root);
+            assert_eq!(calls_to(&e, MAP_REMOVE_ALL).len(), removals);
+            assert_eq!(calls_to(&e, NI_FREE), vec![vec![0x0999_0000]]);
+        }
+    }
+
+    #[test]
+    fn the_set_value_of_the_int_key_map_stores_key_and_value() {
+        let mut e = game();
+        let map = map_block(&mut e);
+        let item = Ptr::new(e.mem.alloc(12));
+        fn_00863840(&mut e, map, item, 0x1122_3344, 0x5566);
+        assert_eq!(e.mem.u32(item.addr() + 4), 0x1122_3344);
+        assert_eq!(e.mem.u32(item.addr() + 8), 0x5566);
+    }
+
+    fn large_array(e: &mut Engine) -> Ptr<NiTLargePrimitiveArray> {
+        e.new_object::<NiTLargePrimitiveArray>()
+    }
+
+    #[test]
+    fn the_array_constructors_allocate_unless_the_size_is_zero() {
+        for (size, expect_alloc) in [(5u32, true), (0, false)] {
+            let mut e = game();
+            e.register(ARRAY_ALLOC_BLOCK, |e, a| returns(e.mem.alloc(a[0])));
+            let array = large_array(&mut e);
+            e.set(array, NiTLargePrimitiveArray::m_uiSize, 9);
+            e.set(array, NiTLargePrimitiveArray::m_uiESize, 9);
+            assert_eq!(fn_008641d0(&mut e, array, size, 3), array);
+            assert_eq!(e.mem.u32(array.addr()), FORM_ARRAY_VTABLE);
+            assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiMaxSize), size);
+            assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiGrowBy), 3);
+            assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiSize), 0);
+            assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiESize), 0);
+            let base = e.get(array, NiTLargePrimitiveArray::m_pBase);
+            assert_eq!(base != 0, expect_alloc);
+            assert_eq!(calls_to(&e, ARRAY_ALLOC_BLOCK).len(), expect_alloc as usize);
+
+            let plain = Ptr::new(e.mem.alloc(0x18));
+            assert_eq!(fn_00864160(&mut e, plain, size, 3), plain);
+            assert_eq!(e.mem.u32(plain.addr()), ARRAY_BASE_VTABLE);
+            assert_eq!(e.mem.u32(plain.addr() + 0x14), 3);
+        }
+    }
+
+    #[test]
+    fn the_derived_array_constructor_sets_its_own_vtable_last() {
+        let mut e = game();
+        e.register(ARRAY_ALLOC_BLOCK, |e, a| returns(e.mem.alloc(a[0])));
+        let array = large_array(&mut e);
+        assert_eq!(fn_00863e00(&mut e, array, 4, 2), array);
+        assert_eq!(e.mem.u32(array.addr()), FORM_ARRAY_DERIVED_VTABLE);
+        assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiMaxSize), 4);
+        assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiGrowBy), 2);
+    }
+
+    #[test]
+    fn the_array_destructor_add_and_cleanup_work_on_the_element_block() {
+        let mut e = game();
+        stub(&mut e, ARRAY_FREE_BLOCK);
+        stub(&mut e, ARRAY_ADD_AT);
+        let array = large_array(&mut e);
+        let block = e.mem.alloc(16);
+        for i in 0..4 {
+            e.mem.set_u32(block + 4 * i, 0x70 + i);
+        }
+        e.set(array, NiTLargePrimitiveArray::m_pBase, block);
+        e.set(array, NiTLargePrimitiveArray::m_uiSize, 3);
+        e.set(array, NiTLargePrimitiveArray::m_uiESize, 3);
+
+        fn_00863d90(&mut e, array, 0x99);
+        assert_eq!(
+            calls_to(&e, ARRAY_ADD_AT),
+            vec![vec![array.addr(), 3, 0x99]]
+        );
+
+        // Only the used slots are cleared.
+        fn_00863db0(&mut e, array);
+        assert_eq!(e.mem.u32(block), 0);
+        assert_eq!(e.mem.u32(block + 8), 0);
+        assert_eq!(e.mem.u32(block + 12), 0x73);
+        assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiSize), 0);
+        assert_eq!(e.get(array, NiTLargePrimitiveArray::m_uiESize), 0);
+
+        fn_00863d60(&mut e, array);
+        assert_eq!(e.mem.u32(array.addr()), FORM_ARRAY_VTABLE);
+        assert_eq!(calls_to(&e, ARRAY_FREE_BLOCK), vec![vec![block]]);
+    }
+
+    #[test]
+    fn the_array_scalar_deleting_destructor_frees_the_block_on_request() {
+        for flags in [0u32, 1] {
+            let mut e = game();
+            stub(&mut e, ARRAY_DESTRUCT_BODY);
+            let array = large_array(&mut e);
+            assert_eq!(fn_00863f30(&mut e, array, flags), array);
+            assert_eq!(calls_to(&e, ARRAY_DESTRUCT_BODY), vec![vec![array.addr()]]);
+            assert_eq!(e.mem.block_size(array.addr()).is_none(), flags == 1);
+        }
+    }
+
+    #[test]
+    fn the_map_base_scalar_deleting_destructors_run_the_root_destructor() {
+        type Scalar = fn(&mut Engine, Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>;
+        let all: [(Scalar, u32); 5] = [
+            (ni_t_map_base_unsigned_int_change_data_p_scalar_deleting_destructor, CHANGES_MAP_ROOT_VTABLE),
+            (ni_t_map_base_unsigned_int_bs_simple_list_unsigned_int_p_scalar_deleting_destructor, INTERIOR_MAP_ROOT_VTABLE),
+            (ni_t_map_base_unsigned_int_bs_simple_list_exterior_cell_reference_data_p_scalar_deleting_destructor, EXTERIOR_MAP_ROOT_VTABLE),
+            (ni_t_map_base_unsigned_int_void_p_scalar_deleting_destructor, NUMERIC_ID_MAP_ROOT_VTABLE),
+            (ni_t_map_base_unsigned_char_bs_simple_list_load_form_header_p_scalar_deleting_destructor, STATS_MAP_ROOT_VTABLE),
+        ];
+        for (destroy, root) in all {
+            for flags in [0u32, 1] {
+                let mut e = game();
+                stub(&mut e, MAP_REMOVE_ALL);
+                stub(&mut e, NI_FREE);
+                let map = map_block(&mut e);
+                assert_eq!(destroy(&mut e, map, flags), map);
+                assert_eq!(e.mem.u32(map.addr()), root);
+                assert_eq!(calls_to(&e, MAP_REMOVE_ALL).len(), 1);
+                assert_eq!(e.mem.block_size(map.addr()).is_none(), flags == 1);
+            }
+        }
+    }
+
+    #[test]
+    fn the_array_destructor_body_is_called_through_its_wrapper() {
+        let mut e = game();
+        stub(&mut e, ARRAY_DESTRUCT_BODY);
+        let array = large_array(&mut e);
+        fn_008640e0(&mut e, array);
+        assert_eq!(calls_to(&e, ARRAY_DESTRUCT_BODY), vec![vec![array.addr()]]);
     }
 }
