@@ -1,13 +1,20 @@
 //! `fallout shared/tesobjectcell.cpp` (Xbox PDB source unit), subsystem `fallout shared`: its functions in
 //! FalloutNV.exe 1.4.0.525, translated (docs/ENGINE_CRATE.md).
 //!
-//! The unit holds `TESObjectCELL` (409 functions to translate). This session
-//! translated the first 40 open or traced functions by address, `005415b0`
-//! to `00544490`: the constructor and destructors, the form-record
+//! The unit holds `TESObjectCELL` (409 functions to translate). The first
+//! session translated the first 40 open or traced functions by address,
+//! `005415b0` to `00544490`: the constructor and destructors, the form-record
 //! `Save`/`Load`/`InitItem`/`Copy`/`Compare`/`CreateDuplicateForm` overrides, the
 //! group-record helpers (`SavesBefore`, `BelongsInGroup`, `CreateGroupData`),
-//! the exterior block keys and the flag setters. The next session continues
-//! with the first `open` function after `00544490` (`005444c0`).
+//! the exterior block keys and the flag setters. The second translated the
+//! next 40, `005444c0` to `00545960`: the exterior and interior data
+//! accessors (`INTERIOR_DATA` colours and distances, which a lighting
+//! template can replace), and the `LOADED_CELL_DATA` block (its constructor,
+//! destructor, the build that sorts a cell's references, and the handlers
+//! that add and remove emittance, scripted, activating and water references
+//! and the multibound nodes of marker references). The next session
+//! continues with the first `open` function after `00545960` (`00545a30`,
+//! `TESObjectCELL::AttachMultiBoundNodes`).
 //!
 //! ## Layout (PC build)
 //!
@@ -48,6 +55,8 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSSimpleList;
+use crate::units::fallout_shared::tesobjectrefr::TESObjectREFR;
 
 /// A four-character chunk tag as the record reader compares it (the bytes
 /// in file order, read as a little-endian word).
@@ -2143,6 +2152,1136 @@ pub fn fn_00544490(e: &mut Engine, this: Ptr) -> bool {
     e.call(FORM_FLAGS, &args![this]).u32() & 0x20000 != 0
 }
 
+// ---- the loaded data of a cell and the interior lighting accessors ----
+//
+// Functions `005444c0` to `00545960`. `pLoadedData` (`LOADED_CELL_DATA`,
+// 0x64 bytes) is built by `fn_00544ce0` when a cell's references are loaded
+// and holds the lists and maps the reference handlers below fill. The
+// interior lighting accessors read `INTERIOR_DATA` (`pCellData` of an
+// interior cell), or the lighting template's value when the cell inherits
+// that field (a bit of `iLightingTemplateInheritanceFlags`).
+
+/// `TESWorldSpace` test of form flag 0x80000 (`iFormFlags`).
+const WORLD_SPACE_FLAG_80000: u32 = 0x0058_6230;
+/// `TESWorldSpace` test of bit 2 of the byte at `+0x4C`.
+const WORLD_SPACE_FLAG_4C_2: u32 = 0x0058_6210;
+/// `INTERIOR_DATA` constructor (a cell's interior data, 0x2C bytes).
+const INTERIOR_DATA_CONSTRUCT: u32 = 0x0052_6640;
+/// `EXTERIOR_DATA` constructor (a cell's exterior data, 0xC bytes).
+const EXTERIOR_DATA_CONSTRUCT: u32 = 0x0054_0720;
+/// Whether the cell inherits a field of its lighting template: tests `mask`
+/// against `iLightingTemplateInheritanceFlags`.
+const CELL_INHERITS_LIGHTING_FIELD: u32 = 0x0055_8b80;
+/// The lighting template's accessors for the fields the cell can inherit.
+const TEMPLATE_AMBIENT: u32 = WORD_AT_18;
+const TEMPLATE_DIRECTIONAL: u32 = 0x0044_1110;
+const TEMPLATE_FOG: u32 = 0x007a_f430;
+const TEMPLATE_FOG_NEAR: u32 = 0x0052_6ac0;
+const TEMPLATE_FOG_FAR: u32 = 0x0052_6ae0;
+const TEMPLATE_DIRECTIONAL_XY: u32 = 0x0055_b980;
+const TEMPLATE_DIRECTIONAL_Z: u32 = 0x0067_1d10;
+const TEMPLATE_CLIP_DISTANCE: u32 = 0x009a_9350;
+const TEMPLATE_FOG_POWER: u32 = 0x0059_8040;
+/// `255.0` (`double`): the divisor that turns a colour byte into a float.
+const COLOUR_BYTE_SCALE: u32 = 0x0101_e568;
+/// `3000.0` (`double`): bound size above which an emittance reference is a
+/// large animated reference.
+const LARGE_BOUND_SIZE: u32 = 0x0102_ed48;
+/// `LOADED_CELL_DATA` constructors: the map constructors (hash size
+/// argument) and the matching destructors.
+const MAP_CONSTRUCT_REFERENCE_NODE: u32 = 0x0055_8d40;
+const MAP_CONSTRUCT_FORM_REFERENCE: u32 = 0x0055_8d70;
+const MAP_CONSTRUCT_MULTI_BOUND: u32 = 0x0055_8da0;
+const MAP_DESTRUCT_REFERENCE_NODE: u32 = 0x0055_8f20;
+const MAP_DESTRUCT_FORM_REFERENCE: u32 = 0x0055_9020;
+const MAP_DESTRUCT_MULTI_BOUND: u32 = 0x0055_91d0;
+/// `NiTMapBase` operations: `SetAt(key, value)`, `RemoveAt(key)`,
+/// `GetAt(key, &value)`, the first-slot iterator and
+/// `GetNext(&position, &key, &value)`.
+const MAP_SET_AT: u32 = 0x0084_4700;
+const MAP_REMOVE_AT: u32 = 0x0040_5430;
+const MAP_GET_AT: u32 = 0x006c_62d0;
+const MAP_FIRST_POSITION: u32 = 0x004b_9ba0;
+const MAP_GET_NEXT: u32 = 0x0055_9120;
+/// `SetAt(key, smart pointer by value)` on the multibound map.
+const MAP_SET_AT_MULTI_BOUND: u32 = 0x006c_6920;
+/// `BSSimpleList` operations: remove the item whose address is passed, and
+/// insert after a node; and `pop front` (removes the head).
+const LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+const LIST_INSERT_AFTER: u32 = 0x0090_5820;
+const LIST_POP_FRONT: u32 = 0x0063_f7b0;
+/// The word at `+4` of an object (also the list-node `next` accessor).
+const WORD_AT_4: u32 = 0x0072_6070;
+/// The word at `+0x18` of an object (the owner of the cell's 3D node).
+const WORD_AT_18: u32 = 0x0096_11e0;
+/// Reference predicates and accessors (`TESObjectREFR`).
+const REFERENCE_IS_MARKER_FORM: u32 = 0x0043_9f90;
+const REFERENCE_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
+const REFERENCE_LINKED_NODE_OWNER: u32 = 0x0056_9ac0;
+const REFERENCE_EMITTANCE_SOURCE: u32 = 0x0056_9580;
+const REFERENCE_IS_SCRIPTED: u32 = 0x0056_56d0;
+const REFERENCE_IS_ACTIVATING_CHILDREN: u32 = 0x0056_a250;
+const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
+const REFERENCE_GET_MULTI_BOUND_ROOM: u32 = 0x0056_99b0;
+const REFERENCE_GET_MULTI_BOUND: u32 = 0x0056_9920;
+const REFERENCE_CLEAR_MULTI_BOUND: u32 = 0x0056_9990;
+const REFERENCE_GET_ORIENTATION: u32 = 0x0056_fa00;
+/// `TESBoundObject::GetBoundSize` (Xbox PDB), `float` in ST0.
+const FORM_GET_BOUND_SIZE: u32 = 0x0050_ebf0;
+/// `cFormType` of a form (`00401170`) and the type of lights.
+const FORM_TYPE_LIGHT: u32 = 0x1e;
+/// `ExtraDataList::GetRoom` / `GetPrimitive` (Xbox PDB).
+const EXTRA_DATA_GET_ROOM: u32 = 0x0042_0ed0;
+const EXTRA_DATA_GET_PRIMITIVE: u32 = 0x0041_fbe0;
+/// Multibound node and multibound data accessors.
+const MULTI_BOUND_DATA_OF_ROOM: u32 = 0x0066_29f0;
+const MULTI_BOUND_SET_DATA: u32 = 0x0043_9920;
+const MULTI_BOUND_PRIMITIVE_SLOT: u32 = 0x0043_b230;
+const MULTI_BOUND_SET_PRIMITIVE: u32 = 0x004a_ddc0;
+const PRIMITIVE_SET_ROTATION: u32 = 0x0043_96b0;
+/// Allocates a block for a node (cdecl `size`), and the
+/// `BSMultiBoundNode` constructor.
+const NODE_ALLOCATE: u32 = 0x00aa_13e0;
+const MULTI_BOUND_NODE_CONSTRUCT: u32 = 0x00c4_6970;
+/// `BSShaderManager::CloneMaterialPropertyRecurse` (Xbox PDB), cdecl.
+const CLONE_MATERIAL_PROPERTY: u32 = 0x00b5_7c60;
+/// `NiAVObject::UpdateProperties` / `GetProperty` (Xbox PDB).
+const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+/// Applies a property to a node (cdecl `(node, property)`).
+const SHADER_APPLY_PROPERTY: u32 = 0x00b5_5480;
+/// `TESWorldSpace` (`this`, cell): looks the cell's grid coordinates up in
+/// the map at `+0x68` of the world space and returns the entry (a list of
+/// references), 0 without the map or an entry.
+const WORLD_SPACE_CELL_REFERENCES: u32 = 0x0058_7870;
+/// Tests bit 2 of the word at `+0x244` of the object it is called on (the
+/// game loader singleton at `011ddf38`).
+const LOADER_FLAG_244_2: u32 = 0x0042_ce10;
+/// Run on the cell by `fn_00545030` before it asks the owner of the cell's
+/// 3D node to remove the node (a function of the unit's later range).
+const CELL_DETACH_LOADED_3D: u32 = 0x0054_5c10;
+/// The form pointer `fn_00545740` compares with a reference's base form (the
+/// other marker form, `011ca230`, is only tested by `00439f90`).
+const MARKER_FORM_SECOND: u32 = 0x011c_a238;
+/// Singleton whose `+0x760` word `fn_005453b0` falls back to.
+const EMITTANCE_FALLBACK_OWNER_POINTER: u32 = 0x011d_ea3c;
+
+layout! {
+    /// `EXTERIOR_DATA` (Xbox PDB), 0xC bytes: the data of an exterior cell.
+    pub struct ExteriorData: 0x0c {
+        /// `iCellX` (Xbox PDB).
+        0x00 iCellX: i32,
+        /// `iCellY` (Xbox PDB).
+        0x04 iCellY: i32,
+        /// `cLandHideFlags` (Xbox PDB).
+        0x08 cLandHideFlags: i8,
+    }
+
+    /// `INTERIOR_DATA` (Xbox PDB), 0x2C bytes: the data of an interior cell.
+    pub struct InteriorData: 0x2c {
+        /// `iAmbient` (Xbox PDB): packed colour.
+        0x00 iAmbient: u32,
+        /// `iDirectional` (Xbox PDB): packed colour.
+        0x04 iDirectional: u32,
+        /// `iFog` (Xbox PDB): packed colour.
+        0x08 iFog: u32,
+        /// `fFogNear` (Xbox PDB).
+        0x0C fFogNear: f32,
+        /// `fFogFar` (Xbox PDB).
+        0x10 fFogFar: f32,
+        /// `iDirectionalXY` (Xbox PDB).
+        0x14 iDirectionalXY: u32,
+        /// `iDirectionalZ` (Xbox PDB).
+        0x18 iDirectionalZ: u32,
+        /// `fDirectionalFade` (Xbox PDB).
+        0x1C fDirectionalFade: f32,
+        /// `fClipDist` (Xbox PDB).
+        0x20 fClipDist: f32,
+        /// `fFogPower` (Xbox PDB).
+        0x24 fFogPower: f32,
+        /// `iInteriorOffset` (Xbox PDB).
+        0x28 iInteriorOffset: u32,
+    }
+
+    /// `NiTMap<K, V>` (Xbox PDB), 0x10 bytes for every `K` and `V`.
+    pub struct NiTMap: 0x10 {
+        /// `m_uiHashSize` (Xbox PDB).
+        0x04 m_uiHashSize: u32,
+        /// `m_ppkHashTable` (Xbox PDB).
+        0x08 m_ppkHashTable: u32,
+    }
+
+    /// `LOADED_CELL_DATA` (Xbox PDB), 0x64 bytes (the same on the PC).
+    pub struct LoadedCellData: 0x64 {
+        /// `spCell3D` (Xbox PDB): `NiPointer<NiNode>` slot.
+        0x00 spCell3D: Ptr,
+        /// `LargeAnimatedRefs` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x04 LargeAnimatedRefs: Inline<BSSimpleList>,
+        /// `AnimatedRefMap` (Xbox PDB): `NiTMap<TESObjectREFR *, NiNode *>`.
+        0x0C AnimatedRefMap: Inline<NiTMap>,
+        /// `EmittanceSourceRefMap` (Xbox PDB):
+        /// `NiTMap<TESForm *, TESObjectREFR *>`.
+        0x1C EmittanceSourceRefMap: Inline<NiTMap>,
+        /// `EmittanceLightRefMap` (Xbox PDB):
+        /// `NiTMap<TESObjectREFR *, NiNode *>`.
+        0x2C EmittanceLightRefMap: Inline<NiTMap>,
+        /// `MultiboundRefMap` (Xbox PDB):
+        /// `NiTMap<TESObjectREFR *, NiPointer<BSMultiBoundNode>>`.
+        0x3C MultiboundRefMap: Inline<NiTMap>,
+        /// `ScriptedRefs` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x4C ScriptedRefs: Inline<BSSimpleList>,
+        /// `ActivatingRefs` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x54 ActivatingRefs: Inline<BSSimpleList>,
+        /// `WaterRefs` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x5C WaterRefs: Inline<BSSimpleList>,
+    }
+}
+
+/// The address of the embedded sub-object `field` of a loaded-data block.
+fn loaded_part<U>(loaded: Ptr<LoadedCellData>, field: Field<LoadedCellData, Inline<U>>) -> Ptr {
+    loaded.byte_add(field.off)
+}
+
+/// The cell's `pLoadedData`.
+fn loaded_data(e: &Engine, this: Ptr<TESObjectCELL>) -> Ptr<LoadedCellData> {
+    e.get(this, TESObjectCELL::pLoadedData).cast()
+}
+
+/// Calls a list operation that takes the address of an item
+/// (`BSSimpleList::AddHead`, `Remove`, `InsertAfter`): the game passes the
+/// address of a local holding the item.
+fn list_operation(e: &mut Engine, function: u32, list: Ptr, item: Ptr) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item.addr());
+        e.call(function, &args![list, slot]);
+    });
+}
+
+// Translated from 005444c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For an interior cell: whether form flag 0x80000 is set; for an exterior
+/// cell: the same flag of its world space, false without one.
+pub fn fn_005444c0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> bool {
+    if is_interior(e, this.cast()) {
+        e.call(FORM_FLAGS, &args![this]).u32() & 0x80000 != 0
+    } else {
+        let world = world_space(e, this.cast());
+        !world.is_null() && e.call(WORLD_SPACE_FLAG_80000, &args![world]).bool()
+    }
+}
+
+// Translated from 00544520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 2 of `cCellFlags`, inverted for an interior cell; when that is false,
+/// the world space's bit 2 of the byte at `+0x4C`, false without a world
+/// space.
+pub fn fn_00544520(e: &mut Engine, this: Ptr<TESObjectCELL>) -> bool {
+    let mut flag = e.get(this, TESObjectCELL::cCellFlags) & 0x4 != 0;
+    if is_interior(e, this.cast()) {
+        flag = !flag;
+    }
+    if flag {
+        return true;
+    }
+    let world = world_space(e, this.cast());
+    !world.is_null() && e.call(WORLD_SPACE_FLAG_4C_2, &args![world]).bool()
+}
+
+// Translated from 00544590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `bit & 31` of the exterior data's `cLandHideFlags` (a `char`,
+/// sign-extended) is set; false for a cell without exterior data.
+pub fn fn_00544590(e: &mut Engine, this: Ptr<TESObjectCELL>, bit: u32) -> bool {
+    let data: Ptr<ExteriorData> = fn_005445d0(e, this).cast();
+    if data.is_null() {
+        return false;
+    }
+    let mask = 1u32 << (bit & 0x1f);
+    let flags = e.get(data, ExteriorData::cLandHideFlags) as i32 as u32;
+    flags & mask != 0
+}
+
+// Translated from 005445d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The exterior data (`pCellData`) of an exterior cell, null for an
+/// interior one.
+pub fn fn_005445d0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> Ptr {
+    if is_interior(e, this.cast()) {
+        Ptr::NULL
+    } else {
+        e.get(this, TESObjectCELL::pCellData)
+    }
+}
+
+// Translated from 00544600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior data (`pCellData`) of an interior cell, null for an
+/// exterior one.
+pub fn fn_00544600(e: &mut Engine, this: Ptr<TESObjectCELL>) -> Ptr {
+    if is_interior(e, this.cast()) {
+        e.get(this, TESObjectCELL::pCellData)
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 00544630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::CreateCellData` (Xbox PDB): frees the old `pCellData`
+/// (the code frees it the same way for an interior and an exterior cell) and
+/// builds a new one: `INTERIOR_DATA` (0x2C bytes) for an interior cell,
+/// `EXTERIOR_DATA` (0xC bytes) otherwise. The exception-unwinding frame is
+/// not translated.
+pub fn tes_object_cell_create_cell_data(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    let old = e.get(this, TESObjectCELL::pCellData);
+    if !old.is_null() {
+        // Both arms of the interior test free the same pointer.
+        is_interior(e, this.cast());
+        e.call(DEALLOCATE, &args![old]);
+        e.set(this, TESObjectCELL::pCellData, Ptr::NULL);
+    }
+    let (size, construct) = if is_interior(e, this.cast()) {
+        (InteriorData::SIZE, INTERIOR_DATA_CONSTRUCT)
+    } else {
+        (ExteriorData::SIZE, EXTERIOR_DATA_CONSTRUCT)
+    };
+    let block = e.call(ALLOCATE, &args![size]).ptr::<()>();
+    let data = if block.is_null() {
+        Ptr::NULL
+    } else {
+        e.call(construct, &args![block]).ptr()
+    };
+    e.set(this, TESObjectCELL::pCellData, data);
+}
+
+/// The lighting template of the cell when the cell inherits the field
+/// selected by `mask` and has a template (the code asks for the template
+/// twice).
+fn inherited_template(e: &mut Engine, this: Ptr<TESObjectCELL>, mask: u32) -> Option<Ptr> {
+    if e.call(CELL_INHERITS_LIGHTING_FIELD, &args![this, mask])
+        .bool()
+        && !e
+            .call(CELL_GET_LIGHTING_TEMPLATE, &args![this])
+            .ptr::<()>()
+            .is_null()
+    {
+        Some(e.call(CELL_GET_LIGHTING_TEMPLATE, &args![this]).ptr())
+    } else {
+        None
+    }
+}
+
+/// A word of the interior data, or the lighting template's value for it
+/// (`template_accessor`) when the cell inherits it (`mask`); 0 for a cell
+/// without interior data.
+fn interior_word(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    mask: u32,
+    field: Field<InteriorData, u32>,
+    template_accessor: u32,
+) -> u32 {
+    let data: Ptr<InteriorData> = fn_00544600(e, this).cast();
+    if data.is_null() {
+        return 0;
+    }
+    match inherited_template(e, this, mask) {
+        Some(template) => e.call(template_accessor, &args![template]).u32(),
+        None => e.get(data, field),
+    }
+}
+
+/// The `float` counterpart of [`interior_word`]; `missing` is the value for
+/// a cell without interior data.
+fn interior_float(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    mask: u32,
+    field: Field<InteriorData, f32>,
+    template_accessor: u32,
+    missing: f32,
+) -> f32 {
+    let data: Ptr<InteriorData> = fn_00544600(e, this).cast();
+    if data.is_null() {
+        return missing;
+    }
+    match inherited_template(e, this, mask) {
+        Some(template) => e.call(template_accessor, &args![template]).f32(),
+        None => e.get(data, field),
+    }
+}
+
+/// Writes the three channels of a packed colour (bytes 0, 1 and 2) as
+/// `float`s in `0..=1` at `out`.
+fn unpack_colour(e: &mut Engine, packed: u32, out: Ptr) {
+    let scale: f64 = e.global(COLOUR_BYTE_SCALE);
+    let channels = [packed & 0xff, (packed >> 8) & 0xff, (packed >> 16) & 0xff];
+    for (i, channel) in channels.into_iter().enumerate() {
+        e.mem
+            .set_f32(out.addr() + 4 * i as u32, (channel as f64 / scale) as f32);
+    }
+}
+
+// Translated from 00544750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior ambient colour (`iAmbient`, packed), from the lighting
+/// template when the cell inherits it (inheritance bit 0x1).
+pub fn fn_00544750(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    interior_word(e, this, 0x1, InteriorData::iAmbient, TEMPLATE_AMBIENT)
+}
+
+// Translated from 005447b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The ambient colour as three `float`s at `out`.
+pub fn fn_005447b0(e: &mut Engine, this: Ptr<TESObjectCELL>, out: Ptr) {
+    let packed = fn_00544750(e, this);
+    unpack_colour(e, packed, out);
+}
+
+// Translated from 00544830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior directional colour (`iDirectional`, packed), from the
+/// lighting template when the cell inherits it (bit 0x2).
+pub fn fn_00544830(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    interior_word(
+        e,
+        this,
+        0x2,
+        InteriorData::iDirectional,
+        TEMPLATE_DIRECTIONAL,
+    )
+}
+
+// Translated from 00544890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The directional colour as three `float`s at `out`.
+pub fn fn_00544890(e: &mut Engine, this: Ptr<TESObjectCELL>, out: Ptr) {
+    let packed = fn_00544830(e, this);
+    unpack_colour(e, packed, out);
+}
+
+// Translated from 00544910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `iDirectionalXY`, from the lighting template when the cell
+/// inherits it (bit 0x20).
+pub fn fn_00544910(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    interior_word(
+        e,
+        this,
+        0x20,
+        InteriorData::iDirectionalXY,
+        TEMPLATE_DIRECTIONAL_XY,
+    )
+}
+
+// Translated from 00544970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `iDirectionalZ`, from the lighting template when the cell
+/// inherits it (bit 0x20, the same bit as `iDirectionalXY`).
+pub fn fn_00544970(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    interior_word(
+        e,
+        this,
+        0x20,
+        InteriorData::iDirectionalZ,
+        TEMPLATE_DIRECTIONAL_Z,
+    )
+}
+
+// Translated from 005449d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior fog colour (`iFog`, packed), from the lighting template when
+/// the cell inherits it (bit 0x4).
+pub fn fn_005449d0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    interior_word(e, this, 0x4, InteriorData::iFog, TEMPLATE_FOG)
+}
+
+// Translated from 00544a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The fog colour as three `float`s at `out`.
+pub fn fn_00544a30(e: &mut Engine, this: Ptr<TESObjectCELL>, out: Ptr) {
+    let packed = fn_005449d0(e, this);
+    unpack_colour(e, packed, out);
+}
+
+// Translated from 00544ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `fFogNear` (0.0 without interior data), from the lighting
+/// template when the cell inherits it (bit 0x8).
+pub fn fn_00544ab0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> f32 {
+    interior_float(e, this, 0x8, InteriorData::fFogNear, TEMPLATE_FOG_NEAR, 0.0)
+}
+
+// Translated from 00544b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `fFogFar` (0.0 without interior data), from the lighting
+/// template when the cell inherits it (bit 0x10).
+pub fn fn_00544b10(e: &mut Engine, this: Ptr<TESObjectCELL>) -> f32 {
+    interior_float(e, this, 0x10, InteriorData::fFogFar, TEMPLATE_FOG_FAR, 0.0)
+}
+
+// Translated from 00544b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `fFogPower` (1.0 without interior data), from the lighting
+/// template when the cell inherits it (bit 0x100).
+pub fn fn_00544b70(e: &mut Engine, this: Ptr<TESObjectCELL>) -> f32 {
+    interior_float(
+        e,
+        this,
+        0x100,
+        InteriorData::fFogPower,
+        TEMPLATE_FOG_POWER,
+        1.0,
+    )
+}
+
+// Translated from 00544bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The interior `fClipDist` (0.0 without interior data), from the lighting
+/// template when the cell inherits it (bit 0x80).
+pub fn fn_00544bd0(e: &mut Engine, this: Ptr<TESObjectCELL>) -> f32 {
+    interior_float(
+        e,
+        this,
+        0x80,
+        InteriorData::fClipDist,
+        TEMPLATE_CLIP_DISTANCE,
+        0.0,
+    )
+}
+
+// Translated from 00544c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::GetDataX` (Xbox PDB): `iCellX` of the exterior data, 0 for
+/// a cell without it.
+pub fn tes_object_cell_get_data_x(e: &mut Engine, this: Ptr<TESObjectCELL>) -> i32 {
+    let data: Ptr<ExteriorData> = fn_005445d0(e, this).cast();
+    if data.is_null() {
+        0
+    } else {
+        e.get(data, ExteriorData::iCellX)
+    }
+}
+
+// Translated from 00544c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::GetDataY` (Xbox PDB): `iCellY` of the exterior data, 0 for
+/// a cell without it.
+pub fn tes_object_cell_get_data_y(e: &mut Engine, this: Ptr<TESObjectCELL>) -> i32 {
+    let data: Ptr<ExteriorData> = fn_005445d0(e, this).cast();
+    if data.is_null() {
+        0
+    } else {
+        e.get(data, ExteriorData::iCellY)
+    }
+}
+
+// Translated from 00544c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::SetDataCoord` (Xbox PDB): stores the grid coordinates in
+/// the exterior data; nothing for an interior cell or one without data.
+pub fn tes_object_cell_set_data_coord(e: &mut Engine, this: Ptr<TESObjectCELL>, x: i32, y: i32) {
+    if is_interior(e, this.cast()) {
+        return;
+    }
+    let data: Ptr<ExteriorData> = fn_005445d0(e, this).cast();
+    if !data.is_null() {
+        e.set(data, ExteriorData::iCellX, x);
+        e.set(data, ExteriorData::iCellY, y);
+    }
+}
+
+// Translated from 00544ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the cell's loaded data (when it has none) and sorts its
+/// references into it. Under the reference lock: every reference that is not
+/// flag 0x20 (or is while bit 2 of the game loader's word at `+0x244` is
+/// set) is handled by kind. A reference whose base form is one of the two
+/// marker forms gets its multibound node (`fn_00545740`) and, when it has a
+/// linked-node owner (`00569ac0`), is queued in a local list. Any other
+/// reference that is not an actor but is scripted (`005656d0`) is added to
+/// the loaded data's `ScriptedRefs`; one that is activating children
+/// (`TESObjectREFR::IsActivatingChildren`) to `ActivatingRefs`. After the
+/// lock is left, each queued reference's node and its owner's node (both
+/// through `fn_00545960`) are linked through the owner node's virtual slot
+/// 0xDC, and the world space's references for the cell get their multibound
+/// nodes. The exception-unwinding frame is not translated.
+pub fn fn_00544ce0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    if loaded_data(e, this).is_null() {
+        let block = e.call(ALLOCATE, &args![LoadedCellData::SIZE]).ptr::<()>();
+        let created = if block.is_null() {
+            Ptr::NULL
+        } else {
+            fn_00544f60(e, block.cast()).cast()
+        };
+        e.set(this, TESObjectCELL::pLoadedData, created);
+    }
+    fn_00541ac0(e, this);
+    // Locals: the queue (a `BSSimpleList`, 8 bytes) and the reference whose
+    // address the list calls take.
+    e.with_stack(0xc, |e, frame| {
+        let queue = frame;
+        let held = frame.byte_add(8);
+        e.call(LIST_CONSTRUCT, &args![queue]);
+
+        let mut node = reference_list(e, this.cast());
+        while !list_is_end(e, node) {
+            let reference = list_item(e, node);
+            e.mem.set_u32(held.addr(), reference.addr());
+            node = list_next(e, node);
+            if flag_20(e, reference)
+                && !e
+                    .call(
+                        LOADER_FLAG_244_2,
+                        &args![e.global::<u32>(GAME_LOADER_POINTER)],
+                    )
+                    .bool()
+            {
+                continue;
+            }
+            if e.call(REFERENCE_IS_MARKER_FORM, &args![reference]).bool() {
+                fn_00545740(e, this, reference.cast());
+                if e.call(REFERENCE_LINKED_NODE_OWNER, &args![reference]).u32() != 0 {
+                    e.call(LIST_PUSH_FRONT, &args![queue, held]);
+                }
+            } else {
+                let loaded = loaded_data(e, this);
+                if !e.vcall(reference.addr(), 0x100, &[]).bool()
+                    && e.call(REFERENCE_IS_SCRIPTED, &args![reference]).bool()
+                {
+                    let scripted = loaded_part(loaded, LoadedCellData::ScriptedRefs);
+                    e.call(LIST_PUSH_FRONT, &args![scripted, held]);
+                }
+                if e.call(REFERENCE_IS_ACTIVATING_CHILDREN, &args![reference])
+                    .bool()
+                {
+                    let activating = loaded_part(loaded, LoadedCellData::ActivatingRefs);
+                    e.call(LIST_PUSH_FRONT, &args![activating, held]);
+                }
+            }
+        }
+        fn_00541ae0(e, this);
+
+        while !e.call(LIST_IS_END, &args![queue]).bool() {
+            let address = e.call(LIST_ITEM_ADDRESS, &args![queue]).u32();
+            let reference = Ptr::<()>::new(e.mem.u32(address));
+            e.call(LIST_POP_FRONT, &args![queue]);
+            let owner = e.call(REFERENCE_LINKED_NODE_OWNER, &args![reference]).ptr();
+            let reference_node = fn_00545960(e, this, reference.cast());
+            let owner_node = fn_00545960(e, this, owner);
+            if reference_node != owner_node {
+                e.vcall(owner_node.addr(), 0xdc, &args![reference_node, 1u32]);
+            }
+        }
+
+        let world = world_space(e, this.cast());
+        if !world.is_null() {
+            let mut node = e
+                .call(WORLD_SPACE_CELL_REFERENCES, &args![world, this])
+                .ptr();
+            while !list_is_end(e, node) {
+                let reference = list_item(e, node);
+                fn_00545740(e, this, reference.cast());
+                node = list_next(e, node);
+            }
+        }
+        e.call(LIST_DESTRUCT, &args![queue]);
+    });
+}
+
+// Translated from 00544f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LOADED_CELL_DATA` constructor: the null `spCell3D` slot, the three
+/// reference lists, and the four maps (0x25 buckets each). Returns `this`.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00544f60(e: &mut Engine, this: Ptr<LoadedCellData>) -> Ptr<LoadedCellData> {
+    e.call(SLOT_CONSTRUCT, &args![this, 0u32]);
+    e.call(
+        LIST_CONSTRUCT,
+        &args![loaded_part(this, LoadedCellData::LargeAnimatedRefs)],
+    );
+    let maps = [
+        (LoadedCellData::AnimatedRefMap, MAP_CONSTRUCT_REFERENCE_NODE),
+        (
+            LoadedCellData::EmittanceSourceRefMap,
+            MAP_CONSTRUCT_FORM_REFERENCE,
+        ),
+        (
+            LoadedCellData::EmittanceLightRefMap,
+            MAP_CONSTRUCT_REFERENCE_NODE,
+        ),
+        (LoadedCellData::MultiboundRefMap, MAP_CONSTRUCT_MULTI_BOUND),
+    ];
+    for (map, construct) in maps {
+        e.call(construct, &args![loaded_part(this, map), 0x25u32]);
+    }
+    for list in [
+        LoadedCellData::ScriptedRefs,
+        LoadedCellData::ActivatingRefs,
+        LoadedCellData::WaterRefs,
+    ] {
+        e.call(LIST_CONSTRUCT, &args![loaded_part(this, list)]);
+    }
+    this
+}
+
+// Translated from 00545030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the cell's loaded data: empties `ScriptedRefs` and
+/// `ActivatingRefs`; walks the multibound map, and for every entry that has
+/// a node whose word at `+4` is 2 (the map holds the last other reference)
+/// calls `00569990` on the key; then, if the cell has a 3D node, runs
+/// `00545c10` and asks the owner of that node (`009611e0`) to remove it
+/// (virtual slot 0xE8); finally destroys and frees the loaded data and
+/// clears `pLoadedData`. The exception-unwinding frame is not translated.
+pub fn fn_00545030(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() {
+        return;
+    }
+    e.call(
+        LIST_CLEAR,
+        &args![loaded_part(loaded, LoadedCellData::ScriptedRefs)],
+    );
+    e.call(
+        LIST_CLEAR,
+        &args![loaded_part(loaded, LoadedCellData::ActivatingRefs)],
+    );
+    let map = loaded_part(loaded, LoadedCellData::MultiboundRefMap);
+    // Locals: the iteration position, the key and the value slot.
+    e.with_stack(0xc, |e, frame| {
+        let position = frame;
+        let key = frame.byte_add(4);
+        let slot = frame.byte_add(8);
+        let first = e.call(MAP_FIRST_POSITION, &args![map]).u32();
+        e.mem.set_u32(position.addr(), first);
+        while e.mem.u32(position.addr()) != 0 {
+            e.call(SLOT_CONSTRUCT, &args![slot, 0u32]);
+            e.mem.set_u32(key.addr(), 0);
+            e.call(MAP_GET_NEXT, &args![map, position, key, slot]);
+            let reference = e.mem.u32(key.addr());
+            if reference != 0 && !slot_get(e, slot).is_null() {
+                let node = slot_get(e, slot);
+                let owner = e.call(MULTI_BOUND_DATA_OF_ROOM, &args![node]).u32();
+                if e.call(WORD_AT_4, &args![owner]).u32() == 2 {
+                    e.call(REFERENCE_CLEAR_MULTI_BOUND, &args![reference]);
+                }
+            }
+            e.call(SLOT_RELEASE, &args![slot]);
+        }
+    });
+    if !slot_get(e, loaded.cast()).is_null() {
+        e.call(CELL_DETACH_LOADED_3D, &args![this]);
+        let node = slot_get(e, loaded.cast());
+        let owner = e.call(WORD_AT_18, &args![node]).ptr::<()>();
+        if !owner.is_null() {
+            let node = slot_get(e, loaded.cast());
+            e.vcall(owner.addr(), 0xe8, &args![node]);
+        }
+    }
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        fn_005451d0(e, loaded, 1);
+    }
+    e.set(this, TESObjectCELL::pLoadedData, Ptr::NULL);
+}
+
+// Translated from 005451d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LOADED_CELL_DATA` scalar deleting destructor: destroys the members
+/// (`fn_00545200`) and frees the block when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_005451d0(e: &mut Engine, this: Ptr<LoadedCellData>, flags: u32) -> Ptr<LoadedCellData> {
+    fn_00545200(e, this);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00545200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LOADED_CELL_DATA` destructor: the lists and maps in reverse order of
+/// construction, then the `spCell3D` slot. The exception-unwinding frame is
+/// not translated.
+pub fn fn_00545200(e: &mut Engine, this: Ptr<LoadedCellData>) {
+    for list in [
+        LoadedCellData::WaterRefs,
+        LoadedCellData::ActivatingRefs,
+        LoadedCellData::ScriptedRefs,
+    ] {
+        e.call(LIST_DESTRUCT, &args![loaded_part(this, list)]);
+    }
+    let maps = [
+        (LoadedCellData::MultiboundRefMap, MAP_DESTRUCT_MULTI_BOUND),
+        (
+            LoadedCellData::EmittanceLightRefMap,
+            MAP_DESTRUCT_REFERENCE_NODE,
+        ),
+        (
+            LoadedCellData::EmittanceSourceRefMap,
+            MAP_DESTRUCT_FORM_REFERENCE,
+        ),
+        (LoadedCellData::AnimatedRefMap, MAP_DESTRUCT_REFERENCE_NODE),
+    ];
+    for (map, destruct) in maps {
+        e.call(destruct, &args![loaded_part(this, map)]);
+    }
+    e.call(
+        LIST_DESTRUCT,
+        &args![loaded_part(this, LoadedCellData::LargeAnimatedRefs)],
+    );
+    e.call(SLOT_RELEASE, &args![this]);
+}
+
+// Translated from 005452c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Registers an emittance reference: when the reference has a node (virtual
+/// slot 0x1D0), maps the reference to the value its node's virtual slot 0xC
+/// returns in `AnimatedRefMap`, and when its base form's bound size
+/// (`TESBoundObject::GetBoundSize`) exceeds 3000.0 adds it to
+/// `LargeAnimatedRefs`.
+pub fn fn_005452c0(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() || reference.is_null() {
+        return;
+    }
+    if e.vcall(reference.addr(), 0x1d0, &[]).u32() == 0 {
+        return;
+    }
+    let node = e.vcall(reference.addr(), 0x1d0, &[]).ptr::<()>();
+    let value = e.vcall(node.addr(), 0xc, &[]).u32();
+    e.call(
+        MAP_SET_AT,
+        &args![
+            loaded_part(loaded, LoadedCellData::AnimatedRefMap),
+            reference,
+            value
+        ],
+    );
+    let form = e.call(REFERENCE_GET_BASE_FORM, &args![reference]).u32();
+    let bound_size = e.call(FORM_GET_BOUND_SIZE, &args![form]).f64();
+    let limit: f64 = e.global(LARGE_BOUND_SIZE);
+    if bound_size > limit {
+        let list = loaded_part(loaded, LoadedCellData::LargeAnimatedRefs);
+        list_operation(e, LIST_PUSH_FRONT, list, reference.cast());
+    }
+}
+
+// Translated from 00545360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::RemoveEmittanceRef` (Xbox PDB): removes the reference from
+/// `AnimatedRefMap` and from `LargeAnimatedRefs`.
+pub fn tes_object_cell_remove_emittance_ref(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    reference: Ptr<TESObjectREFR>,
+) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() {
+        return;
+    }
+    e.call(
+        MAP_REMOVE_AT,
+        &args![
+            loaded_part(loaded, LoadedCellData::AnimatedRefMap),
+            reference
+        ],
+    );
+    let list = loaded_part(loaded, LoadedCellData::LargeAnimatedRefs);
+    list_operation(e, LIST_REMOVE_ITEM, list, reference.cast());
+}
+
+// Translated from 005453b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Registers a light or emittance source: for a reference with a node
+/// (virtual slot 0x1D0), a light (base form type 0x1E) is mapped in
+/// `EmittanceLightRefMap` to the value of its node's virtual slot 0xC;
+/// any other base form has its node's materials cloned
+/// (`CloneMaterialPropertyRecurse`) and properties updated, and, when its
+/// emittance source (`00569580`, or the `+0x760` word of the singleton at
+/// `011dea3c`) has a value (virtual slot 0xC0), the node's property 2 is
+/// fetched, the shader applies it (`00b55480(node, value)`), and the
+/// source is mapped to the reference in `EmittanceSourceRefMap`.
+pub fn fn_005453b0(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() || reference.is_null() {
+        return;
+    }
+    if e.vcall(reference.addr(), 0x1d0, &[]).u32() == 0 {
+        return;
+    }
+    let node = e.vcall(reference.addr(), 0x1d0, &[]).ptr::<()>();
+    let form = e.call(REFERENCE_GET_BASE_FORM, &args![reference]).u32();
+    if e.call(FORM_TYPE, &args![form]).u32() == FORM_TYPE_LIGHT {
+        let value = e.vcall(node.addr(), 0xc, &[]).u32();
+        e.call(
+            MAP_SET_AT,
+            &args![
+                loaded_part(loaded, LoadedCellData::EmittanceLightRefMap),
+                reference,
+                value
+            ],
+        );
+        return;
+    }
+    e.call(CLONE_MATERIAL_PROPERTY, &args![node]);
+    e.call(NODE_UPDATE_PROPERTIES, &args![node]);
+    let mut source = e
+        .call(REFERENCE_EMITTANCE_SOURCE, &args![reference])
+        .ptr::<()>();
+    if source.is_null() {
+        let owner = Ptr::new(e.global::<u32>(EMITTANCE_FALLBACK_OWNER_POINTER));
+        source = fn_005454d0(e, owner);
+    }
+    if source.is_null() {
+        return;
+    }
+    let value = e.vcall(source.addr(), 0xc0, &[]).u32();
+    if value == 0 {
+        return;
+    }
+    e.call(NODE_GET_PROPERTY, &args![node, 2u32]);
+    e.call(SHADER_APPLY_PROPERTY, &args![node, value]);
+    e.call(
+        MAP_SET_AT,
+        &args![
+            loaded_part(loaded, LoadedCellData::EmittanceSourceRefMap),
+            source,
+            reference
+        ],
+    );
+}
+
+// Translated from 005454d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x760` of the object (a field of the singleton at
+/// `011dea3c`).
+pub fn fn_005454d0(e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(e.mem.u32(this.addr() + 0x760))
+}
+
+// Translated from 005454f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Undoes `fn_005453b0`: a light (base form type 0x1E) is removed from
+/// `EmittanceLightRefMap` by the reference; any other reference is removed
+/// from `EmittanceSourceRefMap` by its emittance source (`00569580`) when it
+/// has one.
+pub fn fn_005454f0(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() {
+        return;
+    }
+    let form = e.call(REFERENCE_GET_BASE_FORM, &args![reference]).u32();
+    if e.call(FORM_TYPE, &args![form]).u32() == FORM_TYPE_LIGHT {
+        e.call(
+            MAP_REMOVE_AT,
+            &args![
+                loaded_part(loaded, LoadedCellData::EmittanceLightRefMap),
+                reference
+            ],
+        );
+    } else {
+        let source = e.call(REFERENCE_EMITTANCE_SOURCE, &args![reference]).u32();
+        if source != 0 {
+            e.call(
+                MAP_REMOVE_AT,
+                &args![
+                    loaded_part(loaded, LoadedCellData::EmittanceSourceRefMap),
+                    source
+                ],
+            );
+        }
+    }
+}
+
+// Translated from 00545560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the reference to the front of `ScriptedRefs`.
+pub fn fn_00545560(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        let list = loaded_part(loaded, LoadedCellData::ScriptedRefs);
+        list_operation(e, LIST_PUSH_FRONT, list, reference.cast());
+    }
+}
+
+// Translated from 00545590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the reference from `ScriptedRefs`.
+pub fn fn_00545590(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        let list = loaded_part(loaded, LoadedCellData::ScriptedRefs);
+        list_operation(e, LIST_REMOVE_ITEM, list, reference.cast());
+    }
+}
+
+// Translated from 005455c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::AddActivatingRef` (Xbox PDB): unless the reference is
+/// already in `ActivatingRefs`, calls its virtual slot 0x48 with 0x4000000
+/// and links it in after the last node of the list (at the front when the
+/// list is empty).
+pub fn tes_object_cell_add_activating_ref(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    reference: Ptr<TESObjectREFR>,
+) {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() {
+        return;
+    }
+    let list = loaded_part(loaded, LoadedCellData::ActivatingRefs);
+    let mut node = list;
+    let mut previous = Ptr::<()>::NULL;
+    while !list_is_end(e, node) {
+        if list_item(e, node).addr() == reference.addr() {
+            return;
+        }
+        previous = node;
+        node = list_next(e, node);
+    }
+    e.vcall(reference.addr(), 0x48, &args![0x0400_0000u32]);
+    if previous.is_null() {
+        list_operation(e, LIST_PUSH_FRONT, list, reference.cast());
+    } else {
+        list_operation(e, LIST_INSERT_AFTER, previous, reference.cast());
+    }
+}
+
+// Translated from 00545670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the reference from `ActivatingRefs` and calls its virtual slot
+/// 0x4C with 0x4000000 (the reference's change flag).
+pub fn fn_00545670(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        let list = loaded_part(loaded, LoadedCellData::ActivatingRefs);
+        list_operation(e, LIST_REMOVE_ITEM, list, reference.cast());
+    }
+    e.vcall(reference.addr(), 0x4c, &args![0x0400_0000u32]);
+}
+
+// Translated from 005456b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the reference to the front of `WaterRefs`.
+pub fn fn_005456b0(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        let list = loaded_part(loaded, LoadedCellData::WaterRefs);
+        list_operation(e, LIST_PUSH_FRONT, list, reference.cast());
+    }
+}
+
+// Translated from 005456e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes the reference from `WaterRefs`.
+pub fn fn_005456e0(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) {
+    let loaded = loaded_data(e, this);
+    if !loaded.is_null() {
+        let list = loaded_part(loaded, LoadedCellData::WaterRefs);
+        list_operation(e, LIST_REMOVE_ITEM, list, reference.cast());
+    }
+}
+
+// Translated from 00545710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the loaded data's `WaterRefs` list, null without loaded
+/// data.
+pub fn fn_00545710(e: &mut Engine, this: Ptr<TESObjectCELL>) -> Ptr {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null() {
+        Ptr::NULL
+    } else {
+        loaded_part(loaded, LoadedCellData::WaterRefs)
+    }
+}
+
+// Translated from 00545740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives a marker reference its multibound node and registers it. Does
+/// nothing (null) for a cell without loaded data, a null reference or one
+/// whose base form is not one of the two marker forms (`00439f90`). The room
+/// node is the reference's `ExtraDataList::GetRoom`; without one, a
+/// reference of the second marker form uses its `GetMultiBoundRoom` (null
+/// ends the function), any other gets a new `BSMultiBoundNode` (0xB4 bytes)
+/// that is given the reference's `GetMultiBound`. The node's primitive (the
+/// bound shape: the multibound data's slot, or one built by the reference's
+/// `ExtraDataList::GetPrimitive` from the three words at `+0x24` of the reference) gets the reference's
+/// virtual slot 0x1F4 value (slot 0xB8), and, when its type (slot 0x8C) is 2,
+/// the reference's orientation. The room is then stored in
+/// `MultiboundRefMap` under the reference, its virtual slot 0xBC is called,
+/// and it is returned. The exception-unwinding frame is not translated.
+pub fn fn_00545740(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) -> Ptr {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null()
+        || reference.is_null()
+        || !e.call(REFERENCE_IS_MARKER_FORM, &args![reference]).bool()
+    {
+        return Ptr::NULL;
+    }
+    let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+    let mut room = e.call(EXTRA_DATA_GET_ROOM, &args![extra_list]).ptr::<()>();
+    let multi_bound: Ptr;
+    if room.is_null() {
+        let form = e.call(REFERENCE_GET_BASE_FORM, &args![reference]).u32();
+        if form == e.global::<u32>(MARKER_FORM_SECOND) {
+            room = e
+                .call(REFERENCE_GET_MULTI_BOUND_ROOM, &args![reference])
+                .ptr();
+            if room.is_null() {
+                return Ptr::NULL;
+            }
+            multi_bound = e.call(MULTI_BOUND_DATA_OF_ROOM, &args![room]).ptr();
+        } else {
+            let block = e.call(NODE_ALLOCATE, &args![0xb4u32]).ptr::<()>();
+            room = if block.is_null() {
+                Ptr::NULL
+            } else {
+                e.call(MULTI_BOUND_NODE_CONSTRUCT, &args![block]).ptr()
+            };
+            multi_bound = e.call(REFERENCE_GET_MULTI_BOUND, &args![reference]).ptr();
+            e.call(MULTI_BOUND_SET_DATA, &args![room, multi_bound]);
+        }
+    } else {
+        multi_bound = e.call(MULTI_BOUND_DATA_OF_ROOM, &args![room]).ptr();
+    }
+    let mut primitive = e
+        .call(MULTI_BOUND_PRIMITIVE_SLOT, &args![multi_bound])
+        .ptr::<()>();
+    if primitive.is_null() {
+        let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+        let shape = e
+            .call(EXTRA_DATA_GET_PRIMITIVE, &args![extra_list])
+            .ptr::<()>();
+        if !shape.is_null() {
+            let rotation = e.call(REFERENCE_ROTATION, &args![reference]).u32();
+            // The three words are copied to a local and passed by address.
+            primitive = e.with_stack(12, |e, copy| {
+                for word in 0..3 {
+                    let value = e.mem.u32(rotation + 4 * word);
+                    e.mem.set_u32(copy.addr() + 4 * word, value);
+                }
+                e.vcall(shape.addr(), 0x14, &args![copy]).ptr()
+            });
+            e.call(MULTI_BOUND_SET_PRIMITIVE, &args![multi_bound, primitive]);
+        }
+    }
+    if !primitive.is_null() {
+        let transform = e.vcall(reference.addr(), 0x1f4, &[]).u32();
+        e.vcall(primitive.addr(), 0xb8, &args![transform]);
+        if e.vcall(primitive.addr(), 0x8c, &[]).u32() == 2 {
+            // `NiMatrix3` out parameter, 9 words.
+            e.with_stack(0x24, |e, matrix| {
+                let orientation = e
+                    .call(REFERENCE_GET_ORIENTATION, &args![reference, matrix])
+                    .u32();
+                e.call(PRIMITIVE_SET_ROTATION, &args![primitive, orientation]);
+            });
+        }
+        e.call(MULTI_BOUND_SET_DATA, &args![room, multi_bound]);
+        // The room goes into the map as a `NiPointer` passed by value.
+        e.with_stack(4, |e, pointer| {
+            e.call(SLOT_CONSTRUCT, &args![pointer, room]);
+            let value = e.mem.u32(pointer.addr());
+            let map = loaded_part(loaded, LoadedCellData::MultiboundRefMap);
+            e.call(MAP_SET_AT_MULTI_BOUND, &args![map, reference, value]);
+        });
+    }
+    e.vcall(room.addr(), 0xbc, &[]);
+    room
+}
+
+// Translated from 00545960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The multibound node of a marker reference: looked up in `MultiboundRefMap`
+/// (`GetAt`), and, when absent or null, built by `fn_00545740` and stored in
+/// a local `NiPointer` slot that is released at the end. Null for a cell
+/// without loaded data, a null reference or a reference that is not a marker.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00545960(e: &mut Engine, this: Ptr<TESObjectCELL>, reference: Ptr<TESObjectREFR>) -> Ptr {
+    let loaded = loaded_data(e, this);
+    if loaded.is_null()
+        || reference.is_null()
+        || !e.call(REFERENCE_IS_MARKER_FORM, &args![reference]).bool()
+    {
+        return Ptr::NULL;
+    }
+    e.with_stack(4, |e, slot| {
+        e.call(SLOT_CONSTRUCT, &args![slot, 0u32]);
+        let map = loaded_part(loaded, LoadedCellData::MultiboundRefMap);
+        let found = e.call(MAP_GET_AT, &args![map, reference, slot]).bool();
+        if !found || slot_get(e, slot).is_null() {
+            let built = fn_00545740(e, this, reference);
+            slot_assign(e, slot, built);
+        }
+        let result = slot_get(e, slot);
+        e.call(SLOT_RELEASE, &args![slot]);
+        result
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2223,6 +3362,100 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00544420, fn_00544420(Ptr<TESObjectCELL>) -> bool),
         entry!(0x00544440, fn_00544440(Ptr<TESObjectCELL>, bool)),
         entry!(0x00544490, fn_00544490(Ptr) -> bool),
+        entry!(0x005444c0, fn_005444c0(Ptr<TESObjectCELL>) -> bool),
+        entry!(0x00544520, fn_00544520(Ptr<TESObjectCELL>) -> bool),
+        entry!(0x00544590, fn_00544590(Ptr<TESObjectCELL>, u32) -> bool),
+        entry!(0x005445d0, fn_005445d0(Ptr<TESObjectCELL>) -> Ptr),
+        entry!(0x00544600, fn_00544600(Ptr<TESObjectCELL>) -> Ptr),
+        entry!(
+            0x00544630,
+            tes_object_cell_create_cell_data(Ptr<TESObjectCELL>)
+        ),
+        entry!(0x00544750, fn_00544750(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x005447b0, fn_005447b0(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00544830, fn_00544830(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x00544890, fn_00544890(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00544910, fn_00544910(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x00544970, fn_00544970(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x005449d0, fn_005449d0(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x00544a30, fn_00544a30(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00544ab0, fn_00544ab0(Ptr<TESObjectCELL>) -> f32),
+        entry!(0x00544b10, fn_00544b10(Ptr<TESObjectCELL>) -> f32),
+        entry!(0x00544b70, fn_00544b70(Ptr<TESObjectCELL>) -> f32),
+        entry!(0x00544bd0, fn_00544bd0(Ptr<TESObjectCELL>) -> f32),
+        entry!(
+            0x00544c30,
+            tes_object_cell_get_data_x(Ptr<TESObjectCELL>) -> i32
+        ),
+        entry!(
+            0x00544c60,
+            tes_object_cell_get_data_y(Ptr<TESObjectCELL>) -> i32
+        ),
+        entry!(
+            0x00544c90,
+            tes_object_cell_set_data_coord(Ptr<TESObjectCELL>, i32, i32)
+        ),
+        entry!(0x00544ce0, fn_00544ce0(Ptr<TESObjectCELL>)),
+        entry!(
+            0x00544f60,
+            fn_00544f60(Ptr<LoadedCellData>) -> Ptr<LoadedCellData>
+        ),
+        entry!(0x00545030, fn_00545030(Ptr<TESObjectCELL>)),
+        entry!(
+            0x005451d0,
+            fn_005451d0(Ptr<LoadedCellData>, u32) -> Ptr<LoadedCellData>
+        ),
+        entry!(0x00545200, fn_00545200(Ptr<LoadedCellData>)),
+        entry!(
+            0x005452c0,
+            fn_005452c0(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x00545360,
+            tes_object_cell_remove_emittance_ref(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x005453b0,
+            fn_005453b0(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(0x005454d0, fn_005454d0(Ptr) -> Ptr),
+        entry!(
+            0x005454f0,
+            fn_005454f0(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x00545560,
+            fn_00545560(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x00545590,
+            fn_00545590(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x005455c0,
+            tes_object_cell_add_activating_ref(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x00545670,
+            fn_00545670(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x005456b0,
+            fn_005456b0(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x005456e0,
+            fn_005456e0(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>)
+        ),
+        entry!(0x00545710, fn_00545710(Ptr<TESObjectCELL>) -> Ptr),
+        entry!(
+            0x00545740,
+            fn_00545740(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>) -> Ptr
+        ),
+        entry!(
+            0x00545960,
+            fn_00545960(Ptr<TESObjectCELL>, Ptr<TESObjectREFR>) -> Ptr
+        ),
     ]
 }
 
@@ -5030,5 +6263,1416 @@ mod tests {
         assert_eq!(build(&mut e, interior, wrong_blocks)[0], 0);
         let sub = header(&mut e, 3, 6);
         assert_eq!(build(&mut e, interior, sub)[0], 0);
+    }
+
+    // ---- the loaded data and the interior lighting accessors ----------
+
+    /// The vtable of the wide test objects: slot `s` (up to `0x1f4`) leads to
+    /// the double at `wide(s)`, which answers with the word at
+    /// `SLOT_ANSWERS + s` of the object, so one object type serves as a
+    /// reference, a node, a room, a bound shape or an owner.
+    const WIDE_VTABLE: u32 = 0x0130_4000;
+    const WIDE_SIZE: u32 = 0x400;
+    const SLOT_ANSWERS: u32 = 0x200;
+    // Words the doubles of the reference helpers read from a wide object.
+    const IS_MARKER: u32 = 0x100;
+    const LINKED_OWNER: u32 = 0x104;
+    const IS_SCRIPTED: u32 = 0x108;
+    const IS_ACTIVATING: u32 = 0x10c;
+    const ROOM: u32 = 0x110;
+    const BASE_FORM: u32 = 0x114;
+    const MULTI_BOUND_ROOM: u32 = 0x118;
+    const MULTI_BOUND_DATA: u32 = 0x11c;
+    const PRIMITIVE: u32 = 0x120;
+    const SHAPE: u32 = 0x124;
+    const CACHED_NODE: u32 = 0x128;
+    const EMITTANCE_SOURCE: u32 = 0x12c;
+
+    fn wide(slot: u32) -> u32 {
+        0x7200_0000 + slot
+    }
+
+    /// The test engine plus the wide vtable and doubles for the reference,
+    /// list, map and node helpers the loaded-data functions call.
+    fn wide_engine() -> Engine {
+        let mut e = engine();
+        e.map(0x0102_e000, 0x1000);
+        e.map(0x0101_e000, 0x1000);
+        let slots: Vec<u32> = (0..=0x1f4 / 4).map(|i| wide(4 * i)).collect();
+        e.put_vtable(WIDE_VTABLE, &slots);
+        for i in 0..=0x1f4u32 / 4 {
+            e.register_double(wide(4 * i), move |e, a| {
+                e.mem.u32(a[0] + SLOT_ANSWERS + 4 * i).into_ret()
+            });
+        }
+        let readers: [(u32, u32); 9] = [
+            (REFERENCE_IS_MARKER_FORM, IS_MARKER),
+            (REFERENCE_LINKED_NODE_OWNER, LINKED_OWNER),
+            (REFERENCE_IS_SCRIPTED, IS_SCRIPTED),
+            (REFERENCE_IS_ACTIVATING_CHILDREN, IS_ACTIVATING),
+            (REFERENCE_GET_BASE_FORM, BASE_FORM),
+            (REFERENCE_GET_MULTI_BOUND_ROOM, MULTI_BOUND_ROOM),
+            (REFERENCE_GET_MULTI_BOUND, MULTI_BOUND_DATA),
+            (MULTI_BOUND_DATA_OF_ROOM, MULTI_BOUND_DATA),
+            (MULTI_BOUND_PRIMITIVE_SLOT, PRIMITIVE),
+        ];
+        for (address, word) in readers {
+            e.register_double(address, move |e, a| e.mem.u32(a[0] + word).into_ret());
+        }
+        e.register(REFERENCE_EMITTANCE_SOURCE, |e, a| {
+            e.mem.u32(a[0] + EMITTANCE_SOURCE).into_ret()
+        });
+        e.register(REFERENCE_EXTRA_DATA_LIST, |_, a| (a[0] + 0x44).into_ret());
+        e.register(EXTRA_DATA_GET_ROOM, |e, a| {
+            e.mem.u32(a[0] - 0x44 + ROOM).into_ret()
+        });
+        e.register(EXTRA_DATA_GET_PRIMITIVE, |e, a| {
+            e.mem.u32(a[0] - 0x44 + SHAPE).into_ret()
+        });
+        e.register(NODE_ALLOCATE, |e, _| e.mem.alloc(WIDE_SIZE).into_ret());
+        e.register(MULTI_BOUND_NODE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], WIDE_VTABLE);
+            a[0].into_ret()
+        });
+        e.register(MAP_GET_AT, |e, a| {
+            let cached = e.mem.u32(a[1] + CACHED_NODE);
+            if cached != 0 {
+                e.mem.set_u32(a[2], cached);
+            }
+            u32::from(cached != 0).into_ret()
+        });
+        e.register(REFERENCE_GET_ORIENTATION, |_, a| a[1].into_ret());
+        e.register(LOADER_FLAG_244_2, |e, a| {
+            u32::from(e.mem.u32(a[0] + 0x244) & 2 != 0).into_ret()
+        });
+        quiet(
+            &mut e,
+            &[
+                LOCK_ENTER,
+                LOCK_LEAVE,
+                LIST_CONSTRUCT,
+                LIST_CLEAR,
+                LIST_DESTRUCT,
+                MULTI_BOUND_SET_DATA,
+                MULTI_BOUND_SET_PRIMITIVE,
+                PRIMITIVE_SET_ROTATION,
+                MAP_SET_AT,
+                MAP_SET_AT_MULTI_BOUND,
+                MAP_REMOVE_AT,
+                MAP_CONSTRUCT_REFERENCE_NODE,
+                MAP_CONSTRUCT_FORM_REFERENCE,
+                MAP_CONSTRUCT_MULTI_BOUND,
+                MAP_DESTRUCT_REFERENCE_NODE,
+                MAP_DESTRUCT_FORM_REFERENCE,
+                MAP_DESTRUCT_MULTI_BOUND,
+                REFERENCE_CLEAR_MULTI_BOUND,
+                CELL_DETACH_LOADED_3D,
+                CLONE_MATERIAL_PROPERTY,
+                NODE_UPDATE_PROPERTIES,
+                NODE_GET_PROPERTY,
+                SHADER_APPLY_PROPERTY,
+                LIST_REMOVE_ITEM,
+                LIST_INSERT_AFTER,
+            ],
+        );
+        // A `BSSimpleList` head is { item, next }, empty when both are 0.
+        e.register(LIST_PUSH_FRONT, |e, a| {
+            let value = e.mem.u32(a[1]);
+            let (item, next) = (e.mem.u32(a[0]), e.mem.u32(a[0] + 4));
+            if item == 0 && next == 0 {
+                e.mem.set_u32(a[0], value);
+            } else {
+                let node = e.mem.alloc(8);
+                e.mem.set_u32(node, item);
+                e.mem.set_u32(node + 4, next);
+                e.mem.set_u32(a[0], value);
+                e.mem.set_u32(a[0] + 4, node);
+            }
+            Ret::default()
+        });
+        e.register(LIST_POP_FRONT, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let (item, after) = (e.mem.u32(next), e.mem.u32(next + 4));
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+                e.mem.free(next);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            Ret::default()
+        });
+        e.set_global(COLOUR_BYTE_SCALE, 255.0f64);
+        e.set_global(LARGE_BOUND_SIZE, 3000.0f64);
+        e
+    }
+
+    fn wide_object(e: &mut Engine) -> Ptr {
+        let block = e.mem.alloc(WIDE_SIZE);
+        e.mem.set_u32(block, WIDE_VTABLE);
+        Ptr::new(block)
+    }
+
+    /// Sets the answer of virtual slot `slot` of a wide object.
+    fn answer(e: &mut Engine, object: Ptr, slot: u32, value: u32) {
+        e.mem.set_u32(object.addr() + SLOT_ANSWERS + slot, value);
+    }
+
+    fn word(e: &mut Engine, object: Ptr, offset: u32, value: u32) {
+        e.mem.set_u32(object.addr() + offset, value);
+    }
+
+    /// A cell with loaded data (zeroed).
+    fn loaded_cell(e: &mut Engine, interior: bool) -> (Ptr<TESObjectCELL>, Ptr<LoadedCellData>) {
+        let cell = cell(e, interior);
+        let loaded = e.new_object::<LoadedCellData>();
+        e.set(cell, TESObjectCELL::pLoadedData, loaded.cast());
+        (cell, loaded)
+    }
+
+    /// The items of a `BSSimpleList` whose head is at `head`.
+    fn list_items(e: &Engine, head: u32) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = head;
+        while node != 0 && !(e.mem.u32(node) == 0 && e.mem.u32(node + 4) == 0) {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    /// A cell, for the checkers whose own variable is called `cell`.
+    fn new_cell(e: &mut Engine, interior: bool) -> Ptr<TESObjectCELL> {
+        cell(e, interior)
+    }
+
+    fn take_log(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log.take().unwrap()
+    }
+
+    /// An interior cell with zeroed interior data.
+    fn lit_cell(e: &mut Engine) -> (Ptr<TESObjectCELL>, Ptr<InteriorData>) {
+        let cell = cell(e, true);
+        let data = e.new_object::<InteriorData>();
+        e.set(cell, TESObjectCELL::pCellData, data.cast());
+        e.register(CELL_INHERITS_LIGHTING_FIELD, |e, a| {
+            u32::from(e.mem.u32(a[0] + 0xdc) & a[1] != 0).into_ret()
+        });
+        (cell, data)
+    }
+
+    #[test]
+    fn world_flag_80000_comes_from_the_cell_or_its_world_space() {
+        let mut e = engine();
+        returns(&mut e, WORLD_SPACE_FLAG_80000, 1);
+        let interior = cell(&mut e, true);
+        let exterior = cell(&mut e, false);
+        let world = object(&mut e);
+        e.set(exterior, TESObjectCELL::pWorldSpace, world);
+        // An interior cell tests its own flag.
+        assert!(!e.call(0x0054_44c0, &args![interior]).bool());
+        e.mem.set_u32(interior.addr() + 8, 0x80000);
+        assert!(e.call(0x0054_44c0, &args![interior]).bool());
+        // An exterior cell asks its world space, if it has one.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0054_44c0, &args![exterior]).bool());
+        assert_eq!(
+            calls_to(&take_log(&mut e), WORLD_SPACE_FLAG_80000),
+            vec![vec![world.addr()]]
+        );
+        returns(&mut e, WORLD_SPACE_FLAG_80000, 0);
+        assert!(!e.call(0x0054_44c0, &args![exterior]).bool());
+        e.set(exterior, TESObjectCELL::pWorldSpace, Ptr::NULL);
+        returns(&mut e, WORLD_SPACE_FLAG_80000, 1);
+        assert!(!e.call(0x0054_44c0, &args![exterior]).bool());
+    }
+
+    #[test]
+    fn cell_flag_4_is_inverted_for_interiors_and_falls_back_to_the_world_space() {
+        let mut e = engine();
+        returns(&mut e, WORLD_SPACE_FLAG_4C_2, 1);
+        let interior = cell(&mut e, true);
+        let exterior = cell(&mut e, false);
+        let world = object(&mut e);
+        e.set(exterior, TESObjectCELL::pWorldSpace, world);
+        // Interior: bit 2 clear gives true without asking the world space.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0054_4520, &args![interior]).bool());
+        assert!(calls_to(&take_log(&mut e), WORLD_SPACE_FLAG_4C_2).is_empty());
+        // Interior with the bit set: false, there is no world space.
+        e.mem.set_u8(interior.addr() + 0x24, 0x05);
+        assert!(!e.call(0x0054_4520, &args![interior]).bool());
+        // Exterior: the bit gives true, otherwise the world space decides.
+        e.mem.set_u8(exterior.addr() + 0x24, 0x04);
+        assert!(e.call(0x0054_4520, &args![exterior]).bool());
+        e.mem.set_u8(exterior.addr() + 0x24, 0x00);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x0054_4520, &args![exterior]).bool());
+        assert_eq!(
+            calls_to(&take_log(&mut e), WORLD_SPACE_FLAG_4C_2),
+            vec![vec![world.addr()]]
+        );
+        returns(&mut e, WORLD_SPACE_FLAG_4C_2, 0);
+        assert!(!e.call(0x0054_4520, &args![exterior]).bool());
+        e.set(exterior, TESObjectCELL::pWorldSpace, Ptr::NULL);
+        assert!(!e.call(0x0054_4520, &args![exterior]).bool());
+    }
+
+    #[test]
+    fn land_hide_flags_are_tested_bit_by_bit_with_sign_extension() {
+        let mut e = engine();
+        let exterior = cell(&mut e, false);
+        let interior = cell(&mut e, true);
+        // No data: false.
+        assert!(!fn_00544590(&mut e, exterior, 0));
+        let data = e.new_object::<ExteriorData>();
+        e.set(exterior, TESObjectCELL::pCellData, data.cast());
+        e.set(interior, TESObjectCELL::pCellData, data.cast());
+        e.set(data, ExteriorData::cLandHideFlags, 0b0000_0100);
+        assert!(fn_00544590(&mut e, exterior, 2));
+        assert!(!fn_00544590(&mut e, exterior, 3));
+        // The shift count is taken modulo 32.
+        assert!(fn_00544590(&mut e, exterior, 34));
+        // The `char` is sign-extended: a negative flags byte sets bits 8..32.
+        e.set(data, ExteriorData::cLandHideFlags, -128);
+        assert!(fn_00544590(&mut e, exterior, 7));
+        assert!(fn_00544590(&mut e, exterior, 20));
+        assert!(!fn_00544590(&mut e, exterior, 0));
+        // An interior cell has no exterior data.
+        assert!(!fn_00544590(&mut e, interior, 7));
+    }
+
+    #[test]
+    fn exterior_and_interior_data_are_told_apart_by_the_interior_flag() {
+        let mut e = engine();
+        let exterior = cell(&mut e, false);
+        let interior = cell(&mut e, true);
+        let data = e.new_object::<ExteriorData>();
+        e.set(exterior, TESObjectCELL::pCellData, data.cast());
+        e.set(interior, TESObjectCELL::pCellData, data.cast());
+        assert_eq!(fn_005445d0(&mut e, exterior), data.cast());
+        assert_eq!(fn_005445d0(&mut e, interior), Ptr::NULL);
+    }
+
+    #[test]
+    fn interior_data_is_only_for_interior_cells() {
+        let mut e = engine();
+        let exterior = cell(&mut e, false);
+        let interior = cell(&mut e, true);
+        let data = e.new_object::<InteriorData>();
+        e.set(exterior, TESObjectCELL::pCellData, data.cast());
+        e.set(interior, TESObjectCELL::pCellData, data.cast());
+        assert_eq!(fn_00544600(&mut e, interior), data.cast());
+        assert_eq!(fn_00544600(&mut e, exterior), Ptr::NULL);
+    }
+
+    #[test]
+    fn creating_cell_data_replaces_the_old_data_by_kind() {
+        let mut e = engine();
+        e.register(EXTERIOR_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        e.register(INTERIOR_DATA_CONSTRUCT, |_, a| a[0].into_ret());
+        let exterior = cell(&mut e, false);
+        let old = e.mem.alloc(0xc);
+        e.set(exterior, TESObjectCELL::pCellData, Ptr::new(old));
+        e.call_log = Some(vec![]);
+        e.call(0x0054_4630, &args![exterior]);
+        let log = take_log(&mut e);
+        let fresh = e.get(exterior, TESObjectCELL::pCellData);
+        assert_ne!(fresh.addr(), 0);
+        assert_eq!(fresh.addr(), e.mem.u32(exterior.addr() + 0x48));
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![old]]);
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0xc]]);
+        assert_eq!(
+            calls_to(&log, EXTERIOR_DATA_CONSTRUCT),
+            vec![vec![fresh.addr()]]
+        );
+        assert!(calls_to(&log, INTERIOR_DATA_CONSTRUCT).is_empty());
+
+        // An interior cell without data allocates the larger block and frees
+        // nothing.
+        let interior = cell(&mut e, true);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_4630, &args![interior]);
+        let log = take_log(&mut e);
+        let fresh = e.get(interior, TESObjectCELL::pCellData);
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x2c]]);
+        assert!(calls_to(&log, DEALLOCATE).is_empty());
+        assert_eq!(
+            calls_to(&log, INTERIOR_DATA_CONSTRUCT),
+            vec![vec![fresh.addr()]]
+        );
+
+        // A failed allocation leaves the data null and builds nothing.
+        returns(&mut e, ALLOCATE, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_4630, &args![interior]);
+        assert_eq!(e.get(interior, TESObjectCELL::pCellData), Ptr::NULL);
+        assert!(calls_to(&take_log(&mut e), INTERIOR_DATA_CONSTRUCT).is_empty());
+    }
+
+    /// Checks an accessor that returns a word of the interior data or the
+    /// lighting template's value (`template_accessor`) when the cell
+    /// inherits it (`mask`).
+    fn check_word_accessor(
+        address: u32,
+        mask: u32,
+        field: Field<InteriorData, u32>,
+        template_accessor: u32,
+    ) {
+        let mut e = wide_engine();
+        let (cell, data) = lit_cell(&mut e);
+        e.set(data, field, 0x1122_3344);
+        assert_eq!(e.call(address, &args![cell]).u32(), 0x1122_3344);
+        // The inheritance bit without a lighting template changes nothing.
+        e.mem.set_u32(cell.addr() + 0xdc, mask);
+        assert_eq!(e.call(address, &args![cell]).u32(), 0x1122_3344);
+        // With a template the accessor of the template answers.
+        let template = object(&mut e);
+        e.mem.set_u32(cell.addr() + 0xd8, template.addr());
+        returns(&mut e, template_accessor, 0x5566_7788);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(address, &args![cell]).u32(), 0x5566_7788);
+        assert_eq!(
+            calls_to(&take_log(&mut e), template_accessor),
+            vec![vec![template.addr()]]
+        );
+        // The other bits do not inherit it.
+        e.mem.set_u32(cell.addr() + 0xdc, !mask);
+        assert_eq!(e.call(address, &args![cell]).u32(), 0x1122_3344);
+        // An exterior cell has no interior data.
+        let exterior = new_cell(&mut e, false);
+        assert_eq!(e.call(address, &args![exterior]).u32(), 0);
+    }
+
+    /// The `float` counterpart of [`check_word_accessor`]; `missing` is the
+    /// result for a cell without interior data.
+    fn check_float_accessor(
+        address: u32,
+        mask: u32,
+        field: Field<InteriorData, f32>,
+        template_accessor: u32,
+        missing: f32,
+    ) {
+        let mut e = wide_engine();
+        let (cell, data) = lit_cell(&mut e);
+        e.set(data, field, 2.5);
+        assert_eq!(e.call(address, &args![cell]).f32(), 2.5);
+        e.mem.set_u32(cell.addr() + 0xdc, mask);
+        assert_eq!(e.call(address, &args![cell]).f32(), 2.5);
+        let template = object(&mut e);
+        e.mem.set_u32(cell.addr() + 0xd8, template.addr());
+        e.register_double(template_accessor, |_, _| 7.75f32.into_ret());
+        assert_eq!(e.call(address, &args![cell]).f32(), 7.75);
+        e.mem.set_u32(cell.addr() + 0xdc, !mask);
+        assert_eq!(e.call(address, &args![cell]).f32(), 2.5);
+        let exterior = new_cell(&mut e, false);
+        assert_eq!(e.call(address, &args![exterior]).f32(), missing);
+    }
+
+    /// Checks a colour accessor: the packed value `0x00ff8040` becomes
+    /// `(0x40, 0x80, 0xff) / 255`, from the data or the template.
+    fn check_colour_accessor(
+        address: u32,
+        mask: u32,
+        field: Field<InteriorData, u32>,
+        template_accessor: u32,
+    ) {
+        let mut e = wide_engine();
+        let (cell, data) = lit_cell(&mut e);
+        let out = e.mem.alloc(12);
+        let read = |e: &Engine| -> Vec<f32> { (0..3).map(|i| e.mem.f32(out + 4 * i)).collect() };
+        let expected = |packed: u32| -> Vec<f32> {
+            [packed & 0xff, (packed >> 8) & 0xff, (packed >> 16) & 0xff]
+                .iter()
+                .map(|c| (*c as f64 / 255.0) as f32)
+                .collect()
+        };
+        e.set(data, field, 0x00ff_8040);
+        e.call(address, &args![cell, Ptr::<()>::new(out)]);
+        assert_eq!(read(&e), expected(0x00ff_8040));
+        assert_eq!(read(&e)[2], 1.0);
+        // Inherited from the lighting template.
+        let template = object(&mut e);
+        e.mem.set_u32(cell.addr() + 0xd8, template.addr());
+        e.mem.set_u32(cell.addr() + 0xdc, mask);
+        returns(&mut e, template_accessor, 0x0010_2030);
+        e.call(address, &args![cell, Ptr::<()>::new(out)]);
+        assert_eq!(read(&e), expected(0x0010_2030));
+        // The high byte of the packed colour is ignored.
+        returns(&mut e, template_accessor, 0xff10_2030);
+        e.call(address, &args![cell, Ptr::<()>::new(out)]);
+        assert_eq!(read(&e), expected(0x0010_2030));
+    }
+
+    #[test]
+    fn ambient_colour_word() {
+        check_word_accessor(0x0054_4750, 0x1, InteriorData::iAmbient, TEMPLATE_AMBIENT);
+    }
+
+    #[test]
+    fn ambient_colour_floats() {
+        check_colour_accessor(0x0054_47b0, 0x1, InteriorData::iAmbient, TEMPLATE_AMBIENT);
+    }
+
+    #[test]
+    fn directional_colour_word() {
+        check_word_accessor(
+            0x0054_4830,
+            0x2,
+            InteriorData::iDirectional,
+            TEMPLATE_DIRECTIONAL,
+        );
+    }
+
+    #[test]
+    fn directional_colour_floats() {
+        check_colour_accessor(
+            0x0054_4890,
+            0x2,
+            InteriorData::iDirectional,
+            TEMPLATE_DIRECTIONAL,
+        );
+    }
+
+    #[test]
+    fn directional_xy_word() {
+        check_word_accessor(
+            0x0054_4910,
+            0x20,
+            InteriorData::iDirectionalXY,
+            TEMPLATE_DIRECTIONAL_XY,
+        );
+    }
+
+    #[test]
+    fn directional_z_word() {
+        check_word_accessor(
+            0x0054_4970,
+            0x20,
+            InteriorData::iDirectionalZ,
+            TEMPLATE_DIRECTIONAL_Z,
+        );
+    }
+
+    #[test]
+    fn fog_colour_word() {
+        check_word_accessor(0x0054_49d0, 0x4, InteriorData::iFog, TEMPLATE_FOG);
+    }
+
+    #[test]
+    fn fog_colour_floats() {
+        check_colour_accessor(0x0054_4a30, 0x4, InteriorData::iFog, TEMPLATE_FOG);
+    }
+
+    #[test]
+    fn fog_near_distance() {
+        check_float_accessor(
+            0x0054_4ab0,
+            0x8,
+            InteriorData::fFogNear,
+            TEMPLATE_FOG_NEAR,
+            0.0,
+        );
+    }
+
+    #[test]
+    fn fog_far_distance() {
+        check_float_accessor(
+            0x0054_4b10,
+            0x10,
+            InteriorData::fFogFar,
+            TEMPLATE_FOG_FAR,
+            0.0,
+        );
+    }
+
+    #[test]
+    fn fog_power_defaults_to_one() {
+        check_float_accessor(
+            0x0054_4b70,
+            0x100,
+            InteriorData::fFogPower,
+            TEMPLATE_FOG_POWER,
+            1.0,
+        );
+    }
+
+    #[test]
+    fn clip_distance() {
+        check_float_accessor(
+            0x0054_4bd0,
+            0x80,
+            InteriorData::fClipDist,
+            TEMPLATE_CLIP_DISTANCE,
+            0.0,
+        );
+    }
+
+    #[test]
+    fn grid_coordinates_read_the_exterior_data() {
+        let mut e = engine();
+        let exterior = cell(&mut e, false);
+        let interior = cell(&mut e, true);
+        assert_eq!(tes_object_cell_get_data_x(&mut e, exterior), 0);
+        assert_eq!(tes_object_cell_get_data_y(&mut e, exterior), 0);
+        let data = e.new_object::<ExteriorData>();
+        e.set(data, ExteriorData::iCellX, -7);
+        e.set(data, ExteriorData::iCellY, 12);
+        e.set(exterior, TESObjectCELL::pCellData, data.cast());
+        e.set(interior, TESObjectCELL::pCellData, data.cast());
+        assert_eq!(tes_object_cell_get_data_x(&mut e, exterior), -7);
+        assert_eq!(tes_object_cell_get_data_y(&mut e, exterior), 12);
+        // An interior cell has no exterior data.
+        assert_eq!(tes_object_cell_get_data_x(&mut e, interior), 0);
+        assert_eq!(tes_object_cell_get_data_y(&mut e, interior), 0);
+    }
+
+    #[test]
+    fn grid_coordinates_are_stored_in_the_exterior_data_only() {
+        let mut e = engine();
+        let exterior = cell(&mut e, false);
+        let interior = cell(&mut e, true);
+        // Nothing to store into: no crash.
+        tes_object_cell_set_data_coord(&mut e, exterior, 1, 2);
+        let data = e.new_object::<ExteriorData>();
+        e.set(exterior, TESObjectCELL::pCellData, data.cast());
+        tes_object_cell_set_data_coord(&mut e, exterior, -3, 40);
+        assert_eq!(e.get(data, ExteriorData::iCellX), -3);
+        assert_eq!(e.get(data, ExteriorData::iCellY), 40);
+        // An interior cell ignores it.
+        e.set(interior, TESObjectCELL::pCellData, data.cast());
+        tes_object_cell_set_data_coord(&mut e, interior, 9, 9);
+        assert_eq!(e.get(data, ExteriorData::iCellX), -3);
+        // The registered form takes the same words.
+        e.call(0x0054_4c90, &args![exterior, 5i32, 6i32]);
+        assert_eq!(e.get(data, ExteriorData::iCellY), 6);
+    }
+
+    #[test]
+    fn building_the_loaded_data_constructs_every_member() {
+        let mut e = wide_engine();
+        let block = e.mem.alloc(LoadedCellData::SIZE);
+        let loaded = Ptr::<()>::new(block);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_4f60, &args![loaded]);
+        assert_eq!(result.u32(), block);
+        let log = take_log(&mut e);
+        assert_eq!(
+            sequence(&log),
+            vec![
+                SLOT_CONSTRUCT,
+                LIST_CONSTRUCT,
+                MAP_CONSTRUCT_REFERENCE_NODE,
+                MAP_CONSTRUCT_FORM_REFERENCE,
+                MAP_CONSTRUCT_REFERENCE_NODE,
+                MAP_CONSTRUCT_MULTI_BOUND,
+                LIST_CONSTRUCT,
+                LIST_CONSTRUCT,
+                LIST_CONSTRUCT,
+            ]
+        );
+        assert_eq!(calls_to(&log, SLOT_CONSTRUCT), vec![vec![block, 0]]);
+        assert_eq!(
+            calls_to(&log, LIST_CONSTRUCT),
+            vec![
+                vec![block + 0x04],
+                vec![block + 0x4c],
+                vec![block + 0x54],
+                vec![block + 0x5c]
+            ]
+        );
+        // The maps, each with 0x25 buckets.
+        assert_eq!(
+            calls_to(&log, MAP_CONSTRUCT_REFERENCE_NODE),
+            vec![vec![block + 0x0c, 0x25], vec![block + 0x2c, 0x25],]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_CONSTRUCT_FORM_REFERENCE),
+            vec![vec![block + 0x1c, 0x25]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_CONSTRUCT_MULTI_BOUND),
+            vec![vec![block + 0x3c, 0x25]]
+        );
+    }
+
+    /// A marker reference with a room (and a bound shape on the room's
+    /// multibound data), as `fn_00545740` handles it.
+    fn marker_reference(e: &mut Engine) -> (Ptr, Ptr, Ptr, Ptr) {
+        let reference = wide_object(e);
+        let room = wide_object(e);
+        let data = wide_object(e);
+        let primitive = wide_object(e);
+        word(e, reference, IS_MARKER, 1);
+        word(e, reference, ROOM, room.addr());
+        word(e, room, MULTI_BOUND_DATA, data.addr());
+        word(e, data, PRIMITIVE, primitive.addr());
+        (reference, room, data, primitive)
+    }
+
+    #[test]
+    fn building_the_loaded_data_sorts_the_references() {
+        let mut e = wide_engine();
+        let cell = cell(&mut e, false);
+        let loader = e.mem.alloc(0x250);
+        e.set_global(GAME_LOADER_POINTER, loader);
+        let world = wide_object(&mut e);
+        e.set(cell, TESObjectCELL::pWorldSpace, world);
+
+        let plain = wide_object(&mut e);
+        word(&mut e, plain, IS_SCRIPTED, 1);
+        word(&mut e, plain, IS_ACTIVATING, 1);
+        let actor = wide_object(&mut e);
+        answer(&mut e, actor, 0x100, 1);
+        word(&mut e, actor, IS_SCRIPTED, 1);
+        let hidden = wide_object(&mut e);
+        word(&mut e, hidden, 8, 0x20);
+        word(&mut e, hidden, IS_SCRIPTED, 1);
+        word(&mut e, hidden, IS_ACTIVATING, 1);
+        // A marker reference whose owner is another marker with a node.
+        let (linked, linked_room, _, _) = marker_reference(&mut e);
+        let (owner, owner_room, _, _) = marker_reference(&mut e);
+        word(&mut e, linked, LINKED_OWNER, owner.addr());
+        word(&mut e, owner, CACHED_NODE, owner_room.addr());
+        // A marker reference without an owner.
+        let (lonely, _, _, _) = marker_reference(&mut e);
+        // A reference of the world space's list for this cell.
+        let (from_world, _, _, _) = marker_reference(&mut e);
+        let world_list = e.mem.alloc(8);
+        e.mem.set_u32(world_list, from_world.addr());
+        e.register_double(WORLD_SPACE_CELL_REFERENCES, move |_, _| {
+            world_list.into_ret()
+        });
+
+        set_references(&mut e, cell, &[plain, actor, hidden, linked, lonely]);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_4ce0, &args![cell]);
+        let log = take_log(&mut e);
+
+        // The loaded data was built (0x64 bytes) and stored.
+        let loaded = e.get(cell, TESObjectCELL::pLoadedData);
+        assert_ne!(loaded.addr(), 0);
+        assert_eq!(calls_to(&log, ALLOCATE), vec![vec![0x64]]);
+        // Scripted and activating references: the plain one only; the actor
+        // is not scripted and the hidden one (flag 0x20 and no loader flag)
+        // is skipped.
+        assert_eq!(list_items(&e, loaded.addr() + 0x4c), vec![plain.addr()]);
+        assert_eq!(list_items(&e, loaded.addr() + 0x54), vec![plain.addr()]);
+        // The references are handled under the lock.
+        let order = sequence(&log);
+        let enter = order.iter().position(|a| *a == LOCK_ENTER).unwrap();
+        let leave = order.iter().position(|a| *a == LOCK_LEAVE).unwrap();
+        assert!(enter < leave);
+        let stored: Vec<Vec<u32>> = calls_to(&log, MAP_SET_AT_MULTI_BOUND);
+        let stored_refs: Vec<u32> = stored.iter().map(|call| call[1]).collect();
+        // `linked` and `lonely` in the first loop, `linked` again for the
+        // queue (its node is not cached), `from_world` last.
+        assert_eq!(
+            stored_refs,
+            vec![
+                linked.addr(),
+                lonely.addr(),
+                linked.addr(),
+                from_world.addr()
+            ]
+        );
+        assert!(stored.iter().all(|call| call[0] == loaded.addr() + 0x3c));
+        // After the lock: the owner's node is told about the reference's node
+        // (virtual slot 0xdc with the node and 1).
+        let linking = calls_to(&log, wide(0xdc));
+        assert_eq!(
+            linking,
+            vec![vec![owner_room.addr(), linked_room.addr(), 1]]
+        );
+        let linking_at = order.iter().position(|a| *a == wide(0xdc)).unwrap();
+        assert!(leave < linking_at);
+
+        // With the loader's flag 2 the hidden reference is handled too, and
+        // loaded data that exists is kept.
+        e.mem.set_u32(loader + 0x244, 2);
+        let again = e.get(cell, TESObjectCELL::pLoadedData);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_4ce0, &args![cell]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, ALLOCATE).is_empty());
+        assert_eq!(e.get(cell, TESObjectCELL::pLoadedData), again);
+        let activating = list_items(&e, again.addr() + 0x54);
+        assert_eq!(activating.len(), 3);
+        assert!(activating.contains(&hidden.addr()));
+    }
+
+    #[test]
+    fn releasing_the_loaded_data_clears_what_it_holds() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        // Two multibound entries: one whose node's data has two owners left
+        // (cleared), one with three (kept), then entries without a key or a
+        // node.
+        let (data_a, data_b) = (wide_object(&mut e), wide_object(&mut e));
+        word(&mut e, data_a, 4, 2);
+        word(&mut e, data_b, 4, 3);
+        let (node_a, node_b, node_c) = (
+            wide_object(&mut e),
+            wide_object(&mut e),
+            wide_object(&mut e),
+        );
+        word(&mut e, node_a, MULTI_BOUND_DATA, data_a.addr());
+        word(&mut e, node_b, MULTI_BOUND_DATA, data_b.addr());
+        word(&mut e, node_c, MULTI_BOUND_DATA, data_a.addr());
+        let entries = std::rc::Rc::new(RefCell::new(VecDeque::from(vec![
+            (0xa0u32, node_a.addr()),
+            (0xb0, node_b.addr()),
+            (0, node_c.addr()),
+            (0xd0, 0),
+        ])));
+        returns(&mut e, MAP_FIRST_POSITION, 1);
+        let queue = entries.clone();
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            let (key, node) = queue.borrow_mut().pop_front().unwrap();
+            e.mem.set_u32(a[2], key);
+            e.mem.set_u32(a[3], node);
+            e.mem.set_u32(a[1], u32::from(!queue.borrow().is_empty()));
+            Ret::default()
+        });
+        e.register(WORD_AT_4, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        // The cell has a 3D node whose owner removes it.
+        let node_3d = wide_object(&mut e);
+        let owner = wide_object(&mut e);
+        e.mem.set_u32(loaded.addr(), node_3d.addr());
+        returns(&mut e, WORD_AT_18, owner.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5030, &args![cell]);
+        let log = take_log(&mut e);
+
+        assert_eq!(
+            calls_to(&log, LIST_CLEAR),
+            vec![vec![loaded.addr() + 0x4c], vec![loaded.addr() + 0x54]]
+        );
+        // Only the entry with two owners left is cleared.
+        assert_eq!(
+            calls_to(&log, REFERENCE_CLEAR_MULTI_BOUND),
+            vec![vec![0xa0]]
+        );
+        assert_eq!(calls_to(&log, SLOT_RELEASE).len(), 5);
+        // The 3D node: the detach work, then the owner's slot 0xe8.
+        assert_eq!(
+            calls_to(&log, CELL_DETACH_LOADED_3D),
+            vec![vec![cell.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, wide(0xe8)),
+            vec![vec![owner.addr(), node_3d.addr()]]
+        );
+        // The loaded data is destroyed and freed.
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![loaded.addr()]]);
+        assert_eq!(e.get(cell, TESObjectCELL::pLoadedData), Ptr::NULL);
+
+        // A cell without 3D node: no detach. Without loaded data: nothing.
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        returns(&mut e, MAP_FIRST_POSITION, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5030, &args![cell]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, CELL_DETACH_LOADED_3D).is_empty());
+        assert_eq!(calls_to(&log, DEALLOCATE), vec![vec![loaded.addr()]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5030, &args![cell]);
+        assert_eq!(take_log(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn the_loaded_data_destructor_frees_only_on_request() {
+        let mut e = wide_engine();
+        let block = e.mem.alloc(LoadedCellData::SIZE);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_51d0, &args![Ptr::<()>::new(block), 0u32]);
+        assert_eq!(result.u32(), block);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, DEALLOCATE).is_empty());
+        assert_eq!(calls_to(&log, SLOT_RELEASE), vec![vec![block]]);
+        e.call_log = Some(vec![]);
+        // Bit 0 of the flags frees the block, the other bits do not.
+        e.call(0x0054_51d0, &args![Ptr::<()>::new(block), 3u32]);
+        assert_eq!(calls_to(&take_log(&mut e), DEALLOCATE), vec![vec![block]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_51d0, &args![Ptr::<()>::new(block), 2u32]);
+        assert!(calls_to(&take_log(&mut e), DEALLOCATE).is_empty());
+    }
+
+    #[test]
+    fn the_loaded_data_members_are_destroyed_in_reverse_order() {
+        let mut e = wide_engine();
+        let block = e.mem.alloc(LoadedCellData::SIZE);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5200, &args![Ptr::<()>::new(block)]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            log.iter().skip(1).cloned().collect::<Vec<_>>(),
+            vec![
+                (LIST_DESTRUCT, vec![block + 0x5c]),
+                (LIST_DESTRUCT, vec![block + 0x54]),
+                (LIST_DESTRUCT, vec![block + 0x4c]),
+                (MAP_DESTRUCT_MULTI_BOUND, vec![block + 0x3c]),
+                (MAP_DESTRUCT_REFERENCE_NODE, vec![block + 0x2c]),
+                (MAP_DESTRUCT_FORM_REFERENCE, vec![block + 0x1c]),
+                (MAP_DESTRUCT_REFERENCE_NODE, vec![block + 0x0c]),
+                (LIST_DESTRUCT, vec![block + 0x04]),
+                (SLOT_RELEASE, vec![block]),
+            ]
+        );
+    }
+
+    #[test]
+    fn emittance_references_are_mapped_and_large_ones_listed() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let node = wide_object(&mut e);
+        let form = object(&mut e);
+        word(&mut e, reference, BASE_FORM, form.addr());
+        answer(&mut e, node, 0xc, 0x77);
+        returns(&mut e, FORM_GET_BOUND_SIZE, 0);
+        let bound = |e: &mut Engine, size: f64| {
+            e.register_double(FORM_GET_BOUND_SIZE, move |_, _| size.into_ret());
+        };
+
+        // No node: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0054_52c0, &args![cell, reference]);
+        assert_eq!(take_log(&mut e).len(), 2);
+        // A node: the map gets the value of the node's slot 0xc.
+        answer(&mut e, reference, 0x1d0, node.addr());
+        bound(&mut e, 3000.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_52c0, &args![cell, reference]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![loaded.addr() + 0x0c, reference.addr(), 0x77]]
+        );
+        // Not above 3000.0: not a large reference.
+        assert_eq!(list_items(&e, loaded.addr() + 4), Vec::<u32>::new());
+        // Above 3000.0: listed in LargeAnimatedRefs.
+        bound(&mut e, 3000.5);
+        e.call(0x0054_52c0, &args![cell, reference]);
+        assert_eq!(list_items(&e, loaded.addr() + 4), vec![reference.addr()]);
+        // A NaN bound size is not above it either.
+        e.mem.set_u32(loaded.addr() + 4, 0);
+        bound(&mut e, f64::NAN);
+        e.call(0x0054_52c0, &args![cell, reference]);
+        assert_eq!(list_items(&e, loaded.addr() + 4), Vec::<u32>::new());
+        // Without loaded data or a reference: nothing.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call(0x0054_52c0, &args![cell, reference]);
+        let (cell, _) = loaded_cell(&mut e, false);
+        e.call(0x0054_52c0, &args![cell, Ptr::<()>::NULL]);
+    }
+
+    #[test]
+    fn removing_an_emittance_reference_clears_the_map_and_the_list() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let removed = std::rc::Rc::new(RefCell::new(vec![]));
+        let seen = removed.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5360, &args![cell, reference]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), MAP_REMOVE_AT),
+            vec![vec![loaded.addr() + 0x0c, reference.addr()]]
+        );
+        assert_eq!(
+            *removed.borrow(),
+            vec![(loaded.addr() + 4, reference.addr())]
+        );
+        // Without loaded data nothing is called.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5360, &args![cell, reference]);
+        assert_eq!(take_log(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn lights_and_other_sources_are_registered_differently() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let node = wide_object(&mut e);
+        let form = object(&mut e);
+        word(&mut e, reference, BASE_FORM, form.addr());
+        answer(&mut e, node, 0xc, 0x77);
+
+        // No node: nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        assert_eq!(sequence(&take_log(&mut e)), vec![wide(0x1d0)]);
+
+        // A light (form type 0x1e): mapped in EmittanceLightRefMap.
+        answer(&mut e, reference, 0x1d0, node.addr());
+        e.mem.set_u8(form.addr() + 4, 0x1e);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![loaded.addr() + 0x2c, reference.addr(), 0x77]]
+        );
+        assert!(calls_to(&log, CLONE_MATERIAL_PROPERTY).is_empty());
+
+        // Another form: materials cloned, properties updated, and the
+        // source (virtual slot 0xc0 gives a value) mapped to the reference.
+        e.mem.set_u8(form.addr() + 4, 0x10);
+        let source = wide_object(&mut e);
+        answer(&mut e, source, 0xc0, 0x99);
+        word(&mut e, reference, EMITTANCE_SOURCE, source.addr());
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            sequence(&log)
+                .into_iter()
+                .filter(|a| {
+                    [
+                        CLONE_MATERIAL_PROPERTY,
+                        NODE_UPDATE_PROPERTIES,
+                        NODE_GET_PROPERTY,
+                        SHADER_APPLY_PROPERTY,
+                        MAP_SET_AT,
+                    ]
+                    .contains(a)
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                CLONE_MATERIAL_PROPERTY,
+                NODE_UPDATE_PROPERTIES,
+                NODE_GET_PROPERTY,
+                SHADER_APPLY_PROPERTY,
+                MAP_SET_AT
+            ]
+        );
+        assert_eq!(
+            calls_to(&log, CLONE_MATERIAL_PROPERTY),
+            vec![vec![node.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, NODE_GET_PROPERTY),
+            vec![vec![node.addr(), 2]]
+        );
+        assert_eq!(
+            calls_to(&log, SHADER_APPLY_PROPERTY),
+            vec![vec![node.addr(), 0x99]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT),
+            vec![vec![loaded.addr() + 0x1c, source.addr(), reference.addr()]]
+        );
+
+        // A source whose slot 0xc0 gives nothing: only the clone and the
+        // update happen.
+        answer(&mut e, source, 0xc0, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, CLONE_MATERIAL_PROPERTY).len(), 1);
+        assert!(calls_to(&log, MAP_SET_AT).is_empty());
+
+        // Without a source of its own, the singleton's word at +0x760.
+        word(&mut e, reference, EMITTANCE_SOURCE, 0);
+        let singleton = e.mem.alloc(0x768);
+        e.mem.set_u32(singleton + 0x760, source.addr());
+        e.set_global(EMITTANCE_FALLBACK_OWNER_POINTER, singleton);
+        answer(&mut e, source, 0xc0, 0x55);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), MAP_SET_AT),
+            vec![vec![loaded.addr() + 0x1c, source.addr(), reference.addr()]]
+        );
+        // With no source at all nothing is mapped.
+        e.mem.set_u32(singleton + 0x760, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_53b0, &args![cell, reference]);
+        assert!(calls_to(&take_log(&mut e), MAP_SET_AT).is_empty());
+    }
+
+    #[test]
+    fn a_word_at_0x760_is_read_from_the_object() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x768);
+        e.mem.set_u32(block + 0x760, 0xabcd);
+        assert_eq!(
+            e.call(0x0054_54d0, &args![Ptr::<()>::new(block)]).u32(),
+            0xabcd
+        );
+    }
+
+    #[test]
+    fn emittance_sources_are_removed_by_kind() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let form = object(&mut e);
+        word(&mut e, reference, BASE_FORM, form.addr());
+        // A light: removed from EmittanceLightRefMap by the reference.
+        e.mem.set_u8(form.addr() + 4, 0x1e);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_54f0, &args![cell, reference]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), MAP_REMOVE_AT),
+            vec![vec![loaded.addr() + 0x2c, reference.addr()]]
+        );
+        // Another form without a source: nothing removed.
+        e.mem.set_u8(form.addr() + 4, 0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_54f0, &args![cell, reference]);
+        assert!(calls_to(&take_log(&mut e), MAP_REMOVE_AT).is_empty());
+        // With a source: removed from EmittanceSourceRefMap by the source.
+        word(&mut e, reference, EMITTANCE_SOURCE, 0x4321);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_54f0, &args![cell, reference]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), MAP_REMOVE_AT),
+            vec![vec![loaded.addr() + 0x1c, 0x4321]]
+        );
+        // Without loaded data nothing is called.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_54f0, &args![cell, reference]);
+        assert_eq!(take_log(&mut e).len(), 1);
+    }
+
+    /// Checks an add / remove pair on the list at `offset` of the loaded data.
+    fn check_list_pair(add: u32, remove: u32, offset: u32) {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let (first, second) = (wide_object(&mut e), wide_object(&mut e));
+        e.call(add, &args![cell, first]);
+        e.call(add, &args![cell, second]);
+        assert_eq!(
+            list_items(&e, loaded.addr() + offset),
+            vec![second.addr(), first.addr()]
+        );
+        // Removal passes the address of a slot holding the reference.
+        let removed = std::rc::Rc::new(RefCell::new(vec![]));
+        let seen = removed.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.call(remove, &args![cell, first]);
+        assert_eq!(
+            *removed.borrow(),
+            vec![(loaded.addr() + offset, first.addr())]
+        );
+        // Without loaded data neither does anything.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(add, &args![cell, first]);
+        e.call(remove, &args![cell, first]);
+        assert_eq!(take_log(&mut e).len(), 2);
+    }
+
+    #[test]
+    fn scripted_references_are_added_to_their_list() {
+        check_list_pair(0x0054_5560, 0x0054_5590, 0x4c);
+    }
+
+    #[test]
+    fn water_references_are_added_to_their_list() {
+        check_list_pair(0x0054_56b0, 0x0054_56e0, 0x5c);
+    }
+
+    #[test]
+    fn activating_references_are_linked_after_the_last_one() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let (first, second, third) = (
+            wide_object(&mut e),
+            wide_object(&mut e),
+            wide_object(&mut e),
+        );
+        let inserted = std::rc::Rc::new(RefCell::new(vec![]));
+        let seen = inserted.clone();
+        e.register_double(LIST_INSERT_AFTER, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        // An empty list: pushed at the front, after the change flag call.
+        e.call_log = Some(vec![]);
+        e.call(0x0054_55c0, &args![cell, first]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            sequence(&log),
+            vec![LIST_IS_END, wide(0x48), LIST_PUSH_FRONT]
+        );
+        assert_eq!(
+            calls_to(&log, wide(0x48)),
+            vec![vec![first.addr(), 0x0400_0000]]
+        );
+        assert_eq!(list_items(&e, loaded.addr() + 0x54), vec![first.addr()]);
+        // A reference already in the list changes nothing.
+        e.call_log = Some(vec![]);
+        e.call(0x0054_55c0, &args![cell, first]);
+        assert_eq!(
+            sequence(&take_log(&mut e)),
+            vec![LIST_IS_END, LIST_ITEM_ADDRESS]
+        );
+        // Another one is inserted after the last node.
+        let head = loaded.addr() + 0x54;
+        e.mem.set_u32(head + 4, 0); // still a single node
+        e.call(0x0054_55c0, &args![cell, second]);
+        assert_eq!(*inserted.borrow(), vec![(head, second.addr())]);
+        // With two nodes it is the second node that is passed.
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, third.addr());
+        e.mem.set_u32(head + 4, node);
+        inserted.borrow_mut().clear();
+        e.call(0x0054_55c0, &args![cell, second]);
+        assert_eq!(*inserted.borrow(), vec![(node, second.addr())]);
+        // Without loaded data nothing happens.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_55c0, &args![cell, first]);
+        assert_eq!(take_log(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn removing_an_activating_reference_always_calls_slot_0x4c() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let removed = std::rc::Rc::new(RefCell::new(vec![]));
+        let seen = removed.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            seen.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5670, &args![cell, reference]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            *removed.borrow(),
+            vec![(loaded.addr() + 0x54, reference.addr())]
+        );
+        assert_eq!(
+            calls_to(&log, wide(0x4c)),
+            vec![vec![reference.addr(), 0x0400_0000]]
+        );
+        // Without loaded data only the virtual call is made.
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(0x0054_5670, &args![cell, reference]);
+        assert_eq!(sequence(&take_log(&mut e)), vec![wide(0x4c)]);
+    }
+
+    #[test]
+    fn the_water_list_is_returned_when_there_is_loaded_data() {
+        let mut e = engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        assert_eq!(
+            e.call(0x0054_5710, &args![cell]).u32(),
+            loaded.addr() + 0x5c
+        );
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        assert_eq!(e.call(0x0054_5710, &args![cell]).u32(), 0);
+    }
+
+    #[test]
+    fn marker_references_get_their_room_registered() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let (reference, room, data, primitive) = marker_reference(&mut e);
+        answer(&mut e, reference, 0x1f4, 0x6006);
+        let build = |e: &mut Engine, reference: Ptr| -> (Ptr, Vec<(u32, Vec<u32>)>) {
+            e.call_log = Some(vec![]);
+            let room = e.call(0x0054_5740, &args![cell, reference]).ptr::<()>();
+            (room, take_log(e))
+        };
+
+        // A room, its data and a primitive: the primitive takes the
+        // reference's transform, the room goes into the map, slot 0xbc runs.
+        let (result, log) = build(&mut e, reference);
+        assert_eq!(result, room);
+        assert_eq!(
+            calls_to(&log, wide(0xb8)),
+            vec![vec![primitive.addr(), 0x6006]]
+        );
+        assert!(calls_to(&log, REFERENCE_GET_ORIENTATION).is_empty());
+        assert_eq!(
+            calls_to(&log, MULTI_BOUND_SET_DATA),
+            vec![vec![room.addr(), data.addr()]]
+        );
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT_MULTI_BOUND),
+            vec![vec![loaded.addr() + 0x3c, reference.addr(), room.addr()]]
+        );
+        assert_eq!(calls_to(&log, wide(0xbc)), vec![vec![room.addr()]]);
+        assert_eq!(sequence(&log).last(), Some(&wide(0xbc)));
+
+        // A primitive of type 2 also gets the reference's orientation.
+        answer(&mut e, primitive, 0x8c, 2);
+        let (_, log) = build(&mut e, reference);
+        let orientation = calls_to(&log, REFERENCE_GET_ORIENTATION);
+        assert_eq!(orientation.len(), 1);
+        assert_eq!(orientation[0][0], reference.addr());
+        assert_eq!(
+            calls_to(&log, PRIMITIVE_SET_ROTATION),
+            vec![vec![primitive.addr(), orientation[0][1]]]
+        );
+        answer(&mut e, primitive, 0x8c, 0);
+
+        // No primitive in the data: built from the extra data's shape at the
+        // reference's three words, then stored in the data.
+        word(&mut e, data, PRIMITIVE, 0);
+        let shape = wide_object(&mut e);
+        let made = wide_object(&mut e);
+        word(&mut e, reference, SHAPE, shape.addr());
+        e.register(REFERENCE_ROTATION, |_, a| (a[0] + 0x20).into_ret());
+        for (i, value) in [11u32, 22, 33].into_iter().enumerate() {
+            word(&mut e, reference, 0x20 + 4 * i as u32, value);
+        }
+        let seen = std::rc::Rc::new(RefCell::new(vec![]));
+        let copy = seen.clone();
+        e.register_double(wide(0x14), move |e, a| {
+            *copy.borrow_mut() = (0..3).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            made.addr().into_ret()
+        });
+        let (_, log) = build(&mut e, reference);
+        assert_eq!(*seen.borrow(), vec![11, 22, 33]);
+        assert_eq!(
+            calls_to(&log, MULTI_BOUND_SET_PRIMITIVE),
+            vec![vec![data.addr(), made.addr()]]
+        );
+        assert_eq!(calls_to(&log, wide(0xb8)), vec![vec![made.addr(), 0x6006]]);
+        // No shape either: no primitive work, but the room is still
+        // returned and notified; nothing goes into the map.
+        word(&mut e, reference, SHAPE, 0);
+        let (result, log) = build(&mut e, reference);
+        assert_eq!(result, room);
+        assert!(calls_to(&log, MAP_SET_AT_MULTI_BOUND).is_empty());
+        assert_eq!(calls_to(&log, wide(0xbc)), vec![vec![room.addr()]]);
+    }
+
+    #[test]
+    fn marker_references_without_a_room_get_one_by_form() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let reference = wide_object(&mut e);
+        let room_from_reference = wide_object(&mut e);
+        let data = wide_object(&mut e);
+        let primitive = wide_object(&mut e);
+        word(&mut e, reference, IS_MARKER, 1);
+        word(&mut e, room_from_reference, MULTI_BOUND_DATA, data.addr());
+        word(&mut e, data, PRIMITIVE, primitive.addr());
+        word(&mut e, reference, MULTI_BOUND_DATA, data.addr());
+        let marker_form = 0x5151u32;
+        e.set_global(MARKER_FORM_SECOND, marker_form);
+
+        // The second marker form takes the reference's multibound room; none
+        // ends the function.
+        word(&mut e, reference, BASE_FORM, marker_form);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0054_5740, &args![cell, reference]).u32(), 0);
+        assert!(calls_to(&take_log(&mut e), MAP_SET_AT_MULTI_BOUND).is_empty());
+        word(
+            &mut e,
+            reference,
+            MULTI_BOUND_ROOM,
+            room_from_reference.addr(),
+        );
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_5740, &args![cell, reference]).ptr::<()>();
+        assert_eq!(result, room_from_reference);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, NODE_ALLOCATE).is_empty());
+        assert_eq!(
+            calls_to(&log, MAP_SET_AT_MULTI_BOUND),
+            vec![vec![
+                loaded.addr() + 0x3c,
+                reference.addr(),
+                room_from_reference.addr()
+            ]]
+        );
+
+        // Any other form gets a new node (0xb4 bytes) and the reference's
+        // multibound data.
+        word(&mut e, reference, BASE_FORM, 0x7777);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_5740, &args![cell, reference]).ptr::<()>();
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, NODE_ALLOCATE), vec![vec![0xb4]]);
+        let built = calls_to(&log, MULTI_BOUND_NODE_CONSTRUCT);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0][0], result.addr());
+        assert_eq!(
+            calls_to(&log, MULTI_BOUND_SET_DATA),
+            vec![
+                vec![result.addr(), data.addr()],
+                vec![result.addr(), data.addr()]
+            ]
+        );
+        assert_eq!(calls_to(&log, wide(0xbc)), vec![vec![result.addr()]]);
+    }
+
+    #[test]
+    fn marker_registration_needs_loaded_data_a_reference_and_a_marker_form() {
+        let mut e = wide_engine();
+        let (cell, _) = loaded_cell(&mut e, false);
+        let (reference, _, _, _) = marker_reference(&mut e);
+        // Not a marker.
+        word(&mut e, reference, IS_MARKER, 0);
+        assert_eq!(e.call(0x0054_5740, &args![cell, reference]).u32(), 0);
+        assert_eq!(e.call(0x0054_5960, &args![cell, reference]).u32(), 0);
+        // No reference.
+        assert_eq!(e.call(0x0054_5740, &args![cell, Ptr::<()>::NULL]).u32(), 0);
+        assert_eq!(e.call(0x0054_5960, &args![cell, Ptr::<()>::NULL]).u32(), 0);
+        // No loaded data.
+        word(&mut e, reference, IS_MARKER, 1);
+        e.set(cell, TESObjectCELL::pLoadedData, Ptr::NULL);
+        assert_eq!(e.call(0x0054_5740, &args![cell, reference]).u32(), 0);
+        assert_eq!(e.call(0x0054_5960, &args![cell, reference]).u32(), 0);
+    }
+
+    #[test]
+    fn the_node_of_a_marker_reference_is_cached_or_built() {
+        let mut e = wide_engine();
+        let (cell, loaded) = loaded_cell(&mut e, false);
+        let (reference, room, _, _) = marker_reference(&mut e);
+        let cached = wide_object(&mut e);
+
+        // In the map: returned as it is, nothing built.
+        word(&mut e, reference, CACHED_NODE, cached.addr());
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_5960, &args![cell, reference]);
+        assert_eq!(result.u32(), cached.addr());
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, MAP_GET_AT)[0][..2].to_vec(),
+            vec![loaded.addr() + 0x3c, reference.addr()]
+        );
+        assert!(calls_to(&log, MULTI_BOUND_SET_DATA).is_empty());
+        assert_eq!(calls_to(&log, SLOT_RELEASE).len(), 1);
+        assert_eq!(sequence(&log).last(), Some(&SLOT_RELEASE));
+
+        // Not in the map: built by `fn_00545740` and kept in the slot.
+        word(&mut e, reference, CACHED_NODE, 0);
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_5960, &args![cell, reference]);
+        assert_eq!(result.u32(), room.addr());
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, MAP_SET_AT_MULTI_BOUND).len(), 1);
+        assert_eq!(calls_to(&log, SLOT_ASSIGN)[0][1], room.addr());
+        assert_eq!(calls_to(&log, SLOT_RELEASE).len(), 1);
+
+        // The map answers but the slot is null: built as well.
+        e.register(MAP_GET_AT, |_, _| 1u32.into_ret());
+        e.call_log = Some(vec![]);
+        let result = e.call(0x0054_5960, &args![cell, reference]);
+        assert_eq!(result.u32(), room.addr());
+        assert_eq!(calls_to(&take_log(&mut e), SLOT_ASSIGN).len(), 1);
     }
 }
