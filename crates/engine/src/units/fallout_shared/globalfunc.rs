@@ -9,8 +9,12 @@
 //! `MakeQuadBox`, `MakeTriangle`, `MakeRectangle` and a one segment line
 //! builder), the small vector and matrix products, `NiMatrix3`'s inverse,
 //! the geometry snapping function `004b3e60` with its helper `004b4910`,
-//! and the `bhkMouseSpringAction` constructor chain. The next session
-//! continues at `004b5220`.
+//! and the `bhkMouseSpringAction` constructor chain. Session 2 covers the
+//! next 40, `004b5210` to `004b6810`: the rest of `bhkMouseSpringAction`,
+//! the collision object lookups, the collidable accessors, `NiASin`, the
+//! scene graph walks (scabbard and editor marker removal, morpher test,
+//! tinting, collision object counts) and the bound against frustum test.
+//! The next session continues at `004b68a0`.
 //!
 //! Conventions this file uses, so the next session finds them:
 //!
@@ -215,9 +219,8 @@ const BHK_MOUSE_SPRING_ACTION_VTABLE: u32 = 0x0101_ffcc;
 const BHK_ACTION_OBJECT_COUNT: u32 = 0x0126_8154;
 const BHK_UNARY_ACTION_OBJECT_COUNT: u32 = 0x0126_8118;
 const BHK_MOUSE_SPRING_ACTION_OBJECT_COUNT: u32 = 0x0126_8124;
-/// The `NiRTTI` objects the `GetRTTI` functions return. The one of
-/// `bhkMouseSpringAction` (`0126812c`) belongs to `004b5210`, which the
-/// next session translates.
+/// The `NiRTTI` objects the `GetRTTI` functions return.
+const BHK_MOUSE_SPRING_ACTION_RTTI: u32 = 0x0126_812c;
 const BHK_SERIALIZABLE_RTTI: u32 = 0x0126_8134;
 const BHK_ACTION_RTTI: u32 = 0x0126_8158;
 const BHK_UNARY_ACTION_RTTI: u32 = 0x0126_811c;
@@ -1563,6 +1566,966 @@ pub fn bhk_unary_action_scalar_deleting_destructor(e: &mut Engine, this: Ptr, fl
     this
 }
 
+// ---------------------------------------------------------------------
+// Second session: `bhkMouseSpringAction`'s last virtual functions, the
+// collision object lookups, the collidable accessors, the scene graph
+// walks and the world bound against frustum test.
+// ---------------------------------------------------------------------
+
+/// `bhkMouseSpringAction::~bhkMouseSpringAction` (Xbox PDB), `(this)`.
+const BHK_MOUSE_SPRING_ACTION_DESTRUCT: u32 = 0x00c8_6cb0;
+/// `bhkCollisionObject::GetbhkCollisionObject(object)` (Xbox PDB, cdecl):
+/// the collision object of a scene graph object, or 0.
+const GET_BHK_COLLISION_OBJECT: u32 = 0x0043_b610;
+/// `006fa820(this)`: what the code uses as the owner of a collision object
+/// (an object `004b5400` can measure).
+const COLLISION_OBJECT_OWNER: u32 = 0x006f_a820;
+/// `004ae750(this)` (the engine map names it
+/// `bhkCharacterProxy::operatorP`): a pointer to the body of an object, or
+/// 0. `004b4ea0(body)` (ST0) is the number `004b5400` reports for it.
+const BODY_OF_OBJECT: u32 = 0x004a_e750;
+const BODY_VALUE: u32 = 0x004b_4ea0;
+/// `004a7290(vector)` (ST0): the squared length of a vector.
+const VECTOR_LENGTH_SQUARED: u32 = 0x004a_7290;
+/// `NiASin`'s body for arguments strictly between `-1` and `1`
+/// (`004b5510(x)`, cdecl, result in ST0); the `-1.0` (`double`) it compares
+/// with; the `float` it returns at the limits (zero in the exe file, so the
+/// game writes it at run time).
+const NI_ASIN_BODY: u32 = 0x004b_5510;
+const NEGATIVE_ONE_DOUBLE: u32 = 0x0101_a6b0;
+const ASIN_LIMIT: u32 = 0x011c_627c;
+/// `0.5` (`float`): the fourth component of the tint colours.
+const TINT_ALPHA: u32 = 0x0101_6248;
+/// `0044ddc0(this)` reads the word at `this + 8`; `0043b540(this)` is
+/// `0044ddc0(this + 0x14)`.
+const WORD_AT_EIGHT: u32 = 0x0044_ddc0;
+const COLLIDABLE_WORD: u32 = 0x0043_b540;
+/// `008c71b0(this, value)` stores a word in a one word value (the engine
+/// map's name for it is wrong) and returns `this`; `004a3a20(this)` gives
+/// the high half of that word.
+const STORE_WORD: u32 = 0x008c_71b0;
+const HIGH_HALF: u32 = 0x004a_3a20;
+/// `004b4ec0(body)`: the value `00458620(out, value)` (cdecl) turns into a
+/// position; `00457620(finder, position)` finds the cell holding a
+/// position (the finder is the singleton at `011dea10`); `009611e0(cell)`
+/// reads the word at `cell + 0x18`.
+const BODY_POSITION_SOURCE: u32 = 0x004b_4ec0;
+const POSITION_FROM_VALUE: u32 = 0x0045_8620;
+const CELL_AT_POSITION: u32 = 0x0045_7620;
+const WORD_AT_0X18: u32 = 0x0096_11e0;
+const CELL_FINDER: u32 = 0x011d_ea10;
+/// `bhkWorldObject::GetAVObject(this, flags)` (Xbox PDB).
+const GET_AV_OBJECT: u32 = 0x00c8_5c80;
+/// The checked cast `00653270(class key, object)` (cdecl): the object when
+/// it is of that class, else 0.
+const DYNAMIC_CAST: u32 = 0x0065_3270;
+const CAST_CLASS_012043F8: u32 = 0x0120_43f8;
+const CAST_CLASS_01268168: u32 = 0x0126_8168;
+/// `bhkWorldObject::GetProperty(out, object, key)` (Xbox PDB, cdecl) with
+/// its key (`01267b70`); `00559450(this)` reads a smart pointer.
+const WORLD_OBJECT_GET_PROPERTY: u32 = 0x00c8_5ef0;
+const WORLD_OBJECT_PROPERTY_KEY: u32 = 0x0126_7b70;
+const SMART_POINTER_GET: u32 = 0x0055_9450;
+/// `0084e3a0(this)`.
+const FN_0084E3A0: u32 = 0x0084_e3a0;
+/// Names: `00413f40(object)` gives the object's name holder and
+/// `0043b1b0(holder)` the text (0 when there is none). `00404dc0(a, b)`
+/// (0 on a match) and `00408b20(a, b)` are string compares (cdecl),
+/// `00ec7ec0` the CRT `_strnicmp(a, b, count)`.
+const NAME_HOLDER: u32 = 0x0041_3f40;
+const NAME_TEXT: u32 = 0x0043_b1b0;
+const STRING_COMPARE: u32 = 0x0040_4dc0;
+const STRING_COMPARE_SECOND: u32 = 0x0040_8b20;
+const STRING_COMPARE_NO_CASE: u32 = 0x00ec_7ec0;
+/// `"Scb"`, `"FadeNode "`, `"EditorMarker"` and `"Arrow"`.
+const SCABBARD_NAME: u32 = 0x0101_fa04;
+const FADE_NODE_PREFIX: u32 = 0x0102_0300;
+const EDITOR_MARKER_NAME: u32 = 0x0102_030c;
+const ARROW_NAME: u32 = 0x0102_031c;
+/// `NiObjectNET::GetController(this, class key)` (Xbox PDB) with the two
+/// class keys used here, and `NiObjectNET::GetExtraData(this, name)`
+/// (Xbox PDB); `00448a80()` is the name asked for and `00448a60(this,
+/// 0x20)` a test of what was found.
+const GET_CONTROLLER: u32 = 0x00a5_c570;
+const MORPHER_CONTROLLER_CLASS: u32 = 0x011f_3728;
+const MARKER_CONTROLLER_CLASS: u32 = 0x011f_36ac;
+const GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+const EXTRA_DATA_NAME: u32 = 0x0044_8a80;
+const EXTRA_DATA_TEST: u32 = 0x0044_8a60;
+/// `0043b300(class key, object)` (cdecl, bool): whether the object is of
+/// that class.
+const IS_OF_CLASS: u32 = 0x0043_b300;
+const IS_OF_CLASS_KEY_012024E0: u32 = 0x0120_24e0;
+const IS_OF_CLASS_KEY_0126817C: u32 = 0x0126_817c;
+const IS_OF_CLASS_KEY_011F9140: u32 = 0x011f_9140;
+/// `00537bd0(controller)`.
+const FN_00537BD0: u32 = 0x0053_7bd0;
+/// What `RemoveEditorMarkers` remembers between calls: the root it found
+/// the marker data on and a value taken from its controller; and the four
+/// words `004b5f60` to `004b5f90` return.
+const MARKER_ROOT: u32 = 0x011c_6328;
+const MARKER_CONTROLLER: u32 = 0x011c_6324;
+const MARKER_WORD_A: u32 = 0x011c_61f0;
+const MARKER_WORD_B: u32 = 0x011c_61f4;
+const MARKER_WORD_C: u32 = 0x011c_61f8;
+const MARKER_WORD_D: u32 = 0x011c_61fc;
+/// The frustum test: the six planes (an `NiFrustumPlanes`, constructor
+/// `0045c620(this)`) at `011c6330`; the guard bit of the function local
+/// `static` is bit 0 of `011c6394`; the camera the planes were made for
+/// (`011c632c`); `00a755d0(planes, camera)` sets them; the stamp
+/// `00825c00(011f6394)` of the camera state they were made for is kept at
+/// `011890e0`; `004b4cf0(planes, index)` is a pointer to a plane's four
+/// floats.
+const FRUSTUM_PLANES: u32 = 0x011c_6330;
+const FRUSTUM_GUARD: u32 = 0x011c_6394;
+const FRUSTUM_CAMERA: u32 = 0x011c_632c;
+const FRUSTUM_PLANES_CONSTRUCT: u32 = 0x0045_c620;
+const FRUSTUM_PLANES_SET: u32 = 0x00a7_55d0;
+const CAMERA_STAMP_OWNER: u32 = 0x011f_6394;
+const CAMERA_STAMP: u32 = 0x0082_5c00;
+const FRUSTUM_STAMP: u32 = 0x0118_90e0;
+const FRUSTUM_PLANE: u32 = 0x004b_4cf0;
+/// `NiPoint3::Dot(this, other)` (Xbox PDB), result in ST0.
+const POINT3_DOT: u32 = 0x004b_6190;
+/// Tinting: the smart pointer on the stack (`00633c90(this, pointer)` sets
+/// it, `0066b0d0(this, pointer)` assigns, `0045cec0(this)` releases), the
+/// 0x74-byte effect data (`00b668b0(this)` constructs it), the constructor
+/// of a value of four floats `00414430(this, x, y, z, w)` (returns `this`),
+/// `NiAVObject::GetProperty(this, kind)` (Xbox PDB) and
+/// `BSShaderPPLightingProperty::SetTextureEffectData(this, data)`
+/// (Xbox PDB).
+const SMART_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+const SMART_POINTER_ASSIGN: u32 = 0x0066_b0d0;
+const SMART_POINTER_RELEASE: u32 = 0x0045_cec0;
+const EFFECT_DATA_CONSTRUCT: u32 = 0x00b6_68b0;
+const COLOUR_CONSTRUCT: u32 = 0x0041_4430;
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+const SET_TEXTURE_EFFECT_DATA: u32 = 0x00b6_75c0;
+const CAST_CLASS_011FA010: u32 = 0x011f_a010;
+/// The scene graph walker `00c68900(root, context, callback)` (cdecl).
+const WALK_SCENE_GRAPH: u32 = 0x00c6_8900;
+/// The walker callbacks of this file: `004b6740` counts, `004b68a0` finds.
+const COUNT_CALLBACK: u32 = 0x004b_6740;
+const FIND_CALLBACK: u32 = 0x004b_68a0;
+
+// Translated from 004b5210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkMouseSpringAction::GetRTTI` (Xbox PDB): the address of its `NiRTTI`.
+pub fn bhk_mouse_spring_action_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    BHK_MOUSE_SPRING_ACTION_RTTI
+}
+
+// Translated from 004b5220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual function of `bhkMouseSpringAction`'s vtable (`0101ffcc`) that
+/// returns the constant `0x40`; the slot is not named.
+pub fn fn_004b5220(_e: &mut Engine, _this: Ptr) -> u32 {
+    0x40
+}
+
+// Translated from 004b5230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkMouseSpringAction::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor (`00c86cb0`) and, when bit 0 of `flags` is set, frees the
+/// 0x10-byte object. Returns `this`.
+pub fn bhk_mouse_spring_action_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(BHK_MOUSE_SPRING_ACTION_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(SIZED_DELETE, &args![this, 0x10u32]);
+    }
+    this
+}
+
+/// The object's children container (virtual slot `0xc` of the scene graph
+/// object, 0 for a leaf).
+fn children_of(e: &mut Engine, object: Ptr) -> u32 {
+    e.vcall(object.addr(), 0xc, &[]).u32()
+}
+
+/// The text of the object's name (0 when it has none).
+fn name_of(e: &mut Engine, object: Ptr) -> u32 {
+    let holder = e.call(NAME_HOLDER, &args![object]).u32();
+    e.call(NAME_TEXT, &args![holder]).u32()
+}
+
+// Translated from 004b5260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FindFirstCollisionObject` (Xbox PDB): the object's own collision
+/// object, or else the first one found by searching its children in order
+/// (recursively); 0 when there is none.
+pub fn find_first_collision_object(e: &mut Engine, object: Ptr) -> u32 {
+    if object.is_null() {
+        return 0;
+    }
+    let own = e.call(GET_BHK_COLLISION_OBJECT, &args![object]).u32();
+    if own != 0 {
+        return own;
+    }
+    let children = children_of(e, object);
+    if children == 0 {
+        return 0;
+    }
+    let count = e.call(CHILD_COUNT, &args![children]).u32();
+    for i in 0..count {
+        let child = e.call(CHILD_AT, &args![children, i]).u32();
+        let found = find_first_collision_object(e, Ptr::new(child));
+        if found != 0 {
+            return found;
+        }
+    }
+    0
+}
+
+// Translated from 004b52f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Among the object's own collision object (as `006fa820` turns it into
+/// the object `004b5400` measures) and the ones found under its children
+/// (recursively, in order), the one with the greatest `004b5400` value; the
+/// first one found wins ties. 0 when there is none (or `object` is null).
+pub fn fn_004b52f0(e: &mut Engine, object: Ptr) -> u32 {
+    if object.is_null() {
+        return 0;
+    }
+    let mut best = 0u32;
+    let children = children_of(e, object);
+    if children != 0 {
+        let count = e.call(CHILD_COUNT, &args![children]).u32();
+        for i in 0..count {
+            let child = e.call(CHILD_AT, &args![children, i]).u32();
+            let found = fn_004b52f0(e, Ptr::new(child));
+            if found != 0 {
+                if best != 0 {
+                    let best_value = fn_004b5400(e, Ptr::new(best));
+                    let found_value = fn_004b5400(e, Ptr::new(found));
+                    // Not greater (or unordered): keep the one already held.
+                    if !(found_value > best_value) {
+                        continue;
+                    }
+                }
+                best = found;
+            }
+        }
+    }
+    let collision = e.call(GET_BHK_COLLISION_OBJECT, &args![object]).u32();
+    let own = if collision != 0 {
+        e.call(COLLISION_OBJECT_OWNER, &args![collision]).u32()
+    } else {
+        0
+    };
+    if best != 0 {
+        if own == 0 {
+            return best;
+        }
+        let own_value = fn_004b5400(e, Ptr::new(own));
+        let best_value = fn_004b5400(e, Ptr::new(best));
+        if best_value > own_value {
+            return best;
+        }
+    }
+    own
+}
+
+// Translated from 004b5400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number `004b4ea0` reports for the body `004ae750` finds on `this`
+/// (`0.0` when it has no body), as a `float`.
+pub fn fn_004b5400(e: &mut Engine, this: Ptr) -> f32 {
+    let body = e.call(BODY_OF_OBJECT, &args![this]).u32();
+    if body == 0 {
+        0.0
+    } else {
+        e.call(BODY_VALUE, &args![body]).f32()
+    }
+}
+
+// Translated from 004b5440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares the distance between two points with `radius` (see
+/// [`fn_004b5470`]): builds `this - other` in a local and returns that
+/// function's answer (the compiler leaves it in EAX; the decompiler calls
+/// the function `void`).
+pub fn fn_004b5440(e: &mut Engine, this: Ptr, other: Ptr, radius: f32) -> i32 {
+    e.with_stack(12, |e, difference| {
+        let vector = e
+            .call(POINT3_SUBTRACT, &args![this, difference, other])
+            .u32();
+        fn_004b5470(e, Ptr::new(vector), radius)
+    })
+}
+
+// Translated from 004b5470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares the squared length of a vector (`004a7290`, stored as a
+/// `float`) with `radius * radius` (also a `float`): `-1` when the radius
+/// is the larger, `1` when the vector is, `0` when they are equal or
+/// unordered.
+pub fn fn_004b5470(e: &mut Engine, vector: Ptr, radius: f32) -> i32 {
+    let length_squared = e.call(VECTOR_LENGTH_SQUARED, &args![vector]).f32();
+    let radius_squared = (radius as f64 * radius as f64) as f32;
+    if radius_squared > length_squared {
+        -1
+    } else if radius_squared < length_squared {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 004b54c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiASin` (Xbox PDB): the arc sine; at or below `-1` (or unordered) the
+/// negated limit constant (`011c627c`), at or above `1` the limit, in
+/// between `004b5510`. The result is in ST0.
+pub fn ni_a_sin(e: &mut Engine, x: f32) -> f64 {
+    let negative_one: f64 = e.global(NEGATIVE_ONE_DOUBLE);
+    let one: f64 = e.global(ONE);
+    let limit: f32 = e.global(ASIN_LIMIT);
+    if !(x as f64 > negative_one) {
+        -(limit as f64)
+    } else if (x as f64) < one {
+        e.call(NI_ASIN_BODY, &args![x]).f64()
+    } else {
+        limit as f64
+    }
+}
+
+// Translated from 004b5820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetAVObjectForCollidable` (Xbox PDB): the scene graph object that a
+/// Havok collidable belongs to, or 0.
+///
+/// The collidable is read as a body (`004b59f0`, handle type 1) or as a
+/// phantom (`004b5950`, handle type 2). For a body: the object `004b5a20`
+/// derives from it (`0044ddc0` of that); when there is none and the high
+/// half of the collidable's word (`0043b540`) is 1, the cell holding the
+/// body's position and that cell's word at `+0x18` (`009611e0`). For a
+/// phantom: `004b5ad0` and then `004b5a80` give the candidates.
+pub fn get_av_object_for_collidable(e: &mut Engine, collidable: Ptr) -> u32 {
+    if collidable.is_null() {
+        return 0;
+    }
+    let mut result = 0u32;
+    let body = fn_004b59f0(e, collidable);
+    let phantom = if body == 0 {
+        fn_004b5950(e, collidable)
+    } else {
+        0
+    };
+    if body != 0 {
+        let from_body = fn_004b5a20(e, Ptr::new(body));
+        if from_body != 0 {
+            return e.call(WORD_AT_EIGHT, &args![from_body]).u32();
+        }
+        let word = e.call(COLLIDABLE_WORD, &args![collidable]).u32();
+        let half = e.with_stack(4, |e, value| {
+            let value = e.call(STORE_WORD, &args![value, word]).u32();
+            e.call(HIGH_HALF, &args![value]).u32()
+        });
+        if half == 1 {
+            e.with_stack(12, |e, position| {
+                e.call(POINT3_EMPTY_CONSTRUCTOR, &args![position]);
+                let source = e.call(BODY_POSITION_SOURCE, &args![body]).u32();
+                e.call(POSITION_FROM_VALUE, &args![position, source]);
+                let finder: u32 = e.global(CELL_FINDER);
+                let cell = e.call(CELL_AT_POSITION, &args![finder, position]).u32();
+                if cell != 0 && e.call(WORD_AT_0X18, &args![cell]).u32() != 0 {
+                    result = e.call(WORD_AT_0X18, &args![cell]).u32();
+                }
+            });
+        }
+        return result;
+    }
+    let candidate = fn_004b5ad0(e, Ptr::new(phantom));
+    if candidate != 0 {
+        result = e.call(WORD_AT_EIGHT, &args![candidate]).u32();
+    }
+    if result == 0 {
+        let world_object = fn_004b5a80(e, Ptr::new(phantom));
+        if world_object != 0 {
+            result = e.call(GET_AV_OBJECT, &args![world_object, 0u32]).u32();
+        }
+    }
+    result
+}
+
+// Translated from 004b5950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The collidable's owner when its broad phase handle type is 2
+/// (`004b5980`), else 0.
+pub fn fn_004b5950(e: &mut Engine, collidable: Ptr) -> u32 {
+    if fn_004b5980(e, collidable) == 2 {
+        fn_004b59c0(e, collidable)
+    } else {
+        0
+    }
+}
+
+// Translated from 004b5980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The broad phase handle type of a collidable: [`fn_004b59a0`] of the
+/// handle at `+0x14`.
+pub fn fn_004b5980(e: &mut Engine, this: Ptr) -> i32 {
+    fn_004b59a0(e, Ptr::new(this.addr().wrapping_add(0x14)))
+}
+
+// Translated from 004b59a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The signed byte at `+4` of a broad phase handle (its type).
+pub fn fn_004b59a0(e: &mut Engine, this: Ptr) -> i32 {
+    e.mem.i8(this.addr().wrapping_add(4)) as i32
+}
+
+// Translated from 004b59c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_004b59d0`] on its argument.
+pub fn fn_004b59c0(e: &mut Engine, collidable: Ptr) -> u32 {
+    fn_004b59d0(e, collidable)
+}
+
+// Translated from 004b59d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The owner of a collidable: `this` plus the signed byte at `+0x10`.
+pub fn fn_004b59d0(e: &mut Engine, this: Ptr) -> u32 {
+    let offset = e.mem.i8(this.addr().wrapping_add(0x10)) as i32;
+    this.addr().wrapping_add(offset as u32)
+}
+
+// Translated from 004b59f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The collidable's owner when its broad phase handle type is 1
+/// (`004b5980`), else 0.
+pub fn fn_004b59f0(e: &mut Engine, collidable: Ptr) -> u32 {
+    if fn_004b5980(e, collidable) == 1 {
+        fn_004b59c0(e, collidable)
+    } else {
+        0
+    }
+}
+
+// Translated from 004b5a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The checked cast (`00653270`, class `012043f8`) of what [`fn_004b5a50`]
+/// finds for the object.
+pub fn fn_004b5a20(e: &mut Engine, object: Ptr) -> u32 {
+    let property = fn_004b5a50(e, object);
+    e.call(DYNAMIC_CAST, &args![CAST_CLASS_012043F8, property])
+        .u32()
+}
+
+// Translated from 004b5a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorldObject::GetProperty` (Xbox PDB) with the key `01267b70`,
+/// through `00559450` (the smart pointer read).
+pub fn fn_004b5a50(e: &mut Engine, object: Ptr) -> u32 {
+    e.with_stack(8, |e, out| {
+        let property = e
+            .call(
+                WORLD_OBJECT_GET_PROPERTY,
+                &args![out, object, WORLD_OBJECT_PROPERTY_KEY],
+            )
+            .u32();
+        e.call(SMART_POINTER_GET, &args![property]).u32()
+    })
+}
+
+// Translated from 004b5a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_004b5aa0`] on its argument.
+pub fn fn_004b5a80(e: &mut Engine, object: Ptr) -> u32 {
+    fn_004b5aa0(e, object)
+}
+
+// Translated from 004b5aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `0084e3a0(object)`, or 0 for a null object.
+pub fn fn_004b5aa0(e: &mut Engine, object: Ptr) -> u32 {
+    if object.is_null() {
+        0
+    } else {
+        e.call(FN_0084E3A0, &args![object]).u32()
+    }
+}
+
+// Translated from 004b5ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like [`fn_004b5a20`] with the cast class `01268168`.
+pub fn fn_004b5ad0(e: &mut Engine, object: Ptr) -> u32 {
+    let property = fn_004b5a50(e, object);
+    e.call(DYNAMIC_CAST, &args![CAST_CLASS_01268168, property])
+        .u32()
+}
+
+// Translated from 004b5b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Element `index` of the array of 0x30-byte elements at `this + 0x34`.
+pub fn fn_004b5b00(e: &mut Engine, this: Ptr, index: u16) -> u32 {
+    let base = e.mem.u32(this.addr().wrapping_add(0x34));
+    (index as u32).wrapping_mul(0x30).wrapping_add(base)
+}
+
+// Translated from 004b5b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RemoveScabard` (Xbox PDB): looks through the children of the node for
+/// one named `"Scb"` (removed through virtual slot `0xf0` of the node,
+/// given its index) or, failing that, a name starting with `"FadeNode "`,
+/// into whose children it descends, returning that search's answer. `true`
+/// when one was removed.
+pub fn remove_scabard(e: &mut Engine, node: Ptr) -> bool {
+    if node.is_null() {
+        return false;
+    }
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![node]).u32() {
+        let child = e.call(CHILD_AT, &args![node, index]).u32();
+        if child != 0 {
+            let name = name_of(e, Ptr::new(child));
+            if name != 0 {
+                if e.call(STRING_COMPARE, &args![name, SCABBARD_NAME]).u32() == 0 {
+                    e.vcall(node.addr(), 0xf0, &args![index]);
+                    return true;
+                }
+                if e.call(STRING_COMPARE_NO_CASE, &args![name, FADE_NODE_PREFIX, 9u32])
+                    .u32()
+                    == 0
+                {
+                    let below = children_of(e, Ptr::new(child));
+                    return remove_scabard(e, Ptr::new(below));
+                }
+            }
+        }
+        index += 1;
+    }
+    false
+}
+
+// Translated from 004b5bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HasMorpherController` (Xbox PDB): whether the object has a controller
+/// of the morpher class, or (through its children, recursively) any object
+/// below it does.
+pub fn has_morpher_controller(e: &mut Engine, object: Ptr) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    if e.call(GET_CONTROLLER, &args![object, MORPHER_CONTROLLER_CLASS])
+        .u32()
+        != 0
+    {
+        return true;
+    }
+    let children = children_of(e, object);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if has_morpher_controller(e, Ptr::new(child)) {
+                return true;
+            }
+            index += 1;
+        }
+    }
+    false
+}
+
+// Translated from 004b5c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the object is of the class `012024e0` (`0043b300`) or any object
+/// below it is (through its children, recursively).
+pub fn fn_004b5c80(e: &mut Engine, object: Ptr) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    if e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_012024E0, object])
+        .bool()
+    {
+        return true;
+    }
+    let children = children_of(e, object);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if fn_004b5c80(e, Ptr::new(child)) {
+                return true;
+            }
+            index += 1;
+        }
+    }
+    false
+}
+
+/// Forgets the remembered marker root (and its controller value) when it
+/// is `node`.
+fn forget_marker_root(e: &mut Engine, node: Ptr) {
+    let root: u32 = e.global(MARKER_ROOT);
+    if root == node.addr() {
+        e.set_global(MARKER_ROOT, 0u32);
+        e.set_global(MARKER_CONTROLLER, 0u32);
+    }
+}
+
+// Translated from 004b5d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RemoveEditorMarkers` (Xbox PDB): while no root is remembered
+/// (`011c6328`), takes the node as the root when it has the marker extra
+/// data (`GetExtraData`, then `004b5fa0`), also remembering a value from
+/// its controller (`011c6324`). With a root: a node named `"EditorMarker"`
+/// sends the four words of [`fn_004b5f60`] to [`fn_004b5f90`] to the
+/// remembered controller value (virtual slot `0x90`), asks the object at
+/// `+0x18` (`009611e0`; virtual slot `0xe8`) to remove the node and returns
+/// `true`; otherwise it searches the node's children (their own `+0xc`
+/// containers) the same way. The remembered root is dropped when the call
+/// that set it returns.
+pub fn remove_editor_markers(e: &mut Engine, node: Ptr) -> bool {
+    let mut found = false;
+    if node.is_null() {
+        return found;
+    }
+    if e.global::<u32>(MARKER_ROOT) == 0 {
+        let name = e.call(EXTRA_DATA_NAME, &[]).u32();
+        let extra = e.call(GET_EXTRA_DATA, &args![node, name]).u32();
+        if extra != 0 && fn_004b5fa0(e, Ptr::new(extra)) {
+            e.set_global(MARKER_ROOT, node.addr());
+            let controller = e
+                .call(GET_CONTROLLER, &args![node, MARKER_CONTROLLER_CLASS])
+                .u32();
+            if controller != 0 {
+                let value = e.call(FN_00537BD0, &args![controller]).u32();
+                e.set_global(MARKER_CONTROLLER, value);
+            }
+        }
+    }
+    if e.global::<u32>(MARKER_ROOT) == 0 {
+        return found;
+    }
+    if name_of(e, node) != 0 {
+        let name = name_of(e, node);
+        if e.call(STRING_COMPARE, &args![name, EDITOR_MARKER_NAME])
+            .u32()
+            == 0
+        {
+            if e.global::<u32>(MARKER_CONTROLLER) != 0 {
+                // The game pushes a 0 word for each of these four getters
+                // and never removes it: they take no arguments.
+                let getters: [fn(&mut Engine) -> u32; 4] =
+                    [fn_004b5f60, fn_004b5f70, fn_004b5f80, fn_004b5f90];
+                for getter in getters {
+                    let value = getter(e);
+                    let controller: u32 = e.global(MARKER_CONTROLLER);
+                    e.vcall(controller, 0x90, &args![value]);
+                }
+            }
+            if e.call(WORD_AT_0X18, &args![node]).u32() != 0 {
+                let parent = e.call(WORD_AT_0X18, &args![node]).u32();
+                e.vcall(parent, 0xe8, &args![node]);
+            }
+            forget_marker_root(e, node);
+            return true;
+        }
+    }
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![node]).u32() {
+        let child = e.call(CHILD_AT, &args![node, index]).u32();
+        if child != 0 {
+            let below = children_of(e, Ptr::new(child));
+            if below != 0 {
+                found = remove_editor_markers(e, Ptr::new(below));
+                if found {
+                    forget_marker_root(e, node);
+                    return found;
+                }
+            }
+        }
+        index += 1;
+    }
+    forget_marker_root(e, node);
+    found
+}
+
+// Translated from 004b5f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c61f0`.
+pub fn fn_004b5f60(e: &mut Engine) -> u32 {
+    e.global(MARKER_WORD_A)
+}
+
+// Translated from 004b5f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c61f4`.
+pub fn fn_004b5f70(e: &mut Engine) -> u32 {
+    e.global(MARKER_WORD_B)
+}
+
+// Translated from 004b5f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c61f8`.
+pub fn fn_004b5f80(e: &mut Engine) -> u32 {
+    e.global(MARKER_WORD_C)
+}
+
+// Translated from 004b5f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011c61fc`.
+pub fn fn_004b5f90(e: &mut Engine) -> u32 {
+    e.global(MARKER_WORD_D)
+}
+
+// Translated from 004b5fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `00448a60(this, 0x20)` is non-zero.
+pub fn fn_004b5fa0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(EXTRA_DATA_TEST, &args![this, 0x20u32]).u32() != 0
+}
+
+// Translated from 004b5fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the world bound of `object` is not entirely outside the frustum
+/// of `camera`: [`fn_004b5ff0`] on the bound `NiAVObject::GetWorldBound`
+/// gives; `false` for a null object.
+pub fn fn_004b5fc0(e: &mut Engine, object: Ptr, camera: Ptr) -> bool {
+    if object.is_null() {
+        return false;
+    }
+    let bound = e.call(GET_WORLD_BOUND, &args![object]).u32();
+    fn_004b5ff0(e, Ptr::new(bound), camera)
+}
+
+// Translated from 004b5ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the bound (centre and radius, four floats) is not entirely
+/// outside any of the six frustum planes of `camera`. The planes are kept
+/// in a global `NiFrustumPlanes` (constructed on the first call) and are
+/// recomputed (`00a755d0`) when the camera differs from the one they were
+/// made for or the camera state stamp (`00825c00`) changed. `false` for a
+/// null camera. The compiler's exception frame is not translated.
+pub fn fn_004b5ff0(e: &mut Engine, bound: Ptr, camera: Ptr) -> bool {
+    if camera.is_null() {
+        return false;
+    }
+    let guard: u32 = e.global(FRUSTUM_GUARD);
+    if guard & 1 == 0 {
+        e.set_global(FRUSTUM_GUARD, guard | 1);
+        e.call(FRUSTUM_PLANES_CONSTRUCT, &args![FRUSTUM_PLANES]);
+    }
+    let mut current = false;
+    if e.global::<u32>(FRUSTUM_CAMERA) == camera.addr() {
+        let stamp = e.call(CAMERA_STAMP, &args![CAMERA_STAMP_OWNER]).u32();
+        current = e.global::<u32>(FRUSTUM_STAMP) == stamp;
+    }
+    if !current {
+        e.call(FRUSTUM_PLANES_SET, &args![FRUSTUM_PLANES, camera]);
+        let stamp = e.call(CAMERA_STAMP, &args![CAMERA_STAMP_OWNER]).u32();
+        e.set_global(FRUSTUM_STAMP, stamp);
+        e.set_global(FRUSTUM_CAMERA, camera.addr());
+    }
+    for index in 0..6u32 {
+        let plane = e.call(FRUSTUM_PLANE, &args![FRUSTUM_PLANES, index]).u32();
+        let side = e.with_stack(16, |e, copy| {
+            for word in 0..4 {
+                let value = e.mem.u32(plane + 4 * word);
+                e.mem.set_u32(copy.addr() + 4 * word, value);
+            }
+            ni_bound_which_side(e, bound, copy)
+        });
+        if side == 2 {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 004b6100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBound::WhichSide` (Xbox PDB): the signed distance of the bound's
+/// centre from the plane ([`fn_004b6160`]) against the bound's radius
+/// (`+0xc`): `2` when the centre is at least the radius behind the plane,
+/// `1` when it is at least the radius in front, else `0` (also for NaN).
+pub fn ni_bound_which_side(e: &mut Engine, this: Ptr, plane: Ptr) -> i32 {
+    let distance = fn_004b6160(e, plane, this);
+    let radius = e.mem.f32(this.addr().wrapping_add(0xc));
+    if distance <= -radius {
+        2
+    } else if distance >= radius {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 004b6160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The signed distance of a point from a plane: `NiPoint3::Dot` of the
+/// plane's normal (`this`) with the point (`004b6190`) minus the plane's
+/// constant (`+0xc`), stored as a `float`.
+pub fn fn_004b6160(e: &mut Engine, this: Ptr, point: Ptr) -> f32 {
+    let dot = e.call(POINT3_DOT, &args![this, point]).f64();
+    let constant = e.mem.f32(this.addr().wrapping_add(0xc));
+    (dot - constant as f64) as f32
+}
+
+// Translated from 004b6360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TintScenegraph` (Xbox PDB): gives every lighting property found in the
+/// scene graph below `node` (`NiAVObject::GetProperty(3)`, then the checked
+/// cast to class `011fa010`) one shared texture effect data object, set
+/// with `SetTextureEffectData`. When `effect_data` is null the object is
+/// made first: a 0x74-byte object whose four colours (at `+0x2c`, `+0x3c`,
+/// `+0xc` and `+0x1c`, in that order) are all `colour` (three floats) with
+/// alpha `0.5`, and whose words `+0x5c`, `+0x60`, `+0x64` and `+0x68` are 9,
+/// 10, 1 and 4. The object is held by a smart pointer that lives for the
+/// call (the children are passed the same object). The compiler's
+/// exception frame is not translated.
+pub fn tint_scenegraph(e: &mut Engine, node: Ptr, colour: Ptr, effect_data: Ptr) {
+    e.with_stack(4, |e, holder| {
+        e.call(SMART_POINTER_CONSTRUCT, &args![holder, effect_data]);
+        let mut effect_data = effect_data;
+        if effect_data.is_null() {
+            let memory = e.call(NI_OPERATOR_NEW, &args![0x74u32]).u32();
+            let object = if memory != 0 {
+                e.call(EFFECT_DATA_CONSTRUCT, &args![memory]).u32()
+            } else {
+                0
+            };
+            e.call(SMART_POINTER_ASSIGN, &args![holder, object]);
+            effect_data = Ptr::new(e.call(SMART_POINTER_GET, &args![holder]).u32());
+            for offset in [0x2cu32, 0x3c, 0x0c, 0x1c] {
+                let x = e.mem.f32(colour.addr());
+                let y = e.mem.f32(colour.addr().wrapping_add(4));
+                let z = e.mem.f32(colour.addr().wrapping_add(8));
+                let alpha: f32 = e.global(TINT_ALPHA);
+                e.with_stack(16, |e, temporary| {
+                    let made = e
+                        .call(COLOUR_CONSTRUCT, &args![temporary, x, y, z, alpha])
+                        .u32();
+                    let target = e.call(SMART_POINTER_GET, &args![holder]).u32();
+                    for word in 0..4 {
+                        let value = e.mem.u32(made + 4 * word);
+                        e.mem.set_u32(target + offset + 4 * word, value);
+                    }
+                });
+            }
+            for (offset, value) in [(0x5cu32, 9u32), (0x60, 10), (0x64, 1), (0x68, 4)] {
+                let target = e.call(SMART_POINTER_GET, &args![holder]).u32();
+                e.mem.set_u32(target + offset, value);
+            }
+        }
+        let property = e.call(GET_PROPERTY, &args![node, 3u32]).u32();
+        let lighting = e
+            .call(DYNAMIC_CAST, &args![CAST_CLASS_011FA010, property])
+            .u32();
+        if lighting != 0 {
+            let data = e.call(SMART_POINTER_GET, &args![holder]).u32();
+            e.call(SET_TEXTURE_EFFECT_DATA, &args![lighting, data]);
+        }
+        let children = children_of(e, node);
+        if children != 0 {
+            let mut index = 0u32;
+            while index < e.call(CHILD_COUNT, &args![children]).u32() {
+                if e.call(CHILD_AT, &args![children, index]).u32() != 0 {
+                    let child = e.call(CHILD_AT, &args![children, index]).u32();
+                    tint_scenegraph(e, Ptr::new(child), colour, effect_data);
+                }
+                index += 1;
+            }
+        }
+        e.call(SMART_POINTER_RELEASE, &args![holder]);
+    });
+}
+
+// Translated from 004b6630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `UnTintScenegraph` (Xbox PDB): clears the texture effect data of every
+/// lighting property below `node` (the reverse of [`tint_scenegraph`]).
+pub fn un_tint_scenegraph(e: &mut Engine, node: Ptr) {
+    let property = e.call(GET_PROPERTY, &args![node, 3u32]).u32();
+    let lighting = e
+        .call(DYNAMIC_CAST, &args![CAST_CLASS_011FA010, property])
+        .u32();
+    if lighting != 0 {
+        e.call(SET_TEXTURE_EFFECT_DATA, &args![lighting, 0u32]);
+    }
+    let children = children_of(e, node);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            if e.call(CHILD_AT, &args![children, index]).u32() != 0 {
+                let child = e.call(CHILD_AT, &args![children, index]).u32();
+                un_tint_scenegraph(e, Ptr::new(child));
+            }
+            index += 1;
+        }
+    }
+}
+
+/// The flags word of the context the scene graph walker hands its callbacks
+/// (a 0x1c-byte block of which the callers fill `+4` with a byte 1, `+8`
+/// with `0x12`, the result at `+0xc` (the count) or `+0x14` (the index
+/// found), the value looked for at `+0x10`, and these flags at `+0x18`):
+/// bits 0, 1 and 2 are the three flag arguments of the callers.
+fn walk_flags(first: bool, second: bool, third: bool) -> u32 {
+    u32::from(first) | (u32::from(second) << 1) | (u32::from(third) << 2)
+}
+
+// Translated from 004b66d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetCollisionObjectCountInSceneGraph` (Xbox PDB): walks the scene graph
+/// from `root` with `00c68900` and the callback [`fn_004b6740`], over a
+/// context whose flags are the three arguments (bits 0, 1, 2), and returns
+/// the count the callback built up.
+pub fn get_collision_object_count_in_scene_graph(
+    e: &mut Engine,
+    root: Ptr,
+    first_flag: bool,
+    second_flag: bool,
+    third_flag: bool,
+) -> u32 {
+    e.with_stack(0x1c, |e, context| {
+        e.mem.set_u8(context.addr() + 4, 1);
+        e.mem.set_u32(context.addr() + 8, 0x12);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.mem.set_u32(
+            context.addr() + 0x18,
+            walk_flags(first_flag, second_flag, third_flag),
+        );
+        e.call(WALK_SCENE_GRAPH, &args![root, context, COUNT_CALLBACK]);
+        e.mem.u32(context.addr() + 0xc)
+    })
+}
+
+// Translated from 004b6740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`get_collision_object_count_in_scene_graph`]:
+/// adds one to the count (`context + 0xc`) unless the flags say to skip
+/// the object. Flag bit 0 skips an object of the class `0126817c`; flag
+/// bit 1 skips one whose `+8` word is of the class `011f9140` and one
+/// whose `+8` word has a name that does not differ from `"Arrow"`.
+pub fn fn_004b6740(e: &mut Engine, object: Ptr, context: Ptr) {
+    let flags = e.mem.u32(context.addr() + 0x18);
+    if flags & 1 != 0
+        && e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_0126817C, object])
+            .bool()
+    {
+        return;
+    }
+    if e.mem.u32(context.addr() + 0x18) & 2 != 0 {
+        let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+        if e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_011F9140, inner])
+            .bool()
+        {
+            return;
+        }
+    }
+    if e.mem.u32(context.addr() + 0x18) & 2 != 0 && e.call(WORD_AT_EIGHT, &args![object]).u32() != 0
+    {
+        let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+        if name_of(e, Ptr::new(inner)) != 0 {
+            let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+            let name = name_of(e, Ptr::new(inner));
+            if e.call(STRING_COMPARE_SECOND, &args![name, ARROW_NAME])
+                .u32()
+                == 0
+            {
+                return;
+            }
+        }
+    }
+    let count = e.mem.u32(context.addr() + 0xc);
+    e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+}
+
+// Translated from 004b6810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like [`get_collision_object_count_in_scene_graph`] but with the callback
+/// `004b68a0` and the extra word `value` in the context (`+0x10`): returns
+/// the word at `context + 0x14`, which starts at `-1` (the callback stores
+/// the result there).
+pub fn fn_004b6810(
+    e: &mut Engine,
+    root: Ptr,
+    value: u32,
+    first_flag: bool,
+    second_flag: bool,
+    third_flag: bool,
+) -> i32 {
+    e.with_stack(0x1c, |e, context| {
+        e.mem.set_u8(context.addr() + 4, 1);
+        e.mem.set_u32(context.addr() + 8, 0x12);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.mem.set_u32(context.addr() + 0x10, value);
+        e.mem.set_u32(context.addr() + 0x14, 0xffff_ffff);
+        e.mem.set_u32(
+            context.addr() + 0x18,
+            walk_flags(first_flag, second_flag, third_flag),
+        );
+        e.call(WALK_SCENE_GRAPH, &args![root, context, FIND_CALLBACK]);
+        e.mem.i32(context.addr() + 0x14)
+    })
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1633,6 +2596,52 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x004b51a0, bhk_action_scalar_deleting_destructor(Ptr, u32) -> Ptr),
         entry!(0x004b51d0, bhk_unary_action_get_rtti(Ptr) -> u32),
         entry!(0x004b51e0, bhk_unary_action_scalar_deleting_destructor(Ptr, u32) -> Ptr),
+        entry!(0x004b5210, bhk_mouse_spring_action_get_rtti(Ptr) -> u32),
+        entry!(0x004b5220, fn_004b5220(Ptr) -> u32),
+        entry!(
+            0x004b5230,
+            bhk_mouse_spring_action_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x004b5260, find_first_collision_object(Ptr) -> u32),
+        entry!(0x004b52f0, fn_004b52f0(Ptr) -> u32),
+        entry!(0x004b5400, fn_004b5400(Ptr) -> f32),
+        entry!(0x004b5440, fn_004b5440(Ptr, Ptr, f32) -> i32),
+        entry!(0x004b5470, fn_004b5470(Ptr, f32) -> i32),
+        entry!(0x004b54c0, ni_a_sin(f32) -> f64),
+        entry!(0x004b5820, get_av_object_for_collidable(Ptr) -> u32),
+        entry!(0x004b5950, fn_004b5950(Ptr) -> u32),
+        entry!(0x004b5980, fn_004b5980(Ptr) -> i32),
+        entry!(0x004b59a0, fn_004b59a0(Ptr) -> i32),
+        entry!(0x004b59c0, fn_004b59c0(Ptr) -> u32),
+        entry!(0x004b59d0, fn_004b59d0(Ptr) -> u32),
+        entry!(0x004b59f0, fn_004b59f0(Ptr) -> u32),
+        entry!(0x004b5a20, fn_004b5a20(Ptr) -> u32),
+        entry!(0x004b5a50, fn_004b5a50(Ptr) -> u32),
+        entry!(0x004b5a80, fn_004b5a80(Ptr) -> u32),
+        entry!(0x004b5aa0, fn_004b5aa0(Ptr) -> u32),
+        entry!(0x004b5ad0, fn_004b5ad0(Ptr) -> u32),
+        entry!(0x004b5b00, fn_004b5b00(Ptr, u16) -> u32),
+        entry!(0x004b5b20, remove_scabard(Ptr) -> bool),
+        entry!(0x004b5bf0, has_morpher_controller(Ptr) -> bool),
+        entry!(0x004b5c80, fn_004b5c80(Ptr) -> bool),
+        entry!(0x004b5d10, remove_editor_markers(Ptr) -> bool),
+        entry!(0x004b5f60, fn_004b5f60() -> u32),
+        entry!(0x004b5f70, fn_004b5f70() -> u32),
+        entry!(0x004b5f80, fn_004b5f80() -> u32),
+        entry!(0x004b5f90, fn_004b5f90() -> u32),
+        entry!(0x004b5fa0, fn_004b5fa0(Ptr) -> bool),
+        entry!(0x004b5fc0, fn_004b5fc0(Ptr, Ptr) -> bool),
+        entry!(0x004b5ff0, fn_004b5ff0(Ptr, Ptr) -> bool),
+        entry!(0x004b6100, ni_bound_which_side(Ptr, Ptr) -> i32),
+        entry!(0x004b6160, fn_004b6160(Ptr, Ptr) -> f32),
+        entry!(0x004b6360, tint_scenegraph(Ptr, Ptr, Ptr)),
+        entry!(0x004b6630, un_tint_scenegraph(Ptr)),
+        entry!(
+            0x004b66d0,
+            get_collision_object_count_in_scene_graph(Ptr, bool, bool, bool) -> u32
+        ),
+        entry!(0x004b6740, fn_004b6740(Ptr, Ptr)),
+        entry!(0x004b6810, fn_004b6810(Ptr, u32, bool, bool, bool) -> i32),
     ]
 }
 
@@ -1673,6 +2682,8 @@ mod tests {
             0x0101_2000,
             0x0101_6000,
             0x0101_7000,
+            0x0101_a000,
+            0x011d_e000,
             0x0101_f000,
             0x0118_7000,
             0x0118_8000,
@@ -1696,6 +2707,7 @@ mod tests {
         e.set_global(SINGULAR_DETERMINANT, 9.99999974752427e-7f64);
         e.set_global(SNAP_TOLERANCE, 0.001f32);
         e.set_global(DEBUG_OFFSET, 10.0f32);
+        e.set_global(NEGATIVE_ONE_DOUBLE, -1.0f64);
         e
     }
 
@@ -3148,5 +4160,1211 @@ mod tests {
             let log = take_log(&mut e);
             assert_eq!(calls_to(&log, SIZED_DELETE), vec![args![this, 0x10u32]]);
         }
+    }
+
+    // ---- second session: collision objects, scene graph walks ----
+
+    type Shared<T> = Rc<RefCell<T>>;
+    /// A virtual call a test node recorded: the slot offset and the words.
+    type VirtualCall = (u32, Vec<u32>);
+    /// A walker call: the root, the callback and the context's seven words.
+    type WalkCall = (u32, u32, Vec<u32>);
+
+    /// A test scene graph. Every node is a block of 0x60 bytes with the
+    /// vtable `GRAPH_TABLE`; its fields are whatever the doubles of the test
+    /// read: `+0x10` collision object, `+0x14` value, `+0x18` parent,
+    /// `+0x20` name text, `+0x24` morpher or marker controller, `+0x28` and
+    /// `+0x2c` class flags, `+0x2c` extra data (in the marker test),
+    /// `+0x30` property. Virtual slot `0xc` gives the node itself when it
+    /// has children (the node is its own container) and 0 otherwise; the
+    /// slots `0x90`, `0xe8` and `0xf0` record their calls.
+    struct Graph {
+        children: Rc<RefCell<BTreeMap<u32, Vec<u32>>>>,
+        virtuals: Shared<Vec<VirtualCall>>,
+    }
+
+    const GRAPH_TABLE: u32 = 0x0300_4000;
+
+    fn graph(e: &mut Engine) -> Graph {
+        let children: Rc<RefCell<BTreeMap<u32, Vec<u32>>>> = Rc::default();
+        let virtuals: Shared<Vec<VirtualCall>> = Rc::default();
+        {
+            let children = children.clone();
+            e.register_double(CHILD_COUNT, move |_, a| {
+                ret_u(children.borrow().get(&a[0]).map_or(0, |c| c.len() as u32))
+            });
+        }
+        {
+            let children = children.clone();
+            e.register_double(CHILD_AT, move |_, a| {
+                ret_u(children.borrow()[&a[0]][a[1] as usize])
+            });
+        }
+        let mut slots = vec![0u32; 61];
+        slots[3] = 0x0300_5000;
+        for (slot, double) in [
+            (36u32, 0x0300_5010u32),
+            (58, 0x0300_5020),
+            (60, 0x0300_5030),
+        ] {
+            slots[slot as usize] = double;
+            let virtuals = virtuals.clone();
+            e.register_double(double, move |_, a| {
+                virtuals.borrow_mut().push((slot * 4, a.to_vec()));
+                Ret::default()
+            });
+        }
+        {
+            let children = children.clone();
+            e.register_double(0x0300_5000, move |_, a| {
+                ret_u(if children.borrow().contains_key(&a[0]) {
+                    a[0]
+                } else {
+                    0
+                })
+            });
+        }
+        e.put_vtable(GRAPH_TABLE, &slots);
+        Graph { children, virtuals }
+    }
+
+    fn graph_node(e: &mut Engine, g: &Graph, kids: &[u32]) -> u32 {
+        let node = e.mem.alloc(0x60);
+        e.mem.set_u32(node, GRAPH_TABLE);
+        if !kids.is_empty() {
+            g.children.borrow_mut().insert(node, kids.to_vec());
+        }
+        node
+    }
+
+    fn constant_text(e: &Engine, address: u32) -> String {
+        match address {
+            SCABBARD_NAME => "Scb".into(),
+            FADE_NODE_PREFIX => "FadeNode ".into(),
+            EDITOR_MARKER_NAME => "EditorMarker".into(),
+            ARROW_NAME => "Arrow".into(),
+            _ => (0..)
+                .map(|i| e.mem.u8(address + i))
+                .take_while(|&b| b != 0)
+                .map(char::from)
+                .collect(),
+        }
+    }
+
+    /// Names: the holder is the object, its text pointer sits at `+0x20`.
+    fn name_doubles(e: &mut Engine) {
+        e.register(NAME_HOLDER, |_, a| ret_u(a[0]));
+        e.register(NAME_TEXT, |e, a| ret_u(e.mem.u32(a[0] + 0x20)));
+        fn differ(e: &mut Engine, a: &[u32]) -> Ret {
+            ret_u((constant_text(e, a[0]) != constant_text(e, a[1])) as u32)
+        }
+        e.register(STRING_COMPARE, differ);
+        e.register(STRING_COMPARE_SECOND, differ);
+        e.register(STRING_COMPARE_NO_CASE, |e, a| {
+            let n = a[2] as usize;
+            let x: String = constant_text(e, a[0])
+                .to_lowercase()
+                .chars()
+                .take(n)
+                .collect();
+            let y: String = constant_text(e, a[1])
+                .to_lowercase()
+                .chars()
+                .take(n)
+                .collect();
+            ret_u((x != y) as u32)
+        });
+    }
+
+    fn set_name(e: &mut Engine, node: u32, name: &str) {
+        let t = text(e, name);
+        e.mem.set_u32(node + 0x20, t.addr());
+    }
+
+    fn collision_engine() -> (Engine, Graph) {
+        let mut e = engine();
+        let g = graph(&mut e);
+        e.register(GET_BHK_COLLISION_OBJECT, |e, a| {
+            ret_u(e.mem.u32(a[0] + 0x10))
+        });
+        (e, g)
+    }
+
+    #[test]
+    fn mouse_spring_action_get_rtti_returns_its_class_object() {
+        let mut e = bhk_engine();
+        assert_eq!(
+            e.call(0x004b_5210, &args![Ptr::<()>::NULL]).u32(),
+            0x0126_812c
+        );
+    }
+
+    #[test]
+    fn the_constant_virtual_function_returns_0x40() {
+        let mut e = bhk_engine();
+        assert_eq!(e.call(0x004b_5220, &args![Ptr::<()>::NULL]).u32(), 0x40);
+    }
+
+    #[test]
+    fn the_mouse_spring_action_destructor_frees_only_when_asked() {
+        let mut e = bhk_engine();
+        e.register(BHK_MOUSE_SPRING_ACTION_DESTRUCT, |_, _| Ret::default());
+        let this = p(0x4000_0000);
+        e.call_log = Some(vec![]);
+        let r = e.call(0x004b_5230, &args![this, 0u32]);
+        assert_eq!(r.u32(), this.addr());
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, BHK_MOUSE_SPRING_ACTION_DESTRUCT),
+            vec![args![this]]
+        );
+        assert!(calls_to(&log, SIZED_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_5230, &args![this, 3u32]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, SIZED_DELETE), vec![args![this, 0x10u32]]);
+    }
+
+    #[test]
+    fn find_first_collision_object_takes_the_own_one_or_the_first_below() {
+        let (mut e, g) = collision_engine();
+        let a = graph_node(&mut e, &g, &[]);
+        let b = graph_node(&mut e, &g, &[]);
+        let c = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(b + 0x10, 0xb0);
+        e.mem.set_u32(c + 0x10, 0xc0);
+        let inner = graph_node(&mut e, &g, &[a]);
+        let root = graph_node(&mut e, &g, &[inner, b, c]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_5260, &args![p(root)]).u32(), 0xb0);
+        // The root, the inner node, `a`, then `b`: `c` is never asked.
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, GET_BHK_COLLISION_OBJECT),
+            vec![args![root], args![inner], args![a], args![b]]
+        );
+        // An own collision object wins without looking at the children.
+        e.mem.set_u32(root + 0x10, 0x99);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_5260, &args![p(root)]).u32(), 0x99);
+        assert_eq!(calls_to(&take_log(&mut e), CHILD_COUNT).len(), 0);
+        // Nothing found, a leaf, and a null object.
+        assert_eq!(e.call(0x004b_5260, &args![p(a)]).u32(), 0);
+        assert_eq!(e.call(0x004b_5260, &args![inner]).u32(), 0);
+        assert_eq!(e.call(0x004b_5260, &args![Ptr::<()>::NULL]).u32(), 0);
+    }
+
+    fn measured_engine() -> (Engine, Graph) {
+        let (mut e, g) = collision_engine();
+        e.register(COLLISION_OBJECT_OWNER, |_, a| ret_u(a[0]));
+        e.register(BODY_OF_OBJECT, |_, a| ret_u(a[0]));
+        e.register(BODY_VALUE, |e, a| ret_f(e.mem.f32(a[0] + 0x14) as f64));
+        (e, g)
+    }
+
+    /// A collision object whose measured value is `value`.
+    fn measured(e: &mut Engine, value: f32) -> u32 {
+        let object = e.mem.alloc(0x20);
+        e.mem.set_f32(object + 0x14, value);
+        object
+    }
+
+    #[test]
+    fn fn_004b52f0_picks_the_greatest_value_and_the_first_on_ties() {
+        let (mut e, g) = measured_engine();
+        let (v1, v3, v2, v2b) = (
+            measured(&mut e, 1.0),
+            measured(&mut e, 3.0),
+            measured(&mut e, 2.0),
+            measured(&mut e, 2.0),
+        );
+        let leaf = |e: &mut Engine, g: &Graph, collision: u32| {
+            let node = graph_node(e, g, &[]);
+            e.mem.set_u32(node + 0x10, collision);
+            node
+        };
+        let (n1, n3, n2, n2b) = (
+            leaf(&mut e, &g, v1),
+            leaf(&mut e, &g, v3),
+            leaf(&mut e, &g, v2),
+            leaf(&mut e, &g, v2b),
+        );
+        let root = graph_node(&mut e, &g, &[n1, n3, n2]);
+        assert_eq!(e.call(0x004b_52f0, &args![p(root)]).u32(), v3);
+        // Equal values: the first stays.
+        let ties = graph_node(&mut e, &g, &[n2, n2b]);
+        assert_eq!(e.call(0x004b_52f0, &args![p(ties)]).u32(), v2);
+        // The node's own collision object against the best below: it wins
+        // only when the best below is not greater.
+        let own_high = measured(&mut e, 5.0);
+        let own_equal = measured(&mut e, 3.0);
+        let own_low = measured(&mut e, 2.0);
+        let parent = graph_node(&mut e, &g, &[n3]);
+        e.mem.set_u32(parent + 0x10, own_high);
+        assert_eq!(e.call(0x004b_52f0, &args![p(parent)]).u32(), own_high);
+        e.mem.set_u32(parent + 0x10, own_equal);
+        assert_eq!(e.call(0x004b_52f0, &args![p(parent)]).u32(), own_equal);
+        e.mem.set_u32(parent + 0x10, own_low);
+        assert_eq!(e.call(0x004b_52f0, &args![p(parent)]).u32(), v3);
+        // No own object: the one below. Nothing at all, and null: 0.
+        e.mem.set_u32(parent + 0x10, 0);
+        assert_eq!(e.call(0x004b_52f0, &args![p(parent)]).u32(), v3);
+        let bare = graph_node(&mut e, &g, &[]);
+        assert_eq!(e.call(0x004b_52f0, &args![p(bare)]).u32(), 0);
+        assert_eq!(e.call(0x004b_52f0, &args![Ptr::<()>::NULL]).u32(), 0);
+        // The own object alone.
+        e.mem.set_u32(bare + 0x10, own_low);
+        assert_eq!(e.call(0x004b_52f0, &args![p(bare)]).u32(), own_low);
+    }
+
+    #[test]
+    fn fn_004b5400_reports_the_value_of_the_body_or_zero() {
+        let mut e = engine();
+        e.register(BODY_OF_OBJECT, |e, a| ret_u(e.mem.u32(a[0] + 0x10)));
+        e.register(BODY_VALUE, |e, a| ret_f(e.mem.f32(a[0] + 0x14) as f64));
+        let object = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x004b_5400, &args![p(object)]).f32(), 0.0);
+        let body = measured(&mut e, 12.5);
+        e.mem.set_u32(object + 0x10, body);
+        assert_eq!(e.call(0x004b_5400, &args![p(object)]).f32(), 12.5);
+    }
+
+    fn length_squared_double(e: &mut Engine) {
+        point_doubles(e);
+        e.register(VECTOR_LENGTH_SQUARED, |e, a| {
+            let sum: f32 = (0..3).map(|i| e.mem.f32(a[0] + 4 * i).powi(2)).sum();
+            ret_f(sum as f64)
+        });
+    }
+
+    #[test]
+    fn fn_004b5470_compares_the_squared_length_with_the_squared_radius() {
+        let mut e = engine();
+        length_squared_double(&mut e);
+        let vector = p(floats(&mut e, &[3.0, 4.0, 0.0]));
+        // Squared length 25.
+        assert_eq!(e.call(0x004b_5470, &args![vector, 6.0f32]).i32(), -1);
+        assert_eq!(e.call(0x004b_5470, &args![vector, 4.0f32]).i32(), 1);
+        assert_eq!(e.call(0x004b_5470, &args![vector, 5.0f32]).i32(), 0);
+        assert_eq!(e.call(0x004b_5470, &args![vector, -5.0f32]).i32(), 0);
+        assert_eq!(e.call(0x004b_5470, &args![vector, f32::NAN]).i32(), 0);
+    }
+
+    #[test]
+    fn fn_004b5440_builds_the_difference_and_compares_it() {
+        let mut e = engine();
+        length_squared_double(&mut e);
+        let a = p(floats(&mut e, &[4.0, 6.0, 1.0]));
+        let b = p(floats(&mut e, &[1.0, 2.0, 1.0]));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_5440, &args![a, b, 6.0f32]).i32(), -1);
+        let log = take_log(&mut e);
+        let subtract = calls_to(&log, POINT3_SUBTRACT);
+        assert_eq!(subtract.len(), 1);
+        assert_eq!((subtract[0][0], subtract[0][2]), (a.addr(), b.addr()));
+        assert_eq!(e.call(0x004b_5440, &args![a, b, 4.0f32]).i32(), 1);
+        assert_eq!(e.call(0x004b_5440, &args![a, b, 5.0f32]).i32(), 0);
+    }
+
+    #[test]
+    fn ni_a_sin_clamps_at_the_limits_and_calls_the_body_between() {
+        let mut e = engine();
+        e.set_global(NEGATIVE_ONE_DOUBLE, -1.0f64);
+        e.set_global(ASIN_LIMIT, 1.5707964f32);
+        e.register_double(NI_ASIN_BODY, |_, a| {
+            assert_eq!(f32::from_bits(a[0]), 0.5);
+            ret_f(0.25)
+        });
+        let limit = 1.5707964f32 as f64;
+        for (x, want) in [
+            (-2.0f32, -limit),
+            (-1.0, -limit),
+            (f32::NAN, -limit),
+            (1.0, limit),
+            (3.0, limit),
+            (0.5, 0.25),
+        ] {
+            e.call_log = Some(vec![]);
+            let r = e.call(0x004b_54c0, &args![x]).f64();
+            assert_eq!(r, want, "x = {x}");
+            let body_calls = calls_to(&take_log(&mut e), NI_ASIN_BODY).len();
+            assert_eq!(body_calls, (want == 0.25) as usize);
+        }
+    }
+
+    /// A block of 0x200 bytes where the collidable sits at `+0x100` with the
+    /// given handle type and an owner at `-0x80` from it; returns the
+    /// collidable and the owner.
+    fn collidable(e: &mut Engine, handle_type: u8) -> (u32, u32) {
+        let base = e.mem.alloc(0x200);
+        let collidable = base + 0x100;
+        e.mem.set_u8(collidable + 0x18, handle_type);
+        e.mem.set_u8(collidable + 0x10, (-0x80i8) as u8);
+        (collidable, base + 0x80)
+    }
+
+    fn property_doubles(e: &mut Engine) {
+        e.register(WORLD_OBJECT_GET_PROPERTY, |_, a| ret_u(a[1]));
+        e.register(SMART_POINTER_GET, |_, a| ret_u(a[0]));
+        e.register(DYNAMIC_CAST, |e, a| {
+            if a[1] == 0 {
+                return ret_u(0);
+            }
+            match a[0] {
+                CAST_CLASS_012043F8 => ret_u(e.mem.u32(a[1] + 0x30)),
+                CAST_CLASS_01268168 => ret_u(e.mem.u32(a[1] + 0x34)),
+                other => panic!("cast to {other:08x}"),
+            }
+        });
+        e.register(WORD_AT_EIGHT, |e, a| ret_u(e.mem.u32(a[0] + 8)));
+        e.register(WORD_AT_0X18, |e, a| ret_u(e.mem.u32(a[0] + 0x18)));
+    }
+
+    #[test]
+    fn get_av_object_for_collidable_follows_bodies_and_phantoms() {
+        let mut e = engine();
+        property_doubles(&mut e);
+        e.register(COLLIDABLE_WORD, |e, a| ret_u(e.mem.u32(a[0] + 0x20)));
+        e.register(STORE_WORD, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret_u(a[0])
+        });
+        e.register(HIGH_HALF, |e, a| ret_u(e.mem.u32(a[0]) >> 16));
+        e.register(POINT3_EMPTY_CONSTRUCTOR, |_, a| ret_u(a[0]));
+        e.register(BODY_POSITION_SOURCE, |_, a| ret_u(a[0] + 1));
+        e.register(POSITION_FROM_VALUE, |_, _| Ret::default());
+        e.register(FN_0084E3A0, |e, a| ret_u(e.mem.u32(a[0] + 0x38)));
+        e.register(GET_AV_OBJECT, |_, a| {
+            assert_eq!(a[1], 0);
+            ret_u(a[0] + 0x1000)
+        });
+        e.set_global(CELL_FINDER, 0x1234u32);
+        e.register_double(CELL_AT_POSITION, |e, a| {
+            assert_eq!(a[0], 0x1234);
+            // The cell is found from the position the body gives.
+            ret_u(e.mem.u32(a[1]))
+        });
+        assert_eq!(
+            e.call(0x004b_5820, &args![Ptr::<()>::NULL]).u32(),
+            0,
+            "null"
+        );
+
+        // A body whose cast object has the scene graph object at +8.
+        let (body_collidable, body) = collidable(&mut e, 1);
+        let cast = e.mem.alloc(0x20);
+        e.mem.set_u32(cast + 8, 0xab0);
+        e.mem.set_u32(body + 0x30, cast);
+        assert_eq!(e.call(0x004b_5820, &args![p(body_collidable)]).u32(), 0xab0);
+
+        // Without a cast object: the collidable's word decides whether the
+        // cell holding the position is used.
+        e.mem.set_u32(body + 0x30, 0);
+        let cell = e.mem.alloc(0x40);
+        e.mem.set_u32(cell + 0x18, 0xce11);
+        // The position block is the stack local `00457620` is given; the
+        // double stores the cell there before asking.
+        e.register_double(POSITION_FROM_VALUE, move |e, a| {
+            e.mem.set_u32(a[0], cell);
+            Ret::default()
+        });
+        e.mem.set_u32(body_collidable + 0x20, 0x0001_0000);
+        assert_eq!(
+            e.call(0x004b_5820, &args![p(body_collidable)]).u32(),
+            0xce11
+        );
+        e.mem.set_u32(body_collidable + 0x20, 0x0002_0000);
+        assert_eq!(e.call(0x004b_5820, &args![p(body_collidable)]).u32(), 0);
+        e.mem.set_u32(body_collidable + 0x20, 0x0001_0000);
+        e.mem.set_u32(cell + 0x18, 0);
+        assert_eq!(e.call(0x004b_5820, &args![p(body_collidable)]).u32(), 0);
+
+        // A phantom: the cast object, else the world object's AV object.
+        let (phantom_collidable, phantom) = collidable(&mut e, 2);
+        let cast = e.mem.alloc(0x20);
+        e.mem.set_u32(cast + 8, 0xcd0);
+        e.mem.set_u32(phantom + 0x34, cast);
+        assert_eq!(
+            e.call(0x004b_5820, &args![p(phantom_collidable)]).u32(),
+            0xcd0
+        );
+        e.mem.set_u32(phantom + 0x34, 0);
+        assert_eq!(e.call(0x004b_5820, &args![p(phantom_collidable)]).u32(), 0);
+        e.mem.set_u32(phantom + 0x38, 0x7000);
+        assert_eq!(
+            e.call(0x004b_5820, &args![p(phantom_collidable)]).u32(),
+            0x7000 + 0x1000
+        );
+
+        // Neither a body nor a phantom.
+        let (other, _) = collidable(&mut e, 0);
+        assert_eq!(e.call(0x004b_5820, &args![p(other)]).u32(), 0);
+    }
+
+    #[test]
+    fn the_collidable_accessors_read_the_handle_type_and_the_owner() {
+        let mut e = engine();
+        let (body, owner) = collidable(&mut e, 1);
+        let (phantom, phantom_owner) = collidable(&mut e, 2);
+        // The handle type at +0x18 (= +0x14 and +4), signed.
+        assert_eq!(e.call(0x004b_5980, &args![p(body)]).i32(), 1);
+        assert_eq!(e.call(0x004b_5980, &args![p(phantom)]).i32(), 2);
+        e.mem.set_u8(body + 0x18, 0xff);
+        assert_eq!(e.call(0x004b_5980, &args![p(body)]).i32(), -1);
+        e.mem.set_u8(body + 0x18, 1);
+        // The handle itself (+0x14): the byte at +4.
+        assert_eq!(e.call(0x004b_59a0, &args![p(body + 0x14)]).i32(), 1);
+        // The owner: this plus the signed byte at +0x10.
+        assert_eq!(e.call(0x004b_59d0, &args![p(body)]).u32(), owner);
+        assert_eq!(e.call(0x004b_59c0, &args![p(phantom)]).u32(), phantom_owner);
+        e.mem.set_u8(body + 0x10, 0x10);
+        assert_eq!(e.call(0x004b_59d0, &args![p(body)]).u32(), body + 0x10);
+        // The two typed owners.
+        assert_eq!(e.call(0x004b_59f0, &args![p(phantom)]).u32(), 0);
+        assert_eq!(e.call(0x004b_5950, &args![p(body)]).u32(), 0);
+        assert_eq!(e.call(0x004b_59f0, &args![p(body)]).u32(), body + 0x10);
+        assert_eq!(e.call(0x004b_5950, &args![p(phantom)]).u32(), phantom_owner);
+    }
+
+    #[test]
+    fn fn_004b5950_returns_the_owner_only_for_type_2() {
+        let mut e = engine();
+        let (phantom, owner) = collidable(&mut e, 2);
+        let (body, _) = collidable(&mut e, 1);
+        assert_eq!(e.call(0x004b_5950, &args![p(phantom)]).u32(), owner);
+        assert_eq!(e.call(0x004b_5950, &args![p(body)]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_004b5980_reads_the_type_through_the_handle() {
+        let mut e = engine();
+        let (c, _) = collidable(&mut e, 5);
+        assert_eq!(e.call(0x004b_5980, &args![p(c)]).i32(), 5);
+    }
+
+    #[test]
+    fn fn_004b59a0_reads_a_signed_byte_at_plus_4() {
+        let mut e = engine();
+        let handle = e.mem.alloc(8);
+        e.mem.set_u8(handle + 4, 0x80);
+        assert_eq!(e.call(0x004b_59a0, &args![p(handle)]).i32(), -128);
+    }
+
+    #[test]
+    fn fn_004b59c0_is_the_owner_of_its_argument() {
+        let mut e = engine();
+        let (c, owner) = collidable(&mut e, 1);
+        assert_eq!(e.call(0x004b_59c0, &args![p(c)]).u32(), owner);
+    }
+
+    #[test]
+    fn fn_004b59d0_adds_the_signed_byte_at_plus_0x10() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x40) + 0x20;
+        e.mem.set_u8(block + 0x10, 0xf0);
+        assert_eq!(e.call(0x004b_59d0, &args![p(block)]).u32(), block - 0x10);
+        e.mem.set_u8(block + 0x10, 0x08);
+        assert_eq!(e.call(0x004b_59d0, &args![p(block)]).u32(), block + 8);
+    }
+
+    #[test]
+    fn fn_004b59f0_returns_the_owner_only_for_type_1() {
+        let mut e = engine();
+        let (body, owner) = collidable(&mut e, 1);
+        let (phantom, _) = collidable(&mut e, 2);
+        assert_eq!(e.call(0x004b_59f0, &args![p(body)]).u32(), owner);
+        assert_eq!(e.call(0x004b_59f0, &args![p(phantom)]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_004b5a50_reads_the_world_object_property_through_the_smart_pointer() {
+        let mut e = engine();
+        let out_seen = Rc::new(RefCell::new(0u32));
+        {
+            let out_seen = out_seen.clone();
+            e.register_double(WORLD_OBJECT_GET_PROPERTY, move |_, a| {
+                assert_eq!((a[1], a[2]), (0x5000, WORLD_OBJECT_PROPERTY_KEY));
+                *out_seen.borrow_mut() = a[0];
+                ret_u(0x6000)
+            });
+        }
+        e.register(SMART_POINTER_GET, |_, a| ret_u(a[0] + 4));
+        assert_eq!(e.call(0x004b_5a50, &args![0x5000u32]).u32(), 0x6004);
+        // The out block is a local, not null.
+        assert_ne!(*out_seen.borrow(), 0);
+    }
+
+    #[test]
+    fn fn_004b5a20_casts_the_property_to_the_first_class() {
+        let mut e = engine();
+        property_doubles(&mut e);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + 0x30, 0x77);
+        e.mem.set_u32(object + 0x34, 0x88);
+        assert_eq!(e.call(0x004b_5a20, &args![p(object)]).u32(), 0x77);
+    }
+
+    #[test]
+    fn fn_004b5ad0_casts_the_property_to_the_second_class() {
+        let mut e = engine();
+        property_doubles(&mut e);
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object + 0x30, 0x77);
+        e.mem.set_u32(object + 0x34, 0x88);
+        assert_eq!(e.call(0x004b_5ad0, &args![p(object)]).u32(), 0x88);
+    }
+
+    #[test]
+    fn fn_004b5a80_forwards_to_fn_004b5aa0() {
+        let mut e = engine();
+        e.register(FN_0084E3A0, |_, a| ret_u(a[0] * 2));
+        assert_eq!(e.call(0x004b_5a80, &args![0x21u32]).u32(), 0x42);
+        assert_eq!(e.call(0x004b_5a80, &args![0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_004b5aa0_skips_null_objects() {
+        let mut e = engine();
+        e.register(FN_0084E3A0, |_, a| ret_u(a[0] + 1));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_5aa0, &args![0u32]).u32(), 0);
+        assert!(calls_to(&take_log(&mut e), FN_0084E3A0).is_empty());
+        assert_eq!(e.call(0x004b_5aa0, &args![0x40u32]).u32(), 0x41);
+    }
+
+    #[test]
+    fn fn_004b5b00_indexes_0x30_byte_elements() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x34, 0x1000);
+        assert_eq!(e.call(0x004b_5b00, &args![p(this), 0u32]).u32(), 0x1000);
+        assert_eq!(e.call(0x004b_5b00, &args![p(this), 3u32]).u32(), 0x1090);
+        // Only the low half-word of the stack word is the index.
+        assert_eq!(
+            e.call(0x004b_5b00, &args![p(this), 0x0001_0002u32]).u32(),
+            0x1000 + 0x60
+        );
+    }
+
+    #[test]
+    fn remove_scabard_removes_the_scb_child_or_descends_into_a_fade_node() {
+        let mut e = engine();
+        let g = graph(&mut e);
+        name_doubles(&mut e);
+        let leaf = |e: &mut Engine, g: &Graph, name: &str| {
+            let node = graph_node(e, g, &[]);
+            if !name.is_empty() {
+                set_name(e, node, name);
+            }
+            node
+        };
+        // Direct child named "Scb" (after an unnamed one and another).
+        let (unnamed, other, scb) = (
+            leaf(&mut e, &g, ""),
+            leaf(&mut e, &g, "Weapon"),
+            leaf(&mut e, &g, "Scb"),
+        );
+        let parent = graph_node(&mut e, &g, &[unnamed, other, scb]);
+        assert!(e.call(0x004b_5b20, &args![p(parent)]).bool());
+        assert_eq!(
+            *g.virtuals.borrow(),
+            vec![(0xf0, vec![parent, 2])],
+            "slot 0xf0 of the parent with the child's index"
+        );
+        // A "FadeNode " child: the search goes into it and gives its answer.
+        g.virtuals.borrow_mut().clear();
+        let deep_scb = leaf(&mut e, &g, "Scb");
+        let fade = graph_node(&mut e, &g, &[other, deep_scb]);
+        set_name(&mut e, fade, "FadeNode 01");
+        let top = graph_node(&mut e, &g, &[fade]);
+        assert!(e.call(0x004b_5b20, &args![p(top)]).bool());
+        assert_eq!(*g.virtuals.borrow(), vec![(0xf0, vec![fade, 1])]);
+        // A fade node without one: the loop ends there with false (it does
+        // not go on to later children).
+        g.virtuals.borrow_mut().clear();
+        let empty_fade = graph_node(&mut e, &g, &[other]);
+        set_name(&mut e, empty_fade, "fadenode x");
+        let later_scb = leaf(&mut e, &g, "Scb");
+        let top = graph_node(&mut e, &g, &[empty_fade, later_scb]);
+        assert!(!e.call(0x004b_5b20, &args![p(top)]).bool());
+        assert!(g.virtuals.borrow().is_empty());
+        // No children, and null.
+        let bare = leaf(&mut e, &g, "");
+        assert!(!e.call(0x004b_5b20, &args![p(bare)]).bool());
+        assert!(!e.call(0x004b_5b20, &args![Ptr::<()>::NULL]).bool());
+    }
+
+    #[test]
+    fn has_morpher_controller_looks_at_the_object_then_below() {
+        let mut e = engine();
+        let g = graph(&mut e);
+        e.register(GET_CONTROLLER, |e, a| {
+            assert_eq!(a[1], MORPHER_CONTROLLER_CLASS);
+            ret_u(e.mem.u32(a[0] + 0x24))
+        });
+        let (a, b) = (graph_node(&mut e, &g, &[]), graph_node(&mut e, &g, &[]));
+        let inner = graph_node(&mut e, &g, &[a, b]);
+        let root = graph_node(&mut e, &g, &[inner]);
+        assert!(!e.call(0x004b_5bf0, &args![p(root)]).bool());
+        e.mem.set_u32(b + 0x24, 1);
+        assert!(e.call(0x004b_5bf0, &args![p(root)]).bool());
+        e.mem.set_u32(b + 0x24, 0);
+        e.mem.set_u32(root + 0x24, 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5bf0, &args![p(root)]).bool());
+        // Found on the object itself: the children are not looked at.
+        assert!(calls_to(&take_log(&mut e), CHILD_COUNT).is_empty());
+        assert!(!e.call(0x004b_5bf0, &args![Ptr::<()>::NULL]).bool());
+    }
+
+    #[test]
+    fn fn_004b5c80_looks_for_the_class_on_the_object_then_below() {
+        let mut e = engine();
+        let g = graph(&mut e);
+        e.register(IS_OF_CLASS, |e, a| {
+            assert_eq!(a[0], IS_OF_CLASS_KEY_012024E0);
+            ret_u((e.mem.u32(a[1] + 0x28) != 0) as u32)
+        });
+        let (a, b) = (graph_node(&mut e, &g, &[]), graph_node(&mut e, &g, &[]));
+        let inner = graph_node(&mut e, &g, &[a, b]);
+        let root = graph_node(&mut e, &g, &[inner]);
+        assert!(!e.call(0x004b_5c80, &args![p(root)]).bool());
+        e.mem.set_u32(a + 0x28, 1);
+        assert!(e.call(0x004b_5c80, &args![p(root)]).bool());
+        e.mem.set_u32(a + 0x28, 0);
+        e.mem.set_u32(root + 0x28, 1);
+        assert!(e.call(0x004b_5c80, &args![p(root)]).bool());
+        assert!(!e.call(0x004b_5c80, &args![Ptr::<()>::NULL]).bool());
+    }
+
+    fn marker_engine() -> (Engine, Graph) {
+        let mut e = engine();
+        e.map(MARKER_ROOT & !0xfff, 0x1000);
+        let g = graph(&mut e);
+        name_doubles(&mut e);
+        e.register(EXTRA_DATA_NAME, |_, _| ret_u(0x77));
+        e.register(GET_EXTRA_DATA, |e, a| {
+            assert_eq!(a[1], 0x77);
+            ret_u(e.mem.u32(a[0] + 0x2c))
+        });
+        e.register(EXTRA_DATA_TEST, |_, a| {
+            assert_eq!(a[1], 0x20);
+            ret_u((a[0] == 0x2222) as u32)
+        });
+        e.register(GET_CONTROLLER, |e, a| {
+            assert_eq!(a[1], MARKER_CONTROLLER_CLASS);
+            ret_u(e.mem.u32(a[0] + 0x24))
+        });
+        e.register(FN_00537BD0, |e, a| ret_u(e.mem.u32(a[0])));
+        e.register(WORD_AT_0X18, |e, a| ret_u(e.mem.u32(a[0] + 0x18)));
+        e.set_global(MARKER_WORD_A, 0xa);
+        e.set_global(MARKER_WORD_B, 0xb);
+        e.set_global(MARKER_WORD_C, 0xc);
+        e.set_global(MARKER_WORD_D, 0xd);
+        (e, g)
+    }
+
+    #[test]
+    fn remove_editor_markers_removes_the_marker_node_it_starts_on() {
+        let (mut e, g) = marker_engine();
+        // The marker node carries the extra data; its controller's value
+        // (`00537bd0`) is an object with virtual slot 0x90; its parent has
+        // slot 0xe8.
+        let marker = graph_node(&mut e, &g, &[]);
+        set_name(&mut e, marker, "EditorMarker");
+        e.mem.set_u32(marker + 0x2c, 0x2222);
+        let target = graph_node(&mut e, &g, &[]);
+        let controller = e.mem.alloc(8);
+        e.mem.set_u32(controller, target);
+        e.mem.set_u32(marker + 0x24, controller);
+        let parent = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(marker + 0x18, parent);
+        assert!(e.call(0x004b_5d10, &args![p(marker)]).bool());
+        assert_eq!(
+            *g.virtuals.borrow(),
+            vec![
+                (0x90, vec![target, 0xa]),
+                (0x90, vec![target, 0xb]),
+                (0x90, vec![target, 0xc]),
+                (0x90, vec![target, 0xd]),
+                (0xe8, vec![parent, marker]),
+            ]
+        );
+        // The root was this node: forgotten, with the controller value.
+        assert_eq!(e.global::<u32>(MARKER_ROOT), 0);
+        assert_eq!(e.global::<u32>(MARKER_CONTROLLER), 0);
+    }
+
+    #[test]
+    fn remove_editor_markers_searches_the_children_of_a_known_root() {
+        let (mut e, g) = marker_engine();
+        let target = graph_node(&mut e, &g, &[]);
+        e.set_global(MARKER_ROOT, 0x1234u32);
+        e.set_global(MARKER_CONTROLLER, target);
+        let marker = graph_node(&mut e, &g, &[]);
+        let below = graph_node(&mut e, &g, &[]);
+        let marker = {
+            // The marker needs children to be searched as a container.
+            g.children.borrow_mut().insert(marker, vec![below]);
+            marker
+        };
+        set_name(&mut e, marker, "EditorMarker");
+        let parent = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(marker + 0x18, parent);
+        let other = graph_node(&mut e, &g, &[]);
+        let root = graph_node(&mut e, &g, &[other, marker]);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5d10, &args![p(root)]).bool());
+        // The extra data is not looked up while a root is remembered.
+        assert!(calls_to(&take_log(&mut e), GET_EXTRA_DATA).is_empty());
+        let virtuals = g.virtuals.borrow().clone();
+        assert_eq!(virtuals.len(), 5);
+        assert_eq!(virtuals[4], (0xe8, vec![parent, marker]));
+        // The remembered root is not this node: kept.
+        assert_eq!(e.global::<u32>(MARKER_ROOT), 0x1234);
+        // No controller value: only the removal request.
+        g.virtuals.borrow_mut().clear();
+        e.set_global(MARKER_CONTROLLER, 0u32);
+        assert!(e.call(0x004b_5d10, &args![p(root)]).bool());
+        assert_eq!(*g.virtuals.borrow(), vec![(0xe8, vec![parent, marker])]);
+        // No parent: nothing to ask.
+        g.virtuals.borrow_mut().clear();
+        e.mem.set_u32(marker + 0x18, 0);
+        assert!(e.call(0x004b_5d10, &args![p(root)]).bool());
+        assert!(g.virtuals.borrow().is_empty());
+    }
+
+    #[test]
+    fn remove_editor_markers_remembers_a_root_with_the_extra_data_and_drops_it() {
+        let (mut e, g) = marker_engine();
+        let target = graph_node(&mut e, &g, &[]);
+        let controller = e.mem.alloc(8);
+        e.mem.set_u32(controller, target);
+        let leaf = graph_node(&mut e, &g, &[]);
+        set_name(&mut e, leaf, "Plain");
+        let root = graph_node(&mut e, &g, &[leaf]);
+        e.mem.set_u32(root + 0x2c, 0x2222);
+        e.mem.set_u32(root + 0x24, controller);
+        // No marker anywhere: false, and the root it remembered is dropped.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004b_5d10, &args![p(root)]).bool());
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, FN_00537BD0), vec![args![controller]]);
+        assert_eq!(e.global::<u32>(MARKER_ROOT), 0);
+        assert_eq!(e.global::<u32>(MARKER_CONTROLLER), 0);
+        assert!(g.virtuals.borrow().is_empty());
+        // Extra data that the test rejects, or none: nothing is remembered.
+        e.mem.set_u32(root + 0x2c, 0x3333);
+        assert!(!e.call(0x004b_5d10, &args![p(root)]).bool());
+        e.mem.set_u32(root + 0x2c, 0);
+        assert!(!e.call(0x004b_5d10, &args![p(root)]).bool());
+        assert_eq!(e.global::<u32>(MARKER_ROOT), 0);
+        // Null node.
+        assert!(!e.call(0x004b_5d10, &args![Ptr::<()>::NULL]).bool());
+    }
+
+    #[test]
+    fn the_four_marker_getters_return_their_globals() {
+        let mut e = engine();
+        for (i, (address, global)) in [
+            (0x004b_5f60u32, MARKER_WORD_A),
+            (0x004b_5f70, MARKER_WORD_B),
+            (0x004b_5f80, MARKER_WORD_C),
+            (0x004b_5f90, MARKER_WORD_D),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            e.set_global(global, 0x100 + i as u32);
+            assert_eq!(e.call(address, &[]).u32(), 0x100 + i as u32);
+        }
+    }
+
+    #[test]
+    fn fn_004b5fa0_is_whether_the_test_with_0x20_is_non_zero() {
+        let mut e = engine();
+        e.register(EXTRA_DATA_TEST, |_, a| {
+            assert_eq!(a[1], 0x20);
+            ret_u(a[0])
+        });
+        assert!(e.call(0x004b_5fa0, &args![0x1234_0000u32]).bool());
+        assert!(!e.call(0x004b_5fa0, &args![0u32]).bool());
+    }
+
+    /// The six planes (each four floats: a normal and the constant at
+    /// `+0xc`); `dot` is the dot product of the plane's normal with the
+    /// point.
+    fn frustum_engine(planes: [[f32; 4]; 6]) -> Engine {
+        let mut e = engine();
+        e.map(FRUSTUM_GUARD & !0xfff, 0x1000);
+        let block = e.mem.alloc(6 * 16);
+        for (i, plane) in planes.iter().enumerate() {
+            for (j, v) in plane.iter().enumerate() {
+                e.mem.set_f32(block + 16 * i as u32 + 4 * j as u32, *v);
+            }
+        }
+        e.register(FRUSTUM_PLANES_CONSTRUCT, |_, a| {
+            assert_eq!(a[0], FRUSTUM_PLANES);
+            Ret::default()
+        });
+        e.register(FRUSTUM_PLANES_SET, |_, a| {
+            assert_eq!(a[0], FRUSTUM_PLANES);
+            Ret::default()
+        });
+        e.register(CAMERA_STAMP, |_, a| {
+            assert_eq!(a[0], CAMERA_STAMP_OWNER);
+            ret_u(7)
+        });
+        e.register_double(FRUSTUM_PLANE, move |_, a| {
+            assert_eq!(a[0], FRUSTUM_PLANES);
+            ret_u(block + 16 * a[1])
+        });
+        e.register(POINT3_DOT, |e, a| {
+            let sum: f64 = (0..3)
+                .map(|i| e.mem.f32(a[0] + 4 * i) as f64 * e.mem.f32(a[1] + 4 * i) as f64)
+                .sum();
+            ret_f(sum)
+        });
+        e
+    }
+
+    /// A bound: centre and radius.
+    fn bound_at(e: &mut Engine, centre: [f32; 3], radius: f32) -> Ptr {
+        p(floats(e, &[centre[0], centre[1], centre[2], radius]))
+    }
+
+    const INSIDE: [[f32; 4]; 6] = [[0.0, 0.0, 1.0, -5.0]; 6];
+
+    #[test]
+    fn fn_004b5ff0_tests_the_bound_against_the_six_planes() {
+        let mut e = frustum_engine(INSIDE);
+        let bound = bound_at(&mut e, [0.0, 0.0, 0.0], 1.0);
+        let camera = p(0x5000);
+        // A null camera: false, nothing touched.
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004b_5ff0, &args![bound, Ptr::<()>::NULL]).bool());
+        assert!(take_log(&mut e).len() == 1);
+        // First call: the planes are constructed and set for this camera.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5ff0, &args![bound, camera]).bool());
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, FRUSTUM_PLANES_CONSTRUCT).len(), 1);
+        assert_eq!(
+            calls_to(&log, FRUSTUM_PLANES_SET),
+            vec![args![FRUSTUM_PLANES, camera]]
+        );
+        assert_eq!(calls_to(&log, FRUSTUM_PLANE).len(), 6);
+        assert_eq!(e.global::<u32>(FRUSTUM_GUARD) & 1, 1);
+        assert_eq!(e.global::<u32>(FRUSTUM_CAMERA), camera.addr());
+        assert_eq!(e.global::<u32>(FRUSTUM_STAMP), 7);
+        // Same camera and stamp: nothing is recomputed.
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5ff0, &args![bound, camera]).bool());
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, FRUSTUM_PLANES_CONSTRUCT).is_empty());
+        assert!(calls_to(&log, FRUSTUM_PLANES_SET).is_empty());
+        // A changed stamp, or another camera: recomputed.
+        e.set_global(FRUSTUM_STAMP, 3u32);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5ff0, &args![bound, camera]).bool());
+        assert_eq!(calls_to(&take_log(&mut e), FRUSTUM_PLANES_SET).len(), 1);
+        e.call_log = Some(vec![]);
+        assert!(e.call(0x004b_5ff0, &args![bound, p(0x6000)]).bool());
+        assert_eq!(calls_to(&take_log(&mut e), FRUSTUM_PLANES_SET).len(), 1);
+    }
+
+    #[test]
+    fn fn_004b5ff0_stops_at_the_first_plane_that_has_the_bound_behind_it() {
+        let mut planes = INSIDE;
+        planes[2] = [0.0, 0.0, 1.0, 5.0];
+        let mut e = frustum_engine(planes);
+        let bound = bound_at(&mut e, [0.0, 0.0, 0.0], 1.0);
+        e.call_log = Some(vec![]);
+        assert!(!e.call(0x004b_5ff0, &args![bound, p(0x5000)]).bool());
+        assert_eq!(calls_to(&take_log(&mut e), FRUSTUM_PLANE).len(), 3);
+    }
+
+    #[test]
+    fn fn_004b5fc0_tests_the_world_bound_of_the_object() {
+        let mut planes = INSIDE;
+        planes[5] = [0.0, 0.0, 1.0, 5.0];
+        let mut e = frustum_engine(INSIDE);
+        e.register(GET_WORLD_BOUND, |e, a| ret_u(e.mem.u32(a[0])));
+        let bound = bound_at(&mut e, [0.0, 0.0, 0.0], 1.0);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, bound.addr());
+        assert!(e.call(0x004b_5fc0, &args![p(object), p(0x5000)]).bool());
+        assert!(!e
+            .call(0x004b_5fc0, &args![Ptr::<()>::NULL, p(0x5000)])
+            .bool());
+        assert!(!e
+            .call(0x004b_5fc0, &args![p(object), Ptr::<()>::NULL])
+            .bool());
+        // Another set of planes with the last one against the bound.
+        let mut e = frustum_engine(planes);
+        e.register(GET_WORLD_BOUND, |e, a| ret_u(e.mem.u32(a[0])));
+        let bound = bound_at(&mut e, [0.0, 0.0, 0.0], 1.0);
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, bound.addr());
+        assert!(!e.call(0x004b_5fc0, &args![p(object), p(0x5000)]).bool());
+    }
+
+    #[test]
+    fn ni_bound_which_side_compares_the_distance_with_the_radius() {
+        let mut e = engine();
+        e.register(POINT3_DOT, |e, a| {
+            ret_f((e.mem.f32(a[0]) * e.mem.f32(a[1])) as f64)
+        });
+        // Plane normal (1, 0, 0), constant `d`; the bound's centre x is 3,
+        // so the distance is 3 - d. Radius 1.
+        for (d, want) in [
+            (6.0f32, 2),
+            (4.0, 2),
+            (3.5, 0),
+            (3.0, 0),
+            (2.5, 0),
+            (2.0, 1),
+            (-5.0, 1),
+        ] {
+            let bound = bound_at(&mut e, [3.0, 0.0, 0.0], 1.0);
+            let plane = p(floats(&mut e, &[1.0, 0.0, 0.0, d]));
+            assert_eq!(
+                e.call(0x004b_6100, &args![bound, plane]).i32(),
+                want,
+                "d = {d}"
+            );
+        }
+        // Not a number: neither side.
+        let bound = bound_at(&mut e, [f32::NAN, 0.0, 0.0], 1.0);
+        let plane = p(floats(&mut e, &[1.0, 0.0, 0.0, 0.0]));
+        assert_eq!(e.call(0x004b_6100, &args![bound, plane]).i32(), 0);
+    }
+
+    #[test]
+    fn fn_004b6160_is_the_dot_product_minus_the_plane_constant() {
+        let mut e = engine();
+        let plane = e.mem.alloc(16);
+        e.mem.set_f32(plane + 0xc, 0.5);
+        e.register_double(POINT3_DOT, move |_, a| {
+            assert_eq!((a[0], a[1]), (plane, 0x2000));
+            ret_f(2.0)
+        });
+        assert_eq!(e.call(0x004b_6160, &args![p(plane), p(0x2000)]).f32(), 1.5);
+    }
+
+    fn tint_engine() -> (Engine, Graph) {
+        let mut e = engine();
+        let g = graph(&mut e);
+        e.set_global(TINT_ALPHA, 0.5f32);
+        e.register(SMART_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret_u(a[0])
+        });
+        e.register(SMART_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret_u(a[0])
+        });
+        e.register(SMART_POINTER_GET, |e, a| ret_u(e.mem.u32(a[0])));
+        e.register(SMART_POINTER_RELEASE, |_, _| Ret::default());
+        e.register(NI_OPERATOR_NEW, |e, a| ret_u(e.mem.alloc(a[0])));
+        e.register(EFFECT_DATA_CONSTRUCT, |_, a| ret_u(a[0]));
+        e.register(COLOUR_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            ret_u(a[0])
+        });
+        e.register(GET_PROPERTY, |e, a| {
+            assert_eq!(a[1], 3);
+            ret_u(e.mem.u32(a[0] + 0x30))
+        });
+        e.register(DYNAMIC_CAST, |_, a| {
+            assert_eq!(a[0], CAST_CLASS_011FA010);
+            ret_u(a[1])
+        });
+        e.register(SET_TEXTURE_EFFECT_DATA, |_, _| Ret::default());
+        (e, g)
+    }
+
+    /// Three nodes: a root with two leaves; the second leaf has no property.
+    fn tint_tree(e: &mut Engine, g: &Graph) -> (u32, u32, u32) {
+        let first = graph_node(e, g, &[]);
+        let second = graph_node(e, g, &[]);
+        let root = graph_node(e, g, &[first, second]);
+        e.mem.set_u32(root + 0x30, 0x1001);
+        e.mem.set_u32(first + 0x30, 0x1002);
+        (root, first, second)
+    }
+
+    #[test]
+    fn tint_scenegraph_makes_the_effect_data_once_and_shares_it() {
+        let (mut e, g) = tint_engine();
+        let (root, first, _second) = tint_tree(&mut e, &g);
+        let colour = p(floats(&mut e, &[0.25, 0.5, 0.75]));
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6360, &args![p(root), colour, Ptr::<()>::NULL]);
+        let log = take_log(&mut e);
+        // Made once, 0x74 bytes; each node's call holds and releases it.
+        assert_eq!(calls_to(&log, NI_OPERATOR_NEW), vec![args![0x74u32]]);
+        assert_eq!(calls_to(&log, SMART_POINTER_CONSTRUCT).len(), 3);
+        assert_eq!(calls_to(&log, SMART_POINTER_RELEASE).len(), 3);
+        let sets = calls_to(&log, SET_TEXTURE_EFFECT_DATA);
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0][0], 0x1001);
+        assert_eq!(sets[1][0], 0x1002);
+        let data = sets[0][1];
+        assert_eq!(sets[1][1], data);
+        assert_ne!(data, 0);
+        // The four colours and the four words.
+        for offset in [0x2c, 0x3c, 0x0c, 0x1c] {
+            assert_eq!(
+                read_floats(&e, data + offset, 4),
+                vec![0.25, 0.5, 0.75, 0.5]
+            );
+        }
+        assert_eq!(
+            [0x5c, 0x60, 0x64, 0x68].map(|o| e.mem.u32(data + o)),
+            [9, 10, 1, 4]
+        );
+        // Children were handed the same object, not null.
+        let constructs = calls_to(&log, SMART_POINTER_CONSTRUCT);
+        assert_eq!(constructs[1][1], data);
+        assert_eq!(constructs[2][1], data);
+        let _ = first;
+    }
+
+    #[test]
+    fn tint_scenegraph_uses_the_effect_data_it_is_given() {
+        let (mut e, g) = tint_engine();
+        let (root, _, _) = tint_tree(&mut e, &g);
+        let colour = p(floats(&mut e, &[1.0, 1.0, 1.0]));
+        let data = e.mem.alloc(0x74);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6360, &args![p(root), colour, p(data)]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, NI_OPERATOR_NEW).is_empty());
+        assert!(calls_to(&log, COLOUR_CONSTRUCT).is_empty());
+        let sets = calls_to(&log, SET_TEXTURE_EFFECT_DATA);
+        assert_eq!(sets, vec![args![0x1001u32, data], args![0x1002u32, data]]);
+        assert_eq!(e.mem.u32(data + 0x5c), 0);
+    }
+
+    #[test]
+    fn un_tint_scenegraph_clears_the_effect_data_below_the_node() {
+        let (mut e, g) = tint_engine();
+        let (root, _, _) = tint_tree(&mut e, &g);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6630, &args![p(root)]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, SET_TEXTURE_EFFECT_DATA),
+            vec![args![0x1001u32, 0u32], args![0x1002u32, 0u32]]
+        );
+    }
+
+    #[test]
+    fn get_collision_object_count_in_scene_graph_walks_with_the_flags() {
+        let mut e = engine();
+        let seen: Shared<Vec<WalkCall>> = Rc::default();
+        {
+            let seen = seen.clone();
+            e.register_double(WALK_SCENE_GRAPH, move |e, a| {
+                let words = (0..7).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+                seen.borrow_mut().push((a[0], a[2], words));
+                // The callback leaves its count at +0xc.
+                e.mem.set_u32(a[1] + 0xc, 9);
+                Ret::default()
+            });
+        }
+        let r = e.call(0x004b_66d0, &args![0x5000u32, true, false, true]);
+        assert_eq!(r.u32(), 9);
+        assert_eq!(
+            *seen.borrow(),
+            vec![(0x5000, COUNT_CALLBACK, vec![0, 1, 0x12, 0, 0, 0, 5])]
+        );
+        e.call(0x004b_66d0, &args![0x5000u32, false, true, false]);
+        assert_eq!(seen.borrow()[1].2[6], 2);
+        e.call(0x004b_66d0, &args![0x5000u32, false, false, false]);
+        assert_eq!(seen.borrow()[2].2[6], 0);
+    }
+
+    #[test]
+    fn fn_004b6740_counts_the_objects_the_flags_do_not_skip() {
+        let mut e = engine();
+        name_doubles(&mut e);
+        e.register(WORD_AT_EIGHT, |e, a| ret_u(e.mem.u32(a[0] + 8)));
+        e.register(IS_OF_CLASS, |e, a| {
+            if a[1] == 0 {
+                return ret_u(0);
+            }
+            match a[0] {
+                IS_OF_CLASS_KEY_0126817C => ret_u(e.mem.u32(a[1] + 0x28)),
+                IS_OF_CLASS_KEY_011F9140 => ret_u(e.mem.u32(a[1] + 0x2c)),
+                other => panic!("class {other:08x}"),
+            }
+        });
+        let object = e.mem.alloc(0x60);
+        let inner = e.mem.alloc(0x60);
+        e.mem.set_u32(object + 8, inner);
+        let context = e.mem.alloc(0x20);
+        let count = |e: &mut Engine, flags: u32| {
+            e.mem.set_u32(context + 0x18, flags);
+            e.mem.set_u32(context + 0xc, 10);
+            e.call(0x004b_6740, &args![p(object), p(context)]);
+            e.mem.u32(context + 0xc)
+        };
+        // No flags: counted whatever the object is.
+        e.mem.set_u32(object + 0x28, 1);
+        e.mem.set_u32(inner + 0x2c, 1);
+        assert_eq!(count(&mut e, 0), 11);
+        // Flag 1 skips the objects of the first class.
+        assert_eq!(count(&mut e, 1), 10);
+        e.mem.set_u32(object + 0x28, 0);
+        assert_eq!(count(&mut e, 1), 11);
+        // Flag 2 skips an object whose inner object is of the second class.
+        assert_eq!(count(&mut e, 2), 10);
+        e.mem.set_u32(inner + 0x2c, 0);
+        // Without a name, or with another name, it is counted; "Arrow" is not.
+        assert_eq!(count(&mut e, 2), 11);
+        set_name(&mut e, inner, "Quiver");
+        assert_eq!(count(&mut e, 2), 11);
+        set_name(&mut e, inner, "Arrow");
+        assert_eq!(count(&mut e, 2), 10);
+        // No inner object at all.
+        e.mem.set_u32(object + 8, 0);
+        assert_eq!(count(&mut e, 2), 11);
+        assert_eq!(count(&mut e, 3), 11);
+    }
+
+    #[test]
+    fn fn_004b6810_returns_the_index_the_callback_stored() {
+        let mut e = engine();
+        let seen: Shared<Vec<WalkCall>> = Rc::default();
+        {
+            let seen = seen.clone();
+            e.register_double(WALK_SCENE_GRAPH, move |e, a| {
+                let words = (0..7).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+                seen.borrow_mut().push((a[0], a[2], words));
+                // The second walk finds index 5.
+                if seen.borrow().len() == 2 {
+                    e.mem.set_u32(a[1] + 0x14, 5);
+                }
+                Ret::default()
+            });
+        }
+        // Nothing found: -1.
+        let r = e.call(0x004b_6810, &args![0x5000u32, 0x77u32, false, true, true]);
+        assert_eq!(r.i32(), -1);
+        assert_eq!(
+            seen.borrow()[0],
+            (
+                0x5000,
+                FIND_CALLBACK,
+                vec![0, 1, 0x12, 0, 0x77, 0xffff_ffff, 6]
+            )
+        );
+        let r = e.call(0x004b_6810, &args![0x5000u32, 0x77u32, true, false, false]);
+        assert_eq!(r.i32(), 5);
+        assert_eq!(seen.borrow()[1].2[6], 1);
     }
 }
