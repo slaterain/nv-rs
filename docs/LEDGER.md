@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 0 | 1 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 22 | 37 | 5 | 0 | 79 |
-| 2 | 1575 | 583 | 378 | 755 | 44 | 4 | 394 |
-| 3 | 4973 | 1303 | 1060 | 2443 | 208 | 26 | 1236 |
+| 1 | 143 | 117 | 33 | 28 | 5 | 0 | 77 |
+| 2 | 1575 | 583 | 659 | 485 | 43 | 4 | 384 |
+| 3 | 4973 | 1303 | 2189 | 1362 | 208 | 26 | 1188 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -146,7 +146,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 8 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | open |
 | 9 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | open |
 | 10 | `00705990` | `Interface::GetPipboy` | traced |
-| 11 | `004b7210` | - | traced |
+| 11 | `004b7210` | - | translated |
 | 12 | `00424940` | - | translated |
 | 13 | `008782b0` | `MemoryLevelManager::RunNonDestructiveFree` | open |
 | 14 | `0086f940` | `Main::OnIdle_UpdatePlayer` | open |
@@ -158,13 +158,13 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 20 | `007050d0` | `Interface::InDialog` | open |
 | 21 | `00701450` | `FaderManager::IsFaderVisible` | open |
 | 22 | `00703d50` | `Interface::IsConsoleVisible` | traced |
-| 23 | `008d6f30` | - | traced |
+| 23 | `008d6f30` | - | translated |
 | 24 | `006da7c0` | `Pathing::ProfilePathing` | open |
 | 25 | `00851d90` | `BGSSaveLoadManager::UpdateQueuedSaves` | open |
 | 26 | `0086ef30` | - | open |
 | 27 | `0086ef90` | - | open |
 | 28 | `0086f190` | `Main::OnIdle_FixActorBones` | open |
-| 29 | `00483710` | - | traced |
+| 29 | `00483710` | - | translated |
 | 30 | `004e1610` | - | open |
 | 31 | `0086ef40` | - | open |
 | 32 | `0086f260` | `Main::OnIdle_UpdateTimer` | traced |
@@ -188,13 +188,13 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 50 | `00451530` | - | translated |
 | 51 | `0086ef70` | - | open |
 | 52 | `004556d0` | `TES::TestAllCells` | translated |
-| 53 | `00559450` | - | traced |
+| 53 | `00559450` | - | translated |
 | 54 | `0084d030` | - | traced |
 | 55 | `0084d030` | - | traced |
 | 56 | `00867a40` | `Calendar::Update` | translated |
 | 57 | `0043d4d0` | - | translated |
 | 58 | `00455640` | `TES::RunAnimations` | translated |
-| 59 | `0040fbf0` | - | traced |
+| 59 | `0040fbf0` | - | translated |
 | 60 | `00978550` | `ProcessLists::RunActorScripts` | open |
 | 61 | `0043d4d0` | - | translated |
 | 62 | `009777a0` | `ProcessLists::UpdateRadiationList` | open |
@@ -204,7 +204,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 66 | `008d0600` | `ProcessLists::PrintLists` | traced |
 | 67 | `0096eb40` | `ProcessLists::ChangeProcessLevelTempList` | open |
 | 68 | `0096e9b0` | `ProcessLists::UpdateFollowerTempList` | open |
-| 69 | `0040fba0` | - | traced |
+| 69 | `0040fba0` | - | translated |
 | 70 | `00446ef0` | - | translated |
 | 71 | `00878080` | - | traced |
 | 72 | `0086ef60` | - | open |
@@ -216,18 +216,18 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 78 | `0086fbe0` | `Main::OnIdle_UpdateCurrentGridCell` | open |
 | 79 | `0043d4d0` | - | translated |
 | 80 | `0086fd70` | `Main::OnIdle_DoInterfaceIdle` | open |
-| 81 | `00483710` | - | traced |
+| 81 | `00483710` | - | translated |
 | 82 | `0049fef0` | `BGSDecalManager::GetInstance` | open |
 | 83 | `0049fff0` | `BGSDecalManager::UpdateDecals` | open |
 | 84 | `00524c90` | - | open |
 | 85 | `00712e60` | - | open |
-| 86 | `0044ddc0` | - | traced |
+| 86 | `0044ddc0` | - | translated |
 | 87 | `00710ab0` | - | open |
 | 88 | `0045c670` | - | translated |
 | 89 | `00c52020` | `BSSceneGraph::SetCameraFOV` | open |
 | 90 | `00710ab0` | - | open |
 | 91 | `00b54000` | `BSShaderManager::SetFOV` | platform |
-| 92 | `00559450` | - | traced |
+| 92 | `00559450` | - | translated |
 | 93 | `006629f0` | `BSFaceGenNiNode::GetAnimationData` | traced |
 | 94 | `0045bc80` | `TES::ResetAllMultiBoundNodes` | translated |
 | 95 | `00450b80` | - | translated |
@@ -235,7 +235,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 97 | `0045b070` | `TES::UpdateMultiBoundVisibility` | translated |
 | 98 | `0043d4d0` | - | translated |
 | 99 | `008c80e0` | `AILinearTaskThreadManager::SetMainRendering` | open |
-| 100 | `00713d80` | - | open |
+| 100 | `00713d80` | - | traced |
 | 101 | `008c78c0` | `AILinearTaskThreadManager::StartThreads` | open |
 | 102 | `008ca070` | `AITaskManager::StartTasksDuringRendering` | open |
 | 103 | `0086fc60` | `Main::OnIdle_UpdateAnimationsAndEffects` | open |
@@ -248,7 +248,7 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 110 | `00552ba0` | - | translated |
 | 111 | `006a61b0` | `NavMeshRender::Update` | open |
 | 112 | `0043d4d0` | - | translated |
-| 113 | `00408d60` | - | traced |
+| 113 | `00408d60` | - | translated |
 | 114 | `006c0720` | `NavMeshObstacleManager::GetInstance` | traced |
 | 115 | `006c3640` | `NavMeshObstacleManager::Update` | open |
 | 116 | `00991500` | `CombatManager::Update` | open |
@@ -262,9 +262,9 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 124 | `0047e040` | `TESActorBaseData::GetAlignmentForKarma` | traced |
 | 125 | `0086ff70` | `Main::Swap` | traced |
 | 126 | `008705d0` | `Main::PostSwapProcess` | open |
-| 127 | `004dc360` | - | traced |
+| 127 | `004dc360` | - | translated |
 | 128 | `0043d4d0` | - | translated |
-| 129 | `00713d80` | - | open |
+| 129 | `00713d80` | - | traced |
 | 130 | `008c7990` | `AILinearTaskThreadManager::WaitForThreads` | open |
 | 131 | `008ca300` | `AITaskManager::WaitForTasksDuringRendering` | open |
 | 132 | `0086f6a0` | `Main::UpdateNonRenderSafeAITasks` | open |
