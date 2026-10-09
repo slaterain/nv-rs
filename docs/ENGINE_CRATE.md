@@ -154,3 +154,33 @@ Pure functions can be compared with the real CPU through `nv-call`
 translation, bit for bit. The ledger will gain a column for that check.
 Stateful code is checked by the save round trip (Phase 2) and the
 acceptance routes once it is wired.
+
+## Lessons from the first sessions (2026-10-09)
+
+- **Arguments come from the disassembly.** The decompiler often hangs a
+  pushed word on the wrong call (`PUSH x; CALL getter; MOV ECX,EAX; CALL
+  method`: `x` belongs to `method`), drops `this`, and mis-sizes `this`
+  (indexing in `wchar_t` units). A function's parameters are exactly the
+  words its `RET n` (or its callers' cleanup, for cdecl) shows; a word it
+  never reads is still a parameter, named `_unused_<n>`.
+- **PC layouts differ from the Xbox PDB in known ways.** `TESForm` is 0x18
+  on PC (no editor ID or version-control fields), so fields of every class
+  derived from it sit 0x10 lower than the PDB says (`TESObjectREFR`,
+  `TESObjectCELL`, ...). Some classes lose the MemDebug build's leading
+  accounting words (`Model`: 8 bytes). Gamebryo transforms are 16-byte
+  aligned on Xbox only. Always confirm offsets against the PC code.
+- **Map names can be wrong for folded code.** Identical-code folding puts
+  one method's name on another's body (`005f36f0`, named
+  `ActorMover::GetPreferredMoveMode`, returns `TES::pInteriorCell`). Name
+  by the body.
+- **Script command bodies** share one cdecl signature of 8 words
+  (`ScriptArgs` in `units/fallout_shared/tesscriptfunctions.rs`).
+- **Split units.** The largest units are split into part files
+  (`<stem>_p2.rs`, ...), each with its own owner and address range; the
+  main file's owner declares shared constants and helpers `pub(crate)`.
+- **Tests.** `e.call_log` includes the top-level call the test makes;
+  calls between functions of one file are direct and not logged. Doubles
+  that keep state use `register_double`. Tests that read exe data map the
+  page and write the values the code reads.
+- **Scratch files** never go to `/tmp` or a shared folder: translators run
+  in parallel.
