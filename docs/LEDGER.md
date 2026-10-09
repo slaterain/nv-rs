@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 398 | 0.6% |
-| traced | 3298 | 5.0% |
-| platform | 3545 | 5.4% |
+| translated | 400 | 0.6% |
+| traced | 3299 | 5.0% |
+| platform | 3547 | 5.4% |
 | library | 21971 | 33.2% |
-| open | 37047 | 55.9% |
+| open | 37042 | 55.9% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 3476 (8.6%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 3479 (8.6%) are translated or traced.
 
-Rust cites 3842 distinct `.text` addresses; 27 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 3847 distinct `.text` addresses; 27 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -71,10 +71,10 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 0 | 53 | 0 | 21282 | 0 | - |
 | fallout shared | 10470 | 2065 | 3149 | 80 | 982 | 0 | 0 | 9408 | 10.1% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 58 | 0 | 0 | 6480 | 1.7% |
+| Havok SDK | 6591 | 1555 | 3499 | 53 | 59 | 0 | 0 | 6479 | 1.7% |
 | fallout/ai | 4849 | 1475 | 1888 | 111 | 597 | 0 | 0 | 4141 | 14.6% |
 | fallout/interface | 2645 | 991 | 1247 | 56 | 749 | 0 | 0 | 1840 | 30.4% |
-| (unplaced) | 2353 | 470 | 0 | 6 | 100 | 0 | 0 | 2247 | 4.5% |
+| (unplaced) | 2353 | 470 | 0 | 8 | 100 | 0 | 0 | 2245 | 4.6% |
 | fallout shared/pathfinding | 1788 | 365 | 452 | 38 | 83 | 0 | 0 | 1667 | 6.8% |
 | NiMain | 1619 | 261 | 1134 | 2 | 12 | 0 | 0 | 1605 | 0.9% |
 | BSHavok | 1615 | 316 | 1134 | 22 | 51 | 0 | 0 | 1542 | 4.5% |
@@ -96,7 +96,7 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | BSSystem | 275 | 54 | 36 | 1 | 9 | 265 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 2 | 0 | 0 | 213 | 0.9% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 13 | 0 | 0 | 191 | 6.4% |
-| BSCore | 197 | 22 | 45 | 1 | 4 | 0 | 0 | 192 | 2.5% |
+| BSCore | 197 | 22 | 45 | 1 | 4 | 2 | 0 | 190 | 2.5% |
 | fallout/audio | 190 | 55 | 49 | 13 | 28 | 0 | 0 | 149 | 21.6% |
 | fallout shared/sky | 164 | 59 | 51 | 0 | 26 | 0 | 0 | 138 | 15.9% |
 | fallout shared/region system | 159 | 26 | 74 | 0 | 2 | 0 | 0 | 157 | 1.3% |

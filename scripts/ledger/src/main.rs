@@ -31,6 +31,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod units;
+
 /// `.text` of FalloutNV.exe 1.4.0.525 (image base 0x400000).
 const TEXT: (u32, u32) = (0x0040_1000, 0x00fd_e600);
 
@@ -81,6 +83,7 @@ struct Func {
     subsystem: String,
     placed: String,
     translated: BTreeSet<String>,
+    replaced: BTreeSet<String>,
     traced: BTreeSet<String>,
 }
 
@@ -88,6 +91,8 @@ impl Func {
     fn status(&self) -> &'static str {
         if !self.translated.is_empty() {
             "translated"
+        } else if !self.replaced.is_empty() {
+            "platform"
         } else if !self.traced.is_empty() {
             "traced"
         } else {
@@ -124,24 +129,41 @@ fn addresses(line: &str) -> Vec<u32> {
     out
 }
 
-fn is_marker(line: &str) -> bool {
-    line.contains("Translated from") || line.contains("decompiled, FalloutNV")
+/// How a citation counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Cite {
+    Traced,
+    /// On a translation marker (ADR-0003).
+    Translated,
+    /// On a `Platform: replaces <addr>` marker: Rust platform code stands in
+    /// for the function (the allocator, file and thread layers).
+    Replaced,
 }
 
-/// (address, translated?) for every citation in one file.
-fn scan(text: &str) -> Vec<(u32, bool, usize)> {
+fn marker(line: &str) -> Option<Cite> {
+    if line.contains("Translated from") || line.contains("decompiled, FalloutNV") {
+        Some(Cite::Translated)
+    } else if line.contains("Platform: replaces") {
+        Some(Cite::Replaced)
+    } else {
+        None
+    }
+}
+
+/// (address, kind, line) for every citation in one file.
+fn scan(text: &str) -> Vec<(u32, Cite, usize)> {
     let lines: Vec<&str> = text.lines().collect();
     let mut out = Vec::new();
     for (i, l) in lines.iter().enumerate() {
         let here = addresses(l);
-        let marker = is_marker(l);
-        if marker && here.is_empty() && i > 0 {
+        let m = marker(l);
+        if let (Some(k), true, true) = (m, here.is_empty(), i > 0) {
             for a in addresses(lines[i - 1]) {
-                out.push((a, true, i));
+                out.push((a, k, i));
             }
         }
         for a in here {
-            out.push((a, marker, i + 1));
+            out.push((a, m.unwrap_or(Cite::Traced), i + 1));
         }
     }
     out
@@ -199,6 +221,7 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
             subsystem,
             placed: get("placed"),
             translated: BTreeSet::new(),
+            replaced: BTreeSet::new(),
             traced: BTreeSet::new(),
         });
     }
@@ -388,7 +411,7 @@ fn main() {
             .unwrap_or(path)
             .to_string_lossy()
             .replace('\\', "/");
-        for (a, translated, line) in scan(&text) {
+        for (a, kind, line) in scan(&text) {
             cited.insert(a);
             let k = funcs.partition_point(|f| f.addr <= a);
             let Some(f) = k.checked_sub(1).map(|k| &mut funcs[k]) else {
@@ -400,12 +423,55 @@ fn main() {
                 continue;
             }
             let loc = format!("{rel}:{line}");
-            if translated {
-                f.translated.insert(loc);
-            } else {
-                f.traced.insert(loc);
-            }
+            match kind {
+                Cite::Translated => f.translated.insert(loc),
+                Cite::Replaced => f.replaced.insert(loc),
+                Cite::Traced => f.traced.insert(loc),
+            };
         }
+    }
+    let units_dir = root.join("crates/engine/src/units");
+    match args.first().map(String::as_str) {
+        Some("units") => {
+            match units::regenerate(&units_dir) {
+                Ok(n) => println!("ledger: {n} unit modules"),
+                Err(e) => {
+                    eprintln!("ledger: {e}");
+                    std::process::exit(2);
+                }
+            }
+            return;
+        }
+        Some("scaffold") => {
+            // scaffold <unit or subsystem>...: create unit files for every
+            // unit named, or every unit of a subsystem named.
+            let want: BTreeSet<&str> = args[1..].iter().map(String::as_str).collect();
+            let mut done = BTreeSet::new();
+            for f in &funcs {
+                if f.unit.is_empty() || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str())) {
+                    continue;
+                }
+                if done.insert(f.unit.clone()) {
+                    match units::scaffold(&units_dir, &f.unit, &f.subsystem) {
+                        Ok(rel) => println!("{}	{rel}", f.unit),
+                        Err(e) => {
+                            eprintln!("ledger: {e}");
+                            std::process::exit(2);
+                        }
+                    }
+                }
+            }
+            if let Err(e) = units::regenerate(&units_dir) {
+                eprintln!("ledger: {e}");
+                std::process::exit(2);
+            }
+            return;
+        }
+        Some("queue") => {
+            queue(&funcs, &args[1..]);
+            return;
+        }
+        _ => {}
     }
     let md = render(&funcs, &header, unmapped.len(), cited.len());
     let out = root.join("docs/LEDGER.md");
@@ -422,7 +488,7 @@ fn main() {
     if let Some(t) = tsv {
         let mut s = String::from("address\tsize\tname\tsubsystem\tunit\tstatus\trust\n");
         for f in &funcs {
-            let locs: Vec<&String> = f.translated.iter().chain(f.traced.iter()).collect();
+            let locs: Vec<&String> = f.translated.iter().chain(&f.replaced).chain(&f.traced).collect();
             let _ = writeln!(
                 s,
                 "{:08x}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -470,10 +536,10 @@ mod tests {
                     /// the finder (`00afe220`,\n\
                     /// decompiled, FalloutNV.exe 1.4.0.525): wraps\n";
         let got = scan(text);
-        assert!(got.contains(&(0x00c90e60, false, 1)));
-        assert!(got.contains(&(0x00c95a80, true, 2)));
-        assert!(got.contains(&(0x00c90e60, true, 2)));
-        assert!(got.iter().any(|&(a, t, _)| a == 0x00afe220 && t));
+        assert!(got.contains(&(0x00c90e60, Cite::Traced, 1)));
+        assert!(got.contains(&(0x00c95a80, Cite::Translated, 2)));
+        assert!(got.contains(&(0x00c90e60, Cite::Translated, 2)));
+        assert!(got.iter().any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
     }
 
     #[test]
@@ -481,5 +547,29 @@ mod tests {
         assert_eq!(base_status("LIBCMT"), "library");
         assert_eq!(base_status("NiXenonRenderer"), "platform");
         assert_eq!(base_status("Havok SDK"), "open");
+    }
+}
+
+/// `queue`: open game functions per unit (unit, functions, bytes), largest
+/// first. `queue <unit>`: that unit's functions (address, size, status,
+/// name), the work list for one translator.
+fn queue(funcs: &[Func], args: &[String]) {
+    if let Some(unit) = args.first() {
+        for f in funcs.iter().filter(|f| &f.unit == unit) {
+            println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, f.status(), f.name);
+        }
+        return;
+    }
+    let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
+    for f in funcs.iter().filter(|f| f.status() == "open" && !f.unit.is_empty()) {
+        let e = per.entry((&f.subsystem, &f.unit)).or_default();
+        e.0 += 1;
+        e.1 += f.size as u64;
+    }
+    let mut rows: Vec<_> = per.into_iter().collect();
+    rows.sort_by(|a, b| b.1 .1.cmp(&a.1 .1).then(a.0.cmp(&b.0)));
+    for ((sub, unit), (n, bytes)) in rows {
+        let (d, s) = units::module_of(unit, sub);
+        println!("{unit}\t{sub}\t{n}\t{bytes}\tunits/{d}/{s}.rs");
     }
 }
