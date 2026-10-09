@@ -157,6 +157,8 @@ layout! {
         /// `pInitialPackage` (Xbox PDB, +0x1a8): `TESPackage *`. Also the
         /// package `Actor::InitPackageLocations` remembers.
         0x198 pInitialPackage: u32,
+        /// `pMyKiller` (Xbox PDB, +0xd0).
+        0xC0 pMyKiller: Ptr,
     }
 }
 
@@ -1139,6 +1141,8 @@ const ACTOR_GET_EYE_LEVEL: u32 = 0x008b_e940;
 const ACTOR_SLOT_234: u32 = 0x234;
 /// `Actor` virtual slot `0x214`.
 const ACTOR_SLOT_214: u32 = 0x214;
+/// Process virtual slot `0x214`, as the actor slot above.
+const PROCESS_SLOT_214: u32 = 0x214;
 /// Reference test: `*(this + 0x1ac) == 9`.
 const REFR_FIELD_1AC_IS_9: u32 = 0x0057_9670;
 /// Extra-data-objects test (`00437bd0`).
@@ -4791,6 +4795,3958 @@ fn play_picked_group(
     }
 }
 
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB): the process level of the
+/// object (a signed number; `0` is the high process).
+const MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE: u32 = 0x0093_1850;
+/// `TaskQueueInterface::QueueActorKill` (Xbox PDB): thiscall on the object
+/// `GET_TES` returns, taking the actor, the kill data and a flag.
+const QUEUE_ACTOR_KILL: u32 = 0x0087_aff0;
+/// `FollowerBarks::TriggerFollowerBark` (Xbox PDB), cdecl: the actor and the
+/// bark number.
+const TRIGGER_FOLLOWER_BARK: u32 = 0x008d_5cb0;
+/// `CombatController::IsActoraCombatTarget` (Xbox PDB): thiscall on the
+/// combat controller, taking the actor.
+const COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET: u32 = 0x0097_fa10;
+/// `Actor::GetFactionFightReaction` (Xbox PDB): the other actor and a pointer
+/// to a byte the function writes.
+const ACTOR_GET_FACTION_FIGHT_REACTION: u32 = 0x008b_87a0;
+/// `Actor::Kill` (Xbox PDB): the attacker and the damage (`float`).
+const ACTOR_KILL: u32 = 0x0089_d900;
+/// `Actor::GetArmorBeingWorn` (Xbox PDB): thiscall taking a slot number.
+const ACTOR_GET_ARMOR_BEING_WORN: u32 = 0x0089_1b90;
+/// Test that returns whether the debug messages are enabled (`005b6f70`,
+/// takes the actor).
+const DEBUG_MESSAGES_ENABLED: u32 = 0x005b_6f70;
+/// The cdecl `printf`-style function that prints a debug line (`00703c00`).
+const PRINT_DEBUG_LINE: u32 = 0x0070_3c00;
+/// `"%.20s blocks %.0f%% of %.20s's blow!"`.
+const BLOCKS_BLOW_FORMAT: u32 = 0x0108_4b54;
+/// `100.0` (`double`).
+const HUNDRED: u32 = 0x0101_7a40;
+/// `0.25` (`double`).
+const QUARTER: u32 = 0x0102_90b0;
+/// `0.5` (`double`).
+const HALF: u32 = 0x0101_1588;
+/// `Actor` virtual slot `0x360`: a bool predicate (`0047c850` returns 0 in
+/// the base class).
+const ACTOR_SLOT_360: u32 = 0x360;
+/// `Actor` virtual slot `0x380`: the actor's reach as a `float` (`0088b850`
+/// is `CombatFormulas::CalcWeaponReach` of a setting).
+const ACTOR_SLOT_REACH: u32 = 0x380;
+/// `Actor` virtual slot `0x3ac`: changes an actor value (`00881130`: the
+/// value number, the amount, the source actor).
+const ACTOR_SLOT_MODIFY_ACTOR_VALUE: u32 = 0x3ac;
+/// `Actor` virtual slot `0x3cc` (`008929a0`): drops an item: form, extra
+/// data list, count, position, rotation; returns the new reference.
+const ACTOR_SLOT_DROP_OBJECT: u32 = 0x3cc;
+/// Process virtual slot `0x534`: the item the actor has equipped in the
+/// other hand (compared with the weapon entry's form).
+const PROCESS_SLOT_534: u32 = 0x534;
+/// `CombatFormulas::CalcWeaponReach` (Xbox PDB), cdecl: the weapon's reach
+/// as a `float`; the result is in ST0.
+const CALC_WEAPON_REACH: u32 = 0x0064_63e0;
+/// Reach of a weapon form (`006447f0`, thiscall on the form; ST0).
+const WEAPON_REACH: u32 = 0x0064_47f0;
+/// `TESObjectREFR::GetScale` (Xbox PDB): ST0.
+const REFR_GET_SCALE: u32 = 0x0056_7400;
+/// `009a60e0`: cdecl, takes the actor and a `float` distance.
+const ACTOR_REACH_WORKER: u32 = 0x009a_60e0;
+/// The setting object the reach is multiplied by for a special idle of kind 4
+/// (the address `SETTING_GET_VALUE_POINTER` is called on).
+const REACH_MULTIPLIER_SETTING: u32 = 0x011c_e194;
+/// `ProcessLists::PrintLists` (Xbox PDB, the engine map's name): thiscall on
+/// the combat controller of the attacker with the victim and the amount.
+const COMBAT_CONTROLLER_NOTIFY_DAMAGE: u32 = 0x008d_0600;
+/// `0097f7f0`: thiscall on the combat controller `008a0330` returns, taking
+/// the attacker and the amount.
+const CONTROLLER_RECORD_DAMAGE: u32 = 0x0097_f7f0;
+/// `0097f6d0`: thiscall on the combat controller, taking one flag.
+const CONTROLLER_SET_FLAG: u32 = 0x0097_f6d0;
+/// `Actor::GetEssential` (Xbox PDB).
+const ACTOR_GET_ESSENTIAL: u32 = 0x0087_f3d0;
+/// `Actor::DifficultyLevelAdjustHealthModifier` (Xbox PDB): the amount and
+/// the source actor; the result is in ST0.
+const DIFFICULTY_ADJUST_HEALTH_MODIFIER: u32 = 0x0088_08a0;
+/// `00579220`: thiscall on the reference, takes a `float` and a flag.
+const REFR_FLOAT_SETTER_579220: u32 = 0x0057_9220;
+/// The setting object whose value the fatigue is compared with.
+const FATIGUE_SETTING: u32 = 0x011c_e118;
+/// Process virtual slot `0x72c`: reacts to damage (attacker, amount).
+const PROCESS_SLOT_72C: u32 = 0x72c;
+/// Process virtual slot `0x580` (shader effects: 1, 0, 0).
+const PROCESS_SLOT_580: u32 = 0x580;
+/// `ExtraDataList::GetCanNotWear` (Xbox PDB).
+const EXTRA_GET_CAN_NOT_WEAR: u32 = 0x0041_8b10;
+/// Whether the form (`this` = form) has bit `0x8` of the byte at `+0x100`
+/// (`00891b70`).
+const FORM_FLAG_100_BIT_3: u32 = 0x0089_1b70;
+/// Whether the form has bit `0x20` of the byte at `+0x100` (`0046e8c0`).
+const FORM_FLAG_100_BIT_5: u32 = 0x0046_e8c0;
+/// The position of a bone node: the address of its 3 floats (`0045bb80`,
+/// `node + 0x8c`).
+const NODE_WORLD_TRANSLATE: u32 = 0x0045_bb80;
+/// `node + 0x68` (`00461130`): the rotation matrix of a node.
+const NODE_ROTATION: u32 = 0x0046_1130;
+/// `NiMatrix3::ToEulerAnglesXYZ` (Xbox PDB): thiscall on the matrix with
+/// three pointers for the angles.
+const NI_MATRIX3_TO_EULER_ANGLES_XYZ: u32 = 0x00a5_92c0;
+/// `0056acb0` (cdecl): the dropper actor and the dropped reference.
+const ACTOR_DROPPED_OBJECT_WORKER: u32 = 0x0056_acb0;
+/// Form flag test (`00461580`): thiscall on the form with a mask; true when
+/// `*(this + 4) & mask` is not zero.
+const FORM_TEST_FLAGS: u32 = 0x0046_1580;
+
+/// The actor's value owner embedded at `+0xa4` (virtual slot `4`: base value,
+/// slot `0xc`: current value, both taking the actor value number).
+const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
+
+/// Reads a `float` constant stored as a `double` at `address`.
+fn double_constant(e: &Engine, address: u32) -> f64 {
+    e.global::<f64>(address)
+}
+
+// Translated from 008985d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Ends the actor's movement, creates a package of type `0x24` and adds it
+/// through the actor's add-package slot (`0x2f4`): with `1, 1` when the
+/// actor's process type is at most 1, otherwise after setting the package's
+/// second flag, with `0, 0`.
+pub fn fn_008985d0(e: &mut Engine, this: Ptr<Actor>) {
+    e.call(ACTOR_END_MOVEMENT, &args![this]);
+    let package = e.call(PACKAGE_CREATE, &args![0x24u32]).ptr::<()>();
+    e.call(PACKAGE_CALCULATE_PROCEDURE_TYPE, &args![package, 0u32]);
+    let process_type = e
+        .call(MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, &args![this])
+        .i32();
+    if process_type <= 1 {
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_ADD_PACKAGE,
+            &args![package, 1u32, 1u32],
+        );
+    } else {
+        e.call(PACKAGE_SET_FLAG_B, &args![package, 1u32]);
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_ADD_PACKAGE,
+            &args![package, 0u32, 0u32],
+        );
+    }
+}
+
+// Translated from 00898650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies a health loss to an actor that is not an essential-style
+/// protected one (`this`'s slot `0x22c(0)` false): works out the health
+/// ratio (current over base of actor value `0x10`), lets a follower
+/// (teammate flag at `+0x18d`) bark when it is under a half (bark 4) or a
+/// quarter (bark 5), turns the attacker into nobody when the player attacks
+/// a creature that the player's faction reaction does not allow it to fight,
+/// and, when the health is below one, kills the actor: directly
+/// (`Actor::Kill`) or, when the task queue is used (`008c7aa0`), by queueing
+/// the kill with the damage `float` in a 4-byte block and remembering the
+/// attacker as the killer (`+0xc0`).
+pub fn fn_00898650(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage: f32) {
+    let mut attacker = attacker;
+    if e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        return;
+    }
+    let owner = this.addr() + ACTOR_VALUE_OWNER_OFFSET;
+    let current = e.vcall(owner, 0x0c, &args![0x10u32]).f32();
+    let base = e.vcall(owner, 0x04, &args![0x10u32]).f32();
+    let mut ratio = 1.0f32;
+    if base != 0.0 {
+        ratio = (current as f64 / base as f64) as f32;
+    }
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+        let quarter = double_constant(e, QUARTER);
+        let half = double_constant(e, HALF);
+        if (ratio as f64) < quarter {
+            e.call(TRIGGER_FOLLOWER_BARK, &args![this, 5u32]);
+        } else if (ratio as f64) < half {
+            e.call(TRIGGER_FOLLOWER_BARK, &args![this, 4u32]);
+        }
+    }
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    if attacker.addr() == player_address
+        && controller != 0
+        && !e
+            .call(
+                COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+                &args![controller, player_address],
+            )
+            .bool()
+    {
+        let reaction = e.with_stack(4, |e, out| {
+            e.mem.set_u8(out.addr(), 0);
+            e.call(
+                ACTOR_GET_FACTION_FIGHT_REACTION,
+                &args![this, player_address, out],
+            )
+            .i32()
+        });
+        if reaction == 2 {
+            attacker = Ptr::NULL;
+        }
+    }
+    let one = double_constant(e, ONE_DOUBLE);
+    if (current as f64) < one {
+        if !e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+            e.call(ACTOR_KILL, &args![this, attacker, damage]);
+        } else {
+            let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+            e.mem.set_f32(block, damage);
+            e.set(this, Actor::pMyKiller, attacker.cast());
+            let tes = e.call(GET_TES, &args![]).u32();
+            e.call(QUEUE_ACTOR_KILL, &args![tes, this, block, 0u32]);
+        }
+    }
+}
+
+// Translated from 00898fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x10` of the dword at `+0x12c` is set.
+pub fn fn_00898fd0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x12c) & 0x10 != 0
+}
+
+// Translated from 00898ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls virtual slot `0x18` of the object embedded at `+0x30` of the
+/// actor's base form (`004181e0`) and returns its flag.
+pub fn fn_00898ff0(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+    e.vcall(base + 0x30, 0x18, &args![]).bool()
+}
+
+// Translated from 00899030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to virtual slot `0x4f0` of the object
+/// `MiddleHighProcess::GetSavedAcquireObject` returns for the actor, and
+/// returns its result.
+pub fn fn_00899030(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    e.vcall(object, 0x4f0, &args![]).u32()
+}
+
+// Translated from 00899060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the actor has an acquire object (`008d8520`), calls its virtual
+/// slot `0x4f4` with `flag`.
+pub fn fn_00899060(e: &mut Engine, this: Ptr<Actor>, flag: u8) {
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(object, 0x4f4, &args![flag]);
+    }
+}
+
+// Translated from 008990a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::HandleBlockedAttack` (Xbox PDB): when debug messages are on,
+/// prints `"<other> blocks <percent>% of <this>'s blow!"`; `percent` is
+/// `blocked * 100`. Two of the four stack words are never read.
+pub fn actor_handle_blocked_attack(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    _unused_0: u32,
+    blocked: f32,
+    other: Ptr<Actor>,
+    _unused_3: u32,
+) {
+    if e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() {
+        let this_name = e.call(REFR_GET_NAME, &args![this]).u32();
+        let percent = blocked as f64 * double_constant(e, HUNDRED);
+        let other_name = e.call(REFR_GET_NAME, &args![other]).u32();
+        e.call(
+            PRINT_DEBUG_LINE,
+            &args![BLOCKS_BLOW_FORMAT, other_name, percent, this_name],
+        );
+    }
+}
+
+// Translated from 008990f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks for the reference the actor can hit: works out the actor's reach (the
+/// reach of the weapon it holds, `CalcWeaponReach` of the weapon form's reach,
+/// or with no weapon its own, slot `0x380`; times the actor's scale; times
+/// the reach setting when slot `0x360` is true and the special idle state
+/// object's form is of kind 4) and returns what `009a60e0(actor, reach)`
+/// finds.
+pub fn fn_008990f0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mut weapon = 0;
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        weapon = e.vcall(object, PROCESS_SLOT_CURRENT_WEAPON, &args![]).u32();
+    }
+    let mut weapon_form = 0;
+    if weapon != 0 {
+        weapon_form = e.call(ENTRY_FORM, &args![weapon]).u32();
+    }
+    let reach = if weapon_form != 0 {
+        let raw = e.call(WEAPON_REACH, &args![weapon_form]).f32();
+        e.call(CALC_WEAPON_REACH, &args![raw]).f32()
+    } else {
+        e.vcall(this.addr(), ACTOR_SLOT_REACH, &args![]).f32()
+    };
+    let scale = e.call(REFR_GET_SCALE, &args![this]).f32();
+    let mut result = (scale as f64 * reach as f64) as f32;
+    if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && e.call(ENTRY_FORM, &args![SPECIAL_IDLE_STATE_OBJECT]).u32() == 4
+    {
+        let setting = e
+            .call(SETTING_GET_VALUE_POINTER, &args![REACH_MULTIPLIER_SETTING])
+            .u32();
+        let multiplier = e.mem.f32(setting);
+        result = (result as f64 * multiplier as f64) as f32;
+    }
+    e.call(ACTOR_REACH_WORKER, &args![this, result]).u32()
+}
+
+// Translated from 0089d5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the form flag bit `0x8000000` is set (the flag test `00461580`:
+/// `*(this + 4) & mask != 0`).
+pub fn fn_0089d5e0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(FORM_TEST_FLAGS, &args![this, 0x0800_0000u32]).bool()
+}
+
+// Translated from 0089d600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the embedded object at `+0x450`.
+pub fn fn_0089d600(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0x450)
+}
+
+// Translated from 0089d620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dword at `+0x2e4`.
+pub fn fn_0089d620(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x2e4)
+}
+
+// Translated from 0089d640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores three dwords at `+0xf4`, `+0xf8` and `+0xfc`.
+pub fn fn_0089d640(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) {
+    e.mem.set_u32(this.addr() + 0xf4, first);
+    e.mem.set_u32(this.addr() + 0xf8, second);
+    e.mem.set_u32(this.addr() + 0xfc, third);
+}
+
+// Translated from 0089d670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x28d`.
+pub fn fn_0089d670(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x28d)
+}
+
+// Translated from 0089d690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x28e`.
+pub fn fn_0089d690(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x28e)
+}
+
+// Translated from 0089d6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dword at `+0x29c`.
+pub fn fn_0089d6b0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x29c)
+}
+
+// Translated from 0089d6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dword at `+0x298`.
+pub fn fn_0089d6d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x298)
+}
+
+// Translated from 0089d6f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies damage to an actor that is not protected (the object embedded at
+/// `+0x94`, slot `0x10`, is false). `health_loss` goes through
+/// `DifficultyLevelAdjustHealthModifier`; when the adjusted loss is positive
+/// the attacker's combat controller (slot `0x428`) and this actor's process
+/// object are told, a non-player actor's acquire object reacts (slot
+/// `0x72c`) unless it is essential, actor value `0x10` (health) is lowered
+/// by the loss through slot `0x3ac` and `00579220` runs. A positive
+/// `fatigue_loss` lowers actor value `0x16` the same way when the fatigue
+/// has reached the fatigue setting. Returns slot `0x22c(0)`'s result, or the
+/// protected test's result with its low byte cleared.
+pub fn fn_0089d6f0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    health_loss: f32,
+    fatigue_loss: f32,
+    attacker: Ptr<Actor>,
+) -> u32 {
+    let protected = e.vcall(this.addr() + 0x94, 0x10, &args![]).u32();
+    if protected as u8 != 0 {
+        return protected & 0xffff_ff00;
+    }
+    let adjusted = e
+        .call(
+            DIFFICULTY_ADJUST_HEALTH_MODIFIER,
+            &args![this, -health_loss, attacker],
+        )
+        .f32();
+    let loss = -adjusted;
+    if loss as f64 > double_constant(e, ZERO_DOUBLE) {
+        if !attacker.is_null() {
+            let controller = e.vcall(attacker.addr(), ACTOR_SLOT_428, &args![]).u32();
+            if controller != 0 {
+                let controller = e.vcall(attacker.addr(), ACTOR_SLOT_428, &args![]).u32();
+                e.call(
+                    COMBAT_CONTROLLER_NOTIFY_DAMAGE,
+                    &args![controller, this, loss],
+                );
+            }
+        }
+        if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+            let controller = fn_008a0330(e, this);
+            e.call(CONTROLLER_RECORD_DAMAGE, &args![controller, attacker, loss]);
+        }
+        if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+            && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0
+            && !e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+        {
+            let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            e.vcall(object, PROCESS_SLOT_72C, &args![attacker, loss]);
+        }
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_MODIFY_ACTOR_VALUE,
+            &args![0x10u32, -loss, attacker],
+        );
+        e.call(REFR_FLOAT_SETTER_579220, &args![this, health_loss, 0u32]);
+    }
+    if fatigue_loss as f64 > double_constant(e, ZERO_DOUBLE) {
+        let fatigue = actor_get_fatigue(e, this) as f64;
+        let setting = e
+            .call(SETTING_GET_VALUE_POINTER, &args![FATIGUE_SETTING])
+            .u32();
+        let threshold = e.mem.f32(setting) as f64;
+        if threshold <= fatigue {
+            e.vcall(
+                this.addr(),
+                ACTOR_SLOT_MODIFY_ACTOR_VALUE,
+                &args![0x16u32, -fatigue_loss, attacker],
+            );
+        }
+    }
+    e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).u32()
+}
+
+// Translated from 0089d8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetRandomWornArmor` (Xbox PDB): with `flag` set, the armor worn in
+/// slot 0 or, when there is none, in slot 1; otherwise the armor worn in
+/// slot 2.
+pub fn actor_get_random_worn_armor(e: &mut Engine, this: Ptr<Actor>, flag: u8) -> u32 {
+    if flag == 0 {
+        e.call(ACTOR_GET_ARMOR_BEING_WORN, &args![this, 2u32]).u32()
+    } else {
+        let armor = e.call(ACTOR_GET_ARMOR_BEING_WORN, &args![this, 0u32]).u32();
+        if armor == 0 {
+            e.call(ACTOR_GET_ARMOR_BEING_WORN, &args![this, 1u32]).u32()
+        } else {
+            armor
+        }
+    }
+}
+
+// Translated from 0089f4e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dword at `+0x638`.
+pub fn fn_0089f4e0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x638)
+}
+
+// Translated from 0089f500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0xe2d`.
+pub fn fn_0089f500(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xe2d)
+}
+
+// Translated from 0089f520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the byte `value` at `+0x18a`.
+pub fn fn_0089f520(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x18a, value);
+}
+
+// Translated from 0089f540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x18a`.
+pub fn fn_0089f540(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x18a)
+}
+
+// Translated from 0089f560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds 1 to the dword at `+0x3c`.
+pub fn fn_0089f560(e: &mut Engine, this: Ptr) {
+    let count = e.mem.u32(this.addr() + 0x3c);
+    e.mem.set_u32(this.addr() + 0x3c, count.wrapping_add(1));
+}
+
+// Translated from 0089f580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drops the weapon the actor has drawn when it is not the item equipped in
+/// the other hand (process slot `0x534`), is not flagged (form bytes at
+/// `+0x100`: bits `0x8`, `0x20`) and cannot be worn (its extra data list says
+/// `GetCanNotWear` false): the drop (`Actor` slot `0x3cc`) happens at the
+/// weapon bone's position and angles (process slot `0x190` of the
+/// `Actor` slot `0x1e8` result) when the node exists, then the dropped
+/// reference is passed to `0056acb0` and, for an enchanted form, process
+/// slot `0x580` runs with `1, 0, 0`. Ends by telling the actor's
+/// controller of its fight (`0097f6d0(0)`) when it has one (slot `0x428`).
+pub fn fn_0089f580(e: &mut Engine, this: Ptr<Actor>) {
+    let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let weapon = e.vcall(object, PROCESS_SLOT_CURRENT_WEAPON, &args![]).u32();
+    let object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let other_hand = e.vcall(object, PROCESS_SLOT_534, &args![]).u32();
+    if weapon != 0 {
+        let form = e.call(ENTRY_FORM, &args![weapon]).u32();
+        if e.call(FORM_FLAG_100_BIT_3, &args![form]).bool() {
+            return;
+        }
+        let form = e.call(ENTRY_FORM, &args![weapon]).u32();
+        if e.call(FORM_FLAG_100_BIT_5, &args![form]).bool() {
+            return;
+        }
+        if !e.call(ACTOR_IS_WEAPON_DRAWN, &args![this]).bool() {
+            return;
+        }
+        let lists = e.call(ENTRY_FIRST_EXTRA_LIST, &args![weapon]).u32();
+        let lists = e.call(LIST_ITEM_SLOT, &args![lists]).u32();
+        let first = e.mem.u32(lists);
+        if e.call(EXTRA_GET_CAN_NOT_WEAR, &args![first]).bool() {
+            return;
+        }
+        if e.call(ENTRY_FORM, &args![weapon]).u32() == other_hand {
+            return;
+        }
+        let mut enchanted = false;
+        let form = e.call(ENTRY_FORM, &args![weapon]).u32();
+        if e.call(GET_FORM_ENCHANTING, &args![form]).u32() != 0 {
+            enchanted = true;
+        }
+        let bone_slot = e.vcall(this.addr(), ACTOR_SLOT_1E8, &args![]).u32();
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let node = e
+            .vcall(process, PROCESS_SLOT_WEAPON_BONE, &args![bone_slot])
+            .u32();
+        if node != 0 {
+            let translate = e.call(NODE_WORLD_TRANSLATE, &args![node]).u32();
+            let position = e.mem.alloc(12);
+            for word in 0..3 {
+                let value = e.mem.u32(translate + 4 * word);
+                e.mem.set_u32(position + 4 * word, value);
+            }
+            let angles = e.mem.alloc(12);
+            let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+            e.call(
+                NI_MATRIX3_TO_EULER_ANGLES_XYZ,
+                &args![rotation, angles, angles + 4, angles + 8],
+            );
+            let lists = e.call(ENTRY_FIRST_EXTRA_LIST, &args![weapon]).u32();
+            let first = e.mem.u32(lists);
+            let form = e.call(ENTRY_FORM, &args![weapon]).u32();
+            let dropped = e
+                .vcall(
+                    this.addr(),
+                    ACTOR_SLOT_DROP_OBJECT,
+                    &args![form, first, 1u32, position, angles],
+                )
+                .u32();
+            e.call(ACTOR_DROPPED_OBJECT_WORKER, &args![this, dropped]);
+            e.mem.free(position);
+            e.mem.free(angles);
+            if enchanted {
+                let process = e.get(this, Actor::pCurrentProcess).addr();
+                e.vcall(process, PROCESS_SLOT_580, &args![1u32, 0u32, 0u32]);
+            }
+        }
+        if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+            let controller = fn_008a0330(e, this);
+            e.call(CONTROLLER_SET_FLAG, &args![controller, 0u32]);
+        }
+    }
+}
+
+// Translated from 008a0250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `+0xc4` to 1 (`bMurderAlarm` of an `Actor`, Xbox PDB; the
+/// combat starter also calls it on a combat controller).
+pub fn fn_008a0250(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0xc4, 1);
+}
+
+// Translated from 008a0330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls virtual slot `0x22c` of the actor's process (`pCurrentProcess`) and
+/// returns its result: the actor's combat controller as the process holds it
+/// (`Actor::GetCombatController`, `008a02d0`, checks its type and the combat
+/// flag first).
+pub fn fn_008a0330(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    e.vcall(process, PROCESS_SLOT_22C, &args![]).u32()
+}
+
+/// The `CombatManager` singleton pointer.
+const COMBAT_MANAGER: u32 = 0x011f_1958;
+/// The `TES` singleton pointer (`GET_TES` returns the same object).
+const TES_SINGLETON: u32 = 0x011d_ea10;
+/// The `ModelLoader` singleton pointer.
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+/// The `FaderManager` singleton pointer.
+const FADER_MANAGER: u32 = 0x011d_8804;
+/// The global object `Actor::Resurrect` locks around its work (`0040fbf0`
+/// locks it, `0040fba0` unlocks it).
+const RESURRECT_LOCK: u32 = 0x011f_11a0;
+/// The global object whose do-nothing method `00483710` the combat start
+/// calls around the combat controller's start (`0x11df71c`).
+const COMBAT_START_GUARD: u32 = 0x011d_f71c;
+/// The pointer read as the `this` of `0047c850` (`TESActorBaseData`'s
+/// do-nothing predicate that returns 0).
+const BASE_DATA_OBJECT: u32 = 0x011d_e45c;
+/// `0047c850`: predicate on `BASE_DATA_OBJECT` (returns 0 in the exe).
+const BASE_DATA_PREDICATE: u32 = 0x0047_c850;
+/// `PathManager::QInstance` (Xbox PDB): the singleton, no arguments.
+const PATH_MANAGER_Q_INSTANCE: u32 = 0x0047_d0b0;
+/// `PathManager::ClearInventoryPointersFromCurrentRequests` (Xbox PDB):
+/// thiscall on the manager, taking the inventory changes.
+const PATH_MANAGER_CLEAR_INVENTORY_POINTERS: u32 = 0x006e_bd10;
+/// `00574920`: thiscall on the actor, taking a flag.
+const ACTOR_UPDATE_INVENTORY_WORKER: u32 = 0x0057_4920;
+/// `TESNPC::InitDefaultWorn`-style worker (`006047c0`, the 5-word form of
+/// the creature one): the actor, `1`, a flag, `0`, `1`.
+const NPC_INIT_DEFAULT_WORN: u32 = 0x0060_47c0;
+/// `TESCreature::InitDefaultWorn` (Xbox PDB): the actor, `1`, a flag, `1`.
+const CREATURE_INIT_DEFAULT_WORN: u32 = 0x005f_9e00;
+/// Whether a package (`this`) is one of the kinds `00441b00` accepts.
+const PACKAGE_KIND_TEST: u32 = 0x0044_1b00;
+/// `Actor` virtual slot `0x1cc`.
+const ACTOR_SLOT_1CC: u32 = 0x1cc;
+/// Process virtual slot `0x468`.
+const PROCESS_SLOT_468: u32 = 0x468;
+/// `Actor` virtual slot `0x418`.
+const ACTOR_SLOT_418: u32 = 0x418;
+/// `Actor` virtual slot `0x434`: `Actor::StopCombat` (Xbox PDB), takes the
+/// target.
+const ACTOR_SLOT_STOP_COMBAT: u32 = 0x434;
+/// Process virtual slot `0x4d4` (a furniture marker entry, whose byte at
+/// `+0xe` is compared with `0x14`).
+const PROCESS_SLOT_4D4: u32 = 0x4d4;
+/// Process virtual slot `0x52c`.
+const PROCESS_SLOT_52C: u32 = 0x52c;
+/// Process virtual slot `0x208` (takes the target and the reference
+/// `0x52c` gave; the result is a `float`).
+const PROCESS_SLOT_208: u32 = 0x208;
+/// Process virtual slot `0x2c8` (takes a `float`).
+const PROCESS_SLOT_2C8: u32 = 0x2c8;
+/// `TESObjectREFR::GetDistanceFromReference` (Xbox PDB): the other
+/// reference and two flags; the distance is in ST0.
+const REFR_GET_DISTANCE_FROM_REFERENCE: u32 = 0x0057_23b0;
+/// `Actor` `0087f9c0` (a `float` read).
+const ACTOR_GETTER_87F9C0: u32 = 0x0087_f9c0;
+/// `PlayerCharacter::ChangePerceivedActorHostileStatus` (Xbox PDB): thiscall
+/// on the player, taking the actor and a flag.
+const PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS: u32 = 0x0096_7220;
+/// `00703350`: returns the reference the crosshair targets (compared with
+/// the actor).
+const CROSSHAIR_TARGET: u32 = 0x0070_3350;
+/// `Interface::SetCrosshairTargetType` (Xbox PDB), cdecl.
+const SET_CROSSHAIR_TARGET_TYPE: u32 = 0x0070_3860;
+/// `Actor::EndInterruptPackage` (Xbox PDB): takes a flag.
+const ACTOR_END_INTERRUPT_PACKAGE: u32 = 0x0088_1680;
+/// `CombatManager::AddGroupMember` (Xbox PDB): thiscall on the manager,
+/// taking the actor and the group.
+const COMBAT_MANAGER_ADD_GROUP_MEMBER: u32 = 0x0099_22b0;
+/// `CombatManager::AddCombatant` (Xbox PDB): the actor, the target, the
+/// value and a flag.
+const COMBAT_MANAGER_ADD_COMBATANT: u32 = 0x0099_2110;
+/// `CombatManager::AddPretendCombatant` (Xbox PDB): the actor and the
+/// pretend target.
+const COMBAT_MANAGER_ADD_PRETEND_COMBATANT: u32 = 0x0099_23d0;
+/// `CombatController::AddTarget` (Xbox PDB): the target, the value, a flag
+/// and two `float`s.
+const COMBAT_CONTROLLER_ADD_TARGET: u32 = 0x0097_f930;
+/// The target of a combat controller: `*(controller + 0xc0)` (`004030b0`).
+const COMBAT_CONTROLLER_TARGET: u32 = 0x0040_30b0;
+/// The value `Interface` calls `Error`: a do-nothing cdecl function
+/// (`0040fbe0`) that takes the actor.
+const ERROR_NO_OP: u32 = 0x0040_fbe0;
+/// `FaderManager::GetFaderAlpha` (Xbox PDB): thiscall on the manager,
+/// taking a fader number; the result is in ST0.
+const FADER_MANAGER_GET_FADER_ALPHA: u32 = 0x0070_14e0;
+/// Test on an actor (`00576d30`).
+const ACTOR_TEST_576D30: u32 = 0x0057_6d30;
+/// Test on a combat controller (`00981450`).
+const CONTROLLER_TEST_981450: u32 = 0x0098_1450;
+/// Test on the player (`005a03f0`, takes a flag).
+const PLAYER_TEST_5A03F0: u32 = 0x005a_03f0;
+/// Process-type test on the actor (`00437bf0`: process level equal to 5).
+const ACTOR_PROCESS_LEVEL_IS_5: u32 = 0x0043_7bf0;
+/// Process-type test on the actor (`00437bd0`: process level equal to 3).
+const ACTOR_PROCESS_LEVEL_IS_3: u32 = 0x0043_7bd0;
+/// Test on an actor (`00440da0`).
+const ACTOR_TEST_440DA0: u32 = 0x0044_0da0;
+/// Test on an actor (`00440d80`).
+const ACTOR_TEST_440D80: u32 = 0x0044_0d80;
+/// `Actor` virtual slot `0x2e8`.
+const ACTOR_SLOT_2E8: u32 = 0x2e8;
+/// How many combat entries the player's combat list holds for the actor
+/// (`008a8230`: the player and the actor).
+const PLAYER_COMBAT_LIST_COUNT: u32 = 0x008a_8230;
+/// `PlayerCharacter::AddActorToPlayerCombatList` (Xbox PDB): thiscall on the
+/// player, taking the actor.
+const PLAYER_ADD_ACTOR_TO_COMBAT_LIST: u32 = 0x0093_a690;
+/// Test on the combat controller (`009818b0`).
+const CONTROLLER_TEST_9818B0: u32 = 0x0098_18b0;
+/// Process virtual slot `0x64c`.
+const PROCESS_SLOT_64C: u32 = 0x64c;
+/// Process virtual slot `0x630` (takes the target).
+const PROCESS_SLOT_630: u32 = 0x630;
+/// Combat controller start for the high process level (`0097da50`).
+const CONTROLLER_START_HIGH: u32 = 0x0097_da50;
+/// Combat controller start for the other process levels (`0097e4b0`).
+const CONTROLLER_START_OTHER: u32 = 0x0097_e4b0;
+/// `00972aa0`: thiscall on the process lists, taking the actor.
+const PROCESS_LISTS_WORKER_972AA0: u32 = 0x0097_2aa0;
+/// `ExtraDataList::RemoveSavedHavokData` (Xbox PDB).
+const EXTRA_REMOVE_SAVED_HAVOK_DATA: u32 = 0x0042_2c20;
+/// `ExtraDataList::RemoveDismembermentExtra` (Xbox PDB).
+const EXTRA_REMOVE_DISMEMBERMENT_EXTRA: u32 = 0x0042_e8e0;
+/// `ExtraDataList::RemovePlayerCrimeListExtra` (Xbox PDB): takes the actor.
+const EXTRA_REMOVE_PLAYER_CRIME_LIST_EXTRA: u32 = 0x0041_cf30;
+/// `MiddleHighProcess::GetLastIdlePlayed` (Xbox PDB).
+const PROCESS_GET_LAST_IDLE_PLAYED: u32 = 0x005a_29b0;
+/// `Actor::SetLifeState` (Xbox PDB): takes the state number.
+const ACTOR_SET_LIFE_STATE: u32 = 0x008a_1800;
+/// `00884f80`: thiscall on the actor.
+const ACTOR_WORKER_884F80: u32 = 0x0088_4f80;
+/// `NiPointer` constructor (`00633c90`): stores the pointer and adds a
+/// reference when it is not null.
+const NI_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+/// `bhkWorld::SetMotion` (Xbox PDB), cdecl: the world object (from `Actor`
+/// slot `0x1d0`) and four flags.
+const BHK_WORLD_SET_MOTION: u32 = 0x00c6_a350;
+/// `Actor` virtual slot `0x1d0` (no arguments).
+const ACTOR_SLOT_1D0: u32 = 0x1d0;
+/// `Actor` virtual slot `0xc4` (`MobileObject::SetDelete`, Xbox PDB).
+const ACTOR_SLOT_SET_DELETE: u32 = 0xc4;
+/// `Actor` virtual slot `0x4c` (takes a flag mask).
+const ACTOR_SLOT_4C: u32 = 0x4c;
+/// `Actor` virtual slot `0x1c4` (`MobileObject::InitHavok`, Xbox PDB).
+const ACTOR_SLOT_INIT_HAVOK: u32 = 0x1c4;
+/// Process virtual slot `0x290`.
+const PROCESS_SLOT_290: u32 = 0x290;
+/// Process virtual slot `0x410`.
+const PROCESS_SLOT_410: u32 = 0x410;
+/// `ModifierList::DeleteAllModifiers` (Xbox PDB).
+const MODIFIER_LIST_DELETE_ALL: u32 = 0x0093_70b0;
+/// `ProcessLists::RemoveReference` (Xbox PDB): thiscall on the process
+/// lists, taking the actor and the process level.
+const PROCESS_LISTS_REMOVE_REFERENCE: u32 = 0x0096_d470;
+/// `ProcessLists::AddReference` (Xbox PDB): the actor, the level and three
+/// zeros.
+const PROCESS_LISTS_ADD_REFERENCE: u32 = 0x0096_d450;
+/// Constructor of the 0xb4-byte process object `Resurrect` installs
+/// (`00906dc0`).
+const NEW_PROCESS_CONSTRUCT: u32 = 0x0090_6dc0;
+/// `Actor` virtual slot `0x208` (`fn_0089fb80`).
+const ACTOR_SLOT_208: u32 = 0x208;
+/// `Actor` virtual slots `0x240`, `0x248` and `0x24c`: the process-level
+/// switches (to the high, middle high and middle low level; the names are
+/// those the code's `GetDesiredProcessLevel` switch uses, not confirmed).
+const ACTOR_SLOT_240: u32 = 0x240;
+const ACTOR_SLOT_248: u32 = 0x248;
+const ACTOR_SLOT_24C: u32 = 0x24c;
+/// `TES::IsCellLoaded` (Xbox PDB): thiscall on the TES, taking the cell and
+/// a flag.
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+/// `TES::GetCellPriority` (Xbox PDB): the cell and two flags.
+const TES_GET_CELL_PRIORITY: u32 = 0x0045_8be0;
+/// `ModelLoader::QueueReference` (Xbox PDB): thiscall on the loader, taking
+/// the reference and the priority.
+const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
+/// Test on a cell (`00450ff0`).
+const CELL_TEST_450FF0: u32 = 0x0045_0ff0;
+/// `MobileObject::GetDesiredProcessLevel` (Xbox PDB).
+const MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL: u32 = 0x0093_34b0;
+/// Lock and unlock of the global at `RESURRECT_LOCK`.
+const LOCK_ENTER: u32 = 0x0040_fbf0;
+const LOCK_LEAVE: u32 = 0x0040_fba0;
+/// `008a1a40`: thiscall on the actor, taking a flag (the function after
+/// `Actor::SetLifeState`; its translation is outside this session's list).
+const ACTOR_FN_008A1A40: u32 = 0x008a_1a40;
+/// Process virtual slot `0x54` (takes the actor and a kind number).
+const PROCESS_SLOT_54: u32 = 0x54;
+/// `0097efe0`: thiscall on a combat controller, taking two words.
+const CONTROLLER_FORWARD_97EFE0: u32 = 0x0097_efe0;
+/// `00483710`: a do-nothing method (it only stores `this`) the combat start
+/// calls on `COMBAT_START_GUARD` before and after starting the controller.
+const COMBAT_START_GUARD_NO_OP: u32 = 0x0048_3710;
+
+// Translated from 0089f780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::Resurrect` (Xbox PDB), `reset_process`, `queue_load`, `heal`:
+/// brings an actor back to life. Clears the delete state (slot `0xc4`),
+/// the saved havok and dismemberment extras, the idle played and the
+/// player crime extra, removes the actor from the process lists
+/// (`00972aa0`), then:
+/// - with `heal` set and a collision object (slot `0x1d0`): sets the life
+///   state to 0, heals actor value `0x10` to its base through slot `0x3ac`,
+///   re-initializes havok and the collision motion and tells the process
+///   (slots `0x290`, `0x410`);
+/// - otherwise clears the modifier lists, a new `0xb4`-byte process object
+///   replaces the actor's one when it is not the player, the life state is
+///   set to 0 and the actor is put back in the process level it wants
+///   (through the cell load queue when `queue_load` is set).
+///
+/// The compiler's exception-unwinding frame is not translated.
+pub fn actor_resurrect(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    reset_process: u8,
+    queue_load: u8,
+    heal: u8,
+) {
+    e.vcall(this.addr(), ACTOR_SLOT_SET_DELETE, &args![0u32]);
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(EXTRA_REMOVE_SAVED_HAVOK_DATA, &args![extra]);
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(EXTRA_REMOVE_DISMEMBERMENT_EXTRA, &args![extra]);
+    e.vcall(this.addr(), ACTOR_SLOT_4C, &args![0x0002_0000u32]);
+    if e.call(PROCESS_GET_LAST_IDLE_PLAYED, &args![this]).u32() != 0 {
+        e.call(ACTOR_FN_008A1A40, &args![this, 0u32]);
+    }
+    e.mem.set_u8(this.addr() + 0x174, 0);
+    e.call(ACTOR_WORKER_884F80, &args![this]);
+    e.call(PROCESS_LISTS_WORKER_972AA0, &args![PROCESS_LISTS, this]);
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(EXTRA_REMOVE_PLAYER_CRIME_LIST_EXTRA, &args![extra, this]);
+
+    if heal != 0 && e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() != 0 {
+        e.call(ACTOR_SET_LIFE_STATE, &args![this, 0u32]);
+        let owner = this.addr() + ACTOR_VALUE_OWNER_OFFSET;
+        let current = e.vcall(owner, 0x0c, &args![0x10u32]).f32();
+        let base = e.vcall(owner, 0x00, &args![0x10u32]).i32();
+        let missing = ((base as f32) as f64 - current as f64) as f32;
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_MODIFY_ACTOR_VALUE,
+            &args![0x10u32, missing, 0u32],
+        );
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        // A `NiPointer` temporary on the stack, built from null and passed
+        // by value.
+        e.with_stack(4, |e, pointer| {
+            e.call(NI_POINTER_CONSTRUCT, &args![pointer, 0u32]);
+            let value = e.mem.u32(pointer.addr());
+            e.vcall(process, PROCESS_SLOT_290, &args![value]);
+        });
+        e.vcall(this.addr(), ACTOR_SLOT_INIT_HAVOK, &args![]);
+        let world = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+        e.call(BHK_WORLD_SET_MOTION, &args![world, 1u32, 1u32, 0u32, 1u32]);
+        if process != 0 {
+            e.vcall(process, PROCESS_SLOT_410, &args![3u32]);
+        }
+        return;
+    }
+
+    e.vcall(this.addr(), ACTOR_SLOT_4C, &args![4u32]);
+    e.call(MODIFIER_LIST_DELETE_ALL, &args![this.byte_add(0xd0)]);
+    e.call(MODIFIER_LIST_DELETE_ALL, &args![this.byte_add(0xe0)]);
+    e.mem.set_u8(this.addr() + 0x118, 0);
+    e.call(LOCK_ENTER, &args![RESURRECT_LOCK, 0u32]);
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    if this.addr() != player_address {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        if process != 0 {
+            let level = e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32();
+            e.call(
+                PROCESS_LISTS_REMOVE_REFERENCE,
+                &args![PROCESS_LISTS, this, level],
+            );
+        }
+        let old_process = e.get(this, Actor::pCurrentProcess).addr();
+        if old_process != 0 {
+            e.vcall(old_process, 0, &args![1u32]);
+        }
+        let block = e.call(OPERATOR_NEW, &args![0xb4u32]).u32();
+        let new_process = if block != 0 {
+            e.call(NEW_PROCESS_CONSTRUCT, &args![block]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(this.addr() + 0x68, new_process);
+    }
+    if reset_process != 0 {
+        e.vcall(this.addr(), ACTOR_SLOT_208, &args![0u32]);
+    }
+    e.call(ACTOR_SET_LIFE_STATE, &args![this, 0u32]);
+    if this.addr() != player_address {
+        let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+        if cell != 0 {
+            let tes = e.global::<u32>(TES_SINGLETON);
+            if e.call(TES_IS_CELL_LOADED, &args![tes, cell, 0u32]).bool() && queue_load != 0 {
+                let priority = e
+                    .call(TES_GET_CELL_PRIORITY, &args![tes, cell, 0u32, 0u32])
+                    .u32();
+                let loader = e.global::<u32>(MODEL_LOADER);
+                e.call(MODEL_LOADER_QUEUE_REFERENCE, &args![loader, this, priority]);
+                if e.call(CELL_TEST_450FF0, &args![cell]).bool() {
+                    e.vcall(this.addr(), ACTOR_SLOT_240, &args![]);
+                } else {
+                    e.vcall(this.addr(), ACTOR_SLOT_24C, &args![]);
+                }
+                e.call(LOCK_LEAVE, &args![RESURRECT_LOCK]);
+                return;
+            }
+        }
+        match e
+            .call(MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL, &args![this])
+            .u32()
+        {
+            0 => {
+                e.vcall(this.addr(), ACTOR_SLOT_240, &args![]);
+            }
+            1 => {
+                e.vcall(this.addr(), ACTOR_SLOT_24C, &args![]);
+            }
+            2 => {
+                e.vcall(this.addr(), ACTOR_SLOT_248, &args![]);
+            }
+            3 => {
+                e.call(
+                    PROCESS_LISTS_ADD_REFERENCE,
+                    &args![PROCESS_LISTS, this, 3u32, 0u32, 0u32, 0u32],
+                );
+            }
+            _ => {}
+        }
+    }
+    e.call(LOCK_LEAVE, &args![RESURRECT_LOCK]);
+}
+
+// Translated from 0089fb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor` virtual slot `0x208`: re-initializes the actor's worn items.
+/// Unless the base data predicate (`0047c850`) is set, asks the acquire
+/// object (when its field `+0x28` is at most 1; otherwise the actor itself
+/// through slot `0x1cc`) to refresh, clears the path manager's pointers into
+/// the actor's inventory and runs `00574920`; then, for an actor with a
+/// collision object (slot `0x1d0`), runs the default-worn setup of its base
+/// form: the NPC one (form type `0x2a`) or the creature one (type `0x2b`),
+/// with a flag that is cleared while the current package is of the kind
+/// `00441b00` accepts.
+pub fn fn_0089fb80(e: &mut Engine, this: Ptr<Actor>, flag: u8) {
+    let base_data = e.global::<u32>(BASE_DATA_OBJECT);
+    if !e.call(BASE_DATA_PREDICATE, &args![base_data]).bool() {
+        let mut object = 0;
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.call(ACQUIRE_OBJECT_FIELD_28, &args![acquire]).i32() <= 1 {
+                object = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            }
+        }
+        if object != 0 {
+            e.vcall(object, PROCESS_SLOT_468, &args![1u32]);
+        } else {
+            e.vcall(this.addr(), ACTOR_SLOT_1CC, &args![0u32, 1u32]);
+        }
+    }
+    let extra = extra_data_list_of(e, this.cast());
+    let changes = e.call(GET_CONTAINER_CHANGES, &args![extra]).u32();
+    let manager = e.call(PATH_MANAGER_Q_INSTANCE, &args![]).u32();
+    e.call(
+        PATH_MANAGER_CLEAR_INVENTORY_POINTERS,
+        &args![manager, changes],
+    );
+    e.call(ACTOR_UPDATE_INVENTORY_WORKER, &args![this, flag]);
+    if e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() != 0 {
+        let form = base_form(e, this.cast());
+        let mut npc_form = Ptr::NULL;
+        let mut creature_form = Ptr::NULL;
+        match form_type(e, form) {
+            0x2a => npc_form = form,
+            0x2b => creature_form = form,
+            _ => {}
+        }
+        let mut apply = 1u32;
+        let package = e.call(GET_CURRENT_PACKAGE, &args![this]).u32();
+        if package != 0 && e.call(PACKAGE_KIND_TEST, &args![package]).bool() {
+            apply = 0;
+        }
+        if !npc_form.is_null() {
+            e.call(
+                NPC_INIT_DEFAULT_WORN,
+                &args![npc_form, this, 1u32, apply, 0u32, 1u32],
+            );
+        } else if !creature_form.is_null() {
+            e.call(
+                CREATURE_INIT_DEFAULT_WORN,
+                &args![creature_form, this, 1u32, apply, 1u32],
+            );
+        }
+    }
+}
+
+// Translated from 0089fcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts combat between this actor and `target` (or a combat group, or a
+/// pretend target). Does nothing for actors whose process level is 5 or 3
+/// (`00437bf0`, `00437bd0`), for the target being the actor, for protected
+/// (slot `0x22c(0)`) or dead actors. Unless `forced`, an actor in an
+/// interrupting state (slot `0x214` not 0, 4 or 9) needs a furniture marker
+/// entry whose byte `+0xe` is above `0x14` (slot `0x418` runs then); when
+/// `0087f9c0` is 0 the target must be within the actor's reach plus a
+/// quarter of it. Without a combat controller (slot `0x428`) the actor's
+/// process is told (slot `0x2c8(0.0)`), the player's hostile status updated,
+/// the crosshair cleared when it was on the actor, the equipped item queued
+/// again, the interrupt package ended, and the combatant is added through
+/// the `CombatManager` (a group member, a combatant with `value` or a
+/// pretend combatant); the new controller then gets the acquire object's
+/// slot `0x710` and is added as a package; byte `+0x104` (`bInCombat`)
+/// records whether there is one. With a controller, a different target is
+/// added to it, otherwise the group member is added. `value` is worked out
+/// from the acquire object's slot `0x208` when it is 0.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_0089fcf0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    target: Ptr<Actor>,
+    group: u32,
+    flag_a: u8,
+    _unused_3: u32,
+    flag_b: u8,
+    value: i32,
+    _unused_6: u32,
+    pretend: u32,
+) {
+    if e.call(ACTOR_PROCESS_LEVEL_IS_5, &args![this]).bool()
+        || e.call(ACTOR_PROCESS_LEVEL_IS_3, &args![this]).bool()
+        || target == this
+        || e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        || e.mem.u8(this.addr() + 0x118) != 0
+    {
+        return;
+    }
+    if flag_a == 0 {
+        let kind = e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).i32();
+        if kind != 0 && kind != 4 && kind != 9 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.vcall(acquire, PROCESS_SLOT_4D4, &args![]).u32() == 0 {
+                return;
+            }
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let entry = e.vcall(acquire, PROCESS_SLOT_4D4, &args![]).u32();
+            if e.mem.u8(entry + 0xe) <= 0x14 {
+                return;
+            }
+            e.vcall(this.addr(), ACTOR_SLOT_418, &args![]);
+        }
+    }
+    if e.call(ACTOR_GETTER_87F9C0, &args![this]).f64() == double_constant(e, ZERO_DOUBLE) {
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![this, target, 0u32, 0u32],
+            )
+            .f32();
+        let quarter_reach = (e.vcall(this.addr(), ACTOR_SLOT_REACH, &args![]).f64()
+            * double_constant(e, QUARTER)) as f32;
+        let reach = e.vcall(this.addr(), ACTOR_SLOT_REACH, &args![]).f64();
+        if distance as f64 > reach + quarter_reach as f64 {
+            return;
+        }
+    }
+    let ranked = value > 0;
+    let mut combat_value = 0;
+    if value == 0 {
+        let mut other = this.addr();
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.vcall(acquire, PROCESS_SLOT_52C, &args![]).u32() != 0 {
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                other = e.vcall(acquire, PROCESS_SLOT_52C, &args![]).u32();
+            }
+        }
+        if !target.is_null() && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![target]).u32() != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![target]).u32();
+            let result = e
+                .vcall(acquire, PROCESS_SLOT_208, &args![target, other])
+                .f64();
+            combat_value = e.call(FTOL, &args![result]).i32();
+        }
+    } else {
+        combat_value = value;
+    }
+    let manager = e.global::<u32>(COMBAT_MANAGER);
+    if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() == 0 {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        e.vcall(process, PROCESS_SLOT_2C8, &args![0.0f32]);
+        let player_address = e.global::<u32>(PLAYER_CHARACTER);
+        if target.addr() == player_address {
+            e.call(
+                PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS,
+                &args![player_address, this, 1u32],
+            );
+        }
+        // The base form's type is read but its result is not used.
+        let form = base_form(e, this.cast());
+        form_type(e, form);
+        if e.call(CROSSHAIR_TARGET, &args![]).u32() == this.addr() {
+            e.call(SET_CROSSHAIR_TARGET_TYPE, &args![0u32]);
+        }
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let held = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
+        if held != 0 {
+            let held = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
+            if e.call(PACKAGE_KIND_TEST, &args![held]).bool() {
+                let item = e.vcall(this.addr(), ACTOR_SLOT_3BC, &args![6u32]).u32();
+                if item != 0 {
+                    // (the compiler also looked at the entry's form type
+                    // here, without using it)
+                    if e.call(ENTRY_FORM, &args![item]).u32() != 0 {
+                        let form = e.call(ENTRY_FORM, &args![item]).ptr::<()>();
+                        if form_type(e, form) == 0x28 {
+                            e.call(ENTRY_FORM, &args![item]);
+                        }
+                    }
+                    let form = e.call(ENTRY_FORM, &args![item]).u32();
+                    e.call(
+                        ACTOR_QUEUE_EQUIP_OBJECT,
+                        &args![this, form, 1u32, 0u32, 1u32, 0u32, 1u32],
+                    );
+                    delete_entry(e, Ptr::new(item));
+                }
+            }
+        }
+        e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![this, 0u32]);
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        e.vcall(process, PROCESS_SLOT_214, &args![]);
+        let kind = e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).i32();
+        if kind == 4 || e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).i32() == 9 {
+            e.vcall(this.addr(), ACTOR_SLOT_418, &args![]);
+        }
+        let mut controller = 0;
+        if group != 0 {
+            controller = e
+                .call(
+                    COMBAT_MANAGER_ADD_GROUP_MEMBER,
+                    &args![manager, this, group],
+                )
+                .u32();
+        } else if !target.is_null() {
+            controller = e
+                .call(
+                    COMBAT_MANAGER_ADD_COMBATANT,
+                    &args![manager, this, target, combat_value, u32::from(ranked)],
+                )
+                .u32();
+        } else if pretend != 0 {
+            controller = e
+                .call(
+                    COMBAT_MANAGER_ADD_PRETEND_COMBATANT,
+                    &args![manager, this, pretend],
+                )
+                .u32();
+        }
+        if flag_b != 0 && controller != 0 {
+            e.call(
+                COMBAT_CONTROLLER_NOTIFY_DAMAGE,
+                &args![controller, target, 0u32],
+            );
+        }
+        if flag_a != 0 && controller != 0 {
+            fn_008a0250(e, Ptr::new(controller));
+        }
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_28, &args![]);
+        if controller != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            e.vcall(acquire, PROCESS_SLOT_710, &args![this]);
+            e.vcall(
+                this.addr(),
+                ACTOR_SLOT_ADD_PACKAGE,
+                &args![controller, 0u32, 1u32],
+            );
+            e.mem.set_u8(this.addr() + 0x104, 1);
+        } else {
+            e.mem.set_u8(this.addr() + 0x104, 0);
+        }
+    } else if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+        if !target.is_null() {
+            let controller = fn_008a0330(e, this);
+            if e.call(COMBAT_CONTROLLER_TARGET, &args![controller]).u32() != target.addr() {
+                let controller = fn_008a0330(e, this);
+                e.call(
+                    COMBAT_CONTROLLER_ADD_TARGET,
+                    &args![
+                        controller,
+                        target,
+                        combat_value,
+                        u32::from(ranked),
+                        0.0f32,
+                        0.0f32
+                    ],
+                );
+                return;
+            }
+        }
+        if group != 0 {
+            e.call(
+                COMBAT_MANAGER_ADD_GROUP_MEMBER,
+                &args![manager, this, group],
+            );
+        }
+    }
+}
+
+// Translated from 008a0270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor is in combat (`bInCombat`, `+0x104`): 0 for the player
+/// and for an actor without a process; with `ignore_searching` set, 0 also
+/// when it is only searching in combat (`bSearchingInCombat`, `+0x127`).
+pub fn fn_008a0270(e: &mut Engine, this: Ptr<Actor>, ignore_searching: u8) -> u8 {
+    if this.addr() == e.global::<u32>(PLAYER_CHARACTER) {
+        return 0;
+    }
+    if e.get(this, Actor::pCurrentProcess).is_null() {
+        return 0;
+    }
+    let in_combat = e.mem.u8(this.addr() + 0x104);
+    if in_combat != 0 && ignore_searching != 0 && e.mem.u8(this.addr() + 0x127) != 0 {
+        return 0;
+    }
+    in_combat
+}
+
+// Translated from 008a02d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCombatController` (the base-class body of `Actor` slot
+/// `0x428`): the object the actor's process holds in its slot `0x22c`, when
+/// the actor is in combat and that object's type byte (`+0x20`) is `0x12`;
+/// otherwise 0.
+pub fn fn_008a02d0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process == 0 || !e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+        return 0;
+    }
+    let held = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
+    if held != 0 && e.call(PACKAGE_TYPE, &args![held]).i32() == 0x12 {
+        held
+    } else {
+        0
+    }
+}
+
+// Translated from 008a0360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The target of the actor's combat controller (slot `0x428`), or 0.
+pub fn fn_008a0360(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    if controller != 0 {
+        e.call(COMBAT_CONTROLLER_TARGET, &args![controller]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 008a03a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Keeps the actor's combat going once the screen has faded in: does
+/// nothing while the fader (number 1) is visible, for actors failing
+/// `00576d30`, actors not in combat or without a combat controller.
+/// Stops the combat (slot `0x434`) when `00981450` says so or the
+/// controller's target is no longer a combat target or is protected, dead
+/// or otherwise unsuitable; otherwise registers the target with the
+/// player's combat list, starts the controller (slot `0x64c`, or `0x630`
+/// with the target) and runs the high (process level 0) or other combat
+/// start of the controller.
+pub fn fn_008a03a0(e: &mut Engine, this: Ptr<Actor>) {
+    let fader = e.global::<u32>(FADER_MANAGER);
+    let alpha = e
+        .call(FADER_MANAGER_GET_FADER_ALPHA, &args![fader, 1u32])
+        .f32();
+    if alpha as f64 > double_constant(e, ZERO_DOUBLE) {
+        return;
+    }
+    if e.call(ACTOR_TEST_576D30, &args![this]).bool() {
+        return;
+    }
+    if !e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+        return;
+    }
+    let mut controller = fn_008a0330(e, this);
+    if controller == 0 {
+        return;
+    }
+    if e.call(CONTROLLER_TEST_981450, &args![controller]).bool() {
+        e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![0u32]);
+        return;
+    }
+    let mut target = e.call(COMBAT_CONTROLLER_TARGET, &args![controller]).u32();
+    if target != 0
+        && !e
+            .call(
+                COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+                &args![controller, target],
+            )
+            .bool()
+    {
+        e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![target]);
+        controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+        if controller == 0 {
+            return;
+        }
+        target = e.call(COMBAT_CONTROLLER_TARGET, &args![controller]).u32();
+    }
+    if e.call(ACTOR_PROCESS_LEVEL_IS_5, &args![this]).bool() {
+        return;
+    }
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    if target == player_address
+        && e.call(PLAYER_TEST_5A03F0, &args![player_address, 1u32])
+            .bool()
+    {
+        return;
+    }
+    if target != 0 {
+        let protected = e.vcall(target, ACTOR_SLOT_22C, &args![0u32]).bool();
+        let unsuitable = (protected && !e.vcall(target, ACTOR_SLOT_2E8, &args![]).bool())
+            || e.call(ACTOR_TEST_440DA0, &args![target]).bool()
+            || e.call(ACTOR_TEST_440D80, &args![target]).bool()
+            || e.call(ACTOR_PROCESS_LEVEL_IS_3, &args![target]).bool();
+        if unsuitable {
+            e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![target]);
+            return;
+        }
+    }
+    if target == player_address
+        && e.call(PLAYER_COMBAT_LIST_COUNT, &args![player_address, this])
+            .i32()
+            > 0
+    {
+        e.call(
+            PLAYER_ADD_ACTOR_TO_COMBAT_LIST,
+            &args![player_address, this],
+        );
+    }
+    if e.call(CONTROLLER_TEST_9818B0, &args![controller]).bool() {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_64C, &args![]);
+    } else {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_630, &args![target]);
+    }
+    e.call(COMBAT_START_GUARD_NO_OP, &args![COMBAT_START_GUARD]);
+    if e.call(MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, &args![this])
+        .i32()
+        == 0
+    {
+        e.call(CONTROLLER_START_HIGH, &args![controller]);
+    } else {
+        e.call(CONTROLLER_START_OTHER, &args![controller]);
+    }
+    e.call(COMBAT_START_GUARD_NO_OP, &args![COMBAT_START_GUARD]);
+}
+
+// Translated from 008a05f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a combat controller (slot `0x428`) calls the do-nothing `Error`
+/// (`0040fbe0`) with the actor; without one sets the actor's process
+/// (slot `0x54`) to the kind `1` when the process' field `+0x28` is 1, `2`
+/// when it is 2 and `4` otherwise.
+pub fn fn_008a05f0(e: &mut Engine, this: Ptr<Actor>) {
+    if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+        e.call(ERROR_NO_OP, &args![this]);
+        return;
+    }
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    let kind = match e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() {
+        1 => 1u32,
+        2 => 2,
+        _ => 4,
+    };
+    e.vcall(process, PROCESS_SLOT_54, &args![this, kind]);
+}
+
+// Translated from 008a0680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards two words to `0097efe0` on the actor's combat controller (slot
+/// `0x428`) when there is one.
+pub fn fn_008a0680(e: &mut Engine, this: Ptr<Actor>, first: u32, second: u32) {
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    if controller != 0 {
+        e.call(CONTROLLER_FORWARD_97EFE0, &args![controller, first, second]);
+    }
+}
+
+/// `Actor::GetCurrentWeapon` (Xbox PDB).
+const ACTOR_GET_CURRENT_WEAPON: u32 = 0x008a_1710;
+/// `Actor::GetPackageSetAsPcurrent` (Xbox PDB).
+const ACTOR_GET_PACKAGE_SET_AS_PCURRENT: u32 = 0x0088_1510;
+/// Test on the actor (`008ace90`).
+const ACTOR_TEST_8ACE90: u32 = 0x008a_ce90;
+/// The process level number of an actor or process (`004f8960`; 4 is
+/// compared with).
+const PROCESS_LEVEL_NUMBER: u32 = 0x004f_8960;
+/// `Actor::GetDetectionLevelAgainstActor` (Xbox PDB), thiscall with the 7
+/// words `0, other, &flag, 1, 1, 1, &flag`; returns the detection level.
+const ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR: u32 = 0x008a_0d10;
+/// Test on a package (`0067a770`).
+const PACKAGE_TEST_67A770: u32 = 0x0067_a770;
+/// Test on the actor (`005a3790`).
+const ACTOR_TEST_5A3790: u32 = 0x005a_3790;
+/// Pointer to the integer value of a setting (`0043d4d0`, `this` = the
+/// setting).
+const SETTING_GET_INT_POINTER: u32 = 0x0043_d4d0;
+/// `ExtraDataList` call that runs when the friend-hit limit is at least
+/// 1000 (`00422670`).
+const EXTRA_RESET_FRIEND_HITS: u32 = 0x0042_2670;
+/// `ExtraDataList::AddFriendHit` (Xbox PDB): returns the new count.
+const EXTRA_ADD_FRIEND_HIT: u32 = 0x0042_2590;
+/// `CombatDialogueManager::StartDialogue_ov2` (Xbox PDB): thiscall on the
+/// manager with the speaker, the target and four numbers.
+const COMBAT_DIALOGUE_START_DIALOGUE: u32 = 0x0098_39b0;
+/// The `CombatDialogueManager` singleton pointer.
+const COMBAT_DIALOGUE_MANAGER: u32 = 0x011f_1708;
+/// `Actor::IsTalking` (Xbox PDB).
+const ACTOR_IS_TALKING: u32 = 0x008a_67f0;
+/// `MobileObject::IsinDialogue` (Xbox PDB).
+const MOBILE_OBJECT_IS_IN_DIALOGUE: u32 = 0x0093_36c0;
+/// `ProcessLists::GetActorRefInHigh` (Xbox PDB): thiscall on the process
+/// lists with a form and a flag.
+const PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH: u32 = 0x0097_0a20;
+/// The three-word variant of that lookup, used for owners of form type 8
+/// (`00970b30`: the form, 0, 1).
+const PROCESS_LISTS_GET_OWNER_ACTOR: u32 = 0x0097_0b30;
+/// `Actor::AttackAlarm` (Xbox PDB): thiscall with the attacker, a flag and
+/// `1`.
+const ACTOR_ATTACK_ALARM: u32 = 0x008c_0460;
+/// Test taking the other actor (`008b0670`).
+const ACTOR_TEST_8B0670: u32 = 0x008b_0670;
+/// Returns an actor related to the other one (`008b0ba0`).
+const ACTOR_RELATED_8B0BA0: u32 = 0x008b_0ba0;
+/// `Actor::IsAngryWithPlayer` (Xbox PDB).
+const ACTOR_IS_ANGRY_WITH_PLAYER: u32 = 0x008b_ffc0;
+/// `Actor::GetShouldAttackActor` (Xbox PDB): the other actor, a flag, a
+/// pointer to the reaction and a flag.
+const ACTOR_GET_SHOULD_ATTACK_ACTOR: u32 = 0x008b_06d0;
+/// `Actor::IsFleeing` (Xbox PDB): takes a flag.
+const ACTOR_IS_FLEEING: u32 = 0x008a_6650;
+/// Returns the object at `this + 0x30` of a base form (`005d8a70` is called
+/// with it); the result goes to `008256d0`.
+const FORM_SUB_OBJECT_ACCESSOR: u32 = 0x005d_8a70;
+/// Test on that object (`008256d0`).
+const FORM_SUB_OBJECT_TEST: u32 = 0x0082_56d0;
+/// `0047ead0`: thiscall on the base form's embedded object (`+0x30`), taking
+/// a flag.
+const BASE_DATA_SET_FLAG: u32 = 0x0047_ead0;
+/// `0097f580`: thiscall on the combat controller with the target and a word.
+const CONTROLLER_WORKER_97F580: u32 = 0x0097_f580;
+/// Process virtual slot `0x504` (target, flag): returns the detection record
+/// of the target, or 0.
+const PROCESS_SLOT_504: u32 = 0x504;
+/// Process virtual slot `0xf0`: creates a detection record (target, level,
+/// flag, detection, 0, flag, 1).
+const PROCESS_SLOT_F0: u32 = 0xf0;
+/// Process virtual slot `0x33c` (13 words).
+const PROCESS_SLOT_33C: u32 = 0x33c;
+/// `Actor` virtual slot `0x100` (a bool on the target).
+const ACTOR_SLOT_100: u32 = 0x100;
+/// `Actor` virtual slot `0x48` (takes a flag mask).
+const ACTOR_SLOT_48: u32 = 0x48;
+/// `Actor` virtual slot `0x304` (bool).
+const ACTOR_SLOT_304: u32 = 0x304;
+/// `Actor` virtual slot `0x37c`.
+const ACTOR_SLOT_37C: u32 = 0x37c;
+/// `Actor` virtual slot `0x42c` (returns an actor: the one this actor is
+/// attacking or following).
+const ACTOR_SLOT_42C: u32 = 0x42c;
+/// `Actor` virtual slot `0x21c` (bool).
+const ACTOR_SLOT_21C: u32 = 0x21c;
+/// `Actor` virtual slot `0x460` (target, float).
+const ACTOR_SLOT_460: u32 = 0x460;
+/// `Actor` virtual slot `0x474` (flag).
+const ACTOR_SLOT_474: u32 = 0x474;
+/// Settings read by `fn_008987f0`: detection threshold (`float`), the
+/// `float` that is unused afterwards, the friend-hit limits (ints) and the
+/// float passed to slot `0x460`.
+const DETECTION_THRESHOLD_SETTING: u32 = 0x011c_df10;
+const UNUSED_FLOAT_SETTING: u32 = 0x011c_d45c;
+const FRIEND_HIT_LIMIT_SETTINGS: [u32; 4] = [0x011c_d204, 0x011c_d5b0, 0x011c_d4b4, 0x011c_d468];
+const SLOT_460_FLOAT_SETTING: u32 = 0x011d_13e0;
+
+// Translated from 008987f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reacts to `target` being noticed (or acting) near this actor. Returns
+/// early for protected actors (slot `0x22c(0)`), actors failing `008ace90`,
+/// `target == this` and an actor of process level 4 whose slot `0x52c`
+/// object is the target. Otherwise, unless this actor's combat controller
+/// (slot `0x428`) already has `target` as a combat target:
+/// - works out the detection level against the target
+///   (`GetDetectionLevelAgainstActor`) and, at the high process level, stores
+///   it (with the level 3 when it exceeds the detection setting) in the
+///   target's detection record in the acquire object (slot `0x504`, created
+///   by slot `0xf0` if needed);
+/// - when the target is the player: asks the faction reaction; for reaction
+///   2 or 3 counts a friend hit against the setting limit and either starts
+///   the dialogue of `CombatDialogueManager` (talking and dialogue states
+///   permitting) or goes on to raise the attack alarm through the owner and
+///   itself;
+/// - when `target` is not the player, this actor passes `0x304`, has no
+///   controller and the target answers slots `0x218` (twice) and `0x37c`:
+///   raises the attack alarm (unless the player branch did) and returns;
+/// - when `008b0670` says so and `target` relates to this actor or the
+///   player: works out whether it should attack, steals or alarms, sets the
+///   "bark" flag through slot `0x460`, and tells the acquire object (slot
+///   `0x33c`, 13 words);
+///
+/// Then lets the actor's slot `0x474` run, updates the base data (`+0x30`
+/// object) and, when nothing alarmed and the flagged alarm is still due,
+/// raises it; finally passes `target` and `param` to the combat controller
+/// (`0097f580`) when the actor has one.
+pub fn fn_008987f0(e: &mut Engine, this: Ptr<Actor>, target: Ptr<Actor>, param: u32) {
+    if e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        return;
+    }
+    if e.call(ACTOR_TEST_8ACE90, &args![this]).bool() {
+        return;
+    }
+    if target == this {
+        return;
+    }
+    let package = e
+        .call(ACTOR_GET_PACKAGE_SET_AS_PCURRENT, &args![this])
+        .u32();
+    if e.call(PROCESS_LEVEL_NUMBER, &args![this]).i32() == 4 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.vcall(acquire, PROCESS_SLOT_52C, &args![]).u32() == target.addr() {
+            return;
+        }
+    }
+    let mut weapon_flag = 0u8;
+    let mut deferred_alarm = false;
+    let mut alarmed = false;
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let process_type = e
+        .call(MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, &args![this])
+        .i32();
+    let weapon = if target.is_null() {
+        0
+    } else {
+        e.call(ACTOR_GET_CURRENT_WEAPON, &args![target]).u32()
+    };
+    if weapon != 0 && fn_00898fd0(e, Ptr::new(weapon)) {
+        weapon_flag = 1;
+    }
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    let already_target = controller != 0
+        && e.call(
+            COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+            &args![controller, target],
+        )
+        .bool();
+    if !already_target {
+        // Two bytes the detection call writes: the first at +0, the second
+        // (preset to 1) at +1.
+        let flags = e.mem.alloc(4);
+        e.mem.set_u8(flags + 1, 1);
+        let detection = e
+            .call(
+                ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR,
+                &args![this, 0u32, target, flags, 1u32, 1u32, 1u32, flags + 1],
+            )
+            .i32();
+        let mut level = 0u32;
+        let setting = e
+            .call(
+                SETTING_GET_VALUE_POINTER,
+                &args![DETECTION_THRESHOLD_SETTING],
+            )
+            .u32();
+        if (e.mem.f32(setting) as f64) < detection as f64 {
+            level = 3;
+        }
+        if process_type == 0 {
+            let mut record = e
+                .vcall(acquire, PROCESS_SLOT_504, &args![target, 0u32])
+                .u32();
+            if record == 0 && e.vcall(target.addr(), ACTOR_SLOT_100, &args![]).bool() {
+                record = e
+                    .vcall(
+                        acquire,
+                        PROCESS_SLOT_F0,
+                        &args![
+                            target,
+                            level,
+                            u32::from(e.mem.u8(flags)),
+                            detection,
+                            0u32,
+                            u32::from(e.mem.u8(flags + 1)),
+                            1u32
+                        ],
+                    )
+                    .u32();
+            }
+            e.mem.set_u32(record + 8, detection as u32);
+            e.mem.set_u32(record + 4, level);
+            let detected_flag = e.mem.u8(flags);
+            e.mem.set_u8(record + 0x1e, detected_flag);
+            let second_flag = e.mem.u8(flags + 1);
+            e.mem.set_u8(record + 0x1c, second_flag);
+            e.mem.set_u8(record + 0x1d, 1);
+        }
+        // The value of this setting is read; nothing uses it afterwards.
+        e.call(SETTING_GET_VALUE_POINTER, &args![UNUSED_FLOAT_SETTING]);
+        if package != 0 {
+            e.call(PACKAGE_TEST_67A770, &args![package]);
+        }
+        if target.addr() == player_address
+            && (controller == 0
+                || !e
+                    .call(
+                        COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+                        &args![controller, player_address],
+                    )
+                    .bool())
+        {
+            let reaction_flag = e.mem.alloc(4);
+            e.mem.set_u8(reaction_flag, 0);
+            let reaction = e
+                .call(
+                    ACTOR_GET_FACTION_FIGHT_REACTION,
+                    &args![this, player_address, reaction_flag],
+                )
+                .i32();
+            if reaction == 3 || reaction == 2 {
+                if e.call(ACTOR_TEST_5A3790, &args![this]).bool() {
+                    return;
+                }
+                let setting_address = match (reaction == 3, controller != 0) {
+                    (true, true) => FRIEND_HIT_LIMIT_SETTINGS[0],
+                    (true, false) => FRIEND_HIT_LIMIT_SETTINGS[1],
+                    (false, true) => FRIEND_HIT_LIMIT_SETTINGS[2],
+                    (false, false) => FRIEND_HIT_LIMIT_SETTINGS[3],
+                };
+                let pointer = e
+                    .call(SETTING_GET_INT_POINTER, &args![setting_address])
+                    .u32();
+                let limit = e.mem.u32(pointer) as i32;
+                if limit > 0 {
+                    if limit >= 1000 {
+                        let extra = extra_data_list_of(e, this.cast());
+                        e.call(EXTRA_RESET_FRIEND_HITS, &args![extra]);
+                    }
+                    let extra = extra_data_list_of(e, this.cast());
+                    let hits = e.call(EXTRA_ADD_FRIEND_HIT, &args![extra]).i32();
+                    e.vcall(this.addr(), ACTOR_SLOT_48, &args![0x8000_0000u32]);
+                    if hits <= limit {
+                        if e.call(ACTOR_IS_TALKING, &args![this]).bool() {
+                            return;
+                        }
+                        if e.call(MOBILE_OBJECT_IS_IN_DIALOGUE, &args![this]).bool() {
+                            return;
+                        }
+                        if e.call(ACTOR_SHOULD_SKIP_FALLOUT_BEHAVIOR, &args![this, 5u32])
+                            .bool()
+                        {
+                            return;
+                        }
+                        let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
+                        e.call(
+                            COMBAT_DIALOGUE_START_DIALOGUE,
+                            &args![manager, this, target, 2u32, 2u32, 1u32, 0u32],
+                        );
+                        return;
+                    }
+                }
+            }
+            if e.call(REFR_GET_OWNER, &args![this]).u32() != 0 {
+                let owner = e.call(REFR_GET_OWNER, &args![this]).ptr::<()>();
+                let owner_actor = if form_type(e, owner) == 8 {
+                    e.call(
+                        PROCESS_LISTS_GET_OWNER_ACTOR,
+                        &args![PROCESS_LISTS, owner, 0u32, 1u32],
+                    )
+                    .u32()
+                } else {
+                    e.call(
+                        PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH,
+                        &args![PROCESS_LISTS, owner, 0u32],
+                    )
+                    .u32()
+                };
+                if owner_actor != 0 {
+                    e.call(
+                        ACTOR_ATTACK_ALARM,
+                        &args![owner_actor, target, u32::from(weapon_flag), 1u32],
+                    );
+                }
+            }
+            e.call(
+                ACTOR_ATTACK_ALARM,
+                &args![this, target, u32::from(weapon_flag), 1u32],
+            );
+            alarmed = true;
+        }
+        if target.addr() != player_address
+            && e.vcall(this.addr(), ACTOR_SLOT_304, &args![]).bool()
+            && controller == 0
+            && e.vcall(target.addr(), ACTOR_SLOT_218, &args![]).bool()
+            && e.vcall(target.addr(), ACTOR_SLOT_218, &args![]).bool()
+            && e.vcall(target.addr(), ACTOR_SLOT_37C, &args![]).u32() != 0
+        {
+            if !alarmed {
+                e.call(
+                    ACTOR_ATTACK_ALARM,
+                    &args![this, target, u32::from(weapon_flag), 1u32],
+                );
+            }
+            return;
+        }
+        if e.call(ACTOR_TEST_8B0670, &args![this, target]).bool() {
+            let related = target.addr() == player_address
+                || e.vcall(target.addr(), ACTOR_SLOT_42C, &args![]).u32() == this.addr()
+                || (e.call(ACTOR_RELATED_8B0BA0, &args![target]).u32() == player_address
+                    && e.vcall(target.addr(), ACTOR_SLOT_42C, &args![]).u32() == player_address);
+            if related && this.addr() != player_address {
+                let mut should_attack = 0u32;
+                let state = e.mem.alloc(8);
+                let reaction = e
+                    .call(
+                        ACTOR_GET_FACTION_FIGHT_REACTION,
+                        &args![this, target, state + 4],
+                    )
+                    .u32();
+                e.mem.set_u32(state, reaction);
+                if !e.call(ACTOR_IS_ANGRY_WITH_PLAYER, &args![this]).bool()
+                    && e.mem.u8(state + 4) == 0
+                    && e.call(
+                        ACTOR_GET_SHOULD_ATTACK_ACTOR,
+                        &args![this, target, 0u32, state, 0u32],
+                    )
+                    .bool()
+                {
+                    should_attack = 1;
+                }
+                if controller == 0
+                    && !e.vcall(target.addr(), ACTOR_SLOT_304, &args![]).bool()
+                    && target.addr() == player_address
+                {
+                    if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() == 0
+                        && !e.call(ACTOR_IS_FLEEING, &args![this, 0u32]).bool()
+                        && !alarmed
+                    {
+                        if e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+                            let extra = extra_data_list_of(e, this.cast());
+                            if e.call(EXTRA_GET_OWNER_FORM, &args![extra]).u32() != 0 {
+                                let extra = extra_data_list_of(e, this.cast());
+                                let owner = e.call(EXTRA_GET_OWNER_FORM, &args![extra]).u32();
+                                e.call(
+                                    ACTOR_STEAL_ALARM,
+                                    &args![player_address, this, 0u32, 1u32, 0u32, owner],
+                                );
+                            }
+                        } else {
+                            e.call(
+                                ACTOR_ATTACK_ALARM,
+                                &args![this, target, u32::from(weapon_flag), 1u32],
+                            );
+                        }
+                    } else {
+                        let setting = e
+                            .call(SETTING_GET_VALUE_POINTER, &args![SLOT_460_FLOAT_SETTING])
+                            .u32();
+                        let value = e.mem.f32(setting);
+                        e.vcall(this.addr(), ACTOR_SLOT_460, &args![target, value]);
+                        deferred_alarm = true;
+                    }
+                }
+                e.vcall(
+                    acquire,
+                    PROCESS_SLOT_33C,
+                    &args![
+                        this,
+                        target,
+                        1u32,
+                        1u32,
+                        0u32,
+                        0u32,
+                        0u32,
+                        should_attack,
+                        0u32,
+                        0u32,
+                        should_attack,
+                        0u32,
+                        0u32
+                    ],
+                );
+            }
+        }
+        if this.addr() != player_address || e.call(ACTOR_IN_COMBAT, &args![target]).bool() {
+            e.vcall(this.addr(), ACTOR_SLOT_474, &args![1u32]);
+        }
+        let mut base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+        if base != 0 {
+            let part = e.call(FORM_SUB_OBJECT_ACCESSOR, &args![base + 0x30]).u32();
+            if e.call(FORM_SUB_OBJECT_TEST, &args![part]).bool() {
+                base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+            }
+        }
+        if target.addr() == player_address {
+            e.call(BASE_DATA_SET_FLAG, &args![base + 0x30, 1u32]);
+        }
+    }
+    if !alarmed && deferred_alarm && !e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+        if e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+            let extra = extra_data_list_of(e, this.cast());
+            if e.call(EXTRA_GET_OWNER_FORM, &args![extra]).u32() != 0 {
+                let extra = extra_data_list_of(e, this.cast());
+                let owner = e.call(EXTRA_GET_OWNER_FORM, &args![extra]).u32();
+                e.call(
+                    ACTOR_STEAL_ALARM,
+                    &args![player_address, this, 0u32, 1u32, 0u32, owner],
+                );
+            }
+        } else {
+            e.call(
+                ACTOR_ATTACK_ALARM,
+                &args![this, target, u32::from(weapon_flag), 1u32],
+            );
+        }
+    }
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    if controller != 0 {
+        e.call(CONTROLLER_WORKER_97F580, &args![controller, target, param]);
+    }
+}
+
+/// The `VATS` singleton (the address the code passes as `this` of the
+/// `VATS` calls and of the accessor `0044ddc0`; the dword at `+8` is 4 while
+/// a VATS action plays).
+const VATS_OBJECT: u32 = 0x011f_2250;
+/// The pointer to the actor VATS is acting for.
+const VATS_ACTOR: u32 = 0x011f_21f0;
+/// `VATS::GetCurrentAction` (Xbox PDB).
+const VATS_GET_CURRENT_ACTION: u32 = 0x009c_71c0;
+/// `BGSDefaultObjectManager::GetDefaultObject` (Xbox PDB), cdecl.
+const GET_DEFAULT_OBJECT: u32 = 0x0058_db10;
+/// The RTTI type descriptor of `MagicItem` (the class the default object
+/// number 5 is cast to).
+const RTTI_TYPE_MAGIC_ITEM: u32 = 0x0118_3140;
+/// `MiscStatManager::Increment` (Xbox PDB), cdecl.
+const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
+/// Offset of the magic caster embedded in an `Actor`.
+const ACTOR_MAGIC_CASTER_OFFSET: u32 = 0x88;
+/// Magic caster virtual slot `0x40`.
+const MAGIC_CASTER_SLOT_40: u32 = 0x40;
+/// Magic caster virtual slot `0x48`.
+const MAGIC_CASTER_SLOT_48: u32 = 0x48;
+/// Reads the integer setting at `DEBUG_DRAW_SETTING` (`004503f0`).
+const DEBUG_DRAW_LEVEL: u32 = 0x0045_03f0;
+const DEBUG_DRAW_SETTING: u32 = 0x011d_f838;
+/// Four-`float` constructor (`00414430`, thiscall, 4 floats).
+const COLOR_CONSTRUCT: u32 = 0x0041_4430;
+/// Rotation matrix times vector (`00524c40`: thiscall on the matrix, taking
+/// an output vector and the input vector; returns the output).
+const MATRIX_TRANSFORM: u32 = 0x0052_4c40;
+/// Vector subtraction (`00439ef0`: thiscall on the minuend, taking an output
+/// vector and the subtrahend; returns the output).
+const VECTOR_SUBTRACT: u32 = 0x0043_9ef0;
+/// Vector normalization in place (`004a0c10`).
+const VECTOR_NORMALIZE: u32 = 0x004a_0c10;
+/// Vector times scalar (`0045bb20`: thiscall on the vector, taking an
+/// output vector and the scalar; returns the output).
+const VECTOR_SCALE: u32 = 0x0045_bb20;
+/// `BSTestObjects::CreateDirArrow` (Xbox PDB), cdecl: vector, colour.
+const CREATE_DIR_ARROW: u32 = 0x00c5_9a50;
+/// Sets the position of a debug object (`00440460`, takes the position).
+const DEBUG_OBJECT_SET_POSITION: u32 = 0x0044_0460;
+/// Reads a `float` setting (`00450410`, `this` = `DEBUG_DRAW_DURATION`).
+const DEBUG_DRAW_DURATION_GETTER: u32 = 0x0045_0410;
+const DEBUG_DRAW_DURATION: u32 = 0x011d_f754;
+/// `TES::AddTempDebugObject` (Xbox PDB): the object and the seconds.
+const TES_ADD_TEMP_DEBUG_OBJECT: u32 = 0x0045_8e20;
+/// `800.0f` and `0.1f` (the scales applied to the arrow vector).
+const ARROW_LENGTH_SCALE: u32 = 0x0102_2454;
+const ARROW_WIDTH_SCALE: u32 = 0x0101_e2bc;
+/// `0087b040`: thiscall on the object `GET_TES` returns, taking the actor
+/// and the two flags.
+const TES_QUEUE_ATTACK: u32 = 0x0087_b040;
+/// Process virtual slot `0x460`: returns the address of a vector (the weapon
+/// bone offset the debug arrow starts from).
+const PROCESS_SLOT_460: u32 = 0x460;
+/// Process virtual slot `0x448`.
+const PROCESS_SLOT_448: u32 = 0x448;
+/// `008bc240`: thiscall on the actor, taking one word.
+const ACTOR_WORKER_8BC240: u32 = 0x008b_c240;
+/// `005fbeb0`: thiscall on the base form, returns a word.
+const FORM_GETTER_5FBEB0: u32 = 0x005f_beb0;
+/// The integer setting passed to `008bc240` when slot `0x21c` is false.
+const WORD_SETTING_3B4: u32 = 0x011c_d3b4;
+/// Process virtual slot `0x274`.
+const PROCESS_SLOT_274: u32 = 0x274;
+/// `*(this + 0x18)` (`009611e0`).
+const OBJECT_TYPE_FIELD: u32 = 0x0096_11e0;
+/// `*(this + 4)` (`00726070`).
+const NODE_NEXT: u32 = 0x0072_6070;
+/// Actor test `008ae660` (takes a flag).
+const ACTOR_TEST_8AE660: u32 = 0x008a_e660;
+/// `0097f7d0`: thiscall on the combat controller, taking the target.
+const CONTROLLER_WORKER_97F7D0: u32 = 0x0097_f7d0;
+/// `Actor::CombatHit` (Xbox PDB), `00899cb0`.
+const ACTOR_COMBAT_HIT: u32 = 0x0089_9cb0;
+/// `BSSoundHandle::SetPosition` (Xbox PDB): the three coordinates.
+const SOUND_HANDLE_SET_POSITION_XYZ: u32 = 0x00ad_8b60;
+/// `BSSoundHandle::SetObjectToFollow` (Xbox PDB).
+const SOUND_HANDLE_SET_OBJECT_TO_FOLLOW: u32 = 0x00ad_8f20;
+/// Test on the weapon's actor record (`00406090`).
+const RECORD_TEST_406090: u32 = 0x0040_6090;
+/// `TESActorBaseData::GetFatigue` (Xbox PDB): a 16-bit value.
+const ACTOR_BASE_DATA_GET_FATIGUE: u32 = 0x004a_8ae0;
+
+// Translated from 00899200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Carries out the attack animation's hit on the actor's side.
+///
+/// With the task queue in use (`008c7aa0`) only forwards `(this, flag_a,
+/// flag_b)` to `0087b040`. Otherwise: during a VATS action of this actor
+/// uses up a shot of the action or casts the default magic object number 5
+/// and counts the stat `0x15`; draws a debug arrow from the weapon bone to
+/// the weapon position when the debug setting is above 1; tells the
+/// acquire object (slot `0x448`); and runs `008bc240` with the form
+/// word (or the setting) for the actor kind. With `flag_b` set it then
+/// finds the target to hit (the acquire object's slot `0x274` reference when
+/// slot `0x27c`'s object has the type number `0x2c`, otherwise
+/// `fn_008990f0`), gives up for an actor whose slot `0x360` says to when
+/// `008ae660` agrees, and either runs `Actor::CombatHit` on the target (with
+/// the kind 1 for the animation groups `0x38`, `0x64`, `0x65` and 2 for
+/// `0x3e`) or, with no target, plays the weapon's sound at the actor and
+/// casts the weapon's actor-base spell when the animation matches. Ends by
+/// telling the combat controller (slot `0x428`) with `0097f7d0`.
+/// The compiler's exception-unwinding frame is not translated; `CombatHit`
+/// is called by its address.
+pub fn fn_00899200(e: &mut Engine, this: Ptr<Actor>, flag_a: u8, flag_b: u8) {
+    if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+        let tes = e.call(GET_TES, &args![]).u32();
+        e.call(TES_QUEUE_ATTACK, &args![tes, this, flag_a, flag_b]);
+        return;
+    }
+    let caster = this.addr() + ACTOR_MAGIC_CASTER_OFFSET;
+    if e.call(ENTRY_FORM, &args![VATS_OBJECT]).u32() == 4
+        && this.addr() == e.global::<u32>(VATS_ACTOR)
+    {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let weapon_entry = e
+            .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32();
+        let weapon_form = if weapon_entry != 0 {
+            let weapon_entry = e
+                .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                .u32();
+            e.call(ENTRY_FORM, &args![weapon_entry]).u32()
+        } else {
+            0
+        };
+        let action = e.call(VATS_GET_CURRENT_ACTION, &args![VATS_OBJECT]).u32();
+        if action != 0 {
+            if weapon_form != 0 && e.call(WEAPON_BYTE_FLAG, &args![weapon_form]).bool() {
+                let shots = e.mem.u8(action + 8);
+                e.mem.set_u8(action + 8, shots.wrapping_sub(1));
+            } else {
+                let reference = e.mem.u32(action + 0xc);
+                if e.mem.u8(action + 7) != 0
+                    && !e.vcall(reference, 0x234, &args![]).bool()
+                    && e.vcall(reference, 0x100, &args![]).bool()
+                {
+                    let object = e.call(GET_DEFAULT_OBJECT, &args![5u32]).u32();
+                    if object != 0 {
+                        let item = e
+                            .call(
+                                RTTI_DYNAMIC_CAST,
+                                &args![
+                                    object,
+                                    0u32,
+                                    RTTI_TYPE_TES_FORM,
+                                    RTTI_TYPE_MAGIC_ITEM,
+                                    0u32
+                                ],
+                            )
+                            .u32();
+                        e.vcall(caster, MAGIC_CASTER_SLOT_40, &args![item]);
+                        let reference = e.mem.u32(action + 0xc);
+                        let source = if reference != 0 { reference + 0x94 } else { 0 };
+                        e.vcall(caster, MAGIC_CASTER_SLOT_48, &args![source]);
+                        if e.call(MAGIC_CASTER_RELEASE_CAST, &args![caster, 0u32])
+                            .bool()
+                        {
+                            e.call(MISC_STAT_INCREMENT, &args![0x15u32]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if e.call(DEBUG_DRAW_LEVEL, &args![DEBUG_DRAW_SETTING]).i32() > 1 {
+        draw_hit_arrow(e, this);
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    e.vcall(acquire, PROCESS_SLOT_448, &args![1u32]);
+    if e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+        let form = base_form(e, this.cast());
+        let word = e.call(FORM_GETTER_5FBEB0, &args![form]).u32();
+        e.call(ACTOR_WORKER_8BC240, &args![this, word]);
+    } else {
+        let setting = e
+            .call(SETTING_GET_INT_POINTER, &args![WORD_SETTING_3B4])
+            .u32();
+        let word = e.mem.u32(setting);
+        e.call(ACTOR_WORKER_8BC240, &args![this, word]);
+    }
+    if flag_b == 0 {
+        return;
+    }
+
+    let mut found = false;
+    let mut hit_target = 0u32;
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if acquire != 0 {
+        let holder = e.vcall(acquire, PROCESS_SLOT_27C, &args![]).u32();
+        if holder != 0 && e.call(OBJECT_TYPE_FIELD, &args![holder]).u32() == 0x2c {
+            let entry = e.vcall(acquire, PROCESS_SLOT_274, &args![]).u32();
+            if entry != 0 {
+                e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]);
+                let next = e.call(NODE_NEXT, &args![entry]).u32();
+                if next != 0 && e.vcall(next, ACTOR_SLOT_100, &args![]).bool() {
+                    hit_target = next;
+                    found = true;
+                }
+            }
+        }
+    }
+    if !found {
+        hit_target = fn_008990f0(e, this);
+    }
+    if hit_target == 0
+        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && e.call(ACTOR_TEST_8AE660, &args![this, flag_a]).bool()
+    {
+        return;
+    }
+    if hit_target != 0 && e.call(ACTOR_TEST_8ACE90, &args![hit_target]).bool() {
+        hit_target = 0;
+    }
+    let weapon_entry = if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32()
+    } else {
+        0
+    };
+    let weapon_form = if weapon_entry != 0 {
+        e.call(ENTRY_FORM, &args![weapon_entry]).u32()
+    } else {
+        0
+    };
+    if hit_target != 0 {
+        let mut kind = 0u32;
+        if weapon_form == 0 || e.call(WEAPON_TYPE, &args![weapon_form]).u32() == 0 {
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            let sequence = e.vcall(process, PROCESS_SLOT_ANIM_SEQUENCE, &args![]).u32();
+            let transform = e
+                .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![sequence])
+                .u32();
+            match e.call(ANIM_GROUP_GET_NUMBER, &args![transform]).u32() {
+                0x38 | 0x64 | 0x65 => kind = 1,
+                0x3e => kind = 2,
+                _ => {}
+            }
+        }
+        e.call(
+            ACTOR_COMBAT_HIT,
+            &args![this, hit_target, flag_a, 0u32, kind],
+        );
+    } else {
+        let sound_set = if weapon_form != 0 {
+            e.call(WEAPON_SOUND_SET, &args![weapon_form]).u32()
+        } else {
+            0
+        };
+        if sound_set != 0 {
+            play_weapon_sound(e, this, sound_set);
+        }
+        cast_weapon_spell(e, this, caster);
+    }
+    let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    if controller != 0 {
+        e.call(CONTROLLER_WORKER_97F7D0, &args![controller, hit_target]);
+    }
+}
+
+/// Copies the three words at `from` to `to`.
+fn copy_vector(e: &mut Engine, from: u32, to: u32) {
+    for word in 0..3 {
+        let value = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to + 4 * word, value);
+    }
+}
+
+/// The debug drawing of `fn_00899200`: an arrow from the position of the
+/// weapon bone towards the weapon position, in blue for an actor whose slot
+/// `0x360` is true and red otherwise, shown for a number of seconds.
+fn draw_hit_arrow(e: &mut Engine, this: Ptr<Actor>) {
+    let locals = e.mem.alloc(0x100);
+    let color = locals;
+    let color_temp = locals + 0x10;
+    let first = locals + 0x20;
+    let second = locals + 0x30;
+    let bone_temp = locals + 0x40;
+    let weapon_temp = locals + 0x50;
+    let transformed_temp = locals + 0x60;
+    let difference_temp = locals + 0x70;
+    let direction = locals + 0x80;
+    let scaled = locals + 0x90;
+    let scaled_again = locals + 0xa0;
+    let zero = 0.0f32;
+    let one = 1.0f32;
+    e.call(COLOR_CONSTRUCT, &args![color, zero, zero, zero, zero]);
+    let made = if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
+        e.call(COLOR_CONSTRUCT, &args![color_temp, zero, zero, one, one])
+    } else {
+        e.call(COLOR_CONSTRUCT, &args![color_temp, one, zero, zero, one])
+    }
+    .u32();
+    for word in 0..4 {
+        let value = e.mem.u32(made + 4 * word);
+        e.mem.set_u32(color + 4 * word, value);
+    }
+    // `first` and `second` are `NiPoint3` temporaries whose constructor
+    // (`006815c0`) does nothing.
+    let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    if node != 0 {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let bone = e.vcall(process, PROCESS_SLOT_460, &args![]).u32();
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        let result = e
+            .call(MATRIX_TRANSFORM, &args![rotation, bone_temp, bone])
+            .u32();
+        copy_vector(e, result, first);
+        let position = e
+            .call(ACTOR_GET_WEAPON_POSITION, &args![this, weapon_temp, 0u32])
+            .u32();
+        let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+        let result = e
+            .call(
+                MATRIX_TRANSFORM,
+                &args![rotation, transformed_temp, position],
+            )
+            .u32();
+        copy_vector(e, result, second);
+    }
+    let result = e
+        .call(VECTOR_SUBTRACT, &args![second, difference_temp, first])
+        .u32();
+    copy_vector(e, result, direction);
+    e.call(VECTOR_NORMALIZE, &args![direction]);
+    let length_scale = e.global::<f32>(ARROW_LENGTH_SCALE);
+    e.call(VECTOR_SCALE, &args![direction, scaled, length_scale]);
+    let width_scale = e.global::<f32>(ARROW_WIDTH_SCALE);
+    let arrow_vector = e
+        .call(VECTOR_SCALE, &args![scaled, scaled_again, width_scale])
+        .u32();
+    let arrow = e.call(CREATE_DIR_ARROW, &args![arrow_vector, color]).u32();
+    e.call(DEBUG_OBJECT_SET_POSITION, &args![arrow, second]);
+    let seconds = e
+        .call(DEBUG_DRAW_DURATION_GETTER, &args![DEBUG_DRAW_DURATION])
+        .f32();
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.call(TES_ADD_TEMP_DEBUG_OBJECT, &args![tes, arrow, seconds]);
+    e.mem.free(locals);
+}
+
+/// Plays the sound of the weapon's sound set (`sound_set`) at the actor's
+/// position, following its node.
+fn play_weapon_sound(e: &mut Engine, this: Ptr<Actor>, sound_set: u32) {
+    let handle = e.mem.alloc(12);
+    let file_name = e.call(SOUND_SET_FILE_NAME, &args![sound_set]).u32();
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    e.call(
+        AUDIO_GET_SOUND_HANDLE_BY_FILENAME,
+        &args![audio, handle, file_name, 0x102u32, sound_set],
+    );
+    let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+    let x = e.mem.u32(position);
+    let y = e.mem.u32(position + 4);
+    let z = e.mem.u32(position + 8);
+    e.call(SOUND_HANDLE_SET_POSITION_XYZ, &args![handle, x, y, z]);
+    let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    e.call(SOUND_HANDLE_SET_OBJECT_TO_FOLLOW, &args![handle, node]);
+    e.call(SOUND_HANDLE_PLAY, &args![handle, 0u32]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    e.mem.free(handle);
+}
+
+/// Casts the spell of the actor base form's record (`base + 0x70`, its first
+/// entry plus `0x18`) when its test passes and the animation the actor plays
+/// has the group the record names (or the record names `0xff`).
+fn cast_weapon_spell(e: &mut Engine, this: Ptr<Actor>, caster: u32) {
+    let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+    let node = e.call(NODE_NEXT, &args![base + 0x70]).u32();
+    let record = if node != 0 { node + 0x18 } else { 0 };
+    if record == 0 || !e.call(RECORD_TEST_406090, &args![record + 0xc]).bool() {
+        return;
+    }
+    let mut matched = false;
+    let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+    let group = u32::from(
+        e.call(ACTOR_BASE_DATA_GET_FATIGUE, &args![base + 0x70])
+            .u16(),
+    );
+    if group == 0xff {
+        matched = true;
+    } else if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.vcall(acquire, PROCESS_SLOT_ANIM_SEQUENCE, &args![]).u32() != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let sequence = e.vcall(acquire, PROCESS_SLOT_ANIM_SEQUENCE, &args![]).u32();
+            if e.call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![sequence])
+                .u32()
+                != 0
+            {
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                let sequence = e.vcall(acquire, PROCESS_SLOT_ANIM_SEQUENCE, &args![]).u32();
+                let transform = e
+                    .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![sequence])
+                    .u32();
+                if e.call(ANIM_GROUP_GET_NUMBER, &args![transform]).u32() == group {
+                    matched = true;
+                }
+            }
+        }
+    }
+    if matched {
+        e.vcall(caster, MAGIC_CASTER_SLOT_40, &args![record]);
+        let source = if this.is_null() {
+            0
+        } else {
+            this.addr() + 0x94
+        };
+        e.vcall(caster, MAGIC_CASTER_SLOT_48, &args![source]);
+        e.call(MAGIC_CASTER_RELEASE_CAST, &args![caster, 0u32]);
+    }
+}
+/// `Actor::HitMe` (Xbox PDB), `0089a760`: thiscall on the target, taking the
+/// `HitData` and a kind byte.
+const ACTOR_HIT_ME: u32 = 0x0089_a760;
+/// Process-level test on an actor (`00437b90`).
+const ACTOR_PROCESS_LEVEL_TEST_437B90: u32 = 0x0043_7b90;
+/// `HitData::HitData` (Xbox PDB): thiscall on the memory, returns it.
+const HIT_DATA_CONSTRUCT: u32 = 0x009b_4d90;
+/// `NiPointer<HitData>` construction from a raw pointer (`008c1c30`):
+/// thiscall on the 4-byte holder; stores the pointer and takes a reference.
+const NI_POINTER_HIT_DATA_CONSTRUCT: u32 = 0x008c_1c30;
+/// `NiPointer<HitData>::~NiPointer<HitData>` (Xbox PDB).
+const NI_POINTER_HIT_DATA_DESTRUCT: u32 = 0x008c_1c60;
+/// `NiPointer::operator->`: returns the pointer the holder (`this`) keeps
+/// (`*this`).
+const NI_POINTER_GET: u32 = 0x0055_9450;
+/// `HitData::Copy` (Xbox PDB): thiscall on the destination, taking the
+/// source.
+const HIT_DATA_COPY: u32 = 0x009b_4ec0;
+/// `HitData::InitializeHitData_ov2` (Xbox PDB), cdecl: the hit data, the
+/// attacker, the target, the weapon entry, the attack flag byte and the
+/// source reference.
+const HIT_DATA_INITIALIZE: u32 = 0x009b_5120;
+/// Form flag test (`00444d00`): thiscall on the reference, taking a mask.
+const REFR_FLAG_TEST: u32 = 0x0044_4d00;
+/// `00407e00`: thiscall on the hit data's critical effect holder, taking
+/// two words (`0x3fc`, 0).
+const HIT_DATA_CLEAR_EFFECT: u32 = 0x0040_7e00;
+/// `00476c90`: thiscall on the source reference, taking a flag, 0 and the
+/// attacker; returns the weapon object the projectile count is read from.
+const SOURCE_WEAPON_LOOKUP: u32 = 0x0047_6c90;
+/// `TESObjectWEAP::GetNumProjectiles` (Xbox PDB): thiscall, a byte result.
+const WEAPON_GET_NUM_PROJECTILES: u32 = 0x0052_5b20;
+/// Test on the base object of the source reference (`004fd3c0`).
+const BASE_TEST_4FD3C0: u32 = 0x004f_d3c0;
+/// `00885d70`: thiscall on the source reference; the result is in ST0.
+const REFR_GETTER_885D70: u32 = 0x0088_5d70;
+/// `HitData` flag test (`0058cba0`): thiscall on the hit data, taking a
+/// flag number.
+const HIT_DATA_FLAG_TEST: u32 = 0x0058_cba0;
+/// `ImpactMixer::PlayWeaponBlock` (Xbox PDB), cdecl: the weapon type, the
+/// weapon form, two positions of 3 words and a flag.
+const IMPACT_MIXER_PLAY_WEAPON_BLOCK: u32 = 0x0083_97f0;
+/// The weapon-hit sound call (`00837520`), cdecl, 9 words.
+const IMPACT_MIXER_PLAY_WEAPON_HIT: u32 = 0x0083_7520;
+/// The pointer read as the second word of the block sound call when the
+/// target holds no weapon.
+const IMPACT_BLOCK_DEFAULT_SOUND: u32 = 0x011c_a278;
+/// `00476c90`'s companion: `ItemChange` number read (`004bd350`, ST0).
+const ITEM_CHANGE_GETTER_4BD350: u32 = 0x004b_d350;
+/// `Actor` virtual slot `0x3d8` (weapon entry, target, source reference, out
+/// byte): returns a byte.
+const ACTOR_SLOT_3D8: u32 = 0x3d8;
+/// `Actor` virtual slot `0x3c8` (weapon entry, `float`, flag): returns a
+/// byte.
+const ACTOR_SLOT_3C8: u32 = 0x3c8;
+/// `Actor` virtual slots `0x32c` (getter), `0x328` (setter) and `0x330`.
+const ACTOR_SLOT_32C: u32 = 0x32c;
+const ACTOR_SLOT_328: u32 = 0x328;
+const ACTOR_SLOT_330: u32 = 0x330;
+/// `Actor` virtual slot `0x4c0` (hit damage, blocked fraction, target,
+/// source reference).
+const ACTOR_SLOT_4C0: u32 = 0x4c0;
+/// `00444d00` mask used for the critical-hit check.
+const REFR_FLAG_NO_CRIT: u32 = 0x0002_0000;
+/// `TESPackage::GetUseWeaponPackageData` (Xbox PDB).
+const PACKAGE_GET_USE_WEAPON_PACKAGE_DATA: u32 = 0x0067_58f0;
+/// Test on that data (`00524cd0`).
+const USE_WEAPON_DATA_TEST: u32 = 0x0052_4cd0;
+/// `00407e00`'s mask word.
+const HIT_DATA_EFFECT_MASK: u32 = 0x3fc;
+/// Player worker (`009627a0`, thiscall on the player).
+const PLAYER_WORKER_9627A0: u32 = 0x0096_27a0;
+
+// `HitData` (Xbox PDB, 0x64 bytes) field offsets used here.
+const HIT_SOURCE_REF: u32 = 0x08;
+const HIT_HEALTH_DAMAGE: u32 = 0x14;
+const HIT_TOTAL_DAMAGE: u32 = 0x18;
+const HIT_FATIGUE_DAMAGE: u32 = 0x1c;
+const HIT_TARGETED_LIMB_DAMAGE: u32 = 0x20;
+const HIT_PERCENT_BLOCKED: u32 = 0x24;
+const HIT_ARMOR_DAMAGE: u32 = 0x28;
+const HIT_DAMAGE_TO_WEAPON: u32 = 0x2c;
+const HIT_LOCATION: u32 = 0x38;
+const HIT_DIRECTION: u32 = 0x44;
+const HIT_CRITICAL_EFFECT: u32 = 0x50;
+const HIT_ATTACK_SKILL: u32 = 0x0c;
+
+/// The `HitData` pointer a holder keeps (through `operator->`, `00559450`).
+fn hit_data_of(e: &mut Engine, holder: u32) -> u32 {
+    e.call(NI_POINTER_GET, &args![holder]).u32()
+}
+
+/// Divides the `float` at `address` by `divisor`.
+fn divide_float(e: &mut Engine, address: u32, divisor: u32) {
+    let value = e.mem.f32(address) as f64 / divisor as f64;
+    e.mem.set_f32(address, value as f32);
+}
+
+/// Multiplies the `float` at `address` by `factor`.
+fn multiply_float(e: &mut Engine, address: u32, factor: f32) {
+    let value = e.mem.f32(address) as f64 * factor as f64;
+    e.mem.set_f32(address, value as f32);
+}
+
+/// The three words of the position `slot 0x1f4` of `actor` returns.
+fn position_words(e: &mut Engine, actor: u32) -> [u32; 3] {
+    let position = e.vcall(actor, ACTOR_SLOT_POSITION, &args![]).u32();
+    [
+        e.mem.u32(position),
+        e.mem.u32(position + 4),
+        e.mem.u32(position + 8),
+    ]
+}
+
+// Translated from 00899cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CombatHit` (Xbox PDB): the attack `this` makes lands on `target`.
+///
+/// Gives up for a missing target, `008ace90` and `00437b90`. Looks up the
+/// weapon entry/form/type, asks slot `0x3d8` whether the hit connects, builds
+/// the `HitData` (a new `0x64`-byte object kept in an `NiPointer`): during a
+/// VATS action the action's data is copied in and the freshly initialized
+/// one is merged over it, otherwise it is just initialized
+/// (`HitData::InitializeHitData_ov2`). Zeroes the damage of an attack whose
+/// source reference has the form flag `0x20000`, splits it among the
+/// projectiles of the weapon and applies the armor-piercing correction
+/// (`004fd3c0`). Updates the actor's hit counter (slots `0x32c`, `0x328`) and
+/// slot `0x330`; plays the block or hit sounds (flag 1 of the hit data
+/// chooses between them), casts a weapon effect when its threshold is
+/// passed, gives up the weapon for a destroyed one (slot `0x3c8`), clears
+/// the damage for a use-weapon package and finally lets `target` take the hit
+/// (`Actor::HitMe`) unless this actor's combat controller does not have the
+/// target as a combat target.
+/// The compiler's exception-unwinding frame is not translated; `HitMe` is
+/// called by its address.
+pub fn actor_combat_hit(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    target: Ptr<Actor>,
+    flag: u8,
+    source_ref: Ptr,
+    kind: u8,
+) {
+    if target.is_null()
+        || e.call(ACTOR_TEST_8ACE90, &args![target]).bool()
+        || e.call(ACTOR_PROCESS_LEVEL_TEST_437B90, &args![target])
+            .bool()
+    {
+        return;
+    }
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    let mut not_a_target = false;
+    if this.addr() != player_address && e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+        let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+        if !e
+            .call(
+                COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+                &args![controller, target],
+            )
+            .bool()
+        {
+            not_a_target = true;
+        }
+    }
+    let weapon_entry = if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32()
+    } else {
+        0
+    };
+    let weapon_form = if weapon_entry != 0 {
+        e.call(ENTRY_FORM, &args![weapon_entry]).u32()
+    } else {
+        0
+    };
+    let weapon_type = if weapon_form != 0 {
+        e.call(WEAPON_TYPE, &args![weapon_form]).u32()
+    } else {
+        0
+    };
+    let out_flag = e.mem.alloc(4);
+    let connects = e
+        .vcall(
+            this.addr(),
+            ACTOR_SLOT_3D8,
+            &args![weapon_entry, target, source_ref, out_flag],
+        )
+        .u8();
+    if e.mem.u8(out_flag) != 0 && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
+        e.call(PLAYER_WORKER_9627A0, &args![player_address]);
+    }
+    e.mem.free(out_flag);
+
+    let block = e.call(OPERATOR_NEW, &args![0x64u32]).u32();
+    let new_hit_data = if block != 0 {
+        e.call(HIT_DATA_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    };
+    let holder = e.mem.alloc(4);
+    e.call(NI_POINTER_HIT_DATA_CONSTRUCT, &args![holder, new_hit_data]);
+
+    let action = if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && e.call(ENTRY_FORM, &args![VATS_OBJECT]).u32() == 4
+    {
+        e.call(VATS_GET_CURRENT_ACTION, &args![VATS_OBJECT]).u32()
+    } else {
+        0
+    };
+    if action != 0 {
+        let saved = e.mem.u32(action + 0x14);
+        let hit_data = hit_data_of(e, holder);
+        e.call(HIT_DATA_COPY, &args![hit_data, saved]);
+        let fresh = e.mem.alloc(0x64);
+        e.call(HIT_DATA_CONSTRUCT, &args![fresh]);
+        e.call(
+            HIT_DATA_INITIALIZE,
+            &args![fresh, this, target, weapon_entry, flag, source_ref],
+        );
+        let hit_data = hit_data_of(e, holder);
+        for word in 0..3 {
+            let value = e.mem.u32(fresh + HIT_DIRECTION + 4 * word);
+            e.mem.set_u32(hit_data + HIT_DIRECTION + 4 * word, value);
+        }
+        let hit_data = hit_data_of(e, holder);
+        for word in 0..3 {
+            let value = e.mem.u32(fresh + HIT_LOCATION + 4 * word);
+            e.mem.set_u32(hit_data + HIT_LOCATION + 4 * word, value);
+        }
+        if e.mem.u8(action + 4) == 0 {
+            for offset in [
+                HIT_HEALTH_DAMAGE,
+                HIT_TOTAL_DAMAGE,
+                HIT_FATIGUE_DAMAGE,
+                HIT_ARMOR_DAMAGE,
+                HIT_TARGETED_LIMB_DAMAGE,
+            ] {
+                let hit_data = hit_data_of(e, holder);
+                let value = e.mem.f32(fresh + offset);
+                e.mem.set_f32(hit_data + offset, value);
+            }
+        }
+        if !source_ref.is_null()
+            && e.call(REFR_FLAG_TEST, &args![source_ref, REFR_FLAG_NO_CRIT])
+                .bool()
+        {
+            let hit_data = hit_data_of(e, holder);
+            e.mem.set_u32(hit_data + HIT_CRITICAL_EFFECT, 0);
+            for offset in [
+                HIT_HEALTH_DAMAGE,
+                HIT_TOTAL_DAMAGE,
+                HIT_FATIGUE_DAMAGE,
+                HIT_DAMAGE_TO_WEAPON,
+                HIT_ARMOR_DAMAGE,
+                HIT_TARGETED_LIMB_DAMAGE,
+            ] {
+                let hit_data = hit_data_of(e, holder);
+                e.mem.set_f32(hit_data + offset, 0.0);
+            }
+            let hit_data = hit_data_of(e, holder);
+            e.call(
+                HIT_DATA_CLEAR_EFFECT,
+                &args![hit_data, HIT_DATA_EFFECT_MASK, 0u32],
+            );
+        }
+        let hit_data = hit_data_of(e, holder);
+        if e.mem.u32(hit_data + HIT_SOURCE_REF) == 0 && !source_ref.is_null() {
+            let hit_data = hit_data_of(e, holder);
+            e.mem.set_u32(hit_data + HIT_SOURCE_REF, source_ref.addr());
+        }
+        let hit_data = hit_data_of(e, holder);
+        if !source_ref.is_null() && e.mem.f32(hit_data + HIT_HEALTH_DAMAGE) as f64 != 0.0 {
+            let mut has_effect = 0u32;
+            if weapon_entry != 0
+                && e.call(
+                    ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE,
+                    &args![weapon_entry, 0xcu32],
+                )
+                .bool()
+            {
+                has_effect = 1;
+            }
+            let weapon_object = e
+                .call(
+                    SOURCE_WEAPON_LOOKUP,
+                    &args![source_ref, has_effect, 0u32, this],
+                )
+                .u32();
+            let projectiles = e
+                .call(WEAPON_GET_NUM_PROJECTILES, &args![weapon_object])
+                .u8() as u32;
+            if projectiles as i32 > 1 {
+                for offset in [
+                    HIT_HEALTH_DAMAGE,
+                    HIT_TOTAL_DAMAGE,
+                    HIT_TARGETED_LIMB_DAMAGE,
+                ] {
+                    let hit_data = hit_data_of(e, holder);
+                    divide_float(e, hit_data + offset, projectiles);
+                }
+            }
+            let base = e.call(ACTOR_BASE_FORM, &args![source_ref]).u32();
+            if e.call(BASE_TEST_4FD3C0, &args![base]).u32() != 0 {
+                let hit_data = hit_data_of(e, holder);
+                let reduction = e.call(REFR_GETTER_885D70, &args![source_ref]).f64();
+                let numerator = (e.mem.f32(hit_data + HIT_HEALTH_DAMAGE) as f64 - reduction) as f32;
+                let hit_data = hit_data_of(e, holder);
+                let ratio = numerator as f64 / e.mem.f32(hit_data + HIT_HEALTH_DAMAGE) as f64;
+                let factor = (1.0 - ratio) as f32;
+                for offset in [
+                    HIT_HEALTH_DAMAGE,
+                    HIT_TOTAL_DAMAGE,
+                    HIT_TARGETED_LIMB_DAMAGE,
+                ] {
+                    let hit_data = hit_data_of(e, holder);
+                    multiply_float(e, hit_data + offset, factor);
+                }
+            }
+        }
+        hit_data_of(e, holder);
+    } else {
+        let hit_data = hit_data_of(e, holder);
+        e.call(
+            HIT_DATA_INITIALIZE,
+            &args![hit_data, this, target, weapon_entry, flag, source_ref],
+        );
+    }
+
+    let counter = e.vcall(this.addr(), ACTOR_SLOT_32C, &args![]).u32();
+    e.vcall(this.addr(), ACTOR_SLOT_328, &args![counter.wrapping_add(1)]);
+    let hit_data = hit_data_of(e, holder);
+    let attack_skill = e.mem.u32(hit_data + HIT_ATTACK_SKILL);
+    e.vcall(this.addr(), ACTOR_SLOT_330, &args![attack_skill]);
+
+    let hit_data = hit_data_of(e, holder);
+    if e.call(HIT_DATA_FLAG_TEST, &args![hit_data, 1u32]).bool() {
+        let hit_data = hit_data_of(e, holder);
+        let health_damage = e.mem.f32(hit_data + HIT_HEALTH_DAMAGE);
+        let hit_data = hit_data_of(e, holder);
+        let percent_blocked = e.mem.f32(hit_data + HIT_PERCENT_BLOCKED);
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_4C0,
+            &args![health_damage, percent_blocked, target, source_ref],
+        );
+        let hit_data = hit_data_of(e, holder);
+        if e.call(HIT_DATA_FLAG_TEST, &args![hit_data, 2u32]).bool() {
+            let target_process = e.get(target, Actor::pCurrentProcess).addr();
+            let target_weapon = e
+                .vcall(target_process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                .u32();
+            if target_weapon != 0 {
+                let target_position = position_words(e, target.addr());
+                let this_position = position_words(e, this.addr());
+                let target_process = e.get(target, Actor::pCurrentProcess).addr();
+                let target_weapon = e
+                    .vcall(target_process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                    .u32();
+                let target_form = e.call(ENTRY_FORM, &args![target_weapon]).u32();
+                e.call(
+                    IMPACT_MIXER_PLAY_WEAPON_BLOCK,
+                    &args![
+                        weapon_type,
+                        target_form,
+                        this_position[0],
+                        this_position[1],
+                        this_position[2],
+                        target_position[0],
+                        target_position[1],
+                        target_position[2],
+                        u32::from(connects)
+                    ],
+                );
+            } else {
+                let target_position = position_words(e, target.addr());
+                let this_position = position_words(e, this.addr());
+                let default_sound = e.global::<u32>(IMPACT_BLOCK_DEFAULT_SOUND);
+                e.call(
+                    IMPACT_MIXER_PLAY_WEAPON_BLOCK,
+                    &args![
+                        weapon_type,
+                        default_sound,
+                        this_position[0],
+                        this_position[1],
+                        this_position[2],
+                        target_position[0],
+                        target_position[1],
+                        target_position[2],
+                        u32::from(connects)
+                    ],
+                );
+            }
+        } else {
+            let target_position = position_words(e, target.addr());
+            let this_position = position_words(e, this.addr());
+            e.call(
+                IMPACT_MIXER_PLAY_WEAPON_BLOCK,
+                &args![
+                    weapon_type,
+                    0u32,
+                    this_position[0],
+                    this_position[1],
+                    this_position[2],
+                    target_position[0],
+                    target_position[1],
+                    target_position[2],
+                    u32::from(connects == 0)
+                ],
+            );
+        }
+    } else {
+        let hit_type = if weapon_form != 0 {
+            e.call(WEAPON_TYPE, &args![weapon_form]).u32()
+        } else {
+            0xffff_ffff
+        };
+        let hit_data = hit_data_of(e, holder);
+        let health_damage = e.mem.f32(hit_data + HIT_HEALTH_DAMAGE);
+        e.call(
+            IMPACT_MIXER_PLAY_WEAPON_HIT,
+            &args![
+                this,
+                health_damage,
+                0.0f32,
+                target,
+                hit_type,
+                0xffff_ffffu32,
+                0xffff_ffffu32,
+                0u32,
+                u32::from(connects)
+            ],
+        );
+    }
+
+    if weapon_form != 0 && weapon_entry != 0 {
+        let mut spell = 0u32;
+        if spell == 0 {
+            let node = e.call(NODE_NEXT, &args![weapon_form + 0x74]).u32();
+            spell = if node != 0 { node + 0x18 } else { 0 };
+        }
+        if spell == 0 {
+            let poison = e.call(ITEM_CHANGE_GET_POISON, &args![weapon_entry]).u32();
+            spell = if poison != 0 { poison + 0x30 } else { 0 };
+        }
+        if spell != 0 && connects != 0 && source_ref.is_null() {
+            let threshold = e
+                .call(ITEM_CHANGE_GETTER_4BD350, &args![weapon_entry])
+                .f64();
+            let value = e.vcall(spell + 0xc, 8, &args![this]).f64();
+            if value > threshold {
+                let process = e.get(this, Actor::pCurrentProcess).addr();
+                e.vcall(process, PROCESS_SLOT_580, &args![1u32, 0u32, 0u32]);
+            }
+        }
+    }
+    if weapon_entry != 0
+        && weapon_form != 0
+        && source_ref.is_null()
+        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && !e.call(FORM_FLAG_100_BIT_5, &args![weapon_form]).bool()
+    {
+        let hit_data = hit_data_of(e, holder);
+        let damage_to_weapon = e.mem.f32(hit_data + HIT_DAMAGE_TO_WEAPON);
+        // The result clears a local that nothing reads afterwards.
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_3C8,
+            &args![weapon_entry, damage_to_weapon, 0u32],
+        );
+    }
+    let package = e.call(GET_CURRENT_PACKAGE, &args![this]).u32();
+    if package != 0 {
+        let data = e
+            .call(PACKAGE_GET_USE_WEAPON_PACKAGE_DATA, &args![package])
+            .u32();
+        if data != 0 && e.call(USE_WEAPON_DATA_TEST, &args![data]).bool() {
+            let hit_data = hit_data_of(e, holder);
+            e.mem.set_f32(hit_data + HIT_HEALTH_DAMAGE, 0.0);
+        }
+    }
+    if !not_a_target {
+        let hit_data = hit_data_of(e, holder);
+        e.call(ACTOR_HIT_ME, &args![target, hit_data, kind]);
+    }
+    e.call(NI_POINTER_HIT_DATA_DESTRUCT, &args![holder]);
+    e.mem.free(holder);
+}
+/// `Actor::GetCurrentEditorPackage` (Xbox PDB).
+const ACTOR_GET_CURRENT_EDITOR_PACKAGE: u32 = 0x0088_14b0;
+/// `ExtraDataList::GetWeaponAttackSound` (Xbox PDB): thiscall on the extra
+/// data list, taking the sound handle to fill.
+const EXTRA_GET_WEAPON_ATTACK_SOUND: u32 = 0x0041_8a00;
+/// `ExtraDataList::SetWeaponAttackSound` (Xbox PDB).
+const EXTRA_SET_WEAPON_ATTACK_SOUND: u32 = 0x0041_a540;
+/// `ExtraDataList::GetWeaponIdleSound` (Xbox PDB).
+const EXTRA_GET_WEAPON_IDLE_SOUND: u32 = 0x0041_89c0;
+/// `ExtraDataList::SetWeaponIdleSound` (Xbox PDB).
+const EXTRA_SET_WEAPON_IDLE_SOUND: u32 = 0x0041_a3e0;
+/// `ExtraDataList::GetCreatureAwakeSound` (Xbox PDB).
+const EXTRA_GET_CREATURE_AWAKE_SOUND: u32 = 0x0041_8940;
+/// `ExtraDataList::SetCreatureAwakeSound` (Xbox PDB).
+const EXTRA_SET_CREATURE_AWAKE_SOUND: u32 = 0x0041_a090;
+/// `BSSoundHandle::IsPlaying` (Xbox PDB).
+const SOUND_HANDLE_IS_PLAYING: u32 = 0x00ad_8930;
+/// `BSSoundHandle::FadeOutAndRelease` (Xbox PDB): the fade time in
+/// milliseconds.
+const SOUND_HANDLE_FADE_OUT_AND_RELEASE: u32 = 0x00ad_8da0;
+/// `BSSoundHandle::Release` (Xbox PDB).
+const SOUND_HANDLE_RELEASE: u32 = 0x00ad_8d10;
+/// `BSSoundHandle::Stop` (Xbox PDB).
+const SOUND_HANDLE_STOP: u32 = 0x00ad_88f0;
+/// `BSAudio::GetSoundHandleByNumericID` (Xbox PDB): thiscall on the audio
+/// object, taking the output handle, the id and the flags.
+const AUDIO_GET_SOUND_HANDLE_BY_NUMERIC_ID: u32 = 0x00ad_73b0;
+/// `BSAudio::GetSoundHandleByName` (Xbox PDB): the output handle, the name
+/// and the flags; returns the handle.
+const AUDIO_GET_SOUND_HANDLE_BY_NAME: u32 = 0x00ad_7550;
+/// `"MUSDeath"`.
+const DEATH_MUSIC_NAME: u32 = 0x0108_4d00;
+/// `MobileObject::StopCurrentDialogue` (Xbox PDB).
+const MOBILE_OBJECT_STOP_CURRENT_DIALOGUE: u32 = 0x0093_4250;
+/// `bhkRigidBody::SetFixed` (Xbox PDB), cdecl: the body and two flags.
+const BHK_RIGID_BODY_SET_FIXED: u32 = 0x00c8_f210;
+/// `bhkRagdollController::DisableRagdollAnim` (Xbox PDB): thiscall on the
+/// controller, taking a flag.
+const BHK_RAGDOLL_DISABLE_RAGDOLL_ANIM: u32 = 0x00c7_c150;
+/// Pointer to the byte value of a setting (`00408d60`, `this` = the
+/// setting).
+const SETTING_GET_BOOL_POINTER: u32 = 0x0040_8d60;
+/// The `bool` setting that, with `GetEssential`, keeps an actor from dying.
+const ESSENTIAL_SETTING: u32 = 0x011e_0888;
+/// The `float` setting `Kill` multiplies the base health by for the actors
+/// of process level 3 and 5.
+const LOW_LEVEL_HEALTH_SETTING: u32 = 0x011d_0144;
+/// The `float` setting passed to process slot `0xe8` for an essential
+/// actor.
+const ESSENTIAL_DOWN_TIMER_SETTING: u32 = 0x011d_0700;
+/// `Actor::ClearInCombat` (Xbox PDB): takes a flag.
+const ACTOR_CLEAR_IN_COMBAT: u32 = 0x008a_08e0;
+/// `Actor::SetHavokWeapon` (Xbox PDB).
+const ACTOR_SET_HAVOK_WEAPON: u32 = 0x008a_5eb0;
+/// `Actor::RestoreFullHealthAndConditions` (Xbox PDB).
+const ACTOR_RESTORE_FULL_HEALTH_AND_CONDITIONS: u32 = 0x008a_0960;
+/// `MagicCaster::InterruptCast` (Xbox PDB), `this` = the caster at `+0x88`.
+const MAGIC_CASTER_INTERRUPT_CAST: u32 = 0x0081_5b00;
+/// `TESObjectREFR::SetMarkerUsed` (Xbox PDB): thiscall on the marker with
+/// the index and a flag.
+const REFR_SET_MARKER_USED: u32 = 0x0056_8020;
+/// The CRT's `sprintf` (`00ec623a`), cdecl.
+const SPRINTF: u32 = 0x00ec_623a;
+/// `"%s %s"`.
+const TWO_STRINGS_FORMAT: u32 = 0x0101_2058;
+/// `"Interface\Icons\Message Icons\glow_message_vaultboy_surprised.dds"`.
+const MESSAGE_ICON_SURPRISED: u32 = 0x0104_9638;
+/// The setting object whose string follows the actor's name in the message
+/// shown for an essential actor that goes down.
+const DOWN_MESSAGE_SETTING: u32 = 0x011d_1e24;
+/// String of a setting (`00403df0`, `this` = the setting).
+const SETTING_GET_STRING: u32 = 0x0040_3df0;
+/// `ProcessLists` worker taking the actor (`0096e2f0`).
+const PROCESS_LISTS_WORKER_96E2F0: u32 = 0x0096_e2f0;
+/// `TESObjectREFR::IsPartofEvilFaction` (Xbox PDB).
+const REFR_IS_PART_OF_EVIL_FACTION: u32 = 0x0056_78a0;
+/// `PlayerCharacter::SetIsAMurderer` (Xbox PDB).
+const PLAYER_SET_IS_A_MURDERER: u32 = 0x0095_3f80;
+/// `TESActorBaseData::GetAlignmentForKarma` (Xbox PDB), cdecl, a `float`.
+const GET_ALIGNMENT_FOR_KARMA: u32 = 0x0047_e040;
+/// `Actor::HasFactionThatCaresAboutCrime` (Xbox PDB).
+const ACTOR_HAS_FACTION_THAT_CARES_ABOUT_CRIME: u32 = 0x008b_8490;
+/// `PlayerCharacter::RewardKarma` (Xbox PDB): thiscall on the player.
+const PLAYER_REWARD_KARMA: u32 = 0x0094_fd30;
+/// `float` settings of the karma reward: the default, the one for
+/// creatures and the ones per alignment (indexed by the alignment number;
+/// entry 1 is the default).
+const KARMA_REWARD_SETTING: u32 = 0x011c_df6c;
+const KARMA_REWARD_CREATURE_SETTING: u32 = 0x011c_d164;
+const KARMA_REWARD_ALIGNMENT_SETTINGS: [u32; 5] = [
+    0x011c_d7a4,
+    KARMA_REWARD_SETTING,
+    0x011c_ded4,
+    0x011c_dca4,
+    0x011c_d508,
+];
+/// Test on the player (`004997b0`).
+const PLAYER_TEST_4997B0: u32 = 0x0049_97b0;
+/// `PlayerCharacter::IsPlayerDetectedByNonTeammates` (Xbox PDB): thiscall on
+/// the player, taking an actor.
+const PLAYER_IS_DETECTED_BY_NON_TEAMMATES: u32 = 0x0096_7160;
+/// Test on a weapon form (`006450c0`).
+const WEAPON_FORM_TEST_6450C0: u32 = 0x0064_50c0;
+/// `00525620`: thiscall on a weapon form, taking two flags.
+const WEAPON_FORM_NUMBER: u32 = 0x0052_5620;
+/// The integer setting that number is compared with.
+const WEAPON_NUMBER_SETTING: u32 = 0x011c_d3b4;
+/// Test of the tracked damage against the health (`00670700`, cdecl, two
+/// `float`s).
+const TRACKED_DAMAGE_TEST: u32 = 0x0067_0700;
+/// `0087f9f0`: thiscall on the actor, a 16-bit result.
+const ACTOR_GETTER_87F9F0: u32 = 0x0087_f9f0;
+/// `ExperiencePoints::GetExperiencePoints` (Xbox PDB), cdecl: a flag and a
+/// 16-bit number; returns an integer.
+const GET_EXPERIENCE_POINTS: u32 = 0x0067_05b0;
+/// `005be4d0`: thiscall on the player, returns an integer.
+const PLAYER_INT_5BE4D0: u32 = 0x005b_e4d0;
+/// `00648c80`: cdecl, a `float` and an integer; returns a `float`.
+const SCALE_EXPERIENCE: u32 = 0x0064_8c80;
+/// `00406ce0`: cdecl, a `float`; returns a `float`.
+const FLOAT_ROUND: u32 = 0x0040_6ce0;
+/// Player virtual slot `0x488` (takes the amount).
+const PLAYER_SLOT_488: u32 = 0x488;
+/// `Actor` virtual slot `0x1a0` (takes a flag).
+const ACTOR_SLOT_1A0: u32 = 0x1a0;
+/// `Actor` virtual slot `0x2a0`.
+const ACTOR_SLOT_2A0: u32 = 0x2a0;
+/// `Actor::GetHeading` (Xbox PDB), `Actor` virtual slot `0x2bc` (takes a
+/// flag; the result is a `float`).
+const ACTOR_SLOT_GET_HEADING: u32 = 0x2bc;
+/// `Actor` virtual slot `0x38c` (a bool).
+const ACTOR_SLOT_38C: u32 = 0x38c;
+/// `Actor` virtual slot `0x448` (a bool).
+const ACTOR_SLOT_448: u32 = 0x448;
+/// Process virtual slots used by `Kill`: `GetIsAggressor` (`0x1c4`),
+/// `ClearMuzzleFlash` (`0x6c4`), `RemoveAllQueuedItems` (`0x180`),
+/// `SetGreetingFlag` (`0x310`), `GetCurrentFurniture` (`0x4c8`),
+/// `GetCurrentFurnitureIndex` (`0x4d0`), `SetBreathTimer` (`0x2fc`),
+/// `GetTrackedDamage` (`0x730`), `ClearAllHeadTrackTargets` (`0x660`),
+/// `SetDeathTime` (`0x6a0`), `SetGreetingTimer` (`0x4b4`) and
+/// `GetKnockState` (`0x40c`) (Xbox PDB names of the `HighProcess` vtable).
+const PROCESS_SLOT_1C4: u32 = 0x1c4;
+const PROCESS_SLOT_6C4: u32 = 0x6c4;
+const PROCESS_SLOT_180: u32 = 0x180;
+const PROCESS_SLOT_310: u32 = 0x310;
+const PROCESS_SLOT_4C8: u32 = 0x4c8;
+const PROCESS_SLOT_4D0: u32 = 0x4d0;
+const PROCESS_SLOT_2FC: u32 = 0x2fc;
+const PROCESS_SLOT_730: u32 = 0x730;
+const PROCESS_SLOT_660: u32 = 0x660;
+const PROCESS_SLOT_6A0: u32 = 0x6a0;
+const PROCESS_SLOT_4B4: u32 = 0x4b4;
+const PROCESS_SLOT_40C: u32 = 0x40c;
+/// Static byte read (`00525420`: a global flag).
+const GLOBAL_FLAG_525420: u32 = 0x0052_5420;
+/// `TESCreature::PickCreatureSound` (Xbox PDB): thiscall on the creature,
+/// taking the sound type.
+const CREATURE_PICK_CREATURE_SOUND: u32 = 0x005f_92d0;
+/// The numeric id of a sound form (`0084e3a0`; also used for the ids in the
+/// death report).
+const FORM_NUMERIC_ID: u32 = 0x0084_e3a0;
+/// `FalloutRadio::PipboyRadioEnable` (Xbox PDB), cdecl.
+const PIPBOY_RADIO_ENABLE: u32 = 0x0083_24e0;
+/// `00830680`: cdecl, `1000, 0`.
+const SOUND_FADE_WORKER: u32 = 0x0083_0680;
+/// `VATS::QuitVATSPlayback` (Xbox PDB): thiscall on `VATS`, two flags.
+const VATS_QUIT_PLAYBACK: u32 = 0x009c_8950;
+/// `Interface::IsTopMenuID` (Xbox PDB), cdecl.
+const INTERFACE_IS_TOP_MENU_ID: u32 = 0x0070_2450;
+/// `SurgeryMenu::Close` (Xbox PDB).
+const SURGERY_MENU_CLOSE: u32 = 0x007e_1980;
+/// `Actor::GetFaceAnimationData` (Xbox PDB).
+const ACTOR_GET_FACE_ANIMATION_DATA: u32 = 0x008a_dcb0;
+/// `009ca1f0`: thiscall on `VATS`.
+const VATS_WORKER_9CA1F0: u32 = 0x009c_a1f0;
+/// `0080ced0`: cdecl, the actor and a number; returns a byte.
+const ACTOR_GETTER_80CED0: u32 = 0x0080_ced0;
+/// `00867e30`: thiscall on `TIME_STAMP_OBJECT`, an unsigned result.
+const TIME_STAMP_867E30: u32 = 0x0086_7e30;
+const TIME_STAMP_OBJECT: u32 = 0x011d_e7b8;
+/// `00459060`: thiscall on `TES`, taking a form and `1`.
+const TES_WORKER_459060: u32 = 0x0045_9060;
+/// `ExtraDataList::RemoveTrespassPackage` (Xbox PDB).
+const EXTRA_REMOVE_TRESPASS_PACKAGE: u32 = 0x0041_cda0;
+/// `0043fcd0`: the collision object of the actor (the base function of
+/// `Actor` slot `0x1d0`).
+const ACTOR_COLLISION_OBJECT: u32 = 0x0043_fcd0;
+/// Four-`float` constructor (`005532a0`).
+const VECTOR4_CONSTRUCT: u32 = 0x0055_32a0;
+/// `bhkCharacterProxy::GetLinearVelocity` (Xbox PDB): thiscall, takes the
+/// output vector.
+const BHK_CHARACTER_PROXY_GET_LINEAR_VELOCITY: u32 = 0x0066_ca00;
+/// Vector assignment (`004a3e00`, cdecl: destination, source).
+const VECTOR_ASSIGN: u32 = 0x004a_3e00;
+/// `MobileObject::SetChaseBip` (Xbox PDB): takes a flag.
+const MOBILE_OBJECT_SET_CHASE_BIP: u32 = 0x0093_1fb0;
+/// The `float` setting passed to process slot `0x4b4`.
+const GREETING_TIMER_SETTING: u32 = 0x011c_cf7c;
+/// Test on the actor (`0087eeb0`).
+const ACTOR_TEST_87EEB0: u32 = 0x0087_eeb0;
+/// `Actor` helper (`0087eef0`, thiscall on the actor).
+const ACTOR_WORKER_87EEF0: u32 = 0x0087_eef0;
+/// The three `float`s at `0x11f426c`: the default impulse direction.
+const DEFAULT_DIRECTION: u32 = 0x011f_426c;
+/// `00630b40`: thiscall on a vector, taking an output; returns an object.
+const VECTOR_TRANSFORM_630B40: u32 = 0x0063_0b40;
+/// `004586d0`: thiscall on that object; the result is in ST0.
+const VECTOR_LENGTH_4586D0: u32 = 0x0045_86d0;
+/// `00458620`: cdecl, output vector and input vector.
+const VECTOR_COPY_458620: u32 = 0x0045_8620;
+/// `004a0c90`: thiscall on a vector, taking a `float`.
+const VECTOR_ROTATE_4A0C90: u32 = 0x004a_0c90;
+/// `004b4500`: thiscall on a vector, taking an output and a vector;
+/// returns the output.
+const VECTOR_MULTIPLY_4B4500: u32 = 0x004b_4500;
+/// A constant vector at `0x11a9478`.
+const UNIT_VECTOR: u32 = 0x011a_9478;
+/// `bhkCharacterController::GetPosition` (Xbox PDB, `00812b00`): thiscall,
+/// takes the output vector.
+const BHK_CHARACTER_CONTROLLER_GET_POSITION: u32 = 0x0081_2b00;
+/// Three-`float` constructors (`0043d410` and `00416870`).
+const VECTOR3_CONSTRUCT_43D410: u32 = 0x0043_d410;
+const VECTOR3_CONSTRUCT_416870: u32 = 0x0041_6870;
+/// `00a59c60`: thiscall on the collision object, taking a vector.
+const COLLISION_OBJECT_SET_ANGULAR_VELOCITY: u32 = 0x00a5_9c60;
+/// `00439180`: thiscall on a vector, taking a scalar.
+const VECTOR_SCALE_IN_PLACE: u32 = 0x0043_9180;
+/// The scalar setting multiplying the impulse (`0x11cf724`).
+const DEATH_IMPULSE_SETTING: u32 = 0x011c_f724;
+/// `TESHavokUtilities::AddVelocity` (Xbox PDB), cdecl: body, vector, flag.
+const TES_HAVOK_ADD_VELOCITY: u32 = 0x0062_b8d0;
+/// `0062b930`: cdecl, body, vector, flag.
+const TES_HAVOK_SET_VELOCITY: u32 = 0x0062_b930;
+/// The `float` used as the upward component (`0x101712c`).
+const UPWARD_COMPONENT: u32 = 0x0101_712c;
+/// `CombatManager::GetCombatantCount` (Xbox PDB): thiscall on the manager,
+/// taking an actor and a pointer.
+const COMBAT_MANAGER_GET_COMBATANT_COUNT: u32 = 0x0099_31c0;
+/// Integer settings: the combatant count limit and the drop chance.
+const COMBATANT_COUNT_SETTING: u32 = 0x011d_f780;
+const DROP_WEAPON_CHANCE_SETTING: u32 = 0x011d_055c;
+/// Random number (`00487f50`).
+const RANDOM_NUMBER: u32 = 0x0048_7f50;
+/// `Actor::DoDeathStuff` (Xbox PDB).
+const ACTOR_DO_DEATH_STUFF: u32 = 0x008b_01c0;
+/// `TESObjectREFR::RunScript` (Xbox PDB).
+const REFR_RUN_SCRIPT: u32 = 0x0056_5870;
+/// `bhkRagdollPenetrationUtil::Clear` (Xbox PDB).
+const BHK_RAGDOLL_PENETRATION_UTIL_CLEAR: u32 = 0x00ca_20e0;
+/// `00931ed0`: thiscall on the actor, taking an output; returns an object.
+const ACTOR_OUTPUT_931ED0: u32 = 0x0093_1ed0;
+/// `004a3a20` (thiscall).
+const OBJECT_ACCESSOR_4A3A20: u32 = 0x004a_3a20;
+/// `00ca2ad0`: thiscall on the penetration utility, taking the collision
+/// object and a value.
+const PENETRATION_UTIL_WORKER: u32 = 0x00ca_2ad0;
+/// The `bool` setting that enables the death report.
+const DEATH_REPORT_SETTING: u32 = 0x011d_f690;
+/// `"'%s' (%08X) was killed by '%s' (%08X)."`.
+const KILLED_BY_FORMAT: u32 = 0x0108_4cc8;
+/// `"'%s' (%08X) has died with no attacker."`.
+const DIED_WITH_NO_ATTACKER_FORMAT: u32 = 0x0108_4ca0;
+/// `"%.20s is dead!"`.
+const IS_DEAD_FORMAT: u32 = 0x0108_4cf0;
+/// `MapMarkerData::GetLocationName` (Xbox PDB), used on the base form's
+/// name member (`+0xd0`).
+const LOCATION_NAME: u32 = 0x0040_8da0;
+/// `Error` (Xbox PDB), cdecl, does nothing.
+const ERROR_REPORT: u32 = 0x0040_fbe0;
+/// Test on a setting object (`00454af0`).
+const SETTING_TEST_454AF0: u32 = 0x0045_4af0;
+const EXPORT_SETTING: u32 = 0x011e_0a30;
+/// `PlayerCharacter::ExportProgressData` (Xbox PDB).
+const PLAYER_EXPORT_PROGRESS_DATA: u32 = 0x0094_ed40;
+/// `Actor::AddFactionMinorCrime` (Xbox PDB).
+const ACTOR_ADD_FACTION_MINOR_CRIME: u32 = 0x008b_7c00;
+/// `PlayerCharacter::SetSlowMoCamera` (Xbox PDB).
+const PLAYER_SET_SLOW_MO_CAMERA: u32 = 0x0093_e530;
+const SLOW_MO_SETTING: u32 = 0x011d_00fc;
+/// `ProcessLists::FinishMagicShaderHitEffect` (Xbox PDB).
+const PROCESS_LISTS_FINISH_MAGIC_SHADER_HIT_EFFECT: u32 = 0x0097_4a50;
+/// `ContinuousBeamProjectile::SetKill` (Xbox PDB).
+const CONTINUOUS_BEAM_PROJECTILE_SET_KILL: u32 = 0x009a_b9a0;
+/// The pointer that is the `this` of `fn_0089f4e0`.
+const MAGIC_SHADER_HOLDER: u32 = 0x011c_3f2c;
+/// Test on a form (`0056af40`).
+const ACTOR_TEST_56AF40: u32 = 0x0056_af40;
+/// `ExtraDataList` accessor (`00421720`).
+const EXTRA_GET_BASE_FORM_421720: u32 = 0x0042_1720;
+/// `TESCreature` accessor (`0059f3a0`): a signed byte.
+const CREATURE_GETTER_59F3A0: u32 = 0x0059_f3a0;
+/// RTTI type descriptor of `TESActorBase` and of `TESCreature`.
+const RTTI_TYPE_TES_ACTOR_BASE: u32 = 0x0118_46e8;
+const RTTI_TYPE_TES_CREATURE: u32 = 0x0118_3a00;
+/// Statistics worker (`005f5950`, cdecl, 7 words).
+const STATISTICS_WORKER_5F5950: u32 = 0x005f_5950;
+/// Weapon-form accessor returning a 16-bit value (`008d85e0`).
+const WEAPON_GETTER_8D85E0: u32 = 0x008d_85e0;
+/// The `float` setting (distance) that decides whether a dying actor speaks.
+const DEATH_VOICE_DISTANCE_SETTING: u32 = 0x011d_0f9c;
+/// `Actor::GetAnimGroup` (Xbox PDB), called by its address.
+const ACTOR_GET_ANIM_GROUP_ADDRESS: u32 = 0x0089_7910;
+
+/// Fetches one of the actor's remembered sounds from its extra data list
+/// into `handle`, stops it (fading it out first while it plays, when
+/// `fade_out`; otherwise `Stop` then `Release`) and stores the handle back.
+fn forget_actor_sound(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    handle: u32,
+    getter: u32,
+    setter: u32,
+    fade_out: bool,
+) {
+    e.call(SOUND_HANDLE_CONSTRUCT, &args![handle]);
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(getter, &args![extra, handle]);
+    if fade_out {
+        if e.call(SOUND_HANDLE_IS_PLAYING, &args![handle]).bool() {
+            e.call(SOUND_HANDLE_FADE_OUT_AND_RELEASE, &args![handle, 500u32]);
+        } else {
+            e.call(SOUND_HANDLE_RELEASE, &args![handle]);
+        }
+    } else {
+        e.call(SOUND_HANDLE_STOP, &args![handle]);
+        e.call(SOUND_HANDLE_RELEASE, &args![handle]);
+    }
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(setter, &args![extra, handle]);
+}
+
+/// Destroys the three sound handles `actor_kill` keeps (in the order the
+/// compiler's cleanup does) and releases their memory.
+fn destroy_kill_sound_handles(e: &mut Engine, handles: u32) {
+    e.call(SOUND_HANDLE_DESTROY, &args![handles + 24]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handles + 12]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handles]);
+    e.mem.free(handles);
+}
+
+/// Calls `TESObjectREFR::SetMarkerUsed` on the furniture the process
+/// reports (`GetCurrentFurniture`) with its index, when it reports one.
+fn release_furniture_marker(e: &mut Engine, this: Ptr<Actor>) {
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.vcall(process, PROCESS_SLOT_4C8, &args![]).u32() != 0 {
+            let index_source = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let furniture_source = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let index = e.vcall(index_source, PROCESS_SLOT_4D0, &args![]).u32();
+            let furniture = e.vcall(furniture_source, PROCESS_SLOT_4C8, &args![]).u32();
+            e.call(REFR_SET_MARKER_USED, &args![furniture, index, 0u32]);
+        }
+    }
+}
+
+/// `*(setting)` as a `float`, for a `float` setting object.
+fn float_setting(e: &mut Engine, setting: u32) -> f32 {
+    let pointer = e.call(SETTING_GET_VALUE_POINTER, &args![setting]).u32();
+    e.mem.f32(pointer)
+}
+
+/// `*(setting)` as an integer, for an integer setting object.
+fn int_setting(e: &mut Engine, setting: u32) -> u32 {
+    let pointer = e.call(SETTING_GET_INT_POINTER, &args![setting]).u32();
+    e.mem.u32(pointer)
+}
+
+/// The kill statistics `Actor::Kill` records when the attacker belongs to
+/// the player: the entry point `0x15`, and the statistics worker three
+/// times with the weapon, the creature type and the weapon's numbers; then
+/// the `VATS` counter.
+fn record_kill_statistics(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+    e.call(HANDLE_ENTRY_POINT, &args![0x15u32, player, this, this]);
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![attacker]).u32();
+    let weapon_entry = e
+        .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+        .u32();
+    let weapon_form = if weapon_entry != 0 {
+        e.call(ENTRY_FORM, &args![weapon_entry]).u32()
+    } else {
+        0
+    };
+    let mut base = base_form(e, this.cast()).addr();
+    if e.call(ACTOR_TEST_56AF40, &args![this]).bool() {
+        let extra = extra_data_list_of(e, this.cast());
+        base = e.call(EXTRA_GET_BASE_FORM_421720, &args![extra]).u32();
+    }
+    let creature_type = if e.vcall(this.addr(), ACTOR_SLOT_218, &args![]).bool() {
+        0u8
+    } else {
+        let actor_base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+        let creature = e
+            .call(
+                RTTI_DYNAMIC_CAST,
+                &args![
+                    actor_base,
+                    0u32,
+                    RTTI_TYPE_TES_ACTOR_BASE,
+                    RTTI_TYPE_TES_CREATURE,
+                    0u32
+                ],
+            )
+            .u32();
+        let kind = e.call(CREATURE_GETTER_59F3A0, &args![creature]).u8() as i8;
+        (kind as i32 + 1) as u8
+    };
+    if !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+        for (first, second) in [(1u32, 1u32), (0, 1)] {
+            let number = weapon_number(e, weapon_form);
+            let slot = weapon_slot(e, weapon_form);
+            e.call(
+                STATISTICS_WORKER_5F5950,
+                &args![first, second, base, weapon_form, 0u32, slot, number],
+            );
+        }
+        let number = weapon_number(e, weapon_form);
+        e.call(
+            STATISTICS_WORKER_5F5950,
+            &args![
+                2u32,
+                1u32,
+                0u32,
+                weapon_form,
+                0u32,
+                u32::from(creature_type as i8 as i16 as u16),
+                number
+            ],
+        );
+    }
+    if e.call(ENTRY_FORM, &args![VATS_OBJECT]).u32() == 4 {
+        fn_0089f560(e, Ptr::new(VATS_OBJECT));
+    }
+}
+
+/// `(weapon type + 1) & 0xffff` of a weapon form, 1 when there is none.
+fn weapon_number(e: &mut Engine, weapon_form: u32) -> u32 {
+    if weapon_form != 0 {
+        u32::from((e.call(WEAPON_TYPE, &args![weapon_form]).u16()).wrapping_add(1))
+    } else {
+        1
+    }
+}
+
+/// The 16-bit slot number of a weapon form (`008d85e0`), `0x2d` when none.
+fn weapon_slot(e: &mut Engine, weapon_form: u32) -> u32 {
+    if weapon_form != 0 {
+        u32::from(e.call(WEAPON_GETTER_8D85E0, &args![weapon_form]).u16())
+    } else {
+        0x2d
+    }
+}
+
+/// The part of `Actor::Kill` for an essential actor (the essential setting
+/// is on and `GetEssential` is true): it does not die. At process levels 3
+/// and 5 its health is set to the setting's share of the base health;
+/// otherwise its crime list, timers and package are reset, it leaves
+/// combat, releases its furniture, goes to life state 6 with full health
+/// and, at process level 6, shows a message. Returns true when the whole
+/// kill ends here (the first case, which also destroys the sound handles).
+fn kill_essential_actor(e: &mut Engine, this: Ptr<Actor>, handles: u32) -> bool {
+    if e.call(ACTOR_PROCESS_LEVEL_IS_3, &args![this]).bool()
+        || e.call(ACTOR_PROCESS_LEVEL_IS_5, &args![this]).bool()
+    {
+        let owner = this.addr() + ACTOR_VALUE_OWNER_OFFSET;
+        let base_health = e.vcall(owner, 0x00, &args![0x10u32]).i32() as f32;
+        let share = float_setting(e, LOW_LEVEL_HEALTH_SETTING);
+        let mut amount = (share as f64 * base_health as f64) as f32;
+        let current = e.vcall(owner, 0x0c, &args![0x10u32]).f32();
+        amount = (amount as f64 - current as f64) as f32;
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_MODIFY_ACTOR_VALUE,
+            &args![0x10u32, amount, 0u32],
+        );
+        destroy_kill_sound_handles(e, handles);
+        return true;
+    }
+    let package = e.call(ACTOR_GET_CURRENT_EDITOR_PACKAGE, &args![this]).u32();
+    let extra = extra_data_list_of(e, this.cast());
+    e.call(EXTRA_REMOVE_PLAYER_CRIME_LIST_EXTRA, &args![extra, this]);
+    let timer = float_setting(e, ESSENTIAL_DOWN_TIMER_SETTING);
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    e.vcall(process, PROCESS_SLOT_E8, &args![timer]);
+    let twenty: f32 = e.global(TWENTY);
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    e.vcall(process, PROCESS_SLOT_2FC, &args![twenty]);
+    if package != 0 && e.call(PACKAGE_TYPE, &args![package]).i32() != 0xf {
+        e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![this, 0u32]);
+    }
+    e.call(ACTOR_CLEAR_IN_COMBAT, &args![this, 1u32]);
+    release_furniture_marker(e, this);
+    e.call(MAGIC_CASTER_INTERRUPT_CAST, &args![this.byte_add(0x88)]);
+    e.call(ACTOR_SET_LIFE_STATE, &args![this, 6u32]);
+    e.call(ACTOR_SET_HAVOK_WEAPON, &args![this]);
+    e.call(ACTOR_RESTORE_FULL_HEALTH_AND_CONDITIONS, &args![this]);
+    if e.call(PROCESS_LEVEL_NUMBER, &args![this]).i32() == 6 {
+        let text = e
+            .call(SETTING_GET_STRING, &args![DOWN_MESSAGE_SETTING])
+            .u32();
+        let name = e.call(REFR_GET_NAME, &args![this]).u32();
+        let buffer = e.mem.alloc(204);
+        e.call(SPRINTF, &args![buffer, TWO_STRINGS_FORMAT, name, text]);
+        let duration: f32 = e.global(MESSAGE_DURATION);
+        e.call(
+            SHOW_MESSAGE,
+            &args![buffer, 0u32, MESSAGE_ICON_SURPRISED, 0u32, duration, 0u32],
+        );
+        e.mem.free(buffer);
+    }
+    false
+}
+
+/// Reports the death through `Error` (which does nothing) with the two
+/// actors' names and ids.
+fn report_death(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>) {
+    if !attacker.is_null() {
+        let attacker_id = e.call(FORM_NUMERIC_ID, &args![attacker]).u32();
+        let base = e.call(ACTOR_BASE_FORM, &args![attacker]).u32();
+        let attacker_name = e.call(LOCATION_NAME, &args![base + 0xd0]).u32();
+        let id = e.call(FORM_NUMERIC_ID, &args![this]).u32();
+        let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+        let name = e.call(LOCATION_NAME, &args![base + 0xd0]).u32();
+        e.call(
+            ERROR_REPORT,
+            &args![KILLED_BY_FORMAT, name, id, attacker_name, attacker_id],
+        );
+    } else {
+        let id = e.call(FORM_NUMERIC_ID, &args![this]).u32();
+        let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+        let name = e.call(LOCATION_NAME, &args![base + 0xd0]).u32();
+        e.call(ERROR_REPORT, &args![DIED_WITH_NO_ATTACKER_FORMAT, name, id]);
+    }
+}
+
+/// The part of `Actor::Kill` that updates the combat bookkeeping for the
+/// player or a teammate of the player: crime for a combatant that sees the
+/// player, and the slow-motion camera when nothing else is fighting.
+fn update_kill_counts(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+    let counter = e.mem.alloc(8);
+    if attacker.addr() == player
+        || (!attacker.is_null()
+            && e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![attacker])
+                .bool())
+    {
+        let manager = e.global::<u32>(COMBAT_MANAGER);
+        let count = e
+            .call(
+                COMBAT_MANAGER_GET_COMBATANT_COUNT,
+                &args![manager, player, counter],
+            )
+            .u32();
+        if count > 0
+            && e.call(PLAYER_IS_DETECTED_BY_NON_TEAMMATES, &args![player, this])
+                .bool()
+        {
+            e.call(ACTOR_ADD_FACTION_MINOR_CRIME, &args![this, 1u32, 1u32]);
+        }
+        if e.call(ENTRY_FORM, &args![VATS_OBJECT]).u32() == 0 && count == 0 {
+            let factor = float_setting(e, SLOW_MO_SETTING);
+            e.call(
+                PLAYER_SET_SLOW_MO_CAMERA,
+                &args![player, this, factor, 1u32, 0xffff_ffffu32],
+            );
+        }
+    }
+    e.mem.free(counter);
+}
+
+/// The killing part of `Actor::Kill` (the actor is not essential): clears
+/// the actor out of the process lists, settles who gets the blame
+/// (`attacker` may be replaced by its commanding actor), does the crime,
+/// karma and experience bookkeeping for the player, releases furniture,
+/// plays the death dialogue or creature sound, sets the life state to 1,
+/// handles the player's own death, gives the body a ragdoll impulse and
+/// finishes with `Actor::DoDeathStuff` and the debug line.
+fn kill_actor(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    attacker: &mut Ptr<Actor>,
+    was_aggressor: bool,
+    player: u32,
+) {
+    e.call(PROCESS_LISTS_WORKER_96E2F0, &args![PROCESS_LISTS, this]);
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_310, &args![0u32]);
+    }
+    if !attacker.is_null() && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![*attacker]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![*attacker]).u32();
+        if e.vcall(process, PROCESS_SLOT_52C, &args![]).u32() != 0 {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![*attacker]).u32();
+            *attacker = Ptr::new(e.vcall(process, PROCESS_SLOT_52C, &args![]).u32());
+        }
+    }
+    if !attacker.is_null() && e.vcall(attacker.addr(), ACTOR_SLOT_218, &args![]).bool() {
+        let mut blamed = true;
+        if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+            let controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+            blamed = e
+                .call(
+                    COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET,
+                    &args![controller, *attacker],
+                )
+                .bool();
+        }
+        if blamed {
+            e.mem.set_u8(this.addr() + 0xc4, u8::from(!was_aggressor));
+            if attacker.addr() == player {
+                let flag = e.mem.alloc(4);
+                e.mem.set_u8(flag, 0);
+                let reaction = e
+                    .call(ACTOR_GET_FACTION_FIGHT_REACTION, &args![this, player, flag])
+                    .i32();
+                e.mem.free(flag);
+                if (reaction == 3 || reaction == 2)
+                    && e.call(ACTOR_TEST_5A3790, &args![this]).bool()
+                {
+                    e.mem.set_u8(this.addr() + 0xc4, 0);
+                }
+            }
+        }
+    }
+    if attacker.addr() == player && !e.vcall(this.addr(), ACTOR_SLOT_2E8, &args![]).bool() {
+        if e.vcall(this.addr(), ACTOR_SLOT_218, &args![]).bool() {
+            e.call(MISC_STAT_INCREMENT, &args![2u32]);
+            if !e.call(REFR_IS_PART_OF_EVIL_FACTION, &args![this]).bool()
+                && e.mem.u8(this.addr() + 0xc4) != 0
+            {
+                e.call(PLAYER_SET_IS_A_MURDERER, &args![player]);
+            }
+        } else {
+            e.call(MISC_STAT_INCREMENT, &args![3u32]);
+        }
+        e.call(MISC_STAT_INCREMENT, &args![0x23u32]);
+        e.call(ACTOR_BASE_FORM, &args![this]);
+        let base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+        let karma = e.vcall(base + 0x100, 0x0c, &args![0x17u32]).f32();
+        let alignment = e.call(GET_ALIGNMENT_FOR_KARMA, &args![karma]).u32();
+        if !was_aggressor
+            && e.call(ACTOR_HAS_FACTION_THAT_CARES_ABOUT_CRIME, &args![this])
+                .bool()
+        {
+            let mut reward = float_setting(e, KARMA_REWARD_SETTING);
+            if e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+                reward = float_setting(e, KARMA_REWARD_CREATURE_SETTING);
+            }
+            if alignment != 1 && alignment <= 4 {
+                reward = float_setting(e, KARMA_REWARD_ALIGNMENT_SETTINGS[alignment as usize]);
+            }
+            if reward as f64 != 0.0 {
+                let amount = e.call(FTOL, &args![reward as f64]).u32();
+                e.call(PLAYER_REWARD_KARMA, &args![player, amount]);
+            }
+        }
+    }
+    if attacker.addr() == player
+        && e.call(PLAYER_TEST_4997B0, &args![player]).bool()
+        && !e
+            .call(PLAYER_IS_DETECTED_BY_NON_TEAMMATES, &args![player, 0u32])
+            .bool()
+    {
+        let mut weapon_form = 0u32;
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![player]).u32() != 0 {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![player]).u32();
+            if e.vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                .u32()
+                != 0
+            {
+                let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![player]).u32();
+                let entry = e
+                    .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                    .u32();
+                weapon_form = e.call(ENTRY_FORM, &args![entry]).u32();
+            }
+        }
+        let mut clear = true;
+        if weapon_form != 0 && !e.call(WEAPON_FORM_TEST_6450C0, &args![weapon_form]).bool() {
+            let number = e
+                .call(WEAPON_FORM_NUMBER, &args![weapon_form, 0u32, 0u32])
+                .u32();
+            if number != int_setting(e, WEAPON_NUMBER_SETTING) {
+                let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![player]).u32();
+                let entry = e
+                    .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                    .u32();
+                if !e
+                    .call(ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE, &args![entry, 0xbu32])
+                    .bool()
+                {
+                    clear = false;
+                }
+            }
+        }
+        if clear {
+            e.mem.set_u8(this.addr() + 0xc4, 0);
+        }
+    }
+    award_experience(e, this, *attacker, player);
+    release_furniture_marker(e, this);
+    if this.addr() != player {
+        e.call(ACTOR_WORKER_87EEF0, &args![this]);
+        e.set(this, Actor::pMyKiller, attacker.cast());
+    }
+    let group = e
+        .call(
+            ACTOR_GET_ANIM_GROUP_ADDRESS,
+            &args![this, 0xe0u32, 0u32, 0u32, 0u32],
+        )
+        .u16();
+    if e.call(ANIM_GROUP_GET_TYPE, &args![u32::from(group)]).i32() == 0xe0 {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        e.vcall(process, PROCESS_SLOT_614, &args![0x20u32]);
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_660, &args![]);
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 {
+            play_death_voice(e, this, *attacker, player);
+        }
+    }
+    e.call(ACTOR_SET_LIFE_STATE, &args![this, 1u32]);
+    e.call(ACTOR_SET_HAVOK_WEAPON, &args![this]);
+    if this.addr() == player {
+        player_dies(e, this);
+    }
+    finish_dying(e, this, *attacker, player);
+    if e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() {
+        let name = e.call(REFR_GET_NAME, &args![this]).u32();
+        e.call(PRINT_DEBUG_LINE, &args![IS_DEAD_FORMAT, name]);
+    }
+}
+
+/// The experience the player gets for the kill: only when the actor was
+/// not a teammate's kill (or the attacker is a teammate of the player), is
+/// neither a protected nor an unfriendly actor, and the damage tracked on
+/// it passes the test against its health.
+fn award_experience(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+    let mut by_player_side = true;
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+        by_player_side =
+            !attacker.is_null() && e.vcall(attacker.addr(), ACTOR_SLOT_360, &args![]).bool();
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        || e.vcall(this.addr(), ACTOR_SLOT_2E8, &args![]).bool()
+        || !by_player_side
+    {
+        return;
+    }
+    let tracked = if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_730, &args![]).f32()
+    } else {
+        0.0
+    };
+    if (tracked as f64) <= 0.0 || tracked.is_nan() {
+        return;
+    }
+    let owner = this.addr() + ACTOR_VALUE_OWNER_OFFSET;
+    let base_health = e.vcall(owner, 0x00, &args![0x10u32]).i32() as f32;
+    if !e
+        .call(TRACKED_DAMAGE_TEST, &args![tracked, base_health])
+        .bool()
+    {
+        return;
+    }
+    let word = e.call(ACTOR_GETTER_87F9F0, &args![this]).u16();
+    let flag = u32::from(!e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool());
+    let points = e
+        .call(GET_EXPERIENCE_POINTS, &args![flag, u32::from(word)])
+        .i32() as f32;
+    let multiplier = e.call(PLAYER_INT_5BE4D0, &args![player]).u32();
+    let scaled = e.call(SCALE_EXPERIENCE, &args![points, multiplier]).f32();
+    let rounded = e.call(FLOAT_ROUND, &args![scaled]).f64();
+    let amount = e.call(FTOL, &args![rounded]).u32();
+    e.vcall(player, PLAYER_SLOT_488, &args![amount]);
+}
+
+/// Death dialogue or sound: unless the actor is within the hearing
+/// distance of the player (and is not a teammate-killed or protected
+/// case), a creature plays a creature sound (`PickCreatureSound(8)`) and
+/// anything else starts the combat dialogue 6.
+fn play_death_voice(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+    let mut near = !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && e.call(GLOBAL_FLAG_525420, &args![]).bool();
+    if near {
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![this, player, 0u32, 0u32],
+            )
+            .f32();
+        let limit = float_setting(e, DEATH_VOICE_DISTANCE_SETTING);
+        if limit as f64 >= distance as f64 {
+            near = false;
+        }
+    }
+    if near {
+        return;
+    }
+    let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
+    if !e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+        e.call(
+            COMBAT_DIALOGUE_START_DIALOGUE,
+            &args![manager, this, attacker, 2u32, 6u32, 1u32, 0u32],
+        );
+        return;
+    }
+    let mut creature = 0u32;
+    if e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool() {
+        creature = base_form(e, this.cast()).addr();
+    }
+    let sound = if creature != 0 {
+        e.call(CREATURE_PICK_CREATURE_SOUND, &args![creature, 8u32])
+            .u32()
+    } else {
+        0
+    };
+    if sound == 0 {
+        e.call(
+            COMBAT_DIALOGUE_START_DIALOGUE,
+            &args![manager, this, attacker, 2u32, 6u32, 1u32, 0u32],
+        );
+        return;
+    }
+    let handle = e.mem.alloc(12);
+    let id = e.call(FORM_NUMERIC_ID, &args![sound]).u32();
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    e.call(
+        AUDIO_GET_SOUND_HANDLE_BY_NUMERIC_ID,
+        &args![audio, handle, id, 0x102u32],
+    );
+    let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+    let x = e.mem.u32(position);
+    let y = e.mem.u32(position + 4);
+    let z = e.mem.u32(position + 8);
+    e.call(SOUND_HANDLE_SET_POSITION_XYZ, &args![handle, x, y, z]);
+    let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    e.call(SOUND_HANDLE_SET_OBJECT_TO_FOLLOW, &args![handle, node]);
+    e.call(SOUND_HANDLE_PLAY, &args![handle, 0u32]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    e.mem.free(handle);
+}
+
+/// What happens when the player is the one dying: the Pipboy radio is
+/// switched off, the death music plays, a VATS playback ends and an open
+/// surgery menu closes.
+fn player_dies(e: &mut Engine, this: Ptr<Actor>) {
+    e.call(PIPBOY_RADIO_ENABLE, &args![0u32]);
+    e.call(SOUND_FADE_WORKER, &args![0x3e8u32, 0u32]);
+    let handle = e.mem.alloc(12);
+    let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+    let music = e
+        .call(
+            AUDIO_GET_SOUND_HANDLE_BY_NAME,
+            &args![audio, handle, DEATH_MUSIC_NAME, 0x901u32],
+        )
+        .u32();
+    e.call(SOUND_HANDLE_PLAY, &args![music, 0u32]);
+    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    e.mem.free(handle);
+    e.call(VATS_QUIT_PLAYBACK, &args![VATS_OBJECT, 0u32, 0u32]);
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_3F4, &args![0u32]);
+    }
+    if e.call(INTERFACE_IS_TOP_MENU_ID, &args![0x41eu32]).bool() {
+        e.call(SURGERY_MENU_CLOSE, &args![]);
+    }
+}
+
+/// The last part of the killing: face animation, VATS, process state,
+/// `TES` bookkeeping, the ragdoll impulse (with the many vector helpers)
+/// and the weapon drop, or `Actor::DoDeathStuff` and the dead flag when
+/// there is no process.
+fn finish_dying(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, player: u32) {
+    let face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+    if face != 0 {
+        e.vcall(face, 0xd8, &args![1u32, 0u32]);
+    }
+    if this.addr() == player {
+        let vats_acting = e.call(ENTRY_FORM, &args![VATS_OBJECT]).u32() == 4
+            && e.call(VATS_GET_CURRENT_ACTION, &args![VATS_OBJECT]).u32() != 0
+            && {
+                let action = e.call(VATS_GET_CURRENT_ACTION, &args![VATS_OBJECT]).u32();
+                e.mem.u32(action) == 0xf
+            };
+        if !vats_acting {
+            e.call(VATS_WORKER_9CA1F0, &args![VATS_OBJECT]);
+        }
+    }
+    let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if process != 0 && e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 {
+        let flag = fn_0089f540(e, Ptr::new(process));
+        if flag != 0 {
+            let result = e
+                .call(ACTOR_GETTER_80CED0, &args![this, u32::from(flag)])
+                .u8();
+            fn_0089f520(e, Ptr::new(process), result);
+        }
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_28, &args![]);
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let stamp_object = TIME_STAMP_OBJECT;
+        let stamp = e.call(TIME_STAMP_867E30, &args![stamp_object]).u32();
+        e.vcall(process, PROCESS_SLOT_6A0, &args![stamp as f32]);
+    }
+    let extra = extra_data_list_of(e, this.cast());
+    let mut base = e
+        .call(EXTRA_GET_LEV_CREA_ORIGINAL_BASE, &args![extra])
+        .u32();
+    if base == 0 {
+        base = e.call(ACTOR_BASE_FORM, &args![this]).u32();
+    }
+    let tes = e.global::<u32>(TES_SINGLETON);
+    e.call(TES_WORKER_459060, &args![tes, base, 1u32]);
+    if e.vcall(this.addr(), ACTOR_SLOT_448, &args![]).bool() {
+        let extra = extra_data_list_of(e, this.cast());
+        e.call(EXTRA_REMOVE_TRESPASS_PACKAGE, &args![extra]);
+    }
+    let node = e.call(ACTOR_COLLISION_OBJECT, &args![this]).u32();
+    let velocity = e.mem.alloc(16);
+    let zero = 0.0f32;
+    e.call(VECTOR4_CONSTRUCT, &args![velocity, zero, zero, zero, zero]);
+    if e.call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+        .u32()
+        != 0
+    {
+        let linear = e.mem.alloc(16);
+        let controller = e
+            .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+            .u32();
+        e.call(
+            BHK_CHARACTER_PROXY_GET_LINEAR_VELOCITY,
+            &args![controller, linear],
+        );
+        e.call(VECTOR_ASSIGN, &args![velocity, linear]);
+        e.mem.free(linear);
+    }
+    if this.addr() == player {
+        e.call(MOBILE_OBJECT_SET_CHASE_BIP, &args![this, 1u32]);
+    } else {
+        e.vcall(this.addr(), ACTOR_SLOT_2A0, &args![]);
+    }
+    let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let alive_body =
+        process != 0 && e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 && node != 0;
+    if alive_body {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let timer = float_setting(e, GREETING_TIMER_SETTING);
+        e.vcall(process, PROCESS_SLOT_4B4, &args![timer]);
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let mut impulse_branch = e.vcall(process, PROCESS_SLOT_40C, &args![]).u32() == 0;
+        if !impulse_branch {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            impulse_branch = e.vcall(process, PROCESS_SLOT_40C, &args![]).u32() == 6;
+        }
+        if impulse_branch {
+            apply_death_impulse(e, this, attacker, player, node, velocity);
+        } else if e.vcall(this.addr(), ACTOR_SLOT_234, &args![]).bool() {
+            apply_knocked_impulse(e, this, node);
+        }
+        let manager = e.global::<u32>(COMBAT_MANAGER);
+        let count = e
+            .call(
+                COMBAT_MANAGER_GET_COMBATANT_COUNT,
+                &args![manager, 0u32, 0u32],
+            )
+            .u32();
+        let too_many = count > int_setting(e, COMBATANT_COUNT_SETTING);
+        let skip = too_many && e.vcall(this.addr(), ACTOR_SLOT_38C, &args![]).bool();
+        if !skip && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+            let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.vcall(process, PROCESS_SLOT_52C, &args![]).u32() == 0 {
+                let roll = e.call(RANDOM_NUMBER, &args![]).u32() % 100;
+                if roll < int_setting(e, DROP_WEAPON_CHANCE_SETTING)
+                    || !e.vcall(this.addr(), ACTOR_SLOT_38C, &args![]).bool()
+                {
+                    fn_0089f580(e, this);
+                }
+            }
+        }
+    } else {
+        e.call(ACTOR_DO_DEATH_STUFF, &args![this]);
+        e.call(REFR_RUN_SCRIPT, &args![this]);
+        e.mem.set_u8(this.addr() + 0x118, 1);
+    }
+    e.mem.free(velocity);
+}
+
+/// The impulse a dying actor's body gets when it is not knocked down in a
+/// way that already moves it: the direction is the character proxy's
+/// velocity direction, the actor's heading when that is zero, or away from
+/// the player when the player is the killer.
+fn apply_death_impulse(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    attacker: Ptr<Actor>,
+    player: u32,
+    node: u32,
+    velocity: u32,
+) {
+    if e.call(ACTOR_TEST_87EEB0, &args![this]).bool() {
+        return;
+    }
+    let locals = e.mem.alloc(0x100);
+    let direction = locals;
+    let transformed = locals + 0x10;
+    let rotation = locals + 0x20;
+    let rotated = locals + 0x30;
+    let player_position = locals + 0x40;
+    let own_position = locals + 0x50;
+    let difference = locals + 0x60;
+    let angular = locals + 0x70;
+    copy_vector(e, DEFAULT_DIRECTION, direction);
+    let object = e
+        .call(VECTOR_TRANSFORM_630B40, &args![velocity, transformed])
+        .u32();
+    let length = e.call(VECTOR_LENGTH_4586D0, &args![object]).f64();
+    if length == 0.0 {
+        let heading = e
+            .vcall(this.addr(), ACTOR_SLOT_GET_HEADING, &args![0u32])
+            .f32();
+        e.call(VECTOR_ROTATE_4A0C90, &args![rotation, heading]);
+        let result = e
+            .call(
+                VECTOR_MULTIPLY_4B4500,
+                &args![rotation, rotated, UNIT_VECTOR],
+            )
+            .u32();
+        copy_vector(e, result, direction);
+    } else {
+        e.call(VECTOR_COPY_458620, &args![direction, velocity]);
+        e.call(VECTOR_NORMALIZE, &args![direction]);
+    }
+    if attacker.addr() == player
+        && this.addr() != player
+        && e.call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+            .u32()
+            != 0
+    {
+        copy_vector(e, DEFAULT_DIRECTION, player_position);
+        copy_vector(e, DEFAULT_DIRECTION, own_position);
+        let controller = e
+            .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![player])
+            .u32();
+        e.call(
+            BHK_CHARACTER_CONTROLLER_GET_POSITION,
+            &args![controller, player_position],
+        );
+        let controller = e
+            .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+            .u32();
+        e.call(
+            BHK_CHARACTER_CONTROLLER_GET_POSITION,
+            &args![controller, own_position],
+        );
+        let result = e
+            .call(
+                VECTOR_SUBTRACT,
+                &args![own_position, difference, player_position],
+            )
+            .u32();
+        copy_vector(e, result, direction);
+        e.call(VECTOR_NORMALIZE, &args![direction]);
+    }
+    e.call(BHK_WORLD_SET_MOTION, &args![node, 1u32, 1u32, 1u32, 1u32]);
+    let zero = 0.0f32;
+    e.call(VECTOR3_CONSTRUCT_43D410, &args![angular, zero, 0u32, 0u32]);
+    e.call(COLLISION_OBJECT_SET_ANGULAR_VELOCITY, &args![node, angular]);
+    let factor = float_setting(e, DEATH_IMPULSE_SETTING);
+    e.call(VECTOR_SCALE_IN_PLACE, &args![direction, factor]);
+    e.call(TES_HAVOK_ADD_VELOCITY, &args![node, direction, 0u32]);
+    e.vcall(this.addr(), ACTOR_SLOT_48, &args![4u32]);
+    e.mem.free(locals);
+}
+
+/// The push a dying actor gets in the knocked-down state: the body is
+/// un-fixed and given an upward velocity along its heading.
+fn apply_knocked_impulse(e: &mut Engine, this: Ptr<Actor>, node: u32) {
+    e.call(BHK_RIGID_BODY_SET_FIXED, &args![node, 0u32, 1u32]);
+    let locals = e.mem.alloc(0x100);
+    let rotation = locals;
+    let up = locals + 0x20;
+    let rotated = locals + 0x30;
+    let velocity = locals + 0x40;
+    let heading = e
+        .vcall(this.addr(), ACTOR_SLOT_GET_HEADING, &args![0u32])
+        .f32();
+    e.call(VECTOR_ROTATE_4A0C90, &args![rotation, heading]);
+    let upward: f32 = e.global(UPWARD_COMPONENT);
+    e.call(VECTOR3_CONSTRUCT_416870, &args![up, 0.0f32, upward, 0.0f32]);
+    let result = e
+        .call(VECTOR_MULTIPLY_4B4500, &args![rotation, rotated, up])
+        .u32();
+    copy_vector(e, result, up);
+    e.call(VECTOR_ASSIGN, &args![velocity, up]);
+    e.call(TES_HAVOK_SET_VELOCITY, &args![node, velocity, 0u32]);
+    e.mem.free(locals);
+}
+
+// Translated from 0089d900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::Kill` (Xbox PDB): the actor `attacker` (may be null) kills this
+/// one with `damage`.
+///
+/// Does nothing for protected actors (slot `0x22c(0)`). Forgets the
+/// actor's remembered weapon, idle and awake sounds. With the task queue in
+/// use it only queues the kill (`QueueActorKill`, `damage` in a 4-byte
+/// block, `attacker` stored at `+0xc0`). Otherwise records the kill
+/// statistics for a player-owned attacker, clears `bMurderAlarm`, stops
+/// dialogue and combat, tells the process and clears collision and ragdoll
+/// state, and then takes one of two branches chosen by the essential
+/// setting (`0x11e0888`) and `GetEssential`: [`kill_essential_actor`] keeps
+/// the actor alive, [`kill_actor`] kills it. Both end in the common tail:
+/// clearing the penetration utility, the death report, exporting progress
+/// for the player, the combat bookkeeping, the magic shader effect and the
+/// continuous beam.
+/// The compiler's exception-unwinding frame is not translated;
+/// `Actor::GetAnimGroup` is called by its address.
+pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage: f32) {
+    let mut attacker = attacker;
+    if e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        return;
+    }
+    let player_address = e.global::<u32>(PLAYER_CHARACTER);
+    if e.vcall(this.addr(), ACTOR_SLOT_1A0, &args![0u32]).bool() && this.addr() != player_address {
+        return;
+    }
+    // Three sound handles of 12 bytes (`BSSoundHandle`).
+    let handles = e.mem.alloc(36);
+    forget_actor_sound(
+        e,
+        this,
+        handles,
+        EXTRA_GET_WEAPON_ATTACK_SOUND,
+        EXTRA_SET_WEAPON_ATTACK_SOUND,
+        true,
+    );
+    forget_actor_sound(
+        e,
+        this,
+        handles + 12,
+        EXTRA_GET_WEAPON_IDLE_SOUND,
+        EXTRA_SET_WEAPON_IDLE_SOUND,
+        true,
+    );
+    forget_actor_sound(
+        e,
+        this,
+        handles + 24,
+        EXTRA_GET_CREATURE_AWAKE_SOUND,
+        EXTRA_SET_CREATURE_AWAKE_SOUND,
+        false,
+    );
+    if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+        let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+        e.mem.set_f32(block, damage);
+        e.set(this, Actor::pMyKiller, attacker.cast());
+        let tes = e.call(GET_TES, &args![]).u32();
+        e.call(QUEUE_ACTOR_KILL, &args![tes, this, block, 0u32]);
+        destroy_kill_sound_handles(e, handles);
+        return;
+    }
+
+    if !attacker.is_null()
+        && e.vcall(attacker.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+    {
+        record_kill_statistics(e, this, attacker, player_address);
+    }
+
+    e.mem.set_u8(this.addr() + 0xc4, 0);
+    let mut was_aggressor = false;
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.vcall(process, PROCESS_SLOT_1C4, &args![]).bool() {
+            was_aggressor = true;
+        }
+    }
+    e.call(MOBILE_OBJECT_STOP_CURRENT_DIALOGUE, &args![this]);
+    e.vcall(this.addr(), ACTOR_SLOT_STOP_COMBAT, &args![0u32]);
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_6C4, &args![]);
+        let process = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(process, PROCESS_SLOT_180, &args![]);
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_234, &args![]).bool() {
+        let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+        e.call(BHK_RIGID_BODY_SET_FIXED, &args![collision, 0u32, 1u32]);
+    }
+    let ragdoll = e.mem.u32(this.addr() + 0xac);
+    if ragdoll != 0 {
+        e.call(BHK_RAGDOLL_DISABLE_RAGDOLL_ANIM, &args![ragdoll, 1u32]);
+    }
+
+    let setting = e
+        .call(SETTING_GET_BOOL_POINTER, &args![ESSENTIAL_SETTING])
+        .u32();
+    if e.mem.u8(setting) != 0 && e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool() {
+        if kill_essential_actor(e, this, handles) {
+            return;
+        }
+    } else {
+        kill_actor(e, this, &mut attacker, was_aggressor, player_address);
+    }
+
+    // The common tail.
+    let penetration = e.mem.u32(this.addr() + 0xb0);
+    if penetration != 0 {
+        e.call(BHK_RAGDOLL_PENETRATION_UTIL_CLEAR, &args![penetration]);
+        let output = e.mem.alloc(4);
+        let object = e.call(ACTOR_OUTPUT_931ED0, &args![this, output]).u32();
+        let value = e.call(OBJECT_ACCESSOR_4A3A20, &args![object]).u32();
+        e.mem.free(output);
+        let collision = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+        e.call(
+            PENETRATION_UTIL_WORKER,
+            &args![penetration, collision, value],
+        );
+    }
+    let report = e
+        .call(SETTING_GET_BOOL_POINTER, &args![DEATH_REPORT_SETTING])
+        .u32();
+    if e.mem.u8(report) != 0 {
+        report_death(e, this, attacker);
+    }
+    let export = e.call(SETTING_TEST_454AF0, &args![EXPORT_SETTING]).bool();
+    if export && this.addr() == player_address {
+        e.set(this, Actor::pMyKiller, attacker.cast());
+        e.call(PLAYER_EXPORT_PROGRESS_DATA, &args![player_address, 1u32]);
+        e.set(this, Actor::pMyKiller, Ptr::NULL);
+    }
+    update_kill_counts(e, this, attacker, player_address);
+    if fn_0089f500(e, Ptr::new(player_address)) != 0 {
+        let holder = e.global::<u32>(MAGIC_SHADER_HOLDER);
+        let shader = fn_0089f4e0(e, Ptr::new(holder));
+        if shader != 0 {
+            e.call(
+                PROCESS_LISTS_FINISH_MAGIC_SHADER_HIT_EFFECT,
+                &args![PROCESS_LISTS, this, shader],
+            );
+        }
+    }
+    let beam = e.mem.u32(this.addr() + 0x1a0);
+    if beam != 0 {
+        e.call(CONTINUOUS_BEAM_PROJECTILE_SET_KILL, &args![beam, this]);
+    }
+    destroy_kill_sound_handles(e, handles);
+}
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4858,6 +8814,60 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             actor_initiate_avoid_package(Ptr<Actor>, Ptr, f32)
         ),
         entry!(0x008984c0, actor_initiate_surface_package(Ptr<Actor>)),
+        entry!(0x008985d0, fn_008985d0(Ptr<Actor>)),
+        entry!(0x00898650, fn_00898650(Ptr<Actor>, Ptr<Actor>, f32)),
+        entry!(0x00898fd0, fn_00898fd0(Ptr) -> bool),
+        entry!(0x00898ff0, fn_00898ff0(Ptr<Actor>) -> bool),
+        entry!(0x00899030, fn_00899030(Ptr<Actor>) -> u32),
+        entry!(0x00899060, fn_00899060(Ptr<Actor>, u8)),
+        entry!(
+            0x008990a0,
+            actor_handle_blocked_attack(Ptr<Actor>, u32, f32, Ptr<Actor>, u32)
+        ),
+        entry!(0x008990f0, fn_008990f0(Ptr<Actor>) -> u32),
+        entry!(0x0089d5e0, fn_0089d5e0(Ptr) -> bool),
+        entry!(0x0089d600, fn_0089d600(Ptr) -> Ptr),
+        entry!(0x0089d620, fn_0089d620(Ptr) -> u32),
+        entry!(0x0089d640, fn_0089d640(Ptr, u32, u32, u32)),
+        entry!(0x0089d670, fn_0089d670(Ptr) -> u8),
+        entry!(0x0089d690, fn_0089d690(Ptr) -> u8),
+        entry!(0x0089d6b0, fn_0089d6b0(Ptr) -> u32),
+        entry!(0x0089d6d0, fn_0089d6d0(Ptr) -> u32),
+        entry!(
+            0x0089d6f0,
+            fn_0089d6f0(Ptr<Actor>, f32, f32, Ptr<Actor>) -> u32
+        ),
+        entry!(
+            0x0089d8b0,
+            actor_get_random_worn_armor(Ptr<Actor>, u8) -> u32
+        ),
+        entry!(0x0089f4e0, fn_0089f4e0(Ptr) -> u32),
+        entry!(0x0089f500, fn_0089f500(Ptr) -> u8),
+        entry!(0x0089f520, fn_0089f520(Ptr, u8)),
+        entry!(0x0089f540, fn_0089f540(Ptr) -> u8),
+        entry!(0x0089f560, fn_0089f560(Ptr)),
+        entry!(0x0089f580, fn_0089f580(Ptr<Actor>)),
+        entry!(0x008a0250, fn_008a0250(Ptr)),
+        entry!(0x008a0330, fn_008a0330(Ptr<Actor>) -> u32),
+        entry!(0x0089f780, actor_resurrect(Ptr<Actor>, u8, u8, u8)),
+        entry!(0x0089fb80, fn_0089fb80(Ptr<Actor>, u8)),
+        entry!(
+            0x0089fcf0,
+            fn_0089fcf0(Ptr<Actor>, Ptr<Actor>, u32, u8, u32, u8, i32, u32, u32)
+        ),
+        entry!(0x008a0270, fn_008a0270(Ptr<Actor>, u8) -> u8),
+        entry!(0x008a02d0, fn_008a02d0(Ptr<Actor>) -> u32),
+        entry!(0x008a0360, fn_008a0360(Ptr<Actor>) -> u32),
+        entry!(0x008a03a0, fn_008a03a0(Ptr<Actor>)),
+        entry!(0x008a05f0, fn_008a05f0(Ptr<Actor>)),
+        entry!(0x008a0680, fn_008a0680(Ptr<Actor>, u32, u32)),
+        entry!(0x008987f0, fn_008987f0(Ptr<Actor>, Ptr<Actor>, u32)),
+        entry!(0x00899200, fn_00899200(Ptr<Actor>, u8, u8)),
+        entry!(
+            0x00899cb0,
+            actor_combat_hit(Ptr<Actor>, Ptr<Actor>, u8, Ptr, u8)
+        ),
+        entry!(0x0089d900, actor_kill(Ptr<Actor>, Ptr<Actor>, f32)),
     ]
 }
 
@@ -4907,6 +8917,40 @@ mod tests {
         0x00966a70, 0x00969040, 0x0096f450, 0x00974db0, 0x009818e0, 0x009819d0, 0x00984f60,
         0x00994ef0, 0x009f0e00, 0x009f1140, 0x009f1310, 0x00a24660, 0x00a5bdd0, 0x00ad7480,
         0x00ad8830, 0x00ad8ce0, 0x00c6a270, 0x00c6bd00, 0x00c74890, 0x00ec43fb, 0x00ec62c0,
+        0x00931850, 0x0087aff0, 0x008d5cb0, 0x0097fa10, 0x008b87a0, 0x00891b90, 0x005b6f70,
+        0x00703c00, 0x006463e0, 0x006447f0, 0x00567400, 0x009a60e0, 0x008d0600, 0x0097f7f0,
+        0x0097f6d0, 0x0087f3d0, 0x008808a0, 0x00579220, 0x00418b10, 0x00891b70, 0x0046e8c0,
+        0x0045bb80, 0x00461130, 0x00a592c0, 0x0056acb0, 0x00461580, 0x0089d900, 0x00422c20,
+        0x0042e8e0, 0x005a29b0, 0x008a1a40, 0x00884f80, 0x00972aa0, 0x0041cf30, 0x00633c90,
+        0x00c6a350, 0x009370b0, 0x0096d470, 0x0096d450, 0x00906dc0, 0x004511e0, 0x00458be0,
+        0x00444850, 0x00450ff0, 0x009334b0, 0x0040fbf0, 0x0040fba0, 0x0047c850, 0x0047d0b0,
+        0x006ebd10, 0x00574920, 0x006047c0, 0x005f9e00, 0x00441b00, 0x005723b0, 0x0087f9c0,
+        0x00967220, 0x00703350, 0x00703860, 0x00881680, 0x009922b0, 0x00992110, 0x009923d0,
+        0x0097f930, 0x004030b0, 0x0040fbe0, 0x007014e0, 0x00576d30, 0x00981450, 0x005a03f0,
+        0x00440d80, 0x008a8230, 0x0093a690, 0x009818b0, 0x0097da50, 0x0097e4b0, 0x0097efe0,
+        0x008a1800, 0x00881510, 0x008ace90, 0x004f8960, 0x008a0d10, 0x0067a770, 0x005a3790,
+        0x0043d4d0, 0x00422670, 0x00422590, 0x009839b0, 0x008a67f0, 0x009336c0, 0x00970a20,
+        0x00970b30, 0x008c0460, 0x008b0670, 0x008b0ba0, 0x008bffc0, 0x008b06d0, 0x008a6650,
+        0x005d8a70, 0x008256d0, 0x0047ead0, 0x0097f580, 0x008a1710, 0x009c71c0, 0x0058db10,
+        0x004d5c60, 0x004503f0, 0x00414430, 0x00524c40, 0x00439ef0, 0x004a0c10, 0x0045bb20,
+        0x00c59a50, 0x00440460, 0x00450410, 0x00458e20, 0x0087b040, 0x008bc240, 0x005fbeb0,
+        0x009611e0, 0x008ae660, 0x0097f7d0, 0x00ad8b60, 0x00ad8f20, 0x00406090, 0x004a8ae0,
+        0x00899cb0, 0x0089a760, 0x00437b90, 0x009b4d90, 0x008c1c30, 0x008c1c60, 0x009b4ec0,
+        0x009b5120, 0x00444d00, 0x00407e00, 0x00476c90, 0x00525b20, 0x004fd3c0, 0x00885d70,
+        0x0058cba0, 0x008397f0, 0x00837520, 0x004bd350, 0x009627a0, 0x006758f0, 0x00524cd0,
+        0x008814b0, 0x00418a00, 0x0041a540, 0x004189c0, 0x0041a3e0, 0x00418940, 0x0041a090,
+        0x00ad8930, 0x00ad8da0, 0x00ad8d10, 0x00ad88f0, 0x00ad73b0, 0x00ad7550, 0x00934250,
+        0x00c8f210, 0x00c7c150, 0x008a08e0, 0x008a5eb0, 0x008a0960, 0x00815b00, 0x00568020,
+        0x00ec623a, 0x00403df0, 0x0096e2f0, 0x005678a0, 0x00953f80, 0x0047e040, 0x008b8490,
+        0x0094fd30, 0x00967160, 0x00525620, 0x00670700, 0x0087f9f0, 0x006705b0, 0x005be4d0,
+        0x00648c80, 0x00406ce0, 0x00525420, 0x005f92d0, 0x008324e0, 0x00830680, 0x009c8950,
+        0x00702450, 0x007e1980, 0x008adcb0, 0x009ca1f0, 0x0080ced0, 0x00867e30, 0x00459060,
+        0x0041cda0, 0x0043fcd0, 0x005532a0, 0x0066ca00, 0x004a3e00, 0x00931fb0, 0x0087eeb0,
+        0x0087eef0, 0x00630b40, 0x004586d0, 0x00458620, 0x004a0c90, 0x004b4500, 0x00812b00,
+        0x0043d410, 0x00416870, 0x00a59c60, 0x00439180, 0x0062b8d0, 0x0062b930, 0x009931c0,
+        0x00487f50, 0x008b01c0, 0x00565870, 0x00ca20e0, 0x00931ed0, 0x004a3a20, 0x00ca2ad0,
+        0x00454af0, 0x0094ed40, 0x008b7c00, 0x0093e530, 0x00974a50, 0x009ab9a0, 0x0056af40,
+        0x00421720, 0x0059f3a0, 0x005f5950, 0x008d85e0, 0x00881130,
     ];
 
     fn ret(eax: u32) -> Ret {
@@ -6954,5 +10998,3254 @@ mod tests {
             ]]
         );
         let _ = animation;
+    }
+
+    /// Gives the object whose vtable pointer is at `address` (an embedded
+    /// part of a larger object) a table with one double per slot.
+    fn embedded_table(e: &mut Engine, address: u32, slots: &[(u32, Ret)]) {
+        let table = e.mem.alloc(0x800);
+        for (offset, result) in slots {
+            let target = e.mem.alloc(8);
+            let result = *result;
+            e.register_double(target, move |_, _| result);
+            e.mem.set_u32(table + offset, target);
+        }
+        e.mem.set_u32(address, table);
+    }
+
+    /// Maps a `double` constant of the exe and sets it.
+    fn double_global(e: &mut Engine, address: u32, value: f64) {
+        e.map(address, 8);
+        e.set_global(address, value);
+    }
+
+    /// An actor whose value owner (`+0xa4`) reports `current` for slot `0xc`
+    /// and `base` for slot `4`.
+    fn actor_with_health(
+        e: &mut Engine,
+        extra_slots: &[(u32, Ret)],
+        current: f32,
+        base: f32,
+    ) -> Ptr<Actor> {
+        let mut slots = extra_slots.to_vec();
+        if !slots.iter().any(|(offset, _)| *offset == ACTOR_SLOT_22C) {
+            slots.push((ACTOR_SLOT_22C, ret(0)));
+        }
+        let actor = actor_with(e, &slots, None);
+        embedded_table(
+            e,
+            actor.addr() + 0xa4,
+            &[(0x0c, float_ret(current)), (0x04, float_ret(base))],
+        );
+        actor
+    }
+
+    #[test]
+    fn fn_008985d0_adds_a_package_by_process_type() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_ADD_PACKAGE, ret(0))], None);
+        stub(&mut e, PACKAGE_CREATE, 0x5000);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 1);
+        fn_008985d0(&mut e, actor);
+        assert_eq!(calls_to(&e, PACKAGE_CREATE), vec![vec![0x24]]);
+        assert_eq!(calls_to(&e, ACTOR_END_MOVEMENT), vec![vec![actor.addr()]]);
+        assert_eq!(
+            calls_to(&e, PACKAGE_CALCULATE_PROCEDURE_TYPE),
+            vec![vec![0x5000, 0]]
+        );
+        let add = slot_target(&e, actor.cast(), ACTOR_SLOT_ADD_PACKAGE);
+        assert_eq!(calls_to(&e, add), vec![vec![actor.addr(), 0x5000, 1, 1]]);
+        assert_eq!(call_count(&e, PACKAGE_SET_FLAG_B), 0);
+
+        e.call_log = Some(vec![]);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 2);
+        fn_008985d0(&mut e, actor);
+        assert_eq!(calls_to(&e, PACKAGE_SET_FLAG_B), vec![vec![0x5000, 1]]);
+        assert_eq!(calls_to(&e, add), vec![vec![actor.addr(), 0x5000, 0, 0]]);
+    }
+
+    /// The constants `fn_00898650` reads.
+    fn kill_constants(e: &mut Engine) {
+        double_global(e, QUARTER, 0.25);
+        double_global(e, HALF, 0.5);
+        double_global(e, ONE_DOUBLE, 1.0);
+    }
+
+    #[test]
+    fn fn_00898650_kills_at_zero_health_and_barks_at_low_health() {
+        let mut e = engine();
+        kill_constants(&mut e);
+        let attacker = actor_with(&mut e, &[], None);
+        // Health 0.5 of 10: the actor is killed directly; the follower barks
+        // the quarter-health bark.
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_428, ret(0))], 0.5, 10.0);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        fn_00898650(&mut e, actor, attacker, 3.0);
+        assert_eq!(
+            calls_to(&e, TRIGGER_FOLLOWER_BARK),
+            vec![vec![actor.addr(), 5]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_KILL),
+            vec![vec![actor.addr(), attacker.addr(), 3.0f32.to_bits()]]
+        );
+
+        // A third of the health gives bark 4 and, being above 1, no kill.
+        e.call_log = Some(vec![]);
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_428, ret(0))], 3.0, 10.0);
+        fn_00898650(&mut e, actor, attacker, 3.0);
+        assert_eq!(
+            calls_to(&e, TRIGGER_FOLLOWER_BARK),
+            vec![vec![actor.addr(), 4]]
+        );
+        assert_eq!(call_count(&e, ACTOR_KILL), 0);
+
+        // A base of 0 gives the ratio 1.0: no bark.
+        e.call_log = Some(vec![]);
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_428, ret(0))], 0.0, 0.0);
+        fn_00898650(&mut e, actor, attacker, 3.0);
+        assert_eq!(call_count(&e, TRIGGER_FOLLOWER_BARK), 0);
+        assert_eq!(call_count(&e, ACTOR_KILL), 1);
+    }
+
+    #[test]
+    fn fn_00898650_queues_the_kill_when_the_task_queue_is_used() {
+        let mut e = engine();
+        kill_constants(&mut e);
+        let attacker = actor_with(&mut e, &[], None);
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_428, ret(0))], 0.0, 10.0);
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, GET_TES, 0x7777);
+        stub_with(&mut e, OPERATOR_NEW, |e, _| ret(e.mem.alloc(4)));
+        fn_00898650(&mut e, actor, attacker, 2.5);
+        let queued = calls_to(&e, QUEUE_ACTOR_KILL);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0][..2], [0x7777, actor.addr()]);
+        assert_eq!(queued[0][3], 0);
+        assert_eq!(e.mem.f32(queued[0][2]), 2.5);
+        assert_eq!(e.get(actor, Actor::pMyKiller).addr(), attacker.addr());
+        assert_eq!(call_count(&e, ACTOR_KILL), 0);
+    }
+
+    #[test]
+    fn fn_00898650_drops_the_player_as_attacker_when_the_reaction_is_two() {
+        let mut e = engine();
+        kill_constants(&mut e);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_428, ret(0x4400))], 0.0, 10.0);
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 2);
+        fn_00898650(&mut e, actor, player, 1.0);
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET),
+            vec![vec![0x4400, player.addr()]]
+        );
+        let reaction = calls_to(&e, ACTOR_GET_FACTION_FIGHT_REACTION);
+        assert_eq!(reaction[0][..2], [actor.addr(), player.addr()]);
+        assert_eq!(calls_to(&e, ACTOR_KILL)[0][1], 0);
+
+        // Another reaction keeps the attacker.
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 1);
+        fn_00898650(&mut e, actor, player, 1.0);
+        assert_eq!(calls_to(&e, ACTOR_KILL)[0][1], player.addr());
+
+        // A combat target is never asked.
+        e.call_log = Some(vec![]);
+        stub(&mut e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 1);
+        fn_00898650(&mut e, actor, player, 1.0);
+        assert_eq!(call_count(&e, ACTOR_GET_FACTION_FIGHT_REACTION), 0);
+    }
+
+    #[test]
+    fn fn_00898650_does_nothing_for_a_protected_actor() {
+        let mut e = engine();
+        kill_constants(&mut e);
+        let attacker = actor_with(&mut e, &[], None);
+        let actor = actor_with_health(&mut e, &[(ACTOR_SLOT_22C, ret(1))], 0.0, 10.0);
+        fn_00898650(&mut e, actor, attacker, 1.0);
+        assert_eq!(call_count(&e, ACTOR_KILL), 0);
+        assert_eq!(call_count(&e, TRIGGER_FOLLOWER_BARK), 0);
+    }
+
+    #[test]
+    fn small_flag_and_field_accessors() {
+        let mut e = engine();
+        let object = Ptr::<()>::new(e.mem.alloc(0x1000));
+        e.mem.set_u32(object.addr() + 0x12c, 0x10);
+        assert!(fn_00898fd0(&mut e, object));
+        e.mem.set_u32(object.addr() + 0x12c, 0xffef);
+        assert!(!fn_00898fd0(&mut e, object));
+        assert_eq!(fn_0089d600(&mut e, object), object.byte_add(0x450));
+        e.mem.set_u32(object.addr() + 0x2e4, 0x2e4);
+        assert_eq!(fn_0089d620(&mut e, object), 0x2e4);
+        fn_0089d640(&mut e, object, 1, 2, 3);
+        assert_eq!(e.mem.u32(object.addr() + 0xf4), 1);
+        assert_eq!(e.mem.u32(object.addr() + 0xf8), 2);
+        assert_eq!(e.mem.u32(object.addr() + 0xfc), 3);
+        e.mem.set_u8(object.addr() + 0x28d, 7);
+        e.mem.set_u8(object.addr() + 0x28e, 8);
+        e.mem.set_u32(object.addr() + 0x29c, 0x29c);
+        e.mem.set_u32(object.addr() + 0x298, 0x298);
+        assert_eq!(fn_0089d670(&mut e, object), 7);
+        assert_eq!(fn_0089d690(&mut e, object), 8);
+        assert_eq!(fn_0089d6b0(&mut e, object), 0x29c);
+        assert_eq!(fn_0089d6d0(&mut e, object), 0x298);
+        e.mem.set_u32(object.addr() + 0x638, 0x638);
+        e.mem.set_u8(object.addr() + 0xe2d, 9);
+        assert_eq!(fn_0089f4e0(&mut e, object), 0x638);
+        assert_eq!(fn_0089f500(&mut e, object), 9);
+        fn_0089f520(&mut e, object, 5);
+        assert_eq!(e.mem.u8(object.addr() + 0x18a), 5);
+        assert_eq!(fn_0089f540(&mut e, object), 5);
+        e.mem.set_u32(object.addr() + 0x3c, 0xffff_ffff);
+        fn_0089f560(&mut e, object);
+        assert_eq!(e.mem.u32(object.addr() + 0x3c), 0);
+        assert!(!fn_0089d5e0(&mut e, object));
+        stub(&mut e, FORM_TEST_FLAGS, 1);
+        assert!(fn_0089d5e0(&mut e, object));
+        assert_eq!(
+            calls_to(&e, FORM_TEST_FLAGS),
+            vec![
+                vec![object.addr(), 0x0800_0000],
+                vec![object.addr(), 0x0800_0000]
+            ]
+        );
+        let actor = actor_with(&mut e, &[], None);
+        fn_008a0250(&mut e, actor.cast());
+        assert_eq!(e.mem.u8(actor.addr() + 0xc4), 1);
+    }
+
+    #[test]
+    fn fn_00898ff0_asks_the_object_inside_the_base_form() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        let base = e.mem.alloc(0x40);
+        embedded_table(&mut e, base + 0x30, &[(0x18, ret(1))]);
+        stub(&mut e, ACTOR_BASE_FORM, base);
+        assert!(fn_00898ff0(&mut e, actor));
+        embedded_table(&mut e, base + 0x30, &[(0x18, ret(0))]);
+        assert!(!fn_00898ff0(&mut e, actor));
+    }
+
+    #[test]
+    fn acquire_object_forwarders() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        let acquire = object(&mut e, 0x10, &[(0x4f0, ret(0x1234)), (0x4f4, ret(0))]);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        assert_eq!(fn_00899030(&mut e, actor), 0x1234);
+        fn_00899060(&mut e, actor, 7);
+        let slot = slot_target(&e, acquire, 0x4f4);
+        assert_eq!(calls_to(&e, slot), vec![vec![acquire.addr(), 7]]);
+
+        e.call_log = Some(vec![]);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        fn_00899060(&mut e, actor, 7);
+        assert_eq!(call_count(&e, slot), 0);
+    }
+
+    #[test]
+    fn blocked_attack_prints_the_message_only_when_debugging() {
+        let mut e = engine();
+        double_global(&mut e, HUNDRED, 100.0);
+        let this = actor_with(&mut e, &[], None);
+        let other = actor_with(&mut e, &[], None);
+        stub_with(&mut e, REFR_GET_NAME, |_, a| ret(a[0] + 1));
+        actor_handle_blocked_attack(&mut e, this, 0, 0.5, other, 0);
+        assert_eq!(call_count(&e, PRINT_DEBUG_LINE), 0);
+
+        stub(&mut e, DEBUG_MESSAGES_ENABLED, 1);
+        actor_handle_blocked_attack(&mut e, this, 0, 0.5, other, 0);
+        let percent = (0.5f32 as f64 * 100.0).to_bits();
+        assert_eq!(
+            calls_to(&e, PRINT_DEBUG_LINE),
+            vec![vec![
+                BLOCKS_BLOW_FORMAT,
+                other.addr() + 1,
+                percent as u32,
+                (percent >> 32) as u32,
+                this.addr() + 1
+            ]]
+        );
+    }
+
+    #[test]
+    fn fn_008990f0_scales_the_weapon_reach() {
+        let mut e = engine();
+        e.map(SPECIAL_IDLE_STATE_OBJECT, 0x10);
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_REACH, float_ret(2.0)), (ACTOR_SLOT_360, ret(0))],
+            None,
+        );
+        stub_float(&mut e, REFR_GET_SCALE, 1.5);
+        stub(&mut e, ACTOR_REACH_WORKER, 0x99);
+        // No weapon: the actor's own reach times the scale.
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        assert_eq!(fn_008990f0(&mut e, actor), 0x99);
+        let passed = calls_to(&e, ACTOR_REACH_WORKER);
+        assert_eq!(passed, vec![vec![actor.addr(), 3.0f32.to_bits()]]);
+
+        // A weapon: its reach goes through CalcWeaponReach.
+        e.call_log = Some(vec![]);
+        let acquire = object(&mut e, 0x10, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(0x6000))]);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(&mut e, ENTRY_FORM, 0x6100);
+        stub_float(&mut e, WEAPON_REACH, 4.0);
+        stub_float(&mut e, CALC_WEAPON_REACH, 8.0);
+        fn_008990f0(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, CALC_WEAPON_REACH),
+            vec![vec![4.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_REACH_WORKER),
+            vec![vec![actor.addr(), 12.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn fn_008990f0_multiplies_by_the_setting_for_special_idle_kind_four() {
+        let mut e = engine();
+        e.map(SPECIAL_IDLE_STATE_OBJECT, 0x10);
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_REACH, float_ret(2.0)), (ACTOR_SLOT_360, ret(1))],
+            None,
+        );
+        stub_float(&mut e, REFR_GET_SCALE, 1.0);
+        let setting = e.mem.alloc(4);
+        e.mem.set_f32(setting, 0.5);
+        stub(&mut e, SETTING_GET_VALUE_POINTER, setting);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == SPECIAL_IDLE_STATE_OBJECT {
+                4
+            } else {
+                0
+            })
+        });
+        fn_008990f0(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, SETTING_GET_VALUE_POINTER),
+            vec![vec![REACH_MULTIPLIER_SETTING]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_REACH_WORKER),
+            vec![vec![actor.addr(), 1.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn fn_0089d6f0_applies_health_and_fatigue_loss() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let attacker = actor_with(&mut e, &[(ACTOR_SLOT_428, ret(0x4400))], None);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_428, ret(0x4500)),
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_MODIFY_ACTOR_VALUE, ret(0)),
+                (ACTOR_SLOT_22C, ret(0x42)),
+            ],
+            None,
+        );
+        embedded_table(&mut e, actor.addr() + 0x94, &[(0x10, ret(0))]);
+        let acquire = object(&mut e, 0x10, &[(PROCESS_SLOT_72C, ret(0))]);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        // The difficulty adjustment returns -4 for an amount of -3.
+        stub_float(&mut e, DIFFICULTY_ADJUST_HEALTH_MODIFIER, -4.0);
+        // The fatigue is 10 and the setting 5: the fatigue loss applies.
+        embedded_table(&mut e, actor.addr() + 0xa4, &[(0x0c, float_ret(10.0))]);
+        let setting = e.mem.alloc(4);
+        e.mem.set_f32(setting, 5.0);
+        stub(&mut e, SETTING_GET_VALUE_POINTER, setting);
+        stub(&mut e, CONTROLLER_SET_FLAG, 0);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 0);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 0);
+        let process = object(&mut e, 0x10, &[(PROCESS_SLOT_22C, ret(0x4600))]);
+        e.set(actor, Actor::pCurrentProcess, process);
+
+        let result = fn_0089d6f0(&mut e, actor, 3.0, 2.0, attacker);
+        assert_eq!(result, 0x42);
+        assert_eq!(
+            calls_to(&e, DIFFICULTY_ADJUST_HEALTH_MODIFIER),
+            vec![vec![actor.addr(), (-3.0f32).to_bits(), attacker.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_NOTIFY_DAMAGE),
+            vec![vec![0x4400, actor.addr(), 4.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, CONTROLLER_RECORD_DAMAGE),
+            vec![vec![0x4600, attacker.addr(), 4.0f32.to_bits()]]
+        );
+        let reaction = slot_target(&e, acquire, PROCESS_SLOT_72C);
+        assert_eq!(
+            calls_to(&e, reaction),
+            vec![vec![acquire.addr(), attacker.addr(), 4.0f32.to_bits()]]
+        );
+        let modify = slot_target(&e, actor.cast(), ACTOR_SLOT_MODIFY_ACTOR_VALUE);
+        assert_eq!(
+            calls_to(&e, modify),
+            vec![
+                vec![actor.addr(), 0x10, (-4.0f32).to_bits(), attacker.addr()],
+                vec![actor.addr(), 0x16, (-2.0f32).to_bits(), attacker.addr()],
+            ]
+        );
+        assert_eq!(
+            calls_to(&e, REFR_FLOAT_SETTER_579220),
+            vec![vec![actor.addr(), 3.0f32.to_bits(), 0]]
+        );
+    }
+
+    #[test]
+    fn fn_0089d6f0_stops_for_a_protected_actor_and_skips_small_losses() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_22C, ret(0))], None);
+        embedded_table(&mut e, actor.addr() + 0x94, &[(0x10, ret(0x1201))]);
+        assert_eq!(fn_0089d6f0(&mut e, actor, 3.0, 2.0, Ptr::NULL), 0x1200);
+        assert_eq!(call_count(&e, DIFFICULTY_ADJUST_HEALTH_MODIFIER), 0);
+
+        // A zero adjusted loss and a zero fatigue loss change nothing.
+        embedded_table(&mut e, actor.addr() + 0x94, &[(0x10, ret(0))]);
+        stub_float(&mut e, DIFFICULTY_ADJUST_HEALTH_MODIFIER, 0.0);
+        fn_0089d6f0(&mut e, actor, 3.0, 0.0, Ptr::NULL);
+        assert_eq!(call_count(&e, REFR_FLOAT_SETTER_579220), 0);
+        assert_eq!(call_count(&e, SETTING_GET_VALUE_POINTER), 0);
+    }
+
+    #[test]
+    fn worn_armor_falls_back_to_the_second_slot() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        stub_with(&mut e, ACTOR_GET_ARMOR_BEING_WORN, |_, a| {
+            ret(if a[1] == 1 { 0xaa } else { 0 })
+        });
+        assert_eq!(actor_get_random_worn_armor(&mut e, actor, 1), 0xaa);
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_ARMOR_BEING_WORN),
+            vec![vec![actor.addr(), 0], vec![actor.addr(), 1]]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(actor_get_random_worn_armor(&mut e, actor, 0), 0);
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_ARMOR_BEING_WORN),
+            vec![vec![actor.addr(), 2]]
+        );
+    }
+
+    /// An actor with a drawn weapon entry; `fn_0089f580` finds the weapon
+    /// bone's node and drops the weapon.
+    fn drop_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr, Ptr) {
+        let process = object(
+            e,
+            0x800,
+            &[
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+                (PROCESS_SLOT_534, ret(0x7000)),
+                (PROCESS_SLOT_WEAPON_BONE, ret(0)),
+                (PROCESS_SLOT_580, ret(0)),
+                (PROCESS_SLOT_22C, ret(0x4600)),
+            ],
+        );
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_1E8, ret(3)),
+                (ACTOR_SLOT_DROP_OBJECT, ret(0x8000)),
+                (ACTOR_SLOT_428, ret(1)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        let weapon = e.mem.alloc(8);
+        let list = e.mem.alloc(8);
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(weapon, list);
+        e.mem.set_u32(list, first);
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, process.addr());
+        stub(e, ACTOR_IS_WEAPON_DRAWN, 1);
+        stub(e, ENTRY_FORM, 0x7100);
+        stub(e, ENTRY_FIRST_EXTRA_LIST, list);
+        stub_with(e, LIST_ITEM_SLOT, |_, a| ret(a[0]));
+        // The process reports `weapon` as the current weapon.
+        let slot = slot_target(e, process, PROCESS_SLOT_CURRENT_WEAPON);
+        e.register_double(slot, move |_, _| ret(weapon));
+        (actor, process, Ptr::new(weapon))
+    }
+
+    #[test]
+    fn fn_0089f580_drops_the_drawn_weapon_at_the_bone() {
+        let mut e = engine();
+        let (actor, process, weapon) = drop_setup(&mut e);
+        let node = e.mem.alloc(0x100);
+        let bone = slot_target(&e, process, PROCESS_SLOT_WEAPON_BONE);
+        e.register_double(bone, move |_, _| ret(node));
+        let translate = e.mem.alloc(12);
+        e.mem.set_f32(translate, 1.0);
+        e.mem.set_f32(translate + 4, 2.0);
+        e.mem.set_f32(translate + 8, 3.0);
+        stub(&mut e, NODE_WORLD_TRANSLATE, translate);
+        stub(&mut e, NODE_ROTATION, node + 0x68);
+        stub(&mut e, GET_FORM_ENCHANTING, 0x9999);
+        let seen_z = e.mem.alloc(4);
+        let drop_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_DROP_OBJECT);
+        e.register_double(drop_slot, move |e, a| {
+            let z = e.mem.f32(a[4] + 8);
+            e.mem.set_f32(seen_z, z);
+            ret(0x8000)
+        });
+        fn_0089f580(&mut e, actor);
+
+        let slot = slot_target(&e, process, PROCESS_SLOT_WEAPON_BONE);
+        assert_eq!(calls_to(&e, slot), vec![vec![process.addr(), 3]]);
+        let angles = calls_to(&e, NI_MATRIX3_TO_EULER_ANGLES_XYZ);
+        assert_eq!(angles.len(), 1);
+        assert_eq!(angles[0][0], node + 0x68);
+        assert_eq!(angles[0][2], angles[0][1] + 4);
+        let drop = calls_to(&e, drop_slot);
+        assert_eq!(drop.len(), 1);
+        // this, form, extra data list, count, position, angles
+        assert_eq!(
+            drop[0][..4],
+            [actor.addr(), 0x7100, e.mem.u32(e.mem.u32(weapon.addr())), 1]
+        );
+        assert_eq!(e.mem.f32(seen_z), 3.0);
+        assert_eq!(drop[0][5], angles[0][1]);
+        assert_eq!(
+            calls_to(&e, ACTOR_DROPPED_OBJECT_WORKER),
+            vec![vec![actor.addr(), 0x8000]]
+        );
+        // The form is enchanted: the shader effects slot runs.
+        let effects = slot_target(&e, process, PROCESS_SLOT_580);
+        assert_eq!(calls_to(&e, effects), vec![vec![process.addr(), 1, 0, 0]]);
+        assert_eq!(calls_to(&e, CONTROLLER_SET_FLAG), vec![vec![0x4600, 0]]);
+    }
+
+    #[test]
+    fn fn_0089f580_stops_at_each_blocking_condition() {
+        // The form is the one equipped in the other hand.
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        stub(&mut e, ENTRY_FORM, 0x7000);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, GET_FORM_ENCHANTING), 0);
+        assert_eq!(call_count(&e, CONTROLLER_SET_FLAG), 0);
+
+        // The weapon cannot be worn.
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        stub(&mut e, EXTRA_GET_CAN_NOT_WEAR, 1);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, GET_FORM_ENCHANTING), 0);
+
+        // Not drawn.
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        stub(&mut e, ACTOR_IS_WEAPON_DRAWN, 0);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, EXTRA_GET_CAN_NOT_WEAR), 0);
+
+        // The form flags.
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        stub(&mut e, FORM_FLAG_100_BIT_3, 1);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, FORM_FLAG_100_BIT_5), 0);
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        stub(&mut e, FORM_FLAG_100_BIT_5, 1);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_IS_WEAPON_DRAWN), 0);
+
+        // Without a bone node nothing is dropped but the process is told.
+        let mut e = engine();
+        let (actor, _, _) = drop_setup(&mut e);
+        fn_0089f580(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_DROPPED_OBJECT_WORKER), 0);
+        assert_eq!(call_count(&e, CONTROLLER_SET_FLAG), 1);
+    }
+
+    #[test]
+    fn fn_0089fb80_refreshes_the_worn_items_by_form_type() {
+        let mut e = engine();
+        e.map(BASE_DATA_OBJECT, 4);
+        e.set_global(BASE_DATA_OBJECT, 0x5a5a_0000u32);
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_1CC, ret(0)), (ACTOR_SLOT_1D0, ret(0x9000))],
+            None,
+        );
+        stub(&mut e, GET_CONTAINER_CHANGES, 0x6100);
+        stub(&mut e, PATH_MANAGER_Q_INSTANCE, 0x6200);
+        stub(&mut e, REFR_BASE_FORM, 0x6300);
+        stub(&mut e, FORM_TYPE, 0x2a);
+        fn_0089fb80(&mut e, actor, 7);
+        // No acquire object: the actor's own slot 0x1cc is called.
+        let refresh = slot_target(&e, actor.cast(), ACTOR_SLOT_1CC);
+        assert_eq!(calls_to(&e, refresh), vec![vec![actor.addr(), 0, 1]]);
+        assert_eq!(calls_to(&e, BASE_DATA_PREDICATE), vec![vec![0x5a5a_0000]]);
+        assert_eq!(
+            calls_to(&e, PATH_MANAGER_CLEAR_INVENTORY_POINTERS),
+            vec![vec![0x6200, 0x6100]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_UPDATE_INVENTORY_WORKER),
+            vec![vec![actor.addr(), 7]]
+        );
+        assert_eq!(
+            calls_to(&e, NPC_INIT_DEFAULT_WORN),
+            vec![vec![0x6300, actor.addr(), 1, 1, 0, 1]]
+        );
+        assert_eq!(call_count(&e, CREATURE_INIT_DEFAULT_WORN), 0);
+
+        // A creature form, and a current package of the accepted kind.
+        e.call_log = Some(vec![]);
+        stub(&mut e, FORM_TYPE, 0x2b);
+        stub(&mut e, GET_CURRENT_PACKAGE, 0x6400);
+        stub(&mut e, PACKAGE_KIND_TEST, 1);
+        fn_0089fb80(&mut e, actor, 0);
+        assert_eq!(
+            calls_to(&e, CREATURE_INIT_DEFAULT_WORN),
+            vec![vec![0x6300, actor.addr(), 1, 0, 1]]
+        );
+        assert_eq!(call_count(&e, NPC_INIT_DEFAULT_WORN), 0);
+    }
+
+    #[test]
+    fn fn_0089fb80_prefers_the_acquire_object_and_honours_the_predicate() {
+        let mut e = engine();
+        e.map(BASE_DATA_OBJECT, 4);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_1D0, ret(0))], None);
+        let acquire = object(&mut e, 0x10, &[(PROCESS_SLOT_468, ret(0))]);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 1);
+        fn_0089fb80(&mut e, actor, 0);
+        let slot = slot_target(&e, acquire, PROCESS_SLOT_468);
+        assert_eq!(calls_to(&e, slot), vec![vec![acquire.addr(), 1]]);
+
+        // A field above 1 uses the actor's slot (not present in this vtable:
+        // the predicate is set instead, so nothing is refreshed at all).
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 2);
+        stub(&mut e, BASE_DATA_PREDICATE, 1);
+        fn_0089fb80(&mut e, actor, 0);
+        assert_eq!(call_count(&e, slot), 0);
+        assert_eq!(call_count(&e, GET_SAVED_ACQUIRE_OBJECT), 0);
+        assert_eq!(call_count(&e, NPC_INIT_DEFAULT_WORN), 0);
+    }
+
+    /// An actor ready for `fn_0089fcf0`: no combat controller yet, a process
+    /// object and the constants the function reads.
+    fn combat_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr, Ptr<Actor>, Ptr) {
+        double_global(e, ZERO_DOUBLE, 0.0);
+        double_global(e, QUARTER, 0.25);
+        e.map(COMBAT_MANAGER, 4);
+        e.set_global(COMBAT_MANAGER, 0x7100u32);
+        let process = object(
+            e,
+            0x800,
+            &[
+                (PROCESS_SLOT_2C8, ret(0)),
+                (PROCESS_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_214, ret(0)),
+            ],
+        );
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_214, ret(0)),
+                (ACTOR_SLOT_REACH, float_ret(10.0)),
+                (ACTOR_SLOT_428, ret(0)),
+                (ACTOR_SLOT_3BC, ret(0)),
+                (ACTOR_SLOT_ADD_PACKAGE, ret(0)),
+                (ACTOR_SLOT_418, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        let target = actor_with(e, &[], None);
+        let acquire = object(
+            e,
+            0x10,
+            &[
+                (PROCESS_SLOT_208, float_ret(55.7)),
+                (PROCESS_SLOT_28, ret(0)),
+                (PROCESS_SLOT_710, ret(0)),
+                (PROCESS_SLOT_52C, ret(0)),
+                (PROCESS_SLOT_4D4, ret(0)),
+            ],
+        );
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        (actor, process, target, acquire)
+    }
+
+    #[test]
+    fn fn_0089fcf0_adds_a_combatant_and_starts_the_package() {
+        let mut e = engine();
+        let (actor, process, target, acquire) = combat_setup(&mut e);
+        let controller = e.mem.alloc(0x100);
+        stub_with(&mut e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        stub(&mut e, COMBAT_MANAGER_ADD_COMBATANT, controller);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 1, 0, 0, 0);
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_ADD_COMBATANT),
+            vec![vec![0x7100, actor.addr(), target.addr(), 55, 0]]
+        );
+        let slot_208 = slot_target(&e, acquire, PROCESS_SLOT_208);
+        assert_eq!(
+            calls_to(&e, slot_208),
+            vec![vec![acquire.addr(), target.addr(), actor.addr()]]
+        );
+        // flag_b set: the controller is told about the target.
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_NOTIFY_DAMAGE),
+            vec![vec![controller, target.addr(), 0]]
+        );
+        let add_package = slot_target(&e, actor.cast(), ACTOR_SLOT_ADD_PACKAGE);
+        assert_eq!(
+            calls_to(&e, add_package),
+            vec![vec![actor.addr(), controller, 0, 1]]
+        );
+        let slot_710 = slot_target(&e, acquire, PROCESS_SLOT_710);
+        assert_eq!(
+            calls_to(&e, slot_710),
+            vec![vec![acquire.addr(), actor.addr()]]
+        );
+        assert_eq!(e.mem.u8(actor.addr() + 0x104), 1);
+        let hostile = slot_target(&e, process, PROCESS_SLOT_2C8);
+        assert_eq!(calls_to(&e, hostile), vec![vec![process.addr(), 0]]);
+        // The controller was not marked (flag_a is 0).
+        assert_eq!(e.mem.u8(controller + 0xc4), 0);
+    }
+
+    #[test]
+    fn fn_0089fcf0_adds_a_group_member_or_a_pretend_combatant() {
+        let mut e = engine();
+        let (actor, _, target, _) = combat_setup(&mut e);
+        stub(&mut e, COMBAT_MANAGER_ADD_GROUP_MEMBER, 0);
+        fn_0089fcf0(&mut e, actor, target, 0x55, 0, 0, 0, 3, 0, 0x66);
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_ADD_GROUP_MEMBER),
+            vec![vec![0x7100, actor.addr(), 0x55]]
+        );
+        assert_eq!(call_count(&e, COMBAT_MANAGER_ADD_COMBATANT), 0);
+        // No controller came back: the combat flag is cleared.
+        assert_eq!(e.mem.u8(actor.addr() + 0x104), 0);
+
+        e.call_log = Some(vec![]);
+        stub(&mut e, COMBAT_MANAGER_ADD_PRETEND_COMBATANT, 0);
+        fn_0089fcf0(&mut e, actor, Ptr::NULL, 0, 0, 0, 0, 3, 0, 0x66);
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_ADD_PRETEND_COMBATANT),
+            vec![vec![0x7100, actor.addr(), 0x66]]
+        );
+    }
+
+    #[test]
+    fn fn_0089fcf0_marks_the_controller_and_clears_the_crosshair_for_the_player() {
+        let mut e = engine();
+        let (actor, _, _, _) = combat_setup(&mut e);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let controller = e.mem.alloc(0x100);
+        stub(&mut e, COMBAT_MANAGER_ADD_COMBATANT, controller);
+        stub(&mut e, CROSSHAIR_TARGET, actor.addr());
+        fn_0089fcf0(&mut e, actor, player, 0, 1, 0, 0, 5, 0, 0);
+        assert_eq!(e.mem.u8(controller + 0xc4), 1);
+        assert_eq!(
+            calls_to(&e, PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS),
+            vec![vec![player.addr(), actor.addr(), 1]]
+        );
+        assert_eq!(calls_to(&e, SET_CROSSHAIR_TARGET_TYPE), vec![vec![0]]);
+        // A positive value is passed on with the "ranked" flag.
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_ADD_COMBATANT),
+            vec![vec![0x7100, actor.addr(), player.addr(), 5, 1]]
+        );
+    }
+
+    #[test]
+    fn fn_0089fcf0_queues_the_held_item_again() {
+        let mut e = engine();
+        let (actor, process, target, _) = combat_setup(&mut e);
+        let held = e.mem.alloc(0x40);
+        let process_slot = slot_target(&e, process, PROCESS_SLOT_22C);
+        e.register_double(process_slot, move |_, _| ret(held));
+        stub(&mut e, PACKAGE_KIND_TEST, 1);
+        let item_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_3BC);
+        e.register_double(item_slot, |_, _| ret(0x7700));
+        stub(&mut e, ENTRY_FORM, 0x7800);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(calls_to(&e, item_slot), vec![vec![actor.addr(), 6]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_QUEUE_EQUIP_OBJECT),
+            vec![vec![actor.addr(), 0x7800, 1, 0, 1, 0, 1]]
+        );
+        assert_eq!(calls_to(&e, ENTRY_DELETE), vec![vec![0x7700, 1]]);
+        assert_eq!(
+            calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE),
+            vec![vec![actor.addr(), 0]]
+        );
+    }
+
+    #[test]
+    fn fn_0089fcf0_adds_the_target_to_an_existing_controller() {
+        let mut e = engine();
+        let (actor, process, target, _) = combat_setup(&mut e);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x9200));
+        let process_slot = slot_target(&e, process, PROCESS_SLOT_22C);
+        e.register_double(process_slot, |_, _| ret(0x9300));
+        stub(&mut e, COMBAT_CONTROLLER_TARGET, 0x1111);
+        fn_0089fcf0(&mut e, actor, target, 0x44, 0, 0, 0, 4, 0, 0);
+        let float_zero = 0.0f32.to_bits();
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_ADD_TARGET),
+            vec![vec![0x9300, target.addr(), 4, 1, float_zero, float_zero]]
+        );
+        assert_eq!(call_count(&e, COMBAT_MANAGER_ADD_GROUP_MEMBER), 0);
+
+        // The same target again: only the group member is added.
+        e.call_log = Some(vec![]);
+        stub(&mut e, COMBAT_CONTROLLER_TARGET, target.addr());
+        fn_0089fcf0(&mut e, actor, target, 0x44, 0, 0, 0, 4, 0, 0);
+        assert_eq!(call_count(&e, COMBAT_CONTROLLER_ADD_TARGET), 0);
+        assert_eq!(
+            calls_to(&e, COMBAT_MANAGER_ADD_GROUP_MEMBER),
+            vec![vec![0x7100, actor.addr(), 0x44]]
+        );
+    }
+
+    #[test]
+    fn fn_0089fcf0_refuses_in_the_cases_the_code_lists() {
+        // Process level 5.
+        let mut e = engine();
+        let (actor, _, target, _) = combat_setup(&mut e);
+        stub(&mut e, ACTOR_PROCESS_LEVEL_IS_5, 1);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(call_count(&e, COMBAT_MANAGER_ADD_COMBATANT), 0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+
+        // The target is the actor itself.
+        let mut e = engine();
+        let (actor, _, _, _) = combat_setup(&mut e);
+        fn_0089fcf0(&mut e, actor, actor, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+
+        // Dead.
+        let mut e = engine();
+        let (actor, _, target, _) = combat_setup(&mut e);
+        e.mem.set_u8(actor.addr() + 0x118, 1);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+
+        // Too far away: distance 20 against reach 10 plus a quarter.
+        let mut e = engine();
+        let (actor, _, target, _) = combat_setup(&mut e);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 20.0);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(
+            calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE),
+            vec![vec![actor.addr(), target.addr(), 0, 0]]
+        );
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+        // Distance 12.5 is within 10 + 2.5.
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 12.5);
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 1);
+
+        // A busy state (3) without a furniture entry above 0x14 stops it.
+        let mut e = engine();
+        let (actor, _, target, acquire) = combat_setup(&mut e);
+        let kind = slot_target(&e, actor.cast(), ACTOR_SLOT_214);
+        e.register_double(kind, |_, _| ret(3));
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+        // A furniture entry whose byte is 0x15 lets it go on, after slot 0x418.
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u8(entry + 0xe, 0x15);
+        let furniture = slot_target(&e, acquire, PROCESS_SLOT_4D4);
+        e.register_double(furniture, move |_, _| ret(entry));
+        fn_0089fcf0(&mut e, actor, target, 0, 0, 0, 0, 1, 0, 0);
+        let slot_418 = slot_target(&e, actor.cast(), ACTOR_SLOT_418);
+        assert_eq!(call_count(&e, slot_418), 1);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 1);
+    }
+
+    #[test]
+    fn fn_008a0270_reports_the_combat_flag() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let actor = actor_with(&mut e, &[], None);
+        // No process: 0.
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        assert_eq!(fn_008a0270(&mut e, actor, 0), 0);
+        let process = e.mem.alloc(8);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        assert_eq!(fn_008a0270(&mut e, actor, 0), 1);
+        // Searching in combat is ignored on request.
+        e.mem.set_u8(actor.addr() + 0x127, 1);
+        assert_eq!(fn_008a0270(&mut e, actor, 0), 1);
+        assert_eq!(fn_008a0270(&mut e, actor, 1), 0);
+        // The player is never "in combat" here.
+        e.set(player, Actor::pCurrentProcess, Ptr::new(process));
+        e.mem.set_u8(player.addr() + 0x104, 1);
+        assert_eq!(fn_008a0270(&mut e, player, 0), 0);
+    }
+
+    #[test]
+    fn fn_008a02d0_returns_the_controller_of_type_0x12() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        assert_eq!(fn_008a02d0(&mut e, actor), 0);
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_22C, ret(0x9300))]);
+        e.set(actor, Actor::pCurrentProcess, process);
+        // Not in combat.
+        assert_eq!(fn_008a02d0(&mut e, actor), 0);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        stub(&mut e, PACKAGE_TYPE, 0x11);
+        assert_eq!(fn_008a02d0(&mut e, actor), 0);
+        stub(&mut e, PACKAGE_TYPE, 0x12);
+        assert_eq!(fn_008a02d0(&mut e, actor), 0x9300);
+        let none = slot_target(&e, process, PROCESS_SLOT_22C);
+        e.register_double(none, |_, _| ret(0));
+        assert_eq!(fn_008a02d0(&mut e, actor), 0);
+    }
+
+    #[test]
+    fn small_combat_controller_forwarders() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_428, ret(0))], None);
+        assert_eq!(fn_008a0360(&mut e, actor), 0);
+        fn_008a0680(&mut e, actor, 1, 2);
+        assert_eq!(call_count(&e, CONTROLLER_FORWARD_97EFE0), 0);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x9400));
+        stub(&mut e, COMBAT_CONTROLLER_TARGET, 0x1234);
+        assert_eq!(fn_008a0360(&mut e, actor), 0x1234);
+        fn_008a0680(&mut e, actor, 1, 2);
+        assert_eq!(
+            calls_to(&e, CONTROLLER_FORWARD_97EFE0),
+            vec![vec![0x9400, 1, 2]]
+        );
+    }
+
+    #[test]
+    fn fn_008a05f0_picks_a_process_kind_without_a_controller() {
+        let mut e = engine();
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_54, ret(0))]);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_428, ret(0))], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        let slot = slot_target(&e, process, PROCESS_SLOT_54);
+        for (field, kind) in [(1, 1), (2, 2), (3, 4), (0, 4)] {
+            e.call_log = Some(vec![]);
+            stub(&mut e, ACQUIRE_OBJECT_FIELD_28, field);
+            fn_008a05f0(&mut e, actor);
+            assert_eq!(
+                calls_to(&e, slot),
+                vec![vec![process.addr(), actor.addr(), kind]]
+            );
+        }
+        // With a controller only the do-nothing function is called.
+        e.call_log = Some(vec![]);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(1));
+        fn_008a05f0(&mut e, actor);
+        assert_eq!(call_count(&e, slot), 0);
+        assert_eq!(calls_to(&e, ERROR_NO_OP), vec![vec![actor.addr()]]);
+    }
+
+    /// An actor with a combat controller for `fn_008a03a0`.
+    fn keep_combat_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr, u32) {
+        double_global(e, ZERO_DOUBLE, 0.0);
+        e.map(FADER_MANAGER, 4);
+        e.set_global(FADER_MANAGER, 0x7200u32);
+        let target = actor_with(
+            e,
+            &[(ACTOR_SLOT_22C, ret(0)), (ACTOR_SLOT_2E8, ret(0))],
+            None,
+        );
+        let process = object(e, 0x800, &[(PROCESS_SLOT_22C, ret(0x9500))]);
+        let acquire = object(
+            e,
+            0x10,
+            &[(PROCESS_SLOT_64C, ret(0)), (PROCESS_SLOT_630, ret(0))],
+        );
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_428, ret(0x9500)),
+                (ACTOR_SLOT_STOP_COMBAT, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub(e, ACTOR_IN_COMBAT, 1);
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(e, COMBAT_CONTROLLER_TARGET, target.addr());
+        stub(e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 1);
+        (actor, acquire, target.addr())
+    }
+
+    #[test]
+    fn fn_008a03a0_restarts_the_combat_controller() {
+        let mut e = engine();
+        let (actor, acquire, target) = keep_combat_setup(&mut e);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 0);
+        fn_008a03a0(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, FADER_MANAGER_GET_FADER_ALPHA),
+            vec![vec![0x7200, 1]]
+        );
+        let slot_630 = slot_target(&e, acquire.cast(), PROCESS_SLOT_630);
+        assert_eq!(calls_to(&e, slot_630), vec![vec![acquire.addr(), target]]);
+        assert_eq!(calls_to(&e, CONTROLLER_START_HIGH), vec![vec![0x9500]]);
+        assert_eq!(call_count(&e, CONTROLLER_START_OTHER), 0);
+        assert_eq!(call_count(&e, COMBAT_START_GUARD_NO_OP), 2);
+
+        // Another process level, and the controller test 9818b0.
+        e.call_log = Some(vec![]);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 2);
+        stub(&mut e, CONTROLLER_TEST_9818B0, 1);
+        fn_008a03a0(&mut e, actor);
+        let slot_64c = slot_target(&e, acquire.cast(), PROCESS_SLOT_64C);
+        assert_eq!(calls_to(&e, slot_64c), vec![vec![acquire.addr()]]);
+        assert_eq!(calls_to(&e, CONTROLLER_START_OTHER), vec![vec![0x9500]]);
+    }
+
+    #[test]
+    fn fn_008a03a0_adds_the_actor_to_the_players_combat_list() {
+        let mut e = engine();
+        let (actor, _, _) = keep_combat_setup(&mut e);
+        let player = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_22C, ret(0)), (ACTOR_SLOT_2E8, ret(0))],
+            None,
+        );
+        set_player(&mut e, player);
+        stub(&mut e, COMBAT_CONTROLLER_TARGET, player.addr());
+        stub(&mut e, PLAYER_COMBAT_LIST_COUNT, 2);
+        fn_008a03a0(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, PLAYER_ADD_ACTOR_TO_COMBAT_LIST),
+            vec![vec![player.addr(), actor.addr()]]
+        );
+        // The player's refusal stops everything.
+        e.call_log = Some(vec![]);
+        stub(&mut e, PLAYER_TEST_5A03F0, 1);
+        fn_008a03a0(&mut e, actor);
+        assert_eq!(
+            call_count(&e, CONTROLLER_START_HIGH) + call_count(&e, CONTROLLER_START_OTHER),
+            0
+        );
+    }
+
+    #[test]
+    fn fn_008a03a0_stops_the_combat_in_the_cases_the_code_lists() {
+        // Visible fader: nothing.
+        let mut e = engine();
+        let (actor, _, _) = keep_combat_setup(&mut e);
+        stub_float(&mut e, FADER_MANAGER_GET_FADER_ALPHA, 0.5);
+        fn_008a03a0(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_TEST_576D30), 0);
+
+        // The controller says to stop: slot 0x434 with 0.
+        let mut e = engine();
+        let (actor, _, _) = keep_combat_setup(&mut e);
+        stub(&mut e, CONTROLLER_TEST_981450, 1);
+        fn_008a03a0(&mut e, actor);
+        let stop = slot_target(&e, actor.cast(), ACTOR_SLOT_STOP_COMBAT);
+        assert_eq!(calls_to(&e, stop), vec![vec![actor.addr(), 0]]);
+        assert_eq!(call_count(&e, CONTROLLER_START_HIGH), 0);
+
+        // The target is no longer a combat target: stop with it, and give up
+        // when the actor has no controller afterwards.
+        let mut e = engine();
+        let (actor, _, target) = keep_combat_setup(&mut e);
+        stub(&mut e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 0);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0));
+        fn_008a03a0(&mut e, actor);
+        let stop = slot_target(&e, actor.cast(), ACTOR_SLOT_STOP_COMBAT);
+        assert_eq!(calls_to(&e, stop), vec![vec![actor.addr(), target]]);
+        assert_eq!(call_count(&e, CONTROLLER_START_HIGH), 0);
+
+        // A protected target that is not "2e8": stop with it.
+        let mut e = engine();
+        let (actor, _, target) = keep_combat_setup(&mut e);
+        let protected = slot_target(&e, Ptr::new(target), ACTOR_SLOT_22C);
+        e.register_double(protected, |_, _| ret(1));
+        fn_008a03a0(&mut e, actor);
+        let stop = slot_target(&e, actor.cast(), ACTOR_SLOT_STOP_COMBAT);
+        assert_eq!(calls_to(&e, stop), vec![vec![actor.addr(), target]]);
+        // ... but a "2e8" target is not stopped by that alone.
+        e.call_log = Some(vec![]);
+        let flagged = slot_target(&e, Ptr::new(target), ACTOR_SLOT_2E8);
+        e.register_double(flagged, |_, _| ret(1));
+        fn_008a03a0(&mut e, actor);
+        assert_eq!(call_count(&e, stop), 0);
+        // The three other tests each stop it too.
+        for test in [
+            ACTOR_TEST_440DA0,
+            ACTOR_TEST_440D80,
+            ACTOR_PROCESS_LEVEL_IS_3,
+        ] {
+            e.call_log = Some(vec![]);
+            stub(&mut e, test, 1);
+            fn_008a03a0(&mut e, actor);
+            assert_eq!(calls_to(&e, stop), vec![vec![actor.addr(), target]]);
+            stub(&mut e, test, 0);
+        }
+    }
+
+    #[test]
+    fn actor_resurrect_brings_the_actor_back_with_new_process_data() {
+        let mut e = engine();
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, 0x7300u32);
+        e.map(MODEL_LOADER, 4);
+        e.set_global(MODEL_LOADER, 0x7400u32);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let old_process = object(&mut e, 0x800, &[(0, ret(0))]);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_SET_DELETE, ret(0)),
+                (ACTOR_SLOT_4C, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0)),
+                (ACTOR_SLOT_208, ret(0)),
+                (ACTOR_SLOT_240, ret(0)),
+                (ACTOR_SLOT_248, ret(0)),
+                (ACTOR_SLOT_24C, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, old_process);
+        e.mem.set_u8(actor.addr() + 0x174, 1);
+        e.mem.set_u8(actor.addr() + 0x118, 1);
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 2);
+        stub_with(&mut e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        stub_with(&mut e, NEW_PROCESS_CONSTRUCT, |_, a| ret(a[0]));
+        stub(&mut e, MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL, 2);
+        actor_resurrect(&mut e, actor, 1, 0, 0);
+        let slot = |e: &Engine, offset: u32| slot_target(e, actor.cast(), offset);
+        assert_eq!(
+            calls_to(&e, slot(&e, ACTOR_SLOT_SET_DELETE)),
+            vec![vec![actor.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, slot(&e, ACTOR_SLOT_4C)),
+            vec![vec![actor.addr(), 0x20000], vec![actor.addr(), 4]]
+        );
+        assert_eq!(e.mem.u8(actor.addr() + 0x174), 0);
+        assert_eq!(e.mem.u8(actor.addr() + 0x118), 0);
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_REMOVE_REFERENCE),
+            vec![vec![PROCESS_LISTS, actor.addr(), 2]]
+        );
+        // The old process object is deleted, a new one built and installed.
+        assert_eq!(
+            calls_to(&e, slot_target(&e, old_process, 0)),
+            vec![vec![old_process.addr(), 1]]
+        );
+        let new_process = e.get(actor, Actor::pCurrentProcess).addr();
+        assert_ne!(new_process, old_process.addr());
+        assert_eq!(calls_to(&e, NEW_PROCESS_CONSTRUCT), vec![vec![new_process]]);
+        assert_eq!(calls_to(&e, OPERATOR_NEW), vec![vec![0xb4]]);
+        assert_eq!(
+            calls_to(&e, MODIFIER_LIST_DELETE_ALL),
+            vec![vec![actor.addr() + 0xd0], vec![actor.addr() + 0xe0]]
+        );
+        assert_eq!(
+            calls_to(&e, slot(&e, ACTOR_SLOT_208)),
+            vec![vec![actor.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_LIFE_STATE),
+            vec![vec![actor.addr(), 0]]
+        );
+        // Desired level 2 uses slot 0x248; the lock is taken and released.
+        assert_eq!(call_count(&e, slot(&e, ACTOR_SLOT_248)), 1);
+        assert_eq!(calls_to(&e, LOCK_ENTER), vec![vec![RESURRECT_LOCK, 0]]);
+        assert_eq!(calls_to(&e, LOCK_LEAVE), vec![vec![RESURRECT_LOCK]]);
+        assert_eq!(
+            calls_to(&e, EXTRA_REMOVE_PLAYER_CRIME_LIST_EXTRA),
+            vec![vec![0, actor.addr()]]
+        );
+    }
+
+    #[test]
+    fn actor_resurrect_picks_the_process_level_switch() {
+        for (level, slot) in [
+            (0, ACTOR_SLOT_240),
+            (1, ACTOR_SLOT_24C),
+            (2, ACTOR_SLOT_248),
+        ] {
+            let mut e = engine();
+            e.map(TES_SINGLETON, 4);
+            let player = actor_with(
+                &mut e,
+                &[(ACTOR_SLOT_SET_DELETE, ret(0)), (ACTOR_SLOT_4C, ret(0))],
+                None,
+            );
+            set_player(&mut e, player);
+            let actor = actor_with(
+                &mut e,
+                &[
+                    (ACTOR_SLOT_4C, ret(0)),
+                    (ACTOR_SLOT_1D0, ret(0)),
+                    (ACTOR_SLOT_240, ret(0)),
+                    (ACTOR_SLOT_248, ret(0)),
+                    (ACTOR_SLOT_24C, ret(0)),
+                    (ACTOR_SLOT_SET_DELETE, ret(0)),
+                ],
+                None,
+            );
+            stub_with(&mut e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+            stub(&mut e, MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL, level);
+            actor_resurrect(&mut e, actor, 0, 0, 0);
+            let target = slot_target(&e, actor.cast(), slot);
+            assert_eq!(call_count(&e, target), 1, "level {level}");
+        }
+        // Level 3 goes to the process lists; the player skips the switch.
+        let mut e = engine();
+        e.map(TES_SINGLETON, 4);
+        let player = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_SET_DELETE, ret(0)), (ACTOR_SLOT_4C, ret(0))],
+            None,
+        );
+        set_player(&mut e, player);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_4C, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0)),
+                (ACTOR_SLOT_SET_DELETE, ret(0)),
+            ],
+            None,
+        );
+        stub_with(&mut e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        stub(&mut e, MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL, 3);
+        actor_resurrect(&mut e, actor, 0, 0, 0);
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, actor.addr(), 3, 0, 0, 0]]
+        );
+        e.call_log = Some(vec![]);
+        actor_resurrect(&mut e, player, 0, 0, 0);
+        assert_eq!(call_count(&e, MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL), 0);
+        assert_eq!(call_count(&e, PROCESS_LISTS_REMOVE_REFERENCE), 0);
+    }
+
+    #[test]
+    fn actor_resurrect_queues_the_load_of_a_loaded_cell() {
+        let mut e = engine();
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, 0x7300u32);
+        e.map(MODEL_LOADER, 4);
+        e.set_global(MODEL_LOADER, 0x7400u32);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_4C, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0)),
+                (ACTOR_SLOT_240, ret(0)),
+                (ACTOR_SLOT_24C, ret(0)),
+                (ACTOR_SLOT_SET_DELETE, ret(0)),
+            ],
+            None,
+        );
+        stub_with(&mut e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        stub(&mut e, REFR_PARENT_CELL, 0x7500);
+        stub(&mut e, TES_IS_CELL_LOADED, 1);
+        stub(&mut e, TES_GET_CELL_PRIORITY, 0x33);
+        actor_resurrect(&mut e, actor, 0, 1, 0);
+        assert_eq!(
+            calls_to(&e, TES_IS_CELL_LOADED),
+            vec![vec![0x7300, 0x7500, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, TES_GET_CELL_PRIORITY),
+            vec![vec![0x7300, 0x7500, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, MODEL_LOADER_QUEUE_REFERENCE),
+            vec![vec![0x7400, actor.addr(), 0x33]]
+        );
+        // The cell test picks slot 0x24c (false) here.
+        let low = slot_target(&e, actor.cast(), ACTOR_SLOT_24C);
+        assert_eq!(call_count(&e, low), 1);
+        assert_eq!(call_count(&e, MOBILE_OBJECT_GET_DESIRED_PROCESS_LEVEL), 0);
+        assert_eq!(call_count(&e, LOCK_LEAVE), 1);
+    }
+
+    #[test]
+    fn actor_resurrect_with_heal_restores_health_and_havok() {
+        let mut e = engine();
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_SET_DELETE, ret(0)),
+                (ACTOR_SLOT_4C, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0x9900)),
+                (ACTOR_SLOT_MODIFY_ACTOR_VALUE, ret(0)),
+                (ACTOR_SLOT_INIT_HAVOK, ret(0)),
+            ],
+            None,
+        );
+        embedded_table(
+            &mut e,
+            actor.addr() + 0xa4,
+            &[(0x0c, float_ret(30.5)), (0x00, ret(100))],
+        );
+        let process = object(
+            &mut e,
+            0x800,
+            &[(PROCESS_SLOT_290, ret(0)), (PROCESS_SLOT_410, ret(0))],
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub_with(&mut e, NI_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        actor_resurrect(&mut e, actor, 0, 0, 1);
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_LIFE_STATE),
+            vec![vec![actor.addr(), 0]]
+        );
+        let modify = slot_target(&e, actor.cast(), ACTOR_SLOT_MODIFY_ACTOR_VALUE);
+        assert_eq!(
+            calls_to(&e, modify),
+            vec![vec![actor.addr(), 0x10, 69.5f32.to_bits(), 0]]
+        );
+        let motion = calls_to(&e, BHK_WORLD_SET_MOTION);
+        assert_eq!(motion, vec![vec![0x9900, 1, 1, 0, 1]]);
+        let slot_290 = slot_target(&e, process, PROCESS_SLOT_290);
+        assert_eq!(calls_to(&e, slot_290), vec![vec![process.addr(), 0]]);
+        let slot_410 = slot_target(&e, process, PROCESS_SLOT_410);
+        assert_eq!(calls_to(&e, slot_410), vec![vec![process.addr(), 3]]);
+        // The branch for the dead: no modifier lists were cleared.
+        assert_eq!(call_count(&e, MODIFIER_LIST_DELETE_ALL), 0);
+        assert_eq!(call_count(&e, LOCK_ENTER), 0);
+    }
+
+    /// Makes `SETTING_GET_VALUE_POINTER` return a pointer to the `float`
+    /// given for the setting address it is called on.
+    fn float_settings(e: &mut Engine, values: &[(u32, f32)]) {
+        let mut table = std::collections::HashMap::new();
+        for (address, value) in values {
+            let cell = e.mem.alloc(4);
+            e.mem.set_f32(cell, *value);
+            table.insert(*address, cell);
+        }
+        e.register_double(SETTING_GET_VALUE_POINTER, move |_, a| ret(table[&a[0]]));
+    }
+
+    /// Makes `SETTING_GET_INT_POINTER` return a pointer to the integer given
+    /// for the setting address it is called on.
+    fn int_settings(e: &mut Engine, values: &[(u32, u32)]) {
+        let mut table = std::collections::HashMap::new();
+        for (address, value) in values {
+            let cell = e.mem.alloc(4);
+            e.mem.set_u32(cell, *value);
+            table.insert(*address, cell);
+        }
+        e.register_double(SETTING_GET_INT_POINTER, move |_, a| ret(table[&a[0]]));
+    }
+
+    /// An actor, a target and an acquire object for `fn_008987f0`.
+    fn reaction_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr<Actor>, Ptr) {
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_428, ret(0)),
+                (ACTOR_SLOT_304, ret(0)),
+                (ACTOR_SLOT_21C, ret(0)),
+                (ACTOR_SLOT_460, ret(0)),
+                (ACTOR_SLOT_474, ret(0)),
+                (ACTOR_SLOT_48, ret(0)),
+            ],
+            None,
+        );
+        let target = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_100, ret(1)),
+                (ACTOR_SLOT_218, ret(0)),
+                (ACTOR_SLOT_37C, ret(0)),
+                (ACTOR_SLOT_42C, ret(0)),
+                (ACTOR_SLOT_304, ret(0)),
+            ],
+            None,
+        );
+        let acquire = object(
+            e,
+            0x10,
+            &[
+                (PROCESS_SLOT_52C, ret(0)),
+                (PROCESS_SLOT_504, ret(0)),
+                (PROCESS_SLOT_F0, ret(0)),
+                (PROCESS_SLOT_33C, ret(0)),
+            ],
+        );
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 1);
+        float_settings(
+            e,
+            &[
+                (DETECTION_THRESHOLD_SETTING, 10.0),
+                (UNUSED_FLOAT_SETTING, 1.0),
+                (SLOT_460_FLOAT_SETTING, 5.0),
+            ],
+        );
+        e.map(COMBAT_DIALOGUE_MANAGER, 4);
+        e.set_global(COMBAT_DIALOGUE_MANAGER, 0x7600u32);
+        (actor, target, acquire)
+    }
+
+    #[test]
+    fn fn_008987f0_returns_early_in_the_cases_the_code_lists() {
+        let mut e = engine();
+        let (actor, target, _) = reaction_setup(&mut e);
+        // Protected.
+        let protected = slot_target(&e, actor.cast(), ACTOR_SLOT_22C);
+        e.register_double(protected, |_, _| ret(1));
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(call_count(&e, ACTOR_TEST_8ACE90), 0);
+
+        // The test 008ace90.
+        let mut e = engine();
+        let (actor, target, _) = reaction_setup(&mut e);
+        stub(&mut e, ACTOR_TEST_8ACE90, 1);
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(call_count(&e, ACTOR_GET_PACKAGE_SET_AS_PCURRENT), 0);
+
+        // The target is the actor itself.
+        let mut e = engine();
+        let (actor, _, _) = reaction_setup(&mut e);
+        fn_008987f0(&mut e, actor, actor, 0);
+        assert_eq!(call_count(&e, ACTOR_GET_PACKAGE_SET_AS_PCURRENT), 0);
+
+        // Process level 4 and the target is the acquire object's slot 0x52c.
+        let mut e = engine();
+        let (actor, target, acquire) = reaction_setup(&mut e);
+        stub(&mut e, PROCESS_LEVEL_NUMBER, 4);
+        let slot = slot_target(&e, acquire, PROCESS_SLOT_52C);
+        let target_address = target.addr();
+        e.register_double(slot, move |_, _| ret(target_address));
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(call_count(&e, ACTOR_GET_CURRENT_WEAPON), 0);
+    }
+
+    #[test]
+    fn fn_008987f0_records_the_detection_at_the_high_process_level() {
+        let mut e = engine();
+        let (actor, target, acquire) = reaction_setup(&mut e);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 0);
+        // The detection level is 50 (above the setting 10): level 3; the
+        // call writes 7 into its first flag byte and leaves the second at 1.
+        stub_with(&mut e, ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR, |e, a| {
+            e.mem.set_u8(a[3], 7);
+            ret(50)
+        });
+        let record = e.mem.alloc(0x40);
+        let creator = slot_target(&e, acquire, PROCESS_SLOT_F0);
+        e.register_double(creator, move |_, _| ret(record));
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(e.mem.u32(record + 8), 50);
+        assert_eq!(e.mem.u32(record + 4), 3);
+        assert_eq!(e.mem.u8(record + 0x1e), 7);
+        assert_eq!(e.mem.u8(record + 0x1c), 1);
+        assert_eq!(e.mem.u8(record + 0x1d), 1);
+        let created = calls_to(&e, creator);
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0][1..], [target.addr(), 3, 7, 50, 0, 1, 1]);
+        let detection = calls_to(&e, ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR);
+        assert_eq!(detection[0][..3], [actor.addr(), 0, target.addr()]);
+
+        // An existing record is reused, with the level 0 for a low detection.
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR, 4);
+        let finder = slot_target(&e, acquire, PROCESS_SLOT_504);
+        let existing = e.mem.alloc(0x40);
+        e.register_double(finder, move |_, _| ret(existing));
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(call_count(&e, creator), 0);
+        assert_eq!(e.mem.u32(existing + 8), 4);
+        assert_eq!(e.mem.u32(existing + 4), 0);
+    }
+
+    #[test]
+    fn fn_008987f0_starts_the_dialogue_for_the_player_on_a_friend_hit() {
+        let mut e = engine();
+        let (actor, _, _) = reaction_setup(&mut e);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 2);
+        stub(&mut e, EXTRA_ADD_FRIEND_HIT, 1);
+        int_settings(&mut e, &[(FRIEND_HIT_LIMIT_SETTINGS[3], 3)]);
+        fn_008987f0(&mut e, actor, player, 0);
+        assert_eq!(
+            calls_to(&e, COMBAT_DIALOGUE_START_DIALOGUE),
+            vec![vec![0x7600, actor.addr(), player.addr(), 2, 2, 1, 0]]
+        );
+        let flags = slot_target(&e, actor.cast(), ACTOR_SLOT_48);
+        assert_eq!(calls_to(&e, flags), vec![vec![actor.addr(), 0x8000_0000]]);
+        assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 0);
+        // The limit of 1000 or more resets the hits first.
+        e.call_log = Some(vec![]);
+        int_settings(&mut e, &[(FRIEND_HIT_LIMIT_SETTINGS[3], 1000)]);
+        fn_008987f0(&mut e, actor, player, 0);
+        assert_eq!(call_count(&e, EXTRA_RESET_FRIEND_HITS), 1);
+
+        // Talking, dialogue and the skip test each stop the dialogue (and the
+        // whole reaction).
+        for blocker in [
+            ACTOR_IS_TALKING,
+            MOBILE_OBJECT_IS_IN_DIALOGUE,
+            ACTOR_SHOULD_SKIP_FALLOUT_BEHAVIOR,
+        ] {
+            e.call_log = Some(vec![]);
+            stub(&mut e, blocker, 1);
+            fn_008987f0(&mut e, actor, player, 0);
+            assert_eq!(call_count(&e, COMBAT_DIALOGUE_START_DIALOGUE), 0);
+            assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 0);
+            stub(&mut e, blocker, 0);
+        }
+        // The test 005a3790 ends it before any count.
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACTOR_TEST_5A3790, 1);
+        fn_008987f0(&mut e, actor, player, 0);
+        assert_eq!(call_count(&e, EXTRA_ADD_FRIEND_HIT), 0);
+    }
+
+    #[test]
+    fn fn_008987f0_raises_the_alarm_through_the_owner_for_the_player() {
+        let mut e = engine();
+        let (actor, _, _) = reaction_setup(&mut e);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        // A reaction other than 2 and 3: no friend-hit counting.
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 0);
+        stub(&mut e, REFR_GET_OWNER, 0x7700);
+        stub(&mut e, FORM_TYPE, 8);
+        stub(&mut e, PROCESS_LISTS_GET_OWNER_ACTOR, 0x7800);
+        stub(&mut e, ACTOR_IN_COMBAT, 0);
+        fn_008987f0(&mut e, actor, player, 0);
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_GET_OWNER_ACTOR),
+            vec![vec![PROCESS_LISTS, 0x7700, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_ATTACK_ALARM),
+            vec![
+                vec![0x7800, player.addr(), 0, 1],
+                vec![actor.addr(), player.addr(), 0, 1]
+            ]
+        );
+        assert_eq!(call_count(&e, EXTRA_ADD_FRIEND_HIT), 0);
+
+        // Another owner type uses the other lookup.
+        e.call_log = Some(vec![]);
+        stub(&mut e, FORM_TYPE, 9);
+        stub(&mut e, PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH, 0);
+        fn_008987f0(&mut e, actor, player, 0);
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_GET_ACTOR_REF_IN_HIGH),
+            vec![vec![PROCESS_LISTS, 0x7700, 0]]
+        );
+        assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 1);
+    }
+
+    #[test]
+    fn fn_008987f0_alarms_for_a_target_that_is_not_the_player() {
+        let mut e = engine();
+        let (actor, target, _) = reaction_setup(&mut e);
+        let actor_304 = slot_target(&e, actor.cast(), ACTOR_SLOT_304);
+        e.register_double(actor_304, |_, _| ret(1));
+        for slot in [ACTOR_SLOT_218, ACTOR_SLOT_37C] {
+            let target_slot = slot_target(&e, target.cast(), slot);
+            e.register_double(target_slot, |_, _| ret(1));
+        }
+        fn_008987f0(&mut e, actor, target, 0);
+        assert_eq!(
+            calls_to(&e, ACTOR_ATTACK_ALARM),
+            vec![vec![actor.addr(), target.addr(), 0, 1]]
+        );
+        // It returns before the controller work.
+        assert_eq!(call_count(&e, CONTROLLER_WORKER_97F580), 0);
+    }
+
+    #[test]
+    fn fn_008987f0_tells_the_acquire_object_when_the_target_relates_to_the_player() {
+        let mut e = engine();
+        let (actor, _, acquire) = reaction_setup(&mut e);
+        let player = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_304, ret(0)), (ACTOR_SLOT_42C, ret(0))],
+            None,
+        );
+        set_player(&mut e, player);
+        stub(&mut e, ACTOR_TEST_8B0670, 1);
+        // The reaction 0 with the byte 0 and "should attack" true.
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 0);
+        stub(&mut e, ACTOR_GET_SHOULD_ATTACK_ACTOR, 1);
+        stub(&mut e, REFR_GET_OWNER, 0);
+        fn_008987f0(&mut e, actor, player, 0x55);
+        let slot = slot_target(&e, acquire, PROCESS_SLOT_33C);
+        assert_eq!(
+            calls_to(&e, slot),
+            vec![vec![
+                acquire.addr(),
+                actor.addr(),
+                player.addr(),
+                1,
+                1,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                1,
+                0,
+                0
+            ]]
+        );
+        // No combat controller, not fleeing, not alarmed before (the player
+        // branch above already alarmed through the first block).
+        assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 1);
+        let reaction_args = calls_to(&e, ACTOR_GET_SHOULD_ATTACK_ACTOR);
+        assert_eq!(reaction_args[0][..3], [actor.addr(), player.addr(), 0]);
+        // No controller, not fleeing but already alarmed: slot 0x460 gets the
+        // target and the setting 5.0.
+        let slot_460 = slot_target(&e, actor.cast(), ACTOR_SLOT_460);
+        assert_eq!(
+            calls_to(&e, slot_460),
+            vec![vec![actor.addr(), player.addr(), 5.0f32.to_bits()]]
+        );
+        // The actor's slot 0x474 runs with 1 (the actor is not the player).
+        let slot_474 = slot_target(&e, actor.cast(), ACTOR_SLOT_474);
+        assert_eq!(calls_to(&e, slot_474), vec![vec![actor.addr(), 1]]);
+    }
+
+    #[test]
+    fn fn_008987f0_tells_the_acquire_object_without_alarm_for_other_targets() {
+        let mut e = engine();
+        let (actor, target, acquire) = reaction_setup(&mut e);
+        // A non-player target that relates to the actor through slot 0x42c.
+        let target_42c = slot_target(&e, target.cast(), ACTOR_SLOT_42C);
+        let actor_address = actor.addr();
+        e.register_double(target_42c, move |_, _| ret(actor_address));
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        stub(&mut e, ACTOR_TEST_8B0670, 1);
+        stub(&mut e, ACTOR_IS_FLEEING, 0);
+        // The target is not the player, so only the plain tell happens.
+        fn_008987f0(&mut e, actor, target, 0);
+        let slot = slot_target(&e, acquire, PROCESS_SLOT_33C);
+        assert_eq!(call_count(&e, slot), 1);
+        assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 0);
+        let slot_460 = slot_target(&e, actor.cast(), ACTOR_SLOT_460);
+        assert_eq!(call_count(&e, slot_460), 0);
+    }
+
+    #[test]
+    fn fn_008987f0_with_a_controller_that_has_the_target_only_passes_it_on() {
+        let mut e = engine();
+        let (actor, target, _) = reaction_setup(&mut e);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x9700));
+        stub(&mut e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 1);
+        fn_008987f0(&mut e, actor, target, 0x66);
+        assert_eq!(
+            calls_to(&e, CONTROLLER_WORKER_97F580),
+            vec![vec![0x9700, target.addr(), 0x66]]
+        );
+        assert_eq!(call_count(&e, ACTOR_GET_DETECTION_LEVEL_AGAINST_ACTOR), 0);
+        assert_eq!(call_count(&e, ACTOR_ATTACK_ALARM), 0);
+    }
+
+    /// An actor for `fn_00899200` with the slots the function uses and an
+    /// acquire object without a weapon.
+    fn hit_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr) {
+        let process = object(
+            e,
+            0x800,
+            &[
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+                (PROCESS_SLOT_ANIM_SEQUENCE, ret(0x7a00)),
+                (PROCESS_SLOT_460, ret(0x7b00)),
+            ],
+        );
+        let acquire = object(
+            e,
+            0x10,
+            &[
+                (PROCESS_SLOT_448, ret(0)),
+                (PROCESS_SLOT_27C, ret(0)),
+                (PROCESS_SLOT_274, ret(0)),
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+                (PROCESS_SLOT_ANIM_SEQUENCE, ret(0x7a00)),
+            ],
+        );
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_21C, ret(0)),
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_428, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0x7c00)),
+                (ACTOR_SLOT_REACH, float_ret(2.0)),
+                (ACTOR_SLOT_POSITION, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        embedded_table(
+            e,
+            actor.addr() + ACTOR_MAGIC_CASTER_OFFSET,
+            &[
+                (MAGIC_CASTER_SLOT_40, ret(0)),
+                (MAGIC_CASTER_SLOT_48, ret(0)),
+            ],
+        );
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(e, DEBUG_DRAW_LEVEL, 0);
+        int_settings(e, &[(WORD_SETTING_3B4, 0x1234)]);
+        float_settings(e, &[]);
+        stub_float(e, REFR_GET_SCALE, 1.0);
+        e.map(SPECIAL_IDLE_STATE_OBJECT, 0x10);
+        e.map(VATS_ACTOR, 4);
+        (actor, acquire)
+    }
+
+    #[test]
+    fn fn_00899200_only_queues_when_the_task_queue_is_used() {
+        let mut e = engine();
+        let (actor, _) = hit_setup(&mut e);
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, GET_TES, 0x7d00);
+        fn_00899200(&mut e, actor, 3, 4);
+        assert_eq!(
+            calls_to(&e, TES_QUEUE_ATTACK),
+            vec![vec![0x7d00, actor.addr(), 3, 4]]
+        );
+        assert_eq!(call_count(&e, GET_SAVED_ACQUIRE_OBJECT), 0);
+    }
+
+    #[test]
+    fn fn_00899200_updates_the_acquire_object_and_the_word() {
+        let mut e = engine();
+        let (actor, acquire) = hit_setup(&mut e);
+        fn_00899200(&mut e, actor, 1, 0);
+        let slot = slot_target(&e, acquire, PROCESS_SLOT_448);
+        assert_eq!(calls_to(&e, slot), vec![vec![acquire.addr(), 1]]);
+        // Slot 0x21c false: the setting is the word.
+        assert_eq!(
+            calls_to(&e, ACTOR_WORKER_8BC240),
+            vec![vec![actor.addr(), 0x1234]]
+        );
+        // Slot 0x21c true: the base form's word.
+        e.call_log = Some(vec![]);
+        let slot_21c = slot_target(&e, actor.cast(), ACTOR_SLOT_21C);
+        e.register_double(slot_21c, |_, _| ret(1));
+        stub(&mut e, REFR_BASE_FORM, 0x7e00);
+        stub(&mut e, FORM_GETTER_5FBEB0, 0x77);
+        fn_00899200(&mut e, actor, 1, 0);
+        assert_eq!(
+            calls_to(&e, ACTOR_WORKER_8BC240),
+            vec![vec![actor.addr(), 0x77]]
+        );
+        // With flag_b clear nothing else happens.
+        assert_eq!(call_count(&e, ACTOR_COMBAT_HIT), 0);
+        assert_eq!(call_count(&e, CONTROLLER_WORKER_97F7D0), 0);
+    }
+
+    #[test]
+    fn fn_00899200_vats_uses_up_a_shot_or_casts_the_default_spell() {
+        let mut e = engine();
+        let (actor, _) = hit_setup(&mut e);
+        e.set_global(VATS_ACTOR, actor.addr());
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == VATS_OBJECT { 4 } else { 0x7f00 })
+        });
+        let weapon_slot = slot_target(
+            &e,
+            e.get(actor, Actor::pCurrentProcess),
+            PROCESS_SLOT_CURRENT_WEAPON,
+        );
+        e.register_double(weapon_slot, |_, _| ret(0x7f10));
+        let action = e.mem.alloc(0x20);
+        stub(&mut e, VATS_GET_CURRENT_ACTION, action);
+        e.mem.set_u8(action + 8, 5);
+        stub(&mut e, WEAPON_BYTE_FLAG, 1);
+        fn_00899200(&mut e, actor, 0, 0);
+        assert_eq!(e.mem.u8(action + 8), 4);
+
+        // Without the weapon flag: the spell is cast through the caster.
+        let reference = object(&mut e, 0x10, &[(0x234, ret(0)), (0x100, ret(1))]);
+        e.mem.set_u8(action + 7, 1);
+        e.mem.set_u32(action + 0xc, reference.addr());
+        stub(&mut e, WEAPON_BYTE_FLAG, 0);
+        stub(&mut e, GET_DEFAULT_OBJECT, 0x8100);
+        stub(&mut e, RTTI_DYNAMIC_CAST, 0x8200);
+        stub(&mut e, MAGIC_CASTER_RELEASE_CAST, 1);
+        e.call_log = Some(vec![]);
+        fn_00899200(&mut e, actor, 0, 0);
+        assert_eq!(calls_to(&e, GET_DEFAULT_OBJECT), vec![vec![5]]);
+        assert_eq!(
+            calls_to(&e, RTTI_DYNAMIC_CAST),
+            vec![vec![0x8100, 0, RTTI_TYPE_TES_FORM, RTTI_TYPE_MAGIC_ITEM, 0]]
+        );
+        let caster = actor.addr() + ACTOR_MAGIC_CASTER_OFFSET;
+        let slot_40 = slot_target(&e, Ptr::new(caster), MAGIC_CASTER_SLOT_40);
+        let slot_48 = slot_target(&e, Ptr::new(caster), MAGIC_CASTER_SLOT_48);
+        assert_eq!(calls_to(&e, slot_40), vec![vec![caster, 0x8200]]);
+        assert_eq!(
+            calls_to(&e, slot_48),
+            vec![vec![caster, reference.addr() + 0x94]]
+        );
+        assert_eq!(
+            calls_to(&e, MAGIC_CASTER_RELEASE_CAST),
+            vec![vec![caster, 0]]
+        );
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT), vec![vec![0x15]]);
+        // A target that is already blocked (slot 0x234) casts nothing.
+        let blocked = slot_target(&e, reference, 0x234);
+        e.register_double(blocked, |_, _| ret(1));
+        e.call_log = Some(vec![]);
+        fn_00899200(&mut e, actor, 0, 0);
+        assert_eq!(call_count(&e, GET_DEFAULT_OBJECT), 0);
+    }
+
+    #[test]
+    fn fn_00899200_draws_the_debug_arrow() {
+        let mut e = engine();
+        let (actor, _) = hit_setup(&mut e);
+        stub(&mut e, DEBUG_DRAW_LEVEL, 2);
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, 0x8300u32);
+        e.map(ARROW_LENGTH_SCALE, 4);
+        e.set_global(ARROW_LENGTH_SCALE, 800.0f32);
+        e.map(ARROW_WIDTH_SCALE, 4);
+        e.set_global(ARROW_WIDTH_SCALE, 0.1f32);
+        // The colour constructor returns the address of what it built.
+        stub_with(&mut e, COLOR_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            ret(a[0])
+        });
+        stub(&mut e, NODE_ROTATION, 0x8400);
+        let vector = e.mem.alloc(12);
+        e.mem.set_f32(vector, 1.0);
+        stub(&mut e, MATRIX_TRANSFORM, vector);
+        stub(&mut e, VECTOR_SUBTRACT, vector);
+        stub(&mut e, VECTOR_SCALE, vector);
+        stub(&mut e, ACTOR_GET_WEAPON_POSITION, vector);
+        stub(&mut e, CREATE_DIR_ARROW, 0x8500);
+        stub_float(&mut e, DEBUG_DRAW_DURATION_GETTER, 4.5);
+        fn_00899200(&mut e, actor, 0, 0);
+        // Red: the actor's slot 0x360 is false.
+        let arrow = calls_to(&e, CREATE_DIR_ARROW);
+        assert_eq!(arrow.len(), 1);
+        assert_eq!(arrow[0][0], vector);
+        let color = arrow[0][1];
+        assert_eq!(
+            [
+                e.mem.f32(color),
+                e.mem.f32(color + 4),
+                e.mem.f32(color + 8),
+                e.mem.f32(color + 12)
+            ],
+            [1.0, 0.0, 0.0, 1.0]
+        );
+        let scales = calls_to(&e, VECTOR_SCALE);
+        assert_eq!(scales[0][2], 800.0f32.to_bits());
+        assert_eq!(scales[1][2], 0.1f32.to_bits());
+        assert_eq!(
+            calls_to(&e, TES_ADD_TEMP_DEBUG_OBJECT),
+            vec![vec![0x8300, 0x8500, 4.5f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&e, MATRIX_TRANSFORM).len(), 2);
+        assert_eq!(calls_to(&e, VECTOR_NORMALIZE).len(), 1);
+        assert_eq!(calls_to(&e, DEBUG_OBJECT_SET_POSITION)[0][0], 0x8500);
+
+        // Blue when slot 0x360 is true.
+        e.call_log = Some(vec![]);
+        let slot_360 = slot_target(&e, actor.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        fn_00899200(&mut e, actor, 0, 0);
+        let color = calls_to(&e, CREATE_DIR_ARROW)[0][1];
+        assert_eq!([e.mem.f32(color + 4), e.mem.f32(color + 8)], [0.0, 1.0]);
+    }
+
+    #[test]
+    fn fn_00899200_hits_the_target_the_acquire_object_names() {
+        let mut e = engine();
+        let (actor, acquire) = hit_setup(&mut e);
+        let holder = slot_target(&e, acquire, PROCESS_SLOT_27C);
+        e.register_double(holder, |_, _| ret(0x8600));
+        let entry = slot_target(&e, acquire, PROCESS_SLOT_274);
+        e.register_double(entry, |_, _| ret(0x8700));
+        stub(&mut e, OBJECT_TYPE_FIELD, 0x2c);
+        let target = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(1))], None);
+        let target_address = target.addr();
+        stub_with(&mut e, NODE_NEXT, move |_, a| {
+            ret(if a[0] == 0x8700 { target_address } else { 0 })
+        });
+        // The animation group 0x64: hand to hand kind 1.
+        stub(&mut e, ANIMATION_ZERO_GLOBAL_TRANSFORM, 0x8800);
+        stub(&mut e, ANIM_GROUP_GET_NUMBER, 0x64);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x8900));
+        fn_00899200(&mut e, actor, 9, 1);
+        assert_eq!(
+            calls_to(&e, ACTOR_COMBAT_HIT),
+            vec![vec![actor.addr(), target.addr(), 9, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, CONTROLLER_WORKER_97F7D0),
+            vec![vec![0x8900, target.addr()]]
+        );
+
+        // The group 0x3e gives kind 2; a weapon of another type gives 0.
+        e.call_log = Some(vec![]);
+        stub(&mut e, ANIM_GROUP_GET_NUMBER, 0x3e);
+        fn_00899200(&mut e, actor, 9, 1);
+        assert_eq!(calls_to(&e, ACTOR_COMBAT_HIT)[0][4], 2);
+        e.call_log = Some(vec![]);
+        let weapon_slot = slot_target(&e, acquire, PROCESS_SLOT_CURRENT_WEAPON);
+        e.register_double(weapon_slot, |_, _| ret(0x8a00));
+        stub(&mut e, ENTRY_FORM, 0x8b00);
+        stub(&mut e, WEAPON_TYPE, 3);
+        fn_00899200(&mut e, actor, 9, 1);
+        assert_eq!(calls_to(&e, ACTOR_COMBAT_HIT)[0][4], 0);
+
+        // The test 008ace90 on the target drops it (no hit).
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACTOR_TEST_8ACE90, 1);
+        fn_00899200(&mut e, actor, 9, 1);
+        assert_eq!(call_count(&e, ACTOR_COMBAT_HIT), 0);
+    }
+
+    #[test]
+    fn fn_00899200_plays_the_weapon_sound_and_casts_when_nothing_is_hit() {
+        let mut e = engine();
+        let (actor, acquire) = hit_setup(&mut e);
+        let weapon_slot = slot_target(&e, acquire, PROCESS_SLOT_CURRENT_WEAPON);
+        e.register_double(weapon_slot, |_, _| ret(0x8a00));
+        stub(&mut e, ENTRY_FORM, 0x8b00);
+        stub(&mut e, WEAPON_SOUND_SET, 0x8c00);
+        stub(&mut e, SOUND_SET_FILE_NAME, 0x8d00);
+        stub(&mut e, AUDIO_INSTANCE, 0x8e00);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.5);
+        e.mem.set_f32(position + 4, 2.5);
+        e.mem.set_f32(position + 8, 3.5);
+        let position_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_POSITION);
+        e.register_double(position_slot, move |_, _| ret(position));
+        // The reach worker finds no target.
+        stub(&mut e, ACTOR_REACH_WORKER, 0);
+        // Spell part: the base form record names group 0xff.
+        stub(&mut e, ACTOR_BASE_FORM, 0x9000);
+        stub(&mut e, NODE_NEXT, 0x9100);
+        stub(&mut e, RECORD_TEST_406090, 1);
+        stub(&mut e, ACTOR_BASE_DATA_GET_FATIGUE, 0xff);
+        fn_00899200(&mut e, actor, 0, 1);
+        let play = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
+        assert_eq!(play.len(), 1);
+        assert_eq!(play[0][0], 0x8e00);
+        assert_eq!(play[0][2..], [0x8d00, 0x102, 0x8c00]);
+        let handle = play[0][1];
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_POSITION_XYZ),
+            vec![vec![
+                handle,
+                1.5f32.to_bits(),
+                2.5f32.to_bits(),
+                3.5f32.to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_OBJECT_TO_FOLLOW),
+            vec![vec![handle, 0x7c00]]
+        );
+        assert_eq!(calls_to(&e, SOUND_HANDLE_PLAY), vec![vec![handle, 0]]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_DESTROY), vec![vec![handle]]);
+        // The spell is cast: record at node + 0x18.
+        let caster = actor.addr() + ACTOR_MAGIC_CASTER_OFFSET;
+        let slot_40 = slot_target(&e, Ptr::new(caster), MAGIC_CASTER_SLOT_40);
+        let slot_48 = slot_target(&e, Ptr::new(caster), MAGIC_CASTER_SLOT_48);
+        assert_eq!(calls_to(&e, slot_40), vec![vec![caster, 0x9118]]);
+        assert_eq!(
+            calls_to(&e, slot_48),
+            vec![vec![caster, actor.addr() + 0x94]]
+        );
+        assert_eq!(calls_to(&e, RECORD_TEST_406090), vec![vec![0x9118 + 0xc]]);
+        assert_eq!(
+            calls_to(&e, MAGIC_CASTER_RELEASE_CAST),
+            vec![vec![caster, 0]]
+        );
+        assert_eq!(call_count(&e, ACTOR_COMBAT_HIT), 0);
+
+        // The record names a group the animation does not match: no cast.
+        e.call_log = Some(vec![]);
+        stub(&mut e, ACTOR_BASE_DATA_GET_FATIGUE, 0x20);
+        stub(&mut e, ANIMATION_ZERO_GLOBAL_TRANSFORM, 0x9200);
+        stub(&mut e, ANIM_GROUP_GET_NUMBER, 0x21);
+        fn_00899200(&mut e, actor, 0, 1);
+        assert_eq!(call_count(&e, slot_40), 0);
+        // ... and one it does.
+        stub(&mut e, ANIM_GROUP_GET_NUMBER, 0x20);
+        fn_00899200(&mut e, actor, 0, 1);
+        assert_eq!(call_count(&e, slot_40), 1);
+    }
+
+    #[test]
+    fn fn_00899200_gives_up_for_an_actor_that_the_test_8ae660_stops() {
+        let mut e = engine();
+        let (actor, _) = hit_setup(&mut e);
+        let slot_360 = slot_target(&e, actor.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        stub(&mut e, ACTOR_REACH_WORKER, 0);
+        stub(&mut e, ACTOR_TEST_8AE660, 1);
+        let controller_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x8900));
+        fn_00899200(&mut e, actor, 6, 1);
+        assert_eq!(calls_to(&e, ACTOR_TEST_8AE660), vec![vec![actor.addr(), 6]]);
+        assert_eq!(call_count(&e, CONTROLLER_WORKER_97F7D0), 0);
+        assert_eq!(call_count(&e, SOUND_HANDLE_PLAY), 0);
+    }
+
+    /// What the `HitData` doubles do: the allocation is a plain block, the
+    /// pointer holder stores and returns the pointer, and the initializer
+    /// writes 12.5 as the health damage.
+    fn hit_data_doubles(e: &mut Engine) {
+        stub_with(e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        stub_with(e, HIT_DATA_CONSTRUCT, |_, a| ret(a[0]));
+        stub_with(e, NI_POINTER_HIT_DATA_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        stub_with(e, NI_POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        stub_with(e, HIT_DATA_INITIALIZE, |e, a| {
+            e.mem.set_f32(a[0] + HIT_HEALTH_DAMAGE, 12.5);
+            e.mem.set_f32(a[0] + HIT_TOTAL_DAMAGE, 20.0);
+            e.mem.set_f32(a[0] + HIT_TARGETED_LIMB_DAMAGE, 8.0);
+            e.mem.set_u32(a[0] + HIT_ATTACK_SKILL, 0x1b);
+            ret(0)
+        });
+    }
+
+    /// An attacker with a drawn weapon entry, a target and the `HitData`
+    /// doubles. Returns (attacker, target, weapon entry).
+    fn combat_hit_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr<Actor>, u32) {
+        hit_data_doubles(e);
+        let player = actor_with(e, &[], None);
+        set_player(e, player);
+        let process = object(
+            e,
+            0x800,
+            &[
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+                (PROCESS_SLOT_580, ret(0)),
+            ],
+        );
+        let weapon_entry = 0x8a00u32;
+        let acquire = object(e, 0x10, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(weapon_entry))]);
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        stub(e, ENTRY_FORM, 0x8b00);
+        stub(e, WEAPON_TYPE, 6);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let slots = [
+            (ACTOR_SLOT_428, ret(0)),
+            (ACTOR_SLOT_360, ret(0)),
+            (ACTOR_SLOT_3D8, ret(1)),
+            (ACTOR_SLOT_32C, ret(5)),
+            (ACTOR_SLOT_328, ret(0)),
+            (ACTOR_SLOT_330, ret(0)),
+            (ACTOR_SLOT_4C0, ret(0)),
+            (ACTOR_SLOT_3C8, ret(0)),
+            (ACTOR_SLOT_POSITION, ret(position)),
+        ];
+        let attacker = actor_with(e, &slots, None);
+        e.set(attacker, Actor::pCurrentProcess, process);
+        let target_process = object(e, 0x800, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(0))]);
+        let target = actor_with(e, &[(ACTOR_SLOT_POSITION, ret(position))], None);
+        e.set(target, Actor::pCurrentProcess, target_process);
+        e.map(IMPACT_BLOCK_DEFAULT_SOUND, 4);
+        e.set_global(IMPACT_BLOCK_DEFAULT_SOUND, 0x4141u32);
+        e.map(VATS_OBJECT, 0x10);
+        (attacker, target, weapon_entry)
+    }
+
+    #[test]
+    fn actor_combat_hit_gives_up_without_a_usable_target() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        actor_combat_hit(&mut e, attacker, Ptr::NULL, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, HIT_DATA_INITIALIZE), 0);
+        stub(&mut e, ACTOR_TEST_8ACE90, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, HIT_DATA_INITIALIZE), 0);
+        stub(&mut e, ACTOR_TEST_8ACE90, 0);
+        stub(&mut e, ACTOR_PROCESS_LEVEL_TEST_437B90, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, HIT_DATA_INITIALIZE), 0);
+        assert_eq!(call_count(&e, NI_POINTER_HIT_DATA_DESTRUCT), 0);
+    }
+
+    #[test]
+    fn actor_combat_hit_plays_the_hit_sound_and_hits_the_target() {
+        let mut e = engine();
+        let (attacker, target, weapon_entry) = combat_hit_setup(&mut e);
+        actor_combat_hit(&mut e, attacker, target, 3, Ptr::NULL, 2);
+        let init = calls_to(&e, HIT_DATA_INITIALIZE);
+        assert_eq!(init.len(), 1);
+        assert_eq!(
+            init[0][1..],
+            [attacker.addr(), target.addr(), weapon_entry, 3, 0]
+        );
+        let hit_data = init[0][0];
+        // The slot 0x3d8 got the weapon entry, the target, the source and an
+        // out byte.
+        let connects = calls_to(&e, slot_target(&e, attacker.cast(), ACTOR_SLOT_3D8));
+        assert_eq!(
+            connects[0][..4],
+            [attacker.addr(), weapon_entry, target.addr(), 0]
+        );
+        // The counter is read, incremented and the attack skill passed on.
+        let setter = slot_target(&e, attacker.cast(), ACTOR_SLOT_328);
+        assert_eq!(calls_to(&e, setter), vec![vec![attacker.addr(), 6]]);
+        let skill = slot_target(&e, attacker.cast(), ACTOR_SLOT_330);
+        assert_eq!(calls_to(&e, skill), vec![vec![attacker.addr(), 0x1b]]);
+        // Flag 1 of the hit data is not set: the plain hit sound.
+        assert_eq!(
+            calls_to(&e, IMPACT_MIXER_PLAY_WEAPON_HIT),
+            vec![vec![
+                attacker.addr(),
+                12.5f32.to_bits(),
+                0.0f32.to_bits(),
+                target.addr(),
+                6,
+                0xffff_ffff,
+                0xffff_ffff,
+                0,
+                1
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_HIT_ME),
+            vec![vec![target.addr(), hit_data, 2]]
+        );
+        assert_eq!(calls_to(&e, NI_POINTER_HIT_DATA_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn actor_combat_hit_without_a_weapon_uses_the_unarmed_sound_type() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        let sound = calls_to(&e, IMPACT_MIXER_PLAY_WEAPON_HIT);
+        assert_eq!(sound[0][4], 0xffff_ffff);
+        assert_eq!(call_count(&e, ACTOR_HIT_ME), 1);
+    }
+
+    #[test]
+    fn actor_combat_hit_plays_the_block_sounds() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        // Flag 1 set, flag 2 clear: the block sound with the "connects"
+        // flag inverted, a zero form and the two positions.
+        stub_with(&mut e, HIT_DATA_FLAG_TEST, |_, a| ret(u32::from(a[1] == 1)));
+        stub_with(&mut e, HIT_DATA_INITIALIZE, |e, a| {
+            e.mem.set_f32(a[0] + HIT_HEALTH_DAMAGE, 12.5);
+            e.mem.set_f32(a[0] + HIT_PERCENT_BLOCKED, 0.25);
+            ret(0)
+        });
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        let one = 1.0f32.to_bits();
+        let two = 2.0f32.to_bits();
+        let three = 3.0f32.to_bits();
+        assert_eq!(
+            calls_to(&e, IMPACT_MIXER_PLAY_WEAPON_BLOCK),
+            vec![vec![6, 0, one, two, three, one, two, three, 0]]
+        );
+        // Slot 0x4c0 got the damage, the blocked fraction, target, source.
+        let report = slot_target(&e, attacker.cast(), ACTOR_SLOT_4C0);
+        assert_eq!(
+            calls_to(&e, report),
+            vec![vec![
+                attacker.addr(),
+                12.5f32.to_bits(),
+                0.25f32.to_bits(),
+                target.addr(),
+                0
+            ]]
+        );
+        assert_eq!(call_count(&e, IMPACT_MIXER_PLAY_WEAPON_HIT), 0);
+
+        // Both flags: the target's weapon form is used when it holds one,
+        // the default sound word otherwise.
+        e.call_log = Some(vec![]);
+        stub(&mut e, HIT_DATA_FLAG_TEST, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(
+            calls_to(&e, IMPACT_MIXER_PLAY_WEAPON_BLOCK),
+            vec![vec![6, 0x4141, one, two, three, one, two, three, 1]]
+        );
+        e.call_log = Some(vec![]);
+        let target_weapon = slot_target(
+            &e,
+            Ptr::new(e.get(target, Actor::pCurrentProcess).addr()),
+            PROCESS_SLOT_CURRENT_WEAPON,
+        );
+        e.register_double(target_weapon, |_, _| ret(0x8c00));
+        stub(&mut e, ENTRY_FORM, 0x8d00);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(
+            calls_to(&e, IMPACT_MIXER_PLAY_WEAPON_BLOCK),
+            vec![vec![6, 0x8d00, one, two, three, one, two, three, 1]]
+        );
+    }
+
+    #[test]
+    fn actor_combat_hit_does_not_hit_when_the_controller_has_other_targets() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        let controller_slot = slot_target(&e, attacker.cast(), ACTOR_SLOT_428);
+        e.register_double(controller_slot, |_, _| ret(0x9800));
+        stub(&mut e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET),
+            vec![vec![0x9800, target.addr()]]
+        );
+        assert_eq!(call_count(&e, ACTOR_HIT_ME), 0);
+        assert_eq!(call_count(&e, NI_POINTER_HIT_DATA_DESTRUCT), 1);
+        // When it does have the target, the hit goes ahead.
+        e.call_log = Some(vec![]);
+        stub(&mut e, COMBAT_CONTROLLER_IS_ACTOR_A_COMBAT_TARGET, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, ACTOR_HIT_ME), 1);
+    }
+
+    #[test]
+    fn actor_combat_hit_vats_merges_the_action_hit_data() {
+        let mut e = engine();
+        let (attacker, target, weapon_entry) = combat_hit_setup(&mut e);
+        let slot_360 = slot_target(&e, attacker.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == VATS_OBJECT { 4 } else { 0x8b00 })
+        });
+        let action = e.mem.alloc(0x20);
+        let saved = e.mem.alloc(0x64);
+        e.mem.set_u32(action + 0x14, saved);
+        e.mem.set_u8(action + 4, 0);
+        stub(&mut e, VATS_GET_CURRENT_ACTION, action);
+        // The freshly initialized data carries a location, a direction and
+        // damages, which are merged into the copy.
+        stub_with(&mut e, HIT_DATA_INITIALIZE, |e, a| {
+            for i in 0..3 {
+                e.mem.set_f32(a[0] + HIT_LOCATION + 4 * i, 1.0 + i as f32);
+                e.mem.set_f32(a[0] + HIT_DIRECTION + 4 * i, 4.0 + i as f32);
+            }
+            e.mem.set_f32(a[0] + HIT_HEALTH_DAMAGE, 10.0);
+            e.mem.set_f32(a[0] + HIT_TOTAL_DAMAGE, 11.0);
+            e.mem.set_f32(a[0] + HIT_FATIGUE_DAMAGE, 12.0);
+            e.mem.set_f32(a[0] + HIT_ARMOR_DAMAGE, 13.0);
+            e.mem.set_f32(a[0] + HIT_TARGETED_LIMB_DAMAGE, 14.0);
+            ret(0)
+        });
+        actor_combat_hit(&mut e, attacker, target, 3, Ptr::NULL, 1);
+        let copy = calls_to(&e, HIT_DATA_COPY);
+        assert_eq!(copy.len(), 1);
+        assert_eq!(copy[0][1], saved);
+        let hit_data = copy[0][0];
+        let init = calls_to(&e, HIT_DATA_INITIALIZE);
+        assert_eq!(init.len(), 1);
+        assert_ne!(init[0][0], hit_data);
+        assert_eq!(
+            init[0][1..],
+            [attacker.addr(), target.addr(), weapon_entry, 3, 0]
+        );
+        assert_eq!(e.mem.f32(hit_data + HIT_LOCATION + 8), 3.0);
+        assert_eq!(e.mem.f32(hit_data + HIT_DIRECTION + 4), 5.0);
+        assert_eq!(e.mem.f32(hit_data + HIT_HEALTH_DAMAGE), 10.0);
+        assert_eq!(e.mem.f32(hit_data + HIT_FATIGUE_DAMAGE), 12.0);
+        assert_eq!(e.mem.f32(hit_data + HIT_ARMOR_DAMAGE), 13.0);
+        assert_eq!(e.mem.f32(hit_data + HIT_TARGETED_LIMB_DAMAGE), 14.0);
+        assert_eq!(
+            calls_to(&e, ACTOR_HIT_ME)[0][..2],
+            [target.addr(), hit_data]
+        );
+
+        // With the action's byte at +4 set, the damages are not merged.
+        e.call_log = Some(vec![]);
+        e.mem.set_u8(action + 4, 1);
+        e.mem.set_f32(saved + HIT_HEALTH_DAMAGE, 99.0);
+        actor_combat_hit(&mut e, attacker, target, 3, Ptr::NULL, 1);
+        assert_eq!(call_count(&e, ACTOR_HIT_ME), 1);
+    }
+
+    #[test]
+    fn actor_combat_hit_vats_scales_the_damage_of_a_source_reference() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        let slot_360 = slot_target(&e, attacker.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == VATS_OBJECT { 4 } else { 0x8b00 })
+        });
+        let action = e.mem.alloc(0x20);
+        let saved = e.mem.alloc(0x64);
+        e.mem.set_u32(action + 0x14, saved);
+        e.mem.set_u8(action + 4, 1);
+        stub(&mut e, VATS_GET_CURRENT_ACTION, action);
+        let source = e.mem.alloc(0x10);
+        // The source reference is not flagged; the weapon fires 4
+        // projectiles; the base object test passes and the reduction is 1.
+        stub(&mut e, REFR_FLAG_TEST, 0);
+        stub(&mut e, ITEM_CHANGE_HAS_MOD_EFFECT_ACTIVE, 1);
+        stub(&mut e, SOURCE_WEAPON_LOOKUP, 0x9a00);
+        stub(&mut e, WEAPON_GET_NUM_PROJECTILES, 4);
+        stub(&mut e, ACTOR_BASE_FORM, 0x9b00);
+        stub(&mut e, BASE_TEST_4FD3C0, 1);
+        stub_float(&mut e, REFR_GETTER_885D70, 1.0);
+        // The merge is skipped (action byte 1), so the damages the copy holds
+        // are those of the saved data.
+        e.mem.set_f32(saved + HIT_HEALTH_DAMAGE, 16.0);
+        stub_with(&mut e, HIT_DATA_COPY, |e, a| {
+            for offset in [
+                HIT_HEALTH_DAMAGE,
+                HIT_TOTAL_DAMAGE,
+                HIT_TARGETED_LIMB_DAMAGE,
+            ] {
+                let value = e.mem.f32(a[1] + offset);
+                e.mem.set_f32(a[0] + offset, value);
+            }
+            ret(0)
+        });
+        e.mem.set_f32(saved + HIT_TOTAL_DAMAGE, 20.0);
+        e.mem.set_f32(saved + HIT_TARGETED_LIMB_DAMAGE, 8.0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::new(source), 0);
+        // The source reference is recorded and the count passed on.
+        let lookup = calls_to(&e, SOURCE_WEAPON_LOOKUP);
+        assert_eq!(lookup, vec![vec![source, 1, 0, attacker.addr()]]);
+        let hit_me = calls_to(&e, ACTOR_HIT_ME);
+        let hit_data = hit_me[0][1];
+        assert_eq!(e.mem.u32(hit_data + HIT_SOURCE_REF), source);
+        // 16 / 4 = 4 health, then times (1 - (4 - 1) / 4) = 0.25 -> 1.
+        assert_eq!(e.mem.f32(hit_data + HIT_HEALTH_DAMAGE), 1.0);
+        // 20 / 4 = 5 -> 1.25; 8 / 4 = 2 -> 0.5.
+        assert_eq!(e.mem.f32(hit_data + HIT_TOTAL_DAMAGE), 1.25);
+        assert_eq!(e.mem.f32(hit_data + HIT_TARGETED_LIMB_DAMAGE), 0.5);
+    }
+
+    #[test]
+    fn actor_combat_hit_vats_clears_a_flagged_source_reference() {
+        let mut e = engine();
+        let (attacker, target, _) = combat_hit_setup(&mut e);
+        let slot_360 = slot_target(&e, attacker.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == VATS_OBJECT { 4 } else { 0x8b00 })
+        });
+        let action = e.mem.alloc(0x20);
+        let saved = e.mem.alloc(0x64);
+        e.mem.set_u32(action + 0x14, saved);
+        e.mem.set_u8(action + 4, 1);
+        stub(&mut e, VATS_GET_CURRENT_ACTION, action);
+        let source = e.mem.alloc(0x10);
+        stub(&mut e, REFR_FLAG_TEST, 1);
+        stub_with(&mut e, HIT_DATA_COPY, |e, a| {
+            e.mem.set_f32(a[0] + HIT_HEALTH_DAMAGE, 9.0);
+            e.mem.set_u32(a[0] + HIT_CRITICAL_EFFECT, 0x77);
+            ret(0)
+        });
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::new(source), 0);
+        let flag_test = calls_to(&e, REFR_FLAG_TEST);
+        assert_eq!(flag_test, vec![vec![source, 0x20000]]);
+        let hit_data = calls_to(&e, ACTOR_HIT_ME)[0][1];
+        assert_eq!(e.mem.u32(hit_data + HIT_CRITICAL_EFFECT), 0);
+        assert_eq!(e.mem.f32(hit_data + HIT_HEALTH_DAMAGE), 0.0);
+        assert_eq!(
+            calls_to(&e, HIT_DATA_CLEAR_EFFECT),
+            vec![vec![hit_data, 0x3fc, 0]]
+        );
+        // The damage is zero, so the projectile split is skipped.
+        assert_eq!(call_count(&e, SOURCE_WEAPON_LOOKUP), 0);
+    }
+
+    #[test]
+    fn actor_combat_hit_casts_the_weapon_effect_past_its_threshold() {
+        let mut e = engine();
+        let (attacker, target, weapon_entry) = combat_hit_setup(&mut e);
+        // The form's list holds a record at node + 0x18 whose embedded
+        // object (record + 0xc) has a slot 8 reporting 9.0 against the
+        // entry's threshold of 5.0.
+        let node = e.mem.alloc(0x60);
+        stub_with(&mut e, NODE_NEXT, move |_, a| {
+            ret(if a[0] == 0x8b74 { node } else { 0 })
+        });
+        embedded_table(&mut e, node + 0x18 + 0xc, &[(8, float_ret(9.0))]);
+        stub_float(&mut e, ITEM_CHANGE_GETTER_4BD350, 5.0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        let process = e.get(attacker, Actor::pCurrentProcess);
+        let slot_580 = slot_target(&e, process, PROCESS_SLOT_580);
+        assert_eq!(calls_to(&e, slot_580), vec![vec![process.addr(), 1, 0, 0]]);
+        let value_slot = e.mem.u32(e.mem.u32(node + 0x18 + 0xc) + 8);
+        assert_eq!(
+            calls_to(&e, value_slot),
+            vec![vec![node + 0x18 + 0xc, attacker.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, ITEM_CHANGE_GETTER_4BD350),
+            vec![vec![weapon_entry]]
+        );
+
+        // Below the threshold nothing happens.
+        e.call_log = Some(vec![]);
+        stub_float(&mut e, ITEM_CHANGE_GETTER_4BD350, 9.0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, slot_580), 0);
+
+        // Without a form record the entry's poison is used (record + 0x30).
+        e.call_log = Some(vec![]);
+        stub(&mut e, NODE_NEXT, 0);
+        let poison = e.mem.alloc(0x60);
+        embedded_table(&mut e, poison + 0x30 + 0xc, &[(8, float_ret(9.0))]);
+        stub(&mut e, ITEM_CHANGE_GET_POISON, poison);
+        stub_float(&mut e, ITEM_CHANGE_GETTER_4BD350, 5.0);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, slot_580), 1);
+        // A hit that does not connect (slot 0x3d8 false) casts nothing.
+        e.call_log = Some(vec![]);
+        let connects = slot_target(&e, attacker.cast(), ACTOR_SLOT_3D8);
+        e.register_double(connects, |_, _| ret(0));
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, slot_580), 0);
+    }
+
+    #[test]
+    fn actor_combat_hit_wears_the_weapon_and_clears_use_weapon_damage() {
+        let mut e = engine();
+        let (attacker, target, weapon_entry) = combat_hit_setup(&mut e);
+        let slot_360 = slot_target(&e, attacker.cast(), ACTOR_SLOT_360);
+        e.register_double(slot_360, |_, _| ret(1));
+        stub_with(&mut e, ENTRY_FORM, |_, a| {
+            ret(if a[0] == VATS_OBJECT { 0 } else { 0x8b00 })
+        });
+        stub_with(&mut e, HIT_DATA_INITIALIZE, |e, a| {
+            e.mem.set_f32(a[0] + HIT_HEALTH_DAMAGE, 12.5);
+            e.mem.set_f32(a[0] + HIT_DAMAGE_TO_WEAPON, 1.5);
+            ret(0)
+        });
+        stub(&mut e, GET_CURRENT_PACKAGE, 0x9c00);
+        stub(&mut e, PACKAGE_GET_USE_WEAPON_PACKAGE_DATA, 0x9d00);
+        stub(&mut e, USE_WEAPON_DATA_TEST, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        let wear = slot_target(&e, attacker.cast(), ACTOR_SLOT_3C8);
+        assert_eq!(
+            calls_to(&e, wear),
+            vec![vec![attacker.addr(), weapon_entry, 1.5f32.to_bits(), 0]]
+        );
+        // The use-weapon package data zeroes the damage before the hit.
+        let hit_data = calls_to(&e, ACTOR_HIT_ME)[0][1];
+        assert_eq!(e.mem.f32(hit_data + HIT_HEALTH_DAMAGE), 0.0);
+        assert_eq!(
+            calls_to(&e, PACKAGE_GET_USE_WEAPON_PACKAGE_DATA),
+            vec![vec![0x9c00]]
+        );
+
+        // A weapon form with the flag bit set is not worn.
+        e.call_log = Some(vec![]);
+        stub(&mut e, FORM_FLAG_100_BIT_5, 1);
+        actor_combat_hit(&mut e, attacker, target, 0, Ptr::NULL, 0);
+        assert_eq!(call_count(&e, wear), 0);
+    }
+
+    /// Allocates a zero cell per setting address and makes the three
+    /// setting-pointer functions return the cell of the address they are
+    /// called on. Returns the address-to-cell table.
+    fn setting_cells(e: &mut Engine, addresses: &[u32]) -> std::collections::HashMap<u32, u32> {
+        let mut table = std::collections::HashMap::new();
+        for address in addresses {
+            table.insert(*address, e.mem.alloc(8));
+        }
+        for function in [
+            SETTING_GET_VALUE_POINTER,
+            SETTING_GET_INT_POINTER,
+            SETTING_GET_BOOL_POINTER,
+        ] {
+            let copy = table.clone();
+            e.register_double(function, move |_, a| ret(copy[&a[0]]));
+        }
+        table
+    }
+
+    /// An actor of `0x1000` bytes with the given virtual slots (the
+    /// player's `+0xe2d` byte is read by `Kill`).
+    fn big_actor(e: &mut Engine, slots: &[(u32, Ret)]) -> Ptr<Actor> {
+        object(e, 0x1000, slots).cast::<Actor>()
+    }
+
+    /// The slots a killed NPC answers.
+    fn npc_slots() -> Vec<(u32, Ret)> {
+        vec![
+            (ACTOR_SLOT_22C, ret(0)),
+            (ACTOR_SLOT_1A0, ret(0)),
+            (ACTOR_SLOT_360, ret(0)),
+            (ACTOR_SLOT_2E8, ret(0)),
+            (ACTOR_SLOT_218, ret(1)),
+            (ACTOR_SLOT_21C, ret(0)),
+            (ACTOR_SLOT_STOP_COMBAT, ret(0)),
+            (ACTOR_SLOT_234, ret(0)),
+            (ACTOR_SLOT_428, ret(0)),
+            (ACTOR_SLOT_1D0, ret(0)),
+            (ACTOR_SLOT_48, ret(0)),
+            (ACTOR_SLOT_2A0, ret(0)),
+            (ACTOR_SLOT_448, ret(0)),
+            (ACTOR_SLOT_38C, ret(0)),
+            (ACTOR_SLOT_MODIFY_ACTOR_VALUE, ret(0)),
+            (ACTOR_SLOT_GET_HEADING, float_ret(0.0)),
+            (PLAYER_SLOT_488, ret(0)),
+        ]
+    }
+
+    /// The slots a process object answers during `Kill`.
+    fn process_slots() -> Vec<(u32, Ret)> {
+        vec![
+            (PROCESS_SLOT_1C4, ret(0)),
+            (PROCESS_SLOT_6C4, ret(0)),
+            (PROCESS_SLOT_180, ret(0)),
+            (PROCESS_SLOT_310, ret(0)),
+            (PROCESS_SLOT_4C8, ret(0)),
+            (PROCESS_SLOT_4D0, ret(0)),
+            (PROCESS_SLOT_660, ret(0)),
+            (PROCESS_SLOT_28, ret(0)),
+            (PROCESS_SLOT_6A0, ret(0)),
+            (PROCESS_SLOT_4B4, ret(0)),
+            (PROCESS_SLOT_40C, ret(0)),
+            (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+            (PROCESS_SLOT_52C, ret(0)),
+            (PROCESS_SLOT_730, float_ret(0.0)),
+            (PROCESS_SLOT_3F4, ret(0)),
+            (PROCESS_SLOT_614, ret(0)),
+            (PROCESS_SLOT_E8, ret(0)),
+            (PROCESS_SLOT_2FC, ret(0)),
+            (PROCESS_SLOT_534, ret(0)),
+        ]
+    }
+
+    /// A victim with a process, a player and the settings, ready for
+    /// `actor_kill`. Returns (victim, process, player, setting cells).
+    fn kill_setup(
+        e: &mut Engine,
+    ) -> (
+        Ptr<Actor>,
+        Ptr,
+        Ptr<Actor>,
+        std::collections::HashMap<u32, u32>,
+    ) {
+        let cells = setting_cells(
+            e,
+            &[
+                ESSENTIAL_SETTING,
+                DEATH_REPORT_SETTING,
+                LOW_LEVEL_HEALTH_SETTING,
+                ESSENTIAL_DOWN_TIMER_SETTING,
+                KARMA_REWARD_SETTING,
+                KARMA_REWARD_CREATURE_SETTING,
+                KARMA_REWARD_ALIGNMENT_SETTINGS[0],
+                KARMA_REWARD_ALIGNMENT_SETTINGS[2],
+                KARMA_REWARD_ALIGNMENT_SETTINGS[3],
+                KARMA_REWARD_ALIGNMENT_SETTINGS[4],
+                WEAPON_NUMBER_SETTING,
+                DEATH_VOICE_DISTANCE_SETTING,
+                GREETING_TIMER_SETTING,
+                DEATH_IMPULSE_SETTING,
+                COMBATANT_COUNT_SETTING,
+                DROP_WEAPON_CHANCE_SETTING,
+                SLOW_MO_SETTING,
+            ],
+        );
+        let process = object(e, 0x800, &process_slots());
+        let player = big_actor(e, &npc_slots());
+        e.mem.set_u32(player.addr() + 0xa4, 0);
+        set_player(e, player);
+        let victim = big_actor(e, &npc_slots());
+        e.set(victim, Actor::pCurrentProcess, process);
+        embedded_table(
+            e,
+            victim.addr() + ACTOR_VALUE_OWNER_OFFSET,
+            &[(0x00, ret(100)), (0x0c, float_ret(30.0))],
+        );
+        e.map(TES_SINGLETON, 4);
+        e.set_global(TES_SINGLETON, 0x8800u32);
+        e.map(COMBAT_MANAGER, 4);
+        e.set_global(COMBAT_MANAGER, 0x8900u32);
+        e.map(VATS_OBJECT, 0x10);
+        e.map(MAGIC_SHADER_HOLDER, 4);
+        let shader_owner = e.mem.alloc(0x700);
+        e.set_global(MAGIC_SHADER_HOLDER, shader_owner);
+        e.map(COMBAT_DIALOGUE_MANAGER, 4);
+        let karma_base = e.mem.alloc(0x200);
+        embedded_table(e, karma_base + 0x100, &[(0x0c, float_ret(0.0))]);
+        stub(e, ACTOR_BASE_FORM, karma_base);
+        e.map(0x011f_158c, 4);
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, process.addr());
+        stub_with(e, OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        stub(e, ACTOR_GET_ANIM_GROUP_ADDRESS, 0xff);
+        (victim, process, player, cells)
+    }
+
+    #[test]
+    fn actor_kill_does_nothing_for_protected_actors() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        let slot = slot_target(&e, victim.cast(), ACTOR_SLOT_22C);
+        e.register_double(slot, |_, _| ret(1));
+        actor_kill(&mut e, victim, Ptr::NULL, 3.0);
+        assert_eq!(call_count(&e, SOUND_HANDLE_CONSTRUCT), 0);
+
+        // Slot 0x1a0 stops everything but the player.
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        let slot = slot_target(&e, victim.cast(), ACTOR_SLOT_1A0);
+        e.register_double(slot, |_, _| ret(1));
+        actor_kill(&mut e, victim, Ptr::NULL, 3.0);
+        assert_eq!(call_count(&e, SOUND_HANDLE_CONSTRUCT), 0);
+    }
+
+    #[test]
+    fn actor_kill_forgets_the_sounds_and_queues_the_kill() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        let attacker = big_actor(&mut e, &npc_slots());
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, GET_TES, 0x8a00);
+        stub(&mut e, SOUND_HANDLE_IS_PLAYING, 1);
+        actor_kill(&mut e, victim, attacker, 7.5);
+        let constructed = calls_to(&e, SOUND_HANDLE_CONSTRUCT);
+        assert_eq!(constructed.len(), 3);
+        let handles = [constructed[0][0], constructed[1][0], constructed[2][0]];
+        assert_eq!(handles[1], handles[0] + 12);
+        assert_eq!(handles[2], handles[0] + 24);
+        // The extra data list is `this + 0x44` (accessor `005d43c0` is a
+        // double returning 0 here).
+        assert_eq!(
+            calls_to(&e, EXTRA_GET_WEAPON_ATTACK_SOUND),
+            vec![vec![0, handles[0]]]
+        );
+        assert_eq!(
+            calls_to(&e, EXTRA_SET_WEAPON_IDLE_SOUND),
+            vec![vec![0, handles[1]]]
+        );
+        // The attack and idle sounds fade out while they play; the awake
+        // sound is stopped and released.
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_FADE_OUT_AND_RELEASE),
+            vec![vec![handles[0], 500], vec![handles[1], 500]]
+        );
+        assert_eq!(calls_to(&e, SOUND_HANDLE_STOP), vec![vec![handles[2]]]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_RELEASE), vec![vec![handles[2]]]);
+        // The kill is queued with the damage in a block and the killer
+        // remembered.
+        let queued = calls_to(&e, QUEUE_ACTOR_KILL);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0][..2], [0x8a00, victim.addr()]);
+        assert_eq!(queued[0][3], 0);
+        assert_eq!(e.mem.f32(queued[0][2]), 7.5);
+        assert_eq!(e.get(victim, Actor::pMyKiller).addr(), attacker.addr());
+        // The handles are destroyed in reverse order and nothing else runs.
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_DESTROY),
+            vec![vec![handles[2]], vec![handles[1]], vec![handles[0]]]
+        );
+        assert_eq!(call_count(&e, ACTOR_SET_LIFE_STATE), 0);
+
+        // A sound that is not playing is only released.
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, GET_TES, 0x8a00);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(call_count(&e, SOUND_HANDLE_FADE_OUT_AND_RELEASE), 0);
+        assert_eq!(call_count(&e, SOUND_HANDLE_RELEASE), 3);
+    }
+
+    #[test]
+    fn actor_kill_without_a_process_finishes_with_the_death_stuff() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_LIFE_STATE),
+            vec![vec![victim.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_HAVOK_WEAPON),
+            vec![vec![victim.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_DO_DEATH_STUFF),
+            vec![vec![victim.addr()]]
+        );
+        assert_eq!(calls_to(&e, REFR_RUN_SCRIPT), vec![vec![victim.addr()]]);
+        assert_eq!(e.mem.u8(victim.addr() + 0x118), 1);
+        assert_eq!(e.mem.u8(victim.addr() + 0xc4), 0);
+        assert_eq!(
+            calls_to(&e, MOBILE_OBJECT_STOP_CURRENT_DIALOGUE),
+            vec![vec![victim.addr()]]
+        );
+        let stop = slot_target(&e, victim.cast(), ACTOR_SLOT_STOP_COMBAT);
+        assert_eq!(calls_to(&e, stop), vec![vec![victim.addr(), 0]]);
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_WORKER_96E2F0),
+            vec![vec![PROCESS_LISTS, victim.addr()]]
+        );
+        assert_eq!(calls_to(&e, SOUND_HANDLE_DESTROY).len(), 3);
+        // TES learns about the original base form.
+        assert_eq!(calls_to(&e, TES_WORKER_459060).len(), 1);
+    }
+
+    #[test]
+    fn actor_kill_clears_collision_and_ragdoll_state() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        let fixed = slot_target(&e, victim.cast(), ACTOR_SLOT_234);
+        e.register_double(fixed, |_, _| ret(1));
+        let collision = slot_target(&e, victim.cast(), ACTOR_SLOT_1D0);
+        e.register_double(collision, |_, _| ret(0x9000));
+        e.mem.set_u32(victim.addr() + 0xac, 0x9100);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(
+            calls_to(&e, BHK_RIGID_BODY_SET_FIXED),
+            vec![vec![0x9000, 0, 1]]
+        );
+        assert_eq!(
+            calls_to(&e, BHK_RAGDOLL_DISABLE_RAGDOLL_ANIM),
+            vec![vec![0x9100, 1]]
+        );
+    }
+
+    #[test]
+    fn actor_kill_by_the_player_records_the_statistics_and_karma() {
+        let mut e = engine();
+        let (victim, process, player, cells) = kill_setup(&mut e);
+        // The player's side: its slot 0x360 is true, it can be killed...
+        let player_360 = slot_target(&e, player.cast(), ACTOR_SLOT_360);
+        e.register_double(player_360, |_, _| ret(1));
+        e.mem
+            .set_f32(cells[&KARMA_REWARD_ALIGNMENT_SETTINGS[0]], 5.0);
+        stub(&mut e, GET_ALIGNMENT_FOR_KARMA, 0);
+        stub(&mut e, ACTOR_HAS_FACTION_THAT_CARES_ABOUT_CRIME, 1);
+        stub(&mut e, PLAYER_TEST_4997B0, 1);
+        stub(&mut e, REFR_BASE_FORM, 0x9300);
+        let _ = process;
+        let karma_owner = e.mem.alloc(0x200);
+        embedded_table(&mut e, karma_owner + 0x100, &[(0x0c, float_ret(10.0))]);
+        stub(&mut e, ACTOR_BASE_FORM, karma_owner);
+        stub_with(&mut e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        stub(&mut e, CREATURE_GETTER_59F3A0, 0);
+        stub(&mut e, RTTI_DYNAMIC_CAST, 0x9400);
+        actor_kill(&mut e, victim, player, 1.0);
+
+        assert_eq!(
+            calls_to(&e, HANDLE_ENTRY_POINT),
+            vec![vec![0x15, player.addr(), victim.addr(), victim.addr()]]
+        );
+        // The three statistics calls: weapon type 0 + 1, slot 0x2d without
+        // a weapon.
+        let stats = calls_to(&e, STATISTICS_WORKER_5F5950);
+        assert_eq!(stats.len(), 3);
+        assert_eq!(stats[0], vec![1, 1, 0x9300, 0, 0, 0x2d, 1]);
+        assert_eq!(stats[1], vec![0, 1, 0x9300, 0, 0, 0x2d, 1]);
+        assert_eq!(stats[2], vec![2, 1, 0, 0, 0, 0, 1]);
+        // The kill counts (NPC kill, overall) and the murderer mark.
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT), vec![vec![2], vec![0x23]]);
+        assert_eq!(
+            calls_to(&e, PLAYER_SET_IS_A_MURDERER),
+            vec![vec![player.addr()]]
+        );
+        // Karma: alignment 0 uses its own setting; the amount is truncated.
+        assert_eq!(
+            calls_to(&e, GET_ALIGNMENT_FOR_KARMA),
+            vec![vec![10.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAYER_REWARD_KARMA),
+            vec![vec![player.addr(), 5]]
+        );
+        // The player is not detected and holds no weapon: the murder mark
+        // is cleared again.
+        assert_eq!(e.mem.u8(victim.addr() + 0xc4), 0);
+        assert_eq!(e.get(victim, Actor::pMyKiller).addr(), player.addr());
+    }
+
+    #[test]
+    fn actor_kill_by_the_player_gives_experience() {
+        let mut e = engine();
+        let (victim, process, player, _) = kill_setup(&mut e);
+        // The tracked damage is 12.0 against a base health of 100.
+        let tracked = slot_target(&e, process, PROCESS_SLOT_730);
+        e.register_double(tracked, |_, _| float_ret(12.0));
+        stub(&mut e, TRACKED_DAMAGE_TEST, 1);
+        stub(&mut e, ACTOR_GETTER_87F9F0, 0x77);
+        stub(&mut e, GET_EXPERIENCE_POINTS, 50);
+        stub(&mut e, PLAYER_INT_5BE4D0, 2);
+        stub_float(&mut e, SCALE_EXPERIENCE, 100.0);
+        stub_float(&mut e, FLOAT_ROUND, 100.0);
+        stub_with(&mut e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+        let player_488 = slot_target(&e, player.cast(), PLAYER_SLOT_488);
+        e.register_double(player_488, |_, _| ret(0));
+        actor_kill(&mut e, victim, player, 1.0);
+        assert_eq!(
+            calls_to(&e, TRACKED_DAMAGE_TEST),
+            vec![vec![12.0f32.to_bits(), 100.0f32.to_bits()]]
+        );
+        // Experience points for a non-creature (flag 1) and the word.
+        assert_eq!(calls_to(&e, GET_EXPERIENCE_POINTS), vec![vec![1, 0x77]]);
+        assert_eq!(
+            calls_to(&e, SCALE_EXPERIENCE),
+            vec![vec![50.0f32.to_bits(), 2]]
+        );
+        assert_eq!(calls_to(&e, player_488), vec![vec![player.addr(), 100]]);
+        // A teammate-owned victim (process level flag) only counts when the
+        // attacker's slot 0x360 is true.
+        e.call_log = Some(vec![]);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        actor_kill(&mut e, victim, player, 1.0);
+        assert_eq!(call_count(&e, GET_EXPERIENCE_POINTS), 0);
+    }
+
+    #[test]
+    fn actor_kill_of_an_essential_actor_at_a_low_process_level() {
+        let mut e = engine();
+        let (victim, _, _, cells) = kill_setup(&mut e);
+        e.mem.set_u8(cells[&ESSENTIAL_SETTING], 1);
+        e.mem.set_f32(cells[&LOW_LEVEL_HEALTH_SETTING], 0.5);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
+        stub(&mut e, ACTOR_PROCESS_LEVEL_IS_3, 1);
+        e.mem.set_u32(victim.addr() + 0xb0, 0x9500);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // 0.5 * 100 - 30 = 20.
+        let modify = slot_target(&e, victim.cast(), ACTOR_SLOT_MODIFY_ACTOR_VALUE);
+        assert_eq!(
+            calls_to(&e, modify),
+            vec![vec![victim.addr(), 0x10, 20.0f32.to_bits(), 0]]
+        );
+        assert_eq!(call_count(&e, SOUND_HANDLE_DESTROY), 3);
+        // The common tail does not run.
+        assert_eq!(call_count(&e, BHK_RAGDOLL_PENETRATION_UTIL_CLEAR), 0);
+        assert_eq!(call_count(&e, ACTOR_SET_LIFE_STATE), 0);
+    }
+
+    #[test]
+    fn actor_kill_of_an_essential_actor_puts_it_into_life_state_six() {
+        let mut e = engine();
+        let (victim, process, _, cells) = kill_setup(&mut e);
+        e.mem.set_u8(cells[&ESSENTIAL_SETTING], 1);
+        e.mem.set_f32(cells[&ESSENTIAL_DOWN_TIMER_SETTING], 3.0);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
+        stub(&mut e, ACTOR_GET_CURRENT_EDITOR_PACKAGE, 0x9600);
+        stub(&mut e, PACKAGE_TYPE, 5);
+        stub(&mut e, PROCESS_LEVEL_NUMBER, 6);
+        stub(&mut e, SETTING_GET_STRING, 0x9700);
+        stub(&mut e, REFR_GET_NAME, 0x9800);
+        e.map(TWENTY, 4);
+        e.set_global(TWENTY, 20.0f32);
+        e.map(MESSAGE_DURATION, 4);
+        e.set_global(MESSAGE_DURATION, 2.0f32);
+        e.mem.set_u32(victim.addr() + 0xb0, 0);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        let down_timer = slot_target(&e, process, PROCESS_SLOT_E8);
+        assert_eq!(
+            calls_to(&e, down_timer),
+            vec![vec![process.addr(), 3.0f32.to_bits()]]
+        );
+        let breath = slot_target(&e, process, PROCESS_SLOT_2FC);
+        assert_eq!(
+            calls_to(&e, breath),
+            vec![vec![process.addr(), 20.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE),
+            vec![vec![victim.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_CLEAR_IN_COMBAT),
+            vec![vec![victim.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, MAGIC_CASTER_INTERRUPT_CAST),
+            vec![vec![victim.addr() + 0x88]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_SET_LIFE_STATE),
+            vec![vec![victim.addr(), 6]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_RESTORE_FULL_HEALTH_AND_CONDITIONS),
+            vec![vec![victim.addr()]]
+        );
+        // Level 6: the message "<name> <string>".
+        let sprintf = calls_to(&e, SPRINTF);
+        assert_eq!(sprintf.len(), 1);
+        assert_eq!(sprintf[0][1..], [TWO_STRINGS_FORMAT, 0x9800, 0x9700]);
+        assert_eq!(
+            calls_to(&e, SHOW_MESSAGE),
+            vec![vec![
+                sprintf[0][0],
+                0,
+                MESSAGE_ICON_SURPRISED,
+                0,
+                2.0f32.to_bits(),
+                0
+            ]]
+        );
+        // The package of type 0xf would not be interrupted.
+        e.call_log = Some(vec![]);
+        stub(&mut e, PACKAGE_TYPE, 0xf);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(call_count(&e, ACTOR_END_INTERRUPT_PACKAGE), 0);
+        // The dead flag is not set for an essential actor.
+        assert_eq!(e.mem.u8(victim.addr() + 0x118), 0);
+        assert_eq!(call_count(&e, ACTOR_DO_DEATH_STUFF), 0);
+    }
+
+    #[test]
+    fn actor_kill_gives_the_body_an_impulse() {
+        let mut e = engine();
+        let (victim, process, _, cells) = kill_setup(&mut e);
+        let node = e.mem.alloc(0x40);
+        let collision = slot_target(&e, victim.cast(), ACTOR_SLOT_1D0);
+        e.register_double(collision, move |_, _| ret(node));
+        stub(&mut e, ACTOR_COLLISION_OBJECT, node);
+        e.mem.set_f32(cells[&GREETING_TIMER_SETTING], 4.0);
+        e.mem.set_f32(cells[&DEATH_IMPULSE_SETTING], 2.0);
+        // The proxy velocity has a length: its direction is normalized.
+        stub_float(&mut e, VECTOR_LENGTH_4586D0, 1.0);
+        e.map(DEFAULT_DIRECTION, 12);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        let greeting = slot_target(&e, process, PROCESS_SLOT_4B4);
+        assert_eq!(
+            calls_to(&e, greeting),
+            vec![vec![process.addr(), 4.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, BHK_WORLD_SET_MOTION),
+            vec![vec![node, 1, 1, 1, 1]]
+        );
+        let scale = calls_to(&e, VECTOR_SCALE_IN_PLACE);
+        assert_eq!(scale.len(), 1);
+        assert_eq!(scale[0][1], 2.0f32.to_bits());
+        let velocity = calls_to(&e, TES_HAVOK_ADD_VELOCITY);
+        assert_eq!(velocity, vec![vec![node, scale[0][0], 0]]);
+        let flags = slot_target(&e, victim.cast(), ACTOR_SLOT_48);
+        assert_eq!(calls_to(&e, flags), vec![vec![victim.addr(), 4]]);
+        assert_eq!(call_count(&e, VECTOR_COPY_458620), 1);
+        // The weapon drop runs (it asks the process for the other-hand
+        // item); no combatant limit is exceeded and no commanding actor.
+        let other_hand = slot_target(&e, process, PROCESS_SLOT_534);
+        assert_eq!(call_count(&e, other_hand), 1);
+        assert_eq!(call_count(&e, ACTOR_DO_DEATH_STUFF), 0);
+    }
+
+    #[test]
+    fn actor_kill_uses_the_heading_when_the_velocity_is_zero() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        let node = e.mem.alloc(0x40);
+        stub(&mut e, ACTOR_COLLISION_OBJECT, node);
+        stub_float(&mut e, VECTOR_LENGTH_4586D0, 0.0);
+        let heading = slot_target(&e, victim.cast(), ACTOR_SLOT_GET_HEADING);
+        e.register_double(heading, |_, _| float_ret(1.5));
+        let result = e.mem.alloc(12);
+        e.mem.set_f32(result, 0.5);
+        stub(&mut e, VECTOR_MULTIPLY_4B4500, result);
+        e.map(DEFAULT_DIRECTION, 12);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        let rotate = calls_to(&e, VECTOR_ROTATE_4A0C90);
+        assert_eq!(rotate.len(), 1);
+        assert_eq!(rotate[0][1], 1.5f32.to_bits());
+        assert_eq!(call_count(&e, VECTOR_COPY_458620), 0);
+        let multiply = calls_to(&e, VECTOR_MULTIPLY_4B4500);
+        assert_eq!(multiply[0][2], UNIT_VECTOR);
+        // The impulse direction is the result (normalized).
+        let impulse = calls_to(&e, TES_HAVOK_ADD_VELOCITY);
+        assert_eq!(e.mem.f32(impulse[0][1]), 0.5);
+    }
+
+    #[test]
+    fn actor_kill_pushes_a_knocked_down_body() {
+        let mut e = engine();
+        let (victim, process, _, _) = kill_setup(&mut e);
+        let node = e.mem.alloc(0x40);
+        stub(&mut e, ACTOR_COLLISION_OBJECT, node);
+        let knock = slot_target(&e, process, PROCESS_SLOT_40C);
+        e.register_double(knock, |_, _| ret(3));
+        let fixed = slot_target(&e, victim.cast(), ACTOR_SLOT_234);
+        e.register_double(fixed, |_, _| ret(1));
+        let collision = slot_target(&e, victim.cast(), ACTOR_SLOT_1D0);
+        e.register_double(collision, move |_, _| ret(node));
+        e.map(UPWARD_COMPONENT, 4);
+        e.set_global(UPWARD_COMPONENT, 5.0f32);
+        let result = e.mem.alloc(12);
+        stub(&mut e, VECTOR_MULTIPLY_4B4500, result);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        // Un-fixed twice: at the start (slot 0x234) and for the push.
+        assert_eq!(
+            calls_to(&e, BHK_RIGID_BODY_SET_FIXED),
+            vec![vec![node, 0, 1], vec![node, 0, 1]]
+        );
+        let up = calls_to(&e, VECTOR3_CONSTRUCT_416870);
+        assert_eq!(
+            up[0][1..],
+            [0.0f32.to_bits(), 5.0f32.to_bits(), 0.0f32.to_bits()]
+        );
+        let set = calls_to(&e, TES_HAVOK_SET_VELOCITY);
+        assert_eq!(set.len(), 1);
+        assert_eq!(set[0][0], node);
+        assert_eq!(set[0][2], 0);
+        assert_eq!(call_count(&e, BHK_WORLD_SET_MOTION), 0);
+    }
+
+    #[test]
+    fn actor_kill_plays_the_death_dialogue() {
+        let mut e = engine();
+        let (victim, process, _, cells) = kill_setup(&mut e);
+        e.mem.set_f32(cells[&DEATH_VOICE_DISTANCE_SETTING], 50.0);
+        e.map(COMBAT_DIALOGUE_MANAGER, 4);
+        e.set_global(COMBAT_DIALOGUE_MANAGER, 0x8b00u32);
+        let attacker = big_actor(&mut e, &npc_slots());
+        let _ = process;
+        actor_kill(&mut e, victim, attacker, 1.0);
+        assert_eq!(
+            calls_to(&e, COMBAT_DIALOGUE_START_DIALOGUE),
+            vec![vec![0x8b00, victim.addr(), attacker.addr(), 2, 6, 1, 0]]
+        );
+
+        // The global flag with a distance beyond the setting suppresses it.
+        let mut e = engine();
+        let (victim, _, _, cells) = kill_setup(&mut e);
+        e.mem.set_f32(cells[&DEATH_VOICE_DISTANCE_SETTING], 50.0);
+        e.map(COMBAT_DIALOGUE_MANAGER, 4);
+        stub(&mut e, GLOBAL_FLAG_525420, 1);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 80.0);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(call_count(&e, COMBAT_DIALOGUE_START_DIALOGUE), 0);
+        // ... and a player within the distance lets the dialogue happen.
+        e.call_log = Some(vec![]);
+        e.set_global(COMBAT_DIALOGUE_MANAGER, 0x8b00u32);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 10.0);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(call_count(&e, COMBAT_DIALOGUE_START_DIALOGUE), 1);
+    }
+
+    #[test]
+    fn actor_kill_of_a_creature_plays_its_death_sound() {
+        let mut e = engine();
+        let (victim, _, _, _) = kill_setup(&mut e);
+        // A creature: slot 0x218 false and 0x21c true.
+        for (slot, value) in [(ACTOR_SLOT_218, 0), (ACTOR_SLOT_21C, 1)] {
+            let target = slot_target(&e, victim.cast(), slot);
+            e.register_double(target, move |_, _| ret(value));
+        }
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        let position_slot = slot_target(&e, victim.cast(), ACTOR_SLOT_POSITION);
+        e.register_double(position_slot, move |_, _| ret(position));
+        let node_slot = slot_target(&e, victim.cast(), ACTOR_SLOT_1D0);
+        e.register_double(node_slot, |_, _| ret(0x9900));
+        stub(&mut e, REFR_BASE_FORM, 0x9a00);
+        stub(&mut e, CREATURE_PICK_CREATURE_SOUND, 0x9b00);
+        stub(&mut e, FORM_NUMERIC_ID, 0x4242);
+        stub(&mut e, AUDIO_INSTANCE, 0x9c00);
+        stub(&mut e, ACTOR_BASE_FORM, 0);
+        stub(&mut e, RTTI_DYNAMIC_CAST, 0);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(
+            calls_to(&e, CREATURE_PICK_CREATURE_SOUND),
+            vec![vec![0x9a00, 8]]
+        );
+        let play = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_NUMERIC_ID);
+        assert_eq!(play.len(), 1);
+        assert_eq!(play[0][0], 0x9c00);
+        assert_eq!(play[0][2..], [0x4242, 0x102]);
+        let handle = play[0][1];
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_POSITION_XYZ)[0][..2],
+            [handle, 1.0f32.to_bits()]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_OBJECT_TO_FOLLOW),
+            vec![vec![handle, 0x9900]]
+        );
+        assert_eq!(calls_to(&e, SOUND_HANDLE_PLAY), vec![vec![handle, 0]]);
+        assert_eq!(call_count(&e, COMBAT_DIALOGUE_START_DIALOGUE), 0);
+    }
+
+    #[test]
+    fn actor_kill_of_the_player_ends_the_world_around_it() {
+        let mut e = engine();
+        let (_, _, player, _) = kill_setup(&mut e);
+        stub(&mut e, INTERFACE_IS_TOP_MENU_ID, 1);
+        stub(&mut e, AUDIO_INSTANCE, 0x9c00);
+        stub(&mut e, AUDIO_GET_SOUND_HANDLE_BY_NAME, 0x9d00);
+        stub(&mut e, SETTING_TEST_454AF0, 1);
+        let attacker = big_actor(&mut e, &npc_slots());
+        e.mem.set_u32(player.addr() + 0x68, 0);
+        let process = object(&mut e, 0x800, &process_slots());
+        e.set(player, Actor::pCurrentProcess, process);
+        embedded_table(
+            &mut e,
+            player.addr() + ACTOR_VALUE_OWNER_OFFSET,
+            &[(0x00, ret(100)), (0x0c, float_ret(30.0))],
+        );
+        actor_kill(&mut e, player, attacker, 1.0);
+        assert_eq!(calls_to(&e, PIPBOY_RADIO_ENABLE), vec![vec![0]]);
+        assert_eq!(calls_to(&e, SOUND_FADE_WORKER), vec![vec![0x3e8, 0]]);
+        let music = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_NAME);
+        assert_eq!(music[0][0], 0x9c00);
+        assert_eq!(music[0][2..], [DEATH_MUSIC_NAME, 0x901]);
+        assert_eq!(calls_to(&e, SOUND_HANDLE_PLAY), vec![vec![0x9d00, 0]]);
+        assert_eq!(
+            calls_to(&e, VATS_QUIT_PLAYBACK),
+            vec![vec![VATS_OBJECT, 0, 0]]
+        );
+        assert_eq!(call_count(&e, SURGERY_MENU_CLOSE), 1);
+        // The player is not VATS-playing: the VATS worker runs, and the
+        // progress export remembers the killer only for the call.
+        assert_eq!(call_count(&e, VATS_WORKER_9CA1F0), 1);
+        assert_eq!(
+            calls_to(&e, PLAYER_EXPORT_PROGRESS_DATA),
+            vec![vec![player.addr(), 1]]
+        );
+        assert_eq!(e.get(player, Actor::pMyKiller).addr(), 0);
+        // The chase bip (not slot 0x2a0) is used for the player.
+        assert_eq!(
+            calls_to(&e, MOBILE_OBJECT_SET_CHASE_BIP),
+            vec![vec![player.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn actor_kill_tail_reports_and_updates_the_combat_counts() {
+        let mut e = engine();
+        let (victim, _, player, cells) = kill_setup(&mut e);
+        e.mem.set_u8(cells[&DEATH_REPORT_SETTING], 1);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        stub(&mut e, FORM_NUMERIC_ID, 0x55);
+        stub(&mut e, LOCATION_NAME, 0x9e00);
+        stub(&mut e, ACTOR_BASE_FORM, 0x9f00);
+        // The shader effect and the beam.
+        e.mem.set_u8(player.addr() + 0xe2d, 1);
+        let holder = e.global::<u32>(MAGIC_SHADER_HOLDER);
+        e.mem.set_u32(holder + 0x638, 0xa100);
+        e.mem.set_u32(victim.addr() + 0x1a0, 0xa200);
+        e.mem.set_u32(victim.addr() + 0xb0, 0xa300);
+        stub(&mut e, ACTOR_OUTPUT_931ED0, 0xa400);
+        stub(&mut e, OBJECT_ACCESSOR_4A3A20, 0xa500);
+        let collision = slot_target(&e, victim.cast(), ACTOR_SLOT_1D0);
+        e.register_double(collision, |_, _| ret(0xa600));
+        // The player kills with a teammate-free combat count of zero.
+        stub(&mut e, GET_ALIGNMENT_FOR_KARMA, 1);
+        e.map(SLOW_MO_SETTING, 4);
+        e.mem.set_f32(cells[&SLOW_MO_SETTING], 0.25);
+        let attacker = big_actor(&mut e, &npc_slots());
+        let attacker_address = attacker.addr();
+        actor_kill(&mut e, victim, attacker, 1.0);
+        assert_eq!(
+            calls_to(&e, ERROR_REPORT),
+            vec![vec![KILLED_BY_FORMAT, 0x9e00, 0x55, 0x9e00, 0x55]]
+        );
+        assert_eq!(
+            calls_to(&e, PROCESS_LISTS_FINISH_MAGIC_SHADER_HIT_EFFECT),
+            vec![vec![PROCESS_LISTS, victim.addr(), 0xa100]]
+        );
+        assert_eq!(
+            calls_to(&e, CONTINUOUS_BEAM_PROJECTILE_SET_KILL),
+            vec![vec![0xa200, victim.addr()]]
+        );
+        assert_eq!(call_count(&e, BHK_RAGDOLL_PENETRATION_UTIL_CLEAR), 1);
+        let utility = calls_to(&e, PENETRATION_UTIL_WORKER);
+        assert_eq!(utility, vec![vec![0xa300, 0xa600, 0xa500]]);
+        let _ = attacker_address;
+
+        // Without an attacker the other message is used.
+        e.call_log = Some(vec![]);
+        actor_kill(&mut e, victim, Ptr::NULL, 1.0);
+        assert_eq!(
+            calls_to(&e, ERROR_REPORT),
+            vec![vec![DIED_WITH_NO_ATTACKER_FORMAT, 0x9e00, 0x55]]
+        );
+    }
+
+    #[test]
+    fn actor_kill_by_the_player_counts_combatants_and_the_slow_motion_camera() {
+        let mut e = engine();
+        let (victim, _, player, cells) = kill_setup(&mut e);
+        stub(&mut e, GET_SAVED_ACQUIRE_OBJECT, 0);
+        e.mem.set_f32(cells[&SLOW_MO_SETTING], 0.25);
+        stub(&mut e, PLAYER_INT_5BE4D0, 0);
+        stub(&mut e, ACTOR_IS_FLEEING, 0);
+        // No combatants: the slow-motion camera is requested.
+        actor_kill(&mut e, victim, player, 1.0);
+        let counted = calls_to(&e, COMBAT_MANAGER_GET_COMBATANT_COUNT);
+        assert!(counted
+            .iter()
+            .any(|call| call[..2] == [0x8900, player.addr()]));
+        assert_eq!(
+            calls_to(&e, PLAYER_SET_SLOW_MO_CAMERA),
+            vec![vec![
+                player.addr(),
+                victim.addr(),
+                0.25f32.to_bits(),
+                1,
+                0xffff_ffff
+            ]]
+        );
+        assert_eq!(call_count(&e, ACTOR_ADD_FACTION_MINOR_CRIME), 0);
+
+        // With combatants that see the player, a minor crime is added and
+        // there is no camera.
+        e.call_log = Some(vec![]);
+        stub(&mut e, COMBAT_MANAGER_GET_COMBATANT_COUNT, 2);
+        stub(&mut e, PLAYER_IS_DETECTED_BY_NON_TEAMMATES, 1);
+        actor_kill(&mut e, victim, player, 1.0);
+        assert_eq!(
+            calls_to(&e, ACTOR_ADD_FACTION_MINOR_CRIME),
+            vec![vec![victim.addr(), 1, 1]]
+        );
+        assert_eq!(call_count(&e, PLAYER_SET_SLOW_MO_CAMERA), 0);
     }
 }
