@@ -7,9 +7,9 @@
 //! `ExtraLight`, `ExtraLock`, `ExtraFollower`, `ExtraGuardedRefData`,
 //! `ExtraTeleport`, ...), in address order, together with `REFR_LOCK`.
 //!
-//! Translated so far: the first 160 functions of the queue (`004300f0` to
-//! `00433d40`). The next session continues at `00433db0`
-//! (`ExtraDecalRefs::InitItem`).
+//! Translated so far: the first 200 functions of the queue (`004300f0` to
+//! `004353d0`), which is the whole address range `00000000` to `004353f0` of
+//! this file; the part files and the main file continue from `004353f0`.
 //!
 //! Notes for the next session:
 //! - The layouts of the simple one-field classes (`ExtraRank`, `ExtraCount`,
@@ -25,11 +25,10 @@
 //!   flags is set.
 //! - The compiler's exception-unwinding frames (`FS:[0]` chains, the
 //!   `__CxxFrameHandler` state words) are not translated.
-//! - Functions this unit still has to translate and that the ones below call
-//!   by address: `00438570`, `004385a0` (the `DismemberedLimbs` array
-//!   constructor/destructor), `00438660`, `00438690` (the `Guards` array
-//!   constructor/destructor), `004343c0` (frees the decal list of an
-//!   `ExtraDecalRefs`) and `00438470` (`BSStringT<char>::Set(other)`).
+//! - Functions of this unit outside this file's address range that the ones
+//!   below call by address: `00438570`, `004385a0` (the `DismemberedLimbs`
+//!   array constructor/destructor), `00438660`, `00438690` (the `Guards`
+//!   array constructor/destructor) and `00438470` (`BSStringT<char>::Set(other)`).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -420,9 +419,6 @@ const MEMCPY: u32 = 0x0040_1460;
 /// The constructor of a `REF_ACTIVATE_DATA` (`this` is the 8-byte data:
 /// clears the reference and the delay).
 const REF_ACTIVATE_DATA_CONSTRUCT: u32 = 0x0041_4010;
-/// Empties the `DecalRefList` of an `ExtraDecalRefs` (`this` is the extra
-/// data) and deletes the decal data; in this unit, not yet translated.
-const DECAL_REFS_FREE_LIST: u32 = 0x0043_43c0;
 /// An empty C string in the exe's data (what `ExtraActivateRef`'s constructor sets
 /// its text to).
 const EMPTY_STRING: u32 = 0x0101_1584;
@@ -477,6 +473,92 @@ const LOOKUP_FORM_BY_ID: u32 = 0x0048_39c0;
 /// engine map's `MiddleHighProcess::GetSavedAcquireObject`; `this` is the
 /// form).
 const FORM_PROCESS: u32 = 0x008d_8520;
+
+/// `RTTI Type Descriptor`s used by the fourth batch: the source and target of
+/// the `InitItem`s' cast of a looked-up form (`TESForm`, `TESObjectREFR`), and
+/// the classes whose `Compare` or `Copy` casts `other`.
+const TES_FORM_TYPE: u32 = 0x0118_3028;
+const TES_OBJECT_REFR_TYPE: u32 = 0x0118_41cc;
+const EXTRA_DECAL_REFS_TYPE: u32 = 0x0118_4ea4;
+const EXTRA_REFLECTED_REFS_TYPE: u32 = 0x0118_3fec;
+const EXTRA_REFLECTOR_REFS_TYPE: u32 = 0x0118_4010;
+const EXTRA_WATER_LIGHT_REFS_TYPE: u32 = 0x0118_4034;
+const EXTRA_LIT_WATER_REFS_TYPE: u32 = 0x0118_4058;
+const EXTRA_MERCHANT_CONTAINER_TYPE: u32 = 0x0118_4ec4;
+const EXTRA_LEV_CREA_MODIFIER_TYPE: u32 = 0x0118_4eec;
+const EXTRA_POISON_TYPE: u32 = 0x0118_461c;
+const EXTRA_LAST_FINISHED_SEQUENCE_TYPE: u32 = 0x0118_4408;
+
+/// The vtables of the classes of the fourth batch (names from the RTTI
+/// type descriptors).
+const EXTRA_REFLECTED_REFS_VTABLE: u32 = 0x0101_4428;
+const EXTRA_REFLECTOR_REFS_VTABLE: u32 = 0x0101_4434;
+const EXTRA_WATER_LIGHT_REFS_VTABLE: u32 = 0x0101_4440;
+const EXTRA_LIT_WATER_REFS_VTABLE: u32 = 0x0101_444c;
+const EXTRA_MERCHANT_CONTAINER_VTABLE: u32 = 0x0101_5e04;
+const EXTRA_LEV_CREA_MODIFIER_VTABLE: u32 = 0x0101_5e10;
+const EXTRA_POISON_VTABLE: u32 = 0x0101_595c;
+const EXTRA_LAST_FINISHED_SEQUENCE_VTABLE: u32 = 0x0101_5e1c;
+const EXTRA_X_TARGET_VTABLE: u32 = 0x0101_5e28;
+
+/// Extra-data type bytes of the fourth batch.
+const TYPE_MERCHANT_CONTAINER: u32 = 0x3c;
+const TYPE_LEV_CREA_MODIFIER: u32 = 0x1e;
+const TYPE_POISON: u32 = 0x3f;
+const TYPE_LAST_FINISHED_SEQUENCE: u32 = 0x41;
+const TYPE_X_TARGET: u32 = 0x44;
+
+/// `LCM_NONE` (Xbox PDB `LEV_CREA_MODIFIER`; the others are `LCM_EASY` 0,
+/// `LCM_MEDIUM` 1, `LCM_HARD` 2, `LCM_BOSS` 3).
+const LEV_CREA_MODIFIER_NONE: u32 = 4;
+/// The table of float-setting pointers, one per `LEV_CREA_MODIFIER` value
+/// below `LCM_NONE`, that `fn_004350c0` indexes.
+const LEV_CREA_SETTING_TABLE: u32 = 0x0118_4ab0;
+
+/// `TESForm::GetFile(index)` (Xbox PDB name; `this` is the form, the argument
+/// -1 asks for the last file that changed it).
+const FORM_GET_FILE: u32 = 0x0048_4e60;
+/// `TESForm::AddCompileIndex(formIdAddress, file)` (Xbox PDB name, cdecl, two
+/// stack arguments): adds the file's compile index to the form id held at the
+/// address given.
+const FORM_ADD_COMPILE_INDEX: u32 = 0x0048_5d50;
+/// `TESObjectREFR::GetRefPersists` (Xbox PDB name; `this` is the reference).
+const REFR_GET_REF_PERSISTS: u32 = 0x0056_53d0;
+/// The accessor of a reference's extra-data list (`this + 0x44`, in
+/// `tesscriptfunctions.cpp` by address range; `this` is the reference, the
+/// result the address of the embedded list).
+const REFR_EXTRA_LIST: u32 = 0x005d_43c0;
+/// The log function (cdecl, `format, ...`) the `InitItem`s report with.
+const MASTERFILE_LOG: u32 = 0x005b_5e40;
+/// Two methods of `ExtraDataList` (in `extradatalist.cpp` by address range;
+/// `this` is the list, the arguments are a reference and a flag, 1 to add)
+/// that `ExtraReflectorRefs::InitItem` calls for effect flag bits 0 and 1.
+const REFLECTOR_ADD_FIRST: u32 = 0x0041_f4c0;
+const REFLECTOR_ADD_SECOND: u32 = 0x0041_f650;
+/// `ExtraDataList::SetWaterLightRef(reference, add)` (engine map name; `this`
+/// is the extra-data list).
+const WATER_LIGHT_REF_SET: u32 = 0x0041_f840;
+/// Removes from the list starting at `this` the first node whose item equals
+/// the word at the address given (in `highprocess.cpp` by address range).
+const SIMPLE_LIST_REMOVE_ITEM: u32 = 0x0090_5330;
+/// Whether the list at `this` holds an item equal to the word at the address
+/// given (the engine map has no name for it).
+const SIMPLE_LIST_CONTAINS: u32 = 0x005f_65d0;
+/// The constructor of a `REF_DECAL_DATA` (`this` is the 0x1c-byte block; it
+/// runs two folded `NiPoint3` constructors and returns `this`).
+const REF_DECAL_DATA_CONSTRUCT: u32 = 0x0055_a400;
+/// `strlen(string)` (the wrapper around the CRT function `00ec6130`, cdecl).
+const STRLEN: u32 = 0x0044_a670;
+/// `strcpy_s(destination, size, source)` (the wrapper around `00ec65a6`,
+/// cdecl).
+const STRING_COPY_CHECKED: u32 = 0x0040_6d30;
+
+/// The messages the `InitItem`s log (the format strings of `MASTERFILE_LOG`;
+/// each takes one form id).
+const MESSAGE_DECAL_NOT_FOUND: u32 = 0x0101_5cf8;
+const MESSAGE_REFLECTOR_NOT_FOUND: u32 = 0x0101_5d8c;
+const MESSAGE_NOT_PERSISTENT: u32 = 0x0101_5d30;
+const MESSAGE_LIT_WATER_NOT_FOUND: u32 = 0x0101_5dc8;
 
 layout! {
     /// `NiPoint3` (Xbox PDB): three floats.
@@ -919,6 +1001,85 @@ layout! {
     pub struct ExtraDecalRefs: 0x14 {
         /// `DecalRefList` (Xbox PDB): `BSSimpleList<REF_DECAL_DATA *>`.
         0x0C DecalRefList: Inline<BSSimpleList>,
+    }
+}
+
+layout! {
+    /// `REF_DECAL_DATA` (Xbox PDB), 0x1c bytes.
+    pub struct RefDecalData: 0x1C {
+        /// `pDecalRef` (Xbox PDB): `TESObjectREFR*`; holds the form id until
+        /// `ExtraDecalRefs::InitItem` resolves it.
+        0x00 pDecalRef: Ptr,
+        /// `Intersect` (Xbox PDB).
+        0x04 Intersect: Inline<NiPoint3>,
+        /// `Normal` (Xbox PDB).
+        0x10 Normal: Inline<NiPoint3>,
+    }
+
+    /// `REF_REFLECTED_DATA` and `REF_REFLECTOR_DATA` (Xbox PDB, same layout),
+    /// 8 bytes.
+    pub struct RefReflectData: 0x08 {
+        /// `pRef` (Xbox PDB): `TESObjectREFR*`; holds the form id until
+        /// `InitItem` resolves it.
+        0x00 pRef: Ptr,
+        /// `iEffectFlags` (Xbox PDB).
+        0x04 iEffectFlags: u32,
+    }
+
+    /// `ExtraReflectedRefs` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraReflectedRefs: 0x14 {
+        /// `RefList` (Xbox PDB): `BSSimpleList<REF_REFLECTED_DATA *>`, the
+        /// entries owned.
+        0x0C RefList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraReflectorRefs` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraReflectorRefs: 0x14 {
+        /// `RefList` (Xbox PDB): `BSSimpleList<REF_REFLECTOR_DATA *>`, the
+        /// entries owned.
+        0x0C RefList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraWaterLightRefs` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraWaterLightRefs: 0x14 {
+        /// `RefList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x0C RefList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraLitWaterRefs` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraLitWaterRefs: 0x14 {
+        /// `RefList` (Xbox PDB): `BSSimpleList<TESObjectREFR *>`.
+        0x0C RefList: Inline<BSSimpleList>,
+    }
+
+    /// `ExtraMerchantContainer` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraMerchantContainer: 0x10 {
+        /// `pContainer` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pContainer: Ptr,
+    }
+
+    /// `ExtraLevCreaModifier` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraLevCreaModifier: 0x10 {
+        /// `eModifier` (Xbox PDB): a `LEV_CREA_MODIFIER`, read as a 32-bit word.
+        0x0C eModifier: u32,
+    }
+
+    /// `ExtraPoison` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraPoison: 0x10 {
+        /// `pPoison` (Xbox PDB): `AlchemyItem*`.
+        0x0C pPoison: Ptr,
+    }
+
+    /// `ExtraLastFinishedSequence` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraLastFinishedSequence: 0x10 {
+        /// `pLastSequenceName` (Xbox PDB): `char*`, owned (allocated).
+        0x0C pLastSequenceName: Ptr,
+    }
+
+    /// `ExtraXTarget` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraXTarget: 0x10 {
+        /// `pTarget` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pTarget: Ptr,
     }
 }
 
@@ -3628,11 +3789,920 @@ pub fn extra_decal_refs_scalar_deleting_destructor(
 /// The exception-unwinding frame is not translated.
 pub fn fn_00433d40(e: &mut Engine, this: Ptr<ExtraDecalRefs>) {
     e.mem.set_u32(this.addr(), EXTRA_DECAL_REFS_VTABLE);
-    e.call(DECAL_REFS_FREE_LIST, &args![this]);
+    fn_004343c0(e, this);
     e.call(
         SIMPLE_LIST_DESTRUCT,
         &args![this.at(ExtraDecalRefs::DecalRefList)],
     );
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+/// The frame helper of the three `InitItem`s: asks the owner's file for its
+/// compile index, adds it to the form id held at `id_slot` (a word on the
+/// game's stack, modified in place), looks the form up and casts it to a
+/// `TESObjectREFR`. Returns the reference, or null when there is none.
+fn resolve_reference(e: &mut Engine, owner: Ptr, id_slot: Ptr) -> Ptr {
+    let file = e.call(FORM_GET_FILE, &args![owner, 0xffff_ffffu32]).u32();
+    e.call(FORM_ADD_COMPILE_INDEX, &args![id_slot, file]);
+    let id = e.mem.u32(id_slot.addr());
+    let form = e.call(LOOKUP_FORM_BY_ID, &args![id]).u32();
+    e.call(
+        DYNAMIC_CAST,
+        &args![form, 0u32, TES_FORM_TYPE, TES_OBJECT_REFR_TYPE, 0u32],
+    )
+    .ptr()
+}
+
+/// Drops the entry of a list that an `InitItem` could not resolve: the head
+/// is removed (remove-head, `0063f7b0`) when there is no previous node, otherwise the
+/// entry (the pointer held at `item_slot`) is removed after `previous`, and
+/// the walk continues at the node after `previous`. The entry is then
+/// deleted. Returns the node the walk goes on with.
+fn drop_unresolved_entry(
+    e: &mut Engine,
+    node: Ptr<BSSimpleList>,
+    previous: Ptr<BSSimpleList>,
+    item_slot: Ptr,
+) -> Ptr<BSSimpleList> {
+    let next = if previous.is_null() {
+        e.call(SIMPLE_LIST_REMOVE_HEAD, &args![node]);
+        node
+    } else {
+        e.call(SIMPLE_LIST_REMOVE_ITEM, &args![previous, item_slot]);
+        list_node_next(e, previous)
+    };
+    let item = e.mem.u32(item_slot.addr());
+    e.call(OPERATOR_DELETE, &args![item]);
+    e.mem.set_u32(item_slot.addr(), 0);
+    next
+}
+
+// Translated from 00433db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs::InitItem` (engine map name, not in the Xbox PDB; `this`,
+/// then the reference the extra data belongs to, whose file is asked for the
+/// compile index): resolves the form id of every decal entry to the
+/// reference. An entry whose form cannot be found (not a `TESObjectREFR`) is
+/// logged ("MASTERFILE: Unable to find decal reference %08X."), removed from
+/// the list and deleted; the others have their first word replaced by the
+/// reference pointer. The exception-unwinding frame is not translated.
+pub fn extra_decal_refs_init_item(e: &mut Engine, this: Ptr<ExtraDecalRefs>, owner: Ptr) {
+    e.with_stack(8, |e, frame| {
+        // `frame` holds the entry pointer (its address goes to `00905330`),
+        // `frame + 4` the form id (its address goes to `AddCompileIndex`).
+        let item_slot = frame;
+        let id_slot = frame.byte_add(4);
+        let mut node = this.at(ExtraDecalRefs::DecalRefList);
+        let mut previous: Ptr<BSSimpleList> = Ptr::NULL;
+        while !node.is_null() && !list_node_is_empty(e, node) {
+            let mut removed = false;
+            let item = list_node_item(e, node);
+            e.mem.set_u32(item_slot.addr(), item);
+            let id = e.mem.u32(item);
+            e.mem.set_u32(id_slot.addr(), id);
+            let reference = resolve_reference(e, owner, id_slot);
+            if reference.is_null() {
+                let id = e.mem.u32(id_slot.addr());
+                e.call(MASTERFILE_LOG, &args![MESSAGE_DECAL_NOT_FOUND, id]);
+                node = drop_unresolved_entry(e, node, previous, item_slot);
+                removed = true;
+            } else {
+                e.mem.set_u32(item, reference.addr());
+            }
+            if !removed {
+                previous = node;
+                node = list_node_next(e, node);
+            }
+        }
+    });
+}
+
+// Translated from 00433ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectorRefs::InitItem` (engine map name, not in the Xbox PDB;
+/// `this`, then the reference the extra data belongs to): resolves the form
+/// id of every entry to a persistent reference. An entry whose form is not a
+/// reference, or whose reference is not persistent, is logged ("Unable to find
+/// water reflector reference" / "is not persistent so cannot reflect or
+/// refract other references"), removed and deleted. For the others, the
+/// reference's extra-data list is told about the owner once for each of the
+/// entry's effect flags (bit 0: `0041f4c0`, bit 1: `0041f650`), and the first
+/// word of the entry becomes the reference pointer. The exception-unwinding
+/// frame is not translated.
+pub fn extra_reflector_refs_init_item(e: &mut Engine, this: Ptr<ExtraReflectorRefs>, owner: Ptr) {
+    e.with_stack(8, |e, frame| {
+        let item_slot = frame;
+        let id_slot = frame.byte_add(4);
+        let mut node = this.at(ExtraReflectorRefs::RefList);
+        let mut previous: Ptr<BSSimpleList> = Ptr::NULL;
+        while !node.is_null() && !list_node_is_empty(e, node) {
+            let mut removed = false;
+            let item = list_node_item(e, node);
+            e.mem.set_u32(item_slot.addr(), item);
+            let id = e.mem.u32(item);
+            e.mem.set_u32(id_slot.addr(), id);
+            let reference = resolve_reference(e, owner, id_slot);
+            if reference.is_null() || !e.call(REFR_GET_REF_PERSISTS, &args![reference]).bool() {
+                let id = e.mem.u32(id_slot.addr());
+                if reference.is_null() {
+                    e.call(MASTERFILE_LOG, &args![MESSAGE_REFLECTOR_NOT_FOUND, id]);
+                } else {
+                    e.call(MASTERFILE_LOG, &args![MESSAGE_NOT_PERSISTENT, id]);
+                }
+                node = drop_unresolved_entry(e, node, previous, item_slot);
+                removed = true;
+            } else {
+                // REF_REFLECTOR_DATA::iEffectFlags (Xbox PDB) +0x04
+                if e.mem.u32(item + 4) & 1 != 0 {
+                    let list = e.call(REFR_EXTRA_LIST, &args![reference]).u32();
+                    e.call(REFLECTOR_ADD_FIRST, &args![list, owner, 1u32]);
+                }
+                if e.mem.u32(item + 4) & 2 != 0 {
+                    let list = e.call(REFR_EXTRA_LIST, &args![reference]).u32();
+                    e.call(REFLECTOR_ADD_SECOND, &args![list, owner, 1u32]);
+                }
+                e.mem.set_u32(item, reference.addr());
+            }
+            if !removed {
+                previous = node;
+                node = list_node_next(e, node);
+            }
+        }
+    });
+}
+
+// Translated from 00434050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLitWaterRefs::InitItem` (engine map name, not in the Xbox PDB;
+/// `this`, then the reference the extra data belongs to): resolves the form
+/// id of every entry to a persistent reference and rebuilds the list from
+/// the ones that resolve (the temporary list reverses their order, the
+/// refill reverses it again, so the order is kept). An entry whose form is not a
+/// reference, or whose reference is not persistent, is logged ("Unable to find
+/// lit water reference" / "is not persistent so cannot reflect or refract
+/// other references") and dropped. For each good reference, its extra-data
+/// list is told about the owner (`ExtraDataList::SetWaterLightRef`, adding)
+/// and the reference is added at the head of a temporary list; the list is
+/// then cleared and refilled from the temporary one, which is cleared and
+/// destroyed. The exception-unwinding frame is not translated.
+pub fn extra_lit_water_refs_init_item(e: &mut Engine, this: Ptr<ExtraLitWaterRefs>, owner: Ptr) {
+    // `frame`: the temporary list (8 bytes), then the form id and the
+    // reference, whose addresses are passed on.
+    e.with_stack(0x10, |e, frame| {
+        let temporary: Ptr<BSSimpleList> = frame.cast();
+        let id_slot = frame.byte_add(8);
+        let reference_slot = frame.byte_add(0xc);
+        e.call(SIMPLE_LIST_CONSTRUCT, &args![temporary]);
+        let list = this.at(ExtraLitWaterRefs::RefList);
+        let mut node = list;
+        while !node.is_null() && !list_node_is_empty(e, node) {
+            let id = list_node_item(e, node);
+            e.mem.set_u32(id_slot.addr(), id);
+            let reference = resolve_reference(e, owner, id_slot);
+            e.mem.set_u32(reference_slot.addr(), reference.addr());
+            if reference.is_null() || !e.call(REFR_GET_REF_PERSISTS, &args![reference]).bool() {
+                let id = e.mem.u32(id_slot.addr());
+                if reference.is_null() {
+                    e.call(MASTERFILE_LOG, &args![MESSAGE_LIT_WATER_NOT_FOUND, id]);
+                } else {
+                    e.call(MASTERFILE_LOG, &args![MESSAGE_NOT_PERSISTENT, id]);
+                }
+            } else {
+                let extra_list = e.call(REFR_EXTRA_LIST, &args![reference]).u32();
+                e.call(WATER_LIGHT_REF_SET, &args![extra_list, owner, 1u32]);
+                e.call(SIMPLE_LIST_ADD_HEAD, &args![temporary, reference_slot]);
+            }
+            node = list_node_next(e, node);
+        }
+        e.call(SIMPLE_LIST_CLEAR, &args![list]);
+        let mut walk = temporary;
+        while !walk.is_null() {
+            let slot = e.call(SIMPLE_LIST_ITEM_SLOT, &args![walk]).u32();
+            if e.mem.u32(slot) == 0 {
+                break;
+            }
+            let slot = e.call(SIMPLE_LIST_ITEM_SLOT, &args![walk]).u32();
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, slot]);
+            walk = list_node_next(e, walk);
+        }
+        e.call(SIMPLE_LIST_CLEAR, &args![temporary]);
+        e.call(SIMPLE_LIST_DESTRUCT, &args![temporary]);
+    });
+}
+
+/// The entries of two decal, reflected or reflector lists, compared the way
+/// the three `Compare` methods do after their cast: the lists must have the
+/// same number of entries, and every entry of `other_list` must have an entry
+/// of the same first word in `this` (`GetRefDecalData`) whose first
+/// `entry_size` bytes are equal. Returns true when they differ.
+fn entry_lists_differ(
+    e: &mut Engine,
+    this: Ptr<ExtraDecalRefs>,
+    other_list: Ptr<BSSimpleList>,
+    entry_size: u32,
+) -> bool {
+    let my_count = e
+        .call(
+            SIMPLE_LIST_COUNT,
+            &args![this.at(ExtraDecalRefs::DecalRefList)],
+        )
+        .u32();
+    let their_count = e.call(SIMPLE_LIST_COUNT, &args![other_list]).u32();
+    if my_count != their_count {
+        return true;
+    }
+    let mut node = other_list;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        let reference = e.mem.u32(item);
+        let counterpart = extra_decal_refs_get_ref_decal_data(e, this, reference);
+        if counterpart.is_null() {
+            return true;
+        }
+        if e.call(MEMCMP, &args![counterpart, item, entry_size]).u32() != 0 {
+            return true;
+        }
+        node = list_node_next(e, node);
+    }
+    false
+}
+
+// Translated from 004341e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs::Compare` (engine map name, `vt` slot): true when `other`
+/// is not an `ExtraDecalRefs`, when the lists have a different number of
+/// entries, or when an entry of the other list has no entry with the same
+/// first word here or differs from it in its 0x1c bytes. `BSExtraData::Compare`
+/// is not asked.
+pub fn extra_decal_refs_compare(e: &mut Engine, this: Ptr<ExtraDecalRefs>, other: Ptr) -> bool {
+    let cast: Ptr<ExtraDecalRefs> = dynamic_cast_extra(e, other, EXTRA_DECAL_REFS_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    entry_lists_differ(e, this, cast.at(ExtraDecalRefs::DecalRefList), 0x1c)
+}
+
+// Translated from 004342b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs::Copy` (engine map name, `vt` slot): when `other` is an
+/// `ExtraDecalRefs`, deletes this list's entries (`004343c0`) and adds a copy
+/// (0x1c bytes, built with the `REF_DECAL_DATA` constructor) of each of the
+/// other list's entries at the head, so the order is reversed. Nothing
+/// happens when `other` is another class. The exception-unwinding frame is not
+/// translated.
+pub fn extra_decal_refs_copy(e: &mut Engine, this: Ptr<ExtraDecalRefs>, other: Ptr) {
+    let cast: Ptr<ExtraDecalRefs> = dynamic_cast_extra(e, other, EXTRA_DECAL_REFS_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    fn_004343c0(e, this);
+    let mut node = cast.at(ExtraDecalRefs::DecalRefList);
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
+        let copy = if memory != 0 {
+            e.call(REF_DECAL_DATA_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.call(MEMCPY, &args![copy, item, 0x1cu32]);
+        let list = this.at(ExtraDecalRefs::DecalRefList);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), copy);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        });
+        node = list_node_next(e, node);
+    }
+}
+
+// Translated from 004343c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraDecalRefs` (the engine map has no name for it): deletes
+/// every decal entry and empties the list (removes the head, then deletes
+/// the entry it held, until the list is empty).
+pub fn fn_004343c0(e: &mut Engine, this: Ptr<ExtraDecalRefs>) {
+    let list = this.at(ExtraDecalRefs::DecalRefList);
+    while !list_node_is_empty(e, list) {
+        let item = list_node_item(e, list);
+        e.call(SIMPLE_LIST_REMOVE_HEAD, &args![list]);
+        e.call(OPERATOR_DELETE, &args![item]);
+    }
+}
+
+// Translated from 00434410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDecalRefs::GetRefDecalData` (engine map name; the body is shared,
+/// by identical-code folding, with the reflected and reflector classes, whose
+/// entries also start with the reference): the first entry of the list whose
+/// first word is `reference`, null if there is none.
+pub fn extra_decal_refs_get_ref_decal_data(
+    e: &mut Engine,
+    this: Ptr<ExtraDecalRefs>,
+    reference: u32,
+) -> Ptr<RefDecalData> {
+    let mut node = this.at(ExtraDecalRefs::DecalRefList);
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        node = list_node_next(e, node);
+        if e.mem.u32(item) == reference {
+            return Ptr::new(item);
+        }
+    }
+    Ptr::NULL
+}
+
+// Translated from 00434480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraDecalRefs` (the engine map has no name for it): sets the
+/// decal data of `reference`. When the list has no entry whose first word is
+/// `reference`, a 0x1c-byte entry is built (`REF_DECAL_DATA` constructor),
+/// given `reference` as its first word and added at the head of the list. The
+/// entry's `Intersect` is then set from the vector at `intersect` and its
+/// `Normal` from the vector at `normal`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00434480(
+    e: &mut Engine,
+    this: Ptr<ExtraDecalRefs>,
+    reference: u32,
+    intersect: Ptr,
+    normal: Ptr,
+) {
+    let mut entry = extra_decal_refs_get_ref_decal_data(e, this, reference).addr();
+    if entry == 0 {
+        let memory = e.call(OPERATOR_NEW, &args![0x1cu32]).u32();
+        entry = if memory != 0 {
+            e.call(REF_DECAL_DATA_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(entry, reference);
+        let list = this.at(ExtraDecalRefs::DecalRefList);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), entry);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        });
+    }
+    // REF_DECAL_DATA::Intersect (Xbox PDB) +0x04, ::Normal +0x10
+    copy_words(e, intersect.addr(), entry + 4);
+    copy_words(e, normal.addr(), entry + 0x10);
+}
+
+/// The destructor body of the classes that own the entries of the list at +0xc
+/// (`ExtraReflectedRefs`, `ExtraReflectorRefs`): resets the vtable, deletes
+/// every entry, clears the list, runs the list's destructor body, then the
+/// base destructor. The exception-unwinding frame is not translated.
+fn destroy_with_owned_entries(e: &mut Engine, this: Ptr, vtable: u32) {
+    e.mem.set_u32(this.addr(), vtable);
+    let list = Ptr::<BSSimpleList>::new(this.addr() + 0xc);
+    let mut node = list;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        e.call(OPERATOR_DELETE, &args![item]);
+        node = list_node_next(e, node);
+    }
+    e.call(SIMPLE_LIST_CLEAR, &args![list]);
+    e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00434560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectedRefs`' destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the vtable `01014428` is this
+/// class's): deletes every entry, clears the list, then the base destructor.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00434560(e: &mut Engine, this: Ptr<ExtraReflectedRefs>) {
+    destroy_with_owned_entries(e, this.cast(), EXTRA_REFLECTED_REFS_VTABLE);
+}
+
+// Translated from 00434620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectedRefs::Compare` (engine map name, `vt` slot): true when `other`
+/// is not an `ExtraReflectedRefs`, when the lists have a different number of
+/// entries, or when an entry of the other list has no entry with the same
+/// first word here (`ExtraDecalRefs::GetRefDecalData`, whose body is shared)
+/// or differs from it in its 8 bytes. `BSExtraData::Compare` is not asked.
+pub fn extra_reflected_refs_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraReflectedRefs>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraReflectedRefs> = dynamic_cast_extra(e, other, EXTRA_REFLECTED_REFS_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    entry_lists_differ(e, this.cast(), cast.at(ExtraReflectedRefs::RefList), 8)
+}
+
+// Translated from 004346f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectedRefs::Copy` (engine map name, `vt` slot): when `other` is an
+/// `ExtraReflectedRefs`, removes every entry from this list without deleting
+/// them (`ClearReferenceData`) and adds a copy (8 bytes) of each of the other
+/// list's entries at the head, so the order is reversed. Nothing happens when
+/// `other` is another class. The exception-unwinding frame is not translated.
+pub fn extra_reflected_refs_copy(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, other: Ptr) {
+    let cast: Ptr<ExtraReflectedRefs> = dynamic_cast_extra(e, other, EXTRA_REFLECTED_REFS_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    extra_reflected_refs_clear_reference_data(e, this);
+    copy_reference_entries(
+        e,
+        this.at(ExtraReflectedRefs::RefList),
+        cast.at(ExtraReflectedRefs::RefList),
+    );
+}
+
+/// The loop of the reflected and reflector `Copy` methods: adds at the head of
+/// `list` a copy (8 bytes, built like `REF_REFLECTED_DATA`: the list-node
+/// constructor `0096a2d0` clears it) of each entry of `source`.
+fn copy_reference_entries(e: &mut Engine, list: Ptr<BSSimpleList>, source: Ptr<BSSimpleList>) {
+    let mut node = source;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let item = list_node_item(e, node);
+        let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let copy = if memory != 0 {
+            e.call(SIMPLE_LIST_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.call(MEMCPY, &args![copy, item, 8u32]);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), copy);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        });
+        node = list_node_next(e, node);
+    }
+}
+
+// Translated from 00434800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraReflectedRefs` (the engine map has no name for it; its
+/// callers in `extradatalist.cpp` use it for the reflected and the reflector
+/// classes alike, so the body is shared): removes the first entry whose
+/// first word is `reference` from the list (the head with remove-head `0063f7b0`, any
+/// other node after its predecessor) and deletes the entry. Nothing happens
+/// when there is none.
+pub fn fn_00434800(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, reference: u32) {
+    e.with_stack(4, |e, item_slot| {
+        let mut node = this.at(ExtraReflectedRefs::RefList);
+        let mut previous: Ptr<BSSimpleList> = Ptr::NULL;
+        while !node.is_null() && !list_node_is_empty(e, node) {
+            let item = list_node_item(e, node);
+            e.mem.set_u32(item_slot.addr(), item);
+            if e.mem.u32(item) == reference {
+                if previous.is_null() {
+                    e.call(SIMPLE_LIST_REMOVE_HEAD, &args![node]);
+                } else {
+                    e.call(SIMPLE_LIST_REMOVE_ITEM, &args![previous, item_slot]);
+                }
+                let removed = e.mem.u32(item_slot.addr());
+                e.call(OPERATOR_DELETE, &args![removed]);
+                e.mem.set_u32(item_slot.addr(), 0);
+                return;
+            }
+            previous = node;
+            node = list_node_next(e, node);
+        }
+    });
+}
+
+// Translated from 004348a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraReflectedRefs` (the engine map has no name for it; the
+/// body is shared with the reflector class): sets the effect flags of the
+/// entry for `reference`. When the list has no entry whose first word is
+/// `reference` (`ExtraDecalRefs::GetRefDecalData`), an 8-byte entry is built
+/// (`0096a2d0` clears it), given `reference` as its first word and added at
+/// the head of the list. The entry's `iEffectFlags` is then set to `flags`.
+/// The exception-unwinding frame is not translated.
+pub fn fn_004348a0(e: &mut Engine, this: Ptr<ExtraReflectedRefs>, reference: u32, flags: u32) {
+    let mut entry = extra_decal_refs_get_ref_decal_data(e, this.cast(), reference).addr();
+    if entry == 0 {
+        let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        entry = if memory != 0 {
+            e.call(SIMPLE_LIST_CONSTRUCT, &args![memory]).u32()
+        } else {
+            0
+        };
+        e.mem.set_u32(entry, reference);
+        let list = this.at(ExtraReflectedRefs::RefList);
+        e.with_stack(4, |e, local| {
+            e.mem.set_u32(local.addr(), entry);
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        });
+    }
+    // REF_REFLECTED_DATA::iEffectFlags (Xbox PDB) +0x04
+    e.mem.set_u32(entry + 4, flags);
+}
+
+// Translated from 00434950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterLightRefs`' destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the vtable `01014440` is this
+/// class's): resets the vtable, clears the list (the references are not
+/// owned), runs the list's destructor body, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00434950(e: &mut Engine, this: Ptr<ExtraWaterLightRefs>) {
+    destroy_with_list(e, this.cast(), EXTRA_WATER_LIGHT_REFS_VTABLE);
+}
+
+/// The `Compare` of the two reference-list classes `ExtraWaterLightRefs` and
+/// `ExtraLitWaterRefs` after their cast: true when the lists have a different
+/// number of entries or when an entry of the other list is not in this list.
+fn reference_lists_differ(
+    e: &mut Engine,
+    this_list: Ptr<BSSimpleList>,
+    other_list: Ptr<BSSimpleList>,
+) -> bool {
+    let my_count = e.call(SIMPLE_LIST_COUNT, &args![this_list]).u32();
+    let their_count = e.call(SIMPLE_LIST_COUNT, &args![other_list]).u32();
+    if my_count != their_count {
+        return true;
+    }
+    let mut node = other_list;
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let slot = e.call(SIMPLE_LIST_ITEM_SLOT, &args![node]).u32();
+        if !e.call(SIMPLE_LIST_CONTAINS, &args![this_list, slot]).bool() {
+            return true;
+        }
+        node = list_node_next(e, node);
+    }
+    false
+}
+
+// Translated from 004349c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterLightRefs::Compare` (engine map name, `vt` slot): true when
+/// `other` is not an `ExtraWaterLightRefs`, when the lists have a different
+/// number of entries, or when an entry of the other list is not in this list.
+/// `BSExtraData::Compare` is not asked.
+pub fn extra_water_light_refs_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraWaterLightRefs>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraWaterLightRefs> = dynamic_cast_extra(e, other, EXTRA_WATER_LIGHT_REFS_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    reference_lists_differ(
+        e,
+        this.at(ExtraWaterLightRefs::RefList),
+        cast.at(ExtraWaterLightRefs::RefList),
+    )
+}
+
+// Translated from 00434a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterLightRefs::Copy` (engine map name, `vt` slot): when `other` is an
+/// `ExtraWaterLightRefs`, clears this list (`00434fa0`) and adds each reference
+/// of the other list that is not already there (`00434f60`). Nothing happens
+/// when `other` is another class.
+pub fn extra_water_light_refs_copy(e: &mut Engine, this: Ptr<ExtraWaterLightRefs>, other: Ptr) {
+    let cast: Ptr<ExtraWaterLightRefs> = dynamic_cast_extra(e, other, EXTRA_WATER_LIGHT_REFS_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    fn_00434fa0(e, this.cast());
+    let mut node = cast.at(ExtraWaterLightRefs::RefList);
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let reference = list_node_item(e, node);
+        fn_00434f60(e, this.cast(), reference);
+        node = list_node_next(e, node);
+    }
+}
+
+// Translated from 00434af0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectorRefs`' destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the vtable `01014434` is this
+/// class's): deletes every entry, clears the list, then the base destructor.
+/// The exception-unwinding frame is not translated.
+pub fn fn_00434af0(e: &mut Engine, this: Ptr<ExtraReflectorRefs>) {
+    destroy_with_owned_entries(e, this.cast(), EXTRA_REFLECTOR_REFS_VTABLE);
+}
+
+// Translated from 00434bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectorRefs::Compare` (engine map name, `vt` slot): true when `other`
+/// is not an `ExtraReflectorRefs`, when the lists have a different number of
+/// entries, or when an entry of the other list has no entry with the same
+/// first word here (`ExtraDecalRefs::GetRefDecalData`, whose body is shared)
+/// or differs from it in its 8 bytes. `BSExtraData::Compare` is not asked.
+pub fn extra_reflector_refs_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraReflectorRefs>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraReflectorRefs> = dynamic_cast_extra(e, other, EXTRA_REFLECTOR_REFS_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    entry_lists_differ(e, this.cast(), cast.at(ExtraReflectorRefs::RefList), 8)
+}
+
+// Translated from 00434c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectorRefs::Copy` (engine map name, `vt` slot): when `other` is an
+/// `ExtraReflectorRefs`, removes every entry from this list without deleting
+/// them (`ExtraReflectedRefs::ClearReferenceData`, whose body is shared) and
+/// adds a copy (8 bytes) of each of the other list's entries at the head, so
+/// the order is reversed. Nothing happens when `other` is another class. The
+/// exception-unwinding frame is not translated.
+pub fn extra_reflector_refs_copy(e: &mut Engine, this: Ptr<ExtraReflectorRefs>, other: Ptr) {
+    let cast: Ptr<ExtraReflectorRefs> = dynamic_cast_extra(e, other, EXTRA_REFLECTOR_REFS_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    extra_reflected_refs_clear_reference_data(e, this.cast());
+    copy_reference_entries(
+        e,
+        this.at(ExtraReflectorRefs::RefList),
+        cast.at(ExtraReflectorRefs::RefList),
+    );
+}
+
+// Translated from 00434d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReflectedRefs::ClearReferenceData` (engine map name; the body is
+/// shared with `ExtraReflectorRefs`): removes the head of the list until it is
+/// empty. The entries are not deleted.
+pub fn extra_reflected_refs_clear_reference_data(e: &mut Engine, this: Ptr<ExtraReflectedRefs>) {
+    let list = this.at(ExtraReflectedRefs::RefList);
+    while !list_node_is_empty(e, list) {
+        e.call(SIMPLE_LIST_REMOVE_HEAD, &args![list]);
+    }
+}
+
+// Translated from 00434dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLitWaterRefs`' destructor body (the decompiler names it
+/// `CMFCRibbonInfo::XQAT::~XQAT` by mistake; the vtable `0101444c` is this
+/// class's): resets the vtable, clears the list (the references are not
+/// owned), runs the list's destructor body, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00434dc0(e: &mut Engine, this: Ptr<ExtraLitWaterRefs>) {
+    destroy_with_list(e, this.cast(), EXTRA_LIT_WATER_REFS_VTABLE);
+}
+
+// Translated from 00434e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLitWaterRefs::Compare` (engine map name, `vt` slot): true when `other`
+/// is not an `ExtraLitWaterRefs`, when the lists have a different number of
+/// entries, or when an entry of the other list is not in this list.
+/// `BSExtraData::Compare` is not asked.
+pub fn extra_lit_water_refs_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraLitWaterRefs>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraLitWaterRefs> = dynamic_cast_extra(e, other, EXTRA_LIT_WATER_REFS_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    reference_lists_differ(
+        e,
+        this.at(ExtraLitWaterRefs::RefList),
+        cast.at(ExtraLitWaterRefs::RefList),
+    )
+}
+
+// Translated from 00434ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLitWaterRefs::Copy` (engine map name, `vt` slot): when `other` is an
+/// `ExtraLitWaterRefs`, clears this list (`00434fa0`) and adds each reference
+/// of the other list that is not already there (`00434f60`). Nothing happens
+/// when `other` is another class.
+pub fn extra_lit_water_refs_copy(e: &mut Engine, this: Ptr<ExtraLitWaterRefs>, other: Ptr) {
+    let cast: Ptr<ExtraLitWaterRefs> = dynamic_cast_extra(e, other, EXTRA_LIT_WATER_REFS_TYPE);
+    if cast.is_null() {
+        return;
+    }
+    fn_00434fa0(e, this.cast());
+    let mut node = cast.at(ExtraLitWaterRefs::RefList);
+    while !node.is_null() && !list_node_is_empty(e, node) {
+        let reference = list_node_item(e, node);
+        fn_00434f60(e, this.cast(), reference);
+        node = list_node_next(e, node);
+    }
+}
+
+// Translated from 00434f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraWaterLightRefs` (the engine map has no name for it; the
+/// body is shared with `ExtraLitWaterRefs`): adds `reference` at the head of
+/// the list unless the list already holds it.
+pub fn fn_00434f60(e: &mut Engine, this: Ptr<ExtraWaterLightRefs>, reference: u32) {
+    let list = this.at(ExtraWaterLightRefs::RefList);
+    e.with_stack(4, |e, local| {
+        e.mem.set_u32(local.addr(), reference);
+        if !e.call(SIMPLE_LIST_CONTAINS, &args![list, local]).bool() {
+            e.call(SIMPLE_LIST_ADD_HEAD, &args![list, local]);
+        }
+    });
+}
+
+// Translated from 00434fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraWaterLightRefs` (the engine map has no name for it; the
+/// body is shared with `ExtraLitWaterRefs`): clears the list (`BSSimpleList`
+/// clear: frees the nodes after the head and empties the head).
+pub fn fn_00434fa0(e: &mut Engine, this: Ptr<ExtraWaterLightRefs>) {
+    e.call(
+        SIMPLE_LIST_CLEAR,
+        &args![this.at(ExtraWaterLightRefs::RefList)],
+    );
+}
+
+// Translated from 00434fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMerchantContainer`'s constructor (the engine map has no name for it):
+/// extra-data type 0x3c and no container. Returns `this`.
+pub fn fn_00434fc0(
+    e: &mut Engine,
+    this: Ptr<ExtraMerchantContainer>,
+) -> Ptr<ExtraMerchantContainer> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_MERCHANT_CONTAINER,
+        EXTRA_MERCHANT_CONTAINER_VTABLE,
+    );
+    e.set(this, ExtraMerchantContainer::pContainer, Ptr::NULL);
+    this
+}
+
+// Translated from 00434ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraMerchantContainer::Compare` (engine map name, `vt` slot): true when
+/// `other` is not an `ExtraMerchantContainer` or when the containers differ.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_merchant_container_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraMerchantContainer>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraMerchantContainer> =
+        dynamic_cast_extra(e, other, EXTRA_MERCHANT_CONTAINER_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraMerchantContainer::pContainer)
+        != e.get(this, ExtraMerchantContainer::pContainer)
+}
+
+// Translated from 00435040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLevCreaModifier`'s constructor (the engine map has no name for it):
+/// extra-data type 0x1e and the modifier 4 (`LCM_NONE`, Xbox PDB). Returns
+/// `this`.
+pub fn fn_00435040(e: &mut Engine, this: Ptr<ExtraLevCreaModifier>) -> Ptr<ExtraLevCreaModifier> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_LEV_CREA_MODIFIER,
+        EXTRA_LEV_CREA_MODIFIER_VTABLE,
+    );
+    e.set(
+        this,
+        ExtraLevCreaModifier::eModifier,
+        LEV_CREA_MODIFIER_NONE,
+    );
+    this
+}
+
+// Translated from 00435070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLevCreaModifier::Compare` (engine map name, `vt` slot): true when
+/// `other` is not an `ExtraLevCreaModifier` or when the modifiers differ.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_lev_crea_modifier_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraLevCreaModifier>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraLevCreaModifier> =
+        dynamic_cast_extra(e, other, EXTRA_LEV_CREA_MODIFIER_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraLevCreaModifier::eModifier) != e.get(this, ExtraLevCreaModifier::eModifier)
+}
+
+// Translated from 004350c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraLevCreaModifier` (the engine map has no name for it): the
+/// modifier's multiplier. 1.0 for `LCM_NONE` (4); otherwise the float game
+/// setting the modifier selects in the table at `01184ab0` (one setting
+/// pointer per modifier), read through the setting accessor. Returned in ST0.
+pub fn fn_004350c0(e: &mut Engine, this: Ptr<ExtraLevCreaModifier>) -> f32 {
+    let modifier = e.get(this, ExtraLevCreaModifier::eModifier);
+    if modifier == LEV_CREA_MODIFIER_NONE {
+        return 1.0;
+    }
+    let setting = e.mem.u32(LEV_CREA_SETTING_TABLE + modifier.wrapping_mul(4));
+    let value = e.call(SETTING_FLOAT_VALUE, &args![setting]).u32();
+    e.mem.f32(value)
+}
+
+// Translated from 00435100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraLevCreaModifier` (the engine map has no name for it): 1
+/// for the modifier 0 (`LCM_EASY`), 0 for 4 (`LCM_NONE`) and -1 for any other.
+pub fn fn_00435100(e: &mut Engine, this: Ptr<ExtraLevCreaModifier>) -> i32 {
+    match e.get(this, ExtraLevCreaModifier::eModifier) {
+        0 => 1,
+        LEV_CREA_MODIFIER_NONE => 0,
+        _ => -1,
+    }
+}
+
+// Translated from 00435150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPoison`'s constructor (the decompiler names it
+/// `CPrintDialog::CPrintDialog` by mistake; the engine map has no name for it):
+/// extra-data type 0x3f and the poison given. Returns `this`.
+pub fn fn_00435150(e: &mut Engine, this: Ptr<ExtraPoison>, poison: Ptr) -> Ptr<ExtraPoison> {
+    construct_base(e, this.cast(), TYPE_POISON, EXTRA_POISON_VTABLE);
+    e.set(this, ExtraPoison::pPoison, poison);
+    this
+}
+
+// Translated from 00435180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPoison::Compare` (engine map name, `vt` slot): true when `other` is
+/// not an `ExtraPoison` or when the poisons differ. (`BSExtraData::Compare` is
+/// not asked.)
+pub fn extra_poison_compare(e: &mut Engine, this: Ptr<ExtraPoison>, other: Ptr) -> bool {
+    let cast: Ptr<ExtraPoison> = dynamic_cast_extra(e, other, EXTRA_POISON_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    e.get(cast, ExtraPoison::pPoison) != e.get(this, ExtraPoison::pPoison)
+}
+
+// Translated from 004351d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLastFinishedSequence`'s constructor (the engine map has no name for
+/// it): extra-data type 0x41 and a copy of the C string given, in a new
+/// buffer of `strlen + 1` bytes (`operator new`, then the checked string copy
+/// `00406d30(destination, size, source)`). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004351d0(
+    e: &mut Engine,
+    this: Ptr<ExtraLastFinishedSequence>,
+    name: Ptr,
+) -> Ptr<ExtraLastFinishedSequence> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_LAST_FINISHED_SEQUENCE,
+        EXTRA_LAST_FINISHED_SEQUENCE_VTABLE,
+    );
+    let size = e.call(STRLEN, &args![name]).u32().wrapping_add(1);
+    let buffer = e.call(OPERATOR_NEW, &args![size]).ptr();
+    e.set(this, ExtraLastFinishedSequence::pLastSequenceName, buffer);
+    e.call(STRING_COPY_CHECKED, &args![buffer, size, name]);
+    this
+}
+
+// Translated from 00435270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLastFinishedSequence::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_last_finished_sequence_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraLastFinishedSequence>,
+    flags: u32,
+) -> Ptr<ExtraLastFinishedSequence> {
+    fn_004352a0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004352a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLastFinishedSequence`'s destructor body (the engine map has no name
+/// for it): resets the vtable, deletes the name buffer (without testing it for
+/// null), then runs the base destructor. The exception-unwinding frame is not
+/// translated.
+pub fn fn_004352a0(e: &mut Engine, this: Ptr<ExtraLastFinishedSequence>) {
+    e.mem
+        .set_u32(this.addr(), EXTRA_LAST_FINISHED_SEQUENCE_VTABLE);
+    let name = e.get(this, ExtraLastFinishedSequence::pLastSequenceName);
+    e.call(OPERATOR_DELETE, &args![name]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00435310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLastFinishedSequence::Compare` (Xbox PDB): true when `other` is not
+/// an `ExtraLastFinishedSequence` or when `strcmp` of the two names is not 0.
+/// (`BSExtraData::Compare` is not asked.)
+pub fn extra_last_finished_sequence_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraLastFinishedSequence>,
+    other: Ptr,
+) -> bool {
+    let cast: Ptr<ExtraLastFinishedSequence> =
+        dynamic_cast_extra(e, other, EXTRA_LAST_FINISHED_SEQUENCE_TYPE);
+    if cast.is_null() {
+        return true;
+    }
+    let mine = e.get(this, ExtraLastFinishedSequence::pLastSequenceName);
+    let theirs = e.get(cast, ExtraLastFinishedSequence::pLastSequenceName);
+    e.call(STRCMP, &args![mine, theirs]).u32() != 0
+}
+
+// Translated from 00435370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraXTarget`'s constructor (the engine map has no name for it):
+/// extra-data type 0x44 and no target. Returns `this`.
+pub fn fn_00435370(e: &mut Engine, this: Ptr<ExtraXTarget>) -> Ptr<ExtraXTarget> {
+    construct_base(e, this.cast(), TYPE_X_TARGET, EXTRA_X_TARGET_VTABLE);
+    e.set(this, ExtraXTarget::pTarget, Ptr::NULL);
+    this
+}
+
+// Translated from 004353a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraXTarget::_scalar_deleting_destructor_` (the engine map has no name
+/// for it): the destructor, then `operator delete` when `flags & 1`. Returns
+/// `this`.
+pub fn fn_004353a0(e: &mut Engine, this: Ptr<ExtraXTarget>, flags: u32) -> Ptr<ExtraXTarget> {
+    fn_004353d0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004353d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraXTarget`'s destructor body (the engine map has no name for it):
+/// resets the vtable, then runs the base destructor. The target is not owned.
+pub fn fn_004353d0(e: &mut Engine, this: Ptr<ExtraXTarget>) {
+    e.mem.set_u32(this.addr(), EXTRA_X_TARGET_VTABLE);
     e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
 }
 
@@ -4226,6 +5296,126 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             ) -> Ptr<ExtraDecalRefs>
         ),
         entry!(0x00433d40, fn_00433d40(Ptr<ExtraDecalRefs>)),
+        entry!(
+            0x00433db0,
+            extra_decal_refs_init_item(Ptr<ExtraDecalRefs>, Ptr)
+        ),
+        entry!(
+            0x00433ed0,
+            extra_reflector_refs_init_item(Ptr<ExtraReflectorRefs>, Ptr)
+        ),
+        entry!(
+            0x00434050,
+            extra_lit_water_refs_init_item(Ptr<ExtraLitWaterRefs>, Ptr)
+        ),
+        entry!(
+            0x004341e0,
+            extra_decal_refs_compare(Ptr<ExtraDecalRefs>, Ptr) -> bool
+        ),
+        entry!(0x004342b0, extra_decal_refs_copy(Ptr<ExtraDecalRefs>, Ptr)),
+        entry!(0x004343c0, fn_004343c0(Ptr<ExtraDecalRefs>)),
+        entry!(
+            0x00434410,
+            extra_decal_refs_get_ref_decal_data(Ptr<ExtraDecalRefs>, u32) -> Ptr<RefDecalData>
+        ),
+        entry!(0x00434480, fn_00434480(Ptr<ExtraDecalRefs>, u32, Ptr, Ptr)),
+        entry!(0x00434560, fn_00434560(Ptr<ExtraReflectedRefs>)),
+        entry!(
+            0x00434620,
+            extra_reflected_refs_compare(Ptr<ExtraReflectedRefs>, Ptr) -> bool
+        ),
+        entry!(
+            0x004346f0,
+            extra_reflected_refs_copy(Ptr<ExtraReflectedRefs>, Ptr)
+        ),
+        entry!(0x00434800, fn_00434800(Ptr<ExtraReflectedRefs>, u32)),
+        entry!(0x004348a0, fn_004348a0(Ptr<ExtraReflectedRefs>, u32, u32)),
+        entry!(0x00434950, fn_00434950(Ptr<ExtraWaterLightRefs>)),
+        entry!(
+            0x004349c0,
+            extra_water_light_refs_compare(Ptr<ExtraWaterLightRefs>, Ptr) -> bool
+        ),
+        entry!(
+            0x00434a70,
+            extra_water_light_refs_copy(Ptr<ExtraWaterLightRefs>, Ptr)
+        ),
+        entry!(0x00434af0, fn_00434af0(Ptr<ExtraReflectorRefs>)),
+        entry!(
+            0x00434bb0,
+            extra_reflector_refs_compare(Ptr<ExtraReflectorRefs>, Ptr) -> bool
+        ),
+        entry!(
+            0x00434c80,
+            extra_reflector_refs_copy(Ptr<ExtraReflectorRefs>, Ptr)
+        ),
+        entry!(
+            0x00434d90,
+            extra_reflected_refs_clear_reference_data(Ptr<ExtraReflectedRefs>)
+        ),
+        entry!(0x00434dc0, fn_00434dc0(Ptr<ExtraLitWaterRefs>)),
+        entry!(
+            0x00434e30,
+            extra_lit_water_refs_compare(Ptr<ExtraLitWaterRefs>, Ptr) -> bool
+        ),
+        entry!(
+            0x00434ee0,
+            extra_lit_water_refs_copy(Ptr<ExtraLitWaterRefs>, Ptr)
+        ),
+        entry!(0x00434f60, fn_00434f60(Ptr<ExtraWaterLightRefs>, u32)),
+        entry!(0x00434fa0, fn_00434fa0(Ptr<ExtraWaterLightRefs>)),
+        entry!(
+            0x00434fc0,
+            fn_00434fc0(Ptr<ExtraMerchantContainer>) -> Ptr<ExtraMerchantContainer>
+        ),
+        entry!(
+            0x00434ff0,
+            extra_merchant_container_compare(Ptr<ExtraMerchantContainer>, Ptr) -> bool
+        ),
+        entry!(
+            0x00435040,
+            fn_00435040(Ptr<ExtraLevCreaModifier>) -> Ptr<ExtraLevCreaModifier>
+        ),
+        entry!(
+            0x00435070,
+            extra_lev_crea_modifier_compare(Ptr<ExtraLevCreaModifier>, Ptr) -> bool
+        ),
+        entry!(0x004350c0, fn_004350c0(Ptr<ExtraLevCreaModifier>) -> f32),
+        entry!(0x00435100, fn_00435100(Ptr<ExtraLevCreaModifier>) -> i32),
+        entry!(
+            0x00435150,
+            fn_00435150(Ptr<ExtraPoison>, Ptr) -> Ptr<ExtraPoison>
+        ),
+        entry!(
+            0x00435180,
+            extra_poison_compare(Ptr<ExtraPoison>, Ptr) -> bool
+        ),
+        entry!(
+            0x004351d0,
+            fn_004351d0(Ptr<ExtraLastFinishedSequence>, Ptr) -> Ptr<ExtraLastFinishedSequence>
+        ),
+        entry!(
+            0x00435270,
+            extra_last_finished_sequence_scalar_deleting_destructor(
+                Ptr<ExtraLastFinishedSequence>,
+                u32,
+            ) -> Ptr<
+                ExtraLastFinishedSequence,
+            >
+        ),
+        entry!(0x004352a0, fn_004352a0(Ptr<ExtraLastFinishedSequence>)),
+        entry!(
+            0x00435310,
+            extra_last_finished_sequence_compare(Ptr<ExtraLastFinishedSequence>, Ptr) -> bool
+        ),
+        entry!(
+            0x00435370,
+            fn_00435370(Ptr<ExtraXTarget>) -> Ptr<ExtraXTarget>
+        ),
+        entry!(
+            0x004353a0,
+            fn_004353a0(Ptr<ExtraXTarget>, u32) -> Ptr<ExtraXTarget>
+        ),
+        entry!(0x004353d0, fn_004353d0(Ptr<ExtraXTarget>)),
     ]
 }
 
@@ -7606,7 +8796,6 @@ mod tests {
     #[test]
     fn decal_refs_scalar_deleting_destructor_frees_only_when_asked() {
         let mut e = list_engine();
-        e.register(DECAL_REFS_FREE_LIST, |_, _| Ret::default());
         let this = e.mem.alloc(0x14);
         assert_eq!(
             e.call(0x0043_3d10, &args![Ptr::<()>::new(this), 0u32])
@@ -7622,31 +8811,1028 @@ mod tests {
     #[test]
     fn decal_refs_destructor_frees_the_entries_then_destroys_the_list() {
         let mut e = list_engine();
-        e.register(DECAL_REFS_FREE_LIST, |_, _| Ret::default());
         let this = e.mem.alloc(0x14);
+        let entries = [e.mem.alloc(0x1c), e.mem.alloc(0x1c)];
+        fill_list(&mut e, this + 0xc, &entries);
         start_log(&mut e);
         e.call(0x0043_3d40, &args![Ptr::<()>::new(this)]);
         assert_eq!(vtable_of(&e, this), EXTRA_DECAL_REFS_VTABLE);
-        let order: Vec<u32> = e
-            .call_log
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|(called, _)| *called)
-            .collect();
+        // Each entry is removed from the head and deleted, then the list's
+        // destructor body and the base destructor run.
         assert_eq!(
-            order,
-            vec![
-                0x0043_3d40,
-                DECAL_REFS_FREE_LIST,
-                SIMPLE_LIST_DESTRUCT,
-                BS_EXTRA_DATA_DESTRUCT
-            ]
+            calls(&e, OPERATOR_DELETE),
+            vec![vec![entries[0]], vec![entries[1]]]
         );
-        // The entries are freed through the extra data, the list destructed
-        // through its member.
-        assert_eq!(calls(&e, DECAL_REFS_FREE_LIST), vec![vec![this]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).len(), 2);
+        assert!(calls(&e, SIMPLE_LIST_REMOVE_HEAD)
+            .iter()
+            .all(|call| *call == vec![this + 0xc]));
         assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
         assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+    }
+
+    // ---- fourth batch: 00433db0 to 004353d0 ----
+
+    fn raw(addr: u32) -> Ptr<()> {
+        Ptr::new(addr)
+    }
+
+    /// An entry block holding `words`.
+    fn make_entry(e: &mut Engine, size: u32, words: &[u32]) -> u32 {
+        let entry = e.mem.alloc(size);
+        for (i, word) in words.iter().enumerate() {
+            e.mem.set_u32(entry + 4 * i as u32, *word);
+        }
+        entry
+    }
+
+    /// The doubles for the list functions the fourth batch calls on top of
+    /// `list_engine`: the count, the membership test, the removal of an item
+    /// (same algorithm as `00905330`: the search starts at the node given) and
+    /// the `REF_DECAL_DATA` constructor.
+    fn refs_engine(cast_ok: bool) -> Engine {
+        let mut e = list_engine();
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            ret(if cast_ok { a[0] } else { 0 })
+        });
+        e.register(SIMPLE_LIST_COUNT, |e, a| {
+            let mut count = 0;
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    count += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(count)
+        });
+        e.register(SIMPLE_LIST_CONTAINS, |e, a| {
+            let target = e.mem.u32(a[1]);
+            let mut node = a[0];
+            while node != 0 {
+                if e.mem.u32(node) == target {
+                    return ret(1);
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(0)
+        });
+        e.register(SIMPLE_LIST_REMOVE_ITEM, |e, a| {
+            let start = a[0];
+            let target = e.mem.u32(a[1]);
+            let (mut previous, mut current) = (start, start);
+            while current != 0 && e.mem.u32(current) != target {
+                previous = current;
+                current = e.mem.u32(current + 4);
+            }
+            if current == 0 {
+                return Ret::default();
+            }
+            if current == start {
+                let next = e.mem.u32(start + 4);
+                if next != 0 {
+                    let item = e.mem.u32(next);
+                    let after = e.mem.u32(next + 4);
+                    e.mem.set_u32(start, item);
+                    e.mem.set_u32(start + 4, after);
+                    e.mem.free(next);
+                } else {
+                    e.mem.set_u32(start, 0);
+                }
+            } else {
+                let after = e.mem.u32(current + 4);
+                e.mem.set_u32(previous + 4, after);
+                e.mem.free(current);
+            }
+            Ret::default()
+        });
+        e.register(REF_DECAL_DATA_CONSTRUCT, |e, a| {
+            for word in 0..7 {
+                e.mem.set_u32(a[0] + 4 * word, 0);
+            }
+            ret(a[0])
+        });
+        e
+    }
+
+    /// The doubles for what the `InitItem`s call besides the list functions.
+    /// `references` maps a resolved form id (the file index 1 is added to the
+    /// top byte by the `AddCompileIndex` double) to a reference; `persistent`
+    /// lists the references that are persistent.
+    fn init_engine(references: Vec<(u32, u32)>, persistent: Vec<u32>) -> Engine {
+        let mut e = refs_engine(true);
+        e.register(FORM_GET_FILE, |_, _| ret(1));
+        e.register(FORM_ADD_COMPILE_INDEX, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id | (a[1] << 24));
+            Ret::default()
+        });
+        // The form looked up is the id itself; the cast finds the reference.
+        e.register(LOOKUP_FORM_BY_ID, |_, a| ret(a[0]));
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            ret(references
+                .iter()
+                .find(|(id, _)| *id == a[0])
+                .map_or(0, |(_, reference)| *reference))
+        });
+        e.register_double(REFR_GET_REF_PERSISTS, move |_, a| {
+            ret(persistent.contains(&a[0]) as u32)
+        });
+        e.register(MASTERFILE_LOG, |_, _| Ret::default());
+        e.register(REFR_EXTRA_LIST, |_, a| ret(a[0] + 0x44));
+        for addr in [
+            REFLECTOR_ADD_FIRST,
+            REFLECTOR_ADD_SECOND,
+            WATER_LIGHT_REF_SET,
+        ] {
+            e.register(addr, |_, _| Ret::default());
+        }
+        e
+    }
+
+    #[test]
+    fn decal_init_item_resolves_ids_and_drops_unresolved_entries() {
+        let mut e = init_engine(vec![(0x0100_0010, 0x5010), (0x0100_0030, 0x5030)], vec![]);
+        let this = e.mem.alloc(0x14);
+        let entries: Vec<u32> = [0x10u32, 0x20, 0x30]
+            .iter()
+            .map(|id| make_entry(&mut e, 0x1c, &[*id, 0xdead, 0xbeef]))
+            .collect();
+        fill_list(&mut e, this + 0xc, &entries);
+        start_log(&mut e);
+        e.call(0x0043_3db0, &args![raw(this), raw(0x9000)]);
+        // The middle entry is gone (removed after its predecessor, deleted
+        // and logged with the id after the compile index); the others hold
+        // the reference in their first word.
+        assert_eq!(list_items(&e, this + 0xc), vec![entries[0], entries[2]]);
+        assert_eq!(e.mem.u32(entries[0]), 0x5010);
+        assert_eq!(e.mem.u32(entries[2]), 0x5030);
+        assert_eq!(e.mem.u32(entries[0] + 4), 0xdead);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![entries[1]]]);
+        assert_eq!(e.mem.block_size(entries[1]), None);
+        assert_eq!(
+            calls(&e, MASTERFILE_LOG),
+            vec![vec![MESSAGE_DECAL_NOT_FOUND, 0x0100_0020]]
+        );
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_ITEM).len(), 1);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_ITEM)[0][0], this + 0xc);
+        assert!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).is_empty());
+        // The owner's file is asked for (-1) once per entry, and the id
+        // handed to the lookup carries the file's compile index.
+        assert_eq!(calls(&e, FORM_GET_FILE), vec![vec![0x9000, 0xffff_ffff]; 3]);
+        assert_eq!(
+            calls(&e, LOOKUP_FORM_BY_ID),
+            vec![vec![0x0100_0010], vec![0x0100_0020], vec![0x0100_0030]]
+        );
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST)[0],
+            vec![0x0100_0010, 0, TES_FORM_TYPE, TES_OBJECT_REFR_TYPE, 0]
+        );
+    }
+
+    #[test]
+    fn decal_init_item_removes_unresolved_heads_with_remove_head() {
+        let mut e = init_engine(vec![(0x0100_0010, 0x5010)], vec![]);
+        let this = e.mem.alloc(0x14);
+        let entries: Vec<u32> = [0x20u32, 0x40, 0x10]
+            .iter()
+            .map(|id| make_entry(&mut e, 0x1c, &[*id]))
+            .collect();
+        fill_list(&mut e, this + 0xc, &entries);
+        start_log(&mut e);
+        e.call(0x0043_3db0, &args![raw(this), raw(0x9000)]);
+        // Both unresolved entries were at the head when they were dropped.
+        assert_eq!(list_items(&e, this + 0xc), vec![entries[2]]);
+        assert_eq!(e.mem.u32(entries[2]), 0x5010);
+        assert_eq!(
+            calls(&e, SIMPLE_LIST_REMOVE_HEAD),
+            vec![vec![this + 0xc]; 2]
+        );
+        assert!(calls(&e, SIMPLE_LIST_REMOVE_ITEM).is_empty());
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            vec![vec![entries[0]], vec![entries[1]]]
+        );
+        // An empty list does nothing at all.
+        let empty = e.mem.alloc(0x14);
+        start_log(&mut e);
+        e.call(0x0043_3db0, &args![raw(empty), raw(0x9000)]);
+        assert!(calls(&e, FORM_GET_FILE).is_empty());
+    }
+
+    #[test]
+    fn reflector_init_item_checks_persistence_and_notifies_the_reference() {
+        let mut e = init_engine(
+            vec![
+                (0x0100_0010, 0x5010),
+                (0x0100_0020, 0x5020),
+                (0x0100_0030, 0x5030),
+                (0x0100_0050, 0x5050),
+            ],
+            vec![0x5010, 0x5030, 0x5050],
+        );
+        let this = e.mem.alloc(0x14);
+        // (id, effect flags): 0x10 flags 1, 0x20 not persistent, 0x30 flags 3,
+        // 0x40 unknown, 0x50 no flags.
+        let specs = [(0x10u32, 1u32), (0x20, 3), (0x30, 3), (0x40, 1), (0x50, 0)];
+        let entries: Vec<u32> = specs
+            .iter()
+            .map(|(id, flags)| make_entry(&mut e, 8, &[*id, *flags]))
+            .collect();
+        fill_list(&mut e, this + 0xc, &entries);
+        start_log(&mut e);
+        e.call(0x0043_3ed0, &args![raw(this), raw(0x9000)]);
+        assert_eq!(
+            list_items(&e, this + 0xc),
+            vec![entries[0], entries[2], entries[4]]
+        );
+        assert_eq!(e.mem.u32(entries[0]), 0x5010);
+        assert_eq!(e.mem.u32(entries[2]), 0x5030);
+        assert_eq!(e.mem.u32(entries[4]), 0x5050);
+        assert_eq!(
+            calls(&e, MASTERFILE_LOG),
+            vec![
+                vec![MESSAGE_NOT_PERSISTENT, 0x0100_0020],
+                vec![MESSAGE_REFLECTOR_NOT_FOUND, 0x0100_0040]
+            ]
+        );
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            vec![vec![entries[1]], vec![entries[3]]]
+        );
+        // Bit 0 calls the first method of the reference's extra-data list
+        // (the reference + 0x44) with the owner and 1, bit 1 the second.
+        assert_eq!(
+            calls(&e, REFLECTOR_ADD_FIRST),
+            vec![
+                vec![0x5010 + 0x44, 0x9000, 1],
+                vec![0x5030 + 0x44, 0x9000, 1]
+            ]
+        );
+        assert_eq!(
+            calls(&e, REFLECTOR_ADD_SECOND),
+            vec![vec![0x5030 + 0x44, 0x9000, 1]]
+        );
+        // Only the persistent references were asked about (not the unknown).
+        assert_eq!(
+            calls(&e, REFR_GET_REF_PERSISTS),
+            vec![vec![0x5010], vec![0x5020], vec![0x5030], vec![0x5050]]
+        );
+    }
+
+    #[test]
+    fn lit_water_init_item_keeps_the_good_references_in_order() {
+        let mut e = init_engine(
+            vec![
+                (0x0100_0010, 0x5010),
+                (0x0100_0020, 0x5020),
+                (0x0100_0030, 0x5030),
+            ],
+            vec![0x5010, 0x5030],
+        );
+        let this = e.mem.alloc(0x14);
+        // 0x10 and 0x30 are good, 0x20 is not persistent, 0x40 is unknown.
+        fill_list(&mut e, this + 0xc, &[0x10, 0x20, 0x30, 0x40]);
+        start_log(&mut e);
+        e.call(0x0043_4050, &args![raw(this), raw(0x9000)]);
+        // The temporary list reverses the good references, the refill
+        // reverses them again.
+        assert_eq!(list_items(&e, this + 0xc), vec![0x5010, 0x5030]);
+        assert_eq!(
+            calls(&e, MASTERFILE_LOG),
+            vec![
+                vec![MESSAGE_NOT_PERSISTENT, 0x0100_0020],
+                vec![MESSAGE_LIT_WATER_NOT_FOUND, 0x0100_0040]
+            ]
+        );
+        assert_eq!(
+            calls(&e, WATER_LIGHT_REF_SET),
+            vec![
+                vec![0x5010 + 0x44, 0x9000, 1],
+                vec![0x5030 + 0x44, 0x9000, 1]
+            ]
+        );
+        // The temporary list (a stack local) is built, cleared and destroyed;
+        // the own list is cleared once.
+        let constructed = calls(&e, SIMPLE_LIST_CONSTRUCT);
+        assert_eq!(constructed.len(), 1);
+        let temporary = constructed[0][0];
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![temporary]]);
+        assert_eq!(
+            calls(&e, SIMPLE_LIST_CLEAR),
+            vec![vec![this + 0xc], vec![temporary]]
+        );
+        // Nothing is deleted: the references are not owned.
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+    }
+
+    /// An extra data of `class_size` bytes whose list at +0xc holds entries of
+    /// `entry_size` bytes with the first words `keys`; the other words of an
+    /// entry are `fill`.
+    fn make_entry_extra(
+        e: &mut Engine,
+        class_size: u32,
+        entry_size: u32,
+        keys: &[u32],
+        fill: u32,
+    ) -> u32 {
+        let this = e.mem.alloc(class_size);
+        let entries: Vec<u32> = keys
+            .iter()
+            .map(|key| {
+                let entry = e.mem.alloc(entry_size);
+                for word in 1..entry_size / 4 {
+                    e.mem.set_u32(entry + 4 * word, fill);
+                }
+                e.mem.set_u32(entry, *key);
+                entry
+            })
+            .collect();
+        fill_list(e, this + 0xc, &entries);
+        this
+    }
+
+    /// The `Compare` of the decal, reflected and reflector classes (the entry
+    /// lists are compared by key then by bytes).
+    fn check_entry_list_compare(addr: u32, entry_size: u32) {
+        let compare = |e: &mut Engine, this: u32, other: u32| {
+            e.call(addr, &args![raw(this), raw(other)]).bool()
+        };
+        // Not of the class: true, and no list is looked at.
+        let mut e = refs_engine(false);
+        let this = make_entry_extra(&mut e, 0x14, entry_size, &[1], 0);
+        let other = make_entry_extra(&mut e, 0x14, entry_size, &[1], 0);
+        start_log(&mut e);
+        assert!(compare(&mut e, this, other));
+        assert!(calls(&e, SIMPLE_LIST_COUNT).is_empty());
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, entry_size, &[1, 2], 7);
+        // The same keys in another order and the same bytes: equal. The base
+        // is not asked.
+        let same = make_entry_extra(&mut e, 0x14, entry_size, &[2, 1], 7);
+        start_log(&mut e);
+        assert!(!compare(&mut e, this, same));
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+        // A different number of entries (either way).
+        let fewer = make_entry_extra(&mut e, 0x14, entry_size, &[1], 7);
+        assert!(compare(&mut e, this, fewer));
+        assert!(compare(&mut e, fewer, this));
+        // The same number, but a key is missing here.
+        let other_key = make_entry_extra(&mut e, 0x14, entry_size, &[1, 3], 7);
+        assert!(compare(&mut e, this, other_key));
+        // The same keys, but the last compared word differs.
+        let other_bytes = make_entry_extra(&mut e, 0x14, entry_size, &[1, 2], 8);
+        assert!(compare(&mut e, this, other_bytes));
+        // Two empty lists are equal.
+        let none = make_entry_extra(&mut e, 0x14, entry_size, &[], 0);
+        let also_none = make_entry_extra(&mut e, 0x14, entry_size, &[], 0);
+        assert!(!compare(&mut e, none, also_none));
+        // Only `entry_size` bytes are compared.
+        if entry_size == 8 {
+            let beyond = make_entry_extra(&mut e, 0x14, 0x1c, &[1, 2], 7);
+            let beyond_other = make_entry_extra(&mut e, 0x14, 0x1c, &[1, 2], 7);
+            let entry = e.mem.u32(beyond_other + 0xc);
+            e.mem.set_u32(entry + 8, 0x1234);
+            assert!(!compare(&mut e, beyond, beyond_other));
+        }
+    }
+
+    #[test]
+    fn decal_refs_compare_checks_class_count_keys_and_bytes() {
+        check_entry_list_compare(0x0043_41e0, 0x1c);
+        // The lookup is asked on `this` for the other list's keys.
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[5], 1);
+        let other = make_entry_extra(&mut e, 0x14, 0x1c, &[5], 1);
+        let this_entry = e.mem.u32(this + 0xc);
+        let other_entry = e.mem.u32(other + 0xc);
+        start_log(&mut e);
+        assert!(!e.call(0x0043_41e0, &args![raw(this), raw(other)]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, BS_EXTRA_DATA_TYPE, EXTRA_DECAL_REFS_TYPE, 0]]
+        );
+        assert_eq!(
+            calls(&e, SIMPLE_LIST_COUNT),
+            vec![vec![this + 0xc], vec![other + 0xc]]
+        );
+        assert_eq!(calls(&e, MEMCMP), vec![vec![this_entry, other_entry, 0x1c]]);
+    }
+
+    #[test]
+    fn reflected_and_reflector_refs_compare_check_class_count_keys_and_bytes() {
+        check_entry_list_compare(0x0043_4620, 8);
+        check_entry_list_compare(0x0043_4bb0, 8);
+        for (addr, target_type) in [
+            (0x0043_4620, EXTRA_REFLECTED_REFS_TYPE),
+            (0x0043_4bb0, EXTRA_REFLECTOR_REFS_TYPE),
+        ] {
+            let mut e = refs_engine(false);
+            let this = make_entry_extra(&mut e, 0x14, 8, &[1], 0);
+            let other = make_entry_extra(&mut e, 0x14, 8, &[1], 0);
+            start_log(&mut e);
+            assert!(e.call(addr, &args![raw(this), raw(other)]).bool());
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+            );
+        }
+    }
+
+    /// The list of the entries (each as its words) at +0xc of `this`.
+    fn entry_words(e: &Engine, this: u32, words: u32) -> Vec<Vec<u32>> {
+        list_items(e, this + 0xc)
+            .into_iter()
+            .filter(|entry| *entry != 0)
+            .map(|entry| (0..words).map(|word| e.mem.u32(entry + 4 * word)).collect())
+            .collect()
+    }
+
+    #[test]
+    fn decal_refs_copy_replaces_the_entries_with_reversed_copies() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[0x90, 0x91], 9);
+        let old_entries = list_items(&e, this + 0xc);
+        let other = make_entry_extra(&mut e, 0x14, 0x1c, &[1, 2], 7);
+        let source_entries = list_items(&e, other + 0xc);
+        start_log(&mut e);
+        e.call(0x0043_42b0, &args![raw(this), raw(other)]);
+        // The old entries were deleted, the source entries copied (0x1c
+        // bytes each) and added at the head: the order is reversed.
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            old_entries
+                .iter()
+                .map(|entry| vec![*entry])
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(entry_words(&e, this, 3), vec![vec![2, 7, 7], vec![1, 7, 7]]);
+        let copies = list_items(&e, this + 0xc);
+        assert!(source_entries.iter().all(|entry| !copies.contains(entry)));
+        assert_eq!(calls(&e, REF_DECAL_DATA_CONSTRUCT).len(), 2);
+        assert_eq!(calls(&e, MEMCPY)[0][1..], [source_entries[0], 0x1c]);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x1c], vec![0x1c]]);
+        // The source is untouched.
+        assert_eq!(list_items(&e, other + 0xc), source_entries);
+    }
+
+    #[test]
+    fn decal_refs_copy_of_another_class_does_nothing() {
+        let mut e = refs_engine(false);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[0x90], 9);
+        let before = list_items(&e, this + 0xc);
+        let other = make_entry_extra(&mut e, 0x14, 0x1c, &[1], 7);
+        start_log(&mut e);
+        e.call(0x0043_42b0, &args![raw(this), raw(other)]);
+        assert_eq!(list_items(&e, this + 0xc), before);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn reflected_and_reflector_refs_copy_clear_without_deleting_then_copy() {
+        for (addr, target_type) in [
+            (0x0043_46f0, EXTRA_REFLECTED_REFS_TYPE),
+            (0x0043_4c80, EXTRA_REFLECTOR_REFS_TYPE),
+        ] {
+            let mut e = refs_engine(true);
+            let this = make_entry_extra(&mut e, 0x14, 8, &[0x90, 0x91], 9);
+            let other = make_entry_extra(&mut e, 0x14, 8, &[1, 2], 7);
+            let source_entries = list_items(&e, other + 0xc);
+            start_log(&mut e);
+            e.call(addr, &args![raw(this), raw(other)]);
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+            );
+            // The old entries are only removed from the list (not deleted):
+            // the copies are new 8-byte blocks, added at the head.
+            assert!(calls(&e, OPERATOR_DELETE).is_empty());
+            assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).len(), 2);
+            assert_eq!(entry_words(&e, this, 2), vec![vec![2, 7], vec![1, 7]]);
+            assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8], vec![8]]);
+            assert_eq!(calls(&e, MEMCPY)[0][1..], [source_entries[0], 8]);
+            assert_eq!(list_items(&e, other + 0xc), source_entries);
+
+            // Another class: nothing happens.
+            let mut e = refs_engine(false);
+            let this = make_entry_extra(&mut e, 0x14, 8, &[0x90], 9);
+            let other = make_entry_extra(&mut e, 0x14, 8, &[1], 7);
+            start_log(&mut e);
+            e.call(addr, &args![raw(this), raw(other)]);
+            assert_eq!(entry_words(&e, this, 2), vec![vec![0x90, 9]]);
+            assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn decal_refs_free_list_deletes_every_entry() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[1, 2, 3], 0);
+        let entries = list_items(&e, this + 0xc);
+        start_log(&mut e);
+        e.call(0x0043_43c0, &args![raw(this)]);
+        assert_eq!(
+            calls(&e, OPERATOR_DELETE),
+            entries.iter().map(|entry| vec![*entry]).collect::<Vec<_>>()
+        );
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+        // An empty list: nothing is called but the emptiness test.
+        start_log(&mut e);
+        e.call(0x0043_43c0, &args![raw(this)]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).is_empty());
+    }
+
+    #[test]
+    fn get_ref_decal_data_finds_the_entry_by_its_first_word() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[5, 6, 7], 0);
+        let entries = list_items(&e, this + 0xc);
+        let find = |e: &mut Engine, key: u32| e.call(0x0043_4410, &args![raw(this), key]).u32();
+        assert_eq!(find(&mut e, 5), entries[0]);
+        assert_eq!(find(&mut e, 7), entries[2]);
+        assert_eq!(find(&mut e, 8), 0);
+        let empty = make_entry_extra(&mut e, 0x14, 0x1c, &[], 0);
+        assert_eq!(e.call(0x0043_4410, &args![raw(empty), 5u32]).u32(), 0);
+    }
+
+    #[test]
+    fn set_decal_data_creates_or_updates_the_entry() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 0x1c, &[5], 0);
+        let existing = e.mem.u32(this + 0xc);
+        let intersect = e.mem.alloc(12);
+        let normal = e.mem.alloc(12);
+        for word in 0..3 {
+            e.mem.set_f32(intersect + 4 * word, 1.0 + word as f32);
+            e.mem.set_f32(normal + 4 * word, 10.0 + word as f32);
+        }
+        start_log(&mut e);
+        // An existing key: the entry is updated in place.
+        e.call(
+            0x0043_4480,
+            &args![raw(this), 5u32, raw(intersect), raw(normal)],
+        );
+        assert_eq!(list_items(&e, this + 0xc), vec![existing]);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        assert_eq!(e.mem.f32(existing + 4), 1.0);
+        assert_eq!(e.mem.f32(existing + 0xc), 3.0);
+        assert_eq!(e.mem.f32(existing + 0x10), 10.0);
+        assert_eq!(e.mem.f32(existing + 0x18), 12.0);
+        // A new key: a 0x1c-byte entry is built and added at the head.
+        e.call(
+            0x0043_4480,
+            &args![raw(this), 6u32, raw(normal), raw(intersect)],
+        );
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x1c]]);
+        let items = list_items(&e, this + 0xc);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1], existing);
+        let created = items[0];
+        assert_eq!(calls(&e, REF_DECAL_DATA_CONSTRUCT), vec![vec![created]]);
+        assert_eq!(e.mem.u32(created), 6);
+        assert_eq!(e.mem.f32(created + 4), 10.0);
+        assert_eq!(e.mem.f32(created + 0x10), 1.0);
+        assert_eq!(e.mem.f32(created + 0x18), 3.0);
+    }
+
+    #[test]
+    fn reflected_refs_destructors_delete_the_entries_and_the_others_do_not() {
+        for (addr, vtable, owned) in [
+            (0x0043_4560, EXTRA_REFLECTED_REFS_VTABLE, true),
+            (0x0043_4af0, EXTRA_REFLECTOR_REFS_VTABLE, true),
+            (0x0043_4950, EXTRA_WATER_LIGHT_REFS_VTABLE, false),
+            (0x0043_4dc0, EXTRA_LIT_WATER_REFS_VTABLE, false),
+        ] {
+            let mut e = refs_engine(true);
+            let this = make_entry_extra(&mut e, 0x14, 8, &[1, 2], 0);
+            let entries = list_items(&e, this + 0xc);
+            start_log(&mut e);
+            e.call(addr, &args![raw(this)]);
+            assert_eq!(vtable_of(&e, this), vtable);
+            let expected: Vec<Vec<u32>> = if owned {
+                entries.iter().map(|entry| vec![*entry]).collect()
+            } else {
+                vec![]
+            };
+            assert_eq!(calls(&e, OPERATOR_DELETE), expected);
+            let order: Vec<u32> = e
+                .call_log
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|(called, _)| *called)
+                .filter(|called| {
+                    [
+                        SIMPLE_LIST_CLEAR,
+                        SIMPLE_LIST_DESTRUCT,
+                        BS_EXTRA_DATA_DESTRUCT,
+                    ]
+                    .contains(called)
+                })
+                .collect();
+            assert_eq!(
+                order,
+                vec![
+                    SIMPLE_LIST_CLEAR,
+                    SIMPLE_LIST_DESTRUCT,
+                    BS_EXTRA_DATA_DESTRUCT
+                ]
+            );
+            assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![this + 0xc]]);
+            assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0xc]]);
+            assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+            assert_eq!(list_items(&e, this + 0xc), vec![0]);
+        }
+    }
+
+    #[test]
+    fn remove_reference_data_removes_head_or_inner_entry_and_deletes_it() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 8, &[1, 2, 3], 0);
+        let entries = list_items(&e, this + 0xc);
+        start_log(&mut e);
+        // An inner entry is removed after its predecessor.
+        e.call(0x0043_4800, &args![raw(this), 2u32]);
+        assert_eq!(list_items(&e, this + 0xc), vec![entries[0], entries[2]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_ITEM).len(), 1);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_ITEM)[0][0], this + 0xc);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![entries[1]]]);
+        // The head entry is removed with remove-head.
+        e.call(0x0043_4800, &args![raw(this), 1u32]);
+        assert_eq!(list_items(&e, this + 0xc), vec![entries[2]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, OPERATOR_DELETE).len(), 2);
+        // A key that is not there: nothing happens.
+        start_log(&mut e);
+        e.call(0x0043_4800, &args![raw(this), 9u32]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+        assert_eq!(list_items(&e, this + 0xc), vec![entries[2]]);
+    }
+
+    #[test]
+    fn set_effect_flags_creates_or_updates_the_entry() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 8, &[5], 0);
+        let existing = e.mem.u32(this + 0xc);
+        start_log(&mut e);
+        e.call(0x0043_48a0, &args![raw(this), 5u32, 3u32]);
+        assert_eq!(list_items(&e, this + 0xc), vec![existing]);
+        assert_eq!(e.mem.u32(existing + 4), 3);
+        assert!(calls(&e, OPERATOR_NEW).is_empty());
+        // A new key: an 8-byte entry (cleared by the list-node constructor)
+        // is added at the head.
+        e.call(0x0043_48a0, &args![raw(this), 6u32, 2u32]);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8]]);
+        let items = list_items(&e, this + 0xc);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1], existing);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![items[0]]]);
+        assert_eq!((e.mem.u32(items[0]), e.mem.u32(items[0] + 4)), (6, 2));
+    }
+
+    #[test]
+    fn reference_list_compare_checks_class_count_and_membership() {
+        for (addr, target_type) in [
+            (0x0043_49c0, EXTRA_WATER_LIGHT_REFS_TYPE),
+            (0x0043_4e30, EXTRA_LIT_WATER_REFS_TYPE),
+        ] {
+            let compare = |e: &mut Engine, this: u32, other: u32| {
+                e.call(addr, &args![raw(this), raw(other)]).bool()
+            };
+            let mut e = refs_engine(false);
+            let this = make_entry_extra(&mut e, 0x14, 4, &[], 0);
+            let other = make_entry_extra(&mut e, 0x14, 4, &[], 0);
+            start_log(&mut e);
+            assert!(compare(&mut e, this, other));
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+            );
+            assert!(calls(&e, SIMPLE_LIST_COUNT).is_empty());
+
+            let mut e = refs_engine(true);
+            let build = |e: &mut Engine, items: &[u32]| {
+                let this = e.mem.alloc(0x14);
+                fill_list(e, this + 0xc, items);
+                this
+            };
+            let this = build(&mut e, &[0x51, 0x52]);
+            // The same references in another order: equal.
+            let same = build(&mut e, &[0x52, 0x51]);
+            start_log(&mut e);
+            assert!(!compare(&mut e, this, same));
+            assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+            // The test is asked on this list with the other list's item slot.
+            assert_eq!(
+                calls(&e, SIMPLE_LIST_CONTAINS),
+                vec![vec![this + 0xc, same + 0xc], {
+                    let second = e.mem.u32(same + 0xc + 4);
+                    vec![this + 0xc, second]
+                }]
+            );
+            // A different count, and a reference that is not in this list.
+            let fewer = build(&mut e, &[0x51]);
+            assert!(compare(&mut e, this, fewer));
+            let other_item = build(&mut e, &[0x51, 0x53]);
+            assert!(compare(&mut e, this, other_item));
+            let none = build(&mut e, &[]);
+            let also_none = build(&mut e, &[]);
+            assert!(!compare(&mut e, none, also_none));
+        }
+    }
+
+    #[test]
+    fn reference_list_copy_clears_then_adds_each_missing_reference() {
+        for (addr, target_type) in [
+            (0x0043_4a70, EXTRA_WATER_LIGHT_REFS_TYPE),
+            (0x0043_4ee0, EXTRA_LIT_WATER_REFS_TYPE),
+        ] {
+            let mut e = refs_engine(true);
+            let build = |e: &mut Engine, items: &[u32]| {
+                let this = e.mem.alloc(0x14);
+                fill_list(e, this + 0xc, items);
+                this
+            };
+            let this = build(&mut e, &[0x99]);
+            // The other list holds a duplicate: it is added once.
+            let other = build(&mut e, &[0x51, 0x52, 0x51]);
+            start_log(&mut e);
+            e.call(addr, &args![raw(this), raw(other)]);
+            assert_eq!(
+                calls(&e, DYNAMIC_CAST),
+                vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+            );
+            assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![this + 0xc]]);
+            // Added at the head: the later reference ends up first.
+            assert_eq!(list_items(&e, this + 0xc), vec![0x52, 0x51]);
+            assert_eq!(calls(&e, SIMPLE_LIST_ADD_HEAD).len(), 2);
+            assert_eq!(list_items(&e, other + 0xc), vec![0x51, 0x52, 0x51]);
+
+            // Another class: nothing happens.
+            let mut e = refs_engine(false);
+            let this = build(&mut e, &[0x99]);
+            let other = build(&mut e, &[0x51]);
+            start_log(&mut e);
+            e.call(addr, &args![raw(this), raw(other)]);
+            assert_eq!(list_items(&e, this + 0xc), vec![0x99]);
+            assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        }
+    }
+
+    #[test]
+    fn add_reference_if_absent_and_clear_list() {
+        let mut e = refs_engine(true);
+        let this = e.mem.alloc(0x14);
+        fill_list(&mut e, this + 0xc, &[0x51]);
+        start_log(&mut e);
+        e.call(0x0043_4f60, &args![raw(this), 0x51u32]);
+        assert_eq!(list_items(&e, this + 0xc), vec![0x51]);
+        assert!(calls(&e, SIMPLE_LIST_ADD_HEAD).is_empty());
+        e.call(0x0043_4f60, &args![raw(this), 0x52u32]);
+        assert_eq!(list_items(&e, this + 0xc), vec![0x52, 0x51]);
+        // Both calls ask about the address of a stack word holding the item.
+        let asked = calls(&e, SIMPLE_LIST_CONTAINS);
+        assert_eq!(asked.len(), 2);
+        assert_eq!(asked[0][0], this + 0xc);
+        assert_eq!(calls(&e, SIMPLE_LIST_ADD_HEAD)[0][0], this + 0xc);
+        e.call(0x0043_4fa0, &args![raw(this)]);
+        assert_eq!(calls(&e, SIMPLE_LIST_CLEAR), vec![vec![this + 0xc]]);
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+    }
+
+    #[test]
+    fn clear_reference_data_removes_the_heads_without_deleting() {
+        let mut e = refs_engine(true);
+        let this = make_entry_extra(&mut e, 0x14, 8, &[1, 2, 3], 0);
+        start_log(&mut e);
+        e.call(0x0043_4d90, &args![raw(this)]);
+        assert_eq!(list_items(&e, this + 0xc), vec![0]);
+        assert_eq!(
+            calls(&e, SIMPLE_LIST_REMOVE_HEAD),
+            vec![vec![this + 0xc]; 3]
+        );
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn merchant_container_constructor_and_compare() {
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0xaaaa_aaaa);
+        assert_eq!(e.call(0x0043_4fc0, &args![raw(this)]).u32(), this);
+        assert_eq!(extra_type_of(&e, this), 0x3c);
+        assert_eq!(vtable_of(&e, this), EXTRA_MERCHANT_CONTAINER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        check_value_compare_without_base(0x0043_4ff0, EXTRA_MERCHANT_CONTAINER_TYPE);
+    }
+
+    /// A `Compare` that casts `other`, then compares the word at +0xc and does
+    /// not ask the base.
+    fn check_value_compare_without_base(addr: u32, target_type: u32) {
+        let mut e = compare_engine(false, false);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        start_log(&mut e);
+        assert!(e.call(addr, &args![raw(this), raw(other)]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![other, 0, BS_EXTRA_DATA_TYPE, target_type, 0]]
+        );
+        let mut e = compare_engine(true, true);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0x1111);
+        e.mem.set_u32(other + 0xc, 0x1111);
+        start_log(&mut e);
+        // The base answer (true) is never asked.
+        assert!(!e.call(addr, &args![raw(this), raw(other)]).bool());
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+        e.mem.set_u32(other + 0xc, 0x2222);
+        assert!(e.call(addr, &args![raw(this), raw(other)]).bool());
+    }
+
+    #[test]
+    fn lev_crea_modifier_constructor_compare_and_accessors() {
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x0043_5040, &args![raw(this)]).u32(), this);
+        assert_eq!(extra_type_of(&e, this), 0x1e);
+        assert_eq!(vtable_of(&e, this), EXTRA_LEV_CREA_MODIFIER_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 4);
+        check_value_compare_without_base(0x0043_5070, EXTRA_LEV_CREA_MODIFIER_TYPE);
+
+        // 00435100: 1 for 0, 0 for 4, -1 otherwise.
+        for (modifier, expected) in [(0u32, 1i32), (4, 0), (1, -1), (2, -1), (3, -1), (7, -1)] {
+            e.mem.set_u32(this + 0xc, modifier);
+            assert_eq!(e.call(0x0043_5100, &args![raw(this)]).i32(), expected);
+        }
+    }
+
+    #[test]
+    fn lev_crea_modifier_multiplier_reads_the_setting_for_the_modifier() {
+        let mut e = compare_engine(true, false);
+        e.map(0x0118_4000, 0x1000);
+        // Four settings; the accessor answers the address of the value, which
+        // sits at +8 of the setting.
+        let settings: Vec<u32> = [0.5f32, 1.5, 2.5, 4.0]
+            .iter()
+            .map(|value| {
+                let setting = e.mem.alloc(0x10);
+                e.mem.set_f32(setting + 8, *value);
+                setting
+            })
+            .collect();
+        for (i, setting) in settings.iter().enumerate() {
+            e.mem
+                .set_u32(LEV_CREA_SETTING_TABLE + 4 * i as u32, *setting);
+        }
+        e.register(SETTING_FLOAT_VALUE, |_, a| ret(a[0] + 8));
+        let this = e.mem.alloc(0x10);
+        for (modifier, expected) in [(0u32, 0.5f32), (1, 1.5), (2, 2.5), (3, 4.0), (4, 1.0)] {
+            e.mem.set_u32(this + 0xc, modifier);
+            start_log(&mut e);
+            assert_eq!(e.call(0x0043_50c0, &args![raw(this)]).f32(), expected);
+            // The setting is only read for the modifiers below 4.
+            assert_eq!(
+                calls(&e, SETTING_FLOAT_VALUE).len(),
+                (modifier < 4) as usize
+            );
+        }
+    }
+
+    #[test]
+    fn poison_constructor_and_compare() {
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x10);
+        assert_eq!(
+            e.call(0x0043_5150, &args![raw(this), raw(0x7777)]).u32(),
+            this
+        );
+        assert_eq!(extra_type_of(&e, this), 0x3f);
+        assert_eq!(vtable_of(&e, this), EXTRA_POISON_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0x7777);
+        check_value_compare_without_base(0x0043_5180, EXTRA_POISON_TYPE);
+    }
+
+    #[test]
+    fn last_finished_sequence_constructor_copies_the_name() {
+        let mut e = extra_engine();
+        e.register(STRLEN, |e, a| {
+            let mut length = 0;
+            while e.mem.u8(a[0] + length) != 0 {
+                length += 1;
+            }
+            ret(length)
+        });
+        e.register(STRING_COPY_CHECKED, |e, a| {
+            for i in 0..a[1] {
+                let byte = e.mem.u8(a[2] + i);
+                e.mem.set_u8(a[0] + i, byte);
+            }
+            Ret::default()
+        });
+        let name = e.mem.alloc(8);
+        for (i, byte) in b"idle\0".iter().enumerate() {
+            e.mem.set_u8(name + i as u32, *byte);
+        }
+        let this = e.mem.alloc(0x10);
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0043_51d0, &args![raw(this), raw(name)]).u32(),
+            this
+        );
+        assert_eq!(extra_type_of(&e, this), 0x41);
+        assert_eq!(vtable_of(&e, this), EXTRA_LAST_FINISHED_SEQUENCE_VTABLE);
+        let copy = e.mem.u32(this + 0xc);
+        assert_ne!(copy, name);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![5]]);
+        assert_eq!(calls(&e, STRING_COPY_CHECKED), vec![vec![copy, 5, name]]);
+        assert_eq!(e.mem.bytes(copy, 5), b"idle\0".to_vec());
+    }
+
+    #[test]
+    fn last_finished_sequence_destructors_free_the_name() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        let name = e.mem.alloc(8);
+        e.mem.set_u32(this + 0xc, name);
+        start_log(&mut e);
+        e.call(0x0043_52a0, &args![raw(this)]);
+        assert_eq!(vtable_of(&e, this), EXTRA_LAST_FINISHED_SEQUENCE_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![name]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(e.mem.block_size(name), None);
+
+        // The scalar deleting destructor: the body, then the block when asked.
+        let this = e.mem.alloc(0x10);
+        let name = e.mem.alloc(8);
+        e.mem.set_u32(this + 0xc, name);
+        assert_eq!(e.call(0x0043_5270, &args![raw(this), 0u32]).u32(), this);
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(e.mem.block_size(name), None);
+        // (The name pointer still points to the freed block: null it so the
+        // second destruction deletes nothing.)
+        e.mem.set_u32(this + 0xc, 0);
+        assert_eq!(e.call(0x0043_5270, &args![raw(this), 1u32]).u32(), this);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn last_finished_sequence_compare_uses_strcmp_of_the_names() {
+        let mut e = compare_engine(false, false);
+        let this = e.mem.alloc(0x10);
+        let other = e.mem.alloc(0x10);
+        start_log(&mut e);
+        assert!(e.call(0x0043_5310, &args![raw(this), raw(other)]).bool());
+        assert_eq!(
+            calls(&e, DYNAMIC_CAST),
+            vec![vec![
+                other,
+                0,
+                BS_EXTRA_DATA_TYPE,
+                EXTRA_LAST_FINISHED_SEQUENCE_TYPE,
+                0
+            ]]
+        );
+        for answer in [0u32, 1, u32::MAX] {
+            let mut e = compare_engine(true, true);
+            e.register_double(STRCMP, move |_, _| ret(answer));
+            let this = e.mem.alloc(0x10);
+            let other = e.mem.alloc(0x10);
+            e.mem.set_u32(this + 0xc, 0x1111);
+            e.mem.set_u32(other + 0xc, 0x2222);
+            start_log(&mut e);
+            // The base answer (true) is not asked; the names are given as
+            // (this name, other name).
+            assert_eq!(
+                e.call(0x0043_5310, &args![raw(this), raw(other)]).bool(),
+                answer != 0
+            );
+            assert_eq!(calls(&e, STRCMP), vec![vec![0x1111, 0x2222]]);
+            assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+        }
+    }
+
+    #[test]
+    fn x_target_constructor_and_destructors() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0xaaaa_aaaa);
+        assert_eq!(e.call(0x0043_5370, &args![raw(this)]).u32(), this);
+        assert_eq!(extra_type_of(&e, this), 0x44);
+        assert_eq!(vtable_of(&e, this), EXTRA_X_TARGET_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        check_scalar_deleting_destructor(0x0043_53a0, EXTRA_X_TARGET_VTABLE, 0x10);
+        // The destructor body resets the vtable and runs the base.
+        let other = e.mem.alloc(0x10);
+        start_log(&mut e);
+        e.call(0x0043_53d0, &args![raw(other)]);
+        assert_eq!(vtable_of(&e, other), EXTRA_X_TARGET_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![other]]);
+        assert!(calls(&e, OPERATOR_DELETE).is_empty());
     }
 }
