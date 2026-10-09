@@ -3,16 +3,20 @@
 //!
 //! The unit has 517 functions (`ledger queue "fallout shared/modelloader.cpp"`);
 //! it is translated in address order, a session at a time. State of this file:
-//! the first 40 functions, `0043aaf0` to `0043baa0` (the `Model` and `KFModel`
-//! classes, `Model::InitModel` and the small helpers the unit's compiler
-//! emitted next to them: `BSStream`, `NiNode` and `NiFixedString` accessors,
-//! interlocked-operation wrappers). The next session continues at `0043bac0`.
+//! the first 80 functions, `0043aaf0` to `0043c830`. The first 40, to
+//! `0043baa0`, are the `Model` and `KFModel` classes, `Model::InitModel` and
+//! the small helpers the unit's compiler emitted next to them (`BSStream`,
+//! `NiNode` and `NiFixedString` accessors, interlocked-operation wrappers).
+//! The next 40, from `0043bac0`, are `LoadedFile`, `QueuedFile`,
+//! `QueuedTexture` (constructors, `QueueMe`, `Run`, `Finish`, `Cancel`) and
+//! the start of `QueuedModel`, with their flag, TLS and texture-map helpers.
+//! The next session continues at `0043c890`.
 //!
 //! Layouts and helpers added here live at the top of the file, below.
 //!
 //! Not translated: the compiler's exception-unwinding frames (the `FS:[0]`
 //! chains and state variables of the constructors, destructors and
-//! `InitModel`) and the stack-cookie check of `0043b7e0`. Locals the game
+//! `InitModel`) and the stack-cookie checks (`0043b7e0`, `0043bb80`, `0043bd10`). Locals the game
 //! keeps on its stack and passes by address (the temporary `NiFixedString`s
 //! and the 268-byte name buffer of `0043b7e0`) are heap blocks here, freed
 //! where the game's scope ends.
@@ -172,6 +176,141 @@ const PROPERTY_TYPE_FIRST: u32 = 0xb;
 /// interface unit).
 const PROPERTY_TYPE_SECOND_GETTER: u32 = 0x0070_2440;
 
+// --- Queued files (`0043bac0` onwards): `LoadedFile`, `QueuedTexture`, `QueuedModel`. ---
+
+/// `QueuedFileEntry::QueuedFileEntry(context)` (`00c3ce60`): the shared base
+/// constructor of the queued texture and model.
+const QUEUED_FILE_ENTRY_CONSTRUCT: u32 = 0x00c3_ce60;
+/// `QueuedFileEntry` destructor body (`00c3cea0`).
+const QUEUED_FILE_ENTRY_DESTRUCT: u32 = 0x00c3_cea0;
+/// Copies a file name into `pFileName` (`00c3cee0`, `__thiscall(name)`).
+const QUEUED_FILE_ENTRY_SET_FILE_NAME: u32 = 0x00c3_cee0;
+/// Looks the file entry of `pFileName` up (`00c3cf60`, `__thiscall(flag)`).
+const QUEUED_FILE_ENTRY_FIND_FILE_ENTRY: u32 = 0x00c3_cf60;
+/// Stores `pFileEntry` (`00c3cf40`, `__thiscall(file entry)`).
+const QUEUED_FILE_ENTRY_SET_FILE_ENTRY: u32 = 0x00c3_cf40;
+/// `QueuedFileEntry::GetFile` (Xbox PDB, `00c3cff0`), `__thiscall(1, 2)`:
+/// opens the file of the entry and returns the `BSFile` (0 on failure).
+const QUEUED_FILE_ENTRY_GET_FILE: u32 = 0x00c3_cff0;
+/// `QueuedFileEntry::GetDescription` (Xbox PDB, `00c3d0e0`),
+/// `__thiscall(buffer, size, kind text) -> bool`.
+const QUEUED_FILE_ENTRY_GET_DESCRIPTION: u32 = 0x00c3_d0e0;
+/// `QueuedFile::Cancel` (Xbox PDB, `00c3cb70`), `__thiscall(2 arguments)`.
+const QUEUED_FILE_CANCEL: u32 = 0x00c3_cb70;
+/// Getter of `QueuedFileEntry::pFileEntry` (`0055b980`, `this + 0x2c`; the
+/// linker folded it with the same getter of the object unit).
+const QUEUED_FILE_ENTRY_GET_FILE_ENTRY: u32 = 0x0055_b980;
+/// Getter of `QueuedFileEntry::pFileName` (`0045cd60`, `this + 0x28`).
+const QUEUED_FILE_ENTRY_GET_FILE_NAME: u32 = 0x0045_cd60;
+/// `BSFileEntry::iSize & 0x3fffffff` (`0062a100`).
+const FILE_ENTRY_GET_SIZE: u32 = 0x0062_a100;
+/// The archive that holds a file entry, `__cdecl(file entry, 2) -> archive`
+/// (`00af6910`, in the archive unit; 0 when there is none).
+const FILE_ENTRY_FIND_ARCHIVE: u32 = 0x00af_6910;
+/// `__thiscall(flag, byte)` helpers of this unit, `__cdecl(flag, byte
+/// pointer)`: set (non-zero `flag`) or clear one bit of the byte.
+const SET_FLAG_BIT_1: u32 = 0x0044_ae20;
+const SET_FLAG_BIT_2: u32 = 0x0044_ae60;
+const SET_FLAG_BIT_4: u32 = 0x0044_aea0;
+/// `__cdecl(flags byte) -> bool`: whether bit 2 / bit 4 of the byte is set.
+const TEST_FLAG_BIT_2: u32 = 0x0044_ae50;
+const TEST_FLAG_BIT_4: u32 = 0x0044_ae90;
+/// `__thiscall(flag)` on a `QueuedTexture` (`0043e480`, in this unit, not
+/// translated yet): sets or clears bit 1 of `cFlags`.
+const QUEUED_TEXTURE_SET_FLAG_1: u32 = 0x0043_e480;
+/// `__thiscall()` on a `QueuedTexture` (`0043e530`, in this unit, not
+/// translated yet): whether bit 1 of `cFlags` is set.
+const QUEUED_TEXTURE_TEST_FLAG_1: u32 = 0x0043_e530;
+/// The object at `011c3b3c`, whose methods `00448330`, `00448370`,
+/// `00448ed0` and `00448f50` (this unit, not translated yet) keep the maps
+/// of loaded files and of queued textures.
+const FILE_MAP_OWNER: u32 = 0x011c_3b3c;
+/// `__thiscall(name, loaded file) -> bool` on [`FILE_MAP_OWNER`]: adds a
+/// `LoadedFile` to the map of loaded files.
+const FILE_MAP_ADD_LOADED_FILE: u32 = 0x0044_8330;
+/// `__thiscall(name)` on [`FILE_MAP_OWNER`]: removes it again.
+const FILE_MAP_REMOVE_LOADED_FILE: u32 = 0x0044_8370;
+/// `__thiscall(file entry, queued texture) -> bool` on [`FILE_MAP_OWNER`]:
+/// adds the texture to the map of queued textures by file entry.
+const FILE_MAP_ADD_QUEUED_TEXTURE: u32 = 0x0044_8ed0;
+/// `__thiscall(file entry)` on [`FILE_MAP_OWNER`]: removes it.
+const FILE_MAP_REMOVE_QUEUED_TEXTURE: u32 = 0x0044_8f50;
+/// The object at `01202d98` (a task queue); slot `0x48` takes the queued
+/// texture to run.
+const TASK_QUEUE: u32 = 0x0120_2d98;
+/// The object at `011f6388` that `LoadedFile`'s destructor reports to
+/// (slot `0x14`: `(severity, text, 0, 0, 0)`), 0 when there is none.
+const MESSAGE_SINK: u32 = 0x011f_6388;
+/// `BSTexturePalette::pTexMapA` (Xbox PDB), `011f4468`: the texture map.
+const TEXTURE_MAP: u32 = 0x011f_4468;
+/// The word `0043c4b0` returns (`011f4748`, a default texture setting).
+const DEFAULT_TEXTURE_SETTING: u32 = 0x011f_4748;
+/// `BSTexturePalette::SetTexture` (Xbox PDB, `00a61c50`), `__cdecl(texture,
+/// file entry)`.
+const TEXTURE_PALETTE_SET_TEXTURE: u32 = 0x00a6_1c50;
+/// `BSTexturePalette::GetTexture_ov2` (Xbox PDB, `00a61b90`), `__cdecl(file
+/// name, NiPointer out)`.
+const TEXTURE_PALETTE_GET_TEXTURE_BY_NAME: u32 = 0x00a6_1b90;
+/// Hash-bucket lookup of the texture map (`00a61a60`), `__thiscall(bucket,
+/// file entry, NiPointer out) -> bool`.
+const TEXTURE_MAP_FIND: u32 = 0x00a6_1a60;
+/// Creates a texture from an open file, `__cdecl(NiFixedString*, file,
+/// setting, format preferences)` (`00a61040`, in the cube map unit).
+const CREATE_TEXTURE_FROM_FIXED_NAME: u32 = 0x00a6_1040;
+/// The engine map's `NiSourceCubeMap::Create` (`00a5fe30`), `__cdecl(file,
+/// name, format preferences, 1)`; `Run` takes it for names without `_e.dd`,
+/// so the map's name is doubtful.
+const CREATE_TEXTURE_FROM_FILE: u32 = 0x00a5_fe30;
+/// `strstr` (`00ec7750`), `__cdecl(text, pattern)`.
+const STRSTR: u32 = 0x00ec_7750;
+/// `sprintf` (`00ec623a`), `__cdecl(buffer, format, ...)`.
+const SPRINTF: u32 = 0x00ec_623a;
+/// Path-normalizing copy, `__cdecl(name, buffer, size)` (`00af4200`).
+const NORMALIZE_PATH: u32 = 0x00af_4200;
+/// The texture's surface getter (`0059bb30`, `this + 0x24`; the engine map
+/// calls it `D3DTexture_LockRect`).
+const TEXTURE_GET_SURFACE: u32 = 0x0059_bb30;
+/// The scope guard that sets the memory context for the rest of a function:
+/// `__thiscall(context, 1, source file, line)` and its destructor.
+const MEMORY_CONTEXT_ENTER: u32 = 0x0040_4eb0;
+const MEMORY_CONTEXT_LEAVE: u32 = 0x0040_4ee0;
+/// Releases the `NiPointer<Model>` at `this` (`0040c110`).
+const MODEL_POINTER_RELEASE: u32 = 0x0040_c110;
+
+/// `QueuedTexture`'s virtual table (`01016788`) and `QueuedModel`'s
+/// (`01016890`).
+const QUEUED_TEXTURE_VTABLE: u32 = 0x0101_6788;
+const QUEUED_MODEL_VTABLE: u32 = 0x0101_6890;
+
+/// `"texture"`.
+const TEXTURE_WORD: u32 = 0x0101_6884;
+/// `"_e.dd"`.
+const ENVIRONMENT_MAP_SUFFIX: u32 = 0x0101_6838;
+/// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\ModelLoader.cpp"`.
+const MODEL_LOADER_SOURCE: u32 = 0x0101_6840;
+/// The source line the memory context scope of `Run` records.
+const RUN_SOURCE_LINE: u32 = 0x2b7;
+/// `"MODELS: Could not get file for texture %s."`.
+const NO_FILE_FOR_TEXTURE_NAME_MESSAGE: u32 = 0x0101_67b8;
+/// `"MODELS: Could not get file for texture with file entry offset %i and
+/// size %i."`.
+const NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE: u32 = 0x0101_67e8;
+/// `"LoadedFile %s was loaded at %i and added to the map, but is being thrown
+/// away without being used"`.
+const LOADED_FILE_UNUSED_MESSAGE: u32 = 0x0101_6720;
+/// `"%s ref object at mem %i being destroyed with %i references\r\n"`.
+const LOADED_FILE_REFERENCES_MESSAGE: u32 = 0x0101_66dc;
+/// The format preferences object `Run` passes to the texture creators.
+const TEXTURE_FORMAT_PREFERENCES: u32 = 0x011a_9598;
+
+/// The offsets in a thread's TLS block `QueuedTexture` uses: a byte flag
+/// (read by `0043c130`) and a word (`0043c410`/`0043c3f0`) that `Run` sets to
+/// 1 while it loads a texture whose flag bit 2 is set.
+const TLS_QUEUED_FLAG: u32 = 0x25c;
+const TLS_QUEUED_VALUE: u32 = 0x29c;
+/// Puts a queued task into state 5, done (`00449150`: `this + 0xC = 5`).
+const TASK_SET_DONE: u32 = 0x0044_9150;
+
 layout! {
     /// `Model` (Xbox PDB), 0x18 bytes on the Xbox, 0x10 on PC (the two
     /// leading memory-accounting words `iVBMem` and `iDefaultMem` are gone,
@@ -200,6 +339,79 @@ layout! {
         0x0C iRefCount: i32,
         /// `iManualRefCount` (Xbox PDB).
         0x10 iManualRefCount: i32,
+    }
+}
+
+layout! {
+    /// `LoadedFile` (Xbox PDB), 0x10 bytes (the same on PC): a file kept
+    /// open by the loader, found by name in the map of loaded files.
+    pub struct LoadedFile: 0x10 {
+        /// `iRefCount` (Xbox PDB).
+        0x00 iRefCount: i32,
+        /// `pFileName` (Xbox PDB): `char*`, a copy owned by the object.
+        0x04 pFileName: u32,
+        /// `pFile` (Xbox PDB): `BSFile*`, deleted with the object.
+        0x08 pFile: Ptr,
+        /// `bInLoadedFileMap` (Xbox PDB).
+        0x0C bInLoadedFileMap: bool,
+        /// `bFileUsed` (Xbox PDB).
+        0x0D bFileUsed: bool,
+    }
+
+    /// `QueuedChildren` (Xbox PDB), 0x14 bytes: the Xbox class derives from
+    /// `BSSimpleArray<NiPointer<QueuedFile>>`; only the counter at the end
+    /// is used here.
+    pub struct QueuedChildren: 0x14 {
+        /// `iNumChildrenFinished` (Xbox PDB).
+        0x10 iNumChildrenFinished: u32,
+    }
+
+    /// `QueuedFile` (Xbox PDB), 0x28 bytes on the Xbox (virtual table, the
+    /// `IOTask` base, then these); the PC offsets used here are the same.
+    pub struct QueuedFile: 0x28 {
+        /// `eContext` (Xbox PDB): the memory context the task runs in.
+        0x18 eContext: u32,
+        /// `pChildren` (Xbox PDB): `QueuedChildren*`.
+        0x20 pChildren: Ptr,
+    }
+
+    /// `QueuedTexture` (Xbox PDB), 0x38 bytes on the Xbox (a `QueuedFile`,
+    /// then `QueuedFileEntry`'s `pFileName` and `pFileEntry`, then these);
+    /// the offsets used here are the same on PC.
+    pub struct QueuedTexture: 0x38 {
+        /// `eContext` (`QueuedFile`, Xbox PDB).
+        0x18 eContext: u32,
+        /// `pChildren` (`QueuedFile`, Xbox PDB).
+        0x20 pChildren: Ptr,
+        /// `pFileName` (`QueuedFileEntry`, Xbox PDB).
+        0x28 pFileName: u32,
+        /// `pFileEntry` (`QueuedFileEntry`, Xbox PDB): `BSFileEntry*`.
+        0x2C pFileEntry: Ptr,
+        /// `spTexture` (Xbox PDB): `NiPointer<NiTexture>`.
+        0x30 spTexture: Ptr,
+        /// `cFlags` (Xbox PDB). Bit 4: the texture is in the map of queued
+        /// textures (set from the result of the map's add, cleared by
+        /// `Finish` and `Cancel` when they remove it). Bit 2: set when the
+        /// thread flag `TLS_QUEUED_FLAG` was set at queueing time; `Run`
+        /// then sets the TLS word while it loads. Bit 1 is set by
+        /// `0043e480` and tested by `0043e530` (not translated yet).
+        0x34 cFlags: u8,
+    }
+
+    /// `QueuedModel` (Xbox PDB), 0x48 bytes on the Xbox; the offsets used
+    /// here are the same on PC.
+    pub struct QueuedModel: 0x48 {
+        /// `spModel` (Xbox PDB): `NiPointer<Model>`.
+        0x30 spModel: Ptr,
+        /// `pTESModel` (Xbox PDB): `TESModel*`.
+        0x34 pTESModel: Ptr,
+        /// `eLODFadeMult` (Xbox PDB).
+        0x38 eLODFadeMult: u32,
+        /// `cFlags` (Xbox PDB): bit 1 and bit 2 are set by the constructor's
+        /// last two arguments.
+        0x3C cFlags: u8,
+        /// `mfOverriddenVisualDistance` (Xbox PDB).
+        0x40 mfOverriddenVisualDistance: f32,
     }
 }
 
@@ -856,6 +1068,623 @@ pub fn fn_0043baa0(e: &mut Engine, this: Ptr, group: Ptr) -> Ptr {
         .ptr()
 }
 
+/// The address of `QueuedTexture::spTexture`, which the game passes to the
+/// `NiPointer` functions.
+fn texture_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
+    texture.byte_add(QueuedTexture::spTexture.off)
+}
+
+/// The address of `QueuedModel::spModel`.
+fn model_pointer(model: Ptr<QueuedModel>) -> Ptr {
+    model.byte_add(QueuedModel::spModel.off)
+}
+
+/// `QueuedFileEntry::pFileEntry` through the game's getter (`0055b980`).
+fn queued_file_entry(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
+    e.call(QUEUED_FILE_ENTRY_GET_FILE_ENTRY, &args![this]).u32()
+}
+
+/// `QueuedFileEntry::pFileName` through the game's getter (`0045cd60`).
+fn queued_file_name(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
+    e.call(QUEUED_FILE_ENTRY_GET_FILE_NAME, &args![this]).u32()
+}
+
+/// The address of a queued texture's `cFlags` byte, which the game passes to
+/// the flag helpers.
+fn texture_flags_pointer(texture: Ptr<QueuedTexture>) -> Ptr {
+    texture.byte_add(QueuedTexture::cFlags.off)
+}
+
+// Translated from 0043bac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedChildren` method (no name in the engine map): decrements
+/// `iNumChildrenFinished` (interlocked) when it is positive.
+pub fn fn_0043bac0(e: &mut Engine, this: Ptr<QueuedChildren>) {
+    // The comparison is signed although the Xbox PDB declares a `u32`.
+    if e.get(this, QueuedChildren::iNumChildrenFinished) as i32 > 0 {
+        let counter = this.byte_add(QueuedChildren::iNumChildrenFinished.off);
+        e.call(INTERLOCKED_DECREMENT, &args![counter]);
+    }
+}
+
+// Translated from 0043baf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoadedFile::LoadedFile` (no name in the engine map): keeps `file`,
+/// copies `name`, adds the object to the map of loaded files (the result
+/// becomes `bInLoadedFileMap`) and starts it unused with no references.
+/// Returns `this`.
+pub fn fn_0043baf0(e: &mut Engine, this: Ptr<LoadedFile>, name: u32, file: Ptr) -> Ptr<LoadedFile> {
+    e.set(this, LoadedFile::pFile, file);
+    let copy = copy_name(e, name);
+    e.set(this, LoadedFile::pFileName, copy);
+    let owner = e.global::<u32>(FILE_MAP_OWNER);
+    let added = e
+        .call(FILE_MAP_ADD_LOADED_FILE, &args![owner, copy, this])
+        .bool();
+    e.set(this, LoadedFile::bInLoadedFileMap, added);
+    e.set(this, LoadedFile::bFileUsed, false);
+    e.set(this, LoadedFile::iRefCount, 0);
+    this
+}
+
+// Translated from 0043bb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LoadedFile::~LoadedFile` (Xbox PDB): complains (log) about a file that
+/// was added to the map but never used, removes it from the map, reports a
+/// non-zero reference count to the message sink, frees the name and deletes
+/// the file.
+///
+/// The stack-cookie check is not translated.
+pub fn loaded_file_destructor(e: &mut Engine, this: Ptr<LoadedFile>) {
+    let name = e.get(this, LoadedFile::pFileName);
+    let in_map = e.get(this, LoadedFile::bInLoadedFileMap);
+    if !e.get(this, LoadedFile::bFileUsed) && in_map {
+        e.call(LOG, &args![LOADED_FILE_UNUSED_MESSAGE, name, this]);
+    }
+    if in_map {
+        let owner = e.global::<u32>(FILE_MAP_OWNER);
+        e.call(FILE_MAP_REMOVE_LOADED_FILE, &args![owner, name]);
+    }
+    let references = e.get(this, LoadedFile::iRefCount);
+    if references != 0 {
+        // `char text[268]` of the game's stack frame.
+        e.with_stack(0x10c, |e, text| {
+            e.call(
+                SPRINTF,
+                &args![text, LOADED_FILE_REFERENCES_MESSAGE, name, this, references],
+            );
+            if fn_0043bce0(e) {
+                let sink = fn_0043bd00(e);
+                // Slot 0x14: report `(severity 4, text, 0, 0, 0)`.
+                e.vcall(sink, 0x14, &args![4u32, text, 0u32, 0u32, 0u32]);
+            }
+        });
+    }
+    let name = e.get(this, LoadedFile::pFileName);
+    e.call(MEMORY_FREE, &args![name]);
+    let file = e.get(this, LoadedFile::pFile);
+    if !file.is_null() {
+        // Slot 0: the scalar deleting destructor, with the delete flag.
+        e.vcall(file.addr(), 0, &args![1u32]);
+    }
+}
+
+// Translated from 0043bce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the message sink at `011f6388` exists.
+pub fn fn_0043bce0(e: &mut Engine) -> bool {
+    e.global::<u32>(MESSAGE_SINK) != 0
+}
+
+// Translated from 0043bd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The message sink at `011f6388`.
+pub fn fn_0043bd00(e: &mut Engine) -> u32 {
+    e.global::<u32>(MESSAGE_SINK)
+}
+
+// Translated from 0043bd10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `QueuedTexture` constructor (no name in the engine map) that loads by
+/// file name: the base constructor with `context`, the texture's virtual
+/// table, a null texture and no flags, then the path `name` normalized into
+/// a 260-character buffer becomes `pFileName` and its file entry is looked
+/// up (flag 1). Returns `this`.
+///
+/// The stack-cookie check and the exception-unwinding frame are not
+/// translated.
+pub fn fn_0043bd10(
+    e: &mut Engine,
+    this: Ptr<QueuedTexture>,
+    name: u32,
+    context: u32,
+) -> Ptr<QueuedTexture> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_TEXTURE_VTABLE);
+    let texture = texture_pointer(this);
+    e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+    e.set(this, QueuedTexture::cFlags, 0);
+    // `char path[260]` of the game's stack frame (268 bytes with padding).
+    e.with_stack(0x10c, |e, path| {
+        e.call(NORMALIZE_PATH, &args![name, path, 0x104u32]);
+        e.call(QUEUED_FILE_ENTRY_SET_FILE_NAME, &args![this, path]);
+    });
+    e.call(QUEUED_FILE_ENTRY_FIND_FILE_ENTRY, &args![this, 1u32]);
+    this
+}
+
+// Translated from 0043bde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedFile::NotifyChildFinished` (Xbox PDB): counts one more finished
+/// child ([`fn_0043be10`] on `pChildren`), then asks the file whether it is
+/// finished (slot `0x28`, `CheckFinished`). The stack argument (`RET 4`,
+/// the finished child) is not used.
+pub fn queued_file_notify_child_finished(e: &mut Engine, this: Ptr<QueuedFile>, _child: Ptr) {
+    let children = e.get(this, QueuedFile::pChildren);
+    fn_0043be10(e, children.cast());
+    e.vcall(this.addr(), 0x28, &args![]);
+}
+
+// Translated from 0043be10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedChildren` method (no name in the engine map): increments
+/// `iNumChildrenFinished` (interlocked).
+pub fn fn_0043be10(e: &mut Engine, this: Ptr<QueuedChildren>) {
+    let counter = this.byte_add(QueuedChildren::iNumChildrenFinished.off);
+    e.call(INTERLOCKED_INCREMENT, &args![counter]);
+}
+
+// Translated from 0043be30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor ([`fn_0043bf80`]) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn queued_texture_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<QueuedTexture>,
+    flags: u32,
+) -> Ptr<QueuedTexture> {
+    fn_0043bf80(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0043be60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `QueuedTexture` constructor (no name in the engine map) that is given
+/// the file entry: like [`fn_0043bd10`] but it stores `file_entry` as
+/// `pFileEntry` instead of resolving a name. Returns `this`.
+pub fn fn_0043be60(
+    e: &mut Engine,
+    this: Ptr<QueuedTexture>,
+    file_entry: Ptr,
+    context: u32,
+) -> Ptr<QueuedTexture> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_TEXTURE_VTABLE);
+    let texture = texture_pointer(this);
+    e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+    e.set(this, QueuedTexture::cFlags, 0);
+    e.call(QUEUED_FILE_ENTRY_SET_FILE_ENTRY, &args![this, file_entry]);
+    this
+}
+
+// Translated from 0043bef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A `QueuedTexture` constructor (no name in the engine map) that is given
+/// the finished texture: like [`fn_0043be60`] but it stores `texture` in
+/// `spTexture` and runs `00449150`, which puts the task in state 5 (done).
+/// Returns `this`.
+pub fn fn_0043bef0(
+    e: &mut Engine,
+    this: Ptr<QueuedTexture>,
+    texture: Ptr,
+    context: u32,
+) -> Ptr<QueuedTexture> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_TEXTURE_VTABLE);
+    let slot = texture_pointer(this);
+    e.call(NI_POINTER_CONSTRUCT, &args![slot, 0u32]);
+    e.set(this, QueuedTexture::cFlags, 0);
+    e.call(NI_POINTER_ASSIGN, &args![slot, texture]);
+    e.call(TASK_SET_DONE, &args![this]);
+    this
+}
+
+// Translated from 0043bf80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture` destructor (no name in the engine map): restores the
+/// texture's virtual table, releases the texture and runs the base
+/// destructor.
+pub fn fn_0043bf80(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    e.mem.set_u32(this.addr(), QUEUED_TEXTURE_VTABLE);
+    let texture = texture_pointer(this);
+    e.call(NI_POINTER_DESTRUCT, &args![texture]);
+    e.call(QUEUED_FILE_ENTRY_DESTRUCT, &args![this]);
+}
+
+// Translated from 0043bfe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::GetFileIndex` (Xbox PDB): 0 when the texture has no file
+/// entry or its archive is not found, otherwise the archive's file index
+/// ([`fn_0043c030`]) plus 4.
+pub fn queued_texture_get_file_index(e: &mut Engine, this: Ptr<QueuedTexture>) -> u32 {
+    if queued_file_entry(e, this) != 0 {
+        let file_entry = queued_file_entry(e, this);
+        let archive = e
+            .call(FILE_ENTRY_FIND_ARCHIVE, &args![file_entry, 2u32])
+            .u32();
+        if archive != 0 {
+            return fn_0043c030(e, Ptr::new(archive)).wrapping_add(4);
+        }
+    }
+    0
+}
+
+// Translated from 0043c030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dword at +0x1C8 of an archive (what `GetFileIndex` adds 4 to).
+pub fn fn_0043c030(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x1c8)
+}
+
+// Translated from 0043c050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::QueueMe` (Xbox PDB): with a file entry, adds the texture
+/// to the map of queued textures by it and records the result as flag bit 4;
+/// when the thread flag is set, sets flag bit 2; then hands the task to the
+/// task queue (slot `0x48`).
+pub fn queued_texture_queue_me(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    if queued_file_entry(e, this) != 0 {
+        let file_entry = queued_file_entry(e, this);
+        let owner = e.global::<u32>(FILE_MAP_OWNER);
+        let added = e
+            .call(FILE_MAP_ADD_QUEUED_TEXTURE, &args![owner, file_entry, this])
+            .u8();
+        fn_0043c100(e, this, added);
+    }
+    if fn_0043c130(e) != 0 {
+        fn_0043c0d0(e, this, 1);
+    }
+    let queue = e.global::<u32>(TASK_QUEUE);
+    e.vcall(queue, 0x48, &args![this]);
+}
+
+// Translated from 0043c0d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` non-zero) or clears bit 2 of the texture's `cFlags`.
+pub fn fn_0043c0d0(e: &mut Engine, this: Ptr<QueuedTexture>, flag: u8) {
+    let flags = texture_flags_pointer(this);
+    e.call(SET_FLAG_BIT_2, &args![flag as u32, flags]);
+}
+
+// Translated from 0043c100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` non-zero) or clears bit 4 of the texture's `cFlags`.
+pub fn fn_0043c100(e: &mut Engine, this: Ptr<QueuedTexture>, flag: u8) {
+    let flags = texture_flags_pointer(this);
+    e.call(SET_FLAG_BIT_4, &args![flag as u32, flags]);
+}
+
+// Translated from 0043c130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +0x25C of the thread's TLS block. (The code is a method of
+/// the object at `011c3b3c` but does not use `this`.)
+pub fn fn_0043c130(e: &mut Engine) -> u8 {
+    let address = e.tls() + TLS_QUEUED_FLAG;
+    e.mem.u8(address)
+}
+
+// Translated from 0043c150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::Run` (Xbox PDB): finds the texture, or loads it from its
+/// file.
+///
+/// Inside the memory context of the task (`eContext`), the texture comes
+/// from the palette by file entry, or by file name when there is none. If it
+/// is there already, flag bit 1 is set, and a texture whose surface format
+/// byte ([`fn_0043c430`]) is 3 and whose flag bit 2 is clear gets its
+/// virtual function `0x8c` called. Otherwise the file is opened
+/// (`QueuedFileEntry::GetFile`); with it, and with the TLS word set to 1 for
+/// flag bit 2, the texture is created from it (`00a61040` when the file name
+/// contains `_e.dd`, else `00a5fe30`) and stored in `spTexture`; without it
+/// the failure is logged with the file entry's offset and size, or with the
+/// file name.
+///
+/// The exception-unwinding frame is not translated.
+pub fn queued_texture_run(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    let context = e.get(this, QueuedTexture::eContext);
+    // The scope guard of the game's stack frame (4 bytes).
+    e.with_stack(4, |e, guard| {
+        e.call(
+            MEMORY_CONTEXT_ENTER,
+            &args![guard, context, 1u32, MODEL_LOADER_SOURCE, RUN_SOURCE_LINE],
+        );
+        queued_texture_run_in_context(e, this);
+        e.call(MEMORY_CONTEXT_LEAVE, &args![guard]);
+    });
+}
+
+/// The body of [`queued_texture_run`] inside its memory context.
+fn queued_texture_run_in_context(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    let slot = texture_pointer(this);
+    if queued_file_entry(e, this) != 0 {
+        let file_entry = queued_file_entry(e, this);
+        bs_texture_palette_get_texture(e, file_entry, slot);
+    } else if queued_file_name(e, this) != 0 {
+        let name = queued_file_name(e, this);
+        e.call(TEXTURE_PALETTE_GET_TEXTURE_BY_NAME, &args![name, slot]);
+    }
+
+    if !ni_pointer_get(e, slot).is_null() {
+        e.call(QUEUED_TEXTURE_SET_FLAG_1, &args![this, 1u32]);
+        let texture = ni_pointer_get(e, slot);
+        if fn_0043c430(e, texture) == 3 && !fn_0043c3d0(e, this) {
+            let texture = ni_pointer_get(e, slot);
+            e.vcall(texture.addr(), 0x8c, &args![]);
+        }
+        return;
+    }
+
+    let file: Ptr = e
+        .call(QUEUED_FILE_ENTRY_GET_FILE, &args![this, 1u32, 2u32])
+        .ptr();
+    if !file.is_null() {
+        // Slot 0x18 of the file: its name.
+        let name = e.vcall(file.addr(), 0x18, &args![]).u32();
+        let saved = fn_0043c410(e);
+        if fn_0043c3d0(e, this) {
+            fn_0043c3f0(e, 1);
+        }
+        if e.call(STRSTR, &args![name, ENVIRONMENT_MAP_SUFFIX]).u32() != 0 {
+            let setting = fn_0043c4b0(e);
+            // The `NiFixedString` temporary of the game's stack frame.
+            e.with_stack(4, |e, local| {
+                let fixed_name = e.call(FIXED_STRING_CONSTRUCT, &args![local, name]).u32();
+                let texture = e
+                    .call(
+                        CREATE_TEXTURE_FROM_FIXED_NAME,
+                        &args![fixed_name, file, setting, TEXTURE_FORMAT_PREFERENCES],
+                    )
+                    .u32();
+                e.call(NI_POINTER_ASSIGN, &args![slot, texture]);
+                e.call(FIXED_STRING_DESTRUCT, &args![local]);
+            });
+        } else {
+            let texture = e
+                .call(
+                    CREATE_TEXTURE_FROM_FILE,
+                    &args![file, name, TEXTURE_FORMAT_PREFERENCES, 1u32],
+                )
+                .u32();
+            e.call(NI_POINTER_ASSIGN, &args![slot, texture]);
+        }
+        fn_0043c3f0(e, saved);
+    } else if queued_file_entry(e, this) != 0 {
+        let file_entry = queued_file_entry(e, this);
+        let size = e.call(FILE_ENTRY_GET_SIZE, &args![file_entry]).u32();
+        let file_entry = queued_file_entry(e, this);
+        let offset = fn_0043c3b0(e, Ptr::new(file_entry));
+        e.call(LOG, &args![NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE, offset, size]);
+    } else if queued_file_name(e, this) != 0 {
+        let name = queued_file_name(e, this);
+        e.call(LOG, &args![NO_FILE_FOR_TEXTURE_NAME_MESSAGE, name]);
+    }
+}
+
+// Translated from 0043c3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSFileEntry::iOffset` with the top bit masked off (the dword at +0xC).
+pub fn fn_0043c3b0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xc) & 0x7fff_ffff
+}
+
+// Translated from 0043c3d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 2 of the texture's `cFlags` is set.
+pub fn fn_0043c3d0(e: &mut Engine, this: Ptr<QueuedTexture>) -> bool {
+    let flags = e.get(this, QueuedTexture::cFlags);
+    e.call(TEST_FLAG_BIT_2, &args![flags as u32]).bool()
+}
+
+// Translated from 0043c3f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word at +0x29C of the thread's TLS block.
+pub fn fn_0043c3f0(e: &mut Engine, value: u32) {
+    let address = e.tls() + TLS_QUEUED_VALUE;
+    e.mem.set_u32(address, value);
+}
+
+// Translated from 0043c410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at +0x29C of the thread's TLS block.
+pub fn fn_0043c410(e: &mut Engine) -> u32 {
+    let address = e.tls() + TLS_QUEUED_VALUE;
+    e.mem.u32(address)
+}
+
+// Translated from 0043c430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A texture's surface format byte: 0 for a texture without a surface,
+/// otherwise the byte at +3 of the descriptor at +0x58 of its surface
+/// (`0059bb30`, `this + 0x24`).
+pub fn fn_0043c430(e: &mut Engine, this: Ptr) -> u32 {
+    if e.call(TEXTURE_GET_SURFACE, &args![this]).u32() != 0 {
+        let surface = e.call(TEXTURE_GET_SURFACE, &args![this]).ptr();
+        let descriptor = fn_0043c490(e, surface);
+        fn_0043c470(e, descriptor) as u32
+    } else {
+        0
+    }
+}
+
+// Translated from 0043c470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at +3 of `this`.
+pub fn fn_0043c470(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 3)
+}
+
+// Translated from 0043c490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address `this + 0x58`.
+pub fn fn_0043c490(_e: &mut Engine, this: Ptr) -> Ptr {
+    this.byte_add(0x58)
+}
+
+// Translated from 0043c4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `011f4748` (a default texture setting).
+pub fn fn_0043c4b0(e: &mut Engine) -> u32 {
+    e.global::<u32>(DEFAULT_TEXTURE_SETTING)
+}
+
+// Translated from 0043c4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTexturePalette::GetTexture` (Xbox PDB): clears the `NiPointer` at
+/// `out` and looks the texture of `file_entry` up in the texture map into
+/// it.
+pub fn bs_texture_palette_get_texture(e: &mut Engine, file_entry: u32, out: Ptr) {
+    e.call(NI_POINTER_ASSIGN, &args![out, 0u32]);
+    let map = e.global::<u32>(TEXTURE_MAP);
+    fn_0043c4f0(e, Ptr::new(map), file_entry, out);
+}
+
+// Translated from 0043c4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTexturePalette` method (no name in the engine map): looks
+/// `file_entry` up in the hash bucket [`fn_0043c530`] gives for it in the
+/// texture map `this` (`00a61a60`), storing the texture found into the
+/// `NiPointer` at `out`. Returns whether it was found.
+pub fn fn_0043c4f0(e: &mut Engine, this: Ptr, file_entry: u32, out: Ptr) -> bool {
+    let bucket = fn_0043c530(e, file_entry);
+    e.call(TEXTURE_MAP_FIND, &args![this, bucket, file_entry, out])
+        .bool()
+}
+
+// Translated from 0043c530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The hash bucket of a key: `(key >> 4) % 1001`.
+pub fn fn_0043c530(_e: &mut Engine, key: u32) -> u32 {
+    (key >> 4) % 0x3e9
+}
+
+// Translated from 0043c550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::Finish` (Xbox PDB): unless flag bit 1 is set, a loaded
+/// texture goes into the palette (`SetTexture`, by file entry, or without
+/// one when the texture has only a file name). If the texture is in the map
+/// of queued textures (flag bit 4), it is taken out and the flag cleared.
+/// Finally asks the task whether it is finished ([`fn_0043c610`]).
+pub fn queued_texture_finish(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    let flag_1 = e.call(QUEUED_TEXTURE_TEST_FLAG_1, &args![this]).bool();
+    let slot = texture_pointer(this);
+    if !flag_1 && !ni_pointer_get(e, slot).is_null() {
+        if queued_file_entry(e, this) != 0 {
+            let file_entry = queued_file_entry(e, this);
+            let texture = ni_pointer_get(e, slot);
+            e.call(TEXTURE_PALETTE_SET_TEXTURE, &args![texture, file_entry]);
+        } else if queued_file_name(e, this) != 0 {
+            let texture = ni_pointer_get(e, slot);
+            e.call(TEXTURE_PALETTE_SET_TEXTURE, &args![texture, 0u32]);
+        }
+    }
+    leave_texture_map(e, this);
+    fn_0043c610(e, this);
+}
+
+/// The common end of `Finish` and `Cancel`: a texture with a file entry that
+/// is in the map of queued textures (flag bit 4) is removed from it.
+fn leave_texture_map(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    if queued_file_entry(e, this) != 0 && fn_0043c630(e, this) {
+        fn_0043c100(e, this, 0);
+        let file_entry = queued_file_entry(e, this);
+        let owner = e.global::<u32>(FILE_MAP_OWNER);
+        e.call(FILE_MAP_REMOVE_QUEUED_TEXTURE, &args![owner, file_entry]);
+    }
+}
+
+// Translated from 0043c610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the task's virtual function `0x28` (`CheckFinished`).
+pub fn fn_0043c610(e: &mut Engine, this: Ptr<QueuedTexture>) {
+    e.vcall(this.addr(), 0x28, &args![]);
+}
+
+// Translated from 0043c630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 4 of the texture's `cFlags` is set.
+pub fn fn_0043c630(e: &mut Engine, this: Ptr<QueuedTexture>) -> bool {
+    let flags = e.get(this, QueuedTexture::cFlags);
+    e.call(TEST_FLAG_BIT_4, &args![flags as u32]).bool()
+}
+
+// Translated from 0043c650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::Cancel` (Xbox PDB): `QueuedFile::Cancel` with its two
+/// arguments, then takes the texture out of the map of queued textures as
+/// `Finish` does.
+pub fn queued_texture_cancel(e: &mut Engine, this: Ptr<QueuedTexture>, first: u32, second: u32) {
+    e.call(QUEUED_FILE_CANCEL, &args![this, first, second]);
+    leave_texture_map(e, this);
+}
+
+// Translated from 0043c6b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedTexture::GetDescription` (Xbox PDB):
+/// `QueuedFileEntry::GetDescription` with the kind word `"texture"`;
+/// returns its result (always true).
+pub fn queued_texture_get_description(
+    e: &mut Engine,
+    this: Ptr<QueuedTexture>,
+    buffer: u32,
+    size: u32,
+) -> bool {
+    e.call(
+        QUEUED_FILE_ENTRY_GET_DESCRIPTION,
+        &args![this, buffer, size, TEXTURE_WORD],
+    )
+    .bool()
+}
+
+// Translated from 0043c6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedModel` constructor (no name in the engine map): the base
+/// constructor with `context`, the model's virtual table, no model, no
+/// `TESModel`, `lod_fade_mult`, no flags; then the file name is copied
+/// (`name`), the file entry is looked up (flag 0), and the constructor's two
+/// flag arguments set bits 1 and 2 of `cFlags`. The overridden visual
+/// distance starts at 0. Returns `this`.
+pub fn fn_0043c6e0(
+    e: &mut Engine,
+    this: Ptr<QueuedModel>,
+    name: u32,
+    context: u32,
+    lod_fade_mult: u32,
+    first_flag: u8,
+    second_flag: u8,
+) -> Ptr<QueuedModel> {
+    e.call(QUEUED_FILE_ENTRY_CONSTRUCT, &args![this, context]);
+    e.mem.set_u32(this.addr(), QUEUED_MODEL_VTABLE);
+    let model = model_pointer(this);
+    e.call(NI_POINTER_CONSTRUCT, &args![model, 0u32]);
+    e.set(this, QueuedModel::pTESModel, Ptr::NULL);
+    e.set(this, QueuedModel::eLODFadeMult, lod_fade_mult);
+    e.set(this, QueuedModel::cFlags, 0);
+    e.call(QUEUED_FILE_ENTRY_SET_FILE_NAME, &args![this, name]);
+    e.call(QUEUED_FILE_ENTRY_FIND_FILE_ENTRY, &args![this, 0u32]);
+    fn_0043c7a0(e, this, first_flag);
+    fn_0043c7d0(e, this, second_flag);
+    e.set(this, QueuedModel::mfOverriddenVisualDistance, 0.0);
+    this
+}
+
+// Translated from 0043c7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` non-zero) or clears bit 1 of the model's `cFlags`.
+pub fn fn_0043c7a0(e: &mut Engine, this: Ptr<QueuedModel>, flag: u8) {
+    let flags = this.byte_add(QueuedModel::cFlags.off);
+    e.call(SET_FLAG_BIT_1, &args![flag as u32, flags]);
+}
+
+// Translated from 0043c7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` non-zero) or clears bit 2 of the model's `cFlags`.
+pub fn fn_0043c7d0(e: &mut Engine, this: Ptr<QueuedModel>, flag: u8) {
+    let flags = this.byte_add(QueuedModel::cFlags.off);
+    e.call(SET_FLAG_BIT_2, &args![flag as u32, flags]);
+}
+
+// Translated from 0043c800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedModel::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor ([`fn_0043c830`]) and, when bit 0 of `flags` is set, frees the
+/// object. Returns `this`.
+pub fn queued_model_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<QueuedModel>,
+    flags: u32,
+) -> Ptr<QueuedModel> {
+    fn_0043c830(e, this);
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0043c830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `QueuedModel` destructor (the engine map names the folded body after a
+/// cancellation-token callback): releases the model pointer and runs the
+/// base destructor. It does not restore the virtual table.
+pub fn fn_0043c830(e: &mut Engine, this: Ptr<QueuedModel>) {
+    let model = model_pointer(this);
+    e.call(MODEL_POINTER_RELEASE, &args![model]);
+    e.call(QUEUED_FILE_ENTRY_DESTRUCT, &args![this]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -914,6 +1743,82 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0043ba60, fn_0043ba60(Ptr)),
         entry!(0x0043baa0, fn_0043baa0(Ptr, Ptr) -> Ptr),
+        entry!(0x0043bac0, fn_0043bac0(Ptr<QueuedChildren>)),
+        entry!(
+            0x0043baf0,
+            fn_0043baf0(Ptr<LoadedFile>, u32, Ptr) -> Ptr<LoadedFile>
+        ),
+        entry!(0x0043bb80, loaded_file_destructor(Ptr<LoadedFile>)),
+        entry!(0x0043bce0, fn_0043bce0() -> bool),
+        entry!(0x0043bd00, fn_0043bd00() -> u32),
+        entry!(
+            0x0043bd10,
+            fn_0043bd10(Ptr<QueuedTexture>, u32, u32) -> Ptr<QueuedTexture>
+        ),
+        entry!(
+            0x0043bde0,
+            queued_file_notify_child_finished(Ptr<QueuedFile>, Ptr)
+        ),
+        entry!(0x0043be10, fn_0043be10(Ptr<QueuedChildren>)),
+        entry!(
+            0x0043be30,
+            queued_texture_scalar_deleting_destructor(
+                Ptr<QueuedTexture>,
+                u32,
+            ) -> Ptr<QueuedTexture>
+        ),
+        entry!(
+            0x0043be60,
+            fn_0043be60(Ptr<QueuedTexture>, Ptr, u32) -> Ptr<QueuedTexture>
+        ),
+        entry!(
+            0x0043bef0,
+            fn_0043bef0(Ptr<QueuedTexture>, Ptr, u32) -> Ptr<QueuedTexture>
+        ),
+        entry!(0x0043bf80, fn_0043bf80(Ptr<QueuedTexture>)),
+        entry!(
+            0x0043bfe0,
+            queued_texture_get_file_index(Ptr<QueuedTexture>) -> u32
+        ),
+        entry!(0x0043c030, fn_0043c030(Ptr) -> u32),
+        entry!(0x0043c050, queued_texture_queue_me(Ptr<QueuedTexture>)),
+        entry!(0x0043c0d0, fn_0043c0d0(Ptr<QueuedTexture>, u8)),
+        entry!(0x0043c100, fn_0043c100(Ptr<QueuedTexture>, u8)),
+        entry!(0x0043c130, fn_0043c130() -> u8),
+        entry!(0x0043c150, queued_texture_run(Ptr<QueuedTexture>)),
+        entry!(0x0043c3b0, fn_0043c3b0(Ptr) -> u32),
+        entry!(0x0043c3d0, fn_0043c3d0(Ptr<QueuedTexture>) -> bool),
+        entry!(0x0043c3f0, fn_0043c3f0(u32)),
+        entry!(0x0043c410, fn_0043c410() -> u32),
+        entry!(0x0043c430, fn_0043c430(Ptr) -> u32),
+        entry!(0x0043c470, fn_0043c470(Ptr) -> u8),
+        entry!(0x0043c490, fn_0043c490(Ptr) -> Ptr),
+        entry!(0x0043c4b0, fn_0043c4b0() -> u32),
+        entry!(0x0043c4c0, bs_texture_palette_get_texture(u32, Ptr)),
+        entry!(0x0043c4f0, fn_0043c4f0(Ptr, u32, Ptr) -> bool),
+        entry!(0x0043c530, fn_0043c530(u32) -> u32),
+        entry!(0x0043c550, queued_texture_finish(Ptr<QueuedTexture>)),
+        entry!(0x0043c610, fn_0043c610(Ptr<QueuedTexture>)),
+        entry!(0x0043c630, fn_0043c630(Ptr<QueuedTexture>) -> bool),
+        entry!(
+            0x0043c650,
+            queued_texture_cancel(Ptr<QueuedTexture>, u32, u32)
+        ),
+        entry!(
+            0x0043c6b0,
+            queued_texture_get_description(Ptr<QueuedTexture>, u32, u32) -> bool
+        ),
+        entry!(
+            0x0043c6e0,
+            fn_0043c6e0(Ptr<QueuedModel>, u32, u32, u32, u8, u8) -> Ptr<QueuedModel>
+        ),
+        entry!(0x0043c7a0, fn_0043c7a0(Ptr<QueuedModel>, u8)),
+        entry!(0x0043c7d0, fn_0043c7d0(Ptr<QueuedModel>, u8)),
+        entry!(
+            0x0043c800,
+            queued_model_scalar_deleting_destructor(Ptr<QueuedModel>, u32) -> Ptr<QueuedModel>
+        ),
+        entry!(0x0043c830, fn_0043c830(Ptr<QueuedModel>)),
     ]
 }
 
@@ -2200,5 +3105,1076 @@ mod tests {
         );
         assert_eq!(back.u32(), sequence + 0x74);
         assert_eq!(e.mem.u32(sequence + 0x74), 0x6666);
+    }
+
+    // --- Queued files: `LoadedFile`, `QueuedTexture`, `QueuedModel`. ---
+
+    /// A `BSFile`-like object's virtual table: slot 0 deletes, slot 0x18 is
+    /// the file name.
+    const FILE_VTABLE: u32 = 0x0ff2_0000;
+    const FILE_DELETE: u32 = 0x0ff0_0100;
+    const FILE_NAME_SLOT: u32 = 0x0ff0_0101;
+    /// The message sink's table: slot 0x14 reports.
+    const SINK_VTABLE: u32 = 0x0ff2_1000;
+    const SINK_REPORT: u32 = 0x0ff0_0102;
+    /// A task's table: slot 0x28 is `CheckFinished`.
+    const TASK_VTABLE: u32 = 0x0ff2_2000;
+    const CHECK_FINISHED: u32 = 0x0ff0_0103;
+    /// The task queue's table: slot 0x48 adds a task.
+    const QUEUE_VTABLE: u32 = 0x0ff2_3000;
+    const QUEUE_ADD: u32 = 0x0ff0_0104;
+    /// A texture's table: slot 0x8c is the hook `Run` calls.
+    const TEXTURE_VTABLE: u32 = 0x0ff2_4000;
+    const TEXTURE_HOOK: u32 = 0x0ff0_0105;
+    /// Where the doubles for the texture map and object keep their state.
+    const OWNER_OBJECT: u32 = 0x0ff3_0000;
+    const MAP_OBJECT: u32 = 0x0ff3_1000;
+
+    fn put_slots(e: &mut Engine, vtable: u32, slots: &[(u32, u32)]) {
+        let mut table = vec![ANSWERS_NO; 0x80];
+        for (offset, target) in slots {
+            table[(*offset / 4) as usize] = *target;
+        }
+        e.put_vtable(vtable, &table);
+    }
+
+    /// Sets (`on`) or clears the bit `mask` of the byte at `address`, as the
+    /// game's flag helpers do.
+    fn write_flag(e: &mut Engine, address: u32, mask: u8, on: bool) {
+        let byte = e.mem.u8(address);
+        e.mem
+            .set_u8(address, if on { byte | mask } else { byte & !mask });
+    }
+
+    /// An engine with doubles for what the queued-file functions call.
+    fn queue_engine() -> Engine {
+        let mut e = loader_engine();
+        for page in [0x011c_3000, 0x011f_6000] {
+            e.map(page, 0x1000);
+        }
+        // The exe's string the suffix test searches for.
+        e.map(0x0101_6000, 0x1000);
+        e.mem.set_cstr(ENVIRONMENT_MAP_SUFFIX, b"_e.dd");
+        e.register(SET_FLAG_BIT_1, |e, a| {
+            write_flag(e, a[1], 1, a[0] & 0xff != 0);
+            Ret::default()
+        });
+        e.register(SET_FLAG_BIT_2, |e, a| {
+            write_flag(e, a[1], 2, a[0] & 0xff != 0);
+            Ret::default()
+        });
+        e.register(SET_FLAG_BIT_4, |e, a| {
+            write_flag(e, a[1], 4, a[0] & 0xff != 0);
+            Ret::default()
+        });
+        e.register(TEST_FLAG_BIT_2, |_, a| (a[0] & 2 != 0).into_ret());
+        e.register(TEST_FLAG_BIT_4, |_, a| (a[0] & 4 != 0).into_ret());
+        e.register(QUEUED_TEXTURE_SET_FLAG_1, |e, a| {
+            write_flag(e, a[0] + 0x34, 1, a[1] != 0);
+            Ret::default()
+        });
+        e.register(QUEUED_TEXTURE_TEST_FLAG_1, |e, a| {
+            (e.mem.u8(a[0] + 0x34) & 1 != 0).into_ret()
+        });
+        e.register(QUEUED_FILE_ENTRY_GET_FILE_ENTRY, |e, a| {
+            e.mem.u32(a[0] + 0x2c).into_ret()
+        });
+        e.register(QUEUED_FILE_ENTRY_GET_FILE_NAME, |e, a| {
+            e.mem.u32(a[0] + 0x28).into_ret()
+        });
+        e.register(FILE_ENTRY_GET_SIZE, |e, a| {
+            (e.mem.u32(a[0] + 8) & 0x3fff_ffff).into_ret()
+        });
+        e.register(TEXTURE_GET_SURFACE, |e, a| {
+            e.mem.u32(a[0] + 0x24).into_ret()
+        });
+        e.register(STRSTR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            let pattern = e.mem.cstr(a[1]);
+            match text.windows(pattern.len()).position(|w| w == &pattern[..]) {
+                Some(i) => (a[0] + i as u32).into_ret(),
+                None => 0u32.into_ret(),
+            }
+        });
+        e.register(SPRINTF, |e, a| {
+            e.mem.set_cstr(a[0], b"formatted");
+            Ret::default()
+        });
+        e.register(NORMALIZE_PATH, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            e.mem.set_cstr(a[1], &text);
+            Ret::default()
+        });
+        for address in [
+            QUEUED_FILE_ENTRY_CONSTRUCT,
+            QUEUED_FILE_ENTRY_DESTRUCT,
+            QUEUED_FILE_ENTRY_SET_FILE_NAME,
+            QUEUED_FILE_ENTRY_FIND_FILE_ENTRY,
+            QUEUED_FILE_ENTRY_SET_FILE_ENTRY,
+            QUEUED_FILE_CANCEL,
+            TASK_SET_DONE,
+            MEMORY_CONTEXT_ENTER,
+            MEMORY_CONTEXT_LEAVE,
+            MODEL_POINTER_RELEASE,
+            FILE_MAP_REMOVE_LOADED_FILE,
+            FILE_MAP_REMOVE_QUEUED_TEXTURE,
+            TEXTURE_PALETTE_SET_TEXTURE,
+            TEXTURE_PALETTE_GET_TEXTURE_BY_NAME,
+            FILE_DELETE,
+            SINK_REPORT,
+            CHECK_FINISHED,
+            QUEUE_ADD,
+            TEXTURE_HOOK,
+        ] {
+            e.register(address, |_, _| Ret::default());
+        }
+        e.register(FILE_MAP_ADD_LOADED_FILE, |_, _| 1u32.into_ret());
+        e.register(FILE_MAP_ADD_QUEUED_TEXTURE, |_, _| 1u32.into_ret());
+        e.register(QUEUED_FILE_ENTRY_GET_DESCRIPTION, |_, _| 1u32.into_ret());
+        e.register(FILE_NAME_SLOT, |e, a| e.mem.u32(a[0] + 4).into_ret());
+        e.register(TEXTURE_MAP_FIND, |_, _| 0u32.into_ret());
+        e.register(CREATE_TEXTURE_FROM_FILE, |_, _| 0x7001u32.into_ret());
+        e.register(CREATE_TEXTURE_FROM_FIXED_NAME, |_, _| 0x7002u32.into_ret());
+        put_slots(
+            &mut e,
+            FILE_VTABLE,
+            &[(0, FILE_DELETE), (0x18, FILE_NAME_SLOT)],
+        );
+        put_slots(&mut e, SINK_VTABLE, &[(0x14, SINK_REPORT)]);
+        put_slots(&mut e, TASK_VTABLE, &[(0x28, CHECK_FINISHED)]);
+        put_slots(&mut e, QUEUE_VTABLE, &[(0x48, QUEUE_ADD)]);
+        put_slots(&mut e, TEXTURE_VTABLE, &[(0x8c, TEXTURE_HOOK)]);
+        e
+    }
+
+    /// A queued texture whose first word is the task table (so slot `0x28`
+    /// is `CheckFinished`).
+    fn queued_texture(e: &mut Engine) -> Ptr<QueuedTexture> {
+        let texture: Ptr<QueuedTexture> = e.new_object();
+        e.mem.set_u32(texture.addr(), TASK_VTABLE);
+        texture
+    }
+
+    /// A file entry with the given offset and size words.
+    fn file_entry(e: &mut Engine, offset: u32, size: u32) -> Ptr {
+        let entry = Ptr::new(e.mem.alloc(0x10));
+        e.mem.set_u32(entry.addr() + 8, size);
+        e.mem.set_u32(entry.addr() + 0xc, offset);
+        entry
+    }
+
+    /// An open file whose name (slot `0x18`) is `name`.
+    fn open_file(e: &mut Engine, name: &str) -> Ptr {
+        let file = Ptr::new(e.mem.alloc(0x10));
+        let text = text(e, name);
+        e.mem.set_u32(file.addr(), FILE_VTABLE);
+        e.mem.set_u32(file.addr() + 4, text);
+        file
+    }
+
+    #[test]
+    fn children_counter_is_decremented_only_when_positive() {
+        let mut e = queue_engine();
+        let children: Ptr<QueuedChildren> = e.new_object();
+        for (before, after) in [(3, 2), (1, 0), (0, 0), (-5, -5)] {
+            e.set(
+                children,
+                QueuedChildren::iNumChildrenFinished,
+                before as u32,
+            );
+            e.call(0x0043_bac0, &args![children]);
+            assert_eq!(
+                e.get(children, QueuedChildren::iNumChildrenFinished) as i32,
+                after
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_file_constructor_copies_the_name_and_joins_the_map() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let this: Ptr<LoadedFile> = e.new_object();
+        e.set(this, LoadedFile::iRefCount, 9);
+        e.set(this, LoadedFile::bFileUsed, true);
+        let name = text(&mut e, "meshes\\a.nif");
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_baf0, &args![this, name, Ptr::<()>::new(0x4321)]);
+        assert_eq!(back.ptr::<LoadedFile>(), this);
+        let copy = e.get(this, LoadedFile::pFileName);
+        assert_ne!(copy, name);
+        assert_eq!(e.mem.cstr(copy), b"meshes\\a.nif");
+        assert_eq!(e.get(this, LoadedFile::pFile), Ptr::new(0x4321));
+        assert!(e.get(this, LoadedFile::bInLoadedFileMap));
+        assert!(!e.get(this, LoadedFile::bFileUsed));
+        assert_eq!(e.get(this, LoadedFile::iRefCount), 0);
+        assert_eq!(
+            calls_to(&e, FILE_MAP_ADD_LOADED_FILE),
+            vec![vec![OWNER_OBJECT, copy, this.addr()]]
+        );
+        // A refused add leaves the flag clear.
+        e.register(FILE_MAP_ADD_LOADED_FILE, |_, _| 0u32.into_ret());
+        e.call(0x0043_baf0, &args![this, name, Ptr::<()>::new(0)]);
+        assert!(!e.get(this, LoadedFile::bInLoadedFileMap));
+    }
+
+    /// A loaded file with a name, a file object and the given state.
+    fn loaded_file(
+        e: &mut Engine,
+        in_map: bool,
+        used: bool,
+        references: i32,
+    ) -> (Ptr<LoadedFile>, u32, Ptr) {
+        let this: Ptr<LoadedFile> = e.new_object();
+        let name = text(e, "a.nif");
+        let file = open_file(e, "a.nif");
+        e.set(this, LoadedFile::pFileName, name);
+        e.set(this, LoadedFile::pFile, file);
+        e.set(this, LoadedFile::bInLoadedFileMap, in_map);
+        e.set(this, LoadedFile::bFileUsed, used);
+        e.set(this, LoadedFile::iRefCount, references);
+        (this, name, file)
+    }
+
+    #[test]
+    fn loaded_file_destructor_reports_an_unused_mapped_file() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let (this, name, file) = loaded_file(&mut e, true, false, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bb80, &args![this]);
+        assert_eq!(
+            calls_to(&e, LOG),
+            vec![vec![LOADED_FILE_UNUSED_MESSAGE, name, this.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, FILE_MAP_REMOVE_LOADED_FILE),
+            vec![vec![OWNER_OBJECT, name]]
+        );
+        // No references: nothing is formatted or reported.
+        assert!(calls_to(&e, SPRINTF).is_empty());
+        assert!(calls_to(&e, SINK_REPORT).is_empty());
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![name]]);
+        // The file is deleted last, through slot 0 with the delete flag.
+        assert_eq!(calls_to(&e, FILE_DELETE), vec![vec![file.addr(), 1]]);
+        assert_eq!(*call_order(&e).last().unwrap(), FILE_DELETE);
+    }
+
+    #[test]
+    fn loaded_file_destructor_reports_leftover_references_to_the_sink() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let sink = Ptr::<()>::new(e.mem.alloc(8));
+        e.mem.set_u32(sink.addr(), SINK_VTABLE);
+        e.set_global(MESSAGE_SINK, sink.addr());
+        // Used and not in the map: no complaint, no map removal.
+        let (this, name, _) = loaded_file(&mut e, false, true, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bb80, &args![this]);
+        assert!(calls_to(&e, LOG).is_empty());
+        assert!(calls_to(&e, FILE_MAP_REMOVE_LOADED_FILE).is_empty());
+        let formats = calls_to(&e, SPRINTF);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(
+            formats[0][1..],
+            [LOADED_FILE_REFERENCES_MESSAGE, name, this.addr(), 2]
+        );
+        let reports = calls_to(&e, SINK_REPORT);
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0][0], sink.addr());
+        assert_eq!(reports[0][1], 4);
+        assert_eq!(reports[0][2], formats[0][0]);
+        assert_eq!(reports[0][3..], [0, 0, 0]);
+        // Without a sink the references are formatted but not reported.
+        e.set_global(MESSAGE_SINK, 0u32);
+        let (this, _, _) = loaded_file(&mut e, false, true, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bb80, &args![this]);
+        assert_eq!(calls_to(&e, SPRINTF).len(), 1);
+        assert!(calls_to(&e, SINK_REPORT).is_empty());
+    }
+
+    #[test]
+    fn loaded_file_destructor_without_a_file_deletes_nothing() {
+        let mut e = queue_engine();
+        let (this, _, _) = loaded_file(&mut e, false, true, 0);
+        e.set(this, LoadedFile::pFile, Ptr::NULL);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bb80, &args![this]);
+        assert!(calls_to(&e, FILE_DELETE).is_empty());
+        assert_eq!(calls_to(&e, MEMORY_FREE).len(), 1);
+    }
+
+    #[test]
+    fn message_sink_is_the_word_at_011f6388() {
+        let mut e = queue_engine();
+        assert!(!e.call(0x0043_bce0, &args![]).bool());
+        assert_eq!(e.call(0x0043_bd00, &args![]).u32(), 0);
+        e.set_global(MESSAGE_SINK, 0x1234u32);
+        assert!(e.call(0x0043_bce0, &args![]).bool());
+        assert_eq!(e.call(0x0043_bd00, &args![]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn texture_constructor_by_name_normalizes_the_path() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedTexture> = e.new_object();
+        e.set(this, QueuedTexture::cFlags, 0xff);
+        let name = text(&mut e, "textures\\a.dds");
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_bd10, &args![this, name, 0x77u32]);
+        assert_eq!(back.ptr::<QueuedTexture>(), this);
+        assert_eq!(e.mem.u32(this.addr()), QUEUED_TEXTURE_VTABLE);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 0x77]]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_CONSTRUCT),
+            vec![vec![this.addr() + 0x30, 0]]
+        );
+        let normalized = calls_to(&e, NORMALIZE_PATH);
+        assert_eq!(normalized.len(), 1);
+        assert_eq!(normalized[0][0], name);
+        assert_eq!(normalized[0][2], 0x104);
+        // The normalized buffer is what becomes the file name.
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_FILE_NAME),
+            vec![vec![this.addr(), normalized[0][1]]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_FIND_FILE_ENTRY),
+            vec![vec![this.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn child_notification_counts_and_asks_whether_finished() {
+        let mut e = queue_engine();
+        let this = Ptr::<QueuedFile>::new(e.mem.alloc(0x28));
+        e.mem.set_u32(this.addr(), TASK_VTABLE);
+        let children: Ptr<QueuedChildren> = e.new_object();
+        e.set(this, QueuedFile::pChildren, children.cast());
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bde0, &args![this, Ptr::<()>::new(0x99)]);
+        assert_eq!(e.get(children, QueuedChildren::iNumChildrenFinished), 1);
+        assert_eq!(calls_to(&e, CHECK_FINISHED), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn children_counter_is_incremented() {
+        let mut e = queue_engine();
+        let children: Ptr<QueuedChildren> = e.new_object();
+        e.call(0x0043_be10, &args![children]);
+        e.call(0x0043_be10, &args![children]);
+        assert_eq!(e.get(children, QueuedChildren::iNumChildrenFinished), 2);
+    }
+
+    #[test]
+    fn texture_scalar_deleting_destructor_frees_only_on_request() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_be30, &args![this, 0u32]);
+        assert_eq!(back.ptr::<QueuedTexture>(), this);
+        assert_eq!(
+            call_order(&e),
+            vec![0x0043_be30, NI_POINTER_DESTRUCT, QUEUED_FILE_ENTRY_DESTRUCT]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0043_be30, &args![this, 3u32]);
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+        // Only bit 0 of the flags counts.
+        e.call_log = Some(vec![]);
+        e.call(0x0043_be30, &args![this, 2u32]);
+        assert!(calls_to(&e, MEMORY_FREE).is_empty());
+    }
+
+    #[test]
+    fn texture_constructor_by_file_entry_stores_the_entry() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedTexture> = e.new_object();
+        e.set(this, QueuedTexture::cFlags, 0xff);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_be60, &args![this, Ptr::<()>::new(0x5150), 0x66u32]);
+        assert_eq!(back.ptr::<QueuedTexture>(), this);
+        assert_eq!(e.mem.u32(this.addr()), QUEUED_TEXTURE_VTABLE);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 0x66]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_FILE_ENTRY),
+            vec![vec![this.addr(), 0x5150]]
+        );
+        assert!(calls_to(&e, QUEUED_FILE_ENTRY_SET_FILE_NAME).is_empty());
+    }
+
+    #[test]
+    fn texture_constructor_by_texture_marks_the_task_done() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedTexture> = e.new_object();
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_bef0, &args![this, Ptr::<()>::new(0x4040), 0x66u32]);
+        assert_eq!(back.ptr::<QueuedTexture>(), this);
+        assert_eq!(e.mem.u32(this.addr()), QUEUED_TEXTURE_VTABLE);
+        assert_eq!(e.get(this, QueuedTexture::spTexture), Ptr::new(0x4040));
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        let order = call_order(&e);
+        // Constructed empty first, then assigned, then marked done.
+        let construct = order
+            .iter()
+            .position(|a| *a == NI_POINTER_CONSTRUCT)
+            .unwrap();
+        let assign = order.iter().position(|a| *a == NI_POINTER_ASSIGN).unwrap();
+        let done = order.iter().position(|a| *a == TASK_SET_DONE).unwrap();
+        assert!(construct < assign && assign < done);
+        assert_eq!(calls_to(&e, TASK_SET_DONE), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn texture_destructor_restores_the_table_and_runs_the_base() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedTexture> = e.new_object();
+        e.mem.set_u32(this.addr(), 0x1111);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_bf80, &args![this]);
+        assert_eq!(e.mem.u32(this.addr()), QUEUED_TEXTURE_VTABLE);
+        assert_eq!(
+            call_order(&e)[1..],
+            [NI_POINTER_DESTRUCT, QUEUED_FILE_ENTRY_DESTRUCT]
+        );
+        assert_eq!(
+            calls_to(&e, NI_POINTER_DESTRUCT),
+            vec![vec![this.addr() + 0x30]]
+        );
+    }
+
+    #[test]
+    fn file_index_is_the_archive_word_plus_four() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        // No file entry.
+        assert_eq!(e.call(0x0043_bfe0, &args![this]).u32(), 0);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        // A file entry without an archive.
+        e.register(FILE_ENTRY_FIND_ARCHIVE, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0043_bfe0, &args![this]).u32(), 0);
+        assert_eq!(
+            calls_to(&e, FILE_ENTRY_FIND_ARCHIVE),
+            vec![vec![entry.addr(), 2]]
+        );
+        // With an archive.
+        let archive = e.mem.alloc(0x200);
+        e.mem.set_u32(archive + 0x1c8, 11);
+        e.register_double(FILE_ENTRY_FIND_ARCHIVE, move |_, _| archive.into_ret());
+        assert_eq!(e.call(0x0043_bfe0, &args![this]).u32(), 15);
+    }
+
+    #[test]
+    fn archive_word_is_read_at_0x1c8() {
+        let mut e = queue_engine();
+        let archive = e.mem.alloc(0x200);
+        e.mem.set_u32(archive + 0x1c8, 0xabcd);
+        assert_eq!(
+            e.call(0x0043_c030, &args![Ptr::<()>::new(archive)]).u32(),
+            0xabcd
+        );
+    }
+
+    /// A task queue object for `QueueMe`.
+    fn task_queue(e: &mut Engine) -> u32 {
+        let queue = e.mem.alloc(8);
+        e.mem.set_u32(queue, QUEUE_VTABLE);
+        e.set_global(TASK_QUEUE, queue);
+        queue
+    }
+
+    #[test]
+    fn queue_me_registers_the_file_entry_and_sets_the_thread_flag_bit() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let queue = task_queue(&mut e);
+        let this = queued_texture(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        let tls = e.tls();
+        e.mem.set_u8(tls + TLS_QUEUED_FLAG, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c050, &args![this]);
+        assert_eq!(
+            calls_to(&e, FILE_MAP_ADD_QUEUED_TEXTURE),
+            vec![vec![OWNER_OBJECT, entry.addr(), this.addr()]]
+        );
+        // Added to the map (bit 4) and queued with the thread flag set (bit 2).
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 6);
+        assert_eq!(calls_to(&e, QUEUE_ADD), vec![vec![queue, this.addr()]]);
+    }
+
+    #[test]
+    fn queue_me_without_entry_or_thread_flag_only_queues() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        task_queue(&mut e);
+        let this = queued_texture(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c050, &args![this]);
+        assert!(calls_to(&e, FILE_MAP_ADD_QUEUED_TEXTURE).is_empty());
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        assert_eq!(calls_to(&e, QUEUE_ADD).len(), 1);
+        // A refused add clears bit 4.
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        e.set(this, QueuedTexture::cFlags, 4);
+        e.register(FILE_MAP_ADD_QUEUED_TEXTURE, |_, _| 0u32.into_ret());
+        e.call(0x0043_c050, &args![this]);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+    }
+
+    #[test]
+    fn texture_flag_bit_2_is_set_and_cleared() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        e.set(this, QueuedTexture::cFlags, 0x01);
+        e.call(0x0043_c0d0, &args![this, 1u8]);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0x03);
+        e.call(0x0043_c0d0, &args![this, 0u8]);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0x01);
+    }
+
+    #[test]
+    fn texture_flag_bit_4_is_set_and_cleared() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        e.set(this, QueuedTexture::cFlags, 0x02);
+        e.call(0x0043_c100, &args![this, 1u8]);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0x06);
+        e.call(0x0043_c100, &args![this, 0u8]);
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0x02);
+    }
+
+    #[test]
+    fn thread_flag_is_the_tls_byte_at_0x25c() {
+        let mut e = queue_engine();
+        assert_eq!(e.call(0x0043_c130, &args![]).u8(), 0);
+        let tls = e.tls();
+        e.mem.set_u8(tls + 0x25c, 7);
+        assert_eq!(e.call(0x0043_c130, &args![]).u8(), 7);
+    }
+
+    /// Doubles and objects for `Run`: the texture map finds nothing unless
+    /// told otherwise, the memory context is a guard of 4 bytes.
+    fn run_scene(e: &mut Engine) -> Ptr<QueuedTexture> {
+        e.set_global(TEXTURE_MAP, MAP_OBJECT);
+        e.set_global(DEFAULT_TEXTURE_SETTING, 0x5a5a_u32);
+        let this = queued_texture(e);
+        e.set(this, QueuedTexture::eContext, 0x55);
+        this
+    }
+
+    #[test]
+    fn run_keeps_a_texture_the_palette_already_has() {
+        let mut e = queue_engine();
+        let this = run_scene(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        // The texture has a surface whose format byte is 3.
+        let texture = e.mem.alloc(0x40);
+        e.mem.set_u32(texture, TEXTURE_VTABLE);
+        let surface = e.mem.alloc(0x80);
+        e.mem.set_u32(texture + 0x24, surface);
+        e.mem.set_u8(surface + 0x58 + 3, 3);
+        e.register_double(TEXTURE_MAP_FIND, move |e, a| {
+            e.mem.set_u32(a[3], texture);
+            1u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        // The guard is entered with the task's context and left again.
+        let enter = calls_to(&e, MEMORY_CONTEXT_ENTER);
+        assert_eq!(enter.len(), 1);
+        assert_eq!(enter[0][1..], [0x55, 1, MODEL_LOADER_SOURCE, 0x2b7]);
+        assert_eq!(calls_to(&e, MEMORY_CONTEXT_LEAVE), vec![vec![enter[0][0]]]);
+        // Looked up by file entry in the bucket of the entry's address.
+        let bucket = (entry.addr() >> 4) % 1001;
+        assert_eq!(
+            calls_to(&e, TEXTURE_MAP_FIND),
+            vec![vec![MAP_OBJECT, bucket, entry.addr(), this.addr() + 0x30]]
+        );
+        assert_eq!(e.get(this, QueuedTexture::spTexture), Ptr::new(texture));
+        // Flag bit 1 is set; the format byte 3 with bit 2 clear calls the hook.
+        assert_eq!(
+            calls_to(&e, QUEUED_TEXTURE_SET_FLAG_1),
+            vec![vec![this.addr(), 1]]
+        );
+        assert_eq!(calls_to(&e, TEXTURE_HOOK), vec![vec![texture]]);
+        // Nothing was loaded from a file.
+        assert!(calls_to(&e, QUEUED_FILE_ENTRY_GET_FILE).is_empty());
+        // With bit 2 set the hook is not called.
+        e.set(this, QueuedTexture::cFlags, 2);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
+        // Nor with another format byte.
+        e.set(this, QueuedTexture::cFlags, 0);
+        e.mem.set_u8(surface + 0x58 + 3, 4);
+        e.call(0x0043_c150, &args![this]);
+        assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
+    }
+
+    #[test]
+    fn run_looks_a_texture_up_by_name_without_a_file_entry() {
+        let mut e = queue_engine();
+        let this = run_scene(&mut e);
+        let name = text(&mut e, "a.dds");
+        e.set(this, QueuedTexture::pFileName, name);
+        let texture = e.mem.alloc(0x40);
+        e.mem.set_u32(texture, TEXTURE_VTABLE);
+        e.register_double(TEXTURE_PALETTE_GET_TEXTURE_BY_NAME, move |e, a| {
+            e.mem.set_u32(a[1], texture);
+            Ret::default()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_PALETTE_GET_TEXTURE_BY_NAME),
+            vec![vec![name, this.addr() + 0x30]]
+        );
+        assert!(calls_to(&e, TEXTURE_MAP_FIND).is_empty());
+        assert_eq!(e.get(this, QueuedTexture::spTexture), Ptr::new(texture));
+        // A texture without a surface: no hook.
+        assert!(calls_to(&e, TEXTURE_HOOK).is_empty());
+    }
+
+    #[test]
+    fn run_loads_a_plain_texture_from_its_file() {
+        let mut e = queue_engine();
+        let this = run_scene(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        let file = open_file(&mut e, "textures\\wall.dds");
+        let name = e.mem.u32(file.addr() + 4);
+        e.register(QUEUED_FILE_ENTRY_GET_FILE, |e, a| {
+            // The task's file: the one stored in the scene.
+            e.mem.u32(a[0] + 0x10).into_ret()
+        });
+        e.mem.set_u32(this.addr() + 0x10, file.addr());
+        // The thread value is 9 before and 1 while the file is opened with
+        // bit 2 set; the creator sees it.
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_QUEUED_VALUE, 9);
+        e.set(this, QueuedTexture::cFlags, 2);
+        e.register_double(CREATE_TEXTURE_FROM_FILE, move |e, _| {
+            let tls = e.tls();
+            assert_eq!(e.mem.u32(tls + TLS_QUEUED_VALUE), 1);
+            0x7001u32.into_ret()
+        });
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_GET_FILE),
+            vec![vec![this.addr(), 1, 2]]
+        );
+        assert_eq!(
+            calls_to(&e, CREATE_TEXTURE_FROM_FILE),
+            vec![vec![file.addr(), name, TEXTURE_FORMAT_PREFERENCES, 1]]
+        );
+        assert!(calls_to(&e, CREATE_TEXTURE_FROM_FIXED_NAME).is_empty());
+        assert_eq!(e.get(this, QueuedTexture::spTexture), Ptr::new(0x7001));
+        // The thread value is back to what it was.
+        assert_eq!(e.mem.u32(tls + TLS_QUEUED_VALUE), 9);
+    }
+
+    #[test]
+    fn run_loads_an_environment_map_through_a_fixed_string() {
+        let mut e = queue_engine();
+        let this = run_scene(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        let file = open_file(&mut e, "textures\\sky_e.dds");
+        let name = e.mem.u32(file.addr() + 4);
+        e.register(QUEUED_FILE_ENTRY_GET_FILE, |e, a| {
+            e.mem.u32(a[0] + 0x10).into_ret()
+        });
+        e.mem.set_u32(this.addr() + 0x10, file.addr());
+        let tls = e.tls();
+        e.mem.set_u32(tls + TLS_QUEUED_VALUE, 9);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        // The fixed string is built from the name and destroyed afterwards.
+        let constructed = calls_to(&e, FIXED_STRING_CONSTRUCT);
+        assert_eq!(constructed.len(), 1);
+        assert_eq!(constructed[0][1], name);
+        let local = constructed[0][0];
+        assert_eq!(
+            calls_to(&e, CREATE_TEXTURE_FROM_FIXED_NAME),
+            vec![vec![local, file.addr(), 0x5a5a, TEXTURE_FORMAT_PREFERENCES]]
+        );
+        assert_eq!(calls_to(&e, FIXED_STRING_DESTRUCT), vec![vec![local]]);
+        assert!(calls_to(&e, CREATE_TEXTURE_FROM_FILE).is_empty());
+        assert_eq!(e.get(this, QueuedTexture::spTexture), Ptr::new(0x7002));
+        // Bit 2 was clear, so the thread value was never changed.
+        assert_eq!(e.mem.u32(tls + TLS_QUEUED_VALUE), 9);
+    }
+
+    #[test]
+    fn run_logs_why_no_file_could_be_opened() {
+        let mut e = queue_engine();
+        let this = run_scene(&mut e);
+        e.register(QUEUED_FILE_ENTRY_GET_FILE, |_, _| 0u32.into_ret());
+        // With a file entry: its offset (top bit masked) and size (top two
+        // bits masked).
+        let entry = file_entry(&mut e, 0x8000_1234, 0xc000_0777);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert_eq!(
+            calls_to(&e, LOG),
+            vec![vec![NO_FILE_FOR_TEXTURE_ENTRY_MESSAGE, 0x1234, 0x777]]
+        );
+        // With only a name.
+        let this = run_scene(&mut e);
+        let name = text(&mut e, "missing.dds");
+        e.set(this, QueuedTexture::pFileName, name);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert_eq!(
+            calls_to(&e, LOG),
+            vec![vec![NO_FILE_FOR_TEXTURE_NAME_MESSAGE, name]]
+        );
+        // With neither: silence.
+        let this = run_scene(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c150, &args![this]);
+        assert!(calls_to(&e, LOG).is_empty());
+        assert_eq!(calls_to(&e, MEMORY_CONTEXT_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn file_entry_offset_drops_the_top_bit() {
+        let mut e = queue_engine();
+        let entry = file_entry(&mut e, 0xffff_ffff, 0);
+        assert_eq!(e.call(0x0043_c3b0, &args![entry]).u32(), 0x7fff_ffff);
+    }
+
+    #[test]
+    fn texture_flag_bit_2_test() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        for (flags, expected) in [(0, false), (1, false), (2, true), (7, true), (4, false)] {
+            e.set(this, QueuedTexture::cFlags, flags);
+            assert_eq!(e.call(0x0043_c3d0, &args![this]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn thread_value_is_stored_and_read_at_0x29c() {
+        let mut e = queue_engine();
+        e.call(0x0043_c3f0, &args![0x1234u32]);
+        let tls = e.tls();
+        assert_eq!(e.mem.u32(tls + 0x29c), 0x1234);
+        assert_eq!(e.call(0x0043_c410, &args![]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn surface_format_byte_is_zero_without_a_surface() {
+        let mut e = queue_engine();
+        let texture = e.mem.alloc(0x40);
+        assert_eq!(
+            e.call(0x0043_c430, &args![Ptr::<()>::new(texture)]).u32(),
+            0
+        );
+        let surface = e.mem.alloc(0x80);
+        e.mem.set_u32(texture + 0x24, surface);
+        e.mem.set_u8(surface + 0x58 + 3, 0x2a);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0043_c430, &args![Ptr::<()>::new(texture)]).u32(),
+            0x2a
+        );
+        // The surface getter is asked twice, as the game does.
+        assert_eq!(calls_to(&e, TEXTURE_GET_SURFACE).len(), 2);
+    }
+
+    #[test]
+    fn byte_at_offset_3_is_read() {
+        let mut e = queue_engine();
+        let block = e.mem.alloc(8);
+        e.mem.set_u8(block + 3, 0x42);
+        assert_eq!(
+            e.call(0x0043_c470, &args![Ptr::<()>::new(block)]).u8(),
+            0x42
+        );
+    }
+
+    #[test]
+    fn descriptor_address_is_surface_plus_0x58() {
+        let mut e = queue_engine();
+        assert_eq!(
+            e.call(0x0043_c490, &args![Ptr::<()>::new(0x1000)]).u32(),
+            0x1058
+        );
+    }
+
+    #[test]
+    fn default_texture_setting_is_the_word_at_011f4748() {
+        let mut e = queue_engine();
+        e.set_global(DEFAULT_TEXTURE_SETTING, 0xfeedu32);
+        assert_eq!(e.call(0x0043_c4b0, &args![]).u32(), 0xfeed);
+    }
+
+    #[test]
+    fn palette_get_texture_clears_the_output_and_searches_the_map() {
+        let mut e = queue_engine();
+        e.set_global(TEXTURE_MAP, MAP_OBJECT);
+        let out = e.mem.alloc(4);
+        e.mem.set_u32(out, 0xdead);
+        e.register_double(TEXTURE_MAP_FIND, |_, _| 0u32.into_ret());
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c4c0, &args![0x0001_2340u32, Ptr::<()>::new(out)]);
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!(call_order(&e)[1..], [NI_POINTER_ASSIGN, TEXTURE_MAP_FIND]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_MAP_FIND),
+            vec![vec![MAP_OBJECT, 0x1234 % 1001, 0x0001_2340, out]]
+        );
+    }
+
+    #[test]
+    fn palette_lookup_returns_what_the_map_says() {
+        let mut e = queue_engine();
+        let out = e.mem.alloc(4);
+        for found in [false, true] {
+            e.register_double(TEXTURE_MAP_FIND, move |_, _| found.into_ret());
+            let back = e.call(
+                0x0043_c4f0,
+                &args![Ptr::<()>::new(MAP_OBJECT), 0x100u32, Ptr::<()>::new(out)],
+            );
+            assert_eq!(back.bool(), found);
+        }
+    }
+
+    #[test]
+    fn palette_bucket_is_the_key_over_16_modulo_1001() {
+        let mut e = queue_engine();
+        for key in [0u32, 15, 16, 0x1000, 0x0123_4560, 0xffff_ffff] {
+            assert_eq!(e.call(0x0043_c530, &args![key]).u32(), (key >> 4) % 1001);
+        }
+        assert_eq!(e.call(0x0043_c530, &args![1001u32 * 16]).u32(), 0);
+    }
+
+    #[test]
+    fn finish_stores_the_texture_in_the_palette_by_file_entry() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let this = queued_texture(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        e.set(this, QueuedTexture::spTexture, Ptr::new(0x6001));
+        // Bit 4: the texture is in the map of queued textures.
+        e.set(this, QueuedTexture::cFlags, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c550, &args![this]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_PALETTE_SET_TEXTURE),
+            vec![vec![0x6001, entry.addr()]]
+        );
+        // Taken out of the queued map, bit 4 cleared, then CheckFinished.
+        assert_eq!(
+            calls_to(&e, FILE_MAP_REMOVE_QUEUED_TEXTURE),
+            vec![vec![OWNER_OBJECT, entry.addr()]]
+        );
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        assert_eq!(*call_order(&e).last().unwrap(), CHECK_FINISHED);
+        assert_eq!(calls_to(&e, CHECK_FINISHED), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn finish_stores_a_name_only_texture_without_an_entry() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        let name = text(&mut e, "a.dds");
+        e.set(this, QueuedTexture::pFileName, name);
+        e.set(this, QueuedTexture::spTexture, Ptr::new(0x6002));
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c550, &args![this]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_PALETTE_SET_TEXTURE),
+            vec![vec![0x6002, 0]]
+        );
+        assert!(calls_to(&e, FILE_MAP_REMOVE_QUEUED_TEXTURE).is_empty());
+        assert_eq!(calls_to(&e, CHECK_FINISHED).len(), 1);
+    }
+
+    #[test]
+    fn finish_skips_the_palette_when_flag_bit_1_is_set_or_no_texture() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        e.set(this, QueuedTexture::spTexture, Ptr::new(0x6003));
+        e.set(this, QueuedTexture::cFlags, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c550, &args![this]);
+        assert!(calls_to(&e, TEXTURE_PALETTE_SET_TEXTURE).is_empty());
+        // No texture at all.
+        e.set(this, QueuedTexture::cFlags, 0);
+        e.set(this, QueuedTexture::spTexture, Ptr::NULL);
+        e.call(0x0043_c550, &args![this]);
+        assert!(calls_to(&e, TEXTURE_PALETTE_SET_TEXTURE).is_empty());
+        // Bit 4 clear: the queued map is left alone, but CheckFinished runs.
+        assert!(calls_to(&e, FILE_MAP_REMOVE_QUEUED_TEXTURE).is_empty());
+        assert_eq!(calls_to(&e, CHECK_FINISHED).len(), 2);
+    }
+
+    #[test]
+    fn check_finished_slot_is_called() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c610, &args![this]);
+        assert_eq!(calls_to(&e, CHECK_FINISHED), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn texture_flag_bit_4_test() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        for (flags, expected) in [(0, false), (2, false), (4, true), (7, true)] {
+            e.set(this, QueuedTexture::cFlags, flags);
+            assert_eq!(e.call(0x0043_c630, &args![this]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn cancel_runs_the_base_and_leaves_the_queued_map() {
+        let mut e = queue_engine();
+        e.set_global(FILE_MAP_OWNER, OWNER_OBJECT);
+        let this = queued_texture(&mut e);
+        let entry = file_entry(&mut e, 0, 0);
+        e.set(this, QueuedTexture::pFileEntry, entry);
+        e.set(this, QueuedTexture::cFlags, 4);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c650, &args![this, 0x11u32, 0x22u32]);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_CANCEL),
+            vec![vec![this.addr(), 0x11, 0x22]]
+        );
+        assert_eq!(
+            calls_to(&e, FILE_MAP_REMOVE_QUEUED_TEXTURE),
+            vec![vec![OWNER_OBJECT, entry.addr()]]
+        );
+        assert_eq!(e.get(this, QueuedTexture::cFlags), 0);
+        // Unlike `Finish`, nothing asks whether the task is finished.
+        assert!(calls_to(&e, CHECK_FINISHED).is_empty());
+        // Not in the map: left alone.
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c650, &args![this, 0u32, 0u32]);
+        assert!(calls_to(&e, FILE_MAP_REMOVE_QUEUED_TEXTURE).is_empty());
+    }
+
+    #[test]
+    fn texture_description_passes_the_word_texture() {
+        let mut e = queue_engine();
+        let this = queued_texture(&mut e);
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_c6b0, &args![this, 0x9000u32, 0x400u32]);
+        assert!(back.bool());
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_GET_DESCRIPTION),
+            vec![vec![this.addr(), 0x9000, 0x400, TEXTURE_WORD]]
+        );
+    }
+
+    #[test]
+    fn model_constructor_sets_up_the_fields_and_flags() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedModel> = e.new_object();
+        e.set(this, QueuedModel::pTESModel, Ptr::new(0x1111));
+        e.set(this, QueuedModel::mfOverriddenVisualDistance, 5.0);
+        e.set(this, QueuedModel::cFlags, 0xff);
+        let name = text(&mut e, "meshes\\a.nif");
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_c6e0, &args![this, name, 0x77u32, 0x3u32, 1u8, 0u8]);
+        assert_eq!(back.ptr::<QueuedModel>(), this);
+        assert_eq!(e.mem.u32(this.addr()), QUEUED_MODEL_VTABLE);
+        assert_eq!(e.get(this, QueuedModel::spModel), Ptr::NULL);
+        assert_eq!(e.get(this, QueuedModel::pTESModel), Ptr::NULL);
+        assert_eq!(e.get(this, QueuedModel::eLODFadeMult), 3);
+        // Flag argument 1 sets bit 1, argument 2 (zero) clears bit 2.
+        assert_eq!(e.get(this, QueuedModel::cFlags), 1);
+        assert_eq!(e.get(this, QueuedModel::mfOverriddenVisualDistance), 0.0);
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_CONSTRUCT),
+            vec![vec![this.addr(), 0x77]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_SET_FILE_NAME),
+            vec![vec![this.addr(), name]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_FIND_FILE_ENTRY),
+            vec![vec![this.addr(), 0]]
+        );
+        // The other combination.
+        e.call(0x0043_c6e0, &args![this, name, 0x77u32, 0u32, 0u8, 1u8]);
+        assert_eq!(e.get(this, QueuedModel::cFlags), 2);
+    }
+
+    #[test]
+    fn model_flag_bits_1_and_2_are_set_and_cleared() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedModel> = e.new_object();
+        e.set(this, QueuedModel::cFlags, 0x04);
+        e.call(0x0043_c7a0, &args![this, 1u8]);
+        assert_eq!(e.get(this, QueuedModel::cFlags), 0x05);
+        e.call(0x0043_c7d0, &args![this, 1u8]);
+        assert_eq!(e.get(this, QueuedModel::cFlags), 0x07);
+        e.call(0x0043_c7a0, &args![this, 0u8]);
+        e.call(0x0043_c7d0, &args![this, 0u8]);
+        assert_eq!(e.get(this, QueuedModel::cFlags), 0x04);
+    }
+
+    #[test]
+    fn model_scalar_deleting_destructor_frees_only_on_request() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedModel> = e.new_object();
+        e.call_log = Some(vec![]);
+        let back = e.call(0x0043_c800, &args![this, 0u32]);
+        assert_eq!(back.ptr::<QueuedModel>(), this);
+        assert_eq!(
+            call_order(&e),
+            vec![
+                0x0043_c800,
+                MODEL_POINTER_RELEASE,
+                QUEUED_FILE_ENTRY_DESTRUCT
+            ]
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c800, &args![this, 1u32]);
+        assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this.addr()]]);
+    }
+
+    #[test]
+    fn model_destructor_releases_the_model_pointer_and_keeps_the_table() {
+        let mut e = queue_engine();
+        let this: Ptr<QueuedModel> = e.new_object();
+        e.mem.set_u32(this.addr(), 0x2222);
+        e.call_log = Some(vec![]);
+        e.call(0x0043_c830, &args![this]);
+        assert_eq!(
+            calls_to(&e, MODEL_POINTER_RELEASE),
+            vec![vec![this.addr() + 0x30]]
+        );
+        assert_eq!(
+            calls_to(&e, QUEUED_FILE_ENTRY_DESTRUCT),
+            vec![vec![this.addr()]]
+        );
+        // The virtual table is left as it was.
+        assert_eq!(e.mem.u32(this.addr()), 0x2222);
     }
 }
