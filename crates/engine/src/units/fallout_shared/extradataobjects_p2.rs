@@ -3,9 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::extradataobjects`]; anything public there may be used here.
 //!
-//! Translated so far: the first 80 functions of the range, `004353f0` to
-//! `00437290` (`ExtraXTarget::Compare` to `ExtraRadioData::Compare`). The
-//! next session continues at `00437300` (`ExtraCombatStyle::Compare`).
+//! Translated: all 120 functions of the range, `004353f0` to `00438280`
+//! (`ExtraXTarget::Compare` to `ExtraSecuritronFace::SetMood`). The range is
+//! complete.
 //!
 //! Notes for the next session:
 //! - Every class here is a `BSExtraData` subclass whose payload starts at
@@ -1824,6 +1824,899 @@ pub fn extra_radio_data_compare(e: &mut Engine, this: Ptr<ExtraRadioData>, other
         != 0
 }
 
+/// Extra-data type bytes of the classes of the last part of this range.
+const TYPE_SAY_TOPIC_INFO_ONCE_A_DAY: u32 = 0x73;
+const TYPE_SAY_TO_TOPIC_INFO: u32 = 0x75;
+const TYPE_WATER_ZONE_MAP: u32 = 0x7e;
+const TYPE_IGNORED_BY_SANDBOX: u32 = 0x80;
+const TYPE_PATROL_REF_IN_USE_DATA: u32 = 0x88;
+const TYPE_FOLLOWER_SWIM_BREADCRUMBS: u32 = 0x8b;
+
+/// Their vtables.
+const EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY_VTABLE: u32 = 0x0101_5f3c;
+const EXTRA_SAY_TO_TOPIC_INFO_VTABLE: u32 = 0x0101_5f48;
+const EXTRA_WATER_ZONE_MAP_VTABLE: u32 = 0x0101_5f54;
+const EXTRA_IGNORED_BY_SANDBOX_VTABLE: u32 = 0x0101_5f64;
+const EXTRA_PATROL_REF_IN_USE_DATA_VTABLE: u32 = 0x0101_5f70;
+const EXTRA_FOLLOWER_SWIM_BREADCRUMBS_VTABLE: u32 = 0x0101_5f7c;
+
+/// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`.
+const EXTRA_COMBAT_STYLE_TYPE: u32 = 0x0118_495c;
+const EXTRA_PRIMITIVE_TYPE: u32 = 0x0118_42b0;
+const EXTRA_AMMO_TYPE: u32 = 0x0118_48c0;
+
+/// The list's head removal (`this` is the list; the first item's node is
+/// taken out and the next node moves into the head).
+const SIMPLE_LIST_REMOVE_HEAD: u32 = 0x0063_f7b0;
+/// The list's replacement of the head item (`this` is the list; the
+/// argument is the address of a word holding the new item).
+const SIMPLE_LIST_SET_HEAD: u32 = 0x0072_6c60;
+/// The insertion `ExtraFollowerSwimBreadcrumbs` uses for its crumb list
+/// (`this` is the list; the argument is the address of the word holding the
+/// crumb pointer).
+const CRUMB_LIST_ADD: u32 = 0x0090_5820;
+/// `ExtraFollowerSwimBreadcrumb`'s scalar deleting destructor (`this`, the
+/// flags).
+const CRUMB_DELETE: u32 = 0x007b_3fa0;
+/// The constructor of the map `ExtraWaterZoneMap` embeds at +0xc (`this` is
+/// the map, the argument the bucket count).
+const WATER_ZONE_MAP_CONSTRUCT: u32 = 0x0043_83b0;
+/// The destructor of that map (`this` is the map).
+const WATER_ZONE_MAP_DESTRUCT: u32 = 0x0043_8720;
+/// The map's lookup (`this` is the map, the arguments the key and the
+/// address of the word that receives the count).
+const ZONE_MAP_LOOKUP: u32 = 0x0085_3130;
+/// The map's `SetAt` (`this` is the map, the arguments the key and the value).
+const ZONE_MAP_SET_AT: u32 = 0x0084_4700;
+/// The map's `RemoveAt` (`this` is the map, the argument the key).
+const ZONE_MAP_REMOVE_AT: u32 = 0x0040_5430;
+/// The map's first position (`this` is the map; 0 when it is empty).
+const ZONE_MAP_FIRST: u32 = 0x004b_9ba0;
+/// The map's iteration step (`this` is the map; the arguments are the
+/// addresses of the position, of the key and of the value, which receive
+/// the entry; the position advances).
+const ZONE_MAP_NEXT: u32 = 0x006b_7f20;
+/// The float `fn_00437850` starts its search for the highest zone from (the
+/// lowest `f32`, held in the exe's data).
+const LOWEST_FLOAT: u32 = 0x0101_5f5c;
+/// The handle of a reference (`this` is the reference).
+const REFERENCE_HANDLE: u32 = 0x0084_e3a0;
+/// The reference for a handle (cdecl, one stack argument; null when the
+/// handle has none).
+const REFERENCE_FOR_HANDLE: u32 = 0x0048_39c0;
+/// A method of the reference that returns a small integer (the code
+/// compared with 3 and with 5 below; `this` only).
+const REFERENCE_KIND: u32 = 0x004f_8960;
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB).
+const GET_CURRENT_PROCESS_TYPE: u32 = 0x0093_1850;
+/// The global that holds a fixed string's empty value.
+const EMPTY_FIXED_STRING: u32 = 0x0109_b220;
+/// Creates the fixed string for a C string (cdecl, one stack argument).
+const FIXED_STRING_CREATE: u32 = 0x00a5_b690;
+/// Releases a fixed string's text (cdecl, one stack argument: the address
+/// of the text's header, 8 bytes before the text).
+const FIXED_STRING_RELEASE: u32 = 0x0040_19a0;
+/// The string assignment `ExtraSecuritronFace` uses (`this` is the string,
+/// the argument a C string).
+const STRING_ASSIGN: u32 = 0x0043_8390;
+/// The two methods of `ExtraSecuritronFace` that copy a string out (`this`
+/// is the extra data, the argument the address of the destination string).
+const GET_FACE_STRING_FIRST: u32 = 0x0042_8070;
+const GET_FACE_STRING_SECOND: u32 = 0x0042_80b0;
+/// A string's length (`this` is the string).
+const STRING_LENGTH: u32 = 0x0040_48e0;
+/// A string's destructor (`this` is the string).
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// An accessor that returns the word `this` points at (the text of a string,
+/// the object of a smart pointer).
+const POINTER_VALUE: u32 = 0x0055_9450;
+/// `sprintf`-style formatting (cdecl: buffer, size, format, then the values).
+const FORMAT_STRING: u32 = 0x0040_6d00;
+/// `SwapPlatformLanguageTexturePath(source, destination, size)` (Xbox PDB;
+/// cdecl).
+const SWAP_PLATFORM_LANGUAGE_TEXTURE_PATH: u32 = 0x004b_7240;
+/// The global holding the `TES` pointer.
+const TES: u32 = 0x011d_ea10;
+/// `TES::CreateTextureImage` (Xbox PDB; `this` is the TES object, then the
+/// path, the address of the smart pointer that receives the image and two
+/// zero words).
+const CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
+/// `NiAVObject::GetProperty` (Xbox PDB; `this`, the property type).
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+/// The format of the texture path `ApplyFace` builds.
+const SECURITRON_TEXTURE_FORMAT: u32 = 0x0101_5f84;
+/// The name of the object `ApplyFace` looks for.
+const SECURITRON_SCREEN_NAME: u32 = 0x0101_5fac;
+/// The three-word exe global `ExtraFollowerSwimBreadcrumbs`' constructor
+/// copies into `LeaderLocation`.
+const DEFAULT_LEADER_LOCATION: u32 = 0x011f_426c;
+
+layout! {
+    /// `ExtraCombatStyle` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraCombatStyle: 0x10 {
+        /// `pCombatStyle` (Xbox PDB): `TESCombatStyle*`.
+        0x0C pCombatStyle: Ptr,
+    }
+
+    /// `ExtraPrimitive` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraPrimitive: 0x10 {
+        /// `pPrimitive` (Xbox PDB): `BGSPrimitive*`.
+        0x0C pPrimitive: Ptr,
+    }
+
+    /// `ExtraAmmo` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraAmmo: 0x14 {
+        /// `pAmmo` (Xbox PDB): `TESAmmo*`.
+        0x0C pAmmo: Ptr,
+        /// `iCount` (Xbox PDB).
+        0x10 iCount: i32,
+    }
+
+    /// `ExtraSayTopicInfoOnceADay` (Xbox PDB), type `0x73`, 0x10 bytes.
+    pub struct ExtraSayTopicInfoOnceADay: 0x10 {
+        /// `pListofSaidOnceTopicInfos` (Xbox PDB):
+        /// `BSSimpleList<SayOnceTopicInfos *>*`, owned.
+        0x0C pListofSaidOnceTopicInfos: Ptr,
+    }
+
+    /// `ExtraSayToTopicInfo` (Xbox PDB), type `0x75`, 0x1C bytes.
+    pub struct ExtraSayToTopicInfo: 0x1C {
+        /// `pInfo` (Xbox PDB): `TESTopicInfo*`.
+        0x0C pInfo: Ptr,
+        /// `pTopic` (Xbox PDB): `TESTopic*`.
+        0x10 pTopic: Ptr,
+        /// `nResponseID` (Xbox PDB).
+        0x14 nResponseID: u32,
+        /// `bVoiceDone` (Xbox PDB).
+        0x18 bVoiceDone: u8,
+    }
+
+    /// `ExtraWaterZoneMap` (Xbox PDB), type `0x7e`, 0x20 bytes. The
+    /// `NiTMap<WaterZone *,int>` `WaterZoneMap` sits at +0xc (0x10 bytes).
+    pub struct ExtraWaterZoneMap: 0x20 {
+        /// `pHighestWaterZone` (Xbox PDB): `WaterZone*`.
+        0x1C pHighestWaterZone: Ptr,
+    }
+
+    /// `ExtraPatrolRefInUseData` (Xbox PDB), type `0x88`, 0x10 bytes.
+    pub struct ExtraPatrolRefInUseData: 0x10 {
+        /// `User` (Xbox PDB): the handle of the reference using the patrol
+        /// reference.
+        0x0C User: u32,
+    }
+
+    /// `ExtraFollowerSwimBreadcrumbs` (Xbox PDB), type `0x8b`, 0x28 bytes.
+    /// `LeaderLocation` (a `NiPoint3`, +0x10) and `CrumbList` (a
+    /// `BSSimpleList`, +0x20) are used by address.
+    pub struct ExtraFollowerSwimBreadcrumbs: 0x28 {
+        /// `eLeaderState` (Xbox PDB).
+        0x0C eLeaderState: u32,
+        /// `LeaderNavMeshID` (Xbox PDB).
+        0x1C LeaderNavMeshID: u32,
+    }
+
+    /// `ExtraSecuritronFace` (Xbox PDB), 0x1C bytes. `msPersonality` (+0xc)
+    /// and `msMood` (+0x14) are `BSStringT<char>`s, used by address.
+    pub struct ExtraSecuritronFace: 0x1C {
+    }
+}
+
+// Translated from 00437300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCombatStyle::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraCombatStyle`, when `BSExtraData::Compare` says so, or when
+/// `pCombatStyle` differs.
+pub fn extra_combat_style_compare(e: &mut Engine, this: Ptr<ExtraCombatStyle>, other: Ptr) -> bool {
+    let Some(cast) = compare_start(e, this.cast(), other, EXTRA_COMBAT_STYLE_TYPE) else {
+        return true;
+    };
+    e.mem.u32(this.addr() + 0xc) != e.mem.u32(cast.addr() + 0xc)
+}
+
+// Translated from 00437370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPrimitive::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraPrimitive` or when `pPrimitive` differs (the base compare is not
+/// asked).
+pub fn extra_primitive_compare(e: &mut Engine, this: Ptr<ExtraPrimitive>, other: Ptr) -> bool {
+    compare_payload_word(e, this, other, EXTRA_PRIMITIVE_TYPE)
+}
+
+// Translated from 004373c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraAmmo::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraAmmo`, when `BSExtraData::Compare` says so, or when `iCount` (+0x10)
+/// or `pAmmo` (+0xc) differs.
+pub fn extra_ammo_compare(e: &mut Engine, this: Ptr<ExtraAmmo>, other: Ptr) -> bool {
+    let Some(cast) = compare_start(e, this.cast(), other, EXTRA_AMMO_TYPE) else {
+        return true;
+    };
+    if e.mem.u32(this.addr() + 0x10) != e.mem.u32(cast.addr() + 0x10) {
+        return true;
+    }
+    e.mem.u32(this.addr() + 0xc) != e.mem.u32(cast.addr() + 0xc)
+}
+
+// Translated from 00437440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSayTopicInfoOnceADay`'s constructor (the engine map has no name for
+/// it): extra-data type 0x73, then a new 8-byte list (`0096a2d0`) stored in
+/// `pListofSaidOnceTopicInfos`. Returns `this`. The exception-unwinding frame
+/// is not translated.
+pub fn fn_00437440(
+    e: &mut Engine,
+    this: Ptr<ExtraSayTopicInfoOnceADay>,
+) -> Ptr<ExtraSayTopicInfoOnceADay> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_SAY_TOPIC_INFO_ONCE_A_DAY,
+        EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY_VTABLE,
+    );
+    let list = new_object(e, 8, SIMPLE_LIST_CONSTRUCT);
+    e.set(
+        this,
+        ExtraSayTopicInfoOnceADay::pListofSaidOnceTopicInfos,
+        Ptr::new(list),
+    );
+    this
+}
+
+// Translated from 004374e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSayTopicInfoOnceADay::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_say_topic_info_once_a_day_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraSayTopicInfoOnceADay>,
+    flags: u32,
+) -> Ptr<ExtraSayTopicInfoOnceADay> {
+    fn_004375c0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00437510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor of `ExtraSayTopicInfoOnceADay` that the engine map has no
+/// name for: as `00437440`, then it adds `item` (the one stack word, passed
+/// by address) to the new list (`005ae3d0`, with no null check). Returns
+/// `this`. The exception-unwinding frame is not translated.
+pub fn fn_00437510(
+    e: &mut Engine,
+    this: Ptr<ExtraSayTopicInfoOnceADay>,
+    item: u32,
+) -> Ptr<ExtraSayTopicInfoOnceADay> {
+    fn_00437440(e, this);
+    let list = e.get(this, ExtraSayTopicInfoOnceADay::pListofSaidOnceTopicInfos);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(SIMPLE_LIST_ADD_HEAD, &args![list, slot]);
+    });
+    this
+}
+
+// Translated from 004375c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSayTopicInfoOnceADay`'s destructor body (the engine map has no name
+/// for it): resets the vtable, then, while the list has a first item, takes
+/// the item, removes the head node (`0063f7b0`) and frees the item
+/// (`operator delete`); then runs the list's scalar deleting destructor with
+/// the flag 1 when the list exists; then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004375c0(e: &mut Engine, this: Ptr<ExtraSayTopicInfoOnceADay>) {
+    e.mem
+        .set_u32(this.addr(), EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY_VTABLE);
+    let list = e
+        .get(this, ExtraSayTopicInfoOnceADay::pListofSaidOnceTopicInfos)
+        .addr();
+    while list != 0 && node_item(e, list) != 0 {
+        let item = node_item(e, list);
+        e.call(SIMPLE_LIST_REMOVE_HEAD, &args![list]);
+        e.call(OPERATOR_DELETE, &args![item]);
+    }
+    let list = e.get(this, ExtraSayTopicInfoOnceADay::pListofSaidOnceTopicInfos);
+    if !list.is_null() {
+        e.call(SIMPLE_LIST_DELETE, &args![list, 1u32]);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00437690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSayToTopicInfo`'s default constructor (the engine map has no name
+/// for it): extra-data type 0x75, `pInfo`, `pTopic` and `nResponseID` zero,
+/// `bVoiceDone` false. Returns `this`.
+pub fn fn_00437690(e: &mut Engine, this: Ptr<ExtraSayToTopicInfo>) -> Ptr<ExtraSayToTopicInfo> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_SAY_TO_TOPIC_INFO,
+        EXTRA_SAY_TO_TOPIC_INFO_VTABLE,
+    );
+    e.set(this, ExtraSayToTopicInfo::pInfo, Ptr::new(0));
+    e.set(this, ExtraSayToTopicInfo::pTopic, Ptr::new(0));
+    e.set(this, ExtraSayToTopicInfo::nResponseID, 0);
+    e.set(this, ExtraSayToTopicInfo::bVoiceDone, 0);
+    this
+}
+
+// Translated from 004376e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSayToTopicInfo`'s constructor with the info (the engine map has no
+/// name for it): extra-data type 0x75, `pInfo` = `info`, the other fields
+/// zero (`nResponseID` is not written by this one). Returns `this`.
+pub fn fn_004376e0(
+    e: &mut Engine,
+    this: Ptr<ExtraSayToTopicInfo>,
+    info: u32,
+) -> Ptr<ExtraSayToTopicInfo> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_SAY_TO_TOPIC_INFO,
+        EXTRA_SAY_TO_TOPIC_INFO_VTABLE,
+    );
+    e.set(this, ExtraSayToTopicInfo::pInfo, Ptr::new(info));
+    e.set(this, ExtraSayToTopicInfo::pTopic, Ptr::new(0));
+    e.set(this, ExtraSayToTopicInfo::nResponseID, 0);
+    e.set(this, ExtraSayToTopicInfo::bVoiceDone, 0);
+    this
+}
+
+// Translated from 00437730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A setter of `ExtraSayToTopicInfo` that the engine map has no name for:
+/// stores `topic` in `pTopic` (+0x10).
+pub fn fn_00437730(e: &mut Engine, this: Ptr<ExtraSayToTopicInfo>, topic: u32) {
+    e.set(this, ExtraSayToTopicInfo::pTopic, Ptr::new(topic));
+}
+
+// Translated from 00437750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterZoneMap`'s constructor (the engine map has no name for it):
+/// extra-data type 0x7e, the embedded map built with 0x25 buckets (`004383b0`)
+/// and `pHighestWaterZone` null. Returns `this`. The exception-unwinding
+/// frame is not translated.
+pub fn fn_00437750(e: &mut Engine, this: Ptr<ExtraWaterZoneMap>) -> Ptr<ExtraWaterZoneMap> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_WATER_ZONE_MAP,
+        EXTRA_WATER_ZONE_MAP_VTABLE,
+    );
+    e.call(WATER_ZONE_MAP_CONSTRUCT, &args![this.addr() + 0xc, 0x25u32]);
+    e.set(this, ExtraWaterZoneMap::pHighestWaterZone, Ptr::new(0));
+    this
+}
+
+// Translated from 004377c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterZoneMap::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_water_zone_map_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraWaterZoneMap>,
+    flags: u32,
+) -> Ptr<ExtraWaterZoneMap> {
+    fn_004377f0(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 004377f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWaterZoneMap`'s destructor body (the engine map names this body
+/// after a folded library class): destroys the embedded map (`00438720`),
+/// then runs the base destructor. The vtable is not stored again. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004377f0(e: &mut Engine, this: Ptr<ExtraWaterZoneMap>) {
+    e.call(WATER_ZONE_MAP_DESTRUCT, &args![this.addr() + 0xc]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00437850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraWaterZoneMap` that the engine map has no name for; it
+/// keeps the count of the zone in the map (`WaterZoneMap`, at +0xc) and
+/// `pHighestWaterZone`, the zone with the greatest float at +0x18.
+///
+/// With `add` set: looks the zone up (the result is not used), sets its count
+/// to 1 (`SetAt`) and, when its float is above the lowest float, makes it the
+/// highest. With `add` clear: looks the count up; at 1 or less the zone is
+/// removed (`RemoveAt`) and the highest zone is searched again over the
+/// remaining entries (an entry replaces the best one when its float is
+/// strictly above it, so the earlier entry wins a tie; `pHighestWaterZone` is
+/// left alone when no entry is above the lowest float); above 1 the count is
+/// set to the count minus 1.
+pub fn fn_00437850(e: &mut Engine, this: Ptr<ExtraWaterZoneMap>, zone: u32, add: bool) {
+    let map = this.addr() + 0xc;
+    let lowest = e.global::<f32>(LOWEST_FLOAT);
+    if add {
+        e.with_stack(4, |e, count| {
+            e.mem.set_u32(count.addr(), 0);
+            e.call(ZONE_MAP_LOOKUP, &args![map, zone, count]);
+        });
+        e.call(ZONE_MAP_SET_AT, &args![map, zone, 1u32]);
+        if lowest < f32::from_bits(e.mem.u32(zone + 0x18)) {
+            e.set(this, ExtraWaterZoneMap::pHighestWaterZone, Ptr::new(zone));
+        }
+        return;
+    }
+    let count = e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        e.call(ZONE_MAP_LOOKUP, &args![map, zone, slot]);
+        e.mem.u32(slot.addr()) as i32
+    });
+    if count > 1 {
+        e.call(ZONE_MAP_SET_AT, &args![map, zone, (count - 1) as u32]);
+        return;
+    }
+    e.call(ZONE_MAP_REMOVE_AT, &args![map, zone]);
+    let first = e.call(ZONE_MAP_FIRST, &args![map]).u32();
+    e.with_stack(12, |e, slots| {
+        let position = slots.addr();
+        let key = slots.addr() + 4;
+        let value = slots.addr() + 8;
+        e.mem.set_u32(position, first);
+        let mut best = lowest;
+        while e.mem.u32(position) != 0 {
+            e.call(ZONE_MAP_NEXT, &args![map, position, key, value]);
+            let candidate = e.mem.u32(key);
+            let height = f32::from_bits(e.mem.u32(candidate + 0x18));
+            if best < height {
+                best = height;
+                e.set(
+                    this,
+                    ExtraWaterZoneMap::pHighestWaterZone,
+                    Ptr::new(candidate),
+                );
+            }
+        }
+    });
+}
+
+// Translated from 00437970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraIgnoredBySandbox`'s constructor (the engine map has no name for it):
+/// extra-data type 0x80, no payload. Returns `this`.
+pub fn fn_00437970(e: &mut Engine, this: Ptr) -> Ptr {
+    construct_base(
+        e,
+        this,
+        TYPE_IGNORED_BY_SANDBOX,
+        EXTRA_IGNORED_BY_SANDBOX_VTABLE,
+    );
+    this
+}
+
+// Translated from 004379a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPatrolRefInUseData`'s constructor (the engine map has no name for
+/// it): extra-data type 0x88; `User` is the handle of `user` (`0084e3a0`), or
+/// 0 for a null `user`. Returns `this`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_004379a0(
+    e: &mut Engine,
+    this: Ptr<ExtraPatrolRefInUseData>,
+    user: Ptr,
+) -> Ptr<ExtraPatrolRefInUseData> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_PATROL_REF_IN_USE_DATA,
+        EXTRA_PATROL_REF_IN_USE_DATA_VTABLE,
+    );
+    let handle = if user.is_null() {
+        0
+    } else {
+        e.call(REFERENCE_HANDLE, &args![user]).u32()
+    };
+    e.set(this, ExtraPatrolRefInUseData::User, handle);
+    this
+}
+
+// Translated from 00437a30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPatrolRefInUseData::Compare` (Xbox PDB): true when `User` differs.
+/// It neither casts `other` nor asks the base compare.
+pub fn extra_patrol_ref_in_use_data_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraPatrolRefInUseData>,
+    other: Ptr<ExtraPatrolRefInUseData>,
+) -> bool {
+    e.get(this, ExtraPatrolRefInUseData::User) != e.get(other, ExtraPatrolRefInUseData::User)
+}
+
+// Translated from 00437a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPatrolRefInUseData`'s scalar deleting destructor (the engine map has
+/// no name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_00437a60(
+    e: &mut Engine,
+    this: Ptr<ExtraPatrolRefInUseData>,
+    flags: u32,
+) -> Ptr<ExtraPatrolRefInUseData> {
+    fn_00437a90(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00437a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPatrolRefInUseData`'s destructor body (the engine map has no name
+/// for it): resets the vtable, then runs the base destructor.
+pub fn fn_00437a90(e: &mut Engine, this: Ptr<ExtraPatrolRefInUseData>) {
+    e.mem
+        .set_u32(this.addr(), EXTRA_PATROL_REF_IN_USE_DATA_VTABLE);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00437ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPatrolRefInUseData::GetCanBeUsedBy` (Xbox PDB): true when `user` is
+/// the reference that already holds the patrol reference (its handle,
+/// `0084e3a0`, equals `User`). Otherwise looks up the reference for `User`
+/// (`004839c0`): when it is gone, or virtual slot 0x22c (called with 0) is
+/// true, or its flags word has `0x820` (`00437b90`), the hold is released
+/// (`User` = 0) and the answer is true. A reference for which virtual slot
+/// 0x100 is false answers false. Otherwise the hold is released (answer true)
+/// when its kind code (`004f8960`) is 5 or 3, or when it has a current process
+/// type (`00931850`, non-zero) and the byte at +0x87 is clear; else false.
+pub fn extra_patrol_ref_in_use_data_get_can_be_used_by(
+    e: &mut Engine,
+    this: Ptr<ExtraPatrolRefInUseData>,
+    user: Ptr,
+) -> bool {
+    if !user.is_null() {
+        let handle = e.call(REFERENCE_HANDLE, &args![user]).u32();
+        if handle == e.get(this, ExtraPatrolRefInUseData::User) {
+            return true;
+        }
+    }
+    let handle = e.get(this, ExtraPatrolRefInUseData::User);
+    let reference = e.call(REFERENCE_FOR_HANDLE, &args![handle]).ptr();
+    if reference.is_null() {
+        e.set(this, ExtraPatrolRefInUseData::User, 0);
+        return true;
+    }
+    if e.vcall(reference.addr(), 0x22c, &args![0u32]).bool() || fn_00437b90(e, reference) {
+        e.set(this, ExtraPatrolRefInUseData::User, 0);
+        return true;
+    }
+    if !e.vcall(reference.addr(), 0x100, &args![]).bool() {
+        return false;
+    }
+    let releases = fn_00437bf0(e, reference)
+        || fn_00437bd0(e, reference)
+        || (e.call(GET_CURRENT_PROCESS_TYPE, &args![reference]).u32() != 0
+            && !fn_00437bb0(e, reference));
+    if releases {
+        e.set(this, ExtraPatrolRefInUseData::User, 0);
+        return true;
+    }
+    false
+}
+
+// Translated from 00437b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A predicate on a form that the engine map has no name for: true when the
+/// flags word at +0x8 has bit `0x20` or `0x800` set.
+pub fn fn_00437b90(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 8) & 0x820 != 0
+}
+
+// Translated from 00437bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An accessor that the engine map has no name for: the byte at +0x87 of a
+/// reference.
+pub fn fn_00437bb0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x87) != 0
+}
+
+// Translated from 00437bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A predicate on a reference that the engine map has no name for: true when
+/// its kind code (`004f8960`) is 3.
+pub fn fn_00437bd0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(REFERENCE_KIND, &args![this]).u32() == 3
+}
+
+// Translated from 00437bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A predicate on a reference that the engine map has no name for: true when
+/// its kind code (`004f8960`) is 5.
+pub fn fn_00437bf0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(REFERENCE_KIND, &args![this]).u32() == 5
+}
+
+// Translated from 00437c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of an `ExtraFollowerSwimBreadcrumb` (0x24 bytes) that the
+/// engine map has no name for: runs the folded `NiPoint3` constructor on the
+/// two vectors at +0 and +0x10 (it writes nothing). Returns `this`.
+pub fn fn_00437c10(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(NI_POINT3_CONSTRUCT, &args![this]);
+    e.call(NI_POINT3_CONSTRUCT, &args![this.addr() + 0x10]);
+    this
+}
+
+// Translated from 00437c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFollowerSwimBreadcrumbs::ExtraFollowerSwimBreadcrumbs` (Xbox PDB):
+/// extra-data type 0x8b, `eLeaderState` 0, `LeaderLocation` copied from the
+/// three-word exe global at `011f426c`, `LeaderNavMeshID` 0 and the crumb
+/// list at +0x20 built in place (`0096a2d0`). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn extra_follower_swim_breadcrumbs_extra_follower_swim_breadcrumbs(
+    e: &mut Engine,
+    this: Ptr<ExtraFollowerSwimBreadcrumbs>,
+) -> Ptr<ExtraFollowerSwimBreadcrumbs> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_FOLLOWER_SWIM_BREADCRUMBS,
+        EXTRA_FOLLOWER_SWIM_BREADCRUMBS_VTABLE,
+    );
+    e.set(this, ExtraFollowerSwimBreadcrumbs::eLeaderState, 0);
+    for offset in [0u32, 4, 8] {
+        let word = e.mem.u32(DEFAULT_LEADER_LOCATION + offset);
+        e.mem.set_u32(this.addr() + 0x10 + offset, word);
+    }
+    e.set(this, ExtraFollowerSwimBreadcrumbs::LeaderNavMeshID, 0);
+    e.call(SIMPLE_LIST_CONSTRUCT, &args![this.addr() + 0x20]);
+    this
+}
+
+// Translated from 00437ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFollowerSwimBreadcrumbs::_scalar_deleting_destructor_` (Xbox PDB):
+/// the destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_follower_swim_breadcrumbs_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraFollowerSwimBreadcrumbs>,
+    flags: u32,
+) -> Ptr<ExtraFollowerSwimBreadcrumbs> {
+    fn_00437d10(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00437d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraFollowerSwimBreadcrumbs`' destructor body (the engine map has no
+/// name for it): resets the vtable; walks every node of the crumb list at
+/// +0x20, running the scalar deleting destructor (`007b3fa0`, flag 1) of
+/// each non-null crumb and clearing the node's item; then the list's
+/// destructor (`0046ffb0`) and the base destructor. The exception-unwinding
+/// frame is not translated.
+pub fn fn_00437d10(e: &mut Engine, this: Ptr<ExtraFollowerSwimBreadcrumbs>) {
+    e.mem
+        .set_u32(this.addr(), EXTRA_FOLLOWER_SWIM_BREADCRUMBS_VTABLE);
+    let list = this.addr() + 0x20;
+    let mut node = list;
+    while node != 0 {
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        let crumb = e.mem.u32(slot);
+        if crumb != 0 {
+            e.call(CRUMB_DELETE, &args![crumb, 1u32]);
+        }
+        let slot = e.call(LIST_NODE_ITEM_SLOT, &args![node]).u32();
+        e.mem.set_u32(slot, 0);
+        node = node_next(e, node);
+    }
+    e.call(SIMPLE_LIST_DESTRUCT, &args![list]);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00437dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// An accessor of `ExtraFollowerSwimBreadcrumbs` that the engine map has no
+/// name for: the first crumb of the list at +0x20.
+pub fn fn_00437dd0(e: &mut Engine, this: Ptr<ExtraFollowerSwimBreadcrumbs>) -> u32 {
+    node_item(e, this.addr() + 0x20)
+}
+
+// Translated from 00437df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFollowerSwimBreadcrumbs` that the engine map has no
+/// name for: destroys the first crumb (`007b3fa0`, flag 1, when not null),
+/// sets the head item of the list at +0x20 to null (`00726c60`) and removes
+/// the head node (`0063f7b0`).
+pub fn fn_00437df0(e: &mut Engine, this: Ptr<ExtraFollowerSwimBreadcrumbs>) {
+    let list = this.addr() + 0x20;
+    let crumb = node_item(e, list);
+    if crumb != 0 {
+        e.call(CRUMB_DELETE, &args![crumb, 1u32]);
+    }
+    e.with_stack(4, |e, zero| {
+        e.mem.set_u32(zero.addr(), 0);
+        e.call(SIMPLE_LIST_SET_HEAD, &args![list, zero]);
+    });
+    e.call(SIMPLE_LIST_REMOVE_HEAD, &args![list]);
+}
+
+// Translated from 00437e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of `ExtraFollowerSwimBreadcrumbs` that the engine map has no
+/// name for (it records the leader's move): `state` is the new
+/// `eLeaderState`, and `x`, `y`, `z` and `nav_mesh` the new leader location
+/// and navmesh. Does nothing and returns false when `state` is 0. When
+/// `state` differs from the current one and the current one is not 0, a new
+/// crumb (0x24 bytes, `00437c10`) is appended to the list (`00905820`) first:
+/// it holds the old location (+0), the old navmesh (+0xc), the new location
+/// (+0x10), the new navmesh (+0x1c) and whether `state` is 2 (+0x20). In
+/// every non-zero case the location, navmesh and state are then stored.
+/// Returns whether a crumb was appended. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00437e50(
+    e: &mut Engine,
+    this: Ptr<ExtraFollowerSwimBreadcrumbs>,
+    state: u32,
+    x: u32,
+    y: u32,
+    z: u32,
+    nav_mesh: u32,
+) -> bool {
+    if state == 0 {
+        return false;
+    }
+    let mut appended = false;
+    let current = e.get(this, ExtraFollowerSwimBreadcrumbs::eLeaderState);
+    if state != current && current != 0 {
+        let memory = e.call(OPERATOR_NEW, &args![0x24u32]).u32();
+        let crumb = if memory == 0 {
+            0
+        } else {
+            fn_00437c10(e, Ptr::new(memory)).addr()
+        };
+        for offset in [0u32, 4, 8] {
+            let word = e.mem.u32(this.addr() + 0x10 + offset);
+            e.mem.set_u32(crumb + offset, word);
+        }
+        let old_nav_mesh = e.get(this, ExtraFollowerSwimBreadcrumbs::LeaderNavMeshID);
+        e.mem.set_u32(crumb + 0xc, old_nav_mesh);
+        e.mem.set_u32(crumb + 0x10, x);
+        e.mem.set_u32(crumb + 0x14, y);
+        e.mem.set_u32(crumb + 0x18, z);
+        e.mem.set_u32(crumb + 0x1c, nav_mesh);
+        e.mem.set_u8(crumb + 0x20, (state == 2) as u8);
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), crumb);
+            e.call(CRUMB_LIST_ADD, &args![this.addr() + 0x20, slot]);
+        });
+        appended = true;
+    }
+    e.mem.set_u32(this.addr() + 0x10, x);
+    e.mem.set_u32(this.addr() + 0x14, y);
+    e.mem.set_u32(this.addr() + 0x18, z);
+    e.set(
+        this,
+        ExtraFollowerSwimBreadcrumbs::LeaderNavMeshID,
+        nav_mesh,
+    );
+    e.set(this, ExtraFollowerSwimBreadcrumbs::eLeaderState, state);
+    appended
+}
+
+// Translated from 00437f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSecuritronFace::ApplyFace` (Xbox PDB): `this` holds two strings
+/// (personality at +0xc, mood at +0x14) and `root` is the Securitron's scene
+/// object. Nothing happens for a null `root`. Otherwise the object named
+/// "Screen01:0" is asked of `root` (virtual slot 0x9c, called with a fixed
+/// string); when there is none, nothing more happens. When both strings
+/// (`00428070`, `004280b0`) are non-empty, the texture path
+/// `Textures\creatures\Securitron\%s_%s.dds` is formatted from them, passed
+/// through `SwapPlatformLanguageTexturePath` and loaded
+/// (`TES::CreateTextureImage`) into a smart pointer on the stack. Then the
+/// screen's property of the type `00438220` gives (3) is asked
+/// (`NiAVObject::GetProperty`) and, when it exists, receives the texture
+/// (`00438230`), null when none was loaded. The exception-unwinding frame and
+/// the stack-cookie check are not translated.
+pub fn extra_securitron_face_apply_face(e: &mut Engine, this: Ptr<ExtraSecuritronFace>, root: Ptr) {
+    if root.is_null() {
+        return;
+    }
+    e.with_stack(0x228, |e, frame| {
+        let base = frame.addr();
+        let name = Ptr::new(base);
+        let first = base + 4;
+        let second = base + 0xc;
+        let path = base + 0x14;
+        let texture = base + 0x120;
+        let localized = base + 0x124;
+        let name_text = fixed_string_construct(e, name, SECURITRON_SCREEN_NAME);
+        let screen: Ptr = e.vcall(root.addr(), 0x9c, &args![name_text]).ptr();
+        fixed_string_destruct(e, name);
+        if screen.is_null() {
+            return;
+        }
+        e.call(NI_POINTER_CONSTRUCT, &args![texture, 0u32]);
+        e.call(GET_FACE_STRING_FIRST, &args![this, first]);
+        e.call(GET_FACE_STRING_SECOND, &args![this, second]);
+        if e.call(STRING_LENGTH, &args![first]).u32() != 0
+            && e.call(STRING_LENGTH, &args![second]).u32() != 0
+        {
+            let second_text = e.call(POINTER_VALUE, &args![second]).u32();
+            let first_text = e.call(POINTER_VALUE, &args![first]).u32();
+            e.call(
+                FORMAT_STRING,
+                &args![
+                    path,
+                    0x104u32,
+                    SECURITRON_TEXTURE_FORMAT,
+                    first_text,
+                    second_text
+                ],
+            );
+            e.call(
+                SWAP_PLATFORM_LANGUAGE_TEXTURE_PATH,
+                &args![path, localized, 0x104u32],
+            );
+            let tes = e.global::<u32>(TES);
+            e.call(
+                CREATE_TEXTURE_IMAGE,
+                &args![tes, localized, texture, 0u32, 0u32],
+            );
+        }
+        let property_type = fn_00438220(e);
+        let property: Ptr = e.call(GET_PROPERTY, &args![screen, property_type]).ptr();
+        if !property.is_null() {
+            let image = e.call(POINTER_VALUE, &args![texture]).u32();
+            fn_00438230(e, property, image);
+        }
+        e.call(STRING_DESTRUCT, &args![second]);
+        e.call(STRING_DESTRUCT, &args![first]);
+        e.call(NI_POINTER_DESTRUCT, &args![texture]);
+    });
+}
+
+// Translated from 00438170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of a fixed string (`NiFixedString`) that the engine map
+/// has no name for: stores in `this` the empty value (the word at `0109b220`)
+/// for a null `text`, otherwise the fixed string made for `text`
+/// (`00a5b690`). Returns `this`.
+pub fn fixed_string_construct(e: &mut Engine, this: Ptr, text: u32) -> Ptr {
+    let value = if text == 0 {
+        e.mem.u32(EMPTY_FIXED_STRING)
+    } else {
+        e.call(FIXED_STRING_CREATE, &args![text]).u32()
+    };
+    e.mem.set_u32(this.addr(), value);
+    this
+}
+
+// Translated from 004381b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of a fixed string that the engine map has no name for:
+/// releases the text (`004381d0`).
+pub fn fixed_string_destruct(e: &mut Engine, this: Ptr) {
+    fixed_string_release(e, this);
+}
+
+// Translated from 004381d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the text of the fixed string at `slot` (cdecl, one stack word;
+/// the engine map has no name for it): nothing for the empty value, otherwise
+/// `004019a0` with the header address of the text (`00438210`).
+pub fn fixed_string_release(e: &mut Engine, slot: Ptr) {
+    if e.mem.u32(slot.addr()) == e.mem.u32(EMPTY_FIXED_STRING) {
+        return;
+    }
+    let header = fn_00438210(e, slot);
+    e.call(FIXED_STRING_RELEASE, &args![header]);
+}
+
+// Translated from 00438210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the header of a fixed string's text that the engine map
+/// has no name for (cdecl, one stack word): the text pointer stored at `slot`
+/// minus 8.
+pub fn fn_00438210(e: &mut Engine, slot: Ptr) -> u32 {
+    e.mem.u32(slot.addr()).wrapping_sub(8)
+}
+
+// Translated from 00438220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A function with no arguments that the engine map has no name for: returns
+/// 3 (the property type `ApplyFace` asks for).
+pub fn fn_00438220(_e: &mut Engine) -> u32 {
+    3
+}
+
+// Translated from 00438230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method of the property `ApplyFace` finds that the engine map has no
+/// name for: assigns `texture` to the smart pointer at +0x60
+/// (`NiPointer::operator=`, `0066b0d0`) and clears the word at +0x38.
+pub fn fn_00438230(e: &mut Engine, this: Ptr, texture: u32) {
+    e.call(NI_POINTER_ASSIGN, &args![this.addr() + 0x60, texture]);
+    e.mem.set_u32(this.addr() + 0x38, 0);
+}
+
+// Translated from 00438260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSecuritronFace::SetPersonality` (Xbox PDB): assigns `text` to
+/// `msPersonality` (+0xc, `00438390`).
+pub fn extra_securitron_face_set_personality(
+    e: &mut Engine,
+    this: Ptr<ExtraSecuritronFace>,
+    text: u32,
+) {
+    e.call(STRING_ASSIGN, &args![this.addr() + 0xc, text]);
+}
+
+// Translated from 00438280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSecuritronFace::SetMood` (Xbox PDB): assigns `text` to `msMood`
+/// (+0x14, `00438390`).
+pub fn extra_securitron_face_set_mood(e: &mut Engine, this: Ptr<ExtraSecuritronFace>, text: u32) {
+    e.call(STRING_ASSIGN, &args![this.addr() + 0x14, text]);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2102,6 +2995,129 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00437290,
             extra_radio_data_compare(Ptr<ExtraRadioData>, Ptr) -> bool
+        ),
+        entry!(
+            0x00437300,
+            extra_combat_style_compare(Ptr<ExtraCombatStyle>, Ptr) -> bool
+        ),
+        entry!(
+            0x00437370,
+            extra_primitive_compare(Ptr<ExtraPrimitive>, Ptr) -> bool
+        ),
+        entry!(0x004373c0, extra_ammo_compare(Ptr<ExtraAmmo>, Ptr) -> bool),
+        entry!(
+            0x00437440,
+            fn_00437440(Ptr<ExtraSayTopicInfoOnceADay>) -> Ptr<ExtraSayTopicInfoOnceADay>
+        ),
+        entry!(
+            0x004374e0,
+            extra_say_topic_info_once_a_day_scalar_deleting_destructor(
+                Ptr<ExtraSayTopicInfoOnceADay>,
+                u32,
+            ) -> Ptr<
+                ExtraSayTopicInfoOnceADay,
+            >
+        ),
+        entry!(
+            0x00437510,
+            fn_00437510(Ptr<ExtraSayTopicInfoOnceADay>, u32) -> Ptr<ExtraSayTopicInfoOnceADay>
+        ),
+        entry!(0x004375c0, fn_004375c0(Ptr<ExtraSayTopicInfoOnceADay>)),
+        entry!(
+            0x00437690,
+            fn_00437690(Ptr<ExtraSayToTopicInfo>) -> Ptr<ExtraSayToTopicInfo>
+        ),
+        entry!(
+            0x004376e0,
+            fn_004376e0(Ptr<ExtraSayToTopicInfo>, u32) -> Ptr<ExtraSayToTopicInfo>
+        ),
+        entry!(0x00437730, fn_00437730(Ptr<ExtraSayToTopicInfo>, u32)),
+        entry!(
+            0x00437750,
+            fn_00437750(Ptr<ExtraWaterZoneMap>) -> Ptr<ExtraWaterZoneMap>
+        ),
+        entry!(
+            0x004377c0,
+            extra_water_zone_map_scalar_deleting_destructor(
+                Ptr<ExtraWaterZoneMap>,
+                u32,
+            ) -> Ptr<ExtraWaterZoneMap>
+        ),
+        entry!(0x004377f0, fn_004377f0(Ptr<ExtraWaterZoneMap>)),
+        entry!(0x00437850, fn_00437850(Ptr<ExtraWaterZoneMap>, u32, bool)),
+        entry!(0x00437970, fn_00437970(Ptr) -> Ptr),
+        entry!(
+            0x004379a0,
+            fn_004379a0(Ptr<ExtraPatrolRefInUseData>, Ptr) -> Ptr<ExtraPatrolRefInUseData>
+        ),
+        entry!(
+            0x00437a30,
+            extra_patrol_ref_in_use_data_compare(
+                Ptr<ExtraPatrolRefInUseData>,
+                Ptr<ExtraPatrolRefInUseData>,
+            ) -> bool
+        ),
+        entry!(
+            0x00437a60,
+            fn_00437a60(Ptr<ExtraPatrolRefInUseData>, u32) -> Ptr<ExtraPatrolRefInUseData>
+        ),
+        entry!(0x00437a90, fn_00437a90(Ptr<ExtraPatrolRefInUseData>)),
+        entry!(
+            0x00437ab0,
+            extra_patrol_ref_in_use_data_get_can_be_used_by(
+                Ptr<ExtraPatrolRefInUseData>,
+                Ptr,
+            ) -> bool
+        ),
+        entry!(0x00437b90, fn_00437b90(Ptr) -> bool),
+        entry!(0x00437bb0, fn_00437bb0(Ptr) -> bool),
+        entry!(0x00437bd0, fn_00437bd0(Ptr) -> bool),
+        entry!(0x00437bf0, fn_00437bf0(Ptr) -> bool),
+        entry!(0x00437c10, fn_00437c10(Ptr) -> Ptr),
+        entry!(
+            0x00437c40,
+            extra_follower_swim_breadcrumbs_extra_follower_swim_breadcrumbs(
+                Ptr<ExtraFollowerSwimBreadcrumbs>,
+            ) -> Ptr<
+                ExtraFollowerSwimBreadcrumbs,
+            >
+        ),
+        entry!(
+            0x00437ce0,
+            extra_follower_swim_breadcrumbs_scalar_deleting_destructor(
+                Ptr<ExtraFollowerSwimBreadcrumbs>,
+                u32,
+            ) -> Ptr<
+                ExtraFollowerSwimBreadcrumbs,
+            >
+        ),
+        entry!(0x00437d10, fn_00437d10(Ptr<ExtraFollowerSwimBreadcrumbs>)),
+        entry!(
+            0x00437dd0,
+            fn_00437dd0(Ptr<ExtraFollowerSwimBreadcrumbs>) -> u32
+        ),
+        entry!(0x00437df0, fn_00437df0(Ptr<ExtraFollowerSwimBreadcrumbs>)),
+        entry!(
+            0x00437e50,
+            fn_00437e50(Ptr<ExtraFollowerSwimBreadcrumbs>, u32, u32, u32, u32, u32) -> bool
+        ),
+        entry!(
+            0x00437f90,
+            extra_securitron_face_apply_face(Ptr<ExtraSecuritronFace>, Ptr)
+        ),
+        entry!(0x00438170, fixed_string_construct(Ptr, u32) -> Ptr),
+        entry!(0x004381b0, fixed_string_destruct(Ptr)),
+        entry!(0x004381d0, fixed_string_release(Ptr)),
+        entry!(0x00438210, fn_00438210(Ptr) -> u32),
+        entry!(0x00438220, fn_00438220() -> u32),
+        entry!(0x00438230, fn_00438230(Ptr, u32)),
+        entry!(
+            0x00438260,
+            extra_securitron_face_set_personality(Ptr<ExtraSecuritronFace>, u32)
+        ),
+        entry!(
+            0x00438280,
+            extra_securitron_face_set_mood(Ptr<ExtraSecuritronFace>, u32)
         ),
     ]
 }
@@ -3550,5 +4566,1018 @@ mod tests {
         assert_eq!(calls(&e, MEMCMP)[0], vec![this + 0xc, same + 0xc, 0x10]);
         e.register(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
         assert!(e.call(0x0043_7290, &args![this, same]).bool());
+    }
+
+    // ---- The last 40 functions of the range (00437300 to 00438280). ----
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    /// A list of `items`: nodes of 8 bytes (item, next); the head node comes
+    /// first. An empty list is one node with a null item.
+    fn item_list(e: &mut Engine, items: &[u32]) -> u32 {
+        let head = e.mem.alloc(8);
+        let mut node = head;
+        for (index, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if index + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        head
+    }
+
+    /// The doubles of the list accessors the node walkers use: the item slot
+    /// of a node is the node itself, the next node is the word at +4, and the
+    /// head removal moves the next node's item and link into the head.
+    fn list_engine() -> Engine {
+        let mut e = session_engine();
+        e.register(SIMPLE_LIST_REMOVE_HEAD, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next == 0 {
+                e.mem.set_u32(a[0], 0);
+            } else {
+                let item = e.mem.u32(next);
+                let after = e.mem.u32(next + 4);
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            }
+            Ret::default()
+        });
+        e.register(SIMPLE_LIST_DELETE, |_, a| ret(a[0]));
+        e
+    }
+
+    fn items_of(e: &Engine, head: u32) -> Vec<u32> {
+        let mut items = vec![];
+        let mut node = head;
+        while node != 0 {
+            items.push(e.mem.u32(node));
+            node = e.mem.u32(node + 4);
+        }
+        items
+    }
+
+    #[test]
+    fn combat_style_compare_asks_the_base_then_the_style() {
+        let mut e = session_engine();
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| Ret::default());
+        let this = dirty_object(&mut e, 0x10);
+        let same = dirty_object(&mut e, 0x10);
+        let other = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, 0x1234);
+        e.mem.set_u32(same + 0xc, 0x1234);
+        e.mem.set_u32(other + 0xc, 0x5678);
+        start_log(&mut e);
+        assert!(e.call(0x0043_7300, &args![this, 0u32]).bool());
+        assert!(!e.call(0x0043_7300, &args![this, same]).bool());
+        assert!(e.call(0x0043_7300, &args![this, other]).bool());
+        let casts = calls(&e, DYNAMIC_CAST);
+        assert_eq!(
+            casts[1],
+            vec![same, 0, BS_EXTRA_DATA_TYPE, EXTRA_COMBAT_STYLE_TYPE, 0]
+        );
+        // A base compare that reports a difference decides alone.
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
+        assert!(e.call(0x0043_7300, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn primitive_compare_asks_only_the_primitive() {
+        check_word_compare(0x0043_7370, EXTRA_PRIMITIVE_TYPE);
+    }
+
+    #[test]
+    fn ammo_compare_checks_the_count_and_the_ammo() {
+        let mut e = session_engine();
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| Ret::default());
+        let make = |e: &mut Engine, ammo: u32, count: u32| {
+            let object = dirty_object(e, 0x14);
+            e.mem.set_u32(object + 0xc, ammo);
+            e.mem.set_u32(object + 0x10, count);
+            object
+        };
+        let this = make(&mut e, 0x10, 5);
+        let same = make(&mut e, 0x10, 5);
+        let other_ammo = make(&mut e, 0x11, 5);
+        let other_count = make(&mut e, 0x10, 6);
+        assert!(e.call(0x0043_73c0, &args![this, 0u32]).bool());
+        assert!(!e.call(0x0043_73c0, &args![this, same]).bool());
+        assert!(e.call(0x0043_73c0, &args![this, other_ammo]).bool());
+        assert!(e.call(0x0043_73c0, &args![this, other_count]).bool());
+        e.register(BS_EXTRA_DATA_COMPARE, |_, _| ret(1));
+        assert!(e.call(0x0043_73c0, &args![this, same]).bool());
+    }
+
+    #[test]
+    fn say_topic_info_once_a_day_constructor_builds_a_list() {
+        let mut e = session_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7440, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x73);
+        assert_eq!(vtable_of(&e, this), EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY_VTABLE);
+        let list = e.mem.u32(this + 0xc);
+        assert_eq!(e.mem.block_size(list), Some(8));
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![list]]);
+    }
+
+    #[test]
+    fn say_topic_info_once_a_day_scalar_deleting_destructor_frees_on_flag() {
+        let mut e = session_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_74e0, &args![this, 0u32]).u32(), this);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert!(e.mem.block_size(this).is_some());
+        e.call(0x0043_74e0, &args![this, 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn say_topic_info_once_a_day_constructor_with_an_item_adds_it() {
+        let mut e = session_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7510, &args![this, 0xabcdu32]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x73);
+        let list = e.mem.u32(this + 0xc);
+        assert_eq!(items_of(&e, list), vec![0xabcd]);
+        assert_eq!(calls(&e, SIMPLE_LIST_ADD_HEAD).len(), 1);
+        assert_eq!(calls(&e, SIMPLE_LIST_ADD_HEAD)[0][0], list);
+    }
+
+    #[test]
+    fn say_topic_info_once_a_day_destructor_frees_every_item() {
+        let mut e = list_engine();
+        let first = e.mem.alloc(8);
+        let second = e.mem.alloc(8);
+        let list = item_list(&mut e, &[first, second]);
+        let this = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, list);
+        start_log(&mut e);
+        e.call(0x0043_75c0, &args![this]);
+        assert_eq!(vtable_of(&e, this), EXTRA_SAY_TOPIC_INFO_ONCE_A_DAY_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![first], vec![second]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).len(), 2);
+        assert_eq!(calls(&e, SIMPLE_LIST_DELETE), vec![vec![list, 1]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // Without a list only the base destructor runs.
+        let bare = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(bare + 0xc, 0);
+        start_log(&mut e);
+        e.call(0x0043_75c0, &args![bare]);
+        assert!(calls(&e, SIMPLE_LIST_DELETE).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![bare]]);
+    }
+
+    #[test]
+    fn say_to_topic_info_default_constructor_clears_the_fields() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x1c);
+        for offset in [0x10, 0x14, 0x18] {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        assert_eq!(e.call(0x0043_7690, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x75);
+        assert_eq!(vtable_of(&e, this), EXTRA_SAY_TO_TOPIC_INFO_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        assert_eq!(e.mem.u8(this + 0x18), 0);
+    }
+
+    #[test]
+    fn say_to_topic_info_constructor_stores_the_info() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x1c);
+        for offset in [0x10, 0x14, 0x18] {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        assert_eq!(e.call(0x0043_76e0, &args![this, 0x4242u32]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x75);
+        assert_eq!(e.mem.u32(this + 0xc), 0x4242);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.mem.u8(this + 0x18), 0);
+    }
+
+    #[test]
+    fn say_to_topic_info_set_topic_stores_the_topic() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x1c);
+        e.call(0x0043_7730, &args![this, 0x77u32]);
+        assert_eq!(e.mem.u32(this + 0x10), 0x77);
+        assert_eq!(e.mem.u32(this + 0xc), 0xdead_0002);
+    }
+
+    #[test]
+    fn water_zone_map_constructor_builds_the_map() {
+        let mut e = session_engine();
+        e.register(WATER_ZONE_MAP_CONSTRUCT, |_, a| ret(a[0]));
+        let this = dirty_object(&mut e, 0x20);
+        e.mem.set_u32(this + 0x1c, 0xdead_beef);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7750, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x7e);
+        assert_eq!(vtable_of(&e, this), EXTRA_WATER_ZONE_MAP_VTABLE);
+        assert_eq!(
+            calls(&e, WATER_ZONE_MAP_CONSTRUCT),
+            vec![vec![this + 0xc, 0x25]]
+        );
+        assert_eq!(e.mem.u32(this + 0x1c), 0);
+    }
+
+    #[test]
+    fn water_zone_map_scalar_deleting_destructor_frees_on_flag() {
+        let mut e = session_engine();
+        e.register(WATER_ZONE_MAP_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x20);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_77c0, &args![this, 0u32]).u32(), this);
+        assert_eq!(calls(&e, WATER_ZONE_MAP_DESTRUCT), vec![vec![this + 0xc]]);
+        assert!(e.mem.block_size(this).is_some());
+        e.call(0x0043_77c0, &args![this, 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn water_zone_map_destructor_keeps_the_vtable() {
+        let mut e = session_engine();
+        e.register(WATER_ZONE_MAP_DESTRUCT, |_, _| Ret::default());
+        let this = dirty_object(&mut e, 0x20);
+        start_log(&mut e);
+        e.call(0x0043_77f0, &args![this]);
+        assert_eq!(vtable_of(&e, this), 0xdead_0001);
+        assert_eq!(calls(&e, WATER_ZONE_MAP_DESTRUCT), vec![vec![this + 0xc]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    /// A map of zone pointers to counts, in insertion order, behind the
+    /// doubles of the map accessors.
+    fn zone_map(e: &mut Engine) -> Rc<RefCell<Vec<(u32, u32)>>> {
+        let entries: Rc<RefCell<Vec<(u32, u32)>>> = Rc::default();
+        e.map(0x0101_5000, 0x1000);
+        e.set_global(LOWEST_FLOAT, 0xff7f_ffffu32);
+        let map = entries.clone();
+        e.register_double(ZONE_MAP_LOOKUP, move |e, a| {
+            if let Some((_, count)) = map.borrow().iter().find(|(key, _)| *key == a[1]) {
+                e.mem.set_u32(a[2], *count);
+            }
+            Ret::default()
+        });
+        let map = entries.clone();
+        e.register_double(ZONE_MAP_SET_AT, move |_, a| {
+            let mut map = map.borrow_mut();
+            match map.iter_mut().find(|(key, _)| *key == a[1]) {
+                Some(entry) => entry.1 = a[2],
+                None => map.push((a[1], a[2])),
+            }
+            Ret::default()
+        });
+        let map = entries.clone();
+        e.register_double(ZONE_MAP_REMOVE_AT, move |_, a| {
+            map.borrow_mut().retain(|(key, _)| *key != a[1]);
+            Ret::default()
+        });
+        let map = entries.clone();
+        e.register_double(ZONE_MAP_FIRST, move |_, _| {
+            ret(!map.borrow().is_empty() as u32)
+        });
+        let map = entries.clone();
+        e.register_double(ZONE_MAP_NEXT, move |e, a| {
+            let map = map.borrow();
+            let index = e.mem.u32(a[1]) as usize - 1;
+            e.mem.set_u32(a[2], map[index].0);
+            e.mem.set_u32(a[3], map[index].1);
+            let next = if index + 1 < map.len() { index + 2 } else { 0 };
+            e.mem.set_u32(a[1], next as u32);
+            Ret::default()
+        });
+        entries
+    }
+
+    fn zone_with_height(e: &mut Engine, height: f32) -> u32 {
+        let zone = e.mem.alloc(0x20);
+        e.mem.set_u32(zone + 0x18, height.to_bits());
+        zone
+    }
+
+    #[test]
+    fn water_zone_map_add_and_remove_keep_the_highest_zone() {
+        let mut e = session_engine();
+        let entries = zone_map(&mut e);
+        let this = dirty_object(&mut e, 0x20);
+        e.mem.set_u32(this + 0x1c, 0);
+        let low = zone_with_height(&mut e, 2.0);
+        let high_a = zone_with_height(&mut e, 7.0);
+        let high_b = zone_with_height(&mut e, 7.0);
+        start_log(&mut e);
+        // Adding sets the count to 1 and makes the zone the highest.
+        e.call(0x0043_7850, &args![this, low, 1u32]);
+        assert_eq!(*entries.borrow(), vec![(low, 1)]);
+        assert_eq!(e.mem.u32(this + 0x1c), low);
+        assert_eq!(calls(&e, ZONE_MAP_SET_AT)[0], vec![this + 0xc, low, 1]);
+        e.call(0x0043_7850, &args![this, high_a, 1u32]);
+        e.call(0x0043_7850, &args![this, high_b, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x1c), high_b);
+        // A zone as low as the lowest float does not qualify.
+        let floor = zone_with_height(&mut e, f32::from_bits(0xff7f_ffff));
+        e.call(0x0043_7850, &args![this, floor, 1u32]);
+        assert_eq!(e.mem.u32(this + 0x1c), high_b);
+        // Removing a zone with a count above 1 lowers the count.
+        entries.borrow_mut()[0].1 = 3;
+        e.call(0x0043_7850, &args![this, low, 0u32]);
+        assert_eq!(entries.borrow()[0], (low, 2));
+        assert_eq!(calls(&e, ZONE_MAP_REMOVE_AT).len(), 0);
+        // At count 1 the zone goes and the highest is searched again: the
+        // earlier of two equal heights wins.
+        e.call(0x0043_7850, &args![this, high_b, 0u32]);
+        assert!(entries.borrow().iter().all(|(key, _)| *key != high_b));
+        assert_eq!(
+            calls(&e, ZONE_MAP_REMOVE_AT),
+            vec![vec![this + 0xc, high_b]]
+        );
+        assert_eq!(e.mem.u32(this + 0x1c), high_a);
+    }
+
+    #[test]
+    fn water_zone_map_remove_of_the_last_zone_leaves_the_highest_alone() {
+        let mut e = session_engine();
+        let entries = zone_map(&mut e);
+        let this = dirty_object(&mut e, 0x20);
+        let only = zone_with_height(&mut e, 4.0);
+        e.call(0x0043_7850, &args![this, only, 1u32]);
+        e.call(0x0043_7850, &args![this, only, 0u32]);
+        assert!(entries.borrow().is_empty());
+        assert_eq!(e.mem.u32(this + 0x1c), only);
+    }
+
+    #[test]
+    fn ignored_by_sandbox_constructor_has_no_payload() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0xc);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7970, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x80);
+        assert_eq!(vtable_of(&e, this), EXTRA_IGNORED_BY_SANDBOX_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_CONSTRUCT), vec![vec![this, 0x80]]);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_constructor_stores_the_handle() {
+        let mut e = session_engine();
+        e.register(REFERENCE_HANDLE, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let user = e.mem.alloc(0x20);
+        e.mem.set_u32(user + 0x10, 0x5150);
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_79a0, &args![this, user]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x88);
+        assert_eq!(vtable_of(&e, this), EXTRA_PATROL_REF_IN_USE_DATA_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0x5150);
+        assert_eq!(calls(&e, REFERENCE_HANDLE), vec![vec![user]]);
+        // Without a user the handle is 0 and nothing is asked.
+        let alone = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        e.call(0x0043_79a0, &args![alone, 0u32]);
+        assert_eq!(e.mem.u32(alone + 0xc), 0);
+        assert!(calls(&e, REFERENCE_HANDLE).is_empty());
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_compare_looks_only_at_the_user() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x10);
+        let same = dirty_object(&mut e, 0x10);
+        let other = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, 9);
+        e.mem.set_u32(same + 0xc, 9);
+        e.mem.set_u32(other + 0xc, 10);
+        start_log(&mut e);
+        assert!(!e.call(0x0043_7a30, &args![this, same]).bool());
+        assert!(e.call(0x0043_7a30, &args![this, other]).bool());
+        assert!(calls(&e, DYNAMIC_CAST).is_empty());
+        assert!(calls(&e, BS_EXTRA_DATA_COMPARE).is_empty());
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_scalar_deleting_destructor_frees_on_flag() {
+        check_scalar_deleting(0x0043_7a60, BS_EXTRA_DATA_DESTRUCT);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_destructor_resets_the_vtable() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x10);
+        start_log(&mut e);
+        e.call(0x0043_7a90, &args![this]);
+        assert_eq!(vtable_of(&e, this), EXTRA_PATROL_REF_IN_USE_DATA_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    /// The pieces of a reference for `GetCanBeUsedBy`: virtual slots 0x22c
+    /// (index 0x8b) and 0x100 (index 0x40), the flags word at +8, the kind
+    /// code and the process type kept in words of the object.
+    struct PatrolReference {
+        object: u32,
+        disabled: bool,
+        in_use: bool,
+        flags: u32,
+        kind: u32,
+        process_type: u32,
+        byte_87: u8,
+    }
+
+    fn patrol_engine(reference: PatrolReference) -> (Engine, u32) {
+        let mut e = session_engine();
+        e.register(REFERENCE_HANDLE, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let table = 0x7100_0000;
+        let mut slots = vec![0u32; 0x8c];
+        slots[0x8b] = 0x7000_0001;
+        slots[0x40] = 0x7000_0002;
+        e.put_vtable(table, &slots);
+        let disabled = reference.disabled as u32;
+        let in_use = reference.in_use as u32;
+        e.register_double(0x7000_0001, move |_, _| ret(disabled));
+        e.register_double(0x7000_0002, move |_, _| ret(in_use));
+        let object = reference.object;
+        e.map(object, 0x1000);
+        e.mem.set_u32(object, table);
+        e.mem.set_u32(object + 8, reference.flags);
+        e.mem.set_u8(object + 0x87, reference.byte_87);
+        e.register_double(REFERENCE_FOR_HANDLE, move |_, a| {
+            ret(if a[0] == 0x99 { object } else { 0 })
+        });
+        let kind = reference.kind;
+        e.register_double(REFERENCE_KIND, move |_, _| ret(kind));
+        let process_type = reference.process_type;
+        e.register_double(GET_CURRENT_PROCESS_TYPE, move |_, _| ret(process_type));
+        let this = dirty_object(&mut e, 0x10);
+        e.mem.set_u32(this + 0xc, 0x99);
+        (e, this)
+    }
+
+    fn live_reference(e_object: u32) -> PatrolReference {
+        PatrolReference {
+            object: e_object,
+            disabled: false,
+            in_use: true,
+            flags: 0,
+            kind: 1,
+            process_type: 0,
+            byte_87: 0,
+        }
+    }
+
+    /// Runs `GetCanBeUsedBy` with no user for a reference described by
+    /// `describe`; returns the answer and the `User` word afterwards.
+    fn patrol_answer(describe: impl FnOnce(&mut PatrolReference)) -> (bool, u32) {
+        let mut reference = live_reference(0x7200_0000);
+        describe(&mut reference);
+        let (mut e, this) = patrol_engine(reference);
+        let answer = e.call(0x0043_7ab0, &args![this, 0u32]).bool();
+        (answer, e.mem.u32(this + 0xc))
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_is_usable_by_its_user() {
+        let mut reference = live_reference(0x7200_0000);
+        reference.in_use = false;
+        let (mut e, this) = patrol_engine(reference);
+        let user = e.mem.alloc(0x20);
+        e.mem.set_u32(user + 0x10, 0x99);
+        start_log(&mut e);
+        assert!(e.call(0x0043_7ab0, &args![this, user]).bool());
+        assert_eq!(e.mem.u32(this + 0xc), 0x99);
+        assert!(calls(&e, REFERENCE_FOR_HANDLE).is_empty());
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_releases_a_vanished_reference() {
+        let (mut e, this) = patrol_engine(live_reference(0x7200_0000));
+        e.mem.set_u32(this + 0xc, 0x55);
+        assert!(e.call(0x0043_7ab0, &args![this, 0u32]).bool());
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_releases_a_disabled_reference() {
+        let (answer, user) = patrol_answer(|r| r.disabled = true);
+        assert!(answer);
+        assert_eq!(user, 0);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_releases_a_flagged_reference() {
+        let (answer, user) = patrol_answer(|r| r.flags = 0x800);
+        assert!(answer);
+        assert_eq!(user, 0);
+        let (answer, user) = patrol_answer(|r| r.flags = 0x1);
+        assert!(!answer);
+        assert_eq!(user, 0x99);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_keeps_a_reference_that_is_not_in_use() {
+        let (answer, user) = patrol_answer(|r| {
+            r.in_use = false;
+            r.kind = 5;
+        });
+        assert!(!answer);
+        assert_eq!(user, 0x99);
+    }
+
+    #[test]
+    fn patrol_ref_in_use_data_releases_by_kind_or_process() {
+        for kind in [3, 5] {
+            let (answer, user) = patrol_answer(|r| r.kind = kind);
+            assert!(answer);
+            assert_eq!(user, 0);
+        }
+        // A process type with the byte at +0x87 clear releases it.
+        let (answer, user) = patrol_answer(|r| r.process_type = 2);
+        assert!(answer);
+        assert_eq!(user, 0);
+        // With the byte set, or without a process type, it is kept.
+        let (answer, user) = patrol_answer(|r| {
+            r.process_type = 2;
+            r.byte_87 = 1;
+        });
+        assert!(!answer);
+        assert_eq!(user, 0x99);
+        let (answer, user) = patrol_answer(|_| {});
+        assert!(!answer);
+        assert_eq!(user, 0x99);
+    }
+
+    #[test]
+    fn form_flags_predicate_tests_two_bits() {
+        let mut e = Engine::new();
+        let form = e.mem.alloc(0x10);
+        for (flags, expected) in [(0u32, false), (0x20, true), (0x800, true), (0x7df, false)] {
+            e.mem.set_u32(form + 8, flags);
+            assert_eq!(e.call(0x0043_7b90, &args![form]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn reference_byte_87_accessor_reads_the_byte() {
+        let mut e = Engine::new();
+        let reference = e.mem.alloc(0x90);
+        assert!(!e.call(0x0043_7bb0, &args![reference]).bool());
+        e.mem.set_u8(reference + 0x87, 1);
+        assert!(e.call(0x0043_7bb0, &args![reference]).bool());
+    }
+
+    #[test]
+    fn reference_kind_predicates_compare_the_code() {
+        let mut e = Engine::new();
+        let kind = Rc::new(RefCell::new(0u32));
+        let shared = kind.clone();
+        e.register_double(REFERENCE_KIND, move |_, _| ret(*shared.borrow()));
+        for (code, is_three, is_five) in [(3, true, false), (5, false, true), (4, false, false)] {
+            *kind.borrow_mut() = code;
+            assert_eq!(e.call(0x0043_7bd0, &args![0x1000u32]).bool(), is_three);
+            assert_eq!(e.call(0x0043_7bf0, &args![0x1000u32]).bool(), is_five);
+        }
+    }
+
+    #[test]
+    fn breadcrumb_constructor_runs_the_vector_constructors() {
+        let mut e = session_engine();
+        let crumb = e.mem.alloc(0x24);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7c10, &args![crumb]).u32(), crumb);
+        assert_eq!(
+            calls(&e, NI_POINT3_CONSTRUCT),
+            vec![vec![crumb], vec![crumb + 0x10]]
+        );
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_constructor_copies_the_default_location() {
+        let mut e = session_engine();
+        e.map(0x011f_4000, 0x1000);
+        for (i, word) in [1.5f32, -2.0, 3.25].iter().enumerate() {
+            e.mem
+                .set_u32(DEFAULT_LEADER_LOCATION + 4 * i as u32, word.to_bits());
+        }
+        let this = dirty_object(&mut e, 0x28);
+        for offset in [0x10, 0x14, 0x18, 0x1c] {
+            e.mem.set_u32(this + offset, 0xdead_beef);
+        }
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7c40, &args![this]).u32(), this);
+        assert_eq!(extra_type(&e, this), 0x8b);
+        assert_eq!(vtable_of(&e, this), EXTRA_FOLLOWER_SWIM_BREADCRUMBS_VTABLE);
+        assert_eq!(e.mem.u32(this + 0xc), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 1.5f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0x14), (-2.0f32).to_bits());
+        assert_eq!(e.mem.u32(this + 0x18), 3.25f32.to_bits());
+        assert_eq!(e.mem.u32(this + 0x1c), 0);
+        assert_eq!(calls(&e, SIMPLE_LIST_CONSTRUCT), vec![vec![this + 0x20]]);
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_scalar_deleting_destructor_frees_on_flag() {
+        let mut e = session_engine();
+        let this = e.mem.alloc(0x28);
+        e.mem.set_u32(this + 0x20, 0);
+        e.mem.set_u32(this + 0x24, 0);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_7ce0, &args![this, 0u32]).u32(), this);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert!(e.mem.block_size(this).is_some());
+        e.call(0x0043_7ce0, &args![this, 1u32]);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_destructor_destroys_every_crumb() {
+        let mut e = session_engine();
+        e.register(CRUMB_DELETE, |_, _| Ret::default());
+        let this = dirty_object(&mut e, 0x28);
+        let crumb = e.mem.alloc(0x24);
+        let second = e.mem.alloc(8);
+        // The list is embedded at +0x20: the head node holds a crumb, the
+        // next node none.
+        e.mem.set_u32(this + 0x20, crumb);
+        e.mem.set_u32(this + 0x24, second);
+        e.mem.set_u32(second, 0);
+        e.mem.set_u32(second + 4, 0);
+        start_log(&mut e);
+        e.call(0x0043_7d10, &args![this]);
+        assert_eq!(vtable_of(&e, this), EXTRA_FOLLOWER_SWIM_BREADCRUMBS_VTABLE);
+        assert_eq!(calls(&e, CRUMB_DELETE), vec![vec![crumb, 1]]);
+        assert_eq!(e.mem.u32(this + 0x20), 0);
+        assert_eq!(calls(&e, SIMPLE_LIST_DESTRUCT), vec![vec![this + 0x20]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_first_crumb_is_the_head_item() {
+        let mut e = session_engine();
+        let this = dirty_object(&mut e, 0x28);
+        e.mem.set_u32(this + 0x20, 0x1234);
+        assert_eq!(e.call(0x0043_7dd0, &args![this]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_drop_first_destroys_the_crumb() {
+        let mut e = list_engine();
+        e.register(CRUMB_DELETE, |_, _| Ret::default());
+        e.register(SIMPLE_LIST_SET_HEAD, |e, a| {
+            let item = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], item);
+            Ret::default()
+        });
+        let this = dirty_object(&mut e, 0x28);
+        let crumb = e.mem.alloc(0x24);
+        e.mem.set_u32(this + 0x20, crumb);
+        e.mem.set_u32(this + 0x24, 0);
+        start_log(&mut e);
+        e.call(0x0043_7df0, &args![this]);
+        assert_eq!(calls(&e, CRUMB_DELETE), vec![vec![crumb, 1]]);
+        assert_eq!(calls(&e, SIMPLE_LIST_SET_HEAD).len(), 1);
+        assert_eq!(calls(&e, SIMPLE_LIST_SET_HEAD)[0][0], this + 0x20);
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD), vec![vec![this + 0x20]]);
+        // With no crumb nothing is destroyed.
+        e.mem.set_u32(this + 0x20, 0);
+        start_log(&mut e);
+        e.call(0x0043_7df0, &args![this]);
+        assert!(calls(&e, CRUMB_DELETE).is_empty());
+        assert_eq!(calls(&e, SIMPLE_LIST_REMOVE_HEAD).len(), 1);
+    }
+
+    #[test]
+    fn follower_swim_breadcrumbs_record_appends_a_crumb_on_a_state_change() {
+        let mut e = session_engine();
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        let appended: Rc<RefCell<Vec<u32>>> = Rc::default();
+        let log = appended.clone();
+        e.register_double(CRUMB_LIST_ADD, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        let this = dirty_object(&mut e, 0x28);
+        let set = |e: &mut Engine, state: u32, nav_mesh: u32| {
+            e.mem.set_u32(this + 0xc, state);
+            e.mem.set_u32(this + 0x10, 1.0f32.to_bits());
+            e.mem.set_u32(this + 0x14, 2.0f32.to_bits());
+            e.mem.set_u32(this + 0x18, 3.0f32.to_bits());
+            e.mem.set_u32(this + 0x1c, nav_mesh);
+        };
+        let (x, y, z) = (4.0f32.to_bits(), 5.0f32.to_bits(), 6.0f32.to_bits());
+        // A state of 0 does nothing.
+        set(&mut e, 1, 0x70);
+        assert!(!e
+            .call(0x0043_7e50, &args![this, 0u32, x, y, z, 0x71u32])
+            .bool());
+        assert_eq!(e.mem.u32(this + 0xc), 1);
+        assert_eq!(e.mem.u32(this + 0x10), 1.0f32.to_bits());
+        // From state 0 the location is stored with no crumb.
+        set(&mut e, 0, 0x70);
+        assert!(!e
+            .call(0x0043_7e50, &args![this, 1u32, x, y, z, 0x71u32])
+            .bool());
+        assert!(appended.borrow().is_empty());
+        assert_eq!(e.mem.u32(this + 0xc), 1);
+        assert_eq!(e.mem.u32(this + 0x10), x);
+        assert_eq!(e.mem.u32(this + 0x1c), 0x71);
+        // The same state again stores without a crumb.
+        assert!(!e
+            .call(0x0043_7e50, &args![this, 1u32, x, y, z, 0x72u32])
+            .bool());
+        assert!(appended.borrow().is_empty());
+        assert_eq!(e.mem.u32(this + 0x1c), 0x72);
+        // A change from state 1 to 2 appends the old and new positions.
+        set(&mut e, 1, 0x70);
+        assert!(e
+            .call(0x0043_7e50, &args![this, 2u32, x, y, z, 0x71u32])
+            .bool());
+        let crumb = appended.borrow()[0];
+        assert_eq!(e.mem.block_size(crumb), Some(0x28));
+        assert_eq!(e.mem.u32(crumb), 1.0f32.to_bits());
+        assert_eq!(e.mem.u32(crumb + 4), 2.0f32.to_bits());
+        assert_eq!(e.mem.u32(crumb + 8), 3.0f32.to_bits());
+        assert_eq!(e.mem.u32(crumb + 0xc), 0x70);
+        assert_eq!(e.mem.u32(crumb + 0x10), x);
+        assert_eq!(e.mem.u32(crumb + 0x14), y);
+        assert_eq!(e.mem.u32(crumb + 0x18), z);
+        assert_eq!(e.mem.u32(crumb + 0x1c), 0x71);
+        assert_eq!(e.mem.u8(crumb + 0x20), 1);
+        assert_eq!(e.mem.u32(this + 0xc), 2);
+        assert_eq!(e.mem.u32(this + 0x18), z);
+        // A change to a state other than 2 clears the flag.
+        set(&mut e, 2, 0x70);
+        assert!(e
+            .call(0x0043_7e50, &args![this, 3u32, x, y, z, 0x71u32])
+            .bool());
+        assert_eq!(e.mem.u8(appended.borrow()[1] + 0x20), 0);
+    }
+
+    #[test]
+    fn fixed_string_constructor_uses_the_empty_value_for_null() {
+        let mut e = Engine::new();
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x5555);
+        e.register(FIXED_STRING_CREATE, |_, a| ret(a[0] + 1));
+        let slot = e.mem.alloc(4);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0043_8170, &args![slot, 0u32]).u32(), slot);
+        assert_eq!(e.mem.u32(slot), 0x5555);
+        assert!(calls(&e, FIXED_STRING_CREATE).is_empty());
+        e.call(0x0043_8170, &args![slot, 0x9000u32]);
+        assert_eq!(e.mem.u32(slot), 0x9001);
+        assert_eq!(calls(&e, FIXED_STRING_CREATE), vec![vec![0x9000]]);
+    }
+
+    #[test]
+    fn fixed_string_release_skips_the_empty_value() {
+        let mut e = Engine::new();
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x5555);
+        e.register(FIXED_STRING_RELEASE, |_, _| Ret::default());
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x5555);
+        start_log(&mut e);
+        e.call(0x0043_81d0, &args![slot]);
+        assert!(calls(&e, FIXED_STRING_RELEASE).is_empty());
+        e.mem.set_u32(slot, 0x6000);
+        e.call(0x0043_81d0, &args![slot]);
+        assert_eq!(calls(&e, FIXED_STRING_RELEASE), vec![vec![0x5ff8]]);
+    }
+
+    #[test]
+    fn fixed_string_destructor_releases_the_text() {
+        let mut e = Engine::new();
+        e.map(0x0109_b000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x5555);
+        e.register(FIXED_STRING_RELEASE, |_, _| Ret::default());
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x7000);
+        start_log(&mut e);
+        e.call(0x0043_81b0, &args![slot]);
+        assert_eq!(calls(&e, FIXED_STRING_RELEASE), vec![vec![0x6ff8]]);
+    }
+
+    #[test]
+    fn fixed_string_header_is_eight_bytes_before_the_text() {
+        let mut e = Engine::new();
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, 0x1234);
+        assert_eq!(e.call(0x0043_8210, &args![slot]).u32(), 0x122c);
+    }
+
+    #[test]
+    fn securitron_property_type_is_three() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0043_8220, &args![]).u32(), 3);
+    }
+
+    #[test]
+    fn securitron_property_takes_the_texture() {
+        let mut e = Engine::new();
+        e.register(NI_POINTER_ASSIGN, |_, _| Ret::default());
+        let property = e.mem.alloc(0x70);
+        e.mem.set_u32(property + 0x38, 0xdead_beef);
+        start_log(&mut e);
+        e.call(0x0043_8230, &args![property, 0x4321u32]);
+        assert_eq!(
+            calls(&e, NI_POINTER_ASSIGN),
+            vec![vec![property + 0x60, 0x4321]]
+        );
+        assert_eq!(e.mem.u32(property + 0x38), 0);
+    }
+
+    #[test]
+    fn securitron_face_setters_assign_their_strings() {
+        let mut e = Engine::new();
+        e.register(STRING_ASSIGN, |_, _| Ret::default());
+        let this = e.mem.alloc(0x1c);
+        start_log(&mut e);
+        e.call(0x0043_8260, &args![this, 0xa0u32]);
+        e.call(0x0043_8280, &args![this, 0xb0u32]);
+        assert_eq!(
+            calls(&e, STRING_ASSIGN),
+            vec![vec![this + 0xc, 0xa0], vec![this + 0x14, 0xb0]]
+        );
+    }
+
+    /// `ApplyFace` with doubles: the two strings and their text addresses,
+    /// the root's slot 0x9c (returns `screen`), the property the screen has,
+    /// and the texture the loader puts in the smart pointer.
+    struct FaceScene {
+        e: Engine,
+        this: u32,
+        root: u32,
+        screen: u32,
+        property: u32,
+        assigned: Rc<RefCell<Vec<u32>>>,
+    }
+
+    fn face_scene(first: &'static str, second: &'static str, has_screen: bool) -> FaceScene {
+        let mut e = session_engine();
+        e.map(0x0109_b000, 0x1000);
+        e.map(0x011d_e000, 0x1000);
+        e.mem.set_u32(EMPTY_FIXED_STRING, 0x5555);
+        e.mem.set_u32(TES, 0x6000_0000);
+        e.register(FIXED_STRING_CREATE, |_, a| ret(a[0] + 8));
+        e.register(FIXED_STRING_RELEASE, |_, _| Ret::default());
+        // A string is a text address and a length; the first getter fills
+        // the first string, the second getter the second.
+        let texts = [first, second];
+        for (index, getter) in [GET_FACE_STRING_FIRST, GET_FACE_STRING_SECOND]
+            .into_iter()
+            .enumerate()
+        {
+            let text = texts[index];
+            e.register_double(getter, move |e, a| {
+                let buffer = e.mem.alloc(text.len() as u32 + 1);
+                for (i, byte) in text.bytes().enumerate() {
+                    e.mem.set_u8(buffer + i as u32, byte);
+                }
+                e.mem.set_u32(a[1], buffer);
+                e.mem.set_u32(a[1] + 4, text.len() as u32);
+                Ret::default()
+            });
+        }
+        e.register(STRING_LENGTH, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(POINTER_VALUE, |e, a| ret(e.mem.u32(a[0])));
+        e.register(STRING_DESTRUCT, |_, _| Ret::default());
+        e.register(FORMAT_STRING, |e, a| {
+            // Builds "<first>_<second>" so the arguments can be checked.
+            let read = |e: &Engine, mut at: u32| {
+                let mut text = String::new();
+                while e.mem.u8(at) != 0 {
+                    text.push(e.mem.u8(at) as char);
+                    at += 1;
+                }
+                text
+            };
+            let text = format!("{}_{}", read(e, a[3]), read(e, a[4]));
+            for (i, byte) in text.bytes().enumerate() {
+                e.mem.set_u8(a[0] + i as u32, byte);
+            }
+            e.mem.set_u8(a[0] + text.len() as u32, 0);
+            Ret::default()
+        });
+        e.register(SWAP_PLATFORM_LANGUAGE_TEXTURE_PATH, |e, a| {
+            let mut at = 0;
+            loop {
+                let byte = e.mem.u8(a[0] + at);
+                e.mem.set_u8(a[1] + at, byte);
+                if byte == 0 {
+                    break;
+                }
+                at += 1;
+            }
+            Ret::default()
+        });
+        e.register(NI_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        e.register(CREATE_TEXTURE_IMAGE, |e, a| {
+            e.mem.set_u32(a[2], 0x7777);
+            Ret::default()
+        });
+        let root = e.mem.alloc(0x10);
+        let screen = if has_screen { e.mem.alloc(0x10) } else { 0 };
+        let table = 0x7300_0000;
+        let mut slots = vec![0u32; 0x28];
+        slots[0x27] = 0x7000_0010;
+        e.put_vtable(table, &slots);
+        e.register_double(0x7000_0010, move |_, _| ret(screen));
+        e.mem.set_u32(root, table);
+        let property = e.mem.alloc(0x70);
+        e.register_double(GET_PROPERTY, move |_, a| {
+            ret(if a[1] == 3 { property } else { 0 })
+        });
+        let assigned: Rc<RefCell<Vec<u32>>> = Rc::default();
+        let log = assigned.clone();
+        e.register_double(NI_POINTER_ASSIGN, move |_, a| {
+            log.borrow_mut().push(a[1]);
+            Ret::default()
+        });
+        let this = e.mem.alloc(0x1c);
+        FaceScene {
+            e,
+            this,
+            root,
+            screen,
+            property,
+            assigned,
+        }
+    }
+
+    #[test]
+    fn apply_face_builds_the_texture_path_and_assigns_the_texture() {
+        let mut scene = face_scene("calm", "happy", true);
+        start_log(&mut scene.e);
+        scene.e.call(0x0043_7f90, &args![scene.this, scene.root]);
+        let e = &scene.e;
+        // The name is made from the literal and released afterwards.
+        assert_eq!(
+            calls(e, FIXED_STRING_CREATE),
+            vec![vec![SECURITRON_SCREEN_NAME]]
+        );
+        assert_eq!(calls(e, FIXED_STRING_RELEASE).len(), 1);
+        let format = calls(e, FORMAT_STRING);
+        assert_eq!(format.len(), 1);
+        assert_eq!(format[0][1], 0x104);
+        assert_eq!(format[0][2], SECURITRON_TEXTURE_FORMAT);
+        let localized = calls(e, SWAP_PLATFORM_LANGUAGE_TEXTURE_PATH)[0][1];
+        let mut path = String::new();
+        let mut at = localized;
+        while e.mem.u8(at) != 0 {
+            path.push(e.mem.u8(at) as char);
+            at += 1;
+        }
+        assert_eq!(path, "calm_happy");
+        let create = &calls(e, CREATE_TEXTURE_IMAGE)[0];
+        assert_eq!(create[0], 0x6000_0000);
+        assert_eq!(create[1], localized);
+        assert_eq!(&create[3..], &[0, 0]);
+        assert_eq!(calls(e, GET_PROPERTY), vec![vec![scene.screen, 3]]);
+        assert_eq!(*scene.assigned.borrow(), vec![0x7777]);
+        assert_eq!(calls(e, STRING_DESTRUCT).len(), 2);
+        assert_eq!(calls(e, NI_POINTER_DESTRUCT).len(), 1);
+        let _ = scene.property;
+    }
+
+    #[test]
+    fn apply_face_with_an_empty_string_still_gives_the_property_no_texture() {
+        let mut scene = face_scene("calm", "", true);
+        start_log(&mut scene.e);
+        scene.e.call(0x0043_7f90, &args![scene.this, scene.root]);
+        let e = &scene.e;
+        assert!(calls(e, FORMAT_STRING).is_empty());
+        assert!(calls(e, CREATE_TEXTURE_IMAGE).is_empty());
+        assert_eq!(*scene.assigned.borrow(), vec![0]);
+        assert_eq!(calls(e, STRING_DESTRUCT).len(), 2);
+    }
+
+    #[test]
+    fn apply_face_stops_without_a_screen_or_a_root() {
+        let mut scene = face_scene("calm", "happy", false);
+        start_log(&mut scene.e);
+        scene.e.call(0x0043_7f90, &args![scene.this, scene.root]);
+        let e = &scene.e;
+        assert_eq!(calls(e, FIXED_STRING_RELEASE).len(), 1);
+        assert!(calls(e, GET_FACE_STRING_FIRST).is_empty());
+        assert!(calls(e, NI_POINTER_CONSTRUCT).is_empty());
+        assert!(scene.assigned.borrow().is_empty());
+        // A null root does nothing at all.
+        start_log(&mut scene.e);
+        scene.e.call(0x0043_7f90, &args![scene.this, 0u32]);
+        assert!(calls(&scene.e, FIXED_STRING_CREATE).is_empty());
     }
 }
