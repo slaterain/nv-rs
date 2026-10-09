@@ -464,6 +464,15 @@ fn main() {
         }
     }
     let units_dir = root.join("crates/engine/src/units");
+    if let Some(a) = args.first() {
+        if !matches!(
+            a.as_str(),
+            "units" | "scaffold" | "queue" | "--check" | "--tsv"
+        ) {
+            eprintln!("ledger: unknown argument {a} (commands: units, scaffold, queue; options: --check, --tsv <file>)");
+            std::process::exit(2);
+        }
+    }
     match args.first().map(String::as_str) {
         Some("units") => {
             match units::regenerate(&units_dir) {
@@ -598,7 +607,18 @@ mod tests {
 /// name), the work list for one translator.
 fn queue(funcs: &[Func], args: &[String]) {
     if let Some(unit) = args.first() {
-        for f in funcs.iter().filter(|f| &f.unit == unit) {
+        // Optional address range [lo, hi): one part of a unit split between
+        // several translators.
+        let hex = |i: usize, d: u32| {
+            args.get(i)
+                .and_then(|s| u32::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+                .unwrap_or(d)
+        };
+        let (lo, hi) = (hex(1, 0), hex(2, u32::MAX));
+        for f in funcs
+            .iter()
+            .filter(|f| &f.unit == unit && f.addr >= lo && f.addr < hi)
+        {
             let st = if f.in_engine() { "done" } else { f.status() };
             println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, st, f.name);
         }
