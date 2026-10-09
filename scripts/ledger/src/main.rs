@@ -226,7 +226,30 @@ fn load_map(path: &Path) -> Result<(Vec<Func>, Vec<String>), String> {
         });
     }
     funcs.sort_by_key(|f| f.addr);
+    run_units(&mut funcs);
     Ok((funcs, header))
+}
+
+/// Functions the map placed in a subsystem but in no unit get a synthetic
+/// unit per run of such functions with the same subsystem:
+/// `<subsystem>/run_<first address>`, so they have a file and an owner
+/// like the others. Library and platform subsystems are left alone.
+fn run_units(funcs: &mut [Func]) {
+    let mut current: Option<(String, String)> = None;
+    for f in funcs.iter_mut() {
+        if !f.unit.is_empty() || base_status(&f.subsystem) != "open" {
+            current = None;
+            continue;
+        }
+        match &current {
+            Some((sub, unit)) if *sub == f.subsystem => f.unit = unit.clone(),
+            _ => {
+                let unit = format!("{}/run_{:08x}", f.subsystem, f.addr);
+                current = Some((f.subsystem.clone(), unit.clone()));
+                f.unit = unit;
+            }
+        }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -448,7 +471,9 @@ fn main() {
             let want: BTreeSet<&str> = args[1..].iter().map(String::as_str).collect();
             let mut done = BTreeSet::new();
             for f in &funcs {
-                if f.unit.is_empty() || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str())) {
+                if f.unit.is_empty()
+                    || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str()))
+                {
                     continue;
                 }
                 if done.insert(f.unit.clone()) {
@@ -488,7 +513,12 @@ fn main() {
     if let Some(t) = tsv {
         let mut s = String::from("address\tsize\tname\tsubsystem\tunit\tstatus\trust\n");
         for f in &funcs {
-            let locs: Vec<&String> = f.translated.iter().chain(&f.replaced).chain(&f.traced).collect();
+            let locs: Vec<&String> = f
+                .translated
+                .iter()
+                .chain(&f.replaced)
+                .chain(&f.traced)
+                .collect();
             let _ = writeln!(
                 s,
                 "{:08x}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -539,7 +569,9 @@ mod tests {
         assert!(got.contains(&(0x00c90e60, Cite::Traced, 1)));
         assert!(got.contains(&(0x00c95a80, Cite::Translated, 2)));
         assert!(got.contains(&(0x00c90e60, Cite::Translated, 2)));
-        assert!(got.iter().any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
+        assert!(got
+            .iter()
+            .any(|&(a, t, _)| a == 0x00afe220 && t == Cite::Translated));
     }
 
     #[test]

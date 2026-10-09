@@ -14,8 +14,8 @@ const KEYWORDS: &[&str] = &[
     "as", "async", "await", "box", "break", "const", "continue", "crate", "dyn", "else", "enum",
     "extern", "false", "fn", "for", "gen", "if", "impl", "in", "let", "loop", "match", "mod",
     "move", "mut", "priv", "pub", "ref", "return", "self", "static", "struct", "super", "trait",
-    "true", "try", "type", "unsafe", "use", "where", "while", "yield", "abstract", "become",
-    "do", "final", "macro", "override", "typeof", "unsized", "virtual",
+    "true", "try", "type", "unsafe", "use", "where", "while", "yield", "abstract", "become", "do",
+    "final", "macro", "override", "typeof", "unsized", "virtual",
 ];
 
 /// A Rust module name from a path piece.
@@ -29,7 +29,10 @@ pub fn ident(s: &str) -> String {
         }
     }
     let out = out.trim_matches('_').to_string();
-    if out.is_empty() || out.starts_with(|c: char| c.is_ascii_digit()) || KEYWORDS.contains(&out.as_str()) {
+    if out.is_empty()
+        || out.starts_with(|c: char| c.is_ascii_digit())
+        || KEYWORDS.contains(&out.as_str())
+    {
         format!("u_{out}")
     } else {
         out
