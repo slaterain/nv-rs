@@ -5,13 +5,13 @@
 //! at), `PlaceableWaterGroup` and the small accessors the water code is
 //! built from. It has 166 functions, `004e21b0` to `004edd80`.
 //!
-//! Translated so far: the first 160 functions of the queue (`004e21b0` to
-//! `004eda60`). The next session continues at `004edb60` (the base
-//! constructor of `NiTPointerMap<TESObjectREFR *, WadingWaterData *>`);
-//! the last six functions are `004edb60`, `004edc90`, `004edcf0`, `004edd20`,
-//! `004edd50` and `004edd80` (map constructors and destructors; `004ed800`,
-//! `004eba20` and `004eba90` call `004edb60`, `004edc90`/`004edcf0` and
-//! `004edc60`/`004edcc0` by address until then).
+//! Translated: all 166 functions (the two library ones, `00f426e0` and
+//! `00f46cc0`, are not part of the queue). The last session (`004edb60` to
+//! `004edd80`) did the base constructor of the wading map, two small
+//! two-word constructors (bodies `004edf70` and `004edfe0`, called by
+//! address) and the three `NiTMapBase` deleting destructors; `004ed800`,
+//! `004eba20` and `004eba90` still reach `004edb60`, `004edc90`/`004edcf0`
+//! and `004edc60`/`004edcc0` by address.
 //! Fourth session (`004eb540` to `004eda60`): the world and sky reflection
 //! finish, the depth setup and render of a group, the clip-plane setup
 //! (`004ecef0`, with the D3DX math), the group constructor and destructor and
@@ -924,7 +924,7 @@ const SETTING_STORE_FLOAT: u32 = 0x004d_e290;
 /// (`WaterTypeUpdateMap`) and `NiTPointerMap<TESObjectREFR *,
 /// WadingWaterData *>` (`WadingWaterMap`): the vtables of the derived
 /// classes and of the `NiTMapBase` instances `fn_004ed960` and `fn_004eda60`
-/// construct, the base constructor of the third (`004edb60`, next session)
+/// construct, the base constructor of the third (`004edb60`)
 /// and the three base destructor bodies.
 const REFERENCE_MAP_VTABLE: u32 = 0x0102_31f4;
 const WATER_FORM_MAP_VTABLE: u32 = 0x0102_3214;
@@ -932,6 +932,16 @@ const WADING_MAP_VTABLE: u32 = 0x0102_3234;
 const REFERENCE_MAP_BASE_VTABLE: u32 = 0x0102_3254;
 const WATER_FORM_MAP_BASE_VTABLE: u32 = 0x0102_3274;
 const WADING_MAP_BASE_CONSTRUCT: u32 = 0x004e_db60;
+/// The vtable `fn_004edb60` sets (the base of the wading map).
+const WADING_MAP_BASE_VTABLE: u32 = 0x0102_3294;
+/// The destructor bodies of the three `NiTMapBase` instances (`this`).
+const REFERENCE_MAP_BASE_DESTRUCT: u32 = 0x004e_da30;
+const WATER_FORM_MAP_BASE_DESTRUCT: u32 = 0x004e_db30;
+const WADING_MAP_BASE_DESTRUCT: u32 = 0x004e_dc30;
+/// The constructor bodies `fn_004edc90` and `fn_004edcf0` call
+/// (`this, first, second`; the engine map has no names).
+const CONSTRUCT_BODY_004EDF70: u32 = 0x004e_df70;
+const CONSTRUCT_BODY_004EDFE0: u32 = 0x004e_dfe0;
 const REFERENCE_MAP_DESTRUCT: u32 = 0x004e_d9d0;
 const WATER_FORM_MAP_DESTRUCT: u32 = 0x004e_dad0;
 const WADING_MAP_DESTRUCT: u32 = 0x004e_dbd0;
@@ -7929,7 +7939,7 @@ pub fn fn_004ed7d0(e: &mut Engine, this: u32, size: u32) -> u32 {
 
 // Translated from 004ed800 (decompiled, FalloutNV.exe 1.4.0.525)
 /// `NiTPointerMap<TESObjectREFR *, WadingWaterData *>` constructor:
-/// `004edb60(this, size)` (translated next session), then the vtable
+/// `004edb60(this, size)`, then the vtable
 /// `0x01023234`. Returns `this`.
 pub fn fn_004ed800(e: &mut Engine, this: u32, size: u32) -> u32 {
     e.call(WADING_MAP_BASE_CONSTRUCT, &args![this, size]);
@@ -8012,6 +8022,78 @@ pub fn fn_004ed960(e: &mut Engine, this: u32, size: u32) -> u32 {
 /// `0x01023274`). Returns `this`.
 pub fn fn_004eda60(e: &mut Engine, this: u32, size: u32) -> u32 {
     construct_pointer_map_base(e, this, size, WATER_FORM_MAP_BASE_VTABLE)
+}
+
+// Translated from 004edb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of `NiTPointerMap<TESObjectREFR *, WadingWaterData *>`
+/// (the engine map has no name; the vtable is `0x01023294`): see
+/// `construct_pointer_map_base`. Returns `this`.
+pub fn fn_004edb60(e: &mut Engine, this: u32, size: u32) -> u32 {
+    construct_pointer_map_base(e, this, size, WADING_MAP_BASE_VTABLE)
+}
+
+// Translated from 004edc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A constructor with two word arguments (the engine map has no name): the
+/// body `004edf70(this, first, second)` (both words are 16-bit values there),
+/// then the vtable `0x010232bc`. Returns `this`.
+pub fn fn_004edc90(e: &mut Engine, this: u32, first: u32, second: u32) -> u32 {
+    e.call(CONSTRUCT_BODY_004EDF70, &args![this, first, second]);
+    e.mem.set_u32(this, 0x0102_32bc);
+    this
+}
+
+// Translated from 004edcf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same with the body `004edfe0` and the vtable `0x010232cc`.
+pub fn fn_004edcf0(e: &mut Engine, this: u32, first: u32, second: u32) -> u32 {
+    e.call(CONSTRUCT_BODY_004EDFE0, &args![this, first, second]);
+    e.mem.set_u32(this, 0x0102_32cc);
+    this
+}
+
+// Translated from 004edd20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned_int>,TESObjectREFR *,TESObjectREFR *>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor body `004eda30` and, when bit 0 of
+/// `flags` is set, frees the object. Returns `this`.
+pub fn ni_t_map_base_tes_object_refr_p_tes_object_refr_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(REFERENCE_MAP_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004edd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned_int>,TESWaterForm *,bool>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the same with the destructor body `004edb30`.
+pub fn ni_t_map_base_tes_water_form_p_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(WATER_FORM_MAP_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004edd80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<NiTPointerAllocator<unsigned_int>,TESObjectREFR *,WadingWaterData *>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the same with the destructor body `004edc30`.
+pub fn ni_t_map_base_tes_object_refr_p_wading_water_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(WADING_MAP_BASE_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
 }
 
 /// This unit's translated functions, by exe address.
@@ -8307,6 +8389,25 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x004ed960, fn_004ed960(u32, u32) -> u32),
         entry!(0x004eda60, fn_004eda60(u32, u32) -> u32),
+        entry!(0x004edb60, fn_004edb60(u32, u32) -> u32),
+        entry!(0x004edc90, fn_004edc90(u32, u32, u32) -> u32),
+        entry!(0x004edcf0, fn_004edcf0(u32, u32, u32) -> u32),
+        entry!(
+            0x004edd20,
+            ni_t_map_base_tes_object_refr_p_tes_object_refr_p_scalar_deleting_destructor(
+                u32, u32
+            ) -> u32
+        ),
+        entry!(
+            0x004edd50,
+            ni_t_map_base_tes_water_form_p_bool_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x004edd80,
+            ni_t_map_base_tes_object_refr_p_wading_water_data_p_scalar_deleting_destructor(
+                u32, u32
+            ) -> u32
+        ),
     ]
 }
 
@@ -15920,6 +16021,64 @@ mod tests {
                     (0x004e_d830u32, REFERENCE_MAP_DESTRUCT),
                     (0x004e_d860, WATER_FORM_MAP_DESTRUCT),
                     (0x004e_d890, WADING_MAP_DESTRUCT),
+                ] {
+                    e.register(body, |_, _| Ret::default());
+                    start_log(&mut e);
+                    assert_eq!(e.call(function, &args![0x500u32, 0u32]).u32(), 0x500);
+                    assert_eq!(calls(&e, body), vec![vec![0x500]]);
+                    assert!(calls(&e, OPERATOR_DELETE).is_empty());
+                    assert_eq!(e.call(function, &args![0x500u32, 1u32]).u32(), 0x500);
+                    assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x500]]);
+                }
+            }
+
+            #[test]
+            fn the_wading_map_base_constructor_allocates_and_clears_the_buckets() {
+                let mut e = water_engine();
+                e.register(NI_ALLOC_ARRAY, |e, a| ret(e.mem.alloc(a[0])));
+                e.register(MEMORY_SET, |_, _| Ret::default());
+                let map = e.mem.alloc(0x10);
+                e.mem.set_u32(map + 0xc, 99);
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_db60, &args![map, 0x20u32]).u32(), map);
+                assert_eq!(e.mem.u32(map), 0x0102_3294);
+                assert_eq!(e.mem.u32(map + 4), 0x20);
+                assert_eq!(e.mem.u32(map + 0xc), 0, "the count");
+                let buckets = e.mem.u32(map + 8);
+                assert_eq!(calls(&e, NI_ALLOC_ARRAY), vec![vec![0x80]]);
+                assert_eq!(calls(&e, MEMORY_SET), vec![vec![buckets, 0, 0x80]]);
+            }
+
+            #[test]
+            fn the_two_word_constructors_run_their_body_then_set_the_vtable() {
+                let mut e = water_engine();
+                for (constructor, body, vtable) in [
+                    (0x004e_dc90u32, CONSTRUCT_BODY_004EDF70, 0x0102_32bcu32),
+                    (0x004e_dcf0, CONSTRUCT_BODY_004EDFE0, 0x0102_32cc),
+                ] {
+                    e.register(body, |e, a| {
+                        e.mem.set_u32(a[0], 0xba5e);
+                        ret(a[0])
+                    });
+                    let object = e.mem.alloc(0x10);
+                    start_log(&mut e);
+                    assert_eq!(
+                        e.call(constructor, &args![object, 6u32, 9u32]).u32(),
+                        object
+                    );
+                    assert_eq!(calls(&e, body), vec![vec![object, 6, 9]]);
+                    assert_eq!(e.mem.u32(object), vtable, "the derived vtable wins");
+                }
+            }
+
+            #[test]
+            fn the_map_base_deleting_destructors_free_on_bit_zero() {
+                let mut e = water_engine();
+                e.register(OPERATOR_DELETE, |_, _| Ret::default());
+                for (function, body) in [
+                    (0x004e_dd20u32, REFERENCE_MAP_BASE_DESTRUCT),
+                    (0x004e_dd50, WATER_FORM_MAP_BASE_DESTRUCT),
+                    (0x004e_dd80, WADING_MAP_BASE_DESTRUCT),
                 ] {
                     e.register(body, |_, _| Ret::default());
                     start_log(&mut e);
