@@ -63,21 +63,20 @@ pub struct LaterCommands {
 }
 
 impl LaterCommands {
-    /// The lines due `now` (seconds since the start), taken out in order;
-    /// the clock starts at the first call.
+    /// One due line, taken out by time and then input order. Running one per
+    /// update keeps overdue script lines from collapsing into the same frame
+    /// after dialogue or loading held the queue; the clock starts at first use.
     pub fn due(&mut self, now: f32) -> Vec<String> {
         let since = now - *self.ready_at.get_or_insert(now);
-        let mut due: Vec<(f32, String)> = Vec::new();
-        self.lines.retain(|(at, line)| {
-            if *at <= since {
-                due.push((*at, line.clone()));
-                false
-            } else {
-                true
-            }
-        });
-        due.sort_by(|a, b| a.0.total_cmp(&b.0));
-        due.into_iter().map(|(_, l)| l).collect()
+        let next = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| *at <= since)
+            .min_by(|(a_i, (a, _)), (b_i, (b, _))| a.total_cmp(b).then_with(|| a_i.cmp(b_i)))
+            .map(|(i, _)| i);
+        next.map(|i| vec![self.lines.remove(i).1])
+            .unwrap_or_default()
     }
 }
 
@@ -1944,7 +1943,10 @@ mod tests {
         // The clock starts at the first look.
         assert!(later.due(100.0).is_empty());
         assert_eq!(later.due(111.0), ["a"]);
-        assert_eq!(later.due(140.0), ["b", "c"]);
+        // If time jumps past multiple deadlines while the queue is held,
+        // keep each line on its own update and preserve equal-time order.
+        assert_eq!(later.due(140.0), ["b"]);
+        assert_eq!(later.due(140.0), ["c"]);
         assert!(later.due(500.0).is_empty());
     }
 

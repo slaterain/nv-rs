@@ -914,10 +914,11 @@ fn people_go_through_load_doors_toward_their_package() {
     assert_eq!(package.form_id, FormId(FAR_TRAVEL));
     // Not reachable on foot from here...
     assert!(ai::destination(&order, &state, doc, &package).is_none());
-    let (space, _) = ai::target_place(&order, &state, doc, &package).unwrap();
+    let (space, target) = ai::target_place(&order, &state, doc, &package).unwrap();
     assert_eq!(space, FormId(CELL2));
     // ...but through the door at 150,150, coming out at 400,0 over there.
-    let way = ai::door_toward(&order, &state, doc, space).unwrap();
+    let mut navs = ai::NavCache::default();
+    let way = ai::door_toward(&order, &state, doc, space, target, &mut navs.infos).unwrap();
     assert_eq!(way.door, FormId(LINK_DOOR));
     assert_eq!(
         (way.at, way.to, way.to_space),
@@ -927,7 +928,6 @@ fn people_go_through_load_doors_toward_their_package() {
     // toward the door (212 away), then on through it, then to the marker
     // (141 from the far side; arriving within 20 of it, a chest's bounds-less
     // radius).
-    let mut navs = ai::NavCache::default();
     assert_eq!(
         ai::move_offstage(&order, &mut state, doc, 100.0, &mut navs),
         ai::Offstage::Moved
@@ -977,10 +977,53 @@ fn people_go_through_load_doors_toward_their_package() {
         Some(FormId(CELL))
     );
     // And back, from the far side's door.
-    let home = ai::door_toward(&order, &state, doc, FormId(CELL)).unwrap();
+    let home = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL),
+        [0.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
     assert_eq!(
         (home.door, home.to),
         (FormId(LINK_DOOR2), [150.0, 120.0, 0.0])
+    );
+
+    // A different interior reached through a shared intermediate place:
+    // Bison-like `TestCell` → `TestCell3` → `TestCell4`. The first lookup
+    // should choose the exit to the shared exterior, and the next lookup
+    // after that transition should choose the target interior's entrance.
+    state.spaces.insert(doc, (FormId(CELL), FormId(CELL)));
+    state.positions.insert(doc, ([0.0, 0.0, 0.0], 0.0));
+    let first = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL4),
+        [200.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
+    assert_eq!(
+        (first.door, first.to_space),
+        (FormId(LINK_DOOR3), FormId(CELL3))
+    );
+    state.spaces.insert(doc, (FormId(CELL3), FormId(CELL3)));
+    state.positions.insert(doc, ([10.0, 0.0, 0.0], 0.0));
+    let second = ai::door_toward(
+        &order,
+        &state,
+        doc,
+        FormId(CELL4),
+        [200.0, 0.0, 0.0],
+        &mut navs.infos,
+    )
+    .unwrap();
+    assert_eq!(
+        (second.door, second.to_space),
+        (FormId(LINK_DOOR6), FormId(CELL4))
     );
 }
 

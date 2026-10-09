@@ -299,6 +299,8 @@ pub struct Ctx<'a> {
     pub state: &'a mut GameState,
     pub seats: &'a mut Seats,
     pub mesh: &'a NavMesh,
+    /// The loaded navmesh-info map used to choose a route through load doors.
+    pub infos: Option<&'a mut world::ai::navinfo::NavInfos>,
     /// Turning and walking settings (`world::movement`).
     pub moves: &'a world::movement::MoveSettings,
     pub now: f32,
