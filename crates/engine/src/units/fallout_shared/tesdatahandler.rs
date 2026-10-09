@@ -38,6 +38,31 @@
 //! placement function of the same family, called by `004698a0` for
 //! projectiles).
 //!
+//! Session 4 (the last 39 functions, `0046a080` to `0046feb0`; the unit has
+//! no open function left) holds the placement of projectiles and explosions
+//! (`0046a080`, `0046a190`, called by `004698a0`), `GenerateDefaultObjects`
+//! (`0046a370`: the default forms of the game, built from the tables
+//! [`DEFAULT_FORMS_A`] to [`DEFAULT_FORMS_D`] and a few hand-written
+//! blocks), `Sky::GetInstance`, the debug reports `CheckModels`,
+//! `CheckTexturesRecurse`, `CheckIcons` and `CheckForNiRawImageData`
+//! (settings in the exe's data decide what they do), the barter container
+//! (`0046f310`, `RemoveItemBarterContainer`, the two clear functions), the
+//! class/race sort `0046fb50`, `IsDLCPackageName` and the one-line accessors
+//! the compiler emitted next to them (the map getters of a
+//! `NiTexturingProperty`, flag getters, ...).
+//!
+//! Notes for session 4:
+//! - The decompiler hung pushed words on the wrong call again: in
+//!   `CheckIcons`/`CheckModels` the virtual `0x18` of an icon object takes no
+//!   argument (the `PUSH` before it belongs to `sprintf_s`), `005d43c0`
+//!   takes none (the word pushed before it is the argument of
+//!   `ExtraDataList::SetPersistentCell`), and `0044ddc0` is a plain getter
+//!   (the two pushes before it belong to `GetObjectInList`).
+//! - `GenerateDefaultObjects` does not look up the help messages
+//!   (`0x168`..) or the second image space (`0x161`) before making them.
+//! - `CheckModels` and `CheckIcons` read settings through
+//!   `00408d60(setting object)` (a pointer to the value byte).
+//!
 //! Notes for session 3:
 //! - Form type numbers (the byte at `TESForm +4` and the number
 //!   `TESFile::GetTESForm` answers for a record) index a name table in the
@@ -444,7 +469,7 @@ const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
 /// `009740a0(cell)` with the object at [`OBJECT_011E0E80`] as `this`.
 const OBJECT_011E0E80_STEP: u32 = 0x0097_40a0;
 /// Stores its argument in the byte at `0x01202df0`.
-const SET_BYTE_01202DF0: u32 = 0x0044_ada0;
+const SET_FLAG_01202DF0: u32 = 0x0044_ada0;
 /// Whether bit 1 of the word at `+0x244` of the object is set.
 const OBJECT_011DDF38_TEST: u32 = 0x0042_ce10;
 /// `bClearingData` of the handler it is called on (`+0x61D`).
@@ -2919,7 +2944,7 @@ pub fn tes_data_handler_unload_cell(e: &mut Engine, _this: Ptr<TESDataHandler>, 
     if cell.is_null() || e.call(FORM_HAS_FLAG_BIT_5, &args![cell]).bool() {
         return;
     }
-    e.call(SET_BYTE_01202DF0, &args![1u32]);
+    e.call(SET_FLAG_01202DF0, &args![1u32]);
     let mut remembered = 0u8;
     let object: u32 = e.global(OBJECT_011DDF38);
     if e.call(OBJECT_011DDF38_TEST, &args![object]).bool() {
@@ -2953,7 +2978,7 @@ pub fn tes_data_handler_unload_cell(e: &mut Engine, _this: Ptr<TESDataHandler>, 
     if e.call(OBJECT_011DDF38_TEST, &args![object]).bool() {
         fn_004623f0(e, Ptr::new(object), remembered);
     }
-    e.call(SET_BYTE_01202DF0, &args![0u32]);
+    e.call(SET_FLAG_01202DF0, &args![0u32]);
 }
 
 // Translated from 004623f0 (decompiled, FalloutNV.exe 1.4.0.525)
@@ -5668,6 +5693,2776 @@ pub fn fn_0046a060(e: &mut Engine, this: Ptr) -> bool {
     e.mem.u32(this.addr() + 0xa8) & 0x20 != 0
 }
 
+// ---------------------------------------------------------------------------
+// Session 4: `0046a080` to `0046feb0`.
+// ---------------------------------------------------------------------------
+
+/// Virtual slot `0x1c8` of a reference (called with 0 by `CheckModels`).
+const REFERENCE_VTABLE_SLOT_1C8: u32 = 0x1c8;
+
+// Callees and data of the placement of projectiles and explosions.
+/// `009bca60`: creates a projectile (cdecl, 16 words) and `009ac9c0`: creates
+/// an explosion (cdecl, 16 words).
+const PROJECTILE_CREATE: u32 = 0x009b_ca60;
+const EXPLOSION_CREATE: u32 = 0x009a_c9c0;
+/// `TESObjectREFR::GetWorldSpace` (Xbox PDB).
+const REFERENCE_GET_WORLD_SPACE: u32 = 0x0057_5d70;
+/// `NiMatrix3::FromEulerAnglesZYX(this, z, y, x)` (Xbox PDB).
+const MATRIX_FROM_EULER_ANGLES_ZYX: u32 = 0x00a5_9780;
+/// `"CELLS: Trying to create an explosion in an unloaded cell: %i, %i."`.
+const UNLOADED_CELL_FORMAT: u32 = 0x0101_8c08;
+/// Form ids of the base forms for which an explosion is created with the
+/// player as the cause.
+const PLAYER_EXPLOSION_FORM_IDS: [u32; 3] = [0x000c_def0, 0x0016_af00, 0x0017_2fbd];
+/// `"DataHandler: internal error"` and
+/// `"DataHandler: unrecognized form\r\nLook in the %s file for more info.\r\n"`.
+const HANDLER_ERROR_MESSAGE: u32 = 0x0101_8c4c;
+const HANDLER_UNRECOGNIZED_FORM_FORMAT: u32 = 0x0101_8c68;
+/// Answers the name of the warnings file (no arguments).
+const WARNINGS_FILE_NAME: u32 = 0x00c3_bb80;
+/// `"..\Fallout Shared\Sky\Sky.h"`, the `Sky` singleton (pointer variable)
+/// and its constructor.
+const SKY_HEADER_FILE: u32 = 0x0101_95e8;
+const SKY_SINGLETON: u32 = 0x011c_cb78;
+const SKY_CONSTRUCT: u32 = 0x0063_9d40;
+
+// Settings (INI settings): `00408d60(setting)` answers a pointer to the value
+// of a setting object; the debug code below reads one byte.
+const SETTING_VALUE: u32 = 0x0040_8d60;
+const SETTING_SKIP_MODEL_CHECK: u32 = 0x011c_408c;
+const SETTING_011C3FA8: u32 = 0x011c_3fa8;
+const SETTING_011C4080: u32 = 0x011c_4080;
+const SETTING_011C3FD4: u32 = 0x011c_3fd4;
+const SETTING_011C4054: u32 = 0x011c_4054;
+const SETTING_SKIP_ICON_CHECK: u32 = 0x011c_3f98;
+const SETTING_011C3F80: u32 = 0x011c_3f80;
+const SETTING_011C4060: u32 = 0x011c_4060;
+
+// `CheckModels`.
+/// `Main::RenderMenuBackground` (Xbox PDB; `this` is the object at
+/// [`OBJECT_011DEA0C`]) and `MessageHandler::Output(file, text, ...)` (Xbox
+/// PDB, cdecl; the text takes format arguments).
+const MAIN_RENDER_MENU_BACKGROUND: u32 = 0x0087_1dc0;
+const MESSAGE_OUTPUT: u32 = 0x00c3_c220;
+/// Whether a `TESModel` has a model name (`this` is the model).
+const MODEL_HAS_NAME: u32 = 0x0048_cee0;
+/// `TESBipedModelForm::GetWorldTESModel_ov2(index)` and
+/// `GetBipedTESModel_ov2(index)` (Xbox PDB): male (0) or female (1) model.
+const BIPED_WORLD_MODEL: u32 = 0x0048_1110;
+const BIPED_BIPED_MODEL: u32 = 0x0048_1150;
+/// `sprintf(buffer, format, ...)` (cdecl, no size).
+const SPRINTF: u32 = 0x00ec_623a;
+/// `00703c00(text)` (cdecl) and `0086ff70()` (`this` is the object at
+/// [`OBJECT_011DEA0C`]): the loading text of the menu.
+const SET_LOADING_TEXT: u32 = 0x0070_3c00;
+const MENU_STEP_86FF70: u32 = 0x0086_ff70;
+/// `ModelLoader::QueueReference(reference, 0, 0)` (Xbox PDB; `this` is the
+/// object at [`MODEL_LOADER`]) and `IOManager::LoadQueuedPriority` (`this` is
+/// the object at [`IO_MANAGER`]).
+const MODEL_LOADER_QUEUE_REFERENCE: u32 = 0x0044_4850;
+const MODEL_LOADER: u32 = 0x011c_3b3c;
+const IO_MANAGER_LOAD_QUEUED_PRIORITY: u32 = 0x0045_6520;
+const IO_MANAGER: u32 = 0x0120_2d98;
+/// `0047d1a0(base form, &flags)` (cdecl): answers whether the form has actor
+/// base data and stores its flags word (`TESActorBaseData`).
+const ACTOR_BASE_FLAGS: u32 = 0x0047_d1a0;
+/// `TESHavokUtilities::InspectHavokObjects(node, &convex vertices,
+/// &triangle collections)` (Xbox PDB, cdecl).
+const INSPECT_HAVOK_OBJECTS: u32 = 0x0062_bd00;
+/// `TESBoundObject::GetBoundSize` (Xbox PDB; answer in `ST0`).
+const BOUND_OBJECT_GET_BOUND_SIZE: u32 = 0x0050_ebf0;
+/// `TES::GetFaceCount(node, 1)` and `TES::CleanUpUnusedTextures(0)` (Xbox PDB).
+const TES_GET_FACE_COUNT: u32 = 0x0045_6670;
+const TES_CLEAN_UP_UNUSED_TEXTURES: u32 = 0x0045_2490;
+/// Whether bit `0x20` of the flags word (`+8`) of a form is set.
+const FORM_FLAG_BIT_5_AT_8: u32 = 0x0044_0d80;
+/// `TESModel` (RTTI type descriptor) and `TESBipedModelForm`, targets of the
+/// casts of `CheckModels`; `TESIcon` and `TESTexture` for `CheckIcons`.
+const MODEL_TYPE_DESCRIPTOR: u32 = 0x0118_31e8;
+const BIPED_MODEL_TYPE_DESCRIPTOR: u32 = 0x0118_3978;
+const ICON_TYPE_DESCRIPTOR: u32 = 0x0118_3200;
+const TEXTURE_TYPE_DESCRIPTOR: u32 = 0x0118_3218;
+/// The form type byte of each of the 0x57 kinds `CheckModels` checks (bytes)
+/// and their names (word pointers to text).
+const MODEL_KIND_TYPES: u32 = 0x0118_a598;
+const MODEL_KIND_NAMES: u32 = 0x0118_a2d8;
+const MODEL_KIND_COUNT: u32 = 0x57;
+/// The index of the kind whose models are in `Trees\` in the table above.
+const MODEL_KIND_TREE: u32 = 10;
+/// Strings of `CheckModels` and `CheckIcons`.
+const MODEL_INVALID_TYPE_FORMAT: u32 = 0x0101_9604;
+const MODEL_NOT_SELECTED_FORMAT: u32 = 0x0101_9628;
+const MODEL_COLLISION_FORMAT: u32 = 0x0101_9658;
+const MODEL_WARNINGS_FORMAT: u32 = 0x0101_9680;
+const MODEL_LOADING_FORMAT: u32 = 0x0101_96bc;
+const MODEL_NOT_FOUND_FORMAT: u32 = 0x0101_96e0;
+const MODEL_X_PREFIX_FORMAT: u32 = 0x0101_970c;
+const MODEL_MESHES_FORMAT: u32 = 0x0101_9710;
+const MODEL_TREES_FORMAT: u32 = 0x0101_971c;
+const MODEL_PREFIX_FEMALE_BIPED: u32 = 0x0101_9728;
+const MODEL_PREFIX_MALE_BIPED: u32 = 0x0101_9738;
+const MODEL_PREFIX_FEMALE_WORLD: u32 = 0x0101_9744;
+const MODEL_PREFIX_MALE_WORLD: u32 = 0x0101_9754;
+const COLLISION_INFO_FILE: u32 = 0x0101_9760;
+const COLLISION_INFO_HEADER: u32 = 0x0101_9780;
+const TWO_STRINGS_FORMAT: u32 = 0x0101_996c;
+const ICON_MISSING_FORMAT: u32 = 0x0101_9974;
+const ICON_FILE_MISSING_FORMAT: u32 = 0x0101_9944;
+const MENU_ICON_MISSING_FORMAT: u32 = 0x0101_98b8;
+const TEXTURE_MISSING_FORMAT: u32 = 0x0101_991c;
+const TEXTURE_FILE_MISSING_FORMAT: u32 = 0x0101_98e0;
+const LANDSCAPE_PATH_FORMAT: u32 = 0x0101_990c;
+const RAW_IMAGE_DATA_FORMAT: u32 = 0x0101_9998;
+/// `00408da0(this)`: the text of a `BSStringT` at `this + 4`, or `""`
+/// (`MapMarkerData::GetLocationName` in the engine map).
+const ITEM_NAME_TEXT: u32 = 0x0040_8da0;
+/// `strlen` (cdecl wrapper, one argument).
+const STRING_LENGTH: u32 = 0x0044_a670;
+/// `TESBipedModelForm::GetIcon(index)` (`00481230`): the icon text.
+const BIPED_ICON_TEXT: u32 = 0x0048_1230;
+/// The name of a form type (cdecl, the type byte; `004b1b60`).
+const FORM_TYPE_LABEL: u32 = 0x004b_1b60;
+
+// `CheckTexturesRecurse`.
+/// `NiAVObject::GetProperty(type)` (Xbox PDB), the cast the game applies to
+/// the answer (`00653270(rtti object, property)`, cdecl) and the two RTTI
+/// objects it is called with.
+const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+const PROPERTY_CAST: u32 = 0x0065_3270;
+const TEXTURING_PROPERTY_RTTI: u32 = 0x011f_49a4;
+const TEXTURE_SINK_RTTI: u32 = 0x011f_444c;
+/// `005585e0(texture)`: the word `0046e8e0` hands to the sink.
+const TEXTURE_INFO: u32 = 0x0055_85e0;
+/// `NiNode`'s child count and child at an index.
+const NODE_CHILD_COUNT: u32 = 0x0043_b480;
+const NODE_CHILD_AT: u32 = 0x0043_b4a0;
+/// `"Detail Map"`, `"Bump Map"`, `"Glow Map"`, `"Gloss Map"`, `"Dark Map"`
+/// and `"Decal Map"`.
+const DETAIL_MAP_NAME: u32 = 0x0101_98ac;
+const BUMP_MAP_NAME: u32 = 0x0101_98a0;
+const GLOW_MAP_NAME: u32 = 0x0101_9894;
+const GLOSS_MAP_NAME: u32 = 0x0101_9888;
+const DARK_MAP_NAME: u32 = 0x0101_987c;
+const DECAL_MAP_NAME: u32 = 0x0101_9870;
+/// Offset of the map array of a `NiTexturingProperty`.
+const TEXTURE_MAPS: u32 = 0x1c;
+
+// `CheckForNiRawImageData` (Windows imports, by import slot).
+const CREATE_FILE_A: u32 = 0x00fd_f088;
+const GET_FILE_SIZE: u32 = 0x00fd_f084;
+const READ_FILE: u32 = 0x00fd_f080;
+const CLOSE_HANDLE: u32 = 0x00fd_f07c;
+const GENERIC_READ: u32 = 0x8000_0000;
+const OPEN_EXISTING: u32 = 3;
+const FILE_FLAGS_SEQUENTIAL_SCAN: u32 = 0x0800_0001;
+const RAW_IMAGE_DATA_TAG: &[u8; 14] = b"NiRawImageData";
+
+// `EnumReferencesCloseToPoint`.
+/// The world space enumeration and the interior cell enumeration (`this`
+/// first, six words after).
+const WORLD_ENUM_REFERENCES: u32 = 0x0058_85f0;
+const CELL_ENUM_REFERENCES: u32 = 0x0054_da20;
+
+// The barter container.
+/// `InventoryChanges::InventoryChanges(owner)` (Xbox PDB; the object is
+/// 0x14 bytes).
+const INVENTORY_CHANGES_CONSTRUCT: u32 = 0x004b_efb0;
+/// `ExtraDataList::GetContainerChanges` and `GetMerchantContainer` (Xbox PDB).
+const EXTRA_GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
+const EXTRA_GET_MERCHANT_CONTAINER: u32 = 0x0042_1400;
+/// `InventoryChanges::RunScripts(owner)` (Xbox PDB), and
+/// `004d26d0(this = changes; barter, owner, 0)`: copies the items of one
+/// container into another.
+const INVENTORY_CHANGES_RUN_SCRIPTS: u32 = 0x004d_2480;
+const INVENTORY_CHANGES_COPY_ITEMS: u32 = 0x004d_26d0;
+/// `0054b260(this = cell; reference, barter container)`.
+const CELL_STEP_54B260: u32 = 0x0054_b260;
+/// The base form of an inventory entry (word at `+8`).
+const ENTRY_GET_OBJECT: u32 = 0x0044_ddc0;
+/// `Actor::GetCurrentWeapon` and `TESObjectWEAP::GetCurrentAmmo(actor)` (Xbox
+/// PDB).
+const ACTOR_GET_CURRENT_WEAPON: u32 = 0x008a_1710;
+const WEAPON_GET_CURRENT_AMMO: u32 = 0x0052_5980;
+/// `ExtraDataList::GetOriginalReference`, `GetCount` (a 16-bit answer),
+/// `RemoveOriginalReferenceExtra`, `GetScript` and `RemoveOwnership` (Xbox
+/// PDB).
+const EXTRA_GET_ORIGINAL_REFERENCE: u32 = 0x0041_8630;
+const EXTRA_GET_COUNT: u32 = 0x0041_8770;
+const EXTRA_REMOVE_ORIGINAL_REFERENCE: u32 = 0x0041_8600;
+const EXTRA_GET_SCRIPT: u32 = 0x0041_8800;
+const EXTRA_REMOVE_OWNERSHIP: u32 = 0x0041_aed0;
+/// `BaseExtraList::ItemsInList` and `GetExtraData(type)` (Xbox PDB).
+const EXTRA_ITEMS_IN_LIST: u32 = 0x0040_fe20;
+const EXTRA_GET_DATA: u32 = 0x0041_0220;
+/// `CombatProcedureAttackMelee::Initialize` (the map's name for the body
+/// that stores the count of an inventory entry at `+4`), `ItemChange::GetWorn(0)`
+/// and `InventoryChanges::GetObjectInList(form, 1, 0)` (Xbox PDB).
+const ENTRY_SET_COUNT: u32 = 0x006e_cd40;
+const ENTRY_GET_WORN: u32 = 0x004b_ddd0;
+const INVENTORY_CHANGES_GET_OBJECT_IN_LIST: u32 = 0x004b_fba0;
+/// `InventoryChanges::ClearAllChangeItems` (Xbox PDB name of `004d3660`).
+const INVENTORY_CHANGES_CLEAR_ALL: u32 = 0x004d_3660;
+/// The first node of the list of an inventory entry (`this + 0`).
+const LIST_FIRST_NODE: u32 = 0x0055_9450;
+/// The number of items of a list (`this` is the list).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// Stores an item in a list node (`this` is the node, the argument the
+/// address of a word holding the item; a null item is ignored).
+const LIST_STORE_ITEM: u32 = 0x0072_6c60;
+/// Virtual slots: of the player `RemoveItem` (`0x3d0`, arguments reference,
+/// count, 0), of a reference the removal `0x17c` (ten words).
+const PLAYER_VTABLE_REMOVE_ITEM: u32 = 0x3d0;
+const REFERENCE_VTABLE_REMOVE_ITEM: u32 = 0x17c;
+/// `_mbsicmp` (cdecl wrapper body).
+const MBSICMP: u32 = 0x00ec_858a;
+/// `_strnicmp(first, second, count)` (cdecl wrapper).
+const STRING_COMPARE_N: u32 = 0x0045_64f0;
+/// `__makepath_s(buffer, size, drive, dir, name, ext)` (cdecl).
+const MAKE_PATH_S: u32 = 0x00ec_825b;
+/// `"DeadMoney"`, `"HonestHearts"`, `"OldWorldBlues"` and `"LonesomeRoad"`.
+const DEAD_MONEY_NAME: u32 = 0x0101_9a04;
+const HONEST_HEARTS_NAME: u32 = 0x0101_99f4;
+const OLD_WORLD_BLUES_NAME: u32 = 0x0101_99e4;
+const LONESOME_ROAD_NAME: u32 = 0x0101_99d4;
+
+// Translated from 0046a080 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates a projectile for `base_form` (a `PROJ` form, else null is
+/// returned) at `position` (three floats) with `rotation` (three floats): the
+/// target cell is `cell` unless `world_space` is not null, then it is the
+/// cell of that world space at the position (the position as integers, `>>
+/// 12`; a log message when there is none). With no target cell the answer is
+/// null; else it is the answer of `009bca60` (16 words: the base form, three
+/// zeros, the position, the rotation z and x, four zeros, two floats `0.0`,
+/// the cell). `this` is not read. Called by `004698a0`.
+pub fn fn_0046a080(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    base_form: u32,
+    position: Ptr,
+    rotation: Ptr,
+    cell: u32,
+    world_space: u32,
+) -> u32 {
+    if base_form == 0 || e.call(FORM_GET_TYPE, &args![base_form]).u32() != FORM_TYPE_PROJECTILE {
+        return 0;
+    }
+    let target_cell = if world_space != 0 {
+        let x = e.mem.u32(position.addr());
+        let x = e.call(FLOAT_TO_INT, &args![x]).i32() >> 12;
+        let y = e.mem.u32(position.addr() + 4);
+        let y = e.call(FLOAT_TO_INT, &args![y]).i32() >> 12;
+        let found = e.call(WORLD_GET_CELL, &args![world_space, x, y]).u32();
+        if found == 0 {
+            e.call(LOG_MESSAGE, &args![UNLOADED_CELL_FORMAT, x, y]);
+        }
+        found
+    } else {
+        cell
+    };
+    if target_cell == 0 {
+        return 0;
+    }
+    let position_words: Vec<u32> = (0..3).map(|i| e.mem.u32(position.addr() + 4 * i)).collect();
+    let rotation_x = e.mem.u32(rotation.addr());
+    let rotation_z = e.mem.u32(rotation.addr() + 8);
+    e.call(
+        PROJECTILE_CREATE,
+        &args![
+            base_form,
+            0u32,
+            0u32,
+            0u32,
+            position_words[0],
+            position_words[1],
+            position_words[2],
+            rotation_z,
+            rotation_x,
+            0u32,
+            0u32,
+            0u32,
+            0u32,
+            0.0f32,
+            0.0f32,
+            target_cell
+        ],
+    )
+    .u32()
+}
+
+// Translated from 0046a190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates an explosion for `base_form` (an `EXPL` form, else null is
+/// returned), the same way `fn_0046a080` places a projectile: the target
+/// cell is `cell` or, with a world space, the cell at the position (a log
+/// message when there is none and the player is in another world space). The
+/// rotation (three floats, z first) builds a matrix; the cause is the player
+/// when the form id is one of [`PLAYER_EXPLOSION_FORM_IDS`], else none. The
+/// answer is that of `009ac9c0` (the base form, the cause, 0, the cell, the
+/// position, the nine matrix words). Without a target cell but with a world
+/// space the new explosion is made persistent and its extra data list gets
+/// the persistent cell of the world space (`005f36f0`, a word at `+0x34`).
+/// `this` is not read.
+pub fn fn_0046a190(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    base_form: u32,
+    position: Ptr,
+    rotation: Ptr,
+    cell: u32,
+    world_space: u32,
+) -> u32 {
+    if base_form == 0 || e.call(FORM_GET_TYPE, &args![base_form]).u32() != FORM_TYPE_EXPLOSION {
+        return 0;
+    }
+    let target_cell = if world_space != 0 {
+        let x = e.mem.u32(position.addr());
+        let x = e.call(FLOAT_TO_INT, &args![x]).i32() >> 12;
+        let y = e.mem.u32(position.addr() + 4);
+        let y = e.call(FLOAT_TO_INT, &args![y]).i32() >> 12;
+        let found = e.call(WORLD_GET_CELL, &args![world_space, x, y]).u32();
+        if found == 0 {
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let player_world_space = e.call(REFERENCE_GET_WORLD_SPACE, &args![player]).u32();
+            if world_space != player_world_space {
+                e.call(LOG_MESSAGE, &args![UNLOADED_CELL_FORMAT, x, y]);
+            }
+        }
+        found
+    } else {
+        cell
+    };
+    let rotation_words: Vec<u32> = (0..3).map(|i| e.mem.u32(rotation.addr() + 4 * i)).collect();
+    let position_words: Vec<u32> = (0..3).map(|i| e.mem.u32(position.addr() + 4 * i)).collect();
+    let explosion = e.with_stack(0x24, |e, matrix| {
+        e.call(LIST_HEAD_ITEM, &args![matrix]);
+        e.call(
+            MATRIX_FROM_EULER_ANGLES_ZYX,
+            &args![
+                matrix,
+                rotation_words[2],
+                rotation_words[1],
+                rotation_words[0]
+            ],
+        );
+        let mut cause = 0u32;
+        let form_id = e.call(FORM_GET_ID, &args![base_form]).u32();
+        if PLAYER_EXPLOSION_FORM_IDS.contains(&form_id) {
+            cause = e.global::<u32>(PLAYER_SINGLETON);
+        }
+        let mut words = args![base_form, cause, 0u32, target_cell];
+        words.extend(&position_words);
+        for i in 0..9 {
+            let word = e.mem.u32(matrix.addr() + 4 * i);
+            words.push(word);
+        }
+        e.call(EXPLOSION_CREATE, &words).u32()
+    });
+    if target_cell == 0 && world_space != 0 {
+        e.call(REFERENCE_SET_PERSISTS, &args![explosion, 1u32]);
+        let persistent_cell = e.call(ITEM_GET_CELL, &args![world_space]).u32();
+        let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![explosion]).u32();
+        e.call(
+            EXTRA_SET_PERSISTENT_CELL,
+            &args![extra_list, persistent_cell],
+        );
+    }
+    explosion
+}
+
+// Translated from 0046a330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The handler's error report: for `code` 3 logs "unrecognized form" with the
+/// name `00c3bb80` answers (the warnings file), else logs "internal error".
+/// `this` is not read.
+pub fn fn_0046a330(e: &mut Engine, _this: Ptr<TESDataHandler>, code: u32) {
+    if code == 3 {
+        let file_name = e.call(WARNINGS_FILE_NAME, &args![]).u32();
+        e.call(
+            LOG_MESSAGE,
+            &args![HANDLER_UNRECOGNIZED_FORM_FORMAT, file_name],
+        );
+    } else {
+        e.call(LOG_MESSAGE, &args![HANDLER_ERROR_MESSAGE]);
+    }
+}
+
+// Translated from 0046dcc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte at `this + 0xF4` (of a weapon form: used by the
+/// "Fists" default object).
+pub fn fn_0046dcc0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0xf4, value);
+}
+
+// Translated from 0046dce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float `value` at `this + 0x24` (of a global form).
+pub fn fn_0046dce0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr() + 0x24, value);
+}
+
+// Translated from 0046dd00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Sky::GetInstance` (Xbox PDB): the singleton at `0x011ccb78`, created on
+/// first use (allocation scope kind 0x21, line 0x118 of `Sky.h`; the object
+/// is 0x138 bytes, constructor `00639d40`). The compiler's exception frame is
+/// not translated.
+pub fn sky_get_instance(e: &mut Engine) -> u32 {
+    if e.global::<u32>(SKY_SINGLETON) == 0 {
+        e.with_stack(4, |e, scope| {
+            e.call(
+                SCOPE_ENTER,
+                &args![scope, 0x21u32, 1u32, SKY_HEADER_FILE, 0x118u32],
+            );
+            let memory = e.call(OPERATOR_NEW, &args![0x138u32]).u32();
+            let sky = if memory == 0 {
+                0
+            } else {
+                e.call(SKY_CONSTRUCT, &args![memory]).u32()
+            };
+            e.set_global(SKY_SINGLETON, sky);
+            e.call(SCOPE_LEAVE, &args![scope]);
+        });
+    }
+    e.global::<u32>(SKY_SINGLETON)
+}
+
+// Translated from 0046e850 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A cdecl wrapper of `__makepath_s(buffer, size, drive, dir, name,
+/// extension)` (`00ec825b`); returns its result.
+pub fn fn_0046e850(
+    e: &mut Engine,
+    buffer: Ptr,
+    size: u32,
+    drive: Ptr,
+    directory: Ptr,
+    name: Ptr,
+    extension: Ptr,
+) -> i32 {
+    e.call(
+        MAKE_PATH_S,
+        &args![buffer, size, drive, directory, name, extension],
+    )
+    .i32()
+}
+
+// Translated from 0046e880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `bCheckingModels` (`+0x61F`).
+pub fn fn_0046e880(e: &mut Engine, this: Ptr<TESDataHandler>, value: u8) {
+    e.set(this, TESDataHandler::bCheckingModels, value != 0);
+}
+
+// Translated from 0046e8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x2B8` of the TLS block (the count `CheckModels` compares
+/// before and after loading a model: the warnings of the thread).
+pub fn fn_0046e8a0(e: &mut Engine) -> u32 {
+    let tls = e.tls();
+    e.mem.u32(tls + 0x2b8)
+}
+
+// Translated from 0046e8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x20` of the byte at `this + 0x100` is set.
+pub fn fn_0046e8c0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x100) & 0x20 != 0
+}
+
+// Translated from 0046e8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sink `CheckTexturesRecurse` hands every texture of a geometry to
+/// (`texture`, the geometry, the map's name, the model path and whether the
+/// geometry has an alpha property; only `texture` is read): with a texture,
+/// `00653270(0x011f444c, 005585e0(texture))`. `this` is not read. The four
+/// words after the texture are parameters the code never reads.
+pub fn fn_0046e8e0(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    texture: u32,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+    _unused_4: u32,
+) {
+    if texture != 0 {
+        let info = e.call(TEXTURE_INFO, &args![texture]).u32();
+        e.call(PROPERTY_CAST, &args![TEXTURE_SINK_RTTI, info]);
+    }
+}
+
+/// The map at `index` of the map array at `+0x1C` of a `NiTexturingProperty`
+/// (`00877a30(array, index)` answers the address of the map's slot).
+fn texture_map(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    let slot = e
+        .call(ARRAY_AT, &args![this.addr() + TEXTURE_MAPS, index])
+        .u32();
+    e.mem.u32(slot)
+}
+
+// Translated from 0046eb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The dark map (map 1) of a `NiTexturingProperty`.
+pub fn fn_0046eb00(e: &mut Engine, this: Ptr) -> u32 {
+    texture_map(e, this, 1)
+}
+
+// Translated from 0046eb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The detail map (map 2) of a `NiTexturingProperty`.
+pub fn fn_0046eb20(e: &mut Engine, this: Ptr) -> u32 {
+    texture_map(e, this, 2)
+}
+
+// Translated from 0046eb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The gloss map (map 3) of a `NiTexturingProperty`.
+pub fn fn_0046eb40(e: &mut Engine, this: Ptr) -> u32 {
+    texture_map(e, this, 3)
+}
+
+// Translated from 0046eb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The glow map (map 4) of a `NiTexturingProperty`.
+pub fn fn_0046eb60(e: &mut Engine, this: Ptr) -> u32 {
+    texture_map(e, this, 4)
+}
+
+// Translated from 0046eb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The bump map (map 5) of a `NiTexturingProperty`.
+pub fn fn_0046eb80(e: &mut Engine, this: Ptr) -> u32 {
+    texture_map(e, this, 5)
+}
+
+// Translated from 0046eba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Decal map `index` (map `index + 8`) of a `NiTexturingProperty`.
+pub fn fn_0046eba0(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    texture_map(e, this, index.wrapping_add(8))
+}
+
+// Translated from 0046ebd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of decal maps of a `NiTexturingProperty`: bits 4 to 11 of the
+/// flags word at `+0x18` (`fn_0046ebf0` with mask `0xFF0` and shift 4).
+pub fn fn_0046ebd0(e: &mut Engine, this: Ptr) -> u16 {
+    fn_0046ebf0(e, this, 0xff0, 4) as u16
+}
+
+// Translated from 0046ebf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `(word at +0x18 & mask) >> (shift & 0x1F)`, with the 16-bit word and mask
+/// zero-extended and an arithmetic shift.
+pub fn fn_0046ebf0(e: &mut Engine, this: Ptr, mask: u16, shift: u16) -> i32 {
+    let word = e.mem.u16(this.addr() + 0x18);
+    ((word & mask) as i32) >> ((shift as u8) & 0x1f)
+}
+
+// Translated from 0046f070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 1 of the word at `this + 0xA8` is set.
+pub fn fn_0046f070(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0xa8) & 2 != 0
+}
+
+// Translated from 0046f090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls virtual `0x18` of the object embedded at `this + 0x8C` (with that
+/// address as `this`; the vtable word is the first word of the object) and
+/// returns its answer (the directory text of the icon of a
+/// `TESBipedModelForm`).
+pub fn fn_0046f090(e: &mut Engine, this: Ptr) -> u32 {
+    e.vcall(this.addr() + 0x8c, 0x18, &args![]).u32()
+}
+
+// Translated from 0046faf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::ClearBarterContainer` (Xbox PDB): with a barter
+/// container (`+0x628`), `InventoryChanges::ClearAllChangeItems` on it.
+pub fn tes_data_handler_clear_barter_container(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let container = e.get(this, TESDataHandler::pBarterContainer);
+    if !container.is_null() {
+        e.call(INVENTORY_CHANGES_CLEAR_ALL, &args![container]);
+    }
+}
+
+// Translated from 0046fb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same for the recipe container (`+0x62C`).
+pub fn fn_0046fb20(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let container = e.get(this, TESDataHandler::pRecipeContainer);
+    if !container.is_null() {
+        e.call(INVENTORY_CHANGES_CLEAR_ALL, &args![container]);
+    }
+}
+
+// Translated from 0046fd30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A cdecl wrapper of `_mbsicmp(first, second)` (`00ec858a`); returns its
+/// result (the map names it `previous_character`, which it is not).
+pub fn fn_0046fd30(e: &mut Engine, first: u32, second: u32) -> i32 {
+    e.call(MBSICMP, &args![first, second]).i32()
+}
+
+// Translated from 0046fd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks `animObjects` (`+0x1A0`, the list `00461090` answers) and returns
+/// the `skip`-th item (counting from 0) whose word at `+0x38` equals `value`
+/// (`fn_0046fdd0`); null when there is none or the list holds a null item.
+pub fn fn_0046fd50(e: &mut Engine, this: Ptr<TESDataHandler>, value: u32, skip: u32) -> u32 {
+    let mut skip = skip;
+    let mut node = this.at(TESDataHandler::animObjects).addr();
+    while node != 0 {
+        let item = list_item(e, node);
+        if item == 0 {
+            return 0;
+        }
+        if fn_0046fdd0(e, Ptr::new(item), value) {
+            if skip == 0 {
+                return item;
+            }
+            skip = skip.wrapping_sub(1);
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    0
+}
+
+// Translated from 0046fdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at `this + 0x38` equals `value`.
+pub fn fn_0046fdd0(e: &mut Engine, this: Ptr, value: u32) -> bool {
+    e.mem.u32(this.addr() + 0x38) == value
+}
+
+// Translated from 0046fdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns 0.
+pub fn fn_0046fdf0(_e: &mut Engine, _this: Ptr) -> u32 {
+    0
+}
+
+// Translated from 0046fe10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of bits among 1, 2, 4 and 8 set in the byte at `this`
+/// (`fn_0046fe90` for each).
+pub fn fn_0046fe10(e: &mut Engine, this: Ptr) -> u32 {
+    [1u8, 2, 4, 8]
+        .iter()
+        .filter(|&&mask| fn_0046fe90(e, this, mask))
+        .count() as u32
+}
+
+// Translated from 0046fe90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the byte at `this` and `mask` share a bit (both sign-extended).
+pub fn fn_0046fe90(e: &mut Engine, this: Ptr, mask: u8) -> bool {
+    (e.mem.i8(this.addr()) as i32 & mask as i8 as i32) != 0
+}
+
+// Translated from 0046feb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::IsDLCPackageName` (Xbox PDB): the number of the add-on
+/// whose name starts `name`: 1 `DeadMoney` (9 characters compared), 2
+/// `HonestHearts`, 3 `OldWorldBlues`, 4 `LonesomeRoad` (12 characters each,
+/// case-insensitive), chosen by the first character (`D`, `H`, `O`, `L`);
+/// 0 for a name shorter than 2 characters or anything else. `this` is not
+/// read.
+pub fn tes_data_handler_is_dlc_package_name(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    name: u32,
+) -> u32 {
+    if e.call(STRING_LENGTH, &args![name]).u32() < 2 {
+        return 0;
+    }
+    let (package, length, number) = match e.mem.u8(name) {
+        b'D' => (DEAD_MONEY_NAME, 9u32, 1u32),
+        b'H' => (HONEST_HEARTS_NAME, 0xc, 2),
+        b'L' => (LONESOME_ROAD_NAME, 0xc, 4),
+        b'O' => (OLD_WORLD_BLUES_NAME, 0xc, 3),
+        _ => return 0,
+    };
+    if e.call(STRING_COMPARE_N, &args![name, package, length])
+        .u32()
+        == 0
+    {
+        number
+    } else {
+        0
+    }
+}
+
+// Translated from 0046f280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::EnumReferencesCloseToPoint` (Xbox PDB): with a cell and a
+/// non-null `callback` (the sixth word), an interior cell passes the six
+/// words on to `0054da20` (this = the cell) and an exterior cell to `005885f0`
+/// (this = its world space, only if it has one). The words are passed
+/// unchanged (`x` and `y` are floats the code only copies). `this` is not
+/// read.
+#[allow(clippy::too_many_arguments)]
+pub fn tes_data_handler_enum_references_close_to_point(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    cell: u32,
+    first: u32,
+    x: f32,
+    second: u32,
+    y: f32,
+    callback: u32,
+    context: u32,
+) {
+    if cell == 0 || callback == 0 {
+        return;
+    }
+    if !e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+        if world_space != 0 {
+            e.call(
+                WORLD_ENUM_REFERENCES,
+                &args![world_space, first, x, second, y, callback, context],
+            );
+        }
+    } else {
+        e.call(
+            CELL_ENUM_REFERENCES,
+            &args![cell, first, x, second, y, callback, context],
+        );
+    }
+}
+
+// Translated from 0046fb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sorts two lists of the handler by name, case-insensitively: the list at
+/// `+0x80` (`listClasses`) and the list at `+0x60` (`listRaces`), each by a
+/// bubble sort of `count - 1` passes that swaps the items of neighbouring
+/// nodes when the name of the first (`00408da0(item + 0x18)`) sorts after the
+/// name of the second (`fn_0046fd30`). The swap is `00726c60(node, &item)`
+/// (which stores a non-null item in the node).
+pub fn fn_0046fb50(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    sort_list_by_name(e, this.at(TESDataHandler::listClasses).addr());
+    sort_list_by_name(e, this.at(TESDataHandler::listRaces).addr());
+}
+
+/// One list of `fn_0046fb50` (`list` is the address of the list's first node).
+fn sort_list_by_name(e: &mut Engine, list: u32) {
+    let count = e.call(LIST_COUNT, &args![list]).i32();
+    let mut pass = 0i32;
+    while pass < count - 1 {
+        let mut node = list;
+        while node != 0 {
+            if list_item(e, node) == 0 {
+                break;
+            }
+            let next = e.call(LIST_NEXT, &args![node]).u32();
+            if next != 0 {
+                let first = list_item(e, node);
+                let second = list_item(e, next);
+                if first != 0 && second != 0 {
+                    let second_name = e.call(ITEM_NAME_TEXT, &args![second + 0x18]).u32();
+                    let first_name = e.call(ITEM_NAME_TEXT, &args![first + 0x18]).u32();
+                    if fn_0046fd30(e, first_name, second_name) > 0 {
+                        e.with_stack(8, |e, slots| {
+                            e.mem.set_u32(slots.addr(), first);
+                            e.mem.set_u32(slots.addr() + 4, second);
+                            e.call(LIST_STORE_ITEM, &args![node, slots.addr() + 4]);
+                            let next = e.call(LIST_NEXT, &args![node]).u32();
+                            e.call(LIST_STORE_ITEM, &args![next, slots.addr()]);
+                        });
+                    }
+                }
+            }
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        pass += 1;
+    }
+}
+
+// Translated from 0046e910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CheckTexturesRecurse` (Xbox PDB): walks the scene graph
+/// below `node` (null: nothing). A geometry (virtual `0x1c` answers non-zero)
+/// whose property 5 casts (`00653270(0x011f49a4, property)`) to a
+/// `NiTexturingProperty` hands its detail, bump, glow, gloss and dark maps
+/// and then each decal map to `fn_0046e8e0` (with the geometry, the map's
+/// name, `path` and whether it has property 3); any other node that is a
+/// `NiNode` (virtual `0xc`) recurses into each of its children.
+pub fn tes_data_handler_check_textures_recurse(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    node: u32,
+    path: u32,
+) {
+    if node == 0 {
+        return;
+    }
+    if e.vcall(node, 0x1c, &args![]).u32() != 0 {
+        let alpha = e.call(NODE_GET_PROPERTY, &args![node, 3u32]).u32();
+        let property = e.call(NODE_GET_PROPERTY, &args![node, 5u32]).u32();
+        let texturing = Ptr::new(
+            e.call(PROPERTY_CAST, &args![TEXTURING_PROPERTY_RTTI, property])
+                .u32(),
+        );
+        if texturing.is_null() {
+            return;
+        }
+        let has_alpha = (alpha != 0) as u32;
+        let maps = [
+            (fn_0046eb20(e, texturing), DETAIL_MAP_NAME),
+            (fn_0046eb80(e, texturing), BUMP_MAP_NAME),
+            (fn_0046eb60(e, texturing), GLOW_MAP_NAME),
+            (fn_0046eb40(e, texturing), GLOSS_MAP_NAME),
+            (fn_0046eb00(e, texturing), DARK_MAP_NAME),
+        ];
+        // The game reads each map just before it hands it over.
+        let _ = maps;
+        for (read, name) in [
+            (fn_0046eb20 as fn(&mut Engine, Ptr) -> u32, DETAIL_MAP_NAME),
+            (fn_0046eb80, BUMP_MAP_NAME),
+            (fn_0046eb60, GLOW_MAP_NAME),
+            (fn_0046eb40, GLOSS_MAP_NAME),
+            (fn_0046eb00, DARK_MAP_NAME),
+        ] {
+            let map = read(e, texturing);
+            fn_0046e8e0(e, this, map, node, name, path, has_alpha);
+        }
+        let mut index = 0u32;
+        while index < fn_0046ebd0(e, texturing) as u32 {
+            let map = fn_0046eba0(e, texturing, index);
+            fn_0046e8e0(e, this, map, node, DECAL_MAP_NAME, path, has_alpha);
+            index += 1;
+        }
+    } else if e.vcall(node, 0xc, &args![]).u32() != 0 {
+        let count = e.call(NODE_CHILD_COUNT, &args![node]).u32();
+        let mut index = 0u32;
+        while index < count {
+            let child = e.call(NODE_CHILD_AT, &args![node, index]).u32();
+            if child != 0 {
+                tes_data_handler_check_textures_recurse(e, this, child, path);
+            }
+            index += 1;
+        }
+    }
+}
+
+// Translated from 0046f0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CheckForNiRawImageData` (Xbox PDB): opens the file `path`
+/// (`CreateFileA(path, GENERIC_READ, 1, 0, OPEN_EXISTING, 0x08000001, 0)`),
+/// reads it whole into a block from `operator new` (never freed) and looks
+/// for the text `NiRawImageData` in its first `size - 15` bytes; when found
+/// it logs that the file must be exported again without textures embedded.
+/// The handle is closed. `this` is not read.
+pub fn tes_data_handler_check_for_ni_raw_image_data(
+    e: &mut Engine,
+    _this: Ptr<TESDataHandler>,
+    path: u32,
+) {
+    let file = e
+        .call(
+            CREATE_FILE_A,
+            &args![
+                path,
+                GENERIC_READ,
+                1u32,
+                0u32,
+                OPEN_EXISTING,
+                FILE_FLAGS_SEQUENTIAL_SCAN,
+                0u32
+            ],
+        )
+        .u32();
+    if file == INVALID_HANDLE {
+        return;
+    }
+    let size = e.call(GET_FILE_SIZE, &args![file, 0u32]).u32();
+    if size != 0 {
+        let buffer = e.call(OPERATOR_NEW, &args![size]).u32();
+        let read = e.with_stack(4, |e, count| {
+            e.call(READ_FILE, &args![file, buffer, size, count, 0u32]);
+            e.mem.u32(count.addr())
+        });
+        if read == size && size > 0xf {
+            let mut offset = 0u32;
+            while offset < size - 0xf {
+                let found = RAW_IMAGE_DATA_TAG
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &byte)| e.mem.i8(buffer + offset + i as u32) == byte as i8);
+                if found {
+                    e.call(LOG_MESSAGE, &args![RAW_IMAGE_DATA_FORMAT, path]);
+                    break;
+                }
+                offset += 1;
+            }
+        }
+    }
+    e.call(CLOSE_HANDLE, &args![file]);
+}
+
+/// Whether the setting object at `setting` holds a non-zero byte
+/// (`00408d60(setting)` answers a pointer to its value).
+fn setting_is_set(e: &mut Engine, setting: u32) -> bool {
+    let value = e.call(SETTING_VALUE, &args![setting]).u32();
+    e.mem.u8(value) != 0
+}
+
+/// `FileFinder::Exist(path, 0, 0, -1)` (Xbox PDB, cdecl).
+fn file_exists(e: &mut Engine, path: u32) -> bool {
+    e.call(FILE_FINDER_EXIST, &args![path, 0u32, 0u32, 0xffff_ffffu32])
+        .u32()
+        != 0
+}
+
+/// The two words the debug reports of `CheckModels` and `CheckIcons` print
+/// for a form: the name of its form type (`004b1b60` of the type byte) and
+/// its editor id (virtual `0x130`), read in the order the game does (the
+/// editor id first).
+fn form_report_words(e: &mut Engine, form: u32) -> (u32, u32) {
+    let editor_id = e.vcall(form, FORM_VTABLE_SLOT_130, &args![]).u32();
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+    let label = e.call(FORM_TYPE_LABEL, &args![form_type]).u32();
+    (label, editor_id)
+}
+
+// Translated from 0046ec10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CheckIcons` (Xbox PDB): a debug report, skipped when the
+/// setting at `0x011c3f98` is set or there is no `pAllForms`. For every form
+/// in `TESForm::pAllForms` it checks, and logs when missing, the icon of
+/// a `TESIcon` form (setting `0x011c3f80`; type `0x1e` only when its flag at
+/// `+0xA8` has bit 1), the texture of a `TESTexture` form (setting
+/// `0x011c4060`; none is expected for types 7 and `0x41`; type `0x12` is
+/// looked up under `<directory>\Landscape\`) and the icon of a
+/// `TESBipedModelForm` (setting `0x011c3f80`): the file must exist
+/// (`FileFinder::Exist`) under the directory text plus the name. `this` is
+/// not read.
+pub fn tes_data_handler_check_icons(e: &mut Engine, _this: Ptr<TESDataHandler>) {
+    if setting_is_set(e, SETTING_SKIP_ICON_CHECK) {
+        return;
+    }
+    let all_forms = e.global::<u32>(ALL_FORMS_MAP);
+    if all_forms == 0 {
+        return;
+    }
+    e.with_stack(0x110, |e, frame| {
+        // position, key, form: the three out parameters of `GetNext`; then
+        // the path buffer.
+        let position = frame.addr();
+        let key = frame.addr() + 4;
+        let form_slot = frame.addr() + 8;
+        let buffer = frame.addr() + 0xc;
+        e.mem.set_u32(form_slot, 0);
+        let first = e.call(MAP_FIRST_POSITION, &args![all_forms]).u32();
+        e.mem.set_u32(position, first);
+        while e.mem.u32(position) != 0 {
+            e.call(MAP_GET_NEXT, &args![all_forms, position, key, form_slot]);
+            let form = e.mem.u32(form_slot);
+            if form == 0 {
+                continue;
+            }
+            let cast = |e: &mut Engine, target: u32| {
+                e.call(
+                    DYNAMIC_CAST,
+                    &args![form, 0u32, FORM_TYPE_DESCRIPTOR, target, 0u32],
+                )
+                .u32()
+            };
+            let icon = cast(e, ICON_TYPE_DESCRIPTOR);
+            let texture = cast(e, TEXTURE_TYPE_DESCRIPTOR);
+            let biped = cast(e, BIPED_MODEL_TYPE_DESCRIPTOR);
+            if icon != 0 {
+                check_form_icon(e, form, icon, buffer);
+            } else if texture != 0 {
+                check_form_texture(e, form, texture, buffer);
+            } else if biped != 0 {
+                check_biped_icon(e, form, biped, buffer);
+            }
+        }
+    });
+}
+
+/// The `TESIcon` case of `CheckIcons`.
+fn check_form_icon(e: &mut Engine, form: u32, icon: u32, buffer: u32) {
+    if !setting_is_set(e, SETTING_011C3F80) {
+        return;
+    }
+    if e.call(FORM_GET_TYPE, &args![form]).u32() == 0x1e && !fn_0046f070(e, Ptr::new(form)) {
+        return;
+    }
+    if e.call(MODEL_HAS_NAME, &args![icon]).u32() == 0 {
+        let (label, editor_id) = form_report_words(e, form);
+        e.call(LOG_MESSAGE, &args![ICON_MISSING_FORMAT, label, editor_id]);
+        return;
+    }
+    let name = e.call(ITEM_NAME_TEXT, &args![icon]).u32();
+    let directory = e.vcall(icon, 0x18, &args![]).u32();
+    e.call(
+        FORMAT_S,
+        &args![buffer, 0x104u32, TWO_STRINGS_FORMAT, directory, name],
+    );
+    if !file_exists(e, buffer) {
+        let (label, editor_id) = form_report_words(e, form);
+        let name = e.call(ITEM_NAME_TEXT, &args![icon]).u32();
+        e.call(
+            LOG_MESSAGE,
+            &args![ICON_FILE_MISSING_FORMAT, name, label, editor_id],
+        );
+    }
+}
+
+/// The `TESTexture` case of `CheckIcons`.
+fn check_form_texture(e: &mut Engine, form: u32, texture: u32, buffer: u32) {
+    if !setting_is_set(e, SETTING_011C4060) {
+        return;
+    }
+    if e.call(MODEL_HAS_NAME, &args![texture]).u32() == 0 {
+        let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+        if form_type != 7 && form_type != 0x41 {
+            let (label, editor_id) = form_report_words(e, form);
+            e.call(
+                LOG_MESSAGE,
+                &args![TEXTURE_MISSING_FORMAT, label, editor_id],
+            );
+        }
+        return;
+    }
+    let landscape = e.call(FORM_GET_TYPE, &args![form]).u32() == 0x12;
+    let name = e.call(ITEM_NAME_TEXT, &args![texture]).u32();
+    let directory = e.vcall(texture, 0x18, &args![]).u32();
+    let format = if landscape {
+        LANDSCAPE_PATH_FORMAT
+    } else {
+        TWO_STRINGS_FORMAT
+    };
+    e.call(FORMAT_S, &args![buffer, 0x104u32, format, directory, name]);
+    if !file_exists(e, buffer) {
+        let (label, editor_id) = form_report_words(e, form);
+        let name = e.call(ITEM_NAME_TEXT, &args![texture]).u32();
+        e.call(
+            LOG_MESSAGE,
+            &args![TEXTURE_FILE_MISSING_FORMAT, name, label, editor_id],
+        );
+    }
+}
+
+/// The `TESBipedModelForm` case of `CheckIcons`.
+fn check_biped_icon(e: &mut Engine, form: u32, biped: u32, buffer: u32) {
+    if !setting_is_set(e, SETTING_011C3F80) {
+        return;
+    }
+    let icon = e.call(BIPED_ICON_TEXT, &args![biped, 0u32]).u32();
+    if e.call(STRING_LENGTH, &args![icon]).u32() == 0 {
+        let (label, editor_id) = form_report_words(e, form);
+        e.call(LOG_MESSAGE, &args![ICON_MISSING_FORMAT, label, editor_id]);
+        return;
+    }
+    let directory = fn_0046f090(e, Ptr::new(biped));
+    e.call(
+        FORMAT_S,
+        &args![buffer, 0x104u32, TWO_STRINGS_FORMAT, directory, icon],
+    );
+    if !file_exists(e, buffer) {
+        let (label, editor_id) = form_report_words(e, form);
+        e.call(
+            LOG_MESSAGE,
+            &args![MENU_ICON_MISSING_FORMAT, icon, label, editor_id],
+        );
+    }
+}
+
+/// The locals of `CheckModels` that are buffers, in one block (the game's
+/// stack frame): the pieces of a split path, the path, the loading text and
+/// the three out words of the Havok inspection.
+const MODEL_FRAME_DRIVE: u32 = 0x000;
+const MODEL_FRAME_NAME: u32 = 0x004;
+const MODEL_FRAME_DIRECTORY: u32 = 0x204;
+const MODEL_FRAME_EXTENSION: u32 = 0x30c;
+const MODEL_FRAME_PATH: u32 = 0x40c;
+const MODEL_FRAME_MESSAGE: u32 = 0x514;
+const MODEL_FRAME_CONVEX_VERTICES: u32 = 0x61c;
+const MODEL_FRAME_TRIANGLE_COLLECTIONS: u32 = 0x620;
+const MODEL_FRAME_ACTOR_FLAGS: u32 = 0x624;
+const MODEL_FRAME_SIZE: u32 = 0x630;
+
+/// What `CheckModels` knows about the form it is checking.
+#[derive(Clone, Copy)]
+struct ModelCheck {
+    /// The form (`TESObject`) and its position in the table of kinds.
+    form: u32,
+    kind: u32,
+    /// Virtual `0x154` of the form answered true: no model is expected.
+    excluded: bool,
+    /// The form as a `TESModel` (null if it is none), as a `TESBoundObject`
+    /// and as a `TESBipedModelForm`.
+    model: u32,
+    bound: u32,
+    biped: u32,
+    /// The `load_all` argument of `CheckModels`.
+    load_all: bool,
+    /// The address of the frame block.
+    frame: u32,
+}
+
+// Translated from 0046ddb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::CheckModels` (Xbox PDB): a debug report over every
+/// object of `pObjectList`, skipped when the setting at `0x011c408c` is set.
+/// It sets `bCheckingModels` for its duration, optionally renders the menu
+/// background (setting `0x011c3fa8`) and starts the collision info file
+/// (setting `0x011c4080`). For each object that is not deleted (bit `0x20`
+/// of the word at `+8`) it finds the object's form type in the table of
+/// [`MODEL_KIND_COUNT`] kinds (an unknown type is logged) and checks the
+/// model or, for a `TESBipedModelForm`, the four models (male and female
+/// world and biped): the file must exist under `Meshes\` (`Trees\` for the
+/// tree kind; when it does not, setting `0x011c3fd4` makes it try the file
+/// with an `x` prefix and log it), and, when the file exists and the object
+/// is a `TESBoundObject` (settings `0x011c3fa8`/`0x011c4080` or `load_all`),
+/// a reference to it is built, the model queued and loaded and its textures
+/// checked, with the collision info printed for non-actors. Every 21st
+/// loaded model the unused textures are cleaned up. The compiler's exception
+/// frame is not translated.
+pub fn tes_data_handler_check_models(e: &mut Engine, this: Ptr<TESDataHandler>, load_all: u8) {
+    if setting_is_set(e, SETTING_SKIP_MODEL_CHECK) {
+        return;
+    }
+    fn_0046e880(e, this, 1);
+    if setting_is_set(e, SETTING_011C3FA8) {
+        let menu = e.global::<u32>(OBJECT_011DEA0C);
+        e.call(MAIN_RENDER_MENU_BACKGROUND, &args![menu]);
+    }
+    if setting_is_set(e, SETTING_011C4080) {
+        e.call(
+            MESSAGE_OUTPUT,
+            &args![COLLISION_INFO_FILE, COLLISION_INFO_HEADER],
+        );
+    }
+    let object_list = e.get(this, TESDataHandler::pObjectList);
+    let mut node = e.call(LIST_NEXT, &args![object_list]).u32();
+    let mut counter = 0i32;
+    e.with_stack(MODEL_FRAME_SIZE, |e, frame| {
+        while node != 0 {
+            check_model_object(e, this, load_all != 0, node, frame.addr(), &mut counter);
+            node = e.call(OBJECT_NEXT, &args![node]).u32();
+        }
+    });
+    fn_0046e880(e, this, 0);
+}
+
+/// One object of `CheckModels`.
+fn check_model_object(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    load_all: bool,
+    form: u32,
+    frame: u32,
+    counter: &mut i32,
+) {
+    if e.call(FORM_FLAG_BIT_5_AT_8, &args![form]).bool() {
+        return;
+    }
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32() as u8;
+    let mut kind = 0u32;
+    while kind < MODEL_KIND_COUNT && e.mem.u8(MODEL_KIND_TYPES + kind) != form_type {
+        kind += 1;
+    }
+    if kind >= MODEL_KIND_COUNT {
+        let editor_id = e.vcall(form, FORM_VTABLE_SLOT_130, &args![]).u32();
+        e.call(LOG_MESSAGE, &args![MODEL_INVALID_TYPE_FORMAT, editor_id]);
+        return;
+    }
+    let excluded = e.vcall(form, 0x154, &args![]).bool();
+    let cast = |e: &mut Engine, target: u32| {
+        e.call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, OBJECT_TYPE_DESCRIPTOR, target, 0u32],
+        )
+        .u32()
+    };
+    let model = cast(e, MODEL_TYPE_DESCRIPTOR);
+    let bound = cast(e, BOUND_OBJECT_TYPE_DESCRIPTOR);
+    let biped = cast(e, BIPED_MODEL_TYPE_DESCRIPTOR);
+    let steps = if model != 0 {
+        1
+    } else if biped != 0 {
+        4
+    } else {
+        0
+    };
+    let check = ModelCheck {
+        form,
+        kind,
+        excluded,
+        model,
+        bound,
+        biped,
+        load_all,
+        frame,
+    };
+    for step in (1..=steps).rev() {
+        check_model_step(e, this, &check, step, counter);
+    }
+}
+
+/// One model of one object of `CheckModels` (`step` counts down from 1 or 4:
+/// for a biped form 1 and 2 are the male and female world models, 3 and 4
+/// the biped models).
+fn check_model_step(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    check: &ModelCheck,
+    step: u32,
+    counter: &mut i32,
+) {
+    let mut model = check.model;
+    let mut prefix = EMPTY_STRING;
+    if check.biped != 0 {
+        match step {
+            1 => {
+                model = e.call(BIPED_WORLD_MODEL, &args![check.biped, 0u32]).u32();
+                prefix = MODEL_PREFIX_MALE_WORLD;
+            }
+            2 => {
+                model = e.call(BIPED_WORLD_MODEL, &args![check.biped, 1u32]).u32();
+                prefix = MODEL_PREFIX_FEMALE_WORLD;
+            }
+            3 => {
+                model = e.call(BIPED_BIPED_MODEL, &args![check.biped, 0u32]).u32();
+                prefix = MODEL_PREFIX_MALE_BIPED;
+            }
+            4 => {
+                model = e.call(BIPED_BIPED_MODEL, &args![check.biped, 1u32]).u32();
+                prefix = MODEL_PREFIX_FEMALE_BIPED;
+            }
+            _ => {}
+        }
+    }
+    if check.excluded {
+        return;
+    }
+    let kind_name = e.mem.u32(MODEL_KIND_NAMES + 4 * check.kind);
+    if e.call(MODEL_HAS_NAME, &args![model]).u32() == 0 {
+        if check.kind != 0xc && check.kind != 6 && setting_is_set(e, SETTING_011C4054) {
+            let expected_empty = match check.kind {
+                0 => true,
+                0xb => fn_0046e8c0(e, Ptr::new(check.form)),
+                _ => false,
+            };
+            if !expected_empty {
+                let editor_id = e.vcall(check.form, FORM_VTABLE_SLOT_130, &args![]).u32();
+                e.call(
+                    LOG_MESSAGE,
+                    &args![MODEL_NOT_SELECTED_FORMAT, prefix, kind_name, editor_id],
+                );
+            }
+        }
+        return;
+    }
+    let path = check.frame + MODEL_FRAME_PATH;
+    let model_path = e.vcall(model, 0x14, &args![]).u32();
+    let format = if check.kind == MODEL_KIND_TREE {
+        MODEL_TREES_FORMAT
+    } else {
+        MODEL_MESHES_FORMAT
+    };
+    e.call(FORMAT_S, &args![path, 0x104u32, format, model_path]);
+    if !file_exists(e, path) {
+        if setting_is_set(e, SETTING_011C3FD4) {
+            report_missing_model(e, this, check, model, prefix, kind_name);
+        }
+    } else if check.bound != 0
+        && (setting_is_set(e, SETTING_011C3FA8)
+            || check.load_all
+            || setting_is_set(e, SETTING_011C4080))
+    {
+        load_and_check_model(e, this, check, model, prefix, kind_name, counter);
+    }
+}
+
+/// The model file of an object is missing and setting `0x011c3fd4` is set:
+/// tries the same name with an `x` prefix under `Meshes\` (a file found there
+/// is scanned for embedded textures) and logs the model otherwise.
+fn report_missing_model(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    check: &ModelCheck,
+    model: u32,
+    prefix: u32,
+    kind_name: u32,
+) {
+    let frame = check.frame;
+    let path = frame + MODEL_FRAME_PATH;
+    let drive = frame + MODEL_FRAME_DRIVE;
+    let name = frame + MODEL_FRAME_NAME;
+    let directory = frame + MODEL_FRAME_DIRECTORY;
+    let extension = frame + MODEL_FRAME_EXTENSION;
+    let model_path = e.vcall(model, 0x14, &args![]).u32();
+    fn_00462d40(
+        e,
+        Ptr::new(model_path),
+        Ptr::new(drive),
+        3,
+        Ptr::new(directory),
+        0x104,
+        Ptr::new(name),
+        0x200,
+        Ptr::new(extension),
+        0x100,
+    );
+    e.call(
+        FORMAT_S,
+        &args![path, 0x104u32, MODEL_X_PREFIX_FORMAT, name],
+    );
+    e.call(STRING_COPY_S, &args![name, 0x200u32, path]);
+    e.call(
+        FORMAT_S,
+        &args![path, 0x104u32, MODEL_MESHES_FORMAT, directory],
+    );
+    e.call(STRING_COPY_S, &args![directory, 0x104u32, path]);
+    fn_0046e850(
+        e,
+        Ptr::new(path),
+        0x104,
+        Ptr::new(drive),
+        Ptr::new(directory),
+        Ptr::new(name),
+        Ptr::new(extension),
+    );
+    if !file_exists(e, path) {
+        let editor_id = e.vcall(check.form, FORM_VTABLE_SLOT_130, &args![]).u32();
+        let model_path = e.vcall(model, 0x14, &args![]).u32();
+        e.call(
+            LOG_MESSAGE,
+            &args![
+                MODEL_NOT_FOUND_FORMAT,
+                prefix,
+                model_path,
+                kind_name,
+                editor_id
+            ],
+        );
+    } else {
+        tes_data_handler_check_for_ni_raw_image_data(e, this, path);
+    }
+}
+
+/// The model file exists and the object is a bound object: builds a
+/// reference to it, loads the model, checks its textures and prints the
+/// collision info (the middle of `CheckModels`).
+fn load_and_check_model(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    check: &ModelCheck,
+    model: u32,
+    prefix: u32,
+    kind_name: u32,
+    counter: &mut i32,
+) {
+    let frame = check.frame;
+    let bound = check.bound;
+    let editor_id = e.vcall(bound, FORM_VTABLE_SLOT_130, &args![]).u32();
+    let model_path = e.vcall(model, 0x14, &args![]).u32();
+    let message = frame + MODEL_FRAME_MESSAGE;
+    e.call(
+        SPRINTF,
+        &args![
+            message,
+            MODEL_LOADING_FORMAT,
+            prefix,
+            model_path,
+            kind_name,
+            editor_id
+        ],
+    );
+    e.call(SET_LOADING_TEXT, &args![message]);
+    let menu = e.global::<u32>(OBJECT_011DEA0C);
+    e.call(MENU_STEP_86FF70, &args![menu]);
+    let reference = if e.call(FORM_GET_TYPE, &args![bound]).u32() == FORM_TYPE_NPC {
+        construct_reference(e, 0x1c8, CHARACTER_CONSTRUCT)
+    } else if e.call(FORM_GET_TYPE, &args![bound]).u32() == FORM_TYPE_CREATURE {
+        construct_reference(e, 0x1c0, CREATURE_CONSTRUCT)
+    } else {
+        construct_reference(e, 0x68, REFERENCE_CONSTRUCT)
+    };
+    e.call(REFERENCE_SET_OBJECT_REFERENCE, &args![reference, bound]);
+    let bound_type = e.call(FORM_GET_TYPE, &args![bound]).u32();
+    let mut skip_load = false;
+    if bound_type == FORM_TYPE_NPC || bound_type == FORM_TYPE_CREATURE {
+        let load = !setting_is_set(e, SETTING_011C4080)
+            || setting_is_set(e, SETTING_011C3FA8)
+            || check.load_all;
+        if !load {
+            skip_load = true;
+        } else {
+            let flags = frame + MODEL_FRAME_ACTOR_FLAGS;
+            e.mem.set_u16(flags, 0);
+            let has_data = e.call(ACTOR_BASE_FLAGS, &args![bound, flags]).u32() != 0;
+            if has_data && e.mem.u16(flags) & 6 != 0 {
+                skip_load = true;
+            } else {
+                let loader = e.global::<u32>(MODEL_LOADER);
+                e.call(
+                    MODEL_LOADER_QUEUE_REFERENCE,
+                    &args![loader, reference, 0u32, 0u32],
+                );
+                let io_manager = e.global::<u32>(IO_MANAGER);
+                e.call(IO_MANAGER_LOAD_QUEUED_PRIORITY, &args![io_manager]);
+            }
+        }
+    }
+    if !skip_load {
+        let warnings_before = fn_0046e8a0(e);
+        e.vcall(reference, REFERENCE_VTABLE_SLOT_1C8, &args![0u32]);
+        let warnings_after = fn_0046e8a0(e);
+        if warnings_before != warnings_after {
+            let editor_id = e.vcall(bound, FORM_VTABLE_SLOT_130, &args![]).u32();
+            let model_path = e.vcall(model, 0x14, &args![]).u32();
+            e.call(
+                LOG_MESSAGE,
+                &args![
+                    MODEL_WARNINGS_FORMAT,
+                    prefix,
+                    model_path,
+                    kind_name,
+                    editor_id
+                ],
+            );
+            e.call(LOG_MESSAGE, &args![EMPTY_STRING]);
+        }
+    }
+    let scene = e
+        .vcall(reference, REFERENCE_VTABLE_SLOT_1D0, &args![])
+        .u32();
+    if scene != 0 {
+        let model_path = e.vcall(model, 0x14, &args![]).u32();
+        let scene = e
+            .vcall(reference, REFERENCE_VTABLE_SLOT_1D0, &args![])
+            .u32();
+        tes_data_handler_check_textures_recurse(e, this, scene, model_path);
+    }
+    if setting_is_set(e, SETTING_011C4080)
+        && e.call(FORM_GET_TYPE, &args![bound]).u32() != FORM_TYPE_NPC
+        && e.call(FORM_GET_TYPE, &args![bound]).u32() != FORM_TYPE_CREATURE
+    {
+        print_collision_info(e, check, model, reference);
+    }
+    if reference != 0 {
+        e.vcall(reference, FORM_VTABLE_DELETE, &args![1u32]);
+    }
+    let previous = *counter;
+    *counter += 1;
+    if previous > 0x14 {
+        let tes = e.global::<u32>(TES_SINGLETON);
+        e.call(TES_CLEAN_UP_UNUSED_TEXTURES, &args![tes, 0u32]);
+        *counter = 0;
+    }
+}
+
+/// The collision info line of `CheckModels` (one row of the tab separated
+/// file): the model path, its bound size, the face count of its scene and
+/// the convex vertex and triangle collection counts of its Havok objects
+/// with their ratios to the size and to the face count.
+fn print_collision_info(e: &mut Engine, check: &ModelCheck, model: u32, reference: u32) {
+    let convex = check.frame + MODEL_FRAME_CONVEX_VERTICES;
+    let triangles = check.frame + MODEL_FRAME_TRIANGLE_COLLECTIONS;
+    e.mem.set_u32(convex, 0);
+    e.mem.set_u32(triangles, 0);
+    let scene = e
+        .vcall(reference, REFERENCE_VTABLE_SLOT_1D0, &args![])
+        .u32();
+    e.call(INSPECT_HAVOK_OBJECTS, &args![scene, convex, triangles]);
+    let size = e
+        .call(BOUND_OBJECT_GET_BOUND_SIZE, &args![check.bound])
+        .f32();
+    let mut faces = 0i32;
+    let tes = e.global::<u32>(TES_SINGLETON);
+    if tes != 0 {
+        let scene = e
+            .vcall(reference, REFERENCE_VTABLE_SLOT_1D0, &args![])
+            .u32();
+        let node = if scene == 0 {
+            0
+        } else {
+            e.vcall(scene, 0xc, &args![]).u32()
+        };
+        faces = e.call(TES_GET_FACE_COUNT, &args![tes, node, 1u32]).i32();
+    }
+    let convex_count = e.mem.i32(convex);
+    let triangle_count = e.mem.i32(triangles);
+    let model_path = e.vcall(model, 0x14, &args![]).u32();
+    let size = size as f64;
+    e.call(
+        MESSAGE_OUTPUT,
+        &args![
+            COLLISION_INFO_FILE,
+            MODEL_COLLISION_FORMAT,
+            model_path,
+            size,
+            faces,
+            convex_count,
+            convex_count as f64 / size,
+            convex_count as f64 / faces as f64,
+            triangle_count,
+            triangle_count as f64 / size,
+            triangle_count as f64 / faces as f64
+        ],
+    );
+}
+
+// Translated from 0046f310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fills the barter container (`+0x628`, created on first use: an
+/// `InventoryChanges` of 0x14 bytes, else emptied) for a barter with
+/// `reference`: the items of the reference's own container changes, then
+/// those of its merchant container (`GetMerchantContainer`; its changes are
+/// run through `RunScripts` or built new), are copied in (`004d26d0`). With
+/// a parent cell of the reference, `0054b260` runs on it, and if virtual
+/// `0x100` of the reference is true, the entry for the weapon the reference
+/// has equipped (the first item of type `0x29` whose base form is the
+/// current ammo of the reference's weapon) loses the count of its extra data
+/// whose original reference is the reference, and the entry is removed from
+/// the container when its count is not positive, it has no extra data
+/// list, its extra data list is empty or it is worn. The compiler's
+/// exception frame is not translated.
+pub fn fn_0046f310(e: &mut Engine, this: Ptr<TESDataHandler>, reference: u32) {
+    if e.get(this, TESDataHandler::pBarterContainer).is_null() {
+        let container = new_object(e, 0x14, INVENTORY_CHANGES_CONSTRUCT, Some(0));
+        e.set(this, TESDataHandler::pBarterContainer, container);
+    } else {
+        tes_data_handler_clear_barter_container(e, this);
+    }
+    let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+    let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+    let changes = e
+        .call(EXTRA_GET_CONTAINER_CHANGES, &args![extra_list])
+        .u32();
+    if changes != 0 {
+        e.call(
+            INVENTORY_CHANGES_COPY_ITEMS,
+            &args![changes, barter, reference, 0u32],
+        );
+    }
+    let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+    let merchant = e
+        .call(EXTRA_GET_MERCHANT_CONTAINER, &args![extra_list])
+        .u32();
+    if merchant != 0 {
+        let extra_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![merchant]).u32();
+        let mut changes = e
+            .call(EXTRA_GET_CONTAINER_CHANGES, &args![extra_list])
+            .u32();
+        if changes == 0 {
+            changes = new_object(e, 0x14, INVENTORY_CHANGES_CONSTRUCT, Some(merchant)).addr();
+        } else {
+            e.call(INVENTORY_CHANGES_RUN_SCRIPTS, &args![changes, merchant]);
+        }
+        let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+        e.call(
+            INVENTORY_CHANGES_COPY_ITEMS,
+            &args![changes, barter, merchant, 0u32],
+        );
+    }
+    let cell = e.call(REFERENCE_GET_PARENT_CELL, &args![reference]).u32();
+    if cell == 0 {
+        return;
+    }
+    let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+    e.call(CELL_STEP_54B260, &args![cell, reference, barter]);
+    if !e
+        .vcall(reference, REFERENCE_VTABLE_SLOT_100, &args![])
+        .bool()
+    {
+        return;
+    }
+    let mut node = e.mem.u32(barter);
+    while node != 0 {
+        let slot = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            return;
+        }
+        let item = list_item(e, node);
+        let base = e.call(ENTRY_GET_OBJECT, &args![item]).u32();
+        if e.call(FORM_GET_TYPE, &args![base]).u32() == 0x29
+            && e.call(ACTOR_GET_CURRENT_WEAPON, &args![reference]).u32() != 0
+        {
+            let weapon = e.call(ACTOR_GET_CURRENT_WEAPON, &args![reference]).u32();
+            let ammo = e
+                .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, reference])
+                .u32();
+            if ammo == base {
+                take_equipped_weapon_from_barter(e, barter, reference, item);
+                return;
+            }
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+}
+
+/// The last part of `fn_0046f310`: `item` is the inventory entry of the
+/// weapon (with the equipped ammo as its base form) in the barter container.
+fn take_equipped_weapon_from_barter(e: &mut Engine, barter: u32, reference: u32, item: u32) {
+    let mut count = 0i32;
+    let mut node = e.call(LIST_FIRST_NODE, &args![item]).u32();
+    while node != 0 {
+        let slot = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        let extra = list_item(e, node);
+        if e.call(EXTRA_GET_ORIGINAL_REFERENCE, &args![extra]).u32() != 0
+            && e.call(EXTRA_GET_ORIGINAL_REFERENCE, &args![extra]).u32() == reference
+        {
+            count = e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32;
+            e.with_stack(4, |e, slot| {
+                e.mem.set_u32(slot.addr(), extra);
+                let list = e.call(LIST_FIRST_NODE, &args![item]).u32();
+                e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+            });
+            break;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    let entry_count = e.call(LIST_NEXT, &args![item]).i32();
+    e.call(
+        ENTRY_SET_COUNT,
+        &args![item, entry_count.wrapping_sub(count)],
+    );
+    let remove = e.call(LIST_NEXT, &args![item]).i32() <= 0 || {
+        let list = e.call(LIST_FIRST_NODE, &args![item]).u32();
+        list == 0
+            || {
+                let list = e.call(LIST_FIRST_NODE, &args![item]).u32();
+                e.call(LIST_IS_EMPTY, &args![list]).bool()
+            }
+            || e.call(ENTRY_GET_WORN, &args![item, 0u32]).bool()
+    };
+    if remove {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), item);
+            let list = e.mem.u32(barter);
+            e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+        });
+    }
+}
+
+/// Whether the extra data list `extra` is a lone, script-less, single entry:
+/// fewer than 2 items in the list, a count of at most 1 and no script
+/// (`ItemsInList`, `GetCount`, `GetScript`, in the order the game tests).
+fn extra_is_plain(e: &mut Engine, extra: u32) -> bool {
+    e.call(EXTRA_ITEMS_IN_LIST, &args![extra]).u32() < 2
+        && (e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16) <= 1
+        && e.call(EXTRA_GET_SCRIPT, &args![extra]).u32() == 0
+}
+
+/// Whether `extra` is still in the list of the first entry that
+/// `GetObjectInList(form of entry)` finds in `changes`.
+fn extra_is_listed(e: &mut Engine, changes: u32, entry_form: u32, extra: u32) -> bool {
+    let found = e
+        .call(
+            INVENTORY_CHANGES_GET_OBJECT_IN_LIST,
+            &args![changes, entry_form, 1u32, 0u32],
+        )
+        .u32();
+    if found == 0 || e.call(LIST_FIRST_NODE, &args![found]).u32() == 0 {
+        return false;
+    }
+    let mut node = e.call(LIST_FIRST_NODE, &args![found]).u32();
+    while node != 0 {
+        let slot = e.call(LIST_HEAD_ITEM, &args![node]).u32();
+        if e.mem.u32(slot) == 0 {
+            break;
+        }
+        if list_item(e, node) == extra {
+            return true;
+        }
+        node = e.call(LIST_NEXT, &args![node]).u32();
+    }
+    false
+}
+
+// Translated from 0046f640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::RemoveItemBarterContainer` (Xbox PDB): takes `count`
+/// items of the inventory entry `entry` out of the barter container
+/// (`+0x628`) into the player's hands. It walks the extra data lists of the
+/// entry found in the barter container (`GetObjectInList(form of entry, 1,
+/// 0)`); each carries a count (`GetCount`, at least 1) and an original
+/// reference (`GetOriginalReference`): without one the walk just moves on.
+/// With one that has no container the ownership and original reference
+/// extras are removed, the player's virtual `0x3d0` removes the item and the
+/// extra data list is taken out of the entry (and deleted when plain). With
+/// a container the original reference's virtual `0x17c` removes the item
+/// to the player, and the extra is dropped from the entry when neither that
+/// reference's container changes nor the player's still list it. When the
+/// extra data lists run out, the container is built anew for `reference`
+/// (`fn_0046f310`) once and the walk restarts, ending when they run out
+/// again. The compiler's exception frame is not translated.
+pub fn tes_data_handler_remove_item_barter_container(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    entry: u32,
+    count: i32,
+    reference: u32,
+) {
+    let mut count = count;
+    let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+    let form = e.call(ENTRY_GET_OBJECT, &args![entry]).u32();
+    let mut found = e
+        .call(
+            INVENTORY_CHANGES_GET_OBJECT_IN_LIST,
+            &args![barter, form, 1u32, 0u32],
+        )
+        .u32();
+    if found == 0 {
+        return;
+    }
+    let mut node = e.call(LIST_FIRST_NODE, &args![found]).u32();
+    if node != 0 {
+        list_item(e, node);
+    }
+    let mut rebuilt = false;
+    while count != 0 {
+        let mut original = 0u32;
+        let mut taken = 1i32;
+        if node == 0 && rebuilt {
+            return;
+        }
+        if node == 0 {
+            fn_0046f310(e, this, reference);
+            rebuilt = true;
+            let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+            let form = e.call(ENTRY_GET_OBJECT, &args![entry]).u32();
+            found = e
+                .call(
+                    INVENTORY_CHANGES_GET_OBJECT_IN_LIST,
+                    &args![barter, form, 1u32, 0u32],
+                )
+                .u32();
+            if found == 0 {
+                return;
+            }
+            node = e.call(LIST_FIRST_NODE, &args![found]).u32();
+            if node != 0 {
+                list_item(e, node);
+            }
+            continue;
+        }
+        let extra = list_item(e, node);
+        node = e.call(LIST_NEXT, &args![node]).u32();
+        if extra != 0 {
+            taken = e.call(EXTRA_GET_COUNT, &args![extra]).u16() as i16 as i32;
+            if taken > 0 {
+                original = e.call(EXTRA_GET_ORIGINAL_REFERENCE, &args![extra]).u32();
+                if count >= taken {
+                    e.call(EXTRA_REMOVE_ORIGINAL_REFERENCE, &args![extra]);
+                }
+                if count < taken {
+                    taken = count;
+                }
+            } else {
+                original = 0;
+            }
+        }
+        if original == 0 {
+            if node == 0 {
+                count = 0;
+            } else {
+                list_item(e, node);
+            }
+            continue;
+        }
+        if !e.call(REFERENCE_HAS_CONTAINER, &args![original]).bool() {
+            let list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![original]).u32();
+            e.call(EXTRA_REMOVE_OWNERSHIP, &args![list]);
+            let list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![original]).u32();
+            e.call(EXTRA_REMOVE_ORIGINAL_REFERENCE, &args![list]);
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            e.vcall(
+                player,
+                PLAYER_VTABLE_REMOVE_ITEM,
+                &args![original, taken, 0u32],
+            );
+            remove_extra_from_entry(e, found, extra);
+            node = e.call(LIST_FIRST_NODE, &args![found]).u32();
+            if extra_is_plain(e, extra) && extra != 0 {
+                e.vcall(extra, FORM_VTABLE_DELETE, &args![1u32]);
+            }
+        } else {
+            let mut keep = 0u32;
+            if e.call(EXTRA_ITEMS_IN_LIST, &args![extra]).u32() != 0
+                && (e.call(EXTRA_ITEMS_IN_LIST, &args![extra]).u32() != 1
+                    || e.call(EXTRA_GET_DATA, &args![extra, 0x24u32]).u32() == 0)
+            {
+                keep = extra;
+            }
+            let player = e.global::<u32>(PLAYER_SINGLETON);
+            let entry_form = e.call(ENTRY_GET_OBJECT, &args![found]).u32();
+            e.vcall(
+                original,
+                REFERENCE_VTABLE_REMOVE_ITEM,
+                &args![entry_form, keep, taken, 0u32, 0u32, player, 0u32, 0u32, 1u32, 0u32],
+            );
+            let mut unlisted = true;
+            let list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![original]).u32();
+            let changes = e.call(EXTRA_GET_CONTAINER_CHANGES, &args![list]).u32();
+            if changes != 0 {
+                let entry_form = e.call(ENTRY_GET_OBJECT, &args![found]).u32();
+                if extra_is_listed(e, changes, entry_form, extra) {
+                    unlisted = false;
+                }
+            }
+            let player_list = e.call(REFERENCE_EXTRA_DATA_LIST, &args![player]).u32();
+            let changes = e
+                .call(EXTRA_GET_CONTAINER_CHANGES, &args![player_list])
+                .u32();
+            if changes != 0 {
+                let entry_form = e.call(ENTRY_GET_OBJECT, &args![found]).u32();
+                if extra_is_listed(e, changes, entry_form, extra) {
+                    unlisted = false;
+                }
+            }
+            if unlisted && extra != 0 && extra_is_plain(e, extra) {
+                remove_extra_from_entry(e, found, extra);
+                node = e.call(LIST_FIRST_NODE, &args![found]).u32();
+                if extra != 0 {
+                    e.vcall(extra, FORM_VTABLE_DELETE, &args![1u32]);
+                }
+            }
+            // The game then sets its word `extra` to 0 under some conditions
+            // on the extra data list (count and items); the word is reloaded
+            // below before it is read again, so they are omitted.
+        }
+        count = count.wrapping_sub(taken);
+        if node != 0 {
+            list_item(e, node);
+        }
+    }
+}
+
+/// Removes `extra` from the list of the inventory entry `entry`
+/// (`905330(entry word, &extra)`).
+fn remove_extra_from_entry(e: &mut Engine, entry: u32, extra: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), extra);
+        let list = e.mem.u32(entry);
+        e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+    });
+}
+
+// The default objects.
+/// `ActorValue::RegisterActorValues` (Xbox PDB) and
+/// `BGSCameraPathManager::CreateDefaultPath` (Xbox PDB; `this` is the object
+/// at [`CAMERA_PATH_MANAGER`]).
+const REGISTER_ACTOR_VALUES: u32 = 0x0066_f260;
+const CAMERA_PATH_CREATE_DEFAULT: u32 = 0x0058_b850;
+/// `TESSoundFile::SetSoundFile(name)` (Xbox PDB; `this` is the embedded
+/// sound file object).
+const SET_SOUND_FILE: u32 = 0x0048_9100;
+/// The list accessor that answers `listWorldSpaces`.
+const WORLD_SPACE_LIST_ACCESSOR: u32 = 0x0046_0140;
+/// `00905330` removing and `005ae3d0` adding the same item moves it to the
+/// head of the list; `listFactions` accessor and the steps of the faction.
+const FACTION_LIST_ACCESSOR: u32 = 0x0087_1a30;
+const FACTION_SET_RANK_NAME_STEP: u32 = 0x0048_bfc0;
+const FACTION_STEP_5FD460: u32 = 0x005f_d460;
+/// `0061a040()` (no arguments), run after the furniture markers.
+const STEP_61A040: u32 = 0x0061_a040;
+/// Constructors, steps and list accessors of the forms built below.
+const GLOBAL_FORM_CONSTRUCT: u32 = 0x005a_6320;
+const GLOBAL_LIST_ACCESSOR: u32 = 0x0046_1190;
+const WEATHER_CONSTRUCT: u32 = 0x0058_07f0;
+const WEATHER_MAKE_DEFAULT: u32 = 0x0058_1c00;
+const WEATHER_LIST_ACCESSOR: u32 = 0x0043_6aa0;
+const CLIMATE_CONSTRUCT: u32 = 0x0052_aaa0;
+const CLIMATE_MAKE_DEFAULT: u32 = 0x0052_b0f0;
+const CLIMATE_LIST_ACCESSOR: u32 = 0x0050_0940;
+/// `Sky::SetCurrentClimate(climate, flag)` (Xbox PDB).
+const SKY_SET_CURRENT_CLIMATE: u32 = 0x0063_c8f0;
+const LIST_FORM_CONSTRUCT: u32 = 0x0058_f9d0;
+const LIST_FORM_LIST_ACCESSOR: u32 = 0x0046_1230;
+const MESSAGE_FORM_CONSTRUCT: u32 = 0x0059_0530;
+const MESSAGE_FORM_LIST_ACCESSOR: u32 = 0x0046_1250;
+const IMAGE_SPACE_CONSTRUCT: u32 = 0x0052_b310;
+const IMAGE_SPACE_STEP: u32 = 0x0052_b780;
+const IMAGE_SPACE_LIST_ACCESSOR: u32 = 0x0089_1170;
+const IMAGE_SPACE_MODIFIER_CONSTRUCT: u32 = 0x0052_b8f0;
+const IMAGE_SPACE_MODIFIER_STEP: u32 = 0x0053_30a0;
+const IMAGE_SPACE_MODIFIER_LIST_ACCESSOR: u32 = 0x0046_10d0;
+/// `MagicSystem::GenerateDefaultObjects`, `TESSound::GenerateDefaultObjects`,
+/// `BGSImpactDataSet::CreateDefaultImpactDataSet`,
+/// `BGSEquipType::GenerateDefaultMenuIcons`,
+/// `BGSBodyPartData::GenerateDefaultBodyPartData`,
+/// `BGSTextureSet::CreateNullTextureSet` and `BGSEncounterZone::CreateNoZone`
+/// (Xbox PDB, no arguments).
+const MAGIC_SYSTEM_GENERATE_DEFAULT_OBJECTS: u32 = 0x0040_ca50;
+const SOUND_GENERATE_DEFAULT_OBJECTS: u32 = 0x005e_3600;
+const IMPACT_DATA_SET_CREATE_DEFAULT: u32 = 0x0058_ea10;
+const EQUIP_TYPE_GENERATE_DEFAULT_MENU_ICONS: u32 = 0x0047_9570;
+const BODY_PART_DATA_GENERATE_DEFAULT: u32 = 0x005e_53a0;
+const TEXTURE_SET_CREATE_NULL: u32 = 0x0059_3140;
+const ENCOUNTER_ZONE_CREATE_NO_ZONE: u32 = 0x0052_6340;
+/// The script effect (`ScriptEffect`): constructor, the step run on it
+/// (cdecl) and the combat style: constructor and list accessor.
+const SCRIPT_EFFECT_CONSTRUCT: u32 = 0x0040_7020;
+const SCRIPT_EFFECT_STEP: u32 = 0x0040_9060;
+const COMBAT_STYLE_CONSTRUCT: u32 = 0x0050_5010;
+const COMBAT_STYLE_LIST_ACCESSOR: u32 = 0x0046_10b0;
+/// `BGSDefaultObjectManager::Instance()` is [`DEFAULT_OBJECT_MANAGER_INSTANCE`];
+/// the virtual `0x14` called on it.
+const DEFAULT_OBJECT_MANAGER_VTABLE_FINISH: u32 = 0x14;
+/// The virtual slots of the new forms: `SetFormID(id, 1)`, `SetEditorID(name)`
+/// are [`FORM_VTABLE_SLOT_128`] and [`FORM_VTABLE_SET_EDITOR_ID`]; `0xc8` is
+/// [`FORM_VTABLE_SET_ALTERED`].
+const GAME_YEAR_VALUE: u32 = 0x0101_8fa8;
+const GAME_MONTH_VALUE: u32 = 0x0101_8f98;
+const GAME_DAY_VALUE: u32 = 0x0101_8f8c;
+const GAME_HOUR_VALUE: u32 = 0x0101_8f7c;
+const TIME_SCALE_VALUE: u32 = 0x0101_8f5c;
+/// The first of the 40 `FurnitureMarkerNN` names; they follow each other
+/// downwards, 0x14 bytes apart.
+const FURNITURE_MARKER_FIRST_NAME: u32 = 0x0101_92c4;
+const FURNITURE_MARKER_NAME_STRIDE: u32 = 0x14;
+const FURNITURE_MARKER_FIRST_ID: u32 = 0x64;
+const FURNITURE_MARKER_COUNT: u32 = 0x28;
+/// Form ids of the help message forms: `0x168` plus an index into
+/// [`HELP_MESSAGE_NAMES`].
+const HELP_MESSAGE_FIRST_ID: u32 = 0x168;
+/// The help messages: index (of 64 possible) and editor id.
+const HELP_MESSAGES: [(u32, u32); 28] = [
+    (5, 0x0101_8f04),
+    (6, 0x0101_8ef0),
+    (14, 0x0101_8ed8),
+    (15, 0x0101_8ec8),
+    (16, 0x0101_8eb8),
+    (17, 0x0101_8ea8),
+    (19, 0x0101_8e9c),
+    (20, 0x0101_8e88),
+    (21, 0x0101_8e7c),
+    (22, 0x0101_8e6c),
+    (23, 0x0101_8e60),
+    (24, 0x0101_8e50),
+    (25, 0x0101_8e40),
+    (26, 0x0101_8e30),
+    (27, 0x0101_8e20),
+    (28, 0x0101_8e0c),
+    (29, 0x0101_8e00),
+    (30, 0x0101_8dec),
+    (31, 0x0101_8dd4),
+    (32, 0x0101_8db8),
+    (33, 0x0101_8da0),
+    (34, 0x0101_8d94),
+    (35, 0x0101_8d88),
+    (36, 0x0101_8d7c),
+    (37, 0x0101_8d6c),
+    (38, 0x0101_8d5c),
+    (39, 0x0101_8d4c),
+    (40, 0x0101_8d38),
+];
+/// The words `GenerateDefaultObjects` clears first, in the order it clears
+/// them.
+const DEFAULT_OBJECT_GLOBALS: [u32; 25] = [
+    0x011c_a220,
+    0x011c_a230,
+    0x011c_a244,
+    0x011c_a248,
+    0x011c_a224,
+    0x011c_a228,
+    0x011c_a22c,
+    0x011c_a254,
+    0x011c_a258,
+    0x011c_a25c,
+    0x011c_a260,
+    0x011c_a250,
+    0x011c_b550,
+    0x011c_a268,
+    0x011c_a26c,
+    0x011c_a53c,
+    0x011c_b96c,
+    0x011c_b600,
+    0x011c_a278,
+    0x011c_b298,
+    0x011c_b29c,
+    0x011c_a27c,
+    0x011c_a280,
+    0x011c_a284,
+    0x011c_a288,
+];
+/// RTTI type descriptors the lookups cast to: `BGSExplosion`,
+/// `TESObjectWEAP`, `TESEyes`, `TESObjectACTI`, `BGSVoiceType`,
+/// `TESWaterForm`, `TESObjectSTAT`, `TESObjectMISC`, `TESObjectDOOR`,
+/// `TESFaction`, `TESNPC` and `TESWorldSpace`.
+const FACTION_TYPE_DESCRIPTOR_FOR_DEFAULTS: u32 = 0x0118_4704;
+const NPC_TYPE_DESCRIPTOR_FOR_DEFAULTS: u32 = 0x0118_3a1c;
+const WORLD_SPACE_TYPE_DESCRIPTOR_FOR_DEFAULTS: u32 = 0x0118_3fd0;
+/// Form ids and editor ids of the default objects handled one by one.
+const FACTION_FORM_ID: u32 = 0x13;
+const FACTION_GLOBAL: u32 = 0x011c_b550;
+const WORLD_SPACE_FORM_ID: u32 = 0x3c;
+const PLAYER_FORM_ID: u32 = 7;
+
+/// What a new default form gets after its ids, before it is listed.
+#[derive(Clone, Copy)]
+enum FormExtra {
+    None,
+    /// `TESSoundFile::SetSoundFile(name)` on the object embedded at `+offset`.
+    SoundFile(u32, u32),
+    /// Virtual `0x18` (set the model) of the object embedded at `+offset`.
+    Model(u32, u32),
+    /// The same, only when virtual `0x14` of the embedded object answers
+    /// null or an empty text.
+    ModelIfEmpty(u32, u32),
+    /// `fn_0046dcc0(form, 0)`.
+    WeaponByteZero,
+}
+
+/// Where a new default form is listed.
+#[derive(Clone, Copy)]
+enum FormListing {
+    /// `TESObjectList::Add(form)` on `pObjectList`.
+    ObjectList,
+    /// The list the accessor (`this` = the handler) answers gets the form
+    /// (through the address of a word holding it).
+    List(u32),
+}
+
+/// One default form `GenerateDefaultObjects` makes when it is missing:
+/// looked up by `id` (cast to `descriptor` unless that is 0) and kept in the
+/// word `global` (0: a local), else built (`size` bytes, `constructor`),
+/// given its form id and `editor_id`, the extras and the listing, and
+/// finally marked unaltered (virtual `0xc8`, 0).
+#[derive(Clone, Copy)]
+struct DefaultForm {
+    id: u32,
+    descriptor: u32,
+    global: u32,
+    size: u32,
+    constructor: u32,
+    editor_id: u32,
+    extra: FormExtra,
+    listing: FormListing,
+}
+
+use FormExtra as Extra;
+use FormListing as Listing;
+
+/// The first default forms: the water explosion, the gas trap, the
+/// reanimated eyes, two ash piles, two voice types, the default water, the
+/// horse marker, the bobby pin and the door marker. The descriptors are the
+/// RTTI type descriptors of `BGSExplosion`, `TESObjectWEAP`, `TESEyes`,
+/// `TESObjectACTI`, `BGSVoiceType`, `TESWaterForm`, `TESObjectSTAT`,
+/// `TESObjectMISC`.
+const DEFAULT_FORMS_A: [DefaultForm; 11] = [
+    DefaultForm {
+        id: 0x1f5,
+        descriptor: 0x118620c,
+        global: 0x011ca284,
+        size: 0xa8,
+        constructor: 0x004fabf0,
+        editor_id: 0x10195d0,
+        extra: Extra::SoundFile(0x30, 0x10195c0),
+        listing: Listing::List(0x00460ff0),
+    },
+    DefaultForm {
+        id: 0x1f6,
+        descriptor: 0x1183998,
+        global: 0x011ca288,
+        size: 0x388,
+        constructor: 0x0051d770,
+        editor_id: 0x10195b0,
+        extra: Extra::SoundFile(0x30, 0x10195b0),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x1a,
+        descriptor: 0x1186388,
+        global: 0x011cb600,
+        size: 0x34,
+        constructor: 0x005fc050,
+        editor_id: 0x10195a0,
+        extra: Extra::SoundFile(0x18, 0x1019590),
+        listing: Listing::List(0x0043c490),
+    },
+    DefaultForm {
+        id: 0x1b,
+        descriptor: 0x1186584,
+        global: 0x011ca27c,
+        size: 0x90,
+        constructor: 0x005104f0,
+        editor_id: 0x1019580,
+        extra: Extra::SoundFile(0x30, 0x1019574),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x22,
+        descriptor: 0x1186584,
+        global: 0x011ca280,
+        size: 0x90,
+        constructor: 0x005104f0,
+        editor_id: 0x1019564,
+        extra: Extra::SoundFile(0x30, 0x1019558),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x2d,
+        descriptor: 0x1186318,
+        global: 0x011cb298,
+        size: 0x24,
+        constructor: 0x005effc0,
+        editor_id: 0x1019548,
+        extra: Extra::None,
+        listing: Listing::List(0x004611b0),
+    },
+    DefaultForm {
+        id: 0x2e,
+        descriptor: 0x1186318,
+        global: 0x011cb29c,
+        size: 0x24,
+        constructor: 0x005effc0,
+        editor_id: 0x1019534,
+        extra: Extra::None,
+        listing: Listing::List(0x004611b0),
+    },
+    DefaultForm {
+        id: 0x18,
+        descriptor: 0x1184118,
+        global: 0x011ca53c,
+        size: 0x194,
+        constructor: 0x0057eba0,
+        editor_id: 0x1019524,
+        extra: Extra::None,
+        listing: Listing::List(0x0045a730),
+    },
+    DefaultForm {
+        id: 0x12,
+        descriptor: 0x1186568,
+        global: 0x011ca26c,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019518,
+        extra: Extra::Model(0x30, 0x1019504),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0xa,
+        descriptor: 0x118654c,
+        global: 0x011ca268,
+        size: 0xac,
+        constructor: 0x0051a6a0,
+        editor_id: 0x10194f8,
+        extra: Extra::None,
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x1,
+        descriptor: 0x1186568,
+        global: 0x011ca220,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10194ec,
+        extra: Extra::Model(0x30, 0x10194d8),
+        listing: Listing::ObjectList,
+    },
+];
+
+/// The marker statics after the world space step (`MultiBoundMarker`,
+/// `PlaneMarker`, ..., `Radiation Marker`); the prison marker is a
+/// `TESObjectDOOR`.
+const DEFAULT_FORMS_B: [DefaultForm; 17] = [
+    DefaultForm {
+        id: 0x15,
+        descriptor: 0x1186568,
+        global: 0x011ca230,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10162c4,
+        extra: Extra::Model(0x30, 0x1011584),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x17,
+        descriptor: 0x1186568,
+        global: 0x011ca234,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10194cc,
+        extra: Extra::Model(0x30, 0x1011584),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x1f,
+        descriptor: 0x1186568,
+        global: 0x011ca238,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10194c0,
+        extra: Extra::Model(0x30, 0x1011584),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x20,
+        descriptor: 0x1186568,
+        global: 0x011ca23c,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10194b0,
+        extra: Extra::Model(0x30, 0x1011584),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x21,
+        descriptor: 0x1186568,
+        global: 0x011ca240,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10194a0,
+        extra: Extra::Model(0x30, 0x1011584),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x3b,
+        descriptor: 0x1186568,
+        global: 0x011ca244,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019498,
+        extra: Extra::Model(0x30, 0x101948c),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x34,
+        descriptor: 0x1186568,
+        global: 0x011ca248,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x101947c,
+        extra: Extra::Model(0x30, 0x1019468),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x32,
+        descriptor: 0x1186568,
+        global: 0x011ca24c,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019454,
+        extra: Extra::Model(0x30, 0x101943c),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x10,
+        descriptor: 0x1186568,
+        global: 0x011ca224,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019430,
+        extra: Extra::Model(0x30, 0x1019420),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x23,
+        descriptor: 0x1186568,
+        global: 0x011ca228,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019414,
+        extra: Extra::Model(0x30, 0x1019400),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x24,
+        descriptor: 0x1186568,
+        global: 0x011ca22c,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10193f0,
+        extra: Extra::Model(0x30, 0x1019400),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x2,
+        descriptor: 0x1186568,
+        global: 0x011ca250,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10193e0,
+        extra: Extra::Model(0x30, 0x10193cc),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x3,
+        descriptor: 0x1186568,
+        global: 0x011ca254,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x10193c0,
+        extra: Extra::Model(0x30, 0x10193ac),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x4,
+        descriptor: 0x1186530,
+        global: 0x011ca258,
+        size: 0x90,
+        constructor: 0x005173e0,
+        editor_id: 0x101939c,
+        extra: Extra::Model(0x3c, 0x1019388),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x6,
+        descriptor: 0x1186568,
+        global: 0x011ca25c,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019378,
+        extra: Extra::Model(0x30, 0x1019364),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x5,
+        descriptor: 0x1186568,
+        global: 0x011ca260,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x1019354,
+        extra: Extra::Model(0x30, 0x1019340),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x33,
+        descriptor: 0x1186568,
+        global: 0x011ca264,
+        size: 0x58,
+        constructor: 0x0051b140,
+        editor_id: 0x101932c,
+        extra: Extra::Model(0x30, 0x1019314),
+        listing: Listing::ObjectList,
+    },
+];
+
+/// Caps (`Caps001`, a `TESObjectMISC`), the loot bag container and the
+/// fists weapon, looked up without a cast.
+const DEFAULT_FORMS_C: [DefaultForm; 3] = [
+    DefaultForm {
+        id: 0xf,
+        descriptor: 0,
+        global: 0,
+        size: 0xac,
+        constructor: 0x0051_a6a0,
+        editor_id: 0x0101_92fc,
+        extra: Extra::None,
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0xe,
+        descriptor: 0,
+        global: 0x011c_3f40,
+        size: 0x9c,
+        constructor: 0x0051_60f0,
+        editor_id: 0x0101_92f4,
+        extra: Extra::ModelIfEmpty(0x48, 0x0101_92e0),
+        listing: Listing::ObjectList,
+    },
+    DefaultForm {
+        id: 0x1f4,
+        descriptor: 0,
+        global: 0x011c_a278,
+        size: 0x388,
+        constructor: 0x0051_d770,
+        editor_id: 0x0101_92d8,
+        extra: Extra::WeaponByteZero,
+        listing: Listing::ObjectList,
+    },
+];
+
+/// The player's base NPC (`Player`), cast to `TESNPC`, kept in a local.
+const DEFAULT_FORMS_D: [DefaultForm; 1] = [DefaultForm {
+    id: PLAYER_FORM_ID,
+    descriptor: NPC_TYPE_DESCRIPTOR_FOR_DEFAULTS,
+    global: 0,
+    size: 0x20c,
+    constructor: 0x0060_1170,
+    editor_id: 0x0101_8f54,
+    extra: Extra::None,
+    listing: Listing::ObjectList,
+}];
+
+/// Where a global form takes its float value from.
+#[derive(Clone, Copy)]
+enum GameValue {
+    /// The float at this address of the exe's data.
+    Memory(u32),
+    /// `FLD1`.
+    One,
+    /// `FLDZ`.
+    Zero,
+}
+
+/// A global form with a float value: its id, editor id, the value and the
+/// word the form is kept in (0: a local).
+struct GlobalValueForm {
+    id: u32,
+    editor_id: u32,
+    value: GameValue,
+    global: u32,
+}
+
+/// `GameYear`, `GameMonth`, `GameDay`, `GameHour`, `GameDaysPassed` and
+/// `TimeScale`: built when missing (the value read from the exe's data),
+/// listed and registered with the editor id map.
+const GAME_VALUE_FORMS: [GlobalValueForm; 6] = [
+    GlobalValueForm {
+        id: 0x35,
+        editor_id: 0x0101_8fac,
+        value: GameValue::Memory(GAME_YEAR_VALUE),
+        global: 0,
+    },
+    GlobalValueForm {
+        id: 0x36,
+        editor_id: 0x0101_8f9c,
+        value: GameValue::Memory(GAME_MONTH_VALUE),
+        global: 0,
+    },
+    GlobalValueForm {
+        id: 0x37,
+        editor_id: 0x0101_8f90,
+        value: GameValue::Memory(GAME_DAY_VALUE),
+        global: 0,
+    },
+    GlobalValueForm {
+        id: 0x38,
+        editor_id: 0x0101_8f80,
+        value: GameValue::Memory(GAME_HOUR_VALUE),
+        global: 0,
+    },
+    GlobalValueForm {
+        id: 0x39,
+        editor_id: 0x0101_8f6c,
+        value: GameValue::One,
+        global: 0,
+    },
+    GlobalValueForm {
+        id: 0x3a,
+        editor_id: 0x0101_8f60,
+        value: GameValue::Memory(TIME_SCALE_VALUE),
+        global: 0,
+    },
+];
+
+/// The word `PlayCredits` is kept in.
+const PLAY_CREDITS_GLOBAL: u32 = 0x011c_3f3c;
+
+/// Gives a new form its id (virtual `0x128`: the id and 1) and editor id
+/// (virtual `0x134`).
+fn name_new_form(e: &mut Engine, form: u32, id: u32, editor_id: u32) {
+    e.vcall(form, FORM_VTABLE_SLOT_128, &args![id, 1u32]);
+    e.vcall(form, FORM_VTABLE_SET_EDITOR_ID, &args![editor_id]);
+}
+
+/// Adds `form` to the list the `accessor` of the handler answers
+/// (`005ae3d0(list, &slot)`), through `slot`, the address of a word holding
+/// the form (a local when `slot` is 0).
+fn add_form_to_list(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    accessor: u32,
+    form: u32,
+    slot: u32,
+) {
+    let local = if slot == 0 { e.mem.alloc(4) } else { slot };
+    e.mem.set_u32(local, form);
+    let list = e.call(accessor, &args![this]).u32();
+    e.call(LIST_ADD, &args![list, local]);
+    if slot == 0 {
+        e.mem.free(local);
+    }
+}
+
+/// `TESObjectList::Add(form)` on the handler's object list.
+fn add_default_form_to_object_list(e: &mut Engine, this: Ptr<TESDataHandler>, form: u32) {
+    let object_list = e.get(this, TESDataHandler::pObjectList);
+    e.call(OBJECT_LIST_ADD, &args![object_list, form]);
+}
+
+/// Marks a new default form as not altered (virtual `0xc8`, 0).
+fn finish_new_form(e: &mut Engine, form: u32) {
+    e.vcall(form, FORM_VTABLE_SET_ALTERED, &args![0u32]);
+}
+
+/// One entry of the tables above.
+fn make_default_form(e: &mut Engine, this: Ptr<TESDataHandler>, spec: &DefaultForm) {
+    let found = if spec.descriptor != 0 {
+        form_by_id_as(e, spec.id, spec.descriptor).addr()
+    } else {
+        e.call(FORM_BY_ID, &args![spec.id]).u32()
+    };
+    if spec.global != 0 {
+        e.set_global(spec.global, found);
+    }
+    if found != 0 {
+        return;
+    }
+    let form = construct_reference(e, spec.size, spec.constructor);
+    if spec.global != 0 {
+        e.set_global(spec.global, form);
+    }
+    name_new_form(e, form, spec.id, spec.editor_id);
+    match spec.extra {
+        Extra::None => {}
+        Extra::SoundFile(offset, name) => {
+            e.call(SET_SOUND_FILE, &args![form + offset, name]);
+        }
+        Extra::Model(offset, path) => {
+            e.vcall(form + offset, 0x18, &args![path]);
+        }
+        Extra::ModelIfEmpty(offset, path) => {
+            let model_path = e.vcall(form + offset, 0x14, &args![]).u32();
+            let empty = model_path == 0 || {
+                let model_path = e.vcall(form + offset, 0x14, &args![]).u32();
+                e.call(STRING_LENGTH, &args![model_path]).u32() == 0
+            };
+            if empty {
+                e.vcall(form + offset, 0x18, &args![path]);
+            }
+        }
+        Extra::WeaponByteZero => fn_0046dcc0(e, Ptr::new(form), 0),
+    }
+    match spec.listing {
+        Listing::ObjectList => add_default_form_to_object_list(e, this, form),
+        Listing::List(accessor) => add_form_to_list(e, this, accessor, form, spec.global),
+    }
+    finish_new_form(e, form);
+}
+
+/// The default creature faction (`CreatureFaction`).
+fn make_default_faction(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let found = form_by_id_as(e, FACTION_FORM_ID, FACTION_TYPE_DESCRIPTOR_FOR_DEFAULTS).addr();
+    e.set_global(FACTION_GLOBAL, found);
+    if found != 0 {
+        return;
+    }
+    let form = construct_reference(e, 0x4c, 0x005f_c680);
+    e.set_global(FACTION_GLOBAL, form);
+    name_new_form(e, form, FACTION_FORM_ID, 0x0101_9304);
+    add_form_to_list(e, this, FACTION_LIST_ACCESSOR, form, FACTION_GLOBAL);
+    e.call(
+        FACTION_SET_RANK_NAME_STEP,
+        &args![form + 0x24, form, 0x64u32],
+    );
+    e.call(FACTION_STEP_5FD460, &args![form]);
+    e.call(FORM_STEP_484AB0, &args![form, 1u32]);
+    finish_new_form(e, form);
+}
+
+/// The world space with form id `0x3c` is moved to the head of
+/// `listWorldSpaces` when it exists and is not there yet.
+fn move_world_space_to_head(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let world_space = form_by_id_as(
+        e,
+        WORLD_SPACE_FORM_ID,
+        WORLD_SPACE_TYPE_DESCRIPTOR_FOR_DEFAULTS,
+    )
+    .addr();
+    if world_space == 0 {
+        return;
+    }
+    let list = e.call(WORLD_SPACE_LIST_ACCESSOR, &args![this]).u32();
+    if list_item(e, list) == world_space {
+        return;
+    }
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), world_space);
+        let list = e.call(WORLD_SPACE_LIST_ACCESSOR, &args![this]).u32();
+        e.call(LIST_REMOVE_ITEM, &args![list, slot]);
+        let list = e.call(WORLD_SPACE_LIST_ACCESSOR, &args![this]).u32();
+        e.call(LIST_ADD, &args![list, slot]);
+    });
+}
+
+/// The global forms with a float value (`GameYear`, ..., and `PlayCredits`,
+/// which is kept in a word and has the value 0.0).
+fn make_global_value_form(e: &mut Engine, this: Ptr<TESDataHandler>, spec: &GlobalValueForm) {
+    let found = e.call(FORM_BY_ID, &args![spec.id]).u32();
+    if spec.global != 0 {
+        e.set_global(spec.global, found);
+    }
+    if found != 0 {
+        return;
+    }
+    let form = construct_reference(e, 0x28, GLOBAL_FORM_CONSTRUCT);
+    if spec.global != 0 {
+        e.set_global(spec.global, form);
+    }
+    name_new_form(e, form, spec.id, spec.editor_id);
+    let value = match spec.value {
+        GameValue::Memory(address) => e.global::<f32>(address),
+        GameValue::One => 1.0f32,
+        GameValue::Zero => 0.0f32,
+    };
+    fn_0046dce0(e, Ptr::new(form), value);
+    add_form_to_list(e, this, GLOBAL_LIST_ACCESSOR, form, spec.global);
+    let editor_ids = e.global::<u32>(EDITOR_ID_MAP);
+    e.call(EDITOR_ID_MAP_ADD, &args![editor_ids, spec.editor_id, form]);
+}
+
+/// A form made without a lookup of a cast type: built when `FORM_BY_ID`
+/// finds nothing, `steps` run on it between its editor id and its listing.
+#[allow(clippy::too_many_arguments)]
+fn make_simple_form(
+    e: &mut Engine,
+    this: Ptr<TESDataHandler>,
+    id: u32,
+    size: u32,
+    constructor: u32,
+    editor_id: u32,
+    step: Option<u32>,
+    accessor: u32,
+) {
+    if e.call(FORM_BY_ID, &args![id]).u32() != 0 {
+        return;
+    }
+    let form = construct_reference(e, size, constructor);
+    name_new_form(e, form, id, editor_id);
+    if let Some(step) = step {
+        e.call(step, &args![form]);
+    }
+    add_form_to_list(e, this, accessor, form, 0);
+}
+
+// Translated from 0046a370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESDataHandler::GenerateDefaultObjects` (Xbox PDB): inside an allocation
+/// scope (kind 0x2f, line 0x2a8f) it clears 25 words that keep the default
+/// objects, registers the actor values, creates the default camera path and
+/// then makes every default form that is missing, in this order: the
+/// explosion, gas trap, eyes, ash piles, voice types, water, markers
+/// ([`DEFAULT_FORMS_A`]), the world space `0x3c` moved to the head of its
+/// list, the other markers ([`DEFAULT_FORMS_B`]), the creature faction,
+/// caps, loot bag and fists ([`DEFAULT_FORMS_C`]), the 40 furniture markers
+/// (ids `0x64`..), `0061a040`, the game time globals, the player NPC, the
+/// default weather and climate (and the sky's current climate), the two
+/// help manual lists, the help messages, the image spaces and modifiers,
+/// then the magic system's, the script effect, the sounds', impact data
+/// sets', menu icons', body part data's, null texture set's and no
+/// encounter zone's own defaults, the default combat style, `PlayCredits`;
+/// last virtual `0x14` of the `BGSDefaultObjectManager` instance. A form
+/// made here is given its id (virtual `0x128`, id and 1) and editor id
+/// (virtual `0x134`), added to its list and marked unaltered (virtual
+/// `0xc8`). The compiler's exception frame is not translated.
+pub fn tes_data_handler_generate_default_objects(e: &mut Engine, this: Ptr<TESDataHandler>) {
+    let scope = scope_enter(e, 0x2f, 0x2a8f);
+    for word in DEFAULT_OBJECT_GLOBALS {
+        e.set_global(word, 0u32);
+    }
+    e.call(REGISTER_ACTOR_VALUES, &args![]);
+    let camera_path_manager = e.global::<u32>(CAMERA_PATH_MANAGER);
+    e.call(CAMERA_PATH_CREATE_DEFAULT, &args![camera_path_manager]);
+    for spec in &DEFAULT_FORMS_A {
+        make_default_form(e, this, spec);
+    }
+    move_world_space_to_head(e, this);
+    for spec in &DEFAULT_FORMS_B {
+        make_default_form(e, this, spec);
+    }
+    make_default_faction(e, this);
+    for spec in &DEFAULT_FORMS_C {
+        make_default_form(e, this, spec);
+    }
+    for index in 0..FURNITURE_MARKER_COUNT {
+        let id = FURNITURE_MARKER_FIRST_ID + index;
+        if e.call(FORM_BY_ID, &args![id]).u32() == 0 {
+            let form = construct_reference(e, 0x58, 0x0051_b140);
+            name_new_form(
+                e,
+                form,
+                id,
+                FURNITURE_MARKER_FIRST_NAME - FURNITURE_MARKER_NAME_STRIDE * index,
+            );
+            add_default_form_to_object_list(e, this, form);
+            finish_new_form(e, form);
+        }
+    }
+    e.call(STEP_61A040, &args![]);
+    for spec in &GAME_VALUE_FORMS {
+        make_global_value_form(e, this, spec);
+    }
+    for spec in &DEFAULT_FORMS_D {
+        make_default_form(e, this, spec);
+    }
+    make_simple_form(
+        e,
+        this,
+        0x15e,
+        0x36c,
+        WEATHER_CONSTRUCT,
+        0x0101_8f44,
+        Some(WEATHER_MAKE_DEFAULT),
+        WEATHER_LIST_ACCESSOR,
+    );
+    make_simple_form(
+        e,
+        this,
+        0x15f,
+        0x58,
+        CLIMATE_CONSTRUCT,
+        0x0101_8f34,
+        Some(CLIMATE_MAKE_DEFAULT),
+        CLIMATE_LIST_ACCESSOR,
+    );
+    let sky = sky_get_instance(e);
+    e.call(SKY_SET_CURRENT_CLIMATE, &args![sky, 0u32, 1u32]);
+    make_simple_form(
+        e,
+        this,
+        0x163,
+        0x24,
+        LIST_FORM_CONSTRUCT,
+        0x0101_8f24,
+        None,
+        LIST_FORM_LIST_ACCESSOR,
+    );
+    make_simple_form(
+        e,
+        this,
+        0x165,
+        0x24,
+        LIST_FORM_CONSTRUCT,
+        0x0101_8f14,
+        None,
+        LIST_FORM_LIST_ACCESSOR,
+    );
+    for (index, name) in HELP_MESSAGES {
+        let form = construct_reference(e, 0x40, MESSAGE_FORM_CONSTRUCT);
+        name_new_form(e, form, HELP_MESSAGE_FIRST_ID + index, name);
+        add_form_to_list(e, this, MESSAGE_FORM_LIST_ACCESSOR, form, 0);
+    }
+    if e.call(FORM_BY_ID, &args![0x160u32]).u32() == 0 {
+        for (id, name) in [(0x160u32, 0x0101_8d1cu32), (0x161, 0x0101_8d00)] {
+            let form = construct_reference(e, 0xb0, IMAGE_SPACE_CONSTRUCT);
+            name_new_form(e, form, id, name);
+            e.call(IMAGE_SPACE_STEP, &args![form]);
+            add_form_to_list(e, this, IMAGE_SPACE_LIST_ACCESSOR, form, 0);
+        }
+    }
+    for (id, name) in [
+        (0x162u32, 0x0101_8cf8u32),
+        (0x166, 0x0101_8ce8),
+        (0x164, 0x0101_8cd0),
+    ] {
+        make_simple_form(
+            e,
+            this,
+            id,
+            0x730,
+            IMAGE_SPACE_MODIFIER_CONSTRUCT,
+            name,
+            Some(IMAGE_SPACE_MODIFIER_STEP),
+            IMAGE_SPACE_MODIFIER_LIST_ACCESSOR,
+        );
+    }
+    e.call(MAGIC_SYSTEM_GENERATE_DEFAULT_OBJECTS, &args![]);
+    if e.call(FORM_BY_ID, &args![0x14au32]).u32() == 0 {
+        let form = construct_reference(e, 0xb0, SCRIPT_EFFECT_CONSTRUCT);
+        name_new_form(e, form, 0x14a, 0x0101_2dec);
+        e.call(SET_SOUND_FILE, &args![form + 0x38, 0x0101_2dfcu32]);
+        e.call(SCRIPT_EFFECT_STEP, &args![form]);
+    }
+    e.call(SOUND_GENERATE_DEFAULT_OBJECTS, &args![]);
+    e.call(IMPACT_DATA_SET_CREATE_DEFAULT, &args![]);
+    e.call(EQUIP_TYPE_GENERATE_DEFAULT_MENU_ICONS, &args![]);
+    e.call(BODY_PART_DATA_GENERATE_DEFAULT, &args![]);
+    e.call(TEXTURE_SET_CREATE_NULL, &args![]);
+    e.call(ENCOUNTER_ZONE_CREATE_NO_ZONE, &args![]);
+    make_simple_form(
+        e,
+        this,
+        0x3d,
+        0x108,
+        COMBAT_STYLE_CONSTRUCT,
+        0x0101_8cbc,
+        None,
+        COMBAT_STYLE_LIST_ACCESSOR,
+    );
+    make_global_value_form(
+        e,
+        this,
+        &GlobalValueForm {
+            id: 0x63,
+            editor_id: 0x0101_8cb0,
+            value: GameValue::Zero,
+            global: PLAY_CREDITS_GLOBAL,
+        },
+    );
+    let manager = e.call(DEFAULT_OBJECT_MANAGER_INSTANCE, &args![]).u32();
+    e.vcall(manager, DEFAULT_OBJECT_MANAGER_VTABLE_FINISH, &args![]);
+    scope_leave(e, scope);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -5955,6 +8750,93 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x0046a010, fn_0046a010(Ptr, u8)),
         entry!(0x0046a060, fn_0046a060(Ptr) -> bool),
+        entry!(
+            0x0046a080,
+            fn_0046a080(Ptr<TESDataHandler>, u32, Ptr, Ptr, u32, u32) -> u32
+        ),
+        entry!(
+            0x0046a190,
+            fn_0046a190(Ptr<TESDataHandler>, u32, Ptr, Ptr, u32, u32) -> u32
+        ),
+        entry!(0x0046a330, fn_0046a330(Ptr<TESDataHandler>, u32)),
+        entry!(
+            0x0046a370,
+            tes_data_handler_generate_default_objects(Ptr<TESDataHandler>)
+        ),
+        entry!(0x0046dcc0, fn_0046dcc0(Ptr, u8)),
+        entry!(0x0046dce0, fn_0046dce0(Ptr, f32)),
+        entry!(0x0046dd00, sky_get_instance() -> u32),
+        entry!(
+            0x0046ddb0,
+            tes_data_handler_check_models(Ptr<TESDataHandler>, u8)
+        ),
+        entry!(0x0046e850, fn_0046e850(Ptr, u32, Ptr, Ptr, Ptr, Ptr) -> i32),
+        entry!(0x0046e880, fn_0046e880(Ptr<TESDataHandler>, u8)),
+        entry!(0x0046e8a0, fn_0046e8a0() -> u32),
+        entry!(0x0046e8c0, fn_0046e8c0(Ptr) -> bool),
+        entry!(
+            0x0046e8e0,
+            fn_0046e8e0(Ptr<TESDataHandler>, u32, u32, u32, u32, u32)
+        ),
+        entry!(
+            0x0046e910,
+            tes_data_handler_check_textures_recurse(Ptr<TESDataHandler>, u32, u32)
+        ),
+        entry!(0x0046eb00, fn_0046eb00(Ptr) -> u32),
+        entry!(0x0046eb20, fn_0046eb20(Ptr) -> u32),
+        entry!(0x0046eb40, fn_0046eb40(Ptr) -> u32),
+        entry!(0x0046eb60, fn_0046eb60(Ptr) -> u32),
+        entry!(0x0046eb80, fn_0046eb80(Ptr) -> u32),
+        entry!(0x0046eba0, fn_0046eba0(Ptr, u32) -> u32),
+        entry!(0x0046ebd0, fn_0046ebd0(Ptr) -> u16),
+        entry!(0x0046ebf0, fn_0046ebf0(Ptr, u16, u16) -> i32),
+        entry!(
+            0x0046ec10,
+            tes_data_handler_check_icons(Ptr<TESDataHandler>)
+        ),
+        entry!(0x0046f070, fn_0046f070(Ptr) -> bool),
+        entry!(0x0046f090, fn_0046f090(Ptr) -> u32),
+        entry!(
+            0x0046f0c0,
+            tes_data_handler_check_for_ni_raw_image_data(Ptr<TESDataHandler>, u32)
+        ),
+        entry!(
+            0x0046f280,
+            tes_data_handler_enum_references_close_to_point(
+                Ptr<TESDataHandler>,
+                u32,
+                u32,
+                f32,
+                u32,
+                f32,
+                u32,
+                u32,
+            )
+        ),
+        entry!(0x0046f310, fn_0046f310(Ptr<TESDataHandler>, u32)),
+        entry!(
+            0x0046f640,
+            tes_data_handler_remove_item_barter_container(Ptr<TESDataHandler>, u32, i32, u32)
+        ),
+        entry!(
+            0x0046faf0,
+            tes_data_handler_clear_barter_container(Ptr<TESDataHandler>)
+        ),
+        entry!(0x0046fb20, fn_0046fb20(Ptr<TESDataHandler>)),
+        entry!(0x0046fb50, fn_0046fb50(Ptr<TESDataHandler>)),
+        entry!(0x0046fd30, fn_0046fd30(u32, u32) -> i32),
+        entry!(
+            0x0046fd50,
+            fn_0046fd50(Ptr<TESDataHandler>, u32, u32) -> u32
+        ),
+        entry!(0x0046fdd0, fn_0046fdd0(Ptr, u32) -> bool),
+        entry!(0x0046fdf0, fn_0046fdf0(Ptr) -> u32),
+        entry!(0x0046fe10, fn_0046fe10(Ptr) -> u32),
+        entry!(0x0046fe90, fn_0046fe90(Ptr, u8) -> bool),
+        entry!(
+            0x0046feb0,
+            tes_data_handler_is_dlc_package_name(Ptr<TESDataHandler>, u32) -> u32
+        ),
     ]
 }
 
@@ -8626,7 +11508,7 @@ mod tests {
         do_nothing(
             &mut e,
             &[
-                SET_BYTE_01202DF0,
+                SET_FLAG_01202DF0,
                 CELL_DETACH,
                 OBJECT_011E0E80_STEP,
                 CELL_SET_BYTE_26,
@@ -8669,7 +11551,7 @@ mod tests {
             call_order(&e),
             vec![
                 FORM_HAS_FLAG_BIT_5,
-                SET_BYTE_01202DF0,
+                SET_FLAG_01202DF0,
                 OBJECT_011DDF38_TEST,
                 CELL_DETACH,
                 OBJECT_011E0E80_STEP,
@@ -8693,10 +11575,10 @@ mod tests {
                 CELL_GET_WORLD_SPACE,
                 WORLD_UNLOAD_CELL,
                 OBJECT_011DDF38_TEST,
-                SET_BYTE_01202DF0,
+                SET_FLAG_01202DF0,
             ]
         );
-        assert_eq!(calls(&e, SET_BYTE_01202DF0), vec![vec![1], vec![0]]);
+        assert_eq!(calls(&e, SET_FLAG_01202DF0), vec![vec![1], vec![0]]);
         assert_eq!(calls(&e, CELL_DETACH), vec![vec![cell, 1]]);
         assert_eq!(
             calls(&e, OBJECT_011E0E80_STEP),
@@ -12541,5 +15423,1693 @@ mod tests {
         assert!(calls(&p.e, 0x0340_0000 + 0x46c).is_empty());
         assert_eq!(p.e.mem.u32(actor + 8), 0xffff_ffff);
         let _ = p.base_object;
+    }
+
+    // ---------------------------------------------------------------
+    // Session 4: `0046a080` to `0046feb0`.
+    // ---------------------------------------------------------------
+
+    /// A block of floats (a position or a rotation).
+    fn float_block(e: &mut Engine, values: [f32; 3]) -> Ptr {
+        let block = e.mem.alloc(12);
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_f32(block + 4 * i as u32, *value);
+        }
+        Ptr::new(block)
+    }
+
+    #[test]
+    fn projectile_is_created_in_the_target_cell() {
+        let (mut e, this) = engine();
+        let position = float_block(&mut e, [8192.0, 4096.0, 5.0]);
+        let rotation = float_block(&mut e, [0.5, 0.25, 0.125]);
+        e.register(FORM_GET_TYPE, |_, a| {
+            ret(if a[0] == 0x1000 { 0x33 } else { 1 })
+        });
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register(PROJECTILE_CREATE, |_, _| ret(0x7777));
+        e.register(WORLD_GET_CELL, |_, a| {
+            ret(if a[0] == 0x55 { 0xce11 } else { 0 })
+        });
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+        start_log(&mut e);
+        let call = |e: &mut Engine, form: u32, cell: u32, world: u32| {
+            e.call(
+                0x0046_a080,
+                &args![this, form, position, rotation, cell, world],
+            )
+            .u32()
+        };
+        // Not a projectile, or no form: nothing.
+        assert_eq!(call(&mut e, 0x2000, 0xc0, 0), 0);
+        assert_eq!(call(&mut e, 0, 0xc0, 0), 0);
+        assert!(calls(&e, PROJECTILE_CREATE).is_empty());
+        // A cell: used as it is.
+        assert_eq!(call(&mut e, 0x1000, 0xc0, 0), 0x7777);
+        let words = |cell: u32| {
+            vec![
+                0x1000,
+                0,
+                0,
+                0,
+                8192.0f32.to_bits(),
+                4096.0f32.to_bits(),
+                5.0f32.to_bits(),
+                0.125f32.to_bits(),
+                0.5f32.to_bits(),
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                cell,
+            ]
+        };
+        assert_eq!(calls(&e, PROJECTILE_CREATE), vec![words(0xc0)]);
+        // A world space: the cell at (2, 1).
+        assert_eq!(call(&mut e, 0x1000, 0xc0, 0x55), 0x7777);
+        assert_eq!(calls(&e, WORLD_GET_CELL), vec![vec![0x55, 2, 1]]);
+        assert_eq!(calls(&e, PROJECTILE_CREATE)[1], words(0xce11));
+        // No cell there: logged, nothing created.
+        assert_eq!(call(&mut e, 0x1000, 0xc0, 0x66), 0);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![UNLOADED_CELL_FORMAT, 2, 1]]
+        );
+        assert_eq!(calls(&e, PROJECTILE_CREATE).len(), 2);
+    }
+
+    #[test]
+    fn explosion_is_created_with_the_player_as_cause() {
+        let (mut e, this) = engine();
+        let position = float_block(&mut e, [8192.0, 4096.0, 5.0]);
+        let rotation = float_block(&mut e, [0.5, 0.25, 0.125]);
+        e.set_global(PLAYER_SINGLETON, 0x1234u32);
+        e.register(FORM_GET_TYPE, |_, a| {
+            ret(if a[0] == 0x1000 || a[0] == 0x1100 {
+                0x51
+            } else {
+                1
+            })
+        });
+        e.register(FORM_GET_ID, |_, a| {
+            ret(if a[0] == 0x1000 { 0xc_def0 } else { 7 })
+        });
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        e.register(MATRIX_FROM_EULER_ANGLES_ZYX, |e, a| {
+            for i in 0..9 {
+                e.mem.set_u32(a[0] + 4 * i, 100 + i);
+            }
+            ret(0)
+        });
+        e.register(EXPLOSION_CREATE, |_, _| ret(0x8888));
+        e.register(WORLD_GET_CELL, |_, _| ret(0));
+        e.register(REFERENCE_GET_WORLD_SPACE, |_, _| ret(0x77));
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+        e.register(REFERENCE_SET_PERSISTS, |_, _| ret(0));
+        e.register(ITEM_GET_CELL, |_, _| ret(0x99));
+        e.register(REFERENCE_EXTRA_DATA_LIST, |_, _| ret(0xe1));
+        e.register(EXTRA_SET_PERSISTENT_CELL, |_, _| ret(0));
+        start_log(&mut e);
+        let call = |e: &mut Engine, form: u32, cell: u32, world: u32| {
+            e.call(
+                0x0046_a190,
+                &args![this, form, position, rotation, cell, world],
+            )
+            .u32()
+        };
+        assert_eq!(call(&mut e, 0x2000, 0xc0, 0), 0);
+        assert_eq!(call(&mut e, 0x1000, 0xc0, 0), 0x8888);
+        let matrix: Vec<u32> = (100..109).collect();
+        let create = |form: u32, cause: u32, cell: u32| {
+            let mut words = vec![
+                form,
+                cause,
+                0,
+                cell,
+                8192.0f32.to_bits(),
+                4096.0f32.to_bits(),
+                5.0f32.to_bits(),
+            ];
+            words.extend(&matrix);
+            words
+        };
+        assert_eq!(calls(&e, EXPLOSION_CREATE)[0], create(0x1000, 0x1234, 0xc0));
+        // The matrix comes from the rotation, z first.
+        let euler = &calls(&e, MATRIX_FROM_EULER_ANGLES_ZYX)[0];
+        assert_eq!(
+            euler[1..],
+            [0.125f32.to_bits(), 0.25f32.to_bits(), 0.5f32.to_bits()]
+        );
+        // Another form id: no cause.
+        call(&mut e, 0x1100, 0xc0, 0);
+        assert_eq!(calls(&e, EXPLOSION_CREATE)[1], create(0x1100, 0, 0xc0));
+        // A world space without a cell: made persistent in the world space's
+        // persistent cell; logged unless it is the player's world space.
+        call(&mut e, 0x1100, 0, 0x78);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![UNLOADED_CELL_FORMAT, 2, 1]]
+        );
+        assert_eq!(calls(&e, REFERENCE_SET_PERSISTS), vec![vec![0x8888, 1]]);
+        assert_eq!(calls(&e, EXTRA_SET_PERSISTENT_CELL), vec![vec![0xe1, 0x99]]);
+        assert_eq!(calls(&e, ITEM_GET_CELL), vec![vec![0x78]]);
+        call(&mut e, 0x1100, 0, 0x77);
+        assert_eq!(calls(&e, LOG_MESSAGE).len(), 1);
+    }
+
+    #[test]
+    fn handler_error_report_names_the_warnings_file() {
+        let (mut e, this) = engine();
+        e.register(WARNINGS_FILE_NAME, |_, _| ret(0xf11e));
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_a330, &args![this, 3u32]);
+        e.call(0x0046_a330, &args![this, 4u32]);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![
+                vec![HANDLER_UNRECOGNIZED_FORM_FORMAT, 0xf11e],
+                vec![HANDLER_ERROR_MESSAGE]
+            ]
+        );
+    }
+
+    #[test]
+    fn weapon_byte_is_stored() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x100);
+        e.call(0x0046_dcc0, &args![object, 7u8]);
+        assert_eq!(e.mem.u8(object + 0xf4), 7);
+    }
+
+    #[test]
+    fn global_value_is_stored() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x100);
+        e.call(0x0046_dce0, &args![object, 80.5f32]);
+        assert_eq!(e.mem.f32(object + 0x24), 80.5);
+    }
+
+    #[test]
+    fn checking_models_flag_is_set_and_cleared() {
+        let (mut e, this) = engine();
+        e.call(0x0046_e880, &args![this, 1u8]);
+        assert!(e.get(this, TESDataHandler::bCheckingModels));
+        e.call(0x0046_e880, &args![this, 0u8]);
+        assert!(!e.get(this, TESDataHandler::bCheckingModels));
+    }
+
+    #[test]
+    fn sky_instance_is_created_once() {
+        let mut e = Engine::new();
+        e.map(0x011c_c000, 0x1000);
+        e.register(SCOPE_ENTER, |_, _| ret(0));
+        e.register(SCOPE_LEAVE, |_, _| ret(0));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(SKY_CONSTRUCT, |_, a| ret(a[0]));
+        start_log(&mut e);
+        let first = e.call(0x0046_dd00, &args![]).u32();
+        assert_ne!(first, 0);
+        assert_eq!(e.call(0x0046_dd00, &args![]).u32(), first);
+        assert_eq!(e.global::<u32>(SKY_SINGLETON), first);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x138]]);
+        let enter = &calls(&e, SCOPE_ENTER)[0];
+        assert_eq!(enter[1..], [0x21, 1, SKY_HEADER_FILE, 0x118]);
+        assert_eq!(calls(&e, SKY_CONSTRUCT), vec![vec![first]]);
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn makepath_wrapper_passes_its_arguments() {
+        let mut e = Engine::new();
+        e.register(MAKE_PATH_S, |_, _| ret(22));
+        start_log(&mut e);
+        let result = e.call(0x0046_e850, &args![1u32, 2u32, 3u32, 4u32, 5u32, 6u32]);
+        assert_eq!(result.i32(), 22);
+        assert_eq!(calls(&e, MAKE_PATH_S), vec![vec![1, 2, 3, 4, 5, 6]]);
+    }
+
+    #[test]
+    fn mbsicmp_wrapper_returns_the_comparison() {
+        let mut e = Engine::new();
+        e.register(MBSICMP, |_, a| ret(a[0].wrapping_sub(a[1])));
+        assert_eq!(e.call(0x0046_fd30, &args![5u32, 8u32]).i32(), -3);
+    }
+
+    #[test]
+    fn warning_count_is_read_from_the_tls_block() {
+        let mut e = Engine::new();
+        let tls = e.tls();
+        e.mem.set_u32(tls + 0x2b8, 41);
+        assert_eq!(e.call(0x0046_e8a0, &args![]).u32(), 41);
+    }
+
+    #[test]
+    fn flag_getters_test_their_bits() {
+        let mut e = Engine::new();
+        let big = e.mem.alloc(0x200);
+        assert!(!e.call(0x0046_e8c0, &args![big]).bool());
+        e.mem.set_u8(big + 0x100, 0x20);
+        assert!(e.call(0x0046_e8c0, &args![big]).bool());
+        e.mem.set_u8(big + 0x100, 0xdf);
+        assert!(!e.call(0x0046_e8c0, &args![big]).bool());
+        e.mem.set_u32(big + 0xa8, 2);
+        assert!(e.call(0x0046_f070, &args![big]).bool());
+        e.mem.set_u32(big + 0xa8, 0xfd);
+        assert!(!e.call(0x0046_f070, &args![big]).bool());
+    }
+
+    #[test]
+    fn word_comparison_and_zero_getters() {
+        let mut e = Engine::new();
+        let big = e.mem.alloc(0x200);
+        assert_eq!(e.call(0x0046_fdf0, &args![big]).u32(), 0);
+        e.mem.set_u32(big + 0x38, 0x77);
+        assert!(e.call(0x0046_fdd0, &args![big, 0x77u32]).bool());
+        assert!(!e.call(0x0046_fdd0, &args![big, 0x78u32]).bool());
+    }
+
+    #[test]
+    fn texture_sink_hands_the_texture_to_the_cast() {
+        let (mut e, this) = engine();
+        e.register(TEXTURE_INFO, |_, a| ret(a[0] + 1));
+        e.register(PROPERTY_CAST, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_e8e0, &args![this, 0u32, 1u32, 2u32, 3u32, 4u32]);
+        assert!(calls(&e, TEXTURE_INFO).is_empty());
+        e.call(0x0046_e8e0, &args![this, 0x500u32, 1u32, 2u32, 3u32, 4u32]);
+        assert_eq!(calls(&e, TEXTURE_INFO), vec![vec![0x500]]);
+        assert_eq!(
+            calls(&e, PROPERTY_CAST),
+            vec![vec![TEXTURE_SINK_RTTI, 0x501]]
+        );
+    }
+
+    #[test]
+    fn texture_maps_read_the_array_of_the_property() {
+        let mut e = Engine::new();
+        let property = e.mem.alloc(0x40);
+        let cells = e.mem.alloc(0x100);
+        e.register_double(ARRAY_AT, move |_, a| {
+            assert_eq!(a[0], property + 0x1c);
+            ret(cells + 4 * a[1])
+        });
+        for i in 0..16 {
+            e.mem.set_u32(cells + 4 * i, 0xa000 + i);
+        }
+        for (address, index) in [
+            (0x0046_eb00u32, 1u32),
+            (0x0046_eb20, 2),
+            (0x0046_eb40, 3),
+            (0x0046_eb60, 4),
+            (0x0046_eb80, 5),
+        ] {
+            assert_eq!(e.call(address, &args![property]).u32(), 0xa000 + index);
+        }
+        assert_eq!(e.call(0x0046_eba0, &args![property, 3u32]).u32(), 0xa00b);
+    }
+
+    #[test]
+    fn decal_count_is_a_bit_field() {
+        let mut e = Engine::new();
+        let property = e.mem.alloc(0x40);
+        e.mem.set_u16(property + 0x18, 0xf5a7);
+        assert_eq!(e.call(0x0046_ebd0, &args![property]).u16(), 0x5a);
+        // The general form: mask, shift (only the low 5 bits count).
+        assert_eq!(
+            e.call(0x0046_ebf0, &args![property, 0xff00u32, 0x28u32])
+                .i32(),
+            (0xf5a7 & 0xff00) >> 8
+        );
+        assert_eq!(
+            e.call(0x0046_ebf0, &args![property, 0x000fu32, 0u32]).i32(),
+            7
+        );
+    }
+
+    #[test]
+    fn embedded_icon_object_is_asked_for_its_directory() {
+        let mut e = Engine::new();
+        let object = e.mem.alloc(0x100);
+        let vtable = 0x0340_0000;
+        e.put_vtable(vtable, &[0, 0, 0, 0, 0, 0, 0x0340_1000]);
+        e.mem.set_u32(object + 0x8c, vtable);
+        e.register(0x0340_1000, |_, a| ret(a[0] + 0x1000));
+        assert_eq!(
+            e.call(0x0046_f090, &args![object]).u32(),
+            object + 0x8c + 0x1000
+        );
+    }
+
+    #[test]
+    fn containers_are_cleared_when_present() {
+        let (mut e, this) = engine();
+        e.register(INVENTORY_CHANGES_CLEAR_ALL, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_faf0, &args![this]);
+        e.call(0x0046_fb20, &args![this]);
+        assert!(calls(&e, INVENTORY_CHANGES_CLEAR_ALL).is_empty());
+        e.set(this, TESDataHandler::pBarterContainer, Ptr::new(0xb1));
+        e.set(this, TESDataHandler::pRecipeContainer, Ptr::new(0xb2));
+        e.call(0x0046_faf0, &args![this]);
+        e.call(0x0046_fb20, &args![this]);
+        assert_eq!(
+            calls(&e, INVENTORY_CHANGES_CLEAR_ALL),
+            vec![vec![0xb1], vec![0xb2]]
+        );
+    }
+
+    #[test]
+    fn animation_object_is_found_by_its_word() {
+        let (mut e, this) = engine();
+        // Three nodes on the list at +0x1A0, items with the word at +0x38.
+        let items: Vec<u32> = (0..3)
+            .map(|i| {
+                let item = e.mem.alloc(0x40);
+                e.mem.set_u32(item + 0x38, if i == 1 { 5 } else { 9 });
+                item
+            })
+            .collect();
+        let nodes: Vec<u32> = (0..2).map(|_| e.mem.alloc(8)).collect();
+        let head = this.addr() + 0x1a0;
+        e.mem.set_u32(head, items[0]);
+        e.mem.set_u32(head + 4, nodes[0]);
+        e.mem.set_u32(nodes[0], items[1]);
+        e.mem.set_u32(nodes[0] + 4, nodes[1]);
+        e.mem.set_u32(nodes[1], items[2]);
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        assert_eq!(
+            e.call(0x0046_fd50, &args![this, 5u32, 0u32]).u32(),
+            items[1]
+        );
+        assert_eq!(
+            e.call(0x0046_fd50, &args![this, 9u32, 0u32]).u32(),
+            items[0]
+        );
+        assert_eq!(
+            e.call(0x0046_fd50, &args![this, 9u32, 1u32]).u32(),
+            items[2]
+        );
+        assert_eq!(e.call(0x0046_fd50, &args![this, 9u32, 2u32]).u32(), 0);
+        assert_eq!(e.call(0x0046_fd50, &args![this, 4u32, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn bit_counter_counts_four_bits() {
+        let mut e = Engine::new();
+        let byte = e.mem.alloc(4);
+        for (value, expected) in [(0u8, 0u32), (1, 1), (0x0f, 4), (0xf5, 2), (0x80, 0)] {
+            e.mem.set_u8(byte, value);
+            assert_eq!(e.call(0x0046_fe10, &args![byte]).u32(), expected);
+        }
+    }
+
+    #[test]
+    fn bit_test_sign_extends_both_bytes() {
+        let mut e = Engine::new();
+        let byte = e.mem.alloc(4);
+        e.mem.set_u8(byte, 0x04);
+        assert!(e.call(0x0046_fe90, &args![byte, 4u8]).bool());
+        assert!(!e.call(0x0046_fe90, &args![byte, 2u8]).bool());
+        e.mem.set_u8(byte, 0x80);
+        assert!(e.call(0x0046_fe90, &args![byte, 0x80u8]).bool());
+        assert!(!e.call(0x0046_fe90, &args![byte, 0x01u8]).bool());
+    }
+
+    #[test]
+    fn dlc_package_names_are_chosen_by_first_letter() {
+        let (mut e, this) = engine();
+        e.register(STRING_LENGTH, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
+        // Case-insensitive compare of the first `n` characters.
+        e.register(STRING_COMPARE_N, |e, a| {
+            let first = e.mem.cstr(a[0]);
+            let second = e.mem.cstr(a[1]);
+            let n = a[2] as usize;
+            let same = first.len() >= n
+                && second.len() >= n
+                && first[..n].eq_ignore_ascii_case(&second[..n]);
+            ret(if same { 0 } else { 1 })
+        });
+        for (address, text) in [
+            (DEAD_MONEY_NAME, &b"DeadMoney"[..]),
+            (HONEST_HEARTS_NAME, b"HonestHearts"),
+            (OLD_WORLD_BLUES_NAME, b"OldWorldBlues"),
+            (LONESOME_ROAD_NAME, b"LonesomeRoad"),
+        ] {
+            e.map(address & !0xfff, 0x1000);
+            e.mem.set_cstr(address, text);
+        }
+        let name = e.mem.alloc(0x40);
+        for (text, expected) in [
+            (&b"DeadMoney"[..], 1u32),
+            (b"DEADMONEY.esm", 1),
+            (b"deadmoney.esm", 0),
+            (b"HonestHearts.esm", 2),
+            (b"OldWorldBlues.esm", 3),
+            (b"LonesomeRoad.esm", 4),
+            (b"DeadMoneX", 0),
+            (b"Fallout", 0),
+            (b"D", 0),
+            (b"", 0),
+            (b"Dxxxxxxxxxxxxxxx", 0),
+        ] {
+            e.mem.set_cstr(name, text);
+            assert_eq!(
+                e.call(0x0046_feb0, &args![this, name]).u32(),
+                expected,
+                "{}",
+                String::from_utf8_lossy(text)
+            );
+        }
+    }
+
+    #[test]
+    fn references_near_a_point_go_to_the_cell_or_its_world_space() {
+        let (mut e, this) = engine();
+        e.register(CELL_IS_INTERIOR, |_, a| ret((a[0] == 0xc1) as u32));
+        e.register(CELL_GET_WORLD_SPACE, |_, a| {
+            ret(if a[0] == 0xc2 { 0x55 } else { 0 })
+        });
+        e.register(WORLD_ENUM_REFERENCES, |_, _| ret(0));
+        e.register(CELL_ENUM_REFERENCES, |_, _| ret(0));
+        start_log(&mut e);
+        let go = |e: &mut Engine, cell: u32, callback: u32| {
+            e.call(
+                0x0046_f280,
+                &args![this, cell, 1u32, 2.5f32, 3u32, 4.5f32, callback, 9u32],
+            );
+        };
+        go(&mut e, 0, 7);
+        go(&mut e, 0xc1, 0);
+        assert!(calls(&e, CELL_ENUM_REFERENCES).is_empty());
+        go(&mut e, 0xc1, 7);
+        assert_eq!(
+            calls(&e, CELL_ENUM_REFERENCES),
+            vec![vec![0xc1, 1, 2.5f32.to_bits(), 3, 4.5f32.to_bits(), 7, 9]]
+        );
+        go(&mut e, 0xc2, 7);
+        assert_eq!(
+            calls(&e, WORLD_ENUM_REFERENCES),
+            vec![vec![0x55, 1, 2.5f32.to_bits(), 3, 4.5f32.to_bits(), 7, 9]]
+        );
+        // An exterior cell without a world space: nothing.
+        go(&mut e, 0xc3, 7);
+        assert_eq!(calls(&e, WORLD_ENUM_REFERENCES).len(), 1);
+    }
+
+    /// Settings for the debug reports: a page of bytes, one per low byte of a
+    /// setting object's address. Returns nothing; sets the values given.
+    fn install_settings(e: &mut Engine, on: &[u32]) {
+        e.map(0x0300_0000, 0x1000);
+        e.register(SETTING_VALUE, |_, a| ret(0x0300_0000 + (a[0] & 0xff)));
+        for setting in on {
+            e.mem.set_u8(0x0300_0000 + (setting & 0xff), 1);
+        }
+    }
+
+    /// A C string in a fresh block.
+    fn text(e: &mut Engine, value: &[u8]) -> u32 {
+        let block = e.mem.alloc(value.len() as u32 + 1);
+        e.mem.set_cstr(block, value);
+        block
+    }
+
+    /// A node of a scene graph test: an object with the given virtual slots.
+    fn node_with(e: &mut Engine, vtable: u32, slots: &[(u32, u32)]) -> u32 {
+        object_with(e, vtable, slots)
+    }
+
+    #[test]
+    fn scene_graph_textures_go_to_the_sink() {
+        let (mut e, this) = engine();
+        let cells = e.mem.alloc(0x100);
+        for i in 0..16 {
+            e.mem.set_u32(cells + 4 * i, 0xa000 + i);
+        }
+        let texturing = e.mem.alloc(0x40);
+        // Two decal maps: bits 4 to 11 of the flags word.
+        e.mem.set_u16(texturing + 0x18, 0x0020);
+        e.register_double(ARRAY_AT, move |_, a| ret(cells + 4 * a[1]));
+        e.register_double(PROPERTY_CAST, move |_, a| {
+            ret(if a[0] == TEXTURING_PROPERTY_RTTI {
+                texturing
+            } else {
+                0
+            })
+        });
+        e.register(NODE_GET_PROPERTY, |_, a| {
+            ret(if a[1] == 3 { 1 } else { 0x9000 })
+        });
+        e.register(TEXTURE_INFO, |_, a| ret(a[0]));
+        e.register(0x0341_0000, |_, _| ret(1));
+        e.register(0x0341_0001, |_, _| ret(0));
+        let geometry = node_with(&mut e, 0x0342_0000, &[(0x1c, 0x0341_0000)]);
+        let parent = node_with(
+            &mut e,
+            0x0343_0000,
+            &[(0x1c, 0x0341_0001), (0xc, 0x0341_0000)],
+        );
+        e.register(NODE_CHILD_COUNT, |_, _| ret(2));
+        e.register_double(NODE_CHILD_AT, move |_, a| {
+            ret(if a[1] == 0 { geometry } else { 0 })
+        });
+        start_log(&mut e);
+        e.call(0x0046_e910, &args![this, parent, 0xbeefu32]);
+        // Detail, bump, glow, gloss, dark, then the decals 8 and 9.
+        let order: Vec<u32> = calls(&e, TEXTURE_INFO).iter().map(|c| c[0]).collect();
+        assert_eq!(
+            order,
+            vec![0xa002, 0xa005, 0xa004, 0xa003, 0xa001, 0xa008, 0xa009]
+        );
+        assert_eq!(
+            calls(&e, NODE_CHILD_AT),
+            vec![vec![parent, 0], vec![parent, 1]]
+        );
+        // Nothing for a null node or a geometry without a texturing property.
+        e.call(0x0046_e910, &args![this, 0u32, 0u32]);
+        e.register(PROPERTY_CAST, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_e910, &args![this, geometry, 0u32]);
+        assert!(calls(&e, TEXTURE_INFO).is_empty());
+    }
+
+    /// The Windows file functions of `CheckForNiRawImageData` over `content`.
+    fn install_file(e: &mut Engine, handle: u32, content: &'static [u8]) {
+        e.register_double(CREATE_FILE_A, move |_, _| ret(handle));
+        e.register_double(GET_FILE_SIZE, move |_, _| ret(content.len() as u32));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register_double(READ_FILE, move |e, a| {
+            e.mem.write(a[1], content);
+            e.mem.set_u32(a[3], content.len() as u32);
+            ret(1)
+        });
+        e.register(CLOSE_HANDLE, |_, _| ret(1));
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+    }
+
+    #[test]
+    fn raw_image_data_is_found_in_the_file() {
+        let (mut e, this) = engine();
+        let path = text(&mut e, b"a.nif");
+        // The tag at offset 4 of a 20 byte file is the last place scanned.
+        install_file(&mut e, 5, b"abcdNiRawImageDataxx");
+        start_log(&mut e);
+        e.call(0x0046_f0c0, &args![this, path]);
+        assert_eq!(
+            calls(&e, CREATE_FILE_A),
+            vec![vec![path, GENERIC_READ, 1, 0, 3, 0x0800_0001, 0]]
+        );
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![RAW_IMAGE_DATA_FORMAT, path]]
+        );
+        assert_eq!(calls(&e, CLOSE_HANDLE), vec![vec![5]]);
+        // At offset 5 it is beyond the scan.
+        install_file(&mut e, 5, b"abcdeNiRawImageDatax");
+        start_log(&mut e);
+        e.call(0x0046_f0c0, &args![this, path]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+        // A file without it, a short file and an empty file.
+        for content in [&b"nothing to see here at all!"[..], b"NiRawImage", b""] {
+            let content: &'static [u8] = Box::leak(content.to_vec().into_boxed_slice());
+            install_file(&mut e, 5, content);
+            start_log(&mut e);
+            e.call(0x0046_f0c0, &args![this, path]);
+            assert!(calls(&e, LOG_MESSAGE).is_empty());
+            assert_eq!(calls(&e, CLOSE_HANDLE).len(), 1);
+        }
+        // A file that cannot be opened: nothing else.
+        install_file(&mut e, INVALID_HANDLE, b"abcdNiRawImageDataxx");
+        start_log(&mut e);
+        e.call(0x0046_f0c0, &args![this, path]);
+        assert!(calls(&e, CLOSE_HANDLE).is_empty());
+        assert!(calls(&e, GET_FILE_SIZE).is_empty());
+    }
+
+    /// The vtables of the forms and icon-like objects of the `CheckIcons`
+    /// tests: a form answers its editor id "Ed" from virtual `0x130`, an
+    /// icon-like object answers the directory "Dir\" from virtual `0x18`.
+    fn icon_vtables(e: &mut Engine) {
+        let editor = text(e, b"Ed");
+        let directory = text(e, b"Dir\\");
+        e.register_double(0x0344_1000, move |_, _| ret(editor));
+        e.register_double(0x0345_1000, move |_, _| ret(directory));
+    }
+
+    /// A form of `form_type` for `CheckIcons` that casts to an icon-like
+    /// object (with the given name text, null for an empty name) at
+    /// `cast_offset`.
+    fn icon_form(e: &mut Engine, form_type: u8, cast_offset: u32, name: &[u8]) -> u32 {
+        let form = object_with(e, 0x0344_0000, &[(0x130, 0x0344_1000)]);
+        e.mem.set_u8(form + 4, form_type);
+        let object = if cast_offset == 0x18 {
+            // A biped form: the icon object is embedded at +0x8C.
+            let biped = e.mem.alloc(0x100);
+            e.put_vtable(0x0345_0000, &[0x7fff_0000; 8]);
+            e.mem.set_u32(0x0345_0000 + 0x18, 0x0345_1000);
+            e.mem.set_u32(biped + 0x8c, 0x0345_0000);
+            let icon_text = text(e, name);
+            e.mem.set_u32(biped + 0x20, icon_text);
+            biped
+        } else {
+            let object = object_with(e, 0x0345_0000, &[(0x18, 0x0345_1000)]);
+            if !name.is_empty() {
+                let name = text(e, name);
+                e.mem.set_u32(object + 0x20, name);
+            }
+            object
+        };
+        e.mem.set_u32(form + cast_offset, object);
+        form
+    }
+
+    /// The doubles `CheckIcons` needs: `entries` in `pAllForms`, the text
+    /// functions and a set of existing files.
+    fn install_icon_doubles(
+        e: &mut Engine,
+        entries: Vec<(u32, u32)>,
+        existing: &'static [&'static [u8]],
+    ) {
+        e.set_global(ALL_FORMS_MAP, 0xa11u32);
+        e.register(MAP_FIRST_POSITION, |_, _| ret(1));
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            let position = e.mem.u32(a[1]) as usize;
+            let (key, form) = entries[position - 1];
+            e.mem.set_u32(a[2], key);
+            e.mem.set_u32(a[3], form);
+            let next = if position < entries.len() {
+                position as u32 + 1
+            } else {
+                0
+            };
+            e.mem.set_u32(a[1], next);
+            ret(0)
+        });
+        e.register(FORM_GET_TYPE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(FORM_TYPE_LABEL, |_, a| ret(0x7100 + a[0]));
+        e.register(DYNAMIC_CAST, |e, a| {
+            let offset = match a[3] {
+                ICON_TYPE_DESCRIPTOR => 0x10,
+                TEXTURE_TYPE_DESCRIPTOR => 0x14,
+                BIPED_MODEL_TYPE_DESCRIPTOR => 0x18,
+                other => panic!("cast to {other:08x}"),
+            };
+            ret(e.mem.u32(a[0] + offset))
+        });
+        e.register(MODEL_HAS_NAME, |e, a| {
+            ret((e.mem.u32(a[0] + 0x20) != 0) as u32)
+        });
+        e.register(ITEM_NAME_TEXT, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(STRING_LENGTH, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
+        e.register(BIPED_ICON_TEXT, |e, a| {
+            assert_eq!(a[1], 0);
+            ret(e.mem.u32(a[0] + 0x20))
+        });
+        e.register(FORMAT_S, |e, a| {
+            let mut joined = e.mem.cstr(a[3]);
+            joined.extend(e.mem.cstr(a[4]));
+            e.mem.set_cstr(a[0], &joined);
+            ret(0)
+        });
+        e.register_double(FILE_FINDER_EXIST, move |e, a| {
+            let path = e.mem.cstr(a[0]);
+            ret(existing.contains(&path.as_slice()) as u32)
+        });
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+    }
+
+    #[test]
+    fn missing_icons_and_textures_are_logged() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_011C3F80, SETTING_011C4060]);
+        icon_vtables(&mut e);
+        let icon = icon_form(&mut e, 0x10, 0x10, b"icon.dds");
+        let landscape = icon_form(&mut e, 0x12, 0x14, b"rock.dds");
+        let no_texture = icon_form(&mut e, 3, 0x14, b"");
+        let ignored_texture = icon_form(&mut e, 7, 0x14, b"");
+        let empty_biped = icon_form(&mut e, 0x20, 0x18, b"");
+        let biped = icon_form(&mut e, 0x20, 0x18, b"worn.dds");
+        let quiet_icon = icon_form(&mut e, 0x1e, 0x10, b"x.dds");
+        let loud_icon = icon_form(&mut e, 0x1e, 0x10, b"y.dds");
+        e.mem.set_u32(loud_icon + 0xa8, 2);
+        let nameless_icon = icon_form(&mut e, 0x10, 0x10, b"");
+        let plain = icon_form(&mut e, 0x30, 0x18, b"");
+        e.mem.set_u32(plain + 0x18, 0);
+        let existing: &'static [&'static [u8]] = &[b"Dir\\rock.dds"];
+        let entries = [
+            icon,
+            landscape,
+            no_texture,
+            ignored_texture,
+            empty_biped,
+            biped,
+            quiet_icon,
+            loud_icon,
+            nameless_icon,
+            plain,
+        ];
+        install_icon_doubles(
+            &mut e,
+            entries
+                .iter()
+                .enumerate()
+                .map(|(i, &f)| (i as u32, f))
+                .collect(),
+            existing,
+        );
+        start_log(&mut e);
+        e.call(0x0046_ec10, &args![this]);
+        let name_of = |e: &Engine, form: u32, offset: u32| {
+            let object = e.mem.u32(form + offset);
+            e.mem.u32(object + 0x20)
+        };
+        let logs = calls(&e, LOG_MESSAGE);
+        let label = |form_type: u32| 0x7100 + form_type;
+        let editor_id = logs[0][3];
+        assert_eq!(
+            logs,
+            vec![
+                vec![
+                    ICON_FILE_MISSING_FORMAT,
+                    name_of(&e, icon, 0x10),
+                    label(0x10),
+                    editor_id
+                ],
+                vec![TEXTURE_MISSING_FORMAT, label(3), editor_id],
+                vec![ICON_MISSING_FORMAT, label(0x20), editor_id],
+                vec![
+                    MENU_ICON_MISSING_FORMAT,
+                    name_of(&e, biped, 0x18),
+                    label(0x20),
+                    editor_id
+                ],
+                vec![
+                    ICON_FILE_MISSING_FORMAT,
+                    name_of(&e, loud_icon, 0x10),
+                    label(0x1e),
+                    editor_id
+                ],
+                vec![ICON_MISSING_FORMAT, label(0x10), editor_id],
+            ]
+        );
+        // The landscape texture used the landscape format.
+        let formats: Vec<u32> = calls(&e, FORMAT_S).iter().map(|c| c[2]).collect();
+        assert!(formats.contains(&LANDSCAPE_PATH_FORMAT));
+        assert_eq!(
+            calls(&e, FILE_FINDER_EXIST)[0],
+            vec![calls(&e, FORMAT_S)[0][0], 0, 0, 0xffff_ffff]
+        );
+    }
+
+    #[test]
+    fn icon_report_is_skipped_by_its_setting_or_without_forms() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_SKIP_ICON_CHECK]);
+        e.set_global(ALL_FORMS_MAP, 0xa11u32);
+        e.register(MAP_FIRST_POSITION, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_ec10, &args![this]);
+        assert!(calls(&e, MAP_FIRST_POSITION).is_empty());
+        e.mem.set_u8(0x0300_0000 + 0x98, 0);
+        e.set_global(ALL_FORMS_MAP, 0u32);
+        e.call(0x0046_ec10, &args![this]);
+        assert!(calls(&e, MAP_FIRST_POSITION).is_empty());
+        e.set_global(ALL_FORMS_MAP, 0xa11u32);
+        e.call(0x0046_ec10, &args![this]);
+        assert_eq!(calls(&e, MAP_FIRST_POSITION), vec![vec![0xa11]]);
+    }
+
+    /// The doubles shared by the `CheckModels` tests, with one object (type
+    /// byte `0x28` at kind index 3) in the object list that is visited
+    /// `visits` times. Returns the object, its model object and the
+    /// editor id, model path and kind name texts.
+    struct ModelWorld {
+        form: u32,
+        model: u32,
+        editor_id: u32,
+        model_path: u32,
+        kind_name: u32,
+    }
+
+    fn model_world(e: &mut Engine, this: Ptr<TESDataHandler>, visits: u32) -> ModelWorld {
+        for page in [0x0118_a000, 0x011c_3000, 0x0120_2000] {
+            e.map(page, 0x1000);
+        }
+        let editor_id = text(e, b"EdId");
+        let model_path = text(e, b"a\\b.nif");
+        let kind_name = text(e, b"Static");
+        e.mem.set_u8(MODEL_KIND_TYPES + 3, 0x28);
+        e.mem.set_u32(MODEL_KIND_NAMES + 12, kind_name);
+        e.register_double(0x0346_0000, move |_, _| ret(editor_id));
+        e.register(0x0346_0001, |_, _| ret(0));
+        e.register_double(0x0346_0002, move |_, _| ret(model_path));
+        let form = object_with(
+            e,
+            0x0346_1000,
+            &[(0x130, 0x0346_0000), (0x154, 0x0346_0001)],
+        );
+        e.mem.set_u8(form + 4, 0x28);
+        let model = object_with(e, 0x0346_2000, &[(0x14, 0x0346_0002)]);
+        let list = e.mem.alloc(8);
+        e.mem.set_u32(list + 4, form);
+        e.set(this, TESDataHandler::pObjectList, Ptr::new(list));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        let remaining = Rc::new(RefCell::new(visits));
+        e.register_double(OBJECT_NEXT, move |_, _| {
+            let mut remaining = remaining.borrow_mut();
+            if *remaining == 0 {
+                *remaining = visits;
+            }
+            *remaining -= 1;
+            ret(if *remaining == 0 { 0 } else { form })
+        });
+        e.register(FORM_FLAG_BIT_5_AT_8, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x20 != 0) as u32)
+        });
+        e.register(FORM_GET_TYPE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register_double(DYNAMIC_CAST, move |_, a| {
+            ret(match a[3] {
+                MODEL_TYPE_DESCRIPTOR => model,
+                BOUND_OBJECT_TYPE_DESCRIPTOR => a[0],
+                BIPED_MODEL_TYPE_DESCRIPTOR => 0,
+                other => panic!("cast to {other:08x}"),
+            })
+        });
+        e.register(MODEL_HAS_NAME, |_, _| ret(1));
+        e.register(FORMAT_S, |e, a| {
+            let text = e.mem.cstr(a[3]);
+            e.mem.set_cstr(a[0], &text);
+            ret(0)
+        });
+        e.register(LOG_MESSAGE, |_, _| ret(0));
+        ModelWorld {
+            form,
+            model,
+            editor_id,
+            model_path,
+            kind_name,
+        }
+    }
+
+    #[test]
+    fn model_report_is_skipped_by_its_setting() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_SKIP_MODEL_CHECK]);
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        assert!(!e.get(this, TESDataHandler::bCheckingModels));
+    }
+
+    #[test]
+    fn missing_model_is_retried_with_an_x_prefix_and_logged() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_011C3FD4]);
+        let world = model_world(&mut e, this, 1);
+        e.register(FILE_FINDER_EXIST, |_, _| ret(0));
+        e.register(SPLIT_PATH_S, |_, _| ret(0));
+        e.register(STRING_COPY_S, |_, _| ret(0));
+        e.register(MAKE_PATH_S, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert!(!e.get(this, TESDataHandler::bCheckingModels));
+        let formats: Vec<u32> = calls(&e, FORMAT_S).iter().map(|c| c[2]).collect();
+        assert_eq!(
+            formats,
+            vec![
+                MODEL_MESHES_FORMAT,
+                MODEL_X_PREFIX_FORMAT,
+                MODEL_MESHES_FORMAT
+            ]
+        );
+        assert_eq!(calls(&e, FORMAT_S)[0][3], world.model_path);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![
+                MODEL_NOT_FOUND_FORMAT,
+                EMPTY_STRING,
+                world.model_path,
+                world.kind_name,
+                world.editor_id
+            ]]
+        );
+        // The split path call is the nine words of `_splitpath_s`.
+        assert_eq!(calls(&e, SPLIT_PATH_S)[0].len(), 9);
+        assert_eq!(calls(&e, SPLIT_PATH_S)[0][0], world.model_path);
+        assert_eq!(calls(&e, MAKE_PATH_S)[0].len(), 6);
+        // When the prefixed file exists, it is scanned for embedded textures.
+        let existing = Rc::new(RefCell::new(0u32));
+        let counter = existing.clone();
+        e.register_double(FILE_FINDER_EXIST, move |_, _| {
+            let mut count = counter.borrow_mut();
+            *count += 1;
+            ret(if *count == 1 { 0 } else { 1 })
+        });
+        e.register(CREATE_FILE_A, |_, _| ret(INVALID_HANDLE));
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+        assert_eq!(calls(&e, CREATE_FILE_A).len(), 1);
+    }
+
+    #[test]
+    fn model_without_a_name_is_reported_unless_its_kind_allows_it() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_011C4054]);
+        let world = model_world(&mut e, this, 1);
+        e.register(MODEL_HAS_NAME, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![
+                MODEL_NOT_SELECTED_FORMAT,
+                EMPTY_STRING,
+                world.kind_name,
+                world.editor_id
+            ]]
+        );
+        // Kind 0 is never reported.
+        e.mem.set_u8(MODEL_KIND_TYPES + 3, 0);
+        e.mem.set_u8(MODEL_KIND_TYPES, 0x28);
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn unknown_object_type_is_logged_and_deleted_objects_are_skipped() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[]);
+        let world = model_world(&mut e, this, 1);
+        e.mem.set_u8(world.form + 4, 0x7e);
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert_eq!(
+            calls(&e, LOG_MESSAGE),
+            vec![vec![MODEL_INVALID_TYPE_FORMAT, world.editor_id]]
+        );
+        e.mem.set_u32(world.form + 8, 0x20);
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        assert!(calls(&e, LOG_MESSAGE).is_empty());
+    }
+
+    #[test]
+    fn existing_model_is_loaded_and_its_textures_checked() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_011C3FA8]);
+        let world = model_world(&mut e, this, 22);
+        let tes = e.mem.alloc(0x40);
+        e.set_global(TES_SINGLETON, tes);
+        let menu = e.mem.alloc(0x40);
+        e.set_global(OBJECT_011DEA0C, menu);
+        e.register(FILE_FINDER_EXIST, |_, _| ret(1));
+        e.register(MAIN_RENDER_MENU_BACKGROUND, |_, _| ret(0));
+        e.register(SPRINTF, |_, _| ret(0));
+        e.register(SET_LOADING_TEXT, |_, _| ret(0));
+        e.register(MENU_STEP_86FF70, |_, _| ret(0));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        // The reference: virtual 0x1c8 adds a warning, 0x1d0 answers a
+        // scene, 0x10 is the deleting destructor.
+        e.register(0x0347_0000, |e, a| {
+            let tls = e.tls();
+            let warnings = e.mem.u32(tls + 0x2b8);
+            e.mem.set_u32(tls + 0x2b8, warnings + 1);
+            assert_eq!(a[1], 0);
+            ret(0)
+        });
+        e.register(0x0347_0003, |_, _| ret(0));
+        let scene = object_with(
+            &mut e,
+            0x0348_0000,
+            &[(0x1c, 0x0347_0003), (0xc, 0x0347_0003)],
+        );
+        e.register_double(0x0347_0001, move |_, _| ret(scene));
+        e.register(0x0347_0002, |_, _| ret(0));
+        e.register(REFERENCE_CONSTRUCT, |e, a| {
+            e.put_vtable(0x0347_1000, &[0x7fff_0000; 0x80]);
+            e.mem.set_u32(0x0347_1000 + 0x10, 0x0347_0002);
+            e.mem.set_u32(0x0347_1000 + 0x1c8, 0x0347_0000);
+            e.mem.set_u32(0x0347_1000 + 0x1d0, 0x0347_0001);
+            e.mem.set_u32(a[0], 0x0347_1000);
+            ret(a[0])
+        });
+        e.register(REFERENCE_SET_OBJECT_REFERENCE, |_, _| ret(0));
+        e.register(TES_CLEAN_UP_UNUSED_TEXTURES, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        // The menu is rendered once; each visit loads the model.
+        assert_eq!(calls(&e, MAIN_RENDER_MENU_BACKGROUND), vec![vec![menu]]);
+        assert_eq!(calls(&e, SPRINTF).len(), 22);
+        assert_eq!(
+            calls(&e, SPRINTF)[0][1..],
+            [
+                MODEL_LOADING_FORMAT,
+                EMPTY_STRING,
+                world.model_path,
+                world.kind_name,
+                world.editor_id
+            ]
+        );
+        assert_eq!(calls(&e, REFERENCE_CONSTRUCT).len(), 22);
+        assert_eq!(calls(&e, OPERATOR_NEW)[0], vec![0x68]);
+        assert_eq!(calls(&e, REFERENCE_SET_OBJECT_REFERENCE)[0][1], world.form);
+        // Every load raised the warning count: logged each time, followed by
+        // an empty line.
+        let logs = calls(&e, LOG_MESSAGE);
+        assert_eq!(logs.len(), 44);
+        assert_eq!(
+            logs[0],
+            vec![
+                MODEL_WARNINGS_FORMAT,
+                EMPTY_STRING,
+                world.model_path,
+                world.kind_name,
+                world.editor_id
+            ]
+        );
+        assert_eq!(logs[1], vec![EMPTY_STRING]);
+        // The unused textures are cleaned up after the 22nd model.
+        assert_eq!(calls(&e, TES_CLEAN_UP_UNUSED_TEXTURES), vec![vec![tes, 0]]);
+        let _ = world.model;
+    }
+
+    #[test]
+    fn collision_info_is_printed_for_non_actor_models() {
+        let (mut e, this) = engine();
+        install_settings(&mut e, &[SETTING_011C4080]);
+        let world = model_world(&mut e, this, 1);
+        let tes = e.mem.alloc(0x40);
+        e.set_global(TES_SINGLETON, tes);
+        let menu = e.mem.alloc(0x40);
+        e.set_global(OBJECT_011DEA0C, menu);
+        e.register(FILE_FINDER_EXIST, |_, _| ret(1));
+        e.register(MESSAGE_OUTPUT, |_, _| ret(0));
+        e.register(SPRINTF, |_, _| ret(0));
+        e.register(SET_LOADING_TEXT, |_, _| ret(0));
+        e.register(MENU_STEP_86FF70, |_, _| ret(0));
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        // The scene node answers virtual 0xc (its NiNode view) with 0x5ce.
+        let scene = object_with(
+            &mut e,
+            0x0348_0000,
+            &[(0xc, 0x0348_1000), (0x1c, 0x0348_1001)],
+        );
+        e.register(0x0348_1000, |_, _| ret(0x5ce));
+        e.register(0x0348_1001, |_, _| ret(0));
+        e.register(0x0347_0000, |_, _| ret(0));
+        e.register_double(0x0347_0001, move |_, _| ret(scene));
+        e.register(0x0347_0002, |_, _| ret(0));
+        e.register(REFERENCE_CONSTRUCT, |e, a| {
+            e.put_vtable(0x0347_1000, &[0x7fff_0000; 0x80]);
+            e.mem.set_u32(0x0347_1000 + 0x10, 0x0347_0002);
+            e.mem.set_u32(0x0347_1000 + 0x1c8, 0x0347_0000);
+            e.mem.set_u32(0x0347_1000 + 0x1d0, 0x0347_0001);
+            e.mem.set_u32(a[0], 0x0347_1000);
+            ret(a[0])
+        });
+        e.register(REFERENCE_SET_OBJECT_REFERENCE, |_, _| ret(0));
+        e.register(NODE_CHILD_COUNT, |_, _| ret(0));
+        e.register(INSPECT_HAVOK_OBJECTS, |e, a| {
+            e.mem.set_u32(a[1], 6);
+            e.mem.set_u32(a[2], 4);
+            ret(0)
+        });
+        e.register(BOUND_OBJECT_GET_BOUND_SIZE, |_, _| Ret {
+            st0: 2.0,
+            ..Ret::default()
+        });
+        e.register(TES_GET_FACE_COUNT, |_, _| ret(3));
+        start_log(&mut e);
+        e.call(0x0046_ddb0, &args![this, 0u8]);
+        let output = calls(&e, MESSAGE_OUTPUT);
+        // The header, then one row.
+        assert_eq!(output[0], vec![COLLISION_INFO_FILE, COLLISION_INFO_HEADER]);
+        let words = |value: f64| [value.to_bits() as u32, (value.to_bits() >> 32) as u32];
+        let mut row = vec![
+            COLLISION_INFO_FILE,
+            MODEL_COLLISION_FORMAT,
+            world.model_path,
+        ];
+        row.extend(words(2.0));
+        row.extend([3, 6]);
+        row.extend(words(3.0));
+        row.extend(words(2.0));
+        row.push(4);
+        row.extend(words(2.0));
+        row.extend(words(4.0 / 3.0));
+        assert_eq!(output[1], row);
+        // The face count is asked of the node virtual 0xc answered.
+        assert_eq!(calls(&e, TES_GET_FACE_COUNT), vec![vec![tes, 0x5ce, 1]]);
+    }
+
+    /// The (this, item) pairs `LIST_REMOVE_ITEM` was called with, the item
+    /// read from the word the argument points to.
+    fn list_removals(e: &mut Engine) -> Rc<RefCell<Vec<(u32, u32)>>> {
+        let log = Rc::new(RefCell::new(Vec::new()));
+        let shared = log.clone();
+        e.register_double(LIST_REMOVE_ITEM, move |e, a| {
+            shared.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            ret(1)
+        });
+        log
+    }
+
+    /// Doubles for the plain accessors of lists and extra data the barter
+    /// functions read: the head item slot is the node itself, the next node
+    /// and the entry count are the word at `+4`, the entry's form is the
+    /// word at `+8`, a reference's extra data list is at `+0x44`, its
+    /// container changes the word at `+0x10` of that list and its merchant
+    /// container the word at `+0x20`.
+    fn install_barter_accessors(e: &mut Engine) {
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(ENTRY_GET_OBJECT, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(REFERENCE_EXTRA_DATA_LIST, |_, a| ret(a[0] + 0x44));
+        e.register(EXTRA_GET_CONTAINER_CHANGES, |e, a| {
+            ret(e.mem.u32(a[0] + 0x10))
+        });
+        e.register(EXTRA_GET_MERCHANT_CONTAINER, |e, a| {
+            ret(e.mem.u32(a[0] + 0x20))
+        });
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(INVENTORY_CHANGES_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(INVENTORY_CHANGES_COPY_ITEMS, |_, _| ret(0));
+        e.register(INVENTORY_CHANGES_RUN_SCRIPTS, |_, _| ret(0));
+        e.register(INVENTORY_CHANGES_CLEAR_ALL, |_, _| ret(0));
+    }
+
+    /// A reference-like block (extra data list at `+0x44`).
+    fn reference_block(e: &mut Engine, vtable: u32, slots: &[(u32, u32)]) -> u32 {
+        let reference = e.mem.alloc(0x400);
+        let mut table = vec![0x7fff_0000u32; 0x100];
+        for &(offset, target) in slots {
+            table[offset as usize / 4] = target;
+        }
+        e.put_vtable(vtable, &table);
+        e.mem.set_u32(reference, vtable);
+        reference
+    }
+
+    #[test]
+    fn barter_container_is_built_for_a_reference_and_its_merchant() {
+        let (mut e, this) = engine();
+        install_barter_accessors(&mut e);
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0));
+        let reference = e.mem.alloc(0x100);
+        let merchant = e.mem.alloc(0x100);
+        // The reference's own changes and a merchant without any.
+        e.mem.set_u32(reference + 0x44 + 0x10, 0xc1);
+        e.mem.set_u32(reference + 0x44 + 0x20, merchant);
+        start_log(&mut e);
+        e.call(0x0046_f310, &args![this, reference]);
+        let barter = e.get(this, TESDataHandler::pBarterContainer).addr();
+        assert_ne!(barter, 0);
+        assert_eq!(calls(&e, INVENTORY_CHANGES_CONSTRUCT)[0], vec![barter, 0]);
+        let built = calls(&e, INVENTORY_CHANGES_CONSTRUCT)[1].clone();
+        assert_eq!(built[1], merchant);
+        assert_eq!(
+            calls(&e, INVENTORY_CHANGES_COPY_ITEMS),
+            vec![
+                vec![0xc1, barter, reference, 0],
+                vec![built[0], barter, merchant, 0]
+            ]
+        );
+        assert!(calls(&e, INVENTORY_CHANGES_CLEAR_ALL).is_empty());
+        // With a container already there it is cleared first, and a merchant
+        // that has changes gets them run.
+        e.mem.set_u32(merchant + 0x44 + 0x10, 0xc2);
+        start_log(&mut e);
+        e.call(0x0046_f310, &args![this, reference]);
+        assert_eq!(calls(&e, INVENTORY_CHANGES_CLEAR_ALL), vec![vec![barter]]);
+        assert_eq!(
+            calls(&e, INVENTORY_CHANGES_RUN_SCRIPTS),
+            vec![vec![0xc2, merchant]]
+        );
+        assert_eq!(
+            calls(&e, INVENTORY_CHANGES_COPY_ITEMS)[1],
+            vec![0xc2, barter, merchant, 0]
+        );
+    }
+
+    /// The barter container of a reference with an equipped weapon: one
+    /// entry (ammo, count 3) with one extra data list whose original
+    /// reference is the reference and whose count is 2. Returns the engine,
+    /// the handler, the reference, the entry and the barter container's list
+    /// node word.
+    fn weapon_barter(worn: bool) -> (Engine, Ptr<TESDataHandler>, u32, u32, u32) {
+        let (mut e, this) = engine();
+        install_barter_accessors(&mut e);
+        let reference = reference_block(&mut e, 0x0349_0000, &[(0x100, 0x0349_1000)]);
+        e.register(0x0349_1000, |_, _| ret(1));
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0xce11));
+        e.register(CELL_STEP_54B260, |_, _| ret(0));
+        let ammo = 0x0a_44;
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 4, 3);
+        e.mem.set_u32(entry + 8, ammo);
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, entry);
+        let barter = e.mem.alloc(0x20);
+        e.mem.set_u32(barter, node);
+        e.set(this, TESDataHandler::pBarterContainer, Ptr::new(barter));
+        let extra = e.mem.alloc(0x20);
+        let extra_node = e.mem.alloc(8);
+        e.mem.set_u32(extra_node, extra);
+        e.register_double(LIST_FIRST_NODE, move |_, a| {
+            ret(if a[0] == entry { extra_node } else { 0 })
+        });
+        e.register(FORM_GET_TYPE, |_, _| ret(0x29));
+        e.register(ACTOR_GET_CURRENT_WEAPON, |_, _| ret(0x4444));
+        e.register(WEAPON_GET_CURRENT_AMMO, |_, _| ret(0x0a_44));
+        e.register_double(EXTRA_GET_ORIGINAL_REFERENCE, move |_, _| ret(reference));
+        e.register(EXTRA_GET_COUNT, |_, _| ret(2));
+        e.register(ENTRY_SET_COUNT, |_, _| ret(0));
+        e.register(LIST_IS_EMPTY, |_, _| ret(0));
+        e.register_double(ENTRY_GET_WORN, move |_, _| ret(worn as u32));
+        (e, this, reference, entry, barter)
+    }
+
+    #[test]
+    fn equipped_weapon_loses_its_extra_count_in_the_barter_container() {
+        let (mut e, this, reference, entry, barter) = weapon_barter(false);
+        let removals = list_removals(&mut e);
+        start_log(&mut e);
+        e.call(0x0046_f310, &args![this, reference]);
+        // The extra data list was removed from the entry; the entry's count
+        // became 3 - 2 and it stays.
+        assert_eq!(removals.borrow().len(), 1);
+        assert_eq!(calls(&e, ENTRY_SET_COUNT), vec![vec![entry, 1]]);
+        let _ = barter;
+    }
+
+    #[test]
+    fn worn_weapon_entry_is_removed_from_the_barter_container() {
+        let (mut e, this, reference, entry, barter) = weapon_barter(true);
+        let removals = list_removals(&mut e);
+        e.call(0x0046_f310, &args![this, reference]);
+        let list_word = e.mem.u32(barter);
+        let removals = removals.borrow();
+        assert_eq!(removals.len(), 2);
+        assert_eq!(removals[1], (list_word, entry));
+    }
+
+    #[test]
+    fn items_are_taken_out_of_the_barter_container_one_extra_list_at_a_time() {
+        let (mut e, this) = engine();
+        install_barter_accessors(&mut e);
+        let player = reference_block(&mut e, 0x034a_0000, &[(0x3d0, 0x034a_1000)]);
+        e.set_global(PLAYER_SINGLETON, player);
+        e.register(0x034a_1000, |_, _| ret(0));
+        let original = reference_block(&mut e, 0x034b_0000, &[(0x17c, 0x034b_1000)]);
+        e.register(0x034b_1000, |_, _| ret(0));
+        let reference = e.mem.alloc(0x400);
+        let form = 0xf0_f0;
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, form);
+        // The entry in the barter container and its list of extra lists.
+        let found = e.mem.alloc(0x20);
+        let list_word = e.mem.alloc(8);
+        e.mem.set_u32(found, list_word);
+        e.mem.set_u32(found + 8, 0x0f_02);
+        let extra = object_with(&mut e, 0x034c_0000, &[(0, 0x034c_1000)]);
+        let extra_node = e.mem.alloc(8);
+        e.mem.set_u32(extra_node, extra);
+        let barter = e.mem.alloc(0x20);
+        e.set(this, TESDataHandler::pBarterContainer, Ptr::new(barter));
+        e.register_double(INVENTORY_CHANGES_GET_OBJECT_IN_LIST, move |_, a| {
+            ret(if a[1] == form { found } else { 0 })
+        });
+        e.register_double(LIST_FIRST_NODE, move |_, a| {
+            ret(if a[0] == found { extra_node } else { 0 })
+        });
+        e.register(EXTRA_GET_COUNT, |_, _| ret(2));
+        e.register_double(EXTRA_GET_ORIGINAL_REFERENCE, move |_, _| ret(original));
+        e.register(EXTRA_REMOVE_ORIGINAL_REFERENCE, |_, _| ret(0));
+        e.register(EXTRA_REMOVE_OWNERSHIP, |_, _| ret(0));
+        e.register(EXTRA_ITEMS_IN_LIST, |_, _| ret(1));
+        e.register(EXTRA_GET_DATA, |_, _| ret(0));
+        e.register(EXTRA_GET_SCRIPT, |_, _| ret(0));
+        e.register(REFERENCE_HAS_CONTAINER, |_, _| ret(0));
+        let removals = list_removals(&mut e);
+        start_log(&mut e);
+        // An original reference without a container: ownership and original
+        // reference extras go, the player removes the item, the extra list is
+        // taken out of the entry and deleted (it is plain only with a count
+        // of at most 1: here 2, so it stays).
+        e.call(0x0046_f640, &args![this, entry, 2u32, reference]);
+        assert_eq!(
+            calls(&e, EXTRA_REMOVE_ORIGINAL_REFERENCE),
+            vec![vec![extra], vec![original + 0x44]]
+        );
+        assert_eq!(
+            calls(&e, EXTRA_REMOVE_OWNERSHIP),
+            vec![vec![original + 0x44]]
+        );
+        assert_eq!(calls(&e, 0x034a_1000), vec![vec![player, original, 2, 0]]);
+        assert_eq!(*removals.borrow(), vec![(list_word, extra)]);
+        assert!(calls(&e, 0x034c_1000).is_empty());
+        // Taking fewer than the extra list holds: the count is cut and the
+        // original reference extra of the list is kept.
+        start_log(&mut e);
+        e.call(0x0046_f640, &args![this, entry, 1u32, reference]);
+        assert_eq!(calls(&e, 0x034a_1000), vec![vec![player, original, 1, 0]]);
+        assert_eq!(calls(&e, EXTRA_REMOVE_ORIGINAL_REFERENCE).len(), 1);
+        // An original reference with a container: its removal virtual gets
+        // ten words (the entry's form, the extra list to keep, the count,
+        // the player).
+        e.register(REFERENCE_HAS_CONTAINER, |_, _| ret(1));
+        e.register(EXTRA_GET_CONTAINER_CHANGES, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_f640, &args![this, entry, 2u32, reference]);
+        assert_eq!(
+            calls(&e, 0x034b_1000),
+            vec![vec![original, 0x0f_02, extra, 2, 0, 0, player, 0, 0, 1, 0]]
+        );
+        // An original reference of zero ends the walk.
+        e.register(EXTRA_GET_ORIGINAL_REFERENCE, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_f640, &args![this, entry, 5u32, reference]);
+        assert!(calls(&e, 0x034b_1000).is_empty());
+    }
+
+    #[test]
+    fn barter_container_is_rebuilt_once_when_the_lists_run_out() {
+        let (mut e, this) = engine();
+        install_barter_accessors(&mut e);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, 0xf0f0);
+        let found = e.mem.alloc(0x20);
+        let barter = e.mem.alloc(0x20);
+        e.set(this, TESDataHandler::pBarterContainer, Ptr::new(barter));
+        e.register_double(INVENTORY_CHANGES_GET_OBJECT_IN_LIST, move |_, _| ret(found));
+        e.register(LIST_FIRST_NODE, |_, _| ret(0));
+        e.register(REFERENCE_GET_PARENT_CELL, |_, _| ret(0));
+        let reference = e.mem.alloc(0x100);
+        start_log(&mut e);
+        e.call(0x0046_f640, &args![this, entry, 3u32, reference]);
+        assert_eq!(calls(&e, REFERENCE_GET_PARENT_CELL), vec![vec![reference]]);
+        assert_eq!(calls(&e, INVENTORY_CHANGES_GET_OBJECT_IN_LIST).len(), 2);
+        // Without the entry in the container nothing happens.
+        e.register(INVENTORY_CHANGES_GET_OBJECT_IN_LIST, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0046_f640, &args![this, entry, 3u32, reference]);
+        assert!(calls(&e, REFERENCE_GET_PARENT_CELL).is_empty());
+    }
+
+    #[test]
+    fn classes_and_races_are_sorted_by_name() {
+        let (mut e, this) = engine();
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(ITEM_NAME_TEXT, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+        e.register(LIST_COUNT, |e, a| {
+            let mut count = 0;
+            let mut node = a[0];
+            while node != 0 && e.mem.u32(node) != 0 {
+                count += 1;
+                node = e.mem.u32(node + 4);
+            }
+            ret(count)
+        });
+        e.register(MBSICMP, |e, a| {
+            let first = e.mem.cstr(a[0]).to_ascii_lowercase();
+            let second = e.mem.cstr(a[1]).to_ascii_lowercase();
+            ret(match first.cmp(&second) {
+                std::cmp::Ordering::Less => -1i32 as u32,
+                std::cmp::Ordering::Equal => 0,
+                std::cmp::Ordering::Greater => 1,
+            })
+        });
+        e.register(LIST_STORE_ITEM, |e, a| {
+            let item = e.mem.u32(a[1]);
+            if item != 0 {
+                e.mem.set_u32(a[0], item);
+            }
+            ret(0)
+        });
+        // Build a list of items with the names at node heads `head`.
+        let build = |e: &mut Engine, head: u32, names: &[&[u8]]| -> Vec<u32> {
+            let mut items = Vec::new();
+            let mut node = head;
+            for (i, name) in names.iter().enumerate() {
+                let item = e.mem.alloc(0x40);
+                let text = text(e, name);
+                // `item + 0x18` is the name object; its text is at +4 of it.
+                e.mem.set_u32(item + 0x1c, text);
+                e.mem.set_u32(node, item);
+                if i + 1 < names.len() {
+                    let next = e.mem.alloc(8);
+                    e.mem.set_u32(node + 4, next);
+                    node = next;
+                }
+                items.push(item);
+            }
+            items
+        };
+        let classes = build(&mut e, this.addr() + 0x80, &[b"b", b"C", b"a"]);
+        let races = build(&mut e, this.addr() + 0x60, &[b"z", b"Y"]);
+        // The name text is read as `00408da0(item + 0x18)`; the double reads
+        // the word at +0x1c of the item, so it takes the argument minus 0x18.
+        e.register(ITEM_NAME_TEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.call(0x0046_fb50, &args![this]);
+        let order = |e: &Engine, head: u32, count: usize| {
+            let mut node = head;
+            let mut items = Vec::new();
+            for _ in 0..count {
+                items.push(e.mem.u32(node));
+                node = e.mem.u32(node + 4);
+            }
+            items
+        };
+        assert_eq!(
+            order(&e, this.addr() + 0x80, 3),
+            vec![classes[2], classes[0], classes[1]]
+        );
+        assert_eq!(order(&e, this.addr() + 0x60, 2), vec![races[1], races[0]]);
+    }
+
+    /// Doubles for `GenerateDefaultObjects`: every form id is found
+    /// (`found` true; casts answer the form) or missing, constructors set a
+    /// shared vtable whose slots log into the call log (at
+    /// `0x0351_0000 + slot`), and every other callee does nothing.
+    fn default_objects_engine(found: bool) -> (Engine, Ptr<TESDataHandler>) {
+        let (mut e, this) = engine();
+        for page in [0x011c_3000, 0x011c_c000, 0x0101_8000] {
+            e.map(page, 0x1000);
+        }
+        for (address, value) in [
+            (GAME_YEAR_VALUE, 77.0f32),
+            (GAME_MONTH_VALUE, 7.0),
+            (GAME_DAY_VALUE, 17.0),
+            (GAME_HOUR_VALUE, 12.0),
+            (TIME_SCALE_VALUE, 30.0),
+        ] {
+            e.mem.set_f32(address, value);
+        }
+        let object_list = e.mem.alloc(0x10);
+        e.set(this, TESDataHandler::pObjectList, Ptr::new(object_list));
+        let table = vec![0x0351_0000u32; 0x140];
+        let table: Vec<u32> = table
+            .iter()
+            .enumerate()
+            .map(|(i, base)| base + 4 * i as u32)
+            .collect();
+        e.put_vtable(0x0350_0000, &table);
+        for slot in (0..0x500u32).step_by(4) {
+            e.register(0x0351_0000 + slot, |_, _| ret(0));
+        }
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0].max(0x100))));
+        let mut constructors: Vec<u32> = [
+            0x005f_c680u32,
+            0x0051_b140,
+            GLOBAL_FORM_CONSTRUCT,
+            WEATHER_CONSTRUCT,
+            CLIMATE_CONSTRUCT,
+            LIST_FORM_CONSTRUCT,
+            MESSAGE_FORM_CONSTRUCT,
+            IMAGE_SPACE_CONSTRUCT,
+            IMAGE_SPACE_MODIFIER_CONSTRUCT,
+            SCRIPT_EFFECT_CONSTRUCT,
+            COMBAT_STYLE_CONSTRUCT,
+        ]
+        .to_vec();
+        for spec in DEFAULT_FORMS_A
+            .iter()
+            .chain(&DEFAULT_FORMS_B)
+            .chain(&DEFAULT_FORMS_C)
+            .chain(&DEFAULT_FORMS_D)
+        {
+            constructors.push(spec.constructor);
+        }
+        for constructor in constructors {
+            e.register(constructor, |e, a| {
+                // The form and the objects embedded in it that get virtual calls.
+                for offset in [0u32, 0x30, 0x3c, 0x48] {
+                    e.mem.set_u32(a[0] + offset, 0x0350_0000);
+                }
+                ret(a[0])
+            });
+        }
+        e.register(SKY_CONSTRUCT, |_, a| ret(a[0]));
+        e.register_double(FORM_BY_ID, move |_, _| ret(if found { 0x1234 } else { 0 }));
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(STRING_LENGTH, |_, _| ret(0));
+        let manager = object_with(&mut e, 0x0352_0000, &[(0x14, 0x0352_1000)]);
+        e.register(0x0352_1000, |_, _| ret(0));
+        e.register_double(DEFAULT_OBJECT_MANAGER_INSTANCE, move |_, _| ret(manager));
+        do_nothing(
+            &mut e,
+            &[
+                SCOPE_ENTER,
+                SCOPE_LEAVE,
+                REGISTER_ACTOR_VALUES,
+                CAMERA_PATH_CREATE_DEFAULT,
+                SET_SOUND_FILE,
+                LIST_ADD,
+                OBJECT_LIST_ADD,
+                LIST_REMOVE_ITEM,
+                EDITOR_ID_MAP_ADD,
+                STEP_61A040,
+                FACTION_SET_RANK_NAME_STEP,
+                FACTION_STEP_5FD460,
+                FORM_STEP_484AB0,
+                WEATHER_MAKE_DEFAULT,
+                CLIMATE_MAKE_DEFAULT,
+                SKY_SET_CURRENT_CLIMATE,
+                IMAGE_SPACE_STEP,
+                IMAGE_SPACE_MODIFIER_STEP,
+                MAGIC_SYSTEM_GENERATE_DEFAULT_OBJECTS,
+                SOUND_GENERATE_DEFAULT_OBJECTS,
+                IMPACT_DATA_SET_CREATE_DEFAULT,
+                EQUIP_TYPE_GENERATE_DEFAULT_MENU_ICONS,
+                BODY_PART_DATA_GENERATE_DEFAULT,
+                TEXTURE_SET_CREATE_NULL,
+                ENCOUNTER_ZONE_CREATE_NO_ZONE,
+                SCRIPT_EFFECT_STEP,
+            ],
+        );
+        // The list accessors answer the handler plus a distinct offset; the
+        // world space accessor answers a list whose head item is 0x5555.
+        for accessor in [
+            0x0046_0ff0u32,
+            0x0043_c490,
+            0x0046_11b0,
+            0x0045_a730,
+            FACTION_LIST_ACCESSOR,
+            GLOBAL_LIST_ACCESSOR,
+            WEATHER_LIST_ACCESSOR,
+            CLIMATE_LIST_ACCESSOR,
+            LIST_FORM_LIST_ACCESSOR,
+            MESSAGE_FORM_LIST_ACCESSOR,
+            IMAGE_SPACE_LIST_ACCESSOR,
+            IMAGE_SPACE_MODIFIER_LIST_ACCESSOR,
+            COMBAT_STYLE_LIST_ACCESSOR,
+        ] {
+            e.register(accessor, |_, a| ret(a[0] + 0x10));
+        }
+        let world_list = e.mem.alloc(8);
+        e.mem.set_u32(world_list, 0x5555);
+        e.register_double(WORLD_SPACE_LIST_ACCESSOR, move |_, _| ret(world_list));
+        e.register(LIST_HEAD_ITEM, |_, a| ret(a[0]));
+        (e, this)
+    }
+
+    #[test]
+    fn all_missing_default_objects_are_created() {
+        let (mut e, this) = default_objects_engine(false);
+        start_log(&mut e);
+        e.call(0x0046_a370, &args![this]);
+        // 119 forms and the sky.
+        let sizes: Vec<u32> = calls(&e, OPERATOR_NEW).iter().map(|c| c[0]).collect();
+        assert_eq!(sizes.len(), 120);
+        assert_eq!(sizes[0], 0xa8);
+        assert_eq!(*sizes.last().unwrap(), 0x28);
+        // Ids and editor ids: the first form is the water explosion.
+        let ids = calls(&e, 0x0351_0000 + 0x128);
+        assert_eq!(ids.len(), 119);
+        assert_eq!(ids[0][1..], [0x1f5, 1]);
+        let editor_ids = calls(&e, 0x0351_0000 + 0x134);
+        assert_eq!(editor_ids[0][1], 0x0101_95d0);
+        // The furniture markers, ids 0x64 to 0x8b, with names counting up.
+        let furniture: Vec<&Vec<u32>> = ids
+            .iter()
+            .filter(|c| (0x64..0x8c).contains(&c[1]))
+            .collect();
+        assert_eq!(furniture.len(), 40);
+        // Marked unaltered: the 73 forms of the tables, the faction, the
+        // furniture markers and the player.
+        assert_eq!(calls(&e, 0x0351_0000 + 0xc8).len(), 73);
+        assert_eq!(calls(&e, 0x0351_0000 + 0xc8)[0][1], 0);
+        // The globals now hold the forms.
+        for word in [
+            0x011c_a284u32,
+            0x011c_a220,
+            0x011c_b550,
+            0x011c_3f40,
+            0x011c_a278,
+        ] {
+            assert_ne!(e.global::<u32>(word), 0, "{word:08x}");
+        }
+        // The world space step found nothing; the fists got their byte.
+        let fists = e.global::<u32>(0x011c_a278);
+        assert_eq!(e.mem.u8(fists + 0xf4), 0);
+        // The loot bag got its model (the text length was 0).
+        let loot_bag = e.global::<u32>(0x011c_3f40);
+        assert!(calls(&e, 0x0351_0000 + 0x18)
+            .iter()
+            .any(|c| c[0] == loot_bag + 0x48 && c[1] == 0x0101_92e0));
+        // The game values were read from the exe's data.
+        let game_year = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|(address, args)| *address == EDITOR_ID_MAP_ADD && args[1] == 0x0101_8fac)
+            .map(|(_, args)| args[2])
+            .unwrap();
+        assert_eq!(e.mem.f32(game_year + 0x24), 77.0);
+        // The default object manager is finished last.
+        assert_eq!(calls(&e, 0x0352_1000).len(), 1);
+        assert_eq!(
+            calls(&e, SCOPE_ENTER)[0][1..],
+            [0x2f, 1, SOURCE_FILE, 0x2a8f]
+        );
+        assert_eq!(calls(&e, SCOPE_LEAVE).len(), 2);
+    }
+
+    #[test]
+    fn existing_default_objects_are_kept() {
+        let (mut e, this) = default_objects_engine(true);
+        let removals = list_removals(&mut e);
+        start_log(&mut e);
+        e.call(0x0046_a370, &args![this]);
+        // Only the sky (its singleton was not there) and the 28 help messages
+        // (which are made without a lookup) are created.
+        let sizes: Vec<u32> = calls(&e, OPERATOR_NEW).iter().map(|c| c[0]).collect();
+        assert_eq!(sizes.len(), 29);
+        assert_eq!(sizes[0], 0x138);
+        assert!(sizes[1..].iter().all(|&size| size == 0x40));
+        assert_eq!(calls(&e, 0x0351_0000 + 0x128).len(), 28);
+        for word in [
+            0x011c_a284u32,
+            0x011c_a220,
+            0x011c_b550,
+            0x011c_3f40,
+            0x011c_a278,
+        ] {
+            assert_eq!(e.global::<u32>(word), 0x1234, "{word:08x}");
+        }
+        // The world space is moved to the head of its list (it is not there).
+        let removed: Vec<u32> = removals.borrow().iter().map(|r| r.1).collect();
+        assert_eq!(removed, vec![0x1234]);
+        assert_eq!(calls(&e, LIST_ADD).len(), 29);
+        assert_eq!(calls(&e, REGISTER_ACTOR_VALUES).len(), 1);
+        assert_eq!(calls(&e, MAGIC_SYSTEM_GENERATE_DEFAULT_OBJECTS).len(), 1);
     }
 }
