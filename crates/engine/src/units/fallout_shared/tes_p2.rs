@@ -21,7 +21,23 @@
 //! Not translated: the compiler's exception-unwinding frames, the stack
 //! cookie checks and the 16-byte stack realignment prologues.
 //!
-//! The next session continues at `00458b20`.
+//! Session 2 (the next 40 functions, `00458b20` to `0045a730`) holds:
+//!
+//! - the `BSTempNode` class (constructor, `GetRTTI`, destructors) and
+//!   `TES::AddTempDebugObject`, which hangs a node under one for debugging;
+//! - `TES::GetMapNameForLocation` and `TES::GetCellPriority` (the cell
+//!   priority cache);
+//! - the `TES::DeadCount` list at `+0x9C` (an 8-byte entry per form: the
+//!   form pointer and a 16-bit count) and its save and load code:
+//!   `GetSaveSize`, `TES::SaveGame`, `TES::SaveGame_ov2`, `TES::LoadGame`;
+//! - `TES::CreateFurnitureList`, the two cell walks `fn_00459920` and
+//!   `fn_00459a00`, and the cell test run (`TES::RunCellTest`,
+//!   `TES::TestCell`);
+//! - the preloading of add-on nodes, forms, default models, the blood decal and
+//!   the water textures (`TES::PreloadAddonNodes`, `TES::PreloadForms`,
+//!   `fn_0045a370`, `fn_0045a520`, `fn_0045a600`) with their one-line helpers.
+//!
+//! The next session continues at `0045a750` (`TES::SetupTemporaryParticleCache`).
 
 #[allow(unused_imports)]
 use super::tes::*;
@@ -831,6 +847,1212 @@ pub fn fn_00458ad0(e: &mut Engine, this: Ptr, source: Ptr) {
     }
 }
 
+// ----- Session 2: `00458b20` to `0045a730` -----
+
+/// `sRagdollDataDefault:General` (a string `INISetting`; `00403df0` returns a
+/// pointer to its text).
+const SETTING_RAGDOLL_DATA_DEFAULT: u32 = 0x011d_14c4;
+/// `sBloodParticleDefault:General`.
+const SETTING_BLOOD_PARTICLE_DEFAULT: u32 = 0x011c_ebb0;
+/// `sSplashParticles:General`.
+const SETTING_SPLASH_PARTICLES: u32 = 0x011d_12c0;
+/// `sExplosionSplashParticles:General`.
+const SETTING_EXPLOSION_SPLASH_PARTICLES: u32 = 0x011d_0ce4;
+/// `sBloodTextureDefault:General`.
+const SETTING_BLOOD_TEXTURE_DEFAULT: u32 = 0x011c_fd40;
+/// `bUsePerWorldSpaceWaterNoise:Water`.
+const SETTING_PER_WORLD_SPACE_WATER_NOISE: u32 = 0x011c_7b98;
+/// A byte `INISetting` (`011de4e8`) which, when set, makes the save-size and
+/// save code log how many bytes they wrote.
+const SETTING_SAVE_SIZE_LOG: u32 = 0x011d_e4e8;
+/// Returns a pointer to a string setting's text.
+const SETTING_VALUE_ADDRESS_STRING: u32 = 0x0040_3df0;
+
+/// The cell `TES::GetCellPriority` answered for last.
+const CELL_PRIORITY_LAST_CELL: u32 = 0x011c_3f04;
+/// The priority (1 or 3) it answered.
+const CELL_PRIORITY_VALUE: u32 = 0x011c_3f00;
+/// A word the save code appends to the save when the save version is at
+/// least 0x32 (four bytes of the global at this address).
+const SAVE_EXTRA_WORD: u32 = 0x011c_3c08;
+/// The weapon object whose `QueueFiles` `TES::PreloadForms` calls.
+const WEAPON_QUEUE_OBJECT: u32 = 0x011c_a278;
+/// The `NiPointer` cell `fn_0045a190` reads (the scene root the loaded add-on
+/// nodes are attached to).
+const ADDON_PARENT_CELL: u32 = 0x011d_ed58;
+/// `RTTI` descriptors `TES::LoadGame` hands the dynamic cast.
+const RTTI_LOAD_SOURCE: u32 = 0x0118_3028;
+const RTTI_LOAD_TARGET: u32 = 0x0118_46e8;
+/// `BSTempNode`'s vtable and `NiRTTI`.
+const BS_TEMP_NODE_VTABLE: u32 = 0x0101_7d24;
+const BS_TEMP_NODE_RTTI: u32 = 0x0120_2e00;
+
+/// `Error` (the game's formatted debug-message function; C varargs).
+const ERROR_LOG: u32 = 0x0040_fbe0;
+/// `strlen`.
+const STRING_LENGTH: u32 = 0x0044_a670;
+/// A `sprintf`-style formatter `(buffer, size, format, ...)`.
+const FORMAT_STRING: u32 = 0x0040_6d00;
+/// The integer absolute value (negates when below zero).
+const ABSOLUTE_VALUE: u32 = 0x00ec_7d40;
+/// `__RTDynamicCast(object, vfDelta, source, target, isReference)`.
+const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// The text of a string object (a `NiPointer` to the text at `+4`; an empty
+/// constant when null).
+const STRING_OBJECT_TEXT: u32 = 0x0040_8da0;
+/// Whether a list node has neither item nor successor.
+const LIST_NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// `NiNode::NiNode(unsigned short)` and `NiNode::~NiNode`.
+const NI_NODE_CTOR: u32 = 0x00a5_ecb0;
+const NI_NODE_DTOR: u32 = 0x00a5_e930;
+/// `NiAVObject::UpdateProperties` (Xbox PDB).
+const NI_AV_OBJECT_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// Gives the scene node the debug objects are attached to (`this` is the
+/// `TES`).
+const TES_DEBUG_PARENT: u32 = 0x0096_11e0;
+/// A form's id (the word the game keeps for it).
+const FORM_ID_GETTER: u32 = 0x0084_e3a0;
+/// Looks a form up by its id.
+const FORM_LOOKUP: u32 = 0x0048_39c0;
+/// `TESSaveLoadGame::UseSaveGameBlocks` (Xbox PDB).
+const USE_SAVE_GAME_BLOCKS: u32 = 0x0086_2110;
+/// The current write position (an address) of the save buffer.
+const SAVE_BUFFER_POSITION: u32 = 0x0082_5c00;
+/// Writes `(source, length)` bytes to the save buffer.
+const SAVE_BUFFER_WRITE: u32 = 0x0085_79b0;
+/// `TESSaveLoadGame::SaveNumericID` (Xbox PDB): `(&id, length)`.
+const SAVE_NUMERIC_ID: u32 = 0x0085_7a10;
+/// The save version byte (`>= 0x32` adds a word to the save).
+const SAVE_VERSION: u32 = 0x008d_f040;
+/// Gives `this + 0x9C` (the list head the save code walks; takes the `TES`).
+const SAVE_LIST_HEAD: u32 = 0x0050_d100;
+/// Number of nodes with a non-null item in a list (`VATS::GetCount` in the
+/// Xbox PDB, which names the same body).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// `TESDataHandler` function `(handler, formId)` that says whether the id is
+/// one the data handler knows.
+const DATA_HANDLER_HAS_FORM: u32 = 0x0046_9860;
+/// `TESDataHandler::GetAddonNode` (Xbox PDB) `(handler, index)`.
+const DATA_HANDLER_GET_ADDON_NODE: u32 = 0x0046_17e0;
+/// `TESDataHandler` interior-cell accessors: `PrepareInteriors`, count and
+/// cell at an index.
+const DATA_HANDLER_PREPARE_INTERIORS: u32 = 0x0046_19b0;
+const DATA_HANDLER_INTERIOR_COUNT: u32 = 0x0046_1960;
+const DATA_HANDLER_INTERIOR_AT: u32 = 0x0046_1980;
+/// `TESObjectCELL::QueueReferences` (Xbox PDB) `(cell, flag)`.
+const CELL_QUEUE_REFERENCES: u32 = 0x0055_71a0;
+/// A `TESObjectCELL` function taking only `this`, called by the same walk.
+const CELL_QUEUE_B: u32 = 0x0055_73e0;
+/// `TESObjectCELL::AddFurnitureToList` (Xbox PDB) `(cell, list)`.
+const CELL_ADD_FURNITURE_TO_LIST: u32 = 0x0054_ca00;
+/// Cell function `0054ba00` (run on loaded cells of the buffers).
+const CELL_FINISH: u32 = 0x0054_ba00;
+/// `TES::IsCellLoaded` (Xbox PDB) `(tes, cell, flag)`.
+const TES_IS_CELL_LOADED: u32 = 0x0045_11e0;
+/// Cell state test (`fn_00450ff0` in the unit's main file).
+const CELL_STATE_TEST: u32 = 0x0045_0ff0;
+/// `TESWorldSpace::GetCellFromCellCoord` (Xbox PDB) `(worldSpace, x, y)`.
+const WORLD_SPACE_GET_CELL: u32 = 0x0058_75a0;
+/// `BGSSaveGameBuffer` / `BGSLoadGameBuffer` methods (Xbox PDB names where
+/// the map has them).
+const SAVE_BUFFER_START_VARIABLE: u32 = 0x0086_5f20;
+const SAVE_BUFFER_SAVE_FORM_ID_POINTER: u32 = 0x0086_5df0;
+const SAVE_BUFFER_WRITE_BYTES: u32 = 0x0086_5e50;
+const SAVE_BUFFER_END_VARIABLE: u32 = 0x0086_5ff0;
+const SAVE_BUFFER_SAVE_FORM_ID: u32 = 0x0086_5db0;
+const LOAD_BUFFER_VARIABLE_SIZE: u32 = 0x0086_4a60;
+const LOAD_BUFFER_FORM_ID: u32 = 0x0086_48a0;
+const LOAD_BUFFER_FORM_ID_OUT: u32 = 0x0086_48e0;
+const LOAD_BUFFER_READ_BYTES: u32 = 0x0086_4980;
+/// `BGSSaveLoadGame::ClearFormID` (Xbox PDB).
+const SAVE_LOAD_CLEAR_FORM_ID: u32 = 0x0084_a9c0;
+/// The cell's slot `TES::LoadGame` hands the loaded id and `1`.
+const CELL_SLOT_LOAD: u32 = 0x128;
+/// `ModelLoader` methods (Xbox PDB names).
+const MODEL_LOADER_QUEUE_MODEL: u32 = 0x0044_4040;
+const MODEL_LOADER_QUEUE_FILE: u32 = 0x0044_3d30;
+const MODEL_LOADER_LOAD_FILE: u32 = 0x0044_7080;
+const MODEL_LOADER_RELEASE_MODEL: u32 = 0x0044_5300;
+/// Test on a data handler add-on node that picks the `LoadFile` path.
+const ADDON_NODE_LOADS_NOW: u32 = 0x0044_8bf0;
+/// `QueuedFile::QueuedFile` (Xbox PDB) `(this, priority)`.
+const QUEUED_FILE_CTOR: u32 = 0x00c3_c590;
+/// `NiPointer<QueuedFile>::operator=` (Xbox PDB), `(cell, pointer)`.
+const QUEUED_FILE_POINTER_ASSIGN: u32 = 0x006f_74f0;
+/// `TES::CreateTextureImage` (Xbox PDB).
+const CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
+
+// Translated from 00458b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the address of the constant at `01267e30` (the zero `hkVector4` the
+/// pick helpers hand out).
+pub fn fn_00458b20(_e: &mut Engine) -> Ptr {
+    Ptr::new(0x0126_7e30)
+}
+
+// Translated from 00458b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte at `this + 0x11`.
+pub fn fn_00458b30(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x11, value);
+}
+
+// Translated from 00458b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The stored pointer of the `NiPointer` at `this` (`00559450`).
+pub fn fn_00458b50(e: &mut Engine, this: Ptr) -> u32 {
+    ni_pointer_get(e, this)
+}
+
+// Translated from 00458b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetMapNameForLocation` (Xbox PDB): asks a world space (the one
+/// passed, or the current one from `TES::GetWorldSpace`, `004fd3e0`) for the
+/// map name of a location, through its slot `0x138`. Returns 0 without a
+/// world space. The four words after `this` are passed on as they are: the
+/// first alone, the next three being a 12-byte structure the game copies by
+/// value on the stack.
+pub fn tes_get_map_name_for_location(
+    e: &mut Engine,
+    this: Ptr<TES>,
+    first: u32,
+    structure_0: u32,
+    structure_1: u32,
+    structure_2: u32,
+    world_space: Ptr,
+) -> u32 {
+    let world_space = if world_space.is_null() {
+        e.call(GET_WORLD_SPACE, &args![this]).ptr::<()>()
+    } else {
+        world_space
+    };
+    if world_space.is_null() {
+        return 0;
+    }
+    e.vcall(
+        world_space.addr(),
+        0x138,
+        &args![first, structure_0, structure_1, structure_2],
+    )
+    .u32()
+}
+
+// Translated from 00458be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::GetCellPriority` (Xbox PDB): 1 for a cell near the centre of the
+/// loaded grid, 3 for one farther out, cached for the last cell asked about.
+///
+/// The distance is how far the cell is, in cells, from `position` (the
+/// position's `x` and `y` shifted down to cell units; the current grid
+/// centre `iCurrentGridX`/`iCurrentGridY` when null; the middle of the grid
+/// for an interior cell), less half of `uGridsToLoad`, in the larger of the
+/// two axes. The class is `10 + 10 * distance` as a byte, above 20 giving 3.
+pub fn tes_get_cell_priority(e: &mut Engine, this: Ptr<TES>, cell: Ptr, position: Ptr) -> u32 {
+    if e.global::<u32>(CELL_PRIORITY_LAST_CELL) == cell.addr() {
+        return e.global(CELL_PRIORITY_VALUE);
+    }
+    let offset_x: i32;
+    let offset_y: i32;
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        offset_x = (grids_to_load(e) >> 1) as i32;
+        offset_y = (grids_to_load(e) >> 1) as i32;
+    } else if !position.is_null() {
+        let data_x = e.call(CELL_GET_DATA_X, &args![cell]).i32();
+        let x = e.mem.f32(position.addr());
+        let position_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x]).i32() >> 12;
+        let half = (grids_to_load(e) >> 1) as i32;
+        offset_x = data_x.wrapping_sub(position_x.wrapping_sub(half));
+        let data_y = e.call(CELL_GET_DATA_Y, &args![cell]).i32();
+        let y = e.mem.f32(position.addr() + 4);
+        let position_y = e.call(FLOAT_TO_INT_ROUNDED, &args![y]).i32() >> 12;
+        let half = (grids_to_load(e) >> 1) as i32;
+        offset_y = data_y.wrapping_sub(position_y.wrapping_sub(half));
+    } else {
+        let data_x = e.call(CELL_GET_DATA_X, &args![cell]).i32();
+        let half = (grids_to_load(e) >> 1) as i32;
+        let grid_x = e.get(this, TES::iCurrentGridX);
+        offset_x = data_x.wrapping_sub(grid_x.wrapping_sub(half));
+        let data_y = e.call(CELL_GET_DATA_Y, &args![cell]).i32();
+        let half = (grids_to_load(e) >> 1) as i32;
+        let grid_y = e.get(this, TES::iCurrentGridY);
+        offset_y = data_y.wrapping_sub(grid_y.wrapping_sub(half));
+    }
+    let half = (grids_to_load(e) >> 1) as i32;
+    let across = offset_x.wrapping_sub(half);
+    let half = (grids_to_load(e) >> 1) as i32;
+    let down = offset_y.wrapping_sub(half);
+    let farther = if across > down { across } else { down };
+    let distance = e.call(ABSOLUTE_VALUE, &args![farther]).i32();
+    let scaled = distance.wrapping_mul(10).wrapping_add(10) as u8;
+    let class = if scaled > 0x14 { 0x28u8 } else { 0x14 };
+    match class {
+        0x14 => e.set_global(CELL_PRIORITY_VALUE, 1u32),
+        _ => e.set_global(CELL_PRIORITY_VALUE, 3u32),
+    }
+    e.set_global(CELL_PRIORITY_LAST_CELL, cell.addr());
+    e.global(CELL_PRIORITY_VALUE)
+}
+
+// Translated from 00458e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::AddTempDebugObject` (Xbox PDB): for a non-null `node`, builds a
+/// `BSTempNode` (0xB0 bytes, `fn_00458ef0`) carrying `value` at `+0xAC`,
+/// attaches `node` to it (slot `0xDC`, second argument 1), attaches the
+/// temp node to the node `009611e0` gives for `this`, and updates the temp
+/// node's properties.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_add_temp_debug_object(e: &mut Engine, this: Ptr<TES>, node: Ptr, value: f32) {
+    if node.is_null() {
+        return;
+    }
+    let memory = e.call(NI_OPERATOR_NEW, &args![0xb0u32]).u32();
+    let temp_node = if memory == 0 {
+        0
+    } else {
+        fn_00458ef0(e, Ptr::new(memory), value).addr()
+    };
+    e.vcall(temp_node, 0xdc, &args![node, 1u32]);
+    let parent = e.call(TES_DEBUG_PARENT, &args![this]).u32();
+    e.vcall(parent, 0xdc, &args![temp_node, 1u32]);
+    e.call(NI_AV_OBJECT_UPDATE_PROPERTIES, &args![temp_node]);
+}
+
+// Translated from 00458ef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSTempNode` constructor (vtable `01017d24`): `NiNode::NiNode(0)`,
+/// then the vtable and the float at `+0xAC`. Returns `this`.
+pub fn fn_00458ef0(e: &mut Engine, this: Ptr, value: f32) -> Ptr {
+    e.call(NI_NODE_CTOR, &args![this, 0u32]);
+    e.mem.set_u32(this.addr(), BS_TEMP_NODE_VTABLE);
+    e.mem.set_f32(this.addr() + 0xac, value);
+    this
+}
+
+// Translated from 00458f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempNode::GetRTTI` (Xbox PDB): the class's `NiRTTI`.
+pub fn bs_temp_node_get_rtti(_e: &mut Engine, _this: Ptr) -> Ptr {
+    Ptr::new(BS_TEMP_NODE_RTTI)
+}
+
+// Translated from 00458f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSTempNode::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor and, when bit 0 of `flags` is set, frees the 0xB0-byte
+/// object. Returns `this`.
+pub fn bs_temp_node_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00458f70(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_OPERATOR_DELETE, &args![this, 0xb0u32]);
+    }
+    this
+}
+
+// Translated from 00458f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `BSTempNode` destructor: restores the vtable and runs the `NiNode`
+/// destructor (`00a5e930`).
+pub fn fn_00458f70(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), BS_TEMP_NODE_VTABLE);
+    e.call(NI_NODE_DTOR, &args![this]);
+}
+
+// Translated from 00458f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Frees the 8-byte entries (form pointer, count) of the list at `this +
+/// 0x9C` (`TES::DeadCount`) and then empties the list (`00470470`). The walk
+/// stops at the first node whose item word is null.
+pub fn fn_00458f90(e: &mut Engine, this: Ptr<TES>) {
+    let list = this.addr() + 0x9c;
+    let mut node = list;
+    while node != 0 {
+        if list_node_item(e, node) == 0 {
+            break;
+        }
+        let entry = list_node_item(e, node);
+        e.call(OPERATOR_DELETE, &args![entry]);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    e.call(0x0047_0470, &args![list]);
+}
+
+// Translated from 00459000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The count kept for `form` in the list at `this + 0x9C`
+/// (`TES::DeadCount`), or 0 when it has no entry. Each entry is 8 bytes: the
+/// form pointer, then a 16-bit count.
+pub fn fn_00459000(e: &mut Engine, this: Ptr<TES>, form: u32) -> u16 {
+    let mut node = this.addr() + 0x9c;
+    while node != 0 {
+        if list_node_item(e, node) == 0 {
+            break;
+        }
+        let entry = list_node_item(e, node);
+        if e.mem.u32(entry) == form {
+            return e.mem.u16(entry + 4);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    0
+}
+
+// Translated from 00459060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `delta` to the count kept for `form` in the list at `this + 0x9C`
+/// (`TES::DeadCount`), or puts a new 8-byte entry (form, `delta`) at the head
+/// of the list when it has none.
+pub fn fn_00459060(e: &mut Engine, this: Ptr<TES>, form: u32, delta: i16) {
+    let list = this.addr() + 0x9c;
+    let mut node = list;
+    while node != 0 {
+        if list_node_item(e, node) == 0 {
+            break;
+        }
+        let entry = list_node_item(e, node);
+        if e.mem.u32(entry) == form {
+            let count = e.mem.i16(entry + 4) as i32 + delta as i32;
+            e.mem.set_u16(entry + 4, count as u16);
+            return;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    e.mem.set_u32(entry, form);
+    e.mem.set_u16(entry + 4, delta as u16);
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), entry);
+        e.call(LIST_ADD_HEAD, &args![list, slot]);
+    });
+}
+
+/// Logs the byte count of a save step the way `fn_00459100` and
+/// `tes_save_game` do when the log byte is set: with the current world
+/// space's form id, name and flags when there is one (`TES::GetWorldSpace`
+/// is called with the save object as `this`, as the game does), else a
+/// shorter line.
+fn log_save_bytes(
+    e: &mut Engine,
+    save_load: u32,
+    bytes: u32,
+    line: u32,
+    format_plain: u32,
+    format_with_form: u32,
+) {
+    let world_space = e.call(GET_WORLD_SPACE, &args![save_load]).u32();
+    if world_space == 0 {
+        e.call(ERROR_LOG, &args![format_plain, bytes, line, TES_CPP_PATH]);
+    } else {
+        let form_id = e.mem.u32(world_space);
+        let form = e.call(FORM_LOOKUP, &args![form_id]).u32();
+        let flags = e.mem.u32(world_space + 5);
+        let name = e.vcall(form, FORM_SLOT_NAME, &args![]).u32();
+        e.call(
+            ERROR_LOG,
+            &args![
+                format_with_form,
+                bytes,
+                form_id,
+                name,
+                flags,
+                line,
+                TES_CPP_PATH
+            ],
+        );
+    }
+}
+
+// Translated from 00459100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The size, in bytes, the save of this class will take (its own error
+/// message calls it `GetSaveSize()`): 6 when the save uses blocks, 4 for the
+/// list count, 6 for each entry of the list `0050d100` gives (`this + 0x9C`), 4 more when the
+/// save version (`008df040`) is at least 0x32. When the log byte setting is
+/// set, the size is logged (see `log_save_bytes`).
+pub fn fn_00459100(e: &mut Engine, this: Ptr<TES>) -> u16 {
+    let save_load: u32 = e.global(SAVE_LOAD_GAME);
+    let mut size: u16 = 0;
+    let start = size;
+    if e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool() {
+        size = size.wrapping_add(4);
+        size = size.wrapping_add(2);
+    }
+    let list = e.call(SAVE_LIST_HEAD, &args![this]).u32();
+    size = size.wrapping_add(4);
+    let count = e.call(LIST_COUNT, &args![list]).u32();
+    size = (size as u32).wrapping_add(count.wrapping_mul(6)) as u16;
+    if e.call(SAVE_VERSION, &args![save_load]).u8() >= 0x32 {
+        size = size.wrapping_add(4);
+    }
+    if setting_byte(e, SETTING_SAVE_SIZE_LOG) != 0 {
+        let bytes = (size as u32).wrapping_sub(start as u32);
+        log_save_bytes(e, save_load, bytes, 0x1882, 0x0101_2c78, 0x0101_2cb0);
+    }
+    size
+}
+
+// Translated from 00459230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::SaveGame` (Xbox PDB): writes this class's part of the save: when
+/// the save uses blocks, the tag `BLOK` and a 16-bit size placeholder; the
+/// length of the list `0050d100` gives (`this + 0x9C`) and, per entry, the numeric form id
+/// and the 16-bit count; the word at `011c3c08` when the save version is at
+/// least 0x32; and, at the end, the size of the block, patched into the
+/// placeholder (a message is printed when it exceeds 16 bits). When the log
+/// byte setting is set the number of bytes written is logged.
+pub fn tes_save_game(e: &mut Engine, this: Ptr<TES>) {
+    let save_load: u32 = e.global(SAVE_LOAD_GAME);
+    e.with_stack(16, |e, scratch| {
+        let tag = scratch.addr();
+        let placeholder = scratch.addr() + 4;
+        let count_cell = scratch.addr() + 8;
+        let id_cell = scratch.addr() + 12;
+        e.mem.set_u16(placeholder, 0);
+        let mut block = 0u32;
+        let mut start = e.call(SAVE_BUFFER_POSITION, &args![save_load]).u32();
+        if setting_byte(e, SETTING_SAVE_SIZE_LOG) != 0 {
+            start = e.call(SAVE_BUFFER_POSITION, &args![save_load]).u32();
+        }
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool() {
+            e.mem.set_u32(tag, 0x424c_4f4b);
+            e.call(SAVE_BUFFER_WRITE, &args![save_load, tag, 4u32]);
+            block = e.call(SAVE_BUFFER_POSITION, &args![save_load]).u32();
+            e.call(SAVE_BUFFER_WRITE, &args![save_load, placeholder, 2u32]);
+        }
+        let mut node = e.call(SAVE_LIST_HEAD, &args![this]).u32();
+        let count = e.call(LIST_COUNT, &args![node]).u32();
+        e.mem.set_u32(count_cell, count);
+        e.call(SAVE_BUFFER_WRITE, &args![save_load, count_cell, 4u32]);
+        while node != 0 {
+            let entry = list_node_item(e, node);
+            if entry != 0 {
+                e.mem.set_u32(id_cell, 0);
+                let form = e.mem.u32(entry);
+                if form != 0 {
+                    let id = e.call(FORM_ID_GETTER, &args![form]).u32();
+                    e.mem.set_u32(id_cell, id);
+                }
+                e.call(SAVE_NUMERIC_ID, &args![save_load, id_cell, 4u32]);
+                e.call(SAVE_BUFFER_WRITE, &args![save_load, entry + 4, 2u32]);
+            }
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        }
+        if e.call(SAVE_VERSION, &args![save_load]).u8() >= 0x32 {
+            e.call(SAVE_BUFFER_WRITE, &args![save_load, SAVE_EXTRA_WORD, 4u32]);
+        }
+        if setting_byte(e, SETTING_SAVE_SIZE_LOG) != 0 {
+            let end = e.call(SAVE_BUFFER_POSITION, &args![save_load]).u32();
+            log_save_bytes(
+                e,
+                save_load,
+                end.wrapping_sub(start),
+                0x18e1,
+                0x0101_536c,
+                0x0101_53a0,
+            );
+        }
+        if e.call(USE_SAVE_GAME_BLOCKS, &args![save_load]).bool() {
+            let end = e.call(SAVE_BUFFER_POSITION, &args![save_load]).u32();
+            if end > block.wrapping_add(0xffff) {
+                e.call(DEBUG_PRINT, &args![0x0101_5318u32, TES_CPP_PATH, 0x18e1u32]);
+            }
+            e.mem.set_u16(block, end.wrapping_sub(block) as u16);
+        }
+    });
+}
+
+// Translated from 00459470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `index`th slot of `pExteriorBuffer` (`TES + 0x3C`).
+pub fn fn_00459470(e: &mut Engine, this: Ptr<TES>, index: u32) -> u32 {
+    let buffer = e.get(this, TES::pExteriorBuffer);
+    e.mem.u32(buffer.addr().wrapping_add(index.wrapping_mul(4)))
+}
+
+// Translated from 00459490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::SaveGame_ov2` (Xbox PDB): the save of this class into a
+/// `BGSSaveGameBuffer`: a variable-sized block with the entries of the list
+/// at `this + 0x9C` (form id and 16-bit count each), `uGridsToLoad`, and then
+/// one form id per cell of the grid (0 for an empty slot or a cell the data
+/// handler does not know).
+pub fn tes_save_game_ov2(e: &mut Engine, this: Ptr<TES>, buffer: Ptr) {
+    let mut entries = 0u32;
+    let start = e.call(SAVE_BUFFER_START_VARIABLE, &args![buffer]).u32();
+    let mut node = this.addr() + 0x9c;
+    while node != 0 {
+        let entry = list_node_item(e, node);
+        if entry != 0 {
+            let form = e.mem.u32(entry);
+            e.call(SAVE_BUFFER_SAVE_FORM_ID_POINTER, &args![buffer, form, 0u32]);
+            e.call(
+                SAVE_BUFFER_WRITE_BYTES,
+                &args![buffer, entry + 4, 2u32, 0u32],
+            );
+            entries += 1;
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    e.call(SAVE_BUFFER_END_VARIABLE, &args![buffer, entries, start]);
+    let grids = grids_to_load(e);
+    e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), grids);
+        e.call(SAVE_BUFFER_WRITE_BYTES, &args![buffer, cell, 4u32, 0u32]);
+    });
+    let mut x = 0u32;
+    while x < grids {
+        let mut y = 0u32;
+        while y < grids {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            let mut id = 0u32;
+            if cell != 0 {
+                let cell_id = e.call(FORM_ID_GETTER, &args![cell]).u32();
+                let handler: u32 = e.global(DATA_HANDLER);
+                if e.call(DATA_HANDLER_HAS_FORM, &args![handler, cell_id])
+                    .bool()
+                {
+                    id = e.call(FORM_ID_GETTER, &args![cell]).u32();
+                }
+            }
+            e.call(SAVE_BUFFER_SAVE_FORM_ID, &args![buffer, id, 0u32]);
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+// Translated from 004595e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::LoadGame` (Xbox PDB): reads back what `tes_save_game_ov2` wrote:
+/// the list of (form, count) entries (each form looked up by its loaded id
+/// and dynamic-cast, `__RTDynamicCast`), then `uGridsToLoad` and one form id
+/// per grid cell; a non-empty id for a cell the data handler knows is
+/// cleared (`BGSSaveLoadGame::ClearFormID`) and handed to the cell's slot
+/// `0x128` with 1.
+pub fn tes_load_game(e: &mut Engine, this: Ptr<TES>, buffer: Ptr) {
+    let count = e.call(LOAD_BUFFER_VARIABLE_SIZE, &args![buffer]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let id = e.call(LOAD_BUFFER_FORM_ID, &args![buffer]).u32();
+        let form = e.call(FORM_LOOKUP, &args![id]).u32();
+        let cast = e
+            .call(
+                RT_DYNAMIC_CAST,
+                &args![form, 0u32, RTTI_LOAD_SOURCE, RTTI_LOAD_TARGET, 0u32],
+            )
+            .u32();
+        e.mem.set_u32(entry, cast);
+        e.call(LOAD_BUFFER_READ_BYTES, &args![buffer, entry + 4, 2u32]);
+        let list = this.addr() + 0x9c;
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), entry);
+            e.call(LIST_ADD_HEAD, &args![list, slot]);
+        });
+        index += 1;
+    }
+    let grids = e.with_stack(4, |e, cell| {
+        e.mem.set_u32(cell.addr(), 0);
+        e.call(LOAD_BUFFER_READ_BYTES, &args![buffer, cell, 4u32]);
+        e.mem.u32(cell.addr())
+    });
+    let mut x = 0u32;
+    while x < grids {
+        let mut y = 0u32;
+        while y < grids {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            let id = e.with_stack(4, |e, id_cell| {
+                e.mem.set_u32(id_cell.addr(), 0);
+                e.call(LOAD_BUFFER_FORM_ID_OUT, &args![buffer, id_cell]);
+                e.mem.u32(id_cell.addr())
+            });
+            if cell != 0 && id != 0 {
+                let cell_id = e.call(FORM_ID_GETTER, &args![cell]).u32();
+                let handler: u32 = e.global(DATA_HANDLER);
+                if e.call(DATA_HANDLER_HAS_FORM, &args![handler, cell_id])
+                    .bool()
+                {
+                    let script_context: u32 = e.global(SCRIPT_CONTEXT);
+                    e.call(SAVE_LOAD_CLEAR_FORM_ID, &args![script_context, id]);
+                    e.vcall(cell, CELL_SLOT_LOAD, &args![id, 1u32]);
+                }
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+// Translated from 00459750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finishes the cells held in `pInteriorBuffer` and `pExteriorBuffer`
+/// (`TES + 0x38` and `+0x3C`, as many slots as `uInterior Cell Buffer` and
+/// `uExterior Cell Buffer` say): for each non-null slot whose cell
+/// `TES::IsCellLoaded` (`004511e0`, second argument 1) says is loaded,
+/// `0054ba00` runs on it. Then the `NiPointer` at `+0xC0`
+/// (`spLoadedAreaBound`) is read and handed to `00628da0`.
+pub fn fn_00459750(e: &mut Engine, this: Ptr<TES>) {
+    for (buffer_field, setting) in [
+        (TES::pInteriorBuffer, SETTING_INTERIOR_CELL_BUFFER),
+        (TES::pExteriorBuffer, SETTING_EXTERIOR_CELL_BUFFER),
+    ] {
+        let mut index = 0i32;
+        loop {
+            let slots = e.call(SETTING_VALUE_ADDRESS_INT, &args![setting]).u32();
+            if index >= e.mem.i32(slots) {
+                break;
+            }
+            let buffer = e.get(this, buffer_field);
+            let at = buffer.addr().wrapping_add((index as u32).wrapping_mul(4));
+            let cell = e.mem.u32(at);
+            if cell != 0 {
+                let tes: u32 = e.global(TES_SINGLETON);
+                if e.call(TES_IS_CELL_LOADED, &args![tes, cell, 1u32]).bool() {
+                    let buffer = e.get(this, buffer_field);
+                    let at = buffer.addr().wrapping_add((index as u32).wrapping_mul(4));
+                    let cell = e.mem.u32(at);
+                    e.call(CELL_FINISH, &args![cell]);
+                }
+            }
+            index += 1;
+        }
+    }
+    let bound = ni_pointer_get(e, Ptr::new(this.addr() + 0xc0));
+    e.call(0x0062_8da0, &args![bound]);
+}
+
+// Translated from 00459840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the `TES::DeadCount` list (`fn_00458f90`) and sets `iSaveGridX`
+/// and `iSaveGridY` (`+0x48`, `+0x4C`) to `0x7fffffff`.
+pub fn fn_00459840(e: &mut Engine, this: Ptr<TES>) {
+    fn_00458f90(e, this);
+    e.set(this, TES::iSaveGridX, 0x7fff_ffff);
+    e.set(this, TES::iSaveGridY, 0x7fff_ffff);
+}
+
+// Translated from 00459870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::CreateFurnitureList` (Xbox PDB): fills the list at `this + 0x94`
+/// (`ListofBedsAndChairs`) with the furniture of the interior cell
+/// (`TESObjectCELL::AddFurnitureToList`), or of every slot of the grid when
+/// there is none. The grid slots are not checked for null.
+pub fn tes_create_furniture_list(e: &mut Engine, this: Ptr<TES>) {
+    let list = this.addr() + 0x94;
+    let interior = e.get(this, TES::pInteriorCell);
+    if !interior.is_null() {
+        e.call(CELL_ADD_FURNITURE_TO_LIST, &args![interior, list]);
+        return;
+    }
+    let mut x = 0u32;
+    while x < grids_to_load(e) {
+        let mut y = 0u32;
+        while y < grids_to_load(e) {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            e.call(CELL_ADD_FURNITURE_TO_LIST, &args![cell, list]);
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+/// Runs `action` on the interior cell (when there is one and
+/// `fn_00450ff0` accepts it) and on every non-null grid cell `fn_00450ff0`
+/// accepts, the way `fn_00459920` and `fn_00459a00` do. Does nothing
+/// without a `TESDataHandler`.
+fn for_each_ready_cell(e: &mut Engine, this: Ptr<TES>, action: fn(&mut Engine, u32)) {
+    let handler: u32 = e.global(DATA_HANDLER);
+    if handler == 0 {
+        return;
+    }
+    if e.call(GET_INTERIOR_CELL, &args![this]).u32() != 0 {
+        let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+        if e.call(CELL_STATE_TEST, &args![interior]).bool() {
+            let interior = e.call(GET_INTERIOR_CELL, &args![this]).u32();
+            action(e, interior);
+        }
+    }
+    let mut x = 0u32;
+    while x < grids_to_load(e) {
+        let mut y = 0u32;
+        while y < grids_to_load(e) {
+            let grid_cells = e.get(this, TES::pGridCellA);
+            let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            if cell != 0 && e.call(CELL_STATE_TEST, &args![cell]).bool() {
+                action(e, cell);
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+// Translated from 00459920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues the references (`TESObjectCELL::QueueReferences`, second argument
+/// 0) of the interior cell and of every grid cell whose state test
+/// (`fn_00450ff0`) passes. Does nothing without a `TESDataHandler`.
+pub fn fn_00459920(e: &mut Engine, this: Ptr<TES>) {
+    for_each_ready_cell(e, this, |e, cell| {
+        e.call(CELL_QUEUE_REFERENCES, &args![cell, 0u32]);
+    });
+}
+
+// Translated from 00459a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Same walk as `fn_00459920`, calling `005573e0` on each cell.
+pub fn fn_00459a00(e: &mut Engine, this: Ptr<TES>) {
+    for_each_ready_cell(e, this, |e, cell| {
+        e.call(CELL_QUEUE_B, &args![cell]);
+    });
+}
+
+// Translated from 00459ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::RunCellTest` (Xbox PDB): the cell test run: sets `bRunningCellTests`
+/// (`+0x51`), turns on the player's god mode, logs "Running Cell Test",
+/// closes the menus, and then takes every world space of the data handler in
+/// turn (stopping when the list node is empty, `008256d0`): enters it
+/// (`TES::SetWorldSpace`), logs its form id, name and cell bounds, walks the
+/// bounds in steps of `uGridsToLoad` cells (loading cells that are not there)
+/// and tests each cell (`TES::TestCell`, `tes_test_cell`). Then the interior
+/// cells of the data handler are tested the same way. `bRunningCellTests2`
+/// (`+0x52`) is cleared at the end.
+pub fn tes_run_cell_test(e: &mut Engine, this: Ptr<TES>, mode: u32) {
+    e.set(this, TES::bRunningCellTests, true);
+    e.call(0x0095_26a0, &args![1u32]);
+    e.call(ERROR_LOG, &args![0x0101_7e5cu32]);
+    e.call(0x0070_37e0, &args![]);
+    let start = fn_00457fe0(e);
+    let handler: u32 = e.global(DATA_HANDLER);
+    let mut node = e
+        .call(DATA_HANDLER_FIRST_WORLD_SPACE, &args![handler])
+        .u32();
+    while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+        let world_space = list_node_item(e, node);
+        if world_space != 0 {
+            tes_set_world_space(e, this, Ptr::new(world_space));
+            let left = world_space_bound_in_cells(e, 0x0045_65f0, world_space);
+            let bottom = world_space_bound_in_cells(e, 0x0081_2870, world_space);
+            let right = world_space_bound_in_cells(e, 0x009b_88a0, world_space);
+            let top = world_space_bound_in_cells(e, 0x009b_88c0, world_space);
+            let mut name = e.call(STRING_OBJECT_TEXT, &args![world_space + 0x18]).u32();
+            if name == 0 || e.call(STRING_LENGTH, &args![name]).u32() == 0 {
+                name = e.vcall(world_space, FORM_SLOT_NAME, &args![]).u32();
+            }
+            let form_id = e.call(FORM_ID_GETTER, &args![world_space]).u32();
+            e.call(
+                ERROR_LOG,
+                &args![0x0101_7e24u32, form_id, name, left, bottom, right, top],
+            );
+            let mut x = left;
+            while x < right {
+                let mut y = bottom;
+                while y < top {
+                    let mut cell = e
+                        .call(WORLD_SPACE_GET_CELL, &args![world_space, x, y])
+                        .u32();
+                    if cell == 0 {
+                        cell = e
+                            .call(WORLD_SPACE_LOAD_CELL, &args![world_space, x, y])
+                            .u32();
+                    }
+                    if cell != 0 {
+                        tes_test_cell(e, this, Ptr::new(cell), mode, start);
+                    }
+                    y = y.wrapping_add(grids_to_load(e) as i32);
+                }
+                x = x.wrapping_add(grids_to_load(e) as i32);
+            }
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    let handler: u32 = e.global(DATA_HANDLER);
+    e.call(DATA_HANDLER_PREPARE_INTERIORS, &args![handler]);
+    let handler: u32 = e.global(DATA_HANDLER);
+    let count = e.call(DATA_HANDLER_INTERIOR_COUNT, &args![handler]).u32();
+    let mut index = 0u32;
+    while index < count {
+        let handler: u32 = e.global(DATA_HANDLER);
+        let cell = e
+            .call(DATA_HANDLER_INTERIOR_AT, &args![handler, index])
+            .u32();
+        tes_test_cell(e, this, Ptr::new(cell), mode, start);
+        index += 1;
+    }
+    e.set(this, TES::bRunningCellTests2, false);
+}
+
+// Translated from 00459d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::TestCell` (Xbox PDB): for a non-null cell, logs "Moving to
+/// interior/exterior cell ...", centres the player on it
+/// (`PlayerCharacter::CenterOnCell`), loads the queued files
+/// (`IOManager::LoadQueuedPriority`), logs how long the load took and the
+/// total test time since `start_time` (`hh:mm:ss`), updates the process lists
+/// (`ProcessLists::ChangeProcessLevelTempList`, `UpdateProcessLists`,
+/// `ChangeProcessLevelTempList`), and for modes 4 and 5 runs
+/// `TESSaveLoadGame::TestAllCells(mode)`. (`this` is not used.)
+pub fn tes_test_cell(e: &mut Engine, _this: Ptr<TES>, cell: Ptr, mode: u32, start_time: u32) {
+    if cell.is_null() {
+        return;
+    }
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        let name = e.call(STRING_OBJECT_TEXT, &args![cell.addr() + 0x18]).u32();
+        let form_id = e.call(FORM_ID_GETTER, &args![cell]).u32();
+        e.call(ERROR_LOG, &args![0x0101_7f54u32, form_id, name]);
+    } else {
+        let name = e.call(STRING_OBJECT_TEXT, &args![cell.addr() + 0x18]).u32();
+        let data_y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+        let data_x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+        let form_id = e.call(FORM_ID_GETTER, &args![cell]).u32();
+        e.call(
+            ERROR_LOG,
+            &args![0x0101_7f2cu32, form_id, data_x, data_y, name],
+        );
+    }
+    let before = fn_00457fe0(e);
+    let player: u32 = e.global(PLAYER_CHARACTER);
+    e.call(0x0093_db60, &args![player, 0u32, cell]);
+    let io_manager: u32 = e.global(IO_MANAGER);
+    e.call(0x0045_6520, &args![io_manager]);
+    let after = fn_00457fe0(e);
+    let total = fn_00457fe0(e).wrapping_sub(start_time);
+    let hours = total / 3_600_000;
+    let rest = total - hours * 3_600_000;
+    let minutes = rest / 60_000;
+    let rest = rest - minutes * 60_000;
+    let seconds = rest / 1000;
+    let loading = after.wrapping_sub(before) as f64 / e.mem.f64(0x0101_7b70);
+    if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+        e.call(
+            ERROR_LOG,
+            &args![0x0101_7ed8u32, loading, hours, minutes, seconds],
+        );
+    } else {
+        let data_y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+        let data_x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+        e.call(
+            ERROR_LOG,
+            &args![
+                0x0101_7e78u32,
+                data_x,
+                data_y,
+                loading,
+                hours,
+                minutes,
+                seconds
+            ],
+        );
+    }
+    let delay = e.mem.f32(0x0101_7e70);
+    e.call(0x0086_7a40, &args![OBJECT_011DE7B8, delay]);
+    e.call(0x0096_eb40, &args![OBJECT_011E0E80]);
+    e.call(0x0096_d810, &args![OBJECT_011E0E80]);
+    e.call(0x0096_eb40, &args![OBJECT_011E0E80]);
+    if (4..=5).contains(&mode) {
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        e.call(0x0086_1f20, &args![save_load, mode]);
+    }
+}
+
+/// Allocates a `QueuedFile` of priority 5 (`operator new` 0x28 bytes and
+/// `QueuedFile::QueuedFile`, or null when the allocation fails) and stores it
+/// in the `NiPointer` at `slot`.
+fn store_new_queued_file(e: &mut Engine, slot: u32) {
+    let memory = e.call(OPERATOR_NEW, &args![0x28u32]).u32();
+    let queued = if memory == 0 {
+        0
+    } else {
+        e.call(QUEUED_FILE_CTOR, &args![memory, 5u32]).u32()
+    };
+    e.call(QUEUED_FILE_POINTER_ASSIGN, &args![slot, queued]);
+}
+
+// Translated from 00459f10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::PreloadAddonNodes` (Xbox PDB): unless `spPreloadedAddonNodes`
+/// (`+0xA4`) is already set, makes a `QueuedFile` (priority 5) for it and
+/// goes through the data handler's add-on nodes (`fn_0045a120` many). For a
+/// node `00448bf0` accepts, the model named by slot `0x14` of the node's
+/// sub-object (`node + 0x30`) is loaded (`ModelLoader::LoadFile`) and, when it
+/// loads, given the node's data (`0068a830`, `0059e300`, the word at
+/// `node + 0x58`) and attached to the scene root `fn_0045a190` returns; the
+/// model is then released (`ModelLoader::ReleaseModel`). For any other node
+/// the model is queued on the `QueuedFile`.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_preload_addon_nodes(e: &mut Engine, this: Ptr<TES>) {
+    let slot = this.addr() + 0xa4;
+    if ni_pointer_get(e, Ptr::new(slot)) != 0 {
+        return;
+    }
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 7u32, 1u32, TES_CPP_PATH, 0x1b8eu32],
+        );
+        store_new_queued_file(e, slot);
+        let handler: u32 = e.global(DATA_HANDLER);
+        let count = fn_0045a120(e, Ptr::new(handler));
+        let mut index = 0u32;
+        while index < count {
+            let handler: u32 = e.global(DATA_HANDLER);
+            let node = e
+                .call(DATA_HANDLER_GET_ADDON_NODE, &args![handler, index])
+                .u32();
+            if node != 0 {
+                if e.call(ADDON_NODE_LOADS_NOW, &args![node]).bool() {
+                    let name = e.vcall(node + 0x30, 0x14, &args![]).u32();
+                    let model_loader: u32 = e.global(MODEL_LOADER);
+                    let model = e
+                        .call(
+                            MODEL_LOADER_LOAD_FILE,
+                            &args![model_loader, name, 0u32, 1u32, 0u32, 0u32, 0u32],
+                        )
+                        .u32();
+                    if model != 0 {
+                        let first = e.call(0x0068_a830, &args![node]).u32();
+                        e.call(0x0040_30d0, &args![model, first]);
+                        let second = e.call(0x0059_e300, &args![node]).u32();
+                        e.call(0x0070_5b10, &args![model, second]);
+                        let word = fn_0045a1a0(e, Ptr::new(node));
+                        fn_0045a140(e, Ptr::new(model), word);
+                        let root = fn_0045a190(e);
+                        fn_0045a160(e, Ptr::new(root), Ptr::new(model));
+                    }
+                    let name = e.vcall(node + 0x30, 0x14, &args![]).u32();
+                    let model_loader: u32 = e.global(MODEL_LOADER);
+                    e.call(
+                        MODEL_LOADER_RELEASE_MODEL,
+                        &args![model_loader, name, 1u32, 1u32],
+                    );
+                } else {
+                    let queued = ni_pointer_get(e, Ptr::new(slot));
+                    let model_loader: u32 = e.global(MODEL_LOADER);
+                    e.call(
+                        MODEL_LOADER_QUEUE_FILE,
+                        &args![
+                            model_loader,
+                            node + 0x30,
+                            5u32,
+                            queued,
+                            0u32,
+                            1u32,
+                            0u32,
+                            0u32
+                        ],
+                    );
+                }
+            }
+            index += 1;
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 0045a120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands `this + 0x1EC` (the data handler's add-on node list) to `00658930`
+/// and returns its result (the number of add-on nodes).
+pub fn fn_0045a120(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(0x0065_8930, &args![this.addr() + 0x1ec]).u32()
+}
+
+// Translated from 0045a140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a 16-bit value at `this + 0xBC`.
+pub fn fn_0045a140(e: &mut Engine, this: Ptr, value: u16) {
+    e.mem.set_u16(this.addr() + 0xbc, value);
+}
+
+// Translated from 0045a160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls slot `0xDC` of `this` with `(child, 1)`.
+pub fn fn_0045a160(e: &mut Engine, this: Ptr, child: Ptr) {
+    e.vcall(this.addr(), 0xdc, &args![child, 1u32]);
+}
+
+// Translated from 0045a190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The stored pointer of the `NiPointer` at `011ded58`.
+pub fn fn_0045a190(e: &mut Engine) -> u32 {
+    ni_pointer_get(e, Ptr::new(ADDON_PARENT_CELL))
+}
+
+// Translated from 0045a1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-bit word at `this + 0x58`.
+pub fn fn_0045a1a0(e: &mut Engine, this: Ptr) -> u16 {
+    e.mem.u16(this.addr() + 0x58)
+}
+
+// Translated from 0045a1c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears `spPreloadedAddonNodes` (`+0xA4`).
+pub fn fn_0045a1c0(e: &mut Engine, this: Ptr<TES>) {
+    e.call(QUEUED_FILE_POINTER_ASSIGN, &args![this.addr() + 0xa4, 0u32]);
+}
+
+// Translated from 0045a1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TES::PreloadForms` (Xbox PDB): unless `spPreloadedForms` (`+0xAC`) is
+/// already set, makes a `QueuedFile` (priority 5) for it, asks every entry of
+/// the data handler's list at `+0x180` (until a node reports empty,
+/// `008256d0`) to queue its files (slot `0x10` of the sub-object at
+/// `entry + 0x30`, with `(5, queuedFile)`), and, when the weapon object at
+/// `011ca278` exists, `TESObjectWEAP::QueueFiles(5, queuedFile, 0)`.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn tes_preload_forms(e: &mut Engine, this: Ptr<TES>) {
+    let slot = this.addr() + 0xac;
+    if ni_pointer_get(e, Ptr::new(slot)) != 0 {
+        return;
+    }
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 7u32, 1u32, TES_CPP_PATH, 0x1bd0u32],
+        );
+        store_new_queued_file(e, slot);
+        let handler: u32 = e.global(DATA_HANDLER);
+        let mut node = fn_0045a330(e, Ptr::new(handler));
+        while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+            let entry = list_node_item(e, node);
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+            if entry != 0 {
+                let queued = ni_pointer_get(e, Ptr::new(slot));
+                e.vcall(entry + 0x30, 0x10, &args![5u32, queued]);
+            }
+        }
+        let weapons: u32 = e.global(WEAPON_QUEUE_OBJECT);
+        if weapons != 0 {
+            let queued = ni_pointer_get(e, Ptr::new(slot));
+            e.call(0x0052_5510, &args![weapons, 5u32, queued, 0u32]);
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 0045a330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0x180` (the data handler's list head at that offset).
+pub fn fn_0045a330(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0x180)
+}
+
+// Translated from 0045a350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears `spPreloadedForms` (`+0xAC`).
+pub fn fn_0045a350(e: &mut Engine, this: Ptr<TES>) {
+    e.call(QUEUED_FILE_POINTER_ASSIGN, &args![this.addr() + 0xac, 0u32]);
+}
+
+/// The text of a string setting (`00403df0`).
+fn setting_text(e: &mut Engine, setting: u32) -> u32 {
+    e.call(SETTING_VALUE_ADDRESS_STRING, &args![setting]).u32()
+}
+
+/// The four string settings that name the models to preload, in the order
+/// the code visits them.
+const PRELOAD_MODEL_SETTINGS: [u32; 4] = [
+    SETTING_RAGDOLL_DATA_DEFAULT,
+    SETTING_BLOOD_PARTICLE_DEFAULT,
+    SETTING_SPLASH_PARTICLES,
+    SETTING_EXPLOSION_SPLASH_PARTICLES,
+];
+
+// Translated from 0045a370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues the models named by `sRagdollDataDefault`, `sBloodParticleDefault`,
+/// `sSplashParticles` and `sExplosionSplashParticles` (each when its text is
+/// not empty; `ModelLoader::QueueModel(name, 5, 0, 0, 1, 1, 0)`) and loads
+/// the blood texture named by `sBloodTextureDefault` as `Data\Textures\<name>`
+/// into `BloodDecalPreload1` (`+0xA8`, `TES::CreateTextureImage`).
+///
+/// Not translated: the compiler's exception-unwinding frame and the stack
+/// cookie check.
+pub fn fn_0045a370(e: &mut Engine, this: Ptr<TES>) {
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 7u32, 1u32, TES_CPP_PATH, 0x1bf0u32],
+        );
+        for setting in PRELOAD_MODEL_SETTINGS {
+            let text = setting_text(e, setting);
+            if e.mem.i8(text) != 0 {
+                let name = setting_text(e, setting);
+                let model_loader: u32 = e.global(MODEL_LOADER);
+                e.call(
+                    MODEL_LOADER_QUEUE_MODEL,
+                    &args![model_loader, name, 5u32, 0u32, 0u32, 1u32, 1u32, 0u32],
+                );
+            }
+        }
+        let text = setting_text(e, SETTING_BLOOD_TEXTURE_DEFAULT);
+        if e.mem.i8(text) != 0 {
+            let name = setting_text(e, SETTING_BLOOD_TEXTURE_DEFAULT);
+            e.with_stack(0x104, |e, buffer| {
+                e.call(
+                    FORMAT_STRING,
+                    &args![
+                        buffer,
+                        0x104u32,
+                        0x0101_7f74u32,
+                        0x0101_7f80u32,
+                        0x0101_7f88u32,
+                        name
+                    ],
+                );
+                e.call(
+                    CREATE_TEXTURE_IMAGE,
+                    &args![this, buffer, this.addr() + 0xa8, 0u32, 0u32],
+                );
+            });
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 0045a520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the four models `fn_0045a370` queued (`fn_0045a5e0`, each when
+/// its setting text is not empty) and clears `BloodDecalPreload1` (`+0xA8`).
+pub fn fn_0045a520(e: &mut Engine, this: Ptr<TES>) {
+    for setting in PRELOAD_MODEL_SETTINGS {
+        let text = setting_text(e, setting);
+        if e.mem.i8(text) != 0 {
+            let name = setting_text(e, setting);
+            let model_loader: u32 = e.global(MODEL_LOADER);
+            fn_0045a5e0(e, Ptr::new(model_loader), name);
+        }
+    }
+    e.call(NI_POINTER_ASSIGN, &args![this.addr() + 0xa8, 0u32]);
+}
+
+// Translated from 0045a5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ModelLoader::ReleaseModel(name, 1, 1)` on the model loader `this`.
+pub fn fn_0045a5e0(e: &mut Engine, this: Ptr, name: u32) {
+    e.call(MODEL_LOADER_RELEASE_MODEL, &args![this, name, 1u32, 1u32]);
+}
+
+// Translated from 0045a600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Preloads the water textures: after `0070ec90` (the water system getter)
+/// and unless `bUsePerWorldSpaceWaterNoise` is set, goes through the data
+/// handler's list at `+0x130` (until a node reports empty); for each entry
+/// that `00580080` accepts, `TES::CreateTextureImage(name, &texture, 1, 0)`
+/// loads the texture `005800a0` names into a local `NiPointer`, which
+/// `005800c0` then receives; the pointer is released.
+///
+/// Not translated: the compiler's exception-unwinding frame.
+pub fn fn_0045a600(e: &mut Engine, this: Ptr<TES>) {
+    e.with_stack(SCOPE_GUARD_SIZE, |e, guard| {
+        e.call(
+            SCOPE_GUARD_CTOR,
+            &args![guard, 0x1du32, 1u32, TES_CPP_PATH, 0x1c27u32],
+        );
+        e.call(TES_WATER_SYSTEM_GETTER, &args![this]);
+        if setting_byte(e, SETTING_PER_WORLD_SPACE_WATER_NOISE) != 0 {
+            e.call(SCOPE_GUARD_DTOR, &args![guard]);
+            return;
+        }
+        let handler: u32 = e.global(DATA_HANDLER);
+        let mut node = fn_0045a730(e, Ptr::new(handler));
+        while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+            let entry = list_node_item(e, node);
+            if e.call(0x0058_0080, &args![entry]).u32() != 0 {
+                e.with_stack(4, |e, texture| {
+                    e.call(NI_POINTER_CTOR, &args![texture, 0u32]);
+                    let name = e.call(0x0058_00a0, &args![entry]).u32();
+                    let tes: u32 = e.global(TES_SINGLETON);
+                    e.call(CREATE_TEXTURE_IMAGE, &args![tes, name, texture, 1u32, 0u32]);
+                    let loaded = ni_pointer_get(e, texture);
+                    e.call(0x0058_00c0, &args![entry, loaded]);
+                    e.call(NI_POINTER_DTOR, &args![texture]);
+                });
+            }
+            node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        }
+        e.call(SCOPE_GUARD_DTOR, &args![guard]);
+    });
+}
+
+// Translated from 0045a730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this + 0x130` (the data handler's list head at that offset).
+pub fn fn_0045a730(_e: &mut Engine, this: Ptr) -> u32 {
+    this.addr().wrapping_add(0x130)
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -877,6 +2099,52 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00458a10, fn_00458a10(Ptr, Ptr, Ptr)),
         entry!(0x00458a60, fn_00458a60(Ptr, Ptr, Ptr) -> Ptr),
         entry!(0x00458ad0, fn_00458ad0(Ptr, Ptr)),
+        entry!(0x00458b20, fn_00458b20() -> Ptr),
+        entry!(0x00458b30, fn_00458b30(Ptr, u8)),
+        entry!(0x00458b50, fn_00458b50(Ptr) -> u32),
+        entry!(
+            0x00458b70,
+            tes_get_map_name_for_location(Ptr<TES>, u32, u32, u32, u32, Ptr) -> u32
+        ),
+        entry!(0x00458be0, tes_get_cell_priority(Ptr<TES>, Ptr, Ptr) -> u32),
+        entry!(0x00458e20, tes_add_temp_debug_object(Ptr<TES>, Ptr, f32)),
+        entry!(0x00458ef0, fn_00458ef0(Ptr, f32) -> Ptr),
+        entry!(0x00458f20, bs_temp_node_get_rtti(Ptr) -> Ptr),
+        entry!(
+            0x00458f30,
+            bs_temp_node_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00458f70, fn_00458f70(Ptr)),
+        entry!(0x00458f90, fn_00458f90(Ptr<TES>)),
+        entry!(0x00459000, fn_00459000(Ptr<TES>, u32) -> u16),
+        entry!(0x00459060, fn_00459060(Ptr<TES>, u32, i16)),
+        entry!(0x00459100, fn_00459100(Ptr<TES>) -> u16),
+        entry!(0x00459230, tes_save_game(Ptr<TES>)),
+        entry!(0x00459470, fn_00459470(Ptr<TES>, u32) -> u32),
+        entry!(0x00459490, tes_save_game_ov2(Ptr<TES>, Ptr)),
+        entry!(0x004595e0, tes_load_game(Ptr<TES>, Ptr)),
+        entry!(0x00459750, fn_00459750(Ptr<TES>)),
+        entry!(0x00459840, fn_00459840(Ptr<TES>)),
+        entry!(0x00459870, tes_create_furniture_list(Ptr<TES>)),
+        entry!(0x00459920, fn_00459920(Ptr<TES>)),
+        entry!(0x00459a00, fn_00459a00(Ptr<TES>)),
+        entry!(0x00459ae0, tes_run_cell_test(Ptr<TES>, u32)),
+        entry!(0x00459d20, tes_test_cell(Ptr<TES>, Ptr, u32, u32)),
+        entry!(0x00459f10, tes_preload_addon_nodes(Ptr<TES>)),
+        entry!(0x0045a120, fn_0045a120(Ptr) -> u32),
+        entry!(0x0045a140, fn_0045a140(Ptr, u16)),
+        entry!(0x0045a160, fn_0045a160(Ptr, Ptr)),
+        entry!(0x0045a190, fn_0045a190() -> u32),
+        entry!(0x0045a1a0, fn_0045a1a0(Ptr) -> u16),
+        entry!(0x0045a1c0, fn_0045a1c0(Ptr<TES>)),
+        entry!(0x0045a1e0, tes_preload_forms(Ptr<TES>)),
+        entry!(0x0045a330, fn_0045a330(Ptr) -> u32),
+        entry!(0x0045a350, fn_0045a350(Ptr<TES>)),
+        entry!(0x0045a370, fn_0045a370(Ptr<TES>)),
+        entry!(0x0045a520, fn_0045a520(Ptr<TES>)),
+        entry!(0x0045a5e0, fn_0045a5e0(Ptr, u32)),
+        entry!(0x0045a600, fn_0045a600(Ptr<TES>)),
+        entry!(0x0045a730, fn_0045a730(Ptr) -> u32),
     ]
 }
 
@@ -943,7 +2211,7 @@ mod tests {
 
     /// A vtable with the given (byte offset, function address) slots.
     fn vtable(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
-        let table = e.mem.alloc(0x100);
+        let table = e.mem.alloc(0x400);
         for (offset, function) in slots {
             e.mem.set_u32(table + offset, *function);
         }
@@ -2094,5 +3362,1503 @@ mod tests {
         e.mem.set_f32(pick.addr() + 0x90 + 8, 0.0);
         e.mem.set_f32(pick.addr() + 0x90 + 12, 50.0);
         assert!(!e.call(0x0045_88d0, &args![pick]).bool());
+    }
+
+    // ===== Session 2: `00458b20` to `0045a730` =====
+
+    /// The pages the second session's code reads, on top of [`map_globals`].
+    fn map_more_globals(e: &mut Engine) {
+        map_globals(e);
+        for page in [
+            0x011c_7000u32,
+            0x011c_a000,
+            0x011c_e000,
+            0x011c_f000,
+            0x011d_0000,
+            0x011d_1000,
+            0x011d_d000,
+            0x011e_0000,
+            0x0120_2000,
+        ] {
+            e.map(page, 0x1000);
+        }
+    }
+
+    /// Item and next accessors for `BSSimpleList` nodes: the item word at
+    /// +0, the next node at +4.
+    fn list_doubles(e: &mut Engine) {
+        e.register(LIST_NODE_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NODE_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+    }
+
+    /// Fills the list whose first (inline) node is at `head` with `items`.
+    fn fill_list(e: &mut Engine, head: u32, items: &[u32]) {
+        let mut node = head;
+        for (index, item) in items.iter().enumerate() {
+            e.mem.set_u32(node, *item);
+            if index + 1 < items.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+    }
+
+    /// An 8-byte list entry: form pointer, 16-bit count.
+    fn dead_entry(e: &mut Engine, form: u32, count: u16) -> u32 {
+        let entry = e.mem.alloc(8);
+        e.mem.set_u32(entry, form);
+        e.mem.set_u16(entry + 4, count);
+        entry
+    }
+
+    /// A cell for the priority code: interior flag, data x, data y.
+    fn cell_object(e: &mut Engine, interior: bool, x: i32, y: i32) -> Ptr {
+        let cell = e.mem.alloc(0x40);
+        e.mem.set_u32(cell, interior as u32);
+        e.mem.set_i32(cell + 4, x);
+        e.mem.set_i32(cell + 8, y);
+        Ptr::new(cell)
+    }
+
+    // ----- 00458b20, 00458b30, 00458b50 -----
+
+    #[test]
+    fn zero_vector_address_is_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(e.call(0x0045_8b20, &args![]).u32(), 0x0126_7e30);
+    }
+
+    #[test]
+    fn byte_setter_stores_at_0x11() {
+        let mut e = Engine::new();
+        let object = Ptr::<()>::new(e.mem.alloc(0x20));
+        e.call(0x0045_8b30, &args![object, 7u8]);
+        assert_eq!(e.mem.u8(object.addr() + 0x11), 7);
+    }
+
+    #[test]
+    fn pointer_getter_forwards_to_the_ni_pointer_getter() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        let cell = e.mem.alloc(8);
+        e.mem.set_u32(cell, 0x1234);
+        assert_eq!(
+            e.call(0x0045_8b50, &args![Ptr::<()>::new(cell)]).u32(),
+            0x1234
+        );
+    }
+
+    // ----- 00458b70 -----
+
+    #[test]
+    fn map_name_asks_the_given_world_space_through_slot_0x138() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x138, 0x7000_0138)]);
+        let world_space = object_with(&mut e, table);
+        let asked = recording(&mut e, 0x7000_0138, 0xabcd);
+        let current = recording(&mut e, GET_WORLD_SPACE, 0);
+        let tes = e.new_object::<TES>();
+        let name = e
+            .call(
+                0x0045_8b70,
+                &args![tes, 1u32, 2u32, 3u32, 4u32, world_space],
+            )
+            .u32();
+        assert_eq!(name, 0xabcd);
+        assert_eq!(*asked.borrow(), vec![vec![world_space.addr(), 1, 2, 3, 4]]);
+        assert!(current.borrow().is_empty());
+    }
+
+    #[test]
+    fn map_name_falls_back_to_the_current_world_space() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0x138, 0x7000_0138)]);
+        let world_space = object_with(&mut e, table);
+        let asked = recording(&mut e, 0x7000_0138, 0x77);
+        let current = recording(&mut e, GET_WORLD_SPACE, world_space.addr());
+        let tes = e.new_object::<TES>();
+        let name = e
+            .call(
+                0x0045_8b70,
+                &args![tes, 9u32, 8u32, 7u32, 6u32, Ptr::<()>::NULL],
+            )
+            .u32();
+        assert_eq!(name, 0x77);
+        assert_eq!(*current.borrow(), vec![vec![tes.addr()]]);
+        assert_eq!(asked.borrow()[0][1..], [9, 8, 7, 6]);
+    }
+
+    #[test]
+    fn map_name_is_zero_without_any_world_space() {
+        let mut e = Engine::new();
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        let tes = e.new_object::<TES>();
+        let name = e
+            .call(
+                0x0045_8b70,
+                &args![tes, 1u32, 2u32, 3u32, 4u32, Ptr::<()>::NULL],
+            )
+            .u32();
+        assert_eq!(name, 0);
+    }
+
+    // ----- 00458be0 -----
+
+    fn priority_engine(grids: u32) -> Engine {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, grids);
+        e.register(CELL_IS_INTERIOR, |e, a| ret(e.mem.u32(a[0])));
+        e.register(CELL_GET_DATA_X, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(CELL_GET_DATA_Y, |e, a| ret(e.mem.u32(a[0] + 8)));
+        e.register(FLOAT_TO_INT_ROUNDED, |_, a| {
+            ret(f32::from_bits(a[0]).round() as i32 as u32)
+        });
+        e.register(ABSOLUTE_VALUE, |_, a| ret((a[0] as i32).unsigned_abs()));
+        e
+    }
+
+    #[test]
+    fn cell_priority_is_cached_for_the_last_cell() {
+        let mut e = priority_engine(5);
+        let asked = recording(&mut e, CELL_IS_INTERIOR, 0);
+        let tes = e.new_object::<TES>();
+        e.set_global(CELL_PRIORITY_LAST_CELL, 0x4444u32);
+        e.set_global(CELL_PRIORITY_VALUE, 3u32);
+        let priority = e.call(0x0045_8be0, &args![tes, 0x4444u32, Ptr::<()>::NULL]);
+        assert_eq!(priority.u32(), 3);
+        assert!(asked.borrow().is_empty());
+    }
+
+    #[test]
+    fn interior_cells_are_always_near() {
+        let mut e = priority_engine(5);
+        let tes = e.new_object::<TES>();
+        let cell = cell_object(&mut e, true, 500, -500);
+        let priority = e.call(0x0045_8be0, &args![tes, cell, Ptr::<()>::NULL]);
+        assert_eq!(priority.u32(), 1);
+        assert_eq!(e.global::<u32>(CELL_PRIORITY_LAST_CELL), cell.addr());
+        assert_eq!(e.global::<u32>(CELL_PRIORITY_VALUE), 1);
+    }
+
+    #[test]
+    fn exterior_priority_follows_the_distance_from_the_grid_centre() {
+        let mut e = priority_engine(5);
+        let tes = e.new_object::<TES>();
+        e.set(tes, TES::iCurrentGridX, 100);
+        e.set(tes, TES::iCurrentGridY, 100);
+        // grids/2 = 2: a cell at distance 1 is still near (10 + 10 = 20), at
+        // distance 2 it is far (30). The game takes the larger of the two
+        // signed offsets and then its absolute value, so a cell far away
+        // on the negative side of one axis only is still near, and one far
+        // on the negative side of both is far.
+        for (x, y, expected) in [
+            (100, 100, 1),
+            (101, 100, 1),
+            (100, 99, 1),
+            (102, 100, 3),
+            (100, 102, 3),
+            (104, 100, 3),
+            (96, 100, 1),
+            (96, 96, 3),
+        ] {
+            let cell = cell_object(&mut e, false, x, y);
+            let priority = e.call(0x0045_8be0, &args![tes, cell, Ptr::<()>::NULL]);
+            assert_eq!(priority.u32(), expected, "cell ({x}, {y})");
+        }
+    }
+
+    #[test]
+    fn exterior_priority_with_a_position_uses_its_cell() {
+        let mut e = priority_engine(5);
+        let tes = e.new_object::<TES>();
+        let position = Ptr::<()>::new(e.mem.alloc(16));
+        e.mem.set_f32(position.addr(), 100.0 * 4096.0);
+        e.mem.set_f32(position.addr() + 4, 100.0 * 4096.0);
+        let near = cell_object(&mut e, false, 100, 101);
+        let far = cell_object(&mut e, false, 106, 100);
+        assert_eq!(e.call(0x0045_8be0, &args![tes, near, position]).u32(), 1);
+        assert_eq!(e.call(0x0045_8be0, &args![tes, far, position]).u32(), 3);
+    }
+
+    // ----- 00458e20, 00458ef0, 00458f20, 00458f30, 00458f70 -----
+
+    #[test]
+    fn temp_debug_object_is_built_and_attached() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        let temp_memory = e.mem.alloc(0xb0);
+        returns(&mut e, NI_OPERATOR_NEW, temp_memory);
+        let constructed = recording(&mut e, NI_NODE_CTOR, 0);
+        e.mem.set_u32(BS_TEMP_NODE_VTABLE + 0xdc, 0x7000_00dc);
+        let temp_attach = recording(&mut e, 0x7000_00dc, 0);
+        let parent_table = vtable(&mut e, &[(0xdc, 0x7000_01dc)]);
+        let parent = object_with(&mut e, parent_table);
+        returns(&mut e, TES_DEBUG_PARENT, parent.addr());
+        let parent_attach = recording(&mut e, 0x7000_01dc, 0);
+        let updated = recording(&mut e, NI_AV_OBJECT_UPDATE_PROPERTIES, 0);
+        let tes = e.new_object::<TES>();
+        let node = Ptr::<()>::new(0x6000_0000);
+        e.call(0x0045_8e20, &args![tes, node, 1.5f32]);
+        assert_eq!(*constructed.borrow(), vec![vec![temp_memory, 0]]);
+        assert_eq!(e.mem.u32(temp_memory), BS_TEMP_NODE_VTABLE);
+        assert_eq!(e.mem.f32(temp_memory + 0xac), 1.5);
+        assert_eq!(
+            *temp_attach.borrow(),
+            vec![vec![temp_memory, node.addr(), 1]]
+        );
+        assert_eq!(
+            *parent_attach.borrow(),
+            vec![vec![parent.addr(), temp_memory, 1]]
+        );
+        assert_eq!(*updated.borrow(), vec![vec![temp_memory]]);
+    }
+
+    #[test]
+    fn temp_debug_object_does_nothing_for_a_null_node() {
+        let mut e = Engine::new();
+        let allocated = recording(&mut e, NI_OPERATOR_NEW, 0);
+        let tes = e.new_object::<TES>();
+        e.call(0x0045_8e20, &args![tes, Ptr::<()>::NULL, 1.5f32]);
+        assert!(allocated.borrow().is_empty());
+    }
+
+    #[test]
+    fn temp_node_constructor_sets_vtable_and_float() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        let constructed = recording(&mut e, NI_NODE_CTOR, 0);
+        let node = Ptr::<()>::new(e.mem.alloc(0xb0));
+        let back = e.call(0x0045_8ef0, &args![node, 2.25f32]).ptr::<()>();
+        assert_eq!(back, node);
+        assert_eq!(*constructed.borrow(), vec![vec![node.addr(), 0]]);
+        assert_eq!(e.mem.u32(node.addr()), BS_TEMP_NODE_VTABLE);
+        assert_eq!(e.mem.f32(node.addr() + 0xac), 2.25);
+    }
+
+    #[test]
+    fn temp_node_rtti_is_the_constant() {
+        let mut e = Engine::new();
+        assert_eq!(
+            e.call(0x0045_8f20, &args![0x1000u32]).u32(),
+            BS_TEMP_NODE_RTTI
+        );
+    }
+
+    #[test]
+    fn temp_node_deleting_destructor_frees_only_when_asked() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        let node_dtor = recording(&mut e, NI_NODE_DTOR, 0);
+        let freed = recording(&mut e, NI_OPERATOR_DELETE, 0);
+        let node = Ptr::<()>::new(e.mem.alloc(0xb0));
+        let back = e.call(0x0045_8f30, &args![node, 0u32]).ptr::<()>();
+        assert_eq!(back, node);
+        assert!(freed.borrow().is_empty());
+        e.call(0x0045_8f30, &args![node, 1u32]);
+        assert_eq!(*freed.borrow(), vec![vec![node.addr(), 0xb0]]);
+        assert_eq!(node_dtor.borrow().len(), 2);
+    }
+
+    #[test]
+    fn temp_node_destructor_restores_the_vtable_and_runs_the_base() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        let node_dtor = recording(&mut e, NI_NODE_DTOR, 0);
+        let node = Ptr::<()>::new(e.mem.alloc(0xb0));
+        e.mem.set_u32(node.addr(), 0x1111);
+        e.call(0x0045_8f70, &args![node]);
+        assert_eq!(e.mem.u32(node.addr()), BS_TEMP_NODE_VTABLE);
+        assert_eq!(*node_dtor.borrow(), vec![vec![node.addr()]]);
+    }
+
+    // ----- 00458f90, 00459000, 00459060, 00459840 -----
+
+    #[test]
+    fn dead_count_list_is_freed_entry_by_entry_and_cleared() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let first = dead_entry(&mut e, 0x10, 1);
+        let second = dead_entry(&mut e, 0x20, 2);
+        fill_list(&mut e, tes.addr() + 0x9c, &[first, second]);
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        let cleared = recording(&mut e, 0x0047_0470, 0);
+        e.call(0x0045_8f90, &args![tes]);
+        assert_eq!(*freed.borrow(), vec![vec![first], vec![second]]);
+        assert_eq!(*cleared.borrow(), vec![vec![tes.addr() + 0x9c]]);
+    }
+
+    #[test]
+    fn dead_count_list_walk_stops_at_a_null_item() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let first = dead_entry(&mut e, 0x10, 1);
+        let later = dead_entry(&mut e, 0x20, 2);
+        fill_list(&mut e, tes.addr() + 0x9c, &[first, 0, later]);
+        let freed = recording(&mut e, OPERATOR_DELETE, 0);
+        let cleared = recording(&mut e, 0x0047_0470, 0);
+        e.call(0x0045_8f90, &args![tes]);
+        assert_eq!(*freed.borrow(), vec![vec![first]]);
+        assert_eq!(cleared.borrow().len(), 1);
+    }
+
+    #[test]
+    fn dead_count_lookup_finds_the_form_or_gives_zero() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let first = dead_entry(&mut e, 0x10, 4);
+        let second = dead_entry(&mut e, 0x20, 9);
+        fill_list(&mut e, tes.addr() + 0x9c, &[first, second]);
+        assert_eq!(e.call(0x0045_9000, &args![tes, 0x20u32]).u16(), 9);
+        assert_eq!(e.call(0x0045_9000, &args![tes, 0x10u32]).u16(), 4);
+        assert_eq!(e.call(0x0045_9000, &args![tes, 0x30u32]).u16(), 0);
+    }
+
+    #[test]
+    fn dead_count_add_updates_an_existing_entry() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0x10, 4);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        let added = recording(&mut e, LIST_ADD_HEAD, 0);
+        e.call(0x0045_9060, &args![tes, 0x10u32, -6i16]);
+        assert_eq!(e.mem.i16(entry + 4), -2);
+        assert!(added.borrow().is_empty());
+    }
+
+    #[test]
+    fn dead_count_add_puts_a_new_entry_at_the_head() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0x10, 4);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        let fresh = e.mem.alloc(8);
+        let requested = recording(&mut e, OPERATOR_NEW, fresh);
+        let seen = Rc::new(RefCell::new(vec![]));
+        let inner = seen.clone();
+        e.register_double(LIST_ADD_HEAD, move |e, a| {
+            inner.borrow_mut().push((a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        e.call(0x0045_9060, &args![tes, 0x99u32, 3i16]);
+        assert_eq!(*requested.borrow(), vec![vec![8]]);
+        assert_eq!(e.mem.u32(fresh), 0x99);
+        assert_eq!(e.mem.u16(fresh + 4), 3);
+        assert_eq!(*seen.borrow(), vec![(tes.addr() + 0x9c, fresh)]);
+        // The existing entry is untouched.
+        assert_eq!(e.mem.u16(entry + 4), 4);
+    }
+
+    #[test]
+    fn save_reset_clears_the_list_and_the_save_grid() {
+        let mut e = Engine::new();
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0x10, 4);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        noop(&mut e, &[OPERATOR_DELETE]);
+        let cleared = recording(&mut e, 0x0047_0470, 0);
+        e.call(0x0045_9840, &args![tes]);
+        assert_eq!(cleared.borrow().len(), 1);
+        assert_eq!(e.get(tes, TES::iSaveGridX), 0x7fff_ffff);
+        assert_eq!(e.get(tes, TES::iSaveGridY), 0x7fff_ffff);
+    }
+
+    // ----- 00459100 -----
+
+    /// An engine for the save-size and save code: the save object global,
+    /// the block and version answers, the list helpers and the log byte.
+    fn save_engine(blocks: bool, version: u8, log: bool) -> Engine {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        list_doubles(&mut e);
+        e.set_global(SAVE_LOAD_GAME, 0x7100_0000u32);
+        returns(&mut e, USE_SAVE_GAME_BLOCKS, blocks as u32);
+        returns(&mut e, SAVE_VERSION, version as u32);
+        e.register(SAVE_LIST_HEAD, |_, a| ret(a[0] + 0x9c));
+        e.register(LIST_COUNT, |e, a| {
+            let mut node = a[0];
+            let mut count = 0;
+            while node != 0 {
+                if e.mem.u32(node) != 0 {
+                    count += 1;
+                }
+                node = e.mem.u32(node + 4);
+            }
+            ret(count)
+        });
+        put_setting(&mut e, SETTING_SAVE_SIZE_LOG, log as u32);
+        e
+    }
+
+    #[test]
+    fn save_size_counts_blocks_entries_and_version() {
+        let mut e = save_engine(true, 0x32, false);
+        let tes = e.new_object::<TES>();
+        let first = dead_entry(&mut e, 0x10, 1);
+        let second = dead_entry(&mut e, 0x20, 2);
+        fill_list(&mut e, tes.addr() + 0x9c, &[first, second]);
+        let logged = recording(&mut e, ERROR_LOG, 0);
+        // 6 (block tag and size) + 4 (count) + 2 * 6 + 4 (version).
+        assert_eq!(e.call(0x0045_9100, &args![tes]).u16(), 26);
+        assert!(logged.borrow().is_empty());
+    }
+
+    #[test]
+    fn save_size_without_blocks_or_entries_is_just_the_count() {
+        let mut e = save_engine(false, 0x31, false);
+        let tes = e.new_object::<TES>();
+        assert_eq!(e.call(0x0045_9100, &args![tes]).u16(), 4);
+    }
+
+    #[test]
+    fn save_size_logs_the_size_without_a_world_space() {
+        let mut e = save_engine(false, 0x31, true);
+        let tes = e.new_object::<TES>();
+        let logged = recording(&mut e, ERROR_LOG, 0);
+        let world = recording(&mut e, GET_WORLD_SPACE, 0);
+        e.call(0x0045_9100, &args![tes]);
+        assert_eq!(
+            *logged.borrow(),
+            vec![vec![0x0101_2c78, 4, 0x1882, TES_CPP_PATH]]
+        );
+        assert_eq!(*world.borrow(), vec![vec![0x7100_0000]]);
+    }
+
+    #[test]
+    fn save_size_logs_the_world_space_form_when_there_is_one() {
+        let mut e = save_engine(false, 0x31, true);
+        let tes = e.new_object::<TES>();
+        let logged = recording(&mut e, ERROR_LOG, 0);
+        let world_space = e.mem.alloc(0x20);
+        e.mem.set_u32(world_space, 0xabc);
+        e.mem.set_u32(world_space + 5, 0x1234_5678);
+        returns(&mut e, GET_WORLD_SPACE, world_space);
+        let table = vtable(&mut e, &[(0x130, 0x7000_0130)]);
+        let form = object_with(&mut e, table);
+        returns(&mut e, 0x7000_0130, 0x5555);
+        let looked_up = recording(&mut e, FORM_LOOKUP, form.addr());
+        e.call(0x0045_9100, &args![tes]);
+        assert_eq!(*looked_up.borrow(), vec![vec![0xabc]]);
+        assert_eq!(
+            *logged.borrow(),
+            vec![vec![
+                0x0101_2cb0,
+                4,
+                0xabc,
+                0x5555,
+                0x1234_5678,
+                0x1882,
+                TES_CPP_PATH
+            ]]
+        );
+    }
+
+    // ----- 00459230 -----
+
+    /// A save buffer in memory: the position double and the writers, which
+    /// copy bytes at the cursor. A write of the extra word adds `extra`
+    /// bytes to the cursor (to make a block too big).
+    fn save_buffer(e: &mut Engine, extra: u32) -> u32 {
+        let base = e.mem.alloc(0x200);
+        let cursor = Rc::new(RefCell::new(base));
+        let position = cursor.clone();
+        e.register_double(SAVE_BUFFER_POSITION, move |_, _| ret(*position.borrow()));
+        for function in [SAVE_BUFFER_WRITE, SAVE_NUMERIC_ID] {
+            let position = cursor.clone();
+            e.register_double(function, move |e, a| {
+                let at = *position.borrow();
+                for offset in 0..a[2] {
+                    let byte = e.mem.u8(a[1] + offset);
+                    e.mem.set_u8(at + offset, byte);
+                }
+                *position.borrow_mut() += a[2];
+                if a[1] == SAVE_EXTRA_WORD {
+                    *position.borrow_mut() += extra;
+                }
+                Ret::default()
+            });
+        }
+        base
+    }
+
+    #[test]
+    fn save_writes_a_block_with_its_size_patched_in() {
+        let mut e = save_engine(true, 0x31, false);
+        let base = save_buffer(&mut e, 0);
+        returns(&mut e, FORM_ID_GETTER, 0xaa55);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0x500, 3);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        e.call(0x0045_9230, &args![tes]);
+        assert_eq!(e.mem.u32(base), 0x424c_4f4b);
+        // 2 (size) + 4 (count) + 4 (id) + 2 (count) bytes follow the tag.
+        assert_eq!(e.mem.u16(base + 4), 12);
+        assert_eq!(e.mem.u32(base + 6), 1);
+        assert_eq!(e.mem.u32(base + 10), 0xaa55);
+        assert_eq!(e.mem.u16(base + 14), 3);
+    }
+
+    #[test]
+    fn save_writes_a_zero_id_for_an_entry_without_a_form() {
+        let mut e = save_engine(false, 0x31, false);
+        let base = save_buffer(&mut e, 0);
+        let ids = recording(&mut e, FORM_ID_GETTER, 0xaa55);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0, 3);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        e.call(0x0045_9230, &args![tes]);
+        assert!(ids.borrow().is_empty());
+        // No block: the count comes first, then id 0 and the 16-bit count.
+        assert_eq!(e.mem.u32(base), 1);
+        assert_eq!(e.mem.u32(base + 4), 0);
+        assert_eq!(e.mem.u16(base + 8), 3);
+    }
+
+    #[test]
+    fn save_appends_the_extra_word_for_new_versions() {
+        let mut e = save_engine(true, 0x32, false);
+        let base = save_buffer(&mut e, 0);
+        e.set_global(SAVE_EXTRA_WORD, 0xdead_beefu32);
+        let tes = e.new_object::<TES>();
+        e.call(0x0045_9230, &args![tes]);
+        // Tag, size, count, then the word: 2 + 4 + 4 bytes in the block.
+        assert_eq!(e.mem.u16(base + 4), 10);
+        assert_eq!(e.mem.u32(base + 10), 0xdead_beef);
+    }
+
+    #[test]
+    fn save_complains_when_the_block_is_bigger_than_16_bits() {
+        let mut e = save_engine(true, 0x32, false);
+        let base = save_buffer(&mut e, 0x1_0000);
+        let printed = recording(&mut e, DEBUG_PRINT, 0);
+        let tes = e.new_object::<TES>();
+        e.call(0x0045_9230, &args![tes]);
+        assert_eq!(
+            *printed.borrow(),
+            vec![vec![0x0101_5318, TES_CPP_PATH, 0x18e1]]
+        );
+        // 2 + 4 + 4 + 0x10000 truncated to 16 bits.
+        assert_eq!(e.mem.u16(base + 4), 10);
+    }
+
+    #[test]
+    fn save_logs_the_bytes_written_when_asked() {
+        let mut e = save_engine(false, 0x31, true);
+        save_buffer(&mut e, 0);
+        returns(&mut e, GET_WORLD_SPACE, 0);
+        let logged = recording(&mut e, ERROR_LOG, 0);
+        let tes = e.new_object::<TES>();
+        e.call(0x0045_9230, &args![tes]);
+        // Only the 4-byte count was written.
+        assert_eq!(
+            *logged.borrow(),
+            vec![vec![0x0101_536c, 4, 0x18e1, TES_CPP_PATH]]
+        );
+    }
+
+    // ----- 00459470 -----
+
+    #[test]
+    fn exterior_buffer_slot_is_read_by_index() {
+        let mut e = Engine::new();
+        let tes = e.new_object::<TES>();
+        let buffer = e.mem.alloc(16);
+        e.mem.set_u32(buffer + 8, 0xc0de);
+        e.set(tes, TES::pExteriorBuffer, Ptr::new(buffer));
+        assert_eq!(e.call(0x0045_9470, &args![tes, 2u32]).u32(), 0xc0de);
+        assert_eq!(e.call(0x0045_9470, &args![tes, 0u32]).u32(), 0);
+    }
+
+    // ----- 00459490 -----
+
+    /// A `grids` by `grids` array of cell slots for `GridCellArray::Get`
+    /// (the double answers with the address of the slot at `(x, y)`).
+    fn grid_with_cells(e: &mut Engine, tes: Ptr<TES>, grids: u32, cells: &[u32]) {
+        let table = e.mem.alloc(4 * grids * grids);
+        for (index, cell) in cells.iter().enumerate() {
+            e.mem.set_u32(table + 4 * index as u32, *cell);
+        }
+        let array = e.mem.alloc(0x28);
+        e.set(tes, TES::pGridCellA, Ptr::new(array));
+        e.register_double(GRID_CELL_ARRAY_GET, move |_, a| {
+            assert_eq!(a[0], array);
+            ret(table + 4 * (a[1] * grids + a[2]))
+        });
+    }
+
+    #[test]
+    fn save_ov2_writes_the_entries_the_grid_size_and_the_cell_ids() {
+        let mut e = save_engine(false, 0x31, false);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+        let tes = e.new_object::<TES>();
+        let entry = dead_entry(&mut e, 0x700, 4);
+        fill_list(&mut e, tes.addr() + 0x9c, &[entry]);
+        grid_with_cells(&mut e, tes, 2, &[0, 0x1000, 0x2000, 0x3000]);
+        e.set_global(DATA_HANDLER, 0x7200_0000u32);
+        e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
+        // The data handler knows every cell but the one at 0x2000.
+        e.register(DATA_HANDLER_HAS_FORM, |_, a| {
+            assert_eq!(a[0], 0x7200_0000);
+            ret((a[1] != 0x2001) as u32)
+        });
+        returns(&mut e, SAVE_BUFFER_START_VARIABLE, 0x55);
+        let form_pointers = recording(&mut e, SAVE_BUFFER_SAVE_FORM_ID_POINTER, 0);
+        let writes = Rc::new(RefCell::new(vec![]));
+        let inner = writes.clone();
+        e.register_double(SAVE_BUFFER_WRITE_BYTES, move |e, a| {
+            let value = if a[2] == 4 { e.mem.u32(a[1]) } else { 0 };
+            inner.borrow_mut().push((a[2], a[3], value));
+            Ret::default()
+        });
+        let ended = recording(&mut e, SAVE_BUFFER_END_VARIABLE, 0);
+        let ids = recording(&mut e, SAVE_BUFFER_SAVE_FORM_ID, 0);
+        let buffer = Ptr::<()>::new(0x7300_0000);
+        e.call(0x0045_9490, &args![tes, buffer]);
+        assert_eq!(*form_pointers.borrow(), vec![vec![buffer.addr(), 0x700, 0]]);
+        assert_eq!(*writes.borrow(), vec![(2, 0, 0), (4, 0, 2)]);
+        assert_eq!(*ended.borrow(), vec![vec![buffer.addr(), 1, 0x55]]);
+        let saved: Vec<u32> = ids.borrow().iter().map(|call| call[1]).collect();
+        assert_eq!(saved, vec![0, 0x1001, 0, 0x3001]);
+    }
+
+    // ----- 004595e0 -----
+
+    #[test]
+    fn load_reads_the_entries_then_clears_and_loads_known_cells() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        list_doubles(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 1);
+        e.set_global(DATA_HANDLER, 0x7200_0000u32);
+        e.set_global(SCRIPT_CONTEXT, 0x7400_0000u32);
+        let tes = e.new_object::<TES>();
+        let table = vtable(&mut e, &[(0x128, 0x7000_0128)]);
+        let cell = object_with(&mut e, table).addr();
+        grid_with_cells(&mut e, tes, 1, &[cell]);
+        e.register_double(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        returns(&mut e, LOAD_BUFFER_VARIABLE_SIZE, 1);
+        returns(&mut e, LOAD_BUFFER_FORM_ID, 0x77);
+        let looked_up = recording(&mut e, FORM_LOOKUP, 0x88);
+        let cast = recording(&mut e, RT_DYNAMIC_CAST, 0x99);
+        // Reads: 2 bytes are a count of 5, 4 bytes are the grid size 1.
+        e.register(LOAD_BUFFER_READ_BYTES, |e, a| {
+            if a[2] == 2 {
+                e.mem.set_u16(a[1], 5);
+            } else {
+                e.mem.set_u32(a[1], 1);
+            }
+            Ret::default()
+        });
+        let seen = Rc::new(RefCell::new(vec![]));
+        let inner = seen.clone();
+        e.register_double(LIST_ADD_HEAD, move |e, a| {
+            let entry = e.mem.u32(a[1]);
+            inner
+                .borrow_mut()
+                .push((a[0], e.mem.u32(entry), e.mem.u16(entry + 4)));
+            Ret::default()
+        });
+        e.register(LOAD_BUFFER_FORM_ID_OUT, |e, a| {
+            e.mem.set_u32(a[1], 0x42);
+            Ret::default()
+        });
+        e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
+        returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+        let cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
+        let loaded = recording(&mut e, 0x7000_0128, 0);
+        let buffer = Ptr::<()>::new(0x7300_0000);
+        e.call(0x0045_95e0, &args![tes, buffer]);
+        assert_eq!(*looked_up.borrow(), vec![vec![0x77]]);
+        assert_eq!(
+            *cast.borrow(),
+            vec![vec![0x88, 0, RTTI_LOAD_SOURCE, RTTI_LOAD_TARGET, 0]]
+        );
+        assert_eq!(*seen.borrow(), vec![(tes.addr() + 0x9c, 0x99, 5)]);
+        assert_eq!(*cleared.borrow(), vec![vec![0x7400_0000, 0x42]]);
+        assert_eq!(*loaded.borrow(), vec![vec![cell, 0x42, 1]]);
+    }
+
+    #[test]
+    fn load_skips_cells_with_no_id_or_that_the_data_handler_lacks() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 1);
+        e.set_global(DATA_HANDLER, 0x7200_0000u32);
+        let tes = e.new_object::<TES>();
+        let table = vtable(&mut e, &[(0x128, 0x7000_0128)]);
+        let cell = object_with(&mut e, table).addr();
+        grid_with_cells(&mut e, tes, 1, &[cell]);
+        returns(&mut e, LOAD_BUFFER_VARIABLE_SIZE, 0);
+        e.register(LOAD_BUFFER_READ_BYTES, |e, a| {
+            e.mem.set_u32(a[1], 1);
+            Ret::default()
+        });
+        e.register(FORM_ID_GETTER, |_, a| ret(a[0] + 1));
+        let cleared = recording(&mut e, SAVE_LOAD_CLEAR_FORM_ID, 0);
+        let loaded = recording(&mut e, 0x7000_0128, 0);
+        // First an id of 0, then an id the data handler does not know.
+        e.register(LOAD_BUFFER_FORM_ID_OUT, |e, a| {
+            e.mem.set_u32(a[1], 0);
+            Ret::default()
+        });
+        returns(&mut e, DATA_HANDLER_HAS_FORM, 1);
+        let buffer = Ptr::<()>::new(0x7300_0000);
+        e.call(0x0045_95e0, &args![tes, buffer]);
+        e.register(LOAD_BUFFER_FORM_ID_OUT, |e, a| {
+            e.mem.set_u32(a[1], 0x42);
+            Ret::default()
+        });
+        returns(&mut e, DATA_HANDLER_HAS_FORM, 0);
+        e.call(0x0045_95e0, &args![tes, buffer]);
+        assert!(cleared.borrow().is_empty());
+        assert!(loaded.borrow().is_empty());
+    }
+
+    // ----- 00459750 -----
+
+    #[test]
+    fn buffered_cells_that_are_loaded_are_finished() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        ni_pointer_doubles(&mut e);
+        put_setting(&mut e, SETTING_INTERIOR_CELL_BUFFER, 2);
+        put_setting(&mut e, SETTING_EXTERIOR_CELL_BUFFER, 3);
+        e.set_global(TES_SINGLETON, 0x7200_0000u32);
+        let tes = e.new_object::<TES>();
+        let interior = e.mem.alloc(8);
+        e.mem.set_u32(interior, 0xc1);
+        let exterior = e.mem.alloc(12);
+        e.mem.set_u32(exterior + 4, 0xc2);
+        e.mem.set_u32(exterior + 8, 0xc3);
+        e.set(tes, TES::pInteriorBuffer, Ptr::new(interior));
+        e.set(tes, TES::pExteriorBuffer, Ptr::new(exterior));
+        let bound = e.mem.alloc(4);
+        e.mem.set_u32(bound, 0xb0b0);
+        e.mem.set_u32(tes.addr() + 0xc0, bound);
+        // Loaded: 0xc1 and 0xc3.
+        let asked = Rc::new(RefCell::new(vec![]));
+        let inner = asked.clone();
+        e.register_double(TES_IS_CELL_LOADED, move |_, a| {
+            inner.borrow_mut().push(a.to_vec());
+            ret((a[1] != 0xc2) as u32)
+        });
+        let finished = recording(&mut e, CELL_FINISH, 0);
+        let bound_user = recording(&mut e, 0x0062_8da0, 0);
+        e.call(0x0045_9750, &args![tes]);
+        assert_eq!(
+            *asked.borrow(),
+            vec![
+                vec![0x7200_0000, 0xc1, 1],
+                vec![0x7200_0000, 0xc2, 1],
+                vec![0x7200_0000, 0xc3, 1]
+            ]
+        );
+        assert_eq!(*finished.borrow(), vec![vec![0xc1], vec![0xc3]]);
+        assert_eq!(*bound_user.borrow(), vec![vec![bound]]);
+    }
+
+    // ----- 00459870 -----
+
+    #[test]
+    fn furniture_list_uses_the_interior_cell_alone_when_there_is_one() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+        let tes = e.new_object::<TES>();
+        e.set(tes, TES::pInteriorCell, Ptr::new(0xce11));
+        let added = recording(&mut e, CELL_ADD_FURNITURE_TO_LIST, 0);
+        e.call(0x0045_9870, &args![tes]);
+        assert_eq!(*added.borrow(), vec![vec![0xce11, tes.addr() + 0x94]]);
+    }
+
+    #[test]
+    fn furniture_list_walks_the_whole_grid_without_an_interior_cell() {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+        let tes = e.new_object::<TES>();
+        grid_with_cells(&mut e, tes, 2, &[0xc0, 0xc1, 0xc2, 0xc3]);
+        let added = recording(&mut e, CELL_ADD_FURNITURE_TO_LIST, 0);
+        e.call(0x0045_9870, &args![tes]);
+        let list = tes.addr() + 0x94;
+        assert_eq!(
+            *added.borrow(),
+            vec![
+                vec![0xc0, list],
+                vec![0xc1, list],
+                vec![0xc2, list],
+                vec![0xc3, list]
+            ]
+        );
+    }
+
+    // ----- 00459920, 00459a00 -----
+
+    /// A grid of `[null, ready, not ready, ready]` cells and an interior
+    /// cell (`ready` too) for the two cell walks. A cell is ready when its
+    /// first word is 1.
+    fn walk_world(with_handler: bool) -> (Engine, Ptr<TES>, Vec<u32>) {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        put_setting(&mut e, SETTING_GRIDS_TO_LOAD, 2);
+        e.set_global(DATA_HANDLER, if with_handler { 0x7200_0000u32 } else { 0 });
+        let tes = e.new_object::<TES>();
+        let mut cells = vec![];
+        for ready in [1, 0, 1, 1] {
+            let cell = e.mem.alloc(8);
+            e.mem.set_u32(cell, ready);
+            cells.push(cell);
+        }
+        grid_with_cells(&mut e, tes, 2, &[0, cells[0], cells[1], cells[2]]);
+        e.register(CELL_STATE_TEST, |e, a| ret(e.mem.u32(a[0])));
+        returns(&mut e, GET_INTERIOR_CELL, cells[3]);
+        (e, tes, cells)
+    }
+
+    #[test]
+    fn references_are_queued_for_the_ready_cells() {
+        let (mut e, tes, cells) = walk_world(true);
+        let queued = recording(&mut e, CELL_QUEUE_REFERENCES, 0);
+        e.call(0x0045_9920, &args![tes]);
+        assert_eq!(
+            *queued.borrow(),
+            vec![vec![cells[3], 0], vec![cells[0], 0], vec![cells[2], 0]]
+        );
+    }
+
+    #[test]
+    fn references_are_not_queued_without_a_data_handler() {
+        let (mut e, tes, _) = walk_world(false);
+        let queued = recording(&mut e, CELL_QUEUE_REFERENCES, 0);
+        e.call(0x0045_9920, &args![tes]);
+        assert!(queued.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_second_cell_walk_calls_the_other_cell_function() {
+        let (mut e, tes, cells) = walk_world(true);
+        let queued = recording(&mut e, CELL_QUEUE_B, 0);
+        e.call(0x0045_9a00, &args![tes]);
+        assert_eq!(
+            *queued.borrow(),
+            vec![vec![cells[3]], vec![cells[0]], vec![cells[2]]]
+        );
+        let (mut e, tes, _) = walk_world(false);
+        let queued = recording(&mut e, CELL_QUEUE_B, 0);
+        e.call(0x0045_9a00, &args![tes]);
+        assert!(queued.borrow().is_empty());
+    }
+
+    // ----- 00459ae0, 00459d20 -----
+
+    /// Doubles for `TES::TestCell`: the clock steps through `ticks`, the
+    /// logger and the player, I/O and process-list calls are recorded.
+    struct CellTest {
+        e: Engine,
+        errors: Log,
+        centred: Log,
+        mode_runs: Log,
+        delay: Log,
+    }
+
+    fn cell_test_engine(ticks: Vec<u32>) -> CellTest {
+        let mut e = priority_engine(1);
+        e.set_global(PLAYER_CHARACTER, 0x7500_0000u32);
+        e.set_global(IO_MANAGER, 0x7600_0000u32);
+        e.set_global(SAVE_LOAD_GAME, 0x7100_0000u32);
+        e.set_global(0x0101_7b70u32, 1000.0f64);
+        e.set_global(0x0101_7e70u32, 120.0f32);
+        let next = Rc::new(RefCell::new(0usize));
+        e.register_double(GET_TICK_COUNT, move |_, _| {
+            let mut next = next.borrow_mut();
+            let tick = ticks[(*next).min(ticks.len() - 1)];
+            *next += 1;
+            ret(tick)
+        });
+        e.register(STRING_OBJECT_TEXT, |_, a| ret(a[0] + 0x100));
+        e.register(FORM_ID_GETTER, |_, a| ret(a[0] ^ 0xf000_0000));
+        let errors = recording(&mut e, ERROR_LOG, 0);
+        let centred = recording(&mut e, 0x0093_db60, 0);
+        let delay = recording(&mut e, 0x0086_7a40, 0);
+        let mode_runs = recording(&mut e, 0x0086_1f20, 0);
+        noop(&mut e, &[0x0045_6520, 0x0096_eb40, 0x0096_d810]);
+        CellTest {
+            e,
+            errors,
+            centred,
+            mode_runs,
+            delay,
+        }
+    }
+
+    #[test]
+    fn test_cell_does_nothing_for_a_null_cell() {
+        let mut test = cell_test_engine(vec![0]);
+        let tes = test.e.new_object::<TES>();
+        test.e
+            .call(0x0045_9d20, &args![tes, Ptr::<()>::NULL, 4u32, 0u32]);
+        assert!(test.errors.borrow().is_empty());
+        assert!(test.centred.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_cell_reports_an_interior_cell_and_the_elapsed_times() {
+        // before = 10000, after = 12500, now = 5000 + 1h 1m 1s.
+        let mut test = cell_test_engine(vec![10_000, 12_500, 3_666_000]);
+        let tes = test.e.new_object::<TES>();
+        let cell = cell_object(&mut test.e, true, 0, 0);
+        test.e.call(0x0045_9d20, &args![tes, cell, 3u32, 5_000u32]);
+        let id = cell.addr() ^ 0xf000_0000;
+        let name = cell.addr() + 0x18 + 0x100;
+        assert_eq!(
+            *test.errors.borrow(),
+            vec![
+                args![0x0101_7f54u32, id, name],
+                args![0x0101_7ed8u32, 2.5f64, 1u32, 1u32, 1u32]
+            ]
+        );
+        assert_eq!(
+            *test.centred.borrow(),
+            vec![vec![0x7500_0000, 0, cell.addr()]]
+        );
+        assert_eq!(
+            *test.delay.borrow(),
+            vec![vec![OBJECT_011DE7B8, 120.0f32.to_bits()]]
+        );
+        assert!(test.mode_runs.borrow().is_empty());
+    }
+
+    #[test]
+    fn test_cell_reports_an_exterior_cell_and_runs_the_save_test_in_mode_4() {
+        let mut test = cell_test_engine(vec![0, 1_000, 61_500]);
+        let tes = test.e.new_object::<TES>();
+        let cell = cell_object(&mut test.e, false, -3, 8);
+        test.e.call(0x0045_9d20, &args![tes, cell, 4u32, 0u32]);
+        let id = cell.addr() ^ 0xf000_0000;
+        let name = cell.addr() + 0x18 + 0x100;
+        let minus_three = (-3i32) as u32;
+        assert_eq!(
+            *test.errors.borrow(),
+            vec![
+                args![0x0101_7f2cu32, id, minus_three, 8u32, name],
+                args![0x0101_7e78u32, minus_three, 8u32, 1.0f64, 0u32, 1u32, 1u32]
+            ]
+        );
+        assert_eq!(*test.mode_runs.borrow(), vec![vec![0x7100_0000, 4]]);
+    }
+
+    #[test]
+    fn test_cell_runs_the_save_test_only_for_modes_4_and_5() {
+        for (mode, runs) in [(3u32, 0), (4, 1), (5, 1), (6, 0)] {
+            let mut test = cell_test_engine(vec![0]);
+            let tes = test.e.new_object::<TES>();
+            let cell = cell_object(&mut test.e, true, 0, 0);
+            test.e.call(0x0045_9d20, &args![tes, cell, mode, 0u32]);
+            assert_eq!(test.mode_runs.borrow().len(), runs, "mode {mode}");
+        }
+    }
+
+    #[test]
+    fn cell_test_run_walks_each_world_space_and_then_the_interiors() {
+        let mut test = cell_test_engine(vec![0]);
+        let e = &mut test.e;
+        put_setting(e, SETTING_GRIDS_TO_LOAD, 1);
+        let tes = e.new_object::<TES>();
+        e.set(tes, TES::bRunningCellTests2, true);
+        // One world space with bounds (0,0) to (2,2): four cells, the one at
+        // (1,1) not loaded yet.
+        let world_space = e.mem.alloc(0x100);
+        e.set(tes, TES::pWorldSpace, Ptr::new(world_space));
+        let node = e.mem.alloc(8);
+        e.mem.set_u32(node, world_space);
+        e.set_global(DATA_HANDLER, 0x7200_0000u32);
+        returns(e, DATA_HANDLER_FIRST_WORLD_SPACE, node);
+        e.register(LIST_NODE_IS_EMPTY, |_, _| ret(0));
+        noop(e, &[0x0095_26a0, 0x0070_37e0]);
+        list_doubles(e);
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            ret(value as i32 as u32)
+        });
+        for (getter, bound) in [
+            (0x0045_65f0u32, 0.0f64),
+            (0x0081_2870, 0.0),
+            (0x009b_88a0, 2.0),
+            (0x009b_88c0, 2.0),
+        ] {
+            e.register_double(getter, move |_, _| Ret {
+                st0: bound * 4096.0,
+                ..Ret::default()
+            });
+        }
+        e.register(STRING_LENGTH, |_, _| ret(0));
+        let table = vtable(e, &[(0x130, 0x7000_0130)]);
+        e.mem.set_u32(world_space, table);
+        returns(e, 0x7000_0130, 0x5eed);
+        let loaded_cell = cell_object(e, false, 1, 1).addr();
+        e.register_double(WORLD_SPACE_GET_CELL, move |e, a| {
+            if (a[1], a[2]) == (1, 1) {
+                ret(0)
+            } else {
+                ret(cell_object(e, false, a[1] as i32, a[2] as i32).addr())
+            }
+        });
+        let loaded = recording(e, WORLD_SPACE_LOAD_CELL, loaded_cell);
+        // Two interior cells.
+        returns(e, DATA_HANDLER_PREPARE_INTERIORS, 0);
+        returns(e, DATA_HANDLER_INTERIOR_COUNT, 2);
+        let interior_a = cell_object(e, true, 0, 0).addr();
+        let interior_b = cell_object(e, true, 0, 0).addr();
+        e.register_double(DATA_HANDLER_INTERIOR_AT, move |_, a| {
+            ret([interior_a, interior_b][a[1] as usize])
+        });
+        e.call(0x0045_9ae0, &args![tes, 3u32]);
+        let centred: Vec<u32> = test.centred.borrow().iter().map(|call| call[2]).collect();
+        assert_eq!(centred.len(), 6);
+        assert_eq!(centred[3], loaded_cell);
+        assert_eq!(centred[4..], [interior_a, interior_b]);
+        assert_eq!(*loaded.borrow(), vec![vec![world_space, 1, 1]]);
+        let errors = test.errors.borrow();
+        assert_eq!(errors[0], args![0x0101_7e5cu32]);
+        assert_eq!(
+            errors[1],
+            args![
+                0x0101_7e24u32,
+                world_space ^ 0xf000_0000,
+                0x5eedu32,
+                0u32,
+                0u32,
+                2u32,
+                2u32
+            ]
+        );
+        assert!(test.e.get(tes, TES::bRunningCellTests));
+        assert!(!test.e.get(tes, TES::bRunningCellTests2));
+    }
+
+    // ----- 00459f10 and its helpers -----
+
+    #[test]
+    fn small_addon_helpers_read_and_write_their_fields() {
+        let mut e = Engine::new();
+        ni_pointer_doubles(&mut e);
+        map_more_globals(&mut e);
+        let object = Ptr::<()>::new(e.mem.alloc(0x200));
+        e.mem.set_u16(object.addr() + 0x58, 0x1357);
+        assert_eq!(e.call(0x0045_a1a0, &args![object]).u16(), 0x1357);
+        e.call(0x0045_a140, &args![object, 0x2468u16]);
+        assert_eq!(e.mem.u16(object.addr() + 0xbc), 0x2468);
+        assert_eq!(
+            e.call(0x0045_a330, &args![object]).u32(),
+            object.addr() + 0x180
+        );
+        assert_eq!(
+            e.call(0x0045_a730, &args![object]).u32(),
+            object.addr() + 0x130
+        );
+        let counted = recording(&mut e, 0x0065_8930, 7);
+        assert_eq!(e.call(0x0045_a120, &args![object]).u32(), 7);
+        assert_eq!(*counted.borrow(), vec![vec![object.addr() + 0x1ec]]);
+        e.mem.set_u32(ADDON_PARENT_CELL, 0xfeed);
+        assert_eq!(e.call(0x0045_a190, &args![]).u32(), 0xfeed);
+    }
+
+    #[test]
+    fn attach_helper_calls_slot_0xdc_with_the_child_and_one() {
+        let mut e = Engine::new();
+        let table = vtable(&mut e, &[(0xdc, 0x7000_00dc)]);
+        let parent = object_with(&mut e, table);
+        let attached = recording(&mut e, 0x7000_00dc, 0);
+        e.call(0x0045_a160, &args![parent, Ptr::<()>::new(0xc41d)]);
+        assert_eq!(*attached.borrow(), vec![vec![parent.addr(), 0xc41d, 1]]);
+    }
+
+    #[test]
+    fn preloaded_pointers_are_cleared_through_the_queued_file_assignment() {
+        let mut e = Engine::new();
+        let assigned = recording(&mut e, QUEUED_FILE_POINTER_ASSIGN, 0);
+        let tes = e.new_object::<TES>();
+        e.call(0x0045_a1c0, &args![tes]);
+        e.call(0x0045_a350, &args![tes]);
+        assert_eq!(
+            *assigned.borrow(),
+            vec![vec![tes.addr() + 0xa4, 0], vec![tes.addr() + 0xac, 0]]
+        );
+    }
+
+    /// The doubles shared by the two preload functions: the data handler
+    /// object, the model loader, the scope guard, the queued-file allocation
+    /// and the `NiPointer` getter.
+    struct Preload {
+        e: Engine,
+        tes: Ptr<TES>,
+        handler: u32,
+        queued_file: u32,
+        guard: Log,
+    }
+
+    fn preload_world() -> Preload {
+        let mut e = Engine::new();
+        map_more_globals(&mut e);
+        ni_pointer_doubles(&mut e);
+        list_doubles(&mut e);
+        let tes = e.new_object::<TES>();
+        let handler = e.mem.alloc(0x400);
+        e.set_global(DATA_HANDLER, handler);
+        e.set_global(MODEL_LOADER, 0x7700_0000u32);
+        let queued_file = e.mem.alloc(0x28);
+        returns(&mut e, OPERATOR_NEW, queued_file);
+        e.register(QUEUED_FILE_CTOR, |_, a| ret(a[0]));
+        e.register(QUEUED_FILE_POINTER_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        let guard = recording(&mut e, SCOPE_GUARD_CTOR, 0);
+        noop(&mut e, &[SCOPE_GUARD_DTOR]);
+        Preload {
+            e,
+            tes,
+            handler,
+            queued_file,
+            guard,
+        }
+    }
+
+    /// An add-on node whose sub-object (`node + 0x30`) has slot `0x14` giving
+    /// `name`, flag byte (what `00448bf0` answers) and the words the loader
+    /// path reads.
+    fn addon_node(e: &mut Engine, name: u32) -> u32 {
+        let table = vtable(e, &[(0x14, 0x7000_0014), (0x10, 0x7000_0010)]);
+        let node = e.mem.alloc(0x100);
+        e.mem.set_u32(node + 0x30, table);
+        e.mem.set_u16(node + 0x58, 0x0abc);
+        returns(e, 0x7000_0014, name);
+        node
+    }
+
+    #[test]
+    fn addon_nodes_do_nothing_when_already_preloaded() {
+        let mut world = preload_world();
+        world
+            .e
+            .set(world.tes, TES::spPreloadedAddonNodes, Ptr::new(0x1234));
+        world.e.call(0x0045_9f10, &args![world.tes]);
+        assert!(world.guard.borrow().is_empty());
+    }
+
+    #[test]
+    fn addon_nodes_that_load_now_are_loaded_attached_and_released() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        let node = addon_node(e, 0x6000);
+        e.mem.set_u32(world.handler + 0x1ec, 0);
+        returns(e, 0x0065_8930, 1);
+        e.register_double(DATA_HANDLER_GET_ADDON_NODE, move |_, a| {
+            assert_eq!(a[1], 0);
+            ret(node)
+        });
+        returns(e, ADDON_NODE_LOADS_NOW, 1);
+        let model = e.mem.alloc(0x100);
+        let loaded = recording(e, MODEL_LOADER_LOAD_FILE, model);
+        returns(e, 0x0068_a830, 0x11);
+        returns(e, 0x0059_e300, 0x22);
+        let first = recording(e, 0x0040_30d0, 0);
+        let second = recording(e, 0x0070_5b10, 0);
+        let root_table = vtable(e, &[(0xdc, 0x7000_00dc)]);
+        let root = object_with(e, root_table);
+        e.mem.set_u32(ADDON_PARENT_CELL, root.addr());
+        let attached = recording(e, 0x7000_00dc, 0);
+        let released = recording(e, MODEL_LOADER_RELEASE_MODEL, 0);
+        let queued = recording(e, MODEL_LOADER_QUEUE_FILE, 0);
+        e.call(0x0045_9f10, &args![world.tes]);
+        assert_eq!(world.guard.borrow()[0][1..], [7, 1, TES_CPP_PATH, 0x1b8e]);
+        assert_eq!(
+            e.get(world.tes, TES::spPreloadedAddonNodes).addr(),
+            world.queued_file
+        );
+        assert_eq!(
+            *loaded.borrow(),
+            vec![vec![0x7700_0000, 0x6000, 0, 1, 0, 0, 0]]
+        );
+        assert_eq!(*first.borrow(), vec![vec![model, 0x11]]);
+        assert_eq!(*second.borrow(), vec![vec![model, 0x22]]);
+        assert_eq!(e.mem.u16(model + 0xbc), 0x0abc);
+        assert_eq!(*attached.borrow(), vec![vec![root.addr(), model, 1]]);
+        assert_eq!(*released.borrow(), vec![vec![0x7700_0000, 0x6000, 1, 1]]);
+        assert!(queued.borrow().is_empty());
+    }
+
+    #[test]
+    fn addon_nodes_that_fail_to_load_are_still_released() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        let node = addon_node(e, 0x6000);
+        returns(e, 0x0065_8930, 1);
+        returns(e, DATA_HANDLER_GET_ADDON_NODE, node);
+        returns(e, ADDON_NODE_LOADS_NOW, 1);
+        returns(e, MODEL_LOADER_LOAD_FILE, 0);
+        let attached = recording(e, 0x0070_5b10, 0);
+        let released = recording(e, MODEL_LOADER_RELEASE_MODEL, 0);
+        e.call(0x0045_9f10, &args![world.tes]);
+        assert!(attached.borrow().is_empty());
+        assert_eq!(released.borrow().len(), 1);
+    }
+
+    #[test]
+    fn other_addon_nodes_are_queued_on_the_queued_file() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        let first = addon_node(e, 0x6000);
+        let second = addon_node(e, 0x6100);
+        returns(e, 0x0065_8930, 3);
+        e.register_double(DATA_HANDLER_GET_ADDON_NODE, move |_, a| {
+            ret([first, 0, second][a[1] as usize])
+        });
+        returns(e, ADDON_NODE_LOADS_NOW, 0);
+        let queued = recording(e, MODEL_LOADER_QUEUE_FILE, 0);
+        let loaded = recording(e, MODEL_LOADER_LOAD_FILE, 0);
+        e.call(0x0045_9f10, &args![world.tes]);
+        let file = world.queued_file;
+        assert_eq!(
+            *queued.borrow(),
+            vec![
+                vec![0x7700_0000, first + 0x30, 5, file, 0, 1, 0, 0],
+                vec![0x7700_0000, second + 0x30, 5, file, 0, 1, 0, 0]
+            ]
+        );
+        assert!(loaded.borrow().is_empty());
+    }
+
+    // ----- 0045a1e0 -----
+
+    fn empty_node(e: &mut Engine) -> u32 {
+        let node = e.mem.alloc(8);
+        e.register(LIST_NODE_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        node
+    }
+
+    #[test]
+    fn preload_forms_queues_the_files_of_each_entry_and_of_the_weapons() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        empty_node(e);
+        let first = addon_node(e, 0);
+        let second = addon_node(e, 0);
+        fill_list(e, world.handler + 0x180, &[first, 0, second]);
+        let asked_first = recording(e, 0x7000_0010, 0);
+        e.set_global(WEAPON_QUEUE_OBJECT, 0x7800_0000u32);
+        let weapons = recording(e, 0x0052_5510, 0);
+        e.call(0x0045_a1e0, &args![world.tes]);
+        let file = world.queued_file;
+        assert_eq!(
+            *asked_first.borrow(),
+            vec![vec![first + 0x30, 5, file], vec![second + 0x30, 5, file]]
+        );
+        assert_eq!(*weapons.borrow(), vec![vec![0x7800_0000, 5, file, 0]]);
+        assert_eq!(
+            e.get(world.tes, TES::spPreloadedForms).addr(),
+            world.queued_file
+        );
+        assert_eq!(world.guard.borrow()[0][1..], [7, 1, TES_CPP_PATH, 0x1bd0]);
+    }
+
+    #[test]
+    fn preload_forms_stops_at_an_empty_node_and_skips_missing_weapons() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        empty_node(e);
+        let entry = addon_node(e, 0);
+        // The head node holds nothing and leads nowhere: the list is empty.
+        let asked = recording(e, 0x7000_0010, 0);
+        let weapons = recording(e, 0x0052_5510, 0);
+        e.call(0x0045_a1e0, &args![world.tes]);
+        assert!(asked.borrow().is_empty());
+        assert!(weapons.borrow().is_empty());
+        // Already preloaded: nothing at all.
+        let mut world = preload_world();
+        world
+            .e
+            .set(world.tes, TES::spPreloadedForms, Ptr::new(0x99));
+        world.e.call(0x0045_a1e0, &args![world.tes]);
+        assert!(world.guard.borrow().is_empty());
+        let _ = entry;
+    }
+
+    // ----- 0045a370, 0045a520, 0045a5e0 -----
+
+    /// String settings with text: the double gives `setting + 8`.
+    fn text_settings(e: &mut Engine, texts: &[(u32, &str)]) {
+        e.register(SETTING_VALUE_ADDRESS_STRING, |_, a| ret(a[0] + 8));
+        for setting in [
+            SETTING_RAGDOLL_DATA_DEFAULT,
+            SETTING_BLOOD_PARTICLE_DEFAULT,
+            SETTING_SPLASH_PARTICLES,
+            SETTING_EXPLOSION_SPLASH_PARTICLES,
+            SETTING_BLOOD_TEXTURE_DEFAULT,
+        ] {
+            e.mem.set_cstr(setting + 8, b"");
+        }
+        for (setting, text) in texts {
+            e.mem.set_cstr(setting + 8, text.as_bytes());
+        }
+    }
+
+    #[test]
+    fn default_models_are_queued_and_the_blood_texture_is_loaded() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        text_settings(
+            e,
+            &[
+                (SETTING_RAGDOLL_DATA_DEFAULT, "a.rdt"),
+                (SETTING_SPLASH_PARTICLES, "c.nif"),
+                (SETTING_BLOOD_TEXTURE_DEFAULT, "blood.dds"),
+            ],
+        );
+        let queued = recording(e, MODEL_LOADER_QUEUE_MODEL, 0);
+        let formatted = recording(e, FORMAT_STRING, 0);
+        let texture = recording(e, CREATE_TEXTURE_IMAGE, 0);
+        e.call(0x0045_a370, &args![world.tes]);
+        assert_eq!(
+            *queued.borrow(),
+            vec![
+                vec![
+                    0x7700_0000,
+                    SETTING_RAGDOLL_DATA_DEFAULT + 8,
+                    5,
+                    0,
+                    0,
+                    1,
+                    1,
+                    0
+                ],
+                vec![0x7700_0000, SETTING_SPLASH_PARTICLES + 8, 5, 0, 0, 1, 1, 0]
+            ]
+        );
+        let format = formatted.borrow()[0].clone();
+        assert_eq!(
+            format[1..],
+            [
+                0x104,
+                0x0101_7f74,
+                0x0101_7f80,
+                0x0101_7f88,
+                SETTING_BLOOD_TEXTURE_DEFAULT + 8
+            ]
+        );
+        assert_eq!(
+            *texture.borrow(),
+            vec![vec![
+                world.tes.addr(),
+                format[0],
+                world.tes.addr() + 0xa8,
+                0,
+                0
+            ]]
+        );
+        assert_eq!(world.guard.borrow()[0][1..], [7, 1, TES_CPP_PATH, 0x1bf0]);
+    }
+
+    #[test]
+    fn nothing_is_queued_when_the_settings_are_empty() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        text_settings(e, &[]);
+        let queued = recording(e, MODEL_LOADER_QUEUE_MODEL, 0);
+        let texture = recording(e, CREATE_TEXTURE_IMAGE, 0);
+        e.call(0x0045_a370, &args![world.tes]);
+        assert!(queued.borrow().is_empty());
+        assert!(texture.borrow().is_empty());
+    }
+
+    #[test]
+    fn preloaded_models_are_released_and_the_blood_decal_cleared() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        text_settings(
+            e,
+            &[
+                (SETTING_BLOOD_PARTICLE_DEFAULT, "b.nif"),
+                (SETTING_EXPLOSION_SPLASH_PARTICLES, "d.nif"),
+            ],
+        );
+        let released = recording(e, MODEL_LOADER_RELEASE_MODEL, 0);
+        let cleared = recording(e, NI_POINTER_ASSIGN, 0);
+        e.call(0x0045_a520, &args![world.tes]);
+        assert_eq!(
+            *released.borrow(),
+            vec![
+                vec![0x7700_0000, SETTING_BLOOD_PARTICLE_DEFAULT + 8, 1, 1],
+                vec![0x7700_0000, SETTING_EXPLOSION_SPLASH_PARTICLES + 8, 1, 1]
+            ]
+        );
+        assert_eq!(*cleared.borrow(), vec![vec![world.tes.addr() + 0xa8, 0]]);
+    }
+
+    #[test]
+    fn release_helper_passes_the_name_and_two_ones() {
+        let mut e = Engine::new();
+        let released = recording(&mut e, MODEL_LOADER_RELEASE_MODEL, 0);
+        e.call(0x0045_a5e0, &args![Ptr::<()>::new(0x7700_0000), 0xabcdu32]);
+        assert_eq!(*released.borrow(), vec![vec![0x7700_0000, 0xabcd, 1, 1]]);
+    }
+
+    // ----- 0045a600 -----
+
+    #[test]
+    fn water_textures_are_loaded_into_a_local_pointer_for_accepted_entries() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        empty_node(e);
+        e.mem.set_u8(SETTING_PER_WORLD_SPACE_WATER_NOISE + 4, 0);
+        put_setting(e, SETTING_PER_WORLD_SPACE_WATER_NOISE, 0);
+        e.set_global(TES_SINGLETON, 0x7900_0000u32);
+        e.register(NI_POINTER_CTOR, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret(a[0])
+        });
+        let accepted = e.mem.alloc(8);
+        let rejected = e.mem.alloc(8);
+        fill_list(e, world.handler + 0x130, &[accepted, rejected]);
+        e.register_double(0x0058_0080, move |_, a| ret((a[0] == accepted) as u32));
+        returns(e, TES_WATER_SYSTEM_GETTER, 0);
+        returns(e, 0x0058_00a0, 0x4e41);
+        let texture = Rc::new(RefCell::new(0u32));
+        let inner = texture.clone();
+        e.register_double(CREATE_TEXTURE_IMAGE, move |e, a| {
+            *inner.borrow_mut() = a[2];
+            e.mem.set_u32(a[2], 0x7e57);
+            Ret::default()
+        });
+        let received = recording(e, 0x0058_00c0, 0);
+        e.call(0x0045_a600, &args![world.tes]);
+        assert_eq!(*received.borrow(), vec![vec![accepted, 0x7e57]]);
+        assert_eq!(
+            world.guard.borrow()[0][1..],
+            [0x1d, 1, TES_CPP_PATH, 0x1c27]
+        );
+        // The local pointer was released after use.
+        assert_eq!(e.mem.u32(*texture.borrow()), 0);
+    }
+
+    #[test]
+    fn water_textures_are_skipped_with_per_world_space_noise() {
+        let mut world = preload_world();
+        let e = &mut world.e;
+        put_setting(e, SETTING_PER_WORLD_SPACE_WATER_NOISE, 1);
+        let listed = recording(e, 0x0058_0080, 0);
+        let water = recording(e, TES_WATER_SYSTEM_GETTER, 0);
+        e.call(0x0045_a600, &args![world.tes]);
+        assert!(listed.borrow().is_empty());
+        assert_eq!(*water.borrow(), vec![vec![world.tes.addr()]]);
     }
 }
