@@ -30,16 +30,16 @@ Map provenance:
 
 | | Functions | Share |
 | --- | ---: | ---: |
-| translated | 7680 | 11.6% |
-| traced | 4457 | 6.7% |
-| platform | 3441 | 5.2% |
+| translated | 7902 | 11.9% |
+| traced | 4479 | 6.8% |
+| platform | 3440 | 5.2% |
 | library | 21918 | 33.1% |
-| open | 28763 | 43.4% |
+| open | 28520 | 43.0% |
 | **all** | **66259** | |
 
-Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 11757 (29.0%) are translated or traced.
+Game code (functions in subsystems that are neither platform nor library): **40523** functions, of which 12000 (29.6%) are translated or traced.
 
-Rust cites 12446 distinct `.text` addresses; 56 of them lie outside every function in the map (mid-instruction data, or code no function covers).
+Rust cites 12690 distinct `.text` addresses; 56 of them lie outside every function in the map (mid-instruction data, or code no function covers).
 
 Names by tier (see the engine-map README for each tier's evidence):
 
@@ -70,37 +70,37 @@ Largest first. `Named` counts functions with an Xbox PDB (or, in the runtime lib
 | Subsystem | Functions | KB | Named | translated | traced | platform | library | open | done |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | compiler: static init/exit | 21335 | 529 | 102 | 1 | 62 | 0 | 21272 | 0 | - |
-| fallout shared | 10470 | 2065 | 3149 | 6060 | 978 | 0 | 0 | 3432 | 67.2% |
-| Havok SDK | 6591 | 1555 | 3499 | 53 | 71 | 0 | 0 | 6467 | 1.9% |
-| fallout/ai | 4849 | 1475 | 1888 | 848 | 737 | 0 | 0 | 3264 | 32.7% |
-| fallout/interface | 2645 | 991 | 1247 | 315 | 796 | 0 | 0 | 1534 | 42.0% |
-| (unplaced) | 2353 | 470 | 0 | 30 | 356 | 1 | 0 | 1966 | 16.4% |
-| fallout shared/pathfinding | 1788 | 365 | 452 | 38 | 129 | 0 | 0 | 1621 | 9.3% |
+| fallout shared | 10470 | 2065 | 3149 | 6060 | 990 | 0 | 0 | 3420 | 67.3% |
+| Havok SDK | 6591 | 1555 | 3499 | 53 | 73 | 0 | 0 | 6465 | 1.9% |
+| fallout/ai | 4849 | 1475 | 1888 | 962 | 729 | 0 | 0 | 3158 | 34.9% |
+| fallout/interface | 2645 | 991 | 1247 | 423 | 769 | 0 | 0 | 1453 | 45.1% |
+| (unplaced) | 2353 | 470 | 0 | 30 | 367 | 1 | 0 | 1955 | 16.9% |
+| fallout shared/pathfinding | 1788 | 365 | 452 | 38 | 131 | 0 | 0 | 1619 | 9.5% |
 | NiMain | 1619 | 261 | 1134 | 3 | 72 | 0 | 0 | 1544 | 4.6% |
-| BSHavok | 1615 | 316 | 1134 | 22 | 126 | 0 | 0 | 1467 | 9.2% |
-| BSShader | 1549 | 608 | 350 | 0 | 126 | 1423 | 0 | 0 | - |
+| BSHavok | 1615 | 316 | 1134 | 22 | 128 | 0 | 0 | 1465 | 9.3% |
+| BSShader | 1549 | 608 | 350 | 0 | 127 | 1422 | 0 | 0 | - |
 | NiAnimation | 1279 | 171 | 903 | 0 | 32 | 0 | 0 | 1247 | 2.5% |
 | fallout/misc | 1045 | 171 | 353 | 271 | 127 | 0 | 0 | 647 | 38.1% |
-| BSMain | 991 | 192 | 478 | 0 | 59 | 0 | 0 | 932 | 6.0% |
+| BSMain | 991 | 192 | 478 | 0 | 60 | 0 | 0 | 931 | 6.1% |
 | NiXenonRenderer | 965 | 172 | 298 | 0 | 5 | 960 | 0 | 0 | - |
 | SpeedTree | 732 | 234 | 151 | 0 | 111 | 621 | 0 | 0 | - |
-| fallout/magic | 705 | 162 | 378 | 7 | 45 | 0 | 0 | 653 | 7.4% |
+| fallout/magic | 705 | 162 | 378 | 7 | 53 | 0 | 0 | 645 | 8.5% |
 | LIBCMT | 682 | 124 | 503 | 0 | 21 | 31 | 630 | 0 | - |
 | NiParticle | 649 | 89 | 540 | 0 | 66 | 0 | 0 | 583 | 10.2% |
-| fallout shared/havok | 478 | 60 | 110 | 7 | 55 | 0 | 0 | 416 | 13.0% |
+| fallout shared/havok | 478 | 60 | 110 | 7 | 63 | 0 | 0 | 408 | 14.6% |
 | FaceGen | 474 | 164 | 51 | 0 | 10 | 0 | 0 | 464 | 2.1% |
 | fallout shared/facegen | 433 | 63 | 91 | 0 | 54 | 0 | 0 | 379 | 12.5% |
-| BSMenu | 361 | 136 | 221 | 1 | 81 | 0 | 0 | 279 | 22.7% |
-| BSAudio | 304 | 75 | 141 | 0 | 23 | 0 | 0 | 281 | 7.6% |
-| fallout shared/magic | 296 | 43 | 83 | 5 | 66 | 0 | 0 | 225 | 24.0% |
+| BSMenu | 361 | 136 | 221 | 1 | 85 | 0 | 0 | 275 | 23.8% |
+| BSAudio | 304 | 75 | 141 | 0 | 24 | 0 | 0 | 280 | 7.9% |
+| fallout shared/magic | 296 | 43 | 83 | 5 | 68 | 0 | 0 | 223 | 24.7% |
 | BSSystem | 275 | 54 | 36 | 1 | 31 | 243 | 0 | 0 | - |
 | NiCollision | 215 | 104 | 115 | 0 | 4 | 0 | 0 | 211 | 1.9% |
 | fallout shared/distant terrain system | 204 | 37 | 62 | 0 | 26 | 0 | 0 | 178 | 12.7% |
 | BSCore | 197 | 22 | 45 | 1 | 12 | 2 | 0 | 182 | 6.6% |
 | fallout/audio | 190 | 55 | 49 | 13 | 41 | 0 | 0 | 136 | 28.4% |
 | fallout shared/sky | 164 | 59 | 51 | 2 | 33 | 0 | 0 | 129 | 21.3% |
-| fallout shared/region system | 159 | 26 | 74 | 0 | 18 | 0 | 0 | 141 | 11.3% |
-| fallout shared/tempeffects | 149 | 48 | 58 | 0 | 21 | 0 | 0 | 128 | 14.1% |
+| fallout shared/region system | 159 | 26 | 74 | 0 | 20 | 0 | 0 | 139 | 12.6% |
+| fallout shared/tempeffects | 149 | 48 | 58 | 0 | 22 | 0 | 0 | 127 | 14.8% |
 | fallout shared/speedtree | 115 | 33 | 57 | 1 | 18 | 0 | 0 | 96 | 16.5% |
 | NiSystem | 92 | 7 | 39 | 1 | 4 | 0 | 0 | 87 | 5.4% |
 | BSSystemUtilities | 86 | 5 | 25 | 0 | 1 | 85 | 0 | 0 | - |
@@ -128,9 +128,9 @@ The call tree of `Main::OnIdle` (Xbox PDB, PC `0086e650`), the game's per-frame 
 | Depth | Call sites | Functions | translated | traced | platform | library | open |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 0 | 1 | 1 | 1 | 0 | 0 | 0 | 0 |
-| 1 | 143 | 117 | 73 | 41 | 3 | 0 | 26 |
-| 2 | 1575 | 583 | 811 | 504 | 25 | 4 | 231 |
-| 3 | 4973 | 1303 | 2618 | 1320 | 173 | 26 | 836 |
+| 1 | 143 | 117 | 78 | 36 | 3 | 0 | 26 |
+| 2 | 1575 | 583 | 838 | 478 | 25 | 4 | 230 |
+| 3 | 4973 | 1303 | 2683 | 1272 | 173 | 26 | 819 |
 
 The calls of `Main::OnIdle` itself (depth 1), in order:
 
@@ -143,8 +143,8 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 5 | `007050d0` | `Interface::InDialog` | translated |
 | 6 | `00701450` | `FaderManager::IsFaderVisible` | traced |
 | 7 | `00703d50` | `Interface::IsConsoleVisible` | translated |
-| 8 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | traced |
-| 9 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | traced |
+| 8 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | translated |
+| 9 | `00707ad0` | `Interface::GetCurrentRenderedMenu` | translated |
 | 10 | `00705990` | `Interface::GetPipboy` | translated |
 | 11 | `004b7210` | - | translated |
 | 12 | `00424940` | - | translated |
@@ -222,10 +222,10 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 84 | `00524c90` | - | traced |
 | 85 | `00712e60` | - | traced |
 | 86 | `0044ddc0` | - | translated |
-| 87 | `00710ab0` | - | traced |
+| 87 | `00710ab0` | - | translated |
 | 88 | `0045c670` | - | translated |
 | 89 | `00c52020` | `BSSceneGraph::SetCameraFOV` | traced |
-| 90 | `00710ab0` | - | traced |
+| 90 | `00710ab0` | - | translated |
 | 91 | `00b54000` | `BSShaderManager::SetFOV` | traced |
 | 92 | `00559450` | - | translated |
 | 93 | `006629f0` | `BSFaceGenNiNode::GetAnimationData` | traced |
@@ -277,5 +277,5 @@ The calls of `Main::OnIdle` itself (depth 1), in order:
 | 139 | `005a9d60` | `ScriptLocals::ClearOptimizations` | translated |
 | 140 | `0084d030` | - | traced |
 | 141 | `00702360` | `Interface::IsInMenuMode` | translated |
-| 142 | `00950090` | - | traced |
+| 142 | `00950090` | - | translated |
 | 143 | `00aa7290` | - | traced |
