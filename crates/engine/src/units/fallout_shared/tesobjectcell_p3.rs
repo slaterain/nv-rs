@@ -20,8 +20,15 @@
 //! its type test, the hide and reference-update walks, the cell's save-game
 //! size, save and load functions and their save-buffer variants, the north
 //! rotation, `GetSeenValue` and `GetIntSeenSection`, and the loops over a
-//! cell's references (`QueueReferences` and four others). The next session
-//! continues with the first function after `005574d0` that is not done.
+//! cell's references (`QueueReferences` and four others).
+//!
+//! The third batch holds the last 40 functions, `005575d0` to `00558df0`:
+//! the navmesh obstacle walks of attach and detach, the addon node walk
+//! (`ProcessAddonNodesForRefs`), the LOD fade walks, `RenderTestCell` with its
+//! orientation loop, frame check, statistics and the `SaveRenderFailureData`
+//! report file, the lighting template accessors, the held-word helpers and
+//! the constructors at the end of the range. This completes the range of the
+//! file; the unit's other parts continue elsewhere.
 //!
 //! # Conventions of the exe worth knowing
 //!
@@ -2941,6 +2948,1180 @@ pub fn fn_005574d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Third batch: the callees, constants and helpers of `005575d0` to `00558df0`.
+
+/// Virtual slot `+0x15c` of a reference: true when the reference has a
+/// navmesh obstacle (`fn_005575d0` and `fn_005576c0` ask it).
+const REFERENCE_OBSTACLE_SLOT: u32 = 0x15c;
+/// `NavMeshObstacleManager::AddObstacleForReference` (engine map), thiscall
+/// on the value `OBSTACLE_MANAGER_GET(reference)` returns, no stack argument.
+const OBSTACLE_ADD: u32 = 0x006c_0c30;
+/// `NavMeshObstacleManager::RemoveObstacleForReference` (engine map), same
+/// calling form.
+const OBSTACLE_REMOVE: u32 = 0x006c_0c80;
+/// `NavMeshObstacleManager::OnDoorClose` (engine map), same calling form.
+const OBSTACLE_DOOR_CLOSED: u32 = 0x006c_0f10;
+/// Removal call (`006c1060`) `fn_005576c0` makes for door references.
+const OBSTACLE_DOOR_REMOVE: u32 = 0x006c_1060;
+/// `BGSOpenCloseForm::GetOpenState` (Xbox PDB), cdecl `(reference)`; `1`
+/// is the state `fn_005575d0` treats as open.
+const GET_OPEN_STATE: u32 = 0x0047_b250;
+/// `TESObjectDOOR::IsSlidingDoor` (Xbox PDB), thiscall on the base form.
+const IS_SLIDING_DOOR: u32 = 0x0051_8080;
+/// The form type (`00401170`) of the base objects the obstacle walks treat
+/// as doors (the type `IsSlidingDoor` is asked about).
+const DOOR_FORM_TYPE: u32 = 0x1c;
+/// `00541a30(object, 1)`: what `fn_00557760` calls on the object it
+/// replaces.
+const RELEASE_HELD: u32 = 0x0054_1a30;
+/// `00578060` / `00578170`: `TESObjectREFR::AddMasterParticleAddonNodes` and
+/// `RemoveMasterParticleAddonNodes` (Xbox PDB), cdecl `(node)`.
+const ADD_ADDON_NODES: u32 = 0x0057_8060;
+const REMOVE_ADDON_NODES: u32 = 0x0057_8170;
+/// `004523e0(reference, 2)`: the reference test `ProcessAddonNodesForRefs`
+/// makes before it asks for the reference's 3D (virtual `+0x1d0`).
+const REFERENCE_ADDON_TEST: u32 = 0x0045_23e0;
+const REFERENCE_NODE_SLOT: u32 = 0x1d0;
+/// `fn_005578f0`: the cell's node holder (`CELL_NODE_D`), the holder of
+/// an entry's node (`00413f40`), its name (`0043b1b0`), the name compare
+/// (`00408b20`, cdecl, 0 when equal), the string it compares with and the
+/// virtual slot called on a match.
+const ENTRY_HOLDER: u32 = 0x0041_3f40;
+const HOLDER_NAME: u32 = 0x0043_b1b0;
+const STRING_COMPARE: u32 = 0x0040_8b20;
+const CELL_LOCATION_MARKER_NAME: u32 = 0x0102_f154;
+const MARKER_ENTRY_SLOT: u32 = 0xf0;
+/// `fn_00557990`: the node `00456fc0(cell, 7)` gives, the form type it skips
+/// (`0x1e`), the form (`011ca234`) it skips and the call `00450f90(node,
+/// flag)` it makes on the reference's 3D.
+const SKIPPED_FORM_TYPE: u32 = 0x1e;
+const SKIPPED_FORM: u32 = 0x011c_a234;
+const NODE_SET_FLAG: u32 = 0x0045_0f90;
+/// The cell fade-in value `fn_00557ae0` and `fn_00557c40` store (`float`).
+const LOD_FADE_VALUE: u32 = 0x0118_b694;
+/// `fn_00557ae0`: the model's type test `007058c0`, the type it accepts
+/// (6), the model's second test `0099e040` (a `float` in `ST0`) and the
+/// `double` it must exceed (`599.9000244140625`).
+const MODEL_TYPE: u32 = 0x0070_58c0;
+const MODEL_TYPE_ACCEPTED: u32 = 6;
+const MODEL_DISTANCE: u32 = 0x0099_e040;
+const MODEL_DISTANCE_LIMIT: u32 = 0x0102_f168;
+/// `fn_00557c40`: the call `0054b800(model)` made for models of type 6.
+const MODEL_DETACH_STEP: u32 = 0x0054_b800;
+/// `fn_00557be0`: the scene's cell count (`00453980`) and cell at an index
+/// (`00459470`).
+const SCENE_CELL_COUNT: u32 = 0x0045_3980;
+const SCENE_CELL_AT: u32 = 0x0045_9470;
+/// The limits of `RenderTestCell` (`fn_00557d50`): geometry, triangles,
+/// passes, lights, time, and a last count.
+const RENDER_LIMITS: [u32; 6] = [0x4b0, 800_000, 100, 0xf, 0xffff_ffff, 8];
+/// The report callback `fn_00557da0` installs (`fn_005586c0`).
+const RENDER_FAILURE_CALLBACK: u32 = 0x0055_86c0;
+/// `fn_00558200`, the navmesh triangle accessors: the count of the
+/// triangle array (`0044ddc0`), the `NiPoint3` of a vertex (`0068f0a0(navmesh,
+/// vertex)`), the in-place vector add (`0063c8a0(sum, other)`) and the
+/// scale by a `float` (`00439180(sum, factor)`) and the factor's address.
+const TRIANGLE_COUNT: u32 = 0x0044_ddc0;
+const NAV_MESH_VERTEX: u32 = 0x0068_f0a0;
+const VECTOR_ADD_ASSIGN: u32 = 0x0063_c8a0;
+const VECTOR_SCALE: u32 = 0x0043_9180;
+const ONE_THIRD: u32 = 0x0102_f200;
+/// `RenderTestCell`: the render handle (`0045c670`), a node's local
+/// translation (`0043c490`) and rotation (`006a9540`) and their setters
+/// (`00440460`, `0043fa80`), the cell's navmesh array (`0070ec90`), the
+/// count of that array (`00620b80`), `NavMeshArray::GetNavMeshByIndex`
+/// `(array, out slot, index)`, the slot's test (`00458b50`) and release
+/// (`0042fa40`), the count of a reference list (`005ae380`), the debug
+/// print (`005b5e40`, cdecl, a format and its arguments), and the strings
+/// and constants they use.
+const RENDER_HANDLE: u32 = 0x0045_c670;
+const NODE_LOCAL_TRANSLATION: u32 = 0x0043_c490;
+const NODE_LOCAL_ROTATION: u32 = 0x006a_9540;
+const NODE_SET_TRANSLATION: u32 = 0x0044_0460;
+const NODE_SET_ROTATION: u32 = 0x0043_fa80;
+const CELL_NAV_MESH_ARRAY: u32 = 0x0070_ec90;
+const NAV_MESH_ARRAY_COUNT: u32 = 0x0062_0b80;
+const NAV_MESH_BY_INDEX: u32 = 0x0046_4f60;
+const NAV_MESH_SLOT_TEST: u32 = 0x0045_8b50;
+const NAV_MESH_SLOT_RELEASE: u32 = 0x0042_fa40;
+const LIST_COUNT: u32 = 0x005a_e380;
+const DEBUG_PRINT_LINE: u32 = 0x005b_5e40;
+const TESTING_TRIANGLES_FORMAT: u32 = 0x0102_f1e0;
+const TESTING_POSITIONS_FORMAT: u32 = 0x0102_f1b4;
+const RENDER_FAILED_MESSAGE: u32 = 0x0102_f170;
+const TRIANGLE_LIFT: u32 = 0x0102_f1d8;
+/// Virtual slots of a reference used by `RenderTestCell`: `+0x1f4` gives a
+/// pointer to its position, `+0x1d0` its 3D; the world bound accessor of
+/// the 3D (`0043d450`, engine map `NiAVObject::GetWorldBound`).
+const REFERENCE_POSITION_SLOT: u32 = 0x1f4;
+const WORLD_BOUND: u32 = 0x0043_d450;
+/// The 3D of the player (`011dea3c`, virtual `+0x1d0`) and its position
+/// accessor (`0045bb80`).
+const NODE_POSITION_POINTER: u32 = 0x0045_bb80;
+/// `fn_00558330`: `NiMatrix3::MakeXRotation` (Xbox PDB, `(matrix, angle)`),
+/// the product `0043f8d0(this, out, other)` (engine map
+/// `NiMatrix3::operator*`) and the degree factor `0.017453292` (`double`).
+const MAKE_X_ROTATION: u32 = 0x0052_4ac0;
+const MATRIX_PRODUCT: u32 = 0x0043_f8d0;
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// `fn_00558430`: the tick counter (`00457fe0`), the object `011dea0c` and
+/// its call `0086ff70`, the statistics getter (`0043c4b0`, which returns a
+/// global and leaves its stack words to `00558600`), the shadow scene node
+/// of the table entry 0 (`00b5ac60`).
+const TICK_COUNT: u32 = 0x0045_7fe0;
+const RENDER_FRAME_OBJECT: u32 = 0x011d_ea0c;
+const RENDER_FRAME_STEP: u32 = 0x0086_ff70;
+const STATISTICS_HOLDER: u32 = 0x0043_c4b0;
+const SHADOW_SCENE_VALUE: u32 = 0x00b5_ac60;
+/// The eleven statistics words `fn_00558600` copies, in the order of its
+/// parameters.
+const STATISTICS_SOURCES: [u32; 11] = [
+    0x011f_9fc8,
+    0x011f_9fcc,
+    0x011f_9fd8,
+    0x011f_9fdc,
+    0x011f_9fe0,
+    0x011f_9fe4,
+    0x011f_9fd0,
+    0x011f_9fd4,
+    0x011f_9fe8,
+    0x011f_9ff0,
+    0x011f_9fec,
+];
+/// `SaveRenderFailureData`: the last cell written (`011ca218`), the `RTF`
+/// directory name (`0102f2f0`, for `00b00800`) and the path prefix
+/// (`0102f2e8`, `".\RTF\"`), the file name formats, the header line, the
+/// line format, the `double` that converts radians to degrees, the C
+/// library `sprintf` (`00406d00`) and `strlen` (`STRING_LENGTH`), the file
+/// deletion (`00aff0b0`), the `BSFile` constructor `(this, path, mode,
+/// buffer size, 0)` (`00b00260`), the `ToEulerAnglesXYZ` of a matrix
+/// (`00a592c0`) and the name pointer of a cell (`00401280`).
+const LAST_RENDER_FAILURE_CELL: u32 = 0x011c_a218;
+const RTF_DIRECTORY_NAME: u32 = 0x0102_f2f0;
+const RTF_PREFIX: u32 = 0x0102_f2e8;
+const CREATE_DIRECTORY: u32 = 0x00b0_0800;
+const INTERIOR_FILE_FORMAT: u32 = 0x0102_f2d8;
+const EXTERIOR_NAMED_FILE_FORMAT: u32 = 0x0102_f2bc;
+const EXTERIOR_FILE_FORMAT: u32 = 0x0102_f2a4;
+const HEADER_FORMAT: u32 = 0x0102_f250;
+const LINE_FORMAT: u32 = 0x0102_f204;
+const RADIANS_TO_DEGREES: u32 = 0x0102_f248;
+const FORMAT_TEXT: u32 = 0x0040_6d00;
+const DELETE_FILE: u32 = 0x00af_f0b0;
+const FILE_CONSTRUCT: u32 = 0x00b0_0260;
+const FILE_SIZE: u32 = 0x158;
+const FILE_BUFFER_SIZE: u32 = 0x4000;
+const FILE_MODE_APPEND: u32 = 2;
+const FILE_MODE_CREATE: u32 = 1;
+const FILE_SEEK_SLOT: u32 = 0x14;
+const FILE_OPEN_SLOT: u32 = 0x20;
+const FILE_WRITE_SLOT: u32 = 0x48;
+const FILE_SEEK_ORIGIN: u32 = 0x010a_2480;
+const MATRIX_TO_EULER: u32 = 0x00a5_92c0;
+const CELL_NAME_POINTER: u32 = 0x0040_1280;
+const NAME_SLOT: u32 = 0x130;
+const PATH_BUFFER_SIZE: u32 = 0x104;
+/// `fn_00558c90`: the call `00c6a270(3D, 1, 1, 1)` (engine map `bhkWorld::
+/// Activate`).
+const WORLD_ACTIVATE: u32 = 0x00c6_a270;
+const OWNER_REFUSES_SLOT: u32 = 0x100;
+/// `fn_00558ba0`: the slot of a reference holds a pointer at `+0x64` to a
+/// word.
+const HELD_POINTER_OFFSET: u32 = 0x64;
+/// The constructors and the destructor of the three small classes at
+/// `00558d40` to `00558df0`: the base constructors, the vtables they set and
+/// the member destructor.
+const SMALL_CLASS_BASE_A: u32 = 0x0055_8eb0;
+const SMALL_CLASS_BASE_B: u32 = 0x0055_8fb0;
+const SMALL_CLASS_BASE_C: u32 = 0x0055_90b0;
+const SMALL_CLASS_VTABLE_A: u32 = 0x0102_f2f8;
+const SMALL_CLASS_VTABLE_B: u32 = 0x0102_f318;
+const SMALL_CLASS_VTABLE_C: u32 = 0x0102_f338;
+const SMALL_CLASS_DESTRUCT: u32 = 0x0055_8f20;
+
+/// Helper: like [`for_each_list_item`], but the game advances (`00726070`)
+/// right after reading the item and before it uses it, so the next node is
+/// asked for first.
+fn for_each_list_item_advancing_first(
+    e: &mut Engine,
+    first: u32,
+    mut visit: impl FnMut(&mut Engine, Ptr),
+) {
+    let mut node = first;
+    while node != 0 {
+        let item = node_item(e, Ptr::new(node));
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+        visit(e, item);
+    }
+}
+
+/// Helper: copies `count` words.
+fn copy_words(e: &mut Engine, destination: u32, source: u32, count: u32) {
+    for index in 0..count {
+        let word = e.mem.u32(source + 4 * index);
+        e.mem.set_u32(destination + 4 * index, word);
+    }
+}
+
+// Translated from 005575d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the cell lock, for every non-null reference: when its virtual
+/// `+0x15c` is true, `006c0c30` (`NavMeshObstacleManager::
+/// AddObstacleForReference`, engine map) on the value `006c0720(reference)`
+/// gives; for door references (form type `0x1c` of the base object) an open
+/// door (`GetOpenState == 1`) that is not sliding is added the same way, any
+/// other state calls `OnDoorClose` (`006c0f10`). The map has no name for it.
+pub fn fn_005575d0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if reference.is_null() {
+            return;
+        }
+        if e.vcall(reference.addr(), REFERENCE_OBSTACLE_SLOT, &[])
+            .bool()
+        {
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
+            e.call(OBSTACLE_ADD, &args![obstacle]);
+        }
+        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+        if e.call(FORM_TYPE, &args![base]).u32() != DOOR_FORM_TYPE {
+            return;
+        }
+        if e.call(GET_OPEN_STATE, &args![reference]).i32() == 1 {
+            let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+            if !e.call(IS_SLIDING_DOOR, &args![base]).bool() {
+                let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
+                e.call(OBSTACLE_ADD, &args![obstacle]);
+            }
+        } else {
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
+            e.call(OBSTACLE_DOOR_CLOSED, &args![obstacle]);
+        }
+    });
+}
+
+// Translated from 005576c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The counterpart of `fn_005575d0`, under the cell lock, for every
+/// non-null reference: when its virtual `+0x15c` is true,
+/// `006c0c80` (`RemoveObstacleForReference`, engine map) on
+/// `006c0720(reference)`; for door references `006c1060` on the same value.
+/// The map has no name for it.
+pub fn fn_005576c0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    for_each_cell_reference_locked(e, this, |e, reference| {
+        if reference.is_null() {
+            return;
+        }
+        if e.vcall(reference.addr(), REFERENCE_OBSTACLE_SLOT, &[])
+            .bool()
+        {
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
+            e.call(OBSTACLE_REMOVE, &args![obstacle]);
+        }
+        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+        if e.call(FORM_TYPE, &args![base]).u32() == DOOR_FORM_TYPE {
+            let obstacle = e.call(OBSTACLE_MANAGER_GET, &args![reference]).u32();
+            e.call(OBSTACLE_DOOR_REMOVE, &args![obstacle]);
+        }
+    });
+}
+
+// Translated from 00557760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the pointer at `+0x64`: when there is one, `00541a30(held, 1)`
+/// is called on it first (the compiler emitted its null test twice). The
+/// map has no name for it.
+pub fn fn_00557760(e: &mut Engine, this: Ptr, value: Ptr) {
+    let held = e.mem.u32(this.addr() + HELD_POINTER_OFFSET);
+    if held != 0 {
+        e.call(RELEASE_HELD, &args![held, 1u32]);
+    }
+    e.mem
+        .set_u32(this.addr() + HELD_POINTER_OFFSET, value.addr());
+}
+
+// Translated from 005577b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::ProcessAddonNodesForRefs` (Xbox PDB): under the cell
+/// lock, for every non-null reference that passes `004523e0(reference, 2)`
+/// and has a 3D (virtual `+0x1d0`, asked twice): `AddMasterParticleAddonNodes`
+/// (`00578060`) when `add` is non-zero, else `RemoveMasterParticleAddonNodes`
+/// (`00578170`), on the 3D's virtual `+0x0c` value. The game advances the
+/// list before it handles the item.
+pub fn tes_object_cell_process_addon_nodes_for_refs(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+    add: u8,
+) {
+    e.call(CELL_LOCK_ENTER, &args![this]);
+    let first = e.call(CELL_REFERENCES, &args![this]).u32();
+    for_each_list_item_advancing_first(e, first, |e, reference| {
+        if reference.is_null() || !e.call(REFERENCE_ADDON_TEST, &args![reference, 2u32]).bool() {
+            return;
+        }
+        if e.vcall(reference.addr(), REFERENCE_NODE_SLOT, &[]).u32() == 0 {
+            return;
+        }
+        let node = e.vcall(reference.addr(), REFERENCE_NODE_SLOT, &[]).u32();
+        let value = e.vcall(node, 0x0c, &[]).u32();
+        let function = if add != 0 {
+            ADD_ADDON_NODES
+        } else {
+            REMOVE_ADDON_NODES
+        };
+        e.call(function, &args![value]);
+    });
+    e.call(CELL_LOCK_LEAVE, &args![this]);
+}
+
+// Translated from 005578e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A method with three stack words that ignores them all and returns `0`.
+/// The map has no name for it.
+pub fn fn_005578e0(
+    _e: &mut Engine,
+    _this: Ptr,
+    _unused_1: u32,
+    _unused_2: u32,
+    _unused_3: u32,
+) -> u32 {
+    0
+}
+
+// Translated from 005578f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For every entry `i` of the node `00524cf0(this)` gives (if any), whose
+/// holder (`00413f40`) has a name (`0043b1b0`) equal to `"CellLocationMarker"`
+/// (`00408b20` answers 0): calls the node's virtual `+0xf0` with `i`. The
+/// entry count is asked again at every step. The map has no name for it.
+pub fn fn_005578f0(e: &mut Engine, this: Ptr) {
+    let node = e.call(CELL_NODE_D, &args![this]).u32();
+    if node == 0 {
+        return;
+    }
+    let mut index = 0u32;
+    while index < e.call(NODE_CHILD_COUNT, &args![node]).u32() {
+        let entry = e.call(NODE_CHILD_AT, &args![node, index]).u32();
+        if entry != 0 {
+            let holder = e.call(ENTRY_HOLDER, &args![entry]).u32();
+            let name = e.call(HOLDER_NAME, &args![holder]).u32();
+            if name != 0
+                && e.call(STRING_COMPARE, &args![name, CELL_LOCATION_MARKER_NAME])
+                    .u32()
+                    == 0
+            {
+                e.vcall(node, MARKER_ENTRY_SLOT, &args![index]);
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00557990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the two-level node tree `00456fc0(this, 7)` gives (children of
+/// children, the counts asked again at every step). Only when `mode == 4`:
+/// for each leaf whose reference (`FindReferenceFor3D`, cdecl) exists and
+/// whose base object's form type is not `0x1e` and is not the form at
+/// `011ca234`, calls `00450f90(reference 3D, flag)` on the 3D (virtual
+/// `+0x1d0`) of the reference. The map has no name for it.
+pub fn fn_00557990(e: &mut Engine, this: Ptr, flag: u8, mode: u32) {
+    let root = e.call(CELL_CHILD_NODE, &args![this, 7u32]).u32();
+    if root == 0 {
+        return;
+    }
+    let mut outer = 0u32;
+    while outer < e.call(NODE_CHILD_COUNT, &args![root]).u32() {
+        let group = e.call(NODE_CHILD_AT, &args![root, outer]).u32();
+        if group != 0 {
+            let mut inner = 0u32;
+            while inner < e.call(NODE_CHILD_COUNT, &args![group]).u32() {
+                let leaf = e.call(NODE_CHILD_AT, &args![group, inner]).u32();
+                if leaf != 0 {
+                    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![leaf]).u32();
+                    if reference != 0 && mode == 4 {
+                        let base = e.call(REFERENCE_BASE_OBJECT, &args![reference]).u32();
+                        let skipped: u32 = e.global(SKIPPED_FORM);
+                        if e.call(FORM_TYPE, &args![base]).u32() != SKIPPED_FORM_TYPE
+                            && base != skipped
+                        {
+                            let node = e.vcall(reference, REFERENCE_NODE_SLOT, &[]).u32();
+                            e.call(NODE_SET_FLAG, &args![node, u32::from(flag)]);
+                        }
+                    }
+                }
+                inner += 1;
+            }
+        }
+        outer += 1;
+    }
+}
+
+// Translated from 00557aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Starts the fade to high detail unless it is running: when
+/// `bFadingToHighDetail` is clear, sets it, clears `bFadingToLowDetail` and
+/// sets `fLodFadeInPercent` to `0.0`. The map has no name for it.
+pub fn fn_00557aa0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    if !e.get(this, TESObjectCELL::bFadingToHighDetail) {
+        e.set(this, TESObjectCELL::bFadingToHighDetail, true);
+        e.set(this, TESObjectCELL::bFadingToLowDetail, false);
+        e.set(this, TESObjectCELL::fLodFadeInPercent, 0.0);
+    }
+}
+
+/// Helper: the reference tests `fn_00557ae0` and `fn_00557c40` share: the
+/// reference is not the object at `011dea3c` and has a model (`0043fcd0`)
+/// whose virtual `+0x10` gives a non-null node. Returns the node.
+fn model_node_of_other_reference(e: &mut Engine, reference: Ptr) -> Option<u32> {
+    if reference.is_null() {
+        return None;
+    }
+    let player: u32 = e.global(DISTANCE_SOURCE_SINGLETON);
+    if reference.addr() == player {
+        return None;
+    }
+    let model = e.call(REFERENCE_MODEL, &args![reference]).u32();
+    if model == 0 {
+        return None;
+    }
+    let node = e.vcall(model, MODEL_TEST_SLOT, &[]).u32();
+    (node != 0).then_some(node)
+}
+
+// Translated from 00557ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finishes the fade to high detail: under the cell lock, for every
+/// reference other than the object at `011dea3c` that has a model node
+/// (`0043fcd0`, virtual `+0x10`) of type 6 (`007058c0`) or with
+/// `0099e040` above `599.9000244140625`: `00476ab0(node)` and fade alpha
+/// `1.0`. Then `fLodFadeInPercent` is set from `0118b694`,
+/// `bDisplayHighDetail` and `bUpdateTerrain` are set and both fading flags
+/// are cleared. The map has no name for it.
+pub fn fn_00557ae0(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    e.call(CELL_LOCK_ENTER, &args![this]);
+    let first = e.call(CELL_REFERENCES, &args![this]).u32();
+    for_each_list_item_advancing_first(e, first, |e, reference| {
+        let Some(node) = model_node_of_other_reference(e, reference) else {
+            return;
+        };
+        let accepted = if e.call(MODEL_TYPE, &args![node]).u32() == MODEL_TYPE_ACCEPTED {
+            true
+        } else {
+            let value = e.call(MODEL_DISTANCE, &args![node]).f64();
+            let limit: f64 = e.global(MODEL_DISTANCE_LIMIT);
+            value > limit
+        };
+        if accepted {
+            e.call(MODEL_PREPARE, &args![node]);
+            e.call(SET_PROPERTY_FADE_ALPHA, &args![node, 1.0f32]);
+        }
+    });
+    let fade: f32 = e.global(LOD_FADE_VALUE);
+    e.set(this, TESObjectCELL::fLodFadeInPercent, fade);
+    e.set(this, TESObjectCELL::bDisplayHighDetail, true);
+    e.set(this, TESObjectCELL::bFadingToHighDetail, false);
+    e.set(this, TESObjectCELL::bFadingToLowDetail, false);
+    e.set(this, TESObjectCELL::bUpdateTerrain, true);
+    e.call(CELL_LOCK_LEAVE, &args![this]);
+}
+
+// Translated from 00557be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `fn_00557ae0` on every non-null cell of the scene (`011dea10`;
+/// count `00453980`, element `00459470`). `this` is not used. The map has
+/// no name for it.
+pub fn fn_00557be0(e: &mut Engine, _this: Ptr) {
+    let scene: u32 = e.global(SCENE_SINGLETON);
+    let mut index = 0u32;
+    while index < e.call(SCENE_CELL_COUNT, &args![scene]).u32() {
+        let cell = e.call(SCENE_CELL_AT, &args![scene, index]).u32();
+        if cell != 0 {
+            fn_00557ae0(e, Ptr::new(cell));
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00557c40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Run before a cell is detached: keeps `bFadingToLowDetail` set when it
+/// was, clears `bFadingToHighDetail` and `bDisplayHighDetail`, sets
+/// `fLodFadeInPercent` from `0118b694`; then, under the cell lock, calls
+/// `0054b800(node)` for every reference other than the object at `011dea3c`
+/// whose model node (`0043fcd0`, virtual `+0x10`) has type 6. The map has
+/// no name for it.
+pub fn fn_00557c40(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    if e.get(this, TESObjectCELL::bFadingToLowDetail) {
+        e.set(this, TESObjectCELL::bFadingToLowDetail, true);
+    }
+    e.set(this, TESObjectCELL::bFadingToHighDetail, false);
+    let fade: f32 = e.global(LOD_FADE_VALUE);
+    e.set(this, TESObjectCELL::fLodFadeInPercent, fade);
+    e.set(this, TESObjectCELL::bDisplayHighDetail, false);
+    e.call(CELL_LOCK_ENTER, &args![this]);
+    let first = e.call(CELL_REFERENCES, &args![this]).u32();
+    for_each_list_item_advancing_first(e, first, |e, reference| {
+        let Some(node) = model_node_of_other_reference(e, reference) else {
+            return;
+        };
+        if e.call(MODEL_TYPE, &args![node]).u32() == MODEL_TYPE_ACCEPTED {
+            e.call(MODEL_DETACH_STEP, &args![node]);
+        }
+    });
+    e.call(CELL_LOCK_LEAVE, &args![this]);
+}
+
+// Translated from 00557d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00450fd0(this) != 0` (the cell state getter). The map has no name for
+/// it.
+pub fn fn_00557d10(e: &mut Engine, this: Ptr<TESObjectCELL>) -> bool {
+    e.call(CELL_GET_STATE, &args![this]).u32() != 0
+}
+
+// Translated from 00557d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::All3DWithVisibleDistantFadingIn` (Xbox PDB): the byte
+/// `bDisplayHighDetail` at `+0xd0`.
+pub fn tes_object_cell_all3d_with_visible_distant_fading_in(
+    e: &mut Engine,
+    this: Ptr<TESObjectCELL>,
+) -> u8 {
+    e.mem.u8(this.addr() + 0xd0)
+}
+
+// Translated from 00557d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the default limits of `RenderTestCell` in the first six words of
+/// `this` (`0x4b0`, `800000`, `100`, `15`, `-1`, `8`) and returns `this`.
+/// The map has no name for it.
+pub fn fn_00557d50(e: &mut Engine, this: Ptr) -> Ptr {
+    for (index, value) in RENDER_LIMITS.iter().enumerate() {
+        e.mem.set_u32(this.addr() + 4 * index as u32, *value);
+    }
+    this
+}
+
+// Translated from 00557da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the `RenderTestCell` configuration: the default limits,
+/// the report callback `fn_005586c0` at `+0x18` and `0` at `+0x1c`.
+/// Returns `this`. The map has no name for it.
+pub fn fn_00557da0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00557d50(e, this);
+    e.mem.set_u32(this.addr() + 0x18, RENDER_FAILURE_CALLBACK);
+    e.mem.set_u32(this.addr() + 0x1c, 0);
+    this
+}
+
+// Translated from 00558200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of triangles of a navmesh: `0044ddc0` on the array at
+/// `this + 0x38`. The map has no name for it.
+pub fn fn_00558200(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(TRIANGLE_COUNT, &args![this.addr() + 0x38]).u32()
+}
+
+// Translated from 00558220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NavMesh::GetCenter` (Xbox PDB): writes the centroid of triangle
+/// `triangle` into `out` and returns `out`. The three vertex positions
+/// (`0068f0a0(navmesh, vertex index)`) are summed with `0063c8a0` starting
+/// from a copy of the first, and the sum is scaled by the `float` at
+/// `0102f200` with `00439180`.
+pub fn nav_mesh_get_center(e: &mut Engine, this: Ptr, out: Ptr, triangle: u16) -> Ptr {
+    let record = fn_005582f0(e, this, triangle);
+    e.with_stack(12, |e, sum| {
+        let vertex = fn_005582d0(e, record, 0);
+        let position = e
+            .call(NAV_MESH_VERTEX, &args![this, u32::from(vertex)])
+            .u32();
+        copy_words(e, sum.addr(), position, 3);
+        for index in 1..3u32 {
+            let vertex = fn_005582d0(e, record, index);
+            let position = e
+                .call(NAV_MESH_VERTEX, &args![this, u32::from(vertex)])
+                .u32();
+            e.call(VECTOR_ADD_ASSIGN, &args![sum, position]);
+        }
+        let third: f32 = e.global(ONE_THIRD);
+        e.call(VECTOR_SCALE, &args![sum, third]);
+        copy_words(e, out.addr(), sum.addr(), 3);
+    });
+    out
+}
+
+// Translated from 005582d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `u16` at `this + 2 * index`. The map has no name for it.
+pub fn fn_005582d0(e: &mut Engine, this: Ptr, index: u32) -> u16 {
+    e.mem.u16(this.addr().wrapping_add(index.wrapping_mul(2)))
+}
+
+// Translated from 005582f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-byte triangle record `triangle` of a navmesh (`fn_00558dd0` on the
+/// array at `this + 0x38`). The map has no name for it.
+pub fn fn_005582f0(e: &mut Engine, this: Ptr, triangle: u16) -> Ptr {
+    fn_00558dd0(e, Ptr::new(this.addr() + 0x38), u32::from(triangle))
+}
+
+// Translated from 00558310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The child `0` of a scene node: `0045bc00(this, 0)`. The map has no name
+/// for it.
+pub fn fn_00558310(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(SCENE_NODE_CHILD, &args![this, 0u32]).u32()
+}
+
+// Translated from 00558330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(cell, position, config)`: renders the test cell from `position`
+/// in 24 orientations: for the x rotations of 45, 0 and -45 degrees
+/// (`MakeXRotation`) and the z rotations of 0, 45, ... 315 degrees
+/// (`004a0c90`), multiplied (`0043f8d0`), `fn_00558430(cell, position,
+/// matrix, config)`. Returns false when any of them failed.
+pub fn fn_00558330(e: &mut Engine, cell: Ptr, position: Ptr, config: Ptr) -> bool {
+    let mut passed = true;
+    let mut x_degrees = 0x2di32;
+    // Three 36-byte matrices: the x rotation, the z rotation, the product.
+    e.with_stack(0x6c, |e, frame| {
+        let x_rotation = frame;
+        let z_rotation = frame.byte_add(0x24);
+        let product = frame.byte_add(0x48);
+        for _ in 0..3 {
+            e.call(LIST_NODE_ITEM_ADDRESS, &args![x_rotation]);
+            let factor: f64 = e.global(DEGREES_TO_RADIANS);
+            let angle = (f64::from(x_degrees) * factor) as f32;
+            e.call(MAKE_X_ROTATION, &args![x_rotation, angle]);
+            x_degrees -= 0x2d;
+            let mut z_degrees = 0i32;
+            for _ in 0..8 {
+                e.call(LIST_NODE_ITEM_ADDRESS, &args![z_rotation]);
+                let factor: f64 = e.global(DEGREES_TO_RADIANS);
+                let angle = (f64::from(z_degrees) * factor) as f32;
+                e.call(ROTATION_MATRIX_BUILD, &args![z_rotation, angle]);
+                z_degrees += 0x2d;
+                e.call(MATRIX_PRODUCT, &args![z_rotation, product, x_rotation]);
+                if !fn_00558430(e, cell, position, product, config) {
+                    passed = false;
+                }
+            }
+        }
+    });
+    passed
+}
+
+// Translated from 00558430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(cell, position, rotation, config)`: places the render camera
+/// (`0045c670`, child `0`) at `position` with `rotation`, updates it, renders
+/// one frame (`0086ff70` on `011dea0c`, timed with `00457fe0`) and reads the
+/// statistics: the report record starts with the default limits
+/// (`fn_00558690`), then `fn_00558600` stores two statistics in its words 0
+/// and 1 (`0043c4b0` hands it the eleven words it reads), word 3 is
+/// `00b5ac60` of table entry 0 (low 16 bits) and word 4 the elapsed ticks.
+/// A record exceeding one of the limits in `config` (words 0, 1, 2, 3, 5, 4,
+/// compared unsigned in that order) is a failure: when `config + 0x18` holds
+/// a callback it is called as `callback(&record, config[7])` with the record
+/// completed by the cell, the position and the rotation. Returns true when
+/// no limit was exceeded.
+pub fn fn_00558430(e: &mut Engine, cell: Ptr, position: Ptr, rotation: Ptr, config: Ptr) -> bool {
+    let handle = e.call(RENDER_HANDLE, &[]).u32();
+    let node = fn_00558310(e, Ptr::new(handle));
+    e.call(NODE_SET_TRANSLATION, &args![node, position]);
+    let node = fn_00558310(e, Ptr::new(handle));
+    e.call(NODE_SET_ROTATION, &args![node, rotation]);
+    // The record is 0x4c bytes; the update record and the word the game's
+    // exception state shared with the statistics pointers follow it.
+    e.with_stack(0x4c + UPDATE_RECORD_SIZE + 4, |e, frame| {
+        let record = frame;
+        let update = frame.byte_add(0x4c);
+        let shared_word = frame.byte_add(0x4c + UPDATE_RECORD_SIZE);
+        e.call(UPDATE_RECORD_CONSTRUCT, &args![update, 0.0f32, 0u32, 0u32]);
+        let node = fn_00558310(e, Ptr::new(handle));
+        e.call(CONTROLLER_UPDATE, &args![node, update]);
+        let started = e.call(TICK_COUNT, &[]).u32();
+        let frame_object: u32 = e.global(RENDER_FRAME_OBJECT);
+        e.call(RENDER_FRAME_STEP, &args![frame_object]);
+        e.mem.set_u32(shared_word.addr(), 0);
+        fn_00558690(e, record);
+        let finished = e.call(TICK_COUNT, &[]).u32();
+        e.mem
+            .set_u32(record.addr() + 0x10, finished.wrapping_sub(started));
+        // The eleven pointers: words 0 and 1 of the record, the rest the
+        // shared word, as in the call.
+        let holder = e.call(STATISTICS_HOLDER, &[]).u32();
+        let source = fn_005585e0(e, Ptr::new(holder));
+        let targets = [
+            record.addr(),
+            shared_word.addr(),
+            record.addr() + 4,
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+            shared_word.addr(),
+        ];
+        fn_00558600(e, Ptr::new(source), targets.map(Ptr::new));
+        let table = e.call(TABLE_ENTRY, &args![0u32]).u32();
+        let value = e.call(SHADOW_SCENE_VALUE, &args![table]).u16();
+        e.mem.set_u32(record.addr() + 0x0c, u32::from(value));
+        // Unsigned comparisons in the game's order.
+        let limit = |e: &Engine, index: u32| e.mem.u32(config.addr() + 4 * index);
+        let word = |e: &Engine, index: u32| e.mem.u32(record.addr() + 4 * index);
+        let exceeded = word(e, 0) > limit(e, 0)
+            || word(e, 1) > limit(e, 1)
+            || word(e, 2) > limit(e, 2)
+            || word(e, 3) > limit(e, 3)
+            || word(e, 5) > limit(e, 5)
+            || word(e, 4) > limit(e, 4);
+        let callback = e.mem.u32(config.addr() + 0x18);
+        if exceeded && callback != 0 {
+            e.mem.set_u32(record.addr() + 0x18, cell.addr());
+            copy_words(e, record.addr() + 0x1c, position.addr(), 3);
+            copy_words(e, record.addr() + 0x28, rotation.addr(), 9);
+            let user_data = e.mem.u32(config.addr() + 0x1c);
+            e.call(callback, &args![record, user_data]);
+        }
+        !exceeded
+    })
+}
+
+// Translated from 005585e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The pointer held by the slot at `this + 8` (`00559450`). The map has no
+/// name for it.
+pub fn fn_005585e0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(SLOT_GET_POINTER, &args![this.addr() + 8]).u32()
+}
+
+// Translated from 00558600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the eleven statistics words (`011f9fc8`, `011f9fcc`, `011f9fd8`,
+/// `011f9fdc`, `011f9fe0`, `011f9fe4`, `011f9fd0`, `011f9fd4`, `011f9fe8`,
+/// `011f9ff0`, `011f9fec`) through its eleven pointer parameters, in that
+/// order (a pointer that appears twice keeps the last word). `this` is not
+/// used. The map has no name for it.
+pub fn fn_00558600(e: &mut Engine, _this: Ptr, targets: [Ptr; 11]) {
+    for (target, source) in targets.iter().zip(STATISTICS_SOURCES) {
+        let word: u32 = e.global(source);
+        e.mem.set_u32(target.addr(), word);
+    }
+}
+
+// Translated from 00558690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of the statistics record: the default limits
+/// (`fn_00557d50`), then `006815c0` (a function that returns its `this`) on
+/// `+0x1c` and `+0x28`. Returns `this`. The map has no name for it.
+pub fn fn_00558690(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_00557d50(e, this);
+    e.call(LIST_NODE_ITEM_ADDRESS, &args![this.addr() + 0x1c]);
+    e.call(LIST_NODE_ITEM_ADDRESS, &args![this.addr() + 0x28]);
+    this
+}
+
+// Translated from 005586c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// cdecl `(record)`: the report callback of the default configuration,
+/// `SaveRenderFailureData(record)`.
+pub fn fn_005586c0(e: &mut Engine, record: Ptr) {
+    tes_object_cell_save_render_failure_data(e, record);
+}
+
+// Translated from 00557dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::RenderTestCell` (Xbox PDB), cdecl `(cell, config,
+/// by_reference)`: does nothing without a cell that has a 3D (`00545cb0`).
+/// With the default configuration (`fn_00557da0`) when `config` is null, it
+/// saves the render camera's translation and rotation, then renders the
+/// cell from a set of positions with `fn_00558330`: the player's
+/// (virtual `+0x1d0` of `011dea3c`, `0045bb80`) when `by_reference` is 0,
+/// otherwise the positions of the navmesh triangle centres (3D lifted by
+/// `118.0`) when the cell has navmeshes, or those of its references
+/// (stopping when `008256d0` says so). The camera is restored and
+/// `"!!!RenderTestCell failed!!!..."` is printed when any render failed.
+/// The C++ exception frames are not translated.
+pub fn tes_object_cell_render_test_cell(e: &mut Engine, cell: Ptr, config: Ptr, by_reference: u8) {
+    if cell.is_null() || e.call(CELL_NODE_OF_CELL, &args![cell]).u32() == 0 {
+        return;
+    }
+    // The game's locals: the default configuration (0x20), the saved
+    // translation (12) and rotation (36), the update record (12), a smart
+    // pointer slot (4), the navmesh centre (12) and the reference position
+    // (12).
+    e.with_stack(0x80, |e, frame| {
+        let default_config = frame;
+        let saved_translation = frame.byte_add(0x20);
+        let saved_rotation = frame.byte_add(0x2c);
+        let update = frame.byte_add(0x50);
+        let slot = frame.byte_add(0x5c);
+        let centre = frame.byte_add(0x60);
+        let position = frame.byte_add(0x6c);
+        let mut passed = true;
+        fn_00557da0(e, default_config);
+        let config = if config.is_null() {
+            default_config.cast()
+        } else {
+            config
+        };
+        e.call(LIST_NODE_ITEM_ADDRESS, &args![saved_translation]);
+        e.call(LIST_NODE_ITEM_ADDRESS, &args![saved_rotation]);
+        let handle = Ptr::new(e.call(RENDER_HANDLE, &[]).u32());
+        let node = fn_00558310(e, handle);
+        let translation = e.call(NODE_LOCAL_TRANSLATION, &args![node]).u32();
+        copy_words(e, saved_translation.addr(), translation, 3);
+        let node = fn_00558310(e, handle);
+        let rotation = e.call(NODE_LOCAL_ROTATION, &args![node]).u32();
+        copy_words(e, saved_rotation.addr(), rotation, 9);
+        if by_reference == 0 {
+            let player: u32 = e.global(PLAYER_OBJECT);
+            let player_node = e.vcall(player, REFERENCE_NODE_SLOT, &[]).u32();
+            let place = e.call(NODE_POSITION_POINTER, &args![player_node]).u32();
+            if !fn_00558330(e, cell, Ptr::new(place), config) {
+                passed = false;
+            }
+        } else {
+            let array = e.call(CELL_NAV_MESH_ARRAY, &args![cell]).u32();
+            if array != 0 && e.call(NAV_MESH_ARRAY_COUNT, &args![array]).u32() != 0 {
+                let mut triangles = 0u32;
+                let mut index = 0u32;
+                while index < e.call(NAV_MESH_ARRAY_COUNT, &args![array]).u32() {
+                    e.call(NAV_MESH_BY_INDEX, &args![array, slot, index]);
+                    let mesh = e.call(SLOT_GET_POINTER, &args![slot]).u32();
+                    let count = fn_00558200(e, Ptr::new(mesh));
+                    triangles = count.wrapping_add(triangles);
+                    e.call(NAV_MESH_SLOT_RELEASE, &args![slot]);
+                    index += 1;
+                }
+                e.call(
+                    DEBUG_PRINT_LINE,
+                    &args![TESTING_TRIANGLES_FORMAT, triangles],
+                );
+                let mut index = 0u32;
+                while index < e.call(NAV_MESH_ARRAY_COUNT, &args![array]).u32() {
+                    e.call(NAV_MESH_BY_INDEX, &args![array, slot, index]);
+                    if e.call(NAV_MESH_SLOT_TEST, &args![slot]).u32() != 0 {
+                        let mesh = e.call(SLOT_GET_POINTER, &args![slot]).u32();
+                        let count = fn_00558200(e, Ptr::new(mesh));
+                        let mut triangle = 0u32;
+                        while triangle < count {
+                            let mesh = e.call(SLOT_GET_POINTER, &args![slot]).u32();
+                            nav_mesh_get_center(e, Ptr::new(mesh), centre, triangle as u16);
+                            let lift: f64 = e.global(TRIANGLE_LIFT);
+                            let height = (f64::from(e.mem.f32(centre.addr() + 8)) + lift) as f32;
+                            e.mem.set_f32(centre.addr() + 8, height);
+                            if !fn_00558330(e, cell, centre.cast(), config) {
+                                passed = false;
+                            }
+                            triangle += 1;
+                        }
+                    }
+                    e.call(NAV_MESH_SLOT_RELEASE, &args![slot]);
+                    index += 1;
+                }
+            } else {
+                let list = e.call(CELL_REFERENCES, &args![cell]).u32();
+                let count = e.call(LIST_COUNT, &args![list]).u32();
+                e.call(DEBUG_PRINT_LINE, &args![TESTING_POSITIONS_FORMAT, count]);
+                let mut node = e.call(CELL_REFERENCES, &args![cell]).u32();
+                while node != 0 && !e.call(LIST_NODE_IS_END, &args![node]).bool() {
+                    let item = node_item(e, Ptr::new(node)).addr();
+                    node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+                    let place = e.vcall(item, REFERENCE_POSITION_SLOT, &[]).u32();
+                    copy_words(e, position.addr(), place, 3);
+                    if e.vcall(item, REFERENCE_NODE_SLOT, &[]).u32() != 0 {
+                        let item_node = e.vcall(item, REFERENCE_NODE_SLOT, &[]).u32();
+                        let bound = e.call(WORLD_BOUND, &args![item_node]).u32();
+                        let centre_of_bound = e.call(LIST_NODE_ITEM_ADDRESS, &args![bound]).u32();
+                        copy_words(e, position.addr(), centre_of_bound, 3);
+                    }
+                    if !fn_00558330(e, cell, position.cast(), config) {
+                        passed = false;
+                    }
+                }
+            }
+        }
+        let node = fn_00558310(e, handle);
+        e.call(NODE_SET_TRANSLATION, &args![node, saved_translation]);
+        let node = fn_00558310(e, handle);
+        e.call(NODE_SET_ROTATION, &args![node, saved_rotation]);
+        e.call(UPDATE_RECORD_CONSTRUCT, &args![update, 0.0f32, 0u32, 0u32]);
+        let node = fn_00558310(e, handle);
+        e.call(CONTROLLER_UPDATE, &args![node, update]);
+        if !passed {
+            e.call(DEBUG_PRINT_LINE, &args![RENDER_FAILED_MESSAGE]);
+        }
+    });
+}
+
+// Translated from 005586e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::SaveRenderFailureData` (Xbox PDB), cdecl `(record)`, the
+/// callback `RenderTestCell` calls with a failing render's statistics
+/// record (words 0 to 3 and 4 as counts, the cell at `+0x18`, the camera
+/// position at `+0x1c`, its rotation matrix at `+0x28`). A null record only
+/// clears `011ca218`. Otherwise it makes the `RTF` directory (`00b00800`) and
+/// the file name `.\RTF\INT-<cell name>.txt` (interior) or `.\RTF\EXT-<world
+/// space name>-(<x>, <y>).txt`, with `-<cell name>` before `.txt` when the
+/// cell has a name (`00401280`). When the cell is not the one in `011ca218` the
+/// file is deleted (`00aff0b0`), created and given the header line;
+/// otherwise it is opened for appending. One line follows: the form id of
+/// the cell, the camera position, the rotation as Euler angles in degrees
+/// (`ToEulerAnglesXYZ`, times `57.29...`) and the five counts. The file object
+/// (`BSFile`, `0x158` bytes) is destroyed through its virtual destructor.
+/// The C++ exception frames and the stack cookie are not translated.
+pub fn tes_object_cell_save_render_failure_data(e: &mut Engine, record: Ptr) {
+    if record.is_null() {
+        e.set_global(LAST_RENDER_FAILURE_CELL, 0u32);
+        return;
+    }
+    e.call(CREATE_DIRECTORY, &args![RTF_DIRECTORY_NAME]);
+    // The path buffer, the line buffer and the three Euler angles.
+    e.with_stack(2 * PATH_BUFFER_SIZE + 12, |e, frame| {
+        let path = frame.addr();
+        let line = frame.addr() + PATH_BUFFER_SIZE;
+        let angles = frame.addr() + 2 * PATH_BUFFER_SIZE;
+        let cell = e.mem.u32(record.addr() + 0x18);
+        if e.call(CELL_IS_INTERIOR, &args![cell]).bool() {
+            let name = e.vcall(cell, NAME_SLOT, &[]).u32();
+            e.call(
+                FORMAT_TEXT,
+                &args![
+                    path,
+                    PATH_BUFFER_SIZE,
+                    INTERIOR_FILE_FORMAT,
+                    RTF_PREFIX,
+                    name
+                ],
+            );
+        } else {
+            let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+            let name_pointer = e.call(CELL_NAME_POINTER, &args![cell]).u32();
+            if e.mem.u8(name_pointer) != 0 {
+                let cell_name = e.vcall(cell, NAME_SLOT, &[]).u32();
+                let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+                let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+                let world_name = e.vcall(world_space, NAME_SLOT, &[]).u32();
+                e.call(
+                    FORMAT_TEXT,
+                    &args![
+                        path,
+                        PATH_BUFFER_SIZE,
+                        EXTERIOR_NAMED_FILE_FORMAT,
+                        RTF_PREFIX,
+                        world_name,
+                        x,
+                        y,
+                        cell_name
+                    ],
+                );
+            } else {
+                let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+                let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+                let world_name = e.vcall(world_space, NAME_SLOT, &[]).u32();
+                e.call(
+                    FORMAT_TEXT,
+                    &args![
+                        path,
+                        PATH_BUFFER_SIZE,
+                        EXTERIOR_FILE_FORMAT,
+                        RTF_PREFIX,
+                        world_name,
+                        x,
+                        y
+                    ],
+                );
+            }
+        }
+        let last: u32 = e.global(LAST_RENDER_FAILURE_CELL);
+        let file;
+        if last != cell {
+            e.call(DELETE_FILE, &args![path]);
+            let memory = e.call(OPERATOR_NEW, &args![FILE_SIZE]).u32();
+            file = if memory != 0 {
+                e.call(
+                    FILE_CONSTRUCT,
+                    &args![memory, path, FILE_MODE_CREATE, FILE_BUFFER_SIZE, 0u32],
+                )
+                .u32()
+            } else {
+                0
+            };
+            e.vcall(file, FILE_OPEN_SLOT, &args![0u32, 0u32]);
+            let origin: u32 = e.global(FILE_SEEK_ORIGIN);
+            e.vcall(file, FILE_SEEK_SLOT, &args![0u32, origin]);
+            e.call(FORMAT_TEXT, &args![line, PATH_BUFFER_SIZE, HEADER_FORMAT]);
+            let length = e.call(STRING_LENGTH, &args![line]).u32();
+            e.vcall(file, FILE_WRITE_SLOT, &args![line, length]);
+            e.set_global(LAST_RENDER_FAILURE_CELL, cell);
+        } else {
+            let memory = e.call(OPERATOR_NEW, &args![FILE_SIZE]).u32();
+            file = if memory != 0 {
+                e.call(
+                    FILE_CONSTRUCT,
+                    &args![memory, path, FILE_MODE_APPEND, FILE_BUFFER_SIZE, 0u32],
+                )
+                .u32()
+            } else {
+                0
+            };
+            e.vcall(file, FILE_OPEN_SLOT, &args![0u32, 0u32]);
+        }
+        // The three angles: x, y, z (the game's locals hold them apart).
+        e.call(
+            MATRIX_TO_EULER,
+            &args![record.addr() + 0x28, angles, angles + 4, angles + 8],
+        );
+        let degrees: f64 = e.global(RADIANS_TO_DEGREES);
+        let angle = |e: &Engine, index: u32| f64::from(e.mem.f32(angles + 4 * index)) * degrees;
+        let position = |e: &Engine, offset: u32| f64::from(e.mem.f32(record.addr() + offset));
+        let form_id = e.call(FORM_ID, &args![cell]).u32();
+        let mut words: Vec<u32> = vec![line, PATH_BUFFER_SIZE, LINE_FORMAT, form_id];
+        let values = [
+            position(e, 0x1c),
+            position(e, 0x20),
+            position(e, 0x24),
+            angle(e, 0),
+            angle(e, 1),
+            angle(e, 2),
+        ];
+        for value in values {
+            words.extend(args![value]);
+        }
+        for offset in [0x10u32, 0x00, 0x04, 0x08, 0x0c] {
+            words.push(e.mem.u32(record.addr() + offset));
+        }
+        e.call(FORMAT_TEXT, &words);
+        let length = e.call(STRING_LENGTH, &args![line]).u32();
+        e.vcall(file, FILE_WRITE_SLOT, &args![line, length]);
+        if file != 0 {
+            e.vcall(file, 0, &args![1u32]);
+        }
+    });
+}
+
+// Translated from 00558b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `pLightingTemplate` (`+0xd8`) of the cell. The map has no name for it.
+pub fn fn_00558b40(e: &mut Engine, this: Ptr<TESObjectCELL>) -> u32 {
+    e.get(this, TESObjectCELL::pLightingTemplate).addr()
+}
+
+// Translated from 00558b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `pLightingTemplate` (`+0xd8`). The map has no name for it.
+pub fn fn_00558b60(e: &mut Engine, this: Ptr<TESObjectCELL>, value: Ptr) {
+    e.set(this, TESObjectCELL::pLightingTemplate, value);
+}
+
+// Translated from 00558b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `iLightingTemplateInheritanceFlags & mask != 0` (`+0xdc`). The map has no
+/// name for it.
+pub fn fn_00558b80(e: &mut Engine, this: Ptr<TESObjectCELL>, mask: u32) -> bool {
+    e.get(this, TESObjectCELL::iLightingTemplateInheritanceFlags) & mask != 0
+}
+
+// Translated from 00558ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the held word of every object whose held word equals `key`: for
+/// each node of the cell's reference list (`009604f0`) up to the first whose
+/// item is null, `fn_00558c30(item) == key` leads to `fn_00558c60(item, 0)`;
+/// then the same for the object at `011dea3c`. The map has no name for it.
+pub fn fn_00558ba0(e: &mut Engine, this: Ptr, key: u32) {
+    let mut node = e.call(CELL_REFERENCES, &args![this]).u32();
+    while node != 0 {
+        let address = e.call(LIST_NODE_ITEM_ADDRESS, &args![node]).u32();
+        if e.mem.u32(address) == 0 {
+            break;
+        }
+        let item = node_item(e, Ptr::new(node));
+        if fn_00558c30(e, item) == key {
+            fn_00558c60(e, item, 0);
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+    let player = Ptr::new(e.global::<u32>(DISTANCE_SOURCE_SINGLETON));
+    if fn_00558c30(e, player) == key {
+        fn_00558c60(e, player, 0);
+    }
+}
+
+// Translated from 00558c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word the pointer at `+0x64` points to, or `0` without a pointer.
+/// The map has no name for it.
+pub fn fn_00558c30(e: &mut Engine, this: Ptr) -> u32 {
+    let held = e.mem.u32(this.addr() + HELD_POINTER_OFFSET);
+    if held == 0 {
+        0
+    } else {
+        e.mem.u32(held)
+    }
+}
+
+// Translated from 00558c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word the pointer at `+0x64` points to, when there
+/// is a pointer. The map has no name for it.
+pub fn fn_00558c60(e: &mut Engine, this: Ptr, value: u32) {
+    let held = e.mem.u32(this.addr() + HELD_POINTER_OFFSET);
+    if held != 0 {
+        e.mem.set_u32(held, value);
+    }
+}
+
+// Translated from 00558c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For each node of the cell's reference list up to the first with a null
+/// item: when the item's virtual `+0x100` is false, its base object's form
+/// type is not `0x1c`, `00549580(item)` is true and the cell has a 3D
+/// (`00545cb0`): `00c6a270(3D, 1, 1, 1)` (engine map `bhkWorld::Activate`).
+/// The map has no name for it.
+pub fn fn_00558c90(e: &mut Engine, this: Ptr<TESObjectCELL>) {
+    let mut node = e.call(CELL_REFERENCES, &args![this]).u32();
+    while node != 0 {
+        let address = e.call(LIST_NODE_ITEM_ADDRESS, &args![node]).u32();
+        if e.mem.u32(address) == 0 {
+            break;
+        }
+        let item = node_item(e, Ptr::new(node)).addr();
+        if !e.vcall(item, OWNER_REFUSES_SLOT, &[]).bool() {
+            let base = e.call(REFERENCE_BASE_OBJECT, &args![item]).u32();
+            if e.call(FORM_TYPE, &args![base]).u32() != DOOR_FORM_TYPE
+                && e.call(BASE_FORM_FLAG_40, &args![item]).bool()
+                && e.call(CELL_NODE_OF_CELL, &args![this]).u32() != 0
+            {
+                let node_3d = e.call(CELL_NODE_OF_CELL, &args![this]).u32();
+                e.call(WORLD_ACTIVATE, &args![node_3d, 1u32, 1u32, 1u32]);
+            }
+        }
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+// Translated from 00558d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor `(this, size)` of a small class: the base constructor
+/// `00558eb0(size)`, then the vtable `0102f2f8`. Returns `this`. The map has
+/// no name for it.
+pub fn fn_00558d40(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.call(SMALL_CLASS_BASE_A, &args![this, size]);
+    e.mem.set_u32(this.addr(), SMALL_CLASS_VTABLE_A);
+    this
+}
+
+// Translated from 00558d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor `(this, size)` of a small class: the base constructor
+/// `00558fb0(size)`, then the vtable `0102f318`. Returns `this`. The map has
+/// no name for it.
+pub fn fn_00558d70(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.call(SMALL_CLASS_BASE_B, &args![this, size]);
+    e.mem.set_u32(this.addr(), SMALL_CLASS_VTABLE_B);
+    this
+}
+
+// Translated from 00558da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor `(this, size)` of a small class: the base constructor
+/// `005590b0(size)`, then the vtable `0102f338`. Returns `this`. The map has
+/// no name for it.
+pub fn fn_00558da0(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.call(SMALL_CLASS_BASE_C, &args![this, size]);
+    e.mem.set_u32(this.addr(), SMALL_CLASS_VTABLE_C);
+    this
+}
+
+// Translated from 00558dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of element `index` of the 16-byte records whose array
+/// pointer is at `this + 4`. The map has no name for it.
+pub fn fn_00558dd0(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
+    let base = e.mem.u32(this.addr() + 4);
+    Ptr::new((index << 4).wrapping_add(base))
+}
+
+// Translated from 00558df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor the engine map names
+/// `NiTMap<TESObjectREFR*,NiNode*>`: the member destructor `00558f20`, then
+/// `00401030(this)` (the block release) when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_00558df0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(SMALL_CLASS_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(DEALLOCATE_BLOCK, &args![this]);
+    }
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3060,6 +4241,59 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005573e0, fn_005573e0(Ptr<TESObjectCELL>)),
         entry!(0x00557470, fn_00557470(Ptr<TESObjectCELL>)),
         entry!(0x005574d0, fn_005574d0(Ptr<TESObjectCELL>)),
+        entry!(0x005575d0, fn_005575d0(Ptr<TESObjectCELL>)),
+        entry!(0x005576c0, fn_005576c0(Ptr<TESObjectCELL>)),
+        entry!(0x00557760, fn_00557760(Ptr, Ptr)),
+        entry!(
+            0x005577b0,
+            tes_object_cell_process_addon_nodes_for_refs(Ptr<TESObjectCELL>, u8)
+        ),
+        entry!(0x005578e0, fn_005578e0(Ptr, u32, u32, u32) -> u32),
+        entry!(0x005578f0, fn_005578f0(Ptr)),
+        entry!(0x00557990, fn_00557990(Ptr, u8, u32)),
+        entry!(0x00557aa0, fn_00557aa0(Ptr<TESObjectCELL>)),
+        entry!(0x00557ae0, fn_00557ae0(Ptr<TESObjectCELL>)),
+        entry!(0x00557be0, fn_00557be0(Ptr)),
+        entry!(0x00557c40, fn_00557c40(Ptr<TESObjectCELL>)),
+        entry!(0x00557d10, fn_00557d10(Ptr<TESObjectCELL>) -> bool),
+        entry!(
+            0x00557d30,
+            tes_object_cell_all3d_with_visible_distant_fading_in(Ptr<TESObjectCELL>) -> u8
+        ),
+        entry!(0x00557d50, fn_00557d50(Ptr) -> Ptr),
+        entry!(0x00557da0, fn_00557da0(Ptr) -> Ptr),
+        entry!(0x00557dd0, tes_object_cell_render_test_cell(Ptr, Ptr, u8)),
+        entry!(0x00558200, fn_00558200(Ptr) -> u32),
+        entry!(0x00558220, nav_mesh_get_center(Ptr, Ptr, u16) -> Ptr),
+        entry!(0x005582d0, fn_005582d0(Ptr, u32) -> u16),
+        entry!(0x005582f0, fn_005582f0(Ptr, u16) -> Ptr),
+        entry!(0x00558310, fn_00558310(Ptr) -> u32),
+        entry!(0x00558330, fn_00558330(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x00558430, fn_00558430(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x005585e0, fn_005585e0(Ptr) -> u32),
+        (
+            0x00558600,
+            (|e: &mut Engine, a: &[u32]| {
+                let targets: [Ptr; 11] = std::array::from_fn(|index| Ptr::new(a[1 + index]));
+                fn_00558600(e, Ptr::new(a[0]), targets);
+                Ret::default()
+            }) as AbiFn,
+        ),
+        entry!(0x00558690, fn_00558690(Ptr) -> Ptr),
+        entry!(0x005586c0, fn_005586c0(Ptr)),
+        entry!(0x005586e0, tes_object_cell_save_render_failure_data(Ptr)),
+        entry!(0x00558b40, fn_00558b40(Ptr<TESObjectCELL>) -> u32),
+        entry!(0x00558b60, fn_00558b60(Ptr<TESObjectCELL>, Ptr)),
+        entry!(0x00558b80, fn_00558b80(Ptr<TESObjectCELL>, u32) -> bool),
+        entry!(0x00558ba0, fn_00558ba0(Ptr, u32)),
+        entry!(0x00558c30, fn_00558c30(Ptr) -> u32),
+        entry!(0x00558c60, fn_00558c60(Ptr, u32)),
+        entry!(0x00558c90, fn_00558c90(Ptr<TESObjectCELL>)),
+        entry!(0x00558d40, fn_00558d40(Ptr, u32) -> Ptr),
+        entry!(0x00558d70, fn_00558d70(Ptr, u32) -> Ptr),
+        entry!(0x00558da0, fn_00558da0(Ptr, u32) -> Ptr),
+        entry!(0x00558dd0, fn_00558dd0(Ptr, u32) -> Ptr),
+        entry!(0x00558df0, fn_00558df0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -3132,11 +4366,11 @@ mod tests {
     #[test]
     fn functions_are_registered() {
         let table = funcs();
-        assert_eq!(table.len(), 80);
+        assert_eq!(table.len(), 120);
         let mut seen: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
         seen.sort_unstable();
         seen.dedup();
-        assert_eq!(seen.len(), 80);
+        assert_eq!(seen.len(), 120);
         assert!(seen.iter().all(|a| (0x0055_2470..0x0055_8e20).contains(a)));
     }
 
@@ -7077,5 +8311,1359 @@ mod tests {
             assert!(calls_to(&log, TERRAIN_HIDE_TREE).is_empty(), "{step}");
             assert!(calls_to(&log, TERRAIN_SET_FLAG).is_empty(), "{step}");
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Third batch.
+
+    /// A reference for the obstacle walks: `+0x30` is the answer of virtual
+    /// `+0x15c`, `+0x34` the base object, `+0x38` the open state; a base
+    /// object holds its form type at `+4` and the sliding flag at `+8`.
+    fn obstacle_reference(
+        e: &mut Engine,
+        obstacle: bool,
+        base_type: u8,
+        open_state: u32,
+        sliding: bool,
+    ) -> u32 {
+        let base = e.mem.alloc(0x10);
+        e.mem.set_u8(base + 4, base_type);
+        e.mem.set_u8(base + 8, u8::from(sliding));
+        let at = object(e, 0x60);
+        e.mem.set_u8(at + 0x30, u8::from(obstacle));
+        e.mem.set_u32(at + 0x34, base);
+        e.mem.set_u32(at + 0x38, open_state);
+        at
+    }
+
+    fn obstacle_setup(e: &mut Engine) {
+        e.register(fake(0x15c), |e, a| e.mem.u8(a[0] + 0x30).into_ret());
+        e.register(REFERENCE_BASE_OBJECT, |e, a| {
+            e.mem.u32(a[0] + 0x34).into_ret()
+        });
+        e.register(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
+        e.register(GET_OPEN_STATE, |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(IS_SLIDING_DOOR, |e, a| e.mem.u8(a[0] + 8).into_ret());
+        e.register(OBSTACLE_MANAGER_GET, |_, a| (a[0] + 1).into_ret());
+        quiet(
+            e,
+            &[
+                OBSTACLE_ADD,
+                OBSTACLE_REMOVE,
+                OBSTACLE_DOOR_CLOSED,
+                OBSTACLE_DOOR_REMOVE,
+            ],
+        );
+    }
+
+    /// The references of the two obstacle walks, in list order: a null item,
+    /// a plain reference, one with an obstacle, a door with an obstacle that
+    /// is open and sliding, an open door, an open sliding door and a closed
+    /// door.
+    fn obstacle_cell(e: &mut Engine) -> (Ptr<TESObjectCELL>, [u32; 6]) {
+        obstacle_setup(e);
+        let plain = obstacle_reference(e, false, 5, 0, false);
+        let flagged = obstacle_reference(e, true, 5, 0, false);
+        let door_flagged = obstacle_reference(e, true, 0x1c, 1, true);
+        let open_door = obstacle_reference(e, false, 0x1c, 1, false);
+        let open_sliding = obstacle_reference(e, false, 0x1c, 1, true);
+        let closed = obstacle_reference(e, false, 0x1c, 0, false);
+        let cell = reference_list_setup(
+            e,
+            &[
+                0,
+                plain,
+                flagged,
+                door_flagged,
+                open_door,
+                open_sliding,
+                closed,
+            ],
+        );
+        (
+            cell,
+            [
+                flagged,
+                door_flagged,
+                open_door,
+                open_sliding,
+                closed,
+                plain,
+            ],
+        )
+    }
+
+    #[test]
+    fn obstacles_are_added_for_flagged_references_and_open_doors() {
+        let mut e = engine();
+        let (cell, [flagged, door_flagged, open_door, _open_sliding, closed, _]) =
+            obstacle_cell(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_75d0, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(addresses(&log)[0], CELL_LOCK_ENTER);
+        assert_eq!(*addresses(&log).last().unwrap(), CELL_LOCK_LEAVE);
+        assert_eq!(
+            calls_to(&log, OBSTACLE_ADD),
+            vec![
+                vec![flagged + 1],
+                vec![door_flagged + 1],
+                vec![open_door + 1]
+            ]
+        );
+        assert_eq!(calls_to(&log, OBSTACLE_DOOR_CLOSED), vec![vec![closed + 1]]);
+        // The sliding open doors are asked, not added.
+        assert_eq!(calls_to(&log, IS_SLIDING_DOOR).len(), 3);
+        assert!(calls_to(&log, OBSTACLE_REMOVE).is_empty());
+    }
+
+    #[test]
+    fn obstacles_are_removed_for_flagged_references_and_doors() {
+        let mut e = engine();
+        let (cell, [flagged, door_flagged, open_door, open_sliding, closed, _]) =
+            obstacle_cell(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_76c0, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, OBSTACLE_REMOVE),
+            vec![vec![flagged + 1], vec![door_flagged + 1]]
+        );
+        assert_eq!(
+            calls_to(&log, OBSTACLE_DOOR_REMOVE),
+            vec![
+                vec![door_flagged + 1],
+                vec![open_door + 1],
+                vec![open_sliding + 1],
+                vec![closed + 1]
+            ]
+        );
+        assert!(calls_to(&log, OBSTACLE_ADD).is_empty());
+        assert_eq!(*addresses(&log).last().unwrap(), CELL_LOCK_LEAVE);
+    }
+
+    #[test]
+    fn the_held_pointer_is_released_before_it_is_replaced() {
+        let mut e = engine();
+        quiet(&mut e, &[RELEASE_HELD]);
+        let at = e.mem.alloc(0x80);
+        start_log(&mut e);
+        e.call(0x0055_7760, &args![at, 0x1111u32]);
+        assert_eq!(calls(&e), vec![]);
+        assert_eq!(e.mem.u32(at + 0x64), 0x1111);
+        start_log(&mut e);
+        e.call(0x0055_7760, &args![at, 0x2222u32]);
+        assert_eq!(calls(&e), vec![(RELEASE_HELD, vec![0x1111, 1])]);
+        assert_eq!(e.mem.u32(at + 0x64), 0x2222);
+        e.call(0x0055_7760, &args![at, 0u32]);
+        assert_eq!(e.mem.u32(at + 0x64), 0);
+    }
+
+    #[test]
+    fn addon_nodes_are_added_or_removed_for_references_with_a_3d() {
+        let mut e = engine();
+        e.register(REFERENCE_ADDON_TEST, |_, a| u32::from(a[1] == 2).into_ret());
+        e.register(fake(0x1d0), |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(fake(0x0c), |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        quiet(&mut e, &[ADD_ADDON_NODES, REMOVE_ADDON_NODES]);
+        let node = object(&mut e, 0x40);
+        e.mem.set_u32(node + 0x34, 0xabc);
+        let with_3d = object(&mut e, 0x60);
+        e.mem.set_u32(with_3d + 0x34, node);
+        let without_3d = object(&mut e, 0x60);
+        let cell = reference_list_setup(&mut e, &[0, without_3d, with_3d]);
+        start_log(&mut e);
+        e.call(0x0055_77b0, &args![cell, 1u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, ADD_ADDON_NODES), vec![vec![0xabc]]);
+        assert!(calls_to(&log, REMOVE_ADDON_NODES).is_empty());
+        // The list is advanced before the item is handled.
+        assert_eq!(
+            addresses(&log)[..5],
+            [
+                CELL_LOCK_ENTER,
+                CELL_REFERENCES,
+                LIST_NODE_ITEM_ADDRESS,
+                LIST_NODE_NEXT,
+                LIST_NODE_ITEM_ADDRESS
+            ]
+        );
+        // The 3D is asked twice for the reference that has one.
+        assert_eq!(calls_to(&log, fake(0x1d0)).len(), 3);
+        start_log(&mut e);
+        e.call(0x0055_77b0, &args![cell, 0u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, REMOVE_ADDON_NODES), vec![vec![0xabc]]);
+        assert!(calls_to(&log, ADD_ADDON_NODES).is_empty());
+        assert_eq!(*addresses(&log).last().unwrap(), CELL_LOCK_LEAVE);
+    }
+
+    #[test]
+    fn the_empty_method_returns_zero() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0055_78e0, &args![1u32, 2u32, 3u32, 4u32]).u32(), 0);
+    }
+
+    /// A node object with `children`: the count at `+0x10`, the elements from
+    /// `+0x14`; the doubles of the child count and element accessors.
+    fn node_with_children(e: &mut Engine, children: &[u32]) -> u32 {
+        let at = object(e, 0x80);
+        e.mem.set_u32(at + 0x10, children.len() as u32);
+        for (index, child) in children.iter().enumerate() {
+            e.mem.set_u32(at + 0x14 + 4 * index as u32, *child);
+        }
+        e.register(NODE_CHILD_COUNT, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(NODE_CHILD_AT, |e, a| {
+            e.mem.u32(a[0] + 0x14 + 4 * a[1]).into_ret()
+        });
+        at
+    }
+
+    #[test]
+    fn entries_named_cell_location_marker_are_called_back_with_their_index() {
+        let mut e = engine();
+        e.mem
+            .set_cstr(CELL_LOCATION_MARKER_NAME, b"CellLocationMarker");
+        e.register(ENTRY_HOLDER, |_, a| a[0].into_ret());
+        e.register(HOLDER_NAME, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        e.register(STRING_COMPARE, |e, a| {
+            u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+        });
+        quiet(&mut e, &[fake(0xf0)]);
+        let named = |e: &mut Engine, name: &[u8]| {
+            let at = e.mem.alloc(0x20);
+            let text = e.mem.alloc(0x20);
+            e.mem.set_cstr(text, name);
+            e.mem.set_u32(at + 0x10, text);
+            at
+        };
+        let marker_a = named(&mut e, b"CellLocationMarker");
+        let other = named(&mut e, b"SomethingElse");
+        let marker_b = named(&mut e, b"CellLocationMarker");
+        let nameless = e.mem.alloc(0x20);
+        let node = node_with_children(&mut e, &[marker_a, 0, other, nameless, marker_b]);
+        returns(&mut e, CELL_NODE_D, node);
+        start_log(&mut e);
+        e.call(0x0055_78f0, &args![0x1234u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, CELL_NODE_D), vec![vec![0x1234]]);
+        assert_eq!(
+            calls_to(&log, fake(0xf0)),
+            vec![vec![node, 0], vec![node, 4]]
+        );
+        // Without a node, nothing else happens.
+        returns(&mut e, CELL_NODE_D, 0);
+        start_log(&mut e);
+        e.call(0x0055_78f0, &args![0x1234u32]);
+        assert_eq!(addresses(&calls(&e)), vec![CELL_NODE_D]);
+    }
+
+    #[test]
+    fn nodes_of_the_second_level_are_updated_only_in_mode_4() {
+        let mut e = engine();
+        // Leaves hold their reference at `+0x10`; references the base object
+        // at `+0x34` and their 3D at `+0x38`; base objects the type at `+4`.
+        e.register(FIND_REFERENCE_FOR_3D, |e, a| {
+            e.mem.u32(a[0] + 0x10).into_ret()
+        });
+        e.register(REFERENCE_BASE_OBJECT, |e, a| {
+            e.mem.u32(a[0] + 0x34).into_ret()
+        });
+        e.register(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
+        e.register(fake(0x1d0), |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        quiet(&mut e, &[NODE_SET_FLAG]);
+        let reference = |e: &mut Engine, base_type: u8, base_at: Option<u32>| {
+            let base = base_at.unwrap_or_else(|| e.mem.alloc(0x10));
+            e.mem.set_u8(base + 4, base_type);
+            let at = object(e, 0x60);
+            e.mem.set_u32(at + 0x34, base);
+            e.mem.set_u32(at + 0x38, 0x3d00 + base_type as u32);
+            (at, base)
+        };
+        let leaf = |e: &mut Engine, reference: u32| {
+            let at = e.mem.alloc(0x20);
+            e.mem.set_u32(at + 0x10, reference);
+            at
+        };
+        let (plain, _) = reference(&mut e, 5, None);
+        let (skipped_type, _) = reference(&mut e, 0x1e, None);
+        let (skipped_form, form_base) = reference(&mut e, 6, None);
+        e.set_global(SKIPPED_FORM, form_base);
+        let leaves = [
+            leaf(&mut e, plain),
+            0,
+            leaf(&mut e, 0),
+            leaf(&mut e, skipped_type),
+            leaf(&mut e, skipped_form),
+        ];
+        let group = node_with_children(&mut e, &leaves);
+        let root = node_with_children(&mut e, &[0, group]);
+        returns(&mut e, CELL_CHILD_NODE, root);
+        start_log(&mut e);
+        e.call(0x0055_7990, &args![0x1234u32, 1u32, 4u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, CELL_CHILD_NODE), vec![vec![0x1234, 7]]);
+        assert_eq!(calls_to(&log, NODE_SET_FLAG), vec![vec![0x3d05, 1]]);
+        start_log(&mut e);
+        e.call(0x0055_7990, &args![0x1234u32, 1u32, 3u32]);
+        assert!(calls_to(&calls(&e), NODE_SET_FLAG).is_empty());
+        returns(&mut e, CELL_CHILD_NODE, 0);
+        start_log(&mut e);
+        e.call(0x0055_7990, &args![0x1234u32, 1u32, 4u32]);
+        assert_eq!(addresses(&calls(&e)), vec![CELL_CHILD_NODE]);
+    }
+
+    #[test]
+    fn the_fade_to_high_detail_starts_only_once() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        e.set(cell, TESObjectCELL::bFadingToLowDetail, true);
+        e.set(cell, TESObjectCELL::fLodFadeInPercent, 7.5);
+        e.call(0x0055_7aa0, &args![cell]);
+        assert!(e.get(cell, TESObjectCELL::bFadingToHighDetail));
+        assert!(!e.get(cell, TESObjectCELL::bFadingToLowDetail));
+        assert_eq!(e.get(cell, TESObjectCELL::fLodFadeInPercent), 0.0);
+        e.set(cell, TESObjectCELL::bFadingToLowDetail, true);
+        e.set(cell, TESObjectCELL::fLodFadeInPercent, 7.5);
+        e.call(0x0055_7aa0, &args![cell]);
+        assert!(e.get(cell, TESObjectCELL::bFadingToLowDetail));
+        assert_eq!(e.get(cell, TESObjectCELL::fLodFadeInPercent), 7.5);
+    }
+
+    /// Models for the two fade walks: a reference holds its model at `+0x30`,
+    /// a model its node at `+0x30` (the answer of virtual `+0x10`), a node
+    /// its type at `+0` and its distance at `+4`.
+    fn model_setup(e: &mut Engine) {
+        e.register(REFERENCE_MODEL, |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        e.register(fake(0x10), |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        e.register(MODEL_TYPE, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(MODEL_DISTANCE, |e, a| e.mem.f32(a[0] + 4).into_ret());
+        quiet(
+            e,
+            &[MODEL_PREPARE, SET_PROPERTY_FADE_ALPHA, MODEL_DETACH_STEP],
+        );
+    }
+
+    fn model_reference(e: &mut Engine, node_type: Option<(u32, f32)>) -> (u32, u32) {
+        let node = e.mem.alloc(0x10);
+        if let Some((kind, distance)) = node_type {
+            e.mem.set_u32(node, kind);
+            e.mem.set_f32(node + 4, distance);
+        }
+        let model = object(e, 0x40);
+        e.mem
+            .set_u32(model + 0x30, if node_type.is_some() { node } else { 0 });
+        let reference = e.mem.alloc(0x40);
+        e.mem.set_u32(reference + 0x30, model);
+        (reference, node)
+    }
+
+    #[test]
+    fn the_fade_to_high_detail_finishes_the_nodes_that_qualify() {
+        let mut e = engine();
+        model_setup(&mut e);
+        e.set_global(LOD_FADE_VALUE, 1.25f32);
+        e.set_global(MODEL_DISTANCE_LIMIT, 599.9000244140625f64);
+        let player = e.mem.alloc(0x40);
+        e.set_global(DISTANCE_SOURCE_SINGLETON, player);
+        let (type_six, node_six) = model_reference(&mut e, Some((6, 0.0)));
+        let (far, node_far) = model_reference(&mut e, Some((3, 700.0)));
+        let (near, _) = model_reference(&mut e, Some((3, 500.0)));
+        let (no_node, _) = model_reference(&mut e, None);
+        let no_model = e.mem.alloc(0x40);
+        let cell =
+            reference_list_setup(&mut e, &[0, player, no_model, no_node, near, type_six, far]);
+        e.set(cell, TESObjectCELL::bFadingToLowDetail, true);
+        start_log(&mut e);
+        e.call(0x0055_7ae0, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, MODEL_PREPARE),
+            vec![vec![node_six], vec![node_far]]
+        );
+        assert_eq!(
+            calls_to(&log, SET_PROPERTY_FADE_ALPHA),
+            vec![
+                vec![node_six, 1.0f32.to_bits()],
+                vec![node_far, 1.0f32.to_bits()]
+            ]
+        );
+        assert_eq!(e.get(cell, TESObjectCELL::fLodFadeInPercent), 1.25);
+        assert!(e.get(cell, TESObjectCELL::bDisplayHighDetail));
+        assert!(e.get(cell, TESObjectCELL::bUpdateTerrain));
+        assert!(!e.get(cell, TESObjectCELL::bFadingToHighDetail));
+        assert!(!e.get(cell, TESObjectCELL::bFadingToLowDetail));
+        assert_eq!(addresses(&log)[0], CELL_LOCK_ENTER);
+        assert_eq!(*addresses(&log).last().unwrap(), CELL_LOCK_LEAVE);
+    }
+
+    #[test]
+    fn every_cell_of_the_scene_finishes_its_fade() {
+        let mut e = engine();
+        let first = reference_list_setup(&mut e, &[]);
+        let second = e.new_object::<TESObjectCELL>();
+        e.set_global(SCENE_SINGLETON, 0x9900u32);
+        returns(&mut e, SCENE_CELL_COUNT, 3);
+        let cells = [first.addr(), 0, second.addr()];
+        let table = e.mem.alloc(12);
+        for (index, cell) in cells.iter().enumerate() {
+            e.mem.set_u32(table + 4 * index as u32, *cell);
+        }
+        e.set_global(LOD_FADE_VALUE, 2.0f32);
+        e.register_double(SCENE_CELL_AT, move |e, a| {
+            e.mem.u32(table + 4 * a[1]).into_ret()
+        });
+        start_log(&mut e);
+        e.call(0x0055_7be0, &args![0xdeadu32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, SCENE_CELL_COUNT), vec![vec![0x9900]; 4]);
+        assert_eq!(
+            calls_to(&log, SCENE_CELL_AT),
+            vec![vec![0x9900, 0], vec![0x9900, 1], vec![0x9900, 2]]
+        );
+        for cell in [first, second] {
+            assert!(e.get(cell, TESObjectCELL::bUpdateTerrain));
+            assert_eq!(e.get(cell, TESObjectCELL::fLodFadeInPercent), 2.0);
+        }
+        assert_eq!(calls_to(&log, CELL_LOCK_ENTER).len(), 2);
+    }
+
+    #[test]
+    fn the_detach_preparation_clears_the_fade_and_detaches_type_6_nodes() {
+        let mut e = engine();
+        model_setup(&mut e);
+        e.set_global(LOD_FADE_VALUE, 1.5f32);
+        let player = e.mem.alloc(0x40);
+        e.set_global(DISTANCE_SOURCE_SINGLETON, player);
+        let (type_six, node_six) = model_reference(&mut e, Some((6, 0.0)));
+        let (other, _) = model_reference(&mut e, Some((3, 900.0)));
+        let (no_node, _) = model_reference(&mut e, None);
+        let cell = reference_list_setup(&mut e, &[player, other, 0, no_node, type_six]);
+        e.set(cell, TESObjectCELL::bFadingToHighDetail, true);
+        e.set(cell, TESObjectCELL::bDisplayHighDetail, true);
+        e.set(cell, TESObjectCELL::bFadingToLowDetail, true);
+        start_log(&mut e);
+        e.call(0x0055_7c40, &args![cell]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, MODEL_DETACH_STEP), vec![vec![node_six]]);
+        assert!(calls_to(&log, MODEL_PREPARE).is_empty());
+        assert!(e.get(cell, TESObjectCELL::bFadingToLowDetail));
+        assert!(!e.get(cell, TESObjectCELL::bFadingToHighDetail));
+        assert!(!e.get(cell, TESObjectCELL::bDisplayHighDetail));
+        assert_eq!(e.get(cell, TESObjectCELL::fLodFadeInPercent), 1.5);
+        // Without the low-detail fade the flag stays clear.
+        e.set(cell, TESObjectCELL::bFadingToLowDetail, false);
+        e.call(0x0055_7c40, &args![cell]);
+        assert!(!e.get(cell, TESObjectCELL::bFadingToLowDetail));
+    }
+
+    #[test]
+    fn the_cell_state_is_tested_against_zero() {
+        let mut e = engine();
+        returns(&mut e, CELL_GET_STATE, 0);
+        assert!(!e.call(0x0055_7d10, &args![0x10u32]).bool());
+        returns(&mut e, CELL_GET_STATE, 4);
+        assert!(e.call(0x0055_7d10, &args![0x10u32]).bool());
+    }
+
+    #[test]
+    fn the_display_high_detail_byte_is_returned() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        assert_eq!(e.call(0x0055_7d30, &args![cell]).u8(), 0);
+        e.set(cell, TESObjectCELL::bDisplayHighDetail, true);
+        assert_eq!(e.call(0x0055_7d30, &args![cell]).u8(), 1);
+    }
+
+    #[test]
+    fn the_render_limits_default_to_the_game_values() {
+        let mut e = engine();
+        let at = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x0055_7d50, &args![at]).u32(), at);
+        let words: Vec<u32> = (0..7).map(|index| e.mem.u32(at + 4 * index)).collect();
+        assert_eq!(words, vec![0x4b0, 800_000, 100, 15, 0xffff_ffff, 8, 0]);
+    }
+
+    #[test]
+    fn the_render_configuration_installs_the_report_callback() {
+        let mut e = engine();
+        let at = e.mem.alloc(0x40);
+        e.mem.set_u32(at + 0x1c, 0x77);
+        assert_eq!(e.call(0x0055_7da0, &args![at]).u32(), at);
+        assert_eq!(e.mem.u32(at), 0x4b0);
+        assert_eq!(e.mem.u32(at + 0x14), 8);
+        assert_eq!(e.mem.u32(at + 0x18), 0x0055_86c0);
+        assert_eq!(e.mem.u32(at + 0x1c), 0);
+    }
+
+    #[test]
+    fn the_triangle_count_comes_from_the_array_at_0x38() {
+        let mut e = engine();
+        returns(&mut e, TRIANGLE_COUNT, 9);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8200, &args![0x5000u32]).u32(), 9);
+        assert_eq!(calls(&e), vec![(TRIANGLE_COUNT, vec![0x5038])]);
+    }
+
+    /// A navmesh with the triangle records at `+0x3c`; the vertex table
+    /// `(0,0,0) (3,0,0) (0,6,9)`.
+    fn centre_setup(e: &mut Engine) -> (u32, u32) {
+        let vertices = e.mem.alloc(36);
+        put_floats(e, vertices, &[0.0, 0.0, 0.0, 3.0, 0.0, 0.0, 0.0, 6.0, 9.0]);
+        let records = e.mem.alloc(32);
+        // Two 16-byte records: the vertices (1, 2, 0) and (0, 0, 1).
+        for (index, vertex) in [(0u32, 1u16), (1, 2), (2, 0), (8, 0), (9, 0), (10, 1)] {
+            e.mem.set_u16(records + 2 * index, vertex);
+        }
+        let mesh = e.mem.alloc(0x100);
+        e.mem.set_u32(mesh + 0x3c, records);
+        e.register_double(NAV_MESH_VERTEX, move |_, a| {
+            (vertices + 12 * a[1]).into_ret()
+        });
+        e.register(VECTOR_ADD_ASSIGN, |e, a| {
+            for index in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * index) + e.mem.f32(a[1] + 4 * index);
+                e.mem.set_f32(a[0] + 4 * index, sum);
+            }
+            Ret::default()
+        });
+        e.register(VECTOR_SCALE, |e, a| {
+            for index in 0..3 {
+                let scaled = e.mem.f32(a[0] + 4 * index) * f32::from_bits(a[1]);
+                e.mem.set_f32(a[0] + 4 * index, scaled);
+            }
+            Ret::default()
+        });
+        e.set_global(ONE_THIRD, 0.5f32);
+        (mesh, records)
+    }
+
+    #[test]
+    fn the_centre_of_a_triangle_is_the_scaled_sum_of_its_vertices() {
+        let mut e = engine();
+        let (mesh, _) = centre_setup(&mut e);
+        let out = e.mem.alloc(16);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8220, &args![mesh, out, 0u16]).u32(), out);
+        assert_eq!(floats(&e, out, 3), vec![1.5, 3.0, 4.5]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, NAV_MESH_VERTEX),
+            vec![vec![mesh, 1], vec![mesh, 2], vec![mesh, 0]]
+        );
+        // The second triangle holds the vertices 0, 0, 1.
+        e.call(0x0055_8220, &args![mesh, out, 1u16]);
+        assert_eq!(floats(&e, out, 3), vec![1.5, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn the_u16_table_entry_and_the_triangle_record_are_addressed() {
+        let mut e = engine();
+        let table = e.mem.alloc(16);
+        e.mem.set_u16(table + 6, 0x1234);
+        assert_eq!(e.call(0x0055_82d0, &args![table, 3u32]).u16(), 0x1234);
+        let mesh = e.mem.alloc(0x100);
+        e.mem.set_u32(mesh + 0x3c, 0x9000);
+        assert_eq!(e.call(0x0055_82f0, &args![mesh, 5u16]).u32(), 0x9050);
+        assert_eq!(e.call(0x0055_8dd0, &args![mesh + 0x38, 2u32]).u32(), 0x9020);
+    }
+
+    #[test]
+    fn the_scene_child_zero_is_asked_for() {
+        let mut e = engine();
+        returns(&mut e, SCENE_NODE_CHILD, 0x4321);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8310, &args![0x1000u32]).u32(), 0x4321);
+        assert_eq!(calls(&e), vec![(SCENE_NODE_CHILD, vec![0x1000, 0])]);
+    }
+
+    /// Doubles for one frame of the test render: the render handle, the
+    /// camera node (translation at `+0x10`: `1, 2, 3`; rotation at `+0x20`:
+    /// `1 .. 9`), the timer (`7` ticks per call), the statistics holder and
+    /// the shadow scene value (low 16 bits `4`). Returns the camera node.
+    fn render_setup(e: &mut Engine) -> u32 {
+        let camera = e.mem.alloc(0x60);
+        put_floats(e, camera + 0x10, &[1.0, 2.0, 3.0]);
+        put_floats(
+            e,
+            camera + 0x20,
+            &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0],
+        );
+        let holder = e.mem.alloc(0x20);
+        e.mem.set_u32(holder + 8, 0xaaaa);
+        e.set_global(RENDER_FRAME_OBJECT, 0x7000u32);
+        e.set_global(DEGREES_TO_RADIANS, 0.017453292519943295f64);
+        e.register(LIST_NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        returns(e, RENDER_HANDLE, 0x6000);
+        returns(e, SCENE_NODE_CHILD, camera);
+        returns(e, STATISTICS_HOLDER, holder);
+        returns(e, TABLE_ENTRY, 0x5100);
+        returns(e, SHADOW_SCENE_VALUE, 0x1_0004);
+        e.register(NODE_LOCAL_TRANSLATION, |_, a| (a[0] + 0x10).into_ret());
+        e.register(NODE_LOCAL_ROTATION, |_, a| (a[0] + 0x20).into_ret());
+        e.register(SLOT_GET_POINTER, |e, a| e.mem.u32(a[0]).into_ret());
+        let ticks = Rc::new(RefCell::new(0u32));
+        e.register_double(TICK_COUNT, move |_, _| {
+            *ticks.borrow_mut() += 7;
+            (*ticks.borrow()).into_ret()
+        });
+        quiet(
+            e,
+            &[
+                NODE_SET_TRANSLATION,
+                NODE_SET_ROTATION,
+                UPDATE_RECORD_CONSTRUCT,
+                CONTROLLER_UPDATE,
+                DEBUG_PRINT_LINE,
+                MAKE_X_ROTATION,
+                ROTATION_MATRIX_BUILD,
+                MATRIX_PRODUCT,
+                RENDER_FRAME_STEP,
+            ],
+        );
+        camera
+    }
+
+    /// A configuration in memory: the default limits, `callback` at `+0x18`
+    /// and `user_data` at `+0x1c`.
+    fn render_config(e: &mut Engine, callback: u32, user_data: u32) -> u32 {
+        let at = e.mem.alloc(0x20);
+        fn_00557da0(e, Ptr::new(at));
+        e.mem.set_u32(at + 0x18, callback);
+        e.mem.set_u32(at + 0x1c, user_data);
+        at
+    }
+
+    /// Records the three floats at every `NODE_SET_TRANSLATION` argument.
+    fn capture_translations(e: &mut Engine) -> Rc<RefCell<Vec<Vec<f32>>>> {
+        let seen = Rc::new(RefCell::new(vec![]));
+        let store = seen.clone();
+        e.register_double(NODE_SET_TRANSLATION, move |e, a| {
+            store.borrow_mut().push(floats(e, a[1], 3));
+            Ret::default()
+        });
+        seen
+    }
+
+    /// Records the record words and the user data of every report callback.
+    /// (record words, user data) of each report.
+    type Reports = Rc<RefCell<Vec<(Vec<u32>, u32)>>>;
+
+    fn capture_reports(e: &mut Engine, callback: u32) -> Reports {
+        let seen = Rc::new(RefCell::new(vec![]));
+        let store = seen.clone();
+        e.register_double(callback, move |e, a| {
+            let words = (0..19).map(|index| e.mem.u32(a[0] + 4 * index)).collect();
+            store.borrow_mut().push((words, a[1]));
+            Ret::default()
+        });
+        seen
+    }
+
+    #[test]
+    fn one_frame_is_rendered_and_checked_against_the_limits() {
+        let mut e = engine();
+        let camera = render_setup(&mut e);
+        e.set_global(STATISTICS_SOURCES[0], 3u32);
+        e.set_global(STATISTICS_SOURCES[2], 4u32);
+        let reports = capture_reports(&mut e, 0x7777_0000);
+        let config = render_config(&mut e, 0x7777_0000, 0x55);
+        let position = e.mem.alloc(16);
+        let rotation = e.mem.alloc(48);
+        start_log(&mut e);
+        assert!(e
+            .call(0x0055_8430, &args![0x1234u32, position, rotation, config])
+            .bool());
+        assert_eq!(
+            addresses(&calls(&e)),
+            vec![
+                RENDER_HANDLE,
+                SCENE_NODE_CHILD,
+                NODE_SET_TRANSLATION,
+                SCENE_NODE_CHILD,
+                NODE_SET_ROTATION,
+                UPDATE_RECORD_CONSTRUCT,
+                SCENE_NODE_CHILD,
+                CONTROLLER_UPDATE,
+                TICK_COUNT,
+                RENDER_FRAME_STEP,
+                LIST_NODE_ITEM_ADDRESS,
+                LIST_NODE_ITEM_ADDRESS,
+                TICK_COUNT,
+                STATISTICS_HOLDER,
+                SLOT_GET_POINTER,
+                TABLE_ENTRY,
+                SHADOW_SCENE_VALUE,
+            ]
+        );
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, NODE_SET_TRANSLATION),
+            vec![vec![camera, position]]
+        );
+        assert_eq!(
+            calls_to(&log, NODE_SET_ROTATION),
+            vec![vec![camera, rotation]]
+        );
+        assert_eq!(calls_to(&log, RENDER_FRAME_STEP), vec![vec![0x7000]]);
+        assert!(reports.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_frame_over_a_limit_reports_the_record() {
+        // (what exceeds, setup)
+        type Setup = fn(&mut Engine, u32);
+        let cases: [(&str, Setup); 6] = [
+            ("geometry", |e, _| {
+                e.set_global(STATISTICS_SOURCES[0], 5000u32)
+            }),
+            ("triangles", |e, _| {
+                e.set_global(STATISTICS_SOURCES[2], 900_000u32)
+            }),
+            ("passes", |e, config| e.mem.set_u32(config + 8, 50)),
+            ("lights", |e, config| e.mem.set_u32(config + 0x0c, 3)),
+            ("last count", |e, config| e.mem.set_u32(config + 0x14, 4)),
+            ("time", |e, config| e.mem.set_u32(config + 0x10, 6)),
+        ];
+        for (what, setup) in cases {
+            let mut e = engine();
+            render_setup(&mut e);
+            let reports = capture_reports(&mut e, 0x7777_0000);
+            let config = render_config(&mut e, 0x7777_0000, 0x55);
+            setup(&mut e, config);
+            let position = e.mem.alloc(16);
+            put_floats(&mut e, position, &[10.0, 20.0, 30.0]);
+            let rotation = e.mem.alloc(48);
+            put_floats(
+                &mut e,
+                rotation,
+                &[9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+            );
+            let passed = e
+                .call(0x0055_8430, &args![0x1234u32, position, rotation, config])
+                .bool();
+            assert!(!passed, "{what}");
+            let reports = reports.borrow();
+            assert_eq!(reports.len(), 1, "{what}");
+            let (words, user_data) = &reports[0];
+            assert_eq!(*user_data, 0x55, "{what}");
+            // Words 2 to 5 are the default limits and the measured values;
+            // word 6 the cell, then the position and the rotation.
+            assert_eq!(words[2], 100, "{what}");
+            assert_eq!(words[3], 4, "{what}");
+            assert_eq!(words[4], 7, "{what}");
+            assert_eq!(words[5], 8, "{what}");
+            assert_eq!(words[6], 0x1234, "{what}");
+            assert_eq!(
+                words[7..10].to_vec(),
+                [10.0f32, 20.0, 30.0].map(f32::to_bits).to_vec(),
+                "{what}"
+            );
+            assert_eq!(
+                words[10..19].to_vec(),
+                [9.0f32, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
+                    .map(f32::to_bits)
+                    .to_vec(),
+                "{what}"
+            );
+            if what == "geometry" {
+                assert_eq!(words[0], 5000);
+            }
+        }
+    }
+
+    #[test]
+    fn a_failing_frame_without_a_callback_only_fails() {
+        let mut e = engine();
+        render_setup(&mut e);
+        e.set_global(STATISTICS_SOURCES[0], 5000u32);
+        let config = render_config(&mut e, 0, 0);
+        assert!(!e
+            .call(0x0055_8430, &args![1u32, 0x100u32, 0x200u32, config])
+            .bool());
+    }
+
+    #[test]
+    fn the_test_cell_is_rendered_from_24_orientations() {
+        let mut e = engine();
+        let camera = render_setup(&mut e);
+        let config = render_config(&mut e, 0, 0);
+        let position = e.mem.alloc(16);
+        start_log(&mut e);
+        assert!(e
+            .call(0x0055_8330, &args![0x1234u32, position, config])
+            .bool());
+        let log = calls(&e);
+        let angle = |degrees: i32| ((degrees as f64) * 0.017453292519943295f64) as f32;
+        let x_angles: Vec<f32> = calls_to(&log, MAKE_X_ROTATION)
+            .iter()
+            .map(|call| f32::from_bits(call[1]))
+            .collect();
+        assert_eq!(x_angles, vec![angle(45), angle(0), angle(-45)]);
+        let z_angles: Vec<f32> = calls_to(&log, ROTATION_MATRIX_BUILD)
+            .iter()
+            .map(|call| f32::from_bits(call[1]))
+            .collect();
+        assert_eq!(z_angles.len(), 24);
+        assert_eq!(
+            z_angles[..8],
+            [0, 45, 90, 135, 180, 225, 270, 315].map(angle)
+        );
+        assert_eq!(z_angles[8..16], z_angles[..8]);
+        let products = calls_to(&log, MATRIX_PRODUCT);
+        assert_eq!(products.len(), 24);
+        assert!(products.iter().all(|call| call[1..] == products[0][1..]));
+        let translations = calls_to(&log, NODE_SET_TRANSLATION);
+        assert_eq!(translations.len(), 24);
+        assert!(translations
+            .iter()
+            .all(|call| *call == vec![camera, position]));
+    }
+
+    #[test]
+    fn every_orientation_is_tried_even_after_a_failure() {
+        let mut e = engine();
+        render_setup(&mut e);
+        let config = render_config(&mut e, 0, 0);
+        let products = Rc::new(RefCell::new(0u32));
+        let counter = products.clone();
+        e.register_double(MATRIX_PRODUCT, move |e, _| {
+            *counter.borrow_mut() += 1;
+            let failing = *counter.borrow() == 5;
+            e.set_global(STATISTICS_SOURCES[0], if failing { 99_999u32 } else { 0 });
+            Ret::default()
+        });
+        start_log(&mut e);
+        assert!(!e.call(0x0055_8330, &args![1u32, 0x100u32, config]).bool());
+        assert_eq!(calls_to(&calls(&e), NODE_SET_TRANSLATION).len(), 24);
+        assert_eq!(*products.borrow(), 24);
+    }
+
+    #[test]
+    fn the_test_cell_does_nothing_without_a_3d() {
+        let mut e = engine();
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0u32, 0u32, 0u32]);
+        assert_eq!(calls(&e), vec![]);
+        returns(&mut e, CELL_NODE_OF_CELL, 0);
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0x1234u32, 0u32, 1u32]);
+        assert_eq!(calls(&e), vec![(CELL_NODE_OF_CELL, vec![0x1234])]);
+    }
+
+    #[test]
+    fn the_test_cell_is_rendered_from_the_player_position() {
+        let mut e = engine();
+        render_setup(&mut e);
+        returns(&mut e, CELL_NODE_OF_CELL, 0x3d3d);
+        let player = object(&mut e, 0x60);
+        e.set_global(PLAYER_OBJECT, player);
+        e.register(fake(0x1d0), |_, _| 0x5e00u32.into_ret());
+        let position = e.mem.alloc(16);
+        returns(&mut e, NODE_POSITION_POINTER, position);
+        let seen = capture_translations(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0x1234u32, 0u32, 0u32]);
+        let log = calls(&e);
+        assert_eq!(calls_to(&log, NODE_POSITION_POINTER), vec![vec![0x5e00]]);
+        // 24 renders at the player's position, then the camera is restored
+        // to the translation and rotation it had.
+        assert_eq!(seen.borrow().len(), 25);
+        assert_eq!(seen.borrow()[24], vec![1.0, 2.0, 3.0]);
+        assert_eq!(calls_to(&log, NODE_SET_ROTATION).len(), 25);
+        assert!(calls_to(&log, DEBUG_PRINT_LINE).is_empty());
+        assert_eq!(*addresses(&log).last().unwrap(), CONTROLLER_UPDATE);
+    }
+
+    #[test]
+    fn a_failed_test_cell_prints_the_failure_message() {
+        let mut e = engine();
+        render_setup(&mut e);
+        returns(&mut e, CELL_NODE_OF_CELL, 0x3d3d);
+        let player = object(&mut e, 0x60);
+        e.set_global(PLAYER_OBJECT, player);
+        e.register(fake(0x1d0), |_, _| 0x5e00u32.into_ret());
+        returns(&mut e, NODE_POSITION_POINTER, 0x100);
+        e.set_global(STATISTICS_SOURCES[0], 5000u32);
+        let config = render_config(&mut e, 0, 0);
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0x1234u32, config, 0u32]);
+        assert_eq!(
+            calls_to(&calls(&e), DEBUG_PRINT_LINE),
+            vec![vec![RENDER_FAILED_MESSAGE]]
+        );
+    }
+
+    #[test]
+    fn the_test_cell_is_rendered_from_the_navmesh_triangle_centres() {
+        let mut e = engine();
+        render_setup(&mut e);
+        returns(&mut e, CELL_NODE_OF_CELL, 0x3d3d);
+        let (first, _) = centre_setup(&mut e);
+        e.mem.set_u32(first + 0x60, 2);
+        let second = e.mem.alloc(0x100);
+        e.mem.set_u32(second + 0x60, 3);
+        returns(&mut e, CELL_NAV_MESH_ARRAY, 0xa000);
+        returns(&mut e, NAV_MESH_ARRAY_COUNT, 2);
+        e.register(TRIANGLE_COUNT, |e, a| {
+            e.mem.u32(a[0] - 0x38 + 0x60).into_ret()
+        });
+        e.register_double(NAV_MESH_BY_INDEX, move |e, a| {
+            e.mem.set_u32(a[1], if a[2] == 0 { first } else { second });
+            Ret::default()
+        });
+        e.register_double(NAV_MESH_SLOT_TEST, move |e, a| {
+            u32::from(e.mem.u32(a[0]) == first).into_ret()
+        });
+        quiet(&mut e, &[NAV_MESH_SLOT_RELEASE]);
+        e.set_global(TRIANGLE_LIFT, 118.0f64);
+        let seen = capture_translations(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0x1234u32, 0u32, 1u32]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT_LINE),
+            vec![vec![TESTING_TRIANGLES_FORMAT, 5]]
+        );
+        assert_eq!(calls_to(&log, NAV_MESH_SLOT_RELEASE).len(), 4);
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 49);
+        assert_eq!(seen[0], vec![1.5, 3.0, 122.5]);
+        assert_eq!(seen[23], vec![1.5, 3.0, 122.5]);
+        assert_eq!(seen[24], vec![1.5, 0.0, 118.0]);
+        assert_eq!(seen[48], vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn the_test_cell_is_rendered_from_the_reference_positions() {
+        let mut e = engine();
+        render_setup(&mut e);
+        returns(&mut e, CELL_NODE_OF_CELL, 0x3d3d);
+        returns(&mut e, CELL_NAV_MESH_ARRAY, 0);
+        returns(&mut e, LIST_COUNT, 2);
+        list_doubles(&mut e);
+        // A reference holds a pointer to its position at `+0x34` (virtual
+        // `+0x1f4`) and its 3D at `+0x38` (virtual `+0x1d0`); a 3D its world
+        // bound at `+0x10`.
+        e.register(fake(0x1f4), |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(fake(0x1d0), |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(WORLD_BOUND, |e, a| e.mem.u32(a[0] + 0x10).into_ret());
+        let position_a = e.mem.alloc(16);
+        put_floats(&mut e, position_a, &[4.0, 5.0, 6.0]);
+        let reference_a = object(&mut e, 0x60);
+        e.mem.set_u32(reference_a + 0x34, position_a);
+        let bound = e.mem.alloc(16);
+        put_floats(&mut e, bound, &[7.0, 8.0, 9.0]);
+        let node = e.mem.alloc(0x40);
+        e.mem.set_u32(node + 0x10, bound);
+        let reference_b = object(&mut e, 0x60);
+        e.mem.set_u32(reference_b + 0x34, position_a);
+        e.mem.set_u32(reference_b + 0x38, node);
+        let head = list_of(&mut e, &[reference_a, reference_b]);
+        returns(&mut e, CELL_REFERENCES, head);
+        let seen = capture_translations(&mut e);
+        start_log(&mut e);
+        e.call(0x0055_7dd0, &args![0x1234u32, 0u32, 1u32]);
+        let log = calls(&e);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT_LINE),
+            vec![vec![TESTING_POSITIONS_FORMAT, 2]]
+        );
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 49);
+        assert_eq!(seen[0], vec![4.0, 5.0, 6.0]);
+        assert_eq!(seen[24], vec![7.0, 8.0, 9.0]);
+        assert_eq!(seen[48], vec![1.0, 2.0, 3.0]);
+        // The reference without a 3D never asks for its bound.
+        assert_eq!(calls_to(&log, WORLD_BOUND), vec![vec![node]]);
+    }
+
+    #[test]
+    fn the_statistics_words_are_stored_through_the_pointers_in_order() {
+        let mut e = engine();
+        for (index, source) in STATISTICS_SOURCES.iter().enumerate() {
+            e.set_global(*source, 100 + index as u32);
+        }
+        let words = e.mem.alloc(48);
+        // The tenth pointer appears twice: the last word it gets is kept.
+        let mut pointers = [0u32; 11];
+        for (index, slot) in pointers.iter_mut().enumerate() {
+            *slot = words + 4 * index as u32;
+        }
+        pointers[10] = pointers[3];
+        let mut call_words = vec![0x1234u32];
+        call_words.extend(pointers);
+        e.call(0x0055_8600, &call_words);
+        let stored: Vec<u32> = (0..11).map(|index| e.mem.u32(words + 4 * index)).collect();
+        assert_eq!(
+            stored,
+            vec![100, 101, 102, 110, 104, 105, 106, 107, 108, 109, 0]
+        );
+    }
+
+    #[test]
+    fn the_statistics_record_starts_with_the_default_limits() {
+        let mut e = engine();
+        e.register(LIST_NODE_ITEM_ADDRESS, |_, a| a[0].into_ret());
+        let at = e.mem.alloc(0x40);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8690, &args![at]).u32(), at);
+        assert_eq!(e.mem.u32(at + 0x10), 0xffff_ffff);
+        assert_eq!(
+            calls(&e)
+                .iter()
+                .map(|(address, words)| (*address, words[0] - at))
+                .collect::<Vec<_>>(),
+            vec![
+                (LIST_NODE_ITEM_ADDRESS, 0x1c),
+                (LIST_NODE_ITEM_ADDRESS, 0x28)
+            ]
+        );
+        e.register(SLOT_GET_POINTER, |_, a| (a[0] * 2).into_ret());
+        assert_eq!(e.call(0x0055_85e0, &args![0x1000u32]).u32(), 0x2010);
+    }
+
+    #[test]
+    fn the_report_callback_saves_the_failure_data() {
+        let mut e = engine();
+        e.set_global(LAST_RENDER_FAILURE_CELL, 0x1234u32);
+        start_log(&mut e);
+        e.call(0x0055_86c0, &args![0u32]);
+        assert_eq!(e.global::<u32>(LAST_RENDER_FAILURE_CELL), 0);
+        assert_eq!(calls(&e), vec![]);
+    }
+
+    /// The record of a render failure and the doubles `SaveRenderFailureData`
+    /// needs. The cell object: `+0x30` interior flag, `+0x34` world space,
+    /// `+0x38` pointer to its name's first character, `+0x3c` its name for
+    /// virtual `+0x130`, `+0x40` and `+0x44` the coordinates, `+0x0c` the
+    /// form id. Returns the record, the cell and the world space.
+    fn failure_setup(e: &mut Engine, interior: bool, name: &[u8]) -> (u32, u32, u32) {
+        e.register(CELL_IS_INTERIOR, |e, a| e.mem.u8(a[0] + 0x30).into_ret());
+        e.register(CELL_GET_WORLD_SPACE, |e, a| {
+            e.mem.u32(a[0] + 0x34).into_ret()
+        });
+        e.register(CELL_NAME_POINTER, |e, a| e.mem.u32(a[0] + 0x38).into_ret());
+        e.register(CELL_GET_DATA_X, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        e.register(CELL_GET_DATA_Y, |e, a| e.mem.u32(a[0] + 0x44).into_ret());
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0x0c).into_ret());
+        e.register(fake(0x130), |e, a| e.mem.u32(a[0] + 0x3c).into_ret());
+        e.register(FORMAT_TEXT, |e, a| {
+            e.mem.set_cstr(a[0], b"0123456789");
+            Ret::default()
+        });
+        e.register(STRING_LENGTH, |e, a| {
+            (e.mem.cstr(a[0]).len() as u32).into_ret()
+        });
+        e.register(OPERATOR_NEW, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(FILE_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], TEST_VTABLE);
+            a[0].into_ret()
+        });
+        e.register(MATRIX_TO_EULER, |e, a| {
+            e.mem.set_f32(a[1], 0.5);
+            e.mem.set_f32(a[2], 1.0);
+            e.mem.set_f32(a[3], 2.0);
+            Ret::default()
+        });
+        quiet(
+            e,
+            &[
+                CREATE_DIRECTORY,
+                DELETE_FILE,
+                fake(0x20),
+                fake(0x14),
+                fake(0x48),
+                fake(0),
+            ],
+        );
+        e.set_global(RADIANS_TO_DEGREES, 2.0f64);
+        e.set_global(FILE_SEEK_ORIGIN, 0x42u32);
+        let text = e.mem.alloc(0x40);
+        e.mem.set_cstr(text, name);
+        let world = object(e, 0x40);
+        e.mem.set_u32(world + 0x3c, text);
+        let cell = object(e, 0x80);
+        e.mem.set_u8(cell + 0x30, u8::from(interior));
+        e.mem.set_u32(cell + 0x34, world);
+        e.mem.set_u32(cell + 0x38, text);
+        e.mem.set_u32(cell + 0x3c, text);
+        e.mem.set_u32(cell + 0x40, 7);
+        e.mem.set_u32(cell + 0x44, 9);
+        e.mem.set_u32(cell + 0x0c, 0xabcd);
+        let record = e.mem.alloc(0x80);
+        for (index, count) in [11u32, 12, 13, 14, 15].iter().enumerate() {
+            e.mem.set_u32(record + 4 * index as u32, *count);
+        }
+        e.mem.set_u32(record + 0x18, cell);
+        put_floats(e, record + 0x1c, &[1.0, 2.0, 3.0]);
+        (record, cell, world)
+    }
+
+    /// The words of `args![..]` for the failure line: the buffer, its size,
+    /// the format, the form id, the position and the angles as doubles, and
+    /// the five counts.
+    fn failure_line(line: u32) -> Vec<u32> {
+        let mut words = vec![line, PATH_BUFFER_SIZE, LINE_FORMAT, 0xabcd];
+        for value in [1.0f64, 2.0, 3.0, 1.0, 2.0, 4.0] {
+            words.extend(args![value]);
+        }
+        words.extend([15, 11, 12, 13, 14]);
+        words
+    }
+
+    #[test]
+    fn the_first_failure_of_an_interior_cell_creates_the_file_with_a_header() {
+        let mut e = engine();
+        let (record, cell, _) = failure_setup(&mut e, true, b"Vault");
+        start_log(&mut e);
+        e.call(0x0055_86e0, &args![record]);
+        let log = calls(&e);
+        let path = calls_to(&log, DELETE_FILE)[0][0];
+        let line = path + PATH_BUFFER_SIZE;
+        assert_eq!(
+            calls_to(&log, CREATE_DIRECTORY),
+            vec![vec![RTF_DIRECTORY_NAME]]
+        );
+        let name = e.mem.u32(cell + 0x3c);
+        let formats = calls_to(&log, FORMAT_TEXT);
+        assert_eq!(formats.len(), 3);
+        assert_eq!(
+            formats[0],
+            vec![
+                path,
+                PATH_BUFFER_SIZE,
+                INTERIOR_FILE_FORMAT,
+                RTF_PREFIX,
+                name
+            ]
+        );
+        assert_eq!(formats[1], vec![line, PATH_BUFFER_SIZE, HEADER_FORMAT]);
+        assert_eq!(formats[2], failure_line(line));
+        let files = calls_to(&log, FILE_CONSTRUCT);
+        assert_eq!(files.len(), 1);
+        let file = files[0][0];
+        assert_eq!(files[0][1..], [path, 1, 0x4000, 0]);
+        assert_eq!(calls_to(&log, OPERATOR_NEW), vec![vec![0x158]]);
+        assert_eq!(calls_to(&log, fake(0x20)), vec![vec![file, 0, 0]]);
+        assert_eq!(calls_to(&log, fake(0x14)), vec![vec![file, 0, 0x42]]);
+        assert_eq!(
+            calls_to(&log, fake(0x48)),
+            vec![vec![file, line, 10], vec![file, line, 10]]
+        );
+        assert_eq!(calls_to(&log, fake(0)), vec![vec![file, 1]]);
+        assert_eq!(e.global::<u32>(LAST_RENDER_FAILURE_CELL), cell);
+        assert_eq!(calls_to(&log, MATRIX_TO_EULER)[0][0], record + 0x28);
+    }
+
+    #[test]
+    fn a_second_failure_of_the_same_cell_appends_a_line() {
+        let mut e = engine();
+        let (record, cell, _) = failure_setup(&mut e, true, b"Vault");
+        e.set_global(LAST_RENDER_FAILURE_CELL, cell);
+        start_log(&mut e);
+        e.call(0x0055_86e0, &args![record]);
+        let log = calls(&e);
+        assert!(calls_to(&log, DELETE_FILE).is_empty());
+        assert!(calls_to(&log, fake(0x14)).is_empty());
+        assert_eq!(calls_to(&log, FORMAT_TEXT).len(), 2);
+        let files = calls_to(&log, FILE_CONSTRUCT);
+        assert_eq!(files[0][2..], [2, 0x4000, 0]);
+        assert_eq!(calls_to(&log, fake(0x20)).len(), 1);
+        assert_eq!(calls_to(&log, fake(0x48)).len(), 1);
+        assert_eq!(calls_to(&log, fake(0)).len(), 1);
+    }
+
+    #[test]
+    fn exterior_file_names_carry_the_world_space_the_coordinates_and_the_cell_name() {
+        let mut e = engine();
+        let (record, cell, world) = failure_setup(&mut e, false, b"Goodsprings");
+        let name = e.mem.u32(cell + 0x3c);
+        let world_name = e.mem.u32(world + 0x3c);
+        start_log(&mut e);
+        e.call(0x0055_86e0, &args![record]);
+        let log = calls(&e);
+        let path = calls_to(&log, DELETE_FILE)[0][0];
+        assert_eq!(
+            calls_to(&log, FORMAT_TEXT)[0],
+            vec![
+                path,
+                PATH_BUFFER_SIZE,
+                EXTERIOR_NAMED_FILE_FORMAT,
+                RTF_PREFIX,
+                world_name,
+                7,
+                9,
+                name
+            ]
+        );
+        assert_eq!(calls_to(&log, CELL_GET_WORLD_SPACE), vec![vec![cell]]);
+        // A cell without a name leaves it out.
+        let mut e = engine();
+        let (record, cell, world) = failure_setup(&mut e, false, b"");
+        let world_name = e.mem.u32(world + 0x3c);
+        let _ = cell;
+        start_log(&mut e);
+        e.call(0x0055_86e0, &args![record]);
+        let log = calls(&e);
+        let path = calls_to(&log, DELETE_FILE)[0][0];
+        assert_eq!(
+            calls_to(&log, FORMAT_TEXT)[0],
+            vec![
+                path,
+                PATH_BUFFER_SIZE,
+                EXTERIOR_FILE_FORMAT,
+                RTF_PREFIX,
+                world_name,
+                7,
+                9
+            ]
+        );
+    }
+
+    #[test]
+    fn a_null_failure_record_forgets_the_last_cell() {
+        let mut e = engine();
+        e.set_global(LAST_RENDER_FAILURE_CELL, 0x1234u32);
+        start_log(&mut e);
+        e.call(0x0055_86e0, &args![0u32]);
+        assert_eq!(e.global::<u32>(LAST_RENDER_FAILURE_CELL), 0);
+        assert_eq!(calls(&e), vec![]);
+    }
+
+    #[test]
+    fn the_lighting_template_accessors_use_the_cell_fields() {
+        let mut e = engine();
+        let cell = e.new_object::<TESObjectCELL>();
+        e.call(0x0055_8b60, &args![cell, 0x4455u32]);
+        assert_eq!(e.call(0x0055_8b40, &args![cell]).u32(), 0x4455);
+        assert_eq!(e.mem.u32(cell.addr() + 0xd8), 0x4455);
+        e.mem.set_u32(cell.addr() + 0xdc, 0b0110);
+        assert!(e.call(0x0055_8b80, &args![cell, 0b0100u32]).bool());
+        assert!(!e.call(0x0055_8b80, &args![cell, 0b1001u32]).bool());
+    }
+
+    /// An object with a held pointer (`+0x64`) to the word `value`.
+    fn holder_of(e: &mut Engine, value: u32) -> (u32, u32) {
+        let word = e.mem.alloc(4);
+        e.mem.set_u32(word, value);
+        let at = e.mem.alloc(0x80);
+        e.mem.set_u32(at + 0x64, word);
+        (at, word)
+    }
+
+    #[test]
+    fn the_held_word_is_read_and_written_through_the_pointer() {
+        let mut e = engine();
+        let (at, word) = holder_of(&mut e, 0x77);
+        assert_eq!(e.call(0x0055_8c30, &args![at]).u32(), 0x77);
+        e.call(0x0055_8c60, &args![at, 0x88u32]);
+        assert_eq!(e.mem.u32(word), 0x88);
+        let empty = e.mem.alloc(0x80);
+        assert_eq!(e.call(0x0055_8c30, &args![empty]).u32(), 0);
+        e.call(0x0055_8c60, &args![empty, 0x99u32]);
+        assert_eq!(e.mem.u32(empty + 0x64), 0);
+    }
+
+    #[test]
+    fn held_words_equal_to_the_key_are_cleared_until_a_null_item() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        let (first, first_word) = holder_of(&mut e, 5);
+        let (second, second_word) = holder_of(&mut e, 6);
+        let (third, third_word) = holder_of(&mut e, 5);
+        let (after_null, after_word) = holder_of(&mut e, 5);
+        let (player, player_word) = holder_of(&mut e, 5);
+        e.set_global(DISTANCE_SOURCE_SINGLETON, player);
+        let head = list_of(&mut e, &[first, second, third, 0, after_null]);
+        returns(&mut e, CELL_REFERENCES, head);
+        e.call(0x0055_8ba0, &args![0x1234u32, 5u32]);
+        assert_eq!(e.mem.u32(first_word), 0);
+        assert_eq!(e.mem.u32(second_word), 6);
+        assert_eq!(e.mem.u32(third_word), 0);
+        assert_eq!(e.mem.u32(after_word), 5);
+        assert_eq!(e.mem.u32(player_word), 0);
+    }
+
+    #[test]
+    fn references_are_activated_in_the_havok_world_only_when_they_qualify() {
+        let mut e = engine();
+        list_doubles(&mut e);
+        // `+0x30` answer of virtual `+0x100`, `+0x34` base object (type at
+        // `+4`), `+0x38` answer of `00549580`.
+        e.register(fake(0x100), |e, a| e.mem.u8(a[0] + 0x30).into_ret());
+        e.register(REFERENCE_BASE_OBJECT, |e, a| {
+            e.mem.u32(a[0] + 0x34).into_ret()
+        });
+        e.register(FORM_TYPE, |e, a| u32::from(e.mem.u8(a[0] + 4)).into_ret());
+        e.register(BASE_FORM_FLAG_40, |e, a| e.mem.u8(a[0] + 0x38).into_ret());
+        quiet(&mut e, &[WORLD_ACTIVATE]);
+        let reference = |e: &mut Engine, refuses: bool, base_type: u8, flagged: bool| {
+            let base = e.mem.alloc(0x10);
+            e.mem.set_u8(base + 4, base_type);
+            let at = object(e, 0x60);
+            e.mem.set_u8(at + 0x30, u8::from(refuses));
+            e.mem.set_u32(at + 0x34, base);
+            e.mem.set_u8(at + 0x38, u8::from(flagged));
+            at
+        };
+        let good = reference(&mut e, false, 5, true);
+        let refusing = reference(&mut e, true, 5, true);
+        let door = reference(&mut e, false, 0x1c, true);
+        let unflagged = reference(&mut e, false, 5, false);
+        let good_too = reference(&mut e, false, 6, true);
+        let after_null = reference(&mut e, false, 5, true);
+        let head = list_of(
+            &mut e,
+            &[good, refusing, door, unflagged, good_too, 0, after_null],
+        );
+        returns(&mut e, CELL_REFERENCES, head);
+        returns(&mut e, CELL_NODE_OF_CELL, 0x3d3d);
+        start_log(&mut e);
+        e.call(0x0055_8c90, &args![0x1234u32]);
+        assert_eq!(
+            calls_to(&calls(&e), WORLD_ACTIVATE),
+            vec![vec![0x3d3d, 1, 1, 1]; 2]
+        );
+        // A cell without a 3D activates nothing.
+        returns(&mut e, CELL_NODE_OF_CELL, 0);
+        start_log(&mut e);
+        e.call(0x0055_8c90, &args![0x1234u32]);
+        assert!(calls_to(&calls(&e), WORLD_ACTIVATE).is_empty());
+    }
+
+    #[test]
+    fn the_small_class_constructors_set_their_vtables() {
+        let mut e = engine();
+        for (entry, base, vtable) in [
+            (0x0055_8d40u32, SMALL_CLASS_BASE_A, SMALL_CLASS_VTABLE_A),
+            (0x0055_8d70, SMALL_CLASS_BASE_B, SMALL_CLASS_VTABLE_B),
+            (0x0055_8da0, SMALL_CLASS_BASE_C, SMALL_CLASS_VTABLE_C),
+        ] {
+            quiet(&mut e, &[base]);
+            let at = e.mem.alloc(0x20);
+            start_log(&mut e);
+            assert_eq!(e.call(entry, &args![at, 16u32]).u32(), at);
+            assert_eq!(calls(&e), vec![(base, vec![at, 16])]);
+            assert_eq!(e.mem.u32(at), vtable);
+        }
+    }
+
+    #[test]
+    fn the_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = engine();
+        quiet(&mut e, &[SMALL_CLASS_DESTRUCT, DEALLOCATE_BLOCK]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8df0, &args![0x5000u32, 0u32]).u32(), 0x5000);
+        assert_eq!(calls(&e), vec![(SMALL_CLASS_DESTRUCT, vec![0x5000])]);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0055_8df0, &args![0x5000u32, 3u32]).u32(), 0x5000);
+        assert_eq!(
+            addresses(&calls(&e)),
+            vec![SMALL_CLASS_DESTRUCT, DEALLOCATE_BLOCK]
+        );
+        start_log(&mut e);
+        e.call(0x0055_8df0, &args![0x5000u32, 2u32]);
+        assert_eq!(addresses(&calls(&e)), vec![SMALL_CLASS_DESTRUCT]);
     }
 }
