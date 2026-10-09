@@ -9,11 +9,13 @@
 //! Most start by writing `0.0` to `*result`, and all but a few finish with a
 //! debug line through `00703c00` when the byte at `TLS + 0x268` is set.
 //!
-//! Progress: this file holds the first 40 functions of the unit in address
-//! order (`0059bfa0` to `0059dbe0`, `0059c380` excepted: `crates/world`
-//! already describes it and the ledger counts it as translated). The next
-//! session continues with `0059dc90` (`GetSleeping`); keep new shared
-//! helpers and constants in the block below, above the functions.
+//! Progress: this file holds the first 80 functions of the unit in address
+//! order: `0059bfa0` to `0059dbe0` (the first session; it left `0059c380`
+//! out because `crates/world` already describes it) and `0059c380` plus
+//! `0059dc90` to `0059f540` (the second session). The next session continues
+//! with `0059f610` (the `RACE` playable-flag test `GetIsPlayableRace` calls
+//! by address); keep new shared helpers and constants in the block below,
+//! above the functions.
 //!
 //! x87 note: the game computes in extended precision and stores `double`
 //! results. The translations compute in `f64`, which can differ from the
@@ -115,6 +117,159 @@ const REF_GET_NAME: u32 = 0x0055_d520;
 /// `57.295776` (`double`): degrees per radian, `GetAngle`'s multiplier.
 const DEGREES_PER_RADIAN: u32 = 0x0102_f248;
 
+/// `1.0` (`double`), the constant `GetSleeping` and `GetSitting` add.
+const DOUBLE_ONE: u32 = 0x0101_2070;
+/// The `float` constants of the rain / snow tests (`0059e950`, `0059ea80`):
+/// the second argument of the first and of the second weather lookup.
+const WEATHER_RAIN_FROM: u32 = 0x0102_31e0;
+const WEATHER_RAIN_TO: u32 = 0x0101_7d00;
+
+/// `Interface::IsInMenuMode` (Xbox PDB), cdecl, byte result.
+const INTERFACE_IS_IN_MENU_MODE: u32 = 0x0070_2360;
+/// `Interface::IsTopMenuID` (Xbox PDB), cdecl, one menu id.
+const INTERFACE_IS_TOP_MENU_ID: u32 = 0x0070_2450;
+/// `Interface::IsMenuIDVisible` (Xbox PDB), cdecl, (menu id, 0).
+const INTERFACE_IS_MENU_ID_VISIBLE: u32 = 0x0070_2680;
+/// Byte global: when set, `GetMenuMode` asks for the top menu only.
+const MENU_MODE_TOP_ONLY: u32 = 0x011c_ab24;
+
+/// Virtual on `Actor` (vtable `+0x214`): the sit / sleep state, 0 for none.
+const VSLOT_SIT_SLEEP_STATE: u32 = 0x214;
+/// Virtuals of the actor's middle-high process: the furniture marker id
+/// (`+0x4c4`) and the furniture reference the actor uses (`+0x4c8`).
+const VSLOT_PROCESS_FURNITURE_MARKER_ID: u32 = 0x4c4;
+const VSLOT_PROCESS_FURNITURE_REFERENCE: u32 = 0x4c8;
+/// Virtual on `TESObjectREFR` behind `GetTalkedToPC` (bool).
+const VSLOT_TALKED_TO_PC: u32 = 0x98;
+/// Virtual on `Actor` behind `GetAttacked` (bool).
+const VSLOT_ATTACKED: u32 = 0x470;
+/// Virtual on `Actor` that `GetShouldAttack` calls with (target, 0) before
+/// its checks; the result is not used.
+const VSLOT_ACTOR_PREPARE_ATTACK_CHECK: u32 = 0x344;
+/// Virtual on the target of `GetShouldAttack`; non-zero lets the combat
+/// manager answer first.
+const VSLOT_TARGET_COMBAT_CHECK: u32 = 0x428;
+/// Virtual on `TESForm` returning a name string (`GetInCell` compares them).
+const VSLOT_FORM_GET_NAME: u32 = 0x130;
+/// Virtual `+0x68` of the component at `+0x30` of an `NPC_` / `CREA` base
+/// form: its voice type.
+const VSLOT_BASE_COMPONENT_VOICE_TYPE: u32 = 0x68;
+
+/// Form types the functions test (`TESForm::cFormType`).
+const FORM_TYPE_CLASS: u32 = 7;
+const FORM_TYPE_FACTION: u32 = 8;
+const FORM_TYPE_RACE: u32 = 0xc;
+/// The form type whose voice type comes from `0x009185e0` (`+0x94`).
+const FORM_TYPE_VOICE_SOURCE: u32 = 0x16;
+const FORM_TYPE_FURNITURE: u32 = 0x27;
+const FORM_TYPE_CREATURE: u32 = 0x2b;
+const FORM_TYPE_WEATHER: u32 = 0x35;
+const FORM_TYPE_CELL: u32 = 0x39;
+const FORM_TYPE_WORLDSPACE: u32 = 0x41;
+const FORM_TYPE_QUEST: u32 = 0x47;
+/// The range of placed reference types (`0x3a` to `0x40`), and the one more
+/// type (`0x69`) the reference tests accept.
+const FORM_TYPE_REFERENCE_FIRST: u32 = 0x3a;
+const FORM_TYPE_REFERENCE_LAST: u32 = 0x40;
+const FORM_TYPE_REFERENCE_EXTRA: u32 = 0x69;
+/// The two types `GetShouldAttack` accepts for its target.
+const FORM_TYPE_ACTOR_FIRST: u32 = 0x3b;
+const FORM_TYPE_ACTOR_LAST: u32 = 0x3c;
+
+/// `[this + 0x40]` of a reference: its parent cell.
+const REF_GET_PARENT_CELL: u32 = 0x008d_6f30;
+/// `TESObjectREFR::GetWorldSpace` (Xbox PDB).
+const REF_GET_WORLDSPACE: u32 = 0x0057_5d70;
+/// `this + 0x44`: the reference's `ExtraDataList` (`tesscriptfunctions.cpp`).
+const REF_GET_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
+/// `ExtraDataList::GetReferencePointer` (Xbox PDB).
+const EXTRA_DATA_LIST_GET_REFERENCE_POINTER: u32 = 0x0041_c8d0;
+/// `[this + 0x0c]` of a reference: the id `GetInventoryItem` takes.
+const REF_GET_ITEM_ID: u32 = 0x0084_e3a0;
+/// `TESObjectREFR::GetInventoryItem` (Xbox PDB): `this` and (base form,
+/// item id).
+const REF_GET_INVENTORY_ITEM: u32 = 0x0057_6260;
+/// `TESObjectREFR::GetScriptVariables` (Xbox PDB).
+const REF_GET_SCRIPT_VARIABLES: u32 = 0x0056_73e0;
+/// `ItemChange::GetScriptLocals` (Xbox PDB).
+const ITEM_CHANGE_GET_SCRIPT_LOCALS: u32 = 0x004b_dea0;
+/// Destructor with a delete flag: `this` the `ItemChange`, flag 1.
+const ITEM_CHANGE_DESTROY: u32 = 0x0044_59e0;
+/// `ScriptLocals::GetVariable` (Xbox PDB): `this` and (variable, 0), the
+/// value in ST0.
+const SCRIPT_LOCALS_GET_VARIABLE: u32 = 0x005a_9140;
+/// True when the singly linked list starting at `this` holds the item whose
+/// address is the argument (`0x005f65d0`).
+const LIST_CONTAINS: u32 = 0x005f_65d0;
+
+/// `Sky::GetInstance` (Xbox PDB).
+const SKY_GET_INSTANCE: u32 = 0x0046_dd00;
+/// `Sky::pCurrentWeather` (`+0x10`); the engine map names this body
+/// `BaseProcess::GetCurrentProcedureIndex` because of folded code.
+const SKY_GET_CURRENT_WEATHER: u32 = 0x0044_edb0;
+/// `Sky::pLastWeather` (`+0x14`).
+const SKY_GET_LAST_WEATHER: u32 = 0x0082_5c00;
+/// `Sky::fCurrentWeatherPct` (`+0xf4`), returned as a `float` in ST0.
+const SKY_GET_WEATHER_PERCENT: u32 = 0x0064_47d0;
+/// `TESWeather`: true when flag `4` of the byte at `+0xeb` is set.
+const WEATHER_HAS_FLAG_PRECIPITATION: u32 = 0x004e_d270;
+/// `TESWeather`: interpolates a per-weather byte (`this`, index, from, to)
+/// and returns the `float` in ST0.
+const WEATHER_INTERPOLATE: u32 = 0x004e_d230;
+
+/// `Actor::GetShouldAttackActor` (Xbox PDB): `this` the actor and (target, 0,
+/// out struct, 0), byte result.
+const ACTOR_GET_SHOULD_ATTACK_ACTOR: u32 = 0x008b_06d0;
+/// Byte at `+0x104` of the target (`animation.cpp`).
+const TARGET_GET_FLAG: u32 = 0x0049_3bb0;
+/// The attack test of the combat manager: `this` the manager read from
+/// [`COMBAT_MANAGER`] and (actor, target), byte result.
+const COMBAT_MANAGER_CHECK: u32 = 0x0099_2640;
+const COMBAT_MANAGER: u32 = 0x011f_1958;
+/// `TESActorBaseData::GetFactionRank` (Xbox PDB) on `base + 0x30`:
+/// (faction, is the player), -1 when not a member.
+const ACTOR_BASE_DATA_GET_FACTION_RANK: u32 = 0x0047_d680;
+/// `fallout/ai/actor.cpp`: the entry of a string table (`0x0119bcb0`) that
+/// `GetAlarmed` compares with "Alarm", or null.
+const ACTOR_GET_PROCEDURE_NAME: u32 = 0x0088_b7f0;
+/// `_stricmp` (cdecl, two strings).
+const STRING_COMPARE_NO_CASE: u32 = 0x0040_4dc0;
+/// `_strnicmp` (cdecl, two strings and a count).
+const STRING_COMPARE_N_NO_CASE: u32 = 0x00ec_7ec0;
+/// Number of characters of a cell's name to compare (`this` the cell).
+const CELL_GET_NAME_LENGTH: u32 = 0x0047_4cb0;
+/// `TESQuest` accessors: running test, current stage, stage-done test (with
+/// a byte argument).
+const QUEST_IS_RUNNING: u32 = 0x0045_5620;
+const QUEST_GET_CURRENT_STAGE: u32 = 0x0060_d700;
+const QUEST_IS_STAGE_DONE: u32 = 0x0060_d600;
+/// `this + 0x3c`: the address of a quest's flag byte.
+const QUEST_GET_FLAGS_ADDRESS: u32 = 0x005a_8080;
+
+/// True when bit 1 of a `RACE`'s flags (`this + 0x70`) is set; the next
+/// function of this unit (`0059f610`), called by address.
+const RACE_IS_PLAYABLE: u32 = 0x0059_f610;
+/// `NPC_` accessors: the race (`bipedanim.cpp`), the class (the engine map
+/// names this body `MiddleHighProcess::GetFireNode`, folded) and the sex
+/// (`TESActorBase::GetSex`, Xbox PDB).
+const NPC_GET_RACE: u32 = 0x004a_c110;
+const NPC_GET_CLASS: u32 = 0x0050_2430;
+const NPC_GET_SEX: u32 = 0x005f_0cc0;
+/// `[this + 0x94]` (`middlehighprocess.cpp`): the voice type of a
+/// [`FORM_TYPE_VOICE_SOURCE`] form.
+const FORM_GET_VOICE_TYPE: u32 = 0x0091_85e0;
+
+/// `GetInCell`'s cache: the last reference, cell and result (`float`).
+const IN_CELL_CACHE_REFERENCE: u32 = 0x011c_aaf4;
+const IN_CELL_CACHE_CELL: u32 = 0x011c_aaf8;
+const IN_CELL_CACHE_RESULT: u32 = 0x011c_aafc;
+/// `GetIsVoiceType`'s cache: the last reference and its voice type.
+const VOICE_TYPE_CACHE_VOICE: u32 = 0x011c_ab14;
+const VOICE_TYPE_CACHE_REFERENCE: u32 = 0x011c_ab18;
+/// `GetIsPlayableRace`'s cache: the last reference and its result (`float`).
+const PLAYABLE_RACE_CACHE_REFERENCE: u32 = 0x011c_ab1c;
+const PLAYABLE_RACE_CACHE_RESULT: u32 = 0x011c_ab20;
+
 /// The byte at `TLS + 0x268`: the condition functions print a debug line
 /// for their result when it is set.
 fn trace_enabled(e: &mut Engine) -> bool {
@@ -157,6 +312,47 @@ fn npc_base_form_of(e: &mut Engine, reference: Ptr) -> Ptr {
     }
     let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
     if e.call(FORM_GET_TYPE, &args![base]).u32() == FORM_TYPE_NPC {
+        e.call(REF_GET_BASE_FORM, &args![reference]).ptr()
+    } else {
+        Ptr::NULL
+    }
+}
+
+/// `form` when it is non-null and has the given `TESForm::cFormType`, else
+/// null (the `if (p && p->type == T) typed = p` test the form parameters go
+/// through).
+fn form_of_type(e: &mut Engine, form: Ptr, form_type: u32) -> Ptr {
+    if !form.is_null() && e.call(FORM_GET_TYPE, &args![form]).u32() == form_type {
+        form
+    } else {
+        Ptr::NULL
+    }
+}
+
+/// `form` when it is non-null and one of the placed reference types
+/// (`0x3a` to `0x40`, or `0x69`), else null.
+fn placed_reference_of(e: &mut Engine, form: Ptr) -> Ptr {
+    if form.is_null() {
+        return Ptr::NULL;
+    }
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+    if (FORM_TYPE_REFERENCE_FIRST..=FORM_TYPE_REFERENCE_LAST).contains(&form_type)
+        || form_type == FORM_TYPE_REFERENCE_EXTRA
+    {
+        form
+    } else {
+        Ptr::NULL
+    }
+}
+
+/// The reference's base form when its type is `form_type`, else null (the
+/// test [`npc_base_form_of`] runs for `NPC_`).
+fn base_form_of_type(e: &mut Engine, reference: Ptr, form_type: u32) -> Ptr {
+    if reference.is_null() {
+        return Ptr::NULL;
+    }
+    let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
+    if e.call(FORM_GET_TYPE, &args![base]).u32() == form_type {
         e.call(REF_GET_BASE_FORM, &args![reference]).ptr()
     } else {
         Ptr::NULL
@@ -1426,6 +1622,1087 @@ pub fn script_get_gold_condition_function(
     true
 }
 
+// Translated from 0059c380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetMenuModeConditionFunction` (Xbox PDB): with menu id 0, whether
+/// the game is in menu mode; otherwise whether that menu is visible (or the
+/// top menu when the byte at `011cab24` is set).
+pub fn script_get_menu_mode_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    menu_id: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if menu_id == 0 {
+        let in_menu = e.call(INTERFACE_IS_IN_MENU_MODE, &args![]).u8();
+        set_result(e, result, in_menu as f64);
+    } else if e.mem.u8(MENU_MODE_TOP_ONLY) != 0 {
+        if e.call(INTERFACE_IS_TOP_MENU_ID, &args![menu_id]).bool() {
+            set_result(e, result, 1.0);
+        }
+    } else if e
+        .call(INTERFACE_IS_MENU_ID_VISIBLE, &args![menu_id, 0u32])
+        .bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "MenuMode %d >> %0.2f"
+        trace_labeled_result(e, 0x0103_4da0, menu_id, result);
+    }
+    true
+}
+
+/// Adds `1.0` (the `double` at [`DOUBLE_ONE`]) to `*result` `times` times,
+/// one x87 add and store each, as the fall-through `switch` of `GetSleeping`
+/// and `GetSitting` does.
+fn add_ones_to_result(e: &mut Engine, result: Ptr, times: u32) {
+    for _ in 0..times {
+        let one = e.global::<f64>(DOUBLE_ONE);
+        let sum = e.mem.f64(result.addr()) + one;
+        set_result(e, result, sum);
+    }
+}
+
+// Translated from 0059dc90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetSleepingConditionFunction` (Xbox PDB): the actor's sleep state
+/// (virtual `+0x214`) as 0 to 4: states 6 / 7 and 8 / 9 / 10 map to
+/// 1 / 2 / 2 / 3 / 4.
+pub fn script_get_sleeping_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let state = e.vcall(actor.addr(), VSLOT_SIT_SLEEP_STATE, &args![]).u32();
+        let additions = match state {
+            10 => 4,
+            9 => 3,
+            7 | 8 => 2,
+            6 => 1,
+            _ => 0,
+        };
+        add_ones_to_result(e, result, additions);
+    }
+    if trace_enabled(e) {
+        // "GetSleeping >> %0.2f"
+        trace_result(e, 0x0103_505c, result);
+    }
+    true
+}
+
+// Translated from 0059dd90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetSittingConditionFunction` (Xbox PDB): the actor's sit state
+/// (virtual `+0x214`) as 0 to 4: states 1 / 2 / 3 / 4 / 5 map to
+/// 1 / 2 / 2 / 3 / 4.
+pub fn script_get_sitting_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let state = e.vcall(actor.addr(), VSLOT_SIT_SLEEP_STATE, &args![]).u32();
+        let additions = match state {
+            5 => 4,
+            4 => 3,
+            2 | 3 => 2,
+            1 => 1,
+            _ => 0,
+        };
+        add_ones_to_result(e, result, additions);
+    }
+    if trace_enabled(e) {
+        // "GetSitting >> %0.2f"
+        trace_result(e, 0x0103_5074, result);
+    }
+    true
+}
+
+// Translated from 0059de90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFurnitureMarkerIDConditionFunction` (Xbox PDB): the marker id
+/// (virtual `+0x4c4` of the actor's process) of the furniture the actor uses.
+/// The result is left alone for a non-actor.
+pub fn script_get_furniture_marker_id_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).ptr::<()>();
+        let marker_id = e
+            .vcall(process.addr(), VSLOT_PROCESS_FURNITURE_MARKER_ID, &args![])
+            .u32();
+        set_result(e, result, marker_id as f64);
+    }
+    if trace_enabled(e) {
+        // "GetFurnitureMarkerID >> %0.2f"
+        trace_result(e, 0x0103_5088, result);
+    }
+    true
+}
+
+// Translated from 0059df40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCurrentFurnitureRefConditionFunction` (Xbox PDB): 1.0 when the
+/// furniture reference the actor uses (virtual `+0x4c8` of its process) is
+/// the given reference.
+pub fn script_is_current_furniture_ref_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    furniture: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).ptr::<()>();
+        let current = e
+            .vcall(process.addr(), VSLOT_PROCESS_FURNITURE_REFERENCE, &args![])
+            .ptr::<()>();
+        if current == furniture {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "IsCurrentFurnitureRef>> %0.2f"
+        trace_result(e, 0x0103_50a8, result);
+    }
+    true
+}
+
+// Translated from 0059dfe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCurrentFurnitureObjConditionFunction` (Xbox PDB): 1.0 when the
+/// base form of the furniture the actor uses is the given `FURN`, or is in
+/// the given form list.
+pub fn script_is_current_furniture_obj_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    form: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !form.is_null() {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).ptr::<()>();
+        let furniture = e
+            .vcall(process.addr(), VSLOT_PROCESS_FURNITURE_REFERENCE, &args![])
+            .ptr::<()>();
+        if !furniture.is_null() {
+            if e.call(FORM_GET_TYPE, &args![form]).u32() == FORM_TYPE_FURNITURE {
+                let base = e.call(REF_GET_BASE_FORM, &args![furniture]).ptr::<()>();
+                if base == form {
+                    set_result(e, result, 1.0);
+                }
+            } else if e.call(FORM_GET_TYPE, &args![form]).u32() == FORM_TYPE_FORM_LIST {
+                let base = e.call(REF_GET_BASE_FORM, &args![furniture]).u32();
+                let listed = e.with_stack(4, |e, local| {
+                    e.mem.set_u32(local.addr(), base);
+                    let list = e.call(FORM_LIST_GET_LIST, &args![form]).ptr::<()>();
+                    e.call(LIST_CONTAINS, &args![list, local]).bool()
+                });
+                if listed {
+                    set_result(e, result, 1.0);
+                }
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "IsCurrentFurnitureObj>> %0.2f"
+        trace_result(e, 0x0103_50c8, result);
+    }
+    true
+}
+
+// Translated from 0059e0f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetTalkedToPCConditionFunction` (Xbox PDB): 1.0 when virtual
+/// `+0x98` of the actor says it has talked to the player. A null reference
+/// falls back on the first parameter as the actor candidate (which is then
+/// not tested for being an actor).
+pub fn script_get_talked_to_pc_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    fallback: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let subject = if reference.is_null() {
+        fallback
+    } else {
+        actor_of(e, reference)
+    };
+    if !subject.is_null() && e.vcall(subject.addr(), VSLOT_TALKED_TO_PC, &args![]).bool() {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetTalkedToPC >> %0.2f"
+        trace_result(e, 0x0103_50e8, result);
+    }
+    true
+}
+
+// Translated from 0059e1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `GetVariable` condition (no Xbox name; no debug line): the value of the
+/// script variable `variable` in the script locals of the given reference
+/// (placed reference types: its own, or those of the matching inventory item
+/// when it is a carried item) or quest (`QUST`, `+0x5c`).
+pub fn fn_0059e1a0(e: &mut Engine, _reference: Ptr, form: Ptr, variable: u32, result: Ptr) -> bool {
+    set_result(e, result, 0.0);
+    if form.is_null() {
+        return true;
+    }
+    let mut locals: Ptr = Ptr::NULL;
+    let form_type = e.call(FORM_GET_TYPE, &args![form]).u32();
+    if (FORM_TYPE_REFERENCE_FIRST..=FORM_TYPE_REFERENCE_LAST).contains(&form_type)
+        || form_type == FORM_TYPE_REFERENCE_EXTRA
+    {
+        let extra_list = e.call(REF_GET_EXTRA_DATA_LIST, &args![form]).ptr::<()>();
+        let carried_by = e
+            .call(EXTRA_DATA_LIST_GET_REFERENCE_POINTER, &args![extra_list])
+            .ptr::<()>();
+        if carried_by.is_null() {
+            locals = e.call(REF_GET_SCRIPT_VARIABLES, &args![form]).ptr();
+        } else {
+            let extra_list = e.call(REF_GET_EXTRA_DATA_LIST, &args![form]).ptr::<()>();
+            let owner = e
+                .call(EXTRA_DATA_LIST_GET_REFERENCE_POINTER, &args![extra_list])
+                .ptr::<()>();
+            let item_id = e.call(REF_GET_ITEM_ID, &args![form]).u32();
+            let base = e.call(REF_GET_BASE_FORM, &args![form]).u32();
+            let item = e
+                .call(REF_GET_INVENTORY_ITEM, &args![owner, base, item_id])
+                .ptr::<()>();
+            if !item.is_null() {
+                locals = e.call(ITEM_CHANGE_GET_SCRIPT_LOCALS, &args![item]).ptr();
+            }
+            if !item.is_null() {
+                e.call(ITEM_CHANGE_DESTROY, &args![item, 1u32]);
+            }
+        }
+    } else if form_type == FORM_TYPE_QUEST {
+        locals = Ptr::new(fn_0059e300(e, form));
+    }
+    if !locals.is_null() && e.mem.u32(locals.addr()) != 0 {
+        let value = e
+            .call(SCRIPT_LOCALS_GET_VARIABLE, &args![locals, variable, 0u32])
+            .f64();
+        set_result(e, result, value);
+    }
+    true
+}
+
+// Translated from 0059e300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `[this + 0x5c]` of a quest: its script locals pointer.
+pub fn fn_0059e300(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x5c)
+}
+
+// Translated from 0059e320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetQuestRunningConditionFunction` (Xbox PDB): 1.0 when the quest
+/// is running (`00455620`).
+pub fn script_get_quest_running_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    quest: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !quest.is_null() && e.call(QUEST_IS_RUNNING, &args![quest]).bool() {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetQuestRunning >> %0.2f"
+        trace_result(e, 0x0103_5100, result);
+    }
+    true
+}
+
+// Translated from 0059e390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetQuestCompletedConditionFunction` (Xbox PDB): 1.0 when the
+/// quest's flag byte has bit 2 set ([`fn_0059e400`]).
+pub fn script_get_quest_completed_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    quest: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !quest.is_null() && fn_0059e400(e, quest) {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetQuestCompleted >> %0.2f"
+        trace_result(e, 0x0103_511c, result);
+    }
+    true
+}
+
+// Translated from 0059e400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit 2 of the quest's flag byte (at `this + 0x3c`) is set.
+pub fn fn_0059e400(e: &mut Engine, this: Ptr) -> bool {
+    let flags = e.call(QUEST_GET_FLAGS_ADDRESS, &args![this]).u32();
+    e.mem.u8(flags) & 2 != 0
+}
+
+// Translated from 0059e420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStageConditionFunction` (Xbox PDB): the quest's current stage.
+pub fn script_get_stage_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    quest: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !quest.is_null() {
+        let stage = e.call(QUEST_GET_CURRENT_STAGE, &args![quest]).u32();
+        set_result(e, result, stage as f64);
+    }
+    if trace_enabled(e) {
+        // "GetStage >> %0.2f"
+        trace_result(e, 0x0103_5138, result);
+    }
+    true
+}
+
+// Translated from 0059e490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStageDoneConditionFunction` (Xbox PDB): 1.0 when the quest
+/// has completed the stage (low byte of the second parameter).
+pub fn script_get_stage_done_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    quest: Ptr,
+    stage: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !quest.is_null()
+        && e.call(QUEST_IS_STAGE_DONE, &args![quest, stage & 0xff])
+            .bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetStageDone >> %0.2f"
+        trace_result(e, 0x0103_514c, result);
+    }
+    true
+}
+
+// Translated from 0059e510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFactionRankDifferenceConditionFunction` (Xbox PDB): the
+/// faction rank of the actor minus that of the other reference, when both are
+/// members. Returns without a debug line when the actor or the other
+/// reference is missing.
+pub fn script_get_faction_rank_difference_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    faction: Ptr,
+    other: Ptr,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if actor.is_null() || other.is_null() {
+        return true;
+    }
+    let actor_base = e.call(ACTOR_GET_BASE_FORM, &args![actor]).ptr::<()>();
+    let other_base = e.call(ACTOR_GET_BASE_FORM, &args![other]).ptr::<()>();
+    let faction = form_of_type(e, faction, FORM_TYPE_FACTION);
+    if !actor_base.is_null() && !other_base.is_null() && !faction.is_null() {
+        let player = e.global::<u32>(PLAYER);
+        let actor_is_player = (actor.addr() == player) as u32;
+        let actor_rank = e
+            .call(
+                ACTOR_BASE_DATA_GET_FACTION_RANK,
+                &args![actor_base.addr() + 0x30, faction, actor_is_player],
+            )
+            .i32();
+        let other_is_player = (other.addr() == player) as u32;
+        let other_rank = e
+            .call(
+                ACTOR_BASE_DATA_GET_FACTION_RANK,
+                &args![other_base.addr() + 0x30, faction, other_is_player],
+            )
+            .i32();
+        if actor_rank != -1 && other_rank != -1 {
+            set_result(e, result, actor_rank.wrapping_sub(other_rank) as f64);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetFactionRankDifference >> %0.2f"
+        trace_result(e, 0x0103_5164, result);
+    }
+    true
+}
+
+// Translated from 0059e650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAlarmedConditionFunction` (Xbox PDB): 1.0 when the actor's
+/// current procedure name (`0088b7f0`) is "Alarm" (case-insensitive).
+pub fn script_get_alarmed_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.call(ACTOR_GET_PROCEDURE_NAME, &args![actor]).u32() != 0 {
+        let name = e.call(ACTOR_GET_PROCEDURE_NAME, &args![actor]).u32();
+        // "Alarm"
+        if e.call(STRING_COMPARE_NO_CASE, &args![name, 0x0103_519cu32])
+            .i32()
+            == 0
+        {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetAlarmed >> %0.2f"
+        trace_result(e, 0x0103_5188, result);
+    }
+    true
+}
+
+/// The shared body of `GetIsPleasant` and `GetIsCloudy`: the current
+/// weather's share of the sky when it has the flag, plus the share of the
+/// weather it is changing from (one minus the share) when that one has the
+/// flag.
+fn sky_weather_flag_share(
+    e: &mut Engine,
+    result: Ptr,
+    has_flag: fn(&mut Engine, Ptr) -> bool,
+    format: u32,
+) {
+    let sky = e.call(SKY_GET_INSTANCE, &args![]).ptr::<()>();
+    let current = e.call(SKY_GET_CURRENT_WEATHER, &args![sky]).ptr::<()>();
+    let current_share = if !current.is_null() && has_flag(e, current) {
+        e.call(SKY_GET_WEATHER_PERCENT, &args![sky]).f32() as f64
+    } else {
+        0.0
+    };
+    set_result(e, result, current_share);
+    let last = e.call(SKY_GET_LAST_WEATHER, &args![sky]).ptr::<()>();
+    let last_share = if !last.is_null() && has_flag(e, last) {
+        1.0 - e.call(SKY_GET_WEATHER_PERCENT, &args![sky]).f32() as f64
+    } else {
+        0.0
+    };
+    let total = e.mem.f64(result.addr()) + last_share;
+    set_result(e, result, total);
+    if trace_enabled(e) {
+        trace_result(e, format, result);
+    }
+}
+
+// Translated from 0059e700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsPleasantConditionFunction` (Xbox PDB): how much of the sky
+/// is pleasant weather ([`fn_0059e7d0`]).
+pub fn script_get_is_pleasant_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    // "GetIsPleasant >> %0.2f"
+    sky_weather_flag_share(e, result, fn_0059e7d0, 0x0103_51a4);
+    true
+}
+
+// Translated from 0059e7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when flag 1 of the `TESWeather` byte at `+0xeb` is set (pleasant).
+pub fn fn_0059e7d0(e: &mut Engine, weather: Ptr) -> bool {
+    e.mem.u8(weather.addr() + 0xeb) & 1 != 0
+}
+
+// Translated from 0059e7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCloudyConditionFunction` (Xbox PDB): how much of the sky is
+/// cloudy weather ([`fn_0059e8c0`]).
+pub fn script_get_is_cloudy_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    // "GetIsCloudy >> %0.2f"
+    sky_weather_flag_share(e, result, fn_0059e8c0, 0x0103_51bc);
+    true
+}
+
+// Translated from 0059e8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when flag 2 of the `TESWeather` byte at `+0xeb` is set (cloudy).
+pub fn fn_0059e8c0(e: &mut Engine, weather: Ptr) -> bool {
+    e.mem.u8(weather.addr() + 0xeb) & 2 != 0
+}
+
+// Translated from 0059e8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsRainingConditionFunction` (Xbox PDB): 1.0 when
+/// [`fn_0059e950`] says it rains.
+pub fn script_get_is_raining_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let sky = e.call(SKY_GET_INSTANCE, &args![]).ptr::<()>();
+    let raining = fn_0059e950(e, sky);
+    set_result(e, result, if raining { 1.0 } else { 0.0 });
+    if trace_enabled(e) {
+        // "GetIsRaining >> %0.2f"
+        trace_result(e, 0x0103_51d4, result);
+    }
+    true
+}
+
+/// The test behind `GetIsRaining` and `GetIsSnowing`: the weather being
+/// shown (`has_flag` on `Sky::pCurrentWeather`) has passed the threshold at
+/// which that weather's precipitation starts (`WEATHER_INTERPOLATE` of its
+/// entry 6 below the current weather percentage), or the weather being left
+/// (`Sky::pLastWeather`) has not yet fallen below the one of its entry 7.
+fn sky_precipitation_active(
+    e: &mut Engine,
+    sky: Ptr,
+    has_flag: fn(&mut Engine, Ptr) -> bool,
+) -> bool {
+    // Sky::pCurrentWeather (Xbox PDB) +0x10, pLastWeather +0x14,
+    // fCurrentWeatherPct +0xf4.
+    let current = Ptr::new(e.mem.u32(sky.addr() + 0x10));
+    if !current.is_null() && has_flag(e, current) {
+        let from = e.global::<f32>(WEATHER_RAIN_FROM);
+        let limit = e
+            .call(WEATHER_INTERPOLATE, &args![current, 6u32, from, 0.0f32])
+            .f32();
+        let percent = e.mem.f32(sky.addr() + 0xf4);
+        if percent as f64 > limit as f64 {
+            return true;
+        }
+    }
+    let last = Ptr::new(e.mem.u32(sky.addr() + 0x14));
+    if !last.is_null() && has_flag(e, last) {
+        let to = e.global::<f32>(WEATHER_RAIN_TO);
+        let limit = e
+            .call(WEATHER_INTERPOLATE, &args![last, 7u32, 1.0f32, to])
+            .f32();
+        let percent = e.mem.f32(sky.addr() + 0xf4);
+        if (percent as f64) < limit as f64 {
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 0059e950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The rain test of a `Sky` (`this`): [`sky_precipitation_active`] with the
+/// precipitation flag (`004ed270`) as the weather test.
+pub fn fn_0059e950(e: &mut Engine, sky: Ptr) -> bool {
+    sky_precipitation_active(e, sky, |e, weather| {
+        e.call(WEATHER_HAS_FLAG_PRECIPITATION, &args![weather])
+            .bool()
+    })
+}
+
+// Translated from 0059ea10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsSnowingConditionFunction` (Xbox PDB): 1.0 when
+/// [`fn_0059ea80`] says it snows.
+pub fn script_get_is_snowing_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let sky = e.call(SKY_GET_INSTANCE, &args![]).ptr::<()>();
+    let snowing = fn_0059ea80(e, sky);
+    set_result(e, result, if snowing { 1.0 } else { 0.0 });
+    if trace_enabled(e) {
+        // "GetIsSnowing >> %0.2f"
+        trace_result(e, 0x0103_51ec, result);
+    }
+    true
+}
+
+// Translated from 0059ea80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The snow test of a `Sky` (`this`): [`sky_precipitation_active`] with
+/// [`fn_0059eb40`] (flag 8 of the weather) as the weather test.
+pub fn fn_0059ea80(e: &mut Engine, sky: Ptr) -> bool {
+    sky_precipitation_active(e, sky, fn_0059eb40)
+}
+
+// Translated from 0059eb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when flag 8 of the `TESWeather` byte at `+0xeb` is set (snow).
+pub fn fn_0059eb40(e: &mut Engine, weather: Ptr) -> bool {
+    e.mem.u8(weather.addr() + 0xeb) & 8 != 0
+}
+
+// Translated from 0059eb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetWeatherPercentConditionFunction` (Xbox PDB): the sky's
+/// current weather percentage.
+pub fn script_get_weather_percent_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let sky = e.call(SKY_GET_INSTANCE, &args![]).ptr::<()>();
+    let percent = e.call(SKY_GET_WEATHER_PERCENT, &args![sky]).f32();
+    set_result(e, result, percent as f64);
+    if trace_enabled(e) {
+        // "GetCurrentWeatherPercent >> %0.2f"
+        trace_result(e, 0x0103_5204, result);
+    }
+    true
+}
+
+// Translated from 0059ebb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCurrentWeatherConditionFunction` (Xbox PDB): 1.0 when the
+/// given `WTHR` is the sky's current weather (a null weather matches when
+/// the sky has none).
+pub fn script_get_is_current_weather_condition_function(
+    e: &mut Engine,
+    _reference: Ptr,
+    weather: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let weather = form_of_type(e, weather, FORM_TYPE_WEATHER);
+    let sky = e.call(SKY_GET_INSTANCE, &args![]).ptr::<()>();
+    let current = e.call(SKY_GET_CURRENT_WEATHER, &args![sky]).ptr::<()>();
+    if weather == current {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetIsCurrentWeather >> %0.2f"
+        trace_result(e, 0x0103_5228, result);
+    }
+    true
+}
+
+// Translated from 0059ec30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAttackedConditionFunction` (Xbox PDB): the actor's virtual
+/// `+0x470` (a byte). Unlike its neighbours it does not zero the result
+/// first: a non-actor leaves `*result` as it was.
+pub fn script_get_attacked_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let attacked = e.vcall(actor.addr(), VSLOT_ATTACKED, &args![]).u8();
+        set_result(e, result, attacked as f64);
+    }
+    if trace_enabled(e) {
+        // "GetAttacked >> %0.2f"
+        trace_result(e, 0x0103_5248, result);
+    }
+    true
+}
+
+// Translated from 0059ecc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCreatureConditionFunction` (Xbox PDB): 1.0 when the
+/// reference's base form is a `CREA`.
+pub fn script_get_is_creature_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
+        if e.call(FORM_GET_TYPE, &args![base]).u32() == FORM_TYPE_CREATURE {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetIsCreature >> %0.2f"
+        trace_result(e, 0x0103_5260, result);
+    }
+    true
+}
+
+// Translated from 0059ed30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetShouldAttackConditionFunction` (Xbox PDB): 100 when the actor
+/// should attack the target (an `ACHR` / `ACRE`), else 0. The result is
+/// written only when both are valid and the combat manager has not already
+/// answered yes, in which case the function returns without a debug line.
+pub fn script_get_should_attack_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    target: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let mut verdict = 0u32;
+    let mut attack_target = Ptr::NULL;
+    if !target.is_null() {
+        let target_type = e.call(FORM_GET_TYPE, &args![target]).u32();
+        if (FORM_TYPE_ACTOR_FIRST..=FORM_TYPE_ACTOR_LAST).contains(&target_type) {
+            attack_target = target;
+        }
+    }
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !attack_target.is_null() {
+        let flagged = e.call(TARGET_GET_FLAG, &args![attack_target]).bool();
+        e.vcall(
+            actor.addr(),
+            VSLOT_ACTOR_PREPARE_ATTACK_CHECK,
+            &args![attack_target, 0u32],
+        );
+        if flagged
+            && e.vcall(attack_target.addr(), VSLOT_TARGET_COMBAT_CHECK, &args![])
+                .u32()
+                != 0
+        {
+            let manager = e.global::<u32>(COMBAT_MANAGER);
+            if e.call(COMBAT_MANAGER_CHECK, &args![manager, actor, attack_target])
+                .bool()
+            {
+                return true;
+            }
+        }
+        // The out structure on the game's stack: 16 bytes, zeroed.
+        let should_attack = e.with_stack(16, |e, out| {
+            e.call(
+                ACTOR_GET_SHOULD_ATTACK_ACTOR,
+                &args![actor, attack_target, 0u32, out, 0u32],
+            )
+            .bool()
+        });
+        if should_attack {
+            verdict = 100;
+        }
+        set_result(e, result, verdict as f64);
+    }
+    if trace_enabled(e) {
+        // "GetShouldAttack >> %i"
+        e.call(DEBUG_PRINT, &args![0x0103_5278u32, verdict]);
+    }
+    true
+}
+
+// Translated from 0059ee80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetInSameCellConditionFunction` (Xbox PDB): 1.0 when the
+/// reference and the other (placed) reference are in the same parent cell.
+pub fn script_get_in_same_cell_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    other: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let other = placed_reference_of(e, other);
+    let reference_cell = if reference.is_null() {
+        Ptr::NULL
+    } else {
+        e.call(REF_GET_PARENT_CELL, &args![reference]).ptr::<()>()
+    };
+    let other_cell = if other.is_null() {
+        Ptr::NULL
+    } else {
+        e.call(REF_GET_PARENT_CELL, &args![other]).ptr::<()>()
+    };
+    if !reference_cell.is_null() && !other_cell.is_null() && reference_cell == other_cell {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetInSameCell >> %0.2f"
+        trace_result(e, 0x0103_5290, result);
+    }
+    true
+}
+
+// Translated from 0059ef60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetInCellConditionFunction` (Xbox PDB): 1.0 when the (second
+/// parameter or calling) reference's parent cell has a name starting with the
+/// given cell's. The last (reference, cell, answer) is cached in globals.
+pub fn script_get_in_cell_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    cell: Ptr,
+    other: Ptr,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let cell = form_of_type(e, cell, FORM_TYPE_CELL);
+    let mut subject = placed_reference_of(e, other);
+    if subject.is_null() {
+        subject = reference;
+    }
+    if !subject.is_null() {
+        if subject.addr() == e.global::<u32>(IN_CELL_CACHE_REFERENCE)
+            && e.global::<u32>(IN_CELL_CACHE_CELL) == cell.addr()
+        {
+            let cached = e.global::<f32>(IN_CELL_CACHE_RESULT);
+            set_result(e, result, cached as f64);
+        } else {
+            let parent_cell = e.call(REF_GET_PARENT_CELL, &args![subject]).ptr::<()>();
+            if !parent_cell.is_null() && !cell.is_null() {
+                let length = e.call(CELL_GET_NAME_LENGTH, &args![cell]).u32();
+                let cell_name = e.vcall(cell.addr(), VSLOT_FORM_GET_NAME, &args![]).u32();
+                let parent_name = e
+                    .vcall(parent_cell.addr(), VSLOT_FORM_GET_NAME, &args![])
+                    .u32();
+                let same = e
+                    .call(
+                        STRING_COMPARE_N_NO_CASE,
+                        &args![parent_name, cell_name, length],
+                    )
+                    .i32();
+                if same == 0 {
+                    set_result(e, result, 1.0);
+                }
+            }
+            e.set_global::<u32>(IN_CELL_CACHE_REFERENCE, subject.addr());
+            e.set_global::<u32>(IN_CELL_CACHE_CELL, cell.addr());
+            let answer = e.mem.f64(result.addr());
+            e.set_global::<f32>(IN_CELL_CACHE_RESULT, answer as f32);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetInCell >> %0.2f"
+        trace_result(e, 0x0103_52a8, result);
+    }
+    true
+}
+
+// Translated from 0059f0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetInWorldspaceConditionFunction` (Xbox PDB): 1.0 when the
+/// (second parameter or calling) reference is in the given worldspace.
+pub fn script_get_in_worldspace_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    worldspace: Ptr,
+    other: Ptr,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let worldspace = form_of_type(e, worldspace, FORM_TYPE_WORLDSPACE);
+    let mut subject = placed_reference_of(e, other);
+    if subject.is_null() {
+        subject = reference;
+    }
+    if !worldspace.is_null()
+        && e.call(REF_GET_WORLDSPACE, &args![subject]).ptr::<()>() == worldspace
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetInWorldspace >> %0.2f"
+        trace_result(e, 0x0103_52bc, result);
+    }
+    true
+}
+
+// Translated from 0059f180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsClassConditionFunction` (Xbox PDB): 1.0 when the `NPC_`'s
+/// class is the given `CLAS`.
+pub fn script_get_is_class_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    class: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let npc = npc_base_form_of(e, reference);
+    let class = form_of_type(e, class, FORM_TYPE_CLASS);
+    if !npc.is_null() && !class.is_null() && e.call(NPC_GET_CLASS, &args![npc]).ptr::<()>() == class
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetIsClass >> %0.2f"
+        trace_result(e, 0x0103_52d8, result);
+    }
+    true
+}
+
+// Translated from 0059f240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsRaceConditionFunction` (Xbox PDB): 1.0 when the `NPC_`'s
+/// race is the given `RACE`.
+pub fn script_get_is_race_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    race: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let npc = npc_base_form_of(e, reference);
+    let race = form_of_type(e, race, FORM_TYPE_RACE);
+    if !npc.is_null() && !race.is_null() && e.call(NPC_GET_RACE, &args![npc]).ptr::<()>() == race {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetIsRace >> %0.2f"
+        trace_result(e, 0x0103_52ec, result);
+    }
+    true
+}
+
+// Translated from 0059f300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCreatureTypeConditionFunction` (Xbox PDB): 1.0 when the
+/// `CREA`'s type byte ([`fn_0059f3a0`], sign-extended) is the given number.
+pub fn script_get_is_creature_type_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    creature_type: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let creature = base_form_of_type(e, reference, FORM_TYPE_CREATURE);
+    if !creature.is_null() {
+        let kind = fn_0059f3a0(e, creature) as i8 as i32 as u32;
+        if kind == creature_type {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetIsCreatureType >> %0.2f"
+        trace_result(e, 0x0103_5300, result);
+    }
+    true
+}
+
+// Translated from 0059f3a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The type byte of a creature form (`this + 0x12c`).
+pub fn fn_0059f3a0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x12c)
+}
+
+// Translated from 0059f3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsSexConditionFunction` (Xbox PDB): 1.0 when the `NPC_`'s sex
+/// is the given number.
+pub fn script_get_is_sex_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    sex: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let npc = npc_base_form_of(e, reference);
+    if !npc.is_null() && e.call(NPC_GET_SEX, &args![npc]).u32() == sex {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetIsSex >> %0.2f"
+        trace_result(e, 0x0103_531c, result);
+    }
+    true
+}
+
+// Translated from 0059f450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsVoiceTypeConditionFunction` (Xbox PDB): 1.0 when the voice
+/// type of the reference's base form is the given one. The last (reference,
+/// voice type) is cached in globals.
+pub fn script_get_is_voice_type_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    voice_type: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let voice = if reference.addr() == e.global::<u32>(VOICE_TYPE_CACHE_REFERENCE) {
+            e.global::<u32>(VOICE_TYPE_CACHE_VOICE)
+        } else {
+            let mut found = 0u32;
+            let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
+            let base_type = e.call(FORM_GET_TYPE, &args![base]).i32();
+            if base_type == FORM_TYPE_VOICE_SOURCE as i32 {
+                let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
+                found = e.call(FORM_GET_VOICE_TYPE, &args![base]).u32();
+            } else if base_type > 0x29 && base_type <= FORM_TYPE_CREATURE as i32 {
+                // The component at +0x30 of the NPC_ / CREA base form.
+                let base = e.call(REF_GET_BASE_FORM, &args![reference]).ptr::<()>();
+                found = e
+                    .vcall(
+                        base.addr() + 0x30,
+                        VSLOT_BASE_COMPONENT_VOICE_TYPE,
+                        &args![],
+                    )
+                    .u32();
+            }
+            e.set_global::<u32>(VOICE_TYPE_CACHE_REFERENCE, reference.addr());
+            e.set_global::<u32>(VOICE_TYPE_CACHE_VOICE, found);
+            found
+        };
+        if voice == voice_type {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetIsVoiceType >> %0.2f"
+        trace_result(e, 0x0103_5330, result);
+    }
+    true
+}
+
+// Translated from 0059f540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsPlayableRaceConditionFunction` (Xbox PDB): 1.0 when the
+/// `NPC_`'s race has its playable flag (`0059f610`). The last (reference,
+/// answer) is cached in globals and answers first (the debug line is still
+/// printed).
+pub fn script_get_is_playable_race_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    if e.global::<u32>(PLAYABLE_RACE_CACHE_REFERENCE) == reference.addr() {
+        let cached = e.global::<f32>(PLAYABLE_RACE_CACHE_RESULT);
+        set_result(e, result, cached as f64);
+    } else {
+        set_result(e, result, 0.0);
+        let npc = npc_base_form_of(e, reference);
+        if !npc.is_null() {
+            let race = e.call(NPC_GET_RACE, &args![npc]).ptr::<()>();
+            if !race.is_null() && e.call(RACE_IS_PLAYABLE, &args![race]).bool() {
+                set_result(e, result, 1.0);
+            }
+        }
+        e.set_global::<u32>(PLAYABLE_RACE_CACHE_REFERENCE, reference.addr());
+        let answer = e.mem.f64(result.addr());
+        e.set_global::<f32>(PLAYABLE_RACE_CACHE_RESULT, answer as f32);
+    }
+    if trace_enabled(e) {
+        // "GetIsPlayableRace >> %0.2f"
+        trace_result(e, 0x0103_5348, result);
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1435,6 +2712,7 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059c170, script_get_angle_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x0059c230, script_get_starting_pos_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x0059c2d0, script_get_starting_angle_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059c380, script_get_menu_mode_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x0059c430, script_get_seconds_passed_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
         entry!(0x0059c4c0, fn_0059c4c0(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x0059c4f0, fn_0059c4f0(Ptr, u32, u32, Ptr) -> bool),
@@ -1469,6 +2747,45 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0059d8e0, script_get_item_count_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
         entry!(0x0059da90, script_get_equipped_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
         entry!(0x0059dbe0, script_get_gold_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059dc90, script_get_sleeping_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059dd90, script_get_sitting_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059de90, script_get_furniture_marker_id_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059df40, script_is_current_furniture_ref_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059dfe0, script_is_current_furniture_obj_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e0f0, script_get_talked_to_pc_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e1a0, fn_0059e1a0(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e300, fn_0059e300(Ptr) -> u32),
+        entry!(0x0059e320, script_get_quest_running_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e390, script_get_quest_completed_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e400, fn_0059e400(Ptr) -> bool),
+        entry!(0x0059e420, script_get_stage_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e490, script_get_stage_done_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059e510, script_get_faction_rank_difference_condition_function(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x0059e650, script_get_alarmed_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059e700, script_get_is_pleasant_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059e7d0, fn_0059e7d0(Ptr) -> bool),
+        entry!(0x0059e7f0, script_get_is_cloudy_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059e8c0, fn_0059e8c0(Ptr) -> bool),
+        entry!(0x0059e8e0, script_get_is_raining_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059e950, fn_0059e950(Ptr) -> bool),
+        entry!(0x0059ea10, script_get_is_snowing_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059ea80, fn_0059ea80(Ptr) -> bool),
+        entry!(0x0059eb40, fn_0059eb40(Ptr) -> bool),
+        entry!(0x0059eb60, script_get_weather_percent_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059ebb0, script_get_is_current_weather_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059ec30, script_get_attacked_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059ecc0, script_get_is_creature_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059ed30, script_get_should_attack_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059ee80, script_get_in_same_cell_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059ef60, script_get_in_cell_condition_function(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x0059f0c0, script_get_in_worldspace_condition_function(Ptr, Ptr, Ptr, Ptr) -> bool),
+        entry!(0x0059f180, script_get_is_class_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059f240, script_get_is_race_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x0059f300, script_get_is_creature_type_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059f3a0, fn_0059f3a0(Ptr) -> u8),
+        entry!(0x0059f3c0, script_get_is_sex_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059f450, script_get_is_voice_type_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x0059f540, script_get_is_playable_race_condition_function(Ptr, u32, u32, Ptr) -> bool),
     ]
 }
 
@@ -1494,7 +2811,11 @@ mod tests {
             0x0101_d000,
             0x0102_9000,
             0x0102_f000,
+            0x0102_3000,
+            0x0101_7000,
+            0x011c_a000,
             0x011d_e000,
+            0x011f_1000,
         ] {
             e.map(page, 0x1000);
         }
@@ -1505,6 +2826,9 @@ mod tests {
         e.set_global(0x0101_de30, 0.75f64);
         e.set_global(0x0102_90b0, 0.25f64);
         e.set_global(DEGREES_PER_RADIAN, 57.29577951308232f64);
+        e.set_global(DOUBLE_ONE, 1.0f64);
+        e.set_global(WEATHER_RAIN_FROM, 0.5f32);
+        e.set_global(WEATHER_RAIN_TO, 0.125f32);
         e.register(DEBUG_PRINT, |_, _| Ret::default());
         e.register(IS_ACTOR_YES, |_, _| true.into_ret());
         e.register(IS_ACTOR_NO, |_, _| false.into_ret());
@@ -2659,5 +3983,908 @@ mod tests {
         stub(&mut e, 0x0048_39c0, 0);
         assert_eq!(run(&mut e, 0x0059_dbe0, 0x2000, 0, 0), (true, 0.0));
         assert_eq!(run(&mut e, 0x0059_dbe0, 0, 0, 0), (true, 0.0));
+    }
+
+    // ---- second session: 0059c380, 0059dc90 to 0059f540 ----
+
+    /// A virtual-slot function answering `value` in `eax`.
+    fn slot_function(e: &mut Engine, addr: u32, value: u32) -> u32 {
+        e.register_double(addr, move |_, _| value.into_ret());
+        addr
+    }
+
+    /// `TESForm::cFormType` (`00401170`) reading the byte at `+4`.
+    fn use_form_types(e: &mut Engine) {
+        e.register(FORM_GET_TYPE, |e, a| (e.mem.u8(a[0] + 4) as u32).into_ret());
+    }
+
+    /// A form-like object whose type byte (`+4`) is `form_type`.
+    fn typed_object(e: &mut Engine, form_type: u8) -> u32 {
+        let object = e.mem.alloc(0x200);
+        e.mem.set_u8(object + 4, form_type);
+        object
+    }
+
+    /// An actor object (`IsActor` yes) with extra vtable slots.
+    fn actor_with(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let mut all = vec![(VSLOT_IS_ACTOR, IS_ACTOR_YES)];
+        all.extend_from_slice(slots);
+        object(e, &all)
+    }
+
+    /// Whether the debug line was printed with the format at `format`.
+    fn printed(log: &Log, format: u32) -> bool {
+        calls_to(log, DEBUG_PRINT).iter().any(|w| w[0] == format)
+    }
+
+    #[test]
+    fn menu_mode_asks_the_menu_functions() {
+        let mut e = engine();
+        stub(&mut e, INTERFACE_IS_IN_MENU_MODE, 1);
+        assert_eq!(run(&mut e, 0x0059_c380, 0, 0, 0), (true, 1.0));
+        stub(&mut e, INTERFACE_IS_IN_MENU_MODE, 0);
+        assert_eq!(run(&mut e, 0x0059_c380, 0, 0, 0), (true, 0.0));
+
+        // A menu id: visibility (with a 0 second argument) ...
+        e.register_double(INTERFACE_IS_MENU_ID_VISIBLE, |_, a| {
+            assert_eq!(a, [0x3ec, 0]);
+            true.into_ret()
+        });
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x0059_c380, 0, 0x3ec, 0), (true, 1.0));
+        let log = take_log(&mut e);
+        let w = words(1.0);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT),
+            vec![vec![0x0103_4da0, 0x3ec, w[0], w[1]]]
+        );
+        // ... or, with the byte at 011cab24 set, the top menu only.
+        e.mem.set_u8(MENU_MODE_TOP_ONLY, 1);
+        stub(&mut e, INTERFACE_IS_TOP_MENU_ID, 0);
+        assert_eq!(run(&mut e, 0x0059_c380, 0, 0x3ec, 0), (true, 0.0));
+        e.register_double(INTERFACE_IS_TOP_MENU_ID, |_, a| {
+            assert_eq!(a, [0x3ec]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x0059_c380, 0, 0x3ec, 0), (true, 1.0));
+    }
+
+    #[test]
+    fn sleeping_and_sitting_count_up_by_state() {
+        let mut e = engine();
+        // Sleeping: states 6..=10 give 1, 2, 2, 3, 4; sitting: 1..=5 the same.
+        for (state, sleeping, sitting) in [
+            (0u32, 0.0, 0.0),
+            (1, 0.0, 1.0),
+            (2, 0.0, 2.0),
+            (3, 0.0, 2.0),
+            (4, 0.0, 3.0),
+            (5, 0.0, 4.0),
+            (6, 1.0, 0.0),
+            (7, 2.0, 0.0),
+            (8, 2.0, 0.0),
+            (9, 3.0, 0.0),
+            (10, 4.0, 0.0),
+            (11, 0.0, 0.0),
+        ] {
+            let state_function = slot_function(&mut e, 0x0f00_0100 + state, state);
+            let actor = actor_with(&mut e, &[(VSLOT_SIT_SLEEP_STATE, state_function)]);
+            assert_eq!(
+                run(&mut e, 0x0059_dc90, actor, 0, 0),
+                (true, sleeping),
+                "sleeping state {state}"
+            );
+            assert_eq!(
+                run(&mut e, 0x0059_dd90, actor, 0, 0),
+                (true, sitting),
+                "sitting state {state}"
+            );
+        }
+        // A non-actor and no reference: 0.
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_dc90, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_dd90, 0, 0, 0), (true, 0.0));
+        // The debug lines.
+        let six = slot_function(&mut e, 0x0f00_0200, 6);
+        let actor = actor_with(&mut e, &[(VSLOT_SIT_SLEEP_STATE, six)]);
+        trace_on(&mut e);
+        run(&mut e, 0x0059_dc90, actor, 0, 0);
+        run(&mut e, 0x0059_dd90, actor, 0, 0);
+        let log = take_log(&mut e);
+        let one = words(1.0);
+        let zero = words(0.0);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT),
+            vec![
+                vec![0x0103_505c, one[0], one[1]],
+                vec![0x0103_5074, zero[0], zero[1]]
+            ]
+        );
+    }
+
+    #[test]
+    fn furniture_marker_id_is_unsigned() {
+        let mut e = engine();
+        let marker = slot_function(&mut e, 0x0f00_0300, 0xffff_fff0);
+        let process = object(&mut e, &[(VSLOT_PROCESS_FURNITURE_MARKER_ID, marker)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        let actor = actor(&mut e);
+        assert_eq!(
+            run(&mut e, 0x0059_de90, actor, 0, 0),
+            (true, 4_294_967_280.0)
+        );
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_de90, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_de90, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn current_furniture_reference_is_compared() {
+        let mut e = engine();
+        let furniture = slot_function(&mut e, 0x0f00_0310, 0x7000);
+        let process = object(&mut e, &[(VSLOT_PROCESS_FURNITURE_REFERENCE, furniture)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        let actor = actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_df40, actor, 0x7000, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_df40, actor, 0x7001, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_df40, plain, 0x7000, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn current_furniture_object_matches_a_furn_or_a_list() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let furniture = typed_object(&mut e, 0x27);
+        let list = typed_object(&mut e, 0x55);
+        let in_use = slot_function(&mut e, 0x0f00_0320, 0x7000);
+        let process = object(&mut e, &[(VSLOT_PROCESS_FURNITURE_REFERENCE, in_use)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        let actor = actor(&mut e);
+        // GetForm of the furniture reference.
+        stub(&mut e, REF_GET_BASE_FORM, furniture);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 1.0));
+        let other_furniture = typed_object(&mut e, 0x27);
+        assert_eq!(
+            run(&mut e, 0x0059_dfe0, actor, other_furniture, 0),
+            (true, 0.0)
+        );
+
+        // A form list: the base form is looked up in the list through the
+        // list-contains function, handed the address of a local that holds it.
+        e.register_double(LIST_CONTAINS, move |e, a| {
+            assert_eq!(a[0], list + 0x18);
+            (e.mem.u32(a[1]) == furniture).into_ret()
+        });
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, list, 0), (true, 1.0));
+        stub(&mut e, REF_GET_BASE_FORM, other_furniture);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, list, 0), (true, 0.0));
+
+        // Any other type, no furniture in use, no form or a non-actor: 0.
+        let weapon = typed_object(&mut e, 0x28);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, weapon, 0), (true, 0.0));
+        let nothing = slot_function(&mut e, 0x0f00_0321, 0);
+        let idle_process = object(&mut e, &[(VSLOT_PROCESS_FURNITURE_REFERENCE, nothing)]);
+        stub(&mut e, ACTOR_GET_PROCESS, idle_process);
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, furniture, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_dfe0, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_dfe0, plain, furniture, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn talked_to_pc_asks_the_actor_or_the_fallback() {
+        let mut e = engine();
+        let yes = slot_function(&mut e, 0x0f00_0330, 1);
+        let no = slot_function(&mut e, 0x0f00_0331, 0);
+        let talked = actor_with(&mut e, &[(VSLOT_TALKED_TO_PC, yes)]);
+        let silent = actor_with(&mut e, &[(VSLOT_TALKED_TO_PC, no)]);
+        assert_eq!(run(&mut e, 0x0059_e0f0, talked, 0, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_e0f0, silent, 0, 0), (true, 0.0));
+        // A reference that is not an actor is dropped, whatever the fallback.
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_e0f0, plain, talked, 0), (true, 0.0));
+        // No reference at all: the first parameter is the actor (untested).
+        assert_eq!(run(&mut e, 0x0059_e0f0, 0, talked, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_e0f0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn get_variable_reads_the_locals_of_a_reference_an_item_or_a_quest() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let locals = e.mem.alloc(8);
+        e.mem.set_u32(locals, 0x1234);
+        e.register_double(SCRIPT_LOCALS_GET_VARIABLE, move |_, a| {
+            assert_eq!((a[0], a[1], a[2]), (locals, 7, 0));
+            Ret {
+                st0: 3.5,
+                ..Ret::default()
+            }
+        });
+        // A placed reference that is not carried: its own script variables.
+        let reference = typed_object(&mut e, 0x3b);
+        stub(&mut e, REF_GET_EXTRA_DATA_LIST, 0x6000);
+        stub(&mut e, EXTRA_DATA_LIST_GET_REFERENCE_POINTER, 0);
+        stub(&mut e, REF_GET_SCRIPT_VARIABLES, locals);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, reference, 7), (true, 3.5));
+
+        // Locals that are not set up (first word 0): 0.0.
+        e.mem.set_u32(locals, 0);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, reference, 7), (true, 0.0));
+        e.mem.set_u32(locals, 0x1234);
+
+        // A carried item: the owner's inventory item, its locals, then the
+        // item is destroyed (flag 1).
+        let owner = 0x9100;
+        stub(&mut e, EXTRA_DATA_LIST_GET_REFERENCE_POINTER, owner);
+        stub(&mut e, REF_GET_ITEM_ID, 0x55);
+        stub(&mut e, REF_GET_BASE_FORM, 0xba5e);
+        stub(&mut e, REF_GET_INVENTORY_ITEM, 0x9200);
+        stub(&mut e, ITEM_CHANGE_GET_SCRIPT_LOCALS, locals);
+        stub(&mut e, ITEM_CHANGE_DESTROY, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, reference, 7), (true, 3.5));
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, REF_GET_INVENTORY_ITEM),
+            vec![vec![owner, 0xba5e, 0x55]]
+        );
+        assert_eq!(calls_to(&log, ITEM_CHANGE_DESTROY), vec![vec![0x9200, 1]]);
+        assert!(calls_to(&log, REF_GET_SCRIPT_VARIABLES).is_empty());
+        // No such inventory item: nothing to read or destroy.
+        stub(&mut e, REF_GET_INVENTORY_ITEM, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, reference, 7), (true, 0.0));
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, ITEM_CHANGE_DESTROY).is_empty());
+
+        // A quest: the pointer at +0x5c.
+        let quest = typed_object(&mut e, 0x47);
+        e.mem.set_u32(quest + 0x5c, locals);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, quest, 7), (true, 3.5));
+        assert_eq!(fn_0059e300(&mut e, Ptr::new(quest)), locals);
+        // Another form type, or none: 0.
+        let weapon = typed_object(&mut e, 0x28);
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, weapon, 7), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_e1a0, 0, 0, 7), (true, 0.0));
+    }
+
+    #[test]
+    fn quest_conditions_ask_the_quest() {
+        let mut e = engine();
+        trace_on(&mut e);
+        // Running.
+        stub(&mut e, QUEST_IS_RUNNING, 1);
+        assert_eq!(run(&mut e, 0x0059_e320, 0, 0x4000, 0), (true, 1.0));
+        stub(&mut e, QUEST_IS_RUNNING, 0);
+        assert_eq!(run(&mut e, 0x0059_e320, 0, 0x4000, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_e320, 0, 0, 0), (true, 0.0));
+        // Completed: bit 2 of the flag byte.
+        let flags = e.mem.alloc(4);
+        stub(&mut e, QUEST_GET_FLAGS_ADDRESS, flags);
+        e.mem.set_u8(flags, 0x05);
+        assert_eq!(run(&mut e, 0x0059_e390, 0, 0x4000, 0), (true, 0.0));
+        e.mem.set_u8(flags, 0x06);
+        assert_eq!(run(&mut e, 0x0059_e390, 0, 0x4000, 0), (true, 1.0));
+        assert!(fn_0059e400(&mut e, Ptr::new(0x4000)));
+        assert_eq!(run(&mut e, 0x0059_e390, 0, 0, 0), (true, 0.0));
+        // Current stage.
+        e.register_double(QUEST_GET_CURRENT_STAGE, |_, a| {
+            assert_eq!(a, [0x4000]);
+            40u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x0059_e420, 0, 0x4000, 0), (true, 40.0));
+        assert_eq!(run(&mut e, 0x0059_e420, 0, 0, 0), (true, 0.0));
+        // Stage done: the stage is the low byte of the second parameter.
+        e.register_double(QUEST_IS_STAGE_DONE, |_, a| {
+            assert_eq!(a, [0x4000, 0x78]);
+            true.into_ret()
+        });
+        assert_eq!(
+            run(&mut e, 0x0059_e490, 0, 0x4000, 0x1234_5678),
+            (true, 1.0)
+        );
+        assert_eq!(run(&mut e, 0x0059_e490, 0, 0, 0x78), (true, 0.0));
+        let log = take_log(&mut e);
+        assert!(printed(&log, 0x0103_5100));
+        assert!(printed(&log, 0x0103_511c));
+        assert!(printed(&log, 0x0103_5138));
+        assert!(printed(&log, 0x0103_514c));
+    }
+
+    #[test]
+    fn faction_rank_difference_needs_two_members() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let faction = typed_object(&mut e, 8);
+        let actor = actor(&mut e);
+        let other = typed_object(&mut e, 0x3b);
+        e.set_global::<u32>(PLAYER, other);
+        e.register(ACTOR_GET_BASE_FORM, |_, a| (a[0] + 0x1000).into_ret());
+        // Rank 5 for the actor, 3 for the other; (faction, is the player).
+        e.register_double(ACTOR_BASE_DATA_GET_FACTION_RANK, move |_, a| {
+            assert_eq!(a[1], faction);
+            if a[0] == actor + 0x1000 + 0x30 {
+                assert_eq!(a[2], 0);
+                5u32.into_ret()
+            } else {
+                assert_eq!(a[0], other + 0x1000 + 0x30);
+                assert_eq!(a[2], 1);
+                3u32.into_ret()
+            }
+        });
+        assert_eq!(run(&mut e, 0x0059_e510, actor, faction, other), (true, 2.0));
+        // Not a member of the faction: nothing written.
+        e.register_double(ACTOR_BASE_DATA_GET_FACTION_RANK, move |_, a| {
+            if a[2] == 1 {
+                u32::MAX.into_ret()
+            } else {
+                5u32.into_ret()
+            }
+        });
+        assert_eq!(run(&mut e, 0x0059_e510, actor, faction, other), (true, 0.0));
+        // Not a faction.
+        let class = typed_object(&mut e, 7);
+        assert_eq!(run(&mut e, 0x0059_e510, actor, class, other), (true, 0.0));
+
+        // No actor, or no other reference: back without a debug line.
+        trace_on(&mut e);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_e510, plain, faction, other), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_e510, actor, faction, 0), (true, 0.0));
+        let log = take_log(&mut e);
+        assert!(!printed(&log, 0x0103_5164));
+        // The valid case prints.
+        trace_on(&mut e);
+        run(&mut e, 0x0059_e510, actor, faction, other);
+        let log = take_log(&mut e);
+        assert!(printed(&log, 0x0103_5164));
+    }
+
+    #[test]
+    fn alarmed_compares_the_procedure_name_with_alarm() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        stub(&mut e, ACTOR_GET_PROCEDURE_NAME, 0x9000);
+        e.register_double(STRING_COMPARE_NO_CASE, |_, a| {
+            assert_eq!(a, [0x9000, 0x0103_519c]);
+            0u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x0059_e650, actor, 0, 0), (true, 1.0));
+        stub(&mut e, STRING_COMPARE_NO_CASE, 1);
+        assert_eq!(run(&mut e, 0x0059_e650, actor, 0, 0), (true, 0.0));
+        // No name, a non-actor or no reference: 0.
+        stub(&mut e, STRING_COMPARE_NO_CASE, 0);
+        stub(&mut e, ACTOR_GET_PROCEDURE_NAME, 0);
+        assert_eq!(run(&mut e, 0x0059_e650, actor, 0, 0), (true, 0.0));
+        stub(&mut e, ACTOR_GET_PROCEDURE_NAME, 0x9000);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_e650, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_e650, 0, 0, 0), (true, 0.0));
+    }
+
+    /// A weather object: the flag byte at `+0xeb`.
+    fn weather(e: &mut Engine, flags: u8) -> u32 {
+        let weather = e.mem.alloc(0x100);
+        e.mem.set_u8(weather + 0xeb, flags);
+        weather
+    }
+
+    /// A sky object at the address `Sky::GetInstance` returns.
+    fn sky(e: &mut Engine, current: u32, last: u32, percent: f32) -> u32 {
+        let sky = e.mem.alloc(0x140);
+        e.mem.set_u32(sky + 0x10, current);
+        e.mem.set_u32(sky + 0x14, last);
+        e.mem.set_f32(sky + 0xf4, percent);
+        stub(e, SKY_GET_INSTANCE, sky);
+        e.register(SKY_GET_CURRENT_WEATHER, |e, a| {
+            e.mem.u32(a[0] + 0x10).into_ret()
+        });
+        e.register(SKY_GET_LAST_WEATHER, |e, a| {
+            e.mem.u32(a[0] + 0x14).into_ret()
+        });
+        e.register(SKY_GET_WEATHER_PERCENT, |e, a| Ret {
+            st0: e.mem.f32(a[0] + 0xf4) as f64,
+            ..Ret::default()
+        });
+        sky
+    }
+
+    #[test]
+    fn pleasant_and_cloudy_add_the_shares_of_both_weathers() {
+        let mut e = engine();
+        // Percentage 0.25: the current weather counts 0.25, the last 0.75.
+        for (current, last, pleasant, cloudy) in [
+            (1u8, 0u8, 0.25, 0.0),
+            (0, 1, 0.75, 0.0),
+            (1, 1, 1.0, 0.0),
+            (2, 2, 0.0, 1.0),
+            (3, 2, 0.25, 1.0),
+            (0, 0, 0.0, 0.0),
+        ] {
+            let current_weather = weather(&mut e, current);
+            let last_weather = weather(&mut e, last);
+            sky(&mut e, current_weather, last_weather, 0.25);
+            assert_eq!(
+                run(&mut e, 0x0059_e700, 0, 0, 0),
+                (true, pleasant),
+                "pleasant {current} {last}"
+            );
+            assert_eq!(
+                run(&mut e, 0x0059_e7f0, 0, 0, 0),
+                (true, cloudy),
+                "cloudy {current} {last}"
+            );
+        }
+        // Without weathers: 0.
+        sky(&mut e, 0, 0, 0.25);
+        assert_eq!(run(&mut e, 0x0059_e700, 0, 0, 0), (true, 0.0));
+        // The flag tests.
+        let both = weather(&mut e, 3);
+        assert!(fn_0059e7d0(&mut e, Ptr::new(both)));
+        assert!(fn_0059e8c0(&mut e, Ptr::new(both)));
+        assert!(!fn_0059eb40(&mut e, Ptr::new(both)));
+        trace_on(&mut e);
+        run(&mut e, 0x0059_e700, 0, 0, 0);
+        run(&mut e, 0x0059_e7f0, 0, 0, 0);
+        let log = take_log(&mut e);
+        assert!(printed(&log, 0x0103_51a4));
+        assert!(printed(&log, 0x0103_51bc));
+    }
+
+    #[test]
+    fn raining_and_snowing_test_the_weather_percentage() {
+        let mut e = engine();
+        // Interpolated limits: 0.75 for entry 6 (current), 0.25 for entry 7
+        // (last); the weather argument tells which.
+        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Vec<u32>>::new()));
+        let recorded = calls.clone();
+        e.register_double(WEATHER_INTERPOLATE, move |_, a| {
+            recorded.borrow_mut().push(a.to_vec());
+            Ret {
+                st0: if a[1] == 6 { 0.75 } else { 0.25 },
+                ..Ret::default()
+            }
+        });
+        stub(&mut e, WEATHER_HAS_FLAG_PRECIPITATION, 1);
+        let current = weather(&mut e, 0);
+        let last = weather(&mut e, 0);
+        // Percentage 0.875: above the current limit (0.75): raining.
+        let sky_address = sky(&mut e, current, last, 0.875);
+        assert!(fn_0059e950(&mut e, Ptr::new(sky_address)));
+        assert_eq!(
+            calls.borrow()[0],
+            vec![current, 6, 0.5f32.to_bits(), 0.0f32.to_bits()]
+        );
+        assert_eq!(run(&mut e, 0x0059_e8e0, 0, 0, 0), (true, 1.0));
+        // Percentage 0.125: not above the current limit but below the last
+        // weather's (0.25): still raining.
+        let sky_address = sky(&mut e, current, last, 0.125);
+        calls.borrow_mut().clear();
+        assert!(fn_0059e950(&mut e, Ptr::new(sky_address)));
+        assert_eq!(
+            calls.borrow()[1],
+            vec![last, 7, 1.0f32.to_bits(), 0.125f32.to_bits()]
+        );
+        // Percentage 0.5: neither.
+        let sky_address = sky(&mut e, current, last, 0.5);
+        assert!(!fn_0059e950(&mut e, Ptr::new(sky_address)));
+        assert_eq!(run(&mut e, 0x0059_e8e0, 0, 0, 0), (true, 0.0));
+        // No precipitation flag: no rain whatever the percentage.
+        stub(&mut e, WEATHER_HAS_FLAG_PRECIPITATION, 0);
+        let sky_address = sky(&mut e, current, last, 0.875);
+        assert!(!fn_0059e950(&mut e, Ptr::new(sky_address)));
+        // No weathers.
+        stub(&mut e, WEATHER_HAS_FLAG_PRECIPITATION, 1);
+        sky(&mut e, 0, 0, 0.875);
+        assert_eq!(run(&mut e, 0x0059_e8e0, 0, 0, 0), (true, 0.0));
+
+        // Snow uses flag 8 of the weather byte instead.
+        let snowy = weather(&mut e, 8);
+        let dry = weather(&mut e, 0);
+        let sky_address = sky(&mut e, snowy, dry, 0.875);
+        assert!(fn_0059ea80(&mut e, Ptr::new(sky_address)));
+        assert_eq!(run(&mut e, 0x0059_ea10, 0, 0, 0), (true, 1.0));
+        sky(&mut e, dry, snowy, 0.125);
+        assert_eq!(run(&mut e, 0x0059_ea10, 0, 0, 0), (true, 1.0));
+        sky(&mut e, dry, snowy, 0.5);
+        assert_eq!(run(&mut e, 0x0059_ea10, 0, 0, 0), (true, 0.0));
+        sky(&mut e, dry, dry, 0.125);
+        assert_eq!(run(&mut e, 0x0059_ea10, 0, 0, 0), (true, 0.0));
+        trace_on(&mut e);
+        run(&mut e, 0x0059_e8e0, 0, 0, 0);
+        run(&mut e, 0x0059_ea10, 0, 0, 0);
+        let log = take_log(&mut e);
+        assert!(printed(&log, 0x0103_51d4));
+        assert!(printed(&log, 0x0103_51ec));
+    }
+
+    #[test]
+    fn weather_percent_and_current_weather() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let current = typed_object(&mut e, 0x35);
+        sky(&mut e, current, 0, 0.375);
+        assert_eq!(run(&mut e, 0x0059_eb60, 0, 0, 0), (true, 0.375));
+        // The given WTHR is the current one.
+        assert_eq!(run(&mut e, 0x0059_ebb0, 0, current, 0), (true, 1.0));
+        let other = typed_object(&mut e, 0x35);
+        assert_eq!(run(&mut e, 0x0059_ebb0, 0, other, 0), (true, 0.0));
+        // A form of another type counts as no weather, which matches only a
+        // sky without one.
+        let class = typed_object(&mut e, 7);
+        assert_eq!(run(&mut e, 0x0059_ebb0, 0, class, 0), (true, 0.0));
+        sky(&mut e, 0, 0, 0.0);
+        assert_eq!(run(&mut e, 0x0059_ebb0, 0, class, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_ebb0, 0, 0, 0), (true, 1.0));
+    }
+
+    #[test]
+    fn attacked_reads_the_actor_byte_and_keeps_the_result_for_others() {
+        let mut e = engine();
+        let yes = slot_function(&mut e, 0x0f00_0340, 0x0101);
+        let no = slot_function(&mut e, 0x0f00_0341, 0x0100);
+        let attacked = actor_with(&mut e, &[(VSLOT_ATTACKED, yes)]);
+        let calm = actor_with(&mut e, &[(VSLOT_ATTACKED, no)]);
+        // Only the low byte counts.
+        assert_eq!(run(&mut e, 0x0059_ec30, attacked, 0, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_ec30, calm, 0, 0), (true, 0.0));
+        // The result is not zeroed first.
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_ec30, plain, 0, 0), (true, SENTINEL));
+        assert_eq!(run(&mut e, 0x0059_ec30, 0, 0, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn is_creature_tests_the_base_form_type() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let creature = typed_object(&mut e, 0x2b);
+        let npc = typed_object(&mut e, 0x2a);
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        assert_eq!(run(&mut e, 0x0059_ecc0, 0x2000, 0, 0), (true, 1.0));
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        assert_eq!(run(&mut e, 0x0059_ecc0, 0x2000, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_ecc0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn should_attack_goes_through_the_combat_manager_then_the_actor() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let prepare = slot_function(&mut e, 0x0f00_0350, 0);
+        let actor = actor_with(&mut e, &[(VSLOT_ACTOR_PREPARE_ATTACK_CHECK, prepare)]);
+        let combat_yes = slot_function(&mut e, 0x0f00_0351, 1);
+        let target = object(&mut e, &[(VSLOT_TARGET_COMBAT_CHECK, combat_yes)]);
+        e.mem.set_u8(target + 4, 0x3b);
+        e.set_global::<u32>(COMBAT_MANAGER, 0x7770);
+        e.register_double(ACTOR_GET_SHOULD_ATTACK_ACTOR, move |e, a| {
+            assert_eq!((a[0], a[1], a[2], a[4]), (actor, target, 0, 0));
+            // The out structure starts zeroed.
+            assert!((0..4).all(|i| e.mem.u32(a[3] + 4 * i) == 0));
+            true.into_ret()
+        });
+        stub(&mut e, TARGET_GET_FLAG, 0);
+        stub(&mut e, COMBAT_MANAGER_CHECK, 0);
+        // The flag is clear: the actor decides.
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x0059_ed30, actor, target, 0), (true, 100.0));
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, DEBUG_PRINT), vec![vec![0x0103_5278, 100]]);
+        assert_eq!(calls_to(&log, ACTOR_GET_SHOULD_ATTACK_ACTOR).len(), 1);
+
+        // The flag is set and the combat manager says yes: back at once, with
+        // neither a result nor a debug line.
+        stub(&mut e, TARGET_GET_FLAG, 1);
+        e.register_double(COMBAT_MANAGER_CHECK, move |_, a| {
+            assert_eq!(a, [0x7770, actor, target]);
+            true.into_ret()
+        });
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x0059_ed30, actor, target, 0), (true, SENTINEL));
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, DEBUG_PRINT).is_empty());
+        assert!(calls_to(&log, ACTOR_GET_SHOULD_ATTACK_ACTOR).is_empty());
+
+        // The combat manager says no: the actor decides again; a "no" gives 0.
+        stub(&mut e, COMBAT_MANAGER_CHECK, 0);
+        assert_eq!(run(&mut e, 0x0059_ed30, actor, target, 0), (true, 100.0));
+        stub(&mut e, ACTOR_GET_SHOULD_ATTACK_ACTOR, 0);
+        assert_eq!(run(&mut e, 0x0059_ed30, actor, target, 0), (true, 0.0));
+
+        // A target of another type, or a non-actor: the result is left and the
+        // debug line shows 0.
+        let wrong_target = typed_object(&mut e, 0x3a);
+        trace_on(&mut e);
+        assert_eq!(
+            run(&mut e, 0x0059_ed30, actor, wrong_target, 0),
+            (true, SENTINEL)
+        );
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x0059_ed30, plain, target, 0), (true, SENTINEL));
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT),
+            vec![vec![0x0103_5278, 0], vec![0x0103_5278, 0]]
+        );
+    }
+
+    #[test]
+    fn in_same_cell_compares_the_parent_cells() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        e.register(REF_GET_PARENT_CELL, |e, a| {
+            e.mem.u32(a[0] + 0x40).into_ret()
+        });
+        let reference = typed_object(&mut e, 0x3b);
+        let same_cell = typed_object(&mut e, 0x3b);
+        let other_cell = typed_object(&mut e, 0x3a);
+        let not_a_reference = typed_object(&mut e, 0x28);
+        let extra_type = typed_object(&mut e, 0x69);
+        for object in [reference, same_cell, extra_type, not_a_reference] {
+            e.mem.set_u32(object + 0x40, 0xce11);
+        }
+        e.mem.set_u32(other_cell + 0x40, 0xce12);
+        assert_eq!(
+            run(&mut e, 0x0059_ee80, reference, same_cell, 0),
+            (true, 1.0)
+        );
+        assert_eq!(
+            run(&mut e, 0x0059_ee80, reference, extra_type, 0),
+            (true, 1.0)
+        );
+        assert_eq!(
+            run(&mut e, 0x0059_ee80, reference, other_cell, 0),
+            (true, 0.0)
+        );
+        // The other form must be a reference type, and neither side may be null
+        // or in no cell.
+        assert_eq!(
+            run(&mut e, 0x0059_ee80, reference, not_a_reference, 0),
+            (true, 0.0)
+        );
+        assert_eq!(run(&mut e, 0x0059_ee80, reference, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_ee80, 0, same_cell, 0), (true, 0.0));
+        let no_cell = typed_object(&mut e, 0x3b);
+        assert_eq!(run(&mut e, 0x0059_ee80, no_cell, no_cell, 0), (true, 0.0));
+    }
+
+    fn run_in_cell(e: &mut Engine, reference: u32, cell: u32, other: u32) -> (bool, f64) {
+        run(e, 0x0059_ef60, reference, cell, other)
+    }
+
+    #[test]
+    fn in_cell_compares_name_prefixes_and_caches_the_answer() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        e.register(REF_GET_PARENT_CELL, |e, a| {
+            e.mem.u32(a[0] + 0x40).into_ret()
+        });
+        let cell_name = slot_function(&mut e, 0x0f00_0360, 0xa000);
+        let parent_name = slot_function(&mut e, 0x0f00_0361, 0xa100);
+        let cell = object(&mut e, &[(VSLOT_FORM_GET_NAME, cell_name)]);
+        e.mem.set_u8(cell + 4, 0x39);
+        let parent = object(&mut e, &[(VSLOT_FORM_GET_NAME, parent_name)]);
+        let reference = typed_object(&mut e, 0x3b);
+        e.mem.set_u32(reference + 0x40, parent);
+        stub(&mut e, CELL_GET_NAME_LENGTH, 6);
+        let compares = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let counted = compares.clone();
+        e.register_double(STRING_COMPARE_N_NO_CASE, move |_, a| {
+            assert_eq!(a, [0xa100, 0xa000, 6]);
+            counted.set(counted.get() + 1);
+            0u32.into_ret()
+        });
+        // The reference itself (second parameter null): equal prefixes.
+        assert_eq!(run_in_cell(&mut e, reference, cell, 0), (true, 1.0));
+        assert_eq!(compares.get(), 1);
+        assert_eq!(e.global::<u32>(IN_CELL_CACHE_REFERENCE), reference);
+        assert_eq!(e.global::<u32>(IN_CELL_CACHE_CELL), cell);
+        assert_eq!(e.global::<f32>(IN_CELL_CACHE_RESULT), 1.0);
+        // The same pair again: the cached answer, no comparison.
+        stub(&mut e, STRING_COMPARE_N_NO_CASE, 1);
+        assert_eq!(run_in_cell(&mut e, reference, cell, 0), (true, 1.0));
+        // Another pair, now with different prefixes; the second parameter
+        // supplies the reference.
+        let other_reference = typed_object(&mut e, 0x3c);
+        e.mem.set_u32(other_reference + 0x40, parent);
+        assert_eq!(run_in_cell(&mut e, 0, cell, other_reference), (true, 0.0));
+        assert_eq!(e.global::<u32>(IN_CELL_CACHE_REFERENCE), other_reference);
+        assert_eq!(e.global::<f32>(IN_CELL_CACHE_RESULT), 0.0);
+        // A form that is not a cell, a reference without a parent cell, and no
+        // reference at all: 0, and the last has no cache effect.
+        stub(&mut e, STRING_COMPARE_N_NO_CASE, 0);
+        let not_a_cell = typed_object(&mut e, 7);
+        assert_eq!(run_in_cell(&mut e, reference, not_a_cell, 0), (true, 0.0));
+        let orphan = typed_object(&mut e, 0x3b);
+        assert_eq!(run_in_cell(&mut e, orphan, cell, 0), (true, 0.0));
+        let cached_before = e.global::<u32>(IN_CELL_CACHE_REFERENCE);
+        assert_eq!(run_in_cell(&mut e, 0, cell, 0), (true, 0.0));
+        assert_eq!(e.global::<u32>(IN_CELL_CACHE_REFERENCE), cached_before);
+    }
+
+    #[test]
+    fn in_worldspace_compares_the_reference_worldspace() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let worldspace = typed_object(&mut e, 0x41);
+        let other_worldspace = typed_object(&mut e, 0x41);
+        e.register_double(REF_GET_WORLDSPACE, move |_, a| {
+            if a[0] == 0x2000 {
+                worldspace.into_ret()
+            } else {
+                other_worldspace.into_ret()
+            }
+        });
+        // The calling reference, or the placed reference of the third argument.
+        assert_eq!(run(&mut e, 0x0059_f0c0, 0x2000, worldspace, 0), (true, 1.0));
+        assert_eq!(
+            run(&mut e, 0x0059_f0c0, 0x2000, other_worldspace, 0),
+            (true, 0.0)
+        );
+        let placed = typed_object(&mut e, 0x3b);
+        assert_eq!(
+            run(&mut e, 0x0059_f0c0, 0x2000, worldspace, placed),
+            (true, 0.0)
+        );
+        assert_eq!(
+            run(&mut e, 0x0059_f0c0, 0x2000, other_worldspace, placed),
+            (true, 1.0)
+        );
+        // Not a worldspace: 0.
+        let class = typed_object(&mut e, 7);
+        assert_eq!(run(&mut e, 0x0059_f0c0, 0x2000, class, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f0c0, 0x2000, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn is_class_and_is_race_compare_the_npc_forms() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let npc = typed_object(&mut e, 0x2a);
+        let creature = typed_object(&mut e, 0x2b);
+        let class = typed_object(&mut e, 7);
+        let other_class = typed_object(&mut e, 7);
+        let race = typed_object(&mut e, 0xc);
+        let other_race = typed_object(&mut e, 0xc);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        stub(&mut e, NPC_GET_CLASS, class);
+        stub(&mut e, NPC_GET_RACE, race);
+        assert_eq!(run(&mut e, 0x0059_f180, 0x2000, class, 0), (true, 1.0));
+        assert_eq!(
+            run(&mut e, 0x0059_f180, 0x2000, other_class, 0),
+            (true, 0.0)
+        );
+        // A form of the wrong type, or none.
+        assert_eq!(run(&mut e, 0x0059_f180, 0x2000, race, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f180, 0x2000, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f240, 0x2000, race, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_f240, 0x2000, other_race, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f240, 0x2000, class, 0), (true, 0.0));
+        // The base form is not an NPC_, or there is no reference.
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        assert_eq!(run(&mut e, 0x0059_f180, 0x2000, class, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f240, 0x2000, race, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f240, 0, race, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn creature_type_is_a_sign_extended_byte() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let creature = typed_object(&mut e, 0x2b);
+        e.mem.set_u8(creature + 0x12c, 0xff);
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        assert_eq!(fn_0059f3a0(&mut e, Ptr::new(creature)), 0xff);
+        // The byte 0xff reads as -1 and equals the parameter -1 (0xffff_ffff).
+        assert_eq!(
+            run(&mut e, 0x0059_f300, 0x2000, 0xffff_ffff, 0),
+            (true, 1.0)
+        );
+        assert_eq!(run(&mut e, 0x0059_f300, 0x2000, 0xff, 0), (true, 0.0));
+        e.mem.set_u8(creature + 0x12c, 4);
+        assert_eq!(run(&mut e, 0x0059_f300, 0x2000, 4, 0), (true, 1.0));
+        // Not a creature, or no reference.
+        let npc = typed_object(&mut e, 0x2a);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        assert_eq!(run(&mut e, 0x0059_f300, 0x2000, 4, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f300, 0, 4, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn is_sex_compares_the_npc_sex() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let npc = typed_object(&mut e, 0x2a);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        stub(&mut e, NPC_GET_SEX, 1);
+        assert_eq!(run(&mut e, 0x0059_f3c0, 0x2000, 1, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x0059_f3c0, 0x2000, 0, 0), (true, 0.0));
+        let creature = typed_object(&mut e, 0x2b);
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        assert_eq!(run(&mut e, 0x0059_f3c0, 0x2000, 1, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x0059_f3c0, 0, 1, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn voice_type_comes_from_the_base_form_and_is_cached() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        // An NPC_ base form with a component at +0x30 whose vtable slot 0x68
+        // gives the voice type.
+        let voice = slot_function(&mut e, 0x0f00_0370, 0x77);
+        let component_vtable = e.mem.alloc(0x100);
+        e.mem
+            .set_u32(component_vtable + VSLOT_BASE_COMPONENT_VOICE_TYPE, voice);
+        let npc = typed_object(&mut e, 0x2a);
+        e.mem.set_u32(npc + 0x30, component_vtable);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        assert_eq!(run(&mut e, 0x0059_f450, 0x2000, 0x77, 0), (true, 1.0));
+        assert_eq!(e.global::<u32>(VOICE_TYPE_CACHE_REFERENCE), 0x2000);
+        assert_eq!(e.global::<u32>(VOICE_TYPE_CACHE_VOICE), 0x77);
+        assert_eq!(run(&mut e, 0x0059_f450, 0x2000, 0x78, 0), (true, 0.0));
+        // The cache answers for the same reference even if the form changed.
+        let other_voice = typed_object(&mut e, 0x2a);
+        let other_vtable = e.mem.alloc(0x100);
+        let other_function = slot_function(&mut e, 0x0f00_0371, 0x99);
+        e.mem.set_u32(
+            other_vtable + VSLOT_BASE_COMPONENT_VOICE_TYPE,
+            other_function,
+        );
+        e.mem.set_u32(other_voice + 0x30, other_vtable);
+        stub(&mut e, REF_GET_BASE_FORM, other_voice);
+        assert_eq!(run(&mut e, 0x0059_f450, 0x2000, 0x77, 0), (true, 1.0));
+        // A different reference is looked up again.
+        assert_eq!(run(&mut e, 0x0059_f450, 0x2004, 0x99, 0), (true, 1.0));
+        // The form type whose voice type is at +0x94.
+        let source = typed_object(&mut e, 0x16);
+        stub(&mut e, REF_GET_BASE_FORM, source);
+        stub(&mut e, FORM_GET_VOICE_TYPE, 0x55);
+        assert_eq!(run(&mut e, 0x0059_f450, 0x2008, 0x55, 0), (true, 1.0));
+        // Another type: voice type 0, which is cached too.
+        let weapon = typed_object(&mut e, 0x28);
+        stub(&mut e, REF_GET_BASE_FORM, weapon);
+        assert_eq!(run(&mut e, 0x0059_f450, 0x200c, 0, 0), (true, 1.0));
+        assert_eq!(e.global::<u32>(VOICE_TYPE_CACHE_REFERENCE), 0x200c);
+        // No reference: nothing happens (the cache stays).
+        assert_eq!(run(&mut e, 0x0059_f450, 0, 0, 0), (true, 0.0));
+        assert_eq!(e.global::<u32>(VOICE_TYPE_CACHE_REFERENCE), 0x200c);
+    }
+
+    #[test]
+    fn playable_race_tests_the_race_flag_and_caches_the_answer() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let npc = typed_object(&mut e, 0x2a);
+        let race = typed_object(&mut e, 0xc);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        stub(&mut e, NPC_GET_RACE, race);
+        e.register_double(RACE_IS_PLAYABLE, move |_, a| {
+            assert_eq!(a, [race]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x0059_f540, 0x2000, 0, 0), (true, 1.0));
+        assert_eq!(e.global::<u32>(PLAYABLE_RACE_CACHE_REFERENCE), 0x2000);
+        assert_eq!(e.global::<f32>(PLAYABLE_RACE_CACHE_RESULT), 1.0);
+        // The cache answers for the same reference.
+        stub(&mut e, RACE_IS_PLAYABLE, 0);
+        assert_eq!(run(&mut e, 0x0059_f540, 0x2000, 0, 0), (true, 1.0));
+        // A new reference whose race is not playable.
+        assert_eq!(run(&mut e, 0x0059_f540, 0x2004, 0, 0), (true, 0.0));
+        assert_eq!(e.global::<f32>(PLAYABLE_RACE_CACHE_RESULT), 0.0);
+        // No race, or not an NPC_: 0.
+        stub(&mut e, RACE_IS_PLAYABLE, 1);
+        stub(&mut e, NPC_GET_RACE, 0);
+        assert_eq!(run(&mut e, 0x0059_f540, 0x2008, 0, 0), (true, 0.0));
+        let creature = typed_object(&mut e, 0x2b);
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        stub(&mut e, NPC_GET_RACE, race);
+        assert_eq!(run(&mut e, 0x0059_f540, 0x200c, 0, 0), (true, 0.0));
+        // The debug line is printed on the cached path too.
+        trace_on(&mut e);
+        run(&mut e, 0x0059_f540, 0x200c, 0, 0);
+        let log = take_log(&mut e);
+        assert!(printed(&log, 0x0103_5348));
     }
 }
