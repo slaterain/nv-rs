@@ -152,8 +152,20 @@ layout! {
     pub struct Actor: 0x1c4 {
         /// `pCurrentProcess` (Xbox PDB, +0x78): `BaseProcess *`.
         0x68 pCurrentProcess: Ptr,
+        /// `bInCombat` (Xbox PDB).
+        /// `fUpdateTargetTimer` (Xbox PDB).
+        0x74 fUpdateTargetTimer: f32,
+        /// `pRagdollController` (Xbox PDB).
+        0xAC pRagdollController: Ptr,
+        0x104 bInCombat: bool,
+        /// `eLifeState` (Xbox PDB).
+        0x108 eLifeState: u32,
+        /// `eCriticalStage` (Xbox PDB).
+        0x10C eCriticalStage: u32,
         /// `eQueuedattack` (Xbox PDB, +0x120): `ANIM_GROUP_ENUM`.
         0x110 eQueuedattack: u32,
+        /// `fHeadTrackTimer` (Xbox PDB).
+        0x158 fHeadTrackTimer: f32,
         /// `pInitialPackage` (Xbox PDB, +0x1a8): `TESPackage *`. Also the
         /// package `Actor::InitPackageLocations` remembers.
         0x198 pInitialPackage: u32,
@@ -8747,6 +8759,4967 @@ pub fn actor_kill(e: &mut Engine, this: Ptr<Actor>, attacker: Ptr<Actor>, damage
     }
     destroy_kill_sound_handles(e, handles);
 }
+/// Acquire object slot `0x128`: returns the actor it is acquiring from.
+const ACQUIRE_OBJECT_SLOT_128: u32 = 0x128;
+/// Acquire object slot `0x5c4` (takes `-1` from `StopCombat`).
+const ACQUIRE_OBJECT_SLOT_5C4: u32 = 0x5c4;
+/// Acquire object slot `0x1c8` (takes `0` from `StopCombat`).
+const ACQUIRE_OBJECT_SLOT_1C8: u32 = 0x1c8;
+/// `PlayerCharacter::RemoveActorFromPlayercombatList` (Xbox PDB): thiscall on
+/// the player.
+const PLAYER_REMOVE_ACTOR_FROM_COMBAT_LIST: u32 = 0x0093_a660;
+/// `CombatController::StopCombat` (Xbox PDB): thiscall on the controller,
+/// taking the target; returns a byte.
+const COMBAT_CONTROLLER_STOP_COMBAT: u32 = 0x0097_f4d0;
+/// `Script::SetActionFlag` (Xbox PDB), cdecl: the actor, its extra data list
+/// and the flag.
+const SCRIPT_SET_ACTION_FLAG: u32 = 0x005a_c750;
+/// `"%.20s stops combat."`.
+const STOPS_COMBAT_FORMAT: u32 = 0x0108_4d0c;
+/// Process slot `0x620` (takes `1` at the end of `StopCombat`).
+const PROCESS_SLOT_620: u32 = 0x620;
+/// `Actor::RestoreActorValue` (Xbox PDB): the actor value and the amount.
+const ACTOR_RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
+/// `1000.0` (`float`), the amount restored to the condition values.
+const RESTORE_AMOUNT: u32 = 0x0101_3974;
+/// Speed in ST0 (`00885ed0`), used when the animation flags `0x200` and
+/// `0x800` are both set.
+const ACTOR_SPEED_885ED0: u32 = 0x0088_5ed0;
+/// Speed in ST0 (`00885d90`), used with flag `0x800` and not `0x200`.
+const ACTOR_SPEED_885D90: u32 = 0x0088_5d90;
+/// Speed in ST0 (`00886010`), used with flag `0x2000`.
+const ACTOR_SPEED_886010: u32 = 0x0088_6010;
+/// `MiddleHighProcess::IsHeavyBodyArmorWorn` (Xbox PDB), called with the
+/// actor.
+const IS_HEAVY_BODY_ARMOR_WORN: u32 = 0x008d_8270;
+/// Actor slot `0x30c` (takes a `float`).
+const ACTOR_SLOT_30C: u32 = 0x30c;
+/// Actor slot `0x310` (returns a `float`; `-1.0` means not yet computed).
+const ACTOR_SLOT_310: u32 = 0x310;
+/// `InventoryChanges::GetInventoryChanges` (Xbox PDB), cdecl.
+const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
+/// `InventoryChanges` method `004d1180` (thiscall, takes the actor): returns
+/// a `float` in ST0.
+const CHANGES_VALUE_4D1180: u32 = 0x004d_1180;
+/// `004d1360`: byte result on the player (`thePlayer` is `this`).
+const PLAYER_FLAG_4D1360: u32 = 0x004d_1360;
+/// `00577250`: thiscall on an actor, taking a byte.
+const ACTOR_SET_FLAG_577250: u32 = 0x0057_7250;
+
+// Translated from 008a06c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::StopCombat` (Xbox PDB): ends the actor's combat against `other`
+/// (null or the player stops it altogether). Releases the player's acquire
+/// object when the actor is its source, removes the actor from the player's
+/// combat list, unblocks, tells the combat controller to stop and, when that
+/// ended the combat and the actor is not fleeing, clears the combat state.
+pub fn actor_stop_combat(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>) {
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    if e.vcall(this.addr(), ACTOR_SLOT_304, &args![]).bool()
+        && fn_008a08c0(e, Ptr::new(player_addr)) != 0
+        && e.call(ACTOR_IN_COMBAT, &args![this]).bool()
+    {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let source = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_128, &args![]).u32();
+        if source == player_addr {
+            let player_acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![player_addr]).u32();
+            e.vcall(
+                player_acquire,
+                ACQUIRE_OBJECT_SLOT_5C4,
+                &args![0xffff_ffffu32],
+            );
+        }
+    }
+    if other.is_null() || other.addr() == player_addr {
+        e.call(
+            PLAYER_REMOVE_ACTOR_FROM_COMBAT_LIST,
+            &args![player_addr, this],
+        );
+    }
+    if other.addr() == player_addr {
+        e.call(
+            PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS,
+            &args![player_addr, this, 0u32],
+        );
+    }
+    actor_set_block(e, this, 0);
+    e.vcall(this.addr(), ACTOR_SLOT_474, &args![0u32]);
+    if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() == 0 {
+        actor_clear_in_combat(e, this, 1);
+    } else {
+        let controller = fn_008a0330(e, this);
+        let stopped = e
+            .call(COMBAT_CONTROLLER_STOP_COMBAT, &args![controller, other])
+            .u8();
+        let fleeing = e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool();
+        if !fleeing && stopped != 0 {
+            e.call(ACTOR_WORKER_884F80, &args![this]);
+            if e.call(DEBUG_MESSAGES_ENABLED, &args![this]).bool() {
+                let name = e.call(REFR_GET_NAME, &args![this]).u32();
+                e.call(PRINT_DEBUG_LINE, &args![STOPS_COMBAT_FORMAT, name]);
+            }
+            e.call(ACTOR_END_INTERRUPT_PACKAGE, &args![this, 1u32]);
+            actor_clear_in_combat(e, this, 1);
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+            e.call(SCRIPT_SET_ACTION_FLAG, &args![this, extra, 0x40u32]);
+            e.set(this, Actor::eQueuedattack, 0xff);
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            e.vcall(process, PROCESS_SLOT_620, &args![1u32]);
+        }
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, ACQUIRE_OBJECT_SLOT_1C8, &args![0u32]);
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, PROCESS_SLOT_64C, &args![]);
+    }
+}
+
+// Translated from 008a08c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x7c4` (`StopCombat` calls it on the player).
+pub fn fn_008a08c0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x7c4)
+}
+
+// Translated from 008a08e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ClearInCombat` (Xbox PDB): clears `bInCombat`; when `restore` is
+/// set, the actor was in combat, the tests of slots `0x360` and `0x21c` are
+/// false and the actor is essential, it gets its health and conditions back.
+pub fn actor_clear_in_combat(e: &mut Engine, this: Ptr<Actor>, restore: u8) {
+    let was_in_combat = e.get(this, Actor::bInCombat);
+    e.set(this, Actor::bInCombat, false);
+    if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && !e.vcall(this.addr(), ACTOR_SLOT_21C, &args![]).bool()
+        && restore != 0
+        && was_in_combat
+        && e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+    {
+        actor_restore_full_health_and_conditions(e, this);
+    }
+}
+
+// Translated from 008a0960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::RestoreFullHealthAndConditions` (Xbox PDB): lifts the current
+/// values of actor values `0x10` and `0x16` back to 1 when they are below 0,
+/// then restores `1000.0` of each of the values `0x1f`, `0x1d`, `0x1e`,
+/// `0x1b`, `0x1c`, `0x1a` and `0x19`.
+pub fn actor_restore_full_health_and_conditions(e: &mut Engine, this: Ptr<Actor>) {
+    for actor_value in [0x10u32, 0x16] {
+        let current = e.vcall(this.addr() + 0xa4, 0x14, &args![actor_value]).f32();
+        if (current as f64) < e.global::<f64>(ZERO_DOUBLE) {
+            let amount = (-(current as f64) + e.global::<f64>(ONE_DOUBLE)) as f32;
+            e.call(ACTOR_RESTORE_ACTOR_VALUE, &args![this, actor_value, amount]);
+        }
+    }
+    let amount: f32 = e.global(RESTORE_AMOUNT);
+    for actor_value in [0x1fu32, 0x1d, 0x1e, 0x1b, 0x1c, 0x1a, 0x19] {
+        e.call(ACTOR_RESTORE_ACTOR_VALUE, &args![this, actor_value, amount]);
+    }
+}
+
+/// The `Actor` an actor-value owner pointer (`Actor + 0xa4`) belongs to, or 0.
+fn actor_of_value_owner(owner: u32) -> u32 {
+    if owner == 0 {
+        0
+    } else {
+        owner.wrapping_sub(0xa4)
+    }
+}
+
+// Translated from 008a0a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl callback of the actor value table: calls virtual slot `0x43c` of
+/// the actor the owner pointer (`Actor + 0xa4`) belongs to.
+pub fn fn_008a0a90(e: &mut Engine, owner: u32) {
+    let actor = actor_of_value_owner(owner);
+    e.vcall(actor, 0x43c, &args![]);
+}
+
+// Translated from 008a0ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl callback of the actor value table: calls virtual slot `0x440` of
+/// the actor the owner pointer (`Actor + 0xa4`) belongs to.
+pub fn fn_008a0ad0(e: &mut Engine, owner: u32) {
+    let actor = actor_of_value_owner(owner);
+    e.vcall(actor, 0x440, &args![]);
+}
+
+// Translated from 008a0b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentSpeed` (Xbox PDB): with a process whose `0045cd60` test
+/// is 0 the speed follows the animation flags (each test reads them anew:
+/// `0x200` running, `0x800` and `0x2000` the other movement kinds); without
+/// one the actor runs when in combat and not in heavy body armor, and walks
+/// otherwise.
+pub fn actor_get_current_speed(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process != 0 && e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 {
+        let flags = |e: &mut Engine, mask: u32| -> bool {
+            e.call(ACTOR_ANIM_FLAGS, &args![this]).u32() & mask != 0
+        };
+        let speed = if !flags(e, 0x200) {
+            if !flags(e, 0x800) {
+                if !flags(e, 0x2000) {
+                    ACTOR_GET_WALK_SPEED
+                } else {
+                    ACTOR_SPEED_886010
+                }
+            } else {
+                ACTOR_SPEED_885D90
+            }
+        } else if !flags(e, 0x800) {
+            if !flags(e, 0x2000) {
+                ACTOR_GET_RUN_SPEED
+            } else {
+                ACTOR_SPEED_886010
+            }
+        } else {
+            ACTOR_SPEED_885ED0
+        };
+        e.call(speed, &args![this]).f32()
+    } else if e.call(ACTOR_IN_COMBAT, &args![this]).bool()
+        && !e.call(IS_HEAVY_BODY_ARMOR_WORN, &args![this]).bool()
+    {
+        e.call(ACTOR_GET_RUN_SPEED, &args![this]).f32()
+    } else {
+        e.call(ACTOR_GET_WALK_SPEED, &args![this]).f32()
+    }
+}
+
+// Translated from 008a0c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The current value of actor value `0xd` (slot `0x0c` of the owner at
+/// `this + 0xa4`) passed through entry point `0x16`; returns the result.
+pub fn fn_008a0c20(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    let value = e.vcall(this.addr() + 0xa4, 0x0c, &args![0xdu32]).f32();
+    e.with_stack(4, |e, slot| {
+        e.mem.set_f32(slot.addr(), value);
+        e.call(HANDLE_ENTRY_POINT, &args![0x16u32, this, slot]);
+        e.mem.f32(slot.addr())
+    })
+}
+
+// Translated from 008a0c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the speed of slot `0x310` is `-1.0`, computes it from the actor's
+/// inventory changes (`004d1180`) and stores it through slot `0x30c`; returns
+/// the speed of slot `0x310`.
+pub fn fn_008a0c60(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    let speed = e.vcall(this.addr(), ACTOR_SLOT_310, &args![]).f32();
+    if speed as f64 == e.global::<f64>(MINUS_ONE_DOUBLE) {
+        let changes = e.call(GET_INVENTORY_CHANGES, &args![this]).u32();
+        let value = e.call(CHANGES_VALUE_4D1180, &args![changes, this]).f32();
+        e.vcall(this.addr(), ACTOR_SLOT_30C, &args![value]);
+    }
+    e.vcall(this.addr(), ACTOR_SLOT_310, &args![]).f32()
+}
+
+// Translated from 008a0cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl callback of the actor value table: asks the player (`004d1360`)
+/// and hands the byte to `00577250` on the actor the owner pointer
+/// (`Actor + 0xa4`) belongs to.
+pub fn fn_008a0cd0(e: &mut Engine, owner: u32) {
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    let flag = e.call(PLAYER_FLAG_4D1360, &args![player_addr]).u8();
+    let actor = actor_of_value_owner(owner);
+    e.call(ACTOR_SET_FLAG_577250, &args![actor, flag]);
+}
+/// `8192.0` (`double`), the distance from the player beyond which nothing is
+/// detected.
+const DETECTION_MAX_DISTANCE: u32 = 0x0108_4d28;
+/// Acquire object slot `0x504`: the detection record of an actor (takes the
+/// actor and a flag; `+8` level, `+0x1c` and `+0x1e` bytes).
+const ACQUIRE_OBJECT_SLOT_504: u32 = 0x504;
+/// Acquire object slot `0x1fc` (takes two actors).
+const ACQUIRE_OBJECT_SLOT_1FC: u32 = 0x1fc;
+/// Acquire object slot `0x734` (returns a `float`).
+const ACQUIRE_OBJECT_SLOT_734: u32 = 0x734;
+/// Acquire object slot `0xf0` (takes seven words, see
+/// [`detection_level_against_actor`]).
+const ACQUIRE_OBJECT_SLOT_F0: u32 = 0xf0;
+/// Counter incremented by every line of sight detection check
+/// (`0x011dea38`).
+const DETECTION_CHECK_COUNTER: u32 = 0x011d_ea38;
+/// `float` `2.0` the combined check stores when the package test fails.
+const DETECTION_FLOAT_TWO: u32 = 0x0101_62c0;
+/// Settings object whose float is the detection scale (`0x011d0f90`).
+const SETTING_DETECTION_SCALE: u32 = 0x011d_0f90;
+/// Settings object whose float is the view cone angle in degrees
+/// (`0x011cd668`).
+const SETTING_VIEW_CONE_ANGLE: u32 = 0x011c_d668;
+/// Settings object whose integer is added for worn armor of the first kind
+/// (`0x011d1554`).
+const SETTING_ARMOR_BONUS_A: u32 = 0x011d_1554;
+/// Settings object whose integer is added for worn armor of the second kind
+/// (`0x011d0538`).
+const SETTING_ARMOR_BONUS_B: u32 = 0x011d_0538;
+/// Settings object whose float scales the distance when the entry point
+/// `0x45` result is positive (`0x011d031c`).
+const SETTING_DISTANCE_SCALE: u32 = 0x011d_031c;
+/// `0.017453292` (`double`), degrees to radians.
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+/// `0.875` (`float`) passed to `00885520`.
+const FLOAT_0_875: u32 = 0x0108_4d20;
+/// `Actor::LineOfSight` (Xbox PDB): thiscall with the flag, the other
+/// reference, a flag, a pointer to a number and a flag byte; returns a byte.
+const ACTOR_LINE_OF_SIGHT: u32 = 0x0088_b880;
+/// `0097fd60`: thiscall on the combat controller, takes the line of sight
+/// number.
+const COMBAT_CONTROLLER_SET_LINE_OF_SIGHT: u32 = 0x0097_fd60;
+/// `00436aa0`: thiscall on an actor, returns the value `IsPointInViewCone`
+/// is given (no stack arguments).
+const ACTOR_VIEW_CONE_TARGET: u32 = 0x0043_6aa0;
+/// `Actor::IsPointInViewCone` (Xbox PDB): thiscall with an angle in radians
+/// and the point.
+const ACTOR_IS_POINT_IN_VIEW_CONE: u32 = 0x0088_c570;
+/// `00891be0`: thiscall on the actor, taking the worn armor entry; returns
+/// the value passed to the detection formula.
+const ACTOR_ARMOR_VALUE: u32 = 0x0089_1be0;
+/// `004c0bd0`: test on the armor form's `+0x70` part (first armor kind).
+const ARMOR_KIND_TEST_A: u32 = 0x004c_0bd0;
+/// `00514450`: test on the armor form's `+0x70` part (second armor kind).
+const ARMOR_KIND_TEST_B: u32 = 0x0051_4450;
+/// `00472380`: thiscall on the other actor, returns a word for the formula.
+const ACTOR_VALUE_472380: u32 = 0x0047_2380;
+/// `004938e0`: thiscall on the other actor, returns a byte for the formula.
+const ACTOR_FLAG_4938E0: u32 = 0x0049_38e0;
+/// `00885520`: thiscall on the actor with the position, the cell and a
+/// `float`; returns a byte that is not used further.
+const ACTOR_POSITION_CELL_TEST: u32 = 0x0088_5520;
+/// `ActorValueOwner::GetClampedActorFloatValue` (Xbox PDB): thiscall on the
+/// owner at `actor + 0xa4`, takes the actor value; returns a `float`.
+const GET_CLAMPED_ACTOR_FLOAT_VALUE: u32 = 0x0066_ef50;
+/// `Actor::GetHeight` (Xbox PDB): the height in ST0.
+const ACTOR_GET_HEIGHT: u32 = 0x0088_53a0;
+/// `00642e80`: cdecl, a `float` height to the formula's size class.
+const HEIGHT_CLASS: u32 = 0x0064_2e80;
+/// `00642ed0`: cdecl, the detection formula (25 words); returns the
+/// detection level.
+const DETECTION_FORMULA: u32 = 0x0064_2ed0;
+/// Actor value number whose clamped value is the detecting actor's
+/// perception.
+const ACTOR_VALUE_PERCEPTION: u32 = 6;
+
+// Translated from 008a0d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetDetectionLevelAgainstActor` (Xbox PDB): how well `this` detects
+/// `other`; returns the level (`-100` when nothing can be detected, `0` when
+/// the actor has no acquire object). `*seen` receives whether `other` was
+/// seen; `*seen_line` (optional) the line of sight result. With `use_line`
+/// set the level is computed by the detection formula (`00642ed0`) from the
+/// two actors' perception and stealth values, distance, armor, movement and
+/// line of sight, and reported to both acquire objects (slot `0xf0`) when
+/// `report_always` is not 0 or `this` is the player; without it the stored
+/// detection record is read. `report` is passed on to slot `0xf0`.
+#[allow(clippy::too_many_arguments)]
+pub fn actor_get_detection_level_against_actor(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    use_line: u8,
+    other: Ptr<Actor>,
+    seen: Ptr,
+    report: u8,
+    report_always: u8,
+    _unused_7: u32,
+    seen_line: Ptr,
+) -> i32 {
+    e.with_stack(0x18, |e, scratch| {
+        detection_level_against_actor(
+            e,
+            this,
+            use_line,
+            other,
+            seen,
+            report,
+            report_always,
+            seen_line,
+            scratch.addr(),
+        )
+    })
+}
+
+/// The body of [`actor_get_detection_level_against_actor`]; `scratch` is the
+/// block of locals the game keeps on its stack (`+0` the entry point `0x45`
+/// result, `+4` the line of sight number, `+8` the entry point `0x1f`
+/// result, `+0xc`, `+0x10`, `+0x14` the formula's three out `float`s).
+#[allow(clippy::too_many_arguments)]
+fn detection_level_against_actor(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    use_line: u8,
+    other: Ptr<Actor>,
+    seen: Ptr,
+    report: u8,
+    report_always: u8,
+    seen_line: Ptr,
+    scratch: u32,
+) -> i32 {
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() == 0 {
+        return 0;
+    }
+    let mut result: i32 = 0x7fff_ffff;
+    e.mem.set_u8(seen.addr(), 0);
+    e.mem.set_f32(scratch, 0.0);
+    e.call(HANDLE_ENTRY_POINT, &args![0x45u32, this, scratch]);
+    let limit: f64 = e.global(DETECTION_MAX_DISTANCE);
+    // x87 `FCOMP` + `TEST AH,1` treats an unordered result as "below".
+    let first = e
+        .call(
+            REFR_GET_DISTANCE_FROM_REFERENCE,
+            &args![this, player_addr, 0u32, 0u32],
+        )
+        .f64();
+    if first >= limit {
+        return -100;
+    }
+    let second = e
+        .call(
+            REFR_GET_DISTANCE_FROM_REFERENCE,
+            &args![other, player_addr, 0u32, 0u32],
+        )
+        .f64();
+    if second >= limit {
+        return -100;
+    }
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool()
+        && !e.call(ACTOR_IN_COMBAT, &args![other]).bool()
+        && e.call(ACTOR_IS_MOVING, &args![player_addr]).bool()
+        && !e.call(ACTOR_IN_COMBAT, &args![player_addr]).bool()
+    {
+        return -100;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let record = e
+        .vcall(acquire, ACQUIRE_OBJECT_SLOT_504, &args![other, 0u32])
+        .u32();
+    if record != 0 {
+        result = e.mem.i32(record + 8);
+        let byte = e.mem.u8(record + 0x1e);
+        e.mem.set_u8(seen.addr(), byte);
+    }
+    if e.vcall(other.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0 {
+        return -100;
+    }
+    if use_line == 0 {
+        if result == 0x7fff_ffff {
+            result = -100;
+        } else if record != 0 && !seen_line.is_null() {
+            let byte = e.mem.u8(record + 0x1c);
+            e.mem.set_u8(seen_line.addr(), byte);
+        }
+        return result;
+    }
+
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let package_target = e.vcall(acquire, PROCESS_SLOT_22C, &args![]).u32();
+    let mut package_bonus: f32 = 0.0;
+    if package_target != 0 && e.call(PACKAGE_TYPE, &args![package_target]).u32() == 9 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        package_bonus = if e
+            .vcall(acquire, ACQUIRE_OBJECT_SLOT_1FC, &args![this, other])
+            .bool()
+        {
+            1.0
+        } else {
+            e.global(DETECTION_FLOAT_TWO)
+        };
+    }
+    let mut distance = e
+        .call(
+            REFR_GET_DISTANCE_FROM_REFERENCE,
+            &args![this, other, 0u32, 0u32],
+        )
+        .f32();
+    let counter: u32 = e.global(DETECTION_CHECK_COUNTER);
+    e.set_global(DETECTION_CHECK_COUNTER, counter.wrapping_add(1));
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![other]).u32();
+    let stealth_float = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_734, &args![]).f64();
+    let mut sneak_bonus = e.call(FTOL, &args![stealth_float]).i32();
+    let value = e.vcall(this.addr() + 0xa4, 0x0c, &args![0x32u32]).f64();
+    if value > zero {
+        let scale_ptr = e
+            .call(SETTING_GET_VALUE_POINTER, &args![SETTING_DETECTION_SCALE])
+            .u32();
+        let scale = e.mem.f32(scale_ptr) as f64;
+        let scaled = e.call(FTOL, &args![scale]).i32();
+        sneak_bonus = scaled.wrapping_mul(sneak_bonus);
+        if sneak_bonus > 100 {
+            sneak_bonus = 100;
+        }
+    }
+    // The line of sight call reports through the number at `scratch + 4`.
+    e.mem.set_u32(scratch + 4, 3);
+    let line_of_sight_flag = 1u32;
+    let line = e
+        .call(
+            ACTOR_LINE_OF_SIGHT,
+            &args![this, 1u32, other, 1u32, scratch + 4, line_of_sight_flag],
+        )
+        .u8();
+    if e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32() != 0 {
+        let controller = fn_008a0330(e, this);
+        if e.call(COMBAT_CONTROLLER_TARGET, &args![controller]).u32() == other.addr() {
+            let line_number = e.mem.u32(scratch + 4);
+            let controller = fn_008a0330(e, this);
+            e.call(
+                COMBAT_CONTROLLER_SET_LINE_OF_SIGHT,
+                &args![controller, line_number],
+            );
+        }
+    }
+    // The flag passed to the line of sight call is always 1, so the result
+    // always goes to the second output (`seen_line`), which the callers of
+    // this mode supply.
+    e.mem.set_u8(seen_line.addr(), line);
+    if line != 0 {
+        let angle_ptr = e
+            .call(SETTING_GET_VALUE_POINTER, &args![SETTING_VIEW_CONE_ANGLE])
+            .u32();
+        let radians: f64 = e.global(DEGREES_TO_RADIANS);
+        let angle = (e.mem.f32(angle_ptr) as f64 * radians) as f32;
+        let point = e.call(ACTOR_VIEW_CONE_TARGET, &args![other]).u32();
+        let in_cone = e
+            .call(ACTOR_IS_POINT_IN_VIEW_CONE, &args![this, point, angle])
+            .bool();
+        e.mem.set_u8(seen.addr(), in_cone as u8);
+    } else {
+        e.mem.set_u8(seen.addr(), 0);
+    }
+
+    // Worn armor of the detected actor.
+    let armor = e
+        .call(ACTOR_GET_ARMOR_BEING_WORN, &args![other, 2u32])
+        .u32();
+    let armor_value = e.call(ACTOR_ARMOR_VALUE, &args![other, armor]).u32();
+    let mut armor_bonus: i32 = 0;
+    let armor_form = if armor != 0 {
+        e.call(ENTRY_FORM, &args![armor]).u32()
+    } else {
+        0
+    };
+    if armor != 0 {
+        e.call(ENTRY_DELETE, &args![armor, 1u32]);
+    }
+    if armor_form != 0 {
+        if e.call(ARMOR_KIND_TEST_A, &args![armor_form + 0x70]).bool() {
+            let bonus = e
+                .call(SETTING_GET_INT_POINTER, &args![SETTING_ARMOR_BONUS_A])
+                .u32();
+            armor_bonus = armor_bonus.wrapping_add(e.mem.i32(bonus));
+        } else if e.call(ARMOR_KIND_TEST_B, &args![armor_form + 0x70]).bool() {
+            let bonus = e
+                .call(SETTING_GET_INT_POINTER, &args![SETTING_ARMOR_BONUS_B])
+                .u32();
+            armor_bonus = armor_bonus.wrapping_add(e.mem.i32(bonus));
+        }
+    }
+
+    let this_in_combat = e.call(ACTOR_IN_COMBAT, &args![this]).u8();
+    let word_472380 = e.call(ACTOR_VALUE_472380, &args![other]).u32();
+    let seen_now = (e.mem.u8(seen.addr()) != 0) as u32;
+    let mut byte_4938e0 = e.call(ACTOR_FLAG_4938E0, &args![other]).u8();
+    let mut other_running = 0u8;
+    if e.call(ACTOR_ANIM_FLAGS, &args![other]).u32() & 0x200 != 0 {
+        other_running = 1;
+    }
+    e.mem.set_f32(scratch + 8, 0.0);
+    e.call(HANDLE_ENTRY_POINT, &args![0x1fu32, other, scratch + 8]);
+    if e.mem.f32(scratch + 8) as f64 != zero {
+        other_running = 0;
+    }
+    let mut other_moving = e.call(ACTOR_IS_MOVING, &args![other]).u8();
+    let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+    let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+    let float_0_875: f32 = e.global(FLOAT_0_875);
+    e.call(
+        ACTOR_POSITION_CELL_TEST,
+        &args![this, position, cell, float_0_875],
+    );
+    let this_flag_1ac = e.call(REFR_FIELD_1AC_IS_9, &args![this]).u8();
+    // The code tests the other actor's cell flag (`00425fd0`) and keeps the
+    // result in a local it never reads.
+    if e.call(REFR_PARENT_CELL, &args![other]).u32() != 0 {
+        let cell = e.call(REFR_PARENT_CELL, &args![other]).u32();
+        e.call(CELL_FLAG_24_BIT_0, &args![cell]);
+    }
+    let own_perception = e
+        .call(
+            GET_CLAMPED_ACTOR_FLOAT_VALUE,
+            &args![this.addr() + 0xa4, ACTOR_VALUE_PERCEPTION],
+        )
+        .f64();
+    let own_perception = e.call(FTOL, &args![own_perception]).i32();
+    let other_stealth = e
+        .call(
+            GET_CLAMPED_ACTOR_FLOAT_VALUE,
+            &args![other.addr() + 0xa4, 0x2au32],
+        )
+        .f64();
+    let mut other_stealth = e.call(FTOL, &args![other_stealth]).i32();
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
+        let player_stealth = e
+            .call(
+                GET_CLAMPED_ACTOR_FLOAT_VALUE,
+                &args![player_addr + 0xa4, 0x2au32],
+            )
+            .f64();
+        let player_stealth = e.call(FTOL, &args![player_stealth]).i32();
+        if other_stealth < player_stealth {
+            other_stealth = player_stealth;
+        }
+    }
+    let mut stealth_flag = 0u8;
+    let value = e.vcall(other.addr() + 0xa4, 0x0c, &args![0x30u32]).f64();
+    if value > zero || e.vcall(other.addr() + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
+        stealth_flag = 1;
+    }
+    if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![other]).bool() {
+        let value = e.vcall(player_addr + 0xa4, 0x0c, &args![0x30u32]).f64();
+        if value > zero || e.vcall(player_addr + 0xa4, 0x08, &args![0x31u32]).i32() > 0 {
+            stealth_flag = 1;
+        }
+    }
+    let height = e.call(ACTOR_GET_HEIGHT, &args![this]).f32();
+    let height_class = e.call(HEIGHT_CLASS, &args![height]).u32();
+    e.mem.set_f32(scratch + 0x0c, 0.0);
+    e.mem.set_f32(scratch + 0x10, 0.0);
+    e.mem.set_f32(scratch + 0x14, 0.0);
+    let mut cell_flag_clear = 1u8;
+    if e.call(REFR_PARENT_CELL, &args![this]).u32() != 0 {
+        let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+        if e.call(CELL_FLAG_24_BIT_0, &args![cell]).bool() {
+            cell_flag_clear = 0;
+        }
+    }
+    let mut group_member_other = 0u8;
+    if !e.call(IS_HEAVY_BODY_ARMOR_WORN, &args![this]).bool()
+        && fn_008a16b0(e, this) != 0
+        && other.addr() != fn_008a16b0(e, this)
+    {
+        group_member_other = 1;
+    }
+    e.mem.set_f32(scratch + 8, 0.0);
+    e.call(HANDLE_ENTRY_POINT, &args![0x1fu32, other, scratch + 8]);
+    if e.mem.f32(scratch + 8) as f64 != zero && other_moving != 0 {
+        byte_4938e0 = 0;
+    }
+    let this_word = e.vcall(this.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
+    let other_word = e.vcall(other.addr() + 0xa4, 0x28, &args![]).u32() & 0xffff;
+    let entry_result = e.mem.f32(scratch);
+    let mut line_flag = line;
+    if (entry_result as f64) > zero {
+        line_flag = 1;
+        let scale_ptr = e
+            .call(SETTING_GET_VALUE_POINTER, &args![SETTING_DISTANCE_SCALE])
+            .u32();
+        distance = (distance as f64 * e.mem.f32(scale_ptr) as f64) as f32;
+        stealth_flag = 0;
+        other_moving = 0;
+    }
+    let package_int = e.call(FTOL, &args![package_bonus as f64]).u32();
+    result = e
+        .call(
+            DETECTION_FORMULA,
+            &args![
+                own_perception as u32,
+                other_stealth as u32,
+                line_flag as u32,
+                seen_now,
+                distance,
+                sneak_bonus as u32,
+                0u32,
+                stealth_flag as u32,
+                armor_value,
+                byte_4938e0 as u32,
+                other_moving as u32,
+                other_running as u32,
+                this_flag_1ac as u32,
+                this_in_combat as u32,
+                word_472380,
+                height_class,
+                cell_flag_clear as u32,
+                group_member_other as u32,
+                package_int,
+                scratch + 0x0c,
+                scratch + 0x10,
+                scratch + 0x14,
+                this_word,
+                other_word,
+                armor_bonus as u32
+            ],
+        )
+        .i32();
+
+    if use_line == 0 || report_always != 0 || this.addr() == player_addr {
+        let mut level = 0u32;
+        if result > 0 {
+            level = 3;
+        }
+        if e.vcall(other.addr(), ACTOR_SLOT_100, &args![]).bool() {
+            let seen_value = if seen_line.is_null() {
+                e.mem.u8(seen.addr())
+            } else {
+                e.mem.u8(seen_line.addr())
+            };
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let seen_byte = e.mem.u8(seen.addr());
+            e.vcall(
+                acquire,
+                ACQUIRE_OBJECT_SLOT_F0,
+                &args![
+                    other,
+                    level,
+                    seen_byte as u32,
+                    result,
+                    0u32,
+                    seen_value as u32,
+                    report as u32
+                ],
+            );
+            if result > 0 {
+                let seen_value = if seen_line.is_null() {
+                    e.mem.u8(seen.addr())
+                } else {
+                    e.mem.u8(seen_line.addr())
+                };
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![other]).u32();
+                let seen_byte = e.mem.u8(seen.addr());
+                e.vcall(
+                    acquire,
+                    ACQUIRE_OBJECT_SLOT_F0,
+                    &args![
+                        this,
+                        level,
+                        seen_byte as u32,
+                        result,
+                        1u32,
+                        seen_value as u32,
+                        report as u32
+                    ],
+                );
+            }
+        }
+    }
+    result
+}
+/// Table of `u32` indexed by the weapon type (`0x0118a838`), read by
+/// `fn_008a1760`.
+const WEAPON_TYPE_TABLE: u32 = 0x0118_a838;
+/// The setting object read through [`SETTING_GET_BOOL_POINTER`].
+const SETTING_ESSENTIAL_PROTECTION: u32 = 0x011e_0888;
+/// `Actor::CanKnockDown` (Xbox PDB).
+const ACTOR_CAN_KNOCK_DOWN: u32 = 0x0088_45a0;
+/// `Actor::StopMoving` (Xbox PDB).
+const ACTOR_STOP_MOVING: u32 = 0x008b_3ab0;
+/// Face animation data slot `0xd8` (takes `1, 1`).
+const FACE_ANIMATION_SLOT_D8: u32 = 0xd8;
+/// `004534f0`: thiscall on the container changes, takes the actor.
+const CHANGES_FN_4534F0: u32 = 0x0045_34f0;
+/// `0043fcd0`: thiscall on the actor, returns what `StopMovingSounds`
+/// takes first.
+const ACTOR_SOUND_SOURCE: u32 = 0x0043_fcd0;
+/// `BSAudio::QInstance` (Xbox PDB): the audio singleton (no arguments).
+const AUDIO_GET_INSTANCE: u32 = 0x0045_3a70;
+/// `BSAudio::StopMovingSounds` (Xbox PDB): thiscall on the audio object with
+/// a word, a `float` and a word.
+const AUDIO_STOP_MOVING_SOUNDS: u32 = 0x00ad_8570;
+/// `00483710`: thiscall on the sound handle, the handle's destructor.
+const SOUND_HANDLE_DESTRUCT: u32 = 0x0048_3710;
+/// Process slot `0x610` (a state number; 3 and 4 fade the actor in).
+const PROCESS_SLOT_610: u32 = 0x610;
+/// `HighProcess::FadeIn` (Xbox PDB): thiscall on the process, takes the actor
+/// and a flag.
+const HIGH_PROCESS_FADE_IN: u32 = 0x008f_e8f0;
+/// `Actor::ResetLoadedAnimations` (Xbox PDB).
+const ACTOR_RESET_LOADED_ANIMATIONS: u32 = 0x0088_7d00;
+/// `TaskQueueInterface` getter (`004537b0`, no arguments).
+const TASK_QUEUE_INTERFACE: u32 = 0x0045_37b0;
+/// `TaskQueueInterface::QueueActorApplyCriticalStage` (Xbox PDB): thiscall on
+/// the interface, takes the actor.
+const QUEUE_ACTOR_APPLY_CRITICAL_STAGE: u32 = 0x0087_b810;
+/// Actor slot `0x130` (returns the actor's name for debug output).
+const ACTOR_SLOT_130: u32 = 0x130;
+/// `005b5e40`: cdecl debug print: format, stage, name, form id.
+const PRINT_ERROR_LINE: u32 = 0x005b_5e40;
+/// `"Applying critical stage %i to actor '%s' (%08X) who is not dead"`.
+const CRITICAL_STAGE_NOT_DEAD_FORMAT: u32 = 0x0108_4d30;
+/// `bhkUtilFunctions::ReplaceConstraints` (Xbox PDB), cdecl: the body and a
+/// constraint kind.
+const BHK_REPLACE_CONSTRAINTS: u32 = 0x00c8_0ce0;
+/// `bhkUtilFunctions::DampBodiesVelocity` (Xbox PDB), cdecl: the body and a
+/// `float` damping.
+const BHK_DAMP_BODIES_VELOCITY: u32 = 0x00c8_03a0;
+/// `TESObjectREFR::RemoveFromAllWater` (Xbox PDB): takes a flag.
+const REFR_REMOVE_FROM_ALL_WATER: u32 = 0x0057_b520;
+/// `00450f90`: thiscall on the body, takes `1`.
+const BODY_FN_450F90: u32 = 0x0045_0f90;
+/// Actor slot `0x1c0`.
+const ACTOR_SLOT_1C0: u32 = 0x1c0;
+
+// Translated from 008a16b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the word at `+0x128` (`pCurrentCombatTarget`, Xbox PDB). The map
+/// names this body `Actor::IsCombatGroupMember`.
+pub fn fn_008a16b0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    e.mem.u32(this.addr() + 0x128)
+}
+
+// Translated from 008a16d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsWeaponDrawn` (Xbox PDB): asks the actor's process (slot
+/// `0x454`); false without a process.
+pub fn actor_is_weapon_drawn(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process == 0 {
+        return 0;
+    }
+    e.vcall(process, PROCESS_SLOT_454, &args![]).u8()
+}
+
+// Translated from 008a1710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentWeapon` (Xbox PDB): the form of the weapon entry the
+/// process reports (slot `0x148`), or 0.
+pub fn actor_get_current_weapon(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process != 0
+        && e.vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32()
+            != 0
+    {
+        let entry = e
+            .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32();
+        return e.call(ENTRY_FORM, &args![entry]).u32();
+    }
+    0
+}
+
+// Translated from 008a1760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A number for the actor's state: 0 when fleeing (slot `0x22c`), `0xc` for
+/// the player; for an actor with an acquire object whose level (`0045cd60`)
+/// is 0 or 1, `1` without a weapon and otherwise the entry of the table at
+/// `0x0118a838` for the weapon's type; 0 in the other cases.
+pub fn fn_008a1760(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    if e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        return 0;
+    }
+    if this.addr() == e.global::<u32>(PLAYER_CHARACTER) {
+        return 0xc;
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let level = e.call(ACQUIRE_OBJECT_FIELD_28, &args![acquire]).i32();
+        if (0..=1).contains(&level) {
+            let weapon = actor_get_current_weapon(e, this);
+            if weapon != 0 {
+                let weapon_type = e.call(WEAPON_TYPE, &args![weapon]).u32();
+                return e
+                    .mem
+                    .u32(WEAPON_TYPE_TABLE.wrapping_add(weapon_type.wrapping_mul(4)));
+            }
+            return 1;
+        }
+    }
+    0
+}
+
+// Translated from 008a1800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetLifeState` (Xbox PDB). With the essential protection setting
+/// on, an essential actor's state 1 or 2 becomes 6; state 6 becomes 0 when
+/// the actor cannot be knocked down. Entering the states 1, 2 or 6 from 0
+/// stops the actor moving. State 2 (dead) drops the face animation, tells the
+/// container changes, silences the creature awake sound and stops the moving
+/// sounds. A non-zero state fades the actor in when its process is in the
+/// state 3 or 4 (slot `0x610`). A change of state calls slot `0x48` with
+/// `0x400`, and entering or leaving 2 resets the loaded animations.
+/// C++ exception unwinding (the sound handle's cleanup) is not translated.
+pub fn actor_set_life_state(e: &mut Engine, this: Ptr<Actor>, state: u32) {
+    let mut state = state;
+    let flag = e
+        .call(
+            SETTING_GET_BOOL_POINTER,
+            &args![SETTING_ESSENTIAL_PROTECTION],
+        )
+        .u32();
+    if e.mem.u8(flag) != 0
+        && e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+        && (state == 2 || state == 1)
+    {
+        state = 6;
+    }
+    if state == 6 && !e.call(ACTOR_CAN_KNOCK_DOWN, &args![this]).bool() {
+        state = 0;
+    }
+    if e.get(this, Actor::eLifeState) == 0 && (state == 1 || state == 2 || state == 6) {
+        e.call(ACTOR_STOP_MOVING, &args![this]);
+    }
+    if state == 2 {
+        let face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+        if face != 0 {
+            e.vcall(face, FACE_ANIMATION_SLOT_D8, &args![1u32, 1u32]);
+        }
+        let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+        let changes = e.call(GET_CONTAINER_CHANGES, &args![extra]).u32();
+        if changes != 0 {
+            e.call(CHANGES_FN_4534F0, &args![changes, this]);
+        }
+        e.with_stack(12, |e, handle| {
+            e.call(SOUND_HANDLE_CONSTRUCT, &args![handle]);
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+            e.call(EXTRA_GET_CREATURE_AWAKE_SOUND, &args![extra, handle]);
+            e.call(SOUND_HANDLE_STOP, &args![handle]);
+            e.call(SOUND_HANDLE_RELEASE, &args![handle]);
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+            e.call(EXTRA_SET_CREATURE_AWAKE_SOUND, &args![extra, handle]);
+            let source = e.call(ACTOR_SOUND_SOURCE, &args![this]).u32();
+            let audio = e.call(AUDIO_GET_INSTANCE, &args![]).u32();
+            e.call(
+                AUDIO_STOP_MOVING_SOUNDS,
+                &args![audio, source, 0.0f32, 0u32],
+            );
+            e.call(SOUND_HANDLE_DESTRUCT, &args![handle]);
+        });
+    }
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if state != 0
+        && process != 0
+        && e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0
+        && (e.vcall(process, PROCESS_SLOT_610, &args![]).u32() == 3
+            || e.vcall(process, PROCESS_SLOT_610, &args![]).u32() == 4)
+    {
+        e.call(HIGH_PROCESS_FADE_IN, &args![process, this, 0u32]);
+    }
+    if e.get(this, Actor::eLifeState) != state {
+        e.vcall(this.addr(), ACTOR_SLOT_48, &args![0x400u32]);
+    }
+    let old = e.get(this, Actor::eLifeState);
+    e.set(this, Actor::eLifeState, state);
+    let new = e.get(this, Actor::eLifeState);
+    if old != new && ((old == 2 && new != 1) || new == 2) {
+        e.call(ACTOR_RESET_LOADED_ANIMATIONS, &args![this]);
+    }
+}
+
+// Translated from 008a1a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the critical stage (`eCriticalStage`, Xbox PDB) and applies it.
+pub fn fn_008a1a40(e: &mut Engine, this: Ptr<Actor>, stage: u32) {
+    e.set(this, Actor::eCriticalStage, stage);
+    actor_apply_critical_stage(e, this);
+}
+
+// Translated from 008a1a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ApplyCriticalStage` (Xbox PDB): for an actor with a body (slot
+/// `0x1d0`). When the task queue is in use (`008c7aa0`) queues the stage
+/// instead. Otherwise stage 1 replaces the body's constraints and stops its
+/// velocity; stages 2 and 4 take the actor out of the water, run slot
+/// `0x1c0` and, when the killer (`pMyKiller`) is the player (slot `0x360`
+/// of the killer) and the actor is not, count the statistic `0x1d`. A stage
+/// other than 0 on a living actor prints a debug line.
+pub fn actor_apply_critical_stage(e: &mut Engine, this: Ptr<Actor>) {
+    let body = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    if body == 0 {
+        return;
+    }
+    if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+        let queue = e.call(TASK_QUEUE_INTERFACE, &args![]).u32();
+        e.call(QUEUE_ACTOR_APPLY_CRITICAL_STAGE, &args![queue, this]);
+        return;
+    }
+    let stage = e.get(this, Actor::eCriticalStage);
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() && stage != 0 {
+        let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
+        let name = e.vcall(this.addr(), ACTOR_SLOT_130, &args![]).u32();
+        e.call(
+            PRINT_ERROR_LINE,
+            &args![CRITICAL_STAGE_NOT_DEAD_FORMAT, stage, name, form_id],
+        );
+    }
+    match e.get(this, Actor::eCriticalStage) {
+        1 => {
+            e.call(BHK_REPLACE_CONSTRAINTS, &args![body, 8u32]);
+            e.call(BHK_DAMP_BODIES_VELOCITY, &args![body, 0.0f32]);
+        }
+        2 | 4 => {
+            e.call(REFR_REMOVE_FROM_ALL_WATER, &args![this, 0u32]);
+            e.call(BODY_FN_450F90, &args![body, 1u32]);
+            e.vcall(this.addr(), ACTOR_SLOT_1C0, &args![]);
+            if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
+                let killer = e.get(this, Actor::pMyKiller).addr();
+                if killer != 0 && e.vcall(killer, ACTOR_SLOT_360, &args![]).bool() {
+                    e.call(MISC_STAT_INCREMENT, &args![0x1du32]);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+/// `TESTopic::CreateDialogueItem` (Xbox PDB): thiscall on the topic, taking
+/// the speaker, a word and three zeros; returns the dialogue item.
+const TOPIC_CREATE_DIALOGUE_ITEM: u32 = 0x0061_b320;
+/// `TESObjectREFR::SetSayToTopic` (Xbox PDB).
+const REFR_SET_SAY_TO_TOPIC: u32 = 0x0057_ad20;
+/// `TESObjectREFR::SetSayToTopicInfo` (Xbox PDB).
+const REFR_SET_SAY_TO_TOPIC_INFO: u32 = 0x0057_ace0;
+/// `TESTopicInfo::AddTopicList` (Xbox PDB).
+const TOPIC_INFO_ADD_TOPIC_LIST: u32 = 0x0061_f150;
+/// `TESTopicInfo::RunResult` (Xbox PDB): thiscall on the info, taking a flag
+/// and the speaker.
+const TOPIC_INFO_RUN_RESULT: u32 = 0x0061_f170;
+/// `DialogueItem::FirstResponse` (Xbox PDB).
+const DIALOGUE_ITEM_FIRST_RESPONSE: u32 = 0x0083_c7b0;
+/// `DialogueItem::GetCurrentResponse` (Xbox PDB).
+const DIALOGUE_ITEM_GET_CURRENT_RESPONSE: u32 = 0x0083_c820;
+/// `00933150`: thiscall on the actor, fills a 12-byte handle (first word:
+/// what `SetCompletionCallback` is given) from the form id, a zero, a flag
+/// word and a flag.
+const MOBILE_OBJECT_FILL_SOUND_HANDLE: u32 = 0x0093_3150;
+/// `BSAudioManager::QInstance` (Xbox PDB): the audio manager singleton.
+const AUDIO_MANAGER_INSTANCE: u32 = 0x00ad_9060;
+/// `BSAudioManager::SetCompletionCallback` (Xbox PDB): thiscall on the
+/// manager, taking the sound, the callback and a word.
+const AUDIO_MANAGER_SET_COMPLETION_CALLBACK: u32 = 0x00ad_bfd0;
+/// The completion callback the manager is given (`00935cc0`).
+const SAY_TO_COMPLETION_CALLBACK: u32 = 0x0093_5cc0;
+/// `00460140`: thiscall on a dialogue response, returns the object whose first
+/// word is the sound file name pointer.
+const RESPONSE_SOUND_HOLDER: u32 = 0x0046_0140;
+/// `00406d30`: cdecl string copy (destination, size, source).
+const COPY_STRING_LIMITED: u32 = 0x0040_6d30;
+/// `BSSoundHandle::SetStaticAttenuation` (Xbox PDB): takes an integer.
+const SOUND_HANDLE_SET_STATIC_ATTENUATION: u32 = 0x00ad_89b0;
+/// `BSSoundHandle::SetCompletionCallback` (Xbox PDB): the callback and a
+/// word.
+const SOUND_HANDLE_SET_COMPLETION_CALLBACK: u32 = 0x00ad_8e60;
+/// `MobileObject::SayToCallBack` (Xbox PDB), cdecl: a form id and a flag.
+const SAY_TO_CALLBACK: u32 = 0x0093_6a20;
+/// `BSSoundHandle::GetDuration` (Xbox PDB).
+const SOUND_HANDLE_GET_DURATION: u32 = 0x00ad_8b30;
+/// `Actor::AlwaysShowSubtitles` (Xbox PDB).
+const ACTOR_ALWAYS_SHOW_SUBTITLES: u32 = 0x008c_1bc0;
+/// `Interface::ShowSubtitle` (Xbox PDB), cdecl: the text, the sound handle
+/// and the position by value (three words each), a word and a flag.
+const INTERFACE_SHOW_SUBTITLE: u32 = 0x0070_5210;
+/// `DialogueItem` destructor (`005c90d0`): thiscall, takes the delete flag.
+const DIALOGUE_ITEM_DESTROY: u32 = 0x005c_90d0;
+/// Setting whose byte forces the subtitles on (`0x011d8928`).
+const SETTING_SHOW_SUBTITLES: u32 = 0x011d_8928;
+/// Setting whose `float` scales the static attenuation (`0x011e060c`).
+const SETTING_STATIC_ATTENUATION: u32 = 0x011e_060c;
+/// Process slot `0x490` (takes a flag and a sound handle by value).
+const PROCESS_SLOT_490: u32 = 0x490;
+
+/// A copy of the sound handle at `handle` made by the assignment function
+/// (`00418900`) into a fresh 12-byte block, as the code builds the by-value
+/// argument on its stack; returns the three words.
+fn sound_handle_words(e: &mut Engine, handle: u32) -> [u32; 3] {
+    e.with_stack(12, |e, copy| {
+        e.call(SOUND_HANDLE_ASSIGN, &args![copy, handle]);
+        [
+            e.mem.u32(copy.addr()),
+            e.mem.u32(copy.addr() + 4),
+            e.mem.u32(copy.addr() + 8),
+        ]
+    })
+}
+
+// Translated from 008a1bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the actor say `topic` to `speaker_arg`: builds the dialogue item,
+/// stops the current dialogue, records the topic and its info on the actor,
+/// runs the info's result, and for the item's current response plays its
+/// voice file (as a static sound when `static_sound` is set, otherwise at the
+/// actor's position following its node) and shows its subtitle (unless
+/// `no_subtitle`). The sound handle is returned through `result` (copied
+/// into it); the return value is `result`. `+0x7f` and `+0x80` of the actor
+/// are bytes the code clears when it starts the line.
+/// C++ exception unwinding is not translated.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008a1bd0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    result: Ptr,
+    topic: Ptr,
+    speaker_arg: u32,
+    static_sound: u8,
+    no_subtitle: u8,
+    _unused_6: u32,
+    notify_when_done: u8,
+) -> u32 {
+    e.with_stack(12, |e, sound| {
+        let sound = sound.addr();
+        e.call(SOUND_HANDLE_CONSTRUCT, &args![sound]);
+        let item = e
+            .call(
+                TOPIC_CREATE_DIALOGUE_ITEM,
+                &args![topic, this, speaker_arg, 0u32, 0u32, 0u32],
+            )
+            .u32();
+        e.call(MOBILE_OBJECT_STOP_CURRENT_DIALOGUE, &args![this]);
+        e.call(REFR_SET_SAY_TO_TOPIC, &args![this, topic]);
+        if item != 0 {
+            say_item(
+                e,
+                this,
+                item,
+                sound,
+                speaker_arg,
+                static_sound,
+                no_subtitle,
+                notify_when_done,
+            );
+            e.call(DIALOGUE_ITEM_DESTROY, &args![item, 1u32]);
+        }
+        e.call(SOUND_HANDLE_ASSIGN, &args![result, sound]);
+        e.call(SOUND_HANDLE_DESTROY, &args![sound]);
+        result.addr()
+    })
+}
+
+/// The part of [`fn_008a1bd0`] that runs when the dialogue item exists.
+#[allow(clippy::too_many_arguments)]
+fn say_item(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    item: u32,
+    sound: u32,
+    speaker_arg: u32,
+    static_sound: u8,
+    no_subtitle: u8,
+    notify_when_done: u8,
+) {
+    let info = e.call(REFR_FORM_ID, &args![item]).u32();
+    e.call(REFR_SET_SAY_TO_TOPIC_INFO, &args![this, info]);
+    if info != 0 {
+        e.call(TOPIC_INFO_ADD_TOPIC_LIST, &args![info]);
+        e.call(TOPIC_INFO_RUN_RESULT, &args![info, 0u32, this]);
+    }
+    e.call(DIALOGUE_ITEM_FIRST_RESPONSE, &args![item]);
+    let response = e
+        .call(DIALOGUE_ITEM_GET_CURRENT_RESPONSE, &args![item])
+        .u32();
+    if response == 0 {
+        return;
+    }
+    let mut speaking = true;
+    let form = e.call(REFR_BASE_FORM, &args![response]).u32();
+    if form != 0 && e.mem.u8(this.addr() + 0x7f) != 0 {
+        let form = e.call(REFR_BASE_FORM, &args![response]).u32();
+        let form_id = e.call(REFR_FORM_ID, &args![form]).u32();
+        e.with_stack(12, |e, filled| {
+            e.call(
+                MOBILE_OBJECT_FILL_SOUND_HANDLE,
+                &args![this, filled, form_id, 0u32, 0x4000_0102u32, 1u32],
+            );
+            let audio = e.call(AUDIO_MANAGER_INSTANCE, &args![]).u32();
+            let this_id = e.call(REFR_FORM_ID, &args![this]).u32();
+            let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![filled]).u32();
+            e.call(
+                AUDIO_MANAGER_SET_COMPLETION_CALLBACK,
+                &args![audio, first, SAY_TO_COMPLETION_CALLBACK, this_id],
+            );
+            e.mem.set_u8(this.addr() + 0x7f, 0);
+            speaking = false;
+            e.call(SOUND_HANDLE_DESTROY, &args![filled]);
+        });
+    }
+    if speaking && e.mem.u8(this.addr() + 0x7f) != 0 {
+        let holder = e.call(RESPONSE_SOUND_HOLDER, &args![response]).u32();
+        if e.call(ENTRY_FIRST_EXTRA_LIST, &args![holder]).u32() == 0 {
+            if info != 0 && notify_when_done != 0 {
+                let this_id = e.call(REFR_FORM_ID, &args![this]).u32();
+                e.call(SAY_TO_CALLBACK, &args![this_id, 1u32]);
+            }
+        } else {
+            let holder = e.call(RESPONSE_SOUND_HOLDER, &args![response]).u32();
+            let file_name = e.call(ENTRY_FIRST_EXTRA_LIST, &args![holder]).u32();
+            e.with_stack(0x200 + 12, |e, block| {
+                let buffer = block.addr() + 12;
+                let found_handle = block.addr();
+                e.call(COPY_STRING_LIMITED, &args![buffer, 0x200u32, file_name]);
+                let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+                let flags = if static_sound != 0 { 0x105u32 } else { 0x106 };
+                let found = e
+                    .call(
+                        AUDIO_GET_SOUND_HANDLE_BY_FILENAME,
+                        &args![audio, found_handle, buffer, flags, 0u32],
+                    )
+                    .u32();
+                e.call(SOUND_HANDLE_ASSIGN, &args![sound, found]);
+                e.call(SOUND_HANDLE_DESTROY, &args![found_handle]);
+            });
+            if static_sound == 0 {
+                let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+                let x = e.mem.u32(position);
+                let y = e.mem.u32(position + 4);
+                let z = e.mem.u32(position + 8);
+                e.call(SOUND_HANDLE_SET_POSITION_XYZ, &args![sound, x, y, z]);
+                let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+                e.call(SOUND_HANDLE_SET_OBJECT_TO_FOLLOW, &args![sound, node]);
+            } else {
+                let scale_ptr = e
+                    .call(
+                        SETTING_GET_VALUE_POINTER,
+                        &args![SETTING_STATIC_ATTENUATION],
+                    )
+                    .u32();
+                let hundred: f64 = e.global(HUNDRED);
+                let value = e.mem.f32(scale_ptr) as f64 * hundred;
+                let attenuation = e.call(FTOL, &args![value]).u32();
+                e.call(
+                    SOUND_HANDLE_SET_STATIC_ATTENUATION,
+                    &args![sound, attenuation],
+                );
+            }
+            e.call(SOUND_HANDLE_PLAY, &args![sound, 0u32]);
+            if notify_when_done != 0 {
+                let this_id = e.call(REFR_FORM_ID, &args![this]).u32();
+                e.call(
+                    SOUND_HANDLE_SET_COMPLETION_CALLBACK,
+                    &args![sound, SAY_TO_CALLBACK, this_id],
+                );
+            }
+            e.mem.set_u8(this.addr() + 0x80, 0);
+            let words = sound_handle_words(e, sound);
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            e.vcall(
+                process,
+                PROCESS_SLOT_490,
+                &args![0u32, words[0], words[1], words[2]],
+            );
+            // The duration is converted to a `float` local the code never
+            // reads again.
+            e.call(SOUND_HANDLE_GET_DURATION, &args![sound]);
+        }
+    }
+    let always = e
+        .call(SETTING_GET_BOOL_POINTER, &args![SETTING_SHOW_SUBTITLES])
+        .u32();
+    if (e.mem.u8(always) != 0 || e.call(ACTOR_ALWAYS_SHOW_SUBTITLES, &args![this]).bool())
+        && no_subtitle == 0
+    {
+        let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+        let at = [
+            e.mem.u32(position),
+            e.mem.u32(position + 4),
+            e.mem.u32(position + 8),
+        ];
+        let words = sound_handle_words(e, sound);
+        let text_holder = e.call(LIST_ITEM_SLOT, &args![response]).u32();
+        let text = e.call(ENTRY_FIRST_EXTRA_LIST, &args![text_holder]).u32();
+        e.call(
+            INTERFACE_SHOW_SUBTITLE,
+            &args![
+                text,
+                words[0],
+                words[1],
+                words[2],
+                at[0],
+                at[1],
+                at[2],
+                speaker_arg,
+                1u32
+            ],
+        );
+    }
+}
+/// Actor slot `0x1e8`: returns the node the head node is searched under.
+const ACTOR_SLOT_1E8_NODE: u32 = 0x1e8;
+/// `1000.0` (`double`).
+const THOUSAND_DOUBLE: u32 = 0x0101_7b70;
+/// `0.5` (`double`).
+const HALF_DOUBLE: u32 = 0x0101_1588;
+/// Settings object whose `float` is subtracted from 1000 in the head track
+/// score (`0x011cd114`).
+const SETTING_11CD114: u32 = 0x011c_d114;
+/// Settings object whose `float` is compared with the distance to the
+/// target (`0x011cd750`).
+const SETTING_11CD750: u32 = 0x011c_d750;
+/// Process slot `0x68c` (an actor the process remembers).
+const PROCESS_SLOT_68C: u32 = 0x68c;
+/// `0043_0830`: thiscall on an actor, returns a pointer to its rotation
+/// (`+8` is the heading).
+const ACTOR_ROTATION_POINTER: u32 = 0x0043_0830;
+/// `pi` (`double`).
+const PI_DOUBLE: u32 = 0x0101_ff40;
+/// `2 * pi` (`double`).
+const TWO_PI_DOUBLE: u32 = 0x0101_ff48;
+/// `-pi` (`double`).
+const MINUS_PI_DOUBLE: u32 = 0x0101_ff58;
+/// `pi` (`float`), the turn limit towards the actor the process targets.
+const PI_FLOAT: u32 = 0x0102_b3c8;
+/// `2 * pi / 3` (`float`), the turn limit towards other actors.
+const TURN_LIMIT_FLOAT: u32 = 0x0108_4d88;
+/// `00560d30`: thiscall on a 4-`float` vector, takes an index; returns a
+/// pointer to that component.
+const FLOAT_ARRAY_SLOT: u32 = 0x0056_0d30;
+/// Settings object whose `float` `fn_008a2d20` returns (`0x011d5788`).
+const SETTING_11D5788: u32 = 0x011d_5788;
+/// Process slot `0x278`: the entry of the object the process is working on.
+const PROCESS_SLOT_278: u32 = 0x278;
+/// Package method `00671d10`: the package's target holder.
+const PACKAGE_GET_TARGET_OBJECT: u32 = 0x0067_1d10;
+/// `PackageTarget::GetTargType` (Xbox PDB).
+const PACKAGE_TARGET_GET_TARG_TYPE: u32 = 0x0051_9b00;
+/// `PackageTarget::GetTargObject` (Xbox PDB).
+const PACKAGE_TARGET_GET_TARG_OBJECT: u32 = 0x0068_0050;
+/// `PackageTarget::GetTargObjectType` (Xbox PDB): thiscall on the target,
+/// takes a pointer to a word.
+const PACKAGE_TARGET_GET_TARG_OBJECT_TYPE: u32 = 0x0068_0080;
+/// `InventoryChanges::GetObjectbyPackObjType` (Xbox PDB): thiscall on the
+/// changes, takes the object type result and a pointer to a word.
+const INVENTORY_CHANGES_GET_OBJECT_BY_PACK_OBJ_TYPE: u32 = 0x004c_6a10;
+/// Reference slot `0xe4` (a test on the target object).
+const REFERENCE_SLOT_E4: u32 = 0xe4;
+/// `TESObjectREFR::GetInventoryItem` (Xbox PDB): thiscall on the reference,
+/// takes the base form and a form id (or an object and 0).
+const REFR_GET_INVENTORY_ITEM_FN: u32 = 0x0057_6260;
+/// `0047c850`: thiscall test on the object the pointer at `0x011de45c`
+/// holds.
+const SINGLETON_TEST_47C850: u32 = 0x0047_c850;
+/// The pointer `fn_008a2ed0` tests (`0x011de45c`).
+const SINGLETON_11DE45C: u32 = 0x011d_e45c;
+/// Acquire object slot `0x678`: the actor it targets.
+const ACQUIRE_OBJECT_SLOT_678: u32 = 0x678;
+/// Settings object whose `float` is the head tracking distance
+/// (`0x011cd938`).
+const SETTING_11CD938: u32 = 0x011c_d938;
+/// `004ab230`: thiscall on the node `Actor` slot `0x1e8` returns, takes a
+/// word; returns a node.
+const NODE_FN_4AB230: u32 = 0x004a_b230;
+/// `NiObjectNET::GetController` (Xbox PDB): thiscall on the object, takes a
+/// controller type descriptor.
+const NI_OBJECT_NET_GET_CONTROLLER: u32 = 0x00a5_c570;
+/// The controller type descriptor `fn_008a2fa0` asks for (`0x011f36ac`).
+const CONTROLLER_TYPE_11F36AC: u32 = 0x011f_36ac;
+/// `00537bd0`: thiscall on a controller, returns the object whose slot
+/// `0x8c` finds the head node.
+const CONTROLLER_OWNER_537BD0: u32 = 0x0053_7bd0;
+/// Slot `0x8c` of that object (takes the value of `fn_008a30f0`).
+const CONTROLLER_OWNER_SLOT_8C: u32 = 0x8c;
+/// `NiPoint3::operator+=` (`0063c8a0`): thiscall on a 3-`float` vector, adds
+/// the vector at the pointer to it.
+const VECTOR_ADD_ASSIGN: u32 = 0x0063_c8a0;
+/// `bhkRagdollController::GetEyeOffset` (Xbox PDB): thiscall on the
+/// controller, fills the 12-byte vector at the pointer; returns a byte.
+const RAGDOLL_GET_EYE_OFFSET: u32 = 0x00c7_57b0;
+/// Global words the eye position starts from (`0x011f426c`, three
+/// `float`s).
+const EYE_POSITION_DEFAULT: u32 = 0x011f_426c;
+/// `0.9` (`double`), the share of the height the eye sits at.
+const EYE_HEIGHT_SHARE: u32 = 0x0106_b9e8;
+/// Value `fn_008a30f0` returns (`0x011c61ac`).
+const GLOBAL_11C61AC: u32 = 0x011c_61ac;
+/// Settings object whose `float` is the head tracking range (`0x011cd2f4`).
+const SETTING_11CD2F4: u32 = 0x011c_d2f4;
+/// `PlayerCharacter::IsPlayerCharacterInCombat` (Xbox PDB): thiscall on the
+/// player, takes a pointer.
+const PLAYER_IS_IN_COMBAT: u32 = 0x0095_3c50;
+/// `0067a690`: test on a package.
+const PACKAGE_TEST_67A690: u32 = 0x0067_a690;
+/// `00888a50`: test on the ragdoll controller.
+const RAGDOLL_TEST_888A50: u32 = 0x0088_8a50;
+/// `00c75580`: thiscall on the ragdoll controller, takes `1`.
+const RAGDOLL_FN_C75580: u32 = 0x00c7_5580;
+/// `Actor::IsVisible` (Xbox PDB): takes a flag number.
+const ACTOR_IS_VISIBLE: u32 = 0x008b_0190;
+/// Process slot `0x264` (returns a `float`).
+const PROCESS_SLOT_264: u32 = 0x264;
+/// Process slot `0x268` (takes a `float`).
+const PROCESS_SLOT_268: u32 = 0x268;
+/// Process slot `0x2d8` (a test).
+const PROCESS_SLOT_2D8: u32 = 0x2d8;
+/// Process slot `0x30c` (a test).
+const PROCESS_SLOT_30C_TEST: u32 = 0x30c;
+/// Process slot `0x668` (a test).
+const PROCESS_SLOT_668: u32 = 0x668;
+/// Process slot `0x624` (takes the new target).
+const PROCESS_SLOT_624: u32 = 0x624;
+/// Counter of head tracking updates (`0x011df674`).
+const HEAD_TRACK_UPDATE_COUNTER: u32 = 0x011d_f674;
+/// Settings object whose integer is the updates per frame limit
+/// (`0x011df848`).
+const SETTING_INT_11DF848: u32 = 0x011d_f848;
+/// Settings objects for the random target timer (`0x011df828` upper,
+/// `0x011df810` lower).
+const SETTING_11DF828: u32 = 0x011d_f828;
+/// See [`SETTING_11DF828`].
+const SETTING_11DF810: u32 = 0x011d_f810;
+/// Settings object whose `float` the process timer is set to after a new
+/// target (`0x011cdbb8`).
+const SETTING_11CDBB8: u32 = 0x011c_dbb8;
+/// Settings objects for the random head track timer (`0x011df78c` upper,
+/// `0x011df700` lower).
+const SETTING_11DF78C: u32 = 0x011d_f78c;
+/// See [`SETTING_11DF78C`].
+const SETTING_11DF700: u32 = 0x011d_f700;
+/// `0.8` (`double`).
+const HEAD_TURN_SHARE: u32 = 0x0102_17d8;
+/// Settings object whose integer is the head turn limit in degrees
+/// (`0x011cd480`).
+const SETTING_INT_11CD480: u32 = 0x011c_d480;
+/// Settings object whose integer is the head turn limit in degrees while the
+/// animation flags `0x30` are set (`0x011cda1c`).
+const SETTING_INT_11CDA1C: u32 = 0x011c_da1c;
+/// `GetZAngleFromVector` (Xbox PDB), cdecl: the vector; returns a `float`.
+const GET_Z_ANGLE_FROM_VECTOR: u32 = 0x004b_13c0;
+/// `004b15e0`, cdecl: the heading, the angle and a pointer to a `float`;
+/// returns a `float` angle difference.
+const ANGLE_DIFFERENCE: u32 = 0x004b_15e0;
+/// `00408840`, cdecl: the absolute value of a `float` (`float` result).
+const ABSOLUTE_VALUE: u32 = 0x0040_8840;
+/// `00408820`, cdecl: the absolute value of a `float` (`float` result).
+const ABSOLUTE_VALUE_ALT: u32 = 0x0040_8820;
+/// `008bb520`: thiscall on the actor, takes a position (three words) and a
+/// flag: turns the actor towards the point.
+const ACTOR_TURN_TOWARDS: u32 = 0x008b_b520;
+/// Settings object whose byte forces the head tracking on (`0x011df6d0`).
+const SETTING_BOOL_11DF6D0: u32 = 0x011d_f6d0;
+/// `004ade00`, cdecl: the actor's 3D node and the value of `fn_008a30f0`;
+/// returns a node.
+const NODE_FN_4ADE00: u32 = 0x004a_de00;
+/// The controller type descriptor the head tracking asks for (`0x011f3e6c`).
+const CONTROLLER_TYPE_11F3E6C: u32 = 0x011f_3e6c;
+/// Controller slot `0xc4` (takes `0`).
+const CONTROLLER_SLOT_C4: u32 = 0xc4;
+/// `0045bad0`, cdecl: the descriptor `0x011f3e58` and the value of slot
+/// `0xc4`.
+const CONTROLLER_MATCH_45BAD0: u32 = 0x0045_bad0;
+/// The descriptor passed to [`CONTROLLER_MATCH_45BAD0`] (`0x011f3e58`).
+const CONTROLLER_DESCRIPTOR_11F3E58: u32 = 0x011f_3e58;
+/// `00508100`: thiscall, returns a `float` (the controller's time).
+const CONTROLLER_TIME_508100: u32 = 0x0050_8100;
+/// `00457990`: thiscall on a vector, returns its length (`float`).
+const VECTOR_LENGTH: u32 = 0x0045_7990;
+/// Actor slot `0x194` (the eye position; see [`fn_008a2fa0`]).
+const ACTOR_SLOT_194: u32 = 0x194;
+/// Actor slot `0xfc` (a test on the tracked actor).
+const ACTOR_SLOT_FC: u32 = 0xfc;
+/// Form type byte the head tracking leaves alone (`0x1c`; its name is not
+/// confirmed).
+const FORM_TYPE_NUMBER_1C: u32 = 0x1c;
+/// `Actor::IsPathingComplete` (Xbox PDB).
+const ACTOR_IS_PATHING_COMPLETE: u32 = 0x008b_3bb0;
+/// `00717e50`: the process lists' process array getter (no stack
+/// arguments).
+const PROCESS_LISTS_GET_ARRAY: u32 = 0x0071_7e50;
+/// `005be5c0`: thiscall on the array, takes the level; returns the count.
+const PROCESS_ARRAY_COUNT: u32 = 0x005b_e5c0;
+/// `00968670`: thiscall on the array, takes an index; returns the actor.
+const PROCESS_ARRAY_GET_ACTOR: u32 = 0x0096_8670;
+/// `005ae3d0`: thiscall on a list, appends the value at the pointer.
+const LIST_APPEND: u32 = 0x005a_e3d0;
+/// `0096a2d0`: thiscall on a list head, initializes it.
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+/// `0046ffb0`: thiscall on a list head, the destructor.
+const LIST_DESTRUCT: u32 = 0x0046_ffb0;
+/// `008256d0`: thiscall test on a list node (true when the walk stops).
+const LIST_NODE_STOP_TEST: u32 = 0x0082_56d0;
+/// `005b7470`: returns the byte at `0x0119b4e0`.
+const GLOBAL_FLAG_5B7470: u32 = 0x005b_7470;
+/// Face animation data slot `0xb4`.
+const FACE_ANIMATION_SLOT_B4: u32 = 0xb4;
+/// Face animation data slot `0x114` (takes a number and a `float`).
+const FACE_ANIMATION_SLOT_114: u32 = 0x114;
+/// Face animation data slot `0x11c` (takes a value).
+const FACE_ANIMATION_SLOT_11C: u32 = 0x11c;
+/// Process slot `0x48c` (fills a sound handle).
+const PROCESS_SLOT_48C: u32 = 0x48c;
+/// Process slot `0x2e8` (a test).
+const PROCESS_SLOT_2E8: u32 = 0x2e8;
+/// `BSSoundHandle::IsValid` (Xbox PDB).
+const SOUND_HANDLE_IS_VALID_FN: u32 = 0x00ad_8ce0;
+/// `TESAnimGroup::IsAttackAction` (Xbox PDB), cdecl: the group.
+const IS_ATTACK_ACTION: u32 = 0x005f_2540;
+/// `1.0` as a `float` word.
+const FLOAT_ONE_BITS: u32 = 0x3f80_0000;
+/// Distance setting for the player's head tracking (`0x01013d84`, `float`).
+const PLAYER_TRACK_DISTANCE: u32 = 0x0101_3d84;
+/// Distance for other actors' head tracking (`0x01016410`, `float`).
+const OTHER_TRACK_DISTANCE: u32 = 0x0101_6410;
+/// Process slot `0x674` (takes a number).
+const PROCESS_SLOT_674: u32 = 0x674;
+/// `PackageLocation` holder getter (`0055b980`).
+const PACKAGE_GET_LOCATION_FN: u32 = 0x0055_b980;
+/// Second package location getter (`00672dd0`).
+const PACKAGE_GET_LOCATION_B: u32 = 0x0067_2dd0;
+/// `PackageLocation::GetLocReference` (Xbox PDB).
+const PACKAGE_LOCATION_GET_LOC_REFERENCE: u32 = 0x0067_f390;
+/// `PackageLocation::GetLocType` (Xbox PDB).
+const PACKAGE_LOCATION_GET_LOC_TYPE_FN: u32 = 0x0067_8ca0;
+/// `TESObjectREFR::IsFurniture` (Xbox PDB).
+const REFR_IS_FURNITURE: u32 = 0x0056_8680;
+/// `009dcb30`: thiscall test on the actor mover (`Actor + 0x190`).
+const ACTOR_MOVER_TEST_9DCB30: u32 = 0x009d_cb30;
+/// A form pointer the packages compare locations with (`0x011ca248`).
+const FORM_POINTER_11CA248: u32 = 0x011c_a248;
+/// `008d0430`: thiscall on the process, returns an object.
+const PROCESS_OBJECT_8D0430: u32 = 0x008d_0430;
+/// `009f4300`: thiscall on that object, takes the actor and a flag.
+const OBJECT_TEST_9F4300: u32 = 0x009f_4300;
+/// `00639b40`: thiscall on that object, returns a reference.
+const OBJECT_REFERENCE_639B40: u32 = 0x0063_9b40;
+/// `ACTOR_FORM_TEST_FLAGS` (`00461580`): thiscall, takes a flag mask.
+const FORM_TEST_FLAGS_FN: u32 = 0x0046_1580;
+/// `Actor` base form accessor (`004181e0`).
+const ACTOR_BASE_FORM_FN: u32 = 0x0041_81e0;
+/// Actor slot `0x21c` (a test).
+const ACTOR_SLOT_21C_TEST: u32 = 0x21c;
+/// Actor slot `0x1e4` (the animation).
+const ACTOR_SLOT_1E4: u32 = 0x1e4;
+
+/// The `float` of the setting object at `setting` (`00403e20` returns a
+/// pointer to it).
+fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+    let pointer = e.call(SETTING_GET_VALUE_POINTER, &args![setting]).u32();
+    e.mem.f32(pointer)
+}
+
+/// Whether the head tracking controller of the actor's 3D object blocks the
+/// tracking: the actor's node (slot `0x1e8`, or for slot `0x21c` actors the
+/// node found by `004ade00`) has a controller of the type `0x011f3e6c` whose
+/// value matches `0x011f3e58` and whose time is at least `90.0`.
+fn head_tracking_controller_blocks(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let mut node = 0u32;
+    if e.vcall(this.addr(), ACTOR_SLOT_1E8_NODE, &args![]).u32() != 0 {
+        let owner = e.vcall(this.addr(), ACTOR_SLOT_1E8_NODE, &args![]).u32();
+        node = e.call(NODE_FN_4AB230, &args![owner, 0u32]).u32();
+    } else if e.vcall(this.addr(), ACTOR_SLOT_21C_TEST, &args![]).bool() {
+        let key = fn_008a30f0(e);
+        let body = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+        node = e.call(NODE_FN_4ADE00, &args![body, key]).u32();
+    }
+    if node == 0 {
+        return false;
+    }
+    let controller = e
+        .call(
+            NI_OBJECT_NET_GET_CONTROLLER,
+            &args![node, CONTROLLER_TYPE_11F3E6C],
+        )
+        .u32();
+    if controller == 0 {
+        return false;
+    }
+    let value = e.vcall(controller, CONTROLLER_SLOT_C4, &args![0u32]).u32();
+    if !e
+        .call(
+            CONTROLLER_MATCH_45BAD0,
+            &args![CONTROLLER_DESCRIPTOR_11F3E58, value],
+        )
+        .bool()
+    {
+        return false;
+    }
+    let time = e.call(CONTROLLER_TIME_508100, &args![value]).f64();
+    time >= e.global::<f64>(NINETY)
+}
+
+// Translated from 008a2d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` of the setting at `0x011d5788`.
+pub fn fn_008a2d20(e: &mut Engine) -> f32 {
+    setting_float(e, SETTING_11D5788)
+}
+
+// Translated from 008a2d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The inventory item (`TESObjectREFR::GetInventoryItem`) of the object the
+/// actor's current package targets: for target types 0 and 3 the process'
+/// object (slot `0x278`), for type 1 the target object when it passes the
+/// test of its slot `0xe4`, for type 2 the object the container changes find
+/// for the target's object type; 0 without a package.
+pub fn fn_008a2d40(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mut item_form = 0u32;
+    let mut target_object = 0u32;
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process != 0 && e.vcall(process, PROCESS_SLOT_22C, &args![]).u32() != 0 {
+        let package = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
+        let target = e.call(PACKAGE_GET_TARGET_OBJECT, &args![package]).u32();
+        if target != 0 {
+            match e.call(PACKAGE_TARGET_GET_TARG_TYPE, &args![target]).u32() {
+                0 | 3 => {
+                    let entry = e.vcall(process, PROCESS_SLOT_278, &args![]).u32();
+                    item_form = e.call(ENTRY_FORM, &args![entry]).u32();
+                }
+                1 => {
+                    if e.call(PACKAGE_TARGET_GET_TARG_OBJECT, &args![target]).u32() != 0 {
+                        let object = e.call(PACKAGE_TARGET_GET_TARG_OBJECT, &args![target]).u32();
+                        if e.vcall(object, REFERENCE_SLOT_E4, &args![]).bool() {
+                            target_object =
+                                e.call(PACKAGE_TARGET_GET_TARG_OBJECT, &args![target]).u32();
+                        }
+                    }
+                }
+                2 => {
+                    let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+                    if e.call(GET_CONTAINER_CHANGES, &args![extra]).u32() != 0 {
+                        e.with_stack(4, |e, word| {
+                            let object_type = e
+                                .call(PACKAGE_TARGET_GET_TARG_OBJECT_TYPE, &args![target, word])
+                                .u32();
+                            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+                            let changes = e.call(GET_CONTAINER_CHANGES, &args![extra]).u32();
+                            target_object = e
+                                .call(
+                                    INVENTORY_CHANGES_GET_OBJECT_BY_PACK_OBJ_TYPE,
+                                    &args![changes, object_type, word],
+                                )
+                                .u32();
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    if item_form != 0 {
+        let form_id = e.call(REFR_FORM_ID, &args![item_form]).u32();
+        let base = e.call(REFR_BASE_FORM, &args![item_form]).u32();
+        e.call(REFR_GET_INVENTORY_ITEM_FN, &args![this, base, form_id])
+            .u32()
+    } else if target_object != 0 {
+        e.call(
+            REFR_GET_INVENTORY_ITEM_FN,
+            &args![this, target_object, 0u32],
+        )
+        .u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 008a2ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// What the actor's acquire object reports as the actor it targets (slot
+/// `0x678`) when the test `0047c850` on the object at `0x011de45c` is false;
+/// the checks of the current package target distance (`0x011cd938`) do not
+/// change the result, which is 0 otherwise.
+pub fn fn_008a2ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let singleton = e.global::<u32>(SINGLETON_11DE45C);
+    if e.call(SINGLETON_TEST_47C850, &args![singleton]).bool() {
+        return 0;
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let targeted = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+        if targeted != 0 {
+            return targeted;
+        }
+        if e.call(MOBILE_OBJECT_GET_CURRENT_PACKAGE, &args![this])
+            .u32()
+            != 0
+            && this.addr() != e.global::<u32>(PLAYER_CHARACTER)
+        {
+            let package_target = e.call(ACTOR_GET_CURRENT_PACKAGE_TARGET, &args![this]).u32();
+            if package_target != 0 {
+                // The distance is compared with the setting, but the
+                // result of the comparison is not used.
+                e.call(
+                    REFR_GET_DISTANCE_FROM_REFERENCE,
+                    &args![package_target, this, 0u32, 0u32],
+                );
+                setting_float(e, SETTING_11CD938);
+            }
+        }
+    }
+    0
+}
+
+// Translated from 008a2fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the position the actor looks from to `out` (three `float`s) and
+/// returns it. The position is the default (`0x011f426c`) plus the world
+/// translation of the head node (found through slot `0x1e8`'s node or the
+/// controller of the actor's 3D object), with the eye offset of the ragdoll
+/// controller replacing the height when there is one; without a head node it
+/// is the default raised by 0.9 of the actor's height plus the actor's
+/// position.
+pub fn fn_008a2fa0(e: &mut Engine, this: Ptr<Actor>, out: Ptr) -> u32 {
+    e.with_stack(0x20, |e, block| {
+        let position = block.addr();
+        let eye_offset = block.addr() + 0x10;
+        for i in 0..3 {
+            let word = e.mem.u32(EYE_POSITION_DEFAULT + 4 * i);
+            e.mem.set_u32(position + 4 * i, word);
+        }
+        let owner = e.vcall(this.addr(), ACTOR_SLOT_1E8_NODE, &args![]).u32();
+        let mut head = 0u32;
+        if owner != 0 {
+            head = e.call(NODE_FN_4AB230, &args![owner, 0u32]).u32();
+        }
+        if head == 0 {
+            let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+            if node != 0 {
+                let controller = e
+                    .call(
+                        NI_OBJECT_NET_GET_CONTROLLER,
+                        &args![node, CONTROLLER_TYPE_11F36AC],
+                    )
+                    .u32();
+                if controller != 0 {
+                    let finder = e.call(CONTROLLER_OWNER_537BD0, &args![controller]).u32();
+                    if finder != 0 {
+                        let key = fn_008a30f0(e);
+                        head = e.vcall(finder, CONTROLLER_OWNER_SLOT_8C, &args![key]).u32();
+                    }
+                }
+            }
+        }
+        if head != 0 {
+            let translation = e.call(NODE_WORLD_TRANSLATE, &args![head]).u32();
+            e.call(VECTOR_ADD_ASSIGN, &args![position, translation]);
+            e.call(LIST_ITEM_SLOT, &args![eye_offset]);
+            let ragdoll = e.get(this, Actor::pRagdollController).addr();
+            if ragdoll != 0
+                && e.call(RAGDOLL_GET_EYE_OFFSET, &args![ragdoll, eye_offset])
+                    .bool()
+            {
+                let z = e.mem.u32(eye_offset + 8);
+                e.mem.set_u32(position + 8, z);
+            }
+        } else {
+            let height = e.call(ACTOR_GET_HEIGHT, &args![this]).f64();
+            let share: f64 = e.global(EYE_HEIGHT_SHARE);
+            let z = e.mem.f32(position + 8) as f64;
+            e.mem.set_f32(position + 8, (height * share + z) as f32);
+            let actor_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+            e.call(VECTOR_ADD_ASSIGN, &args![position, actor_position]);
+        }
+        for i in 0..3 {
+            let word = e.mem.u32(position + 4 * i);
+            e.mem.set_u32(out.addr() + 4 * i, word);
+        }
+        out.addr()
+    })
+}
+
+// Translated from 008a30f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `0x011c61ac`.
+pub fn fn_008a30f0(e: &mut Engine) -> u32 {
+    e.global(GLOBAL_11C61AC)
+}
+
+// Translated from 008a3100 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame update of the actor's head tracking (`dt` is the frame time).
+/// Does nothing for the player or an actor without a process. With a package
+/// the process reports (slot `0x27c`) that passes `0067a690` it only marks
+/// the ragdoll controller (byte `+0xb2`). Otherwise it runs the timers,
+/// picks a new target (`fn_008a3ed0`) when the update timer runs out,
+/// turns the actor towards the target when needed, and either lets the
+/// ragdoll controller look at the target (`fn_008a3b70`) or marks it.
+pub fn fn_008a3100(e: &mut Engine, this: Ptr<Actor>, dt: f32) {
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if this.addr() == player_addr || process == 0 {
+        return;
+    }
+    let ragdoll = e.get(this, Actor::pRagdollController);
+    let package = e.vcall(process, PROCESS_SLOT_27C, &args![]).u32();
+    if package != 0 && e.call(PACKAGE_TEST_67A690, &args![package]).bool() {
+        if !ragdoll.is_null()
+            && e.call(RAGDOLL_TEST_888A50, &args![ragdoll]).bool()
+            && fn_008a3bd0(e, ragdoll) == 0
+        {
+            fn_008a3bf0(e, ragdoll, 1);
+        }
+        return;
+    }
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let controller = e
+        .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+        .u32();
+    if controller != 0 {
+        let value = fn_008a3b50(e, Ptr::new(controller)) as f64;
+        if value < zero {
+            return;
+        }
+        let value = fn_008a3b50(e, Ptr::new(controller)) as f64;
+        if (setting_float(e, SETTING_11CD2F4) as f64) < value {
+            return;
+        }
+    }
+    let update_timer = e.mem.f32(this.addr() + 0x74);
+    e.mem
+        .set_f32(this.addr() + 0x74, (update_timer as f64 - dt as f64) as f32);
+    let process_timer = e.vcall(process, PROCESS_SLOT_264, &args![]).f64();
+    let reduced = (process_timer - dt as f64) as f32;
+    e.vcall(process, PROCESS_SLOT_268, &args![reduced]);
+    let process_target = e.vcall(process, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+    let package = e.vcall(process, PROCESS_SLOT_27C, &args![]).u32();
+    let package_is_type_2 = package != 0 && {
+        let package = e.vcall(process, PROCESS_SLOT_27C, &args![]).u32();
+        e.call(PACKAGE_TYPE, &args![package]).u32() == 2
+    };
+    if process_target == player_addr {
+        let record = e
+            .vcall(process, PROCESS_SLOT_504, &args![player_addr, 0u32])
+            .u32();
+        if record != 0
+            && e.mem.i32(record + 8) <= 0
+            && !e.vcall(process, PROCESS_SLOT_2D8, &args![]).bool()
+            && !package_is_type_2
+            && !e.vcall(process, PROCESS_SLOT_30C_TEST, &args![]).bool()
+        {
+            e.vcall(process, PROCESS_SLOT_660, &args![]);
+        }
+    }
+    let allowed = e
+        .call(SETTING_GET_INT_POINTER, &args![SETTING_INT_11DF848])
+        .u32();
+    let allowed = e.mem.i32(allowed);
+    if (e.global::<u32>(HEAD_TRACK_UPDATE_COUNTER) as i32) > allowed {
+        return;
+    }
+    let mut acquire = 0u32;
+    if e.call(ACQUIRE_OBJECT_FIELD_28, &args![process]).u32() == 0 {
+        acquire = e.get(this, Actor::pCurrentProcess).addr();
+    }
+    if acquire == 0 {
+        return;
+    }
+    if e.call(ACTOR_SOUND_SOURCE, &args![this]).u32() == 0 {
+        return;
+    }
+    if e.mem.u8(this.addr() + 0x15c) == 0 {
+        e.mem.set_u8(this.addr() + 0x15c, 1);
+    }
+    if !e.call(ACTOR_IS_VISIBLE, &args![this, 7u32]).bool() {
+        e.mem.set_u8(this.addr() + 0x15c, 0);
+    }
+    let face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+    if face != 0 {
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![player_addr, this, 0u32, 0u32],
+            )
+            .f64();
+        if (setting_float(e, SETTING_11CD2F4) as f64) < distance {
+            return;
+        }
+    }
+    let mut target = e.vcall(process, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+    if target != 0
+        && e.vcall(target, ACTOR_SLOT_FC, &args![]).bool()
+        && e.vcall(target, ACTOR_SLOT_1D0, &args![]).u32() == 0
+    {
+        e.vcall(process, PROCESS_SLOT_660, &args![]);
+        target = 0;
+    }
+    let head_timer = e.mem.f32(this.addr() + 0x158);
+    e.mem
+        .set_f32(this.addr() + 0x158, (head_timer as f64 - dt as f64) as f32);
+    if e.mem.f32(this.addr() + 0x74) as f64 <= zero {
+        let counter: u32 = e.global(HEAD_TRACK_UPDATE_COUNTER);
+        e.set_global(HEAD_TRACK_UPDATE_COUNTER, counter.wrapping_add(1));
+        let upper = setting_float(e, SETTING_11DF828);
+        let lower = setting_float(e, SETTING_11DF810);
+        let random = e.call(RANDOM_FLOAT, &args![lower, upper]).f32();
+        e.mem.set_f32(this.addr() + 0x74, random);
+        if e.vcall(process, PROCESS_SLOT_668, &args![]).bool() {
+            if (e.mem.f32(this.addr() + 0x158) as f64) < zero {
+                e.mem.set_f32(this.addr() + 0x158, 0.0);
+            }
+            let chosen = fn_008a3ed0(e, this);
+            if chosen != target {
+                target = chosen;
+                e.vcall(process, PROCESS_SLOT_624, &args![chosen]);
+                let timer = setting_float(e, SETTING_11CDBB8);
+                e.vcall(process, PROCESS_SLOT_268, &args![timer]);
+                let upper = setting_float(e, SETTING_11DF78C);
+                let lower = setting_float(e, SETTING_11DF700);
+                let random = e.call(RANDOM_FLOAT, &args![lower, upper]).f32();
+                e.mem.set_f32(this.addr() + 0x158, random);
+            }
+        }
+    }
+    e.with_stack(0x50, |e, block| {
+        let position = block.addr();
+        let difference = block.addr() + 0x10;
+        let heading_out = block.addr() + 0x20;
+        let offset = block.addr() + 0x30;
+        let eye_buffer = block.addr() + 0x40;
+        let look_at = if target != 0 {
+            e.vcall(target, ACTOR_SLOT_POSITION, &args![]).u32()
+        } else {
+            EYE_POSITION_DEFAULT
+        };
+        for i in 0..3 {
+            let word = e.mem.u32(look_at + 4 * i);
+            e.mem.set_u32(position + 4 * i, word);
+        }
+        if target != 0 {
+            if e.mem.u8(this.addr() + 0x15d) != 0
+                && e.call(ACTOR_IS_PATHING_COMPLETE, &args![this]).bool()
+            {
+                let actor_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+                e.call(
+                    VECTOR_SUBTRACT,
+                    &args![position, difference, actor_position],
+                );
+                let angle = e.call(GET_Z_ANGLE_FROM_VECTOR, &args![difference]).f32();
+                e.mem.set_f32(heading_out, 0.0);
+                let heading = e
+                    .vcall(this.addr(), ACTOR_SLOT_GET_HEADING, &args![0u32])
+                    .f32();
+                let turned = e
+                    .call(ANGLE_DIFFERENCE, &args![heading, angle, heading_out])
+                    .f32();
+                let degrees = e
+                    .call(SETTING_GET_INT_POINTER, &args![SETTING_INT_11CD480])
+                    .u32();
+                let radians: f64 = e.global(DEGREES_TO_RADIANS);
+                let share: f64 = e.global(HEAD_TURN_SHARE);
+                let mut limit = (e.mem.i32(degrees) as f64 * radians * share) as f32;
+                if fn_008a3b30(e, this) != 0 {
+                    let degrees = e
+                        .call(SETTING_GET_INT_POINTER, &args![SETTING_INT_11CDA1C])
+                        .u32();
+                    limit = (e.mem.i32(degrees) as f64 * radians * share) as f32;
+                }
+                let magnitude = e.call(ABSOLUTE_VALUE, &args![turned]).f64();
+                if (limit as f64) < magnitude {
+                    let words = [
+                        e.mem.u32(position),
+                        e.mem.u32(position + 4),
+                        e.mem.u32(position + 8),
+                    ];
+                    e.call(
+                        ACTOR_TURN_TOWARDS,
+                        &args![this, words[0], words[1], words[2], 0u32],
+                    );
+                }
+            }
+            // The distance from the player to the target is compared with a
+            // setting; the result is not used afterwards.
+            e.call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![player_addr, target, 0u32, 1u32],
+            );
+            setting_float(e, SETTING_11CD750);
+        }
+        let mut busy = false;
+        if e.call(PROCESS_LEVEL_NUMBER, &args![this]).u32() != 0
+            && e.call(PROCESS_LEVEL_NUMBER, &args![this]).u32() != 5
+        {
+            busy = true;
+        }
+        let forced = e
+            .call(SETTING_GET_BOOL_POINTER, &args![SETTING_BOOL_11DF6D0])
+            .u32();
+        if e.mem.u8(forced) != 0 {
+            busy = true;
+        }
+        let process_now = e.get(this, Actor::pCurrentProcess).addr();
+        if process_now != 0 && !package_is_type_2 {
+            let animation = e.call(ACTOR_GET_ANIMATION, &args![this]).u32();
+            let group = e
+                .call(ANIMATION_GROUP_OF_SLOT, &args![animation, 4u32])
+                .u16();
+            if e.call(IS_ATTACK_ACTION, &args![group as u32]).bool()
+                || head_tracking_controller_blocks(e, this)
+            {
+                busy = true;
+            }
+        }
+        let form = if target != 0 {
+            e.call(REFR_BASE_FORM, &args![target]).u32()
+        } else {
+            0
+        };
+        let form_is_skipped =
+            form != 0 && e.call(FORM_TYPE, &args![form]).u32() == FORM_TYPE_NUMBER_1C;
+        if !ragdoll.is_null() && !busy && target != 0 && target != this.addr() && !form_is_skipped {
+            let actor_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+            e.call(VECTOR_SUBTRACT, &args![actor_position, offset, position]);
+            let length = e.call(VECTOR_LENGTH, &args![offset]).f32() as f64;
+            let near = fn_008a3c10(e) as f64;
+            if length <= near {
+                let far = fn_008a3c30(e) as f64;
+                if far < length {
+                    fn_008a3bf0(e, ragdoll, 0);
+                    e.call(RAGDOLL_FN_C75580, &args![ragdoll, 1u32]);
+                    let eye = e.vcall(target, ACTOR_SLOT_194, &args![eye_buffer]).u32();
+                    fn_008a3b70(e, ragdoll, eye, 1);
+                }
+            }
+            return;
+        }
+        if !ragdoll.is_null()
+            && e.call(RAGDOLL_TEST_888A50, &args![ragdoll]).bool()
+            && fn_008a3bd0(e, ragdoll) == 0
+        {
+            fn_008a3bf0(e, ragdoll, 1);
+        }
+    });
+}
+
+// Translated from 008a3b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether any of the animation flags `0x30` of the actor is set.
+pub fn fn_008a3b30(e: &mut Engine, this: Ptr<Actor>) -> u8 {
+    (e.call(ACTOR_ANIM_FLAGS, &args![this]).u32() & 0x30 != 0) as u8
+}
+
+// Translated from 008a3b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` at `+0x5fc` (on the character controller).
+pub fn fn_008a3b50(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x5fc)
+}
+
+// Translated from 008a3b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// On the ragdoll controller: copies the vector `source` into the vector at
+/// `+0xd0` (`004a3e00`), zeroes its fourth component and, when `reset` is
+/// set, calls `00c75580(1)` and clears the bytes at `+0xb2` and `+0x43`.
+pub fn fn_008a3b70(e: &mut Engine, this: Ptr, source: u32, reset: u8) {
+    e.call(VECTOR_ASSIGN, &args![this.addr() + 0xd0, source]);
+    let slot = e
+        .call(FLOAT_ARRAY_SLOT, &args![this.addr() + 0xd0, 3u32])
+        .u32();
+    e.mem.set_f32(slot, 0.0);
+    if reset != 0 {
+        e.call(RAGDOLL_FN_C75580, &args![this, 1u32]);
+        e.mem.set_u8(this.addr() + 0xb2, 0);
+        e.mem.set_u8(this.addr() + 0x43, 0);
+    }
+}
+
+// Translated from 008a3bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0xb2`.
+pub fn fn_008a3bd0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0xb2)
+}
+
+// Translated from 008a3bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `+0xb2`.
+pub fn fn_008a3bf0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0xb2, value);
+}
+
+// Translated from 008a3c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` of the setting at `0x01267d08`.
+pub fn fn_008a3c10(e: &mut Engine) -> f32 {
+    setting_float(e, 0x0126_7d08)
+}
+
+// Translated from 008a3c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` of the setting at `0x01267d14`.
+pub fn fn_008a3c30(e: &mut Engine) -> f32 {
+    setting_float(e, 0x0126_7d14)
+}
+
+// Translated from 008a3c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame face animation update: for an actor in process level 0 whose
+/// character controller and distance to the player are within the head
+/// tracking range, sets the face animation (slot `0xb4`, `0x114` or `0x11c`
+/// of the face animation data) according to the global flag `0119b4e0`,
+/// fleeing, combat and the process' sound state.
+/// C++ exception unwinding (the sound handle's cleanup) is not translated.
+pub fn fn_008a3c50(e: &mut Engine, this: Ptr<Actor>) {
+    if e.call(MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, &args![this])
+        .u32()
+        != 0
+    {
+        return;
+    }
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let controller = e
+        .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+        .u32();
+    if controller != 0 {
+        let value = fn_008a3b50(e, Ptr::new(controller)) as f64;
+        if value < zero {
+            return;
+        }
+        let value = fn_008a3b50(e, Ptr::new(controller)) as f64;
+        if (setting_float(e, SETTING_11CD2F4) as f64) < value {
+            return;
+        }
+    }
+    let face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+    if face != 0 {
+        let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![player_addr, this, 0u32, 0u32],
+            )
+            .f64();
+        if (setting_float(e, SETTING_11CD2F4) as f64) < distance {
+            return;
+        }
+    }
+    if face == 0 {
+        return;
+    }
+    if !e.call(GLOBAL_FLAG_5B7470, &args![]).bool() {
+        e.vcall(
+            face,
+            FACE_ANIMATION_SLOT_B4,
+            &args![0.0f32, 1u32, 0u32, 0u32, 0u32, 0u32],
+        );
+        return;
+    }
+    if e.call(ACTOR_IS_FLEEING, &args![this, 0u32]).bool() {
+        e.vcall(face, FACE_ANIMATION_SLOT_114, &args![1u32, FLOAT_ONE_BITS]);
+    } else if e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+        e.vcall(
+            face,
+            FACE_ANIMATION_SLOT_114,
+            &args![0xeu32, FLOAT_ONE_BITS],
+        );
+    } else {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let set_value = if process == 0 {
+            true
+        } else {
+            e.with_stack(12, |e, handle| {
+                let found = e
+                    .vcall(process, PROCESS_SLOT_48C, &args![handle, 0u32])
+                    .u32();
+                let valid = e.call(SOUND_HANDLE_IS_VALID_FN, &args![found]).bool();
+                let idle = !valid && e.vcall(process, PROCESS_SLOT_2E8, &args![]).u32() == 0;
+                e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+                idle
+            })
+        };
+        if set_value {
+            let value = e.vcall(this.addr() + 0xa4, 0x08, &args![4u32, 0u32]).u32();
+            e.vcall(face, FACE_ANIMATION_SLOT_11C, &args![value]);
+        }
+    }
+}
+
+// Translated from 008a3ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks the actor to track with the head: the package's target when the
+/// package (type 6 or 9) has one and it is closer than the limit (500 for the
+/// player, 100 otherwise); else, of the high process actors and the player
+/// that `fn_008a4810` allows, the one with the best `fn_008a46c0` score;
+/// 0 when none.
+/// C++ exception unwinding (the list's cleanup) is not translated.
+pub fn fn_008a3ed0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let package = e
+        .call(MOBILE_OBJECT_GET_CURRENT_PACKAGE, &args![this])
+        .u32();
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    if package != 0
+        && (e.call(PACKAGE_TYPE, &args![package]).u32() == 6
+            || e.call(PACKAGE_TYPE, &args![package]).u32() == 9)
+        && e.call(PACKAGE_GET_TARGET_OBJECT, &args![package]).u32() != 0
+    {
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let entry = e.vcall(process, PROCESS_SLOT_278, &args![]).u32();
+        let form = e.call(ENTRY_FORM, &args![entry]).u32();
+        if form != 0 {
+            let limit = if form == player_addr {
+                e.global::<f32>(PLAYER_TRACK_DISTANCE)
+            } else {
+                e.global::<f32>(OTHER_TRACK_DISTANCE)
+            };
+            let distance = e
+                .call(
+                    REFR_GET_DISTANCE_FROM_REFERENCE,
+                    &args![this, form, 0u32, 1u32],
+                )
+                .f64();
+            // The form is returned when the distance is below the limit.
+            if distance < limit as f64 {
+                return form;
+            }
+        }
+    }
+    e.with_stack(8, |e, list| {
+        e.call(LIST_CONSTRUCT, &args![list]);
+        let mut index = 0u32;
+        loop {
+            let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
+            let count = e.call(PROCESS_ARRAY_COUNT, &args![array, 0u32]).u32();
+            if index >= count {
+                break;
+            }
+            let array = e.call(PROCESS_LISTS_GET_ARRAY, &args![PROCESS_LISTS]).u32();
+            let candidate = e.call(PROCESS_ARRAY_GET_ACTOR, &args![array, index]).u32();
+            if actor_can_head_track(e, this, Ptr::new(candidate), 1) != 0 {
+                e.with_stack(4, |e, holder| {
+                    e.mem.set_u32(holder.addr(), candidate);
+                    e.call(LIST_APPEND, &args![list, holder]);
+                });
+            }
+            index = index.wrapping_add(1);
+        }
+        if actor_can_head_track(e, this, Ptr::new(player_addr), 1) != 0 {
+            e.with_stack(4, |e, holder| {
+                e.mem.set_u32(holder.addr(), player_addr);
+                e.call(LIST_APPEND, &args![list, holder]);
+            });
+        }
+        let mut best_score = 0.0f32;
+        let mut best = 0u32;
+        let mut node = list.addr();
+        while node != 0 && !e.call(LIST_NODE_STOP_TEST, &args![node]).bool() {
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            let candidate = e.mem.u32(slot);
+            let score = fn_008a46c0(e, this, Ptr::new(candidate));
+            if (best_score as f64) < score as f64 {
+                best = candidate;
+                best_score = score;
+            }
+            node = e.call(LIST_NEXT, &args![node]).u32();
+        }
+        e.call(LIST_CLEAR, &args![list]);
+        e.call(LIST_DESTRUCT, &args![list]);
+        best
+    })
+}
+
+// Translated from 008a40e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor may be told to start an idle or package behaviour that
+/// involves `other` (the actor its process targets when 0): false for the
+/// player, without a 3D object, when its base form passes `fn_008a46a0`, with
+/// attached arrows, without a target or targeting itself, while not at the
+/// end of its path, in combat, during an attack animation, while the head
+/// tracking controller blocks it, when it cannot be seen by the player, and
+/// in several package dependent cases; true otherwise.
+pub fn fn_008a40e0(e: &mut Engine, this: Ptr<Actor>, other: u32) -> u8 {
+    let mut other = other;
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    if this.addr() == player_addr {
+        return 0;
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0 {
+        return 0;
+    }
+    let base = e.call(ACTOR_BASE_FORM_FN, &args![this]).u32();
+    if base != 0 && fn_008a46a0(e, Ptr::new(base + 0x30)) != 0 {
+        return 0;
+    }
+    if other == 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        other = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).u32() != 0 {
+        return 0;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if e.vcall(acquire, ACQUIRE_OBJECT_SLOT_678, &args![]).u32() == 0 {
+        return 0;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if e.vcall(acquire, ACQUIRE_OBJECT_SLOT_678, &args![]).u32() == this.addr() {
+        return 0;
+    }
+    if !e.call(ACTOR_IS_PATHING_COMPLETE, &args![this]).bool() {
+        return 0;
+    }
+    if e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+        return 0;
+    }
+    let animation = e.call(ACTOR_GET_ANIMATION, &args![this]).u32();
+    if animation != 0 {
+        let animation = e.call(ACTOR_GET_ANIMATION, &args![this]).u32();
+        let group = e
+            .call(ANIMATION_GROUP_OF_SLOT, &args![animation, 4u32])
+            .u16();
+        if e.call(IS_ATTACK_ACTION, &args![group as u32]).bool() {
+            return 0;
+        }
+    }
+    if head_tracking_controller_blocks(e, this) {
+        return 0;
+    }
+    if e.call(ACTOR_IS_MOVING, &args![player_addr]).bool() && other == player_addr {
+        let mut lvl = 0i32;
+        e.with_stack(4, |e, flag| {
+            e.mem.set_u8(flag.addr(), 1);
+            let in_combat = e.call(PLAYER_IS_IN_COMBAT, &args![player_addr, 0u32]).u8();
+            lvl = actor_get_detection_level_against_actor(
+                e,
+                this,
+                0,
+                Ptr::new(player_addr),
+                flag,
+                in_combat,
+                0,
+                0,
+                Ptr::new(0),
+            );
+        });
+        if lvl <= 0 {
+            return 0;
+        }
+    }
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    let package = e.vcall(process, PROCESS_SLOT_22C, &args![]).u32();
+    if package != 0 {
+        let package_type = e.call(PACKAGE_TYPE, &args![package]).u32();
+        let handler = if package_type <= 0x1c {
+            HEAD_PACKAGE_HANDLER_TABLE[package_type as usize]
+        } else {
+            5
+        };
+        match handler {
+            0 => {
+                if e.get(this, Actor::pCurrentProcess).addr() != 0
+                    && e.call(ACTOR_ANIM_FLAGS, &args![this]).u32() & 0xf != 0
+                {
+                    return 0;
+                }
+            }
+            1 => {
+                if e.get(this, Actor::pCurrentProcess).addr() != 0
+                    && e.call(ACTOR_ANIM_FLAGS, &args![this]).u32() & 0xf != 0
+                {
+                    return 0;
+                }
+                let animation = e.vcall(this.addr(), ACTOR_SLOT_1E4, &args![]).u32();
+                if animation != 0
+                    && !e
+                        .call(ANIMATION_SPECIAL_IDLE_DONE_PLAYING, &args![animation])
+                        .bool()
+                {
+                    return 0;
+                }
+            }
+            2 => {
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                if e.vcall(acquire, PROCESS_SLOT_674, &args![5u32]).u32() != 0 {
+                    return 1;
+                }
+                let mut location_ref = 0u32;
+                if e.call(PACKAGE_GET_LOCATION_FN, &args![package]).u32() != 0 {
+                    let location = e.call(PACKAGE_GET_LOCATION_FN, &args![package]).u32();
+                    location_ref = e
+                        .call(PACKAGE_LOCATION_GET_LOC_REFERENCE, &args![location])
+                        .u32();
+                }
+                if location_ref == 0 && e.call(PACKAGE_GET_LOCATION_B, &args![package]).u32() != 0 {
+                    let location = e.call(PACKAGE_GET_LOCATION_B, &args![package]).u32();
+                    location_ref = e
+                        .call(PACKAGE_LOCATION_GET_LOC_REFERENCE, &args![location])
+                        .u32();
+                }
+                if location_ref != 0 {
+                    let form = e.call(REFR_BASE_FORM, &args![location_ref]).u32();
+                    if form == e.global::<u32>(FORM_POINTER_11CA248) {
+                        return 0;
+                    }
+                    let other_base = e.call(REFR_BASE_FORM, &args![other]).u32();
+                    if e.call(FORM_TYPE, &args![other_base]).u32() == 0x30 {
+                        let animation = e.call(ACTOR_GET_ANIMATION, &args![this]).u32();
+                        if animation != 0
+                            && !e
+                                .call(ANIMATION_SPECIAL_IDLE_DONE_PLAYING, &args![animation])
+                                .bool()
+                        {
+                            return 0;
+                        }
+                    }
+                    if e.call(PACKAGE_GET_LOCATION_FN, &args![package]).u32() != 0 {
+                        let location = e.call(PACKAGE_GET_LOCATION_FN, &args![package]).u32();
+                        if e.call(PACKAGE_LOCATION_GET_LOC_TYPE_FN, &args![location])
+                            .u32()
+                            == 3
+                        {
+                            return 0;
+                        }
+                    }
+                    if e.call(REFR_IS_FURNITURE, &args![other]).bool() {
+                        return 0;
+                    }
+                    let mover = e.mem.u32(this.addr() + 0x190);
+                    if e.call(ACTOR_MOVER_TEST_9DCB30, &args![mover]).bool() {
+                        return 0;
+                    }
+                }
+            }
+            3 => return 0,
+            4 => {
+                if e.get(this, Actor::pCurrentProcess).addr() != 0
+                    && e.call(ACTOR_ANIM_FLAGS, &args![this]).u32() & 0xf != 0
+                {
+                    return 0;
+                }
+                let process = e.get(this, Actor::pCurrentProcess).addr();
+                let object = e.call(PROCESS_OBJECT_8D0430, &args![process]).u32();
+                if object == 0
+                    || !e
+                        .call(OBJECT_TEST_9F4300, &args![object, this, 1u32])
+                        .bool()
+                {
+                    return 0;
+                }
+                let reference = e.call(OBJECT_REFERENCE_639B40, &args![object]).u32();
+                if reference != 0 {
+                    if e.call(REFR_IS_FURNITURE, &args![reference]).bool() {
+                        return 0;
+                    }
+                    let form = e.call(REFR_BASE_FORM, &args![reference]).u32();
+                    if form != 0 {
+                        if form == e.global::<u32>(FORM_POINTER_11CA248) {
+                            return 0;
+                        }
+                        if e.call(FORM_TYPE, &args![form]).u32() == 0x30 {
+                            return 0;
+                        }
+                    }
+                }
+                let animation = e.vcall(this.addr(), ACTOR_SLOT_1E4, &args![]).u32();
+                if animation != 0
+                    && !e
+                        .call(ANIMATION_SPECIAL_IDLE_DONE_PLAYING, &args![animation])
+                        .bool()
+                    && e.call(ENTRY_FORM, &args![object]).u32() == 3
+                {
+                    return 0;
+                }
+            }
+            _ => {}
+        }
+    }
+    1
+}
+
+/// Which handler `fn_008a40e0` runs for each package type `0..=0x1c` (the
+/// byte table at `0x008a4680`).
+const HEAD_PACKAGE_HANDLER_TABLE: [u8; 29] = [
+    0, 5, 0, 5, 5, 1, 2, 5, 3, 5, 5, 5, 4, 2, 2, 3, 3, 5, 5, 5, 3, 5, 5, 5, 5, 5, 5, 5, 3,
+];
+
+// Translated from 008a46a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Tests the flag `0x40000000` of the object (`00461580`).
+pub fn fn_008a46a0(e: &mut Engine, this: Ptr) -> u8 {
+    e.call(FORM_TEST_FLAGS_FN, &args![this, 0x4000_0000u32])
+        .u8()
+}
+
+// Translated from 008a46c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// How interesting `other` is to track: 0 without a usable acquire object;
+/// otherwise `(1000 - distance) / (1000 - setting)` (`0x011cd114`), halved
+/// without a line of sight to a target the slot `0x100` test accepts, times
+/// the head track timer (`+0x158`) plus one when `other` is the actor the
+/// acquire object targets, halved when `other` is fleeing.
+pub fn fn_008a46c0(e: &mut Engine, this: Ptr<Actor>, other: Ptr<Actor>) -> f32 {
+    let mut acquire = 0u32;
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let candidate = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.call(ACQUIRE_OBJECT_FIELD_28, &args![candidate]).u32() == 0 {
+            acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        }
+    }
+    if acquire == 0 {
+        return 0.0;
+    }
+    let mut tracked = 0u32;
+    if e.vcall(other.addr(), ACTOR_SLOT_100, &args![]).bool() {
+        tracked = other.addr();
+    }
+    let distance = e
+        .call(
+            REFR_GET_DISTANCE_FROM_REFERENCE,
+            &args![other, this, 0u32, 0u32],
+        )
+        .f32();
+    let mut line_of_sight = 1u8;
+    if tracked != 0 {
+        line_of_sight = e
+            .call(
+                ACTOR_LINE_OF_SIGHT,
+                &args![this, 0u32, tracked, 1u32, 0u32, 0u32],
+            )
+            .u8();
+    }
+    let thousand: f64 = e.global(THOUSAND_DOUBLE);
+    let numerator = thousand - distance as f64;
+    let setting = setting_float(e, SETTING_11CD114) as f64;
+    let mut score = (numerator / (thousand - setting)) as f32;
+    let half: f64 = e.global(HALF_DOUBLE);
+    if line_of_sight == 0 {
+        score = (score as f64 * half) as f32;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let targeted = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+    if other.addr() == targeted {
+        let head_timer = e.mem.f32(this.addr() + 0x158);
+        score = ((head_timer as f64 + 1.0) * score as f64) as f32;
+    }
+    if e.vcall(other.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        score = (score as f64 * half) as f32;
+    }
+    score
+}
+
+// Translated from 008a4810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CanHeadTrack` (Xbox PDB): whether `this` may turn its head to
+/// `other`: not itself, `other` passes slot `0x100` and has a 3D object, is
+/// within the head tracking distance (`0x011cd938`), is either under 100
+/// units away, the player or the actor `this` targets (slot `0x68c`), is
+/// within the turn limit of the heading (`pi` for the actor the process
+/// targets, 120 degrees otherwise), and, when `check_detection` is set, can
+/// be detected.
+pub fn actor_can_head_track(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    other: Ptr<Actor>,
+    check_detection: u8,
+) -> u8 {
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    if this.addr() == other.addr()
+        || !e.vcall(other.addr(), ACTOR_SLOT_100, &args![]).bool()
+        || e.call(FORM_FLAG_800, &args![other]).bool()
+        || e.vcall(other.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0
+    {
+        return 0;
+    }
+    e.with_stack(0x10, |e, difference| {
+        let this_point = e.call(ACTOR_VIEW_CONE_TARGET, &args![this]).u32();
+        let other_point = e.call(ACTOR_VIEW_CONE_TARGET, &args![other]).u32();
+        e.call(VECTOR_SUBTRACT, &args![other_point, difference, this_point]);
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![other, this, 0u32, 1u32],
+            )
+            .f32();
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        // Both branches of the code read the same setting.
+        let _targeted = e.vcall(process, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+        let limit = setting_float(e, SETTING_11CD938);
+        if (limit as f64) < distance as f64 {
+            return 0;
+        }
+        let hundred: f64 = e.global(HUNDRED);
+        if !((distance as f64) >= hundred || distance.is_nan())
+            && other.addr() != player_addr
+            && e.vcall(process, PROCESS_SLOT_68C, &args![]).u32() != other.addr()
+        {
+            return 0;
+        }
+        let angle = e.call(GET_Z_ANGLE_FROM_VECTOR, &args![difference]).f32();
+        let rotation = e.call(ACTOR_ROTATION_POINTER, &args![this]).u32();
+        let facing = e.mem.f32(rotation + 8);
+        let mut turn = (angle as f64 - facing as f64) as f32;
+        let pi: f64 = e.global(PI_DOUBLE);
+        let two_pi: f64 = e.global(TWO_PI_DOUBLE);
+        let minus_pi: f64 = e.global(MINUS_PI_DOUBLE);
+        if turn as f64 > pi {
+            turn = (turn as f64 - two_pi) as f32;
+        }
+        if (turn as f64) < minus_pi {
+            turn = (turn as f64 + two_pi) as f32;
+        }
+        let targeted = e.vcall(process, ACQUIRE_OBJECT_SLOT_678, &args![]).u32();
+        let turn_limit: f32 = if other.addr() == targeted {
+            e.global(PI_FLOAT)
+        } else {
+            e.global(TURN_LIMIT_FLOAT)
+        };
+        let magnitude = e.call(ABSOLUTE_VALUE_ALT, &args![turn]).f64();
+        if (turn_limit as f64) < magnitude {
+            return 0;
+        }
+        if this.addr() != player_addr
+            && other.addr() != player_addr
+            && e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).u32() != 0
+            && e.vcall(other.addr(), ACTOR_SLOT_214, &args![]).u32() != 0
+        {
+            return 0;
+        }
+        if check_detection != 0 {
+            let level = e.with_stack(4, |e, flags| {
+                // `+0` the "seen" byte (starts as 1), `+1` the second output
+                // (starts 0), `+2` the player combat output.
+                e.mem.set_u8(flags.addr(), 1);
+                e.mem.set_u8(flags.addr() + 1, 0);
+                e.mem.set_u8(flags.addr() + 2, 0);
+                let in_combat = if other.addr() == player_addr {
+                    e.call(PLAYER_IS_IN_COMBAT, &args![player_addr, flags.addr() + 2])
+                        .u8()
+                } else {
+                    e.call(ACTOR_IN_COMBAT, &args![other]).u8()
+                };
+                let level = actor_get_detection_level_against_actor(
+                    e,
+                    this,
+                    0,
+                    other,
+                    flags,
+                    in_combat,
+                    0,
+                    in_combat as u32,
+                    Ptr::new(flags.addr() + 1),
+                );
+                (level, e.mem.u8(flags.addr()), e.mem.u8(flags.addr() + 1))
+            });
+            let (level, seen, second) = level;
+            if level <= 0 {
+                return 0;
+            }
+            if other.addr() == player_addr
+                && e.vcall(process, ACQUIRE_OBJECT_SLOT_678, &args![]).u32() == other.addr()
+                && second == 0
+            {
+                return 0;
+            }
+            if e.call(ACTOR_FLAG_4938E0, &args![this]).bool() && seen == 0 {
+                return 0;
+            }
+        }
+        1
+    })
+}
+/// `TESObjectREFR::GetDismembered` (Xbox PDB): thiscall on the reference,
+/// takes a limb number.
+const REFR_GET_DISMEMBERED: u32 = 0x0057_3090;
+/// `String` constructor from a character pointer (`0040c0e0`): thiscall on a
+/// 4-byte string object.
+const STRING_CONSTRUCT: u32 = 0x0040_c0e0;
+/// The string object's destructor (`004037d0`).
+const STRING_DESTRUCT: u32 = 0x0040_37d0;
+/// `009336c0`-like `cdecl` callback (`00936ac0`): a form id and a flag; the
+/// variant of `MobileObject::SayToCallBack` used while in dialogue.
+const SAY_TO_CALLBACK_IN_DIALOGUE: u32 = 0x0093_6ac0;
+/// Lock entry function used with [`SAY_LOCK`] (`004538a0`): thiscall on the
+/// lock, takes a flag.
+const SAY_LOCK_ENTER: u32 = 0x0045_38a0;
+/// Lock exit function used with [`SAY_LOCK`] (`004538c0`): thiscall on the
+/// lock.
+const SAY_LOCK_LEAVE: u32 = 0x0045_38c0;
+/// The critical section `fn_008a20d0` holds while it works (`0x011df7e0`).
+const SAY_LOCK: u32 = 0x011d_f7e0;
+/// Setting object whose integer limits the distance at which the face is
+/// animated (`0x011cd378`).
+const SETTING_INT_11CD378: u32 = 0x011c_d378;
+/// Acquire object slot `0x37c`: the actor's lip sync animation.
+const ACQUIRE_OBJECT_SLOT_37C: u32 = 0x37c;
+/// Acquire object slot `0x378` (a test).
+const ACQUIRE_OBJECT_SLOT_378: u32 = 0x378;
+/// Acquire object slot `0x370` (takes a flag).
+const ACQUIRE_OBJECT_SLOT_370: u32 = 0x370;
+/// Acquire object slot `0x154` (takes a flag).
+const ACQUIRE_OBJECT_SLOT_154: u32 = 0x154;
+/// Acquire object slot `0x374` (takes a flag).
+const ACQUIRE_OBJECT_SLOT_374: u32 = 0x374;
+/// Acquire object slot `0x2ec` (takes a word).
+const ACQUIRE_OBJECT_SLOT_2EC: u32 = 0x2ec;
+/// Acquire object slot `0x74c` (takes the duration in milliseconds).
+const ACQUIRE_OBJECT_SLOT_74C: u32 = 0x74c;
+/// Acquire object slot `0x744` (takes the lip sync animation).
+const ACQUIRE_OBJECT_SLOT_744: u32 = 0x744;
+/// Acquire object slot `0x748` (returns the lip sync animation).
+const ACQUIRE_OBJECT_SLOT_748: u32 = 0x748;
+/// Acquire object slot `0x380` (takes a flag).
+const ACQUIRE_OBJECT_SLOT_380: u32 = 0x380;
+/// Acquire object slot `0x44` (takes the actor, a word, a number, two
+/// flags and a flag).
+const ACQUIRE_OBJECT_SLOT_44: u32 = 0x44;
+/// Process slot `0x1d4` (returns an object handed to `00600900`).
+const PROCESS_SLOT_1D4: u32 = 0x1d4;
+/// `TESIdleManager::SetUsedItem` (Xbox PDB), cdecl: the value.
+const IDLE_MANAGER_SET_USED_ITEM_FN: u32 = 0x0060_0900;
+/// Actor slot `0x2d4` (takes a word).
+const ACTOR_SLOT_2D4: u32 = 0x2d4;
+/// Actor slot `0x2dc` (takes a word).
+const ACTOR_SLOT_2DC: u32 = 0x2dc;
+/// `4d5ad0`: cdecl test on the line's string object.
+const LINE_STRING_TEST_4D5AD0: u32 = 0x004d_5ad0;
+/// `4d52d0`: cdecl, finds the lip sync animation for the line's string
+/// object.
+const LINE_STRING_FIND_4D52D0: u32 = 0x004d_52d0;
+/// Setting object whose byte switches the early return of the line on
+/// (`0x011e05ec`).
+const SETTING_BOOL_11E05EC: u32 = 0x011e_05ec;
+/// Manager singleton the early return reports to (`0x011f11e0`).
+const SAY_REPORT_MANAGER: u32 = 0x011f_11e0;
+/// `00905f30`: thiscall on the manager, takes the actor and the line text.
+const SAY_REPORT: u32 = 0x0090_5f30;
+/// `00935f00`: cdecl, a form id and a flag.
+const SAY_CANCEL_FN: u32 = 0x0093_5f00;
+/// Global `float` the cancel of a missing lip sync stores
+/// (`0x011d951c`).
+const SAY_COUNTDOWN: u32 = 0x011d_951c;
+/// Settings object whose `float` is stored there (`0x011d32c4`).
+const SETTING_11D32C4: u32 = 0x011d_32c4;
+/// Face animation data slot `0x124` (takes the text at `0x01084d70`).
+const FACE_ANIMATION_SLOT_124: u32 = 0x124;
+/// String passed to face animation slot `0x124` (`0x01084d70`).
+const FACE_ANIMATION_STRING_1084D70: u32 = 0x0108_4d70;
+/// `ActorMover::GetPreferredMoveMode` (map name; the body returns a global
+/// pointer).
+const PACKAGE_FN_5F36F0: u32 = 0x005f_36f0;
+/// `4d5930`: thiscall on the lip sync animation, takes the face animation
+/// data and a `float`.
+const LIP_SYNC_START: u32 = 0x004d_5930;
+/// `0.2` (`float`) passed to [`LIP_SYNC_START`].
+const LIP_SYNC_START_FLOAT: u32 = 0x0101_df44;
+/// `30.0` (`double`), the lip sync frame rate.
+const LIP_SYNC_FRAME_RATE: u32 = 0x0101_db88;
+/// `Actor` method `00880910` (a test).
+const ACTOR_TEST_880910: u32 = 0x0088_0910;
+/// `BSSoundHandle::SetPriority` (Xbox PDB).
+const SOUND_HANDLE_SET_PRIORITY: u32 = 0x00ad_9030;
+/// `005790d0`: returns a `float` (the sound's maximum distance).
+const SOUND_MAX_DISTANCE: u32 = 0x0057_90d0;
+/// `005790b0`: returns a `float` (the sound's minimum distance).
+const SOUND_MIN_DISTANCE: u32 = 0x0057_90b0;
+/// `BSSoundHandle::SetMinMax` (Xbox PDB): the two distances.
+const SOUND_HANDLE_SET_MIN_MAX: u32 = 0x00ad_8be0;
+/// `200.0` (`double`), added to the height of the sound position.
+const SOUND_HEIGHT_OFFSET: u32 = 0x0101_79e0;
+/// `BSAudioManager::SetCompletionCallback` variant (`00adc050`): thiscall on
+/// the manager, takes the sound, the callback and a word.
+const AUDIO_MANAGER_SET_CALLBACK_B: u32 = 0x00ad_c050;
+/// `LipSynchAnim` method `004d5a90`: the animation's length (`float`).
+const LIP_SYNC_LENGTH: u32 = 0x004d_5a90;
+/// `BSSoundHandle::PlayAfter` (Xbox PDB): thiscall on the handle, takes a
+/// delay in milliseconds and a flag.
+const SOUND_HANDLE_PLAY_AFTER: u32 = 0x00ad_8870;
+/// Settings object whose `float` is the seconds per unit of the line
+/// (`0x011cd0bc`).
+const SETTING_11CD0BC: u32 = 0x011c_d0bc;
+/// `LipSynchAnim::~LipSynchAnim` (Xbox PDB): takes the delete flag.
+const LIP_SYNC_DESTRUCT: u32 = 0x004d_5850;
+/// Bytes of the actor: `+0x7c` and `+0x7d`.
+const ACTOR_BYTE_7C: u32 = 0x7c;
+
+// Translated from 008a20d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the actor speak the line with the file name `name`: stops the
+/// current dialogue, finds its lip sync animation, starts the sound (a static
+/// one or one placed at the actor and following its node), registers the
+/// completion callback and tells the acquire object about the sound
+/// (slot `0x490`). Returns the length of the line in seconds; `out_sound`
+/// receives the sound handle. Returns 0 when the line cannot be spoken (no
+/// name, a dismembered head or no 3D object). The code works inside a
+/// critical section. The other arguments are not named by the exe: words
+/// handed to the actor and the acquire object (`arg_10`, `arg_14`, `arg_1c`,
+/// `arg_20`), `arg_18` a multiplier of a setting, `arg_24` another actor, and
+/// bytes `flag_28`..`flag_38` that select what is done.
+/// C++ exception unwinding (the string object's cleanup) is not translated.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_008a20d0(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    name: u32,
+    out_sound: Ptr,
+    arg_10: u32,
+    arg_14: u32,
+    arg_18: i32,
+    arg_1c: u32,
+    arg_20: u32,
+    arg_24: Ptr<Actor>,
+    flag_28: u8,
+    flag_2c: u8,
+    flag_30: u8,
+    flag_34: u8,
+    flag_38: u8,
+) -> f32 {
+    e.with_stack(8, |e, string_object| {
+        e.call(STRING_CONSTRUCT, &args![string_object, name]);
+        let result = e.with_stack(0x200, |e, buffer| {
+            say_line(
+                e,
+                this,
+                name,
+                out_sound,
+                [arg_10, arg_14, arg_1c, arg_20],
+                arg_18,
+                arg_24,
+                [flag_28, flag_2c, flag_30, flag_34, flag_38],
+                string_object.addr(),
+                buffer.addr(),
+            )
+        });
+        e.call(STRING_DESTRUCT, &args![string_object]);
+        result
+    })
+}
+
+/// The body of [`fn_008a20d0`]; `string_object` is the string object built
+/// from the name and `buffer` the 512-byte copy of the name.
+#[allow(clippy::too_many_arguments)]
+fn say_line(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    name: u32,
+    out_sound: Ptr,
+    words: [u32; 4],
+    arg_18: i32,
+    other_actor: Ptr<Actor>,
+    flags: [u8; 5],
+    string_object: u32,
+    buffer: u32,
+) -> f32 {
+    let [arg_10, arg_14, arg_1c, arg_20] = words;
+    let [flag_28, flag_2c, flag_30, flag_34, flag_38] = flags;
+    let player_addr = e.global::<u32>(PLAYER_CHARACTER);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    e.vcall(this.addr(), ACTOR_SLOT_2D4, &args![arg_10]);
+    e.vcall(this.addr(), ACTOR_SLOT_2DC, &args![arg_14]);
+    if name == 0
+        || e.call(REFR_GET_DISMEMBERED, &args![this, 1u32]).bool()
+        || e.call(REFR_GET_DISMEMBERED, &args![this, 2u32]).bool()
+    {
+        let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
+        if e.call(MOBILE_OBJECT_IS_IN_DIALOGUE, &args![this]).bool() {
+            e.call(SAY_TO_CALLBACK_IN_DIALOGUE, &args![form_id, 1u32]);
+        } else {
+            e.call(SAY_TO_CALLBACK, &args![form_id, 1u32]);
+        }
+        return 0.0;
+    }
+    e.call(COPY_STRING_LIMITED, &args![buffer, 0x200u32, name]);
+    if this.is_null() || e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0 {
+        return 0.0;
+    }
+    e.call(SAY_LOCK_ENTER, &args![SAY_LOCK, 0u32]);
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let mut lip_sync = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_37C, &args![]).u32();
+    e.call(MOBILE_OBJECT_STOP_CURRENT_DIALOGUE, &args![this]);
+    let is_flagged = e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).u8();
+    let mut lip_length = 0.0f32;
+    let static_sound: u8 = if is_flagged != 0 { 1 } else { flag_2c };
+    let mut face = 0u32;
+    let near_player = if e.call(IS_IN_DIALOGUE_WITH_PLAYER, &args![this]).bool() {
+        true
+    } else {
+        let distance = e
+            .call(
+                REFR_GET_DISTANCE_FROM_REFERENCE,
+                &args![this, player_addr, 0u32, 0u32],
+            )
+            .f64();
+        let limit = e
+            .call(SETTING_GET_INT_POINTER, &args![SETTING_INT_11CD378])
+            .u32();
+        (e.mem.i32(limit) as f64) > distance
+    };
+    if near_player
+        && (is_flagged == 0
+            || e.call(PLAYER_FIRST_PERSON_CHECK, &args![player_addr])
+                .bool())
+    {
+        face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+    }
+    if lip_sync == 0 && this.addr() != player_addr {
+        let mut other_branch = flag_34 == 0;
+        if !other_branch {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            other_branch = e.vcall(acquire, ACQUIRE_OBJECT_SLOT_378, &args![]).bool();
+        }
+        if !other_branch {
+            if e.call(LINE_STRING_TEST_4D5AD0, &args![string_object])
+                .bool()
+            {
+                let forced = flag_30 != 0 && {
+                    let pointer = e
+                        .call(SETTING_GET_BOOL_POINTER, &args![SETTING_BOOL_11E05EC])
+                        .u32();
+                    e.mem.u8(pointer) != 0
+                };
+                if forced {
+                    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                    e.vcall(acquire, ACQUIRE_OBJECT_SLOT_370, &args![1u32]);
+                    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                    e.vcall(acquire, ACQUIRE_OBJECT_SLOT_154, &args![1u32]);
+                    let text = e.call(ENTRY_FIRST_EXTRA_LIST, &args![string_object]).u32();
+                    e.call(SAY_REPORT, &args![SAY_REPORT_MANAGER, this, text]);
+                    e.call(SAY_LOCK_LEAVE, &args![SAY_LOCK]);
+                    return 0.0;
+                }
+                lip_sync = e.call(LINE_STRING_FIND_4D52D0, &args![string_object]).u32();
+                if lip_sync == 0 {
+                    let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
+                    e.call(SAY_CANCEL_FN, &args![form_id, 0u32]);
+                    let countdown = setting_float(e, SETTING_11D32C4);
+                    e.set_global(SAY_COUNTDOWN, countdown);
+                }
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                e.vcall(acquire, ACQUIRE_OBJECT_SLOT_370, &args![0u32]);
+            }
+        } else {
+            let own_face = e.call(ACTOR_GET_FACE_ANIMATION_DATA, &args![this]).u32();
+            if own_face != 0 {
+                e.vcall(
+                    own_face,
+                    FACE_ANIMATION_SLOT_124,
+                    &args![FACE_ANIMATION_STRING_1084D70],
+                );
+            }
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            if e.vcall(acquire, ACQUIRE_OBJECT_SLOT_378, &args![]).bool() {
+                let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
+                e.call(SAY_CANCEL_FN, &args![form_id, 0u32]);
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                e.vcall(acquire, ACQUIRE_OBJECT_SLOT_374, &args![0u32]);
+            }
+        }
+    }
+    let animation = e.vcall(this.addr(), ACTOR_SLOT_1E4, &args![]).u32();
+    if animation != 0 {
+        if arg_1c != 0 || flag_38 != 0 {
+            let mut flag_b = 1u32;
+            if e.call(ACTOR_IN_COMBAT, &args![this]).bool() {
+                flag_b = 0;
+            }
+            let process = e.get(this, Actor::pCurrentProcess).addr();
+            let held = e.vcall(process, PROCESS_SLOT_1D4, &args![]).u32();
+            e.call(IDLE_MANAGER_SET_USED_ITEM_FN, &args![held]);
+            e.vcall(
+                process,
+                ACQUIRE_OBJECT_SLOT_44,
+                &args![this, arg_1c, (arg_1c != 0) as u32 + 2, 0u32, flag_b, 1u32],
+            );
+            e.call(IDLE_MANAGER_SET_USED_ITEM_FN, &args![0u32]);
+        }
+        if !other_actor.is_null() && other_actor.addr() != this.addr() {
+            let other = other_actor.addr();
+            if e.vcall(other, ACTOR_SLOT_FC, &args![]).bool()
+                || e.vcall(other, ACTOR_SLOT_100, &args![]).bool()
+            {
+                let mut flag_a = 1u32;
+                if e.vcall(other, ACTOR_SLOT_100, &args![]).bool()
+                    && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![other]).u32() != 0
+                {
+                    let package = e
+                        .call(MOBILE_OBJECT_GET_CURRENT_PACKAGE, &args![other])
+                        .u32();
+                    if package != 0 && e.call(PACKAGE_FN_5F36F0, &args![package]).u32() != 0 {
+                        flag_a = 0;
+                    }
+                    if arg_20 != 0 || flag_a != 0 {
+                        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![other]).u32();
+                        e.vcall(
+                            acquire,
+                            ACQUIRE_OBJECT_SLOT_44,
+                            &args![other, arg_20, (arg_20 != 0) as u32 + 2, 0u32, 1u32, 1u32],
+                        );
+                    }
+                }
+            }
+        }
+    }
+    if lip_sync != 0 {
+        let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![lip_sync]).u32();
+        lip_length = (first as f64 / e.global::<f64>(LIP_SYNC_FRAME_RATE)) as f32;
+        let start: f32 = e.global(LIP_SYNC_START_FLOAT);
+        e.call(LIP_SYNC_START, &args![lip_sync, face, start]);
+    }
+    if flag_28 != 0 && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, ACQUIRE_OBJECT_SLOT_2EC, &args![arg_10]);
+    }
+    let mut sound_flags = 0x104u32;
+    if is_flagged == 0 && e.call(ACTOR_TEST_880910, &args![this]).bool() {
+        sound_flags |= 0x8_0000;
+    }
+    if static_sound == 0 {
+        sound_flags |= 2;
+    } else {
+        sound_flags |= 1;
+    }
+    e.with_stack(12, |e, found_handle| {
+        let audio = e.call(AUDIO_INSTANCE, &args![]).u32();
+        let found = e
+            .call(
+                AUDIO_GET_SOUND_HANDLE_BY_FILENAME,
+                &args![audio, found_handle, buffer, sound_flags, 0u32],
+            )
+            .u32();
+        e.call(SOUND_HANDLE_ASSIGN, &args![out_sound, found]);
+        e.call(SOUND_HANDLE_DESTROY, &args![found_handle]);
+    });
+    e.call(SOUND_HANDLE_SET_PRIORITY, &args![out_sound, 0x40u32]);
+    if static_sound == 0 {
+        let position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+        let x = e.mem.u32(position);
+        let y = e.mem.u32(position + 4);
+        let z = e.mem.f32(position + 8);
+        let maximum = e.call(SOUND_MAX_DISTANCE, &args![]).f32();
+        let minimum = e.call(SOUND_MIN_DISTANCE, &args![]).f32();
+        e.call(
+            SOUND_HANDLE_SET_MIN_MAX,
+            &args![out_sound, minimum, maximum],
+        );
+        let raised = (z as f64 + e.global::<f64>(SOUND_HEIGHT_OFFSET)) as f32;
+        e.call(
+            SOUND_HANDLE_SET_POSITION_XYZ,
+            &args![out_sound, x, y, raised],
+        );
+        let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+        e.call(SOUND_HANDLE_SET_OBJECT_TO_FOLLOW, &args![out_sound, node]);
+    } else {
+        let scale = setting_float(e, SETTING_STATIC_ATTENUATION) as f64;
+        let value = scale * e.global::<f64>(HUNDRED);
+        let attenuation = e.call(FTOL, &args![value]).u32();
+        e.call(
+            SOUND_HANDLE_SET_STATIC_ATTENUATION,
+            &args![out_sound, attenuation],
+        );
+    }
+    let manager = e.call(AUDIO_MANAGER_INSTANCE, &args![]).u32();
+    let form_id = e.call(REFR_FORM_ID, &args![this]).u32();
+    let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![out_sound]).u32();
+    e.call(
+        AUDIO_MANAGER_SET_CALLBACK_B,
+        &args![manager, first, SAY_TO_CALLBACK, form_id],
+    );
+    let result: f32;
+    if lip_sync != 0 {
+        let length = e.call(LIP_SYNC_LENGTH, &args![lip_sync]).f64();
+        let base = fn_008a2d20(e) as f64;
+        let milliseconds = ((base + length) * e.global::<f64>(THOUSAND_DOUBLE)) as f32;
+        let delay = e.call(FTOL, &args![milliseconds as f64]).u32();
+        e.call(SOUND_HANDLE_PLAY_AFTER, &args![out_sound, delay, 0u32]);
+        let length = e.call(LIP_SYNC_LENGTH, &args![lip_sync]).f64();
+        let mut total = (fn_008a2d20(e) as f64 + length) as f32;
+        if lip_length as f64 > zero {
+            total = (total as f64 + lip_length as f64) as f32;
+        } else if e.call(SOUND_HANDLE_GET_DURATION, &args![out_sound]).u32() != 0 {
+            let duration = e.call(SOUND_HANDLE_GET_DURATION, &args![out_sound]).u32() as i32;
+            total = (total as f64 + duration as f64 / e.global::<f64>(THOUSAND_DOUBLE)) as f32;
+        } else {
+            let per_unit = setting_float(e, SETTING_11CD0BC) as f64;
+            total = (per_unit * arg_18 as f64 + total as f64) as f32;
+        }
+        result = total;
+        if e.vcall(this.addr(), ACTOR_SLOT_21C_TEST, &args![]).bool() {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let animation_time = e.call(ANIMATION_FLOAT_D0, &args![animation]).f64();
+            let value = animation_time * e.global::<f64>(THOUSAND_DOUBLE) + milliseconds as f64;
+            e.vcall(
+                acquire,
+                ACQUIRE_OBJECT_SLOT_74C,
+                &args![value.trunc() as i64 as u32],
+            );
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            e.vcall(acquire, ACQUIRE_OBJECT_SLOT_744, &args![lip_sync]);
+        }
+    } else {
+        e.call(SOUND_HANDLE_PLAY_AFTER, &args![out_sound, 1u32, 0u32]);
+        let per_unit = setting_float(e, SETTING_11CD0BC) as f64;
+        result = (per_unit * arg_18 as f64) as f32;
+    }
+    if e.mem.u8(this.addr() + 0x7d) != 0 {
+        e.mem.set_u8(this.addr() + ACTOR_BYTE_7C, 0);
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let handle_words = sound_handle_words(e, out_sound.addr());
+    e.vcall(
+        acquire,
+        PROCESS_SLOT_490,
+        &args![0u32, handle_words[0], handle_words[1], handle_words[2]],
+    );
+    if lip_sync != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if lip_sync != e.vcall(acquire, ACQUIRE_OBJECT_SLOT_748, &args![]).u32() {
+            e.call(LIP_SYNC_DESTRUCT, &args![lip_sync, 1u32]);
+        }
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, ACQUIRE_OBJECT_SLOT_380, &args![0u32]);
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        e.vcall(acquire, ACQUIRE_OBJECT_SLOT_370, &args![0u32]);
+    }
+    e.call(SAY_LOCK_LEAVE, &args![SAY_LOCK]);
+    result
+}
+layout! {
+    /// `HitData` (Xbox PDB), `0x64` bytes in the PDB (the PC allocation size has
+    /// not been checked). Only the fields `Actor::HitMe` uses are listed; the
+    /// offsets are the PDB's, which the PC code agrees with. `kHitLocation`
+    /// (`+0x38`) and `kHitDirection` (`+0x44`) are vectors of three `float`s
+    /// read by address.
+    pub struct HitData: 0x64 {
+        /// `pAggressor` (Xbox PDB): `Actor *`.
+        0x00 pAggressor: Ptr,
+        /// `pTarget` (Xbox PDB): `Actor *`.
+        0x04 pTarget: Ptr,
+        /// `pSourceRef` (Xbox PDB): `TESObjectREFR *`.
+        0x08 pSourceRef: Ptr,
+        /// `eAttackSkill` (Xbox PDB): `ActorValue::Index`.
+        0x0C eAttackSkill: u32,
+        /// `eDamageLimb` (Xbox PDB): `BGSBodyPart::LIMB_ENUM` (`-1` is none).
+        0x10 eDamageLimb: i32,
+        /// `fHealthDamage` (Xbox PDB).
+        0x14 fHealthDamage: f32,
+        /// `fTotalDamage` (Xbox PDB).
+        0x18 fTotalDamage: f32,
+        /// `fFatigueDamage` (Xbox PDB).
+        0x1C fFatigueDamage: f32,
+        /// `fTargetedLimbDamage` (Xbox PDB).
+        0x20 fTargetedLimbDamage: f32,
+        /// `fPercentBlocked` (Xbox PDB).
+        0x24 fPercentBlocked: f32,
+        /// `fArmorDamage` (Xbox PDB).
+        0x28 fArmorDamage: f32,
+        /// `pWeapon` (Xbox PDB): `TESObjectWEAP *`.
+        0x30 pWeapon: Ptr,
+        /// `pCriticalEffect` (Xbox PDB): `SpellItem *`.
+        0x50 pCriticalEffect: Ptr,
+        /// `pVATSCommand` (Xbox PDB): `VATS_COMMAND *`.
+        0x54 pVATSCommand: Ptr,
+        /// `uiFlags` (Xbox PDB).
+        0x58 uiFlags: u32,
+    }
+}
+
+/// Size of the stack frame `Actor::HitMe` keeps its structure locals in; the
+/// translation lays them out at the offsets the code uses (`HIT_ME_FRAME_EBP`
+/// stands for `EBP`).
+const HIT_ME_FRAME_SIZE: u32 = 0x700;
+/// Offset of `EBP` in the emulated frame of `Actor::HitMe`.
+const HIT_ME_FRAME_EBP: u32 = 0x640;
+
+/// The locals of `Actor::HitMe` that live across its sections. The names
+/// say what the code does with them; the comments give the offsets below
+/// `EBP` the code keeps them at.
+struct HitMe {
+    this: Ptr<Actor>,
+    hit: Ptr<HitData>,
+    /// The second argument (a byte; `1` and `2` mean attack kinds).
+    kind: i32,
+    player: u32,
+    /// The emulated `EBP`.
+    ebp: u32,
+    /// `-0x19`: the actor was moved out of the way (arrows or a knockback).
+    moved: bool,
+    /// `-0x1a`.
+    flag_1a: bool,
+    /// `-0x30`: the result of `Actor` slot `0x214` (attached arrows).
+    arrows: u32,
+    /// `-0x50`: weapon type number plus one.
+    weapon_type: u16,
+    /// `-0x61`: a limb became crippled by this hit.
+    crippled: bool,
+    /// `-0x62`: the kind of the hit is 1.
+    kind_one: bool,
+    /// `-0x63`.
+    flag_63: bool,
+    /// `-0x64`.
+    flag_64: bool,
+    /// `-0x68`, `-0x6c`, `-0x70`, `-0x74`: copies of the hit's health, fatigue,
+    /// total damage and percent blocked.
+    health: f32,
+    fatigue: f32,
+    total: f32,
+    blocked: f32,
+    /// `-0x279` of the frame: whether the actor is not fleeing.
+    not_fleeing: bool,
+    /// `-0x2ad` of the frame: whether `Actor` slot `0x338` reported the
+    /// damage as lethal.
+    dead: bool,
+    /// The limb index the hit damaged (`-1` for none).
+    limb: i32,
+    /// Whether the limb damage may cripple the limb (`-0x338` of the frame).
+    cripple_roll: bool,
+    /// Whether the hit targeted the torso (limb 0; `-0x33e` of the frame).
+    torso_hit: bool,
+}
+
+impl HitMe {
+    fn aggressor(&self, e: &Engine) -> u32 {
+        e.get(self.hit, HitData::pAggressor).addr()
+    }
+    fn weapon(&self, e: &Engine) -> u32 {
+        e.get(self.hit, HitData::pWeapon).addr()
+    }
+    fn source(&self, e: &Engine) -> u32 {
+        e.get(self.hit, HitData::pSourceRef).addr()
+    }
+    fn flags(&self, e: &Engine) -> u32 {
+        e.get(self.hit, HitData::uiFlags)
+    }
+    /// The address of the local at `EBP + offset`.
+    fn local(&self, offset: i32) -> u32 {
+        self.ebp.wrapping_add(offset as u32)
+    }
+}
+
+/// Process slot `0x4c4` (`MiddleHighProcess::GetFurnitureMarkerID`, Xbox PDB).
+const PROCESS_SLOT_4C4: u32 = 0x4c4;
+/// Process slot `0x20c`: what the actor is sitting on (a package).
+const PROCESS_SLOT_20C: u32 = 0x20c;
+/// `MiddleHighProcess::KnockExplosion` (Xbox PDB), process slot `0x418`:
+/// the actor, a position (three words) and a speed.
+const PROCESS_SLOT_KNOCK_EXPLOSION: u32 = 0x418;
+/// `HighProcess::GetWeaponLastPos` (Xbox PDB), process slot `0x460`.
+const PROCESS_SLOT_WEAPON_LAST_POS: u32 = 0x460;
+/// `MiddleHighProcess::GetSitSleepState` (Xbox PDB), process slot `0x4bc`.
+const PROCESS_SLOT_4BC: u32 = 0x4bc;
+/// `MiddleHighProcess::ShouldCheckFlare` (Xbox PDB), process slot `0x5c8`:
+/// two words.
+const PROCESS_SLOT_5C8: u32 = 0x5c8;
+/// `HighProcess::SetCurrentProcessIdle` (Xbox PDB), process slot `0x71c`.
+const PROCESS_SLOT_SET_IDLE: u32 = 0x71c;
+/// `HighProcess::GetAnimActionAnimSeq` (Xbox PDB), process slot `0x3e8`.
+const PROCESS_SLOT_3E8: u32 = 0x3e8;
+/// `MiddleHighProcess::GetCharController` (Xbox PDB), process slot `0x28c`.
+const PROCESS_SLOT_CHAR_CONTROLLER: u32 = 0x28c;
+/// `0087ae10`: thiscall on the task queue interface, queues a hit (the actor
+/// and the hit data).
+const QUEUE_ACTOR_HIT: u32 = 0x0087_ae10;
+/// `0087ada0`: thiscall on the task queue interface, queues the hit
+/// feedback (the actor and the hit data).
+const QUEUE_ACTOR_HIT_FEEDBACK: u32 = 0x0087_ada0;
+/// `008a5300`: thiscall on the actor, run at the start and the end of the hit.
+const ACTOR_HIT_BRACKET_8A5300: u32 = 0x008a_5300;
+/// `Actor::GetOutofFurnitureQuick` (Xbox PDB).
+const ACTOR_GET_OUT_OF_FURNITURE_QUICK: u32 = 0x0088_d640;
+/// `008a5230`: thiscall on the aggressor.
+const AGGRESSOR_FN_8A5230: u32 = 0x008a_5230;
+/// `008a51f0`: thiscall on the aggressor, takes the hit data.
+const AGGRESSOR_FN_8A51F0: u32 = 0x008a_51f0;
+/// `008a52c0`: thiscall on the target, takes the hit data.
+const TARGET_FN_8A52C0: u32 = 0x008a_52c0;
+/// Table of `u16` per limb number (`0x01196dac`, stride 4).
+const LIMB_WORD_TABLE: u32 = 0x0119_6dac;
+/// Global pointer to the default weapon form (`0x011ca278`).
+const DEFAULT_WEAPON_FORM: u32 = 0x011c_a278;
+/// `Script::RunScriptEffectStart` (Xbox PDB): thiscall, takes the target and
+/// a flag.
+const SCRIPT_RUN_EFFECT_START: u32 = 0x005a_c340;
+/// `"%s %s"` (`0x01012058`).
+const HIT_MESSAGE_FORMAT: u32 = 0x0101_2058;
+/// The string the hit message uses as its icon text (`0x01011584`).
+const HIT_MESSAGE_TEXT: u32 = 0x0101_1584;
+/// The sound path of the hit message (`0x0103a830`).
+const HIT_MESSAGE_SOUND: u32 = 0x0103_a830;
+/// Setting holding the first hit message word (`0x011d3240`).
+const SETTING_HIT_MESSAGE_A: u32 = 0x011d_3240;
+/// Setting holding the second hit message word (`0x011d502c`).
+const SETTING_HIT_MESSAGE_B: u32 = 0x011d_502c;
+/// `00406d00`: cdecl `snprintf`-style formatter: the buffer, its size, the
+/// format and the arguments.
+const FORMAT_STRING_406D00: u32 = 0x0040_6d00;
+/// `ActorValue::GetActorValueName` (Xbox PDB), cdecl: the actor value number.
+const ACTOR_VALUE_GET_NAME: u32 = 0x0066_e950;
+/// The debug line format for the health and fatigue damage (`0x01084c68`).
+const HIT_DEBUG_FORMAT: u32 = 0x0108_4c68;
+/// `Interface::SetEnemyActor` (Xbox PDB), cdecl: the actor.
+const INTERFACE_SET_ENEMY_ACTOR: u32 = 0x0070_38b0;
+/// `00647b70`: cdecl, a damage integer and a flag; returns the statistics
+/// value.
+const DAMAGE_STATISTIC_VALUE: u32 = 0x0064_7b70;
+/// The error line printed when the player has no animation (`0x01084bb8`).
+const NO_ANIMATION_FORMAT: u32 = 0x0108_4bb8;
+/// Offset of the magic caster sub-object in an actor.
+const MAGIC_CASTER_OFFSET: u32 = 0x88;
+/// Magic caster slot `0x40`: sets the spell's magic item.
+const MAGIC_CASTER_SLOT_SET_SPELL: u32 = 0x40;
+/// `MagicCaster::FindTargets` (Xbox PDB): thiscall with five words.
+const MAGIC_CASTER_FIND_TARGETS: u32 = 0x0081_5d00;
+/// `00824110`: thiscall on `Actor + 0x94`, takes the spell's magic item.
+const MAGIC_TARGET_FN_824110: u32 = 0x0082_4110;
+/// Actor slot `0x338`: applies the health and fatigue damage and returns
+/// whether it kills (`fn_0089d6f0`).
+const ACTOR_SLOT_APPLY_DAMAGE: u32 = 0x338;
+/// Actor slot `0x3ac`: damages a limb.
+const ACTOR_SLOT_DAMAGE_LIMB: u32 = 0x3ac;
+/// `Actor::DamageEquipment` (Xbox PDB), actor slot `0x3c8`.
+const ACTOR_SLOT_DAMAGE_EQUIPMENT: u32 = 0x3c8;
+/// `Actor::HitMe_ov2` (Xbox PDB), actor slot `0x478`.
+const ACTOR_SLOT_HIT_ME_OV2: u32 = 0x478;
+/// Actor slot `0x4bc` (`fn_008987f0`): the actor and a number.
+const ACTOR_SLOT_HIT_NOTICE: u32 = 0x4bc;
+/// Reference slot `0x220`.
+const REFERENCE_SLOT_220: u32 = 0x220;
+/// Reference slot `0x224`.
+const REFERENCE_SLOT_224: u32 = 0x224;
+/// Reference slot `0x168`.
+const REFERENCE_SLOT_168: u32 = 0x168;
+/// `004839c0`: cdecl, finds a form by its id.
+const FIND_FORM_BY_ID: u32 = 0x0048_39c0;
+/// The id of the form `Actor::HitMe` looks up (`0x1768d7`).
+const FORM_ID_1768D7: u32 = 0x0017_68d7;
+/// `00500940`: thiscall on a form, takes a pointer to a form pointer; returns
+/// a list.
+const FORM_LIST_FIRST_500940: u32 = 0x0050_0940;
+/// `005f65d0`: thiscall on that list, returns a byte.
+const LIST_TEST_5F65D0: u32 = 0x005f_65d0;
+/// Setting byte that suppresses the critical effect cast (`0x011df7f8`).
+const SETTING_SKIP_CRITICAL_EFFECT: u32 = 0x011d_f7f8;
+/// `CombatFormulas::GetKnockbackSpeed` (Xbox PDB), cdecl: the value owner and
+/// a number; the speed is in ST0.
+const GET_KNOCKBACK_SPEED: u32 = 0x0064_6580;
+/// `HighProcess::GetDialogTarget` (Xbox PDB), thiscall (called on a weapon).
+const HIGH_PROCESS_GET_DIALOG_TARGET: u32 = 0x0051_f510;
+/// `009ac9c0`: cdecl, creates a reference (sixteen words).
+const CREATE_REFERENCE_AT: u32 = 0x009a_c9c0;
+/// `004a3c90`: thiscall on a structure, takes a pointer.
+const OBJECT_FN_4A3C90: u32 = 0x004a_3c90;
+/// `00476c70`: thiscall on a reference, takes a form.
+const REFERENCE_FN_476C70: u32 = 0x0047_6c70;
+/// Setting (`0x011d0334`) multiplying the targeted limb damage when the kind
+/// is 2.
+const SETTING_KIND_TWO_SCALE: u32 = 0x011d_0334;
+/// Setting integer (`0x011cf308`): percent chance of a torso hit crippling.
+const SETTING_LIMB_CHANCE_A: u32 = 0x011c_f308;
+/// Setting integer (`0x011ce0fc`): percent chance of dropping the weapon.
+const SETTING_TORSO_CHANCE: u32 = 0x011c_e0fc;
+/// `BGSBodyPartData::GetBodyPart` (Xbox PDB): thiscall on the data, takes a
+/// number.
+const BODY_PART_DATA_GET_BODY_PART: u32 = 0x005e_50f0;
+/// `005e5190`: thiscall on a body part, returns its limb number (a byte).
+const BODY_PART_LIMB_NUMBER: u32 = 0x005e_5190;
+/// `00647ac0`: thiscall on a body part, returns a percentage (a byte).
+const BODY_PART_PERCENT: u32 = 0x0064_7ac0;
+/// `0.01` (`double`).
+const ONE_HUNDREDTH: u32 = 0x0101_6408;
+/// `009b1720`: thiscall on the source reference, takes the actor; returns the
+/// first node of its body part list.
+const SOURCE_BODY_PART_LIST: u32 = 0x009b_1720;
+/// Actor base form slot `0x180`: the body part data.
+const BASE_FORM_SLOT_BODY_PART_DATA: u32 = 0x180;
+/// `00646cb0`: thiscall test on a form.
+const EQUIPMENT_TEST_646CB0: u32 = 0x0064_6cb0;
+/// `008b43a0`: thiscall on the actor, takes the hit data, the attacker's base
+/// form and a category; the death handler.
+const ACTOR_DEATH_HANDLER: u32 = 0x008b_43a0;
+/// `008ae000`: thiscall on the aggressor, takes the hit data.
+const AGGRESSOR_KILL_NOTICE: u32 = 0x008a_e000;
+/// Setting byte (`0x011df760`) that enables the crippled-limb idle.
+const SETTING_CRIPPLE_IDLE: u32 = 0x011d_f760;
+/// The idle manager pointer (`0x011cb6a0`).
+const IDLE_MANAGER: u32 = 0x011c_b6a0;
+/// `TESIdleManager::GetIdleToPlay` (Xbox PDB): thiscall on the manager, takes
+/// the actor and a reference.
+const IDLE_MANAGER_GET_IDLE_TO_PLAY: u32 = 0x0060_0950;
+/// `Animation::SpecialIdleWorking` (Xbox PDB): takes the idle.
+const ANIMATION_SPECIAL_IDLE_WORKING: u32 = 0x0049_8d30;
+/// `TESIdleForm::GetIdleAnimGroupSection` (Xbox PDB).
+const IDLE_FORM_GET_ANIM_GROUP_SECTION: u32 = 0x005f_f160;
+/// `00497f20`: thiscall on the animation, starts an idle (the idle, the
+/// actor, the section and a number).
+const ANIMATION_START_IDLE: u32 = 0x0049_7f20;
+/// The VATS singleton (`0x011f2250`).
+const VATS_SINGLETON: u32 = 0x011f_2250;
+/// `008d0300`: thiscall on the aggressor, takes the target and the skill.
+const ACTOR_FN_8D0300: u32 = 0x008d_0300;
+/// Setting (`0x011cf5a0`): the health ratio above which a hit staggers.
+const SETTING_STAGGER_RATIO: u32 = 0x011c_f5a0;
+/// Setting (`0x011cee30`): the chance of a stagger.
+const SETTING_STAGGER_CHANCE: u32 = 0x011c_ee30;
+/// `009a6ae0`: cdecl, takes the actor, the aggressor and a flag.
+const ACTOR_STAGGER_TEST_9A6AE0: u32 = 0x009a_6ae0;
+/// The debug line for a stunning hit (`0x01084b7c`).
+const STUN_DEBUG_FORMAT: u32 = 0x0108_4b7c;
+/// The global the rumble object is read from (`0x011dea0c`).
+const CONTROLS_HOLDER: u32 = 0x011d_ea0c;
+/// `Controls::Rumble` (Xbox PDB): thiscall with seven words.
+const CONTROLS_RUMBLE: u32 = 0x00a2_55b0;
+/// `00974e90`: thiscall on the process lists, takes the actor and a number.
+const PROCESS_LISTS_NOTIFY: u32 = 0x0097_4e90;
+/// `0047c850` as a predicate of the actor.
+const ACTOR_PREDICATE_47C850: u32 = 0x0047_c850;
+/// `008d0370`: thiscall on the actor, takes the aggressor.
+const ACTOR_FN_8D0370: u32 = 0x008d_0370;
+/// `TESImageSpaceModifier::GetGetHit` (Xbox PDB), no arguments.
+const IMAGE_SPACE_GET_HIT: u32 = 0x005d_2860;
+/// `ImageSpaceModifierInstanceForm::Trigger` (Xbox PDB), cdecl: the modifier,
+/// the strength and a node.
+const IMAGE_SPACE_TRIGGER: u32 = 0x0052_99a0;
+/// Setting (`0x011cf834`): the strength of the hit screen effect.
+const SETTING_BLOCK_SCREEN_EFFECT: u32 = 0x011c_f834;
+/// Rumble time setting for a blocked hit on the player (`0x011cfeac`).
+const SETTING_BLOCKED_RUMBLE_TIME: u32 = 0x011c_feac;
+/// Rumble pulse setting for a blocked hit on the player (`0x011d0078`).
+const SETTING_BLOCKED_RUMBLE_PULSE: u32 = 0x011d_0078;
+/// Rumble time setting for a blocked hit by the player (`0x011d0988`).
+const SETTING_BLOCK_RUMBLE_TIME_OUT: u32 = 0x011d_0988;
+/// Rumble pulse setting for a blocked hit by the player (`0x011d1008`).
+const SETTING_BLOCK_RUMBLE_PULSE_OUT: u32 = 0x011d_1008;
+/// Rumble time setting for a hit on the player (`0x011d0acc`).
+const SETTING_HIT_RUMBLE_TIME: u32 = 0x011d_0acc;
+/// Rumble pulse setting for a hit on the player (`0x011d1374`).
+const SETTING_HIT_RUMBLE_PULSE: u32 = 0x011d_1374;
+/// Rumble time setting for a hit by the player (`0x011d067c`).
+const SETTING_HIT_OUT_RUMBLE_TIME: u32 = 0x011d_067c;
+/// Rumble pulse setting for a hit by the player (`0x011d0b30`).
+const SETTING_HIT_OUT_RUMBLE_PULSE: u32 = 0x011d_0b30;
+/// `0088e1e0`: thiscall on the hit actor, takes the hit data.
+const ACTOR_FN_88E1E0: u32 = 0x0088_e1e0;
+/// `0088e8d0`: thiscall on the hit actor, takes the damage and the hit data.
+const ACTOR_FN_88E8D0: u32 = 0x0088_e8d0;
+/// `0088fb00`: thiscall on the aggressor, takes the damage, the hit data and
+/// the hit actor.
+const ACTOR_FN_88FB00: u32 = 0x0088_fb00;
+/// Setting (`0x011cf5ac`): the largest knockback speed.
+const SETTING_KNOCKBACK_CAP: u32 = 0x011c_f5ac;
+/// Setting (`0x011cfbd8`): the velocity modifier of the knockback.
+const SETTING_VELOCITY_MODIFIER: u32 = 0x011c_fbd8;
+/// `bhkCharacterController::SetVelocityModifier` (Xbox PDB): a vector and a
+/// `float`.
+const CHARACTER_SET_VELOCITY_MODIFIER: u32 = 0x00c6_d4d0;
+/// `00552490`: thiscall test on the ragdoll controller.
+const RAGDOLL_TEST_552490: u32 = 0x0055_2490;
+/// `bhkRagdollController::SetRagdollFeedbackActive` (Xbox PDB).
+const RAGDOLL_SET_FEEDBACK_ACTIVE: u32 = 0x00c7_b6a0;
+/// `004a3c20`: thiscall, constructs a structure.
+const OBJECT_CONSTRUCT_4A3C20: u32 = 0x004a_3c20;
+/// `00553fc0`: cdecl, copies a vector (destination, source).
+const VECTOR_COPY_553FC0: u32 = 0x0055_3fc0;
+/// `00458880`: thiscall on a vector, takes two vectors.
+const VECTOR_CROSS_458880: u32 = 0x0045_8880;
+/// `00c76320`: thiscall on the ragdoll controller.
+const RAGDOLL_PICK_C76320: u32 = 0x00c7_6320;
+/// `00c762f0`: thiscall on the ragdoll controller, returns a rigid body.
+const RAGDOLL_BODY_C762F0: u32 = 0x00c7_62f0;
+/// `008c71b0`: thiscall on a structure, takes a flag.
+const OBJECT_FN_8C71B0: u32 = 0x008c_71b0;
+/// `0059ce80`: thiscall on a structure, takes a flag.
+const OBJECT_FN_59CE80: u32 = 0x0059_ce80;
+/// `004a39f0`: thiscall on a structure, takes a number.
+const OBJECT_FN_4A39F0: u32 = 0x004a_39f0;
+/// `004a3f70`: thiscall on a structure, takes a word.
+const OBJECT_FN_4A3F70: u32 = 0x004a_3f70;
+/// `00458a10`: thiscall on a vector, takes two vectors.
+const VECTOR_FN_458A10: u32 = 0x0045_8a10;
+/// `0056d340`: thiscall on a structure, takes a vector.
+const OBJECT_FN_56D340: u32 = 0x0056_d340;
+/// `004a3f40`: thiscall on a structure, takes a vector.
+const OBJECT_FN_4A3F40: u32 = 0x004a_3f40;
+/// Slot `0xc8` of the ragdoll controller's pick object.
+const PICK_SLOT_C8: u32 = 0xc8;
+/// `bhkPickData::GethkRigidBody` (Xbox PDB).
+const PICK_DATA_GET_RIGID_BODY: u32 = 0x00c6_6fd0;
+/// `004b5a20`: cdecl, the reference of a rigid body.
+const RIGID_BODY_REFERENCE_4B5A20: u32 = 0x004b_5a20;
+/// `TESObjectREFR::FindReferenceFor3D` (Xbox PDB), cdecl.
+const FIND_REFERENCE_FOR_3D: u32 = 0x0056_f930;
+/// `0062aea0`: thiscall, constructs a structure.
+const OBJECT_CONSTRUCT_62AEA0: u32 = 0x0062_aea0;
+/// `005dbf20`: thiscall on a structure, takes a `float`.
+const OBJECT_FN_5DBF20: u32 = 0x005d_bf20;
+/// `00627920`: thiscall on a structure, takes a structure.
+const OBJECT_FN_627920: u32 = 0x0062_7920;
+/// `00541c80`: thiscall, returns a sound handle-like object.
+const PICK_HANDLE_541C80: u32 = 0x0054_1c80;
+/// `hkpRigidBody::applyLinearImpulse` (Xbox PDB).
+const RIGID_BODY_APPLY_LINEAR_IMPULSE: u32 = 0x0081_82d0;
+/// `00525430`: thiscall test on the VATS singleton.
+const VATS_TEST_525430: u32 = 0x0052_5430;
+/// `007a9280`: thiscall test on the VATS singleton.
+const VATS_TEST_7A9280: u32 = 0x007a_9280;
+/// `00716440`: returns a `float` (no arguments).
+const VATS_SCALE_716440: u32 = 0x0071_6440;
+/// `004410d0`: thiscall on the VATS singleton, takes a flag.
+const VATS_FN_4410D0: u32 = 0x0044_10d0;
+/// `005ca4f0`: thiscall test.
+const REFERENCE_TEST_5CA4F0: u32 = 0x005c_a4f0;
+/// `GetTickCount` (the import slot).
+const IMPORT_GET_TICK_COUNT: u32 = 0x00fd_f060;
+/// Deadline (a tick count) before which the combat dialogue is not started
+/// again (`0x011df684`).
+const HIT_BARK_DEADLINE: u32 = 0x011d_f684;
+/// Setting (`0x011df70c`): the upper delay in seconds.
+const SETTING_BARK_DELAY_UPPER: u32 = 0x011d_f70c;
+/// Setting (`0x011df73c`): the lower delay in seconds.
+const SETTING_BARK_DELAY_LOWER: u32 = 0x011d_f73c;
+/// `00944460`: cdecl, a random number between two bounds.
+const RANDOM_RANGE_944460: u32 = 0x0094_4460;
+
+// Translated from 0089a760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::HitMe` (Xbox PDB): applies the hit `hit` (a `HitData`) to the actor.
+/// `kind` is a byte: `1` and `2` mark special attack kinds (a limb hit that
+/// always cripples; a limb damage scaled by a setting).
+///
+/// Does nothing for an actor without a process or for a missing hit; when the
+/// task queue is in use (`008c7aa0`) only queues the hit (`0087ae10`).
+/// Otherwise: gets the actor off furniture it sits on when it carries arrows,
+/// notifies the aggressor, records the weapon type, reports the attack to the
+/// statistics and the script action flags, applies the health and fatigue
+/// damage (`Actor` slot `0x338`), the critical effect and the VATS
+/// effects, knocks the actor back, damages the limb (`Actor` slot `0x3ac`) and
+/// hands a lethal hit on to the death handler (`008b43a0`); then plays the
+/// hit reactions (the blocked reaction, the ragdoll impulse, the animation
+/// and the controller rumble when the player is involved), damages armor
+/// and tells the combat controller and the combat dialogue manager.
+/// C++ exception unwinding (the string and structure locals' cleanup) is not
+/// translated.
+pub fn actor_hit_me(e: &mut Engine, this: Ptr<Actor>, hit: Ptr<HitData>, kind: u8) {
+    e.with_stack(HIT_ME_FRAME_SIZE, |e, frame| {
+        let mut s = HitMe {
+            this,
+            hit,
+            kind: kind as i8 as i32,
+            player: e.global(PLAYER_CHARACTER),
+            ebp: frame.addr() + HIT_ME_FRAME_EBP,
+            moved: false,
+            flag_1a: false,
+            arrows: 0,
+            weapon_type: 1,
+            crippled: false,
+            kind_one: false,
+            flag_63: false,
+            flag_64: false,
+            health: 0.0,
+            fatigue: 0.0,
+            total: 0.0,
+            blocked: 0.0,
+            not_fleeing: false,
+            dead: false,
+            limb: -1,
+            cripple_roll: false,
+            torso_hit: false,
+        };
+        hit_me_body(e, &mut s);
+    });
+}
+
+/// The sections of `Actor::HitMe` in order; every `return` of a section that
+/// returns `false` is a jump to the end of the function (`0089d4fa`).
+fn hit_me_body(e: &mut Engine, s: &mut HitMe) {
+    if !hit_me_start(e, s) {
+        return;
+    }
+    hit_me_report_attack(e, s);
+    hit_me_damage_values(e, s);
+    hit_me_damage(e, s);
+    hit_me_reactions(e, s);
+    hit_me_finish(e, s);
+}
+
+/// `0089a7a1`..`0089aafb`: the guards, the arrows, the weapon type and the
+/// first statistics call. Returns `false` when the function ends here.
+fn hit_me_start(e: &mut Engine, s: &mut HitMe) -> bool {
+    let this = s.this;
+    let hit = s.hit;
+    if e.get(this, Actor::pCurrentProcess).addr() == 0 {
+        return false;
+    }
+    e.call(ACTOR_HIT_BRACKET_8A5300, &args![this]);
+    if hit.is_null() {
+        return false;
+    }
+    if e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+        let queue = e.call(TASK_QUEUE_INTERFACE, &args![]).u32();
+        e.call(QUEUE_ACTOR_HIT, &args![queue, this, hit]);
+        return false;
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && e.get(hit, HitData::eDamageLimb) == 0xe
+    {
+        return false;
+    }
+    if e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool() {
+        // The names of the aggressor and the weapon are looked up, but the
+        // code never uses them.
+        let aggressor = s.aggressor(e);
+        if aggressor != 0 {
+            e.call(REFR_GET_NAME, &args![aggressor]);
+        }
+        let weapon = s.weapon(e);
+        if weapon != 0 {
+            e.call(MAP_MARKER_DATA_GET_LOCATION_NAME, &args![weapon + 0x30]);
+        }
+    }
+    s.arrows = e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).u32();
+    if e.vcall(this.addr(), ACTOR_SLOT_214, &args![]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        if e.vcall(acquire, PROCESS_SLOT_4C4, &args![]).u32() > 0x14 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+            let sitting_on = e.vcall(acquire, PROCESS_SLOT_20C, &args![]).u32();
+            if sitting_on == 0 || e.call(PACKAGE_TYPE, &args![sitting_on]).u32() != 0x1a {
+                if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+                    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                    if e.vcall(acquire, PROCESS_SLOT_4C8, &args![]).u32() != 0 {
+                        let first = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                        let second = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                        let index = e.vcall(first, PROCESS_SLOT_4D0, &args![]).u32();
+                        let furniture = e.vcall(second, PROCESS_SLOT_4C8, &args![]).u32();
+                        e.call(REFR_SET_MARKER_USED, &args![furniture, index, 0u32]);
+                    }
+                }
+                e.call(MOBILE_OBJECT_SET_CHASE_BIP, &args![this, 0u32]);
+                e.call(ACTOR_GET_OUT_OF_FURNITURE_QUICK, &args![this]);
+                let mut who = this.addr();
+                if s.aggressor(e) != 0 {
+                    who = s.aggressor(e);
+                }
+                let position = e.vcall(who, ACTOR_SLOT_POSITION, &args![]).u32();
+                let [x, y, z] = read_words3(e, position);
+                let process = e.get(this, Actor::pCurrentProcess).addr();
+                e.vcall(
+                    process,
+                    PROCESS_SLOT_KNOCK_EXPLOSION,
+                    &args![this, x, y, z, 1.0f32],
+                );
+                s.moved = true;
+            }
+        }
+    }
+    let aggressor = s.aggressor(e);
+    if aggressor != 0 {
+        e.call(AGGRESSOR_FN_8A5230, &args![aggressor]);
+        e.call(AGGRESSOR_FN_8A51F0, &args![aggressor, hit]);
+    }
+    e.call(TARGET_FN_8A52C0, &args![this, hit]);
+    s.weapon_type = 1;
+    let weapon = s.weapon(e);
+    if weapon != 0 {
+        s.weapon_type = (e.call(WEAPON_TYPE, &args![weapon]).u16()).wrapping_add(1);
+        if e.call(WEAPON_GETTER_8D85E0, &args![weapon]).u32() == 0x2d {
+            s.flag_1a = true;
+        }
+    } else if s.flags(e) & 0x2000 == 0 {
+        s.flag_1a = true;
+    }
+    let flagged = s.flags(e) & 4 != 0;
+    if s.aggressor(e) == s.player
+        && !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        && flagged
+        && !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool()
+    {
+        let mut base = e.call(REFR_BASE_FORM, &args![this]).u32();
+        if e.call(ACTOR_TEST_56AF40, &args![this]).bool() {
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+            base = e.call(EXTRA_GET_BASE_FORM_421720, &args![extra]).u32();
+        }
+        let limb_word = limb_word(e, hit);
+        e.call(
+            STATISTICS_WORKER_5F5950,
+            &args![
+                3u32,
+                1u32,
+                base,
+                weapon,
+                limb_word,
+                1u32,
+                u32::from(s.weapon_type)
+            ],
+        );
+    }
+    true
+}
+
+/// Reads three words at `address`.
+fn read_words3(e: &Engine, address: u32) -> [u32; 3] {
+    [
+        e.mem.u32(address),
+        e.mem.u32(address + 4),
+        e.mem.u32(address + 8),
+    ]
+}
+
+/// The `u16` of the limb table for the hit's damage limb.
+fn limb_word(e: &Engine, hit: Ptr<HitData>) -> u32 {
+    let limb = e.get(hit, HitData::eDamageLimb);
+    u32::from(
+        e.mem
+            .u16(LIMB_WORD_TABLE.wrapping_add((limb as u32).wrapping_mul(4))),
+    )
+}
+
+/// `0089aafe`..`0089ac5b`: the script action flags of the aggressor and the
+/// weapon, and the script effect of the ammo.
+fn hit_me_report_attack(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    let aggressor = s.aggressor(e);
+    let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+    e.call(SCRIPT_SET_ACTION_FLAG, &args![aggressor, extra, 0x80u32]);
+    let weapon = s.weapon(e);
+    if weapon != 0 {
+        let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+        e.call(SCRIPT_SET_ACTION_FLAG, &args![weapon, extra, 0x100u32]);
+        if aggressor != 0
+            && e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32() != 0
+            && e.call(LIST_NEXT, &args![weapon + 0x68]).u32() != 0
+        {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32();
+            let entry = e
+                .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                .u32();
+            if entry != 0 && e.call(ENTRY_FIRST_EXTRA_LIST, &args![entry]).u32() != 0 {
+                let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![entry]).u32();
+                let slot = e.call(LIST_ITEM_SLOT, &args![first]).u32();
+                if e.mem.u32(slot) != 0 {
+                    let first = e.call(ENTRY_FIRST_EXTRA_LIST, &args![entry]).u32();
+                    let slot = e.call(LIST_ITEM_SLOT, &args![first]).u32();
+                    let value = e.mem.u32(slot);
+                    let target = e.get(hit, HitData::pTarget).addr();
+                    e.call(SCRIPT_SET_ACTION_FLAG, &args![target, value, 0x80u32]);
+                }
+            }
+        }
+        let ammo = e
+            .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
+            .u32();
+        if ammo != 0 {
+            let ammo = e
+                .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
+                .u32();
+            let effect = e.call(LIST_NEXT, &args![ammo + 0x9c]).u32();
+            if effect != 0 {
+                let ammo = e
+                    .call(WEAPON_GET_CURRENT_AMMO, &args![weapon, aggressor])
+                    .u32();
+                let effect = e.call(LIST_NEXT, &args![ammo + 0x9c]).u32();
+                e.call(SCRIPT_RUN_EFFECT_START, &args![effect, this, 0u32]);
+            }
+        }
+    } else {
+        let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+        let default_weapon = e.global::<u32>(DEFAULT_WEAPON_FORM);
+        e.call(
+            SCRIPT_SET_ACTION_FLAG,
+            &args![default_weapon, extra, 0x100u32],
+        );
+    }
+}
+
+/// `0089ac5b`..`0089ae19`: reads the damage values from the hit and prints the
+/// player's hit message.
+fn hit_me_damage_values(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    s.crippled = false;
+    e.mem.set_u8(this.addr() + 0x1b1, 0);
+    s.kind_one = false;
+    s.flag_63 = false;
+    s.flag_64 = false;
+    s.health = e.get(hit, HitData::fHealthDamage);
+    s.fatigue = e.get(hit, HitData::fFatigueDamage);
+    s.total = e.get(hit, HitData::fTotalDamage);
+    s.blocked = e.get(hit, HitData::fPercentBlocked);
+    let aggressor = s.aggressor(e);
+    if aggressor != 0
+        && e.vcall(aggressor, ACTOR_SLOT_360, &args![]).bool()
+        && e.call(HIT_DATA_FLAG_TEST, &args![hit, 4u32]).bool()
+        && !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        && !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+    {
+        let word = if e.call(HIT_DATA_FLAG_TEST, &args![hit, 0x400u32]).bool() {
+            e.call(SETTING_GET_STRING, &args![SETTING_HIT_MESSAGE_A])
+                .u32()
+        } else {
+            e.call(SETTING_GET_STRING, &args![SETTING_HIT_MESSAGE_B])
+                .u32()
+        };
+        let name = e.call(REFR_GET_NAME, &args![this]).u32();
+        e.with_stack(0x1f4, |e, text| {
+            e.call(
+                FORMAT_STRING_406D00,
+                &args![text, 0x1f4u32, HIT_MESSAGE_FORMAT, word, name],
+            );
+            e.with_stack(4, |e, message| {
+                e.call(STRING_CONSTRUCT, &args![message, HIT_MESSAGE_TEXT]);
+                let characters = e.call(ENTRY_FIRST_EXTRA_LIST, &args![message]).u32();
+                let two: f32 = e.global(DETECTION_FLOAT_TWO);
+                e.call(
+                    SHOW_MESSAGE,
+                    &args![text, 1u32, HIT_MESSAGE_SOUND, characters, two, 0u32],
+                );
+                e.call(STRING_DESTRUCT, &args![message]);
+            });
+        });
+    }
+    s.not_fleeing = !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool();
+}
+
+/// The effect the hit casts on the actor: interrupts the actor's magic
+/// caster (`+0x88`), sets the spell (`spell` is read after the interrupt and
+/// again after the targets were found, as the code does), finds the targets
+/// and tells `Actor + 0x94`.
+fn hit_me_cast_effect(e: &mut Engine, this: Ptr<Actor>, mut spell: impl FnMut(&mut Engine) -> u32) {
+    let caster = this.addr() + MAGIC_CASTER_OFFSET;
+    e.call(MAGIC_CASTER_INTERRUPT_CAST, &args![caster]);
+    let first = spell(e);
+    let item = if first != 0 { first + 0x18 } else { 0 };
+    e.vcall(caster, MAGIC_CASTER_SLOT_SET_SPELL, &args![item]);
+    e.call(
+        MAGIC_CASTER_FIND_TARGETS,
+        &args![caster, 1.0f32, 0u32, 0u32, 1.0f32, 0u32],
+    );
+    let second = spell(e);
+    let item = if second != 0 { second + 0x18 } else { 0 };
+    e.call(MAGIC_TARGET_FN_824110, &args![this.addr() + 0x94, item]);
+}
+
+/// `0089ae19`..`0089c5be`: the damage section, run when the hit does health,
+/// fatigue or limb damage.
+fn hit_me_damage(e: &mut Engine, s: &mut HitMe) {
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let hit = s.hit;
+    let limb_damage = e.get(hit, HitData::fTargetedLimbDamage);
+    if !((s.health as f64) > zero || (s.fatigue as f64) > zero || limb_damage as f64 != zero) {
+        return;
+    }
+    hit_me_debug_lines(e, s);
+    let this = s.this;
+    let aggressor = s.aggressor(e);
+    if aggressor == s.player {
+        e.call(INTERFACE_SET_ENEMY_ACTOR, &args![this]);
+    }
+    if aggressor == s.player {
+        hit_me_player_statistics(e, s);
+        if s.flag_1a {
+            hit_me_player_spell(e, s);
+        }
+    }
+    s.dead = e
+        .vcall(
+            this.addr(),
+            ACTOR_SLOT_APPLY_DAMAGE,
+            &args![s.health, s.fatigue, aggressor],
+        )
+        .bool();
+    if s.not_fleeing {
+        hit_me_critical_effect(e, s);
+        hit_me_kill_effect(e, s);
+    }
+    hit_me_vats_effect(e, s);
+    hit_me_knockback(e, s);
+    hit_me_limb_damage(e, s);
+    hit_me_death(e, s);
+}
+
+/// `0089ae19`..`0089aefd`: the debug lines about the health and fatigue
+/// damage.
+fn hit_me_debug_lines(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let aggressor = s.aggressor(e);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if !e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() || aggressor == 0 {
+        return;
+    }
+    for (damage, actor_value) in [(s.health, 0x10u32), (s.fatigue, 0x16)] {
+        if (damage as f64) > zero {
+            let value_name = e.call(ACTOR_VALUE_GET_NAME, &args![actor_value]).u32();
+            let current = e.vcall(this.addr() + 0xa4, 0x0c, &args![actor_value]).f64();
+            let this_name = e.call(REFR_GET_NAME, &args![this]).u32();
+            let aggressor_name = e.call(REFR_GET_NAME, &args![aggressor]).u32();
+            e.call(
+                PRINT_DEBUG_LINE,
+                &args![
+                    HIT_DEBUG_FORMAT,
+                    aggressor_name,
+                    this_name,
+                    damage as f64,
+                    current,
+                    value_name
+                ],
+            );
+        }
+    }
+}
+
+/// `0089af16`..`0089b051`: when the player hits a living actor, reports the
+/// hit to the statistics.
+fn hit_me_player_statistics(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    if !s.not_fleeing || e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+        return;
+    }
+    let mut default_kind = 0x2du32;
+    if s.weapon(e) == 0 && s.flags(e) & 0x2000 != 0 {
+        default_kind = 0x23;
+    }
+    let mut base = e.call(REFR_BASE_FORM, &args![this]).u32();
+    if e.call(ACTOR_TEST_56AF40, &args![this]).bool() {
+        let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+        base = e.call(EXTRA_GET_BASE_FORM_421720, &args![extra]).u32();
+    }
+    if this.addr() != s.player {
+        let weapon = s.weapon(e);
+        let selected = if weapon != 0 {
+            e.call(WEAPON_GETTER_8D85E0, &args![weapon]).u32()
+        } else {
+            default_kind
+        };
+        let damage = e.call(FTOL, &args![s.health as f64]).u32();
+        let value = e.call(DAMAGE_STATISTIC_VALUE, &args![damage, 1u32]).u32();
+        let limb = limb_word(e, hit);
+        e.call(
+            STATISTICS_WORKER_5F5950,
+            &args![
+                8u32,
+                value,
+                base,
+                s.weapon(e),
+                limb,
+                selected & 0xffff,
+                u32::from(s.weapon_type)
+            ],
+        );
+    }
+    let limb = limb_word(e, hit);
+    e.call(
+        STATISTICS_WORKER_5F5950,
+        &args![
+            3u32,
+            1u32,
+            base,
+            s.weapon(e),
+            limb,
+            0u32,
+            u32::from(s.weapon_type)
+        ],
+    );
+}
+
+/// `0089b051`..`0089b26b`: the player's current spell effect is released with
+/// the default object chosen by the animation's group number.
+fn hit_me_player_spell(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![s.player]).u32();
+    let sequence = e.vcall(acquire, PROCESS_SLOT_3E8, &args![]).u32();
+    if sequence == 0 {
+        e.call(PRINT_ERROR_LINE, &args![NO_ANIMATION_FORMAT]);
+        return;
+    }
+    let transform = e
+        .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![sequence])
+        .u32();
+    let group = e.call(ANIM_GROUP_GET_NUMBER, &args![transform]).i32();
+    if !((0x61..=0x65).contains(&group) || group == 0xa8) {
+        return;
+    }
+    let object_number = match group {
+        0x61 => Some(0x19u32),
+        0x62 => Some(0x1a),
+        0x63 => Some(0x1d),
+        0x64 => Some(0x1b),
+        0x65 => Some(0x1c),
+        0xa8 => Some(0x1e),
+        _ => None,
+    };
+    let mut chosen = 0u32;
+    if let Some(number) = object_number {
+        chosen = e.call(GET_DEFAULT_OBJECT, &args![number]).u32();
+    }
+    let spell = chosen;
+    if spell == 0 {
+        return;
+    }
+    e.call(MAGIC_CASTER_INTERRUPT_CAST, &args![this.addr() + 0x88]);
+    let item = spell + 0x18;
+    e.vcall(
+        this.addr() + 0x88,
+        MAGIC_CASTER_SLOT_SET_SPELL,
+        &args![item],
+    );
+    e.call(
+        MAGIC_CASTER_FIND_TARGETS,
+        &args![this.addr() + 0x88, 1.0f32, 0u32, 0u32, 1.0f32, 0u32],
+    );
+    e.call(MAGIC_TARGET_FN_824110, &args![this.addr() + 0x94, item]);
+}
+
+/// `0089b295`..`0089b43f`: the critical effect of the hit.
+fn hit_me_critical_effect(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    if !e.call(HIT_DATA_FLAG_TEST, &args![hit, 4u32]).bool()
+        || e.get(hit, HitData::pCriticalEffect).addr() == 0
+    {
+        return;
+    }
+    let essential = e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool();
+    if (essential || !s.dead) && e.call(HIT_DATA_FLAG_TEST, &args![hit, 8u32]).bool() {
+        return;
+    }
+    let mut effect_found = false;
+    if s.arrows != 0 {
+        let form = e.call(FIND_FORM_BY_ID, &args![FORM_ID_1768D7]).u32();
+        let critical = e.get(hit, HitData::pCriticalEffect).addr();
+        if critical != 0 && form != 0 {
+            e.with_stack(4, |e, holder| {
+                e.mem.set_u32(holder.addr(), critical);
+                let list = e.call(FORM_LIST_FIRST_500940, &args![form, holder]).u32();
+                if e.call(LIST_TEST_5F65D0, &args![list]).bool() {
+                    effect_found = true;
+                }
+            });
+        }
+    }
+    let skip = e
+        .call(
+            SETTING_GET_BOOL_POINTER,
+            &args![SETTING_SKIP_CRITICAL_EFFECT],
+        )
+        .u32();
+    if e.mem.u8(skip) == 0 && !effect_found {
+        hit_me_cast_effect(e, this, |e| e.get(hit, HitData::pCriticalEffect).addr());
+    }
+}
+
+/// `0089b43f`..`0089b6d0`: a kill of the player's bound weapon 0x22 can
+/// fire a projectile-like reference back at the target.
+fn hit_me_kill_effect(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let aggressor = s.aggressor(e);
+    if aggressor == 0 {
+        return;
+    }
+    let mut entry_form = 0u32;
+    if s.player != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![s.player]).u32();
+        if acquire != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![s.player]).u32();
+            if e.vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                .u32()
+                != 0
+            {
+                let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![s.player]).u32();
+                let entry = e
+                    .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+                    .u32();
+                entry_form = e.call(ENTRY_FORM, &args![entry]).u32();
+            }
+        }
+    }
+    if entry_form == 0 || e.call(WEAPON_GETTER_8D85E0, &args![entry_form]).u32() != 0x22 || !s.dead
+    {
+        return;
+    }
+    let chance = e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), 0.0);
+        e.call(HANDLE_ENTRY_POINT, &args![0x2eu32, aggressor, out]);
+        e.mem.f32(out.addr())
+    });
+    if (chance as f64) <= e.global::<f64>(ZERO_DOUBLE) {
+        return;
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() == 0 {
+        return;
+    }
+    let object = e.call(GET_DEFAULT_OBJECT, &args![0x18u32]).u32();
+    if object == 0 {
+        return;
+    }
+    let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    let rotation = e.call(NODE_ROTATION, &args![node]).u32();
+    let rotation_words: Vec<u32> = (0..9).map(|i| e.mem.u32(rotation + 4 * i)).collect();
+    let node = e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32();
+    let translation = e.call(NODE_WORLD_TRANSLATE, &args![node]).u32();
+    let [tx, ty, tz] = read_words3(e, translation);
+    let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+    let mut words = vec![object, aggressor, 0u32, cell, tx, ty, tz];
+    words.extend(rotation_words);
+    let reference = e.call(CREATE_REFERENCE_AT, &words).u32();
+    if reference == 0 {
+        return;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    let controller = e
+        .vcall(acquire, PROCESS_SLOT_CHAR_CONTROLLER, &args![])
+        .u32();
+    let offset = fn_0089d600(e, Ptr::new(controller)).addr();
+    let copy = s.local(-0x300);
+    e.call(OBJECT_FN_4A3C90, &args![copy, offset]);
+    let vector = s.local(-0x30c);
+    let built = e
+        .call(
+            VECTOR3_CONSTRUCT_416870,
+            &args![vector, 0.0f32, 0.0f32, 1.0f32],
+        )
+        .u32();
+    let [x, y, z] = read_words3(e, built);
+    fn_0089d640(e, Ptr::new(reference), x, y, z);
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32();
+    if e.vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+        .u32()
+        != 0
+    {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32();
+        let entry = e
+            .vcall(acquire, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32();
+        let weapon = e.call(ENTRY_FORM, &args![entry]).u32();
+        e.call(REFERENCE_FN_476C70, &args![reference, weapon]);
+    }
+}
+
+/// `0089b6d0`..`0089b7e2`: a VATS command of kind `0x10` or `0x11` casts the
+/// effect of the weapon's dialog target.
+fn hit_me_vats_effect(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    let command = e.get(hit, HitData::pVATSCommand).addr();
+    if command == 0 {
+        return;
+    }
+    let kind = e.mem.u32(command);
+    let weapon = s.weapon(e);
+    if (kind != 0x10 && kind != 0x11)
+        || weapon == 0
+        || e.call(HIGH_PROCESS_GET_DIALOG_TARGET, &args![weapon]).u32() == 0
+    {
+        return;
+    }
+    hit_me_cast_effect(e, this, |e| {
+        e.call(HIGH_PROCESS_GET_DIALOG_TARGET, &args![weapon]).u32()
+    });
+}
+
+/// `0089b7e2`..`0089b970`: a chance, from the aggressor's entry points, of
+/// knocking the actor back.
+fn hit_me_knockback(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let aggressor = s.aggressor(e);
+    if aggressor == 0 {
+        return;
+    }
+    let chance = e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), 0.0);
+        let weapon = s.weapon(e);
+        e.call(HANDLE_ENTRY_POINT, &args![0x34u32, aggressor, weapon, out]);
+        e.mem.f32(out.addr())
+    });
+    if (chance as f64) <= e.global::<f64>(ZERO_DOUBLE) {
+        return;
+    }
+    let roll = e.call(RANDOM_FLOAT, &args![0.0f32, 1.0f32]).f64();
+    if roll > chance as f64 {
+        return;
+    }
+    let owner = this.addr() + 0xa4;
+    let speed = e.call(GET_KNOCKBACK_SPEED, &args![owner, 5u32]).f32();
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if acquire == 0 || e.call(ACQUIRE_OBJECT_FIELD_28, &args![acquire]).u32() != 0 {
+        return;
+    }
+    s.moved = true;
+    let source = s.source(e);
+    let from = if source != 0 { source } else { aggressor };
+    let position = e.vcall(from, ACTOR_SLOT_POSITION, &args![]).u32();
+    let [x, y, z] = read_words3(e, position);
+    e.vcall(
+        acquire,
+        PROCESS_SLOT_KNOCK_EXPLOSION,
+        &args![this, x, y, z, speed],
+    );
+}
+
+/// `0089b970`..`0089bfaf`: the damage to a limb. With a source reference that
+/// passes `0x220`, each body part named in the list of the source damages its
+/// limb in proportion to the health damage; otherwise the limb the hit
+/// names is damaged by the targeted limb damage.
+fn hit_me_limb_damage(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    s.limb = -1;
+    s.cripple_roll = false;
+    s.torso_hit = false;
+    let source = s.source(e);
+    if source != 0 && e.vcall(source, REFERENCE_SLOT_220, &args![]).bool() {
+        let base = e.call(ACTOR_BASE_FORM_FN, &args![this]).u32();
+        let body_parts = e.vcall(base, BASE_FORM_SLOT_BODY_PART_DATA, &args![]).u32();
+        if body_parts == 0 {
+            return;
+        }
+        let mut node = e.call(SOURCE_BODY_PART_LIST, &args![source, this]).u32();
+        while node != 0 && !e.call(LIST_NODE_STOP_TEST, &args![node]).bool() {
+            let slot = e.call(LIST_ITEM_SLOT, &args![node]).u32();
+            let item = e.mem.u32(slot);
+            node = e.call(LIST_NEXT, &args![node]).u32();
+            let number = e.mem.u32(item);
+            let part = e
+                .call(BODY_PART_DATA_GET_BODY_PART, &args![body_parts, number])
+                .u32();
+            if part != 0 {
+                s.limb = e.call(BODY_PART_LIMB_NUMBER, &args![part]).u8() as i8 as i32;
+                if s.limb >= 0 && s.limb < 0x4d {
+                    let percent = e.call(BODY_PART_PERCENT, &args![part]).u8();
+                    let share = f64::from(percent) * e.global::<f64>(ONE_HUNDREDTH);
+                    let maximum = e.vcall(this.addr() + 0xa4, 0x00, &args![0x10u32]).i32();
+                    let damage = (s.health as f64 / (maximum as f64 * share)
+                        * e.global::<f64>(HUNDRED)) as f32;
+                    let weapon = s.weapon(e);
+                    let selected = if weapon != 0 {
+                        weapon
+                    } else {
+                        e.global::<u32>(DEFAULT_WEAPON_FORM)
+                    };
+                    let aggressor = s.aggressor(e);
+                    e.with_stack(4, |e, out| {
+                        e.mem.set_f32(out.addr(), damage);
+                        e.call(
+                            HANDLE_ENTRY_POINT,
+                            &args![6u32, this, aggressor, selected, out],
+                        );
+                        let scaled = e.mem.f32(out.addr());
+                        e.vcall(
+                            this.addr(),
+                            ACTOR_SLOT_DAMAGE_LIMB,
+                            &args![s.limb as u32, -scaled, aggressor],
+                        );
+                    });
+                }
+                s.limb = -1;
+            }
+        }
+        return;
+    }
+    // The limb the hit names.
+    e.vcall(this.addr(), ACTOR_SLOT_360, &args![]);
+    let named = e.get(hit, HitData::eDamageLimb);
+    if named == -1 {
+        return;
+    }
+    if named == 0 {
+        s.torso_hit = true;
+    } else if named != 0xe {
+        // The general limb path below.
+    } else {
+        // The head-mounted equipment of limb 0xe takes the damage.
+        let limb_damage = e.get(hit, HitData::fTargetedLimbDamage);
+        let process = e.get(this, Actor::pCurrentProcess).addr();
+        let entry = e
+            .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+            .u32();
+        e.vcall(
+            this.addr(),
+            ACTOR_SLOT_DAMAGE_EQUIPMENT,
+            &args![entry, limb_damage, 0u32],
+        );
+        if !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+            && !e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+            && e.call(HIT_DATA_FLAG_TEST, &args![hit, 4u32]).bool()
+        {
+            let roll = e.call(RANDOM_NUMBER, &args![]).u32() % 100;
+            let chance = e
+                .call(SETTING_GET_INT_POINTER, &args![SETTING_TORSO_CHANCE])
+                .u32();
+            if roll < e.mem.u32(chance) {
+                fn_0089f580(e, this);
+            }
+        }
+        return;
+    }
+    let base = e.call(ACTOR_BASE_FORM_FN, &args![this]).u32();
+    let body_parts = e.vcall(base, BASE_FORM_SLOT_BODY_PART_DATA, &args![]).u32();
+    if body_parts == 0 {
+        return;
+    }
+    let part = e
+        .call(
+            BODY_PART_DATA_GET_BODY_PART,
+            &args![body_parts, named as u32],
+        )
+        .u32();
+    if part == 0 {
+        return;
+    }
+    s.limb = e.call(BODY_PART_LIMB_NUMBER, &args![part]).u8() as i8 as i32;
+    if !(s.limb >= 0 && s.limb < 0x4d) {
+        return;
+    }
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    let limb_health = e
+        .vcall(this.addr() + 0xa4, 0x0c, &args![s.limb as u32])
+        .f32();
+    let mut damage = e.get(hit, HitData::fTargetedLimbDamage);
+    if s.kind == 2 {
+        let scale = e
+            .call(SETTING_GET_VALUE_POINTER, &args![SETTING_KIND_TWO_SCALE])
+            .u32();
+        damage = (damage as f64 * e.mem.f32(scale) as f64) as f32;
+    }
+    let weapon = s.weapon(e);
+    let selected = if weapon != 0 {
+        weapon
+    } else {
+        e.global::<u32>(DEFAULT_WEAPON_FORM)
+    };
+    let aggressor = s.aggressor(e);
+    e.with_stack(4, |e, out| {
+        e.mem.set_f32(out.addr(), damage);
+        e.call(
+            HANDLE_ENTRY_POINT,
+            &args![6u32, this, aggressor, selected, out],
+        );
+        damage = e.mem.f32(out.addr());
+    });
+    e.vcall(
+        this.addr(),
+        ACTOR_SLOT_DAMAGE_LIMB,
+        &args![s.limb as u32, -damage, aggressor],
+    );
+    s.crippled = limb_health as f64 > zero
+        && e.vcall(this.addr() + 0xa4, 0x0c, &args![s.limb as u32])
+            .f64()
+            <= zero;
+    if s.torso_hit && !s.crippled {
+        let current = e
+            .vcall(this.addr() + 0xa4, 0x0c, &args![s.limb as u32])
+            .f64();
+        if current <= zero {
+            let roll = e.call(RANDOM_NUMBER, &args![]).u32() % 100;
+            let chance = e
+                .call(SETTING_GET_INT_POINTER, &args![SETTING_LIMB_CHANCE_A])
+                .u32();
+            if roll <= e.mem.u32(chance) {
+                s.cripple_roll = true;
+            }
+        }
+    } else if s.crippled {
+        s.cripple_roll = true;
+    }
+    if e.vcall(this.addr() + 0xa4, 0x08, &args![0x48u32]).u32() != 0 {
+        s.cripple_roll = false;
+    }
+    if s.kind == 1 {
+        s.cripple_roll = true;
+        e.mem.set_u8(this.addr() + 0x1b1, 1);
+    }
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    let entry = e
+        .vcall(process, PROCESS_SLOT_CURRENT_WEAPON, &args![])
+        .u32();
+    let worn = if entry != 0 {
+        e.call(ENTRY_FORM, &args![entry]).u32()
+    } else {
+        0
+    };
+    if s.cripple_roll
+        && worn != 0
+        && !e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+        && !e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+    {
+        let named = e.get(hit, HitData::eDamageLimb);
+        let drop_weapon = if named == 5 || named == 6 {
+            true
+        } else if !e.call(EQUIPMENT_TEST_646CB0, &args![worn]).bool() {
+            false
+        } else {
+            named == 3 || named == 4
+        };
+        if drop_weapon {
+            fn_0089f580(e, this);
+        }
+    }
+}
+
+/// The death-category number for the form type `form_type` of the source
+/// reference (`0089c0ba`..`0089c13b`; the table is the one at `0x0089d598`).
+fn hit_me_death_category(form_type: u32) -> u32 {
+    match form_type {
+        0x28 => 2,
+        0x2f => 5,
+        0x33 | 0x3d | 0x3f | 0x40 | 0x69 => 1,
+        0x3e | 0x51 => 0,
+        0x52 => 4,
+        _ => 3,
+    }
+}
+
+/// `0089bfaf`..`0089c5be`: for an actor with a 3D object in a loaded cell,
+/// the death handling (`008b43a0`), the aggressor's kill notice, the idle that
+/// reacts to a crippled limb and the stun.
+fn hit_me_death(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    if e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0
+        || e.call(REFR_PARENT_CELL, &args![this]).u32() == 0
+    {
+        return;
+    }
+    let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+    if !e.call(CELL_TEST_450FF0, &args![cell]).bool() {
+        return;
+    }
+    let source = s.source(e);
+    let mut attacker_base = 0u32;
+    if source != 0 {
+        if e.vcall(source, ACTOR_SLOT_100, &args![]).bool() {
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![source]).u32();
+            attacker_base = e
+                .call(EXTRA_GET_LEV_CREA_ORIGINAL_BASE, &args![extra])
+                .u32();
+        }
+        if attacker_base == 0 {
+            attacker_base = e.call(REFR_BASE_FORM, &args![source]).u32();
+        }
+    }
+    let source_flag = source != 0 && e.vcall(source, REFERENCE_SLOT_220, &args![]).bool();
+    let aggressor = s.aggressor(e);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if s.dead && e.call(PROCESS_LEVEL_NUMBER, &args![this]).u32() != 6 {
+        let mut category = 3u32;
+        if source != 0 {
+            let form_type = e.call(FORM_TYPE, &args![source]).u32();
+            category = hit_me_death_category(form_type);
+        }
+        if source_flag {
+            category = 0;
+        }
+        let announce = if s.limb == -1 {
+            true
+        } else {
+            e.vcall(this.addr() + 0xa4, 0x0c, &args![s.limb as u32])
+                .f64()
+                <= zero
+        };
+        if announce {
+            e.call(
+                ACTOR_DEATH_HANDLER,
+                &args![this, hit, attacker_base, category],
+            );
+            if aggressor == s.player
+                && s.not_fleeing
+                && !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool()
+            {
+                e.call(MISC_STAT_INCREMENT, &args![0x24u32]);
+            }
+        }
+    }
+    if s.not_fleeing && s.dead {
+        if e.call(ACTOR_GETTER_87F9C0, &args![this]).f64() > zero && aggressor != 0 {
+            e.call(AGGRESSOR_KILL_NOTICE, &args![aggressor, hit]);
+        }
+    } else if !e.vcall(this.addr(), ACTOR_SLOT_230, &args![]).bool() {
+        let enabled = e
+            .call(SETTING_GET_BOOL_POINTER, &args![SETTING_CRIPPLE_IDLE])
+            .u32();
+        if e.mem.u8(enabled) != 0
+            && e.get(hit, HitData::eDamageLimb) != -1
+            && s.cripple_roll
+            && e.vcall(this.addr() + 0xa4, 0x08, &args![0x48u32]).i32() <= 0
+        {
+            let manager = e.global::<u32>(IDLE_MANAGER);
+            let idle = e
+                .call(IDLE_MANAGER_GET_IDLE_TO_PLAY, &args![manager, this, source])
+                .u32();
+            let animation = e.vcall(this.addr(), ACTOR_SLOT_1E4, &args![]).u32();
+            if idle != 0
+                && animation != 0
+                && !e
+                    .call(ANIMATION_SPECIAL_IDLE_WORKING, &args![animation, idle])
+                    .bool()
+            {
+                if this.addr() == s.player {
+                    let section = e.call(IDLE_FORM_GET_ANIM_GROUP_SECTION, &args![idle]).u32();
+                    e.call(
+                        ANIMATION_START_IDLE,
+                        &args![animation, idle, this, section, 2u32],
+                    );
+                    e.call(VATS_QUIT_PLAYBACK, &args![VATS_SINGLETON, 0u32, 0u32]);
+                } else {
+                    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+                    e.vcall(acquire, PROCESS_SLOT_SET_IDLE, &args![idle]);
+                    e.vcall(acquire, PROCESS_SLOT_614, &args![0x10u32]);
+                }
+            }
+        }
+    }
+    e.mem.set_u8(this.addr() + 0x1b1, 0);
+    if s.dead {
+        return;
+    }
+    let mut stunned = false;
+    if (s.fatigue as f64) > zero {
+        let value = e.vcall(this.addr() + 0xa4, 0x08, &args![0x16u32]).i32();
+        if (value as f64) <= zero {
+            stunned = true;
+        }
+    }
+    if s.kind == 1 {
+        s.kind_one = true;
+    }
+    let maximum = e.vcall(this.addr() + 0xa4, 0x08, &args![0x10u32]).i32();
+    let ratio = (s.health as f64 / maximum as f64) as f32;
+    if aggressor != 0 {
+        let skill = e.get(hit, HitData::eAttackSkill);
+        e.call(ACTOR_FN_8D0300, &args![aggressor, this, skill]);
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if !e.call(ACTOR_IS_TALKING, &args![this]).bool()
+        && !e.call(MOBILE_OBJECT_IS_IN_DIALOGUE, &args![this]).bool()
+        && !e.vcall(acquire, PROCESS_SLOT_30C, &args![]).bool()
+    {
+        if stunned {
+            s.flag_64 = true;
+        } else {
+            let limit = e
+                .call(SETTING_GET_VALUE_POINTER, &args![SETTING_STAGGER_RATIO])
+                .u32();
+            let limit = e.mem.f32(limit);
+            if (limit as f64) < ratio as f64 {
+                s.flag_64 = true;
+            } else {
+                let chance = e
+                    .call(SETTING_GET_VALUE_POINTER, &args![SETTING_STAGGER_CHANCE])
+                    .u32();
+                let chance = e.mem.f32(chance);
+                if e.call(CHANCE_ROLL, &args![chance]).bool() {
+                    s.flag_64 = true;
+                }
+            }
+        }
+    }
+    if stunned && !e.vcall(this.addr(), ACTOR_SLOT_230, &args![]).bool() && aggressor != 0 {
+        if e.call(ACTOR_STAGGER_TEST_9A6AE0, &args![this, aggressor, 0u32])
+            .bool()
+        {
+            s.flag_63 = true;
+        }
+        if e.call(DEBUG_MESSAGES_ENABLED, &args![]).bool() {
+            let aggressor_name = e.call(REFR_GET_NAME, &args![aggressor]).u32();
+            let this_name = e.call(REFR_GET_NAME, &args![this]).u32();
+            e.call(
+                PRINT_DEBUG_LINE,
+                &args![STUN_DEBUG_FORMAT, this_name, aggressor_name, s.total as f64],
+            );
+        }
+    }
+}
+
+/// The controller rumble of the hit (`Controls::Rumble`): the time is the
+/// setting `time_setting` (times `scale`, or times 1000.0 without one) and
+/// both pulse strengths are the setting `pulse_setting`.
+fn hit_me_rumble(e: &mut Engine, time_setting: u32, pulse_setting: u32, scale: Option<f64>) {
+    let holder = e.global::<u32>(CONTROLS_HOLDER);
+    let controls = e.call(OBJECT_011DEA0C_GET, &args![holder]).u32();
+    let time = setting_float(e, time_setting) as f64;
+    let milliseconds = match scale {
+        Some(multiplier) => time * multiplier,
+        None => time * e.global::<f64>(THOUSAND_DOUBLE),
+    };
+    let milliseconds = e.call(FTOL, &args![milliseconds]).u32();
+    let first = setting_float(e, pulse_setting);
+    let second = setting_float(e, pulse_setting);
+    e.call(
+        CONTROLS_RUMBLE,
+        &args![
+            controls,
+            second,
+            first,
+            milliseconds,
+            0u32,
+            0u32,
+            0u32,
+            0u32
+        ],
+    );
+}
+
+/// `0089c5be`..`0089d0af`: the reactions of the hit actor that need a 3D
+/// object in a loaded cell: the blocked hit, the knockback and ragdoll
+/// impulse, the damage hooks and the player's screen and controller feedback.
+fn hit_me_reactions(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    if e.vcall(this.addr(), ACTOR_SLOT_1D0, &args![]).u32() == 0
+        || e.call(REFR_PARENT_CELL, &args![this]).u32() == 0
+    {
+        return;
+    }
+    let cell = e.call(REFR_PARENT_CELL, &args![this]).u32();
+    if !e.call(CELL_TEST_450FF0, &args![cell]).bool() {
+        return;
+    }
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if (s.blocked as f64) > zero {
+        hit_me_blocked_reaction(e, s);
+    } else {
+        hit_me_unblocked_reaction(e, s);
+    }
+    if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32() != 0 {
+        let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+        let value = e.vcall(this.addr() + 0x94, 0x08, &args![]).u32();
+        if e.vcall(acquire, PROCESS_SLOT_5C8, &args![value, 8u32])
+            .bool()
+        {
+            e.call(PROCESS_LISTS_NOTIFY, &args![PROCESS_LISTS, this, 8u32]);
+        }
+    }
+}
+
+/// `0089c614`..`0089c7b7`: the hit was (partly) blocked: the block idle for
+/// the actor and the player's feedback.
+fn hit_me_blocked_reaction(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let source = s.source(e);
+    let aggressor = s.aggressor(e);
+    let flag = if source != 0 {
+        false
+    } else {
+        e.call(ACTOR_PREDICATE_47C850, &args![this]).bool()
+    };
+    fn_00894d90(e, this, u32::from(flag));
+    if !flag {
+        let result = e.call(ACTOR_FN_8D0370, &args![this, aggressor]).bool();
+        if source == 0 || result {
+            fn_00894e90(e, Ptr::new(aggressor));
+        }
+    }
+    if this.addr() == s.player {
+        if e.call(ENTRY_FORM, &args![VATS_SINGLETON]).u32() == 0 {
+            let strength = setting_float(e, SETTING_BLOCK_SCREEN_EFFECT);
+            let modifier = e.call(IMAGE_SPACE_GET_HIT, &args![]).u32();
+            e.call(IMAGE_SPACE_TRIGGER, &args![modifier, strength, 0u32]);
+        }
+        if !e.call(INTERFACE_IS_IN_MENU_MODE, &args![]).bool() {
+            hit_me_rumble(
+                e,
+                SETTING_BLOCKED_RUMBLE_TIME,
+                SETTING_BLOCKED_RUMBLE_PULSE,
+                None,
+            );
+        }
+    } else if aggressor == s.player
+        && source == 0
+        && !e.call(INTERFACE_IS_IN_MENU_MODE, &args![]).bool()
+    {
+        hit_me_rumble(
+            e,
+            SETTING_BLOCK_RUMBLE_TIME_OUT,
+            SETTING_BLOCK_RUMBLE_PULSE_OUT,
+            None,
+        );
+    }
+}
+
+/// `0089c7b7`..`0089d0af`: the hit was not blocked.
+fn hit_me_unblocked_reaction(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    let aggressor = s.aggressor(e);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if !s.flag_63 && aggressor != 0 {
+        if e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32() != 0 {
+            let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![aggressor]).u32();
+            let weapon_buffer = s.local(-0x3fc);
+            let position = e
+                .call(
+                    ACTOR_GET_WEAPON_POSITION,
+                    &args![aggressor, weapon_buffer, 0u32],
+                )
+                .u32();
+            let last = e
+                .vcall(acquire, PROCESS_SLOT_WEAPON_LAST_POS, &args![])
+                .u32();
+            e.vcall(
+                this.addr(),
+                ACTOR_SLOT_HIT_ME_OV2,
+                &args![aggressor, s.health, s.blocked, last, position],
+            );
+        }
+        let positive = e.call(ACTOR_GETTER_87F9C0, &args![this]).f64() > zero;
+        let base = if positive {
+            e.call(ACTOR_BASE_FORM_FN, &args![this]).u32()
+        } else {
+            0
+        };
+        if positive
+            && !fn_0089d5e0(e, Ptr::new(base + 0x30))
+            && !(s.source(e) != 0 && e.vcall(s.source(e), REFERENCE_SLOT_224, &args![]).bool())
+        {
+            let owner = this.addr() + 0xa4;
+            let amount = e.call(FTOL, &args![s.total as f64]).u32();
+            let mut speed = e.call(GET_KNOCKBACK_SPEED, &args![owner, amount]).f32();
+            let aggressor_position = e.vcall(aggressor, ACTOR_SLOT_POSITION, &args![]).u32();
+            let this_position = e.vcall(this.addr(), ACTOR_SLOT_POSITION, &args![]).u32();
+            let difference = s.local(-0x410);
+            let scaled = s.local(-0x428);
+            let result_words = s.local(-0x41c);
+            e.call(
+                VECTOR_SUBTRACT,
+                &args![this_position, difference, aggressor_position],
+            );
+            e.call(LIST_ITEM_SLOT, &args![result_words]);
+            let cap = setting_float(e, SETTING_KNOCKBACK_CAP);
+            if (cap as f64) < speed as f64 {
+                speed = cap;
+            }
+            e.call(VECTOR_NORMALIZE, &args![difference]);
+            let scaled_vector = e
+                .call(VECTOR_SCALE, &args![difference, scaled, speed])
+                .u32();
+            let words = read_words3(e, scaled_vector);
+            for (i, word) in words.iter().enumerate() {
+                e.mem.set_u32(result_words + 4 * i as u32, *word);
+            }
+            let controller = e
+                .call(MOBILE_OBJECT_GET_CHAR_CONTROLLER, &args![this])
+                .u32();
+            if controller != 0 {
+                let modifier = setting_float(e, SETTING_VELOCITY_MODIFIER);
+                e.call(
+                    CHARACTER_SET_VELOCITY_MODIFIER,
+                    &args![controller, result_words, modifier],
+                );
+            }
+        }
+    }
+    e.call(ACTOR_FN_88E1E0, &args![this, hit]);
+    // Whether the actor's process has a ragdoll body to push.
+    let mut ragdoll_ready = false;
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if acquire != 0 && e.call(ACQUIRE_OBJECT_FIELD_28, &args![acquire]).u32() == 0 {
+        let kind = fn_0089d620(e, Ptr::new(acquire));
+        if kind != 0 && e.call(PACKAGE_FN_5F36F0, &args![kind]).i32() <= 1 {
+            ragdoll_ready = true;
+        }
+    }
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        hit_me_ragdoll_impulse(e, s, ragdoll_ready);
+    }
+    if !e.call(PICK_UP_GOES_TO_TASK_QUEUE, &args![]).bool() {
+        e.call(ACTOR_FN_88E8D0, &args![this, s.health, hit]);
+        if aggressor != 0 {
+            e.call(ACTOR_FN_88FB00, &args![aggressor, s.health, hit, this]);
+        }
+    } else {
+        let queue = e.call(TASK_QUEUE_INTERFACE, &args![]).u32();
+        e.call(QUEUE_ACTOR_HIT_FEEDBACK, &args![queue, this, hit]);
+    }
+    hit_me_player_feedback(e, s);
+}
+
+/// `0089ca53`..`0089ce0a`: pushes the ragdoll body the hit location names with
+/// an impulse along the hit direction.
+fn hit_me_ragdoll_impulse(e: &mut Engine, s: &mut HitMe, ready: bool) {
+    let this = s.this;
+    let hit = s.hit;
+    if !ready || e.call(ACTOR_PROCESS_LEVEL_IS_3, &args![this]).bool() {
+        return;
+    }
+    let ragdoll = e.get(this, Actor::pRagdollController).addr();
+    if ragdoll == 0
+        || !e.call(RAGDOLL_TEST_552490, &args![ragdoll]).bool()
+        || fn_0089d670(e, Ptr::new(ragdoll)) == 0
+    {
+        return;
+    }
+    let acquire = e.call(GET_SAVED_ACQUIRE_OBJECT, &args![this]).u32();
+    if e.vcall(acquire, PROCESS_SLOT_4BC, &args![]).u32() != 0 {
+        return;
+    }
+    e.call(RAGDOLL_SET_FEEDBACK_ACTIVE, &args![ragdoll, 1u32]);
+    if fn_0089d690(e, Ptr::new(ragdoll)) == 0 {
+        return;
+    }
+    let mut body = 0u32;
+    let transform = s.local(-0x500);
+    let location = s.local(-0x510);
+    let direction = s.local(-0x520);
+    let cross = s.local(-0x530);
+    let flags_holder = s.local(-0x538);
+    let strength = s.local(-0x570);
+    e.call(OBJECT_CONSTRUCT_4A3C20, &args![transform]);
+    e.call(LIST_ITEM_SLOT, &args![location]);
+    e.call(VECTOR_ASSIGN, &args![location, hit.addr() + 0x38]);
+    e.call(LIST_ITEM_SLOT, &args![direction]);
+    e.call(VECTOR_COPY_553FC0, &args![direction, hit.addr() + 0x44]);
+    e.call(LIST_ITEM_SLOT, &args![cross]);
+    e.call(VECTOR_CROSS_458880, &args![cross, direction, location]);
+    let pick = e.call(RAGDOLL_PICK_C76320, &args![ragdoll]).u32();
+    if s.kind_one {
+        body = e.call(RAGDOLL_BODY_C762F0, &args![ragdoll]).u32();
+    } else {
+        e.call(OBJECT_FN_8C71B0, &args![flags_holder, 0u32]);
+        e.call(OBJECT_FN_59CE80, &args![flags_holder, 0u32]);
+        e.call(OBJECT_FN_4A39F0, &args![flags_holder, 8u32]);
+        let flags = e.mem.u32(flags_holder);
+        e.call(OBJECT_FN_4A3F70, &args![transform, flags]);
+        e.call(VECTOR_FN_458A10, &args![location, location, direction]);
+        e.call(OBJECT_FN_56D340, &args![transform, location]);
+        e.call(OBJECT_FN_4A3F40, &args![transform, cross]);
+        if pick != 0 && e.vcall(pick, PICK_SLOT_C8, &args![transform]).bool() {
+            body = e.call(PICK_DATA_GET_RIGID_BODY, &args![transform]).u32();
+        }
+    }
+    if body == 0 {
+        return;
+    }
+    let reference = e.call(RIGID_BODY_REFERENCE_4B5A20, &args![body]).u32();
+    let form = if reference != 0 {
+        e.call(ENTRY_FORM, &args![reference]).u32()
+    } else {
+        0
+    };
+    let found = if form != 0 {
+        e.call(FIND_REFERENCE_FOR_3D, &args![form]).u32()
+    } else {
+        0
+    };
+    if found != 0 && e.vcall(found, REFERENCE_SLOT_224, &args![]).bool() {
+        return;
+    }
+    e.call(OBJECT_CONSTRUCT_62AEA0, &args![direction]);
+    let mut impulse = fn_0089d6b0(e, Ptr::new(ragdoll));
+    let weapon = s.weapon(e);
+    if s.kind_one || (weapon != 0 && e.call(WEAPON_FORM_TEST_6450C0, &args![weapon]).bool()) {
+        impulse = fn_0089d6d0(e, Ptr::new(ragdoll));
+    }
+    e.call(OBJECT_FN_5DBF20, &args![strength, impulse as f32]);
+    e.call(OBJECT_FN_627920, &args![direction, strength]);
+    let handle = e.call(PICK_HANDLE_541C80, &args![pick]).u32();
+    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+    e.call(RIGID_BODY_APPLY_LINEAR_IMPULSE, &args![body, direction]);
+    let handle = e.call(PICK_HANDLE_541C80, &args![pick]).u32();
+    e.call(SOUND_HANDLE_DESTROY, &args![handle]);
+}
+
+/// `0089ce60`..`0089d0af`: the player's controller rumble and screen effect
+/// for a hit that is not blocked.
+fn hit_me_player_feedback(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let aggressor = s.aggressor(e);
+    let source = s.source(e);
+    if this.addr() == s.player {
+        if aggressor != 0 && e.call(ENTRY_FORM, &args![VATS_SINGLETON]).u32() == 0 {
+            let node = e.vcall(aggressor, ACTOR_SLOT_1D0, &args![]).u32();
+            let strength = setting_float(e, SETTING_BLOCK_SCREEN_EFFECT);
+            let modifier = e.call(IMAGE_SPACE_GET_HIT, &args![]).u32();
+            e.call(IMAGE_SPACE_TRIGGER, &args![modifier, strength, node]);
+        }
+        if !e.call(INTERFACE_IS_IN_MENU_MODE, &args![]).bool()
+            && !e.call(VATS_TEST_525430, &args![VATS_SINGLETON]).bool()
+        {
+            hit_me_rumble(e, SETTING_HIT_RUMBLE_TIME, SETTING_HIT_RUMBLE_PULSE, None);
+        }
+    } else if aggressor == s.player
+        && source == 0
+        && !e.call(INTERFACE_IS_IN_MENU_MODE, &args![]).bool()
+    {
+        if !e.call(VATS_TEST_525430, &args![VATS_SINGLETON]).bool() {
+            hit_me_rumble(
+                e,
+                SETTING_HIT_OUT_RUMBLE_TIME,
+                SETTING_HIT_OUT_RUMBLE_PULSE,
+                None,
+            );
+        } else if e.call(VATS_TEST_7A9280, &args![VATS_SINGLETON]).bool() {
+            let scale =
+                e.call(VATS_SCALE_716440, &args![]).f64() * e.global::<f64>(THOUSAND_DOUBLE);
+            hit_me_rumble(
+                e,
+                SETTING_HIT_OUT_RUMBLE_TIME,
+                SETTING_HIT_OUT_RUMBLE_PULSE,
+                Some(scale),
+            );
+            e.call(VATS_FN_4410D0, &args![VATS_SINGLETON, 0u32]);
+        } else {
+            let scale =
+                e.call(VATS_SCALE_716440, &args![]).f64() * e.global::<f64>(THOUSAND_DOUBLE);
+            hit_me_rumble(
+                e,
+                SETTING_HIT_OUT_RUMBLE_TIME,
+                SETTING_HIT_OUT_RUMBLE_PULSE,
+                Some(scale),
+            );
+        }
+    }
+}
+
+/// `0089d110`..`0089d4f2`: the follower barks, the statistics for the
+/// crippled and moved actor, the armor damage and the notices to the combat
+/// controller and the combat dialogue manager.
+fn hit_me_finish(e: &mut Engine, s: &mut HitMe) {
+    let this = s.this;
+    let hit = s.hit;
+    let aggressor = s.aggressor(e);
+    let zero: f64 = e.global(ZERO_DOUBLE);
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool() {
+        if e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+            if s.moved {
+                e.call(TRIGGER_FOLLOWER_BARK, &args![this, 1u32]);
+            } else if s.crippled {
+                e.call(TRIGGER_FOLLOWER_BARK, &args![this, 2u32]);
+                e.call(TRIGGER_FOLLOWER_BARK, &args![this, 6u32]);
+            }
+        }
+        let mut base = e.call(REFR_BASE_FORM, &args![this]).u32();
+        if e.call(ACTOR_TEST_56AF40, &args![this]).bool() {
+            let extra = e.call(REFR_EXTRA_DATA_LIST, &args![this]).u32();
+            base = e.call(EXTRA_GET_BASE_FORM_421720, &args![extra]).u32();
+        }
+        if aggressor == s.player && !e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+            let weapon = s.weapon(e);
+            if s.crippled {
+                let limb = limb_word(e, hit);
+                e.call(
+                    STATISTICS_WORKER_5F5950,
+                    &args![
+                        3u32,
+                        1u32,
+                        base,
+                        weapon,
+                        limb,
+                        3u32,
+                        u32::from(s.weapon_type)
+                    ],
+                );
+            }
+            if s.moved {
+                let limb = limb_word(e, hit);
+                e.call(
+                    STATISTICS_WORKER_5F5950,
+                    &args![
+                        3u32,
+                        1u32,
+                        base,
+                        weapon,
+                        limb,
+                        2u32,
+                        u32::from(s.weapon_type)
+                    ],
+                );
+            }
+        }
+    } else if s.not_fleeing
+        && e.call(PROCESS_GET_FORCE_NEXT_UPDATE, &args![this]).bool()
+        && !e.call(ACTOR_GET_ESSENTIAL, &args![this]).bool()
+    {
+        e.call(TRIGGER_FOLLOWER_BARK, &args![this, 3u32]);
+    }
+    if !e.vcall(this.addr(), ACTOR_SLOT_22C, &args![0u32]).bool()
+        && e.get(hit, HitData::fArmorDamage) as f64 > zero
+        && e.vcall(this.addr(), ACTOR_SLOT_360, &args![]).bool()
+    {
+        let limb = e.get(hit, HitData::eDamageLimb);
+        let prefer_head = limb == 1 || limb == 2;
+        let item = actor_get_random_worn_armor(e, this, u8::from(prefer_head));
+        if item != 0 {
+            let damage = e.get(hit, HitData::fArmorDamage);
+            e.vcall(
+                this.addr(),
+                ACTOR_SLOT_DAMAGE_EQUIPMENT,
+                &args![item, damage, 0u32],
+            );
+            e.call(ENTRY_DELETE, &args![item, 1u32]);
+        }
+    }
+    let mut target = aggressor;
+    let source = s.source(e);
+    if target == 0 && source != 0 {
+        let owner = e.vcall(source, REFERENCE_SLOT_168, &args![]).u32();
+        if owner != 0 && e.call(REFERENCE_TEST_5CA4F0, &args![owner]).bool() {
+            target = e.call(ENTRY_FIRST_EXTRA_LIST, &args![owner]).u32();
+        }
+    }
+    let mut controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+    if target != 0 {
+        e.vcall(this.addr(), ACTOR_SLOT_HIT_NOTICE, &args![target, 0u32]);
+    }
+    if e.call(ACTOR_IS_TALKING, &args![this]).bool()
+        || e.call(MOBILE_OBJECT_IS_IN_DIALOGUE, &args![this]).bool()
+    {
+        s.flag_64 = false;
+    }
+    let now = e.call(IMPORT_GET_TICK_COUNT, &args![]).u32();
+    if e.global::<u32>(HIT_BARK_DEADLINE) > now {
+        s.flag_64 = false;
+    }
+    let now = e.call(IMPORT_GET_TICK_COUNT, &args![]).u32();
+    if e.global::<u32>(HIT_BARK_DEADLINE) < now {
+        let start = e.call(IMPORT_GET_TICK_COUNT, &args![]).u32();
+        let upper =
+            setting_float(e, SETTING_BARK_DELAY_UPPER) as f64 * e.global::<f64>(THOUSAND_DOUBLE);
+        let upper = e.call(FTOL, &args![upper]).u32();
+        let lower =
+            setting_float(e, SETTING_BARK_DELAY_LOWER) as f64 * e.global::<f64>(THOUSAND_DOUBLE);
+        let lower = e.call(FTOL, &args![lower]).u32();
+        let delay = e.call(RANDOM_RANGE_944460, &args![lower, upper]).u32();
+        e.set_global(HIT_BARK_DEADLINE, start.wrapping_add(delay));
+    }
+    if controller == 0 {
+        controller = e.vcall(this.addr(), ACTOR_SLOT_428, &args![]).u32();
+        if controller != 0 {
+            e.call(
+                CONTROLLER_RECORD_DAMAGE,
+                &args![controller, target, s.health],
+            );
+        }
+    }
+    if s.flag_64 {
+        let manager = e.global::<u32>(COMBAT_DIALOGUE_MANAGER);
+        e.call(
+            COMBAT_DIALOGUE_START_DIALOGUE,
+            &args![manager, this, aggressor, 2u32, 2u32, 1u32, controller],
+        );
+    }
+    e.call(ACTOR_HIT_BRACKET_8A5300, &args![this]);
+}
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -8868,6 +13841,85 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             actor_combat_hit(Ptr<Actor>, Ptr<Actor>, u8, Ptr, u8)
         ),
         entry!(0x0089d900, actor_kill(Ptr<Actor>, Ptr<Actor>, f32)),
+        entry!(0x008a06c0, actor_stop_combat(Ptr<Actor>, Ptr<Actor>)),
+        entry!(0x008a08c0, fn_008a08c0(Ptr) -> u8),
+        entry!(0x008a08e0, actor_clear_in_combat(Ptr<Actor>, u8)),
+        entry!(
+            0x008a0960,
+            actor_restore_full_health_and_conditions(Ptr<Actor>)
+        ),
+        entry!(0x008a0a90, fn_008a0a90(u32)),
+        entry!(0x008a0ad0, fn_008a0ad0(u32)),
+        entry!(0x008a0b10, actor_get_current_speed(Ptr<Actor>) -> f32),
+        entry!(0x008a0c20, fn_008a0c20(Ptr<Actor>) -> f32),
+        entry!(0x008a0c60, fn_008a0c60(Ptr<Actor>) -> f32),
+        entry!(0x008a0cd0, fn_008a0cd0(u32)),
+        entry!(
+            0x008a0d10,
+            actor_get_detection_level_against_actor(
+                Ptr<Actor>,
+                u8,
+                Ptr<Actor>,
+                Ptr,
+                u8,
+                u8,
+                u32,
+                Ptr,
+            ) -> i32
+        ),
+        entry!(0x008a16b0, fn_008a16b0(Ptr<Actor>) -> u32),
+        entry!(0x008a16d0, actor_is_weapon_drawn(Ptr<Actor>) -> u8),
+        entry!(0x008a1710, actor_get_current_weapon(Ptr<Actor>) -> u32),
+        entry!(0x008a1760, fn_008a1760(Ptr<Actor>) -> u32),
+        entry!(0x008a1800, actor_set_life_state(Ptr<Actor>, u32)),
+        entry!(0x008a1a40, fn_008a1a40(Ptr<Actor>, u32)),
+        entry!(0x008a1a70, actor_apply_critical_stage(Ptr<Actor>)),
+        entry!(
+            0x008a1bd0,
+            fn_008a1bd0(Ptr<Actor>, Ptr, Ptr, u32, u8, u8, u32, u8) -> u32
+        ),
+        entry!(0x008a2d20, fn_008a2d20() -> f32),
+        entry!(0x008a2d40, fn_008a2d40(Ptr<Actor>) -> u32),
+        entry!(0x008a2ed0, fn_008a2ed0(Ptr<Actor>) -> u32),
+        entry!(0x008a2fa0, fn_008a2fa0(Ptr<Actor>, Ptr) -> u32),
+        entry!(0x008a30f0, fn_008a30f0() -> u32),
+        entry!(0x008a3100, fn_008a3100(Ptr<Actor>, f32)),
+        entry!(0x008a3b30, fn_008a3b30(Ptr<Actor>) -> u8),
+        entry!(0x008a3b50, fn_008a3b50(Ptr) -> f32),
+        entry!(0x008a3b70, fn_008a3b70(Ptr, u32, u8)),
+        entry!(0x008a3bd0, fn_008a3bd0(Ptr) -> u8),
+        entry!(0x008a3bf0, fn_008a3bf0(Ptr, u8)),
+        entry!(0x008a3c10, fn_008a3c10() -> f32),
+        entry!(0x008a3c30, fn_008a3c30() -> f32),
+        entry!(0x008a3c50, fn_008a3c50(Ptr<Actor>)),
+        entry!(0x008a3ed0, fn_008a3ed0(Ptr<Actor>) -> u32),
+        entry!(0x008a40e0, fn_008a40e0(Ptr<Actor>, u32) -> u8),
+        entry!(0x008a46a0, fn_008a46a0(Ptr) -> u8),
+        entry!(0x008a46c0, fn_008a46c0(Ptr<Actor>, Ptr<Actor>) -> f32),
+        entry!(
+            0x008a4810,
+            actor_can_head_track(Ptr<Actor>, Ptr<Actor>, u8) -> u8
+        ),
+        entry!(
+            0x008a20d0,
+            fn_008a20d0(
+                Ptr<Actor>,
+                u32,
+                Ptr,
+                u32,
+                u32,
+                i32,
+                u32,
+                u32,
+                Ptr<Actor>,
+                u8,
+                u8,
+                u8,
+                u8,
+                u8,
+            ) -> f32
+        ),
+        entry!(0x0089a760, actor_hit_me(Ptr<Actor>, Ptr<HitData>, u8)),
     ]
 }
 
@@ -8950,7 +14002,34 @@ mod tests {
         0x0043d410, 0x00416870, 0x00a59c60, 0x00439180, 0x0062b8d0, 0x0062b930, 0x009931c0,
         0x00487f50, 0x008b01c0, 0x00565870, 0x00ca20e0, 0x00931ed0, 0x004a3a20, 0x00ca2ad0,
         0x00454af0, 0x0094ed40, 0x008b7c00, 0x0093e530, 0x00974a50, 0x009ab9a0, 0x0056af40,
-        0x00421720, 0x0059f3a0, 0x005f5950, 0x008d85e0, 0x00881130,
+        0x00421720, 0x0059f3a0, 0x005f5950, 0x008d85e0, 0x00881130, 0x004037d0, 0x00406d30,
+        0x00408820, 0x0040c0e0, 0x00430830, 0x00436aa0, 0x00450f90, 0x004534f0, 0x004538a0,
+        0x004538c0, 0x00457990, 0x0045bad0, 0x00460140, 0x0046ffb0, 0x00472380, 0x004938e0,
+        0x004ab230, 0x004ade00, 0x004b13c0, 0x004b15e0, 0x004bf220, 0x004c0bd0, 0x004c6a10,
+        0x004d1180, 0x004d1360, 0x004d52d0, 0x004d5850, 0x004d5930, 0x004d5a90, 0x004d5ad0,
+        0x00514450, 0x00519b00, 0x00537bd0, 0x00560d30, 0x00568680, 0x00573090, 0x00577250,
+        0x005790b0, 0x005790d0, 0x0057ace0, 0x0057ad20, 0x0057b520, 0x005ac750, 0x005ae3d0,
+        0x005b7470, 0x005be5c0, 0x005c90d0, 0x005f36f0, 0x0061b320, 0x0061f150, 0x0061f170,
+        0x00639b40, 0x0063c8a0, 0x00642e80, 0x00642ed0, 0x0066ef50, 0x00672dd0, 0x0067a690,
+        0x0067f390, 0x00680050, 0x00680080, 0x00705210, 0x00717e50, 0x0083c7b0, 0x0083c820,
+        0x0087b810, 0x00880910, 0x008845a0, 0x008853a0, 0x00885520, 0x00885d90, 0x00885ed0,
+        0x00886010, 0x00887d00, 0x00888a50, 0x0088b740, 0x0088b880, 0x0088c570, 0x00891be0,
+        0x008b0190, 0x008b3ab0, 0x008b3bb0, 0x008bb520, 0x008c1bc0, 0x008d0430, 0x008d8270,
+        0x008fe8f0, 0x00905f30, 0x00933150, 0x00935cc0, 0x00935f00, 0x00936a20, 0x00936ac0,
+        0x0093a660, 0x00953c50, 0x00968670, 0x0096a2d0, 0x0097f4d0, 0x0097fd60, 0x009dcb30,
+        0x009f4300, 0x00a5c570, 0x00ad8570, 0x00ad8870, 0x00ad89b0, 0x00ad8b30, 0x00ad8be0,
+        0x00ad8e60, 0x00ad9030, 0x00ad9060, 0x00adbfd0, 0x00adc050, 0x00c75580, 0x00c757b0,
+        0x00c803a0, 0x00c80ce0, 0x00406d00, 0x004410d0, 0x00458880, 0x00458a10, 0x00476c70,
+        0x004839c0, 0x00497f20, 0x00498d30, 0x004a39f0, 0x004a3c20, 0x004a3c90, 0x004a3f40,
+        0x004a3f70, 0x004b5a20, 0x0051f510, 0x00525430, 0x005299a0, 0x00541c80, 0x00552490,
+        0x00553fc0, 0x0056d340, 0x0056f930, 0x0059ce80, 0x005ac340, 0x005ca4f0, 0x005d2860,
+        0x005dbf20, 0x005e50f0, 0x005e5190, 0x005f65d0, 0x005ff160, 0x00600950, 0x00627920,
+        0x0062aea0, 0x00646580, 0x00646cb0, 0x00647ac0, 0x00647b70, 0x0066e950, 0x007038b0,
+        0x00716440, 0x007a9280, 0x00815d00, 0x008182d0, 0x00824110, 0x0087ada0, 0x0087ae10,
+        0x0088d640, 0x0088e1e0, 0x0088e8d0, 0x0088fb00, 0x008a51f0, 0x008a5230, 0x008a52c0,
+        0x008a5300, 0x008ae000, 0x008b43a0, 0x008c71b0, 0x008d0300, 0x008d0370, 0x00974e90,
+        0x009a6ae0, 0x009ac9c0, 0x009b1720, 0x00a255b0, 0x00c66fd0, 0x00c6d4d0, 0x00c762f0,
+        0x00c76320, 0x00c7b6a0, 0x00fdf060,
     ];
 
     fn ret(eax: u32) -> Ret {
@@ -14247,5 +19326,2557 @@ mod tests {
             vec![vec![victim.addr(), 1, 1]]
         );
         assert_eq!(call_count(&e, PLAYER_SET_SLOW_MO_CAMERA), 0);
+    }
+
+    /// Makes the setting getter (`00403e20`) return a pointer to a `float`
+    /// for each `(setting, value)` pair (any other setting reads 0.0).
+    fn stub_float_settings(e: &mut Engine, settings: &[(u32, f32)]) {
+        let zero = e.mem.alloc(8);
+        let mut table = vec![];
+        for (setting, value) in settings {
+            let cell = e.mem.alloc(8);
+            e.mem.set_f32(cell, *value);
+            table.push((*setting, cell));
+        }
+        stub_with(e, SETTING_GET_VALUE_POINTER, move |_, a| {
+            let cell = table
+                .iter()
+                .find(|(setting, _)| *setting == a[0])
+                .map(|(_, cell)| *cell)
+                .unwrap_or(zero);
+            ret(cell)
+        });
+    }
+
+    /// Makes the integer setting getter (`0043d4d0`) return a pointer to an
+    /// integer for each `(setting, value)` pair (any other setting reads 0).
+    fn stub_int_settings(e: &mut Engine, settings: &[(u32, i32)]) {
+        let zero = e.mem.alloc(8);
+        let mut table = vec![];
+        for (setting, value) in settings {
+            let cell = e.mem.alloc(8);
+            e.mem.set_u32(cell, *value as u32);
+            table.push((*setting, cell));
+        }
+        stub_with(e, SETTING_GET_INT_POINTER, move |_, a| {
+            let cell = table
+                .iter()
+                .find(|(setting, _)| *setting == a[0])
+                .map(|(_, cell)| *cell)
+                .unwrap_or(zero);
+            ret(cell)
+        });
+    }
+
+    /// Makes the byte setting getter (`00408d60`) return a pointer to a byte
+    /// for each `(setting, value)` pair (any other setting reads 0).
+    fn stub_bool_settings(e: &mut Engine, settings: &[(u32, u8)]) {
+        let zero = e.mem.alloc(8);
+        let mut table = vec![];
+        for (setting, value) in settings {
+            let cell = e.mem.alloc(8);
+            e.mem.set_u8(cell, *value);
+            table.push((*setting, cell));
+        }
+        stub_with(e, SETTING_GET_BOOL_POINTER, move |_, a| {
+            let cell = table
+                .iter()
+                .find(|(setting, _)| *setting == a[0])
+                .map(|(_, cell)| *cell)
+                .unwrap_or(zero);
+            ret(cell)
+        });
+    }
+
+    /// An acquire object with the given slots that `GetSavedAcquireObject`
+    /// returns for every actor.
+    fn shared_acquire(e: &mut Engine, slots: &[(u32, Ret)]) -> Ptr {
+        let acquire = object(e, 0x800, slots);
+        stub(e, GET_SAVED_ACQUIRE_OBJECT, acquire.addr());
+        acquire
+    }
+
+    #[test]
+    fn actor_stop_combat_ends_the_combat_with_a_controller() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        e.mem.set_u8(player.addr() + 0x7c4, 1);
+        let acquire = shared_acquire(
+            &mut e,
+            &[
+                (ACQUIRE_OBJECT_SLOT_128, ret(player.addr())),
+                (ACQUIRE_OBJECT_SLOT_5C4, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_1C8, ret(0)),
+                (PROCESS_SLOT_64C, ret(0)),
+                (PROCESS_SLOT_614, ret(0)),
+            ],
+        );
+        let process = object(
+            &mut e,
+            0x800,
+            &[(PROCESS_SLOT_22C, ret(0x9300)), (PROCESS_SLOT_620, ret(0))],
+        );
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_304, ret(1)),
+                (ACTOR_SLOT_GET_ANIMATION, ret(0x77)),
+                (ACTOR_SLOT_474, ret(0)),
+                (ACTOR_SLOT_428, ret(1)),
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_21C, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        stub(&mut e, COMBAT_CONTROLLER_STOP_COMBAT, 1);
+        stub(&mut e, DEBUG_MESSAGES_ENABLED, 1);
+        stub(&mut e, REFR_GET_NAME, 0x6000);
+        stub(&mut e, REFR_EXTRA_DATA_LIST, 0x5000);
+        actor_stop_combat(&mut e, actor, player.cast());
+        // The player's acquire object is released: the actor is the source.
+        assert_eq!(
+            calls_to(&e, slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_5C4)),
+            vec![vec![acquire.addr(), 0xffff_ffff]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAYER_REMOVE_ACTOR_FROM_COMBAT_LIST),
+            vec![vec![player.addr(), actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS),
+            vec![vec![player.addr(), actor.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, COMBAT_CONTROLLER_STOP_COMBAT),
+            vec![vec![0x9300, player.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, PRINT_DEBUG_LINE),
+            vec![vec![STOPS_COMBAT_FORMAT, 0x6000]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_END_INTERRUPT_PACKAGE),
+            vec![vec![actor.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, SCRIPT_SET_ACTION_FLAG),
+            vec![vec![actor.addr(), 0x5000, 0x40]]
+        );
+        assert_eq!(e.get(actor, Actor::eQueuedattack), 0xff);
+        assert!(!e.get(actor, Actor::bInCombat));
+        assert_eq!(
+            calls_to(&e, slot_target(&e, process, PROCESS_SLOT_620)),
+            vec![vec![process.addr(), 1]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_1C8)),
+            vec![vec![acquire.addr(), 0]]
+        );
+        assert_eq!(
+            call_count(&e, slot_target(&e, acquire, PROCESS_SLOT_64C)),
+            1
+        );
+    }
+
+    #[test]
+    fn actor_stop_combat_without_a_controller_clears_the_combat_state() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        shared_acquire(
+            &mut e,
+            &[
+                (PROCESS_SLOT_614, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_1C8, ret(0)),
+                (PROCESS_SLOT_64C, ret(0)),
+            ],
+        );
+        let other = actor_with(&mut e, &[], None);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_304, ret(0)),
+                (ACTOR_SLOT_GET_ANIMATION, ret(0x77)),
+                (ACTOR_SLOT_474, ret(0)),
+                (ACTOR_SLOT_428, ret(0)),
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_21C, ret(0)),
+            ],
+            None,
+        );
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 0);
+        actor_stop_combat(&mut e, actor, other);
+        // Another actor than the player or nobody: the combat list and the
+        // hostile status are left alone.
+        assert_eq!(call_count(&e, PLAYER_REMOVE_ACTOR_FROM_COMBAT_LIST), 0);
+        assert_eq!(call_count(&e, PLAYER_CHANGE_PERCEIVED_HOSTILE_STATUS), 0);
+        assert_eq!(call_count(&e, COMBAT_CONTROLLER_STOP_COMBAT), 0);
+        assert!(!e.get(actor, Actor::bInCombat));
+    }
+
+    #[test]
+    fn fn_008a08c0_reads_the_byte_at_7c4() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x800);
+        e.mem.set_u8(block + 0x7c4, 9);
+        assert_eq!(fn_008a08c0(&mut e, Ptr::new(block)), 9);
+    }
+
+    #[test]
+    fn actor_clear_in_combat_restores_an_essential_actor() {
+        let mut e = engine();
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_360, ret(0)), (ACTOR_SLOT_21C, ret(0))],
+            None,
+        );
+        embedded_table(&mut e, actor.addr() + 0xa4, &[(0x14, float_ret(5.0))]);
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        double_global(&mut e, ONE_DOUBLE, 1.0);
+        e.map(RESTORE_AMOUNT, 4);
+        e.set_global(RESTORE_AMOUNT, 1000.0f32);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
+        // Not asked to restore: only the flag is cleared.
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        actor_clear_in_combat(&mut e, actor, 0);
+        assert!(!e.get(actor, Actor::bInCombat));
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 0);
+        // Was in combat, essential, asked to restore: seven values restored
+        // (the two health values are positive, so only the 1000.0 ones).
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        actor_clear_in_combat(&mut e, actor, 1);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 7);
+        // Not in combat before: nothing more.
+        actor_clear_in_combat(&mut e, actor, 1);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 7);
+        // A non-essential actor is not restored.
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 0);
+        e.mem.set_u8(actor.addr() + 0x104, 1);
+        actor_clear_in_combat(&mut e, actor, 1);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 7);
+    }
+
+    #[test]
+    fn actor_restore_full_health_lifts_negative_values_to_one() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        embedded_table(&mut e, actor.addr() + 0xa4, &[(0x14, float_ret(-3.0))]);
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        double_global(&mut e, ONE_DOUBLE, 1.0);
+        e.map(RESTORE_AMOUNT, 4);
+        e.set_global(RESTORE_AMOUNT, 1000.0f32);
+        actor_restore_full_health_and_conditions(&mut e, actor);
+        let calls = calls_to(&e, ACTOR_RESTORE_ACTOR_VALUE);
+        let a = actor.addr();
+        let four = 4.0f32.to_bits();
+        let thousand = 1000.0f32.to_bits();
+        assert_eq!(
+            calls,
+            vec![
+                vec![a, 0x10, four],
+                vec![a, 0x16, four],
+                vec![a, 0x1f, thousand],
+                vec![a, 0x1d, thousand],
+                vec![a, 0x1e, thousand],
+                vec![a, 0x1b, thousand],
+                vec![a, 0x1c, thousand],
+                vec![a, 0x1a, thousand],
+                vec![a, 0x19, thousand],
+            ]
+        );
+        // Positive values are left alone.
+        let other = actor_with(&mut e, &[], None);
+        embedded_table(&mut e, other.addr() + 0xa4, &[(0x14, float_ret(2.0))]);
+        e.call_log = Some(vec![]);
+        actor_restore_full_health_and_conditions(&mut e, other);
+        assert_eq!(call_count(&e, ACTOR_RESTORE_ACTOR_VALUE), 7);
+    }
+
+    #[test]
+    fn value_table_callbacks_call_the_actor_slots() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[(0x43c, ret(0)), (0x440, ret(0))], None);
+        let owner = actor.addr() + 0xa4;
+        fn_008a0a90(&mut e, owner);
+        fn_008a0ad0(&mut e, owner);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, actor.cast(), 0x43c)),
+            vec![vec![actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(&e, actor.cast(), 0x440)),
+            vec![vec![actor.addr()]]
+        );
+    }
+
+    #[test]
+    fn actor_get_current_speed_follows_the_animation_flags_or_the_combat_state() {
+        let mut e = engine();
+        stub_float(&mut e, ACTOR_GET_RUN_SPEED, 5.0);
+        stub_float(&mut e, ACTOR_GET_WALK_SPEED, 2.0);
+        stub_float(&mut e, ACTOR_SPEED_885ED0, 7.0);
+        stub_float(&mut e, ACTOR_SPEED_885D90, 8.0);
+        stub_float(&mut e, ACTOR_SPEED_886010, 9.0);
+        // No process: run in combat unless heavy armor is worn.
+        let actor = actor_with(&mut e, &[], None);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        stub(&mut e, IS_HEAVY_BODY_ARMOR_WORN, 0);
+        assert_eq!(actor_get_current_speed(&mut e, actor), 5.0);
+        stub(&mut e, IS_HEAVY_BODY_ARMOR_WORN, 1);
+        assert_eq!(actor_get_current_speed(&mut e, actor), 2.0);
+        stub(&mut e, IS_HEAVY_BODY_ARMOR_WORN, 0);
+        stub(&mut e, ACTOR_IN_COMBAT, 0);
+        assert_eq!(actor_get_current_speed(&mut e, actor), 2.0);
+        // With a process whose level test is 0 the animation flags decide.
+        let process = e.mem.alloc(0x10);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 0);
+        for (flags, speed) in [
+            (0x000, 2.0),
+            (0x200, 5.0),
+            (0x800, 8.0),
+            (0xa00, 7.0),
+            (0x2000, 9.0),
+            (0x2200, 9.0),
+        ] {
+            stub(&mut e, ACTOR_ANIM_FLAGS, flags);
+            assert_eq!(actor_get_current_speed(&mut e, actor), speed, "{flags:#x}");
+        }
+        // A process whose level test is not 0 falls back to the combat rule.
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 1);
+        assert_eq!(actor_get_current_speed(&mut e, actor), 2.0);
+    }
+
+    #[test]
+    fn fn_008a0c20_passes_the_value_through_entry_point_0x16() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        embedded_table(&mut e, actor.addr() + 0xa4, &[(0x0c, float_ret(7.0))]);
+        stub_with(&mut e, HANDLE_ENTRY_POINT, |e, a| {
+            let value = e.mem.f32(a[2]);
+            e.mem.set_f32(a[2], value * 2.0);
+            ret(0)
+        });
+        assert_eq!(fn_008a0c20(&mut e, actor), 14.0);
+        let calls = calls_to(&e, HANDLE_ENTRY_POINT);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0][..2], [0x16, actor.addr()]);
+    }
+
+    #[test]
+    fn fn_008a0c60_computes_a_missing_value_once() {
+        let mut e = engine();
+        double_global(&mut e, MINUS_ONE_DOUBLE, -1.0);
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_30C, ret(0)), (ACTOR_SLOT_310, ret(0))],
+            None,
+        );
+        let getter = slot_target(&e, actor.cast(), ACTOR_SLOT_310);
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = reads.clone();
+        e.register_double(getter, move |_, _| {
+            counter.set(counter.get() + 1);
+            // The first read is "not computed yet", the later ones are 6.0.
+            float_ret(if counter.get() == 1 { -1.0 } else { 6.0 })
+        });
+        stub(&mut e, GET_INVENTORY_CHANGES, 0x1234);
+        stub_float(&mut e, CHANGES_VALUE_4D1180, 3.0);
+        assert_eq!(fn_008a0c60(&mut e, actor), 6.0);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, actor.cast(), ACTOR_SLOT_30C)),
+            vec![vec![actor.addr(), 3.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, CHANGES_VALUE_4D1180),
+            vec![vec![0x1234, actor.addr()]]
+        );
+        // A value that is already there is returned as it is.
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_008a0c60(&mut e, actor), 6.0);
+        assert_eq!(call_count(&e, CHANGES_VALUE_4D1180), 0);
+    }
+
+    #[test]
+    fn fn_008a0cd0_hands_the_players_byte_to_the_actor() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        stub(&mut e, PLAYER_FLAG_4D1360, 1);
+        fn_008a0cd0(&mut e, 0x5000 + 0xa4);
+        assert_eq!(calls_to(&e, PLAYER_FLAG_4D1360), vec![vec![player.addr()]]);
+        assert_eq!(calls_to(&e, ACTOR_SET_FLAG_577250), vec![vec![0x5000, 1]]);
+    }
+
+    /// Makes `_ftol2` truncate its `double` argument.
+    fn stub_ftol(e: &mut Engine) {
+        stub_with(e, FTOL, |_, a| {
+            ret(f64::from_bits(u64::from(a[0]) | u64::from(a[1]) << 32) as i32 as u32)
+        });
+    }
+
+    #[test]
+    fn detection_level_is_zero_without_an_acquire_object() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let actor = actor_with(&mut e, &[], None);
+        let other = actor_with(&mut e, &[], None);
+        let seen = e.mem.alloc(4);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            0,
+            other,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(0),
+        );
+        assert_eq!(level, 0);
+        // Nothing was asked of the entry points.
+        assert_eq!(call_count(&e, HANDLE_ENTRY_POINT), 0);
+    }
+
+    #[test]
+    fn detection_level_is_minus_100_beyond_the_maximum_distance() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        shared_acquire(&mut e, &[]);
+        double_global(&mut e, DETECTION_MAX_DISTANCE, 8192.0);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 9000.0);
+        let actor = actor_with(&mut e, &[], None);
+        let other = actor_with(&mut e, &[], None);
+        let seen = e.mem.alloc(4);
+        e.mem.set_u8(seen, 7);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            1,
+            other,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(0),
+        );
+        assert_eq!(level, -100);
+        // The seen byte was cleared first.
+        assert_eq!(e.mem.u8(seen), 0);
+        // Within range, a mover that is not in combat while the player is
+        // idle (the test of the other actor, the player's movement and
+        // combat) also gives -100.
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 100.0);
+        stub(&mut e, PROCESS_GET_FORCE_NEXT_UPDATE, 1);
+        stub(&mut e, ACTOR_IS_MOVING, 1);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            1,
+            other,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(0),
+        );
+        assert_eq!(level, -100);
+    }
+
+    #[test]
+    fn detection_level_reads_the_stored_record_without_the_line_of_sight() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        double_global(&mut e, DETECTION_MAX_DISTANCE, 8192.0);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 100.0);
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u32(record + 8, 33);
+        e.mem.set_u8(record + 0x1c, 3);
+        e.mem.set_u8(record + 0x1e, 1);
+        let acquire = shared_acquire(&mut e, &[(ACQUIRE_OBJECT_SLOT_504, ret(record))]);
+        let actor = actor_with(&mut e, &[], None);
+        let other = actor_with(&mut e, &[(ACTOR_SLOT_1D0, ret(1))], None);
+        let seen = e.mem.alloc(4);
+        let seen_line = e.mem.alloc(4);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            0,
+            other,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(seen_line),
+        );
+        assert_eq!(level, 33);
+        assert_eq!(e.mem.u8(seen), 1);
+        assert_eq!(e.mem.u8(seen_line), 3);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_504)),
+            vec![vec![acquire.addr(), other.addr(), 0]]
+        );
+        // Without a record the level is "unknown", which reads as -100.
+        e.set_global(PLAYER_CHARACTER, player.addr());
+        let slot = slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_504);
+        e.register_double(slot, |_, _| ret(0));
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            0,
+            other,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(seen_line),
+        );
+        assert_eq!(level, -100);
+        // An actor that cannot be detected (slot 0x1d0 is 0) also gives -100.
+        let blind = actor_with(&mut e, &[(ACTOR_SLOT_1D0, ret(0))], None);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            0,
+            blind,
+            Ptr::new(seen),
+            0,
+            0,
+            0,
+            Ptr::new(0),
+        );
+        assert_eq!(level, -100);
+    }
+
+    #[test]
+    fn detection_level_uses_the_formula_and_reports_it() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        // The detecting actor is the player, so the result is reported.
+        let actor = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_428, ret(0)), (ACTOR_SLOT_POSITION, ret(0))],
+            None,
+        );
+        set_player(&mut e, actor);
+        let position = e.mem.alloc(12);
+        let slot = slot_target(&e, actor.cast(), ACTOR_SLOT_POSITION);
+        e.register_double(slot, move |_, _| ret(position));
+        embedded_table(
+            &mut e,
+            actor.addr() + 0xa4,
+            &[
+                (0x0c, float_ret(0.0)),
+                (0x08, ret(0)),
+                (0x28, ret(0x1_2345)),
+            ],
+        );
+        let acquire = shared_acquire(
+            &mut e,
+            &[
+                (ACQUIRE_OBJECT_SLOT_504, ret(0)),
+                (PROCESS_SLOT_22C, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_734, float_ret(10.0)),
+                (ACQUIRE_OBJECT_SLOT_F0, ret(0)),
+            ],
+        );
+        let other = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_1D0, ret(1)), (ACTOR_SLOT_100, ret(1))],
+            None,
+        );
+        embedded_table(
+            &mut e,
+            other.addr() + 0xa4,
+            &[(0x0c, float_ret(0.0)), (0x08, ret(0)), (0x28, ret(7))],
+        );
+        double_global(&mut e, DETECTION_MAX_DISTANCE, 8192.0);
+        double_global(&mut e, DEGREES_TO_RADIANS, 0.017453292);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 100.0);
+        stub_float_settings(&mut e, &[(SETTING_VIEW_CONE_ANGLE, 90.0)]);
+        stub_with(&mut e, GET_CLAMPED_ACTOR_FLOAT_VALUE, |_, a| {
+            float_ret(if a[1] == ACTOR_VALUE_PERCEPTION {
+                40.0
+            } else {
+                25.0
+            })
+        });
+        stub_ftol(&mut e);
+        stub(&mut e, ACTOR_LINE_OF_SIGHT, 1);
+        stub(&mut e, ACTOR_IS_POINT_IN_VIEW_CONE, 1);
+        stub(&mut e, ACTOR_ARMOR_VALUE, 3);
+        stub(&mut e, HEIGHT_CLASS, 2);
+        stub(&mut e, DETECTION_FORMULA, 55);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        stub(&mut e, ACTOR_FLAG_4938E0, 1);
+        let seen = e.mem.alloc(4);
+        let seen_line = e.mem.alloc(4);
+        let level = actor_get_detection_level_against_actor(
+            &mut e,
+            actor,
+            1,
+            other,
+            Ptr::new(seen),
+            9,
+            0,
+            0,
+            Ptr::new(seen_line),
+        );
+        assert_eq!(level, 55);
+        assert_eq!(e.mem.u8(seen), 1);
+        assert_eq!(e.mem.u8(seen_line), 1);
+        let formula = calls_to(&e, DETECTION_FORMULA);
+        assert_eq!(formula.len(), 1);
+        let words = &formula[0];
+        assert_eq!(words.len(), 25);
+        // Perception, stealth, line of sight, seen, distance, sneak bonus.
+        assert_eq!(words[..6], [40, 25, 1, 1, 100.0f32.to_bits(), 10]);
+        // Armor value, the movement flag byte, combat byte, word 0x472380.
+        assert_eq!(words[8], 3);
+        assert_eq!(words[9], 1);
+        // The two detectors' words masked to 16 bits.
+        assert_eq!(words[22..24], [0x2345, 7]);
+        // The sight check was made with flag 1 against the other actor.
+        let sight = calls_to(&e, ACTOR_LINE_OF_SIGHT);
+        assert_eq!(sight.len(), 1);
+        assert_eq!(sight[0][..3], [actor.addr(), 1, other.addr()]);
+        // The result is reported to both acquire objects (level 3 as the
+        // result is positive).
+        let reports = calls_to(&e, slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_F0));
+        assert_eq!(
+            reports,
+            vec![
+                vec![acquire.addr(), other.addr(), 3, 1, 55, 0, 1, 9],
+                vec![acquire.addr(), actor.addr(), 3, 1, 55, 1, 1, 9],
+            ]
+        );
+    }
+
+    #[test]
+    fn small_actor_fields_and_process_tests() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        e.mem.set_u32(actor.addr() + 0x128, 0x1234);
+        assert_eq!(fn_008a16b0(&mut e, actor), 0x1234);
+        // fn_008a16d0 asks the process, and is 0 without one.
+        assert_eq!(actor_is_weapon_drawn(&mut e, actor), 0);
+        let process = object(
+            &mut e,
+            0x800,
+            &[
+                (PROCESS_SLOT_454, ret(1)),
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0x6000)),
+            ],
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        assert_eq!(actor_is_weapon_drawn(&mut e, actor), 1);
+        // The current weapon is the form of the entry the process reports.
+        stub(&mut e, ENTRY_FORM, 0x7000);
+        assert_eq!(actor_get_current_weapon(&mut e, actor), 0x7000);
+        assert_eq!(calls_to(&e, ENTRY_FORM), vec![vec![0x6000]]);
+        let none = slot_target(&e, process, PROCESS_SLOT_CURRENT_WEAPON);
+        e.register_double(none, |_, _| ret(0));
+        assert_eq!(actor_get_current_weapon(&mut e, actor), 0);
+    }
+
+    #[test]
+    fn fn_008a1760_numbers_the_actors_state() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_22C, ret(0))], None);
+        set_player(&mut e, player);
+        e.map(WEAPON_TYPE_TABLE, 0x40);
+        e.mem.set_u32(WEAPON_TYPE_TABLE + 12, 77);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_22C, ret(0))], None);
+        // The player always gives 0xc.
+        assert_eq!(fn_008a1760(&mut e, player), 0xc);
+        // No acquire object: 0.
+        assert_eq!(fn_008a1760(&mut e, actor), 0);
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(0))]);
+        e.set(actor, Actor::pCurrentProcess, process);
+        shared_acquire(&mut e, &[]);
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 1);
+        // Level 1 without a weapon: 1.
+        assert_eq!(fn_008a1760(&mut e, actor), 1);
+        // With a weapon of type 3 the table entry.
+        let weapon_slot = slot_target(&e, process, PROCESS_SLOT_CURRENT_WEAPON);
+        e.register_double(weapon_slot, |_, _| ret(0x6000));
+        stub(&mut e, ENTRY_FORM, 0x7000);
+        stub(&mut e, WEAPON_TYPE, 3);
+        assert_eq!(fn_008a1760(&mut e, actor), 77);
+        // A higher level gives 0.
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 2);
+        assert_eq!(fn_008a1760(&mut e, actor), 0);
+        // Fleeing gives 0.
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 0);
+        let fleeing = actor_with(&mut e, &[(ACTOR_SLOT_22C, ret(1))], None);
+        assert_eq!(fn_008a1760(&mut e, fleeing), 0);
+    }
+
+    #[test]
+    fn actor_set_life_state_turns_essential_deaths_into_state_6() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_48, ret(0))], None);
+        stub_bool_settings(&mut e, &[(SETTING_ESSENTIAL_PROTECTION, 1)]);
+        stub(&mut e, ACTOR_GET_ESSENTIAL, 1);
+        stub(&mut e, ACTOR_CAN_KNOCK_DOWN, 1);
+        actor_set_life_state(&mut e, actor, 2);
+        assert_eq!(e.get(actor, Actor::eLifeState), 6);
+        // Entering 6 from 0 stops the actor; the slot is told of the change.
+        assert_eq!(calls_to(&e, ACTOR_STOP_MOVING), vec![vec![actor.addr()]]);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, actor.cast(), ACTOR_SLOT_48)),
+            vec![vec![actor.addr(), 0x400]]
+        );
+        // An actor that cannot be knocked down goes to 0 instead.
+        stub(&mut e, ACTOR_CAN_KNOCK_DOWN, 0);
+        actor_set_life_state(&mut e, actor, 1);
+        assert_eq!(e.get(actor, Actor::eLifeState), 0);
+    }
+
+    #[test]
+    fn actor_set_life_state_death_silences_the_actor() {
+        let mut e = engine();
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_610, ret(3))]);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_48, ret(0))], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub_bool_settings(&mut e, &[]);
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 0);
+        stub(&mut e, REFR_EXTRA_DATA_LIST, 0x5000);
+        stub(&mut e, GET_CONTAINER_CHANGES, 0x5100);
+        stub(&mut e, ACTOR_SOUND_SOURCE, 0x5200);
+        stub(&mut e, AUDIO_GET_INSTANCE, 0x6100);
+        actor_set_life_state(&mut e, actor, 2);
+        assert_eq!(e.get(actor, Actor::eLifeState), 2);
+        assert_eq!(
+            calls_to(&e, CHANGES_FN_4534F0),
+            vec![vec![0x5100, actor.addr()]]
+        );
+        assert_eq!(call_count(&e, SOUND_HANDLE_STOP), 1);
+        assert_eq!(call_count(&e, SOUND_HANDLE_RELEASE), 1);
+        assert_eq!(
+            calls_to(&e, AUDIO_STOP_MOVING_SOUNDS),
+            vec![vec![0x6100, 0x5200, 0, 0]]
+        );
+        // Dead, with a process in state 3: faded in; the animations reset.
+        assert_eq!(
+            calls_to(&e, HIGH_PROCESS_FADE_IN),
+            vec![vec![process.addr(), actor.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_RESET_LOADED_ANIMATIONS),
+            vec![vec![actor.addr()]]
+        );
+        // The same state again changes nothing.
+        e.call_log = Some(vec![]);
+        actor_set_life_state(&mut e, actor, 2);
+        assert_eq!(call_count(&e, ACTOR_RESET_LOADED_ANIMATIONS), 0);
+    }
+
+    #[test]
+    fn fn_008a1a40_stores_the_stage_and_applies_it() {
+        let mut e = engine();
+        // No 3D body: applying does nothing more.
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_1D0, ret(0))], None);
+        fn_008a1a40(&mut e, actor, 4);
+        assert_eq!(e.get(actor, Actor::eCriticalStage), 4);
+        assert_eq!(call_count(&e, BHK_REPLACE_CONSTRAINTS), 0);
+    }
+
+    #[test]
+    fn actor_apply_critical_stage_acts_on_the_stage() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_360, ret(1))], None);
+        let killer = player;
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_1D0, ret(0x7000)),
+                (ACTOR_SLOT_22C, ret(1)),
+                (ACTOR_SLOT_1C0, ret(0)),
+                (ACTOR_SLOT_360, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pMyKiller, killer.cast());
+        // Stage 1: constraints replaced and velocity damped.
+        e.set(actor, Actor::eCriticalStage, 1);
+        actor_apply_critical_stage(&mut e, actor);
+        assert_eq!(calls_to(&e, BHK_REPLACE_CONSTRAINTS), vec![vec![0x7000, 8]]);
+        assert_eq!(
+            calls_to(&e, BHK_DAMP_BODIES_VELOCITY),
+            vec![vec![0x7000, 0.0f32.to_bits()]]
+        );
+        // Stage 2: out of the water, and the player's kill is counted.
+        e.set(actor, Actor::eCriticalStage, 2);
+        actor_apply_critical_stage(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, REFR_REMOVE_FROM_ALL_WATER),
+            vec![vec![actor.addr(), 0]]
+        );
+        assert_eq!(calls_to(&e, BODY_FN_450F90), vec![vec![0x7000, 1]]);
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT), vec![vec![0x1d]]);
+        // A stage of a living actor prints a line.
+        let living = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_1D0, ret(0x7000)),
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_130, ret(0x6500)),
+            ],
+            None,
+        );
+        e.set(living, Actor::eCriticalStage, 3);
+        stub(&mut e, REFR_FORM_ID, 0xabcd);
+        actor_apply_critical_stage(&mut e, living);
+        assert_eq!(
+            calls_to(&e, PRINT_ERROR_LINE),
+            vec![vec![CRITICAL_STAGE_NOT_DEAD_FORMAT, 3, 0x6500, 0xabcd]]
+        );
+        // With the task queue in use the stage is queued instead.
+        e.call_log = Some(vec![]);
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, TASK_QUEUE_INTERFACE, 0x7300);
+        actor_apply_critical_stage(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, QUEUE_ACTOR_APPLY_CRITICAL_STAGE),
+            vec![vec![0x7300, actor.addr()]]
+        );
+        assert_eq!(call_count(&e, BHK_REPLACE_CONSTRAINTS), 0);
+    }
+
+    #[test]
+    fn fn_008a1bd0_without_a_dialogue_item_only_copies_the_handle() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        let result = e.mem.alloc(12);
+        let topic = e.mem.alloc(4);
+        let returned = fn_008a1bd0(
+            &mut e,
+            actor,
+            Ptr::new(result),
+            Ptr::new(topic),
+            0x10,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(returned, result);
+        assert_eq!(
+            calls_to(&e, TOPIC_CREATE_DIALOGUE_ITEM),
+            vec![vec![topic, actor.addr(), 0x10, 0, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, MOBILE_OBJECT_STOP_CURRENT_DIALOGUE),
+            vec![vec![actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, REFR_SET_SAY_TO_TOPIC),
+            vec![vec![actor.addr(), topic]]
+        );
+        // The handle built on the stack is copied into the result and then
+        // destroyed.
+        let assigns = calls_to(&e, SOUND_HANDLE_ASSIGN);
+        assert_eq!(assigns.len(), 1);
+        assert_eq!(assigns[0][0], result);
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_DESTROY),
+            vec![vec![assigns[0][1]]]
+        );
+        assert_eq!(call_count(&e, DIALOGUE_ITEM_DESTROY), 0);
+    }
+
+    #[test]
+    fn fn_008a1bd0_plays_the_response_as_a_static_sound_and_shows_the_subtitle() {
+        let mut e = engine();
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_490, ret(0))]);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_POSITION, ret(position))], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        e.mem.set_u8(actor.addr() + 0x7f, 1);
+        let result = e.mem.alloc(12);
+        let topic = e.mem.alloc(4);
+        stub(&mut e, TOPIC_CREATE_DIALOGUE_ITEM, 0x5000);
+        stub(&mut e, REFR_FORM_ID, 0x4400);
+        stub(&mut e, DIALOGUE_ITEM_GET_CURRENT_RESPONSE, 0x5500);
+        stub(&mut e, REFR_BASE_FORM, 0);
+        stub(&mut e, RESPONSE_SOUND_HOLDER, 0x5600);
+        stub(&mut e, ENTRY_FIRST_EXTRA_LIST, 0x5700);
+        stub(&mut e, AUDIO_INSTANCE, 0x6100);
+        stub(&mut e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME, 0x6200);
+        stub(&mut e, LIST_ITEM_SLOT, 0x5800);
+        stub(&mut e, ACTOR_ALWAYS_SHOW_SUBTITLES, 1);
+        stub_float_settings(&mut e, &[(SETTING_STATIC_ATTENUATION, 2.0)]);
+        stub_bool_settings(&mut e, &[]);
+        stub_ftol(&mut e);
+        double_global(&mut e, HUNDRED, 100.0);
+        stub_with(&mut e, SOUND_HANDLE_ASSIGN, |e, a| {
+            for i in 0..3 {
+                e.mem.set_u32(a[0] + 4 * i, 0x11 * (i + 1));
+            }
+            ret(0)
+        });
+        let returned = fn_008a1bd0(
+            &mut e,
+            actor,
+            Ptr::new(result),
+            Ptr::new(topic),
+            0x10,
+            1,
+            0,
+            0,
+            1,
+        );
+        assert_eq!(returned, result);
+        // The info of the item gets the result run and the topic list.
+        assert_eq!(calls_to(&e, TOPIC_INFO_ADD_TOPIC_LIST), vec![vec![0x4400]]);
+        assert_eq!(
+            calls_to(&e, TOPIC_INFO_RUN_RESULT),
+            vec![vec![0x4400, 0, actor.addr()]]
+        );
+        // The file name goes through the 512-byte buffer, the sound is looked
+        // up with flags 0x105 (static) and its attenuation is set.
+        let lookups = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
+        assert_eq!(lookups.len(), 1);
+        assert_eq!(lookups[0][0], 0x6100);
+        assert_eq!(lookups[0][3..], [0x105, 0]);
+        let copies = calls_to(&e, COPY_STRING_LIMITED);
+        assert_eq!(copies[0][1..], [0x200, 0x5700]);
+        let attenuation = calls_to(&e, SOUND_HANDLE_SET_STATIC_ATTENUATION);
+        assert_eq!(attenuation.len(), 1);
+        assert_eq!(attenuation[0][1], 200);
+        assert_eq!(call_count(&e, SOUND_HANDLE_SET_POSITION_XYZ), 0);
+        // The sound plays and calls back when done.
+        let plays = calls_to(&e, SOUND_HANDLE_PLAY);
+        assert_eq!(plays.len(), 1);
+        assert_eq!(plays[0][1], 0);
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_COMPLETION_CALLBACK),
+            vec![vec![plays[0][0], SAY_TO_CALLBACK, 0x4400]]
+        );
+        assert_eq!(e.mem.u8(actor.addr() + 0x80), 0);
+        // The process is given the flag and the handle by value.
+        assert_eq!(
+            calls_to(&e, slot_target(&e, process, PROCESS_SLOT_490)),
+            vec![vec![process.addr(), 0, 0x11, 0x22, 0x33]]
+        );
+        // The subtitle: the text, the handle, the position, the speaker word
+        // and a flag.
+        assert_eq!(
+            calls_to(&e, INTERFACE_SHOW_SUBTITLE),
+            vec![vec![
+                0x5700,
+                0x11,
+                0x22,
+                0x33,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                0x10,
+                1
+            ]]
+        );
+        assert_eq!(calls_to(&e, DIALOGUE_ITEM_DESTROY), vec![vec![0x5000, 1]]);
+    }
+
+    /// The objects and settings `fn_008a20d0` needs for a line with a lip
+    /// sync animation; returns the actor, the acquire object and the lip
+    /// sync animation.
+    fn say_line_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr, u32) {
+        let player = actor_with(e, &[], None);
+        set_player(e, player);
+        let lip_sync = 0x8800u32;
+        let animation = 0x9900u32;
+        let acquire = shared_acquire(
+            e,
+            &[
+                (ACQUIRE_OBJECT_SLOT_37C, ret(lip_sync)),
+                (ACQUIRE_OBJECT_SLOT_378, ret(0)),
+                (PROCESS_SLOT_490, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_748, ret(lip_sync)),
+                (ACQUIRE_OBJECT_SLOT_380, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_370, ret(0)),
+            ],
+        );
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_2D4, ret(0)),
+                (ACTOR_SLOT_2DC, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0x7777)),
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_1E4, ret(animation)),
+                (ACTOR_SLOT_POSITION, ret(position)),
+                (ACTOR_SLOT_21C_TEST, ret(0)),
+            ],
+            None,
+        );
+        let process = object(e, 0x800, &[]);
+        e.set(actor, Actor::pCurrentProcess, process);
+        double_global(e, ZERO_DOUBLE, 0.0);
+        double_global(e, LIP_SYNC_FRAME_RATE, 30.0);
+        double_global(e, SOUND_HEIGHT_OFFSET, 200.0);
+        double_global(e, THOUSAND_DOUBLE, 1000.0);
+        double_global(e, HUNDRED, 100.0);
+        e.map(LIP_SYNC_START_FLOAT, 4);
+        e.set_global(LIP_SYNC_START_FLOAT, 0.2f32);
+        e.map(SAY_COUNTDOWN, 4);
+        stub_float_settings(e, &[(SETTING_11D5788, 0.5)]);
+        stub_int_settings(e, &[(SETTING_INT_11CD378, 1000)]);
+        stub_bool_settings(e, &[]);
+        stub_ftol(e);
+        stub_float(e, REFR_GET_DISTANCE_FROM_REFERENCE, 50.0);
+        stub(e, ENTRY_FIRST_EXTRA_LIST, 3000);
+        stub(e, REFR_FORM_ID, 0x4400);
+        stub(e, ACTOR_GET_FACE_ANIMATION_DATA, 0x6700);
+        stub(e, AUDIO_INSTANCE, 0x6100);
+        stub(e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME, 0x6200);
+        stub(e, AUDIO_MANAGER_INSTANCE, 0x6300);
+        stub_float(e, LIP_SYNC_LENGTH, 2.0);
+        stub_float(e, SOUND_MAX_DISTANCE, 900.0);
+        stub_float(e, SOUND_MIN_DISTANCE, 100.0);
+        stub(e, ACTOR_TEST_880910, 1);
+        (actor, acquire, lip_sync)
+    }
+
+    #[test]
+    fn fn_008a20d0_speaks_a_line_with_a_lip_sync_animation() {
+        let mut e = engine();
+        let (actor, acquire, lip_sync) = say_line_setup(&mut e);
+        let out = e.mem.alloc(12);
+        let result = fn_008a20d0(
+            &mut e,
+            actor,
+            0x4000,
+            Ptr::new(out),
+            0x10,
+            0x14,
+            5,
+            0,
+            0,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        // 0.5 + 2.0 seconds of lip sync plus the 3000 / 30 = 100 of the frame
+        // count.
+        assert_eq!(result, 102.5);
+        assert_eq!(
+            calls_to(&e, LIP_SYNC_START),
+            vec![vec![lip_sync, 0x6700, 0.2f32.to_bits()]]
+        );
+        // The sound is looked up with the flags of a positioned sound.
+        let lookups = calls_to(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME);
+        assert_eq!(lookups[0][0], 0x6100);
+        assert_eq!(lookups[0][3..], [0x104 | 0x80000 | 2, 0]);
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_PRIORITY),
+            vec![vec![out, 0x40]]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_MIN_MAX),
+            vec![vec![out, 100.0f32.to_bits(), 900.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_POSITION_XYZ),
+            vec![vec![
+                out,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                203.0f32.to_bits()
+            ]]
+        );
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_SET_OBJECT_TO_FOLLOW),
+            vec![vec![out, 0x7777]]
+        );
+        assert_eq!(
+            calls_to(&e, AUDIO_MANAGER_SET_CALLBACK_B),
+            vec![vec![0x6300, 3000, SAY_TO_CALLBACK, 0x4400]]
+        );
+        // Playback is delayed by (0.5 + 2.0) * 1000 milliseconds.
+        assert_eq!(
+            calls_to(&e, SOUND_HANDLE_PLAY_AFTER),
+            vec![vec![out, 2500, 0]]
+        );
+        assert_eq!(calls_to(&e, SAY_LOCK_ENTER), vec![vec![SAY_LOCK, 0]]);
+        assert_eq!(calls_to(&e, SAY_LOCK_LEAVE), vec![vec![SAY_LOCK]]);
+        // The lip sync animation is kept: the acquire object already has it.
+        assert_eq!(call_count(&e, LIP_SYNC_DESTRUCT), 0);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_380)),
+            vec![vec![acquire.addr(), 0]]
+        );
+    }
+
+    #[test]
+    fn fn_008a20d0_refuses_lines_that_cannot_be_spoken() {
+        let mut e = engine();
+        let (actor, _acquire, _lip_sync) = say_line_setup(&mut e);
+        let out = e.mem.alloc(12);
+        // No name: the callback is told, nothing is looked up.
+        let result = fn_008a20d0(
+            &mut e,
+            actor,
+            0,
+            Ptr::new(out),
+            0,
+            0,
+            0,
+            0,
+            0,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(result, 0.0);
+        assert_eq!(calls_to(&e, SAY_TO_CALLBACK), vec![vec![0x4400, 1]]);
+        assert_eq!(call_count(&e, AUDIO_GET_SOUND_HANDLE_BY_FILENAME), 0);
+        // In dialogue the other callback is used.
+        e.call_log = Some(vec![]);
+        stub(&mut e, MOBILE_OBJECT_IS_IN_DIALOGUE, 1);
+        fn_008a20d0(
+            &mut e,
+            actor,
+            0,
+            Ptr::new(out),
+            0,
+            0,
+            0,
+            0,
+            0,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(
+            calls_to(&e, SAY_TO_CALLBACK_IN_DIALOGUE),
+            vec![vec![0x4400, 1]]
+        );
+        assert_eq!(call_count(&e, SAY_TO_CALLBACK), 0);
+        // A dismembered actor cannot speak either.
+        e.call_log = Some(vec![]);
+        stub(&mut e, REFR_GET_DISMEMBERED, 1);
+        let result = fn_008a20d0(
+            &mut e,
+            actor,
+            0x4000,
+            Ptr::new(out),
+            0,
+            0,
+            0,
+            0,
+            0,
+            Ptr::new(0),
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        assert_eq!(result, 0.0);
+        assert_eq!(call_count(&e, SAY_LOCK_ENTER), 0);
+    }
+
+    #[test]
+    fn fn_008a2d20_reads_its_setting() {
+        let mut e = engine();
+        stub_float_settings(&mut e, &[(SETTING_11D5788, 1.5)]);
+        assert_eq!(fn_008a2d20(&mut e), 1.5);
+    }
+
+    #[test]
+    fn fn_008a2d40_finds_the_item_the_package_targets() {
+        let mut e = engine();
+        let process = object(
+            &mut e,
+            0x800,
+            &[
+                (PROCESS_SLOT_22C, ret(0x5000)),
+                (PROCESS_SLOT_278, ret(0x6000)),
+            ],
+        );
+        let actor = actor_with(&mut e, &[], None);
+        // Without a process: 0.
+        assert_eq!(fn_008a2d40(&mut e, actor), 0);
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub(&mut e, PACKAGE_GET_TARGET_OBJECT, 0x5100);
+        stub(&mut e, REFR_GET_INVENTORY_ITEM_FN, 0x9999);
+        // Target type 0: the process' entry form decides.
+        stub(&mut e, PACKAGE_TARGET_GET_TARG_TYPE, 0);
+        stub(&mut e, ENTRY_FORM, 0x7100);
+        stub(&mut e, REFR_FORM_ID, 0x44);
+        stub(&mut e, REFR_BASE_FORM, 0x7200);
+        assert_eq!(fn_008a2d40(&mut e, actor), 0x9999);
+        assert_eq!(
+            calls_to(&e, REFR_GET_INVENTORY_ITEM_FN),
+            vec![vec![actor.addr(), 0x7200, 0x44]]
+        );
+        // Target type 1: the target object when its slot 0xe4 accepts.
+        e.call_log = Some(vec![]);
+        let object_with_test = object(&mut e, 0x100, &[(REFERENCE_SLOT_E4, ret(1))]);
+        stub(&mut e, PACKAGE_TARGET_GET_TARG_TYPE, 1);
+        stub(&mut e, ENTRY_FORM, 0);
+        stub(
+            &mut e,
+            PACKAGE_TARGET_GET_TARG_OBJECT,
+            object_with_test.addr(),
+        );
+        assert_eq!(fn_008a2d40(&mut e, actor), 0x9999);
+        assert_eq!(
+            calls_to(&e, REFR_GET_INVENTORY_ITEM_FN),
+            vec![vec![actor.addr(), object_with_test.addr(), 0]]
+        );
+        // Target type 2: the container changes find the object.
+        e.call_log = Some(vec![]);
+        stub(&mut e, PACKAGE_TARGET_GET_TARG_TYPE, 2);
+        stub(&mut e, REFR_EXTRA_DATA_LIST, 0x5200);
+        stub(&mut e, GET_CONTAINER_CHANGES, 0x5300);
+        stub(&mut e, PACKAGE_TARGET_GET_TARG_OBJECT_TYPE, 7);
+        stub(
+            &mut e,
+            INVENTORY_CHANGES_GET_OBJECT_BY_PACK_OBJ_TYPE,
+            0x7400,
+        );
+        assert_eq!(fn_008a2d40(&mut e, actor), 0x9999);
+        let found = calls_to(&e, INVENTORY_CHANGES_GET_OBJECT_BY_PACK_OBJ_TYPE);
+        assert_eq!(found[0][..2], [0x5300, 7]);
+        assert_eq!(
+            calls_to(&e, REFR_GET_INVENTORY_ITEM_FN),
+            vec![vec![actor.addr(), 0x7400, 0]]
+        );
+        // Nothing found: 0.
+        stub(&mut e, INVENTORY_CHANGES_GET_OBJECT_BY_PACK_OBJ_TYPE, 0);
+        assert_eq!(fn_008a2d40(&mut e, actor), 0);
+    }
+
+    #[test]
+    fn fn_008a2ed0_reports_the_actor_the_acquire_object_targets() {
+        let mut e = engine();
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        e.map(SINGLETON_11DE45C, 4);
+        e.set_global(SINGLETON_11DE45C, 0x5000u32);
+        let actor = actor_with(&mut e, &[], None);
+        // The singleton test is true: 0.
+        stub(&mut e, SINGLETON_TEST_47C850, 1);
+        assert_eq!(fn_008a2ed0(&mut e, actor), 0);
+        stub(&mut e, SINGLETON_TEST_47C850, 0);
+        // No acquire object: 0.
+        assert_eq!(fn_008a2ed0(&mut e, actor), 0);
+        let acquire = shared_acquire(&mut e, &[(ACQUIRE_OBJECT_SLOT_678, ret(0x5555))]);
+        assert_eq!(fn_008a2ed0(&mut e, actor), 0x5555);
+        // Without a target the package target distance is looked at, but
+        // the result stays 0.
+        let slot = slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_678);
+        e.register_double(slot, |_, _| ret(0));
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PACKAGE, 0x6000);
+        stub(&mut e, ACTOR_GET_CURRENT_PACKAGE_TARGET, 0x6100);
+        stub_float_settings(&mut e, &[]);
+        assert_eq!(fn_008a2ed0(&mut e, actor), 0);
+        assert_eq!(
+            calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE),
+            vec![vec![0x6100, actor.addr(), 0, 0]]
+        );
+    }
+
+    /// Makes `NiPoint3::operator+=` add the vector at the pointer to the
+    /// vector at `this`.
+    fn stub_vector_add(e: &mut Engine) {
+        stub_with(e, VECTOR_ADD_ASSIGN, |e, a| {
+            for i in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * i) + e.mem.f32(a[1] + 4 * i);
+                e.mem.set_f32(a[0] + 4 * i, sum);
+            }
+            ret(a[0])
+        });
+    }
+
+    #[test]
+    fn fn_008a2fa0_uses_the_head_node_and_the_ragdoll_eye_offset() {
+        let mut e = engine();
+        e.map(EYE_POSITION_DEFAULT, 12);
+        stub_vector_add(&mut e);
+        let translation = e.mem.alloc(12);
+        e.mem.set_f32(translation, 10.0);
+        e.mem.set_f32(translation + 4, 20.0);
+        e.mem.set_f32(translation + 8, 30.0);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_1E8_NODE, ret(0x7000))], None);
+        e.set(actor, Actor::pRagdollController, Ptr::new(0x7800));
+        stub(&mut e, NODE_FN_4AB230, 0x7100);
+        stub(&mut e, NODE_WORLD_TRANSLATE, translation);
+        stub_with(&mut e, RAGDOLL_GET_EYE_OFFSET, |e, a| {
+            e.mem.set_f32(a[1] + 8, 99.0);
+            ret(1)
+        });
+        let out = e.mem.alloc(12);
+        assert_eq!(fn_008a2fa0(&mut e, actor, Ptr::new(out)), out);
+        assert_eq!(e.mem.f32(out), 10.0);
+        assert_eq!(e.mem.f32(out + 4), 20.0);
+        // The ragdoll controller's eye offset replaces the height.
+        assert_eq!(e.mem.f32(out + 8), 99.0);
+    }
+
+    #[test]
+    fn fn_008a2fa0_without_a_head_node_raises_the_actors_position() {
+        let mut e = engine();
+        e.map(EYE_POSITION_DEFAULT, 12);
+        stub_vector_add(&mut e);
+        double_global(&mut e, EYE_HEIGHT_SHARE, 0.9);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let actor = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_1E8_NODE, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0)),
+                (ACTOR_SLOT_POSITION, ret(position)),
+            ],
+            None,
+        );
+        stub_float(&mut e, ACTOR_GET_HEIGHT, 2.0);
+        let out = e.mem.alloc(12);
+        fn_008a2fa0(&mut e, actor, Ptr::new(out));
+        assert_eq!(e.mem.f32(out), 1.0);
+        assert_eq!(e.mem.f32(out + 4), 2.0);
+        assert_eq!(e.mem.f32(out + 8), (2.0f64 * 0.9 + 3.0) as f32);
+    }
+
+    #[test]
+    fn fn_008a30f0_returns_the_global_word() {
+        let mut e = engine();
+        e.map(GLOBAL_11C61AC, 4);
+        e.set_global(GLOBAL_11C61AC, 0x1234u32);
+        assert_eq!(fn_008a30f0(&mut e), 0x1234);
+    }
+
+    /// A ragdoll controller block: a 0x100-byte zeroed object.
+    fn ragdoll_block(e: &mut Engine) -> Ptr {
+        Ptr::new(e.mem.alloc(0x100))
+    }
+
+    #[test]
+    fn fn_008a3100_does_nothing_for_the_player_or_without_a_process() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let process = object(&mut e, 0x800, &[]);
+        e.set(player, Actor::pCurrentProcess, process);
+        fn_008a3100(&mut e, player, 0.5);
+        let actor = actor_with(&mut e, &[], None);
+        fn_008a3100(&mut e, actor, 0.5);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+    }
+
+    #[test]
+    fn fn_008a3100_marks_the_ragdoll_while_a_package_runs() {
+        let mut e = engine();
+        double_global(&mut e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(&mut e, &[], None);
+        set_player(&mut e, player);
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_27C, ret(0x5000))]);
+        let actor = actor_with(&mut e, &[], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        let ragdoll = ragdoll_block(&mut e);
+        e.set(actor, Actor::pRagdollController, ragdoll);
+        stub(&mut e, PACKAGE_TEST_67A690, 1);
+        stub(&mut e, RAGDOLL_TEST_888A50, 1);
+        fn_008a3100(&mut e, actor, 0.5);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 1);
+        assert_eq!(calls_to(&e, PACKAGE_TEST_67A690), vec![vec![0x5000]]);
+    }
+
+    /// An actor with a process, a tracked target and a ragdoll controller
+    /// for the head tracking update; returns them with the acquire object.
+    fn head_tracking_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr<Actor>, Ptr, Ptr) {
+        double_global(e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(e, player);
+        let eye = e.mem.alloc(12);
+        let position = e.mem.alloc(12);
+        let target = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_FC, ret(0)),
+                (ACTOR_SLOT_1D0, ret(1)),
+                (ACTOR_SLOT_POSITION, ret(position)),
+                (ACTOR_SLOT_194, ret(eye)),
+            ],
+            None,
+        );
+        let process = object(
+            e,
+            0x800,
+            &[
+                (PROCESS_SLOT_27C, ret(0)),
+                (PROCESS_SLOT_264, float_ret(5.0)),
+                (PROCESS_SLOT_268, ret(0)),
+                (ACQUIRE_OBJECT_SLOT_678, ret(target.addr())),
+                (PROCESS_SLOT_504, ret(0)),
+                (PROCESS_SLOT_660, ret(0)),
+                (PROCESS_SLOT_668, ret(0)),
+                (PROCESS_SLOT_624, ret(0)),
+            ],
+        );
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_POSITION, ret(position)),
+                (ACTOR_SLOT_1E8_NODE, ret(0)),
+                (ACTOR_SLOT_21C_TEST, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        let ragdoll = ragdoll_block(e);
+        e.set(actor, Actor::pRagdollController, ragdoll);
+        e.mem.set_f32(actor.addr() + 0x74, 1.0);
+        e.map(HEAD_TRACK_UPDATE_COUNTER, 4);
+        stub_int_settings(e, &[(SETTING_INT_11DF848, 100)]);
+        stub_bool_settings(e, &[]);
+        stub_float_settings(
+            e,
+            &[
+                (SETTING_11CD2F4, 1000.0),
+                (0x0126_7d08, 100.0),
+                (0x0126_7d14, 10.0),
+            ],
+        );
+        stub(e, ACQUIRE_OBJECT_FIELD_28, 0);
+        stub(e, ACTOR_SOUND_SOURCE, 1);
+        stub(e, ACTOR_IS_VISIBLE, 1);
+        stub(e, ANIMATION_GROUP_OF_SLOT, 4);
+        stub(e, REFR_BASE_FORM, 0);
+        stub_float(e, VECTOR_LENGTH, 50.0);
+        stub(e, RAGDOLL_TEST_888A50, 1);
+        stub_float(e, REFR_GET_DISTANCE_FROM_REFERENCE, 10.0);
+        (actor, target, process, ragdoll)
+    }
+
+    #[test]
+    fn fn_008a3100_points_the_ragdoll_at_the_target() {
+        let mut e = engine();
+        let (actor, target, process, ragdoll) = head_tracking_setup(&mut e);
+        let cell = e.mem.alloc(4);
+        stub(&mut e, FLOAT_ARRAY_SLOT, cell);
+        e.mem.set_u8(ragdoll.addr() + 0xb2, 7);
+        let eye = e.mem.alloc(12);
+        let slot = slot_target(&e, target.cast(), ACTOR_SLOT_194);
+        e.register_double(slot, move |_, _| ret(eye));
+        fn_008a3100(&mut e, actor, 0.5);
+        // The timers ran: the update timer 1.0 - 0.5, the process timer
+        // 5.0 - 0.5.
+        assert_eq!(e.mem.f32(actor.addr() + 0x74), 0.5);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, process, PROCESS_SLOT_268)),
+            vec![vec![process.addr(), 4.5f32.to_bits()]]
+        );
+        // The target is within the range (50 is between 10 and 100): the
+        // ragdoll controller is reset and told where to look.
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 0);
+        assert_eq!(
+            calls_to(&e, RAGDOLL_FN_C75580),
+            vec![vec![ragdoll.addr(), 1], vec![ragdoll.addr(), 1]]
+        );
+        let copies = calls_to(&e, VECTOR_ASSIGN);
+        assert_eq!(copies, vec![vec![ragdoll.addr() + 0xd0, eye]]);
+    }
+
+    #[test]
+    fn fn_008a3100_marks_the_ragdoll_when_the_target_is_out_of_range() {
+        let mut e = engine();
+        let (actor, _target, _process, ragdoll) = head_tracking_setup(&mut e);
+        stub_float(&mut e, VECTOR_LENGTH, 500.0);
+        fn_008a3100(&mut e, actor, 0.5);
+        // Too far: nothing is copied, the ragdoll is marked.
+        assert_eq!(call_count(&e, VECTOR_ASSIGN), 0);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 0);
+        // A busy actor (process level 1) marks it instead.
+        stub(&mut e, PROCESS_LEVEL_NUMBER, 1);
+        fn_008a3100(&mut e, actor, 0.5);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 1);
+    }
+
+    #[test]
+    fn fn_008a3100_picks_a_new_target_when_the_timer_runs_out() {
+        let mut e = engine();
+        let (actor, target, process, _ragdoll) = head_tracking_setup(&mut e);
+        e.mem.set_f32(actor.addr() + 0x74, 0.25);
+        e.map(EYE_POSITION_DEFAULT, 12);
+        stub_list_functions(&mut e);
+        // The process accepts a new target (slot 0x668) and the best
+        // candidate is another actor.
+        let tracking = slot_target(&e, process, PROCESS_SLOT_668);
+        e.register_double(tracking, |_, _| ret(1));
+        stub_with(&mut e, RANDOM_FLOAT, |_, _| float_ret(3.0));
+        stub_float_settings(
+            &mut e,
+            &[
+                (SETTING_11CD2F4, 1000.0),
+                (0x0126_7d08, 100.0),
+                (0x0126_7d14, 10.0),
+                (SETTING_11CDBB8, 7.0),
+            ],
+        );
+        // `fn_008a3ed0` finds nothing: the package test fails and the lists
+        // are empty.
+        stub(&mut e, PROCESS_ARRAY_COUNT, 0);
+        fn_008a3100(&mut e, actor, 0.5);
+        // The timer was set again by the random value; the target changed to
+        // nobody (0), so the process was told.
+        assert_eq!(e.mem.f32(actor.addr() + 0x74), 3.0);
+        assert_eq!(e.mem.f32(actor.addr() + 0x158), 3.0);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, process, PROCESS_SLOT_624)),
+            vec![vec![process.addr(), 0]]
+        );
+        let _ = target;
+        assert_eq!(e.global::<u32>(HEAD_TRACK_UPDATE_COUNTER), 1);
+    }
+
+    #[test]
+    fn fn_008a3b30_tests_the_animation_flags_0x30() {
+        let mut e = engine();
+        let actor = actor_with(&mut e, &[], None);
+        stub(&mut e, ACTOR_ANIM_FLAGS, 0x10);
+        assert_eq!(fn_008a3b30(&mut e, actor), 1);
+        stub(&mut e, ACTOR_ANIM_FLAGS, 0x40);
+        assert_eq!(fn_008a3b30(&mut e, actor), 0);
+    }
+
+    #[test]
+    fn fn_008a3b50_reads_the_float_at_5fc() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x800);
+        e.mem.set_f32(block + 0x5fc, 2.5);
+        assert_eq!(fn_008a3b50(&mut e, Ptr::new(block)), 2.5);
+    }
+
+    #[test]
+    fn fn_008a3b70_copies_the_vector_and_resets_on_request() {
+        let mut e = engine();
+        let ragdoll = ragdoll_block(&mut e);
+        let cell = e.mem.alloc(4);
+        e.mem.set_f32(cell, 9.0);
+        stub(&mut e, FLOAT_ARRAY_SLOT, cell);
+        e.mem.set_u8(ragdoll.addr() + 0xb2, 7);
+        e.mem.set_u8(ragdoll.addr() + 0x43, 7);
+        fn_008a3b70(&mut e, ragdoll, 0x6000, 0);
+        assert_eq!(
+            calls_to(&e, VECTOR_ASSIGN),
+            vec![vec![ragdoll.addr() + 0xd0, 0x6000]]
+        );
+        assert_eq!(
+            calls_to(&e, FLOAT_ARRAY_SLOT),
+            vec![vec![ragdoll.addr() + 0xd0, 3]]
+        );
+        assert_eq!(e.mem.f32(cell), 0.0);
+        // Without the flag the bytes stay.
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 7);
+        fn_008a3b70(&mut e, ragdoll, 0x6000, 1);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 0);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0x43), 0);
+        assert_eq!(
+            calls_to(&e, RAGDOLL_FN_C75580),
+            vec![vec![ragdoll.addr(), 1]]
+        );
+    }
+
+    #[test]
+    fn fn_008a3bd0_and_fn_008a3bf0_access_the_byte_at_b2() {
+        let mut e = engine();
+        let ragdoll = ragdoll_block(&mut e);
+        assert_eq!(fn_008a3bd0(&mut e, ragdoll), 0);
+        fn_008a3bf0(&mut e, ragdoll, 5);
+        assert_eq!(fn_008a3bd0(&mut e, ragdoll), 5);
+        assert_eq!(e.mem.u8(ragdoll.addr() + 0xb2), 5);
+    }
+
+    #[test]
+    fn head_tracking_range_settings_are_read() {
+        let mut e = engine();
+        stub_float_settings(&mut e, &[(0x0126_7d08, 12.5), (0x0126_7d14, 3.5)]);
+        assert_eq!(fn_008a3c10(&mut e), 12.5);
+        assert_eq!(fn_008a3c30(&mut e), 3.5);
+    }
+
+    /// The setup for the face animation update: an actor in process level
+    /// 0, a face animation data object and in range.
+    fn face_update_setup(e: &mut Engine) -> (Ptr<Actor>, Ptr) {
+        double_global(e, ZERO_DOUBLE, 0.0);
+        let player = actor_with(e, &[], None);
+        set_player(e, player);
+        let face = object(
+            e,
+            0x200,
+            &[
+                (FACE_ANIMATION_SLOT_B4, ret(0)),
+                (FACE_ANIMATION_SLOT_114, ret(0)),
+                (FACE_ANIMATION_SLOT_11C, ret(0)),
+            ],
+        );
+        let actor = actor_with(e, &[], None);
+        embedded_table(e, actor.addr() + 0xa4, &[(0x08, ret(55))]);
+        stub(e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 0);
+        stub(e, MOBILE_OBJECT_GET_CHAR_CONTROLLER, 0);
+        stub(e, ACTOR_GET_FACE_ANIMATION_DATA, face.addr());
+        stub_float_settings(e, &[(SETTING_11CD2F4, 1000.0)]);
+        stub_float(e, REFR_GET_DISTANCE_FROM_REFERENCE, 10.0);
+        (actor, face)
+    }
+
+    #[test]
+    fn fn_008a3c50_sets_the_face_animation() {
+        let mut e = engine();
+        let (actor, face) = face_update_setup(&mut e);
+        // The global flag is off: the neutral animation (slot 0xb4).
+        stub(&mut e, GLOBAL_FLAG_5B7470, 0);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_B4)),
+            vec![vec![face.addr(), 0, 1, 0, 0, 0, 0]]
+        );
+        // Fleeing: animation 1 at full strength.
+        stub(&mut e, GLOBAL_FLAG_5B7470, 1);
+        stub(&mut e, ACTOR_IS_FLEEING, 1);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_114)),
+            vec![vec![face.addr(), 1, FLOAT_ONE_BITS]]
+        );
+        // In combat: animation 0xe.
+        stub(&mut e, ACTOR_IS_FLEEING, 0);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        e.call_log = Some(vec![]);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_114)),
+            vec![vec![face.addr(), 0xe, FLOAT_ONE_BITS]]
+        );
+        // Otherwise without a process: the value of the owner's slot 8.
+        stub(&mut e, ACTOR_IN_COMBAT, 0);
+        e.call_log = Some(vec![]);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
+            vec![vec![face.addr(), 55]]
+        );
+    }
+
+    #[test]
+    fn fn_008a3c50_with_a_process_waits_for_the_sound_to_end() {
+        let mut e = engine();
+        let (actor, face) = face_update_setup(&mut e);
+        stub(&mut e, GLOBAL_FLAG_5B7470, 1);
+        let process = object(
+            &mut e,
+            0x800,
+            &[(PROCESS_SLOT_48C, ret(0x6000)), (PROCESS_SLOT_2E8, ret(0))],
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        // No valid sound handle and the process slot 0x2e8 is 0: set.
+        stub(&mut e, SOUND_HANDLE_IS_VALID_FN, 0);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            call_count(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
+            1
+        );
+        assert_eq!(call_count(&e, SOUND_HANDLE_DESTROY), 1);
+        // A valid handle: left alone.
+        e.call_log = Some(vec![]);
+        stub(&mut e, SOUND_HANDLE_IS_VALID_FN, 1);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(
+            call_count(&e, slot_target(&e, face, FACE_ANIMATION_SLOT_11C)),
+            0
+        );
+        // Not in process level 0: nothing at all.
+        e.call_log = Some(vec![]);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PROCESS_TYPE, 1);
+        fn_008a3c50(&mut e, actor);
+        assert_eq!(call_count(&e, ACTOR_GET_FACE_ANIMATION_DATA), 0);
+    }
+
+    /// Doubles for the `BSSimpleList` functions the head tracking uses: the
+    /// constructor clears the head, `append` puts the item in the head and
+    /// moves the old item into a new node after it, the node test is true
+    /// for an empty head, `next` reads the node's second word.
+    fn stub_list_functions(e: &mut Engine) {
+        stub_with(e, LIST_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            e.mem.set_u32(a[0] + 4, 0);
+            ret(a[0])
+        });
+        stub_with(e, LIST_APPEND, |e, a| {
+            let head = a[0];
+            let item = e.mem.u32(a[1]);
+            if e.mem.u32(head) != 0 {
+                let node = e.mem.alloc(8);
+                let old_item = e.mem.u32(head);
+                let old_next = e.mem.u32(head + 4);
+                e.mem.set_u32(node, old_item);
+                e.mem.set_u32(node + 4, old_next);
+                e.mem.set_u32(head + 4, node);
+            }
+            e.mem.set_u32(head, item);
+            ret(0)
+        });
+        stub_with(e, LIST_NODE_STOP_TEST, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        stub_with(e, LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        stub_with(e, LIST_ITEM_SLOT, |_, a| ret(a[0]));
+    }
+
+    /// Maps the constants `actor_can_head_track` reads.
+    fn head_track_constants(e: &mut Engine) {
+        double_global(e, ZERO_DOUBLE, 0.0);
+        double_global(e, HUNDRED, 100.0);
+        double_global(e, PI_DOUBLE, std::f64::consts::PI);
+        double_global(e, TWO_PI_DOUBLE, 2.0 * std::f64::consts::PI);
+        double_global(e, MINUS_PI_DOUBLE, -std::f64::consts::PI);
+        double_global(e, DETECTION_MAX_DISTANCE, 8192.0);
+        e.map(PI_FLOAT, 4);
+        e.set_global(PI_FLOAT, std::f32::consts::PI);
+        e.map(TURN_LIMIT_FLOAT, 4);
+        e.set_global(TURN_LIMIT_FLOAT, 2.0943952f32);
+        stub_float_settings(e, &[(SETTING_11CD938, 1000.0), (SETTING_11CD114, 0.0)]);
+        double_global(e, THOUSAND_DOUBLE, 1000.0);
+        double_global(e, HALF_DOUBLE, 0.5);
+        let rotation = e.mem.alloc(16);
+        stub(e, ACTOR_ROTATION_POINTER, rotation);
+        stub_float(e, GET_Z_ANGLE_FROM_VECTOR, 0.0);
+        stub_float(e, ABSOLUTE_VALUE_ALT, 0.0);
+    }
+
+    /// An actor that `actor_can_head_track` accepts when `this` asks about
+    /// it from `distance` units away; its record in the shared acquire object
+    /// is positive.
+    fn head_track_candidate(e: &mut Engine) -> Ptr<Actor> {
+        actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_100, ret(1)),
+                (ACTOR_SLOT_1D0, ret(1)),
+                (ACTOR_SLOT_214, ret(0)),
+                (ACTOR_SLOT_22C, ret(0)),
+            ],
+            None,
+        )
+    }
+
+    /// The acquire object with a positive detection record.
+    fn detecting_acquire(e: &mut Engine) -> Ptr {
+        let record = e.mem.alloc(0x40);
+        e.mem.set_u32(record + 8, 5);
+        e.mem.set_u8(record + 0x1c, 1);
+        e.mem.set_u8(record + 0x1e, 1);
+        shared_acquire(
+            e,
+            &[
+                (ACQUIRE_OBJECT_SLOT_504, ret(record)),
+                (ACQUIRE_OBJECT_SLOT_678, ret(1)),
+            ],
+        )
+    }
+
+    #[test]
+    fn actor_can_head_track_accepts_a_visible_actor_in_range() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(&mut e, player);
+        detecting_acquire(&mut e);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_214, ret(0))], None);
+        let process = object(&mut e, 0x800, &[(ACQUIRE_OBJECT_SLOT_678, ret(1))]);
+        e.set(actor, Actor::pCurrentProcess, process);
+        let other = head_track_candidate(&mut e);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 200.0);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 1), 1);
+        // The distance is asked from the other actor to this one.
+        assert_eq!(
+            calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE)[0],
+            vec![other.addr(), actor.addr(), 0, 1]
+        );
+        // Without the detection check the detection is not asked.
+        e.call_log = Some(vec![]);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 0), 1);
+        assert_eq!(call_count(&e, GET_SAVED_ACQUIRE_OBJECT), 0);
+    }
+
+    #[test]
+    fn actor_can_head_track_refuses_the_cases_the_code_lists() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(&mut e, player);
+        detecting_acquire(&mut e);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_214, ret(0))], None);
+        let process = object(
+            &mut e,
+            0x800,
+            &[
+                (ACQUIRE_OBJECT_SLOT_678, ret(1)),
+                (PROCESS_SLOT_68C, ret(0)),
+            ],
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        let other = head_track_candidate(&mut e);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 200.0);
+        // Itself.
+        assert_eq!(actor_can_head_track(&mut e, actor, actor, 0), 0);
+        // An actor that fails the test of slot 0x100.
+        assert_eq!(actor_can_head_track(&mut e, actor, player, 0), 0);
+        // Without a 3D object.
+        let blind = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_100, ret(1)), (ACTOR_SLOT_1D0, ret(0))],
+            None,
+        );
+        assert_eq!(actor_can_head_track(&mut e, actor, blind, 0), 0);
+        // Too far away (the limit is 1000).
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 1500.0);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 0), 0);
+        // Closer than 100 units but neither the player nor remembered.
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 50.0);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 0), 0);
+        // Remembered by the process (slot 0x68c): accepted.
+        let remembered = slot_target(&e, process, PROCESS_SLOT_68C);
+        let other_addr = other.addr();
+        e.register_double(remembered, move |_, _| ret(other_addr));
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 0), 1);
+        // Behind the actor: the angle beyond the turn limit.
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 200.0);
+        stub_float(&mut e, ABSOLUTE_VALUE_ALT, 3.0);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 0), 0);
+        // Two actors that both have an attached-arrow list (slot 0x214).
+        stub_float(&mut e, ABSOLUTE_VALUE_ALT, 0.0);
+        let arrows = actor_with(
+            &mut e,
+            &[
+                (ACTOR_SLOT_100, ret(1)),
+                (ACTOR_SLOT_1D0, ret(1)),
+                (ACTOR_SLOT_214, ret(1)),
+            ],
+            None,
+        );
+        let slot = slot_target(&e, actor.cast(), ACTOR_SLOT_214);
+        e.register_double(slot, |_, _| ret(1));
+        assert_eq!(actor_can_head_track(&mut e, actor, arrows, 0), 0);
+    }
+
+    #[test]
+    fn actor_can_head_track_needs_a_positive_detection_level() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(&mut e, player);
+        let acquire = detecting_acquire(&mut e);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_214, ret(0))], None);
+        let process = object(&mut e, 0x800, &[(ACQUIRE_OBJECT_SLOT_678, ret(1))]);
+        e.set(actor, Actor::pCurrentProcess, process);
+        let other = head_track_candidate(&mut e);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 200.0);
+        // The record's level is 0: not detected.
+        let record = e.mem.alloc(0x40);
+        let slot = slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_504);
+        e.register_double(slot, move |_, _| ret(record));
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 1), 0);
+        // Detected, but an actor flagged by `004938e0` that was not seen.
+        e.mem.set_u32(record + 8, 5);
+        e.mem.set_u8(record + 0x1c, 0);
+        e.mem.set_u8(record + 0x1e, 0);
+        stub(&mut e, ACTOR_FLAG_4938E0, 1);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 1), 0);
+        // Seen: accepted.
+        e.mem.set_u8(record + 0x1e, 1);
+        assert_eq!(actor_can_head_track(&mut e, actor, other, 1), 1);
+    }
+
+    #[test]
+    fn fn_008a3ed0_prefers_the_package_target_within_range() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        stub_list_functions(&mut e);
+        e.map(PLAYER_TRACK_DISTANCE, 4);
+        e.set_global(PLAYER_TRACK_DISTANCE, 500.0f32);
+        e.map(OTHER_TRACK_DISTANCE, 4);
+        e.set_global(OTHER_TRACK_DISTANCE, 100.0f32);
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(&mut e, player);
+        let process = object(&mut e, 0x800, &[(PROCESS_SLOT_278, ret(0x6000))]);
+        let actor = actor_with(&mut e, &[], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub(&mut e, MOBILE_OBJECT_GET_CURRENT_PACKAGE, 0x5000);
+        stub(&mut e, PACKAGE_TYPE, 6);
+        stub(&mut e, PACKAGE_GET_TARGET_OBJECT, 1);
+        stub(&mut e, ENTRY_FORM, 0x7000);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 50.0);
+        assert_eq!(fn_008a3ed0(&mut e, actor), 0x7000);
+        assert_eq!(
+            calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE),
+            vec![vec![actor.addr(), 0x7000, 0, 1]]
+        );
+        // Beyond the limit the lists are searched; nobody is there.
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 150.0);
+        stub(&mut e, PROCESS_ARRAY_COUNT, 0);
+        assert_eq!(fn_008a3ed0(&mut e, actor), 0);
+        // The player's own limit is larger.
+        stub(&mut e, ENTRY_FORM, player.addr());
+        assert_eq!(fn_008a3ed0(&mut e, actor), player.addr());
+    }
+
+    #[test]
+    fn fn_008a3ed0_picks_the_best_scoring_candidate() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        stub_list_functions(&mut e);
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_100, ret(0))], None);
+        set_player(&mut e, player);
+        detecting_acquire(&mut e);
+        let process = object(&mut e, 0x800, &[(ACQUIRE_OBJECT_SLOT_678, ret(1))]);
+        let actor = actor_with(&mut e, &[(ACTOR_SLOT_214, ret(0))], None);
+        e.set(actor, Actor::pCurrentProcess, process);
+        let near = head_track_candidate(&mut e);
+        let far = head_track_candidate(&mut e);
+        let (near_addr, far_addr, actor_addr) = (near.addr(), far.addr(), actor.addr());
+        stub_with(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, move |_, a| {
+            float_ret(if a[0] == far_addr && a[1] == actor_addr {
+                300.0
+            } else if a[0] == near_addr && a[1] == actor_addr {
+                200.0
+            } else {
+                100.0
+            })
+        });
+        stub(&mut e, PROCESS_LISTS_GET_ARRAY, 0x8000);
+        stub(&mut e, PROCESS_ARRAY_COUNT, 2);
+        stub_with(&mut e, PROCESS_ARRAY_GET_ACTOR, move |_, a| {
+            ret(if a[1] == 0 { far_addr } else { near_addr })
+        });
+        stub(&mut e, ACTOR_LINE_OF_SIGHT, 1);
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 0);
+        assert_eq!(fn_008a3ed0(&mut e, actor), near_addr);
+        // Both were appended and the list was cleaned up.
+        assert_eq!(call_count(&e, LIST_APPEND), 2);
+        assert_eq!(call_count(&e, LIST_CLEAR), 1);
+        assert_eq!(call_count(&e, LIST_DESTRUCT), 1);
+    }
+
+    #[test]
+    fn fn_008a46a0_tests_the_form_flag() {
+        let mut e = engine();
+        stub(&mut e, FORM_TEST_FLAGS_FN, 1);
+        assert_eq!(fn_008a46a0(&mut e, Ptr::new(0x5030)), 1);
+        assert_eq!(
+            calls_to(&e, FORM_TEST_FLAGS_FN),
+            vec![vec![0x5030, 0x4000_0000]]
+        );
+    }
+
+    #[test]
+    fn fn_008a46c0_scores_a_target_by_distance_and_state() {
+        let mut e = engine();
+        head_track_constants(&mut e);
+        let acquire = shared_acquire(&mut e, &[(ACQUIRE_OBJECT_SLOT_678, ret(0))]);
+        let actor = actor_with(&mut e, &[], None);
+        let other = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_100, ret(0)), (ACTOR_SLOT_22C, ret(0))],
+            None,
+        );
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 0);
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 200.0);
+        e.mem.set_f32(actor.addr() + 0x158, 0.5);
+        // (1000 - 200) / (1000 - 0) = 0.8 for a target without a line of
+        // sight test.
+        assert_eq!(fn_008a46c0(&mut e, actor, other), 0.8f32);
+        assert_eq!(
+            calls_to(&e, REFR_GET_DISTANCE_FROM_REFERENCE),
+            vec![vec![other.addr(), actor.addr(), 0, 0]]
+        );
+        // The actor the acquire object targets: times (timer + 1).
+        let slot = slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_678);
+        let other_addr = other.addr();
+        e.register_double(slot, move |_, _| ret(other_addr));
+        let expected = ((0.5f32 as f64 + 1.0) * 0.8f32 as f64) as f32;
+        assert_eq!(fn_008a46c0(&mut e, actor, other), expected);
+        // A fleeing target is halved.
+        let fleeing = slot_target(&e, other.cast(), ACTOR_SLOT_22C);
+        e.register_double(fleeing, |_, _| ret(1));
+        assert_eq!(
+            fn_008a46c0(&mut e, actor, other),
+            (expected as f64 * 0.5) as f32
+        );
+        // Without a line of sight the score is halved first.
+        let other_two = actor_with(
+            &mut e,
+            &[(ACTOR_SLOT_100, ret(1)), (ACTOR_SLOT_22C, ret(0))],
+            None,
+        );
+        stub(&mut e, ACTOR_LINE_OF_SIGHT, 0);
+        assert_eq!(fn_008a46c0(&mut e, actor, other_two), 0.4f32);
+        // No usable acquire object: 0.
+        stub(&mut e, ACQUIRE_OBJECT_FIELD_28, 1);
+        assert_eq!(fn_008a46c0(&mut e, actor, other), 0.0);
+    }
+
+    /// An actor that `fn_008a40e0` accepts when no package runs, with the
+    /// package of its process given by `package`. Returns the actor, the
+    /// actor it targets and the process.
+    fn idle_check_setup(e: &mut Engine, package: u32) -> (Ptr<Actor>, u32, Ptr) {
+        let player = actor_with(e, &[], None);
+        set_player(e, player);
+        head_track_constants(e);
+        e.map(FORM_POINTER_11CA248, 4);
+        e.set_global(FORM_POINTER_11CA248, 0x7777u32);
+        shared_acquire(
+            e,
+            &[
+                (ACQUIRE_OBJECT_SLOT_678, ret(0x5555)),
+                (ACQUIRE_OBJECT_SLOT_504, ret(0)),
+                (PROCESS_SLOT_674, ret(0)),
+            ],
+        );
+        let process = object(e, 0x800, &[(PROCESS_SLOT_22C, ret(package))]);
+        let actor = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_1D0, ret(1)),
+                (ACTOR_SLOT_214, ret(0)),
+                (ACTOR_SLOT_1E8_NODE, ret(0)),
+                (ACTOR_SLOT_21C_TEST, ret(0)),
+                (ACTOR_SLOT_1E4, ret(0)),
+            ],
+            None,
+        );
+        e.set(actor, Actor::pCurrentProcess, process);
+        stub(e, ACTOR_IS_PATHING_COMPLETE, 1);
+        (actor, 0x5000, process)
+    }
+
+    #[test]
+    fn fn_008a40e0_refuses_the_cases_the_code_lists() {
+        let mut e = engine();
+        let (actor, other, _process) = idle_check_setup(&mut e, 0);
+        // The player never.
+        let player = Ptr::<Actor>::new(e.global::<u32>(PLAYER_CHARACTER));
+        assert_eq!(fn_008a40e0(&mut e, player, other), 0);
+        // Accepted without a package.
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        // A base form with the flag.
+        stub(&mut e, ACTOR_BASE_FORM_FN, 0x6000);
+        stub(&mut e, FORM_TEST_FLAGS_FN, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        assert_eq!(
+            calls_to(&e, FORM_TEST_FLAGS_FN),
+            vec![vec![0x6030, 0x4000_0000]]
+        );
+        stub(&mut e, ACTOR_BASE_FORM_FN, 0);
+        // Arrows attached (slot 0x214).
+        let arrows = slot_target(&e, actor.cast(), ACTOR_SLOT_214);
+        e.register_double(arrows, |_, _| ret(1));
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        e.register_double(arrows, |_, _| ret(0));
+        // Not at the end of the path, or in combat.
+        stub(&mut e, ACTOR_IS_PATHING_COMPLETE, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, ACTOR_IS_PATHING_COMPLETE, 1);
+        stub(&mut e, ACTOR_IN_COMBAT, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, ACTOR_IN_COMBAT, 0);
+        // During an attack animation.
+        stub(&mut e, ACTOR_GET_ANIMATION, 0x6100);
+        stub(&mut e, ANIMATION_GROUP_OF_SLOT, 4);
+        stub(&mut e, IS_ATTACK_ACTION, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, IS_ATTACK_ACTION, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        // The acquire object targets the actor itself: refused.
+        let acquire_now = Ptr::new(e.call(GET_SAVED_ACQUIRE_OBJECT, &args![actor]).u32());
+        let targeted = slot_target(&e, acquire_now, ACQUIRE_OBJECT_SLOT_678);
+        let actor_addr = actor.addr();
+        e.register_double(targeted, move |_, _| ret(actor_addr));
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+    }
+
+    #[test]
+    fn fn_008a40e0_asks_for_the_detection_of_the_player() {
+        let mut e = engine();
+        let (actor, _other, _process) = idle_check_setup(&mut e, 0);
+        // The player moves and is the other actor: the detection decides.
+        let player = actor_with(&mut e, &[(ACTOR_SLOT_1D0, ret(1))], None);
+        set_player(&mut e, player);
+        stub(&mut e, ACTOR_IS_MOVING, 1);
+        stub(&mut e, PLAYER_IS_IN_COMBAT, 1);
+        let record = e.mem.alloc(0x40);
+        let acquire = Ptr::new(e.call(GET_SAVED_ACQUIRE_OBJECT, &args![actor]).u32());
+        let slot = slot_target(&e, acquire, ACQUIRE_OBJECT_SLOT_504);
+        e.register_double(slot, move |_, _| ret(record));
+        stub_float(&mut e, REFR_GET_DISTANCE_FROM_REFERENCE, 100.0);
+        // A record with level 0: not detected, refused.
+        assert_eq!(fn_008a40e0(&mut e, actor, player.addr()), 0);
+        assert_eq!(
+            calls_to(&e, PLAYER_IS_IN_COMBAT),
+            vec![vec![player.addr(), 0]]
+        );
+        // Detected: accepted.
+        e.mem.set_u32(record + 8, 5);
+        assert_eq!(fn_008a40e0(&mut e, actor, player.addr()), 1);
+    }
+
+    #[test]
+    fn fn_008a40e0_handles_the_package_types() {
+        let mut e = engine();
+        let (actor, other, process) = idle_check_setup(&mut e, 0x5100);
+        // Types that always refuse: 8, 0xf, 0x10, 0x14 and 0x1c.
+        for package_type in [8, 0xf, 0x10, 0x14, 0x1c] {
+            stub(&mut e, PACKAGE_TYPE, package_type);
+            assert_eq!(fn_008a40e0(&mut e, actor, other), 0, "{package_type:#x}");
+        }
+        // Types without an own rule.
+        for package_type in [1, 3, 4, 7, 9, 0x1d, 0x30] {
+            stub(&mut e, PACKAGE_TYPE, package_type);
+            assert_eq!(fn_008a40e0(&mut e, actor, other), 1, "{package_type:#x}");
+        }
+        // Types 0 and 2 refuse while a movement animation flag is set.
+        for package_type in [0, 2] {
+            stub(&mut e, PACKAGE_TYPE, package_type);
+            stub(&mut e, ACTOR_ANIM_FLAGS, 0);
+            assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+            stub(&mut e, ACTOR_ANIM_FLAGS, 4);
+            assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        }
+        stub(&mut e, ACTOR_ANIM_FLAGS, 0);
+        // Type 5 also waits for the special idle to finish.
+        stub(&mut e, PACKAGE_TYPE, 5);
+        let animation_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_1E4);
+        e.register_double(animation_slot, |_, _| ret(0x6200));
+        stub(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        e.register_double(animation_slot, |_, _| ret(0));
+        // Type 6: an acquire object that accepts at once ends it with 1.
+        stub(&mut e, PACKAGE_TYPE, 6);
+        stub(&mut e, PACKAGE_GET_LOCATION_FN, 0x5400);
+        stub(&mut e, PACKAGE_LOCATION_GET_LOC_REFERENCE, 0x5500);
+        stub(&mut e, REFR_BASE_FORM, 0x7777);
+        // The location's form is the remembered form: refused.
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, REFR_BASE_FORM, 0x7778);
+        stub(&mut e, FORM_TYPE, 0x30);
+        // A location of kind 3 refuses.
+        stub(&mut e, PACKAGE_LOCATION_GET_LOC_TYPE_FN, 3);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, PACKAGE_LOCATION_GET_LOC_TYPE_FN, 0);
+        // A furniture other actor refuses.
+        stub(&mut e, REFR_IS_FURNITURE, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, REFR_IS_FURNITURE, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        let _ = process;
+    }
+
+    #[test]
+    fn fn_008a40e0_type_0xc_needs_the_process_object_to_accept() {
+        let mut e = engine();
+        let (actor, other, _process) = idle_check_setup(&mut e, 0x5100);
+        stub(&mut e, PACKAGE_TYPE, 0xc);
+        // No object: refused.
+        stub(&mut e, PROCESS_OBJECT_8D0430, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        // An object that does not accept the actor: refused.
+        stub(&mut e, PROCESS_OBJECT_8D0430, 0x6300);
+        stub(&mut e, OBJECT_TEST_9F4300, 0);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        // Accepted, with a furniture reference: refused.
+        stub(&mut e, OBJECT_TEST_9F4300, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        assert_eq!(
+            calls_to(&e, OBJECT_TEST_9F4300),
+            vec![vec![0x6300, actor.addr(), 1]; 2]
+        );
+        stub(&mut e, OBJECT_REFERENCE_639B40, 0x6400);
+        stub(&mut e, REFR_IS_FURNITURE, 1);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, REFR_IS_FURNITURE, 0);
+        stub(&mut e, REFR_BASE_FORM, 0x7777);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, REFR_BASE_FORM, 0x7778);
+        stub(&mut e, FORM_TYPE, 0x30);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, FORM_TYPE, 0x31);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+        // A running animation of the object kind 3 refuses.
+        let animation_slot = slot_target(&e, actor.cast(), ACTOR_SLOT_1E4);
+        e.register_double(animation_slot, |_, _| ret(0x6200));
+        stub(&mut e, ANIMATION_SPECIAL_IDLE_DONE_PLAYING, 0);
+        stub(&mut e, ENTRY_FORM, 3);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 0);
+        stub(&mut e, ENTRY_FORM, 4);
+        assert_eq!(fn_008a40e0(&mut e, actor, other), 1);
+    }
+
+    /// The objects of a hit: the player as the aggressor, a victim with a
+    /// process and the hit data. Every global and setting the hit reads is
+    /// mapped; the callees are the default doubles.
+    struct HitWorld {
+        player: Ptr<Actor>,
+        victim: Ptr<Actor>,
+        process: Ptr,
+        acquire: Ptr,
+        hit: Ptr<HitData>,
+    }
+
+    fn hit_world(e: &mut Engine, kills: bool) -> HitWorld {
+        let player_position = e.mem.alloc(12);
+        double_global(e, ZERO_DOUBLE, 0.0);
+        double_global(e, THOUSAND_DOUBLE, 1000.0);
+        double_global(e, HUNDRED, 100.0);
+        double_global(e, ONE_HUNDREDTH, 0.01);
+        for global in [
+            DEFAULT_WEAPON_FORM,
+            HIT_BARK_DEADLINE,
+            CONTROLS_HOLDER,
+            COMBAT_DIALOGUE_MANAGER,
+            DETECTION_FLOAT_TWO,
+        ] {
+            e.map(global, 4);
+        }
+        e.map(LIMB_WORD_TABLE, 0x200);
+        stub_float_settings(e, &[]);
+        stub_int_settings(e, &[]);
+        stub_bool_settings(e, &[]);
+        stub_ftol(e);
+        stub(e, IMPORT_GET_TICK_COUNT, 1000);
+        stub(e, REFR_PARENT_CELL, 0x9000);
+        stub(e, CELL_TEST_450FF0, 1);
+        stub(e, OBJECT_011DEA0C_GET, 0x9100);
+        let player = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_360, ret(1)),
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_1D0, ret(0x7100)),
+                (ACTOR_SLOT_POSITION, ret(player_position)),
+            ],
+            None,
+        );
+        set_player(e, player);
+        let position = e.mem.alloc(12);
+        let acquire = shared_acquire(
+            e,
+            &[
+                (PROCESS_SLOT_3E8, ret(0)),
+                (PROCESS_SLOT_CURRENT_WEAPON, ret(0)),
+                (PROCESS_SLOT_WEAPON_LAST_POS, ret(0)),
+                (PROCESS_SLOT_5C8, ret(0)),
+                (PROCESS_SLOT_30C, ret(0)),
+            ],
+        );
+        let victim = actor_with(
+            e,
+            &[
+                (ACTOR_SLOT_360, ret(0)),
+                (ACTOR_SLOT_214, ret(0)),
+                (ACTOR_SLOT_22C, ret(0)),
+                (ACTOR_SLOT_APPLY_DAMAGE, ret(kills as u32)),
+                (ACTOR_SLOT_1D0, ret(0x7000)),
+                (ACTOR_SLOT_428, ret(0)),
+                (ACTOR_SLOT_230, ret(0)),
+                (ACTOR_SLOT_HIT_NOTICE, ret(0)),
+                (ACTOR_SLOT_HIT_ME_OV2, ret(0)),
+                (ACTOR_SLOT_DAMAGE_EQUIPMENT, ret(0)),
+                (ACTOR_SLOT_POSITION, ret(position)),
+                (ACTOR_SLOT_DAMAGE_LIMB, ret(0)),
+                (ACTOR_SLOT_1E4, ret(0)),
+            ],
+            None,
+        );
+        embedded_table(e, victim.addr() + 0x94, &[(0x08, ret(0))]);
+        embedded_table(
+            e,
+            victim.addr() + 0xa4,
+            &[(0x08, ret(0)), (0x0c, float_ret(0.0))],
+        );
+        let process = object(e, 0x800, &[(PROCESS_SLOT_CURRENT_WEAPON, ret(0))]);
+        e.set(victim, Actor::pCurrentProcess, process);
+        let hit = e.new_object::<HitData>();
+        e.set(hit, HitData::pAggressor, player.cast());
+        e.set(hit, HitData::pTarget, victim.cast());
+        e.set(hit, HitData::eDamageLimb, -1);
+        e.set(hit, HitData::fHealthDamage, 12.0);
+        e.set(hit, HitData::fTotalDamage, 15.0);
+        HitWorld {
+            player,
+            victim,
+            process,
+            acquire,
+            hit,
+        }
+    }
+
+    #[test]
+    fn actor_hit_me_ignores_actors_without_a_process_and_missing_hits() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        // No process: nothing at all.
+        let idle = actor_with(&mut e, &[], None);
+        actor_hit_me(&mut e, idle, world.hit, 0);
+        assert!(e.call_log.as_ref().unwrap().is_empty());
+        // No hit data: only the bracket function runs.
+        actor_hit_me(&mut e, world.victim, Ptr::NULL, 0);
+        assert_eq!(
+            calls_to(&e, ACTOR_HIT_BRACKET_8A5300),
+            vec![vec![world.victim.addr()]]
+        );
+        assert_eq!(call_count(&e, SCRIPT_SET_ACTION_FLAG), 0);
+    }
+
+    #[test]
+    fn actor_hit_me_only_queues_the_hit_when_the_task_queue_is_used() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        stub(&mut e, PICK_UP_GOES_TO_TASK_QUEUE, 1);
+        stub(&mut e, TASK_QUEUE_INTERFACE, 0x7300);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        assert_eq!(
+            calls_to(&e, QUEUE_ACTOR_HIT),
+            vec![vec![0x7300, world.victim.addr(), world.hit.addr()]]
+        );
+        assert_eq!(call_count(&e, SCRIPT_SET_ACTION_FLAG), 0);
+        assert_eq!(call_count(&e, ACTOR_HIT_BRACKET_8A5300), 1);
+    }
+
+    #[test]
+    fn actor_hit_me_applies_a_lethal_hit_of_the_player() {
+        let mut e = engine();
+        let world = hit_world(&mut e, true);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        // The damage was applied through slot 0x338 with the health,
+        // fatigue and the aggressor.
+        assert_eq!(
+            calls_to(
+                &e,
+                slot_target(&e, world.victim.cast(), ACTOR_SLOT_APPLY_DAMAGE)
+            ),
+            vec![vec![
+                world.victim.addr(),
+                12.0f32.to_bits(),
+                0.0f32.to_bits(),
+                world.player.addr()
+            ]]
+        );
+        // The script action flags of the aggressor are set.
+        let flags = calls_to(&e, SCRIPT_SET_ACTION_FLAG);
+        assert_eq!(flags[0][0], world.player.addr());
+        assert_eq!(flags[0][2], 0x80);
+        assert_eq!(flags[1][2], 0x100);
+        // The death handler runs with the category 3 (no source) and the
+        // kill is counted for the player.
+        assert_eq!(
+            calls_to(&e, ACTOR_DEATH_HANDLER),
+            vec![vec![world.victim.addr(), world.hit.addr(), 0, 3]]
+        );
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT), vec![vec![0x24]]);
+        // The player's hit feedback: one rumble.
+        assert_eq!(call_count(&e, CONTROLS_RUMBLE), 1);
+        // The hit is bracketed by the two 0x008a5300 calls.
+        assert_eq!(call_count(&e, ACTOR_HIT_BRACKET_8A5300), 2);
+        let _ = (world.process, world.acquire);
+    }
+
+    /// Makes `HitData::HasFlag` (`0058cba0`) test the hit's flags.
+    fn stub_hit_flag_test(e: &mut Engine) {
+        stub_with(e, HIT_DATA_FLAG_TEST, |e, a| {
+            ret(((e.mem.u32(a[0] + 0x58) & a[1]) != 0) as u32)
+        });
+    }
+
+    #[test]
+    fn actor_hit_me_damages_the_limb_the_hit_names() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        let base = object(
+            &mut e,
+            0x400,
+            &[(BASE_FORM_SLOT_BODY_PART_DATA, ret(0xc000))],
+        );
+        stub(&mut e, ACTOR_BASE_FORM_FN, base.addr());
+        stub(&mut e, BODY_PART_DATA_GET_BODY_PART, 0xd000);
+        stub(&mut e, BODY_PART_LIMB_NUMBER, 3);
+        e.set(world.hit, HitData::eDamageLimb, 3);
+        e.set(world.hit, HitData::fTargetedLimbDamage, 5.0);
+        // The limb has 10 health before the damage and 0 after.
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = reads.clone();
+        let table = e.mem.alloc(0x800);
+        let current = e.mem.alloc(8);
+        e.register_double(current, move |_, a| {
+            if a[1] == 3 {
+                counter.set(counter.get() + 1);
+                float_ret(if counter.get() == 1 { 10.0 } else { 0.0 })
+            } else {
+                float_ret(0.0)
+            }
+        });
+        e.mem.set_u32(table + 0x0c, current);
+        let integer = e.mem.alloc(8);
+        e.register_double(integer, |_, _| ret(0));
+        e.mem.set_u32(table + 0x08, integer);
+        e.mem.set_u32(world.victim.addr() + 0xa4, table);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        assert_eq!(
+            calls_to(
+                &e,
+                slot_target(&e, world.victim.cast(), ACTOR_SLOT_DAMAGE_LIMB)
+            ),
+            vec![vec![
+                world.victim.addr(),
+                3,
+                (-5.0f32).to_bits(),
+                world.player.addr()
+            ]]
+        );
+        // The entry point 6 was asked to adjust the damage.
+        let entry = calls_to(&e, HANDLE_ENTRY_POINT);
+        assert!(entry
+            .iter()
+            .any(|call| call[..3] == [6, world.victim.addr(), world.player.addr()]));
+    }
+
+    #[test]
+    fn actor_hit_me_casts_the_critical_effect() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        stub_hit_flag_test(&mut e);
+        embedded_table(
+            &mut e,
+            world.victim.addr() + 0x88,
+            &[(MAGIC_CASTER_SLOT_SET_SPELL, ret(0))],
+        );
+        e.set(world.hit, HitData::uiFlags, 4);
+        e.set(world.hit, HitData::pCriticalEffect, Ptr::new(0x6600));
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        let caster = world.victim.addr() + 0x88;
+        assert_eq!(
+            calls_to(&e, MAGIC_CASTER_INTERRUPT_CAST),
+            vec![vec![caster]]
+        );
+        assert_eq!(
+            calls_to(&e, MAGIC_CASTER_FIND_TARGETS),
+            vec![vec![caster, 1.0f32.to_bits(), 0, 0, 1.0f32.to_bits(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, MAGIC_TARGET_FN_824110),
+            vec![vec![world.victim.addr() + 0x94, 0x6618]]
+        );
+        // The setting that suppresses the cast turns it off.
+        e.call_log = Some(vec![]);
+        stub_bool_settings(&mut e, &[(SETTING_SKIP_CRITICAL_EFFECT, 1)]);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        assert_eq!(call_count(&e, MAGIC_CASTER_INTERRUPT_CAST), 0);
+    }
+
+    #[test]
+    fn actor_hit_me_knocks_back_an_actor_with_arrows() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position, 1.0);
+        e.mem.set_f32(position + 4, 2.0);
+        e.mem.set_f32(position + 8, 3.0);
+        let player_position = slot_target(&e, world.player.cast(), ACTOR_SLOT_POSITION);
+        e.register_double(player_position, move |_, _| ret(position));
+        let arrows = slot_target(&e, world.victim.cast(), ACTOR_SLOT_214);
+        e.register_double(arrows, |_, _| ret(1));
+        // The acquire object reports a furniture marker number above 0x14 and
+        // no furniture.
+        let acquire_table = e.mem.u32(world.acquire.addr());
+        for (slot, value) in [
+            (PROCESS_SLOT_4C4, 0x20u32),
+            (PROCESS_SLOT_20C, 0),
+            (PROCESS_SLOT_4C8, 0),
+        ] {
+            let function = e.mem.alloc(8);
+            e.register_double(function, move |_, _| ret(value));
+            e.mem.set_u32(acquire_table + slot, function);
+        }
+        let knock = e.mem.alloc(8);
+        e.register_double(knock, |_, _| ret(0));
+        let process_table = e.mem.alloc(0x800);
+        e.mem
+            .set_u32(process_table + PROCESS_SLOT_KNOCK_EXPLOSION, knock);
+        e.mem.set_u32(world.process.addr(), process_table);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        assert_eq!(
+            calls_to(&e, MOBILE_OBJECT_SET_CHASE_BIP),
+            vec![vec![world.victim.addr(), 0]]
+        );
+        assert_eq!(
+            calls_to(&e, ACTOR_GET_OUT_OF_FURNITURE_QUICK),
+            vec![vec![world.victim.addr()]]
+        );
+        // The victim is knocked away from the aggressor at speed 1.0.
+        assert_eq!(
+            calls_to(&e, knock)[0],
+            vec![
+                world.process.addr(),
+                world.victim.addr(),
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                1.0f32.to_bits()
+            ]
+        );
+    }
+
+    #[test]
+    fn actor_hit_me_uses_the_blocked_hit_paths() {
+        let mut e = engine();
+        let world = hit_world(&mut e, false);
+        e.set(world.hit, HitData::fPercentBlocked, 0.5);
+        stub(&mut e, INTERFACE_IS_IN_MENU_MODE, 0);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        // A blocked hit by the player rumbles once and skips the damage hooks.
+        assert_eq!(call_count(&e, CONTROLS_RUMBLE), 1);
+        assert_eq!(call_count(&e, ACTOR_FN_88E8D0), 0);
+        // A hit that is not blocked runs them.
+        e.call_log = Some(vec![]);
+        e.set(world.hit, HitData::fPercentBlocked, 0.0);
+        actor_hit_me(&mut e, world.victim, world.hit, 0);
+        assert_eq!(call_count(&e, ACTOR_FN_88E8D0), 1);
     }
 }
