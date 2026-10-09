@@ -13,16 +13,30 @@
 //! (`004abad0`), the model and texture queueing (`004abd30`, `004abfe0`,
 //! `QueueSkinTexture`), `LoadBipedParts`, the small `NiCloningProcess`
 //! members this unit emits, `ApplySkinnedObjects` and `AttachSkinnedObject`.
-//! The next session continues at `004add50`.
+//!
+//! Session 2 (b0021) covers `004add50` to `004afc50`, the next 40 functions:
+//! the small members of the bone table and node array (`004add50` to
+//! `004ade20`), `AttachToSkeleton`, `AttachToParent`, `LoadFaceGenModel`,
+//! `CloneHelmet`, `AttachHelmet`, the queueing of a FaceGen part
+//! (`004aede0`, `004aee60`), `LoadAndAttachAddOn`, `AddAddonNodes`,
+//! `GetLightingProperty`, `GetSkinBipedObject`, `AdjustSkinComplexion`, the
+//! first person path helpers (`004af950` to `004afa50`), and the constructors
+//! and destructors of the clone map, the process map and the node array. The
+//! next session continues at `004afc80` (`NiTArray<NiPointer<NiAVObject>>`
+//! `Compact`) with the rest of the queue (the map and array members up to
+//! `004b01f0`, `005e0ba0` and `00ba87e0`).
 //!
 //! Conventions this file uses, so the next session finds them:
 //!
 //! - The layouts ([`BipedAnim`], [`BipedBone`], [`BipedObject`],
 //!   [`NiCloningProcess`]) and the slot accessors ([`bone`], [`object`],
 //!   [`buffered`]) are first below and `pub(crate)`. A function of this unit
-//!   that is not translated yet (the ones from `004add50` on) is called by
+//!   that is not translated yet (the ones from `004afc80` on) is called by
 //!   address through a `FN_` constant until a later session translates it; one
-//!   that is translated is called directly.
+//!   that is translated is called directly. The calls session 1 wrote to the
+//!   functions session 2 translated (`FN_004ADDA0` to `FN_004AFC50`) still go
+//!   by address, because session 1's tests stand in for them; they behave the
+//!   same.
 //! - Tiny functions of other units are called by address through the
 //!   constants below. `00559450` is the one the linker folded into dozens of
 //!   getters: it returns the word at the address in `ECX`, so on an
@@ -433,7 +447,10 @@ const BODY_PART_COUNT: u32 = 0x0080_41a0;
 const BODY_PART_ARRAY: u32 = 0x0082_5c00;
 /// `00c4b310(node, name, 1)`: the object named `name` under `node`.
 const FIND_OBJECT_BY_NAME: u32 = 0x00c4_b310;
-/// Functions of this unit after the 40 this session covers.
+/// Functions of this unit that session 1 called by address because they were
+/// not translated yet. Session 2 translated them (`004add50` to `004afc50`),
+/// but these call sites keep the address: session 1's tests stand in for the
+/// functions. Session 2's own calls between functions of this file are direct.
 const FN_004ADDA0: u32 = 0x004a_dda0;
 const FN_004ADDC0: u32 = 0x004a_ddc0;
 const FN_004ADDE0: u32 = 0x004a_dde0;
@@ -459,6 +476,180 @@ const FN_004AFB80: u32 = 0x004a_fb80;
 const FN_004AFBA0: u32 = 0x004a_fba0;
 const FN_004AFC50: u32 = 0x004a_fc50;
 const FN_004AFF00: u32 = 0x004a_ff00;
+
+// ---- Session 2: functions of this unit not translated yet --------------------------
+
+/// The next session translates these (`NiTArray<NiPointer<NiAVObject>>`
+/// `Compact` and `UpdateSize`, the constructors and destructors of the clone
+/// map and the process map, the array destructor and the add at an index).
+const FN_004AFC80: u32 = 0x004a_fc80;
+const FN_004AFE50: u32 = 0x004a_fe50;
+const FN_004AFF30: u32 = 0x004a_ff30;
+const FN_004B0030: u32 = 0x004b_0030;
+const FN_004AFFA0: u32 = 0x004a_ffa0;
+const FN_004B00A0: u32 = 0x004b_00a0;
+const FN_004B0220: u32 = 0x004b_0220;
+const FN_004B02D0: u32 = 0x004b_02d0;
+
+// ---- Session 2: data of the exe ------------------------------------------------------
+
+/// The global holding the `NiFixedString` that is the key of the parent node
+/// extra data on a part (`004ae780` returns it; the log text names the key
+/// `Prn`).
+const PARENT_NODE_KEY: u32 = 0x011c_61e8;
+/// Class arguments of `00653270`: the string extra data class (the log text
+/// says `NiStringExtraData`) and the texture class `AdjustSkinComplexion`
+/// asks the property's texture about.
+const STRING_EXTRA_CLASS: u32 = 0x011f_4a38;
+const TEXTURE_CLASS: u32 = 0x011f_444c;
+/// An object at `011f6394` whose word at `+0x14` (read with `00825c00`)
+/// `AttachToParent` turns into the float of a record.
+const COUNT_OBJECT: u32 = 0x011f_6394;
+/// `Scb`: the name of the node `AttachToParent` looks for under a part (the
+/// scabbard the `RemoveScabard` call is named after), and `UPB`: the key of
+/// the extra data on the backpack node.
+const SCABBARD_NODE_NAME: u32 = 0x0101_fa04;
+const BACKPACK_KEY_NAME: u32 = 0x0101_fa00;
+/// `Meshes\` and `Meshes`, the format `Data\%s\%s`, and the suffix `1st.nif`
+/// of the first person model of a part.
+const MESHES_PREFIX: u32 = 0x0101_6fac;
+const MESHES_FOLDER: u32 = 0x0101_dccc;
+const DATA_PATH_FORMAT: u32 = 0x0101_fb74;
+const FIRST_PERSON_SUFFIX: u32 = 0x0101_fb80;
+/// The five skin part names (`char*` each, `01188c38`) `GetSkinBipedObject`
+/// compares the property's name with, and the sex names (`01199e8c`).
+const SKIN_PART_NAMES: u32 = 0x0118_8c38;
+const SEX_NAMES: u32 = 0x0119_9e8c;
+/// The table of 0x18-byte path entries `004afa20` fills (`011c5d10`).
+const PATH_TABLE: u32 = 0x011c_5d10;
+/// The vtables `004afb20`, `004afb50` and `004afc20` store.
+const CLONE_MAP_VTABLE: u32 = 0x0101_fb8c;
+const PROCESS_MAP_VTABLE: u32 = 0x0101_fbac;
+const NODE_ARRAY_VTABLE: u32 = 0x0101_fbcc;
+/// The form type for which a missing parent node makes `AttachToParent` call
+/// `RemoveScabard` instead of logging (what type `0x2b` is has not been
+/// confirmed from the exe).
+const FORM_TYPE_REMOVES_SCABBARD: u32 = 0x2b;
+/// The layer `AttachToParent` expects of a weapon's collision.
+const WEAPON_LAYER: u32 = 5;
+/// Log formats of session 2.
+const BONE_IN_PART_FORMAT: u32 = 0x0101_f8d8;
+const BONE_REQUESTED_FORMAT: u32 = 0x0101_f890;
+const BONE_ONLY_FORMAT: u32 = 0x0101_f840;
+const EXPORTED_WRONG_FORMAT: u32 = 0x0101_f7c8;
+const PARENT_EXTRA_MISSING_FORMAT: u32 = 0x0101_fa08;
+const EXTRA_NOT_STRING_FORMAT: u32 = 0x0101_fa40;
+const PARENT_NOT_FOUND_FORMAT: u32 = 0x0101_fa80;
+const NO_HAVOK_FORMAT: u32 = 0x0101_f944;
+const WEAPON_LAYER_FORMAT: u32 = 0x0101_f980;
+const NO_SHAPE_FORMAT: u32 = 0x0101_f9c4;
+const ADD_ON_SKINNED_FORMAT: u32 = 0x0101_fac0;
+const BAD_SKIN_NAME_FORMAT: u32 = 0x0101_fb04;
+const MISSING_RACE_TEXTURE_FORMAT: u32 = 0x0101_fb38;
+/// The global holding the object `004af8a0` reads a `NiPointer` from (at
+/// `+0x11a0`).
+const TEXTURE_OWNER: u32 = 0x011d_59e8;
+
+// ---- Session 2: callees outside this unit --------------------------------------------
+
+/// `strcpy_s(destination, size, source)` (`00406d30`), `strcat_s` (`00406d50`)
+/// and `sprintf_s(destination, size, format, ...)` (`00406d00`).
+const STRING_COPY: u32 = 0x0040_6d30;
+const STRING_APPEND: u32 = 0x0040_6d50;
+const FORMAT_INTO: u32 = 0x0040_6d00;
+/// `strrchr(text, character)` (`0040ab30`), `FileFinder::Exist(path, 0, 6, 1)`
+/// (`00456a20`, Xbox PDB name), `_strncpy_s(destination, size, source,
+/// count)` (`00ec8d5f`) and `_strlwr_s(text, size)` (`00ec8feb`).
+const FIND_LAST_CHAR: u32 = 0x0040_ab30;
+const FILE_EXISTS: u32 = 0x0045_6a20;
+const STRNCPY_S: u32 = 0x00ec_8d5f;
+const STRLWR_S: u32 = 0x00ec_8feb;
+/// `operator delete(block)` (`00401030`).
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `BSUtilities::GetObjectByName(root, &fixed name, 1)` (`00c4b470`, Xbox PDB
+/// name): the object named by the `NiFixedString` at `&fixed name`.
+const GET_OBJECT_BY_NAME: u32 = 0x00c4_b470;
+/// `0043b300(class, node)`: whether the node is of the class (a `bool`).
+const IS_KIND_OF: u32 = 0x0043_b300;
+/// `00453470(node)`: a test on the object at `+0x9c` of a node (which test
+/// has not been confirmed).
+const NODE_CHECK_9C: u32 = 0x0045_3470;
+/// `0048d150(extra)`: the address of the text field (`+0xc`) of a string
+/// extra data.
+const STRING_EXTRA_TEXT: u32 = 0x0048_d150;
+/// `0056f930(root)`: the reference whose 3D is under `root` (the Xbox name is
+/// `TESObjectREFR::FindReferenceFor3D`), `004b5b20(node)`: `RemoveScabard`.
+const FIND_REFERENCE_FOR_3D: u32 = 0x0056_f930;
+const REMOVE_SCABBARD: u32 = 0x004b_5b20;
+/// `009cdae0(node)`: the float at `+0x64` of a node (its scale), and
+/// `00440490(node, scale)`: sets it.
+const NODE_SCALE: u32 = 0x009c_dae0;
+const SET_NODE_SCALE: u32 = 0x0044_0490;
+/// `0043d410(record, float, byte, byte)`: builds the 9-byte record
+/// `AttachToParent` passes to virtual slot 0xa4 of the part.
+const BUILD_RECORD: u32 = 0x0043_d410;
+/// `ShadowSceneNode::AddObject(object)` (`00b5eeb0`).
+const SHADOW_ADD_OBJECT: u32 = 0x00b5_eeb0;
+/// `00c6c0e0(parent, 1)` (called after attaching the scabbard node).
+const NOTIFY_ATTACHED: u32 = 0x00c6_c0e0;
+/// `bhkWorld::KillHavok(node, 1, 1)` (`00c6a2e0`) and
+/// `bhkWorld::SetMotion(node, 4, 1, 1, 1)` (`00c6a350`).
+const KILL_HAVOK: u32 = 0x00c6_a2e0;
+const SET_MOTION: u32 = 0x00c6_a350;
+/// The weapon's collision: `bhkCollisionObject::GetbhkCollisionObject(node)`
+/// (`0043b610`), `006fa820(collision)` (the word at `+0x10`),
+/// `004ae6a0(body)` (the shape), `0043b4f0(body, out)` (writes the layer
+/// object and returns it) and `0043b4d0(layer)` (the layer: its low seven
+/// bits).
+const GET_COLLISION_OBJECT: u32 = 0x0043_b610;
+const COLLISION_BODY: u32 = 0x006f_a820;
+const BODY_SHAPE: u32 = 0x004a_e6a0;
+const COPY_LAYER: u32 = 0x0043_b4f0;
+const LAYER_OF: u32 = 0x0043_b4d0;
+/// `NiObjectNET::RemoveAllExtraData` (`00a5bfa0`, named by its body) and
+/// `TESObjectREFR::AddMasterParticleAddonNodes(node)` (`00578060`).
+const REMOVE_ALL_EXTRA_DATA: u32 = 0x00a5_bfa0;
+const ADD_MASTER_PARTICLE_ADDON_NODES: u32 = 0x0057_8060;
+/// `TESObjectREFR::AddAddonNodes(node)` (`00577e20`), the key of the add-on
+/// extra data (`00448a80`) and the test on that extra data (`00448a40`).
+const ADD_ADDON_NODES: u32 = 0x0057_7e20;
+const ADDON_KEY: u32 = 0x0044_8a80;
+const ADDON_EXTRA_CHECK: u32 = 0x0044_8a40;
+/// The queue of the model loader: `004450c0(loader; biped, handle, first,
+/// second, slot)`, and `NiPointer<QueuedFile>::operator=` (`006f74f0`).
+const LOADER_QUEUE_PART: u32 = 0x0044_50c0;
+const QUEUED_FILE_ASSIGN: u32 = 0x006f_74f0;
+/// The FaceGen model: `BSFaceGenManager::GetAsEGMFile(out, path, -1)`
+/// (`00653520`, Xbox PDB name) and `00651b50(file, 0, 0, 0, 1, -1, 0)`.
+const GET_EGM_FILE: u32 = 0x0065_3520;
+const FACE_GEN_LOAD: u32 = 0x0065_1b50;
+/// A recursive lock keyed by thread (owner at `+0`, count at `+4`):
+/// `0040fbf0(lock, 0)` takes it and `0040fba0(lock)` releases it.
+const RECURSIVE_LOCK_ENTER: u32 = 0x0040_fbf0;
+const RECURSIVE_LOCK_LEAVE: u32 = 0x0040_fba0;
+/// Properties: `NiAVObject::GetProperty(type)` (`00a59d30`),
+/// `PathingLocation::GetWorldspace` (`00441110`, a folded name) on a
+/// property, `004a2020(property, bit)` and `BSShaderProperty::SetFlag(bit,
+/// value)` (`00441130`).
+const GET_PROPERTY: u32 = 0x00a5_9d30;
+const PROPERTY_WORLDSPACE: u32 = 0x0044_1110;
+const PROPERTY_FLAG: u32 = 0x004a_2020;
+const SET_SHADER_FLAG: u32 = 0x0044_1130;
+/// The race body textures: `TESRace::GetBodyTexture(race; out, out, npc, slot,
+/// first person)` (`006149b0`), the race name text `00408da0(race + 0x18)`,
+/// `TESActorBase::GetSex` (`005f0cc0`), `00464f30(x, _)` (returns `x`) and
+/// `BSShaderManager::GetTexture(path, flag, out, 1, 0)` (`00b55840`).
+const GET_BODY_TEXTURE: u32 = 0x0061_49b0;
+const RACE_NAME_TEXT: u32 = 0x0040_8da0;
+const ACTOR_BASE_SEX: u32 = 0x005f_0cc0;
+const IDENTITY_TEXT: u32 = 0x0046_4f30;
+const GET_TEXTURE: u32 = 0x00b5_5840;
+/// `006a9540(object)`: the address of the field at `+0x34` (the path of a
+/// texture; the same body is the node's rotation, [`NODE_ROTATION`]).
+const TEXTURE_PATH_FIELD: u32 = 0x006a_9540;
+/// `SetSoundFile`-named folded function (`00489100`): copies a path into a
+/// 0x18-byte entry of [`PATH_TABLE`].
+const SET_PATH_ENTRY: u32 = 0x0048_9100;
 
 // ---- Small helpers --------------------------------------------------------------
 
@@ -537,7 +728,7 @@ fn setting_text_set(e: &mut Engine, setting: u32) -> bool {
 }
 
 /// `004ae8a0(this; slot)`: whether the slot holds FaceGen data (a function
-/// of this unit that a later session translates).
+/// of this unit, translated as [`fn_004ae8a0`], called by address as session 1 wrote it).
 fn is_face_gen_slot(e: &mut Engine, this: Ptr<BipedAnim>, slot: u32) -> bool {
     e.call(FN_004AE8A0, &args![this, slot]).bool()
 }
@@ -2094,6 +2285,1101 @@ fn attach_face_gen(e: &mut Engine, requester: Ptr, face: Ptr, child: Ptr, handle
     stack_free(e, coords);
 }
 
+// ---- Session 2: the functions from 004add50 -----------------------------------------
+
+// Translated from 004add50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strncpy_s(destination, count + 1, source, count)`: copies `count`
+/// characters of `source` and terminates `destination`. Returns the CRT
+/// function's result.
+pub fn fn_004add50(e: &mut Engine, destination: Ptr, source: Ptr, count: u32) -> u32 {
+    e.call(
+        STRNCPY_S,
+        &args![destination, count.wrapping_add(1), source, count],
+    )
+    .u32()
+}
+
+// Translated from 004add70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compacts the `NiTArray<NiPointer<NiAVObject>>` at `+0x9c` of `node`
+/// (`004afc80`) and then updates its size (`004afe50`); the map names the two
+/// `Compact` and `UpdateSize`.
+pub fn fn_004add70(e: &mut Engine, node: Ptr) {
+    let array = node.byte_add(0x9c);
+    e.call(FN_004AFC80, &args![array]);
+    e.call(FN_004AFE50, &args![array]);
+}
+
+// Translated from 004adda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as element `index` of the array of words at `+0x14` of
+/// `this` (the bone table of a geometry's data).
+pub fn fn_004adda0(e: &mut Engine, this: Ptr, index: u32, value: Ptr) {
+    let table = e.mem.u32(this.addr().wrapping_add(0x14));
+    e.mem
+        .set_u32(table.wrapping_add(index.wrapping_mul(4)), value.addr());
+}
+
+// Translated from 004addc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns `value` to the `NiPointer` at `+0xc` of `this`.
+pub fn fn_004addc0(e: &mut Engine, this: Ptr, value: Ptr) {
+    ni_pointer_assign(e, this.byte_add(0x0c), value);
+}
+
+// Translated from 004adde0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assigns `value` to the `NiPointer` at `+0xbc` of `this` (the data
+/// pointer of a geometry node).
+pub fn fn_004adde0(e: &mut Engine, this: Ptr, value: Ptr) {
+    ni_pointer_assign(e, this.byte_add(0xbc), value);
+}
+
+// Translated from 004ade00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Looks up the object named by the `NiFixedString` at `name` under `root`
+/// (`BSUtilities::GetObjectByName(root, name, 1)`, `00c4b470`).
+pub fn fn_004ade00(e: &mut Engine, root: Ptr, name: Ptr) -> Ptr {
+    e.call(GET_OBJECT_BY_NAME, &args![root, name, 1u32]).ptr()
+}
+
+// Translated from 004ade20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the node array `this` (the map names the body
+/// `~basic_streambuf<>`, a folded name; it is [`fn_004afc20`]).
+pub fn fn_004ade20(e: &mut Engine, this: Ptr) {
+    fn_004afc20(e, this);
+}
+
+// Translated from 004ade40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::AttachToSkeleton` (Xbox PDB): binds the bone table of the
+/// geometry `node` to the objects named in it under `skeleton` (a bone not
+/// found is replaced by `skeleton` itself and, with `flag`, logged), attaches
+/// the geometry to `parent` (virtual slot 0xdc) when given and, for a `node`
+/// with children, attaches every child the same way (a child that is not a
+/// geometry is moved out of `node`, after an incorrect export is logged once).
+/// The children of the skinned class are attached with `flag` 1.
+pub fn biped_anim_attach_to_skeleton(
+    e: &mut Engine,
+    skeleton: Ptr,
+    node: Ptr,
+    parent: Ptr,
+    flag: u8,
+) {
+    if node.is_null() {
+        return;
+    }
+    // Virtual slot 0xc of the node: its `NiNode`, if it is one.
+    let as_node = e.vcall(node.addr(), 0x0c, &[]).ptr::<()>();
+    // Virtual slot 0x18: its geometry, if it is one.
+    if e.vcall(node.addr(), 0x18, &[]).u32() != 0 {
+        let data = e.call(NODE_DATA_POINTER, &args![node]).ptr::<()>();
+        if !data.is_null() {
+            let owner = e.call(BODY_PART_OWNER, &args![data]).u32();
+            let count = e.call(BODY_PART_COUNT, &args![owner]).u32();
+            let items = e.call(BODY_PART_ARRAY, &args![data]).u32();
+            for index in 0..count {
+                let item = e.mem.u32(items.wrapping_add(index.wrapping_mul(4)));
+                if item == 0 {
+                    continue;
+                }
+                let name = e.call(NAME_FIELD, &args![item]).u32();
+                let found = fn_004ade00(e, skeleton, Ptr::new(name));
+                if !found.is_null() {
+                    fn_004adda0(e, data, index, found);
+                    continue;
+                }
+                fn_004adda0(e, data, index, skeleton);
+                if flag == 0 {
+                    continue;
+                }
+                if !as_node.is_null() {
+                    let bone_text = node_name(e, Ptr::new(item));
+                    let length = e.call(TEXT_LENGTH, &args![bone_text]).u32();
+                    let bone_text = node_name(e, Ptr::new(item));
+                    let node_text = node_name(e, node);
+                    if e.call(COMPARE_PREFIX, &args![node_text, bone_text, length])
+                        .u32()
+                        == 0
+                    {
+                        let as_node_name = node_name(e, as_node);
+                        let above = e.call(NODE_PARENT, &args![as_node]).ptr::<()>();
+                        let above_name = node_name(e, above);
+                        let bone_name = node_name(e, Ptr::new(item));
+                        e.call(
+                            LOG,
+                            &args![BONE_IN_PART_FORMAT, bone_name, above_name, as_node_name],
+                        );
+                        continue;
+                    }
+                }
+                if !as_node.is_null() && !skeleton.is_null() {
+                    let skeleton_name = node_name(e, skeleton);
+                    let as_node_name = node_name(e, as_node);
+                    let bone_name = node_name(e, Ptr::new(item));
+                    e.call(
+                        LOG,
+                        &args![
+                            BONE_REQUESTED_FORMAT,
+                            bone_name,
+                            as_node_name,
+                            skeleton_name
+                        ],
+                    );
+                } else {
+                    let bone_name = node_name(e, Ptr::new(item));
+                    e.call(LOG, &args![BONE_ONLY_FORMAT, bone_name]);
+                }
+            }
+            if !parent.is_null() {
+                e.call(SET_PARENT_OBJECT, &args![data, parent]);
+                e.vcall(parent.addr(), 0xdc, &args![node, 1u32]);
+            }
+        }
+    }
+    if as_node.is_null() {
+        return;
+    }
+    let mut reported = false;
+    fn_004add70(e, as_node);
+    let moved = stack_alloc(e, 0x10);
+    e.call(FN_004AFF00, &args![moved, 0u32, 1u32]);
+    let mut index = 0;
+    // The child count is read again on every round: children are removed.
+    while index < child_count(e, as_node) {
+        let child = child_at(e, as_node, index);
+        index += 1;
+        if child.is_null() {
+            continue;
+        }
+        let child_node = e.vcall(child.addr(), 0x0c, &[]).ptr::<()>();
+        if e.call(IS_KIND_OF, &args![SKINNED_CLASS, as_node]).bool() && !child_node.is_null() {
+            biped_anim_attach_to_skeleton(e, skeleton, child, parent, 1);
+        } else if e.vcall(child.addr(), 0x18, &[]).u32() == 0 {
+            if !reported && !child_node.is_null() && e.call(NODE_CHECK_9C, &args![child]).u32() != 0
+            {
+                let skeleton_name = node_name(e, skeleton);
+                let as_node_name = node_name(e, as_node);
+                let above = e.call(NODE_PARENT, &args![as_node]).ptr::<()>();
+                let above_name = node_name(e, above);
+                e.call(
+                    LOG,
+                    &args![
+                        EXPORTED_WRONG_FORMAT,
+                        above_name,
+                        as_node_name,
+                        skeleton_name
+                    ],
+                );
+                reported = true;
+            }
+            array_add(e, moved, child);
+            e.vcall(as_node.addr(), 0xe8, &args![child]);
+        } else {
+            biped_anim_attach_to_skeleton(e, skeleton, child, parent, flag);
+        }
+    }
+    fn_004add70(e, as_node);
+    fn_004ade20(e, moved);
+    stack_free(e, moved);
+}
+
+// Translated from 004ae250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::AttachToParent` (Xbox PDB): attaches the part `node` to the
+/// node its parent-node extra data (`Prn`, a string extra data, from
+/// `source` or else from `node`) names under `root`; logs when the extra data
+/// or the parent is missing (for form type `0x2b`, `RemoveScabard` instead).
+/// With a parent: takes its scale, attaches `node`, records it with the
+/// shadow scene and attaches the `Scb` child. Then handles the `Backpack`
+/// child (the player's first person node gets the weapon flag, the others
+/// the scale and an `UPB` parent), and finally either kills the Havok of the
+/// first person biped or checks a weapon's collision (slot 5: data, shape
+/// and layer, each logged when wrong) and sets the motion of `node`.
+/// `_unused_5` is a word the callers pass and the function never reads.
+pub fn biped_anim_attach_to_parent(
+    e: &mut Engine,
+    root: Ptr,
+    node: Ptr,
+    source: Ptr,
+    biped: Ptr<BipedAnim>,
+    slot: u32,
+    _unused_5: u32,
+) {
+    let mut extra: Ptr = Ptr::NULL;
+    let mut parent = Ptr::NULL;
+    if !source.is_null() {
+        let key = fn_004ae780(e);
+        extra = e.call(GET_EXTRA_DATA, &args![source, key]).ptr();
+    }
+    if extra.is_null() {
+        let key = fn_004ae780(e);
+        extra = e.call(GET_EXTRA_DATA, &args![node, key]).ptr();
+    }
+    if extra.is_null() {
+        let name = node_name(e, node);
+        e.call(LOG, &args![PARENT_EXTRA_MISSING_FORMAT, name]);
+    } else {
+        let text_extra = e
+            .call(CAST_TO_CLASS, &args![STRING_EXTRA_CLASS, extra])
+            .ptr::<()>();
+        if text_extra.is_null() {
+            let name = node_name(e, node);
+            e.call(LOG, &args![EXTRA_NOT_STRING_FORMAT, name]);
+        } else {
+            let field = e.call(STRING_EXTRA_TEXT, &args![text_extra]).u32();
+            parent = fn_004ade00(e, root, Ptr::new(field));
+            if parent.is_null() {
+                let reference = e.call(FIND_REFERENCE_FOR_3D, &args![root]).ptr::<()>();
+                let mut scabbard = false;
+                if !reference.is_null()
+                    && !e
+                        .call(REFERENCE_FORM, &args![reference])
+                        .ptr::<()>()
+                        .is_null()
+                {
+                    let form = e.call(REFERENCE_FORM, &args![reference]).u32();
+                    if e.call(FORM_TYPE, &args![form]).u32() == FORM_TYPE_REMOVES_SCABBARD {
+                        e.call(REMOVE_SCABBARD, &args![node]);
+                        scabbard = true;
+                    }
+                }
+                if !scabbard {
+                    let node_text = node_name(e, node);
+                    let field = e.call(STRING_EXTRA_TEXT, &args![text_extra]).u32();
+                    let parent_text = e.call(NAME_TEXT, &args![field]).ptr::<()>();
+                    e.call(LOG, &args![PARENT_NOT_FOUND_FORMAT, parent_text, node_text]);
+                }
+            }
+        }
+    }
+    let mut scale = 1.0f32;
+    if !parent.is_null() {
+        scale = e.call(NODE_SCALE, &args![parent]).f32();
+        e.vcall(parent.addr(), 0xdc, &args![node, 1u32]);
+        let count = e.call(BODY_PART_ARRAY, &args![COUNT_OBJECT]).u32();
+        let record = stack_alloc(e, 0x10);
+        e.call(BUILD_RECORD, &args![record, count as f32, 0u8, 0u8]);
+        e.vcall(node.addr(), 0xa4, &args![record, 0u32]);
+        stack_free(e, record);
+        let scene = e.call(SHADOW_SCENE_NODE, &args![0u32]).u32();
+        e.call(SHADOW_ADD_OBJECT, &args![scene, node]);
+        let scabbard_node = fn_004aae30(e, node, Ptr::new(SCABBARD_NODE_NAME));
+        if !scabbard_node.is_null() {
+            e.vcall(parent.addr(), 0xdc, &args![scabbard_node, 1u32]);
+            e.call(NOTIFY_ATTACHED, &args![parent, 1u32]);
+            e.call(UPDATE_PROPERTIES, &args![scabbard_node]);
+            fn_004add70(e, node);
+        }
+    }
+    let backpack = fn_004aae30(e, node, Ptr::new(BACKPACK_NAME));
+    if !backpack.is_null() {
+        let player = e.global::<u32>(PLAYER);
+        let player_node = e.call(PLAYER_NODE, &args![player, 1u32]).u32();
+        if root.addr() == player_node {
+            e.call(SET_WEAPON_FLAG, &args![backpack, 1u32]);
+        } else {
+            e.call(SET_NODE_SCALE, &args![backpack, scale]);
+            let fixed = stack_alloc(e, 4);
+            let key = e
+                .call(FIXED_STRING_INIT, &args![fixed, BACKPACK_KEY_NAME])
+                .u32();
+            extra = e.call(GET_EXTRA_DATA, &args![backpack, key]).ptr();
+            e.call(FIXED_STRING_FREE, &args![fixed]);
+            stack_free(e, fixed);
+            if !extra.is_null() {
+                let text_extra = e
+                    .call(CAST_TO_CLASS, &args![STRING_EXTRA_CLASS, extra])
+                    .ptr::<()>();
+                if !text_extra.is_null() {
+                    let field = e.call(STRING_EXTRA_TEXT, &args![text_extra]).u32();
+                    parent = fn_004ade00(e, root, Ptr::new(field));
+                    if !parent.is_null() {
+                        e.vcall(parent.addr(), 0xdc, &args![backpack, 1u32]);
+                    }
+                }
+            }
+        }
+    }
+    if !biped.is_null() && biped.addr() == player_biped(e, 1) {
+        e.call(KILL_HAVOK, &args![node, 1u32, 1u32]);
+    } else {
+        if slot == WEAPON_SLOT {
+            let collision = e.call(GET_COLLISION_OBJECT, &args![node]).u32();
+            if collision == 0 {
+                let name = node_name(e, node);
+                e.call(LOG, &args![NO_HAVOK_FORMAT, name]);
+            } else {
+                // The code tests `collision` for null again here; it cannot be.
+                let body = e.call(COLLISION_BODY, &args![collision]).u32();
+                let shape = if body == 0 {
+                    0
+                } else {
+                    e.call(BODY_SHAPE, &args![body]).u32()
+                };
+                if shape == 0 {
+                    let name = node_name(e, node);
+                    e.call(LOG, &args![NO_SHAPE_FORMAT, name]);
+                }
+                if body != 0 {
+                    let out = stack_alloc(e, 4);
+                    let layer = e.call(COPY_LAYER, &args![body, out]).u32();
+                    if e.call(LAYER_OF, &args![layer]).u32() != WEAPON_LAYER {
+                        let name = node_name(e, node);
+                        e.call(LOG, &args![WEAPON_LAYER_FORMAT, name]);
+                    }
+                    stack_free(e, out);
+                }
+            }
+        }
+        e.call(SET_MOTION, &args![node, 4u32, 1u32, 1u32, 1u32]);
+    }
+}
+
+// Translated from 004ae780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The key of the parent node extra data: the global at `011c61e8`.
+pub fn fn_004ae780(e: &mut Engine) -> Ptr {
+    Ptr::new(e.global::<u32>(PARENT_NODE_KEY))
+}
+
+// Translated from 004ae790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::LoadFaceGenModel` (Xbox PDB): with the part lock held, for a
+/// slot with a model: builds `Meshes\<model path>`, asks the FaceGen manager
+/// for the matching `.egm` file and loads it. Returns the loaded FaceGen
+/// model, or 0 (no model in the slot).
+pub fn biped_anim_load_face_gen_model(e: &mut Engine, this: Ptr<BipedAnim>, slot: u32) -> Ptr {
+    e.call(LOCK_ENTER, &args![PART_LOCK, 0u32]);
+    let part = e.get(object(this, slot), BipedObject::pPart);
+    let mut result = Ptr::NULL;
+    if !part.is_null() {
+        let text = stack_alloc(e, 8);
+        e.call(STRING_INIT, &args![text]);
+        let buffer = stack_alloc(e, 0x104);
+        e.call(STRING_COPY, &args![buffer, 0x104u32, MESHES_PREFIX]);
+        // Virtual slot 0x14 of the model: its path.
+        let path = e.vcall(part.addr(), 0x14, &[]).u32();
+        e.call(STRING_APPEND, &args![buffer, 0x104u32, path]);
+        let file = e
+            .call(GET_EGM_FILE, &args![text, buffer, 0xffff_ffffu32])
+            .u32();
+        result = e
+            .call(
+                FACE_GEN_LOAD,
+                &args![file, 0u32, 0u32, 0u32, 1u32, 0xffff_ffffu32, 0u32],
+            )
+            .ptr();
+        e.call(STRING_FREE, &args![text]);
+        stack_free(e, buffer);
+        stack_free(e, text);
+    }
+    e.call(LOCK_LEAVE, &args![PART_LOCK]);
+    result
+}
+
+// Translated from 004ae8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether slot `slot` has a model and that model has bit 0 of the byte at
+/// `+0x14` set (`004ae8f0`): the slot holds FaceGen data.
+pub fn fn_004ae8a0(e: &mut Engine, this: Ptr<BipedAnim>, slot: u32) -> bool {
+    let part = e.get(object(this, slot), BipedObject::pPart);
+    !part.is_null() && fn_004ae8f0(e, part) != 0
+}
+
+// Translated from 004ae8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 0 of the byte at `+0x14` of `this`.
+pub fn fn_004ae8f0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr().wrapping_add(0x14)) & 1
+}
+
+// Translated from 004ae910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::CloneHelmet` (Xbox PDB): for a slot that has no clone yet and
+/// given `face_model` (only tested for null; `AttachHelmet` passes the same
+/// word on as the FaceGen model) and the loaded `file`, clones the file
+/// (deep copy with the same textures when it has a morpher controller),
+/// sets the fade node's LOD multiplier type to 7, resets the translation and
+/// rotation, swaps the textures the slot's model and form ask for and
+/// returns the clone. Returns 0 when the slot has a clone or an argument is
+/// null, or the clone fails.
+pub fn biped_anim_clone_helmet(
+    e: &mut Engine,
+    this: Ptr<BipedAnim>,
+    face_model: Ptr,
+    file: Ptr,
+    slot: u32,
+) -> Ptr {
+    let current = object(this, slot);
+    if !e.get(current, BipedObject::pPartClone).is_null() {
+        return Ptr::NULL;
+    }
+    if face_model.is_null() || file.is_null() {
+        return Ptr::NULL;
+    }
+    let cloning = stack_alloc(e, 0x1c);
+    fn_004ad050(e, cloning, 1.0);
+    let handle = stack_alloc(e, 4);
+    ni_pointer_new(e, handle, Ptr::NULL);
+    let copy = if e.call(HAS_MORPHER_CONTROLLER, &args![file]).bool() {
+        let tes = e.global::<u32>(TES_GLOBAL);
+        let deep = e
+            .call(DEEP_COPY_SAME_TEXTURES, &args![tes, file, cloning])
+            .ptr();
+        ni_pointer_assign(e, handle, deep);
+        ni_pointer_get(e, handle)
+    } else {
+        e.call(NI_OBJECT_CLONE, &args![file, cloning]).ptr()
+    };
+    let mut result = Ptr::NULL;
+    if !copy.is_null() {
+        if e.call(IS_KIND_OF, &args![SKINNED_CLASS, copy]).bool() {
+            e.call(SET_LOD_MULT_TYPE, &args![copy, 7u32]);
+        }
+        e.call(SET_TRANSLATION, &args![copy, ZERO_TRANSLATION]);
+        e.call(SET_ROTATION, &args![copy, IDENTITY_ROTATION]);
+        let part = e.get(current, BipedObject::pPart);
+        if !part.is_null() {
+            // Virtual slot 0x1c of the model: the texture swap.
+            let swap = e.vcall(part.addr(), 0x1c, &[]).u32();
+            if swap != 0 {
+                e.call(SWAP_TEXTURES, &args![swap, copy]);
+            }
+        }
+        let form = e.get(current, BipedObject::pParent);
+        if !form.is_null() && e.vcall(form.addr(), 0xac, &[]).bool() {
+            e.call(SWAP_PLATFORM_TEXTURES, &args![copy]);
+        }
+        result = copy;
+    }
+    ni_pointer_release(e, handle);
+    stack_free(e, handle);
+    ni_cloning_process_destructor(e, cloning.cast());
+    stack_free(e, cloning);
+    result
+}
+
+// Translated from 004aeb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::AttachHelmet` (Xbox PDB): for `node` (given `face_model`),
+/// applies the skinned objects like `LoadBipedParts` does (the first person
+/// player flags as there) or else attaches it with
+/// [`biped_anim_attach_to_parent`]; the result is named after the slot and
+/// the form, gets its add-on nodes and, when the slot is not skinned, is
+/// attached to the bone of the slot (the root when there is no such bone and
+/// the result has a parent). Stored as the slot's clone. At the end the
+/// actor's 3D properties are updated.
+pub fn biped_anim_attach_helmet(
+    e: &mut Engine,
+    this: Ptr<BipedAnim>,
+    face_model: Ptr,
+    node: Ptr,
+    slot: u32,
+) {
+    let requester = e.get(this, BipedAnim::m_pRequester);
+    if !face_model.is_null() && !node.is_null() {
+        let bone_index = e.global::<u32>(SLOT_BONES + 4 * slot);
+        // The result of this first test is not used.
+        if requester.addr() == e.global::<u32>(PLAYER) {
+            let player = e.global::<u32>(PLAYER);
+            e.call(IS_FIRST_PERSON_BIPED, &args![player, this]);
+        }
+        let has_slot_6 = !e.get(object(this, 6), BipedObject::pParent).is_null();
+        let mut first_person = false;
+        if requester.addr() == e.global::<u32>(PLAYER) {
+            let player = e.global::<u32>(PLAYER);
+            if e.call(IS_FIRST_PERSON_BIPED, &args![player, this]).bool() {
+                first_person = true;
+            }
+        }
+        let mut result = biped_anim_apply_skinned_objects(
+            e,
+            this,
+            node,
+            slot,
+            first_person as u8,
+            has_slot_6 as u8,
+            face_model,
+        );
+        if result.is_null() {
+            result = node;
+            let root = e.get(this, BipedAnim::root);
+            biped_anim_attach_to_parent(e, root, node, Ptr::NULL, this, slot, face_model.addr());
+        }
+        if !result.is_null() {
+            let form = e.get(object(this, slot), BipedObject::pParent);
+            name_part_node(e, result, form, slot);
+            fn_004af240(e, node, node, slot, requester.addr());
+            let skinned = e.get(object(this, slot), BipedObject::bSkinned);
+            if !skinned && e.vcall(result.addr(), 0x0c, &[]).u32() != 0 {
+                e.call(NODE_PARENT, &args![result]);
+                // `bone[bone_index].pParent`, whose address wraps for index -1.
+                let bone_node: Ptr = Ptr::new(
+                    e.mem.u32(
+                        this.addr()
+                            .wrapping_add(bone_index.wrapping_mul(8))
+                            .wrapping_add(8),
+                    ),
+                );
+                if !bone_node.is_null() {
+                    e.vcall(bone_node.addr(), 0xdc, &args![result, 1u32]);
+                } else if !e.call(NODE_PARENT, &args![result]).ptr::<()>().is_null() {
+                    let root = e.get(this, BipedAnim::root);
+                    e.vcall(root.addr(), 0xdc, &args![result, 1u32]);
+                }
+            }
+            e.set(object(this, slot), BipedObject::pPartClone, result);
+        }
+    }
+    if !requester.is_null() {
+        let actor_root = e.call(ACTOR_ROOT, &args![requester]).ptr::<()>();
+        if !actor_root.is_null() {
+            let actor_root = e.call(ACTOR_ROOT, &args![requester]).ptr::<()>();
+            e.call(UPDATE_PROPERTIES, &args![actor_root]);
+        }
+    }
+}
+
+// Translated from 004aede0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Queues the slot's model through [`fn_004aee60`] with a fresh handle (the
+/// four-byte object `00528cb0` builds and `0044cbf0` destroys).
+pub fn fn_004aede0(e: &mut Engine, this: Ptr<BipedAnim>, first: u32, second: u32, slot: u32) {
+    let handle = stack_alloc(e, 4);
+    e.call(QUEUE_OBJECT_INIT, &args![handle, 0u32]);
+    fn_004aee60(e, this, first, second, handle, slot);
+    e.call(QUEUE_OBJECT_FREE, &args![handle]);
+    stack_free(e, handle);
+}
+
+// Translated from 004aee60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the `NiPointer` `handle` holds nothing: for a slot without a model
+/// (or with the model word -1) assigns null to it (`006f74f0`), otherwise
+/// asks the model loader to queue the slot's part (`004450c0`).
+pub fn fn_004aee60(
+    e: &mut Engine,
+    this: Ptr<BipedAnim>,
+    first: u32,
+    second: u32,
+    handle: Ptr,
+    slot: u32,
+) {
+    if !ni_pointer_get(e, handle).is_null() {
+        return;
+    }
+    let part = e.get(object(this, slot), BipedObject::pPart);
+    if part.is_null() || part.addr() == 0xffff_ffff {
+        e.call(QUEUED_FILE_ASSIGN, &args![handle, 0u32]);
+    } else {
+        let loader = e.global::<u32>(MODEL_LOADER);
+        e.call(
+            LOADER_QUEUE_PART,
+            &args![loader, this, handle, first, second, slot],
+        );
+    }
+}
+
+// Translated from 004aeed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::LoadAndAttachAddOn` (Xbox PDB): loads the model `model` (not
+/// null, with a path) for `requester` and clones it (like `LoadBipedParts`),
+/// swaps its textures (the model's and, when `form` asks, the platform
+/// ones), adds the add-on nodes, puts back the extra data of the clone under
+/// the key `004ab220` gives after removing all of it, resets its
+/// translation and rotation and, unless it is skinned (then logged),
+/// attaches it with [`biped_anim_attach_to_parent`] and, when it has no
+/// parent yet, under the bone of `slot` or the root (`root_override`, else
+/// the actor's 3D root). Returns the clone, or 0.
+pub fn biped_anim_load_and_attach_add_on(
+    e: &mut Engine,
+    form: Ptr,
+    model: Ptr,
+    slot: u32,
+    requester: Ptr,
+    root_override: Ptr,
+) -> Ptr {
+    if model.is_null() || requester.is_null() {
+        return Ptr::NULL;
+    }
+    // Virtual slot 0x14 of the model: its path.
+    let path = e.vcall(model.addr(), 0x14, &[]).ptr::<()>();
+    if path.is_null() || e.mem.i8(path.addr()) == 0 {
+        return Ptr::NULL;
+    }
+    let mut root = root_override;
+    if root.is_null() {
+        root = e.call(ACTOR_ROOT, &args![requester]).ptr();
+    }
+    if root.is_null() {
+        return Ptr::NULL;
+    }
+    let loader = e.global::<u32>(MODEL_LOADER);
+    let file = e
+        .call(
+            LOAD_FILE,
+            &args![loader, path, 3u32, 1u32, 0u32, 0u32, 0u32],
+        )
+        .ptr::<()>();
+    let cloning = stack_alloc(e, 0x1c);
+    fn_004ad050(e, cloning, 1.0);
+    let handle = stack_alloc(e, 4);
+    ni_pointer_new(e, handle, Ptr::NULL);
+    let copy = if e.call(HAS_MORPHER_CONTROLLER, &args![file]).bool() {
+        let tes = e.global::<u32>(TES_GLOBAL);
+        let deep = e
+            .call(DEEP_COPY_SAME_TEXTURES, &args![tes, file, cloning])
+            .ptr();
+        ni_pointer_assign(e, handle, deep);
+        ni_pointer_get(e, handle)
+    } else {
+        e.call(NI_OBJECT_CLONE, &args![file, cloning]).ptr()
+    };
+    let mut skinned = false;
+    // Virtual slot 0x1c of the model: the texture swap.
+    let swap = e.vcall(model.addr(), 0x1c, &[]).u32();
+    if swap != 0 {
+        e.call(SWAP_TEXTURES, &args![swap, copy]);
+    }
+    if !form.is_null() && e.vcall(form.addr(), 0xac, &[]).bool() {
+        e.call(SWAP_PLATFORM_TEXTURES, &args![copy]);
+    }
+    fn_004af240(e, file, copy, slot, requester.addr());
+    e.call(ADD_MASTER_PARTICLE_ADDON_NODES, &args![copy]);
+    let key = fn_004ab220(e);
+    let extra = e.call(GET_EXTRA_DATA, &args![copy, key]).ptr();
+    let held = stack_alloc(e, 4);
+    ni_pointer_new(e, held, extra);
+    e.call(REMOVE_ALL_EXTRA_DATA, &args![copy]);
+    if !ni_pointer_get(e, held).is_null() {
+        let value = ni_pointer_get(e, held);
+        let key = fn_004ab220(e);
+        e.call(ADD_EXTRA_DATA, &args![copy, key, value]);
+        ni_pointer_assign(e, held, Ptr::NULL);
+    }
+    if !copy.is_null() {
+        if e.call(IS_KIND_OF, &args![SKINNED_CLASS, copy]).bool() {
+            e.call(SET_LOD_MULT_TYPE, &args![copy, 7u32]);
+        }
+        e.call(SET_TRANSLATION, &args![copy, ZERO_TRANSLATION]);
+        e.call(SET_ROTATION, &args![copy, IDENTITY_ROTATION]);
+        if e.call(FIND_SKINNED_NODE, &args![copy]).u8() != 0 {
+            skinned = true;
+        }
+        if skinned {
+            let name = node_name(e, copy);
+            e.call(LOG, &args![ADD_ON_SKINNED_FORMAT, name]);
+        } else {
+            biped_anim_attach_to_parent(e, root, copy, file, Ptr::NULL, slot, 0);
+        }
+        if !skinned && e.vcall(copy.addr(), 0x0c, &[]).u32() != 0 {
+            let above = e.call(NODE_PARENT, &args![copy]).ptr::<()>();
+            if above.is_null() {
+                let mut bone_node = Ptr::NULL;
+                if slot != 0xffff_ffff {
+                    let bone_index = e.global::<u32>(SLOT_BONES + 4 * slot);
+                    if bone_index != 0xffff_ffff {
+                        let name = e.global::<u32>(BONE_NAMES + 4 * bone_index);
+                        bone_node = fn_004aae30(e, root, Ptr::new(name));
+                    }
+                }
+                if !bone_node.is_null() {
+                    e.vcall(bone_node.addr(), 0xdc, &args![copy, 1u32]);
+                } else {
+                    e.vcall(root.addr(), 0xdc, &args![copy, 1u32]);
+                }
+            }
+        }
+        e.call(UPDATE_PROPERTIES, &args![copy]);
+    }
+    ni_pointer_release(e, held);
+    stack_free(e, held);
+    ni_pointer_release(e, handle);
+    stack_free(e, handle);
+    ni_cloning_process_destructor(e, cloning.cast());
+    stack_free(e, cloning);
+    copy
+}
+
+// Translated from 004af240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::AddAddonNodes` (Xbox PDB): when the extra data the add-on key
+/// (`00448a80`) names on `file` passes the test `00448a40`, adds the add-on
+/// nodes to `node` (`TESObjectREFR::AddAddonNodes`). `_unused_2` and
+/// `_unused_3` are words the callers pass (the slot and the requester).
+pub fn fn_004af240(e: &mut Engine, file: Ptr, node: Ptr, _unused_2: u32, _unused_3: u32) {
+    let key = e.call(ADDON_KEY, &[]).u32();
+    let extra = e.call(GET_EXTRA_DATA, &args![file, key]).u32();
+    if extra != 0 && e.call(ADDON_EXTRA_CHECK, &args![extra]).bool() {
+        e.call(ADD_ADDON_NODES, &args![node]);
+    }
+}
+
+// Translated from 004af290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::GetLightingProperty` (Xbox PDB): for a geometry `node`, its
+/// lighting property (`GetProperty(3)`) when that property's value
+/// (`00441110`) is between 8 and 12, else null. The properties of type
+/// `004af350()` and `004af340()` are fetched too and not used.
+pub fn biped_anim_get_lighting_property(e: &mut Engine, node: Ptr) -> Ptr {
+    // Virtual slot 0x18 of the node: its geometry.
+    if node.is_null() || e.vcall(node.addr(), 0x18, &[]).u32() == 0 {
+        return Ptr::NULL;
+    }
+    let first = fn_004af350(e);
+    e.call(GET_PROPERTY, &args![node, first]);
+    let second = fn_004af340(e);
+    e.call(GET_PROPERTY, &args![node, second]);
+    let property = e.call(GET_PROPERTY, &args![node, 3u32]).ptr::<()>();
+    // The value is asked for again for the upper bound, as the code does.
+    let in_range = !property.is_null()
+        && e.call(PROPERTY_WORLDSPACE, &args![property]).i32() >= 8
+        && e.call(PROPERTY_WORLDSPACE, &args![property]).i32() <= 12;
+    if in_range {
+        property
+    } else {
+        Ptr::NULL
+    }
+}
+
+// Translated from 004af340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constant 5 (a property type).
+pub fn fn_004af340(_e: &mut Engine) -> u32 {
+    5
+}
+
+// Translated from 004af350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constant 2 (a property type).
+pub fn fn_004af350(_e: &mut Engine) -> u32 {
+    2
+}
+
+// Translated from 004af360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::GetSkinBipedObject` (Xbox PDB): the slot a geometry's skin
+/// belongs to, or -1. Takes the lighting property (`property`, or
+/// [`biped_anim_get_lighting_property`] when null); without one, or without
+/// its bit 10, -1. Otherwise the geometry's name is compared (case
+/// insensitively, by prefix) with the five skin part names: 0, 1 and 4 give
+/// slot 2, 2 gives 3 and 3 gives 4; no match logs the name and gives 2.
+pub fn biped_anim_get_skin_biped_object(e: &mut Engine, node: Ptr, property: Ptr) -> u32 {
+    let mut property = property;
+    if property.is_null() {
+        property = biped_anim_get_lighting_property(e, node);
+    }
+    if property.is_null() || !e.call(PROPERTY_FLAG, &args![property, 10u32]).bool() {
+        return 0xffff_ffff;
+    }
+    let text = node_name(e, node);
+    let mut result = 2;
+    let mut index = 0;
+    while index < 5 {
+        if !text.is_null() {
+            let part_name = e.global::<u32>(SKIN_PART_NAMES + 4 * index);
+            let length = e.call(TEXT_LENGTH, &args![part_name]).u32();
+            let part_name = e.global::<u32>(SKIN_PART_NAMES + 4 * index);
+            if e.call(COMPARE_PREFIX, &args![text, part_name, length])
+                .u32()
+                == 0
+            {
+                break;
+            }
+        }
+        index += 1;
+    }
+    match index {
+        0 | 1 | 4 => result = 2,
+        2 => result = 3,
+        3 => result = 4,
+        _ => {
+            let above = e.call(NODE_PARENT, &args![node]).ptr::<()>();
+            let above_name = node_name(e, above);
+            e.call(LOG, &args![BAD_SKIN_NAME_FORMAT, text, above_name]);
+        }
+    }
+    result
+}
+
+// Translated from 004af490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BipedAnim::AdjustSkinComplexion` (Xbox PDB): for a geometry `node` with a
+/// lighting property and a skin slot, fetches the requester's NPC (its face
+/// coordinates are read but not used further) and the race's body textures
+/// for that slot (`GetBodyTexture`, with `flag` as the first person
+/// argument). Missing race textures are logged. Otherwise the property gets
+/// the textures: the base one in slot 0 of virtual method 0xfc (and a normal
+/// map, from the base texture's path with `_n`, in slot 0 of method 0x100),
+/// the second in slot 1 of method 0xfc, [`fn_004af8a0`] in slot 1 of method
+/// 0x100, and its shader flag 10 is set.
+pub fn biped_anim_adjust_skin_complexion(
+    e: &mut Engine,
+    this: Ptr<BipedAnim>,
+    node: Ptr,
+    flag: u8,
+) {
+    let property = biped_anim_get_lighting_property(e, node);
+    if property.is_null() {
+        return;
+    }
+    let skin = biped_anim_get_skin_biped_object(e, node, property);
+    if skin == 0xffff_ffff {
+        return;
+    }
+    let coords = stack_alloc(e, 0x80);
+    e.call(
+        VECTOR_CONSTRUCT,
+        &args![coords, 0x20u32, 4u32, FACE_COORD_INIT, FACE_COORD_FREE],
+    );
+    let requester = e.get(this, BipedAnim::m_pRequester);
+    let npc = requester_npc(e, requester);
+    let base = stack_alloc(e, 4);
+    ni_pointer_new(e, base, Ptr::NULL);
+    let second = stack_alloc(e, 4);
+    ni_pointer_new(e, second, Ptr::NULL);
+    if !npc.is_null() {
+        e.call(GET_FACE_COORD, &args![npc, coords]);
+    }
+    let race = fn_004ac110(e, npc);
+    let first_person = (flag != 0) as u32;
+    let found = e
+        .call(
+            GET_BODY_TEXTURE,
+            &args![race, base, second, npc, skin, first_person],
+        )
+        .bool();
+    if !npc.is_null() && !found {
+        let race = fn_004ac110(e, npc);
+        let race_name = e
+            .call(RACE_NAME_TEXT, &args![race.wrapping_add(0x18)])
+            .u32();
+        let slot_name = e.global::<u32>(SLOT_NAMES.wrapping_add(skin.wrapping_mul(4)));
+        let slot_text = e.call(IDENTITY_TEXT, &args![slot_name, 1u32]).u32();
+        let sex = e.call(ACTOR_BASE_SEX, &args![npc, 0u32, slot_text]).u32();
+        let sex_name = e.global::<u32>(SEX_NAMES.wrapping_add(sex.wrapping_mul(4)));
+        let sex_text = e.call(IDENTITY_TEXT, &args![sex_name, 0u32]).u32();
+        e.call(
+            LOG,
+            &args![MISSING_RACE_TEXTURE_FORMAT, sex_text, slot_text, race_name],
+        );
+    } else {
+        let texture = ni_pointer_get(e, base);
+        e.vcall(property.addr(), 0xfc, &args![0u32, texture]);
+        let texture = ni_pointer_get(e, base);
+        let typed = e
+            .call(CAST_TO_CLASS, &args![TEXTURE_CLASS, texture])
+            .ptr::<()>();
+        let mut path_text: Ptr = Ptr::NULL;
+        let mut mipmaps = 1u32;
+        if !typed.is_null() {
+            let hidden = fn_004af860(e, typed);
+            mipmaps = if hidden { 0 } else { 1 };
+            fn_004af880(e, typed);
+            let field = e.call(TEXTURE_PATH_FIELD, &args![typed]).u32();
+            path_text = e.call(NAME_TEXT, &args![field]).ptr();
+        }
+        let normal = stack_alloc(e, 0x104);
+        e.call(
+            MODIFIED_TEXTURE_FILENAME,
+            &args![normal, path_text, NORMAL_MAP_SUFFIX, 1u32],
+        );
+        if e.mem.i8(normal.addr()) != 0 {
+            let handle = stack_alloc(e, 4);
+            ni_pointer_new(e, handle, Ptr::NULL);
+            e.call(GET_TEXTURE, &args![normal, mipmaps, handle, 1u32, 0u32]);
+            if !ni_pointer_get(e, handle).is_null() {
+                let loaded = ni_pointer_get(e, handle);
+                e.vcall(property.addr(), 0x100, &args![0u32, loaded]);
+            }
+            ni_pointer_release(e, handle);
+            stack_free(e, handle);
+        }
+        stack_free(e, normal);
+        let texture = ni_pointer_get(e, second);
+        e.vcall(property.addr(), 0xfc, &args![1u32, texture]);
+        let owner_texture = fn_004af8a0(e);
+        e.vcall(property.addr(), 0x100, &args![1u32, owner_texture]);
+        e.call(SET_SHADER_FLAG, &args![property, 10u32, 1u32]);
+    }
+    ni_pointer_release(e, second);
+    stack_free(e, second);
+    ni_pointer_release(e, base);
+    stack_free(e, base);
+    e.call(
+        VECTOR_DESTRUCT,
+        &args![coords, 0x20u32, 4u32, FACE_COORD_FREE],
+    );
+    stack_free(e, coords);
+}
+
+// Translated from 004af860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Always false: the code loads the signed byte at `+0x43` of `this` and
+/// ANDs it with zero.
+pub fn fn_004af860(_e: &mut Engine, _this: Ptr) -> bool {
+    false
+}
+
+// Translated from 004af880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the byte at `+0x43` of `this` onto itself (no change).
+pub fn fn_004af880(e: &mut Engine, this: Ptr) {
+    let address = this.addr().wrapping_add(0x43);
+    let value = e.mem.u8(address);
+    e.mem.set_u8(address, value);
+}
+
+// Translated from 004af8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word of the `NiPointer` at `+0x11a0` of the object in the global
+/// `011d59e8`; without that object, the word of a fresh null `NiPointer`
+/// (0).
+pub fn fn_004af8a0(e: &mut Engine) -> u32 {
+    let owner = e.global::<u32>(TEXTURE_OWNER);
+    if owner != 0 {
+        return e.call(READ_WORD, &args![owner.wrapping_add(0x11a0)]).u32();
+    }
+    let handle = stack_alloc(e, 4);
+    ni_pointer_new(e, handle, Ptr::NULL);
+    let value = ni_pointer_get(e, handle);
+    ni_pointer_release(e, handle);
+    stack_free(e, handle);
+    value.addr()
+}
+
+// Translated from 004af950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds in `buffer` the path of the first person model of `item`: its
+/// model path (virtual slot 0x14) with the extension replaced by `1st.nif`;
+/// true when `Data\Meshes\<that path>` exists (`FileFinder::Exist`). False
+/// when the path has no extension.
+pub fn fn_004af950(e: &mut Engine, _this: Ptr, item: Ptr, buffer: Ptr) -> bool {
+    let path = e.vcall(item.addr(), 0x14, &[]).u32();
+    e.call(STRING_COPY, &args![buffer, 0x104u32, path]);
+    let dot = e.call(FIND_LAST_CHAR, &args![buffer, 0x2eu32]).u32();
+    if dot == 0 {
+        return false;
+    }
+    e.mem.set_u8(dot, 0);
+    let room = 0x104u32.wrapping_sub(dot.wrapping_sub(buffer.addr()));
+    e.call(STRING_APPEND, &args![dot, room, FIRST_PERSON_SUFFIX]);
+    let full = stack_alloc(e, 0x104);
+    e.call(
+        FORMAT_INTO,
+        &args![full, 0x104u32, DATA_PATH_FORMAT, MESHES_FOLDER, buffer],
+    );
+    let exists = e.call(FILE_EXISTS, &args![full, 0u32, 6u32, 1u32]).u32() != 0;
+    stack_free(e, full);
+    exists
+}
+
+// Translated from 004afa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets entry `index` of the 0x18-byte path table (`011c5d10`) to `path`
+/// (`00489100`) and returns the entry's address.
+pub fn fn_004afa20(e: &mut Engine, _this: Ptr, index: u32, path: Ptr) -> u32 {
+    let entry = PATH_TABLE.wrapping_add(index.wrapping_mul(0x18));
+    e.call(SET_PATH_ENTRY, &args![entry, path]);
+    entry
+}
+
+// Translated from 004afa50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The alternative path entry for `part`: `part` itself when it already is
+/// the table entry of `slot`; the entry of `slot` set to the first person
+/// model path of `part` ([`fn_004af950`]) when that file exists; else `part`.
+pub fn fn_004afa50(e: &mut Engine, this: Ptr, slot: u32, part: Ptr) -> u32 {
+    let entry = PATH_TABLE.wrapping_add(slot.wrapping_mul(0x18));
+    if part.addr() == entry {
+        return part.addr();
+    }
+    let buffer = stack_alloc(e, 0x104);
+    let result = if fn_004af950(e, this, part, buffer) {
+        fn_004afa20(e, this, slot, buffer)
+    } else {
+        part.addr()
+    };
+    stack_free(e, buffer);
+    result
+}
+
+// Translated from 004afad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lower-cases in place the text `this` holds (a text pointer at `+0` and a
+/// 16-bit length at `+4`), with the size length + 1 ([`fn_004afb00`]); does
+/// nothing without text.
+pub fn fn_004afad0(e: &mut Engine, this: Ptr) {
+    let text = e.mem.u32(this.addr());
+    if text != 0 {
+        let size = e.mem.u16(this.addr().wrapping_add(4)) as u32 + 1;
+        fn_004afb00(e, text, size);
+    }
+}
+
+// Translated from 004afb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `_strlwr_s(text, size)` (`00ec8feb`); the decompiler's name for the
+/// function, `previous_character`, is a folded library name. Returns the CRT
+/// function's result.
+pub fn fn_004afb00(e: &mut Engine, text: u32, size: u32) -> u32 {
+    e.call(STRLWR_S, &args![text, size]).u32()
+}
+
+// Translated from 004afb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the clone map (`NiTPointerMap<NiObject *,NiObject *>`,
+/// whose scalar deleting destructor is the first slot of the vtable it
+/// stores): the base constructor (`004aff30`) with `hash_size`, then the
+/// vtable at `0101fb8c`. Returns `this`.
+pub fn fn_004afb20(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    e.call(FN_004AFF30, &args![this, hash_size]);
+    e.mem.set_u32(this.addr(), CLONE_MAP_VTABLE);
+    this
+}
+
+// Translated from 004afb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the process map (`NiTPointerMap<NiObject *,bool>`): the
+/// base constructor (`004b0030`) with `hash_size`, then the vtable at
+/// `0101fbac`. Returns `this`.
+pub fn fn_004afb50(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    e.call(FN_004B0030, &args![this, hash_size]);
+    e.mem.set_u32(this.addr(), PROCESS_MAP_VTABLE);
+    this
+}
+
+// Translated from 004afb80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the recursive lock at `+0x20` of `this`.
+pub fn fn_004afb80(e: &mut Engine, this: Ptr) {
+    e.call(RECURSIVE_LOCK_ENTER, &args![this.byte_add(0x20), 0u32]);
+}
+
+// Translated from 004afba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Releases the recursive lock at `+0x20` of `this`.
+pub fn fn_004afba0(e: &mut Engine, this: Ptr) {
+    e.call(RECURSIVE_LOCK_LEAVE, &args![this.byte_add(0x20)]);
+}
+
+// Translated from 004afbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<NiObject *,NiObject *>::scalar deleting destructor`
+/// (Xbox PDB): destroys the map (`004affa0`) and, with bit 0 of `flags`,
+/// frees it. Returns `this`.
+pub fn ni_t_pointer_map_object_object_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(FN_004AFFA0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004afbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<NiObject *,bool>::scalar deleting destructor` (Xbox PDB):
+/// destroys the map (`004b00a0`) and, with bit 0 of `flags`, frees it.
+/// Returns `this`.
+pub fn ni_t_pointer_map_object_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    e.call(FN_004B00A0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004afc20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys a node array: stores its vtable (`0101fbcc`) and releases the
+/// block at `+4` (`004b0220`). The map names the body `~basic_streambuf<>`,
+/// a folded library name.
+pub fn fn_004afc20(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), NODE_ARRAY_VTABLE);
+    let block = e.mem.u32(this.addr().wrapping_add(4));
+    e.call(FN_004B0220, &args![block]);
+}
+
+// Translated from 004afc50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `item` (the address of an `NiPointer`) to the array `this` at index
+/// `u16(+0xa)`, the number of elements (`004b02d0`).
+pub fn fn_004afc50(e: &mut Engine, this: Ptr, item: Ptr) {
+    let count = e.mem.u16(this.addr().wrapping_add(0x0a)) as u32;
+    e.call(FN_004B02D0, &args![this, count, item]);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2164,6 +3450,77 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x004ad4a0,
             biped_anim_attach_skinned_object(Ptr<BipedAnim>, Ptr, Ptr, u32, u8, u8, Ptr) -> Ptr
         ),
+        // Session 2.
+        entry!(0x004add50, fn_004add50(Ptr, Ptr, u32) -> u32),
+        entry!(0x004add70, fn_004add70(Ptr)),
+        entry!(0x004adda0, fn_004adda0(Ptr, u32, Ptr)),
+        entry!(0x004addc0, fn_004addc0(Ptr, Ptr)),
+        entry!(0x004adde0, fn_004adde0(Ptr, Ptr)),
+        entry!(0x004ade00, fn_004ade00(Ptr, Ptr) -> Ptr),
+        entry!(0x004ade20, fn_004ade20(Ptr)),
+        entry!(0x004ade40, biped_anim_attach_to_skeleton(Ptr, Ptr, Ptr, u8)),
+        entry!(
+            0x004ae250,
+            biped_anim_attach_to_parent(Ptr, Ptr, Ptr, Ptr<BipedAnim>, u32, u32)
+        ),
+        entry!(0x004ae780, fn_004ae780() -> Ptr),
+        entry!(
+            0x004ae790,
+            biped_anim_load_face_gen_model(Ptr<BipedAnim>, u32) -> Ptr
+        ),
+        entry!(0x004ae8a0, fn_004ae8a0(Ptr<BipedAnim>, u32) -> bool),
+        entry!(0x004ae8f0, fn_004ae8f0(Ptr) -> u8),
+        entry!(
+            0x004ae910,
+            biped_anim_clone_helmet(Ptr<BipedAnim>, Ptr, Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x004aeb20,
+            biped_anim_attach_helmet(Ptr<BipedAnim>, Ptr, Ptr, u32)
+        ),
+        entry!(0x004aede0, fn_004aede0(Ptr<BipedAnim>, u32, u32, u32)),
+        entry!(0x004aee60, fn_004aee60(Ptr<BipedAnim>, u32, u32, Ptr, u32)),
+        entry!(
+            0x004aeed0,
+            biped_anim_load_and_attach_add_on(Ptr, Ptr, u32, Ptr, Ptr) -> Ptr
+        ),
+        entry!(0x004af240, fn_004af240(Ptr, Ptr, u32, u32)),
+        entry!(
+            0x004af290,
+            biped_anim_get_lighting_property(Ptr) -> Ptr
+        ),
+        entry!(0x004af340, fn_004af340() -> u32),
+        entry!(0x004af350, fn_004af350() -> u32),
+        entry!(
+            0x004af360,
+            biped_anim_get_skin_biped_object(Ptr, Ptr) -> u32
+        ),
+        entry!(
+            0x004af490,
+            biped_anim_adjust_skin_complexion(Ptr<BipedAnim>, Ptr, u8)
+        ),
+        entry!(0x004af860, fn_004af860(Ptr) -> bool),
+        entry!(0x004af880, fn_004af880(Ptr)),
+        entry!(0x004af8a0, fn_004af8a0() -> u32),
+        entry!(0x004af950, fn_004af950(Ptr, Ptr, Ptr) -> bool),
+        entry!(0x004afa20, fn_004afa20(Ptr, u32, Ptr) -> u32),
+        entry!(0x004afa50, fn_004afa50(Ptr, u32, Ptr) -> u32),
+        entry!(0x004afad0, fn_004afad0(Ptr)),
+        entry!(0x004afb00, fn_004afb00(u32, u32) -> u32),
+        entry!(0x004afb20, fn_004afb20(Ptr, u32) -> Ptr),
+        entry!(0x004afb50, fn_004afb50(Ptr, u32) -> Ptr),
+        entry!(0x004afb80, fn_004afb80(Ptr)),
+        entry!(0x004afba0, fn_004afba0(Ptr)),
+        entry!(
+            0x004afbc0,
+            ni_t_pointer_map_object_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x004afbf0,
+            ni_t_pointer_map_object_bool_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x004afc20, fn_004afc20(Ptr)),
+        entry!(0x004afc50, fn_004afc50(Ptr, Ptr)),
     ]
 }
 
@@ -2322,6 +3679,62 @@ mod tests {
         FN_004AFBA0,
         FN_004AFC50,
         FN_004AFF00,
+        FN_004AFC80,
+        FN_004AFE50,
+        FN_004AFF30,
+        FN_004B0030,
+        FN_004AFFA0,
+        FN_004B00A0,
+        FN_004B0220,
+        FN_004B02D0,
+        STRING_COPY,
+        STRING_APPEND,
+        FORMAT_INTO,
+        FIND_LAST_CHAR,
+        FILE_EXISTS,
+        STRNCPY_S,
+        STRLWR_S,
+        OPERATOR_DELETE,
+        GET_OBJECT_BY_NAME,
+        IS_KIND_OF,
+        NODE_CHECK_9C,
+        STRING_EXTRA_TEXT,
+        FIND_REFERENCE_FOR_3D,
+        REMOVE_SCABBARD,
+        NODE_SCALE,
+        SET_NODE_SCALE,
+        BUILD_RECORD,
+        SHADOW_ADD_OBJECT,
+        NOTIFY_ATTACHED,
+        KILL_HAVOK,
+        SET_MOTION,
+        GET_COLLISION_OBJECT,
+        COLLISION_BODY,
+        BODY_SHAPE,
+        COPY_LAYER,
+        LAYER_OF,
+        REMOVE_ALL_EXTRA_DATA,
+        ADD_MASTER_PARTICLE_ADDON_NODES,
+        ADD_ADDON_NODES,
+        ADDON_KEY,
+        ADDON_EXTRA_CHECK,
+        LOADER_QUEUE_PART,
+        QUEUED_FILE_ASSIGN,
+        GET_EGM_FILE,
+        FACE_GEN_LOAD,
+        RECURSIVE_LOCK_ENTER,
+        RECURSIVE_LOCK_LEAVE,
+        GET_PROPERTY,
+        PROPERTY_WORLDSPACE,
+        PROPERTY_FLAG,
+        SET_SHADER_FLAG,
+        GET_BODY_TEXTURE,
+        RACE_NAME_TEXT,
+        ACTOR_BASE_SEX,
+        IDENTITY_TEXT,
+        GET_TEXTURE,
+        TEXTURE_PATH_FIELD,
+        SET_PATH_ENTRY,
     ];
 
     fn ret(value: u32) -> Ret {
@@ -2339,6 +3752,7 @@ mod tests {
         for (start, length) in [
             (0x0101_6000u32, 0x1000u32),
             (0x0118_8000, 0x1000),
+            (0x0119_9000, 0x1000),
             (0x011a_9000, 0x1000),
             (0x011c_3000, 0x4000),
             (0x011d_5000, 0x1000),
@@ -2462,13 +3876,13 @@ mod tests {
     }
 
     #[test]
-    fn the_unit_registers_forty_functions() {
+    fn the_unit_registers_eighty_functions() {
         let table = funcs();
-        assert_eq!(table.len(), 40);
+        assert_eq!(table.len(), 80);
         let mut addresses: Vec<u32> = table.iter().map(|(a, _)| *a).collect();
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 40);
+        assert_eq!(addresses.len(), 80);
         let mut e = engine();
         // Through the uniform form: the weapon flag word table and a flag bit.
         let form = block(&mut e, 0x300);
@@ -4701,5 +6115,1806 @@ mod tests {
         let calls = log(&mut e);
         assert_eq!(calls_to(&calls, FN_004AE790), vec![vec![this.addr(), 3]]);
         assert!(calls_to(&calls, GET_FACE_COORD).is_empty());
+    }
+
+    // ---- Session 2 -------------------------------------------------------------
+
+    /// Makes a node's fixed-string field its own address and its name text the
+    /// bytes at `+0x100`, so `node_name(x)` is [`name_of`].
+    fn names_are(e: &mut Engine) {
+        e.register(NAME_FIELD, |_, a| ret(a[0].wrapping_add(8)));
+        e.register(NAME_TEXT, |_, a| ret(a[0].wrapping_add(0x100)));
+    }
+
+    /// The pointer `node_name` gives for the object at `address` once
+    /// [`names_are`] was called.
+    fn name_of(address: u32) -> u32 {
+        address.wrapping_add(0x108)
+    }
+
+    /// An object whose virtual slot 0xc returns itself (an `NiNode`), the
+    /// other slots as `slots`.
+    fn node_object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let object = object_with_slots(e, slots);
+        let vtable = e.mem.u32(object);
+        let target = 0x7000_0000 + vtable + 0x0c;
+        e.register_double(target, move |_, _| ret(object));
+        e.mem.set_u32(vtable + 0x0c, target);
+        object
+    }
+
+    /// A geometry node (virtual slot 0x18 non-zero) that is not an `NiNode`,
+    /// with the other slots as `slots`.
+    fn geometry_object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let mut all = vec![(0x0c, 0), (0x18, 1)];
+        all.extend_from_slice(slots);
+        object_with_slots(e, &all)
+    }
+
+    #[test]
+    fn the_constant_functions_are_registered_by_address() {
+        let mut e = engine();
+        assert_eq!(e.call(0x004a_f340, &[]).u32(), 5);
+        assert_eq!(e.call(0x004a_f350, &[]).u32(), 2);
+    }
+
+    #[test]
+    fn the_bounded_copy_asks_for_one_more_character_of_room() {
+        let mut e = engine();
+        returns(&mut e, STRNCPY_S, 22);
+        log(&mut e);
+        let result = fn_004add50(&mut e, Ptr::new(0x100), Ptr::new(0x200), 7);
+        assert_eq!(result, 22);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, STRNCPY_S), vec![vec![0x100, 8, 0x200, 7]]);
+    }
+
+    #[test]
+    fn compacting_a_nodes_children_compacts_then_updates_the_array_at_0x9c() {
+        let mut e = engine();
+        log(&mut e);
+        fn_004add70(&mut e, Ptr::new(0x1000));
+        let calls = log(&mut e);
+        assert_eq!(
+            calls,
+            vec![(FN_004AFC80, vec![0x109c]), (FN_004AFE50, vec![0x109c])]
+        );
+    }
+
+    #[test]
+    fn a_bone_is_stored_in_the_table_at_0x14() {
+        let mut e = engine();
+        let data = block(&mut e, 0x40);
+        let table = block(&mut e, 0x20);
+        e.mem.set_u32(data + 0x14, table);
+        fn_004adda0(&mut e, Ptr::new(data), 3, Ptr::new(0x7777));
+        assert_eq!(e.mem.u32(table + 12), 0x7777);
+        assert_eq!(e.mem.u32(table), 0);
+    }
+
+    #[test]
+    fn the_two_pointer_setters_assign_to_their_fields() {
+        let mut e = engine();
+        let object = block(&mut e, 0x100);
+        log(&mut e);
+        fn_004addc0(&mut e, Ptr::new(object), Ptr::new(0x1111));
+        fn_004adde0(&mut e, Ptr::new(object), Ptr::new(0x2222));
+        assert_eq!(e.mem.u32(object + 0x0c), 0x1111);
+        assert_eq!(e.mem.u32(object + 0xbc), 0x2222);
+        let calls = log(&mut e);
+        assert_eq!(
+            calls,
+            vec![
+                (NI_POINTER_SET, vec![object + 0x0c, 0x1111]),
+                (NI_POINTER_SET, vec![object + 0xbc, 0x2222])
+            ]
+        );
+    }
+
+    #[test]
+    fn the_object_by_fixed_name_lookup_is_recursive() {
+        let mut e = engine();
+        returns(&mut e, GET_OBJECT_BY_NAME, 0x4242);
+        log(&mut e);
+        assert_eq!(
+            fn_004ade00(&mut e, Ptr::new(0x10), Ptr::new(0x20)),
+            Ptr::new(0x4242)
+        );
+        assert_eq!(log(&mut e), vec![(GET_OBJECT_BY_NAME, vec![0x10, 0x20, 1])]);
+    }
+
+    #[test]
+    fn destroying_a_node_array_stores_its_vtable_and_releases_the_block() {
+        let mut e = engine();
+        let array = block(&mut e, 0x10);
+        e.mem.set_u32(array + 4, 0x3333);
+        log(&mut e);
+        fn_004ade20(&mut e, Ptr::new(array));
+        assert_eq!(e.mem.u32(array), NODE_ARRAY_VTABLE);
+        assert_eq!(log(&mut e), vec![(FN_004B0220, vec![0x3333])]);
+        let again = block(&mut e, 0x10);
+        e.mem.set_u32(again + 4, 0x4444);
+        fn_004afc20(&mut e, Ptr::new(again));
+        assert_eq!(e.mem.u32(again), NODE_ARRAY_VTABLE);
+    }
+
+    /// A geometry with a data object whose bone table has three entries (the
+    /// middle one empty); `GetObjectByName` finds the first only.
+    fn bone_scene(e: &mut Engine) -> (u32, u32, u32, u32) {
+        names_are(e);
+        let data = block(e, 0x40);
+        let table = block(e, 0x10);
+        e.mem.set_u32(data + 0x14, table);
+        let items = block(e, 0x10);
+        e.mem.set_u32(items, 0x6000);
+        e.mem.set_u32(items + 8, 0x6100);
+        returns(e, NODE_DATA_POINTER, data);
+        returns(e, BODY_PART_OWNER, 0x77);
+        returns(e, BODY_PART_COUNT, 3);
+        returns(e, BODY_PART_ARRAY, items);
+        e.register(GET_OBJECT_BY_NAME, |_, a| {
+            ret(if a[1] == 0x6008 { 0x7777 } else { 0 })
+        });
+        (data, table, 0x6000, 0x6100)
+    }
+
+    #[test]
+    fn attaching_nothing_does_nothing() {
+        let mut e = engine();
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::NULL, Ptr::NULL, 1);
+        assert!(log(&mut e).is_empty());
+    }
+
+    #[test]
+    fn attaching_a_geometry_binds_its_bones_to_the_objects_found() {
+        let mut e = engine();
+        let (data, table, _, _) = bone_scene(&mut e);
+        let geometry = geometry_object(&mut e, &[(0xdc, 0)]);
+        let parent = object_with_slots(&mut e, &[(0xdc, 0)]);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(
+            &mut e,
+            Ptr::new(0x5100),
+            Ptr::new(geometry),
+            Ptr::new(parent),
+            0,
+        );
+        // Found, left empty, and not found (the skeleton itself).
+        assert_eq!(e.mem.u32(table), 0x7777);
+        assert_eq!(e.mem.u32(table + 4), 0);
+        assert_eq!(e.mem.u32(table + 8), 0x5100);
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, BODY_PART_COUNT), vec![vec![0x77]]);
+        assert_eq!(
+            calls_to(&calls, SET_PARENT_OBJECT),
+            vec![vec![data, parent]]
+        );
+        let attach = slot_target(&e, parent, 0xdc);
+        assert_eq!(calls_to(&calls, attach), vec![vec![parent, geometry, 1]]);
+        assert!(calls_to(&calls, LOG).is_empty());
+        // A geometry that is not a node stops there.
+        assert!(calls_to(&calls, FN_004AFF00).is_empty());
+    }
+
+    #[test]
+    fn a_missing_bone_of_a_geometry_is_logged_by_name_when_asked() {
+        let mut e = engine();
+        bone_scene(&mut e);
+        let geometry = geometry_object(&mut e, &[]);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(geometry), Ptr::NULL, 1);
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![BONE_ONLY_FORMAT, name_of(0x6100)]]
+        );
+        assert!(calls_to(&calls, SET_PARENT_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn a_missing_bone_of_a_node_names_the_part_when_the_node_name_starts_with_the_bone() {
+        let mut e = engine();
+        bone_scene(&mut e);
+        // A geometry that is also a node.
+        let node = node_object(&mut e, &[(0x18, 1), (0xe8, 0)]);
+        // The names are equal as far as the bone's name is long.
+        returns(&mut e, COMPARE_PREFIX, 0);
+        returns(&mut e, NODE_PARENT, 0x9000);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(node), Ptr::NULL, 1);
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![
+                BONE_IN_PART_FORMAT,
+                name_of(0x6100),
+                name_of(0x9000),
+                name_of(node)
+            ]]
+        );
+    }
+
+    #[test]
+    fn a_missing_bone_of_another_part_names_the_node_and_the_skeleton() {
+        let mut e = engine();
+        bone_scene(&mut e);
+        let node = node_object(&mut e, &[(0x18, 1), (0xe8, 0)]);
+        returns(&mut e, COMPARE_PREFIX, 1);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(node), Ptr::NULL, 1);
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![
+                BONE_REQUESTED_FORMAT,
+                name_of(0x6100),
+                name_of(node),
+                name_of(0x5100)
+            ]]
+        );
+        // Without a skeleton only the bone is named.
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::NULL, Ptr::new(node), Ptr::NULL, 1);
+        let calls = log(&mut e);
+        assert!(calls_to(&calls, LOG)
+            .iter()
+            .any(|words| words[0] == BONE_ONLY_FORMAT));
+    }
+
+    #[test]
+    fn children_that_are_not_geometries_are_moved_out_of_the_node() {
+        let mut e = engine();
+        names_are(&mut e);
+        let node = node_object(&mut e, &[(0x18, 0), (0xe8, 0)]);
+        let moved_child = node_object(&mut e, &[(0x18, 0)]);
+        let geometry_child = geometry_object(&mut e, &[]);
+        children_are(&mut e, vec![0, moved_child, moved_child, geometry_child]);
+        returns(&mut e, NODE_CHECK_9C, 1);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(node), Ptr::NULL, 0);
+        let calls = log(&mut e);
+        // The array of moved children is made, compacted before and after.
+        assert_eq!(calls_to(&calls, FN_004AFF00).len(), 1);
+        assert_eq!(calls_to(&calls, FN_004AFC80), vec![vec![node + 0x9c]; 2]);
+        assert_eq!(calls_to(&calls, FN_004AFE50), vec![vec![node + 0x9c]; 2]);
+        assert_eq!(calls_to(&calls, FN_004AFC50).len(), 2);
+        let remove = slot_target(&e, node, 0xe8);
+        assert_eq!(
+            calls_to(&calls, remove),
+            vec![vec![node, moved_child], vec![node, moved_child]]
+        );
+        // The wrong export is logged once: the node above, the node, the skeleton.
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![
+                EXPORTED_WRONG_FORMAT,
+                name_of(0),
+                name_of(node),
+                name_of(0x5100)
+            ]]
+        );
+        // The array is destroyed.
+        assert_eq!(calls_to(&calls, FN_004B0220).len(), 1);
+    }
+
+    #[test]
+    fn children_of_the_skinned_class_are_attached_with_the_flag_set() {
+        let mut e = engine();
+        names_are(&mut e);
+        let node = node_object(&mut e, &[(0x18, 0), (0xe8, 0)]);
+        let child = node_object(&mut e, &[(0x18, 0)]);
+        e.register_double(CHILD_COUNT, move |_, a| ret((a[0] == node) as u32));
+        e.register_double(CHILD_AT, move |_, _| ret(child));
+        returns(&mut e, IS_KIND_OF, 1);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(node), Ptr::NULL, 0);
+        let calls = log(&mut e);
+        // The child was attached itself (its own array), nothing was moved.
+        assert_eq!(calls_to(&calls, FN_004AFF00).len(), 2);
+        assert!(calls_to(&calls, FN_004AFC50).is_empty());
+        assert_eq!(calls_to(&calls, IS_KIND_OF)[0], vec![SKINNED_CLASS, node]);
+    }
+
+    #[test]
+    fn a_child_that_is_a_geometry_is_attached_with_the_callers_flag() {
+        let mut e = engine();
+        names_are(&mut e);
+        let node = node_object(&mut e, &[(0x18, 0), (0xe8, 0)]);
+        let child = geometry_object(&mut e, &[]);
+        e.register_double(CHILD_COUNT, move |_, a| ret((a[0] == node) as u32));
+        e.register_double(CHILD_AT, move |_, _| ret(child));
+        returns(&mut e, NODE_DATA_POINTER, 0x6600);
+        returns(&mut e, BODY_PART_COUNT, 1);
+        returns(&mut e, BODY_PART_ARRAY, 0x6700);
+        // The bone table of the child's data.
+        let items = block(&mut e, 4);
+        e.mem.set_u32(items, 0x6000);
+        returns(&mut e, BODY_PART_ARRAY, items);
+        let table = block(&mut e, 4);
+        let data = block(&mut e, 0x20);
+        e.mem.set_u32(data + 0x14, table);
+        returns(&mut e, NODE_DATA_POINTER, data);
+        log(&mut e);
+        biped_anim_attach_to_skeleton(&mut e, Ptr::new(0x5100), Ptr::new(node), Ptr::NULL, 1);
+        let calls = log(&mut e);
+        // The child's bone was not found: the flag reaches it, and as the child
+        // is not a node, only the bone name is logged.
+        assert_eq!(e.mem.u32(table), 0x5100);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![BONE_ONLY_FORMAT, name_of(0x6000)]]
+        );
+    }
+
+    /// The scene of `AttachToParent`: names work, the key global is set, the
+    /// extra data is a string extra data naming a parent found by name.
+    /// Returns the node, the parent and the root.
+    fn parent_scene(e: &mut Engine) -> (u32, u32, u32) {
+        names_are(e);
+        e.set_global(PARENT_NODE_KEY, 0x2468);
+        returns(e, GET_EXTRA_DATA, 0x5500);
+        returns(e, CAST_TO_CLASS, 0x6600);
+        e.register(STRING_EXTRA_TEXT, |_, a| ret(a[0].wrapping_add(0x0c)));
+        let parent = object_with_slots(e, &[(0xdc, 0)]);
+        returns(e, GET_OBJECT_BY_NAME, parent);
+        let node = object_with_slots(e, &[(0xa4, 0)]);
+        (node, parent, 0x5100)
+    }
+
+    #[test]
+    fn a_part_without_parent_extra_data_is_logged_and_moved() {
+        let mut e = engine();
+        names_are(&mut e);
+        e.set_global(PARENT_NODE_KEY, 0x2468);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(0x5100),
+            Ptr::new(0x7000),
+            Ptr::new(0x7100),
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        // Both the source and the node were asked, with the key.
+        assert_eq!(
+            calls_to(&calls, GET_EXTRA_DATA),
+            vec![vec![0x7100, 0x2468], vec![0x7000, 0x2468]]
+        );
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![PARENT_EXTRA_MISSING_FORMAT, name_of(0x7000)]]
+        );
+        assert_eq!(calls_to(&calls, SET_MOTION), vec![vec![0x7000, 4, 1, 1, 1]]);
+    }
+
+    #[test]
+    fn extra_data_that_is_not_a_string_is_logged() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        returns(&mut e, CAST_TO_CLASS, 0);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, CAST_TO_CLASS),
+            vec![vec![STRING_EXTRA_CLASS, 0x5500]]
+        );
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![EXTRA_NOT_STRING_FORMAT, name_of(node)]]
+        );
+    }
+
+    #[test]
+    fn a_part_is_attached_to_the_parent_the_extra_data_names() {
+        let mut e = engine();
+        let (node, parent, root) = parent_scene(&mut e);
+        e.register_double(NODE_SCALE, |_, _| Ret {
+            st0: 2.0,
+            ..Ret::default()
+        });
+        returns(&mut e, BODY_PART_ARRAY, 9);
+        returns(&mut e, SHADOW_SCENE_NODE, 0x5a5a);
+        let scabbard = object_with_slots(&mut e, &[]);
+        e.register_double(FIND_OBJECT_BY_NAME, move |_, a| {
+            ret(if a[1] == SCABBARD_NODE_NAME {
+                scabbard
+            } else {
+                0
+            })
+        });
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        // The parent is looked up by the text of the string extra data (+0xc).
+        assert_eq!(
+            calls_to(&calls, GET_OBJECT_BY_NAME),
+            vec![vec![root, 0x660c, 1]]
+        );
+        let attach = slot_target(&e, parent, 0xdc);
+        assert_eq!(
+            calls_to(&calls, attach),
+            vec![vec![parent, node, 1], vec![parent, scabbard, 1]]
+        );
+        // The record built from the count: its float, and two zero bytes.
+        let record = calls_to(&calls, BUILD_RECORD);
+        assert_eq!(
+            record[0][1..],
+            [9.0f32.to_bits(), 0, 0],
+            "the count as a float"
+        );
+        assert_eq!(calls_to(&calls, BODY_PART_ARRAY), vec![vec![COUNT_OBJECT]]);
+        let record_slot = slot_target(&e, node, 0xa4);
+        assert_eq!(
+            calls_to(&calls, record_slot),
+            vec![vec![node, record[0][0], 0]]
+        );
+        assert_eq!(
+            calls_to(&calls, SHADOW_ADD_OBJECT),
+            vec![vec![0x5a5a, node]]
+        );
+        assert_eq!(calls_to(&calls, NOTIFY_ATTACHED), vec![vec![parent, 1]]);
+        assert_eq!(calls_to(&calls, UPDATE_PROPERTIES), vec![vec![scabbard]]);
+        assert_eq!(calls_to(&calls, FN_004AFC80), vec![vec![node + 0x9c]]);
+        assert!(calls_to(&calls, LOG).is_empty());
+    }
+
+    #[test]
+    fn a_missing_parent_of_a_form_type_0x2b_reference_removes_the_scabbard() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        returns(&mut e, GET_OBJECT_BY_NAME, 0);
+        returns(&mut e, FIND_REFERENCE_FOR_3D, 0x8800);
+        returns(&mut e, REFERENCE_FORM, 0x9900);
+        returns(&mut e, FORM_TYPE, 0x2b);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, FIND_REFERENCE_FOR_3D), vec![vec![root]]);
+        assert_eq!(calls_to(&calls, REMOVE_SCABBARD), vec![vec![node]]);
+        assert!(calls_to(&calls, LOG).is_empty());
+    }
+
+    #[test]
+    fn a_missing_parent_is_logged_by_name_otherwise() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        returns(&mut e, GET_OBJECT_BY_NAME, 0);
+        returns(&mut e, FIND_REFERENCE_FOR_3D, 0x8800);
+        returns(&mut e, REFERENCE_FORM, 0x9900);
+        returns(&mut e, FORM_TYPE, 0x2a);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        assert!(calls_to(&calls, REMOVE_SCABBARD).is_empty());
+        // The text of the extra data: the name of 0x660c.
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![PARENT_NOT_FOUND_FORMAT, 0x660c + 0x100, name_of(node)]]
+        );
+        // Without a reference there is nothing to ask the form of either.
+        returns(&mut e, FIND_REFERENCE_FOR_3D, 0);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, LOG).len(), 1);
+        assert!(calls_to(&calls, REMOVE_SCABBARD).is_empty());
+    }
+
+    #[test]
+    fn the_players_first_person_node_gets_the_weapon_flag_on_its_backpack() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        returns(&mut e, FIND_OBJECT_BY_NAME, 0x4400);
+        returns(&mut e, PLAYER_NODE, root);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, PLAYER_NODE), vec![vec![0x0f00_0000, 1]]);
+        assert_eq!(calls_to(&calls, SET_WEAPON_FLAG), vec![vec![0x4400, 1]]);
+        assert!(calls_to(&calls, SET_NODE_SCALE).is_empty());
+    }
+
+    #[test]
+    fn another_backpack_gets_the_scale_and_the_parent_its_extra_data_names() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        let backpack_parent = object_with_slots(&mut e, &[(0xdc, 0)]);
+        // The backpack is found by name; its parent comes from the `UPB` data.
+        e.register_double(FIND_OBJECT_BY_NAME, |_, a| {
+            ret(if a[1] == BACKPACK_NAME { 0x4400 } else { 0 })
+        });
+        returns(&mut e, PLAYER_NODE, 0x1111);
+        e.register_double(NODE_SCALE, |_, _| Ret {
+            st0: 0.5,
+            ..Ret::default()
+        });
+        returns(&mut e, FIXED_STRING_INIT, 0x7755);
+        e.register_double(GET_OBJECT_BY_NAME, move |_, a| {
+            // The skeleton's parent node for `node` first, then the backpack's.
+            ret(if a[1] == 0x660c { backpack_parent } else { 0 })
+        });
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            Ptr::NULL,
+            3,
+            0,
+        );
+        let calls = log(&mut e);
+        // The scale is the parent's (0.5); the lookups by `0x660c` find the same parent.
+        assert_eq!(
+            calls_to(&calls, SET_NODE_SCALE),
+            vec![vec![0x4400, 0.5f32.to_bits()]]
+        );
+        let keyed = calls_to(&calls, GET_EXTRA_DATA);
+        assert_eq!(keyed.last().unwrap(), &vec![0x4400, 0x7755]);
+        assert_eq!(calls_to(&calls, FIXED_STRING_INIT)[0][1], BACKPACK_KEY_NAME);
+        let attach = slot_target(&e, backpack_parent, 0xdc);
+        assert_eq!(
+            calls_to(&calls, attach),
+            vec![
+                vec![backpack_parent, node, 1],
+                vec![backpack_parent, 0x4400, 1]
+            ]
+        );
+    }
+
+    #[test]
+    fn the_first_person_biped_has_its_havok_killed() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        let this = biped(&mut e);
+        returns(&mut e, GET_BIPED, this.addr());
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            this,
+            5,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, KILL_HAVOK), vec![vec![node, 1, 1]]);
+        assert!(calls_to(&calls, SET_MOTION).is_empty());
+        assert!(calls_to(&calls, GET_COLLISION_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn a_weapon_without_havok_data_is_logged_and_still_gets_its_motion() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        let this = biped(&mut e);
+        returns(&mut e, GET_COLLISION_OBJECT, 0);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            this,
+            WEAPON_SLOT,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![NO_HAVOK_FORMAT, name_of(node)]]
+        );
+        assert_eq!(calls_to(&calls, SET_MOTION), vec![vec![node, 4, 1, 1, 1]]);
+    }
+
+    #[test]
+    fn a_weapon_with_a_bad_shape_or_layer_is_logged() {
+        let mut e = engine();
+        let (node, _, root) = parent_scene(&mut e);
+        let this = biped(&mut e);
+        returns(&mut e, GET_COLLISION_OBJECT, 0x31);
+        returns(&mut e, COLLISION_BODY, 0x32);
+        returns(&mut e, BODY_SHAPE, 0);
+        returns(&mut e, COPY_LAYER, 0x34);
+        returns(&mut e, LAYER_OF, 4);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            this,
+            WEAPON_SLOT,
+            0,
+        );
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, COLLISION_BODY), vec![vec![0x31]]);
+        assert_eq!(calls_to(&calls, BODY_SHAPE), vec![vec![0x32]]);
+        assert_eq!(calls_to(&calls, LAYER_OF), vec![vec![0x34]]);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![
+                vec![NO_SHAPE_FORMAT, name_of(node)],
+                vec![WEAPON_LAYER_FORMAT, name_of(node)]
+            ]
+        );
+        // A good weapon logs nothing.
+        returns(&mut e, BODY_SHAPE, 0x33);
+        returns(&mut e, LAYER_OF, WEAPON_LAYER);
+        log(&mut e);
+        biped_anim_attach_to_parent(
+            &mut e,
+            Ptr::new(root),
+            Ptr::new(node),
+            Ptr::NULL,
+            this,
+            WEAPON_SLOT,
+            0,
+        );
+        assert!(calls_to(&log(&mut e), LOG).is_empty());
+    }
+
+    #[test]
+    fn the_parent_extra_data_key_is_the_global() {
+        let mut e = engine();
+        e.set_global(PARENT_NODE_KEY, 0x2468);
+        assert_eq!(fn_004ae780(&mut e), Ptr::new(0x2468));
+        assert_eq!(e.call(0x004a_e780, &[]).u32(), 0x2468);
+    }
+
+    #[test]
+    fn the_face_gen_model_of_a_slot_is_loaded_under_the_part_lock() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        let model = object_with_slots(&mut e, &[(0x14, 0xabc0)]);
+        set_slot(&mut e, this, 4, 0x1111, model, 0);
+        returns(&mut e, GET_EGM_FILE, 0x6161);
+        returns(&mut e, FACE_GEN_LOAD, 0x7272);
+        log(&mut e);
+        let result = biped_anim_load_face_gen_model(&mut e, this, 4);
+        assert_eq!(result, Ptr::new(0x7272));
+        let calls = log(&mut e);
+        let order: Vec<u32> = addresses(&calls);
+        assert_eq!(order[0], LOCK_ENTER);
+        assert_eq!(order[order.len() - 1], LOCK_LEAVE);
+        assert_eq!(calls[0].1, vec![PART_LOCK, 0]);
+        let copy = calls_to(&calls, STRING_COPY);
+        assert_eq!(copy[0][1..], [0x104, MESHES_PREFIX]);
+        let append = calls_to(&calls, STRING_APPEND);
+        assert_eq!(append[0][1..], [0x104, 0xabc0]);
+        assert_eq!(copy[0][0], append[0][0]);
+        let text = calls_to(&calls, STRING_INIT)[0][0];
+        assert_eq!(
+            calls_to(&calls, GET_EGM_FILE),
+            vec![vec![text, copy[0][0], 0xffff_ffff]]
+        );
+        assert_eq!(
+            calls_to(&calls, FACE_GEN_LOAD),
+            vec![vec![0x6161, 0, 0, 0, 1, 0xffff_ffff, 0]]
+        );
+        assert_eq!(calls_to(&calls, STRING_FREE), vec![vec![text]]);
+    }
+
+    #[test]
+    fn a_slot_without_a_model_loads_no_face_gen_model() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        log(&mut e);
+        assert_eq!(biped_anim_load_face_gen_model(&mut e, this, 4), Ptr::NULL);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (LOCK_ENTER, vec![PART_LOCK, 0]),
+                (LOCK_LEAVE, vec![PART_LOCK])
+            ]
+        );
+    }
+
+    #[test]
+    fn a_slot_holds_face_gen_data_when_its_model_has_bit_0() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        assert!(!fn_004ae8a0(&mut e, this, 2));
+        let model = block(&mut e, 0x40);
+        set_slot(&mut e, this, 2, 0x1111, model, 0);
+        assert!(!fn_004ae8a0(&mut e, this, 2));
+        e.mem.set_u8(model + 0x14, 0x03);
+        assert!(fn_004ae8a0(&mut e, this, 2));
+    }
+
+    #[test]
+    fn the_face_gen_bit_is_bit_0_of_the_byte_at_0x14() {
+        let mut e = engine();
+        let model = block(&mut e, 0x40);
+        e.mem.set_u8(model + 0x14, 0xfe);
+        assert_eq!(fn_004ae8f0(&mut e, Ptr::new(model)), 0);
+        e.mem.set_u8(model + 0x14, 0x07);
+        assert_eq!(fn_004ae8f0(&mut e, Ptr::new(model)), 1);
+    }
+
+    /// A slot-3 scene for the helmet functions: the part's model has the
+    /// texture swap slot (0x1c) and the form the platform one (0xac).
+    fn helmet_scene(e: &mut Engine, swap: u32, platform: u32) -> (Ptr<BipedAnim>, u32, u32) {
+        let s = scene(e, 3, 1);
+        let model = object_with_slots(e, &[(0x14, 0xabc0), (0x1c, swap)]);
+        let form = object_with_slots(e, &[(0xac, platform), (0x130, 0x7e7e)]);
+        set_slot(e, s.this, 3, form, model, 0);
+        let file = block(e, 0x40);
+        (s.this, file, s.node)
+    }
+
+    #[test]
+    fn a_helmet_is_cloned_and_its_textures_swapped() {
+        let mut e = engine();
+        let (this, file, _) = helmet_scene(&mut e, 0x6677, 1);
+        let copy = node_object(&mut e, &[]);
+        returns(&mut e, NI_OBJECT_CLONE, copy);
+        returns(&mut e, IS_KIND_OF, 1);
+        log(&mut e);
+        let result = biped_anim_clone_helmet(&mut e, this, Ptr::new(0x5151), Ptr::new(file), 3);
+        assert_eq!(result, Ptr::new(copy));
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, NI_OBJECT_CLONE)[0][0], file);
+        assert_eq!(calls_to(&calls, SET_LOD_MULT_TYPE), vec![vec![copy, 7]]);
+        assert_eq!(
+            calls_to(&calls, SET_TRANSLATION),
+            vec![vec![copy, ZERO_TRANSLATION]]
+        );
+        assert_eq!(
+            calls_to(&calls, SET_ROTATION),
+            vec![vec![copy, IDENTITY_ROTATION]]
+        );
+        assert_eq!(calls_to(&calls, SWAP_TEXTURES), vec![vec![0x6677, copy]]);
+        assert_eq!(calls_to(&calls, SWAP_PLATFORM_TEXTURES), vec![vec![copy]]);
+    }
+
+    #[test]
+    fn a_morphing_helmet_is_deep_copied_and_other_cases_swap_nothing() {
+        let mut e = engine();
+        let (this, file, _) = helmet_scene(&mut e, 0, 0);
+        let copy = object_with_slots(&mut e, &[]);
+        returns(&mut e, HAS_MORPHER_CONTROLLER, 1);
+        returns(&mut e, DEEP_COPY_SAME_TEXTURES, copy);
+        e.set_global(TES_GLOBAL, 0x3030);
+        log(&mut e);
+        let result = biped_anim_clone_helmet(&mut e, this, Ptr::new(0x5151), Ptr::new(file), 3);
+        assert_eq!(result, Ptr::new(copy));
+        let calls = log(&mut e);
+        let deep = calls_to(&calls, DEEP_COPY_SAME_TEXTURES);
+        assert_eq!((deep[0][0], deep[0][1]), (0x3030, file));
+        assert!(calls_to(&calls, NI_OBJECT_CLONE).is_empty());
+        assert!(calls_to(&calls, SET_LOD_MULT_TYPE).is_empty());
+        assert!(calls_to(&calls, SWAP_TEXTURES).is_empty());
+        assert!(calls_to(&calls, SWAP_PLATFORM_TEXTURES).is_empty());
+    }
+
+    #[test]
+    fn a_helmet_is_not_cloned_twice_or_without_its_arguments() {
+        let mut e = engine();
+        let (this, file, _) = helmet_scene(&mut e, 0, 0);
+        e.set(object(this, 3), BipedObject::pPartClone, Ptr::new(0x9090));
+        log(&mut e);
+        assert_eq!(
+            biped_anim_clone_helmet(&mut e, this, Ptr::new(0x5151), Ptr::new(file), 3),
+            Ptr::NULL
+        );
+        e.set(object(this, 3), BipedObject::pPartClone, Ptr::NULL);
+        assert_eq!(
+            biped_anim_clone_helmet(&mut e, this, Ptr::NULL, Ptr::new(file), 3),
+            Ptr::NULL
+        );
+        assert_eq!(
+            biped_anim_clone_helmet(&mut e, this, Ptr::new(0x5151), Ptr::NULL, 3),
+            Ptr::NULL
+        );
+        assert!(log(&mut e).is_empty());
+        // A clone that fails gives null.
+        returns(&mut e, NI_OBJECT_CLONE, 0);
+        assert_eq!(
+            biped_anim_clone_helmet(&mut e, this, Ptr::new(0x5151), Ptr::new(file), 3),
+            Ptr::NULL
+        );
+    }
+
+    #[test]
+    fn an_attached_helmet_is_named_and_hung_on_the_bone_of_its_slot() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 1);
+        let bone_object = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(bone(s.this, 1), BipedBone::pParent, Ptr::new(bone_object));
+        returns(&mut e, ACTOR_ROOT, 0x1234);
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        // Not skinned: attached to the parent given by the extra data (none
+        // here), named, add-on nodes asked, then hung on the bone.
+        assert_eq!(calls_to(&calls, SET_NAME).len(), 1);
+        assert_eq!(calls_to(&calls, SET_NAME)[0][0], s.node);
+        let hang = slot_target(&e, bone_object, 0xdc);
+        assert_eq!(calls_to(&calls, hang), vec![vec![bone_object, s.node, 1]]);
+        assert_eq!(slot_words(&e, object(s.this, 3))[2], s.node);
+        assert_eq!(calls_to(&calls, SET_MOTION).len(), 1);
+        // The actor's 3D is refreshed at the end.
+        assert_eq!(calls.last().unwrap(), &(UPDATE_PROPERTIES, vec![0x1234]));
+        assert_eq!(calls_to(&calls, ACTOR_ROOT).len(), 2);
+    }
+
+    #[test]
+    fn a_helmet_without_a_bone_index_goes_through_the_word_before_the_bones() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 0xffff_ffff);
+        // Index -1 reads `bone[-1].pParent` at `this + 0`: the root.
+        let root = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(s.this, BipedAnim::root, Ptr::new(root));
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        let hang = slot_target(&e, root, 0xdc);
+        assert_eq!(calls_to(&calls, hang), vec![vec![root, s.node, 1]]);
+    }
+
+    #[test]
+    fn a_helmet_whose_bone_is_missing_goes_under_the_root_when_it_has_a_parent() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 2);
+        let root = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(s.this, BipedAnim::root, Ptr::new(root));
+        log(&mut e);
+        // No parent: not attached anywhere.
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        let hang = slot_target(&e, root, 0xdc);
+        assert!(calls_to(&calls, hang).is_empty());
+        returns(&mut e, NODE_PARENT, 0x9999);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        // The root gets the part, since the bone is missing and it has a parent.
+        assert!(calls_to(&calls, hang).contains(&vec![root, s.node, 1]));
+    }
+
+    #[test]
+    fn a_skinned_helmet_is_not_hung_on_a_bone() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 1);
+        let bone_object = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.set(bone(s.this, 1), BipedBone::pParent, Ptr::new(bone_object));
+        // The node holds skinned objects: ApplySkinnedObjects marks the slot.
+        returns(&mut e, FIND_SKINNED_NODE, 1);
+        returns(&mut e, FIND_OBJECT_BY_NAME, 0x4a4a);
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        let hang = slot_target(&e, bone_object, 0xdc);
+        assert!(calls_to(&calls, hang).is_empty());
+    }
+
+    #[test]
+    fn the_first_person_player_flags_are_passed_to_the_skinned_objects() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 1);
+        e.set(s.this, BipedAnim::m_pRequester, Ptr::new(0x0f00_0000));
+        returns(&mut e, IS_FIRST_PERSON_BIPED, 1);
+        returns(&mut e, ACTOR_ROOT, 0x1234);
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(0x5151), Ptr::new(s.node), 3);
+        let calls = log(&mut e);
+        // Asked twice (the first answer is not used).
+        assert_eq!(
+            calls_to(&calls, IS_FIRST_PERSON_BIPED),
+            vec![vec![0x0f00_0000, s.this.addr()]; 2]
+        );
+    }
+
+    #[test]
+    fn nothing_is_attached_without_a_face_model_or_a_node_but_the_3d_is_refreshed() {
+        let mut e = engine();
+        let s = scene(&mut e, 3, 1);
+        returns(&mut e, ACTOR_ROOT, 0x1234);
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::NULL, Ptr::new(s.node), 3);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::new(1), Ptr::NULL, 3);
+        let calls = log(&mut e);
+        assert_eq!(
+            addresses(&calls),
+            vec![
+                ACTOR_ROOT,
+                ACTOR_ROOT,
+                UPDATE_PROPERTIES,
+                ACTOR_ROOT,
+                ACTOR_ROOT,
+                UPDATE_PROPERTIES
+            ]
+        );
+        // Nor does an actor without a 3D root get an update.
+        returns(&mut e, ACTOR_ROOT, 0);
+        log(&mut e);
+        biped_anim_attach_helmet(&mut e, s.this, Ptr::NULL, Ptr::NULL, 3);
+        assert_eq!(log(&mut e), vec![(ACTOR_ROOT, vec![0x0abc_0000])]);
+    }
+
+    #[test]
+    fn queueing_through_a_fresh_handle_builds_and_destroys_it() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        let model = block(&mut e, 0x40);
+        set_slot(&mut e, this, 2, 0x1111, model, 0);
+        e.set_global(MODEL_LOADER, 0x5555);
+        log(&mut e);
+        fn_004aede0(&mut e, this, 5, 6, 2);
+        let calls = log(&mut e);
+        let handle = calls_to(&calls, QUEUE_OBJECT_INIT)[0][0];
+        assert_eq!(calls_to(&calls, QUEUE_OBJECT_INIT), vec![vec![handle, 0]]);
+        assert_eq!(
+            calls_to(&calls, LOADER_QUEUE_PART),
+            vec![vec![0x5555, this.addr(), handle, 5, 6, 2]]
+        );
+        assert_eq!(calls.last().unwrap(), &(QUEUE_OBJECT_FREE, vec![handle]));
+    }
+
+    #[test]
+    fn a_part_already_queued_is_not_queued_again() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        let model = block(&mut e, 0x40);
+        set_slot(&mut e, this, 2, 0x1111, model, 0);
+        let handle = block(&mut e, 4);
+        e.mem.set_u32(handle, 0x7a7a);
+        log(&mut e);
+        fn_004aee60(&mut e, this, 5, 6, Ptr::new(handle), 2);
+        assert_eq!(log(&mut e), vec![(READ_WORD, vec![handle])]);
+    }
+
+    #[test]
+    fn a_slot_without_a_model_clears_the_queued_file() {
+        let mut e = engine();
+        let this = biped(&mut e);
+        let handle = block(&mut e, 4);
+        log(&mut e);
+        fn_004aee60(&mut e, this, 5, 6, Ptr::new(handle), 2);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (READ_WORD, vec![handle]),
+                (QUEUED_FILE_ASSIGN, vec![handle, 0])
+            ]
+        );
+        // A model word of -1 does too.
+        e.set(object(this, 2), BipedObject::pPart, Ptr::new(0xffff_ffff));
+        fn_004aee60(&mut e, this, 5, 6, Ptr::new(handle), 2);
+        assert_eq!(calls_to(&log(&mut e), QUEUED_FILE_ASSIGN).len(), 1);
+    }
+
+    /// The model, form and requester of an add-on, with the file, the clone
+    /// and the root `LoadAndAttachAddOn` works with.
+    struct AddOn {
+        form: u32,
+        model: u32,
+        requester: u32,
+        root: u32,
+        file: u32,
+        copy: u32,
+    }
+
+    fn add_on(e: &mut Engine) -> AddOn {
+        names_are(e);
+        e.set_global(MODEL_LOADER, 0x5555);
+        e.set_global(EXTRA_DATA_KEY, 0x9900);
+        tables(e);
+        let path = text(e, "add.nif");
+        let model = object_with_slots(e, &[(0x14, path), (0x1c, 0x6677)]);
+        let form = object_with_slots(e, &[(0xac, 1)]);
+        let root = object_with_slots(e, &[(0xdc, 0)]);
+        let copy = node_object(e, &[]);
+        returns(e, LOAD_FILE, 0xf11e);
+        returns(e, NI_OBJECT_CLONE, copy);
+        returns(e, GET_EXTRA_DATA, 0x8000);
+        AddOn {
+            form,
+            model,
+            requester: 0x0abc_0000,
+            root,
+            file: 0xf11e,
+            copy,
+        }
+    }
+
+    #[test]
+    fn an_add_on_is_loaded_cloned_attached_and_hung_under_the_root() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        log(&mut e);
+        let result = biped_anim_load_and_attach_add_on(
+            &mut e,
+            Ptr::new(a.form),
+            Ptr::new(a.model),
+            0xffff_ffff,
+            Ptr::new(a.requester),
+            Ptr::new(a.root),
+        );
+        assert_eq!(result, Ptr::new(a.copy));
+        let calls = log(&mut e);
+        let path = calls_to(&calls, LOAD_FILE);
+        assert_eq!(path[0][0], 0x5555);
+        assert_eq!(calls_to(&calls, NI_OBJECT_CLONE)[0][0], a.file);
+        assert_eq!(path[0][2..], [3, 1, 0, 0, 0]);
+        assert_eq!(calls_to(&calls, SWAP_TEXTURES), vec![vec![0x6677, a.copy]]);
+        assert_eq!(calls_to(&calls, SWAP_PLATFORM_TEXTURES), vec![vec![a.copy]]);
+        // The extra data kept under the key was taken out and put back.
+        assert_eq!(calls_to(&calls, REMOVE_ALL_EXTRA_DATA), vec![vec![a.copy]]);
+        assert_eq!(
+            calls_to(&calls, ADD_EXTRA_DATA),
+            vec![vec![a.copy, 0x9900, 0x8000]]
+        );
+        let order = addresses(&calls);
+        let remove = order.iter().position(|&x| x == REMOVE_ALL_EXTRA_DATA);
+        let add = order.iter().position(|&x| x == ADD_EXTRA_DATA);
+        assert!(remove < add);
+        assert_eq!(
+            calls_to(&calls, ADD_MASTER_PARTICLE_ADDON_NODES),
+            vec![vec![a.copy]]
+        );
+        // The part is attached by the parent extra data (the file is asked)...
+        assert_eq!(calls_to(&calls, SET_MOTION), vec![vec![a.copy, 4, 1, 1, 1]]);
+        // ...and, having no parent, hung under the root.
+        let hang = slot_target(&e, a.root, 0xdc);
+        assert_eq!(calls_to(&calls, hang), vec![vec![a.root, a.copy, 1]]);
+        assert_eq!(calls_to(&calls, UPDATE_PROPERTIES), vec![vec![a.copy]]);
+    }
+
+    #[test]
+    fn an_add_on_goes_under_the_bone_of_its_slot_and_defaults_to_the_actors_root() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        e.mem.set_u32(SLOT_BONES + 4 * 3, 1);
+        let bone_object = object_with_slots(&mut e, &[(0xdc, 0)]);
+        e.register_double(FIND_OBJECT_BY_NAME, move |_, a| {
+            ret(if a[1] == 0x0118_8c10 { bone_object } else { 0 })
+        });
+        returns(&mut e, ACTOR_ROOT, a.root);
+        log(&mut e);
+        let result = biped_anim_load_and_attach_add_on(
+            &mut e,
+            Ptr::NULL,
+            Ptr::new(a.model),
+            3,
+            Ptr::new(a.requester),
+            Ptr::NULL,
+        );
+        assert_eq!(result, Ptr::new(a.copy));
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, ACTOR_ROOT), vec![vec![a.requester]]);
+        assert!(calls_to(&calls, SWAP_PLATFORM_TEXTURES).is_empty());
+        let hang = slot_target(&e, bone_object, 0xdc);
+        assert_eq!(calls_to(&calls, hang), vec![vec![bone_object, a.copy, 1]]);
+        // The root's search used the bone name of the table.
+        let searched: Vec<_> = calls_to(&calls, FIND_OBJECT_BY_NAME)
+            .into_iter()
+            .filter(|words| words[0] == a.root)
+            .collect();
+        assert_eq!(searched, vec![vec![a.root, 0x0118_8c10, 1]]);
+    }
+
+    #[test]
+    fn a_skinned_add_on_is_logged_and_not_attached() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        returns(&mut e, FIND_SKINNED_NODE, 1);
+        log(&mut e);
+        let result = biped_anim_load_and_attach_add_on(
+            &mut e,
+            Ptr::new(a.form),
+            Ptr::new(a.model),
+            3,
+            Ptr::new(a.requester),
+            Ptr::new(a.root),
+        );
+        assert_eq!(result, Ptr::new(a.copy));
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![ADD_ON_SKINNED_FORMAT, name_of(a.copy)]]
+        );
+        assert!(calls_to(&calls, SET_MOTION).is_empty());
+        let hang = slot_target(&e, a.root, 0xdc);
+        assert!(calls_to(&calls, hang).is_empty());
+        assert_eq!(calls_to(&calls, UPDATE_PROPERTIES), vec![vec![a.copy]]);
+    }
+
+    #[test]
+    fn a_morphing_add_on_is_deep_copied() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        returns(&mut e, HAS_MORPHER_CONTROLLER, 1);
+        returns(&mut e, DEEP_COPY_SAME_TEXTURES, a.copy);
+        log(&mut e);
+        let result = biped_anim_load_and_attach_add_on(
+            &mut e,
+            Ptr::new(a.form),
+            Ptr::new(a.model),
+            0xffff_ffff,
+            Ptr::new(a.requester),
+            Ptr::new(a.root),
+        );
+        assert_eq!(result, Ptr::new(a.copy));
+        let calls = log(&mut e);
+        assert_eq!(calls_to(&calls, DEEP_COPY_SAME_TEXTURES).len(), 1);
+        assert!(calls_to(&calls, NI_OBJECT_CLONE).is_empty());
+    }
+
+    #[test]
+    fn an_add_on_needs_a_model_with_a_path_a_requester_and_a_root() {
+        let mut e = engine();
+        let a = add_on(&mut e);
+        log(&mut e);
+        let go = |e: &mut Engine, model: u32, requester: u32, root: u32| {
+            biped_anim_load_and_attach_add_on(
+                e,
+                Ptr::new(a.form),
+                Ptr::new(model),
+                3,
+                Ptr::new(requester),
+                Ptr::new(root),
+            )
+        };
+        assert_eq!(go(&mut e, 0, a.requester, a.root), Ptr::NULL);
+        assert_eq!(go(&mut e, a.model, 0, a.root), Ptr::NULL);
+        let empty = text(&mut e, "");
+        let no_path = object_with_slots(&mut e, &[(0x14, empty)]);
+        assert_eq!(go(&mut e, no_path, a.requester, a.root), Ptr::NULL);
+        let nothing = object_with_slots(&mut e, &[(0x14, 0)]);
+        assert_eq!(go(&mut e, nothing, a.requester, a.root), Ptr::NULL);
+        // No root of its own: the actor has no 3D.
+        returns(&mut e, ACTOR_ROOT, 0);
+        assert_eq!(go(&mut e, a.model, a.requester, 0), Ptr::NULL);
+        assert!(calls_to(&log(&mut e), LOAD_FILE).is_empty());
+    }
+
+    #[test]
+    fn add_on_nodes_are_added_when_the_extra_data_passes_the_test() {
+        let mut e = engine();
+        returns(&mut e, ADDON_KEY, 0x2468);
+        returns(&mut e, GET_EXTRA_DATA, 0x8000);
+        returns(&mut e, ADDON_EXTRA_CHECK, 1);
+        log(&mut e);
+        fn_004af240(&mut e, Ptr::new(0xf11e), Ptr::new(0xc10e), 3, 0xabc);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (ADDON_KEY, vec![]),
+                (GET_EXTRA_DATA, vec![0xf11e, 0x2468]),
+                (ADDON_EXTRA_CHECK, vec![0x8000]),
+                (ADD_ADDON_NODES, vec![0xc10e])
+            ]
+        );
+        returns(&mut e, ADDON_EXTRA_CHECK, 0);
+        fn_004af240(&mut e, Ptr::new(0xf11e), Ptr::new(0xc10e), 3, 0xabc);
+        assert!(calls_to(&log(&mut e), ADD_ADDON_NODES).is_empty());
+        returns(&mut e, GET_EXTRA_DATA, 0);
+        fn_004af240(&mut e, Ptr::new(0xf11e), Ptr::new(0xc10e), 3, 0xabc);
+        assert!(calls_to(&log(&mut e), ADDON_EXTRA_CHECK).is_empty());
+    }
+
+    #[test]
+    fn the_lighting_property_needs_a_geometry_and_a_value_between_8_and_12() {
+        let mut e = engine();
+        let geometry = geometry_object(&mut e, &[]);
+        let plain = object_with_slots(&mut e, &[(0x18, 0)]);
+        returns(&mut e, GET_PROPERTY, 0x6a6a);
+        returns(&mut e, PROPERTY_WORLDSPACE, 10);
+        log(&mut e);
+        assert_eq!(
+            biped_anim_get_lighting_property(&mut e, Ptr::new(geometry)),
+            Ptr::new(0x6a6a)
+        );
+        // Types 2 and 5 are fetched first, then 3.
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, GET_PROPERTY),
+            vec![vec![geometry, 2], vec![geometry, 5], vec![geometry, 3]]
+        );
+        assert_eq!(
+            biped_anim_get_lighting_property(&mut e, Ptr::new(plain)),
+            Ptr::NULL
+        );
+        assert_eq!(
+            biped_anim_get_lighting_property(&mut e, Ptr::NULL),
+            Ptr::NULL
+        );
+        for (value, expected) in [(7, 0), (8, 0x6a6a), (12, 0x6a6a), (13, 0)] {
+            returns(&mut e, PROPERTY_WORLDSPACE, value);
+            assert_eq!(
+                biped_anim_get_lighting_property(&mut e, Ptr::new(geometry)),
+                Ptr::new(expected)
+            );
+        }
+        returns(&mut e, GET_PROPERTY, 0);
+        assert_eq!(
+            biped_anim_get_lighting_property(&mut e, Ptr::new(geometry)),
+            Ptr::NULL
+        );
+    }
+
+    #[test]
+    fn two_constants_give_the_property_types() {
+        let mut e = engine();
+        assert_eq!(fn_004af340(&mut e), 5);
+        assert_eq!(fn_004af350(&mut e), 2);
+    }
+
+    /// The skin part names, as real texts, and a prefix compare that works.
+    fn skin_names(e: &mut Engine) {
+        for (index, name) in ["UpperBody", "LeftHand", "RightHand", "Head", "Body"]
+            .into_iter()
+            .enumerate()
+        {
+            let address = text(e, name);
+            e.mem.set_u32(SKIN_PART_NAMES + 4 * index as u32, address);
+        }
+        e.register(TEXT_LENGTH, |e, a| ret(e.mem.cstr(a[0]).len() as u32));
+        e.register(COMPARE_PREFIX, |e, a| {
+            let left = e.mem.cstr(a[0]);
+            let right = e.mem.cstr(a[1]);
+            let count = a[2] as usize;
+            let equal = left.len() >= count
+                && right.len() >= count
+                && left[..count].eq_ignore_ascii_case(&right[..count]);
+            ret(if equal { 0 } else { 1 })
+        });
+        // The node's own address is its name text.
+        e.register(NAME_FIELD, |_, a| ret(a[0]));
+        e.register(NAME_TEXT, |_, a| ret(a[0]));
+    }
+
+    #[test]
+    fn the_skin_slot_is_chosen_by_the_prefix_of_the_geometry_name() {
+        let mut e = engine();
+        skin_names(&mut e);
+        returns(&mut e, PROPERTY_FLAG, 1);
+        for (name, slot) in [
+            ("UpperBody01", 2),
+            ("lefthand", 2),
+            ("RightHand:0", 3),
+            ("Head", 4),
+            ("body", 2),
+        ] {
+            let node = text(&mut e, name);
+            assert_eq!(
+                biped_anim_get_skin_biped_object(&mut e, Ptr::new(node), Ptr::new(0x6a6a)),
+                slot,
+                "{name}"
+            );
+        }
+        assert!(calls_to(&log(&mut e), LOG).is_empty());
+    }
+
+    #[test]
+    fn an_unknown_skin_name_is_logged_and_gives_slot_2() {
+        let mut e = engine();
+        skin_names(&mut e);
+        returns(&mut e, PROPERTY_FLAG, 1);
+        let node = text(&mut e, "Elbow");
+        let above = text(&mut e, "Above");
+        returns(&mut e, NODE_PARENT, above);
+        log(&mut e);
+        assert_eq!(
+            biped_anim_get_skin_biped_object(&mut e, Ptr::new(node), Ptr::new(0x6a6a)),
+            2
+        );
+        assert_eq!(
+            calls_to(&log(&mut e), LOG),
+            vec![vec![BAD_SKIN_NAME_FORMAT, node, above]]
+        );
+    }
+
+    #[test]
+    fn a_skin_without_the_property_flag_has_no_slot() {
+        let mut e = engine();
+        skin_names(&mut e);
+        let node = text(&mut e, "Head");
+        returns(&mut e, PROPERTY_FLAG, 0);
+        assert_eq!(
+            biped_anim_get_skin_biped_object(&mut e, Ptr::new(node), Ptr::new(0x6a6a)),
+            0xffff_ffff
+        );
+        assert_eq!(
+            calls_to(&log(&mut e), PROPERTY_FLAG),
+            vec![vec![0x6a6a, 10]]
+        );
+    }
+
+    #[test]
+    fn without_a_property_the_lighting_property_is_used() {
+        let mut e = engine();
+        skin_names(&mut e);
+        // A geometry named Head with a lighting property in range.
+        let node = geometry_object(&mut e, &[]);
+        e.mem.set_cstr(node + 0x40, b"Head");
+        returns(&mut e, GET_PROPERTY, 0x6a6a);
+        returns(&mut e, PROPERTY_WORLDSPACE, 9);
+        returns(&mut e, PROPERTY_FLAG, 1);
+        e.register(NAME_FIELD, |_, a| ret(a[0] + 0x40));
+        e.register(NAME_TEXT, |_, a| ret(a[0]));
+        assert_eq!(
+            biped_anim_get_skin_biped_object(&mut e, Ptr::new(node), Ptr::NULL),
+            4
+        );
+        returns(&mut e, GET_PROPERTY, 0);
+        assert_eq!(
+            biped_anim_get_skin_biped_object(&mut e, Ptr::new(node), Ptr::NULL),
+            0xffff_ffff
+        );
+    }
+
+    /// A geometry with a lighting property for `AdjustSkinComplexion`: the
+    /// property's virtual slots 0xfc and 0x100 set a texture. The geometry's
+    /// name is `Head`.
+    fn complexion_scene(e: &mut Engine) -> (Ptr<BipedAnim>, u32, u32, u32) {
+        skin_names(e);
+        let this = biped(e);
+        e.set(this, BipedAnim::m_pRequester, Ptr::new(0x0abc_0000));
+        let node = geometry_object(e, &[]);
+        e.mem.set_cstr(node + 0x40, b"Head");
+        e.register(NAME_FIELD, |_, a| ret(a[0] + 0x40));
+        e.register(NAME_TEXT, |_, a| ret(a[0]));
+        let property = object_with_slots(e, &[(0xfc, 0), (0x100, 0)]);
+        returns(e, GET_PROPERTY, property);
+        returns(e, PROPERTY_WORLDSPACE, 9);
+        returns(e, PROPERTY_FLAG, 1);
+        // The requester's base form is an NPC.
+        let npc = block(e, 0x300);
+        returns(e, REFERENCE_FORM, 0x3030);
+        returns(e, RT_DYNAMIC_CAST, npc);
+        // The race texture handles are filled by `GetBodyTexture`.
+        e.register_double(GET_BODY_TEXTURE, |e, a| {
+            e.mem.set_u32(a[1], 0x1a1a);
+            e.mem.set_u32(a[2], 0x2b2b);
+            ret(1)
+        });
+        returns(e, READ_WORD_PLUS_4, 0x6060);
+        (this, node, property, npc)
+    }
+
+    #[test]
+    fn a_skin_gets_its_race_textures_and_the_shader_flag() {
+        let mut e = engine();
+        let (this, node, property, npc) = complexion_scene(&mut e);
+        let texture_object = block(&mut e, 0x80);
+        returns(&mut e, CAST_TO_CLASS, texture_object);
+        e.register(TEXTURE_PATH_FIELD, |_, a| ret(a[0] + 0x34));
+        let owner = block(&mut e, 0x1200);
+        e.mem.set_u32(owner + 0x11a0, 0x4e4e);
+        e.mem.set_u32(TEXTURE_OWNER, owner);
+        log(&mut e);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 1);
+        let calls = log(&mut e);
+        let body = calls_to(&calls, GET_BODY_TEXTURE);
+        assert_eq!(body[0][0], 0x6060);
+        assert_eq!(body[0][3..], [npc, 4, 1]);
+        assert_eq!(
+            calls_to(&calls, GET_FACE_COORD).len(),
+            1,
+            "the face coordinates are read"
+        );
+        let set_base = slot_target(&e, property, 0xfc);
+        let set_normal = slot_target(&e, property, 0x100);
+        assert_eq!(
+            calls_to(&calls, set_base),
+            vec![vec![property, 0, 0x1a1a], vec![property, 1, 0x2b2b]]
+        );
+        // The filter flag of the texture: the cast object gives 1; the path is
+        // that of the cast object (+0x34 is the field, its text the same).
+        assert_eq!(
+            calls_to(&calls, MODIFIED_TEXTURE_FILENAME)[0][1..],
+            [texture_object + 0x34, NORMAL_MAP_SUFFIX, 1]
+        );
+        assert_eq!(
+            calls_to(&calls, CAST_TO_CLASS)
+                .iter()
+                .filter(|words| words[0] == TEXTURE_CLASS)
+                .count(),
+            1
+        );
+        // The second texture comes from the owner's NiPointer.
+        assert_eq!(
+            calls_to(&calls, set_normal).last().unwrap(),
+            &vec![property, 1, 0x4e4e]
+        );
+        assert_eq!(
+            calls_to(&calls, SET_SHADER_FLAG),
+            vec![vec![property, 10, 1]]
+        );
+        assert_eq!(calls_to(&calls, VECTOR_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn a_normal_map_found_for_the_base_texture_is_set_too() {
+        let mut e = engine();
+        let (this, node, property, _) = complexion_scene(&mut e);
+        let texture_object = block(&mut e, 0x80);
+        returns(&mut e, CAST_TO_CLASS, texture_object);
+        e.register(MODIFIED_TEXTURE_FILENAME, |e, a| {
+            e.mem.set_cstr(a[0], b"x_n.dds");
+            Ret::default()
+        });
+        e.register_double(GET_TEXTURE, |e, a| {
+            e.mem.set_u32(a[2], 0x3c3c);
+            Ret::default()
+        });
+        e.register(READ_WORD, |e, a| ret(e.mem.u32(a[0])));
+        log(&mut e);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 0);
+        let calls = log(&mut e);
+        let texture = calls_to(&calls, GET_TEXTURE);
+        assert_eq!(texture[0][1], 1, "mipmaps stay on");
+        assert_eq!(texture[0][3..], [1, 0]);
+        let set_normal = slot_target(&e, property, 0x100);
+        assert_eq!(calls_to(&calls, set_normal)[0], vec![property, 0, 0x3c3c]);
+        assert_eq!(calls_to(&calls, GET_BODY_TEXTURE)[0][5], 0);
+    }
+
+    #[test]
+    fn a_skin_without_race_textures_is_logged_with_the_race_and_sex_names() {
+        let mut e = engine();
+        let (this, node, property, npc) = complexion_scene(&mut e);
+        returns(&mut e, GET_BODY_TEXTURE, 0);
+        returns(&mut e, ACTOR_BASE_SEX, 1);
+        e.register(IDENTITY_TEXT, |_, a| ret(a[0]));
+        returns(&mut e, RACE_NAME_TEXT, 0x8181);
+        let sex_name = text(&mut e, "Female");
+        e.mem.set_u32(SEX_NAMES + 4, sex_name);
+        log(&mut e);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 0);
+        let calls = log(&mut e);
+        let slot_name = e.mem.u32(SLOT_NAMES + 4 * 4);
+        assert_eq!(
+            calls_to(&calls, ACTOR_BASE_SEX),
+            vec![vec![npc, 0, slot_name]]
+        );
+        assert_eq!(
+            calls_to(&calls, LOG),
+            vec![vec![
+                MISSING_RACE_TEXTURE_FORMAT,
+                sex_name,
+                slot_name,
+                0x8181
+            ]]
+        );
+        let set_base = slot_target(&e, property, 0xfc);
+        assert!(calls_to(&calls, set_base).is_empty());
+        assert!(calls_to(&calls, SET_SHADER_FLAG).is_empty());
+        assert_eq!(calls_to(&calls, VECTOR_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn a_skin_without_an_npc_still_gets_its_textures() {
+        let mut e = engine();
+        let (this, node, property, _) = complexion_scene(&mut e);
+        returns(&mut e, RT_DYNAMIC_CAST, 0);
+        returns(&mut e, GET_BODY_TEXTURE, 0);
+        log(&mut e);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 0);
+        let calls = log(&mut e);
+        assert!(calls_to(&calls, GET_FACE_COORD).is_empty());
+        assert!(calls_to(&calls, LOG).is_empty());
+        assert_eq!(
+            calls_to(&calls, SET_SHADER_FLAG),
+            vec![vec![property, 10, 1]]
+        );
+    }
+
+    #[test]
+    fn a_node_without_a_property_or_a_skin_slot_is_left_alone() {
+        let mut e = engine();
+        let (this, node, _, _) = complexion_scene(&mut e);
+        returns(&mut e, GET_PROPERTY, 0);
+        log(&mut e);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 0);
+        assert!(calls_to(&log(&mut e), VECTOR_CONSTRUCT).is_empty());
+        returns(&mut e, PROPERTY_FLAG, 0);
+        let (this, node, _, _) = complexion_scene(&mut e);
+        returns(&mut e, PROPERTY_FLAG, 0);
+        biped_anim_adjust_skin_complexion(&mut e, this, Ptr::new(node), 0);
+        assert!(calls_to(&log(&mut e), VECTOR_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn two_small_texture_helpers_are_neutral() {
+        let mut e = engine();
+        let object = block(&mut e, 0x80);
+        e.mem.set_u8(object + 0x43, 0x99);
+        assert!(!fn_004af860(&mut e, Ptr::new(object)));
+        fn_004af880(&mut e, Ptr::new(object));
+        assert_eq!(e.mem.u8(object + 0x43), 0x99);
+        assert!(!e.call(0x004a_f860, &args![object]).bool());
+    }
+
+    #[test]
+    fn the_owner_texture_is_read_from_the_owner_or_a_fresh_pointer() {
+        let mut e = engine();
+        returns(&mut e, READ_WORD, 0x4d4d);
+        e.mem.set_u32(TEXTURE_OWNER, 0x7070);
+        log(&mut e);
+        assert_eq!(fn_004af8a0(&mut e), 0x4d4d);
+        assert_eq!(log(&mut e), vec![(READ_WORD, vec![0x7070 + 0x11a0])]);
+        e.mem.set_u32(TEXTURE_OWNER, 0);
+        e.register(READ_WORD, |e, a| ret(e.mem.u32(a[0])));
+        assert_eq!(fn_004af8a0(&mut e), 0);
+        let calls = log(&mut e);
+        assert_eq!(
+            addresses(&calls),
+            vec![NI_POINTER_INIT, READ_WORD, NI_POINTER_RELEASE]
+        );
+    }
+
+    #[test]
+    fn the_first_person_model_path_replaces_the_extension() {
+        let mut e = engine();
+        let item = object_with_slots(&mut e, &[(0x14, 0xabc0)]);
+        e.register(STRING_COPY, |e, a| {
+            e.mem.set_cstr(a[0], b"armor\\helmet.nif");
+            ret(0)
+        });
+        e.register(FIND_LAST_CHAR, |e, a| {
+            let text = e.mem.cstr(a[0]);
+            ret(text
+                .iter()
+                .rposition(|&c| c == b'.')
+                .map_or(0, |i| a[0] + i as u32))
+        });
+        e.register(STRING_APPEND, |e, a| {
+            e.mem.set_cstr(a[0], b".1st.nif");
+            ret(0)
+        });
+        returns(&mut e, FILE_EXISTS, 1);
+        let buffer = block(&mut e, 0x104);
+        log(&mut e);
+        assert!(fn_004af950(
+            &mut e,
+            Ptr::NULL,
+            Ptr::new(item),
+            Ptr::new(buffer)
+        ));
+        let calls = log(&mut e);
+        assert_eq!(
+            calls_to(&calls, STRING_COPY),
+            vec![vec![buffer, 0x104, 0xabc0]]
+        );
+        assert_eq!(calls_to(&calls, FIND_LAST_CHAR), vec![vec![buffer, 0x2e]]);
+        // The text was cut at the dot and the suffix appended with the room left.
+        assert_eq!(e.mem.u8(buffer + 12), b'.');
+        assert_eq!(
+            calls_to(&calls, STRING_APPEND),
+            vec![vec![buffer + 12, 0x104 - 12, FIRST_PERSON_SUFFIX]]
+        );
+        let format = calls_to(&calls, FORMAT_INTO);
+        assert_eq!(
+            format[0][1..],
+            [0x104, DATA_PATH_FORMAT, MESHES_FOLDER, buffer]
+        );
+        assert_eq!(
+            calls_to(&calls, FILE_EXISTS),
+            vec![vec![format[0][0], 0, 6, 1]]
+        );
+        returns(&mut e, FILE_EXISTS, 0);
+        assert!(!fn_004af950(
+            &mut e,
+            Ptr::NULL,
+            Ptr::new(item),
+            Ptr::new(buffer)
+        ));
+    }
+
+    #[test]
+    fn a_path_without_an_extension_has_no_first_person_model() {
+        let mut e = engine();
+        let item = object_with_slots(&mut e, &[(0x14, 0xabc0)]);
+        let buffer = block(&mut e, 0x104);
+        log(&mut e);
+        assert!(!fn_004af950(
+            &mut e,
+            Ptr::NULL,
+            Ptr::new(item),
+            Ptr::new(buffer)
+        ));
+        assert_eq!(addresses(&log(&mut e))[1..], [STRING_COPY, FIND_LAST_CHAR]);
+    }
+
+    #[test]
+    fn a_path_entry_is_set_and_its_address_returned() {
+        let mut e = engine();
+        log(&mut e);
+        assert_eq!(
+            fn_004afa20(&mut e, Ptr::NULL, 2, Ptr::new(0xabc0)),
+            PATH_TABLE + 0x30
+        );
+        assert_eq!(
+            log(&mut e),
+            vec![(SET_PATH_ENTRY, vec![PATH_TABLE + 0x30, 0xabc0])]
+        );
+    }
+
+    #[test]
+    fn the_alternative_path_entry_is_the_part_itself_unless_a_first_person_model_exists() {
+        let mut e = engine();
+        let item = object_with_slots(&mut e, &[(0x14, 0xabc0)]);
+        // The part already is the entry of the slot.
+        log(&mut e);
+        assert_eq!(
+            fn_004afa50(&mut e, Ptr::NULL, 2, Ptr::new(PATH_TABLE + 0x30)),
+            PATH_TABLE + 0x30
+        );
+        assert!(log(&mut e).is_empty());
+        // No first person model (no extension): the part.
+        assert_eq!(fn_004afa50(&mut e, Ptr::NULL, 2, Ptr::new(item)), item);
+        // A first person model: the entry, set from the built path.
+        e.register(FIND_LAST_CHAR, |_, a| ret(a[0] + 5));
+        returns(&mut e, FILE_EXISTS, 1);
+        log(&mut e);
+        assert_eq!(
+            fn_004afa50(&mut e, Ptr::NULL, 2, Ptr::new(item)),
+            PATH_TABLE + 0x30
+        );
+        let calls = log(&mut e);
+        let set = calls_to(&calls, SET_PATH_ENTRY);
+        assert_eq!(set[0][0], PATH_TABLE + 0x30);
+        assert_eq!(set[0][1], calls_to(&calls, STRING_COPY)[0][0]);
+    }
+
+    #[test]
+    fn a_text_is_lowered_with_room_for_its_length_plus_one() {
+        let mut e = engine();
+        let holder = block(&mut e, 8);
+        log(&mut e);
+        fn_004afad0(&mut e, Ptr::new(holder));
+        assert!(log(&mut e).is_empty());
+        e.mem.set_u32(holder, 0xabc0);
+        e.mem.set_u16(holder + 4, 6);
+        returns(&mut e, STRLWR_S, 0);
+        fn_004afad0(&mut e, Ptr::new(holder));
+        assert_eq!(log(&mut e), vec![(STRLWR_S, vec![0xabc0, 7])]);
+    }
+
+    #[test]
+    fn the_lowering_wrapper_passes_both_words_on() {
+        let mut e = engine();
+        returns(&mut e, STRLWR_S, 22);
+        log(&mut e);
+        assert_eq!(fn_004afb00(&mut e, 0xabc0, 9), 22);
+        assert_eq!(log(&mut e), vec![(STRLWR_S, vec![0xabc0, 9])]);
+    }
+
+    #[test]
+    fn the_clone_map_and_process_map_constructors_store_their_vtables() {
+        let mut e = engine();
+        let clone_map = block(&mut e, 0x10);
+        let process_map = block(&mut e, 0x10);
+        log(&mut e);
+        assert_eq!(
+            fn_004afb20(&mut e, Ptr::new(clone_map), 0x101),
+            Ptr::new(clone_map)
+        );
+        assert_eq!(e.mem.u32(clone_map), CLONE_MAP_VTABLE);
+        assert_eq!(
+            fn_004afb50(&mut e, Ptr::new(process_map), 0x101),
+            Ptr::new(process_map)
+        );
+        assert_eq!(e.mem.u32(process_map), PROCESS_MAP_VTABLE);
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (FN_004AFF30, vec![clone_map, 0x101]),
+                (FN_004B0030, vec![process_map, 0x101])
+            ]
+        );
+    }
+
+    #[test]
+    fn the_queue_lock_is_the_recursive_lock_at_0x20() {
+        let mut e = engine();
+        log(&mut e);
+        fn_004afb80(&mut e, Ptr::new(0x4000));
+        fn_004afba0(&mut e, Ptr::new(0x4000));
+        assert_eq!(
+            log(&mut e),
+            vec![
+                (RECURSIVE_LOCK_ENTER, vec![0x4020, 0]),
+                (RECURSIVE_LOCK_LEAVE, vec![0x4020])
+            ]
+        );
+    }
+
+    #[test]
+    fn the_clone_map_is_freed_only_when_the_flag_says_so() {
+        let mut e = engine();
+        log(&mut e);
+        assert_eq!(
+            ni_t_pointer_map_object_object_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 0),
+            Ptr::new(0x4000)
+        );
+        assert_eq!(log(&mut e), vec![(FN_004AFFA0, vec![0x4000])]);
+        ni_t_pointer_map_object_object_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 3);
+        assert_eq!(
+            log(&mut e),
+            vec![(FN_004AFFA0, vec![0x4000]), (OPERATOR_DELETE, vec![0x4000])]
+        );
+    }
+
+    #[test]
+    fn the_process_map_is_freed_only_when_the_flag_says_so() {
+        let mut e = engine();
+        log(&mut e);
+        assert_eq!(
+            ni_t_pointer_map_object_bool_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 2),
+            Ptr::new(0x4000)
+        );
+        assert_eq!(log(&mut e), vec![(FN_004B00A0, vec![0x4000])]);
+        ni_t_pointer_map_object_bool_scalar_deleting_destructor(&mut e, Ptr::new(0x4000), 1);
+        assert_eq!(
+            log(&mut e),
+            vec![(FN_004B00A0, vec![0x4000]), (OPERATOR_DELETE, vec![0x4000])]
+        );
+    }
+
+    #[test]
+    fn adding_to_the_array_appends_at_the_current_count() {
+        let mut e = engine();
+        let array = block(&mut e, 0x20);
+        e.mem.set_u16(array + 0x0a, 4);
+        log(&mut e);
+        fn_004afc50(&mut e, Ptr::new(array), Ptr::new(0x4141));
+        assert_eq!(log(&mut e), vec![(FN_004B02D0, vec![array, 4, 0x4141])]);
     }
 }
