@@ -12,8 +12,14 @@
 //! `00884990`, translated in blocks of 40 functions in address order):
 //! - Block 1 (b0148) ends with `0087f620`; block 2 (`0087f660` up to
 //!   `00881360`: editor location, disposition modifiers, the actor-value
-//!   change functions) ends with `00881360`. The next function is `00881450`
-//!   (`Actor::GetPackage`).
+//!   change functions) ends with `00881360`. Block 3 (`00881450` up to
+//!   `00884970`: package getters, the four process transitions `00881d30`,
+//!   `00882b90`, `00883240`, `00883800`, and the movement predicates) closes
+//!   this file's range: no function of `00000000 .. 00884990` is open.
+//! - Virtual-slot arities used by block 3 were checked against the vtables
+//!   (the `HighProcess` vtable at `01087864`, the `Actor` vtable at `01084254`):
+//!   e.g. process `+0x160` takes 3 words, `+0x6c8` 2, `+0x24` 2, `+0x4c0` 4;
+//!   actor `+0x1d0`, `+0x1f4`, `+0x1e4` take none.
 //! - Functions at `0x0088xxxx` whose `this` is the actor-value owner
 //!   sub-object (`Actor + 0xa4`) take it as a plain `Ptr` and subtract `0xa4`.
 //! - `004181e0` (the engine map calls it `BGSSaveFormBuffer::GetForm`, the
@@ -2317,6 +2323,1972 @@ pub fn fn_00881360(e: &mut Engine, this: Ptr<Actor>, index: u32, amount: f32) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Block 3 (batch b0148, continued): `00881450` up to `00884970`
+//
+// The three process transitions (`00881d30`, `00882b90`, `00883240`,
+// `00883800`) carry C++ exception frames in the exe; the unwinding is not
+// translated.
+
+/// `TESAIForm::GetCurrentPackage(reference)` (decompiler name, cdecl).
+const REFERENCE_CURRENT_PACKAGE: u32 = 0x0047_f520;
+/// `TESAIForm::GetMissedPackages(reference, a, b, hour)` (decompiler name, cdecl).
+const REFERENCE_MISSED_PACKAGES: u32 = 0x0047_f590;
+/// The calendar singleton (`ECX` of the two calendar getters below).
+const CALENDAR_OBJECT: u32 = 0x011d_e7b8;
+/// `Calendar::GetHour` (Xbox PDB), result in `ST0`.
+const CALENDAR_GET_HOUR: u32 = 0x0086_7da0;
+/// The calendar function whose word result `00881d10` stores as the actor's
+/// last-seen time.
+const CALENDAR_TIME_STAMP: u32 = 0x0086_7e30;
+/// `TESPackage::IsInterruptPackage` (decompiler name).
+const IS_INTERRUPT_PACKAGE: u32 = 0x0067_8610;
+/// `ExtraDataList::GetPackageExtra` (decompiler name): the package an
+/// `ExtraDataList` holds.
+const EXTRA_PACKAGE: u32 = 0x0041_cb10;
+/// `Actor::IsFleeing(flag)` (decompiler name).
+const IS_FLEEING: u32 = 0x008a_6650;
+/// Returns the word at `+8` of its `this` (`0044ddc0`), here `process + 4`.
+const WORD_AT_8: u32 = 0x0044_ddc0;
+/// The level of a process (`0045cd60`): 0 high, 1 middle high, 2 middle low, 3 low
+/// (the order in which the four transitions below use it).
+const PROCESS_LEVEL: u32 = 0x0045_cd60;
+/// `MobileObject::GetCurrentProcessType` (Xbox PDB), on the actor.
+const CURRENT_PROCESS_TYPE: u32 = 0x0093_1850;
+/// `MobileObject::GetCurrentPackage` (Xbox PDB), on the actor.
+const MOBILE_OBJECT_PACKAGE: u32 = 0x0093_44a0;
+/// `Actor::SetLifeState(state)` (Xbox PDB).
+const SET_LIFE_STATE: u32 = 0x008a_1800;
+/// `Actor::RestoreFullHealthAndConditions` (decompiler name).
+const RESTORE_FULL_HEALTH: u32 = 0x008a_0960;
+/// `Actor::IsAlarmed` (decompiler name).
+const IS_ALARMED: u32 = 0x008a_61b0;
+/// `Actor::IsContinuingPackageforPC` (decompiler name).
+const IS_CONTINUING_PACKAGE_FOR_PC: u32 = 0x008a_69d0;
+/// `Actor::UnlockLockDoorsProcedure` (Xbox PDB).
+const UNLOCK_LOCK_DOORS_PROCEDURE: u32 = 0x008a_6a40;
+/// Takes the actor, a process level and a flag (`008a0680`).
+const MOVE_TO_PROCESS_LEVEL: u32 = 0x008a_0680;
+/// `Actor::UpdateAlpha` (Xbox PDB).
+const UPDATE_ALPHA: u32 = 0x008c_4640;
+/// `Actor::CastPermanentMagic(flag)` (Xbox PDB).
+const CAST_PERMANENT_MAGIC: u32 = 0x008c_26e0;
+/// `Actor::DoDeathStuff` (decompiler name).
+const DO_DEATH_STUFF: u32 = 0x008b_01c0;
+/// `TESObjectREFR::RunScript` (decompiler name).
+const RUN_SCRIPT: u32 = 0x0056_5870;
+/// A query on the actor whose result 6 means "dead" in the transitions (`004f8960`).
+const ACTOR_STATE_QUERY: u32 = 0x004f_8960;
+/// The parent cell of a reference (`008d6f30`).
+const PARENT_CELL: u32 = 0x008d_6f30;
+/// The world space of a reference (`00575d70`, decompiler name `GetWorldSpace`).
+const WORLD_SPACE: u32 = 0x0057_5d70;
+/// `ExtraDataList::GetContainerChanges` (Xbox PDB).
+const GET_CONTAINER_CHANGES: u32 = 0x0041_8520;
+/// `InventoryChanges::GetWornItem(slot, flag)` (Xbox PDB).
+const GET_WORN_ITEM: u32 = 0x004c_8c10;
+/// The reference's name text (`0055d520`).
+const REFERENCE_NAME: u32 = 0x0055_d520;
+/// `strstr(text, pattern)` (CRT, cdecl).
+const STRSTR: u32 = 0x00ec_7750;
+/// The text `"Lily"` the transitions look for in a reference's name.
+const LILY_TEXT: u32 = 0x0102_fdc8;
+/// `TESCreature::InitDefaultWorn(actor, a, b, c)` (Xbox PDB).
+const INIT_DEFAULT_WORN: u32 = 0x005f_9e00;
+/// The object `0040fbf0(flag)` and `0040fba0()` are called on.
+const GUARD_OBJECT_011F11A0: u32 = 0x011f_11a0;
+/// Enters the guard object with a flag.
+const GUARD_ENTER: u32 = 0x0040_fbf0;
+/// Leaves the guard object.
+const GUARD_LEAVE: u32 = 0x0040_fba0;
+/// A global pointer to an object tested with `0042ce10`.
+const SHARED_OBJECT_POINTER_011DDF38: u32 = 0x011d_df38;
+/// A global pointer to an object tested with `0047c850`.
+const SHARED_OBJECT_POINTER_011DE45C: u32 = 0x011d_e45c;
+/// `0042ce10`: a flag test of the object at [`SHARED_OBJECT_POINTER_011DDF38`].
+const SHARED_OBJECT_TEST: u32 = 0x0042_ce10;
+/// A test of the actor (`00576d30`).
+const REFERENCE_TEST: u32 = 0x0057_6d30;
+/// `0047c850`: the always-false function several actor slots point to.
+const ALWAYS_FALSE: u32 = 0x0047_c850;
+/// `004226e0`: tested on the object at [`SHUTDOWN_CHECK_OBJECT_POINTER`].
+const SHUTDOWN_CHECK: u32 = 0x0042_26e0;
+/// `ProcessLists::RemoveReference(actor, level)` (Xbox PDB).
+const PROCESS_LISTS_REMOVE_REFERENCE: u32 = 0x0096_d470;
+/// `ProcessLists::AddReference(actor, level, a, b, c)` (Xbox PDB).
+const PROCESS_LISTS_ADD_REFERENCE: u32 = 0x0096_d450;
+/// `(actor)` on the process lists (`0096e2f0`).
+const PROCESS_LISTS_REMOVE_ACTOR: u32 = 0x0096_e2f0;
+/// `ProcessLists::RemoveActorCloseToPlayer(actor)` (decompiler name).
+const PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER: u32 = 0x0096_e6f0;
+/// `(actor)` on the process lists (`00973cb0`).
+const PROCESS_LISTS_REFRESH_ACTOR: u32 = 0x0097_3cb0;
+/// `(actor)` on the process lists (`0096e2b0`).
+const PROCESS_LISTS_NOTE_ACTOR: u32 = 0x0096_e2b0;
+/// `BSShaderManager::GetAccumulator` (decompiler name).
+const GET_ACCUMULATOR: u32 = 0x00b4_f5c0;
+/// `(accumulator, value)` (`00b66050`).
+const ACCUMULATOR_ADD: u32 = 0x00b6_6050;
+/// The shader value of an actor (`0084e3a0`).
+const ACTOR_SHADER_VALUE: u32 = 0x0084_e3a0;
+/// `MagicTarget::Dispel` (decompiler name), on `actor + 0x94`.
+const MAGIC_TARGET_DISPEL: u32 = 0x0082_4970;
+/// `(actor)` (`008c2b60`).
+const ACTOR_CLEAN_UP_A: u32 = 0x008c_2b60;
+/// `(actor)` (`008c30a0`).
+const ACTOR_CLEAN_UP_B: u32 = 0x008c_30a0;
+/// `(process)` (`008e56b0`).
+const PROCESS_RESET: u32 = 0x008e_56b0;
+/// `(process, float)` (`00693d50`).
+const PROCESS_SET_TIME: u32 = 0x0069_3d50;
+/// `(actor)` (`00437bb0`).
+const ACTOR_TEST_00437BB0: u32 = 0x0043_7bb0;
+/// `HighProcess::HighProcess` (Xbox PDB), object size `0x46c`.
+const HIGH_PROCESS_CONSTRUCTOR: u32 = 0x008d_7510;
+/// Constructor of the low process (object size `0xb4`).
+const LOW_PROCESS_CONSTRUCTOR: u32 = 0x0090_6dc0;
+/// Constructor of the middle-low process (object size `0xc8`).
+const MIDDLE_LOW_PROCESS_CONSTRUCTOR: u32 = 0x0092_c950;
+/// Constructor of the middle-high process (object size `0x25c`).
+const MIDDLE_HIGH_PROCESS_CONSTRUCTOR: u32 = 0x0091_3fe0;
+/// `(actor)` (`00483710`).
+const ACTOR_NOTE_FAILURE: u32 = 0x0048_3710;
+/// `(process, actor)` (`008da1a0`).
+const HIGH_PROCESS_SET_ACTOR: u32 = 0x008d_a1a0;
+/// `(process, actor)` (`008e4e50`).
+const HIGH_PROCESS_INIT_ACTOR: u32 = 0x008e_4e50;
+/// `MiddleHighProcess::GetForceNextUpdate` (Xbox PDB), called on the actor.
+const GET_FORCE_NEXT_UPDATE: u32 = 0x0056_6950;
+/// A test of a package (`0067a460`).
+const PACKAGE_TEST_0067A460: u32 = 0x0067_a460;
+/// `TESPackage::GetIsCreated` (decompiler name).
+const PACKAGE_GET_IS_CREATED: u32 = 0x0067_4d40;
+/// `(cell, actor)` (`00546ca0`).
+const CELL_TEST_ACTOR: u32 = 0x0054_6ca0;
+/// `TESPackage::GetLocationReference(actor)` (decompiler name).
+const PACKAGE_LOCATION_REFERENCE: u32 = 0x0067_6140;
+/// `TESPackage::GetLocationCell(actor)` (decompiler name).
+const PACKAGE_LOCATION_CELL: u32 = 0x0067_5c20;
+/// `TESPackage::GetLocationCoord(out, actor)` (decompiler name).
+const PACKAGE_LOCATION_COORD: u32 = 0x0067_5de0;
+/// The package's location (`0055b980`).
+const PACKAGE_LOCATION: u32 = 0x0055_b980;
+/// `PackageLocation::GetLocType` (decompiler name).
+const PACKAGE_LOCATION_TYPE: u32 = 0x0067_8ca0;
+/// `(package, actor)` (`00676280`).
+const PACKAGE_LOCATION_CHECK: u32 = 0x0067_6280;
+/// A no-op "constructor" that returns its `this` (`006815c0`).
+const POINT_CONSTRUCTOR: u32 = 0x0068_15c0;
+/// The global the location form is compared with.
+const LOCATION_FORM_POINTER_011CA248: u32 = 0x011c_a248;
+/// Length of a `NiPoint3` (`00457990`), result in `ST0`.
+const POINT_LENGTH: u32 = 0x0045_7990;
+/// `NiPoint3` subtraction `this - other` into `out` (`00439ef0`).
+const POINT_SUBTRACT: u32 = 0x0043_9ef0;
+/// `NiPoint3` addition `this + other` into `out` (`00439e90`).
+const POINT_ADD: u32 = 0x0043_9e90;
+/// `NiPoint3` scaled by a float into `out` (`0045bb20`).
+const POINT_SCALE: u32 = 0x0045_bb20;
+/// Length of the horizontal vector (`00457910`), result in `ST0`.
+const POINT_LENGTH_2D: u32 = 0x0045_7910;
+/// Squared length of a `NiPoint3` (`004a7290`), result in `ST0`.
+const POINT_LENGTH_SQUARED: u32 = 0x004a_7290;
+/// `Actor::GetRadius` (Xbox PDB), result in `ST0`.
+const ACTOR_GET_RADIUS: u32 = 0x008b_e1b0;
+/// `Pathing::FindClosestPointOnNavmesh(worldspace, cell, position, out)`.
+const FIND_CLOSEST_POINT_ON_NAVMESH: u32 = 0x006d_6f80;
+/// `PathingLocation::PathingLocation(position, actor)`.
+const PATHING_LOCATION_CONSTRUCTOR: u32 = 0x006d_ce10;
+/// `PathingLocation::~PathingLocation`.
+const PATHING_LOCATION_DESTRUCTOR: u32 = 0x004f_f7e0;
+/// Constructor of the local `0x18`-byte object `00881860` fills (`006a0480`).
+const PATH_POINT_CONSTRUCTOR: u32 = 0x006a_0480;
+/// `(location, radius, out)` (`006d4570`, cdecl).
+const PATHING_FIND_POINT: u32 = 0x006d_4570;
+/// `PathingRequestClosePoint::PathingRequestClosePoint`.
+const REQUEST_CONSTRUCTOR: u32 = 0x006e_3f30;
+/// `(request, actor)` (`006e29f0`).
+const REQUEST_SET_ACTOR: u32 = 0x006e_29f0;
+/// `(request, float)` (`00507610`).
+const REQUEST_SET_RADIUS: u32 = 0x0050_7610;
+/// `(request, float)` (`006e5ee0`).
+const REQUEST_SET_OUTER_RADIUS: u32 = 0x006e_5ee0;
+/// `(request, position)` (`006d33c0`, cdecl).
+const REQUEST_SUBMIT: u32 = 0x006d_33c0;
+/// `PathingRequestClosePoint` destructor (`006dad70`).
+const REQUEST_DESTRUCTOR: u32 = 0x006d_ad70;
+/// Returns the singleton `0087b650` and `0087b190` are called on (`004537b0`).
+const PATHING_SINGLETON: u32 = 0x0045_37b0;
+/// `(singleton, actor, position)` (`0087b650`).
+const PATHING_ORDER_MOVE: u32 = 0x0087_b650;
+/// `(singleton, actor)` (`0087b190`).
+const PATHING_ORDER_FINISH: u32 = 0x0087_b190;
+/// Whether the pathing singleton is usable (`008c7aa0`).
+const PATHING_AVAILABLE: u32 = 0x008c_7aa0;
+/// Tests of the actor in `Actor::CanMove` (`00437bf0`, `00437bd0`).
+const ACTOR_BLOCK_TEST_A: u32 = 0x0043_7bf0;
+const ACTOR_BLOCK_TEST_B: u32 = 0x0043_7bd0;
+/// `PlayerCharacter::IsPipboyActive` (decompiler name).
+const IS_PIPBOY_ACTIVE: u32 = 0x0096_7ae0;
+/// The action animation of the actor (`008a7570`, decompiler name `GetAnimAction`).
+const GET_ANIM_ACTION: u32 = 0x008a_7570;
+/// Flag test on a base form's data (`00461580(this, mask)`).
+const BASE_FLAG_TEST: u32 = 0x0046_1580;
+/// Barter gold of a base form's data (`0047d3f0`), a `short`.
+const BARTER_GOLD: u32 = 0x0047_d3f0;
+/// The class of an actor base (`00502430`).
+const ACTOR_BASE_CLASS: u32 = 0x0050_2430;
+/// The last-seen interval (`00526100`).
+const LAST_SEEN_INTERVAL: u32 = 0x0052_6100;
+/// The reference's encounter zone (`00567d20`).
+const ENCOUNTER_ZONE: u32 = 0x0056_7d20;
+/// Whether the encounter zone has its flag set (`00526320`).
+const ENCOUNTER_ZONE_FLAG: u32 = 0x0052_6320;
+/// `bhkRagdollController::DisableRagdollAnim(flag)` (Xbox PDB).
+const DISABLE_RAGDOLL_ANIM: u32 = 0x00c7_c150;
+/// `bhkBlendController::DoKnockDown` (Xbox PDB).
+const DO_KNOCK_DOWN: u32 = 0x00c9_b670;
+/// `(actor)` (`0089f580`).
+const ACTOR_AFTER_ANIMATION: u32 = 0x0089_f580;
+/// `(actor, out)` (`00931ed0`).
+const ACTOR_POSITION_OBJECT: u32 = 0x0093_1ed0;
+/// `(object)` (`004a3a20`).
+const POSITION_OBJECT_VALUE: u32 = 0x004a_3a20;
+/// `(controller, node, value)` (`00ca2ad0`).
+const RAGDOLL_SET_POSITION: u32 = 0x00ca_2ad0;
+/// `Animation::GroupLoaded(group)` (Xbox PDB).
+const ANIMATION_GROUP_LOADED: u32 = 0x0049_4710;
+/// `Animation::ForceSection` (Xbox PDB).
+const ANIMATION_FORCE_SECTION: u32 = 0x0049_55c0;
+/// `(animation, flag)` (`00491040`).
+const ANIMATION_CURRENT: u32 = 0x0049_1040;
+/// `Animation::Update` (Xbox PDB).
+const ANIMATION_UPDATE: u32 = 0x0049_1180;
+/// `Animation::UpdateMovement` (Xbox PDB).
+const ANIMATION_UPDATE_MOVEMENT: u32 = 0x0049_3900;
+/// `Animation::ZeroGlobalTransform` (Xbox PDB).
+const ANIMATION_ZERO_GLOBAL_TRANSFORM: u32 = 0x0048_f7f0;
+/// `TESAnimGroup::GetTime` (Xbox PDB).
+const ANIM_GROUP_GET_TIME: u32 = 0x005f_3780;
+/// `(animation)` returning a float (`00508100`).
+const ANIMATION_TIME: u32 = 0x0050_8100;
+/// `(animation, float)` (`0098adb0`).
+const ANIMATION_SET_TIME: u32 = 0x0098_adb0;
+/// Sets the angle of a local matrix: `(matrix, float)` (`004a0c90`).
+const MATRIX_SET_ANGLE: u32 = 0x004a_0c90;
+/// Builds a vector: `(vector, x, y, z)` (`00416870`).
+const VECTOR_BUILD: u32 = 0x0041_6870;
+/// Rotates a vector by a matrix: `(matrix, out, vector)` (`004b4500`).
+const MATRIX_TRANSFORM: u32 = 0x004b_4500;
+/// The actor's 3D node (`0043fcd0`; also actor slot `0x1d0`).
+const GET_3D_NODE: u32 = 0x0043_fcd0;
+/// The form-type byte of a form (`00401170`), same as [`FORM_TYPE`].
+const GET_FORM_TYPE: u32 = 0x0040_1170;
+/// `ExtraDataList::GetRagDollData` (Xbox PDB).
+const GET_RAGDOLL_DATA: u32 = 0x0041_d6d0;
+/// `ExtraDataList::GetSavedHavokData` (Xbox PDB).
+const GET_SAVED_HAVOK_DATA: u32 = 0x0042_2b90;
+/// `(flag)` returning an object (`00450b80`, cdecl).
+const OBJECT_GETTER: u32 = 0x0045_0b80;
+/// `(object, value)` (`00b5cbd0`).
+const OBJECT_SET_VALUE: u32 = 0x00b5_cbd0;
+/// `(actor mover)` (`009dc7f0`).
+const MOVER_UPDATE_A: u32 = 0x009d_c7f0;
+/// `(actor mover)` (`009dc780`).
+const MOVER_UPDATE_B: u32 = 0x009d_c780;
+/// `(actor, flag)` (`008a6840`).
+const ACTOR_SET_FLAG: u32 = 0x008a_6840;
+/// `(worn item, flag)` (`004459e0`).
+const WORN_ITEM_UPDATE: u32 = 0x0044_59e0;
+/// `(actor)` (`008c0050`).
+const ACTOR_TEST_008C0050: u32 = 0x008c_0050;
+/// `TESDataHandler::EnumReferencesCloseToPoint` (decompiler name), on the
+/// object at [`SHUTDOWN_CHECK_OBJECT_POINTER`].
+const ENUM_REFERENCES_CLOSE_TO_POINT: u32 = 0x0046_f280;
+/// The callback `00883800` passes to that enumeration.
+const ENUM_CALLBACK: u32 = 0x0090_d480;
+/// `(actor, object)` (`00891170`): returns an object whose `+0x10` is tested.
+const NOTE_LOOKUP: u32 = 0x0089_1170;
+/// The object `00891170` is called with.
+const NOTE_OBJECT_011F426C: u32 = 0x011f_426c;
+/// Test of the `+0x10` part of that object (`004390c0`).
+const NOTE_TEST: u32 = 0x0043_90c0;
+/// `(actor, float)` (`00575770`).
+const ACTOR_SET_FLOAT: u32 = 0x0057_5770;
+/// Returns a pointer to a float of the reference (`00430830`); `FLT_MAX` means unset.
+const REFERENCE_FLOAT_POINTER: u32 = 0x0043_0830;
+/// `FLT_MAX` as a `double`.
+const FLT_MAX_DOUBLE: u32 = 0x0102_31b0;
+/// `-1.0f`.
+const MINUS_ONE_FLOAT: u32 = 0x0101_2054;
+/// `0.0` as a `double`.
+const ZERO_DOUBLE: u32 = 0x0101_2060;
+/// `1.0` as a `double`.
+const ONE_DOUBLE: u32 = 0x0101_2070;
+/// `0.5` as a `double`.
+const HALF_DOUBLE: u32 = 0x0101_1588;
+/// `1.5` as a `double`.
+const ONE_AND_HALF_DOUBLE: u32 = 0x0101_6ff0;
+/// `3.0` as a `double`.
+const THREE_DOUBLE: u32 = 0x0102_1928;
+/// `5000.0f`.
+const ENUM_RADIUS_FLOAT: u32 = 0x0103_0020;
+/// `CombatFormulas::GetBodyPartCondition(owner, part, flag)` (Xbox PDB), result in `ST0`.
+const GET_BODY_PART_CONDITION: u32 = 0x0064_6800;
+
+/// The actor's current process (`this + 0x68`).
+fn process_of(e: &Engine, this: Ptr<Actor>) -> u32 {
+    e.get(this, Actor::pCurrentProcess).addr()
+}
+
+/// The level of `process` (`0045cd60`).
+fn process_level(e: &mut Engine, process: u32) -> i32 {
+    e.call(PROCESS_LEVEL, &args![process]).i32()
+}
+
+/// The type word of a package (`0041ca90`).
+fn package_type(e: &mut Engine, package: u32) -> u32 {
+    e.call(PACKAGE_TYPE, &args![package]).u32()
+}
+
+/// `0041ca90`, the package type word (same function as [`package_kind`]).
+const PACKAGE_TYPE: u32 = 0x0041_ca90;
+
+/// The object `ECX` points at in `004226e0(*SHUTDOWN_CHECK_OBJECT_POINTER)`.
+fn shutdown_check(e: &mut Engine) -> bool {
+    let object = e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER);
+    e.call(SHUTDOWN_CHECK, &args![object]).bool()
+}
+
+/// `Calendar::GetHour` of the calendar singleton.
+fn calendar_hour(e: &mut Engine) -> f64 {
+    e.call(CALENDAR_GET_HOUR, &args![CALENDAR_OBJECT]).f64()
+}
+
+/// The constant 'double' stored at `addr`.
+fn double_at(e: &Engine, addr: u32) -> f64 {
+    e.global::<f64>(addr)
+}
+
+/// Replaces the actor's process with `new_process`: `new_process.vcall(4)(old)`,
+/// the old process's deleting destructor, and the store into `this + 0x68`.
+fn swap_process(e: &mut Engine, this: Ptr<Actor>, new_process: u32) {
+    let old = process_of(e, this);
+    e.vcall(new_process, 4, &args![old]);
+    if old != 0 {
+        e.vcall(old, 0, &args![1u32]);
+    }
+    e.set(this, Actor::pCurrentProcess, Ptr::new(new_process));
+}
+
+/// Allocates `size` bytes with `operator new` and runs `constructor` on them
+/// (null stays null).
+fn construct_process(e: &mut Engine, size: u32, constructor: u32) -> u32 {
+    let memory = e.call(OPERATOR_NEW, &args![size]).u32();
+    if memory != 0 {
+        e.call(constructor, &args![memory]).u32()
+    } else {
+        0
+    }
+}
+
+/// Ends an interrupt package when the actor's package is an interrupt package
+/// that the actor does not need any more; the opening test the process
+/// transitions share (`008d8520` process, its virtual `+0x27c` package of type
+/// `0x1c`, then its virtual `+0x2d8`).
+fn end_interrupt_if_requested(e: &mut Engine, this: Ptr<Actor>) {
+    if actor_process(e, this).is_null() {
+        return;
+    }
+    let process = actor_process(e, this).addr();
+    let package = e.vcall(process, 0x27c, &args![]).u32();
+    if package != 0 && package_type(e, package) == 0x1c {
+        let process = actor_process(e, this).addr();
+        if e.vcall(process, 0x2d8, &args![]).bool() {
+            actor_end_interrupt_package(e, this, false);
+        }
+    }
+}
+
+// Translated from 00881450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetPackage` (Xbox PDB): the reference's current package
+/// (`0047f520(reference)`).
+pub fn actor_get_package(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    e.call(REFERENCE_CURRENT_PACKAGE, &args![this]).ptr()
+}
+
+// Translated from 00881470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetMissedPacks` (Xbox PDB): `0047f590(this, a, b, hour)` with the
+/// calendar's hour as a `float`.
+pub fn actor_get_missed_packs(e: &mut Engine, this: Ptr<Actor>, arg_a: u32, arg_b: f32) {
+    let hour = calendar_hour(e) as f32;
+    e.call(REFERENCE_MISSED_PACKAGES, &args![this, arg_a, arg_b, hour]);
+}
+
+// Translated from 008814b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentEditorPackage` (Xbox PDB): without a process 0; otherwise
+/// the process's current package (virtual `+0x22c`) unless it is missing or an
+/// interrupt package, in which case the package of the reference's extra data.
+pub fn actor_get_current_editor_package(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let process = process_of(e, this);
+    if process == 0 {
+        return Ptr::new(0);
+    }
+    let package = e.vcall(process, 0x22c, &args![]).u32();
+    if package != 0 && !e.call(IS_INTERRUPT_PACKAGE, &args![package]).bool() {
+        return Ptr::new(package);
+    }
+    let list = extra_data_list(e, this);
+    e.call(EXTRA_PACKAGE, &args![list]).ptr()
+}
+
+// Translated from 00881510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetPackageSetAsPcurrent` (Xbox PDB): the process's current package
+/// (virtual `+0x22c`), replaced by the package of the reference's extra data
+/// when it is an interrupt package; 0 without a process.
+pub fn actor_get_package_set_as_pcurrent(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let process = process_of(e, this);
+    let mut package = 0;
+    if process != 0 {
+        package = e.vcall(process, 0x22c, &args![]).u32();
+    }
+    if package != 0 && e.call(IS_INTERRUPT_PACKAGE, &args![package]).bool() {
+        let list = extra_data_list(e, this);
+        package = e.call(EXTRA_PACKAGE, &args![list]).u32();
+    }
+    Ptr::new(package)
+}
+
+// Translated from 00881570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsRunningRunOnce` (Xbox PDB): the process's virtual `+0x35c`
+/// (the process is not checked).
+pub fn actor_is_running_run_once(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this);
+    e.vcall(process, 0x35c, &args![]).bool()
+}
+
+// Translated from 008815a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Without a process 0. With one: when `00493bb0` is false, or the actor is
+/// running a run-once package and is not fleeing, or its virtual `+0x42c` gives
+/// 0, the process's virtual `+0x128`; otherwise the result of the actor's
+/// virtual `+0x42c`.
+pub fn fn_008815a0(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let process = process_of(e, this);
+    if process == 0 {
+        return Ptr::new(0);
+    }
+    if e.call(ANIMATION_FLAG_TEST, &args![this]).bool() {
+        let use_actor_slot =
+            !actor_is_running_run_once(e, this) || e.call(IS_FLEEING, &args![this, 0u32]).bool();
+        if use_actor_slot {
+            let value = e.vcall(this.addr(), 0x42c, &args![]).u32();
+            if value != 0 {
+                return Ptr::new(value);
+            }
+        }
+    }
+    e.vcall(process, 0x128, &args![]).ptr()
+}
+
+/// `00493bb0(actor)`: a test of the actor (the engine map puts it in `animation.cpp`).
+const ANIMATION_FLAG_TEST: u32 = 0x0049_3bb0;
+
+// Translated from 00881620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::SetCurrentTarget` (Xbox PDB): with a process, its virtual `+0x12c`
+/// with `target`.
+pub fn actor_set_current_target(e: &mut Engine, this: Ptr<Actor>, target: u32) {
+    let process = process_of(e, this);
+    if process != 0 {
+        e.vcall(process, 0x12c, &args![target]);
+    }
+}
+
+// Translated from 00881650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetCurrentPackageTarget` (Xbox PDB): without a process 0, else the
+/// word at `+8` of the block at `process + 4` (`0044ddc0`).
+pub fn actor_get_current_package_target(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let process = process_of(e, this);
+    if process == 0 {
+        return 0;
+    }
+    e.call(WORD_AT_8, &args![process + 4]).u32()
+}
+
+// Translated from 00881680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::EndInterruptPackage` (Xbox PDB): with a process, drops the current
+/// interrupt package. `keep_idle` skips the actor's virtual `+0x288` call and
+/// keeps the running type-`0x1c` package.
+pub fn actor_end_interrupt_package(e: &mut Engine, this: Ptr<Actor>, keep_idle: bool) {
+    let process = process_of(e, this);
+    if process == 0 {
+        return;
+    }
+    if !keep_idle {
+        e.vcall(this.addr(), 0x288, &args![]);
+    }
+    let process = process_of(e, this);
+    let package = e.vcall(process, 0x22c, &args![]).u32();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    // PlayerCharacter +0x208: the package the player is waiting on.
+    if package == e.mem.u32(player + 0x208) {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        e.mem.set_u32(player + 0x208, 0);
+    }
+    let mut ended = false;
+    let current = e.vcall(process, 0x20c, &args![]).u32();
+    if current != 0
+        && (!keep_idle || package_type(e, current) != 0x1c)
+        && package_type(e, current) != 0x1a
+    {
+        e.vcall(process, 0x214, &args![]);
+        ended = true;
+    }
+    if package != 0 && e.call(IS_INTERRUPT_PACKAGE, &args![package]).bool() {
+        if package_type(e, package) == 0x17 {
+            fn_00881830(e, Ptr::new(package), -1);
+        }
+        e.call(CLEAR_IN_COMBAT, &args![this, 1u32]);
+        e.vcall(this.addr(), 0x4c, &args![0u32]);
+        let process = process_of(e, this);
+        e.vcall(process, 0x234, &args![]);
+        e.vcall(process, 0x714, &args![this]);
+        let after = e.vcall(process, 0x22c, &args![]).u32();
+        if after == 0 {
+            let object = e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER);
+            if !e.call(SHUTDOWN_CHECK, &args![object]).bool() {
+                e.vcall(process, 0x24, &args![this, 0u32]);
+            }
+        }
+        ended = true;
+    }
+    if ended {
+        actor_end_movement(e, this);
+    }
+}
+
+// Translated from 00881830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds `delta` to the word at `+0x98` of `this` (a package; wraps).
+pub fn fn_00881830(e: &mut Engine, this: Ptr, delta: i32) {
+    let value = e.mem.u32(this.addr() + 0x98);
+    e.mem
+        .set_u32(this.addr() + 0x98, value.wrapping_add(delta as u32));
+}
+
+// Translated from 00881860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves the actor toward a navmesh point near it; true when it did. With
+/// `force` false it does nothing for an actor that cannot move, only swims or is
+/// blocked by its virtual `+0x4b4`. The package (virtual `+0x22c` of the
+/// process) can veto the move; otherwise the actor's position is snapped to the
+/// navmesh, pulled away from the player when it is closer than 1.5 times the
+/// sum of their radii (with a close-point request for the player), and the
+/// move is ordered through the pathing singleton or the actor's virtual `+0x2a8`.
+pub fn fn_00881860(e: &mut Engine, this: Ptr<Actor>, force: bool) -> bool {
+    let blocked = !actor_can_move(e, this)
+        || actor_swims_only(e, this)
+        || e.vcall(this.addr(), 0x4b4, &args![]).bool();
+    if blocked && !force {
+        return false;
+    }
+    let mut proceed = true;
+    let process = process_of(e, this);
+    let package = if process != 0 {
+        e.vcall(process, 0x22c, &args![]).u32()
+    } else {
+        0
+    };
+    if package != 0 {
+        let minus_one = e.global::<f32>(MINUS_ONE_FLOAT);
+        let accepted = e
+            .vcall(package, 0x13c, &args![this, 0u32, minus_one, 0u32])
+            .bool();
+        if accepted {
+            let mut vetoed = false;
+            if package_type(e, package) == 6 {
+                let reference = e
+                    .call(PACKAGE_LOCATION_REFERENCE, &args![package, this])
+                    .u32();
+                if reference != 0 {
+                    let reference = e
+                        .call(PACKAGE_LOCATION_REFERENCE, &args![package, this])
+                        .u32();
+                    let form = e.call(GET_FORM, &args![reference]).u32();
+                    if form == e.global::<u32>(LOCATION_FORM_POINTER_011CA248) {
+                        proceed = false;
+                        vetoed = true;
+                    }
+                }
+            }
+            if !vetoed && e.call(PACKAGE_LOCATION, &args![package]).u32() != 0 {
+                let location = e.call(PACKAGE_LOCATION, &args![package]).u32();
+                if e.call(PACKAGE_LOCATION_TYPE, &args![location]).i32() == 3
+                    && e.call(PACKAGE_LOCATION_CHECK, &args![package, this]).u32() == 0
+                {
+                    proceed = false;
+                }
+            }
+        }
+    }
+    if !proceed {
+        return false;
+    }
+    // The game's locals, laid out as in its frame (offsets from the frame's
+    // bottom at ebp - 0x160).
+    e.with_stack(0x160, |e, frame| {
+        let at = |ebp_offset: u32| frame.addr() + 0x160 - ebp_offset;
+        let pathing_location = at(0x74);
+        let path_point = at(0x4c);
+        let path_point_position = at(0x40);
+        let target = at(0x34);
+        let to_player = at(0x28);
+        let direction = at(0x84);
+        let scaled = at(0x148);
+        let sum = at(0x154);
+        let request = at(0x13c);
+
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        copy_point(e, position, target);
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        let cell = e.call(PARENT_CELL, &args![this]).u32();
+        let world_space = e.call(WORLD_SPACE, &args![this]).u32();
+        let found = e
+            .call(
+                FIND_CLOSEST_POINT_ON_NAVMESH,
+                &args![world_space, cell, position, target],
+            )
+            .bool();
+        if found {
+            e.call(
+                PATHING_LOCATION_CONSTRUCTOR,
+                &args![pathing_location, target, this],
+            );
+            e.call(PATH_POINT_CONSTRUCTOR, &args![path_point]);
+            let radius = e.call(ACTOR_GET_RADIUS, &args![this]).f32();
+            let has_point = e
+                .call(
+                    PATHING_FIND_POINT,
+                    &args![pathing_location, radius, path_point],
+                )
+                .bool();
+            if has_point {
+                e.call(
+                    POINT_SUBTRACT,
+                    &args![target, direction, path_point_position],
+                );
+                e.mem.set_f32(direction + 8, 0.0);
+                let length = e.call(POINT_LENGTH_2D, &args![direction]).f32();
+                let radius = e.call(ACTOR_GET_RADIUS, &args![this]).f64();
+                if (length as f64) < radius {
+                    let radius = e.call(ACTOR_GET_RADIUS, &args![this]).f32();
+                    let scaled_point = e.call(POINT_SCALE, &args![direction, scaled, radius]).u32();
+                    let moved = e
+                        .call(POINT_ADD, &args![path_point_position, sum, scaled_point])
+                        .u32();
+                    copy_point(e, moved, target);
+                }
+            }
+            e.call(PATHING_LOCATION_DESTRUCTOR, &args![pathing_location]);
+        }
+        let player = e.global::<u32>(PLAYER_POINTER);
+        let player_position = e.vcall(player, 0x1f4, &args![]).u32();
+        e.call(POINT_SUBTRACT, &args![target, to_player, player_position]);
+        let player_radius = e.call(ACTOR_GET_RADIUS, &args![player]).f64();
+        let own_radius = e.call(ACTOR_GET_RADIUS, &args![this]).f64();
+        let reach = (own_radius + player_radius) as f32;
+        let distance = e.call(POINT_LENGTH_SQUARED, &args![to_player]).f64();
+        let one_and_half = double_at(e, ONE_AND_HALF_DOUBLE);
+        let limit = reach as f64 * reach as f64 * one_and_half * one_and_half;
+        if limit > distance {
+            e.call(REQUEST_CONSTRUCTOR, &args![request]);
+            e.call(REQUEST_SET_ACTOR, &args![request, player]);
+            let inner = (reach as f64 * one_and_half) as f32;
+            e.call(REQUEST_SET_RADIUS, &args![request, inner]);
+            let outer = (reach as f64 * double_at(e, THREE_DOUBLE)) as f32;
+            e.call(REQUEST_SET_OUTER_RADIUS, &args![request, outer]);
+            e.call(REQUEST_SUBMIT, &args![request, target]);
+            e.call(REQUEST_DESTRUCTOR, &args![request]);
+        }
+        if e.call(PATHING_AVAILABLE, &args![]).bool() {
+            let singleton = e.call(PATHING_SINGLETON, &args![]).u32();
+            e.call(PATHING_ORDER_MOVE, &args![singleton, this, target]);
+            let singleton = e.call(PATHING_SINGLETON, &args![]).u32();
+            e.call(PATHING_ORDER_FINISH, &args![singleton, this]);
+        } else {
+            e.vcall(this.addr(), 0x2a8, &args![target]);
+        }
+    });
+    true
+}
+
+// Translated from 00881c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the actor may be seen again at time stamp `time`: true when it was
+/// never seen (`+0x120` is 0); false when `time` is not later; otherwise true
+/// once the elapsed time exceeds the interval of `00526100`, unless the
+/// reference's encounter zone has its flag.
+pub fn fn_00881c90(e: &mut Engine, this: Ptr<Actor>, time: u32) -> bool {
+    let last_seen = e.get(this, Actor::iLastSeenTime);
+    if last_seen == 0 {
+        return true;
+    }
+    if time > last_seen {
+        let elapsed = time.wrapping_sub(last_seen);
+        let interval = e.call(LAST_SEEN_INTERVAL, &args![]).u32();
+        if elapsed > interval {
+            let zone = e.call(ENCOUNTER_ZONE, &args![this]).u32();
+            if zone != 0 && e.call(ENCOUNTER_ZONE_FLAG, &args![zone]).bool() {
+                return false;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+// Translated from 00881d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the calendar's time stamp (`00867e30` of the calendar singleton) in
+/// `iLastSeenTime`.
+pub fn fn_00881d10(e: &mut Engine, this: Ptr<Actor>) {
+    let stamp = e.call(CALENDAR_TIME_STAMP, &args![CALENDAR_OBJECT]).u32();
+    e.set(this, Actor::iLastSeenTime, stamp);
+}
+
+/// `Actor::GetAnimation` (Xbox PDB).
+const GET_ANIMATION: u32 = 0x008b_70d0;
+
+/// Enters the guard object (`0040fbf0(flag)`).
+fn guard_enter(e: &mut Engine, flag: u32) {
+    e.call(GUARD_ENTER, &args![GUARD_OBJECT_011F11A0, flag]);
+}
+
+/// Leaves the guard object (`0040fba0()`).
+fn guard_leave(e: &mut Engine) {
+    e.call(GUARD_LEAVE, &args![GUARD_OBJECT_011F11A0]);
+}
+
+/// The test the transitions end with: the process's virtual `+0x31c`, or a
+/// current package (virtual `+0x22c`) that `0067a460` accepts; when it holds,
+/// the process's virtual `+0x450` with 1. `package` is the package already
+/// read by the caller (`0` to read it from the process).
+fn request_process_update(e: &mut Engine, this: Ptr<Actor>, package: Option<u32>) {
+    let process = process_of(e, this);
+    let mut wanted = e.vcall(process, 0x31c, &args![]).bool();
+    if !wanted {
+        wanted = match package {
+            Some(package) => package != 0 && e.call(PACKAGE_TEST_0067A460, &args![package]).bool(),
+            None => {
+                e.vcall(process, 0x22c, &args![]).u32() != 0 && {
+                    let package = e.vcall(process, 0x22c, &args![]).u32();
+                    e.call(PACKAGE_TEST_0067A460, &args![package]).bool()
+                }
+            }
+        };
+    }
+    if wanted {
+        let process = process_of(e, this);
+        e.vcall(process, 0x450, &args![1u32]);
+    }
+}
+
+/// The equip step of the transitions: when the reference has container
+/// changes, the worn item of slot 5 goes to the process's virtual `+0x160`.
+fn worn_item(e: &mut Engine, changes: u32) -> u32 {
+    e.call(GET_WORN_ITEM, &args![changes, 5u32, 0u32]).u32()
+}
+
+// Translated from 00881d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the actor into the high process (the first of the four process
+/// transitions `00881d30`, `00882b90`, `00883240`, `00883800`; always true).
+///
+/// An actor without a process, or already in the high process (level 0), only
+/// has its worn item refreshed. Otherwise the process is replaced with a new
+/// `HighProcess` (`0x46c` bytes), the actor re-registers in the process
+/// lists, equips its worn item, and an actor flagged `bDeadFlag` with a loaded
+/// 3D is woken from its ragdoll or knock-down state.
+pub fn fn_00881d30(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let old_process = process_of(e, this);
+    if old_process == 0 || process_level(e, old_process) == 0 {
+        // No process, or already high.
+        let process = process_of(e, this);
+        if process != 0 && e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+            let list = extra_data_list(e, this);
+            let changes = e.call(GET_CONTAINER_CHANGES, &args![list]).u32();
+            if changes != 0 {
+                let mut with_node = false;
+                if e.call(GET_FORCE_NEXT_UPDATE, &args![this]).bool()
+                    && e.vcall(this.addr(), 0x21c, &args![]).bool()
+                {
+                    let name = e.call(REFERENCE_NAME, &args![this]).u32();
+                    if e.call(STRSTR, &args![name, LILY_TEXT]).u32() != 0 {
+                        let node = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+                        let worn = worn_item(e, changes);
+                        let process = process_of(e, this);
+                        e.vcall(process, 0x160, &args![worn, node, 1u32]);
+                        with_node = true;
+                    }
+                }
+                if !with_node {
+                    let worn = worn_item(e, changes);
+                    let process = process_of(e, this);
+                    e.vcall(process, 0x160, &args![worn, 0u32, 1u32]);
+                }
+            }
+            request_process_update(e, this, None);
+        }
+        return true;
+    }
+
+    // A lower process: build a high one.
+    let ignore_flag = {
+        let object = e.global::<u32>(SHARED_OBJECT_POINTER_011DDF38);
+        e.call(SHARED_OBJECT_TEST, &args![object]).bool()
+            || e.call(REFERENCE_TEST, &args![this]).bool()
+    };
+    e.mem.set_u8(this.addr() + 0x83, 0);
+    if e.call(CURRENT_PROCESS_TYPE, &args![this]).i32() != 1 {
+        let process = actor_process(e, this).addr();
+        e.vcall(process, 0x84, &args![this]);
+    }
+    let animation_flag = e.call(ANIMATION_FLAG_TEST, &args![this]).bool();
+    if !animation_flag && process_of(e, this) != 0 && !ignore_flag {
+        let process = process_of(e, this);
+        e.vcall(process, 0x24, &args![this, 1u32]);
+    }
+    // The result (a "fleeing" flag) is stored by the game and never read.
+    e.call(IS_FLEEING, &args![this, 0u32]);
+    guard_enter(e, 0);
+    if !e.vcall(this.addr(), 0x22c, &args![0u32]).bool() {
+        e.call(PROCESS_LISTS_NOTE_ACTOR, &args![PROCESS_LISTS, this]);
+    }
+    let mut level = 3;
+    let mut package = 0;
+    if process_of(e, this) != 0 {
+        let process = process_of(e, this);
+        level = process_level(e, process);
+        package = e.vcall(process, 0x22c, &args![]).u32();
+        e.call(
+            PROCESS_LISTS_REMOVE_REFERENCE,
+            &args![PROCESS_LISTS, this, level as u32],
+        );
+    }
+    let mut wants_move = false;
+    let mut flag_12 = false;
+    let float_pointer = e.call(REFERENCE_FLOAT_POINTER, &args![this]).u32();
+    let value = e.mem.f32(float_pointer) as f64;
+    if value == double_at(e, FLT_MAX_DOUBLE) {
+        wants_move = true;
+        e.call(ACTOR_SET_FLOAT, &args![this, 0.0f32]);
+        let owner = this.addr() + ACTOR_VALUE_OWNER;
+        if e.vcall(owner, 4, &args![0x10u32]).f64() > double_at(e, ZERO_DOUBLE) {
+            flag_12 = true;
+        }
+    } else {
+        let note = e
+            .call(NOTE_LOOKUP, &args![this, NOTE_OBJECT_011F426C])
+            .u32();
+        if e.call(NOTE_TEST, &args![note + 0x10]).bool() {
+            wants_move = true;
+        }
+    }
+    if !wants_move {
+        let object = e.global::<u32>(SHARED_OBJECT_POINTER_011DDF38);
+        if !e.call(SHARED_OBJECT_TEST, &args![object]).bool() && (2..=3).contains(&level) {
+            wants_move = true;
+        }
+    }
+    let mut failed = true;
+    if wants_move && fn_00881860(e, this, flag_12) {
+        failed = false;
+    }
+    if failed {
+        e.call(ACTOR_NOTE_FAILURE, &args![this]);
+    }
+
+    let new_process = construct_process(e, 0x46c, HIGH_PROCESS_CONSTRUCTOR);
+    swap_process(e, this, new_process);
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+        let form = base_form(e, this).addr();
+        let first = e.vcall(form, 0x180, &args![]).u32();
+        let second = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+        let process = process_of(e, this);
+        e.vcall(process, 0x6c8, &args![second, first]);
+    }
+    e.call(
+        PROCESS_LISTS_ADD_REFERENCE,
+        &args![PROCESS_LISTS, this, 0u32, 0u32, 0u32, 0u32],
+    );
+    guard_leave(e);
+    e.call(HIGH_PROCESS_SET_ACTOR, &args![new_process, this]);
+    e.vcall(new_process, 0x58, &args![]);
+    let list = extra_data_list(e, this);
+    let changes = e.call(GET_CONTAINER_CHANGES, &args![list]).u32();
+    if changes != 0 {
+        if e.call(GET_FORCE_NEXT_UPDATE, &args![this]).bool() {
+            let name = e.call(REFERENCE_NAME, &args![this]).u32();
+            if e.call(STRSTR, &args![name, LILY_TEXT]).u32() != 0
+                && e.vcall(this.addr(), 0x21c, &args![]).bool()
+            {
+                let form = e.call(GET_FORM, &args![this]).u32();
+                e.call(INIT_DEFAULT_WORN, &args![form, this, 1u32, 1u32, 1u32]);
+            }
+        }
+        let worn = worn_item(e, changes);
+        if level != 1 {
+            let process = process_of(e, this);
+            e.vcall(process, 0x160, &args![worn, 0u32, 0u32]);
+        }
+    }
+    request_process_update(e, this, Some(package));
+    let process = process_of(e, this);
+    e.vcall(process, 0x48, &args![]);
+    e.call(UNLOCK_LOCK_DOORS_PROCEDURE, &args![this]);
+    if animation_flag {
+        e.call(MOVE_TO_PROCESS_LEVEL, &args![this, level as u32, 0u32]);
+    }
+    let node = e.call(GET_3D_NODE, &args![this]).u32();
+    let mut may_ragdoll = true;
+    let mut character = 0;
+    let form = e.call(GET_FORM, &args![this]).u32();
+    if e.call(GET_FORM_TYPE, &args![form]).u32() == 0x2b {
+        character = this.addr();
+    }
+    if character != 0 && node != 0 && !e.vcall(character, 0x38c, &args![]).bool() {
+        may_ragdoll = false;
+    }
+    if e.vcall(this.addr(), 0x22c, &args![1u32]).bool() && may_ragdoll {
+        let list = extra_data_list(e, this);
+        if e.call(GET_RAGDOLL_DATA, &args![list]).u32() == 0 {
+            let list = extra_data_list(e, this);
+            if e.call(GET_SAVED_HAVOK_DATA, &args![list]).u32() == 0 {
+                e.set(this, Actor::bDeadFlag, true);
+            }
+        }
+    }
+    e.call(HIGH_PROCESS_INIT_ACTOR, &args![new_process, this]);
+    e.vcall(this.addr(), 0x1fc, &args![0u32]);
+    if e.get(this, Actor::bDeadFlag) && node != 0 {
+        wake_from_death_pose(e, this, node);
+    }
+    if node != 0 {
+        e.call(UPDATE_ALPHA, &args![this]);
+    }
+    let process = actor_process(e, this).addr();
+    let current = e.call(MOBILE_OBJECT_PACKAGE, &args![this]).u32();
+    if current != 0 && package_type(e, current) == 6 {
+        e.vcall(process, 0x284, &args![0u32]);
+    }
+    if !e.vcall(this.addr(), 0x22c, &args![0u32]).bool() && (level == 3 || level == 2) {
+        e.call(CAST_PERMANENT_MAGIC, &args![this, 0u32]);
+    }
+    if process != 0 && e.vcall(process, 0x360, &args![]).bool() {
+        let target = e.vcall(process, 0x128, &args![]).u32();
+        if target != 0 {
+            let target = e.vcall(process, 0x128, &args![]).u32();
+            if e.vcall(target, 0x100, &args![]).bool() {
+                let target = e.vcall(process, 0x128, &args![]).u32();
+                if target != 0 && e.call(CURRENT_PROCESS_TYPE, &args![target]).i32() != 0 {
+                    e.vcall(process, 0x364, &args![0u32]);
+                    e.call(
+                        PROCESS_LISTS_REMOVE_REFERENCE,
+                        &args![PROCESS_LISTS, this, 0u32],
+                    );
+                    e.vcall(process, 0x364, &args![1u32]);
+                }
+            }
+        }
+    }
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+        let value = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+        let object = e.call(OBJECT_GETTER, &args![0u32]).u32();
+        e.call(OBJECT_SET_VALUE, &args![object, value]);
+    }
+    let mover = e.get(this, Actor::pActorMover).addr();
+    e.call(MOVER_UPDATE_A, &args![mover]);
+    let process = actor_process(e, this).addr();
+    if e.vcall(process, 0x20c, &args![]).u32() == 0 {
+        let process = actor_process(e, this).addr();
+        if !e.vcall(process, 0x228, &args![this]).bool() && !ignore_flag {
+            let process = actor_process(e, this).addr();
+            let package = e.vcall(process, 0x22c, &args![]).u32();
+            if package != 0 {
+                let process = actor_process(e, this).addr();
+                let attached = e.call(ANIMATION_FLAG_TEST, &args![this]).u8() as u32;
+                e.vcall(process, 0xb0, &args![this, package, attached]);
+            }
+        }
+    }
+    let process = process_of(e, this);
+    e.vcall(process, 0x7a8, &args![this]);
+    true
+}
+
+/// The part of `00881d30` that wakes an actor flagged `bDeadFlag` whose 3D
+/// `node` is loaded: forces the death-pose animation section when the
+/// animation has it, or knocks the node down, then clears the flag.
+fn wake_from_death_pose(e: &mut Engine, this: Ptr<Actor>, node: u32) {
+    e.vcall(this.addr(), 0x2a0, &args![]);
+    let animation = e.call(GET_ANIMATION, &args![this]).u32();
+    let controller = e.get(this, Actor::pRagdollController).addr();
+    if controller != 0 {
+        e.call(DISABLE_RAGDOLL_ANIM, &args![controller, 1u32]);
+    }
+    let penetration = e.get(this, Actor::pPenetrationDetection).addr();
+    if penetration != 0 {
+        e.with_stack(0x20, |e, scratch| {
+            let object = e.call(ACTOR_POSITION_OBJECT, &args![this, scratch]).u32();
+            let value = e.call(POSITION_OBJECT_VALUE, &args![object]).u32();
+            e.call(RAGDOLL_SET_POSITION, &args![penetration, node, value]);
+        });
+    }
+    if animation != 0
+        && e.call(ANIMATION_GROUP_LOADED, &args![animation, 0xe0u32])
+            .bool()
+    {
+        e.call(
+            ANIMATION_FORCE_SECTION,
+            &args![animation, 0x14u32, 0xe0u32, -1i32, 0.0f32, -1i32],
+        );
+        let current = e.call(ANIMATION_CURRENT, &args![animation, 1u32]).u32();
+        if current != 0 {
+            if !e.vcall(this.addr(), 0x38c, &args![]).bool() {
+                let time = e.call(ANIMATION_TIME, &args![current]).f32();
+                e.call(ANIMATION_SET_TIME, &args![current, time]);
+                let time = e.call(ANIMATION_TIME, &args![current]).f32();
+                e.call(ANIMATION_UPDATE, &args![animation, this, 0.0f32, time]);
+                e.call(ANIMATION_UPDATE_MOVEMENT, &args![animation, this]);
+            } else {
+                let group = e
+                    .call(ANIMATION_ZERO_GLOBAL_TRANSFORM, &args![current, 1u32])
+                    .u32();
+                let time = e.call(ANIM_GROUP_GET_TIME, &args![group]).f32();
+                e.call(ANIMATION_UPDATE, &args![animation, this, 0.0f32, time]);
+                e.call(ANIMATION_UPDATE_MOVEMENT, &args![animation, this]);
+                knock_down(e, this, node, true);
+            }
+        }
+        e.call(ACTOR_AFTER_ANIMATION, &args![this]);
+        e.call(SET_LIFE_STATE, &args![this, 1u32]);
+    } else if e.get(this, Actor::bDeadFlag) {
+        e.call(SET_LIFE_STATE, &args![this, 1u32]);
+        knock_down(e, this, node, false);
+    }
+    let process = process_of(e, this);
+    e.vcall(process, 0x28, &args![]);
+    e.set(this, Actor::bDeadFlag, false);
+}
+
+/// The knock-down both branches of [`wake_from_death_pose`] end with: builds
+/// a vector (0, 1, 0) rotated by a z angle and calls
+/// `DoKnockDown(node, vector, 1, 0.0, 1)`, then the actor's virtual `+0x48`
+/// with 4. The angle is the float at `+8` of `00430830` (and the node a fresh
+/// `0043fcd0`) when `from_reference_float`, else the actor's virtual `+0x2bc`
+/// result and the caller's `node`.
+fn knock_down(e: &mut Engine, this: Ptr<Actor>, node: u32, from_reference_float: bool) {
+    e.with_stack(0x40, |e, frame| {
+        let matrix = frame.addr();
+        let vector = frame.addr() + 0x0c;
+        let rotated = frame.addr() + 0x18;
+        e.call(POINT_CONSTRUCTOR, &args![matrix]);
+        let angle = if from_reference_float {
+            let pointer = e.call(REFERENCE_FLOAT_POINTER, &args![this]).u32();
+            e.mem.f32(pointer + 8)
+        } else {
+            e.vcall(this.addr(), 0x2bc, &args![0u32]).f32()
+        };
+        e.call(MATRIX_SET_ANGLE, &args![matrix, angle]);
+        e.call(VECTOR_BUILD, &args![vector, 0.0f32, 1.0f32, 0.0f32]);
+        let result = e
+            .call(MATRIX_TRANSFORM, &args![matrix, rotated, vector])
+            .u32();
+        copy_point(e, result, vector);
+        let node = if from_reference_float {
+            e.call(GET_3D_NODE, &args![this]).u32()
+        } else {
+            node
+        };
+        e.call(DO_KNOCK_DOWN, &args![node, vector, 1u32, 0.0f32, 1u32]);
+        e.vcall(this.addr(), 0x48, &args![4u32]);
+    });
+}
+
+/// The opening the low, middle-low and middle-high transitions share: when the
+/// actor is in the high process (level 0), stamps its last-seen time, resets
+/// its process (`reset_process` is true for the low and middle-low
+/// transitions) and registers the shader value with the accumulator.
+fn leave_high_process(e: &mut Engine, this: Ptr<Actor>, reset_process: bool) {
+    if process_of(e, this) != 0 {
+        let process = process_of(e, this);
+        if process_level(e, process) == 0 {
+            fn_00881d10(e, this);
+            if reset_process {
+                let process = process_of(e, this);
+                e.call(PROCESS_RESET, &args![process]);
+            }
+            let accumulator = e.call(GET_ACCUMULATOR, &args![]).u32();
+            if accumulator != 0 {
+                let value = e.call(ACTOR_SHADER_VALUE, &args![this]).u32();
+                e.call(ACCUMULATOR_ADD, &args![accumulator, value]);
+            }
+        }
+    }
+}
+
+/// The "killed or not" step of the low-process transitions: with the actor's
+/// virtual `+0x2e8` true, runs the death hooks; otherwise an actor whose
+/// virtual `+0x22c(0)` is true and which is in the high process gets its
+/// virtual `+0xd4` with 1.
+fn run_death_step(e: &mut Engine, this: Ptr<Actor>) {
+    if e.vcall(this.addr(), 0x2e8, &args![]).bool() {
+        e.call(DO_DEATH_STUFF, &args![this]);
+        let process = process_of(e, this);
+        e.vcall(process, 0x354, &args![this]);
+        e.call(RUN_SCRIPT, &args![this]);
+    } else if e.vcall(this.addr(), 0x22c, &args![0u32]).bool() {
+        let process = process_of(e, this);
+        if process_level(e, process) == 0 {
+            e.vcall(this.addr(), 0xd4, &args![1u32]);
+        }
+    }
+}
+
+/// Resets the actor's life state when `004f8960` says 6: `SetLifeState(0)`, the
+/// process's virtual `+0xe8` with `0.0`, optionally the full health restore,
+/// and the process's virtual `+0x420`.
+fn reset_dead_state(e: &mut Engine, this: Ptr<Actor>, restore_health: bool, call_420: bool) {
+    if e.call(ACTOR_STATE_QUERY, &args![this]).i32() == 6 {
+        e.call(SET_LIFE_STATE, &args![this, 0u32]);
+        let process = process_of(e, this);
+        e.vcall(process, 0xe8, &args![0.0f32]);
+        if restore_health {
+            e.call(RESTORE_FULL_HEALTH, &args![this]);
+        }
+        if call_420 {
+            let process = process_of(e, this);
+            e.vcall(process, 0x420, &args![this]);
+        }
+    }
+}
+
+/// Ends the interrupt package when the actor has a package that is an
+/// interrupt package and the actor is neither flagged (`animation_flag`) nor
+/// alarmed.
+fn end_interrupt_unless_flagged(e: &mut Engine, this: Ptr<Actor>, animation_flag: bool) {
+    let process = process_of(e, this);
+    if process == 0 {
+        return;
+    }
+    let package = e.vcall(process, 0x22c, &args![]).u32();
+    if package == 0 {
+        return;
+    }
+    let package = e.vcall(process, 0x22c, &args![]).u32();
+    if e.call(IS_INTERRUPT_PACKAGE, &args![package]).bool()
+        && !animation_flag
+        && !e.call(IS_ALARMED, &args![this]).bool()
+    {
+        actor_end_interrupt_package(e, this, false);
+    }
+}
+
+/// The scheduling step the three lower transitions end with, for process
+/// `level` (3, 2 or 1) and `step` hours (the constant subtracted from the
+/// calendar hour): re-times the new process and moves the actor between the
+/// process lists, or hands it to `008a0680`.
+fn schedule_in_process_lists(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    old_level: i32,
+    new_level: u32,
+    animation_flag: bool,
+    leave_hours: f64,
+) {
+    if animation_flag {
+        e.call(
+            MOVE_TO_PROCESS_LEVEL,
+            &args![this, old_level as u32, new_level],
+        );
+    } else {
+        let mut due = false;
+        if e.vcall(this.addr(), 0x160, &args![]).bool() && e.mem.u8(this.addr() + 0x126) != 0 {
+            due = true;
+        } else if actor_is_following(e, this) || actor_is_escorter_behind(e, this) {
+            let process = actor_process(e, this).addr();
+            let player = e.global::<u32>(PLAYER_POINTER);
+            if e.vcall(process, 0x128, &args![]).u32() == player {
+                due = true;
+            }
+        }
+        if due {
+            let hour = calendar_hour(e);
+            let time = (hour - leave_hours) as f32;
+            let process = process_of(e, this);
+            e.call(PROCESS_SET_TIME, &args![process, time]);
+            e.call(
+                PROCESS_LISTS_REMOVE_REFERENCE,
+                &args![PROCESS_LISTS, this, new_level],
+            );
+            e.call(
+                PROCESS_LISTS_ADD_REFERENCE,
+                &args![PROCESS_LISTS, this, new_level, 0u32, 0u32, 0u32],
+            );
+        }
+    }
+}
+
+// Translated from 00882b90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the actor into the low process (level 3; always true; the fourth of
+/// the transitions after `00881d30`). Nothing happens for an actor already
+/// there. Otherwise the actor leaves the high process, ends interrupt
+/// packages, runs the death or dismiss steps, is re-registered in the process
+/// lists with a new low process (`0xb4` bytes) and, when no shutdown is
+/// pending, rescheduled; it ends with the process's virtual `+0x7a8` and the
+/// actor's virtual `+0x4c` with `0x100000`.
+pub fn fn_00882b90(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this);
+    if process != 0 && process_level(e, process) == 3 {
+        return true;
+    }
+    leave_high_process(e, this, true);
+    e.set(this, Actor::cCurrentSitSleepState, 0);
+    end_interrupt_if_requested(e, this);
+    if e.vcall(this.addr(), 0x274, &args![0u32]).bool()
+        && !e.call(ACTOR_TEST_00437BB0, &args![this]).bool()
+    {
+        e.vcall(this.addr(), 0x434, &args![0u32]);
+    }
+    guard_enter(e, 0);
+    e.call(PROCESS_LISTS_REMOVE_ACTOR, &args![PROCESS_LISTS, this]);
+    e.call(
+        PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER,
+        &args![PROCESS_LISTS, this],
+    );
+    reset_dead_state(e, this, true, true);
+    let process = process_of(e, this);
+    if process != 0 && e.vcall(process, 0x22c, &args![]).u32() != 0 {
+        let package = e.vcall(process, 0x22c, &args![]).u32();
+        if package_type(e, package) == 0x1c {
+            let target = e.vcall(process, 0x128, &args![]).u32();
+            if target != e.global::<u32>(PLAYER_POINTER) {
+                actor_end_interrupt_package(e, this, false);
+            }
+        }
+    }
+    if e.call(IS_ALARMED, &args![this]).bool() && !e.vcall(this.addr(), 0x304, &args![]).bool() {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        let cell = e.call(PARENT_CELL, &args![player]).u32();
+        let in_cell = cell != 0 && {
+            let cell = e.call(PARENT_CELL, &args![player]).u32();
+            e.call(FLAG_BIT_0_AT_0X24, &args![cell]).bool()
+        };
+        if !in_cell {
+            actor_end_interrupt_package(e, this, false);
+        }
+    }
+    let process = process_of(e, this);
+    let level = process_level(e, process);
+    e.call(ACTOR_CLEAN_UP_A, &args![this]);
+    if level == 1 || level == 0 {
+        e.call(ACTOR_CLEAN_UP_B, &args![this]);
+    }
+    e.call(MAGIC_TARGET_DISPEL, &args![this.addr() + 0x94]);
+    if !shutdown_check(e) {
+        let object = e.global::<u32>(SHARED_OBJECT_POINTER_011DE45C);
+        if !e.call(ALWAYS_FALSE, &args![object]).bool() {
+            e.call(PROCESS_LISTS_REFRESH_ACTOR, &args![PROCESS_LISTS, this]);
+        }
+    }
+    run_death_step(e, this);
+    e.call(
+        PROCESS_LISTS_REMOVE_REFERENCE,
+        &args![PROCESS_LISTS, this, level as u32],
+    );
+    let continuing = e.call(IS_CONTINUING_PACKAGE_FOR_PC, &args![this]).bool();
+    let animation_flag = e.call(ANIMATION_FLAG_TEST, &args![this]).bool();
+    end_interrupt_unless_flagged(e, this, animation_flag);
+    let new_process = construct_process(e, 0xb4, LOW_PROCESS_CONSTRUCTOR);
+    let process = process_of(e, this);
+    if e.vcall(process, 0x4c8, &args![]).u32() != 0 {
+        e.vcall(process, 0x540, &args![0u32, 0u32, 0u32]);
+    }
+    swap_process(e, this, new_process);
+    e.call(
+        PROCESS_LISTS_ADD_REFERENCE,
+        &args![PROCESS_LISTS, this, 3u32, 1u32, 0u32, 0u32],
+    );
+    if !animation_flag && continuing {
+        let process = process_of(e, this);
+        e.vcall(process, 0x24, &args![this, 0u32]);
+    }
+    if e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER) != 0 && !shutdown_check(e) {
+        if continuing {
+            let process = process_of(e, this);
+            e.vcall(process, 0x24, &args![this, 0u32]);
+        }
+        schedule_in_process_lists(e, this, level, 3, animation_flag, double_at(e, ONE_DOUBLE));
+        e.mem.set_u8(this.addr() + 0x126, 1);
+    }
+    guard_leave(e);
+    if level == 0 {
+        let mover = e.get(this, Actor::pActorMover).addr();
+        e.call(MOVER_UPDATE_B, &args![mover]);
+    }
+    let process = process_of(e, this);
+    e.vcall(process, 0x7a8, &args![this]);
+    e.vcall(this.addr(), 0x4c, &args![0x0010_0000u32]);
+    true
+}
+
+// Translated from 00883240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the actor into the middle-low process (level 2; always true). Like
+/// `00882b90`, with a new `0xc8`-byte process, a package type-5 check
+/// (virtual `+0x284`) and half an hour of lead time; no health restore, and it
+/// stops early for an actor already at level 2.
+pub fn fn_00883240(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    e.call(
+        PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER,
+        &args![PROCESS_LISTS, this],
+    );
+    e.set(this, Actor::cCurrentSitSleepState, 0);
+    let process = process_of(e, this);
+    if process != 0 && process_level(e, process) == 2 {
+        return true;
+    }
+    leave_high_process(e, this, true);
+    end_interrupt_if_requested(e, this);
+    let process = process_of(e, this);
+    let level = process_level(e, process);
+    e.call(ACTOR_CLEAN_UP_A, &args![this]);
+    if level == 1 || level == 0 {
+        e.call(ACTOR_CLEAN_UP_B, &args![this]);
+    }
+    e.call(MAGIC_TARGET_DISPEL, &args![this.addr() + 0x94]);
+    run_death_step(e, this);
+    guard_enter(e, 0);
+    e.call(
+        PROCESS_LISTS_REMOVE_REFERENCE,
+        &args![PROCESS_LISTS, this, level as u32],
+    );
+    e.call(PROCESS_LISTS_REMOVE_ACTOR, &args![PROCESS_LISTS, this]);
+    if !shutdown_check(e) {
+        let object = e.global::<u32>(SHARED_OBJECT_POINTER_011DE45C);
+        if !e.call(ALWAYS_FALSE, &args![object]).bool() {
+            e.call(PROCESS_LISTS_REFRESH_ACTOR, &args![PROCESS_LISTS, this]);
+        }
+        let process = process_of(e, this);
+        if process != 0 && e.vcall(process, 0x22c, &args![]).u32() != 0 {
+            let package = e.vcall(process, 0x22c, &args![]).u32();
+            if package_type(e, package) == 5 {
+                e.vcall(process, 0x284, &args![0u32]);
+            }
+        }
+    }
+    reset_dead_state(e, this, true, true);
+    let continuing = e.call(IS_CONTINUING_PACKAGE_FOR_PC, &args![this]).bool();
+    let new_process = construct_process(e, 0xc8, MIDDLE_LOW_PROCESS_CONSTRUCTOR);
+    let animation_flag = e.call(ANIMATION_FLAG_TEST, &args![this]).bool();
+    end_interrupt_unless_flagged(e, this, animation_flag);
+    swap_process(e, this, new_process);
+    e.call(
+        PROCESS_LISTS_ADD_REFERENCE,
+        &args![PROCESS_LISTS, this, 2u32, 1u32, 0u32, 0u32],
+    );
+    if !animation_flag && continuing {
+        let process = process_of(e, this);
+        e.vcall(process, 0x24, &args![this, 0u32]);
+    }
+    if e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER) != 0 && !shutdown_check(e) {
+        if continuing {
+            let process = process_of(e, this);
+            e.vcall(process, 0x24, &args![this, 0u32]);
+        }
+        schedule_in_process_lists(e, this, level, 2, animation_flag, double_at(e, HALF_DOUBLE));
+        e.mem.set_u8(this.addr() + 0x126, 1);
+    }
+    guard_leave(e);
+    if level == 0 {
+        let mover = e.get(this, Actor::pActorMover).addr();
+        e.call(MOVER_UPDATE_B, &args![mover]);
+    }
+    let process = process_of(e, this);
+    e.vcall(process, 0x7a8, &args![this]);
+    true
+}
+
+// Translated from 00883800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Puts the actor into the middle-high process (level 1; always true). Builds
+/// a `0x25c`-byte process, re-equips the worn item and, when the actor is
+/// scheduled for it, searches for references within 5000 units of the player's
+/// follower or escorter.
+pub fn fn_00883800(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    e.call(
+        PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER,
+        &args![PROCESS_LISTS, this],
+    );
+    let process = process_of(e, this);
+    if process != 0 && process_level(e, process) == 1 {
+        return true;
+    }
+    leave_high_process(e, this, false);
+    end_interrupt_if_requested(e, this);
+    let process = process_of(e, this);
+    let current = e.vcall(process, 0x20c, &args![]).u32();
+    if current != 0 && e.call(PACKAGE_GET_IS_CREATED, &args![current]).bool() {
+        let process = process_of(e, this);
+        let package = e.vcall(process, 0x22c, &args![]).u32();
+        if package != 0 {
+            if !e.call(IS_ALARMED, &args![this]).bool()
+                && fn_008840f0(e, Ptr::new(package))
+                && fn_008840d0(e, Ptr::new(package))
+                && e.call(PARENT_CELL, &args![this]).u32() != 0
+            {
+                let cell = e.call(PARENT_CELL, &args![this]).u32();
+                if e.call(CELL_TEST_ACTOR, &args![cell, this]).bool() {
+                    actor_end_interrupt_package(e, this, false);
+                }
+            }
+        } else if e.call(IS_ALARMED, &args![this]).bool()
+            && !e.vcall(this.addr(), 0x304, &args![]).bool()
+        {
+            let player = e.global::<u32>(PLAYER_POINTER);
+            let cell = e.call(PARENT_CELL, &args![player]).u32();
+            if !e.call(FLAG_BIT_0_AT_0X24, &args![cell]).bool() {
+                actor_end_interrupt_package(e, this, false);
+            }
+        }
+    }
+    let process = process_of(e, this);
+    let level = process_level(e, process);
+    if e.vcall(this.addr(), 0x2e8, &args![]).bool() {
+        e.call(DO_DEATH_STUFF, &args![this]);
+        let process = process_of(e, this);
+        e.vcall(process, 0x354, &args![this]);
+        e.call(RUN_SCRIPT, &args![this]);
+    } else {
+        let mut high = false;
+        if e.vcall(this.addr(), 0x22c, &args![1u32]).bool() {
+            let process = process_of(e, this);
+            if process_level(e, process) == 0 {
+                e.vcall(this.addr(), 0xd4, &args![1u32]);
+                high = true;
+            }
+        }
+        if !high {
+            reset_dead_state(e, this, false, true);
+        }
+    }
+    let kind = e.vcall(this.addr(), 0x214, &args![]).u32();
+    if kind != 0 {
+        let mut proceed = false;
+        if e.vcall(this.addr(), 0x214, &args![]).u32() == 4
+            || e.vcall(this.addr(), 0x214, &args![]).u32() == 9
+            || {
+                let process = process_of(e, this);
+                e.vcall(process, 0x4c8, &args![]).u32() == 0
+            }
+        {
+            let package = e.call(MOBILE_OBJECT_PACKAGE, &args![this]).u32();
+            if package != 0 {
+                let package = e.call(MOBILE_OBJECT_PACKAGE, &args![this]).u32();
+                if package_type(e, package) == 0x1a {
+                    proceed = true;
+                }
+            }
+        } else {
+            proceed = true;
+        }
+        if proceed {
+            let process = process_of(e, this);
+            e.vcall(process, 0x2ac, &args![this]);
+            let process = process_of(e, this);
+            e.vcall(process, 0x214, &args![]);
+        }
+    }
+    if e.vcall(this.addr(), 0x214, &args![]).u32() != 0
+        && e.vcall(this.addr(), 0x214, &args![]).u32() != 4
+        && e.vcall(this.addr(), 0x214, &args![]).u32() != 9
+        && {
+            let process = process_of(e, this);
+            e.vcall(process, 0x4c8, &args![]).u32() == 0
+        }
+    {
+        let process = process_of(e, this);
+        e.vcall(process, 0x4c0, &args![this, 0u32, 0u32, 0x7fu32]);
+        e.set(this, Actor::cCurrentSitSleepState, 0);
+    }
+    if !shutdown_check(e) {
+        let object = e.global::<u32>(SHARED_OBJECT_POINTER_011DE45C);
+        if !e.call(ALWAYS_FALSE, &args![object]).bool() {
+            e.call(PROCESS_LISTS_REFRESH_ACTOR, &args![PROCESS_LISTS, this]);
+        }
+    }
+    guard_enter(e, 0);
+    e.call(
+        PROCESS_LISTS_REMOVE_REFERENCE,
+        &args![PROCESS_LISTS, this, level as u32],
+    );
+    e.call(PROCESS_LISTS_REMOVE_ACTOR, &args![PROCESS_LISTS, this]);
+    reset_dead_state(e, this, true, false);
+    let continuing = e.call(IS_CONTINUING_PACKAGE_FOR_PC, &args![this]).bool();
+    let new_process = construct_process(e, 0x25c, MIDDLE_HIGH_PROCESS_CONSTRUCTOR);
+    swap_process(e, this, new_process);
+    if e.vcall(this.addr(), 0x1d0, &args![]).u32() != 0 {
+        let form = base_form(e, this).addr();
+        let first = e.vcall(form, 0x180, &args![]).u32();
+        let second = e.vcall(this.addr(), 0x1d0, &args![]).u32();
+        let process = process_of(e, this);
+        e.vcall(process, 0x6c8, &args![second, first]);
+    }
+    let process = process_of(e, this);
+    if e.vcall(process, 0x31c, &args![]).bool() {
+        e.call(ACTOR_SET_FLAG, &args![this, 1u32]);
+    }
+    e.call(
+        PROCESS_LISTS_ADD_REFERENCE,
+        &args![PROCESS_LISTS, this, 1u32, 1u32, 0u32, 0u32],
+    );
+    guard_leave(e);
+    let list = extra_data_list(e, this);
+    let changes = e.call(GET_CONTAINER_CHANGES, &args![list]).u32();
+    if changes != 0 {
+        let worn = worn_item(e, changes);
+        if level != 0 {
+            let process = process_of(e, this);
+            e.vcall(process, 0x160, &args![worn, 0u32, 0u32]);
+        } else if worn != 0 {
+            e.call(WORN_ITEM_UPDATE, &args![worn, 1u32]);
+        }
+    }
+    if e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER) != 0 && !shutdown_check(e) {
+        if continuing {
+            let process = process_of(e, this);
+            e.vcall(process, 0x24, &args![this, 0u32]);
+        }
+        let animation_flag = e.call(ANIMATION_FLAG_TEST, &args![this]).bool();
+        if animation_flag {
+            e.call(MOVE_TO_PROCESS_LEVEL, &args![this, level as u32, 1u32]);
+        } else {
+            let mut due = false;
+            if e.vcall(this.addr(), 0x160, &args![]).bool() && e.mem.u8(this.addr() + 0x126) != 0 {
+                due = true;
+            } else if actor_is_following(e, this) || actor_is_escorter_behind(e, this) {
+                let process = actor_process(e, this).addr();
+                if e.vcall(process, 0x128, &args![]).u32() == e.global::<u32>(PLAYER_POINTER) {
+                    due = true;
+                }
+            }
+            if due {
+                let time = (calendar_hour(e) - double_at(e, HALF_DOUBLE)) as f32;
+                let process = process_of(e, this);
+                e.call(PROCESS_SET_TIME, &args![process, time]);
+                e.call(
+                    PROCESS_LISTS_REMOVE_REFERENCE,
+                    &args![PROCESS_LISTS, this, 1u32],
+                );
+                let kind = e.call(CURRENT_PROCESS_TYPE, &args![this]).u32();
+                e.call(
+                    PROCESS_LISTS_ADD_REFERENCE,
+                    &args![PROCESS_LISTS, this, kind, 0u32, 0u32, 0u32],
+                );
+            }
+        }
+        e.mem.set_u8(this.addr() + 0x126, 1);
+        if e.call(ACTOR_TEST_008C0050, &args![this]).bool() {
+            let mut follower = 0;
+            let process = process_of(e, this);
+            let target = e.vcall(process, 0x128, &args![]).u32();
+            if target != 0 && e.vcall(target, 0x100, &args![]).bool() {
+                follower = target;
+            }
+            if follower != 0 && !e.vcall(follower, 0x448, &args![]).bool() {
+                actor_end_interrupt_package(e, this, false);
+                let radius = e.global::<f32>(ENUM_RADIUS_FLOAT);
+                let first = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                let second = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+                let cell = e.call(PARENT_CELL, &args![this]).u32();
+                let handler = e.global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER);
+                e.call(
+                    ENUM_REFERENCES_CLOSE_TO_POINT,
+                    &args![
+                        handler,
+                        cell,
+                        second,
+                        radius,
+                        first,
+                        radius,
+                        ENUM_CALLBACK,
+                        this
+                    ],
+                );
+            }
+        }
+    }
+    if !e.vcall(this.addr(), 0x22c, &args![0u32]).bool() && (level == 3 || level == 2) {
+        e.call(CAST_PERMANENT_MAGIC, &args![this, 0u32]);
+    }
+    if level == 0 {
+        let mover = e.get(this, Actor::pActorMover).addr();
+        e.call(MOVER_UPDATE_B, &args![mover]);
+    }
+    let process = process_of(e, this);
+    e.vcall(process, 0x7a8, &args![this]);
+    true
+}
+
+// Translated from 008840d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit 0 of the flag word at `+0x1c` of `this` (a package).
+pub fn fn_008840d0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x1c) & 1 != 0
+}
+
+// Translated from 008840f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Bit `0x200` of the flag word at `+0x1c` of `this` (a package).
+pub fn fn_008840f0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x1c) & 0x200 != 0
+}
+
+// Translated from 00884110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsEscorterBehind` (Xbox PDB): true when the actor's process has an
+/// escort package (type 2, virtual `+0x27c`) whose target (virtual `+0x128`) is
+/// the player, and, unless the package's location cell differs from the
+/// player's (both interior), the player's offset from its escort location is
+/// shorter than the actor's offset from its own.
+pub fn actor_is_escorter_behind(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this);
+    if process == 0 {
+        return false;
+    }
+    let package = e.vcall(process, 0x27c, &args![]).u32();
+    let target = e.vcall(process, 0x128, &args![]).u32();
+    if package == 0 || package_type(e, package) != 2 || target != e.global::<u32>(PLAYER_POINTER) {
+        return false;
+    }
+    e.with_stack(0x60, |e, frame| {
+        let own_offset = frame.addr();
+        let target_offset = frame.addr() + 0x0c;
+        let coord_a = frame.addr() + 0x18;
+        let temp_a = frame.addr() + 0x24;
+        let coord_b = frame.addr() + 0x30;
+        let temp_b = frame.addr() + 0x3c;
+        e.call(POINT_CONSTRUCTOR, &args![own_offset]);
+        e.call(POINT_CONSTRUCTOR, &args![target_offset]);
+        if target == 0 {
+            return false;
+        }
+        let coord = e
+            .call(PACKAGE_LOCATION_COORD, &args![package, coord_a, this])
+            .u32();
+        let position = e.vcall(this.addr(), 0x1f4, &args![]).u32();
+        let offset = e
+            .call(POINT_SUBTRACT, &args![position, temp_a, coord])
+            .u32();
+        copy_point(e, offset, own_offset);
+        let coord = e
+            .call(PACKAGE_LOCATION_COORD, &args![package, coord_b, this])
+            .u32();
+        let position = e.vcall(target, 0x1f4, &args![]).u32();
+        let offset = e
+            .call(POINT_SUBTRACT, &args![position, temp_b, coord])
+            .u32();
+        copy_point(e, offset, target_offset);
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if e.call(PARENT_CELL, &args![player]).u32() != 0 {
+            let cell = e.call(PARENT_CELL, &args![player]).u32();
+            if e.call(FLAG_BIT_0_AT_0X24, &args![cell]).bool()
+                && e.call(PACKAGE_LOCATION_CELL, &args![package, this]).u32() != 0
+            {
+                let location_cell = e.call(PACKAGE_LOCATION_CELL, &args![package, this]).u32();
+                if e.call(FLAG_BIT_0_AT_0X24, &args![location_cell]).bool() {
+                    let location_cell = e.call(PACKAGE_LOCATION_CELL, &args![package, this]).u32();
+                    let player_cell = e.call(PARENT_CELL, &args![player]).u32();
+                    if location_cell != player_cell {
+                        return false;
+                    }
+                }
+            }
+        }
+        let own_length = e.call(POINT_LENGTH, &args![own_offset]).f64();
+        let target_length = e.call(POINT_LENGTH, &args![target_offset]).f64();
+        target_length < own_length
+    })
+}
+
+// Translated from 008842c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsFollowing` (Xbox PDB): the process's package (virtual `+0x27c`)
+/// is of type 1 and was not created at run time (`0067 4d40`).
+pub fn actor_is_following(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this);
+    if process == 0 {
+        return false;
+    }
+    let package = e.vcall(process, 0x27c, &args![]).u32();
+    package != 0
+        && package_type(e, package) == 1
+        && !e.call(PACKAGE_GET_IS_CREATED, &args![package]).bool()
+}
+
+// Translated from 00884320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetBarterGoldBase` (Xbox PDB): the `short` barter gold of the base
+/// form's data at `+0x30` (`0047d3f0`).
+pub fn actor_get_barter_gold_base(e: &mut Engine, this: Ptr<Actor>) -> u16 {
+    let form = base_form(e, this).addr();
+    e.call(BARTER_GOLD, &args![form + 0x30]).u16()
+}
+
+// Translated from 00884350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetClass` (Xbox PDB): 0 unless the actor's virtual `+0x218` is true
+/// and it has a form, whose class (`00502430`) is returned.
+pub fn actor_get_class(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    if e.vcall(this.addr(), 0x218, &args![]).bool() {
+        let form = e.call(GET_FORM, &args![this]).u32();
+        if form != 0 {
+            return e.call(ACTOR_BASE_CLASS, &args![form]).u32();
+        }
+    }
+    0
+}
+
+// Translated from 008843a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CanMove` (Xbox PDB): false when the actor's virtual `+0x234` or
+/// `+0x22c(0)` is true, its action animation is 12 or 13, its virtual
+/// `+0x230` is true, either block test (`00437bf0`, `00437bd0`) holds, its
+/// virtual `+0x214` is nonzero, or it is the player with the Pip-Boy active.
+pub fn actor_can_move(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.vcall(this.addr(), 0x234, &args![]).bool()
+        || e.vcall(this.addr(), 0x22c, &args![0u32]).bool()
+    {
+        return false;
+    }
+    let action = e.call(GET_ANIM_ACTION, &args![this]).i32();
+    if (12..=13).contains(&action) {
+        return false;
+    }
+    if e.vcall(this.addr(), 0x230, &args![]).bool() {
+        return false;
+    }
+    if e.call(ACTOR_BLOCK_TEST_A, &args![this]).bool()
+        || e.call(ACTOR_BLOCK_TEST_B, &args![this]).bool()
+    {
+        return false;
+    }
+    if e.vcall(this.addr(), 0x214, &args![]).u32() != 0 {
+        return false;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if this.addr() == player && e.call(IS_PIPBOY_ACTIVE, &args![player]).bool() {
+        return false;
+    }
+    true
+}
+
+// Translated from 00884480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CanSpeak` (Xbox PDB): false when the actor's virtual `+0x234` or
+/// `+0x22c(0)` or `+0x230` is true, or `00437bd0` holds.
+pub fn actor_can_speak(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.vcall(this.addr(), 0x234, &args![]).bool()
+        || e.vcall(this.addr(), 0x22c, &args![0u32]).bool()
+    {
+        return false;
+    }
+    if e.vcall(this.addr(), 0x230, &args![]).bool() {
+        return false;
+    }
+    !e.call(ACTOR_BLOCK_TEST_B, &args![this]).bool()
+}
+
+// Translated from 008844f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when `004f8960` says 2 or 1, or, when `exclude_six` is false, 6
+/// (the actor's slot `+0x22c`).
+pub fn fn_008844f0(e: &mut Engine, this: Ptr<Actor>, exclude_six: bool) -> bool {
+    let kind = |e: &mut Engine| e.call(ACTOR_STATE_QUERY, &args![this]).i32();
+    if exclude_six {
+        kind(e) == 2 || kind(e) == 1
+    } else {
+        kind(e) == 2 || kind(e) == 1 || kind(e) == 6
+    }
+}
+
+// Translated from 00884560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the actor has a process whose virtual `+0x40c` is nonzero.
+pub fn fn_00884560(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this);
+    process != 0 && e.vcall(process, 0x40c, &args![]).u32() != 0
+}
+
+// Translated from 008845a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::CanKnockDown` (Xbox PDB): false when the actor's virtual `+0x22c(1)`
+/// or `+0x4b4` is true, its base form's data (at `+0x30`) forbids it
+/// (`00884690`), its process's virtual `+0x3e4` is 9 or `0x11`, or its virtual
+/// `+0x1e4` result passes `008846c0`.
+pub fn actor_can_knock_down(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.vcall(this.addr(), 0x22c, &args![1u32]).bool() {
+        return false;
+    }
+    if e.vcall(this.addr(), 0x4b4, &args![]).bool() {
+        return false;
+    }
+    let form = base_form(e, this).addr();
+    if !fn_00884690(e, Ptr::new(form + 0x30)) {
+        return false;
+    }
+    let process = process_of(e, this);
+    if process != 0 {
+        if e.vcall(process, 0x3e4, &args![]).i32() == 9 {
+            return false;
+        }
+        let process = process_of(e, this);
+        if e.vcall(process, 0x3e4, &args![]).i32() == 0x11 {
+            return false;
+        }
+    }
+    if e.vcall(this.addr(), 0x1e4, &args![]).u32() != 0 {
+        let value = e.vcall(this.addr(), 0x1e4, &args![]).u32();
+        if fn_008846c0(e, Ptr::new(value)) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00884690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when `00461580(this, 0x4000000)` is false (a flag test of a base-form
+/// data block).
+pub fn fn_00884690(e: &mut Engine, this: Ptr) -> bool {
+    !e.call(BASE_FLAG_TEST, &args![this, 0x0400_0000u32]).bool()
+}
+
+// Translated from 008846c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the `u16` at `+0x122` of `this` is not `0xff`.
+pub fn fn_008846c0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u16(this.addr() + 0x122) != 0xff
+}
+
+// Translated from 008846e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The actor mover's virtual `+0x20` (the movement flags), 0 without a mover.
+pub fn fn_008846e0(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    let mover = e.get(this, Actor::pActorMover).addr();
+    if mover == 0 {
+        0
+    } else {
+        e.vcall(mover, 0x20, &args![]).u32()
+    }
+}
+
+// Translated from 00884730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsRunning` (Xbox PDB): bit `0x200` of the movement flags
+/// (`008846e0`).
+pub fn actor_is_running(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    fn_008846e0(e, this) & 0x200 != 0
+}
+
+// Translated from 00884750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// False when `0047c850` holds, the action animation is 7, or the actor is the
+/// player and its process's virtual `+0x404` is true; true otherwise.
+pub fn fn_00884750(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    if e.call(ALWAYS_FALSE, &args![this]).bool() {
+        return false;
+    }
+    if e.call(GET_ANIM_ACTION, &args![this]).i32() == 7 {
+        return false;
+    }
+    let process = process_of(e, this);
+    if this.addr() == e.global::<u32>(PLAYER_POINTER)
+        && process != 0
+        && e.vcall(process, 0x404, &args![]).bool()
+    {
+        return false;
+    }
+    true
+}
+
+// Translated from 008847c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `this` is the sub-object at `Actor + 0xa8`. True when both of the actor
+/// value owner's (`this - 4`, null for a null actor) body part conditions 29
+/// and 30 are `0.0`, or when the owner's virtual `+8` with `0x48` is nonzero;
+/// the result is also written into the process's flag block (`00884880`).
+pub fn fn_008847c0(e: &mut Engine, this: Ptr) -> bool {
+    let owner = if this.addr() == 0xa8 {
+        0
+    } else {
+        this.addr() - 4
+    };
+    let zero = double_at(e, ZERO_DOUBLE);
+    let mut result = false;
+    let first = e
+        .call(GET_BODY_PART_CONDITION, &args![owner, 0x1du32, 0u32])
+        .f64();
+    let mut check_slot = true;
+    if first == zero {
+        let owner = if this.addr() == 0xa8 {
+            0
+        } else {
+            this.addr() - 4
+        };
+        let second = e
+            .call(GET_BODY_PART_CONDITION, &args![owner, 0x1eu32, 0u32])
+            .f64();
+        if second == zero {
+            result = true;
+            check_slot = false;
+        }
+    }
+    if check_slot && e.vcall(this.addr() - 4, 8, &args![0x48u32]).u32() != 0 {
+        result = true;
+    }
+    let process = e.mem.u32(this.addr() - 0x40);
+    if process != 0 {
+        fn_00884880(e, Ptr::new(process), result as u8);
+    }
+    result
+}
+
+// Translated from 00884880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a flag block at `+0x2c`, stores `value` in its byte at `+0x40` and sets
+/// bit `0x4000` of its word at `+0x44` (`008848c0`).
+pub fn fn_00884880(e: &mut Engine, this: Ptr, value: u8) {
+    let block = e.mem.u32(this.addr() + 0x2c);
+    if block != 0 {
+        e.mem.set_u8(block + 0x40, value);
+        fn_008848c0(e, Ptr::new(block), 0x4000);
+    }
+}
+
+// Translated from 008848c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the bits `mask` in the word at `+0x44` of `this`.
+pub fn fn_008848c0(e: &mut Engine, this: Ptr, mask: u32) {
+    let flags = e.mem.u32(this.addr() + 0x44);
+    e.mem.set_u32(this.addr() + 0x44, flags | mask);
+}
+
+// Translated from 008848e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a process that has a flag block (`+0x2c`), clears bit `0x4000` of its
+/// flags (`00884940`).
+pub fn fn_008848e0(e: &mut Engine, this: Ptr<Actor>) {
+    let process = process_of(e, this);
+    if process != 0 && fn_00884920(e, Ptr::new(process)) {
+        fn_00884940(e, Ptr::new(process), 0x4000);
+    }
+}
+
+// Translated from 00884920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the word at `+0x2c` of `this` is nonzero.
+pub fn fn_00884920(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x2c) != 0
+}
+
+// Translated from 00884940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a flag block at `+0x2c`, clears the bits `mask` of it (`00884970`).
+pub fn fn_00884940(e: &mut Engine, this: Ptr, mask: u32) {
+    let block = e.mem.u32(this.addr() + 0x2c);
+    if block != 0 {
+        fn_00884970(e, Ptr::new(block), mask);
+    }
+}
+
+// Translated from 00884970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the bits `mask` in the word at `+0x44` of `this`.
+pub fn fn_00884970(e: &mut Engine, this: Ptr, mask: u32) {
+    let flags = e.mem.u32(this.addr() + 0x44);
+    e.mem.set_u32(this.addr() + 0x44, !mask & flags);
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2412,6 +4384,55 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00881130, fn_00881130(Ptr<Actor>, u32, f32, Ptr<Actor>)),
         entry!(0x00881330, fn_00881330(Ptr<Actor>, u32, i32)),
         entry!(0x00881360, fn_00881360(Ptr<Actor>, u32, f32)),
+        entry!(0x00881450, actor_get_package(Ptr<Actor>) -> Ptr),
+        entry!(0x00881470, actor_get_missed_packs(Ptr<Actor>, u32, f32)),
+        entry!(
+            0x008814b0,
+            actor_get_current_editor_package(Ptr<Actor>) -> Ptr
+        ),
+        entry!(
+            0x00881510,
+            actor_get_package_set_as_pcurrent(Ptr<Actor>) -> Ptr
+        ),
+        entry!(0x00881570, actor_is_running_run_once(Ptr<Actor>) -> bool),
+        entry!(0x008815a0, fn_008815a0(Ptr<Actor>) -> Ptr),
+        entry!(0x00881620, actor_set_current_target(Ptr<Actor>, u32)),
+        entry!(
+            0x00881650,
+            actor_get_current_package_target(Ptr<Actor>) -> u32
+        ),
+        entry!(0x00881680, actor_end_interrupt_package(Ptr<Actor>, bool)),
+        entry!(0x00881830, fn_00881830(Ptr, i32)),
+        entry!(0x00881860, fn_00881860(Ptr<Actor>, bool) -> bool),
+        entry!(0x00881c90, fn_00881c90(Ptr<Actor>, u32) -> bool),
+        entry!(0x00881d10, fn_00881d10(Ptr<Actor>)),
+        entry!(0x00881d30, fn_00881d30(Ptr<Actor>) -> bool),
+        entry!(0x00882b90, fn_00882b90(Ptr<Actor>) -> bool),
+        entry!(0x00883240, fn_00883240(Ptr<Actor>) -> bool),
+        entry!(0x00883800, fn_00883800(Ptr<Actor>) -> bool),
+        entry!(0x008840d0, fn_008840d0(Ptr) -> bool),
+        entry!(0x008840f0, fn_008840f0(Ptr) -> bool),
+        entry!(0x00884110, actor_is_escorter_behind(Ptr<Actor>) -> bool),
+        entry!(0x008842c0, actor_is_following(Ptr<Actor>) -> bool),
+        entry!(0x00884320, actor_get_barter_gold_base(Ptr<Actor>) -> u16),
+        entry!(0x00884350, actor_get_class(Ptr<Actor>) -> u32),
+        entry!(0x008843a0, actor_can_move(Ptr<Actor>) -> bool),
+        entry!(0x00884480, actor_can_speak(Ptr<Actor>) -> bool),
+        entry!(0x008844f0, fn_008844f0(Ptr<Actor>, bool) -> bool),
+        entry!(0x00884560, fn_00884560(Ptr<Actor>) -> bool),
+        entry!(0x008845a0, actor_can_knock_down(Ptr<Actor>) -> bool),
+        entry!(0x00884690, fn_00884690(Ptr) -> bool),
+        entry!(0x008846c0, fn_008846c0(Ptr) -> bool),
+        entry!(0x008846e0, fn_008846e0(Ptr<Actor>) -> u32),
+        entry!(0x00884730, actor_is_running(Ptr<Actor>) -> bool),
+        entry!(0x00884750, fn_00884750(Ptr<Actor>) -> bool),
+        entry!(0x008847c0, fn_008847c0(Ptr) -> bool),
+        entry!(0x00884880, fn_00884880(Ptr, u8)),
+        entry!(0x008848c0, fn_008848c0(Ptr, u32)),
+        entry!(0x008848e0, fn_008848e0(Ptr<Actor>)),
+        entry!(0x00884920, fn_00884920(Ptr) -> bool),
+        entry!(0x00884940, fn_00884940(Ptr, u32)),
+        entry!(0x00884970, fn_00884970(Ptr, u32)),
     ]
 }
 
@@ -4806,5 +6827,1603 @@ mod tests_block2 {
         assert_eq!(report.borrow()[0], expected);
         e.call(0x0088_1360, &args![actor, 0x99u32, 2.5f32]);
         assert_eq!(set.borrow().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod tests_block3 {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const ACTOR_VTABLE: u32 = 0x0200_0000;
+    const PROCESS_VTABLE: u32 = 0x0201_0000;
+    const OBJECT_VTABLE: u32 = 0x0202_0000;
+    const TARGET_VTABLE: u32 = 0x0203_0000;
+    const MOVER_VTABLE: u32 = 0x0204_0000;
+
+    /// The address and argument words of every call a double saw, in order.
+    type Log = Rc<RefCell<Vec<(u32, Vec<u32>)>>>;
+
+    /// The address a test vtable slot jumps to.
+    fn target(vtable: u32, offset: u32) -> u32 {
+        0x6000_0000 + (vtable & 0x00ff_ffff) + offset
+    }
+
+    fn ret(value: u32) -> Ret {
+        value.into_ret()
+    }
+
+    fn float_ret(value: f64) -> Ret {
+        Ret {
+            st0: value,
+            ..Ret::default()
+        }
+    }
+
+    /// Every exe function the translations of this block call by address.
+    const CALLEES: &[u32] = &[
+        REFERENCE_CURRENT_PACKAGE,
+        REFERENCE_MISSED_PACKAGES,
+        CALENDAR_GET_HOUR,
+        CALENDAR_TIME_STAMP,
+        IS_INTERRUPT_PACKAGE,
+        EXTRA_PACKAGE,
+        IS_FLEEING,
+        WORD_AT_8,
+        PROCESS_LEVEL,
+        CURRENT_PROCESS_TYPE,
+        MOBILE_OBJECT_PACKAGE,
+        SET_LIFE_STATE,
+        RESTORE_FULL_HEALTH,
+        IS_ALARMED,
+        IS_CONTINUING_PACKAGE_FOR_PC,
+        UNLOCK_LOCK_DOORS_PROCEDURE,
+        MOVE_TO_PROCESS_LEVEL,
+        UPDATE_ALPHA,
+        CAST_PERMANENT_MAGIC,
+        DO_DEATH_STUFF,
+        RUN_SCRIPT,
+        ACTOR_STATE_QUERY,
+        PARENT_CELL,
+        WORLD_SPACE,
+        GET_CONTAINER_CHANGES,
+        GET_WORN_ITEM,
+        REFERENCE_NAME,
+        STRSTR,
+        INIT_DEFAULT_WORN,
+        GUARD_ENTER,
+        GUARD_LEAVE,
+        SHARED_OBJECT_TEST,
+        REFERENCE_TEST,
+        ALWAYS_FALSE,
+        SHUTDOWN_CHECK,
+        PROCESS_LISTS_REMOVE_REFERENCE,
+        PROCESS_LISTS_ADD_REFERENCE,
+        PROCESS_LISTS_REMOVE_ACTOR,
+        PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER,
+        PROCESS_LISTS_REFRESH_ACTOR,
+        PROCESS_LISTS_NOTE_ACTOR,
+        GET_ACCUMULATOR,
+        ACCUMULATOR_ADD,
+        ACTOR_SHADER_VALUE,
+        MAGIC_TARGET_DISPEL,
+        ACTOR_CLEAN_UP_A,
+        ACTOR_CLEAN_UP_B,
+        PROCESS_RESET,
+        PROCESS_SET_TIME,
+        ACTOR_TEST_00437BB0,
+        HIGH_PROCESS_CONSTRUCTOR,
+        LOW_PROCESS_CONSTRUCTOR,
+        MIDDLE_LOW_PROCESS_CONSTRUCTOR,
+        MIDDLE_HIGH_PROCESS_CONSTRUCTOR,
+        ACTOR_NOTE_FAILURE,
+        HIGH_PROCESS_SET_ACTOR,
+        HIGH_PROCESS_INIT_ACTOR,
+        GET_FORCE_NEXT_UPDATE,
+        PACKAGE_TEST_0067A460,
+        PACKAGE_GET_IS_CREATED,
+        CELL_TEST_ACTOR,
+        PACKAGE_LOCATION_REFERENCE,
+        PACKAGE_LOCATION_CELL,
+        PACKAGE_LOCATION_COORD,
+        PACKAGE_LOCATION,
+        PACKAGE_LOCATION_TYPE,
+        PACKAGE_LOCATION_CHECK,
+        POINT_CONSTRUCTOR,
+        POINT_LENGTH,
+        POINT_SUBTRACT,
+        POINT_ADD,
+        POINT_SCALE,
+        POINT_LENGTH_2D,
+        POINT_LENGTH_SQUARED,
+        ACTOR_GET_RADIUS,
+        FIND_CLOSEST_POINT_ON_NAVMESH,
+        PATHING_LOCATION_CONSTRUCTOR,
+        PATHING_LOCATION_DESTRUCTOR,
+        PATH_POINT_CONSTRUCTOR,
+        PATHING_FIND_POINT,
+        REQUEST_CONSTRUCTOR,
+        REQUEST_SET_ACTOR,
+        REQUEST_SET_RADIUS,
+        REQUEST_SET_OUTER_RADIUS,
+        REQUEST_SUBMIT,
+        REQUEST_DESTRUCTOR,
+        PATHING_SINGLETON,
+        PATHING_ORDER_MOVE,
+        PATHING_ORDER_FINISH,
+        PATHING_AVAILABLE,
+        ACTOR_BLOCK_TEST_A,
+        ACTOR_BLOCK_TEST_B,
+        IS_PIPBOY_ACTIVE,
+        GET_ANIM_ACTION,
+        BASE_FLAG_TEST,
+        BARTER_GOLD,
+        ACTOR_BASE_CLASS,
+        LAST_SEEN_INTERVAL,
+        ENCOUNTER_ZONE,
+        ENCOUNTER_ZONE_FLAG,
+        DISABLE_RAGDOLL_ANIM,
+        DO_KNOCK_DOWN,
+        ACTOR_AFTER_ANIMATION,
+        ACTOR_POSITION_OBJECT,
+        POSITION_OBJECT_VALUE,
+        RAGDOLL_SET_POSITION,
+        ANIMATION_GROUP_LOADED,
+        ANIMATION_FORCE_SECTION,
+        ANIMATION_CURRENT,
+        ANIMATION_UPDATE,
+        ANIMATION_UPDATE_MOVEMENT,
+        ANIMATION_ZERO_GLOBAL_TRANSFORM,
+        ANIM_GROUP_GET_TIME,
+        ANIMATION_TIME,
+        ANIMATION_SET_TIME,
+        MATRIX_SET_ANGLE,
+        VECTOR_BUILD,
+        MATRIX_TRANSFORM,
+        GET_3D_NODE,
+        GET_FORM_TYPE,
+        GET_RAGDOLL_DATA,
+        GET_SAVED_HAVOK_DATA,
+        OBJECT_GETTER,
+        OBJECT_SET_VALUE,
+        MOVER_UPDATE_A,
+        MOVER_UPDATE_B,
+        ACTOR_SET_FLAG,
+        WORN_ITEM_UPDATE,
+        ACTOR_TEST_008C0050,
+        ENUM_REFERENCES_CLOSE_TO_POINT,
+        NOTE_LOOKUP,
+        NOTE_TEST,
+        ACTOR_SET_FLOAT,
+        REFERENCE_FLOAT_POINTER,
+        GET_BODY_PART_CONDITION,
+        PACKAGE_TYPE,
+        ANIMATION_FLAG_TEST,
+        GET_ANIMATION,
+        ACTOR_PROCESS,
+        GET_EXTRA_DATA_LIST,
+        GET_BASE_FORM,
+        GET_FORM,
+        OPERATOR_NEW,
+        CLEAR_IN_COMBAT,
+        FLAG_BIT_0_AT_0X24,
+        0x005f_0b50,
+        0x005f_0bf0,
+        0x005f_0c40,
+    ];
+
+    /// An actor with a process, doubles over every callee and over every
+    /// virtual slot of the test vtables (all returning zero until a test says
+    /// otherwise), and a log of every call the doubles see.
+    struct Rig {
+        e: Engine,
+        log: Log,
+        actor: Ptr<Actor>,
+        process: u32,
+    }
+
+    impl Rig {
+        fn new() -> Rig {
+            let mut e = Engine::new();
+            for page in [
+                0x0101_1000,
+                0x0101_2000,
+                0x0101_6000,
+                0x0102_1000,
+                0x0102_3000,
+                0x0103_0000,
+                0x011c_3000,
+                0x011c_a000,
+                0x011d_d000,
+                0x011d_e000,
+            ] {
+                e.map(page, 0x1000);
+            }
+            let actor = Ptr::new(e.mem.alloc(0x1b4));
+            let process = e.mem.alloc(0x400);
+            let mut rig = Rig {
+                e,
+                log: Rc::default(),
+                actor,
+                process,
+            };
+            for vtable in [
+                ACTOR_VTABLE,
+                PROCESS_VTABLE,
+                OBJECT_VTABLE,
+                TARGET_VTABLE,
+                MOVER_VTABLE,
+            ] {
+                rig.add_vtable(vtable);
+            }
+            for addr in CALLEES {
+                rig.stub(*addr, Ret::default());
+            }
+            rig.e
+                .register_double(ACTOR_PROCESS, |e, a| ret(e.mem.u32(a[0] + 0x68)));
+            rig.e.mem.set_u32(actor.addr(), ACTOR_VTABLE);
+            rig.e.mem.set_u32(actor.addr() + 0xa4, OBJECT_VTABLE);
+            rig.e.mem.set_u32(process, PROCESS_VTABLE);
+            rig.e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+            rig
+        }
+
+        /// Maps a vtable page whose slots all log and return zero.
+        fn add_vtable(&mut self, vtable: u32) {
+            self.e.map(vtable, 0x1000);
+            for offset in (0..0x800).step_by(4) {
+                self.vslot(vtable, offset, Ret::default());
+            }
+        }
+
+        /// A double over `addr` that logs its calls and returns `value`.
+        fn stub(&mut self, addr: u32, value: Ret) {
+            let log = self.log.clone();
+            self.e.register_double(addr, move |_, a| {
+                log.borrow_mut().push((addr, a.to_vec()));
+                value
+            });
+        }
+
+        /// A double that returns the values in turn (the last one again and again).
+        fn stub_seq(&mut self, addr: u32, values: Vec<Ret>) {
+            let log = self.log.clone();
+            let mut index = 0;
+            self.e.register_double(addr, move |_, a| {
+                log.borrow_mut().push((addr, a.to_vec()));
+                let value = values[index.min(values.len() - 1)];
+                index += 1;
+                value
+            });
+        }
+
+        /// Makes slot `offset` of `vtable` log and return `value`.
+        fn vslot(&mut self, vtable: u32, offset: u32, value: Ret) {
+            self.e.mem.set_u32(vtable + offset, target(vtable, offset));
+            self.stub(target(vtable, offset), value);
+        }
+
+        fn vslot_seq(&mut self, vtable: u32, offset: u32, values: Vec<Ret>) {
+            self.e.mem.set_u32(vtable + offset, target(vtable, offset));
+            self.stub_seq(target(vtable, offset), values);
+        }
+
+        /// An object of `size` bytes with `vtable`.
+        fn object(&mut self, vtable: u32, size: u32) -> u32 {
+            let object = self.e.mem.alloc(size);
+            self.e.mem.set_u32(object, vtable);
+            object
+        }
+
+        /// The argument words of every call to `addr`.
+        fn calls(&self, addr: u32) -> Vec<Vec<u32>> {
+            self.log
+                .borrow()
+                .iter()
+                .filter(|(a, _)| *a == addr)
+                .map(|(_, args)| args.clone())
+                .collect()
+        }
+
+        /// The argument words of every call of slot `offset` of `vtable`.
+        fn vcalls(&self, vtable: u32, offset: u32) -> Vec<Vec<u32>> {
+            self.calls(target(vtable, offset))
+        }
+
+        /// The addresses of all calls so far, in order.
+        fn order(&self) -> Vec<u32> {
+            self.log.borrow().iter().map(|(a, _)| *a).collect()
+        }
+
+        fn clear(&self) {
+            self.log.borrow_mut().clear();
+        }
+
+        /// Sets the process level the doubles report.
+        fn level(&mut self, level: u32) {
+            self.stub(PROCESS_LEVEL, ret(level));
+        }
+    }
+
+    #[test]
+    fn get_package_forwards_the_reference() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(REFERENCE_CURRENT_PACKAGE, ret(0x1234));
+        assert_eq!(actor_get_package(&mut r.e, a), Ptr::new(0x1234));
+        assert_eq!(r.calls(REFERENCE_CURRENT_PACKAGE), vec![vec![a.addr()]]);
+    }
+
+    #[test]
+    fn missed_packs_passes_the_calendar_hour_as_a_float() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(CALENDAR_GET_HOUR, float_ret(13.5));
+        actor_get_missed_packs(&mut r.e, a, 7, 2.5);
+        assert_eq!(
+            r.calls(REFERENCE_MISSED_PACKAGES),
+            vec![vec![a.addr(), 7, 2.5f32.to_bits(), 13.5f32.to_bits()]]
+        );
+        assert_eq!(r.calls(CALENDAR_GET_HOUR), vec![vec![CALENDAR_OBJECT]]);
+    }
+
+    #[test]
+    fn current_editor_package_falls_back_to_the_extra_data() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(GET_EXTRA_DATA_LIST, ret(0x500));
+        r.stub(EXTRA_PACKAGE, ret(0x900));
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        // A normal package is the answer.
+        r.stub(IS_INTERRUPT_PACKAGE, ret(0));
+        assert_eq!(actor_get_current_editor_package(&mut r.e, a).addr(), 0x700);
+        // An interrupt package is replaced by the extra data's.
+        r.stub(IS_INTERRUPT_PACKAGE, ret(1));
+        assert_eq!(actor_get_current_editor_package(&mut r.e, a).addr(), 0x900);
+        assert_eq!(r.calls(EXTRA_PACKAGE), vec![vec![0x500]]);
+        // No package at all gives the extra data's too.
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0));
+        assert_eq!(actor_get_current_editor_package(&mut r.e, a).addr(), 0x900);
+        // Without a process there is nothing.
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert_eq!(actor_get_current_editor_package(&mut r.e, a).addr(), 0);
+    }
+
+    #[test]
+    fn package_set_as_pcurrent_replaces_only_interrupt_packages() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(GET_EXTRA_DATA_LIST, ret(0x500));
+        r.stub(EXTRA_PACKAGE, ret(0x900));
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        r.stub(IS_INTERRUPT_PACKAGE, ret(0));
+        assert_eq!(actor_get_package_set_as_pcurrent(&mut r.e, a).addr(), 0x700);
+        r.stub(IS_INTERRUPT_PACKAGE, ret(1));
+        assert_eq!(actor_get_package_set_as_pcurrent(&mut r.e, a).addr(), 0x900);
+        // No package: the interrupt test is not even made.
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0));
+        r.clear();
+        assert_eq!(actor_get_package_set_as_pcurrent(&mut r.e, a).addr(), 0);
+        assert!(r.calls(IS_INTERRUPT_PACKAGE).is_empty());
+        // No process.
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert_eq!(actor_get_package_set_as_pcurrent(&mut r.e, a).addr(), 0);
+    }
+
+    #[test]
+    fn is_running_run_once_asks_the_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        assert!(!actor_is_running_run_once(&mut r.e, a));
+        r.vslot(PROCESS_VTABLE, 0x35c, ret(1));
+        assert!(actor_is_running_run_once(&mut r.e, a));
+    }
+
+    #[test]
+    fn fn_008815a0_picks_between_the_actor_and_the_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.vslot(PROCESS_VTABLE, 0x128, ret(0xaa));
+        r.vslot(ACTOR_VTABLE, 0x42c, ret(0xbb));
+        // The flag test fails: the process's answer.
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0xaa);
+        // The flag holds and the package is not run-once: the actor's answer.
+        r.stub(ANIMATION_FLAG_TEST, ret(1));
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0xbb);
+        // Run-once and not fleeing: the process's answer again.
+        r.vslot(PROCESS_VTABLE, 0x35c, ret(1));
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0xaa);
+        assert_eq!(r.calls(IS_FLEEING).last(), Some(&vec![a.addr(), 0]));
+        // Run-once but fleeing: the actor's.
+        r.stub(IS_FLEEING, ret(1));
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0xbb);
+        // The actor's answer is zero: back to the process's.
+        r.vslot(ACTOR_VTABLE, 0x42c, ret(0));
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0xaa);
+        // No process.
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert_eq!(fn_008815a0(&mut r.e, a).addr(), 0);
+    }
+
+    #[test]
+    fn set_current_target_needs_a_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        actor_set_current_target(&mut r.e, a, 0x55);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x12c), vec![vec![r.process, 0x55]]);
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        actor_set_current_target(&mut r.e, a, 0x66);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x12c).len(), 1);
+    }
+
+    #[test]
+    fn current_package_target_reads_behind_the_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(WORD_AT_8, ret(0x42));
+        assert_eq!(actor_get_current_package_target(&mut r.e, a), 0x42);
+        assert_eq!(r.calls(WORD_AT_8), vec![vec![r.process + 4]]);
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert_eq!(actor_get_current_package_target(&mut r.e, a), 0);
+    }
+
+    #[test]
+    fn end_interrupt_package_ends_an_interrupt_package() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        let package = r.e.mem.alloc(0xa0);
+        r.e.mem.set_u32(package + 0x98, 10);
+        r.e.mem.set_u32(player + 0x208, package);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        // The process's package is the interrupt package (type 0x17), later none.
+        r.vslot_seq(PROCESS_VTABLE, 0x22c, vec![ret(package), ret(0)]);
+        r.vslot(PROCESS_VTABLE, 0x20c, ret(0x800));
+        r.stub(IS_INTERRUPT_PACKAGE, ret(1));
+        r.stub_seq(PACKAGE_TYPE, vec![ret(0x10), ret(0x17)]);
+        actor_end_interrupt_package(&mut r.e, a, false);
+        // The player's pending package is cleared, the package's counter lowered.
+        assert_eq!(r.e.mem.u32(player + 0x208), 0);
+        assert_eq!(r.e.mem.u32(package + 0x98), 9);
+        let order = r.order();
+        let position = |addr: u32| order.iter().position(|x| *x == addr).unwrap();
+        assert!(position(target(ACTOR_VTABLE, 0x288)) < position(target(PROCESS_VTABLE, 0x22c)));
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x214), vec![vec![r.process]]);
+        assert_eq!(r.calls(CLEAR_IN_COMBAT), vec![vec![a.addr(), 1]]);
+        assert_eq!(r.vcalls(ACTOR_VTABLE, 0x4c), vec![vec![a.addr(), 0]]);
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x714),
+            vec![vec![r.process, a.addr()]]
+        );
+        // No package left: with no shutdown pending the process gets the actor again.
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x24),
+            vec![vec![r.process, a.addr(), 0]]
+        );
+        // And the movement ends.
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x294),
+            vec![vec![r.process, a.addr()]]
+        );
+    }
+
+    #[test]
+    fn end_interrupt_package_keeps_the_idle_package_when_asked() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        r.vslot(PROCESS_VTABLE, 0x20c, ret(0x800));
+        r.stub(PACKAGE_TYPE, ret(0x1c));
+        actor_end_interrupt_package(&mut r.e, a, true);
+        // Type 0x1c with the flag set is left alone; the actor's +0x288 is skipped.
+        assert!(r.vcalls(ACTOR_VTABLE, 0x288).is_empty());
+        assert!(r.vcalls(PROCESS_VTABLE, 0x214).is_empty());
+        assert!(r.vcalls(PROCESS_VTABLE, 0x294).is_empty());
+        // Without the flag the same package is dropped.
+        actor_end_interrupt_package(&mut r.e, a, false);
+        assert_eq!(r.vcalls(ACTOR_VTABLE, 0x288).len(), 1);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x214).len(), 1);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x294).len(), 1);
+        // Type 0x1a is never dropped.
+        r.stub(PACKAGE_TYPE, ret(0x1a));
+        actor_end_interrupt_package(&mut r.e, a, false);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x214).len(), 1);
+        // No process, nothing at all.
+        r.clear();
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        actor_end_interrupt_package(&mut r.e, a, false);
+        assert!(r.order().is_empty());
+    }
+
+    #[test]
+    fn fn_00881830_adds_to_the_counter() {
+        let mut e = Engine::new();
+        let package = Ptr::new(e.mem.alloc(0xa0));
+        e.mem.set_u32(package.addr() + 0x98, 5);
+        fn_00881830(&mut e, package, -1);
+        assert_eq!(e.mem.u32(package.addr() + 0x98), 4);
+        fn_00881830(&mut e, package, 10);
+        assert_eq!(e.mem.u32(package.addr() + 0x98), 14);
+        e.mem.set_u32(package.addr() + 0x98, 0);
+        fn_00881830(&mut e, package, -1);
+        assert_eq!(e.mem.u32(package.addr() + 0x98), u32::MAX);
+    }
+
+    /// An actor that may move, with the position `(1, 2, 3)` behind its
+    /// virtual `+0x1f4`; returns the position's address.
+    fn mobile_rig(r: &mut Rig) -> u32 {
+        let position = r.e.mem.alloc(12);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            r.e.mem.set_f32(position + 4 * i as u32, *v);
+        }
+        r.vslot(ACTOR_VTABLE, 0x1f4, ret(position));
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        r.stub(ACTOR_GET_RADIUS, float_ret(1.0));
+        r.e.mem.set_f64(ONE_AND_HALF_DOUBLE, 1.5);
+        r.e.mem.set_f64(THREE_DOUBLE, 3.0);
+        position
+    }
+
+    #[test]
+    fn fn_00881860_refuses_an_actor_that_cannot_move() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        mobile_rig(&mut r);
+        r.vslot(ACTOR_VTABLE, 0x234, ret(1));
+        assert!(!fn_00881860(&mut r.e, a, false));
+        assert!(r.calls(PARENT_CELL).is_empty());
+        // `force` goes on anyway (and with no navmesh point just orders the move).
+        assert!(fn_00881860(&mut r.e, a, true));
+        assert_eq!(r.calls(PARENT_CELL).len(), 1);
+    }
+
+    #[test]
+    fn fn_00881860_lets_the_package_veto() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        mobile_rig(&mut r);
+        let package = r.object(OBJECT_VTABLE, 0x100);
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(package));
+        r.e.mem.set_f32(MINUS_ONE_FLOAT, -1.0);
+        r.vslot(OBJECT_VTABLE, 0x13c, ret(1));
+        r.stub(PACKAGE_TYPE, ret(6));
+        r.stub(PACKAGE_LOCATION_REFERENCE, ret(0x77));
+        r.stub(GET_FORM, ret(0x1111));
+        r.e.set_global::<u32>(LOCATION_FORM_POINTER_011CA248, 0x1111);
+        assert!(!fn_00881860(&mut r.e, a, false));
+        assert_eq!(
+            r.vcalls(OBJECT_VTABLE, 0x13c),
+            vec![vec![package, a.addr(), 0, (-1.0f32).to_bits(), 0]]
+        );
+        // A different form does not veto.
+        r.e.set_global::<u32>(LOCATION_FORM_POINTER_011CA248, 0x2222);
+        r.stub(PACKAGE_LOCATION, ret(0));
+        assert!(fn_00881860(&mut r.e, a, false));
+        // A location of type 3 that the package rejects does.
+        r.stub(PACKAGE_LOCATION, ret(0x88));
+        r.stub(PACKAGE_LOCATION_TYPE, ret(3));
+        r.stub(PACKAGE_LOCATION_CHECK, ret(0));
+        assert!(!fn_00881860(&mut r.e, a, false));
+        r.stub(PACKAGE_LOCATION_CHECK, ret(1));
+        assert!(fn_00881860(&mut r.e, a, false));
+    }
+
+    #[test]
+    fn fn_00881860_orders_the_move_to_the_snapped_point() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let position = mobile_rig(&mut r);
+        // The navmesh has a point; the path finder finds a close one at distance
+        // (3, 4) horizontally, inside the radius 1.0? No: farther, so no push.
+        r.stub(FIND_CLOSEST_POINT_ON_NAVMESH, ret(1));
+        r.stub(PATHING_FIND_POINT, ret(1));
+        r.stub(POINT_LENGTH_2D, float_ret(5.0));
+        // The player is far away: no close-point request.
+        r.stub(POINT_LENGTH_SQUARED, float_ret(100.0));
+        // The 0x2a8 double reads the three position words it is given.
+        let seen = Rc::new(RefCell::new(vec![]));
+        let seen_in = seen.clone();
+        let slot = target(ACTOR_VTABLE, 0x2a8);
+        r.e.register_double(slot, move |e, args| {
+            seen_in.borrow_mut().push([
+                e.mem.f32(args[1]),
+                e.mem.f32(args[1] + 4),
+                e.mem.f32(args[1] + 8),
+            ]);
+            Ret::default()
+        });
+        assert!(fn_00881860(&mut r.e, a, false));
+        assert_eq!(*seen.borrow(), vec![[1.0, 2.0, 3.0]]);
+        assert_eq!(
+            r.calls(FIND_CLOSEST_POINT_ON_NAVMESH)[0][2],
+            position,
+            "the actor's position is the third argument"
+        );
+        assert_eq!(r.calls(PATHING_LOCATION_DESTRUCTOR).len(), 1);
+        assert!(r.calls(REQUEST_CONSTRUCTOR).is_empty());
+        assert!(r.calls(PATHING_ORDER_MOVE).is_empty());
+    }
+
+    #[test]
+    fn fn_00881860_pulls_away_from_the_player() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        mobile_rig(&mut r);
+        r.stub(FIND_CLOSEST_POINT_ON_NAVMESH, ret(1));
+        r.stub(PATHING_FIND_POINT, ret(1));
+        // The horizontal distance 0.5 is inside the radius 1.0: the point is
+        // pushed out by the radius.
+        r.stub(POINT_LENGTH_2D, float_ret(0.5));
+        let scaled = r.e.mem.alloc(12);
+        let moved = r.e.mem.alloc(12);
+        for (i, v) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+            r.e.mem.set_f32(moved + 4 * i as u32, *v);
+        }
+        r.stub(POINT_SCALE, ret(scaled));
+        r.stub(POINT_ADD, ret(moved));
+        // The player is close: radii 1 + 1, squared 4 * 2.25 = 9 > 4.
+        r.stub(POINT_LENGTH_SQUARED, float_ret(4.0));
+        r.stub(PATHING_AVAILABLE, ret(1));
+        r.stub(PATHING_SINGLETON, ret(0x5000));
+        let ordered = Rc::new(RefCell::new(vec![]));
+        let ordered_in = ordered.clone();
+        r.e.register_double(PATHING_ORDER_MOVE, move |e, args| {
+            ordered_in.borrow_mut().push([
+                e.mem.f32(args[2]),
+                e.mem.f32(args[2] + 4),
+                e.mem.f32(args[2] + 8),
+            ]);
+            Ret::default()
+        });
+        assert!(fn_00881860(&mut r.e, a, false));
+        assert_eq!(*ordered.borrow(), vec![[7.0, 8.0, 9.0]]);
+        assert_eq!(r.calls(POINT_SCALE)[0][2], 1.0f32.to_bits());
+        let player = r.e.global::<u32>(PLAYER_POINTER);
+        let request = r.calls(REQUEST_CONSTRUCTOR)[0][0];
+        assert_eq!(r.calls(REQUEST_SET_ACTOR), vec![vec![request, player]]);
+        assert_eq!(
+            r.calls(REQUEST_SET_RADIUS),
+            vec![vec![request, 3.0f32.to_bits()]]
+        );
+        assert_eq!(
+            r.calls(REQUEST_SET_OUTER_RADIUS),
+            vec![vec![request, 6.0f32.to_bits()]]
+        );
+        assert_eq!(r.calls(REQUEST_SUBMIT)[0][0], request);
+        assert_eq!(r.calls(REQUEST_DESTRUCTOR), vec![vec![request]]);
+        // The move goes through the pathing singleton, with the pushed-out point.
+        assert_eq!(r.calls(PATHING_ORDER_FINISH), vec![vec![0x5000, a.addr()]]);
+        assert!(r.vcalls(ACTOR_VTABLE, 0x2a8).is_empty());
+    }
+
+    #[test]
+    fn fn_00881c90_waits_for_the_interval() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(LAST_SEEN_INTERVAL, ret(100));
+        // Never seen: always true.
+        assert!(fn_00881c90(&mut r.e, a, 5));
+        r.e.set(a, Actor::iLastSeenTime, 1000);
+        // Not later than the last time: false.
+        assert!(!fn_00881c90(&mut r.e, a, 1000));
+        assert!(!fn_00881c90(&mut r.e, a, 900));
+        // Later but within the interval: false.
+        assert!(!fn_00881c90(&mut r.e, a, 1100));
+        // Beyond the interval: true unless the encounter zone is flagged.
+        assert!(fn_00881c90(&mut r.e, a, 1101));
+        r.stub(ENCOUNTER_ZONE, ret(0x30));
+        assert!(fn_00881c90(&mut r.e, a, 1101));
+        r.stub(ENCOUNTER_ZONE_FLAG, ret(1));
+        assert!(!fn_00881c90(&mut r.e, a, 1101));
+        assert_eq!(r.calls(ENCOUNTER_ZONE_FLAG).last(), Some(&vec![0x30]));
+    }
+
+    #[test]
+    fn fn_00881d10_stores_the_calendar_stamp() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(CALENDAR_TIME_STAMP, ret(0x1234));
+        fn_00881d10(&mut r.e, a);
+        assert_eq!(r.e.get(a, Actor::iLastSeenTime), 0x1234);
+        assert_eq!(r.calls(CALENDAR_TIME_STAMP), vec![vec![CALENDAR_OBJECT]]);
+    }
+
+    #[test]
+    fn fn_00881d30_refreshes_the_worn_item_of_a_high_actor() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.level(0);
+        r.vslot(ACTOR_VTABLE, 0x1d0, ret(0x55));
+        r.stub(GET_CONTAINER_CHANGES, ret(0x66));
+        r.stub(GET_WORN_ITEM, ret(0x99));
+        r.vslot(PROCESS_VTABLE, 0x31c, ret(1));
+        assert!(fn_00881d30(&mut r.e, a));
+        assert_eq!(r.calls(GET_WORN_ITEM), vec![vec![0x66, 5, 0]]);
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x160),
+            vec![vec![r.process, 0x99, 0, 1]]
+        );
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x450), vec![vec![r.process, 1]]);
+        // Nothing replaced the process.
+        assert_eq!(r.e.get(a, Actor::pCurrentProcess), Ptr::new(r.process));
+        assert!(r.calls(HIGH_PROCESS_CONSTRUCTOR).is_empty());
+    }
+
+    #[test]
+    fn fn_00881d30_gives_lily_her_3d_node() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.level(0);
+        r.vslot(ACTOR_VTABLE, 0x1d0, ret(0x55));
+        r.stub(GET_CONTAINER_CHANGES, ret(0x66));
+        r.stub(GET_WORN_ITEM, ret(0x99));
+        r.stub(GET_FORCE_NEXT_UPDATE, ret(1));
+        r.vslot(ACTOR_VTABLE, 0x21c, ret(1));
+        r.stub(REFERENCE_NAME, ret(0x7000));
+        r.stub(STRSTR, ret(0x7002));
+        // A package the process accepts: the same update step.
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        r.stub(PACKAGE_TEST_0067A460, ret(1));
+        assert!(fn_00881d30(&mut r.e, a));
+        assert_eq!(r.calls(STRSTR), vec![vec![0x7000, LILY_TEXT]]);
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x160),
+            vec![vec![r.process, 0x99, 0x55, 1]]
+        );
+        assert_eq!(r.calls(PACKAGE_TEST_0067A460), vec![vec![0x700]]);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x450), vec![vec![r.process, 1]]);
+        // Without a process there is nothing to do.
+        r.clear();
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(fn_00881d30(&mut r.e, a));
+        assert!(r.calls(GET_CONTAINER_CHANGES).is_empty());
+    }
+
+    /// A rig for the transitions: a new process of `size` bytes comes from
+    /// `operator new` and its constructor; returns its address.
+    fn new_process(r: &mut Rig, constructor: u32) -> u32 {
+        let new_process = r.object(PROCESS_VTABLE, 0x500);
+        r.stub(OPERATOR_NEW, ret(0x6666));
+        r.stub(constructor, ret(new_process));
+        new_process
+    }
+
+    #[test]
+    fn fn_00881d30_builds_a_high_process_for_a_low_actor() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let high = new_process(&mut r, HIGH_PROCESS_CONSTRUCTOR);
+        r.level(3);
+        // The reference float is not the "unset" marker, the note object says no:
+        // level 3 asks for a move, which the actor (virtual +0x234) cannot do.
+        let float = r.e.mem.alloc(16);
+        r.e.mem.set_f32(float, 1.0);
+        r.stub(REFERENCE_FLOAT_POINTER, ret(float));
+        r.e.mem.set_f64(FLT_MAX_DOUBLE, f32::MAX as f64);
+        r.vslot(ACTOR_VTABLE, 0x234, ret(1));
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        assert!(fn_00881d30(&mut r.e, a));
+        // The old process is removed from the lists at level 3 and destroyed,
+        // the new one installed and the actor added again at level 0.
+        assert_eq!(
+            r.calls(PROCESS_LISTS_REMOVE_REFERENCE)[0],
+            vec![PROCESS_LISTS, a.addr(), 3]
+        );
+        assert_eq!(r.calls(OPERATOR_NEW), vec![vec![0x46c]]);
+        assert_eq!(r.calls(HIGH_PROCESS_CONSTRUCTOR), vec![vec![0x6666]]);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 4), vec![vec![high, r.process]]);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0), vec![vec![r.process, 1]]);
+        assert_eq!(r.e.get(a, Actor::pCurrentProcess), Ptr::new(high));
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 0, 0, 0, 0]]
+        );
+        // The move failed: the failure is noted.
+        assert_eq!(r.calls(ACTOR_NOTE_FAILURE), vec![vec![a.addr()]]);
+        assert_eq!(r.calls(HIGH_PROCESS_SET_ACTOR), vec![vec![high, a.addr()]]);
+        assert_eq!(r.calls(HIGH_PROCESS_INIT_ACTOR), vec![vec![high, a.addr()]]);
+        // It ends with the new process's virtual +0x7a8.
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x7a8), vec![vec![high, a.addr()]]);
+        // The guard was entered and left once around the swap.
+        assert_eq!(r.calls(GUARD_ENTER), vec![vec![GUARD_OBJECT_011F11A0, 0]]);
+        assert_eq!(r.calls(GUARD_LEAVE), vec![vec![GUARD_OBJECT_011F11A0]]);
+    }
+
+    #[test]
+    fn fn_00881d30_wakes_a_flagged_actor_with_a_knock_down() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let high = new_process(&mut r, HIGH_PROCESS_CONSTRUCTOR);
+        mobile_rig(&mut r);
+        r.level(3);
+        let float = r.e.mem.alloc(16);
+        r.e.mem.set_f32(float, f32::MAX);
+        r.e.mem.set_f64(FLT_MAX_DOUBLE, f32::MAX as f64);
+        r.stub(REFERENCE_FLOAT_POINTER, ret(float));
+        // A 3D node exists, so the dead flag (set below) is acted on; the actor
+        // has no animation, so it is knocked down from its own rotation.
+        r.stub(GET_3D_NODE, ret(0x333));
+        r.e.set(a, Actor::bDeadFlag, true);
+        r.vslot(ACTOR_VTABLE, 0x2bc, float_ret(0.5));
+        let rotated = r.e.mem.alloc(12);
+        for (i, v) in [0.0f32, 0.0, 1.0].iter().enumerate() {
+            r.e.mem.set_f32(rotated + 4 * i as u32, *v);
+        }
+        r.stub(MATRIX_TRANSFORM, ret(rotated));
+        // The vector DoKnockDown gets is the rotated one.
+        let seen = Rc::new(RefCell::new(vec![]));
+        let seen_in = seen.clone();
+        r.e.register_double(DO_KNOCK_DOWN, move |e, args| {
+            seen_in.borrow_mut().push((
+                args.to_vec(),
+                [
+                    e.mem.f32(args[1]),
+                    e.mem.f32(args[1] + 4),
+                    e.mem.f32(args[1] + 8),
+                ],
+            ));
+            Ret::default()
+        });
+        assert!(fn_00881d30(&mut r.e, a));
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0[0], 0x333);
+        assert_eq!(&seen[0].0[2..], &[1, 0.0f32.to_bits(), 1]);
+        assert_eq!(seen[0].1, [0.0, 0.0, 1.0]);
+        assert_eq!(r.calls(MATRIX_SET_ANGLE)[0][1], 0.5f32.to_bits());
+        assert_eq!(r.calls(SET_LIFE_STATE), vec![vec![a.addr(), 1]]);
+        assert_eq!(r.vcalls(ACTOR_VTABLE, 0x48), vec![vec![a.addr(), 4]]);
+        // The flag is cleared and the new process told.
+        assert!(!r.e.get(a, Actor::bDeadFlag));
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x28), vec![vec![high]]);
+        assert_eq!(r.calls(UPDATE_ALPHA), vec![vec![a.addr()]]);
+    }
+
+    #[test]
+    fn fn_00881d30_forces_the_death_pose_section() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let high = new_process(&mut r, HIGH_PROCESS_CONSTRUCTOR);
+        mobile_rig(&mut r);
+        r.level(3);
+        let float = r.e.mem.alloc(16);
+        r.e.mem.set_f32(float, f32::MAX);
+        r.e.mem.set_f64(FLT_MAX_DOUBLE, f32::MAX as f64);
+        r.stub(REFERENCE_FLOAT_POINTER, ret(float));
+        r.stub(GET_3D_NODE, ret(0x333));
+        r.e.set(a, Actor::bDeadFlag, true);
+        r.stub(GET_ANIMATION, ret(0x4000));
+        r.stub(ANIMATION_GROUP_LOADED, ret(1));
+        r.stub(ANIMATION_CURRENT, ret(0x4400));
+        r.stub(ANIMATION_TIME, float_ret(0.25));
+        // The actor's virtual +0x38c is false: it updates at the current time.
+        r.e.set(a, Actor::pRagdollController, Ptr::new(0x8000));
+        assert!(fn_00881d30(&mut r.e, a));
+        assert_eq!(r.calls(DISABLE_RAGDOLL_ANIM), vec![vec![0x8000, 1]]);
+        assert_eq!(
+            r.calls(ANIMATION_FORCE_SECTION),
+            vec![vec![
+                0x4000,
+                0x14,
+                0xe0,
+                u32::MAX,
+                0.0f32.to_bits(),
+                u32::MAX
+            ]]
+        );
+        assert_eq!(r.calls(ANIMATION_CURRENT), vec![vec![0x4000, 1]]);
+        assert_eq!(
+            r.calls(ANIMATION_UPDATE),
+            vec![vec![0x4000, a.addr(), 0.0f32.to_bits(), 0.25f32.to_bits()]]
+        );
+        assert_eq!(
+            r.calls(ANIMATION_SET_TIME),
+            vec![vec![0x4400, 0.25f32.to_bits()]]
+        );
+        assert_eq!(
+            r.calls(ANIMATION_UPDATE_MOVEMENT),
+            vec![vec![0x4000, a.addr()]]
+        );
+        assert_eq!(r.calls(ACTOR_AFTER_ANIMATION), vec![vec![a.addr()]]);
+        assert_eq!(r.calls(SET_LIFE_STATE), vec![vec![a.addr(), 1]]);
+        // No knock-down on this path.
+        assert!(r.calls(DO_KNOCK_DOWN).is_empty());
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x28), vec![vec![high]]);
+        assert!(!r.e.get(a, Actor::bDeadFlag));
+    }
+
+    /// A rig for the three lower transitions: the actor is in the high process,
+    /// the new process comes from `constructor`.
+    fn transition_rig(constructor: u32) -> (Rig, u32) {
+        let mut r = Rig::new();
+        let new = new_process(&mut r, constructor);
+        r.level(0);
+        r.stub(CALENDAR_TIME_STAMP, ret(77));
+        r.stub(GET_ACCUMULATOR, ret(0x9000));
+        r.stub(ACTOR_SHADER_VALUE, ret(0x31));
+        r.stub(ACTOR_STATE_QUERY, ret(0));
+        (r, new)
+    }
+
+    #[test]
+    fn fn_00882b90_stops_for_an_actor_that_is_low_already() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.level(3);
+        assert!(fn_00882b90(&mut r.e, a));
+        assert_eq!(r.order(), vec![PROCESS_LEVEL]);
+    }
+
+    #[test]
+    fn fn_00882b90_moves_a_high_actor_to_the_low_process() {
+        let (mut r, low) = transition_rig(LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        // Dead-body handling: dead actor runs the death hooks.
+        r.vslot(ACTOR_VTABLE, 0x2e8, ret(1));
+        r.stub(IS_CONTINUING_PACKAGE_FOR_PC, ret(1));
+        assert!(fn_00882b90(&mut r.e, a));
+        // The high actor is stamped, its process reset and its shader value
+        // handed to the accumulator.
+        assert_eq!(r.calls(CALENDAR_TIME_STAMP).len(), 1);
+        assert_eq!(r.e.get(a, Actor::iLastSeenTime), 77);
+        assert_eq!(r.calls(PROCESS_RESET), vec![vec![r.process]]);
+        assert_eq!(r.calls(ACCUMULATOR_ADD), vec![vec![0x9000, 0x31]]);
+        // The death hooks.
+        assert_eq!(r.calls(DO_DEATH_STUFF), vec![vec![a.addr()]]);
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x354),
+            vec![vec![r.process, a.addr()]]
+        );
+        assert_eq!(r.calls(RUN_SCRIPT), vec![vec![a.addr()]]);
+        // Removed from the lists at level 0, then added at level 3.
+        assert_eq!(
+            r.calls(PROCESS_LISTS_REMOVE_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 0]]
+        );
+        assert_eq!(r.calls(OPERATOR_NEW), vec![vec![0xb4]]);
+        assert_eq!(r.e.get(a, Actor::pCurrentProcess), Ptr::new(low));
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 3, 1, 0, 0]]
+        );
+        // A continuing package for the player: the new process gets the actor.
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x24), vec![vec![low, a.addr(), 0]]);
+        // The old high actor's mover is told.
+        assert_eq!(r.calls(ACTOR_CLEAN_UP_A), vec![vec![a.addr()]]);
+        assert_eq!(r.calls(ACTOR_CLEAN_UP_B), vec![vec![a.addr()]]);
+        assert_eq!(r.calls(MAGIC_TARGET_DISPEL), vec![vec![a.addr() + 0x94]]);
+        // And the ending: the process's +0x7a8 and the actor's +0x4c(0x100000).
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x7a8), vec![vec![low, a.addr()]]);
+        assert_eq!(
+            r.vcalls(ACTOR_VTABLE, 0x4c),
+            vec![vec![a.addr(), 0x0010_0000]]
+        );
+    }
+
+    #[test]
+    fn fn_00882b90_reschedules_a_follower_one_hour_early() {
+        let (mut r, low) = transition_rig(LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        // A shutdown object exists and is not shutting down.
+        r.e.set_global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER, 0x1234);
+        r.e.mem.set_f64(ONE_DOUBLE, 1.0);
+        r.stub(CALENDAR_GET_HOUR, float_ret(10.0));
+        // The actor's +0x160 holds and the force flag is set: it is due.
+        r.vslot(ACTOR_VTABLE, 0x160, ret(1));
+        r.e.mem.set_u8(a.addr() + 0x126, 1);
+        assert!(fn_00882b90(&mut r.e, a));
+        assert_eq!(r.calls(PROCESS_SET_TIME), vec![vec![low, 9.0f32.to_bits()]]);
+        // The actor leaves and re-enters the lists at level 3.
+        assert_eq!(
+            r.calls(PROCESS_LISTS_REMOVE_REFERENCE).last(),
+            Some(&vec![PROCESS_LISTS, a.addr(), 3])
+        );
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE).last(),
+            Some(&vec![PROCESS_LISTS, a.addr(), 3, 0, 0, 0])
+        );
+        assert_eq!(r.e.mem.u8(a.addr() + 0x126), 1);
+        // With the animation flag, the move goes to `008a0680` instead.
+        let (mut r, _low) = transition_rig(LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        r.e.set_global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER, 0x1234);
+        r.stub(ANIMATION_FLAG_TEST, ret(1));
+        assert!(fn_00882b90(&mut r.e, a));
+        assert_eq!(r.calls(MOVE_TO_PROCESS_LEVEL), vec![vec![a.addr(), 0, 3]]);
+        assert!(r.calls(PROCESS_SET_TIME).is_empty());
+    }
+
+    #[test]
+    fn fn_00882b90_ends_the_idle_package_of_a_stranded_actor() {
+        let (mut r, _low) = transition_rig(LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        // The actor's package is the idle one (0x1c) and its target is not the
+        // player: the package ends.
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        r.vslot(PROCESS_VTABLE, 0x128, ret(0x1111));
+        r.stub(PACKAGE_TYPE, ret(0x1c));
+        assert!(fn_00882b90(&mut r.e, a));
+        assert!(!r.vcalls(ACTOR_VTABLE, 0x288).is_empty());
+        // 4f8960 == 6: the actor is restored first.
+        let (mut r, _low) = transition_rig(LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        r.stub(ACTOR_STATE_QUERY, ret(6));
+        assert!(fn_00882b90(&mut r.e, a));
+        assert_eq!(r.calls(SET_LIFE_STATE), vec![vec![a.addr(), 0]]);
+        assert_eq!(r.calls(RESTORE_FULL_HEALTH), vec![vec![a.addr()]]);
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0xe8),
+            vec![vec![r.process, 0.0f32.to_bits()]]
+        );
+        assert_eq!(
+            r.vcalls(PROCESS_VTABLE, 0x420),
+            vec![vec![r.process, a.addr()]]
+        );
+    }
+
+    #[test]
+    fn fn_00883240_stops_for_an_actor_that_is_middle_low_already() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.level(2);
+        r.e.set(a, Actor::cCurrentSitSleepState, 5);
+        assert!(fn_00883240(&mut r.e, a));
+        assert_eq!(r.e.get(a, Actor::cCurrentSitSleepState), 0);
+        assert_eq!(
+            r.order(),
+            vec![PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER, PROCESS_LEVEL]
+        );
+    }
+
+    #[test]
+    fn fn_00883240_moves_a_high_actor_to_the_middle_low_process() {
+        let (mut r, new) = transition_rig(MIDDLE_LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        assert!(fn_00883240(&mut r.e, a));
+        assert_eq!(r.calls(OPERATOR_NEW), vec![vec![0xc8]]);
+        assert_eq!(r.e.get(a, Actor::pCurrentProcess), Ptr::new(new));
+        assert_eq!(r.calls(PROCESS_RESET), vec![vec![r.process]]);
+        assert_eq!(
+            r.calls(PROCESS_LISTS_REMOVE_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 0]]
+        );
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 2, 1, 0, 0]]
+        );
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x7a8), vec![vec![new, a.addr()]]);
+        // No +0x4c(0x100000) at the end of this transition.
+        assert!(r.vcalls(ACTOR_VTABLE, 0x4c).is_empty());
+    }
+
+    #[test]
+    fn fn_00883240_reschedules_with_half_an_hour_of_lead() {
+        let (mut r, new) = transition_rig(MIDDLE_LOW_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        r.e.set_global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER, 0x1234);
+        r.e.mem.set_f64(HALF_DOUBLE, 0.5);
+        r.stub(CALENDAR_GET_HOUR, float_ret(10.0));
+        r.vslot(ACTOR_VTABLE, 0x160, ret(1));
+        r.e.mem.set_u8(a.addr() + 0x126, 1);
+        // The idle package type 5 of the old process is stopped.
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(0x700));
+        r.stub(PACKAGE_TYPE, ret(5));
+        r.stub(IS_CONTINUING_PACKAGE_FOR_PC, ret(1));
+        assert!(fn_00883240(&mut r.e, a));
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x284), vec![vec![r.process, 0]]);
+        assert_eq!(r.calls(PROCESS_SET_TIME), vec![vec![new, 9.5f32.to_bits()]]);
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE).last(),
+            Some(&vec![PROCESS_LISTS, a.addr(), 2, 0, 0, 0])
+        );
+        // The continuing package gives the actor to the new process twice.
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x24).len(), 2);
+    }
+
+    #[test]
+    fn fn_00883800_stops_for_an_actor_that_is_middle_high_already() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.level(1);
+        assert!(fn_00883800(&mut r.e, a));
+        assert_eq!(
+            r.order(),
+            vec![PROCESS_LISTS_REMOVE_CLOSE_TO_PLAYER, PROCESS_LEVEL]
+        );
+    }
+
+    #[test]
+    fn fn_00883800_moves_a_high_actor_to_the_middle_high_process() {
+        let (mut r, new) = transition_rig(MIDDLE_HIGH_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        r.stub(GET_CONTAINER_CHANGES, ret(0x66));
+        r.stub(GET_WORN_ITEM, ret(0x99));
+        r.vslot(PROCESS_VTABLE, 0x31c, ret(1));
+        assert!(fn_00883800(&mut r.e, a));
+        // No process reset in this transition.
+        assert!(r.calls(PROCESS_RESET).is_empty());
+        assert_eq!(r.calls(OPERATOR_NEW), vec![vec![0x25c]]);
+        assert_eq!(r.e.get(a, Actor::pCurrentProcess), Ptr::new(new));
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE),
+            vec![vec![PROCESS_LISTS, a.addr(), 1, 1, 0, 0]]
+        );
+        assert_eq!(r.calls(ACTOR_SET_FLAG), vec![vec![a.addr(), 1]]);
+        // The old level was 0: the worn item is refreshed in place.
+        assert_eq!(r.calls(WORN_ITEM_UPDATE), vec![vec![0x99, 1]]);
+        assert_eq!(r.vcalls(PROCESS_VTABLE, 0x7a8), vec![vec![new, a.addr()]]);
+        // The mover is told as the actor leaves the high process.
+        assert_eq!(r.calls(MOVER_UPDATE_B).len(), 1);
+    }
+
+    #[test]
+    fn fn_00883800_hands_a_follower_to_the_enumeration() {
+        let (mut r, new) = transition_rig(MIDDLE_HIGH_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        let player = r.object(TARGET_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        r.e.set_global::<u32>(SHUTDOWN_CHECK_OBJECT_POINTER, 0x1234);
+        r.e.mem.set_f64(HALF_DOUBLE, 0.5);
+        r.e.mem.set_f32(ENUM_RADIUS_FLOAT, 5000.0);
+        r.stub(CALENDAR_GET_HOUR, float_ret(10.0));
+        r.stub(CURRENT_PROCESS_TYPE, ret(1));
+        // The actor follows the player: its process's target is the player.
+        r.vslot(PROCESS_VTABLE, 0x27c, ret(0x700));
+        r.stub(PACKAGE_TYPE, ret(1));
+        r.vslot(PROCESS_VTABLE, 0x128, ret(player));
+        r.vslot(TARGET_VTABLE, 0x100, ret(1));
+        r.stub(ACTOR_TEST_008C0050, ret(1));
+        let position = r.e.mem.alloc(12);
+        r.vslot(ACTOR_VTABLE, 0x1f4, ret(position));
+        r.stub(PARENT_CELL, ret(0xc0de));
+        assert!(fn_00883800(&mut r.e, a));
+        // Due: re-timed half an hour early and re-added at the process type.
+        assert_eq!(r.calls(PROCESS_SET_TIME), vec![vec![new, 9.5f32.to_bits()]]);
+        assert_eq!(
+            r.calls(PROCESS_LISTS_ADD_REFERENCE).last(),
+            Some(&vec![PROCESS_LISTS, a.addr(), 1, 0, 0, 0])
+        );
+        // The player's follower is not in a state to be skipped: the
+        // enumeration runs around the actor.
+        let radius = 5000.0f32.to_bits();
+        assert_eq!(
+            r.calls(ENUM_REFERENCES_CLOSE_TO_POINT),
+            vec![vec![
+                0x1234,
+                0xc0de,
+                position,
+                radius,
+                position,
+                radius,
+                ENUM_CALLBACK,
+                a.addr()
+            ]]
+        );
+        assert_eq!(r.e.mem.u8(a.addr() + 0x126), 1);
+    }
+
+    #[test]
+    fn fn_00883800_ends_interrupt_packages_of_a_created_package() {
+        let (mut r, _new) = transition_rig(MIDDLE_HIGH_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        // The process's current package (+0x20c) was created at run time; the
+        // package it runs has the two flags and the actor's cell holds it.
+        r.vslot(PROCESS_VTABLE, 0x20c, ret(0x800));
+        r.stub(PACKAGE_GET_IS_CREATED, ret(1));
+        let package = r.e.mem.alloc(0x40);
+        r.e.mem.set_u32(package + 0x1c, 0x201);
+        r.vslot(PROCESS_VTABLE, 0x22c, ret(package));
+        r.stub(PARENT_CELL, ret(0xc0de));
+        r.stub(CELL_TEST_ACTOR, ret(1));
+        assert!(fn_00883800(&mut r.e, a));
+        assert_eq!(r.calls(CELL_TEST_ACTOR), vec![vec![0xc0de, a.addr()]]);
+        assert!(!r.vcalls(ACTOR_VTABLE, 0x288).is_empty());
+        // Without a package: an alarmed actor outside the player's interior ends it.
+        let (mut r, _new) = transition_rig(MIDDLE_HIGH_PROCESS_CONSTRUCTOR);
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        r.vslot(PROCESS_VTABLE, 0x20c, ret(0x800));
+        r.stub(PACKAGE_GET_IS_CREATED, ret(1));
+        r.stub(IS_ALARMED, ret(1));
+        r.stub(PARENT_CELL, ret(0xc0de));
+        r.stub(FLAG_BIT_0_AT_0X24, ret(0));
+        assert!(fn_00883800(&mut r.e, a));
+        assert!(!r.vcalls(ACTOR_VTABLE, 0x288).is_empty());
+    }
+
+    #[test]
+    fn package_flag_tests_read_the_flag_word() {
+        let mut e = Engine::new();
+        let package = Ptr::new(e.mem.alloc(0x40));
+        assert!(!fn_008840d0(&mut e, package));
+        assert!(!fn_008840f0(&mut e, package));
+        e.mem.set_u32(package.addr() + 0x1c, 1);
+        assert!(fn_008840d0(&mut e, package));
+        assert!(!fn_008840f0(&mut e, package));
+        e.mem.set_u32(package.addr() + 0x1c, 0x200);
+        assert!(!fn_008840d0(&mut e, package));
+        assert!(fn_008840f0(&mut e, package));
+    }
+
+    /// An escort package (type 2) whose target is the player.
+    fn escort_rig() -> (Rig, u32, u32) {
+        let mut r = Rig::new();
+        let player = r.object(TARGET_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        r.vslot(PROCESS_VTABLE, 0x27c, ret(0x700));
+        r.vslot(PROCESS_VTABLE, 0x128, ret(player));
+        r.stub(PACKAGE_TYPE, ret(2));
+        let own_position = r.e.mem.alloc(12);
+        let player_position = r.e.mem.alloc(12);
+        r.vslot(ACTOR_VTABLE, 0x1f4, ret(own_position));
+        r.vslot(TARGET_VTABLE, 0x1f4, ret(player_position));
+        let offset = r.e.mem.alloc(12);
+        r.stub(POINT_SUBTRACT, ret(offset));
+        r.stub_seq(POINT_LENGTH, vec![float_ret(10.0), float_ret(4.0)]);
+        (r, player, offset)
+    }
+
+    #[test]
+    fn is_escorter_behind_compares_the_two_offsets() {
+        let (mut r, _player, _offset) = escort_rig();
+        let a = r.actor;
+        // The player's offset (4) is shorter than the actor's (10).
+        assert!(actor_is_escorter_behind(&mut r.e, a));
+        // The other way round it is not.
+        r.stub_seq(POINT_LENGTH, vec![float_ret(3.0), float_ret(4.0)]);
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+        // Equal is not "behind" either.
+        r.stub_seq(POINT_LENGTH, vec![float_ret(4.0), float_ret(4.0)]);
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+    }
+
+    #[test]
+    fn is_escorter_behind_needs_the_escort_package_and_the_player() {
+        let (mut r, _player, _offset) = escort_rig();
+        let a = r.actor;
+        // Another package type.
+        r.stub(PACKAGE_TYPE, ret(3));
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+        r.stub(PACKAGE_TYPE, ret(2));
+        // Another target.
+        r.vslot(PROCESS_VTABLE, 0x128, ret(0x1234));
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+        // No package.
+        let (mut r, _player, _offset) = escort_rig();
+        let a = r.actor;
+        r.vslot(PROCESS_VTABLE, 0x27c, ret(0));
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+        // No process.
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+    }
+
+    #[test]
+    fn is_escorter_behind_gives_up_when_the_package_cell_is_not_the_players() {
+        let (mut r, _player, _offset) = escort_rig();
+        let a = r.actor;
+        r.stub(PARENT_CELL, ret(0xc0de));
+        r.stub(FLAG_BIT_0_AT_0X24, ret(1));
+        r.stub(PACKAGE_LOCATION_CELL, ret(0xbeef));
+        assert!(!actor_is_escorter_behind(&mut r.e, a));
+        // The same cell: the length comparison decides.
+        r.stub(PACKAGE_LOCATION_CELL, ret(0xc0de));
+        assert!(actor_is_escorter_behind(&mut r.e, a));
+    }
+
+    #[test]
+    fn is_following_needs_an_uncreated_following_package() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.vslot(PROCESS_VTABLE, 0x27c, ret(0x700));
+        r.stub(PACKAGE_TYPE, ret(1));
+        assert!(actor_is_following(&mut r.e, a));
+        r.stub(PACKAGE_GET_IS_CREATED, ret(1));
+        assert!(!actor_is_following(&mut r.e, a));
+        r.stub(PACKAGE_GET_IS_CREATED, ret(0));
+        r.stub(PACKAGE_TYPE, ret(2));
+        assert!(!actor_is_following(&mut r.e, a));
+        r.vslot(PROCESS_VTABLE, 0x27c, ret(0));
+        r.stub(PACKAGE_TYPE, ret(1));
+        assert!(!actor_is_following(&mut r.e, a));
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(!actor_is_following(&mut r.e, a));
+    }
+
+    #[test]
+    fn barter_gold_base_reads_the_base_data() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(GET_BASE_FORM, ret(0x4000));
+        r.stub(BARTER_GOLD, ret(0xabcd_0123));
+        assert_eq!(actor_get_barter_gold_base(&mut r.e, a), 0x0123);
+        assert_eq!(r.calls(BARTER_GOLD), vec![vec![0x4030]]);
+    }
+
+    #[test]
+    fn get_class_needs_a_form_and_the_flag() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(GET_FORM, ret(0x4000));
+        r.stub(ACTOR_BASE_CLASS, ret(0x5000));
+        assert_eq!(actor_get_class(&mut r.e, a), 0);
+        r.vslot(ACTOR_VTABLE, 0x218, ret(1));
+        assert_eq!(actor_get_class(&mut r.e, a), 0x5000);
+        assert_eq!(r.calls(ACTOR_BASE_CLASS), vec![vec![0x4000]]);
+        r.stub(GET_FORM, ret(0));
+        assert_eq!(actor_get_class(&mut r.e, a), 0);
+    }
+
+    #[test]
+    fn can_move_checks_every_blocker() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        assert!(actor_can_move(&mut r.e, a));
+        for offset in [0x234, 0x22c, 0x230, 0x214] {
+            r.vslot(ACTOR_VTABLE, offset, ret(1));
+            assert!(!actor_can_move(&mut r.e, a), "slot {offset:#x}");
+            r.vslot(ACTOR_VTABLE, offset, ret(0));
+        }
+        for action in [12, 13] {
+            r.stub(GET_ANIM_ACTION, ret(action));
+            assert!(!actor_can_move(&mut r.e, a), "action {action}");
+        }
+        for action in [11, 14] {
+            r.stub(GET_ANIM_ACTION, ret(action));
+            assert!(actor_can_move(&mut r.e, a), "action {action}");
+        }
+        r.stub(GET_ANIM_ACTION, ret(0));
+        r.stub(ACTOR_BLOCK_TEST_A, ret(1));
+        assert!(!actor_can_move(&mut r.e, a));
+        r.stub(ACTOR_BLOCK_TEST_A, ret(0));
+        r.stub(ACTOR_BLOCK_TEST_B, ret(1));
+        assert!(!actor_can_move(&mut r.e, a));
+        r.stub(ACTOR_BLOCK_TEST_B, ret(0));
+        // The player with the Pip-Boy up cannot move.
+        r.stub(IS_PIPBOY_ACTIVE, ret(1));
+        assert!(actor_can_move(&mut r.e, a));
+        r.e.set_global::<u32>(PLAYER_POINTER, a.addr());
+        assert!(!actor_can_move(&mut r.e, a));
+        assert_eq!(r.calls(IS_PIPBOY_ACTIVE).last(), Some(&vec![a.addr()]));
+    }
+
+    #[test]
+    fn can_speak_checks_the_blockers() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        assert!(actor_can_speak(&mut r.e, a));
+        for offset in [0x234, 0x22c, 0x230] {
+            r.vslot(ACTOR_VTABLE, offset, ret(1));
+            assert!(!actor_can_speak(&mut r.e, a), "slot {offset:#x}");
+            r.vslot(ACTOR_VTABLE, offset, ret(0));
+        }
+        r.stub(ACTOR_BLOCK_TEST_B, ret(1));
+        assert!(!actor_can_speak(&mut r.e, a));
+        // The movement-only test does not matter for speech.
+        r.stub(ACTOR_BLOCK_TEST_B, ret(0));
+        r.stub(ACTOR_BLOCK_TEST_A, ret(1));
+        assert!(actor_can_speak(&mut r.e, a));
+    }
+
+    #[test]
+    fn fn_008844f0_accepts_states_one_two_and_maybe_six() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        for (state, strict, loose) in [
+            (0, false, false),
+            (1, true, true),
+            (2, true, true),
+            (6, false, true),
+            (7, false, false),
+        ] {
+            r.stub(ACTOR_STATE_QUERY, ret(state));
+            assert_eq!(fn_008844f0(&mut r.e, a, true), strict, "state {state}");
+            assert_eq!(fn_008844f0(&mut r.e, a, false), loose, "state {state}");
+        }
+    }
+
+    #[test]
+    fn fn_00884560_asks_the_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        assert!(!fn_00884560(&mut r.e, a));
+        r.vslot(PROCESS_VTABLE, 0x40c, ret(0x20));
+        assert!(fn_00884560(&mut r.e, a));
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(!fn_00884560(&mut r.e, a));
+    }
+
+    #[test]
+    fn can_knock_down_checks_every_blocker() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        r.stub(GET_BASE_FORM, ret(0x4000));
+        assert!(actor_can_knock_down(&mut r.e, a));
+        assert_eq!(r.calls(BASE_FLAG_TEST), vec![vec![0x4030, 0x0400_0000]]);
+        for offset in [0x22c, 0x4b4] {
+            r.vslot(ACTOR_VTABLE, offset, ret(1));
+            assert!(!actor_can_knock_down(&mut r.e, a), "slot {offset:#x}");
+            r.vslot(ACTOR_VTABLE, offset, ret(0));
+        }
+        // The base data's flag forbids it.
+        r.stub(BASE_FLAG_TEST, ret(1));
+        assert!(!actor_can_knock_down(&mut r.e, a));
+        r.stub(BASE_FLAG_TEST, ret(0));
+        // The process's virtual +0x3e4 (9 and 0x11 forbid it).
+        for state in [9, 0x11] {
+            r.vslot(PROCESS_VTABLE, 0x3e4, ret(state));
+            assert!(!actor_can_knock_down(&mut r.e, a), "state {state}");
+        }
+        r.vslot(PROCESS_VTABLE, 0x3e4, ret(5));
+        assert!(actor_can_knock_down(&mut r.e, a));
+        // The actor's +0x1e4 object with the u16 at +0x122 not 0xff forbids it.
+        let object = r.e.mem.alloc(0x140);
+        r.vslot(ACTOR_VTABLE, 0x1e4, ret(object));
+        r.e.mem.set_u16(object + 0x122, 0xff);
+        assert!(actor_can_knock_down(&mut r.e, a));
+        r.e.mem.set_u16(object + 0x122, 0x10);
+        assert!(!actor_can_knock_down(&mut r.e, a));
+        // Without a process the process test is skipped.
+        r.e.mem.set_u16(object + 0x122, 0xff);
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(actor_can_knock_down(&mut r.e, a));
+    }
+
+    #[test]
+    fn fn_00884690_negates_the_flag_test() {
+        let mut r = Rig::new();
+        assert!(fn_00884690(&mut r.e, Ptr::new(0x4030)));
+        r.stub(BASE_FLAG_TEST, ret(1));
+        assert!(!fn_00884690(&mut r.e, Ptr::new(0x4030)));
+        assert_eq!(
+            r.calls(BASE_FLAG_TEST).last(),
+            Some(&vec![0x4030, 0x0400_0000])
+        );
+    }
+
+    #[test]
+    fn fn_008846c0_compares_the_halfword_with_0xff() {
+        let mut e = Engine::new();
+        let object = Ptr::new(e.mem.alloc(0x140));
+        e.mem.set_u16(object.addr() + 0x122, 0xff);
+        assert!(!fn_008846c0(&mut e, object));
+        e.mem.set_u16(object.addr() + 0x122, 0x100);
+        assert!(fn_008846c0(&mut e, object));
+        e.mem.set_u16(object.addr() + 0x122, 0);
+        assert!(fn_008846c0(&mut e, object));
+    }
+
+    #[test]
+    fn fn_008846e0_and_is_running_read_the_mover() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        // Without a mover: zero.
+        assert_eq!(fn_008846e0(&mut r.e, a), 0);
+        assert!(!actor_is_running(&mut r.e, a));
+        let mover = r.object(MOVER_VTABLE, 0x100);
+        r.e.set(a, Actor::pActorMover, Ptr::new(mover));
+        r.vslot(MOVER_VTABLE, 0x20, ret(0x0300));
+        assert_eq!(fn_008846e0(&mut r.e, a), 0x300);
+        assert!(actor_is_running(&mut r.e, a));
+        r.vslot(MOVER_VTABLE, 0x20, ret(0x0100));
+        assert!(!actor_is_running(&mut r.e, a));
+    }
+
+    #[test]
+    fn fn_00884750_blocks_for_the_stub_the_action_and_the_player() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let player = r.object(ACTOR_VTABLE, 0x300);
+        r.e.set_global::<u32>(PLAYER_POINTER, player);
+        assert!(fn_00884750(&mut r.e, a));
+        r.stub(ALWAYS_FALSE, ret(1));
+        assert!(!fn_00884750(&mut r.e, a));
+        r.stub(ALWAYS_FALSE, ret(0));
+        r.stub(GET_ANIM_ACTION, ret(7));
+        assert!(!fn_00884750(&mut r.e, a));
+        r.stub(GET_ANIM_ACTION, ret(0));
+        // The process's virtual +0x404 only matters for the player.
+        r.vslot(PROCESS_VTABLE, 0x404, ret(1));
+        assert!(fn_00884750(&mut r.e, a));
+        r.e.set_global::<u32>(PLAYER_POINTER, a.addr());
+        assert!(!fn_00884750(&mut r.e, a));
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        assert!(fn_00884750(&mut r.e, a));
+    }
+
+    #[test]
+    fn fn_008847c0_reports_dead_legs_and_marks_the_process() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let process_flags = r.e.mem.alloc(0x60);
+        r.e.mem.set_u32(r.process + 0x2c, process_flags);
+        r.e.mem.set_f64(ZERO_DOUBLE, 0.0);
+        let this = Ptr::new(a.addr() + 0xa8);
+        // Both leg conditions are zero: crippled, without asking the owner.
+        r.stub(GET_BODY_PART_CONDITION, float_ret(0.0));
+        assert!(fn_008847c0(&mut r.e, this));
+        assert_eq!(
+            r.calls(GET_BODY_PART_CONDITION),
+            vec![
+                vec![a.addr() + 0xa4, 0x1d, 0],
+                vec![a.addr() + 0xa4, 0x1e, 0]
+            ]
+        );
+        assert!(r.vcalls(OBJECT_VTABLE, 8).is_empty());
+        assert_eq!(r.e.mem.u8(process_flags + 0x40), 1);
+        assert_eq!(r.e.mem.u32(process_flags + 0x44), 0x4000);
+        // One non-zero condition falls back to the owner's virtual +8 (0x48).
+        r.stub_seq(
+            GET_BODY_PART_CONDITION,
+            vec![float_ret(0.0), float_ret(5.0)],
+        );
+        assert!(!fn_008847c0(&mut r.e, this));
+        assert_eq!(
+            r.vcalls(OBJECT_VTABLE, 8),
+            vec![vec![a.addr() + 0xa4, 0x48]]
+        );
+        assert_eq!(r.e.mem.u8(process_flags + 0x40), 0);
+        r.vslot(OBJECT_VTABLE, 8, ret(1));
+        r.stub(GET_BODY_PART_CONDITION, float_ret(2.0));
+        assert!(fn_008847c0(&mut r.e, this));
+        assert_eq!(r.e.mem.u8(process_flags + 0x40), 1);
+        // Without a process flag block nothing is written.
+        r.e.mem.set_u32(r.process + 0x2c, 0);
+        assert!(fn_008847c0(&mut r.e, this));
+    }
+
+    #[test]
+    fn flag_block_helpers_set_and_clear_bits() {
+        let mut e = Engine::new();
+        let block = Ptr::new(e.mem.alloc(0x60));
+        let holder = Ptr::new(e.mem.alloc(0x40));
+        // 00884920: is there a block?
+        assert!(!fn_00884920(&mut e, holder));
+        e.mem.set_u32(holder.addr() + 0x2c, block.addr());
+        assert!(fn_00884920(&mut e, holder));
+        // 008848c0 sets, 00884970 clears.
+        fn_008848c0(&mut e, block, 0x4001);
+        assert_eq!(e.mem.u32(block.addr() + 0x44), 0x4001);
+        fn_00884970(&mut e, block, 0x4000);
+        assert_eq!(e.mem.u32(block.addr() + 0x44), 0x0001);
+        // 00884880 stores the byte and sets 0x4000.
+        fn_00884880(&mut e, holder, 7);
+        assert_eq!(e.mem.u8(block.addr() + 0x40), 7);
+        assert_eq!(e.mem.u32(block.addr() + 0x44), 0x4001);
+        // 00884940 clears through the block.
+        fn_00884940(&mut e, holder, 0x4001);
+        assert_eq!(e.mem.u32(block.addr() + 0x44), 0);
+        // Without a block, 00884880 and 00884940 do nothing.
+        e.mem.set_u32(holder.addr() + 0x2c, 0);
+        fn_00884880(&mut e, holder, 9);
+        fn_00884940(&mut e, holder, 0xffff);
+        assert_eq!(e.mem.u8(block.addr() + 0x40), 7);
+    }
+
+    #[test]
+    fn fn_008848e0_clears_the_flag_of_the_process_block() {
+        let mut r = Rig::new();
+        let a = r.actor;
+        let block = r.e.mem.alloc(0x60);
+        r.e.mem.set_u32(block + 0x44, 0x4003);
+        r.e.mem.set_u32(r.process + 0x2c, block);
+        fn_008848e0(&mut r.e, a);
+        assert_eq!(r.e.mem.u32(block + 0x44), 0x0003);
+        // No block on the process, or no process: nothing changes.
+        r.e.mem.set_u32(r.process + 0x2c, 0);
+        fn_008848e0(&mut r.e, a);
+        r.e.set(a, Actor::pCurrentProcess, Ptr::new(0));
+        fn_008848e0(&mut r.e, a);
+        assert_eq!(r.e.mem.u32(block + 0x44), 0x0003);
     }
 }
