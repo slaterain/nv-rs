@@ -8,9 +8,11 @@
 //! The first batch holds the 40 open functions from `0056ea40` to
 //! `00572230` (the Havok collision builders of a reference, its orientation
 //! and bound getters, `Set3D` and its helpers, the model getters and
-//! `RemoveWeapon`, `MarkAsPickedUp`). The next session continues with the
-//! next open function after `00572230`, which is `00572270`
-//! (`MarkAsDeleted`).
+//! `RemoveWeapon`, `MarkAsPickedUp`). The second batch holds the 40 open
+//! functions from `00572270` (`MarkAsDeleted`) to `00573ed0` (lights, the
+//! extra-data accessors of the action and dismemberment state, `Activate`
+//! and `MoveRefToNewSpace`). The next session continues with the next open
+//! function after `00573ed0`, which is `00573f00`.
 //!
 //! # Conventions of this part
 //!
@@ -2071,7 +2073,1183 @@ pub fn tes_object_refr_mark_as_picked_up(e: &mut Engine, this: Ptr<TESObjectREFR
         let dropper_extra = extra_list(e, dropper);
         e.call(0x0041_e0d0, &args![dropper_extra, me]);
     }
-    e.call(0x0057_2270, &args![me]);
+    tes_object_refr_mark_as_deleted(e, this);
+}
+
+// Translated from 00572270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::MarkAsDeleted` (Xbox PDB): three virtual calls on the
+/// reference: the one at `+0xc4` (`SetDelete` in the Xbox PDB) with 1, the
+/// one at `+0xc8` (`SetAltered`) with 1, and the one at `+0x1cc` with
+/// `(0, 0)`.
+pub fn tes_object_refr_mark_as_deleted(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    e.vcall(me, 0xc4, &args![1u32]);
+    e.vcall(me, 0xc8, &args![1u32]);
+    e.vcall(me, 0x1cc, &args![0u32, 0u32]);
+}
+
+// Translated from 005722c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::IsDead` (Xbox PDB): an actor whose form id is not 7
+/// (`0084e3a0`) is dead when the health of its base form
+/// (`TESHealthForm::GetFormHealth`, `004873d0`, an unsigned number converted
+/// to `float`) is not above the double at `01012060`; any other reference
+/// answers with `00477ba0`. The word it pops is never read.
+pub fn tes_object_refr_is_dead(e: &mut Engine, this: Ptr<TESObjectREFR>, _unused_1: u32) -> bool {
+    let me = this.addr();
+    if is_actor(e, me) && e.call(FORM_ID, &args![me]).u32() != 7 {
+        let base = e.call(GET_BASE_FORM, &args![me]).u32();
+        let health = e.call(0x0048_73d0, &args![base]).u32();
+        // FILD of the (zero extended) number, FSTP to a float, FCOMP with the
+        // double: true for "less" and "equal", false for "greater" and for
+        // an unordered result
+        let health = f64::from(health as f32);
+        health <= e.global::<f64>(0x0101_2060)
+    } else {
+        e.call(0x0047_7ba0, &args![me]).bool()
+    }
+}
+
+// Translated from 00572350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::Is3DCritical` (Xbox PDB): true for a reference that is
+/// not an actor (`IsActor`, virtual at `+0x100`).
+pub fn tes_object_refr_is_3d_critical(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    !is_actor(e, this.addr())
+}
+
+// Translated from 00572380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Distance from the reference `this` to the position `position` (a
+/// `NiPoint3`): the difference `position - this->Location` (`+0x30`) is built
+/// by `00439ef0` in a local and its length is `00457990` (returned in
+/// `ST0`).
+pub fn fn_00572380(e: &mut Engine, this: Ptr<TESObjectREFR>, position: u32) -> f32 {
+    let me = this.addr();
+    e.with_stack(0xc, |e, difference| {
+        // OBJ_REFR::Location (Xbox PDB) +0x30
+        e.call(0x0043_9ef0, &args![position, difference, me + 0x30]);
+        e.call(0x0045_7990, &args![difference]).f32()
+    })
+}
+
+// Translated from 005723b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetDistanceFromReference` (Xbox PDB): the distance from
+/// `this` to `other` ([`fn_00572380`] on the position the virtual at
+/// `+0x1f4` of `other` gives), or the float at `01016970` (the largest
+/// float) when there is no `other`, when it is disabled (unless
+/// `include_disabled` is set), when it is deleted, or when the two are not
+/// in the same space. Unless `ignore_cells` is set, the two parent cells
+/// (`008d6f30`) must be the same cell when either is an interior (`00425fd0`)
+/// and otherwise the two world spaces (`TESObjectCELL::GetWorldSpace`,
+/// `0054ddd0`; `TESObjectREFR::GetWorldSpace`, `00575d70` for a reference
+/// without a cell) must be the same non-null one.
+pub fn tes_object_refr_get_distance_from_reference(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    other: Ptr<TESObjectREFR>,
+    include_disabled: u8,
+    ignore_cells: u8,
+) -> f32 {
+    let me = this.addr();
+    let other = other.addr();
+    let far_away = e.global::<f32>(0x0101_6970);
+    if other == 0 {
+        return far_away;
+    }
+    if e.call(FORM_IS_DISABLED, &args![other]).bool() && include_disabled == 0 {
+        return far_away;
+    }
+    if e.call(FORM_IS_DELETED, &args![other]).bool() {
+        return far_away;
+    }
+    let mut same_space = true;
+    if ignore_cells == 0 {
+        let mut interior_checked = false;
+        let other_cell = e.call(GET_PARENT_CELL, &args![other]).u32();
+        let this_cell = e.call(GET_PARENT_CELL, &args![me]).u32();
+        if other_cell != 0
+            && this_cell != 0
+            && (e.call(0x0042_5fd0, &args![other_cell]).bool()
+                || e.call(0x0042_5fd0, &args![this_cell]).bool())
+        {
+            if other_cell != this_cell {
+                same_space = false;
+            }
+            interior_checked = true;
+        }
+        if same_space && !interior_checked {
+            let other_space = if other_cell != 0 {
+                e.call(0x0054_ddd0, &args![other_cell]).u32()
+            } else {
+                e.call(0x0057_5d70, &args![me]).u32()
+            };
+            let this_space = if this_cell != 0 {
+                e.call(0x0054_ddd0, &args![this_cell]).u32()
+            } else {
+                e.call(0x0057_5d70, &args![other]).u32()
+            };
+            if other_space != this_space || other_space == 0 {
+                same_space = false;
+            }
+        }
+    }
+    if same_space || ignore_cells != 0 {
+        let position = e.vcall(other, 0x1f4, &args![]).u32();
+        fn_00572380(e, this, position)
+    } else {
+        far_away
+    }
+}
+
+// Translated from 00572500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetDeltaForAngle` (Xbox PDB): writes to `out` the vector
+/// `(0, 1, 0)` rotated by the angle `rotation.z + angle`, where `rotation`
+/// is the `NiPoint3` at `+0x24` (`00430830`) and the sum is clamped by
+/// `ClampAngle` (`004b1480`): a matrix is built from the angle (`004a0c90`),
+/// applied to the vector (`004b4500`) and the result is adjusted by
+/// `004a0c10`. Returns `out`.
+pub fn tes_object_refr_get_delta_for_angle(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    out: Ptr,
+    angle: f32,
+) -> Ptr {
+    let me = this.addr();
+    let rotation = e.call(0x0043_0830, &args![me]).u32();
+    let sum = (f64::from(e.mem.f32(rotation + 8)) + f64::from(angle)) as f32;
+    let clamped = e.call(0x004b_1480, &args![sum]).f32();
+    // the locals: the vector (`ebp-0x34`), the rotated copy (`ebp-0x40`) and
+    // the 3x3 matrix (`ebp-0x28`)
+    e.with_stack(0x3c, |e, frame| {
+        let vector = frame.addr();
+        let rotated_copy = vector + 0xc;
+        let matrix = vector + 0x18;
+        e.call(0x0041_6870, &args![vector, 0.0f32, 1.0f32, 0.0f32]);
+        e.call(NOTHING_CONSTRUCTOR, &args![matrix]);
+        e.call(0x004a_0c90, &args![matrix, clamped]);
+        let rotated = e
+            .call(0x004b_4500, &args![matrix, rotated_copy, vector])
+            .u32();
+        copy_words(e, vector, rotated, 3);
+        e.call(0x004a_0c10, &args![vector]);
+        copy_words(e, out.addr(), vector, 3);
+    });
+    out
+}
+
+// Translated from 005725b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the form type of the reference (`cFormType`, `00401170`) is in
+/// `0x3d..=0x40` or is `0x69`.
+pub fn fn_005725b0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    let kind = e.call(FORM_TYPE, &args![this]).i32();
+    (0x3d..=0x40).contains(&kind) || kind == 0x69
+}
+
+// Translated from 005725f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraDataList` accessor `00418250` on the reference's extra list; its
+/// result (the pointer the other light functions read) is returned.
+pub fn fn_005725f0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_8250, &args![extra]).u32()
+}
+
+// Translated from 005726c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 8-byte holder `fn_00572610` and `fn_00572770` create:
+/// `00633c90(this, 0)`; returns `this`.
+pub fn fn_005726c0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0063_3c90, &args![this, 0u32]);
+    this
+}
+
+/// What `fn_00572610` and `fn_00572770` share: allocates the 8-byte holder
+/// (`00401000`, cdecl), constructs it ([`fn_005726c0`]), stores `value` in
+/// it (`0066b0d0`, the `NiPointer` assignment), sets the float at `+4` to
+/// 1.0 and passes it to `setter` on the extra list of the reference. The C++
+/// exception frame of the original is not translated; a failed allocation is
+/// followed by the stores at `+4` of a null pointer, as in the game.
+fn store_light_holder(e: &mut Engine, me: u32, value: u32, setter: u32) {
+    let holder = e.call(0x0040_1000, &args![8u32]).u32();
+    let holder = if holder == 0 {
+        0
+    } else {
+        fn_005726c0(e, Ptr::new(holder)).addr()
+    };
+    e.call(0x0066_b0d0, &args![holder, value]);
+    e.mem.set_f32(holder + 4, 1.0);
+    let extra = extra_list(e, me);
+    e.call(setter, &args![extra, holder]);
+}
+
+// Translated from 00572610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Creates the 8-byte holder around `value` (see [`store_light_holder`]) and
+/// hands it to `00418e30` on the extra list of the reference.
+pub fn fn_00572610(e: &mut Engine, this: Ptr<TESObjectREFR>, value: u32) {
+    store_light_holder(e, this.addr(), value, 0x0041_8e30);
+}
+
+// Translated from 005726e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SetLight` (Xbox PDB): for a node, looks up the child
+/// named `"##LightOff"` (`01030e54`) and `"##LightOn"` (`01030e48`) with
+/// `004aae30` and, on the one it finds, calls `00450f90` with `flag` (for the
+/// first) or with `flag == 0` (for the second). `this` is not read.
+pub fn tes_object_refr_set_light(e: &mut Engine, _this: Ptr<TESObjectREFR>, node: u32, flag: u8) {
+    if node == 0 {
+        return;
+    }
+    let off = e.call(0x004a_ae30, &args![node, 0x0103_0e54u32]).u32();
+    if off != 0 {
+        e.call(0x0045_0f90, &args![off, u32::from(flag)]);
+    }
+    let on = e.call(0x004a_ae30, &args![node, 0x0103_0e48u32]).u32();
+    if on != 0 {
+        e.call(0x0045_0f90, &args![on, u32::from(flag == 0)]);
+    }
+}
+
+// Translated from 00572750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetSpellEffectLight` (Xbox PDB): `00418280` on the
+/// extra list of the reference.
+pub fn tes_object_refr_get_spell_effect_light(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_8280, &args![extra]).u32()
+}
+
+// Translated from 00572770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Same as [`fn_00572610`] with the setter `00418f60`.
+pub fn fn_00572770(e: &mut Engine, this: Ptr<TESObjectREFR>, value: u32) {
+    store_light_holder(e, this.addr(), value, 0x0041_8f60);
+}
+
+/// The light holder the extra list keeps for the reference: `00418280`
+/// (spell effect light) when `spell_effect` is set, else `00418250`.
+fn light_holder(e: &mut Engine, me: u32, spell_effect: bool) -> u32 {
+    let extra = extra_list(e, me);
+    if spell_effect {
+        e.call(0x0041_8280, &args![extra]).u32()
+    } else {
+        e.call(0x0041_8250, &args![extra]).u32()
+    }
+}
+
+// Translated from 00572820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For a reference whose base object has form type `0x1e`, calls `0050de20`
+/// on that base with the holder from `00418250` and again with the one from
+/// `00418280` (each only when the holder is set), and 0.
+pub fn fn_00572820(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    let extra = extra_list(e, me);
+    let light = e.call(0x0041_8250, &args![extra]).u32();
+    let mut base_light = 0u32;
+    if e.call(GET_BASE_FORM, &args![me]).u32() != 0 {
+        let base = e.call(GET_BASE_FORM, &args![me]).u32();
+        if e.call(FORM_TYPE, &args![base]).i32() == 0x1e {
+            base_light = e.call(GET_BASE_FORM, &args![me]).u32();
+        }
+    }
+    if light != 0 && base_light != 0 {
+        e.call(0x0050_de20, &args![base_light, light, 0u32]);
+    }
+    let extra = extra_list(e, me);
+    let spell_light = e.call(0x0041_8280, &args![extra]).u32();
+    if spell_light != 0 && base_light != 0 {
+        e.call(0x0050_de20, &args![base_light, spell_light, 0u32]);
+    }
+}
+
+// Translated from 005728c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Adds the light of the reference to the shadow scene node
+/// (`ShadowSceneNode::AddLight`, `00b5c940`, on the node
+/// `00450b80(0)` gives): nothing happens for a deleted or disabled
+/// reference, when the holder (`00418250`, or `00418280` when `spell_effect`
+/// is set) is missing or empty, or when the reference has lit-water
+/// references (`0041f810`) that are not empty (`008256d0`). The shadow flag
+/// is 1, or `0050dd90` on the base object when its form type is `0x1e`.
+pub fn fn_005728c0(e: &mut Engine, this: Ptr<TESObjectREFR>, spell_effect: u8) {
+    let me = this.addr();
+    if e.call(FORM_IS_DELETED, &args![me]).bool() || e.call(FORM_IS_DISABLED, &args![me]).bool() {
+        return;
+    }
+    let light = light_holder(e, me, spell_effect != 0);
+    if light == 0 || e.call(READ_FIRST_DWORD, &args![light]).u32() == 0 {
+        return;
+    }
+    let extra = extra_list(e, me);
+    if e.call(0x0041_f810, &args![extra]).u32() != 0 {
+        let extra = extra_list(e, me);
+        if e.call(0x0041_f810, &args![extra]).u32() == 0 {
+            return;
+        }
+        let extra = extra_list(e, me);
+        let lit_water = e.call(0x0041_f810, &args![extra]).u32();
+        if !e.call(0x0082_56d0, &args![lit_water]).bool() {
+            return;
+        }
+    }
+    let mut shadow = 1u8;
+    if e.call(GET_BASE_FORM, &args![me]).u32() != 0 {
+        let base = e.call(GET_BASE_FORM, &args![me]).u32();
+        if e.call(FORM_TYPE, &args![base]).i32() == 0x1e {
+            let base = e.call(GET_BASE_FORM, &args![me]).u32();
+            shadow = e.call(0x0050_dd90, &args![base]).u8();
+        }
+    }
+    let node = e.call(READ_FIRST_DWORD, &args![light]).u32();
+    let scene = e.call(0x0045_0b80, &args![0u32]).u32();
+    e.call(0x00b5_c940, &args![scene, node, u32::from(shadow)]);
+}
+
+// Translated from 005729e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::RemoveLight` (Xbox PDB): takes the light of the holder
+/// (`00418250`, or `00418280` when `spell_effect` is set) out of the shadow
+/// scene node (`ShadowSceneNode::RemoveLight`, `00b5eed0`, on the node
+/// `00450b80(0)` gives).
+pub fn tes_object_refr_remove_light(e: &mut Engine, this: Ptr<TESObjectREFR>, spell_effect: u8) {
+    let light = light_holder(e, this.addr(), spell_effect != 0);
+    if light != 0 && e.call(READ_FIRST_DWORD, &args![light]).u32() != 0 {
+        let node = e.call(READ_FIRST_DWORD, &args![light]).u32();
+        let scene = e.call(0x0045_0b80, &args![0u32]).u32();
+        e.call(0x00b5_eed0, &args![scene, node]);
+    }
+}
+
+// Translated from 00572a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::KillLight` (Xbox PDB): like [`tes_object_refr_remove_light`]
+/// and then clears the holder (`0066b0d0(holder, 0)`); whenever there is a
+/// holder, `0041ae50` (`spell_effect` set) or `0041ae30` runs on the extra
+/// list afterwards.
+pub fn tes_object_refr_kill_light(e: &mut Engine, this: Ptr<TESObjectREFR>, spell_effect: u8) {
+    let me = this.addr();
+    let light = light_holder(e, me, spell_effect != 0);
+    if light != 0 {
+        if e.call(READ_FIRST_DWORD, &args![light]).u32() != 0 {
+            let node = e.call(READ_FIRST_DWORD, &args![light]).u32();
+            let scene = e.call(0x0045_0b80, &args![0u32]).u32();
+            e.call(0x00b5_eed0, &args![scene, node]);
+            e.call(0x0066_b0d0, &args![light, 0u32]);
+        }
+        let extra = extra_list(e, me);
+        if spell_effect != 0 {
+            e.call(0x0041_ae50, &args![extra]);
+        } else {
+            e.call(0x0041_ae30, &args![extra]);
+        }
+    }
+}
+
+// Translated from 00572b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the `NiPoint3` at `+0x18` of the extra data of type `0xf` of the
+/// reference (`0041b080`; it is created when missing) into `out` and
+/// returns `out`.
+pub fn fn_00572b00(e: &mut Engine, this: Ptr<TESObjectREFR>, out: Ptr) -> Ptr {
+    let me = this.addr();
+    let extra = extra_list(e, me);
+    e.call(0x0041_b080, &args![extra, out, me]);
+    out
+}
+
+// Translated from 00572b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the `NiPoint3` at `+0xc` of the extra data of type `0xf` of the
+/// reference (`0041b0d0`; it is created when missing) into `out` and
+/// returns `out`.
+pub fn fn_00572b30(e: &mut Engine, this: Ptr<TESObjectREFR>, out: Ptr) -> Ptr {
+    let me = this.addr();
+    let extra = extra_list(e, me);
+    e.call(0x0041_b0d0, &args![extra, out, me]);
+    out
+}
+
+// Translated from 00572b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the starting position and rotation in the extra data of type
+/// `0xf` of the reference, under a scope lock (`00404eb0`: `(0x31, 1,
+/// "...TESObjectREFR.cpp", 0x3b01)`, released by `00404ee0`). The
+/// `NiPoint3` passed by value (`x`, `y`, `z`) is stored with `0041b180`
+/// unless it equals the vector at `011f426c` (`00439090` says whether it
+/// differs), in which case the position of the reference itself (virtual at
+/// `+0x1f4`) is stored; the rotation (`00430830`, the `NiPoint3` at `+0x24`)
+/// is stored with `0041b120`.
+pub fn fn_00572b60(e: &mut Engine, this: Ptr<TESObjectREFR>, x: u32, y: u32, z: u32) {
+    let me = this.addr();
+    e.with_stack(0x10, |e, guard| {
+        e.call(
+            0x0040_4eb0,
+            &args![guard, 0x31u32, 1u32, 0x0102_fc20u32, 0x3b01u32],
+        );
+        // the vector argument lives in the caller's stack words
+        let given = e.with_stack(0xc, |e, vector| {
+            e.mem.set_u32(vector.addr(), x);
+            e.mem.set_u32(vector.addr() + 4, y);
+            e.mem.set_u32(vector.addr() + 8, z);
+            e.call(0x0043_9090, &args![vector, 0x011f_426cu32]).bool()
+        });
+        let (px, py, pz) = if given {
+            (x, y, z)
+        } else {
+            let position = e.vcall(me, 0x1f4, &args![]).u32();
+            (
+                e.mem.u32(position),
+                e.mem.u32(position + 4),
+                e.mem.u32(position + 8),
+            )
+        };
+        e.with_stack(0xc, |e, result| {
+            let extra = extra_list(e, me);
+            e.call(0x0041_b180, &args![extra, result, me, px, py, pz]);
+        });
+        let rotation = e.call(0x0043_0830, &args![me]).u32();
+        let (rx, ry, rz) = (
+            e.mem.u32(rotation),
+            e.mem.u32(rotation + 4),
+            e.mem.u32(rotation + 8),
+        );
+        e.with_stack(0xc, |e, result| {
+            let extra = extra_list(e, me);
+            e.call(0x0041_b120, &args![extra, result, me, rx, ry, rz]);
+        });
+        e.call(0x0040_4ee0, &args![guard]);
+    });
+}
+
+// Translated from 00572c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the form id (`0084e3a0`) is above `0xfeffffff` as
+/// `TESDataHandler` (`011c3f2c`, `00469860`) says; otherwise by the form type
+/// of the base object: `0x20` asks `00444ed0`, `0x21` and `0x25..=0x27` are
+/// false, all others true.
+pub fn fn_00572c80(e: &mut Engine, this: Ptr<TESObjectREFR>) -> bool {
+    let me = this.addr();
+    let id = e.call(FORM_ID, &args![me]).u32();
+    let handler = e.global::<u32>(GLOBAL_DATA_HANDLER);
+    if e.call(0x0046_9860, &args![handler, id]).bool() {
+        return true;
+    }
+    let base = e.call(GET_BASE_FORM, &args![me]).u32();
+    match e.call(FORM_TYPE, &args![base]).i32() {
+        0x20 => e.call(0x0044_4ed0, &args![me]).bool(),
+        0x21 | 0x25..=0x27 => false,
+        _ => true,
+    }
+}
+
+// Translated from 00572d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte `0041b370` reads from the extra data of type `0xe` of the
+/// reference (1 when it has none).
+pub fn fn_00572d10(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u8 {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_b370, &args![extra]).u8()
+}
+
+// Translated from 00572d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether any bit of `mask` is set in the byte of [`fn_00572d10`]
+/// (`0041b3a0` on the extra list).
+pub fn fn_00572d30(e: &mut Engine, this: Ptr<TESObjectREFR>, mask: u32) -> bool {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_b3a0, &args![extra, mask]).bool()
+}
+
+// Translated from 00572d50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the bits `mask` in the same byte (`0041b440`). For the mask 4 the
+/// reference first changes its form flag `0x800000`: removal
+/// (`RemoveChange`, virtual at `+0x4c`) when its original open-by-default
+/// state (`00561d90`) is set, addition (`AddChange`, `+0x48`) otherwise.
+pub fn fn_00572d50(e: &mut Engine, this: Ptr<TESObjectREFR>, mask: u32) {
+    let me = this.addr();
+    if mask == 4 {
+        let slot = if e.call(0x0056_1d90, &args![me]).bool() {
+            0x4c
+        } else {
+            0x48
+        };
+        e.vcall(me, slot, &args![0x0080_0000u32]);
+    }
+    let extra = extra_list(e, me);
+    e.call(0x0041_b440, &args![extra, mask]);
+}
+
+// Translated from 00572db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::ClearAction` (Xbox PDB): clears the bits `mask` of the
+/// byte (`0041b470`). For the mask 4 the reference first changes its form
+/// flag `0x800000` the other way round from [`fn_00572d50`]: `AddChange`
+/// (`+0x48`) when the original open-by-default state (`00561d90`) is set,
+/// `RemoveChange` (`+0x4c`) otherwise.
+pub fn tes_object_refr_clear_action(e: &mut Engine, this: Ptr<TESObjectREFR>, mask: u32) {
+    let me = this.addr();
+    if mask == 4 {
+        let slot = if e.call(0x0056_1d90, &args![me]).bool() {
+            0x48
+        } else {
+            0x4c
+        };
+        e.vcall(me, slot, &args![0x0080_0000u32]);
+    }
+    let extra = extra_list(e, me);
+    e.call(0x0041_b470, &args![extra, mask]);
+}
+
+// Translated from 00572e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `reference` in the extra data of type `0xe` (`0041b4b0`): it is
+/// created when missing and `reference` is not null, and removed when it has
+/// the default byte and `reference` is null.
+pub fn fn_00572e10(e: &mut Engine, this: Ptr<TESObjectREFR>, reference: u32) {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_b4b0, &args![extra, reference]);
+}
+
+// Translated from 00572e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetActionRef` (Xbox PDB): `ExtraDataList::GetActionRef`
+/// (`0041b520`) on the extra list.
+pub fn tes_object_refr_get_action_ref(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    let extra = extra_list(e, this.addr());
+    e.call(0x0041_b520, &args![extra]).u32()
+}
+
+// Translated from 00572e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SetAnimation` (Xbox PDB): for a mobile object
+/// (`IsMobileObject`, virtual at `+0xfc`) first changes the form flag
+/// `0x10000000` (`AddChange`, `00484b90`, when `animation` is not null;
+/// `RemoveChange`, virtual at `+0x4c`, otherwise), then, when the process
+/// (`008d8520`) has a level (`0045cd60`) of 0 or 1, hands the animation to
+/// the virtual at `+0x820` of that process (after `00931920(actor, 0)` for
+/// any other level when `animation` is set) and returns. For all other
+/// references the animation of the extra list (`00418220`) is replaced:
+/// by `00418c40` when `animation` is set, removed by `0041adf0` when not.
+/// Returns `animation`.
+pub fn tes_object_refr_set_animation(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    animation: u32,
+) -> u32 {
+    let me = this.addr();
+    let mut actor = 0u32;
+    if e.vcall(me, 0xfc, &args![]).bool() {
+        actor = me;
+    }
+    if actor != 0 {
+        if animation != 0 {
+            e.call(0x0048_4b90, &args![me, 0x1000_0000u32]);
+        } else {
+            e.vcall(me, 0x4c, &args![0x1000_0000u32]);
+        }
+    }
+    if actor != 0 {
+        let mut process = 0u32;
+        if e.call(GET_PROCESS, &args![actor]).u32() != 0 {
+            let current = e.call(GET_PROCESS, &args![actor]).u32();
+            let level = e.call(0x0045_cd60, &args![current]).i32();
+            if level != 1 && level != 0 && animation != 0 {
+                e.call(0x0093_1920, &args![actor, 0u32]);
+            }
+            let current = e.call(GET_PROCESS, &args![actor]).u32();
+            let level = e.call(0x0045_cd60, &args![current]).i32();
+            if (0..=1).contains(&level) {
+                process = e.call(GET_PROCESS, &args![actor]).u32();
+            }
+        }
+        if process != 0 {
+            e.vcall(process, 0x820, &args![animation]);
+            return animation;
+        }
+    }
+    let handler = e.global::<u32>(GLOBAL_DATA_HANDLER);
+    fn_00572fa0(e, Ptr::new(handler));
+    let extra = extra_list(e, me);
+    let current = e.call(0x0041_8220, &args![extra]).u32();
+    if current == animation {
+        return animation;
+    }
+    let extra = extra_list(e, me);
+    if animation != 0 {
+        e.call(0x0041_8c40, &args![extra, animation]);
+    } else {
+        e.call(0x0041_adf0, &args![extra]);
+    }
+    animation
+}
+
+// Translated from 00572fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x61f` of the object (the `TESDataHandler` in the only
+/// call).
+pub fn fn_00572fa0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x61f)
+}
+
+// Translated from 00572fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::SetDismembered` (Xbox PDB): on the dismemberment extra of
+/// the reference (`ExtraDataList::AddDismembermentExtra`, `0042e820`):
+/// `ExtraDismemberedLimbs::Dismember(this, limb, flag)` (`00430410`) unless
+/// `limb` is -1, then `00437730(arg_10)`, `00600ab0(arg_0c)` and
+/// `00984f60` with `limb`, or with `arg_14` when `limb` is -1; finally
+/// `AddChange` (virtual at `+0x48`) with the flag `0x20000`. The argument
+/// names are the stack offsets of the words.
+pub fn tes_object_refr_set_dismembered(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    limb: i32,
+    arg_0c: u32,
+    arg_10: u32,
+    arg_14: u32,
+    flag: u8,
+) {
+    let me = this.addr();
+    let extra = extra_list(e, me);
+    let dismembered = e.call(0x0042_e820, &args![extra]).u32();
+    if limb != -1 {
+        e.call(
+            0x0043_0410,
+            &args![dismembered, me, limb as u32, u32::from(flag)],
+        );
+    }
+    e.call(0x0043_7730, &args![dismembered, arg_10]);
+    e.call(0x0060_0ab0, &args![dismembered, arg_0c]);
+    let chosen = if limb == -1 { arg_14 } else { limb as u32 };
+    e.call(0x0098_4f60, &args![dismembered, chosen]);
+    e.vcall(me, 0x48, &args![0x0002_0000u32]);
+}
+
+// Translated from 00573050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the reference has a dismemberment extra (`0042e8c0`), calls
+/// `004305f0(extra, limb, flag)` on it.
+pub fn fn_00573050(e: &mut Engine, this: Ptr<TESObjectREFR>, limb: u32, flag: u8) {
+    let extra = extra_list(e, this.addr());
+    let dismembered = e.call(0x0042_e8c0, &args![extra]).u32();
+    if dismembered != 0 {
+        e.call(0x0043_05f0, &args![dismembered, limb, u32::from(flag)]);
+    }
+}
+
+// Translated from 00573090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetDismembered` (Xbox PDB): false without a
+/// dismemberment extra (`0042e8c0`), else `ExtraDismemberedLimbs::Dismembered`
+/// (`004303e0`) for the limb.
+pub fn tes_object_refr_get_dismembered(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    limb: u32,
+) -> bool {
+    let extra = extra_list(e, this.addr());
+    let dismembered = e.call(0x0042_e8c0, &args![extra]).u32();
+    if dismembered == 0 {
+        false
+    } else {
+        e.call(0x0043_03e0, &args![dismembered, limb]).bool()
+    }
+}
+
+// Translated from 005730d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x10` (`0044edb0`) of the dismemberment extra of the
+/// reference (`0042e8c0`), or -1 without one.
+pub fn fn_005730d0(e: &mut Engine, this: Ptr<TESObjectREFR>) -> i32 {
+    let extra = extra_list(e, this.addr());
+    let dismembered = e.call(0x0042_e8c0, &args![extra]).u32();
+    if dismembered != 0 {
+        e.call(0x0044_edb0, &args![dismembered]).i32()
+    } else {
+        -1
+    }
+}
+
+// Translated from 00573110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::GetLastHitLimb` (Xbox PDB): the word at `+0x18`
+/// (`009611e0`) of the dismemberment extra of the reference (`0042e8c0`), or
+/// -1 without one.
+pub fn tes_object_refr_get_last_hit_limb(e: &mut Engine, this: Ptr<TESObjectREFR>) -> i32 {
+    let extra = extra_list(e, this.addr());
+    let dismembered = e.call(0x0042_e8c0, &args![extra]).u32();
+    if dismembered != 0 {
+        e.call(0x0096_11e0, &args![dismembered]).i32()
+    } else {
+        -1
+    }
+}
+
+// Translated from 00573150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The virtual at `+0x1e8` of the reference; its result is returned.
+pub fn fn_00573150(e: &mut Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    e.vcall(this.addr(), 0x1e8, &args![]).u32()
+}
+
+/// The player (`PlayerCharacter *`, `011dea3c`), read each time as the
+/// game does.
+fn player(e: &Engine) -> u32 {
+    e.global::<u32>(GLOBAL_PLAYER)
+}
+
+/// The message `00403df0` builds on the message object `holder` and `007052f0`
+/// shows: `(0, text, 0, <float at 010162c0>, 0)`.
+fn show_message(e: &mut Engine, holder: u32, text: u32) {
+    let seconds = e.global::<f32>(0x0101_62c0);
+    let message = e
+        .call(0x0040_3df0, &args![holder, 0u32, text, 0u32, seconds, 0u32])
+        .u32();
+    e.call(0x0070_52f0, &args![message]);
+}
+
+// Translated from 00573170 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::Activate` (Xbox PDB virtual `+0x128` is the activation of
+/// the base object that this calls): `activator` activates the reference.
+///
+/// 1. An ash pile or similar (base object equal to the word at `011ca27c` or
+///    `011ca280`) with an ash-pile reference in its extra list
+///    (`0041e310`) hands the whole activation to that reference.
+/// 2. The byte at `011ca428` ("activated") is cleared. The activator is
+///    *busy* when it is an actor whose process (`008d8520`) has level
+///    `0045cd60 == 0` and answers 4 to its virtual at `+0x610`.
+/// 3. The player as activator is turned away (true, nothing happens) while
+///    the pipboy is opening (`00709bc0`), false when `004eaf60` and
+///    [`fn_005737e0`] differ, and with a message when its virtual `+0x1a0`
+///    holds and `008859e0` does not.
+/// 4. Several refusals follow (`00477ba0` on a non-actor reference gives
+///    true; base form type `0x1c` activated by an actor with a zero byte at
+///    `0055d520`, the player activating with that byte zero unless the base
+///    form type is `0x23` or `0x16`, and `0057b460` give false; a locked
+///    reference (`0041eb60`) that `0041e7b0` does not open shows a message to
+///    the player and gives false).
+/// 5. An activator that is not busy logs "'%s' activated %s '%s'" when the
+///    reference is the one under the cursor (`00703180`); a reference other
+///    than the player that is not yet flagged (`fn_00572d30(1)`) is then
+///    flagged (`fn_00572d50(2)`, `fn_00572e10(activator)`), runs its scripts
+///    (`00565870`, at most 5 deep through the counter at `011ca424`) and
+///    returns the byte at `011ca428`.
+/// 6. Otherwise `004213c0(this, activator)` and the removal of the extra of
+///    type `0x7c` (`00410140`) precede the switch on the base form type: no
+///    base is false; `0x20`, `0x21`, `0x22`, `0x25` are false; `0x30` is
+///    true; `0x1c` (doors) first sends a non-sleeping player through the
+///    teleport cell of the door (`00568e50`, `0043a2b0`, `0054af80`); all
+///    other types and the doors then run `0056a290` and the virtual `+0x124`
+///    of the base object, which on success sets the byte at `011ca428` and
+///    gives true.
+///
+/// The `flag`, `arg_10` and `arg_14` arguments are only forwarded. The stack
+/// cookie check of the original is not translated.
+pub fn tes_object_refr_activate(
+    e: &mut Engine,
+    this: Ptr<TESObjectREFR>,
+    activator: u32,
+    flag: u8,
+    arg_10: u32,
+    arg_14: u32,
+) -> bool {
+    let me = this.addr();
+    let mut busy = false;
+    if e.call(GET_BASE_FORM, &args![me]).u32() == e.global::<u32>(0x011c_a27c)
+        || e.call(GET_BASE_FORM, &args![me]).u32() == e.global::<u32>(0x011c_a280)
+    {
+        let extra = extra_list(e, me);
+        let ash_pile = e.call(0x0041_e310, &args![extra]).u32();
+        if ash_pile != 0 {
+            return tes_object_refr_activate(
+                e,
+                Ptr::new(ash_pile),
+                activator,
+                flag,
+                arg_10,
+                arg_14,
+            );
+        }
+    }
+    e.set_global::<u8>(0x011c_a428, 0);
+    if activator != 0 && is_actor(e, activator) && e.call(GET_PROCESS, &args![activator]).u32() != 0
+    {
+        let process = e.call(GET_PROCESS, &args![activator]).u32();
+        if e.call(0x0045_cd60, &args![process]).u32() == 0 {
+            let process = e.call(GET_PROCESS, &args![activator]).u32();
+            if e.vcall(process, 0x610, &args![]).u32() == 4 {
+                busy = true;
+            }
+        }
+    }
+    if activator == player(e) {
+        if e.call(0x0070_9bc0, &args![]).bool() {
+            return true;
+        }
+        let current = player(e);
+        let first = e.call(0x004e_af60, &args![current]).u8();
+        let current = player(e);
+        let second = fn_005737e0(e, Ptr::new(current));
+        if first != second {
+            return false;
+        }
+        let current = player(e);
+        if e.vcall(current, 0x1a0, &args![0u32]).bool() {
+            let current = player(e);
+            if !e.call(0x0088_59e0, &args![current, me]).bool() {
+                show_message(e, 0x011d_4f84, 0);
+                return true;
+            }
+        }
+    }
+    if e.call(0x0047_7ba0, &args![me]).bool() && !is_actor(e, me) {
+        return true;
+    }
+    if e.call(GET_BASE_FORM, &args![me]).u32() != 0 {
+        let base = e.call(GET_BASE_FORM, &args![me]).u32();
+        if e.call(FORM_TYPE, &args![base]).i32() == 0x1c && activator != 0 && is_actor(e, activator)
+        {
+            let state = e.call(0x0055_d520, &args![me]).u32();
+            if e.mem.u8(state) == 0 {
+                return false;
+            }
+        }
+    }
+    if activator == player(e) {
+        let state = e.call(0x0055_d520, &args![me]).u32();
+        if e.mem.u8(state) == 0 {
+            let base = e.call(GET_BASE_FORM, &args![me]).u32();
+            if e.call(FORM_TYPE, &args![base]).i32() != 0x23 {
+                let base = e.call(GET_BASE_FORM, &args![me]).u32();
+                if e.call(FORM_TYPE, &args![base]).i32() != 0x16 {
+                    return false;
+                }
+            }
+        }
+    }
+    if e.call(0x0057_b460, &args![me]).bool() {
+        return false;
+    }
+    let extra = extra_list(e, me);
+    if e.call(0x0041_eb60, &args![extra]).bool() {
+        let extra = extra_list(e, me);
+        if e.call(0x0041_e7b0, &args![extra, activator]).u32() == 0 {
+            if activator == player(e) {
+                show_message(e, 0x011d_2bf8, 0x0103_0e78);
+            }
+            return false;
+        }
+    }
+    if activator != 0 && !busy {
+        if e.call(0x0070_3180, &args![]).u32() == me {
+            let base = e.call(GET_BASE_FORM, &args![me]).u32();
+            let this_name = e.call(0x0048_2720, &args![base]).u32();
+            let base = e.call(GET_BASE_FORM, &args![me]).u32();
+            let verb_source = e.call(0x0044_0e30, &args![base]).u32();
+            let verb = e.call(0x0046_4f30, &args![verb_source, 0u32]).u32();
+            let activator_base = e.call(GET_BASE_FORM, &args![activator]).u32();
+            let activator_name = e.call(0x0048_2720, &args![activator_base]).u32();
+            e.with_stack(0x10c, |e, text| {
+                e.call(
+                    SPRINTF,
+                    &args![text, 0x0103_0e60u32, activator_name, verb, this_name],
+                );
+                e.call(0x0070_3c00, &args![text]);
+            });
+        }
+        if me != player(e) && !fn_00572d30(e, this, 1) {
+            fn_00572d50(e, this, 2);
+            fn_00572e10(e, this, activator);
+            if e.global::<i32>(0x011c_a424) < 5 {
+                let depth = e.global::<i32>(0x011c_a424);
+                e.set_global::<i32>(0x011c_a424, depth + 1);
+                e.call(0x0056_5870, &args![me]);
+                let depth = e.global::<i32>(0x011c_a424);
+                e.set_global::<i32>(0x011c_a424, depth - 1);
+            }
+            if e.global::<u8>(0x011c_a428) == 0 && activator != 0 && is_actor(e, activator) {
+                e.call(0x008b_c980, &args![activator, me, arg_10, arg_14, 1u32]);
+            }
+            return e.global::<u8>(0x011c_a428) != 0;
+        }
+    }
+    let extra = extra_list(e, me);
+    e.call(0x0042_13c0, &args![extra, me, activator]);
+    let extra = extra_list(e, me);
+    e.call(0x0041_0140, &args![extra, 0x7cu32]);
+    if e.call(GET_BASE_FORM, &args![me]).u32() == 0 {
+        return false;
+    }
+    let base = e.call(GET_BASE_FORM, &args![me]).u32();
+    let kind = e.call(FORM_TYPE, &args![base]).i32();
+    match kind {
+        0x20 | 0x21 | 0x22 | 0x25 => return false,
+        0x30 => return true,
+        0x1c => {
+            let door = e.call(0x0056_8e50, &args![me]).u32();
+            if door != 0 && activator == player(e) {
+                let current = player(e);
+                let process = e.call(GET_PROCESS, &args![current]).u32();
+                if e.vcall(process, 0x610, &args![]).u32() != 4 {
+                    let cell = e.call(0x0043_a2b0, &args![door]).u32();
+                    if cell != 0 && e.call(0x0042_5fd0, &args![cell]).bool() {
+                        e.call(0x0054_af80, &args![cell]);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    e.call(0x0056_a290, &args![me, activator]);
+    // TESObjectREFR::data.pObjectReference (Xbox PDB) +0x20: the base object
+    let base_object = e.mem.u32(me + 0x20);
+    let activated = e
+        .vcall(
+            base_object,
+            0x124,
+            &args![me, activator, u32::from(flag), arg_10, arg_14],
+        )
+        .bool();
+    if !activated {
+        return false;
+    }
+    if activator != 0 && is_actor(e, activator) {
+        e.call(0x008b_c980, &args![activator, me, arg_10, arg_14, 0u32]);
+        if activator != player(e) {
+            let current = player(e);
+            e.call(0x0095_2c30, &args![current, activator]);
+        }
+    }
+    e.set_global::<u8>(0x011c_a428, 1);
+    true
+}
+
+// Translated from 005737e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x64c` of the player (`this`).
+pub fn fn_005737e0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x64c)
+}
+
+// Translated from 00573800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::MoveRefToNewSpace` (Xbox PDB, cdecl): moves `refr` into
+/// the cell `cell` (ignored when it is not a valid cell for `00425fd0`) or,
+/// without a cell, into the world space `world` at the cell its position
+/// falls in (`TESWorldSpace::GetCellFromCellCoord`, `005875a0`, on the
+/// position divided by 4096 through `00406d90`). Nothing moves when `refr`
+/// is null or both are null. In outline:
+///
+/// * a mobile object with a character controller (`009306d0`) first gives
+///   the controller the height `Location.z` (`00573f20`); a node with a
+///   flag set (`006838b0`, `00573eb0`) has it cleared for the duration of
+///   the move (`00573ed0`) and restored at the end;
+/// * the extra data of saved Havok data is dropped (`00422c20`) when the
+///   virtual `+0x22c` says so; the reference is taken out of its old cell
+///   (`0054ca90`) or persistent list (`00588030`) and put in the new one
+///   (`00548230`, `00587ff0`), recording the starting cell or world
+///   (`0041b320`, `0041b2a0`) of a non-actor that has none;
+/// * the reference is updated in place, or loaded or unloaded, depending on
+///   whether the old and new cells are loaded (`004511e0` on the object
+///   `011dea10`), through the virtuals `+0x1c0`, `+0x1c4`, `+0x1fc` and
+///   `+0x1cc` or, when `008c7aa0` says so, through the `0087b2xx` helpers;
+/// * an actor moved out of every loaded cell is added to the temporary
+///   change list (`0096e870` on `011e0e80`) and, at process level 3
+///   (`009334b0`), unloaded (`00849730`);
+/// * a reference that ends in another cell, is not persistent and is not
+///   the player gets the changed flag 8 (virtual `+0x48`).
+///
+/// The C++ exception frames of the original are not translated.
+pub fn tes_object_refr_move_ref_to_new_space(
+    e: &mut Engine,
+    refr: Ptr<TESObjectREFR>,
+    cell: u32,
+    world: u32,
+) {
+    let me = refr.addr();
+    let mut cell = cell;
+    let mut restore = false;
+    let node = e.vcall(me, 0x1d0, &args![]).u32();
+    let mut controller = 0u32;
+    let mut actor = 0u32;
+    let mut flagged = 0u32;
+    if e.vcall(me, 0xfc, &args![]).bool() {
+        actor = me;
+        controller = e.call(0x0093_06d0, &args![actor]).u32();
+    }
+    if controller != 0 {
+        let position = e.vcall(actor, 0x1f4, &args![]).u32();
+        let height = e.mem.f32(position + 8);
+        e.call(0x0057_3f20, &args![controller, height]);
+    }
+    if node != 0 {
+        flagged = e.call(0x0068_38b0, &args![node]).u32();
+        if flagged != 0 && fn_00573eb0(e, Ptr::new(flagged)) {
+            fn_00573ed0(e, Ptr::new(flagged), 0);
+            restore = true;
+        }
+    }
+    if cell != 0 && !e.call(0x0042_5fd0, &args![cell]).bool() {
+        cell = 0;
+    }
+    if me != 0 && (cell != 0 || world != 0) {
+        let mut loaded = false;
+        let mut moved = false;
+        let old_space = e.call(0x0057_5d70, &args![me]).u32();
+        let old_cell = e.call(GET_PARENT_CELL, &args![me]).u32();
+        let new_cell;
+        if e.vcall(me, 0x22c, &args![0u32]).bool() {
+            let extra = extra_list(e, me);
+            e.call(0x0042_2c20, &args![extra]);
+            e.vcall(me, 0xd4, &args![0u32]);
+        }
+        if cell != 0 {
+            if old_cell != cell {
+                moved = true;
+                if !is_actor(e, me) {
+                    let extra = extra_list(e, me);
+                    if e.call(0x0041_b320, &args![extra]).u32() == 0 {
+                        let extra = extra_list(e, me);
+                        e.call(0x0041_b2a0, &args![extra, me]);
+                    }
+                }
+                if old_space != 0 && e.call(GET_REF_PERSISTS, &args![me]).bool() {
+                    e.call(0x0058_8030, &args![old_space, me]);
+                }
+                e.call(0x0054_8230, &args![cell, me, 0u32]);
+            } else {
+                update_in_place(e, me);
+                if actor != 0 && controller != 0 {
+                    let position = e.vcall(actor, 0x1f4, &args![]).u32();
+                    e.call(0x0056_20e0, &args![controller, position]);
+                }
+            }
+            let tes = e.global::<u32>(GLOBAL_TES);
+            if e.call(0x0045_11e0, &args![tes, cell, 1u32]).bool() {
+                loaded = true;
+            }
+            new_cell = cell;
+        } else {
+            if old_cell != 0 && e.call(0x0042_5fd0, &args![old_cell]).bool() {
+                moved = true;
+            }
+            if old_space != world && !is_actor(e, me) {
+                let extra = extra_list(e, me);
+                if e.call(0x0041_b320, &args![extra]).u32() == 0 {
+                    let extra = extra_list(e, me);
+                    e.call(0x0041_b2a0, &args![extra, me]);
+                }
+            }
+            if e.call(GET_REF_PERSISTS, &args![me]).bool() && old_space != world {
+                if old_space != 0 {
+                    e.call(0x0058_8030, &args![old_space, me]);
+                }
+                e.call(0x0058_7ff0, &args![world, me]);
+            }
+            let position = e.vcall(me, 0x1f4, &args![]).u32();
+            let x = e.mem.u32(position);
+            let cell_x = e.call(0x0040_6d90, &args![x]).i32() >> 12;
+            let position = e.vcall(me, 0x1f4, &args![]).u32();
+            let y = e.mem.u32(position + 4);
+            let cell_y = e.call(0x0040_6d90, &args![y]).i32() >> 12;
+            new_cell = e
+                .call(0x0058_75a0, &args![world, cell_x as u32, cell_y as u32])
+                .u32();
+            if new_cell != 0 {
+                e.call(0x0054_8230, &args![new_cell, me, 0u32]);
+                let tes = e.global::<u32>(GLOBAL_TES);
+                if e.call(0x0045_11e0, &args![tes, new_cell, 1u32]).bool() {
+                    if old_space != world {
+                        loaded = true;
+                        moved = true;
+                        if is_actor(e, me) {
+                            let current = e.call(GET_PROCESS, &args![me]).u32();
+                            if current != 0 {
+                                let current = e.call(GET_PROCESS, &args![me]).u32();
+                                e.vcall(current, 0x28, &args![]);
+                            }
+                        }
+                    } else if moved && old_cell != 0 {
+                        let tes = e.global::<u32>(GLOBAL_TES);
+                        if e.call(0x0045_11e0, &args![tes, old_cell, 1u32]).bool() {
+                            update_in_place(e, me);
+                        }
+                    }
+                }
+            } else {
+                if old_cell != 0 {
+                    e.call(0x0054_ca90, &args![old_cell, me]);
+                }
+                let sleeping = is_actor(e, me) && {
+                    let current = player(e);
+                    e.call(0x0094_df60, &args![current]).bool()
+                };
+                if !sleeping {
+                    let save_load = e.global::<u32>(GLOBAL_SAVE_LOAD);
+                    if !e.call(0x0047_c850, &args![save_load]).bool() {
+                        e.vcall(me, 0x1cc, &args![0u32, 0u32]);
+                    }
+                }
+            }
+        }
+        if actor != 0 && !loaded {
+            e.call(0x0096_e870, &args![OBJECT_PROCESS_LISTS, actor]);
+            if old_cell != 0
+                && new_cell == 0
+                && e.call(0x0093_34b0, &args![actor]).u32() == 3
+                && !e.call(GET_REF_PERSISTS, &args![actor]).bool()
+            {
+                e.vcall(actor, 0x228, &args![old_cell]);
+                e.vcall(actor, 0x48, &args![8u32]);
+                let save_load = e.global::<u32>(GLOBAL_SAVE_LOAD);
+                e.call(0x008d_0370, &args![save_load, actor]);
+                let unloader = e.global::<u32>(GLOBAL_LOADING_OBJECT);
+                e.call(0x0084_9730, &args![unloader, actor, 0u32]);
+                e.vcall(actor, 0x228, &args![0u32]);
+            }
+        }
+        if moved {
+            if e.call(0x008c_7aa0, &args![]).bool() {
+                let handle = e.call(0x0045_37b0, &args![me]).u32();
+                e.call(0x0087_b2b0, &args![handle]);
+            } else {
+                e.vcall(me, 0x1c0, &args![]);
+            }
+        }
+        if loaded {
+            let mut resume = false;
+            if e.vcall(me, 0xfc, &args![]).bool()
+                && e.vcall(me, 0x1d0, &args![]).u32() != 0
+                && e.call(0x0045_0ff0, &args![new_cell]).bool()
+            {
+                let process = e.call(GET_PROCESS, &args![actor]).u32();
+                if process != 0
+                    && (e.call(0x0045_cd60, &args![process]).u32() == 1
+                        || e.call(0x0045_cd60, &args![process]).u32() == 0)
+                    && e.vcall(process, 0x28c, &args![]).u32() == 0
+                {
+                    resume = true;
+                }
+            }
+            if resume {
+                if e.call(0x008c_7aa0, &args![]).bool() {
+                    let handle = e.call(0x0045_37b0, &args![me]).u32();
+                    e.call(0x0087_b230, &args![handle]);
+                } else {
+                    e.vcall(me, 0x1c4, &args![]);
+                }
+            } else {
+                update_in_place(e, me);
+            }
+        }
+        if e.call(GET_PARENT_CELL, &args![me]).u32() != old_cell
+            && !e.call(GET_REF_PERSISTS, &args![me]).bool()
+            && me != player(e)
+        {
+            e.vcall(me, 0x48, &args![8u32]);
+        }
+    }
+    if restore && e.vcall(me, 0x1d0, &args![]).u32() != 0 {
+        fn_00573ed0(e, Ptr::new(flagged), 1);
+    }
+}
+
+/// What `MoveRefToNewSpace` does in four places: when `008c7aa0` says so,
+/// `0087b270(004537b0(refr))`, else the virtual at `+0x1fc` with 0.
+fn update_in_place(e: &mut Engine, me: u32) {
+    if e.call(0x008c_7aa0, &args![]).bool() {
+        let handle = e.call(0x0045_37b0, &args![me]).u32();
+        e.call(0x0087_b270, &args![handle]);
+    } else {
+        e.vcall(me, 0x1fc, &args![0u32]);
+    }
+}
+
+// Translated from 00573eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the bit 4 of the word at `+0xc` is set (`0047b4d0(this, 4)`).
+pub fn fn_00573eb0(e: &mut Engine, this: Ptr) -> bool {
+    e.call(0x0047_b4d0, &args![this, 4u32]).bool()
+}
+
+// Translated from 00573ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`flag` not 0) or clears the bit 4 of the same word
+/// (`004d9fc0(this, flag, 4)`), and when it was set also `00573f00(this,
+/// 1)`.
+pub fn fn_00573ed0(e: &mut Engine, this: Ptr, flag: u8) {
+    e.call(0x004d_9fc0, &args![this, u32::from(flag), 4u32]);
+    if flag != 0 {
+        e.call(0x0057_3f00, &args![this, 1u32]);
+    }
 }
 
 /// This part's translated functions, by exe address.
@@ -2170,6 +3348,102 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00572230,
             tes_object_refr_mark_as_picked_up(Ptr<TESObjectREFR>)
         ),
+        entry!(
+            0x00572270,
+            tes_object_refr_mark_as_deleted(Ptr<TESObjectREFR>)
+        ),
+        entry!(
+            0x005722c0,
+            tes_object_refr_is_dead(Ptr<TESObjectREFR>, u32) -> bool
+        ),
+        entry!(
+            0x00572350,
+            tes_object_refr_is_3d_critical(Ptr<TESObjectREFR>) -> bool
+        ),
+        entry!(0x00572380, fn_00572380(Ptr<TESObjectREFR>, u32) -> f32),
+        entry!(
+            0x005723b0,
+            tes_object_refr_get_distance_from_reference(
+                Ptr<TESObjectREFR>,
+                Ptr<TESObjectREFR>,
+                u8,
+                u8,
+            ) -> f32
+        ),
+        entry!(
+            0x00572500,
+            tes_object_refr_get_delta_for_angle(Ptr<TESObjectREFR>, Ptr, f32) -> Ptr
+        ),
+        entry!(0x005725b0, fn_005725b0(Ptr<TESObjectREFR>) -> bool),
+        entry!(0x005725f0, fn_005725f0(Ptr<TESObjectREFR>) -> u32),
+        entry!(0x00572610, fn_00572610(Ptr<TESObjectREFR>, u32)),
+        entry!(0x005726c0, fn_005726c0(Ptr) -> Ptr),
+        entry!(
+            0x005726e0,
+            tes_object_refr_set_light(Ptr<TESObjectREFR>, u32, u8)
+        ),
+        entry!(
+            0x00572750,
+            tes_object_refr_get_spell_effect_light(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(0x00572770, fn_00572770(Ptr<TESObjectREFR>, u32)),
+        entry!(0x00572820, fn_00572820(Ptr<TESObjectREFR>)),
+        entry!(0x005728c0, fn_005728c0(Ptr<TESObjectREFR>, u8)),
+        entry!(
+            0x005729e0,
+            tes_object_refr_remove_light(Ptr<TESObjectREFR>, u8)
+        ),
+        entry!(
+            0x00572a50,
+            tes_object_refr_kill_light(Ptr<TESObjectREFR>, u8)
+        ),
+        entry!(0x00572b00, fn_00572b00(Ptr<TESObjectREFR>, Ptr) -> Ptr),
+        entry!(0x00572b30, fn_00572b30(Ptr<TESObjectREFR>, Ptr) -> Ptr),
+        entry!(0x00572b60, fn_00572b60(Ptr<TESObjectREFR>, u32, u32, u32)),
+        entry!(0x00572c80, fn_00572c80(Ptr<TESObjectREFR>) -> bool),
+        entry!(0x00572d10, fn_00572d10(Ptr<TESObjectREFR>) -> u8),
+        entry!(0x00572d30, fn_00572d30(Ptr<TESObjectREFR>, u32) -> bool),
+        entry!(0x00572d50, fn_00572d50(Ptr<TESObjectREFR>, u32)),
+        entry!(
+            0x00572db0,
+            tes_object_refr_clear_action(Ptr<TESObjectREFR>, u32)
+        ),
+        entry!(0x00572e10, fn_00572e10(Ptr<TESObjectREFR>, u32)),
+        entry!(
+            0x00572e30,
+            tes_object_refr_get_action_ref(Ptr<TESObjectREFR>) -> u32
+        ),
+        entry!(
+            0x00572e50,
+            tes_object_refr_set_animation(Ptr<TESObjectREFR>, u32) -> u32
+        ),
+        entry!(0x00572fa0, fn_00572fa0(Ptr) -> u8),
+        entry!(
+            0x00572fc0,
+            tes_object_refr_set_dismembered(Ptr<TESObjectREFR>, i32, u32, u32, u32, u8)
+        ),
+        entry!(0x00573050, fn_00573050(Ptr<TESObjectREFR>, u32, u8)),
+        entry!(
+            0x00573090,
+            tes_object_refr_get_dismembered(Ptr<TESObjectREFR>, u32) -> bool
+        ),
+        entry!(0x005730d0, fn_005730d0(Ptr<TESObjectREFR>) -> i32),
+        entry!(
+            0x00573110,
+            tes_object_refr_get_last_hit_limb(Ptr<TESObjectREFR>) -> i32
+        ),
+        entry!(0x00573150, fn_00573150(Ptr<TESObjectREFR>) -> u32),
+        entry!(
+            0x00573170,
+            tes_object_refr_activate(Ptr<TESObjectREFR>, u32, u8, u32, u32) -> bool
+        ),
+        entry!(0x005737e0, fn_005737e0(Ptr) -> u8),
+        entry!(
+            0x00573800,
+            tes_object_refr_move_ref_to_new_space(Ptr<TESObjectREFR>, u32, u32)
+        ),
+        entry!(0x00573eb0, fn_00573eb0(Ptr) -> bool),
+        entry!(0x00573ed0, fn_00573ed0(Ptr, u8)),
     ]
 }
 
@@ -2244,6 +3518,10 @@ mod tests {
                 e.register(addr, |_, _| Ret::default());
             }
         }
+        // the named constants of the main file this part calls
+        for addr in [FORM_ID, GET_REF_PERSISTS, SPRINTF] {
+            e.register(addr, |_, _| Ret::default());
+        }
         e.register(GET_EXTRA_LIST, |_, a| ret(a[0] + 0x44));
         e.register(GET_BASE_FORM, |e, a| ret(e.mem.u32(a[0] + 0x20)));
         e.register(FORM_TYPE, |e, a| ret(u32::from(e.mem.u8(a[0] + 4))));
@@ -2281,6 +3559,7 @@ mod tests {
         for page in [
             0x0101_2000,
             0x0101_3000,
+            0x0101_6000,
             0x011b_1000,
             0x0118_a000,
             0x011c_3000,
@@ -4744,7 +6023,7 @@ mod tests {
     #[test]
     fn picking_up_removes_the_dropped_item_from_its_dropper_and_marks_it_deleted() {
         let mut e = engine();
-        let refr = e.mem.alloc(0x100);
+        let refr = reference(&mut e, false, &[(0xc4, 0), (0xc8, 0), (0x1cc, 0)]);
         let dropper = e.mem.alloc(0x100);
         returns(&mut e, 0x0041_de00, dropper);
         let log = logged(&mut e, |e| {
@@ -4755,7 +6034,12 @@ mod tests {
             calls_to(&log, 0x0041_e0d0),
             vec![vec![dropper + 0x44, refr]]
         );
-        assert_eq!(log.last().unwrap(), &(0x0057_2270, vec![refr]));
+        // then the three virtual calls of MarkAsDeleted
+        assert_eq!(log[log.len() - 3].0, slot(&e, refr, 0xc4));
+        assert_eq!(
+            log.last().unwrap(),
+            &(slot(&e, refr, 0x1cc), vec![refr, 0, 0])
+        );
 
         // nobody dropped it: only the deletion mark
         returns(&mut e, 0x0041_de00, 0);
@@ -4763,6 +6047,1739 @@ mod tests {
             e.call(0x0057_2230, &args![refr]);
         });
         assert!(calls_to(&log, 0x0041_e0d0).is_empty());
-        assert_eq!(calls_to(&log, 0x0057_2270), vec![vec![refr]]);
+        assert_eq!(calls_to(&log, slot(&e, refr, 0xc4)), vec![vec![refr, 1]]);
+    }
+
+    // ---- 00572270 .. 005723b0 -----------------------------------------------
+
+    fn float_ret(value: f32) -> Ret {
+        Ret {
+            st0: f64::from(value),
+            ..Ret::default()
+        }
+    }
+
+    /// Makes the virtual at byte offset `offset` of `object` return `value`.
+    fn set_slot(e: &mut Engine, object: u32, offset: u32, value: u32) {
+        let vtable = e.mem.u32(object);
+        e.register_double(vtable + offset, move |_, _| ret(value));
+        e.mem.set_u32(vtable + offset, vtable + offset);
+    }
+
+    #[test]
+    fn mark_as_deleted_makes_the_three_virtual_calls_in_order() {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[(0xc4, 0), (0xc8, 0), (0x1cc, 0)]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2270, &args![refr]);
+        });
+        assert_eq!(
+            addresses(&log),
+            vec![
+                0x0057_2270,
+                slot(&e, refr, 0xc4),
+                slot(&e, refr, 0xc8),
+                slot(&e, refr, 0x1cc)
+            ]
+        );
+        assert_eq!(log[1].1, vec![refr, 1]);
+        assert_eq!(log[2].1, vec![refr, 1]);
+        assert_eq!(log[3].1, vec![refr, 0, 0]);
+    }
+
+    /// A reference (an actor or not) whose form id is `id`, with a base form.
+    fn dead_setup(actor: bool, id: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let refr = reference(&mut e, actor, &[]);
+        e.register_double(FORM_ID, move |_, _| ret(id));
+        let base = form(&mut e, 0x2a, 0);
+        e.mem.set_u32(refr + 0x20, base);
+        e.set_global(0x0101_2060, 0.0f64);
+        (e, refr)
+    }
+
+    #[test]
+    fn an_actor_is_dead_when_its_health_is_not_above_the_threshold() {
+        let (mut e, refr) = dead_setup(true, 0x14);
+        let base = e.mem.u32(refr + 0x20);
+        returns(&mut e, 0x0048_73d0, 0);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+        });
+        // the health is read from the base form
+        assert_eq!(calls_to(&log, 0x0048_73d0), vec![vec![base]]);
+        returns(&mut e, 0x0048_73d0, 3);
+        assert!(!e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+        // equal to the threshold counts as dead
+        e.set_global(0x0101_2060, 3.0f64);
+        assert!(e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+        returns(&mut e, 0x0048_73d0, 4);
+        assert!(!e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+    }
+
+    #[test]
+    fn a_non_actor_or_form_id_7_asks_00477ba0_instead() {
+        for (actor, id) in [(false, 0x14), (true, 7)] {
+            let (mut e, refr) = dead_setup(actor, id);
+            returns(&mut e, 0x0047_7ba0, 1);
+            let log = logged(&mut e, |e| {
+                assert!(e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+            });
+            assert!(calls_to(&log, 0x0048_73d0).is_empty());
+            assert_eq!(calls_to(&log, 0x0047_7ba0), vec![vec![refr]]);
+            returns(&mut e, 0x0047_7ba0, 0);
+            assert!(!e.call(0x0057_22c0, &args![refr, 0u32]).bool());
+        }
+    }
+
+    #[test]
+    fn is_3d_critical_is_true_for_a_non_actor() {
+        let mut e = engine();
+        let plain = reference(&mut e, false, &[]);
+        let actor = reference(&mut e, true, &[]);
+        assert!(e.call(0x0057_2350, &args![plain]).bool());
+        assert!(!e.call(0x0057_2350, &args![actor]).bool());
+    }
+
+    #[test]
+    fn distance_to_a_position_is_the_length_of_the_difference_vector() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        let position = e.mem.alloc(0xc);
+        e.register(0x0045_7990, |_, _| float_ret(7.5));
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2380, &args![refr, position]).f32(), 7.5);
+        });
+        // position - this->Location (+0x30), into a local that is then measured
+        let difference = calls_to(&log, 0x0043_9ef0)[0][1];
+        assert_eq!(
+            calls_to(&log, 0x0043_9ef0),
+            vec![vec![position, difference, refr + 0x30]]
+        );
+        assert_eq!(calls_to(&log, 0x0045_7990), vec![vec![difference]]);
+    }
+
+    /// `this` and `other` references; `other` reports `position`; the length
+    /// of every difference vector is 12.5; the cell of a reference holds its
+    /// world space at `+0x10` (also what `TESObjectREFR::GetWorldSpace`
+    /// reads from the reference itself).
+    fn distance_setup() -> (Engine, u32, u32, u32) {
+        let mut e = engine();
+        e.set_global(0x0101_6970, f32::MAX);
+        let position = e.mem.alloc(0xc);
+        let this = reference(&mut e, false, &[]);
+        let other = reference(&mut e, false, &[(0x1f4, position)]);
+        e.register(0x0045_7990, |_, _| float_ret(12.5));
+        e.register(0x0054_ddd0, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x0057_5d70, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        // `IsInterior` (`00425fd0`): bit 0 of the byte at `+0x24` of the cell
+        e.register(0x0042_5fd0, |e, a| {
+            ret(u32::from(e.mem.u8(a[0] + 0x24) & 1))
+        });
+        (e, this, other, position)
+    }
+
+    fn distance(e: &mut Engine, this: u32, other: u32, include: u8, ignore: u8) -> f32 {
+        e.call(0x0057_23b0, &args![this, other, include, ignore])
+            .f32()
+    }
+
+    #[test]
+    fn distance_without_a_reference_is_the_largest_float() {
+        let (mut e, this, _, _) = distance_setup();
+        assert_eq!(distance(&mut e, this, 0, 0, 0), f32::MAX);
+    }
+
+    #[test]
+    fn distance_skips_a_disabled_or_deleted_reference() {
+        let (mut e, this, other, _) = distance_setup();
+        // no cells: the world spaces of the two references (both 0) differ
+        // from "non-null", so give them one
+        e.mem.set_u32(this + 0x10, 5);
+        e.mem.set_u32(other + 0x10, 5);
+        assert_eq!(distance(&mut e, this, other, 0, 0), 12.5);
+        e.mem.set_u32(other + 8, 0x800);
+        assert_eq!(distance(&mut e, this, other, 0, 0), f32::MAX);
+        assert_eq!(distance(&mut e, this, other, 1, 0), 12.5);
+        e.mem.set_u32(other + 8, 0x20);
+        assert_eq!(distance(&mut e, this, other, 1, 0), f32::MAX);
+    }
+
+    #[test]
+    fn distance_between_exterior_cells_needs_the_same_non_null_world_space() {
+        let (mut e, this, other, position) = distance_setup();
+        let this_cell = e.mem.alloc(0x40);
+        let other_cell = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x40, this_cell);
+        e.mem.set_u32(other + 0x40, other_cell);
+        e.mem.set_u32(this_cell + 0x10, 7);
+        e.mem.set_u32(other_cell + 0x10, 7);
+        let log = logged(&mut e, |e| {
+            assert_eq!(distance(e, this, other, 0, 0), 12.5);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0054_ddd0),
+            vec![vec![other_cell], vec![this_cell]]
+        );
+        assert_eq!(calls_to(&log, slot(&e, other, 0x1f4)), vec![vec![other]]);
+        assert_eq!(calls_to(&log, 0x0043_9ef0)[0][0], position);
+        // different world spaces
+        e.mem.set_u32(other_cell + 0x10, 8);
+        assert_eq!(distance(&mut e, this, other, 0, 0), f32::MAX);
+        // ... unless the cells are to be ignored
+        assert_eq!(distance(&mut e, this, other, 0, 1), 12.5);
+        // the same world space 0 is not a space
+        e.mem.set_u32(other_cell + 0x10, 0);
+        e.mem.set_u32(this_cell + 0x10, 0);
+        assert_eq!(distance(&mut e, this, other, 0, 0), f32::MAX);
+    }
+
+    #[test]
+    fn distance_between_interior_cells_needs_the_same_cell() {
+        let (mut e, this, other, _) = distance_setup();
+        let this_cell = e.mem.alloc(0x40);
+        let other_cell = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x40, this_cell);
+        e.mem.set_u32(other + 0x40, other_cell);
+        e.mem.set_u8(other_cell + 0x24, 1);
+        assert_eq!(distance(&mut e, this, other, 0, 0), f32::MAX);
+        assert_eq!(distance(&mut e, this, other, 0, 1), 12.5);
+        // the same interior cell
+        e.mem.set_u32(this + 0x40, other_cell);
+        assert_eq!(distance(&mut e, this, other, 0, 0), 12.5);
+    }
+
+    #[test]
+    fn distance_with_one_reference_outside_a_cell_compares_the_world_spaces() {
+        let (mut e, this, other, _) = distance_setup();
+        let other_cell = e.mem.alloc(0x40);
+        e.mem.set_u32(other + 0x40, other_cell);
+        e.mem.set_u32(other_cell + 0x10, 9);
+        // `this` has no cell: the world space of `other` itself is asked
+        // (`00575d70`) in its place, as the game does
+        e.mem.set_u32(other + 0x10, 9);
+        let log = logged(&mut e, |e| {
+            assert_eq!(distance(e, this, other, 0, 0), 12.5);
+        });
+        assert_eq!(calls_to(&log, 0x0057_5d70), vec![vec![other]]);
+        assert_eq!(calls_to(&log, 0x0054_ddd0), vec![vec![other_cell]]);
+        e.mem.set_u32(other + 0x10, 10);
+        assert_eq!(distance(&mut e, this, other, 0, 0), f32::MAX);
+
+        // the other way round: `other` has no cell and `this` has one
+        let (mut e, this, other, _) = distance_setup();
+        let this_cell = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x40, this_cell);
+        e.mem.set_u32(this_cell + 0x10, 4);
+        e.mem.set_u32(this + 0x10, 4);
+        let log = logged(&mut e, |e| {
+            assert_eq!(distance(e, this, other, 0, 0), 12.5);
+        });
+        assert_eq!(calls_to(&log, 0x0057_5d70), vec![vec![this]]);
+        assert_eq!(calls_to(&log, 0x0054_ddd0), vec![vec![this_cell]]);
+    }
+
+    // ---- 00572500, 005725b0 .. 005726e0 ---------------------------------------
+
+    #[test]
+    fn delta_for_angle_rotates_the_unit_vector_by_the_clamped_angle() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        let rotation = e.mem.alloc(0xc);
+        e.mem.set_f32(rotation + 8, 1.0);
+        returns(&mut e, 0x0043_0830, rotation);
+        e.register_double(0x004b_1480, |_, a| {
+            // the clamp returns its argument plus one
+            float_ret(f32::from_bits(a[0]) + 1.0)
+        });
+        let rotated = e.mem.alloc(0xc);
+        e.mem.set_f32(rotated, 0.25);
+        e.mem.set_f32(rotated + 4, 0.5);
+        e.mem.set_f32(rotated + 8, 0.75);
+        returns(&mut e, 0x004b_4500, rotated);
+        let out = e.mem.alloc(0xc);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2500, &args![refr, out, 0.5f32]).u32(), out);
+        });
+        // angle z + the argument, clamped, then the rotation matrix
+        assert_eq!(calls_to(&log, 0x004b_1480), vec![vec![float_bits(1.5)]]);
+        let unit = calls_to(&log, 0x0041_6870)[0].clone();
+        assert_eq!(
+            &unit[1..],
+            &[float_bits(0.0), float_bits(1.0), float_bits(0.0)]
+        );
+        let matrix = calls_to(&log, 0x004a_0c90)[0].clone();
+        assert_eq!(matrix[1], float_bits(2.5));
+        let rotation_call = calls_to(&log, 0x004b_4500)[0].clone();
+        assert_eq!(rotation_call[0], matrix[0]);
+        assert_eq!(rotation_call[2], unit[0]);
+        assert_ne!(rotation_call[1], unit[0]);
+        // the rotated vector is copied back, adjusted, and copied to `out`
+        assert_eq!(calls_to(&log, 0x004a_0c10), vec![vec![unit[0]]]);
+        assert_eq!(e.mem.f32(out), 0.25);
+        assert_eq!(e.mem.f32(out + 4), 0.5);
+        assert_eq!(e.mem.f32(out + 8), 0.75);
+    }
+
+    #[test]
+    fn form_type_ranges_of_005725b0() {
+        let mut e = engine();
+        for (kind, expected) in [
+            (0x3c, false),
+            (0x3d, true),
+            (0x40, true),
+            (0x41, false),
+            (0x68, false),
+            (0x69, true),
+            (0x6a, false),
+        ] {
+            let refr = form(&mut e, kind, 0);
+            assert_eq!(e.call(0x0057_25b0, &args![refr]).bool(), expected);
+        }
+    }
+
+    #[test]
+    fn light_accessors_read_the_extra_list() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        returns(&mut e, 0x0041_8250, 0x1111);
+        returns(&mut e, 0x0041_8280, 0x2222);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_25f0, &args![refr]).u32(), 0x1111);
+            assert_eq!(e.call(0x0057_2750, &args![refr]).u32(), 0x2222);
+        });
+        assert_eq!(calls_to(&log, 0x0041_8250), vec![vec![refr + 0x44]]);
+        assert_eq!(calls_to(&log, 0x0041_8280), vec![vec![refr + 0x44]]);
+    }
+
+    #[test]
+    fn holder_constructor_initialises_through_00633c90_and_returns_this() {
+        let mut e = engine();
+        let holder = e.mem.alloc(8);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_26c0, &args![holder]).u32(), holder);
+        });
+        assert_eq!(calls_to(&log, 0x0063_3c90), vec![vec![holder, 0]]);
+    }
+
+    #[test]
+    fn light_holders_are_created_filled_and_stored_on_the_extra_list() {
+        for (entry, setter) in [(0x0057_2610, 0x0041_8e30), (0x0057_2770, 0x0041_8f60)] {
+            let mut e = engine();
+            let refr = e.mem.alloc(0x100);
+            let holder = e.mem.alloc(8);
+            returns(&mut e, 0x0040_1000, holder);
+            let log = logged(&mut e, |e| {
+                e.call(entry, &args![refr, 0x7777u32]);
+            });
+            assert_eq!(calls_to(&log, 0x0040_1000), vec![vec![8]]);
+            assert_eq!(calls_to(&log, 0x0063_3c90), vec![vec![holder, 0]]);
+            assert_eq!(calls_to(&log, 0x0066_b0d0), vec![vec![holder, 0x7777]]);
+            assert_eq!(e.mem.f32(holder + 4), 1.0);
+            assert_eq!(calls_to(&log, setter), vec![vec![refr + 0x44, holder]]);
+        }
+    }
+
+    #[test]
+    fn set_light_switches_the_off_and_on_children_oppositely() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        let node = e.mem.alloc(0x10);
+        e.register(0x004a_ae30, |_, a| {
+            ret(match a[1] {
+                0x0103_0e54 => 0xa1,
+                0x0103_0e48 => 0xb2,
+                _ => 0,
+            })
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_26e0, &args![refr, node, 1u8]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x004a_ae30),
+            vec![vec![node, 0x0103_0e54], vec![node, 0x0103_0e48]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0045_0f90),
+            vec![vec![0xa1, 1], vec![0xb2, 0]]
+        );
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_26e0, &args![refr, node, 0u8]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0045_0f90),
+            vec![vec![0xa1, 0], vec![0xb2, 1]]
+        );
+        // a node without those children, and no node at all
+        e.register(0x004a_ae30, |_, _| Ret::default());
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_26e0, &args![refr, node, 1u8]);
+            e.call(0x0057_26e0, &args![refr, 0u32, 1u8]);
+        });
+        assert!(calls_to(&log, 0x0045_0f90).is_empty());
+        assert_eq!(calls_to(&log, 0x004a_ae30).len(), 2);
+    }
+
+    // ---- 00572820 .. 00572b60 ---------------------------------------------------
+
+    #[test]
+    fn base_lights_are_set_for_a_reference_of_a_form_type_1e_base() {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[]);
+        let base = form(&mut e, 0x1e, 0);
+        e.mem.set_u32(refr + 0x20, base);
+        returns(&mut e, 0x0041_8250, 0x1111);
+        returns(&mut e, 0x0041_8280, 0x2222);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2820, &args![refr]);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0050_de20),
+            vec![vec![base, 0x1111, 0], vec![base, 0x2222, 0]]
+        );
+        // a holder that is missing is skipped
+        returns(&mut e, 0x0041_8250, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2820, &args![refr]);
+        });
+        assert_eq!(calls_to(&log, 0x0050_de20), vec![vec![base, 0x2222, 0]]);
+        // another form type of the base: nothing
+        e.mem.set_u8(base + 4, 0x1f);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2820, &args![refr]);
+        });
+        assert!(calls_to(&log, 0x0050_de20).is_empty());
+    }
+
+    /// A reference with a holder (`00418250`) around a light node, and the
+    /// shadow scene node `00450b80` gives.
+    fn light_setup() -> (Engine, u32, u32, u32) {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[]);
+        let holder = e.mem.alloc(0x10);
+        let node = e.mem.alloc(0x10);
+        e.mem.set_u32(holder, node);
+        returns(&mut e, 0x0041_8250, holder);
+        returns(&mut e, 0x0045_0b80, 0x5c5c);
+        (e, refr, holder, node)
+    }
+
+    #[test]
+    fn a_light_is_added_to_the_shadow_scene_node() {
+        let (mut e, refr, _, node) = light_setup();
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0045_0b80), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x00b5_c940), vec![vec![0x5c5c, node, 1]]);
+    }
+
+    #[test]
+    fn a_spell_effect_light_comes_from_the_other_holder() {
+        let (mut e, refr, _, _) = light_setup();
+        let holder = e.mem.alloc(0x10);
+        let node = e.mem.alloc(0x10);
+        e.mem.set_u32(holder, node);
+        returns(&mut e, 0x0041_8280, holder);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 1u8]);
+        });
+        assert_eq!(calls_to(&log, 0x00b5_c940), vec![vec![0x5c5c, node, 1]]);
+    }
+
+    #[test]
+    fn a_light_is_not_added_for_a_deleted_or_disabled_reference_or_without_a_node() {
+        let (mut e, refr, holder, node) = light_setup();
+        for flags in [0x20, 0x800] {
+            e.mem.set_u32(refr + 8, flags);
+            let log = logged(&mut e, |e| {
+                e.call(0x0057_28c0, &args![refr, 0u8]);
+            });
+            assert!(calls_to(&log, 0x00b5_c940).is_empty());
+        }
+        e.mem.set_u32(refr + 8, 0);
+        // the holder holds no light
+        e.mem.set_u32(holder, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert!(calls_to(&log, 0x00b5_c940).is_empty());
+        e.mem.set_u32(holder, node);
+        // no holder
+        returns(&mut e, 0x0041_8250, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert!(calls_to(&log, 0x00b5_c940).is_empty());
+    }
+
+    #[test]
+    fn a_light_with_lit_water_references_needs_them_empty() {
+        let (mut e, refr, _, node) = light_setup();
+        returns(&mut e, 0x0041_f810, 0x3333);
+        // `0082 56d0` says "not empty": no light
+        returns(&mut e, 0x0082_56d0, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0082_56d0), vec![vec![0x3333]]);
+        assert!(calls_to(&log, 0x00b5_c940).is_empty());
+        returns(&mut e, 0x0082_56d0, 1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x00b5_c940), vec![vec![0x5c5c, node, 1]]);
+    }
+
+    #[test]
+    fn the_shadow_flag_of_a_form_type_1e_base_comes_from_0050dd90() {
+        let (mut e, refr, _, node) = light_setup();
+        let base = form(&mut e, 0x1e, 0);
+        e.mem.set_u32(refr + 0x20, base);
+        // only the low byte counts
+        returns(&mut e, 0x0050_dd90, 0x100);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_28c0, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0050_dd90), vec![vec![base]]);
+        assert_eq!(calls_to(&log, 0x00b5_c940), vec![vec![0x5c5c, node, 0]]);
+    }
+
+    #[test]
+    fn remove_light_takes_the_node_out_of_the_shadow_scene_node() {
+        let (mut e, refr, holder, node) = light_setup();
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_29e0, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x00b5_eed0), vec![vec![0x5c5c, node]]);
+        // the spell effect holder is asked for when the flag is set
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_29e0, &args![refr, 1u8]);
+        });
+        assert!(calls_to(&log, 0x00b5_eed0).is_empty());
+        assert_eq!(calls_to(&log, 0x0041_8280).len(), 1);
+        // an empty holder
+        e.mem.set_u32(holder, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_29e0, &args![refr, 0u8]);
+        });
+        assert!(calls_to(&log, 0x00b5_eed0).is_empty());
+    }
+
+    #[test]
+    fn kill_light_also_clears_the_holder_and_the_extra() {
+        let (mut e, refr, holder, node) = light_setup();
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2a50, &args![refr, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x00b5_eed0), vec![vec![0x5c5c, node]]);
+        assert_eq!(calls_to(&log, 0x0066_b0d0), vec![vec![holder, 0]]);
+        assert_eq!(calls_to(&log, 0x0041_ae30), vec![vec![refr + 0x44]]);
+        assert!(calls_to(&log, 0x0041_ae50).is_empty());
+        // the empty holder is not cleared, the extra still is
+        e.mem.set_u32(holder, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2a50, &args![refr, 0u8]);
+        });
+        assert!(calls_to(&log, 0x00b5_eed0).is_empty());
+        assert!(calls_to(&log, 0x0066_b0d0).is_empty());
+        assert_eq!(calls_to(&log, 0x0041_ae30).len(), 1);
+        // the spell effect variant uses the other holder and clearer
+        returns(&mut e, 0x0041_8280, holder);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2a50, &args![refr, 1u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0041_ae50), vec![vec![refr + 0x44]]);
+        assert!(calls_to(&log, 0x0041_ae30).is_empty());
+        // no holder at all: nothing
+        returns(&mut e, 0x0041_8250, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2a50, &args![refr, 0u8]);
+        });
+        assert!(calls_to(&log, 0x0041_ae30).is_empty());
+    }
+
+    #[test]
+    fn the_extra_vector_getters_return_the_out_pointer() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        let out = e.mem.alloc(0xc);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2b00, &args![refr, out]).u32(), out);
+            assert_eq!(e.call(0x0057_2b30, &args![refr, out]).u32(), out);
+        });
+        assert_eq!(
+            calls_to(&log, 0x0041_b080),
+            vec![vec![refr + 0x44, out, refr]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0041_b0d0),
+            vec![vec![refr + 0x44, out, refr]]
+        );
+    }
+
+    #[test]
+    fn starting_position_is_stored_under_the_scope_lock() {
+        let mut e = engine();
+        let position = e.mem.alloc(0xc);
+        e.mem.set_u32(position, 0xa1);
+        e.mem.set_u32(position + 4, 0xa2);
+        e.mem.set_u32(position + 8, 0xa3);
+        let refr = reference(&mut e, false, &[(0x1f4, position)]);
+        let rotation = e.mem.alloc(0xc);
+        e.mem.set_u32(rotation, 0xb1);
+        e.mem.set_u32(rotation + 4, 0xb2);
+        e.mem.set_u32(rotation + 8, 0xb3);
+        returns(&mut e, 0x0043_0830, rotation);
+        // the given vector differs from the zero vector at 011f426c
+        let seen = Rc::new(RefCell::new(vec![]));
+        let seen_in_double = seen.clone();
+        e.register_double(0x0043_9090, move |e, a| {
+            for word in 0..3 {
+                seen_in_double.borrow_mut().push(e.mem.u32(a[0] + 4 * word));
+            }
+            ret(1)
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2b60, &args![refr, 1u32, 2u32, 3u32]);
+        });
+        assert_eq!(*seen.borrow(), vec![1, 2, 3]);
+        assert_eq!(calls_to(&log, 0x0043_9090)[0][1], 0x011f_426c);
+        let guard = calls_to(&log, 0x0040_4eb0)[0][0];
+        assert_eq!(
+            calls_to(&log, 0x0040_4eb0),
+            vec![vec![guard, 0x31, 1, 0x0102_fc20, 0x3b01]]
+        );
+        let position_call = calls_to(&log, 0x0041_b180)[0].clone();
+        assert_eq!(
+            &position_call[2..],
+            &[refr, 1, 2, 3],
+            "the given vector is stored as the starting position"
+        );
+        let rotation_call = calls_to(&log, 0x0041_b120)[0].clone();
+        assert_eq!(&rotation_call[2..], &[refr, 0xb1, 0xb2, 0xb3]);
+        assert_eq!(position_call[0], refr + 0x44);
+        assert_eq!(rotation_call[0], refr + 0x44);
+        // the lock is taken first and released last
+        assert_eq!(
+            addresses(&log)[1],
+            0x0040_4eb0,
+            "the scope lock comes first"
+        );
+        assert_eq!(*log.last().unwrap(), (0x0040_4ee0, vec![guard]));
+
+        // the zero vector: the reference's own position is stored instead
+        returns(&mut e, 0x0043_9090, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2b60, &args![refr, 0u32, 0u32, 0u32]);
+        });
+        let position_call = calls_to(&log, 0x0041_b180)[0].clone();
+        assert_eq!(&position_call[2..], &[refr, 0xa1, 0xa2, 0xa3]);
+    }
+
+    // ---- 00572c80 .. 00572e30 -------------------------------------------------
+
+    #[test]
+    fn data_handler_ids_and_form_types_decide_00572c80() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        let base = form(&mut e, 0x10, 0);
+        e.mem.set_u32(refr + 0x20, base);
+        let handler = e.mem.alloc(0x100);
+        e.set_global(GLOBAL_DATA_HANDLER, handler);
+        e.register_double(FORM_ID, |_, _| ret(0x1234));
+        // the id is above 0xfeffffff for the handler
+        returns(&mut e, 0x0046_9860, 1);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0057_2c80, &args![refr]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0046_9860), vec![vec![handler, 0x1234]]);
+        assert!(calls_to(&log, GET_BASE_FORM).is_empty());
+        returns(&mut e, 0x0046_9860, 0);
+        for (kind, expected) in [
+            (0x10, true),
+            (0x1f, true),
+            (0x21, false),
+            (0x22, true),
+            (0x24, true),
+            (0x25, false),
+            (0x26, false),
+            (0x27, false),
+            (0x28, true),
+        ] {
+            e.mem.set_u8(base + 4, kind);
+            assert_eq!(
+                e.call(0x0057_2c80, &args![refr]).bool(),
+                expected,
+                "{kind:#x}"
+            );
+        }
+        // form type 0x20 asks 00444ed0
+        e.mem.set_u8(base + 4, 0x20);
+        returns(&mut e, 0x0044_4ed0, 0);
+        assert!(!e.call(0x0057_2c80, &args![refr]).bool());
+        returns(&mut e, 0x0044_4ed0, 1);
+        assert!(e.call(0x0057_2c80, &args![refr]).bool());
+    }
+
+    #[test]
+    fn extra_flag_accessors_forward_to_the_extra_list() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        returns(&mut e, 0x0041_b370, 0x0107);
+        returns(&mut e, 0x0041_b3a0, 1);
+        returns(&mut e, 0x0041_b520, 0x9999);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2d10, &args![refr]).u8(), 7);
+            assert!(e.call(0x0057_2d30, &args![refr, 4u32]).bool());
+            assert_eq!(e.call(0x0057_2e30, &args![refr]).u32(), 0x9999);
+            e.call(0x0057_2e10, &args![refr, 0x4242u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0041_b370), vec![vec![refr + 0x44]]);
+        assert_eq!(calls_to(&log, 0x0041_b3a0), vec![vec![refr + 0x44, 4]]);
+        assert_eq!(calls_to(&log, 0x0041_b520), vec![vec![refr + 0x44]]);
+        assert_eq!(calls_to(&log, 0x0041_b4b0), vec![vec![refr + 0x44, 0x4242]]);
+    }
+
+    #[test]
+    fn setting_or_clearing_bits_of_the_extra_byte_changes_the_form_flag_for_4() {
+        // (entry, extra function, slot when the original state is set, slot otherwise)
+        for (entry, extra_fn, set_slot, unset_slot) in [
+            (0x0057_2d50, 0x0041_b440, 0x4c, 0x48),
+            (0x0057_2db0, 0x0041_b470, 0x48, 0x4c),
+        ] {
+            let mut e = engine();
+            let refr = reference(&mut e, false, &[(0x48, 0), (0x4c, 0)]);
+            returns(&mut e, 0x0056_1d90, 1);
+            let log = logged(&mut e, |e| {
+                e.call(entry, &args![refr, 4u32]);
+            });
+            assert_eq!(
+                calls_to(&log, slot(&e, refr, set_slot)),
+                vec![vec![refr, 0x0080_0000]]
+            );
+            assert!(calls_to(&log, slot(&e, refr, unset_slot)).is_empty());
+            assert_eq!(calls_to(&log, extra_fn), vec![vec![refr + 0x44, 4]]);
+
+            returns(&mut e, 0x0056_1d90, 0);
+            let log = logged(&mut e, |e| {
+                e.call(entry, &args![refr, 4u32]);
+            });
+            assert_eq!(
+                calls_to(&log, slot(&e, refr, unset_slot)),
+                vec![vec![refr, 0x0080_0000]]
+            );
+            assert!(calls_to(&log, slot(&e, refr, set_slot)).is_empty());
+
+            // any other mask only reaches the extra list
+            let log = logged(&mut e, |e| {
+                e.call(entry, &args![refr, 2u32]);
+            });
+            assert_eq!(addresses(&log), vec![entry, GET_EXTRA_LIST, extra_fn]);
+            assert_eq!(calls_to(&log, extra_fn), vec![vec![refr + 0x44, 2]]);
+        }
+    }
+
+    // ---- 00572e50 .. 00573150 -------------------------------------------------
+
+    /// A reference whose mobile-object test answers `mobile`, with the data
+    /// handler global in place and the animation in its extra list being
+    /// `current` (`00418220`).
+    fn animation_setup(mobile: bool, current: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let refr = reference(&mut e, mobile, &[(0xfc, u32::from(mobile)), (0x4c, 0)]);
+        let handler = e.mem.alloc(0x700);
+        e.set_global(GLOBAL_DATA_HANDLER, handler);
+        returns(&mut e, 0x0041_8220, current);
+        (e, refr)
+    }
+
+    #[test]
+    fn set_animation_on_a_plain_reference_replaces_the_animation_of_the_extra_list() {
+        let (mut e, refr) = animation_setup(false, 0x10);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2e50, &args![refr, 0x20u32]).u32(), 0x20);
+        });
+        assert_eq!(calls_to(&log, 0x0041_8c40), vec![vec![refr + 0x44, 0x20]]);
+        assert!(calls_to(&log, 0x0041_adf0).is_empty());
+        assert!(calls_to(&log, 0x0048_4b90).is_empty());
+        // removing it
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2e50, &args![refr, 0u32]).u32(), 0);
+        });
+        assert_eq!(calls_to(&log, 0x0041_adf0), vec![vec![refr + 0x44]]);
+        // the same animation: nothing is stored
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2e50, &args![refr, 0x10u32]).u32(), 0x10);
+        });
+        assert!(calls_to(&log, 0x0041_8c40).is_empty());
+        assert!(calls_to(&log, 0x0041_adf0).is_empty());
+    }
+
+    #[test]
+    fn set_animation_of_a_mobile_object_hands_it_to_the_process() {
+        let (mut e, refr) = animation_setup(true, 0);
+        let process = object(&mut e, 0x100, &[(0x820, 0)]);
+        e.mem.set_u32(refr + 0x68, process);
+        // process level 0
+        returns(&mut e, 0x0045_cd60, 0);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_2e50, &args![refr, 0x20u32]).u32(), 0x20);
+        });
+        assert_eq!(calls_to(&log, 0x0048_4b90), vec![vec![refr, 0x1000_0000]]);
+        assert_eq!(
+            calls_to(&log, slot(&e, process, 0x820)),
+            vec![vec![process, 0x20]]
+        );
+        assert!(calls_to(&log, 0x0041_8c40).is_empty());
+        assert!(calls_to(&log, 0x0093_1920).is_empty());
+        // removing the animation clears the change flag through the virtual
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2e50, &args![refr, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, slot(&e, refr, 0x4c)),
+            vec![vec![refr, 0x1000_0000]]
+        );
+        assert!(calls_to(&log, 0x0048_4b90).is_empty());
+        assert_eq!(
+            calls_to(&log, slot(&e, process, 0x820)),
+            vec![vec![process, 0]]
+        );
+    }
+
+    #[test]
+    fn set_animation_changes_the_process_level_first_for_a_high_level() {
+        let (mut e, refr) = animation_setup(true, 0);
+        let process = object(&mut e, 0x100, &[(0x820, 0)]);
+        e.mem.set_u32(refr + 0x68, process);
+        // level 2 before the change, level 1 after it
+        let levels = Rc::new(RefCell::new(vec![2u32, 1u32].into_iter()));
+        let levels_in_double = levels.clone();
+        e.register_double(0x0045_cd60, move |_, _| {
+            ret(levels_in_double.borrow_mut().next().unwrap())
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2e50, &args![refr, 0x20u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0093_1920), vec![vec![refr, 0]]);
+        assert_eq!(
+            calls_to(&log, slot(&e, process, 0x820)),
+            vec![vec![process, 0x20]]
+        );
+
+        // a level that stays high: the process does not take the animation
+        let (mut e, refr) = animation_setup(true, 0);
+        let process = object(&mut e, 0x100, &[(0x820, 0)]);
+        e.mem.set_u32(refr + 0x68, process);
+        returns(&mut e, 0x0045_cd60, 3);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2e50, &args![refr, 0x20u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0093_1920), vec![vec![refr, 0]]);
+        assert!(calls_to(&log, slot(&e, process, 0x820)).is_empty());
+        assert_eq!(calls_to(&log, 0x0041_8c40), vec![vec![refr + 0x44, 0x20]]);
+        // without the animation the level is not changed
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_2e50, &args![refr, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0093_1920).is_empty());
+    }
+
+    #[test]
+    fn the_data_handler_byte_is_read() {
+        let mut e = engine();
+        let handler = e.mem.alloc(0x700);
+        e.mem.set_u8(handler + 0x61f, 9);
+        assert_eq!(e.call(0x0057_2fa0, &args![handler]).u8(), 9);
+    }
+
+    #[test]
+    fn set_dismembered_with_a_limb_dismembers_it_and_notifies() {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[(0x48, 0)]);
+        returns(&mut e, 0x0042_e820, 0x6000);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0057_2fc0,
+                &args![refr, 3u32, 0x11u32, 0x22u32, 0x33u32, 1u8],
+            );
+        });
+        assert_eq!(calls_to(&log, 0x0042_e820), vec![vec![refr + 0x44]]);
+        assert_eq!(calls_to(&log, 0x0043_0410), vec![vec![0x6000, refr, 3, 1]]);
+        assert_eq!(calls_to(&log, 0x0043_7730), vec![vec![0x6000, 0x22]]);
+        assert_eq!(calls_to(&log, 0x0060_0ab0), vec![vec![0x6000, 0x11]]);
+        assert_eq!(calls_to(&log, 0x0098_4f60), vec![vec![0x6000, 3]]);
+        assert_eq!(
+            log.last().unwrap(),
+            &(slot(&e, refr, 0x48), vec![refr, 0x0002_0000])
+        );
+    }
+
+    #[test]
+    fn set_dismembered_without_a_limb_uses_the_fourth_argument() {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[(0x48, 0)]);
+        returns(&mut e, 0x0042_e820, 0x6000);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0057_2fc0,
+                &args![refr, 0xffff_ffffu32, 0x11u32, 0x22u32, 0x33u32, 1u8],
+            );
+        });
+        assert!(calls_to(&log, 0x0043_0410).is_empty());
+        assert_eq!(calls_to(&log, 0x0098_4f60), vec![vec![0x6000, 0x33]]);
+    }
+
+    #[test]
+    fn dismemberment_accessors_need_the_extra_and_forward_to_it() {
+        let mut e = engine();
+        let refr = e.mem.alloc(0x100);
+        // no dismemberment extra
+        assert!(!e.call(0x0057_3090, &args![refr, 2u32]).bool());
+        assert_eq!(e.call(0x0057_30d0, &args![refr]).i32(), -1);
+        assert_eq!(e.call(0x0057_3110, &args![refr]).i32(), -1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_3050, &args![refr, 2u32, 1u8]);
+        });
+        assert!(calls_to(&log, 0x0043_05f0).is_empty());
+
+        returns(&mut e, 0x0042_e8c0, 0x7000);
+        returns(&mut e, 0x0043_03e0, 1);
+        returns(&mut e, 0x0044_edb0, 0xfffe);
+        returns(&mut e, 0x0096_11e0, 5);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0057_3090, &args![refr, 2u32]).bool());
+            assert_eq!(e.call(0x0057_30d0, &args![refr]).i32(), 0xfffe);
+            assert_eq!(e.call(0x0057_3110, &args![refr]).i32(), 5);
+            e.call(0x0057_3050, &args![refr, 2u32, 1u8]);
+        });
+        assert_eq!(calls_to(&log, 0x0043_03e0), vec![vec![0x7000, 2]]);
+        assert_eq!(calls_to(&log, 0x0044_edb0), vec![vec![0x7000]]);
+        assert_eq!(calls_to(&log, 0x0096_11e0), vec![vec![0x7000]]);
+        assert_eq!(calls_to(&log, 0x0043_05f0), vec![vec![0x7000, 2, 1]]);
+    }
+
+    #[test]
+    fn the_virtual_at_1e8_is_called_and_its_result_returned() {
+        let mut e = engine();
+        let refr = reference(&mut e, false, &[(0x1e8, 0x77)]);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0057_3150, &args![refr]).u32(), 0x77);
+        });
+        assert_eq!(calls_to(&log, slot(&e, refr, 0x1e8)), vec![vec![refr]]);
+    }
+
+    // ---- 00573170 ------------------------------------------------------------
+
+    struct ActivateSetup {
+        e: Engine,
+        refr: u32,
+        base: u32,
+        activator: u32,
+        player: u32,
+    }
+
+    /// A reference with a base object (form type 0x10, whose activation
+    /// virtual at `+0x124` succeeds), activated by an actor that is not the
+    /// player; the reference counts as already flagged (`0041b3a0`), so the
+    /// plain case reaches the switch on the form type.
+    fn activate_setup() -> ActivateSetup {
+        let mut e = engine();
+        let base = object(&mut e, 0x100, &[(0x124, 1)]);
+        e.mem.set_u8(base + 4, 0x10);
+        let refr = reference(&mut e, false, &[]);
+        e.mem.set_u32(refr + 0x20, base);
+        let activator_base = form(&mut e, 0x2a, 0);
+        let activator = reference(&mut e, true, &[(0x610, 0)]);
+        e.mem.set_u32(activator + 0x20, activator_base);
+        let player = reference(&mut e, true, &[(0x1a0, 0), (0x610, 0)]);
+        e.set_global(GLOBAL_PLAYER, player);
+        let state = e.mem.alloc(4);
+        e.mem.set_u8(state, 1);
+        returns(&mut e, 0x0055_d520, state);
+        returns(&mut e, 0x0041_b3a0, 1);
+        ActivateSetup {
+            e,
+            refr,
+            base,
+            activator,
+            player,
+        }
+    }
+
+    fn activate(s: &mut ActivateSetup, activator: u32) -> bool {
+        let refr = s.refr;
+        s.e.call(0x0057_3170, &args![refr, activator, 3u8, 0x44u32, 0x55u32])
+            .bool()
+    }
+
+    #[test]
+    fn activating_runs_the_base_object_and_records_the_activation() {
+        let mut s = activate_setup();
+        let (refr, base, activator, player) = (s.refr, s.base, s.activator, s.player);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, activator, 3u8, 0x44u32, 0x55u32])
+                .bool());
+        });
+        assert_eq!(calls_to(&log, 0x0056_a290), vec![vec![refr, activator]]);
+        assert_eq!(
+            calls_to(&log, slot(&s.e, base, 0x124)),
+            vec![vec![base, refr, activator, 3, 0x44, 0x55]]
+        );
+        // an actor activator is told, and the player checks its quest targets
+        assert_eq!(
+            calls_to(&log, 0x008b_c980),
+            vec![vec![activator, refr, 0x44, 0x55, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0095_2c30), vec![vec![player, activator]]);
+        assert_eq!(s.e.global::<u8>(0x011c_a428), 1);
+        // the extra bookkeeping before the switch
+        assert_eq!(
+            calls_to(&log, 0x0042_13c0),
+            vec![vec![refr + 0x44, refr, activator]]
+        );
+        assert_eq!(calls_to(&log, 0x0041_0140), vec![vec![refr + 0x44, 0x7c]]);
+    }
+
+    #[test]
+    fn a_base_object_that_refuses_gives_false_and_no_activation_record() {
+        let mut s = activate_setup();
+        s.e.set_global::<u8>(0x011c_a428, 1);
+        let base = s.base;
+        set_slot(&mut s.e, base, 0x124, 0);
+        let activator = s.activator;
+        assert!(!activate(&mut s, activator));
+        // the byte was cleared at the start and nothing set it again
+        assert_eq!(s.e.global::<u8>(0x011c_a428), 0);
+    }
+
+    #[test]
+    fn the_player_activating_is_told_and_not_activated_when_the_other_object_is_not_set() {
+        let mut s = activate_setup();
+        let (player, refr) = (s.player, s.refr);
+        // the pipboy is opening
+        returns(&mut s.e, 0x0070_9bc0, 1);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert!(calls_to(&log, 0x0056_a290).is_empty());
+        returns(&mut s.e, 0x0070_9bc0, 0);
+
+        // the two player bytes differ
+        returns(&mut s.e, 0x004e_af60, 1);
+        s.e.mem.set_u8(player + 0x64c, 0);
+        let log = logged(&mut s.e, |e| {
+            assert!(!e
+                .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert!(calls_to(&log, 0x0056_a290).is_empty());
+        s.e.mem.set_u8(player + 0x64c, 1);
+
+        // the player's virtual +0x1a0 holds and 008859e0 does not: a message
+        set_slot(&mut s.e, player, 0x1a0, 1);
+        s.e.set_global(0x0101_62c0, 2.0f32);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert_eq!(
+            calls_to(&log, 0x0040_3df0),
+            vec![vec![0x011d_4f84, 0, 0, 0, float_bits(2.0), 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0070_52f0).len(), 1);
+        assert!(calls_to(&log, 0x0056_a290).is_empty());
+        // 008859e0 holds: the activation goes on
+        returns(&mut s.e, 0x0088_59e0, 1);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0040_3df0).is_empty());
+        assert_eq!(calls_to(&log, 0x0056_a290), vec![vec![refr, player]]);
+    }
+
+    #[test]
+    fn a_non_actor_reference_answering_00477ba0_is_activated_by_doing_nothing() {
+        let mut s = activate_setup();
+        returns(&mut s.e, 0x0047_7ba0, 1);
+        let (activator, refr) = (s.activator, s.refr);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert!(calls_to(&log, 0x0056_a290).is_empty());
+        // an actor reference does not take that way
+        set_slot(&mut s.e, refr, 0x100, 1);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1);
+    }
+
+    #[test]
+    fn a_form_type_1c_base_activated_by_an_actor_needs_its_state_byte() {
+        let mut s = activate_setup();
+        s.e.mem.set_u8(s.base + 4, 0x1c);
+        let (activator, refr) = (s.activator, s.refr);
+        let zero_state = s.e.mem.alloc(4);
+        returns(&mut s.e, 0x0055_d520, zero_state);
+        assert!(!activate(&mut s, activator));
+        assert_eq!(s.e.global::<u8>(0x011c_a428), 0);
+        // with the byte set the door code runs
+        s.e.mem.set_u8(zero_state, 1);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert_eq!(calls_to(&log, 0x0056_8e50), vec![vec![refr]]);
+    }
+
+    #[test]
+    fn the_player_activating_with_a_zero_state_byte_needs_form_type_23_or_16() {
+        let mut s = activate_setup();
+        let (player, refr) = (s.player, s.refr);
+        returns(&mut s.e, 0x004e_af60, 0);
+        let zero_state = s.e.mem.alloc(4);
+        returns(&mut s.e, 0x0055_d520, zero_state);
+        let go = |s: &mut ActivateSetup| {
+            s.e.call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
+                .bool()
+        };
+        assert!(!go(&mut s));
+        for kind in [0x23, 0x16] {
+            s.e.mem.set_u8(s.base + 4, kind);
+            let log = logged(&mut s.e, |e| {
+                e.call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32]);
+            });
+            assert_eq!(calls_to(&log, 0x0056_a290).len(), 1, "{kind:#x}");
+        }
+    }
+
+    #[test]
+    fn a_reference_refused_by_0057b460_is_not_activated() {
+        let mut s = activate_setup();
+        returns(&mut s.e, 0x0057_b460, 1);
+        let activator = s.activator;
+        assert!(!activate(&mut s, activator));
+    }
+
+    #[test]
+    fn a_locked_reference_that_is_not_opened_tells_the_player() {
+        let mut s = activate_setup();
+        returns(&mut s.e, 0x0041_eb60, 1);
+        returns(&mut s.e, 0x0041_e7b0, 0);
+        let (activator, player, refr) = (s.activator, s.player, s.refr);
+        let log = logged(&mut s.e, |e| {
+            assert!(!e
+                .call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert_eq!(
+            calls_to(&log, 0x0041_e7b0),
+            vec![vec![refr + 0x44, activator]]
+        );
+        assert!(calls_to(&log, 0x0040_3df0).is_empty());
+        // for the player the message names the text at 01030e78
+        returns(&mut s.e, 0x004e_af60, 0);
+        s.e.mem.set_u8(player + 0x64c, 0);
+        s.e.set_global(0x0101_62c0, 2.0f32);
+        let log = logged(&mut s.e, |e| {
+            assert!(!e
+                .call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32])
+                .bool());
+        });
+        assert_eq!(
+            calls_to(&log, 0x0040_3df0),
+            vec![vec![0x011d_2bf8, 0, 0x0103_0e78, 0, float_bits(2.0), 0]]
+        );
+        assert_eq!(calls_to(&log, 0x0070_52f0).len(), 1);
+        // a lock that opens does not stop the activation
+        returns(&mut s.e, 0x0041_e7b0, 1);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1);
+    }
+
+    #[test]
+    fn form_types_20_21_22_25_refuse_and_30_accepts_without_running_the_base_object() {
+        let mut s = activate_setup();
+        let (activator, base) = (s.activator, s.base);
+        for (kind, expected) in [
+            (0x20, false),
+            (0x21, false),
+            (0x22, false),
+            (0x25, false),
+            (0x30, true),
+        ] {
+            s.e.mem.set_u8(base + 4, kind);
+            assert_eq!(activate(&mut s, activator), expected, "{kind:#x}");
+            assert_eq!(s.e.global::<u8>(0x011c_a428), 0, "{kind:#x}");
+        }
+        // other types, including those just below 0x1c, run the base object
+        for kind in [0x0b, 0x1b, 0x1d, 0x23, 0x2f, 0x31] {
+            s.e.mem.set_u8(base + 4, kind);
+            assert!(activate(&mut s, activator), "{kind:#x}");
+        }
+        // no base object: false
+        let refr = s.refr;
+        s.e.mem.set_u32(refr + 0x20, 0);
+        assert!(!activate(&mut s, activator));
+    }
+
+    #[test]
+    fn a_door_sends_the_player_through_its_teleport_cell_unless_the_state_is_4() {
+        let mut s = activate_setup();
+        let (player, base, refr) = (s.player, s.base, s.refr);
+        s.e.mem.set_u8(base + 4, 0x1c);
+        returns(&mut s.e, 0x004e_af60, 0);
+        s.e.mem.set_u8(player + 0x64c, 0);
+        returns(&mut s.e, 0x0056_8e50, 0x8000);
+        returns(&mut s.e, 0x0043_a2b0, 0x9000);
+        returns(&mut s.e, 0x0042_5fd0, 1);
+        let process = object(&mut s.e, 0x100, &[(0x610, 0)]);
+        s.e.mem.set_u32(player + 0x68, process);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0043_a2b0), vec![vec![0x8000]]);
+        assert_eq!(calls_to(&log, 0x0054_af80), vec![vec![0x9000]]);
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1);
+        // the player is in state 4: no teleport
+        set_slot(&mut s.e, process, 0x610, 4);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, player, 0u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0054_af80).is_empty());
+        assert_eq!(calls_to(&log, 0x0056_a290).len(), 1);
+    }
+
+    #[test]
+    fn an_unflagged_reference_runs_its_scripts_and_reports_the_activation() {
+        let mut s = activate_setup();
+        returns(&mut s.e, 0x0041_b3a0, 0);
+        let (refr, activator) = (s.refr, s.activator);
+        // the script run sees the counter one higher and sets the byte
+        let seen = Rc::new(RefCell::new(vec![]));
+        let seen_in_double = seen.clone();
+        s.e.register_double(0x0056_5870, move |e, _| {
+            seen_in_double
+                .borrow_mut()
+                .push(e.global::<i32>(0x011c_a424));
+            ret(0)
+        });
+        let log = logged(&mut s.e, |e| {
+            assert!(!e
+                .call(0x0057_3170, &args![refr, activator, 3u8, 0x44u32, 0x55u32])
+                .bool());
+        });
+        assert_eq!(*seen.borrow(), vec![1]);
+        assert_eq!(s.e.global::<i32>(0x011c_a424), 0);
+        assert_eq!(calls_to(&log, 0x0041_b3a0), vec![vec![refr + 0x44, 1]]);
+        assert_eq!(calls_to(&log, 0x0041_b440), vec![vec![refr + 0x44, 2]]);
+        assert_eq!(
+            calls_to(&log, 0x0041_b4b0),
+            vec![vec![refr + 0x44, activator]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x008b_c980),
+            vec![vec![activator, refr, 0x44, 0x55, 1]]
+        );
+        // the base object did not run
+        assert!(calls_to(&log, 0x0056_a290).is_empty());
+
+        // the scripts are nested at most 5 deep
+        s.e.set_global::<i32>(0x011c_a424, 5);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 3u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0056_5870).is_empty());
+        assert_eq!(s.e.global::<i32>(0x011c_a424), 5);
+        s.e.set_global::<i32>(0x011c_a424, 0);
+
+        // a script that activated the reference already: its byte is the result
+        s.e.register_double(0x0056_5870, |e, _| {
+            e.set_global::<u8>(0x011c_a428, 1);
+            ret(0)
+        });
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, activator, 3u8, 0u32, 0u32])
+                .bool());
+        });
+        assert!(calls_to(&log, 0x008b_c980).is_empty());
+    }
+
+    #[test]
+    fn the_player_and_a_flagged_reference_skip_the_script_path() {
+        let mut s = activate_setup();
+        let (refr, activator) = (s.refr, s.activator);
+        // flagged: skipped
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0056_5870).is_empty());
+        // the reference is the player itself: skipped too
+        returns(&mut s.e, 0x0041_b3a0, 0);
+        let player = s.player;
+        s.e.mem.set_u32(player + 0x20, s.base);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![player, activator, 0u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0056_5870).is_empty());
+        // an activator that is busy: skipped, and no log line is written
+        let process = object(&mut s.e, 0x100, &[(0x610, 4)]);
+        s.e.mem.set_u32(activator + 0x68, process);
+        returns(&mut s.e, 0x0045_cd60, 0);
+        returns(&mut s.e, 0x0070_3180, refr);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32]);
+        });
+        assert!(calls_to(&log, 0x0056_5870).is_empty());
+        assert!(calls_to(&log, 0x0070_3c00).is_empty());
+    }
+
+    #[test]
+    fn the_targeted_reference_activation_is_logged_with_both_names() {
+        let mut s = activate_setup();
+        let (refr, activator, base) = (s.refr, s.activator, s.base);
+        returns(&mut s.e, 0x0070_3180, refr);
+        let activator_base = s.e.mem.u32(activator + 0x20);
+        s.e.register_double(0x0048_2720, move |_, a| {
+            ret(if a[0] == base { 0xaa } else { 0xbb })
+        });
+        returns(&mut s.e, 0x0044_0e30, 0xcc);
+        returns(&mut s.e, 0x0046_4f30, 0xdd);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 0u32, 0u32]);
+        });
+        let line = calls_to(&log, SPRINTF)[0].clone();
+        // buffer, "'%s' activated %s '%s'", activator name, verb, reference name
+        assert_eq!(&line[1..], &[0x0103_0e60, 0xbb, 0xdd, 0xaa]);
+        assert_eq!(calls_to(&log, 0x0070_3c00), vec![vec![line[0]]]);
+        assert_eq!(
+            calls_to(&log, 0x0048_2720),
+            vec![vec![base], vec![activator_base]]
+        );
+        assert_eq!(calls_to(&log, 0x0044_0e30), vec![vec![base]]);
+        assert_eq!(calls_to(&log, 0x0046_4f30), vec![vec![0xcc, 0]]);
+    }
+
+    #[test]
+    fn an_ash_pile_hands_the_activation_to_its_reference() {
+        let mut s = activate_setup();
+        let (refr, activator, base) = (s.refr, s.activator, s.base);
+        s.e.set_global(0x011c_a280, base);
+        let ash_base = object(&mut s.e, 0x100, &[(0x124, 1)]);
+        s.e.mem.set_u8(ash_base + 4, 0x10);
+        let ash = reference(&mut s.e, false, &[]);
+        s.e.mem.set_u32(ash + 0x20, ash_base);
+        returns(&mut s.e, 0x0041_e310, ash);
+        let log = logged(&mut s.e, |e| {
+            assert!(e
+                .call(0x0057_3170, &args![refr, activator, 0u8, 1u32, 2u32])
+                .bool());
+        });
+        assert_eq!(calls_to(&log, 0x0041_e310), vec![vec![refr + 0x44]]);
+        // the base object of the ash pile reference ran, not the pile's own
+        assert_eq!(calls_to(&log, 0x0056_a290), vec![vec![ash, activator]]);
+        assert_eq!(
+            calls_to(&log, slot(&s.e, ash_base, 0x124)),
+            vec![vec![ash_base, ash, activator, 0, 1, 2]]
+        );
+        assert!(calls_to(&log, slot(&s.e, base, 0x124)).is_empty());
+        // no ash pile reference: the reference itself is activated
+        returns(&mut s.e, 0x0041_e310, 0);
+        let log = logged(&mut s.e, |e| {
+            e.call(0x0057_3170, &args![refr, activator, 0u8, 1u32, 2u32]);
+        });
+        assert_eq!(calls_to(&log, 0x0056_a290), vec![vec![refr, activator]]);
+    }
+
+    // ---- 005737e0, 00573800, 00573eb0, 00573ed0 -------------------------------
+
+    #[test]
+    fn the_player_byte_at_64c_is_read() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x700);
+        e.mem.set_u8(player + 0x64c, 3);
+        assert_eq!(e.call(0x0057_37e0, &args![player]).u8(), 3);
+    }
+
+    #[test]
+    fn the_flag_word_helpers_forward_with_the_bit_4() {
+        let mut e = engine();
+        returns(&mut e, 0x0047_b4d0, 1);
+        let log = logged(&mut e, |e| {
+            assert!(e.call(0x0057_3eb0, &args![0x5000u32]).bool());
+        });
+        assert_eq!(calls_to(&log, 0x0047_b4d0), vec![vec![0x5000, 4]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_3ed0, &args![0x5000u32, 1u8]);
+        });
+        assert_eq!(calls_to(&log, 0x004d_9fc0), vec![vec![0x5000, 1, 4]]);
+        assert_eq!(calls_to(&log, 0x0057_3f00), vec![vec![0x5000, 1]]);
+        let log = logged(&mut e, |e| {
+            e.call(0x0057_3ed0, &args![0x5000u32, 0u8]);
+        });
+        assert_eq!(calls_to(&log, 0x004d_9fc0), vec![vec![0x5000, 0, 4]]);
+        assert!(calls_to(&log, 0x0057_3f00).is_empty());
+    }
+
+    struct MoveSetup {
+        e: Engine,
+        refr: u32,
+        old_cell: u32,
+        cell: u32,
+        world: u32,
+    }
+
+    /// A non-actor reference in the exterior cell `old_cell`, an interior
+    /// destination `cell` and a world space `world`; `AddReference`
+    /// (`00548230`) moves the reference into its cell the way the game does.
+    /// The positions are 8192 and 4096, so the cell coordinates are (2, 1).
+    fn move_setup() -> MoveSetup {
+        let mut e = engine();
+        let position = e.mem.alloc(0xc);
+        e.mem.set_f32(position, 8192.0);
+        e.mem.set_f32(position + 4, 4096.0);
+        e.mem.set_f32(position + 8, 33.0);
+        let refr = reference(
+            &mut e,
+            false,
+            &[
+                (0xfc, 0),
+                (0x1d0, 0),
+                (0x1f4, position),
+                (0x22c, 0),
+                (0x1c0, 0),
+                (0x1c4, 0),
+                (0x1cc, 0),
+                (0x1fc, 0),
+                (0xd4, 0),
+                (0x48, 0),
+                (0x228, 0),
+            ],
+        );
+        let old_cell = e.mem.alloc(0x40);
+        let cell = e.mem.alloc(0x40);
+        let world = e.mem.alloc(0x40);
+        e.mem.set_u32(refr + 0x40, old_cell);
+        // `IsInterior`: bit 0 of the byte at +0x24
+        e.mem.set_u8(cell + 0x24, 1);
+        e.register(0x0042_5fd0, |e, a| {
+            ret(u32::from(e.mem.u8(a[0] + 0x24) & 1))
+        });
+        e.register(0x0054_8230, |e, a| {
+            e.mem.set_u32(a[1] + 0x40, a[0]);
+            Ret::default()
+        });
+        // float to int for the cell coordinates
+        e.register(0x0040_6d90, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        MoveSetup {
+            e,
+            refr,
+            old_cell,
+            cell,
+            world,
+        }
+    }
+
+    fn move_ref(s: &mut MoveSetup, cell: u32, world: u32) -> Vec<(u32, Vec<u32>)> {
+        let refr = s.refr;
+        logged(&mut s.e, |e| {
+            e.call(0x0057_3800, &args![refr, cell, world]);
+        })
+    }
+
+    #[test]
+    fn moving_nowhere_changes_nothing() {
+        let mut s = move_setup();
+        let log = move_ref(&mut s, 0, 0);
+        assert_eq!(addresses(&log)[0], 0x0057_3800);
+        assert!(calls_to(&log, 0x0054_8230).is_empty());
+        assert!(calls_to(&log, 0x0054_ca90).is_empty());
+        // an exterior cell is not used as the destination
+        let old_cell = s.old_cell;
+        let log = move_ref(&mut s, old_cell, 0);
+        assert!(calls_to(&log, 0x0054_8230).is_empty());
+        assert!(calls_to(&log, 0x0054_ca90).is_empty());
+    }
+
+    #[test]
+    fn moving_to_another_cell_records_the_starting_cell_and_the_persistent_list() {
+        let mut s = move_setup();
+        let (refr, cell) = (s.refr, s.cell);
+        // it was in a world space it persists in
+        returns(&mut s.e, 0x0057_5d70, 0x7777);
+        returns(&mut s.e, GET_REF_PERSISTS, 1);
+        let log = move_ref(&mut s, cell, 0);
+        // the starting cell is recorded for a non-actor that has none
+        assert_eq!(calls_to(&log, 0x0041_b320), vec![vec![refr + 0x44]]);
+        assert_eq!(calls_to(&log, 0x0041_b2a0), vec![vec![refr + 0x44, refr]]);
+        assert_eq!(calls_to(&log, 0x0058_8030), vec![vec![0x7777, refr]]);
+        assert_eq!(calls_to(&log, 0x0054_8230), vec![vec![cell, refr, 0]]);
+        // the cell is not loaded: the reference is reinitialised through the
+        // virtual at +0x1c0; it persists, so no change flag is added
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1c0)), vec![vec![refr]]);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x48)).is_empty());
+        // the saved Havok data is not dropped for a reference that says no
+        assert!(calls_to(&log, 0x0042_2c20).is_empty());
+    }
+
+    #[test]
+    fn moving_to_another_cell_marks_a_non_persistent_reference_changed() {
+        let mut s = move_setup();
+        let (refr, cell, old_cell) = (s.refr, s.cell, s.old_cell);
+        // it already has a starting cell
+        returns(&mut s.e, 0x0041_b320, 1);
+        let log = move_ref(&mut s, cell, 0);
+        assert!(calls_to(&log, 0x0041_b2a0).is_empty());
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x48)), vec![vec![refr, 8]]);
+        // the same move of the player adds no flag
+        s.e.set_global(GLOBAL_PLAYER, refr);
+        s.e.mem.set_u32(refr + 0x40, old_cell);
+        let log = move_ref(&mut s, cell, 0);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x48)).is_empty());
+    }
+
+    #[test]
+    fn moving_with_saved_havok_data_drops_it_first() {
+        let mut s = move_setup();
+        let (refr, cell) = (s.refr, s.cell);
+        set_slot(&mut s.e, refr, 0x22c, 1);
+        let log = move_ref(&mut s, cell, 0);
+        let positions = addresses(&log);
+        let drop_at = positions.iter().position(|a| *a == 0x0042_2c20).unwrap();
+        assert_eq!(log[drop_at].1, vec![refr + 0x44]);
+        assert_eq!(log[drop_at + 1], (slot(&s.e, refr, 0xd4), vec![refr, 0]));
+    }
+
+    #[test]
+    fn moving_within_the_same_cell_updates_in_place() {
+        let mut s = move_setup();
+        let (refr, old_cell) = (s.refr, s.old_cell);
+        s.e.mem.set_u8(old_cell + 0x24, 1);
+        let log = move_ref(&mut s, old_cell, 0);
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1fc)), vec![vec![refr, 0]]);
+        assert!(calls_to(&log, 0x0054_8230).is_empty());
+        // `008c7aa0` set: the helper on the handle that 004537b0 gives
+        returns(&mut s.e, 0x008c_7aa0, 1);
+        returns(&mut s.e, 0x0045_37b0, 0x1234);
+        let log = move_ref(&mut s, old_cell, 0);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
+        assert_eq!(calls_to(&log, 0x0045_37b0), vec![vec![refr]]);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x1fc)).is_empty());
+    }
+
+    #[test]
+    fn a_mobile_object_with_a_controller_gets_its_height_and_position() {
+        let mut s = move_setup();
+        let (refr, old_cell) = (s.refr, s.old_cell);
+        s.e.mem.set_u8(old_cell + 0x24, 1);
+        set_slot(&mut s.e, refr, 0xfc, 1);
+        returns(&mut s.e, 0x0093_06d0, 0xc0c0);
+        let log = move_ref(&mut s, old_cell, 0);
+        assert_eq!(calls_to(&log, 0x0093_06d0), vec![vec![refr]]);
+        assert_eq!(
+            calls_to(&log, 0x0057_3f20),
+            vec![vec![0xc0c0, float_bits(33.0)]]
+        );
+        // the same cell: the controller is placed at the position again
+        let placed = calls_to(&log, 0x0056_20e0);
+        assert_eq!(placed.len(), 1);
+        assert_eq!(placed[0][0], 0xc0c0);
+    }
+
+    #[test]
+    fn moving_into_a_loaded_cell_updates_the_reference_through_the_helpers() {
+        let mut s = move_setup();
+        let (refr, cell, old_cell) = (s.refr, s.cell, s.old_cell);
+        s.e.register_double(0x0045_11e0, move |_, a| ret(u32::from(a[1] == cell)));
+        // not a mobile object: updated through the virtual at +0x1fc
+        let log = move_ref(&mut s, cell, 0);
+        assert_eq!(calls_to(&log, 0x0045_11e0)[0][1..], [cell, 1]);
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1fc)), vec![vec![refr, 0]]);
+        // `008c7aa0` set: the helpers of the handle
+        returns(&mut s.e, 0x008c_7aa0, 1);
+        returns(&mut s.e, 0x0045_37b0, 0x1234);
+        s.e.mem.set_u32(refr + 0x40, old_cell);
+        let log = move_ref(&mut s, cell, 0);
+        // the reference moved (1c0 replacement) and was loaded (update)
+        assert_eq!(calls_to(&log, 0x0087_b2b0), vec![vec![0x1234]]);
+        assert_eq!(calls_to(&log, 0x0087_b270), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn a_mobile_object_moved_into_a_loaded_cell_resumes_when_its_process_allows() {
+        let mut s = move_setup();
+        let (refr, cell, old_cell) = (s.refr, s.cell, s.old_cell);
+        s.e.register_double(0x0045_11e0, move |_, a| ret(u32::from(a[1] == cell)));
+        set_slot(&mut s.e, refr, 0xfc, 1);
+        set_slot(&mut s.e, refr, 0x1d0, 0x4040);
+        returns(&mut s.e, 0x0045_0ff0, 1);
+        let process = object(&mut s.e, 0x100, &[(0x28c, 0)]);
+        s.e.mem.set_u32(refr + 0x68, process);
+        returns(&mut s.e, 0x0045_cd60, 1);
+        let log = move_ref(&mut s, cell, 0);
+        assert_eq!(calls_to(&log, 0x0045_0ff0), vec![vec![cell]]);
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1c4)), vec![vec![refr]]);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x1fc)).is_empty());
+        // process level 2: not resumed
+        returns(&mut s.e, 0x0045_cd60, 2);
+        s.e.mem.set_u32(refr + 0x40, old_cell);
+        let log = move_ref(&mut s, cell, 0);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x1c4)).is_empty());
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1fc)), vec![vec![refr, 0]]);
+        // the process vetoes (virtual +0x28c nonzero): updated in place
+        returns(&mut s.e, 0x0045_cd60, 1);
+        set_slot(&mut s.e, process, 0x28c, 1);
+        s.e.mem.set_u32(refr + 0x40, old_cell);
+        let log = move_ref(&mut s, cell, 0);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x1c4)).is_empty());
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1fc)), vec![vec![refr, 0]]);
+    }
+
+    #[test]
+    fn moving_into_a_world_space_finds_the_cell_by_the_position() {
+        let mut s = move_setup();
+        let (refr, old_cell, world) = (s.refr, s.old_cell, s.world);
+        // the old cell is an interior cell, so the move counts as a change
+        s.e.mem.set_u8(old_cell + 0x24, 1);
+        let found = s.cell;
+        returns(&mut s.e, 0x0058_75a0, found);
+        let log = move_ref(&mut s, 0, world);
+        // the coordinates are the positions divided by 4096
+        assert_eq!(calls_to(&log, 0x0058_75a0), vec![vec![world, 2, 1]]);
+        assert_eq!(calls_to(&log, 0x0054_8230), vec![vec![found, refr, 0]]);
+        // the starting world space is recorded; the old space was 0, so
+        // nothing is removed from a persistent list
+        assert_eq!(calls_to(&log, 0x0041_b2a0).len(), 1);
+        assert!(calls_to(&log, 0x0058_8030).is_empty());
+        // the cell is not loaded: reinitialised through the virtual at +0x1c0
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1c0)), vec![vec![refr]]);
+    }
+
+    #[test]
+    fn a_persistent_reference_changes_its_persistent_world_space_list() {
+        let mut s = move_setup();
+        let (refr, world) = (s.refr, s.world);
+        let found = s.cell;
+        returns(&mut s.e, 0x0058_75a0, found);
+        returns(&mut s.e, GET_REF_PERSISTS, 1);
+        returns(&mut s.e, 0x0057_5d70, 0x7777);
+        let log = move_ref(&mut s, 0, world);
+        assert_eq!(calls_to(&log, 0x0058_8030), vec![vec![0x7777, refr]]);
+        assert_eq!(calls_to(&log, 0x0058_7ff0), vec![vec![world, refr]]);
+        // the same world space: neither list changes
+        returns(&mut s.e, 0x0057_5d70, world);
+        let log = move_ref(&mut s, 0, world);
+        assert!(calls_to(&log, 0x0058_8030).is_empty());
+        assert!(calls_to(&log, 0x0058_7ff0).is_empty());
+    }
+
+    #[test]
+    fn a_world_space_without_a_cell_there_takes_the_reference_out_of_its_cell() {
+        let mut s = move_setup();
+        let (refr, old_cell, world) = (s.refr, s.old_cell, s.world);
+        returns(&mut s.e, 0x0058_75a0, 0);
+        let log = move_ref(&mut s, 0, world);
+        assert_eq!(calls_to(&log, 0x0054_ca90), vec![vec![old_cell, refr]]);
+        assert_eq!(
+            calls_to(&log, slot(&s.e, refr, 0x1cc)),
+            vec![vec![refr, 0, 0]]
+        );
+        // while the save game is being loaded (0047c850) nothing more is done
+        returns(&mut s.e, 0x0047_c850, 1);
+        let log = move_ref(&mut s, 0, world);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x1cc)).is_empty());
+    }
+
+    #[test]
+    fn an_actor_pushed_out_of_every_loaded_cell_is_unloaded_at_process_level_3() {
+        let mut s = move_setup();
+        let (refr, old_cell, world) = (s.refr, s.old_cell, s.world);
+        set_slot(&mut s.e, refr, 0xfc, 1);
+        set_slot(&mut s.e, refr, 0x100, 1);
+        returns(&mut s.e, 0x0058_75a0, 0);
+        returns(&mut s.e, 0x0093_34b0, 3);
+        let save_load = s.e.mem.alloc(0x40);
+        s.e.set_global(GLOBAL_SAVE_LOAD, save_load);
+        let unloader = s.e.mem.alloc(0x40);
+        s.e.set_global(GLOBAL_LOADING_OBJECT, unloader);
+        let log = move_ref(&mut s, 0, world);
+        assert_eq!(
+            calls_to(&log, 0x0096_e870),
+            vec![vec![OBJECT_PROCESS_LISTS, refr]]
+        );
+        assert_eq!(
+            calls_to(&log, slot(&s.e, refr, 0x228)),
+            vec![vec![refr, old_cell], vec![refr, 0]]
+        );
+        assert_eq!(calls_to(&log, 0x008d_0370), vec![vec![save_load, refr]]);
+        assert_eq!(calls_to(&log, 0x0084_9730), vec![vec![unloader, refr, 0]]);
+        assert!(calls_to(&log, slot(&s.e, refr, 0x48)).contains(&vec![refr, 8]));
+        // a persistent actor is kept loaded
+        returns(&mut s.e, GET_REF_PERSISTS, 1);
+        let log = move_ref(&mut s, 0, world);
+        assert!(calls_to(&log, 0x0084_9730).is_empty());
+        assert_eq!(calls_to(&log, 0x0096_e870).len(), 1);
+        // a process level other than 3 is kept as well
+        returns(&mut s.e, GET_REF_PERSISTS, 0);
+        returns(&mut s.e, 0x0093_34b0, 2);
+        let log = move_ref(&mut s, 0, world);
+        assert!(calls_to(&log, 0x0084_9730).is_empty());
+    }
+
+    #[test]
+    fn the_flag_of_the_node_is_cleared_for_the_move_and_restored_afterwards() {
+        let mut s = move_setup();
+        let (refr, world) = (s.refr, s.world);
+        set_slot(&mut s.e, refr, 0x1d0, 0x4040);
+        let holder = s.e.mem.alloc(0x40);
+        returns(&mut s.e, 0x0068_38b0, holder);
+        returns(&mut s.e, 0x0047_b4d0, 1);
+        returns(&mut s.e, 0x0058_75a0, 0);
+        let log = move_ref(&mut s, 0, world);
+        assert_eq!(calls_to(&log, 0x0068_38b0), vec![vec![0x4040]]);
+        assert_eq!(
+            calls_to(&log, 0x004d_9fc0),
+            vec![vec![holder, 0, 4], vec![holder, 1, 4]]
+        );
+        assert_eq!(calls_to(&log, 0x0057_3f00), vec![vec![holder, 1]]);
+        // the flag was not set: untouched
+        returns(&mut s.e, 0x0047_b4d0, 0);
+        let log = move_ref(&mut s, 0, world);
+        assert!(calls_to(&log, 0x004d_9fc0).is_empty());
+    }
+
+    #[test]
+    fn a_mobile_object_arriving_in_a_loaded_cell_of_another_world_space_is_woken() {
+        let mut s = move_setup();
+        let (refr, world) = (s.refr, s.world);
+        let found = s.cell;
+        returns(&mut s.e, 0x0058_75a0, found);
+        s.e.register_double(0x0045_11e0, move |_, a| ret(u32::from(a[1] == found)));
+        set_slot(&mut s.e, refr, 0xfc, 1);
+        set_slot(&mut s.e, refr, 0x100, 1);
+        let process = object(&mut s.e, 0x100, &[(0x28, 0)]);
+        s.e.mem.set_u32(refr + 0x68, process);
+        let log = move_ref(&mut s, 0, world);
+        // another world space: the process is asked through its virtual +0x28
+        assert_eq!(
+            calls_to(&log, slot(&s.e, process, 0x28)),
+            vec![vec![process]]
+        );
+        // the loaded reference does not enter the temporary change list
+        assert!(calls_to(&log, 0x0096_e870).is_empty());
+        // and it was reinitialised and updated
+        assert_eq!(calls_to(&log, slot(&s.e, refr, 0x1c0)), vec![vec![refr]]);
     }
 }
