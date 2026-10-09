@@ -15,7 +15,15 @@
 //! animation group player (`009520f0`), the first-person zoom (`00952290`),
 //! the god-mode flags, and the topic and quest lists.
 //!
-//! Notes for the next session: this part continues at `00952b30` (the
+//! The third session covers `00952b30` to `0095c9c0` (40 functions): the
+//! quest target list and path, the map marker, `FocusOnActor`, the sit and
+//! get-up packages, the pick-up and drop of objects (`00953ff0`, `00954610`),
+//! the package predicates, the save size (`00954d40`), the old-format save
+//! and load (`00955620`, `00956f70`, `00958990`, `00958ec0`, `00958fc0`)
+//! and the buffer-format save, load, finish and revert (`009590f0`,
+//! `0095a3b0`, `0095c0a0`, `0095c730`, `0095c9c0`).
+//!
+//! Notes for the next session: this part continues after `0095c9c0` (the
 //! functions from there to `0095d090`).
 //!
 //! Conventions: the `ActorValueOwner` sits at `PlayerCharacter + 0xa4` and the
@@ -313,6 +321,130 @@ const ERROR: u32 = 0x0040_fbe0;
 /// pointer); `ECX` = the setting.
 const SETTING_FLOAT_POINTER: u32 = 0x0040_3e20;
 const SETTING_INT_POINTER: u32 = 0x0043_d4d0;
+
+// Constants of the functions from `00952b30` on.
+/// `Bip01 Speaker`, the node `FocusOnActor` looks for when there is no head.
+const SPEAKER_NODE_NAME: u32 = 0x0108_b3a4;
+/// The log text of `FocusOnActor` for an actor without a head node.
+const FORMAT_FOCUS_WITHOUT_HEAD: u32 = 0x0108_b338;
+/// The last actor `FocusOnActor` warned about.
+const FOCUS_LAST_WARNED_ACTOR: u32 = 0x011e_0d3c;
+/// The blend of the previous `FocusOnActor` call (`float`).
+const FOCUS_BLEND: u32 = 0x011e_0d48;
+/// The ratio (`float`) and the angle limit (`float`) derived from the head's
+/// bound, kept between calls.
+const FOCUS_RATIO: u32 = 0x011e_0d44;
+const FOCUS_ANGLE_LIMIT: u32 = 0x011e_0d40;
+/// The bytes that say the pitch (`0d39`) and the yaw (`0d38`) are turning.
+const FOCUS_PITCH_TURNING: u32 = 0x011e_0d39;
+const FOCUS_YAW_TURNING: u32 = 0x011e_0d38;
+/// The heading and the looking angle saved before the camera refresh.
+const FOCUS_SAVED_HEADING: u32 = 0x011e_076c;
+const FOCUS_SAVED_LOOKING: u32 = 0x011e_0764;
+/// The `float` (32.0 in the exe's data) the bound of a head-less node gets.
+const FOCUS_BOUND_RADIUS: u32 = 0x0101_e340;
+/// `100.0` (`double`).
+const HUNDRED: u32 = 0x0101_7a40;
+/// `44.0` and `25.0` (`double`s): the distance base and scale of the field of
+/// view `FocusOnActor` sets.
+const FOCUS_DISTANCE_BASE: u32 = 0x0103_57e8;
+const FOCUS_DISTANCE_SCALE: u32 = 0x0104_f2f0;
+/// `pi`, `2 * pi` and `-pi` as `double`s (the exe's truncated values).
+const PI_DOUBLE: u32 = 0x0101_ff40;
+const TWO_PI_DOUBLE: u32 = 0x0101_ff48;
+const MINUS_PI_DOUBLE: u32 = 0x0101_ff58;
+/// `pi / 180` (`double`).
+const DEGREES_TO_RADIANS: u32 = 0x0102_3128;
+// Settings `FocusOnActor` reads (floats).
+const HEAD_HEIGHT_SETTING: u32 = 0x011e_08d0;
+const HEAD_DISTANCE_FACTOR_SETTING: u32 = 0x011e_0b84;
+const FOCUS_MAXIMUM_SETTING: u32 = 0x0120_3150;
+const FOCUS_SMOOTHING_SETTING: u32 = 0x011d_3ee0;
+const FOCUS_RATE_SETTING: u32 = 0x011e_0958;
+const PITCH_START_SETTING: u32 = 0x011e_094c;
+const PITCH_STOP_SETTING: u32 = 0x011e_0900;
+const YAW_START_SETTING: u32 = 0x011e_0b28;
+const YAW_STOP_SETTING: u32 = 0x011e_08c4;
+/// The double (5.0 in the exe's data) after which the greet flag resets.
+const GREET_TIMEOUT: u32 = 0x0102_0998;
+/// The actor `fn_00953ff0` found to blame for a theft.
+const STEAL_ACTOR: u32 = 0x011e_07a4;
+/// `##NifRound`, the node hidden when the current ammo is dropped.
+const ROUND_NODE_NAME: u32 = 0x0108_9a7c;
+/// The save-load object (`TESSaveLoadGame`) pointer and its debug setting.
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+const SAVE_SIZE_DEBUG_SETTING: u32 = 0x011d_e4e8;
+/// The texts of the `GetSaveSize()` and `SaveGame()` debug reports: with a
+/// world space record, and without.
+const FORMAT_SAVE_SIZE_FORM: u32 = 0x0101_2cb0;
+const FORMAT_SAVE_SIZE: u32 = 0x0101_2c78;
+const SAVE_SIZE_FORMATS: (u32, u32) = (FORMAT_SAVE_SIZE_FORM, FORMAT_SAVE_SIZE);
+const FORMAT_SAVE_GAME_FORM: u32 = 0x0101_53a0;
+const FORMAT_SAVE_GAME: u32 = 0x0101_536c;
+/// The log text for a save block longer than 16 bits.
+const FORMAT_BLOCK_TOO_BIG: u32 = 0x0101_5318;
+/// Form pointers the save writes as ids (globals).
+const SAVED_FORM_011E0784: u32 = 0x011e_0784;
+const SAVED_FORM_011E078C: u32 = 0x011e_078c;
+/// `__RTDynamicCast` and the two type descriptors the selected spell is cast
+/// between.
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+const RTTI_CAST_SOURCE: u32 = 0x0118_3140;
+const RTTI_CAST_TARGET: u32 = 0x0118_3060;
+/// The element count of a `BSSimpleList` (`005ae380`, `ECX` = the list).
+const LIST_COUNT: u32 = 0x005a_e380;
+/// Type descriptors the load casts forms to (source `01183028`, a `TESForm`).
+const RTTI_LOAD_SOURCE: u32 = 0x0118_3028;
+const RTTI_LOAD_REGION: u32 = 0x0118_99b4;
+const RTTI_LOAD_FORM_0604: u32 = 0x0118_41cc;
+const RTTI_LOAD_REGION_DATA: u32 = 0x0118_629c;
+const RTTI_LOAD_QUEST: u32 = 0x0118_6500;
+const RTTI_LOAD_TOPIC: u32 = 0x0118_4720;
+const RTTI_LOAD_FIRE_NODE: u32 = 0x0118_6424;
+/// The global tested after the perk list is loaded.
+const LOADED_PERK_FLAG: u32 = 0x011e_07b4;
+/// The log texts of the load: wrong block header (with and without the form
+/// being loaded), buffer overrun and underrun (the same).
+const FORMAT_BLOCK_HEADER_FORM: u32 = 0x0101_5718;
+const FORMAT_BLOCK_HEADER: u32 = 0x0101_56a8;
+const FORMAT_OVERRUN_FORM: u32 = 0x0101_5588;
+const FORMAT_UNDERRUN_FORM: u32 = 0x0101_5500;
+const FORMAT_OVERRUN: u32 = 0x0101_54a0;
+const FORMAT_UNDERRUN: u32 = 0x0101_5440;
+/// Appends the item whose address is the argument to a `BSSimpleList`
+/// (`005ae3d0`, `ECX` = the list).
+const LIST_APPEND: u32 = 0x005a_e3d0;
+/// Type descriptors the second load pass casts to.
+const RTTI_RESOLVE_0208: u32 = 0x0119_9c3c;
+const RTTI_SPELL_INTERFACE: u32 = 0x0118_395c;
+const RTTI_MAGIC_ITEM_FORM: u32 = 0x0118_30e8;
+const RTTI_RESOLVE_SCROLL: u32 = 0x0118_a650;
+const RTTI_RESOLVE_0758: u32 = 0x0118_30cc;
+/// More type descriptors of the buffer load: the list at `+0x5e4`, the perk
+/// entries and the effect items.
+const RTTI_LOAD_LIST_05E4: u32 = 0x0118_640c;
+const RTTI_LOAD_PERK: u32 = 0x0118_61dc;
+const RTTI_LOAD_EFFECT_ITEM: u32 = 0x0118_c5c4;
+/// The object `0084a810` is called on for the flagged first-person data, and
+/// the holder that finds a combat group by id (`00991d60`).
+const STATISTICS_OBJECT: u32 = 0x011d_df38;
+const COMBAT_HOLDER: u32 = 0x011f_1958;
+/// The type descriptor of the forms at `+0xd2c`, `+0xd44` and the `+0xd48`
+/// list; the two heartbeat settings (floats) and sound names.
+const RTTI_RESOLVE_0D2C: u32 = 0x0118_46d4;
+const HEARTBEAT_UPPER_SETTING: u32 = 0x011d_00b4;
+const HEARTBEAT_LOWER_SETTING: u32 = 0x011d_04a8;
+const HEARTBEAT_SOUND_ALP: u32 = 0x0108_af40;
+const HEARTBEAT_SOUND_BLP: u32 = 0x0108_af28;
+/// Camera values `fn_0095c9c0` resets: a float (`0768`), the saved alpha
+/// (`011a3b34`, set to -1.0) and a word (`0788`); the `float` (5.0) the
+/// player's timer at `+0x684` restarts with; the two view offset settings.
+const CAMERA_VALUE_0768: u32 = 0x011e_0768;
+const INVENTORY_ALPHA_SAVE: u32 = 0x011a_3b34;
+const CAMERA_WORD_0788: u32 = 0x011e_0788;
+const DEFAULT_TIMER_VALUE: u32 = 0x0101_712c;
+const VIEW_OFFSET_SETTING_A: u32 = 0x0120_315c;
+const VIEW_OFFSET_SETTING_B: u32 = 0x0120_3168;
 
 // ---------------------------------------------------------------------
 // Layout
@@ -3920,6 +4052,3911 @@ pub fn fn_00952a20(e: &mut Engine, this: Ptr<PlayerCharacter>, target: u32) {
     }
 }
 
+// Translated from 00952b30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the list at `+0x6bc` and returns the first entry whose `0044edb0`
+/// equals the active quest (`+0x6b8`) and whose `007af430` is 1, or 0.
+pub fn fn_00952b30(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let active = e.get(this, PlayerCharacter::pActiveQuest).addr();
+    let mut node = this.addr() + 0x6bc;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if e.call(0x0044_edb0, &args![item]).u32() == active
+            && e.call(0x007a_f430, &args![item]).u32() == 1
+        {
+            return item;
+        }
+        node = list_next(e, node);
+    }
+    0
+}
+
+// Translated from 00952ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetCurrentTargetList` (Xbox PDB): the quest target list
+/// at `+0x6c4`, or 0 without an active quest. The list is rebuilt from the
+/// one at `+0x6bc` (`0060f110(quest, +0x6c4, +0x6bc)`) when the dirty byte
+/// at `+0x206` is set or the active quest's check `0060efd0` says it is
+/// stale; the byte is then cleared.
+pub fn player_character_get_current_target_list(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u32 {
+    let player = this.addr();
+    let quest = e.get(this, PlayerCharacter::pActiveQuest).addr();
+    if quest == 0 {
+        return 0;
+    }
+    let dirty = e.mem.u8(player + 0x206) != 0;
+    if dirty
+        || !e
+            .call(0x0060_efd0, &args![quest, player + 0x6c4, player + 0x6bc])
+            .bool()
+    {
+        e.call(0x0060_f110, &args![quest, player + 0x6c4, player + 0x6bc]);
+        e.mem.set_u8(player + 0x206, 0);
+    }
+    player + 0x6c4
+}
+
+// Translated from 00952c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::CheckForQuestTargetUpdate` (Xbox PDB): marks the target
+/// list dirty (`+0x206`) when `reference` is the player (after rebuilding the
+/// path to the target at `+0x6f4` into `+0x6f8`), or when it is the
+/// reference of one of the current quest targets (`006101b0(target, 1)`), or
+/// when it holds an inventory (`0055d310`, `004bf220`) for which `004cfe20`
+/// accepts its form id.
+pub fn player_character_check_for_quest_target_update(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    reference: u32,
+) {
+    let player = this.addr();
+    if reference == e.global::<u32>(PLAYER_POINTER) {
+        let target = e.mem.u32(player + 0x6f4);
+        if target != 0 {
+            player_character_build_path_to_target(e, this, target, player + 0x6f8, 0);
+        }
+        e.mem.set_u8(player + 0x206, 1);
+    }
+    let mut list = player_character_get_current_target_list(e, this);
+    while list != 0 {
+        let item_slot = list_item_slot(e, list);
+        if e.mem.u32(item_slot) == 0 || e.mem.u8(player + 0x206) != 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, list);
+        let target = e.mem.u32(item_slot);
+        list = list_next(e, list);
+        let found = e.call(0x0061_01b0, &args![target, 1u32]).u32();
+        if found == reference {
+            e.mem.set_u8(player + 0x206, 1);
+        }
+        if found != 0 && e.call(0x0055_d310, &args![found]).u32() != 0 {
+            let container = e.call(0x0055_d310, &args![found]).u32();
+            if container != 0 {
+                let changes = e.call(0x004b_f220, &args![found]).u32();
+                if changes != 0 {
+                    let form_id = form_id_of(e, found);
+                    if e.call(0x004c_fe20, &args![changes, form_id]).bool() {
+                        e.mem.set_u8(player + 0x206, 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Translated from 00952d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::BuildPathToTarget` (Xbox PDB): with a target location
+/// and a `TeleportPath` (`path`), builds the low path from the player's
+/// position to the target (`006d4f70`, mode 2) and clears the path again when
+/// that fails. `this` and the third stack word are not read. The stack
+/// objects are two `PathingLocation`s (`006dcd70`, destroyed by `004ff7e0`),
+/// a `TeleportPath` (`006f48b0`, `006f4930`) and the lock data `00502670`
+/// (no destructor runs); the exception frame is not translated.
+pub fn player_character_build_path_to_target(
+    e: &mut Engine,
+    _this: Ptr<PlayerCharacter>,
+    target: u32,
+    path: u32,
+    _unused_3: u32,
+) {
+    if target == 0 || path == 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    e.with_stack(0xa0, |e, frame| {
+        let target_location = frame.addr() + 0x28;
+        let from_location = frame.addr();
+        let lock_data = frame.addr() + 0x50;
+        let scratch_path = frame.addr() + 0x5c;
+        e.call(0x006d_cd70, &args![target_location, player]);
+        e.call(0x006d_cd70, &args![from_location, target]);
+        e.call(0x006f_48b0, &args![scratch_path]);
+        e.call(0x0050_2670, &args![lock_data, player]);
+        e.call(0x006f_4990, &args![path]);
+        let built = e
+            .call(
+                0x006d_4f70,
+                &args![target_location, from_location, path, lock_data, 2u32],
+            )
+            .bool();
+        if !built {
+            e.call(0x006f_4990, &args![path]);
+        }
+        e.call(0x006f_4930, &args![scratch_path]);
+        e.call(0x004f_f7e0, &args![from_location]);
+        e.call(0x004f_f7e0, &args![target_location]);
+    });
+}
+
+// Translated from 00952e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetPlayerMapMarker` (Xbox PDB): creates the map marker
+/// reference (`+0x6f4`, a `TESObjectREFR` of `0x68` bytes built by `0055a2f0`
+/// and given the base object stored at `011ca248` by `00575690`) when there
+/// is none, moves it to the position (`0049eea0`), puts it into the cell or
+/// worldspace `place` (`0087ce80`; for a form of type `0x39` directly, for
+/// type `0x41` the object `005f36f0` returns, when not null), and rebuilds
+/// the path to it into `+0x6f8`. The exception frame is not translated.
+pub fn player_character_set_player_map_marker(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    x: f32,
+    y: f32,
+    z: f32,
+    place: u32,
+) {
+    let player = this.addr();
+    if e.mem.u32(player + 0x6f4) == 0 {
+        let block = e.call(OPERATOR_NEW, &args![0x68u32]).u32();
+        let marker = if block == 0 {
+            0
+        } else {
+            e.call(0x0055_a2f0, &args![block]).u32()
+        };
+        e.mem.set_u32(player + 0x6f4, marker);
+        let base = e.global::<u32>(0x011c_a248);
+        e.call(0x0057_5690, &args![marker, base]);
+    }
+    let marker = e.mem.u32(player + 0x6f4);
+    e.with_stack(12, |e, position| {
+        e.mem.set_f32(position.addr(), x);
+        e.mem.set_f32(position.addr() + 4, y);
+        e.mem.set_f32(position.addr() + 8, z);
+        e.call(0x0049_eea0, &args![marker, position.addr()]);
+    });
+    if e.call(FORM_TYPE_OF, &args![place]).u32() == 0x39 {
+        e.call(0x0087_ce80, &args![marker, place]);
+    } else if e.call(FORM_TYPE_OF, &args![place]).u32() == 0x41 {
+        let cell = e.call(0x005f_36f0, &args![place]).u32();
+        if cell != 0 {
+            e.call(0x0087_ce80, &args![marker, cell]);
+        }
+    }
+    let marker = e.mem.u32(player + 0x6f4);
+    player_character_build_path_to_target(e, this, marker, player + 0x6f8, 0);
+}
+
+// Translated from 00952f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::RemovePlayerMapMarker` (Xbox PDB): destroys the map
+/// marker (`+0x6f4`) through its slot `0x10` with the delete flag, forgets
+/// it and clears the path at `+0x6f8` (`006f4990`).
+pub fn player_character_remove_player_map_marker(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    let marker = e.mem.u32(player + 0x6f4);
+    if marker != 0 {
+        e.vcall(marker, 0x10, &args![1u32]);
+    }
+    e.mem.set_u32(player + 0x6f4, 0);
+    e.call(0x006f_4990, &args![player + 0x6f8]);
+}
+
+// Translated from 00952ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes a three-float position into `out`: the three words `0045bb80`
+/// returns for the node in `011e07d0` when the player is in first person
+/// (`+0x64a` is 0) and that node exists; otherwise what `008a2fa0(player, out)`
+/// writes. Returns `out`.
+pub fn fn_00952ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, out: u32) -> u32 {
+    let node = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+    if !e.get(this, PlayerCharacter::b3rdPerson) && node != 0 {
+        let source = e.call(0x0045_bb80, &args![node]).u32();
+        for i in 0..3 {
+            let word = e.mem.u32(source + i * 4);
+            e.mem.set_u32(out + i * 4, word);
+        }
+    } else {
+        e.call(0x008a_2fa0, &args![this, out]);
+    }
+    out
+}
+
+// Translated from 00953060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::FocusOnActor` (Xbox PDB): turns the camera and the
+/// player towards the head of `actor` (dialogue). `strength` is clamped to
+/// `0..=1` and stored in `011e0d48` at the end (the previous call's blend
+/// decides how fast the turn is: at `0` the angle limit `011e0d40` is
+/// derived from the head's bound; below `1` the step is the frame time over
+/// `(1 - blend) * setting`, capped at 1). Nothing happens without an actor,
+/// or when the actor is in another cell (another world space outside).
+/// The head is the node `008a30f0` names or the node named `Bip01 Speaker`;
+/// an actor with neither logs once. With `skip_turn == 0` the pitch
+/// (`00931e50`) and the yaw (`00931d30`, or `+0x6e4` when slot `0x214` says
+/// so) are turned, then the first-person camera is refreshed. Without
+/// face-gen animation data the field of view is set by `00950610` from the
+/// distance. The exception frame is not translated.
+pub fn player_character_focus_on_actor(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    actor: u32,
+    strength: f32,
+    skip_turn: u8,
+) {
+    let player = this.addr();
+    if actor == 0 {
+        return;
+    }
+    let mut blend = if strength < 0.0 { 0.0 } else { strength };
+    if blend > 1.0 {
+        blend = 1.0;
+    }
+    if e.global::<u8>(VANITY_ACTIVE) != 0 {
+        player_character_stop_vanity_mode(e, this.cast());
+        let hide = u8::from(!e.get(this, PlayerCharacter::b3rdPerson));
+        fn_00951a10(e, this, hide);
+    }
+    let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
+    let mut interior = false;
+    if cell != 0 {
+        let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
+        interior = e.call(0x0042_5fd0, &args![cell]).bool();
+    }
+    if interior {
+        let actor_cell = e.call(PARENT_CELL_OF, &args![actor]).u32();
+        let player_cell = e.call(PARENT_CELL_OF, &args![player]).u32();
+        if actor_cell != player_cell {
+            return;
+        }
+    } else {
+        let actor_world = e.call(0x0057_5d70, &args![actor]).u32();
+        let player_world = e.call(0x0057_5d70, &args![player]).u32();
+        if actor_world != player_world {
+            return;
+        }
+    }
+    e.with_stack(0x50, |e, frame| {
+        // The frame: the vector from the head to the camera, the head
+        // position, the head's bound, a zero point and two results.
+        let delta = frame.addr();
+        let head_position = frame.addr() + 0x0c;
+        let bound = frame.addr() + 0x18;
+        let zero_point = frame.addr() + 0x28;
+        let angle_vector_a = frame.addr() + 0x34;
+        let angle_vector_b = frame.addr() + 0x40;
+        let camera_node = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+        let camera_position = e.call(0x0045_bb80, &args![camera_node]).u32();
+        for i in 0..3 {
+            let word = e.mem.u32(camera_position + i * 4);
+            e.mem.set_u32(delta + i * 4, word);
+        }
+        e.call(LIST_NODE_ITEM_SLOT, &args![head_position]);
+        let mut has_face_animation = false;
+        let mut head_found = true;
+        let target = if e.call(0x0057_4900, &args![actor]).bool() {
+            let base = e.call(0x005e_3fa0, &args![actor]).u32();
+            e.vcall(base, 0x1d0, &args![]).u32()
+        } else {
+            e.vcall(actor, 0x1d0, &args![]).u32()
+        };
+        if target != 0 {
+            let head = e.vcall(actor, 0x1b0, &args![0u32]).u32();
+            let mut found = 0;
+            if head == 0 {
+                let head_name = e.call(0x008a_30f0, &args![]).u32();
+                let looked_up = e.call(0x004a_de00, &args![target, head_name]).u32();
+                found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
+            }
+            let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+            let speaker_name = if block == 0 {
+                0
+            } else {
+                e.call(0x0043_8170, &args![block, SPEAKER_NODE_NAME]).u32()
+            };
+            if found == 0 {
+                let looked_up = e.call(0x004a_de00, &args![target, speaker_name]).u32();
+                found = e.call(0x0065_3270, &args![0x011f_4428u32, looked_up]).u32();
+            }
+            if head == 0 && found == 0 {
+                if e.global::<u32>(FOCUS_LAST_WARNED_ACTOR) != actor {
+                    let model = e.call(0x0057_15d0, &args![actor]).u32();
+                    e.call(LOG_MESSAGE, &args![FORMAT_FOCUS_WITHOUT_HEAD, model]);
+                }
+                e.set_global(FOCUS_LAST_WARNED_ACTOR, actor);
+                head_found = false;
+            } else {
+                if head != 0 && e.call(0x0045_6610, &args![head]).bool() {
+                    e.call(0x0045_0f90, &args![head, 0u32]);
+                    e.call(0x0043_d410, &args![zero_point, 0u32, 0u32, 0u32]);
+                    e.call(0x00a5_9c60, &args![head, zero_point]);
+                    e.vcall(head, 0xbc, &args![]);
+                    e.call(0x0045_0f90, &args![head, 1u32]);
+                }
+                e.call(0x0062_40d0, &args![bound]);
+                if head != 0 {
+                    let world_bound = e.call(0x0043_d450, &args![head]).u32();
+                    e.call(0x004a_5250, &args![bound, world_bound]);
+                } else {
+                    let position = e.call(0x0045_bb80, &args![found]).u32();
+                    e.call(0x0098_ddd0, &args![bound, position]);
+                    let radius = e.global::<u32>(FOCUS_BOUND_RADIUS);
+                    e.call(0x0063_f790, &args![bound, radius]);
+                }
+                let center = e.call(LIST_NODE_ITEM_SLOT, &args![bound]).u32();
+                for i in 0..3 {
+                    let word = e.mem.u32(center + i * 4);
+                    e.mem.set_u32(head_position + i * 4, word);
+                }
+                let height = setting_float(e, HEAD_HEIGHT_SETTING);
+                let z = e.mem.f32(head_position + 8);
+                e.mem
+                    .set_f32(head_position + 8, (f64::from(z) + f64::from(height)) as f32);
+                e.call(0x0045_78c0, &args![delta, head_position]);
+                let owner = e.call(0x0045_c670, &args![]).u32();
+                let animation_data = e.call(0x0066_29f0, &args![owner]).u32();
+                if animation_data != 0 {
+                    has_face_animation = true;
+                    focus_ease_view(e, this, bound, delta, blend);
+                }
+            }
+            if skip_turn == 0 && head_found {
+                focus_turn(e, this, delta, angle_vector_a, angle_vector_b, blend);
+            }
+            if !has_face_animation {
+                let distance = e.call(0x0045_7990, &args![delta]).f64();
+                let scaled = (distance - e.global::<f64>(FOCUS_DISTANCE_BASE))
+                    / e.global::<f64>(HUNDRED)
+                    * e.global::<f64>(FOCUS_DISTANCE_SCALE);
+                let whole = e.call(FTOL, &args![scaled]).i32();
+                fn_00950610(e, this, (whole + 0xf) as f32);
+            }
+        }
+        e.set_global(FOCUS_BLEND, blend);
+    });
+}
+
+/// The frame time: `0084d030` reads the float at `+0xc` of the timer object
+/// `011f6394` (the game also pushes a `1.0`, which it ignores).
+fn focus_frame_time(e: &mut Engine) -> f64 {
+    e.call(0x0084_d030, &args![TIMER_SOURCE_011F6394]).f64()
+}
+
+/// A float setting (`00403e20` gives the address of its value).
+fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+    let at = e.call(SETTING_FLOAT_POINTER, &args![setting]).u32();
+    e.mem.f32(at)
+}
+
+/// The step `min(frame_time / ((1 - blend) * setting), 1)` of `FocusOnActor`
+/// (`0040ebd0` is `min`; its second word is the `1.0` the game pushed for
+/// the frame-time getter, which ignores it).
+fn focus_step(e: &mut Engine, blend: f32) -> f64 {
+    let frame_time = focus_frame_time(e);
+    let smoothing = setting_float(e, FOCUS_SMOOTHING_SETTING);
+    let ratio = (frame_time / ((1.0 - f64::from(blend)) * f64::from(smoothing))) as f32;
+    e.call(0x0040_ebd0, &args![ratio, 1.0f32]).f64()
+}
+
+/// The part of `FocusOnActor` that eases the view offsets `+0x670` and
+/// `+0x674` towards the angle limit derived from the head's bound.
+fn focus_ease_view(e: &mut Engine, this: Ptr<PlayerCharacter>, bound: u32, delta: u32, blend: f32) {
+    let player = this.addr();
+    if blend == 0.0 {
+        let radius = e.call(0x0084_d030, &args![bound]).f64();
+        let factor = setting_float(e, HEAD_DISTANCE_FACTOR_SETTING);
+        let product = f64::from(factor) * radius;
+        let distance = e.call(0x0045_7990, &args![delta]).f64();
+        let ratio = (product / distance) as f32;
+        e.set_global(FOCUS_RATIO, ratio);
+        let angle = e.call(0x005d_c330, &args![ratio]).f64();
+        let limit = (angle * e.global::<f64>(HUNDRED)) as f32;
+        e.set_global(FOCUS_ANGLE_LIMIT, limit);
+        let maximum = setting_float(e, FOCUS_MAXIMUM_SETTING);
+        if limit > maximum {
+            e.set_global(FOCUS_ANGLE_LIMIT, maximum);
+        }
+    }
+    let limit = e.global::<f32>(FOCUS_ANGLE_LIMIT);
+    let first = e.mem.f32(player + 0x670);
+    let second = e.mem.f32(player + 0x674);
+    let first_diff = (f64::from(limit) - f64::from(first)) as f32;
+    let second_diff = (f64::from(limit) - f64::from(second)) as f32;
+    let step = focus_step(e, blend);
+    let first_new = step * f64::from(first_diff) + f64::from(e.mem.f32(player + 0x670));
+    e.mem.set_f32(player + 0x670, first_new as f32);
+    let step = focus_step(e, blend);
+    let second_new = step * f64::from(second_diff) + f64::from(e.mem.f32(player + 0x674));
+    e.mem.set_f32(player + 0x674, second_new as f32);
+}
+
+/// Wraps an angle into `-pi..=pi` with the exe's constants (`0101ff40`,
+/// `0101ff48`, `0101ff58`), storing as `float` after every step.
+fn focus_wrap_angle(e: &mut Engine, mut angle: f32) -> f32 {
+    let pi = e.global::<f64>(PI_DOUBLE);
+    let two_pi = e.global::<f64>(TWO_PI_DOUBLE);
+    let minus_pi = e.global::<f64>(MINUS_PI_DOUBLE);
+    while f64::from(angle) > pi {
+        angle = (f64::from(angle) - two_pi) as f32;
+    }
+    while f64::from(angle) < minus_pi {
+        angle = (f64::from(angle) + two_pi) as f32;
+    }
+    angle
+}
+
+/// The turn by `turn` radians: `step * turn` below full blend, otherwise
+/// `frame_time * (turn * rate)`.
+fn focus_turn_amount(e: &mut Engine, blend: f32, turn: f32) -> f64 {
+    if blend < 1.0 {
+        focus_step(e, blend) * f64::from(turn)
+    } else {
+        let rate = setting_float(e, FOCUS_RATE_SETTING);
+        let scaled = f64::from(turn) * f64::from(rate);
+        focus_frame_time(e) * scaled
+    }
+}
+
+/// The turning half of `FocusOnActor`: the pitch step, the yaw step, then the
+/// first-person camera refresh.
+fn focus_turn(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    delta: u32,
+    angle_vector_a: u32,
+    angle_vector_b: u32,
+    blend: f32,
+) {
+    let player = this.addr();
+    let degrees = e.global::<f64>(DEGREES_TO_RADIANS);
+    let look_rate = (f64::from(e.mem.f32(player + 0x674))
+        / f64::from(setting_float(e, FOCUS_MAXIMUM_SETTING))) as f32;
+    // Pitch.
+    let distance = e.call(0x0045_7990, &args![delta]).f64();
+    let sine = (f64::from(e.mem.f32(delta + 8)) / distance) as f32;
+    let wanted_pitch = e.call(0x004b_5510, &args![sine]).f64() as f32;
+    let looking = e.call(0x0093_1d70, &args![player]).f64();
+    let turn = (f64::from(wanted_pitch) - looking) as f32;
+    let size = e.call(0x0040_8840, &args![turn]).f64();
+    let threshold =
+        f64::from(setting_float(e, PITCH_START_SETTING)) * degrees * f64::from(look_rate);
+    if threshold < size {
+        e.set_global(FOCUS_PITCH_TURNING, 1u8);
+    }
+    if blend < 1.0 {
+        e.set_global(FOCUS_PITCH_TURNING, 1u8);
+    }
+    if e.global::<u8>(FOCUS_PITCH_TURNING) != 0 {
+        let amount = focus_turn_amount(e, blend, turn) as f32;
+        e.call(0x0093_1e50, &args![player, amount]);
+        let size = e.call(0x0040_8840, &args![turn]).f64();
+        let threshold =
+            f64::from(setting_float(e, PITCH_STOP_SETTING)) * degrees * f64::from(look_rate);
+        if threshold > size {
+            e.set_global(FOCUS_PITCH_TURNING, 0u8);
+        }
+    }
+    // Yaw.
+    let vector = e.call(0x004a_0bd0, &args![delta, angle_vector_a]).u32();
+    let z_angle = e.call(0x004b_13c0, &args![vector]).f64();
+    let heading = e.vcall(player, 0x2bc, &args![0u32]).f64();
+    let mut turn = focus_wrap_angle(e, (z_angle - heading) as f32);
+    let size = e.call(0x0040_8840, &args![turn]).f64();
+    let threshold = f64::from(setting_float(e, YAW_START_SETTING)) * degrees * f64::from(look_rate);
+    if threshold < size {
+        e.set_global(FOCUS_YAW_TURNING, 1u8);
+    }
+    if blend < 1.0 {
+        e.set_global(FOCUS_YAW_TURNING, 1u8);
+    }
+    if e.global::<u8>(FOCUS_YAW_TURNING) != 0 {
+        if e.vcall(player, 0x214, &args![]).u32() == 0 {
+            let amount = focus_turn_amount(e, blend, turn) as f32;
+            e.call(0x0093_1d30, &args![player, amount]);
+        } else {
+            let vector = e.call(0x004a_0bd0, &args![delta, angle_vector_b]).u32();
+            let z_angle = e.call(0x004b_13c0, &args![vector]).f64();
+            let heading = e.call(0x008b_d7b0, &args![player, 0u32]).f64();
+            let current = e.mem.f32(player + 0x6e4);
+            turn = focus_wrap_angle(e, ((z_angle - heading) - f64::from(current)) as f32);
+            let amount = focus_turn_amount(e, blend, turn);
+            let updated = amount + f64::from(e.mem.f32(player + 0x6e4));
+            e.mem.set_f32(player + 0x6e4, updated as f32);
+        }
+        let size = e.call(0x0040_8840, &args![turn]).f64();
+        let threshold =
+            f64::from(setting_float(e, YAW_STOP_SETTING)) * degrees * f64::from(look_rate);
+        if threshold > size {
+            e.set_global(FOCUS_YAW_TURNING, 0u8);
+        }
+    }
+    // The camera refresh.
+    let heading = e.vcall(player, 0x2bc, &args![0u32]).f64();
+    e.set_global(FOCUS_SAVED_HEADING, heading as f32);
+    let looking = e.call(0x0093_1d70, &args![player]).f64();
+    e.set_global(FOCUS_SAVED_LOOKING, looking as f32);
+    player_character_set_first_person(e, this, 1);
+    player_character_update_first_person_zoom(e, this);
+    player_character_update_temp_3rd_person(e, this);
+    let camera = e.mem.u32(player + 0x190);
+    e.call(0x009e_a3b0, &args![camera, 0x3fu32]);
+    e.call(0x00c6_6210, &args![]);
+    e.mem.set_u8(player + 0x64a, 1);
+    e.vcall(player, 0x1e0, &args![]);
+    e.call(0x0089_5110, &args![player, 1.0f32, 1.0f32]);
+    let animation = player_character_get_animation(e, this, 0);
+    e.call(0x0088_85e0, &args![player, animation, 0.0f32]);
+    e.mem.set_u8(player + 0x64a, 0);
+    let frame_time = focus_frame_time(e) as f32;
+    e.call(0x008d_3550, &args![player, frame_time]);
+    let frame_time = focus_frame_time(e) as f32;
+    let first_person = u8::from(e.mem.u8(player + 0x64a) == 0);
+    let animation = player_character_get_animation(e, this, first_person);
+    e.call(0x0088_85e0, &args![player, animation, frame_time]);
+}
+
+// Translated from 00953c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetNumberActorsInCombat` (Xbox PDB): `005a4320` of the
+/// combat group at `+0xd64`, or 0 without one.
+pub fn player_character_get_number_actors_in_combat(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+) -> u32 {
+    let group = e.mem.u32(this.addr() + 0xd64);
+    if group == 0 {
+        0
+    } else {
+        e.call(0x005a_4320, &args![group]).u32()
+    }
+}
+
+// Translated from 00953c50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::IsPlayerCharacterInCombat` (Xbox PDB): returns the byte
+/// at `+0xdf0` and, when `out` is not null, stores the byte at `+0xdf1` there.
+pub fn player_character_is_player_character_in_combat(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    out: u32,
+) -> u8 {
+    let player = this.addr();
+    if out != 0 {
+        let flag = e.mem.u8(player + 0xdf1);
+        e.mem.set_u8(out, flag);
+    }
+    e.mem.u8(player + 0xdf0)
+}
+
+// Translated from 00953c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Asks the `ProcessLists` singleton (`00971c30(this, 0x15, 0)`) for an
+/// object; when it finds one, calls `004702f0(object, 1)` on it. Returns
+/// whether an object was found.
+pub fn fn_00953c80(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    let found = e
+        .call(0x0097_1c30, &args![PROCESS_LISTS, this, 0x15u32, 0u32])
+        .u32();
+    if found != 0 {
+        e.call(0x0047_02f0, &args![found, 1u32]);
+    }
+    found != 0
+}
+
+// Translated from 00953ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::ResetPlayerGreetFlag` (Xbox PDB): clears the greet flag
+/// (`+0x6cc`) and its timer (`+0x6d0`).
+pub fn player_character_reset_player_greet_flag(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    e.mem.set_u8(this.addr() + 0x6cc, 0);
+    e.mem.set_f32(this.addr() + 0x6d0, 0.0);
+}
+
+// Translated from 00953d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the greet flag once its timer (`+0x6d0`) is above the double at
+/// `01020998` (5.0 in the exe's data) while the flag (`+0x6cc`) is set.
+pub fn fn_00953d00(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    if e.mem.u8(player + 0x6cc) != 0
+        && f64::from(e.mem.f32(player + 0x6d0)) > e.global::<f64>(GREET_TIMEOUT)
+    {
+        player_character_reset_player_greet_flag(e, this);
+    }
+}
+
+// Translated from 00953d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// While the greet flag (`+0x6cc`) is set, adds the frame time (`0084d030` of
+/// the timer object) to the greet timer (`+0x6d0`).
+pub fn fn_00953d40(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    let player = this.addr();
+    if e.mem.u8(player + 0x6cc) != 0 {
+        let frame_time = focus_frame_time(e);
+        let timer = e.mem.f32(player + 0x6d0);
+        e.mem
+            .set_f32(player + 0x6d0, (frame_time + f64::from(timer)) as f32);
+    }
+}
+
+/// The start of the sit, sleep and get-up packages: when the player's path is
+/// not complete (`008b3bb0`), clears the mover data (`009daf80` on the
+/// mover at `+0x190`).
+fn clear_mover_unless_pathing_complete(e: &mut Engine) {
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if !e.call(0x008b_3bb0, &args![player]).bool() {
+        let mover = e.mem.u32(player + 0x190);
+        e.call(0x009d_af80, &args![mover]);
+    }
+}
+
+// Translated from 00953d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::InitiateSitSleepPackage` (Xbox PDB): gives the player a
+/// package of type 6 (`00670b90`, `00670fc0`) located at `reference` (a
+/// `PackageLocation` of `0xc` bytes, built by `0067f030`, `0067f3c0`, handed
+/// to `00671d30`, destroyed by `00670b30`) and runs it through slot `0x2f4`.
+/// Before, sets `0093a5f0(true)` and, when the process's slot `0x3e4` says 7,
+/// calls `00894cc0(player, 0)`. The exception frame is not translated.
+pub fn player_character_initiate_sit_sleep_package(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    reference: u32,
+) {
+    let player = this.addr();
+    clear_mover_unless_pathing_complete(e);
+    e.call(0x0093_a5f0, &args![this, 1u32]);
+    let process = process_of(e, this);
+    if e.vcall(process, 0x3e4, &args![]).i32() == 7 {
+        e.call(0x0089_4cc0, &args![this, 0u32]);
+    }
+    let package = e.call(0x0067_0b90, &args![6u32]).u32();
+    e.call(0x0067_0fc0, &args![package, 6u32]);
+    e.call(0x0082_6b40, &args![package, 0u32]);
+    e.call(0x0082_6b90, &args![package, 1u32]);
+    let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+    let location = if block == 0 {
+        0
+    } else {
+        e.call(0x0067_f030, &args![block]).u32()
+    };
+    e.call(0x0067_f3c0, &args![location, reference]);
+    e.call(0x0067_1d30, &args![package, location]);
+    if location != 0 {
+        e.call(0x0067_0b30, &args![location, 1u32]);
+    }
+    e.call(0x0098_4f60, &args![package, 0u32]);
+    e.vcall(player, 0x2f4, &args![package, 0u32, 1u32]);
+}
+
+// Translated from 00953ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::InitiateGetUpPackage` (Xbox PDB): clears the mover as
+/// the sit package does, then `0093a6f0(this, true)` and `008a75a0(this)`.
+pub fn player_character_initiate_get_up_package(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    clear_mover_unless_pathing_complete(e);
+    e.call(0x0093_a6f0, &args![this, 1u32]);
+    e.call(0x008a_75a0, &args![this]);
+}
+
+// Translated from 00953f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::GetHeading` (Xbox PDB): the actor's heading
+/// (`008bd7b0(this, 0)`) plus the offset `+0x6e4`, clamped with `004b1480`.
+/// The stack word is not read.
+pub fn player_character_get_heading(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    _unused_1: u32,
+) -> f32 {
+    let heading = e.call(0x008b_d7b0, &args![this, 0u32]).f32();
+    let sum = (f64::from(heading) + f64::from(e.mem.f32(this.addr() + 0x6e4))) as f32;
+    e.call(0x004b_1480, &args![sum]).f32()
+}
+
+// Translated from 00953f60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the murderer byte (`+0x6d8`) is set.
+pub fn fn_00953f60(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    e.mem.u8(this.addr() + 0x6d8) != 0
+}
+
+// Translated from 00953f80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlayerCharacter::SetIsAMurderer` (Xbox PDB): sets the murderer byte
+/// (`+0x6d8`) and calls `008bff70(this, 4, 1)`.
+pub fn player_character_set_is_a_murderer(e: &mut Engine, this: Ptr<PlayerCharacter>) {
+    e.mem.set_u8(this.addr() + 0x6d8, 1);
+    e.call(0x008b_ff70, &args![this, 4u32, 1u32]);
+}
+
+// Translated from 00953fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x6e8`.
+pub fn fn_00953fb0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> u8 {
+    e.mem.u8(this.addr() + 0x6e8)
+}
+
+// Translated from 00953fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `+0x6e8`.
+pub fn fn_00953fd0(e: &mut Engine, this: Ptr<PlayerCharacter>, value: u8) {
+    e.mem.set_u8(this.addr() + 0x6e8, value);
+}
+
+// Translated from 00953ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player takes `count` of the reference `item` (pick-up). The base
+/// object (`007af430`) of form type `0x28` must pass `0047bcf0`, one of type
+/// `0x29` must pass `004c94d0`, other types go on. Then: `008aded0(base, 1,
+/// 0)`, `00c6a270(item's slot 0x1d0, 1, 1, 0)`; every actor of the
+/// `ProcessLists` list `0096f450(form id, player)` is told with `00881620`
+/// (the player when its `00881650` is the item, else null) and the list is
+/// freed; unless a menu is visible (`00702680(0x3f1, 0)`, `00705020`,
+/// `00705000`) the ownership is handled (stealing raises the alarm through
+/// `008bfa40`, then the owner is set from or removed from the extra data);
+/// a form of type `0x28` that is the process's current item (slot `0x14c`)
+/// adds `count` to the count of the item in slot `0x148` and `0x14c`;
+/// `00574b30` does the transfer; the weapon's ammo regeneration may start the
+/// reload (slot `0x3ec`); a reference that was fully taken is destroyed
+/// through its slot `0x10`.
+pub fn fn_00953ff0(e: &mut Engine, this: Ptr<PlayerCharacter>, item: u32, count: u32, flag: u8) {
+    let player = this.addr();
+    let mut flag = flag;
+    let mut touched_item = false;
+    let base = e.call(0x007a_f430, &args![item]).u32();
+    let kind = e.call(FORM_TYPE_OF, &args![base]).u32();
+    if kind == 0x28 {
+        let base = e.call(0x007a_f430, &args![item]).u32();
+        if !e.call(0x0047_bcf0, &args![base]).bool() {
+            return;
+        }
+    } else if kind == 0x29 {
+        let base = e.call(0x007a_f430, &args![item]).u32();
+        if !e.call(0x004c_94d0, &args![base]).bool() {
+            return;
+        }
+    }
+    let base = e.call(0x007a_f430, &args![item]).u32();
+    e.call(0x008a_ded0, &args![this, base, 1u32, 0u32]);
+    let slot = e.vcall(item, 0x1d0, &args![]).u32();
+    e.call(0x00c6_a270, &args![slot, 1u32, 1u32, 0u32]);
+    let form_id = form_id_of(e, item);
+    let list = e
+        .call(0x0096_f450, &args![PROCESS_LISTS, form_id, player])
+        .u32();
+    let mut node = list;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let actor = e.mem.u32(item_slot);
+        if actor != 0 && e.call(0x0088_1650, &args![actor]).u32() == item {
+            e.call(0x0088_1620, &args![actor, player]);
+        } else {
+            e.call(0x0088_1620, &args![actor, 0u32]);
+        }
+        node = list_next(e, node);
+    }
+    if list != 0 {
+        e.call(LIST_CLEAR, &args![list]);
+        e.call(0x0047_02f0, &args![list, 1u32]);
+    }
+    let file = e.call(0x0048_4e60, &args![item, 0xffff_ffffu32]).u32();
+    if !e.call(0x0070_2680, &args![0x3f1u32, 0u32]).bool()
+        && !e.call(0x0070_5020, &args![]).bool()
+        && !e.call(0x0070_5000, &args![]).bool()
+    {
+        let owner = e.call(0x0056_7790, &args![item]).u32();
+        let mut keep_ownership = false;
+        if owner != 0 && !e.call(0x0057_85e0, &args![item, player, 1u32]).bool() {
+            let base = e.call(0x007a_f430, &args![item]).u32();
+            if e.call(FORM_TYPE_OF, &args![base]).u32() != 0x33 {
+                let thief = e.call(0x0097_3ab0, &args![PROCESS_LISTS, item]).u32();
+                e.set_global(STEAL_ACTOR, thief);
+                if e.call(0x0046_0250, &args![item]).bool()
+                    || file != 0
+                    || e.call(0x0057_2d30, &args![item, 2u32]).bool()
+                {
+                    let base = e.call(0x007a_f430, &args![item]).u32();
+                    e.call(0x008b_fa40, &args![this, item, base, count, 0u32, owner]);
+                } else if thief != 0 {
+                    let base = e.call(0x007a_f430, &args![item]).u32();
+                    e.call(0x008b_fa40, &args![this, thief, base, count, 0u32, owner]);
+                }
+                let evil = e.call(0x0057_8790, &args![item, 0u32]).bool();
+                let extra = e.call(EXTRA_LIST_OF, &args![item]).u32();
+                if !evil {
+                    e.call(0x0041_9700, &args![extra, owner]);
+                } else {
+                    e.call(0x0041_aed0, &args![extra]);
+                }
+                keep_ownership = true;
+            }
+        }
+        if !keep_ownership {
+            let extra = e.call(EXTRA_LIST_OF, &args![item]).u32();
+            e.call(0x0041_aed0, &args![extra]);
+        }
+    } else {
+        // A menu is visible: nothing about ownership is touched.
+    }
+    let process = process_of(e, this);
+    let base = e.call(0x007a_f430, &args![item]).u32();
+    let kind = e.call(FORM_TYPE_OF, &args![base]).u32();
+    if kind == 0x28 {
+        let base = e.call(0x007a_f430, &args![item]).u32();
+        if e.call(0x004c_0bf0, &args![base]).bool() && e.vcall(process, 0x14c, &args![]).u32() != 0
+        {
+            let current = e.vcall(process, 0x14c, &args![]).u32();
+            if base == e.call(WORD_AT_8, &args![current]).u32() {
+                if e.vcall(process, 0x148, &args![]).u32() != 0 {
+                    let entry = e.vcall(process, 0x148, &args![]).u32();
+                    let total = e
+                        .call(LIST_NODE_NEXT, &args![entry])
+                        .u32()
+                        .wrapping_add(count);
+                    let entry = e.vcall(process, 0x148, &args![]).u32();
+                    e.call(0x006e_cd40, &args![entry, total]);
+                }
+                if e.vcall(process, 0x14c, &args![]).u32() != 0 {
+                    let entry = e.vcall(process, 0x14c, &args![]).u32();
+                    let total = e
+                        .call(LIST_NODE_NEXT, &args![entry])
+                        .u32()
+                        .wrapping_add(count);
+                    let entry = e.vcall(process, 0x14c, &args![]).u32();
+                    e.call(0x006e_cd40, &args![entry, total]);
+                }
+                touched_item = true;
+            }
+        }
+    } else if kind == 0x29 {
+        flag = 0;
+    }
+    let mut taken_whole = false;
+    if e.call(0x0046_0250, &args![item]).bool() || file != 0 {
+        e.call(0x0057_2230, &args![item]);
+        e.call(
+            0x0057_4b30,
+            &args![this, item, count, u32::from(flag), u32::from(touched_item)],
+        );
+    } else if e.call(0x0057_2d30, &args![item, 2u32]).bool() {
+        e.call(0x0057_2230, &args![item]);
+        e.call(
+            0x0057_4b30,
+            &args![this, item, count, 0u32, u32::from(touched_item)],
+        );
+    } else {
+        e.call(
+            0x0057_4b30,
+            &args![this, item, count, 0u32, u32::from(touched_item)],
+        );
+        taken_whole = true;
+    }
+    let mut skip = false;
+    if e.vcall(process, 0x14c, &args![]).u32() != 0 {
+        let entry = e.vcall(process, 0x14c, &args![]).u32();
+        if e.call(LIST_NODE_NEXT, &args![entry]).u32() != 0 {
+            skip = true;
+        }
+    }
+    if !skip && e.vcall(process, 0x148, &args![]).u32() != 0 && item != 0 {
+        let base = e.call(0x007a_f430, &args![item]).u32();
+        let player_pointer = e.global::<u32>(PLAYER_POINTER);
+        let entry = e.vcall(process, 0x148, &args![]).u32();
+        let form = e.call(WORD_AT_8, &args![entry]).u32();
+        let ammo = e.call(0x0052_5980, &args![form, player_pointer]).u32();
+        if base == ammo {
+            let entry = e.vcall(process, 0x148, &args![]).u32();
+            let modded = e.call(0x004b_da70, &args![entry, 6u32]).u8();
+            let entry = e.vcall(process, 0x148, &args![]).u32();
+            let form = e.call(WORD_AT_8, &args![entry]).u32();
+            let regeneration = e.call(0x0070_9430, &args![form, u32::from(modded)]).f64();
+            if regeneration <= 0.0 {
+                let entry = e.vcall(process, 0x148, &args![]).u32();
+                let modded = e.call(0x004b_da70, &args![entry, 2u32]).u8();
+                let drawn = e.call(0x008a_16d0, &args![this]).bool();
+                let mode = if drawn { 2u32 } else { 0 };
+                let entry = e.vcall(process, 0x148, &args![]).u32();
+                let form = e.call(WORD_AT_8, &args![entry]).u32();
+                e.vcall(player, 0x3ec, &args![form, mode, u32::from(modded), 0u32]);
+            }
+        }
+    }
+    if taken_whole && item != 0 {
+        e.vcall(item, 0x10, &args![1u32]);
+    }
+}
+
+// Translated from 00954610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Drops `count` of `item` (a base form) from the player: quits VATS
+/// playback (`009c8950(011f2250, 0, 0)`), then, when `007043c0` says so and
+/// the player has a parent cell, lets slot `0x17c` do the whole drop at the
+/// position `00551110(cell)` or `00551180(cell, player)` gives (returning 0);
+/// otherwise, for ammunition (type `0x29`) that is the current ammo of the
+/// weapon `008a1710` returns, empties the ammo count and hides the two
+/// `##NifRound` nodes of the first-person biped. The remembered item
+/// (`+0x1f0`) is forgotten when it is the dropped one and worn (`00418ab0`).
+/// The reference slot `0x17c` creates (the base form only when slot `0xe4`
+/// of `item` says so) is placed at the physics body (`1d0`) or put on the
+/// player's pending list (`+0x84c`) and flagged (`00954910`, `00564d20`);
+/// `008aded0(base, 0, 0)` closes it. Returns the reference.
+pub fn fn_00954610(
+    e: &mut Engine,
+    this: Ptr<PlayerCharacter>,
+    item: u32,
+    extra: u32,
+    third: u32,
+    fourth: u32,
+    fifth: u32,
+) -> u32 {
+    let player = this.addr();
+    e.call(0x009c_8950, &args![OBJECT_011F2250, 0u32, 0u32]);
+    let cell = e.call(PARENT_CELL_OF, &args![player]).u32();
+    let mut skip_ammo = false;
+    if e.call(0x0070_43c0, &args![]).bool() && cell != 0 {
+        let mut position = e.call(0x0055_1110, &args![cell]).u32();
+        if position == 0 {
+            position = e.call(0x0055_1180, &args![cell, player]).u32();
+        }
+        if position != 0 {
+            e.vcall(
+                player,
+                0x17c,
+                &args![item, extra, third, 0u32, 0u32, position, 0u32, 0u32, 1u32, 0u32],
+            );
+            return 0;
+        }
+        skip_ammo = true;
+    }
+    if !skip_ammo
+        && e.call(FORM_TYPE_OF, &args![item]).u32() == 0x29
+        && e.call(0x008a_1710, &args![this]).u32() != 0
+    {
+        let weapon = e.call(0x008a_1710, &args![this]).u32();
+        let player_pointer = e.global::<u32>(PLAYER_POINTER);
+        if e.call(0x0052_5980, &args![weapon, player_pointer]).u32() == item {
+            let process = process_of(e, this);
+            let entry = e.vcall(process, 0x14c, &args![]).u32();
+            e.call(0x006e_cd40, &args![entry, 0u32]);
+            for _ in 0..2 {
+                let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
+                let node = e.call(0x004a_ae30, &args![biped, ROUND_NODE_NAME]).u32();
+                if node != 0 {
+                    e.call(0x0045_0f90, &args![node, 1u32]);
+                }
+            }
+        }
+    }
+    let remembered = e.mem.u32(player + 0x1f0);
+    if remembered != 0
+        && item == remembered
+        && extra != 0
+        && e.call(0x0041_8ab0, &args![extra, 0u32]).bool()
+    {
+        e.mem.set_u32(player + 0x1f0, 0);
+    }
+    let selected = if e.vcall(item, 0xe4, &args![]).bool() {
+        item
+    } else {
+        0
+    };
+    let reference = e
+        .vcall(
+            player,
+            0x17c,
+            &args![selected, extra, third, 0u32, 1u32, 0u32, fourth, fifth, 1u32, 0u32],
+        )
+        .u32();
+    if reference != 0 {
+        let body = e.vcall(reference, 0x1d0, &args![]).u32();
+        if body != 0 {
+            e.call(0x00c6_a040, &args![body, 0u32, 1u32, 1u32]);
+            e.with_stack(0x30, |e, frame| {
+                let scratch = frame.addr();
+                let zero_point = frame.addr() + 0x0c;
+                let position = frame.addr() + 0x18;
+                e.call(0x0043_d410, &args![zero_point, 0u32, 0u32, 0u32]);
+                e.call(0x00a5_9c60, &args![body, zero_point]);
+                e.call(0x00c6_a040, &args![body, 1u32, 1u32, 1u32]);
+                let source = e.vcall(reference, 0x1f4, &args![]).u32();
+                for i in 0..3 {
+                    let word = e.mem.u32(source + i * 4);
+                    e.mem.set_u32(position + i * 4, word);
+                }
+                let world_bound = e.call(0x0043_d450, &args![body]).u32();
+                let center = e.call(LIST_NODE_ITEM_SLOT, &args![world_bound]).u32();
+                e.call(0x0043_9ef0, &args![position, scratch, center]);
+                e.call(0x0063_c8a0, &args![position, scratch]);
+                e.call(0x0044_0460, &args![body, position]);
+                e.call(0x0057_5830, &args![reference, position]);
+                e.call(0x00c6_bd00, &args![body, 1u32]);
+                e.call(0x00c6_a270, &args![body, 1u32, 1u32, 0u32]);
+            });
+        } else {
+            let word = e.mem.alloc(4);
+            e.mem.set_u32(word, reference);
+            e.call(0x005a_e3d0, &args![player + 0x84c, word]);
+            e.mem.free(word);
+            fn_00954910(e, Ptr::new(reference), 1);
+            e.call(0x0056_4d20, &args![reference, 1u32]);
+        }
+        e.call(0x008a_ded0, &args![this, selected, 0u32, 0u32]);
+    }
+    reference
+}
+
+// Translated from 00954910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`set` non-zero) or clears bit `0x400000` of the form flags at `+8`.
+pub fn fn_00954910(e: &mut Engine, this: Ptr, set: u8) {
+    let flags = e.mem.u32(this.addr() + 8);
+    let flags = if set != 0 {
+        flags | 0x0040_0000
+    } else {
+        flags & 0xffbf_ffff
+    };
+    e.mem.set_u32(this.addr() + 8, flags);
+}
+
+// Translated from 00954960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// 1.0 unless god mode is on (`IsGodMode`), then `008c4610(this, flag, 0.0)`.
+/// The second stack word is not read.
+pub fn fn_00954960(e: &mut Engine, this: Ptr<PlayerCharacter>, flag: u8, _unused_2: u32) -> f32 {
+    if e.call(IS_GOD_MODE, &args![]).bool() {
+        e.call(0x008c_4610, &args![this, u32::from(flag), 0.0f32])
+            .f32()
+    } else {
+        1.0
+    }
+}
+
+// Translated from 009549a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `actor` is currently using the player (a sit or sleep package):
+/// false when slot `0x22c(0)`, `00440da0`, slot `0x234` or `00437bf0` say so;
+/// otherwise true when its package (`00881510`) is of kind 1 or 7 (`0041ca90`),
+/// the acquire object of its process (`008d8520`) targets the player (slot
+/// `0x128`) and `008a6210` is false. `this` is not used.
+pub fn fn_009549a0(e: &mut Engine, _this: Ptr, actor: u32) -> u8 {
+    if e.vcall(actor, 0x22c, &args![0u32]).bool()
+        || e.call(0x0044_0da0, &args![actor]).bool()
+        || e.vcall(actor, 0x234, &args![]).bool()
+        || e.call(0x0043_7bf0, &args![actor]).bool()
+    {
+        return 0;
+    }
+    let package = e.call(0x0088_1510, &args![actor]).u32();
+    if package == 0 {
+        return 0;
+    }
+    if e.call(0x0041_ca90, &args![package]).u32() != 1
+        && e.call(0x0041_ca90, &args![package]).u32() != 7
+    {
+        return 0;
+    }
+    let holder = e.call(0x008d_8520, &args![actor]).u32();
+    let target = e.vcall(holder, 0x128, &args![]).u32();
+    if target == e.global::<u32>(PLAYER_POINTER) && !e.call(0x008a_6210, &args![actor]).bool() {
+        1
+    } else {
+        0
+    }
+}
+
+// Translated from 00954a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the player is the reason `actor` stands in its current package
+/// (`mode` selects the check; see the two branches). False first when slot
+/// `0x22c(0)`, `00440da0`, slot `0x234` or `00437bf0` say so. Tells the
+/// process's holder (`008d8520`) about the actor (slot `0x24(actor, 1)`).
+/// `this` is not used.
+pub fn fn_00954a70(e: &mut Engine, _this: Ptr, actor: u32, mode: u8) -> u8 {
+    let player_pointer = e.global::<u32>(PLAYER_POINTER);
+    if e.vcall(actor, 0x22c, &args![0u32]).bool()
+        || e.call(0x0044_0da0, &args![actor]).bool()
+        || e.vcall(actor, 0x234, &args![]).bool()
+        || e.call(0x0043_7bf0, &args![actor]).bool()
+    {
+        return 0;
+    }
+    let holder = e.call(0x008d_8520, &args![actor]).u32();
+    e.vcall(holder, 0x24, &args![actor, 1u32]);
+    let package = e.call(0x0088_1510, &args![actor]).u32();
+    let holder = e.call(0x008d_8520, &args![actor]).u32();
+    let acquire = holder + 4;
+    if mode != 0 {
+        let mut target = 0;
+        if acquire != 0 && e.call(WORD_AT_8, &args![acquire]).u32() != 0 {
+            target = e.call(WORD_AT_8, &args![acquire]).u32();
+            if target == 0 {
+                let package_target = e.call(0x0067_1d10, &args![package]).u32();
+                let object = e.call(0x0068_0050, &args![package_target]).u32();
+                if object != 0 {
+                    let player_base = e.call(0x007a_f430, &args![player_pointer]).u32();
+                    if object == player_base {
+                        target = player_pointer;
+                    }
+                }
+            }
+        }
+        let location_is_player =
+            package != 0 && e.call(0x0067_6140, &args![package, actor]).u32() == player_pointer;
+        if !location_is_player {
+            if target != player_pointer {
+                let holder = e.call(0x008d_8520, &args![actor]).u32();
+                if e.vcall(holder, 0x128, &args![]).u32() != player_pointer {
+                    return 0;
+                }
+            }
+            if e.call(0x0041_ca90, &args![package]).u32() == 9 {
+                return 0;
+            }
+        }
+        if target == player_pointer {
+            u8::from(!e.call(0x008a_6210, &args![actor]).bool())
+        } else {
+            1
+        }
+    } else {
+        if package == 0 {
+            return 0;
+        }
+        if e.call(0x0041_ca90, &args![package]).u32() != 1
+            && e.call(0x0041_ca90, &args![package]).u32() != 7
+        {
+            return 0;
+        }
+        if e.call(0x0067_1d10, &args![package]).u32() == 0 {
+            return 0;
+        }
+        let holder = e.call(0x008d_8520, &args![actor]).u32();
+        let acquire = holder + 4;
+        let mut target = e.call(WORD_AT_8, &args![acquire]).u32();
+        if target == 0 {
+            let package_target = e.call(0x0067_1d10, &args![package]).u32();
+            let object = e.call(0x0068_0050, &args![package_target]).u32();
+            if object != 0 {
+                let player_base = e.call(0x007a_f430, &args![player_pointer]).u32();
+                if object == player_base {
+                    target = player_pointer;
+                }
+            }
+        }
+        if target == player_pointer {
+            u8::from(!e.call(0x008a_6290, &args![package]).bool())
+        } else {
+            0
+        }
+    }
+}
+
+// Translated from 00954cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `008a0c20(this)` is below the value of actor value `0x2e` (slot 8
+/// of the `ActorValueOwner` at `+0xa4`); false in god mode.
+pub fn fn_00954cc0(e: &mut Engine, this: Ptr<PlayerCharacter>) -> bool {
+    if e.call(IS_GOD_MODE, &args![]).bool() {
+        return false;
+    }
+    let owner = this.addr() + ACTOR_VALUE_OWNER;
+    let limit = e.vcall(owner, 8, &args![0x2eu32]).i32();
+    let value = e.call(0x008a_0c20, &args![this]).f64();
+    value < f64::from(limit)
+}
+
+/// `GetSaveSize()` debug report of `fn_00954d40`: when the setting at
+/// `011de4e8` is on, logs the size computed so far with the world space
+/// record of the save-load object (form id, name through slot `0x130`, flags
+/// at `+5`) or without it, and the source line.
+fn save_size_report(e: &mut Engine, formats: (u32, u32), size: i32, line: u32) {
+    let at = e.call(0x0040_8d60, &args![SAVE_SIZE_DEBUG_SETTING]).u32();
+    if e.mem.u8(at) == 0 {
+        return;
+    }
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    let record = e.call(0x004f_d3e0, &args![save_load]).u32();
+    if record != 0 {
+        let form_id = e.mem.u32(record);
+        let form_type = e.call(0x0048_39c0, &args![form_id]).u32();
+        let name = e.vcall(form_type, 0x130, &args![]).u32();
+        let flags = e.mem.u32(record + 5);
+        e.call(
+            ERROR,
+            &args![
+                formats.0,
+                size as u32,
+                form_id,
+                name,
+                flags,
+                line,
+                SOURCE_FILE_NAME
+            ],
+        );
+    } else {
+        e.call(
+            ERROR,
+            &args![formats.1, size as u32, line, SOURCE_FILE_NAME],
+        );
+    }
+}
+
+/// The save game version (`008df040` of the save-load object), a byte.
+fn save_version(e: &mut Engine) -> u32 {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    u32::from(e.call(0x008d_f040, &args![save_load]).u8())
+}
+
+/// `total + amount`, wrapped to 16 bits as the game's `word` accumulator.
+fn add16(total: u16, amount: u32) -> u16 {
+    u32::from(total).wrapping_add(amount) as u16
+}
+
+// Translated from 00954d40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The number of bytes the player's save data takes for the save format
+/// version, `flags` being the save flags (its bit `0x10000000` adds the
+/// first-person animation's data, `0049aa20`). Every field of the format is
+/// added with the version that introduced it (`008df040` of the save-load
+/// object `011de45c`), the variable parts by their counts (`005ae380` of the
+/// lists, `0084e3a0`, `008d32b0`, `00805a00`, `008d54e0`, `00609c70`,
+/// `005f6ed0` and the length of the name `0055d520`). With the debug setting
+/// `011de4e8` on, the sizes before and after the base part are logged
+/// ("GetSaveSize(): ..."). The result is a 16-bit sum.
+pub fn fn_00954d40(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) -> u16 {
+    let player = this.addr();
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    let mut total: u16 = 0;
+    if e.call(0x0086_2110, &args![save_load]).bool() {
+        total = add16(total, 4);
+        total = add16(total, 2);
+    }
+    total = add16(total, 0x134);
+    total = add16(total, 0x134);
+    if save_version(e) >= 0x31 {
+        total = add16(total, 0x134);
+    }
+    total = add16(total, 4);
+    save_size_report(e, SAVE_SIZE_FORMATS, i32::from(total), 0x3248);
+    let base = e.call(0x008d_32b0, &args![this, flags]).u16();
+    total = add16(total, u32::from(base));
+    let after_base = total;
+    if e.call(0x0086_2110, &args![save_load]).bool() {
+        total = add16(total, 4);
+        total = add16(total, 2);
+    }
+    if flags & 0x1000_0000 != 0 {
+        let animation = e.mem.u32(player + 0x690);
+        let size = e.call(0x0049_aa20, &args![this, animation]).u16();
+        total = add16(total, u32::from(size));
+    }
+    // Fields present in every version, in the order of the format.
+    for amount in [
+        1u32, 1, 1, 1, 4, 4, 4, 4, 1, 1, 4, 4, 1, 4, 1, 4, 0xc, 4, 4, 4, 4, 1, 4, 1, 1, 4, 4, 1,
+    ] {
+        total = add16(total, amount);
+    }
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        total = add16(total, 0xc);
+        total = add16(total, 0xc);
+    }
+    if save_version(e) >= 0x39 {
+        total = add16(total, 0xac);
+        total = add16(total, 0x14);
+    }
+    if save_version(e) >= 0x3f {
+        total = add16(total, 1);
+    }
+    if save_version(e) >= 0x40 {
+        total = add16(total, 4);
+        total = add16(total, 4);
+        total = add16(total, 4);
+    }
+    if save_version(e) >= 0x49 {
+        total = add16(total, 4);
+        total = add16(total, 1);
+    }
+    save_version(e);
+    if save_version(e) >= 0x71 {
+        total = add16(total, 1);
+        total = add16(total, 1);
+        total = add16(total, 4);
+        total = add16(total, 4);
+    }
+    if save_version(e) >= 0x78 {
+        total = add16(total, 1);
+    }
+    if save_version(e) >= 0x7a {
+        total = add16(total, 4);
+    }
+    for _ in 0..10 {
+        total = add16(total, 4);
+    }
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        total = add16(total, 4);
+    }
+    for (version, amount) in [
+        (0x40u32, 4u32),
+        (0x42, 4),
+        (0x57, 4),
+        (0x60, 4),
+        (0x63, 2),
+        (0x6c, 4),
+    ] {
+        if save_version(e) >= version {
+            total = add16(total, amount);
+        }
+    }
+    if save_version(e) >= 0x6f {
+        total = add16(total, 2);
+        let count = e.call(0x0084_e3a0, &args![player + 0x854]).u32();
+        total = add16(total, count.wrapping_mul(5));
+    }
+    if save_version(e) >= 0x73 {
+        total = add16(total, 2);
+        let count = e.call(LIST_COUNT, &args![0x011e_0ae8u32]).u32();
+        total = add16(total, count.wrapping_mul(4));
+    }
+    if save_version(e) >= 0x7a {
+        total = add16(total, 2);
+        let list = e.mem.u32(player + 0x610);
+        let count = e.call(LIST_COUNT, &args![list]).u32();
+        total = add16(total, count.wrapping_mul(8));
+    }
+    if save_version(e) >= 0x7a {
+        total = add16(total, 2);
+        let list = e.mem.u32(player + 0x614);
+        let count = e.call(LIST_COUNT, &args![list]).u32();
+        total = add16(total, count.wrapping_mul(4));
+        total = add16(total, 2);
+        let list = e.mem.u32(player + 0x618);
+        let count = e.call(LIST_COUNT, &args![list]).u32();
+        total = add16(total, count.wrapping_mul(4));
+        total = add16(total, 0x14);
+    }
+    let size = e
+        .call(0x0080_5a00, &args![e.mem.u32(player + 0x210), this])
+        .u16();
+    total = add16(total, u32::from(size));
+    let size = e
+        .call(0x008d_54e0, &args![player + CHARACTER_PROGRESSION, flags])
+        .u16();
+    total = add16(total, u32::from(size));
+    total = add16(total, 4);
+    total = add16(total, 2);
+    let count = e.call(LIST_COUNT, &args![player + 0x6a8]).u32();
+    total = add16(total, count.wrapping_mul(4));
+    total = add16(total, 2);
+    let count = e.call(LIST_COUNT, &args![player + 0x6b0]).u32();
+    total = add16(total, count.wrapping_mul(6));
+    let count = e.call(LIST_COUNT, &args![player + 0x6bc]).u32();
+    total = add16(total, count.wrapping_mul(5));
+    let extra = e.call(0x0040_8c30, &args![]).u32();
+    total = add16(total, extra);
+    let base_form = e.call(0x007a_f430, &args![this]).u32();
+    let size = e.call(0x0060_9c70, &args![base_form, this]).u16();
+    total = add16(total, u32::from(size));
+    let name = e.call(0x0055_d520, &args![this]).u32();
+    let length = e.call(0x00ec_6130, &args![name]).u32();
+    let length_byte = length.wrapping_add(1) as u8;
+    total = add16(total, u32::from(length_byte) + 1);
+    if save_version(e) >= 0x2c {
+        let base_object = e.call(BASE_FORM_OF, &args![this]).u32();
+        let fire_node = e.call(0x0050_2430, &args![base_object]).u32();
+        let at = e.call(SETTING_INT_POINTER, &args![0x011d_0a9cu32]).u32();
+        let wanted = e.mem.u32(at);
+        let holder = e.global::<u32>(0x011c_3f2c);
+        let matching = e.call(0x0046_15a0, &args![holder, wanted]).u32();
+        total = add16(total, 4);
+        if fire_node != 0 && fire_node == matching {
+            let size = e.call(0x005f_6ed0, &args![fire_node]).u16();
+            total = add16(total, u32::from(size));
+        }
+    }
+    if save_version(e) >= 0x45 {
+        total = add16(total, 4);
+    }
+    save_size_report(
+        e,
+        SAVE_SIZE_FORMATS,
+        i32::from(total) - i32::from(after_base),
+        0x3365,
+    );
+    total
+}
+
+/// `TESForm::SaveGameDataOLD` (`00484ce0`): writes `size` bytes at `ptr`.
+fn save_data(e: &mut Engine, this: u32, ptr: u32, size: u32) {
+    e.call(0x0048_4ce0, &args![this, ptr, size]);
+}
+
+/// `TESForm::SaveNumericID` (`00484d20`): writes the form id at `ptr`.
+fn save_numeric_id(e: &mut Engine, this: u32, ptr: u32, size: u32) {
+    e.call(0x0048_4d20, &args![this, ptr, size]);
+}
+
+/// Saves the low `size` bytes of `value` through a temporary word in game
+/// memory (`SaveGameDataOLD`).
+fn save_value(e: &mut Engine, this: u32, value: u32, size: u32) {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, value);
+    save_data(e, this, word, size);
+    e.mem.free(word);
+}
+
+/// Saves a form id held in a temporary word (`SaveNumericID`).
+fn save_id_value(e: &mut Engine, this: u32, value: u32) {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, value);
+    save_numeric_id(e, this, word, 4);
+    e.mem.free(word);
+}
+
+/// Saves the form id of `form`, or 0 for a null form.
+fn save_form_id(e: &mut Engine, this: u32, form: u32) {
+    let id = if form != 0 { form_id_of(e, form) } else { 0 };
+    save_id_value(e, this, id);
+}
+
+/// Raw write of the save-load object (`008579b0`): `size` bytes at `ptr`.
+fn save_raw(e: &mut Engine, ptr: u32, size: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(0x0085_79b0, &args![save_load, ptr, size]);
+}
+
+/// The current write position of the save-load object (`00825c00`).
+fn save_position(e: &mut Engine) -> u32 {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(0x0082_5c00, &args![save_load]).u32()
+}
+
+/// Starts a save block when the save game uses blocks (`00862110`): writes the
+/// marker `BLOK` and a zero length word, and returns the position of that
+/// word (0 when no block is used).
+fn save_block_begin(e: &mut Engine) -> u32 {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if !e.call(0x0086_2110, &args![save_load]).bool() {
+        return 0;
+    }
+    let marker = e.mem.alloc(4);
+    e.mem.set_u32(marker, 0x424c_4f4b);
+    save_raw(e, marker, 4);
+    e.mem.free(marker);
+    let block = save_position(e);
+    let length = e.mem.alloc(4);
+    e.mem.set_u32(length, 0);
+    save_raw(e, length, 2);
+    e.mem.free(length);
+    block
+}
+
+/// Ends the block that `save_block_begin` started at `block`: stores the
+/// number of bytes written since (and logs when it does not fit 16 bits).
+fn save_block_end(e: &mut Engine, block: u32, line: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if !e.call(0x0086_2110, &args![save_load]).bool() {
+        return;
+    }
+    let position = save_position(e);
+    if position > block.wrapping_add(0xffff) {
+        e.call(
+            LOG_MESSAGE,
+            &args![FORMAT_BLOCK_TOO_BIG, SOURCE_FILE_NAME, line],
+        );
+    }
+    e.mem.set_u16(block, position.wrapping_sub(block) as u16);
+}
+
+/// The list entries `fn_00955620` writes as `count` then one id per entry:
+/// the entries of the `BSSimpleList` at `head`, each as `SaveGameDataOLD`
+/// of the form id (`0084e3a0`) of the entry.
+fn save_form_list(e: &mut Engine, this: u32, head: u32) {
+    let count = e.call(LIST_COUNT, &args![head]).u32();
+    save_value(e, this, count, 4);
+    let mut node = head;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let id = form_id_of(e, item);
+        save_value(e, this, id, 4);
+        node = list_next(e, node);
+    }
+}
+
+// Translated from 00955620 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the player's save data (`SaveGame`, the error text calls it
+/// `SaveGame()`): first the actor value modifiers (`+0x244`, `+0x378`,
+/// `+0x4b0` from version 0x31, `+0x4ac`), then the base class
+/// (`008d32f0(flags)`) and the player's own fields in the order of the
+/// format, each added with the version that introduced it (the sizes are the
+/// ones `fn_00954d40` adds). Bytes go through `TESForm::SaveGameDataOLD`
+/// (`00484ce0`), form ids through `SaveNumericID` (`00484d20`), raw words
+/// through `008579b0`; two blocks (`save_block_begin`) bracket the base part
+/// and the player part when the save game uses blocks. With the debug
+/// setting `011de4e8` on, the sizes are logged. The quest target loop
+/// (`>= 0x63`) is compiled into a loop over a null list, so it writes only
+/// its zero count (the compiler folded the head to zero). The exception
+/// frame is not translated.
+pub fn fn_00955620(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) {
+    let player = this.addr();
+    let formats = (FORMAT_SAVE_GAME_FORM, FORMAT_SAVE_GAME);
+    let mut debug_start = save_position(e);
+    let at = e.call(0x0040_8d60, &args![SAVE_SIZE_DEBUG_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        debug_start = save_position(e);
+    }
+    let first_block = save_block_begin(e);
+    save_data(e, player, player + 0x244, 0x134);
+    save_data(e, player, player + 0x378, 0x134);
+    if save_version(e) >= 0x31 {
+        save_data(e, player, player + 0x4b0, 0x134);
+    }
+    save_data(e, player, player + 0x4ac, 4);
+    let at = e.call(0x0040_8d60, &args![SAVE_SIZE_DEBUG_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        let position = save_position(e);
+        save_size_report(
+            e,
+            formats,
+            position.wrapping_sub(debug_start) as i32,
+            0x3378,
+        );
+    }
+    save_block_end(e, first_block, 0x3378);
+    e.call(0x008d_32f0, &args![this, flags]);
+
+    let mut second_start = save_position(e);
+    let at = e.call(0x0040_8d60, &args![SAVE_SIZE_DEBUG_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        second_start = save_position(e);
+    }
+    let second_block = save_block_begin(e);
+    if flags & 0x1000_0000 != 0 {
+        let animation = e.mem.u32(player + 0x690);
+        e.call(0x0049_aa80, &args![this, animation]);
+    }
+    let marker = e.mem.u32(player + 0x6f4);
+    let position_source = if marker == 0 {
+        INVENTORY_MODEL_ARGUMENT
+    } else {
+        e.vcall(marker, 0x1f4, &args![]).u32()
+    };
+    let position = e.mem.alloc(12);
+    for i in 0..3 {
+        let word = e.mem.u32(position_source + i * 4);
+        e.mem.set_u32(position + i * 4, word);
+    }
+    for (offset, size) in [
+        (0x64au32, 1u32),
+        (0x64d, 1),
+        (0x651, 1),
+        (0x652, 1),
+        (0x654, 4),
+        (0x660, 4),
+        (0x664, 4),
+        (0x668, 4),
+        (0x66c, 1),
+        (0x6cc, 1),
+        (0x6d0, 4),
+        (0x6d4, 4),
+        (0x6d8, 1),
+        (0x6dc, 4),
+        (0x6e8, 1),
+        (0x6e4, 4),
+    ] {
+        save_data(e, player, player + offset, size);
+    }
+    save_data(e, player, position, 0xc);
+    e.mem.free(position);
+    for (offset, size) in [(0x698u32, 4u32), (0x67c, 4), (0x734, 4)] {
+        save_data(e, player, player + offset, size);
+    }
+    save_raw(e, player + 0x738, 4);
+    for (offset, size) in [
+        (0x658u32, 1u32),
+        (0x65c, 4),
+        (0x75c, 1),
+        (0x75e, 1),
+        (0x730, 4),
+        (0x790, 4),
+        (0x680, 1),
+    ] {
+        save_data(e, player, player + offset, size);
+    }
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        save_data(e, player, player + 0x7a0, 0xc);
+        save_data(e, player, player + 0x7a0, 0xc);
+    }
+    if save_version(e) >= 0x39 {
+        let buffer = e.mem.alloc(0xb0);
+        e.call(0x004d_5f60, &args![buffer]);
+        save_data(e, player, buffer, 0xac);
+        e.mem.free(buffer);
+        save_data(e, player, player + 0x744, 0x14);
+    }
+    if save_version(e) >= 0x3f {
+        save_data(e, player, player + 0x7c4, 1);
+    }
+    if save_version(e) >= 0x40 {
+        save_raw(e, player + 0x63c, 4);
+        save_data(e, player, player + 0x640, 4);
+        save_data(e, player, player + 0x644, 4);
+    }
+    if save_version(e) >= 0x49 {
+        save_data(e, player, player + 0x200, 4);
+        save_data(e, player, player + 0x240, 1);
+    }
+    save_version(e);
+    if save_version(e) >= 0x71 {
+        save_data(e, player, player + 0x64e, 1);
+        save_data(e, player, player + 0x66d, 1);
+        save_data(e, player, player + 0x794, 4);
+        save_numeric_id(e, player, player + 0x7f4, 4);
+    }
+    if save_version(e) >= 0x78 {
+        let iron_sights = e.call(0x008b_bc10, &args![this]).u8();
+        save_value(e, player, u32::from(iron_sights), 1);
+    }
+    if save_version(e) >= 0x7a {
+        save_data(e, player, VANITY_RESTORED_VALUE, 4);
+    }
+    if save_version(e) >= 0x7a {
+        // The per-perk style list: count, then three fields per entry.
+        let head = e.call(0x005a_6260, &args![this]).u32();
+        let count = e.call(LIST_COUNT, &args![head]).u32();
+        save_value(e, player, count, 4);
+        let mut node = head;
+        while node != 0 {
+            let item_slot = list_item_slot(e, node);
+            if e.mem.u32(item_slot) == 0 {
+                break;
+            }
+            let item_slot = list_item_slot(e, node);
+            let entry = e.mem.u32(item_slot);
+            let first = e.mem.u32(entry);
+            save_value(e, player, first, 4);
+            let item_slot = list_item_slot(e, node);
+            let entry = e.mem.u32(item_slot);
+            save_data(e, player, entry + 4, 4);
+            let item_slot = list_item_slot(e, node);
+            let entry = e.mem.u32(item_slot);
+            save_data(e, player, entry + 8, 2);
+            node = list_next(e, node);
+        }
+    }
+    if save_version(e) >= 0x7a {
+        let first_list = e.call(0x0073_cba0, &args![this]).u32();
+        save_form_list(e, player, first_list);
+        let second_list = e.call(0x0073_cbc0, &args![this]).u32();
+        save_form_list(e, player, second_list);
+        for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
+            save_data(e, player, player + offset, 4);
+        }
+    }
+    // The form ids: the form at +0x208 (`011e0784` next), the selected spell
+    // (checked with a dynamic cast), the magic item and target, the occupied
+    // region, the selected scroll and two more.
+    let form = e.mem.u32(player + 0x208);
+    save_form_id(e, player, form);
+    let form = e.global::<u32>(SAVED_FORM_011E0784);
+    save_form_id(e, player, form);
+    let mut spell_id = 0;
+    let selected_spell = e.mem.u32(player + 0x6ec);
+    if selected_spell != 0 {
+        let cast = e
+            .call(
+                DYNAMIC_CAST,
+                &args![
+                    selected_spell,
+                    0u32,
+                    RTTI_CAST_SOURCE,
+                    RTTI_CAST_TARGET,
+                    0u32
+                ],
+            )
+            .u32();
+        if cast != 0 {
+            spell_id = form_id_of(e, cast);
+        }
+    }
+    save_id_value(e, player, spell_id);
+    let magic_item = e.mem.u32(player + 0x214);
+    let id = if magic_item != 0 {
+        e.call(0x0040_a1e0, &args![magic_item]).u32()
+    } else {
+        0
+    };
+    save_id_value(e, player, id);
+    let magic_target = e.mem.u32(player + 0x218);
+    let id = if magic_target != 0 {
+        e.call(0x0082_54c0, &args![magic_target]).u32()
+    } else {
+        0
+    };
+    save_id_value(e, player, id);
+    for offset in [0x760u32, 0x6f0, 0x73c, 0x758] {
+        let form = e.mem.u32(player + offset);
+        save_form_id(e, player, form);
+    }
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        let form = e.mem.u32(player + 0x7ac);
+        save_form_id(e, player, form);
+    }
+    if save_version(e) >= 0x40 {
+        let form = e.mem.u32(player + 0x638);
+        save_form_id(e, player, form);
+    }
+    if save_version(e) >= 0x42 {
+        let form = e.global::<u32>(SAVED_FORM_011E078C);
+        save_form_id(e, player, form);
+    }
+    if save_version(e) >= 0x57 {
+        let form = e.mem.u32(player + 0x604);
+        save_form_id(e, player, form);
+    }
+    if save_version(e) >= 0x60 {
+        let mut id = 0;
+        let marker = e.mem.u32(player + 0x6f4);
+        if marker != 0 {
+            let mut place = e.call(0x0057_5d70, &args![marker]).u32();
+            if place == 0 {
+                place = e.call(PARENT_CELL_OF, &args![marker]).u32();
+            }
+            if place != 0 {
+                id = form_id_of(e, place);
+            }
+        }
+        save_id_value(e, player, id);
+    }
+    if save_version(e) >= 0x63 {
+        // The loop over the (folded to null) list writes nothing; the count
+        // word, zero, is stored over the placeholder.
+        let count_position = save_position(e);
+        save_value(e, player, 0, 2);
+        e.mem.set_u16(count_position, 0);
+    }
+    if save_version(e) >= 0x6c {
+        let mut id = 0;
+        let region = e.mem.u32(player + 0x760);
+        if region != 0 && e.call(0x0059_bb30, &args![region]).u32() != 0 {
+            let region_data = e.call(0x0059_bb30, &args![region]).u32();
+            id = form_id_of(e, region_data);
+        }
+        save_id_value(e, player, id);
+    }
+    if save_version(e) >= 0x6f {
+        let table = player + 0x854;
+        let count = form_id_of(e, table);
+        save_value(e, player, count & 0xffff, 2);
+        let iterator = e.mem.alloc(12);
+        let value = iterator + 4;
+        let flag = iterator + 8;
+        let cursor = e.call(0x004b_9ba0, &args![table]).u32();
+        e.mem.set_u32(iterator, cursor);
+        while e.mem.u32(iterator) != 0 {
+            e.mem.set_u32(value, 0);
+            e.mem.set_u8(flag, 0);
+            e.call(0x0096_a400, &args![table, iterator, value, flag]);
+            save_numeric_id(e, player, value, 4);
+            save_data(e, player, flag, 1);
+        }
+        e.mem.free(iterator);
+    }
+    if save_version(e) >= 0x73 {
+        let count_position = save_position(e);
+        save_value(e, player, 0, 2);
+        let mut count: u16 = 0;
+        let mut node = 0x011e_0ae8;
+        while node != 0 && !list_is_empty(e, node) {
+            let item_slot = list_item_slot(e, node);
+            let item = e.mem.u32(item_slot);
+            let id = if item != 0 { form_id_of(e, item) } else { 0 };
+            save_id_value(e, player, id);
+            count = count.wrapping_add(1);
+            node = list_next(e, node);
+        }
+        e.mem.set_u16(count_position, count);
+    }
+    e.call(0x0080_5b40, &args![e.mem.u32(player + 0x210), this]);
+    e.call(0x008d_5510, &args![player + CHARACTER_PROGRESSION, flags]);
+    let quest = e.mem.u32(player + 0x6b8);
+    save_form_id(e, player, quest);
+
+    // The topic list.
+    let count_position = save_position(e);
+    save_value(e, player, 0, 2);
+    let mut count: u16 = 0;
+    let mut node = e.call(0x0046_4e30, &args![this]).u32();
+    while node != 0 && !list_is_empty(e, node) {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let id = form_id_of(e, item);
+        save_id_value(e, player, id);
+        count = count.wrapping_add(1);
+        node = list_next(e, node);
+    }
+    e.mem.set_u16(count_position, count);
+
+    // The quest log.
+    let count_position = save_position(e);
+    save_value(e, player, 0, 2);
+    let mut count: u16 = 0;
+    let mut node = player + 0x6b0;
+    while node != 0 && !list_is_empty(e, node) {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let quest = e.call(0x005e_3fa0, &args![item]).u32();
+        let id = form_id_of(e, quest);
+        let mut stage_done = 0u8;
+        let stage = e.call(0x005d_c980, &args![item]).u8();
+        let mut stage_list = e.call(EXTRA_LIST_OF, &args![quest]).u32();
+        while stage_list != 0 && !list_is_empty(e, stage_list) {
+            let item_slot = list_item_slot(e, stage_list);
+            let candidate = e.mem.u32(item_slot);
+            let found = e
+                .call(0x0060_f2c0, &args![candidate, u32::from(stage)])
+                .u32();
+            if item == found {
+                stage_done = e.call(0x0093_73f0, &args![candidate]).u8();
+                break;
+            }
+            stage_list = list_next(e, stage_list);
+        }
+        save_id_value(e, player, id);
+        save_value(e, player, u32::from(stage_done), 1);
+        save_value(e, player, u32::from(stage), 1);
+        count = count.wrapping_add(1);
+        node = list_next(e, node);
+    }
+    e.mem.set_u16(count_position, count);
+
+    // The quest targets.
+    let count_position = save_position(e);
+    save_value(e, player, 0, 2);
+    let mut count: u16 = 0;
+    let mut node = player + 0x6bc;
+    while node != 0 && !list_is_empty(e, node) {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let quest = e.call(0x0044_edb0, &args![item]).u32();
+        let id = form_id_of(e, quest);
+        let delta = list_next(e, item);
+        save_id_value(e, player, id);
+        save_value(e, player, delta, 4);
+        count = count.wrapping_add(1);
+        node = list_next(e, node);
+    }
+    e.mem.set_u16(count_position, count);
+
+    // The base object's data and the name.
+    let base = e.call(0x007a_f430, &args![this]).u32();
+    e.call(0x0060_9d60, &args![base, this]);
+    let name = e.call(0x0055_d520, &args![this]).u32();
+    let length = e.call(0x00ec_6130, &args![name]).u32();
+    let length_byte = length.wrapping_add(1) as u8;
+    save_value(e, player, u32::from(length_byte), 1);
+    save_data(e, player, name, u32::from(length_byte));
+    if save_version(e) >= 0x2c {
+        let base_object = e.call(BASE_FORM_OF, &args![this]).u32();
+        let fire_node = e.call(0x0050_2430, &args![base_object]).u32();
+        let at = e.call(SETTING_INT_POINTER, &args![0x011d_0a9cu32]).u32();
+        let wanted = e.mem.u32(at);
+        let holder = e.global::<u32>(0x011c_3f2c);
+        let matching = e.call(0x0046_15a0, &args![holder, wanted]).u32();
+        save_form_id(e, player, fire_node);
+        if fire_node != 0 && fire_node == matching {
+            e.call(0x005f_6f70, &args![fire_node]);
+        }
+    }
+    if save_version(e) >= 0x45 {
+        let form = e.mem.u32(player + 0x740);
+        save_form_id(e, player, form);
+    }
+    let at = e.call(0x0040_8d60, &args![SAVE_SIZE_DEBUG_SETTING]).u32();
+    if e.mem.u8(at) != 0 {
+        let position = save_position(e);
+        save_size_report(
+            e,
+            formats,
+            position.wrapping_sub(second_start) as i32,
+            0x3592,
+        );
+    }
+    save_block_end(e, second_block, 0x3592);
+}
+
+/// `TESForm::LoadGameDataOLD` (`00484d00`): reads `size` bytes to `ptr`.
+fn load_data(e: &mut Engine, this: u32, ptr: u32, size: u32) {
+    e.call(0x0048_4d00, &args![this, ptr, size]);
+}
+
+/// `TESForm::LoadNumericID` (`00484d40`): reads a saved form id to `ptr`.
+fn load_numeric_id(e: &mut Engine, this: u32, ptr: u32, size: u32) {
+    e.call(0x0048_4d40, &args![this, ptr, size]);
+}
+
+/// Reads `size` bytes (1, 2 or 4) through a temporary word.
+fn load_value(e: &mut Engine, this: u32, size: u32) -> u32 {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, 0);
+    load_data(e, this, word, size);
+    let value = match size {
+        1 => u32::from(e.mem.u8(word)),
+        2 => u32::from(e.mem.u16(word)),
+        _ => e.mem.u32(word),
+    };
+    e.mem.free(word);
+    value
+}
+
+/// Reads a saved form id through a temporary word (`LoadNumericID`).
+fn load_id_value(e: &mut Engine, this: u32) -> u32 {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, 0);
+    load_numeric_id(e, this, word, 4);
+    let value = e.mem.u32(word);
+    e.mem.free(word);
+    value
+}
+
+/// The form with the loaded id, cast with `__RTDynamicCast` from the `TESForm`
+/// type descriptor `01183028` to `target` (`004839c0` finds the form).
+fn load_cast_form(e: &mut Engine, id: u32, target: u32) -> u32 {
+    let form = e.call(0x0048_39c0, &args![id]).u32();
+    e.call(
+        DYNAMIC_CAST,
+        &args![form, 0u32, RTTI_LOAD_SOURCE, target, 0u32],
+    )
+    .u32()
+}
+
+/// Raw read of the save-load object (`008579e0`).
+fn load_raw(e: &mut Engine, ptr: u32, size: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(0x0085_79e0, &args![save_load, ptr, size]);
+}
+
+/// Skips `size` bytes of the save game (`00857bd0`).
+fn load_skip(e: &mut Engine, size: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    e.call(0x0085_7bd0, &args![save_load, size]);
+}
+
+/// Starts a block when the save game uses blocks: reads and checks the
+/// marker (`BLOK`; a wrong one is logged with the form being loaded,
+/// `004fd3c0`), then the length word. Returns the position after the marker
+/// and the length (zeroes without blocks).
+fn load_block_begin(e: &mut Engine, line: u32) -> (u32, u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if !e.call(0x0086_2110, &args![save_load]).bool() {
+        return (0, 0);
+    }
+    let word = e.mem.alloc(4);
+    load_raw(e, word, 4);
+    if e.mem.u32(word) != 0x424c_4f4b {
+        let record = e.call(0x004f_d3c0, &args![save_load]).u32();
+        if record != 0 {
+            let form_id = e.mem.u32(record);
+            let form_type = e.call(0x0048_39c0, &args![form_id]).u32();
+            let version = u32::from(e.mem.u8(record + 9));
+            let flags = e.mem.u32(record + 5);
+            let name = e.vcall(form_type, 0x130, &args![]).u32();
+            e.call(
+                LOG_MESSAGE,
+                &args![
+                    FORMAT_BLOCK_HEADER_FORM,
+                    SOURCE_FILE_NAME,
+                    line,
+                    form_id,
+                    name,
+                    version,
+                    flags
+                ],
+            );
+        } else {
+            let version = u32::from(e.call(0x008d_f040, &args![save_load]).u8());
+            e.call(
+                LOG_MESSAGE,
+                &args![FORMAT_BLOCK_HEADER, SOURCE_FILE_NAME, line, version],
+            );
+        }
+    }
+    let position = save_position(e);
+    e.mem.set_u32(word, 0);
+    load_raw(e, word, 2);
+    let length = u32::from(e.mem.u16(word));
+    e.mem.free(word);
+    (position, length)
+}
+
+/// Ends a block started by `load_block_begin`: when the save game uses
+/// blocks and the read position is not at `start + length`, logs the
+/// overrun or underrun in bytes (with the form being loaded when known).
+fn load_block_end(e: &mut Engine, start: u32, length: u32, line: u32) {
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if !e.call(0x0086_2110, &args![save_load]).bool() {
+        return;
+    }
+    let position = save_position(e);
+    let record = e.call(0x004f_d3c0, &args![save_load]).u32();
+    let expected = length.wrapping_add(start);
+    if record != 0 {
+        let form_id = e.mem.u32(record);
+        let form_type = e.call(0x0048_39c0, &args![form_id]).u32();
+        if position != expected {
+            let version = u32::from(e.mem.u8(record + 9));
+            let flags = e.mem.u32(record + 5);
+            let name = e.vcall(form_type, 0x130, &args![]).u32();
+            let (format, difference) = if position > expected {
+                (FORMAT_OVERRUN_FORM, position - expected)
+            } else {
+                (FORMAT_UNDERRUN_FORM, expected - position)
+            };
+            e.call(
+                LOG_MESSAGE,
+                &args![
+                    format,
+                    difference,
+                    SOURCE_FILE_NAME,
+                    line,
+                    form_id,
+                    name,
+                    version,
+                    flags
+                ],
+            );
+        }
+    } else if position != expected {
+        let version = u32::from(e.call(0x008d_f040, &args![save_load]).u8());
+        let (format, difference) = if position > expected {
+            (FORMAT_OVERRUN, position - expected)
+        } else {
+            (FORMAT_UNDERRUN, expected - position)
+        };
+        e.call(
+            LOG_MESSAGE,
+            &args![format, difference, SOURCE_FILE_NAME, line, version],
+        );
+    }
+}
+
+// Translated from 00956f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the player's save data (`LoadGame`): the mirror of `fn_00955620`.
+/// Actor value modifiers (`+0x244`, `+0x378`, `+0x4b0`; `0x130` bytes each
+/// before version 0x3b, `0x134` after), the base class (`008d3310(flags,
+/// second)`), then the player's fields in the order the save wrote them,
+/// each read when the version is high enough; the fields of versions that
+/// dropped them are skipped (`00857bd0`). Form ids (`LoadNumericID`) are
+/// resolved with `004839c0` and cast with `__RTDynamicCast` to the type the
+/// field holds. Lists are rebuilt with `00905820` / `005ae3d0` after being
+/// cleared (`00470470`). The two blocks are checked for over- and
+/// underruns (line numbers 0x35b6, 0x35ba, 0x37c8). The exception frame is
+/// not translated.
+pub fn fn_00956f70(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32, second: u32) {
+    let player = this.addr();
+    let (first_start, first_length) = load_block_begin(e, 0x359e);
+    if save_version(e) < 0x3b {
+        load_data(e, player, player + 0x244, 0x130);
+        load_data(e, player, player + 0x378, 0x130);
+        if save_version(e) >= 0x31 {
+            load_data(e, player, player + 0x4b0, 0x130);
+        }
+    } else {
+        load_data(e, player, player + 0x244, 0x134);
+        load_data(e, player, player + 0x378, 0x134);
+        load_data(e, player, player + 0x4b0, 0x134);
+    }
+    load_data(e, player, player + 0x4ac, 4);
+    load_block_end(e, first_start, first_length, 0x35b6);
+    e.call(0x008d_3310, &args![this, flags, second]);
+
+    let (second_start, second_length) = load_block_begin(e, 0x35ba);
+    if flags & 0x1000_0000 != 0 {
+        let animation = e.mem.u32(player + 0x690);
+        e.call(0x0049_ab00, &args![this, animation]);
+    }
+    let position = e.mem.alloc(12);
+    e.call(LIST_NODE_ITEM_SLOT, &args![position]);
+    for (offset, size) in [
+        (0x64au32, 1u32),
+        (0x64d, 1),
+        (0x651, 1),
+        (0x652, 1),
+        (0x654, 4),
+        (0x660, 4),
+        (0x664, 4),
+        (0x668, 4),
+        (0x66c, 1),
+        (0x6cc, 1),
+        (0x6d0, 4),
+        (0x6d4, 4),
+        (0x6d8, 1),
+        (0x6dc, 4),
+        (0x6e8, 1),
+        (0x6e4, 4),
+    ] {
+        load_data(e, player, player + offset, size);
+    }
+    load_data(e, player, position, 0xc);
+    for (offset, size) in [(0x698u32, 4u32), (0x67c, 4), (0x734, 4)] {
+        load_data(e, player, player + offset, size);
+    }
+    load_raw(e, player + 0x738, 4);
+    for (offset, size) in [
+        (0x658u32, 1u32),
+        (0x65c, 4),
+        (0x75c, 1),
+        (0x75e, 1),
+        (0x730, 4),
+    ] {
+        load_data(e, player, player + offset, size);
+    }
+    if save_version(e) >= 0x1d {
+        load_data(e, player, player + 0x790, 4);
+    }
+    if save_version(e) >= 0x22 {
+        load_data(e, player, player + 0x680, 1);
+    }
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        load_skip(e, 1);
+        load_data(e, player, player + 0x7a0, 0xc);
+        load_data(e, player, player + 0x7a0, 0xc);
+    }
+    if save_version(e) >= 0x35 && save_version(e) < 0x71 {
+        load_skip(e, 4);
+    }
+    if save_version(e) >= 0x39 {
+        let buffer = e.mem.alloc(0xb0);
+        load_data(e, player, buffer, 0xac);
+        e.call(0x004d_5f20, &args![buffer]);
+        e.mem.free(buffer);
+        load_data(e, player, player + 0x744, 0x14);
+    }
+    if save_version(e) >= 0x3f {
+        load_data(e, player, player + 0x7c4, 1);
+    }
+    if save_version(e) >= 0x40 {
+        load_raw(e, player + 0x63c, 4);
+        load_data(e, player, player + 0x640, 4);
+        load_data(e, player, player + 0x644, 4);
+    }
+    if save_version(e) >= 0x49 {
+        load_data(e, player, player + 0x200, 4);
+        load_data(e, player, player + 0x240, 1);
+    }
+    if save_version(e) >= 0x4a && save_version(e) < 0x59 {
+        load_skip(e, 8);
+    }
+    if save_version(e) >= 0x59 && save_version(e) < 0x5a {
+        load_skip(e, 4);
+    }
+    save_version(e);
+    if save_version(e) >= 0x71 {
+        load_data(e, player, player + 0x64e, 1);
+        load_data(e, player, player + 0x66d, 1);
+        load_data(e, player, player + 0x794, 4);
+        load_numeric_id(e, player, player + 0x7f4, 4);
+    }
+    if save_version(e) >= 0x78 {
+        let iron_sights = load_value(e, player, 1);
+        e.call(0x008b_b650, &args![this, iron_sights, 0u32, 0u32]);
+    }
+    if save_version(e) >= 0x7a {
+        load_data(e, player, VANITY_RESTORED_VALUE, 4);
+    }
+    if save_version(e) >= 0x7a {
+        let count = load_value(e, player, 4) as i32;
+        let mut index = 0;
+        while index < count {
+            let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+            let entry = if block == 0 {
+                0
+            } else {
+                e.call(0x0073_3f50, &args![block]).u32()
+            };
+            load_data(e, player, entry, 4);
+            load_data(e, player, entry + 4, 4);
+            load_data(e, player, entry + 8, 2);
+            let list = e.mem.u32(player + 0x610);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, entry);
+            e.call(0x0090_5820, &args![list, slot]);
+            e.mem.free(slot);
+            index += 1;
+        }
+        if e.global::<u32>(LOADED_PERK_FLAG) != 0 {
+            e.call(0x0096_9ac0, &args![this]);
+        }
+    }
+    if save_version(e) >= 0x7a {
+        let first_list = e.mem.u32(player + 0x614);
+        e.call(LIST_CLEAR, &args![first_list]);
+        let second_list = e.mem.u32(player + 0x618);
+        e.call(LIST_CLEAR, &args![second_list]);
+        for list_offset in [0x614u32, 0x618] {
+            let count = load_value(e, player, 4) as i32;
+            let mut index = 0;
+            while index < count {
+                let id = load_value(e, player, 4);
+                let form = e.call(0x0048_39c0, &args![id]).u32();
+                let list = e.mem.u32(player + list_offset);
+                let slot = e.mem.alloc(4);
+                e.mem.set_u32(slot, form);
+                e.call(0x0090_5820, &args![list, slot]);
+                e.mem.free(slot);
+                index += 1;
+            }
+        }
+        for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
+            load_data(e, player, player + offset, 4);
+        }
+    }
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x208, id);
+    let id = load_id_value(e, player);
+    e.set_global(SAVED_FORM_011E0784, id);
+    player_character_set_selected_spell(e, this, 0);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x6ec, id);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x214, id);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x218, id);
+    let id = load_id_value(e, player);
+    let region = load_cast_form(e, id, RTTI_LOAD_REGION);
+    e.call(0x0093_a7a0, &args![this, region]);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x6f0, id);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x73c, id);
+    let id = load_id_value(e, player);
+    e.mem.set_u32(player + 0x758, id);
+    if save_version(e) >= 0x28 && save_version(e) < 0x2d {
+        let id = load_id_value(e, player);
+        let form = e.call(0x0048_39c0, &args![id]).u32();
+        e.mem.set_u32(player + 0x7ac, form);
+    }
+    if save_version(e) >= 0x40 {
+        let id = load_id_value(e, player);
+        e.mem.set_u32(player + 0x638, id);
+    }
+    if save_version(e) >= 0x42 {
+        let id = load_id_value(e, player);
+        e.set_global(SAVED_FORM_011E078C, id);
+    }
+    if save_version(e) >= 0x57 {
+        let id = load_id_value(e, player);
+        let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+        e.mem.set_u32(player + 0x604, form);
+    }
+    if save_version(e) >= 0x60 {
+        let id = load_id_value(e, player);
+        let place = e.call(0x0048_39c0, &args![id]).u32();
+        e.mem.set_u32(player + 0x6f4, 0);
+        if place != 0 {
+            let x = e.mem.f32(position);
+            let y = e.mem.f32(position + 4);
+            let z = e.mem.f32(position + 8);
+            player_character_set_player_map_marker(e, this, x, y, z, place);
+        }
+    }
+    if save_version(e) >= 0x63 {
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            load_id_value(e, player);
+            index += 1;
+        }
+    }
+    if save_version(e) >= 0x6c {
+        let id = load_id_value(e, player);
+        let object = load_cast_form(e, id, RTTI_LOAD_REGION_DATA);
+        let region = e.mem.u32(player + 0x760);
+        if region != 0 && object != 0 {
+            e.call(0x0070_37c0, &args![region, object]);
+        }
+    }
+    if save_version(e) >= 0x6f {
+        e.call(0x0043_8af0, &args![player + 0x854]);
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            let id = load_id_value(e, player);
+            let flag = load_value(e, player, 1);
+            if id != 0 {
+                e.call(0x0084_d310, &args![player + 0x854, id, flag]);
+            }
+            index += 1;
+        }
+    }
+    if save_version(e) >= 0x73 {
+        let count = load_value(e, player, 2);
+        let mut index = 0;
+        while index < count {
+            let id = load_id_value(e, player);
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, id);
+            e.call(LIST_APPEND, &args![0x011e_0ae8u32, slot]);
+            e.mem.free(slot);
+            index += 1;
+        }
+    }
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_5d40, &args![progress, this]);
+    e.call(
+        0x008d_5550,
+        &args![player + CHARACTER_PROGRESSION, flags, second],
+    );
+    let id = load_id_value(e, player);
+    if id != 0 {
+        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+        e.mem.set_u32(player + 0x6b8, quest);
+        if quest != 0 {
+            e.call(0x0060_f110, &args![quest, player + 0x6c4, player + 0x6bc]);
+        }
+    } else {
+        e.mem.set_u32(player + 0x6b8, 0);
+    }
+    e.call(LIST_CLEAR, &args![player + 0x6a8]);
+    let count = load_value(e, player, 2);
+    let mut index = 0;
+    while index < count {
+        let id = load_id_value(e, player);
+        let topic = load_cast_form(e, id, RTTI_LOAD_TOPIC);
+        if topic != 0 {
+            let slot = e.mem.alloc(4);
+            e.mem.set_u32(slot, topic);
+            e.call(LIST_APPEND, &args![player + 0x6a8, slot]);
+            e.mem.free(slot);
+        }
+        index += 1;
+    }
+    let head = e.call(0x0046_4e30, &args![this]).u32();
+    e.call(0x0061_a5a0, &args![1u32, head]);
+    e.call(LIST_CLEAR, &args![player + 0x6b0]);
+    let count = load_value(e, player, 2);
+    let mut index = 0;
+    while index < count {
+        let id = load_id_value(e, player);
+        let stage_done = load_value(e, player, 1);
+        let stage = load_value(e, player, 1);
+        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+        if quest != 0 {
+            let entry = e.call(0x0060_db40, &args![quest, stage_done]).u32();
+            if entry != 0 {
+                let item = e.call(0x0060_f2c0, &args![entry, stage]).u32();
+                if item != 0 {
+                    let slot = e.mem.alloc(4);
+                    e.mem.set_u32(slot, item);
+                    e.call(0x0090_5820, &args![player + 0x6b0, slot]);
+                    e.mem.free(slot);
+                }
+            }
+        }
+        index += 1;
+    }
+    e.call(LIST_CLEAR, &args![player + 0x6bc]);
+    let count = load_value(e, player, 2);
+    let mut index = 0;
+    while index < count {
+        let id = load_id_value(e, player);
+        let delta = load_value(e, player, 4);
+        let quest = load_cast_form(e, id, RTTI_LOAD_QUEST);
+        if quest != 0 {
+            let target = e.call(0x0060_c8e0, &args![quest, delta]).u32();
+            if target != 0 {
+                let slot = e.mem.alloc(4);
+                e.mem.set_u32(slot, target);
+                e.call(0x0090_5820, &args![player + 0x6bc, slot]);
+                e.mem.free(slot);
+            }
+        }
+        index += 1;
+    }
+    let base = e.call(0x007a_f430, &args![this]).u32();
+    e.call(0x0060_9f60, &args![base, this]);
+    let length = load_value(e, player, 1);
+    let name = e.mem.alloc(0x104);
+    e.mem.set_u32(name, 0);
+    load_data(e, player, name, length);
+    let base = e.call(0x007a_f430, &args![this]).u32();
+    e.call(0x0048_9100, &args![base + 0xd0, name]);
+    e.mem.free(name);
+    if save_version(e) >= 0x2c {
+        let base_object = e.call(BASE_FORM_OF, &args![this]).u32();
+        let at = e.call(SETTING_INT_POINTER, &args![0x011d_0a9cu32]).u32();
+        let wanted = e.mem.u32(at);
+        let holder = e.global::<u32>(0x011c_3f2c);
+        let matching = e.call(0x0046_15a0, &args![holder, wanted]).u32();
+        let id = load_id_value(e, player);
+        let fire_node = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
+        if fire_node != 0 {
+            e.call(0x0060_1c70, &args![base_object, fire_node]);
+        }
+        if fire_node != 0 && fire_node == matching {
+            e.call(0x005f_7050, &args![fire_node]);
+        }
+    }
+    if save_version(e) >= 0x45 {
+        let id = load_id_value(e, player);
+        if id != 0 {
+            let form = load_cast_form(e, id, RTTI_LOAD_FIRE_NODE);
+            e.mem.set_u32(player + 0x740, form);
+        }
+    }
+    e.mem.free(position);
+    load_block_end(e, second_start, second_length, 0x37c8);
+}
+
+// Translated from 00958990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The second pass of loading the player: turns the form ids that
+/// `fn_00956f70` stored into pointers. After `008d3380(first, second)` the
+/// form at `+0x208`, the global `011e0784`, the selected spell (`+0x6ec`,
+/// cleared first, then set through `SetSelectedSpell` from the spell or
+/// scroll interface of the form), the magic item (`0040a250`) and target
+/// (`00825550`) by numeric id, the selected scroll, the forms at `+0x73c`,
+/// `+0x758`, `+0x638` (from version 0x40) and the global `011e078c` (from
+/// version 0x42) are resolved with `004839c0` and `__RTDynamicCast`. From
+/// version 0x73 the global list `011e0ae8` is resolved the same way and the
+/// entries that do not resolve are removed (`0063f7b0` for the first node,
+/// `00905330` after the previous one). The list loop of version 0x63 and up
+/// walks a list the compiler folded to null and does nothing. Finally
+/// `008060e0`, slot `0x58` of the process, `0060a890`,
+/// `0093a5f0(false)`, `0093a6f0(false)`, `0095f590` (controls disabled
+/// flag, `+0x680`) and `008d0600(first, second)` of the progression.
+pub fn fn_00958990(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, second: u32) {
+    let player = this.addr();
+    e.call(0x008d_3380, &args![this, first, second]);
+    let id = e.mem.u32(player + 0x208);
+    if id != 0 {
+        let form = load_cast_form(e, id, RTTI_RESOLVE_0208);
+        e.mem.set_u32(player + 0x208, form);
+    }
+    let id = e.global::<u32>(SAVED_FORM_011E0784);
+    if id != 0 {
+        let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+        e.set_global(SAVED_FORM_011E0784, form);
+    }
+    let spell = e.mem.u32(player + 0x6ec);
+    e.mem.set_u32(player + 0x6ec, 0);
+    if spell != 0 {
+        let form = e.call(0x0048_39c0, &args![spell]).u32();
+        let as_spell = e
+            .call(
+                DYNAMIC_CAST,
+                &args![form, 0u32, RTTI_LOAD_SOURCE, RTTI_SPELL_INTERFACE, 0u32],
+            )
+            .u32();
+        let as_scroll_item = e
+            .call(
+                DYNAMIC_CAST,
+                &args![form, 0u32, RTTI_LOAD_SOURCE, RTTI_MAGIC_ITEM_FORM, 0u32],
+            )
+            .u32();
+        if as_spell != 0 {
+            player_character_set_selected_spell(e, this, as_spell + 0x18);
+        } else if as_scroll_item != 0 {
+            player_character_set_selected_spell(e, this, as_scroll_item + 0x30);
+        }
+    }
+    let magic_item = e.mem.u32(player + 0x214);
+    if magic_item != 0 {
+        let resolved = e.call(0x0040_a250, &args![magic_item]).u32();
+        e.mem.set_u32(player + 0x214, resolved);
+    }
+    let magic_target = e.mem.u32(player + 0x218);
+    if magic_target != 0 {
+        let resolved = e.call(0x0082_5550, &args![magic_target]).u32();
+        e.mem.set_u32(player + 0x218, resolved);
+    }
+    let scroll = e.mem.u32(player + 0x6f0);
+    if scroll != 0 {
+        let form = load_cast_form(e, scroll, RTTI_RESOLVE_SCROLL);
+        fn_0094c950(e, this, Ptr::new(form));
+    }
+    for (offset, target) in [(0x73cu32, RTTI_LOAD_FIRE_NODE), (0x758, RTTI_RESOLVE_0758)] {
+        let id = e.mem.u32(player + offset);
+        if id != 0 {
+            let form = load_cast_form(e, id, target);
+            e.mem.set_u32(player + offset, form);
+        }
+    }
+    if save_version(e) >= 0x40 {
+        let id = e.mem.u32(player + 0x638);
+        if id != 0 {
+            let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+            e.mem.set_u32(player + 0x638, form);
+        }
+    }
+    if save_version(e) >= 0x42 {
+        let id = e.global::<u32>(SAVED_FORM_011E078C);
+        if id != 0 {
+            let form = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+            e.set_global(SAVED_FORM_011E078C, form);
+        }
+    }
+    save_version(e);
+    if save_version(e) >= 0x73 {
+        let mut node = 0x011e_0ae8;
+        let mut previous = 0;
+        while node != 0 && !list_is_empty(e, node) {
+            let item_slot = list_item_slot(e, node);
+            let id = e.mem.u32(item_slot);
+            let mut resolved = 0;
+            if id != 0 {
+                resolved = load_cast_form(e, id, RTTI_LOAD_FORM_0604);
+                let word = e.mem.alloc(4);
+                e.mem.set_u32(word, resolved);
+                e.call(0x0072_6c60, &args![node, word]);
+                e.mem.free(word);
+            }
+            if resolved == 0 {
+                if previous == 0 {
+                    e.call(0x0063_f7b0, &args![node]);
+                } else {
+                    let word = e.mem.alloc(4);
+                    e.mem.set_u32(word, id);
+                    e.call(0x0090_5330, &args![previous, word]);
+                    e.mem.free(word);
+                    node = list_next(e, previous);
+                }
+            } else {
+                previous = node;
+                node = list_next(e, node);
+            }
+        }
+    }
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_60e0, &args![progress, this]);
+    let process = process_of(e, this);
+    e.vcall(process, 0x58, &args![]);
+    let base = e.call(0x007a_f430, &args![this]).u32();
+    e.call(0x0060_a890, &args![base, this]);
+    e.call(0x0093_a5f0, &args![this, 0u32]);
+    e.call(0x0093_a6f0, &args![this, 0u32]);
+    let disabled = e.mem.u8(player + 0x680);
+    e.call(0x0095_f590, &args![this, u32::from(disabled)]);
+    e.call(
+        0x008d_0600,
+        &args![player + CHARACTER_PROGRESSION, first, second],
+    );
+}
+
+// Translated from 00958ec0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The last pass of loading the player: `008aa9a0(first, second)`; when the
+/// first-person biped exists (`00950bb0(1)`), `SetFirstPerson` (the opposite
+/// of `+0x64a`) and, with `+0x64d` set, `ForceTemp3rdPerson(true)`;
+/// `00806130`; the camera spring (`0095f930`) of the body at `+0x638` unless
+/// its mode (`+0x63c`) is 3; `0080cec0`, `00825990`, `SetLastKnownGoodPosition`
+/// (`00947c90`), the field of view (`00950610(+0x65c)`) and
+/// `008d0600(first, second)` of the progression.
+pub fn fn_00958ec0(e: &mut Engine, this: Ptr<PlayerCharacter>, first: u32, second: u32) {
+    let player = this.addr();
+    e.call(0x008a_a9a0, &args![this, first, second]);
+    if e.call(0x0095_0bb0, &args![this, 1u32]).u32() != 0 {
+        let third_person = e.get(this, PlayerCharacter::b3rdPerson);
+        player_character_set_first_person(e, this, u8::from(!third_person));
+        if e.mem.u8(player + 0x64d) != 0 {
+            player_character_force_temp_3rd_person(e, this, 1);
+        }
+    }
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6130, &args![progress, this]);
+    if e.mem.u32(player + 0x638) != 0 && e.mem.u32(player + 0x63c) != 3 {
+        let body = e.mem.u32(player + 0x638);
+        let mode = e.mem.u32(player + 0x63c);
+        let strength = e.mem.f32(player + 0x644);
+        e.call(0x0095_f930, &args![this, body, mode, strength]);
+    }
+    e.call(0x0080_cec0, &args![]);
+    e.call(0x0082_5990, &args![]);
+    e.call(0x0094_7c90, &args![this]);
+    let fov = e.mem.f32(player + 0x65c);
+    fn_00950610(e, this, fov);
+    e.call(
+        0x008d_0600,
+        &args![player + CHARACTER_PROGRESSION, first, second],
+    );
+}
+
+// Translated from 00958fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the player before a load: `008d3330(flags)`, the byte at `+0xe39`
+/// set (`009590d0`), the float `+0xc8` and the byte `+0x66d` cleared,
+/// `005d14d0(true)`; when the save-load object says so (`0055f5b0`) also the
+/// globals `011e0784` and `011e078c`, vanity mode, `00950010(false)`, the
+/// list `011e0ae8`, `008061b0`, the first-person animation
+/// (`0049a920`, with bit `0x10000000` of `flags`), `00851d10`, `00961280` and
+/// the list at `+0x84c`; then `004534f0(flags)` of the progression and the
+/// byte `+0x75d` set.
+pub fn fn_00958fc0(e: &mut Engine, this: Ptr<PlayerCharacter>, flags: u32) {
+    let player = this.addr();
+    e.call(0x008d_3330, &args![this, flags]);
+    fn_009590d0(e, this, 1);
+    e.mem.set_f32(player + 0xc8, 0.0);
+    e.mem.set_u8(player + 0x66d, 0);
+    e.call(0x005d_14d0, &args![this, 1u32]);
+    e.mem.set_f32(player + 0xc8, 0.0);
+    let save_load = e.global::<u32>(SAVE_LOAD_GAME);
+    if e.call(0x0055_f5b0, &args![save_load]).bool() {
+        e.set_global(SAVED_FORM_011E0784, 0u32);
+        e.set_global(SAVED_FORM_011E078C, 0u32);
+        player_character_stop_vanity_mode(e, this.cast());
+        fn_00950010(e, this, 0);
+        e.call(LIST_CLEAR, &args![0x011e_0ae8u32]);
+        let progress = e.mem.u32(player + 0x210);
+        e.call(0x0080_61b0, &args![progress, this]);
+        if flags & 0x1000_0000 != 0 && e.mem.u32(player + 0x690) != 0 {
+            let animation = e.mem.u32(player + 0x690);
+            e.call(0x0049_a920, &args![animation, this]);
+        }
+        e.call(0x0085_1d10, &args![this]);
+        e.call(0x0096_1280, &args![this]);
+        e.call(LIST_CLEAR, &args![player + 0x84c]);
+    }
+    e.call(0x0045_34f0, &args![player + CHARACTER_PROGRESSION, flags]);
+    e.mem.set_u8(player + 0x75d, 1);
+}
+
+// Translated from 009590d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `+0xe39`.
+pub fn fn_009590d0(e: &mut Engine, this: Ptr<PlayerCharacter>, value: u8) {
+    e.mem.set_u8(this.addr() + 0xe39, value);
+}
+
+/// `BGSSaveGameBuffer::SaveGameData`-style write (`00865e50`): `size` bytes
+/// at `ptr`, into the buffer `buffer`.
+fn buffer_write(e: &mut Engine, buffer: u32, ptr: u32, size: u32) {
+    e.call(0x0086_5e50, &args![buffer, ptr, size, 0u32]);
+}
+
+/// Writes the low `size` bytes of `value` through a temporary word.
+fn buffer_write_value(e: &mut Engine, buffer: u32, value: u32, size: u32) {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, value);
+    buffer_write(e, buffer, word, size);
+    e.mem.free(word);
+}
+
+/// `BGSSaveGameBuffer::SaveFormID` (`00865df0`).
+fn buffer_form_id(e: &mut Engine, buffer: u32, form: u32) {
+    e.call(0x0086_5df0, &args![buffer, form, 0u32]);
+}
+
+/// `BGSSaveGameBuffer::StartVariableSizedValue` (`00865f20`).
+fn buffer_start_sized(e: &mut Engine, buffer: u32) -> u32 {
+    e.call(0x0086_5f20, &args![buffer]).u32()
+}
+
+/// `BGSSaveGameBuffer::SaveVariableSizedValue` (`00865ff0`): stores `count`
+/// over the placeholder `start` returned.
+fn buffer_finish_sized(e: &mut Engine, buffer: u32, count: u32, start: u32) {
+    e.call(0x0086_5ff0, &args![buffer, count, start]);
+}
+
+/// A counted list of the save buffer: for every node of the list starting at
+/// `head` (walked until the node is null) whose item is not null,
+/// `write_item` stores the item and returns whether it counts; the count is
+/// stored over the placeholder at the end.
+fn buffer_write_list(
+    e: &mut Engine,
+    buffer: u32,
+    head: u32,
+    mut write_item: impl FnMut(&mut Engine, u32) -> bool,
+) {
+    let mut count = 0u32;
+    let start = buffer_start_sized(e, buffer);
+    let mut node = head;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if item != 0 && write_item(e, item) {
+            count += 1;
+        }
+        node = list_next(e, node);
+    }
+    buffer_finish_sized(e, buffer, count, start);
+}
+
+// Translated from 009590f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes the player's save data into the save game buffer `buffer`
+/// (`BGSSaveGameBuffer`, the PC format): the three actor value modifier
+/// arrays (`0x4d` floats each, `+0x244`, `+0x378`, `+0x4b0`) and `+0x4ac`,
+/// the base class (`008d33a0`), the first-person animation (`0049ab40`) when
+/// the buffer's flags (`00428110`, `004280f0`) ask for it, the player's
+/// fields, `008d5660` of the progression, the form ids the player refers to,
+/// the topic list (skipping the entries `00619410` rejects), the list at
+/// `+0x5e4`, the item array at `+0xdf4` (`004bed60` for each), the lists at
+/// `+0xd48`, `+0x87c`, `+0x60c`, `+0x610`, `+0x614`, `+0x618`, the quest log
+/// (`+0x6b0`), the quest targets (`+0x6bc`), the active effects (`00806a10`),
+/// the combat group count, two floats (`008d1cf0`, `008d1d00`), the list at
+/// `+0xad4`, two bytes (`004d1360`, `005a6050`), `+0x66e`, eight form ids
+/// (`004bfb30`) and the pending script references (`005aa930`). Each counted
+/// list stores its count over a placeholder (`StartVariableSizedValue`).
+pub fn fn_009590f0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
+    let player = this.addr();
+    for base in [0x244u32, 0x378, 0x4b0] {
+        for index in 0..0x4du32 {
+            buffer_write(e, buffer, player + base + index * 4, 4);
+        }
+    }
+    buffer_write(e, buffer, player + 0x4ac, 4);
+    e.call(0x008d_33a0, &args![this, buffer]);
+    let flag_holder = e.mem.alloc(8);
+    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
+    e.mem.free(flag_holder);
+    if wanted {
+        let start = buffer_start_sized(e, buffer);
+        let before = form_id_of(e, buffer);
+        let animation = e.mem.u32(player + 0x690);
+        e.call(0x0049_ab40, &args![animation, buffer]);
+        let after = form_id_of(e, buffer);
+        buffer_finish_sized(e, buffer, after.wrapping_sub(before), start);
+    }
+    for (offset, size) in [
+        (0x64au32, 1u32),
+        (0x64d, 1),
+        (0x651, 1),
+        (0x652, 1),
+        (0x654, 4),
+        (0x660, 4),
+        (0x664, 4),
+        (0x668, 4),
+        (0x66c, 1),
+        (0x6cc, 1),
+        (0x6d0, 4),
+        (0x6d4, 4),
+        (0x6d8, 1),
+        (0x6dc, 4),
+        (0x6e8, 1),
+        (0x681, 1),
+        (0x7c5, 1),
+        (0x7c6, 1),
+    ] {
+        buffer_write(e, buffer, player + offset, size);
+    }
+    let marker = e.mem.u32(player + 0x6f4);
+    let position_source = if marker == 0 {
+        INVENTORY_MODEL_ARGUMENT
+    } else {
+        e.vcall(marker, 0x1f4, &args![]).u32()
+    };
+    let position = e.mem.alloc(12);
+    for i in 0..3 {
+        let word = e.mem.u32(position_source + i * 4);
+        e.mem.set_u32(position + i * 4, word);
+    }
+    buffer_write(e, buffer, player + 0x6e4, 4);
+    buffer_write(e, buffer, position, 0xc);
+    e.mem.free(position);
+    for (offset, size) in [
+        (0x698u32, 4u32),
+        (0x67c, 4),
+        (0x738, 4),
+        (0x658, 1),
+        (0x65c, 4),
+        (0x674, 4),
+        (0x670, 4),
+        (0x75c, 1),
+        (0x730, 4),
+        (0x790, 4),
+        (0x680, 1),
+        (0x7c4, 1),
+        (0x63c, 4),
+        (0x640, 4),
+        (0x644, 4),
+        (0x200, 4),
+        (0x240, 1),
+        (0x64e, 1),
+        (0x66d, 1),
+        (0x794, 4),
+    ] {
+        buffer_write(e, buffer, player + offset, size);
+    }
+    buffer_write(e, buffer, VANITY_RESTORED_VALUE, 4);
+    for (offset, size) in [
+        (0xd6cu32, 4u32),
+        (0xd70, 4),
+        (0x228, 4),
+        (0x22c, 4),
+        (0x230, 4),
+        (0x234, 4),
+        (0x608, 1),
+        (0xdf2, 1),
+        (0x64f, 1),
+        (0x650, 1),
+        (0x7c7, 1),
+        (0x5f8, 1),
+        (0x1fc, 4),
+        (0x684, 4),
+    ] {
+        buffer_write(e, buffer, player + offset, size);
+    }
+    for index in 0..5u32 {
+        buffer_write(e, buffer, player + 0x744 + index * 4, 4);
+    }
+    e.call(0x008d_5660, &args![player + CHARACTER_PROGRESSION, buffer]);
+
+    // The form ids.
+    let mut marker_place = 0;
+    let marker = e.mem.u32(player + 0x6f4);
+    if marker != 0 {
+        marker_place = e.call(0x0057_5d70, &args![marker]).u32();
+        if marker_place == 0 {
+            marker_place = e.call(PARENT_CELL_OF, &args![marker]).u32();
+        }
+    }
+    let quest = e.mem.u32(player + 0x6b8);
+    buffer_form_id(e, buffer, quest);
+    let form = e.mem.u32(player + 0x73c);
+    buffer_form_id(e, buffer, form);
+    buffer_form_id(e, buffer, marker_place);
+    let region = e.mem.u32(player + 0x760);
+    buffer_form_id(e, buffer, region);
+    let region_data = if e.mem.u32(player + 0x760) != 0 {
+        e.call(0x0059_bb30, &args![region]).u32()
+    } else {
+        0
+    };
+    buffer_form_id(e, buffer, region_data);
+    for offset in [0x208u32, 0x224, 0x638, 0x604, 0xd2c, 0xd44] {
+        let form = e.mem.u32(player + offset);
+        buffer_form_id(e, buffer, form);
+    }
+
+    // The counted lists.
+    buffer_write_list(e, buffer, player + 0x6a8, |e, item| {
+        if e.call(0x0061_9410, &args![item]).bool() {
+            false
+        } else {
+            buffer_form_id(e, buffer, item);
+            true
+        }
+    });
+    buffer_write_list(e, buffer, player + 0x5e4, |e, item| {
+        buffer_form_id(e, buffer, item);
+        true
+    });
+    let items = player + 0xdf4;
+    let item_count = if items == 0 {
+        0
+    } else {
+        e.call(WORD_AT_8, &args![items]).u32()
+    };
+    e.call(0x0086_5f60, &args![buffer, item_count]);
+    let mut index = 0;
+    while index < item_count {
+        let slot = e.call(0x006a_7ad0, &args![items, index]).u32();
+        let entry = e.mem.u32(slot);
+        e.call(0x004b_ed60, &args![entry, buffer]);
+        index += 1;
+    }
+    let list = e.mem.u32(player + 0xd48);
+    buffer_write_list(e, buffer, list, |e, item| {
+        let form = e.mem.u32(item);
+        buffer_form_id(e, buffer, form);
+        buffer_write(e, buffer, item + 4, 1);
+        buffer_write(e, buffer, item + 5, 1);
+        true
+    });
+    buffer_write_list(e, buffer, player + 0x87c, |e, item| {
+        let form = e.mem.u32(item);
+        buffer_form_id(e, buffer, form);
+        buffer_write(e, buffer, item + 4, 1);
+        true
+    });
+    let list = e.mem.u32(player + 0x60c);
+    buffer_write_list(e, buffer, list, |e, item| {
+        buffer_write(e, buffer, item, 4);
+        buffer_write(e, buffer, item + 4, 4);
+        let form = e.mem.u32(item + 8);
+        buffer_form_id(e, buffer, form);
+        true
+    });
+    let list = e.mem.u32(player + 0x610);
+    buffer_write_list(e, buffer, list, |e, item| {
+        buffer_write(e, buffer, item, 4);
+        buffer_write(e, buffer, item + 4, 4);
+        buffer_write(e, buffer, item + 8, 2);
+        true
+    });
+    for list_offset in [0x614u32, 0x618] {
+        let list = e.mem.u32(player + list_offset);
+        buffer_write_list(e, buffer, list, |e, item| {
+            buffer_form_id(e, buffer, item);
+            true
+        });
+    }
+    for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
+        buffer_write(e, buffer, player + offset, 4);
+    }
+    buffer_write_list(e, buffer, player + 0x6b0, |e, item| {
+        let quest = e.call(0x005e_3fa0, &args![item]).u32();
+        let stage_done = e.call(0x0060_f1a0, &args![quest, item]).u8();
+        let stage = e.call(0x005d_c980, &args![item]).u8();
+        buffer_form_id(e, buffer, quest);
+        buffer_write_value(e, buffer, u32::from(stage_done), 1);
+        buffer_write_value(e, buffer, u32::from(stage), 1);
+        true
+    });
+    buffer_write_list(e, buffer, player + 0x6bc, |e, item| {
+        let quest = e.call(0x0044_edb0, &args![item]).u32();
+        let delta = list_next(e, item);
+        buffer_form_id(e, buffer, quest);
+        buffer_write_value(e, buffer, delta, 4);
+        true
+    });
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6a10, &args![buffer, progress]);
+    let group = e.mem.u32(player + 0xd64);
+    let group_count = if group == 0 { 0 } else { list_next(e, group) };
+    buffer_write_value(e, buffer, group_count, 4);
+    let first = e.call(0x008d_1cf0, &args![]).f32();
+    let second = e.call(0x008d_1d00, &args![]).f32();
+    buffer_write_value(e, buffer, first.to_bits(), 4);
+    buffer_write_value(e, buffer, second.to_bits(), 4);
+    buffer_write_list(e, buffer, player + 0xad4, |e, item| {
+        let form = e.mem.u32(item);
+        buffer_form_id(e, buffer, form);
+        buffer_write(e, buffer, item + 4, 1);
+        true
+    });
+    let first_byte = e.call(0x005a_6050, &args![this]).u8();
+    let second_byte = e.call(0x004d_1360, &args![this]).u8();
+    buffer_write_value(e, buffer, u32::from(second_byte), 1);
+    buffer_write_value(e, buffer, u32::from(first_byte), 1);
+    buffer_write(e, buffer, player + 0x66e, 1);
+    for index in 0..8u32 {
+        let form = e.call(0x004b_fb30, &args![this, index]).u32();
+        let id = if form != 0 { form_id_of(e, form) } else { 0 };
+        buffer_write_value(e, buffer, id, 4);
+    }
+    e.call(0x005a_a930, &args![buffer]);
+}
+
+/// `BGSLoadGameBuffer` raw read (`00864980`): `size` bytes to `ptr`.
+fn buffer_read(e: &mut Engine, buffer: u32, ptr: u32, size: u32) {
+    e.call(0x0086_4980, &args![buffer, ptr, size]);
+}
+
+/// Reads `size` bytes (1, 2 or 4) through a temporary word.
+fn buffer_read_value(e: &mut Engine, buffer: u32, size: u32) -> u32 {
+    let word = e.mem.alloc(4);
+    e.mem.set_u32(word, 0);
+    buffer_read(e, buffer, word, size);
+    let value = match size {
+        1 => u32::from(e.mem.u8(word)),
+        2 => u32::from(e.mem.u16(word)),
+        _ => e.mem.u32(word),
+    };
+    e.mem.free(word);
+    value
+}
+
+/// `BGSLoadGameBuffer::LoadFormID` (`008648a0`), cast to `target` as the
+/// callers do (`004839c0`, then `__RTDynamicCast` from the `TESForm` type).
+fn buffer_read_form(e: &mut Engine, buffer: u32, target: u32) -> u32 {
+    let id = e.call(0x0086_48a0, &args![buffer]).u32();
+    load_cast_form(e, id, target)
+}
+
+/// `BGSLoadGameBuffer::LoadVariableSizedValue` (`00864a60`).
+fn buffer_read_count(e: &mut Engine, buffer: u32) -> u32 {
+    e.call(0x0086_4a60, &args![buffer]).u32()
+}
+
+/// The version the load buffer reads (slot 0 of its vtable).
+fn buffer_version(e: &mut Engine, buffer: u32) -> u32 {
+    u32::from(e.vcall(buffer, 0, &args![]).u8())
+}
+
+/// Appends `item` to the list object `list` (`005ae3d0` / `00905820`).
+fn append_item(e: &mut Engine, append: u32, list: u32, item: u32) {
+    let slot = e.mem.alloc(4);
+    e.mem.set_u32(slot, item);
+    e.call(append, &args![list, slot]);
+    e.mem.free(slot);
+}
+
+/// Creates the heap list a player field holds when it has none (`0096a2d0`
+/// on a new 8-byte block) and stores it at `+offset`.
+fn create_list_field(e: &mut Engine, player: u32, offset: u32) {
+    let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let list = if block == 0 {
+        0
+    } else {
+        e.call(0x0096_a2d0, &args![block]).u32()
+    };
+    e.mem.set_u32(player + offset, list);
+}
+
+/// Removes the entries of the embedded list at `head` whose first word is
+/// null (they are freed) or that are null, the way the load does after
+/// reading it: `0063f7b0` for the first node, `00905330` after the previous
+/// one otherwise.
+fn purge_dead_entries(e: &mut Engine, head: u32) {
+    let mut node = head;
+    let mut previous = 0;
+    while node != 0 && !list_is_empty(e, node) {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let mut dead = false;
+        if item != 0 {
+            if e.mem.u32(item) == 0 {
+                e.call(0x0040_1030, &args![item]);
+                dead = true;
+            }
+        } else {
+            dead = true;
+        }
+        if dead {
+            if previous != 0 {
+                let item_slot = list_item_slot(e, node);
+                e.call(0x0090_5330, &args![previous, item_slot]);
+                node = list_next(e, previous);
+            } else {
+                e.call(0x0063_f7b0, &args![node]);
+            }
+        } else {
+            previous = node;
+            node = list_next(e, node);
+        }
+    }
+}
+
+// Translated from 0095a3b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the player's save data from the load buffer `buffer`
+/// (`BGSLoadGameBuffer`, the PC format): the mirror of `fn_009590f0`, with
+/// the buffer's version (slot 0 of its vtable) gating the later additions.
+/// It stops the sound handle at `+0x77c` first, reads the three actor value
+/// arrays and `+0x4ac`, the base class (`008d33f0`), the flagged first-person
+/// data (`0084a810`), the player's fields (a changed byte `+0x7c5` clears the
+/// NPC's head), then form ids resolved with `004839c0` and
+/// `__RTDynamicCast`, and rebuilds the topic list, the lists at `+0x5e4`,
+/// `+0xd48`, `+0x87c`, `+0x60c`, `+0x610`, `+0x614`, `+0x618`, `+0xad4`,
+/// the quest log, the quest targets and the item array (`+0xdf4`).
+/// The exception frame is not translated.
+pub fn fn_0095a3b0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
+    let player = this.addr();
+    fn_009590d0(e, this, 1);
+    e.call(0x00ad_88f0, &args![player + 0x77c]);
+    e.call(0x00ad_8d10, &args![player + 0x77c]);
+    for base in [0x244u32, 0x378, 0x4b0] {
+        for index in 0..0x4du32 {
+            buffer_read(e, buffer, player + base + index * 4, 4);
+        }
+    }
+    buffer_read(e, buffer, player + 0x4ac, 4);
+    e.call(0x008d_33f0, &args![this, buffer]);
+    let flag_holder = e.mem.alloc(8);
+    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
+    e.mem.free(flag_holder);
+    if wanted {
+        let base = e.call(0x007a_f430, &args![this]).u32();
+        let statistics = e.global::<u32>(STATISTICS_OBJECT);
+        e.call(0x0084_a810, &args![statistics, 0u32, buffer, base]);
+    }
+    for (offset, size) in [
+        (0x64au32, 1u32),
+        (0x64d, 1),
+        (0x651, 1),
+        (0x652, 1),
+        (0x654, 4),
+        (0x660, 4),
+        (0x664, 4),
+        (0x668, 4),
+        (0x66c, 1),
+        (0x6cc, 1),
+        (0x6d0, 4),
+        (0x6d4, 4),
+        (0x6d8, 1),
+        (0x6dc, 4),
+        (0x6e8, 1),
+        (0x681, 1),
+    ] {
+        buffer_read(e, buffer, player + offset, size);
+    }
+    let old_byte = e.mem.u8(player + 0x7c5);
+    buffer_read(e, buffer, player + 0x7c5, 1);
+    if e.mem.u8(player + 0x7c5) != old_byte && e.vcall(player, 0x1d0, &args![]).u32() != 0 {
+        let base = e.call(BASE_FORM_OF, &args![this]).u32();
+        e.call(0x005d_d560, &args![base]);
+        let holder = e.call(0x008d_8520, &args![this]).u32();
+        e.vcall(holder, 0x468, &args![8u32]);
+    }
+    buffer_read(e, buffer, player + 0x7c6, 1);
+    let position = e.mem.alloc(12);
+    e.call(LIST_NODE_ITEM_SLOT, &args![position]);
+    buffer_read(e, buffer, player + 0x6e4, 4);
+    buffer_read(e, buffer, position, 0xc);
+    for (offset, size) in [
+        (0x698u32, 4u32),
+        (0x67c, 4),
+        (0x738, 4),
+        (0x658, 1),
+        (0x65c, 4),
+        (0x674, 4),
+        (0x670, 4),
+        (0x75c, 1),
+        (0x730, 4),
+        (0x790, 4),
+        (0x680, 1),
+        (0x7c4, 1),
+        (0x63c, 4),
+        (0x640, 4),
+        (0x644, 4),
+        (0x200, 4),
+        (0x240, 1),
+        (0x64e, 1),
+        (0x66d, 1),
+        (0x794, 4),
+    ] {
+        buffer_read(e, buffer, player + offset, size);
+    }
+    buffer_read(e, buffer, VANITY_RESTORED_VALUE, 4);
+    for (offset, size) in [
+        (0xd6cu32, 4u32),
+        (0xd70, 4),
+        (0x228, 4),
+        (0x22c, 4),
+        (0x230, 4),
+        (0x234, 4),
+        (0x608, 1),
+        (0xdf2, 1),
+    ] {
+        buffer_read(e, buffer, player + offset, size);
+    }
+    if buffer_version(e, buffer) >= 0xd {
+        buffer_read(e, buffer, player + 0x64f, 1);
+        buffer_read(e, buffer, player + 0x650, 1);
+    }
+    if buffer_version(e, buffer) >= 0x10 {
+        buffer_read(e, buffer, player + 0x7c7, 1);
+    }
+    if buffer_version(e, buffer) >= 0x12 {
+        buffer_read(e, buffer, player + 0x5f8, 1);
+    }
+    if buffer_version(e, buffer) >= 0x15 {
+        buffer_read(e, buffer, player + 0x1fc, 4);
+        buffer_read(e, buffer, player + 0x684, 4);
+        for index in 0..5u32 {
+            buffer_read(e, buffer, player + 0x744 + index * 4, 4);
+        }
+    }
+    e.call(0x008d_5680, &args![player + CHARACTER_PROGRESSION, buffer]);
+
+    // The form ids.
+    let quest = buffer_read_form(e, buffer, RTTI_LOAD_QUEST);
+    e.mem.set_u32(player + 0x6b8, quest);
+    let form = buffer_read_form(e, buffer, RTTI_LOAD_FIRE_NODE);
+    e.mem.set_u32(player + 0x73c, form);
+    let id = e.call(0x0086_48a0, &args![buffer]).u32();
+    let place = e.call(0x0048_39c0, &args![id]).u32();
+    e.mem.set_u32(player + 0x6f4, 0);
+    if place != 0 {
+        let x = e.mem.f32(position);
+        let y = e.mem.f32(position + 4);
+        let z = e.mem.f32(position + 8);
+        player_character_set_player_map_marker(e, this, x, y, z, place);
+    }
+    e.mem.free(position);
+    let region = buffer_read_form(e, buffer, RTTI_LOAD_REGION);
+    e.mem.set_u32(player + 0x760, region);
+    let region_data = buffer_read_form(e, buffer, RTTI_LOAD_REGION_DATA);
+    if e.mem.u32(player + 0x760) != 0 && region_data != 0 {
+        let region = e.mem.u32(player + 0x760);
+        e.call(0x0070_37c0, &args![region, region_data]);
+    }
+    e.call(0x0086_48e0, &args![buffer, player + 0x208]);
+    if buffer_version(e, buffer) >= 0x12 {
+        e.call(0x0086_48e0, &args![buffer, player + 0x224]);
+    }
+    for offset in [0x638u32, 0x604, 0xd2c, 0xd44] {
+        e.call(0x0086_48e0, &args![buffer, player + offset]);
+    }
+    let count = buffer_read_count(e, buffer);
+    let mut index = 0;
+    while index < count {
+        let topic = buffer_read_form(e, buffer, RTTI_LOAD_TOPIC);
+        if topic != 0 {
+            append_item(e, LIST_APPEND, player + 0x6a8, topic);
+        }
+        index += 1;
+    }
+    e.call(0x0061_a5a0, &args![1u32, player + 0x6a8]);
+    let count = buffer_read_count(e, buffer);
+    let mut index = 0;
+    while index < count {
+        let form = buffer_read_form(e, buffer, RTTI_LOAD_LIST_05E4);
+        if form != 0 {
+            append_item(e, 0x0090_5820, player + 0x5e4, form);
+        }
+        index += 1;
+    }
+    let count = buffer_read_count(e, buffer);
+    e.call(0x006f_2290, &args![player + 0xdf4, count, 1u32]);
+    let mut index = 0;
+    while index < count {
+        let slot = e.call(0x006a_7ad0, &args![player + 0xdf4, index]).u32();
+        let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+        let entry = if block == 0 {
+            0
+        } else {
+            e.call(0x0076_b630, &args![block]).u32()
+        };
+        e.mem.set_u32(slot, entry);
+        e.call(0x004b_ee00, &args![entry, buffer]);
+        index += 1;
+    }
+    e.call(0x0096_9110, &args![this, 1u32]);
+    e.call(0x0096_7290, &args![this]);
+
+    // The list at +0xd48 (items of a form pointer and two bytes).
+    let count = buffer_read_count(e, buffer);
+    if count != 0 {
+        create_list_field(e, player, 0xd48);
+        let mut index = 0;
+        while index < count {
+            let block = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            let entry = if block == 0 {
+                0
+            } else {
+                e.call(0x0047_81b0, &args![block]).u32()
+            };
+            e.call(0x0086_48e0, &args![buffer, entry]);
+            buffer_read(e, buffer, entry + 4, 1);
+            buffer_read(e, buffer, entry + 5, 1);
+            let list = e.mem.u32(player + 0xd48);
+            append_item(e, LIST_APPEND, list, entry);
+            index += 1;
+        }
+    }
+    // The perk list (+0x87c).
+    let count = buffer_read_count(e, buffer);
+    let mut index = 0;
+    while index < count {
+        let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+        let form = buffer_read_form(e, buffer, RTTI_LOAD_PERK);
+        e.mem.set_u32(entry, form);
+        buffer_read(e, buffer, entry + 4, 1);
+        append_item(e, LIST_APPEND, player + 0x87c, entry);
+        index += 1;
+    }
+    purge_dead_entries(e, player + 0x87c);
+    // The list at +0x60c.
+    let count = buffer_read_count(e, buffer);
+    if count != 0 {
+        if e.mem.u32(player + 0x60c) != 0 {
+            let list = e.mem.u32(player + 0x60c);
+            e.call(LIST_CLEAR, &args![list]);
+        } else {
+            create_list_field(e, player, 0x60c);
+        }
+        let mut index = 0;
+        while index < count {
+            let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+            let entry = if block == 0 {
+                0
+            } else {
+                e.call(0x0078_d900, &args![block]).u32()
+            };
+            buffer_read(e, buffer, entry, 4);
+            buffer_read(e, buffer, entry + 4, 4);
+            e.call(0x0086_48e0, &args![buffer, entry + 8]);
+            let list = e.mem.u32(player + 0x60c);
+            append_item(e, LIST_APPEND, list, entry);
+            index += 1;
+        }
+    }
+    // The list at +0x610: the old entries are freed first.
+    if e.mem.u32(player + 0x610) != 0 {
+        let list = e.mem.u32(player + 0x610);
+        let mut node = list;
+        while node != 0 {
+            let item_slot = list_item_slot(e, node);
+            let item = e.mem.u32(item_slot);
+            e.call(0x0040_1030, &args![item]);
+            node = list_next(e, node);
+        }
+        e.call(LIST_CLEAR, &args![list]);
+    }
+    if e.mem.u32(player + 0x610) != 0 {
+        let list = e.mem.u32(player + 0x610);
+        e.call(LIST_CLEAR, &args![list]);
+    }
+    let count = buffer_read_count(e, buffer);
+    if count != 0 {
+        if e.mem.u32(player + 0x610) == 0 {
+            create_list_field(e, player, 0x610);
+        }
+        let mut index = 0;
+        while index < count {
+            let block = e.call(OPERATOR_NEW, &args![0xcu32]).u32();
+            let entry = if block == 0 {
+                0
+            } else {
+                e.call(0x0073_3f50, &args![block]).u32()
+            };
+            buffer_read(e, buffer, entry, 4);
+            buffer_read(e, buffer, entry + 4, 4);
+            buffer_read(e, buffer, entry + 8, 2);
+            let list = e.mem.u32(player + 0x610);
+            append_item(e, LIST_APPEND, list, entry);
+            index += 1;
+        }
+    }
+    if e.global::<u32>(LOADED_PERK_FLAG) != 0 {
+        e.call(0x0096_9ac0, &args![this]);
+    }
+    // The lists at +0x614 and +0x618 hold objects that are destroyed
+    // through their slot 0x10 before the list is rebuilt.
+    for list_offset in [0x614u32, 0x618] {
+        if e.mem.u32(player + list_offset) != 0 {
+            let mut node = e.mem.u32(player + list_offset);
+            while node != 0 {
+                let item_slot = list_item_slot(e, node);
+                let item = e.mem.u32(item_slot);
+                if item != 0 {
+                    e.vcall(item, 0x10, &args![1u32]);
+                }
+                node = list_next(e, node);
+            }
+            let list = e.mem.u32(player + list_offset);
+            e.call(LIST_CLEAR, &args![list]);
+        }
+        if e.mem.u32(player + list_offset) != 0 {
+            let list = e.mem.u32(player + list_offset);
+            e.call(LIST_CLEAR, &args![list]);
+        }
+        let count = buffer_read_count(e, buffer);
+        if count != 0 {
+            if e.mem.u32(player + list_offset) == 0 {
+                create_list_field(e, player, list_offset);
+            }
+            let mut index = 0;
+            while index < count {
+                let block = e.call(OPERATOR_NEW, &args![0xbcu32]).u32();
+                if block != 0 {
+                    e.call(0x0059_a370, &args![block]);
+                }
+                let object = buffer_read_form(e, buffer, RTTI_LOAD_EFFECT_ITEM);
+                let list = e.mem.u32(player + list_offset);
+                append_item(e, LIST_APPEND, list, object);
+                index += 1;
+            }
+        }
+    }
+    for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c] {
+        buffer_read(e, buffer, player + offset, 4);
+    }
+    // The quest log and the quest targets.
+    let count = buffer_read_count(e, buffer);
+    let mut index = 0;
+    while index < count {
+        let quest = buffer_read_form(e, buffer, RTTI_LOAD_QUEST);
+        let stage_done = buffer_read_value(e, buffer, 1);
+        let stage = buffer_read_value(e, buffer, 1);
+        if quest != 0 {
+            let entry = e.call(0x0060_db40, &args![quest, stage_done]).u32();
+            if entry != 0 {
+                let item = e.call(0x0060_f2c0, &args![entry, stage]).u32();
+                if item != 0 {
+                    append_item(e, 0x0090_5820, player + 0x6b0, item);
+                }
+            }
+        }
+        index += 1;
+    }
+    let count = buffer_read_count(e, buffer);
+    let mut index = 0;
+    while index < count {
+        let quest = buffer_read_form(e, buffer, RTTI_LOAD_QUEST);
+        let delta = buffer_read_value(e, buffer, 4);
+        if quest != 0 {
+            let target = e.call(0x0060_c8e0, &args![quest, delta]).u32();
+            if target != 0 {
+                append_item(e, 0x0090_5820, player + 0x6bc, target);
+            }
+        }
+        index += 1;
+    }
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6a90, &args![buffer, progress]);
+    let group_id = buffer_read_value(e, buffer, 4);
+    if group_id != 0 {
+        let holder = e.global::<u32>(COMBAT_HOLDER);
+        let group = e.call(0x0099_1d60, &args![holder, group_id]).u32();
+        e.mem.set_u32(player + 0xd64, group);
+    }
+    if buffer_version(e, buffer) >= 8 {
+        let first = buffer_read_value(e, buffer, 4);
+        let second = buffer_read_value(e, buffer, 4);
+        e.call(0x008d_1d10, &args![first, second]);
+    }
+    if buffer_version(e, buffer) >= 0x16 {
+        let count = buffer_read_count(e, buffer);
+        let mut index = 0;
+        while index < count {
+            let entry = e.call(OPERATOR_NEW, &args![8u32]).u32();
+            let form = buffer_read_form(e, buffer, RTTI_LOAD_PERK);
+            e.mem.set_u32(entry, form);
+            buffer_read(e, buffer, entry + 4, 1);
+            append_item(e, LIST_APPEND, player + 0xad4, entry);
+            index += 1;
+        }
+        purge_dead_entries(e, player + 0xad4);
+    }
+    if buffer_version(e, buffer) >= 0x17 {
+        let hardcore_flag = 1u32;
+        let word = e.mem.alloc(4);
+        e.mem.set_u8(word, 0);
+        e.mem.set_u8(word + 1, hardcore_flag as u8);
+        buffer_read(e, buffer, word, 1);
+        buffer_read(e, buffer, word + 1, 1);
+        let hardcore = u32::from(e.mem.u8(word));
+        let enabled = e.mem.u8(word + 1);
+        e.mem.free(word);
+        e.call(0x0096_9e90, &args![this, hardcore, 1u32]);
+        if enabled == 0 {
+            e.call(0x005d_e9b0, &args![this]);
+        }
+    }
+    if buffer_version(e, buffer) >= 0x19 {
+        buffer_read(e, buffer, player + 0x66e, 1);
+    }
+    if buffer_version(e, buffer) >= 0x1a {
+        for index in 0..8u32 {
+            let id = buffer_read_value(e, buffer, 4);
+            let form = if id != 0 {
+                e.call(0x0048_39c0, &args![id]).u32()
+            } else {
+                0
+            };
+            e.call(0x004b_fb70, &args![this, index, form]);
+        }
+        let holder = e.call(0x008d_8520, &args![this]).u32();
+        if holder != 0 {
+            let holder = e.call(0x008d_8520, &args![this]).u32();
+            if e.vcall(holder, 0x148, &args![]).u32() != 0 {
+                let holder = e.call(0x008d_8520, &args![this]).u32();
+                e.vcall(holder, 0x168, &args![0u32]);
+                let first = e.call(0x008d_8520, &args![this]).u32();
+                let second = e.call(0x008d_8520, &args![this]).u32();
+                let entry = e.vcall(first, 0x148, &args![]).u32();
+                let modded = e.call(0x004b_da70, &args![entry, 2u32]).u8();
+                let entry = e.vcall(second, 0x148, &args![]).u32();
+                let form = e.call(WORD_AT_8, &args![entry]).u32();
+                e.vcall(player, 0x3ec, &args![form, 0u32, u32::from(modded), 1u32]);
+            }
+        }
+    }
+    e.call(0x0094_62c0, &args![this, 0u32, 1u32]);
+    if buffer_version(e, buffer) >= 0x1b {
+        e.call(0x005a_aaf0, &args![buffer]);
+    }
+}
+
+/// Plays the heartbeat sound `name` on the player's sound handle (`+0x77c`):
+/// asks the audio singleton (`00453a70`) for a handle by name
+/// (`00ad7550`, 0x31), assigns it (`00418900`), releases the temporary
+/// (`00483710`) and plays it (`00ad8830(true)`).
+fn play_heartbeat(e: &mut Engine, player: u32, name: u32) {
+    e.with_stack(12, |e, handle| {
+        let audio = e.call(0x0045_3a70, &args![]).u32();
+        let found = e
+            .call(0x00ad_7550, &args![audio, handle, name, 0x31u32])
+            .u32();
+        e.call(0x0041_8900, &args![player + 0x77c, found]);
+        e.call(0x0048_3710, &args![handle]);
+        e.call(0x00ad_8830, &args![player + 0x77c, 1u32]);
+    });
+}
+
+// Translated from 0095c0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The last pass of loading the player in the buffer format (the mirror of
+/// the id resolution of `fn_00958990`): `008d34b0(buffer)`, then the form
+/// ids at `+0x208` and `+0x224` (from version 0x12) go through `0084aa90` of
+/// the object `011ddf38` and a cast, the forms at `+0x638`, `+0x604`,
+/// `+0xd2c`, `+0xd44` are resolved with `004839c0` and a cast (null stays
+/// null), the list at `+0xd48` is resolved and purged of entries that do not
+/// resolve to a base object (`007af430`), the list at `+0x60c` is resolved
+/// and each target flagged (`00564db0(true)`), then `0095f590` (controls
+/// byte `+0x680`), `00806b00(buffer, +0x210)`, the perks (`005eb980`) and the
+/// matrix `011a9448` for the camera node. The ratio of actor value `0x10`
+/// (slots `0xc` and `0x20` of the `ActorValueOwner`) starts the
+/// `UIHealthHeartbeatALP` or `BLP` sound when it is below the two settings.
+/// Finally, when the buffer's flags (`00428110`, `0042ce30`) say so,
+/// `006047c0` on the base object and slot `0x464` of the process.
+/// The exception frame is not translated.
+pub fn fn_0095c0a0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
+    let player = this.addr();
+    e.call(0x008d_34b0, &args![this, buffer]);
+    let statistics = e.global::<u32>(STATISTICS_OBJECT);
+    let old_id = e.mem.u32(player + 0x208);
+    let resolved = e.call(0x0084_aa90, &args![statistics, old_id]).u32();
+    let form = if resolved == 0 {
+        0
+    } else {
+        load_cast_form(e, resolved, RTTI_RESOLVE_0208)
+    };
+    e.mem.set_u32(player + 0x208, form);
+    if buffer_version(e, buffer) >= 0x12 {
+        let old_id = e.mem.u32(player + 0x224);
+        let resolved = e.call(0x0084_aa90, &args![statistics, old_id]).u32();
+        let form = if resolved == 0 {
+            0
+        } else {
+            load_cast_form(e, resolved, RTTI_RESOLVE_0208)
+        };
+        e.mem.set_u32(player + 0x224, form);
+    }
+    for (offset, target) in [
+        (0x638u32, RTTI_LOAD_FORM_0604),
+        (0x604, RTTI_LOAD_FORM_0604),
+        (0xd2c, RTTI_RESOLVE_0D2C),
+        (0xd44, RTTI_RESOLVE_0D2C),
+    ] {
+        let id = e.mem.u32(player + offset);
+        let form = if id == 0 {
+            0
+        } else {
+            load_cast_form(e, id, target)
+        };
+        e.mem.set_u32(player + offset, form);
+    }
+    // The list at +0xd48: resolve every entry, drop the ones without a base.
+    let mut node = e.mem.u32(player + 0xd48);
+    let mut previous = 0;
+    while node != 0 && !list_is_empty(e, node) {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        let mut dead = false;
+        if item == 0 {
+            dead = true;
+        } else {
+            let id = e.mem.u32(item);
+            let form = if id == 0 {
+                0
+            } else {
+                load_cast_form(e, id, RTTI_RESOLVE_0D2C)
+            };
+            e.mem.set_u32(item, form);
+            if form == 0 || e.call(0x007a_f430, &args![form]).u32() == 0 {
+                e.call(0x0040_1030, &args![item]);
+                dead = true;
+            }
+        }
+        if dead {
+            if previous != 0 {
+                let item_slot = list_item_slot(e, node);
+                e.call(0x0090_5330, &args![previous, item_slot]);
+                node = list_next(e, previous);
+            } else {
+                e.call(0x0063_f7b0, &args![node]);
+            }
+        } else {
+            previous = node;
+            node = list_next(e, node);
+        }
+    }
+    // The list at +0x60c: resolve the target of every entry.
+    let mut node = e.mem.u32(player + 0x60c);
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if item != 0 {
+            let id = e.mem.u32(item + 8);
+            let form = if id == 0 {
+                0
+            } else {
+                load_cast_form(e, id, RTTI_LOAD_FORM_0604)
+            };
+            e.mem.set_u32(item + 8, form);
+            if form != 0 {
+                e.call(0x0056_4db0, &args![form, 1u32]);
+            }
+        }
+        node = list_next(e, node);
+    }
+    let disabled = e.mem.u8(player + 0x680);
+    e.call(0x0095_f590, &args![this, u32::from(disabled)]);
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6b00, &args![buffer, progress]);
+    let mut node = player + 0x87c;
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if item != 0 && e.mem.u32(item) != 0 {
+            let perk = e.mem.u32(item);
+            let rank = u32::from(e.mem.u8(item + 4));
+            e.call(0x005e_b980, &args![perk, this, rank, 0u32]);
+        }
+        node = list_next(e, node);
+    }
+    let camera_node = e.global::<u32>(NODE_CAMERA_1ST_SLOT);
+    if camera_node != 0 {
+        e.call(0x0043_fa80, &args![camera_node, LOAD_3D_MATRIX]);
+    }
+    let owner = player + ACTOR_VALUE_OWNER;
+    let current = e.vcall(owner, 0xc, &args![0x10u32]).f64();
+    let maximum = e.vcall(owner, 0x20, &args![0x10u32]).f64();
+    let ratio = (current / maximum) as f32;
+    let upper = setting_float(e, HEARTBEAT_UPPER_SETTING);
+    let lower = setting_float(e, HEARTBEAT_LOWER_SETTING);
+    let above_upper = upper < ratio;
+    let above_lower = lower < ratio;
+    if !above_upper && above_lower {
+        play_heartbeat(e, player, HEARTBEAT_SOUND_ALP);
+    } else if !above_lower {
+        play_heartbeat(e, player, HEARTBEAT_SOUND_BLP);
+    }
+    if e.vcall(player, 0x1d0, &args![]).u32() != 0 {
+        let flag_holder = e.mem.alloc(16);
+        let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+        let first = e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool();
+        if !first {
+            let flags = e.call(0x0042_ce30, &args![buffer, flag_holder + 8]).u32();
+            if e.call(0x0042_80f0, &args![flags, 0x0800_0020u32]).bool() {
+                let base = e.call(BASE_FORM_OF, &args![this]).u32();
+                e.call(0x0060_47c0, &args![base, this, 1u32, 1u32, 0u32, 1u32]);
+                let process = process_of(e, this);
+                if process != 0 && e.vcall(process, 0x478, &args![]).bool() {
+                    e.vcall(process, 0x464, &args![this]);
+                }
+            }
+        }
+        e.mem.free(flag_holder);
+    }
+}
+
+// Translated from 0095c730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The final pass of loading the player in the buffer format: `008d34d0`,
+/// the field of view (`00567490(00598040)`) when the buffer's flags have
+/// bit `0x10`, the wanted camera (`+0x64c`) taken from `+0x64a`, the
+/// first-person biped refresh (`ForceTemp3rdPerson`, `00951a10`), the alpha
+/// `011a3b38` raised to 1 (`008c4640`), `00952290`, the first-person
+/// animation's scene graph (`00493bd0`), `0094ae40(true, false)`, `009466d0`,
+/// the camera spring, `SetLastKnownGoodPosition`, the field of view,
+/// `00806b50`, `00947d80`, `009480c0`, the quest target list, `007059d0`,
+/// `009444d0(0.0)`, iron sights, the pipboy light effect when the player is
+/// a spell target of the `0093ccd0` spell, and slot `0x3f4`.
+pub fn fn_0095c730(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
+    let player = this.addr();
+    e.call(0x008d_34d0, &args![this, buffer]);
+    let flag_holder = e.mem.alloc(8);
+    let flags = e.call(0x0042_8110, &args![buffer, flag_holder]).u32();
+    let wanted = e.call(0x0042_80f0, &args![flags, 0x10u32]).bool();
+    e.mem.free(flag_holder);
+    if wanted {
+        let field_of_view = e.call(0x0059_8040, &args![this]).f32();
+        e.call(0x0056_7490, &args![this, field_of_view]);
+    }
+    let third_person = e.mem.u8(player + 0x64a);
+    e.mem.set_u8(player + 0x64c, third_person);
+    if e.call(0x0095_0bb0, &args![this, 1u32]).u32() != 0 {
+        if e.mem.u8(player + 0x64d) != 0 {
+            player_character_force_temp_3rd_person(e, this, 1);
+        }
+        let hide = u8::from(e.mem.u8(player + 0x64a) == 0);
+        fn_00951a10(e, this, hide);
+    }
+    if e.global::<f32>(INVENTORY_ALPHA) < 1.0 {
+        e.set_global(INVENTORY_ALPHA, 1.0f32);
+        e.call(0x008c_4640, &args![this]);
+    }
+    player_character_update_first_person_zoom(e, this);
+    let animation = player_character_get_animation(e, this, 1);
+    e.call(0x0049_3bd0, &args![animation]);
+    e.call(0x0094_ae40, &args![this, 1u32, 0u32]);
+    let game_state = e.global::<u32>(GAME_STATE_POINTER);
+    if e.call(0x005b_b4d0, &args![game_state]).bool() {
+        e.call(0x0094_66d0, &args![this, 0.0f32, 1u32]);
+    }
+    if e.mem.u32(player + 0x638) != 0 && e.mem.u32(player + 0x63c) != 3 {
+        let body = e.mem.u32(player + 0x638);
+        let mode = e.mem.u32(player + 0x63c);
+        let strength = e.mem.f32(player + 0x644);
+        e.call(0x0095_f930, &args![this, body, mode, strength]);
+        e.call(0x0070_5ad0, &args![2u32]);
+    }
+    e.call(0x0094_7c90, &args![this]);
+    let fov = e.mem.f32(player + 0x65c);
+    fn_00950610(e, this, fov);
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6b50, &args![buffer, progress]);
+    e.call(0x0094_7d80, &args![this]);
+    e.call(0x0094_80c0, &args![this]);
+    let quest = e.mem.u32(player + 0x6b8);
+    if quest != 0 {
+        e.call(0x0060_f110, &args![quest, player + 0x6c4, player + 0x6bc]);
+    }
+    e.call(0x0070_59d0, &args![]);
+    e.call(0x0094_44d0, &args![this, 0.0f32]);
+    if e.call(0x008b_bc10, &args![this]).bool() {
+        let holder = e.call(0x008d_8520, &args![this]).u32();
+        e.vcall(holder, 0x400, &args![0u32]);
+        e.call(0x008b_b650, &args![this, 1u32, 0u32, 0u32]);
+    }
+    let spell = e.call(0x0093_ccd0, &args![]).u32();
+    let spell_target = if spell == 0 { 0 } else { spell + 0x18 };
+    if e.call(
+        0x0082_2b90,
+        &args![player + MAGIC_TARGET, spell_target, 1u32],
+    )
+    .bool()
+    {
+        let pipboy = e.call(0x0070_5990, &args![1u32, 1u32, 1u32]).u32();
+        e.call(0x007f_a310, &args![pipboy]);
+        let pipboy = e.call(0x0070_5990, &args![0u32, 1u32, 1u32]).u32();
+        e.call(0x007f_a310, &args![pipboy]);
+    }
+    e.vcall(player, 0x3f4, &args![]);
+}
+
+// Translated from 0095c9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the player to its start state before a revert (`Revert` of the
+/// save game): `008d34f0`, the first-person animation (`0049bb70`) when the
+/// buffer's flags (`0042ce30`) have bit `0x10000000`, the biped
+/// (`00c81db0`), the field of view (`00567490(1.0)`) with bit `0x10`, the
+/// globals (`011e0784`, `011e078c`, vanity, camera values), the player's
+/// bytes and words, the lists (`00470470` on `+0x610`, `+0x614`, `+0x618`,
+/// the global `011e0ae8`, `+0x84c`, `+0x6a8`, `+0x6bc`, `+0x6b0`, `+0x5e4`,
+/// `+0x6c4`), the modifier arrays, the objects of the lists at `+0x60c`,
+/// `+0x87c`, `+0xad4`, the map marker, and finally the quest topics are
+/// rebuilt from the list `004612e0` (`011c3f2c`) with `00619410`.
+/// The exception frame is not translated.
+pub fn fn_0095c9c0(e: &mut Engine, this: Ptr<PlayerCharacter>, buffer: u32) {
+    let player = this.addr();
+    e.call(0x008d_34f0, &args![this, buffer]);
+    let flag_holder = e.mem.alloc(16);
+    let flags = e.call(0x0042_ce30, &args![buffer, flag_holder]).u32();
+    let wanted = e.call(0x0042_80f0, &args![flags, 0x1000_0000u32]).bool();
+    if wanted && e.mem.u32(player + 0x690) != 0 {
+        let animation = e.mem.u32(player + 0x690);
+        e.call(0x0049_bb70, &args![animation, buffer]);
+    }
+    let biped = e.call(0x0095_0bb0, &args![this, 0u32]).u32();
+    e.call(0x00c8_1db0, &args![biped, 0u32]);
+    let flags = e.call(0x0042_ce30, &args![buffer, flag_holder + 8]).u32();
+    let wanted = e.call(0x0042_80f0, &args![flags, 0x10u32]).bool();
+    e.mem.free(flag_holder);
+    if wanted {
+        e.call(0x0056_7490, &args![this, 1.0f32]);
+    }
+    e.set_global(SAVED_FORM_011E0784, 0u32);
+    e.set_global(SAVED_FORM_011E078C, 0u32);
+    player_character_stop_vanity_mode(e, this.cast());
+    e.mem.set_u8(player + 0x608, 0);
+    e.set_global(VANITY_VALUE_07DC, 0.0f32);
+    e.set_global(CAMERA_VALUE_0768, 0.0f32);
+    let minus_one = e.global::<f32>(MINUS_ONE_FLOAT);
+    e.set_global(INVENTORY_ALPHA_SAVE, minus_one);
+    e.set_global(IRON_SIGHTS_SKIP_FLAG, 0u8);
+    e.set_global(CAMERA_WORD_0788, 0u32);
+    e.mem.set_u8(player + 0x66e, 1);
+    e.mem.set_u8(player + 0x64a, 0);
+    e.mem.set_u8(player + 0x64c, 0);
+    e.mem.set_u32(player + 0xd64, 0);
+    e.mem.set_u32(player + 0xd68, 0);
+    e.mem.set_f32(player + 0xd6c, 0.0);
+    e.mem.set_f32(player + 0xd70, 0.0);
+    for offset in [0x798u32, 0x799, 0x79a, 0x79b, 0x681] {
+        e.mem.set_u8(player + offset, 0);
+    }
+    e.mem.set_u8(player + 0x75d, 1);
+    let default_value = e.global::<f32>(DEFAULT_TIMER_VALUE);
+    e.mem.set_f32(player + 0x684, default_value);
+    if e.call(0x0056_2d00, &args![buffer]).bool() {
+        e.mem.set_u8(player + 0x7c5, 0);
+    }
+    for offset in [0x7c6u32, 0x7c7, 0x5f8, 0x680, 0x64d, 0x64e, 0x64f, 0x650] {
+        e.mem.set_u8(player + offset, 0);
+    }
+    e.set_global(CAMERA_SWITCH_FLAG_011F21D0, 0u8);
+    e.mem.set_u8(player + 0x7c7, 0);
+    let first = setting_float(e, VIEW_OFFSET_SETTING_A);
+    e.mem.set_f32(player + 0x670, first);
+    let second = setting_float(e, VIEW_OFFSET_SETTING_B);
+    e.mem.set_f32(player + 0x674, second);
+    e.mem.set_u32(player + 0x228, 0);
+    e.mem.set_f32(player + 0x22c, 0.0);
+    e.mem.set_u32(player + 0x230, 0);
+    e.mem.set_f32(player + 0x234, 0.0);
+    e.mem.set_u8(player + 0x608, 0);
+    e.mem.set_u8(player + 0xdf2, 0);
+    e.mem.set_u32(player + 0x654, 0);
+    e.mem.set_f32(player + 0x6e4, 0.0);
+    for index in 0..5u32 {
+        e.mem.set_u32(player + 0x744 + index * 4, 0);
+    }
+    for offset in [0x610u32, 0x614, 0x618] {
+        let list = e.mem.u32(player + offset);
+        e.call(LIST_CLEAR, &args![list]);
+    }
+    for offset in [0x61cu32, 0x620, 0x624, 0x628, 0x62c, 0x1fc] {
+        e.mem.set_u32(player + offset, 0);
+    }
+    e.mem.set_f32(player + 0x684, default_value);
+    e.mem.set_u32(player + 0x790, 0);
+    e.call(0x0085_1d10, &args![this]);
+    e.mem.set_f32(player + 0x4ac, 0.0);
+    for index in 0..0x4du32 {
+        e.mem.set_f32(player + 0x244 + index * 4, 0.0);
+        e.mem.set_f32(player + 0x378 + index * 4, 0.0);
+        e.mem.set_f32(player + 0x4b0 + index * 4, 0.0);
+    }
+    e.call(LIST_CLEAR, &args![0x011e_0ae8u32]);
+    e.call(0x0085_1d10, &args![this]);
+    e.call(0x0096_1280, &args![this]);
+    for offset in [0x84cu32, 0x6a8, 0x6bc, 0x6b0, 0x5e4, 0x6c4] {
+        e.call(LIST_CLEAR, &args![player + offset]);
+    }
+    e.call(0x0096_90a0, &args![this]);
+    e.call(0x0096_7290, &args![this]);
+    e.call(0x008d_56a0, &args![player + CHARACTER_PROGRESSION, buffer]);
+    e.mem.set_u32(player + 0x208, 0);
+    e.mem.set_u32(player + 0x224, 0);
+    e.mem.set_u32(player + 0x1f0, 0);
+    player_character_remove_player_map_marker(e, this);
+    e.mem.set_u32(player + 0x604, 0);
+    fn_00950010(e, this, 0);
+    // The list at +0x60c: free the objects, then the list itself.
+    while e.mem.u32(player + 0x60c) != 0 {
+        let list = e.mem.u32(player + 0x60c);
+        let item_slot = list_item_slot(e, list);
+        if e.mem.u32(item_slot) == 0 {
+            break;
+        }
+        let list = e.mem.u32(player + 0x60c);
+        let item_slot = list_item_slot(e, list);
+        let item = e.mem.u32(item_slot);
+        e.call(0x0040_1030, &args![item]);
+        let list = e.mem.u32(player + 0x60c);
+        e.call(0x0063_f7b0, &args![list]);
+    }
+    let list = e.mem.u32(player + 0x60c);
+    if list != 0 {
+        e.call(0x0047_02f0, &args![list, 1u32]);
+    }
+    e.mem.set_u32(player + 0x60c, 0);
+    for (list_head, first_extra, extra_count) in
+        [(0x87cu32, 0x884u32, 0x4au32), (0xad4, 0xadc, 0x4a)]
+    {
+        let mut node = player + list_head;
+        while node != 0 {
+            let item_slot = list_item_slot(e, node);
+            let item = e.mem.u32(item_slot);
+            e.call(0x0040_1030, &args![item]);
+            node = list_next(e, node);
+        }
+        e.call(LIST_CLEAR, &args![player + list_head]);
+        for index in 0..extra_count {
+            e.call(LIST_CLEAR, &args![player + first_extra + index * 8]);
+        }
+    }
+    let name_buffer = e.mem.u32(player + 0x1ec);
+    e.call(0x0040_1030, &args![name_buffer]);
+    e.mem.set_u32(player + 0x1ec, 0);
+    e.mem.set_u8(player + 0xe38, 1);
+    e.mem.set_u32(player + 0xe0c, 0);
+    e.call(0x008b_bbf0, &args![this, 0u32]);
+    let progress = e.mem.u32(player + 0x210);
+    e.call(0x0080_6ba0, &args![buffer, progress]);
+    let holder = e.global::<u32>(0x011c_3f2c);
+    let mut node = e.call(0x0046_12e0, &args![holder]).u32();
+    while node != 0 {
+        let item_slot = list_item_slot(e, node);
+        let item = e.mem.u32(item_slot);
+        if item != 0 && e.call(0x0061_9410, &args![item]).bool() {
+            append_item(e, LIST_APPEND, player + 0x6a8, item);
+        }
+        node = list_next(e, node);
+    }
+    let head = e.call(0x0046_4e30, &args![this]).u32();
+    e.call(0x0061_a5a0, &args![1u32, head]);
+    e.call(0x0094_7d10, &args![this]);
+    e.call(0x0094_8050, &args![this]);
+    e.call(0x0052_4d70, &args![this]);
+    e.call(0x005a_ae20, &args![buffer]);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4084,6 +8121,91 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             player_character_set_active_quest(Ptr<PlayerCharacter>, u32)
         ),
         entry!(0x00952a20, fn_00952a20(Ptr<PlayerCharacter>, u32)),
+        entry!(0x00952b30, fn_00952b30(Ptr<PlayerCharacter>) -> u32),
+        entry!(
+            0x00952ba0,
+            player_character_get_current_target_list(Ptr<PlayerCharacter>) -> u32
+        ),
+        entry!(
+            0x00952c30,
+            player_character_check_for_quest_target_update(Ptr<PlayerCharacter>, u32)
+        ),
+        entry!(
+            0x00952d60,
+            player_character_build_path_to_target(Ptr<PlayerCharacter>, u32, u32, u32)
+        ),
+        entry!(
+            0x00952e60,
+            player_character_set_player_map_marker(Ptr<PlayerCharacter>, f32, f32, f32, u32)
+        ),
+        entry!(
+            0x00952f90,
+            player_character_remove_player_map_marker(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00952ff0, fn_00952ff0(Ptr<PlayerCharacter>, u32) -> u32),
+        entry!(
+            0x00953060,
+            player_character_focus_on_actor(Ptr<PlayerCharacter>, u32, f32, u8)
+        ),
+        entry!(
+            0x00953c20,
+            player_character_get_number_actors_in_combat(Ptr<PlayerCharacter>) -> u32
+        ),
+        entry!(
+            0x00953c50,
+            player_character_is_player_character_in_combat(Ptr<PlayerCharacter>, u32) -> u8
+        ),
+        entry!(0x00953c80, fn_00953c80(Ptr<PlayerCharacter>) -> bool),
+        entry!(
+            0x00953ce0,
+            player_character_reset_player_greet_flag(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00953d00, fn_00953d00(Ptr<PlayerCharacter>)),
+        entry!(0x00953d40, fn_00953d40(Ptr<PlayerCharacter>)),
+        entry!(
+            0x00953d80,
+            player_character_initiate_sit_sleep_package(Ptr<PlayerCharacter>, u32)
+        ),
+        entry!(
+            0x00953ee0,
+            player_character_initiate_get_up_package(Ptr<PlayerCharacter>)
+        ),
+        entry!(
+            0x00953f20,
+            player_character_get_heading(Ptr<PlayerCharacter>, u32) -> f32
+        ),
+        entry!(0x00953f60, fn_00953f60(Ptr<PlayerCharacter>) -> bool),
+        entry!(
+            0x00953f80,
+            player_character_set_is_a_murderer(Ptr<PlayerCharacter>)
+        ),
+        entry!(0x00953fb0, fn_00953fb0(Ptr<PlayerCharacter>) -> u8),
+        entry!(0x00953fd0, fn_00953fd0(Ptr<PlayerCharacter>, u8)),
+        entry!(0x00953ff0, fn_00953ff0(Ptr<PlayerCharacter>, u32, u32, u8)),
+        entry!(
+            0x00954610,
+            fn_00954610(Ptr<PlayerCharacter>, u32, u32, u32, u32, u32) -> u32
+        ),
+        entry!(0x00954910, fn_00954910(Ptr, u8)),
+        entry!(
+            0x00954960,
+            fn_00954960(Ptr<PlayerCharacter>, u8, u32) -> f32
+        ),
+        entry!(0x009549a0, fn_009549a0(Ptr, u32) -> u8),
+        entry!(0x00954a70, fn_00954a70(Ptr, u32, u8) -> u8),
+        entry!(0x00954cc0, fn_00954cc0(Ptr<PlayerCharacter>) -> bool),
+        entry!(0x00954d40, fn_00954d40(Ptr<PlayerCharacter>, u32) -> u16),
+        entry!(0x00955620, fn_00955620(Ptr<PlayerCharacter>, u32)),
+        entry!(0x00956f70, fn_00956f70(Ptr<PlayerCharacter>, u32, u32)),
+        entry!(0x00958990, fn_00958990(Ptr<PlayerCharacter>, u32, u32)),
+        entry!(0x00958ec0, fn_00958ec0(Ptr<PlayerCharacter>, u32, u32)),
+        entry!(0x00958fc0, fn_00958fc0(Ptr<PlayerCharacter>, u32)),
+        entry!(0x009590d0, fn_009590d0(Ptr<PlayerCharacter>, u8)),
+        entry!(0x009590f0, fn_009590f0(Ptr<PlayerCharacter>, u32)),
+        entry!(0x0095a3b0, fn_0095a3b0(Ptr<PlayerCharacter>, u32)),
+        entry!(0x0095c0a0, fn_0095c0a0(Ptr<PlayerCharacter>, u32)),
+        entry!(0x0095c730, fn_0095c730(Ptr<PlayerCharacter>, u32)),
+        entry!(0x0095c9c0, fn_0095c9c0(Ptr<PlayerCharacter>, u32)),
     ]
 }
 
@@ -7894,5 +12016,1582 @@ mod tests {
             calls_to(&e, 0x005e_c500),
             vec![vec![0xc0c, player.addr() + 0x6c4]]
         );
+    }
+
+    // ----- third session: quest targets, map marker, focus, pick-up, save and load -----
+
+    /// Float settings: the getter answers the address of the setting itself,
+    /// which then holds the float.
+    fn float_settings(e: &mut Engine) {
+        e.register(SETTING_FLOAT_POINTER, |_, a| eax(a[0]));
+    }
+
+    /// The save version `008df040` answers.
+    fn version(e: &mut Engine, value: u32) {
+        double(e, 0x008d_f040, eax(value));
+    }
+
+    #[test]
+    fn the_first_quest_entry_of_the_active_quest_is_found() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        e.set(player, PlayerCharacter::pActiveQuest, Ptr::new(7));
+        let second = node(&mut e, 0xb0b, 0);
+        e.mem.set_u32(player.addr() + 0x6bc, 0xa0a);
+        e.mem.set_u32(player.addr() + 0x6c0, second);
+        e.register(0x0044_edb0, |_, a| eax(if a[0] == 0xb0b { 7 } else { 8 }));
+        double(&mut e, 0x007a_f430, eax(1));
+        assert_eq!(fn_00952b30(&mut e, player), 0xb0b);
+        double(&mut e, 0x007a_f430, eax(2));
+        assert_eq!(fn_00952b30(&mut e, player), 0);
+    }
+
+    #[test]
+    fn the_target_list_is_rebuilt_only_when_stale() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        assert_eq!(player_character_get_current_target_list(&mut e, player), 0);
+        e.set(player, PlayerCharacter::pActiveQuest, Ptr::new(7));
+        double(&mut e, 0x0060_efd0, eax(1));
+        start_log(&mut e);
+        assert_eq!(
+            player_character_get_current_target_list(&mut e, player),
+            p + 0x6c4
+        );
+        assert!(calls_to(&e, 0x0060_f110).is_empty());
+        e.mem.set_u8(p + 0x206, 1);
+        player_character_get_current_target_list(&mut e, player);
+        assert_eq!(
+            calls_to(&e, 0x0060_f110),
+            vec![vec![7, p + 0x6c4, p + 0x6bc]]
+        );
+        assert_eq!(e.mem.u8(p + 0x206), 0);
+        double(&mut e, 0x0060_efd0, eax(0));
+        player_character_get_current_target_list(&mut e, player);
+        assert_eq!(calls_to(&e, 0x0060_f110).len(), 2);
+    }
+
+    #[test]
+    fn a_quest_target_update_marks_the_list_for_a_target_reference_or_the_player() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        player_character_check_for_quest_target_update(&mut e, player, 0x77);
+        assert_eq!(e.mem.u8(p + 0x206), 0);
+        // A quest with one target whose reference is the argument.
+        e.set(player, PlayerCharacter::pActiveQuest, Ptr::new(7));
+        double(&mut e, 0x0060_efd0, eax(1));
+        e.mem.set_u32(p + 0x6c4, 0x55);
+        double(&mut e, 0x0061_01b0, eax(0x77));
+        player_character_check_for_quest_target_update(&mut e, player, 0x77);
+        assert_eq!(e.mem.u8(p + 0x206), 1);
+        // A target holding an inventory the check accepts.
+        e.mem.set_u8(p + 0x206, 0);
+        double(&mut e, 0x0061_01b0, eax(0x78));
+        double(&mut e, 0x0055_d310, eax(0x99));
+        double(&mut e, 0x004b_f220, eax(0xaa));
+        double(&mut e, 0x004c_fe20, eax(1));
+        player_character_check_for_quest_target_update(&mut e, player, 0x77);
+        assert_eq!(e.mem.u8(p + 0x206), 1);
+        // The player: the path to the marker target is rebuilt.
+        e.mem.set_u8(p + 0x206, 0);
+        double(&mut e, 0x004c_fe20, eax(0));
+        e.mem.set_u32(p + 0x6f4, 0x31);
+        start_log(&mut e);
+        player_character_check_for_quest_target_update(&mut e, player, 0x0600_5000);
+        // The list is marked stale and rebuilt at once, which clears the mark.
+        assert_eq!(e.mem.u8(p + 0x206), 0);
+        assert_eq!(calls_to(&e, 0x0060_f110).len(), 1);
+        assert_eq!(calls_to(&e, 0x006d_4f70).len(), 1);
+    }
+
+    #[test]
+    fn the_path_to_a_target_is_built_or_cleared_again() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        start_log(&mut e);
+        player_character_build_path_to_target(&mut e, player, 0, 0x44, 0);
+        player_character_build_path_to_target(&mut e, player, 0x33, 0, 0);
+        assert!(calls_to(&e, 0x006d_4f70).is_empty());
+        double(&mut e, 0x006d_4f70, eax(1));
+        player_character_build_path_to_target(&mut e, player, 0x33, 0x44, 0);
+        let built = calls_to(&e, 0x006d_4f70);
+        assert_eq!(built.len(), 1);
+        assert_eq!(built[0][2], 0x44);
+        assert_eq!(built[0][4], 2);
+        // One clear before the search, none after a success.
+        assert_eq!(calls_to(&e, 0x006f_4990), vec![vec![0x44]]);
+        // Both locations are destroyed.
+        assert_eq!(calls_to(&e, 0x004f_f7e0).len(), 2);
+        double(&mut e, 0x006d_4f70, eax(0));
+        player_character_build_path_to_target(&mut e, player, 0x33, 0x44, 0);
+        assert_eq!(calls_to(&e, 0x006f_4990).len(), 3);
+    }
+
+    #[test]
+    fn the_map_marker_is_created_placed_and_removed() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        e.set_global(0x011c_a248u32, 0x4141u32);
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+        e.register(0x0055_a2f0, |_, a| eax(a[0]));
+        double(&mut e, FORM_TYPE_OF, eax(0x39));
+        start_log(&mut e);
+        player_character_set_player_map_marker(&mut e, player, 1.0, 2.0, 3.0, 0x66);
+        let marker = e.mem.u32(p + 0x6f4);
+        assert_ne!(marker, 0);
+        assert_eq!(calls_to(&e, 0x0057_5690), vec![vec![marker, 0x4141]]);
+        assert_eq!(calls_to(&e, 0x0087_ce80), vec![vec![marker, 0x66]]);
+        assert_eq!(calls_to(&e, 0x0049_eea0).len(), 1);
+        // A second call reuses the marker; a type 0x41 place goes through 005f36f0.
+        double(&mut e, FORM_TYPE_OF, eax(0x41));
+        double(&mut e, 0x005f_36f0, eax(0x88));
+        player_character_set_player_map_marker(&mut e, player, 1.0, 2.0, 3.0, 0x66);
+        assert_eq!(e.mem.u32(p + 0x6f4), marker);
+        assert_eq!(calls_to(&e, 0x0087_ce80).last(), Some(&vec![marker, 0x88]));
+        // Removal destroys it through slot 0x10.
+        let seen = recording_slot(&mut e, marker, 0x10, eax(0));
+        player_character_remove_player_map_marker(&mut e, player);
+        assert_eq!(*seen.borrow(), vec![vec![marker, 1]]);
+        assert_eq!(e.mem.u32(p + 0x6f4), 0);
+        assert_eq!(calls_to(&e, 0x006f_4990).last(), Some(&vec![p + 0x6f8]));
+        player_character_remove_player_map_marker(&mut e, player);
+    }
+
+    #[test]
+    fn the_camera_position_is_copied_in_first_person() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let source = e.mem.alloc(12);
+        e.mem.set_f32(source, 1.0);
+        e.mem.set_f32(source + 4, 2.0);
+        e.mem.set_f32(source + 8, 3.0);
+        double(&mut e, 0x0045_bb80, eax(source));
+        double(&mut e, 0x008a_2fa0, eax(0));
+        let out = e.mem.alloc(12);
+        start_log(&mut e);
+        // No camera node yet: the player's own position is asked for.
+        assert_eq!(fn_00952ff0(&mut e, player, out), out);
+        assert_eq!(calls_to(&e, 0x008a_2fa0), vec![vec![player.addr(), out]]);
+        e.set_global(NODE_CAMERA_1ST_SLOT, 0x100u32);
+        assert_eq!(fn_00952ff0(&mut e, player, out), out);
+        assert_eq!(e.mem.f32(out + 8), 3.0);
+        assert_eq!(e.mem.f32(out), 1.0);
+        // Third person asks again.
+        e.set(player, PlayerCharacter::b3rdPerson, true);
+        fn_00952ff0(&mut e, player, out);
+        assert_eq!(calls_to(&e, 0x008a_2fa0).len(), 2);
+    }
+
+    // ----- FocusOnActor -----
+
+    const TIMER: u32 = 0x011f_6394;
+
+    fn focus_world(e: &mut Engine) -> (Ptr<PlayerCharacter>, u32) {
+        float_settings(e);
+        list_helpers(e);
+        let player = new_player(e);
+        let actor = e.mem.alloc(0x10);
+        e.set_global(NODE_CAMERA_1ST_SLOT, 0x100u32);
+        let position = e.mem.alloc(12);
+        e.mem.set_f32(position + 8, 1.0);
+        double(e, 0x0045_bb80, eax(position));
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(u64::from(a[0]) | (u64::from(a[1]) << 32));
+            eax(value as i32 as u32)
+        });
+        (player, actor)
+    }
+
+    #[test]
+    fn focusing_without_an_actor_or_in_another_world_does_nothing() {
+        let mut e = engine();
+        let (player, actor) = focus_world(&mut e);
+        e.set_global(FOCUS_BLEND, 0.25f32);
+        player_character_focus_on_actor(&mut e, player, 0, 1.0, 0);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 0.25);
+        e.register(0x0057_5d70, |_, a| eax(a[0] & 1));
+        player_character_focus_on_actor(&mut e, player, actor + 1, 1.0, 0);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 0.25);
+        // In an interior the cells decide.
+        double(&mut e, PARENT_CELL_OF, eax(0x44));
+        double(&mut e, 0x0042_5fd0, eax(1));
+        e.register(PARENT_CELL_OF, |_, a| {
+            eax(if a[0] & 1 == 1 { 0x45 } else { 0x44 })
+        });
+        player_character_focus_on_actor(&mut e, player, actor + 1, 1.0, 0);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 0.25);
+    }
+
+    #[test]
+    fn an_actor_without_a_head_is_logged_once() {
+        let mut e = engine();
+        let (player, actor) = focus_world(&mut e);
+        slot(&mut e, actor, 0x1d0, eax(0x77));
+        slot(&mut e, actor, 0x1b0, eax(0));
+        double(&mut e, 0x0057_15d0, eax(0x1234));
+        start_log(&mut e);
+        // Strength is clamped, and stored even without a head.
+        player_character_focus_on_actor(&mut e, player, actor, 7.0, 0);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 1.0);
+        assert_eq!(e.global::<u32>(FOCUS_LAST_WARNED_ACTOR), actor);
+        assert_eq!(
+            calls_to(&e, LOG_MESSAGE),
+            vec![vec![FORMAT_FOCUS_WITHOUT_HEAD, 0x1234]]
+        );
+        player_character_focus_on_actor(&mut e, player, actor, -3.0, 0);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 0.0);
+        assert_eq!(calls_to(&e, LOG_MESSAGE).len(), 1);
+        // The field of view is set from the distance (no face data).
+        assert_eq!(calls_to(&e, 0x0045_7990).len(), 2);
+    }
+
+    #[test]
+    fn the_head_bound_sets_the_angle_limit_and_eases_the_view() {
+        let mut e = engine();
+        let (player, actor) = focus_world(&mut e);
+        let p = player.addr();
+        slot(&mut e, actor, 0x1d0, eax(0x77));
+        slot(&mut e, actor, 0x1b0, eax(0x88));
+        double(&mut e, 0x0043_d450, eax(0x99));
+        double(&mut e, 0x0066_29f0, eax(1));
+        e.register(0x0084_d030, |_, a| {
+            st0(if a[0] == TIMER { 0.5 } else { 2.0 })
+        });
+        e.register(0x0045_7990, |_, _| st0(4.0));
+        double(&mut e, 0x005d_c330, st0(0.25));
+        e.register(0x0040_ebd0, |_, a| {
+            st0(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
+        });
+        e.set_global(HUNDRED, 100.0f64);
+        e.set_global(HEAD_DISTANCE_FACTOR_SETTING, 1.0f32);
+        e.set_global(FOCUS_MAXIMUM_SETTING, 30.0f32);
+        e.set_global(FOCUS_SMOOTHING_SETTING, 1.0f32);
+        e.mem.set_f32(p + 0x670, 5.0);
+        e.mem.set_f32(p + 0x674, 10.0);
+        start_log(&mut e);
+        player_character_focus_on_actor(&mut e, player, actor, 0.0, 1);
+        // limit = 0.25 * 100, below the maximum of 30; the offsets move by
+        // min(0.5 / 1, 1) of the way.
+        assert_eq!(e.global::<f32>(FOCUS_ANGLE_LIMIT), 25.0);
+        assert_eq!(e.global::<f32>(FOCUS_RATIO), 0.5);
+        assert_eq!(e.mem.f32(p + 0x670), 15.0);
+        assert_eq!(e.mem.f32(p + 0x674), 17.5);
+        assert_eq!(e.global::<f32>(FOCUS_BLEND), 0.0);
+        // A smaller maximum caps the limit.
+        e.set_global(FOCUS_MAXIMUM_SETTING, 20.0f32);
+        e.mem.set_f32(p + 0x670, 0.0);
+        player_character_focus_on_actor(&mut e, player, actor, 0.0, 1);
+        assert_eq!(e.global::<f32>(FOCUS_ANGLE_LIMIT), 20.0);
+        assert_eq!(e.mem.f32(p + 0x670), 10.0);
+        // The bound of a head-less actor comes from the node found by name.
+        assert!(calls_to(&e, 0x0098_ddd0).is_empty());
+    }
+
+    #[test]
+    fn the_player_turns_towards_the_actor_and_the_camera_is_refreshed() {
+        let mut e = engine();
+        let (player, actor) = focus_world(&mut e);
+        let p = player.addr();
+        slot(&mut e, actor, 0x1d0, eax(0x77));
+        slot(&mut e, actor, 0x1b0, eax(0x88));
+        // The player's slots: heading (0x2bc), the mover flag (0x214), 0x1e0.
+        slot(&mut e, p, 0x2bc, st0(0.5));
+        slot(&mut e, p, 0x214, eax(0));
+        slot(&mut e, p, 0x1e0, eax(0));
+        double(&mut e, 0x0043_d450, eax(0x99));
+        double(&mut e, 0x0066_29f0, eax(0));
+        e.register(0x0084_d030, |_, a| {
+            st0(if a[0] == TIMER { 0.5 } else { 2.0 })
+        });
+        e.register(0x0045_7990, |_, _| st0(4.0));
+        e.register(0x0040_ebd0, |_, a| {
+            st0(f32::from_bits(a[0]).min(f32::from_bits(a[1])) as f64)
+        });
+        double(&mut e, 0x004b_5510, st0(0.5));
+        double(&mut e, 0x0093_1d70, st0(0.1));
+        e.register(0x0040_8840, |_, a| st0(f32::from_bits(a[0]).abs() as f64));
+        double(&mut e, 0x004b_13c0, st0(0.8));
+        e.set_global(DEGREES_TO_RADIANS, 0.017453292519943295f64);
+        e.set_global(PI_DOUBLE, std::f64::consts::PI);
+        e.set_global(TWO_PI_DOUBLE, std::f64::consts::TAU);
+        e.set_global(MINUS_PI_DOUBLE, -std::f64::consts::PI);
+        e.set_global(FOCUS_MAXIMUM_SETTING, 30.0f32);
+        e.set_global(FOCUS_RATE_SETTING, 1.0f32);
+        e.set_global(PITCH_START_SETTING, 0.0f32);
+        e.set_global(YAW_START_SETTING, 0.0f32);
+        e.mem.set_f32(p + 0x674, 15.0);
+        start_log(&mut e);
+        // Full blend: the pitch turn is frame time * (pitch error * rate).
+        player_character_focus_on_actor(&mut e, player, actor, 1.0, 0);
+        let pitch = calls_to(&e, 0x0093_1e50);
+        assert_eq!(pitch.len(), 1);
+        assert_eq!(f32::from_bits(pitch[0][1]), 0.5 * (0.5 - 0.1));
+        let yaw = calls_to(&e, 0x0093_1d30);
+        assert_eq!(yaw.len(), 1);
+        assert_eq!(e.global::<u8>(FOCUS_PITCH_TURNING), 1);
+        assert_eq!(e.global::<u8>(FOCUS_YAW_TURNING), 1);
+        // The camera was switched to first person and refreshed.
+        assert_eq!(calls_to(&e, 0x0089_5110).len(), 1);
+        assert_eq!(calls_to(&e, 0x008d_3550).len(), 1);
+        assert_eq!(calls_to(&e, 0x0088_85e0).len(), 2);
+        assert_eq!(e.global::<f32>(FOCUS_SAVED_HEADING), 0.5);
+        // With the skip flag set nothing is turned.
+        start_log(&mut e);
+        player_character_focus_on_actor(&mut e, player, actor, 1.0, 1);
+        assert!(calls_to(&e, 0x0093_1e50).is_empty());
+    }
+
+    #[test]
+    fn small_combat_and_greet_accessors_read_and_write_the_player() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        assert_eq!(
+            player_character_get_number_actors_in_combat(&mut e, player),
+            0
+        );
+        e.mem.set_u32(p + 0xd64, 0x55);
+        double(&mut e, 0x005a_4320, eax(3));
+        assert_eq!(
+            player_character_get_number_actors_in_combat(&mut e, player),
+            3
+        );
+        e.mem.set_u8(p + 0xdf0, 1);
+        e.mem.set_u8(p + 0xdf1, 9);
+        let out = e.mem.alloc(4);
+        assert_eq!(
+            player_character_is_player_character_in_combat(&mut e, player, out),
+            1
+        );
+        assert_eq!(e.mem.u8(out), 9);
+        assert_eq!(
+            player_character_is_player_character_in_combat(&mut e, player, 0),
+            1
+        );
+        // Greet flag.
+        e.mem.set_u8(p + 0x6cc, 1);
+        e.mem.set_f32(p + 0x6d0, 2.0);
+        e.set_global(GREET_TIMEOUT, 5.0f64);
+        fn_00953d00(&mut e, player);
+        assert_eq!(e.mem.u8(p + 0x6cc), 1);
+        double(&mut e, 0x0084_d030, st0(4.5));
+        fn_00953d40(&mut e, player);
+        assert_eq!(e.mem.f32(p + 0x6d0), 6.5);
+        fn_00953d00(&mut e, player);
+        assert_eq!(e.mem.u8(p + 0x6cc), 0);
+        assert_eq!(e.mem.f32(p + 0x6d0), 0.0);
+        // The timer does not run without the flag.
+        fn_00953d40(&mut e, player);
+        assert_eq!(e.mem.f32(p + 0x6d0), 0.0);
+        player_character_reset_player_greet_flag(&mut e, player);
+        // Murderer, and the other byte accessors.
+        assert!(!fn_00953f60(&mut e, player));
+        start_log(&mut e);
+        player_character_set_is_a_murderer(&mut e, player);
+        assert!(fn_00953f60(&mut e, player));
+        assert_eq!(calls_to(&e, 0x008b_ff70), vec![vec![p, 4, 1]]);
+        fn_00953fd0(&mut e, player, 5);
+        assert_eq!(fn_00953fb0(&mut e, player), 5);
+    }
+
+    #[test]
+    fn the_process_lists_object_is_asked_for_and_released() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        start_log(&mut e);
+        assert!(!fn_00953c80(&mut e, player));
+        assert!(calls_to(&e, 0x0047_02f0).is_empty());
+        assert_eq!(
+            calls_to(&e, 0x0097_1c30),
+            vec![vec![PROCESS_LISTS, player.addr(), 0x15, 0]]
+        );
+        double(&mut e, 0x0097_1c30, eax(0x44));
+        assert!(fn_00953c80(&mut e, player));
+        assert_eq!(calls_to(&e, 0x0047_02f0), vec![vec![0x44, 1]]);
+    }
+
+    #[test]
+    fn sitting_and_getting_up_start_packages() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        let process = e.mem.alloc(8);
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        slot(&mut e, process, 0x3e4, eax(7));
+        let launched = recording_slot(&mut e, p, 0x2f4, eax(0));
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0])));
+        double(&mut e, 0x0067_0b90, eax(0x500));
+        double(&mut e, 0x0067_f030, eax(0x600));
+        start_log(&mut e);
+        player_character_initiate_sit_sleep_package(&mut e, player, 0x77);
+        // The mover is cleared unless the path is complete.
+        assert_eq!(calls_to(&e, 0x009d_af80).len(), 1);
+        assert_eq!(calls_to(&e, 0x0093_a5f0), vec![vec![p, 1]]);
+        // Process type 7 resets something on the player.
+        assert_eq!(calls_to(&e, 0x0089_4cc0), vec![vec![p, 0]]);
+        assert_eq!(calls_to(&e, 0x0067_0fc0), vec![vec![0x500, 6]]);
+        assert_eq!(calls_to(&e, 0x0067_f3c0), vec![vec![0x600, 0x77]]);
+        assert_eq!(calls_to(&e, 0x0067_1d30), vec![vec![0x500, 0x600]]);
+        assert_eq!(calls_to(&e, 0x0067_0b30), vec![vec![0x600, 1]]);
+        assert_eq!(*launched.borrow(), vec![vec![p, 0x500, 0, 1]]);
+        // Getting up.
+        double(&mut e, 0x008b_3bb0, eax(1));
+        start_log(&mut e);
+        player_character_initiate_get_up_package(&mut e, player);
+        assert!(calls_to(&e, 0x009d_af80).is_empty());
+        assert_eq!(calls_to(&e, 0x0093_a6f0), vec![vec![p, 1]]);
+        assert_eq!(calls_to(&e, 0x008a_75a0), vec![vec![p]]);
+    }
+
+    #[test]
+    fn the_heading_adds_the_offset_and_is_wrapped() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        e.mem.set_f32(player.addr() + 0x6e4, 0.5);
+        double(&mut e, 0x008b_d7b0, st0(1.0));
+        e.register(0x004b_1480, |_, a| st0(f32::from_bits(a[0]) as f64 - 0.25));
+        assert_eq!(player_character_get_heading(&mut e, player, 0), 1.25);
+    }
+
+    /// The settings the save code reads: the pointer getters answer the
+    /// address of the setting, whose value then sits in game memory.
+    fn save_settings(e: &mut Engine) {
+        e.register(0x0040_8d60, |_, a| eax(a[0]));
+        e.register(SETTING_INT_POINTER, |_, a| eax(a[0]));
+    }
+
+    // ----- pick-up, drop and the small predicates -----
+
+    /// A process with the item-change slots `0x148` and `0x14c` answering
+    /// `current`, hung on the player.
+    fn process_with_items(e: &mut Engine, player: Ptr<PlayerCharacter>, current: u32) -> u32 {
+        let process = e.mem.alloc(8);
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        slot(e, process, 0x148, eax(current));
+        slot(e, process, 0x14c, eax(current));
+        process
+    }
+
+    #[test]
+    fn picking_up_an_unwanted_ammunition_form_stops_at_once() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let item = e.mem.alloc(8);
+        double(&mut e, 0x007a_f430, eax(0x4000));
+        double(&mut e, FORM_TYPE_OF, eax(0x28));
+        double(&mut e, 0x0047_bcf0, eax(0));
+        start_log(&mut e);
+        fn_00953ff0(&mut e, player, item, 3, 0);
+        assert!(calls_to(&e, 0x008a_ded0).is_empty());
+        double(&mut e, FORM_TYPE_OF, eax(0x29));
+        double(&mut e, 0x004c_94d0, eax(0));
+        fn_00953ff0(&mut e, player, item, 3, 0);
+        assert!(calls_to(&e, 0x008a_ded0).is_empty());
+    }
+
+    #[test]
+    fn a_stolen_object_raises_the_alarm_and_the_reference_is_destroyed() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        process_with_items(&mut e, player, 0);
+        let item = e.mem.alloc(8);
+        let destroyed = recording_slot(&mut e, item, 0x10, eax(0));
+        slot(&mut e, item, 0x1d0, eax(0x5151));
+        double(&mut e, 0x007a_f430, eax(0x4000));
+        double(&mut e, FORM_TYPE_OF, eax(0x11));
+        let actors = node(&mut e, 0x55, 0);
+        double(&mut e, 0x0096_f450, eax(actors));
+        double(&mut e, 0x0088_1650, eax(item));
+        double(&mut e, 0x0056_7790, eax(0x77));
+        double(&mut e, 0x0097_3ab0, eax(0x88));
+        double(&mut e, EXTRA_LIST_OF, eax(0xe0));
+        start_log(&mut e);
+        fn_00953ff0(&mut e, player, item, 3, 0);
+        assert_eq!(calls_to(&e, 0x008a_ded0), vec![vec![p, 0x4000, 1, 0]]);
+        assert_eq!(calls_to(&e, 0x00c6_a270), vec![vec![0x5151, 1, 1, 0]]);
+        // The actor that was at the item is told about the player.
+        assert_eq!(calls_to(&e, 0x0088_1620), vec![vec![0x55, p]]);
+        assert_eq!(calls_to(&e, 0x0047_02f0), vec![vec![actors, 1]]);
+        // Not an owner: the thief is told, the owner is set on the extra data.
+        assert_eq!(
+            calls_to(&e, 0x008b_fa40),
+            vec![vec![p, 0x88, 0x4000, 3, 0, 0x77]]
+        );
+        assert_eq!(calls_to(&e, 0x0041_9700), vec![vec![0xe0, 0x77]]);
+        assert_eq!(e.global::<u32>(STEAL_ACTOR), 0x88);
+        // Nothing was a reason to keep it: transferred whole and destroyed.
+        assert_eq!(calls_to(&e, 0x0057_4b30), vec![vec![p, item, 3, 0, 0]]);
+        assert_eq!(*destroyed.borrow(), vec![vec![item, 1]]);
+        // An evil owner takes the ownership away instead.
+        double(&mut e, 0x0057_8790, eax(1));
+        fn_00953ff0(&mut e, player, item, 3, 0);
+        assert_eq!(calls_to(&e, 0x0041_aed0), vec![vec![0xe0]]);
+    }
+
+    #[test]
+    fn picking_up_the_current_ammunition_adds_to_the_item_counts() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        process_with_items(&mut e, player, 0x300);
+        let item = e.mem.alloc(8);
+        slot(&mut e, item, 0x1d0, eax(0x5151));
+        double(&mut e, 0x007a_f430, eax(0x4000));
+        double(&mut e, FORM_TYPE_OF, eax(0x28));
+        double(&mut e, 0x0047_bcf0, eax(1));
+        double(&mut e, 0x004c_0bf0, eax(1));
+        double(&mut e, WORD_AT_8, eax(0x4000));
+        double(&mut e, LIST_NODE_NEXT, eax(5));
+        double(&mut e, 0x0057_2d30, eax(1));
+        start_log(&mut e);
+        fn_00953ff0(&mut e, player, item, 3, 0);
+        assert_eq!(
+            calls_to(&e, 0x006e_cd40),
+            vec![vec![0x300, 8], vec![0x300, 8]]
+        );
+        // Marked as touched; picked up with the flag byte given and kept.
+        assert_eq!(calls_to(&e, 0x0057_4b30), vec![vec![p, item, 3, 0, 1]]);
+        assert_eq!(calls_to(&e, 0x0057_2230), vec![vec![item]]);
+    }
+
+    #[test]
+    fn dropping_through_a_position_lets_the_virtual_slot_do_everything() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let dropped = recording_slot(&mut e, p, 0x17c, eax(0xd0d));
+        double(&mut e, 0x0070_43c0, eax(1));
+        double(&mut e, PARENT_CELL_OF, eax(0x500));
+        double(&mut e, 0x0055_1110, eax(0x600));
+        start_log(&mut e);
+        let result = fn_00954610(&mut e, player, 0x11, 0x22, 0x33, 0x44, 0x55);
+        assert_eq!(result, 0);
+        assert_eq!(
+            *dropped.borrow(),
+            vec![vec![p, 0x11, 0x22, 0x33, 0, 0, 0x600, 0, 0, 1, 0]]
+        );
+        assert_eq!(calls_to(&e, 0x009c_8950), vec![vec![OBJECT_011F2250, 0, 0]]);
+    }
+
+    #[test]
+    fn dropping_the_current_ammunition_empties_it_and_places_the_reference() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        process_with_items(&mut e, player, 0x300);
+        let item = e.mem.alloc(8);
+        slot(&mut e, item, 0xe4, eax(1));
+        double(&mut e, FORM_TYPE_OF, eax(0x29));
+        double(&mut e, 0x008a_1710, eax(0x31));
+        double(&mut e, 0x0052_5980, eax(item));
+        double(&mut e, 0x0095_0bb0, eax(0x4242));
+        double(&mut e, 0x004a_ae30, eax(0x4343));
+        // The remembered item is forgotten when it is dropped and worn.
+        e.mem.set_u32(p + 0x1f0, item);
+        double(&mut e, 0x0041_8ab0, eax(1));
+        // The reference slot 0x17c creates: without a body it is listed.
+        let reference = e.mem.alloc(0x20);
+        slot(&mut e, reference, 0x1d0, eax(0));
+        let created = recording_slot(&mut e, p, 0x17c, eax(reference));
+        let appended = record_appends(&mut e);
+        start_log(&mut e);
+        let result = fn_00954610(&mut e, player, item, 0x22, 0x33, 0x44, 0x55);
+        assert_eq!(result, reference);
+        assert_eq!(calls_to(&e, 0x006e_cd40), vec![vec![0x300, 0]]);
+        assert_eq!(
+            calls_to(&e, 0x0045_0f90),
+            vec![vec![0x4343, 1], vec![0x4343, 1]]
+        );
+        assert_eq!(e.mem.u32(p + 0x1f0), 0);
+        assert_eq!(
+            *created.borrow(),
+            vec![vec![p, item, 0x22, 0x33, 0, 1, 0, 0x44, 0x55, 1, 0]]
+        );
+        assert_eq!(*appended.borrow(), vec![(p + 0x84c, reference)]);
+        assert_eq!(e.mem.u32(reference + 8) & 0x0040_0000, 0x0040_0000);
+        assert_eq!(calls_to(&e, 0x0056_4d20), vec![vec![reference, 1]]);
+        assert_eq!(calls_to(&e, 0x008a_ded0), vec![vec![p, item, 0, 0]]);
+    }
+
+    #[test]
+    fn a_dropped_reference_with_a_body_is_activated_in_place() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        let item = e.mem.alloc(8);
+        slot(&mut e, item, 0xe4, eax(0));
+        double(&mut e, FORM_TYPE_OF, eax(0x11));
+        let reference = e.mem.alloc(0x20);
+        slot(&mut e, reference, 0x1d0, eax(0x900));
+        let position = e.mem.alloc(12);
+        e.mem.set_u32(position, 7);
+        slot(&mut e, reference, 0x1f4, eax(position));
+        recording_slot(&mut e, p, 0x17c, eax(reference));
+        start_log(&mut e);
+        assert_eq!(fn_00954610(&mut e, player, item, 0, 0, 0, 0), reference);
+        assert_eq!(calls_to(&e, 0x00c6_a040).len(), 2);
+        assert_eq!(calls_to(&e, 0x00c6_bd00), vec![vec![0x900, 1]]);
+        assert_eq!(calls_to(&e, 0x00c6_a270), vec![vec![0x900, 1, 1, 0]]);
+        assert_eq!(calls_to(&e, 0x0057_5830).len(), 1);
+        // Not worth selecting: the closing call gets a null base.
+        assert_eq!(calls_to(&e, 0x008a_ded0), vec![vec![p, 0, 0, 0]]);
+    }
+
+    #[test]
+    fn the_form_flag_and_god_mode_scale_helpers() {
+        let mut e = engine();
+        let object = e.mem.alloc(16);
+        fn_00954910(&mut e, Ptr::new(object), 1);
+        assert_eq!(e.mem.u32(object + 8), 0x0040_0000);
+        e.mem.set_u32(object + 8, 0xffff_ffff);
+        fn_00954910(&mut e, Ptr::new(object), 0);
+        assert_eq!(e.mem.u32(object + 8), 0xffbf_ffff);
+        let player = new_player(&mut e);
+        double(&mut e, IS_GOD_MODE, eax(0));
+        assert_eq!(fn_00954960(&mut e, player, 3, 0), 1.0);
+        double(&mut e, IS_GOD_MODE, eax(1));
+        double(&mut e, 0x008c_4610, st0(0.75));
+        start_log(&mut e);
+        assert_eq!(fn_00954960(&mut e, player, 3, 0), 0.75);
+        assert_eq!(
+            calls_to(&e, 0x008c_4610),
+            vec![vec![player.addr(), 3, 0.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn the_health_level_is_compared_with_the_actor_value() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let owner = player.addr() + 0xa4;
+        let seen = recording_slot(&mut e, owner, 8, eax(10));
+        double(&mut e, IS_GOD_MODE, eax(1));
+        assert!(!fn_00954cc0(&mut e, player));
+        assert!(seen.borrow().is_empty());
+        double(&mut e, IS_GOD_MODE, eax(0));
+        double(&mut e, 0x008a_0c20, st0(5.0));
+        assert!(fn_00954cc0(&mut e, player));
+        assert_eq!(*seen.borrow(), vec![vec![owner, 0x2e]]);
+        double(&mut e, 0x008a_0c20, st0(15.0));
+        assert!(!fn_00954cc0(&mut e, player));
+    }
+
+    /// An actor that passes the four checks of the package predicates, with
+    /// a package, a process holder and an acquire object.
+    fn package_actor(e: &mut Engine) -> (u32, u32, u32) {
+        let actor = e.mem.alloc(8);
+        slot(e, actor, 0x22c, eax(0));
+        slot(e, actor, 0x234, eax(0));
+        let holder = e.mem.alloc(16);
+        slot(e, holder, 0x128, eax(0x0600_5000));
+        slot(e, holder, 0x24, eax(0));
+        double(e, 0x008d_8520, eax(holder));
+        double(e, 0x0088_1510, eax(0x700));
+        e.set_global(PLAYER_POINTER, 0x0600_5000u32);
+        (actor, holder, 0x700)
+    }
+
+    #[test]
+    fn an_actor_using_the_player_is_recognised_by_its_package() {
+        let mut e = engine();
+        let (actor, _, _package) = package_actor(&mut e);
+        let this = Ptr::<()>::new(0);
+        e.register(0x0041_ca90, |_, a| eax(if a[0] == 0x700 { 1 } else { 0 }));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 1);
+        // The player must be the target; a detail the last check can veto.
+        double(&mut e, 0x008a_6210, eax(1));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 0);
+        double(&mut e, 0x008a_6210, eax(0));
+        e.register(0x0041_ca90, |_, _| eax(5));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 0);
+        e.register(0x0041_ca90, |_, _| eax(7));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 1);
+        // One of the first four checks failing ends it.
+        double(&mut e, 0x0044_0da0, eax(1));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 0);
+        double(&mut e, 0x0044_0da0, eax(0));
+        double(&mut e, 0x0088_1510, eax(0));
+        assert_eq!(fn_009549a0(&mut e, this, actor), 0);
+    }
+
+    #[test]
+    fn the_package_check_with_a_mode_looks_at_the_target_object() {
+        let mut e = engine();
+        let (actor, holder, _) = package_actor(&mut e);
+        let this = Ptr::<()>::new(0);
+        let told = recording_slot(&mut e, holder, 0x24, eax(0));
+        let player_pointer = 0x0600_5000;
+        // Mode 0: the acquire object (holder + 4) names the player.
+        e.register(0x0041_ca90, |_, _| eax(1));
+        double(&mut e, 0x0067_1d10, eax(0x710));
+        double(&mut e, WORD_AT_8, eax(player_pointer));
+        double(&mut e, 0x008a_6290, eax(0));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 0), 1);
+        assert_eq!(*told.borrow(), vec![vec![holder, actor, 1]]);
+        double(&mut e, 0x008a_6290, eax(1));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 0), 0);
+        double(&mut e, WORD_AT_8, eax(0x1234));
+        double(&mut e, 0x0068_0050, eax(0));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 0), 0);
+        e.register(0x0041_ca90, |_, _| eax(3));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 0), 0);
+        // Mode 1: the package location is the player.
+        e.register(0x0041_ca90, |_, _| eax(1));
+        double(&mut e, WORD_AT_8, eax(player_pointer));
+        double(&mut e, 0x0067_6140, eax(player_pointer));
+        double(&mut e, 0x008a_6210, eax(0));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 1);
+        double(&mut e, 0x008a_6210, eax(1));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 0);
+        // Not the location: the kind 9 package or a foreign holder target ends it.
+        double(&mut e, 0x0067_6140, eax(0));
+        double(&mut e, 0x008a_6210, eax(0));
+        e.register(0x0041_ca90, |_, _| eax(9));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 0);
+        e.register(0x0041_ca90, |_, _| eax(1));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 1);
+        slot(&mut e, holder, 0x128, eax(0x1111));
+        double(&mut e, WORD_AT_8, eax(0x2222));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 0);
+        // A failing first check.
+        double(&mut e, 0x0043_7bf0, eax(1));
+        assert_eq!(fn_00954a70(&mut e, this, actor, 1), 0);
+    }
+
+    // ----- save sizes, save and load -----
+
+    #[test]
+    fn the_save_size_adds_every_field_of_the_version() {
+        let mut e = engine();
+        save_settings(&mut e);
+        let player = new_player(&mut e);
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        let name = e.mem.alloc(8);
+        double(&mut e, 0x0055_d520, eax(name));
+        double(&mut e, 0x00ec_6130, eax(5));
+        version(&mut e, 0x7a);
+        assert_eq!(fn_00954d40(&mut e, player, 0), 1352);
+        version(&mut e, 0x20);
+        assert_eq!(fn_00954d40(&mut e, player, 0), 759);
+        // Blocks add a header before and after the base part; the flagged
+        // first-person animation adds its own size.
+        double(&mut e, 0x0086_2110, eax(1));
+        double(&mut e, 0x0049_aa20, eax(100));
+        assert_eq!(fn_00954d40(&mut e, player, 0), 771);
+        assert_eq!(fn_00954d40(&mut e, player, 0x1000_0000), 871);
+    }
+
+    #[test]
+    fn the_save_size_counts_the_lists_and_logs_when_asked() {
+        let mut e = engine();
+        save_settings(&mut e);
+        let player = new_player(&mut e);
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        let name = e.mem.alloc(8);
+        double(&mut e, 0x0055_d520, eax(name));
+        double(&mut e, 0x00ec_6130, eax(0));
+        version(&mut e, 0x7a);
+        let without = fn_00954d40(&mut e, player, 0);
+        // Three entries in each counted list.
+        double(&mut e, LIST_COUNT, eax(3));
+        double(&mut e, FORM_ID_OF, eax(3));
+        let with = fn_00954d40(&mut e, player, 0);
+        // 0x854 table (x5), the global list (x4), +0x610 (x8), +0x614 (x4),
+        // +0x618 (x4), the topics (x4), the quest log (x6), the targets (x5).
+        assert_eq!(with - without, 3 * (5 + 4 + 8 + 4 + 4 + 4 + 6 + 5));
+        // The debug report: with and without a world space record.
+        e.mem.set_u8(SAVE_SIZE_DEBUG_SETTING, 1);
+        start_log(&mut e);
+        fn_00954d40(&mut e, player, 0);
+        let reports = calls_to(&e, ERROR);
+        assert_eq!(reports.len(), 2);
+        assert_eq!(reports[0][0], FORMAT_SAVE_SIZE);
+        assert_eq!(reports[0][2], 0x3248);
+        assert_eq!(reports[1][2], 0x3365);
+        let record = e.mem.alloc(16);
+        e.mem.set_u32(record, 0x77);
+        double(&mut e, 0x004f_d3e0, eax(record));
+        let form_type = e.mem.alloc(4);
+        slot(&mut e, form_type, 0x130, eax(0x4040));
+        double(&mut e, 0x0048_39c0, eax(form_type));
+        start_log(&mut e);
+        fn_00954d40(&mut e, player, 0);
+        let reports = calls_to(&e, ERROR);
+        assert_eq!(reports[0][0], FORMAT_SAVE_SIZE_FORM);
+        assert_eq!(&reports[0][2..4], &[0x77, 0x4040]);
+    }
+
+    type Writes = Rc<RefCell<Vec<(u32, Vec<u8>)>>>;
+
+    /// Records the writes of `SaveGameDataOLD`, `SaveNumericID` and the raw
+    /// write: the address called and the bytes at the moment of the call.
+    fn record_saves(e: &mut Engine) -> Writes {
+        let seen: Writes = Rc::new(RefCell::new(Vec::new()));
+        for address in [0x0048_4ce0u32, 0x0048_4d20, 0x0085_79b0] {
+            let record = seen.clone();
+            e.register_double(address, move |e, w| {
+                let bytes = e.mem.bytes(w[1], w[2]);
+                record.borrow_mut().push((address, bytes));
+                eax(0)
+            });
+        }
+        seen
+    }
+
+    #[test]
+    fn the_old_save_writes_the_modifiers_the_fields_and_the_form_ids() {
+        let mut e = engine();
+        save_settings(&mut e);
+        list_helpers(&mut e);
+        double(&mut e, 0x0082_5c00, eax(0x0600_2000));
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x20);
+        let writes = record_saves(&mut e);
+        e.mem.set_u32(p + 0x244, 0xdead_beef);
+        e.mem.set_u32(p + 0x208, 0x5000);
+        e.mem.set_u32(p + 0x6ec, 0x6000);
+        e.register(FORM_ID_OF, |_, a| eax(a[0] + 1));
+        double(&mut e, DYNAMIC_CAST, eax(0x6100));
+        let name = e.mem.alloc(8);
+        e.mem.set_cstr(name, b"Abc");
+        double(&mut e, 0x0055_d520, eax(name));
+        double(&mut e, 0x00ec_6130, eax(3));
+        fn_00955620(&mut e, player, 0);
+        let writes = writes.borrow();
+        assert_eq!(writes[0].0, 0x0048_4ce0);
+        assert_eq!(writes[0].1.len(), 0x134);
+        assert_eq!(&writes[0].1[..4], &[0xef, 0xbe, 0xad, 0xde]);
+        assert_eq!(writes[1].1.len(), 0x134);
+        // Version 0x20 has no damage array: the next write is the health word.
+        assert_eq!(writes[2].1.len(), 4);
+        let ids: Vec<&(u32, Vec<u8>)> = writes.iter().filter(|w| w.0 == 0x0048_4d20).collect();
+        assert_eq!(ids[0].1, 0x5001u32.to_le_bytes());
+        // The global form is empty; the spell cast gives 0x6100.
+        assert_eq!(ids[1].1, 0u32.to_le_bytes());
+        assert_eq!(ids[2].1, 0x6101u32.to_le_bytes());
+        // The name goes last among the data writes: its length byte, then
+        // the characters.
+        let tail = &writes[writes.len() - 2..];
+        assert_eq!(tail[0].1, vec![4u8]);
+        assert_eq!(tail[1].1.len(), 4);
+        assert_eq!(&tail[1].1[..3], b"Abc");
+    }
+
+    #[test]
+    fn the_old_save_brackets_its_parts_in_blocks_when_the_save_uses_them() {
+        let mut e = engine();
+        save_settings(&mut e);
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x20);
+        double(&mut e, 0x0086_2110, eax(1));
+        let writes = record_saves(&mut e);
+        let counter = Rc::new(RefCell::new(0x0600_1000u32));
+        let ticks = counter.clone();
+        e.register_double(0x0082_5c00, move |_, _| {
+            *ticks.borrow_mut() += 0x10;
+            eax(*ticks.borrow())
+        });
+        double(&mut e, 0x0055_d520, eax(0x0600_8000));
+        e.mem.set_u8(0x0600_8000, 0);
+        fn_00955620(&mut e, player, 0);
+        let writes = writes.borrow();
+        // The block marker comes first, in raw writes.
+        assert_eq!(writes[0].0, 0x0085_79b0);
+        assert_eq!(writes[0].1, b"KOLB".to_vec());
+        assert_eq!(writes[1].0, 0x0085_79b0);
+        assert_eq!(writes[1].1.len(), 2);
+        // The first block's length word (the second position asked for,
+        // 0x20 further than the first) holds the bytes written since.
+        let first_block = 0x0600_1020;
+        assert_ne!(e.mem.u16(first_block), 0);
+    }
+
+    #[test]
+    fn the_old_load_reads_in_the_save_order_and_resolves_the_ids() {
+        let mut e = engine();
+        save_settings(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x20);
+        let reads: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let record = reads.clone();
+        e.register_double(0x0048_4d00, move |_, w| {
+            record.borrow_mut().push((w[1], w[2]));
+            eax(0)
+        });
+        let next_id = Rc::new(RefCell::new(0x100u32));
+        let ids = next_id.clone();
+        e.register_double(0x0048_4d40, move |e, w| {
+            e.mem.set_u32(w[1], *ids.borrow());
+            *ids.borrow_mut() += 1;
+            eax(0)
+        });
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x2000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        fn_00956f70(&mut e, player, 0, 0x55);
+        let reads = reads.borrow();
+        assert_eq!(reads[0], (p + 0x244, 0x130));
+        assert_eq!(reads[1], (p + 0x378, 0x130));
+        assert_eq!(reads[2], (p + 0x4ac, 4));
+        // The fields follow, then the ids.
+        assert_eq!(e.mem.u32(p + 0x208), 0x100);
+        assert_eq!(e.global::<u32>(SAVED_FORM_011E0784), 0x101);
+        assert_eq!(e.mem.u32(p + 0x214), 0x103);
+        assert_eq!(e.mem.u32(p + 0x218), 0x104);
+        assert_eq!(e.mem.u32(p + 0x6f0), 0x106);
+        assert_eq!(e.mem.u32(p + 0x73c), 0x107);
+        assert_eq!(e.mem.u32(p + 0x758), 0x108);
+        // The base class is loaded with both words.
+        assert!(reads.iter().any(|r| *r == (p + 0x64a, 1)));
+        assert!(reads.iter().any(|r| *r == (p + 0x730, 4)));
+    }
+
+    #[test]
+    fn the_old_load_of_a_recent_version_reads_the_lists_and_rebuilds_the_quest_log() {
+        let mut e = engine();
+        save_settings(&mut e);
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x7a);
+        let reads: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let record = reads.clone();
+        // Counts read through the plain loader are 1 for the first word.
+        e.register_double(0x0048_4d00, move |e, w| {
+            record.borrow_mut().push((w[1], w[2]));
+            if w[2] == 2 {
+                e.mem.set_u16(w[1], 1);
+            }
+            eax(0)
+        });
+        e.register(0x0048_4d40, |e, w| {
+            e.mem.set_u32(w[1], 0x300);
+            eax(0)
+        });
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x2000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        double(&mut e, 0x0060_db40, eax(0x9100));
+        double(&mut e, 0x0060_f2c0, eax(0x9200));
+        double(&mut e, 0x0060_c8e0, eax(0x9300));
+        let appended = Rc::new(RefCell::new(Vec::<(u32, u32)>::new()));
+        for address in [0x005a_e3d0u32, 0x0090_5820] {
+            let seen = appended.clone();
+            e.register_double(address, move |e, w| {
+                seen.borrow_mut().push((w[0], e.mem.u32(w[1])));
+                eax(0)
+            });
+        }
+        fn_00956f70(&mut e, player, 0x10, 0x55);
+        let appended = appended.borrow();
+        // The quest log, the targets and the topics were appended.
+        assert!(appended.contains(&(p + 0x6b0, 0x9200)));
+        assert!(appended.contains(&(p + 0x6bc, 0x9300)));
+        assert!(appended.contains(&(p + 0x6a8, 0x2300)));
+        assert_eq!(e.mem.u32(p + 0x6b8), 0x2300);
+    }
+
+    #[test]
+    fn the_second_load_pass_turns_ids_into_forms_and_selects_the_spell_and_scroll() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x20);
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| {
+            eax(match a[3] {
+                RTTI_SPELL_INTERFACE => 0x40,
+                RTTI_MAGIC_ITEM_FORM => 0,
+                _ => a[0],
+            })
+        });
+        double(&mut e, LIST_NODE_NEXT, eax(0x70));
+        e.register(0x0040_a250, |_, a| eax(a[0] + 1));
+        e.register(0x0082_5550, |_, a| eax(a[0] + 2));
+        e.mem.set_u32(p + 0x208, 5);
+        e.mem.set_u32(p + 0x6ec, 9);
+        e.mem.set_u32(p + 0x214, 0x10);
+        e.mem.set_u32(p + 0x218, 0x20);
+        e.mem.set_u32(p + 0x6f0, 0x30);
+        e.mem.set_u32(p + 0x73c, 0x40);
+        e.set_global(SAVED_FORM_011E0784, 8u32);
+        let process = e.mem.alloc(8);
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        let seen = recording_slot(&mut e, process, 0x58, eax(0));
+        start_log(&mut e);
+        fn_00958990(&mut e, player, 1, 2);
+        assert_eq!(e.mem.u32(p + 0x208), 0x1005);
+        assert_eq!(e.global::<u32>(SAVED_FORM_011E0784), 0x1008);
+        assert_eq!(e.mem.u32(p + 0x214), 0x11);
+        assert_eq!(e.mem.u32(p + 0x218), 0x22);
+        assert_eq!(e.mem.u32(p + 0x73c), 0x1040);
+        // The scroll (cast to 0x1030) selects the spell after 0x70.
+        assert_eq!(
+            e.get(player, PlayerCharacter::pSelectedScroll).addr(),
+            0x1030
+        );
+        assert_eq!(e.get(player, PlayerCharacter::pSelectedSpell).addr(), 0x88);
+        assert_eq!(seen.borrow().len(), 1);
+        assert_eq!(calls_to(&e, 0x008d_3380), vec![vec![p, 1, 2]]);
+        assert_eq!(calls_to(&e, 0x008d_0600), vec![vec![p + 0x878, 1, 2]]);
+        assert_eq!(calls_to(&e, 0x0093_a5f0), vec![vec![p, 0]]);
+    }
+
+    #[test]
+    fn the_second_load_pass_purges_the_global_list_of_unresolved_entries() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let process = e.mem.alloc(8);
+        e.set(player, PlayerCharacter::pCurrentProcess, Ptr::new(process));
+        slot(&mut e, process, 0x58, eax(0));
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        version(&mut e, 0x73);
+        // The global list: two entries; the first does not resolve.
+        e.mem.set_u32(0x011e_0ae8, 0xa0a);
+        let second = node(&mut e, 0xb0b, 0);
+        e.mem.set_u32(0x011e_0aec, second);
+        e.register(0x0048_39c0, |_, a| eax(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| {
+            eax(if a[0] == 0xa0a { 0 } else { a[0] })
+        });
+        e.register(0x0063_f7b0, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            if next != 0 {
+                let item = e.mem.u32(next);
+                let after = e.mem.u32(next + 4);
+                e.mem.set_u32(a[0], item);
+                e.mem.set_u32(a[0] + 4, after);
+            } else {
+                e.mem.set_u32(a[0], 0);
+            }
+            eax(0)
+        });
+        start_log(&mut e);
+        fn_00958990(&mut e, player, 0, 0);
+        assert_eq!(calls_to(&e, 0x0063_f7b0), vec![vec![0x011e_0ae8]]);
+        // The resolved entry was stored back.
+        assert_eq!(calls_to(&e, 0x0072_6c60).len(), 2);
+    }
+
+    #[test]
+    fn the_last_load_pass_sets_the_first_person_camera_and_spring() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        double(&mut e, 0x0095_0bb0, eax(0));
+        e.mem.set_u32(p + 0x638, 0x77);
+        e.mem.set_u32(p + 0x63c, 2);
+        e.mem.set_f32(p + 0x644, 1.5);
+        start_log(&mut e);
+        fn_00958ec0(&mut e, player, 3, 4);
+        assert_eq!(calls_to(&e, 0x008a_a9a0), vec![vec![p, 3, 4]]);
+        assert_eq!(
+            calls_to(&e, 0x0095_f930),
+            vec![vec![p, 0x77, 2, 1.5f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&e, 0x008d_0600), vec![vec![p + 0x878, 3, 4]]);
+        // A spring of mode 3 is not created.
+        e.mem.set_u32(p + 0x63c, 3);
+        fn_00958ec0(&mut e, player, 3, 4);
+        assert_eq!(calls_to(&e, 0x0095_f930).len(), 1);
+    }
+
+    #[test]
+    fn the_reset_before_a_load_clears_the_player_and_marks_it() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        e.set_global(SAVE_LOAD_GAME, 0x1111u32);
+        e.set_global(SAVED_FORM_011E0784, 5u32);
+        e.mem.set_u32(p + 0xc8, 0x3f80_0000);
+        e.mem.set_u8(p + 0x66d, 1);
+        start_log(&mut e);
+        fn_00958fc0(&mut e, player, 0x1000_0000);
+        assert_eq!(e.mem.u8(p + 0xe39), 1);
+        assert_eq!(e.mem.f32(p + 0xc8), 0.0);
+        assert_eq!(e.mem.u8(p + 0x66d), 0);
+        assert_eq!(e.mem.u8(p + 0x75d), 1);
+        assert_eq!(
+            calls_to(&e, 0x0045_34f0),
+            vec![vec![p + 0x878, 0x1000_0000]]
+        );
+        // The extra clean-up only runs when the save-load object asks for it.
+        assert_eq!(e.global::<u32>(SAVED_FORM_011E0784), 5);
+        double(&mut e, 0x0055_f5b0, eax(1));
+        e.mem.set_u32(p + 0x690, 0x4141);
+        fn_00958fc0(&mut e, player, 0x1000_0000);
+        assert_eq!(e.global::<u32>(SAVED_FORM_011E0784), 0);
+        assert_eq!(calls_to(&e, 0x0049_a920), vec![vec![0x4141, p]]);
+        fn_009590d0(&mut e, player, 7);
+        assert_eq!(e.mem.u8(p + 0xe39), 7);
+    }
+
+    // ----- the save and load buffers -----
+
+    /// A save buffer object: records every write (`00865e50`) and form id
+    /// (`00865df0`), hands out increasing placeholders (`00865f20`) and
+    /// records the counts stored (`00865ff0`).
+    struct BufferLog {
+        writes: Writes,
+        forms: Rc<RefCell<Vec<u32>>>,
+        counts: Rc<RefCell<Vec<(u32, u32)>>>,
+    }
+
+    fn record_buffer_saves(e: &mut Engine) -> BufferLog {
+        let log = BufferLog {
+            writes: Rc::new(RefCell::new(Vec::new())),
+            forms: Rc::new(RefCell::new(Vec::new())),
+            counts: Rc::new(RefCell::new(Vec::new())),
+        };
+        let writes = log.writes.clone();
+        e.register_double(0x0086_5e50, move |e, w| {
+            let bytes = e.mem.bytes(w[1], w[2]);
+            writes.borrow_mut().push((w[1], bytes));
+            eax(0)
+        });
+        let forms = log.forms.clone();
+        e.register_double(0x0086_5df0, move |_, w| {
+            forms.borrow_mut().push(w[1]);
+            eax(0)
+        });
+        let next = Rc::new(RefCell::new(0x100u32));
+        e.register_double(0x0086_5f20, move |_, _| {
+            *next.borrow_mut() += 1;
+            eax(*next.borrow())
+        });
+        let counts = log.counts.clone();
+        e.register_double(0x0086_5ff0, move |_, w| {
+            counts.borrow_mut().push((w[1], w[2]));
+            eax(0)
+        });
+        log
+    }
+
+    #[test]
+    fn the_buffer_save_writes_the_arrays_the_forms_and_the_counted_lists() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let log = record_buffer_saves(&mut e);
+        e.mem.set_f32(p + 0x244 + 4, 2.5);
+        e.mem.set_u32(p + 0x6b8, 0xa1);
+        e.mem.set_u32(p + 0x208, 0xa2);
+        // One topic the check accepts and one it rejects.
+        let second = node(&mut e, 0xc2, 0);
+        e.mem.set_u32(p + 0x6a8, 0xc1);
+        e.mem.set_u32(p + 0x6ac, second);
+        e.register(0x0061_9410, |_, a| eax(u32::from(a[0] == 0xc2)));
+        // One quest-log entry.
+        e.mem.set_u32(p + 0x6b0, 0xd1);
+        double(&mut e, 0x005e_3fa0, eax(0xd2));
+        double(&mut e, 0x0060_f1a0, eax(1));
+        double(&mut e, 0x005d_c980, eax(2));
+        // One target, whose word after the item is 0x44.
+        let target = e.mem.alloc(8);
+        e.mem.set_u32(target + 4, 0x44);
+        e.mem.set_u32(p + 0x6bc, target);
+        double(&mut e, 0x0044_edb0, eax(0xe2));
+        // The id words of the 8 forms.
+        e.register(0x004b_fb30, |_, a| eax(if a[1] == 3 { 0xf3 } else { 0 }));
+        e.register(FORM_ID_OF, |_, a| eax(a[0] + 1));
+        let buffer = 0x0600_4000;
+        start_log(&mut e);
+        fn_009590f0(&mut e, player, buffer);
+        let writes = log.writes.borrow();
+        // 3 * 0x4d modifier words come first, then +0x4ac.
+        assert_eq!(writes[1].1, 2.5f32.to_le_bytes());
+        assert_eq!(writes[0x4d * 3].0, p + 0x4ac);
+        // The first form ids: the active quest then the form at +0x73c.
+        let forms = log.forms.borrow();
+        assert_eq!(forms[0], 0xa1);
+        assert!(forms.contains(&0xa2));
+        // The accepted topic is counted and written.
+        assert!(forms.contains(&0xc1));
+        assert!(!forms.contains(&0xc2));
+        let counts = log.counts.borrow();
+        assert_eq!(counts[0].0, 1);
+        // The quest log entry has the quest's id and the two bytes.
+        assert!(forms.contains(&0xd2));
+        assert!(writes.iter().any(|w| w.1 == vec![1u8]));
+        // The target is its id and the word after the item.
+        assert!(forms.contains(&0xe2));
+        assert!(writes.iter().any(|w| w.1 == 0x44u32.to_le_bytes()));
+        // The eight form ids are written; the one found is its id.
+        assert!(writes.iter().any(|w| w.1 == 0xf4u32.to_le_bytes()));
+        // The pending references close the save.
+        assert_eq!(calls_to(&e, 0x005a_a930), vec![vec![buffer]]);
+    }
+
+    /// A load buffer object whose version (slot 0) is `version`.
+    fn load_buffer(e: &mut Engine, version: u32) -> u32 {
+        let buffer = e.mem.alloc(8);
+        slot(e, buffer, 0, eax(version));
+        buffer
+    }
+
+    #[test]
+    fn the_buffer_load_reads_the_arrays_and_rebuilds_the_topics() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = load_buffer(&mut e, 0x1b);
+        let reads: Rc<RefCell<Vec<(u32, u32)>>> = Rc::new(RefCell::new(Vec::new()));
+        let record = reads.clone();
+        e.register_double(0x0086_4980, move |_, w| {
+            record.borrow_mut().push((w[1], w[2]));
+            eax(0)
+        });
+        // The counts: the first list counted is the topics (2 entries).
+        let counts = Rc::new(RefCell::new(vec![2u32]));
+        let queue = counts.clone();
+        e.register_double(0x0086_4a60, move |_, _| {
+            let mut queue = queue.borrow_mut();
+            eax(if queue.is_empty() { 0 } else { queue.remove(0) })
+        });
+        let next_id = Rc::new(RefCell::new(1u32));
+        let ids = next_id.clone();
+        e.register_double(0x0086_48a0, move |_, _| {
+            *ids.borrow_mut() += 1;
+            eax(*ids.borrow())
+        });
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        let appended = Rc::new(RefCell::new(Vec::<(u32, u32)>::new()));
+        let seen = appended.clone();
+        e.register_double(0x005a_e3d0, move |e, w| {
+            seen.borrow_mut().push((w[0], e.mem.u32(w[1])));
+            eax(0)
+        });
+        start_log(&mut e);
+        fn_0095a3b0(&mut e, player, buffer);
+        let reads = reads.borrow();
+        assert_eq!(reads[0], (p + 0x244, 4));
+        assert_eq!(reads[0x4d], (p + 0x378, 4));
+        assert_eq!(reads[0x4d * 3], (p + 0x4ac, 4));
+        // The quest, the weapon, the marker, the region and its data take
+        // ids 2 to 6; the topics follow.
+        assert_eq!(e.mem.u32(p + 0x6b8), 0x1002);
+        assert_eq!(e.mem.u32(p + 0x73c), 0x1003);
+        assert_eq!(e.mem.u32(p + 0x760), 0x1005);
+        assert_eq!(
+            *appended.borrow(),
+            vec![(p + 0x6a8, 0x1007), (p + 0x6a8, 0x1008)]
+        );
+        assert_eq!(calls_to(&e, 0x0061_a5a0).len(), 1);
+        // The versions after 0x1a close with the pending references.
+        assert_eq!(calls_to(&e, 0x005a_aaf0), vec![vec![buffer]]);
+        assert_eq!(calls_to(&e, 0x0094_62c0), vec![vec![p, 0, 1]]);
+    }
+
+    #[test]
+    fn the_buffer_load_of_an_old_version_stops_early() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let buffer = load_buffer(&mut e, 5);
+        e.register(0x0048_39c0, |_, a| eax(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        start_log(&mut e);
+        fn_0095a3b0(&mut e, player, buffer);
+        assert!(calls_to(&e, 0x005a_aaf0).is_empty());
+        assert!(calls_to(&e, 0x008d_1d10).is_empty());
+        assert!(calls_to(&e, 0x0096_9e90).is_empty());
+        assert_eq!(calls_to(&e, 0x0094_62c0).len(), 1);
+    }
+
+    #[test]
+    fn the_buffer_load_rebuilds_the_quest_log_the_effect_lists_and_the_hardcore_flag() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        slot(&mut e, p, 0x1d0, eax(0));
+        let buffer = load_buffer(&mut e, 0x1b);
+        // Every list holds one entry.
+        double(&mut e, 0x0086_4a60, eax(1));
+        e.register(0x0086_48a0, |_, _| eax(0x40));
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        double(&mut e, 0x0060_db40, eax(0x9100));
+        double(&mut e, 0x0060_f2c0, eax(0x9200));
+        double(&mut e, 0x0060_c8e0, eax(0x9300));
+        e.register(OPERATOR_NEW, |e, a| eax(e.mem.alloc(a[0].max(0x20))));
+        e.register(0x006a_7ad0, |e, _| eax(e.mem.alloc(4)));
+        for ctor in [
+            0x0096_a2d0u32,
+            0x0047_81b0,
+            0x0078_d900,
+            0x0073_3f50,
+            0x0059_a370,
+            0x0076_b630,
+        ] {
+            e.register(ctor, |_, a| eax(a[0]));
+        }
+        let appended = Rc::new(RefCell::new(Vec::<(u32, u32)>::new()));
+        for address in [0x005a_e3d0u32, 0x0090_5820] {
+            let seen = appended.clone();
+            e.register_double(address, move |e, w| {
+                seen.borrow_mut().push((w[0], e.mem.u32(w[1])));
+                eax(0)
+            });
+        }
+        // Reading the hardcore bytes: both come back as 1.
+        e.register(0x0086_4980, |e, w| {
+            if w[2] == 1 {
+                e.mem.set_u8(w[1], 1);
+            }
+            eax(0)
+        });
+        start_log(&mut e);
+        fn_0095a3b0(&mut e, player, buffer);
+        let appended = appended.borrow();
+        assert!(appended.contains(&(p + 0x6b0, 0x9200)));
+        assert!(appended.contains(&(p + 0x6bc, 0x9300)));
+        // The heap lists were created for the objects that were read.
+        assert_ne!(e.mem.u32(p + 0xd48), 0);
+        assert_ne!(e.mem.u32(p + 0x610), 0);
+        assert_ne!(e.mem.u32(p + 0x614), 0);
+        assert_ne!(e.mem.u32(p + 0x618), 0);
+        // Hardcore mode: first byte 1, enabled byte 1: no further call.
+        assert_eq!(calls_to(&e, 0x0096_9e90), vec![vec![p, 1, 1]]);
+        assert!(calls_to(&e, 0x005d_e9b0).is_empty());
+        // The effect items were built with the 0xbc-byte constructor.
+        assert_eq!(calls_to(&e, 0x0059_a370).len(), 2);
+    }
+
+    #[test]
+    fn the_buffer_load_finish_resolves_forms_and_starts_the_heartbeat() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        float_settings(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = load_buffer(&mut e, 0x12);
+        e.set_global(STATISTICS_OBJECT, 0x77u32);
+        e.register(0x0084_aa90, |_, a| eax(a[1] + 1));
+        e.register(0x0048_39c0, |_, a| eax(a[0] + 0x1000));
+        e.register(DYNAMIC_CAST, |_, a| eax(a[0]));
+        e.mem.set_u32(p + 0x208, 5);
+        e.mem.set_u32(p + 0x224, 7);
+        e.mem.set_u32(p + 0x638, 9);
+        e.mem.set_u32(p + 0xd2c, 0x20);
+        // The health ratio is 2 / 10 = 0.2: between the two settings.
+        let owner = p + 0xa4;
+        slot(&mut e, owner, 0xc, st0(2.0));
+        slot(&mut e, owner, 0x20, st0(10.0));
+        slot(&mut e, p, 0x1d0, eax(0));
+        e.set_global(HEARTBEAT_UPPER_SETTING, 0.5f32);
+        e.set_global(HEARTBEAT_LOWER_SETTING, 0.1f32);
+        // The list at +0x60c has one target to flag.
+        let target = e.mem.alloc(16);
+        e.mem.set_u32(target + 8, 0x30);
+        let list = node(&mut e, target, 0);
+        e.mem.set_u32(p + 0x60c, list);
+        start_log(&mut e);
+        fn_0095c0a0(&mut e, player, buffer);
+        assert_eq!(e.mem.u32(p + 0x208), 0x1006);
+        assert_eq!(e.mem.u32(p + 0x224), 0x1008);
+        assert_eq!(e.mem.u32(p + 0x638), 0x1009);
+        assert_eq!(e.mem.u32(p + 0xd2c), 0x1020);
+        assert_eq!(e.mem.u32(target + 8), 0x1030);
+        assert_eq!(calls_to(&e, 0x0056_4db0), vec![vec![0x1030, 1]]);
+        let sounds = calls_to(&e, 0x00ad_7550);
+        assert_eq!(sounds.len(), 1);
+        assert_eq!(sounds[0][2], HEARTBEAT_SOUND_ALP);
+        assert_eq!(calls_to(&e, 0x00ad_8830), vec![vec![p + 0x77c, 1]]);
+        // A ratio below the lower setting plays the other sound; above the
+        // upper one, none.
+        slot(&mut e, owner, 0xc, st0(0.5));
+        start_log(&mut e);
+        fn_0095c0a0(&mut e, player, buffer);
+        assert_eq!(calls_to(&e, 0x00ad_7550)[0][2], HEARTBEAT_SOUND_BLP);
+        slot(&mut e, owner, 0xc, st0(9.0));
+        start_log(&mut e);
+        fn_0095c0a0(&mut e, player, buffer);
+        assert!(calls_to(&e, 0x00ad_7550).is_empty());
+    }
+
+    #[test]
+    fn the_buffer_load_finish_purges_the_item_list_and_flags_the_perks() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        float_settings(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = load_buffer(&mut e, 5);
+        e.register(0x0084_aa90, |_, _| eax(0));
+        e.register(0x0048_39c0, |_, a| eax(a[0]));
+        e.register(DYNAMIC_CAST, |_, a| {
+            eax(if a[0] == 0x31 { 0 } else { a[0] })
+        });
+        // The list at +0xd48: two entries, the first resolves to nothing.
+        let first = e.mem.alloc(8);
+        e.mem.set_u32(first, 0x31);
+        let second_item = e.mem.alloc(8);
+        e.mem.set_u32(second_item, 0x32);
+        let second = node(&mut e, second_item, 0);
+        let head = node(&mut e, first, second);
+        e.mem.set_u32(p + 0xd48, head);
+        double(&mut e, 0x007a_f430, eax(1));
+        e.register(0x0063_f7b0, |e, a| {
+            let next = e.mem.u32(a[0] + 4);
+            let item = e.mem.u32(next);
+            let after = e.mem.u32(next + 4);
+            e.mem.set_u32(a[0], item);
+            e.mem.set_u32(a[0] + 4, after);
+            eax(0)
+        });
+        // A perk entry (form, rank).
+        slot(&mut e, p + 0xa4, 0xc, st0(1.0));
+        slot(&mut e, p + 0xa4, 0x20, st0(1.0));
+        slot(&mut e, p, 0x1d0, eax(0));
+        let perk = e.mem.alloc(8);
+        e.mem.set_u32(perk, 0x66);
+        e.mem.set_u8(perk + 4, 3);
+        e.mem.set_u32(p + 0x87c, perk);
+        start_log(&mut e);
+        fn_0095c0a0(&mut e, player, buffer);
+        assert_eq!(calls_to(&e, 0x0040_1030), vec![vec![first]]);
+        assert_eq!(calls_to(&e, 0x0063_f7b0), vec![vec![head]]);
+        assert_eq!(e.mem.u32(second_item), 0x32);
+        assert_eq!(calls_to(&e, 0x005e_b980), vec![vec![0x66, p, 3, 0]]);
+        assert_eq!(calls_to(&e, 0x0080_6b00), vec![vec![buffer, 0]]);
+    }
+
+    #[test]
+    fn the_buffer_load_end_restores_the_camera_the_spring_and_the_combat_state() {
+        let mut e = engine();
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = e.mem.alloc(8);
+        double(&mut e, 0x0042_8110, eax(buffer));
+        e.register(0x0042_80f0, |_, a| eax(u32::from(a[1] == 0x10)));
+        double(&mut e, 0x0059_8040, st0(75.0));
+        double(&mut e, 0x0095_0bb0, eax(0));
+        double(&mut e, 0x005b_b4d0, eax(1));
+        e.mem.set_u8(p + 0x64a, 1);
+        e.mem.set_u32(p + 0x638, 0x77);
+        e.mem.set_u32(p + 0x63c, 2);
+        e.mem.set_u32(p + 0x6b8, 0x31);
+        e.set_global(INVENTORY_ALPHA, 0.5f32);
+        double(&mut e, 0x008b_bc10, eax(1));
+        let holder = e.mem.alloc(8);
+        double(&mut e, 0x008d_8520, eax(holder));
+        let reset = recording_slot(&mut e, holder, 0x400, eax(0));
+        let end = recording_slot(&mut e, p, 0x3f4, eax(0));
+        double(&mut e, 0x0093_ccd0, eax(0x500));
+        double(&mut e, 0x0082_2b90, eax(1));
+        double(&mut e, 0x0070_5990, eax(0x600));
+        start_log(&mut e);
+        fn_0095c730(&mut e, player, buffer);
+        assert_eq!(calls_to(&e, 0x0056_7490), vec![vec![p, 75.0f32.to_bits()]]);
+        assert_eq!(e.mem.u8(p + 0x64c), 1);
+        assert_eq!(e.global::<f32>(INVENTORY_ALPHA), 1.0);
+        assert_eq!(calls_to(&e, 0x008c_4640), vec![vec![p]]);
+        assert_eq!(calls_to(&e, 0x0094_66d0).len(), 1);
+        assert_eq!(calls_to(&e, 0x0095_f930).len(), 1);
+        assert_eq!(
+            calls_to(&e, 0x0060_f110),
+            vec![vec![0x31, p + 0x6c4, p + 0x6bc]]
+        );
+        assert_eq!(*reset.borrow(), vec![vec![holder, 0]]);
+        assert_eq!(calls_to(&e, 0x008b_b650), vec![vec![p, 1, 0, 0]]);
+        // The spell target check: the pipboy light flashes twice.
+        assert_eq!(calls_to(&e, 0x0082_2b90), vec![vec![p + 0x94, 0x518, 1]]);
+        assert_eq!(
+            calls_to(&e, 0x0070_5990),
+            vec![vec![1, 1, 1], vec![0, 1, 1]]
+        );
+        assert_eq!(calls_to(&e, 0x007f_a310).len(), 2);
+        assert_eq!(end.borrow().len(), 1);
+    }
+
+    #[test]
+    fn the_revert_resets_the_player_and_rebuilds_the_topic_list() {
+        let mut e = engine();
+        list_helpers(&mut e);
+        float_settings(&mut e);
+        let player = new_player(&mut e);
+        let p = player.addr();
+        let buffer = e.mem.alloc(8);
+        e.mem.set_u32(buffer, 0);
+        e.set_global(MINUS_ONE_FLOAT, -1.0f32);
+        e.set_global(DEFAULT_TIMER_VALUE, 5.0f32);
+        e.set_global(VIEW_OFFSET_SETTING_A, 1.5f32);
+        e.set_global(VIEW_OFFSET_SETTING_B, 2.5f32);
+        e.set_global(SAVED_FORM_011E0784, 9u32);
+        e.mem.set_u8(p + 0x64a, 1);
+        e.mem.set_u32(p + 0x208, 4);
+        e.mem.set_f32(p + 0x244 + 8, 3.0);
+        e.mem.set_f32(p + 0x4ac, 3.0);
+        // The list at +0x60c has one object; the lists +0x87c and +0xad4 too.
+        let object = e.mem.alloc(8);
+        e.mem.set_u32(object, 0x69);
+        e.mem.set_u32(p + 0x60c, object);
+        e.mem.set_u32(p + 0x87c, 0x71);
+        e.mem.set_u32(p + 0xad4, 0x72);
+        e.mem.set_u32(p + 0x1ec, 0x73);
+        // The generic list objects.
+        e.register(0x0063_f7b0, |e, a| {
+            e.mem.set_u32(a[0], 0);
+            eax(0)
+        });
+        // The topics come from a list the quest code gives; one is accepted.
+        e.set_global(0x011c_3f2cu32, 0x0600_9000u32);
+        let list = node(&mut e, 0x81, 0);
+        double(&mut e, 0x0046_12e0, eax(list));
+        double(&mut e, 0x0061_9410, eax(1));
+        let appended = record_appends(&mut e);
+        start_log(&mut e);
+        fn_0095c9c0(&mut e, player, buffer);
+        assert_eq!(e.mem.u8(p + 0x64a), 0);
+        assert_eq!(e.mem.u32(p + 0x208), 0);
+        assert_eq!(e.global::<u32>(SAVED_FORM_011E0784), 0);
+        assert_eq!(e.mem.f32(p + 0x244 + 8), 0.0);
+        assert_eq!(e.mem.f32(p + 0x4ac), 0.0);
+        assert_eq!(e.mem.u8(p + 0x66e), 1);
+        assert_eq!(e.mem.f32(p + 0x670), 1.5);
+        assert_eq!(e.mem.f32(p + 0x674), 2.5);
+        assert_eq!(e.mem.f32(p + 0x684), 5.0);
+        assert_eq!(e.global::<f32>(INVENTORY_ALPHA_SAVE), -1.0);
+        // The list object at +0x60c was freed with its list.
+        assert_eq!(e.mem.u32(p + 0x60c), 0);
+        assert!(calls_to(&e, 0x0040_1030).contains(&vec![0x69]));
+        assert!(calls_to(&e, 0x0040_1030).contains(&vec![0x71]));
+        assert!(calls_to(&e, 0x0040_1030).contains(&vec![0x72]));
+        assert!(calls_to(&e, 0x0040_1030).contains(&vec![0x73]));
+        assert_eq!(e.mem.u32(p + 0x1ec), 0);
+        assert_eq!(e.mem.u8(p + 0xe38), 1);
+        // The cleared lists: 0x4a extra heads each for the perk lists.
+        assert!(calls_to(&e, LIST_CLEAR).contains(&vec![p + 0x884]));
+        assert!(calls_to(&e, LIST_CLEAR).contains(&vec![p + 0xadc + 0x49 * 8]));
+        // The topics are rebuilt and the marker removed.
+        assert_eq!(*appended.borrow(), vec![(p + 0x6a8, 0x81)]);
+        assert_eq!(calls_to(&e, 0x005a_ae20), vec![vec![buffer]]);
     }
 }
