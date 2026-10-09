@@ -2,13 +2,3550 @@
 //! (not including) `008bec80` in FalloutNV.exe 1.4.0.525, translated
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::actor`]; anything public there may be used here.
+//!
+//! This session covers `008b8e90` to `008bb5c0` (40 functions): the
+//! faction test, the `ActorValueOwner` change callbacks (condition, mobility,
+//! endurance and the limb/stat callbacks that mark `CachedValues` stale), the
+//! `CachedValuesOwner` virtuals that refresh the cached stats of a process,
+//! `QueueReplacementLocomotion`, the process-flag getters, the animation
+//! idle tests, the big handler of the process's pending animation/equip
+//! flags (`008ba600`) and the two rotate requests.
+//!
+//! Conventions: the `ActorValueOwner` subobject sits at `Actor + 0xa4` and
+//! the `CachedValuesOwner` at `Actor + 0xa8` on PC; the callbacks receive
+//! the `ActorValueOwner` pointer and subtract `0xa4` (after a null test) to
+//! get the actor. x87 note: the game computes in extended precision and
+//! stores `float` results; the translations compute in `f32` where the code
+//! stores a `float` and compare through the same ordered/unordered rules.
 
 #[allow(unused_imports)]
 use super::actor::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
 
+/// `TESObjectREFR` base form getter (`this + 0x20` through `007af430`).
+const GET_BASE_FORM: u32 = 0x0041_81e0;
+/// Returns the `ExtraDataList` embedded in a reference (`reference + 0x44`).
+const EXTRA_LIST_OF_REFERENCE: u32 = 0x005d_43c0;
+/// `ExtraDataList` lookup of the extra data of type `0x5e` (the code treats
+/// the result as an `ExtraFactionChanges`).
+const EXTRA_LIST_GET_FACTION_CHANGES: u32 = 0x0042_e800;
+/// `ExtraDataList` call that adds the extra data `0042e800` looks up (called
+/// when the lookup found none).
+const EXTRA_LIST_ADD_FACTION_CHANGES: u32 = 0x0042_e760;
+/// `ECX` = faction list of the base form (`base form + 0x30`), one word
+/// (the faction): true when the list holds the faction.
+const BASE_FACTION_LIST_CONTAINS: u32 = 0x0047_ebf0;
+/// `ExtraFactionChanges::GetIsExpelled` (named by the decompiler): `ECX` =
+/// the extra data, one word (the faction).
+const FACTION_CHANGES_IS_EXPELLED: u32 = 0x0043_7080;
+/// `ExtraFactionChanges::GetIsInFaction` (named by the decompiler).
+const FACTION_CHANGES_IS_IN_FACTION: u32 = 0x0043_7010;
+/// `ECX` = extra data (`ExtraFactionChanges`), one word: the call
+/// `008b8f20` makes with its argument once the extra data exists.
+const FACTION_CHANGES_ADD: u32 = 0x0043_6e10;
+/// `MobileObject::GetCharController` (Xbox PDB).
+const GET_CHAR_CONTROLLER: u32 = 0x0093_06d0;
+/// Tells whether a list node (`ECX`) is empty: both words `+0` and `+4`
+/// are zero.
+const LIST_NODE_IS_EMPTY: u32 = 0x0082_56d0;
+/// Returns its `this` (`ECX`): the address of the list node's data word.
+const LIST_NODE_DATA_ADDRESS: u32 = 0x0068_15c0;
+/// Advances the list node in `ECX` and returns the next one (the list
+/// iterator step; also used to read a count).
+const LIST_NODE_NEXT: u32 = 0x0072_6070;
+/// `NiPointer`/smart pointer dereference: returns the word `ECX` points to.
+const POINTER_GET: u32 = 0x0055_9450;
+/// `bhkCharacterProxy::operator*` (map name `operatorP`): `ECX` = the
+/// proxy, returns the object `004b5a20` takes.
+const PROXY_OBJECT: u32 = 0x004a_e750;
+/// `cdecl`, one word: resolves a Havok object to the one `0044ddc0` reads.
+const HAVOK_TO_BODY: u32 = 0x004b_5a20;
+/// `ECX` = an object (the havok body above, or an item entry): returns the
+/// word it holds at `+0x08`.
+const ENTRY_OBJECT: u32 = 0x0044_ddc0;
+/// `TESObjectREFR::FindReferenceFor3D` (Xbox PDB), `cdecl`, one word.
+const FIND_REFERENCE_FOR_3D: u32 = 0x0056_f930;
+/// `ECX` = the player character: the reference the contact test compares
+/// against.
+const PLAYER_EXCLUDED_REFERENCE: u32 = 0x0089_f4e0;
+/// `ECX` = contact entry `+0x1c`, `float` in ST0.
+const CONTACT_VALUE_A: u32 = 0x0045_7990;
+/// `ECX` = the object behind the contact entry, `float` in ST0.
+const CONTACT_VALUE_B: u32 = 0x004b_5400;
+/// `cdecl`, two `float` arguments, `float` in ST0: the impact damage.
+const IMPACT_DAMAGE: u32 = 0x0062_be90;
+/// `operator new` (`cdecl`, size).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+/// `HitData::HitData` (map name): `ECX` = the block.
+const HIT_DATA_CONSTRUCTOR: u32 = 0x009b_4d90;
+/// `NiPointer<HitData>` constructor from a raw pointer (`ECX` = the slot).
+const HIT_DATA_POINTER_CONSTRUCTOR: u32 = 0x008c_1c30;
+/// `NiPointer<HitData>` destructor (`ECX` = the slot).
+const HIT_DATA_POINTER_DESTRUCTOR: u32 = 0x008c_1c60;
+/// `HitData::InitializeImpactData` (Xbox PDB), `cdecl`: hit data, struck
+/// reference, actor, damage, contact entry.
+const INITIALIZE_IMPACT_DATA: u32 = 0x009b_58d0;
+/// `Actor::HitMe` (Xbox PDB): hit data and a flag.
+const ACTOR_HIT_ME: u32 = 0x0089_a760;
+/// `ECX` = reference: seven words, the character controller and two vectors.
+const REACT_TO_CONTACT: u32 = 0x009b_4bf0;
+
+/// The player character pointer global.
+const PLAYER_POINTER: u32 = 0x011d_ea3c;
+/// The HUD main menu pointer global (`HUDMainMenu` singleton).
+const HUD_MAIN_MENU_POINTER: u32 = 0x011d_96c0;
+
+/// Tells whether the process (`ECX`) has a cached-values block.
+const HAS_CACHED_VALUES: u32 = 0x0088_4920;
+/// `ECX` = process, one word: forwards a `CachedValues::iFlags` mask to the
+/// cached-values block.
+const PROCESS_FORWARD_FLAG_MASK: u32 = 0x0088_4940;
+/// `ECX` = cached values, one word: ORs the mask into `iFlags`.
+const CACHED_VALUES_ADD_FLAGS: u32 = 0x0088_48c0;
+/// `ECX` = actor: marks the actor's limb-dependent cached values stale.
+const REFRESH_AFTER_LIMB_CHANGE: u32 = 0x0088_48e0;
+/// `ECX` = actor: recomputes the actor's mobility state before the
+/// replacement locomotion is queued.
+const REFRESH_BEFORE_QUEUE: u32 = 0x0088_4f80;
+/// `Actor::RestoreActorValue` (Xbox PDB): `ECX` = actor, actor value index
+/// and a `float`.
+const RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
+/// `CombatFormulas::GetBodyPartCondition` (Xbox PDB), `cdecl`: the
+/// `ActorValueOwner`, an actor value index and a flag, `float` in ST0.
+const GET_BODY_PART_CONDITION: u32 = 0x0064_6800;
+/// `cdecl`, `ActorValueOwner` and a `float`, `float` in ST0 (called by the
+/// endurance callback with the summed value).
+const ENDURANCE_ADJUSTMENT: u32 = 0x0064_36c0;
+/// `TESActorBase::GetHealth` (Xbox PDB): `ECX` = the base form.
+const GET_BASE_HEALTH: u32 = 0x005f_0b00;
+/// `cdecl`, `ActorValueOwner`, `float` in ST0: the value `008b9b70` caches.
+const CACHED_VALUE_MEDICINE: u32 = 0x0064_9530;
+/// `cdecl`, `ActorValueOwner`, `float` in ST0: the value `008b9c10` caches.
+const CACHED_VALUE_SURVIVAL: u32 = 0x0064_9580;
+/// `SurgeryMenu::ResetLimb` (Xbox PDB), `cdecl`: the limb actor value.
+const SURGERY_MENU_RESET_LIMB: u32 = 0x007e_5810;
+/// `HUDMainMenu::ShowCrippledGuy` (Xbox PDB): `ECX` = the HUD menu.
+const SHOW_CRIPPLED_GUY: u32 = 0x0077_eaf0;
+/// `Actor::TriggerPain` (Xbox PDB): two words.
+const TRIGGER_PAIN: u32 = 0x008a_7d50;
+/// `MiscStatManager::Increment` (Xbox PDB), `cdecl`: the statistic index.
+const MISC_STAT_INCREMENT: u32 = 0x004d_5c60;
+/// `strcpy`-like helper, `cdecl`: destination and source.
+const COPY_STRING: u32 = 0x0040_46f0;
+/// `snprintf`-like helper, `cdecl`: buffer, size, format, arguments.
+const FORMAT_STRING: u32 = 0x0040_6d00;
+/// `BGSBodyPartData::GetBodyPart_ov2` (Xbox PDB): `ECX` = the data, one word
+/// (the actor value index).
+const GET_BODY_PART: u32 = 0x005e_5130;
+/// `ECX` = body part, returns the name pointer at `+0x1c` (through
+/// `00559450`).
+const BODY_PART_NAME: u32 = 0x0068_38b0;
+/// `cdecl`: actor value index, body part name, buffer, size: writes the
+/// limb text.
+const BUILD_LIMB_TEXT: u32 = 0x0064_95d0;
+/// `ECX` = actor: returns the actor's display name through `00891170` and
+/// `TESFullName::GetFullName`.
+const ACTOR_NAME: u32 = 0x0055_d520;
+/// `ECX` = the HUD menu: shows a message (text, flag, icon path, sound
+/// name, `float` time, flag).
+const SHOW_MESSAGE: u32 = 0x0077_5380;
+/// `Actor::QueueEquipObject` (Xbox PDB).
+const QUEUE_EQUIP_OBJECT: u32 = 0x0088_c650;
+/// `ECX` = process, mask and flag (`008acf70`): sets or clears the mask in
+/// the cached-values block when it exists.
+const PROCESS_SET_STATE_FLAG: u32 = 0x008a_cf70;
+/// `ECX` = actor, a flag and a word (`008b7360`): the locomotion change
+/// `QueueReplacementLocomotion` requests.
+const REQUEST_LOCOMOTION_CHANGE: u32 = 0x008b_7360;
+/// Returns the actor's process (`this + 0x68`): the map names the body
+/// `MiddleHighProcess::GetSavedAcquireObject`, identical-code folding put
+/// that name on this getter.
+const ACTOR_PROCESS: u32 = 0x008d_8520;
+/// `ECX` = actor: returns the combat state `005c1ae0` takes.
+const ACTOR_COMBAT_CONTROLLER_STATE: u32 = 0x008a_0330;
+/// `ECX` = the object `008a0330` returned.
+const COMBAT_CONTROLLER_APPLY: u32 = 0x005c_1ae0;
+/// `ECX` = actor (`008c4400`).
+const ACTOR_CALLBACK_008C4400: u32 = 0x008c_4400;
+/// `PlayerCharacter::IsGodMode` (Xbox PDB), no arguments.
+const PLAYER_IS_GOD_MODE: u32 = 0x0095_26b0;
+/// `ECX` = player: returns a `float` in ST0 (`008a0c20`).
+const PLAYER_VALUE_008A0C20: u32 = 0x008a_0c20;
+/// Object the message call `004c69f0` uses as `this`.
+const MESSAGE_QUEUE: u32 = 0x011d_4618;
+/// `ECX` = `0x011d4618`: builds a message (`0`, icon path, `0`, `float`
+/// time, `0`).
+const MESSAGE_QUEUE_ADD: u32 = 0x004c_69f0;
+/// `cdecl`, the message `004c69f0` returned.
+const MESSAGE_QUEUE_SHOW: u32 = 0x0070_52f0;
+
+/// Format string `"%s %s"`.
+const FORMAT_TWO_STRINGS: u32 = 0x0101_2058;
+/// The empty string the message buffer is initialised with.
+const EMPTY_STRING: u32 = 0x0101_1584;
+/// Icon path `Interface\Icons\Message Icons\glow_message_vaultboy_very_happy.dds`.
+const ICON_VERY_HAPPY: u32 = 0x0102_5cc4;
+/// Sound name `UIPopUpMessageGeneral`.
+const SOUND_POPUP_GENERAL: u32 = 0x0103_a830;
+/// Icon path `Interface\Icons\Message Icons\glow_message_vaultboy_surprised.dds`.
+const ICON_SURPRISED: u32 = 0x0104_9638;
+/// `float` display time of the messages.
+const MESSAGE_TIME: u32 = 0x0101_62c0;
+/// `float` the limb callback passes to virtual `+0x394` (100.0).
+const FULL_VALUE: u32 = 0x0101_6410;
+/// The `double` the replacement-locomotion test compares against (2.0).
+const DOUBLE_TWO: u32 = 0x0101_1590;
+/// `1.0` as a `double`.
+const DOUBLE_ONE: u32 = 0x0101_2070;
+
+/// How far the `ActorValueOwner` subobject sits inside an `Actor` on PC.
+const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
+/// `Actor` virtual `+0x360`: a test the condition callbacks use on the actor
+/// (meaning not confirmed).
+const VSLOT_ACTOR_TEST_360: u32 = 0x360;
+/// `Actor` virtual `+0x394`: two words (`0` and a `float`).
+const VSLOT_ACTOR_0X394: u32 = 0x394;
+/// `Actor` virtual `+0x428`: `GetCombatController` (Xbox PDB `+0x424`).
+const VSLOT_GET_COMBAT_CONTROLLER: u32 = 0x428;
+/// Virtual `+0x180` of the base form (the result of `004181e0`): returns
+/// the body part data.
+const VSLOT_BASE_BODY_PART_DATA: u32 = 0x180;
+/// `ActorValueOwner` virtual `+0x0c`: the current value of an actor value,
+/// `float` in ST0.
+const OWNER_VSLOT_VALUE: u32 = 0xc;
+/// `ActorValueOwner` virtual `+0x20`: a `float` read by `008b9960`.
+const OWNER_VSLOT_0X20: u32 = 0x20;
+/// `ActorValueOwner` virtual `+0x08`: one word, a non-zero answer stops
+/// `008b9830`.
+const OWNER_VSLOT_0X08: u32 = 0x08;
+/// `ActorValueOwner` virtuals `+0x10`, `+0x14`, `+0x18`: `float`s the
+/// endurance callback sums.
+const OWNER_VSLOT_0X10: u32 = 0x10;
+const OWNER_VSLOT_0X14: u32 = 0x14;
+const OWNER_VSLOT_0X18: u32 = 0x18;
+
+/// `Actor` field `pCurrentProcess` at `+0x68`.
+fn process_of(e: &Engine, actor: u32) -> u32 {
+    e.get(Ptr::<Actor>::new(actor), Actor::pCurrentProcess)
+        .addr()
+}
+
+/// The actor an `ActorValueOwner` pointer belongs to (the callbacks test the
+/// owner for null first).
+fn actor_of_owner(owner: u32) -> u32 {
+    if owner == 0 {
+        0
+    } else {
+        owner.wrapping_sub(ACTOR_VALUE_OWNER_OFFSET)
+    }
+}
+
+/// The `ActorValueOwner` of an actor (`actor + 0xa4`, null for null).
+fn owner_of_actor(actor: u32) -> u32 {
+    if actor == 0 {
+        0
+    } else {
+        actor.wrapping_add(ACTOR_VALUE_OWNER_OFFSET)
+    }
+}
+
+/// The tail every limb and stat callback shares: when the actor has a
+/// process with a cached-values block, forward `mask` to it so the cached
+/// values are recomputed.
+fn forward_cached_flags(e: &mut Engine, actor: u32, mask: u32) {
+    let process = process_of(e, actor);
+    if process != 0 && e.call(HAS_CACHED_VALUES, &args![process]).bool() {
+        e.call(PROCESS_FORWARD_FLAG_MASK, &args![process, mask]);
+    }
+}
+
+/// Body shared by the `CachedValuesOwner` virtuals: the cached value was
+/// just computed; when the process (at `this - 0x40`, the `Actor + 0x68`
+/// of an owner at `Actor + 0xa8`) has a cached-values block, hand the value
+/// to `store`.
+fn store_cached_value(e: &mut Engine, this: u32, value: f32, store: fn(&mut Engine, Ptr, f32)) {
+    let process = e.mem.u32(this.wrapping_sub(0x40));
+    if process != 0 && e.call(HAS_CACHED_VALUES, &args![process]).bool() {
+        store(e, Ptr::new(process), value);
+    }
+}
+
+/// Writes `value` at `cached + offset` of the process's cached-values block
+/// and ORs `mask` into its `iFlags`, when the block exists.
+fn set_cached_value(e: &mut Engine, process: Ptr, offset: u32, value: f32, mask: u32) {
+    // BaseProcess::pCachedValues (Xbox PDB) +0x2c
+    let cached = e.mem.u32(process.addr() + 0x2c);
+    if cached != 0 {
+        e.mem.set_f32(cached + offset, value);
+        e.call(CACHED_VALUES_ADD_FLAGS, &args![cached, mask]);
+    }
+}
+
+// Translated from 008b8e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsInFaction` (Xbox PDB): true when the actor is in `faction`,
+/// through its base form's faction list and the reference's
+/// `ExtraFactionChanges`. Without the extra data the base answer stands;
+/// with it, a base membership counts unless the extra data expels the
+/// actor, and otherwise the extra data's own membership decides.
+pub fn actor_is_in_faction(e: &mut Engine, this: Ptr<Actor>, faction: Ptr) -> bool {
+    let list = e.call(EXTRA_LIST_OF_REFERENCE, &args![this]).u32();
+    let changes = e.call(EXTRA_LIST_GET_FACTION_CHANGES, &args![list]).u32();
+    let base = e.call(GET_BASE_FORM, &args![this]).u32();
+    let in_base = e
+        .call(BASE_FACTION_LIST_CONTAINS, &args![base + 0x30, faction])
+        .bool();
+    if changes == 0 {
+        return in_base;
+    }
+    if in_base
+        && !e
+            .call(FACTION_CHANGES_IS_EXPELLED, &args![changes, faction])
+            .bool()
+    {
+        return true;
+    }
+    e.call(FACTION_CHANGES_IS_IN_FACTION, &args![changes, faction])
+        .bool()
+}
+
+// Translated from 008b8f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls the actor's virtual `+0x48` with `0x80000000`, then makes sure the
+/// reference has its `ExtraFactionChanges` (adding it when the lookup finds
+/// none) and hands `argument` to it (`00436e10`).
+pub fn fn_008b8f20(e: &mut Engine, this: Ptr<Actor>, argument: u32) {
+    e.vcall(this.addr(), 0x48, &args![0x8000_0000u32]);
+    let list = e.call(EXTRA_LIST_OF_REFERENCE, &args![this]).u32();
+    let mut changes = e.call(EXTRA_LIST_GET_FACTION_CHANGES, &args![list]).u32();
+    if changes == 0 {
+        let list = e.call(EXTRA_LIST_OF_REFERENCE, &args![this]).u32();
+        e.call(EXTRA_LIST_ADD_FACTION_CHANGES, &args![list]);
+        let list = e.call(EXTRA_LIST_OF_REFERENCE, &args![this]).u32();
+        changes = e.call(EXTRA_LIST_GET_FACTION_CHANGES, &args![list]).u32();
+    }
+    if changes != 0 {
+        e.call(FACTION_CHANGES_ADD, &args![changes, argument]);
+    }
+}
+
+// Translated from 008b8f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the contacts the actor's character controller recorded (the list
+/// head sits at controller `+0x648`): for each contact with a reference
+/// other than the player's, a reference answering true to virtual `+0x224`
+/// whose virtual `+0x304` returns 3 gets `009b4bf0` (the controller and the
+/// two vectors of the contact); any other reference takes impact damage
+/// (`0062be90` of two values read from the contact) when it is positive,
+/// through a new `HitData` and `Actor::HitMe`. C++ exception unwinding of
+/// the `NiPointer<HitData>` local is left out.
+pub fn fn_008b8f90(e: &mut Engine, this: Ptr<Actor>) {
+    if e.call(GET_CHAR_CONTROLLER, &args![this]).u32() == 0 {
+        return;
+    }
+    let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+    let mut node = fn_008b9220(e, Ptr::new(controller)).addr();
+    while node != 0 && !e.call(LIST_NODE_IS_EMPTY, &args![node]).bool() {
+        let data_address = e.call(LIST_NODE_DATA_ADDRESS, &args![node]).u32();
+        let contact = e.mem.u32(data_address);
+        contact_event(e, this, contact);
+        node = e.call(LIST_NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// One iteration of the loop of `008b8f90`.
+fn contact_event(e: &mut Engine, this: Ptr<Actor>, contact: u32) {
+    let body = if e.call(POINTER_GET, &args![contact]).u32() != 0 {
+        let proxy = e.call(POINTER_GET, &args![contact]).u32();
+        let object = e.call(PROXY_OBJECT, &args![proxy]).u32();
+        e.call(HAVOK_TO_BODY, &args![object]).u32()
+    } else {
+        0
+    };
+    let object = if body != 0 {
+        e.call(ENTRY_OBJECT, &args![body]).u32()
+    } else {
+        0
+    };
+    let reference = if object != 0 {
+        e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32()
+    } else {
+        0
+    };
+    if reference == 0 {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if reference == e.call(PLAYER_EXCLUDED_REFERENCE, &args![player]).u32() {
+        return;
+    }
+    if e.vcall(reference, 0x224, &args![]).bool() {
+        if e.vcall(reference, 0x304, &args![]).u32() == 3 {
+            let controller = e.call(GET_CHAR_CONTROLLER, &args![this]).u32();
+            let vector_a = [
+                e.mem.u32(contact + 0x10),
+                e.mem.u32(contact + 0x14),
+                e.mem.u32(contact + 0x18),
+            ];
+            let vector_b = [
+                e.mem.u32(contact + 4),
+                e.mem.u32(contact + 8),
+                e.mem.u32(contact + 0xc),
+            ];
+            e.call(
+                REACT_TO_CONTACT,
+                &args![
+                    reference,
+                    controller,
+                    vector_b[0],
+                    vector_b[1],
+                    vector_b[2],
+                    vector_a[0],
+                    vector_a[1],
+                    vector_a[2]
+                ],
+            );
+        }
+        return;
+    }
+    let value_a = e.call(CONTACT_VALUE_A, &args![contact + 0x1c]).f32();
+    let inner = e.call(POINTER_GET, &args![contact]).u32();
+    let value_b = e.call(CONTACT_VALUE_B, &args![inner]).f32();
+    let damage = e.call(IMPACT_DAMAGE, &args![value_b, value_a]).f32();
+    if damage > 0.0 {
+        let block = e.call(OPERATOR_NEW, &args![0x64u32]).u32();
+        let hit_data = if block != 0 {
+            e.call(HIT_DATA_CONSTRUCTOR, &args![block]).u32()
+        } else {
+            0
+        };
+        e.with_stack(4, |e, slot| {
+            e.call(HIT_DATA_POINTER_CONSTRUCTOR, &args![slot, hit_data]);
+            let hit = e.call(POINTER_GET, &args![slot]).u32();
+            e.call(
+                INITIALIZE_IMPACT_DATA,
+                &args![hit, reference, this, damage, contact],
+            );
+            let hit = e.call(POINTER_GET, &args![slot]).u32();
+            e.call(ACTOR_HIT_ME, &args![this, hit, 0u32]);
+            e.call(HIT_DATA_POINTER_DESTRUCTOR, &args![slot]);
+        });
+    }
+}
+
+// Translated from 008b9220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Address of the contact list head inside a character controller
+/// (`controller + 0x648`).
+pub fn fn_008b9220(_e: &mut Engine, this: Ptr) -> Ptr {
+    Ptr::new(this.addr().wrapping_add(0x648))
+}
+
+// Translated from 008b9240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::ConditionModifiedCallback` (Xbox PDB), `cdecl`: called when the
+/// condition actor value `index` of the `ActorValueOwner` `owner` changed
+/// by `change` from `previous`; `source` is the `ActorValueOwner` of whoever
+/// caused it. Resets the surgery limb for the player, shows the crippled
+/// limb HUD effect for an actor passing virtual `+0x360`, reports a limb
+/// crippled by the player, queues the replacement locomotion for the legs
+/// (index `0x48` is the combined mobility value), flags the cached values
+/// stale and refreshes them after a limb change.
+pub fn actor_condition_modified_callback(
+    e: &mut Engine,
+    owner: Ptr,
+    index: i32,
+    previous: f32,
+    change: f32,
+    source: Ptr,
+) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    let source_actor = actor_of_owner(source.addr());
+    if actor == 0 {
+        return;
+    }
+    let value = e
+        .vcall(owner.addr(), OWNER_VSLOT_VALUE, &args![index])
+        .f32();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    if e.vcall(actor, VSLOT_ACTOR_TEST_360, &args![]).bool()
+        && (0x19..=0x1e).contains(&index)
+        && actor == player
+    {
+        e.call(SURGERY_MENU_RESET_LIMB, &args![index]);
+    }
+    let crippled = value <= 0.0 && previous > 0.0;
+    if e.vcall(actor, VSLOT_ACTOR_TEST_360, &args![]).bool() && change < 0.0 && index != 0x48 {
+        if crippled {
+            let hud = e.global::<u32>(HUD_MAIN_MENU_POINTER);
+            e.call(SHOW_CRIPPLED_GUY, &args![hud]);
+            e.call(TRIGGER_PAIN, &args![actor, 1u32, 0u32]);
+            e.call(MISC_STAT_INCREMENT, &args![0x1eu32]);
+        }
+    } else if change < 0.0 && ((0x19..=0x1e).contains(&index) || index == 0x1f) {
+        if index == 0x1f && crippled {
+            let full = e.global::<f32>(FULL_VALUE);
+            e.vcall(actor, VSLOT_ACTOR_0X394, &args![0u32, full]);
+        }
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if crippled
+            && actor != player
+            && source_actor == player
+            && !e.vcall(actor, 0x22c, &args![0u32]).bool()
+            && e.global::<u32>(HUD_MAIN_MENU_POINTER) != 0
+        {
+            show_limb_message(e, actor, index);
+        }
+    }
+    if index == 0x48 {
+        let actor_owner = owner_of_actor(actor);
+        let left = e
+            .call(GET_BODY_PART_CONDITION, &args![actor_owner, 0x1du32, 0u32])
+            .f32();
+        let right = e
+            .call(GET_BODY_PART_CONDITION, &args![actor_owner, 0x1eu32, 0u32])
+            .f32();
+        if crippled {
+            if left <= 0.0 {
+                actor_queue_replacement_locomotion(e, Ptr::new(actor), 1.0, 0.0, 1.0);
+            }
+            if right <= 0.0 {
+                actor_queue_replacement_locomotion(e, Ptr::new(actor), 1.0, 0.0, 1.0);
+            }
+        } else if previous == 0.0 && change != 0.0 {
+            if left <= 0.0 {
+                actor_queue_replacement_locomotion(e, Ptr::new(actor), 0.0, 1.0, 1.0);
+            }
+            if right <= 0.0 {
+                actor_queue_replacement_locomotion(e, Ptr::new(actor), 0.0, 1.0, 1.0);
+            }
+        }
+    }
+    if index == 0x19 && change != 0.0 {
+        forward_cached_flags(e, actor, 0x100);
+    }
+    if index == 0x1d || index == 0x1e || index == 0x48 {
+        e.call(REFRESH_AFTER_LIMB_CHANGE, &args![actor]);
+    }
+}
+
+/// The message `008b9240` shows when the player cripples a limb of another
+/// actor: `"<actor name> <limb text>"` with the happy Vault Boy icon.
+fn show_limb_message(e: &mut Engine, actor: u32, index: i32) {
+    e.with_stack(200, |e, limb_text| {
+        e.with_stack(500, |e, message| {
+            e.call(COPY_STRING, &args![limb_text, EMPTY_STRING]);
+            let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+            let body_part_data = e.vcall(base, VSLOT_BASE_BODY_PART_DATA, &args![]).u32();
+            let mut part_name = 0u32;
+            if body_part_data != 0 {
+                let part = e.call(GET_BODY_PART, &args![body_part_data, index]).u32();
+                if part != 0 {
+                    part_name = e.call(BODY_PART_NAME, &args![part]).u32();
+                }
+            }
+            e.call(BUILD_LIMB_TEXT, &args![index, part_name, limb_text, 200u32]);
+            let name = e.call(ACTOR_NAME, &args![actor]).u32();
+            e.call(
+                FORMAT_STRING,
+                &args![message, 500u32, FORMAT_TWO_STRINGS, name, limb_text],
+            );
+            let time = e.global::<f32>(MESSAGE_TIME);
+            let hud = e.global::<u32>(HUD_MAIN_MENU_POINTER);
+            e.call(
+                SHOW_MESSAGE,
+                &args![
+                    hud,
+                    message,
+                    1u32,
+                    ICON_VERY_HAPPY,
+                    SOUND_POPUP_GENERAL,
+                    time,
+                    0u32
+                ],
+            );
+        });
+    });
+}
+
+// Translated from 008b9790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): reads actor value
+/// `0x19` from the `ActorValueOwner` and, when the process has a
+/// cached-values block, stores it as the cached perception condition
+/// (`008b97f0`). Returns the value.
+pub fn fn_008b9790(e: &mut Engine, this: Ptr) -> f32 {
+    let owner = this.addr().wrapping_sub(4);
+    let value = e.vcall(owner, OWNER_VSLOT_VALUE, &args![0x19u32]).f32();
+    store_cached_value(e, this.addr(), value, fn_008b97f0);
+    value
+}
+
+// Translated from 008b97f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedPerceptionCondition` (Xbox PDB,
+/// `+0x28`) with flag mask `0x100`, when the process has the block.
+pub fn fn_008b97f0(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x28, value, 0x100);
+}
+
+// Translated from 008b9830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::MobilityConditionModifiedCallback` (Xbox PDB), `cdecl`: runs the
+/// general condition callback (`008b9240`); for the leg condition values
+/// `0x1d` and `0x1e`, unless the owner's virtual `+0x08` answers non-zero
+/// for `0x48`, queues the replacement locomotion from the sign of
+/// `previous` and the leg conditions.
+pub fn actor_mobility_condition_modified_callback(
+    e: &mut Engine,
+    owner: Ptr,
+    index: i32,
+    previous: f32,
+    change: f32,
+    source: Ptr,
+) {
+    if owner.addr() == 0 {
+        return;
+    }
+    actor_condition_modified_callback(e, owner, index, previous, change, source);
+    if index != 0x1d && index != 0x1e {
+        return;
+    }
+    if e.vcall(owner.addr(), OWNER_VSLOT_0X08, &args![0x48u32])
+        .u32()
+        != 0
+    {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    let flag: f32 = if previous > 0.0 || previous.is_nan() {
+        1.0
+    } else {
+        0.0
+    };
+    let other_index: u32 = if index == 0x1d { 0x1e } else { 0x1d };
+    let other = e
+        .call(
+            GET_BODY_PART_CONDITION,
+            &args![owner_of_actor(actor), other_index, 0u32],
+        )
+        .f32();
+    e.call(REFRESH_BEFORE_QUEUE, &args![actor]);
+    let current = e
+        .call(
+            GET_BODY_PART_CONDITION,
+            &args![owner_of_actor(actor), index, 0u32],
+        )
+        .f32();
+    actor_queue_replacement_locomotion(e, Ptr::new(actor), flag, current, other);
+}
+
+// Translated from 008b9960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback for actor values `0x10` and `0x16`: when the actor has a
+/// process, compares the owner's virtual `+0x20` value with `previous +
+/// change`; a drop below it (negative `change`, value above the sum) sets
+/// the process flag `0x20000000` (index `0x10`) or `0x40000000` (index
+/// `0x16`), and a rise (positive `change`, value at or below the sum)
+/// clears it (`008acf70`).
+pub fn fn_008b9960(e: &mut Engine, owner: Ptr, index: i32, previous: f32, change: f32) {
+    if owner.addr() == 0 || (index != 0x10 && index != 0x16) {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    if process_of(e, actor) == 0 {
+        return;
+    }
+    let sum = previous + change;
+    let current = e.vcall(owner.addr(), OWNER_VSLOT_0X20, &args![index]).f32();
+    let drop = change < 0.0 && current > sum;
+    let rise = change > 0.0 && current <= sum;
+    let mask = if index == 0x10 {
+        0x2000_0000u32
+    } else {
+        0x4000_0000
+    };
+    if drop {
+        let process = process_of(e, actor);
+        e.call(PROCESS_SET_STATE_FLAG, &args![process, mask, 1u32]);
+    } else if rise {
+        let process = process_of(e, actor);
+        e.call(PROCESS_SET_STATE_FLAG, &args![process, mask, 0u32]);
+    }
+}
+
+// Translated from 008b9ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: asks the actor's process to recompute the cached
+/// values flagged `0x10`.
+pub fn fn_008b9ab0(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    forward_cached_flags(e, actor_of_owner(owner.addr()), 0x10);
+}
+
+// Translated from 008b9b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: asks the actor's process to recompute the cached
+/// values flagged `0x80000000`.
+pub fn fn_008b9b10(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    forward_cached_flags(e, actor_of_owner(owner.addr()), 0x8000_0000);
+}
+
+// Translated from 008b9b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): computes the
+/// medicine effectiveness value (`00649530` of the `ActorValueOwner`) and
+/// stores it (`008b9be0`) when the process has a cached-values block.
+/// Returns the value.
+pub fn fn_008b9b70(e: &mut Engine, this: Ptr) -> f32 {
+    // The compiler's null guard: `this - 0xa8 == 0` gives null.
+    let owner = if this.addr().wrapping_sub(0xa8) == 0 {
+        0
+    } else {
+        this.addr().wrapping_sub(4)
+    };
+    let value = e.call(CACHED_VALUE_MEDICINE, &args![owner]).f32();
+    store_cached_value(e, this.addr(), value, fn_008b9be0);
+    value
+}
+
+// Translated from 008b9be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedMedicineEffectivenessMult`
+/// (Xbox PDB, `+0x14`) with flag mask `0x10`, when the process has the
+/// block.
+pub fn fn_008b9be0(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x14, value, 0x10);
+}
+
+// Translated from 008b9c10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): computes the
+/// survival effectiveness value (`00649580`) and stores it (`008b9c80`).
+/// Returns the value.
+pub fn fn_008b9c10(e: &mut Engine, this: Ptr) -> f32 {
+    let owner = if this.addr().wrapping_sub(0xa8) == 0 {
+        0
+    } else {
+        this.addr().wrapping_sub(4)
+    };
+    let value = e.call(CACHED_VALUE_SURVIVAL, &args![owner]).f32();
+    store_cached_value(e, this.addr(), value, fn_008b9c80);
+    value
+}
+
+// Translated from 008b9c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedSurvivalEffectivenessMult`
+/// (Xbox PDB, `+0x18`) with flag mask `0x80000000`.
+pub fn fn_008b9c80(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x18, value, 0x8000_0000);
+}
+
+// Translated from 008b9cc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: asks the actor's process to recompute the cached
+/// values flagged `0x20`.
+pub fn fn_008b9cc0(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    forward_cached_flags(e, actor_of_owner(owner.addr()), 0x20);
+}
+
+// Translated from 008b9d20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): reads actor value
+/// `0x2f` and stores it (`008b9d80`). Returns the value.
+pub fn fn_008b9d20(e: &mut Engine, this: Ptr) -> f32 {
+    let owner = this.addr().wrapping_sub(4);
+    let value = e.vcall(owner, OWNER_VSLOT_VALUE, &args![0x2fu32]).f32();
+    store_cached_value(e, this.addr(), value, fn_008b9d80);
+    value
+}
+
+// Translated from 008b9d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedParalysis` (Xbox PDB, `+0x1c`)
+/// with flag mask `0x20`.
+pub fn fn_008b9d80(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x1c, value, 0x20);
+}
+
+// Translated from 008b9db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: asks the actor's process to recompute the cached
+/// values flagged `0x40`.
+pub fn fn_008b9db0(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    forward_cached_flags(e, actor_of_owner(owner.addr()), 0x40);
+}
+
+// Translated from 008b9e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): reads actor value
+/// `0x0f` and stores it as the healing rate (`008b9e70`). Returns the
+/// value.
+pub fn fn_008b9e10(e: &mut Engine, this: Ptr) -> f32 {
+    let owner = this.addr().wrapping_sub(4);
+    let value = e.vcall(owner, OWNER_VSLOT_VALUE, &args![0xfu32]).f32();
+    store_cached_value(e, this.addr(), value, fn_008b9e70);
+    value
+}
+
+// Translated from 008b9e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedHealingRate` (Xbox PDB, `+0x20`)
+/// with flag mask `0x40`.
+pub fn fn_008b9e70(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x20, value, 0x40);
+}
+
+// Translated from 008b9ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::EnduranceModifiedCallback` (Xbox PDB), `cdecl`: asks the
+/// process to recompute the cached values flagged `0x80`; when `change` is
+/// negative and the owner's virtual `+0x14` for actor value `0x10` is
+/// negative, sums that value, the base health, the owner's virtuals `+0x18`
+/// and `+0x10` for actor value `0x10` and the adjustment `006436c0` of
+/// `previous + change`, and restores actor value `0x10` by `1 - sum` when
+/// the sum is negative.
+pub fn actor_endurance_modified_callback(
+    e: &mut Engine,
+    owner: Ptr,
+    _unused_1: u32,
+    previous: f32,
+    change: f32,
+) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    forward_cached_flags(e, actor, 0x80);
+    if change >= 0.0 || change.is_nan() {
+        return;
+    }
+    let actor_owner = owner_of_actor(actor);
+    let value = e
+        .vcall(actor_owner, OWNER_VSLOT_0X14, &args![0x10u32])
+        .f32();
+    if value >= 0.0 || value.is_nan() {
+        return;
+    }
+    let sum = previous + change;
+    let adjustment = e.call(ENDURANCE_ADJUSTMENT, &args![owner, sum]).f32();
+    let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+    let health = e.call(GET_BASE_HEALTH, &args![base]).i32() as f64;
+    let second = e
+        .vcall(actor_owner, OWNER_VSLOT_0X18, &args![0x10u32])
+        .f32() as f64;
+    let first = e
+        .vcall(actor_owner, OWNER_VSLOT_0X10, &args![0x10u32])
+        .f32() as f64;
+    // x87 order: the two partial sums are spilled as doubles, the total is
+    // stored as a float.
+    let total = ((first + (second + health)) + value as f64 + adjustment as f64) as f32;
+    if total < 0.0 {
+        let one = e.global::<f64>(DOUBLE_ONE);
+        let amount = (-(total as f64) + one) as f32;
+        e.call(RESTORE_ACTOR_VALUE, &args![actor, 0x10u32, amount]);
+    }
+}
+
+// Translated from 008b9ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `CachedValuesOwner` virtual (`this` = `Actor + 0xa8`): reads actor value
+/// `0x0f` and stores it as the cached endurance (`008ba050`). Returns the
+/// value.
+pub fn fn_008b9ff0(e: &mut Engine, this: Ptr) -> f32 {
+    let owner = this.addr().wrapping_sub(4);
+    let value = e.vcall(owner, OWNER_VSLOT_VALUE, &args![0xfu32]).f32();
+    store_cached_value(e, this.addr(), value, fn_008ba050);
+    value
+}
+
+// Translated from 008ba050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` as `CachedValues::fCachedEndurance` (Xbox PDB, `+0x24`)
+/// with flag mask `0x80`.
+pub fn fn_008ba050(e: &mut Engine, this: Ptr, value: f32) {
+    set_cached_value(e, this, 0x24, value, 0x80);
+}
+
+// Translated from 008ba090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::QueueReplacementLocomotion` (Xbox PDB), `cdecl`: with
+/// `delta = b - a` and `sum = a + c`, a negative `delta` with `sum == 2.0`
+/// and `b == 0` asks `008b7360(actor, 1, 0)`; a positive `delta` with `sum
+/// < 2.0`, `b != 0` and `c > 0` asks `008b7360(actor, 0, 0)`.
+pub fn actor_queue_replacement_locomotion(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    a: f32,
+    b: f32,
+    c: f32,
+) {
+    let delta = b - a;
+    let sum = (a + c) as f64;
+    let two = e.global::<f64>(DOUBLE_TWO);
+    if delta < 0.0 {
+        if sum == two && b == 0.0 {
+            e.call(REQUEST_LOCOMOTION_CHANGE, &args![this, 1u32, 0u32]);
+        }
+    } else if delta > 0.0 && sum < two && b != 0.0 && c > 0.0 {
+        e.call(REQUEST_LOCOMOTION_CHANGE, &args![this, 0u32, 0u32]);
+    }
+}
+
+// Translated from 008ba140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: when the actor has a process, a combat controller
+/// (virtual `+0x428`) gets `008a0330`/`005c1ae0` applied and the process's
+/// virtuals `+0x68` and `+0x6c` are called with the actor; then asks the
+/// process to recompute the cached values flagged `0x400`.
+pub fn fn_008ba140(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    if e.call(ACTOR_PROCESS, &args![actor]).u32() != 0 {
+        if e.vcall(actor, VSLOT_GET_COMBAT_CONTROLLER, &args![]).u32() != 0 {
+            let state = e.call(ACTOR_COMBAT_CONTROLLER_STATE, &args![actor]).u32();
+            e.call(COMBAT_CONTROLLER_APPLY, &args![state]);
+        }
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(process, 0x68, &args![actor]);
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(process, 0x6c, &args![actor]);
+    }
+    forward_cached_flags(e, actor, 0x400);
+}
+
+// Translated from 008ba210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: asks the actor's process to recompute the cached
+/// values flagged `0x800`.
+pub fn fn_008ba210(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    forward_cached_flags(e, actor_of_owner(owner.addr()), 0x800);
+}
+
+// Translated from 008ba270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: calls the actor's virtual `+0x3c4`.
+pub fn fn_008ba270(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    e.vcall(actor, 0x3c4, &args![]);
+}
+
+// Translated from 008ba2b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback: calls `008c4400` on the actor.
+pub fn fn_008ba2b0(e: &mut Engine, owner: Ptr) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    e.call(ACTOR_CALLBACK_008C4400, &args![actor]);
+}
+
+// Translated from 008ba2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `cdecl` callback (the second word is never read): when the actor's
+/// virtual `+0x360` answers true, the player's virtual `+0x358` is asked and
+/// the player is checked for god mode (`009526b0`) and for a value
+/// (`008a0c20`) below `threshold`; when the player answered true and is
+/// neither in god mode nor below the threshold, the "surprised" Vault Boy
+/// message is shown (`004c69f0`, `007052f0`).
+pub fn fn_008ba2f0(e: &mut Engine, owner: Ptr, _unused_1: u32, threshold: f32) {
+    if owner.addr() == 0 {
+        return;
+    }
+    let actor = actor_of_owner(owner.addr());
+    if !e.vcall(actor, VSLOT_ACTOR_TEST_360, &args![]).bool() {
+        return;
+    }
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let answered = e.vcall(player, 0x358, &args![]).bool();
+    let below = if e.call(PLAYER_IS_GOD_MODE, &args![]).bool() {
+        false
+    } else {
+        let value = e.call(PLAYER_VALUE_008A0C20, &args![player]).f32();
+        threshold > value
+    };
+    if answered && !below {
+        let time = e.global::<f32>(MESSAGE_TIME);
+        let message = e
+            .call(
+                MESSAGE_QUEUE_ADD,
+                &args![MESSAGE_QUEUE, 0u32, ICON_SURPRISED, 0u32, time, 0u32],
+            )
+            .u32();
+        e.call(MESSAGE_QUEUE_SHOW, &args![message]);
+    }
+}
+
+// Translated from 008ba3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's virtual `+0x6f4` (a flag test), or false without a
+/// process.
+pub fn fn_008ba3e0(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    process_flag_test(e, this, 0x6f4)
+}
+
+// Translated from 008ba410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's virtual `+0x6ec` (a flag test), or false without a
+/// process.
+pub fn fn_008ba410(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    process_flag_test(e, this, 0x6ec)
+}
+
+// Translated from 008ba440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsHeavyBodyArmorWorn` (Xbox PDB): the process's virtual `+0x6e8`,
+/// or false without a process.
+pub fn actor_is_heavy_body_armor_worn(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    process_flag_test(e, this, 0x6e8)
+}
+
+// Translated from 008ba470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's virtual `+0x6f0` (a flag test), or false without a
+/// process.
+pub fn fn_008ba470(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    process_flag_test(e, this, 0x6f0)
+}
+
+/// The four getters above: false without a process, else the process's
+/// virtual `slot` (a `bool` in `AL`).
+fn process_flag_test(e: &mut Engine, this: Ptr<Actor>, slot: u32) -> bool {
+    let process = process_of(e, this.addr());
+    if process == 0 {
+        return false;
+    }
+    e.vcall(process, slot, &args![]).bool()
+}
+
+/// The pending-animation bits `IsAnimIdleQuequed` tests: `0x4`, `0x8`,
+/// `0x10`, `0x40`, `0x80`, `0x100`, `0x400`, `0x800`, `0x1000`, `0x2000`.
+const QUEUED_IDLE_MASK: u32 =
+    0x4 | 0x8 | 0x10 | 0x40 | 0x80 | 0x100 | 0x400 | 0x800 | 0x1000 | 0x2000;
+
+// Translated from 008ba4a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsAnimIdleQuequed` (Xbox PDB): true when the process's pending
+/// animation flags (virtual `+0x618`) include any bit of
+/// [`QUEUED_IDLE_MASK`]. The process is not tested for null.
+pub fn actor_is_anim_idle_quequed(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let process = process_of(e, this.addr());
+    let flags = e.vcall(process, 0x618, &args![]).u32();
+    flags & QUEUED_IDLE_MASK != 0
+}
+
+/// `Animation::SpecialIdlePlaying` (Xbox PDB): `ECX` = animation.
+const ANIMATION_SPECIAL_IDLE_PLAYING: u32 = 0x0049_85b0;
+/// `ECX` = an anim group object: returns its type at `+0x14`.
+const ANIM_GROUP_TYPE: u32 = 0x0082_5c00;
+
+// Translated from 008ba530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::IsPlayingLowerBodySpecialIdle` (Xbox PDB): with an animation
+/// (actor virtual `+0x1e4`), takes the type of the group in the
+/// animation's `+0x128` slot when an idle is queued, else of the one in its
+/// `+0x124` slot when a special idle is playing; true for types `1`, `7`
+/// and `0x14`.
+pub fn actor_is_playing_lower_body_special_idle(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let animation = e.vcall(this.addr(), 0x1e4, &args![]).u32();
+    if animation == 0 {
+        return false;
+    }
+    let mut group_type: i32 = -1;
+    if actor_is_anim_idle_quequed(e, this)
+        && e.call(POINTER_GET, &args![animation + 0x128]).u32() != 0
+    {
+        let group = e.call(POINTER_GET, &args![animation + 0x128]).u32();
+        group_type = e.call(ANIM_GROUP_TYPE, &args![group]).i32();
+    } else if e
+        .call(ANIMATION_SPECIAL_IDLE_PLAYING, &args![animation])
+        .bool()
+        && e.call(POINTER_GET, &args![animation + 0x124]).u32() != 0
+    {
+        let group = e.call(POINTER_GET, &args![animation + 0x124]).u32();
+        group_type = e.call(ANIM_GROUP_TYPE, &args![group]).i32();
+    }
+    group_type == 1 || group_type == 7 || group_type == 0x14
+}
+
+/// `Actor::GetAnimGroup` (Xbox PDB): `ECX` = actor, four words, returns the
+/// group number in `AX`.
+const GET_ANIM_GROUP: u32 = 0x0089_7910;
+/// `Animation::PlayGroup` (Xbox PDB): `ECX` = animation, four words (the
+/// group number in the low word, then three more).
+const PLAY_GROUP: u32 = 0x0049_4740;
+/// `Actor::StartAttack` (Xbox PDB): `ECX` = actor, the queued attack.
+const START_ATTACK: u32 = 0x0089_3a40;
+/// `Animation::SpecialIdleWorking_ov3` (Xbox PDB): `ECX` = animation.
+const SPECIAL_IDLE_WORKING: u32 = 0x0049_8f80;
+/// `ECX` = actor (`008b0ac0`), called when the pending flag `0x1000` is set.
+const ACTOR_HANDLE_FLAG_1000: u32 = 0x008b_0ac0;
+/// `ECX` = actor (`008a7a90`), called when the pending flag `0x400` is set.
+const ACTOR_HANDLE_FLAG_400: u32 = 0x008a_7a90;
+/// `ECX` = actor (`00894940`), called when the pending flag `0x8000` is set.
+const ACTOR_HANDLE_FLAG_8000: u32 = 0x0089_4940;
+/// `PlayerCharacter::GetAnimation` (Xbox PDB): `ECX` = player, one word.
+const PLAYER_GET_ANIMATION: u32 = 0x0095_0a60;
+/// Named `Animation::ZeroGlobalTransform` in the engine map (folded body):
+/// `ECX` = the object process virtual `+0x3e8` returned.
+const ANIMATION_STEP: u32 = 0x0048_f7f0;
+/// `ECX` = the object `0048f7f0` returned: a kind number (index into the
+/// table at `011977e4`, entries `0x24` bytes).
+const ANIMATION_KIND: u32 = 0x005f_2420;
+/// Table indexed by [`ANIMATION_KIND`] (entries of `0x24` bytes).
+const ANIMATION_KIND_TABLE: u32 = 0x0119_77e4;
+/// `ECX` = actor: the actor's flag word (low 16 bits used).
+const GET_FLAG_WORD: u32 = 0x0088_46e0;
+/// `ItemChange::HasModEffectActive_ov2` (Xbox PDB): `ECX` = item entry, the
+/// effect number; `bool` in `AL`.
+const HAS_MOD_EFFECT_ACTIVE: u32 = 0x004b_da70;
+/// `TESObjectWEAP::GetFormClipRounds` (Xbox PDB): `ECX` = the weapon form,
+/// one word.
+const GET_FORM_CLIP_ROUNDS: u32 = 0x004f_e160;
+/// `InventoryChanges::GetInventoryChanges` (Xbox PDB), `cdecl`: the actor.
+const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
+/// `InventoryChanges::GetObjectCount` (Xbox PDB): `ECX` = inventory changes,
+/// one word (the object).
+const GET_OBJECT_COUNT: u32 = 0x004c_8f30;
+/// `TESAnimGroup::AnimGroup` (Xbox PDB), `cdecl`, four words: packs a group
+/// number into `AX`.
+const PACK_ANIM_GROUP: u32 = 0x005f_2370;
+/// `Animation::PickBestAnimation` (Xbox PDB): `ECX` = animation, two words.
+const PICK_BEST_ANIMATION: u32 = 0x0049_5740;
+/// `ECX` = weapon form, one word: the animation type of the weapon.
+const WEAPON_ANIM_TYPE: u32 = 0x0051_e2a0;
+/// `TESAnimGroup::GetType` (Xbox PDB), `cdecl`: the group number.
+const ANIM_GROUP_GET_TYPE: u32 = 0x005f_2440;
+/// `Actor::SetAnimAction` (Xbox PDB): `ECX` = actor, an action and an
+/// animation slot.
+const SET_ANIM_ACTION: u32 = 0x008a_73e0;
+/// `ECX` = animation, one word (a slot number): the slot's entry.
+const ANIMATION_SLOT: u32 = 0x0049_1040;
+/// `LowProcess::GetGenericLocation` (Xbox PDB): `ECX` = the slot's entry.
+const GET_GENERIC_LOCATION: u32 = 0x0080_41a0;
+/// `Actor::GetOutofFurnitureQuick` (Xbox PDB): `ECX` = actor.
+const GET_OUT_OF_FURNITURE_QUICK: u32 = 0x0088_d640;
+/// `TESIdleForm::GetIdleAnimGroupSection` (Xbox PDB): `ECX` = the idle,
+/// one word.
+const GET_IDLE_ANIM_GROUP_SECTION: u32 = 0x005f_f160;
+/// `ECX` = animation: plays an idle (the idle, the actor, the section).
+const PLAY_IDLE_SECTION: u32 = 0x0049_7f20;
+/// `NiPointer` constructor from a raw pointer (`ECX` = slot, one word).
+const IDLE_POINTER_CONSTRUCTOR: u32 = 0x0063_3c90;
+/// `NiPointer` destructor (`ECX` = slot).
+const IDLE_POINTER_DESTRUCTOR: u32 = 0x0045_cec0;
+/// `AnimIdle::Loaded` (Xbox PDB): `ECX` = the idle, one word.
+const ANIM_IDLE_LOADED: u32 = 0x0049_6cd0;
+/// `Actor::GetCurrentWeapon` (Xbox PDB): `ECX` = actor.
+const GET_CURRENT_WEAPON: u32 = 0x008a_1710;
+/// `ECX` = the current weapon: its anim type.
+const CURRENT_WEAPON_ANIM_TYPE: u32 = 0x0051_f610;
+/// `Actor::SetHavokWeapon` (Xbox PDB): `ECX` = actor.
+const SET_HAVOK_WEAPON: u32 = 0x008a_5eb0;
+/// `TESObjectWEAP::ExpelShellCasing` (Xbox PDB): `ECX` = the weapon form,
+/// one word (the actor).
+const EXPEL_SHELL_CASING: u32 = 0x0052_4db0;
+/// `Actor::SetIronSights` (Xbox PDB): `ECX` = actor, one word.
+const SET_IRON_SIGHTS: u32 = 0x008b_b650;
+/// `ECX` = weapon form: the test that splits the `0x1` block (the decompiler
+/// names no function).
+const WEAPON_FORM_TEST: u32 = 0x004c_0c30;
+/// `ECX` = weapon form, one word (the actor).
+const WEAPON_FORM_PREPARE: u32 = 0x0052_3150;
+/// `ECX` = weapon form, two flag words: returns a word for `008bc240`.
+const WEAPON_FORM_STATE: u32 = 0x0052_5620;
+/// `ECX` = actor, one word (`008bc240`).
+const ACTOR_APPLY_WEAPON_STATE: u32 = 0x008b_c240;
+/// `ECX` = actor: tells whether the actor is in the state that makes the `0x1`
+/// block take its first branch.
+const ACTOR_STATE_TEST_493BB0: u32 = 0x0049_3bb0;
+/// `ECX` = actor, two words (`00899200`).
+const ACTOR_UPDATE_00899200: u32 = 0x0089_9200;
+/// `ECX` = the object process virtual `+0x27c` returned: a type number.
+const OBJECT_TYPE: u32 = 0x0041_ca90;
+/// `Script::SetActionFlag` (Xbox PDB), `cdecl`: form, value, flag word.
+const SET_ACTION_FLAG: u32 = 0x005a_c750;
+/// Process virtual `+0x148`: the entry of the weapon in hand (its form is
+/// read with `0044ddc0`).
+const PROCESS_VSLOT_EQUIPPED: u32 = 0x148;
+/// Process virtual `+0x14c`: the entry of the ammunition.
+const PROCESS_VSLOT_AMMO: u32 = 0x14c;
+/// Process virtual `+0x614`: takes a bit mask (the pending flag to clear).
+const PROCESS_VSLOT_CLEAR_PENDING: u32 = 0x614;
+/// Process virtual `+0x618`: the pending animation/equip flag word.
+const PROCESS_VSLOT_PENDING_FLAGS: u32 = 0x618;
+/// Process virtual `+0x708`: one word.
+const PROCESS_VSLOT_0X708: u32 = 0x708;
+
+/// The process of the actor, read afresh (the virtuals the handler calls may
+/// change it), and its virtual `slot` called with `arguments`.
+fn process_vcall(e: &mut Engine, actor: u32, slot: u32, arguments: &[u32]) -> Ret {
+    let process = process_of(e, actor);
+    e.vcall(process, slot, arguments)
+}
+
+// Translated from 008ba600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Handles the pending animation/equip flags of the actor's process
+/// (virtual `+0x618`), in order: `0x20` plays group `0xe0` and calls
+/// process virtual `+0x294`; stops when actor virtual `+0x22c(0)` answers
+/// true; `0x1000`; the queued attack (`StartAttack`, cleared to `0xff` when
+/// the process says it is over); `0x800`; `0x400`; `0x8000`; `0x40000`
+/// (equip or reload: picks and plays the animation group, queues the ammo
+/// equip); `0x1` (weapon form setup); `0x2` (equip the weapon); `0x4` and
+/// `0x8` (furniture); `0x200`; `0x80` (play an idle); `0x10`; `0x2000`
+/// (loaded idles); `0x40`; `0x100`; `0x4000`; `0x20000` (shell casing);
+/// `0x10000` (iron sights). C++ exception unwinding of the `NiPointer`
+/// local is left out.
+pub fn fn_008ba600(e: &mut Engine, this: Ptr<Actor>) {
+    let actor = this.addr();
+    if process_of(e, actor) == 0 {
+        return;
+    }
+    let animation = e.vcall(actor, 0x1e4, &args![]).u32();
+    let mut flags = process_vcall(e, actor, PROCESS_VSLOT_PENDING_FLAGS, &args![]).u32();
+    process_vcall(e, actor, 0x61c, &args![]);
+    if animation == 0 {
+        return;
+    }
+    if flags & 0x20 != 0 {
+        let group = e
+            .call(GET_ANIM_GROUP, &args![actor, 0xe0u32, 0u32, 0u32, 0u32])
+            .u16();
+        e.call(
+            PLAY_GROUP,
+            &args![
+                animation,
+                group as u32,
+                1u32,
+                0xffff_ffffu32,
+                0xffff_ffffu32
+            ],
+        );
+        process_vcall(e, actor, 0x294, &args![actor]);
+    }
+    if e.vcall(actor, 0x22c, &args![0u32]).bool() {
+        return;
+    }
+    if flags & 0x1000 != 0 {
+        e.call(ACTOR_HANDLE_FLAG_1000, &args![actor]);
+    }
+    let equipped = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+    let equipped_form = if equipped != 0 {
+        e.call(ENTRY_OBJECT, &args![equipped]).u32()
+    } else {
+        0
+    };
+    // Actor::eQueuedattack (Xbox PDB) +0x110
+    let queued_attack = e.get(this, Actor::eQueuedattack);
+    if queued_attack != 0xff {
+        e.call(START_ATTACK, &args![actor, queued_attack]);
+        let over = !process_vcall(e, actor, 0x3f0, &args![]).bool()
+            || process_vcall(e, actor, 0x444, &args![]).f32() == 0.0;
+        if over {
+            process_vcall(e, actor, 0x3f4, &args![0u32]);
+            e.set(this, Actor::eQueuedattack, 0xff);
+        }
+    }
+    if flags & 0x800 != 0 {
+        if process_of(e, actor) == 0
+            || animation == 0
+            || e.call(SPECIAL_IDLE_WORKING, &args![animation]).bool()
+        {
+            let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            e.vcall(process, PROCESS_VSLOT_CLEAR_PENDING, &args![0x800u32]);
+        } else {
+            process_vcall(e, actor, 0xd8, &args![actor]);
+        }
+    }
+    if flags & 0x400 != 0 {
+        e.call(ACTOR_HANDLE_FLAG_400, &args![actor]);
+    }
+    if flags & 0x8000 != 0 {
+        e.call(ACTOR_HANDLE_FLAG_8000, &args![actor]);
+    }
+    if flags & 0x40000 != 0 {
+        equip_or_reload(e, this, animation, equipped_form);
+    }
+    if flags & 0x1 != 0 {
+        weapon_form_setup(e, this);
+    }
+    if flags & 0x2 != 0 && equipped_form != 0 && equipped != 0 {
+        equip_weapon(e, this, animation, equipped, equipped_form);
+    }
+    if flags & 0x4 != 0 {
+        if process_vcall(e, actor, 0x4d0, &args![]).u32() > 0xc8 {
+            e.call(GET_OUT_OF_FURNITURE_QUICK, &args![actor]);
+        } else if !process_vcall(e, actor, 0x2b0, &args![actor]).bool() {
+            process_vcall(e, actor, PROCESS_VSLOT_0X708, &args![0u32]);
+        }
+        flags &= !0x10;
+    }
+    if flags & 0x8 != 0 {
+        if !process_vcall(e, actor, 0x2b8, &args![actor]).bool() {
+            process_vcall(e, actor, PROCESS_VSLOT_0X708, &args![0u32]);
+        }
+        flags &= !0x10;
+    }
+    if flags & 0x200 != 0 {
+        e.call(GET_OUT_OF_FURNITURE_QUICK, &args![actor]);
+    }
+    if flags & 0x80 != 0 {
+        let idle = process_vcall(e, actor, 0x718, &args![]).u32();
+        if idle != 0 {
+            let section = e
+                .call(GET_IDLE_ANIM_GROUP_SECTION, &args![idle, 3u32])
+                .u32();
+            e.call(PLAY_IDLE_SECTION, &args![animation, idle, actor, section]);
+        }
+    }
+    if flags & 0x10 != 0 {
+        process_vcall(e, actor, 0x70c, &args![actor]);
+    }
+    if flags & 0x2000 != 0 {
+        while process_vcall(e, actor, 0x724, &args![]).u32() != 0 {
+            let queued = process_vcall(e, actor, 0x724, &args![]).u32();
+            e.with_stack(4, |e, slot| {
+                e.call(IDLE_POINTER_CONSTRUCTOR, &args![slot, queued]);
+                let idle = process_vcall(e, actor, 0x728, &args![]).u32();
+                if e.call(POINTER_GET, &args![slot]).u32() != 0 && idle != 0 {
+                    let held = e.call(POINTER_GET, &args![slot]).u32();
+                    e.call(ANIM_IDLE_LOADED, &args![held, idle]);
+                }
+                process_vcall(e, actor, 0x720, &args![0u32, 0u32]);
+                e.call(IDLE_POINTER_DESTRUCTOR, &args![slot]);
+            });
+        }
+    }
+    if flags & 0x40 != 0 {
+        let flag = process_vcall(e, actor, 0x454, &args![]).bool();
+        let not_equipped = u32::from(flag && equipped == 0);
+        let slot_entry = if flag { equipped } else { 0xffff_ffff };
+        let group = e
+            .call(
+                GET_ANIM_GROUP,
+                &args![actor, 0u32, slot_entry, not_equipped, animation],
+            )
+            .u16();
+        e.call(
+            PLAY_GROUP,
+            &args![
+                animation,
+                group as u32,
+                1u32,
+                0xffff_ffffu32,
+                0xffff_ffffu32
+            ],
+        );
+    }
+    if flags & 0x100 != 0 && e.call(GET_CURRENT_WEAPON, &args![actor]).u32() != 0 {
+        let weapon = e.call(GET_CURRENT_WEAPON, &args![actor]).u32();
+        let weapon_type = e.call(CURRENT_WEAPON_ANIM_TYPE, &args![weapon]).u32();
+        let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+        let group = e
+            .call(
+                GET_ANIM_GROUP,
+                &args![actor, weapon_type, entry, 0u32, animation],
+            )
+            .u16();
+        e.call(
+            PLAY_GROUP,
+            &args![
+                animation,
+                group as u32,
+                1u32,
+                0xffff_ffffu32,
+                0xffff_ffffu32
+            ],
+        );
+    }
+    if flags & 0x4000 != 0 {
+        e.call(SET_HAVOK_WEAPON, &args![actor]);
+    }
+    if flags & 0x20000 != 0 {
+        let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+        let form = if entry != 0 {
+            let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+            e.call(ENTRY_OBJECT, &args![entry]).u32()
+        } else {
+            0
+        };
+        if form != 0 {
+            e.call(EXPEL_SHELL_CASING, &args![form, actor]);
+        }
+    }
+    if flags & 0x10000 != 0 {
+        let sights = process_vcall(e, actor, 0x404, &args![1u32, 0u32]).u8();
+        e.call(SET_IRON_SIGHTS, &args![actor, sights]);
+    }
+}
+
+/// The `0x40000` block of `008ba600`: picks the equip or reload animation
+/// group for the weapon and ammunition in hand, queues the equip of the
+/// next ammunition entry and plays the group.
+fn equip_or_reload(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped_form: u32) {
+    let actor = this.addr();
+    let player = e.global::<u32>(PLAYER_POINTER);
+    let mut current_animation = e.vcall(actor, 0x1e4, &args![]).u32();
+    if actor == player {
+        current_animation = e.call(PLAYER_GET_ANIMATION, &args![player, 0u32]).u32();
+    }
+    let weapon_entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+    let ammo_entry = process_vcall(e, actor, PROCESS_VSLOT_AMMO, &args![]).u32();
+    let mut ammo_index: i32 = 0;
+    let mut clip_rounds: i32 = 0;
+    let animation_object = process_vcall(e, actor, 0x3e8, &args![]).u32();
+    let stepped = e.call(ANIMATION_STEP, &args![animation_object]).u32();
+    let kind = e.call(ANIMATION_KIND, &args![stepped]).u32();
+    // The entry of the kind table is read and never used afterwards.
+    let _kind_entry = e
+        .mem
+        .u32(ANIMATION_KIND_TABLE.wrapping_add(kind.wrapping_mul(0x24)));
+    let state = e.call(GET_FLAG_WORD, &args![actor]).u16();
+    let mut slot_kind: u32 = 0;
+    if state & 0x800 != 0 {
+        slot_kind = 2;
+    } else if state & 0x2000 != 0 {
+        slot_kind = 3;
+    } else if state & 0x400 != 0 {
+        slot_kind = 1;
+    }
+    let mut group_index: u32 = 0xff;
+    let table: [u32; 4] = if state & 0x200 != 0 {
+        [7, 8, 9, 10]
+    } else {
+        [3, 4, 5, 6]
+    };
+    for (bit, value) in [1u16, 2, 4, 8].into_iter().zip(table) {
+        if state & bit != 0 {
+            group_index = value;
+            break;
+        }
+    }
+    if weapon_entry != 0 && equipped_form != 0 {
+        let modded = e
+            .call(HAS_MOD_EFFECT_ACTIVE, &args![weapon_entry, 2u32])
+            .u8();
+        clip_rounds = e
+            .call(GET_FORM_CLIP_ROUNDS, &args![equipped_form, modded as u32])
+            .i32();
+    }
+    let inventory = e.call(GET_INVENTORY_CHANGES, &args![actor]).u32();
+    let mut ammo_count: i32 = 0;
+    if inventory != 0 && ammo_entry != 0 {
+        let ammo_form = e.call(ENTRY_OBJECT, &args![ammo_entry]).u32();
+        ammo_count = e.call(GET_OBJECT_COUNT, &args![inventory, ammo_form]).i32();
+    }
+    if ammo_entry != 0 {
+        ammo_index = e
+            .call(LIST_NODE_NEXT, &args![ammo_entry])
+            .i32()
+            .wrapping_add(1);
+    }
+    if ammo_entry != 0 && ammo_index <= ammo_count {
+        let ammo_form = e.call(ENTRY_OBJECT, &args![ammo_entry]).u32();
+        e.call(
+            QUEUE_EQUIP_OBJECT,
+            &args![actor, ammo_form, ammo_index, 0u32, 1u32, 0u32, 0u32],
+        );
+    }
+    if ammo_index < clip_rounds && ammo_count != ammo_index && ammo_count != 0 {
+        // Reload: the group of the weapon's own animation type.
+        let weapon_form = e.call(ENTRY_OBJECT, &args![weapon_entry]).u32();
+        let weapon_type = e.call(WEAPON_ANIM_TYPE, &args![weapon_form, 0u32]).u32();
+        let group = e
+            .call(
+                GET_ANIM_GROUP,
+                &args![actor, weapon_type, weapon_entry, 0u32, current_animation],
+            )
+            .u16();
+        let slot = e
+            .call(ANIMATION_SLOT, &args![current_animation, 4u32])
+            .u32();
+        e.call(SET_ANIM_ACTION, &args![actor, 0x11u32, slot]);
+        e.call(
+            PLAY_GROUP,
+            &args![current_animation, group as u32, 1u32, 1u32, 4u32],
+        );
+        if actor == player {
+            e.vcall(player, 0x4b0, &args![group as u32, 1u32]);
+        }
+        return;
+    }
+    let first = fn_008ba3e0(e, this);
+    let flag = first || fn_008ba410(e, this);
+    let packed = e
+        .call(
+            PACK_ANIM_GROUP,
+            &args![slot_kind, 0u32, group_index, u32::from(flag)],
+        )
+        .u16();
+    let picked = e
+        .call(
+            PICK_BEST_ANIMATION,
+            &args![current_animation, packed as u32, 0u32],
+        )
+        .u16();
+    if picked == 0xff || current_animation == 0 {
+        return;
+    }
+    e.call(
+        PLAY_GROUP,
+        &args![current_animation, picked as u32, 1u32, 1u32, 4u32],
+    );
+    if actor != player {
+        let weapon_type = e.call(WEAPON_ANIM_TYPE, &args![equipped_form, 0u32]).u32();
+        let group = e
+            .call(GET_ANIM_GROUP, &args![actor, weapon_type, 0u32, 0u32, 0u32])
+            .u16();
+        let group_type = e.call(ANIM_GROUP_GET_TYPE, &args![group as u32]).u32();
+        if group_type == weapon_type && animation != 0 {
+            e.call(
+                PLAY_GROUP,
+                &args![
+                    animation,
+                    group as u32,
+                    1u32,
+                    0xffff_ffffu32,
+                    0xffff_ffffu32
+                ],
+            );
+            e.vcall(actor, 0x4b0, &args![group as u32, 1u32]);
+            let slot = e.call(ANIMATION_SLOT, &args![animation, 4u32]).u32();
+            e.call(SET_ANIM_ACTION, &args![actor, 9u32, slot]);
+        }
+    }
+    if actor == player {
+        e.vcall(player, 0x4b0, &args![picked as u32, 0u32]);
+        e.call(SET_ANIM_ACTION, &args![player, 0xffff_ffffu32, 0u32]);
+    }
+}
+
+/// The `0x1` block of `008ba600`: sets up the form of the weapon in hand.
+fn weapon_form_setup(e: &mut Engine, this: Ptr<Actor>) {
+    let actor = this.addr();
+    let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+    let form = if entry != 0 {
+        let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+        e.call(ENTRY_OBJECT, &args![entry]).u32()
+    } else {
+        0
+    };
+    if form == 0 {
+        return;
+    }
+    if e.call(WEAPON_FORM_TEST, &args![form]).bool() {
+        e.call(WEAPON_FORM_PREPARE, &args![form, actor]);
+        let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+        let mut first = 0u8;
+        let mut second = 0u8;
+        if entry != 0 {
+            first = e.call(HAS_MOD_EFFECT_ACTIVE, &args![entry, 0xbu32]).u8();
+            second = e.call(HAS_MOD_EFFECT_ACTIVE, &args![entry, 0x10u32]).u8();
+        }
+        let state = e
+            .call(WEAPON_FORM_STATE, &args![form, first as u32, second as u32])
+            .u32();
+        e.call(ACTOR_APPLY_WEAPON_STATE, &args![actor, state]);
+    } else {
+        let player = e.global::<u32>(PLAYER_POINTER);
+        if actor == player || e.call(ACTOR_STATE_TEST_493BB0, &args![actor]).bool() {
+            e.call(ACTOR_UPDATE_00899200, &args![actor, 0u32, 1u32]);
+        } else {
+            let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+            let object = e.vcall(process, 0x27c, &args![]).u32();
+            if object != 0
+                && (e.call(OBJECT_TYPE, &args![object]).u32() == 8
+                    || e.call(OBJECT_TYPE, &args![object]).u32() == 0x10)
+            {
+                e.call(ACTOR_UPDATE_00899200, &args![actor, 0u32, 1u32]);
+            } else {
+                e.call(ACTOR_UPDATE_00899200, &args![actor, 0u32, 0u32]);
+            }
+        }
+    }
+    if e.call(LIST_NODE_NEXT, &args![form + 0x68]).u32() != 0 {
+        let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+        if entry != 0 {
+            let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+            if e.call(POINTER_GET, &args![entry]).u32() != 0 {
+                let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+                let held = e.call(POINTER_GET, &args![entry]).u32();
+                let data = e.call(LIST_NODE_DATA_ADDRESS, &args![held]).u32();
+                let value = e.mem.u32(data);
+                let entry = process_vcall(e, actor, PROCESS_VSLOT_EQUIPPED, &args![]).u32();
+                let target = e.call(ENTRY_OBJECT, &args![entry]).u32();
+                e.call(SET_ACTION_FLAG, &args![target, value, 0x0040_0000u32]);
+            }
+        }
+    }
+}
+
+/// The `0x2` block of `008ba600`: equips the weapon in hand, or clears the
+/// pending flag `0x2` when one of the animation's slots `0`, `1` or `4` is
+/// not in generic location `1`.
+fn equip_weapon(e: &mut Engine, this: Ptr<Actor>, animation: u32, equipped: u32, form: u32) {
+    let actor = this.addr();
+    let mut all_generic = true;
+    for slot in [0u32, 1, 4] {
+        if e.call(ANIMATION_SLOT, &args![animation, slot]).u32() != 0 {
+            let entry = e.call(ANIMATION_SLOT, &args![animation, slot]).u32();
+            if e.call(GET_GENERIC_LOCATION, &args![entry]).u32() != 1 {
+                all_generic = false;
+                break;
+            }
+        }
+    }
+    if all_generic {
+        let modded = e.call(HAS_MOD_EFFECT_ACTIVE, &args![equipped, 2u32]).u8();
+        e.vcall(actor, 0x3ec, &args![form, 2u32, modded as u32, 0u32]);
+    } else {
+        let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+        e.vcall(process, PROCESS_VSLOT_CLEAR_PENDING, &args![2u32]);
+    }
+}
+
+// Translated from 008bb520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Requests the actor mover to rotate the actor towards the vector
+/// (`ActorMover::RequestRotateActor`), unless the actor cannot move
+/// (`Actor::CanMove`; answers true) or its process has an entry with
+/// `008bb5a0` set (answers true).
+pub fn fn_008bb520(e: &mut Engine, this: Ptr<Actor>, x: f32, y: f32, z: f32, flag: bool) -> bool {
+    if !e.call(ACTOR_CAN_MOVE, &args![this]).bool() {
+        return true;
+    }
+    let process = e.call(ACTOR_PROCESS, &args![this]).u32();
+    if process != 0
+        && e.call(PROCESS_FLAG_0X28, &args![process]).u32() == 0
+        && fn_008bb5a0(e, Ptr::new(process)) != 0
+    {
+        return true;
+    }
+    let mover = e.get(this, Actor::pActorMover);
+    e.call(REQUEST_ROTATE_ACTOR, &args![mover, x, y, z, flag])
+        .bool()
+}
+
+/// `Actor::CanMove` (Xbox PDB).
+const ACTOR_CAN_MOVE: u32 = 0x0088_43a0;
+/// `ECX` = process: returns its word at `+0x28`.
+const PROCESS_FLAG_0X28: u32 = 0x0045_cd60;
+/// `ActorMover::RequestRotateActor` (Xbox PDB): `ECX` = mover, a 12-byte
+/// vector and a flag.
+const REQUEST_ROTATE_ACTOR: u32 = 0x009d_ce20;
+/// `ActorMover::RequestRotateActor_ov2` (Xbox PDB): `ECX` = mover, a
+/// `float` and a flag.
+const REQUEST_ROTATE_ACTOR_OV2: u32 = 0x009d_ce80;
+
+// Translated from 008bb5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the process word at `+0x2ac`.
+pub fn fn_008bb5a0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x2ac)
+}
+
+// Translated from 008bb5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `008bb520` with an angle instead of a vector:
+/// `ActorMover::RequestRotateActor_ov2`.
+pub fn fn_008bb5c0(e: &mut Engine, this: Ptr<Actor>, angle: f32, flag: bool) -> bool {
+    if !e.call(ACTOR_CAN_MOVE, &args![this]).bool() {
+        return true;
+    }
+    let process = e.call(ACTOR_PROCESS, &args![this]).u32();
+    if process != 0
+        && e.call(PROCESS_FLAG_0X28, &args![process]).u32() == 0
+        && fn_008bb5a0(e, Ptr::new(process)) != 0
+    {
+        return true;
+    }
+    let mover = e.get(this, Actor::pActorMover);
+    e.call(REQUEST_ROTATE_ACTOR_OV2, &args![mover, angle, flag])
+        .bool()
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
-    vec![]
+    vec![
+        entry!(0x008b8e90, actor_is_in_faction(Ptr<Actor>, Ptr) -> bool),
+        entry!(0x008b8f20, fn_008b8f20(Ptr<Actor>, u32)),
+        entry!(0x008b8f90, fn_008b8f90(Ptr<Actor>)),
+        entry!(0x008b9220, fn_008b9220(Ptr) -> Ptr),
+        entry!(
+            0x008b9240,
+            actor_condition_modified_callback(Ptr, i32, f32, f32, Ptr)
+        ),
+        entry!(0x008b9790, fn_008b9790(Ptr) -> f32),
+        entry!(0x008b97f0, fn_008b97f0(Ptr, f32)),
+        entry!(
+            0x008b9830,
+            actor_mobility_condition_modified_callback(Ptr, i32, f32, f32, Ptr)
+        ),
+        entry!(0x008b9960, fn_008b9960(Ptr, i32, f32, f32)),
+        entry!(0x008b9ab0, fn_008b9ab0(Ptr)),
+        entry!(0x008b9b10, fn_008b9b10(Ptr)),
+        entry!(0x008b9b70, fn_008b9b70(Ptr) -> f32),
+        entry!(0x008b9be0, fn_008b9be0(Ptr, f32)),
+        entry!(0x008b9c10, fn_008b9c10(Ptr) -> f32),
+        entry!(0x008b9c80, fn_008b9c80(Ptr, f32)),
+        entry!(0x008b9cc0, fn_008b9cc0(Ptr)),
+        entry!(0x008b9d20, fn_008b9d20(Ptr) -> f32),
+        entry!(0x008b9d80, fn_008b9d80(Ptr, f32)),
+        entry!(0x008b9db0, fn_008b9db0(Ptr)),
+        entry!(0x008b9e10, fn_008b9e10(Ptr) -> f32),
+        entry!(0x008b9e70, fn_008b9e70(Ptr, f32)),
+        entry!(
+            0x008b9ea0,
+            actor_endurance_modified_callback(Ptr, u32, f32, f32)
+        ),
+        entry!(0x008b9ff0, fn_008b9ff0(Ptr) -> f32),
+        entry!(0x008ba050, fn_008ba050(Ptr, f32)),
+        entry!(
+            0x008ba090,
+            actor_queue_replacement_locomotion(Ptr<Actor>, f32, f32, f32)
+        ),
+        entry!(0x008ba140, fn_008ba140(Ptr)),
+        entry!(0x008ba210, fn_008ba210(Ptr)),
+        entry!(0x008ba270, fn_008ba270(Ptr)),
+        entry!(0x008ba2b0, fn_008ba2b0(Ptr)),
+        entry!(0x008ba2f0, fn_008ba2f0(Ptr, u32, f32)),
+        entry!(0x008ba3e0, fn_008ba3e0(Ptr<Actor>) -> bool),
+        entry!(0x008ba410, fn_008ba410(Ptr<Actor>) -> bool),
+        entry!(
+            0x008ba440,
+            actor_is_heavy_body_armor_worn(Ptr<Actor>) -> bool
+        ),
+        entry!(0x008ba470, fn_008ba470(Ptr<Actor>) -> bool),
+        entry!(0x008ba4a0, actor_is_anim_idle_quequed(Ptr<Actor>) -> bool),
+        entry!(
+            0x008ba530,
+            actor_is_playing_lower_body_special_idle(Ptr<Actor>) -> bool
+        ),
+        entry!(0x008ba600, fn_008ba600(Ptr<Actor>)),
+        entry!(
+            0x008bb520,
+            fn_008bb520(Ptr<Actor>, f32, f32, f32, bool) -> bool
+        ),
+        entry!(0x008bb5a0, fn_008bb5a0(Ptr) -> u32),
+        entry!(0x008bb5c0, fn_008bb5c0(Ptr<Actor>, f32, bool) -> bool),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    const ACTOR_TABLE: u32 = 0x0200_0000;
+    const OWNER_TABLE: u32 = 0x0200_2000;
+    const PROCESS_TABLE: u32 = 0x0200_4000;
+    const REFERENCE_TABLE: u32 = 0x0200_6000;
+    const BASE_TABLE: u32 = 0x0200_8000;
+    const ANIMATION_TABLE: u32 = 0x0200_a000;
+    const PLAYER_TABLE: u32 = 0x0200_c000;
+
+    fn eax(value: u32) -> Ret {
+        Ret {
+            eax: value,
+            ..Ret::default()
+        }
+    }
+
+    fn st0(value: f32) -> Ret {
+        Ret {
+            st0: value as f64,
+            ..Ret::default()
+        }
+    }
+
+    /// An engine with the vtable areas and the exe data pages the code reads.
+    fn engine() -> Engine {
+        let mut e = Engine::new();
+        for table in [
+            ACTOR_TABLE,
+            OWNER_TABLE,
+            PROCESS_TABLE,
+            REFERENCE_TABLE,
+            BASE_TABLE,
+            ANIMATION_TABLE,
+            PLAYER_TABLE,
+        ] {
+            e.map(table, 0x800);
+        }
+        for page in [
+            0x0101_1000,
+            0x0101_2000,
+            0x0101_6000,
+            0x0119_7000,
+            0x011d_9000,
+            0x011d_e000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DOUBLE_TWO, 2.0f64);
+        e.set_global(DOUBLE_ONE, 1.0f64);
+        e.set_global(FULL_VALUE, 100.0f32);
+        e.set_global(MESSAGE_TIME, 2.0f32);
+        e
+    }
+
+    fn double(e: &mut Engine, addr: u32, ret: Ret) {
+        e.register_double(addr, move |_, _| ret);
+    }
+
+    /// Doubles that answer zero to every address in `addrs`.
+    fn quiet(e: &mut Engine, addrs: &[u32]) {
+        for addr in addrs {
+            double(e, *addr, Ret::default());
+        }
+    }
+
+    fn slot_target(table: u32, offset: u32) -> u32 {
+        0x0300_0000 + (table - 0x0200_0000) + offset
+    }
+
+    /// Puts a function answering `ret` into a vtable slot.
+    fn slot(e: &mut Engine, table: u32, offset: u32, ret: Ret) {
+        let target = slot_target(table, offset);
+        e.mem.set_u32(table + offset, target);
+        double(e, target, ret);
+    }
+
+    /// An actor with the actor and `ActorValueOwner` vtables.
+    fn new_actor(e: &mut Engine) -> Ptr<Actor> {
+        let actor = e.new_object::<Actor>();
+        e.mem.set_u32(actor.addr(), ACTOR_TABLE);
+        e.mem.set_u32(actor.addr() + 0xa4, OWNER_TABLE);
+        actor
+    }
+
+    fn owner(actor: Ptr<Actor>) -> Ptr {
+        Ptr::new(actor.addr() + 0xa4)
+    }
+
+    /// Gives the actor a process with a vtable.
+    fn with_process(e: &mut Engine, actor: Ptr<Actor>) -> u32 {
+        let process = e.mem.alloc(0x800);
+        e.mem.set_u32(process, PROCESS_TABLE);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        process
+    }
+
+    /// Process-level doubles of the cached-values helpers: the process has
+    /// a block at `+0x2c`, and the forwarded masks are recorded.
+    fn cached_helpers(e: &mut Engine) -> Rc<RefCell<Vec<u32>>> {
+        let masks = Rc::new(RefCell::new(Vec::new()));
+        e.register(HAS_CACHED_VALUES, |e, a| {
+            eax((e.mem.u32(a[0] + 0x2c) != 0) as u32)
+        });
+        let seen = masks.clone();
+        e.register_double(PROCESS_FORWARD_FLAG_MASK, move |_, a| {
+            seen.borrow_mut().push(a[1]);
+            Ret::default()
+        });
+        e.register(CACHED_VALUES_ADD_FLAGS, |e, a| {
+            let flags = e.mem.u32(a[0] + 0x44);
+            e.mem.set_u32(a[0] + 0x44, flags | a[1]);
+            Ret::default()
+        });
+        masks
+    }
+
+    fn logged(e: &Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log.clone().unwrap()
+    }
+
+    fn logged_addresses(e: &Engine) -> Vec<u32> {
+        logged(e).iter().map(|entry| entry.0).collect()
+    }
+
+    fn calls_to(e: &Engine, addr: u32) -> Vec<Vec<u32>> {
+        logged(e)
+            .into_iter()
+            .filter(|entry| entry.0 == addr)
+            .map(|entry| entry.1)
+            .collect()
+    }
+
+    // ---- 008b8e90 / 008b8f20 -------------------------------------------
+
+    fn faction_case(changes: u32, in_base: bool, expelled: bool, in_changes: bool) -> bool {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        double(&mut e, EXTRA_LIST_OF_REFERENCE, eax(0x5000));
+        double(&mut e, EXTRA_LIST_GET_FACTION_CHANGES, eax(changes));
+        double(&mut e, GET_BASE_FORM, eax(0x7000));
+        e.register_double(BASE_FACTION_LIST_CONTAINS, move |_, a| {
+            assert_eq!(a, [0x7030, 0x77]);
+            eax(in_base as u32)
+        });
+        double(&mut e, FACTION_CHANGES_IS_EXPELLED, eax(expelled as u32));
+        double(
+            &mut e,
+            FACTION_CHANGES_IS_IN_FACTION,
+            eax(in_changes as u32),
+        );
+        actor_is_in_faction(&mut e, actor, Ptr::new(0x77))
+    }
+
+    #[test]
+    fn faction_membership_uses_the_base_list_without_extra_data() {
+        assert!(faction_case(0, true, true, false));
+        assert!(!faction_case(0, false, false, true));
+    }
+
+    #[test]
+    fn faction_membership_with_extra_data() {
+        // Base member who is not expelled.
+        assert!(faction_case(0x6000, true, false, false));
+        // Base member who is expelled falls back to the extra data.
+        assert!(!faction_case(0x6000, true, true, false));
+        assert!(faction_case(0x6000, true, true, true));
+        // Not a base member: the extra data decides.
+        assert!(faction_case(0x6000, false, false, true));
+        assert!(!faction_case(0x6000, false, false, false));
+    }
+
+    #[test]
+    fn faction_changes_are_added_when_missing() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        slot(&mut e, ACTOR_TABLE, 0x48, Ret::default());
+        double(&mut e, EXTRA_LIST_OF_REFERENCE, eax(0x5000));
+        let lookups = Rc::new(RefCell::new(0));
+        let seen = lookups.clone();
+        e.register_double(EXTRA_LIST_GET_FACTION_CHANGES, move |_, _| {
+            *seen.borrow_mut() += 1;
+            eax(if *seen.borrow() == 1 { 0 } else { 0x6000 })
+        });
+        quiet(
+            &mut e,
+            &[EXTRA_LIST_ADD_FACTION_CHANGES, FACTION_CHANGES_ADD],
+        );
+        e.call_log = Some(vec![]);
+        fn_008b8f20(&mut e, actor, 0x1234);
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x48)),
+            [vec![actor.addr(), 0x8000_0000]]
+        );
+        assert_eq!(calls_to(&e, EXTRA_LIST_ADD_FACTION_CHANGES).len(), 1);
+        assert_eq!(calls_to(&e, FACTION_CHANGES_ADD), [vec![0x6000, 0x1234]]);
+    }
+
+    #[test]
+    fn faction_changes_already_present_are_not_added() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        slot(&mut e, ACTOR_TABLE, 0x48, Ret::default());
+        double(&mut e, EXTRA_LIST_OF_REFERENCE, eax(0x5000));
+        double(&mut e, EXTRA_LIST_GET_FACTION_CHANGES, eax(0x6000));
+        quiet(
+            &mut e,
+            &[EXTRA_LIST_ADD_FACTION_CHANGES, FACTION_CHANGES_ADD],
+        );
+        e.call_log = Some(vec![]);
+        fn_008b8f20(&mut e, actor, 9);
+        assert!(calls_to(&e, EXTRA_LIST_ADD_FACTION_CHANGES).is_empty());
+        assert_eq!(calls_to(&e, FACTION_CHANGES_ADD), [vec![0x6000, 9]]);
+    }
+
+    // ---- 008b8f90 / 008b9220 -------------------------------------------
+
+    /// One contact in the controller's list; `reference_table_slots` decides
+    /// what the struck reference answers. Returns the engine and the actor.
+    fn contact_setup(damage: f32) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.mem.set_u32(PLAYER_POINTER, 0x9000);
+        let contact = e.mem.alloc(0x40);
+        e.mem.set_u32(contact + 4, 0x11);
+        e.mem.set_u32(contact + 8, 0x12);
+        e.mem.set_u32(contact + 0xc, 0x13);
+        e.mem.set_u32(contact + 0x10, 0x21);
+        e.mem.set_u32(contact + 0x14, 0x22);
+        e.mem.set_u32(contact + 0x18, 0x23);
+        let data = e.mem.alloc(8);
+        e.mem.set_u32(data, contact);
+        double(&mut e, GET_CHAR_CONTROLLER, eax(0x3000));
+        e.register(LIST_NODE_IS_EMPTY, |_, _| eax(0));
+        e.register_double(LIST_NODE_DATA_ADDRESS, move |_, _| eax(data));
+        e.register(LIST_NODE_NEXT, |_, _| eax(0));
+        e.register(POINTER_GET, |_, a| eax(a[0] + 0x1000));
+        double(&mut e, PROXY_OBJECT, eax(0x100));
+        double(&mut e, HAVOK_TO_BODY, eax(0x200));
+        double(&mut e, ENTRY_OBJECT, eax(0x300));
+        let reference = e.mem.alloc(8);
+        e.mem.set_u32(reference, REFERENCE_TABLE);
+        double(&mut e, FIND_REFERENCE_FOR_3D, eax(reference));
+        double(&mut e, PLAYER_EXCLUDED_REFERENCE, eax(0x4444));
+        double(&mut e, CONTACT_VALUE_A, st0(1.0));
+        double(&mut e, CONTACT_VALUE_B, st0(2.0));
+        double(&mut e, IMPACT_DAMAGE, st0(damage));
+        double(&mut e, OPERATOR_NEW, eax(0x8000));
+        double(&mut e, HIT_DATA_CONSTRUCTOR, eax(0x8100));
+        quiet(
+            &mut e,
+            &[
+                HIT_DATA_POINTER_CONSTRUCTOR,
+                INITIALIZE_IMPACT_DATA,
+                ACTOR_HIT_ME,
+                HIT_DATA_POINTER_DESTRUCTOR,
+                REACT_TO_CONTACT,
+            ],
+        );
+        slot(&mut e, REFERENCE_TABLE, 0x224, eax(0));
+        slot(&mut e, REFERENCE_TABLE, 0x304, eax(0));
+        (e, actor)
+    }
+
+    #[test]
+    fn contacts_without_a_controller_do_nothing() {
+        let (mut e, actor) = contact_setup(5.0);
+        double(&mut e, GET_CHAR_CONTROLLER, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        assert_eq!(logged_addresses(&e), [GET_CHAR_CONTROLLER]);
+    }
+
+    #[test]
+    fn a_damaging_contact_creates_hit_data_and_hits_the_actor() {
+        let (mut e, actor) = contact_setup(5.0);
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        let impact = calls_to(&e, INITIALIZE_IMPACT_DATA);
+        assert_eq!(impact.len(), 1);
+        // hit data, struck reference, actor, damage, contact entry
+        assert_eq!(impact[0][2], actor.addr());
+        assert_eq!(f32::from_bits(impact[0][3]), 5.0);
+        // `Actor::HitMe` gets the hit data the `NiPointer` slot holds (the
+        // pointer double answers slot + 0x1000) and a zero flag.
+        let hit_me = calls_to(&e, ACTOR_HIT_ME);
+        assert_eq!(hit_me.len(), 1);
+        assert_eq!(hit_me[0][0], actor.addr());
+        assert_eq!(hit_me[0][2], 0);
+        let constructed = calls_to(&e, HIT_DATA_POINTER_CONSTRUCTOR);
+        assert_eq!(constructed[0][1], 0x8100);
+        assert_eq!(hit_me[0][1], constructed[0][0] + 0x1000);
+        assert_eq!(calls_to(&e, HIT_DATA_CONSTRUCTOR), [vec![0x8000]]);
+        assert_eq!(calls_to(&e, HIT_DATA_POINTER_DESTRUCTOR).len(), 1);
+        assert!(calls_to(&e, REACT_TO_CONTACT).is_empty());
+        // The damage formula got (value B, value A).
+        let formula = calls_to(&e, IMPACT_DAMAGE);
+        assert_eq!(f32::from_bits(formula[0][0]), 2.0);
+        assert_eq!(f32::from_bits(formula[0][1]), 1.0);
+    }
+
+    #[test]
+    fn a_contact_without_damage_does_nothing() {
+        let (mut e, actor) = contact_setup(0.0);
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        assert!(calls_to(&e, OPERATOR_NEW).is_empty());
+        assert!(calls_to(&e, ACTOR_HIT_ME).is_empty());
+    }
+
+    #[test]
+    fn the_players_own_reference_is_skipped() {
+        let (mut e, actor) = contact_setup(5.0);
+        let reference = e.call(FIND_REFERENCE_FOR_3D, &args![]).u32();
+        double(&mut e, PLAYER_EXCLUDED_REFERENCE, eax(reference));
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        assert!(calls_to(&e, IMPACT_DAMAGE).is_empty());
+        assert!(calls_to(&e, REACT_TO_CONTACT).is_empty());
+    }
+
+    #[test]
+    fn a_character_reference_of_type_three_reacts_to_the_contact() {
+        let (mut e, actor) = contact_setup(5.0);
+        slot(&mut e, REFERENCE_TABLE, 0x224, eax(1));
+        slot(&mut e, REFERENCE_TABLE, 0x304, eax(3));
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        let reaction = calls_to(&e, REACT_TO_CONTACT);
+        assert_eq!(reaction.len(), 1);
+        // reference, controller, vector at +4, vector at +0x10
+        assert_eq!(
+            reaction[0][1..],
+            [0x3000, 0x11, 0x12, 0x13, 0x21, 0x22, 0x23]
+        );
+        assert!(calls_to(&e, IMPACT_DAMAGE).is_empty());
+    }
+
+    #[test]
+    fn a_character_reference_of_another_type_is_ignored() {
+        let (mut e, actor) = contact_setup(5.0);
+        slot(&mut e, REFERENCE_TABLE, 0x224, eax(1));
+        slot(&mut e, REFERENCE_TABLE, 0x304, eax(2));
+        e.call_log = Some(vec![]);
+        fn_008b8f90(&mut e, actor);
+        assert!(calls_to(&e, REACT_TO_CONTACT).is_empty());
+        assert!(calls_to(&e, IMPACT_DAMAGE).is_empty());
+    }
+
+    #[test]
+    fn the_contact_list_head_is_inside_the_controller() {
+        let mut e = engine();
+        assert_eq!(fn_008b9220(&mut e, Ptr::new(0x1000)).addr(), 0x1648);
+        assert_eq!(e.call(0x008b9220, &args![0x2000u32]).u32(), 0x2648);
+    }
+
+    // ---- 008b9240 ---------------------------------------------------------
+
+    /// Callback setup: the owner's value for any index is `value`, virtual
+    /// `+0x360` answers `limb_actor`, and the player is `player`.
+    fn condition_setup(value: f32, limb_actor: bool, player: u32) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        e.mem.set_u32(PLAYER_POINTER, player);
+        slot(&mut e, OWNER_TABLE, 0xc, st0(value));
+        slot(&mut e, ACTOR_TABLE, 0x360, eax(limb_actor as u32));
+        slot(&mut e, ACTOR_TABLE, 0x394, Ret::default());
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(0));
+        quiet(
+            &mut e,
+            &[
+                SURGERY_MENU_RESET_LIMB,
+                SHOW_CRIPPLED_GUY,
+                TRIGGER_PAIN,
+                MISC_STAT_INCREMENT,
+                REFRESH_AFTER_LIMB_CHANGE,
+                REQUEST_LOCOMOTION_CHANGE,
+            ],
+        );
+        cached_helpers(&mut e);
+        (e, actor)
+    }
+
+    #[test]
+    fn crippling_a_limb_of_the_player_shows_the_hud_effect() {
+        let (mut e, actor) = condition_setup(0.0, true, 0);
+        e.mem.set_u32(PLAYER_POINTER, actor.addr());
+        e.call_log = Some(vec![]);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x19, 20.0, -20.0, Ptr::new(0));
+        assert_eq!(calls_to(&e, SURGERY_MENU_RESET_LIMB), [vec![0x19]]);
+        assert_eq!(calls_to(&e, SHOW_CRIPPLED_GUY).len(), 1);
+        assert_eq!(calls_to(&e, TRIGGER_PAIN), [vec![actor.addr(), 1, 0]]);
+        assert_eq!(calls_to(&e, MISC_STAT_INCREMENT), [vec![0x1e]]);
+        assert!(calls_to(&e, REFRESH_AFTER_LIMB_CHANGE).is_empty());
+    }
+
+    #[test]
+    fn a_limb_that_keeps_some_condition_is_not_crippled() {
+        let (mut e, actor) = condition_setup(5.0, true, 0);
+        e.call_log = Some(vec![]);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x19, 20.0, -15.0, Ptr::new(0));
+        assert!(calls_to(&e, SHOW_CRIPPLED_GUY).is_empty());
+        // Index 0x19 with a change flags the cached values (the process has
+        // none here, so nothing is forwarded).
+        assert!(calls_to(&e, PROCESS_FORWARD_FLAG_MASK).is_empty());
+    }
+
+    fn message_setup() -> (Engine, Ptr<Actor>, Ptr<Actor>) {
+        let (mut e, actor) = condition_setup(0.0, false, 0);
+        let player = new_actor(&mut e);
+        e.mem.set_u32(PLAYER_POINTER, player.addr());
+        e.mem.set_u32(HUD_MAIN_MENU_POINTER, 0x6000);
+        e.mem
+            .set_u32(BASE_TABLE + 0x180, slot_target(BASE_TABLE, 0x180));
+        double(&mut e, slot_target(BASE_TABLE, 0x180), eax(0x7100));
+        double(&mut e, GET_BASE_FORM, eax(BASE_TABLE_OBJECT));
+        e.mem.set_u32(BASE_TABLE_OBJECT, BASE_TABLE);
+        double(&mut e, GET_BODY_PART, eax(0x7200));
+        double(&mut e, BODY_PART_NAME, eax(0x7300));
+        quiet(
+            &mut e,
+            &[COPY_STRING, BUILD_LIMB_TEXT, FORMAT_STRING, SHOW_MESSAGE],
+        );
+        double(&mut e, ACTOR_NAME, eax(0x7400));
+        (e, actor, player)
+    }
+
+    /// An object that has the base form vtable.
+    const BASE_TABLE_OBJECT: u32 = 0x0200_8400;
+
+    #[test]
+    fn the_player_crippling_another_actors_head_shows_a_message() {
+        let (mut e, actor, player) = message_setup();
+        e.call_log = Some(vec![]);
+        // Index 0x1f also asks the actor's virtual +0x394 with 100.0.
+        actor_condition_modified_callback(&mut e, owner(actor), 0x1f, 20.0, -20.0, owner(player));
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x394)),
+            [vec![actor.addr(), 0, 100.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&e, GET_BODY_PART), [vec![0x7100, 0x1f]]);
+        let text = calls_to(&e, BUILD_LIMB_TEXT);
+        assert_eq!(text[0][0..2], [0x1f, 0x7300]);
+        assert_eq!(text[0][3], 200);
+        let format = calls_to(&e, FORMAT_STRING);
+        assert_eq!(format[0][1..4], [500, FORMAT_TWO_STRINGS, 0x7400]);
+        let shown = calls_to(&e, SHOW_MESSAGE);
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0][0], 0x6000);
+        assert_eq!(shown[0][2..5], [1, ICON_VERY_HAPPY, SOUND_POPUP_GENERAL]);
+        assert_eq!(f32::from_bits(shown[0][5]), 2.0);
+    }
+
+    #[test]
+    fn no_message_when_someone_else_caused_it_or_the_hud_is_missing() {
+        let (mut e, actor, player) = message_setup();
+        e.call_log = Some(vec![]);
+        // The source is not the player.
+        actor_condition_modified_callback(&mut e, owner(actor), 0x1f, 20.0, -20.0, owner(actor));
+        assert!(calls_to(&e, SHOW_MESSAGE).is_empty());
+        // No HUD.
+        e.mem.set_u32(HUD_MAIN_MENU_POINTER, 0);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x1a, 20.0, -20.0, owner(player));
+        assert!(calls_to(&e, SHOW_MESSAGE).is_empty());
+        // Virtual +0x22c answering true.
+        e.mem.set_u32(HUD_MAIN_MENU_POINTER, 0x6000);
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(1));
+        actor_condition_modified_callback(&mut e, owner(actor), 0x1a, 20.0, -20.0, owner(player));
+        assert!(calls_to(&e, SHOW_MESSAGE).is_empty());
+        // A head with a body part of data that has no part still messages.
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(0));
+        double(&mut e, GET_BODY_PART, eax(0));
+        actor_condition_modified_callback(&mut e, owner(actor), 0x1a, 20.0, -20.0, owner(player));
+        assert_eq!(calls_to(&e, SHOW_MESSAGE).len(), 1);
+        assert_eq!(calls_to(&e, BUILD_LIMB_TEXT)[0][1], 0);
+    }
+
+    #[test]
+    fn mobility_value_queues_the_replacement_locomotion() {
+        let (mut e, actor) = condition_setup(0.0, false, 0);
+        // Both legs crippled; the value went from 3 to 0.
+        e.register(GET_BODY_PART_CONDITION, |_, _| st0(0.0));
+        e.call_log = Some(vec![]);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x48, 3.0, -3.0, Ptr::new(0));
+        // delta = 0 - 1 < 0 with sum 2.0 and b == 0: requests (actor, 1, 0),
+        // once for each leg.
+        assert_eq!(
+            calls_to(&e, REQUEST_LOCOMOTION_CHANGE),
+            [vec![actor.addr(), 1, 0], vec![actor.addr(), 1, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, REFRESH_AFTER_LIMB_CHANGE),
+            [vec![actor.addr()]]
+        );
+    }
+
+    #[test]
+    fn mobility_value_restored_from_zero_queues_the_other_request() {
+        let (mut e, actor) = condition_setup(7.0, false, 0);
+        e.register(GET_BODY_PART_CONDITION, |_, a| {
+            st0(if a[1] == 0x1d { 0.0 } else { 9.0 })
+        });
+        e.call_log = Some(vec![]);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x48, 0.0, 7.0, Ptr::new(0));
+        // delta = 1 - 0 > 0, sum 1 < 2, b != 0 and c > 0: (actor, 0, 0),
+        // once: only the left leg condition is not above zero.
+        assert_eq!(
+            calls_to(&e, REQUEST_LOCOMOTION_CHANGE),
+            [vec![actor.addr(), 0, 0]]
+        );
+    }
+
+    #[test]
+    fn perception_changes_forward_the_cached_flag() {
+        let (mut e, actor) = condition_setup(9.0, false, 0);
+        let masks = cached_helpers(&mut e);
+        let process = with_process(&mut e, actor);
+        let cached = e.mem.alloc(0x48);
+        e.mem.set_u32(process + 0x2c, cached);
+        actor_condition_modified_callback(&mut e, owner(actor), 0x19, 9.0, 1.0, Ptr::new(0));
+        assert_eq!(*masks.borrow(), [0x100]);
+        // A zero change forwards nothing.
+        actor_condition_modified_callback(&mut e, owner(actor), 0x19, 9.0, 0.0, Ptr::new(0));
+        assert_eq!(*masks.borrow(), [0x100]);
+    }
+
+    #[test]
+    fn a_null_owner_does_nothing() {
+        let (mut e, _) = condition_setup(0.0, true, 0);
+        e.call_log = Some(vec![]);
+        actor_condition_modified_callback(&mut e, Ptr::new(0), 0x19, 1.0, -1.0, Ptr::new(0));
+        assert!(logged(&e).is_empty());
+    }
+
+    // ---- 008b9790 and the cached-value family ---------------------------
+
+    /// An actor whose process has a cached-values block; returns the
+    /// `CachedValuesOwner` pointer and the block.
+    fn cached_actor(e: &mut Engine) -> (Ptr<Actor>, Ptr, u32) {
+        let actor = new_actor(e);
+        let process = with_process(e, actor);
+        let cached = e.mem.alloc(0x48);
+        e.mem.set_u32(process + 0x2c, cached);
+        cached_helpers(e);
+        let cache_owner = Ptr::new(actor.addr() + 0xa8);
+        (actor, cache_owner, cached)
+    }
+
+    #[test]
+    fn perception_condition_is_cached() {
+        let mut e = engine();
+        let (_, cache_owner, cached) = cached_actor(&mut e);
+        slot(&mut e, OWNER_TABLE, 0xc, st0(0.75));
+        e.call_log = Some(vec![]);
+        assert_eq!(fn_008b9790(&mut e, cache_owner), 0.75);
+        assert_eq!(calls_to(&e, slot_target(OWNER_TABLE, 0xc)).len(), 1);
+        assert_eq!(calls_to(&e, slot_target(OWNER_TABLE, 0xc))[0][1], 0x19);
+        assert_eq!(e.mem.f32(cached + 0x28), 0.75);
+        assert_eq!(e.mem.u32(cached + 0x44), 0x100);
+    }
+
+    #[test]
+    fn cached_values_are_not_stored_without_a_block() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        with_process(&mut e, actor);
+        cached_helpers(&mut e);
+        slot(&mut e, OWNER_TABLE, 0xc, st0(0.75));
+        let cache_owner = Ptr::new(actor.addr() + 0xa8);
+        assert_eq!(fn_008b9790(&mut e, cache_owner), 0.75);
+        // Without a process either.
+        let bare = new_actor(&mut e);
+        let bare_owner = Ptr::new(bare.addr() + 0xa8);
+        assert_eq!(fn_008b9790(&mut e, bare_owner), 0.75);
+    }
+
+    #[test]
+    fn the_stat_virtuals_store_into_their_fields() {
+        // (function, field offset, flag mask, source of the value)
+        type Getter = fn(&mut Engine, Ptr) -> f32;
+        let cases: [(Getter, u32, u32, Option<u32>); 6] = [
+            (fn_008b9790, 0x28, 0x100, Some(0x19)),
+            (fn_008b9d20, 0x1c, 0x20, Some(0x2f)),
+            (fn_008b9e10, 0x20, 0x40, Some(0xf)),
+            (fn_008b9ff0, 0x24, 0x80, Some(0xf)),
+            (fn_008b9b70, 0x14, 0x10, None),
+            (fn_008b9c10, 0x18, 0x8000_0000, None),
+        ];
+        for (getter, field, mask, index) in cases {
+            let mut e = engine();
+            let (_, cache_owner, cached) = cached_actor(&mut e);
+            slot(&mut e, OWNER_TABLE, 0xc, st0(0.5));
+            double(&mut e, CACHED_VALUE_MEDICINE, st0(1.5));
+            double(&mut e, CACHED_VALUE_SURVIVAL, st0(2.5));
+            e.call_log = Some(vec![]);
+            let value = getter(&mut e, cache_owner);
+            let expected = match index {
+                Some(_) => 0.5,
+                None if field == 0x14 => 1.5,
+                None => 2.5,
+            };
+            assert_eq!(value, expected, "field {field:#x}");
+            assert_eq!(e.mem.f32(cached + field), expected, "field {field:#x}");
+            assert_eq!(e.mem.u32(cached + 0x44), mask, "field {field:#x}");
+            if let Some(index) = index {
+                assert_eq!(calls_to(&e, slot_target(OWNER_TABLE, 0xc))[0][1], index);
+            }
+        }
+    }
+
+    #[test]
+    fn the_medicine_value_gets_the_owner_pointer() {
+        let mut e = engine();
+        let (actor, cache_owner, _) = cached_actor(&mut e);
+        double(&mut e, CACHED_VALUE_MEDICINE, st0(1.5));
+        e.call_log = Some(vec![]);
+        fn_008b9b70(&mut e, cache_owner);
+        assert_eq!(
+            calls_to(&e, CACHED_VALUE_MEDICINE),
+            [vec![actor.addr() + 0xa4]]
+        );
+    }
+
+    #[test]
+    fn the_setters_store_the_given_value() {
+        type Setter = fn(&mut Engine, Ptr, f32);
+        let cases: [(Setter, u32, u32); 6] = [
+            (fn_008b97f0, 0x28, 0x100),
+            (fn_008b9be0, 0x14, 0x10),
+            (fn_008b9c80, 0x18, 0x8000_0000),
+            (fn_008b9d80, 0x1c, 0x20),
+            (fn_008b9e70, 0x20, 0x40),
+            (fn_008ba050, 0x24, 0x80),
+        ];
+        for (setter, field, mask) in cases {
+            let mut e = engine();
+            let actor = new_actor(&mut e);
+            let process = with_process(&mut e, actor);
+            cached_helpers(&mut e);
+            // Without a block nothing happens.
+            setter(&mut e, Ptr::new(process), 3.5);
+            let cached = e.mem.alloc(0x48);
+            e.mem.set_u32(process + 0x2c, cached);
+            setter(&mut e, Ptr::new(process), 3.5);
+            assert_eq!(e.mem.f32(cached + field), 3.5);
+            assert_eq!(e.mem.u32(cached + 0x44), mask);
+        }
+    }
+
+    // ---- the mask callbacks ---------------------------------------------
+
+    #[test]
+    fn mask_callbacks_forward_their_masks_to_the_process() {
+        type Callback = fn(&mut Engine, Ptr);
+        let cases: [(Callback, u32); 6] = [
+            (fn_008b9ab0, 0x10),
+            (fn_008b9b10, 0x8000_0000),
+            (fn_008b9cc0, 0x20),
+            (fn_008b9db0, 0x40),
+            (fn_008ba140, 0x400),
+            (fn_008ba210, 0x800),
+        ];
+        for (callback, mask) in cases {
+            let mut e = engine();
+            let (actor, _, _) = cached_actor(&mut e);
+            // 008ba140 also touches the combat controller and the process.
+            slot(&mut e, ACTOR_TABLE, 0x428, eax(0));
+            let process = e.mem.u32(actor.addr() + 0x68);
+            double(&mut e, ACTOR_PROCESS, eax(process));
+            slot(&mut e, PROCESS_TABLE, 0x68, Ret::default());
+            slot(&mut e, PROCESS_TABLE, 0x6c, Ret::default());
+            let masks = cached_helpers(&mut e);
+            callback(&mut e, Ptr::new(0));
+            assert!(masks.borrow().is_empty());
+            callback(&mut e, owner(actor));
+            assert_eq!(*masks.borrow(), [mask], "mask {mask:#x}");
+        }
+    }
+
+    #[test]
+    fn mask_callbacks_need_a_process_with_a_block() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let masks = cached_helpers(&mut e);
+        fn_008b9ab0(&mut e, owner(actor));
+        assert!(masks.borrow().is_empty());
+        with_process(&mut e, actor);
+        fn_008b9ab0(&mut e, owner(actor));
+        assert!(masks.borrow().is_empty());
+    }
+
+    #[test]
+    fn combat_controller_work_before_the_0x400_mask() {
+        let mut e = engine();
+        let (actor, _, _) = cached_actor(&mut e);
+        let process = e.mem.u32(actor.addr() + 0x68);
+        double(&mut e, ACTOR_PROCESS, eax(process));
+        slot(&mut e, ACTOR_TABLE, 0x428, eax(0x5500));
+        slot(&mut e, PROCESS_TABLE, 0x68, Ret::default());
+        slot(&mut e, PROCESS_TABLE, 0x6c, Ret::default());
+        double(&mut e, ACTOR_COMBAT_CONTROLLER_STATE, eax(0x5600));
+        double(&mut e, COMBAT_CONTROLLER_APPLY, Ret::default());
+        e.call_log = Some(vec![]);
+        fn_008ba140(&mut e, owner(actor));
+        let addresses = logged_addresses(&e);
+        assert_eq!(calls_to(&e, COMBAT_CONTROLLER_APPLY), [vec![0x5600]]);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x68)),
+            [vec![process, actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x6c)),
+            [vec![process, actor.addr()]]
+        );
+        assert!(addresses.contains(&PROCESS_FORWARD_FLAG_MASK));
+    }
+
+    // ---- 008b9830 / 008b9960 / 008b9ea0 / 008ba090 ----------------------
+
+    #[test]
+    fn mobility_callback_for_other_values_only_runs_the_general_one() {
+        let (mut e, actor) = condition_setup(5.0, false, 0);
+        e.call_log = Some(vec![]);
+        actor_mobility_condition_modified_callback(
+            &mut e,
+            owner(actor),
+            0x19,
+            1.0,
+            1.0,
+            Ptr::new(0),
+        );
+        assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
+        actor_mobility_condition_modified_callback(
+            &mut e,
+            Ptr::new(0),
+            0x1d,
+            1.0,
+            1.0,
+            Ptr::new(0),
+        );
+        assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
+    }
+
+    #[test]
+    fn mobility_callback_queues_with_the_other_legs_condition() {
+        let (mut e, actor) = condition_setup(5.0, false, 0);
+        slot(&mut e, OWNER_TABLE, 0x8, eax(0));
+        quiet(&mut e, &[REFRESH_BEFORE_QUEUE]);
+        // Left leg (0x1d) condition 0, right leg (0x1e) condition 4.
+        e.register(GET_BODY_PART_CONDITION, |_, a| {
+            st0(if a[1] == 0x1d { 0.0 } else { 4.0 })
+        });
+        e.call_log = Some(vec![]);
+        // Index 0x1d: flag is 1.0 for a positive previous value; current = 0,
+        // other = 4: delta = 0 - 1 < 0, sum = 1 + 4 = 5: no request.
+        actor_mobility_condition_modified_callback(
+            &mut e,
+            owner(actor),
+            0x1d,
+            3.0,
+            -3.0,
+            Ptr::new(0),
+        );
+        assert_eq!(calls_to(&e, REFRESH_BEFORE_QUEUE), [vec![actor.addr()]]);
+        assert!(calls_to(&e, REQUEST_LOCOMOTION_CHANGE).is_empty());
+        let conditions = calls_to(&e, GET_BODY_PART_CONDITION);
+        assert_eq!(conditions[0][1], 0x1e);
+        // Index 0x1e with the other leg at 0: current = 4 > 0 when the flag
+        // is 0.0 (previous 0): delta = 4 > 0, sum = 0 + 0 < 2, b != 0, c = 0
+        // is not > 0: no request.
+        actor_mobility_condition_modified_callback(
+            &mut e,
+            owner(actor),
+            0x1e,
+            0.0,
+            1.0,
+            Ptr::new(0),
+        );
+        assert!(calls_to(&e, REQUEST_LOCOMOTION_CHANGE).is_empty());
+    }
+
+    #[test]
+    fn mobility_callback_stops_when_the_owner_answers_non_zero() {
+        let (mut e, actor) = condition_setup(5.0, false, 0);
+        slot(&mut e, OWNER_TABLE, 0x8, eax(1));
+        quiet(&mut e, &[REFRESH_BEFORE_QUEUE]);
+        e.call_log = Some(vec![]);
+        actor_mobility_condition_modified_callback(
+            &mut e,
+            owner(actor),
+            0x1d,
+            3.0,
+            -3.0,
+            Ptr::new(0),
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(OWNER_TABLE, 0x8)),
+            [vec![owner(actor).addr(), 0x48]]
+        );
+        assert!(calls_to(&e, REFRESH_BEFORE_QUEUE).is_empty());
+    }
+
+    fn limb_flag_setup(current: f32) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        with_process(&mut e, actor);
+        slot(&mut e, OWNER_TABLE, 0x20, st0(current));
+        double(&mut e, PROCESS_SET_STATE_FLAG, Ret::default());
+        (e, actor)
+    }
+
+    #[test]
+    fn dropping_below_the_sum_sets_the_state_flag() {
+        for (index, mask) in [(0x10, 0x2000_0000u32), (0x16, 0x4000_0000)] {
+            let (mut e, actor) = limb_flag_setup(8.0);
+            let process = e.mem.u32(actor.addr() + 0x68);
+            e.call_log = Some(vec![]);
+            // 5 + -1 = 4 < 8 with a negative change.
+            fn_008b9960(&mut e, owner(actor), index, 5.0, -1.0);
+            assert_eq!(
+                calls_to(&e, PROCESS_SET_STATE_FLAG),
+                [vec![process, mask, 1]]
+            );
+            assert_eq!(
+                calls_to(&e, slot_target(OWNER_TABLE, 0x20)),
+                [vec![owner(actor).addr(), index as u32]]
+            );
+        }
+    }
+
+    #[test]
+    fn rising_to_the_sum_clears_the_state_flag() {
+        let (mut e, actor) = limb_flag_setup(4.0);
+        let process = e.mem.u32(actor.addr() + 0x68);
+        e.call_log = Some(vec![]);
+        // 3 + 1 = 4 and the value is 4 (not above): positive change clears.
+        fn_008b9960(&mut e, owner(actor), 0x10, 3.0, 1.0);
+        assert_eq!(
+            calls_to(&e, PROCESS_SET_STATE_FLAG),
+            [vec![process, 0x2000_0000, 0]]
+        );
+    }
+
+    #[test]
+    fn other_indices_or_no_process_do_nothing_for_the_state_flag() {
+        let (mut e, actor) = limb_flag_setup(8.0);
+        e.call_log = Some(vec![]);
+        fn_008b9960(&mut e, owner(actor), 0x11, 5.0, -1.0);
+        fn_008b9960(&mut e, Ptr::new(0), 0x10, 5.0, -1.0);
+        // A zero change is neither.
+        fn_008b9960(&mut e, owner(actor), 0x10, 5.0, 0.0);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(0));
+        fn_008b9960(&mut e, owner(actor), 0x10, 5.0, -1.0);
+        assert!(calls_to(&e, PROCESS_SET_STATE_FLAG).is_empty());
+    }
+
+    fn endurance_setup(first: f32, second: f32, third: f32, health: u32) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let process = with_process(&mut e, actor);
+        let cached = e.mem.alloc(0x48);
+        e.mem.set_u32(process + 0x2c, cached);
+        cached_helpers(&mut e);
+        slot(&mut e, OWNER_TABLE, 0x14, st0(first));
+        slot(&mut e, OWNER_TABLE, 0x18, st0(second));
+        slot(&mut e, OWNER_TABLE, 0x10, st0(third));
+        double(&mut e, ENDURANCE_ADJUSTMENT, st0(-3.0));
+        double(&mut e, GET_BASE_FORM, eax(0x7000));
+        double(&mut e, GET_BASE_HEALTH, eax(health));
+        double(&mut e, RESTORE_ACTOR_VALUE, Ret::default());
+        (e, actor)
+    }
+
+    #[test]
+    fn endurance_loss_restores_the_missing_health() {
+        // value -2, health 10, +0x18 = 4, +0x10 = 1, adjustment -3: the sum
+        // is 1 + (4 + 10) - 2 - 3 = 10 > 0: nothing to restore.
+        let (mut e, actor) = endurance_setup(-2.0, 4.0, 1.0, 10);
+        e.call_log = Some(vec![]);
+        actor_endurance_modified_callback(&mut e, owner(actor), 0, 10.0, -5.0);
+        assert!(calls_to(&e, RESTORE_ACTOR_VALUE).is_empty());
+        assert_eq!(
+            calls_to(&e, ENDURANCE_ADJUSTMENT),
+            [vec![owner(actor).addr(), 5.0f32.to_bits()]]
+        );
+        // health -20: the sum is 1 + (4 - 20) - 2 - 3 = -20: restore 21.
+        let (mut e, actor) = endurance_setup(-2.0, 4.0, 1.0, (-20i32) as u32);
+        e.call_log = Some(vec![]);
+        actor_endurance_modified_callback(&mut e, owner(actor), 0, 10.0, -5.0);
+        assert_eq!(
+            calls_to(&e, RESTORE_ACTOR_VALUE),
+            [vec![actor.addr(), 0x10, 21.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn endurance_callback_flags_the_cache_and_needs_a_loss() {
+        let (mut e, actor) = endurance_setup(-2.0, 4.0, 1.0, 10);
+        let masks = cached_helpers(&mut e);
+        e.call_log = Some(vec![]);
+        // A gain: only the flag is forwarded.
+        actor_endurance_modified_callback(&mut e, owner(actor), 0, 10.0, 5.0);
+        assert_eq!(*masks.borrow(), [0x80]);
+        assert!(calls_to(&e, ENDURANCE_ADJUSTMENT).is_empty());
+        // A loss while actor value 0x10 is not negative: no adjustment.
+        slot(&mut e, OWNER_TABLE, 0x14, st0(0.0));
+        actor_endurance_modified_callback(&mut e, owner(actor), 0, 10.0, -5.0);
+        assert!(calls_to(&e, ENDURANCE_ADJUSTMENT).is_empty());
+        actor_endurance_modified_callback(&mut e, Ptr::new(0), 0, 10.0, -5.0);
+        assert_eq!(masks.borrow().len(), 2);
+    }
+
+    fn locomotion(a: f32, b: f32, c: f32) -> Vec<Vec<u32>> {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        double(&mut e, REQUEST_LOCOMOTION_CHANGE, Ret::default());
+        e.call_log = Some(vec![]);
+        actor_queue_replacement_locomotion(&mut e, actor, a, b, c);
+        calls_to(&e, REQUEST_LOCOMOTION_CHANGE)
+            .into_iter()
+            .map(|call| call[1..].to_vec())
+            .collect()
+    }
+
+    #[test]
+    fn replacement_locomotion_requests() {
+        // delta < 0, sum == 2.0, b == 0.
+        assert_eq!(locomotion(1.0, 0.0, 1.0), [vec![1, 0]]);
+        // delta < 0 but sum != 2.0.
+        assert!(locomotion(1.0, 0.0, 0.5).is_empty());
+        // delta < 0 with b != 0.
+        assert!(locomotion(1.0, 0.5, 1.0).is_empty());
+        // delta > 0, sum < 2.0, b != 0, c > 0.
+        assert_eq!(locomotion(0.0, 1.0, 1.0), [vec![0, 0]]);
+        // c not positive, sum not below 2.0 or delta zero.
+        assert!(locomotion(0.0, 1.0, 0.0).is_empty());
+        assert!(locomotion(1.5, 2.0, 1.0).is_empty());
+        assert!(locomotion(1.0, 1.0, 1.0).is_empty());
+    }
+
+    // ---- 008ba270 / 008ba2b0 / 008ba2f0 ----------------------------------
+
+    #[test]
+    fn simple_actor_callbacks() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        slot(&mut e, ACTOR_TABLE, 0x3c4, Ret::default());
+        double(&mut e, ACTOR_CALLBACK_008C4400, Ret::default());
+        e.call_log = Some(vec![]);
+        fn_008ba270(&mut e, owner(actor));
+        fn_008ba270(&mut e, Ptr::new(0));
+        fn_008ba2b0(&mut e, owner(actor));
+        fn_008ba2b0(&mut e, Ptr::new(0));
+        assert_eq!(
+            logged(&e),
+            [
+                (slot_target(ACTOR_TABLE, 0x3c4), vec![actor.addr()]),
+                (ACTOR_CALLBACK_008C4400, vec![actor.addr()]),
+            ]
+        );
+    }
+
+    fn surprise_setup(
+        limb_actor: bool,
+        answered: bool,
+        god_mode: bool,
+        value: f32,
+    ) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let player = e.mem.alloc(8);
+        e.mem.set_u32(player, PLAYER_TABLE);
+        e.mem.set_u32(PLAYER_POINTER, player);
+        slot(&mut e, ACTOR_TABLE, 0x360, eax(limb_actor as u32));
+        slot(&mut e, PLAYER_TABLE, 0x358, eax(answered as u32));
+        double(&mut e, PLAYER_IS_GOD_MODE, eax(god_mode as u32));
+        double(&mut e, PLAYER_VALUE_008A0C20, st0(value));
+        double(&mut e, MESSAGE_QUEUE_ADD, eax(0x5a5a));
+        double(&mut e, MESSAGE_QUEUE_SHOW, Ret::default());
+        (e, actor)
+    }
+
+    #[test]
+    fn the_surprised_message_needs_the_player_answer_and_a_big_enough_value() {
+        let (mut e, actor) = surprise_setup(true, true, false, 10.0);
+        e.call_log = Some(vec![]);
+        fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        assert_eq!(
+            calls_to(&e, MESSAGE_QUEUE_ADD),
+            [vec![
+                MESSAGE_QUEUE,
+                0,
+                ICON_SURPRISED,
+                0,
+                2.0f32.to_bits(),
+                0
+            ]]
+        );
+        assert_eq!(calls_to(&e, MESSAGE_QUEUE_SHOW), [vec![0x5a5a]]);
+        // The value is below the threshold: no message.
+        let (mut e, actor) = surprise_setup(true, true, false, 3.0);
+        e.call_log = Some(vec![]);
+        fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        assert!(calls_to(&e, MESSAGE_QUEUE_SHOW).is_empty());
+        // God mode makes the low value irrelevant.
+        let (mut e, actor) = surprise_setup(true, true, true, 3.0);
+        e.call_log = Some(vec![]);
+        fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        assert_eq!(calls_to(&e, MESSAGE_QUEUE_SHOW).len(), 1);
+        // The player did not answer.
+        let (mut e, actor) = surprise_setup(true, false, false, 10.0);
+        e.call_log = Some(vec![]);
+        fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        assert!(calls_to(&e, MESSAGE_QUEUE_SHOW).is_empty());
+        // The actor fails its test: the player is not even asked.
+        let (mut e, actor) = surprise_setup(false, true, false, 10.0);
+        e.call_log = Some(vec![]);
+        fn_008ba2f0(&mut e, owner(actor), 0, 5.0);
+        fn_008ba2f0(&mut e, Ptr::new(0), 0, 5.0);
+        assert!(calls_to(&e, slot_target(PLAYER_TABLE, 0x358)).is_empty());
+    }
+
+    // ---- the process getters and idle tests ------------------------------
+
+    #[test]
+    fn process_flag_getters() {
+        type Getter = fn(&mut Engine, Ptr<Actor>) -> bool;
+        let cases: [(Getter, u32); 4] = [
+            (fn_008ba3e0, 0x6f4),
+            (fn_008ba410, 0x6ec),
+            (actor_is_heavy_body_armor_worn, 0x6e8),
+            (fn_008ba470, 0x6f0),
+        ];
+        for (getter, offset) in cases {
+            let mut e = engine();
+            let actor = new_actor(&mut e);
+            assert!(!getter(&mut e, actor));
+            with_process(&mut e, actor);
+            slot(&mut e, PROCESS_TABLE, offset, eax(0));
+            assert!(!getter(&mut e, actor));
+            slot(&mut e, PROCESS_TABLE, offset, eax(1));
+            assert!(getter(&mut e, actor));
+        }
+    }
+
+    fn queued(flags: u32) -> bool {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        with_process(&mut e, actor);
+        slot(&mut e, PROCESS_TABLE, 0x618, eax(flags));
+        actor_is_anim_idle_quequed(&mut e, actor)
+    }
+
+    #[test]
+    fn anim_idle_queued_tests_ten_bits() {
+        assert!(!queued(0));
+        for bit in [
+            0x4, 0x8, 0x10, 0x40, 0x80, 0x100, 0x400, 0x800, 0x1000, 0x2000,
+        ] {
+            assert!(queued(bit), "bit {bit:#x}");
+            assert!(queued(bit | 0x1), "bit {bit:#x}");
+        }
+        for bit in [0x1, 0x2, 0x20, 0x200, 0x4000, 0x8000, 0x1_0000] {
+            assert!(!queued(bit), "bit {bit:#x}");
+        }
+    }
+
+    fn lower_body_case(
+        queued_flags: u32,
+        slot_a: u32,
+        special_playing: bool,
+        slot_b: u32,
+        group_type: u32,
+    ) -> bool {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        with_process(&mut e, actor);
+        let animation = e.mem.alloc(0x200);
+        slot(&mut e, ACTOR_TABLE, 0x1e4, eax(animation));
+        slot(&mut e, PROCESS_TABLE, 0x618, eax(queued_flags));
+        e.register(POINTER_GET, |e, a| eax(e.mem.u32(a[0])));
+        e.mem.set_u32(animation + 0x128, slot_a);
+        e.mem.set_u32(animation + 0x124, slot_b);
+        double(
+            &mut e,
+            ANIMATION_SPECIAL_IDLE_PLAYING,
+            eax(special_playing as u32),
+        );
+        e.register_double(ANIM_GROUP_TYPE, move |_, a| {
+            eax(if a[0] == 0x10 || a[0] == 0x20 {
+                group_type
+            } else {
+                99
+            })
+        });
+        actor_is_playing_lower_body_special_idle(&mut e, actor)
+    }
+
+    #[test]
+    fn lower_body_special_idle_by_group_type() {
+        // Queued idle with a group in slot +0x128.
+        for (group_type, expected) in [
+            (1, true),
+            (7, true),
+            (0x14, true),
+            (2, false),
+            (0xffff_ffff, false),
+        ] {
+            assert_eq!(lower_body_case(4, 0x10, false, 0, group_type), expected);
+        }
+        // Not queued: the special idle slot +0x124 counts when playing.
+        assert!(lower_body_case(0, 0x10, true, 0x20, 7));
+        assert!(!lower_body_case(0, 0x10, false, 0x20, 7));
+        // Queued but the +0x128 slot is empty falls through to +0x124.
+        assert!(lower_body_case(4, 0, true, 0x20, 1));
+        // Nothing found.
+        assert!(!lower_body_case(0, 0, true, 0, 1));
+    }
+
+    #[test]
+    fn lower_body_special_idle_needs_an_animation() {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        with_process(&mut e, actor);
+        slot(&mut e, ACTOR_TABLE, 0x1e4, eax(0));
+        assert!(!actor_is_playing_lower_body_special_idle(&mut e, actor));
+    }
+
+    // ---- 008ba600 --------------------------------------------------------
+
+    const ANIMATION_OBJECT: u32 = 0x0200_a400;
+
+    /// An actor with a process (pending flags `flags`) and an animation, and
+    /// doubles for every callee of the handler that the blocks reach.
+    fn handler_setup(flags: u32) -> (Engine, Ptr<Actor>, u32) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let process = with_process(&mut e, actor);
+        e.mem.set_u32(ANIMATION_OBJECT, ANIMATION_TABLE);
+        e.set(actor, Actor::eQueuedattack, 0xff);
+        slot(&mut e, ACTOR_TABLE, 0x1e4, eax(ANIMATION_OBJECT));
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(0));
+        slot(&mut e, ACTOR_TABLE, 0x4b0, Ret::default());
+        slot(&mut e, ACTOR_TABLE, 0x3ec, Ret::default());
+        let process_slots: [u32; 17] = [
+            0x61c, 0x294, 0x3f4, 0xd8, 0x614, 0x2b0, 0x2b8, 0x708, 0x70c, 0x718, 0x720, 0x728,
+            0x148, 0x14c, 0x3e8, 0x404, 0x4d0,
+        ];
+        for offset in process_slots {
+            slot(&mut e, PROCESS_TABLE, offset, Ret::default());
+        }
+        slot(&mut e, PROCESS_TABLE, 0x618, eax(flags));
+        slot(&mut e, PROCESS_TABLE, 0x3f0, eax(0));
+        slot(&mut e, PROCESS_TABLE, 0x444, st0(0.0));
+        slot(&mut e, PROCESS_TABLE, 0x454, eax(0));
+        slot(&mut e, PROCESS_TABLE, 0x724, eax(0));
+        slot(&mut e, PROCESS_TABLE, 0x27c, eax(0));
+        e.register(POINTER_GET, |e, a| eax(e.mem.u32(a[0])));
+        e.register(ENTRY_OBJECT, |e, a| eax(e.mem.u32(a[0] + 8)));
+        e.register(ACTOR_PROCESS, |e, a| eax(e.mem.u32(a[0] + 0x68)));
+        quiet(
+            &mut e,
+            &[
+                PLAY_GROUP,
+                GET_OUT_OF_FURNITURE_QUICK,
+                ACTOR_HANDLE_FLAG_1000,
+                ACTOR_HANDLE_FLAG_400,
+                ACTOR_HANDLE_FLAG_8000,
+                SET_HAVOK_WEAPON,
+                EXPEL_SHELL_CASING,
+                SET_IRON_SIGHTS,
+                START_ATTACK,
+            ],
+        );
+        double(&mut e, GET_ANIM_GROUP, eax(0x77));
+        (e, actor, process)
+    }
+
+    #[test]
+    fn handler_without_a_process_or_animation_does_nothing() {
+        let (mut e, actor, _) = handler_setup(0x20);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(logged(&e).is_empty());
+        let (mut e, actor, _) = handler_setup(0x20);
+        slot(&mut e, ACTOR_TABLE, 0x1e4, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        // Only the two process virtuals that were read first.
+        assert_eq!(
+            logged_addresses(&e),
+            [
+                slot_target(ACTOR_TABLE, 0x1e4),
+                slot_target(PROCESS_TABLE, 0x618),
+                slot_target(PROCESS_TABLE, 0x61c),
+            ]
+        );
+    }
+
+    #[test]
+    fn handler_plays_group_0xe0_for_flag_0x20_and_stops_on_virtual_0x22c() {
+        let (mut e, actor, process) = handler_setup(0x20 | 0x1000);
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(1));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, GET_ANIM_GROUP),
+            [vec![actor.addr(), 0xe0, 0, 0, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAY_GROUP),
+            [vec![ANIMATION_OBJECT, 0x77, 1, 0xffff_ffff, 0xffff_ffff]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x294)),
+            [vec![process, actor.addr()]]
+        );
+        // Stopped before the 0x1000 block.
+        assert!(calls_to(&e, ACTOR_HANDLE_FLAG_1000).is_empty());
+    }
+
+    #[test]
+    fn handler_simple_flag_blocks() {
+        let (mut e, actor, process) =
+            handler_setup(0x1000 | 0x400 | 0x8000 | 0x4000 | 0x200 | 0x10);
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(calls_to(&e, ACTOR_HANDLE_FLAG_1000), [vec![actor.addr()]]);
+        assert_eq!(calls_to(&e, ACTOR_HANDLE_FLAG_400), [vec![actor.addr()]]);
+        assert_eq!(calls_to(&e, ACTOR_HANDLE_FLAG_8000), [vec![actor.addr()]]);
+        assert_eq!(calls_to(&e, SET_HAVOK_WEAPON), [vec![actor.addr()]]);
+        assert_eq!(
+            calls_to(&e, GET_OUT_OF_FURNITURE_QUICK),
+            [vec![actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x70c)),
+            [vec![process, actor.addr()]]
+        );
+    }
+
+    #[test]
+    fn handler_queued_attack_is_started_and_cleared() {
+        let (mut e, actor, process) = handler_setup(0);
+        e.set(actor, Actor::eQueuedattack, 3);
+        // The process says the attack is over (virtual +0x3f0 false).
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(calls_to(&e, START_ATTACK), [vec![actor.addr(), 3]]);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x3f4)),
+            [vec![process, 0]]
+        );
+        assert_eq!(e.get(actor, Actor::eQueuedattack), 0xff);
+        // Still going: virtual +0x3f0 true and a non-zero value.
+        e.set(actor, Actor::eQueuedattack, 3);
+        slot(&mut e, PROCESS_TABLE, 0x3f0, eax(1));
+        slot(&mut e, PROCESS_TABLE, 0x444, st0(1.5));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x3f4)).is_empty());
+        assert_eq!(e.get(actor, Actor::eQueuedattack), 3);
+        // True with a zero value ends it as well.
+        slot(&mut e, PROCESS_TABLE, 0x444, st0(0.0));
+        fn_008ba600(&mut e, actor);
+        assert_eq!(e.get(actor, Actor::eQueuedattack), 0xff);
+    }
+
+    #[test]
+    fn handler_flag_0x800_clears_the_pending_bit_or_calls_the_process() {
+        // The special idle is working: clear the pending bit.
+        let (mut e, actor, process) = handler_setup(0x800);
+        double(&mut e, SPECIAL_IDLE_WORKING, eax(1));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x614)),
+            [vec![process, 0x800]]
+        );
+        // Not working: the process's virtual +0xd8 gets the actor.
+        let (mut e, actor, process) = handler_setup(0x800);
+        double(&mut e, SPECIAL_IDLE_WORKING, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0xd8)),
+            [vec![process, actor.addr()]]
+        );
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x614)).is_empty());
+    }
+
+    #[test]
+    fn handler_furniture_blocks_clear_flag_0x10() {
+        // 0x4 with a small value and a refusing virtual: the process gets +0x708(0)
+        // and the 0x10 block no longer runs.
+        let (mut e, actor, process) = handler_setup(0x4 | 0x10);
+        slot(&mut e, PROCESS_TABLE, 0x4d0, eax(0xc8));
+        slot(&mut e, PROCESS_TABLE, 0x2b0, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x2b0)),
+            [vec![process, actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x708)),
+            [vec![process, 0]]
+        );
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x70c)).is_empty());
+        // A value above 0xc8 leaves the furniture quickly.
+        let (mut e, actor, _) = handler_setup(0x4);
+        slot(&mut e, PROCESS_TABLE, 0x4d0, eax(0xc9));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, GET_OUT_OF_FURNITURE_QUICK),
+            [vec![actor.addr()]]
+        );
+        // 0x8 asks +0x2b8 and asks +0x708 when it refuses.
+        let (mut e, actor, process) = handler_setup(0x8 | 0x10);
+        slot(&mut e, PROCESS_TABLE, 0x2b8, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x708)),
+            [vec![process, 0]]
+        );
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x70c)).is_empty());
+        let (mut e, actor, _) = handler_setup(0x8);
+        slot(&mut e, PROCESS_TABLE, 0x2b8, eax(1));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x708)).is_empty());
+    }
+
+    #[test]
+    fn handler_flag_0x80_plays_an_idle() {
+        let (mut e, actor, _) = handler_setup(0x80);
+        slot(&mut e, PROCESS_TABLE, 0x718, eax(0x6100));
+        double(&mut e, GET_IDLE_ANIM_GROUP_SECTION, eax(0x6200));
+        double(&mut e, PLAY_IDLE_SECTION, Ret::default());
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(calls_to(&e, GET_IDLE_ANIM_GROUP_SECTION), [vec![0x6100, 3]]);
+        assert_eq!(
+            calls_to(&e, PLAY_IDLE_SECTION),
+            [vec![ANIMATION_OBJECT, 0x6100, actor.addr(), 0x6200]]
+        );
+    }
+
+    #[test]
+    fn handler_flag_0x2000_loads_each_queued_idle() {
+        let (mut e, actor, _) = handler_setup(0x2000);
+        // Each pass asks twice (the loop test and the item), so four answers
+        // make two passes.
+        let remaining = Rc::new(RefCell::new(4));
+        let counter = remaining.clone();
+        let target = slot_target(PROCESS_TABLE, 0x724);
+        e.register_double(target, move |_, _| {
+            let mut left = counter.borrow_mut();
+            if *left == 0 {
+                eax(0)
+            } else {
+                *left -= 1;
+                eax(0x6300)
+            }
+        });
+        slot(&mut e, PROCESS_TABLE, 0x728, eax(0x6400));
+        double(&mut e, IDLE_POINTER_CONSTRUCTOR, Ret::default());
+        double(&mut e, IDLE_POINTER_DESTRUCTOR, Ret::default());
+        double(&mut e, ANIM_IDLE_LOADED, Ret::default());
+        e.register(POINTER_GET, |_, _| eax(0x6500));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, ANIM_IDLE_LOADED),
+            [vec![0x6500, 0x6400], vec![0x6500, 0x6400]]
+        );
+        assert_eq!(calls_to(&e, IDLE_POINTER_CONSTRUCTOR).len(), 2);
+        assert_eq!(calls_to(&e, IDLE_POINTER_DESTRUCTOR).len(), 2);
+        assert_eq!(calls_to(&e, slot_target(PROCESS_TABLE, 0x720)).len(), 2);
+    }
+
+    #[test]
+    fn handler_flag_0x40_and_0x100_play_groups() {
+        // 0x40 with the process flag set and no weapon in hand.
+        let (mut e, actor, _) = handler_setup(0x40);
+        slot(&mut e, PROCESS_TABLE, 0x454, eax(1));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, GET_ANIM_GROUP),
+            [vec![actor.addr(), 0, 0, 1, ANIMATION_OBJECT]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAY_GROUP),
+            [vec![ANIMATION_OBJECT, 0x77, 1, 0xffff_ffff, 0xffff_ffff]]
+        );
+        // Without the process flag the entry is -1 and the flag 0.
+        let (mut e, actor, _) = handler_setup(0x40);
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, GET_ANIM_GROUP),
+            [vec![actor.addr(), 0, 0xffff_ffff, 0, ANIMATION_OBJECT]]
+        );
+        // 0x100 needs a current weapon.
+        let (mut e, actor, _) = handler_setup(0x100);
+        double(&mut e, GET_CURRENT_WEAPON, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(calls_to(&e, GET_ANIM_GROUP).is_empty());
+        double(&mut e, GET_CURRENT_WEAPON, eax(0x6600));
+        double(&mut e, CURRENT_WEAPON_ANIM_TYPE, eax(0x6700));
+        let entry = e.mem.alloc(0x20);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, GET_ANIM_GROUP),
+            [vec![actor.addr(), 0x6700, entry, 0, ANIMATION_OBJECT]]
+        );
+    }
+
+    #[test]
+    fn handler_flag_0x20000_expels_a_shell_casing_and_0x10000_sets_iron_sights() {
+        let (mut e, actor, _) = handler_setup(0x20000 | 0x10000);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, 0x6900);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+        slot(&mut e, PROCESS_TABLE, 0x404, eax(1));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, EXPEL_SHELL_CASING),
+            [vec![0x6900, actor.addr()]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(PROCESS_TABLE, 0x404)),
+            [vec![e.mem.u32(actor.addr() + 0x68), 1, 0]]
+        );
+        assert_eq!(calls_to(&e, SET_IRON_SIGHTS), [vec![actor.addr(), 1]]);
+        // No weapon in hand: no shell casing.
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(0));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(calls_to(&e, EXPEL_SHELL_CASING).is_empty());
+    }
+
+    fn equip_setup(slot_locations: [u32; 3]) -> (Engine, Ptr<Actor>, u32) {
+        let (mut e, actor, process) = handler_setup(0x2);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, 0x6a00);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+        e.register(ANIMATION_SLOT, |_, a| eax(0x1000 + a[1]));
+        e.register_double(GET_GENERIC_LOCATION, move |_, a| {
+            let slot_index = a[0] - 0x1000;
+            let position = [0u32, 1, 4].iter().position(|s| *s == slot_index).unwrap();
+            eax(slot_locations[position])
+        });
+        double(&mut e, HAS_MOD_EFFECT_ACTIVE, eax(1));
+        (e, actor, process)
+    }
+
+    #[test]
+    fn handler_flag_0x2_equips_the_weapon_when_the_slots_are_generic() {
+        let (mut e, actor, _) = equip_setup([1, 1, 1]);
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x3ec)),
+            [vec![actor.addr(), 0x6a00, 2, 1, 0]]
+        );
+        assert!(calls_to(&e, slot_target(PROCESS_TABLE, 0x614)).is_empty());
+    }
+
+    #[test]
+    fn handler_flag_0x2_clears_the_pending_bit_when_a_slot_is_busy() {
+        for busy in 0..3 {
+            let mut locations = [1, 1, 1];
+            locations[busy] = 5;
+            let (mut e, actor, process) = equip_setup(locations);
+            e.call_log = Some(vec![]);
+            fn_008ba600(&mut e, actor);
+            assert_eq!(
+                calls_to(&e, slot_target(PROCESS_TABLE, 0x614)),
+                [vec![process, 2]],
+                "slot {busy}"
+            );
+            assert!(calls_to(&e, slot_target(ACTOR_TABLE, 0x3ec)).is_empty());
+        }
+    }
+
+    fn weapon_form_setup_case(test_passes: bool) -> Engine {
+        let (mut e, actor, _) = handler_setup(0x1);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry + 8, 0x6b00);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+        double(&mut e, WEAPON_FORM_TEST, eax(test_passes as u32));
+        double(&mut e, WEAPON_FORM_PREPARE, Ret::default());
+        double(&mut e, HAS_MOD_EFFECT_ACTIVE, eax(1));
+        double(&mut e, WEAPON_FORM_STATE, eax(0x6c00));
+        double(&mut e, ACTOR_APPLY_WEAPON_STATE, Ret::default());
+        double(&mut e, ACTOR_STATE_TEST_493BB0, eax(0));
+        double(&mut e, ACTOR_UPDATE_00899200, Ret::default());
+        double(&mut e, OBJECT_TYPE, eax(8));
+        double(&mut e, LIST_NODE_NEXT, eax(0));
+        double(&mut e, SET_ACTION_FLAG, Ret::default());
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        e
+    }
+
+    #[test]
+    fn handler_flag_0x1_sets_up_a_weapon_form() {
+        let e = weapon_form_setup_case(true);
+        assert_eq!(calls_to(&e, WEAPON_FORM_PREPARE).len(), 1);
+        assert_eq!(
+            calls_to(&e, HAS_MOD_EFFECT_ACTIVE)
+                .iter()
+                .map(|c| c[1])
+                .collect::<Vec<_>>(),
+            [0xb, 0x10]
+        );
+        let state = calls_to(&e, WEAPON_FORM_STATE);
+        assert_eq!(state[0][1..], [1, 1]);
+        assert_eq!(calls_to(&e, ACTOR_APPLY_WEAPON_STATE)[0][1], 0x6c00);
+        assert!(calls_to(&e, ACTOR_UPDATE_00899200).is_empty());
+    }
+
+    #[test]
+    fn handler_flag_0x1_updates_the_actor_for_other_forms() {
+        // The form test fails; the process object is not of type 8 or 0x10:
+        // update with (0, 0) when the object exists, else (0, 0) as well.
+        let e = weapon_form_setup_case(false);
+        assert!(calls_to(&e, WEAPON_FORM_PREPARE).is_empty());
+        // The slot +0x27c answers 0, so the else branch (0, 0).
+        assert_eq!(calls_to(&e, ACTOR_UPDATE_00899200)[0][1..], [0, 0]);
+    }
+
+    #[test]
+    fn handler_flag_0x1_sets_the_action_flag_for_forms_with_a_count() {
+        let (mut e, actor, _) = handler_setup(0x1);
+        let entry = e.mem.alloc(0x20);
+        e.mem.set_u32(entry, 0x1500);
+        e.mem.set_u32(entry + 8, 0x6b00);
+        let held_data = e.mem.alloc(8);
+        e.mem.set_u32(held_data, 0xabcd);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+        double(&mut e, WEAPON_FORM_TEST, eax(1));
+        double(&mut e, WEAPON_FORM_PREPARE, Ret::default());
+        double(&mut e, HAS_MOD_EFFECT_ACTIVE, eax(0));
+        double(&mut e, WEAPON_FORM_STATE, eax(0));
+        double(&mut e, ACTOR_APPLY_WEAPON_STATE, Ret::default());
+        double(&mut e, LIST_NODE_NEXT, eax(1));
+        double(&mut e, LIST_NODE_DATA_ADDRESS, eax(held_data));
+        double(&mut e, SET_ACTION_FLAG, Ret::default());
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, SET_ACTION_FLAG),
+            [vec![0x6b00, 0xabcd, 0x40_0000]]
+        );
+    }
+
+    #[test]
+    fn handler_flag_0x1_non_weapon_branches() {
+        for (is_player, state_test, object, object_type, expected) in [
+            (true, 0, 0, 0, [0, 1]),
+            (false, 1, 0, 0, [0, 1]),
+            (false, 0, 0x5000, 8, [0, 1]),
+            (false, 0, 0x5000, 0x10, [0, 1]),
+            (false, 0, 0x5000, 3, [0, 0]),
+            (false, 0, 0, 0, [0, 0]),
+        ] {
+            let (mut e, actor, _) = handler_setup(0x1);
+            let entry = e.mem.alloc(0x20);
+            e.mem.set_u32(entry + 8, 0x6b00);
+            slot(&mut e, PROCESS_TABLE, 0x148, eax(entry));
+            slot(&mut e, PROCESS_TABLE, 0x27c, eax(object));
+            if is_player {
+                e.mem.set_u32(PLAYER_POINTER, actor.addr());
+            }
+            double(&mut e, WEAPON_FORM_TEST, eax(0));
+            double(&mut e, ACTOR_STATE_TEST_493BB0, eax(state_test));
+            double(&mut e, OBJECT_TYPE, eax(object_type));
+            double(&mut e, ACTOR_UPDATE_00899200, Ret::default());
+            double(&mut e, LIST_NODE_NEXT, eax(0));
+            e.call_log = Some(vec![]);
+            fn_008ba600(&mut e, actor);
+            assert_eq!(calls_to(&e, ACTOR_UPDATE_00899200)[0][1..], expected);
+        }
+    }
+
+    /// Equip or reload setup: a weapon and ammunition in hand.
+    fn reload_setup(
+        state: u32,
+        clip: i32,
+        ammo_count: i32,
+        ammo_index_minus_one: i32,
+    ) -> (Engine, Ptr<Actor>, u32) {
+        let (mut e, actor, process) = handler_setup(0x40000);
+        let weapon_entry = e.mem.alloc(0x20);
+        e.mem.set_u32(weapon_entry + 8, 0x6d00);
+        let ammo_entry = e.mem.alloc(0x20);
+        e.mem.set_u32(ammo_entry + 8, 0x6e00);
+        slot(&mut e, PROCESS_TABLE, 0x148, eax(weapon_entry));
+        slot(&mut e, PROCESS_TABLE, 0x14c, eax(ammo_entry));
+        slot(&mut e, PROCESS_TABLE, 0x3e8, eax(0x6f00));
+        double(&mut e, ANIMATION_STEP, eax(0x7000));
+        double(&mut e, ANIMATION_KIND, eax(2));
+        double(&mut e, GET_FLAG_WORD, eax(state));
+        double(&mut e, HAS_MOD_EFFECT_ACTIVE, eax(1));
+        double(&mut e, GET_FORM_CLIP_ROUNDS, eax(clip as u32));
+        double(&mut e, GET_INVENTORY_CHANGES, eax(0x7100));
+        double(&mut e, GET_OBJECT_COUNT, eax(ammo_count as u32));
+        double(&mut e, LIST_NODE_NEXT, eax(ammo_index_minus_one as u32));
+        double(&mut e, QUEUE_EQUIP_OBJECT, Ret::default());
+        double(&mut e, WEAPON_ANIM_TYPE, eax(5));
+        double(&mut e, ANIMATION_SLOT, eax(0x7200));
+        double(&mut e, SET_ANIM_ACTION, Ret::default());
+        double(&mut e, PACK_ANIM_GROUP, eax(0x33));
+        double(&mut e, PICK_BEST_ANIMATION, eax(0x44));
+        double(&mut e, ANIM_GROUP_GET_TYPE, eax(5));
+        double(&mut e, PLAYER_GET_ANIMATION, eax(ANIMATION_OBJECT));
+        for offset in [0x6f4u32, 0x6ec] {
+            slot(&mut e, PROCESS_TABLE, offset, eax(0));
+        }
+        // The equipped form: the weapon entry's object.
+        (e, actor, process)
+    }
+
+    #[test]
+    fn reload_when_the_clip_is_short_and_ammunition_is_left() {
+        // clip 10, ammunition entry count 3 (+1 = 4 <= 5 in the inventory).
+        let (mut e, actor, _) = reload_setup(0, 10, 5, 3);
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert_eq!(
+            calls_to(&e, QUEUE_EQUIP_OBJECT),
+            [vec![actor.addr(), 0x6e00, 4, 0, 1, 0, 0]]
+        );
+        assert_eq!(calls_to(&e, WEAPON_ANIM_TYPE), [vec![0x6d00, 0]]);
+        assert_eq!(
+            calls_to(&e, SET_ANIM_ACTION),
+            [vec![actor.addr(), 0x11, 0x7200]]
+        );
+        assert_eq!(
+            calls_to(&e, PLAY_GROUP),
+            [vec![ANIMATION_OBJECT, 0x77, 1, 1, 4]]
+        );
+        assert!(calls_to(&e, PACK_ANIM_GROUP).is_empty());
+    }
+
+    #[test]
+    fn picks_the_best_animation_when_there_is_nothing_to_reload() {
+        // Ammunition entry count 3 + 1 = 4 and 4 in the inventory: nothing to
+        // reload, and the clip rounds are 4 as well.
+        let (mut e, actor, _) = reload_setup(0x800 | 0x200 | 0x2, 4, 4, 3);
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        // Slot kind 2, group index 8 (flag 0x2 with 0x200).
+        assert_eq!(calls_to(&e, PACK_ANIM_GROUP), [vec![2, 0, 8, 0]]);
+        assert_eq!(
+            calls_to(&e, PICK_BEST_ANIMATION),
+            [vec![ANIMATION_OBJECT, 0x33, 0]]
+        );
+        let plays = calls_to(&e, PLAY_GROUP);
+        assert_eq!(plays[0], [ANIMATION_OBJECT, 0x44, 1, 1, 4]);
+        // Not the player: the weapon type group is played with the process
+        // animation too and the action set to 9.
+        assert_eq!(plays.len(), 2);
+        assert_eq!(
+            calls_to(&e, SET_ANIM_ACTION),
+            [vec![actor.addr(), 9, 0x7200]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x4b0)),
+            [vec![actor.addr(), 0x77, 1]]
+        );
+    }
+
+    #[test]
+    fn the_player_gets_its_own_animation_and_resets_the_action() {
+        let (mut e, actor, _) = reload_setup(0x2000 | 0x4, 4, 4, 3);
+        e.mem.set_u32(PLAYER_POINTER, actor.addr());
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        // Slot kind 3, group index 5.
+        assert_eq!(calls_to(&e, PACK_ANIM_GROUP), [vec![3, 0, 5, 0]]);
+        assert_eq!(calls_to(&e, PLAYER_GET_ANIMATION), [vec![actor.addr(), 0]]);
+        assert_eq!(
+            calls_to(&e, SET_ANIM_ACTION),
+            [vec![actor.addr(), 0xffff_ffff, 0]]
+        );
+        assert_eq!(
+            calls_to(&e, slot_target(ACTOR_TABLE, 0x4b0)),
+            [vec![actor.addr(), 0x44, 0]]
+        );
+    }
+
+    #[test]
+    fn group_index_and_slot_kind_follow_the_actor_flag_word() {
+        // (flag word, slot kind, group index)
+        for (state, kind, group) in [
+            (0x400u32, 1u32, 0xffu32),
+            (0x800 | 0x1, 2, 3),
+            (0x2000 | 0x2, 3, 4),
+            (0x4, 0, 5),
+            (0x8, 0, 6),
+            (0x200 | 0x1, 0, 7),
+            (0x200 | 0x2, 0, 8),
+            (0x200 | 0x4, 0, 9),
+            (0x200 | 0x8, 0, 10),
+            (0x200, 0, 0xff),
+            (0x800 | 0x2000, 2, 0xff),
+        ] {
+            let (mut e, actor, _) = reload_setup(state, 4, 4, 3);
+            e.call_log = Some(vec![]);
+            fn_008ba600(&mut e, actor);
+            assert_eq!(
+                calls_to(&e, PACK_ANIM_GROUP)[0][0..3],
+                [kind, 0, group],
+                "state {state:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn heavy_armor_or_the_other_flag_getter_sets_the_pack_flag() {
+        for (slot_a, slot_b, expected) in [(0, 0, 0), (1, 0, 1), (0, 1, 1)] {
+            let (mut e, actor, _) = reload_setup(0, 4, 4, 3);
+            slot(&mut e, PROCESS_TABLE, 0x6f4, eax(slot_a));
+            slot(&mut e, PROCESS_TABLE, 0x6ec, eax(slot_b));
+            e.call_log = Some(vec![]);
+            fn_008ba600(&mut e, actor);
+            assert_eq!(calls_to(&e, PACK_ANIM_GROUP)[0][3], expected);
+        }
+    }
+
+    #[test]
+    fn no_animation_is_played_when_nothing_is_picked() {
+        let (mut e, actor, _) = reload_setup(0, 4, 4, 3);
+        double(&mut e, PICK_BEST_ANIMATION, eax(0xff));
+        e.call_log = Some(vec![]);
+        fn_008ba600(&mut e, actor);
+        assert!(calls_to(&e, PLAY_GROUP).is_empty());
+    }
+
+    // ---- 008bb520 .. 008bb5c0 -------------------------------------------
+
+    fn rotate_setup(can_move: bool, flag_0x28: u32, flag_0x2ac: u32) -> (Engine, Ptr<Actor>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let process = with_process(&mut e, actor);
+        e.mem.set_u32(process + 0x2ac, flag_0x2ac);
+        e.set(actor, Actor::pActorMover, Ptr::new(0x7700));
+        double(&mut e, ACTOR_CAN_MOVE, eax(can_move as u32));
+        e.register(ACTOR_PROCESS, |e, a| eax(e.mem.u32(a[0] + 0x68)));
+        double(&mut e, PROCESS_FLAG_0X28, eax(flag_0x28));
+        double(&mut e, REQUEST_ROTATE_ACTOR, eax(1));
+        double(&mut e, REQUEST_ROTATE_ACTOR_OV2, eax(0));
+        (e, actor)
+    }
+
+    #[test]
+    fn rotate_request_goes_to_the_actor_mover() {
+        let (mut e, actor) = rotate_setup(true, 0, 0);
+        e.call_log = Some(vec![]);
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        assert_eq!(
+            calls_to(&e, REQUEST_ROTATE_ACTOR),
+            [vec![
+                0x7700,
+                1.0f32.to_bits(),
+                2.0f32.to_bits(),
+                3.0f32.to_bits(),
+                1
+            ]]
+        );
+        assert!(!fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert_eq!(
+            calls_to(&e, REQUEST_ROTATE_ACTOR_OV2),
+            [vec![0x7700, 0.5f32.to_bits(), 0]]
+        );
+    }
+
+    #[test]
+    fn rotate_request_is_answered_true_when_the_actor_cannot_move_or_the_process_blocks() {
+        // Cannot move.
+        let (mut e, actor) = rotate_setup(false, 0, 0);
+        e.call_log = Some(vec![]);
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        assert!(fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert!(calls_to(&e, REQUEST_ROTATE_ACTOR).is_empty());
+        assert!(calls_to(&e, REQUEST_ROTATE_ACTOR_OV2).is_empty());
+        // The process blocks (flag +0x28 clear and word +0x2ac set).
+        let (mut e, actor) = rotate_setup(true, 0, 9);
+        e.call_log = Some(vec![]);
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        assert!(fn_008bb5c0(&mut e, actor, 0.5, false));
+        assert!(calls_to(&e, REQUEST_ROTATE_ACTOR).is_empty());
+        // Flag +0x28 set: the request goes through.
+        let (mut e, actor) = rotate_setup(true, 1, 9);
+        e.call_log = Some(vec![]);
+        assert!(fn_008bb520(&mut e, actor, 1.0, 2.0, 3.0, true));
+        assert_eq!(calls_to(&e, REQUEST_ROTATE_ACTOR).len(), 1);
+    }
+
+    #[test]
+    fn process_word_0x2ac() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x300);
+        e.mem.set_u32(block + 0x2ac, 0x1234);
+        assert_eq!(fn_008bb5a0(&mut e, Ptr::new(block)), 0x1234);
+        assert_eq!(e.call(0x008bb5a0, &args![block]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn registered_in_the_function_table() {
+        let funcs = funcs();
+        assert_eq!(funcs.len(), 40);
+        let mut addresses: Vec<u32> = funcs.iter().map(|f| f.0).collect();
+        addresses.sort_unstable();
+        addresses.dedup();
+        assert_eq!(addresses.len(), 40);
+    }
 }
