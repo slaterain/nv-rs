@@ -22,8 +22,8 @@
 //! translated.
 //!
 //! This unit is translated over several sessions: the first 40 functions
-//! (`004751d0` to `00477640`) are here; the next session continues at
-//! `00477780`. The layouts, constants and helpers are `pub(crate)` for it.
+//! (`004751d0` to `00477640`) were done first; the second session did the
+//! remaining 29 (`00477780` to `004792f0`): the unit is complete.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -1550,6 +1550,1122 @@ fn create_explosion_near_bound(e: &mut Engine, reference: Ptr, holder: u32, expl
     }
 }
 
+// ---------------------------------------------------------------------
+// Second session: preloading, self damage, saving, loading, copying
+// ---------------------------------------------------------------------
+
+/// `operator new` (cdecl: size) and `operator delete` (cdecl: block).
+const OPERATOR_NEW: u32 = 0x0040_1000;
+const OPERATOR_DELETE: u32 = 0x0040_1030;
+/// `memset` (cdecl: block, value, size).
+const MEMSET: u32 = 0x0040_3d30;
+/// `__RTDynamicCast` (cdecl: object, vfptr delta, source type descriptor,
+/// target type descriptor, reference flag).
+const DYNAMIC_CAST: u32 = 0x00ec_43fb;
+/// Writes a line to the log (cdecl: format, arguments...).
+const LOG_MESSAGE: u32 = 0x005b_5e40;
+/// `ECX` = form: the form id (used in the log messages and in `Save`).
+const GET_FORM_ID: u32 = 0x0084_e3a0;
+/// `NiPointer<QueuedFile>::operator=` (`ECX` = the holder, the file as
+/// argument).
+const QUEUED_FILE_ASSIGN: u32 = 0x006f_74f0;
+/// Whether the plugin data is stored the other way round (`Save` and
+/// `LoadChunk` swap the bytes of their structures when it answers yes).
+const IS_SWAPPED_BYTE_ORDER: u32 = 0x0040_1500;
+const IS_SWAPPED_BYTE_ORDER_FILE: u32 = 0x0040_1680;
+
+/// The chunk tags of the form's plugin records (four ASCII letters).
+pub(crate) const CHUNK_DEST: u32 = 0x5453_4544;
+pub(crate) const CHUNK_DSTD: u32 = 0x4454_5344;
+pub(crate) const CHUNK_DSTF: u32 = 0x4654_5344;
+pub(crate) const CHUNK_DMDL: u32 = 0x4c44_4d44;
+pub(crate) const CHUNK_DMDT: u32 = 0x5444_4d44;
+pub(crate) const CHUNK_DMDS: u32 = 0x5344_4d44;
+
+// Translated from 00477780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDestructibleObjectForm::PreloadReplacementModels` (Xbox PDB): with
+/// data present and nothing preloaded yet, creates the `QueuedFile`
+/// (0x28 bytes, constructed with 5 by `00c3c590`), stores it in the
+/// data's preloaded-models holder (+0x10), queues the files
+/// (`QueueFiles`, `queue_arg`, 5, the file) and, when the holder's answer
+/// to `00446990` is 0, clears the holder again. When a file is held at the
+/// end, `0040b460` is called on the reference count at data +0x0C.
+/// (The compiler's exception frame is not translated.)
+pub fn bgs_destructible_object_form_preload_replacement_models(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    queue_arg: u32,
+) {
+    if e.get(this, BGSDestructibleObjectForm::pData).is_null() {
+        return;
+    }
+    let holder = |e: &Engine| e.get(this, BGSDestructibleObjectForm::pData).addr() + 0x10;
+    let current = holder(e);
+    if e.call(POINTER_GET, &args![current]).u32() == 0 {
+        let block = e.call(OPERATOR_NEW, &args![0x28u32]).u32();
+        let file = if block != 0 {
+            e.call(0x00c3_c590, &args![block, 5u32]).u32()
+        } else {
+            0
+        };
+        let current = holder(e);
+        e.call(QUEUED_FILE_ASSIGN, &args![current, file]);
+        let current = holder(e);
+        let held = e.call(POINTER_GET, &args![current]).u32();
+        bgs_destructible_object_form_queue_files(e, this, queue_arg, 5, held);
+        let current = holder(e);
+        let held = e.call(POINTER_GET, &args![current]).u32();
+        if e.call(0x0044_6990, &args![held]).u32() == 0 {
+            let current = holder(e);
+            e.call(QUEUED_FILE_ASSIGN, &args![current, 0u32]);
+        }
+    }
+    let current = holder(e);
+    if e.call(POINTER_GET, &args![current]).u32() != 0 {
+        let count = e.get(this, BGSDestructibleObjectForm::pData).addr() + 0xc;
+        e.call(0x0040_b460, &args![count]);
+    }
+}
+
+// Translated from 004778a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Counterpart of the preloading (fastcall `this`): with data present and
+/// a preloaded file held, calls `004019a0` on the reference count at data
+/// +0x0C and, once the count is 0 or less, clears the holder.
+pub fn fn_004778a0(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>) {
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    if data.is_null() {
+        return;
+    }
+    if e.call(POINTER_GET, &args![data.addr() + 0x10]).u32() == 0 {
+        return;
+    }
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    e.call(0x0040_19a0, &args![data.addr() + 0xc]);
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    if e.get(data, DestructibleObjectData::iReplacementModelRefCount) <= 0 {
+        e.call(QUEUED_FILE_ASSIGN, &args![data.addr() + 0x10, 0u32]);
+    }
+}
+
+// Translated from 00477900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSExplosion::GetRadiusBSUnits` (Xbox PDB): the explosion's radius
+/// (`float` at +0x7C), multiplied by the setting at `011d1218` unless
+/// `00477950(1)` answers yes.
+pub fn bgs_explosion_get_radius_bs_units(e: &mut Engine, this: Ptr) -> f32 {
+    let radius = e.mem.f32(this.addr() + 0x7c);
+    if e.call(0x0047_7950, &args![this, 1u32]).u8() != 0 {
+        radius
+    } else {
+        let setting = e.call(SETTING_POINTER, &args![0x011d_1218u32]).u32();
+        let factor = e.mem.f32(setting);
+        (radius as f64 * factor as f64) as f32
+    }
+}
+
+// Translated from 00477970 (decompiled, FalloutNV.exe 1.4.0.525)
+/// First stage (in order) whose health percentage is below `percentage`
+/// and whose explosion has a radius (`GetRadiusBSUnits`) of at least
+/// `radius_limit` and a value from `006a78f0` of at least `other_limit`:
+/// returns the health at which the stage begins (`percentage / 100` of the
+/// total health, as `float`) and stores the explosion through `out` when
+/// it is not null. Without such a stage the result is -1.0.
+pub fn fn_00477970(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    percentage: u8,
+    radius_limit: f32,
+    other_limit: f32,
+    out: Ptr,
+) -> f32 {
+    let mut index = 0u32;
+    loop {
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+            return e.global(MINUS_ONE);
+        }
+        let stage = stage_at(e, data, index);
+        let stage_percentage = e.get(stage, DestructibleObjectStage::cHealthPercentage);
+        let explosion = e.get(stage, DestructibleObjectStage::pExplosion);
+        if stage_percentage < percentage && !explosion.is_null() {
+            let radius = bgs_explosion_get_radius_bs_units(e, explosion) as f64;
+            if radius_limit as f64 <= radius {
+                let other = e.call(0x006a_78f0, &args![explosion]).f32() as f64;
+                if other_limit as f64 <= other {
+                    let hundred: f64 = e.global(HUNDRED);
+                    let data = e.get(this, BGSDestructibleObjectForm::pData);
+                    let health = e.get(data, DestructibleObjectData::iHealth);
+                    let value = ((stage_percentage as f64 / hundred) * health as f64) as f32;
+                    if !out.is_null() {
+                        e.mem.set_u32(out.addr(), explosion.addr());
+                    }
+                    return value;
+                }
+            }
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00477a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the stages in order; for each stage below `percentage` adds the
+/// health between the previous stage's threshold and this one's, divided
+/// by the previous stage's self damage per second, to a running total
+/// (`float`), and returns that total at the first such stage that has an
+/// explosion passing the same two limits as `00477970`, storing the
+/// explosion through `out` when it is not null. Stops (result -1.0) at the
+/// first stage below `percentage` that follows a stage with no self damage.
+pub fn fn_00477a50(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    percentage: u8,
+    radius_limit: f32,
+    other_limit: f32,
+    out: Ptr,
+) -> f32 {
+    let hundred: f64 = e.global(HUNDRED);
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    let total_health = e.get(data, DestructibleObjectData::iHealth);
+    let mut total = 0.0f32;
+    let mut threshold = ((total_health as f64 * percentage as f64) / hundred) as f32;
+    let mut previous_rate = 0u32;
+    let mut index = 0u32;
+    loop {
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+            break;
+        }
+        let stage = stage_at(e, data, index);
+        let stage_percentage = e.get(stage, DestructibleObjectStage::cHealthPercentage);
+        if stage_percentage < percentage {
+            if previous_rate == 0 {
+                break;
+            }
+            let health = e.get(data, DestructibleObjectData::iHealth);
+            let here = ((health as f64 * stage_percentage as f64) / hundred) as f32;
+            total =
+                (((threshold as f64 - here as f64) / previous_rate as f64) + total as f64) as f32;
+            threshold = here;
+            let explosion = e.get(stage, DestructibleObjectStage::pExplosion);
+            if !explosion.is_null() {
+                let radius = bgs_explosion_get_radius_bs_units(e, explosion) as f64;
+                if radius_limit as f64 <= radius {
+                    let other = e.call(0x006a_78f0, &args![explosion]).f32() as f64;
+                    if other_limit as f64 <= other {
+                        if !out.is_null() {
+                            e.mem.set_u32(out.addr(), explosion.addr());
+                        }
+                        return total;
+                    }
+                }
+            }
+        }
+        previous_rate = e.get(stage, DestructibleObjectStage::iSelfDamagePerSecond);
+        index += 1;
+    }
+    e.global(MINUS_ONE)
+}
+
+// Translated from 00477ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDestructibleObjectForm::SetSelfDamage` (Xbox PDB), cdecl: with a
+/// damage of 0 removes the reference from the self-damage map
+/// ([`DESTRUCTIBLE_OBJECTS`], `NiTMapBase::RemoveAt`), otherwise sets its
+/// entry to `damage_per_second` (`SetAt`).
+pub fn bgs_destructible_object_form_set_self_damage(
+    e: &mut Engine,
+    reference: Ptr,
+    damage_per_second: u32,
+) {
+    if damage_per_second == 0 {
+        e.call(MAP_REMOVE_AT, &args![DESTRUCTIBLE_OBJECTS, reference]);
+    } else {
+        e.call(
+            MAP_SET_AT,
+            &args![DESTRUCTIBLE_OBJECTS, reference, damage_per_second],
+        );
+    }
+}
+
+// Translated from 00477d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl: brings a damaged reference's 3D to its current state and takes
+/// it out of the self-damage and threat bookkeeping. Does nothing unless
+/// `00452370` accepts the reference and its object health is not -1.0
+/// (never damaged). Then: `0041b7c0` on its extra data list; when
+/// `00477ba0` answers yes, `00484650(0)`; if the list holds a model swap
+/// (`0042e250`) the 3D is rebuilt as in the damage routine (`0042e280`,
+/// the flag word at `011ddf38` cleared around virtual slot 0x1CC, the swap
+/// object at `011dea10`, the collision object's `fn_00476ab0`, and
+/// `bhkWorld::Activate`), otherwise the damage stage nodes are updated
+/// with stage 0. Finally `00573f40` for a reference that `00440da0`
+/// answers yes for, the reference leaves the self-damage map, and the
+/// threat map forgets it (`009a51e0`).
+pub fn fn_00477d10(e: &mut Engine, reference: Ptr) {
+    if e.call(0x0045_2370, &args![reference]).u8() == 0 {
+        return;
+    }
+    let form = e.call(0x007a_f430, &args![reference]).u32();
+    // The component is looked up and never used (debug build).
+    let _component = bgs_destructible_object_form_get_destruction_form(e, Ptr::new(form));
+    let list = e.call(GET_EXTRA_LIST, &args![reference]).u32();
+    let health = e.call(GET_OBJECT_HEALTH, &args![list]).f32();
+    let no_health: f64 = e.global(NO_HEALTH);
+    if health as f64 == no_health {
+        return;
+    }
+    let list = e.call(GET_EXTRA_LIST, &args![reference]).u32();
+    e.call(0x0041_b7c0, &args![list]);
+    if e.call(0x0047_7ba0, &args![reference]).u8() != 0 {
+        e.call(0x0048_4650, &args![reference, 0u32]);
+    }
+    let list = e.call(GET_EXTRA_LIST, &args![reference]).u32();
+    let model_swap = e.call(0x0042_e250, &args![list]).u32();
+    if model_swap != 0 {
+        let list = e.call(GET_EXTRA_LIST, &args![reference]).u32();
+        e.call(0x0042_e280, &args![list]);
+        if e.vcall(reference.addr(), 0x1d0, &args![]).u32() != 0 {
+            let swap_flags: u32 = e.global(0x011d_df38);
+            let saved = e.call(0x0046_23f0, &args![swap_flags, 0u32]).u8();
+            e.vcall(reference.addr(), 0x1cc, &args![0u32, 1u32]);
+            e.call(0x0046_23f0, &args![swap_flags, saved as u32]);
+            let word = e.call(GET_REFERENCE_WORD, &args![reference]).u32();
+            let swap_object: u32 = e.global(0x011d_ea10);
+            e.call(
+                0x0045_1ef0,
+                &args![swap_object, reference, word, 0u32, 0u32],
+            );
+            if e.vcall(reference.addr(), 0x1d0, &args![]).u32() != 0 {
+                let root = e.vcall(reference.addr(), 0x1d0, &args![]).u32();
+                let container = if root != 0 {
+                    e.vcall(root, 0xc, &args![]).u32()
+                } else {
+                    0
+                };
+                let collision = if container != 0 {
+                    e.vcall(container, 0x10, &args![]).u32()
+                } else {
+                    0
+                };
+                if collision != 0 {
+                    fn_00476ab0(e, Ptr::new(collision));
+                }
+                e.call(0x00c6_a270, &args![root, 1u32, 1u32, 0u32]);
+            }
+        }
+    } else if e.vcall(reference.addr(), 0x1d0, &args![]).u32() != 0 {
+        let node = e.call(0x0043_fcd0, &args![reference, 0u32]).u32();
+        bgs_destructible_object_form_update_damage_stage_nodes(e, Ptr::new(node), 0);
+    }
+    if e.call(REFERENCE_TEST_A, &args![reference]).u8() != 0 {
+        e.call(0x0057_3f40, &args![reference]);
+    }
+    e.call(MAP_REMOVE_AT, &args![DESTRUCTIBLE_OBJECTS, reference]);
+    let threat_source: u32 = e.global(0x011f_1958);
+    let threat_map = e.call(0x0082_5c00, &args![threat_source]).u32();
+    e.call(0x009a_51e0, &args![threat_map, reference]);
+}
+
+// Translated from 00477f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDestructibleObjectForm::Save` (Xbox PDB), fastcall `this`: with
+/// data present writes the chunk `DEST` (8 bytes: health, stage count,
+/// flags; two bytes of the buffer are never set), then for every stage a
+/// `DSTD` chunk (0x14 bytes: percentage, index, model damage stage, flags,
+/// self damage per second, the explosion's and the debris form's ids, the
+/// debris count), the stage's replacement model through
+/// `TESModelTextureSwap::Save` (`0048a520` with `DMDL`, `DMDT`, `DMDS`)
+/// when it has one, and the end chunk `DSTF`. When `00401500` says the
+/// byte order is swapped, the structures are swapped before and back after
+/// each write (`00503210` for the header, [`fn_00478130`] for a stage).
+pub fn bgs_destructible_object_form_save(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>) {
+    if e.get(this, BGSDestructibleObjectForm::pData).is_null() {
+        return;
+    }
+    let header = e.mem.alloc(8);
+    fn_004781b0(e, Ptr::new(header));
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    let health = e.get(data, DestructibleObjectData::iHealth);
+    e.mem.set_u32(header, health);
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    let count = e.get(data, DestructibleObjectData::cNumStages);
+    e.mem.set_u8(header + 4, count);
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    let flags = e.get(data, DestructibleObjectData::cFlags);
+    e.mem.set_u8(header + 5, flags);
+    if e.call(IS_SWAPPED_BYTE_ORDER, &args![]).u8() != 0 {
+        e.call(0x0050_3210, &args![header]);
+    }
+    e.call(0x0048_5990, &args![CHUNK_DEST, header, 8u32]);
+    if e.call(IS_SWAPPED_BYTE_ORDER, &args![]).u8() != 0 {
+        e.call(0x0050_3210, &args![header]);
+    }
+    e.mem.free(header);
+
+    let record = e.mem.alloc(0x14);
+    let mut index = 0u32;
+    loop {
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+            break;
+        }
+        e.call(MEMSET, &args![record, 0u32, 0x14u32]);
+        e.mem.set_u8(record + 1, index as u8);
+        let current = |e: &Engine| {
+            let data = e.get(this, BGSDestructibleObjectForm::pData);
+            stage_at(e, data, index)
+        };
+        let stage = current(e);
+        let percentage = e.get(stage, DestructibleObjectStage::cHealthPercentage);
+        e.mem.set_u8(record, percentage);
+        let stage = current(e);
+        let rate = e.get(stage, DestructibleObjectStage::iSelfDamagePerSecond);
+        e.mem.set_u32(record + 4, rate);
+        let stage = current(e);
+        let damage_stage = e.get(stage, DestructibleObjectStage::cModelDamageStage);
+        e.mem.set_u8(record + 2, damage_stage);
+        let stage = current(e);
+        let stage_flags = e.get(stage, DestructibleObjectStage::cFlags);
+        e.mem.set_u8(record + 3, stage_flags);
+        let stage = current(e);
+        let debris_count = e.get(stage, DestructibleObjectStage::iDebrisCount);
+        e.mem.set_u32(record + 0x10, debris_count);
+        let stage = current(e);
+        let explosion = e.get(stage, DestructibleObjectStage::pExplosion);
+        if !explosion.is_null() {
+            let stage = current(e);
+            let explosion = e.get(stage, DestructibleObjectStage::pExplosion);
+            let id = e.call(GET_FORM_ID, &args![explosion]).u32();
+            e.mem.set_u32(record + 8, id);
+        }
+        let stage = current(e);
+        let debris = e.get(stage, DestructibleObjectStage::pDebris);
+        if !debris.is_null() {
+            let id = e.call(GET_FORM_ID, &args![debris]).u32();
+            e.mem.set_u32(record + 0xc, id);
+        }
+        if e.call(IS_SWAPPED_BYTE_ORDER, &args![]).u8() != 0 {
+            fn_00478130(e, Ptr::new(record));
+        }
+        e.call(0x0048_5990, &args![CHUNK_DSTD, record, 0x14u32]);
+        if e.call(IS_SWAPPED_BYTE_ORDER, &args![]).u8() != 0 {
+            fn_00478130(e, Ptr::new(record));
+        }
+        let stage = current(e);
+        let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+        if !model.is_null() {
+            e.call(
+                0x0048_a520,
+                &args![model, CHUNK_DMDL, CHUNK_DMDT, CHUNK_DMDS],
+            );
+        }
+        e.call(0x0048_56d0, &args![CHUNK_DSTF]);
+        index += 1;
+    }
+    e.mem.free(record);
+}
+
+// Translated from 00478130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fastcall `this` = a `DSTD` record: calls `00401080(address, 0)` on each
+/// of the four words at +4, +8, +0x0C and +0x10 (the byte-order swap).
+pub fn fn_00478130(e: &mut Engine, this: Ptr) {
+    for offset in [4u32, 8, 0xc, 0x10] {
+        e.call(0x0040_1080, &args![this.addr() + offset, 0u32]);
+    }
+}
+
+// Translated from 004781b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fastcall `this` = a `DEST` record (8 bytes): zeroes the health word and
+/// the two bytes at +4 and +5 (bytes 6 and 7 are left alone). Returns
+/// `this`.
+pub fn fn_004781b0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u8(this.addr() + 4, 0);
+    e.mem.set_u8(this.addr() + 5, 0);
+    this
+}
+
+// Translated from 004781e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDestructibleObjectForm::LoadChunk` (Xbox PDB), cdecl: reads the
+/// form's chunks from the plugin `file`. Does nothing without a form or a
+/// file. The current chunk type (`TESFile::GetTESChunk`, `004726b0`) is
+/// read first, then the component's data is created if missing
+/// ([`fn_00478600`]).
+///
+/// * `DEST`: an 8-byte record (health, stage count, flags) fills the data
+///   and the stage array is allocated ([`fn_00478e90`]); a record of
+///   another size is the old format: it is logged ("Old Destruction data
+///   found on form ... It needs to be resaved.") and the data deleted
+///   ([`fn_00478690`]).
+/// * `DSTD`: a 0x14-byte record fills the stage it numbers (when that
+///   number is below the stage count). Then chunks are read until `DSTF`,
+///   the end of the record or a `file` that has no more: `DMDL` (the model
+///   path, through slot 0x18 of the stage's model), `DMDT` (the model's
+///   texture chunk, `004893e0`) and `DMDS` (the texture swaps,
+///   `0048a7b0` with the chunk's bytes, size and version) after creating
+///   the stage's model ([`fn_00478570`]).
+///
+/// The stack buffers the game takes with `__alloca_probe_16` are heap
+/// blocks here, freed at the end. The stack cookie is not translated.
+pub fn bgs_destructible_object_form_load_chunk(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    file: Ptr,
+) {
+    if file.is_null() || this.is_null() {
+        return;
+    }
+    let chunk = e.call(0x0047_26b0, &args![file]).u32();
+    fn_00478600(e, this);
+    let data: Ptr<DestructibleObjectData> =
+        Ptr::new(e.call(GET_COMPONENT_DATA, &args![this]).u32());
+    if chunk == CHUNK_DSTD {
+        load_stage_chunk(e, file, data);
+    } else if chunk == CHUNK_DEST {
+        let header = e.mem.alloc(8);
+        fn_004781b0(e, Ptr::new(header));
+        let size = e.call(0x0040_1660, &args![file]).u32();
+        if size == 8 {
+            e.call(0x0047_2890, &args![file, header, 0u32]);
+            if e.call(IS_SWAPPED_BYTE_ORDER_FILE, &args![file]).u8() != 0 {
+                e.call(0x0050_3210, &args![header]);
+            }
+            let health = e.mem.u32(header);
+            e.set(data, DestructibleObjectData::iHealth, health);
+            let count = e.mem.u8(header + 4);
+            e.set(data, DestructibleObjectData::cNumStages, count);
+            let flags = e.mem.u8(header + 5);
+            e.set(data, DestructibleObjectData::cFlags, flags);
+            if count != 0 {
+                let stages = fn_00478e90(e, this, count);
+                e.set(data, DestructibleObjectData::pStagesArray, stages);
+            }
+        } else {
+            let form = e
+                .call(
+                    DYNAMIC_CAST,
+                    &args![this, 0u32, 0x0118_32acu32, 0x0118_3028u32, 0u32],
+                )
+                .u32();
+            let name = e.vcall(form, 0x130, &args![]).u32();
+            let id = e.call(GET_FORM_ID, &args![form]).u32();
+            e.call(LOG_MESSAGE, &args![0x0101_a6c8u32, id, name]);
+            fn_00478690(e, this);
+        }
+        e.mem.free(header);
+    }
+}
+
+/// The `DSTD` part of [`bgs_destructible_object_form_load_chunk`].
+fn load_stage_chunk(e: &mut Engine, file: Ptr, data: Ptr<DestructibleObjectData>) {
+    let record = e.mem.alloc(0x14);
+    e.call(MEMSET, &args![record, 0u32, 0x14u32]);
+    e.call(0x0047_2890, &args![file, record, 0x14u32]);
+    if e.call(IS_SWAPPED_BYTE_ORDER_FILE, &args![file]).u8() != 0 {
+        fn_00478130(e, Ptr::new(record));
+    }
+    let index = e.mem.u8(record + 1);
+    if (index as u32) < e.get(data, DestructibleObjectData::cNumStages) as u32 {
+        let stage = stage_at(e, data, index as u32);
+        let damage_stage = e.mem.u8(record + 2);
+        e.set(
+            stage,
+            DestructibleObjectStage::cModelDamageStage,
+            damage_stage,
+        );
+        let percentage = e.mem.u8(record);
+        e.set(
+            stage,
+            DestructibleObjectStage::cHealthPercentage,
+            percentage,
+        );
+        let stage_flags = e.mem.u8(record + 3);
+        e.set(stage, DestructibleObjectStage::cFlags, stage_flags);
+        let rate = e.mem.u32(record + 4);
+        e.set(stage, DestructibleObjectStage::iSelfDamagePerSecond, rate);
+        let explosion = e.mem.u32(record + 8);
+        e.set(
+            stage,
+            DestructibleObjectStage::pExplosion,
+            Ptr::new(explosion),
+        );
+        let debris = e.mem.u32(record + 0xc);
+        e.set(stage, DestructibleObjectStage::pDebris, Ptr::new(debris));
+        let count = e.mem.u32(record + 0x10);
+        e.set(stage, DestructibleObjectStage::iDebrisCount, count);
+
+        let mut buffers = vec![];
+        loop {
+            let chunk = e.call(0x0047_26b0, &args![file]).u32();
+            if chunk == 0 {
+                break;
+            }
+            let stage = stage_at(e, data, index as u32);
+            match chunk {
+                CHUNK_DSTF => break,
+                CHUNK_DMDL => {
+                    fn_00478570(e, stage);
+                    let size = e.call(0x0040_1660, &args![file]).u32();
+                    let buffer = e.mem.alloc(size);
+                    buffers.push(buffer);
+                    e.call(0x0047_2890, &args![file, buffer, 0u32]);
+                    let stage = stage_at(e, data, index as u32);
+                    let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+                    e.vcall(model.addr(), 0x18, &args![buffer]);
+                }
+                CHUNK_DMDT => {
+                    fn_00478570(e, stage);
+                    let stage = stage_at(e, data, index as u32);
+                    let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+                    e.call(0x0048_93e0, &args![model, file]);
+                }
+                CHUNK_DMDS => {
+                    fn_00478570(e, stage);
+                    let size = e.call(0x0040_1660, &args![file]).u32();
+                    let buffer = e.mem.alloc(size);
+                    buffers.push(buffer);
+                    e.call(0x0047_2890, &args![file, buffer, size]);
+                    let version = e.call(0x0040_3570, &args![file]).u32() & 0xffff;
+                    let stage = stage_at(e, data, index as u32);
+                    let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+                    e.call(0x0048_a7b0, &args![model, buffer, size, version]);
+                }
+                _ => {}
+            }
+            if e.call(0x0047_26f0, &args![file]).u8() == 0 {
+                break;
+            }
+        }
+        for buffer in buffers {
+            e.mem.free(buffer);
+        }
+    }
+    e.mem.free(record);
+}
+
+// Translated from 00478570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fastcall `this` = a stage: creates its replacement model (0x20 bytes,
+/// constructed by `0048a3d0`) when it has none.
+pub fn fn_00478570(e: &mut Engine, this: Ptr<DestructibleObjectStage>) {
+    if !e
+        .get(this, DestructibleObjectStage::pReplacementModel)
+        .is_null()
+    {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+    let model = if block != 0 {
+        e.call(0x0048_a3d0, &args![block]).u32()
+    } else {
+        0
+    };
+    e.set(
+        this,
+        DestructibleObjectStage::pReplacementModel,
+        Ptr::new(model),
+    );
+}
+
+// Translated from 00478600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fastcall `this` = the component: creates its data (0x14 bytes,
+/// constructed by `004751d0`) when it has none.
+pub fn fn_00478600(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>) {
+    if !e.get(this, BGSDestructibleObjectForm::pData).is_null() {
+        return;
+    }
+    let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+    let data = if block != 0 {
+        fn_004751d0(e, Ptr::new(block))
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, BGSDestructibleObjectForm::pData, data);
+}
+
+// Translated from 00478690 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fastcall `this` = the component: deletes its data (the scalar deleting
+/// destructor `004753a0` with the delete flag) and clears the pointer.
+pub fn fn_00478690(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>) {
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    if !data.is_null() {
+        fn_004753a0(e, data, 1);
+    }
+    e.set(this, BGSDestructibleObjectForm::pData, Ptr::NULL);
+}
+
+// Translated from 004786e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the destruction data of another form into this component
+/// (`this` = the component, `other` the other form): the other form is cast
+/// (`__RTDynamicCast`, types `01183040` to `011832ac`); nothing happens
+/// when that fails. Its component data is read with `00726070`: without
+/// any, this component's data is deleted; otherwise this component's data
+/// is created, or (when it exists) its stages are deleted (`004752e0`
+/// with the delete flag) and its stage array freed; then health, stage
+/// count and flags are copied, the stage array allocated
+/// ([`fn_00478e90`]) and every stage copied ([`fn_00478fd0`]).
+pub fn fn_004786e0(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>, other: Ptr) {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3040u32, 0x0118_32acu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return;
+    }
+    let source: Ptr<DestructibleObjectData> =
+        Ptr::new(e.call(GET_COMPONENT_DATA, &args![cast]).u32());
+    if source.is_null() {
+        fn_00478690(e, this);
+        return;
+    }
+    if e.get(this, BGSDestructibleObjectForm::pData).is_null() {
+        let block = e.call(OPERATOR_NEW, &args![0x14u32]).u32();
+        let data = if block != 0 {
+            fn_004751d0(e, Ptr::new(block))
+        } else {
+            Ptr::NULL
+        };
+        e.set(this, BGSDestructibleObjectForm::pData, data);
+    } else {
+        let mut index = 0u32;
+        loop {
+            let data = e.get(this, BGSDestructibleObjectForm::pData);
+            if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+                break;
+            }
+            let stage = stage_at(e, data, index);
+            if !stage.is_null() {
+                e.call(0x0047_52e0, &args![stage, 1u32]);
+            }
+            index += 1;
+        }
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        let stages = e.get(data, DestructibleObjectData::pStagesArray);
+        e.call(OPERATOR_DELETE, &args![stages]);
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        e.set(data, DestructibleObjectData::pStagesArray, Ptr::NULL);
+    }
+    let data = e.get(this, BGSDestructibleObjectForm::pData);
+    let flags = e.get(source, DestructibleObjectData::cFlags);
+    e.set(data, DestructibleObjectData::cFlags, flags);
+    let health = e.get(source, DestructibleObjectData::iHealth);
+    e.set(data, DestructibleObjectData::iHealth, health);
+    let count = e.get(source, DestructibleObjectData::cNumStages);
+    e.set(data, DestructibleObjectData::cNumStages, count);
+    if count != 0 {
+        let stages = fn_00478e90(e, this, count);
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        e.set(data, DestructibleObjectData::pStagesArray, stages);
+        let mut index = 0u32;
+        loop {
+            let data = e.get(this, BGSDestructibleObjectForm::pData);
+            if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+                break;
+            }
+            let from = stage_at(e, source, index);
+            let to = stage_at(e, data, index);
+            fn_00478fd0(e, to, from);
+            index += 1;
+        }
+    }
+}
+
+// Translated from 00478900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether another form's destruction data differs from this component's
+/// (`other` is cast as in [`fn_004786e0`]): true when the cast fails, when
+/// only one of the two has data, or when health, flags, stage count or any
+/// stage differs. Per stage the compared fields are: percentage,
+/// self damage per second, model damage stage, flags, explosion, debris,
+/// the replacement model's presence, and the models themselves (virtual
+/// slot 0x0C of this stage's model with the other's as argument, true when
+/// it answers yes). The debris count is compared with itself (the code
+/// reads the other form's stage on both sides), so it never differs.
+pub fn fn_00478900(e: &mut Engine, this: Ptr<BGSDestructibleObjectForm>, other: Ptr) -> bool {
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![other, 0u32, 0x0118_3040u32, 0x0118_32acu32, 0u32],
+        )
+        .u32();
+    if cast == 0 {
+        return true;
+    }
+    let theirs: Ptr<DestructibleObjectData> =
+        Ptr::new(e.call(GET_COMPONENT_DATA, &args![cast]).u32());
+    let ours = e.get(this, BGSDestructibleObjectForm::pData);
+    if theirs.is_null() || ours.is_null() {
+        return !(theirs.is_null() && ours.is_null());
+    }
+    if e.get(ours, DestructibleObjectData::iHealth)
+        != e.get(theirs, DestructibleObjectData::iHealth)
+        || e.get(ours, DestructibleObjectData::cFlags)
+            != e.get(theirs, DestructibleObjectData::cFlags)
+        || e.get(ours, DestructibleObjectData::cNumStages)
+            != e.get(theirs, DestructibleObjectData::cNumStages)
+    {
+        return true;
+    }
+    let mut index = 0u32;
+    loop {
+        let ours = e.get(this, BGSDestructibleObjectForm::pData);
+        if index >= e.get(ours, DestructibleObjectData::cNumStages) as u32 {
+            return false;
+        }
+        let a = stage_at(e, ours, index);
+        let b = stage_at(e, theirs, index);
+        if e.get(a, DestructibleObjectStage::cHealthPercentage)
+            != e.get(b, DestructibleObjectStage::cHealthPercentage)
+            || e.get(a, DestructibleObjectStage::iSelfDamagePerSecond)
+                != e.get(b, DestructibleObjectStage::iSelfDamagePerSecond)
+            || e.get(a, DestructibleObjectStage::cModelDamageStage)
+                != e.get(b, DestructibleObjectStage::cModelDamageStage)
+            || e.get(a, DestructibleObjectStage::cFlags)
+                != e.get(b, DestructibleObjectStage::cFlags)
+            || e.get(a, DestructibleObjectStage::pExplosion)
+                != e.get(b, DestructibleObjectStage::pExplosion)
+            || e.get(a, DestructibleObjectStage::pDebris)
+                != e.get(b, DestructibleObjectStage::pDebris)
+        {
+            return true;
+        }
+        // The debris count of `b` against itself: never different.
+        let model_a = e.get(a, DestructibleObjectStage::pReplacementModel);
+        let model_b = e.get(b, DestructibleObjectStage::pReplacementModel);
+        if model_a.is_null() != model_b.is_null() {
+            return true;
+        }
+        if !model_a.is_null() && e.vcall(model_a.addr(), 0xc, &args![model_b]).u8() != 0 {
+            return true;
+        }
+        index += 1;
+    }
+}
+
+// Translated from 00478be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BGSDestructibleObjectForm::InitItem` (Xbox PDB), `this` = the
+/// component, `owner` the form that holds it: for every stage turns the
+/// explosion and debris form ids into forms (the id is made absolute with
+/// `TESForm::AddCompileIndex` against `owner`'s file, looked up with
+/// `004839c0` and cast; the explosion is cast to `0118620c`, the debris to
+/// `011861f4`) and logs "MASTERFILE: Unable to find stage %i ..." when
+/// nothing is found, naming the owner by its name (virtual slot 0x130,
+/// when `00474cb0` says it has one), its form id, or as unknown when
+/// `owner` is null. Calls `0048aa80(owner)` on every replacement model.
+/// For an owner of form type 0x2A or 0x2B the data's health is then
+/// `005f0b00(owner)` (`TESActorBase::GetHealth`).
+pub fn bgs_destructible_object_form_init_item(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    owner: Ptr,
+) {
+    if e.get(this, BGSDestructibleObjectForm::pData).is_null() {
+        return;
+    }
+    let mut index = 0u32;
+    loop {
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        if index >= e.get(data, DestructibleObjectData::cNumStages) as u32 {
+            break;
+        }
+        let stage = stage_at(e, data, index);
+        if !e.get(stage, DestructibleObjectStage::pExplosion).is_null() {
+            resolve_stage_form(
+                e,
+                this,
+                owner,
+                index,
+                8,
+                0x0118_620c,
+                [0x0101_a800, 0x0101_a898, 0x0101_a848],
+            );
+        }
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        let stage = stage_at(e, data, index);
+        if !e.get(stage, DestructibleObjectStage::pDebris).is_null() {
+            resolve_stage_form(
+                e,
+                this,
+                owner,
+                index,
+                0xc,
+                0x0118_61f4,
+                [0x0101_a720, 0x0101_a7b8, 0x0101_a768],
+            );
+        }
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        let stage = stage_at(e, data, index);
+        let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+        if !model.is_null() {
+            e.call(0x0048_aa80, &args![model, owner]);
+        }
+        index += 1;
+    }
+    let form_type = e.call(GET_FORM_TYPE, &args![owner]).u32() as i32;
+    if (0x2a..=0x2b).contains(&form_type) {
+        let health = e.call(0x005f_0b00, &args![owner]).u32();
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        e.set(data, DestructibleObjectData::iHealth, health);
+    }
+}
+
+/// One form id of a stage of [`bgs_destructible_object_form_init_item`]
+/// (the word at `offset` of the stage): made absolute, looked up, cast to
+/// `target_type` and stored back; when the result is null the matching
+/// message of `messages` (unknown owner, owner with a name, owner by form
+/// id) is logged with the stage index and the id.
+fn resolve_stage_form(
+    e: &mut Engine,
+    this: Ptr<BGSDestructibleObjectForm>,
+    owner: Ptr,
+    index: u32,
+    offset: u32,
+    target_type: u32,
+    messages: [u32; 3],
+) {
+    let stage_word = |e: &Engine| {
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        stage_at(e, data, index).addr() + offset
+    };
+    let id = e.mem.alloc(4);
+    let word = stage_word(e);
+    let stored = e.mem.u32(word);
+    e.mem.set_u32(id, stored);
+    let file = e.call(0x0048_4e60, &args![owner, 0xffff_ffffu32]).u32();
+    e.call(0x0048_5d50, &args![id, file]);
+    let absolute = e.mem.u32(id);
+    let form = e.call(0x0048_39c0, &args![absolute]).u32();
+    let cast = e
+        .call(
+            DYNAMIC_CAST,
+            &args![form, 0u32, 0x0118_3028u32, target_type, 0u32],
+        )
+        .u32();
+    let word = stage_word(e);
+    e.mem.set_u32(word, cast);
+    let word = stage_word(e);
+    if e.mem.u32(word) == 0 {
+        let absolute = e.mem.u32(id);
+        if owner.is_null() {
+            e.call(LOG_MESSAGE, &args![messages[0], index, absolute]);
+        } else if e.call(0x0047_4cb0, &args![owner]).u32() != 0 {
+            let name = e.vcall(owner.addr(), 0x130, &args![]).u32();
+            e.call(LOG_MESSAGE, &args![messages[1], index, absolute, name]);
+        } else {
+            let form_id = e.call(GET_FORM_ID, &args![owner]).u32();
+            e.call(LOG_MESSAGE, &args![messages[2], index, absolute, form_id]);
+        }
+    }
+    e.mem.free(id);
+}
+
+// Translated from 00478e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Thiscall (`this`, the component, is not read), one byte parameter:
+/// allocates an array of `count` stage pointers and, for each, a stage
+/// (0x18 bytes, constructed by [`fn_00478f70`]). Returns 0 for a count of
+/// 0.
+pub fn fn_00478e90(e: &mut Engine, _this: Ptr<BGSDestructibleObjectForm>, count: u8) -> Ptr {
+    if count == 0 {
+        return Ptr::NULL;
+    }
+    let array = e.call(OPERATOR_NEW, &args![count as u32 * 4]).u32();
+    for index in 0..count as u32 {
+        let block = e.call(OPERATOR_NEW, &args![0x18u32]).u32();
+        let stage = if block != 0 {
+            fn_00478f70(e, Ptr::new(block)).addr()
+        } else {
+            0
+        };
+        e.mem.set_u32(array + index * 4, stage);
+    }
+    Ptr::new(array)
+}
+
+// Translated from 00478f70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DestructibleObjectStage` constructor (fastcall `this`): everything
+/// zero (bytes 0 to 2, the words at +4 to +0x14; byte 3 is left alone).
+/// Returns `this`.
+pub fn fn_00478f70(
+    e: &mut Engine,
+    this: Ptr<DestructibleObjectStage>,
+) -> Ptr<DestructibleObjectStage> {
+    e.set(this, DestructibleObjectStage::cModelDamageStage, 0);
+    e.set(this, DestructibleObjectStage::cHealthPercentage, 0);
+    e.set(this, DestructibleObjectStage::cFlags, 0);
+    e.set(this, DestructibleObjectStage::iSelfDamagePerSecond, 0);
+    e.set(this, DestructibleObjectStage::pExplosion, Ptr::NULL);
+    e.set(this, DestructibleObjectStage::pDebris, Ptr::NULL);
+    e.set(this, DestructibleObjectStage::iDebrisCount, 0);
+    e.set(this, DestructibleObjectStage::pReplacementModel, Ptr::NULL);
+    this
+}
+
+// Translated from 00478fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies stage `from` into `this` (nothing when `from` is null): the
+/// fields, then the replacement model: this stage's model is deleted
+/// (virtual slot 0x10 with 1) and cleared; when `from` has one, a new model
+/// is created (0x20 bytes, `0048a3d0`) and made a copy of it (virtual slot
+/// 0x08 with the other model).
+pub fn fn_00478fd0(
+    e: &mut Engine,
+    this: Ptr<DestructibleObjectStage>,
+    from: Ptr<DestructibleObjectStage>,
+) {
+    if from.is_null() {
+        return;
+    }
+    let percentage = e.get(from, DestructibleObjectStage::cHealthPercentage);
+    e.set(this, DestructibleObjectStage::cHealthPercentage, percentage);
+    let rate = e.get(from, DestructibleObjectStage::iSelfDamagePerSecond);
+    e.set(this, DestructibleObjectStage::iSelfDamagePerSecond, rate);
+    let damage_stage = e.get(from, DestructibleObjectStage::cModelDamageStage);
+    e.set(
+        this,
+        DestructibleObjectStage::cModelDamageStage,
+        damage_stage,
+    );
+    let flags = e.get(from, DestructibleObjectStage::cFlags);
+    e.set(this, DestructibleObjectStage::cFlags, flags);
+    let explosion = e.get(from, DestructibleObjectStage::pExplosion);
+    e.set(this, DestructibleObjectStage::pExplosion, explosion);
+    let debris = e.get(from, DestructibleObjectStage::pDebris);
+    e.set(this, DestructibleObjectStage::pDebris, debris);
+    let count = e.get(from, DestructibleObjectStage::iDebrisCount);
+    e.set(this, DestructibleObjectStage::iDebrisCount, count);
+    let old_model = e.get(this, DestructibleObjectStage::pReplacementModel);
+    if !old_model.is_null() {
+        e.vcall(old_model.addr(), 0x10, &args![1u32]);
+        e.set(this, DestructibleObjectStage::pReplacementModel, Ptr::NULL);
+    }
+    let source_model = e.get(from, DestructibleObjectStage::pReplacementModel);
+    if !source_model.is_null() {
+        let block = e.call(OPERATOR_NEW, &args![0x20u32]).u32();
+        let model = if block != 0 {
+            e.call(0x0048_a3d0, &args![block]).u32()
+        } else {
+            0
+        };
+        e.set(
+            this,
+            DestructibleObjectStage::pReplacementModel,
+            Ptr::new(model),
+        );
+        let model = e.get(this, DestructibleObjectStage::pReplacementModel);
+        e.vcall(model.addr(), 0x8, &args![source_model]);
+    }
+}
+
+// Translated from 00479110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the 16-byte `BSSimpleArray` of node pointers (fastcall
+/// `this`): sets the vtable (`0101a8e8`) and calls `006b3eb0(0, 0)`.
+/// Returns `this`.
+pub fn fn_00479110(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0101_a8e8);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00479140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of that array (fastcall `this`): sets the vtable
+/// (`0101a8e8`) and calls `008454f0(1)`.
+pub fn fn_00479140(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_a8e8);
+    e.call(0x0084_54f0, &args![this, 1u32]);
+}
+
+// Translated from 00479160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<NiNode *, 1024>::scalar deleting destructor` (Xbox PDB):
+/// runs [`fn_00479140`] and frees the block when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn bs_simple_array_ni_node_p_1024_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00479140(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00479190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the self-damage map (`NiTMap` of references to
+/// `unsigned int`): runs the base constructor [`fn_004791f0`] with `size`
+/// (the number of buckets) and sets the vtable to `0101a8fc`. Returns
+/// `this`.
+pub fn fn_00479190(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    fn_004791f0(e, this, size);
+    e.mem.set_u32(this.addr(), 0x0101_a8fc);
+    this
+}
+
+// Translated from 004791c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<TESObjectREFR *, unsigned int>::scalar deleting destructor`
+/// (Xbox PDB): runs the destructor body [`fn_00479260`] and frees the block
+/// when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_tes_object_refr_p_unsigned_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_00479260(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004791f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase` constructor (thiscall, `size` = bucket count): vtable
+/// `0101a91c`, the count at +4, zero at +0x0C, the bucket array at +8
+/// (`size * 4` bytes from `00aa1070`) cleared with `memset`. Returns
+/// `this`.
+pub fn fn_004791f0(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), 0x0101_a91c);
+    e.mem.set_u32(this.addr() + 4, size);
+    e.mem.set_u32(this.addr() + 0xc, 0);
+    let buckets = e.call(0x00aa_1070, &args![size << 2]).u32();
+    e.mem.set_u32(this.addr() + 8, buckets);
+    let buckets = e.mem.u32(this.addr() + 8);
+    let size = e.mem.u32(this.addr() + 4) << 2;
+    e.call(MEMSET, &args![buckets, 0u32, size]);
+    this
+}
+
+// Translated from 00479260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the self-damage map (fastcall `this`): vtable
+/// `0101a8fc`, `00438af0` (empties the map), then the base destructor
+/// [`fn_004792c0`]. (The compiler's exception frame is not translated.)
+pub fn fn_00479260(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_a8fc);
+    e.call(0x0043_8af0, &args![this]);
+    fn_004792c0(e, this);
+}
+
+// Translated from 004792c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase` destructor body (fastcall `this`): vtable `0101a91c`,
+/// `00438af0` (empties the map), then frees the bucket array at +8
+/// (`00aa10f0`).
+pub fn fn_004792c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_a91c);
+    e.call(0x0043_8af0, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(0x00aa_10f0, &args![buckets]);
+}
+
+// Translated from 004792f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., TESObjectREFR *, unsigned int>::scalar deleting
+/// destructor` (Xbox PDB): runs the base destructor body [`fn_004792c0`]
+/// and frees the block when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_base_tes_object_refr_p_unsigned_int_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_004792c0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1660,6 +2776,81 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00477640,
             bgs_destructible_object_form_queue_files(Ptr<BGSDestructibleObjectForm>, u32, u32, u32)
+        ),
+        entry!(
+            0x00477780,
+            bgs_destructible_object_form_preload_replacement_models(
+                Ptr<BGSDestructibleObjectForm>,
+                u32,
+            )
+        ),
+        entry!(0x004778a0, fn_004778a0(Ptr<BGSDestructibleObjectForm>)),
+        entry!(0x00477900, bgs_explosion_get_radius_bs_units(Ptr) -> f32),
+        entry!(
+            0x00477970,
+            fn_00477970(Ptr<BGSDestructibleObjectForm>, u8, f32, f32, Ptr) -> f32
+        ),
+        entry!(
+            0x00477a50,
+            fn_00477a50(Ptr<BGSDestructibleObjectForm>, u8, f32, f32, Ptr) -> f32
+        ),
+        entry!(
+            0x00477ce0,
+            bgs_destructible_object_form_set_self_damage(Ptr, u32)
+        ),
+        entry!(0x00477d10, fn_00477d10(Ptr)),
+        entry!(
+            0x00477f20,
+            bgs_destructible_object_form_save(Ptr<BGSDestructibleObjectForm>)
+        ),
+        entry!(0x00478130, fn_00478130(Ptr)),
+        entry!(0x004781b0, fn_004781b0(Ptr) -> Ptr),
+        entry!(
+            0x004781e0,
+            bgs_destructible_object_form_load_chunk(Ptr<BGSDestructibleObjectForm>, Ptr)
+        ),
+        entry!(0x00478570, fn_00478570(Ptr<DestructibleObjectStage>)),
+        entry!(0x00478600, fn_00478600(Ptr<BGSDestructibleObjectForm>)),
+        entry!(0x00478690, fn_00478690(Ptr<BGSDestructibleObjectForm>)),
+        entry!(0x004786e0, fn_004786e0(Ptr<BGSDestructibleObjectForm>, Ptr)),
+        entry!(
+            0x00478900,
+            fn_00478900(Ptr<BGSDestructibleObjectForm>, Ptr) -> bool
+        ),
+        entry!(
+            0x00478be0,
+            bgs_destructible_object_form_init_item(Ptr<BGSDestructibleObjectForm>, Ptr)
+        ),
+        entry!(
+            0x00478e90,
+            fn_00478e90(Ptr<BGSDestructibleObjectForm>, u8) -> Ptr
+        ),
+        entry!(
+            0x00478f70,
+            fn_00478f70(Ptr<DestructibleObjectStage>) -> Ptr<DestructibleObjectStage>
+        ),
+        entry!(
+            0x00478fd0,
+            fn_00478fd0(Ptr<DestructibleObjectStage>, Ptr<DestructibleObjectStage>)
+        ),
+        entry!(0x00479110, fn_00479110(Ptr) -> Ptr),
+        entry!(0x00479140, fn_00479140(Ptr)),
+        entry!(
+            0x00479160,
+            bs_simple_array_ni_node_p_1024_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x00479190, fn_00479190(Ptr, u32) -> Ptr),
+        entry!(
+            0x004791c0,
+            ni_t_map_tes_object_refr_p_unsigned_int_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x004791f0, fn_004791f0(Ptr, u32) -> Ptr),
+        entry!(0x00479260, fn_00479260(Ptr)),
+        entry!(0x004792c0, fn_004792c0(Ptr)),
+        entry!(
+            0x004792f0,
+            ni_t_map_base_tes_object_refr_p_unsigned_int_scalar_deleting_destructor(Ptr, u32)
+                -> Ptr
         ),
     ]
 }
@@ -3463,5 +4654,1450 @@ mod tests {
         damage(&mut e, this, reference, 30.0);
         let log = e.call_log.take().unwrap();
         assert!(log.contains(&(0x009a_51e0, vec![0x7777, reference])));
+    }
+
+    // -----------------------------------------------------------------
+    // Second session
+    // -----------------------------------------------------------------
+
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    fn log_of(e: &mut Engine) -> Vec<(u32, Vec<u32>)> {
+        e.call_log.take().unwrap()
+    }
+
+    /// `operator new`, `operator delete` and `memset` as plain doubles.
+    fn memory_doubles(e: &mut Engine) {
+        e.register(OPERATOR_NEW, |e, a| ret(e.mem.alloc(a[0])));
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.register(MEMSET, |e, a| {
+            e.mem.write(a[0], &vec![a[1] as u8; a[2] as usize]);
+            ret(a[0])
+        });
+    }
+
+    fn preload_engine(answer: u32) -> Engine {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(QUEUED_FILE_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        e.register(0x00c3_c590, |_, a| ret(a[0]));
+        e.register_double(0x0044_6990, move |_, _| ret(answer));
+        noop(&mut e, &[0x0040_b460, 0x0045_c6b0, 0x0044_3d30]);
+        e
+    }
+
+    #[test]
+    fn preloading_creates_the_file_queues_it_and_counts_it() {
+        let mut e = preload_engine(1);
+        let (this, data) = make_component(&mut e, 100, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7780, &args![this, 0x55u32]);
+        let log = log_of(&mut e);
+        let holder = data.addr() + 0x10;
+        let file = e.mem.u32(holder);
+        assert_ne!(file, 0);
+        assert!(log.contains(&(OPERATOR_NEW, vec![0x28])));
+        assert!(log.contains(&(0x00c3_c590, vec![file, 5])));
+        assert!(log.contains(&(QUEUED_FILE_ASSIGN, vec![holder, file])));
+        assert!(log.contains(&(0x0044_6990, vec![file])));
+        assert!(log.contains(&(0x0040_b460, vec![data.addr() + 0xc])));
+        assert!(!log.contains(&(QUEUED_FILE_ASSIGN, vec![holder, 0])));
+    }
+
+    #[test]
+    fn preloading_clears_the_holder_when_the_file_is_refused() {
+        let mut e = preload_engine(0);
+        let (this, data) = make_component(&mut e, 100, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7780, &args![this, 0x55u32]);
+        let log = log_of(&mut e);
+        let holder = data.addr() + 0x10;
+        assert_eq!(e.mem.u32(holder), 0);
+        assert!(log.contains(&(QUEUED_FILE_ASSIGN, vec![holder, 0])));
+        assert!(calls_to(&log, 0x0040_b460).is_empty());
+    }
+
+    #[test]
+    fn preloading_does_nothing_new_when_a_file_is_held_or_without_data() {
+        let mut e = preload_engine(1);
+        let (this, data) = make_component(&mut e, 100, &[]);
+        e.mem.set_u32(data.addr() + 0x10, 0x1234);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7780, &args![this, 0x55u32]);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+        assert_eq!(calls_to(&log, 0x0040_b460).len(), 1);
+
+        let empty: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7780, &args![empty, 0x55u32]);
+        assert_eq!(log_of(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn the_preload_counter_clears_the_holder_at_zero() {
+        let mut e = engine();
+        e.register(POINTER_GET, |e, a| ret(e.mem.u32(a[0])));
+        e.register(QUEUED_FILE_ASSIGN, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            Ret::default()
+        });
+        // `004019a0` takes one off the count at its argument.
+        e.register(0x0040_19a0, |e, a| {
+            let count = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], count.wrapping_sub(1));
+            Ret::default()
+        });
+        let (this, data) = make_component(&mut e, 100, &[]);
+        let holder = data.addr() + 0x10;
+        e.mem.set_u32(holder, 0x1234);
+        e.set(data, DestructibleObjectData::iReplacementModelRefCount, 2);
+        e.call(0x0047_78a0, &args![this]);
+        assert_eq!(e.mem.u32(holder), 0x1234);
+        e.call(0x0047_78a0, &args![this]);
+        assert_eq!(e.mem.u32(holder), 0);
+        // Nothing held: the counter is left alone.
+        e.call(0x0047_78a0, &args![this]);
+        assert_eq!(
+            e.get(data, DestructibleObjectData::iReplacementModelRefCount),
+            0
+        );
+        // No data at all.
+        let empty: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call(0x0047_78a0, &args![empty]);
+    }
+
+    fn limit_engine() -> Engine {
+        let mut e = engine();
+        // `00477950` answers the byte at +0x100, `006a78f0` the float at +0x110.
+        e.register(0x0047_7950, |e, a| ret(e.mem.u8(a[0] + 0x100) as u32));
+        e.register(0x006a_78f0, |e, a| e.mem.f32(a[0] + 0x110).into_ret());
+        e
+    }
+
+    fn limit_explosion(e: &mut Engine, radius: f32, other: f32) -> u32 {
+        let explosion = e.mem.alloc(0x120);
+        e.mem.set_f32(explosion + 0x7c, radius);
+        e.mem.set_u8(explosion + 0x100, 1);
+        e.mem.set_f32(explosion + 0x110, other);
+        explosion
+    }
+
+    #[test]
+    fn explosion_radius_is_scaled_by_the_setting_unless_the_flag_is_set() {
+        let mut e = limit_engine();
+        let setting = e.mem.alloc(8);
+        e.mem.set_f32(setting, 2.0);
+        e.register_double(SETTING_POINTER, move |_, _| ret(setting));
+        let explosion = limit_explosion(&mut e, 5.0, 0.0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_7900, &args![explosion]).f32(), 5.0);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, SETTING_POINTER).is_empty());
+        assert!(log.contains(&(0x0047_7950, vec![explosion, 1])));
+
+        e.mem.set_u8(explosion + 0x100, 0);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_7900, &args![explosion]).f32(), 10.0);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(SETTING_POINTER, vec![0x011d_1218])));
+    }
+
+    #[test]
+    fn the_first_stage_that_passes_both_limits_gives_its_health() {
+        let mut e = limit_engine();
+        let near = limit_explosion(&mut e, 5.0, 3.0);
+        let far = limit_explosion(&mut e, 1.0, 3.0);
+        let stages = [
+            StageSpec {
+                percentage: 80,
+                explosion: far,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 40,
+                explosion: near,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 10,
+                ..StageSpec::default()
+            },
+        ];
+        let (this, _) = make_component(&mut e, 200, &stages);
+        let out = e.mem.alloc(4);
+        let run = |e: &mut Engine, percentage: u32, radius: f32, other: f32, out: u32| {
+            e.call(0x0047_7970, &args![this, percentage, radius, other, out])
+                .f32()
+        };
+        // Stage 0 (80) is not below 60; stage 1 passes: 40% of 200.
+        assert_eq!(run(&mut e, 60, 2.0, 2.0, out), 80.0);
+        assert_eq!(e.mem.u32(out), near);
+        // The radius limit is above every radius: nothing, out untouched.
+        e.mem.set_u32(out, 0);
+        assert_eq!(run(&mut e, 60, 6.0, 2.0, out), -1.0);
+        assert_eq!(e.mem.u32(out), 0);
+        // The second value is below the limit.
+        assert_eq!(run(&mut e, 60, 2.0, 3.5, out), -1.0);
+        // The nearer stage: 80% of 200, and no out pointer is fine.
+        assert_eq!(run(&mut e, 90, 0.5, 2.0, 0), 160.0);
+        assert_eq!(run(&mut e, 90, 0.5, 2.0, out), 160.0);
+        assert_eq!(e.mem.u32(out), far);
+    }
+
+    #[test]
+    fn the_time_to_the_first_matching_stage_adds_up_the_stages() {
+        let mut e = limit_engine();
+        let explosion = limit_explosion(&mut e, 5.0, 3.0);
+        let stages = [
+            StageSpec {
+                percentage: 100,
+                rate: 2,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 60,
+                rate: 4,
+                explosion,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 20,
+                rate: 0,
+                ..StageSpec::default()
+            },
+        ];
+        let (this, _) = make_component(&mut e, 100, &stages);
+        let out = e.mem.alloc(4);
+        // From 80: (80 - 60) / 2 at stage 1, which has the explosion.
+        let result = e
+            .call(0x0047_7a50, &args![this, 80u32, 2.0f32, 2.0f32, out])
+            .f32();
+        assert_eq!(result, 10.0);
+        assert_eq!(e.mem.u32(out), explosion);
+        // The explosion fails the limit: the walk goes on, adding
+        // (60 - 20) / 4 at stage 2, and ends without a match.
+        e.mem.set_u32(out, 0);
+        let result = e
+            .call(0x0047_7a50, &args![this, 80u32, 9.0f32, 2.0f32, out])
+            .f32();
+        assert_eq!(result, -1.0);
+        assert_eq!(e.mem.u32(out), 0);
+        // A stage below the percentage right after a stage without self
+        // damage stops the walk.
+        let stages = [StageSpec {
+            percentage: 70,
+            rate: 0,
+            explosion,
+            ..StageSpec::default()
+        }];
+        let (this, _) = make_component(&mut e, 100, &stages);
+        let result = e
+            .call(0x0047_7a50, &args![this, 80u32, 2.0f32, 2.0f32, 0u32])
+            .f32();
+        assert_eq!(result, -1.0);
+    }
+
+    #[test]
+    fn the_total_of_the_walk_includes_every_stage_passed() {
+        let mut e = limit_engine();
+        let explosion = limit_explosion(&mut e, 5.0, 3.0);
+        let stages = [
+            StageSpec {
+                percentage: 100,
+                rate: 2,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 60,
+                rate: 4,
+                ..StageSpec::default()
+            },
+            StageSpec {
+                percentage: 20,
+                explosion,
+                ..StageSpec::default()
+            },
+        ];
+        let (this, _) = make_component(&mut e, 100, &stages);
+        // (80 - 60) / 2 + (60 - 20) / 4 = 20.
+        let result = e
+            .call(0x0047_7a50, &args![this, 80u32, 2.0f32, 2.0f32, 0u32])
+            .f32();
+        assert_eq!(result, 20.0);
+    }
+
+    #[test]
+    fn self_damage_sets_or_removes_the_map_entry() {
+        let mut e = engine();
+        noop(&mut e, &[MAP_SET_AT, MAP_REMOVE_AT]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7ce0, &args![0x1000u32, 0u32]);
+        e.call(0x0047_7ce0, &args![0x1000u32, 7u32]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(MAP_REMOVE_AT, vec![DESTRUCTIBLE_OBJECTS, 0x1000])));
+        assert!(log.contains(&(MAP_SET_AT, vec![DESTRUCTIBLE_OBJECTS, 0x1000, 7])));
+        assert_eq!(calls_to(&log, MAP_SET_AT).len(), 1);
+    }
+
+    /// The doubles of the self-damage finish routine; the reference's
+    /// +0x1f0 is `00452370`'s answer, +0x1f4 `00440da0`'s, +0x1f8
+    /// `00477ba0`'s, +0x1e8 the node `0043fcd0` gives, and the extra list
+    /// (at +0x180) answers the model swap at its +0x7c.
+    fn finish_engine() -> Engine {
+        let mut e = engine();
+        node_doubles(&mut e);
+        reference_doubles(&mut e);
+        form_type_double(&mut e);
+        e.register(0x0045_2370, |e, a| ret(e.mem.u32(a[0] + 0x1f0)));
+        e.register(REFERENCE_TEST_A, |e, a| ret(e.mem.u32(a[0] + 0x1f4)));
+        e.register(0x0047_7ba0, |e, a| ret(e.mem.u32(a[0] + 0x1f8)));
+        e.register(0x0043_fcd0, |e, a| ret(e.mem.u32(a[0] + 0x1e8)));
+        e.register(0x0042_e250, |e, a| ret(e.mem.u32(a[0] + 0x7c)));
+        e.register(0x007a_f430, |_, a| ret(a[0]));
+        e.register(0x0046_23f0, |_, _| ret(7));
+        e.register(0x0082_5c00, |_, _| ret(0x7777));
+        noop(
+            &mut e,
+            &[
+                0x0041_b7c0,
+                0x0048_4650,
+                0x0042_e280,
+                0x0045_1ef0,
+                0x00c6_a270,
+                0x0057_3f40,
+                MAP_REMOVE_AT,
+                0x009a_51e0,
+                0x0043_b370,
+            ],
+        );
+        e.set_global(0x011d_df38, 0x1111u32);
+        e.set_global(0x011d_ea10, 0x2222u32);
+        e.set_global(0x011f_1958, 0x3333u32);
+        e
+    }
+
+    #[test]
+    fn finishing_ignores_refused_and_undamaged_references() {
+        let mut e = finish_engine();
+        let root = make_node(&mut e, 0, true, &[]);
+        let reference = make_reference(&mut e, root, 100.0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7d10, &args![reference]);
+        let log = log_of(&mut e);
+        assert_eq!(log.len(), 2);
+
+        // Accepted, but never damaged (-1.0).
+        let reference = make_reference(&mut e, root, -1.0);
+        e.mem.set_u32(reference + 0x1f0, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7d10, &args![reference]);
+        let log = log_of(&mut e);
+        assert!(calls_to(&log, 0x0041_b7c0).is_empty());
+        assert!(calls_to(&log, MAP_REMOVE_AT).is_empty());
+    }
+
+    #[test]
+    fn finishing_without_a_model_swap_updates_the_damage_stage_nodes() {
+        let mut e = finish_engine();
+        let root = make_node(&mut e, 0, true, &[]);
+        let node = make_node(&mut e, 0, true, &[]);
+        let reference = make_reference(&mut e, root, 100.0);
+        e.mem.set_u32(reference + 0x1f0, 1);
+        e.mem.set_u32(reference + 0x1f4, 1);
+        e.mem.set_u32(reference + 0x1f8, 1);
+        e.mem.set_u32(reference + 0x1e8, node);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7d10, &args![reference]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(0x0041_b7c0, vec![reference + 0x180])));
+        assert!(log.contains(&(0x0048_4650, vec![reference, 0])));
+        assert!(log.contains(&(0x0043_fcd0, vec![reference, 0])));
+        assert!(log.contains(&(CHECKED_CAST, vec![0x0120_2e8c, node])));
+        assert!(log.contains(&(0x0057_3f40, vec![reference])));
+        assert!(log.contains(&(MAP_REMOVE_AT, vec![DESTRUCTIBLE_OBJECTS, reference])));
+        assert!(log.contains(&(0x009a_51e0, vec![0x7777, reference])));
+        assert!(calls_to(&log, 0x0042_e280).is_empty());
+        assert!(calls_to(&log, 0x0045_1ef0).is_empty());
+    }
+
+    #[test]
+    fn finishing_with_a_model_swap_rebuilds_and_activates_the_3d() {
+        let mut e = finish_engine();
+        // The root's slot 0xc gives a container whose slot 0x10 gives the
+        // collision object.
+        e.register(0x0f00_0011, |e, a| ret(e.mem.u32(a[0] + 8)));
+        let collision = e.mem.alloc(0x100);
+        let container = object_with_vtable(&mut e, 0x20, &[(0x10, 0x0f00_0011)]);
+        e.mem.set_u32(container + 8, collision);
+        let root = make_node(&mut e, 0, true, &[]);
+        e.mem.set_u32(root + 8, container);
+        let reference = make_reference(&mut e, root, 100.0);
+        e.mem.set_u32(reference + 0x1f0, 1);
+        e.mem.set_u32(reference + 0x1fc, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7d10, &args![reference]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(0x0042_e280, vec![reference + 0x180])));
+        // The flag word is cleared around slot 0x1cc and restored with the
+        // byte `004623f0` answered.
+        assert!(log.contains(&(0x0046_23f0, vec![0x1111, 0])));
+        assert!(log.contains(&(0x0046_23f0, vec![0x1111, 7])));
+        assert!(log.contains(&(0x0045_1ef0, vec![0x2222, reference, 0x1234, 0, 0])));
+        assert!(log.contains(&(0x0043_b370, vec![collision, 1, 0x4000])));
+        assert_eq!(e.mem.f32(collision + 0xb4), 1.0);
+        assert!(log.contains(&(0x00c6_a270, vec![root, 1, 1, 0])));
+        assert!(calls_to(&log, 0x0043_fcd0).is_empty());
+        // The reference test said no: `00573f40` is not called.
+        assert!(calls_to(&log, 0x0057_3f40).is_empty());
+    }
+
+    type WrittenChunk = (u32, Vec<u8>);
+
+    struct SavedChunks {
+        chunks: Rc<RefCell<Vec<WrittenChunk>>>,
+    }
+
+    fn save_engine(swapped: u32) -> (Engine, SavedChunks) {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        let chunks: Rc<RefCell<Vec<WrittenChunk>>> = Rc::default();
+        let sink = chunks.clone();
+        e.register_double(0x0048_5990, move |e, a| {
+            sink.borrow_mut().push((a[0], e.mem.bytes(a[1], a[2])));
+            Ret::default()
+        });
+        let sink = chunks.clone();
+        e.register_double(0x0048_56d0, move |_, a| {
+            sink.borrow_mut().push((a[0], vec![]));
+            Ret::default()
+        });
+        e.register_double(IS_SWAPPED_BYTE_ORDER, move |_, _| ret(swapped));
+        e.register(GET_FORM_ID, |_, a| ret(a[0] | 0x0100_0000));
+        noop(&mut e, &[0x0050_3210, 0x0040_1080, 0x0048_a520]);
+        (e, SavedChunks { chunks })
+    }
+
+    fn save_stages() -> [StageSpec; 2] {
+        [
+            StageSpec {
+                damage_stage: 2,
+                percentage: 80,
+                flags: 1,
+                rate: 5,
+                explosion: 0x5000,
+                debris: 0x6000,
+                count: 3,
+                model: 0,
+            },
+            StageSpec {
+                damage_stage: 4,
+                percentage: 40,
+                flags: 2,
+                rate: 0,
+                explosion: 0,
+                debris: 0,
+                count: 0,
+                model: 0x7000,
+            },
+        ]
+    }
+
+    #[test]
+    fn saving_writes_the_header_the_stages_and_their_models() {
+        let (mut e, saved) = save_engine(0);
+        let (this, data) = make_component(&mut e, 100, &save_stages());
+        e.set(data, DestructibleObjectData::cFlags, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7f20, &args![this]);
+        let log = log_of(&mut e);
+        let chunks = saved.chunks.borrow();
+        assert_eq!(chunks[0], (CHUNK_DEST, vec![100, 0, 0, 0, 2, 1, 0, 0]));
+        assert_eq!(
+            chunks[1],
+            (
+                CHUNK_DSTD,
+                vec![
+                    80, 0, 2, 1, 5, 0, 0, 0, 0x00, 0x50, 0x00, 0x01, 0x00, 0x60, 0x00, 0x01, 3, 0,
+                    0, 0
+                ]
+            )
+        );
+        assert_eq!(chunks[2], (CHUNK_DSTF, vec![]));
+        assert_eq!(
+            chunks[3],
+            (
+                CHUNK_DSTD,
+                vec![40, 1, 4, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            )
+        );
+        assert_eq!(chunks[4], (CHUNK_DSTF, vec![]));
+        assert_eq!(chunks.len(), 5);
+        // The model of stage 1 is saved between its record and its end.
+        let order: Vec<u32> = log
+            .iter()
+            .map(|(a, _)| *a)
+            .filter(|a| [0x0048_5990, 0x0048_a520, 0x0048_56d0].contains(a))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                0x0048_5990,
+                0x0048_5990,
+                0x0048_56d0,
+                0x0048_5990,
+                0x0048_a520,
+                0x0048_56d0
+            ]
+        );
+        assert!(log.contains(&(
+            0x0048_a520,
+            vec![0x7000, CHUNK_DMDL, CHUNK_DMDT, CHUNK_DMDS]
+        )));
+        // Only the explosion and debris forms that exist are asked.
+        assert_eq!(calls_to(&log, GET_FORM_ID).len(), 2);
+        assert!(calls_to(&log, 0x0050_3210).is_empty());
+        assert!(calls_to(&log, 0x0040_1080).is_empty());
+    }
+
+    #[test]
+    fn saving_swaps_the_records_around_each_write_when_asked() {
+        let (mut e, _saved) = save_engine(1);
+        let (this, _) = make_component(&mut e, 100, &save_stages());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_7f20, &args![this]);
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, 0x0050_3210).len(), 2);
+        // Four words, before and after, for each of the two stages.
+        assert_eq!(calls_to(&log, 0x0040_1080).len(), 16);
+    }
+
+    #[test]
+    fn saving_nothing_without_data() {
+        let (mut e, saved) = save_engine(0);
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call(0x0047_7f20, &args![this]);
+        assert!(saved.chunks.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_stage_record_swap_touches_the_four_words() {
+        let mut e = engine();
+        noop(&mut e, &[0x0040_1080]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8130, &args![0x4000u32]);
+        let log = log_of(&mut e);
+        assert_eq!(
+            log[1..],
+            [
+                (0x0040_1080, vec![0x4004, 0]),
+                (0x0040_1080, vec![0x4008, 0]),
+                (0x0040_1080, vec![0x400c, 0]),
+                (0x0040_1080, vec![0x4010, 0]),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_header_constructor_leaves_bytes_six_and_seven() {
+        let mut e = engine();
+        let header = e.mem.alloc(8);
+        e.mem.write(header, &[0xff; 8]);
+        assert_eq!(e.call(0x0047_81b0, &args![header]).u32(), header);
+        assert_eq!(e.mem.bytes(header, 8), [0, 0, 0, 0, 0, 0, 0xff, 0xff]);
+    }
+
+    type FileChunks = Rc<RefCell<(Vec<(u32, Vec<u8>)>, usize)>>;
+
+    /// A plugin file that hands out its chunks in order: `GetTESChunk`
+    /// (`004726b0`) takes the next one, the reads (`00472890`) and the
+    /// size (`00401660`) are about the one taken last, and `004726f0`
+    /// says whether any are left.
+    fn file_doubles(e: &mut Engine, chunks: Vec<(u32, Vec<u8>)>, swapped: u32) -> FileChunks {
+        let state: FileChunks = Rc::new(RefCell::new((chunks, 0)));
+        let s = state.clone();
+        e.register_double(0x0047_26b0, move |_, _| {
+            let mut s = s.borrow_mut();
+            s.1 += 1;
+            let tag = s.0.get(s.1 - 1).map_or(0, |chunk| chunk.0);
+            ret(tag)
+        });
+        let s = state.clone();
+        e.register_double(0x0047_26f0, move |_, _| {
+            let s = s.borrow();
+            ret((s.1 < s.0.len()) as u32)
+        });
+        let s = state.clone();
+        e.register_double(0x0040_1660, move |_, _| {
+            let s = s.borrow();
+            ret(s.0[s.1 - 1].1.len() as u32)
+        });
+        let s = state.clone();
+        e.register_double(0x0047_2890, move |e, a| {
+            let s = s.borrow();
+            e.mem.write(a[1], &s.0[s.1 - 1].1);
+            Ret::default()
+        });
+        e.register_double(IS_SWAPPED_BYTE_ORDER_FILE, move |_, _| ret(swapped));
+        e.register(0x0040_3570, |_, _| ret(0x1_0004));
+        state
+    }
+
+    const MODEL_SLOT_LOAD: u32 = 0x0f00_0201;
+    const MODEL_SLOT_DELETE: u32 = 0x0f00_0202;
+    const MODEL_SLOT_COPY: u32 = 0x0f00_0203;
+    const MODEL_SLOT_COMPARE: u32 = 0x0f00_0204;
+    const FORM_SLOT_NAME: u32 = 0x0f00_0205;
+
+    /// A model object whose vtable has the four slots the unit uses.
+    fn make_model(e: &mut Engine) -> u32 {
+        object_with_vtable(
+            e,
+            0x40,
+            &[
+                (0x08, MODEL_SLOT_COPY),
+                (0x0c, MODEL_SLOT_COMPARE),
+                (0x10, MODEL_SLOT_DELETE),
+                (0x18, MODEL_SLOT_LOAD),
+            ],
+        )
+    }
+
+    fn model_doubles(e: &mut Engine) {
+        noop(e, &[MODEL_SLOT_LOAD, MODEL_SLOT_DELETE, MODEL_SLOT_COPY]);
+        // Two models "differ" when the word at +0x10 of the first is set.
+        e.register(MODEL_SLOT_COMPARE, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x0048_a3d0, |e, _| ret(make_model(e)));
+    }
+
+    fn load_engine(chunks: Vec<(u32, Vec<u8>)>, swapped: u32) -> (Engine, FileChunks) {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        model_doubles(&mut e);
+        e.register(GET_COMPONENT_DATA, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x0052_8cb0, |_, _| Ret::default());
+        e.register(0x0047_5220, |_, _| Ret::default());
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(GET_FORM_ID, |_, _| ret(0xabc));
+        e.register(FORM_SLOT_NAME, |_, _| ret(0x4444));
+        noop(
+            &mut e,
+            &[
+                LOG_MESSAGE,
+                0x0048_93e0,
+                0x0048_a7b0,
+                0x0050_3210,
+                0x0040_1080,
+            ],
+        );
+        let state = file_doubles(&mut e, chunks, swapped);
+        (e, state)
+    }
+
+    fn stage_record() -> Vec<u8> {
+        let mut record = vec![70, 1, 3, 5];
+        record.extend_from_slice(&9u32.to_le_bytes());
+        record.extend_from_slice(&0x5000u32.to_le_bytes());
+        record.extend_from_slice(&0x6000u32.to_le_bytes());
+        record.extend_from_slice(&4u32.to_le_bytes());
+        record
+    }
+
+    #[test]
+    fn a_stage_record_fills_its_stage_and_the_model_chunks_follow() {
+        let (mut e, state) = load_engine(
+            vec![
+                (CHUNK_DSTD, stage_record()),
+                (CHUNK_DMDL, b"abc\0".to_vec()),
+                (CHUNK_DMDT, vec![]),
+                (CHUNK_DMDS, vec![1, 2, 3]),
+                (CHUNK_DSTF, vec![]),
+                (CHUNK_DMDL, b"zzz\0".to_vec()),
+            ],
+            0,
+        );
+        let path: Rc<RefCell<Vec<u8>>> = Rc::default();
+        let sink = path.clone();
+        e.register_double(MODEL_SLOT_LOAD, move |e, a| {
+            *sink.borrow_mut() = e.mem.bytes(a[1], 4);
+            Ret::default()
+        });
+        let spec = StageSpec {
+            percentage: 10,
+            ..StageSpec::default()
+        };
+        let (this, data) = make_component(&mut e, 100, &[spec, spec]);
+        let file = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_81e0, &args![this, file]);
+        let log = log_of(&mut e);
+        let stage = stage_at(&e, data, 1);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cHealthPercentage), 70);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cModelDamageStage), 3);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cFlags), 5);
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::iSelfDamagePerSecond),
+            9
+        );
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pExplosion).addr(),
+            0x5000
+        );
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pDebris).addr(),
+            0x6000
+        );
+        assert_eq!(e.get(stage, DestructibleObjectStage::iDebrisCount), 4);
+        // Stage 0 is untouched.
+        let other = stage_at(&e, data, 0);
+        assert_eq!(e.get(other, DestructibleObjectStage::cHealthPercentage), 10);
+        // The model was created once and got the three chunks.
+        let model = e
+            .get(stage, DestructibleObjectStage::pReplacementModel)
+            .addr();
+        assert_ne!(model, 0);
+        assert_eq!(calls_to(&log, 0x0048_a3d0).len(), 1);
+        assert_eq!(*path.borrow(), b"abc\0");
+        assert!(log.contains(&(0x0048_93e0, vec![model, file])));
+        assert!(log.contains(&(0x0048_a7b0, vec![model, log_buffer(&log), 3, 4])));
+        // `DSTF` ended it: three "any left" questions, four chunk reads.
+        assert_eq!(calls_to(&log, 0x0047_26f0).len(), 3);
+        assert_eq!(calls_to(&log, 0x0047_26b0).len(), 5);
+        assert_eq!(state.borrow().1, 5);
+        assert!(calls_to(&log, 0x0040_1080).is_empty());
+    }
+
+    /// The buffer address `0048a7b0` was given (its second word).
+    fn log_buffer(log: &[(u32, Vec<u32>)]) -> u32 {
+        calls_to(log, 0x0048_a7b0)[0][1]
+    }
+
+    #[test]
+    fn a_stage_record_beyond_the_stage_count_is_ignored() {
+        let mut record = stage_record();
+        record[1] = 5;
+        let (mut e, _state) = load_engine(
+            vec![(CHUNK_DSTD, record), (CHUNK_DMDL, b"abc\0".to_vec())],
+            1,
+        );
+        let (this, _) = make_component(&mut e, 100, &[StageSpec::default()]);
+        let file = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_81e0, &args![this, file]);
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, 0x0047_26b0).len(), 1);
+        assert_eq!(calls_to(&log, 0x0040_1080).len(), 4);
+        assert!(calls_to(&log, 0x0048_a3d0).is_empty());
+    }
+
+    #[test]
+    fn the_header_chunk_fills_the_data_and_allocates_the_stages() {
+        let mut header = 500u32.to_le_bytes().to_vec();
+        header.extend_from_slice(&[3, 2, 0, 0]);
+        let (mut e, _state) = load_engine(vec![(CHUNK_DEST, header)], 1);
+        // No data yet: `LoadChunk` creates it first.
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        let file = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_81e0, &args![this, file]);
+        let log = log_of(&mut e);
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        assert!(!data.is_null());
+        assert_eq!(e.get(data, DestructibleObjectData::iHealth), 500);
+        assert_eq!(e.get(data, DestructibleObjectData::cNumStages), 3);
+        assert_eq!(e.get(data, DestructibleObjectData::cFlags), 2);
+        for index in 0..3 {
+            assert!(!stage_at(&e, data, index).is_null());
+        }
+        let sizes: Vec<u32> = calls_to(&log, OPERATOR_NEW).iter().map(|a| a[0]).collect();
+        assert_eq!(sizes, [0x14, 12, 0x18, 0x18, 0x18]);
+        assert_eq!(calls_to(&log, 0x0050_3210).len(), 1);
+    }
+
+    #[test]
+    fn an_old_format_header_is_logged_and_the_data_dropped() {
+        let (mut e, _state) = load_engine(vec![(CHUNK_DEST, vec![0; 4])], 0);
+        let (this, data) = make_component(&mut e, 100, &[]);
+        let table = e.mem.alloc(0x400);
+        e.mem.set_u32(table + 0x130, FORM_SLOT_NAME);
+        e.mem.set_u32(this.addr(), table);
+        let file = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_81e0, &args![this, file]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(LOG_MESSAGE, vec![0x0101_a6c8, 0xabc, 0x4444])));
+        assert!(log.contains(&(
+            DYNAMIC_CAST,
+            vec![this.addr(), 0, 0x0118_32ac, 0x0118_3028, 0]
+        )));
+        assert!(log.contains(&(0x0047_5220, vec![data.addr()])));
+        assert!(log.contains(&(OPERATOR_DELETE, vec![data.addr()])));
+        assert!(e.get(this, BGSDestructibleObjectForm::pData).is_null());
+    }
+
+    #[test]
+    fn loading_needs_a_form_and_a_file() {
+        let (mut e, _state) = load_engine(vec![], 0);
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_81e0, &args![this, 0u32]);
+        e.call(0x0047_81e0, &args![0u32, 0x1000u32]);
+        assert_eq!(log_of(&mut e).len(), 2);
+    }
+
+    #[test]
+    fn a_stage_gets_its_model_only_once() {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        model_doubles(&mut e);
+        let stage: Ptr<DestructibleObjectStage> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8570, &args![stage]);
+        let model = e.get(stage, DestructibleObjectStage::pReplacementModel);
+        assert!(!model.is_null());
+        let log = log_of(&mut e);
+        assert!(log.contains(&(OPERATOR_NEW, vec![0x20])));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8570, &args![stage]);
+        assert_eq!(log_of(&mut e).len(), 1);
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pReplacementModel),
+            model
+        );
+    }
+
+    #[test]
+    fn a_component_gets_its_data_only_once() {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        e.register(0x0052_8cb0, |_, _| Ret::default());
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8600, &args![this]);
+        let log = log_of(&mut e);
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        assert!(!data.is_null());
+        assert!(log.contains(&(OPERATOR_NEW, vec![0x14])));
+        assert!(log.contains(&(0x0052_8cb0, vec![data.addr() + 0x10, 0])));
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8600, &args![this]);
+        assert_eq!(log_of(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn deleting_the_data_clears_the_pointer() {
+        let mut e = engine();
+        noop(&mut e, &[0x0047_5220, OPERATOR_DELETE]);
+        let (this, data) = make_component(&mut e, 100, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8690, &args![this]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(0x0047_5220, vec![data.addr()])));
+        assert!(log.contains(&(OPERATOR_DELETE, vec![data.addr()])));
+        assert!(e.get(this, BGSDestructibleObjectForm::pData).is_null());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8690, &args![this]);
+        assert_eq!(log_of(&mut e).len(), 1);
+    }
+
+    fn copy_engine() -> Engine {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        model_doubles(&mut e);
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(GET_COMPONENT_DATA, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x0052_8cb0, |_, _| Ret::default());
+        e.register(0x0047_5220, |_, _| Ret::default());
+        e.register(0x0047_52e0, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn copying_creates_the_data_and_copies_the_stages() {
+        let mut e = copy_engine();
+        let source_stages = [
+            StageSpec {
+                damage_stage: 1,
+                percentage: 90,
+                flags: 2,
+                rate: 3,
+                explosion: 0x5000,
+                debris: 0x6000,
+                count: 7,
+                model: 0,
+            },
+            StageSpec {
+                percentage: 30,
+                ..StageSpec::default()
+            },
+        ];
+        let (other, source) = make_component(&mut e, 77, &source_stages);
+        e.set(source, DestructibleObjectData::cFlags, 3);
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_86e0, &args![this, other]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(
+            DYNAMIC_CAST,
+            vec![other.addr(), 0, 0x0118_3040, 0x0118_32ac, 0]
+        )));
+        let data = e.get(this, BGSDestructibleObjectForm::pData);
+        assert_ne!(data, source);
+        assert_eq!(e.get(data, DestructibleObjectData::iHealth), 77);
+        assert_eq!(e.get(data, DestructibleObjectData::cFlags), 3);
+        assert_eq!(e.get(data, DestructibleObjectData::cNumStages), 2);
+        let stage = stage_at(&e, data, 0);
+        assert_ne!(stage, stage_at(&e, source, 0));
+        assert_eq!(e.get(stage, DestructibleObjectStage::cHealthPercentage), 90);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cModelDamageStage), 1);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cFlags), 2);
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::iSelfDamagePerSecond),
+            3
+        );
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pExplosion).addr(),
+            0x5000
+        );
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pDebris).addr(),
+            0x6000
+        );
+        assert_eq!(e.get(stage, DestructibleObjectStage::iDebrisCount), 7);
+        let stage = stage_at(&e, data, 1);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cHealthPercentage), 30);
+        assert!(calls_to(&log, 0x0047_52e0).is_empty());
+    }
+
+    #[test]
+    fn copying_over_existing_data_deletes_its_stages_first() {
+        let mut e = copy_engine();
+        let (other, _) = make_component(
+            &mut e,
+            50,
+            &[StageSpec {
+                percentage: 12,
+                ..StageSpec::default()
+            }],
+        );
+        let (this, old) = make_component(&mut e, 10, &[StageSpec::default(); 3]);
+        let old_array = e.get(old, DestructibleObjectData::pStagesArray);
+        let old_stage = stage_at(&e, old, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_86e0, &args![this, other]);
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, 0x0047_52e0).len(), 3);
+        assert!(log.contains(&(0x0047_52e0, vec![old_stage.addr(), 1])));
+        assert!(log.contains(&(OPERATOR_DELETE, vec![old_array.addr()])));
+        // The same data object is reused.
+        assert_eq!(e.get(this, BGSDestructibleObjectForm::pData), old);
+        assert_eq!(e.get(old, DestructibleObjectData::iHealth), 50);
+        assert_eq!(e.get(old, DestructibleObjectData::cNumStages), 1);
+        assert_ne!(e.get(old, DestructibleObjectData::pStagesArray), old_array);
+        let stage = stage_at(&e, old, 0);
+        assert_eq!(e.get(stage, DestructibleObjectStage::cHealthPercentage), 12);
+    }
+
+    #[test]
+    fn copying_from_nothing_deletes_the_data() {
+        let mut e = copy_engine();
+        let (this, data) = make_component(&mut e, 10, &[]);
+        let empty: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_86e0, &args![this, empty]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(0x0047_5220, vec![data.addr()])));
+        assert!(e.get(this, BGSDestructibleObjectForm::pData).is_null());
+
+        // The cast to the component type fails: nothing happens.
+        let (this, data) = make_component(&mut e, 10, &[]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_86e0, &args![this, 0u32]);
+        assert_eq!(log_of(&mut e).len(), 2);
+        assert_eq!(e.get(this, BGSDestructibleObjectForm::pData), data);
+    }
+
+    fn base_spec() -> StageSpec {
+        StageSpec {
+            damage_stage: 1,
+            percentage: 50,
+            flags: 1,
+            rate: 3,
+            explosion: 0x5000,
+            debris: 0x6000,
+            count: 2,
+            model: 0,
+        }
+    }
+
+    /// Whether `00478900` finds the other form different after `change`
+    /// was applied to its data and its second stage.
+    fn differs_after(
+        change: impl FnOnce(&mut Engine, Ptr<DestructibleObjectData>, Ptr<DestructibleObjectStage>),
+    ) -> bool {
+        let mut e = copy_engine();
+        let spec = base_spec();
+        let (ours, _) = make_component(&mut e, 100, &[spec, spec]);
+        let (theirs, theirs_data) = make_component(&mut e, 100, &[spec, spec]);
+        let stage = stage_at(&e, theirs_data, 1);
+        change(&mut e, theirs_data, stage);
+        e.call(0x0047_8900, &args![ours, theirs]).bool()
+    }
+
+    #[test]
+    fn identical_data_does_not_differ() {
+        assert!(!differs_after(|_, _, _| {}));
+    }
+
+    #[test]
+    fn every_compared_field_makes_the_data_differ() {
+        assert!(differs_after(|e, d, _| e.set(
+            d,
+            DestructibleObjectData::iHealth,
+            101
+        )));
+        assert!(differs_after(|e, d, _| e.set(
+            d,
+            DestructibleObjectData::cFlags,
+            1
+        )));
+        assert!(differs_after(|e, d, _| e.set(
+            d,
+            DestructibleObjectData::cNumStages,
+            3
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::cHealthPercentage,
+            51
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::iSelfDamagePerSecond,
+            4
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::cModelDamageStage,
+            2
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::cFlags,
+            0
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::pExplosion,
+            Ptr::new(0x5001)
+        )));
+        assert!(differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::pDebris,
+            Ptr::new(0)
+        )));
+        // The debris count is compared with itself: no difference.
+        assert!(!differs_after(|e, _, s| e.set(
+            s,
+            DestructibleObjectStage::iDebrisCount,
+            99
+        )));
+    }
+
+    #[test]
+    fn the_replacement_models_are_compared_by_presence_and_by_the_model() {
+        // Only the other has one.
+        assert!(differs_after(|e, _, s| {
+            let model = make_model(e);
+            e.set(
+                s,
+                DestructibleObjectStage::pReplacementModel,
+                Ptr::new(model),
+            );
+        }));
+        // Both have one: the answer of slot 0x0c (about our model) counts.
+        for (answer, expected) in [(0u32, false), (1, true)] {
+            let mut e = copy_engine();
+            let ours_model = make_model(&mut e);
+            let theirs_model = make_model(&mut e);
+            e.mem.set_u32(ours_model + 0x10, answer);
+            let spec = StageSpec {
+                model: ours_model,
+                ..base_spec()
+            };
+            let (ours, _) = make_component(&mut e, 100, &[spec]);
+            let spec = StageSpec {
+                model: theirs_model,
+                ..base_spec()
+            };
+            let (theirs, _) = make_component(&mut e, 100, &[spec]);
+            e.call_log = Some(vec![]);
+            let result = e.call(0x0047_8900, &args![ours, theirs]).bool();
+            assert_eq!(result, expected);
+            let log = log_of(&mut e);
+            assert!(log.contains(&(MODEL_SLOT_COMPARE, vec![ours_model, theirs_model])));
+        }
+    }
+
+    #[test]
+    fn missing_data_and_failed_casts_differ_unless_both_are_empty() {
+        let mut e = copy_engine();
+        let (with_data, _) = make_component(&mut e, 100, &[]);
+        let without: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        let other_without: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        assert!(e.call(0x0047_8900, &args![with_data, without]).bool());
+        assert!(e.call(0x0047_8900, &args![without, with_data]).bool());
+        assert!(!e.call(0x0047_8900, &args![without, other_without]).bool());
+        assert!(e.call(0x0047_8900, &args![with_data, 0u32]).bool());
+    }
+
+    const OWNER_NAME_FLAG: u32 = 0x100;
+
+    fn init_engine() -> Engine {
+        let mut e = engine();
+        model_doubles(&mut e);
+        e.register(0x0048_4e60, |_, _| ret(0x9000));
+        // `AddCompileIndex` makes the id absolute: adds 0x1000.
+        e.register(0x0048_5d50, |e, a| {
+            let id = e.mem.u32(a[0]);
+            e.mem.set_u32(a[0], id + 0x1000);
+            Ret::default()
+        });
+        // The lookup finds every form except those with bit 5 set.
+        e.register(0x0048_39c0, |_, a| {
+            ret(if a[0] & 0x20 != 0 { 0 } else { a[0] })
+        });
+        e.register(DYNAMIC_CAST, |_, a| ret(a[0]));
+        e.register(0x0047_4cb0, |e, a| ret(e.mem.u32(a[0] + OWNER_NAME_FLAG)));
+        e.register(GET_FORM_ID, |_, _| ret(0xabcdef));
+        e.register(FORM_SLOT_NAME, |_, _| ret(0x4444));
+        e.register(GET_FORM_TYPE, |e, a| {
+            ret(if a[0] == 0 {
+                0
+            } else {
+                e.mem.u8(a[0] + 4) as u32
+            })
+        });
+        e.register(0x005f_0b00, |_, _| ret(777));
+        noop(&mut e, &[LOG_MESSAGE, 0x0048_aa80]);
+        e
+    }
+
+    fn make_owner(e: &mut Engine, form_type: u8, named: bool) -> u32 {
+        let owner = object_with_vtable(e, 0x200, &[(0x130, FORM_SLOT_NAME)]);
+        e.mem.set_u8(owner + 4, form_type);
+        e.mem.set_u32(owner + OWNER_NAME_FLAG, named as u32);
+        owner
+    }
+
+    #[test]
+    fn init_item_resolves_the_ids_and_logs_what_it_cannot_find() {
+        let mut e = init_engine();
+        let owner = make_owner(&mut e, 0x20, true);
+        // The explosion id resolves (0x10 + 0x1000); the debris (0x20) does not.
+        let spec = StageSpec {
+            explosion: 0x10,
+            debris: 0x20,
+            model: 0x7000,
+            ..StageSpec::default()
+        };
+        let (this, data) = make_component(&mut e, 100, &[spec]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8be0, &args![this, owner]);
+        let log = log_of(&mut e);
+        let stage = stage_at(&e, data, 0);
+        assert_eq!(
+            e.get(stage, DestructibleObjectStage::pExplosion).addr(),
+            0x1010
+        );
+        assert!(e.get(stage, DestructibleObjectStage::pDebris).is_null());
+        assert!(log.contains(&(0x0048_4e60, vec![owner, 0xffff_ffff])));
+        assert!(log.contains(&(DYNAMIC_CAST, vec![0x1010, 0, 0x0118_3028, 0x0118_620c, 0])));
+        assert!(log.contains(&(DYNAMIC_CAST, vec![0, 0, 0x0118_3028, 0x0118_61f4, 0])));
+        assert_eq!(calls_to(&log, LOG_MESSAGE).len(), 1);
+        assert!(log.contains(&(LOG_MESSAGE, vec![0x0101_a7b8, 0, 0x1020, 0x4444])));
+        assert!(log.contains(&(0x0048_aa80, vec![0x7000, owner])));
+        // Form type 0x20: the health stays.
+        assert_eq!(e.get(data, DestructibleObjectData::iHealth), 100);
+    }
+
+    #[test]
+    fn init_item_names_the_owner_by_id_without_a_name_and_as_unknown_without_one() {
+        // Explosion that does not resolve, owner without a name.
+        let mut e = init_engine();
+        let owner = make_owner(&mut e, 0x20, false);
+        let spec = StageSpec {
+            explosion: 0x20,
+            ..StageSpec::default()
+        };
+        let (this, _) = make_component(&mut e, 100, &[spec]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8be0, &args![this, owner]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(LOG_MESSAGE, vec![0x0101_a848, 0, 0x1020, 0xabcdef])));
+
+        // Unknown owner; both fail; the second stage has index 1.
+        let mut e = init_engine();
+        let failing = StageSpec {
+            explosion: 0x20,
+            debris: 0x20,
+            ..StageSpec::default()
+        };
+        let (this, _) = make_component(&mut e, 100, &[StageSpec::default(), failing]);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8be0, &args![this, 0u32]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(LOG_MESSAGE, vec![0x0101_a800, 1, 0x1020])));
+        assert!(log.contains(&(LOG_MESSAGE, vec![0x0101_a720, 1, 0x1020])));
+        assert_eq!(calls_to(&log, LOG_MESSAGE).len(), 2);
+    }
+
+    #[test]
+    fn init_item_takes_the_health_of_actor_bases() {
+        for (form_type, health) in [(0x29u8, 100u32), (0x2a, 777), (0x2b, 777), (0x2c, 100)] {
+            let mut e = init_engine();
+            let owner = make_owner(&mut e, form_type, false);
+            let (this, data) = make_component(&mut e, 100, &[]);
+            e.call(0x0047_8be0, &args![this, owner]);
+            assert_eq!(e.get(data, DestructibleObjectData::iHealth), health);
+        }
+        // No data: nothing is asked.
+        let mut e = init_engine();
+        let owner = make_owner(&mut e, 0x2a, false);
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8be0, &args![this, owner]);
+        assert_eq!(log_of(&mut e).len(), 1);
+    }
+
+    #[test]
+    fn the_stage_array_is_allocated_with_a_stage_for_each_pointer() {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        assert!(e
+            .call(0x0047_8e90, &args![this, 0u32])
+            .ptr::<()>()
+            .is_null());
+        e.call_log = Some(vec![]);
+        let array = e.call(0x0047_8e90, &args![this, 3u32]).u32();
+        let log = log_of(&mut e);
+        let sizes: Vec<u32> = calls_to(&log, OPERATOR_NEW).iter().map(|a| a[0]).collect();
+        assert_eq!(sizes, [12, 0x18, 0x18, 0x18]);
+        let stages: Vec<u32> = (0..3).map(|i| e.mem.u32(array + 4 * i)).collect();
+        assert!(stages.iter().all(|s| *s != 0));
+        assert_ne!(stages[0], stages[1]);
+        assert_ne!(stages[1], stages[2]);
+    }
+
+    #[test]
+    fn a_failed_stage_allocation_leaves_a_null_pointer() {
+        let mut e = engine();
+        let mut calls = 0;
+        e.register_double(OPERATOR_NEW, move |e, a| {
+            calls += 1;
+            ret(if calls == 2 { 0 } else { e.mem.alloc(a[0]) })
+        });
+        let this: Ptr<BGSDestructibleObjectForm> = e.new_object();
+        let array = e.call(0x0047_8e90, &args![this, 2u32]).u32();
+        assert_eq!(e.mem.u32(array), 0);
+        assert_ne!(e.mem.u32(array + 4), 0);
+    }
+
+    #[test]
+    fn the_stage_constructor_zeroes_all_but_byte_three() {
+        let mut e = engine();
+        let stage: Ptr<DestructibleObjectStage> = e.new_object();
+        e.mem.write(stage.addr(), &[0xff; 0x18]);
+        assert_eq!(
+            e.call(0x0047_8f70, &args![stage]).ptr::<()>().addr(),
+            stage.addr()
+        );
+        let bytes = e.mem.bytes(stage.addr(), 0x18);
+        assert_eq!(bytes[..3], [0, 0, 0]);
+        assert_eq!(bytes[3], 0xff);
+        assert!(bytes[4..].iter().all(|b| *b == 0));
+    }
+
+    #[test]
+    fn copying_a_stage_replaces_its_model_with_a_copy() {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        model_doubles(&mut e);
+        let from_model = make_model(&mut e);
+        let old_model = make_model(&mut e);
+        let from = StageSpec {
+            percentage: 33,
+            model: from_model,
+            ..base_spec()
+        };
+        let to = StageSpec {
+            model: old_model,
+            ..StageSpec::default()
+        };
+        let (_, from_data) = make_component(&mut e, 10, &[from]);
+        let (_, to_data) = make_component(&mut e, 10, &[to]);
+        let from_stage = stage_at(&e, from_data, 0);
+        let to_stage = stage_at(&e, to_data, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8fd0, &args![to_stage, from_stage]);
+        let log = log_of(&mut e);
+        assert_eq!(
+            e.get(to_stage, DestructibleObjectStage::cHealthPercentage),
+            33
+        );
+        assert_eq!(e.get(to_stage, DestructibleObjectStage::iDebrisCount), 2);
+        assert_eq!(
+            e.get(to_stage, DestructibleObjectStage::pExplosion).addr(),
+            0x5000
+        );
+        assert!(log.contains(&(MODEL_SLOT_DELETE, vec![old_model, 1])));
+        let new_model = e
+            .get(to_stage, DestructibleObjectStage::pReplacementModel)
+            .addr();
+        assert_ne!(new_model, old_model);
+        assert_ne!(new_model, from_model);
+        assert!(log.contains(&(OPERATOR_NEW, vec![0x20])));
+        assert!(log.contains(&(MODEL_SLOT_COPY, vec![new_model, from_model])));
+    }
+
+    #[test]
+    fn copying_a_stage_without_a_model_drops_the_model_and_a_null_source_does_nothing() {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        model_doubles(&mut e);
+        let old_model = make_model(&mut e);
+        let to = StageSpec {
+            model: old_model,
+            ..StageSpec::default()
+        };
+        let (_, to_data) = make_component(&mut e, 10, &[to]);
+        let (_, from_data) = make_component(&mut e, 10, &[base_spec()]);
+        let to_stage = stage_at(&e, to_data, 0);
+        let from_stage = stage_at(&e, from_data, 0);
+        e.call(0x0047_8fd0, &args![to_stage, 0u32]);
+        assert_eq!(
+            e.get(to_stage, DestructibleObjectStage::pReplacementModel)
+                .addr(),
+            old_model
+        );
+        e.call_log = Some(vec![]);
+        e.call(0x0047_8fd0, &args![to_stage, from_stage]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(MODEL_SLOT_DELETE, vec![old_model, 1])));
+        assert!(e
+            .get(to_stage, DestructibleObjectStage::pReplacementModel)
+            .is_null());
+        assert!(calls_to(&log, OPERATOR_NEW).is_empty());
+    }
+
+    #[test]
+    fn the_node_array_constructor_and_destructors_set_the_vtable() {
+        let mut e = engine();
+        noop(&mut e, &[0x006b_3eb0, 0x0084_54f0, OPERATOR_DELETE]);
+        let array = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_9110, &args![array]).u32(), array);
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.u32(array), 0x0101_a8e8);
+        assert!(log.contains(&(0x006b_3eb0, vec![array, 0, 0])));
+
+        e.mem.set_u32(array, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9140, &args![array]);
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.u32(array), 0x0101_a8e8);
+        assert!(log.contains(&(0x0084_54f0, vec![array, 1])));
+    }
+
+    #[test]
+    fn the_node_array_deleting_destructor_frees_when_asked() {
+        let mut e = engine();
+        noop(&mut e, &[0x0084_54f0, OPERATOR_DELETE]);
+        let array = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_9160, &args![array, 0u32]).u32(), array);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(0x0084_54f0, vec![array, 1])));
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9160, &args![array, 1u32]);
+        let log = log_of(&mut e);
+        assert!(log.contains(&(OPERATOR_DELETE, vec![array])));
+    }
+
+    fn map_engine() -> Engine {
+        let mut e = engine();
+        memory_doubles(&mut e);
+        e.register(0x00aa_1070, |e, a| ret(e.mem.alloc(a[0])));
+        noop(&mut e, &[0x00aa_10f0, 0x0043_8af0]);
+        e
+    }
+
+    #[test]
+    fn the_map_base_constructor_allocates_cleared_buckets() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0047_91f0, &args![map, 8u32]).u32(), map);
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.u32(map), 0x0101_a91c);
+        assert_eq!(e.mem.u32(map + 4), 8);
+        assert_eq!(e.mem.u32(map + 0xc), 0);
+        let buckets = e.mem.u32(map + 8);
+        assert!(log.contains(&(0x00aa_1070, vec![32])));
+        assert!(log.contains(&(MEMSET, vec![buckets, 0, 32])));
+    }
+
+    #[test]
+    fn the_map_constructor_sets_the_derived_vtable() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x0047_9190, &args![map, 4u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), 0x0101_a8fc);
+        assert_eq!(e.mem.u32(map + 4), 4);
+        assert_ne!(e.mem.u32(map + 8), 0);
+    }
+
+    #[test]
+    fn the_map_destructors_empty_the_map_and_free_the_buckets() {
+        let mut e = map_engine();
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x0047_92c0, &args![map]);
+        let log = log_of(&mut e);
+        assert_eq!(e.mem.u32(map), 0x0101_a91c);
+        assert_eq!(
+            log[1..],
+            [(0x0043_8af0, vec![map]), (0x00aa_10f0, vec![0x4444])]
+        );
+
+        // The derived body empties the map once itself and once in the base.
+        e.call_log = Some(vec![]);
+        e.call(0x0047_9260, &args![map]);
+        let log = log_of(&mut e);
+        assert_eq!(calls_to(&log, 0x0043_8af0).len(), 2);
+        assert_eq!(calls_to(&log, 0x00aa_10f0).len(), 1);
+        assert_eq!(e.mem.u32(map), 0x0101_a91c);
+    }
+
+    #[test]
+    fn the_map_deleting_destructors_free_only_when_asked() {
+        for address in [0x0047_91c0u32, 0x0047_92f0] {
+            let mut e = map_engine();
+            let map = e.mem.alloc(0x10);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![map, 0u32]).u32(), map);
+            assert!(calls_to(&log_of(&mut e), OPERATOR_DELETE).is_empty());
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(address, &args![map, 1u32]).u32(), map);
+            assert!(log_of(&mut e).contains(&(OPERATOR_DELETE, vec![map])));
+        }
     }
 }
