@@ -2867,6 +2867,1207 @@ pub fn fn_008bcda0(e: &mut Engine, this: Ptr<Actor>) -> f32 {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 008bcdd0 .. 008bec20 (third session of this part)
+
+/// `bhkRagdollController` (the actor's `+0xac` object): reads its
+/// `bInitRagdollAnim` flag (`0087ea20`).
+const RAGDOLL_INIT_TEST: u32 = 0x0087_ea20;
+/// `ECX` = the player: a test the ragdoll update makes (meaning not
+/// confirmed).
+const PLAYER_TEST_004EAF60: u32 = 0x004e_af60;
+/// `ECX` = the player: a second test of the ragdoll update (meaning not
+/// confirmed).
+const PLAYER_TEST_00524D10: u32 = 0x0052_4d10;
+/// `ECX` = an object: returns the address of its three-float position.
+const OBJECT_POSITION: u32 = 0x0045_bb80;
+/// Global pointers to the two objects whose position the ragdoll update uses
+/// first (the first only while `004eaf60` holds for the player).
+const POSITION_SOURCE_A: u32 = 0x011e_07d4;
+const POSITION_SOURCE_B: u32 = 0x011e_07d0;
+/// The vector the eye height is scaled along (third argument of
+/// `004a3760`).
+const EYE_DIRECTION: u32 = 0x011a_9484;
+/// `NiPoint3` constructor from `ECX`'s side: cdecl `(out, scalar, vector)`,
+/// writes `scalar * vector` to `out` and returns `out`.
+const VECTOR_TIMES_SCALAR: u32 = 0x004a_3760;
+/// `ECX` = a reference: returns `ECX + 0x30` (the reference's position
+/// triple on PC; takes no stack words).
+const REFERENCE_POSITION: u32 = 0x0043_6aa0;
+/// `NiPoint3::operator+` (by its body): `ECX` = left, `(out, right)`; writes
+/// the sum to `out` and returns `out`.
+const VECTOR_ADD: u32 = 0x0043_9e90;
+/// `NiPoint3::operator-` (by its body): `ECX` = left, `(out, right)`; writes
+/// the difference to `out` and returns `out`.
+const VECTOR_SUBTRACT: u32 = 0x0043_9ef0;
+/// `NiPoint3::Length` (by its body): `ECX` = the vector, `float` in ST0.
+const VECTOR_LENGTH: u32 = 0x0045_7990;
+/// `NiAVObject::GetWorldBound` (decompiler name): `ECX` = the 3D object,
+/// returns the address of the sphere (centre and radius, four floats).
+const WORLD_BOUND: u32 = 0x0043_d450;
+/// `ECX` = a bound sphere: its radius, `float` in ST0.
+const BOUND_RADIUS: u32 = 0x0084_d030;
+/// The `double` `1.25` the bound radius is scaled by.
+const BOUND_RADIUS_FACTOR: u32 = 0x0102_1798;
+/// Virtual `+0x22c` of the actor, called with `0` before the ragdoll
+/// animation is enabled (meaning not confirmed).
+const VSLOT_ACTOR_0X22C: u32 = 0x22c;
+/// `ECX` = the ragdoll controller: a test (meaning not confirmed).
+const RAGDOLL_TEST_00552490: u32 = 0x0055_2490;
+/// `ECX` = the ragdoll controller: a second test (meaning not confirmed).
+const RAGDOLL_TEST_008A3BD0: u32 = 0x008a_3bd0;
+/// `bhkRagdollController::EnableRagdollAnim` (decompiler name): `ECX` = the
+/// controller.
+const RAGDOLL_ENABLE_ANIM: u32 = 0x00c7_a8d0;
+/// `Actor::SetHavokWeapon` (decompiler name): `ECX` = the actor.
+const ACTOR_SET_HAVOK_WEAPON: u32 = 0x008a_5eb0;
+/// `ECX` = the actor: a flag word (`& 0xf` and `& 0x8500` are tested).
+const ACTOR_FLAGS_008846E0: u32 = 0x0088_46e0;
+/// Virtual `+0x1e4` of the actor: the 3D data whose animation the ragdoll
+/// update inspects.
+const VSLOT_ACTOR_ANIMATION: u32 = 0x1e4;
+/// `ECX` = the animation data, one word (`1`): returns a sub-object (zero
+/// when there is none).
+const ANIMATION_SUB_OBJECT: u32 = 0x0049_1040;
+/// `ECX` = the sub-object `00491040` returned: the object `005f4d60` and
+/// `005f2420` read.
+const ANIMATION_STATE_OBJECT: u32 = 0x0048_f7f0;
+/// `ECX` = the state object: a test (meaning not confirmed).
+const ANIMATION_STATE_TEST: u32 = 0x005f_4d60;
+/// `ECX` = the state object: a number (`0xe3`, `0xe5` and `0xf1..=0xf4` make
+/// the ragdoll update treat the actor as animating).
+const ANIMATION_STATE_CODE: u32 = 0x005f_2420;
+/// Virtual `+0x214` of the actor (a word, zero allows the ragdoll update).
+const VSLOT_ACTOR_0X214: u32 = 0x214;
+/// `ECX` = the ragdoll controller: a test (meaning not confirmed).
+const RAGDOLL_TEST_00C78090: u32 = 0x00c7_8090;
+/// `ECX` = the ragdoll controller, one flag.
+const RAGDOLL_SET_005BA130: u32 = 0x005b_a130;
+/// `ECX` = the ragdoll controller, one flag.
+const RAGDOLL_SET_00C747D0: u32 = 0x00c7_47d0;
+/// The object the ragdoll update asks for its `+0x08` word (`ENTRY_OBJECT`);
+/// compared with `4`.
+const RAGDOLL_MODE_OBJECT: u32 = 0x011f_2250;
+/// `ECX` = the ragdoll controller: taken when the mode word is `4`.
+const RAGDOLL_MODE_FOUR: u32 = 0x00c7_5910;
+/// `ECX` = the ragdoll controller: taken for any other mode word.
+const RAGDOLL_MODE_OTHER: u32 = 0x00c7_59f0;
+/// `Actor::GetFaceAnimationData` (decompiler name): `ECX` = the actor.
+const ACTOR_FACE_ANIMATION_DATA: u32 = 0x008a_dcb0;
+/// Virtual `+0x9c` of the face animation data: writes four words to the
+/// address it is given.
+const VSLOT_FACE_DATA_VALUE: u32 = 0x9c;
+/// The four-word default `fn_008bd5e0` receives without face data.
+const FACE_DATA_DEFAULT: u32 = 0x011a_9ea4;
+/// Virtual `+0x4bc` of the actor's process: a kind number (`5` and `10` are
+/// tested).
+const VSLOT_PROCESS_KIND: u32 = 0x4bc;
+/// `ECX` = the ragdoll controller, one flag.
+const RAGDOLL_SET_008A3BF0: u32 = 0x008a_3bf0;
+/// `ECX` = the process: a test (meaning not confirmed).
+const PROCESS_TEST_0045CD60: u32 = 0x0045_cd60;
+/// `ECX` = the process: returns the actor mover (zero when none).
+const PROCESS_ACTOR_MOVER: u32 = 0x0089_d620;
+/// `ECX` = the actor mover: returns a word the update compares with `1`
+/// (the engine map names it `ActorMover::GetPreferredMoveMode`, but the body
+/// is folded with `TES::pInteriorCell`'s getter).
+const MOVER_MODE_005F36F0: u32 = 0x005f_36f0;
+/// `ECX` = the ragdoll controller: a test (meaning not confirmed).
+const RAGDOLL_TEST_0089D690: u32 = 0x0089_d690;
+/// `bhkRagdollController::SetRagdollFeedbackActive` (decompiler name):
+/// `ECX` = the controller, one flag.
+const RAGDOLL_SET_FEEDBACK_ACTIVE: u32 = 0x00c7_b6a0;
+/// `ECX` = the ragdoll controller: a test (meaning not confirmed).
+const RAGDOLL_TEST_00888A50: u32 = 0x0088_8a50;
+/// `ECX` = the ragdoll controller, one flag.
+const RAGDOLL_SET_00C75580: u32 = 0x00c7_5580;
+
+/// `ECX` = the actor mover's process, the float read by `008bd550`: the
+/// game setting `0x01267c6c`.
+const RAGDOLL_RANGE_SETTING: u32 = 0x0126_7c6c;
+
+/// `ECX` = a process `+0xc0` object, `(object, value)`: cdecl copy of a
+/// four-word value (the call `008bd5e0` makes).
+const FOUR_WORD_ASSIGN: u32 = 0x0056_1500;
+/// `ECX` = a 3D node: returns the child count of a node (its `+4`).
+const CHILD_COUNT: u32 = 0x0043_b480;
+/// `ECX` = the child array, the index: returns a child.
+const CHILD_AT: u32 = 0x0043_b4a0;
+/// Returns `3` (no arguments): the property type `NiAVObject::GetProperty`
+/// is asked for.
+const PROPERTY_TYPE_SHADER: u32 = 0x0043_8220;
+/// `NiAVObject::GetProperty` (decompiler name): `ECX` = the node, the
+/// property type.
+const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+/// `BSShaderProperty::SetAlpha` (decompiler name): `ECX` = the property, a
+/// `float`.
+const SHADER_SET_ALPHA: u32 = 0x00ba_8ab0;
+/// `ECX` = the property, a `float`: the second request `FadeSkins` makes
+/// with the alpha.
+const SHADER_SET_FADE: u32 = 0x0081_9a70;
+/// Virtual `+0x18` of a node: its skinned geometry object, if any.
+const VSLOT_NODE_SKIN: u32 = 0x18;
+/// Virtual `+0x34` of the skin object (zero lets the fade go on).
+const VSLOT_SKIN_0X34: u32 = 0x34;
+/// Virtual `+0x0c` of a node: its child array (zero when it has none).
+const VSLOT_NODE_CHILDREN: u32 = 0x0c;
+
+/// Virtual `+0x24` of `base form + 0x30` (a test; a true answer ends
+/// `008bd700` with true).
+const VSLOT_FORM_PART_0X24: u32 = 0x24;
+/// Actor virtual `+0x21c`.
+const VSLOT_ACTOR_0X21C: u32 = 0x21c;
+/// `ECX` = the actor: a test, also the answer when the actor virtual
+/// `+0x21c` holds.
+const ACTOR_TEST_008ACE90: u32 = 0x008a_ce90;
+/// Actor virtual `+0x1a0` (called with `0`).
+const VSLOT_ACTOR_0X1A0: u32 = 0x1a0;
+
+/// `ECX` = the reference: returns `ECX + 0x24`, the rotation triple.
+const ROTATION_POINTER: u32 = 0x0043_0830;
+/// Actor virtual `+0x100`, a test `GetHeading` makes.
+const VSLOT_ACTOR_0X100: u32 = 0x100;
+/// `TESActorBase::IsImmobile` (decompiler name): `ECX` = the base form.
+const BASE_FORM_IS_IMMOBILE: u32 = 0x005f_0c80;
+/// `ClampAngle` (decompiler name), cdecl, one `float`, `float` in ST0.
+const CLAMP_ANGLE: u32 = 0x004b_1480;
+
+/// Virtual `+0x1f4` of the actor: the address of its eye position triple.
+const VSLOT_ACTOR_POSITION: u32 = 0x1f4;
+/// Virtual `+0x2bc` of the actor (one word, `0`): a heading, `float` in ST0.
+const VSLOT_ACTOR_HEADING: u32 = 0x2bc;
+/// Virtual `+0x1d0` of a reference: its 3D data.
+const VSLOT_REFERENCE_3D: u32 = 0x1d0;
+/// The `float` game setting added to the eye height (`ECX` of `00403e20`).
+const VATS_HEIGHT_SETTING: u32 = 0x011d_1200;
+/// The `float` game settings `GetVATSTargetVisible` steps and bounds the
+/// search by (`ECX` of `00403e20`).
+const VATS_STEP_COUNT_SETTING: u32 = 0x011d_0850;
+const VATS_STEP_LENGTH_SETTING: u32 = 0x011d_09e8;
+/// The `float` length of the area ray (10000.0).
+const VATS_RAY_LENGTH: u32 = 0x0102_2958;
+/// The `float` answer when nothing is hit (`FLT_MAX`).
+const VATS_NOTHING_HIT: u32 = 0x0101_6970;
+/// The `double` `0.85` the visibility ray fraction is compared with.
+const VATS_FRACTION_LIMIT: u32 = 0x0101_9de8;
+/// The `double` `256.0` the visibility ray distance is compared with.
+const VATS_DISTANCE_LIMIT: u32 = 0x0102_31d8;
+/// `ECX` = a matrix: sets the rotation of the heading about the up axis
+/// (takes the angle).
+const MATRIX_SET_HEADING: u32 = 0x004a_0c90;
+/// `ECX` = a matrix, `(column, out)`: copies a column to `out`.
+const MATRIX_GET_COLUMN: u32 = 0x0043_9f50;
+/// `ECX` = a vector: normalises it in place.
+const VECTOR_NORMALIZE: u32 = 0x004a_0c10;
+/// `ECX` = the ray input: resets it.
+const RAY_RESET: u32 = 0x004a_3c20;
+/// `ECX` = the ray input, the start point address.
+const RAY_SET_FROM: u32 = 0x004a_3da0;
+/// `ECX` = the ray input, the end point address.
+const RAY_SET_TO: u32 = 0x004a_3eb0;
+/// `ECX` = the collision filter, one word: stores it.
+const FILTER_CONSTRUCTOR: u32 = 0x008c_71b0;
+/// `ECX` = the collision filter, the layer (low seven bits).
+const FILTER_SET_LAYER: u32 = 0x004a_39f0;
+/// `ECX` = the actor, an out word: returns the out word holding the actor's
+/// collision filter.
+const ACTOR_COLLISION_FILTER: u32 = 0x0093_1ed0;
+/// `ECX` = that word: its group (the high half).
+const FILTER_GROUP_OF: u32 = 0x004a_3a20;
+/// `ECX` = the collision filter, the group (stored in the high half).
+const FILTER_SET_GROUP: u32 = 0x0059_ce80;
+/// `ECX` = the ray input, one word: stores it at `+0x24`.
+const RAY_SET_FILTER: u32 = 0x004a_3f70;
+/// `hkpAllRayHitCollector::hkpAllRayHitCollector` (Xbox PDB).
+const COLLECTOR_CONSTRUCTOR: u32 = 0x004a_3a70;
+/// `hkpAllRayHitCollector::~hkpAllRayHitCollector` (Xbox PDB).
+const COLLECTOR_DESTRUCTOR: u32 = 0x004a_3bc0;
+/// `ECX` = the ray input, the collector.
+const RAY_SET_COLLECTOR: u32 = 0x004a_3fb0;
+/// `ECX` = the player: its world.
+const PLAYER_WORLD: u32 = 0x008d_6f30;
+/// `ECX` = the world: its physics world (`bhkWorld`).
+const WORLD_PHYSICS: u32 = 0x0045_43c0;
+/// Virtual `+0xc8` of the physics world: casts the ray input.
+const VSLOT_WORLD_CAST_RAY: u32 = 0xc8;
+/// `ECX` = the ray input: returns the collector (`+0xa8`).
+const RAY_COLLECTOR: u32 = 0x008c_dd90;
+/// `ECX` = the collector: returns the hit array (`+0x10`).
+const COLLECTOR_HITS: u32 = 0x0046_0140;
+/// `ECX` = the hit array: the number of hits (`+4`).
+const HIT_COUNT: u32 = 0x0072_6070;
+/// `ECX` = the hit array, the index: the address of the hit (`0x60` bytes
+/// each).
+const HIT_AT: u32 = 0x004a_46b0;
+/// `ECX` = a hit result, one word (the hit): copy-constructs it.
+const HIT_RESULT_CONSTRUCTOR: u32 = 0x0069_6c30;
+/// `GetAVObjectForCollidable` (decompiler name), cdecl, the collidable.
+const AV_OBJECT_FOR_COLLIDABLE: u32 = 0x004b_5820;
+/// cdecl, the collidable: a second object of it (zero when there is none).
+const COLLIDABLE_OBJECT_004B59F0: u32 = 0x004b_59f0;
+/// `NiColorA` constructor: `ECX` = the colour, four floats.
+const COLOUR_CONSTRUCTOR: u32 = 0x0041_4430;
+/// cdecl `(from, colour, to, colour, 1)`: builds a debug line object.
+const DEBUG_LINE_OBJECT: u32 = 0x004b_3890;
+/// `TES::AddTempDebugObject` (decompiler name): `ECX` = the `TES` pointer's
+/// value, `(object, float seconds)`.
+const TES_ADD_TEMP_DEBUG_OBJECT: u32 = 0x0045_8e20;
+/// The `TES *` global.
+const TES_POINTER: u32 = 0x011d_ea10;
+/// The one-byte setting that enables the VATS debug lines.
+const VATS_DEBUG_SETTING: u32 = 0x011d_f868;
+/// The `float` seconds the debug lines stay (10.0).
+const VATS_DEBUG_SECONDS: u32 = 0x0101_7b78;
+
+/// `ECX` = the cached-values block, a mask: true when none of the mask bits
+/// is set in its `iFlags` (`00884e90`).
+const CACHED_VALUES_NONE_OF: u32 = 0x0088_4e90;
+/// `0.0` as a `double`.
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+/// Virtual `+0x184` of the process: its cached fire node.
+const VSLOT_PROCESS_FIRE_NODE: u32 = 0x184;
+/// Virtual `+0x188` of the process: stores the fire node.
+const VSLOT_PROCESS_SET_FIRE_NODE: u32 = 0x188;
+/// `PlayerCharacter::GetCurrent3D` (decompiler name): `ECX` = the player.
+const PLAYER_CURRENT_3D: u32 = 0x0095_0be0;
+/// `GetCurrentWeapon` (decompiler name): `ECX` = the actor.
+const ACTOR_CURRENT_WEAPON: u32 = 0x008a_1710;
+/// `TESObjectWEAP::GetFireNode` (decompiler name): `ECX` = the weapon, the
+/// 3D data.
+const WEAPON_FIRE_NODE: u32 = 0x0052_5700;
+/// cdecl `(3D data, name)`: finds a node by name.
+const FIND_NODE_BY_NAME: u32 = 0x004a_ae30;
+/// The text `ProjectileNode`.
+const PROJECTILE_NODE_NAME: u32 = 0x0102_cb10;
+
+/// `GameSetting` `float` read through `00403e20`.
+fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+    let pointer = e.call(SETTING_FLOAT_POINTER, &args![setting]).u32();
+    e.mem.f32(pointer)
+}
+
+/// Copies `count` words.
+fn copy_words(e: &mut Engine, to: u32, from: u32, count: u32) {
+    for i in 0..count {
+        let word = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, word);
+    }
+}
+
+// Translated from 008bcdd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the `float` at `+0x3ec` of the process (the fade value
+/// `008bcda0` returns for the actor).
+pub fn fn_008bcdd0(e: &mut Engine, this: Ptr) -> f32 {
+    e.mem.f32(this.addr() + 0x3ec)
+}
+
+// Translated from 008bcdf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The ragdoll update of an actor that has a `bhkRagdollController`
+/// (`Actor + 0xac`) in its initialised state; with `update` zero it only
+/// answers false. Otherwise it sets `bFootIKInRange` (Xbox PDB: the 3D
+/// bound of the actor's scene is closer to the player's eye than the
+/// `0x01267c6c` setting), switches the controller's ragdoll animation and
+/// ease-out flags, hands the controller the animation and face state of the
+/// actor, and answers whether the ragdoll is wanted. The second stack word is
+/// never read.
+pub fn fn_008bcdf0(e: &mut Engine, this: Ptr<Actor>, update: u8, _unused_1: u32) -> bool {
+    let actor = this.addr();
+    let ragdoll = e.get(this, Actor::pRagdollController).addr();
+    if ragdoll == 0 || !e.call(RAGDOLL_INIT_TEST, &args![ragdoll]).bool() {
+        return false;
+    }
+    let player = player_pointer(e);
+    let hidden_player = actor == player && !e.call(PLAYER_TEST_004EAF60, &args![player]).bool();
+    if update == 0 {
+        return false;
+    }
+    let scene = e.vcall(actor, VSLOT_REFERENCE_3D, &args![]).u32();
+    let player = player_pointer(e);
+    let mut wanted = !(actor == player && !e.call(PLAYER_TEST_00524D10, &args![player]).bool());
+    e.set(this, Actor::bFootIKInRange, false);
+    if scene != 0 {
+        let in_range = e.with_stack(0x60, |e, frame| {
+            let position = frame.addr();
+            let bound = position + 0x10;
+            let scaled = position + 0x20;
+            let eye = position + 0x30;
+            let difference = position + 0x40;
+            e.call(LIST_NODE_DATA_ADDRESS, &args![position]);
+            let player = player_pointer(e);
+            let source_a = e.global::<u32>(POSITION_SOURCE_A);
+            let source_b = e.global::<u32>(POSITION_SOURCE_B);
+            if e.call(PLAYER_TEST_004EAF60, &args![player]).bool() && source_a != 0 {
+                let from = e.call(OBJECT_POSITION, &args![source_a]).u32();
+                copy_words(e, position, from, 3);
+            } else if source_b != 0 {
+                let from = e.call(OBJECT_POSITION, &args![source_b]).u32();
+                copy_words(e, position, from, 3);
+            } else {
+                let player = player_pointer(e);
+                let height = actor_get_eye_level(e, Ptr::new(player));
+                let offset = e
+                    .call(VECTOR_TIMES_SCALAR, &args![scaled, height, EYE_DIRECTION])
+                    .u32();
+                let player_position = e.call(REFERENCE_POSITION, &args![player]).u32();
+                let sum = e
+                    .call(VECTOR_ADD, &args![player_position, eye, offset])
+                    .u32();
+                copy_words(e, position, sum, 3);
+            }
+            let from = e.call(WORLD_BOUND, &args![scene]).u32();
+            copy_words(e, bound, from, 4);
+            let anchor = e.call(LIST_NODE_DATA_ADDRESS, &args![bound]).u32();
+            let offset = e
+                .call(VECTOR_SUBTRACT, &args![position, difference, anchor])
+                .u32();
+            let distance = e.call(VECTOR_LENGTH, &args![offset]).f64();
+            let radius = e.call(BOUND_RADIUS, &args![bound]).f64();
+            let factor = e.global::<f64>(BOUND_RADIUS_FACTOR);
+            let margin = (distance - radius * factor) as f32;
+            let limit = fn_008bd550(e);
+            margin < limit
+        });
+        e.set(this, Actor::bFootIKInRange, in_range);
+    }
+    let in_range = e.get(this, Actor::bFootIKInRange);
+    if !(wanted && in_range) {
+        if !hidden_player
+            && e.call(RAGDOLL_TEST_00552490, &args![ragdoll]).bool()
+            && fn_008bd5c0(e, Ptr::new(ragdoll)) == 0
+        {
+            fn_008bd570(e, Ptr::new(ragdoll), 1);
+        }
+    } else if !e.vcall(actor, VSLOT_ACTOR_0X22C, &args![0u32]).bool()
+        && (!e.call(RAGDOLL_TEST_00552490, &args![ragdoll]).bool()
+            || e.call(RAGDOLL_TEST_008A3BD0, &args![ragdoll]).bool())
+    {
+        let active = e.call(RAGDOLL_TEST_00552490, &args![ragdoll]).bool();
+        e.call(RAGDOLL_ENABLE_ANIM, &args![ragdoll]);
+        if !active {
+            e.call(ACTOR_SET_HAVOK_WEAPON, &args![actor]);
+        }
+    }
+    wanted =
+        wanted && (e.get(this, Actor::bFootIKInRange) || fn_008bd5c0(e, Ptr::new(ragdoll)) != 0);
+    if !wanted {
+        return false;
+    }
+
+    let flags = e.call(ACTOR_FLAGS_008846E0, &args![actor]).u32();
+    let flag_mask = 0x8500u32;
+    let mut animating = false;
+    let animation = e.vcall(actor, VSLOT_ACTOR_ANIMATION, &args![]).u32();
+    if animation != 0 && e.call(ANIMATION_SUB_OBJECT, &args![animation, 1u32]).u32() != 0 {
+        let sub = e.call(ANIMATION_SUB_OBJECT, &args![animation, 1u32]).u32();
+        let state = e.call(ANIMATION_STATE_OBJECT, &args![sub]).u32();
+        if e.call(ANIMATION_STATE_TEST, &args![state]).bool() {
+            animating = true;
+        } else {
+            let sub = e.call(ANIMATION_SUB_OBJECT, &args![animation, 1u32]).u32();
+            let state = e.call(ANIMATION_STATE_OBJECT, &args![sub]).u32();
+            let code = e.call(ANIMATION_STATE_CODE, &args![state]).u32();
+            if matches!(code, 0xe3 | 0xe5 | 0xf1..=0xf4) {
+                animating = true;
+            }
+        }
+    }
+    let enabled = e.vcall(actor, VSLOT_ACTOR_0X214, &args![]).u32() == 0
+        && !animating
+        && !e.call(RAGDOLL_TEST_00C78090, &args![ragdoll]).bool()
+        && !e.vcall(actor, VSLOT_ACTOR_TEST_360, &args![]).bool();
+    let masked = flags & 0xf != 0;
+    let forced = flags & flag_mask != 0 || {
+        let player = player_pointer(e);
+        actor == player && !e.call(PLAYER_TEST_00524D10, &args![player]).bool()
+    };
+    let unmasked = forced || !masked;
+    e.call(RAGDOLL_SET_005BA130, &args![ragdoll, enabled as u32]);
+    let in_range = e.get(this, Actor::bFootIKInRange);
+    e.call(
+        RAGDOLL_SET_00C747D0,
+        &args![ragdoll, (enabled && in_range && unmasked) as u32],
+    );
+    fn_008bd610(e, Ptr::new(ragdoll), !masked as u8);
+    let mode = e.call(ENTRY_OBJECT, &args![RAGDOLL_MODE_OBJECT]).u32();
+    if mode == 4 {
+        e.call(RAGDOLL_MODE_FOUR, &args![ragdoll]);
+    } else {
+        e.call(RAGDOLL_MODE_OTHER, &args![ragdoll]);
+    }
+    let face = e.call(ACTOR_FACE_ANIMATION_DATA, &args![actor]).u32();
+    if face != 0 {
+        e.with_stack(0x10, |e, value| {
+            e.call(LIST_NODE_DATA_ADDRESS, &args![value]);
+            e.vcall(face, VSLOT_FACE_DATA_VALUE, &args![value]);
+            fn_008bd5e0(e, Ptr::new(ragdoll), value.addr());
+        });
+    } else {
+        fn_008bd5e0(e, Ptr::new(ragdoll), FACE_DATA_DEFAULT);
+    }
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    let kind = e.vcall(process, VSLOT_PROCESS_KIND, &args![]).i32();
+    if kind == 10 || kind == 5 {
+        e.call(RAGDOLL_SET_008A3BF0, &args![ragdoll, 1u32]);
+    }
+    let process = e.call(ACTOR_PROCESS, &args![actor]).u32();
+    if process != 0 && e.call(PROCESS_TEST_0045CD60, &args![process]).u32() == 0 {
+        let mover = e.call(PROCESS_ACTOR_MOVER, &args![process]).u32();
+        if mover != 0 && e.call(MOVER_MODE_005F36F0, &args![mover]).i32() > 1 {
+            if e.call(RAGDOLL_TEST_0089D690, &args![ragdoll]).bool() {
+                e.call(RAGDOLL_SET_FEEDBACK_ACTIVE, &args![ragdoll, 0u32]);
+            }
+            if e.call(RAGDOLL_TEST_00888A50, &args![ragdoll]).bool() {
+                e.call(RAGDOLL_SET_00C75580, &args![ragdoll, 0u32]);
+            }
+        }
+    }
+    wanted
+}
+
+// Translated from 008bd550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `float` game setting at `0x01267c6c` (read through `00403e20`).
+pub fn fn_008bd550(e: &mut Engine) -> f32 {
+    setting_float(e, RAGDOLL_RANGE_SETTING)
+}
+
+// Translated from 008bd570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the five flag bytes of the ragdoll controller at
+/// `+0x221`, `+0x1ed`, `+0x1bd`, `+0xb2` and `+0x43` (PC offsets; `+0x43` is
+/// `bEaseOutRagdollAnim` in the Xbox PDB, the others are not confirmed).
+pub fn fn_008bd570(e: &mut Engine, this: Ptr, value: u8) {
+    for offset in [0x221, 0x1ed, 0x1bd, 0xb2, 0x43] {
+        e.mem.set_u8(this.addr() + offset, value);
+    }
+}
+
+// Translated from 008bd5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `+0x43` of the ragdoll controller
+/// (`bEaseOutRagdollAnim` in the Xbox PDB).
+pub fn fn_008bd5c0(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x43)
+}
+
+// Translated from 008bd5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hands `value` to the four-word object at `+0xc0` of the ragdoll
+/// controller (`00561500`).
+pub fn fn_008bd5e0(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(FOUR_WORD_ASSIGN, &args![this.addr() + 0xc0, value]);
+}
+
+// Translated from 008bd610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte at `+0x243` of the ragdoll controller.
+pub fn fn_008bd610(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x243, value);
+}
+
+// Translated from 008bd630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::FadeSkins` (Xbox PDB): for a node whose skin object (virtual
+/// `+0x18`) answers zero to its virtual `+0x34`, sets the alpha of the
+/// node's property of the type `00438220` returns (`3`) to `alpha` (twice,
+/// through `00ba8ab0` and `00819a70`); then does the same for every child of
+/// the node, recursively.
+#[allow(clippy::only_used_in_recursion)]
+pub fn actor_fade_skins(e: &mut Engine, this: Ptr<Actor>, node: Ptr, alpha: f32) {
+    let skin = e.vcall(node.addr(), VSLOT_NODE_SKIN, &args![]).u32();
+    if skin != 0 && e.vcall(skin, VSLOT_SKIN_0X34, &args![]).u32() == 0 {
+        let kind = e.call(PROPERTY_TYPE_SHADER, &args![]).u32();
+        let property = e.call(NODE_GET_PROPERTY, &args![skin, kind]).u32();
+        if property != 0 {
+            e.call(SHADER_SET_ALPHA, &args![property, alpha]);
+            e.call(SHADER_SET_FADE, &args![property, alpha]);
+        }
+    }
+    let children = e.vcall(node.addr(), VSLOT_NODE_CHILDREN, &args![]).u32();
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if child != 0 {
+                actor_fade_skins(e, this, Ptr::new(child), alpha);
+            }
+            index += 1;
+        }
+    }
+}
+
+// Translated from 008bd700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A virtual of the subobject at `Actor + 0x94` (`this - 0x94` is the actor):
+/// true when the base form part at `+0x30` answers true to its virtual
+/// `+0x24`, or when `008ace90` holds, or when the actor's virtual `+0x1a0`
+/// (with `0`) holds; when the actor's virtual `+0x21c` holds, the answer is
+/// `008ace90`'s.
+pub fn fn_008bd700(e: &mut Engine, this: Ptr) -> u8 {
+    let actor = this.addr().wrapping_sub(0x94);
+    let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+    if e.vcall(base + 0x30, VSLOT_FORM_PART_0X24, &args![]).bool() {
+        return 1;
+    }
+    if e.vcall(actor, VSLOT_ACTOR_0X21C, &args![]).bool() {
+        return e.call(ACTOR_TEST_008ACE90, &args![actor]).u8();
+    }
+    if e.call(ACTOR_TEST_008ACE90, &args![actor]).bool() {
+        return 1;
+    }
+    e.vcall(actor, VSLOT_ACTOR_0X1A0, &args![0u32]).bool() as u8
+}
+
+// Translated from 008bd7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetHeading` (Xbox PDB): the `float` at `+8` of the rotation
+/// triple (`+0x24`); unless `skip_adjust` is set, for an actor whose virtual
+/// `+0x100` holds and whose base form is immobile (`005f0c80`) the angle at
+/// `+4` is added and the sum is clamped (`ClampAngle`).
+pub fn actor_get_heading(e: &mut Engine, this: Ptr<Actor>, skip_adjust: u8) -> f32 {
+    let actor = this.addr();
+    let rotation = e.call(ROTATION_POINTER, &args![actor]).u32();
+    let mut heading = e.mem.f32(rotation + 8);
+    if skip_adjust == 0 && e.vcall(actor, VSLOT_ACTOR_0X100, &args![]).bool() {
+        let base = e.call(GET_BASE_FORM, &args![actor]).u32();
+        if e.call(BASE_FORM_IS_IMMOBILE, &args![base]).bool() {
+            let rotation = e.call(ROTATION_POINTER, &args![actor]).u32();
+            let sum = (heading as f64 + e.mem.f32(rotation + 4) as f64) as f32;
+            heading = e.call(CLAMP_ANGLE, &args![sum]).f32();
+        }
+    }
+    heading
+}
+
+/// The pieces of the ray-cast frame `Actor::GetVATSAreaFree` and
+/// `GetVATSTargetVisible` build on their stack.
+#[derive(Clone, Copy)]
+struct RayFrame {
+    ray: u32,
+    filter: u32,
+    scratch: u32,
+    collector: u32,
+}
+
+/// The ray set-up both VATS functions share: resets the ray input, sets its
+/// start and end, builds the collision filter of the actor (layer `0x23`,
+/// the actor's own group), stores it in the ray input and attaches a fresh
+/// `hkpAllRayHitCollector`.
+fn prepare_ray(e: &mut Engine, actor: u32, frame: RayFrame, from: u32, to: u32) {
+    e.call(RAY_RESET, &args![frame.ray]);
+    e.call(RAY_SET_FROM, &args![frame.ray, from]);
+    e.call(RAY_SET_TO, &args![frame.ray, to]);
+    e.call(FILTER_CONSTRUCTOR, &args![frame.filter, 0u32]);
+    e.call(FILTER_SET_LAYER, &args![frame.filter, 0x23u32]);
+    let word = e
+        .call(ACTOR_COLLISION_FILTER, &args![actor, frame.scratch])
+        .u32();
+    let group = e.call(FILTER_GROUP_OF, &args![word]).u32();
+    e.call(FILTER_SET_GROUP, &args![frame.filter, group]);
+    let filter = e.mem.u32(frame.filter);
+    e.call(RAY_SET_FILTER, &args![frame.ray, filter]);
+    e.call(COLLECTOR_CONSTRUCTOR, &args![frame.collector]);
+    e.call(RAY_SET_COLLECTOR, &args![frame.ray, frame.collector]);
+}
+
+/// Casts the prepared ray through the player's world.
+fn cast_ray(e: &mut Engine, ray: u32) {
+    let player = player_pointer(e);
+    let world = e.call(PLAYER_WORLD, &args![player]).u32();
+    let physics = e.call(WORLD_PHYSICS, &args![world]).u32();
+    e.vcall(physics, VSLOT_WORLD_CAST_RAY, &args![ray]);
+}
+
+/// The number of hits the collector of the ray input holds.
+fn ray_hit_count(e: &mut Engine, ray: u32) -> i32 {
+    let collector = e.call(RAY_COLLECTOR, &args![ray]).u32();
+    let hits = e.call(COLLECTOR_HITS, &args![collector]).u32();
+    e.call(HIT_COUNT, &args![hits]).i32()
+}
+
+/// What the ray's hit number `index` struck: copies it into `result`, then
+/// returns the 3D object of its collidable (`+0x50`), the reference found for
+/// that 3D object and the collidable's second object.
+fn ray_hit_objects(e: &mut Engine, ray: u32, index: i32, result: u32) -> (u32, u32, u32) {
+    let collector = e.call(RAY_COLLECTOR, &args![ray]).u32();
+    let hits = e.call(COLLECTOR_HITS, &args![collector]).u32();
+    let hit = e.call(HIT_AT, &args![hits, index]).u32();
+    e.call(HIT_RESULT_CONSTRUCTOR, &args![result, hit]);
+    let collidable = e.mem.u32(result + 0x50);
+    let object = e.call(AV_OBJECT_FOR_COLLIDABLE, &args![collidable]).u32();
+    let reference = e.call(FIND_REFERENCE_FOR_3D, &args![object]).u32();
+    let collidable = e.mem.u32(result + 0x50);
+    let second = e.call(COLLIDABLE_OBJECT_004B59F0, &args![collidable]).u32();
+    (object, reference, second)
+}
+
+// Translated from 008bd830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetVATSAreaFree` (Xbox PDB): casts a ray from the actor's eye
+/// position (virtual `+0x1f4`, raised by the `0x011d1200` setting) along its
+/// heading (virtual `+0x2bc` plus `heading_offset`) for the length
+/// `0x01022958` and returns the distance to the first hit that is not the
+/// actor itself, or `FLT_MAX` (`0x01016970`) when nothing is hit. With the
+/// debug setting `0x011df868` on, it adds a debug line of that length to
+/// `TES` for ten seconds. The first stack word is never read. (The
+/// structured-exception frame and the stack cookie are not translated.)
+pub fn actor_get_vats_area_free(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    _unused_1: u32,
+    heading_offset: f32,
+) -> f32 {
+    let actor = this.addr();
+    e.with_stack(0x540, |e, block| {
+        // The frame keeps the original stack offsets, counted down from here.
+        let top = block.addr() + 0x530;
+        let start = top - 0x24;
+        let direction = top - 0x30;
+        let matrix = top - 0x54;
+        let scaled_ray = top - 0x68;
+        let end = top - 0x74;
+        let frame = RayFrame {
+            ray: top - 0x130,
+            filter: top - 0x134,
+            scratch: top - 0x138,
+            collector: top - 0x460,
+        };
+        let result = top - 0x4d0;
+        let colour = top - 0x4ec;
+        let debug_scaled = top - 0x4f8;
+        let debug_end = top - 0x504;
+
+        let position = e.vcall(actor, VSLOT_ACTOR_POSITION, &args![]).u32();
+        copy_words(e, start, position, 3);
+        let height = setting_float(e, VATS_HEIGHT_SETTING);
+        let raised = (e.mem.f32(start + 8) as f64 + height as f64) as f32;
+        e.mem.set_f32(start + 8, raised);
+        e.call(LIST_NODE_DATA_ADDRESS, &args![direction]);
+        e.call(LIST_NODE_DATA_ADDRESS, &args![matrix]);
+        let heading = e.vcall(actor, VSLOT_ACTOR_HEADING, &args![0u32]).f64();
+        let angle = (heading + heading_offset as f64) as f32;
+        e.call(MATRIX_SET_HEADING, &args![matrix, angle]);
+        e.call(MATRIX_GET_COLUMN, &args![matrix, 1u32, direction]);
+        e.call(VECTOR_NORMALIZE, &args![direction]);
+        let length = e.global::<f32>(VATS_RAY_LENGTH);
+        let long_ray = e
+            .call(VECTOR_TIMES_SCALAR, &args![scaled_ray, length, direction])
+            .u32();
+        e.call(VECTOR_ADD, &args![start, end, long_ray]);
+        let mut found = false;
+        let mut distance = e.global::<f32>(VATS_NOTHING_HIT);
+        prepare_ray(e, actor, frame, start, end);
+        cast_ray(e, frame.ray);
+        let mut index = 0;
+        while !found && index < ray_hit_count(e, frame.ray) {
+            let (object, reference, second) = ray_hit_objects(e, frame.ray, index, result);
+            if object != 0 && second != 0 && reference != actor {
+                found = true;
+                // The hit result's fraction (Xbox PDB hkpRootCdPoint-style
+                // distance) at +0x10.
+                distance = (e.mem.f32(result + 0x10) as f64 * length as f64) as f32;
+            }
+            index += 1;
+        }
+        let setting = e
+            .call(SETTING_BYTE_POINTER, &args![VATS_DEBUG_SETTING])
+            .u32();
+        if e.mem.u8(setting) != 0 {
+            e.call(
+                COLOUR_CONSTRUCTOR,
+                &args![colour, 1.0f32, 1.0f32, 0.0f32, 1.0f32],
+            );
+            let along = e
+                .call(
+                    VECTOR_TIMES_SCALAR,
+                    &args![debug_scaled, distance, direction],
+                )
+                .u32();
+            let to = e.call(VECTOR_ADD, &args![start, debug_end, along]).u32();
+            let line = e
+                .call(DEBUG_LINE_OBJECT, &args![start, colour, to, colour, 1u32])
+                .u32();
+            let seconds = e.global::<f32>(VATS_DEBUG_SECONDS);
+            let tes = e.global::<u32>(TES_POINTER);
+            e.call(TES_ADD_TEMP_DEBUG_OBJECT, &args![tes, line, seconds]);
+        }
+        e.call(COLLECTOR_DESTRUCTOR, &args![frame.collector]);
+        distance
+    })
+}
+
+// Translated from 008bdbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetVATSTargetVisible` (Xbox PDB): how far toward `target` the
+/// actor can see it. Zero without a target or without its 3D data (virtual
+/// `+0x1d0`). Otherwise it casts rays from the actor's eye position along
+/// its heading (`heading_offset` added) to the centre of the target's bound,
+/// one for each step `n = 1, 2, ...` of length `0x011d09e8` while `n` is
+/// below the count `0x011d0850`; a ray that strikes something other than the
+/// actor with a fraction up to `0.85` (`0x01019de8`) ends the search, unless
+/// the thing is a reference whose virtual `+0x100` holds and the ray is
+/// longer than 256 (`0x010231d8`). It returns `step * n` for the last step
+/// `n` whose ray was not blocked (zero when the first is blocked). With the
+/// debug setting on it adds each ray as
+/// a debug line. (The structured-exception frame and the stack cookie are not
+/// translated.)
+pub fn actor_get_vats_target_visible(
+    e: &mut Engine,
+    this: Ptr<Actor>,
+    target: Ptr,
+    heading_offset: f32,
+) -> f32 {
+    let actor = this.addr();
+    if target.is_null() {
+        return 0.0;
+    }
+    if e.vcall(target.addr(), VSLOT_REFERENCE_3D, &args![]).u32() == 0 {
+        return 0.0;
+    }
+    e.with_stack(0x560, |e, block| {
+        let top = block.addr() + 0x550;
+        let start = top - 0x24;
+        let direction = top - 0x30;
+        let matrix = top - 0x54;
+        let centre = top - 0x64;
+        let scaled_ray = top - 0x98;
+        let end = top - 0xa4;
+        let frame = RayFrame {
+            ray: top - 0x160,
+            filter: top - 0x164,
+            scratch: top - 0x168,
+            collector: top - 0x490,
+        };
+        let colour = top - 0x4a0;
+        let result = top - 0x510;
+        let difference = top - 0x528;
+
+        let position = e.vcall(actor, VSLOT_ACTOR_POSITION, &args![]).u32();
+        copy_words(e, start, position, 3);
+        let height = setting_float(e, VATS_HEIGHT_SETTING);
+        let raised = (e.mem.f32(start + 8) as f64 + height as f64) as f32;
+        e.mem.set_f32(start + 8, raised);
+        e.call(LIST_NODE_DATA_ADDRESS, &args![direction]);
+        e.call(LIST_NODE_DATA_ADDRESS, &args![matrix]);
+        let heading = e.vcall(actor, VSLOT_ACTOR_HEADING, &args![0u32]).f64();
+        let angle = (heading + heading_offset as f64) as f32;
+        e.call(MATRIX_SET_HEADING, &args![matrix, angle]);
+        e.call(MATRIX_GET_COLUMN, &args![matrix, 1u32, direction]);
+        e.call(VECTOR_NORMALIZE, &args![direction]);
+        let scene = e.vcall(target.addr(), VSLOT_REFERENCE_3D, &args![]).u32();
+        let bound = e.call(WORLD_BOUND, &args![scene]).u32();
+        let bound = e.call(LIST_NODE_DATA_ADDRESS, &args![bound]).u32();
+        copy_words(e, centre, bound, 3);
+
+        let mut blocked = false;
+        let mut visible = 0.0f32;
+        let mut step = 0i32;
+        loop {
+            if blocked {
+                break;
+            }
+            let count = setting_float(e, VATS_STEP_COUNT_SETTING);
+            if (count as f64).partial_cmp(&(step as f64)) != Some(std::cmp::Ordering::Greater) {
+                break;
+            }
+            let next = step + 1;
+            let step_length = setting_float(e, VATS_STEP_LENGTH_SETTING);
+            let reach = (step_length as f64 * next as f64) as f32;
+            let ray = e
+                .call(VECTOR_TIMES_SCALAR, &args![scaled_ray, reach, direction])
+                .u32();
+            e.call(VECTOR_ADD, &args![start, end, ray]);
+            prepare_ray(e, actor, frame, end, centre);
+            let setting = e
+                .call(SETTING_BYTE_POINTER, &args![VATS_DEBUG_SETTING])
+                .u32();
+            if e.mem.u8(setting) != 0 {
+                e.call(
+                    COLOUR_CONSTRUCTOR,
+                    &args![colour, 1.0f32, 1.0f32, 0.0f32, 1.0f32],
+                );
+                let line = e
+                    .call(DEBUG_LINE_OBJECT, &args![centre, colour, end, colour, 1u32])
+                    .u32();
+                let seconds = e.global::<f32>(VATS_DEBUG_SECONDS);
+                let tes = e.global::<u32>(TES_POINTER);
+                e.call(TES_ADD_TEMP_DEBUG_OBJECT, &args![tes, line, seconds]);
+            }
+            cast_ray(e, frame.ray);
+            let mut index = 0;
+            while !blocked && index < ray_hit_count(e, frame.ray) {
+                let (object, reference, second) = ray_hit_objects(e, frame.ray, index, result);
+                if object != 0 && second != 0 && reference != target.addr() {
+                    blocked = true;
+                    let fraction = e.mem.f32(result + 0x10);
+                    if fraction as f64 > e.global::<f64>(VATS_FRACTION_LIMIT) {
+                        blocked = false;
+                    }
+                    if reference != 0 && e.vcall(reference, VSLOT_ACTOR_0X100, &args![]).bool() {
+                        let offset = e
+                            .call(VECTOR_SUBTRACT, &args![centre, difference, end])
+                            .u32();
+                        let length = e.call(VECTOR_LENGTH, &args![offset]).f64();
+                        let scaled = (length * fraction as f64) as f32;
+                        if scaled as f64 > e.global::<f64>(VATS_DISTANCE_LIMIT) {
+                            blocked = false;
+                        }
+                    }
+                }
+                index += 1;
+            }
+            if !blocked {
+                let step_length = setting_float(e, VATS_STEP_LENGTH_SETTING);
+                visible = (step_length as f64 * (step + 1) as f64) as f32;
+            }
+            e.call(COLLECTOR_DESTRUCTOR, &args![frame.collector]);
+            step += 1;
+        }
+        visible
+    })
+}
+
+// Translated from 008be0a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetFireNode` (Xbox PDB): zero without a process; otherwise the
+/// process's cached fire node (virtual `+0x184`) when it has one. Else it
+/// looks the node up in the actor's 3D data (the player's current 3D for the
+/// player, actor virtual `+0x1d0` for the others), through the current weapon
+/// (`00525700`) or, without a weapon, by the name `ProjectileNode`
+/// (`004aae30`), stores it in the process (virtual `+0x188`) and returns it.
+pub fn actor_get_fire_node(e: &mut Engine, this: Ptr<Actor>) -> Ptr {
+    let actor = this.addr();
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process == 0 {
+        return Ptr::NULL;
+    }
+    let cached = e.vcall(process, VSLOT_PROCESS_FIRE_NODE, &args![]).u32();
+    if cached != 0 {
+        return Ptr::new(cached);
+    }
+    let scene = if actor == player_pointer(e) {
+        let player = player_pointer(e);
+        e.call(PLAYER_CURRENT_3D, &args![player]).u32()
+    } else {
+        e.vcall(actor, VSLOT_REFERENCE_3D, &args![]).u32()
+    };
+    if scene == 0 {
+        return Ptr::NULL;
+    }
+    let weapon = e.call(ACTOR_CURRENT_WEAPON, &args![actor]).u32();
+    let node = if weapon != 0 {
+        e.call(WEAPON_FIRE_NODE, &args![weapon, scene]).u32()
+    } else {
+        e.call(FIND_NODE_BY_NAME, &args![scene, PROJECTILE_NODE_NAME])
+            .u32()
+    };
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    e.vcall(process, VSLOT_PROCESS_SET_FIRE_NODE, &args![node]);
+    Ptr::new(node)
+}
+
+// Translated from 008be180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// With a process, hands `node` to its virtual `+0x188` (the setter
+/// `Actor::GetFireNode` uses).
+pub fn fn_008be180(e: &mut Engine, this: Ptr<Actor>, node: u32) {
+    let process = e.get(this, Actor::pCurrentProcess).addr();
+    if process != 0 {
+        e.vcall(process, VSLOT_PROCESS_SET_FIRE_NODE, &args![node]);
+    }
+}
+
+/// The `CachedValuesOwner` of an actor (`actor + 0xa8`, null for null).
+fn cached_owner_of(actor: Ptr<Actor>) -> Ptr {
+    if actor.is_null() {
+        Ptr::NULL
+    } else {
+        Ptr::new(actor.addr() + 0xa8)
+    }
+}
+
+/// The actor's process when it has a cached-values block.
+fn process_with_cached_values(e: &mut Engine, actor: Ptr<Actor>) -> Option<Ptr> {
+    let process = e.get(actor, Actor::pCurrentProcess);
+    if !process.is_null() && e.call(HAS_CACHED_VALUES, &args![process]).bool() {
+        Some(process)
+    } else {
+        None
+    }
+}
+
+/// The shared body of the process-level cached-value readers: zero without a
+/// cached-values block (`process + 0x2c`); the cached word at `offset` while
+/// none of the `mask` flags is set; otherwise the owner's virtual `slot`
+/// (the value is recomputed). Returns the `float` in `st0` or the word.
+fn cached_value(
+    e: &mut Engine,
+    process: Ptr,
+    owner: Ptr,
+    mask: u32,
+    offset: u32,
+    slot: u32,
+) -> Ret {
+    // BaseProcess::pCachedValues (Xbox PDB) +0x2c
+    let block = e.mem.u32(process.addr() + 0x2c);
+    if block == 0 {
+        return Ret::default();
+    }
+    if !e.call(CACHED_VALUES_NONE_OF, &args![block, mask]).bool() {
+        Ret {
+            eax: e.mem.u32(block + offset),
+            st0: e.mem.f32(block + offset) as f64,
+            ..Ret::default()
+        }
+    } else {
+        e.vcall(owner.addr(), slot, &args![])
+    }
+}
+
+/// The shared body of the actor-level getters: the process-level reader
+/// `reader` when the actor's process has a cached-values block, otherwise
+/// the owner's virtual `slot` directly.
+fn cached_getter(
+    e: &mut Engine,
+    actor: Ptr<Actor>,
+    slot: u32,
+    reader: fn(&mut Engine, Ptr, Ptr) -> Ret,
+) -> Ret {
+    if let Some(process) = process_with_cached_values(e, actor) {
+        let owner = cached_owner_of(actor);
+        return reader(e, process, owner);
+    }
+    e.vcall(actor.addr() + 0xa8, slot, &args![])
+}
+
+// Translated from 008be1b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetRadius` (Xbox PDB): `CachedValuesOwner` virtual `+0x00`
+/// (`CalculateCachedRadius`) through the process's cached radius
+/// (`008be220`) when the process has a cached-values block.
+pub fn actor_get_radius(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x00, process_radius).f32()
+}
+
+fn process_radius(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x1, 0x00, 0x00)
+}
+
+// Translated from 008be220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's radius: `0` without a cached-values block, the cached
+/// `fCachedRadius` (`+0x00`) while its flag `0x1` is clear in `iFlags`,
+/// otherwise the owner's virtual `+0x00`.
+pub fn fn_008be220(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_radius(e, this, owner).f32()
+}
+
+// Translated from 008be280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `Actor::GetRadius` for virtual `+0x04` (`CalculateCachedWidth`)
+/// through `008be2f0`.
+pub fn fn_008be280(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x04, process_width).f32()
+}
+
+fn process_width(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x2, 0x04, 0x04)
+}
+
+// Translated from 008be2f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's width: the `008be220` pattern with flag `0x2`, field `+0x04`,
+/// owner virtual `+0x04`.
+pub fn fn_008be2f0(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_width(e, this, owner).f32()
+}
+
+// Translated from 008be350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `Actor::GetRadius` for virtual `+0x08` (`CalculateCachedLength`)
+/// through `008be3c0`.
+pub fn fn_008be350(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x08, process_length).f32()
+}
+
+fn process_length(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x4, 0x08, 0x08)
+}
+
+// Translated from 008be3c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's length: the `008be220` pattern with flag `0x4`, field
+/// `+0x08`, owner virtual `+0x08`.
+pub fn fn_008be3c0(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_length(e, this, owner).f32()
+}
+
+// Translated from 008be420 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetForwardLength` (Xbox PDB): like `Actor::GetRadius` for virtual
+/// `+0x0c` (`CalculateCachedForwardLength`) through `008be490`.
+pub fn actor_get_forward_length(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x0c, process_forward_length).f32()
+}
+
+fn process_forward_length(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x8000, 0x0c, 0x0c)
+}
+
+// Translated from 008be490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's forward length: the `008be220` pattern with flag `0x8000`,
+/// field `+0x0c`, owner virtual `+0x0c`.
+pub fn fn_008be490(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_forward_length(e, this, owner).f32()
+}
+
+// Translated from 008be4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when the value of owner virtual `+0x1c` (`CalculateCachedParalysis`,
+/// Xbox PDB), read through `008be5a0` when the process has a cached-values
+/// block, is above zero (the `double` at `0x01012060`).
+pub fn fn_008be4f0(e: &mut Engine, this: Ptr<Actor>) -> bool {
+    let value = cached_getter(e, this, 0x1c, process_paralysis).f64();
+    value > e.global::<f64>(DOUBLE_ZERO)
+}
+
+fn process_paralysis(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x20, 0x1c, 0x1c)
+}
+
+// Translated from 008be5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's paralysis: the `008be220` pattern with flag `0x20`, field
+/// `+0x1c`, owner virtual `+0x1c`.
+pub fn fn_008be5a0(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_paralysis(e, this, owner).f32()
+}
+
+// Translated from 008be600 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetWeaponDamagePerSecond` (Xbox PDB): like `Actor::GetRadius` for
+/// virtual `+0x10` (`CalculateCachedWeaponDPS`) through `008be670`.
+pub fn actor_get_weapon_damage_per_second(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x10, process_weapon_dps).f32()
+}
+
+fn process_weapon_dps(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x8, 0x10, 0x10)
+}
+
+// Translated from 008be670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's weapon damage per second: the `008be220` pattern with flag
+/// `0x8`, field `+0x10`, owner virtual `+0x10`.
+pub fn fn_008be670(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_weapon_dps(e, this, owner).f32()
+}
+
+// Translated from 008be6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `Actor::GetRadius` for virtual `+0x20` (`CalculateCachedHealingRate`)
+/// through `008be740`.
+pub fn fn_008be6d0(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x20, process_healing_rate).f32()
+}
+
+fn process_healing_rate(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x40, 0x20, 0x20)
+}
+
+// Translated from 008be740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's healing rate: the `008be220` pattern with flag `0x40`,
+/// field `+0x20`, owner virtual `+0x20`.
+pub fn fn_008be740(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_healing_rate(e, this, owner).f32()
+}
+
+// Translated from 008be7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetEndurance` (Xbox PDB): like `Actor::GetRadius` for virtual
+/// `+0x24` (`CalculateCachedEndurance`) through `008be810`.
+pub fn actor_get_endurance(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x24, process_endurance).f32()
+}
+
+fn process_endurance(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x80, 0x24, 0x24)
+}
+
+// Translated from 008be810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's endurance: the `008be220` pattern with flag `0x80`, field
+/// `+0x24`, owner virtual `+0x24`.
+pub fn fn_008be810(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_endurance(e, this, owner).f32()
+}
+
+// Translated from 008be870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `Actor::GetRadius` for virtual `+0x28`
+/// (`CalculateCachedPerceptionCondition`) through `008be8e0`.
+pub fn fn_008be870(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x28, process_perception_condition).f32()
+}
+
+fn process_perception_condition(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x100, 0x28, 0x28)
+}
+
+// Translated from 008be8e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's perception condition: the `008be220` pattern with flag
+/// `0x100`, field `+0x28`, owner virtual `+0x28`.
+pub fn fn_008be8e0(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_perception_condition(e, this, owner).f32()
+}
+
+// Translated from 008be940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetEyeLevel` (Xbox PDB): like `Actor::GetRadius` for virtual
+/// `+0x2c` (`CalculateCachedEyeLevel`) through `008be9b0`.
+pub fn actor_get_eye_level(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x2c, process_eye_level).f32()
+}
+
+fn process_eye_level(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x200, 0x2c, 0x2c)
+}
+
+// Translated from 008be9b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's eye level: the `008be220` pattern with flag `0x200`, field
+/// `+0x2c`, owner virtual `+0x2c`.
+pub fn fn_008be9b0(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_eye_level(e, this, owner).f32()
+}
+
+// Translated from 008bea10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetActorAggression` (Xbox PDB): like `Actor::GetRadius` for
+/// virtual `+0x30` (`CalculateCachedActorAggression`) through `008bea80`;
+/// the value is a word.
+pub fn actor_get_actor_aggression(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    cached_getter(e, this, 0x30, process_aggression).u32()
+}
+
+fn process_aggression(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x400, 0x30, 0x30)
+}
+
+// Translated from 008bea80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's aggression word: the `008be220` pattern with flag `0x400`,
+/// word `+0x30`, owner virtual `+0x30`.
+pub fn fn_008bea80(e: &mut Engine, this: Ptr, owner: Ptr) -> u32 {
+    process_aggression(e, this, owner).u32()
+}
+
+// Translated from 008beae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Actor::GetActorAssistance` (Xbox PDB): like `Actor::GetActorAggression`
+/// for virtual `+0x34` (`CalculateCachedActorAssistance`) through
+/// `008beb50`.
+pub fn actor_get_actor_assistance(e: &mut Engine, this: Ptr<Actor>) -> u32 {
+    cached_getter(e, this, 0x34, process_assistance).u32()
+}
+
+fn process_assistance(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x800, 0x34, 0x34)
+}
+
+// Translated from 008beb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's assistance word: the `008be220` pattern with flag `0x800`,
+/// word `+0x34`, owner virtual `+0x34`.
+pub fn fn_008beb50(e: &mut Engine, this: Ptr, owner: Ptr) -> u32 {
+    process_assistance(e, this, owner).u32()
+}
+
+// Translated from 008bebb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Like `Actor::GetRadius` for virtual `+0x14`
+/// (`CalculateCachedMedicineEffectivenessMult`) through `008bec20`.
+pub fn fn_008bebb0(e: &mut Engine, this: Ptr<Actor>) -> f32 {
+    cached_getter(e, this, 0x14, process_medicine).f32()
+}
+
+fn process_medicine(e: &mut Engine, process: Ptr, owner: Ptr) -> Ret {
+    cached_value(e, process, owner, 0x10, 0x14, 0x14)
+}
+
+// Translated from 008bec20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The process's medicine effectiveness multiplier: the `008be220` pattern
+/// with flag `0x10`, field `+0x14`, owner virtual `+0x14`.
+pub fn fn_008bec20(e: &mut Engine, this: Ptr, owner: Ptr) -> f32 {
+    process_medicine(e, this, owner).f32()
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2986,6 +4187,55 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x008bcd20, actor_fade_in(Ptr<Actor>)),
         entry!(0x008bcd60, fn_008bcd60(Ptr<Actor>)),
         entry!(0x008bcda0, fn_008bcda0(Ptr<Actor>) -> f32),
+        entry!(0x008bcdd0, fn_008bcdd0(Ptr) -> f32),
+        entry!(0x008bcdf0, fn_008bcdf0(Ptr<Actor>, u8, u32) -> bool),
+        entry!(0x008bd550, fn_008bd550() -> f32),
+        entry!(0x008bd570, fn_008bd570(Ptr, u8)),
+        entry!(0x008bd5c0, fn_008bd5c0(Ptr) -> u8),
+        entry!(0x008bd5e0, fn_008bd5e0(Ptr, u32)),
+        entry!(0x008bd610, fn_008bd610(Ptr, u8)),
+        entry!(0x008bd630, actor_fade_skins(Ptr<Actor>, Ptr, f32)),
+        entry!(0x008bd700, fn_008bd700(Ptr) -> u8),
+        entry!(0x008bd7b0, actor_get_heading(Ptr<Actor>, u8) -> f32),
+        entry!(
+            0x008bd830,
+            actor_get_vats_area_free(Ptr<Actor>, u32, f32) -> f32
+        ),
+        entry!(
+            0x008bdbd0,
+            actor_get_vats_target_visible(Ptr<Actor>, Ptr, f32) -> f32
+        ),
+        entry!(0x008be0a0, actor_get_fire_node(Ptr<Actor>) -> Ptr),
+        entry!(0x008be180, fn_008be180(Ptr<Actor>, u32)),
+        entry!(0x008be1b0, actor_get_radius(Ptr<Actor>) -> f32),
+        entry!(0x008be220, fn_008be220(Ptr, Ptr) -> f32),
+        entry!(0x008be280, fn_008be280(Ptr<Actor>) -> f32),
+        entry!(0x008be2f0, fn_008be2f0(Ptr, Ptr) -> f32),
+        entry!(0x008be350, fn_008be350(Ptr<Actor>) -> f32),
+        entry!(0x008be3c0, fn_008be3c0(Ptr, Ptr) -> f32),
+        entry!(0x008be420, actor_get_forward_length(Ptr<Actor>) -> f32),
+        entry!(0x008be490, fn_008be490(Ptr, Ptr) -> f32),
+        entry!(0x008be4f0, fn_008be4f0(Ptr<Actor>) -> bool),
+        entry!(0x008be5a0, fn_008be5a0(Ptr, Ptr) -> f32),
+        entry!(
+            0x008be600,
+            actor_get_weapon_damage_per_second(Ptr<Actor>) -> f32
+        ),
+        entry!(0x008be670, fn_008be670(Ptr, Ptr) -> f32),
+        entry!(0x008be6d0, fn_008be6d0(Ptr<Actor>) -> f32),
+        entry!(0x008be740, fn_008be740(Ptr, Ptr) -> f32),
+        entry!(0x008be7a0, actor_get_endurance(Ptr<Actor>) -> f32),
+        entry!(0x008be810, fn_008be810(Ptr, Ptr) -> f32),
+        entry!(0x008be870, fn_008be870(Ptr<Actor>) -> f32),
+        entry!(0x008be8e0, fn_008be8e0(Ptr, Ptr) -> f32),
+        entry!(0x008be940, actor_get_eye_level(Ptr<Actor>) -> f32),
+        entry!(0x008be9b0, fn_008be9b0(Ptr, Ptr) -> f32),
+        entry!(0x008bea10, actor_get_actor_aggression(Ptr<Actor>) -> u32),
+        entry!(0x008bea80, fn_008bea80(Ptr, Ptr) -> u32),
+        entry!(0x008beae0, actor_get_actor_assistance(Ptr<Actor>) -> u32),
+        entry!(0x008beb50, fn_008beb50(Ptr, Ptr) -> u32),
+        entry!(0x008bebb0, fn_008bebb0(Ptr<Actor>) -> f32),
+        entry!(0x008bec20, fn_008bec20(Ptr, Ptr) -> f32),
     ]
 }
 
@@ -6114,13 +7364,1277 @@ mod tests {
         assert!(calls_to(&e, HIGH_PROCESS_FADE_OUT).is_empty());
     }
 
+    // ---- 008bcdd0 .. 008bec20 ------------------------------------------
+
+    const CACHE_OWNER_TABLE: u32 = 0x0200_e000;
+    const NODE_TABLE: u32 = 0x0200_e800;
+    const SKIN_TABLE: u32 = 0x0200_f000;
+    const CHILD_TABLE: u32 = 0x0200_f800;
+
+    fn word(value: f32) -> u32 {
+        value.to_bits()
+    }
+
+    #[test]
+    fn the_fade_value_is_the_float_at_0x3ec() {
+        let mut e = engine();
+        let process = e.mem.alloc(0x400);
+        e.mem.set_f32(process + 0x3ec, 0.75);
+        assert_eq!(e.call(0x008bcdd0, &args![process]).f32(), 0.75);
+    }
+
+    #[test]
+    fn the_ragdoll_range_is_a_float_setting() {
+        let mut e = engine();
+        e.map(0x0126_7000, 0x1000);
+        e.set_global(0x0126_7c6c, 33.5f32);
+        e.register_double(SETTING_FLOAT_POINTER, |_, a| eax(a[0]));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008bd550, &args![]).f32(), 33.5);
+        assert_eq!(calls_to(&e, SETTING_FLOAT_POINTER), [vec![0x0126_7c6c]]);
+    }
+
+    #[test]
+    fn the_ease_out_flags_are_set_together_and_read_back() {
+        let mut e = engine();
+        let ragdoll = e.mem.alloc(0x300);
+        e.call(0x008bd570, &args![ragdoll, 1u32]);
+        for offset in [0x221, 0x1ed, 0x1bd, 0xb2, 0x43] {
+            assert_eq!(e.mem.u8(ragdoll + offset), 1);
+        }
+        assert_eq!(e.mem.u8(ragdoll + 0x44), 0);
+        assert_eq!(e.call(0x008bd5c0, &args![ragdoll]).u8(), 1);
+        e.call(0x008bd570, &args![ragdoll, 0u32]);
+        assert_eq!(e.call(0x008bd5c0, &args![ragdoll]).u8(), 0);
+        assert_eq!(e.mem.u8(ragdoll + 0x221), 0);
+    }
+
+    #[test]
+    fn the_four_word_value_goes_to_the_object_at_0xc0() {
+        let mut e = engine();
+        let ragdoll = e.mem.alloc(0x300);
+        double(&mut e, FOUR_WORD_ASSIGN, Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008bd5e0, &args![ragdoll, 0x1234u32]);
+        assert_eq!(
+            calls_to(&e, FOUR_WORD_ASSIGN),
+            [vec![ragdoll + 0xc0, 0x1234]]
+        );
+    }
+
+    #[test]
+    fn the_byte_at_0x243_is_stored() {
+        let mut e = engine();
+        let ragdoll = e.mem.alloc(0x300);
+        e.call(0x008bd610, &args![ragdoll, 1u32]);
+        assert_eq!(e.mem.u8(ragdoll + 0x243), 1);
+        e.call(0x008bd610, &args![ragdoll, 0u32]);
+        assert_eq!(e.mem.u8(ragdoll + 0x243), 0);
+    }
+
+    // The fade: a root node with a skin that allows the fade and one child
+    // whose skin does not.
+    #[test]
+    fn fading_skins_walks_the_children() {
+        let mut e = engine();
+        for table in [NODE_TABLE, SKIN_TABLE, CHILD_TABLE] {
+            e.map(table, 0x800);
+        }
+        let actor = new_actor(&mut e);
+        let root = e.mem.alloc(0x40);
+        let child = e.mem.alloc(0x40);
+        let root_skin = e.mem.alloc(0x40);
+        let child_skin = e.mem.alloc(0x40);
+        let children = e.mem.alloc(0x40);
+        e.mem.set_u32(root, NODE_TABLE);
+        e.mem.set_u32(child, CHILD_TABLE);
+        e.mem.set_u32(root_skin, SKIN_TABLE);
+        e.mem.set_u32(child_skin, SKIN_TABLE + 0x100);
+        e.map(SKIN_TABLE + 0x100, 0x100);
+        slot(&mut e, NODE_TABLE, 0x18, eax(root_skin));
+        slot(&mut e, NODE_TABLE, 0x0c, eax(children));
+        slot(&mut e, CHILD_TABLE, 0x18, eax(child_skin));
+        slot(&mut e, CHILD_TABLE, 0x0c, eax(0));
+        slot(&mut e, SKIN_TABLE, 0x34, eax(0));
+        slot(&mut e, SKIN_TABLE + 0x100, 0x34, eax(1));
+        e.register(CHILD_COUNT, |_, _| eax(2));
+        e.register_double(CHILD_AT, move |_, a| eax(if a[1] == 0 { child } else { 0 }));
+        e.register(PROPERTY_TYPE_SHADER, |_, _| eax(3));
+        e.register(NODE_GET_PROPERTY, |_, a| eax(a[0] + 0x1000));
+        double(&mut e, SHADER_SET_ALPHA, Ret::default());
+        double(&mut e, SHADER_SET_FADE, Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x008bd630, &args![actor, root, 0.5f32]);
+        assert_eq!(
+            calls_to(&e, NODE_GET_PROPERTY),
+            [vec![root_skin, 3]],
+            "the child's skin refuses the fade"
+        );
+        assert_eq!(
+            calls_to(&e, SHADER_SET_ALPHA),
+            [vec![root_skin + 0x1000, word(0.5)]]
+        );
+        assert_eq!(
+            calls_to(&e, SHADER_SET_FADE),
+            [vec![root_skin + 0x1000, word(0.5)]]
+        );
+        // A node without a skin and without children does nothing.
+        e.call_log = Some(vec![]);
+        slot(&mut e, NODE_TABLE, 0x18, eax(0));
+        slot(&mut e, NODE_TABLE, 0x0c, eax(0));
+        e.call(0x008bd630, &args![actor, root, 0.5f32]);
+        assert!(calls_to(&e, NODE_GET_PROPERTY).is_empty());
+        // A skin without the property sets nothing.
+        slot(&mut e, NODE_TABLE, 0x18, eax(root_skin));
+        e.register(NODE_GET_PROPERTY, |_, _| eax(0));
+        e.call_log = Some(vec![]);
+        e.call(0x008bd630, &args![actor, root, 0.5f32]);
+        assert!(calls_to(&e, SHADER_SET_ALPHA).is_empty());
+    }
+
+    fn visible_case(part: u32, vslot_21c: u32, test: u32, vslot_1a0: u32) -> (u8, Vec<Vec<u32>>) {
+        let mut e = engine();
+        e.map(NODE_TABLE, 0x800);
+        let actor = new_actor(&mut e);
+        let base = e.mem.alloc(0x100);
+        e.mem.set_u32(base + 0x30, NODE_TABLE);
+        slot(&mut e, NODE_TABLE, 0x24, eax(part));
+        slot(&mut e, ACTOR_TABLE, 0x21c, eax(vslot_21c));
+        slot(&mut e, ACTOR_TABLE, 0x1a0, eax(vslot_1a0));
+        e.register_double(GET_BASE_FORM, move |_, _| eax(base));
+        e.register_double(ACTOR_TEST_008ACE90, move |_, _| eax(test));
+        e.call_log = Some(vec![]);
+        let result = e.call(0x008bd700, &args![actor.addr() + 0x94]).u8();
+        let arguments = calls_to(&e, slot_target(ACTOR_TABLE, 0x1a0));
+        (result, arguments)
+    }
+
+    #[test]
+    fn the_subobject_test_at_0x94_walks_its_four_answers() {
+        // The form part answers true: 1, nothing else asked.
+        assert_eq!(visible_case(1, 0, 0, 0), (1, vec![]));
+        // The actor virtual holds: the answer of 008ace90, as it is.
+        assert_eq!(visible_case(0, 1, 7, 1).0, 7);
+        assert_eq!(visible_case(0, 1, 0, 1).0, 0);
+        // 008ace90 holds: 1 without asking the last virtual.
+        assert_eq!(visible_case(0, 0, 1, 1), (1, vec![]));
+        // The last virtual decides, with the argument 0.
+        let (result, asked) = visible_case(0, 0, 0, 1);
+        assert_eq!(result, 1);
+        assert_eq!(asked.len(), 1);
+        assert_eq!(asked[0][1], 0);
+        assert_eq!(visible_case(0, 0, 0, 0).0, 0);
+    }
+
+    fn heading_case(skip: u32, virtual_holds: bool, immobile: bool) -> (f32, Vec<(u32, Vec<u32>)>) {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let rotation = e.mem.alloc(0x40);
+        e.mem.set_f32(rotation + 4, 0.5);
+        e.mem.set_f32(rotation + 8, 1.25);
+        e.register_double(ROTATION_POINTER, move |_, _| eax(rotation));
+        slot(&mut e, ACTOR_TABLE, 0x100, eax(virtual_holds as u32));
+        e.register(GET_BASE_FORM, |_, _| eax(0x7000));
+        e.register_double(BASE_FORM_IS_IMMOBILE, move |_, _| eax(immobile as u32));
+        e.register(CLAMP_ANGLE, |_, a| st0(f32::from_bits(a[0]) * 2.0));
+        e.call_log = Some(vec![]);
+        let heading = e.call(0x008bd7b0, &args![actor, skip]).f32();
+        (heading, logged(&e))
+    }
+
+    #[test]
+    fn the_heading_is_clamped_only_for_immobile_actors() {
+        let (heading, log) = heading_case(0, true, true);
+        assert_eq!(heading, 3.5);
+        assert!(log
+            .iter()
+            .any(|call| call.0 == CLAMP_ANGLE && call.1 == vec![word(1.75)]));
+        // Not immobile, the virtual fails or the adjustment is skipped: the
+        // stored angle.
+        assert_eq!(heading_case(0, true, false).0, 1.25);
+        assert_eq!(heading_case(0, false, true).0, 1.25);
+        let (heading, log) = heading_case(1, true, true);
+        assert_eq!(heading, 1.25);
+        assert!(log.iter().all(|call| call.0 != CLAMP_ANGLE));
+    }
+
+    // ---- the VATS ray casts --------------------------------------------
+
+    const RAY_COLLECTOR_BLOCK: u32 = 0x0200_a100;
+    const POSITION_BLOCK: u32 = 0x0200_a200;
+    const OBJECT_BLOCK: u32 = 0x0200_a300;
+    /// References of the ray hits, each with the vtable `VATS_REF_TABLE`.
+    const VATS_REF_A: u32 = 0x0200_a400;
+    const VATS_REF_B: u32 = 0x0200_a440;
+    const VATS_REF_C: u32 = 0x0200_a480;
+    const VATS_REF_TABLE: u32 = 0x0200_a600;
+
+    /// One ray hit the doubles report: `(fraction, 3D object, reference,
+    /// second object)`.
+    type Hit = (f32, u32, u32, u32);
+
+    struct Vats {
+        e: Engine,
+        actor: Ptr<Actor>,
+        /// The hits of each cast, in the order of the casts.
+        rays: Rc<RefCell<Vec<Vec<Hit>>>>,
+        casts: Rc<RefCell<u32>>,
+    }
+
+    fn vats_rig(rays: Vec<Vec<Hit>>) -> Vats {
+        let mut e = engine();
+        for page in [
+            0x011d_0000,
+            0x011d_1000,
+            0x011d_f000,
+            0x0101_7000,
+            0x0101_9000,
+            0x0102_1000,
+            0x0102_2000,
+            0x0102_3000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.map(0x0200_a000, 0x1000);
+        for reference in [VATS_REF_A, VATS_REF_B, VATS_REF_C] {
+            e.mem.set_u32(reference, VATS_REF_TABLE);
+        }
+        slot(&mut e, VATS_REF_TABLE, 0x100, eax(0));
+        let actor = new_actor(&mut e);
+        e.set_global(PLAYER_POINTER, 0x0200_a500u32);
+        e.set_global(VATS_HEIGHT_SETTING, 8.0f32);
+        e.set_global(VATS_STEP_COUNT_SETTING, 3.0f32);
+        e.set_global(VATS_STEP_LENGTH_SETTING, 100.0f32);
+        e.set_global(VATS_RAY_LENGTH, 10_000.0f32);
+        e.set_global(VATS_NOTHING_HIT, f32::MAX);
+        e.set_global(VATS_FRACTION_LIMIT, 0.85f64);
+        e.set_global(VATS_DISTANCE_LIMIT, 256.0f64);
+        e.set_global(VATS_DEBUG_SECONDS, 10.0f32);
+        e.set_global(VATS_DEBUG_SETTING, 0u8);
+        e.set_global(TES_POINTER, 0x7777u32);
+        e.mem.set_f32(POSITION_BLOCK, 1.0);
+        e.mem.set_f32(POSITION_BLOCK + 4, 2.0);
+        e.mem.set_f32(POSITION_BLOCK + 8, 100.0);
+        slot(&mut e, ACTOR_TABLE, 0x1f4, eax(POSITION_BLOCK));
+        slot(&mut e, ACTOR_TABLE, 0x2bc, st0(0.25));
+        e.register(SETTING_FLOAT_POINTER, |_, a| eax(a[0]));
+        e.register(SETTING_BYTE_POINTER, |_, a| eax(a[0]));
+        e.register(LIST_NODE_DATA_ADDRESS, |_, a| eax(a[0]));
+        quiet(
+            &mut e,
+            &[
+                MATRIX_SET_HEADING,
+                MATRIX_GET_COLUMN,
+                VECTOR_NORMALIZE,
+                RAY_RESET,
+                RAY_SET_FROM,
+                RAY_SET_TO,
+                FILTER_CONSTRUCTOR,
+                FILTER_SET_LAYER,
+                FILTER_SET_GROUP,
+                RAY_SET_FILTER,
+                COLLECTOR_CONSTRUCTOR,
+                COLLECTOR_DESTRUCTOR,
+                RAY_SET_COLLECTOR,
+                COLOUR_CONSTRUCTOR,
+                TES_ADD_TEMP_DEBUG_OBJECT,
+                HIT_RESULT_CONSTRUCTOR,
+            ],
+        );
+        e.register(VECTOR_TIMES_SCALAR, |_, a| eax(a[0]));
+        e.register(VECTOR_ADD, |_, a| eax(a[1]));
+        e.register(VECTOR_SUBTRACT, |_, a| eax(a[1]));
+        e.register(ACTOR_COLLISION_FILTER, |_, a| eax(a[1]));
+        e.register(FILTER_GROUP_OF, |_, _| eax(0x55));
+        e.register(DEBUG_LINE_OBJECT, |_, _| eax(0x9900));
+        e.register(PLAYER_WORLD, |_, _| eax(0x4100));
+        e.register(WORLD_PHYSICS, |_, _| eax(OBJECT_BLOCK));
+        e.mem.set_u32(OBJECT_BLOCK, OBJECT_BLOCK + 0x100);
+        let casts = Rc::new(RefCell::new(0u32));
+        let counted = casts.clone();
+        let cast_target = 0x0300_ff00;
+        e.mem.set_u32(OBJECT_BLOCK + 0x100 + 0xc8, cast_target);
+        e.register_double(cast_target, move |_, _| {
+            *counted.borrow_mut() += 1;
+            Ret::default()
+        });
+        let rays = Rc::new(RefCell::new(rays));
+        e.register(RAY_COLLECTOR, |_, _| eax(RAY_COLLECTOR_BLOCK));
+        e.register(COLLECTOR_HITS, |_, _| eax(RAY_COLLECTOR_BLOCK + 0x10));
+        let (list, count) = (rays.clone(), casts.clone());
+        e.register_double(HIT_COUNT, move |_, _| {
+            let ray = (*count.borrow() as usize).saturating_sub(1);
+            eax(list.borrow().get(ray).map_or(0, |hits| hits.len() as u32))
+        });
+        e.register(HIT_AT, |_, a| eax(a[1]));
+        let (list, count) = (rays.clone(), casts.clone());
+        e.register_double(HIT_RESULT_CONSTRUCTOR, move |e, a| {
+            let ray = (*count.borrow() as usize).saturating_sub(1);
+            let hit = list.borrow()[ray][a[1] as usize];
+            e.mem.set_f32(a[0] + 0x10, hit.0);
+            e.mem.set_u32(a[0] + 0x50, a[1] + 1);
+            Ret::default()
+        });
+        let (list, count) = (rays.clone(), casts.clone());
+        e.register_double(AV_OBJECT_FOR_COLLIDABLE, move |_, a| {
+            let ray = (*count.borrow() as usize).saturating_sub(1);
+            eax(list.borrow()[ray][a[0] as usize - 1].1)
+        });
+        let (list, count) = (rays.clone(), casts.clone());
+        e.register_double(COLLIDABLE_OBJECT_004B59F0, move |_, a| {
+            let ray = (*count.borrow() as usize).saturating_sub(1);
+            eax(list.borrow()[ray][a[0] as usize - 1].3)
+        });
+        let (list, count) = (rays.clone(), casts.clone());
+        e.register_double(FIND_REFERENCE_FOR_3D, move |_, a| {
+            // The reference of the 3D object `a[0]` is the one of the hit
+            // that reported it.
+            let ray = (*count.borrow() as usize).saturating_sub(1);
+            let list = list.borrow();
+            eax(list[ray]
+                .iter()
+                .find(|hit| hit.1 == a[0])
+                .map_or(0, |hit| hit.2))
+        });
+        Vats {
+            e,
+            actor,
+            rays,
+            casts,
+        }
+    }
+
+    #[test]
+    fn the_area_ray_is_built_from_the_raised_eye_position() {
+        let mut vats = vats_rig(vec![vec![]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.call_log = Some(vec![]);
+        let distance = e.call(0x008bd830, &args![actor, 0u32, 0.5f32]).f32();
+        assert_eq!(distance, f32::MAX, "nothing hit");
+        // The start is the position with the setting added to its height.
+        let from = calls_to(e, RAY_SET_FROM)[0][1];
+        assert_eq!(e.mem.f32(from), 1.0);
+        assert_eq!(e.mem.f32(from + 8), 108.0);
+        // The angle is the virtual's plus the argument, the ray is 10000 long
+        // and starts from the start.
+        assert_eq!(calls_to(e, MATRIX_SET_HEADING)[0][1], word(0.75));
+        let scaling = &calls_to(e, VECTOR_TIMES_SCALAR)[0];
+        assert_eq!(scaling[1], word(10_000.0));
+        let sum = &calls_to(e, VECTOR_ADD)[0];
+        assert_eq!(sum[0], from);
+        assert_eq!(sum[2], scaling[0]);
+        assert_eq!(calls_to(e, RAY_SET_TO)[0][1], sum[1]);
+        assert_eq!(calls_to(e, FILTER_SET_LAYER)[0][1], 0x23);
+        assert_eq!(calls_to(e, FILTER_SET_GROUP)[0][1], 0x55);
+        assert_eq!(*vats.casts.borrow(), 1);
+        assert_eq!(calls_to(e, COLLECTOR_DESTRUCTOR).len(), 1);
+        // No debug line without the setting.
+        assert!(calls_to(e, DEBUG_LINE_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn the_area_distance_is_the_first_hit_that_is_not_the_actor() {
+        let actor_addr;
+        let mut vats = {
+            let vats = vats_rig(vec![]);
+            actor_addr = vats.actor.addr();
+            let hits = vec![vec![
+                (0.1, 0x61, actor_addr, 0x71), // the actor itself
+                (0.2, 0, VATS_REF_A, 0x72),    // no 3D object
+                (0.3, 0x62, VATS_REF_A, 0),    // no second object
+                (0.5, 0x63, VATS_REF_B, 0x73), // the answer
+                (0.9, 0x64, VATS_REF_C, 0x74), // never looked at
+            ]];
+            *vats.rays.borrow_mut() = hits;
+            vats
+        };
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.call_log = Some(vec![]);
+        let distance = e.call(0x008bd830, &args![actor, 0u32, 0.0f32]).f32();
+        assert_eq!(distance, 5000.0);
+        let looked_at: Vec<u32> = calls_to(e, HIT_AT).iter().map(|c| c[1]).collect();
+        assert_eq!(looked_at, [0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn the_area_debug_line_is_added_with_the_setting() {
+        let mut vats = vats_rig(vec![vec![(0.25, 0x61, VATS_REF_A, 0x71)]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.set_global(VATS_DEBUG_SETTING, 1u8);
+        e.call_log = Some(vec![]);
+        let distance = e.call(0x008bd830, &args![actor, 0u32, 0.0f32]).f32();
+        assert_eq!(distance, 2500.0);
+        let colour = &calls_to(e, COLOUR_CONSTRUCTOR)[0];
+        assert_eq!(colour[1..], [word(1.0), word(1.0), word(0.0), word(1.0)]);
+        // The line goes from the start to start + 2500 along the direction.
+        let scaling = calls_to(e, VECTOR_TIMES_SCALAR);
+        assert_eq!(scaling[1][1], word(2500.0));
+        let line = &calls_to(e, DEBUG_LINE_OBJECT)[0];
+        assert_eq!(line[1], line[3], "the same colour twice");
+        assert_eq!(line[4], 1);
+        assert_eq!(
+            calls_to(e, TES_ADD_TEMP_DEBUG_OBJECT),
+            [vec![0x7777, 0x9900, word(10.0)]]
+        );
+    }
+
+    fn target_rig(rays: Vec<Vec<Hit>>) -> (Vats, u32) {
+        let mut vats = vats_rig(rays);
+        vats.e.map(NODE_TABLE, 0x800);
+        vats.e.map(CHILD_TABLE, 0x800);
+        let target = vats.e.mem.alloc(0x40);
+        vats.e.mem.set_u32(target, NODE_TABLE);
+        slot(&mut vats.e, NODE_TABLE, 0x1d0, eax(0x6000));
+        vats.e
+            .register(WORLD_BOUND, |_, _| eax(OBJECT_BLOCK + 0x200));
+        vats.e.mem.set_f32(OBJECT_BLOCK + 0x200, 5.0);
+        vats.e.mem.set_f32(OBJECT_BLOCK + 0x204, 6.0);
+        vats.e.mem.set_f32(OBJECT_BLOCK + 0x208, 7.0);
+        (vats, target)
+    }
+
+    #[test]
+    fn nothing_to_see_without_a_target_or_its_3d_data() {
+        let (mut vats, target) = target_rig(vec![]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x008bdbd0, &args![actor, 0u32, 0.0f32]).f32(), 0.0);
+        slot(e, NODE_TABLE, 0x1d0, eax(0));
+        assert_eq!(e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(), 0.0);
+        assert_eq!(*vats.casts.borrow(), 0);
+    }
+
+    #[test]
+    fn a_clear_line_is_visible_for_every_step() {
+        let (mut vats, target) = target_rig(vec![vec![], vec![], vec![]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.call_log = Some(vec![]);
+        let seen = e.call(0x008bdbd0, &args![actor, target, 0.5f32]).f32();
+        assert_eq!(seen, 300.0);
+        assert_eq!(*vats.casts.borrow(), 3);
+        // Each ray goes from start + step * n to the centre of the bound.
+        let to: Vec<u32> = calls_to(e, RAY_SET_TO).iter().map(|c| c[1]).collect();
+        assert_eq!(e.mem.f32(to[0]), 5.0);
+        assert_eq!(e.mem.f32(to[0] + 8), 7.0);
+        let scaling: Vec<u32> = calls_to(e, VECTOR_TIMES_SCALAR)
+            .iter()
+            .map(|c| c[1])
+            .collect();
+        assert_eq!(scaling, [word(100.0), word(200.0), word(300.0)]);
+        assert_eq!(calls_to(e, COLLECTOR_DESTRUCTOR).len(), 3);
+        assert_eq!(calls_to(e, MATRIX_SET_HEADING)[0][1], word(0.75));
+    }
+
+    #[test]
+    fn a_block_ends_the_search_at_the_previous_step() {
+        // The second ray is blocked at a short fraction.
+        let blocker = (0.5, 0x62, VATS_REF_A, 0x72);
+        let (mut vats, target) = target_rig(vec![vec![], vec![blocker], vec![]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        assert_eq!(
+            e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(),
+            100.0
+        );
+        assert_eq!(*vats.casts.borrow(), 2);
+        // Blocked at once: nothing is visible.
+        let (mut vats, target) = target_rig(vec![vec![blocker]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        assert_eq!(e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(), 0.0);
+    }
+
+    #[test]
+    fn hits_of_the_target_itself_and_far_fractions_do_not_block() {
+        let (mut vats, target) = target_rig(vec![vec![]]);
+        let blockers = vec![
+            // The target itself.
+            vec![(0.5, 0x62, target, 0x72)],
+            // Past 0.85 of the ray.
+            vec![(0.9, 0x62, VATS_REF_A, 0x72)],
+            // No 3D object or no second object.
+            vec![(0.5, 0, VATS_REF_A, 0x72), (0.5, 0x63, VATS_REF_A, 0)],
+        ];
+        for hits in blockers {
+            *vats.rays.borrow_mut() = vec![hits, vec![], vec![]];
+            *vats.casts.borrow_mut() = 0;
+            let (e, actor) = (&mut vats.e, vats.actor);
+            assert_eq!(
+                e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(),
+                300.0
+            );
+        }
+    }
+
+    #[test]
+    fn a_far_actor_like_blocker_is_ignored_beyond_256() {
+        let (mut vats, target) = target_rig(vec![vec![]]);
+        let reference = vats.e.mem.alloc(0x40);
+        vats.e.mem.set_u32(reference, NODE_TABLE + 0x200);
+        vats.e.map(NODE_TABLE + 0x200, 0x200);
+        slot(&mut vats.e, NODE_TABLE + 0x200, 0x100, eax(1));
+        vats.e.register(VECTOR_LENGTH, |_, _| st0(600.0));
+        let blocker = (0.5, 0x62, reference, 0x72);
+        // 600 * 0.5 = 300 > 256: not a block.
+        *vats.rays.borrow_mut() = vec![vec![blocker], vec![], vec![]];
+        let (e, actor) = (&mut vats.e, vats.actor);
+        assert_eq!(
+            e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(),
+            300.0
+        );
+        // 400 * 0.5 = 200: a block.
+        e.register(VECTOR_LENGTH, |_, _| st0(400.0));
+        *vats.casts.borrow_mut() = 0;
+        assert_eq!(e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(), 0.0);
+        // The virtual does not hold: a block whatever the length.
+        slot(e, NODE_TABLE + 0x200, 0x100, eax(0));
+        e.register(VECTOR_LENGTH, |_, _| st0(600.0));
+        *vats.casts.borrow_mut() = 0;
+        assert_eq!(e.call(0x008bdbd0, &args![actor, target, 0.0f32]).f32(), 0.0);
+    }
+
+    #[test]
+    fn the_visibility_debug_line_goes_from_the_centre_to_the_ray_end() {
+        let (mut vats, target) = target_rig(vec![vec![], vec![], vec![]]);
+        let (e, actor) = (&mut vats.e, vats.actor);
+        e.set_global(VATS_DEBUG_SETTING, 1u8);
+        e.call_log = Some(vec![]);
+        e.call(0x008bdbd0, &args![actor, target, 0.0f32]);
+        let lines = calls_to(e, DEBUG_LINE_OBJECT);
+        assert_eq!(lines.len(), 3);
+        let to = calls_to(e, RAY_SET_TO)[0][1];
+        assert_eq!(lines[0][0], to, "from the centre of the bound");
+        assert_eq!(lines[0][2], calls_to(e, RAY_SET_FROM)[0][1]);
+        assert_eq!(calls_to(e, TES_ADD_TEMP_DEBUG_OBJECT).len(), 3);
+    }
+
+    // ---- the fire node -------------------------------------------------
+
+    struct Fire {
+        e: Engine,
+        actor: Ptr<Actor>,
+        process: u32,
+    }
+
+    fn fire_rig() -> Fire {
+        let mut e = engine();
+        let actor = new_actor(&mut e);
+        let process = with_process(&mut e, actor);
+        slot(&mut e, PROCESS_TABLE, 0x184, eax(0));
+        slot(&mut e, PROCESS_TABLE, 0x188, Ret::default());
+        slot(&mut e, ACTOR_TABLE, 0x1d0, eax(0x6000));
+        e.set_global(PLAYER_POINTER, 0x0200_a500u32);
+        e.register(PLAYER_CURRENT_3D, |_, _| eax(0x6100));
+        e.register(ACTOR_CURRENT_WEAPON, |_, _| eax(0));
+        e.register(WEAPON_FIRE_NODE, |_, _| eax(0x6200));
+        e.register(FIND_NODE_BY_NAME, |_, _| eax(0x6300));
+        e.call_log = Some(vec![]);
+        Fire { e, actor, process }
+    }
+
+    #[test]
+    fn the_fire_node_needs_a_process() {
+        let mut fire = fire_rig();
+        fire.e.set(fire.actor, Actor::pCurrentProcess, Ptr::NULL);
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0);
+        assert!(logged(&fire.e).len() == 1);
+    }
+
+    #[test]
+    fn a_cached_fire_node_is_returned_as_it_is() {
+        let mut fire = fire_rig();
+        slot(&mut fire.e, PROCESS_TABLE, 0x184, eax(0x6400));
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0x6400);
+        assert!(calls_to(&fire.e, slot_target(PROCESS_TABLE, 0x188)).is_empty());
+    }
+
+    #[test]
+    fn the_fire_node_comes_from_the_weapon_or_the_node_name() {
+        let mut fire = fire_rig();
+        let setter = slot_target(PROCESS_TABLE, 0x188);
+        // No weapon: the node named ProjectileNode, stored in the process.
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0x6300);
+        assert_eq!(
+            calls_to(&fire.e, FIND_NODE_BY_NAME),
+            [vec![0x6000, PROJECTILE_NODE_NAME]]
+        );
+        assert_eq!(calls_to(&fire.e, setter), [vec![fire.process, 0x6300]]);
+        // A weapon: its own fire node.
+        fire.e.register(ACTOR_CURRENT_WEAPON, |_, _| eax(0x6500));
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0x6200);
+        assert_eq!(calls_to(&fire.e, WEAPON_FIRE_NODE), [vec![0x6500, 0x6000]]);
+        assert_eq!(calls_to(&fire.e, setter).len(), 2);
+    }
+
+    #[test]
+    fn the_player_uses_its_current_3d_and_no_3d_gives_no_node() {
+        let mut fire = fire_rig();
+        let player = fire.actor.addr();
+        fire.e.set_global(PLAYER_POINTER, player);
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0x6300);
+        assert_eq!(calls_to(&fire.e, FIND_NODE_BY_NAME)[0][0], 0x6100);
+        // No 3D data: zero, and nothing stored.
+        let mut fire = fire_rig();
+        slot(&mut fire.e, ACTOR_TABLE, 0x1d0, eax(0));
+        assert_eq!(fire.e.call(0x008be0a0, &args![fire.actor]).u32(), 0);
+        assert!(calls_to(&fire.e, slot_target(PROCESS_TABLE, 0x188)).is_empty());
+    }
+
+    #[test]
+    fn the_fire_node_setter_needs_a_process() {
+        let mut fire = fire_rig();
+        fire.e.call(0x008be180, &args![fire.actor, 0x6600u32]);
+        assert_eq!(
+            calls_to(&fire.e, slot_target(PROCESS_TABLE, 0x188)),
+            [vec![fire.process, 0x6600]]
+        );
+        fire.e.set(fire.actor, Actor::pCurrentProcess, Ptr::NULL);
+        fire.e.call_log = Some(vec![]);
+        fire.e.call(0x008be180, &args![fire.actor, 0x6600u32]);
+        assert!(calls_to(&fire.e, slot_target(PROCESS_TABLE, 0x188)).is_empty());
+    }
+
+    // ---- the cached-value readers --------------------------------------
+
+    /// Checks one process-level reader and its actor-level wrapper:
+    /// `mask` is the flag, `offset` the cached field and the owner virtual.
+    fn check_cached(wrapper: u32, reader: u32, mask: u32, offset: u32, word_value: bool) {
+        let mut e = engine();
+        e.map(CACHE_OWNER_TABLE, 0x100);
+        let actor = new_actor(&mut e);
+        e.mem.set_u32(actor.addr() + 0xa8, CACHE_OWNER_TABLE);
+        slot(
+            &mut e,
+            CACHE_OWNER_TABLE,
+            offset,
+            Ret {
+                eax: 0x1234,
+                st0: 7.5,
+                ..Ret::default()
+            },
+        );
+        let owner = actor.addr() + 0xa8;
+        let process = e.mem.alloc(0x100);
+        let block = e.mem.alloc(0x80);
+        let cached = 1.5f32;
+        let value = |ret: Ret| -> u32 {
+            if word_value {
+                ret.eax
+            } else {
+                (ret.st0 as f32).to_bits()
+            }
+        };
+        let computed = if word_value { 0x1234 } else { word(7.5) };
+        let stored = word(cached);
+        // Reader: no block, zero.
+        let ret = e.call(reader, &args![process, owner]);
+        assert_eq!(value(ret), 0);
+        // With a block: the flag decides between the stored and the computed.
+        e.mem.set_u32(process + 0x2c, block);
+        e.mem.set_f32(block + offset, cached);
+        e.mem.set_u32(block + 0x44, mask);
+        assert_eq!(value(e.call(reader, &args![process, owner])), stored);
+        e.mem.set_u32(block + 0x44, !mask);
+        e.call_log = Some(vec![]);
+        assert_eq!(value(e.call(reader, &args![process, owner])), computed);
+        assert_eq!(
+            calls_to(&e, slot_target(CACHE_OWNER_TABLE, offset)),
+            [vec![owner]],
+            "the owner is the virtual's this"
+        );
+        // Wrapper without a process: the owner's virtual directly.
+        e.call_log = Some(vec![]);
+        assert_eq!(value(e.call(wrapper, &args![actor])), computed);
+        assert_eq!(
+            calls_to(&e, slot_target(CACHE_OWNER_TABLE, offset)),
+            [vec![owner]]
+        );
+        // With a process that has the block: the reader.
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        e.mem.set_u32(block + 0x44, mask);
+        e.call_log = Some(vec![]);
+        assert_eq!(value(e.call(wrapper, &args![actor])), stored);
+        assert!(calls_to(&e, slot_target(CACHE_OWNER_TABLE, offset)).is_empty());
+        // A process without the block goes to the owner again.
+        e.mem.set_u32(process + 0x2c, 0);
+        assert_eq!(value(e.call(wrapper, &args![actor])), computed);
+    }
+
+    macro_rules! cached_test {
+        ($name:ident, $wrapper:literal, $reader:literal, $mask:literal, $offset:literal, $word:literal) => {
+            #[test]
+            fn $name() {
+                check_cached($wrapper, $reader, $mask, $offset, $word);
+            }
+        };
+    }
+
+    cached_test!(radius_is_cached, 0x008be1b0, 0x008be220, 0x1, 0x00, false);
+    cached_test!(width_is_cached, 0x008be280, 0x008be2f0, 0x2, 0x04, false);
+    cached_test!(length_is_cached, 0x008be350, 0x008be3c0, 0x4, 0x08, false);
+    cached_test!(
+        forward_length_is_cached,
+        0x008be420,
+        0x008be490,
+        0x8000,
+        0x0c,
+        false
+    );
+    cached_test!(
+        weapon_dps_is_cached,
+        0x008be600,
+        0x008be670,
+        0x8,
+        0x10,
+        false
+    );
+    cached_test!(
+        healing_rate_is_cached,
+        0x008be6d0,
+        0x008be740,
+        0x40,
+        0x20,
+        false
+    );
+    cached_test!(
+        endurance_is_cached,
+        0x008be7a0,
+        0x008be810,
+        0x80,
+        0x24,
+        false
+    );
+    cached_test!(
+        perception_condition_is_cached_by_the_getter,
+        0x008be870,
+        0x008be8e0,
+        0x100,
+        0x28,
+        false
+    );
+    cached_test!(
+        eye_level_is_cached,
+        0x008be940,
+        0x008be9b0,
+        0x200,
+        0x2c,
+        false
+    );
+    cached_test!(
+        aggression_is_cached,
+        0x008bea10,
+        0x008bea80,
+        0x400,
+        0x30,
+        true
+    );
+    cached_test!(
+        assistance_is_cached,
+        0x008beae0,
+        0x008beb50,
+        0x800,
+        0x34,
+        true
+    );
+    cached_test!(
+        medicine_multiplier_is_cached,
+        0x008bebb0,
+        0x008bec20,
+        0x10,
+        0x14,
+        false
+    );
+
+    #[test]
+    fn paralysis_is_true_above_zero() {
+        let mut e = engine();
+        e.map(CACHE_OWNER_TABLE, 0x100);
+        let actor = new_actor(&mut e);
+        e.mem.set_u32(actor.addr() + 0xa8, CACHE_OWNER_TABLE);
+        e.set_global(DOUBLE_ZERO, 0.0f64);
+        // Through the owner's virtual.
+        slot(&mut e, CACHE_OWNER_TABLE, 0x1c, st0(0.5));
+        assert!(e.call(0x008be4f0, &args![actor]).bool());
+        slot(&mut e, CACHE_OWNER_TABLE, 0x1c, st0(0.0));
+        assert!(!e.call(0x008be4f0, &args![actor]).bool());
+        slot(&mut e, CACHE_OWNER_TABLE, 0x1c, st0(-1.0));
+        assert!(!e.call(0x008be4f0, &args![actor]).bool());
+        // Through a cached value.
+        let process = e.mem.alloc(0x100);
+        let block = e.mem.alloc(0x80);
+        e.mem.set_u32(process + 0x2c, block);
+        e.mem.set_u32(block + 0x44, 0x20);
+        e.set(actor, Actor::pCurrentProcess, Ptr::new(process));
+        e.mem.set_f32(block + 0x1c, 2.0);
+        assert!(e.call(0x008be4f0, &args![actor]).bool());
+        e.mem.set_f32(block + 0x1c, 0.0);
+        assert!(!e.call(0x008be4f0, &args![actor]).bool());
+    }
+
+    // ---- 008bcdf0, the ragdoll update ----------------------------------
+
+    const RAGDOLL_TABLE: u32 = 0x0200_b000;
+    const TAIL_TABLE: u32 = 0x0200_b800;
+
+    struct Ragdoll {
+        e: Engine,
+        actor: Ptr<Actor>,
+        ragdoll: u32,
+    }
+
+    /// An actor with a ragdoll controller and doubles for every callee: the
+    /// bound is far (the actor is out of range) unless a test changes it.
+    fn ragdoll_rig() -> Ragdoll {
+        let mut e = engine();
+        e.map(RAGDOLL_TABLE, 0x800);
+        e.map(TAIL_TABLE, 0x800);
+        for page in [0x0126_7000, 0x011e_0000, 0x0102_1000, 0x011f_2000] {
+            e.map(page, 0x1000);
+        }
+        let actor = new_actor(&mut e);
+        let ragdoll = e.mem.alloc(0x300);
+        e.set(actor, Actor::pRagdollController, Ptr::new(ragdoll));
+        e.set_global(PLAYER_POINTER, 0x0200_a500u32);
+        e.set_global(POSITION_SOURCE_A, 0u32);
+        e.set_global(POSITION_SOURCE_B, OBJECT_BLOCK);
+        e.set_global(0x0126_7c6c, 100.0f32);
+        e.set_global(BOUND_RADIUS_FACTOR, 1.25f64);
+        e.register(SETTING_FLOAT_POINTER, |_, a| eax(a[0]));
+        e.register(RAGDOLL_INIT_TEST, |_, _| eax(1));
+        e.register(PLAYER_TEST_004EAF60, |_, _| eax(0));
+        e.register(PLAYER_TEST_00524D10, |_, _| eax(1));
+        e.register(LIST_NODE_DATA_ADDRESS, |_, a| eax(a[0]));
+        e.register(OBJECT_POSITION, |_, a| eax(a[0]));
+        slot(&mut e, ACTOR_TABLE, 0x1d0, eax(0x6000));
+        e.register(WORLD_BOUND, |_, _| eax(OBJECT_BLOCK + 0x200));
+        e.mem.set_f32(OBJECT_BLOCK + 0x20c, 10.0);
+        e.register(VECTOR_SUBTRACT, |_, a| eax(a[1]));
+        e.register(VECTOR_LENGTH, |_, _| st0(500.0));
+        e.register(BOUND_RADIUS, |_, _| st0(10.0));
+        quiet(
+            &mut e,
+            &[
+                RAGDOLL_TEST_00552490,
+                RAGDOLL_TEST_008A3BD0,
+                RAGDOLL_ENABLE_ANIM,
+                ACTOR_SET_HAVOK_WEAPON,
+                RAGDOLL_SET_005BA130,
+                RAGDOLL_SET_00C747D0,
+                RAGDOLL_MODE_FOUR,
+                RAGDOLL_MODE_OTHER,
+                RAGDOLL_SET_008A3BF0,
+                RAGDOLL_SET_FEEDBACK_ACTIVE,
+                RAGDOLL_SET_00C75580,
+                RAGDOLL_TEST_00C78090,
+                RAGDOLL_TEST_0089D690,
+                RAGDOLL_TEST_00888A50,
+                FOUR_WORD_ASSIGN,
+            ],
+        );
+        slot(&mut e, ACTOR_TABLE, 0x22c, eax(0));
+        slot(&mut e, ACTOR_TABLE, 0x1e4, eax(0));
+        slot(&mut e, ACTOR_TABLE, 0x214, eax(0));
+        slot(&mut e, ACTOR_TABLE, 0x360, eax(0));
+        e.register(ACTOR_FLAGS_008846E0, |_, _| eax(0));
+        e.register(ENTRY_OBJECT, |_, _| eax(0));
+        e.register(ACTOR_FACE_ANIMATION_DATA, |_, _| eax(0));
+        let process = with_process(&mut e, actor);
+        slot(&mut e, PROCESS_TABLE, 0x4bc, eax(3));
+        e.register_double(ACTOR_PROCESS, move |_, _| eax(process));
+        e.register(PROCESS_TEST_0045CD60, |_, _| eax(1));
+        e.register(PROCESS_ACTOR_MOVER, |_, _| eax(0));
+        e.register(MOVER_MODE_005F36F0, |_, _| eax(1));
+        Ragdoll { e, actor, ragdoll }
+    }
+
+    fn update(rig: &mut Ragdoll, flag: u8) -> bool {
+        rig.e
+            .call(0x008bcdf0, &args![rig.actor, flag as u32, 0u32])
+            .bool()
+    }
+
+    fn in_range(rig: &Ragdoll) -> bool {
+        rig.e.get(rig.actor, Actor::bFootIKInRange)
+    }
+
+    #[test]
+    fn no_controller_or_an_uninitialised_one_answers_false() {
+        let mut rig = ragdoll_rig();
+        rig.e.call_log = Some(vec![]);
+        rig.e.register(RAGDOLL_INIT_TEST, |_, _| eax(0));
+        assert!(!update(&mut rig, 1));
+        assert_eq!(logged_addresses(&rig.e), [0x008bcdf0, RAGDOLL_INIT_TEST]);
+        let actor = rig.actor;
+        rig.e.set(actor, Actor::pRagdollController, Ptr::NULL);
+        rig.e.call_log = Some(vec![]);
+        assert!(!update(&mut rig, 1));
+        assert_eq!(logged_addresses(&rig.e), [0x008bcdf0]);
+    }
+
+    #[test]
+    fn without_the_update_flag_only_the_checks_run() {
+        let mut rig = ragdoll_rig();
+        rig.e.call_log = Some(vec![]);
+        assert!(!update(&mut rig, 0));
+        assert!(calls_to(&rig.e, slot_target(ACTOR_TABLE, 0x1d0)).is_empty());
+        assert!(calls_to(&rig.e, RAGDOLL_ENABLE_ANIM).is_empty());
+    }
+
+    #[test]
+    fn foot_ik_range_compares_the_margin_with_the_setting() {
+        // Distance 500, radius 10 * 1.25: margin 487.5 against 100: out.
+        let mut rig = ragdoll_rig();
+        update(&mut rig, 1);
+        assert!(!in_range(&rig));
+        // The setting above the margin: in range.
+        rig.e.set_global(0x0126_7c6c, 487.75f32);
+        update(&mut rig, 1);
+        assert!(in_range(&rig));
+        // Exactly the margin is not in range.
+        rig.e.set_global(0x0126_7c6c, 487.5f32);
+        update(&mut rig, 1);
+        assert!(!in_range(&rig));
+        // No scene: the flag is cleared and stays so.
+        slot(&mut rig.e, ACTOR_TABLE, 0x1d0, eax(0));
+        let actor = rig.actor;
+        rig.e.set(actor, Actor::bFootIKInRange, true);
+        update(&mut rig, 1);
+        assert!(!in_range(&rig));
+    }
+
+    #[test]
+    fn the_position_comes_from_a_global_object_or_the_players_eye() {
+        let mut rig = ragdoll_rig();
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, OBJECT_POSITION), [vec![OBJECT_BLOCK]]);
+        // The first object counts only while the player test holds.
+        rig.e.set_global(POSITION_SOURCE_A, 0x0200_a900u32);
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, OBJECT_POSITION), [vec![OBJECT_BLOCK]]);
+        rig.e.register(PLAYER_TEST_004EAF60, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, OBJECT_POSITION), [vec![0x0200_a900]]);
+    }
+
+    #[test]
+    fn without_global_objects_the_position_is_the_players_eye() {
+        let mut rig = ragdoll_rig();
+        rig.e.set_global(POSITION_SOURCE_B, 0u32);
+        let player = rig.e.mem.alloc(0x200);
+        rig.e.mem.set_u32(player, ACTOR_TABLE);
+        rig.e.mem.set_u32(player + 0xa8, CACHE_OWNER_TABLE);
+        rig.e.map(CACHE_OWNER_TABLE, 0x100);
+        slot(&mut rig.e, CACHE_OWNER_TABLE, 0x2c, st0(1.75));
+        rig.e.set_global(PLAYER_POINTER, player);
+        let positions = player + 0x30;
+        rig.e
+            .register_double(REFERENCE_POSITION, move |_, _| eax(positions));
+        rig.e.register(VECTOR_TIMES_SCALAR, |_, a| eax(a[0]));
+        rig.e.register(VECTOR_ADD, |_, a| eax(a[1]));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        let scaling = &calls_to(&rig.e, VECTOR_TIMES_SCALAR)[0];
+        assert_eq!(scaling[1], word(1.75));
+        assert_eq!(scaling[2], EYE_DIRECTION);
+        let sum = &calls_to(&rig.e, VECTOR_ADD)[0];
+        assert_eq!(sum[0], positions);
+        assert_eq!(sum[2], scaling[0]);
+        assert!(calls_to(&rig.e, OBJECT_POSITION).is_empty());
+    }
+
+    #[test]
+    fn out_of_range_the_ease_out_flags_are_raised_for_an_active_ragdoll() {
+        let mut rig = ragdoll_rig();
+        // The ragdoll test fails: the flags stay and the update answers false.
+        assert!(!update(&mut rig, 1));
+        assert_eq!(rig.e.mem.u8(rig.ragdoll + 0x43), 0);
+        // The test holds: the flags are raised, which keeps the update going.
+        rig.e.register(RAGDOLL_TEST_00552490, |_, _| eax(1));
+        assert!(update(&mut rig, 1));
+        assert_eq!(rig.e.mem.u8(rig.ragdoll + 0x43), 1);
+        assert_eq!(rig.e.mem.u8(rig.ragdoll + 0x221), 1);
+        // A hidden player does not raise them.
+        let mut rig = ragdoll_rig();
+        let actor = rig.actor.addr();
+        rig.e.set_global(PLAYER_POINTER, actor);
+        rig.e.register(PLAYER_TEST_004EAF60, |_, _| eax(0));
+        rig.e.register(RAGDOLL_TEST_00552490, |_, _| eax(1));
+        assert!(!update(&mut rig, 1));
+        assert_eq!(rig.e.mem.u8(rig.ragdoll + 0x43), 0);
+        // An already raised flag is left alone and counts.
+        let mut rig = ragdoll_rig();
+        rig.e.register(RAGDOLL_TEST_00552490, |_, _| eax(1));
+        rig.e.mem.set_u8(rig.ragdoll + 0x43, 1);
+        rig.e.call_log = Some(vec![]);
+        assert!(update(&mut rig, 1));
+    }
+
+    fn near(rig: &mut Ragdoll) {
+        rig.e.set_global(0x0126_7c6c, 1000.0f32);
+    }
+
+    #[test]
+    fn in_range_the_ragdoll_animation_is_enabled_unless_the_virtual_holds() {
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        rig.e.call_log = Some(vec![]);
+        // The test fails: the animation is enabled and the havok weapon set.
+        assert!(update(&mut rig, 1));
+        assert_eq!(calls_to(&rig.e, RAGDOLL_ENABLE_ANIM).len(), 1);
+        assert_eq!(calls_to(&rig.e, ACTOR_SET_HAVOK_WEAPON).len(), 1);
+        assert_eq!(
+            calls_to(&rig.e, slot_target(ACTOR_TABLE, 0x22c)),
+            [vec![rig.actor.addr(), 0]]
+        );
+        // The test holds and the second does not: nothing.
+        rig.e.register(RAGDOLL_TEST_00552490, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        assert!(update(&mut rig, 1));
+        assert!(calls_to(&rig.e, RAGDOLL_ENABLE_ANIM).is_empty());
+        // Both hold: enabled, but the havok weapon is left.
+        rig.e.register(RAGDOLL_TEST_008A3BD0, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, RAGDOLL_ENABLE_ANIM).len(), 1);
+        assert!(calls_to(&rig.e, ACTOR_SET_HAVOK_WEAPON).is_empty());
+        // The actor virtual holds: nothing is enabled.
+        slot(&mut rig.e, ACTOR_TABLE, 0x22c, eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert!(calls_to(&rig.e, RAGDOLL_ENABLE_ANIM).is_empty());
+    }
+
+    fn argument_of(rig: &Ragdoll, addr: u32) -> Vec<Vec<u32>> {
+        calls_to(&rig.e, addr)
+    }
+
+    #[test]
+    fn the_flags_are_handed_to_the_controller() {
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        rig.e.call_log = Some(vec![]);
+        // Nothing prevents the ragdoll, no flag bits: enabled, in range, not
+        // masked.
+        assert!(update(&mut rig, 1));
+        let ragdoll = rig.ragdoll;
+        assert_eq!(argument_of(&rig, RAGDOLL_SET_005BA130), [vec![ragdoll, 1]]);
+        assert_eq!(argument_of(&rig, RAGDOLL_SET_00C747D0), [vec![ragdoll, 1]]);
+        assert_eq!(rig.e.mem.u8(ragdoll + 0x243), 1, "no 0xf flag bit");
+        // The 0xf bits: masked, so the last flag clears and the ragdoll
+        // is not "unmasked" unless 0x8500 is also set.
+        rig.e.register(ACTOR_FLAGS_008846E0, |_, _| eax(0x3));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(argument_of(&rig, RAGDOLL_SET_00C747D0), [vec![ragdoll, 0]]);
+        assert_eq!(rig.e.mem.u8(ragdoll + 0x243), 0);
+        rig.e.register(ACTOR_FLAGS_008846E0, |_, _| eax(0x8503));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(argument_of(&rig, RAGDOLL_SET_00C747D0), [vec![ragdoll, 1]]);
+        // A player for whom the second test fails is not wanted at all, so the
+        // update stops before the flags.
+        let actor = rig.actor.addr();
+        rig.e.set_global(PLAYER_POINTER, actor);
+        rig.e.register(PLAYER_TEST_00524D10, |_, _| eax(0));
+        rig.e.call_log = Some(vec![]);
+        assert!(!update(&mut rig, 1));
+        assert!(argument_of(&rig, RAGDOLL_SET_00C747D0).is_empty());
+    }
+
+    #[test]
+    fn what_prevents_the_ragdoll_disables_it() {
+        // Each condition alone turns the first flag off.
+        type Prevention = fn(&mut Ragdoll);
+        let cases: [(&str, Prevention); 4] = [
+            ("virtual 0x214", |rig| {
+                slot(&mut rig.e, ACTOR_TABLE, 0x214, eax(5))
+            }),
+            ("virtual 0x360", |rig| {
+                slot(&mut rig.e, ACTOR_TABLE, 0x360, eax(1))
+            }),
+            ("test c78090", |rig| {
+                rig.e.register(RAGDOLL_TEST_00C78090, |_, _| eax(1))
+            }),
+            ("animation 5f4d60", |rig| {
+                slot(&mut rig.e, ACTOR_TABLE, 0x1e4, eax(0x8100));
+                rig.e.register(ANIMATION_SUB_OBJECT, |_, _| eax(0x8200));
+                rig.e.register(ANIMATION_STATE_OBJECT, |_, _| eax(0x8300));
+                rig.e.register(ANIMATION_STATE_TEST, |_, _| eax(1));
+            }),
+        ];
+        for (name, prevent) in cases {
+            let mut rig = ragdoll_rig();
+            near(&mut rig);
+            prevent(&mut rig);
+            rig.e.call_log = Some(vec![]);
+            update(&mut rig, 1);
+            assert_eq!(
+                argument_of(&rig, RAGDOLL_SET_005BA130),
+                [vec![rig.ragdoll, 0]],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn some_animation_codes_count_as_animating() {
+        for (code, animating) in [
+            (0xe3, true),
+            (0xe4, false),
+            (0xe5, true),
+            (0xf0, false),
+            (0xf1, true),
+            (0xf4, true),
+            (0xf5, false),
+            (0x10, false),
+        ] {
+            let mut rig = ragdoll_rig();
+            near(&mut rig);
+            slot(&mut rig.e, ACTOR_TABLE, 0x1e4, eax(0x8100));
+            rig.e.register(ANIMATION_SUB_OBJECT, |_, _| eax(0x8200));
+            rig.e.register(ANIMATION_STATE_OBJECT, |_, _| eax(0x8300));
+            rig.e.register(ANIMATION_STATE_TEST, |_, _| eax(0));
+            rig.e
+                .register_double(ANIMATION_STATE_CODE, move |_, _| eax(code));
+            rig.e.call_log = Some(vec![]);
+            update(&mut rig, 1);
+            assert_eq!(
+                argument_of(&rig, RAGDOLL_SET_005BA130),
+                [vec![rig.ragdoll, !animating as u32]],
+                "code {code:#x}"
+            );
+            // The sub-object is asked for once to test and again for each use.
+            assert_eq!(
+                calls_to(&rig.e, ANIMATION_SUB_OBJECT).len(),
+                3,
+                "code {code:#x}"
+            );
+        }
+        // No sub-object: not animating, asked once.
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        slot(&mut rig.e, ACTOR_TABLE, 0x1e4, eax(0x8100));
+        rig.e.register(ANIMATION_SUB_OBJECT, |_, _| eax(0));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, ANIMATION_SUB_OBJECT).len(), 1);
+        assert_eq!(
+            argument_of(&rig, RAGDOLL_SET_005BA130),
+            [vec![rig.ragdoll, 1]]
+        );
+    }
+
+    #[test]
+    fn the_mode_word_picks_the_controller_setup() {
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, RAGDOLL_MODE_OTHER).len(), 1);
+        assert!(calls_to(&rig.e, RAGDOLL_MODE_FOUR).is_empty());
+        rig.e.register(ENTRY_OBJECT, |_, _| eax(4));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, RAGDOLL_MODE_FOUR).len(), 1);
+        assert_eq!(
+            calls_to(&rig.e, ENTRY_OBJECT),
+            [vec![RAGDOLL_MODE_OBJECT]],
+            "the mode object is the fixed one"
+        );
+    }
+
+    #[test]
+    fn face_data_or_its_default_goes_to_the_controller() {
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        let ragdoll = rig.ragdoll;
+        assert_eq!(
+            calls_to(&rig.e, FOUR_WORD_ASSIGN),
+            [vec![ragdoll + 0xc0, FACE_DATA_DEFAULT]]
+        );
+        // With face data: its virtual 0x9c fills a temporary handed on.
+        let face = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u32(face, TAIL_TABLE);
+        slot(&mut rig.e, TAIL_TABLE, 0x9c, Ret::default());
+        rig.e
+            .register_double(ACTOR_FACE_ANIMATION_DATA, move |_, _| eax(face));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        let filled = &calls_to(&rig.e, slot_target(TAIL_TABLE, 0x9c))[0];
+        assert_eq!(filled[0], face);
+        let assigned = &calls_to(&rig.e, FOUR_WORD_ASSIGN)[0];
+        assert_eq!(assigned, &vec![ragdoll + 0xc0, filled[1]]);
+    }
+
+    #[test]
+    fn the_process_kind_and_the_mover_mode_adjust_the_controller() {
+        let mut rig = ragdoll_rig();
+        near(&mut rig);
+        let process = rig.e.mem.alloc(0x40);
+        rig.e.mem.set_u32(process, PROCESS_TABLE);
+        rig.e
+            .register_double(ACTOR_PROCESS, move |_, _| eax(process));
+        slot(&mut rig.e, PROCESS_TABLE, 0x4bc, eax(3));
+        rig.e.register(PROCESS_TEST_0045CD60, |_, _| eax(0));
+        rig.e.register(PROCESS_ACTOR_MOVER, |_, _| eax(0x8400));
+        rig.e.register(MOVER_MODE_005F36F0, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        let ragdoll = rig.ragdoll;
+        // Kind 3 and mover mode 1: nothing.
+        assert!(calls_to(&rig.e, RAGDOLL_SET_008A3BF0).is_empty());
+        assert!(calls_to(&rig.e, RAGDOLL_SET_FEEDBACK_ACTIVE).is_empty());
+        assert!(calls_to(&rig.e, RAGDOLL_SET_00C75580).is_empty());
+        // Kinds 5 and 10 raise the flag.
+        for kind in [5, 10] {
+            slot(&mut rig.e, PROCESS_TABLE, 0x4bc, eax(kind));
+            rig.e.call_log = Some(vec![]);
+            update(&mut rig, 1);
+            assert_eq!(
+                calls_to(&rig.e, RAGDOLL_SET_008A3BF0),
+                [vec![ragdoll, 1]],
+                "kind {kind}"
+            );
+        }
+        // Mover mode 2: the two tests decide the two resets.
+        rig.e.register(MOVER_MODE_005F36F0, |_, _| eax(2));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert!(calls_to(&rig.e, RAGDOLL_SET_FEEDBACK_ACTIVE).is_empty());
+        rig.e.register(RAGDOLL_TEST_0089D690, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(
+            calls_to(&rig.e, RAGDOLL_SET_FEEDBACK_ACTIVE),
+            [vec![ragdoll, 0]]
+        );
+        assert!(calls_to(&rig.e, RAGDOLL_SET_00C75580).is_empty());
+        rig.e.register(RAGDOLL_TEST_00888A50, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert_eq!(calls_to(&rig.e, RAGDOLL_SET_00C75580), [vec![ragdoll, 0]]);
+        // A process the test refuses, or no mover: nothing more.
+        rig.e.register(PROCESS_TEST_0045CD60, |_, _| eax(1));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert!(calls_to(&rig.e, RAGDOLL_SET_00C75580).is_empty());
+        rig.e.register(PROCESS_TEST_0045CD60, |_, _| eax(0));
+        rig.e.register(PROCESS_ACTOR_MOVER, |_, _| eax(0));
+        rig.e.call_log = Some(vec![]);
+        update(&mut rig, 1);
+        assert!(calls_to(&rig.e, RAGDOLL_SET_00C75580).is_empty());
+    }
+
     #[test]
     fn registered_in_the_function_table() {
         let funcs = funcs();
-        assert_eq!(funcs.len(), 80);
+        assert_eq!(funcs.len(), 120);
         let mut addresses: Vec<u32> = funcs.iter().map(|f| f.0).collect();
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 80);
+        assert_eq!(addresses.len(), 120);
     }
 }
