@@ -16,9 +16,21 @@
 //! `NiAdditionalGeometryData` functions, the release of the loaded data
 //! (`00537eb0`), `Save` (`00538110`), the Havok MOPP code object and its
 //! base classes, the save-reference slots of the land's vtable, the data
-//! allocator (`00539500`) and the material builder (`00539960`). The next
-//! session continues with the first `open` function after `00539f40`
-//! (`00539f50`).
+//! allocator (`00539500`) and the material builder (`00539960`). The third
+//! session translated the next 40 by address, `00539f50` to `0053e290`: the
+//! binary extra data of the percent arrays, `UpdateMesh` (`0053a090`), the
+//! `CoordData` record and `GetCoordData` (`0053b550`), the layer texture and
+//! opacity accessors and the cleaning of the layers (`0053a940`,
+//! `0053aeb0`), the grass parameter builder (`0053bc10`), the position and
+//! normal at a place (`0053caf0`, `0053d2e0`), the eight-neighbour search
+//! (`0053d330`) and the border normals with their helpers (`0053d8f0`,
+//! `0053db20`, `0053df30`, `0053e290`). The next session continues with the
+//! first function the queue lists after `0053e290` (`0053f0e0`).
+//!
+//! Two translations of the first session were corrected in the third:
+//! `InitializeStatics` passed the default texture set to `00726070` (a
+//! getter of the word at +4 of the data handler, which takes no argument)
+//! and called `00510130` without it; the set is the argument of `00510130`.
 //!
 //! ## Layout (PC build)
 //!
@@ -104,8 +116,8 @@ pub(crate) const Y_OFFSETS: u32 = 0x011c_9eb4;
 /// `pTriStripListBLOCK`: the triangle strip of a quadrant (`u16[1021]`,
 /// 0x7FA bytes).
 pub(crate) const TRIANGLE_STRIP_LIST: u32 = 0x0118_ae90;
-/// The menu manager singleton whose method receives the default texture set.
-const MENU_MANAGER: u32 = 0x011c_3f2c;
+/// The data handler singleton (`011c3f2c`): `InitializeStatics` reads the word at its +4 (`00726070`) and hands it the default texture set (`00510130`); the neighbour search asks it for cells.
+const DATA_HANDLER: u32 = 0x011c_3f2c;
 /// The default colour (four floats) the colour reader returns when the land
 /// has no vertex arrays.
 const DEFAULT_COLOR_WORDS: u32 = 0x011a_9be0;
@@ -197,14 +209,15 @@ const SMART_POINTER_RELEASE: u32 = 0x0045_cec0;
 const SMART_POINTER_CONSTRUCT: u32 = 0x0063_3c90;
 /// `BGSTextureSet::BGSTextureSet`, `BGSTextureSet::SetTexturePath(index,
 /// path)`, `TESLandTexture::TESLandTexture`, `TESLandTexture::SetTextureSet`
-/// (`this` = texture, texture set), the menu manager method that receives
-/// the default texture set and the call that follows it.
+/// (`this` = texture, texture set), the getter of the word at +4 of the data
+/// handler (`00726070`, no argument) and the call on that word that
+/// receives the default texture set (`00510130`, one argument).
 const TEXTURE_SET_CONSTRUCT: u32 = 0x0059_22e0;
 const TEXTURE_SET_SET_PATH: u32 = 0x0059_2cc0;
 const LAND_TEXTURE_CONSTRUCT: u32 = 0x0054_0c50;
 const LAND_TEXTURE_SET_TEXTURE_SET: u32 = 0x0098_4f60;
-const MENU_MANAGER_REGISTER_TEXTURE_SET: u32 = 0x0072_6070;
-const MENU_MANAGER_AFTER_REGISTER: u32 = 0x0051_0130;
+const DATA_HANDLER_WORD_AT_4: u32 = 0x0072_6070;
+const DATA_HANDLER_ADD_TEXTURE_SET: u32 = 0x0051_0130;
 /// The string value of a string setting, and the address of the value of a
 /// float setting.
 const SETTING_GET_STRING: u32 = 0x0040_3df0;
@@ -882,14 +895,9 @@ pub fn tes_object_land_initialize_statics(e: &mut Engine) {
             }
         });
         let texture_set = e.global::<u32>(DEFAULT_TEXTURE_SET);
-        let menu_manager = e.global::<u32>(MENU_MANAGER);
-        let result = e
-            .call(
-                MENU_MANAGER_REGISTER_TEXTURE_SET,
-                &args![menu_manager, texture_set],
-            )
-            .u32();
-        e.call(MENU_MANAGER_AFTER_REGISTER, &args![result]);
+        let handler = e.global::<u32>(DATA_HANDLER);
+        let word = e.call(DATA_HANDLER_WORD_AT_4, &args![handler]).u32();
+        e.call(DATA_HANDLER_ADD_TEXTURE_SET, &args![word, texture_set]);
 
         // The default land texture.
         let memory = e.call(ALLOCATE, &args![0x28u32]).u32();
@@ -3824,6 +3832,2231 @@ pub fn fn_00539f40(e: &mut Engine) -> u32 {
     e.global::<u32>(EXTRA_DATA_KEY)
 }
 
+// ---- Third session: data, callees and layouts ------------------------------
+
+/// The vtable and `NiRTTI` of the 0x14-byte binary extra data (vtable,
+/// reference count, name, data pointer at +0xc, size at +0x10), its base
+/// constructor and destructor body, and a block free that takes only the
+/// pointer.
+const BINARY_EXTRA_DATA_VTABLE: u32 = 0x0102_e394;
+const BINARY_EXTRA_DATA_RTTI: u32 = 0x011f_4ab8;
+const EXTRA_DATA_CONSTRUCT: u32 = 0x00a7_b2e0;
+const EXTRA_DATA_DESTRUCT: u32 = 0x00a7_b300;
+const FREE_BLOCK: u32 = 0x00aa_10f0;
+/// The float the world space gives as the default land height (`009a1260`).
+const WORLD_SPACE_DEFAULT_HEIGHT: u32 = 0x009a_1260;
+/// The type descriptor of `TESTexture`, the target of the casts of the land
+/// texture pointers.
+const RTTI_TES_TEXTURE: u32 = 0x0118_3218;
+/// `(texture, other)`: 0 when the two textures can be merged into one layer
+/// (`0048e4f0`).
+const TEXTURES_DIFFER: u32 = 0x0048_e4f0;
+/// `max(a, b)` and `min(a, b)` of two floats (`__cdecl`, result in `ST0`),
+/// and `fmod(a, b)` of two floats (`__cdecl`).
+const FLOAT_MAX: u32 = 0x0040_4010;
+const FLOAT_MIN: u32 = 0x0040_ebd0;
+const FLOAT_MODULO: u32 = 0x004b_1520;
+/// Constants read from the exe's data: the floats 128.0 and 4096.0, and the
+/// doubles 4096.0, 289.0, 128.0, 9.0, 0.9, 0.1 (a float widened), 0.001 (a
+/// float widened) and 1e-6 (a float widened).
+const F32_128: u32 = 0x0101_e704;
+const F32_4096: u32 = 0x0101_7a3c;
+const F64_4096: u32 = 0x0101_7a10;
+const F64_289: u32 = 0x0102_e428;
+const F64_128: u32 = 0x0102_e430;
+const F64_NINE: u32 = 0x0102_e438;
+const F64_POINT_NINE: u32 = 0x0102_e440;
+const F64_TENTH: u32 = 0x0101_ffa0;
+const F64_THOUSANDTH: u32 = 0x0101_6978;
+const F64_MILLIONTH: u32 = 0x0101_7cf8;
+/// The default normal of a vertex (three words at `011f426c`).
+const DEFAULT_NORMAL_WORDS: u32 = 0x011f_426c;
+/// Vector calls (`NiPoint3` unless noted): `this + other`
+/// (`__thiscall(this, result, other)`), `this - other` (same form),
+/// `this += other` (`__thiscall(this, other)`), `this -= other`,
+/// `scalar * vector` (`__cdecl(result, scalar, vector)`), `this * scalar`
+/// (`__thiscall(this, result, scalar)`), the cross product (same form as
+/// the sum), the length, the equality of x and y (`__thiscall(this,
+/// other)`), the function `00525340` the face normals are passed through
+/// (`__cdecl(vector)`) and `NiPoint3::UnitizeVectors` (`__cdecl(array,
+/// count, stride)`).
+const NI_POINT3_ADD: u32 = 0x0043_9e90;
+const NI_POINT3_SUBTRACT: u32 = 0x0043_9ef0;
+const NI_POINT3_ADD_IN_PLACE: u32 = 0x0063_c8a0;
+const NI_POINT3_SUBTRACT_IN_PLACE: u32 = 0x0045_78c0;
+const NI_POINT3_SCALE_BY: u32 = 0x004a_3760;
+const NI_POINT3_TIMES_SCALAR: u32 = 0x0045_bb20;
+const NI_POINT3_CROSS: u32 = 0x004b_3800;
+const NI_POINT3_LENGTH: u32 = 0x0045_7990;
+const NI_POINT3_SAME_XY: u32 = 0x0043_90c0;
+const NI_POINT3_UNIT_VECTOR: u32 = 0x0052_5340;
+const NI_POINT3_UNITIZE_VECTORS: u32 = 0x00a7_e960;
+/// `NiPoint2` calls: `this - other` (`__thiscall(this, result, other)`) and
+/// the length.
+const NI_POINT2_SUBTRACT: u32 = 0x004e_8880;
+const NI_POINT2_LENGTH: u32 = 0x0058_9850;
+/// The data handler's cell lookup `(handler, x, y, world space, 0)`
+/// (`00461c20`) and `TESObjectCELL::GetLand`.
+const TES_GET_CELL: u32 = 0x0046_1c20;
+const CELL_GET_LAND: u32 = 0x0054_6fb0;
+/// The address of the value of an integer setting (`0043d4d0`; the float one
+/// is [`SETTING_GET_FLOAT_ADDRESS`]).
+const SETTING_GET_INT_ADDRESS: u32 = 0x0043_d4d0;
+/// The settings the grass builder reads: a float (`011c9f38`), a maximum
+/// count (`011c9f74`) and a step (`011c9fb8`, copied to the global
+/// `011c9f6c`); and the float setting `0053ca40` returns.
+const GRASS_SETTING_THRESHOLD: u32 = 0x011c_9f38;
+const GRASS_SETTING_MAXIMUM: u32 = 0x011c_9f74;
+const GRASS_SETTING_STEP: u32 = 0x011c_9fb8;
+const GRASS_STEP: u32 = 0x011c_9f6c;
+const GRASS_DENSITY_SETTING: u32 = 0x011c_8dcc;
+/// The list of the grass forms of a land texture: `00891170` gives the
+/// first position of the list in a texture (the object at +0x20),
+/// `006815c0` returns the position it is given (the element is read
+/// there) and `00726070` gives the next position.
+const LIST_FIRST_POSITION: u32 = 0x0089_1170;
+const LIST_ELEMENT: u32 = 0x0068_15c0;
+const LIST_NEXT_POSITION: u32 = 0x0072_6070;
+/// A grass parameter record is 0x44 bytes; `00b600e0` constructs it;
+/// `SetAt(map, key, record table)` and `GetAt(map, key, &value)` of the
+/// quadrant's grass map.
+const GRASS_RECORD_SIZE: u32 = 0x44;
+const GRASS_RECORD_CONSTRUCT: u32 = 0x00b6_00e0;
+const GRASS_MAP_SET_AT: u32 = 0x0084_4700;
+const GRASS_MAP_GET_AT: u32 = 0x0085_3130;
+/// Calls on a grass form: the name (`0050a550`) and the virtual getters of
+/// its parameters (the meaning of the first four is not confirmed; the
+/// record keeps them at +8, +0xc, +0x10 and +0x18).
+const GRASS_FORM_NAME: u32 = 0x0050_a550;
+const GRASS_SLOT_PARAMETER_AT_8: u32 = 0x1b0;
+const GRASS_SLOT_PARAMETER_AT_0C: u32 = 0x1b8;
+const GRASS_SLOT_PARAMETER_AT_10: u32 = 0x1c0;
+const GRASS_SLOT_PARAMETER_AT_18: u32 = 0x1c8;
+const GRASS_SLOT_BYTE_AT_1C: u32 = 0x1d0;
+const GRASS_SLOT_BYTE_AT_1D: u32 = 0x1d8;
+const GRASS_SLOT_BYTE_AT_1E: u32 = 0x1e0;
+const GRASS_SLOT_PERCENT: u32 = 0x180;
+/// Calls of the mesh update: the vertex data pointer of a geometry data
+/// (`0059bb30`, `D3DTexture_LockRect` in the Xbox PDB) and the call that
+/// follows the copy (`00a66a60`, `(data, 0)`), `NiAVObject::GetProperty(
+/// this, 3)`, the property's type (`00441110`), `BSShaderProperty::
+/// FreeRenderPasses` (Xbox PDB), the property's update slot (0x9c), the
+/// node's slot 0x18 that gives its geometry, the exterior loader global
+/// (`011dea10`) with its flag getter (`00528790`) and the follow-up
+/// `0053fa40(land, flag)`.
+const GEOMETRY_DATA_LOCKED_POINTER: u32 = 0x0059_bb30;
+const GEOMETRY_DATA_UNLOCK: u32 = 0x00a6_6a60;
+const OBJECT_GET_PROPERTY: u32 = 0x00a5_9d30;
+const PROPERTY_GET_TYPE: u32 = 0x0044_1110;
+const SHADER_PROPERTY_FREE_RENDER_PASSES: u32 = 0x00ba_a000;
+const SHADER_PROPERTY_SLOT_UPDATE: u32 = 0x9c;
+const NODE_SLOT_AS_GEOMETRY: u32 = 0x18;
+const EXTERIOR_LOADER: u32 = 0x011d_ea10;
+const EXTERIOR_LOADER_FLAG: u32 = 0x0052_8790;
+const LAND_FOLLOW_UP: u32 = 0x0053_fa40;
+
+layout! {
+    /// What `GetCoordData` (`0053b550`) works out for a world position
+    /// (0x4E bytes on the PC; the Xbox PDB has no name for it): the
+    /// position relative to the land's cell corner, its quadrant (2048
+    /// units), its 128-unit block, the triangle of the block that holds it
+    /// and the vertex nearest to it. `QuadrantOffset*` and `BlockOffset*`
+    /// are relative to the quadrant and block corners. The vector at +0x30
+    /// is the position of the nearest vertex plus the cell origin.
+    pub struct CoordData: 0x50 {
+        /// The position minus the cell corner (x).
+        0x00 CellOffsetX: f32,
+        /// The position minus the cell corner (y).
+        0x04 CellOffsetY: f32,
+        /// The position minus the quadrant corner (x).
+        0x08 QuadrantOffsetX: f32,
+        /// The position minus the quadrant corner (y).
+        0x0C QuadrantOffsetY: f32,
+        /// `trunc(CellOffsetX / 2048)`, less one on an exact boundary.
+        0x10 QuadrantColumn: i32,
+        /// `trunc(CellOffsetY / 2048)`, less one on an exact boundary.
+        0x14 QuadrantRow: i32,
+        /// `QuadrantColumn + 2 * QuadrantRow`: the quadrant index.
+        0x18 Quadrant: i32,
+        /// The position minus the 128-unit block corner (x).
+        0x1C BlockOffsetX: f32,
+        /// The position minus the 128-unit block corner (y).
+        0x20 BlockOffsetY: f32,
+        /// The block column inside the quadrant.
+        0x24 BlockColumn: i32,
+        /// The block row inside the quadrant.
+        0x28 BlockRow: i32,
+        /// A copy of the quadrant index.
+        0x2C QuadrantCopy: i32,
+        /// The vector the nearest vertex gives (see the struct doc).
+        0x30 VertexPositionX: f32,
+        0x34 VertexPositionY: f32,
+        0x38 VertexPositionZ: f32,
+        /// The index of the nearest vertex of the quadrant.
+        0x3C NearestVertex: i32,
+        /// The three vertices of the triangle that holds the position.
+        0x40 TriangleVertex2: i32,
+        0x44 TriangleVertex0: i32,
+        0x48 TriangleVertex1: i32,
+        /// Set when the block's diagonal runs the other way (odd block).
+        0x4C OddBlock: u8,
+        /// Set for the second triangle of the block.
+        0x4D SecondTriangle: u8,
+    }
+}
+
+/// The size of the `CoordData` the callers keep on their stack, rounded up.
+const COORD_DATA_SIZE: u32 = 0x50;
+
+/// The order the eight neighbours of a land are numbered in by
+/// `fn_0053d330`: `(dx, dy)` of the cell relative to the land's cell.
+const NEIGHBOUR_OFFSETS: [(i32, i32); 8] = [
+    (-1, 1),
+    (0, 1),
+    (1, 1),
+    (-1, 0),
+    (1, 0),
+    (-1, -1),
+    (0, -1),
+    (1, -1),
+];
+
+/// `__RTDynamicCast` of a land texture pointer to `TESTexture`.
+fn texture_cast(e: &mut Engine, texture: u32) -> u32 {
+    e.call(
+        RT_DYNAMIC_CAST,
+        &args![texture, 0u32, RTTI_TES_LAND_TEXTURE, RTTI_TES_TEXTURE, 0u32],
+    )
+    .u32()
+}
+
+/// The array of layer textures (`pQuadTextureArray`) of quadrant `quadrant`
+/// of the loaded data.
+fn layer_array(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32) -> u32 {
+    e.mem.u32(
+        data.addr()
+            .wrapping_add(LoadedLandData::pQuadTextureArray.off)
+            .wrapping_add(4u32.wrapping_mul(quadrant)),
+    )
+}
+
+/// The array of the 0x121 percent rows (`ppPercentArrays`) of a quadrant.
+fn percent_array(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32) -> u32 {
+    e.mem.u32(
+        data.addr()
+            .wrapping_add(LoadedLandData::ppPercentArrays.off)
+            .wrapping_add(4u32.wrapping_mul(quadrant)),
+    )
+}
+
+/// The row of layer opacities (eight floats) of vertex `vertex` of a
+/// quadrant's percent array.
+fn percent_row(e: &Engine, percent: u32, vertex: u32) -> u32 {
+    e.mem.u32(percent.wrapping_add(4u32.wrapping_mul(vertex)))
+}
+
+/// A float stored the way an `FSTP float` does after a sum computed in
+/// extended precision.
+fn sum_f32(a: f32, b: f32) -> f32 {
+    (a as f64 + b as f64) as f32
+}
+
+/// The vector `(corner x + 2048, corner y + 2048, 0)` the coordinate code
+/// adds to a vertex: `fn_00534080` (y) first, then `fn_00534050` (x), then
+/// the `NiPoint3` constructor.
+fn cell_centre_vector(e: &mut Engine, this: Ptr<TESObjectLAND>) -> Vec<u32> {
+    let two_thousand = e.global::<f64>(F64_2048);
+    let y = (fn_00534080(e, this) + two_thousand) as f32;
+    let x = (fn_00534050(e, this) + two_thousand) as f32;
+    ni_point3(e, x, y, 0.0)
+}
+
+/// Runs `body` with a 12-byte `NiPoint3` local holding
+/// [`cell_centre_vector`], after its default constructor ran, as the
+/// coordinate functions keep it.
+fn with_cell_centre<R>(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    body: impl FnOnce(&mut Engine, Ptr) -> R,
+) -> R {
+    e.with_stack(12, |e, vector| {
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vector]);
+        let words = cell_centre_vector(e, this);
+        write_words(e, vector.addr(), &words);
+        body(e, vector)
+    })
+}
+
+// ---- Binary extra data (the percent extra data of a quadrant mesh) ---------
+
+// Translated from 00539f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the binary extra data (`NiBinaryExtraData`, by the Xbox
+/// PDB name of its destructor; the decompiler names it after a library
+/// constructor): runs the base constructor `00a7b2e0`, stores the vtable
+/// and sets the size and the data pointer through [`fn_0053a070`]. Returns
+/// `this`. (The unwinding frame is not translated.)
+pub fn fn_00539f50(e: &mut Engine, this: Ptr, size: u32, data: u32) -> Ptr {
+    e.call(EXTRA_DATA_CONSTRUCT, &args![this]);
+    e.mem.set_u32(this.addr(), BINARY_EXTRA_DATA_VTABLE);
+    fn_0053a070(e, this, size, data);
+    this
+}
+
+// Translated from 00539fc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBinaryExtraData::GetRTTI` (Xbox PDB): the class's `NiRTTI`.
+pub fn ni_binary_extra_data_get_rtti(_e: &mut Engine) -> Ptr {
+    Ptr::new(BINARY_EXTRA_DATA_RTTI)
+}
+
+// Translated from 00539fd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiBinaryExtraData::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor body [`fn_0053a000`] and frees the 0x14 bytes when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn ni_binary_extra_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0053a000(e, this);
+    if flags & 1 != 0 {
+        e.call(NI_FREE, &args![this, 0x14u32]);
+    }
+    this
+}
+
+// Translated from 0053a000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the binary extra data: stores its vtable, frees the
+/// data block at +0xc and clears the pointer, then runs the base
+/// destructor body `00a7b300`. (The unwinding frame is not translated.)
+pub fn fn_0053a000(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), BINARY_EXTRA_DATA_VTABLE);
+    let data = e.mem.u32(this.addr() + 0xc);
+    e.call(FREE_BLOCK, &args![data]);
+    e.mem.set_u32(this.addr() + 0xc, 0);
+    e.call(EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 0053a070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the size (+0x10) and the data pointer (+0xc) of the binary extra
+/// data.
+pub fn fn_0053a070(e: &mut Engine, this: Ptr, size: u32, data: u32) {
+    e.mem.set_u32(this.addr() + 0x10, size);
+    e.mem.set_u32(this.addr() + 0xc, data);
+}
+
+// ---- UpdateMesh ----------------------------------------------------------------
+
+// Translated from 0053a090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectLAND::UpdateMesh` (Xbox PDB): a land whose loaded data has no
+/// mesh array allocates its data (`fn_00539500` without a source land) and
+/// builds the quadrant meshes (`fn_005374f0`). Otherwise, for each quadrant
+/// with a scene node: when `update_materials` is set and the node's first
+/// geometry exists, recomputes its bound, marks its data changed (0xf),
+/// takes the shader property (property 3, when its type is 8 to 12), copies
+/// the land's normals into the locked vertex data, hands the geometry to
+/// the property's update slot (0x9c), gives it the texture sets (slot 0:
+/// the quadrant's default texture's, else the default land texture's;
+/// slots 1 to 6: the layer textures') and the texture flag bytes, and
+/// frees its render passes. Every node then gets an update (with a zero
+/// time) and, when `update_materials` is set, `UpdateProperties`. At the
+/// end `update_materials` also runs `0053fa40` with the exterior loader's
+/// flag. The second word of the stack arguments is not read.
+pub fn tes_object_land_update_mesh(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    update_materials: u8,
+    _unused_1: u32,
+) {
+    let data = loaded_data(e, this);
+    if e.get(data, LoadedLandData::ppMesh).is_null() {
+        fn_00539500(e, this, Ptr::NULL);
+        fn_005374f0(e, this);
+        return;
+    }
+    for quadrant in 0..4i32 {
+        let mesh = fn_00535af0(e, this, quadrant).addr();
+        if mesh == 0 {
+            continue;
+        }
+        if update_materials != 0 {
+            update_mesh_materials(e, data, mesh, quadrant as u32);
+        }
+        e.with_stack(12, |e, update_data| {
+            e.call(
+                UPDATE_DATA_CONSTRUCT,
+                &args![update_data, 0.0f32, 0u32, 0u32],
+            );
+            e.call(NODE_UPDATE, &args![mesh, update_data]);
+        });
+        if update_materials != 0 {
+            e.call(NODE_UPDATE_PROPERTIES, &args![mesh]);
+        }
+    }
+    if update_materials != 0 {
+        let loader = e.global::<u32>(EXTERIOR_LOADER);
+        let flag = e.call(EXTERIOR_LOADER_FLAG, &args![loader]).u8();
+        e.call(LAND_FOLLOW_UP, &args![this, flag as u32]);
+    }
+}
+
+/// The part of `tes_object_land_update_mesh` that runs on a node's first
+/// geometry (see there).
+fn update_mesh_materials(e: &mut Engine, data: Ptr<LoadedLandData>, mesh: u32, quadrant: u32) {
+    let node = e.call(NODE_FIRST_GEOMETRY, &args![mesh, 0u32]).u32();
+    let geometry = if node == 0 {
+        0
+    } else {
+        e.vcall(node, NODE_SLOT_AS_GEOMETRY, &args![]).u32()
+    };
+    if geometry == 0 {
+        return;
+    }
+    let vertex_count = e.call(TRI_STRIPS_VERTEX_COUNT, &args![geometry]).u16();
+    let positions = e.call(GEOMETRY_GET_POSITIONS, &args![geometry]).u32();
+    let bound = fn_00537b10(e, Ptr::new(geometry)).addr();
+    e.call(
+        BOUND_COMPUTE_FROM_DATA,
+        &args![bound, vertex_count as u32, positions],
+    );
+    let geometry_data = e.call(GEOMETRY_GET_DATA, &args![geometry]).u32();
+    e.call(GEOMETRY_DATA_MARK_CHANGED, &args![geometry_data, 0xfu32]);
+    let property = e.call(OBJECT_GET_PROPERTY, &args![geometry, 3u32]).u32();
+    let is_shader = if property == 0 {
+        false
+    } else {
+        let kind = e.call(PROPERTY_GET_TYPE, &args![property]).i32();
+        kind >= 8 && e.call(PROPERTY_GET_TYPE, &args![property]).i32() <= 0xc
+    };
+    let shader = if is_shader { property } else { 0 };
+    if shader == 0 {
+        return;
+    }
+    let geometry_data = e.call(GEOMETRY_GET_DATA, &args![geometry]).u32();
+    let locked = e
+        .call(GEOMETRY_DATA_LOCKED_POINTER, &args![geometry_data])
+        .u32();
+    let normals = e.get(data, LoadedLandData::ppNormals);
+    let source = element(e, normals, quadrant);
+    e.call(MEMORY_COPY, &args![locked, source, 0xd8cu32]);
+    let geometry_data = e.call(GEOMETRY_GET_DATA, &args![geometry]).u32();
+    e.call(GEOMETRY_DATA_UNLOCK, &args![geometry_data, 0u32]);
+    e.vcall(shader, SHADER_PROPERTY_SLOT_UPDATE, &args![geometry]);
+    // Slot 0: the quadrant's default texture set, else the default land
+    // texture's.
+    let default_slot = data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant;
+    let texture = e.mem.u32(default_slot);
+    let texture_set = if texture != 0 && e.call(OBJECT_FIELD_0X18, &args![texture]).u32() != 0 {
+        let set = e.call(OBJECT_FIELD_0X18, &args![texture]).u32();
+        e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32()
+    } else {
+        let default_texture = fn_00535ae0(e).addr();
+        let set = e.call(OBJECT_FIELD_0X18, &args![default_texture]).u32();
+        e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32()
+    };
+    e.call(
+        SHADER_PROPERTY_SET_TEXTURE_SET,
+        &args![shader, 0u32, texture_set],
+    );
+    let layers = layer_array(e, data, quadrant);
+    for slot in 1..7u32 {
+        let texture = e.mem.u32(layers + 4 * slot - 4);
+        if texture != 0 && e.call(OBJECT_FIELD_0X18, &args![texture]).u32() != 0 {
+            let set = e.call(OBJECT_FIELD_0X18, &args![texture]).u32();
+            let shader_set = e.call(TEXTURE_SET_AS_SHADER_SET, &args![set]).u32();
+            e.call(
+                SHADER_PROPERTY_SET_TEXTURE_SET,
+                &args![shader, slot, shader_set],
+            );
+        } else {
+            e.call(SHADER_PROPERTY_SET_TEXTURE_SET, &args![shader, slot, 0u32]);
+        }
+    }
+    // The flag bytes of the layer textures 5 to 0, then of the default one.
+    let sources = [
+        e.mem.u32(layers + 0x14),
+        e.mem.u32(layers + 0x10),
+        e.mem.u32(layers + 0xc),
+        e.mem.u32(layers + 8),
+        e.mem.u32(layers + 4),
+        e.mem.u32(layers),
+        e.mem.u32(default_slot),
+    ];
+    let mut flag_bytes = [0u32; 7];
+    for (flag_byte, source) in flag_bytes.iter_mut().zip(sources) {
+        *flag_byte = if source == 0 {
+            0
+        } else {
+            e.call(LAND_TEXTURE_FLAG_BYTE, &args![source]).u8() as u32
+        };
+    }
+    let [layer5, layer4, layer3, layer2, layer1, layer0, default_flag] = flag_bytes;
+    e.call(
+        SHADER_PROPERTY_SET_FLAGS,
+        &args![
+            shader,
+            default_flag,
+            layer0,
+            layer1,
+            layer2,
+            layer3,
+            layer4,
+            layer5,
+            0u32,
+            0u32,
+            0u32
+        ],
+    );
+    e.call(SHADER_PROPERTY_FREE_RENDER_PASSES, &args![shader]);
+}
+
+// ---- Coordinate data records -----------------------------------------------
+
+// Translated from 0053a510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `CoordData` record the coordinate functions keep on
+/// their stack (the decompiler names it after a library constructor): runs
+/// the `NiPoint3` default constructor on the members at +0, +8, +0x1c and
+/// +0x30. Returns `this`.
+pub fn fn_0053a510(e: &mut Engine, this: Ptr) -> Ptr {
+    for offset in [0u32, 0x8, 0x1c, 0x30] {
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![this.byte_add(offset)]);
+    }
+    this
+}
+
+// Translated from 0053a550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The default height of the land: -2048 without a parent cell or a world
+/// space, else the world space's value (`009a1260`).
+pub fn fn_0053a550(e: &mut Engine, this: Ptr<TESObjectLAND>) -> f32 {
+    let mut height = e.global::<f32>(F32_MINUS_2048);
+    let cell = e.call(PARENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        let world_space = e.call(CELL_GET_WORLD_SPACE, &args![cell]).u32();
+        if world_space != 0 {
+            height = e
+                .call(WORLD_SPACE_DEFAULT_HEIGHT, &args![world_space])
+                .f32();
+        }
+    }
+    height
+}
+
+// ---- Layer textures and opacities --------------------------------------------
+
+// Translated from 0053a5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The default texture of quadrant `quadrant` (`pDefQuadTexture`), or 0 for
+/// a quadrant of 4 or more or a land without loaded data.
+pub fn fn_0053a5a0(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8) -> u32 {
+    let data = loaded_data(e, this);
+    if quadrant < 4 && !data.is_null() {
+        return e
+            .mem
+            .u32(data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant as u32);
+    }
+    0
+}
+
+// Translated from 0053a5e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The texture that dominates the position `position` (two floats): works
+/// out its `CoordData` with [`tes_object_land_get_coord_data`] (recursing
+/// once) and returns [`fn_0053a630`] for its quadrant and nearest vertex,
+/// or 0 when the position is outside the land.
+pub fn fn_0053a5e0(e: &mut Engine, this: Ptr<TESObjectLAND>, position: Ptr) -> u32 {
+    e.with_stack(COORD_DATA_SIZE, |e, info| {
+        fn_0053a510(e, info);
+        if tes_object_land_get_coord_data(e, this, info.cast(), position, true) {
+            let quadrant = e.mem.u8(info.addr() + CoordData::Quadrant.off);
+            let vertex = e.mem.u16(info.addr() + CoordData::NearestVertex.off);
+            fn_0053a630(e, this, quadrant, vertex)
+        } else {
+            0
+        }
+    })
+}
+
+// Translated from 0053a630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The texture that dominates vertex `vertex` of quadrant `quadrant`: the
+/// layer (0 to 5) with the highest opacity there, ties going to the
+/// lowest, as the layer texture ([`fn_0053a700`] of that layer minus one),
+/// or the default texture ([`fn_0053a5a0`]) when the highest is layer 0.
+/// 0 for a quadrant of 4 or more or a vertex of 0x121 or more.
+pub fn fn_0053a630(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, vertex: u16) -> u32 {
+    if quadrant >= 4 || vertex >= 0x121 {
+        return 0;
+    }
+    let mut highest = e.global::<f32>(LOWEST_F32);
+    let mut best = 0u16;
+    for layer in 0..6u16 {
+        let opacity = fn_0053a830(e, this, quadrant, vertex, layer);
+        if highest < opacity {
+            best = layer;
+            highest = opacity;
+        }
+    }
+    if best == 0 {
+        fn_0053a5a0(e, this, quadrant)
+    } else {
+        fn_0053a700(e, this, quadrant, best - 1)
+    }
+}
+
+// Translated from 0053a700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The texture of layer `layer` of quadrant `quadrant`, or 0 for a quadrant
+/// of 4 or more, a layer of 6 or more, no loaded data or no layer array.
+pub fn fn_0053a700(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, layer: u16) -> u32 {
+    let data = loaded_data(e, this);
+    if quadrant < 4 && layer < 6 && !data.is_null() {
+        let layers = layer_array(e, data, quadrant as u32);
+        if layers != 0 {
+            return e.mem.u32(layers + 4 * layer as u32);
+        }
+    }
+    0
+}
+
+// Translated from 0053a760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the texture of layer `layer` of quadrant `quadrant` (nothing for a
+/// quadrant of 4 or more, a layer of 6 or more or no loaded data).
+pub fn fn_0053a760(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    quadrant: u8,
+    layer: u16,
+    texture: u32,
+) {
+    let data = loaded_data(e, this);
+    if quadrant < 4 && layer < 6 && !data.is_null() {
+        let layers = layer_array(e, data, quadrant as u32);
+        e.mem.set_u32(layers + 4 * layer as u32, texture);
+    }
+}
+
+// Translated from 0053a7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The opacity left to the default texture at vertex `vertex` of quadrant
+/// `quadrant`: 1 minus the sum of the six layer opacities (just 1 when the
+/// indices are out of range or the quadrant has no percent array).
+pub fn fn_0053a7a0(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, vertex: u16) -> f32 {
+    let mut sum = 0.0f32;
+    let data = loaded_data(e, this);
+    if quadrant < 4 && vertex < 0x121 && !data.is_null() {
+        let percent = percent_array(e, data, quadrant as u32);
+        if percent != 0 {
+            let row = percent_row(e, percent, vertex as u32);
+            for layer in 0..6u32 {
+                sum = sum_f32(sum, e.mem.f32(row + 4 * layer));
+            }
+        }
+    }
+    (1.0 - sum as f64) as f32
+}
+
+// Translated from 0053a830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The opacity of layer `layer` at vertex `vertex` of quadrant `quadrant`
+/// (0 when the indices are out of range or the quadrant has no percent
+/// array).
+pub fn fn_0053a830(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    quadrant: u8,
+    vertex: u16,
+    layer: u16,
+) -> f32 {
+    let data = loaded_data(e, this);
+    if quadrant < 4 && vertex < 0x121 && layer < 6 && !data.is_null() {
+        let percent = percent_array(e, data, quadrant as u32);
+        if percent != 0 {
+            let row = percent_row(e, percent, vertex as u32);
+            return e.mem.f32(row + 4 * layer as u32);
+        }
+    }
+    0.0
+}
+
+// Translated from 0053a8a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the opacity of layer `layer` at vertex `vertex` of quadrant
+/// `quadrant`: a positive `opacity` is stored, anything else stores 0 (and
+/// only when the quadrant has a percent array). Nothing for indices out of
+/// range or a land without loaded data.
+pub fn fn_0053a8a0(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    quadrant: u8,
+    vertex: u16,
+    layer: u16,
+    opacity: f32,
+) {
+    let data = loaded_data(e, this);
+    if quadrant >= 4 || vertex >= 0x121 || layer >= 6 || data.is_null() {
+        return;
+    }
+    let percent = percent_array(e, data, quadrant as u32);
+    if opacity as f64 > e.global::<f64>(F64_ZERO) {
+        let row = percent_row(e, percent, vertex as u32);
+        e.mem.set_f32(row + 4 * layer as u32, opacity);
+    } else if percent != 0 {
+        let row = percent_row(e, percent, vertex as u32);
+        e.mem.set_f32(row + 4 * layer as u32, 0.0);
+    }
+}
+
+// Translated from 0053a940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cleans the layers of every quadrant: a layer whose total opacity over the
+/// 289 vertices, divided by 289, is below 0.001 loses its texture; the empty
+/// layers are squeezed out ([`fn_0053abb0`]); the opacities of the
+/// remaining layers are summed per vertex into a scratch array (with the
+/// share the default texture would have, when the layers sum to less than
+/// 1, added to the entry after the last layer); and the layer with the
+/// highest total is swapped with the default texture ([`fn_0053ace0`]).
+pub fn fn_0053a940(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    let data = loaded_data(e, this);
+    if data.is_null() {
+        return;
+    }
+    for quadrant in 0..4u32 {
+        let layers = layer_array(e, data, quadrant);
+        for layer in 0..6u32 {
+            if e.mem.u32(layers + 4 * layer) == 0 {
+                continue;
+            }
+            let total = fn_0053ae30(e, this, quadrant as u8, layer as u16);
+            let share = (total as f64 / e.global::<f64>(F64_289)) as f32;
+            if (share as f64) < e.global::<f64>(F64_THOUSANDTH) {
+                e.mem.set_u32(layers + 4 * layer, 0);
+            }
+        }
+        let mut count = 6u32;
+        let mut index = 0u32;
+        while index < count {
+            while e.mem.u32(layers + 4 * index) == 0 && index < count {
+                fn_0053abb0(e, this, quadrant as u8, index as u16);
+                count -= 1;
+            }
+            index += 1;
+        }
+        let size = count * 4 + 4;
+        let sums = e.call(ALLOCATE, &args![size]).u32();
+        e.call(MEMORY_SET, &args![sums, 0u32, size]);
+        for vertex in 0..QUADRANT_VERTICES {
+            let mut row_sum = 0.0f32;
+            for layer in 0..count {
+                let opacity = fn_0053a830(e, this, quadrant as u8, vertex as u16, layer as u16);
+                let total = sum_f32(e.mem.f32(sums + 4 * layer), opacity);
+                e.mem.set_f32(sums + 4 * layer, total);
+                row_sum = sum_f32(row_sum, opacity);
+            }
+            if (row_sum as f64) < e.global::<f64>(F64_ONE) {
+                let rest = (1.0 - row_sum as f64) + e.mem.f32(sums + 4 * count) as f64;
+                e.mem.set_f32(sums + 4 * count, rest as f32);
+            }
+        }
+        let mut best = None;
+        let mut highest = e.mem.f32(sums + 4 * count);
+        for layer in 0..count {
+            let total = e.mem.f32(sums + 4 * layer);
+            if highest < total {
+                highest = total;
+                best = Some(layer);
+            }
+        }
+        if let Some(layer) = best {
+            fn_0053ace0(e, this, quadrant as u8, layer as u16);
+        }
+        e.call(DEALLOCATE, &args![sums]);
+    }
+}
+
+// Translated from 0053abb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes layer `layer` of quadrant `quadrant`: the following layer
+/// textures move down one place, the last entry becomes 0 and the same is
+/// done to the opacity rows of the 289 vertices (the last opacity becomes
+/// 0). Nothing for a quadrant of 4 or more, a layer of 6 or more or a land
+/// without loaded data.
+pub fn fn_0053abb0(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, layer: u16) {
+    let data = loaded_data(e, this);
+    if quadrant >= 4 || layer >= 6 || data.is_null() {
+        return;
+    }
+    let layers = layer_array(e, data, quadrant as u32);
+    for index in layer as u32..5 {
+        let next = e.mem.u32(layers + 4 * index + 4);
+        e.mem.set_u32(layers + 4 * index, next);
+    }
+    e.mem.set_u32(layers + 0x14, 0);
+    let percent = percent_array(e, data, quadrant as u32);
+    if percent == 0 {
+        return;
+    }
+    for vertex in 0..QUADRANT_VERTICES {
+        let row = percent_row(e, percent, vertex);
+        for index in layer as u32..5 {
+            let next = e.mem.f32(row + 4 * index + 4);
+            e.mem.set_f32(row + 4 * index, next);
+        }
+        e.mem.set_f32(row + 0x14, 0.0);
+    }
+}
+
+// Translated from 0053ace0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Swaps the default texture of quadrant `quadrant` with the texture of
+/// layer `layer`; then the opacity of that layer at each vertex becomes 1
+/// minus the sum of the six opacities (with the old value of the layer
+/// still in the sum), at least 0. Nothing for a quadrant of 4 or more, a
+/// layer of 6 or more or a land without loaded data.
+pub fn fn_0053ace0(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, layer: u16) {
+    let data = loaded_data(e, this);
+    if quadrant >= 4 || layer >= 6 || data.is_null() {
+        return;
+    }
+    let layers = layer_array(e, data, quadrant as u32);
+    let layer_texture = e.mem.u32(layers + 4 * layer as u32);
+    let default_slot = data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant as u32;
+    let default_texture = e.mem.u32(default_slot);
+    e.mem.set_u32(default_slot, layer_texture);
+    e.mem.set_u32(layers + 4 * layer as u32, default_texture);
+    let percent = percent_array(e, data, quadrant as u32);
+    if percent == 0 {
+        return;
+    }
+    for vertex in 0..QUADRANT_VERTICES {
+        let mut sum = 0.0f32;
+        for index in 0..6u16 {
+            let opacity = fn_0053a830(e, this, quadrant, vertex as u16, index);
+            sum = sum_f32(opacity, sum);
+        }
+        let mut rest = (1.0 - sum as f64) as f32;
+        if (rest as f64) < e.global::<f64>(F64_ZERO) {
+            rest = 0.0;
+        }
+        let row = percent_row(e, percent, vertex);
+        e.mem.set_f32(row + 4 * layer as u32, rest);
+    }
+}
+
+// Translated from 0053ae30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The total opacity of layer `layer` of quadrant `quadrant` over the 289
+/// vertices: 0 for a quadrant of 4 or more, a layer of 6 or more or a layer
+/// without a texture.
+pub fn fn_0053ae30(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: u8, layer: u16) -> f32 {
+    let mut total = 0.0f32;
+    if quadrant < 4 && layer < 6 && fn_0053a700(e, this, quadrant, layer) != 0 {
+        for vertex in 0..QUADRANT_VERTICES {
+            let opacity = fn_0053a830(e, this, quadrant, vertex as u16, layer);
+            total = sum_f32(opacity, total);
+        }
+    }
+    total
+}
+
+// Translated from 0053aeb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Makes the layer opacities of every quadrant consistent. For each
+/// quadrant, for each layer whose texture is a `TESTexture` (a cast of the
+/// layer texture): every other layer whose texture is one too, and
+/// that `0048e4f0` says is not compatible with it, is merged into it (its
+/// opacity added, then zeroed, and its texture cleared), and when the
+/// quadrant's default texture is a `TESTexture` that is not compatible with
+/// the layer's, the layer's opacities are zeroed and its texture cleared;
+/// the layer's opacities are summed per vertex into a scratch array. The
+/// empty layers are squeezed out ([`fn_0053abb0`]); then per vertex every
+/// opacity moves up one place, opacity 0 becomes the share left over by the
+/// others (`max(0, 1 - sum)` capped at 1, through `00404010` and `0040ebd0`)
+/// and when the scratch total was above 1 the shifted opacities are divided
+/// by their sum.
+pub fn fn_0053aeb0(e: &mut Engine, this: Ptr<TESObjectLAND>) {
+    for quadrant in 0..4u32 {
+        let default_texture = fn_0053a5a0(e, this, quadrant as u8);
+        let default_cast = texture_cast(e, default_texture);
+        e.with_stack(0x484, |e, totals| {
+            e.call(MEMORY_SET, &args![totals, 0u32, 0x484u32]);
+            let data = loaded_data(e, this);
+            let percent = percent_array(e, data, quadrant);
+            for layer in 0..6u32 {
+                let texture = fn_0053a700(e, this, quadrant as u8, layer as u16);
+                let layer_cast = texture_cast(e, texture);
+                if layer_cast != 0 {
+                    for other in 0..6u32 {
+                        if layer == other {
+                            continue;
+                        }
+                        let other_texture = fn_0053a700(e, this, quadrant as u8, other as u16);
+                        let other_cast = texture_cast(e, other_texture);
+                        if other_cast == 0 {
+                            continue;
+                        }
+                        if e.call(TEXTURES_DIFFER, &args![layer_cast, other_cast])
+                            .bool()
+                        {
+                            continue;
+                        }
+                        for vertex in 0..QUADRANT_VERTICES {
+                            let row = percent_row(e, percent, vertex);
+                            let merged =
+                                sum_f32(e.mem.f32(row + 4 * layer), e.mem.f32(row + 4 * other));
+                            e.mem.set_f32(row + 4 * layer, merged);
+                            e.mem.set_f32(row + 4 * other, 0.0);
+                        }
+                        fn_0053a760(e, this, quadrant as u8, other as u16, 0);
+                    }
+                    if default_cast != 0
+                        && !e
+                            .call(TEXTURES_DIFFER, &args![layer_cast, default_cast])
+                            .bool()
+                    {
+                        for vertex in 0..QUADRANT_VERTICES {
+                            let row = percent_row(e, percent, vertex);
+                            e.mem.set_f32(row + 4 * layer, 0.0);
+                        }
+                        fn_0053a760(e, this, quadrant as u8, layer as u16, 0);
+                    }
+                }
+                for vertex in 0..QUADRANT_VERTICES {
+                    let row = percent_row(e, percent, vertex);
+                    let total = sum_f32(
+                        e.mem.f32(totals.addr() + 4 * vertex),
+                        e.mem.f32(row + 4 * layer),
+                    );
+                    e.mem.set_f32(totals.addr() + 4 * vertex, total);
+                }
+            }
+            let layers = layer_array(e, data, quadrant);
+            let mut count = 6u32;
+            let mut index = 0u32;
+            while index < count {
+                while e.mem.u32(layers + 4 * index) == 0 && index < count {
+                    fn_0053abb0(e, this, quadrant as u8, index as u16);
+                    count -= 1;
+                }
+                index += 1;
+            }
+            for vertex in 0..QUADRANT_VERTICES {
+                let row = percent_row(e, percent, vertex);
+                let mut sum = 0.0f32;
+                for slot in (1..=6u32).rev() {
+                    let lower = e.mem.u32(row + 4 * (slot - 1));
+                    e.mem.set_u32(row + 4 * slot, lower);
+                    sum = sum_f32(sum, e.mem.f32(row + 4 * slot));
+                }
+                let rest = (1.0 - sum as f64) as f32;
+                let at_least_zero = e.call(FLOAT_MAX, &args![0.0f32, rest]).f32();
+                let share = e.call(FLOAT_MIN, &args![1.0f32, at_least_zero]).f32();
+                e.mem.set_f32(row, share);
+                if (e.mem.f32(totals.addr() + 4 * vertex) as f64) > e.global::<f64>(F64_ONE) {
+                    for slot in (1..=6u32).rev() {
+                        let scaled = e.mem.f32(row + 4 * slot) as f64 / sum as f64;
+                        e.mem.set_f32(row + 4 * slot, scaled as f32);
+                    }
+                }
+            }
+        });
+    }
+}
+
+// ---- Coordinates of a position in the land -------------------------------------
+
+// Translated from 0053b450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The world position of vertex `vertex` of quadrant `quadrant`, written
+/// to `out` (an `NiPoint3`): the cell corner (4096 times the cell
+/// coordinates, taken from `cell_x` and `cell_y` when they are given, else
+/// from the land), plus 2048 for a quadrant in the right column (bit 0) or
+/// the upper row (bit 1), plus 128 times the vertex's column (`vertex %
+/// 17`) and row (`vertex / 17`); z is 0. Returns `out`.
+pub fn fn_0053b450(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    out: Ptr,
+    quadrant: u8,
+    vertex: u16,
+    cell_x: Ptr,
+    cell_y: Ptr,
+) -> Ptr {
+    e.with_stack(12, |e, local| {
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![local]);
+        let mut x: f32 = e.global(F32_4096);
+        let mut y: f32 = e.global(F32_4096);
+        let column = if cell_x.is_null() {
+            fn_00533fd0(e, this)
+        } else {
+            e.mem.i32(cell_x.addr())
+        };
+        x = (column as f64 * x as f64) as f32;
+        let row = if cell_y.is_null() {
+            fn_00534010(e, this)
+        } else {
+            e.mem.i32(cell_y.addr())
+        };
+        y = (row as f64 * y as f64) as f32;
+        let right = if quadrant & 1 != 0 { 0x800 } else { 0 };
+        x = sum_f32(right as f32, x);
+        let upper = if quadrant & 2 != 0 { 0x800 } else { 0 };
+        y = sum_f32(upper as f32, y);
+        x = sum_f32((((vertex as i32) % 0x11) << 7) as f32, x);
+        y = sum_f32((((vertex as i32) / 0x11) << 7) as f32, y);
+        e.mem.set_f32(out.addr(), x);
+        e.mem.set_f32(out.addr() + 4, y);
+        e.mem.set_f32(out.addr() + 8, 0.0);
+        out
+    })
+}
+
+/// `trunc(value / divisor)` through the compiler's float to integer helper
+/// (`_ftol2`), with the correction `GetCoordData` applies on an exact
+/// boundary: when the integer part of `value` is a non-zero multiple of
+/// `modulus`, the block is the one below.
+fn block_index(value: f32, divisor: f64, modulus: i32) -> i32 {
+    let mut index = x87_truncate(value as f64 / divisor);
+    let integer = x87_truncate(value as f64);
+    if integer % modulus == 0 && integer != 0 {
+        index = index.wrapping_sub(1);
+    }
+    index
+}
+
+// Translated from 0053b550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectLAND::GetCoordData` (Xbox PDB): works out where the position
+/// `position` (two floats, world x and y) falls in the land and fills
+/// `out` (a [`CoordData`]): the offsets from the cell corner, the quadrant
+/// (2048 units) and its row and column, the offsets inside the quadrant,
+/// the 128-unit block, the offsets inside the block, the triangle of the
+/// block (two diagonals, by the block's parity) with its three vertices,
+/// and the nearest vertex (the block's vertex when the position is on the
+/// grid, else the nearest of the triangle's three by distance from the
+/// position, through `NiPoint2`s); at +0x30 the position of that vertex plus
+/// the cell centre vector. When `recurse` is set the call is repeated once
+/// for that position (with `recurse` clear). Returns false without loaded
+/// vertex or mesh arrays, or when the position is outside the cell.
+pub fn tes_object_land_get_coord_data(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    out: Ptr<CoordData>,
+    position: Ptr,
+    recurse: bool,
+) -> bool {
+    let cell_size = e.global::<f64>(F64_4096);
+    let corner_x = (fn_00533fd0(e, this) as f64 * cell_size) as f32;
+    let corner_y = (fn_00534010(e, this) as f64 * cell_size) as f32;
+    let data = loaded_data(e, this);
+    if data.is_null() {
+        return false;
+    }
+    if e.get(data, LoadedLandData::ppVertices).is_null()
+        && e.get(data, LoadedLandData::ppMesh).is_null()
+    {
+        return false;
+    }
+    let x = e.mem.f32(position.addr());
+    let y = e.mem.f32(position.addr() + 4);
+    if corner_x > x {
+        return false;
+    }
+    if x > (corner_x as f64 + cell_size) as f32 {
+        return false;
+    }
+    if corner_y > y {
+        return false;
+    }
+    if y > (corner_y as f64 + cell_size) as f32 {
+        return false;
+    }
+    let cell_offset_x = (x as f64 - corner_x as f64) as f32;
+    e.set(out, CoordData::CellOffsetX, cell_offset_x);
+    let cell_offset_y = (y as f64 - corner_y as f64) as f32;
+    e.set(out, CoordData::CellOffsetY, cell_offset_y);
+    let two_thousand = e.global::<f64>(F64_2048);
+    let column = block_index(cell_offset_x, two_thousand, 2048);
+    e.set(out, CoordData::QuadrantColumn, column);
+    let row = block_index(cell_offset_y, two_thousand, 2048);
+    e.set(out, CoordData::QuadrantRow, row);
+    let quadrant = column.wrapping_add(row.wrapping_mul(2));
+    e.set(out, CoordData::Quadrant, quadrant);
+    let quadrant_x = (column.wrapping_shl(11) as f64 + corner_x as f64) as f32;
+    let quadrant_y = (row.wrapping_shl(11) as f64 + corner_y as f64) as f32;
+    let quadrant_offset_x = (x as f64 - quadrant_x as f64) as f32;
+    e.set(out, CoordData::QuadrantOffsetX, quadrant_offset_x);
+    let quadrant_offset_y = (y as f64 - quadrant_y as f64) as f32;
+    e.set(out, CoordData::QuadrantOffsetY, quadrant_offset_y);
+    with_cell_centre(e, this, |e, centre| {
+        let block_size = e.global::<f64>(F64_128);
+        let block_column = block_index(quadrant_offset_x, block_size, 128);
+        e.set(out, CoordData::BlockColumn, block_column);
+        let block_row = block_index(quadrant_offset_y, block_size, 128);
+        e.set(out, CoordData::BlockRow, block_row);
+        let block_x = (block_column.wrapping_shl(7) as f64 + quadrant_x as f64) as f32;
+        let block_y = (block_row.wrapping_shl(7) as f64 + quadrant_y as f64) as f32;
+        let block_offset_x = (x as f64 - block_x as f64) as f32;
+        e.set(out, CoordData::BlockOffsetX, block_offset_x);
+        let block_offset_y = (y as f64 - block_y as f64) as f32;
+        e.set(out, CoordData::BlockOffsetY, block_offset_y);
+        e.set(out, CoordData::QuadrantCopy, quadrant);
+        let first = block_row.wrapping_mul(0x11).wrapping_add(block_column);
+        let next_row = block_row
+            .wrapping_add(1)
+            .wrapping_mul(0x11)
+            .wrapping_add(block_column);
+        if block_column.wrapping_add(block_row) % 2 == 0 {
+            e.set(out, CoordData::OddBlock, 0u8);
+            e.set(out, CoordData::TriangleVertex0, first);
+            e.set(out, CoordData::TriangleVertex1, next_row.wrapping_add(1));
+            if block_offset_y < block_offset_x {
+                e.set(out, CoordData::TriangleVertex2, first.wrapping_add(1));
+                e.set(out, CoordData::SecondTriangle, 0u8);
+            } else {
+                e.set(out, CoordData::TriangleVertex2, next_row);
+                e.set(out, CoordData::SecondTriangle, 1u8);
+            }
+        } else {
+            e.set(out, CoordData::OddBlock, 1u8);
+            e.set(out, CoordData::TriangleVertex0, first.wrapping_add(1));
+            e.set(out, CoordData::TriangleVertex1, next_row);
+            if block_offset_x as f64 + block_offset_y as f64 > e.global::<f64>(F64_128) {
+                e.set(out, CoordData::TriangleVertex2, next_row.wrapping_add(1));
+                e.set(out, CoordData::SecondTriangle, 1u8);
+            } else {
+                e.set(out, CoordData::TriangleVertex2, first);
+                e.set(out, CoordData::SecondTriangle, 0u8);
+            }
+        }
+        let on_grid = x87_truncate(x as f64) % 128 == 0 && x87_truncate(y as f64) % 128 == 0;
+        if on_grid {
+            let rows = x87_truncate(quadrant_offset_y as f64) / 128;
+            let columns = x87_truncate(quadrant_offset_x as f64) / 128;
+            let index = rows.wrapping_mul(0x11).wrapping_add(columns);
+            let vertex = e.call(FLOAT_TO_INT, &args![index as f32]).i32();
+            e.set(out, CoordData::NearestVertex, vertex);
+        } else {
+            let mut nearest_distance = 0.0f32;
+            let mut nearest = 0u32;
+            e.with_stack(8, |e, target| {
+                e.call(NI_POINT2_CONSTRUCT, &args![target, x, y]);
+                for candidate in 0..3u32 {
+                    let index = e
+                        .mem
+                        .i32(out.addr() + CoordData::TriangleVertex2.off + 4 * candidate);
+                    let distance = e.with_stack(12, |e, vertex| {
+                        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vertex]);
+                        fn_00534240(e, this, quadrant as u32, index, vertex);
+                        let vertex_x = e.mem.f32(vertex.addr());
+                        let vertex_y = e.mem.f32(vertex.addr() + 4);
+                        let centre_x = e.mem.f32(centre.addr());
+                        let centre_y = e.mem.f32(centre.addr() + 4);
+                        let point_y = sum_f32(centre_y, vertex_y);
+                        let point_x = sum_f32(centre_x, vertex_x);
+                        e.with_stack(8, |e, point| {
+                            e.with_stack(8, |e, difference| {
+                                e.call(NI_POINT2_CONSTRUCT, &args![point, point_x, point_y]);
+                                e.call(NI_POINT2_SUBTRACT, &args![point, difference, target]);
+                                e.call(NI_POINT2_LENGTH, &args![difference]).f32()
+                            })
+                        })
+                    });
+                    if candidate == 0 || distance < nearest_distance {
+                        nearest = candidate;
+                        nearest_distance = distance;
+                    }
+                }
+            });
+            let vertex = e
+                .mem
+                .i32(out.addr() + CoordData::TriangleVertex2.off + 4 * nearest);
+            e.set(out, CoordData::NearestVertex, vertex);
+        }
+        let nearest_vertex = e.get(out, CoordData::NearestVertex);
+        e.with_stack(12, |e, vertex| {
+            e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vertex]);
+            fn_00534240(e, this, quadrant as u32, nearest_vertex, vertex);
+            e.with_stack(12, |e, sum| {
+                let result = e.call(NI_POINT3_ADD, &args![centre, sum, vertex]).u32();
+                copy_words(e, result, out.addr() + CoordData::VertexPositionX.off, 3);
+            });
+        });
+        true
+    });
+    if recurse {
+        let vertex_position = out.addr() + CoordData::VertexPositionX.off;
+        return tes_object_land_get_coord_data(e, this, out, Ptr::new(vertex_position), false);
+    }
+    true
+}
+
+// ---- Grass parameters -------------------------------------------------------------
+
+/// The offsets (in vertices) of the nine neighbours of a vertex in the
+/// 17 x 17 grid, in the order the grass records keep their samples.
+const GRASS_SAMPLE_OFFSETS: [i32; 9] = [-0x12, -0x11, -0x10, -1, 0, 1, 0x10, 0x11, 0x12];
+
+/// Fills a new grass record (0x44 bytes, constructed by
+/// [`fn_0053ca60`]) from the grass form `form`: name, form id, the
+/// setting float (`0053ca40`), four floats read through the form's virtual
+/// getters (slots 0x1c8, 0x1c0, 0x1b0 and 0x1b8, stored at +0x18, +0x10,
+/// +8 and +0xc) and three bytes (slots 0x1d0, 0x1e0 and 0x1d8, stored at
+/// +0x1c, +0x1e and +0x1d), and returns the byte from slot 0x180 divided by
+/// 100 as a float (the value each sample takes when it passes).
+fn fill_grass_record(e: &mut Engine, record: u32, form: u32) -> f32 {
+    let name = e.call(GRASS_FORM_NAME, &args![form]).u32();
+    e.mem.set_u32(record, name);
+    let id = e.call(FORM_ID, &args![form]).u32();
+    e.mem.set_u32(record + 4, id);
+    let setting = fn_0053ca40(e);
+    e.mem.set_f32(record + 0x14, setting);
+    let value = e.vcall(form, GRASS_SLOT_PARAMETER_AT_18, &args![]).f32();
+    e.mem.set_f32(record + 0x18, value);
+    let value = e.vcall(form, GRASS_SLOT_PARAMETER_AT_10, &args![]).f32();
+    e.mem.set_f32(record + 0x10, value);
+    let value = e.vcall(form, GRASS_SLOT_PARAMETER_AT_8, &args![]).f32();
+    e.mem.set_f32(record + 8, value);
+    let value = e.vcall(form, GRASS_SLOT_PARAMETER_AT_0C, &args![]).f32();
+    e.mem.set_f32(record + 0xc, value);
+    let value = e.vcall(form, GRASS_SLOT_BYTE_AT_1C, &args![]).u8();
+    e.mem.set_u8(record + 0x1c, value);
+    let value = e.vcall(form, GRASS_SLOT_BYTE_AT_1E, &args![]).u8();
+    e.mem.set_u8(record + 0x1e, value);
+    let value = e.vcall(form, GRASS_SLOT_BYTE_AT_1D, &args![]).u8();
+    e.mem.set_u8(record + 0x1d, value);
+    let fraction = e.vcall(form, GRASS_SLOT_PERCENT, &args![]).u8();
+    (fraction as f64 / e.global::<f64>(F64_HUNDRED)) as f32
+}
+
+/// After the nine samples of a grass record (floats at +0x20 to +0x40) are
+/// set: when their mean is below the threshold, clears them all.
+fn clear_weak_samples(e: &mut Engine, record: u32, threshold: f32) {
+    let mut sum = 0.0f32;
+    for sample in 0..9u32 {
+        sum = sum_f32(sum, e.mem.f32(record + 0x20 + 4 * sample));
+    }
+    if (threshold as f64) > sum as f64 / e.global::<f64>(F64_NINE) {
+        for sample in 0..9u32 {
+            e.mem.set_f32(record + 0x20 + 4 * sample, 0.0);
+        }
+    }
+}
+
+// Translated from 0053bc10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds the grass parameter maps of the land: false without loaded data.
+/// The threshold is the float setting at `011c9f38` clamped to 0 .. 1 (above
+/// 1 it becomes 0.9); the maximum is the integer setting at `011c9f74`; the
+/// step is the integer setting at `011c9fb8` stored at `011c9f6c` (2 unless
+/// it is 1, 2, 4 or 8). For each quadrant and each vertex of the grid with
+/// row and column `step, 3 * step, ...` below 16 (key `row * 17 + column`)
+/// a table of 16 record pointers is allocated and cleared, then filled from
+/// the grass of the quadrant's default texture and of each layer texture
+/// whose opacity at the vertex or its eight neighbours exceeds 0.1: for
+/// each grass form of the texture's list (at most the maximum plus one
+/// forms, and at most 16 records), a 0x44-byte record gets the form's
+/// parameters and nine samples, one per neighbour: the value of slot 0x180 when
+/// the neighbour's opacity for the default texture (`fn_0053a7a0`) or for
+/// the layer exceeds the threshold, else 0; a record whose samples average
+/// below the threshold has them cleared. A table with a first record is
+/// added to the quadrant's grass map under the vertex key, else freed.
+pub fn fn_0053bc10(e: &mut Engine, this: Ptr<TESObjectLAND>) -> bool {
+    let data = loaded_data(e, this);
+    if data.is_null() {
+        return false;
+    }
+    let setting = e
+        .call(SETTING_GET_FLOAT_ADDRESS, &args![GRASS_SETTING_THRESHOLD])
+        .u32();
+    let mut threshold = e.mem.f32(setting);
+    if threshold < 0.0 {
+        threshold = 0.0;
+    }
+    if threshold as f64 > e.global::<f64>(F64_ONE) {
+        threshold = e.global::<f64>(F64_POINT_NINE) as f32;
+    }
+    let setting = e
+        .call(SETTING_GET_INT_ADDRESS, &args![GRASS_SETTING_MAXIMUM])
+        .u32();
+    let maximum = e.mem.i32(setting);
+    let setting = e
+        .call(SETTING_GET_INT_ADDRESS, &args![GRASS_SETTING_STEP])
+        .u32();
+    let step = e.mem.i32(setting);
+    e.mem.set_i32(GRASS_STEP, step);
+    if !matches!(step, 1 | 2 | 4 | 8) {
+        e.mem.set_i32(GRASS_STEP, 2);
+    }
+    for quadrant in 0..4u32 {
+        let step = e.mem.i32(GRASS_STEP);
+        let mut column = step;
+        while column < 0x10 {
+            let mut row = e.mem.i32(GRASS_STEP);
+            while row < 0x10 {
+                grass_vertex(e, this, data, quadrant, row, column, threshold, maximum);
+                row += e.mem.i32(GRASS_STEP) * 2;
+            }
+            column += e.mem.i32(GRASS_STEP) * 2;
+        }
+    }
+    true
+}
+
+/// The body of [`fn_0053bc10`] for one vertex: `row` and `column` of the
+/// 17 x 17 grid of quadrant `quadrant`.
+#[allow(clippy::too_many_arguments)]
+fn grass_vertex(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    data: Ptr<LoadedLandData>,
+    quadrant: u32,
+    row: i32,
+    column: i32,
+    threshold: f32,
+    maximum: i32,
+) {
+    let table_size = 16u32;
+    let allocation = e.call(ALLOCATE, &args![table_size * 4]).u32();
+    let table = allocation;
+    e.call(MEMORY_SET, &args![table, 0u32, table_size * 4]);
+    let key = row * 0x11 + column;
+    let mut count = 0u32;
+    let default_texture = e
+        .mem
+        .u32(data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant);
+    if default_texture != 0 {
+        let mut position = e.call(LIST_FIRST_POSITION, &args![default_texture]).u32();
+        let mut used = 0i32;
+        while position != 0 && count < table_size && used <= maximum {
+            let element = e.call(LIST_ELEMENT, &args![position]).u32();
+            let form = e.mem.u32(element);
+            if form != 0 {
+                used += 1;
+                let record = new_grass_record(e);
+                e.mem.set_u32(table + 4 * count, record);
+                let fraction = fill_grass_record(e, record, form);
+                for (sample, offset) in GRASS_SAMPLE_OFFSETS.iter().enumerate() {
+                    let free = fn_0053a7a0(e, this, quadrant as u8, (key + offset) as u16);
+                    let value = if (threshold as f64) < free as f64 {
+                        fraction
+                    } else {
+                        0.0
+                    };
+                    e.mem.set_f32(record + 0x20 + 4 * sample as u32, value);
+                }
+                clear_weak_samples(e, record, threshold);
+                count += 1;
+            }
+            position = e.call(LIST_NEXT_POSITION, &args![position]).u32();
+        }
+    }
+    for layer in 0..6u32 {
+        let layers = layer_array(e, data, quadrant);
+        let layer_texture = e.mem.u32(layers + 4 * layer);
+        if layer_texture == 0 {
+            continue;
+        }
+        let percent = percent_array(e, data, quadrant);
+        if percent == 0 {
+            continue;
+        }
+        let mut strong = false;
+        for offset in GRASS_SAMPLE_OFFSETS {
+            let row_pointer = percent_row(e, percent, (key + offset) as u32);
+            if (e.mem.f32(row_pointer + 4 * layer) as f64) > e.global::<f64>(F64_TENTH) {
+                strong = true;
+                break;
+            }
+        }
+        if !strong {
+            continue;
+        }
+        let mut used = 0i32;
+        let mut position = e.call(LIST_FIRST_POSITION, &args![layer_texture]).u32();
+        while position != 0 && count < table_size && used <= maximum {
+            let element = e.call(LIST_ELEMENT, &args![position]).u32();
+            let form = e.mem.u32(element);
+            if form != 0 {
+                let record = new_grass_record(e);
+                e.mem.set_u32(table + 4 * count, record);
+                used += 1;
+                e.call(MEMORY_SET, &args![record + 0x20, 0u32, 0x24u32]);
+                let fraction = fill_grass_record(e, record, form);
+                for (sample, offset) in GRASS_SAMPLE_OFFSETS.iter().enumerate() {
+                    let row_pointer = percent_row(e, percent, (key + offset) as u32);
+                    let opacity = e.mem.f32(row_pointer + 4 * layer);
+                    let value = if (threshold as f64) < opacity as f64 {
+                        fraction
+                    } else {
+                        0.0
+                    };
+                    e.mem.set_f32(record + 0x20 + 4 * sample as u32, value);
+                }
+                clear_weak_samples(e, record, threshold);
+                count += 1;
+            }
+            position = e.call(LIST_NEXT_POSITION, &args![position]).u32();
+        }
+    }
+    if e.mem.u32(table) != 0 {
+        let map = data.addr() + GRASS_MAP_OFFSET + (quadrant << 4);
+        e.call(GRASS_MAP_SET_AT, &args![map, key as u32, table]);
+    } else {
+        e.call(DEALLOCATE, &args![table]);
+    }
+}
+
+/// Allocates a grass record (0x44 bytes) and constructs it with
+/// [`fn_0053ca60`]; the pointer is 0 when the allocation failed. The first
+/// loop of [`fn_0053bc10`] also clears the new record with `memset`.
+fn new_grass_record(e: &mut Engine) -> u32 {
+    let memory = e.call(ALLOCATE, &args![GRASS_RECORD_SIZE]).u32();
+    let record = if memory != 0 {
+        fn_0053ca60(e, Ptr::new(memory)).addr()
+    } else {
+        0
+    };
+    e.call(MEMORY_SET, &args![record, 0u32, GRASS_RECORD_SIZE]);
+    record
+}
+
+// Translated from 0053ca40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The value of the float setting at `011c8dcc` (read through
+/// `00403e20`, the address of the setting's value).
+pub fn fn_0053ca40(e: &mut Engine) -> f32 {
+    let value = e
+        .call(SETTING_GET_FLOAT_ADDRESS, &args![GRASS_DENSITY_SETTING])
+        .u32();
+    e.mem.f32(value)
+}
+
+// Translated from 0053ca60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a grass parameter record: runs `00b600e0` on it. Returns
+/// `this`.
+pub fn fn_0053ca60(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(GRASS_RECORD_CONSTRUCT, &args![this]);
+    this
+}
+
+// Translated from 0053ca80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The grass table of vertex `key` of quadrant `quadrant`: looked up in the
+/// quadrant's grass map (`00853130`), or 0 without loaded data, for a
+/// quadrant of 4 or more or a key outside 0x12 .. 0x10E.
+pub fn fn_0053ca80(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: i32, key: i32) -> u32 {
+    let data = loaded_data(e, this);
+    if data.is_null() || quadrant >= 4 || key + 0x12 >= 0x121 || key - 0x12 < 0 {
+        return 0;
+    }
+    e.with_stack(4, |e, found| {
+        let map = data.addr() + GRASS_MAP_OFFSET + ((quadrant as u32) << 4);
+        if e.call(GRASS_MAP_GET_AT, &args![map, key as u32, found])
+            .bool()
+        {
+            e.mem.u32(found.addr())
+        } else {
+            0
+        }
+    })
+}
+
+// ---- Normal at a position -----------------------------------------------------------
+
+// Translated from 0053caf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The position and normal at the place `info` (a [`CoordData`]) describes,
+/// written to `out_position` and `out_normal`; always true. When the
+/// vertex's position (`vertex + cell centre`) has the same x and y
+/// (`004390c0`) as the grid position of that vertex (`fn_0053b450`), the
+/// position and normal are those of the nearest vertex. Otherwise the
+/// fractional position inside the 128-unit block (`fmod(x, 128) / 128`
+/// and the same for y of that grid position) weighs the normals of the
+/// triangle's three vertices (the weighting depends on the block's two
+/// flags), the result is unitized as the position, and the normal is the
+/// unit cross product of two edges of the triangle (in the order that
+/// depends on the flags).
+pub fn fn_0053caf0(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    info: Ptr<CoordData>,
+    out_position: Ptr,
+    out_normal: Ptr,
+) -> bool {
+    let quadrant = e.get(info, CoordData::Quadrant);
+    let nearest = e.get(info, CoordData::NearestVertex);
+    e.with_stack(12, |e, vertex| {
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vertex]);
+        e.with_stack(12, |e, grid| {
+            fn_0053b450(
+                e,
+                this,
+                grid,
+                quadrant as u8,
+                nearest as u16,
+                Ptr::NULL,
+                Ptr::NULL,
+            );
+            fn_00534240(e, this, quadrant as u32, nearest, vertex);
+            e.with_stack(12, |e, centre| {
+                e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![centre]);
+                let words = cell_centre_vector(e, this);
+                write_words(e, centre.addr(), &words);
+                e.with_stack(12, |e, position| {
+                    e.call(NI_POINT3_ADD, &args![vertex, position, centre]);
+                    e.mem.set_u32(position.addr() + 8, 0);
+                    let same = e.call(NI_POINT3_SAME_XY, &args![position, grid]).bool();
+                    if same {
+                        fn_00534390(e, this, quadrant as u32, nearest, out_position);
+                        copy_words(e, out_position.addr(), out_normal.addr(), 3);
+                        return;
+                    }
+                    let grid_x = e.mem.f32(grid.addr());
+                    let grid_y = e.mem.f32(grid.addr() + 4);
+                    let block: f32 = e.global(F32_128);
+                    let u = (e.call(FLOAT_MODULO, &args![grid_x, block]).f32() as f64
+                        / e.global::<f64>(F64_128)) as f32;
+                    let v = (e.call(FLOAT_MODULO, &args![grid_y, block]).f32() as f64
+                        / e.global::<f64>(F64_128)) as f32;
+                    triangle_normal(e, this, info, quadrant, u, v, out_position, out_normal);
+                });
+            });
+        });
+    });
+    true
+}
+
+/// The interpolated normal and the face normal of the triangle in `info`
+/// at the fractional position `(u, v)`: see [`fn_0053caf0`].
+#[allow(clippy::too_many_arguments)]
+fn triangle_normal(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    info: Ptr<CoordData>,
+    quadrant: i32,
+    u: f32,
+    v: f32,
+    out_position: Ptr,
+    out_normal: Ptr,
+) {
+    let odd = e.get(info, CoordData::OddBlock) != 0;
+    let second = e.get(info, CoordData::SecondTriangle) != 0;
+    let indices = [
+        e.get(info, CoordData::TriangleVertex2),
+        e.get(info, CoordData::TriangleVertex0),
+        e.get(info, CoordData::TriangleVertex1),
+    ];
+    // Twelve-byte slots of one scratch block: the three vertex normals
+    // (0 to 2), the temporaries of the weighting (3 to 5), the three
+    // results of `combine` (6 to 8), the edges of the face normal (9 to
+    // 12) and its result (13).
+    e.with_stack(12 * 14, |e, scratch| {
+        let slot = |index: u32| scratch.addr() + 12 * index;
+        let (a, b, c) = (slot(0), slot(1), slot(2));
+        for vector in [a, b, c] {
+            e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vector]);
+        }
+        for (vector, index) in [a, b, c].into_iter().zip(indices) {
+            fn_00534390(e, this, quadrant as u32, index, Ptr::new(vector));
+        }
+        let one_minus_u = (1.0 - u as f64) as f32;
+        let one_minus_v = (1.0 - v as f64) as f32;
+        let scale = |e: &mut Engine, target: u32, scalar: f32, vector: u32| -> u32 {
+            e.call(NI_POINT3_SCALE_BY, &args![target, scalar, vector])
+                .u32()
+        };
+        let (t1, t2, t3) = (slot(3), slot(4), slot(5));
+        let results = [slot(6), slot(7), slot(8)];
+        let weighted = match (odd, second) {
+            (false, false) => {
+                // ((1 - u) * b + u * a) * (1 - v) + v * c
+                let last = scale(e, t1, v, c);
+                let second_term = scale(e, t2, u, a);
+                let first = scale(e, t3, one_minus_u, b);
+                combine(e, [first, second_term, last], one_minus_v, results)
+            }
+            (false, true) => {
+                // ((1 - u) * a + u * c) * v + (1 - v) * b
+                let last = scale(e, t1, one_minus_v, b);
+                let second_term = scale(e, t2, u, c);
+                let first = scale(e, t3, one_minus_u, a);
+                combine(e, [first, second_term, last], v, results)
+            }
+            (true, false) => {
+                // ((1 - u) * a + u * b) * (1 - v) + v * c
+                let last = scale(e, t1, v, c);
+                let second_term = scale(e, t2, u, b);
+                let first = scale(e, t3, one_minus_u, a);
+                combine(e, [first, second_term, last], one_minus_v, results)
+            }
+            (true, true) => {
+                // ((1 - u) * c + u * a) * v + (1 - v) * b
+                let last = scale(e, t1, one_minus_v, b);
+                let second_term = scale(e, t2, u, a);
+                let first = scale(e, t3, one_minus_u, c);
+                combine(e, [first, second_term, last], v, results)
+            }
+        };
+        write_words(e, out_position.addr(), &weighted);
+        e.call(NI_POINT3_NORMALIZE, &args![out_position]);
+        // The face normal from two edges of the triangle.
+        let (edge_a, other_a, edge_b, other_b) = (slot(9), slot(10), slot(11), slot(12));
+        for vector in [edge_a, other_a, edge_b, other_b] {
+            e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![vector]);
+        }
+        fn_00534240(e, this, quadrant as u32, indices[0], Ptr::new(edge_a));
+        fn_00534240(e, this, quadrant as u32, indices[1], Ptr::new(other_a));
+        e.call(NI_POINT3_SUBTRACT_IN_PLACE, &args![edge_a, other_a]);
+        fn_00534240(e, this, quadrant as u32, indices[0], Ptr::new(edge_b));
+        fn_00534240(e, this, quadrant as u32, indices[2], Ptr::new(other_b));
+        e.call(NI_POINT3_SUBTRACT_IN_PLACE, &args![edge_b, other_b]);
+        let target = Ptr::new(slot(13));
+        let cross = if odd != second {
+            ni_point3_unit_cross(e, Ptr::new(edge_a), target, Ptr::new(edge_b))
+        } else {
+            ni_point3_unit_cross(e, Ptr::new(edge_b), target, Ptr::new(edge_a))
+        };
+        copy_words(e, cross.addr(), out_normal.addr(), 3);
+    });
+}
+
+/// `((first + second) * scalar) + last` as the code evaluates it
+/// (`00439e90`, `0045bb20`, `00439e90`) with the three result slots
+/// `slots`; the words of the result.
+fn combine(e: &mut Engine, terms: [u32; 3], scalar: f32, slots: [u32; 3]) -> Vec<u32> {
+    let [first, second, last] = terms;
+    let [sum, scaled, total] = slots;
+    e.call(NI_POINT3_ADD, &args![first, sum, second]);
+    e.call(NI_POINT3_TIMES_SCALAR, &args![sum, scaled, scalar]);
+    e.call(NI_POINT3_ADD, &args![scaled, total, last]);
+    read_words(e, total, 3)
+}
+
+// Translated from 0053d1a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiPoint3::UnitCross` (Xbox PDB): the cross product of `this` and
+/// `other` as a unit vector in `out`, or the zero vector when its length is
+/// at most 1e-6. Returns `out`.
+pub fn ni_point3_unit_cross(e: &mut Engine, this: Ptr, out: Ptr, other: Ptr) -> Ptr {
+    let a = [
+        e.mem.f32(this.addr()),
+        e.mem.f32(this.addr() + 4),
+        e.mem.f32(this.addr() + 8),
+    ];
+    let b = [
+        e.mem.f32(other.addr()),
+        e.mem.f32(other.addr() + 4),
+        e.mem.f32(other.addr() + 8),
+    ];
+    let z = (a[0] as f64 * b[1] as f64 - a[1] as f64 * b[0] as f64) as f32;
+    let y = (a[2] as f64 * b[0] as f64 - a[0] as f64 * b[2] as f64) as f32;
+    let x = (a[1] as f64 * b[2] as f64 - a[2] as f64 * b[1] as f64) as f32;
+    e.with_stack(12, |e, cross| {
+        e.call(NI_POINT3_CONSTRUCT, &args![cross, x, y, z]);
+        let length = e.call(NI_POINT3_LENGTH, &args![cross]).f32();
+        if (length as f64) > e.global::<f64>(F64_MILLIONTH) {
+            fn_0053d280(e, cross, out, length);
+        } else {
+            e.call(NI_POINT3_CONSTRUCT, &args![out, 0.0f32, 0.0f32, 0.0f32]);
+        }
+    });
+    out
+}
+
+// Translated from 0053d280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scales `this` (an `NiPoint3`) by `1 / length` into `out`. Returns `out`.
+pub fn fn_0053d280(e: &mut Engine, this: Ptr, out: Ptr, length: f32) -> Ptr {
+    let inverse = (1.0 / length as f64) as f32;
+    let x = (inverse as f64 * e.mem.f32(this.addr()) as f64) as f32;
+    let y = (inverse as f64 * e.mem.f32(this.addr() + 4) as f64) as f32;
+    let z = (inverse as f64 * e.mem.f32(this.addr() + 8) as f64) as f32;
+    e.call(NI_POINT3_CONSTRUCT, &args![out, x, y, z]);
+    out
+}
+
+// Translated from 0053d2e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The position and normal at the world position `position` (two floats):
+/// [`tes_object_land_get_coord_data`] (without recursion) for it, then
+/// [`fn_0053caf0`]; false when the position is outside the land.
+pub fn fn_0053d2e0(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    position: Ptr,
+    out_position: Ptr,
+    out_normal: Ptr,
+) -> bool {
+    e.with_stack(COORD_DATA_SIZE, |e, info| {
+        fn_0053a510(e, info);
+        if !tes_object_land_get_coord_data(e, this, info.cast(), position, false) {
+            return false;
+        }
+        fn_0053caf0(e, this, info.cast(), out_position, out_normal)
+    })
+}
+
+// ---- The eight neighbours of a land and the border normals --------------------------
+
+// Translated from 0053d330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Finds the lands of the eight cells around this land's cell and stores
+/// them in `lands` (eight pointers, in the order of [`NEIGHBOUR_OFFSETS`]):
+/// for each, the data handler (`011c3f2c`) finds the cell (`00461c20`) in
+/// the land's world space and the cell's land (`TESObjectCELL::GetLand`)
+/// is stored when it has vertex arrays. A land without them is stored
+/// (after `LoadVertices` without building meshes, and the entry of `loaded`
+/// set to 1) when `load_missing` is set and `loaded` (eight bytes) is given.
+/// Otherwise the entry is 0. Nothing when `lands` is null.
+pub fn fn_0053d330(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    lands: Ptr,
+    load_missing: bool,
+    loaded: Ptr,
+) {
+    if lands.is_null() {
+        return;
+    }
+    for (index, (dx, dy)) in NEIGHBOUR_OFFSETS.into_iter().enumerate() {
+        let index = index as u32;
+        let world_space = fn_005340b0(e, this).addr();
+        let y = fn_00534010(e, this).wrapping_add(dy);
+        let x = fn_00533fd0(e, this).wrapping_add(dx);
+        let handler = e.global::<u32>(DATA_HANDLER);
+        let cell = e
+            .call(TES_GET_CELL, &args![handler, x, y, world_space, 0u32])
+            .u32();
+        let slot = lands.addr() + 4 * index;
+        if cell != 0 {
+            let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+            if has_vertex_arrays(e, Ptr::new(land)) {
+                let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+                e.mem.set_u32(slot, land);
+                continue;
+            }
+        }
+        if cell != 0 {
+            let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+            if !has_vertex_arrays(e, Ptr::new(land)) && load_missing && !loaded.is_null() {
+                let land = e.call(CELL_GET_LAND, &args![cell]).u32();
+                e.mem.set_u32(slot, land);
+                tes_object_land_load_vertices(e, Ptr::new(land), false);
+                e.mem.set_u8(loaded.addr() + index, 1);
+                continue;
+            }
+        }
+        e.mem.set_u32(slot, 0);
+    }
+}
+
+// Translated from 0053d8f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Recomputes the normals of the vertices on the border of the four
+/// quadrants (vertex rows 0 and 16, columns 0 and 16 of each 17 x 17 block;
+/// only those in `bounds`, see [`fn_0053da60`], when it is given) from the
+/// neighbouring quadrants and lands ([`fn_0053e290`]). `lands` is the
+/// neighbour array of [`fn_0053d330`] (filled here when it is null). When
+/// all eight neighbours exist, sets flag 0x10 (`fn_00534200`). Nothing
+/// when the vertices are not loaded.
+pub fn fn_0053d8f0(e: &mut Engine, this: Ptr<TESObjectLAND>, lands: Ptr, bounds: Ptr) {
+    if !fn_005394a0(e, this) {
+        return;
+    }
+    e.with_stack(0x20, |e, local| {
+        let lands = if lands.is_null() {
+            fn_0053d330(e, this, local, false, Ptr::NULL);
+            local
+        } else {
+            lands
+        };
+        e.with_stack(12, |e, scratch| {
+            e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![scratch]);
+            let data = loaded_data(e, this);
+            for quadrant in 0..QUADRANTS {
+                for vertex in 0..QUADRANT_VERTICES {
+                    let border = !(0x11..=0x110).contains(&vertex)
+                        || vertex % 0x11 == 0
+                        || (vertex + 1) % 0x11 == 0;
+                    if !border {
+                        continue;
+                    }
+                    if !bounds.is_null() {
+                        let vertices = e.get(data, LoadedLandData::ppVertices);
+                        let at = element(e, vertices, quadrant) + vertex * 12;
+                        if !fn_0053da60(e, this, bounds, Ptr::new(at)) {
+                            continue;
+                        }
+                    }
+                    let normals = e.get(data, LoadedLandData::ppNormals);
+                    let at = element(e, normals, quadrant) + vertex * 12;
+                    fn_0053e290(e, this, quadrant as i32, vertex as i32, Ptr::new(at), lands);
+                }
+            }
+            let all_present = (0..8).all(|index| e.mem.u32(lands.addr() + 4 * index) != 0);
+            if all_present {
+                fn_00534200(e, this, true);
+            }
+        });
+    });
+}
+
+// Translated from 0053da60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the position of `vertex` (an `NiPoint3` of the land's local
+/// coordinates) lies inside `bounds` (four integers: left, top, right,
+/// bottom) once the cell centre vector (cell corner + 2048) is added: x not
+/// above the right edge or below the left edge, y not above the top edge
+/// or below the bottom edge. Always true without `bounds`.
+pub fn fn_0053da60(e: &mut Engine, this: Ptr<TESObjectLAND>, bounds: Ptr, vertex: Ptr) -> bool {
+    if bounds.is_null() {
+        return true;
+    }
+    let centre = cell_centre_vector(e, this);
+    e.with_stack(12, |e, position| {
+        write_words(e, position.addr(), &centre);
+        e.call(NI_POINT3_ADD_IN_PLACE, &args![position, vertex]);
+        let x = e.mem.f32(position.addr()) as f64;
+        let y = e.mem.f32(position.addr() + 4) as f64;
+        let left = e.mem.i32(bounds.addr()) as f64;
+        let top = e.mem.i32(bounds.addr() + 4) as f64;
+        let right = e.mem.i32(bounds.addr() + 8) as f64;
+        let bottom = e.mem.i32(bounds.addr() + 0xc) as f64;
+        !(x > right || y > top || x < left || y < bottom)
+    })
+}
+
+// Translated from 0053db20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Recomputes the normals along the borders of the land with the
+/// neighbours loaded for it: false unless the vertices are loaded and the
+/// data does not come from the world space's land file (flag 0x400).
+/// Loads the missing neighbours ([`fn_0053d330`] with `load_missing`),
+/// saves the normals of every neighbour (8 x 4 blocks of 0xd8c bytes in a
+/// 0x1b180-byte local), recomputes the normals of every neighbour
+/// ([`fn_0053df30`]) and of this land, then the border normals
+/// ([`fn_0053d8f0`]). Each normal of this land is then rounded to signed
+/// bytes (`trunc(n * 127)`, divided by 127) and unitized again, and the
+/// saved normals of the neighbours are restored; neighbours loaded here
+/// are unloaded again. Returns true. (The stack probe and security cookie
+/// of the 0x1b1d8-byte frame are not translated.)
+pub fn fn_0053db20(e: &mut Engine, this: Ptr<TESObjectLAND>) -> bool {
+    if !fn_005394a0(e, this) || fn_00534140(e, this) {
+        return false;
+    }
+    e.with_stack(8, |e, loaded| {
+        e.call(MEMORY_SET, &args![loaded, 0u32, 8u32]);
+        e.with_stack(0x20, |e, lands| {
+            fn_0053d330(e, this, lands, true, loaded);
+            e.with_stack(0x1b180, |e, saved| {
+                e.call(
+                    VECTOR_CONSTRUCT,
+                    &args![saved, 0xcu32, 0x2420u32, NI_POINT3_DEFAULT_CONSTRUCT],
+                );
+                for neighbour in 0..8u32 {
+                    let land = e.mem.u32(lands.addr() + 4 * neighbour);
+                    if land == 0 {
+                        continue;
+                    }
+                    for quadrant in 0..4u32 {
+                        let normals = fn_0053df00(e, Ptr::new(land));
+                        let source = e.mem.u32(normals + 4 * quadrant);
+                        let target = saved.addr() + neighbour * 0x3630 + quadrant * 0xd8c;
+                        e.call(MEMORY_COPY, &args![target, source, 0xd8cu32]);
+                    }
+                    fn_0053df30(e, Ptr::new(land), Ptr::NULL);
+                }
+                fn_0053df30(e, this, Ptr::NULL);
+                fn_0053d8f0(e, this, lands, Ptr::NULL);
+                let data = loaded_data(e, this);
+                let scale = e.global::<f64>(F64_127);
+                for quadrant in 0..QUADRANTS {
+                    for vertex in 0..QUADRANT_VERTICES {
+                        let normals = e.get(data, LoadedLandData::ppNormals);
+                        let normal = element(e, normals, quadrant) + vertex * 12;
+                        e.call(NI_POINT3_NORMALIZE, &args![normal]);
+                        let mut bytes = [0i8; 3];
+                        for (axis, byte) in bytes.iter_mut().enumerate() {
+                            let component = e.mem.f32(normal + 4 * axis as u32);
+                            *byte = x87_truncate(component as f64 * scale) as i8;
+                        }
+                        for (axis, byte) in bytes.into_iter().enumerate() {
+                            e.mem
+                                .set_f32(normal + 4 * axis as u32, (byte as f64 / scale) as f32);
+                        }
+                        e.call(NI_POINT3_NORMALIZE, &args![normal]);
+                    }
+                }
+                for neighbour in 0..8u32 {
+                    let land = e.mem.u32(lands.addr() + 4 * neighbour);
+                    if land == 0 {
+                        continue;
+                    }
+                    for quadrant in 0..4u32 {
+                        let normals = fn_0053df00(e, Ptr::new(land));
+                        let target = e.mem.u32(normals + 4 * quadrant);
+                        let source = saved.addr() + neighbour * 0x3630 + quadrant * 0xd8c;
+                        e.call(MEMORY_COPY, &args![target, source, 0xd8cu32]);
+                    }
+                    if e.mem.u8(loaded.addr() + neighbour) != 0 {
+                        tes_object_land_un_load_vertices(e, Ptr::new(land));
+                    }
+                }
+            });
+        });
+    });
+    true
+}
+
+// Translated from 0053df00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The land's `ppNormals` array, or 0 without loaded data.
+pub fn fn_0053df00(e: &mut Engine, this: Ptr<TESObjectLAND>) -> u32 {
+    let data = loaded_data(e, this);
+    if data.is_null() {
+        0
+    } else {
+        e.get(data, LoadedLandData::ppNormals).addr()
+    }
+}
+
+// Translated from 0053df30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Recomputes the vertex normals of the land from its triangles (only the
+/// vertices inside `bounds`, see [`fn_0053da60`], when it is given): every
+/// normal in range is first reset to the default normal (`011f426c`) and
+/// its "normal set" flag cleared; then for each of the 512 triangles of the
+/// shared triangle list (u16 triples), the vector `(b - a) x (c - b)` is
+/// passed through `00525340` and added to the normal of each of its
+/// vertices that is in range; finally each quadrant's normals are
+/// normalized (`NiPoint3::UnitizeVectors`, Xbox PDB). Nothing when the
+/// vertices are not loaded.
+pub fn fn_0053df30(e: &mut Engine, this: Ptr<TESObjectLAND>, bounds: Ptr) {
+    if !fn_005394a0(e, this) {
+        return;
+    }
+    let data = loaded_data(e, this);
+    for quadrant in 0..QUADRANTS {
+        for vertex in 0..QUADRANT_VERTICES {
+            let in_range = bounds.is_null() || {
+                let vertices = e.get(data, LoadedLandData::ppVertices);
+                let at = element(e, vertices, quadrant) + vertex * 12;
+                fn_0053da60(e, this, bounds, Ptr::new(at))
+            };
+            if in_range {
+                let normals = e.get(data, LoadedLandData::ppNormals);
+                let normal = element(e, normals, quadrant) + vertex * 12;
+                copy_words(e, DEFAULT_NORMAL_WORDS, normal, 3);
+                let set = e.get(data, LoadedLandData::ppNormalsSet);
+                e.mem.set_u8(element(e, set, quadrant) + vertex, 0);
+            }
+        }
+        let mut triangles = e.global::<u32>(DEFAULT_TRIANGLE_LIST);
+        for _ in 0..0x200u32 {
+            let a = e.mem.u16(triangles) as u32;
+            let b = e.mem.u16(triangles + 2) as u32;
+            let c = e.mem.u16(triangles + 4) as u32;
+            triangles += 6;
+            let vertices = e.get(data, LoadedLandData::ppVertices);
+            let base = element(e, vertices, quadrant);
+            e.with_stack(36, |e, scratch| {
+                let first_edge = scratch.addr();
+                let second_edge = scratch.addr() + 12;
+                let cross = scratch.addr() + 24;
+                e.call(
+                    NI_POINT3_SUBTRACT,
+                    &args![base + b * 12, first_edge, base + a * 12],
+                );
+                e.call(
+                    NI_POINT3_SUBTRACT,
+                    &args![base + c * 12, second_edge, base + b * 12],
+                );
+                e.call(NI_POINT3_CROSS, &args![first_edge, cross, second_edge]);
+                e.call(NI_POINT3_UNIT_VECTOR, &args![cross]);
+                for corner in [a, b, c] {
+                    let in_range = bounds.is_null()
+                        || fn_0053da60(e, this, bounds, Ptr::new(base + corner * 12));
+                    if in_range {
+                        let normals = e.get(data, LoadedLandData::ppNormals);
+                        let normal = element(e, normals, quadrant) + corner * 12;
+                        e.call(NI_POINT3_ADD_IN_PLACE, &args![normal, cross]);
+                    }
+                }
+            });
+        }
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let block = element(e, normals, quadrant);
+        e.call(
+            NI_POINT3_UNITIZE_VECTORS,
+            &args![block, QUADRANT_VERTICES, 0xcu32],
+        );
+    }
+}
+
+// Translated from 0053e210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The "normal set" flag of the vertex nearest to the position `position`
+/// (two floats): [`tes_object_land_get_coord_data`] (without recursion)
+/// then [`fn_0053e260`] for its quadrant and nearest vertex; 0 when the
+/// position is outside the land.
+pub fn fn_0053e210(e: &mut Engine, this: Ptr<TESObjectLAND>, position: Ptr) -> u8 {
+    e.with_stack(COORD_DATA_SIZE, |e, info| {
+        fn_0053a510(e, info);
+        if !tes_object_land_get_coord_data(e, this, info.cast(), position, false) {
+            return 0;
+        }
+        let quadrant = e.get(info.cast::<CoordData>(), CoordData::Quadrant);
+        let vertex = e.get(info.cast::<CoordData>(), CoordData::NearestVertex);
+        fn_0053e260(e, this, quadrant, vertex)
+    })
+}
+
+// Translated from 0053e260 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The "normal set" flag byte of vertex `vertex` of quadrant `quadrant`.
+pub fn fn_0053e260(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: i32, vertex: i32) -> u8 {
+    let data = loaded_data(e, this);
+    let set = e.get(data, LoadedLandData::ppNormalsSet);
+    let block = element(e, set, quadrant as u32);
+    e.mem.u8(block.wrapping_add(vertex as u32))
+}
+
+/// What `fn_0053e290` accumulates for one vertex: the position the
+/// neighbours are asked about, the normal a neighbour gave, the running sum
+/// of those normals (starting as the vertex's own) and their count.
+struct NormalBlend {
+    position: Ptr,
+    candidate: Ptr,
+    sum: Ptr,
+    scale: f32,
+}
+
+/// Marks the normal of vertex `vertex` of quadrant `quadrant` as set.
+fn mark_normal_set(e: &mut Engine, this: Ptr<TESObjectLAND>, quadrant: i32, vertex: i32) {
+    let data = loaded_data(e, this);
+    let set = e.get(data, LoadedLandData::ppNormalsSet);
+    let block = element(e, set, quadrant as u32);
+    e.mem.set_u8(block.wrapping_add(vertex as u32), 1);
+}
+
+/// One neighbouring land of `fn_0053e290`: asks `land` for the position and
+/// normal at the vertex ([`fn_0053d2e0`]; the default normal (0, 0, 1) when
+/// it has no land or does not know the position); when the land's own
+/// normal there is set ([`fn_0053e210`]) it is the result and the function
+/// is done (true), else the normal is added to the sum.
+fn blend_land(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    land: u32,
+    blend: &mut NormalBlend,
+    quadrant: i32,
+    vertex: i32,
+    out: Ptr,
+) -> bool {
+    e.with_stack(12, |e, normal| {
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![normal]);
+        let known =
+            land != 0 && fn_0053d2e0(e, Ptr::new(land), blend.position, blend.candidate, normal);
+        if !known {
+            write_point3(e, blend.candidate, 0.0, 0.0, 1.0);
+        }
+    });
+    if land != 0 && fn_0053e210(e, Ptr::new(land), blend.position) != 0 {
+        copy_words(e, blend.candidate.addr(), out.addr(), 3);
+        mark_normal_set(e, this, quadrant, vertex);
+        return true;
+    }
+    e.call(NI_POINT3_ADD_IN_PLACE, &args![blend.sum, blend.candidate]);
+    blend.scale = sum_f32(blend.scale, 1.0);
+    false
+}
+
+/// One neighbouring quadrant of the same land: the normal of vertex
+/// `neighbour_vertex` of quadrant `neighbour_quadrant`; when its "normal
+/// set" flag is set it is the result (true), else it is added to the sum.
+#[allow(clippy::too_many_arguments)]
+fn blend_quadrant(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    blend: &mut NormalBlend,
+    quadrant: i32,
+    vertex: i32,
+    out: Ptr,
+    neighbour_quadrant: i32,
+    neighbour_vertex: i32,
+) -> bool {
+    let data = loaded_data(e, this);
+    let normals = e.get(data, LoadedLandData::ppNormals);
+    let block = element(e, normals, neighbour_quadrant as u32);
+    let at = block.wrapping_add((neighbour_vertex as u32).wrapping_mul(12));
+    copy_words(e, at, blend.candidate.addr(), 3);
+    if fn_0053e260(e, this, neighbour_quadrant, neighbour_vertex) != 0 {
+        copy_words(e, blend.candidate.addr(), out.addr(), 3);
+        mark_normal_set(e, this, quadrant, vertex);
+        return true;
+    }
+    e.call(NI_POINT3_ADD_IN_PLACE, &args![blend.sum, blend.candidate]);
+    blend.scale = sum_f32(blend.scale, 1.0);
+    false
+}
+
+// Translated from 0053e290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Computes the normal of vertex `vertex` of quadrant `quadrant` on the
+/// border of the land, into `out`, unless its "normal set" flag is already
+/// set or `lands` (the eight neighbours of [`fn_0053d330`]) is null. The
+/// normal starts as the vertex's own; every neighbour that shares the
+/// vertex adds its normal: the neighbouring land across a quadrant edge
+/// that lies on the land's border (`lands[6]` above quadrants 0 and 1,
+/// `lands[1]` below quadrants 2 and 3, `lands[3]` left of the left column,
+/// `lands[4]` right of the right column, the diagonal lands at the
+/// corners), the neighbouring quadrant of the same land otherwise, and the
+/// diagonal quadrant at the quadrant corners. A neighbour whose own normal
+/// there is already set ends the search with that normal; if none does,
+/// the sum is divided by the count (`fn_0053d280`). The flag is set at the
+/// end.
+pub fn fn_0053e290(
+    e: &mut Engine,
+    this: Ptr<TESObjectLAND>,
+    quadrant: i32,
+    vertex: i32,
+    out: Ptr,
+    lands: Ptr,
+) {
+    let data = loaded_data(e, this);
+    let set = e.get(data, LoadedLandData::ppNormalsSet);
+    let already = e
+        .mem
+        .u8(element(e, set, quadrant as u32).wrapping_add(vertex as u32));
+    if already != 0 || lands.is_null() {
+        return;
+    }
+    e.with_stack(12 * 5, |e, scratch| {
+        let slot = |index: u32| scratch.addr() + 12 * index;
+        let centre = slot(0);
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![centre]);
+        let words = cell_centre_vector(e, this);
+        write_words(e, centre, &words);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let own_vertex = element(e, vertices, quadrant as u32) + (vertex as u32).wrapping_mul(12);
+        let mut blend = NormalBlend {
+            position: Ptr::new(slot(1)),
+            candidate: Ptr::new(slot(2)),
+            sum: Ptr::new(slot(3)),
+            scale: 1.0,
+        };
+        e.call(NI_POINT3_ADD, &args![own_vertex, blend.position, centre]);
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![blend.candidate]);
+        e.call(NI_POINT3_DEFAULT_CONSTRUCT, &args![blend.sum]);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let own_normal = element(e, normals, quadrant as u32) + (vertex as u32).wrapping_mul(12);
+        copy_words(e, own_normal, blend.sum.addr(), 3);
+        let land = |e: &Engine, index: u32| e.mem.u32(lands.addr() + 4 * index);
+        let (mut top, mut bottom, mut left, mut right) = (false, false, false, false);
+        if quadrant < 2 && vertex < 0x11 {
+            top = true;
+            let neighbour = land(e, 6);
+            if blend_land(e, this, neighbour, &mut blend, quadrant, vertex, out) {
+                return;
+            }
+        } else if quadrant >= 2 && vertex >= 0x110 {
+            bottom = true;
+            let neighbour = land(e, 1);
+            if blend_land(e, this, neighbour, &mut blend, quadrant, vertex, out) {
+                return;
+            }
+        }
+        if quadrant % 2 == 0 && vertex % 0x11 == 0 {
+            left = true;
+            let neighbour = land(e, 3);
+            if blend_land(e, this, neighbour, &mut blend, quadrant, vertex, out) {
+                return;
+            }
+        } else if (quadrant + 1) % 2 == 0 && (vertex + 1) % 0x11 == 0 {
+            right = true;
+            let neighbour = land(e, 4);
+            if blend_land(e, this, neighbour, &mut blend, quadrant, vertex, out) {
+                return;
+            }
+        }
+        let corner = if left && top {
+            Some(5)
+        } else if right && top {
+            Some(7)
+        } else if left && bottom {
+            Some(0)
+        } else if right && bottom {
+            Some(2)
+        } else {
+            None
+        };
+        if let Some(index) = corner {
+            let neighbour = land(e, index);
+            if blend_land(e, this, neighbour, &mut blend, quadrant, vertex, out) {
+                return;
+            }
+        }
+        let (mut up, mut down, mut left_quadrant, mut right_quadrant) =
+            (false, false, false, false);
+        if vertex < 0x11 && !top {
+            up = true;
+            if blend_quadrant(
+                e,
+                this,
+                &mut blend,
+                quadrant,
+                vertex,
+                out,
+                quadrant - 2,
+                vertex + 0x110,
+            ) {
+                return;
+            }
+        } else if vertex >= 0x110 && !bottom {
+            down = true;
+            if blend_quadrant(
+                e,
+                this,
+                &mut blend,
+                quadrant,
+                vertex,
+                out,
+                quadrant + 2,
+                vertex - 0x110,
+            ) {
+                return;
+            }
+        }
+        if vertex % 0x11 == 0 && !left {
+            left_quadrant = true;
+            if blend_quadrant(
+                e,
+                this,
+                &mut blend,
+                quadrant,
+                vertex,
+                out,
+                quadrant - 1,
+                vertex + 0x10,
+            ) {
+                return;
+            }
+        } else if (vertex + 1) % 0x11 == 0 && !right {
+            right_quadrant = true;
+            if blend_quadrant(
+                e,
+                this,
+                &mut blend,
+                quadrant,
+                vertex,
+                out,
+                quadrant + 1,
+                vertex - 0x10,
+            ) {
+                return;
+            }
+        }
+        let diagonal = if left_quadrant && up {
+            Some((quadrant - 3, 0x120))
+        } else if left_quadrant && down {
+            Some((quadrant + 1, 0x10))
+        } else if right_quadrant && up {
+            Some((quadrant - 1, 0x110))
+        } else if right_quadrant && down {
+            Some((quadrant + 3, 0))
+        } else {
+            None
+        };
+        if let Some((neighbour_quadrant, neighbour_vertex)) = diagonal {
+            if blend_quadrant(
+                e,
+                this,
+                &mut blend,
+                quadrant,
+                vertex,
+                out,
+                neighbour_quadrant,
+                neighbour_vertex,
+            ) {
+                return;
+            }
+        }
+        let averaged = Ptr::new(slot(4));
+        fn_0053d280(e, blend.sum, averaged, blend.scale);
+        copy_words(e, averaged.addr(), out.addr(), 3);
+        mark_normal_set(e, this, quadrant, vertex);
+    });
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -3961,6 +6194,76 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00539ef0, fn_00539ef0(Ptr, u32)),
         entry!(0x00539f20, fn_00539f20(Ptr, u32)),
         entry!(0x00539f40, fn_00539f40() -> u32),
+        entry!(0x00539f50, fn_00539f50(Ptr, u32, u32) -> Ptr),
+        entry!(0x00539fc0, ni_binary_extra_data_get_rtti() -> Ptr),
+        entry!(
+            0x00539fd0,
+            ni_binary_extra_data_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0053a000, fn_0053a000(Ptr)),
+        entry!(0x0053a070, fn_0053a070(Ptr, u32, u32)),
+        entry!(
+            0x0053a090,
+            tes_object_land_update_mesh(Ptr<TESObjectLAND>, u8, u32)
+        ),
+        entry!(0x0053a510, fn_0053a510(Ptr) -> Ptr),
+        entry!(0x0053a550, fn_0053a550(Ptr<TESObjectLAND>) -> f32),
+        entry!(0x0053a5a0, fn_0053a5a0(Ptr<TESObjectLAND>, u8) -> u32),
+        entry!(0x0053a5e0, fn_0053a5e0(Ptr<TESObjectLAND>, Ptr) -> u32),
+        entry!(0x0053a630, fn_0053a630(Ptr<TESObjectLAND>, u8, u16) -> u32),
+        entry!(0x0053a700, fn_0053a700(Ptr<TESObjectLAND>, u8, u16) -> u32),
+        entry!(0x0053a760, fn_0053a760(Ptr<TESObjectLAND>, u8, u16, u32)),
+        entry!(0x0053a7a0, fn_0053a7a0(Ptr<TESObjectLAND>, u8, u16) -> f32),
+        entry!(
+            0x0053a830,
+            fn_0053a830(Ptr<TESObjectLAND>, u8, u16, u16) -> f32
+        ),
+        entry!(
+            0x0053a8a0,
+            fn_0053a8a0(Ptr<TESObjectLAND>, u8, u16, u16, f32)
+        ),
+        entry!(0x0053a940, fn_0053a940(Ptr<TESObjectLAND>)),
+        entry!(0x0053abb0, fn_0053abb0(Ptr<TESObjectLAND>, u8, u16)),
+        entry!(0x0053ace0, fn_0053ace0(Ptr<TESObjectLAND>, u8, u16)),
+        entry!(0x0053ae30, fn_0053ae30(Ptr<TESObjectLAND>, u8, u16) -> f32),
+        entry!(0x0053aeb0, fn_0053aeb0(Ptr<TESObjectLAND>)),
+        entry!(
+            0x0053b450,
+            fn_0053b450(Ptr<TESObjectLAND>, Ptr, u8, u16, Ptr, Ptr) -> Ptr
+        ),
+        entry!(
+            0x0053b550,
+            tes_object_land_get_coord_data(Ptr<TESObjectLAND>, Ptr<CoordData>, Ptr, bool) -> bool
+        ),
+        entry!(0x0053bc10, fn_0053bc10(Ptr<TESObjectLAND>) -> bool),
+        entry!(0x0053ca40, fn_0053ca40() -> f32),
+        entry!(0x0053ca60, fn_0053ca60(Ptr) -> Ptr),
+        entry!(0x0053ca80, fn_0053ca80(Ptr<TESObjectLAND>, i32, i32) -> u32),
+        entry!(
+            0x0053caf0,
+            fn_0053caf0(Ptr<TESObjectLAND>, Ptr<CoordData>, Ptr, Ptr) -> bool
+        ),
+        entry!(0x0053d1a0, ni_point3_unit_cross(Ptr, Ptr, Ptr) -> Ptr),
+        entry!(0x0053d280, fn_0053d280(Ptr, Ptr, f32) -> Ptr),
+        entry!(
+            0x0053d2e0,
+            fn_0053d2e0(Ptr<TESObjectLAND>, Ptr, Ptr, Ptr) -> bool
+        ),
+        entry!(0x0053d330, fn_0053d330(Ptr<TESObjectLAND>, Ptr, bool, Ptr)),
+        entry!(0x0053d8f0, fn_0053d8f0(Ptr<TESObjectLAND>, Ptr, Ptr)),
+        entry!(
+            0x0053da60,
+            fn_0053da60(Ptr<TESObjectLAND>, Ptr, Ptr) -> bool
+        ),
+        entry!(0x0053db20, fn_0053db20(Ptr<TESObjectLAND>) -> bool),
+        entry!(0x0053df00, fn_0053df00(Ptr<TESObjectLAND>) -> u32),
+        entry!(0x0053df30, fn_0053df30(Ptr<TESObjectLAND>, Ptr)),
+        entry!(0x0053e210, fn_0053e210(Ptr<TESObjectLAND>, Ptr) -> u8),
+        entry!(0x0053e260, fn_0053e260(Ptr<TESObjectLAND>, i32, i32) -> u8),
+        entry!(
+            0x0053e290,
+            fn_0053e290(Ptr<TESObjectLAND>, i32, i32, Ptr, Ptr)
+        ),
     ]
 }
 
@@ -3987,7 +6290,7 @@ mod tests {
     }
 
     /// The pages that hold the exe's constants and the statics.
-    const PAGES: [u32; 21] = [
+    const PAGES: [u32; 24] = [
         0x0101_1000,
         0x0101_2000,
         0x0101_5000,
@@ -4009,6 +6312,9 @@ mod tests {
         0x011c_a000,
         0x011f_4000,
         0x011f_5000,
+        0x0101_f000,
+        0x011c_8000,
+        0x011d_e000,
     ];
 
     /// An engine with the exe's constants the code reads and doubles for the
@@ -4037,6 +6343,16 @@ mod tests {
         e.set_global(F64_255, 255.0f64);
         e.set_global(F64_1024, 1024.0f64);
         e.set_global(F64_2048, 2048.0f64);
+        e.set_global(F64_4096, 4096.0f64);
+        e.set_global(F32_4096, 4096.0f32);
+        e.set_global(F32_128, 128.0f32);
+        e.set_global(F64_289, 289.0f64);
+        e.set_global(F64_128, 128.0f64);
+        e.set_global(F64_NINE, 9.0f64);
+        e.set_global(F64_POINT_NINE, 0.9f64);
+        e.set_global(F64_TENTH, 0.1f32 as f64);
+        e.set_global(F64_THOUSANDTH, 0.001f32 as f64);
+        e.set_global(F64_MILLIONTH, 1e-6f32 as f64);
         for (i, value) in [1.0f32, 1.0, 1.0, 1.0].into_iter().enumerate() {
             e.set_global(DEFAULT_COLOR_WORDS + 4 * i as u32, value);
         }
@@ -4403,9 +6719,9 @@ mod tests {
                 .push((a[1], String::from_utf8(e.mem.cstr(a[2])).unwrap()));
             Ret::default()
         });
-        e.set_global(MENU_MANAGER, 0x0900_0000u32);
-        e.register(MENU_MANAGER_REGISTER_TEXTURE_SET, |_, a| ret(a[0] + 1));
-        e.register(MENU_MANAGER_AFTER_REGISTER, |_, _| Ret::default());
+        e.set_global(DATA_HANDLER, 0x0900_0000u32);
+        e.register(DATA_HANDLER_WORD_AT_4, |_, a| ret(a[0] + 1));
+        e.register(DATA_HANDLER_ADD_TEXTURE_SET, |_, _| Ret::default());
         e.register(LAND_TEXTURE_CONSTRUCT, |_, a| ret(a[0]));
         e.register(LAND_TEXTURE_SET_TEXTURE_SET, |_, _| Ret::default());
         e.register(SMART_POINTER_CONSTRUCT, |e, a| {
@@ -4464,12 +6780,12 @@ mod tests {
             ]
         );
         assert_eq!(
-            arguments_of(&log, MENU_MANAGER_REGISTER_TEXTURE_SET),
-            vec![vec![0x0900_0000, texture_set]]
+            arguments_of(&log, DATA_HANDLER_WORD_AT_4),
+            vec![vec![0x0900_0000]]
         );
         assert_eq!(
-            arguments_of(&log, MENU_MANAGER_AFTER_REGISTER),
-            vec![vec![0x0900_0001]]
+            arguments_of(&log, DATA_HANDLER_ADD_TEXTURE_SET),
+            vec![vec![0x0900_0001, texture_set]]
         );
         let land_texture = e.global::<u32>(DEFAULT_LAND_TEXTURE);
         assert_eq!(
@@ -7993,5 +10309,1935 @@ mod tests {
         );
         e.set_global(EXTRA_DATA_KEY, 0x1234u32);
         assert_eq!(e.call(0x0053_9f40, &args![]).u32(), 0x1234);
+    }
+
+    // ---- Third session: helpers ---------------------------------------------------
+
+    /// A land with the loaded data of `land_with_data` and, per quadrant, a
+    /// full percent array (289 rows of eight floats).
+    fn percent_land(e: &mut Engine) -> (Ptr<TESObjectLAND>, Ptr<LoadedLandData>) {
+        let (this, data) = land_with_data(e);
+        for quadrant in 0..4u32 {
+            let percent = e.mem.alloc(0x484);
+            let rows = e.mem.alloc(0x2420);
+            for vertex in 0..0x121u32 {
+                e.mem.set_u32(percent + 4 * vertex, rows + 0x20 * vertex);
+            }
+            e.mem.set_u32(
+                data.addr() + LoadedLandData::ppPercentArrays.off + 4 * quadrant,
+                percent,
+            );
+        }
+        (this, data)
+    }
+
+    fn opacity_row(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32, vertex: u32) -> u32 {
+        let percent = percent_array(e, data, quadrant);
+        percent_row(e, percent, vertex)
+    }
+
+    fn set_opacities(
+        e: &mut Engine,
+        data: Ptr<LoadedLandData>,
+        quadrant: u32,
+        vertex: u32,
+        values: &[f32],
+    ) {
+        let row = opacity_row(e, data, quadrant, vertex);
+        for (i, value) in values.iter().enumerate() {
+            e.mem.set_f32(row + 4 * i as u32, *value);
+        }
+    }
+
+    fn opacities(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32, vertex: u32) -> Vec<f32> {
+        let row = opacity_row(e, data, quadrant, vertex);
+        floats(e, row, 8)
+    }
+
+    fn set_layers(e: &mut Engine, data: Ptr<LoadedLandData>, quadrant: u32, textures: &[u32]) {
+        let layers = layer_array(e, data, quadrant);
+        for (i, texture) in textures.iter().enumerate() {
+            e.mem.set_u32(layers + 4 * i as u32, *texture);
+        }
+    }
+
+    fn layers(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32) -> Vec<u32> {
+        let layers = layer_array(e, data, quadrant);
+        (0..6).map(|i| e.mem.u32(layers + 4 * i)).collect()
+    }
+
+    fn set_default_texture(e: &mut Engine, data: Ptr<LoadedLandData>, quadrant: u32, texture: u32) {
+        e.mem.set_u32(
+            data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant,
+            texture,
+        );
+    }
+
+    fn default_texture(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32) -> u32 {
+        e.mem
+            .u32(data.addr() + LoadedLandData::pDefQuadTexture.off + 4 * quadrant)
+    }
+
+    // ---- Binary extra data -----------------------------------------------------------
+
+    #[test]
+    fn extra_data_constructor_stores_vtable_size_and_data() {
+        let mut e = engine();
+        e.register(EXTRA_DATA_CONSTRUCT, |_, a| ret(a[0]));
+        let object = e.mem.alloc(0x14);
+        start_log(&mut e);
+        let result = e.call(0x0053_9f50, &args![object, 0x2420u32, 0x4000u32]);
+        assert_eq!(result.u32(), object);
+        assert_eq!(called(&mut e), vec![EXTRA_DATA_CONSTRUCT]);
+        assert_eq!(e.mem.u32(object), BINARY_EXTRA_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + 0x10), 0x2420);
+        assert_eq!(e.mem.u32(object + 0xc), 0x4000);
+    }
+
+    #[test]
+    fn extra_data_setter_sets_size_and_data() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x14);
+        e.call(0x0053_a070, &args![object, 7u32, 0x1234u32]);
+        assert_eq!(e.mem.u32(object + 0x10), 7);
+        assert_eq!(e.mem.u32(object + 0xc), 0x1234);
+    }
+
+    #[test]
+    fn extra_data_rtti_is_the_class_descriptor() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0053_9fc0, &args![]).u32(), 0x011f_4ab8);
+    }
+
+    #[test]
+    fn extra_data_destructor_frees_the_data_and_the_object_on_request() {
+        let mut e = engine();
+        noop(&mut e, &[FREE_BLOCK, EXTRA_DATA_DESTRUCT, NI_FREE]);
+        let object = e.mem.alloc(0x14);
+        e.mem.set_u32(object + 0xc, 0x4444);
+        start_log(&mut e);
+        e.call(0x0053_a000, &args![object]);
+        assert_eq!(
+            end_log(&mut e),
+            vec![
+                (FREE_BLOCK, vec![0x4444]),
+                (EXTRA_DATA_DESTRUCT, vec![object])
+            ]
+        );
+        assert_eq!(e.mem.u32(object), BINARY_EXTRA_DATA_VTABLE);
+        assert_eq!(e.mem.u32(object + 0xc), 0);
+        // The scalar deleting destructor frees the 0x14 bytes only for bit 0.
+        start_log(&mut e);
+        let result = e.call(0x0053_9fd0, &args![object, 1u32]);
+        assert_eq!(result.u32(), object);
+        let log = end_log(&mut e);
+        assert_eq!(log.last().unwrap(), &(NI_FREE, vec![object, 0x14]));
+        start_log(&mut e);
+        e.call(0x0053_9fd0, &args![object, 0u32]);
+        assert!(!called(&mut e).contains(&NI_FREE));
+    }
+
+    // ---- UpdateMesh ------------------------------------------------------------------------
+
+    /// A land with a parent cell, loaded data with one mesh array whose node
+    /// for quadrant 1 exists; the doubles of the update. `kind` is the
+    /// shader property's type. Returns the land, its data, the node, the
+    /// property and the locked buffer.
+    fn update_world(
+        e: &mut Engine,
+        kind: u32,
+    ) -> (Ptr<TESObjectLAND>, Ptr<LoadedLandData>, u32, u32, u32) {
+        let (this, data) = percent_land(e);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(0xce11));
+        let meshes = e.mem.alloc(16);
+        e.set(data, LoadedLandData::ppMesh, Ptr::new(meshes));
+        e.set_global(DEFAULT_LAND_TEXTURE, 0xdefu32);
+        let node = e.mem.alloc(0x20);
+        let geometry = e.mem.alloc(0x100);
+        e.mem.set_u32(geometry + 0xb8, 0x3030);
+        let child_vtable = e.mem.alloc(0x40);
+        e.mem
+            .set_u32(child_vtable + NODE_SLOT_AS_GEOMETRY, 0x0900_0018);
+        let child = e.mem.alloc(0x20);
+        e.mem.set_u32(child, child_vtable);
+        e.register_double(0x0900_0018, move |_, _| ret(geometry));
+        e.register_double(CELL_GET_NODE, move |_, a| {
+            ret(if a[1] == 1 { node } else { 0 })
+        });
+        e.register_double(NODE_FIRST_GEOMETRY, move |_, _| ret(child));
+        let property_vtable = e.mem.alloc(0x100);
+        e.mem
+            .set_u32(property_vtable + SHADER_PROPERTY_SLOT_UPDATE, 0x0900_009c);
+        let property = e.mem.alloc(0x20);
+        e.mem.set_u32(property, property_vtable);
+        let locked = e.mem.alloc(0xd8c);
+        e.register(TRI_STRIPS_VERTEX_COUNT, |_, _| ret(0x121));
+        e.register(GEOMETRY_GET_POSITIONS, |_, _| ret(0x5000));
+        e.register(GETTER_00460140, |_, _| ret(0x6000));
+        e.register_double(GEOMETRY_GET_DATA, |_, _| ret(0x7000));
+        e.register_double(OBJECT_GET_PROPERTY, move |_, _| ret(property));
+        e.register_double(PROPERTY_GET_TYPE, move |_, _| ret(kind));
+        e.register_double(GEOMETRY_DATA_LOCKED_POINTER, move |_, _| ret(locked));
+        e.register(OBJECT_FIELD_0X18, |_, a| {
+            ret(if a[0] == 0x0bad { 0 } else { a[0] + 0x100 })
+        });
+        e.register(TEXTURE_SET_AS_SHADER_SET, |_, a| ret(a[0] + 1));
+        e.register(LAND_TEXTURE_FLAG_BYTE, |_, a| ret(0x100 | (a[0] & 0xff)));
+        e.register(EXTERIOR_LOADER_FLAG, |_, _| ret(0x1fe));
+        e.set_global(EXTERIOR_LOADER, 0x0777u32);
+        noop(
+            e,
+            &[
+                BOUND_COMPUTE_FROM_DATA,
+                GEOMETRY_DATA_MARK_CHANGED,
+                GEOMETRY_DATA_UNLOCK,
+                0x0900_009c,
+                SHADER_PROPERTY_SET_TEXTURE_SET,
+                SHADER_PROPERTY_SET_FLAGS,
+                SHADER_PROPERTY_FREE_RENDER_PASSES,
+                UPDATE_DATA_CONSTRUCT,
+                NODE_UPDATE,
+                NODE_UPDATE_PROPERTIES,
+                LAND_FOLLOW_UP,
+            ],
+        );
+        (this, data, node, property, locked)
+    }
+
+    #[test]
+    fn update_mesh_refreshes_the_materials_of_a_quadrant() {
+        let mut e = engine();
+        let (this, data, node, property, locked) = update_world(&mut e, 9);
+        // The normals of quadrant 1 are copied into the locked data.
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let block = element(&e, normals, 1);
+        e.mem.set_u32(block, 0xabcd_0123);
+        e.mem.set_u32(block + 0xd88, 0x7777_8888);
+        set_default_texture(&mut e, data, 1, 0xa0);
+        set_layers(&mut e, data, 1, &[0xb0, 0, 0x0bad, 0, 0, 0xb5]);
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 1u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(locked), 0xabcd_0123);
+        assert_eq!(e.mem.u32(locked + 0xd88), 0x7777_8888);
+        assert_eq!(
+            arguments_of(&log, BOUND_COMPUTE_FROM_DATA),
+            vec![vec![0x6000, 0x121, 0x5000]]
+        );
+        assert_eq!(
+            arguments_of(&log, GEOMETRY_DATA_MARK_CHANGED),
+            vec![vec![0x7000, 0xf]]
+        );
+        assert_eq!(
+            arguments_of(&log, GEOMETRY_DATA_UNLOCK),
+            vec![vec![0x7000, 0]]
+        );
+        // Slot 0 from the default texture, slots 1 to 6 from the layers
+        // (a texture without a texture set gives 0).
+        let sets = arguments_of(&log, SHADER_PROPERTY_SET_TEXTURE_SET);
+        assert_eq!(
+            sets,
+            vec![
+                vec![property, 0, 0xa0 + 0x100 + 1],
+                vec![property, 1, 0xb0 + 0x100 + 1],
+                vec![property, 2, 0],
+                vec![property, 3, 0],
+                vec![property, 4, 0],
+                vec![property, 5, 0],
+                vec![property, 6, 0xb5 + 0x100 + 1],
+            ]
+        );
+        assert_eq!(
+            arguments_of(&log, SHADER_PROPERTY_SET_FLAGS),
+            vec![vec![property, 0xa0, 0xb0, 0, 0xad, 0, 0, 0xb5, 0, 0, 0]]
+        );
+        assert_eq!(
+            arguments_of(&log, SHADER_PROPERTY_FREE_RENDER_PASSES),
+            vec![vec![property]]
+        );
+        assert_eq!(arguments_of(&log, NODE_UPDATE)[0][0], node);
+        assert_eq!(arguments_of(&log, NODE_UPDATE_PROPERTIES), vec![vec![node]]);
+        assert_eq!(
+            arguments_of(&log, LAND_FOLLOW_UP),
+            vec![vec![this.addr(), 0xfe]]
+        );
+        assert_eq!(arguments_of(&log, EXTERIOR_LOADER_FLAG), vec![vec![0x0777]]);
+    }
+
+    #[test]
+    fn update_mesh_uses_the_default_land_texture_without_a_quadrant_texture() {
+        let mut e = engine();
+        let (this, data, _node, property, _locked) = update_world(&mut e, 12);
+        set_default_texture(&mut e, data, 1, 0);
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 1u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(
+            arguments_of(&log, SHADER_PROPERTY_SET_TEXTURE_SET)[0],
+            vec![property, 0, 0xdef + 0x100 + 1]
+        );
+    }
+
+    #[test]
+    fn update_mesh_leaves_other_property_types_alone() {
+        let mut e = engine();
+        let (this, _data, node, _property, locked) = update_world(&mut e, 7);
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 1u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.u32(locked), 0);
+        assert!(arguments_of(&log, SHADER_PROPERTY_SET_TEXTURE_SET).is_empty());
+        assert!(arguments_of(&log, SHADER_PROPERTY_FREE_RENDER_PASSES).is_empty());
+        // The node is still updated, with its properties.
+        assert_eq!(arguments_of(&log, NODE_UPDATE)[0][0], node);
+        assert_eq!(arguments_of(&log, NODE_UPDATE_PROPERTIES), vec![vec![node]]);
+        // A type above 12 is left alone as well.
+        let mut e = engine();
+        let (this, _data, _node, _property, _locked) = update_world(&mut e, 13);
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 1u32, 0u32]);
+        assert!(arguments_of(&end_log(&mut e), SHADER_PROPERTY_SET_FLAGS).is_empty());
+    }
+
+    #[test]
+    fn update_mesh_without_materials_only_updates_the_nodes() {
+        let mut e = engine();
+        let (this, _data, node, _property, _locked) = update_world(&mut e, 9);
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 0u32, 0u32]);
+        let log = end_log(&mut e);
+        let addresses: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        assert_eq!(
+            addresses,
+            vec![
+                CELL_GET_NODE,
+                CELL_GET_NODE,
+                UPDATE_DATA_CONSTRUCT,
+                NODE_UPDATE,
+                CELL_GET_NODE,
+                CELL_GET_NODE
+            ]
+        );
+        assert_eq!(log[3].1[0], node);
+        // The update data is constructed with zero time.
+        assert_eq!(log[2].1[1..], [0, 0, 0]);
+    }
+
+    #[test]
+    fn update_mesh_without_meshes_allocates_the_data_instead() {
+        let mut e = engine();
+        // Loaded data with vertex arrays (so the allocator returns at once)
+        // but no mesh array, and no parent cell (so no meshes are built).
+        let (this, data) = land_with_data(&mut e);
+        assert!(e.get(data, LoadedLandData::ppMesh).is_null());
+        start_log(&mut e);
+        e.call(0x0053_a090, &args![this, 1u32, 0u32]);
+        assert!(called(&mut e).is_empty());
+    }
+
+    // ---- Coordinate records, default height --------------------------------------------------
+
+    #[test]
+    fn coord_data_constructor_constructs_its_four_members() {
+        let mut e = engine();
+        let info = e.mem.alloc(0x50);
+        start_log(&mut e);
+        let result = e.call(0x0053_a510, &args![info]);
+        assert_eq!(result.u32(), info);
+        let log = end_log(&mut e);
+        assert_eq!(
+            log,
+            vec![
+                (NI_POINT3_DEFAULT_CONSTRUCT, vec![info]),
+                (NI_POINT3_DEFAULT_CONSTRUCT, vec![info + 8]),
+                (NI_POINT3_DEFAULT_CONSTRUCT, vec![info + 0x1c]),
+                (NI_POINT3_DEFAULT_CONSTRUCT, vec![info + 0x30]),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_height_comes_from_the_world_space() {
+        let mut e = engine();
+        e.register(CELL_GET_WORLD_SPACE, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(WORLD_SPACE_DEFAULT_HEIGHT, |e, a| {
+            float_ret(e.mem.f32(a[0] + 8))
+        });
+        let this = land(&mut e);
+        // No cell: -2048.
+        assert_eq!(e.call(0x0053_a550, &args![this]).f32(), -2048.0);
+        // A cell without a world space: -2048.
+        let cell = e.mem.alloc(0x20);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(cell));
+        assert_eq!(e.call(0x0053_a550, &args![this]).f32(), -2048.0);
+        // A world space: its value.
+        let world_space = e.mem.alloc(0x20);
+        e.mem.set_f32(world_space + 8, 64.5);
+        e.mem.set_u32(cell + 4, world_space);
+        assert_eq!(e.call(0x0053_a550, &args![this]).f32(), 64.5);
+    }
+
+    // ---- Layer textures and opacities ------------------------------------------------------------
+
+    #[test]
+    fn default_texture_getter_checks_the_quadrant_and_the_data() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_default_texture(&mut e, data, 2, 0x2222);
+        assert_eq!(e.call(0x0053_a5a0, &args![this, 2u32]).u32(), 0x2222);
+        assert_eq!(e.call(0x0053_a5a0, &args![this, 4u32]).u32(), 0);
+        let bare = land(&mut e);
+        assert_eq!(e.call(0x0053_a5a0, &args![bare, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn layer_texture_getter_and_setter() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_layers(&mut e, data, 3, &[0x10, 0x11, 0x12, 0x13, 0x14, 0x15]);
+        assert_eq!(e.call(0x0053_a700, &args![this, 3u32, 4u32]).u32(), 0x14);
+        assert_eq!(e.call(0x0053_a700, &args![this, 3u32, 6u32]).u32(), 0);
+        assert_eq!(e.call(0x0053_a700, &args![this, 4u32, 0u32]).u32(), 0);
+        // A quadrant without a layer array.
+        e.mem
+            .set_u32(data.addr() + LoadedLandData::pQuadTextureArray.off + 4, 0);
+        assert_eq!(e.call(0x0053_a700, &args![this, 1u32, 0u32]).u32(), 0);
+        e.call(0x0053_a760, &args![this, 3u32, 2u32, 0x99u32]);
+        assert_eq!(layers(&e, data, 3)[2], 0x99);
+        // Out of range: nothing is written.
+        e.call(0x0053_a760, &args![this, 3u32, 6u32, 0x77u32]);
+        e.call(0x0053_a760, &args![this, 4u32, 0u32, 0x77u32]);
+        assert_eq!(
+            layers(&e, data, 3),
+            vec![0x10, 0x11, 0x99, 0x13, 0x14, 0x15]
+        );
+    }
+
+    #[test]
+    fn opacity_getters() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_opacities(&mut e, data, 2, 7, &[0.25, 0.125, 0.0, 0.0, 0.0, 0.5]);
+        assert_eq!(
+            e.call(0x0053_a830, &args![this, 2u32, 7u32, 5u32]).f32(),
+            0.5
+        );
+        assert_eq!(
+            e.call(0x0053_a830, &args![this, 2u32, 7u32, 6u32]).f32(),
+            0.0
+        );
+        assert_eq!(
+            e.call(0x0053_a830, &args![this, 2u32, 0x121u32, 0u32])
+                .f32(),
+            0.0
+        );
+        assert_eq!(
+            e.call(0x0053_a830, &args![this, 4u32, 7u32, 0u32]).f32(),
+            0.0
+        );
+        // The default texture's share: 1 - sum.
+        assert_eq!(e.call(0x0053_a7a0, &args![this, 2u32, 7u32]).f32(), 0.125);
+        assert_eq!(e.call(0x0053_a7a0, &args![this, 2u32, 0x121u32]).f32(), 1.0);
+        // A quadrant without a percent array.
+        e.mem
+            .set_u32(data.addr() + LoadedLandData::ppPercentArrays.off + 12, 0);
+        assert_eq!(
+            e.call(0x0053_a830, &args![this, 3u32, 7u32, 0u32]).f32(),
+            0.0
+        );
+        assert_eq!(e.call(0x0053_a7a0, &args![this, 3u32, 7u32]).f32(), 1.0);
+    }
+
+    #[test]
+    fn opacity_setter_stores_positive_values_and_clears_the_rest() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 2u32, 0.75f32]);
+        assert_eq!(opacities(&e, data, 1, 9)[2], 0.75);
+        // Zero and negative values store 0.
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 2u32, 0.0f32]);
+        assert_eq!(opacities(&e, data, 1, 9)[2], 0.0);
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 3u32, 0.5f32]);
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 3u32, -1.0f32]);
+        assert_eq!(opacities(&e, data, 1, 9)[3], 0.0);
+        // Out of range: nothing changes.
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 6u32, 0.5f32]);
+        e.call(0x0053_a8a0, &args![this, 4u32, 9u32, 0u32, 0.5f32]);
+        e.call(0x0053_a8a0, &args![this, 1u32, 0x121u32, 0u32, 0.5f32]);
+        assert_eq!(opacities(&e, data, 1, 9)[..6], [0.0; 6]);
+        // Without a percent array a non-positive value is dropped.
+        e.mem
+            .set_u32(data.addr() + LoadedLandData::ppPercentArrays.off + 4, 0);
+        e.call(0x0053_a8a0, &args![this, 1u32, 9u32, 0u32, 0.0f32]);
+    }
+
+    #[test]
+    fn dominant_texture_follows_the_highest_opacity() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_default_texture(&mut e, data, 0, 0xd0);
+        set_layers(&mut e, data, 0, &[0x100, 0x101, 0x102, 0x103, 0x104, 0x105]);
+        // Layer 3 is the highest at vertex 5: its texture is layer 2's.
+        set_opacities(&mut e, data, 0, 5, &[0.1, 0.0, 0.5, 0.7, 0.0, 0.0]);
+        assert_eq!(e.call(0x0053_a630, &args![this, 0u32, 5u32]).u32(), 0x102);
+        // The first layer winning (or a tie) gives the default texture.
+        set_opacities(&mut e, data, 0, 6, &[0.7, 0.0, 0.0, 0.7, 0.0, 0.0]);
+        assert_eq!(e.call(0x0053_a630, &args![this, 0u32, 6u32]).u32(), 0xd0);
+        // All zero: layer 0 is the first: the default texture.
+        assert_eq!(e.call(0x0053_a630, &args![this, 0u32, 7u32]).u32(), 0xd0);
+        // Out of range.
+        assert_eq!(e.call(0x0053_a630, &args![this, 4u32, 5u32]).u32(), 0);
+        assert_eq!(e.call(0x0053_a630, &args![this, 0u32, 0x121u32]).u32(), 0);
+    }
+
+    #[test]
+    fn removing_a_layer_moves_the_others_down() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_layers(&mut e, data, 2, &[0xa, 0xb, 0xc, 0xd, 0xe, 0xf]);
+        set_opacities(
+            &mut e,
+            data,
+            2,
+            0,
+            &[0.5, 0.25, 0.125, 0.0625, 0.03125, 0.015625],
+        );
+        set_opacities(&mut e, data, 2, 288, &[1.0, 2.0, 3.0, 4.0, 5.0, 6.0]);
+        e.call(0x0053_abb0, &args![this, 2u32, 1u32]);
+        assert_eq!(layers(&e, data, 2), vec![0xa, 0xc, 0xd, 0xe, 0xf, 0]);
+        assert_eq!(
+            opacities(&e, data, 2, 0)[..6],
+            [0.5, 0.125, 0.0625, 0.03125, 0.015625, 0.0]
+        );
+        assert_eq!(
+            opacities(&e, data, 2, 288)[..6],
+            [1.0, 3.0, 4.0, 5.0, 6.0, 0.0]
+        );
+        // Out of range: nothing.
+        e.call(0x0053_abb0, &args![this, 2u32, 6u32]);
+        e.call(0x0053_abb0, &args![this, 4u32, 0u32]);
+        assert_eq!(layers(&e, data, 2), vec![0xa, 0xc, 0xd, 0xe, 0xf, 0]);
+    }
+
+    #[test]
+    fn swapping_a_layer_with_the_default_texture_recomputes_its_opacity() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_default_texture(&mut e, data, 0, 0xd0);
+        set_layers(&mut e, data, 0, &[0xa, 0xb, 0, 0, 0, 0]);
+        set_opacities(&mut e, data, 0, 3, &[0.25, 0.5, 0.0, 0.0, 0.0, 0.0]);
+        // The sum exceeds 1: the layer's opacity is 0.
+        set_opacities(&mut e, data, 0, 4, &[0.75, 0.75, 0.0, 0.0, 0.0, 0.0]);
+        e.call(0x0053_ace0, &args![this, 0u32, 1u32]);
+        assert_eq!(default_texture(&e, data, 0), 0xb);
+        assert_eq!(layers(&e, data, 0)[..2], [0xa, 0xd0]);
+        // 1 - (0.25 + 0.5) with the old value of the layer in the sum.
+        assert_eq!(opacities(&e, data, 0, 3)[1], 0.25);
+        assert_eq!(opacities(&e, data, 0, 4)[1], 0.0);
+        // Every vertex is recomputed: an empty one gets 1.
+        assert_eq!(opacities(&e, data, 0, 100)[1], 1.0);
+        // Out of range: nothing changes.
+        e.call(0x0053_ace0, &args![this, 0u32, 6u32]);
+        e.call(0x0053_ace0, &args![this, 4u32, 0u32]);
+        assert_eq!(default_texture(&e, data, 0), 0xb);
+    }
+
+    #[test]
+    fn layer_total_sums_the_opacity_of_a_textured_layer() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_layers(&mut e, data, 1, &[0xa, 0, 0, 0, 0, 0]);
+        for vertex in 0..0x121 {
+            set_opacities(&mut e, data, 1, vertex, &[0.5, 0.25]);
+        }
+        assert_eq!(e.call(0x0053_ae30, &args![this, 1u32, 0u32]).f32(), 144.5);
+        // A layer without a texture, a layer or quadrant out of range.
+        assert_eq!(e.call(0x0053_ae30, &args![this, 1u32, 1u32]).f32(), 0.0);
+        assert_eq!(e.call(0x0053_ae30, &args![this, 1u32, 6u32]).f32(), 0.0);
+        assert_eq!(e.call(0x0053_ae30, &args![this, 4u32, 0u32]).f32(), 0.0);
+    }
+
+    #[test]
+    fn weak_layers_are_dropped_and_the_strongest_becomes_the_default() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_default_texture(&mut e, data, 0, 0x400);
+        // Layer 0 holds 0.9 everywhere; layer 1 nothing; the rest are empty.
+        set_layers(&mut e, data, 0, &[0x500, 0x501, 0, 0, 0, 0]);
+        for vertex in 0..0x121 {
+            set_opacities(&mut e, data, 0, vertex, &[0.9]);
+        }
+        start_log(&mut e);
+        e.call(0x0053_a940, &args![this]);
+        let log = end_log(&mut e);
+        // The layer array is squeezed, the scratch array has 1 + 1 floats.
+        assert_eq!(layers(&e, data, 0)[1], 0);
+        assert_eq!(
+            arguments_of(&log, ALLOCATE),
+            vec![vec![8], vec![4], vec![4], vec![4]]
+        );
+        assert_eq!(arguments_of(&log, DEALLOCATE).len(), 4);
+        // The first layer has the highest total: swapped with the default.
+        assert_eq!(default_texture(&e, data, 0), 0x500);
+        assert_eq!(layers(&e, data, 0)[0], 0x400);
+        let values = opacities(&e, data, 0, 17);
+        assert!((values[0] - 0.1).abs() < 1e-6, "{values:?}");
+        // The other quadrants have nothing to do.
+        assert_eq!(default_texture(&e, data, 1), 0);
+    }
+
+    #[test]
+    fn dropping_weak_layers_keeps_a_stronger_default() {
+        let mut e = engine();
+        let (this, data) = percent_land(&mut e);
+        set_default_texture(&mut e, data, 1, 0x400);
+        set_layers(&mut e, data, 1, &[0x500, 0, 0, 0, 0, 0]);
+        // The layer's total is below 0.001 * 289: dropped.
+        set_opacities(&mut e, data, 1, 0, &[0.01]);
+        e.call(0x0053_a940, &args![this]);
+        assert_eq!(layers(&e, data, 1), vec![0; 6]);
+        assert_eq!(default_texture(&e, data, 1), 0x400);
+        // Without loaded data nothing happens.
+        let bare = land(&mut e);
+        e.call(0x0053_a940, &args![bare]);
+    }
+
+    /// Float helpers for the doubles of the layer merge.
+    fn merge_doubles(e: &mut Engine) {
+        // The texture groups are the top nibble of the 16-bit value: textures
+        // of one group can be merged (the "differ" call returns 0).
+        e.register(TEXTURES_DIFFER, |_, a| {
+            ret(((a[0] & 0xf000) != (a[1] & 0xf000)) as u32)
+        });
+        e.register(FLOAT_MAX, |_, a| {
+            float_ret(f32::from_bits(a[0]).max(f32::from_bits(a[1])))
+        });
+        e.register(FLOAT_MIN, |_, a| {
+            float_ret(f32::from_bits(a[0]).min(f32::from_bits(a[1])))
+        });
+    }
+
+    #[test]
+    fn mergeable_layers_are_combined_and_the_opacities_normalized() {
+        let mut e = engine();
+        merge_doubles(&mut e);
+        let (this, data) = percent_land(&mut e);
+        // Quadrant 0: layers 0 and 1 are of one group, the default is not.
+        set_default_texture(&mut e, data, 0, 0x1000);
+        set_layers(&mut e, data, 0, &[0x2000, 0x2010, 0, 0, 0, 0]);
+        set_opacities(&mut e, data, 0, 1, &[0.25, 0.25]);
+        set_opacities(&mut e, data, 0, 2, &[0.75, 0.75]);
+        // Quadrant 1: layer 0 is of the default texture's group.
+        set_default_texture(&mut e, data, 1, 0x1100);
+        set_layers(&mut e, data, 1, &[0x1200, 0, 0, 0, 0, 0]);
+        set_opacities(&mut e, data, 1, 1, &[0.5]);
+        start_log(&mut e);
+        e.call(0x0053_aeb0, &args![this]);
+        let log = end_log(&mut e);
+        assert!(called_contains(&log, TEXTURES_DIFFER));
+        // Layer 1 was merged into layer 0 and removed.
+        assert_eq!(layers(&e, data, 0), vec![0x2000, 0, 0, 0, 0, 0]);
+        // Vertex 1: the opacities moved up and the default share is
+        // 1 - 0.5 = 0.5.
+        assert_eq!(opacities(&e, data, 0, 1)[..3], [0.5, 0.5, 0.0]);
+        // Vertex 2: merged 1.5, share 0 (clamped), the others divided by
+        // their sum.
+        assert_eq!(opacities(&e, data, 0, 2)[..3], [0.0, 1.0, 0.0]);
+        // An empty vertex: all of it goes to the default texture.
+        assert_eq!(opacities(&e, data, 0, 3)[..3], [1.0, 0.0, 0.0]);
+        // Quadrant 1: the layer shares the default's group: dropped.
+        assert_eq!(layers(&e, data, 1), vec![0; 6]);
+        assert_eq!(opacities(&e, data, 1, 1)[..2], [1.0, 0.0]);
+    }
+
+    /// Whether the call log has a call to `address`.
+    fn called_contains(log: &[(u32, Vec<u32>)], address: u32) -> bool {
+        log.iter().any(|(a, _)| *a == address)
+    }
+
+    // ---- Third session: coordinate and normal helpers ---------------------------------
+
+    fn v3(e: &Engine, at: u32) -> [f32; 3] {
+        [e.mem.f32(at), e.mem.f32(at + 4), e.mem.f32(at + 8)]
+    }
+
+    fn put_v3(e: &mut Engine, at: u32, value: [f32; 3]) {
+        for (i, component) in value.iter().enumerate() {
+            e.mem.set_f32(at + 4 * i as u32, *component);
+        }
+    }
+
+    fn normalize_v3(value: [f32; 3]) -> [f32; 3] {
+        let length = (value[0] * value[0] + value[1] * value[1] + value[2] * value[2]).sqrt();
+        if length > 0.0 {
+            [value[0] / length, value[1] / length, value[2] / length]
+        } else {
+            value
+        }
+    }
+
+    /// Doubles for the vector arithmetic the coordinate code calls.
+    fn vector_doubles(e: &mut Engine) {
+        e.register(NI_POINT3_ADD, |e, a| {
+            let (p, q) = (v3(e, a[0]), v3(e, a[2]));
+            put_v3(e, a[1], [p[0] + q[0], p[1] + q[1], p[2] + q[2]]);
+            ret(a[1])
+        });
+        e.register(NI_POINT3_SUBTRACT, |e, a| {
+            let (p, q) = (v3(e, a[0]), v3(e, a[2]));
+            put_v3(e, a[1], [p[0] - q[0], p[1] - q[1], p[2] - q[2]]);
+            ret(a[1])
+        });
+        e.register(NI_POINT3_ADD_IN_PLACE, |e, a| {
+            let (p, q) = (v3(e, a[0]), v3(e, a[1]));
+            put_v3(e, a[0], [p[0] + q[0], p[1] + q[1], p[2] + q[2]]);
+            Ret::default()
+        });
+        e.register(NI_POINT3_SUBTRACT_IN_PLACE, |e, a| {
+            let (p, q) = (v3(e, a[0]), v3(e, a[1]));
+            put_v3(e, a[0], [p[0] - q[0], p[1] - q[1], p[2] - q[2]]);
+            Ret::default()
+        });
+        e.register(NI_POINT3_SCALE_BY, |e, a| {
+            let (s, q) = (f32::from_bits(a[1]), v3(e, a[2]));
+            put_v3(e, a[0], [s * q[0], s * q[1], s * q[2]]);
+            ret(a[0])
+        });
+        e.register(NI_POINT3_TIMES_SCALAR, |e, a| {
+            let (p, s) = (v3(e, a[0]), f32::from_bits(a[2]));
+            put_v3(e, a[1], [s * p[0], s * p[1], s * p[2]]);
+            ret(a[1])
+        });
+        e.register(NI_POINT3_CROSS, |e, a| {
+            let (p, q) = (v3(e, a[0]), v3(e, a[2]));
+            put_v3(
+                e,
+                a[1],
+                [
+                    p[1] * q[2] - p[2] * q[1],
+                    p[2] * q[0] - p[0] * q[2],
+                    p[0] * q[1] - p[1] * q[0],
+                ],
+            );
+            ret(a[1])
+        });
+        e.register(NI_POINT3_LENGTH, |e, a| {
+            let p = v3(e, a[0]);
+            float_ret((p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt())
+        });
+        e.register(NI_POINT3_UNIT_VECTOR, |e, a| {
+            let p = normalize_v3(v3(e, a[0]));
+            put_v3(e, a[0], p);
+            Ret::default()
+        });
+        e.register(NI_POINT3_NORMALIZE, |e, a| {
+            let p = normalize_v3(v3(e, a[0]));
+            put_v3(e, a[0], p);
+            Ret::default()
+        });
+        e.register(NI_POINT3_UNITIZE_VECTORS, |e, a| {
+            for i in 0..a[1] {
+                let at = a[0] + i * a[2];
+                let p = normalize_v3(v3(e, at));
+                put_v3(e, at, p);
+            }
+            Ret::default()
+        });
+        e.register(NI_POINT2_SUBTRACT, |e, a| {
+            let x = e.mem.f32(a[0]) - e.mem.f32(a[2]);
+            let y = e.mem.f32(a[0] + 4) - e.mem.f32(a[2] + 4);
+            e.mem.set_f32(a[1], x);
+            e.mem.set_f32(a[1] + 4, y);
+            ret(a[1])
+        });
+        e.register(NI_POINT2_LENGTH, |e, a| {
+            float_ret((e.mem.f32(a[0]).powi(2) + e.mem.f32(a[0] + 4).powi(2)).sqrt())
+        });
+        e.register(FLOAT_MODULO, |_, a| {
+            float_ret(f32::from_bits(a[0]) % f32::from_bits(a[1]))
+        });
+        e.register(FLOAT_TO_INT, |_, a| ret(f32::from_bits(a[0]) as i32 as u32));
+        e.register(NI_POINT3_SAME_XY, |_, _| ret(0));
+    }
+
+    /// A land at cell (0, 0) with loaded data: the vertex `v` of every
+    /// quadrant is at `(128 * (v % 17), 128 * (v / 17), 0)`, every normal is
+    /// (0, 0, 1), the "normal set" flags are clear, the land is marked
+    /// loaded.
+    fn terrain(e: &mut Engine) -> (Ptr<TESObjectLAND>, Ptr<LoadedLandData>) {
+        let (this, data) = percent_land(e);
+        e.set(this, TESObjectLAND::Data, FLAG_LOADED);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        for quadrant in 0..4u32 {
+            let block = element(e, vertices, quadrant);
+            let normal_block = element(e, normals, quadrant);
+            for vertex in 0..0x121u32 {
+                put_v3(
+                    e,
+                    block + 12 * vertex,
+                    [
+                        128.0 * (vertex % 17) as f32,
+                        128.0 * (vertex / 17) as f32,
+                        0.0,
+                    ],
+                );
+                put_v3(e, normal_block + 12 * vertex, [0.0, 0.0, 1.0]);
+            }
+        }
+        (this, data)
+    }
+
+    fn normal_of(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32, vertex: u32) -> [f32; 3] {
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        v3(e, element(e, normals, quadrant) + 12 * vertex)
+    }
+
+    fn set_normal(
+        e: &mut Engine,
+        data: Ptr<LoadedLandData>,
+        quadrant: u32,
+        vertex: u32,
+        value: [f32; 3],
+    ) {
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let at = element(e, normals, quadrant) + 12 * vertex;
+        put_v3(e, at, value);
+    }
+
+    fn normal_flag(e: &Engine, data: Ptr<LoadedLandData>, quadrant: u32, vertex: u32) -> u8 {
+        let set = e.get(data, LoadedLandData::ppNormalsSet);
+        e.mem.u8(element(e, set, quadrant) + vertex)
+    }
+
+    fn set_normal_flag(
+        e: &mut Engine,
+        data: Ptr<LoadedLandData>,
+        quadrant: u32,
+        vertex: u32,
+        on: u8,
+    ) {
+        let set = e.get(data, LoadedLandData::ppNormalsSet);
+        let at = element(e, set, quadrant) + vertex;
+        e.mem.set_u8(at, on);
+    }
+
+    /// Two floats in memory.
+    fn position(e: &mut Engine, x: f32, y: f32) -> Ptr {
+        let at = e.mem.alloc(8);
+        e.mem.set_f32(at, x);
+        e.mem.set_f32(at + 4, y);
+        Ptr::new(at)
+    }
+
+    /// A `CoordData` the tests fill in.
+    fn coord_info(e: &mut Engine) -> Ptr<CoordData> {
+        e.new_object()
+    }
+
+    // ---- World position of a vertex ----------------------------------------------------
+
+    #[test]
+    fn vertex_world_position_from_the_cell_and_quadrant() {
+        let mut e = engine();
+        let (this, data) = terrain(&mut e);
+        e.set(data, LoadedLandData::iCellX, 2);
+        e.set(data, LoadedLandData::iCellY, -1);
+        let out = e.mem.alloc(12);
+        let result = e.call(0x0053_b450, &args![this, out, 3u32, 20u32, 0u32, 0u32]);
+        assert_eq!(result.u32(), out);
+        // 2 * 4096 + 2048 + 3 * 128, -4096 + 2048 + 128.
+        assert_eq!(v3(&e, out), [10624.0, -1920.0, 0.0]);
+        // Cell numbers given by pointer replace the land's.
+        let (cell_x, cell_y) = (e.mem.alloc(4), e.mem.alloc(4));
+        e.mem.set_i32(cell_x, 5);
+        e.mem.set_i32(cell_y, 6);
+        e.call(0x0053_b450, &args![this, out, 0u32, 0u32, cell_x, cell_y]);
+        assert_eq!(v3(&e, out), [20480.0, 24576.0, 0.0]);
+    }
+
+    // ---- GetCoordData ----------------------------------------------------------------------
+
+    #[test]
+    fn coord_data_needs_loaded_arrays_and_a_position_in_the_cell() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let inside = position(&mut e, 100.0, 100.0);
+        let info = coord_info(&mut e);
+        // No loaded data.
+        let bare = land(&mut e);
+        assert_eq!(
+            e.call(0x0053_b550, &args![bare, info, inside, 0u32]).u32() & 0xff,
+            0
+        );
+        // Loaded data without vertices and meshes.
+        let (this, data) = terrain(&mut e);
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        e.set(data, LoadedLandData::ppVertices, Ptr::NULL);
+        assert_eq!(
+            e.call(0x0053_b550, &args![this, info, inside, 0u32]).u32() & 0xff,
+            0
+        );
+        e.set(data, LoadedLandData::ppVertices, vertices);
+        // Outside the cell on every side; the edges belong to the cell.
+        for (x, y, expected) in [
+            (-1.0, 100.0, 0),
+            (4097.0, 100.0, 0),
+            (100.0, -1.0, 0),
+            (100.0, 4097.0, 0),
+            (4096.0, 4096.0, 1),
+            (0.0, 0.0, 1),
+        ] {
+            let at = position(&mut e, x, y);
+            let result = e.call(0x0053_b550, &args![this, info, at, 0u32]).u32() & 0xff;
+            assert_eq!(result, expected, "{x} {y}");
+        }
+    }
+
+    #[test]
+    fn coord_data_of_a_position_between_vertices() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        let at = position(&mut e, 300.0, 200.0);
+        let info = coord_info(&mut e);
+        assert_eq!(
+            e.call(0x0053_b550, &args![this, info, at, 0u32]).u32() & 0xff,
+            1
+        );
+        assert_eq!(e.get(info, CoordData::CellOffsetX), 300.0);
+        assert_eq!(e.get(info, CoordData::CellOffsetY), 200.0);
+        assert_eq!(e.get(info, CoordData::Quadrant), 0);
+        assert_eq!(e.get(info, CoordData::QuadrantCopy), 0);
+        assert_eq!(e.get(info, CoordData::QuadrantOffsetX), 300.0);
+        assert_eq!(e.get(info, CoordData::BlockColumn), 2);
+        assert_eq!(e.get(info, CoordData::BlockRow), 1);
+        assert_eq!(e.get(info, CoordData::BlockOffsetX), 44.0);
+        assert_eq!(e.get(info, CoordData::BlockOffsetY), 72.0);
+        // An odd block (2 + 1): the first triangle.
+        assert_eq!(e.get(info, CoordData::OddBlock), 1);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 0);
+        assert_eq!(e.get(info, CoordData::TriangleVertex0), 20);
+        assert_eq!(e.get(info, CoordData::TriangleVertex1), 36);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 19);
+        // The nearest of the three, and its position plus the cell centre.
+        assert_eq!(e.get(info, CoordData::NearestVertex), 19);
+        assert_eq!(
+            v3(&e, info.addr() + CoordData::VertexPositionX.off),
+            [2304.0, 2176.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn coord_data_picks_the_nearest_of_the_triangle() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        // The code adds the cell centre to each vertex and measures from the
+        // position: vertex 36 at the origin is the closest.
+        let vertices = e.get(data, LoadedLandData::ppVertices);
+        let at = element(&e, vertices, 0) + 12 * 36;
+        put_v3(&mut e, at, [0.0, 0.0, 0.0]);
+        let at = position(&mut e, 300.0, 200.0);
+        let info = coord_info(&mut e);
+        e.call(0x0053_b550, &args![this, info, at, 0u32]);
+        assert_eq!(e.get(info, CoordData::NearestVertex), 36);
+        assert_eq!(
+            v3(&e, info.addr() + CoordData::VertexPositionX.off),
+            [2048.0, 2048.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn coord_data_of_a_position_on_the_grid() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        let at = position(&mut e, 256.0, 128.0);
+        let info = coord_info(&mut e);
+        assert_eq!(
+            e.call(0x0053_b550, &args![this, info, at, 0u32]).u32() & 0xff,
+            1
+        );
+        // An exact multiple belongs to the block below: (2 - 1, 1 - 1).
+        assert_eq!(e.get(info, CoordData::BlockColumn), 1);
+        assert_eq!(e.get(info, CoordData::BlockRow), 0);
+        assert_eq!(e.get(info, CoordData::BlockOffsetX), 128.0);
+        assert_eq!(e.get(info, CoordData::BlockOffsetY), 128.0);
+        assert_eq!(e.get(info, CoordData::OddBlock), 1);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 1);
+        assert_eq!(e.get(info, CoordData::TriangleVertex0), 2);
+        assert_eq!(e.get(info, CoordData::TriangleVertex1), 18);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 19);
+        // On the grid the vertex is computed: row 1, column 2.
+        assert_eq!(e.get(info, CoordData::NearestVertex), 19);
+    }
+
+    #[test]
+    fn coord_data_of_an_even_block() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        // Block (1, 1): even; x offset 30, y offset 10: the first triangle.
+        let at = position(&mut e, 158.0, 138.0);
+        let info = coord_info(&mut e);
+        e.call(0x0053_b550, &args![this, info, at, 0u32]);
+        assert_eq!(e.get(info, CoordData::OddBlock), 0);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 0);
+        assert_eq!(e.get(info, CoordData::TriangleVertex0), 18);
+        assert_eq!(e.get(info, CoordData::TriangleVertex1), 36);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 19);
+        // The same block with y above x: the second triangle.
+        let at = position(&mut e, 138.0, 158.0);
+        e.call(0x0053_b550, &args![this, info, at, 0u32]);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 1);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 35);
+        // An odd block (0, 1): offsets 10 + 42 are below 128, the first
+        // triangle; 100 + 42 above, the second.
+        let at = position(&mut e, 10.0, 170.0);
+        e.call(0x0053_b550, &args![this, info, at, 0u32]);
+        assert_eq!(e.get(info, CoordData::OddBlock), 1);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 0);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 17);
+        let at = position(&mut e, 100.0, 170.0);
+        e.call(0x0053_b550, &args![this, info, at, 0u32]);
+        assert_eq!(e.get(info, CoordData::SecondTriangle), 1);
+        assert_eq!(e.get(info, CoordData::TriangleVertex2), 35);
+    }
+
+    #[test]
+    fn coord_data_can_look_up_the_vertex_position_again() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        let at = position(&mut e, 256.0, 128.0);
+        let info = coord_info(&mut e);
+        assert_eq!(
+            e.call(0x0053_b550, &args![this, info, at, 1u32]).u32() & 0xff,
+            1
+        );
+        // The vertex position (2304, 2176) is in quadrant 1 + 2 * 1.
+        assert_eq!(e.get(info, CoordData::Quadrant), 3);
+        assert_eq!(e.get(info, CoordData::CellOffsetX), 2304.0);
+    }
+
+    #[test]
+    fn texture_at_a_position() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        // The lookup recurses once: the vertex position (2304, 2176) is in
+        // quadrant 3, where the grid vertex is 19 again.
+        set_default_texture(&mut e, data, 3, 0xd0);
+        set_layers(&mut e, data, 3, &[0x100, 0x101, 0x102, 0, 0, 0]);
+        set_opacities(&mut e, data, 3, 19, &[0.1, 0.6, 0.2]);
+        let at = position(&mut e, 256.0, 128.0);
+        assert_eq!(e.call(0x0053_a5e0, &args![this, at]).u32(), 0x100);
+        // Outside the cell.
+        let outside = position(&mut e, -5.0, 128.0);
+        assert_eq!(e.call(0x0053_a5e0, &args![this, outside]).u32(), 0);
+    }
+
+    // ---- Grass parameters -----------------------------------------------------------------------
+
+    /// Doubles for the grass builder: settings, lists, form getters.
+    fn grass_doubles(e: &mut Engine) {
+        e.register(SETTING_GET_FLOAT_ADDRESS, |_, a| ret(a[0] + 4));
+        e.register(SETTING_GET_INT_ADDRESS, |_, a| ret(a[0] + 4));
+        e.register(LIST_FIRST_POSITION, |_, a| ret(a[0] + 0x20));
+        e.register(LIST_NEXT_POSITION, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(GRASS_RECORD_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(GRASS_FORM_NAME, |_, _| ret(0x1234));
+        e.register(0x0900_01b0, |_, _| float_ret(1.5));
+        e.register(0x0900_01b8, |_, _| float_ret(2.5));
+        e.register(0x0900_01c0, |_, _| float_ret(3.25));
+        e.register(0x0900_01c8, |_, _| float_ret(4.5));
+        e.register(0x0900_01d0, |_, _| ret(1));
+        e.register(0x0900_01d8, |_, _| ret(3));
+        e.register(0x0900_01e0, |_, _| ret(2));
+        e.register(0x0900_0180, |_, _| ret(100));
+        e.set_global(GRASS_DENSITY_SETTING + 4, 3.5f32);
+    }
+
+    /// A grass form with the given id.
+    fn grass_form(e: &mut Engine, id: u32) -> u32 {
+        let vtable = e.mem.alloc(0x200);
+        for slot in [0x1b0u32, 0x1b8, 0x1c0, 0x1c8, 0x1d0, 0x1d8, 0x1e0, 0x180] {
+            e.mem.set_u32(vtable + slot, 0x0900_0000 + slot);
+        }
+        let form = e.mem.alloc(0x20);
+        e.mem.set_u32(form, vtable);
+        e.mem.set_u32(form + 0xc, id);
+        form
+    }
+
+    /// A land texture whose grass list holds `forms`.
+    fn grass_texture(e: &mut Engine, forms: &[u32]) -> u32 {
+        let texture = e.mem.alloc(0x40);
+        let mut node = texture + 0x20;
+        for (i, form) in forms.iter().enumerate() {
+            e.mem.set_u32(node, *form);
+            if i + 1 < forms.len() {
+                let next = e.mem.alloc(8);
+                e.mem.set_u32(node + 4, next);
+                node = next;
+            }
+        }
+        texture
+    }
+
+    #[test]
+    fn grass_records_are_built_for_the_default_texture_and_the_layers() {
+        let mut e = engine();
+        grass_doubles(&mut e);
+        // A threshold above 1 is 0.9; at most 3 forms per texture; a step of
+        // 8 gives the single vertex (8, 8) = key 144.
+        e.set_global(GRASS_SETTING_THRESHOLD + 4, 2.0f32);
+        e.set_global(GRASS_SETTING_MAXIMUM + 4, 2i32);
+        e.set_global(GRASS_SETTING_STEP + 4, 8i32);
+        let (this, data) = terrain(&mut e);
+        let (form1, form2, form3) = (
+            grass_form(&mut e, 0x111),
+            grass_form(&mut e, 0x222),
+            grass_form(&mut e, 0x333),
+        );
+        // Quadrant 0: the default texture has two forms; quadrant 1: layer 0
+        // is a texture with one form and a strong opacity around the vertex.
+        let default = grass_texture(&mut e, &[form1, form2]);
+        set_default_texture(&mut e, data, 0, default);
+        let layer = grass_texture(&mut e, &[form3]);
+        set_layers(&mut e, data, 1, &[layer]);
+        for offset in GRASS_SAMPLE_OFFSETS {
+            set_opacities(&mut e, data, 1, (144 + offset) as u32, &[0.95]);
+        }
+        let sets = recorder::<(u32, u32, u32)>();
+        let sink = sets.clone();
+        e.register_double(GRASS_MAP_SET_AT, move |_, a| {
+            sink.borrow_mut().push((a[0], a[1], a[2]));
+            Ret::default()
+        });
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_bc10, &args![this]).u32() & 0xff, 1);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.i32(GRASS_STEP), 8);
+        let sets = sets.borrow();
+        assert_eq!(sets.len(), 2);
+        assert_eq!(sets[0].0, data.addr() + 0x54);
+        assert_eq!(sets[1].0, data.addr() + 0x54 + 16);
+        assert_eq!((sets[0].1, sets[1].1), (144, 144));
+        // The tables of the quadrants without grass are freed.
+        let freed: Vec<u32> = arguments_of(&log, DEALLOCATE)
+            .iter()
+            .map(|a| a[0])
+            .collect();
+        assert_eq!(freed.len(), 2);
+        assert!(!freed.contains(&sets[0].2) && !freed.contains(&sets[1].2));
+        // Quadrant 0: two records, then 0.
+        let table = sets[0].2;
+        let (first, second) = (e.mem.u32(table), e.mem.u32(table + 4));
+        assert_eq!(e.mem.u32(table + 8), 0);
+        for (record, id) in [(first, 0x111), (second, 0x222)] {
+            assert_eq!(e.mem.u32(record), 0x1234);
+            assert_eq!(e.mem.u32(record + 4), id);
+            assert_eq!(e.mem.f32(record + 0x14), 3.5);
+            assert_eq!(e.mem.f32(record + 0x18), 4.5);
+            assert_eq!(e.mem.f32(record + 0x10), 3.25);
+            assert_eq!(e.mem.f32(record + 8), 1.5);
+            assert_eq!(e.mem.f32(record + 0xc), 2.5);
+            assert_eq!(
+                (
+                    e.mem.u8(record + 0x1c),
+                    e.mem.u8(record + 0x1d),
+                    e.mem.u8(record + 0x1e)
+                ),
+                (1, 3, 2)
+            );
+            // The percentage 100 gives 1.0 for the nine samples that pass.
+            assert_eq!(floats(&e, record + 0x20, 9), vec![1.0; 9]);
+        }
+        // Quadrant 1: one record from the layer.
+        let table = sets[1].2;
+        let record = e.mem.u32(table);
+        assert_eq!(e.mem.u32(record + 4), 0x333);
+        assert_eq!(floats(&e, record + 0x20, 9), vec![1.0; 9]);
+        assert_eq!(e.mem.u32(table + 4), 0);
+    }
+
+    #[test]
+    fn grass_samples_that_average_below_the_threshold_are_cleared() {
+        let mut e = engine();
+        grass_doubles(&mut e);
+        e.set_global(GRASS_SETTING_THRESHOLD + 4, 0.5f32);
+        e.set_global(GRASS_SETTING_MAXIMUM + 4, 0i32);
+        e.set_global(GRASS_SETTING_STEP + 4, 8i32);
+        let (this, data) = terrain(&mut e);
+        let form = grass_form(&mut e, 0x444);
+        // Layer 0 of quadrant 2 passes only at the vertex itself: one sample
+        // of nine, the mean 1/9 is below the threshold.
+        let layer = grass_texture(&mut e, &[form]);
+        set_layers(&mut e, data, 2, &[layer]);
+        set_opacities(&mut e, data, 2, 144, &[0.9]);
+        let sets = recorder::<u32>();
+        let sink = sets.clone();
+        e.register_double(GRASS_MAP_SET_AT, move |_, a| {
+            sink.borrow_mut().push(a[2]);
+            Ret::default()
+        });
+        e.call(0x0053_bc10, &args![this]);
+        let table = sets.borrow()[0];
+        let record = e.mem.u32(table);
+        assert_eq!(e.mem.u32(record + 4), 0x444);
+        assert_eq!(floats(&e, record + 0x20, 9), vec![0.0; 9]);
+    }
+
+    #[test]
+    fn grass_step_defaults_to_two() {
+        let mut e = engine();
+        grass_doubles(&mut e);
+        e.set_global(GRASS_SETTING_THRESHOLD + 4, 0.5f32);
+        e.set_global(GRASS_SETTING_MAXIMUM + 4, 0i32);
+        e.set_global(GRASS_SETTING_STEP + 4, 3i32);
+        let (this, _data) = terrain(&mut e);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_bc10, &args![this]).u32() & 0xff, 1);
+        let log = end_log(&mut e);
+        assert_eq!(e.mem.i32(GRASS_STEP), 2);
+        // Rows and columns 2, 6, 10 and 14 of four quadrants.
+        assert_eq!(arguments_of(&log, ALLOCATE).len(), 64);
+        assert_eq!(arguments_of(&log, DEALLOCATE).len(), 64);
+        // Without loaded data nothing is built.
+        let bare = land(&mut e);
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_bc10, &args![bare]).u32() & 0xff, 0);
+        assert!(called(&mut e).is_empty());
+    }
+
+    #[test]
+    fn grass_helpers() {
+        let mut e = engine();
+        e.register(SETTING_GET_FLOAT_ADDRESS, |_, a| ret(a[0] + 4));
+        e.set_global(GRASS_DENSITY_SETTING + 4, 7.25f32);
+        assert_eq!(e.call(0x0053_ca40, &args![]).f32(), 7.25);
+        // The record constructor returns its record.
+        e.register(GRASS_RECORD_CONSTRUCT, |_, a| ret(a[0] + 1));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_ca60, &args![0x5000u32]).u32(), 0x5000);
+        assert_eq!(called(&mut e), vec![GRASS_RECORD_CONSTRUCT]);
+        // The grass table lookup.
+        let (this, data) = terrain(&mut e);
+        e.register(GRASS_MAP_GET_AT, |e, a| {
+            if a[1] == 144 {
+                e.mem.set_u32(a[2], 0xbeef);
+                ret(1)
+            } else {
+                ret(0)
+            }
+        });
+        start_log(&mut e);
+        assert_eq!(
+            e.call(0x0053_ca80, &args![this, 2i32, 144i32]).u32(),
+            0xbeef
+        );
+        let log = end_log(&mut e);
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].0, GRASS_MAP_GET_AT);
+        assert_eq!(log[0].1[..2], [data.addr() + 0x54 + 32, 144]);
+        // Not found, quadrant or key out of range, no data.
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_ca80, &args![this, 2i32, 145i32]).u32(), 0);
+        assert_eq!(e.call(0x0053_ca80, &args![this, 4i32, 144i32]).u32(), 0);
+        assert_eq!(e.call(0x0053_ca80, &args![this, 0i32, 0x11_i32]).u32(), 0);
+        assert_eq!(e.call(0x0053_ca80, &args![this, 0i32, 0x10f_i32]).u32(), 0);
+        assert_eq!(e.call(0x0053_ca80, &args![this, 0i32, 0x10e_i32]).u32(), 0);
+        // Only 145 and 0x10e passed the range check (the top-level calls of
+        // the other three are logged as well).
+        let looked_up = arguments_of(&end_log(&mut e), GRASS_MAP_GET_AT);
+        assert_eq!(looked_up.len(), 2);
+        let bare = land(&mut e);
+        assert_eq!(e.call(0x0053_ca80, &args![bare, 0i32, 144i32]).u32(), 0);
+    }
+
+    // ---- Vector helpers --------------------------------------------------------------------------
+
+    #[test]
+    fn unit_cross_product() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (a, b, out) = (e.mem.alloc(12), e.mem.alloc(12), e.mem.alloc(12));
+        put_v3(&mut e, a, [3.0, 0.0, 0.0]);
+        put_v3(&mut e, b, [0.0, 2.0, 0.0]);
+        let result = e.call(0x0053_d1a0, &args![a, out, b]);
+        assert_eq!(result.u32(), out);
+        assert_eq!(v3(&e, out), [0.0, 0.0, 1.0]);
+        // The other order is the opposite.
+        e.call(0x0053_d1a0, &args![b, out, a]);
+        assert_eq!(v3(&e, out), [0.0, 0.0, -1.0]);
+        // Parallel vectors give the zero vector.
+        put_v3(&mut e, b, [6.0, 0.0, 0.0]);
+        put_v3(&mut e, out, [9.0, 9.0, 9.0]);
+        e.call(0x0053_d1a0, &args![a, out, b]);
+        assert_eq!(v3(&e, out), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn vector_scaling_by_the_inverse_length() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (a, out) = (e.mem.alloc(12), e.mem.alloc(12));
+        put_v3(&mut e, a, [2.0, 4.0, 6.0]);
+        assert_eq!(e.call(0x0053_d280, &args![a, out, 2.0f32]).u32(), out);
+        assert_eq!(v3(&e, out), [1.0, 2.0, 3.0]);
+    }
+
+    // ---- The normal at a position -------------------------------------------------------------
+
+    /// A land and a `CoordData` describing the triangle (19, 20, 36) of
+    /// quadrant 0 with the nearest vertex 19; the vertex normals are 19:
+    /// (1, 0, 0), 20: (0, 1, 0), 36: (0, 0, 1).
+    fn normal_world(e: &mut Engine, odd: u8, second: u8) -> (Ptr<TESObjectLAND>, Ptr<CoordData>) {
+        vector_doubles(e);
+        let (this, data) = terrain(e);
+        set_normal(e, data, 0, 19, [1.0, 0.0, 0.0]);
+        set_normal(e, data, 0, 20, [0.0, 1.0, 0.0]);
+        set_normal(e, data, 0, 36, [0.0, 0.0, 1.0]);
+        let info = coord_info(e);
+        e.set(info, CoordData::Quadrant, 0);
+        e.set(info, CoordData::NearestVertex, 19);
+        e.set(info, CoordData::TriangleVertex2, 19);
+        e.set(info, CoordData::TriangleVertex0, 20);
+        e.set(info, CoordData::TriangleVertex1, 36);
+        e.set(info, CoordData::OddBlock, odd);
+        e.set(info, CoordData::SecondTriangle, second);
+        (this, info)
+    }
+
+    #[test]
+    fn position_and_normal_on_a_vertex() {
+        let mut e = engine();
+        let (this, info) = normal_world(&mut e, 0, 0);
+        let compared = recorder::<([f32; 3], [f32; 3])>();
+        let sink = compared.clone();
+        e.register_double(NI_POINT3_SAME_XY, move |e, a| {
+            sink.borrow_mut().push((v3(e, a[0]), v3(e, a[1])));
+            ret(1)
+        });
+        let (position, normal) = (e.mem.alloc(12), e.mem.alloc(12));
+        assert_eq!(
+            e.call(0x0053_caf0, &args![this, info, position, normal])
+                .u32()
+                & 0xff,
+            1
+        );
+        // The vertex's normal is both results.
+        assert_eq!(v3(&e, position), [1.0, 0.0, 0.0]);
+        assert_eq!(v3(&e, normal), [1.0, 0.0, 0.0]);
+        // The vertex position plus the cell centre is compared with the
+        // grid position.
+        assert_eq!(
+            *compared.borrow(),
+            vec![([2304.0, 2176.0, 0.0], [256.0, 128.0, 0.0])]
+        );
+    }
+
+    #[test]
+    fn interpolated_normal_depends_on_the_block_flags() {
+        // On the grid the weights are 0, so each case gives one vertex normal.
+        for (odd, second, expected, face) in [
+            (0u8, 0u8, [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]),
+            (0, 1, [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]),
+            (1, 0, [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]),
+            (1, 1, [0.0, 1.0, 0.0], [0.0, 0.0, -1.0]),
+        ] {
+            let mut e = engine();
+            let (this, info) = normal_world(&mut e, odd, second);
+            let (position, normal) = (e.mem.alloc(12), e.mem.alloc(12));
+            assert_eq!(
+                e.call(0x0053_caf0, &args![this, info, position, normal])
+                    .u32()
+                    & 0xff,
+                1
+            );
+            assert_eq!(v3(&e, position), expected, "{odd} {second}");
+            assert_eq!(v3(&e, normal), face, "{odd} {second}");
+        }
+    }
+
+    #[test]
+    fn fractional_position_weighs_the_vertex_normals() {
+        let mut e = engine();
+        let (this, info) = normal_world(&mut e, 0, 0);
+        // A grid position 32 units from the block corner in x and 64 in y:
+        // u = 0.25, v = 0.5. Vertex 19 sits at (256, 128).
+        e.register(FLOAT_MODULO, |_, a| {
+            // fmod(x, 128): the test position is 32 / 64.
+            float_ret(if f32::from_bits(a[0]) == 256.0 {
+                32.0
+            } else {
+                64.0
+            })
+        });
+        let (position, normal) = (e.mem.alloc(12), e.mem.alloc(12));
+        e.call(0x0053_caf0, &args![this, info, position, normal]);
+        // ((1 - u) * b + u * a) * (1 - v) + v * c, normalized.
+        let weighted = [0.25 * 0.5, 0.75 * 0.5, 0.5];
+        let expected = normalize_v3(weighted);
+        let actual = v3(&e, position);
+        for i in 0..3 {
+            assert!(
+                (actual[i] - expected[i]).abs() < 1e-6,
+                "{actual:?} {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn position_and_normal_of_a_world_position() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        set_normal(&mut e, data, 0, 19, [0.0, 1.0, 0.0]);
+        e.register(NI_POINT3_SAME_XY, |_, _| ret(1));
+        let (out_position, out_normal) = (e.mem.alloc(12), e.mem.alloc(12));
+        let at = position(&mut e, 256.0, 128.0);
+        assert_eq!(
+            e.call(0x0053_d2e0, &args![this, at, out_position, out_normal])
+                .u32()
+                & 0xff,
+            1
+        );
+        assert_eq!(v3(&e, out_position), [0.0, 1.0, 0.0]);
+        assert_eq!(v3(&e, out_normal), [0.0, 1.0, 0.0]);
+        // Outside the land: false and nothing written.
+        let outside = position(&mut e, -50.0, 128.0);
+        put_v3(&mut e, out_position, [9.0, 9.0, 9.0]);
+        assert_eq!(
+            e.call(0x0053_d2e0, &args![this, outside, out_position, out_normal])
+                .u32()
+                & 0xff,
+            0
+        );
+        assert_eq!(v3(&e, out_position), [9.0, 9.0, 9.0]);
+    }
+
+    // ---- Border normals and neighbours --------------------------------------------------------------
+
+    #[test]
+    fn bounds_test_adds_the_cell_centre() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        let bounds = e.mem.alloc(16);
+        for (i, value) in [0i32, 5000, 4000, 100].iter().enumerate() {
+            e.mem.set_i32(bounds + 4 * i as u32, *value);
+        }
+        let vertex = e.mem.alloc(12);
+        for (point, expected) in [
+            ([0.0, 0.0, 0.0], 1),
+            ([2500.0, 0.0, 0.0], 0),
+            ([-2100.0, 0.0, 0.0], 0),
+            ([0.0, -2000.0, 0.0], 0),
+            ([0.0, 2900.0, 0.0], 1),
+            ([0.0, 3500.0, 0.0], 0),
+        ] {
+            put_v3(&mut e, vertex, point);
+            let result = e.call(0x0053_da60, &args![this, bounds, vertex]).u32() & 0xff;
+            assert_eq!(result, expected, "{point:?}");
+        }
+        // Without bounds everything is inside.
+        assert_eq!(
+            e.call(0x0053_da60, &args![this, 0u32, vertex]).u32() & 0xff,
+            1
+        );
+    }
+
+    #[test]
+    fn normals_array_and_flag_getters() {
+        let mut e = engine();
+        let (this, data) = terrain(&mut e);
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        assert_eq!(e.call(0x0053_df00, &args![this]).u32(), normals.addr());
+        let bare = land(&mut e);
+        assert_eq!(e.call(0x0053_df00, &args![bare]).u32(), 0);
+        set_normal_flag(&mut e, data, 2, 40, 1);
+        assert_eq!(
+            e.call(0x0053_e260, &args![this, 2i32, 40i32]).u32() & 0xff,
+            1
+        );
+        assert_eq!(
+            e.call(0x0053_e260, &args![this, 2i32, 41i32]).u32() & 0xff,
+            0
+        );
+        // The flag of the vertex nearest to a position.
+        vector_doubles(&mut e);
+        set_normal_flag(&mut e, data, 0, 19, 1);
+        let at = position(&mut e, 256.0, 128.0);
+        assert_eq!(e.call(0x0053_e210, &args![this, at]).u32() & 0xff, 1);
+        let other = position(&mut e, 640.0, 128.0);
+        assert_eq!(e.call(0x0053_e210, &args![this, other]).u32() & 0xff, 0);
+        let outside = position(&mut e, -3.0, 128.0);
+        assert_eq!(e.call(0x0053_e210, &args![this, outside]).u32() & 0xff, 0);
+    }
+
+    /// The shared triangle list with `triangles` first and degenerate
+    /// triangles for the rest.
+    fn triangle_list(e: &mut Engine, triangles: &[[u16; 3]]) {
+        let list = e.mem.alloc(512 * 6);
+        for (i, triangle) in triangles.iter().enumerate() {
+            for (j, index) in triangle.iter().enumerate() {
+                e.mem.set_u16(list + 6 * i as u32 + 2 * j as u32, *index);
+            }
+        }
+        e.set_global(DEFAULT_TRIANGLE_LIST, list);
+        for (i, component) in [0.0f32, 0.0, 0.0].iter().enumerate() {
+            e.set_global(DEFAULT_NORMAL_WORDS + 4 * i as u32, *component);
+        }
+    }
+
+    #[test]
+    fn normals_are_rebuilt_from_the_triangles() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        triangle_list(&mut e, &[[0, 1, 17]]);
+        let unitized = recorder::<(u32, u32, u32)>();
+        let sink = unitized.clone();
+        e.register_double(NI_POINT3_UNITIZE_VECTORS, move |_, a| {
+            sink.borrow_mut().push((a[0], a[1], a[2]));
+            Ret::default()
+        });
+        for quadrant in 0..4 {
+            for vertex in 0..0x121 {
+                set_normal(&mut e, data, quadrant, vertex, [9.0, 9.0, 9.0]);
+                set_normal_flag(&mut e, data, quadrant, vertex, 1);
+            }
+        }
+        e.call(0x0053_df30, &args![this, 0u32]);
+        // The three vertices of the triangle got its normal (b - a) x (c - b);
+        // the others were reset to the default normal (zero here).
+        for quadrant in 0..4 {
+            assert_eq!(normal_of(&e, data, quadrant, 0), [0.0, 0.0, 1.0]);
+            assert_eq!(normal_of(&e, data, quadrant, 1), [0.0, 0.0, 1.0]);
+            assert_eq!(normal_of(&e, data, quadrant, 17), [0.0, 0.0, 1.0]);
+            assert_eq!(normal_of(&e, data, quadrant, 2), [0.0, 0.0, 0.0]);
+            assert_eq!(normal_flag(&e, data, quadrant, 2), 0);
+            assert_eq!(normal_flag(&e, data, quadrant, 288), 0);
+        }
+        // Each quadrant's block is unitized with 289 vectors of 12 bytes.
+        let normals = e.get(data, LoadedLandData::ppNormals);
+        let blocks: Vec<(u32, u32, u32)> = (0..4)
+            .map(|quadrant| (element(&e, normals, quadrant), 0x121, 12))
+            .collect();
+        assert_eq!(*unitized.borrow(), blocks);
+    }
+
+    #[test]
+    fn normals_in_bounds_only_are_rebuilt() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        triangle_list(&mut e, &[[0, 1, 17]]);
+        e.register(NI_POINT3_UNITIZE_VECTORS, |_, _| Ret::default());
+        for vertex in 0..0x121 {
+            set_normal(&mut e, data, 1, vertex, [9.0, 9.0, 9.0]);
+            set_normal_flag(&mut e, data, 1, vertex, 1);
+        }
+        // x in 2048 ..= 2176 and y up to 2048: vertices 0 and 1 of the first
+        // row only.
+        let bounds = e.mem.alloc(16);
+        for (i, value) in [2048i32, 2048, 2176, 0].iter().enumerate() {
+            e.mem.set_i32(bounds + 4 * i as u32, *value);
+        }
+        e.call(0x0053_df30, &args![this, bounds]);
+        assert_eq!(normal_of(&e, data, 1, 0), [0.0, 0.0, 1.0]);
+        assert_eq!(normal_of(&e, data, 1, 1), [0.0, 0.0, 1.0]);
+        assert_eq!(normal_flag(&e, data, 1, 0), 0);
+        assert_eq!(normal_flag(&e, data, 1, 1), 0);
+        // Vertex 17 is out of range: untouched.
+        assert_eq!(normal_of(&e, data, 1, 17), [9.0, 9.0, 9.0]);
+        assert_eq!(normal_flag(&e, data, 1, 17), 1);
+        // A land that is not loaded is left alone.
+        let (other, other_data) = terrain(&mut e);
+        e.set(other, TESObjectLAND::Data, 0);
+        set_normal(&mut e, other_data, 0, 0, [7.0, 7.0, 7.0]);
+        e.call(0x0053_df30, &args![other, 0u32]);
+        assert_eq!(normal_of(&e, other_data, 0, 0), [7.0, 7.0, 7.0]);
+    }
+
+    /// Doubles for the neighbour search of a land at cell (5, 7): cells and
+    /// their lands.
+    fn neighbour_world(e: &mut Engine) -> (Ptr<TESObjectLAND>, Vec<u32>) {
+        let (this, data) = terrain(e);
+        e.set(data, LoadedLandData::iCellX, 5);
+        e.set(data, LoadedLandData::iCellY, 7);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(0xce11));
+        e.register(CELL_GET_WORLD_SPACE, |_, _| ret(0x5a5a));
+        e.set_global(DATA_HANDLER, 0x0900_0000u32);
+        e.register(LOADING_MENU_VISIBLE, |_, _| ret(0));
+        // Lands at (4, 8) and (6, 7) with vertex arrays; (5, 8) without
+        // arrays; (4, 7) without arrays but already loaded.
+        let (north_west, _) = terrain(e);
+        let (east, _) = terrain(e);
+        let (north, north_data) = terrain(e);
+        e.set(north_data, LoadedLandData::ppVertices, Ptr::NULL);
+        let (west, west_data) = terrain(e);
+        e.set(west_data, LoadedLandData::ppVertices, Ptr::NULL);
+        let lands = vec![north_west.addr(), east.addr(), north.addr(), west.addr()];
+        let cells = lands.clone();
+        e.register_double(TES_GET_CELL, move |_, a| {
+            let (x, y) = (a[1] as i32, a[2] as i32);
+            ret(match (x, y) {
+                (4, 8) => 0xc000,
+                (5, 8) => 0xc001,
+                (4, 7) => 0xc002,
+                (6, 7) => 0xc003,
+                _ => 0,
+            })
+        });
+        e.register_double(CELL_GET_LAND, move |_, a| {
+            ret(match a[0] {
+                0xc000 => cells[0],
+                0xc001 => cells[2],
+                0xc002 => cells[3],
+                _ => cells[1],
+            })
+        });
+        (this, lands)
+    }
+
+    #[test]
+    fn neighbours_are_found_through_the_data_handler() {
+        let mut e = engine();
+        let (this, lands) = neighbour_world(&mut e);
+        let (found, loaded) = (e.mem.alloc(0x20), e.mem.alloc(8));
+        start_log(&mut e);
+        e.call(0x0053_d330, &args![this, found, 0u32, loaded]);
+        let log = end_log(&mut e);
+        // The first query: the handler, x - 1, y + 1, the world space, 0.
+        assert_eq!(
+            arguments_of(&log, TES_GET_CELL)[0],
+            vec![0x0900_0000, 4, 8, 0x5a5a, 0]
+        );
+        assert_eq!(arguments_of(&log, TES_GET_CELL).len(), 8);
+        // (4, 8) has vertex arrays; (5, 8) and (4, 7) do not and are not
+        // loaded without the load flag; (6, 7) has them.
+        let entries: Vec<u32> = (0..8).map(|i| e.mem.u32(found + 4 * i)).collect();
+        assert_eq!(entries, vec![lands[0], 0, 0, 0, lands[1], 0, 0, 0]);
+        assert_eq!(e.mem.bytes(loaded, 8), vec![0; 8]);
+    }
+
+    #[test]
+    fn neighbours_without_arrays_are_loaded_on_request() {
+        let mut e = engine();
+        let (this, lands) = neighbour_world(&mut e);
+        let (found, loaded) = (e.mem.alloc(0x20), e.mem.alloc(8));
+        e.call(0x0053_d330, &args![this, found, 1u32, loaded]);
+        let entries: Vec<u32> = (0..8).map(|i| e.mem.u32(found + 4 * i)).collect();
+        // (5, 8) is in the list too: loading is requested for it as well.
+        assert_eq!(
+            entries,
+            vec![lands[0], lands[2], 0, lands[3], lands[1], 0, 0, 0]
+        );
+        assert_eq!(e.mem.bytes(loaded, 8), vec![0, 1, 0, 1, 0, 0, 0, 0]);
+        // Without the flag array nothing is loaded.
+        let found = e.mem.alloc(0x20);
+        e.call(0x0053_d330, &args![this, found, 1u32, 0u32]);
+        let entries: Vec<u32> = (0..8).map(|i| e.mem.u32(found + 4 * i)).collect();
+        assert_eq!(entries, vec![lands[0], 0, 0, 0, lands[1], 0, 0, 0]);
+        // A null array: nothing happens.
+        start_log(&mut e);
+        e.call(0x0053_d330, &args![this, 0u32, 1u32, loaded]);
+        assert!(called(&mut e).is_empty());
+    }
+
+    // ---- Border normals of one vertex --------------------------------------------------------
+
+    /// The call of `fn_0053e290` for vertex `vertex` of quadrant `quadrant`
+    /// with the neighbour array `lands`; returns the output normal.
+    fn border_normal(
+        e: &mut Engine,
+        this: Ptr<TESObjectLAND>,
+        quadrant: i32,
+        vertex: i32,
+        lands: u32,
+    ) -> [f32; 3] {
+        let out = e.mem.alloc(12);
+        put_v3(e, out, [-1.0, -1.0, -1.0]);
+        e.call(0x0053_e290, &args![this, quadrant, vertex, out, lands]);
+        v3(e, out)
+    }
+
+    #[test]
+    fn border_normal_is_left_alone_when_set_or_without_neighbours() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        set_normal_flag(&mut e, data, 0, 40, 1);
+        start_log(&mut e);
+        assert_eq!(border_normal(&mut e, this, 0, 40, lands), [-1.0; 3]);
+        assert!(!called_contains(&end_log(&mut e), NI_POINT3_ADD));
+        // No neighbour array: nothing either.
+        set_normal_flag(&mut e, data, 0, 41, 0);
+        assert_eq!(border_normal(&mut e, this, 0, 41, 0), [-1.0; 3]);
+        assert_eq!(normal_flag(&e, data, 0, 41), 0);
+    }
+
+    #[test]
+    fn border_normal_of_an_interior_vertex_is_its_own() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        set_normal(&mut e, data, 0, 40, [4.0, 0.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 0, 40, lands), [4.0, 0.0, 0.0]);
+        assert_eq!(normal_flag(&e, data, 0, 40), 1);
+    }
+
+    #[test]
+    fn border_normal_averages_the_missing_neighbour_lands() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        // The top edge of quadrant 0 has one land neighbour (lands[6], null):
+        // its answer is the default normal (0, 0, 1).
+        set_normal(&mut e, data, 0, 5, [1.0, 0.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 0, 5, lands), [0.5, 0.0, 0.5]);
+        assert_eq!(normal_flag(&e, data, 0, 5), 1);
+        // The corner has three: above, left and the diagonal.
+        set_normal(&mut e, data, 0, 0, [4.0, 0.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 0, 0, lands), [1.0, 0.0, 0.75]);
+        // The bottom-right corner of quadrant 3 as well (right, below,
+        // diagonal).
+        set_normal(&mut e, data, 3, 288, [0.0, 8.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 3, 288, lands), [0.0, 2.0, 0.75]);
+    }
+
+    #[test]
+    fn border_normal_uses_the_neighbouring_quadrant() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        // Vertex 276 of quadrant 0 is on the edge shared with quadrant 2
+        // (vertex 4 there).
+        set_normal(&mut e, data, 0, 276, [1.0, 0.0, 0.0]);
+        set_normal(&mut e, data, 2, 4, [0.0, 1.0, 0.0]);
+        // The neighbour's normal is not set: the two are averaged.
+        assert_eq!(border_normal(&mut e, this, 0, 276, lands), [0.5, 0.5, 0.0]);
+        // Set: it is taken as it is.
+        set_normal_flag(&mut e, data, 2, 4, 1);
+        set_normal_flag(&mut e, data, 0, 276, 0);
+        assert_eq!(border_normal(&mut e, this, 0, 276, lands), [0.0, 1.0, 0.0]);
+        assert_eq!(normal_flag(&e, data, 0, 276), 1);
+        // The edge with the quadrant above (vertex 3 of quadrant 2 is the
+        // vertex 275 of quadrant 0's...): quadrant 2, vertex 3 looks at
+        // quadrant 0 vertex 275.
+        set_normal(&mut e, data, 0, 275, [0.0, 0.0, 6.0]);
+        set_normal(&mut e, data, 2, 3, [2.0, 0.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 2, 3, lands), [1.0, 0.0, 3.0]);
+        // The left and right edges: quadrant 0's right edge vertex 33 looks at
+        // quadrant 1's vertex 17; quadrant 1's vertex 17 looks at nothing
+        // on its left (that is a land edge: lands[3], null).
+        set_normal(&mut e, data, 0, 33, [2.0, 0.0, 0.0]);
+        set_normal(&mut e, data, 1, 17, [0.0, 2.0, 0.0]);
+        assert_eq!(border_normal(&mut e, this, 0, 33, lands), [1.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn border_normal_of_a_quadrant_corner_uses_three_neighbours() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        // The bottom-right vertex of quadrant 0 touches quadrants 2, 1 and
+        // the diagonal quadrant 3.
+        set_normal(&mut e, data, 0, 288, [1.0, 0.0, 0.0]);
+        set_normal(&mut e, data, 2, 16, [0.0, 1.0, 0.0]);
+        set_normal(&mut e, data, 1, 272, [0.0, 0.0, 1.0]);
+        set_normal(&mut e, data, 3, 0, [1.0, 1.0, 1.0]);
+        assert_eq!(border_normal(&mut e, this, 0, 288, lands), [0.5, 0.5, 0.5]);
+        // The diagonal one set: it ends the search.
+        set_normal(&mut e, data, 3, 0, [0.25, 0.5, 0.75]);
+        set_normal_flag(&mut e, data, 3, 0, 1);
+        set_normal_flag(&mut e, data, 0, 288, 0);
+        assert_eq!(
+            border_normal(&mut e, this, 0, 288, lands),
+            [0.25, 0.5, 0.75]
+        );
+    }
+
+    #[test]
+    fn border_normal_asks_the_neighbouring_land() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        // A land of the same cell whose normals are all set.
+        let (neighbour, neighbour_data) = terrain(&mut e);
+        for quadrant in 0..4 {
+            for vertex in 0..0x121 {
+                set_normal_flag(&mut e, neighbour_data, quadrant, vertex, 1);
+            }
+        }
+        let lands = e.mem.alloc(0x20);
+        e.mem.set_u32(lands + 4 * 6, neighbour.addr());
+        set_normal(&mut e, data, 0, 5, [1.0, 0.0, 0.0]);
+        // Its answer is its interpolated normal, (0, 0, 1) here.
+        assert_eq!(border_normal(&mut e, this, 0, 5, lands), [0.0, 0.0, 1.0]);
+        assert_eq!(normal_flag(&e, data, 0, 5), 1);
+    }
+
+    // ---- Border normals of the whole land --------------------------------------------------------
+
+    #[test]
+    fn border_normals_are_computed_for_the_border_vertices() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        let lands = e.mem.alloc(0x20);
+        e.call(0x0053_d8f0, &args![this, lands, 0u32]);
+        for quadrant in 0..4 {
+            let flagged: Vec<u32> = (0..0x121)
+                .filter(|vertex| normal_flag(&e, data, quadrant, *vertex) != 0)
+                .collect();
+            let border: Vec<u32> = (0..0x121u32)
+                .filter(|v| v / 17 == 0 || v / 17 == 16 || v % 17 == 0 || v % 17 == 16)
+                .collect();
+            assert_eq!(flagged, border);
+            assert_eq!(border.len(), 64);
+        }
+        // Not all neighbours exist: flag 0x10 stays clear.
+        assert_eq!(e.get(this, TESObjectLAND::Data), FLAG_LOADED);
+    }
+
+    #[test]
+    fn border_normals_find_the_neighbours_when_none_are_given() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        e.set_global(DATA_HANDLER, 0x0900_0000u32);
+        e.register(TES_GET_CELL, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0053_d8f0, &args![this, 0u32, 0u32]);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, TES_GET_CELL).len(), 8);
+        assert_eq!(normal_flag(&e, data, 2, 0), 1);
+    }
+
+    #[test]
+    fn border_normals_respect_the_bounds_and_report_a_complete_ring() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        // Eight neighbours that are never asked (the bounds exclude every
+        // vertex): flag 0x10 is set.
+        let lands = e.mem.alloc(0x20);
+        for i in 0..8 {
+            e.mem.set_u32(lands + 4 * i, 0xaaaa);
+        }
+        let bounds = e.mem.alloc(16);
+        for (i, value) in [10000i32, 10000, 10001, 10000].iter().enumerate() {
+            e.mem.set_i32(bounds + 4 * i as u32, *value);
+        }
+        e.call(0x0053_d8f0, &args![this, lands, bounds]);
+        assert_eq!(normal_flag(&e, data, 0, 0), 0);
+        assert_eq!(e.get(this, TESObjectLAND::Data), FLAG_LOADED | FLAG_EDITED);
+        // A land that is not loaded does nothing.
+        let (other, other_data) = terrain(&mut e);
+        e.set(other, TESObjectLAND::Data, 0);
+        e.call(0x0053_d8f0, &args![other, lands, 0u32]);
+        assert_eq!(normal_flag(&e, other_data, 0, 0), 0);
+    }
+
+    // ---- Border normals with the neighbours -------------------------------------------------------
+
+    #[test]
+    fn normals_are_recomputed_for_the_neighbours_and_restored() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        triangle_list(&mut e, &[[0, 1, 17]]);
+        // The land to the west, with arrays: its normals are (1, 0, 0).
+        e.set(data, LoadedLandData::iCellX, 5);
+        e.set(data, LoadedLandData::iCellY, 7);
+        e.set(this, TESObjectLAND::pParentCell, Ptr::new(0xce11));
+        e.register(CELL_GET_WORLD_SPACE, |_, _| ret(0x5a5a));
+        e.set_global(DATA_HANDLER, 0x0900_0000u32);
+        let (west, west_data) = terrain(&mut e);
+        e.set(west_data, LoadedLandData::iCellX, 4);
+        e.set(west_data, LoadedLandData::iCellY, 7);
+        for quadrant in 0..4 {
+            for vertex in 0..0x121 {
+                set_normal(&mut e, west_data, quadrant, vertex, [1.0, 0.0, 0.0]);
+            }
+        }
+        let west_addr = west.addr();
+        e.register_double(TES_GET_CELL, |_, a| {
+            ret(if (a[1], a[2]) == (4, 7) { 0xc000 } else { 0 })
+        });
+        e.register_double(CELL_GET_LAND, move |_, _| ret(west_addr));
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_db20, &args![this]).u32() & 0xff, 1);
+        let log = end_log(&mut e);
+        assert_eq!(arguments_of(&log, TES_GET_CELL).len(), 8);
+        // The neighbour's normals are back.
+        for quadrant in 0..4 {
+            for vertex in [0u32, 17, 100, 288] {
+                assert_eq!(normal_of(&e, west_data, quadrant, vertex), [1.0, 0.0, 0.0]);
+            }
+        }
+        // This land's normals: the triangle's, rounded to bytes and unitized;
+        // the border flags are set.
+        assert_eq!(normal_of(&e, data, 0, 1), [0.0, 0.0, 1.0]);
+        assert_eq!(normal_flag(&e, data, 0, 1), 1);
+        assert_eq!(normal_flag(&e, data, 0, 40), 0);
+        assert_eq!(normal_of(&e, data, 0, 40), [0.0, 0.0, 0.0]);
+        // The saved normals were copied with the right sizes.
+        let copies = arguments_of(&log, MEMORY_COPY);
+        assert_eq!(copies.len(), 8);
+        assert!(copies.iter().all(|call| call[2] == 0xd8c));
+    }
+
+    #[test]
+    fn normals_pass_is_skipped_for_unloaded_lands_and_world_space_land_files() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, _data) = terrain(&mut e);
+        e.set(this, TESObjectLAND::Data, 0);
+        assert_eq!(e.call(0x0053_db20, &args![this]).u32() & 0xff, 0);
+        e.set(
+            this,
+            TESObjectLAND::Data,
+            FLAG_LOADED | FLAG_FROM_WORLD_SPACE,
+        );
+        start_log(&mut e);
+        assert_eq!(e.call(0x0053_db20, &args![this]).u32() & 0xff, 0);
+        assert!(called(&mut e).is_empty());
+    }
+
+    #[test]
+    fn border_normals_round_to_signed_bytes() {
+        let mut e = engine();
+        vector_doubles(&mut e);
+        let (this, data) = terrain(&mut e);
+        e.set_global(DATA_HANDLER, 0x0900_0000u32);
+        e.register(TES_GET_CELL, |_, _| ret(0));
+        // A triangle list with no triangles, and a default normal that is
+        // already unit: (0.6, 0, 0.8) is rounded to 76/127 and 101/127 and
+        // unitized again (by the double).
+        let list = e.mem.alloc(512 * 6);
+        e.set_global(DEFAULT_TRIANGLE_LIST, list);
+        for (i, component) in [0.6f32, 0.0, 0.8].iter().enumerate() {
+            e.set_global(DEFAULT_NORMAL_WORDS + 4 * i as u32, *component);
+        }
+        e.call(0x0053_db20, &args![this]);
+        let expected = normalize_v3([76.0 / 127.0, 0.0, 101.0 / 127.0]);
+        let actual = normal_of(&e, data, 1, 40);
+        for i in 0..3 {
+            assert!(
+                (actual[i] - expected[i]).abs() < 1e-6,
+                "{actual:?} {expected:?}"
+            );
+        }
     }
 }
