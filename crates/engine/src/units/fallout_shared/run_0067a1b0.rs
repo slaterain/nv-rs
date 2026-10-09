@@ -9,9 +9,8 @@
 //! their getter is true when the bit is clear and their setter sets the bit
 //! for a zero argument. Setters take one stack word and read its low byte.
 //!
-//! Still to do (next session continues at `0067ac70`): `0067ac70` (setter
-//! of the `0x100` behavior bit), `0067acd0` (table lookup by the package
-//! type, `0119bcb0[cPackType]`).
+//! `0067acd0` looks up a table of pointers (at `0119bcb0`) by the package
+//! type. All functions of the unit are translated.
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -25,8 +24,10 @@ const GET_FLAG_00441B00: u32 = 0x0044_1b00;
 const GET_SECOND_GENERIC_LOCATION: u32 = 0x0067_33e0;
 /// Writes the word at +0x48 (map name `LowProcess::SetSecondGenericLocation`, folded).
 const SET_SECOND_GENERIC_LOCATION: u32 = 0x0067_3400;
-/// Setter of the `0x100` behavior bit (next session's `0067ac70`).
-const SET_FLAG_0067AC70: u32 = 0x0067_ac70;
+/// Getter at `0041ca90` (`extradatalist.cpp`): the sign-extended byte at +0x20 (`cPackType`).
+const GET_PACK_TYPE_0041CA90: u32 = 0x0041_ca90;
+/// Table of pointers indexed by the package type.
+const PACK_TYPE_TABLE: u32 = 0x0119_bcb0;
 
 // Translated from 0067a1b0 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Copies every flag accessor's value from `source` to `this`, in the exe's
@@ -52,7 +53,7 @@ pub fn fn_0067a1b0(e: &mut Engine, this: Ptr<TESPackage>, source: Ptr<TESPackage
     let v = fn_0067abd0(e, source);
     fn_0067abf0(e, this, v as u8);
     let v = fn_0067ac50(e, source);
-    e.call(SET_FLAG_0067AC70, &args![this, v as u32]);
+    fn_0067ac70(e, this, v as u8);
     let v = fn_0067a460(e, source);
     e.call(SET_FLAG_00671A20, &args![this, v as u32]);
     let v = fn_0067a690(e, source);
@@ -447,6 +448,27 @@ pub fn fn_0067ac50(e: &mut Engine, this: Ptr<TESPackage>) -> bool {
     (flags & 0x100) != 0
 }
 
+// Translated from 0067ac70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Package flag setter: sets bit `0x100` of `iFOBehaviorFlags` when `value != 0`, else clears it.
+pub fn fn_0067ac70(e: &mut Engine, this: Ptr<TESPackage>, value: u8) {
+    let flags = e.get(this, TESPackage::iFOBehaviorFlags);
+    let flags = if value != 0 {
+        flags | 0x100
+    } else {
+        flags & !0x100
+    };
+    e.set(this, TESPackage::iFOBehaviorFlags, flags);
+}
+
+// Translated from 0067acd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the entry of the pointer table at `0119bcb0` for the package type
+/// (`0041ca90` reads the sign-extended byte at +0x20).
+pub fn fn_0067acd0(e: &mut Engine, this: Ptr<TESPackage>) -> u32 {
+    let index = e.call(GET_PACK_TYPE_0041CA90, &args![this]).u32();
+    e.mem
+        .u32(PACK_TYPE_TABLE.wrapping_add(index.wrapping_mul(4)))
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -490,6 +512,8 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0067abd0, fn_0067abd0(Ptr<TESPackage>) -> bool),
         entry!(0x0067abf0, fn_0067abf0(Ptr<TESPackage>, u8)),
         entry!(0x0067ac50, fn_0067ac50(Ptr<TESPackage>) -> bool),
+        entry!(0x0067ac70, fn_0067ac70(Ptr<TESPackage>, u8)),
+        entry!(0x0067acd0, fn_0067acd0(Ptr<TESPackage>) -> u32),
     ]
 }
 
@@ -1042,12 +1066,35 @@ mod tests {
     }
 
     #[test]
+    fn fn_0067ac70_sets_or_clears_the_bit() {
+        let mut e = Engine::new();
+        let p = e.new_object::<TESPackage>();
+        e.set(p, TESPackage::iFOBehaviorFlags, 0);
+        fn_0067ac70(&mut e, p, 1);
+        assert_eq!(e.get(p, TESPackage::iFOBehaviorFlags), 0x100);
+        fn_0067ac70(&mut e, p, 0);
+        assert_eq!(e.get(p, TESPackage::iFOBehaviorFlags), 0);
+        e.set(p, TESPackage::iFOBehaviorFlags, !0);
+        fn_0067ac70(&mut e, p, 0);
+        assert_eq!(e.get(p, TESPackage::iFOBehaviorFlags), !0x100);
+    }
+
+    #[test]
+    fn fn_0067acd0_indexes_the_table_by_type() {
+        let mut e = Engine::new();
+        e.register(GET_PACK_TYPE_0041CA90, |_, _| Ret {
+            eax: 2,
+            ..Ret::default()
+        });
+        e.map(0x0119_b000, 0x1000);
+        e.mem.set_u32(PACK_TYPE_TABLE + 8, 0x1234_5678);
+        let p = e.new_object::<TESPackage>();
+        assert_eq!(fn_0067acd0(&mut e, p), 0x1234_5678);
+    }
+
+    #[test]
     fn fn_0067a1b0_copies_every_flag() {
         let mut e = Engine::new();
-        e.register(SET_FLAG_0067AC70, |e, a| {
-            e.mem.set_u32(0x7000, a[1]);
-            Ret::default()
-        });
         e.register(SET_FLAG_00671A20, |e, a| {
             e.mem.set_u32(0x7004, a[1]);
             Ret::default()
@@ -1085,8 +1132,7 @@ mod tests {
         // Flags set in `this` beforehand but not handled by the stubbed
         // setter of 0x0080_0000 stay as they were.
         assert_eq!(flags & 0x0080_0000, 0x0080_0000);
-        assert_eq!(e.get(this, TESPackage::iFOBehaviorFlags), 0x80);
-        assert_eq!(e.mem.u32(0x7000), 1);
+        assert_eq!(e.get(this, TESPackage::iFOBehaviorFlags), 0x80 | 0x100);
         assert_eq!(e.mem.u32(0x7004), 0);
         assert_eq!(e.mem.u32(this.addr() + 0x48), 0xdead_beef);
     }
