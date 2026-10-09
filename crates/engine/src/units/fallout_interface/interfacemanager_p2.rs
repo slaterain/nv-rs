@@ -3,7 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::interfacemanager`]; anything public there may be used here.
 //!
-//! This part covers `00717230`..`00718fb0` so far: the menu sound and button
+//! This part covers `00717230`..`00719bb0` (the whole of its range): the system
+//! colors (`SystemColorManager::SystemColor` and its hard and soft kinds), the
+//! tile refresh and the fade update, and earlier: the menu sound and button
 //! helpers of the `InterfaceManager`, its tutorial message table
 //! (`InterfaceManager::TutorialManager`) and the `SystemColorManager`
 //! constructor and registration helpers.
@@ -19,6 +21,7 @@
 use super::interfacemanager::*;
 #[allow(unused_imports)]
 use crate::prelude::*;
+use crate::types::BSSimpleArray;
 
 /// `004b7210`: the interface manager object (the word at `011d8a80`).
 const GET_MANAGER: u32 = 0x004b_7210;
@@ -1261,6 +1264,660 @@ pub fn system_color_manager_find(e: &mut Engine, this: Ptr<SystemColorManager>, 
     found
 }
 
+/// `SystemColor`'s vtable, `HardSystemColor`'s and `SoftSystemColor`'s.
+const SYSTEM_COLOR_VTABLE: u32 = 0x0106_f418;
+const HARD_SYSTEM_COLOR_VTABLE: u32 = 0x0106_f430;
+const SOFT_SYSTEM_COLOR_VTABLE: u32 = 0x0106_f448;
+/// Vtable of the array of tiles (`BSSimpleArray<Tile *>`).
+const TILE_ARRAY_VTABLE: u32 = 0x0106_f798;
+/// The format `SystemColor`'s constructor writes its id string with.
+const SYSTEM_COLOR_NAME_FORMAT: u32 = 0x0106_f40c;
+/// `Tile::TextToTrait` (Xbox PDB), `cdecl`: the trait id of a name.
+const TEXT_TO_TRAIT: u32 = 0x00a0_1860;
+/// `009ff8a0`, `cdecl`: text and an integer (the constructor passes the
+/// color's id, the menu refresh a ready flag).
+const SET_NAMED_VALUE: u32 = 0x009f_f8a0;
+/// `0044ddc0`: the word at `+0x08` of its object.
+const GET_WORD_AT_8: u32 = 0x0044_ddc0;
+/// `005330e0`, `cdecl`: clamps the `float` at the address to `[min, max]`.
+const CLAMP_FLOAT: u32 = 0x0053_30e0;
+/// `Tile` value setter with a `float` (`00a012d0`): trait id, value, flag.
+const TILE_SET_FLOAT: u32 = 0x00a0_12d0;
+/// `Tile::SetNeedsUpdate` (Xbox PDB): update flags.
+const TILE_SET_NEEDS_UPDATE: u32 = 0x00a0_74d0;
+/// `00700300`: the name string of a tile (the word at `+0x20`).
+const TILE_NAME: u32 = 0x0070_0300;
+/// `00408b20`, `cdecl`: compares two strings, 0 when equal.
+const COMPARE_STRINGS: u32 = 0x0040_8b20;
+/// `Tile::GetMenu` (Xbox PDB): the menu a tile belongs to.
+const TILE_GET_MENU: u32 = 0x00a0_3c90;
+/// `007d6c30`: refreshes the start menu after the manager changed.
+const REFRESH_START_MENU: u32 = 0x007d_6c30;
+/// `004de2d0`: stores a byte flag in the object at `011d8c4c`.
+const SET_RENDERER_FLAG: u32 = 0x004d_e2d0;
+const RENDERER_OBJECT: u32 = 0x011d_8c4c;
+/// `005407b0`: stores a byte in the object it is called on.
+const STORE_BYTE: u32 = 0x0054_07b0;
+/// `00877720`: the object reached from the one at `011dea0c`.
+const GET_OBJECT_FROM_011DEA0C: u32 = 0x0087_7720;
+/// `004bd510`: rounds the first `float` up to a multiple of the second
+/// (result in `ST0`).
+const ROUND_UP_TO_MULTIPLE: u32 = 0x004b_d510;
+/// The `float` multiplier `SystemColor::GetColor` scales each byte with
+/// (`0102f0e4`) and the `double` `SystemColor::SetColor` scales each channel
+/// with before rounding it up (`0101e568`, also used by the fade).
+const COLOR_BYTE_SCALE: u32 = 0x0102_f0e4;
+const COLOR_CHANNEL_SCALE: u32 = 0x0101_e568;
+/// The strings the tile refresh compares tile names with and the names it
+/// registers or looks up.
+const TILE_NAME_FIRST: u32 = 0x0106_f47c;
+const TILE_NAME_SECOND: u32 = 0x0106_f46c;
+const READY_TRAIT_NAME: u32 = 0x0106_f45c;
+const NAMED_VALUE_FIRST: u32 = 0x0106_f490;
+const NAMED_VALUE_SECOND: u32 = 0x0106_f488;
+const ROOT_TRAIT_NAME: u32 = 0x0106_efcc;
+/// The fade state `00719790` keeps: the last time (`u32`), the level
+/// (`float`) and the direction (`u8`).
+const FADE_LAST_TIME: u32 = 0x011d_8a64;
+const FADE_LEVEL: u32 = 0x011d_8a68;
+const FADE_FALLING: u32 = 0x011d_8a50;
+/// Its constants: the upper and lower bound of the level (`float`), the rate
+/// per millisecond (`float`), the maximum (`float`), and the `double`
+/// threshold (`0102e430`) above which the inverse level is shown.
+const FADE_UPPER_BOUND: u32 = 0x0106_f49c;
+const FADE_LOWER_BOUND: u32 = 0x0106_f498;
+const FADE_RATE: u32 = 0x0101_622c;
+const FLOAT_MAXIMUM: u32 = 0x0102_3cd8;
+const INVERSE_THRESHOLD: u32 = 0x0102_e430;
+/// Trait id `00719790` sets on the tiles.
+const TRAIT_FADE: u32 = 0xfa9;
+/// The clock object `00719790` reads the time from.
+const CLOCK_OBJECT: u32 = 0x011f_6394;
+/// `00401170`: the type byte at `+0x04` of an object; `0x28` is what
+/// `00719790` requires of the object it reads a count from.
+const GET_TYPE_BYTE: u32 = 0x0040_1170;
+const EXPECTED_TYPE: u32 = 0x28;
+/// `ActorValueOwner::GetClampedActorFloatValue` (Xbox PDB) on the owner at
+/// `+0xA4` of the object at `011dea3c`.
+const GET_CLAMPED_ACTOR_VALUE: u32 = 0x0066_ef50;
+/// `BGSEntryPoint::HandleEntryPoint` (Xbox PDB), `cdecl`.
+const HANDLE_ENTRY_POINT: u32 = 0x005e_58f0;
+/// `00663b60` and `MiddleHighProcess::GetDesiredTarget` (`008d8160`): the
+/// integer the fade compares its value with.
+const GET_COUNT_FROM_TYPE: u32 = 0x0066_3b60;
+const GET_DESIRED_TARGET: u32 = 0x008d_8160;
+/// `MiddleHighProcess::GetLastBoundWeapon` (Xbox PDB).
+const GET_LAST_BOUND_WEAPON: u32 = 0x008d_85e0;
+/// `00825c00`: the current time (the word at `+0x14` of the object).
+const GET_CLOCK_TIME: u32 = 0x0082_5c00;
+
+layout! {
+    /// `SystemColorManager::SystemColor` (Xbox PDB), 0x0C bytes: vtable,
+    /// then the id string.
+    pub struct SystemColor: 0x0C {
+        /// `strXMLID` (Xbox PDB): a `BSStringT<char>`.
+        0x04 strXMLID: u32,
+    }
+
+    /// `SystemColorManager::HardSystemColor` (Xbox PDB), 0x10 bytes.
+    pub struct HardSystemColor: 0x10 {
+        /// `iRGB` (Xbox PDB): the packed color.
+        0x0C iRGB: u32,
+    }
+
+    /// `SystemColorManager::SoftSystemColor` (Xbox PDB), 0x10 bytes.
+    pub struct SoftSystemColor: 0x10 {
+        /// `pSetting` (Xbox PDB): `INIPrefSetting*`.
+        0x0C pSetting: u32,
+    }
+}
+
+/// Clamps `value` to `[min, max]` through `005330e0`, which works on a
+/// `float` in memory.
+fn clamp_float(e: &mut Engine, value: f32, min: f32, max: f32) -> f32 {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_f32(slot.addr(), value);
+        e.call(CLAMP_FLOAT, &args![slot, min, max]);
+        e.mem.f32(slot.addr())
+    })
+}
+
+/// `FISTP` with truncation to a 64-bit integer, the low word kept (a value
+/// out of range or not a number gives `0x8000000000000000`).
+fn truncate_low_word(value: f64) -> u32 {
+    let limit = 9_223_372_036_854_775_808.0f64; // 2^63
+    if value.is_nan() || !(-limit..limit).contains(&value) {
+        0
+    } else {
+        value as i64 as u32
+    }
+}
+
+// Translated from 00719010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the colors of the manager: while its list (`0076b610` tests
+/// whether it is empty) has items, takes the first one off (`007b5390`) and
+/// deletes it through its virtual destructor (slot 0, flag 1).
+pub fn fn_00719010(e: &mut Engine, this: Ptr<SystemColorManager>) {
+    while !e.call(0x0076_b610, &args![this]).bool() {
+        let color = e.call(0x007b_5390, &args![this]).u32();
+        if color != 0 {
+            e.vcall(color, 0, &args![1u32]);
+        }
+    }
+}
+
+// Translated from 00719060 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColorManager::GetColor` (Xbox PDB): looks the color up with
+/// [`system_color_manager_find`] and, when found, writes it into `color`
+/// ([`system_color_get_color`]). Returns whether it was found.
+pub fn system_color_manager_get_color(
+    e: &mut Engine,
+    this: Ptr<SystemColorManager>,
+    id: u32,
+    color: Ptr,
+) -> bool {
+    let found = system_color_manager_find(e, this, id);
+    if found == 0 {
+        return false;
+    }
+    system_color_get_color(e, Ptr::new(found), color);
+    true
+}
+
+// Translated from 007190a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The packed color of the system color `id` (its virtual `GetColor`,
+/// slot 4), 0 when there is none.
+pub fn fn_007190a0(e: &mut Engine, this: Ptr<SystemColorManager>, id: u32) -> u32 {
+    let found = system_color_manager_find(e, this, id);
+    if found == 0 {
+        return 0;
+    }
+    e.vcall(found, 4, &args![]).u32()
+}
+
+// Translated from 007190e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColorManager::SetColor` (Xbox PDB): looks the color up and, when
+/// found, sets it from `color` ([`system_color_set_color`]). Returns whether
+/// it was found.
+pub fn system_color_manager_set_color(
+    e: &mut Engine,
+    this: Ptr<SystemColorManager>,
+    id: u32,
+    color: Ptr,
+) -> bool {
+    let found = system_color_manager_find(e, this, id);
+    if found == 0 {
+        return false;
+    }
+    system_color_set_color(e, Ptr::new(found), color);
+    true
+}
+
+// Translated from 00719120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the packed color of the system color `id` through its virtual
+/// `SetColor` (slot 8). Returns whether it was found.
+pub fn fn_00719120(e: &mut Engine, this: Ptr<SystemColorManager>, id: u32, value: u32) -> bool {
+    let found = system_color_manager_find(e, this, id);
+    if found == 0 {
+        return false;
+    }
+    e.vcall(found, 8, &args![value]);
+    true
+}
+
+// Translated from 00719160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColor`'s constructor: sets the vtable, builds the id string
+/// (`004037b0`), writes the name into it with the format at `0106f40c`
+/// (`00406f60`), runs `004afad0` on it and registers its text under `id`
+/// (`009ff8a0`). Returns `this`. The compiler's exception frame is not
+/// translated.
+pub fn fn_00719160(e: &mut Engine, this: Ptr<SystemColor>, name: u32, id: u32) -> Ptr<SystemColor> {
+    e.mem.set_u32(this.addr(), SYSTEM_COLOR_VTABLE);
+    let text = this.addr() + 4;
+    e.call(0x0040_37b0, &args![text]);
+    e.call(0x0040_6f60, &args![text, SYSTEM_COLOR_NAME_FORMAT, name]);
+    e.call(0x004a_fad0, &args![text]);
+    let characters = e.call(0x0055_9450, &args![text]).u32();
+    e.call(SET_NAMED_VALUE, &args![characters, id]);
+    this
+}
+
+// Translated from 00719200 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `SystemColor`: [`fn_00719230`], then
+/// frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00719200(e: &mut Engine, this: Ptr<SystemColor>, flags: u32) -> Ptr<SystemColor> {
+    fn_00719230(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00719230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColor`'s destructor body: sets its vtable and destroys the id
+/// string (`004037d0`).
+pub fn fn_00719230(e: &mut Engine, this: Ptr<SystemColor>) {
+    e.mem.set_u32(this.addr(), SYSTEM_COLOR_VTABLE);
+    e.call(0x0040_37d0, &args![this.addr() + 4]);
+}
+
+// Translated from 00719250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HardSystemColor`'s constructor: the base constructor
+/// ([`fn_00719160`]) with `name` and `id`, its own vtable and the packed
+/// color `rgb`. Returns `this`.
+pub fn fn_00719250(
+    e: &mut Engine,
+    this: Ptr<HardSystemColor>,
+    name: u32,
+    rgb: u32,
+    id: u32,
+) -> Ptr<HardSystemColor> {
+    fn_00719160(e, Ptr::new(this.addr()), name, id);
+    e.mem.set_u32(this.addr(), HARD_SYSTEM_COLOR_VTABLE);
+    e.set(this, HardSystemColor::iRGB, rgb);
+    this
+}
+
+// Translated from 00719290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `HardSystemColor`: [`fn_007192c0`],
+/// then frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00719290(e: &mut Engine, this: Ptr<HardSystemColor>, flags: u32) -> Ptr<HardSystemColor> {
+    fn_007192c0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 007192c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `HardSystemColor`'s destructor body: sets its vtable, then the base
+/// destructor ([`fn_00719230`]).
+pub fn fn_007192c0(e: &mut Engine, this: Ptr<HardSystemColor>) {
+    e.mem.set_u32(this.addr(), HARD_SYSTEM_COLOR_VTABLE);
+    fn_00719230(e, Ptr::new(this.addr()));
+}
+
+// Translated from 007192e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SoftSystemColor`'s constructor: the base constructor
+/// ([`fn_00719160`]) with `name` and `id`, its own vtable and the setting
+/// the color lives in. Returns `this`.
+pub fn fn_007192e0(
+    e: &mut Engine,
+    this: Ptr<SoftSystemColor>,
+    name: u32,
+    setting: u32,
+    id: u32,
+) -> Ptr<SoftSystemColor> {
+    fn_00719160(e, Ptr::new(this.addr()), name, id);
+    e.mem.set_u32(this.addr(), SOFT_SYSTEM_COLOR_VTABLE);
+    e.set(this, SoftSystemColor::pSetting, setting);
+    this
+}
+
+// Translated from 00719320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SoftSystemColor::GetColor` (Xbox PDB): the packed color stored in the
+/// setting (`0043d4d0` gives the address of the setting's value).
+pub fn soft_system_color_get_color(e: &mut Engine, this: Ptr<SoftSystemColor>) -> u32 {
+    let setting = e.get(this, SoftSystemColor::pSetting);
+    let value = e.call(0x0043_d4d0, &args![setting]).u32();
+    e.mem.u32(value)
+}
+
+// Translated from 00719340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SoftSystemColor::SetColor` (Xbox PDB): stores the packed color in the
+/// setting.
+pub fn soft_system_color_set_color(e: &mut Engine, this: Ptr<SoftSystemColor>, rgb: u32) {
+    let setting = e.get(this, SoftSystemColor::pSetting);
+    let value = e.call(0x0043_d4d0, &args![setting]).u32();
+    e.mem.set_u32(value, rgb);
+}
+
+// Translated from 00719360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of `SoftSystemColor`: [`fn_00719390`],
+/// then frees `this` when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00719360(e: &mut Engine, this: Ptr<SoftSystemColor>, flags: u32) -> Ptr<SoftSystemColor> {
+    fn_00719390(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 00719390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SoftSystemColor`'s destructor body: sets its vtable, then the base
+/// destructor ([`fn_00719230`]).
+pub fn fn_00719390(e: &mut Engine, this: Ptr<SoftSystemColor>) {
+    e.mem.set_u32(this.addr(), SOFT_SYSTEM_COLOR_VTABLE);
+    fn_00719230(e, Ptr::new(this.addr()));
+}
+
+// Translated from 007193b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColor::GetColor` (Xbox PDB), the overload that fills a color:
+/// takes the packed color from the virtual `GetColor` (slot 4), splits it
+/// into bytes ([`fn_00719440`]) and writes the three highest as `float`s
+/// (each times the scale at `0102f0e4`) into the three floats at `color`.
+pub fn system_color_get_color(e: &mut Engine, this: Ptr<SystemColor>, color: Ptr) {
+    let packed = e.vcall(this.addr(), 4, &args![]).u32();
+    let bytes = e.mem.alloc(16);
+    fn_00719440(
+        e,
+        packed,
+        Ptr::new(bytes),
+        Ptr::new(bytes + 4),
+        Ptr::new(bytes + 8),
+        Ptr::new(bytes + 12),
+    );
+    let scale: f32 = e.global(COLOR_BYTE_SCALE);
+    for channel in 0..3u32 {
+        let byte = e.mem.u32(bytes + 4 * channel);
+        e.mem.set_f32(
+            color.addr() + 4 * channel,
+            (byte as f64 * scale as f64) as f32,
+        );
+    }
+    e.mem.free(bytes);
+}
+
+// Translated from 00719440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Splits a packed color, `cdecl`: writes its bytes, highest first, to the
+/// four addresses.
+pub fn fn_00719440(
+    e: &mut Engine,
+    packed: u32,
+    byte_3: Ptr,
+    byte_2: Ptr,
+    byte_1: Ptr,
+    byte_0: Ptr,
+) {
+    e.mem.set_u32(byte_3.addr(), (packed >> 24) & 0xff);
+    e.mem.set_u32(byte_2.addr(), (packed >> 16) & 0xff);
+    e.mem.set_u32(byte_1.addr(), (packed >> 8) & 0xff);
+    e.mem.set_u32(byte_0.addr(), packed & 0xff);
+}
+
+// Translated from 00719490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SystemColor::SetColor` (Xbox PDB), the overload that takes a color:
+/// scales the three `float` channels at `color` by the `double` at
+/// `0101e568`, rounds each up with `004bd510(value, 1.0)` and truncates it
+/// to an integer (blue, green, then red), packs them with a low byte of
+/// `0xff` ([`fn_00718e90`]) and stores the result through the virtual
+/// `SetColor` (slot 8).
+pub fn system_color_set_color(e: &mut Engine, this: Ptr<SystemColor>, color: Ptr) {
+    let scale: f64 = e.global(COLOR_CHANNEL_SCALE);
+    let mut channels = [0u32; 3];
+    for channel in [2u32, 1, 0] {
+        let value = e.mem.f32(color.addr() + 4 * channel);
+        let scaled = (value as f64 * scale) as f32;
+        let rounded = st0(e.call(ROUND_UP_TO_MULTIPLE, &args![scaled, 1.0f32]));
+        channels[channel as usize] = truncate_low_word(rounded);
+    }
+    let packed = fn_00718e90(e, channels[0], channels[1], channels[2], 0xff);
+    e.vcall(this.addr(), 8, &args![packed]);
+}
+
+// Translated from 00719580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Refreshes a tile and, first, all its children (the list at `+0x04`): a
+/// tile whose name equals one of the two strings at `0106f47c` and
+/// `0106f46c` gets the trait named by `0106f45c` set to whether the manager
+/// is ready (`004b71d0`) and `Tile::SetNeedsUpdate(4)`.
+pub fn fn_00719580(e: &mut Engine, tile: Ptr) {
+    let children = tile.addr() + 4;
+    let mut node = e.call(0x0055_9450, &args![children]).u32();
+    let slot = e.mem.alloc(4);
+    while node != 0 {
+        e.mem.set_u32(slot, node);
+        let item = e.call(0x0057_cbe0, &args![children, slot]).u32();
+        node = e.mem.u32(slot);
+        let child = e.mem.u32(item);
+        fn_00719580(e, Ptr::new(child));
+    }
+    e.mem.free(slot);
+
+    let name = e.call(TILE_NAME, &args![tile]).u32();
+    let mut matches = e.call(COMPARE_STRINGS, &args![name, TILE_NAME_FIRST]).u32() == 0;
+    if !matches {
+        let name = e.call(TILE_NAME, &args![tile]).u32();
+        matches = e
+            .call(COMPARE_STRINGS, &args![name, TILE_NAME_SECOND])
+            .u32()
+            == 0;
+    }
+    if matches {
+        e.call(GET_MANAGER, &args![]);
+        let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+        let trait_id = e.call(TEXT_TO_TRAIT, &args![READY_TRAIT_NAME]).u32();
+        e.call(TILE_SET_VALUE, &args![tile, trait_id, ready]);
+        e.call(TILE_SET_NEEDS_UPDATE, &args![tile, 4u32]);
+    }
+}
+
+// Translated from 00719630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Applies the manager's ready state to the interface: registers it under
+/// the two names at `0106f490` and `0106f488`, sets the trait named by
+/// `0106efcc` on the string root tile (`+0xA0`), refreshes the menus root
+/// tile (`+0x9C`) with [`fn_00719580`], then calls virtual slot `0x44` of the
+/// menu of each of its children with the ready state, and finally runs
+/// `007d6c30`. The word it is passed is not read.
+pub fn fn_00719630(e: &mut Engine, this: Ptr<InterfaceManagerFields>, _unused_1: u32) {
+    e.call(GET_MANAGER, &args![]);
+    let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+    e.call(SET_NAMED_VALUE, &args![NAMED_VALUE_FIRST, ready]);
+    e.call(GET_MANAGER, &args![]);
+    let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+    e.call(SET_NAMED_VALUE, &args![NAMED_VALUE_SECOND, ready]);
+    let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+    let trait_id = e.call(TEXT_TO_TRAIT, &args![ROOT_TRAIT_NAME]).u32();
+    // InterfaceManager::pStringRoot (Xbox PDB) +0xA0
+    let string_root = e.mem.u32(this.addr() + 0xA0);
+    e.call(TILE_SET_VALUE, &args![string_root, trait_id, ready]);
+
+    // InterfaceManager::pMenusRoot (Xbox PDB) +0x9C
+    let menus_root = e.mem.u32(this.addr() + 0x9C);
+    fn_00719580(e, Ptr::new(menus_root));
+    let menus_root = e.mem.u32(this.addr() + 0x9C);
+    let mut node = if menus_root != 0 {
+        e.call(0x0055_9450, &args![menus_root + 4]).u32()
+    } else {
+        0
+    };
+    let slot = e.mem.alloc(4);
+    while node != 0 {
+        e.mem.set_u32(slot, node);
+        let menus_root = e.mem.u32(this.addr() + 0x9C);
+        let item = e.call(0x0057_cbe0, &args![menus_root + 4, slot]).u32();
+        node = e.mem.u32(slot);
+        let child = e.mem.u32(item);
+        if child != 0 && e.call(TILE_GET_MENU, &args![child]).u32() != 0 {
+            let menu = e.call(TILE_GET_MENU, &args![child]).u32();
+            let ready = e.call(MANAGER_READY, &args![]).bool() as u32;
+            e.vcall(menu, 0x44, &args![ready]);
+        }
+    }
+    e.mem.free(slot);
+    e.call(REFRESH_START_MENU, &args![]);
+}
+
+// Translated from 00719740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `flag` in the object at `011d8c4c` (`004de2d0`), applies the
+/// opposite state to the interface ([`fn_00719630`] on the manager, with
+/// `flag == 0`) and stores `flag` in the object `00877720` finds from the one
+/// at `011dea0c` (`005407b0`). The object it is called on is not read.
+pub fn fn_00719740(e: &mut Engine, _unused_0: Ptr<InterfaceManagerFields>, flag: u8) {
+    e.call(SET_RENDERER_FLAG, &args![RENDERER_OBJECT, flag]);
+    let manager = e.call(GET_MANAGER, &args![]).u32();
+    fn_00719630(e, Ptr::new(manager), (flag == 0) as u32);
+    let object = e.global::<u32>(OBJECT_011DEA0C);
+    let target = e.call(GET_OBJECT_FROM_011DEA0C, &args![object]).u32();
+    e.call(STORE_BYTE, &args![target, flag]);
+}
+
+/// `005330e0` on the `float` at `address`.
+fn clamp_float_at(e: &mut Engine, address: u32, min: f32, max: f32) {
+    e.call(CLAMP_FLOAT, &args![address, min, max]);
+}
+
+// Translated from 00719790 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Per-frame update of a fade level kept at `011d8a68` (0 to 255) that drives
+/// the trait `0xfa9` of up to three tiles, `cdecl`.
+///
+/// `tile_a` and `tile_b` (when both exist) get the inverse of the level and
+/// the level. `tile_c` (when it and `source` exist) gets 255, or the level
+/// (the inverse when that is above 128) when a count read from `source`'s
+/// object (type byte `0x28`) is above a limit: with `use_last_weapon` zero the
+/// limit is the player's actor value 5 plus the entry point `0x35` result and
+/// the count `00663b60`, otherwise it is the actor value of the last bound
+/// weapon and the count is `MiddleHighProcess::GetDesiredTarget`. Last, the
+/// level moves by the time since the last call times the rate (down while
+/// `011d8a50` is set) and is clamped to the two bounds; reaching the upper one
+/// sets the falling flag, reaching the lower one clears it.
+pub fn fn_00719790(
+    e: &mut Engine,
+    tile_a: Ptr,
+    tile_b: Ptr,
+    tile_c: Ptr,
+    source: Ptr,
+    use_last_weapon: u8,
+) {
+    let upper: f32 = e.global(FADE_UPPER_BOUND);
+    let lower: f32 = e.global(FADE_LOWER_BOUND);
+    let rate: f32 = e.global(FADE_RATE);
+    let maximum: f32 = e.global(FLOAT_MAXIMUM);
+    let stored: f32 = e.global(FADE_LEVEL);
+    let level = clamp_float(e, stored, 0.0, maximum);
+    let inverse = (e.global::<f64>(COLOR_CHANNEL_SCALE) - level as f64) as f32;
+    let inverse = clamp_float(e, inverse, 0.0, maximum);
+
+    if !tile_a.is_null() && !tile_b.is_null() {
+        e.call(TILE_SET_FLOAT, &args![tile_a, TRAIT_FADE, inverse, 1u32]);
+        e.call(TILE_SET_FLOAT, &args![tile_b, TRAIT_FADE, level, 1u32]);
+    }
+
+    let player = e.global::<u32>(OBJECT_011DEA3C);
+    if !tile_c.is_null() && !source.is_null() {
+        let mut value = maximum;
+        if use_last_weapon == 0 {
+            let object = e.call(GET_WORD_AT_8, &args![source]).u32();
+            let bonus = e.with_stack(4, |e, slot| {
+                e.mem.set_f32(slot.addr(), 0.0);
+                let owner = e.call(GET_WORD_AT_8, &args![source]).u32();
+                e.call(HANDLE_ENTRY_POINT, &args![0x35u32, player, owner, slot]);
+                e.mem.f32(slot.addr())
+            });
+            let actor_value = st0(e.call(GET_CLAMPED_ACTOR_VALUE, &args![player + 0xA4, 5u32]));
+            let limit = (actor_value + bonus as f64) as f32;
+            if object != 0 && e.call(GET_TYPE_BYTE, &args![object]).u32() == EXPECTED_TYPE {
+                let count = e.call(GET_COUNT_FROM_TYPE, &args![object]).i32();
+                if (limit as f64) < count as f64 {
+                    value = fade_shown_level(e, level, inverse);
+                }
+            }
+        } else {
+            let object = e.call(GET_WORD_AT_8, &args![source]).u32();
+            let weapon = e.call(GET_LAST_BOUND_WEAPON, &args![object]).u32();
+            let actor_value = st0(e.vcall(player + 0xA4, 0xC, &args![weapon])) as f32;
+            if object != 0 && e.call(GET_TYPE_BYTE, &args![object]).u32() == EXPECTED_TYPE {
+                let count = e.call(GET_DESIRED_TARGET, &args![object]).i32();
+                if (actor_value as f64) < count as f64 {
+                    value = fade_shown_level(e, level, inverse);
+                }
+            }
+        }
+        e.call(TILE_SET_FLOAT, &args![tile_c, TRAIT_FADE, value, 1u32]);
+    }
+
+    let now = e.call(GET_CLOCK_TIME, &args![CLOCK_OBJECT]).u32();
+    let elapsed = now.wrapping_sub(e.global::<u32>(FADE_LAST_TIME));
+    e.set_global(FADE_LAST_TIME, now);
+    let current: f32 = e.global(FADE_LEVEL);
+    let step = elapsed as f64 * rate as f64;
+    let moved = if e.global::<u8>(FADE_FALLING) != 0 {
+        current as f64 - step
+    } else {
+        step + current as f64
+    };
+    e.set_global(FADE_LEVEL, moved as f32);
+    clamp_float_at(e, FADE_LEVEL, lower, upper);
+    let current: f32 = e.global(FADE_LEVEL);
+    if upper <= current {
+        e.set_global(FADE_FALLING, 1u8);
+    }
+    if current <= lower {
+        e.set_global(FADE_FALLING, 0u8);
+    }
+}
+
+/// The level `00719790` shows on its third tile: the inverse when it is above
+/// the `double` at `0102e430` (128), the level otherwise.
+fn fade_shown_level(e: &Engine, level: f32, inverse: f32) -> f32 {
+    if inverse as f64 > e.global::<f64>(INVERSE_THRESHOLD) {
+        inverse
+    } else {
+        level
+    }
+}
+
+// Translated from 00719ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs [`fn_00719b00`] on the object at `011dea3c`. The object it is called
+/// on is not read.
+pub fn fn_00719ae0(e: &mut Engine, _unused_0: Ptr<InterfaceManagerFields>) -> bool {
+    let object = e.global::<u32>(OBJECT_011DEA3C);
+    fn_00719b00(e, Ptr::new(object))
+}
+
+// Translated from 00719b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 2 of the byte at `+0x66D` is set.
+pub fn fn_00719b00(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr() + 0x66d) & 4 != 0
+}
+
+// Translated from 00719b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Linear search of a `BSSimpleArray` of words from index `start`: calls the
+/// `cdecl` function `matches(&element, argument)` on each element and returns
+/// the index of the first one it accepts, or -1. A null buffer skips the call
+/// for every index.
+pub fn fn_00719b20(
+    e: &mut Engine,
+    this: Ptr<BSSimpleArray>,
+    argument: u32,
+    start: u32,
+    matches: u32,
+) -> i32 {
+    let mut index = start;
+    while index < e.get(this, BSSimpleArray::iSize) {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        if buffer != 0 {
+            let element = buffer.wrapping_add(index.wrapping_mul(4));
+            if e.call(matches, &args![element, argument]).bool() {
+                return index as i32;
+            }
+        }
+        index += 1;
+    }
+    -1
+}
+
+// Translated from 00719b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the array of tiles (`BSSimpleArray<Tile *>`): sets the
+/// vtable at `0106f798` and runs the base constructor `006b3eb0(0, 0)`.
+/// Returns `this`.
+pub fn fn_00719b80(e: &mut Engine, this: Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray> {
+    e.mem.set_u32(this.addr(), TILE_ARRAY_VTABLE);
+    e.call(0x006b_3eb0, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 00719bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<Tile_P_1024>`'s scalar deleting destructor (Xbox PDB):
+/// runs the destructor body `00719be0`, then frees `this` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_00719bb0(e: &mut Engine, this: Ptr<BSSimpleArray>, flags: u32) -> Ptr<BSSimpleArray> {
+    e.call(0x0071_9be0, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1330,6 +1987,76 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(
             0x00718fb0,
             system_color_manager_find(Ptr<SystemColorManager>, u32) -> u32
+        ),
+        entry!(0x00719010, fn_00719010(Ptr<SystemColorManager>)),
+        entry!(
+            0x00719060,
+            system_color_manager_get_color(Ptr<SystemColorManager>, u32, Ptr) -> bool
+        ),
+        entry!(0x007190a0, fn_007190a0(Ptr<SystemColorManager>, u32) -> u32),
+        entry!(
+            0x007190e0,
+            system_color_manager_set_color(Ptr<SystemColorManager>, u32, Ptr) -> bool
+        ),
+        entry!(
+            0x00719120,
+            fn_00719120(Ptr<SystemColorManager>, u32, u32) -> bool
+        ),
+        entry!(
+            0x00719160,
+            fn_00719160(Ptr<SystemColor>, u32, u32) -> Ptr<SystemColor>
+        ),
+        entry!(
+            0x00719200,
+            fn_00719200(Ptr<SystemColor>, u32) -> Ptr<SystemColor>
+        ),
+        entry!(0x00719230, fn_00719230(Ptr<SystemColor>)),
+        entry!(
+            0x00719250,
+            fn_00719250(Ptr<HardSystemColor>, u32, u32, u32) -> Ptr<HardSystemColor>
+        ),
+        entry!(
+            0x00719290,
+            fn_00719290(Ptr<HardSystemColor>, u32) -> Ptr<HardSystemColor>
+        ),
+        entry!(0x007192c0, fn_007192c0(Ptr<HardSystemColor>)),
+        entry!(
+            0x007192e0,
+            fn_007192e0(Ptr<SoftSystemColor>, u32, u32, u32) -> Ptr<SoftSystemColor>
+        ),
+        entry!(
+            0x00719320,
+            soft_system_color_get_color(Ptr<SoftSystemColor>) -> u32
+        ),
+        entry!(
+            0x00719340,
+            soft_system_color_set_color(Ptr<SoftSystemColor>, u32)
+        ),
+        entry!(
+            0x00719360,
+            fn_00719360(Ptr<SoftSystemColor>, u32) -> Ptr<SoftSystemColor>
+        ),
+        entry!(0x00719390, fn_00719390(Ptr<SoftSystemColor>)),
+        entry!(0x007193b0, system_color_get_color(Ptr<SystemColor>, Ptr)),
+        entry!(0x00719440, fn_00719440(u32, Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x00719490, system_color_set_color(Ptr<SystemColor>, Ptr)),
+        entry!(0x00719580, fn_00719580(Ptr)),
+        entry!(0x00719630, fn_00719630(Ptr<InterfaceManagerFields>, u32)),
+        entry!(0x00719740, fn_00719740(Ptr<InterfaceManagerFields>, u8)),
+        entry!(0x00719790, fn_00719790(Ptr, Ptr, Ptr, Ptr, u8)),
+        entry!(0x00719ae0, fn_00719ae0(Ptr<InterfaceManagerFields>) -> bool),
+        entry!(0x00719b00, fn_00719b00(Ptr) -> bool),
+        entry!(
+            0x00719b20,
+            fn_00719b20(Ptr<BSSimpleArray>, u32, u32, u32) -> i32
+        ),
+        entry!(
+            0x00719b80,
+            fn_00719b80(Ptr<BSSimpleArray>) -> Ptr<BSSimpleArray>
+        ),
+        entry!(
+            0x00719bb0,
+            fn_00719bb0(Ptr<BSSimpleArray>, u32) -> Ptr<BSSimpleArray>
         ),
     ]
 }
@@ -2996,5 +3723,653 @@ mod tests {
         // An empty list finds nothing.
         e.mem.set_u32(this.addr(), 0);
         assert_eq!(e.call(0x0071_8fb0, &args![this, 0x10a0u32]).u32(), 0);
+    }
+
+    // ---- 00719010 .. 00719bb0: system colors, the tile refresh, the fade ----
+
+    /// The callees `system_color_manager_find` uses, and a manager whose
+    /// list holds one node with `color`; the color's id string is `0xa0`,
+    /// that is trait id `0x10a0` for the `TextToTrait` double.
+    fn manager_with(e: &mut Engine, color: u32) -> Ptr<SystemColorManager> {
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0057_cbe0, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            ret(node + 8)
+        });
+        e.register(0x007f_a950, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(0x00a0_1860, |_, a| ret(a[0] + 0x1000));
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, color);
+        let manager = e.new_object::<SystemColorManager>();
+        e.mem.set_u32(manager.addr(), node);
+        e.mem.set_u32(color + 4, 0xa0);
+        manager
+    }
+
+    /// A system color object (0x10 bytes) whose virtual `GetColor` (slot 4)
+    /// returns `packed` and whose `SetColor` (slot 8) is the logged double
+    /// `5000_0008`.
+    fn color_object(e: &mut Engine, packed: u32) -> u32 {
+        e.register_double(0x5000_0004, move |_, _| ret(packed));
+        e.register(0x5000_0008, |_, _| Ret::default());
+        e.register(0x5000_0000, |_, _| Ret::default());
+        let color = e.mem.alloc(0x10);
+        e.put_vtable(0x6000_0000, &[0x5000_0000, 0x5000_0004, 0x5000_0008]);
+        e.mem.set_u32(color, 0x6000_0000);
+        color
+    }
+
+    fn float_pages(e: &mut Engine) {
+        for page in [
+            0x0101_e000,
+            0x0102_3000,
+            0x0102_e000,
+            0x0102_f000,
+            0x011f_6000,
+        ] {
+            e.map(page, 0x1000);
+        }
+    }
+
+    #[test]
+    fn fn_00719010_deletes_every_color_until_the_list_is_empty() {
+        let mut e = base_engine();
+        let manager = e.new_object::<SystemColorManager>();
+        // Two items in the list, the second one null: only the first is
+        // deleted.
+        e.mem.set_u32(manager.addr() + 8, 2);
+        let color = color_object(&mut e, 0);
+        let items = [color, 0];
+        e.register(0x0076_b610, |e, a| ret((e.mem.u32(a[0] + 8) == 0) as u32));
+        e.register_double(0x007b_5390, move |e, a| {
+            let count = e.mem.u32(a[0] + 8) - 1;
+            e.mem.set_u32(a[0] + 8, count);
+            ret(items[(1 - count) as usize])
+        });
+        e.call(0x0071_9010, &args![manager]);
+        assert_eq!(logged(&e, 0x5000_0000), vec![vec![color, 1]]);
+        assert_eq!(e.mem.u32(manager.addr() + 8), 0);
+    }
+
+    #[test]
+    fn system_color_manager_get_color_fills_the_color_when_found() {
+        let mut e = base_engine();
+        float_pages(&mut e);
+        e.set_global(COLOR_BYTE_SCALE, 0.5f32);
+        let color = color_object(&mut e, 0xff80_4020);
+        let manager = manager_with(&mut e, color);
+        let out = e.mem.alloc(12);
+        assert!(e.call(0x0071_9060, &args![manager, 0x10a0u32, out]).bool());
+        assert_eq!(e.mem.f32(out), 127.5);
+        assert_eq!(e.mem.f32(out + 4), 64.0);
+        assert_eq!(e.mem.f32(out + 8), 32.0);
+        // An id nobody has leaves the output alone.
+        assert!(!e.call(0x0071_9060, &args![manager, 0x1111u32, out]).bool());
+        assert_eq!(e.mem.f32(out), 127.5);
+    }
+
+    #[test]
+    fn fn_007190a0_returns_the_packed_color_or_zero() {
+        let mut e = base_engine();
+        let color = color_object(&mut e, 0x1234_5678);
+        let manager = manager_with(&mut e, color);
+        assert_eq!(
+            e.call(0x0071_90a0, &args![manager, 0x10a0u32]).u32(),
+            0x1234_5678
+        );
+        assert_eq!(e.call(0x0071_90a0, &args![manager, 0x1111u32]).u32(), 0);
+    }
+
+    #[test]
+    fn system_color_manager_set_color_packs_the_channels() {
+        let mut e = base_engine();
+        float_pages(&mut e);
+        e.set_global(COLOR_CHANNEL_SCALE, 255.0f64);
+        // `004bd510(value, 1.0)`: the value rounded up to a multiple of 1.
+        e.register(ROUND_UP_TO_MULTIPLE, |_, a| {
+            ret_float((f32::from_bits(a[0]) as f64).ceil())
+        });
+        let color = color_object(&mut e, 0);
+        let manager = manager_with(&mut e, color);
+        let input = e.mem.alloc(12);
+        e.mem.set_f32(input, 1.0);
+        e.mem.set_f32(input + 4, 0.5);
+        e.mem.set_f32(input + 8, 0.25);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0071_90e0, &args![manager, 0x10a0u32, input])
+            .bool());
+        // Blue (63.75 -> 64), green (127.5 -> 128) and red (255), in that
+        // order, packed red first with a low byte of 0xff.
+        let rounds = logged(&e, ROUND_UP_TO_MULTIPLE);
+        assert_eq!(rounds[0], vec![63.75f32.to_bits(), 1.0f32.to_bits()]);
+        assert_eq!(rounds[1][0], 127.5f32.to_bits());
+        assert_eq!(rounds[2][0], 255.0f32.to_bits());
+        assert_eq!(logged(&e, 0x5000_0008), vec![vec![color, 0xff80_40ff]]);
+        assert!(!e
+            .call(0x0071_90e0, &args![manager, 0x1111u32, input])
+            .bool());
+    }
+
+    #[test]
+    fn fn_00719120_sets_the_packed_color_when_found() {
+        let mut e = base_engine();
+        let color = color_object(&mut e, 0);
+        let manager = manager_with(&mut e, color);
+        e.call_log = Some(vec![]);
+        assert!(e
+            .call(0x0071_9120, &args![manager, 0x10a0u32, 0xdead_beefu32])
+            .bool());
+        assert_eq!(logged(&e, 0x5000_0008), vec![vec![color, 0xdead_beef]]);
+        assert!(!e.call(0x0071_9120, &args![manager, 0x1111u32, 1u32]).bool());
+        assert_eq!(logged(&e, 0x5000_0008).len(), 1);
+    }
+
+    /// Doubles for the string and registration calls of the constructor.
+    fn constructor_engine() -> Engine {
+        let mut e = base_engine();
+        nothing(
+            &mut e,
+            &[
+                0x0040_37b0,
+                0x0040_37d0,
+                0x0040_6f60,
+                0x004a_fad0,
+                SET_NAMED_VALUE,
+            ],
+        );
+        e.register(0x0055_9450, |_, a| ret(a[0] + 0x100));
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e
+    }
+
+    #[test]
+    fn fn_00719160_builds_the_id_string_and_registers_it() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0071_9160, &args![color, 0x7000u32, 9u32]).u32(),
+            color
+        );
+        assert_eq!(e.mem.u32(color), SYSTEM_COLOR_VTABLE);
+        assert_eq!(
+            order(&e),
+            vec![
+                0x0071_9160,
+                0x0040_37b0,
+                0x0040_6f60,
+                0x004a_fad0,
+                0x0055_9450,
+                SET_NAMED_VALUE
+            ]
+        );
+        assert_eq!(
+            logged(&e, 0x0040_6f60),
+            vec![vec![color + 4, SYSTEM_COLOR_NAME_FORMAT, 0x7000]]
+        );
+        assert_eq!(logged(&e, SET_NAMED_VALUE), vec![vec![color + 0x104, 9]]);
+    }
+
+    #[test]
+    fn fn_00719200_and_fn_00719230_destroy_the_base_color() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        e.mem.set_u32(color, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9230, &args![color]);
+        assert_eq!(e.mem.u32(color), SYSTEM_COLOR_VTABLE);
+        assert_eq!(logged(&e, 0x0040_37d0), vec![vec![color + 4]]);
+        assert_eq!(e.call(0x0071_9200, &args![color, 0u32]).u32(), color);
+        assert!(logged(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0071_9200, &args![color, 1u32]);
+        assert_eq!(logged(&e, OPERATOR_DELETE), vec![vec![color]]);
+    }
+
+    #[test]
+    fn fn_00719250_adds_the_hard_color() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0071_9250, &args![color, 0x7000u32, 0xff00_00ffu32, 3u32])
+                .u32(),
+            color
+        );
+        assert_eq!(e.mem.u32(color), HARD_SYSTEM_COLOR_VTABLE);
+        assert_eq!(
+            e.get(Ptr::<HardSystemColor>::new(color), HardSystemColor::iRGB),
+            0xff00_00ff
+        );
+        assert_eq!(logged(&e, SET_NAMED_VALUE)[0][1], 3);
+    }
+
+    #[test]
+    fn fn_00719290_and_fn_007192c0_destroy_the_hard_color() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_92c0, &args![color]);
+        // The vtable ends as the base class's after the base destructor.
+        assert_eq!(e.mem.u32(color), SYSTEM_COLOR_VTABLE);
+        assert_eq!(logged(&e, 0x0040_37d0).len(), 1);
+        assert_eq!(e.call(0x0071_9290, &args![color, 1u32]).u32(), color);
+        assert_eq!(logged(&e, OPERATOR_DELETE), vec![vec![color]]);
+    }
+
+    #[test]
+    fn fn_007192e0_adds_the_soft_color() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        assert_eq!(
+            e.call(0x0071_92e0, &args![color, 0x7000u32, 0x8000u32, 4u32])
+                .u32(),
+            color
+        );
+        assert_eq!(e.mem.u32(color), SOFT_SYSTEM_COLOR_VTABLE);
+        assert_eq!(e.mem.u32(color + 0xc), 0x8000);
+    }
+
+    #[test]
+    fn soft_system_color_reads_and_writes_the_settings_value() {
+        let mut e = base_engine();
+        // `0043d4d0` gives the address of the value inside the setting.
+        e.register(0x0043_d4d0, |_, a| ret(a[0] + 4));
+        let setting = e.mem.alloc(8);
+        let color = e.mem.alloc(0x10);
+        e.mem.set_u32(color + 0xc, setting);
+        e.call(0x0071_9340, &args![color, 0xaabb_ccddu32]);
+        assert_eq!(e.mem.u32(setting + 4), 0xaabb_ccdd);
+        assert_eq!(e.call(0x0071_9320, &args![color]).u32(), 0xaabb_ccdd);
+    }
+
+    #[test]
+    fn fn_00719360_and_fn_00719390_destroy_the_soft_color() {
+        let mut e = constructor_engine();
+        let color = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9390, &args![color]);
+        assert_eq!(e.mem.u32(color), SYSTEM_COLOR_VTABLE);
+        assert_eq!(e.call(0x0071_9360, &args![color, 0u32]).u32(), color);
+        assert!(logged(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0071_9360, &args![color, 1u32]);
+        assert_eq!(logged(&e, OPERATOR_DELETE), vec![vec![color]]);
+    }
+
+    #[test]
+    fn fn_00719440_splits_the_bytes_high_first() {
+        let mut e = base_engine();
+        let out = e.mem.alloc(16);
+        e.call(
+            0x0071_9440,
+            &args![0x1122_3344u32, out, out + 4, out + 8, out + 12],
+        );
+        let words: Vec<u32> = (0..4).map(|i| e.mem.u32(out + 4 * i)).collect();
+        assert_eq!(words, vec![0x11, 0x22, 0x33, 0x44]);
+    }
+
+    #[test]
+    fn fn_00719580_refreshes_children_before_the_matching_tile() {
+        let mut e = base_engine();
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0057_cbe0, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            ret(node + 8)
+        });
+        // The tile's name is the word at +0x20; a name matches when it is
+        // the very string address (0 = equal).
+        e.register(TILE_NAME, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(COMPARE_STRINGS, |_, a| ret((a[0] != a[1]) as u32));
+        e.register(GET_MANAGER, |_, _| Ret::default());
+        e.register(MANAGER_READY, |_, _| ret(1));
+        e.register(TEXT_TO_TRAIT, |_, a| ret(a[0] + 1));
+        nothing(&mut e, &[TILE_SET_VALUE, TILE_SET_NEEDS_UPDATE]);
+        // A parent matching the second name with a child matching the first.
+        let parent = e.mem.alloc(0x30);
+        let child = e.mem.alloc(0x30);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, child);
+        e.mem.set_u32(parent + 4, node);
+        e.mem.set_u32(child + 0x20, TILE_NAME_FIRST);
+        e.mem.set_u32(parent + 0x20, TILE_NAME_SECOND);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9580, &args![parent]);
+        assert_eq!(
+            logged(&e, TILE_SET_VALUE),
+            vec![
+                vec![child, READY_TRAIT_NAME + 1, 1],
+                vec![parent, READY_TRAIT_NAME + 1, 1]
+            ]
+        );
+        assert_eq!(
+            logged(&e, TILE_SET_NEEDS_UPDATE),
+            vec![vec![child, 4], vec![parent, 4]]
+        );
+        // A tile with another name is left alone.
+        e.mem.set_u32(parent + 0x20, 0x1234);
+        e.mem.set_u32(parent + 4, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9580, &args![parent]);
+        assert!(logged(&e, TILE_SET_VALUE).is_empty());
+    }
+
+    /// Doubles for the whole interface refresh; the manager's menus root
+    /// holds one child tile whose menu has the virtual slot `0x44`
+    /// (`5000_0044`). Returns the interface object and the menu.
+    fn refresh_engine(ready: u32) -> (Engine, Ptr<InterfaceManagerFields>, u32) {
+        let mut e = base_engine();
+        e.register(0x0055_9450, |e, a| ret(e.mem.u32(a[0])));
+        e.register(0x0057_cbe0, |e, a| {
+            let node = e.mem.u32(a[1]);
+            let next = e.mem.u32(node);
+            e.mem.set_u32(a[1], next);
+            ret(node + 8)
+        });
+        e.register(TILE_NAME, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(COMPARE_STRINGS, |_, _| ret(1));
+        e.register(GET_MANAGER, |_, _| Ret::default());
+        e.register_double(MANAGER_READY, move |_, _| ret(ready));
+        e.register(TEXT_TO_TRAIT, |_, a| ret(a[0] + 1));
+        nothing(
+            &mut e,
+            &[
+                TILE_SET_VALUE,
+                SET_NAMED_VALUE,
+                REFRESH_START_MENU,
+                SET_RENDERER_FLAG,
+                STORE_BYTE,
+                0x5000_0044,
+            ],
+        );
+        let menu = e.mem.alloc(8);
+        e.put_vtable(0x6000_0100, &[0; 0x12]);
+        e.mem.set_u32(0x6000_0100 + 0x44, 0x5000_0044);
+        e.mem.set_u32(menu, 0x6000_0100);
+        e.register_double(TILE_GET_MENU, move |_, _| ret(menu));
+        let child = e.mem.alloc(0x30);
+        let node = e.mem.alloc(12);
+        e.mem.set_u32(node + 8, child);
+        let menus_root = e.mem.alloc(0x30);
+        e.mem.set_u32(menus_root + 4, node);
+        let this = e.new_object::<InterfaceManagerFields>();
+        let string_root = e.mem.alloc(0x30);
+        e.mem.set_u32(this.addr() + 0x9c, menus_root);
+        e.mem.set_u32(this.addr() + 0xa0, string_root);
+        (e, this, menu)
+    }
+
+    #[test]
+    fn fn_00719630_applies_the_ready_state_to_every_menu() {
+        let (mut e, this, menu) = refresh_engine(1);
+        let string_root = e.mem.u32(this.addr() + 0xa0);
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9630, &args![this, 0xffffu32]);
+        assert_eq!(
+            logged(&e, SET_NAMED_VALUE),
+            vec![vec![NAMED_VALUE_FIRST, 1], vec![NAMED_VALUE_SECOND, 1]]
+        );
+        assert_eq!(
+            logged(&e, TILE_SET_VALUE),
+            vec![vec![string_root, ROOT_TRAIT_NAME + 1, 1]]
+        );
+        // The child's menu is looked up twice and told the state.
+        assert_eq!(logged(&e, TILE_GET_MENU).len(), 2);
+        assert_eq!(logged(&e, 0x5000_0044), vec![vec![menu, 1]]);
+        assert_eq!(*order(&e).last().unwrap(), REFRESH_START_MENU);
+    }
+
+    #[test]
+    fn fn_00719630_skips_the_menu_of_a_child_without_one() {
+        let (mut e, this, _) = refresh_engine(0);
+        e.register(TILE_GET_MENU, |_, _| ret(0));
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9630, &args![this, 0u32]);
+        assert!(logged(&e, 0x5000_0044).is_empty());
+        assert_eq!(logged(&e, SET_NAMED_VALUE)[0], vec![NAMED_VALUE_FIRST, 0]);
+        assert_eq!(logged(&e, REFRESH_START_MENU).len(), 1);
+    }
+
+    #[test]
+    fn fn_00719740_stores_the_flag_around_the_refresh() {
+        let (mut e, this, _) = refresh_engine(1);
+        let target = e.mem.alloc(8);
+        e.set_global(OBJECT_011DEA0C, 0x7777u32);
+        e.register_double(GET_MANAGER, move |_, _| ret(this.addr()));
+        e.register_double(GET_OBJECT_FROM_011DEA0C, move |_, _| ret(target));
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9740, &args![0x1000u32, 1u8]);
+        assert_eq!(
+            logged(&e, SET_RENDERER_FLAG),
+            vec![vec![RENDERER_OBJECT, 1]]
+        );
+        assert_eq!(logged(&e, GET_OBJECT_FROM_011DEA0C), vec![vec![0x7777]]);
+        assert_eq!(logged(&e, STORE_BYTE), vec![vec![target, 1]]);
+        let calls = order(&e);
+        let renderer = calls.iter().position(|a| *a == SET_RENDERER_FLAG).unwrap();
+        let refresh = calls.iter().position(|a| *a == REFRESH_START_MENU).unwrap();
+        let store = calls.iter().position(|a| *a == STORE_BYTE).unwrap();
+        assert!(renderer < refresh && refresh < store);
+    }
+
+    /// The state `00719790` reads: constants, the player (with its owner
+    /// at `+0xA4` whose slot `0xC` answers `weapon_value`), the clock at
+    /// `now`, and doubles for every callee.
+    fn fade_engine(level: f32, falling: bool, now: u32, last: u32) -> (Engine, u32) {
+        let mut e = base_engine();
+        float_pages(&mut e);
+        e.set_global(FADE_UPPER_BOUND, 485.0f32);
+        e.set_global(FADE_LOWER_BOUND, -230.0f32);
+        e.set_global(FADE_RATE, 0.25f32);
+        e.set_global(FLOAT_MAXIMUM, 255.0f32);
+        e.set_global(COLOR_CHANNEL_SCALE, 255.0f64);
+        e.set_global(INVERSE_THRESHOLD, 128.0f64);
+        e.set_global(FADE_LEVEL, level);
+        e.set_global(FADE_FALLING, falling as u8);
+        e.set_global(FADE_LAST_TIME, last);
+        e.register(CLAMP_FLOAT, |e, a| {
+            let value = e.mem.f32(a[0]);
+            let (min, max) = (f32::from_bits(a[1]), f32::from_bits(a[2]));
+            if value > max {
+                e.mem.set_f32(a[0], max);
+            } else if value < min {
+                e.mem.set_f32(a[0], min);
+            }
+            Ret::default()
+        });
+        e.register_double(GET_CLOCK_TIME, move |_, _| ret(now));
+        nothing(&mut e, &[TILE_SET_FLOAT]);
+        e.register(GET_WORD_AT_8, |e, a| ret(e.mem.u32(a[0] + 8)));
+        // The entry point writes 2.0 through its last argument.
+        e.register(HANDLE_ENTRY_POINT, |e, a| {
+            e.mem.set_f32(a[3], 2.0);
+            Ret::default()
+        });
+        // The actor value 5 is 3.0.
+        e.register(GET_CLAMPED_ACTOR_VALUE, |_, _| ret_float(3.0));
+        e.register(GET_TYPE_BYTE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(GET_COUNT_FROM_TYPE, |e, a| ret(e.mem.u32(a[0] + 0x19c)));
+        e.register(GET_DESIRED_TARGET, |e, a| ret(e.mem.u32(a[0] + 0x1bc)));
+        e.register(GET_LAST_BOUND_WEAPON, |e, a| ret(e.mem.u32(a[0] + 0x15c)));
+        // The weapon's value is the weapon word as a float.
+        e.register(0x5000_000c, |_, a| ret_float(a[1] as f64));
+        let player = e.mem.alloc(0x700);
+        e.put_vtable(0x6000_0200, &[0, 0, 0, 0x5000_000c]);
+        e.mem.set_u32(player + 0xa4, 0x6000_0200);
+        e.set_global(OBJECT_011DEA3C, player);
+        e.call_log = Some(vec![]);
+        (e, player)
+    }
+
+    fn fade_tiles(e: &mut Engine) -> (u32, u32, u32, u32) {
+        let tiles: Vec<u32> = (0..3).map(|_| e.mem.alloc(8)).collect();
+        // `source`: the word at +8 is an object of type 0x28 with counts.
+        let source = e.mem.alloc(0x10);
+        let object = e.mem.alloc(0x200);
+        e.mem.set_u8(object + 4, 0x28);
+        e.mem.set_u32(source + 8, object);
+        e.mem.set_u32(object + 0x19c, 100);
+        e.mem.set_u32(object + 0x1bc, 50);
+        e.mem.set_u32(object + 0x15c, 10);
+        (tiles[0], tiles[1], tiles[2], source)
+    }
+
+    #[test]
+    fn fn_00719790_sets_inverse_and_level_then_rises() {
+        let (mut e, _) = fade_engine(100.0, false, 5000, 4000);
+        let (a, b, _, _) = fade_tiles(&mut e);
+        e.call(0x0071_9790, &args![a, b, 0u32, 0u32, 0u32]);
+        assert_eq!(
+            logged(&e, TILE_SET_FLOAT),
+            vec![
+                vec![a, TRAIT_FADE, 155.0f32.to_bits(), 1],
+                vec![b, TRAIT_FADE, 100.0f32.to_bits(), 1]
+            ]
+        );
+        // 1000 ms at 0.25 per ms.
+        assert_eq!(e.global::<f32>(FADE_LEVEL), 350.0);
+        assert_eq!(e.global::<u32>(FADE_LAST_TIME), 5000);
+        assert_eq!(e.global::<u8>(FADE_FALLING), 0);
+    }
+
+    #[test]
+    fn fn_00719790_clamps_the_level_and_flips_the_direction() {
+        // Rising past the upper bound: clamped, now falling.
+        let (mut e, _) = fade_engine(400.0, false, 2000, 1000);
+        e.call(0x0071_9790, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.global::<f32>(FADE_LEVEL), 485.0);
+        assert_eq!(e.global::<u8>(FADE_FALLING), 1);
+        // The tiles saw the level clamped to 255 (inverse 0), but none exist.
+        assert!(logged(&e, TILE_SET_FLOAT).is_empty());
+        // Falling below the lower bound: clamped, rising again.
+        let (mut e, _) = fade_engine(20.0, true, 2000, 1000);
+        e.call(0x0071_9790, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.global::<f32>(FADE_LEVEL), -230.0);
+        assert_eq!(e.global::<u8>(FADE_FALLING), 0);
+        // In between nothing flips.
+        let (mut e, _) = fade_engine(100.0, true, 1100, 1000);
+        e.call(0x0071_9790, &args![0u32, 0u32, 0u32, 0u32, 0u32]);
+        assert_eq!(e.global::<f32>(FADE_LEVEL), 75.0);
+        assert_eq!(e.global::<u8>(FADE_FALLING), 1);
+    }
+
+    #[test]
+    fn fn_00719790_third_tile_uses_the_entry_point_limit() {
+        let (mut e, player) = fade_engine(100.0, false, 0, 0);
+        let (_, _, c, source) = fade_tiles(&mut e);
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 0u8]);
+        // Limit 3 + 2 = 5 is below the count 100: the inverse (155 > 128).
+        assert_eq!(
+            logged(&e, TILE_SET_FLOAT),
+            vec![vec![c, TRAIT_FADE, 155.0f32.to_bits(), 1]]
+        );
+        assert_eq!(
+            logged(&e, HANDLE_ENTRY_POINT)[0][..3],
+            [0x35, player, e.mem.u32(source + 8)]
+        );
+        // The inverse is not above 128: the level is shown.
+        let (mut e, _) = fade_engine(200.0, false, 0, 0);
+        let (_, _, c, source) = fade_tiles(&mut e);
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 0u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT)[0][2], 200.0f32.to_bits());
+        // A count at or below the limit, or a wrong type, gives 255.
+        let (mut e, _) = fade_engine(100.0, false, 0, 0);
+        let (_, _, c, source) = fade_tiles(&mut e);
+        let object = e.mem.u32(source + 8);
+        e.mem.set_u32(object + 0x19c, 5);
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 0u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT)[0][2], 255.0f32.to_bits());
+        e.mem.set_u32(object + 0x19c, 100);
+        e.mem.set_u8(object + 4, 0x27);
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 0u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT)[1][2], 255.0f32.to_bits());
+    }
+
+    #[test]
+    fn fn_00719790_third_tile_uses_the_weapon_value_when_asked() {
+        let (mut e, _) = fade_engine(100.0, false, 0, 0);
+        let (_, _, c, source) = fade_tiles(&mut e);
+        // The weapon's value is 10 (its word), below the target 50.
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 1u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT)[0][2], 155.0f32.to_bits());
+        assert!(logged(&e, HANDLE_ENTRY_POINT).is_empty());
+        assert_eq!(logged(&e, 0x5000_000c)[0][1], 10);
+        // A target not above the value gives 255.
+        let object = e.mem.u32(source + 8);
+        e.mem.set_u32(object + 0x1bc, 10);
+        e.call(0x0071_9790, &args![0u32, 0u32, c, source, 1u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT)[1][2], 255.0f32.to_bits());
+        // No source: the tile is not touched.
+        e.call(0x0071_9790, &args![0u32, 0u32, c, 0u32, 1u8]);
+        assert_eq!(logged(&e, TILE_SET_FLOAT).len(), 2);
+    }
+
+    #[test]
+    fn fn_00719b00_and_fn_00719ae0_test_bit_2_of_the_byte() {
+        let mut e = base_engine();
+        let object = e.mem.alloc(0x700);
+        e.set_global(OBJECT_011DEA3C, object);
+        assert!(!e.call(0x0071_9b00, &args![object]).bool());
+        assert!(!e.call(0x0071_9ae0, &args![0x1000u32]).bool());
+        e.mem.set_u8(object + 0x66d, 0x04);
+        assert!(e.call(0x0071_9b00, &args![object]).bool());
+        assert!(e.call(0x0071_9ae0, &args![0x1000u32]).bool());
+        e.mem.set_u8(object + 0x66d, 0xfb);
+        assert!(!e.call(0x0071_9b00, &args![object]).bool());
+    }
+
+    #[test]
+    fn fn_00719b20_returns_the_first_index_the_callback_accepts() {
+        let mut e = base_engine();
+        // The callback accepts an element equal to its argument.
+        e.register(0x5000_0100, |e, a| ret((e.mem.u32(a[0]) == a[1]) as u32));
+        let array = e.new_object::<BSSimpleArray>();
+        let buffer = e.mem.alloc(16);
+        for (i, v) in [7u32, 8, 9, 8].iter().enumerate() {
+            e.mem.set_u32(buffer + 4 * i as u32, *v);
+        }
+        e.set(array, BSSimpleArray::pBuffer, buffer);
+        e.set(array, BSSimpleArray::iSize, 4);
+        let find = |e: &mut Engine, value: u32, start: u32| {
+            e.call(0x0071_9b20, &args![array, value, start, 0x5000_0100u32])
+                .i32()
+        };
+        assert_eq!(find(&mut e, 8, 0), 1);
+        assert_eq!(find(&mut e, 8, 2), 3);
+        assert_eq!(find(&mut e, 5, 0), -1);
+        assert_eq!(find(&mut e, 7, 4), -1);
+        // A null buffer never calls the callback.
+        e.set(array, BSSimpleArray::pBuffer, 0);
+        assert_eq!(find(&mut e, 7, 0), -1);
+    }
+
+    #[test]
+    fn fn_00719b80_sets_the_vtable_and_runs_the_base_constructor() {
+        let mut e = base_engine();
+        nothing(&mut e, &[0x006b_3eb0]);
+        let array = e.new_object::<BSSimpleArray>();
+        e.call_log = Some(vec![]);
+        assert_eq!(
+            e.call(0x0071_9b80, &args![array]).ptr::<()>().addr(),
+            array.addr()
+        );
+        assert_eq!(e.mem.u32(array.addr()), TILE_ARRAY_VTABLE);
+        assert_eq!(logged(&e, 0x006b_3eb0), vec![vec![array.addr(), 0, 0]]);
+    }
+
+    #[test]
+    fn fn_00719bb0_destroys_and_frees_on_request() {
+        let mut e = base_engine();
+        nothing(&mut e, &[0x0071_9be0, OPERATOR_DELETE]);
+        let array = e.new_object::<BSSimpleArray>();
+        e.call_log = Some(vec![]);
+        e.call(0x0071_9bb0, &args![array, 0u32]);
+        assert_eq!(logged(&e, 0x0071_9be0), vec![vec![array.addr()]]);
+        assert!(logged(&e, OPERATOR_DELETE).is_empty());
+        e.call(0x0071_9bb0, &args![array, 1u32]);
+        assert_eq!(logged(&e, OPERATOR_DELETE), vec![vec![array.addr()]]);
     }
 }
