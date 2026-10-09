@@ -27,6 +27,7 @@ pub mod bgsunloadedformbuffer;
 pub mod calendar;
 pub mod garbagecollector;
 pub mod main;
+pub mod main_p2;
 pub mod memorylevelmanager;
 pub mod memorymanagerfile;
 pub mod run_00840f70;
@@ -87,6 +88,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(calendar::funcs());
     out.extend(garbagecollector::funcs());
     out.extend(main::funcs());
+    out.extend(main_p2::funcs());
     out.extend(memorylevelmanager::funcs());
     out.extend(memorymanagerfile::funcs());
     out.extend(run_00840f70::funcs());

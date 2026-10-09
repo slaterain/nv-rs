@@ -66,6 +66,7 @@ pub mod hkcpujobthreadpool;
 pub mod hkcrc32streamwriter;
 pub mod hkdataobject;
 pub mod hkdataobjectdict;
+pub mod hkdataobjectdict_p2;
 pub mod hkdataobjectnative;
 pub mod hkdataobjectutil;
 pub mod hkdebugdisplay;
@@ -972,6 +973,7 @@ pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(hkcrc32streamwriter::funcs());
     out.extend(hkdataobject::funcs());
     out.extend(hkdataobjectdict::funcs());
+    out.extend(hkdataobjectdict_p2::funcs());
     out.extend(hkdataobjectnative::funcs());
     out.extend(hkdataobjectutil::funcs());
     out.extend(hkdebugdisplay::funcs());

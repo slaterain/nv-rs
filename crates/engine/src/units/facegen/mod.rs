@@ -2,6 +2,7 @@
 #![allow(clippy::module_inception)]
 
 pub mod algs;
+pub mod algs_p2;
 pub mod assert;
 pub mod binaryfile;
 pub mod egmfileio;
@@ -26,6 +27,7 @@ pub mod trifileio;
 
 pub fn funcs(out: &mut Vec<(u32, crate::AbiFn)>) {
     out.extend(algs::funcs());
+    out.extend(algs_p2::funcs());
     out.extend(assert::funcs());
     out.extend(binaryfile::funcs());
     out.extend(egmfileio::funcs());
