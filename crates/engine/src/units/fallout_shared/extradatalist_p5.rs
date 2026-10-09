@@ -21,6 +21,16 @@
 //! functions `0042f5f0` (set size), `0042f850` (add) and `0042f8a0` (remove
 //! at an index). The next session continues at `0042f9c0`.
 //!
+//! Third session (25 functions, `0042f9c0` to `00569140`, the end of the
+//! range): the functions of the one-word smart pointer of the
+//! `BSSimpleArray<NavMeshPtr,1024>` (copy, null and object constructors,
+//! destructor, assignment, comparison, deleting destructor), that array's
+//! clear, move-buffer, constructor-body and element functions, the
+//! `NiTMapBase<..., TESObjectREFR *, bool>` constructor and destructor
+//! bodies, the `BSSimpleArray<TESBoundObject *,1024>` destructors, the
+//! type `0x10` extra data constructor, and the two getters at `00555bc0` and
+//! `00569140`.
+//!
 //! The extra data type numbers are `EXTRA_DATA_TYPE` of the Xbox PDB
 //! (`0x4A` `EXTRA_HOT_KEY`, `0x4D` `EXTRA_INFO_GENERAL_TOPIC`, ...). The
 //! compiler's exception-unwinding frames (the `FS:[0]` chains of the setters
@@ -235,6 +245,43 @@ const VTABLE_EXTRA_COMBAT_STYLE: u32 = 0x0101_59c8;
 const VTABLE_BS_SIMPLE_ARRAY_NAV_MESH_PTR: u32 = 0x0101_59d4;
 const VTABLE_NI_T_MAP_REFR_BOOL: u32 = 0x0101_59e8;
 const VTABLE_BS_SIMPLE_ARRAY_BOUND_OBJECT: u32 = 0x0101_5a08;
+
+// Third session (`0042f9c0` to `00569140`).
+
+/// `006e6da0(size, address)`: placement `new`, which gives `address` back.
+const PLACEMENT_NEW: u32 = 0x006e_6da0;
+/// `memmove(destination, source, size)` (`00ec7230`, cdecl).
+const MEMORY_MOVE: u32 = 0x00ec_7230;
+/// `memset(block, value, size)` (`00403d30`, cdecl).
+const MEMORY_SET: u32 = 0x0040_3d30;
+/// Takes a reference: `this` = the address of the reference count, +0x1C of
+/// the object the one-word smart pointer holds (`0040f6e0`).
+const OBJECT_REFERENCE_ADD: u32 = 0x0040_f6e0;
+/// Releases a reference: `this` = the same address (`00401970`).
+const OBJECT_REFERENCE_RELEASE: u32 = 0x0040_1970;
+/// Offset of the reference count in the object the smart pointer holds.
+const REFERENCE_COUNT_OFFSET: u32 = 0x1c;
+/// `00aa1070(bytes)`: allocates the hash table of the
+/// `NiTMapBase<..., TESObjectREFR *, bool>` (cdecl).
+const TABLE_ALLOCATE: u32 = 0x00aa_1070;
+/// `00aa10f0(block)`: frees that table (cdecl; a null block is ignored).
+const TABLE_FREE: u32 = 0x00aa_10f0;
+/// `00438af0(this)`: empties the `NiTMapBase<..., TESObjectREFR *, bool>`.
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+/// `004b0460(this, other)`: whether the word at `this` equals the word at
+/// `other` (a byte in AL, the rest of EAX zero).
+const POINTER_EQUAL: u32 = 0x004b_0460;
+/// `this + 0x28` (`004610d0`), the list of the object `fn_00555bc0` works on.
+const LIST_AT_OFFSET_0X28: u32 = 0x0046_10d0;
+/// `this + 0x44` (`005d43c0`), the list of the object `fn_00569140` works on.
+const LIST_AT_OFFSET_0X44: u32 = 0x005d_43c0;
+/// The word at +0x0C of the list's type 5 extra data, or 0 (`00421910`).
+const EXTRA_WORD_SEEN_DATA: u32 = 0x0042_1910;
+/// The word at +0x0C of the list's type `0x2A` extra data, or 0 (`004182b0`).
+const EXTRA_WORD_LOCK: u32 = 0x0041_82b0;
+
+const VTABLE_NI_T_MAP_BASE_REFR_BOOL: u32 = 0x0101_5a1c;
+const VTABLE_EXTRA_ANIM: u32 = 0x0101_5b28;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1392,6 +1439,379 @@ pub fn fn_0042f8a0(e: &mut Engine, this: Ptr<BSSimpleArray>, index: u32, shrink:
     e.set(this, BSSimpleArray::iSize, size.wrapping_sub(1));
 }
 
+// Translated from 0042f9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears a `BSSimpleArray` of one-word smart pointers (the
+/// `BSSimpleArray<NavMeshPtr,1024>`): with a buffer, destroys its `iSize`
+/// elements (`fn_0042fb20`); with `free_buffer` set, frees the buffer
+/// (`006a8500`) and zeroes `pBuffer` and `iReservedSize`; then `iSize` is 0.
+/// An array without a buffer is left as it is.
+pub fn fn_0042f9c0(e: &mut Engine, this: Ptr<BSSimpleArray>, free_buffer: u8) {
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    if buffer == 0 {
+        return;
+    }
+    let size = e.get(this, BSSimpleArray::iSize);
+    fn_0042fb20(e, this.cast(), buffer, size);
+    if free_buffer != 0 {
+        e.call(ARRAY_FREE_BUFFER, &args![this]);
+        e.set(this, BSSimpleArray::pBuffer, 0);
+        e.set(this, BSSimpleArray::iReservedSize, 0);
+    }
+    e.set(this, BSSimpleArray::iSize, 0);
+}
+
+// Translated from 0042fa20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy constructor of the one-word smart pointer: runs `fn_0042fd40` with
+/// `source` (the address of the pointer to copy). Returns `this`.
+pub fn fn_0042fa20(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    fn_0042fd40(e, this, source);
+    this
+}
+
+// Translated from 0042fa40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the one-word smart pointer: runs `fn_0042fda0`.
+pub fn fn_0042fa40(e: &mut Engine, this: Ptr) {
+    fn_0042fda0(e, this);
+}
+
+// Translated from 0042fa60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Builds `count` one-word smart pointers in place from `address` on: for
+/// each slot, `006e6da0` (placement `new`, which gives the slot back) and,
+/// when its result is not null, the null constructor `fn_0042fb00`. The
+/// array `this` is not used. The compiler's exception frame is not
+/// translated.
+pub fn fn_0042fa60(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
+    for index in 0..count {
+        let slot = address.wrapping_add(index.wrapping_mul(4));
+        let block = e.call(PLACEMENT_NEW, &args![4u32, slot]).u32();
+        if block != 0 {
+            fn_0042fb00(e, Ptr::new(block));
+        }
+    }
+}
+
+// Translated from 0042fb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Default constructor of the one-word smart pointer: `fn_0042fd70` with a
+/// null object. Returns `this`.
+pub fn fn_0042fb00(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0042fd70(e, this, 0);
+    this
+}
+
+// Translated from 0042fb20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys `count` one-word smart pointers from `address` on: for each,
+/// `fn_0042ffa0` with flags 0 (the destructor without `operator delete`).
+/// The array `this` is not used.
+pub fn fn_0042fb20(e: &mut Engine, _this: Ptr, address: u32, count: u32) {
+    for index in 0..count {
+        fn_0042ffa0(e, Ptr::new(address.wrapping_add(index.wrapping_mul(4))), 0);
+    }
+}
+
+// Translated from 0042fb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves `count` one-word elements from `source` to `destination` (the
+/// ranges may overlap): forwards, a word at a time with `memmove`
+/// (`00ec7230`), when the destination is below the source; backwards when it
+/// is above (the index counted down as a signed word, as the code does);
+/// nothing when they are the same or `count` is 0. The array `this` is not
+/// used.
+pub fn fn_0042fb60(e: &mut Engine, _this: Ptr, destination: u32, source: u32, count: u32) {
+    if count == 0 {
+        return;
+    }
+    if destination < source {
+        for index in 0..count {
+            let offset = index.wrapping_mul(4);
+            e.call(
+                MEMORY_MOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    4u32
+                ],
+            );
+        }
+    } else if destination > source {
+        let mut index = count.wrapping_sub(1) as i32;
+        while index >= 0 {
+            let offset = (index as u32).wrapping_mul(4);
+            e.call(
+                MEMORY_MOVE,
+                &args![
+                    destination.wrapping_add(offset),
+                    source.wrapping_add(offset),
+                    4u32
+                ],
+            );
+            index -= 1;
+        }
+    }
+}
+
+// Translated from 0042fc00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Moves the buffer of a `BSSimpleArray` to `new_capacity` words (the
+/// caller stores `iReservedSize`, except for a first allocation). Without a
+/// buffer: allocates one through the vtable slot at +4 and records the
+/// capacity. When `count` is the current capacity: reallocates through the
+/// vtable slot at +0x0C (old buffer, new capacity). Otherwise allocates a new
+/// buffer (slot +4), moves `count` words to it (`fn_0042fb60`), frees the old
+/// buffer (`006a8500`) and installs the new one.
+pub fn fn_0042fc00(e: &mut Engine, this: Ptr<BSSimpleArray>, new_capacity: u32, count: u32) {
+    let buffer = e.get(this, BSSimpleArray::pBuffer);
+    if buffer == 0 {
+        let new_buffer = e.vcall(this.addr(), 4, &args![new_capacity]).u32();
+        e.set(this, BSSimpleArray::pBuffer, new_buffer);
+        e.set(this, BSSimpleArray::iReservedSize, new_capacity);
+    } else if count == e.get(this, BSSimpleArray::iReservedSize) {
+        let new_buffer = e
+            .vcall(this.addr(), 0x0c, &args![buffer, new_capacity])
+            .u32();
+        e.set(this, BSSimpleArray::pBuffer, new_buffer);
+    } else {
+        let new_buffer = e.vcall(this.addr(), 4, &args![new_capacity]).u32();
+        let old_buffer = e.get(this, BSSimpleArray::pBuffer);
+        fn_0042fb60(e, this.cast(), new_buffer, old_buffer, count);
+        e.call(ARRAY_FREE_BUFFER, &args![this]);
+        e.set(this, BSSimpleArray::pBuffer, new_buffer);
+    }
+}
+
+// Translated from 0042fcb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor body of the `BSSimpleArray<NavMeshPtr,1024>`: zeroes
+/// `pBuffer`, `iSize` and `iReservedSize`; the capacity is the larger of
+/// `capacity` and `size`. A nonzero capacity allocates the buffer through the
+/// vtable slot at +4; a nonzero `size` builds that many null elements
+/// (`fn_0042fa60`) and sets `iSize`.
+pub fn fn_0042fcb0(e: &mut Engine, this: Ptr<BSSimpleArray>, capacity: u32, size: u32) {
+    e.set(this, BSSimpleArray::pBuffer, 0);
+    e.set(this, BSSimpleArray::iSize, 0);
+    e.set(this, BSSimpleArray::iReservedSize, 0);
+    let capacity = capacity.max(size);
+    if capacity != 0 {
+        let buffer = e.vcall(this.addr(), 4, &args![capacity]).u32();
+        e.set(this, BSSimpleArray::pBuffer, buffer);
+        e.set(this, BSSimpleArray::iReservedSize, capacity);
+    }
+    if size != 0 {
+        let buffer = e.get(this, BSSimpleArray::pBuffer);
+        fn_0042fa60(e, this.cast(), buffer, size);
+        e.set(this, BSSimpleArray::iSize, size);
+    }
+}
+
+// Translated from 0042fd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copy constructor of the one-word smart pointer (the `NavMeshPtr`):
+/// stores the pointer held at `source` and, when it is not null, takes a
+/// reference on the object (`0040f6e0` on the object's address + 0x1C).
+/// Returns `this`.
+pub fn fn_0042fd40(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let object = e.mem.u32(source.addr());
+    e.mem.set_u32(this.addr(), object);
+    if object != 0 {
+        e.call(
+            OBJECT_REFERENCE_ADD,
+            &args![object.wrapping_add(REFERENCE_COUNT_OFFSET)],
+        );
+    }
+    this
+}
+
+// Translated from 0042fd70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the one-word smart pointer from an object: stores
+/// `object` and, when it is not null, takes a reference on it (`0040f6e0`
+/// on the object's address + 0x1C). Returns `this`.
+pub fn fn_0042fd70(e: &mut Engine, this: Ptr, object: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), object);
+    if object != 0 {
+        e.call(
+            OBJECT_REFERENCE_ADD,
+            &args![object.wrapping_add(REFERENCE_COUNT_OFFSET)],
+        );
+    }
+    this
+}
+
+// Translated from 0042fda0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the one-word smart pointer: when the object is not
+/// null, releases a reference (`00401970` on the object's address + 0x1C).
+pub fn fn_0042fda0(e: &mut Engine, this: Ptr) {
+    let object = e.mem.u32(this.addr());
+    if object != 0 {
+        e.call(
+            OBJECT_REFERENCE_RELEASE,
+            &args![object.wrapping_add(REFERENCE_COUNT_OFFSET)],
+        );
+    }
+}
+
+// Translated from 0042fdc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Assignment of the one-word smart pointer from the pointer held at
+/// `source` (the address of another smart pointer): when the two differ,
+/// releases the old object (`00401970`), stores the new one and takes a
+/// reference on it (`0040f6e0`, both on the object's address + 0x1C, when not
+/// null). Returns `this`.
+pub fn fn_0042fdc0(e: &mut Engine, this: Ptr, source: Ptr) -> Ptr {
+    let held = e.mem.u32(this.addr());
+    let object = e.mem.u32(source.addr());
+    if held != object {
+        if held != 0 {
+            e.call(
+                OBJECT_REFERENCE_RELEASE,
+                &args![held.wrapping_add(REFERENCE_COUNT_OFFSET)],
+            );
+        }
+        e.mem.set_u32(this.addr(), object);
+        if object != 0 {
+            e.call(
+                OBJECT_REFERENCE_ADD,
+                &args![object.wrapping_add(REFERENCE_COUNT_OFFSET)],
+            );
+        }
+    }
+    this
+}
+
+// Translated from 0042fe10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor body of the `NiTMapBase<..., TESObjectREFR *, bool>`: sets
+/// its vtable (`01015a1c`), the hash size (+4) and a zero count (+0x0C),
+/// allocates the table of `hash_size` words (`00aa1070`, stored at +8) and
+/// zeroes it (`memset`, `00403d30`). Returns `this`.
+pub fn fn_0042fe10(e: &mut Engine, this: Ptr, hash_size: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_MAP_BASE_REFR_BOOL);
+    e.mem.set_u32(this.addr() + 4, hash_size);
+    e.mem.set_u32(this.addr() + 0x0c, 0);
+    let bytes = e.mem.u32(this.addr() + 4).wrapping_shl(2);
+    let table = e.call(TABLE_ALLOCATE, &args![bytes]).u32();
+    e.mem.set_u32(this.addr() + 8, table);
+    let table = e.mem.u32(this.addr() + 8);
+    let bytes = e.mem.u32(this.addr() + 4).wrapping_shl(2);
+    e.call(MEMORY_SET, &args![table, 0u32, bytes]);
+    this
+}
+
+// Translated from 0042fe80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the `NiTMap<TESObjectREFR *, bool>` (the engine map
+/// names it after a folded `ctype<char>` destructor): sets its vtable
+/// (`010159e8`), runs `00438af0` (it empties the map), then the base
+/// destructor `fn_0042fee0`. The compiler's exception frame is not
+/// translated.
+pub fn fn_0042fe80(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_MAP_REFR_BOOL);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_0042fee0(e, this);
+}
+
+// Translated from 0042fee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the `NiTMapBase<..., TESObjectREFR *, bool>`: sets
+/// its vtable (`01015a1c`), runs `00438af0` (it empties the map) and frees
+/// the table at +8 (`00aa10f0`).
+pub fn fn_0042fee0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), VTABLE_NI_T_MAP_BASE_REFR_BOOL);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.mem.u32(this.addr() + 8);
+    e.call(TABLE_FREE, &args![table]);
+}
+
+// Translated from 0042ff10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Cdecl wrapper of `fn_0042ff30`: `first` is `this`, `second` the other
+/// pointer. Returns its result.
+pub fn fn_0042ff10(e: &mut Engine, first: Ptr, second: Ptr) -> u32 {
+    fn_0042ff30(e, first, second)
+}
+
+// Translated from 0042ff30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Compares two one-word smart pointers through `004b0460` (`this` = the
+/// first, then the address of the second; it gives whether the words they
+/// hold are equal). Returns its result.
+pub fn fn_0042ff30(e: &mut Engine, this: Ptr, other: Ptr) -> u32 {
+    e.call(POINTER_EQUAL, &args![this, other]).u32()
+}
+
+// Translated from 0042ff50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<TESBoundObject *,1024>::scalar deleting destructor` (Xbox
+/// PDB): the destructor `fn_0042ff80`, then `operator delete` when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn bs_simple_array_tes_bound_object_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0042ff80(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0042ff80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body of the `BSSimpleArray<TESBoundObject *,1024>`: sets its
+/// vtable (`01015a08`), then runs `008454f0` with `shrink` 1 (it sets the
+/// size to 0 and frees the buffer).
+pub fn fn_0042ff80(e: &mut Engine, this: Ptr) {
+    e.mem
+        .set_u32(this.addr(), VTABLE_BS_SIMPLE_ARRAY_BOUND_OBJECT);
+    e.call(ARRAY_SET_SIZE_ZERO, &args![this, 1u32]);
+}
+
+// Translated from 0042ffa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor of the one-word smart pointer: the destructor
+/// `fn_0042fa40`, then `operator delete` when bit 0 of `flags` is set.
+/// Returns `this`.
+pub fn fn_0042ffa0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0042fa40(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 0042ffd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<TESObjectREFR *,bool>>,TESObjectREFR *,bool>::
+/// scalar deleting destructor` (Xbox PDB): the destructor `fn_0042fee0`, then
+/// `operator delete` when bit 0 of `flags` is set. Returns `this`.
+pub fn ni_t_map_base_tes_object_refr_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_0042fee0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004300c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the type `0x10` extra data (`ExtraAnim`, RTTI of vtable
+/// `01015b28`): the `BSExtraData` constructor (`0040ec80`) with the type, the
+/// vtable, and `animation` stored at +0x0C. Returns `this`.
+pub fn fn_004300c0(e: &mut Engine, this: Ptr, animation: u32) -> Ptr {
+    e.call(BS_EXTRA_DATA_INIT, &args![this, EXTRA_ANIM as u32]);
+    e.mem.set_u32(this.addr(), VTABLE_EXTRA_ANIM);
+    e.mem.set_u32(this.addr() + 0x0c, animation);
+    this
+}
+
+// Translated from 00555bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map's `ExtraDataList::GetSeenData` (Xbox PDB name; the body
+/// works on an object that holds the list at +0x28): takes the list from
+/// `004610d0` (`this` + 0x28) and gives the word at +0x0C of its type 5 extra
+/// data, or 0 (`00421910`).
+pub fn fn_00555bc0(e: &mut Engine, this: Ptr) -> u32 {
+    let list = e.call(LIST_AT_OFFSET_0X28, &args![this]).u32();
+    e.call(EXTRA_WORD_SEEN_DATA, &args![list]).u32()
+}
+
+// Translated from 00569140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The engine map's `ExtraDataList::GetLock` (Xbox PDB name; the body works
+/// on an object that holds the list at +0x44): takes the list from `005d43c0`
+/// (`this` + 0x44) and gives the word at +0x0C of its type `0x2A` extra data,
+/// or 0 (`004182b0`).
+pub fn fn_00569140(e: &mut Engine, this: Ptr) -> u32 {
+    let list = e.call(LIST_AT_OFFSET_0X44, &args![this]).u32();
+    e.call(EXTRA_WORD_LOCK, &args![list]).u32()
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1568,6 +1988,37 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x0042f830, fn_0042f830(Ptr)),
         entry!(0x0042f850, fn_0042f850(Ptr<BSSimpleArray>, u32) -> u32),
         entry!(0x0042f8a0, fn_0042f8a0(Ptr<BSSimpleArray>, u32, u8)),
+        entry!(0x0042f9c0, fn_0042f9c0(Ptr<BSSimpleArray>, u8)),
+        entry!(0x0042fa20, fn_0042fa20(Ptr, Ptr) -> Ptr),
+        entry!(0x0042fa40, fn_0042fa40(Ptr)),
+        entry!(0x0042fa60, fn_0042fa60(Ptr, u32, u32)),
+        entry!(0x0042fb00, fn_0042fb00(Ptr) -> Ptr),
+        entry!(0x0042fb20, fn_0042fb20(Ptr, u32, u32)),
+        entry!(0x0042fb60, fn_0042fb60(Ptr, u32, u32, u32)),
+        entry!(0x0042fc00, fn_0042fc00(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x0042fcb0, fn_0042fcb0(Ptr<BSSimpleArray>, u32, u32)),
+        entry!(0x0042fd40, fn_0042fd40(Ptr, Ptr) -> Ptr),
+        entry!(0x0042fd70, fn_0042fd70(Ptr, u32) -> Ptr),
+        entry!(0x0042fda0, fn_0042fda0(Ptr)),
+        entry!(0x0042fdc0, fn_0042fdc0(Ptr, Ptr) -> Ptr),
+        entry!(0x0042fe10, fn_0042fe10(Ptr, u32) -> Ptr),
+        entry!(0x0042fe80, fn_0042fe80(Ptr)),
+        entry!(0x0042fee0, fn_0042fee0(Ptr)),
+        entry!(0x0042ff10, fn_0042ff10(Ptr, Ptr) -> u32),
+        entry!(0x0042ff30, fn_0042ff30(Ptr, Ptr) -> u32),
+        entry!(
+            0x0042ff50,
+            bs_simple_array_tes_bound_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0042ff80, fn_0042ff80(Ptr)),
+        entry!(0x0042ffa0, fn_0042ffa0(Ptr, u32) -> Ptr),
+        entry!(
+            0x0042ffd0,
+            ni_t_map_base_tes_object_refr_bool_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x004300c0, fn_004300c0(Ptr, u32) -> Ptr),
+        entry!(0x00555bc0, fn_00555bc0(Ptr) -> u32),
+        entry!(0x00569140, fn_00569140(Ptr) -> u32),
     ]
 }
 
@@ -3398,10 +3849,573 @@ mod tests {
         assert_eq!(calls_to(&log, ARRAY_FREE_BUFFER), vec![vec![array.addr()]]);
     }
 
+    // ---- third session: the one-word smart pointer and the array machinery
+
+    /// Test vtable with the slots the array move code uses: +4 allocates,
+    /// +0x0C reallocates.
+    const MOVE_VTABLE: u32 = 0x0200_2200;
+    const MOVE_ALLOCATOR: u32 = 0x0200_2300;
+    const MOVE_REALLOCATOR: u32 = 0x0200_2400;
+
+    /// An engine with the reference count calls, `operator delete`, the
+    /// placement `new`, `memmove` and the array vtable `MOVE_VTABLE` stood in
+    /// for.
+    fn pointer_engine() -> Engine {
+        let mut e = engine();
+        e.put_vtable(
+            MOVE_VTABLE,
+            &[DESTRUCTOR, MOVE_ALLOCATOR, 0, MOVE_REALLOCATOR],
+        );
+        e.register(MOVE_ALLOCATOR, |e, a| returns(e.mem.alloc(a[1] * 4)));
+        e.register(MOVE_REALLOCATOR, |e, a| returns(e.mem.alloc(a[2] * 4)));
+        stub(&mut e, OBJECT_REFERENCE_ADD);
+        stub(&mut e, OBJECT_REFERENCE_RELEASE);
+        e.register(PLACEMENT_NEW, |_, a| returns(a[1]));
+        e.register(MEMORY_MOVE, |e, a| {
+            let bytes: Vec<u8> = (0..a[2]).map(|i| e.mem.u8(a[1] + i)).collect();
+            for (i, byte) in bytes.into_iter().enumerate() {
+                e.mem.set_u8(a[0] + i as u32, byte);
+            }
+            Ret::default()
+        });
+        e
+    }
+
+    /// A slot holding `object`.
+    fn slot_with(e: &mut Engine, object: u32) -> Ptr {
+        let slot = e.mem.alloc(4);
+        e.mem.set_u32(slot, object);
+        Ptr::new(slot)
+    }
+
     #[test]
-    fn funcs_registers_eighty_distinct_addresses_in_range() {
+    fn fn_0042fd70_stores_the_object_and_takes_a_reference() {
+        let mut e = pointer_engine();
+        let slot = slot_with(&mut e, 0xdead);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fd70, &args![slot, 0x6000u32]);
+            assert_eq!(result.u32(), slot.addr());
+        });
+        assert_eq!(e.mem.u32(slot.addr()), 0x6000);
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_ADD), vec![vec![0x601c]]);
+        // A null object is stored without a reference.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fd70, &args![slot, 0u32]);
+        });
+        assert_eq!(e.mem.u32(slot.addr()), 0);
+        assert!(calls_to(&log, OBJECT_REFERENCE_ADD).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fd40_copies_the_held_pointer() {
+        let mut e = pointer_engine();
+        let source = slot_with(&mut e, 0x6000);
+        let target = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fd40, &args![target, source]);
+            assert_eq!(result.u32(), target.addr());
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0x6000);
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_ADD), vec![vec![0x601c]]);
+        // Copying a null pointer takes no reference.
+        let empty = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fd40, &args![target, empty]);
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0);
+        assert!(calls_to(&log, OBJECT_REFERENCE_ADD).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fda0_releases_a_held_object_only() {
+        let mut e = pointer_engine();
+        let held = slot_with(&mut e, 0x6000);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fda0, &args![held]);
+        });
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_RELEASE), vec![vec![0x601c]]);
+        let empty = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fda0, &args![empty]);
+        });
+        assert!(calls_to(&log, OBJECT_REFERENCE_RELEASE).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fdc0_assigns_with_release_then_add() {
+        let mut e = pointer_engine();
+        // Different objects: the old one is released, the new one referenced.
+        let target = slot_with(&mut e, 0x6000);
+        let source = slot_with(&mut e, 0x7000);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fdc0, &args![target, source]);
+            assert_eq!(result.u32(), target.addr());
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0x7000);
+        assert_eq!(
+            log.iter()
+                .map(|(callee, a)| (*callee, a.clone()))
+                .filter(|(callee, _)| {
+                    *callee == OBJECT_REFERENCE_ADD || *callee == OBJECT_REFERENCE_RELEASE
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (OBJECT_REFERENCE_RELEASE, vec![0x601c]),
+                (OBJECT_REFERENCE_ADD, vec![0x701c])
+            ]
+        );
+        // The same object: nothing happens.
+        let same = slot_with(&mut e, 0x7000);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fdc0, &args![target, same]);
+        });
+        assert_eq!(log.len(), 1);
+        // Assigning to an empty pointer only takes a reference.
+        let empty = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fdc0, &args![empty, source]);
+        });
+        assert!(calls_to(&log, OBJECT_REFERENCE_RELEASE).is_empty());
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_ADD), vec![vec![0x701c]]);
+        // Assigning a null pointer releases the old object only.
+        let null = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fdc0, &args![target, null]);
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0);
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_RELEASE), vec![vec![0x701c]]);
+        assert!(calls_to(&log, OBJECT_REFERENCE_ADD).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fa20_fa40_fb00_wrap_the_pointer_functions() {
+        let mut e = pointer_engine();
+        // Copy constructor.
+        let source = slot_with(&mut e, 0x6000);
+        let target = slot_with(&mut e, 0);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fa20, &args![target, source]);
+            assert_eq!(result.u32(), target.addr());
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0x6000);
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_ADD), vec![vec![0x601c]]);
+        // Destructor.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fa40, &args![target]);
+        });
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_RELEASE), vec![vec![0x601c]]);
+        // Null constructor: stores null, takes no reference, returns `this`.
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fb00, &args![target]);
+            assert_eq!(result.u32(), target.addr());
+        });
+        assert_eq!(e.mem.u32(target.addr()), 0);
+        assert!(calls_to(&log, OBJECT_REFERENCE_ADD).is_empty());
+    }
+
+    #[test]
+    fn fn_0042ffa0_deletes_on_bit_0_only() {
+        let mut e = pointer_engine();
+        let held = slot_with(&mut e, 0x6000);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042ffa0, &args![held, 0u32]);
+            assert_eq!(result.u32(), held.addr());
+        });
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_RELEASE), vec![vec![0x601c]]);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x0042ffa0, &args![held, 3u32]);
+        });
+        assert_eq!(calls_to(&log, OBJECT_REFERENCE_RELEASE).len(), 1);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![held.addr()]]);
+    }
+
+    #[test]
+    fn fn_0042ff30_and_ff10_pass_the_comparison_result_on() {
+        let mut e = pointer_engine();
+        e.register(POINTER_EQUAL, |e, a| {
+            returns((e.mem.u32(a[0]) == e.mem.u32(a[1])) as u32)
+        });
+        let first = slot_with(&mut e, 0x6000);
+        let same = slot_with(&mut e, 0x6000);
+        let other = slot_with(&mut e, 0x7000);
+        let log = logged(&mut e, |e| {
+            assert_eq!(e.call(0x0042ff30, &args![first, same]).u32(), 1);
+            assert_eq!(e.call(0x0042ff30, &args![first, other]).u32(), 0);
+            assert_eq!(e.call(0x0042ff10, &args![first, same]).u32(), 1);
+            assert_eq!(e.call(0x0042ff10, &args![first, other]).u32(), 0);
+        });
+        assert_eq!(
+            calls_to(&log, POINTER_EQUAL),
+            vec![
+                vec![first.addr(), same.addr()],
+                vec![first.addr(), other.addr()],
+                vec![first.addr(), same.addr()],
+                vec![first.addr(), other.addr()]
+            ]
+        );
+    }
+
+    #[test]
+    fn fn_0042fa60_builds_null_pointers_in_each_slot() {
+        let mut e = pointer_engine();
+        let block = e.mem.alloc(12);
+        for index in 0..3 {
+            e.mem.set_u32(block + 4 * index, 0xaaaa);
+        }
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fa60, &args![Ptr::<()>::new(0x5000), block, 3u32]);
+        });
+        assert_eq!(
+            calls_to(&log, PLACEMENT_NEW),
+            vec![vec![4, block], vec![4, block + 4], vec![4, block + 8]]
+        );
+        for index in 0..3 {
+            assert_eq!(e.mem.u32(block + 4 * index), 0);
+        }
+        assert!(calls_to(&log, OBJECT_REFERENCE_ADD).is_empty());
+        // A count of 0 does nothing.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fa60, &args![Ptr::<()>::new(0x5000), block, 0u32]);
+        });
+        assert!(calls_to(&log, PLACEMENT_NEW).is_empty());
+        // A placement `new` that gives null leaves the slot as it is.
+        e.register(PLACEMENT_NEW, |_, _| Ret::default());
+        e.mem.set_u32(block, 0xaaaa);
+        e.call(0x0042fa60, &args![Ptr::<()>::new(0x5000), block, 1u32]);
+        assert_eq!(e.mem.u32(block), 0xaaaa);
+    }
+
+    #[test]
+    fn fn_0042fb20_destroys_each_element_without_delete() {
+        let mut e = pointer_engine();
+        let block = e.mem.alloc(12);
+        e.mem.set_u32(block, 0x6000);
+        e.mem.set_u32(block + 4, 0);
+        e.mem.set_u32(block + 8, 0x7000);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fb20, &args![Ptr::<()>::new(0x5000), block, 3u32]);
+        });
+        assert_eq!(
+            calls_to(&log, OBJECT_REFERENCE_RELEASE),
+            vec![vec![0x601c], vec![0x701c]]
+        );
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fb60_moves_forwards_backwards_or_not_at_all() {
+        let mut e = pointer_engine();
+        let block = e.mem.alloc(32);
+        let fill = |e: &mut Engine| {
+            for index in 0..8 {
+                e.mem.set_u32(block + 4 * index, 10 + index);
+            }
+        };
+        let words = |e: &Engine| -> Vec<u32> { (0..8).map(|i| e.mem.u32(block + 4 * i)).collect() };
+        // Destination below the source: forwards, index 0 first.
+        fill(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0042fb60,
+                &args![Ptr::<()>::new(0x5000), block, block + 4, 3u32],
+            );
+        });
+        assert_eq!(
+            calls_to(&log, MEMORY_MOVE),
+            vec![
+                vec![block, block + 4, 4],
+                vec![block + 4, block + 8, 4],
+                vec![block + 8, block + 12, 4]
+            ]
+        );
+        assert_eq!(words(&e), vec![11, 12, 13, 13, 14, 15, 16, 17]);
+        // Destination above the source: backwards, the last word first.
+        fill(&mut e);
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0042fb60,
+                &args![Ptr::<()>::new(0x5000), block + 4, block, 3u32],
+            );
+        });
+        assert_eq!(
+            calls_to(&log, MEMORY_MOVE),
+            vec![
+                vec![block + 12, block + 8, 4],
+                vec![block + 8, block + 4, 4],
+                vec![block + 4, block, 4]
+            ]
+        );
+        assert_eq!(words(&e), vec![10, 10, 11, 12, 14, 15, 16, 17]);
+        // The same address, or no words: nothing.
+        let log = logged(&mut e, |e| {
+            e.call(
+                0x0042fb60,
+                &args![Ptr::<()>::new(0x5000), block, block, 3u32],
+            );
+            e.call(
+                0x0042fb60,
+                &args![Ptr::<()>::new(0x5000), block, block + 4, 0u32],
+            );
+        });
+        assert!(calls_to(&log, MEMORY_MOVE).is_empty());
+    }
+
+    #[test]
+    fn fn_0042fc00_allocates_reallocates_or_moves() {
+        let mut e = pointer_engine();
+        // No buffer yet: allocates and records the capacity.
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(array.addr(), MOVE_VTABLE);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fc00, &args![array, 6u32, 0u32]);
+        });
+        let (buffer, size, reserved) = array_fields(&e, array);
+        assert_ne!(buffer, 0);
+        assert_eq!((size, reserved), (0, 6));
+        assert_eq!(calls_to(&log, MOVE_ALLOCATOR), vec![vec![array.addr(), 6]]);
+        // `count` equals the capacity: the vtable reallocates (old buffer,
+        // new capacity); the capacity field is left to the caller.
+        let array = array_with(&mut e, 0x4000, 4, 4);
+        e.mem.set_u32(array.addr(), MOVE_VTABLE);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fc00, &args![array, 9u32, 4u32]);
+        });
+        let (buffer, size, reserved) = array_fields(&e, array);
+        assert_ne!(buffer, 0x4000);
+        assert_eq!((size, reserved), (4, 4));
+        assert_eq!(
+            calls_to(&log, MOVE_REALLOCATOR),
+            vec![vec![array.addr(), 0x4000, 9]]
+        );
+        assert!(calls_to(&log, MOVE_ALLOCATOR).is_empty());
+        // Another count: a new buffer, the words moved, the old one freed.
+        let source = e.mem.alloc(8);
+        e.mem.set_u32(source, 0x11);
+        e.mem.set_u32(source + 4, 0x22);
+        let array = array_with(&mut e, source, 2, 8);
+        e.mem.set_u32(array.addr(), MOVE_VTABLE);
+        stub(&mut e, ARRAY_FREE_BUFFER);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fc00, &args![array, 3u32, 2u32]);
+        });
+        let (buffer, _, reserved) = array_fields(&e, array);
+        assert_ne!(buffer, source);
+        assert_eq!(reserved, 8);
+        assert_eq!(e.mem.u32(buffer), 0x11);
+        assert_eq!(e.mem.u32(buffer + 4), 0x22);
+        assert_eq!(calls_to(&log, MOVE_ALLOCATOR), vec![vec![array.addr(), 3]]);
+        assert_eq!(calls_to(&log, ARRAY_FREE_BUFFER), vec![vec![array.addr()]]);
+    }
+
+    #[test]
+    fn fn_0042fcb0_allocates_the_larger_of_capacity_and_size() {
+        let mut e = pointer_engine();
+        // Nothing requested: all zero, no allocation.
+        let array: Ptr<BSSimpleArray> = e.new_object();
+        e.mem.set_u32(array.addr(), MOVE_VTABLE);
+        e.set(array, BSSimpleArray::pBuffer, 0x1234);
+        e.set(array, BSSimpleArray::iSize, 5);
+        e.set(array, BSSimpleArray::iReservedSize, 7);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fcb0, &args![array, 0u32, 0u32]);
+        });
+        assert_eq!(array_fields(&e, array), (0, 0, 0));
+        assert!(calls_to(&log, MOVE_ALLOCATOR).is_empty());
+        // Capacity above the size: that capacity, the size's elements built.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fcb0, &args![array, 4u32, 2u32]);
+        });
+        let (buffer, size, reserved) = array_fields(&e, array);
+        assert_ne!(buffer, 0);
+        assert_eq!((size, reserved), (2, 4));
+        assert_eq!(calls_to(&log, MOVE_ALLOCATOR), vec![vec![array.addr(), 4]]);
+        assert_eq!(
+            calls_to(&log, PLACEMENT_NEW),
+            vec![vec![4, buffer], vec![4, buffer + 4]]
+        );
+        // Size above the capacity: the size is the capacity.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fcb0, &args![array, 1u32, 3u32]);
+        });
+        let (_, size, reserved) = array_fields(&e, array);
+        assert_eq!((size, reserved), (3, 3));
+        assert_eq!(calls_to(&log, MOVE_ALLOCATOR), vec![vec![array.addr(), 3]]);
+        // A capacity and no elements: the buffer only.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fcb0, &args![array, 5u32, 0u32]);
+        });
+        let (buffer, size, reserved) = array_fields(&e, array);
+        assert_ne!(buffer, 0);
+        assert_eq!((size, reserved), (0, 5));
+        assert!(calls_to(&log, PLACEMENT_NEW).is_empty());
+    }
+
+    #[test]
+    fn fn_0042f9c0_clears_and_optionally_frees_the_buffer() {
+        let mut e = pointer_engine();
+        stub(&mut e, ARRAY_FREE_BUFFER);
+        let buffer = e.mem.alloc(8);
+        e.mem.set_u32(buffer, 0x6000);
+        e.mem.set_u32(buffer + 4, 0x7000);
+        // Without the flag: the elements are destroyed, the buffer is kept.
+        let array = array_with(&mut e, buffer, 2, 8);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042f9c0, &args![array, 0u32]);
+        });
+        assert_eq!(
+            calls_to(&log, OBJECT_REFERENCE_RELEASE),
+            vec![vec![0x601c], vec![0x701c]]
+        );
+        assert!(calls_to(&log, ARRAY_FREE_BUFFER).is_empty());
+        assert_eq!(array_fields(&e, array), (buffer, 0, 8));
+        // With the flag: the buffer is freed and the fields cleared.
+        let array = array_with(&mut e, buffer, 1, 8);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042f9c0, &args![array, 1u32]);
+        });
+        assert_eq!(calls_to(&log, ARRAY_FREE_BUFFER), vec![vec![array.addr()]]);
+        assert_eq!(array_fields(&e, array), (0, 0, 0));
+        // No buffer: nothing happens, whatever the other fields say.
+        let array = array_with(&mut e, 0, 3, 5);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042f9c0, &args![array, 1u32]);
+        });
+        assert_eq!(log.len(), 1);
+        assert_eq!(array_fields(&e, array), (0, 3, 5));
+    }
+
+    #[test]
+    fn fn_0042fe10_builds_a_zeroed_table() {
+        let mut e = pointer_engine();
+        e.register(TABLE_ALLOCATE, |e, a| {
+            let block = e.mem.alloc(a[0]);
+            for offset in 0..a[0] {
+                e.mem.set_u8(block + offset, 0xcc);
+            }
+            returns(block)
+        });
+        e.register(MEMORY_SET, |e, a| {
+            for offset in 0..a[2] {
+                e.mem.set_u8(a[0] + offset, a[1] as u8);
+            }
+            Ret::default()
+        });
+        let map = e.mem.alloc(0x14);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042fe10, &args![Ptr::<()>::new(map), 5u32]);
+            assert_eq!(result.u32(), map);
+        });
+        assert_eq!(e.mem.u32(map), VTABLE_NI_T_MAP_BASE_REFR_BOOL);
+        assert_eq!(e.mem.u32(map + 4), 5);
+        assert_eq!(e.mem.u32(map + 0x0c), 0);
+        let table = e.mem.u32(map + 8);
+        assert_eq!(calls_to(&log, TABLE_ALLOCATE), vec![vec![20]]);
+        assert_eq!(calls_to(&log, MEMORY_SET), vec![vec![table, 0, 20]]);
+        for index in 0..5 {
+            assert_eq!(e.mem.u32(table + 4 * index), 0);
+        }
+    }
+
+    #[test]
+    fn map_destructors_empty_the_map_then_free_the_table() {
+        let mut e = pointer_engine();
+        stub(&mut e, MAP_REMOVE_ALL);
+        stub(&mut e, TABLE_FREE);
+        let map = e.mem.alloc(0x14);
+        e.mem.set_u32(map + 8, 0x9000);
+        // The base destructor body.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fee0, &args![Ptr::<()>::new(map)]);
+        });
+        assert_eq!(e.mem.u32(map), VTABLE_NI_T_MAP_BASE_REFR_BOOL);
+        assert_eq!(calls_to(&log, MAP_REMOVE_ALL), vec![vec![map]]);
+        assert_eq!(calls_to(&log, TABLE_FREE), vec![vec![0x9000]]);
+        // The `NiTMap` body sets its own vtable and then runs the base one.
+        e.register(MAP_REMOVE_ALL, |e, a| {
+            // The vtable is set before the map is emptied.
+            assert_ne!(e.mem.u32(a[0]), 0);
+            Ret::default()
+        });
+        let log = logged(&mut e, |e| {
+            e.call(0x0042fe80, &args![Ptr::<()>::new(map)]);
+        });
+        assert_eq!(e.mem.u32(map), VTABLE_NI_T_MAP_BASE_REFR_BOOL);
+        assert_eq!(calls_to(&log, MAP_REMOVE_ALL).len(), 2);
+        assert_eq!(calls_to(&log, TABLE_FREE), vec![vec![0x9000]]);
+        // The deleting destructor of the base deletes on bit 0 only.
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042ffd0, &args![Ptr::<()>::new(map), 0u32]);
+            assert_eq!(result.u32(), map);
+        });
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        assert_eq!(calls_to(&log, TABLE_FREE).len(), 1);
+        let log = logged(&mut e, |e| {
+            e.call(0x0042ffd0, &args![Ptr::<()>::new(map), 1u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![map]]);
+        assert_eq!(calls_to(&log, TABLE_FREE).len(), 1);
+    }
+
+    #[test]
+    fn bound_object_array_destructors() {
+        let mut e = pointer_engine();
+        stub(&mut e, ARRAY_SET_SIZE_ZERO);
+        let array = e.mem.alloc(0x10);
+        // The body: vtable, then the size reset with shrink 1.
+        let log = logged(&mut e, |e| {
+            e.call(0x0042ff80, &args![Ptr::<()>::new(array)]);
+        });
+        assert_eq!(e.mem.u32(array), VTABLE_BS_SIMPLE_ARRAY_BOUND_OBJECT);
+        assert_eq!(calls_to(&log, ARRAY_SET_SIZE_ZERO), vec![vec![array, 1]]);
+        // The deleting destructor deletes on bit 0 only.
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x0042ff50, &args![Ptr::<()>::new(array), 0u32]);
+            assert_eq!(result.u32(), array);
+        });
+        assert_eq!(calls_to(&log, ARRAY_SET_SIZE_ZERO).len(), 1);
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        let log = logged(&mut e, |e| {
+            e.call(0x0042ff50, &args![Ptr::<()>::new(array), 1u32]);
+        });
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![vec![array]]);
+    }
+
+    #[test]
+    fn fn_004300c0_builds_the_type_0x10_extra_data() {
+        let mut e = pointer_engine();
+        let block = e.mem.alloc(0x10);
+        let log = logged(&mut e, |e| {
+            let result = e.call(0x004300c0, &args![Ptr::<()>::new(block), 0x6000u32]);
+            assert_eq!(result.u32(), block);
+        });
+        assert_eq!(calls_to(&log, BS_EXTRA_DATA_INIT), vec![vec![block, 0x10]]);
+        assert_eq!(e.mem.u32(block), VTABLE_EXTRA_ANIM);
+        assert_eq!(e.mem.u8(block + 4), 0x10);
+        assert_eq!(e.mem.u32(block + 0x0c), 0x6000);
+    }
+
+    #[test]
+    fn list_word_getters_chain_the_list_and_the_reader() {
+        let mut e = pointer_engine();
+        e.register(LIST_AT_OFFSET_0X28, |_, a| returns(a[0] + 0x28));
+        e.register(LIST_AT_OFFSET_0X44, |_, a| returns(a[0] + 0x44));
+        e.register(EXTRA_WORD_SEEN_DATA, |_, a| returns(a[0] ^ 0x1111));
+        e.register(EXTRA_WORD_LOCK, |_, a| returns(a[0] ^ 0x2222));
+        let log = logged(&mut e, |e| {
+            let seen = e.call(0x00555bc0, &args![Ptr::<()>::new(0x8000)]);
+            assert_eq!(seen.u32(), 0x8028 ^ 0x1111);
+            let lock = e.call(0x00569140, &args![Ptr::<()>::new(0x9000)]);
+            assert_eq!(lock.u32(), 0x9044 ^ 0x2222);
+        });
+        assert_eq!(calls_to(&log, EXTRA_WORD_SEEN_DATA), vec![vec![0x8028]]);
+        assert_eq!(calls_to(&log, EXTRA_WORD_LOCK), vec![vec![0x9044]]);
+    }
+
+    #[test]
+    fn funcs_registers_one_hundred_five_distinct_addresses_in_range() {
         let entries = funcs();
-        assert_eq!(entries.len(), 80);
+        assert_eq!(entries.len(), 105);
         let addresses: Vec<u32> = entries.iter().map(|(address, _)| *address).collect();
         let mut sorted = addresses.clone();
         sorted.sort_unstable();
@@ -3411,5 +4425,8 @@ mod tests {
         assert_eq!(addresses[39], 0x0042_ea50);
         assert_eq!(addresses[40], 0x0042_eb10);
         assert_eq!(addresses[79], 0x0042_f8a0);
+        assert_eq!(addresses[80], 0x0042_f9c0);
+        assert_eq!(addresses[103], 0x0055_5bc0);
+        assert_eq!(addresses[104], 0x0056_9140);
     }
 }
