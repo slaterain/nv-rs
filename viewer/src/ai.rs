@@ -1454,6 +1454,8 @@ pub fn move_actors(
         } else {
             world::animation::walk_speed(order, ctx.state, me)
         } * walker.scale;
+        // The turn as this update began (for the mover's own step below).
+        let turn_before = (walker.turn, walker.heading);
         let was_on_path = walker.on_path();
         // Others in the way: wait, or a way round (`009e5ae0`).
         let mut blocked = false;
@@ -1574,6 +1576,22 @@ pub fn move_actors(
         look_frame(&mut ctx, walker, rig.fighting, moves);
         // Idles (`sitting`): once a second of free time, the idle tree.
         crate::sitting::idles_frame(&mut ctx, walker, &mut life, &mut rig);
+        // A turn in place nothing above carried on this update (a walk held
+        // up by someone in the way, a door, a path being made; a path over
+        // before its first turn): the mover turns them all the same each
+        // update, whatever the walk is doing (`ActorMover::UpdateMovement`,
+        // Xbox PDB, `009c9900` → `009e7d70`). Left alone the turn stayed on,
+        // its animation playing in place.
+        if walker.turn.active
+            && (walker.turn, walker.heading) == turn_before
+            && !ctx.state.furniture.contains_key(&me)
+            && !ctx.state.sitters.contains_key(&me)
+        {
+            let side = walker.turn.update(&mut walker.heading, dt, walker.rates[0]);
+            if side.is_some() {
+                walker.turning = side;
+            }
+        }
         // Turned in place or walked: the controller moves them.
         move_body(
             walker,
@@ -2795,7 +2813,8 @@ fn chat_frame(
     let their_off = mv::wrap_pi(mv::heading_to(at, walker.position) - their_heading).abs();
     if !seated
         && !alone
-        && (walker.turn.active
+        && ((walker.turn.active
+            && mv::wrap_pi(walker.turn.target - toward).abs() <= mv::ONE_DEGREE)
             || (their_off > moves.settings.turn_degree * mv::ONE_DEGREE && !walker.turn.active))
     {
         face(walker, toward, ctx.dt, false, ctx.moves);
