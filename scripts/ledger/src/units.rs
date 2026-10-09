@@ -79,6 +79,10 @@ pub fn regenerate(units: &Path) -> Result<usize, String> {
     let mut n = 0;
     for (sub, files) in &subs {
         let mut s = String::from(HEADER);
+        // A unit may share its subsystem's name (`bsaudio/bsaudio.cpp`).
+        s.push_str("#![allow(clippy::module_inception)]
+
+");
         for f in files {
             let _ = writeln!(s, "pub mod {f};");
         }

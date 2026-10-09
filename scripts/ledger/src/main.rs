@@ -472,6 +472,7 @@ fn main() {
             let mut done = BTreeSet::new();
             for f in &funcs {
                 if f.unit.is_empty()
+                    || base_status(&f.subsystem) != "open"
                     || !(want.contains(f.unit.as_str()) || want.contains(f.subsystem.as_str()))
                 {
                     continue;
@@ -593,10 +594,11 @@ fn queue(funcs: &[Func], args: &[String]) {
         return;
     }
     let mut per: BTreeMap<(&str, &str), (usize, u64)> = BTreeMap::new();
-    for f in funcs
-        .iter()
-        .filter(|f| matches!(f.status(), "open" | "traced") && !f.unit.is_empty())
-    {
+    for f in funcs.iter().filter(|f| {
+        matches!(f.status(), "open" | "traced")
+            && !f.unit.is_empty()
+            && base_status(&f.subsystem) == "open"
+    }) {
         let e = per.entry((&f.subsystem, &f.unit)).or_default();
         e.0 += 1;
         e.1 += f.size as u64;
