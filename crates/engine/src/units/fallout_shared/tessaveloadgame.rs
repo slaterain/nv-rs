@@ -1145,9 +1145,9 @@ pub(crate) const FORMAT_BASE: u32 = 0x0108_1924;
 /// The size of the buffer `BuildChangesString` fills, and of its line
 /// scratch (`sprintf_s` is given 0x32).
 pub(crate) const CHANGES_BUFFER_SIZE: u32 = 500;
-const LINE_SIZE: u32 = 0x32;
+pub(crate) const LINE_SIZE: u32 = 0x32;
 /// A line is padded with spaces to this many characters.
-const LINE_WIDTH: u32 = 0x19;
+pub(crate) const LINE_WIDTH: u32 = 0x19;
 /// `" "`.
 pub(crate) const SPACE: u32 = 0x0102_0770;
 /// `TESQuest`'s test of `fn_0085b320` (`0059e300`, `this` the quest).
@@ -1156,7 +1156,7 @@ pub(crate) const QUEST_HAS_SCRIPT_LOCALS: u32 = 0x0059_e300;
 /// A line of the changes string: the flag bit that selects it, its text for
 /// the verbose form (`"CHANGE_...\r\n"`) and its format (`"Name(%i)"`), as
 /// addresses in `.rdata`.
-struct ChangeLine {
+pub(crate) struct ChangeLine {
     mask: u32,
     verbose: u32,
     format: u32,
@@ -1164,106 +1164,106 @@ struct ChangeLine {
 
 // The lines of each form type. Lines whose flag mask is 0 in this build
 // (the compiler folded the test to `flags & 0`) are not here.
-const LINE_FORM_FLAGS: ChangeLine = ChangeLine {
+pub(crate) const LINE_FORM_FLAGS: ChangeLine = ChangeLine {
     mask: 0x1,
     verbose: 0x0108_1910, // "CHANGE_FORM_FLAGS"
     format: 0x0108_1900,  // "Form Flags(%i)"
 };
-const LINE_ACTOR_BASE_DATA: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_BASE_DATA: ChangeLine = ChangeLine {
     mask: 0x2,
     verbose: 0x0108_1884, // "CHANGE_ACTOR_BASE_DATA"
     format: 0x0108_1874,  // "Base Data(%i)"
 };
-const LINE_ACTOR_SPELL_LIST: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_SPELL_LIST: ChangeLine = ChangeLine {
     mask: 0x10,
     verbose: 0x0108_1854, // "CHANGE_ACTOR_BASE_SPELLLIST"
     format: 0x0108_1844,  // "Spell List(%i)"
 };
-const LINE_ACTOR_FULL_NAME: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_FULL_NAME: ChangeLine = ChangeLine {
     mask: 0x20,
     verbose: 0x0108_1798, // "CHANGE_ACTOR_BASE_FULLNAME"
     format: 0x0108_1788,  // "Full Name(%i)"
 };
-const LINE_NPC_SKILLS: ChangeLine = ChangeLine {
+pub(crate) const LINE_NPC_SKILLS: ChangeLine = ChangeLine {
     mask: 0x200,
     verbose: 0x0108_1774, // "CHANGE_NPC_SKILLS"
     format: 0x0108_1768,  // "Skills(%i)"
 };
-const LINE_CREATURE_SKILLS: ChangeLine = ChangeLine {
+pub(crate) const LINE_CREATURE_SKILLS: ChangeLine = ChangeLine {
     mask: 0x200,
     verbose: 0x0108_16fc, // "CHANGE_CREATURE_SKILLS"
     format: 0x0108_1768,  // "Skills(%i)"
 };
-const LINE_QUEST_FLAGS: ChangeLine = ChangeLine {
+pub(crate) const LINE_QUEST_FLAGS: ChangeLine = ChangeLine {
     mask: 0x2,
     verbose: 0x0108_16c4, // "CHANGE_QUEST_FLAGS"
     format: 0x0108_16b4,  // "Quest Flags(%i)"
 };
 /// Quest stages and the "said once" flag of a topic have no size: only the
 /// verbose text (the format is not used).
-const LINE_QUEST_STAGES: ChangeLine = ChangeLine {
+pub(crate) const LINE_QUEST_STAGES: ChangeLine = ChangeLine {
     mask: 0x8000_0000,
     verbose: 0x0108_169c, // "CHANGE_QUEST_STAGES"
     format: 0,
 };
-const LINE_QUEST_SCRIPT: ChangeLine = ChangeLine {
+pub(crate) const LINE_QUEST_SCRIPT: ChangeLine = ChangeLine {
     mask: 0x4000_0000,
     verbose: 0x0108_1684, // "CHANGE_QUEST_SCRIPT"
     format: 0x0108_1670,  // "Quest Script(%i)"
 };
 /// `"Quest Script(No longer has script locals)"`.
 pub(crate) const FORMAT_QUEST_SCRIPT_GONE: u32 = 0x0108_1644;
-const LINE_TOPIC_SAID_ONCE: ChangeLine = ChangeLine {
+pub(crate) const LINE_TOPIC_SAID_ONCE: ChangeLine = ChangeLine {
     mask: 0x8000_0000,
     verbose: 0x0108_162c, // "CHANGE_TOPIC_SAIDONCE"
     format: 0,
 };
-const LINE_PACKAGE_NEVER_RUN: ChangeLine = ChangeLine {
+pub(crate) const LINE_PACKAGE_NEVER_RUN: ChangeLine = ChangeLine {
     mask: 0x8000_0000,
     verbose: 0x0108_1610, // "CHANGE_PACKAGE_NEVER_RUN"
     format: 0x0108_15fc,  // "Never Run Flag(%i)"
 };
-const LINE_PACKAGE_WAITING: ChangeLine = ChangeLine {
+pub(crate) const LINE_PACKAGE_WAITING: ChangeLine = ChangeLine {
     mask: 0x4000_0000,
     verbose: 0x0108_15e0, // "CHANGE_PACKAGE_WAITING"
     format: 0x0108_15cc,  // "Waiting Flag(%i)"
 };
-const LINE_CELL_FLAGS: ChangeLine = ChangeLine {
+pub(crate) const LINE_CELL_FLAGS: ChangeLine = ChangeLine {
     mask: 0x2,
     verbose: 0x0108_15b8, // "CHANGE_CELL_FLAGS"
     format: 0x0108_15a8,  // "Cell Flags(%i)"
 };
-const LINE_CELL_SEEN_DATA: ChangeLine = ChangeLine {
+pub(crate) const LINE_CELL_SEEN_DATA: ChangeLine = ChangeLine {
     mask: 0x8000_0000,
     verbose: 0x0108_1564, // "CHANGE_CELL_SEENDATA"
     format: 0x0108_1554,  // "Seen Data(%i)"
 };
-const LINE_CELL_DETACH_TIME: ChangeLine = ChangeLine {
+pub(crate) const LINE_CELL_DETACH_TIME: ChangeLine = ChangeLine {
     mask: 0x4000_0000,
     verbose: 0x0108_1538, // "CHANGE_CELL_DETACHTIME"
     format: 0x0108_1528,  // "Detach Time(%i)"
 };
-const LINE_CELL_OWNERSHIP: ChangeLine = ChangeLine {
+pub(crate) const LINE_CELL_OWNERSHIP: ChangeLine = ChangeLine {
     mask: 0x8,
     verbose: 0x0108_1510, // "CHANGE_CELL_OWNERSHIP"
     format: 0x0108_1500,  // "Ownership(%i)"
 };
-const LINE_CELL_FULL_NAME: ChangeLine = ChangeLine {
+pub(crate) const LINE_CELL_FULL_NAME: ChangeLine = ChangeLine {
     mask: 0x4,
     verbose: 0x0108_14e8, // "CHANGE_CELL_FULLNAME"
     format: 0x0108_1788,  // "Full Name(%i)"
 };
-const LINE_FACTION_FLAGS: ChangeLine = ChangeLine {
+pub(crate) const LINE_FACTION_FLAGS: ChangeLine = ChangeLine {
     mask: 0x2,
     verbose: 0x0108_14d0, // "CHANGE_FACTION_FLAGS"
     format: 0x0108_14bc,  // "Faction Flags(%i)"
 };
-const LINE_FACTION_REACTIONS: ChangeLine = ChangeLine {
+pub(crate) const LINE_FACTION_REACTIONS: ChangeLine = ChangeLine {
     mask: 0x4,
     verbose: 0x0108_14a0, // "CHANGE_FACTION_REACTIONS"
     format: 0x0108_1488,  // "Faction Reactions(%i)"
 };
-const LINE_BOOK_SKILL: ChangeLine = ChangeLine {
+pub(crate) const LINE_BOOK_SKILL: ChangeLine = ChangeLine {
     mask: 0x20,
     verbose: 0x0108_146c, // "CHANGE_BOOK_TEACHES_SKILL"
     format: 0x0108_145c,  // "Book Skill(%i)"
@@ -1274,64 +1274,64 @@ pub(crate) const TEXT_REFR_MOVE: u32 = 0x0108_13e8; // "CHANGE_REFR_MOVE"
 pub(crate) const FORMAT_REFR_MOVE: u32 = 0x0108_13dc; // "Moved(%i)"
 pub(crate) const TEXT_REFR_HAVOK_MOVE: u32 = 0x0108_13c0; // "CHANGE_REFR_HAVOK_MOVE"
 pub(crate) const FORMAT_REFR_HAVOK_MOVE: u32 = 0x0108_13b0; // "Havok Moved(%i)"
-const LINE_REFR_ANIMATION: ChangeLine = ChangeLine {
+pub(crate) const LINE_REFR_ANIMATION: ChangeLine = ChangeLine {
     mask: 0x1000_0000,
     verbose: 0x0108_1314, // "CHANGE_REFR_ANIMATION"
     format: 0x0108_1304,  // "Animation(%i)"
 };
-const LINE_REFR_SCALE: ChangeLine = ChangeLine {
+pub(crate) const LINE_REFR_SCALE: ChangeLine = ChangeLine {
     mask: 0x10,
     verbose: 0x0108_12f0, // "CHANGE_REFR_SCALE"
     format: 0x0108_12e4,  // "Scale(%i)"
 };
-const LINE_REFR_INVENTORY: ChangeLine = ChangeLine {
+pub(crate) const LINE_REFR_INVENTORY: ChangeLine = ChangeLine {
     mask: 0x20,
     verbose: 0x0108_1214, // "CHANGE_REFR_INVENTORY"
     format: 0x0108_1204,  // "Inventory(%i)"
 };
-const LINE_ACTOR_DAMAGE_MODIFIERS: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_DAMAGE_MODIFIERS: ChangeLine = ChangeLine {
     mask: 0x20_0000,
     verbose: 0x0108_1154, // "CHANGE_ACTOR_DAMAGE_MODIFIERS"
     format: 0x0108_113c,  // "Damage Modifiers(%i)"
 };
-const LINE_ACTOR_SCRIPT_MODIFIERS: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_SCRIPT_MODIFIERS: ChangeLine = ChangeLine {
     mask: 0x80_0000,
     verbose: 0x0108_1118, // "CHANGE_ACTOR_PERMANENT_MODIFIERS"
     format: 0x0108_1100,  // "Script Modifiers(%i)"
 };
-const LINE_ACTOR_TEMP_MODIFIERS: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_TEMP_MODIFIERS: ChangeLine = ChangeLine {
     mask: 0x10_0000,
     verbose: 0x0108_10e0, // "CHANGE_ACTOR_TEMP_MODIFIERS"
     format: 0x0108_10cc,  // "Temp Modifiers(%i)"
 };
-const LINE_ACTOR_DISPOSITION: ChangeLine = ChangeLine {
+pub(crate) const LINE_ACTOR_DISPOSITION: ChangeLine = ChangeLine {
     mask: 0x8_0000,
     verbose: 0x0108_0fb4, // "CHANGE_ACTOR_DISPOSITION_MODIFIERS"
     format: 0x0108_0fa0,  // "Disp Modifiers(%i)"
 };
 pub(crate) const TEXT_ACTOR_LIFE_STATE: u32 = 0x0108_0f14; // "CHANGE_ACTOR_LIFESTATE"
 pub(crate) const FORMAT_ACTOR_LIFE_STATE: u32 = 0x0108_0f04; // "Life State(%i)"
-const LINE_OBJECT_LOCK: ChangeLine = ChangeLine {
+pub(crate) const LINE_OBJECT_LOCK: ChangeLine = ChangeLine {
     mask: 0x1000,
     verbose: 0x0108_0e20, // "CHANGE_OBJECT_EXTRA_LOCK"
     format: 0x0108_0e14,  // "Lock(%i)"
 };
-const LINE_OBJECT_EMPTY: ChangeLine = ChangeLine {
+pub(crate) const LINE_OBJECT_EMPTY: ChangeLine = ChangeLine {
     mask: 0x20_0000,
     verbose: 0x0108_0d30, // "CHANGE_OBJECT_EMPTY"
     format: 0x0108_0d20,  // "Empty Flag(%i)"
 };
-const LINE_DOOR_TELEPORT: ChangeLine = ChangeLine {
+pub(crate) const LINE_DOOR_TELEPORT: ChangeLine = ChangeLine {
     mask: 0x2_0000,
     verbose: 0x0108_0d00, // "CHANGE_DOOR_EXTRA_TELEPORT"
     format: 0x0108_0cf0,  // "Teleport(%i)"
 };
-const LINE_OPEN_STATE: ChangeLine = ChangeLine {
+pub(crate) const LINE_OPEN_STATE: ChangeLine = ChangeLine {
     mask: 0x80_0000,
     verbose: 0x0108_0cdc, // "CHANGE_OPEN_STATE"
     format: 0x0108_0ccc,  // "Open State(%i)"
 };
-const LINE_OPEN_DEFAULT_STATE: ChangeLine = ChangeLine {
+pub(crate) const LINE_OPEN_DEFAULT_STATE: ChangeLine = ChangeLine {
     mask: 0x40_0000,
     verbose: 0x0108_0cb0, // "CHANGE_OPEN_DEFAULT_STATE"
     format: 0x0108_0c98,  // "Default Open State(%i)"
@@ -4437,7 +4437,7 @@ pub fn tes_save_load_game_save_plugin_list(e: &mut Engine, this: Ptr<TESSaveLoad
 /// Pads the line in `scratch` with spaces up to `LINE_WIDTH` characters,
 /// adds one more space, and appends it to `buffer` (the end of every line
 /// `BuildChangesString` writes in its short form).
-fn changes_pad_and_append(e: &mut Engine, buffer: u32, scratch: u32) {
+pub(crate) fn changes_pad_and_append(e: &mut Engine, buffer: u32, scratch: u32) {
     while e.call(STRLEN, &args![scratch]).u32() < LINE_WIDTH {
         e.call(STRING_CAT, &args![scratch, LINE_SIZE, SPACE]);
     }
@@ -4448,7 +4448,7 @@ fn changes_pad_and_append(e: &mut Engine, buffer: u32, scratch: u32) {
 /// The size of the part of the form's changed data selected by `mask`
 /// (virtual slot `0x50`) less `base`, as the lines of `BuildChangesString`
 /// print it; 0 for no form.
-fn changes_part_size(e: &mut Engine, form: u32, base: u32, mask: u32) -> u32 {
+pub(crate) fn changes_part_size(e: &mut Engine, form: u32, base: u32, mask: u32) -> u32 {
     if form == 0 {
         return 0;
     }
@@ -4461,7 +4461,7 @@ fn changes_part_size(e: &mut Engine, form: u32, base: u32, mask: u32) -> u32 {
 /// `format` with the size of that part of the form's changes is built in
 /// `scratch`, padded and appended.
 #[allow(clippy::too_many_arguments)]
-fn changes_line(
+pub(crate) fn changes_line(
     e: &mut Engine,
     buffer: u32,
     scratch: u32,
@@ -4489,7 +4489,7 @@ fn changes_line(
 /// A line without a size: the short form pads and appends whatever the
 /// scratch line held (the quest stages and the topic's "said once" flag do
 /// not build a line of their own).
-fn changes_line_without_size(
+pub(crate) fn changes_line_without_size(
     e: &mut Engine,
     buffer: u32,
     scratch: u32,
@@ -4787,7 +4787,7 @@ pub fn tes_save_load_game_build_changes_string(
 /// reference that is a door, or has no base object test) the teleport, open
 /// state and default open state.
 #[allow(clippy::too_many_arguments)]
-fn changes_reference_lines(
+pub(crate) fn changes_reference_lines(
     e: &mut Engine,
     this: Ptr<TESSaveLoadGame>,
     buffer: u32,
@@ -5166,7 +5166,7 @@ pub fn fn_0085f2e0(e: &mut Engine, this: Ptr<TESSaveLoadGame>) {
 /// `fn_00855010(changes, reference, 0)` on the new changes map when the
 /// game has one, else on the changes map (the animation passes that
 /// `fn_0085f2e0` and `fn_0085f5d0` cannot finish).
-fn requeue_changes(e: &mut Engine, this: Ptr<TESSaveLoadGame>, reference: u32) {
+pub(crate) fn requeue_changes(e: &mut Engine, this: Ptr<TESSaveLoadGame>, reference: u32) {
     let new_changes = e.get(this, TESSaveLoadGame::m_pNewChanges);
     let changes = if new_changes.is_null() {
         e.get(this, TESSaveLoadGame::m_pChanges)
@@ -5539,7 +5539,7 @@ pub fn fn_0085fc90(e: &mut Engine, a: Ptr<SaveGameFile>, b: Ptr<SaveGameFile>) -
 /// The last write time (low, high) of a save: the remembered one, or the
 /// one the file system gives for the file's name (zero for a file it does
 /// not find), which is then remembered.
-fn save_file_time(e: &mut Engine, file: Ptr<SaveGameFile>) -> (u32, u32) {
+pub(crate) fn save_file_time(e: &mut Engine, file: Ptr<SaveGameFile>) -> (u32, u32) {
     let time = e.mem.alloc(8);
     e.call(MEMSET, &args![time, 0u32, 8u32]);
     if fn_0085feb0(e, file) {
@@ -5819,7 +5819,7 @@ pub fn fn_008600b0(
 }
 
 /// Splits a play time in milliseconds into hours, minutes and seconds.
-fn split_play_time(milliseconds: u32) -> (u32, u32, u32) {
+pub(crate) fn split_play_time(milliseconds: u32) -> (u32, u32, u32) {
     let hours = milliseconds / 3_600_000;
     let rest = milliseconds - hours * 3_600_000;
     let minutes = rest / 60_000;

@@ -137,223 +137,223 @@ layout! {
 }
 
 /// `TES`'s vtable (`GetMapNameForLocation` first).
-const TES_VTABLE: u32 = 0x0101_78b4;
+pub(crate) const TES_VTABLE: u32 = 0x0101_78b4;
 /// `BSTempNodeManager`'s vtable.
-const BS_TEMP_NODE_MANAGER_VTABLE: u32 = 0x0101_78bc;
+pub(crate) const BS_TEMP_NODE_MANAGER_VTABLE: u32 = 0x0101_78bc;
 /// `BSTempNodeManager`'s `NiRTTI` (what `GetRTTI` returns).
-const BS_TEMP_NODE_MANAGER_RTTI: u32 = 0x0120_2df8;
+pub(crate) const BS_TEMP_NODE_MANAGER_RTTI: u32 = 0x0120_2df8;
 /// `"D:\_Fallout3\Platforms\Common\Code\Fallout Shared\TES.cpp"`.
-const TES_CPP_PATH: u32 = 0x0101_7874;
+pub(crate) const TES_CPP_PATH: u32 = 0x0101_7874;
 
 // The singletons the world manager creates and destroys.
 
 /// The `TESDataHandler` singleton pointer (the object is 0x63C bytes).
-const DATA_HANDLER: u32 = 0x011c_3f2c;
+pub(crate) const DATA_HANDLER: u32 = 0x011c_3f2c;
 /// The `ModelLoader` singleton pointer (0x30 bytes).
-const MODEL_LOADER: u32 = 0x011c_3b3c;
+pub(crate) const MODEL_LOADER: u32 = 0x011c_3b3c;
 /// The `IOManager` singleton pointer (0xA0 bytes on PC; inferred from its
 /// readers in `main` and the queued-file code).
-const IO_MANAGER: u32 = 0x0120_2d98;
+pub(crate) const IO_MANAGER: u32 = 0x0120_2d98;
 /// The `BSParallelTaskManager` singleton pointer (0x10 bytes), created only
 /// when `iNumHWThreads:General` is above 1.
-const PARALLEL_TASK_MANAGER: u32 = 0x0120_2df4;
+pub(crate) const PARALLEL_TASK_MANAGER: u32 = 0x0120_2df4;
 /// The `TESSaveLoadGame` singleton pointer (0x1C8 bytes).
-const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+pub(crate) const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
 /// An object whose vtable slot `0x1CC` `TES::~TES` calls (with two zeros).
-const OBJECT_WITH_SLOT_1CC: u32 = 0x011d_ea3c;
+pub(crate) const OBJECT_WITH_SLOT_1CC: u32 = 0x011d_ea3c;
 /// An object `TES::~TES` passes to `00867840` as `this` (inline, not a pointer).
-const OBJECT_011DE7B8: u32 = 0x011d_e7b8;
+pub(crate) const OBJECT_011DE7B8: u32 = 0x011d_e7b8;
 /// An object `TES::~TES` passes to `00977540` as `this` (inline).
-const OBJECT_011E0E80: u32 = 0x011e_0e80;
+pub(crate) const OBJECT_011E0E80: u32 = 0x011e_0e80;
 /// The `VATS` object `TES::~TES` passes to `VATS::ClearData` (`009c6ba0`).
-const VATS_OBJECT: u32 = 0x011f_2250;
+pub(crate) const VATS_OBJECT: u32 = 0x011f_2250;
 /// Table of four `BSShadowSceneNode` pointers (`00450b80` reads entry `n`).
-const SHADOW_SCENE_NODE_TABLE: u32 = 0x011f_91c8;
+pub(crate) const SHADOW_SCENE_NODE_TABLE: u32 = 0x011f_91c8;
 /// Number of entries in [`SHADOW_SCENE_NODE_TABLE`].
-const SHADOW_SCENE_NODE_COUNT: u32 = 4;
+pub(crate) const SHADOW_SCENE_NODE_COUNT: u32 = 4;
 /// High-water mark of `uGridsToLoad` squared, raised by `TES::TES`.
-const GRID_CELL_COUNT_HIGH_WATER_MARK: u32 = 0x011c_3c00;
+pub(crate) const GRID_CELL_COUNT_HIGH_WATER_MARK: u32 = 0x011c_3c00;
 
 // INI settings (`SettingT<INISettingCollection>` objects).
 
 /// `iUpdateType:HAVOK`.
-const SETTING_HAVOK_UPDATE_TYPE: u32 = 0x011c_3c30;
+pub(crate) const SETTING_HAVOK_UPDATE_TYPE: u32 = 0x011c_3c30;
 /// `bAddBipedWhenKeyframed:HAVOK`.
-const SETTING_ADD_BIPED_WHEN_KEYFRAMED: u32 = 0x011c_3da0;
+pub(crate) const SETTING_ADD_BIPED_WHEN_KEYFRAMED: u32 = 0x011c_3da0;
 /// `fDebrisMaxVelocity`.
-const SETTING_DEBRIS_MAX_VELOCITY: u32 = 0x011c_3c74;
+pub(crate) const SETTING_DEBRIS_MAX_VELOCITY: u32 = 0x011c_3c74;
 /// `fDebrisMinExtent`.
-const SETTING_DEBRIS_MIN_EXTENT: u32 = 0x011c_3db0;
+pub(crate) const SETTING_DEBRIS_MIN_EXTENT: u32 = 0x011c_3db0;
 /// `fChaseDeltaMult:HAVOK`.
-const SETTING_CHASE_DELTA_MULT: u32 = 0x011c_3d28;
+pub(crate) const SETTING_CHASE_DELTA_MULT: u32 = 0x011c_3d28;
 /// `fMaxPickTime:HAVOK`.
-const SETTING_MAX_PICK_TIME: u32 = 0x011c_3e54;
+pub(crate) const SETTING_MAX_PICK_TIME: u32 = 0x011c_3e54;
 /// `fMaxPickTimeVATS:HAVOK`.
-const SETTING_MAX_PICK_TIME_VATS: u32 = 0x011c_3e94;
+pub(crate) const SETTING_MAX_PICK_TIME_VATS: u32 = 0x011c_3e94;
 /// `iEntityBatchRemoveRate:HAVOK`.
-const SETTING_ENTITY_BATCH_REMOVE_RATE: u32 = 0x011c_3c3c;
+pub(crate) const SETTING_ENTITY_BATCH_REMOVE_RATE: u32 = 0x011c_3c3c;
 /// `fMoveLimitMass:HAVOK`.
-const SETTING_MOVE_LIMIT_MASS: u32 = 0x011c_3d4c;
+pub(crate) const SETTING_MOVE_LIMIT_MASS: u32 = 0x011c_3d4c;
 /// `fCharacterControllerMultipleStepSpeed`.
-const SETTING_CHARACTER_CONTROLLER_MULTIPLE_STEP_SPEED: u32 = 0x011c_3ce8;
+pub(crate) const SETTING_CHARACTER_CONTROLLER_MULTIPLE_STEP_SPEED: u32 = 0x011c_3ce8;
 /// `fPhysicsDamage1Mass`.
-const SETTING_PHYSICS_DAMAGE_1_MASS: u32 = 0x011c_fb38;
+pub(crate) const SETTING_PHYSICS_DAMAGE_1_MASS: u32 = 0x011c_fb38;
 /// `fFadeOutThreshold:LOD`.
-const SETTING_FADE_OUT_THRESHOLD: u32 = 0x011c_3e18;
+pub(crate) const SETTING_FADE_OUT_THRESHOLD: u32 = 0x011c_3e18;
 /// `fFadeInThreshold:LOD`.
-const SETTING_FADE_IN_THRESHOLD: u32 = 0x011c_3d00;
+pub(crate) const SETTING_FADE_IN_THRESHOLD: u32 = 0x011c_3d00;
 /// `fFadeInTime:LOD`.
-const SETTING_FADE_IN_TIME: u32 = 0x011c_3df4;
+pub(crate) const SETTING_FADE_IN_TIME: u32 = 0x011c_3df4;
 /// `fFadeOutTime:LOD`.
-const SETTING_FADE_OUT_TIME: u32 = 0x011c_3c5c;
+pub(crate) const SETTING_FADE_OUT_TIME: u32 = 0x011c_3c5c;
 /// `fDistanceMultiplier:LOD`.
-const SETTING_DISTANCE_MULTIPLIER: u32 = 0x011c_3d60;
+pub(crate) const SETTING_DISTANCE_MULTIPLIER: u32 = 0x011c_3d60;
 /// `bQueueWarnings:General`.
-const SETTING_QUEUE_WARNINGS: u32 = 0x011c_3e64;
+pub(crate) const SETTING_QUEUE_WARNINGS: u32 = 0x011c_3e64;
 /// `bCheckPurgedTextureList:General`.
-const SETTING_CHECK_PURGED_TEXTURE_LIST: u32 = 0x011c_3ccc;
+pub(crate) const SETTING_CHECK_PURGED_TEXTURE_LIST: u32 = 0x011c_3ccc;
 /// `iNumHWThreads:General`.
-const SETTING_NUM_HW_THREADS: u32 = 0x011c_3ea4;
+pub(crate) const SETTING_NUM_HW_THREADS: u32 = 0x011c_3ea4;
 /// `uExterior Cell Buffer:General`.
-const SETTING_EXTERIOR_CELL_BUFFER: u32 = 0x011c_3c90;
+pub(crate) const SETTING_EXTERIOR_CELL_BUFFER: u32 = 0x011c_3c90;
 /// `uInterior Cell Buffer:General`.
-const SETTING_INTERIOR_CELL_BUFFER: u32 = 0x011c_3e38;
+pub(crate) const SETTING_INTERIOR_CELL_BUFFER: u32 = 0x011c_3e38;
 /// `uGridsToLoad:General`.
-const SETTING_GRIDS_TO_LOAD: u32 = 0x011c_63cc;
+pub(crate) const SETTING_GRIDS_TO_LOAD: u32 = 0x011c_63cc;
 /// `fLODFadeOutMultItems:LOD`.
-const SETTING_LOD_FADE_OUT_MULT_ITEMS: u32 = 0x011c_3d0c;
+pub(crate) const SETTING_LOD_FADE_OUT_MULT_ITEMS: u32 = 0x011c_3d0c;
 /// `fLODFadeOutMultActors:LOD`.
-const SETTING_LOD_FADE_OUT_MULT_ACTORS: u32 = 0x011c_3ec0;
+pub(crate) const SETTING_LOD_FADE_OUT_MULT_ACTORS: u32 = 0x011c_3ec0;
 /// `fLODFadeOutMultObjects:LOD`.
-const SETTING_LOD_FADE_OUT_MULT_OBJECTS: u32 = 0x011c_3d78;
+pub(crate) const SETTING_LOD_FADE_OUT_MULT_OBJECTS: u32 = 0x011c_3d78;
 
 // Callees outside this unit.
 
 /// Setting value pointer, `int` flavour (`this + 4`).
-const SETTING_VALUE_ADDRESS_INT: u32 = 0x0043_d4d0;
+pub(crate) const SETTING_VALUE_ADDRESS_INT: u32 = 0x0043_d4d0;
 /// Setting value pointer, `float` flavour (identical code).
-const SETTING_VALUE_ADDRESS_FLOAT: u32 = 0x0040_3e20;
+pub(crate) const SETTING_VALUE_ADDRESS_FLOAT: u32 = 0x0040_3e20;
 /// Setting value pointer, `bool`/byte flavour (identical code).
-const SETTING_VALUE_ADDRESS_BYTE: u32 = 0x0040_8d60;
+pub(crate) const SETTING_VALUE_ADDRESS_BYTE: u32 = 0x0040_8d60;
 /// Sets a `uint` setting's value (`this` = the setting).
-const SETTING_SET_UINT: u32 = 0x0045_ce80;
+pub(crate) const SETTING_SET_UINT: u32 = 0x0045_ce80;
 /// `_memset` through the `std::_Fiopen` name the linker folded onto it.
-const MEMSET: u32 = 0x0040_3d30;
+pub(crate) const MEMSET: u32 = 0x0040_3d30;
 /// `operator new` (`MemoryManager::Allocate`).
-const OPERATOR_NEW: u32 = 0x0040_1000;
+pub(crate) const OPERATOR_NEW: u32 = 0x0040_1000;
 /// `operator delete`.
-const OPERATOR_DELETE: u32 = 0x0040_1030;
+pub(crate) const OPERATOR_DELETE: u32 = 0x0040_1030;
 /// `NiMemObject::operator new` (the block comes back in EAX).
-const NI_OPERATOR_NEW: u32 = 0x00aa_13e0;
+pub(crate) const NI_OPERATOR_NEW: u32 = 0x00aa_13e0;
 /// Sized `NiMemObject::operator delete(block, size)`.
-const NI_OPERATOR_DELETE: u32 = 0x00aa_1460;
+pub(crate) const NI_OPERATOR_DELETE: u32 = 0x00aa_1460;
 /// The 4-byte scope guard the constructor keeps on its stack (sets the
 /// memory-allocation tag to its first argument for the guard's lifetime).
-const SCOPE_GUARD_CTOR: u32 = 0x0040_4eb0;
-const SCOPE_GUARD_DTOR: u32 = 0x0040_4ee0;
+pub(crate) const SCOPE_GUARD_CTOR: u32 = 0x0040_4eb0;
+pub(crate) const SCOPE_GUARD_DTOR: u32 = 0x0040_4ee0;
 /// Size of that guard.
-const SCOPE_GUARD_SIZE: u32 = 4;
+pub(crate) const SCOPE_GUARD_SIZE: u32 = 4;
 
 // Globals and settings used by the grid code (session 2).
 
 /// `bUseWater:Water`.
-const SETTING_USE_WATER: u32 = 0x011c_7adc;
+pub(crate) const SETTING_USE_WATER: u32 = 0x011c_7adc;
 /// `fFadeToBlackFadeSeconds`.
-const SETTING_FADE_TO_BLACK_FADE_SECONDS: u32 = 0x011c_3e7c;
+pub(crate) const SETTING_FADE_TO_BLACK_FADE_SECONDS: u32 = 0x011c_3e7c;
 /// The `TES` singleton pointer.
-const TES_SINGLETON: u32 = 0x011d_ea10;
+pub(crate) const TES_SINGLETON: u32 = 0x011d_ea10;
 /// The `PlayerCharacter` singleton pointer.
-const PLAYER_CHARACTER: u32 = 0x011d_ea3c;
+pub(crate) const PLAYER_CHARACTER: u32 = 0x011d_ea3c;
 /// The `FaderManager` singleton pointer.
-const FADER_MANAGER: u32 = 0x011d_8804;
+pub(crate) const FADER_MANAGER: u32 = 0x011d_8804;
 /// The object `00451ef0` passes as `this` to `0042ce10` (a flag getter).
-const SCRIPT_CONTEXT: u32 = 0x011d_df38;
+pub(crate) const SCRIPT_CONTEXT: u32 = 0x011d_df38;
 /// `TESObjectCELL::spExteriorWorld` (Xbox PDB): a `NiPointer<bhkWorldM>`;
 /// `00559450` (the `NiPointer` getter, returns the first word) reads it.
-const EXTERIOR_WORLD: u32 = 0x011c_a0d8;
+pub(crate) const EXTERIOR_WORLD: u32 = 0x011c_a0d8;
 /// Byte `004512c0` sets while it runs and clears at its end; it returns at
 /// once when the byte is already set (a re-entrancy guard).
-const GRID_LOAD_IN_PROGRESS: u32 = 0x011c_3ed0;
+pub(crate) const GRID_LOAD_IN_PROGRESS: u32 = 0x011c_3ed0;
 /// Byte written by `00451520` (also written by `ClearCanopyShadowMaskTexture`
 /// and read by `008705c0`).
-const GRID_FLAG_01189184: u32 = 0x0118_9184;
+pub(crate) const GRID_FLAG_01189184: u32 = 0x0118_9184;
 /// Byte written by `00451590` (read by `00b61980`).
-const GRID_FLAG_011AD86C: u32 = 0x011a_d86c;
+pub(crate) const GRID_FLAG_011AD86C: u32 = 0x011a_d86c;
 /// Three words (a `NiPoint3`) `004512c0` passes to `0057d0a0` after the
 /// camera position.
-const POINT_011A9478: u32 = 0x011a_9478;
+pub(crate) const POINT_011A9478: u32 = 0x011a_9478;
 /// A `double` (200.0 in the exe) that `00451ef0` compares two floats with
 /// (address of the constant; read at run time).
-const LARGE_CELL_LIMIT: u32 = 0x0101_79e0;
+pub(crate) const LARGE_CELL_LIMIT: u32 = 0x0101_79e0;
 /// `"Loading cell...%s (%i, %i) (%08X)"`.
-const LOADING_CELL_FORMAT: u32 = 0x0101_79bc;
+pub(crate) const LOADING_CELL_FORMAT: u32 = 0x0101_79bc;
 /// `__RTDynamicCast` source and target type descriptors (RTTI data in the
 /// exe) that `00451ef0` casts the reference's base form with.
-const RTTI_TESFORM: u32 = 0x0118_3108;
-const RTTI_CAST_TARGET: u32 = 0x0118_6060;
+pub(crate) const RTTI_TESFORM: u32 = 0x0118_3108;
+pub(crate) const RTTI_CAST_TARGET: u32 = 0x0118_6060;
 
 // Callees outside this unit that several grid functions use.
 
 /// `TESObjectCELL::GetDataX`/`GetDataY` (Xbox PDB).
-const CELL_GET_DATA_X: u32 = 0x0054_4c30;
-const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
+pub(crate) const CELL_GET_DATA_X: u32 = 0x0054_4c30;
+pub(crate) const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
 /// `TES::pInteriorCell` getter (the map calls it
 /// `ActorMover::GetPreferredMoveMode`; the body returns `this + 0x34`).
-const GET_INTERIOR_CELL: u32 = 0x005f_36f0;
+pub(crate) const GET_INTERIOR_CELL: u32 = 0x005f_36f0;
 /// `TES::GetWorldSpace` (Xbox PDB): `this + 0x88`.
-const GET_WORLD_SPACE: u32 = 0x004f_d3e0;
+pub(crate) const GET_WORLD_SPACE: u32 = 0x004f_d3e0;
 /// `GridCellArray::Get(x, y)` (Xbox PDB): the address of the slot holding
 /// the cell pointer.
-const GRID_CELL_ARRAY_GET: u32 = 0x004b_a490;
+pub(crate) const GRID_CELL_ARRAY_GET: u32 = 0x004b_a490;
 /// `GridCellArray::AttachToWorld(root, x, y)` (Xbox PDB).
-const GRID_CELL_ARRAY_ATTACH_TO_WORLD: u32 = 0x004b_a960;
+pub(crate) const GRID_CELL_ARRAY_ATTACH_TO_WORLD: u32 = 0x004b_a960;
 /// `TESWorldSpace::GetTerrainManager` (Xbox PDB).
-const GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
+pub(crate) const GET_TERRAIN_MANAGER: u32 = 0x0058_6170;
 /// A reference's base form (`this + 0x20`; the map names it
 /// `BGSSaveFormBuffer::GetForm`).
-const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
+pub(crate) const REFERENCE_GET_BASE_FORM: u32 = 0x007a_f430;
 /// The form type byte (`this + 4`).
-const FORM_GET_TYPE: u32 = 0x0040_1170;
+pub(crate) const FORM_GET_TYPE: u32 = 0x0040_1170;
 /// `_ftol2_sse`: truncates the `ST0` float to an integer (here an `f64`
 /// argument, see the engine guide).
-const FTOL: u32 = 0x00ec_62c0;
+pub(crate) const FTOL: u32 = 0x00ec_62c0;
 /// `fistp` of a `float` pushed on the stack (round to nearest), returns it.
-const FLOAT_TO_INT_ROUNDED: u32 = 0x0040_6d90;
+pub(crate) const FLOAT_TO_INT_ROUNDED: u32 = 0x0040_6d90;
 /// Constructor of the 12-byte stack object (a `float` at +0, bytes at +4 and
 /// +5, zeros at +6..+8) the grid code passes to [`NODE_UPDATE`]; arguments
 /// `(float, byte, byte)`.
-const UPDATE_OBJECT_CTOR: u32 = 0x0043_d410;
+pub(crate) const UPDATE_OBJECT_CTOR: u32 = 0x0043_d410;
 /// Takes a node and that 12-byte object and calls the node's vtable slot
 /// `0xA4` with the object and 0 (then slot `0xFC` of the object at +0x18, when
 /// set).
-const NODE_UPDATE: u32 = 0x00a5_9c60;
+pub(crate) const NODE_UPDATE: u32 = 0x00a5_9c60;
 
 /// Reads an INI setting's value as an unsigned integer.
-fn setting_uint(e: &mut Engine, setting: u32) -> u32 {
+pub(crate) fn setting_uint(e: &mut Engine, setting: u32) -> u32 {
     let value = e.call(SETTING_VALUE_ADDRESS_INT, &args![setting]).u32();
     e.mem.u32(value)
 }
 
 /// Reads an INI setting's value as a float.
-fn setting_float(e: &mut Engine, setting: u32) -> f32 {
+pub(crate) fn setting_float(e: &mut Engine, setting: u32) -> f32 {
     let value = e.call(SETTING_VALUE_ADDRESS_FLOAT, &args![setting]).u32();
     e.mem.f32(value)
 }
 
 /// Reads an INI setting's value as a byte.
-fn setting_byte(e: &mut Engine, setting: u32) -> u8 {
+pub(crate) fn setting_byte(e: &mut Engine, setting: u32) -> u8 {
     let value = e.call(SETTING_VALUE_ADDRESS_BYTE, &args![setting]).u32();
     e.mem.u8(value)
 }
 
 /// `uGridsToLoad`, as the constructor reads it: one call per use.
-fn grids_to_load(e: &mut Engine) -> u32 {
+pub(crate) fn grids_to_load(e: &mut Engine) -> u32 {
     setting_uint(e, SETTING_GRIDS_TO_LOAD)
 }
 
 /// `uGridsToLoad * uGridsToLoad + uGridsToLoad + uGridsToLoad + 1`, reading
 /// the setting four times in the order the code does.
-fn exterior_cell_buffer_needed(e: &mut Engine) -> u32 {
+pub(crate) fn exterior_cell_buffer_needed(e: &mut Engine) -> u32 {
     let first = e
         .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
         .u32();
@@ -371,7 +371,7 @@ fn exterior_cell_buffer_needed(e: &mut Engine) -> u32 {
 
 /// `count * 4` as the compiler computes an array allocation size: all ones
 /// when the multiplication overflows 32 bits.
-fn array_bytes(count: u32) -> u32 {
+pub(crate) fn array_bytes(count: u32) -> u32 {
     count.saturating_mul(4)
 }
 
@@ -1565,7 +1565,7 @@ pub fn tes_find_first_grid_cell_with_water(e: &mut Engine, this: Ptr<TES>) -> Pt
 
 /// The grid slot `(x, y)` when it holds a cell with the "has water" bit set,
 /// else 0 (the test the water search repeats).
-fn grid_slot_with_water(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32) -> u32 {
+pub(crate) fn grid_slot_with_water(e: &mut Engine, this: Ptr<TES>, x: u32, y: u32) -> u32 {
     let grid_cells = e.get(this, TES::pGridCellA);
     let slot = e.call(GRID_CELL_ARRAY_GET, &args![grid_cells, x, y]).u32();
     if slot != 0 {
@@ -2021,161 +2021,161 @@ pub fn fn_00452420(e: &mut Engine, loaded_data: Ptr, mask: u32) -> bool {
 // Globals, settings and callees of the cell-update code (session 3).
 
 /// `bBackgroundCellLoads:BackgroundLoad`.
-const SETTING_BACKGROUND_CELL_LOADS: u32 = 0x011c_9670;
+pub(crate) const SETTING_BACKGROUND_CELL_LOADS: u32 = 0x011c_9670;
 /// `bPreemptivelyUnloadCells:General`.
-const SETTING_PREEMPTIVELY_UNLOAD_CELLS: u32 = 0x011c_3d40;
+pub(crate) const SETTING_PREEMPTIVELY_UNLOAD_CELLS: u32 = 0x011c_3d40;
 /// `fAnimationMult:General`.
-const SETTING_ANIMATION_MULT: u32 = 0x011c_5724;
+pub(crate) const SETTING_ANIMATION_MULT: u32 = 0x011c_5724;
 /// `bHavokDebug:HAVOK`.
-const SETTING_HAVOK_DEBUG: u32 = 0x0126_7b28;
+pub(crate) const SETTING_HAVOK_DEBUG: u32 = 0x0126_7b28;
 /// The `ExteriorCellLoader` singleton pointer.
-const EXTERIOR_CELL_LOADER: u32 = 0x011c_9618;
+pub(crate) const EXTERIOR_CELL_LOADER: u32 = 0x011c_9618;
 /// The `Main` singleton pointer (`Main::RenderMenuBackground` is `00871dc0`).
-const MAIN_OBJECT: u32 = 0x011d_ea0c;
+pub(crate) const MAIN_OBJECT: u32 = 0x011d_ea0c;
 /// The movie player pointer (`MoviePlayer::GetPlayingSequence` is `00ec17c0`).
-const MOVIE_PLAYER: u32 = 0x0126_fac4;
+pub(crate) const MOVIE_PLAYER: u32 = 0x0126_fac4;
 /// The `FOCollisionListener` singleton pointer (0xC bytes, built by
 /// `00623430` on first use).
-const COLLISION_LISTENER: u32 = 0x011c_c224;
+pub(crate) const COLLISION_LISTENER: u32 = 0x011c_c224;
 /// An object `00453a80`'s sibling `004537b0` returns (passed to `0087aa90`).
-const TASK_QUEUE_OBJECT: u32 = 0x011d_f1a8;
+pub(crate) const TASK_QUEUE_OBJECT: u32 = 0x011d_f1a8;
 /// `BSAudio::QInstance` (Xbox PDB) returns this.
-const AUDIO_INSTANCE: u32 = 0x011f_6d98;
+pub(crate) const AUDIO_INSTANCE: u32 = 0x011f_6d98;
 /// The object `00453550` and `004537c0` pass to `0084d030` (a float getter).
-const FRAME_TIME_OBJECT: u32 = 0x011f_6394;
+pub(crate) const FRAME_TIME_OBJECT: u32 = 0x011f_6394;
 /// The object `00452510` and `00452530` pass to `0040fbf0` and `0040fba0`
 /// (a counted lock).
-const CLEANUP_LOCK: u32 = 0x011f_4480;
+pub(crate) const CLEANUP_LOCK: u32 = 0x011f_4480;
 /// Byte read by `00452540`: whether texture purging is allowed at all.
-const PURGE_ALLOWED: u32 = 0x011c_70e9;
+pub(crate) const PURGE_ALLOWED: u32 = 0x011c_70e9;
 /// Byte `00452480` returns.
-const FLAG_0119B8C8: u32 = 0x0119_b8c8;
+pub(crate) const FLAG_0119B8C8: u32 = 0x0119_b8c8;
 /// Byte stored by `00452e40`.
-const FLAG_011AF70C: u32 = 0x011a_f70c;
+pub(crate) const FLAG_011AF70C: u32 = 0x011a_f70c;
 /// Byte stored by `00454440`.
-const FLAG_011F9427: u32 = 0x011f_9427;
+pub(crate) const FLAG_011F9427: u32 = 0x011f_9427;
 /// Byte `00454450` sets to 1 (`0118 9625`).
-const FLAG_01189625: u32 = 0x0118_9625;
+pub(crate) const FLAG_01189625: u32 = 0x0118_9625;
 /// Byte `UpdateCurrentGridCell` sets while the grid centre has moved and
 /// `00454450` clears; read with [`GRID_FLAG_MOVED_COPY`].
-const GRID_FLAG_MOVED: u32 = 0x011c_3c0c;
+pub(crate) const GRID_FLAG_MOVED: u32 = 0x011c_3c0c;
 /// Copy of [`GRID_FLAG_MOVED`] taken right after it is set or cleared.
-const GRID_FLAG_MOVED_COPY: u32 = 0x011f_94aa;
+pub(crate) const GRID_FLAG_MOVED_COPY: u32 = 0x011f_94aa;
 /// Byte set by `00454450` from `00454b70` (called on the terrain manager).
-const GRID_FLAG_TERRAIN: u32 = 0x011f_94ab;
+pub(crate) const GRID_FLAG_TERRAIN: u32 = 0x011f_94ab;
 /// Float stored by `UpdateCurrentGridCell` and `00454450` from `00452e70(0)`.
-const GRID_FLOAT_011F94AC: u32 = 0x011f_94ac;
+pub(crate) const GRID_FLOAT_011F94AC: u32 = 0x011f_94ac;
 /// Two floats `00452e70` indexes with its argument.
-const FLOAT_PAIR_011F940C: u32 = 0x011f_940c;
+pub(crate) const FLOAT_PAIR_011F940C: u32 = 0x011f_940c;
 /// The world position (two floats) of the centre of the current grid cell.
-const GRID_CENTRE: u32 = 0x011f_962c;
+pub(crate) const GRID_CENTRE: u32 = 0x011f_962c;
 /// The previous value of [`GRID_CENTRE`] (two floats).
-const GRID_PREVIOUS_CENTRE: u32 = 0x011f_9634;
+pub(crate) const GRID_PREVIOUS_CENTRE: u32 = 0x011f_9634;
 /// A pair of floats `00452df0` compares [`GRID_PREVIOUS_CENTRE`] with.
-const GRID_CENTRE_REFERENCE: u32 = 0x011f_4980;
+pub(crate) const GRID_CENTRE_REFERENCE: u32 = 0x011f_4980;
 /// Float time `00453550` adds its argument to.
-const TIME_ACCUMULATOR: u32 = 0x011c_3c08;
+pub(crate) const TIME_ACCUMULATOR: u32 = 0x011c_3c08;
 /// A `double` 0.0 (`UpdateCurrentGridCell` compares the cell deltas with it).
-const DOUBLE_ZERO: u32 = 0x0101_2060;
+pub(crate) const DOUBLE_ZERO: u32 = 0x0101_2060;
 /// A `double` 0.5.
-const DOUBLE_HALF: u32 = 0x0101_1588;
+pub(crate) const DOUBLE_HALF: u32 = 0x0101_1588;
 /// A `double` 4096.0, the edge of an exterior cell in world units.
-const DOUBLE_CELL_SIZE: u32 = 0x0101_7a10;
+pub(crate) const DOUBLE_CELL_SIZE: u32 = 0x0101_7a10;
 /// A `float` 4096.0 and a `float` 3072.0: the extent `UpdateCurrentGridCell`
 /// measures the cell deltas from (3072.0 when `uGridsToLoad` is 3).
-const FLOAT_CELL_EXTENT: u32 = 0x0101_7a3c;
-const FLOAT_CELL_EXTENT_SMALL_GRID: u32 = 0x0101_7a38;
+pub(crate) const FLOAT_CELL_EXTENT: u32 = 0x0101_7a3c;
+pub(crate) const FLOAT_CELL_EXTENT_SMALL_GRID: u32 = 0x0101_7a38;
 /// `"Loading Area (queued cells)..."` and `"Loading Area (unloaded
 /// cells)..."`.
-const LOADING_AREA_QUEUED_CELLS: u32 = 0x0101_7a18;
-const LOADING_AREA_UNLOADED_CELLS: u32 = 0x0101_79e8;
+pub(crate) const LOADING_AREA_QUEUED_CELLS: u32 = 0x0101_7a18;
+pub(crate) const LOADING_AREA_UNLOADED_CELLS: u32 = 0x0101_79e8;
 
 /// `abs` (the CRT's, `int` in, `int` out).
-const ABS: u32 = 0x00ec_7d40;
+pub(crate) const ABS: u32 = 0x00ec_7d40;
 /// `TESWorldSpace::GetCellFromCellCoord` (Xbox PDB): `(worldSpace, x, y)`.
-const WORLD_SPACE_GET_CELL_FROM_CELL_COORD: u32 = 0x0058_75a0;
+pub(crate) const WORLD_SPACE_GET_CELL_FROM_CELL_COORD: u32 = 0x0058_75a0;
 /// The data handler's lookup of the cell at `(x, y, worldSpace, 0)`
 /// (`tesdatahandler.cpp`; a null world space means the current one).
-const DATA_HANDLER_GET_CELL: u32 = 0x0046_1c20;
+pub(crate) const DATA_HANDLER_GET_CELL: u32 = 0x0046_1c20;
 /// `TESDataHandler::UnloadCell` (Xbox PDB).
-const DATA_HANDLER_UNLOAD_CELL: u32 = 0x0046_2290;
+pub(crate) const DATA_HANDLER_UNLOAD_CELL: u32 = 0x0046_2290;
 /// `ExteriorCellLoader::QueueCellLoad` (Xbox PDB): `(worldSpace, x, y)`.
-const EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD: u32 = 0x0052_83c0;
+pub(crate) const EXTERIOR_CELL_LOADER_QUEUE_CELL_LOAD: u32 = 0x0052_83c0;
 /// `TES::AddToBuffer` (Xbox PDB): `(cell)`.
-const TES_ADD_TO_BUFFER: u32 = 0x0045_4b90;
+pub(crate) const TES_ADD_TO_BUFFER: u32 = 0x0045_4b90;
 /// Returns `this + 0x8c`, the address of `listLastLoadedExteriors`.
-const GET_LAST_LOADED_EXTERIORS: u32 = 0x0045_bb80;
+pub(crate) const GET_LAST_LOADED_EXTERIORS: u32 = 0x0045_bb80;
 /// `TES::SetWorldSpace` (the decompiler's name for `00458200`): `(world
 /// space)`.
-const SET_WORLD_SPACE: u32 = 0x0045_8200;
+pub(crate) const SET_WORLD_SPACE: u32 = 0x0045_8200;
 /// `(text)`: the call both "Loading Area (...)" messages are passed to.
-const SET_LOADING_AREA_TEXT: u32 = 0x0045_81e0;
+pub(crate) const SET_LOADING_AREA_TEXT: u32 = 0x0045_81e0;
 /// `TESObjectCELL::Load3D` (Xbox PDB).
-const CELL_LOAD_3D: u32 = 0x0054_5cf0;
+pub(crate) const CELL_LOAD_3D: u32 = 0x0054_5cf0;
 /// `NiAVObject::UpdateProperties` (Xbox PDB).
-const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+pub(crate) const NODE_UPDATE_PROPERTIES: u32 = 0x00a5_a040;
 /// `TESObjectCELL::AttachLights` (Xbox PDB): `(cell, flag)`.
-const CELL_ATTACH_LIGHTS: u32 = 0x0054_ba80;
+pub(crate) const CELL_ATTACH_LIGHTS: u32 = 0x0054_ba80;
 /// `TESObjectCELL::Detach` (Xbox PDB): `(cell, flag)`.
-const CELL_DETACH: u32 = 0x0055_2bd0;
+pub(crate) const CELL_DETACH: u32 = 0x0055_2bd0;
 /// `BGSTerrainManager::Update` (Xbox PDB): `(terrain, position, flags)`.
-const TERRAIN_MANAGER_UPDATE: u32 = 0x006f_ca90;
+pub(crate) const TERRAIN_MANAGER_UPDATE: u32 = 0x006f_ca90;
 /// Puts the item at the address passed at the head of a list: `(list,
 /// &item)`. The list `00452ff0` fills is `listLastLoadedExteriors`.
-const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
+pub(crate) const LIST_ADD_HEAD: u32 = 0x005a_e3d0;
 /// The `NiPointer` getter (first word of `this`).
-const NI_POINTER_GET: u32 = 0x0055_9450;
+pub(crate) const NI_POINTER_GET: u32 = 0x0055_9450;
 /// `NiPointer<NiSourceTexture>` constructor `(this, 0)` and destructor.
-const NI_POINTER_CTOR: u32 = 0x0063_3c90;
-const NI_POINTER_DTOR: u32 = 0x0045_cec0;
+pub(crate) const NI_POINTER_CTOR: u32 = 0x0063_3c90;
+pub(crate) const NI_POINTER_DTOR: u32 = 0x0045_cec0;
 /// `TES::CreateTextureImage` (Xbox PDB): `(this, name, &texture, 1, 0)`.
-const TES_CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
+pub(crate) const TES_CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
 /// Returns `this + 0x64` (`TES::pWaterSystem`; the map names it
 /// `DetailedActorPathHandler::GetCurrentNodeIndex`, identical code).
-const TES_WATER_SYSTEM_GETTER: u32 = 0x0070_ec90;
+pub(crate) const TES_WATER_SYSTEM_GETTER: u32 = 0x0070_ec90;
 /// `(waterSystem, texture)`: stores the texture through `0066b0d0` on
 /// `this + 0x1c`.
-const WATER_SYSTEM_SET_TEXTURE: u32 = 0x0052_d3b0;
+pub(crate) const WATER_SYSTEM_SET_TEXTURE: u32 = 0x0052_d3b0;
 /// `TESObjectCELL::LoadAllTempData` (Xbox PDB).
-const CELL_LOAD_ALL_TEMP_DATA: u32 = 0x0055_0340;
+pub(crate) const CELL_LOAD_ALL_TEMP_DATA: u32 = 0x0055_0340;
 /// `(modelLoader, cell)`: byte answer used to start loading a cell's models.
-const MODEL_LOADER_CELL_NEEDS_MODELS: u32 = 0x0044_7950;
+pub(crate) const MODEL_LOADER_CELL_NEEDS_MODELS: u32 = 0x0044_7950;
 /// `TESObjectCELL::AttachToWorld` (Xbox PDB): `(cell, root)`.
-const CELL_ATTACH_TO_WORLD: u32 = 0x0055_2970;
+pub(crate) const CELL_ATTACH_TO_WORLD: u32 = 0x0055_2970;
 /// The exterior havok world's counters (`bhkworld.obj`): `00c66300` and
 /// `00c66310` add one to the counters at `+0x18` and `+0x1c`; `00c6b540`
 /// and `00c68f00` take one off (argument: a flag that re-enables the
 /// work the counter held back).
-const HAVOK_WORLD_ADD_COUNT_18: u32 = 0x00c6_6300;
-const HAVOK_WORLD_ADD_COUNT_1C: u32 = 0x00c6_6310;
-const HAVOK_WORLD_DROP_COUNT_18: u32 = 0x00c6_b540;
-const HAVOK_WORLD_DROP_COUNT_1C: u32 = 0x00c6_8f00;
+pub(crate) const HAVOK_WORLD_ADD_COUNT_18: u32 = 0x00c6_6300;
+pub(crate) const HAVOK_WORLD_ADD_COUNT_1C: u32 = 0x00c6_6310;
+pub(crate) const HAVOK_WORLD_DROP_COUNT_18: u32 = 0x00c6_b540;
+pub(crate) const HAVOK_WORLD_DROP_COUNT_1C: u32 = 0x00c6_8f00;
 /// `bhkWorld::SetVisualDebugger` (Xbox PDB): `(world, flag)`.
-const HAVOK_WORLD_SET_VISUAL_DEBUGGER: u32 = 0x00c6_a640;
+pub(crate) const HAVOK_WORLD_SET_VISUAL_DEBUGGER: u32 = 0x00c6_a640;
 /// Returns `this + 0x50` (`bstempeffectparticle.cpp`, identical code); the
 /// grid move calls it on the havok world and drops the result.
-const HAVOK_WORLD_GET_0X50: u32 = 0x0068_a830;
+pub(crate) const HAVOK_WORLD_GET_0X50: u32 = 0x0068_a830;
 /// `FaderManager::CreateFader` (Xbox PDB): `(manager, 1, seconds, flag)`.
-const FADER_CREATE_FADER: u32 = 0x0070_0960;
+pub(crate) const FADER_CREATE_FADER: u32 = 0x0070_0960;
 /// `PlayerCharacter` virtual slots: `0x1f4` returns the position (three
 /// floats), `0x1d0` a pointer that is null while no fade is wanted.
-const PLAYER_SLOT_POSITION: u32 = 0x1f4;
-const PLAYER_SLOT_FADE_OBJECT: u32 = 0x1d0;
+pub(crate) const PLAYER_SLOT_POSITION: u32 = 0x1f4;
+pub(crate) const PLAYER_SLOT_FADE_OBJECT: u32 = 0x1d0;
 
 /// The `ExteriorCellLoader` singleton.
-fn exterior_cell_loader(e: &mut Engine) -> u32 {
+pub(crate) fn exterior_cell_loader(e: &mut Engine) -> u32 {
     e.global(EXTERIOR_CELL_LOADER)
 }
 
 /// The `abs` check `UpdateCurrentGridCell` and `00454450` make: the grid
 /// centre moved by more than one cell in x (first) or y.
-fn grid_moved_far(e: &mut Engine, delta_x: i32, delta_y: i32) -> bool {
+pub(crate) fn grid_moved_far(e: &mut Engine, delta_x: i32, delta_y: i32) -> bool {
     e.call(ABS, &args![delta_x]).i32() > 1 || e.call(ABS, &args![delta_y]).i32() > 1
 }
 
 /// `(grid + 0.5) * 4096.0` rounded to a `float`: the world coordinate of the
 /// centre of grid column or row `grid`.
-fn grid_cell_centre(e: &mut Engine, grid: i32) -> f32 {
+pub(crate) fn grid_cell_centre(e: &mut Engine, grid: i32) -> f32 {
     let half: f64 = e.global(DOUBLE_HALF);
     let size: f64 = e.global(DOUBLE_CELL_SIZE);
     ((grid as f64 + half) * size) as f32
@@ -2183,7 +2183,7 @@ fn grid_cell_centre(e: &mut Engine, grid: i32) -> f32 {
 
 /// Stores the world position of the centre of the current grid cell in
 /// [`GRID_CENTRE`] (through `00452dc0`).
-fn store_grid_centre(e: &mut Engine, this: Ptr<TES>) {
+pub(crate) fn store_grid_centre(e: &mut Engine, this: Ptr<TES>) {
     let grid_y = e.get(this, TES::iCurrentGridY);
     let centre_y = grid_cell_centre(e, grid_y);
     let grid_x = e.get(this, TES::iCurrentGridX);
@@ -2197,7 +2197,7 @@ fn store_grid_centre(e: &mut Engine, this: Ptr<TES>) {
 }
 
 /// `previous centre = centre` (two words).
-fn copy_grid_centre_to_previous(e: &mut Engine) {
+pub(crate) fn copy_grid_centre_to_previous(e: &mut Engine) {
     let first: u32 = e.global(GRID_CENTRE);
     e.set_global(GRID_PREVIOUS_CENTRE, first);
     let second: u32 = e.global(GRID_CENTRE + 4);
@@ -2214,7 +2214,7 @@ fn copy_grid_centre_to_previous(e: &mut Engine) {
 /// otherwise a null image is.
 ///
 /// Not translated: the compiler's exception-unwinding frame.
-fn apply_location_image(
+pub(crate) fn apply_location_image(
     e: &mut Engine,
     line: u32,
     named: bool,
@@ -3172,7 +3172,7 @@ pub fn fn_00453a80(e: &mut Engine, this: Ptr<TES>) -> bool {
 
 /// `GridCellArray`'s two `0084e3a0` counts multiplied: the number of slots
 /// of the loaded square at the front of the exterior buffer.
-fn loaded_square_cells(e: &mut Engine, this: Ptr<TES>) -> u32 {
+pub(crate) fn loaded_square_cells(e: &mut Engine, this: Ptr<TES>) -> u32 {
     let grid_cells = e.get(this, TES::pGridCellA);
     let first = e.call(0x0084_e3a0, &args![grid_cells]).i32();
     let grid_cells = e.get(this, TES::pGridCellA);
@@ -3668,207 +3668,207 @@ pub fn fn_00454af0(e: &mut Engine, this: u32) -> u8 {
 
 /// `TESObjectCELL` test: bit 0 of the byte at +0x24 (`cCellFlags`; Xbox PDB
 /// `+0x34`), which the cell buffers and the world code treat as "interior".
-const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
+pub(crate) const CELL_IS_INTERIOR: u32 = 0x0042_5fd0;
 /// A `TESObjectCELL` test on `cell + 0x80` (through `005570b0`); the buffer
 /// code leaves a cell for which it is true where it is (neither unloaded nor
 /// replaced).
-const CELL_PINNED: u32 = 0x0055_7090;
+pub(crate) const CELL_PINNED: u32 = 0x0055_7090;
 /// `TESObjectCELL::GetWorldSpace` (Xbox PDB): `TESWorldSpace*`.
-const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
+pub(crate) const CELL_GET_WORLD_SPACE: u32 = 0x0054_ddd0;
 /// `TESObjectCELL::RunScripts` (Xbox PDB): `(cell, 0, 0)`, a byte answer.
-const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
+pub(crate) const CELL_RUN_SCRIPTS: u32 = 0x0054_c740;
 /// `TESObjectCELL::GetLand` (Xbox PDB): the cell's `TESObjectLAND*`.
-const CELL_GET_LAND: u32 = 0x0054_6fb0;
+pub(crate) const CELL_GET_LAND: u32 = 0x0054_6fb0;
 /// `TESObjectLAND::GetLandHeight` (Xbox PDB): `(land, pos, &height)`.
-const LAND_GET_LAND_HEIGHT: u32 = 0x0053_f180;
+pub(crate) const LAND_GET_LAND_HEIGHT: u32 = 0x0053_f180;
 /// `TESObjectREFR::RunScript` (Xbox PDB) on the player.
-const REFERENCE_RUN_SCRIPT: u32 = 0x0056_5870;
+pub(crate) const REFERENCE_RUN_SCRIPT: u32 = 0x0056_5870;
 /// `Sky::SetMode` (Xbox PDB): `(sky, mode)`.
-const SKY_SET_MODE: u32 = 0x0063_a3f0;
+pub(crate) const SKY_SET_MODE: u32 = 0x0063_a3f0;
 /// Returns `this + 0x68` (`TES::pSky`; the map names it
 /// `MiddleHighProcess::GetSavedAcquireObject`, identical code).
-const TES_GET_SKY: u32 = 0x008d_8520;
+pub(crate) const TES_GET_SKY: u32 = 0x008d_8520;
 /// Returns the word at `this + 0xf8` of the sky (non-null while a sky is
 /// built).
-const SKY_GET_WORD_F8: u32 = 0x0047_6c90;
+pub(crate) const SKY_GET_WORD_F8: u32 = 0x0047_6c90;
 /// Returns `this` itself (the address of a list node's item word: an empty
 /// constructor for a list item or a vector, and the item getter of a list
 /// node).
-const LIST_NODE_ITEM: u32 = 0x0068_15c0;
+pub(crate) const LIST_NODE_ITEM: u32 = 0x0068_15c0;
 /// Returns the next list node (`this + 4`).
-const LIST_NODE_NEXT: u32 = 0x0072_6070;
+pub(crate) const LIST_NODE_NEXT: u32 = 0x0072_6070;
 /// The `TESDataHandler`'s first node of the world-space list (`this + 0x10`).
-const DATA_HANDLER_FIRST_WORLD_SPACE: u32 = 0x0046_0140;
+pub(crate) const DATA_HANDLER_FIRST_WORLD_SPACE: u32 = 0x0046_0140;
 /// Runs the next script of the quest `this` (`TESQuest`, `fallout shared/tesquest.cpp`).
-const QUEST_RUN: u32 = 0x0060_d4d0;
+pub(crate) const QUEST_RUN: u32 = 0x0060_d4d0;
 /// `Script::GetProcessScripts` (Xbox PDB): whether scripts run.
-const SCRIPT_GET_PROCESS_SCRIPTS: u32 = 0x005a_c740;
+pub(crate) const SCRIPT_GET_PROCESS_SCRIPTS: u32 = 0x005a_c740;
 /// Object `00455490` passes to `0040fbf0` and `0040fba0` around its script
 /// pass.
-const SCRIPT_PASS_OBJECT: u32 = 0x011f_11a0;
+pub(crate) const SCRIPT_PASS_OBJECT: u32 = 0x011f_11a0;
 /// Byte set while `00455490` runs (re-entrancy guard).
-const SCRIPT_PASS_RUNNING: u32 = 0x011c_3ed1;
+pub(crate) const SCRIPT_PASS_RUNNING: u32 = 0x011c_3ed1;
 /// `thiscall(this, callback)`: stores `callback` at `this + 0x54` (the map
 /// calls it `IOManager::Pause`; identical code).
-const SET_TEST_CALLBACK: u32 = 0x005a_8040;
+pub(crate) const SET_TEST_CALLBACK: u32 = 0x005a_8040;
 /// Dword `00455680` clears.
-const COUNTER_011C56E8: u32 = 0x011c_56e8;
+pub(crate) const COUNTER_011C56E8: u32 = 0x011c_56e8;
 /// `GridCellArray::Get` is `GRID_CELL_ARRAY_GET`; `GridCell` code behind the
 /// grid-wide passes: `004baba0` and `004bac20` (`gridcell.cpp`) take the grid
 /// array.
-const GRID_CELL_ARRAY_PASS_A: u32 = 0x004b_aba0;
-const GRID_CELL_ARRAY_PASS_B: u32 = 0x004b_ac20;
+pub(crate) const GRID_CELL_ARRAY_PASS_A: u32 = 0x004b_aba0;
+pub(crate) const GRID_CELL_ARRAY_PASS_B: u32 = 0x004b_ac20;
 /// The same passes for one cell (`tesobjectcell.cpp`): `00553820` and
 /// `005538e0` (`TESObjectCELL::UpdateRefSounds`, Xbox PDB).
-const CELL_PASS_A: u32 = 0x0055_3820;
-const CELL_PASS_B: u32 = 0x0055_38e0;
+pub(crate) const CELL_PASS_A: u32 = 0x0055_3820;
+pub(crate) const CELL_PASS_B: u32 = 0x0055_38e0;
 /// `00553bf0` and `00553d00` (`tesobjectcell.cpp`): the per-cell versions of
 /// the two position tests `004570d0` and `004571c0`.
-const CELL_TEST_A: u32 = 0x0055_3bf0;
-const CELL_TEST_B: u32 = 0x0055_3d00;
+pub(crate) const CELL_TEST_A: u32 = 0x0055_3bf0;
+pub(crate) const CELL_TEST_B: u32 = 0x0055_3d00;
 /// `memmove` (CRT, cdecl `(dest, source, bytes)`).
-const MEMMOVE: u32 = 0x00ec_7230;
+pub(crate) const MEMMOVE: u32 = 0x00ec_7230;
 
 // Globals of `TES::TestAllCells`.
 
 /// `TestAllCells` state: base-object checks done.
-const TEST_BASE_OBJECTS_CHECKED: u32 = 0x011c_3ef4;
+pub(crate) const TEST_BASE_OBJECTS_CHECKED: u32 = 0x011c_3ef4;
 /// The mode `TestAllCells` was started with.
-const TEST_MODE: u32 = 0x011c_3ef0;
+pub(crate) const TEST_MODE: u32 = 0x011c_3ef0;
 /// The current node of the data handler's world-space list (0 while the
 /// interiors are tested).
-const TEST_WORLD_SPACE_NODE: u32 = 0x011c_3eec;
+pub(crate) const TEST_WORLD_SPACE_NODE: u32 = 0x011c_3eec;
 /// Count of interior cells (set from `00461960`).
-const TEST_INTERIOR_COUNT: u32 = 0x011c_3ee8;
+pub(crate) const TEST_INTERIOR_COUNT: u32 = 0x011c_3ee8;
 /// Set when the next world space has to be entered.
-const TEST_ENTER_WORLD_SPACE: u32 = 0x011c_3ee4;
+pub(crate) const TEST_ENTER_WORLD_SPACE: u32 = 0x011c_3ee4;
 /// Index of the next interior cell.
-const TEST_INTERIOR_INDEX: u32 = 0x011c_3ee0;
+pub(crate) const TEST_INTERIOR_INDEX: u32 = 0x011c_3ee0;
 /// Current exterior cell x and y.
-const TEST_CELL_X: u32 = 0x011c_3edc;
-const TEST_CELL_Y: u32 = 0x011c_3ed8;
+pub(crate) const TEST_CELL_X: u32 = 0x011c_3edc;
+pub(crate) const TEST_CELL_Y: u32 = 0x011c_3ed8;
 /// Number of exterior cells tested.
-const TEST_EXTERIOR_COUNT: u32 = 0x011c_3ed4;
+pub(crate) const TEST_EXTERIOR_COUNT: u32 = 0x011c_3ed4;
 /// Sign toggled by every `TestAllCells` turn (the mouse move it sends).
-const TEST_INPUT_SIGN: u32 = 0x0118_6080;
+pub(crate) const TEST_INPUT_SIGN: u32 = 0x0118_6080;
 /// Byte: whether `TestAllCells` writes its per-cell lines.
-const TEST_LOGGING: u32 = 0x0118_607c;
+pub(crate) const TEST_LOGGING: u32 = 0x0118_607c;
 /// Pointer to the output file name (`"TestAllCells.xls"`).
-const TEST_OUTPUT_FILE: u32 = 0x0118_6084;
+pub(crate) const TEST_OUTPUT_FILE: u32 = 0x0118_6084;
 /// `"CELLS: ..."` line formats and texts the test prints.
-const TEST_TEXT_BASE_OBJECT_MODELS: u32 = 0x0101_7c50;
-const TEST_TEXT_BASE_OBJECT_ICONS: u32 = 0x0101_7c08;
-const TEST_TEXT_WORLD_SPACE: u32 = 0x0101_7bb8;
-const TEST_TEXT_INTERIORS: u32 = 0x0101_7b7c;
-const TEST_TEXT_EXTERIOR_LINE: u32 = 0x0101_7a70;
-const TEST_TEXT_EXTERIOR_ROW: u32 = 0x0101_7a48;
-const TEST_TEXT_INTERIOR_LINE: u32 = 0x0101_7af8;
-const TEST_TEXT_INTERIOR_ROW: u32 = 0x0101_7acc;
+pub(crate) const TEST_TEXT_BASE_OBJECT_MODELS: u32 = 0x0101_7c50;
+pub(crate) const TEST_TEXT_BASE_OBJECT_ICONS: u32 = 0x0101_7c08;
+pub(crate) const TEST_TEXT_WORLD_SPACE: u32 = 0x0101_7bb8;
+pub(crate) const TEST_TEXT_INTERIORS: u32 = 0x0101_7b7c;
+pub(crate) const TEST_TEXT_EXTERIOR_LINE: u32 = 0x0101_7a70;
+pub(crate) const TEST_TEXT_EXTERIOR_ROW: u32 = 0x0101_7a48;
+pub(crate) const TEST_TEXT_INTERIOR_LINE: u32 = 0x0101_7af8;
+pub(crate) const TEST_TEXT_INTERIOR_ROW: u32 = 0x0101_7acc;
 /// `"test"`: world spaces and cells whose name starts with it are skipped.
-const TEST_PREFIX: u32 = 0x0101_7bfc;
+pub(crate) const TEST_PREFIX: u32 = 0x0101_7bfc;
 /// `"Y"` and `"N"`.
-const TEST_TEXT_YES: u32 = 0x0101_7b68;
-const TEST_TEXT_NO: u32 = 0x0101_7b64;
+pub(crate) const TEST_TEXT_YES: u32 = 0x0101_7b68;
+pub(crate) const TEST_TEXT_NO: u32 = 0x0101_7b64;
 /// A `float` (10.0 in the exe) `TestAllCells` passes to `00867a40` (a
 /// calendar function) on the object at [`OBJECT_011DE7B8`].
-const TEST_FLOAT_TEN: u32 = 0x0101_7b78;
+pub(crate) const TEST_FLOAT_TEN: u32 = 0x0101_7b78;
 /// A `double` (1000.0 in the exe): `clock()` milliseconds per second.
-const TEST_DOUBLE_THOUSAND: u32 = 0x0101_7b70;
+pub(crate) const TEST_DOUBLE_THOUSAND: u32 = 0x0101_7b70;
 /// A `double` (2048.0 in the exe): half a cell, added to the cell's corner.
-const TEST_DOUBLE_HALF_CELL: u32 = 0x0101_6968;
+pub(crate) const TEST_DOUBLE_HALF_CELL: u32 = 0x0101_6968;
 /// A `double` (0.0 in the exe) the heights are compared with.
-const TEST_DOUBLE_ZERO: u32 = 0x0101_2060;
+pub(crate) const TEST_DOUBLE_ZERO: u32 = 0x0101_2060;
 /// A `NiPoint3` global (all zeros in the exe): the position the test starts
 /// from, the origin `NiPick::PickObjects` is given, and the first words of the
 /// output of `004573f0`.
-const NI_POINT3_ZERO: u32 = 0x011f_426c;
+pub(crate) const NI_POINT3_ZERO: u32 = 0x011f_426c;
 /// The land query cache of `00457720`: x and y of the 128-unit column and the
 /// cached answer.
-const CACHED_LAND_COLUMN_X: u32 = 0x0118_608c;
-const CACHED_LAND_COLUMN_Y: u32 = 0x0118_6088;
-const CACHED_LAND_ANSWER: u32 = 0x011c_3ef8;
+pub(crate) const CACHED_LAND_COLUMN_X: u32 = 0x0118_608c;
+pub(crate) const CACHED_LAND_COLUMN_Y: u32 = 0x0118_6088;
+pub(crate) const CACHED_LAND_ANSWER: u32 = 0x011c_3ef8;
 /// The callback address stored by `TestAllCells` for modes 6 and 7.
-const TEST_CALLBACK: u32 = 0x0055_7dd0;
+pub(crate) const TEST_CALLBACK: u32 = 0x0055_7dd0;
 /// `clock()` (CRT).
-const CRT_CLOCK: u32 = 0x00ec_7d50;
+pub(crate) const CRT_CLOCK: u32 = 0x00ec_7d50;
 /// Import slot of `SendInput`.
-const IMPORT_SEND_INPUT: u32 = 0x00fd_f2d4;
+pub(crate) const IMPORT_SEND_INPUT: u32 = 0x00fd_f2d4;
 /// `MessageHandler::IncDisableWarningCount` (Xbox PDB): `(flag)`.
-const MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
+pub(crate) const MESSAGE_HANDLER_INC_DISABLE_WARNING_COUNT: u32 = 0x0043_b2b0;
 /// `BSSystemFile::DeleteFileA` (Xbox PDB): `(path)`.
-const DELETE_FILE: u32 = 0x00af_f0b0;
+pub(crate) const DELETE_FILE: u32 = 0x00af_f0b0;
 /// The debug print `_MESSAGE`-style function: `(format, ...)`, returns 0
 /// (its body only returns 0 in this build).
-const DEBUG_PRINT: u32 = 0x005b_5e40;
+pub(crate) const DEBUG_PRINT: u32 = 0x005b_5e40;
 /// `MessageHandler::Output` (Xbox PDB): `(file, format, ...)`, returns 0.
-const MESSAGE_HANDLER_OUTPUT: u32 = 0x00c3_c220;
-const DATA_HANDLER_CHECK_MODELS: u32 = 0x0046_ddb0;
-const DATA_HANDLER_CHECK_ICONS: u32 = 0x0046_ec10;
-const DATA_HANDLER_PREPARE_INTERIORS: u32 = 0x0046_19b0;
-const DATA_HANDLER_INTERIOR_COUNT: u32 = 0x0046_1960;
-const DATA_HANDLER_GET_INTERIOR: u32 = 0x0046_1980;
-const WORLD_SPACE_LOAD_CELL: u32 = 0x0058_5b30;
+pub(crate) const MESSAGE_HANDLER_OUTPUT: u32 = 0x00c3_c220;
+pub(crate) const DATA_HANDLER_CHECK_MODELS: u32 = 0x0046_ddb0;
+pub(crate) const DATA_HANDLER_CHECK_ICONS: u32 = 0x0046_ec10;
+pub(crate) const DATA_HANDLER_PREPARE_INTERIORS: u32 = 0x0046_19b0;
+pub(crate) const DATA_HANDLER_INTERIOR_COUNT: u32 = 0x0046_1960;
+pub(crate) const DATA_HANDLER_GET_INTERIOR: u32 = 0x0046_1980;
+pub(crate) const WORLD_SPACE_LOAD_CELL: u32 = 0x0058_5b30;
 /// The name of a form (`vtable + 0x130`; the text the test prints and compares with `"test"`).
-const FORM_SLOT_NAME: u32 = 0x130;
+pub(crate) const FORM_SLOT_NAME: u32 = 0x130;
 /// `_strnicmp` through `004564f0`: `(a, b, count)`.
-const STRNICMP: u32 = 0x0045_64f0;
-const WORLD_SPACE_MIN_X: u32 = 0x0045_65f0;
-const WORLD_SPACE_MIN_Y: u32 = 0x0081_2870;
-const WORLD_SPACE_MAX_X: u32 = 0x009b_88a0;
-const WORLD_SPACE_MAX_Y: u32 = 0x009b_88c0;
-const CELL_HAS_FLAG_20: u32 = 0x0044_0d80;
-const CELL_GET_FIRST_REFR: u32 = 0x0054_cee0;
-const CELL_GET_REGION_LIST: u32 = 0x0054_7110;
-const REGION_LIST_CONTAINS: u32 = 0x005f_65d0;
-const REFERENCE_GET_WORLD_SPACE: u32 = 0x0057_5d70;
-const TIME_OBJECT_ADVANCE: u32 = 0x0086_7a40;
-const NI_POINT3_CONSTRUCT_FLOATS: u32 = 0x0041_6870;
-const CELL_GET_COC_PLACEMENT_INFO: u32 = 0x0054_cfd0;
-const POSITION_REQUEST_CONSTRUCT: u32 = 0x0045_6540;
-const PLAYER_ROTATION_GETTER: u32 = 0x0043_0830;
-const PLAYER_REQUEST_POSITION: u32 = 0x0093_be30;
-const PLAYER_HANDLE_POSITION_REQUEST: u32 = 0x0093_bea0;
-const IO_MANAGER_LOAD_QUEUED_PRIORITY: u32 = 0x0045_6520;
-const FRAME_SCOPE_BEGIN: u32 = 0x0087_8160;
-const FRAME_SCOPE_RELEASE: u32 = 0x0087_8250;
-const FRAME_SCOPE_END: u32 = 0x0087_8200;
-const TES_PURGE_UNUSED: u32 = 0x0045_39a0;
-const STRING_ARRAY_CONSTRUCT: u32 = 0x0040_37b0;
-const STRING_ARRAY_DESTRUCT: u32 = 0x0040_37d0;
-const SCENE_INFO_TOTALS: u32 = 0x004a_8bb0;
-const SCENE_INFO_BUILD_M_NUMBER: u32 = 0x004a_9120;
-const CELL_GET_ACTOR_HOLDER: u32 = 0x009d_9f20;
-const ACTOR_HOLDER_GET_FIELD_20: u32 = 0x0089_1170;
-const FIELD_IS_EMPTY: u32 = 0x0076_b610;
-const TEXTURE_LIST_HEAD: u32 = 0x0045_6510;
-const TEXTURE_IS_LOADED: u32 = 0x0059_bb30;
-const TEXTURE_LIST_NEXT: u32 = 0x0055_b980;
-const ACTOR_COUNT: u32 = 0x0096_bc50;
-const CELL_GET_LIGHT_COUNT: u32 = 0x0054_bb90;
-const SAVE_LOAD_GAME_TEST_ALL_CELLS: u32 = 0x0086_1f20;
+pub(crate) const STRNICMP: u32 = 0x0045_64f0;
+pub(crate) const WORLD_SPACE_MIN_X: u32 = 0x0045_65f0;
+pub(crate) const WORLD_SPACE_MIN_Y: u32 = 0x0081_2870;
+pub(crate) const WORLD_SPACE_MAX_X: u32 = 0x009b_88a0;
+pub(crate) const WORLD_SPACE_MAX_Y: u32 = 0x009b_88c0;
+pub(crate) const CELL_HAS_FLAG_20: u32 = 0x0044_0d80;
+pub(crate) const CELL_GET_FIRST_REFR: u32 = 0x0054_cee0;
+pub(crate) const CELL_GET_REGION_LIST: u32 = 0x0054_7110;
+pub(crate) const REGION_LIST_CONTAINS: u32 = 0x005f_65d0;
+pub(crate) const REFERENCE_GET_WORLD_SPACE: u32 = 0x0057_5d70;
+pub(crate) const TIME_OBJECT_ADVANCE: u32 = 0x0086_7a40;
+pub(crate) const NI_POINT3_CONSTRUCT_FLOATS: u32 = 0x0041_6870;
+pub(crate) const CELL_GET_COC_PLACEMENT_INFO: u32 = 0x0054_cfd0;
+pub(crate) const POSITION_REQUEST_CONSTRUCT: u32 = 0x0045_6540;
+pub(crate) const PLAYER_ROTATION_GETTER: u32 = 0x0043_0830;
+pub(crate) const PLAYER_REQUEST_POSITION: u32 = 0x0093_be30;
+pub(crate) const PLAYER_HANDLE_POSITION_REQUEST: u32 = 0x0093_bea0;
+pub(crate) const IO_MANAGER_LOAD_QUEUED_PRIORITY: u32 = 0x0045_6520;
+pub(crate) const FRAME_SCOPE_BEGIN: u32 = 0x0087_8160;
+pub(crate) const FRAME_SCOPE_RELEASE: u32 = 0x0087_8250;
+pub(crate) const FRAME_SCOPE_END: u32 = 0x0087_8200;
+pub(crate) const TES_PURGE_UNUSED: u32 = 0x0045_39a0;
+pub(crate) const STRING_ARRAY_CONSTRUCT: u32 = 0x0040_37b0;
+pub(crate) const STRING_ARRAY_DESTRUCT: u32 = 0x0040_37d0;
+pub(crate) const SCENE_INFO_TOTALS: u32 = 0x004a_8bb0;
+pub(crate) const SCENE_INFO_BUILD_M_NUMBER: u32 = 0x004a_9120;
+pub(crate) const CELL_GET_ACTOR_HOLDER: u32 = 0x009d_9f20;
+pub(crate) const ACTOR_HOLDER_GET_FIELD_20: u32 = 0x0089_1170;
+pub(crate) const FIELD_IS_EMPTY: u32 = 0x0076_b610;
+pub(crate) const TEXTURE_LIST_HEAD: u32 = 0x0045_6510;
+pub(crate) const TEXTURE_IS_LOADED: u32 = 0x0059_bb30;
+pub(crate) const TEXTURE_LIST_NEXT: u32 = 0x0055_b980;
+pub(crate) const ACTOR_COUNT: u32 = 0x0096_bc50;
+pub(crate) const CELL_GET_LIGHT_COUNT: u32 = 0x0054_bb90;
+pub(crate) const SAVE_LOAD_GAME_TEST_ALL_CELLS: u32 = 0x0086_1f20;
 
 /// The address of slot `index` of the interior cell buffer.
-fn interior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
+pub(crate) fn interior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
     e.get(this, TES::pInteriorBuffer)
         .addr()
         .wrapping_add(index.wrapping_mul(4))
 }
 
 /// The address of slot `index` of the exterior cell buffer.
-fn exterior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
+pub(crate) fn exterior_slot(e: &Engine, this: Ptr<TES>, index: u32) -> u32 {
     e.get(this, TES::pExteriorBuffer)
         .addr()
         .wrapping_add(index.wrapping_mul(4))
 }
 
 /// `TESDataHandler::UnloadCell` (`00462290`) on the data handler singleton.
-fn unload_cell(e: &mut Engine, cell: u32) {
+pub(crate) fn unload_cell(e: &mut Engine, cell: u32) {
     let data_handler: u32 = e.global(DATA_HANDLER);
     e.call(DATA_HANDLER_UNLOAD_CELL, &args![data_handler, cell]);
 }
 
 /// `uGridsToLoad * uGridsToLoad`, reading the setting twice as the code does.
-fn grids_squared(e: &mut Engine) -> u32 {
+pub(crate) fn grids_squared(e: &mut Engine) -> u32 {
     let first = e
         .call(SETTING_VALUE_ADDRESS_INT, &args![SETTING_GRIDS_TO_LOAD])
         .u32();
@@ -4380,7 +4380,7 @@ pub fn fn_00455690(e: &mut Engine, this: Ptr<TES>) {
 
 /// `_ftol2` of a world-space bound (a `float` getter's `ST0` result) shifted
 /// down to cell units.
-fn world_space_bound_in_cells(e: &mut Engine, getter: u32, world_space: u32) -> i32 {
+pub(crate) fn world_space_bound_in_cells(e: &mut Engine, getter: u32, world_space: u32) -> i32 {
     let value = e.call(getter, &args![world_space]).f64();
     e.call(FTOL, &args![value]).i32() >> 12
 }
@@ -4388,20 +4388,20 @@ fn world_space_bound_in_cells(e: &mut Engine, getter: u32, world_space: u32) -> 
 /// The name text of a form (`vtable + 0x130`) compared with `"test"` on four
 /// characters, as `TestAllCells` does to skip test cells and world spaces:
 /// true when the name does not start with it.
-fn test_name_differs(e: &mut Engine, form: u32) -> bool {
+pub(crate) fn test_name_differs(e: &mut Engine, form: u32) -> bool {
     let name = e.vcall(form, FORM_SLOT_NAME, &args![]).u32();
     e.call(STRNICMP, &args![name, TEST_PREFIX, 4u32]).i32() != 0
 }
 
 /// The item of a list node (`006815c0` returns the node's address; the item
 /// is its first word).
-fn list_node_item(e: &mut Engine, node: u32) -> u32 {
+pub(crate) fn list_node_item(e: &mut Engine, node: u32) -> u32 {
     let address = e.call(LIST_NODE_ITEM, &args![node]).u32();
     e.mem.u32(address)
 }
 
 /// The pointer to `"Y"` or `"N"` the test prints for the portals column.
-fn portals_text(portals: bool) -> u32 {
+pub(crate) fn portals_text(portals: bool) -> u32 {
     if portals {
         TEST_TEXT_YES
     } else {
@@ -4664,7 +4664,7 @@ pub fn tes_test_all_cells(e: &mut Engine, this: Ptr<TES>, mode: i32) {
 /// What `TestAllCells` does to begin walking the interior cells: the data
 /// handler prepares its interior list (`004619b0`), the count comes from
 /// `00461960`, and the index restarts at 0.
-fn start_interior_walk(e: &mut Engine, data_handler: u32) {
+pub(crate) fn start_interior_walk(e: &mut Engine, data_handler: u32) {
     e.call(DATA_HANDLER_PREPARE_INTERIORS, &args![data_handler]);
     let count = e
         .call(DATA_HANDLER_INTERIOR_COUNT, &args![data_handler])
@@ -4676,7 +4676,7 @@ fn start_interior_walk(e: &mut Engine, data_handler: u32) {
 /// The part of `TestAllCells` that runs for one chosen `cell`: places the
 /// player at it, loads, measures and prints (see [`tes_test_all_cells`]);
 /// `started` is the `clock()` value taken at the beginning of the turn.
-fn test_visit_cell(e: &mut Engine, this: Ptr<TES>, cell: u32, started: u32) {
+pub(crate) fn test_visit_cell(e: &mut Engine, this: Ptr<TES>, cell: u32, started: u32) {
     let ten: f32 = e.global(TEST_FLOAT_TEN);
     e.call(TIME_OBJECT_ADVANCE, &args![OBJECT_011DE7B8, ten]);
     let position = e.mem.alloc(12);
@@ -4788,7 +4788,7 @@ fn test_visit_cell(e: &mut Engine, this: Ptr<TES>, cell: u32, started: u32) {
 /// The logging block of `TestAllCells`: the scene totals, the counts, and
 /// the line printed to the debug output and appended to the output file
 /// (an interior cell and an exterior cell have different lines).
-fn test_print_cell(e: &mut Engine, cell: u32, elapsed: f32) {
+pub(crate) fn test_print_cell(e: &mut Engine, cell: u32, elapsed: f32) {
     let total_time = e.mem.alloc(4);
     let second_value = e.mem.alloc(4);
     let m_number = e.mem.alloc(12);
@@ -5182,7 +5182,7 @@ pub fn fn_004571c0(
 /// The rounding fix of the position code: `rounded` (from `00406d90`) is
 /// moved one down when it is a multiple of 4096 and the exact `value` is
 /// below it (so a position on the border of a cell belongs to the cell below).
-fn adjust_rounded_position(rounded: i32, value: f32) -> i32 {
+pub(crate) fn adjust_rounded_position(rounded: i32, value: f32) -> i32 {
     let mut remainder = (rounded as u32) & 0x8000_0fff;
     if (remainder as i32) < 0 {
         remainder = (remainder.wrapping_sub(1) | 0xffff_f000).wrapping_add(1);
@@ -5196,7 +5196,7 @@ fn adjust_rounded_position(rounded: i32, value: f32) -> i32 {
 
 /// The adjusted x and y of the position `pos` (two floats), both rounded
 /// before either is adjusted.
-fn rounded_position(e: &mut Engine, pos: Ptr) -> (i32, i32) {
+pub(crate) fn rounded_position(e: &mut Engine, pos: Ptr) -> (i32, i32) {
     let x_value = e.mem.f32(pos.addr());
     let rounded_x = e.call(FLOAT_TO_INT_ROUNDED, &args![x_value]).i32();
     let y_value = e.mem.f32(pos.addr() + 4);
@@ -5212,7 +5212,7 @@ fn rounded_position(e: &mut Engine, pos: Ptr) -> (i32, i32) {
 /// The loaded cell under the position `pos` (two floats), or 0: the cell at
 /// the adjusted rounded coordinates divided by 4096 (`00451900`), when
 /// `TES::IsCellLoaded` (on the `TES` singleton, flag 0) says it is loaded.
-fn loaded_cell_at(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
+pub(crate) fn loaded_cell_at(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
     let (x, y) = rounded_position(e, pos);
     let cell = fn_00451900(e, this, x >> 12, y >> 12);
     let tes_singleton: u32 = e.global(TES_SINGLETON);
@@ -5323,7 +5323,7 @@ pub fn fn_00457720(e: &mut Engine, this: Ptr<TES>, pos: Ptr) -> u32 {
 
 /// `value` minus its remainder by 128 (the remainder has the sign of the
 /// value).
-fn rounded_down_to_128(value: i32) -> i32 {
+pub(crate) fn rounded_down_to_128(value: i32) -> i32 {
     let mut remainder = (value as u32) & 0x8000_007f;
     if (remainder as i32) < 0 {
         remainder = (remainder.wrapping_sub(1) | 0xffff_ff80).wrapping_add(1);

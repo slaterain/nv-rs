@@ -28,385 +28,385 @@ use crate::prelude::*;
 
 /// Offset in the TLS block of the byte that turns on the condition
 /// functions' debug lines (`*(*(FS:[0x2c] + _tls_index * 4) + 0x268)`).
-const TLS_TRACE_FLAG: u32 = 0x268;
+pub(crate) const TLS_TRACE_FLAG: u32 = 0x268;
 /// The debug print (`printf`-like, varargs, `interface.cpp`).
-const DEBUG_PRINT: u32 = 0x0070_3c00;
+pub(crate) const DEBUG_PRINT: u32 = 0x0070_3c00;
 /// `PlayerCharacter*` global.
-const PLAYER: u32 = 0x011d_ea3c;
+pub(crate) const PLAYER: u32 = 0x011d_ea3c;
 /// `TES*` global (`TES::Pick`'s `this`).
-const TES: u32 = 0x011d_ea10;
+pub(crate) const TES: u32 = 0x011d_ea10;
 /// The `Calendar` singleton.
-const CALENDAR: u32 = 0x011d_e7b8;
+pub(crate) const CALENDAR: u32 = 0x011d_e7b8;
 /// The save/load global data object `GetSecondsPassed` falls back on.
-const SECONDS_PASSED_SOURCE: u32 = 0x011f_6394;
+pub(crate) const SECONDS_PASSED_SOURCE: u32 = 0x011f_6394;
 
 /// `_ftol2_sse` (`00ec62c0`): truncates the value in ST0 (passed as a leading
 /// `f64` argument) to an integer in EAX.
-const FTOL: u32 = 0x00ec_62c0;
+pub(crate) const FTOL: u32 = 0x00ec_62c0;
 /// `operator delete` (`00401030`).
-const OPERATOR_DELETE: u32 = 0x0040_1030;
+pub(crate) const OPERATOR_DELETE: u32 = 0x0040_1030;
 
 /// Value of virtual `IsActor` (vtable `+0x100`, Xbox PDB name).
-const VSLOT_IS_ACTOR: u32 = 0x100;
+pub(crate) const VSLOT_IS_ACTOR: u32 = 0x100;
 /// Virtual `IsBoundObject` (vtable `+0xe4`, Xbox PDB name).
-const VSLOT_IS_BOUND_OBJECT: u32 = 0xe4;
+pub(crate) const VSLOT_IS_BOUND_OBJECT: u32 = 0xe4;
 /// Virtual `IsMobileObject` (vtable `+0xfc`, Xbox PDB name).
-const VSLOT_IS_MOBILE_OBJECT: u32 = 0xfc;
+pub(crate) const VSLOT_IS_MOBILE_OBJECT: u32 = 0xfc;
 /// Virtual on `TESObjectREFR` returning a pointer to its position (3 floats).
-const VSLOT_GET_POSITION: u32 = 0x1f4;
+pub(crate) const VSLOT_GET_POSITION: u32 = 0x1f4;
 
 /// Reads `[this + 0x20]` (`TESObjectREFR`'s base form; the engine map names
 /// this body `BGSSaveFormBuffer::GetForm` because the linker folded the
 /// identical code).
-const REF_GET_BASE_FORM: u32 = 0x007a_f430;
+pub(crate) const REF_GET_BASE_FORM: u32 = 0x007a_f430;
 /// Same body as [`REF_GET_BASE_FORM`], in `extradatalist.cpp`: the actor's
 /// base form.
-const ACTOR_GET_BASE_FORM: u32 = 0x0041_81e0;
+pub(crate) const ACTOR_GET_BASE_FORM: u32 = 0x0041_81e0;
 /// `TESForm::cFormType` (byte at `+0x04`) of the form in ECX.
-const FORM_GET_TYPE: u32 = 0x0040_1170;
+pub(crate) const FORM_GET_TYPE: u32 = 0x0040_1170;
 /// True when the `TESForm` in ECX has flag `0x800` (`iFormFlags` at `+0x08`).
-const FORM_HAS_FLAG_0800: u32 = 0x0044_0da0;
+pub(crate) const FORM_HAS_FLAG_0800: u32 = 0x0044_0da0;
 /// `TESObjectREFR::HasContainer` (Xbox PDB): non-zero when the reference's
 /// base form holds items.
-const REF_HAS_CONTAINER: u32 = 0x0055_d310;
+pub(crate) const REF_HAS_CONTAINER: u32 = 0x0055_d310;
 /// Form type of an `NPC_` (`TESNPC`).
-const FORM_TYPE_NPC: u32 = 0x2a;
+pub(crate) const FORM_TYPE_NPC: u32 = 0x2a;
 /// Form type of a `FLST` (`BGSListForm`).
-const FORM_TYPE_FORM_LIST: u32 = 0x55;
+pub(crate) const FORM_TYPE_FORM_LIST: u32 = 0x55;
 /// Form type of a `TERM` (`BGSTerminal`).
-const FORM_TYPE_TERMINAL: u32 = 0x17;
+pub(crate) const FORM_TYPE_TERMINAL: u32 = 0x17;
 
 /// `BGSListForm`'s list: returns `this + 0x18`.
-const FORM_LIST_GET_LIST: u32 = 0x0050_0940;
+pub(crate) const FORM_LIST_GET_LIST: u32 = 0x0050_0940;
 /// `BSSimpleList` node helpers (`this` is the node): true for an empty
 /// list's head node (item and next both null) ...
-const LIST_NODE_IS_EMPTY: u32 = 0x0082_56d0;
+pub(crate) const LIST_NODE_IS_EMPTY: u32 = 0x0082_56d0;
 /// ... the address of the node's item field (returns `this`) ...
-const LIST_NODE_ITEM_ADDRESS: u32 = 0x0068_15c0;
+pub(crate) const LIST_NODE_ITEM_ADDRESS: u32 = 0x0068_15c0;
 /// ... and the next node (`[this + 4]`).
-const LIST_NODE_NEXT: u32 = 0x0072_6070;
+pub(crate) const LIST_NODE_NEXT: u32 = 0x0072_6070;
 
 /// `InventoryChanges::GetInventoryChanges` (Xbox PDB), cdecl, one reference
 /// argument.
-const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
+pub(crate) const GET_INVENTORY_CHANGES: u32 = 0x004b_f220;
 /// `InventoryChanges::GetObjectCount` (Xbox PDB name), `this` the inventory
 /// changes, one item form argument.
-const INVENTORY_GET_OBJECT_COUNT: u32 = 0x004c_8f30;
+pub(crate) const INVENTORY_GET_OBJECT_COUNT: u32 = 0x004c_8f30;
 /// CRT function the item counts pass through (cdecl, one `int`).
-const ITEM_COUNT_FILTER: u32 = 0x00ec_7d40;
+pub(crate) const ITEM_COUNT_FILTER: u32 = 0x00ec_7d40;
 
 /// True when the `Actor`'s middle-high process exists (`this` the actor;
 /// the engine map names it `MiddleHighProcess::GetSavedAcquireObject`
 /// because of identical code folding).
-const ACTOR_GET_PROCESS: u32 = 0x008d_8520;
+pub(crate) const ACTOR_GET_PROCESS: u32 = 0x008d_8520;
 /// `ActorValue::GetActorValueScriptName` (Xbox PDB), cdecl.
-const ACTOR_VALUE_SCRIPT_NAME: u32 = 0x0066_eac0;
+pub(crate) const ACTOR_VALUE_SCRIPT_NAME: u32 = 0x0066_eac0;
 /// `TESObjectREFR::GetScale` (Xbox PDB): the reference's scale with its base.
-const REF_GET_SCALE: u32 = 0x0056_7400;
+pub(crate) const REF_GET_SCALE: u32 = 0x0056_7400;
 /// `[this + 0x3c]` as a `float` (the reference's own scale).
-const REF_GET_OWN_SCALE: u32 = 0x0059_8040;
+pub(crate) const REF_GET_OWN_SCALE: u32 = 0x0059_8040;
 /// `TESObjectREFR::GetDistanceFromReference` (Xbox PDB), `this` and
 /// (other, flag, flag).
-const REF_GET_DISTANCE_FROM_REFERENCE: u32 = 0x0057_23b0;
+pub(crate) const REF_GET_DISTANCE_FROM_REFERENCE: u32 = 0x0057_23b0;
 /// `TESObjectREFR::GetLock` (Xbox PDB): the reference's `REFR_LOCK`, or null.
-const REF_GET_LOCK: u32 = 0x0056_9160;
+pub(crate) const REF_GET_LOCK: u32 = 0x0056_9160;
 /// `Actor::LineOfSight` (Xbox PDB): `this` and (0, target, 1, 0, 0), byte
 /// result.
-const ACTOR_LINE_OF_SIGHT: u32 = 0x0088_b880;
+pub(crate) const ACTOR_LINE_OF_SIGHT: u32 = 0x0088_b880;
 /// The name of a reference (`tesobjectrefr.cpp`), used by `GetLOS`'s debug line.
-const REF_GET_NAME: u32 = 0x0055_d520;
+pub(crate) const REF_GET_NAME: u32 = 0x0055_d520;
 
 /// `57.295776` (`double`): degrees per radian, `GetAngle`'s multiplier.
-const DEGREES_PER_RADIAN: u32 = 0x0102_f248;
+pub(crate) const DEGREES_PER_RADIAN: u32 = 0x0102_f248;
 
 /// `1.0` (`double`), the constant `GetSleeping` and `GetSitting` add.
-const DOUBLE_ONE: u32 = 0x0101_2070;
+pub(crate) const DOUBLE_ONE: u32 = 0x0101_2070;
 /// The `float` constants of the rain / snow tests (`0059e950`, `0059ea80`):
 /// the second argument of the first and of the second weather lookup.
-const WEATHER_RAIN_FROM: u32 = 0x0102_31e0;
-const WEATHER_RAIN_TO: u32 = 0x0101_7d00;
+pub(crate) const WEATHER_RAIN_FROM: u32 = 0x0102_31e0;
+pub(crate) const WEATHER_RAIN_TO: u32 = 0x0101_7d00;
 
 /// `Interface::IsInMenuMode` (Xbox PDB), cdecl, byte result.
-const INTERFACE_IS_IN_MENU_MODE: u32 = 0x0070_2360;
+pub(crate) const INTERFACE_IS_IN_MENU_MODE: u32 = 0x0070_2360;
 /// `Interface::IsTopMenuID` (Xbox PDB), cdecl, one menu id.
-const INTERFACE_IS_TOP_MENU_ID: u32 = 0x0070_2450;
+pub(crate) const INTERFACE_IS_TOP_MENU_ID: u32 = 0x0070_2450;
 /// `Interface::IsMenuIDVisible` (Xbox PDB), cdecl, (menu id, 0).
-const INTERFACE_IS_MENU_ID_VISIBLE: u32 = 0x0070_2680;
+pub(crate) const INTERFACE_IS_MENU_ID_VISIBLE: u32 = 0x0070_2680;
 /// Byte global: when set, `GetMenuMode` asks for the top menu only.
-const MENU_MODE_TOP_ONLY: u32 = 0x011c_ab24;
+pub(crate) const MENU_MODE_TOP_ONLY: u32 = 0x011c_ab24;
 
 /// Virtual on `Actor` (vtable `+0x214`): the sit / sleep state, 0 for none.
-const VSLOT_SIT_SLEEP_STATE: u32 = 0x214;
+pub(crate) const VSLOT_SIT_SLEEP_STATE: u32 = 0x214;
 /// Virtuals of the actor's middle-high process: the furniture marker id
 /// (`+0x4c4`) and the furniture reference the actor uses (`+0x4c8`).
-const VSLOT_PROCESS_FURNITURE_MARKER_ID: u32 = 0x4c4;
-const VSLOT_PROCESS_FURNITURE_REFERENCE: u32 = 0x4c8;
+pub(crate) const VSLOT_PROCESS_FURNITURE_MARKER_ID: u32 = 0x4c4;
+pub(crate) const VSLOT_PROCESS_FURNITURE_REFERENCE: u32 = 0x4c8;
 /// Virtual on `TESObjectREFR` behind `GetTalkedToPC` (bool).
-const VSLOT_TALKED_TO_PC: u32 = 0x98;
+pub(crate) const VSLOT_TALKED_TO_PC: u32 = 0x98;
 /// Virtual on `Actor` behind `GetAttacked` (bool).
-const VSLOT_ATTACKED: u32 = 0x470;
+pub(crate) const VSLOT_ATTACKED: u32 = 0x470;
 /// Virtual on `Actor` that `GetShouldAttack` calls with (target, 0) before
 /// its checks; the result is not used.
-const VSLOT_ACTOR_PREPARE_ATTACK_CHECK: u32 = 0x344;
+pub(crate) const VSLOT_ACTOR_PREPARE_ATTACK_CHECK: u32 = 0x344;
 /// Virtual on the target of `GetShouldAttack`; non-zero lets the combat
 /// manager answer first.
-const VSLOT_TARGET_COMBAT_CHECK: u32 = 0x428;
+pub(crate) const VSLOT_TARGET_COMBAT_CHECK: u32 = 0x428;
 /// Virtual on `TESForm` returning a name string (`GetInCell` compares them).
-const VSLOT_FORM_GET_NAME: u32 = 0x130;
+pub(crate) const VSLOT_FORM_GET_NAME: u32 = 0x130;
 /// Virtual `+0x68` of the component at `+0x30` of an `NPC_` / `CREA` base
 /// form: its voice type.
-const VSLOT_BASE_COMPONENT_VOICE_TYPE: u32 = 0x68;
+pub(crate) const VSLOT_BASE_COMPONENT_VOICE_TYPE: u32 = 0x68;
 
 /// Form types the functions test (`TESForm::cFormType`).
-const FORM_TYPE_CLASS: u32 = 7;
-const FORM_TYPE_FACTION: u32 = 8;
-const FORM_TYPE_RACE: u32 = 0xc;
+pub(crate) const FORM_TYPE_CLASS: u32 = 7;
+pub(crate) const FORM_TYPE_FACTION: u32 = 8;
+pub(crate) const FORM_TYPE_RACE: u32 = 0xc;
 /// The form type whose voice type comes from `0x009185e0` (`+0x94`).
-const FORM_TYPE_VOICE_SOURCE: u32 = 0x16;
-const FORM_TYPE_FURNITURE: u32 = 0x27;
-const FORM_TYPE_CREATURE: u32 = 0x2b;
-const FORM_TYPE_WEATHER: u32 = 0x35;
-const FORM_TYPE_CELL: u32 = 0x39;
-const FORM_TYPE_WORLDSPACE: u32 = 0x41;
-const FORM_TYPE_QUEST: u32 = 0x47;
+pub(crate) const FORM_TYPE_VOICE_SOURCE: u32 = 0x16;
+pub(crate) const FORM_TYPE_FURNITURE: u32 = 0x27;
+pub(crate) const FORM_TYPE_CREATURE: u32 = 0x2b;
+pub(crate) const FORM_TYPE_WEATHER: u32 = 0x35;
+pub(crate) const FORM_TYPE_CELL: u32 = 0x39;
+pub(crate) const FORM_TYPE_WORLDSPACE: u32 = 0x41;
+pub(crate) const FORM_TYPE_QUEST: u32 = 0x47;
 /// The range of placed reference types (`0x3a` to `0x40`), and the one more
 /// type (`0x69`) the reference tests accept.
-const FORM_TYPE_REFERENCE_FIRST: u32 = 0x3a;
-const FORM_TYPE_REFERENCE_LAST: u32 = 0x40;
-const FORM_TYPE_REFERENCE_EXTRA: u32 = 0x69;
+pub(crate) const FORM_TYPE_REFERENCE_FIRST: u32 = 0x3a;
+pub(crate) const FORM_TYPE_REFERENCE_LAST: u32 = 0x40;
+pub(crate) const FORM_TYPE_REFERENCE_EXTRA: u32 = 0x69;
 /// The two types `GetShouldAttack` accepts for its target.
-const FORM_TYPE_ACTOR_FIRST: u32 = 0x3b;
-const FORM_TYPE_ACTOR_LAST: u32 = 0x3c;
+pub(crate) const FORM_TYPE_ACTOR_FIRST: u32 = 0x3b;
+pub(crate) const FORM_TYPE_ACTOR_LAST: u32 = 0x3c;
 
 /// `[this + 0x40]` of a reference: its parent cell.
-const REF_GET_PARENT_CELL: u32 = 0x008d_6f30;
+pub(crate) const REF_GET_PARENT_CELL: u32 = 0x008d_6f30;
 /// `TESObjectREFR::GetWorldSpace` (Xbox PDB).
-const REF_GET_WORLDSPACE: u32 = 0x0057_5d70;
+pub(crate) const REF_GET_WORLDSPACE: u32 = 0x0057_5d70;
 /// `this + 0x44`: the reference's `ExtraDataList` (`tesscriptfunctions.cpp`).
-const REF_GET_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
+pub(crate) const REF_GET_EXTRA_DATA_LIST: u32 = 0x005d_43c0;
 /// `ExtraDataList::GetReferencePointer` (Xbox PDB).
-const EXTRA_DATA_LIST_GET_REFERENCE_POINTER: u32 = 0x0041_c8d0;
+pub(crate) const EXTRA_DATA_LIST_GET_REFERENCE_POINTER: u32 = 0x0041_c8d0;
 /// `[this + 0x0c]` of a reference: the id `GetInventoryItem` takes.
-const REF_GET_ITEM_ID: u32 = 0x0084_e3a0;
+pub(crate) const REF_GET_ITEM_ID: u32 = 0x0084_e3a0;
 /// `TESObjectREFR::GetInventoryItem` (Xbox PDB): `this` and (base form,
 /// item id).
-const REF_GET_INVENTORY_ITEM: u32 = 0x0057_6260;
+pub(crate) const REF_GET_INVENTORY_ITEM: u32 = 0x0057_6260;
 /// `TESObjectREFR::GetScriptVariables` (Xbox PDB).
-const REF_GET_SCRIPT_VARIABLES: u32 = 0x0056_73e0;
+pub(crate) const REF_GET_SCRIPT_VARIABLES: u32 = 0x0056_73e0;
 /// `ItemChange::GetScriptLocals` (Xbox PDB).
-const ITEM_CHANGE_GET_SCRIPT_LOCALS: u32 = 0x004b_dea0;
+pub(crate) const ITEM_CHANGE_GET_SCRIPT_LOCALS: u32 = 0x004b_dea0;
 /// Destructor with a delete flag: `this` the `ItemChange`, flag 1.
-const ITEM_CHANGE_DESTROY: u32 = 0x0044_59e0;
+pub(crate) const ITEM_CHANGE_DESTROY: u32 = 0x0044_59e0;
 /// `ScriptLocals::GetVariable` (Xbox PDB): `this` and (variable, 0), the
 /// value in ST0.
-const SCRIPT_LOCALS_GET_VARIABLE: u32 = 0x005a_9140;
+pub(crate) const SCRIPT_LOCALS_GET_VARIABLE: u32 = 0x005a_9140;
 /// True when the singly linked list starting at `this` holds the item whose
 /// address is the argument (`0x005f65d0`).
-const LIST_CONTAINS: u32 = 0x005f_65d0;
+pub(crate) const LIST_CONTAINS: u32 = 0x005f_65d0;
 
 /// `Sky::GetInstance` (Xbox PDB).
-const SKY_GET_INSTANCE: u32 = 0x0046_dd00;
+pub(crate) const SKY_GET_INSTANCE: u32 = 0x0046_dd00;
 /// `Sky::pCurrentWeather` (`+0x10`); the engine map names this body
 /// `BaseProcess::GetCurrentProcedureIndex` because of folded code.
-const SKY_GET_CURRENT_WEATHER: u32 = 0x0044_edb0;
+pub(crate) const SKY_GET_CURRENT_WEATHER: u32 = 0x0044_edb0;
 /// `Sky::pLastWeather` (`+0x14`).
-const SKY_GET_LAST_WEATHER: u32 = 0x0082_5c00;
+pub(crate) const SKY_GET_LAST_WEATHER: u32 = 0x0082_5c00;
 /// `Sky::fCurrentWeatherPct` (`+0xf4`), returned as a `float` in ST0.
-const SKY_GET_WEATHER_PERCENT: u32 = 0x0064_47d0;
+pub(crate) const SKY_GET_WEATHER_PERCENT: u32 = 0x0064_47d0;
 /// `TESWeather`: true when flag `4` of the byte at `+0xeb` is set.
-const WEATHER_HAS_FLAG_PRECIPITATION: u32 = 0x004e_d270;
+pub(crate) const WEATHER_HAS_FLAG_PRECIPITATION: u32 = 0x004e_d270;
 /// `TESWeather`: interpolates a per-weather byte (`this`, index, from, to)
 /// and returns the `float` in ST0.
-const WEATHER_INTERPOLATE: u32 = 0x004e_d230;
+pub(crate) const WEATHER_INTERPOLATE: u32 = 0x004e_d230;
 
 /// `Actor::GetShouldAttackActor` (Xbox PDB): `this` the actor and (target, 0,
 /// out struct, 0), byte result.
-const ACTOR_GET_SHOULD_ATTACK_ACTOR: u32 = 0x008b_06d0;
+pub(crate) const ACTOR_GET_SHOULD_ATTACK_ACTOR: u32 = 0x008b_06d0;
 /// Byte at `+0x104` of the target (`animation.cpp`).
-const TARGET_GET_FLAG: u32 = 0x0049_3bb0;
+pub(crate) const TARGET_GET_FLAG: u32 = 0x0049_3bb0;
 /// The attack test of the combat manager: `this` the manager read from
 /// [`COMBAT_MANAGER`] and (actor, target), byte result.
-const COMBAT_MANAGER_CHECK: u32 = 0x0099_2640;
-const COMBAT_MANAGER: u32 = 0x011f_1958;
+pub(crate) const COMBAT_MANAGER_CHECK: u32 = 0x0099_2640;
+pub(crate) const COMBAT_MANAGER: u32 = 0x011f_1958;
 /// `TESActorBaseData::GetFactionRank` (Xbox PDB) on `base + 0x30`:
 /// (faction, is the player), -1 when not a member.
-const ACTOR_BASE_DATA_GET_FACTION_RANK: u32 = 0x0047_d680;
+pub(crate) const ACTOR_BASE_DATA_GET_FACTION_RANK: u32 = 0x0047_d680;
 /// `fallout/ai/actor.cpp`: the entry of a string table (`0x0119bcb0`) that
 /// `GetAlarmed` compares with "Alarm", or null.
-const ACTOR_GET_PROCEDURE_NAME: u32 = 0x0088_b7f0;
+pub(crate) const ACTOR_GET_PROCEDURE_NAME: u32 = 0x0088_b7f0;
 /// `_stricmp` (cdecl, two strings).
-const STRING_COMPARE_NO_CASE: u32 = 0x0040_4dc0;
+pub(crate) const STRING_COMPARE_NO_CASE: u32 = 0x0040_4dc0;
 /// `_strnicmp` (cdecl, two strings and a count).
-const STRING_COMPARE_N_NO_CASE: u32 = 0x00ec_7ec0;
+pub(crate) const STRING_COMPARE_N_NO_CASE: u32 = 0x00ec_7ec0;
 /// Number of characters of a cell's name to compare (`this` the cell).
-const CELL_GET_NAME_LENGTH: u32 = 0x0047_4cb0;
+pub(crate) const CELL_GET_NAME_LENGTH: u32 = 0x0047_4cb0;
 /// `TESQuest` accessors: running test, current stage, stage-done test (with
 /// a byte argument).
-const QUEST_IS_RUNNING: u32 = 0x0045_5620;
-const QUEST_GET_CURRENT_STAGE: u32 = 0x0060_d700;
-const QUEST_IS_STAGE_DONE: u32 = 0x0060_d600;
+pub(crate) const QUEST_IS_RUNNING: u32 = 0x0045_5620;
+pub(crate) const QUEST_GET_CURRENT_STAGE: u32 = 0x0060_d700;
+pub(crate) const QUEST_IS_STAGE_DONE: u32 = 0x0060_d600;
 /// `this + 0x3c`: the address of a quest's flag byte.
-const QUEST_GET_FLAGS_ADDRESS: u32 = 0x005a_8080;
+pub(crate) const QUEST_GET_FLAGS_ADDRESS: u32 = 0x005a_8080;
 
 /// True when bit 1 of a `RACE`'s flags (`this + 0x70`) is set; the next
 /// function of this unit (`0059f610`), called by address.
-const RACE_IS_PLAYABLE: u32 = 0x0059_f610;
+pub(crate) const RACE_IS_PLAYABLE: u32 = 0x0059_f610;
 /// `NPC_` accessors: the race (`bipedanim.cpp`), the class (the engine map
 /// names this body `MiddleHighProcess::GetFireNode`, folded) and the sex
 /// (`TESActorBase::GetSex`, Xbox PDB).
-const NPC_GET_RACE: u32 = 0x004a_c110;
-const NPC_GET_CLASS: u32 = 0x0050_2430;
-const NPC_GET_SEX: u32 = 0x005f_0cc0;
+pub(crate) const NPC_GET_RACE: u32 = 0x004a_c110;
+pub(crate) const NPC_GET_CLASS: u32 = 0x0050_2430;
+pub(crate) const NPC_GET_SEX: u32 = 0x005f_0cc0;
 /// `[this + 0x94]` (`middlehighprocess.cpp`): the voice type of a
 /// [`FORM_TYPE_VOICE_SOURCE`] form.
-const FORM_GET_VOICE_TYPE: u32 = 0x0091_85e0;
+pub(crate) const FORM_GET_VOICE_TYPE: u32 = 0x0091_85e0;
 
 /// `GetInCell`'s cache: the last reference, cell and result (`float`).
-const IN_CELL_CACHE_REFERENCE: u32 = 0x011c_aaf4;
-const IN_CELL_CACHE_CELL: u32 = 0x011c_aaf8;
-const IN_CELL_CACHE_RESULT: u32 = 0x011c_aafc;
+pub(crate) const IN_CELL_CACHE_REFERENCE: u32 = 0x011c_aaf4;
+pub(crate) const IN_CELL_CACHE_CELL: u32 = 0x011c_aaf8;
+pub(crate) const IN_CELL_CACHE_RESULT: u32 = 0x011c_aafc;
 /// `GetIsVoiceType`'s cache: the last reference and its voice type.
-const VOICE_TYPE_CACHE_VOICE: u32 = 0x011c_ab14;
-const VOICE_TYPE_CACHE_REFERENCE: u32 = 0x011c_ab18;
+pub(crate) const VOICE_TYPE_CACHE_VOICE: u32 = 0x011c_ab14;
+pub(crate) const VOICE_TYPE_CACHE_REFERENCE: u32 = 0x011c_ab18;
 /// `GetIsPlayableRace`'s cache: the last reference and its result (`float`).
-const PLAYABLE_RACE_CACHE_REFERENCE: u32 = 0x011c_ab1c;
-const PLAYABLE_RACE_CACHE_RESULT: u32 = 0x011c_ab20;
+pub(crate) const PLAYABLE_RACE_CACHE_REFERENCE: u32 = 0x011c_ab1c;
+pub(crate) const PLAYABLE_RACE_CACHE_RESULT: u32 = 0x011c_ab20;
 /// `GetInFaction`'s cache: the last faction, reference and result (`float`).
-const IN_FACTION_CACHE_FACTION: u32 = 0x011c_ab00;
-const IN_FACTION_CACHE_REFERENCE: u32 = 0x011c_ab04;
-const IN_FACTION_CACHE_RESULT: u32 = 0x011c_ab08;
+pub(crate) const IN_FACTION_CACHE_FACTION: u32 = 0x011c_ab00;
+pub(crate) const IN_FACTION_CACHE_REFERENCE: u32 = 0x011c_ab04;
+pub(crate) const IN_FACTION_CACHE_RESULT: u32 = 0x011c_ab08;
 /// `GetIsID`'s cache: the last reference's original base form and the
 /// reference.
-const IS_ID_CACHE_BASE: u32 = 0x011c_ab0c;
-const IS_ID_CACHE_REFERENCE: u32 = 0x011c_ab10;
+pub(crate) const IS_ID_CACHE_BASE: u32 = 0x011c_ab0c;
+pub(crate) const IS_ID_CACHE_REFERENCE: u32 = 0x011c_ab10;
 /// `GetDisposition`'s cache: the last actor, target and result (`float`).
-const DISPOSITION_CACHE_ACTOR: u32 = 0x011c_aae8;
-const DISPOSITION_CACHE_TARGET: u32 = 0x011c_aaec;
-const DISPOSITION_CACHE_RESULT: u32 = 0x011c_aaf0;
+pub(crate) const DISPOSITION_CACHE_ACTOR: u32 = 0x011c_aae8;
+pub(crate) const DISPOSITION_CACHE_TARGET: u32 = 0x011c_aaec;
+pub(crate) const DISPOSITION_CACHE_RESULT: u32 = 0x011c_aaf0;
 
 /// `Actor::IsInFaction` (Xbox PDB): `this` the actor and the faction (may be
 /// null), byte result.
-const ACTOR_IS_IN_FACTION: u32 = 0x008b_8e90;
+pub(crate) const ACTOR_IS_IN_FACTION: u32 = 0x008b_8e90;
 /// `Actor::GetFactionRank` (Xbox PDB): `this` the actor and (faction, is the
 /// player), an `int` rank.
-const ACTOR_GET_FACTION_RANK: u32 = 0x008b_8290;
+pub(crate) const ACTOR_GET_FACTION_RANK: u32 = 0x008b_8290;
 /// `ExtraDataList::GetLevCreaOriginalBase` (Xbox PDB): `this` the extra data
 /// list; the original base form of a leveled creature, or null.
-const EXTRA_DATA_LIST_GET_LEV_CREA_ORIGINAL_BASE: u32 = 0x0042_16f0;
+pub(crate) const EXTRA_DATA_LIST_GET_LEV_CREA_ORIGINAL_BASE: u32 = 0x0042_16f0;
 /// Virtual (vtable `+0xe8`) on the form parameter of `GetIsUsedItem`: a bool
 /// that lets the function compare the form with the used item.
-const VSLOT_FORM_COMPARES_USED_ITEM: u32 = 0xe8;
+pub(crate) const VSLOT_FORM_COMPARES_USED_ITEM: u32 = 0xe8;
 /// Virtual (vtable `+0x1a0`) on a reference, called with 0 (bool): the test
 /// behind `IsChild`.
-const VSLOT_REF_IS_CHILD: u32 = 0x1a0;
+pub(crate) const VSLOT_REF_IS_CHILD: u32 = 0x1a0;
 /// Virtual (vtable `+0x344`) on an `Actor`, called with (target, 0): the
 /// actor's disposition toward the target (`int`). It is the same slot as
 /// [`VSLOT_ACTOR_PREPARE_ATTACK_CHECK`].
-const VSLOT_ACTOR_DISPOSITION_TOWARD: u32 = 0x344;
+pub(crate) const VSLOT_ACTOR_DISPOSITION_TOWARD: u32 = 0x344;
 /// Virtual (vtable `+0x2bc`) on a `MobileObject`, called with 0: its facing
 /// (a `float` in ST0).
-const VSLOT_MOBILE_Z_ANGLE: u32 = 0x2bc;
+pub(crate) const VSLOT_MOBILE_Z_ANGLE: u32 = 0x2bc;
 /// Virtual (vtable `+0x40c`) on the object `GetKnockedState` casts the
 /// process to: the knocked state number.
-const VSLOT_KNOCKED_STATE: u32 = 0x40c;
+pub(crate) const VSLOT_KNOCKED_STATE: u32 = 0x40c;
 /// Virtual (vtable `+0x148`) on the middle-high process: the data of the
 /// equipped weapon (null when nothing is out); its form is at `+0x08`.
-const VSLOT_PROCESS_WEAPON_DATA: u32 = 0x148;
+pub(crate) const VSLOT_PROCESS_WEAPON_DATA: u32 = 0x148;
 /// Virtual (vtable `+0x1e4`) on a reference: its animation object.
-const VSLOT_REF_GET_ANIMATION: u32 = 0x1e4;
+pub(crate) const VSLOT_REF_GET_ANIMATION: u32 = 0x1e4;
 
 /// `TESIdleManager::GetUsedItem` (Xbox PDB): the global at `0x011cb6a4`.
-const IDLE_MANAGER_GET_USED_ITEM: u32 = 0x0060_08f0;
+pub(crate) const IDLE_MANAGER_GET_USED_ITEM: u32 = 0x0060_08f0;
 /// The `int` global at `0x01199c8c` (`tesidlemanager.cpp`): the used item's
 /// level.
-const IDLE_MANAGER_GET_USED_ITEM_LEVEL: u32 = 0x0060_0910;
+pub(crate) const IDLE_MANAGER_GET_USED_ITEM_LEVEL: u32 = 0x0060_0910;
 /// The byte global at `0x011cb6a8` (`tesidlemanager.cpp`): the used item is
 /// being activated.
-const IDLE_MANAGER_GET_USED_ITEM_ACTIVATE: u32 = 0x0060_0930;
+pub(crate) const IDLE_MANAGER_GET_USED_ITEM_ACTIVATE: u32 = 0x0060_0930;
 /// `[this + 0x24]` as a `float` (the global form in ECX; the engine map
 /// names this body `BSMultiBoundCapsule::QMultiBoundRadius` because of
 /// folded code), the value in ST0.
-const GLOBAL_GET_VALUE: u32 = 0x0052_6ac0;
+pub(crate) const GLOBAL_GET_VALUE: u32 = 0x0052_6ac0;
 /// Byte tests on the actor in ECX (`extradataobjects.cpp`): unconscious, and
 /// restrained.
-const ACTOR_IS_UNCONSCIOUS: u32 = 0x0043_7bd0;
-const ACTOR_IS_RESTRAINED: u32 = 0x0043_7bf0;
+pub(crate) const ACTOR_IS_UNCONSCIOUS: u32 = 0x0043_7bd0;
+pub(crate) const ACTOR_IS_RESTRAINED: u32 = 0x0043_7bf0;
 /// The random generator singleton (`bgsdestructibleobjectform.cpp`) and
 /// `BSRandom::UnsignedInt` (Xbox PDB): `this` the generator and a maximum.
-const RANDOM_GET_INSTANCE: u32 = 0x0047_6c00;
-const RANDOM_UNSIGNED_INT: u32 = 0x00aa_5230;
+pub(crate) const RANDOM_GET_INSTANCE: u32 = 0x0047_6c00;
+pub(crate) const RANDOM_UNSIGNED_INT: u32 = 0x00aa_5230;
 /// An actor's level (`actor.cpp`), a `u16` in AX.
-const ACTOR_GET_LEVEL: u32 = 0x0087_f9f0;
+pub(crate) const ACTOR_GET_LEVEL: u32 = 0x0087_f9f0;
 /// Dead count of a form (`tes.cpp`): `this` the `TES*` global and the form,
 /// a `short` in AX.
-const TES_GET_DEAD_COUNT: u32 = 0x0045_9000;
+pub(crate) const TES_GET_DEAD_COUNT: u32 = 0x0045_9000;
 /// `Actor::GetAlert` (Xbox PDB): a byte.
-const ACTOR_GET_ALERT: u32 = 0x008a_5e80;
+pub(crate) const ACTOR_GET_ALERT: u32 = 0x008a_5e80;
 /// `Actor::IsWeaponDrawn` (Xbox PDB): a byte.
-const ACTOR_IS_WEAPON_DRAWN: u32 = 0x008a_16d0;
+pub(crate) const ACTOR_IS_WEAPON_DRAWN: u32 = 0x008a_16d0;
 /// Byte test of the actor in ECX behind `IsWaiting` (`actor.cpp`).
-const ACTOR_IS_WAITING: u32 = 0x008a_6210;
+pub(crate) const ACTOR_IS_WAITING: u32 = 0x008a_6210;
 /// `this - other` into an out vector (`NiPoint3`): `this`, the out vector
 /// and the other vector.
-const POINT3_SUBTRACT: u32 = 0x0043_9ef0;
+pub(crate) const POINT3_SUBTRACT: u32 = 0x0043_9ef0;
 /// The Z angle of the vector at the argument (cdecl, `float` in ST0).
-const GET_Z_ANGLE_FROM_VECTOR: u32 = 0x004b_13c0;
+pub(crate) const GET_Z_ANGLE_FROM_VECTOR: u32 = 0x004b_13c0;
 /// Byte test of the animation in ECX (`animation.cpp`): the special idle is
 /// done playing.
-const ANIMATION_SPECIAL_IDLE_DONE_PLAYING: u32 = 0x0049_85f0;
+pub(crate) const ANIMATION_SPECIAL_IDLE_DONE_PLAYING: u32 = 0x0049_85f0;
 /// `[this + 0x08]` of the weapon data returned by [`VSLOT_PROCESS_WEAPON_DATA`]:
 /// the weapon form.
-const WEAPON_DATA_GET_FORM: u32 = 0x0044_ddc0;
+pub(crate) const WEAPON_DATA_GET_FORM: u32 = 0x0044_ddc0;
 /// The global at `0x011ca278`: the form `IsWeaponInList` falls back on when
 /// no weapon is equipped.
-const FALLBACK_WEAPON: u32 = 0x011c_a278;
+pub(crate) const FALLBACK_WEAPON: u32 = 0x011c_a278;
 /// `[this + 0xf4]` of a weapon form, a sign-extended byte: its index into
 /// the table of animation types at [`WEAPON_ANIM_TYPE_TABLE`].
-const WEAPON_GET_ANIM_TYPE_INDEX: u32 = 0x0044_6390;
-const WEAPON_ANIM_TYPE_TABLE: u32 = 0x0118_a838;
+pub(crate) const WEAPON_GET_ANIM_TYPE_INDEX: u32 = 0x0044_6390;
+pub(crate) const WEAPON_ANIM_TYPE_TABLE: u32 = 0x0118_a838;
 /// `[this + 0x15c]` of a weapon form: the value `IsWeaponSkillType` compares
 /// (the engine map names this body `MiddleHighProcess::GetLastBoundWeapon`
 /// because of folded code).
-const WEAPON_GET_SKILL: u32 = 0x008d_85e0;
+pub(crate) const WEAPON_GET_SKILL: u32 = 0x008d_85e0;
 /// `MobileObject::GetCurrentPackage` (Xbox PDB): virtual `+0x27c` of the
 /// object at `+0x68`, or 0.
-const MOBILE_GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
+pub(crate) const MOBILE_GET_CURRENT_PACKAGE: u32 = 0x0093_44a0;
 /// `[this + 0x20]` of a package, a sign-extended byte: its type number.
-const PACKAGE_GET_TYPE: u32 = 0x0041_ca90;
+pub(crate) const PACKAGE_GET_TYPE: u32 = 0x0041_ca90;
 /// The table of seven control names (`char*`) that `GetPlayerControlsDisabled`
 /// lists, and the byte of the `PlayerCharacter` that holds the flags.
-const CONTROL_NAMES: u32 = 0x0118_c608;
-const PLAYER_DISABLED_CONTROLS_OFFSET: u32 = 0x680;
+pub(crate) const CONTROL_NAMES: u32 = 0x0118_c608;
+pub(crate) const PLAYER_DISABLED_CONTROLS_OFFSET: u32 = 0x680;
 /// `__RTDynamicCast` (cdecl): (object, vfdelta, source type, target type,
 /// is reference).
-const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
+pub(crate) const RT_DYNAMIC_CAST: u32 = 0x00ec_43fb;
 /// The two type descriptors `GetKnockedState` casts between.
-const TYPE_SOURCE_OF_KNOCKED_STATE_CAST: u32 = 0x0118_a6b8;
-const TYPE_TARGET_OF_KNOCKED_STATE_CAST: u32 = 0x0118_c64c;
+pub(crate) const TYPE_SOURCE_OF_KNOCKED_STATE_CAST: u32 = 0x0118_a6b8;
+pub(crate) const TYPE_TARGET_OF_KNOCKED_STATE_CAST: u32 = 0x0118_c64c;
 /// Node lookups of a reference (`tesobjectrefr.cpp`, `animation.cpp`):
 /// `this` and (key, name or flag), returning the node.
-const REF_FIND_NODE: u32 = 0x0057_1530;
-const REF_FIND_NODE_BY_NAME: u32 = 0x0049_0310;
+pub(crate) const REF_FIND_NODE: u32 = 0x0057_1530;
+pub(crate) const REF_FIND_NODE_BY_NAME: u32 = 0x0049_0310;
 /// The node key of a reference (`modelloader.cpp`); the node lookups take
 /// it with [`fn_005a07f0`].
-const REF_GET_NODE_KEY: u32 = 0x0043_fcd0;
+pub(crate) const REF_GET_NODE_KEY: u32 = 0x0043_fcd0;
 /// Tests of a node, cdecl (node, 0), byte result: `bhkNiCollisionObject::
 /// GetFaceUp` (Xbox PDB) and its left-up counterpart.
-const COLLISION_GET_FACE_UP: u32 = 0x00c6_b7b0;
-const COLLISION_GET_LEFT_UP: u32 = 0x00c6_b860;
+pub(crate) const COLLISION_GET_FACE_UP: u32 = 0x00c6_b7b0;
+pub(crate) const COLLISION_GET_LEFT_UP: u32 = 0x00c6_b860;
 /// "Bip01 Spine0", the node `IsFacingUp` falls back on.
-const SPINE_NODE_NAME: u32 = 0x0103_5604;
+pub(crate) const SPINE_NODE_NAME: u32 = 0x0103_5604;
 /// "UNKNOWN", `GetIsUsedItem`'s name for a missing form.
-const UNKNOWN_NAME: u32 = 0x0101_5890;
+pub(crate) const UNKNOWN_NAME: u32 = 0x0101_5890;
 
 /// Form type of a `GLOB` (`TESGlobal`) and of a `WEAP` (`TESObjectWEAP`).
-const FORM_TYPE_GLOBAL: u32 = 6;
-const FORM_TYPE_WEAPON: u32 = 0x28;
+pub(crate) const FORM_TYPE_GLOBAL: u32 = 6;
+pub(crate) const FORM_TYPE_WEAPON: u32 = 0x28;
 
 /// `GetCurrentAIPackage`'s value for each package type 0 to 31: the address
 /// of a `double` in the exe's data, or 0 for the types that are `0.0` (type
 /// 0), `1.0` (type 1) and the default (type 17, and any above 31).
-const PACKAGE_VALUE_ADDRESS: [u32; 32] = [
+pub(crate) const PACKAGE_VALUE_ADDRESS: [u32; 32] = [
     0,
     0,
     0x0101_1590,
@@ -442,186 +442,186 @@ const PACKAGE_VALUE_ADDRESS: [u32; 32] = [
 ];
 /// `-1.0` (`double`): the default of the package switch and the start value
 /// of `GetFactionRank` and `GetGlobalValue`.
-const DOUBLE_MINUS_ONE: u32 = 0x0101_a6b0;
+pub(crate) const DOUBLE_MINUS_ONE: u32 = 0x0101_a6b0;
 /// `-pi`, `pi` and `2 * pi` as `double`s (`GetHeadingAngle`).
-const DOUBLE_MINUS_PI: u32 = 0x0101_ff58;
-const DOUBLE_PI: u32 = 0x0101_ff40;
-const DOUBLE_TWO_PI: u32 = 0x0101_ff48;
+pub(crate) const DOUBLE_MINUS_PI: u32 = 0x0101_ff58;
+pub(crate) const DOUBLE_PI: u32 = 0x0101_ff40;
+pub(crate) const DOUBLE_TWO_PI: u32 = 0x0101_ff48;
 
 // Callees and data of the functions from `005a0f90` on.
 
 /// The object at `0x011e0e80`, `this` of the `processlists.cpp` function
 /// [`PROCESS_LISTS_CRIME_TEST`].
-const PROCESS_LISTS: u32 = 0x011e_0e80;
+pub(crate) const PROCESS_LISTS: u32 = 0x011e_0e80;
 /// `processlists.cpp`, `this` the object at [`PROCESS_LISTS`], stack
 /// arguments (actor, placed reference, actor, crime number or -1, 0, -1),
 /// byte result (the test behind `GetCrime`).
-const PROCESS_LISTS_CRIME_TEST: u32 = 0x0097_2600;
+pub(crate) const PROCESS_LISTS_CRIME_TEST: u32 = 0x0097_2600;
 /// `TESClass::IsGuard` (Xbox PDB): byte, `this` the class.
-const CLASS_IS_GUARD: u32 = 0x005f_6e60;
+pub(crate) const CLASS_IS_GUARD: u32 = 0x005f_6e60;
 /// `Actor::IsTalking` (Xbox PDB): byte.
-const ACTOR_IS_TALKING: u32 = 0x008a_67f0;
+pub(crate) const ACTOR_IS_TALKING: u32 = 0x008a_67f0;
 /// `TESObjectREFR::GetMobileObjectExtra` (Xbox PDB): the reference as a
 /// mobile object, or null.
-const REF_GET_MOBILE_OBJECT_EXTRA: u32 = 0x0057_8970;
+pub(crate) const REF_GET_MOBILE_OBJECT_EXTRA: u32 = 0x0057_8970;
 /// `MobileObject::IsTalking` (Xbox PDB): byte.
-const MOBILE_OBJECT_IS_TALKING: u32 = 0x0092_f160;
+pub(crate) const MOBILE_OBJECT_IS_TALKING: u32 = 0x0092_f160;
 
 /// `[this + 0x68]` (`highprocess.cpp` body, the engine map names it
 /// `MiddleHighProcess::GetSavedAcquireObject`): on the `TES` global it is
 /// `TES::pSky` (Xbox PDB `+0x68`).
-const TES_GET_SKY: u32 = 0x008d_8520;
+pub(crate) const TES_GET_SKY: u32 = 0x008d_8520;
 /// `[this + 0xcc]` of the sky, a `float` in ST0 (`tes.cpp`).
-const SKY_GET_WIND_SPEED: u32 = 0x0045_36e0;
+pub(crate) const SKY_GET_WIND_SPEED: u32 = 0x0045_36e0;
 /// Virtual (vtable `+0x448`) on an actor: byte behind `IsTrespassing`.
-const VSLOT_ACTOR_IS_TRESPASSING: u32 = 0x448;
+pub(crate) const VSLOT_ACTOR_IS_TRESPASSING: u32 = 0x448;
 /// `tesobjectcell.cpp`: `this` the cell and (actor), stack argument popped
 /// by the callee, byte result (the test behind `IsInMyOwnedCell`).
-const CELL_IS_OWNED_BY: u32 = 0x0054_6ca0;
+pub(crate) const CELL_IS_OWNED_BY: u32 = 0x0054_6ca0;
 /// `Actor::IsContinuingPackageforPC` (Xbox PDB): byte.
-const ACTOR_IS_CONTINUING_PACKAGE_FOR_PC: u32 = 0x008a_69d0;
+pub(crate) const ACTOR_IS_CONTINUING_PACKAGE_FOR_PC: u32 = 0x008a_69d0;
 
 /// Virtual (vtable `+0x1d0`) on a reference: its loaded node, or null
 /// (`0059c4c0` tests it for non-null).
-const VSLOT_REF_GET_NODE: u32 = 0x1d0;
+pub(crate) const VSLOT_REF_GET_NODE: u32 = 0x1d0;
 /// `modelloader.cpp`: returns the global at `0x01202ddc`, the name (a
 /// string handle passed by pointer) `CanHaveFlames` looks up.
-const FLAMES_EXTRA_DATA_NAME: u32 = 0x0044_8a80;
+pub(crate) const FLAMES_EXTRA_DATA_NAME: u32 = 0x0044_8a80;
 /// `NiObjectNET::GetExtraData` (Xbox PDB): `this` the node and (name).
-const NODE_GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+pub(crate) const NODE_GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
 /// Type descriptor `CanHaveFlames` casts the extra data with (the first
 /// argument of [`EXTRA_DATA_CAST`]).
-const FLAMES_EXTRA_DATA_TYPE: u32 = 0x0120_2de0;
+pub(crate) const FLAMES_EXTRA_DATA_TYPE: u32 = 0x0120_2de0;
 /// `bsfacegenmanager.cpp`: cdecl (type descriptor, object); null when the
 /// object is null, else the object converted by the type.
-const EXTRA_DATA_CAST: u32 = 0x0065_3270;
+pub(crate) const EXTRA_DATA_CAST: u32 = 0x0065_3270;
 /// `modelloader.cpp`: byte, `this` the converted extra data (asks
 /// `0x00448a60` with `0x10`).
-const FLAMES_EXTRA_DATA_TEST: u32 = 0x0044_8a40;
+pub(crate) const FLAMES_EXTRA_DATA_TEST: u32 = 0x0044_8a40;
 /// Virtual (vtable `+0x0c`) on the node: its value goes to
 /// [`REF_HAS_ADDON_NODES`].
-const VSLOT_NODE_FLAMES_ARGUMENT: u32 = 0xc;
+pub(crate) const VSLOT_NODE_FLAMES_ARGUMENT: u32 = 0xc;
 /// `TESObjectREFR::HasAddonNodes` (Xbox PDB): cdecl, one argument, byte.
-const REF_HAS_ADDON_NODES: u32 = 0x0057_8400;
+pub(crate) const REF_HAS_ADDON_NODES: u32 = 0x0057_8400;
 /// `BGSOpenCloseForm::GetOpenState` (Xbox PDB): cdecl (reference), an `int`.
-const OPEN_CLOSE_GET_OPEN_STATE: u32 = 0x0047_b250;
+pub(crate) const OPEN_CLOSE_GET_OPEN_STATE: u32 = 0x0047_b250;
 
 /// Form type of the packages `GetIsCurrentPackage` accepts (the form it
 /// compares with the actor's current package).
-const FORM_TYPE_PACKAGE: u32 = 0x49;
+pub(crate) const FORM_TYPE_PACKAGE: u32 = 0x49;
 /// `Actor::GetPackageSetAsPcurrent` (Xbox PDB).
-const ACTOR_GET_PACKAGE_SET_AS_CURRENT: u32 = 0x0088_1510;
+pub(crate) const ACTOR_GET_PACKAGE_SET_AS_CURRENT: u32 = 0x0088_1510;
 /// `TESPackage::GetIsCreated` (Xbox PDB): byte.
-const PACKAGE_GET_IS_CREATED: u32 = 0x0067_4d40;
+pub(crate) const PACKAGE_GET_IS_CREATED: u32 = 0x0067_4d40;
 /// `ExtraDataList::GetPackageExtra` (Xbox PDB): `this` the extra data list.
-const EXTRA_DATA_LIST_GET_PACKAGE_EXTRA: u32 = 0x0041_cb10;
+pub(crate) const EXTRA_DATA_LIST_GET_PACKAGE_EXTRA: u32 = 0x0041_cb10;
 
 /// Calendar day of the week (`calendar.cpp` region), `this` the
 /// [`CALENDAR`] singleton, an `int`.
-const CALENDAR_GET_DAY_OF_WEEK: u32 = 0x0086_7ef0;
+pub(crate) const CALENDAR_GET_DAY_OF_WEEK: u32 = 0x0086_7ef0;
 /// Byte of the player (`playercharacter.cpp`) behind `IsPlayerAMurderer`.
-const PLAYER_IS_A_MURDERER: u32 = 0x0095_3f60;
+pub(crate) const PLAYER_IS_A_MURDERER: u32 = 0x0095_3f60;
 /// `actor.cpp`: `this` the actor and (target), an `int` (the detection
 /// level; popped by the callee).
-const ACTOR_GET_DETECTION_LEVEL: u32 = 0x008a_81e0;
+pub(crate) const ACTOR_GET_DETECTION_LEVEL: u32 = 0x008a_81e0;
 
 /// `tesactorbasedata.cpp`: byte test of the faction in ECX (bit `0x08` of
 /// its flags at `+0x34`).
-const FACTION_TEST_EXPELLED: u32 = 0x0047_d720;
+pub(crate) const FACTION_TEST_EXPELLED: u32 = 0x0047_d720;
 /// Byte test of a reference (`+0x08` has bit `0x00800000`; `GetDestroyed`).
-const REF_TEST_DESTROYED: u32 = 0x0047_7ba0;
+pub(crate) const REF_TEST_DESTROYED: u32 = 0x0047_7ba0;
 /// Virtual (vtable `+0x19c`) on an actor: its `MagicTarget`, the `this` of
 /// the magic tests below (no stack argument).
-const VSLOT_ACTOR_GET_MAGIC_TARGET: u32 = 0x19c;
+pub(crate) const VSLOT_ACTOR_GET_MAGIC_TARGET: u32 = 0x19c;
 /// `MagicTarget` tests: `this` the magic target and (effect), byte result
 /// (behind `HasMagicEffect`) ...
-const MAGIC_TARGET_HAS_EFFECT: u32 = 0x0082_2d80;
+pub(crate) const MAGIC_TARGET_HAS_EFFECT: u32 = 0x0082_2d80;
 /// ... `MagicTarget::IsSpellTarget` (Xbox PDB), (spell, 1), byte ...
-const MAGIC_TARGET_IS_SPELL_TARGET: u32 = 0x0082_2b90;
+pub(crate) const MAGIC_TARGET_IS_SPELL_TARGET: u32 = 0x0082_2b90;
 /// ... and `MagicTarget::GetUsageMonitorEffectMagnitude` (Xbox PDB),
 /// (effect), a `float` in ST0.
-const MAGIC_TARGET_GET_USAGE_MONITOR_MAGNITUDE: u32 = 0x0082_2eb0;
+pub(crate) const MAGIC_TARGET_GET_USAGE_MONITOR_MAGNITUDE: u32 = 0x0082_2eb0;
 /// The offset of the `MagicTarget` inside an actor that `GetSpellUsageNumber`
 /// uses directly.
-const ACTOR_MAGIC_TARGET_OFFSET: u32 = 0x94;
+pub(crate) const ACTOR_MAGIC_TARGET_OFFSET: u32 = 0x94;
 
 /// The object at `0x011f2250` (`this` of `VATS::GetCurrentAction`).
-const VATS: u32 = 0x011f_2250;
+pub(crate) const VATS: u32 = 0x011f_2250;
 /// `[this + 0x08]` (same body as [`WEAPON_DATA_GET_FORM`]): the VATS mode.
-const VATS_GET_MODE: u32 = 0x0044_ddc0;
+pub(crate) const VATS_GET_MODE: u32 = 0x0044_ddc0;
 /// The mode value `GetVATSTargetHeight` requires.
-const VATS_MODE_TARGETING: u32 = 4;
+pub(crate) const VATS_MODE_TARGETING: u32 = 4;
 /// `VATS::GetCurrentAction` (Xbox PDB): the action, or null.
-const VATS_GET_CURRENT_ACTION: u32 = 0x009c_71c0;
+pub(crate) const VATS_GET_CURRENT_ACTION: u32 = 0x009c_71c0;
 /// `ActionPoints::IsAttackAction` (Xbox PDB): cdecl (action type), byte.
-const ACTION_IS_ATTACK: u32 = 0x0066_dde0;
+pub(crate) const ACTION_IS_ATTACK: u32 = 0x0066_dde0;
 /// Virtual (vtable `+0x180`) on an actor's base form: its body part data,
 /// or null.
-const VSLOT_BASE_FORM_BODY_PART_DATA: u32 = 0x180;
+pub(crate) const VSLOT_BASE_FORM_BODY_PART_DATA: u32 = 0x180;
 /// `BGSBodyPartData::GetBodyPart_ov2` (Xbox PDB): `this` the data and the
 /// part number, the part or null.
-const BODY_PART_DATA_GET_BODY_PART: u32 = 0x005e_5130;
+pub(crate) const BODY_PART_DATA_GET_BODY_PART: u32 = 0x005e_5130;
 /// `modelloader.cpp`: the node name of a body part (`this` the part).
-const BODY_PART_GET_NODE_NAME: u32 = 0x0043_b230;
+pub(crate) const BODY_PART_GET_NODE_NAME: u32 = 0x0043_b230;
 /// cdecl (node, name): the named node below the node (`0x00c4b310` with 1).
-const NODE_FIND_BY_NAME: u32 = 0x004a_ae30;
+pub(crate) const NODE_FIND_BY_NAME: u32 = 0x004a_ae30;
 /// `this + 0x8c` (`bipedanim.cpp`): the address of the node's world
 /// position (3 floats).
-const NODE_GET_WORLD_POSITION: u32 = 0x0045_bb80;
+pub(crate) const NODE_GET_WORLD_POSITION: u32 = 0x0045_bb80;
 /// `NiAVObject::GetWorldBound` (Xbox PDB): `[this + 0x20]`, or the default
 /// bound at `0x011f4288` when null.
-const NODE_GET_WORLD_BOUND: u32 = 0x0043_d450;
+pub(crate) const NODE_GET_WORLD_BOUND: u32 = 0x0043_d450;
 /// Returns `this` (same body as [`LIST_NODE_ITEM_ADDRESS`]); called on a
 /// local vector and on the bound, whose first field is its center.
-const RETURN_THIS: u32 = 0x0068_15c0;
+pub(crate) const RETURN_THIS: u32 = 0x0068_15c0;
 /// `tesobjectrefr.cpp`: `this` the reference and a number; asks the
 /// reference's extra data list (`0x0041b3a0`), byte result.
-const REF_EXTRA_DATA_LIST_TEST: u32 = 0x0057_2d30;
+pub(crate) const REF_EXTRA_DATA_LIST_TEST: u32 = 0x0057_2d30;
 
 /// Virtuals of the player: `GetSandman` and `GetCannibal` (byte results).
-const VSLOT_PLAYER_SANDMAN: u32 = 0x36c;
-const VSLOT_PLAYER_CANNIBAL: u32 = 0x364;
+pub(crate) const VSLOT_PLAYER_SANDMAN: u32 = 0x36c;
+pub(crate) const VSLOT_PLAYER_CANNIBAL: u32 = 0x364;
 /// `[this + 0x10c]` of an actor (`highprocess.cpp` body, the engine map
 /// names it `MiddleHighProcess::GetLastIdlePlayed`): the number
 /// `IsInCritStage` compares with its stage.
-const ACTOR_GET_CRIT_STAGE: u32 = 0x005a_29b0;
+pub(crate) const ACTOR_GET_CRIT_STAGE: u32 = 0x005a_29b0;
 /// The table of stage names (`char*`) indexed by stage number.
-const CRIT_STAGE_NAMES: u32 = 0x0119_bbb0;
+pub(crate) const CRIT_STAGE_NAMES: u32 = 0x0119_bbb0;
 /// `actor.cpp`: byte test behind `HasBeenEaten`.
-const ACTOR_HAS_BEEN_EATEN: u32 = 0x008a_8170;
+pub(crate) const ACTOR_HAS_BEEN_EATEN: u32 = 0x008a_8170;
 
 /// `[this + 0x18]` of a package: the index into [`PROCEDURE_TABLES`].
-const PACKAGE_GET_PROCEDURE_GROUP: u32 = 0x0096_11e0;
+pub(crate) const PACKAGE_GET_PROCEDURE_GROUP: u32 = 0x0096_11e0;
 /// Table of pointers (indexed by the group) to tables of `int`s (indexed by
 /// the process's procedure index) holding the procedure number.
-const PROCEDURE_TABLES: u32 = 0x011a_3ff0;
+pub(crate) const PROCEDURE_TABLES: u32 = 0x011a_3ff0;
 /// Virtuals of the actor's middle-high process: the procedure index
 /// (`+0x280`) and the object `fn_005a1210` and `fn_005a1770` read (`+0x274`).
-const VSLOT_PROCESS_PROCEDURE_INDEX: u32 = 0x280;
-const VSLOT_PROCESS_PROCEDURE_OBJECT: u32 = 0x274;
+pub(crate) const VSLOT_PROCESS_PROCEDURE_INDEX: u32 = 0x280;
+pub(crate) const VSLOT_PROCESS_PROCEDURE_OBJECT: u32 = 0x274;
 /// Package type of the combat packages the fleeing test applies to, and
 /// `CombatController::IsFleeing` (Xbox PDB name of the byte test run on the
 /// package).
-const PACKAGE_TYPE_COMBAT: u32 = 0x12;
-const COMBAT_CONTROLLER_IS_FLEEING: u32 = 0x0098_1990;
+pub(crate) const PACKAGE_TYPE_COMBAT: u32 = 0x12;
+pub(crate) const COMBAT_CONTROLLER_IS_FLEEING: u32 = 0x0098_1990;
 /// The procedure number a fleeing combat package maps to.
-const PROCEDURE_FLEEING: u32 = 10;
+pub(crate) const PROCEDURE_FLEEING: u32 = 10;
 /// `[this + 0x84]` of the package of type `0x17`: the number
 /// `fn_005a1770` returns.
-const PACKAGE_GET_NUMBER: u32 = 0x004f_d3c0;
+pub(crate) const PACKAGE_GET_NUMBER: u32 = 0x004f_d3c0;
 /// `[this + 0x0c]` of the object of `+0x274` (same body as
 /// [`REF_GET_ITEM_ID`]).
-const PROCEDURE_OBJECT_GET_ID: u32 = 0x0084_e3a0;
+pub(crate) const PROCEDURE_OBJECT_GET_ID: u32 = 0x0084_e3a0;
 /// `[this + 0x08]` of the object of `+0x274` (same body as [`VATS_GET_MODE`]).
-const PROCEDURE_OBJECT_GET_VALUE: u32 = 0x0044_ddc0;
+pub(crate) const PROCEDURE_OBJECT_GET_VALUE: u32 = 0x0044_ddc0;
 /// The two package types `fn_005a1770` distinguishes.
-const PACKAGE_TYPE_WITH_PROCESS_OBJECT: u32 = 0xe;
-const PACKAGE_TYPE_WITH_NUMBER: u32 = 0x17;
+pub(crate) const PACKAGE_TYPE_WITH_PROCESS_OBJECT: u32 = 0xe;
+pub(crate) const PACKAGE_TYPE_WITH_NUMBER: u32 = 0x17;
 /// `fn_005a1210`'s table: for each procedure number 0 to `0x36`, the address
 /// of the `double` it yields in the exe's data, or 0 for the numbers handled
 /// in code (0 gives `0.0`, 2 gives `1.0`, `0x2a` is special, and the rest
 /// give `-1.0`).
-const PROCEDURE_VALUE_ADDRESS: [u32; 0x37] = [
+pub(crate) const PROCEDURE_VALUE_ADDRESS: [u32; 0x37] = [
     0,
     0x0101_5a40,
     0,
@@ -681,38 +681,38 @@ const PROCEDURE_VALUE_ADDRESS: [u32; 0x37] = [
 /// Procedure number with the special case, the `double` it starts from, and
 /// the two `float` tables it reads (indexed by `+0x04` of the object, and by
 /// `value + 1` for object type 3).
-const PROCEDURE_SPECIAL: u32 = 0x2a;
-const PROCEDURE_SPECIAL_DEFAULT: u32 = 0x0103_57e8;
-const PROCEDURE_SPECIAL_TABLE_BY_TYPE: u32 = 0x0103_57b8;
-const PROCEDURE_SPECIAL_TABLE_BY_VALUE: u32 = 0x0103_57c8;
+pub(crate) const PROCEDURE_SPECIAL: u32 = 0x2a;
+pub(crate) const PROCEDURE_SPECIAL_DEFAULT: u32 = 0x0103_57e8;
+pub(crate) const PROCEDURE_SPECIAL_TABLE_BY_TYPE: u32 = 0x0103_57b8;
+pub(crate) const PROCEDURE_SPECIAL_TABLE_BY_VALUE: u32 = 0x0103_57c8;
 
 /// The byte at `TLS + 0x268`: the condition functions print a debug line
 /// for their result when it is set.
-fn trace_enabled(e: &mut Engine) -> bool {
+pub(crate) fn trace_enabled(e: &mut Engine) -> bool {
     let tls = e.tls();
     e.mem.u8(tls + TLS_TRACE_FLAG) != 0
 }
 
 /// The debug line `format(*result)`.
-fn trace_result(e: &mut Engine, format: u32, result: Ptr) {
+pub(crate) fn trace_result(e: &mut Engine, format: u32, result: Ptr) {
     let value = e.mem.f64(result.addr());
     e.call(DEBUG_PRINT, &args![format, value]);
 }
 
 /// The debug line `format(label, *result)`.
-fn trace_labeled_result(e: &mut Engine, format: u32, label: u32, result: Ptr) {
+pub(crate) fn trace_labeled_result(e: &mut Engine, format: u32, label: u32, result: Ptr) {
     let value = e.mem.f64(result.addr());
     e.call(DEBUG_PRINT, &args![format, label, value]);
 }
 
-fn set_result(e: &mut Engine, result: Ptr, value: f64) {
+pub(crate) fn set_result(e: &mut Engine, result: Ptr, value: f64) {
     e.mem.set_f64(result.addr(), value);
 }
 
 /// `ref` when it is non-null and virtual `IsActor` says so, else null (the
 /// game's `DYNAMIC_CAST<Actor*>`-style test every actor condition opens
 /// with).
-fn actor_of(e: &mut Engine, reference: Ptr) -> Ptr {
+pub(crate) fn actor_of(e: &mut Engine, reference: Ptr) -> Ptr {
     if !reference.is_null() && e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
         reference
     } else {
@@ -722,7 +722,7 @@ fn actor_of(e: &mut Engine, reference: Ptr) -> Ptr {
 
 /// The reference's base form when its type is `NPC_`, else null (the test
 /// `SameRace` and `SameSex` run on both references).
-fn npc_base_form_of(e: &mut Engine, reference: Ptr) -> Ptr {
+pub(crate) fn npc_base_form_of(e: &mut Engine, reference: Ptr) -> Ptr {
     if reference.is_null() {
         return Ptr::NULL;
     }
@@ -737,7 +737,7 @@ fn npc_base_form_of(e: &mut Engine, reference: Ptr) -> Ptr {
 /// `form` when it is non-null and has the given `TESForm::cFormType`, else
 /// null (the `if (p && p->type == T) typed = p` test the form parameters go
 /// through).
-fn form_of_type(e: &mut Engine, form: Ptr, form_type: u32) -> Ptr {
+pub(crate) fn form_of_type(e: &mut Engine, form: Ptr, form_type: u32) -> Ptr {
     if !form.is_null() && e.call(FORM_GET_TYPE, &args![form]).u32() == form_type {
         form
     } else {
@@ -747,7 +747,7 @@ fn form_of_type(e: &mut Engine, form: Ptr, form_type: u32) -> Ptr {
 
 /// `form` when it is non-null and one of the placed reference types
 /// (`0x3a` to `0x40`, or `0x69`), else null.
-fn placed_reference_of(e: &mut Engine, form: Ptr) -> Ptr {
+pub(crate) fn placed_reference_of(e: &mut Engine, form: Ptr) -> Ptr {
     if form.is_null() {
         return Ptr::NULL;
     }
@@ -763,7 +763,7 @@ fn placed_reference_of(e: &mut Engine, form: Ptr) -> Ptr {
 
 /// The reference's base form when its type is `form_type`, else null (the
 /// test [`npc_base_form_of`] runs for `NPC_`).
-fn base_form_of_type(e: &mut Engine, reference: Ptr, form_type: u32) -> Ptr {
+pub(crate) fn base_form_of_type(e: &mut Engine, reference: Ptr, form_type: u32) -> Ptr {
     if reference.is_null() {
         return Ptr::NULL;
     }
@@ -1233,7 +1233,7 @@ pub fn script_get_scale_condition_function(
 /// `frame` is the game's stack frame: the original keeps these locals at
 /// fixed `ebp` offsets, and this keeps them there so that the blocks are as
 /// far apart as the game lays them out.
-fn get_los_player_case(e: &mut Engine, player: Ptr, target: Ptr, result: Ptr) {
+pub(crate) fn get_los_player_case(e: &mut Engine, player: Ptr, target: Ptr, result: Ptr) {
     let mut visible = false;
     let tes_singleton = e.call(0x0045_c670, &args![]).u32();
     let tes_cell = e.call(0x0055_8310, &args![tes_singleton]).u32();
@@ -2073,7 +2073,7 @@ pub fn script_get_menu_mode_condition_function(
 /// Adds `1.0` (the `double` at [`DOUBLE_ONE`]) to `*result` `times` times,
 /// one x87 add and store each, as the fall-through `switch` of `GetSleeping`
 /// and `GetSitting` does.
-fn add_ones_to_result(e: &mut Engine, result: Ptr, times: u32) {
+pub(crate) fn add_ones_to_result(e: &mut Engine, result: Ptr, times: u32) {
     for _ in 0..times {
         let one = e.global::<f64>(DOUBLE_ONE);
         let sum = e.mem.f64(result.addr()) + one;
@@ -2501,7 +2501,7 @@ pub fn script_get_alarmed_condition_function(
 /// weather's share of the sky when it has the flag, plus the share of the
 /// weather it is changing from (one minus the share) when that one has the
 /// flag.
-fn sky_weather_flag_share(
+pub(crate) fn sky_weather_flag_share(
     e: &mut Engine,
     result: Ptr,
     has_flag: fn(&mut Engine, Ptr) -> bool,
@@ -2595,7 +2595,7 @@ pub fn script_get_is_raining_condition_function(
 /// which that weather's precipitation starts (`WEATHER_INTERPOLATE` of its
 /// entry 6 below the current weather percentage), or the weather being left
 /// (`Sky::pLastWeather`) has not yet fallen below the one of its entry 7.
-fn sky_precipitation_active(
+pub(crate) fn sky_precipitation_active(
     e: &mut Engine,
     sky: Ptr,
     has_flag: fn(&mut Engine, Ptr) -> bool,
@@ -3121,7 +3121,7 @@ pub fn script_get_is_playable_race_condition_function(
 
 /// The reference as an `Actor` (virtual `IsMobileObject`, vtable `+0xfc`),
 /// else null.
-fn mobile_object_of(e: &mut Engine, reference: Ptr) -> Ptr {
+pub(crate) fn mobile_object_of(e: &mut Engine, reference: Ptr) -> Ptr {
     if !reference.is_null()
         && e.vcall(reference.addr(), VSLOT_IS_MOBILE_OBJECT, &args![])
             .bool()
@@ -3135,7 +3135,7 @@ fn mobile_object_of(e: &mut Engine, reference: Ptr) -> Ptr {
 /// The form of the weapon the process has out: the weapon data
 /// ([`VSLOT_PROCESS_WEAPON_DATA`]) form when that is a `WEAP`, else null
 /// (the part `IsWeaponInList` and `GetWeaponAnimType` share).
-fn equipped_weapon_of(e: &mut Engine, process: Ptr) -> Ptr {
+pub(crate) fn equipped_weapon_of(e: &mut Engine, process: Ptr) -> Ptr {
     let data = e
         .vcall(process.addr(), VSLOT_PROCESS_WEAPON_DATA, &args![])
         .ptr::<()>();
