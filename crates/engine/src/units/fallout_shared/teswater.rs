@@ -5,10 +5,25 @@
 //! at), `PlaceableWaterGroup` and the small accessors the water code is
 //! built from. It has 166 functions, `004e21b0` to `004edd80`.
 //!
-//! Translated so far: the first 120 functions of the queue (`004e21b0` to
-//! `004eb510`). The next session continues at `004eb540` (the world
-//! reflection finish, `FINISH_WORLD_REFLECTIONS`); `004ed290`
-//! (`InitializeGreyTexture`) and `004ecef0` are called by address until then.
+//! Translated so far: the first 160 functions of the queue (`004e21b0` to
+//! `004eda60`). The next session continues at `004edb60` (the base
+//! constructor of `NiTPointerMap<TESObjectREFR *, WadingWaterData *>`);
+//! the last six functions are `004edb60`, `004edc90`, `004edcf0`, `004edd20`,
+//! `004edd50` and `004edd80` (map constructors and destructors; `004ed800`,
+//! `004eba20` and `004eba90` call `004edb60`, `004edc90`/`004edcf0` and
+//! `004edc60`/`004edcc0` by address until then).
+//! Fourth session (`004eb540` to `004eda60`): the world and sky reflection
+//! finish, the depth setup and render of a group, the clip-plane setup
+//! (`004ecef0`, with the D3DX math), the group constructor and destructor and
+//! the small accessors; the new callees are under "fourth session". Functions
+//! this unit calls in other places of the same file are now called directly
+//! (`REFLECTION_PLANE_SETUP`, `INITIALIZE_GREY_TEXTURE`, `FLOAT_SETTING_SET`
+//! and `GROUP_DESTRUCT` stay as constants for the earlier call sites, which
+//! reach them by address); the layouts of the NiCamera members `+0xdc`/`+0x100`
+//! are not what the earlier constant names (`CAMERA_PLANES_ADDRESS`,
+//! `CAMERA_FRUSTUM_ADDRESS`) say: going by the camera's size (0x114), `+0xdc`
+//! is probably the `NiFrustum` (0x1c bytes, near plane at `+0xf8`, the `float` at `+0xfc`
+//! the far/near ratio) and `+0x100` the viewport (not checked).
 //! Third session (`004e8000` to `004eb510`): the wading water (ripples,
 //! displacement simulation, wading camera), the three reflection setups and
 //! the interior finish; the layouts of `WadingWaterData` and the extra
@@ -761,6 +776,165 @@ const FORM_FLAG_0008: u32 = 0x0000_0008;
 const FORM_FLAG_0010: u32 = 0x0000_0010;
 const FORM_FLAG_0020: u32 = 0x0000_0020;
 const FORM_FLAG_0040: u32 = 0x0000_0040;
+const FORM_FLAG_0400: u32 = 0x0000_0400;
+
+// ---------------------------------------------------------------------------
+// Callees and globals of the functions from `004eb540` on (fourth session).
+
+/// `TESWater.cpp` lines of the allocation scopes the finish and setup
+/// functions open.
+const SCOPE_LINE_FINISH_WORLD: u32 = 0x10b8;
+const SCOPE_LINE_FINISH_SKY: u32 = 0x1114;
+const SCOPE_LINE_SETUP_DEPTH: u32 = 0x114f;
+const SCOPE_LINE_FINISH_DEPTH: u32 = 0x1209;
+const SCOPE_LINE_GREY_TEXTURE: u32 = 0x138a;
+
+/// `bUseWaterReflectionBlur:Water`, `iWaterBlurAmount:Water` and
+/// `fRefractionWaterPlaneBias:Water` (the `SettingT<INISettingCollection>`
+/// statics, named by the string their static initializers register).
+const SETTING_USE_WATER_REFLECTION_BLUR: u32 = 0x011c_7c48;
+const SETTING_WATER_BLUR_AMOUNT: u32 = 0x011c_7c1c;
+const SETTING_REFRACTION_WATER_PLANE_BIAS: u32 = 0x011c_7c10;
+/// The `float` the blur pass publishes for the image-space shaders:
+/// `iWaterBlurAmount + 1`.
+const WATER_BLUR_FACTOR: u32 = 0x0120_03c4;
+/// The image-space manager's effect `0x10 + iWaterBlurAmount` is the blur
+/// the world reflection is drawn through; its texture slot 2 takes the
+/// blur's rendered texture.
+const BLUR_EFFECT_BASE_INDEX: u32 = 0x10;
+const BLUR_EFFECT_TEXTURE_SLOT: u32 = 2;
+/// `ImageSpaceTexture::SetTexture(this, texture)` and
+/// `ImageSpaceTexture::~ImageSpaceTexture` (Xbox PDB names): the 0x10-byte
+/// holder `fn_004ebb70` constructs.
+const IMAGE_SPACE_TEXTURE_SET: u32 = 0x00ba_37a0;
+const IMAGE_SPACE_TEXTURE_DESTRUCT: u32 = 0x00ba_3a00;
+/// `ImageSpaceEffect::SetTexture(this, slot, texture holder, 0)` (Xbox PDB
+/// name).
+const IMAGE_SPACE_EFFECT_SET_TEXTURE: u32 = 0x00ba_3cb0;
+/// `(this, index)`: the address of element `index` of the array whose base
+/// is `[this + 4]` (no engine-map name; `fn_004ebbc0` reads through it).
+const ARRAY_ELEMENT_ADDRESS: u32 = 0x0087_7a30;
+/// The vtable of `ImageSpaceEffectParam` (0x24 bytes), and the constructors
+/// `(this, 0, 1)` and destructors of its two members at `+4` and `+0x14`
+/// (the next session translates the constructors; the destructors belong to
+/// no unit of ours).
+const IMAGE_SPACE_EFFECT_PARAM_VTABLE: u32 = 0x0102_31cc;
+const IMAGE_SPACE_EFFECT_PARAM_SIZE: u32 = 0x24;
+const EFFECT_PARAM_FIRST_MEMBER_CONSTRUCT: u32 = 0x004e_dc90;
+const EFFECT_PARAM_SECOND_MEMBER_CONSTRUCT: u32 = 0x004e_dcf0;
+const EFFECT_PARAM_FIRST_MEMBER_DESTRUCT: u32 = 0x004e_dc60;
+const EFFECT_PARAM_SECOND_MEMBER_DESTRUCT: u32 = 0x004e_dcc0;
+/// `TES + 0x64` (`pWaterSystem` by use: `fn_004ed3e0` gives the group to the
+/// system it returns).
+const TES_GET_WATER_SYSTEM: u32 = 0x0070_ec90;
+/// `NiTPointerList` constructor and destructor (`this`) the group
+/// constructor and destructor run on their list members.
+const LIST_CONSTRUCT: u32 = 0x0048_f200;
+const LIST_DESTRUCT: u32 = 0x004a_1a30;
+/// `NiPlane::NiPlane(this)` (Xbox PDB name).
+const NI_PLANE_DEFAULT_CONSTRUCT: u32 = 0x00a6_9940;
+/// `NiPoint3::Dot(this, other)` (Xbox PDB name; the result is in `ST0`).
+const NI_POINT3_DOT: u32 = 0x004b_6190;
+/// The CRT `memcpy(destination, source, count)` (cdecl; the engine map's
+/// `_memcpy`).
+const MEMORY_COPY: u32 = 0x00ec_44d0;
+/// The D3DX import thunks the plane setup calls: `D3DXMatrixMultiply(out,
+/// a, b)`, `D3DXMatrixInverse(out, determinant, matrix)` and
+/// `D3DXMatrixTranspose(out, matrix)` (engine map names), and the two
+/// thunks next to them that the decompiler names `D3DXPlaneNormalize(out,
+/// plane)` and `D3DXPlaneTransform(out, plane, matrix)` (checked against
+/// the arguments the code passes).
+const D3DX_MATRIX_MULTIPLY: u32 = 0x00ee_6de0;
+const D3DX_MATRIX_INVERSE: u32 = 0x00ee_6dda;
+const D3DX_MATRIX_TRANSPOSE: u32 = 0x00ee_6dd4;
+const D3DX_PLANE_NORMALIZE: u32 = 0x00ee_6dce;
+const D3DX_PLANE_TRANSFORM: u32 = 0x00ee_6dc8;
+/// The `NiPoint3` global `fn_004ed180` returns: the view matrix code takes
+/// its dot product with each axis (by use it is the eye position).
+const EYE_POSITION: u32 = 0x011f_474c;
+/// The offsets in the renderer of the two 4x4 matrices `fn_004ed1f0` and
+/// `fn_004ed210` return, and of the device object the depth pass sets
+/// states on.
+const RENDERER_VIEW_MATRIX_OFFSET: u32 = 0x980;
+const RENDERER_PROJECTION_MATRIX_OFFSET: u32 = 0x9c0;
+const RENDERER_DEVICE_OFFSET: u32 = 0x8b8;
+/// The render object's device (`render object + 0x288`) and its virtual at
+/// `+0xdc`, called as `(device, index, plane)` with `ECX` holding the
+/// device's vtable pointer (going by its arguments it is Direct3D 9's
+/// `SetClipPlane`, a stdcall method that ignores `ECX`).
+const RENDER_OBJECT_DEVICE_OFFSET: u32 = 0x288;
+const DEVICE_SET_CLIP_PLANE_VIRTUAL: u32 = 0xdc;
+/// The renderer device's virtual at `+0x68`, called as `(state, value, 0,
+/// 0)` (`00b98070` and `00b98380` call it with the states `0x34` and
+/// `0xa8`).
+const DEVICE_SET_STATE_VIRTUAL: u32 = 0x68;
+/// The state the depth pass resets once it has drawn.
+const DEPTH_PASS_RESET_STATE: u32 = 0x98;
+/// The render-state counters: an array of words at `0x011ff9d8`; entries 9,
+/// 0xf and 0x10 are `COUNTER_011FF9FC`, `COUNTER_011FFA14` and
+/// `COUNTER_011FFA18`.
+const RENDER_STATE_COUNTERS: u32 = 0x011f_f9d8;
+const COUNTER_011FF9FC: u32 = 0x011f_f9fc;
+const COUNTER_011FFA18: u32 = 0x011f_fa18;
+/// `cdecl(value, count)`: sets state `0x34` of the device when its counter
+/// is clear, then adds `count` to the counter; the same for state `0xa8`.
+const COUNTED_STATE_34: u32 = 0x00b9_8070;
+const COUNTED_STATE_A8: u32 = 0x00b9_8380;
+/// `cdecl(0, 0, 0, 1)` and `cdecl(0, 1)`: render-state calls of the depth
+/// pass (`bsrenderstate_xenon.cpp`; no engine-map names).
+const RENDER_STATE_980C0: u32 = 0x00b9_80c0;
+const RENDER_STATE_98230: u32 = 0x00b9_8230;
+/// Four floats (the group's reflect plane) and two floats (a `NiPoint2`)
+/// the depth pass publishes for the shaders.
+const DEPTH_PLANE_SHADER_CONSTANT: u32 = 0x011f_9604;
+const DEPTH_RANGE_SHADER_CONSTANT: u32 = 0x011f_9614;
+/// Camera accessors the depth cameras are copied from the viewer with (no
+/// engine-map names): `(this, &matrix)` copies nine words to `this + 0x34`;
+/// `(this, scale)` stores the scale at `this + 0x64`; `NODE_SCALE_SOURCE`
+/// is the `float` at `+0x98` of the viewer; the `float` at `+0xfc` is read
+/// from the viewer and stored into the camera (a camera member next to the
+/// frustum).
+const NODE_SET_LOCAL_ROTATE: u32 = 0x0043_fa80;
+const NODE_SET_LOCAL_SCALE: u32 = 0x0044_0490;
+const NODE_SCALE_SOURCE: u32 = 0x008d_01e0;
+const CAMERA_FLOAT_FC_READ: u32 = 0x0064_47f0;
+const CAMERA_FLOAT_FC_WRITE: u32 = 0x0050_7700;
+/// The `float`s at `+0xa8` and `+0xa4` of a water form (no engine-map
+/// names: folded getters), which `fn_004ec800` publishes as a `NiPoint2`
+/// (the one at `+0xa4` first).
+const WATER_FORM_FLOAT_A8: u32 = 0x009b_88a0;
+const WATER_FORM_FLOAT_A4: u32 = 0x0081_2870;
+/// The reference value of the depth pass's stencil state.
+const DEPTH_STENCIL_REFERENCE: u32 = 0xff;
+/// `0x011ca144`: the list head `fn_004ec7b0` returns, a `{item, next}` node
+/// chain the depth setup walks for forms with the bit `0x40000000`.
+const EXTRA_DEPTH_OBJECT_LIST: u32 = 0x011c_a144;
+/// The `float` `0.5` the grey texture is cleared to.
+const GREY_VALUE: u32 = 0x0101_6248;
+/// The `double` `fn_004ed230` scales its byte with.
+const COLOR_STEP_SCALE: u32 = 0x0102_31e8;
+/// `cdecl(destination, value, count)`: a wrapper of the CRT `memset`.
+const MEMORY_SET: u32 = 0x0040_3d30;
+/// Stores its float argument at `this + 4` when `this` is not null and
+/// returns `this` (the engine map has no name; `fn_004ed780` calls it).
+const SETTING_STORE_FLOAT: u32 = 0x004d_e290;
+/// The three pointer maps the water system holds, by what they map:
+/// `NiTPointerMap<TESObjectREFR *, TESObjectREFR *>` (the `ReflectionRefMap`
+/// and `DepthRefMap` type), `NiTPointerMap<TESWaterForm *, bool>`
+/// (`WaterTypeUpdateMap`) and `NiTPointerMap<TESObjectREFR *,
+/// WadingWaterData *>` (`WadingWaterMap`): the vtables of the derived
+/// classes and of the `NiTMapBase` instances `fn_004ed960` and `fn_004eda60`
+/// construct, the base constructor of the third (`004edb60`, next session)
+/// and the three base destructor bodies.
+const REFERENCE_MAP_VTABLE: u32 = 0x0102_31f4;
+const WATER_FORM_MAP_VTABLE: u32 = 0x0102_3214;
+const WADING_MAP_VTABLE: u32 = 0x0102_3234;
+const REFERENCE_MAP_BASE_VTABLE: u32 = 0x0102_3254;
+const WATER_FORM_MAP_BASE_VTABLE: u32 = 0x0102_3274;
+const WADING_MAP_BASE_CONSTRUCT: u32 = 0x004e_db60;
+const REFERENCE_MAP_DESTRUCT: u32 = 0x004e_d9d0;
+const WATER_FORM_MAP_DESTRUCT: u32 = 0x004e_dad0;
+const WADING_MAP_DESTRUCT: u32 = 0x004e_dbd0;
 
 // ---------------------------------------------------------------------------
 // Globals.
@@ -6487,6 +6661,1359 @@ pub fn fn_004eb510(e: &mut Engine, amount: u32) {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Helpers of the functions from `004eb540` on (fourth session).
+
+/// Runs `body` between the allocation scope guard of `TESWater.cpp` line
+/// `line` (`00404eb0(scope, 0x1d, 1, file name, line)` and `00404ee0`); the
+/// guard is a four-byte object on the game's stack.
+fn in_allocation_scope(e: &mut Engine, line: u32, body: impl FnOnce(&mut Engine)) {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            ALLOCATION_SCOPE_CONSTRUCT,
+            &args![scope, 0x1du32, 1u32, TESWATER_SOURCE_PATH, line],
+        );
+        body(e);
+        e.call(ALLOCATION_SCOPE_DESTRUCT, &args![scope]);
+    });
+}
+
+/// `BSTextureManager::CreateRenderedTexture(manager, renderer, kind, 0, 0,
+/// 0)` (`00b6e110`): the game fetches the renderer, then the texture
+/// manager.
+fn create_rendered_texture(e: &mut Engine, kind: u32) -> u32 {
+    let renderer = e.call(RENDERER, &[]).u32();
+    let manager = e.call(TEXTURE_MANAGER, &[]).u32();
+    e.call(
+        CREATE_RENDERED_TEXTURE,
+        &args![manager, renderer, kind, 0u32, 0u32, 0u32],
+    )
+    .u32()
+}
+
+/// Reads the renderer's clear colour into `original` (0x10 bytes) and sets
+/// the same colour with alpha 0, built in `transparent` (0x10 bytes).
+fn set_transparent_clear_color(e: &mut Engine, original: u32, transparent: u32) {
+    e.call(
+        NI_POINT4_CONSTRUCT,
+        &args![original, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+    );
+    let renderer = e.call(RENDERER, &[]).u32();
+    e.vcall(renderer, RENDERER_GET_CLEAR_COLOR, &args![original]);
+    copy_words(e, original, transparent, 4);
+    e.mem.set_f32(transparent + 12, 0.0);
+    let renderer = e.call(RENDERER, &[]).u32();
+    e.vcall(renderer, RENDERER_SET_CLEAR_COLOR, &args![transparent]);
+}
+
+/// Gives the clear colour at `original` back to the renderer.
+fn restore_clear_color(e: &mut Engine, original: u32) {
+    let renderer = e.call(RENDERER, &[]).u32();
+    e.vcall(renderer, RENDERER_SET_CLEAR_COLOR, &args![original]);
+}
+
+/// Stops the offscreen render of the rendered texture in `map_slot` and
+/// makes the result render-target mode 7 (`00b6b8d0(7, stopped)`).
+fn stop_into_render_target(e: &mut Engine, map_slot: u32) {
+    let texture = pointer_in_slot(e, map_slot);
+    let stopped = e.call(RENDERED_TEXTURE_STOP, &args![texture]).u32();
+    e.call(RENDER_TARGET_SET, &args![7u32, stopped]);
+}
+
+/// Hands the frustum of the camera in `camera_slot` to the render object
+/// (`004a0dd0(object, 004a0d10(camera))`).
+fn give_camera_data_to_render_object(e: &mut Engine, camera_slot: u32) {
+    let camera = pointer_in_slot(e, camera_slot);
+    let frustum = e.call(CAMERA_FRUSTUM_ADDRESS, &args![camera]).u32();
+    let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+    e.call(RENDER_OBJECT_SET_CAMERA_DATA, &args![object, frustum]);
+}
+
+/// `MTRenderingSystem::SetThreadStage`-like `00ba3130(system, 1, stage)`.
+fn set_thread_stage_one(e: &mut Engine, stage: i32) {
+    let system = fn_004ea970(e);
+    e.call(MT_SET_THREAD_STAGE_ONE, &args![system, 1u32, stage]);
+}
+
+/// Hands the reflection plane `plane` to the plane setup `fn_004ecef0`: its
+/// normal and `last` as the fourth word (the game reads the normal's z, y
+/// and x in that order).
+fn submit_reflection_plane(e: &mut Engine, this: u32, plane: u32, last: f32) {
+    let normal_z = {
+        let normal = plane_normal(e, plane);
+        e.mem.f32(normal + 8)
+    };
+    let normal_y = {
+        let normal = plane_normal(e, plane);
+        e.mem.f32(normal + 4)
+    };
+    let normal_x = {
+        let normal = plane_normal(e, plane);
+        e.mem.f32(normal)
+    };
+    e.with_stack(0x10, |e, vector| {
+        let vector = vector.addr();
+        e.call(
+            NI_POINT4_CONSTRUCT,
+            &args![vector, normal_x, normal_y, normal_z, last],
+        );
+        let words: Vec<f32> = (0..4).map(|i| e.mem.f32(vector + 4 * i)).collect();
+        fn_004ecef0(e, this, words[0], words[1], words[2], words[3], 0);
+    });
+}
+
+/// What the world and the sky reflection finish do once the render target
+/// is set: the world-space water plane (`plane`, 0x10 bytes, with `normal`
+/// and `point`, 0xc bytes each, as scratch), the camera to the render
+/// object, the plane to `fn_004ecef0` (its normal and the negated
+/// constant), the accumulated scene drawn with the sorter, and the render
+/// state reset.
+fn draw_reflection_pass(
+    e: &mut Engine,
+    this: u32,
+    camera_slot: u32,
+    sorter_slot: u32,
+    scratch: u32,
+) {
+    let plane = scratch;
+    build_world_water_plane(e, plane, scratch + 0x10, scratch + 0x1c);
+    let camera = pointer_in_slot(e, camera_slot);
+    let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+    fn_004e9bb0(e, object, camera);
+    let constant = plane_constant(e, plane);
+    submit_reflection_plane(e, this, plane, -constant);
+    e.call(
+        RENDER_STATE_SET,
+        &args![1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    let sorter = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(RENDER_ACCUMULATED_SCENE, &args![camera, sorter, 0u32]);
+    fn_004eb510(e, 0);
+    e.call(RENDER_TARGET_RESET, &[]);
+}
+
+/// The blur the world reflection is drawn through (`bUseWaterReflectionBlur`):
+/// a rendered texture of kind `0x16` goes into slot 2 of the image-space
+/// effect `0x10 + iWaterBlurAmount`, the effect is rendered with the world
+/// reflection map as its input, and the texture is given back. `scratch`
+/// (0x34 bytes) holds the `ImageSpaceTexture` holder and the
+/// `ImageSpaceEffectParam`.
+fn blur_world_reflection(e: &mut Engine, scratch: u32) {
+    let texture_holder = scratch;
+    let param = scratch + 0x10;
+    let blur_texture = create_rendered_texture(e, 0x16);
+    fn_004ebb70(e, texture_holder);
+    e.call(
+        IMAGE_SPACE_TEXTURE_SET,
+        &args![texture_holder, blur_texture],
+    );
+    image_space_effect_param_image_space_effect_param(e, param);
+    let amount = setting_int(e, SETTING_WATER_BLUR_AMOUNT);
+    let one = e.global::<f64>(ONE);
+    e.set_global(WATER_BLUR_FACTOR, (amount as f64 + one) as f32);
+    let index = setting_int(e, SETTING_WATER_BLUR_AMOUNT).wrapping_add(BLUR_EFFECT_BASE_INDEX);
+    let manager = fn_004e3270(e);
+    let effect = fn_004ebbc0(e, manager, index);
+    e.call(
+        IMAGE_SPACE_EFFECT_SET_TEXTURE,
+        &args![effect, BLUR_EFFECT_TEXTURE_SLOT, texture_holder, 0u32],
+    );
+    let texture_a = pointer_in_slot(e, WORLD_REFLECTION_MAP);
+    let texture_b = pointer_in_slot(e, WORLD_REFLECTION_MAP);
+    let renderer = e.call(RENDERER, &[]).u32();
+    let manager = fn_004e3270(e);
+    e.call(
+        IMAGE_SPACE_RENDER_DISPLACEMENT,
+        &args![manager, index, renderer, texture_b, texture_a, param, 1u32],
+    );
+    let texture_manager = e.call(TEXTURE_MANAGER, &[]).u32();
+    e.call(
+        RETURN_RENDERED_TEXTURE,
+        &args![texture_manager, blur_texture],
+    );
+    fn_004eba90(e, param);
+    e.call(IMAGE_SPACE_TEXTURE_DESTRUCT, &args![texture_holder]);
+}
+
+/// If the 3D object of `reference` exists and the system's `DepthRefMap`
+/// has no entry for the reference: adds the 3D object to `list` and maps
+/// the reference to itself. The game keeps the reference in a local it
+/// passes to `GetAt` (which fills it when it finds an entry) and reads it
+/// again for `SetAt`.
+fn add_depth_object(e: &mut Engine, this: Ptr<TESWaterSystem>, list: u32, reference: u32) {
+    if reference_node(e, reference) == 0 {
+        return;
+    }
+    let map = address_of(this, TESWaterSystem::DepthRefMap);
+    e.with_stack(4, |e, local| {
+        let local = local.addr();
+        e.mem.set_u32(local, reference);
+        let key = e.mem.u32(local);
+        if e.call(WADING_MAP_GET, &args![map, key, local]).bool() {
+            return;
+        }
+        let node = reference_node(e, reference);
+        list_add_head(e, list, node);
+        let key = e.mem.u32(local);
+        let value = e.mem.u32(local);
+        e.call(MAP_SET_AT, &args![map, key, value]);
+    });
+}
+
+/// What `fn_004ebef0` remembers while it walks the water references of a
+/// group: the grid cells and the actors of the group are added only once.
+#[derive(Default)]
+struct DepthSetupDone {
+    grid_cells: bool,
+    actors: bool,
+}
+
+/// The cell nodes of the loaded grid (four children of every loaded cell)
+/// become static depth objects of the group.
+fn add_grid_depth_objects(e: &mut Engine, group: Ptr<PlaceableWaterGroup>) {
+    let static_objects = address_of(group, PlaceableWaterGroup::StaticDepthObjects);
+    let mut x = 0u32;
+    while x < setting_int(e, SETTING_GRID_SIZE) {
+        let mut y = 0u32;
+        while y < setting_int(e, SETTING_GRID_SIZE) {
+            let tes = e.global::<u32>(TES_POINTER);
+            let slot = e.call(TES_GRID_CELL_SLOT, &args![tes, x, y]).u32();
+            let cell = e.mem.u32(slot);
+            if cell != 0 {
+                for index in 0..4u32 {
+                    let child = e.call(CELL_NODE_CHILD, &args![cell, index]).u32();
+                    list_add_head(e, static_objects, child);
+                }
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+/// The actors in the water of the group become dynamic depth objects (the
+/// player only when `fn_004eaf60` allows it).
+fn add_actor_depth_objects(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+) {
+    let actors = address_of(group, PlaceableWaterGroup::ActorsInWaterList);
+    let dynamic_objects = address_of(group, PlaceableWaterGroup::DynamicDepthObjects);
+    let mut position = pointer_in_slot(e, actors);
+    while position != 0 {
+        let next = e.call(LIST_NEXT_POSITION, &args![actors, position]).u32();
+        let slot = e.call(LIST_ITEM_SLOT, &args![actors, position]).u32();
+        let actor = e.mem.u32(slot);
+        let player = e.global::<u32>(PLAYER_CHARACTER);
+        if actor != player || fn_004eaf60(e, player) != 0 {
+            add_depth_object(e, this, dynamic_objects, actor);
+        }
+        position = next;
+    }
+}
+
+/// The objects reflected in the water reference (`ExtraDataList::
+/// GetReflectedRefs`) whose record has bit 2 set become static depth
+/// objects.
+fn add_reflected_depth_objects(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+    reference: u32,
+) {
+    let static_objects = address_of(group, PlaceableWaterGroup::StaticDepthObjects);
+    let extra_data = e.call(REFERENCE_EXTRA_DATA_LIST, &args![reference]).u32();
+    let mut node = e
+        .call(EXTRA_DATA_LIST_GET_REFLECTED_REFS, &args![extra_data])
+        .u32();
+    while node != 0 && !e.call(WORDS_ARE_ZERO, &args![node]).bool() {
+        let record = {
+            let slot = e.call(ADDRESS_OF_THIS, &args![node]).u32();
+            e.mem.u32(slot)
+        };
+        // The record: the reflected reference, then a flag word.
+        if e.mem.u32(record + 4) & 2 != 0 {
+            let record = {
+                let slot = e.call(ADDRESS_OF_THIS, &args![node]).u32();
+                e.mem.u32(slot)
+            };
+            let reflected = e.mem.u32(record);
+            add_depth_object(e, this, static_objects, reflected);
+        }
+        node = e.call(NODE_NEXT, &args![node]).u32();
+    }
+}
+
+/// The depth setup of one water reference of a group (`fn_004ebef0`).
+fn setup_depth_for_reference(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+    reference: u32,
+    done: &mut DepthSetupDone,
+) {
+    if reference == 0 || e.call(REFERENCE_PARENT_CELL, &args![reference]).u32() == 0 {
+        return;
+    }
+    let cell = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+    if !e.call(CELL_BYTE_IS_SIX, &args![cell]).bool() {
+        return;
+    }
+    let geometry = fn_004e8030(e, this, reference);
+    let property = if geometry != 0 {
+        water_shader_property(e, geometry)
+    } else {
+        Ptr::new(0)
+    };
+    if property.is_null() || !fn_004e62e0(e, this.addr(), reference, viewer) {
+        return;
+    }
+    e.call(
+        NI_POINTER_ASSIGN_FROM,
+        &args![
+            address_of(property, WaterShaderProperty::spDepthMap),
+            DEPTH_MAP
+        ],
+    );
+    let form = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    if !fn_004e32e0(e, form) {
+        return;
+    }
+    if form != 0 && fn_004e32a0(e, form) && !done.grid_cells {
+        done.grid_cells = true;
+        add_grid_depth_objects(e, group);
+    }
+    if form != 0 && fn_004ec7e0(e, form) && !done.actors {
+        done.actors = true;
+        add_actor_depth_objects(e, this, group);
+    }
+    add_reflected_depth_objects(e, this, group, reference);
+    // The objects in the water: the game takes the next position from the
+    // group's `PlaceableWaterList` (the node's `next` does not depend on
+    // the list it asks).
+    let objects = address_of(group, PlaceableWaterGroup::ObjectInWaterList);
+    let references = address_of(group, PlaceableWaterGroup::PlaceableWaterList);
+    let dynamic_objects = address_of(group, PlaceableWaterGroup::DynamicDepthObjects);
+    let mut position = pointer_in_slot(e, objects);
+    while position != 0 {
+        let next = e
+            .call(LIST_NEXT_POSITION, &args![references, position])
+            .u32();
+        let slot = e.call(LIST_ITEM_SLOT, &args![objects, position]).u32();
+        let object = e.mem.u32(slot);
+        add_depth_object(e, this, dynamic_objects, object);
+        position = next;
+    }
+    if form != 0 && e.call(FORM_FLAG_TEST_40000000, &args![form]).bool() {
+        let static_objects = address_of(group, PlaceableWaterGroup::StaticDepthObjects);
+        let mut node = fn_004ec7b0(e);
+        while node != 0 && !e.call(WORDS_ARE_ZERO, &args![node]).bool() {
+            let object = {
+                let slot = e.call(ADDRESS_OF_THIS, &args![node]).u32();
+                e.mem.u32(slot)
+            };
+            if object != 0 {
+                add_depth_object(e, this, static_objects, object);
+            }
+            node = e.call(NODE_NEXT, &args![node]).u32();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Translated functions, fourth session (`004eb540` on).
+
+// Translated from 004eb540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The world reflection finish of `UpdatePlaceableWater` (no Xbox PDB name;
+/// the exception-unwinding frame is not translated). Within an allocation
+/// scope of `TESWater.cpp` line `0x10b8`, when `bUseWaterShader` is on and
+/// the world reflection camera exists: clears the clear colour's alpha,
+/// makes the world reflection texture (kind 9) when there is none, stops the
+/// offscreen render of it into render-target mode 7, gives the camera to the
+/// render object and sets the world thread stage plus one. The distant
+/// terrain is toggled around the draw when it is ready (and
+/// `bForceHighDetailReflections` is off) outside interiors; the player's 3D
+/// object is shown again when the world setup had culled it. The scene is
+/// drawn through the water plane (`fn_004ecef0`), the clear colour restored
+/// and the camera dropped; with `bUseWaterReflectionBlur` the reflection is
+/// then blurred by the image-space effect `0x10 + iWaterBlurAmount`.
+pub fn fn_004eb540(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    in_allocation_scope(e, SCOPE_LINE_FINISH_WORLD, |e| {
+        finish_world_reflections(e, this);
+    });
+}
+
+/// The body of `fn_004eb540`.
+fn finish_world_reflections(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || pointer_in_slot(e, WORLD_REFLECTION_CAMERA) == 0
+    {
+        return;
+    }
+    e.with_stack(0x60 + IMAGE_SPACE_EFFECT_PARAM_SIZE, |e, frame| {
+        let frame = frame.addr();
+        let original = frame;
+        set_transparent_clear_color(e, original, frame + 0x10);
+        if pointer_in_slot(e, WORLD_REFLECTION_MAP) == 0 {
+            let texture = create_rendered_texture(e, 9);
+            assign_slot(e, WORLD_REFLECTION_MAP, texture);
+        }
+        let terrain_ready = e.call(TERRAIN_READY, &[]).bool()
+            && !setting_flag(e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS);
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ONE, &[]);
+        }
+        stop_into_render_target(e, WORLD_REFLECTION_MAP);
+        give_camera_data_to_render_object(e, WORLD_REFLECTION_CAMERA);
+        let stage = e
+            .global::<i32>(WORLD_REFLECTION_THREAD_STAGE)
+            .wrapping_add(1);
+        set_thread_stage_one(e, stage);
+        if e.get(this, TESWaterSystem::bCull3rdPerson) {
+            let player = e.global::<u32>(PLAYER_CHARACTER);
+            if fn_004eaf60(e, player) != 0 {
+                let node = reference_node(e, player);
+                e.call(NODE_SET_CULLED, &args![node, 0u32]);
+            }
+        }
+        draw_reflection_pass(
+            e,
+            this.addr(),
+            WORLD_REFLECTION_CAMERA,
+            WORLD_REFLECTION_SORTER,
+            frame + 0x20,
+        );
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ZERO, &[]);
+        }
+        restore_clear_color(e, original);
+        assign_slot(e, WORLD_REFLECTION_CAMERA, 0);
+        if setting_flag(e, SETTING_USE_WATER_REFLECTION_BLUR) {
+            blur_world_reflection(e, frame + 0x50);
+        }
+    });
+}
+
+// Translated from 004eba20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceEffectParam::ImageSpaceEffectParam` (Xbox PDB): sets the
+/// vtable and constructs its two members (at `+4` and `+0x14`) with `(0, 1)`.
+/// Returns `this`. The exception-unwinding frame is not translated.
+pub fn image_space_effect_param_image_space_effect_param(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u32(this, IMAGE_SPACE_EFFECT_PARAM_VTABLE);
+    e.call(
+        EFFECT_PARAM_FIRST_MEMBER_CONSTRUCT,
+        &args![this + 4, 0u32, 1u32],
+    );
+    e.call(
+        EFFECT_PARAM_SECOND_MEMBER_CONSTRUCT,
+        &args![this + 0x14, 0u32, 1u32],
+    );
+    this
+}
+
+// Translated from 004eba90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `ImageSpaceEffectParam` (the engine map has no
+/// name): resets the vtable and destroys the second, then the first member.
+pub fn fn_004eba90(e: &mut Engine, this: u32) {
+    e.mem.set_u32(this, IMAGE_SPACE_EFFECT_PARAM_VTABLE);
+    fn_004ebb50(e, this + 0x14);
+    fn_004ebb30(e, this + 4);
+}
+
+// Translated from 004ebb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ImageSpaceEffectParam::_scalar_deleting_destructor_` (Xbox PDB): runs the
+/// destructor body and, when bit 0 of `flags` is set, frees the object.
+/// Returns `this`.
+pub fn image_space_effect_param_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    fn_004eba90(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004ebb30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the first member (at `+4`) of an `ImageSpaceEffectParam`: calls
+/// its destructor `004edc60` (the engine map has no name here).
+pub fn fn_004ebb30(e: &mut Engine, this: u32) {
+    e.call(EFFECT_PARAM_FIRST_MEMBER_DESTRUCT, &args![this]);
+}
+
+// Translated from 004ebb50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys the second member (at `+0x14`) of an `ImageSpaceEffectParam`:
+/// calls its destructor `004edcc0`.
+pub fn fn_004ebb50(e: &mut Engine, this: u32) {
+    e.call(EFFECT_PARAM_SECOND_MEMBER_DESTRUCT, &args![this]);
+}
+
+// Translated from 004ebb70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the 0x10-byte `ImageSpaceTexture` holder (the engine map has no
+/// name): three flag bytes cleared, the `NiPointer` at `+4` set to null
+/// through `00633c90`, and the words at `+8` and `+0xc` cleared. Returns
+/// `this`.
+pub fn fn_004ebb70(e: &mut Engine, this: u32) -> u32 {
+    e.mem.set_u8(this, 0);
+    e.mem.set_u8(this + 1, 0);
+    e.mem.set_u8(this + 2, 0);
+    e.call(POINTER_TEMP_CONSTRUCT, &args![this + 4, 0u32]);
+    e.mem.set_u32(this + 8, 0);
+    e.mem.set_u32(this + 0xc, 0);
+    this
+}
+
+// Translated from 004ebbc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Element `index` of the pointer array at `[this + 8]` (the engine map
+/// names the body `CDocManager::GetNextDocTemplate`, a folded library
+/// name): the pointer stored there. The image-space manager's effects are
+/// read this way.
+pub fn fn_004ebbc0(e: &mut Engine, this: u32, index: u32) -> u32 {
+    let slot = e.call(ARRAY_ELEMENT_ADDRESS, &args![this + 4, index]).u32();
+    e.mem.u32(slot)
+}
+
+// Translated from 004ebbe0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The sky reflection finish of `UpdatePlaceableWater` (no Xbox PDB name;
+/// the exception-unwinding frame is not translated): `fn_004eb540` for the
+/// sky camera, map and sorter, within the allocation scope of `TESWater.cpp`
+/// line `0x1114`, with the sky thread stage plus one, the distant terrain
+/// toggled whenever it is ready outside interiors, without the player
+/// culling and without the blur.
+pub fn fn_004ebbe0(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    in_allocation_scope(e, SCOPE_LINE_FINISH_SKY, |e| {
+        finish_sky_reflections(e, this);
+    });
+}
+
+/// The body of `fn_004ebbe0`.
+fn finish_sky_reflections(e: &mut Engine, this: Ptr<TESWaterSystem>) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || pointer_in_slot(e, SKY_REFLECTION_CAMERA) == 0 {
+        return;
+    }
+    e.with_stack(0x50, |e, frame| {
+        let frame = frame.addr();
+        let original = frame;
+        set_transparent_clear_color(e, original, frame + 0x10);
+        if pointer_in_slot(e, SKY_REFLECTION_MAP) == 0 {
+            let texture = create_rendered_texture(e, 9);
+            assign_slot(e, SKY_REFLECTION_MAP, texture);
+        }
+        let terrain_ready = e.call(TERRAIN_READY, &[]).bool();
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ONE, &[]);
+        }
+        stop_into_render_target(e, SKY_REFLECTION_MAP);
+        give_camera_data_to_render_object(e, SKY_REFLECTION_CAMERA);
+        let stage = e.global::<i32>(SKY_REFLECTION_THREAD_STAGE).wrapping_add(1);
+        set_thread_stage_one(e, stage);
+        draw_reflection_pass(
+            e,
+            this.addr(),
+            SKY_REFLECTION_CAMERA,
+            SKY_REFLECTION_SORTER,
+            frame + 0x20,
+        );
+        if !in_interior(e) && terrain_ready {
+            e.call(TERRAIN_TOGGLE_ZERO, &[]);
+        }
+        restore_clear_color(e, original);
+        assign_slot(e, SKY_REFLECTION_CAMERA, 0);
+    });
+}
+
+// Translated from 004ebef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The depth setup of a water group (`SETUP_GROUP_DEPTH`; no Xbox PDB name;
+/// the exception-unwinding frame is not translated). Within an allocation
+/// scope of `TESWater.cpp` line `0x114f`, when `bUseWaterShader` is on and
+/// there is a `viewer`: makes the group's depth camera from the viewer's
+/// world translate, rotation, scale, the `float` at `+0xfc` and frustum,
+/// updates it, makes the depth accumulator when the group has none and
+/// prepares it, makes the shared depth map (kind `0x11`) when there is none,
+/// and fills the group's static and dynamic depth object lists: for every
+/// water reference of the group in range, the reference's shader property
+/// takes the depth map and, by the flags of its base form, the loaded grid
+/// cells (once), the actors in the water (once), the reflected references,
+/// the objects in the water and the list at `0x011ca144` are added unless
+/// the system's `DepthRefMap` already has them. The task goes to the
+/// multithreaded renderer with the group's depth thread stage plus one.
+pub fn fn_004ebef0(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+) {
+    in_allocation_scope(e, SCOPE_LINE_SETUP_DEPTH, |e| {
+        setup_group_depth(e, this, viewer, group);
+    });
+}
+
+/// The body of `fn_004ebef0`.
+fn setup_group_depth(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || viewer == 0 {
+        return;
+    }
+    let camera_slot = address_of(group, PlaceableWaterGroup::spDepthCamera);
+    let sorter_slot = address_of(group, PlaceableWaterGroup::spDepthSorter);
+    assign_new_camera(e, camera_slot);
+    let translate = e.call(NODE_WORLD_TRANSLATE, &args![viewer]).u32();
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(NODE_SET_LOCAL_TRANSLATE, &args![camera, translate]);
+    let rotate = e.call(NODE_WORLD_ROTATE, &args![viewer]).u32();
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(NODE_SET_LOCAL_ROTATE, &args![camera, rotate]);
+    let scale = e.call(NODE_SCALE_SOURCE, &args![viewer]).f32();
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(NODE_SET_LOCAL_SCALE, &args![camera, scale]);
+    let far_value = e.call(CAMERA_FLOAT_FC_READ, &args![viewer]).f32();
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(CAMERA_FLOAT_FC_WRITE, &args![camera, far_value]);
+    let frustum = e.call(CAMERA_PLANES_ADDRESS, &args![viewer]).u32();
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, frustum]);
+    e.with_stack(0x10, |e, update_data| {
+        e.call(
+            UPDATE_DATA_CONSTRUCT,
+            &args![update_data, 0.0f32, 0u32, 0u32],
+        );
+        let camera = pointer_in_slot(e, camera_slot);
+        e.call(NODE_UPDATE, &args![camera, update_data]);
+    });
+    if pointer_in_slot(e, sorter_slot) == 0 {
+        assign_new_accumulator(e, sorter_slot);
+    }
+    let table_entry = e.call(RENDER_TABLE_ENTRY, &args![0u32]).u32();
+    let sorter = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_WORD_194, &args![sorter, table_entry]);
+    let sorter = pointer_in_slot(e, sorter_slot);
+    fn_004ec7c0(e, sorter, 1);
+    let sorter = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    e.vcall(sorter, ACCUMULATOR_SET_CAMERA_VIRTUAL, &args![camera]);
+    let sorter = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_ACCUMULATE, &args![sorter, 1u32]);
+    if pointer_in_slot(e, DEPTH_MAP) == 0 {
+        let texture = create_rendered_texture(e, 0x11);
+        assign_slot(e, DEPTH_MAP, texture);
+    }
+
+    let references = address_of(group, PlaceableWaterGroup::PlaceableWaterList);
+    let mut done = DepthSetupDone::default();
+    e.with_stack(4, |e, cursor| {
+        let cursor = cursor.addr();
+        let head = pointer_in_slot(e, references);
+        e.mem.set_u32(cursor, head);
+        while e.mem.u32(cursor) != 0 {
+            let slot = e.call(LIST_NEXT_ITEM, &args![references, cursor]).u32();
+            let reference = e.mem.u32(slot);
+            setup_depth_for_reference(e, this, viewer, group, reference, &mut done);
+        }
+    });
+
+    let stage = e.get(group, PlaceableWaterGroup::iDepthThreadStage);
+    let sorter = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    let system = fn_004ea970(e);
+    e.call(
+        MT_ADD_ACCUM_TASK,
+        &args![
+            system,
+            camera,
+            0u32,
+            0u32,
+            address_of(group, PlaceableWaterGroup::StaticDepthObjects),
+            address_of(group, PlaceableWaterGroup::DynamicDepthObjects),
+            sorter,
+            0u32,
+            stage.wrapping_add(1),
+            0u32
+        ],
+    );
+    let stage = e.get(group, PlaceableWaterGroup::iDepthThreadStage);
+    let system = fn_004ea970(e);
+    e.call(
+        MT_SET_THREAD_STAGE,
+        &args![system, 0u32, stage.wrapping_add(1)],
+    );
+}
+
+// Translated from 004ec7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the list head at `0x011ca144`.
+pub fn fn_004ec7b0(_e: &mut Engine) -> u32 {
+    EXTRA_DEPTH_OBJECT_LIST
+}
+
+// Translated from 004ec7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` at `this + 0x165` (of a `BSShaderAccumulator`; the byte
+/// next to the one `fn_004ea860` sets).
+pub fn fn_004ec7c0(e: &mut Engine, this: u32, value: u8) {
+    e.mem.set_u8(this + 0x165, value);
+}
+
+// Translated from 004ec7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit `0x400` is set in the form flags.
+pub fn fn_004ec7e0(e: &mut Engine, form: u32) -> bool {
+    form_flag(e, form, FORM_FLAG_0400)
+}
+
+// Translated from 004ec800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The depth render of a water group (`AFTER_GROUP_DEPTH`; no Xbox PDB
+/// name; the exception-unwinding frame is not translated). Within an
+/// allocation scope of `TESWater.cpp` line `0x1209`, when `bUseWaterShader`
+/// is on and the group has a depth camera: hands the camera to the render
+/// object, sets the group's depth thread stage plus one, publishes the water
+/// form's two floats (`+0xa4`, `+0xa8`) and the group's reflect plane for the
+/// shaders (`0x011f9604`, `0x011f9614`), sets the depth accumulator's word
+/// `+0x19c` to `0xe` and the render states of the pass (stencil reference
+/// `0xff`, mask `stencil_mask`), sends the refract plane lowered by
+/// `fRefractionWaterPlaneBias` through `fn_004ecef0`, draws the group's
+/// accumulated scene and resets the states and the camera.
+pub fn fn_004ec800(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+    stencil_mask: u16,
+) {
+    in_allocation_scope(e, SCOPE_LINE_FINISH_DEPTH, |e| {
+        finish_group_depth(e, this, group, stencil_mask);
+    });
+}
+
+/// The body of `fn_004ec800`.
+fn finish_group_depth(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    group: Ptr<PlaceableWaterGroup>,
+    stencil_mask: u16,
+) {
+    let camera_slot = address_of(group, PlaceableWaterGroup::spDepthCamera);
+    let sorter_slot = address_of(group, PlaceableWaterGroup::spDepthSorter);
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || pointer_in_slot(e, camera_slot) == 0 {
+        return;
+    }
+    give_camera_data_to_render_object(e, camera_slot);
+    let stage = e.get(group, PlaceableWaterGroup::iDepthThreadStage);
+    set_thread_stage_one(e, stage.wrapping_add(1));
+    let camera = pointer_in_slot(e, camera_slot);
+    let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+    fn_004e9bb0(e, object, camera);
+    let water_type = e.get(group, PlaceableWaterGroup::pWaterType).addr();
+    let second = e.call(WATER_FORM_FLOAT_A8, &args![water_type]).f32();
+    let first = e.call(WATER_FORM_FLOAT_A4, &args![water_type]).f32();
+    e.with_stack(0x20, |e, scratch| {
+        let scratch = scratch.addr();
+        let range = e
+            .call(NI_POINT2_CONSTRUCT, &args![scratch, first, second])
+            .u32();
+        let x = e.mem.u32(range);
+        let y = e.mem.u32(range + 4);
+        e.set_global(DEPTH_RANGE_SHADER_CONSTANT, x);
+        e.set_global(DEPTH_RANGE_SHADER_CONSTANT + 4, y);
+    });
+    let sorter = pointer_in_slot(e, sorter_slot);
+    e.call(ACCUMULATOR_SET_WORD_19C, &args![sorter, 0xeu32]);
+    e.call(COUNTED_STATE_34, &args![1u32, 1u32]);
+    e.call(
+        SET_STENCIL_STATE,
+        &args![2u32, DEPTH_STENCIL_REFERENCE, stencil_mask as u32, 1u32],
+    );
+    e.call(RENDER_STATE_980C0, &args![0u32, 0u32, 0u32, 1u32]);
+    e.call(RENDER_STATE_98230, &args![0u32, 1u32]);
+    let camera = pointer_in_slot(e, camera_slot);
+    let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+    fn_004e9bb0(e, object, camera);
+    let reflect_plane = address_of(group, PlaceableWaterGroup::ReflectWaterPlane);
+    for i in 0..4 {
+        let word = e.mem.u32(reflect_plane + 4 * i);
+        e.set_global(DEPTH_PLANE_SHADER_CONSTANT + 4 * i, word);
+    }
+    let refract_plane = address_of(group, PlaceableWaterGroup::RefractWaterPlane);
+    let constant = plane_constant(e, refract_plane);
+    let bias = {
+        let value = e
+            .call(
+                SETTING_FLOAT_VALUE,
+                &args![SETTING_REFRACTION_WATER_PLANE_BIAS],
+            )
+            .u32();
+        e.mem.f32(value)
+    };
+    let lowered = (bias as f64 + (-constant) as f64) as f32;
+    submit_reflection_plane(e, this.addr(), refract_plane, lowered);
+    e.call(
+        RENDER_STATE_SET,
+        &args![1u32, 0u32, 0u32, 0u32, 0u32, 0u32, 0u32],
+    );
+    let sorter = pointer_in_slot(e, sorter_slot);
+    let camera = pointer_in_slot(e, camera_slot);
+    e.call(RENDER_ACCUMULATED_SCENE, &args![camera, sorter, 0u32]);
+    fn_004eb510(e, 0);
+    let renderer = e.call(RENDERER, &[]).u32();
+    let device = fn_004ecaf0(e, renderer);
+    e.vcall(
+        device,
+        DEVICE_SET_STATE_VIRTUAL,
+        &args![DEPTH_PASS_RESET_STATE, 0u32, 0u32, 0u32],
+    );
+    fn_004ecb40(e, 1);
+    fn_004ecb10(e, 10);
+    fn_004ecb10(e, 11);
+    fn_004ecb10(e, 12);
+    assign_slot(e, camera_slot, 0);
+}
+
+// Translated from 004ecaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The device object at `this + 0x8b8` (of the renderer).
+pub fn fn_004ecaf0(e: &mut Engine, this: u32) -> u32 {
+    e.mem.u32(this + RENDERER_DEVICE_OFFSET)
+}
+
+// Translated from 004ecb10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers the render-state counter `index` (the words at `0x011ff9d8`) by one
+/// when it is not zero.
+pub fn fn_004ecb10(e: &mut Engine, index: u32) {
+    let counter = RENDER_STATE_COUNTERS.wrapping_add(index.wrapping_mul(4));
+    let value = e.global::<u32>(counter);
+    if value != 0 {
+        e.set_global(counter, value.wrapping_sub(1));
+    }
+}
+
+// Translated from 004ecb40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers the word at `0x011ff9fc` by `amount`, then makes the counted state
+/// call `00b98070(0, 0)` (cdecl).
+pub fn fn_004ecb40(e: &mut Engine, amount: u32) {
+    let counter = e.global::<u32>(COUNTER_011FF9FC);
+    e.set_global(COUNTER_011FF9FC, counter.wrapping_sub(amount));
+    e.call(COUNTED_STATE_34, &args![0u32, 0u32]);
+}
+
+// Translated from 004ecb60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Draws the water of a group into the depth pass (`RENDER_GROUP_DEPTH`; no
+/// Xbox PDB name; the exception-unwinding frame is not translated). Does
+/// nothing without `bUseWaterShader` or a `viewer`. Sets the flag at
+/// `0x011ff375` and makes a camera on the stack from the viewer (translate,
+/// rotation, scale, the `float` at `+0xfc`, frustum), hands it to the render
+/// object, and culls with it; every water reference of the group in a cell of
+/// kind 6, whose 3D object has the water owner type and is in range of the
+/// viewer, gets `stencil_mask` as the stencil mask of its water shader
+/// property and its first render pass is drawn immediately. The word after
+/// the group is not read.
+pub fn fn_004ecb60(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    group: Ptr<PlaceableWaterGroup>,
+    _unused_3: u32,
+    stencil_mask: u16,
+) {
+    if !e.call(WATER_SHADER_ENABLED, &[]).bool() || viewer == 0 {
+        return;
+    }
+    e.set_global(WADING_RENDER_ACTIVE_FLAG, 1u8);
+    e.call(COUNTED_STATE_A8, &args![0u32, 1u32]);
+    e.with_stack(0x114 + 0x10 + 0x10 + CULLING_PROCESS_SIZE, |e, frame| {
+        let camera = frame.addr();
+        let update_data = camera + 0x114;
+        let culling = camera + 0x124;
+        e.call(CAMERA_CONSTRUCT, &args![camera]);
+        let translate = e.call(NODE_WORLD_TRANSLATE, &args![viewer]).u32();
+        e.call(NODE_SET_LOCAL_TRANSLATE, &args![camera, translate]);
+        let rotate = e.call(NODE_WORLD_ROTATE, &args![viewer]).u32();
+        e.call(NODE_SET_LOCAL_ROTATE, &args![camera, rotate]);
+        let scale = e.call(NODE_SCALE_SOURCE, &args![viewer]).f32();
+        e.call(NODE_SET_LOCAL_SCALE, &args![camera, scale]);
+        let frustum = e.call(CAMERA_FRUSTUM_ADDRESS, &args![camera]).u32();
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        e.call(RENDER_OBJECT_SET_CAMERA_DATA, &args![object, frustum]);
+        let far_value = e.call(CAMERA_FLOAT_FC_READ, &args![viewer]).f32();
+        e.call(CAMERA_FLOAT_FC_WRITE, &args![camera, far_value]);
+        let view_frustum = e.call(CAMERA_PLANES_ADDRESS, &args![viewer]).u32();
+        e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, view_frustum]);
+        e.call(
+            UPDATE_DATA_CONSTRUCT,
+            &args![update_data, 0.0f32, 0u32, 0u32],
+        );
+        e.call(NODE_UPDATE, &args![camera, update_data]);
+        e.call(CULLING_PROCESS_CONSTRUCT, &args![culling, 0u32]);
+        e.call(CULLING_PROCESS_SET_CAMERA, &args![culling, camera]);
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        fn_004e9bb0(e, object, camera);
+        let planes = e.call(CAMERA_PLANES_ADDRESS, &args![camera]).u32();
+        e.call(CULLING_PROCESS_SET_PLANES, &args![culling, planes]);
+
+        let references = address_of(group, PlaceableWaterGroup::PlaceableWaterList);
+        let mut position = pointer_in_slot(e, references);
+        while position != 0 {
+            let next = e
+                .call(LIST_NEXT_POSITION, &args![references, position])
+                .u32();
+            let slot = e.call(LIST_ITEM_SLOT, &args![references, position]).u32();
+            let reference = e.mem.u32(slot);
+            draw_depth_reference(e, this, viewer, reference, stencil_mask);
+            position = next;
+        }
+
+        e.call(CULLING_PROCESS_SET_CAMERA, &args![culling, 0u32]);
+        fn_004eced0(e, 1);
+        e.set_global(WADING_RENDER_ACTIVE_FLAG, 0u8);
+        e.call(CULLING_PROCESS_DESTRUCT, &args![culling]);
+        e.call(CAMERA_DESTRUCT, &args![camera]);
+    });
+}
+
+/// One water reference of `fn_004ecb60`.
+fn draw_depth_reference(
+    e: &mut Engine,
+    this: Ptr<TESWaterSystem>,
+    viewer: u32,
+    reference: u32,
+    stencil_mask: u16,
+) {
+    if reference == 0 || e.call(REFERENCE_PARENT_CELL, &args![reference]).u32() == 0 {
+        return;
+    }
+    let cell = e.call(REFERENCE_PARENT_CELL, &args![reference]).u32();
+    if !e.call(CELL_BYTE_IS_SIX, &args![cell]).bool() {
+        return;
+    }
+    let geometry = fn_004e8030(e, this, reference);
+    if geometry == 0 {
+        return;
+    }
+    let owner = e.call(NODE_OWNER, &args![geometry]).u32();
+    if owner == 0 || e.call(OWNER_TYPE, &args![owner]).u32() != WATER_OWNER_TYPE {
+        return;
+    }
+    let property = water_shader_property(e, geometry);
+    e.set(
+        property,
+        WaterShaderProperty::iStencilMask,
+        stencil_mask as u32,
+    );
+    if fn_004e62e0(e, this.addr(), reference, viewer)
+        && !property.is_null()
+        && e.call(PROPERTY_RENDER_PASS, &args![property, geometry])
+            .u32()
+            != 0
+    {
+        let pass = e
+            .call(PROPERTY_RENDER_PASS, &args![property, geometry])
+            .u32();
+        let count = e.mem.u16(pass + 4) as u32;
+        e.call(
+            RENDER_PASS_IMMEDIATELY,
+            &args![pass, count, 0u32, 0u32, 0u32],
+        );
+    }
+}
+
+// Translated from 004eced0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lowers the word at `0x011ffa18` by `amount`, then makes the counted state
+/// call `00b98380(7, 0)` (cdecl).
+pub fn fn_004eced0(e: &mut Engine, amount: u32) {
+    let counter = e.global::<u32>(COUNTER_011FFA18);
+    e.set_global(COUNTER_011FFA18, counter.wrapping_sub(amount));
+    e.call(COUNTED_STATE_A8, &args![7u32, 0u32]);
+}
+
+// Translated from 004ecef0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the clip plane the reflection and depth passes cut with (no Xbox PDB
+/// name). The four floats are a plane; it is normalized and moved by the
+/// transpose of the inverse of the renderer's view matrix (rebuilt here from
+/// its rotation and the eye position) times its projection matrix, and handed
+/// to the render object's device as clip plane 0. The word after the plane
+/// and `ECX` are not read.
+pub fn fn_004ecef0(
+    e: &mut Engine,
+    _unused_0: u32,
+    plane_a: f32,
+    plane_b: f32,
+    plane_c: f32,
+    plane_d: f32,
+    _unused_5: u32,
+) {
+    // The 4x4 matrices: view at +0, projection at +0x40, their product at
+    // +0x80, its inverse at +0xc0; then the plane at +0x100, its transform at
+    // +0x110, and the three axes at +0x120.
+    e.with_stack(0x150, |e, frame| {
+        let frame = frame.addr();
+        let view = frame;
+        let projection = frame + 0x40;
+        let product = frame + 0x80;
+        let inverse = frame + 0xc0;
+        let plane = frame + 0x100;
+        let transformed = frame + 0x110;
+        let axes = frame + 0x120;
+        let renderer = e.call(RENDERER, &[]).u32();
+        let view_source = fn_004ed1f0(e, renderer);
+        fn_004ed110(e, view, view_source);
+        // The translation row: minus the eye position's dot product with each
+        // axis (a column of the rotation).
+        for column in 0..3u32 {
+            let axis = axes + 0x0c * column;
+            let x = e.mem.f32(view + 4 * column);
+            let y = e.mem.f32(view + 0x10 + 4 * column);
+            let z = e.mem.f32(view + 0x20 + 4 * column);
+            let point = e.call(NI_POINT3_CONSTRUCT, &args![axis, x, y, z]).u32();
+            let eye = fn_004ed180(e);
+            let dot = e.call(NI_POINT3_DOT, &args![eye, point]).f32();
+            e.mem.set_f32(view + 0x30 + 4 * column, -dot);
+        }
+        let renderer = e.call(RENDERER, &[]).u32();
+        let projection_source = fn_004ed210(e, renderer);
+        fn_004ed110(e, projection, projection_source);
+        fn_004ed140(e, view, product, projection);
+        e.call(D3DX_MATRIX_INVERSE, &args![inverse, 0u32, product]);
+        e.call(D3DX_MATRIX_TRANSPOSE, &args![product, inverse]);
+        for (i, value) in [plane_a, plane_b, plane_c, plane_d].into_iter().enumerate() {
+            e.mem.set_f32(plane + 4 * i as u32, value);
+        }
+        e.call(D3DX_PLANE_NORMALIZE, &args![plane, plane]);
+        e.call(D3DX_PLANE_TRANSFORM, &args![transformed, plane, product]);
+        copy_words(e, transformed, plane, 4);
+        let object = e.call(RENDER_GLOBAL_OBJECT, &[]).u32();
+        fn_004ed190(e, object, 0, 1, plane);
+    });
+}
+
+// Translated from 004ed110 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies a 4x4 matrix (0x40 bytes) from `source` to `this` (`memcpy`).
+/// Returns `this`.
+pub fn fn_004ed110(e: &mut Engine, this: u32, source: u32) -> u32 {
+    e.call(MEMORY_COPY, &args![this, source, 0x40u32]);
+    this
+}
+
+// Translated from 004ed140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `out = this * other` for 4x4 matrices (`D3DXMatrixMultiply` into a local,
+/// then copied to `out`). Returns `out`.
+pub fn fn_004ed140(e: &mut Engine, this: u32, out: u32, other: u32) -> u32 {
+    e.with_stack(0x40, |e, product| {
+        let product = product.addr();
+        e.call(D3DX_MATRIX_MULTIPLY, &args![product, this, other]);
+        copy_words(e, product, out, 16);
+    });
+    out
+}
+
+// Translated from 004ed180 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the `NiPoint3` at `0x011f474c`.
+pub fn fn_004ed180(_e: &mut Engine) -> u32 {
+    EYE_POSITION
+}
+
+// Translated from 004ed190 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the clip planes `first` to `first + count - 1` of the render object's
+/// device (`this + 0x288`) to the 16-byte planes at `array`: the device's
+/// virtual at `+0xdc` is called as `(device, index, plane)` with `ECX`
+/// holding the vtable pointer.
+pub fn fn_004ed190(e: &mut Engine, this: u32, first: i32, count: i32, array: u32) {
+    let mut i = 0i32;
+    while i < count {
+        let device = e.mem.u32(this + RENDER_OBJECT_DEVICE_OFFSET);
+        let vtable = e.mem.u32(device);
+        let target = e
+            .mem
+            .u32(vtable.wrapping_add(DEVICE_SET_CLIP_PLANE_VIRTUAL));
+        let plane = array.wrapping_add((i as u32).wrapping_mul(16));
+        e.call(target, &args![vtable, device, first.wrapping_add(i), plane]);
+        i += 1;
+    }
+}
+
+// Translated from 004ed1f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the 4x4 matrix at `this + 0x980` (of the renderer).
+pub fn fn_004ed1f0(_e: &mut Engine, this: u32) -> u32 {
+    this.wrapping_add(RENDERER_VIEW_MATRIX_OFFSET)
+}
+
+// Translated from 004ed210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of the 4x4 matrix at `this + 0x9c0` (of the renderer).
+pub fn fn_004ed210(_e: &mut Engine, this: u32) -> u32 {
+    this.wrapping_add(RENDERER_PROJECTION_MATRIX_OFFSET)
+}
+
+// Translated from 004ed230 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Interpolates between `b` and `a` by the byte at `this + offset + 0xe0`
+/// scaled by the double at `0x010231e8`: `byte * scale * (a - b) + b`.
+pub fn fn_004ed230(e: &mut Engine, this: u32, offset: u32, a: f32, b: f32) -> f32 {
+    let byte = e.mem.u8(this.wrapping_add(offset).wrapping_add(0xe0));
+    let scale = e.global::<f64>(COLOR_STEP_SCALE);
+    ((byte as f64 * scale) * (a as f64 - b as f64) + b as f64) as f32
+}
+
+// Translated from 004ed270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether bit 2 of the byte at `this + 0xeb` is set.
+pub fn fn_004ed270(e: &mut Engine, this: u32) -> bool {
+    e.mem.u8(this + 0xeb) & 4 != 0
+}
+
+// Translated from 004ed290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWaterSystem::InitializeGreyTexture` (Xbox PDB): within an allocation
+/// scope of `TESWater.cpp` line `0x138a`, makes a rendered texture of kind 8
+/// and clears it to `(0.5, 0.5, 0.5, 0.5)` (the renderer's clear colour is
+/// set for the draw and restored). Returns the texture. `this` is not read.
+pub fn tes_water_system_initialize_grey_texture(
+    e: &mut Engine,
+    _unused_0: Ptr<TESWaterSystem>,
+) -> u32 {
+    let mut texture = 0;
+    in_allocation_scope(e, SCOPE_LINE_GREY_TEXTURE, |e| {
+        e.with_stack(0x20, |e, colors| {
+            let original = colors.addr();
+            let grey = original + 0x10;
+            e.call(
+                NI_POINT4_CONSTRUCT,
+                &args![original, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+            );
+            texture = create_rendered_texture(e, 8);
+            let renderer = e.call(RENDERER, &[]).u32();
+            e.vcall(renderer, RENDERER_GET_CLEAR_COLOR, &args![original]);
+            let renderer = e.call(RENDERER, &[]).u32();
+            let half = e.global::<f32>(GREY_VALUE);
+            let color = e
+                .call(NI_POINT4_CONSTRUCT, &args![grey, half, half, half, half])
+                .u32();
+            e.vcall(renderer, RENDERER_SET_CLEAR_COLOR, &args![color]);
+            let stopped = e.call(RENDERED_TEXTURE_STOP, &args![texture]).u32();
+            e.call(RENDER_TARGET_SET, &args![7u32, stopped]);
+            e.call(RENDER_TARGET_RESET, &[]);
+            restore_clear_color(e, original);
+        });
+    });
+    texture
+}
+
+// Translated from 004ed3e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor body of `PlaceableWaterGroup` (the engine map has no
+/// name; the exception-unwinding frame is not translated). Drops the two
+/// accumulators, releases the group in the water system, hands the water
+/// form's noise normal map back to the texture manager when the group held
+/// its last other reference, empties the objects-in-water and actor lists,
+/// detaches the wading geometry from the water root, then destroys the
+/// members in reverse order.
+pub fn fn_004ed3e0(e: &mut Engine, this: Ptr<PlaceableWaterGroup>) {
+    assign_slot(
+        e,
+        address_of(this, PlaceableWaterGroup::spGroupReflectionSorter),
+        0,
+    );
+    assign_slot(e, address_of(this, PlaceableWaterGroup::spDepthSorter), 0);
+    let tes = e.global::<u32>(TES_POINTER);
+    let system = e.call(TES_GET_WATER_SYSTEM, &args![tes]).u32();
+    fn_004e58a0(e, Ptr::new(system), this, 1, 0);
+    let water_type = e.get(this, PlaceableWaterGroup::pWaterType);
+    if !water_type.is_null() {
+        let form: Ptr<TESWaterForm> = Ptr::new(water_type.addr());
+        let map_slot = address_of(form, TESWaterForm::spNoiseNormalMap);
+        if pointer_in_slot(e, map_slot) != 0 {
+            let texture = pointer_in_slot(e, map_slot);
+            // The word at +4 of the texture is its reference count.
+            if e.call(NODE_NEXT, &args![texture]).u32() == 2 {
+                let texture = pointer_in_slot(e, map_slot);
+                let manager = e.call(TEXTURE_MANAGER, &[]).u32();
+                e.call(RETURN_RENDERED_TEXTURE, &args![manager, texture]);
+                assign_slot(e, map_slot, 0);
+            }
+        }
+    }
+    e.call(
+        LIST_REMOVE_ALL,
+        &args![address_of(this, PlaceableWaterGroup::ObjectInWaterList)],
+    );
+    e.call(
+        LIST_REMOVE_ALL,
+        &args![address_of(this, PlaceableWaterGroup::ActorsInWaterList)],
+    );
+    let geometry_slot = address_of(this, PlaceableWaterGroup::spWadingWaterGeometry);
+    if pointer_in_slot(e, geometry_slot) != 0 {
+        let root = fn_004e7ff0(e);
+        let geometry = pointer_in_slot(e, geometry_slot);
+        e.vcall(root, NODE_DETACH_CHILD, &args![geometry]);
+        assign_slot(e, geometry_slot, 0);
+    }
+    for offset in [0xa8, 0xa4, 0x98, 0x94] {
+        e.call(POINTER_TEMP_DESTRUCT, &args![this.addr() + offset]);
+    }
+    for offset in [0x88, 0x7c, 0x70, 0x64] {
+        e.call(LIST_DESTRUCT, &args![this.addr() + offset]);
+    }
+    for offset in [0x58, 0x54] {
+        e.call(POINTER_TEMP_DESTRUCT, &args![this.addr() + offset]);
+    }
+    for offset in [0x48, 0x3c, 0x30, 0x24] {
+        e.call(LIST_DESTRUCT, &args![this.addr() + offset]);
+    }
+}
+
+// Translated from 004ed5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PlaceableWaterGroup::PlaceableWaterGroup` (Xbox PDB): constructs the two
+/// planes (`+4`, `+0x14`), the lists (`+0x24`, `+0x30`, `+0x3c`, `+0x48`,
+/// `+0x64`, `+0x70`, `+0x7c`, `+0x88`) and the null `NiPointer`s (`+0x54`,
+/// `+0x58`, `+0x94`, `+0x98`, `+0xa4`, `+0xa8`), clears the sorters and the
+/// wading geometry again, and the flags `bGroupAtWorldSpaceWaterHeight`,
+/// `bRenderGroupReflections` and `bRenderSilhouetteReflections`. Returns
+/// `this`; the other members are not initialized.
+pub fn placeable_water_group_placeable_water_group(
+    e: &mut Engine,
+    this: Ptr<PlaceableWaterGroup>,
+) -> Ptr<PlaceableWaterGroup> {
+    let base = this.addr();
+    e.call(NI_PLANE_DEFAULT_CONSTRUCT, &args![base + 4]);
+    e.call(NI_PLANE_DEFAULT_CONSTRUCT, &args![base + 0x14]);
+    for offset in [0x24, 0x30, 0x3c, 0x48] {
+        e.call(LIST_CONSTRUCT, &args![base + offset]);
+    }
+    for offset in [0x54, 0x58] {
+        e.call(POINTER_TEMP_CONSTRUCT, &args![base + offset, 0u32]);
+    }
+    for offset in [0x64, 0x70, 0x7c, 0x88] {
+        e.call(LIST_CONSTRUCT, &args![base + offset]);
+    }
+    for offset in [0x94, 0x98, 0xa4, 0xa8] {
+        e.call(POINTER_TEMP_CONSTRUCT, &args![base + offset, 0u32]);
+    }
+    assign_slot(e, base + 0x94, 0);
+    assign_slot(e, base + 0x98, 0);
+    assign_slot(e, base + 0x58, 0);
+    e.set(
+        this,
+        PlaceableWaterGroup::bRenderSilhouetteReflections,
+        false,
+    );
+    e.set(this, PlaceableWaterGroup::bRenderGroupReflections, false);
+    e.set(
+        this,
+        PlaceableWaterGroup::bGroupAtWorldSpaceWaterHeight,
+        false,
+    );
+    this
+}
+
+// Translated from 004ed780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` through `004de290(this, value)` (the float at
+/// `setting + 4`); returns `this`.
+pub fn fn_004ed780(e: &mut Engine, this: u32, value: f32) -> u32 {
+    e.call(SETTING_STORE_FLOAT, &args![this, value]);
+    this
+}
+
+// Translated from 004ed7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESObjectREFR *, TESObjectREFR *>` constructor (the engine
+/// map has no name): `004ed960(this, size)`, then the vtable `0x010231f4`.
+/// Returns `this`.
+pub fn fn_004ed7a0(e: &mut Engine, this: u32, size: u32) -> u32 {
+    fn_004ed960(e, this, size);
+    e.mem.set_u32(this, REFERENCE_MAP_VTABLE);
+    this
+}
+
+// Translated from 004ed7d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESWaterForm *, bool>` constructor: `004eda60(this,
+/// size)`, then the vtable `0x01023214`. Returns `this`.
+pub fn fn_004ed7d0(e: &mut Engine, this: u32, size: u32) -> u32 {
+    fn_004eda60(e, this, size);
+    e.mem.set_u32(this, WATER_FORM_MAP_VTABLE);
+    this
+}
+
+// Translated from 004ed800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESObjectREFR *, WadingWaterData *>` constructor:
+/// `004edb60(this, size)` (translated next session), then the vtable
+/// `0x01023234`. Returns `this`.
+pub fn fn_004ed800(e: &mut Engine, this: u32, size: u32) -> u32 {
+    e.call(WADING_MAP_BASE_CONSTRUCT, &args![this, size]);
+    e.mem.set_u32(this, WADING_MAP_VTABLE);
+    this
+}
+
+// Translated from 004ed830 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESObjectREFR_P_TESObjectREFR_P>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the destructor body `004ed9d0` and, when bit 0 of
+/// `flags` is set, frees the object. Returns `this`.
+pub fn ni_t_pointer_map_tes_object_refr_p_tes_object_refr_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(REFERENCE_MAP_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004ed860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESWaterForm_P_bool>::_scalar_deleting_destructor_` (Xbox
+/// PDB): the same with the destructor body `004edad0`.
+pub fn ni_t_pointer_map_tes_water_form_p_bool_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(WATER_FORM_MAP_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004ed890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTPointerMap<TESObjectREFR_P_WadingWaterData_P>::_scalar_deleting_destructor_`
+/// (Xbox PDB): the same with the destructor body `004edbd0`.
+pub fn ni_t_pointer_map_tes_object_refr_p_wading_water_data_p_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: u32,
+    flags: u32,
+) -> u32 {
+    e.call(WADING_MAP_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+/// The constructor body of the three pointer maps: the vtable, the bucket
+/// count at `+4`, the entry count at `+0xc` (zero) and the bucket array at
+/// `+8` (`size * 4` bytes from `NiAlloc`, cleared by `memset`).
+fn construct_pointer_map_base(e: &mut Engine, this: u32, size: u32, vtable: u32) -> u32 {
+    e.mem.set_u32(this, vtable);
+    e.mem.set_u32(this + 4, size);
+    e.mem.set_u32(this + 0xc, 0);
+    let bytes = e.mem.u32(this + 4) << 2;
+    let buckets = e.call(NI_ALLOC_ARRAY, &args![bytes]).u32();
+    e.mem.set_u32(this + 8, buckets);
+    let bytes = e.mem.u32(this + 4) << 2;
+    let buckets = e.mem.u32(this + 8);
+    e.call(MEMORY_SET, &args![buckets, 0u32, bytes]);
+    this
+}
+
+// Translated from 004ed960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The base constructor of `NiTPointerMap<TESObjectREFR *, TESObjectREFR *>`
+/// (the engine map has no name; the vtable is `0x01023254`): see
+/// `construct_pointer_map_base`. Returns `this`.
+pub fn fn_004ed960(e: &mut Engine, this: u32, size: u32) -> u32 {
+    construct_pointer_map_base(e, this, size, REFERENCE_MAP_BASE_VTABLE)
+}
+
+// Translated from 004eda60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same for `NiTPointerMap<TESWaterForm *, bool>` (the vtable is
+/// `0x01023274`). Returns `this`.
+pub fn fn_004eda60(e: &mut Engine, this: u32, size: u32) -> u32 {
+    construct_pointer_map_base(e, this, size, WATER_FORM_MAP_BASE_VTABLE)
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -6704,6 +8231,82 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_004eb220(Ptr<TESWaterSystem>, Ptr<PlaceableWaterGroup>)
         ),
         entry!(0x004eb510, fn_004eb510(u32)),
+        entry!(0x004eb540, fn_004eb540(Ptr<TESWaterSystem>)),
+        entry!(
+            0x004eba20,
+            image_space_effect_param_image_space_effect_param(u32) -> u32
+        ),
+        entry!(0x004eba90, fn_004eba90(u32)),
+        entry!(
+            0x004ebb00,
+            image_space_effect_param_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(0x004ebb30, fn_004ebb30(u32)),
+        entry!(0x004ebb50, fn_004ebb50(u32)),
+        entry!(0x004ebb70, fn_004ebb70(u32) -> u32),
+        entry!(0x004ebbc0, fn_004ebbc0(u32, u32) -> u32),
+        entry!(0x004ebbe0, fn_004ebbe0(Ptr<TESWaterSystem>)),
+        entry!(
+            0x004ebef0,
+            fn_004ebef0(Ptr<TESWaterSystem>, u32, Ptr<PlaceableWaterGroup>)
+        ),
+        entry!(0x004ec7b0, fn_004ec7b0() -> u32),
+        entry!(0x004ec7c0, fn_004ec7c0(u32, u8)),
+        entry!(0x004ec7e0, fn_004ec7e0(u32) -> bool),
+        entry!(
+            0x004ec800,
+            fn_004ec800(Ptr<TESWaterSystem>, Ptr<PlaceableWaterGroup>, u16)
+        ),
+        entry!(0x004ecaf0, fn_004ecaf0(u32) -> u32),
+        entry!(0x004ecb10, fn_004ecb10(u32)),
+        entry!(0x004ecb40, fn_004ecb40(u32)),
+        entry!(
+            0x004ecb60,
+            fn_004ecb60(Ptr<TESWaterSystem>, u32, Ptr<PlaceableWaterGroup>, u32, u16)
+        ),
+        entry!(0x004eced0, fn_004eced0(u32)),
+        entry!(0x004ecef0, fn_004ecef0(u32, f32, f32, f32, f32, u32)),
+        entry!(0x004ed110, fn_004ed110(u32, u32) -> u32),
+        entry!(0x004ed140, fn_004ed140(u32, u32, u32) -> u32),
+        entry!(0x004ed180, fn_004ed180() -> u32),
+        entry!(0x004ed190, fn_004ed190(u32, i32, i32, u32)),
+        entry!(0x004ed1f0, fn_004ed1f0(u32) -> u32),
+        entry!(0x004ed210, fn_004ed210(u32) -> u32),
+        entry!(0x004ed230, fn_004ed230(u32, u32, f32, f32) -> f32),
+        entry!(0x004ed270, fn_004ed270(u32) -> bool),
+        entry!(
+            0x004ed290,
+            tes_water_system_initialize_grey_texture(Ptr<TESWaterSystem>) -> u32
+        ),
+        entry!(0x004ed3e0, fn_004ed3e0(Ptr<PlaceableWaterGroup>)),
+        entry!(
+            0x004ed5f0,
+            placeable_water_group_placeable_water_group(
+                Ptr<PlaceableWaterGroup>,
+            ) -> Ptr<PlaceableWaterGroup>
+        ),
+        entry!(0x004ed780, fn_004ed780(u32, f32) -> u32),
+        entry!(0x004ed7a0, fn_004ed7a0(u32, u32) -> u32),
+        entry!(0x004ed7d0, fn_004ed7d0(u32, u32) -> u32),
+        entry!(0x004ed800, fn_004ed800(u32, u32) -> u32),
+        entry!(
+            0x004ed830,
+            ni_t_pointer_map_tes_object_refr_p_tes_object_refr_p_scalar_deleting_destructor(
+                u32, u32
+            ) -> u32
+        ),
+        entry!(
+            0x004ed860,
+            ni_t_pointer_map_tes_water_form_p_bool_scalar_deleting_destructor(u32, u32) -> u32
+        ),
+        entry!(
+            0x004ed890,
+            ni_t_pointer_map_tes_object_refr_p_wading_water_data_p_scalar_deleting_destructor(
+                u32, u32
+            ) -> u32
+        ),
+        entry!(0x004ed960, fn_004ed960(u32, u32) -> u32),
+        entry!(0x004eda60, fn_004eda60(u32, u32) -> u32),
     ]
 }
 
@@ -13531,6 +15134,1806 @@ mod tests {
             f.run();
             assert!(f.clear_colors.borrow().is_empty());
             assert_eq!(calls(&f.r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+        }
+
+        // --- the fourth session: 004eb540 to 004eda60 ------------------------
+
+        mod fourth_session {
+            use super::*;
+
+            const DEVICE_VTABLE: u32 = 0x0200_d000;
+            const STATE_DEVICE_VTABLE: u32 = 0x0200_e000;
+            const CLIP_PLANE_DOUBLE: u32 = 0x0300_0301;
+            const STATE_DOUBLE: u32 = 0x0300_0302;
+            const IDENTITY: [f32; 16] = [
+                1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            ];
+
+            type ClipPlanes = Rc<RefCell<Vec<(u32, u32, Vec<f32>)>>>;
+            type Products = Rc<RefCell<Vec<([f32; 16], [f32; 16])>>>;
+            type States = Rc<RefCell<Vec<Vec<u32>>>>;
+
+            /// Puts the translation back at `address`, over a double the
+            /// shared fixtures register there.
+            fn use_real_function(e: &mut Engine, address: u32) {
+                for (candidate, function) in funcs() {
+                    if candidate == address {
+                        e.register(candidate, function);
+                    }
+                }
+            }
+
+            fn matrix_at(e: &Engine, address: u32) -> [f32; 16] {
+                std::array::from_fn(|i| e.mem.f32(address + 4 * i as u32))
+            }
+
+            fn put_matrix(e: &mut Engine, address: u32, matrix: &[f32; 16]) {
+                for (i, value) in matrix.iter().enumerate() {
+                    e.mem.set_f32(address + 4 * i as u32, *value);
+                }
+            }
+
+            /// The inverse of a 4x4 matrix (Gauss-Jordan in `f64`).
+            #[allow(clippy::needless_range_loop)]
+            fn invert(m: &[f32; 16]) -> [f32; 16] {
+                let mut a = [[0.0f64; 8]; 4];
+                for r in 0..4 {
+                    for c in 0..4 {
+                        a[r][c] = m[r * 4 + c] as f64;
+                    }
+                    a[r][4 + r] = 1.0;
+                }
+                for col in 0..4 {
+                    let pivot = (col..4)
+                        .max_by(|&x, &y| a[x][col].abs().partial_cmp(&a[y][col].abs()).unwrap())
+                        .unwrap();
+                    a.swap(col, pivot);
+                    let divisor = a[col][col];
+                    for c in 0..8 {
+                        a[col][c] /= divisor;
+                    }
+                    for r in 0..4 {
+                        if r != col {
+                            let factor = a[r][col];
+                            for c in 0..8 {
+                                a[r][c] -= factor * a[col][c];
+                            }
+                        }
+                    }
+                }
+                std::array::from_fn(|i| a[i / 4][4 + i % 4] as f32)
+            }
+
+            /// What the plane setup talks to.
+            struct PlaneMath {
+                /// The clip planes set on the render object's device: device,
+                /// index, plane.
+                clip_planes: ClipPlanes,
+                /// The matrices `D3DXMatrixMultiply` was given.
+                products: Products,
+                /// The calls to the renderer device's virtual at +0x68.
+                states: States,
+                renderer: u32,
+                clip_device: u32,
+                state_device: u32,
+            }
+
+            /// Doubles for the plane setup: a renderer with identity view and
+            /// projection matrices (the rotation is the identity, the eye is
+            /// at (1, 2, 3)), the D3DX math with the real formulas, `memcpy`,
+            /// the dot product, and the devices the clip planes and the
+            /// states go to.
+            fn install_plane_math(e: &mut Engine) -> PlaneMath {
+                let renderer = object(e, RENDERER_VTABLE, 0xa40);
+                put_matrix(e, renderer + RENDERER_VIEW_MATRIX_OFFSET, &IDENTITY);
+                put_matrix(e, renderer + RENDERER_PROJECTION_MATRIX_OFFSET, &IDENTITY);
+                e.register_double(RENDERER, move |_, _| ret(renderer));
+                for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+                    e.set_global(EYE_POSITION + 4 * i as u32, value);
+                }
+                e.register(MEMORY_COPY, |e, a| {
+                    for i in 0..a[2] {
+                        let byte = e.mem.u8(a[1] + i);
+                        e.mem.set_u8(a[0] + i, byte);
+                    }
+                    ret(a[0])
+                });
+                e.register(NI_POINT3_DOT, |e, a| {
+                    (0..3)
+                        .map(|i| e.mem.f32(a[0] + 4 * i) * e.mem.f32(a[1] + 4 * i))
+                        .sum::<f32>()
+                        .into_ret()
+                });
+                let products: Products = Rc::default();
+                let log = products.clone();
+                e.register_double(D3DX_MATRIX_MULTIPLY, move |e, a| {
+                    let (x, y) = (matrix_at(e, a[1]), matrix_at(e, a[2]));
+                    log.borrow_mut().push((x, y));
+                    let mut out = [0.0f32; 16];
+                    for r in 0..4 {
+                        for c in 0..4 {
+                            out[r * 4 + c] = (0..4).map(|k| x[r * 4 + k] * y[k * 4 + c]).sum();
+                        }
+                    }
+                    put_matrix(e, a[0], &out);
+                    ret(a[0])
+                });
+                e.register(D3DX_MATRIX_INVERSE, |e, a| {
+                    assert_eq!(a[1], 0, "no determinant is asked for");
+                    let inverse = invert(&matrix_at(e, a[2]));
+                    put_matrix(e, a[0], &inverse);
+                    ret(a[0])
+                });
+                e.register(D3DX_MATRIX_TRANSPOSE, |e, a| {
+                    let m = matrix_at(e, a[1]);
+                    let transposed: [f32; 16] = std::array::from_fn(|i| m[(i % 4) * 4 + i / 4]);
+                    put_matrix(e, a[0], &transposed);
+                    ret(a[0])
+                });
+                e.register(D3DX_PLANE_NORMALIZE, |e, a| {
+                    let p: Vec<f32> = (0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+                    let length = (p[0] * p[0] + p[1] * p[1] + p[2] * p[2]).sqrt();
+                    for i in 0..4 {
+                        e.mem.set_f32(a[0] + 4 * i, p[i as usize] / length);
+                    }
+                    ret(a[0])
+                });
+                e.register(D3DX_PLANE_TRANSFORM, |e, a| {
+                    let p: Vec<f32> = (0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+                    let m = matrix_at(e, a[2]);
+                    for i in 0..4 {
+                        let value: f32 = (0..4).map(|j| p[j] * m[j * 4 + i as usize]).sum();
+                        e.mem.set_f32(a[0] + 4 * i, value);
+                    }
+                    ret(a[0])
+                });
+                // The render object's device: its clip plane virtual.
+                let render_object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                let clip_device = object(e, DEVICE_VTABLE, 0x40);
+                vtable(
+                    e,
+                    DEVICE_VTABLE,
+                    &[(DEVICE_SET_CLIP_PLANE_VIRTUAL, CLIP_PLANE_DOUBLE)],
+                );
+                e.mem
+                    .set_u32(render_object + RENDER_OBJECT_DEVICE_OFFSET, clip_device);
+                let clip_planes: ClipPlanes = Rc::default();
+                let log = clip_planes.clone();
+                e.register_double(CLIP_PLANE_DOUBLE, move |e, a| {
+                    let plane = (0..4).map(|i| e.mem.f32(a[3] + 4 * i)).collect();
+                    log.borrow_mut().push((a[1], a[2], plane));
+                    Ret::default()
+                });
+                // The renderer's device: its state virtual.
+                let state_device = object(e, STATE_DEVICE_VTABLE, 0x40);
+                vtable(
+                    e,
+                    STATE_DEVICE_VTABLE,
+                    &[(DEVICE_SET_STATE_VIRTUAL, STATE_DOUBLE)],
+                );
+                e.mem
+                    .set_u32(renderer + RENDERER_DEVICE_OFFSET, state_device);
+                let states: States = Rc::default();
+                let log = states.clone();
+                e.register_double(STATE_DOUBLE, move |_, a| {
+                    log.borrow_mut().push(a.to_vec());
+                    Ret::default()
+                });
+                PlaneMath {
+                    clip_planes,
+                    products,
+                    states,
+                    renderer,
+                    clip_device,
+                    state_device,
+                }
+            }
+
+            // --- the small accessors --------------------------------------
+
+            #[test]
+            fn the_address_accessors_return_their_constants() {
+                let mut e = water_engine();
+                assert_eq!(e.call(0x004e_c7b0, &[]).u32(), 0x011c_a144);
+                assert_eq!(e.call(0x004e_d180, &[]).u32(), 0x011f_474c);
+                assert_eq!(e.call(0x004e_d1f0, &args![0x1000u32]).u32(), 0x1980);
+                assert_eq!(e.call(0x004e_d210, &args![0x1000u32]).u32(), 0x19c0);
+                let renderer = e.mem.alloc(0x900);
+                e.mem.set_u32(renderer + 0x8b8, 0xd00d);
+                assert_eq!(e.call(0x004e_caf0, &args![renderer]).u32(), 0xd00d);
+            }
+
+            #[test]
+            fn the_accumulator_byte_and_the_form_flag() {
+                let mut e = water_engine();
+                let accumulator = e.mem.alloc(0x200);
+                e.mem.set_u8(accumulator + 0x164, 9);
+                e.call(0x004e_c7c0, &args![accumulator, 1u8]);
+                assert_eq!(e.mem.u8(accumulator + 0x165), 1);
+                assert_eq!(
+                    e.mem.u8(accumulator + 0x164),
+                    9,
+                    "the next byte is left alone"
+                );
+                let form = e.mem.alloc(0x40);
+                assert!(!e.call(0x004e_c7e0, &args![form]).bool());
+                e.mem.set_u32(form + BASE_FORM_FLAGS, 0x400);
+                assert!(e.call(0x004e_c7e0, &args![form]).bool());
+                e.mem.set_u32(form + BASE_FORM_FLAGS, 0x3ff);
+                assert!(!e.call(0x004e_c7e0, &args![form]).bool());
+            }
+
+            #[test]
+            fn bit_two_of_the_byte_at_eb_is_tested() {
+                let mut e = water_engine();
+                let object = e.mem.alloc(0x100);
+                assert!(!e.call(0x004e_d270, &args![object]).bool());
+                e.mem.set_u8(object + 0xeb, 0xfb);
+                assert!(!e.call(0x004e_d270, &args![object]).bool());
+                e.mem.set_u8(object + 0xeb, 0x04);
+                assert!(e.call(0x004e_d270, &args![object]).bool());
+            }
+
+            #[test]
+            fn the_byte_interpolation_scales_the_byte_between_the_two_floats() {
+                let mut e = water_engine();
+                e.set_global(COLOR_STEP_SCALE, 0.5f64);
+                let object = e.mem.alloc(0x200);
+                e.mem.set_u8(object + 0x10 + 0xe0, 4);
+                // 4 * 0.5 * (3 - 1) + 1
+                let value = e
+                    .call(0x004e_d230, &args![object, 0x10u32, 3.0f32, 1.0f32])
+                    .f32();
+                assert_eq!(value, 5.0);
+                e.mem.set_u8(object + 0x10 + 0xe0, 0);
+                let value = e
+                    .call(0x004e_d230, &args![object, 0x10u32, 3.0f32, 1.0f32])
+                    .f32();
+                assert_eq!(value, 1.0);
+            }
+
+            #[test]
+            fn the_render_state_counters_stop_at_zero() {
+                let mut e = water_engine();
+                e.set_global(RENDER_STATE_COUNTERS + 4 * 10, 3u32);
+                e.set_global(RENDER_STATE_COUNTERS + 4 * 11, 0u32);
+                e.call(0x004e_cb10, &args![10u32]);
+                e.call(0x004e_cb10, &args![11u32]);
+                assert_eq!(e.global::<u32>(RENDER_STATE_COUNTERS + 4 * 10), 2);
+                assert_eq!(e.global::<u32>(RENDER_STATE_COUNTERS + 4 * 11), 0);
+            }
+
+            #[test]
+            fn the_counter_helpers_lower_a_word_and_make_the_counted_state_call() {
+                let mut e = water_engine();
+                quiet(&mut e, &[COUNTED_STATE_34, COUNTED_STATE_A8]);
+                e.set_global(COUNTER_011FF9FC, 5u32);
+                e.set_global(COUNTER_011FFA18, 8u32);
+                start_log(&mut e);
+                e.call(0x004e_cb40, &args![2u32]);
+                e.call(0x004e_ced0, &args![3u32]);
+                assert_eq!(e.global::<u32>(COUNTER_011FF9FC), 3);
+                assert_eq!(e.global::<u32>(COUNTER_011FFA18), 5);
+                assert_eq!(calls(&e, COUNTED_STATE_34), vec![vec![0, 0]]);
+                assert_eq!(calls(&e, COUNTED_STATE_A8), vec![vec![7, 0]]);
+            }
+
+            #[test]
+            fn a_float_setting_is_stored_through_its_setter() {
+                let mut e = water_engine();
+                e.register(SETTING_STORE_FLOAT, |e, a| {
+                    e.mem.set_u32(a[0] + 4, a[1]);
+                    ret(a[0])
+                });
+                let setting = e.mem.alloc(0x10);
+                assert_eq!(e.call(0x004e_d780, &args![setting, 2.5f32]).u32(), setting);
+                assert_eq!(e.mem.f32(setting + 4), 2.5);
+            }
+
+            // --- the matrices and the plane setup ---------------------------
+
+            #[test]
+            fn a_matrix_is_copied_with_memcpy() {
+                let mut e = water_engine();
+                e.register(MEMORY_COPY, |_, a| ret(a[0]));
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_d110, &args![0x100u32, 0x200u32]).u32(), 0x100);
+                assert_eq!(calls(&e, MEMORY_COPY), vec![vec![0x100, 0x200, 0x40]]);
+            }
+
+            #[test]
+            fn matrices_are_multiplied_in_a_temporary_and_copied_out() {
+                let mut e = engine();
+                let m = install_plane_math(&mut e);
+                let (x, y, out) = (e.mem.alloc(0x40), e.mem.alloc(0x40), e.mem.alloc(0x40));
+                let first: [f32; 16] = std::array::from_fn(|i| i as f32);
+                put_matrix(&mut e, x, &first);
+                put_matrix(&mut e, y, &IDENTITY);
+                assert_eq!(e.call(0x004e_d140, &args![x, out, y]).u32(), out);
+                assert_eq!(*m.products.borrow(), vec![(first, IDENTITY)]);
+                assert_eq!(matrix_at(&e, out), first);
+            }
+
+            #[test]
+            fn clip_planes_are_set_from_the_first_index_for_the_count() {
+                let mut e = engine();
+                let m = install_plane_math(&mut e);
+                let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                let planes = e.mem.alloc(0x30);
+                for i in 0..12 {
+                    e.mem.set_f32(planes + 4 * i, i as f32);
+                }
+                e.call(0x004e_d190, &args![object, 5i32, 3i32, planes]);
+                assert_eq!(
+                    *m.clip_planes.borrow(),
+                    vec![
+                        (m.clip_device, 5, vec![0.0, 1.0, 2.0, 3.0]),
+                        (m.clip_device, 6, vec![4.0, 5.0, 6.0, 7.0]),
+                        (m.clip_device, 7, vec![8.0, 9.0, 10.0, 11.0]),
+                    ]
+                );
+                e.call(0x004e_d190, &args![object, 0i32, 0i32, planes]);
+                e.call(0x004e_d190, &args![object, 0i32, -1i32, planes]);
+                assert_eq!(m.clip_planes.borrow().len(), 3, "nothing for a count <= 0");
+            }
+
+            #[test]
+            fn the_clip_plane_is_moved_into_view_space_and_set_on_the_device() {
+                let mut e = engine();
+                let m = install_plane_math(&mut e);
+                start_log(&mut e);
+                // The plane z = 5 (normal (0, 0, 1), minus the constant).
+                e.call(
+                    0x004e_cef0,
+                    &args![0u32, 0.0f32, 0.0f32, 1.0f32, -5.0f32, 0u32],
+                );
+                // With the eye at (1, 2, 3) it is z = 2 in front of the eye.
+                assert_eq!(
+                    *m.clip_planes.borrow(),
+                    vec![(m.clip_device, 0, vec![0.0, 0.0, 1.0, -2.0])]
+                );
+                // The view matrix is the renderer's rotation with the
+                // translation row minus the eye's dot product with each axis.
+                let products = m.products.borrow();
+                assert_eq!(products.len(), 1);
+                assert_eq!(
+                    products[0].0,
+                    [
+                        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, -2.0,
+                        -3.0, 1.0
+                    ]
+                );
+                assert_eq!(products[0].1, IDENTITY);
+            }
+
+            #[test]
+            fn the_view_translation_row_follows_the_rotation_columns() {
+                let mut e = engine();
+                let m = install_plane_math(&mut e);
+                // Rows (0, 1, 0), (-1, 0, 0), (0, 0, 1): the columns are (0, -1,
+                // 0), (1, 0, 0) and (0, 0, 1).
+                let view = [
+                    0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 9.0, 9.0, 9.0, 1.0,
+                ];
+                put_matrix(&mut e, m.renderer + RENDERER_VIEW_MATRIX_OFFSET, &view);
+                e.call(
+                    0x004e_cef0,
+                    &args![0u32, 0.0f32, 0.0f32, 1.0f32, -5.0f32, 0u32],
+                );
+                let products = m.products.borrow();
+                assert_eq!(
+                    products[0].0,
+                    [
+                        0.0, 1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 2.0, -1.0,
+                        -3.0, 1.0
+                    ]
+                );
+            }
+
+            #[test]
+            fn the_plane_is_normalized_before_it_is_moved() {
+                let mut e = engine();
+                let m = install_plane_math(&mut e);
+                e.call(
+                    0x004e_cef0,
+                    &args![0u32, 0.0f32, 0.0f32, 2.0f32, -10.0f32, 0u32],
+                );
+                assert_eq!(
+                    m.clip_planes.borrow()[0].2,
+                    vec![0.0, 0.0, 1.0, -2.0],
+                    "(0, 0, 2, -10) is (0, 0, 1, -5)"
+                );
+            }
+
+            // --- the group constructor, destructor and the grey texture ---------
+
+            #[test]
+            fn a_group_is_constructed_with_its_members_and_three_flags_cleared() {
+                let mut e = water_engine();
+                quiet(
+                    &mut e,
+                    &[
+                        NI_PLANE_DEFAULT_CONSTRUCT,
+                        LIST_CONSTRUCT,
+                        POINTER_TEMP_CONSTRUCT,
+                    ],
+                );
+                let group = e.mem.alloc(0xb0);
+                for offset in [0x5c, 0x5d, 0x5e, 0x5f, 0x60] {
+                    e.mem.set_u8(group + offset, 1);
+                }
+                for offset in [0x58, 0x94, 0x98] {
+                    e.mem.set_u32(group + offset, 0x77);
+                }
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_d5f0, &args![group]).u32(), group);
+                assert_eq!(
+                    calls(&e, NI_PLANE_DEFAULT_CONSTRUCT),
+                    vec![vec![group + 4], vec![group + 0x14]]
+                );
+                let lists: Vec<u32> = calls(&e, LIST_CONSTRUCT)
+                    .iter()
+                    .map(|words| words[0] - group)
+                    .collect();
+                assert_eq!(lists, vec![0x24, 0x30, 0x3c, 0x48, 0x64, 0x70, 0x7c, 0x88]);
+                let pointers: Vec<(u32, u32)> = calls(&e, POINTER_TEMP_CONSTRUCT)
+                    .iter()
+                    .map(|words| (words[0] - group, words[1]))
+                    .collect();
+                assert_eq!(
+                    pointers,
+                    vec![
+                        (0x54, 0),
+                        (0x58, 0),
+                        (0x94, 0),
+                        (0x98, 0),
+                        (0xa4, 0),
+                        (0xa8, 0)
+                    ]
+                );
+                // The sorters and the wading geometry are assigned null again.
+                for offset in [0x58, 0x94, 0x98] {
+                    assert_eq!(e.mem.u32(group + offset), 0);
+                }
+                // Only three of the flags are cleared.
+                assert_eq!(
+                    [0x5c, 0x5d, 0x5e, 0x5f, 0x60].map(|offset| e.mem.u8(group + offset)),
+                    [0, 1, 1, 0, 0]
+                );
+            }
+
+            #[test]
+            fn a_group_destructor_gives_back_the_noise_map_it_alone_references() {
+                let mut r = reflection();
+                let e = &mut r.w.e;
+                quiet(
+                    e,
+                    &[
+                        POINTER_TEMP_DESTRUCT,
+                        LIST_DESTRUCT,
+                        RETURN_RENDERED_TEXTURE,
+                    ],
+                );
+                let system = r.w.system;
+                let group = r.w.group;
+                let tes = e.global::<u32>(TES_POINTER);
+                e.mem.set_u32(tes + 0x64, system.addr());
+                e.register(TES_GET_WATER_SYSTEM, |e, a| ret(e.mem.u32(a[0] + 0x64)));
+                // The water form's noise map has two references.
+                let water_type = e.get(group, PlaceableWaterGroup::pWaterType).addr();
+                let texture = e.mem.alloc(0x20);
+                e.mem.set_u32(texture + 4, 2);
+                e.mem.set_u32(water_type + 0x30, texture);
+                // The group's own sorters, a wading geometry and member lists.
+                e.mem.set_u32(r.w.other_property + 0x13c, 0x1234);
+                e.mem.set_u32(group.addr() + 0x94, 0x11);
+                e.mem.set_u32(group.addr() + 0x98, 0x22);
+                let geometry = node(e);
+                let geometry_property = e.mem.alloc(0x150);
+                e.mem
+                    .set_u32(geometry + GEOMETRY_PROPERTY, geometry_property);
+                e.mem.set_u32(group.addr() + 0x58, geometry);
+                let root = r.w.root;
+                start_log(e);
+                e.call(0x004e_d3e0, &args![group]);
+                assert_eq!(e.mem.u32(group.addr() + 0x94), 0);
+                assert_eq!(e.mem.u32(group.addr() + 0x98), 0);
+                // The group is released from the system first: its water
+                // reference loses the reflection map.
+                assert_eq!(
+                    e.get(
+                        Ptr::<WaterShaderProperty>::new(r.w.other_property),
+                        WaterShaderProperty::spReflectionMap
+                    ),
+                    0
+                );
+                // The noise map goes back to the texture manager and is cleared.
+                assert_eq!(
+                    calls(e, RETURN_RENDERED_TEXTURE),
+                    vec![vec![0x0aaa_0000, texture]]
+                );
+                assert_eq!(e.mem.u32(water_type + 0x30), 0);
+                // The two lists are emptied.
+                assert_eq!(
+                    calls(e, LIST_REMOVE_ALL),
+                    vec![vec![group.addr() + 0x30], vec![group.addr() + 0x3c]]
+                );
+                // The wading geometry is detached from the water root and dropped.
+                assert_eq!(
+                    calls(e, DETACH_CHILD_DOUBLE_ADDRESS),
+                    vec![vec![root, geometry]]
+                );
+                assert_eq!(e.mem.u32(group.addr() + 0x58), 0);
+                // The members are destroyed in reverse order.
+                let pointers: Vec<u32> = calls(e, POINTER_TEMP_DESTRUCT)
+                    .iter()
+                    .map(|words| words[0] - group.addr())
+                    .collect();
+                assert_eq!(pointers, vec![0xa8, 0xa4, 0x98, 0x94, 0x58, 0x54]);
+                let lists: Vec<u32> = calls(e, LIST_DESTRUCT)
+                    .iter()
+                    .map(|words| words[0] - group.addr())
+                    .collect();
+                assert_eq!(lists, vec![0x88, 0x7c, 0x70, 0x64, 0x48, 0x3c, 0x30, 0x24]);
+            }
+
+            #[test]
+            fn a_group_destructor_keeps_a_noise_map_others_reference() {
+                let mut r = reflection();
+                let e = &mut r.w.e;
+                quiet(
+                    e,
+                    &[
+                        POINTER_TEMP_DESTRUCT,
+                        LIST_DESTRUCT,
+                        RETURN_RENDERED_TEXTURE,
+                    ],
+                );
+                let system = r.w.system;
+                let group = r.w.group;
+                let tes = e.global::<u32>(TES_POINTER);
+                e.mem.set_u32(tes + 0x64, system.addr());
+                e.register(TES_GET_WATER_SYSTEM, |e, a| ret(e.mem.u32(a[0] + 0x64)));
+                let water_type = e.get(group, PlaceableWaterGroup::pWaterType).addr();
+                let texture = e.mem.alloc(0x20);
+                e.mem.set_u32(texture + 4, 3);
+                e.mem.set_u32(water_type + 0x30, texture);
+                start_log(e);
+                e.call(0x004e_d3e0, &args![group]);
+                assert!(calls(e, RETURN_RENDERED_TEXTURE).is_empty());
+                assert_eq!(e.mem.u32(water_type + 0x30), texture);
+                // No wading geometry: nothing is detached.
+                assert!(calls(e, DETACH_CHILD_DOUBLE_ADDRESS).is_empty());
+                // A group without a water type skips the map altogether.
+                e.mem.set_u32(group.addr(), 0);
+                e.call(0x004e_d3e0, &args![group]);
+                assert!(calls(e, RETURN_RENDERED_TEXTURE).is_empty());
+            }
+
+            #[test]
+            fn the_grey_texture_is_cleared_to_one_half() {
+                let mut r = reflection();
+                let e = &mut r.w.e;
+                use_real_function(e, 0x004e_d290);
+                e.set_global(GREY_VALUE, 0.5f32);
+                e.register(CREATE_RENDERED_TEXTURE, |_, _| ret(0x0e00_0042));
+                let log: Rc<RefCell<Vec<Vec<f32>>>> = Rc::default();
+                let colors = log.clone();
+                e.register_double(RENDERER_SET_COLOR_DOUBLE, move |e, a| {
+                    colors
+                        .borrow_mut()
+                        .push((0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect());
+                    Ret::default()
+                });
+                start_log(e);
+                let system = r.w.system;
+                let texture = e.call(0x004e_d290, &args![system]).u32();
+                assert_eq!(texture, 0x0e00_0042);
+                // Half grey while it is drawn, the original colour afterwards.
+                assert_eq!(*log.borrow(), vec![vec![0.5; 4], vec![0.1, 0.2, 0.3, 0.4]]);
+                assert_eq!(calls(e, CREATE_RENDERED_TEXTURE)[0][2..], [8, 0, 0, 0]);
+                assert_eq!(calls(e, RENDER_TARGET_SET), vec![vec![7, 0x0e00_0043]]);
+                assert_eq!(calls(e, RENDER_TARGET_RESET).len(), 1);
+                let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+                assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x138a]);
+                assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            }
+
+            // --- the image-space helpers ------------------------------------
+
+            #[test]
+            fn the_effect_param_is_constructed_destroyed_and_deleted() {
+                let mut e = water_engine();
+                quiet(
+                    &mut e,
+                    &[
+                        EFFECT_PARAM_FIRST_MEMBER_CONSTRUCT,
+                        EFFECT_PARAM_SECOND_MEMBER_CONSTRUCT,
+                        EFFECT_PARAM_FIRST_MEMBER_DESTRUCT,
+                        EFFECT_PARAM_SECOND_MEMBER_DESTRUCT,
+                    ],
+                );
+                e.register(OPERATOR_DELETE, |_, _| Ret::default());
+                let param = e.mem.alloc(0x24);
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_ba20, &args![param]).u32(), param);
+                assert_eq!(e.mem.u32(param), 0x0102_31cc);
+                assert_eq!(
+                    calls(&e, EFFECT_PARAM_FIRST_MEMBER_CONSTRUCT),
+                    vec![vec![param + 4, 0, 1]]
+                );
+                assert_eq!(
+                    calls(&e, EFFECT_PARAM_SECOND_MEMBER_CONSTRUCT),
+                    vec![vec![param + 0x14, 0, 1]]
+                );
+                // The destructor body: the second member goes first.
+                e.mem.set_u32(param, 0);
+                start_log(&mut e);
+                e.call(0x004e_ba90, &args![param]);
+                assert_eq!(e.mem.u32(param), 0x0102_31cc);
+                let order: Vec<(u32, u32)> = e
+                    .call_log
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .map(|(address, words)| (*address, words[0]))
+                    .collect();
+                assert_eq!(
+                    order,
+                    vec![
+                        (0x004e_ba90, param),
+                        (EFFECT_PARAM_SECOND_MEMBER_DESTRUCT, param + 0x14),
+                        (EFFECT_PARAM_FIRST_MEMBER_DESTRUCT, param + 4),
+                    ]
+                );
+                // The scalar deleting destructor frees only on bit 0.
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_bb00, &args![param, 0u32]).u32(), param);
+                assert!(calls(&e, OPERATOR_DELETE).is_empty());
+                assert_eq!(e.call(0x004e_bb00, &args![param, 1u32]).u32(), param);
+                assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![param]]);
+            }
+
+            #[test]
+            fn the_member_destructors_forward_to_their_bodies() {
+                let mut e = water_engine();
+                quiet(
+                    &mut e,
+                    &[
+                        EFFECT_PARAM_FIRST_MEMBER_DESTRUCT,
+                        EFFECT_PARAM_SECOND_MEMBER_DESTRUCT,
+                    ],
+                );
+                start_log(&mut e);
+                e.call(0x004e_bb30, &args![0x100u32]);
+                e.call(0x004e_bb50, &args![0x200u32]);
+                assert_eq!(
+                    calls(&e, EFFECT_PARAM_FIRST_MEMBER_DESTRUCT),
+                    vec![vec![0x100]]
+                );
+                assert_eq!(
+                    calls(&e, EFFECT_PARAM_SECOND_MEMBER_DESTRUCT),
+                    vec![vec![0x200]]
+                );
+            }
+
+            #[test]
+            fn the_texture_holder_starts_empty() {
+                let mut e = water_engine();
+                e.register(POINTER_TEMP_CONSTRUCT, |e, a| {
+                    e.mem.set_u32(a[0], a[1]);
+                    ret(a[0])
+                });
+                let holder = e.mem.alloc(0x10);
+                for i in 0..4 {
+                    e.mem.set_u32(holder + 4 * i, 0x0101_0101);
+                }
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_bb70, &args![holder]).u32(), holder);
+                assert_eq!(calls(&e, POINTER_TEMP_CONSTRUCT), vec![vec![holder + 4, 0]]);
+                assert_eq!(
+                    [0, 1, 2, 3].map(|offset| e.mem.u8(holder + offset)),
+                    [0, 0, 0, 0x01]
+                );
+                assert_eq!(e.mem.u32(holder + 4), 0);
+                assert_eq!(e.mem.u32(holder + 8), 0);
+                assert_eq!(e.mem.u32(holder + 0xc), 0);
+            }
+
+            #[test]
+            fn an_effect_is_read_from_the_array_of_the_image_space_manager() {
+                let mut e = water_engine();
+                e.register(ARRAY_ELEMENT_ADDRESS, |e, a| {
+                    ret(e.mem.u32(a[0] + 4) + 4 * a[1])
+                });
+                let manager = e.mem.alloc(0x20);
+                let array = e.mem.alloc(0x40);
+                e.mem.set_u32(manager + 8, array);
+                e.mem.set_u32(array + 4 * 5, 0xeffec7);
+                assert_eq!(e.call(0x004e_bbc0, &args![manager, 5u32]).u32(), 0xeffec7);
+            }
+
+            // --- the pointer maps -------------------------------------------
+
+            #[test]
+            fn the_map_constructors_set_their_vtables_after_the_base() {
+                let mut e = water_engine();
+                e.register(NI_ALLOC_ARRAY, |e, a| ret(e.mem.alloc(a[0])));
+                e.register(MEMORY_SET, |e, a| {
+                    for i in 0..a[2] {
+                        e.mem.set_u8(a[0] + i, a[1] as u8);
+                    }
+                    Ret::default()
+                });
+                e.register(WADING_MAP_BASE_CONSTRUCT, |e, a| {
+                    e.mem.set_u32(a[0], 0xba5e);
+                    ret(a[0])
+                });
+                for (constructor, vtable) in
+                    [(0x004e_d7a0u32, 0x0102_31f4u32), (0x004e_d7d0, 0x0102_3214)]
+                {
+                    let map = e.mem.alloc(0x10);
+                    start_log(&mut e);
+                    assert_eq!(e.call(constructor, &args![map, 8u32]).u32(), map);
+                    assert_eq!(e.mem.u32(map), vtable, "the derived vtable wins");
+                    assert_eq!(e.mem.u32(map + 4), 8);
+                    assert_eq!(e.mem.u32(map + 0xc), 0);
+                    let buckets = e.mem.u32(map + 8);
+                    assert_ne!(buckets, 0);
+                    assert_eq!(calls(&e, NI_ALLOC_ARRAY), vec![vec![32]]);
+                    assert_eq!(calls(&e, MEMORY_SET), vec![vec![buckets, 0, 32]]);
+                }
+                // The wading map's base constructor is the next session's.
+                let map = e.mem.alloc(0x10);
+                start_log(&mut e);
+                assert_eq!(e.call(0x004e_d800, &args![map, 8u32]).u32(), map);
+                assert_eq!(calls(&e, WADING_MAP_BASE_CONSTRUCT), vec![vec![map, 8]]);
+                assert_eq!(e.mem.u32(map), 0x0102_3234);
+            }
+
+            #[test]
+            fn the_base_constructors_allocate_and_clear_the_buckets() {
+                let mut e = water_engine();
+                e.register(NI_ALLOC_ARRAY, |e, a| ret(e.mem.alloc(a[0])));
+                e.register(MEMORY_SET, |_, _| Ret::default());
+                for (constructor, vtable) in
+                    [(0x004e_d960u32, 0x0102_3254u32), (0x004e_da60, 0x0102_3274)]
+                {
+                    let map = e.mem.alloc(0x10);
+                    e.mem.set_u32(map + 0xc, 99);
+                    start_log(&mut e);
+                    assert_eq!(e.call(constructor, &args![map, 0x10u32]).u32(), map);
+                    assert_eq!(e.mem.u32(map), vtable);
+                    assert_eq!(e.mem.u32(map + 4), 0x10);
+                    assert_eq!(e.mem.u32(map + 0xc), 0, "the count");
+                    let buckets = e.mem.u32(map + 8);
+                    assert_eq!(calls(&e, NI_ALLOC_ARRAY), vec![vec![0x40]]);
+                    assert_eq!(calls(&e, MEMORY_SET), vec![vec![buckets, 0, 0x40]]);
+                }
+            }
+
+            #[test]
+            fn the_map_deleting_destructors_free_on_bit_zero() {
+                let mut e = water_engine();
+                e.register(OPERATOR_DELETE, |_, _| Ret::default());
+                for (function, body) in [
+                    (0x004e_d830u32, REFERENCE_MAP_DESTRUCT),
+                    (0x004e_d860, WATER_FORM_MAP_DESTRUCT),
+                    (0x004e_d890, WADING_MAP_DESTRUCT),
+                ] {
+                    e.register(body, |_, _| Ret::default());
+                    start_log(&mut e);
+                    assert_eq!(e.call(function, &args![0x500u32, 0u32]).u32(), 0x500);
+                    assert_eq!(calls(&e, body), vec![vec![0x500]]);
+                    assert!(calls(&e, OPERATOR_DELETE).is_empty());
+                    assert_eq!(e.call(function, &args![0x500u32, 1u32]).u32(), 0x500);
+                    assert_eq!(calls(&e, OPERATOR_DELETE), vec![vec![0x500]]);
+                }
+            }
+
+            // --- the world and sky reflection finish ------------------------
+
+            struct Finishing {
+                r: Reflection,
+                math: PlaneMath,
+                /// The clear colours the renderer was given.
+                clear_colors: Rc<RefCell<Vec<Vec<f32>>>>,
+                world_camera: u32,
+                sky_camera: u32,
+                player: u32,
+                player_node: u32,
+            }
+
+            /// The reflection scene (one group at height 10, the world space's
+            /// water height at 8) with the cameras and sorters of the world and
+            /// sky reflections, the plane math, a player with a 3D node and the
+            /// doubles of the finish: the world thread stage is 3, the sky's 6.
+            fn finishing() -> Finishing {
+                let mut r = reflection();
+                let e = &mut r.w.e;
+                let tes = e.global::<u32>(TES_POINTER);
+                let world_space = e.mem.u32(tes + 0x50);
+                e.mem.set_f32(world_space + 0x7c, 8.0);
+                e.register(WORLD_SPACE_WATER_HEIGHT, |e, a| {
+                    e.mem.f32(a[0] + 0x7c).into_ret()
+                });
+                let math = install_plane_math(e);
+                let clear_colors: Rc<RefCell<Vec<Vec<f32>>>> = Rc::default();
+                let log = clear_colors.clone();
+                e.register_double(RENDERER_SET_COLOR_DOUBLE, move |e, a| {
+                    log.borrow_mut()
+                        .push((0..4).map(|i| e.mem.f32(a[1] + 4 * i)).collect());
+                    Ret::default()
+                });
+                quiet(e, &[RENDER_STATE_SET, RENDER_ACCUMULATED_SCENE]);
+                e.register(CREATE_RENDERED_TEXTURE, |_, _| ret(0x0e00_0777));
+                e.register(NODE_SET_CULLED, |e, a| {
+                    e.mem.set_u32(a[0] + 0x30, a[1]);
+                    Ret::default()
+                });
+                e.set_global(WORLD_REFLECTION_THREAD_STAGE, 3u32);
+                e.set_global(SKY_REFLECTION_THREAD_STAGE, 6u32);
+                let world_camera = e.mem.alloc(0x120);
+                let sky_camera = e.mem.alloc(0x120);
+                e.set_global(WORLD_REFLECTION_CAMERA, world_camera);
+                e.set_global(SKY_REFLECTION_CAMERA, sky_camera);
+                e.set_global(WORLD_REFLECTION_SORTER, 0x4242u32);
+                e.set_global(SKY_REFLECTION_SORTER, 0x4343u32);
+                let player = object(e, ACTOR_VTABLE, 0x700);
+                let player_node = node(e);
+                e.mem.set_u32(player + REF_NODE, player_node);
+                e.set_global(PLAYER_CHARACTER, player);
+                Finishing {
+                    r,
+                    math,
+                    clear_colors,
+                    world_camera,
+                    sky_camera,
+                    player,
+                    player_node,
+                }
+            }
+
+            impl Finishing {
+                fn world(&mut self) {
+                    start_log(&mut self.r.w.e);
+                    let system = self.r.w.system;
+                    self.r.w.e.call(0x004e_b540, &args![system]);
+                }
+
+                fn sky(&mut self) {
+                    start_log(&mut self.r.w.e);
+                    let system = self.r.w.system;
+                    self.r.w.e.call(0x004e_bbe0, &args![system]);
+                }
+            }
+
+            #[test]
+            fn the_world_reflection_is_finished_through_the_water_plane() {
+                let mut f = finishing();
+                f.world();
+                let e = &f.r.w.e;
+                let camera = f.world_camera;
+                // The clear colour has alpha 0 while the reflection renders and is
+                // restored afterwards.
+                assert_eq!(
+                    *f.clear_colors.borrow(),
+                    vec![vec![0.1, 0.2, 0.3, 0.0], vec![0.1, 0.2, 0.3, 0.4]]
+                );
+                assert!(
+                    calls(e, CREATE_RENDERED_TEXTURE).is_empty(),
+                    "the map exists"
+                );
+                // The terrain is toggled around the draw.
+                assert_eq!(calls(e, TERRAIN_TOGGLE_ONE).len(), 1);
+                assert_eq!(calls(e, TERRAIN_TOGGLE_ZERO).len(), 1);
+                // The world map (0x0e000004) is stopped into render target 7.
+                assert_eq!(calls(e, RENDER_TARGET_SET), vec![vec![7, 0x0e00_0005]]);
+                let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                assert_eq!(
+                    calls(e, RENDER_OBJECT_SET_CAMERA_DATA),
+                    vec![vec![object, camera + 0x100]]
+                );
+                assert_eq!(
+                    calls(e, MT_SET_THREAD_STAGE_ONE),
+                    vec![vec![MT_RENDERING_SYSTEM, 1, 4]]
+                );
+                // The plane through (0, 0, 8): normal (0, 0, 1), minus the
+                // constant, moved into view space (the eye is at z = 3).
+                assert_eq!(
+                    *f.math.clip_planes.borrow(),
+                    vec![(f.math.clip_device, 0, vec![0.0, 0.0, 1.0, -5.0])]
+                );
+                assert_eq!(
+                    calls(e, RENDER_STATE_SET),
+                    vec![vec![1, 0, 0, 0, 0, 0, 0], vec![0; 7]]
+                );
+                assert_eq!(
+                    calls(e, RENDER_ACCUMULATED_SCENE),
+                    vec![vec![camera, 0x4242, 0]]
+                );
+                assert_eq!(calls(e, RENDER_TARGET_RESET).len(), 1);
+                assert_eq!(e.global::<u32>(WORLD_REFLECTION_CAMERA), 0);
+                // The sky is left alone, and so is the blur (the setting is off).
+                assert_eq!(e.global::<u32>(SKY_REFLECTION_CAMERA), f.sky_camera);
+                assert!(calls(e, IMAGE_SPACE_RENDER_DISPLACEMENT).is_empty());
+                let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+                assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x10b8]);
+                assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            }
+
+            #[test]
+            fn the_world_reflection_makes_its_map_when_there_is_none() {
+                let mut f = finishing();
+                f.r.w.e.set_global(WORLD_REFLECTION_MAP, 0u32);
+                f.world();
+                let e = &f.r.w.e;
+                let renderer = f.math.renderer;
+                assert_eq!(
+                    calls(e, CREATE_RENDERED_TEXTURE),
+                    vec![vec![0x0aaa_0000, renderer, 9, 0, 0, 0]]
+                );
+                assert_eq!(e.global::<u32>(WORLD_REFLECTION_MAP), 0x0e00_0777);
+                assert_eq!(calls(e, RENDER_TARGET_SET), vec![vec![7, 0x0e00_0778]]);
+            }
+
+            #[test]
+            fn the_terrain_is_left_alone_in_an_interior_when_not_ready_or_forced_high_detail() {
+                // An interior.
+                let mut f = finishing();
+                let tes = f.r.w.e.global::<u32>(TES_POINTER);
+                f.r.w.e.mem.set_u32(tes + 0x34, 0x77);
+                f.world();
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ONE).is_empty());
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ZERO).is_empty());
+                // The terrain is not ready.
+                let mut f = finishing();
+                f.r.w.e.register(TERRAIN_READY, |_, _| ret(0));
+                f.world();
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ONE).is_empty());
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ZERO).is_empty());
+                // bForceHighDetailReflections keeps the world reflection off it.
+                let mut f = finishing();
+                set_setting(&mut f.r.w.e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS, true);
+                f.world();
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ONE).is_empty());
+                assert!(calls(&f.r.w.e, TERRAIN_TOGGLE_ZERO).is_empty());
+                // The sky does not look at that setting.
+                let mut f = finishing();
+                set_setting(&mut f.r.w.e, SETTING_FORCE_HIGH_DETAIL_REFLECTIONS, true);
+                f.sky();
+                assert_eq!(calls(&f.r.w.e, TERRAIN_TOGGLE_ONE).len(), 1);
+                assert_eq!(calls(&f.r.w.e, TERRAIN_TOGGLE_ZERO).len(), 1);
+            }
+
+            #[test]
+            fn the_culled_player_is_shown_again_when_the_world_setup_had_culled_it() {
+                let mut f = finishing();
+                f.r.w.e.mem.set_u32(f.player_node + 0x30, 1);
+                f.r.w.e.mem.set_u8(f.player + 0x64a, 1);
+                let system = f.r.w.system;
+                f.r.w.e.set(system, TESWaterSystem::bCull3rdPerson, true);
+                f.world();
+                assert_eq!(
+                    calls(&f.r.w.e, NODE_SET_CULLED),
+                    vec![vec![f.player_node, 0]]
+                );
+                assert_eq!(f.r.w.e.mem.u32(f.player_node + 0x30), 0);
+                // Nothing for a player the setup did not cull, or without the flag.
+                let mut f = finishing();
+                let system = f.r.w.system;
+                f.r.w.e.set(system, TESWaterSystem::bCull3rdPerson, true);
+                f.world();
+                assert!(calls(&f.r.w.e, NODE_SET_CULLED).is_empty());
+                let mut f = finishing();
+                f.r.w.e.mem.set_u8(f.player + 0x64a, 1);
+                f.world();
+                assert!(calls(&f.r.w.e, NODE_SET_CULLED).is_empty());
+            }
+
+            #[test]
+            fn the_reflection_finishes_need_the_water_shader_and_a_camera() {
+                let mut f = finishing();
+                f.r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+                f.world();
+                f.sky();
+                assert!(f.clear_colors.borrow().is_empty());
+                assert!(calls(&f.r.w.e, RENDER_TARGET_SET).is_empty());
+                assert_eq!(
+                    f.r.w.e.global::<u32>(WORLD_REFLECTION_CAMERA),
+                    f.world_camera
+                );
+                // The scope is opened and closed all the same.
+                assert_eq!(calls(&f.r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+                let mut f = finishing();
+                f.r.w.e.set_global(WORLD_REFLECTION_CAMERA, 0u32);
+                f.world();
+                assert!(f.clear_colors.borrow().is_empty());
+                assert!(calls(&f.r.w.e, RENDER_TARGET_SET).is_empty());
+                let mut f = finishing();
+                f.r.w.e.set_global(SKY_REFLECTION_CAMERA, 0u32);
+                f.sky();
+                assert!(f.clear_colors.borrow().is_empty());
+                assert!(calls(&f.r.w.e, RENDER_TARGET_SET).is_empty());
+            }
+
+            #[test]
+            fn the_blur_draws_the_world_reflection_through_the_blur_effect() {
+                let mut f = finishing();
+                let e = &mut f.r.w.e;
+                set_setting(e, SETTING_USE_WATER_REFLECTION_BLUR, true);
+                set_int_setting(e, SETTING_WATER_BLUR_AMOUNT, 3);
+                e.set_global(ONE, 1.0f64);
+                // The image-space manager: its effect array holds the blur effect
+                // 0x10 + 3.
+                let manager = e.mem.alloc(0x20);
+                let array = e.mem.alloc(0x100);
+                let effect = e.mem.alloc(0x40);
+                e.mem.set_u32(manager + 8, array);
+                e.mem.set_u32(array + 4 * 0x13, effect);
+                e.set_global(IMAGE_SPACE_MANAGER, manager);
+                e.register(ARRAY_ELEMENT_ADDRESS, |e, a| {
+                    ret(e.mem.u32(a[0] + 4) + 4 * a[1])
+                });
+                quiet(
+                    e,
+                    &[
+                        POINTER_TEMP_CONSTRUCT,
+                        IMAGE_SPACE_TEXTURE_SET,
+                        IMAGE_SPACE_TEXTURE_DESTRUCT,
+                        IMAGE_SPACE_EFFECT_SET_TEXTURE,
+                        EFFECT_PARAM_FIRST_MEMBER_CONSTRUCT,
+                        EFFECT_PARAM_SECOND_MEMBER_CONSTRUCT,
+                        EFFECT_PARAM_FIRST_MEMBER_DESTRUCT,
+                        EFFECT_PARAM_SECOND_MEMBER_DESTRUCT,
+                    ],
+                );
+                f.world();
+                let e = &f.r.w.e;
+                let renderer = f.math.renderer;
+                // The blur texture (kind 0x16) goes into slot 2 of the effect.
+                assert_eq!(
+                    calls(e, CREATE_RENDERED_TEXTURE),
+                    vec![vec![0x0aaa_0000, renderer, 0x16, 0, 0, 0]]
+                );
+                let holder = calls(e, IMAGE_SPACE_TEXTURE_SET)[0][0];
+                assert_eq!(
+                    calls(e, IMAGE_SPACE_TEXTURE_SET),
+                    vec![vec![holder, 0x0e00_0777]]
+                );
+                assert_eq!(calls(e, POINTER_TEMP_CONSTRUCT), vec![vec![holder + 4, 0]]);
+                assert_eq!(
+                    calls(e, IMAGE_SPACE_EFFECT_SET_TEXTURE),
+                    vec![vec![effect, 2, holder, 0]]
+                );
+                // The effect param is the 0x24-byte object after the holder.
+                let param = holder + 0x10;
+                assert_eq!(e.mem.u32(param), 0x0102_31cc);
+                assert_eq!(
+                    calls(e, IMAGE_SPACE_RENDER_DISPLACEMENT),
+                    vec![vec![
+                        manager,
+                        0x13,
+                        renderer,
+                        0x0e00_0004,
+                        0x0e00_0004,
+                        param,
+                        1
+                    ]]
+                );
+                assert_eq!(e.global::<f32>(WATER_BLUR_FACTOR), 4.0);
+                // The blur texture is handed back, the param and the holder destroyed.
+                assert_eq!(
+                    calls(e, RETURN_RENDERED_TEXTURE),
+                    vec![vec![0x0aaa_0000, 0x0e00_0777]]
+                );
+                assert_eq!(
+                    calls(e, EFFECT_PARAM_SECOND_MEMBER_DESTRUCT),
+                    vec![vec![param + 0x14]]
+                );
+                assert_eq!(
+                    calls(e, EFFECT_PARAM_FIRST_MEMBER_DESTRUCT),
+                    vec![vec![param + 4]]
+                );
+                assert_eq!(calls(e, IMAGE_SPACE_TEXTURE_DESTRUCT), vec![vec![holder]]);
+                // The blur is the last thing the finish does (after the camera is dropped).
+                assert_eq!(e.global::<u32>(WORLD_REFLECTION_CAMERA), 0);
+            }
+
+            #[test]
+            fn the_sky_reflection_is_finished_with_its_own_camera_map_and_stage() {
+                let mut f = finishing();
+                // The sky has no map yet; the blur setting does not concern it.
+                f.r.w.e.set_global(SKY_REFLECTION_MAP, 0u32);
+                set_setting(&mut f.r.w.e, SETTING_USE_WATER_REFLECTION_BLUR, true);
+                f.r.w.e.mem.set_u8(f.player + 0x64a, 1);
+                let system = f.r.w.system;
+                f.r.w.e.set(system, TESWaterSystem::bCull3rdPerson, true);
+                f.sky();
+                let e = &f.r.w.e;
+                let camera = f.sky_camera;
+                assert_eq!(
+                    *f.clear_colors.borrow(),
+                    vec![vec![0.1, 0.2, 0.3, 0.0], vec![0.1, 0.2, 0.3, 0.4]]
+                );
+                assert_eq!(calls(e, CREATE_RENDERED_TEXTURE)[0][2..], [9, 0, 0, 0]);
+                assert_eq!(e.global::<u32>(SKY_REFLECTION_MAP), 0x0e00_0777);
+                assert_eq!(calls(e, RENDER_TARGET_SET), vec![vec![7, 0x0e00_0778]]);
+                let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                assert_eq!(
+                    calls(e, RENDER_OBJECT_SET_CAMERA_DATA),
+                    vec![vec![object, camera + 0x100]]
+                );
+                assert_eq!(
+                    calls(e, MT_SET_THREAD_STAGE_ONE),
+                    vec![vec![MT_RENDERING_SYSTEM, 1, 7]]
+                );
+                assert_eq!(
+                    calls(e, RENDER_ACCUMULATED_SCENE),
+                    vec![vec![camera, 0x4343, 0]]
+                );
+                assert_eq!(
+                    *f.math.clip_planes.borrow(),
+                    vec![(f.math.clip_device, 0, vec![0.0, 0.0, 1.0, -5.0])]
+                );
+                assert_eq!(e.global::<u32>(SKY_REFLECTION_CAMERA), 0);
+                assert_eq!(e.global::<u32>(WORLD_REFLECTION_CAMERA), f.world_camera);
+                // No culling and no blur for the sky.
+                assert!(calls(e, NODE_SET_CULLED).is_empty());
+                assert!(calls(e, IMAGE_SPACE_RENDER_DISPLACEMENT).is_empty());
+                let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+                assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x1114]);
+            }
+
+            // --- the depth setup of a group (004ebef0) -------------------------
+
+            /// The reflection scene with the doubles of the depth camera: the
+            /// viewer's translate (1, 2, 3), scale 2.5 and the float at +0xfc
+            /// 3.5; the group's depth thread stage is 5. The base form has the
+            /// bit `0x10000000` the setup needs for the lists.
+            fn depth_scene() -> Reflection {
+                let mut r = reflection();
+                r.set_flags(0x1000_0000);
+                let viewer = r.viewer;
+                let e = &mut r.w.e;
+                for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+                    e.mem.set_f32(viewer + 0x8c + 4 * i as u32, value);
+                }
+                e.mem.set_f32(viewer + 0x98, 2.5);
+                e.mem.set_f32(viewer + 0xfc, 3.5);
+                e.register(NODE_SCALE_SOURCE, |e, a| e.mem.f32(a[0] + 0x98).into_ret());
+                e.register(CAMERA_FLOAT_FC_READ, |e, a| {
+                    e.mem.f32(a[0] + 0xfc).into_ret()
+                });
+                e.register(CAMERA_FLOAT_FC_WRITE, |e, a| {
+                    e.mem.set_u32(a[0] + 0xfc, a[1]);
+                    Ret::default()
+                });
+                quiet(e, &[NODE_SET_LOCAL_ROTATE, NODE_SET_LOCAL_SCALE]);
+                e.register(CREATE_RENDERED_TEXTURE, |_, _| ret(0x0e00_0777));
+                let group = r.w.group;
+                r.w.e.set(group, PlaceableWaterGroup::iDepthThreadStage, 5);
+                r
+            }
+
+            fn run_depth(r: &mut Reflection) {
+                start_log(&mut r.w.e);
+                let (system, viewer, group) = (r.w.system, r.viewer, r.w.group);
+                r.w.e.call(0x004e_bef0, &args![system, viewer, group]);
+            }
+
+            fn static_depth_objects(r: &Reflection) -> Vec<u32> {
+                list_items(&r.w.e, r.w.group.addr() + 0x7c)
+            }
+
+            fn dynamic_depth_objects(r: &Reflection) -> Vec<u32> {
+                list_items(&r.w.e, r.w.group.addr() + 0x88)
+            }
+
+            /// A reference with a 3D node of its own (and the node).
+            fn reference_with_node(e: &mut Engine) -> (u32, u32) {
+                let reference = actor(e, 0.0, 0.0, 0.0);
+                let node = node(e);
+                e.mem.set_u32(reference + REF_NODE, node);
+                (reference, node)
+            }
+
+            /// A second water reference of the group, in range, with a shader
+            /// property of its own.
+            fn add_second_reference(r: &mut Reflection) -> u32 {
+                let (second, _, geometry, _) = geometry_chain(&mut r.w.e);
+                let property = r.w.e.mem.alloc(0x150);
+                r.w.e.mem.set_u32(geometry + GEOMETRY_PROPERTY, property);
+                r.w.e.mem.set_u32(second + REF_BASE_FORM, r.base_form);
+                let cell = r.w.e.mem.u32(r.w.water_reference + REF_CELL);
+                r.w.e.mem.set_u32(second + REF_CELL, cell);
+                let top = r.w.e.mem.u32(second + REF_NODE);
+                r.w.e.mem.set_u8(top + NODE_RANGE, 1);
+                let first = r.w.water_reference;
+                fill_list(&mut r.w.e, r.w.group.addr() + 0x24, &[first, second]);
+                property
+            }
+
+            #[test]
+            fn the_depth_camera_is_copied_from_the_viewer_and_the_task_is_handed_over() {
+                let mut r = depth_scene();
+                run_depth(&mut r);
+                let e = &r.w.e;
+                let group = r.w.group;
+                let viewer = r.viewer;
+                let camera = e.get(group, PlaceableWaterGroup::spDepthCamera);
+                assert_ne!(camera, 0);
+                assert_eq!(*r.w.translations.borrow(), vec![(camera, [1.0, 2.0, 3.0])]);
+                assert_eq!(
+                    calls(e, NODE_SET_LOCAL_ROTATE),
+                    vec![vec![camera, viewer + 0x68]]
+                );
+                assert_eq!(
+                    calls(e, NODE_SET_LOCAL_SCALE),
+                    vec![vec![camera, 2.5f32.to_bits()]]
+                );
+                assert_eq!(
+                    calls(e, CAMERA_FLOAT_FC_WRITE),
+                    vec![vec![camera, 3.5f32.to_bits()]]
+                );
+                assert_eq!(e.mem.f32(camera + 0xfc), 3.5);
+                assert_eq!(
+                    calls(e, CAMERA_SET_VIEW_FRUSTUM),
+                    vec![vec![camera, viewer + 0xdc]]
+                );
+                // The camera is updated with a fresh `NiUpdateData`.
+                let update = calls(e, UPDATE_DATA_CONSTRUCT);
+                assert_eq!(update[0][1..], [0.0f32.to_bits(), 0, 0]);
+                assert_eq!(calls(e, NODE_UPDATE), vec![vec![camera, update[0][0]]]);
+                // The depth accumulator is made and prepared.
+                let accumulator = e.get(group, PlaceableWaterGroup::spDepthSorter);
+                assert_ne!(accumulator, 0);
+                assert_eq!(
+                    calls(e, ACCUMULATOR_SET_WORD_194),
+                    vec![vec![accumulator, r.table_entry]]
+                );
+                assert_eq!(e.mem.u8(accumulator + 0x165), 1);
+                assert_eq!(*r.accumulator_cameras.borrow(), vec![(accumulator, camera)]);
+                assert_eq!(
+                    calls(e, ACCUMULATOR_SET_ACCUMULATE),
+                    vec![vec![accumulator, 1]]
+                );
+                // Stage 5 + 1.
+                assert_eq!(
+                    calls(e, MT_ADD_ACCUM_TASK),
+                    vec![vec![
+                        MT_RENDERING_SYSTEM,
+                        camera,
+                        0,
+                        0,
+                        group.addr() + 0x7c,
+                        group.addr() + 0x88,
+                        accumulator,
+                        0,
+                        6,
+                        0
+                    ]]
+                );
+                assert_eq!(
+                    calls(e, MT_SET_THREAD_STAGE),
+                    vec![vec![MT_RENDERING_SYSTEM, 0, 6]]
+                );
+                let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+                assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x114f]);
+                assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT), vec![vec![scope[0][0]]]);
+            }
+
+            #[test]
+            fn an_existing_depth_accumulator_and_map_are_kept() {
+                let mut r = depth_scene();
+                let group = r.w.group;
+                let accumulator = r.w.e.mem.alloc(0x280);
+                r.w.e.mem.set_u32(accumulator, ACCUMULATOR_VTABLE);
+                r.w.e
+                    .set(group, PlaceableWaterGroup::spDepthSorter, accumulator);
+                run_depth(&mut r);
+                assert_eq!(
+                    r.w.e.get(group, PlaceableWaterGroup::spDepthSorter),
+                    accumulator
+                );
+                assert_eq!(r.w.e.mem.u8(accumulator + 0x165), 1);
+                assert!(calls(&r.w.e, ACCUMULATOR_CONSTRUCT).is_empty());
+                assert!(calls(&r.w.e, CREATE_RENDERED_TEXTURE).is_empty());
+            }
+
+            #[test]
+            fn the_properties_of_references_in_range_take_the_depth_map() {
+                let mut r = depth_scene();
+                let second_property = add_second_reference(&mut r);
+                run_depth(&mut r);
+                for property in [r.w.other_property, second_property] {
+                    assert_eq!(
+                        r.w.e.get(
+                            Ptr::<WaterShaderProperty>::new(property),
+                            WaterShaderProperty::spDepthMap
+                        ),
+                        0x0e00_0003
+                    );
+                }
+                assert!(calls(&r.w.e, CREATE_RENDERED_TEXTURE).is_empty());
+                // Without a depth map the setup makes one (kind 0x11).
+                let mut r = depth_scene();
+                r.w.e.set_global(DEPTH_MAP, 0u32);
+                run_depth(&mut r);
+                let renderer = r.w.e.call(RENDERER, &[]).u32();
+                assert_eq!(
+                    calls(&r.w.e, CREATE_RENDERED_TEXTURE),
+                    vec![vec![0x0aaa_0000, renderer, 0x11, 0, 0, 0]]
+                );
+                assert_eq!(r.w.e.global::<u32>(DEPTH_MAP), 0x0e00_0777);
+                assert_eq!(
+                    r.w.e.get(
+                        Ptr::<WaterShaderProperty>::new(r.w.other_property),
+                        WaterShaderProperty::spDepthMap
+                    ),
+                    0x0e00_0777
+                );
+            }
+
+            #[test]
+            fn a_reference_out_of_range_or_in_another_cell_is_left_alone() {
+                let mut r = depth_scene();
+                let top = r.w.e.mem.u32(r.w.water_reference + REF_NODE);
+                r.w.e.mem.set_u8(top + NODE_RANGE, 0);
+                run_depth(&mut r);
+                assert_eq!(
+                    r.w.e.get(
+                        Ptr::<WaterShaderProperty>::new(r.w.other_property),
+                        WaterShaderProperty::spDepthMap
+                    ),
+                    0
+                );
+                let mut r = depth_scene();
+                let cell = r.w.e.mem.u32(r.w.water_reference + REF_CELL);
+                r.w.e.mem.set_u8(cell + 0x26, 5);
+                run_depth(&mut r);
+                assert!(calls(&r.w.e, NODE_GET_PROPERTY).is_empty());
+                let mut r = depth_scene();
+                r.w.e.mem.set_u32(r.w.water_reference + REF_CELL, 0);
+                run_depth(&mut r);
+                assert!(calls(&r.w.e, NODE_GET_PROPERTY).is_empty());
+                // A reference without a shader property is skipped too.
+                let mut r = depth_scene();
+                let geometry = r.w.geometry;
+                r.w.e.mem.set_u32(geometry + GEOMETRY_PROPERTY, 0);
+                run_depth(&mut r);
+                assert!(calls(&r.w.e, NI_POINTER_ASSIGN_FROM).is_empty());
+            }
+
+            #[test]
+            fn a_form_without_the_10000000_bit_adds_no_objects() {
+                let mut r = depth_scene();
+                r.set_flags(0x400 | 0x800);
+                let (actor, _) = reference_with_node(&mut r.w.e);
+                fill_list(&mut r.w.e, r.w.group.addr() + 0x3c, &[actor]);
+                run_depth(&mut r);
+                // The property still takes the depth map.
+                assert_eq!(
+                    r.w.e.get(
+                        Ptr::<WaterShaderProperty>::new(r.w.other_property),
+                        WaterShaderProperty::spDepthMap
+                    ),
+                    0x0e00_0003
+                );
+                assert!(static_depth_objects(&r).is_empty());
+                assert!(dynamic_depth_objects(&r).is_empty());
+            }
+
+            #[test]
+            fn the_grid_cells_become_static_depth_objects_once() {
+                let mut r = depth_scene();
+                r.set_flags(0x1000_0800);
+                add_second_reference(&mut r);
+                run_depth(&mut r);
+                // Cells (0, 0) and (1, 1) exist; each gives its four children, the
+                // newest first in the list; the second reference adds none.
+                let mut expected = vec![];
+                for cell in [GRID_CELL_A, GRID_CELL_B] {
+                    for i in 0..4 {
+                        expected.push(cell * 16 + i);
+                    }
+                }
+                expected.reverse();
+                assert_eq!(static_depth_objects(&r), expected);
+                assert!(dynamic_depth_objects(&r).is_empty());
+                // Without the 0x800 bit there are none.
+                let mut r = depth_scene();
+                r.set_flags(0x1000_0000);
+                run_depth(&mut r);
+                assert!(static_depth_objects(&r).is_empty());
+            }
+
+            #[test]
+            fn the_actors_in_the_water_become_dynamic_depth_objects_once() {
+                let mut r = depth_scene();
+                r.set_flags(0x1000_0400);
+                add_second_reference(&mut r);
+                let (first, first_node) = reference_with_node(&mut r.w.e);
+                let (known, _) = reference_with_node(&mut r.w.e);
+                let without_node = actor(&mut r.w.e, 0.0, 0.0, 0.0);
+                let player = object(&mut r.w.e, ACTOR_VTABLE, 0x700);
+                let player_node = node(&mut r.w.e);
+                r.w.e.mem.set_u32(player + REF_NODE, player_node);
+                r.w.e.set_global(PLAYER_CHARACTER, player);
+                fill_list(
+                    &mut r.w.e,
+                    r.w.group.addr() + 0x3c,
+                    &[first, known, without_node, player],
+                );
+                r.w.map.borrow_mut().insert(known, known);
+                run_depth(&mut r);
+                // The player is only listed when `fn_004eaf60` allows it.
+                assert_eq!(dynamic_depth_objects(&r), vec![first_node]);
+                assert_eq!(r.w.map.borrow().get(&first), Some(&first));
+                assert!(!r.w.map.borrow().contains_key(&without_node));
+                assert!(!r.w.map.borrow().contains_key(&player));
+                // The map is the system's `DepthRefMap`.
+                let queries = calls(&r.w.e, WADING_MAP_GET);
+                assert_eq!(queries[0][0], r.w.system.addr() + 0x5c);
+                // A player in first person is listed.
+                let mut r = depth_scene();
+                r.set_flags(0x1000_0400);
+                let player = object(&mut r.w.e, ACTOR_VTABLE, 0x700);
+                let player_node = node(&mut r.w.e);
+                r.w.e.mem.set_u32(player + REF_NODE, player_node);
+                r.w.e.mem.set_u8(player + 0x64a, 1);
+                r.w.e.set_global(PLAYER_CHARACTER, player);
+                fill_list(&mut r.w.e, r.w.group.addr() + 0x3c, &[player]);
+                run_depth(&mut r);
+                assert_eq!(dynamic_depth_objects(&r), vec![player_node]);
+            }
+
+            #[test]
+            fn the_reflected_references_with_bit_two_become_static_depth_objects() {
+                let mut r = depth_scene();
+                let (first, first_node) = reference_with_node(&mut r.w.e);
+                let (second, _) = reference_with_node(&mut r.w.e);
+                // A chain of `{record, next}` nodes; a record is `{reference,
+                // flags}`.
+                let e = &mut r.w.e;
+                let first_record = e.mem.alloc(8);
+                e.mem.set_u32(first_record, first);
+                e.mem.set_u32(first_record + 4, 2);
+                let second_record = e.mem.alloc(8);
+                e.mem.set_u32(second_record, second);
+                e.mem.set_u32(second_record + 4, 1);
+                let last = e.mem.alloc(8);
+                e.mem.set_u32(last, second_record);
+                let head = e.mem.alloc(8);
+                e.mem.set_u32(head, first_record);
+                e.mem.set_u32(head + 4, last);
+                let water_reference = r.w.water_reference;
+                e.mem.set_u32(water_reference + 0x44, head);
+                run_depth(&mut r);
+                assert_eq!(static_depth_objects(&r), vec![first_node]);
+                assert_eq!(r.w.map.borrow().get(&first), Some(&first));
+                assert!(!r.w.map.borrow().contains_key(&second));
+            }
+
+            #[test]
+            fn the_objects_in_the_water_become_dynamic_depth_objects() {
+                let mut r = depth_scene();
+                let (first, first_node) = reference_with_node(&mut r.w.e);
+                let (known, _) = reference_with_node(&mut r.w.e);
+                let without_node = actor(&mut r.w.e, 0.0, 0.0, 0.0);
+                let (last, last_node) = reference_with_node(&mut r.w.e);
+                fill_list(
+                    &mut r.w.e,
+                    r.w.group.addr() + 0x30,
+                    &[first, known, without_node, last],
+                );
+                r.w.map.borrow_mut().insert(known, known);
+                run_depth(&mut r);
+                assert_eq!(dynamic_depth_objects(&r), vec![last_node, first_node]);
+                assert!(r.w.map.borrow().contains_key(&last));
+                assert!(static_depth_objects(&r).is_empty());
+            }
+
+            #[test]
+            fn the_list_at_011ca144_is_walked_for_forms_with_the_40000000_bit() {
+                let mut r = depth_scene();
+                r.set_flags(0x5000_0000);
+                // The 40000000 bit makes the water geometry one level deeper.
+                let geometry = r.w.geometry;
+                let deeper = r.w.e.mem.u32(geometry + CHILD);
+                let property = r.w.e.mem.u32(geometry + GEOMETRY_PROPERTY);
+                let owner = r.w.e.mem.u32(geometry + GEOMETRY_OWNER);
+                r.w.e.mem.set_u32(deeper + GEOMETRY_PROPERTY, property);
+                r.w.e.mem.set_u32(deeper + GEOMETRY_OWNER, owner);
+                let (first, first_node) = reference_with_node(&mut r.w.e);
+                let (second, second_node) = reference_with_node(&mut r.w.e);
+                let e = &mut r.w.e;
+                let tail = e.mem.alloc(8);
+                e.mem.set_u32(tail, second);
+                e.mem.set_u32(EXTRA_DEPTH_OBJECT_LIST, first);
+                e.mem.set_u32(EXTRA_DEPTH_OBJECT_LIST + 4, tail);
+                run_depth(&mut r);
+                assert_eq!(static_depth_objects(&r), vec![second_node, first_node]);
+                assert!(r.w.map.borrow().contains_key(&first));
+                assert!(r.w.map.borrow().contains_key(&second));
+                // An empty list head adds nothing.
+                let mut r = depth_scene();
+                r.set_flags(0x5000_0000);
+                let geometry = r.w.geometry;
+                let deeper = r.w.e.mem.u32(geometry + CHILD);
+                let property = r.w.e.mem.u32(geometry + GEOMETRY_PROPERTY);
+                let owner = r.w.e.mem.u32(geometry + GEOMETRY_OWNER);
+                r.w.e.mem.set_u32(deeper + GEOMETRY_PROPERTY, property);
+                r.w.e.mem.set_u32(deeper + GEOMETRY_OWNER, owner);
+                r.w.e.mem.set_u32(EXTRA_DEPTH_OBJECT_LIST, 0);
+                r.w.e.mem.set_u32(EXTRA_DEPTH_OBJECT_LIST + 4, 0);
+                run_depth(&mut r);
+                assert!(static_depth_objects(&r).is_empty());
+            }
+
+            #[test]
+            fn the_depth_setup_needs_the_water_shader_and_a_viewer() {
+                let mut r = depth_scene();
+                r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+                run_depth(&mut r);
+                assert!(calls(&r.w.e, NI_ALLOC).is_empty());
+                assert_eq!(calls(&r.w.e, ALLOCATION_SCOPE_CONSTRUCT).len(), 1);
+                assert_eq!(calls(&r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+                let mut r = depth_scene();
+                r.viewer = 0;
+                run_depth(&mut r);
+                assert!(calls(&r.w.e, MT_ADD_ACCUM_TASK).is_empty());
+            }
+
+            // --- the depth render of a group (004ec800, 004ecb60) -----------------
+
+            /// The finishing scene with a depth camera and sorter on the group, a
+            /// water form with the floats 0.25 (+0xa4) and 0.75 (+0xa8), a
+            /// refract plane at 6 and the doubles of the depth pass's states.
+            fn depth_finishing() -> Finishing {
+                let mut f = finishing();
+                let e = &mut f.r.w.e;
+                let group = f.r.w.group;
+                let camera = e.mem.alloc(0x120);
+                e.set(group, PlaceableWaterGroup::spDepthCamera, camera);
+                e.set(group, PlaceableWaterGroup::spDepthSorter, 0x5050);
+                e.set(group, PlaceableWaterGroup::iDepthThreadStage, 5);
+                let water_type = e.get(group, PlaceableWaterGroup::pWaterType).addr();
+                e.mem.set_f32(water_type + 0xa4, 0.25);
+                e.mem.set_f32(water_type + 0xa8, 0.75);
+                e.register(WATER_FORM_FLOAT_A4, |e, a| {
+                    e.mem.f32(a[0] + 0xa4).into_ret()
+                });
+                e.register(WATER_FORM_FLOAT_A8, |e, a| {
+                    e.mem.f32(a[0] + 0xa8).into_ret()
+                });
+                // The refract plane: normal (0, 0, 1), constant 6.
+                e.mem.set_f32(group.addr() + 0x14 + 8, 1.0);
+                e.mem.set_f32(group.addr() + 0x14 + 12, 6.0);
+                set_float_setting(e, SETTING_REFRACTION_WATER_PLANE_BIAS, 2.0);
+                quiet(
+                    e,
+                    &[
+                        COUNTED_STATE_34,
+                        SET_STENCIL_STATE,
+                        RENDER_STATE_980C0,
+                        RENDER_STATE_98230,
+                    ],
+                );
+                e.set_global(RENDER_STATE_COUNTERS + 4 * 10, 5u32);
+                e.set_global(RENDER_STATE_COUNTERS + 4 * 11, 0u32);
+                e.set_global(RENDER_STATE_COUNTERS + 4 * 12, 3u32);
+                e.set_global(COUNTER_011FF9FC, 7u32);
+                f
+            }
+
+            fn run_finish_depth(f: &mut Finishing, mask: u32) {
+                start_log(&mut f.r.w.e);
+                let (system, group) = (f.r.w.system, f.r.w.group);
+                f.r.w.e.call(0x004e_c800, &args![system, group, mask]);
+            }
+
+            #[test]
+            fn the_depth_pass_publishes_its_constants_and_draws_the_group() {
+                let mut f = depth_finishing();
+                let group = f.r.w.group;
+                let camera = f.r.w.e.get(group, PlaceableWaterGroup::spDepthCamera);
+                run_finish_depth(&mut f, 0x1_0055);
+                let e = &f.r.w.e;
+                assert_eq!(
+                    e.get(group, PlaceableWaterGroup::spDepthCamera),
+                    0,
+                    "the camera is dropped at the end"
+                );
+                let object = e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                assert_eq!(
+                    calls(e, RENDER_OBJECT_SET_CAMERA_DATA),
+                    vec![vec![object, camera + 0x100]]
+                );
+                assert_eq!(
+                    calls(e, MT_SET_THREAD_STAGE_ONE),
+                    vec![vec![MT_RENDERING_SYSTEM, 1, 6]]
+                );
+                // The reflect plane (0, 0, 1, 10) and the two floats of the water
+                // form (+0xa4 first) are published for the shaders.
+                let plane: Vec<f32> = (0..4)
+                    .map(|i| e.global::<f32>(DEPTH_PLANE_SHADER_CONSTANT + 4 * i))
+                    .collect();
+                assert_eq!(plane, vec![0.0, 0.0, 1.0, 10.0]);
+                let range: Vec<f32> = (0..2)
+                    .map(|i| e.global::<f32>(DEPTH_RANGE_SHADER_CONSTANT + 4 * i))
+                    .collect();
+                assert_eq!(range, vec![0.25, 0.75]);
+                // The render states: the mask is a 16-bit word.
+                assert_eq!(calls(e, ACCUMULATOR_SET_WORD_19C), vec![vec![0x5050, 0xe]]);
+                assert_eq!(calls(e, COUNTED_STATE_34), vec![vec![1, 1], vec![0, 0]]);
+                assert_eq!(calls(e, SET_STENCIL_STATE), vec![vec![2, 0xff, 0x55, 1]]);
+                assert_eq!(calls(e, RENDER_STATE_980C0), vec![vec![0, 0, 0, 1]]);
+                assert_eq!(calls(e, RENDER_STATE_98230), vec![vec![0, 1]]);
+                // The refract plane (0, 0, 1) at 6, lowered by the bias (2) to -4,
+                // moved into view space (the eye is at z = 3).
+                assert_eq!(
+                    *f.math.clip_planes.borrow(),
+                    vec![(f.math.clip_device, 0, vec![0.0, 0.0, 1.0, -1.0])]
+                );
+                assert_eq!(
+                    calls(e, RENDER_ACCUMULATED_SCENE),
+                    vec![vec![camera, 0x5050, 0]]
+                );
+                // The pass ends with a state on the renderer's device and the
+                // counters lowered.
+                assert_eq!(
+                    *f.math.states.borrow(),
+                    vec![vec![f.math.state_device, 0x98, 0, 0, 0]]
+                );
+                assert_eq!(e.global::<u32>(COUNTER_011FF9FC), 6);
+                assert_eq!(e.global::<u32>(RENDER_STATE_COUNTERS + 4 * 10), 4);
+                assert_eq!(e.global::<u32>(RENDER_STATE_COUNTERS + 4 * 11), 0);
+                assert_eq!(e.global::<u32>(RENDER_STATE_COUNTERS + 4 * 12), 2);
+                let scope = calls(e, ALLOCATION_SCOPE_CONSTRUCT);
+                assert_eq!(&scope[0][1..], &[0x1d, 1, TESWATER_SOURCE_PATH, 0x1209]);
+                assert_eq!(calls(e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+            }
+
+            #[test]
+            fn the_depth_pass_needs_the_water_shader_and_a_depth_camera() {
+                let mut f = depth_finishing();
+                f.r.w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+                run_finish_depth(&mut f, 0x55);
+                assert!(calls(&f.r.w.e, MT_SET_THREAD_STAGE_ONE).is_empty());
+                assert_eq!(calls(&f.r.w.e, ALLOCATION_SCOPE_DESTRUCT).len(), 1);
+                let mut f = depth_finishing();
+                let group = f.r.w.group;
+                f.r.w.e.set(group, PlaceableWaterGroup::spDepthCamera, 0);
+                run_finish_depth(&mut f, 0x55);
+                assert!(calls(&f.r.w.e, MT_SET_THREAD_STAGE_ONE).is_empty());
+                assert!(f.math.states.borrow().is_empty());
+            }
+
+            /// The scene of the wading camera with the doubles of the depth
+            /// camera, a viewer with a translate, scale and the float at +0xfc.
+            fn depth_render_scene() -> (Wading, u32) {
+                let (mut w, _log) = camera_scene();
+                let viewer = w.e.mem.alloc(0x100);
+                for (i, value) in [4.0f32, 5.0, 6.0].into_iter().enumerate() {
+                    w.e.mem.set_f32(viewer + 0x8c + 4 * i as u32, value);
+                }
+                w.e.mem.set_f32(viewer + 0x98, 2.5);
+                w.e.mem.set_f32(viewer + 0xfc, 3.5);
+                w.e.register(NODE_SCALE_SOURCE, |e, a| e.mem.f32(a[0] + 0x98).into_ret());
+                w.e.register(CAMERA_FLOAT_FC_READ, |e, a| {
+                    e.mem.f32(a[0] + 0xfc).into_ret()
+                });
+                quiet(
+                    &mut w.e,
+                    &[
+                        NODE_SET_LOCAL_ROTATE,
+                        NODE_SET_LOCAL_SCALE,
+                        CAMERA_FLOAT_FC_WRITE,
+                        COUNTED_STATE_A8,
+                    ],
+                );
+                w.e.set_global(COUNTER_011FFA18, 4u32);
+                (w, viewer)
+            }
+
+            fn run_render_depth(w: &mut Wading, viewer: u32, mask: u32) {
+                start_log(&mut w.e);
+                let (system, group) = (w.system, w.group);
+                w.e.call(0x004e_cb60, &args![system, viewer, group, 0xdeadu32, mask]);
+            }
+
+            #[test]
+            fn the_depth_camera_on_the_stack_draws_the_references_in_range_at_once() {
+                let (mut w, viewer) = depth_render_scene();
+                run_render_depth(&mut w, viewer, 0x34);
+                let camera = calls(&w.e, CAMERA_CONSTRUCT)[0][0];
+                // A camera on the stack, set up like the depth camera.
+                assert_eq!(*w.translations.borrow(), vec![(camera, [4.0, 5.0, 6.0])]);
+                assert_eq!(
+                    calls(&w.e, NODE_SET_LOCAL_ROTATE),
+                    vec![vec![camera, viewer + 0x68]]
+                );
+                assert_eq!(
+                    calls(&w.e, NODE_SET_LOCAL_SCALE),
+                    vec![vec![camera, 2.5f32.to_bits()]]
+                );
+                assert_eq!(
+                    calls(&w.e, CAMERA_FLOAT_FC_WRITE),
+                    vec![vec![camera, 3.5f32.to_bits()]]
+                );
+                assert_eq!(
+                    calls(&w.e, CAMERA_SET_VIEW_FRUSTUM),
+                    vec![vec![camera, viewer + 0xdc]]
+                );
+                // The camera's frustum goes to the render object; the culling
+                // process works for the camera and is torn down again.
+                let object = w.e.global::<u32>(RENDER_OBJECT_GLOBAL);
+                assert_eq!(
+                    calls(&w.e, RENDER_OBJECT_SET_CAMERA_DATA),
+                    vec![vec![object, camera + 0x100]]
+                );
+                let culling = calls(&w.e, CULLING_PROCESS_CONSTRUCT)[0][0];
+                assert_eq!(
+                    calls(&w.e, CULLING_PROCESS_SET_CAMERA),
+                    vec![vec![culling, camera], vec![culling, 0]]
+                );
+                assert_eq!(
+                    calls(&w.e, CULLING_PROCESS_SET_PLANES),
+                    vec![vec![culling, camera + 0xdc]]
+                );
+                assert_eq!(calls(&w.e, CULLING_PROCESS_DESTRUCT), vec![vec![culling]]);
+                assert_eq!(calls(&w.e, CAMERA_DESTRUCT), vec![vec![camera]]);
+                // The reference gets the mask (and keeps it), its pass is drawn.
+                assert_eq!(w.e.mem.u32(w.other_property + 0x84), 0x34);
+                let request = calls(&w.e, RENDER_PASS_IMMEDIATELY);
+                assert_eq!(request.len(), 1);
+                assert_eq!(request[0][1..], [3, 0, 0, 0]);
+                // The state counters: set on entry, lowered on exit.
+                assert_eq!(calls(&w.e, COUNTED_STATE_A8), vec![vec![0, 1], vec![7, 0]]);
+                assert_eq!(w.e.global::<u32>(COUNTER_011FFA18), 3);
+                assert_eq!(w.e.global::<u8>(WADING_RENDER_ACTIVE_FLAG), 0);
+            }
+
+            #[test]
+            fn a_reference_out_of_range_gets_the_mask_but_is_not_drawn() {
+                let (mut w, viewer) = depth_render_scene();
+                let top = w.e.mem.u32(w.water_reference + REF_NODE);
+                w.e.mem.set_u8(top + NODE_RANGE, 0);
+                run_render_depth(&mut w, viewer, 0x34);
+                assert_eq!(w.e.mem.u32(w.other_property + 0x84), 0x34);
+                assert!(calls(&w.e, PROPERTY_RENDER_PASS).is_empty());
+                assert!(calls(&w.e, RENDER_PASS_IMMEDIATELY).is_empty());
+            }
+
+            #[test]
+            fn references_with_other_owners_or_cells_are_not_touched_by_the_depth_render() {
+                let (mut w, viewer) = depth_render_scene();
+                let cell = w.e.mem.u32(w.water_reference + REF_CELL);
+                w.e.mem.set_u8(cell + 0x26, 5);
+                run_render_depth(&mut w, viewer, 0x34);
+                assert_eq!(w.e.mem.u32(w.other_property + 0x84), 7);
+                let (mut w, viewer) = depth_render_scene();
+                let geometry = w.geometry;
+                let owner = w.e.mem.u32(geometry + GEOMETRY_OWNER);
+                w.e.mem.set_u32(owner + 0x68, 0x0c);
+                run_render_depth(&mut w, viewer, 0x34);
+                assert_eq!(w.e.mem.u32(w.other_property + 0x84), 7);
+                assert!(calls(&w.e, RENDER_PASS_IMMEDIATELY).is_empty());
+            }
+
+            #[test]
+            fn the_depth_render_needs_the_water_shader_and_a_viewer() {
+                let (mut w, viewer) = depth_render_scene();
+                w.e.register(WATER_SHADER_ENABLED, |_, _| ret(0));
+                run_render_depth(&mut w, viewer, 0x34);
+                assert!(calls(&w.e, CAMERA_CONSTRUCT).is_empty());
+                assert!(calls(&w.e, COUNTED_STATE_A8).is_empty());
+                let (mut w, _) = depth_render_scene();
+                run_render_depth(&mut w, 0, 0x34);
+                assert!(calls(&w.e, CAMERA_CONSTRUCT).is_empty());
+                assert_eq!(w.e.global::<u32>(COUNTER_011FFA18), 4);
+            }
         }
     }
 }
