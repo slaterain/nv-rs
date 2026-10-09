@@ -5,13 +5,17 @@
 //!
 //! # Where this file stops
 //!
-//! This holds the first batch of 40 functions of the range, `0056a860` to
-//! `0056d230`: the enable-parent and package-start-location helpers, the
-//! small `ExtraDataList` accessors the linker placed here, `Load3D`
-//! (`0056b2d0`), the setters of the Havok glue and
-//! `InitHavokForPlaceableWater` (`0056c8f0`). The next session continues
-//! with the next open function after `0056d230` in address order
-//! (`0056d250`).
+//! This holds the first two batches of 40 functions of the range:
+//! `0056a860` to `0056d230` (the enable-parent and package-start-location
+//! helpers, the small `ExtraDataList` accessors the linker placed here,
+//! `Load3D` (`0056b2d0`), the setters of the Havok glue and
+//! `InitHavokForPlaceableWater` (`0056c8f0`)), and `0056d250` to `0056e090`
+//! (the Havok constructors, destructors and `GetRTTI` methods of
+//! `bhkWorldObject`, `bhkEntity`, `bhkRigidBody` and `bhkCollisionObject`,
+//! the Gamebryo-to-Havok transform conversion `NI2HK` and
+//! `InitHavokForPrimitiveTrigger` (`0056d7e0`)). The next session continues
+//! with the next open function after `0056e090` in address order
+//! (`0056e0b0`).
 //!
 //! Several functions here are not `TESObjectREFR` methods but small helpers
 //! of other classes (a `BSFadeNode` field setter, a `LOADED_REF_DATA` flag
@@ -1517,6 +1521,674 @@ pub fn tes_object_refr_init_havok_for_placeable_water(e: &mut Engine, this: Ptr<
     locals.release(e);
 }
 
+// ---- The Havok glue after InitHavokForPlaceableWater ---------------------
+
+/// The game's allocator wrapper (`00aa13e0`, cdecl: size) and the sized
+/// release (`00aa1460`, cdecl: block, size) the scalar deleting destructors
+/// call.
+const ALLOCATE: u32 = 0x00aa_13e0;
+const FREE_SIZED: u32 = 0x00aa_1460;
+/// Releases an object of the `00538ef0` family (`00538eb0`, cdecl: block).
+const FREE_OBJECT: u32 = 0x0053_8eb0;
+/// Converts the three floats at `source` into the 16-byte vector
+/// `destination` (`004a3e00`, cdecl: destination, source; the fourth float
+/// is set to 0). Returns `destination`.
+const VECTOR3_TO_VECTOR4: u32 = 0x004a_3e00;
+/// Copies the 16-byte vector at the argument to `this` (`004a3f10`, an
+/// aligned `MOVAPS` copy).
+const COPY_VECTOR4: u32 = 0x004a_3f10;
+/// Stores the low byte of its argument at `this` (`005407b0`).
+const STORE_BYTE: u32 = 0x0054_07b0;
+/// The identity on `this` that the game uses as a trivial constructor
+/// (`006815c0`); [`LIST_ITEM_SLOT`] is the same function.
+const TRIVIAL_CONSTRUCTOR: u32 = LIST_ITEM_SLOT;
+/// `ExtraDataList::GetPrimitive` (Xbox PDB, `0041fbe0`) and
+/// `ExtraDataList::GetCollisionData` (Xbox PDB, `004211a0`).
+const GET_PRIMITIVE: u32 = 0x0041_fbe0;
+const GET_COLLISION_DATA: u32 = 0x0042_11a0;
+/// The word at `this + 4` of a primitive record (`00726070`): 1 for a box,
+/// 2 for a sphere in `InitHavokForPrimitiveTrigger`.
+const PRIMITIVE_TYPE: u32 = 0x0072_6070;
+/// Copies the three floats at `this + 0x18` of a primitive record into the
+/// argument and returns it (`00413fc0`).
+const PRIMITIVE_BOUNDS: u32 = 0x0041_3fc0;
+/// `a + b` of two 3-float vectors (`00439e90`; `this` = a, arguments:
+/// result, b) and `a * s` (`0045bb20`; `this` = a, arguments: result, s).
+/// Both return the result vector.
+const VECTOR3_ADD: u32 = 0x0043_9e90;
+const VECTOR3_SCALE: u32 = 0x0045_bb20;
+/// The global float `-1.0` the AABB case scales the box bounds with.
+const MINUS_ONE: u32 = 0x0101_2054;
+/// The 16-byte constant (0, 0, 0, 1.0f in the exe) `fn_0056d250` stores.
+const VECTOR_0001: u32 = 0x010c_71b0;
+/// The 3x3 identity matrix `InitHavokForPrimitiveTrigger` compares the
+/// reference's orientation with.
+const IDENTITY_MATRIX: u32 = 0x011a_9448;
+/// Collision filter bits every primitive-trigger phantom gets before the
+/// reference's own filter value is or-ed in.
+const TRIGGER_FILTER_BASE: u32 = 0x0005_0000;
+/// Filter value used when the reference has no collision data.
+const DEFAULT_COLLISION_FILTER: u32 = 0x16;
+/// The collision filter value that always selects the shape phantom over
+/// the AABB phantom.
+const SHAPE_PHANTOM_FILTER: u32 = 0x17;
+/// Vtables set by the constructors below.
+const VTABLE_BHK_RIGID_BODY: u32 = 0x0103_01b4;
+const VTABLE_BHK_ENTITY: u32 = 0x0103_02bc;
+const VTABLE_BHK_WORLD_OBJECT: u32 = 0x0103_0394;
+const VTABLE_BHK_COLLISION_OBJECT: u32 = 0x0103_046c;
+const VTABLE_BHK_WATER_PHANTOM_CALLBACK_SHAPE: u32 = 0x0103_0534;
+const VTABLE_HKP_PHANTOM_CALLBACK_SHAPE: u32 = 0x0103_0570;
+const VTABLE_HKP_SHAPE: u32 = 0x0103_05a8;
+/// The instance counters the constructors increment.
+const COUNT_BHK_WORLD_OBJECT: u32 = 0x0126_810c;
+const COUNT_BHK_RIGID_BODY: u32 = 0x0126_81bc;
+const COUNT_BHK_ENTITY: u32 = 0x0126_81fc;
+/// The `NiRTTI` records the `GetRTTI` methods return.
+const RTTI_BHK_WORLD_OBJECT: u32 = 0x0126_8110;
+const RTTI_BHK_ENTITY: u32 = 0x0126_8200;
+const RTTI_BHK_RIGID_BODY: u32 = 0x0126_81c0;
+const RTTI_BHK_COLLISION_OBJECT: u32 = 0x0120_43f8;
+
+fn bump_counter(e: &mut Engine, counter: u32) {
+    let count = e.global::<u32>(counter);
+    e.set_global(counter, count.wrapping_add(1));
+}
+
+fn copy_words(e: &mut Engine, from: u32, to: u32, count: u32) {
+    for word in 0..count {
+        let value = e.mem.u32(from + 4 * word);
+        e.mem.set_u32(to + 4 * word, value);
+    }
+}
+
+/// The scalar deleting destructors' tail: releases the object when bit 0 of
+/// `flags` is set.
+fn release_if_requested(e: &mut Engine, this: Ptr, flags: u32, size: u32) {
+    if flags & 1 != 0 {
+        e.call(FREE_SIZED, &args![this, size]);
+    }
+}
+
+// Translated from 0056d250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the 16-byte constant at `010c71b0` (0, 0, 0, 1.0f in the exe)
+/// into the vector at `this`. The Havok rotation of the placeable-water body
+/// starts as this value.
+pub fn fn_0056d250(e: &mut Engine, this: Ptr) {
+    let target = e.call(TRIVIAL_CONSTRUCTOR, &args![this]).u32();
+    copy_words(e, VECTOR_0001, target, 4);
+}
+
+// Translated from 0056d280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Allocates `size` bytes from Havok's memory router: the thread's router
+/// (`00c85750`), its allocator member (`+0x10`, `0044edb0`), whose virtual
+/// `+4` returns the block. The size is kept in the half-word at block `+4`.
+pub fn fn_0056d280(e: &mut Engine, size: u32) -> u32 {
+    let router = e.call(0x00c8_5750, &args![]).u32();
+    let allocator = e.call(0x0044_edb0, &args![router]).u32();
+    let block = e.vcall(allocator, 4, &args![size]).u32();
+    e.mem.set_u16(block + 4, size as u16);
+    block
+}
+
+// Translated from 0056d2c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls virtual `+0x9c` of `object` with `this` (the cell's Havok holder)
+/// and returns its byte result; 0 when `object` is null.
+pub fn fn_0056d2c0(e: &mut Engine, this: Ptr, object: Ptr) -> u8 {
+    if object.addr() == 0 {
+        return 0;
+    }
+    e.vcall(object.addr(), 0x9c, &args![this]).u8()
+}
+
+// Translated from 0056d300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 16-byte vector `source` into the member at `this + 0x30`
+/// ([`COPY_VECTOR4`]). The rigid-body creation info keeps its position
+/// there.
+pub fn fn_0056d300(e: &mut Engine, this: Ptr, source: Ptr) {
+    e.call(COPY_VECTOR4, &args![this.addr() + 0x30, source]);
+}
+
+// Translated from 0056d320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 16-byte vector `source` into the member at `this + 0x40`
+/// ([`fn_0056d340`]). The rigid-body creation info keeps its rotation
+/// there.
+pub fn fn_0056d320(e: &mut Engine, this: Ptr, source: Ptr) {
+    fn_0056d340(e, Ptr::new(this.addr() + 0x40), source);
+}
+
+// Translated from 0056d340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the 16-byte vector `source` to `this` ([`COPY_VECTOR4`]).
+pub fn fn_0056d340(e: &mut Engine, this: Ptr, source: Ptr) {
+    e.call(COPY_VECTOR4, &args![this, source]);
+}
+
+// Translated from 0056d360 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the low byte of `value` at `this + 0xd4` ([`STORE_BYTE`]); the
+/// callers pass 5 and 2 into the rigid-body creation info.
+pub fn fn_0056d360(e: &mut Engine, this: Ptr, value: u32) {
+    e.call(STORE_BYTE, &args![this.addr() + 0xd4, value]);
+}
+
+// Translated from 0056d380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkRigidBody::bhkRigidBody` (Xbox PDB): builds the `bhkEntity` part
+/// ([`fn_0056d410`]), installs the `bhkRigidBody` vtable, constructs the
+/// member at `this + 0x14` (`004ee810`), initializes the body from `cinfo`
+/// (`bhkRigidBody::Init`, `00c8d650`) and counts the instance. The
+/// exception-unwinding frame is not translated.
+pub fn bhk_rigid_body_bhk_rigid_body(e: &mut Engine, this: Ptr, cinfo: Ptr) -> Ptr {
+    fn_0056d410(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_BHK_RIGID_BODY);
+    e.call(0x004e_e810, &args![this.addr() + 0x14]);
+    e.call(0x00c8_d650, &args![this, cinfo]);
+    bump_counter(e, COUNT_BHK_RIGID_BODY);
+    this
+}
+
+// Translated from 0056d410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `010302bc` (RTTI `bhkEntity`): the
+/// `bhkWorldObject` part first ([`fn_0056d440`]), then the vtable, and the
+/// instance counter at `012681fc` goes up. Returns `this`.
+pub fn fn_0056d410(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0056d440(e, this);
+    e.mem.set_u32(this.addr(), VTABLE_BHK_ENTITY);
+    bump_counter(e, COUNT_BHK_ENTITY);
+    this
+}
+
+// Translated from 0056d440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `01030394` (RTTI `bhkWorldObject`):
+/// the base part (`004b5120`), the vtable, the word at `this + 0x10` set to
+/// 0 and the instance counter at `0126810c` up. Returns `this`.
+pub fn fn_0056d440(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x004b_5120, &args![this]);
+    e.mem.set_u32(this.addr(), VTABLE_BHK_WORLD_OBJECT);
+    e.mem.set_u32(this.addr() + 0x10, 0);
+    bump_counter(e, COUNT_BHK_WORLD_OBJECT);
+    this
+}
+
+// Translated from 0056d480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorldObject::GetRTTI` (Xbox PDB): the address of the class's
+/// `NiRTTI` record.
+pub fn bhk_world_object_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    RTTI_BHK_WORLD_OBJECT
+}
+
+// Translated from 0056d490 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorldObject::ForceAdd` (Xbox PDB): calls virtual `+0x9c` of `this`
+/// with `argument`.
+pub fn bhk_world_object_force_add(e: &mut Engine, this: Ptr, argument: u32) {
+    e.vcall(this.addr(), 0x9c, &args![argument]);
+}
+
+// Translated from 0056d4c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkWorldObject::scalar deleting destructor` (Xbox PDB): runs
+/// `~bhkWorldObject` (`00c85790`), then frees the 0x14-byte object when bit
+/// 0 of `flags` is set. Returns `this`.
+pub fn bhk_world_object_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x00c8_5790, &args![this]);
+    release_if_requested(e, this, flags, 0x14);
+    this
+}
+
+// Translated from 0056d4f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkEntity::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI`
+/// record.
+pub fn bhk_entity_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    RTTI_BHK_ENTITY
+}
+
+// Translated from 0056d500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkEntity::scalar deleting destructor` (Xbox PDB): runs `~bhkEntity`
+/// (`00c9d620`), then frees the 0x14-byte object when bit 0 of `flags` is
+/// set. Returns `this`.
+pub fn bhk_entity_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x00c9_d620, &args![this]);
+    release_if_requested(e, this, flags, 0x14);
+    this
+}
+
+// Translated from 0056d530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkRigidBody::GetRTTI` (Xbox PDB): the address of the class's `NiRTTI`
+/// record.
+pub fn bhk_rigid_body_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    RTTI_BHK_RIGID_BODY
+}
+
+// Translated from 0056d540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkRigidBody::QCinfoSize` (Xbox PDB): the size of the creation info,
+/// 0xe0 bytes.
+pub fn bhk_rigid_body_q_cinfo_size(_e: &mut Engine, _this: Ptr) -> u32 {
+    0xe0
+}
+
+// Translated from 0056d550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkRigidBody::scalar deleting destructor` (Xbox PDB): runs
+/// `~bhkRigidBody` (`00c8e9c0`), then frees the 0x1c-byte object when bit 0
+/// of `flags` is set. Returns `this`.
+pub fn bhk_rigid_body_scalar_deleting_destructor(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x00c8_e9c0, &args![this]);
+    release_if_requested(e, this, flags, 0x1c);
+    this
+}
+
+// Translated from 0056d580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `0103046c` (RTTI
+/// `bhkCollisionObject`): the base part (`00c6b950`, given `node`, the 3D
+/// root the collision object belongs to), then the vtable. Returns `this`.
+pub fn fn_0056d580(e: &mut Engine, this: Ptr, node: Ptr) -> Ptr {
+    e.call(0x00c6_b950, &args![this, node]);
+    e.mem.set_u32(this.addr(), VTABLE_BHK_COLLISION_OBJECT);
+    this
+}
+
+// Translated from 0056d5b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkCollisionObject::GetRTTI` (Xbox PDB): the address of the class's
+/// `NiRTTI` record.
+pub fn bhk_collision_object_get_rtti(_e: &mut Engine, _this: Ptr) -> u32 {
+    RTTI_BHK_COLLISION_OBJECT
+}
+
+// Translated from 0056d5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor (the engine map's name for it is a library
+/// match): runs `0066d410`, then frees the 0x14-byte object when bit 0 of
+/// `flags` is set. Returns `this`.
+pub fn fn_0056d5c0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0066_d410, &args![this]);
+    release_if_requested(e, this, flags, 0x14);
+    this
+}
+
+// Translated from 0056d5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `01030534` (RTTI
+/// `bhkWaterPhantomCallbackShape`) after its base ([`fn_0056d610`]).
+/// Returns `this`.
+pub fn fn_0056d5f0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0056d610(e, this);
+    e.mem
+        .set_u32(this.addr(), VTABLE_BHK_WATER_PHANTOM_CALLBACK_SHAPE);
+    this
+}
+
+// Translated from 0056d610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `01030570` (RTTI
+/// `hkpPhantomCallbackShape`) after its base ([`fn_0056d640`], shape
+/// type 0x1d). Returns `this`.
+pub fn fn_0056d610(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0056d640(e, this, 0x1d);
+    e.mem
+        .set_u32(this.addr(), VTABLE_HKP_PHANTOM_CALLBACK_SHAPE);
+    this
+}
+
+// Translated from 0056d640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor that installs the vtable `010305a8` (RTTI `hkpShape`): the
+/// referenced-object base (`00538ef0`), the vtable, a trivial constructor
+/// on the member at `this + 0xc`, the word at `this + 8` set to 0, and
+/// `00537e90` on that member with `shape_type`. Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_0056d640(e: &mut Engine, this: Ptr, shape_type: u32) -> Ptr {
+    e.call(0x0053_8ef0, &args![this]);
+    e.mem.set_u32(this.addr(), VTABLE_HKP_SHAPE);
+    e.call(TRIVIAL_CONSTRUCTOR, &args![this.addr() + 0xc]);
+    e.mem.set_u32(this.addr() + 8, 0);
+    e.call(0x0053_7e90, &args![this.addr() + 0xc, shape_type]);
+    this
+}
+
+// Translated from 0056d6c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `00538e10` on `this`, the destructor body of the `00538ef0` family
+/// ([`fn_0056d710`] and [`fn_0056d6e0`] go through it).
+pub fn fn_0056d6c0(e: &mut Engine, this: Ptr) {
+    e.call(0x0053_8e10, &args![this]);
+}
+
+// Translated from 0056d6e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor: [`fn_0056d710`], then `00538eb0` frees
+/// the object when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0056d6e0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0056d710(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0056d710 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body: [`fn_0056d6c0`] on `this`.
+pub fn fn_0056d710(e: &mut Engine, this: Ptr) {
+    fn_0056d6c0(e, this);
+}
+
+// Translated from 0056d730 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destroys a creation-info record: [`fn_0056d780`] on `this`.
+pub fn fn_0056d730(e: &mut Engine, this: Ptr) {
+    fn_0056d780(e, this);
+}
+
+// Translated from 0056d750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A scalar deleting destructor: [`fn_0056d7c0`], then `00538eb0` frees the
+/// object when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0056d750(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0056d7c0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0056d780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_0056d7a0`] on `this`.
+pub fn fn_0056d780(e: &mut Engine, this: Ptr) {
+    fn_0056d7a0(e, this);
+}
+
+// Translated from 0056d7a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `0057c530` on the member at `this + 0xc`.
+pub fn fn_0056d7a0(e: &mut Engine, this: Ptr) {
+    e.call(0x0057_c530, &args![this.addr() + 0xc]);
+}
+
+// Translated from 0056d7c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor body: [`fn_0056d710`] on `this`.
+pub fn fn_0056d7c0(e: &mut Engine, this: Ptr) {
+    fn_0056d710(e, this);
+}
+
+// Translated from 0056ded0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a 0x40-byte Havok transform at `this`: the rotation part
+/// ([`fn_0056df00`]) and a trivial constructor on the translation vector at
+/// `this + 0x30`. (The engine map's library name `SafeSQueue<>` is a false
+/// match.) Returns `this`.
+pub fn fn_0056ded0(e: &mut Engine, this: Ptr) -> Ptr {
+    fn_0056df00(e, this);
+    e.call(TRIVIAL_CONSTRUCTOR, &args![this.addr() + 0x30]);
+    this
+}
+
+// Translated from 0056df00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs the rotation part of a Havok transform at `this` (`00621990`).
+/// Returns `this`.
+pub fn fn_0056df00(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0062_1990, &args![this]);
+    this
+}
+
+// Translated from 0056df20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `bhkShapePhantom::SetTransform` (Xbox PDB): converts the Gamebryo
+/// transform to a Havok one in a temporary ([`fn_0056ded0`], [`ni2hk`]) and
+/// hands it to [`fn_0056e050`]. The stack-protector check is not
+/// translated.
+pub fn bhk_shape_phantom_set_transform(e: &mut Engine, this: Ptr, transform: Ptr) {
+    let converted = e.mem.alloc(0x40);
+    fn_0056ded0(e, Ptr::new(converted));
+    let result = ni2hk(e, Ptr::new(converted), transform);
+    fn_0056e050(e, this, result);
+    e.mem.free(converted);
+}
+
+// Translated from 0056df80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NI2HK` (Xbox PDB): converts the Gamebryo transform `source` (rotation
+/// matrix first, translation at `+0x24`) into the Havok transform `out`:
+/// the rotation ([`fn_0056dff0`]) and the translation vector (`004a3e00`,
+/// then [`fn_0056d300`]). Returns `out`. The stack-protector check is not
+/// translated.
+pub fn ni2hk(e: &mut Engine, out: Ptr, source: Ptr) -> Ptr {
+    let out = e.call(TRIVIAL_CONSTRUCTOR, &args![out]).u32();
+    fn_0056dff0(e, Ptr::new(out), source);
+    let vector = e.mem.alloc(16);
+    e.call(TRIVIAL_CONSTRUCTOR, &args![vector]);
+    let translation = e
+        .call(VECTOR3_TO_VECTOR4, &args![vector, source.addr() + 0x24])
+        .u32();
+    fn_0056d300(e, Ptr::new(out), Ptr::new(translation));
+    e.mem.free(vector);
+    Ptr::new(out)
+}
+
+// Translated from 0056dff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Converts the three rotation columns of the Gamebryo matrix `source` into
+/// the vectors of the Havok rotation `out`: for each index `i` it reads
+/// column `i` (`00439f50`, three floats) and stores it as a 16-byte vector
+/// (`004b4cf0` picks the vector `i` of `out`, `00553fc0` fills it). Returns
+/// `out`.
+pub fn fn_0056dff0(e: &mut Engine, out: Ptr, source: Ptr) -> Ptr {
+    let column = e.mem.alloc(12);
+    e.call(TRIVIAL_CONSTRUCTOR, &args![column]);
+    for index in 0..3u32 {
+        e.call(0x0043_9f50, &args![source, index, column]);
+        let row = e.call(0x004b_4cf0, &args![out, index]).u32();
+        e.call(0x0055_3fc0, &args![row, column]);
+    }
+    e.mem.free(column);
+    out
+}
+
+// Translated from 0056e050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the transform of the Havok object `this` holds: when `004ae750`
+/// finds it, `00c9e910` (the engine map names it
+/// `hkpShapePhantom::setTransform`) is called with `transform` between two
+/// calls of `00a29680` (a bare `RET`) on `this`.
+pub fn fn_0056e050(e: &mut Engine, this: Ptr, transform: Ptr) {
+    let object = e.call(0x004a_e750, &args![this]).u32();
+    if object != 0 {
+        e.call(0x00a2_9680, &args![this]);
+        e.call(0x00c9_e910, &args![object, transform]);
+        e.call(0x00a2_9680, &args![this]);
+    }
+}
+
+// Translated from 0056e090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructs a phantom creation-info record at `this` (`0056e0b0`).
+/// Returns `this`.
+pub fn fn_0056e090(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0056_e0b0, &args![this]);
+    this
+}
+
+/// The `NiPointer<bhkPhantom>` slot of the reference's loaded data
+/// (`LOADED_REF_DATA::spPhantom`, Xbox PDB, `+0x18`), read from the
+/// reference each time the way the game does.
+fn phantom_slot(e: &Engine, this: Ptr<TESObjectREFR>) -> u32 {
+    e.get(this, TESObjectREFR::pLoadedData).addr() + 0x18
+}
+
+/// The reference's `NiTransform` that `InitHavokForPrimitiveTrigger` builds:
+/// identity matrix constructor (`00476a80`), the orientation copied over it
+/// (`GetOrientation`, `0056fa00`), the position (virtual `+0x1f4`) at
+/// `+0x24` and scale 1.0 at `+0x30`. Returns the 0x34-byte block.
+fn build_trigger_transform(e: &mut Engine, me: u32, locals: &mut Locals) -> u32 {
+    let transform = locals.alloc(e, 0x34);
+    e.call(0x0047_6a80, &args![transform]);
+    let orientation_out = locals.alloc(e, 0x24);
+    let orientation = e.call(0x0056_fa00, &args![me, orientation_out]).u32();
+    copy_words(e, orientation, transform, 9);
+    let position = e.vcall(me, SLOT_GET_POSITION, &args![]).u32();
+    copy_words(e, position, transform + 0x24, 3);
+    e.mem.set_f32(transform + 0x30, 1.0);
+    transform
+}
+
+// Translated from 0056d7e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectREFR::InitHavokForPrimitiveTrigger` (Xbox PDB): gives a
+/// primitive trigger volume (the `BGSPrimitive` of the reference's extra
+/// data) a Havok phantom, so entering it can be detected. Does nothing
+/// without a parent cell and its loaded-cell holder (`004543c0`).
+///
+/// The reference's scale (`00567490`) and its 3D root's scale (`00440490`)
+/// are set to 1.0 and the root's local translation to the origin
+/// (`00a59c60`). The reference's orientation, position and scale 1.0 go
+/// into an `NiTransform`. The phantom kind depends on the collision filter
+/// (the reference's collision data when it has any, else 0x16) and the
+/// primitive:
+///
+/// - a box primitive (type 1), a filter other than 0x17 and an orientation
+///   equal to the identity matrix (`011a9448`) get a `bhkAabbPhantom`
+///   (`0056e550`) whose box is the position plus and minus the primitive's
+///   bounds (`00413fc0`; the minus case scales them by the global `-1.0`
+///   at `01012054`);
+/// - every other case builds the shape first (a `bhkBoxShape`, `0056e610`,
+///   for type 1; a `bhkSphereShape`, `0056e950`, from the first bound for
+///   type 2; for other types the shape stays null) and wraps it in a
+///   `bhkSimpleShapePhantom` (`0056e2d0`) placed with
+///   `bhkShapePhantom::SetTransform` ([`bhk_shape_phantom_set_transform`]).
+///
+/// Both store the phantom in the loaded data's `spPhantom` (`0066b0d0`).
+/// Then a `bhkCollisionObject` ([`fn_0056d580`]) is made for the 3D root, a
+/// `BSXFlags` extra data (`00c42f70`, set to 2, 1) is added to the root
+/// (`00a5bca0`), the phantom is tied to the root (`00c85c10`) and added to
+/// the cell holder ([`fn_0056d2c0`]).
+///
+/// The temporaries (transform, vectors, creation-info records) are blocks of
+/// the engine's memory, freed on every exit. The exception-unwinding frame
+/// and the stack-protector check are not translated.
+pub fn tes_object_refr_init_havok_for_primitive_trigger(e: &mut Engine, this: Ptr<TESObjectREFR>) {
+    let me = this.addr();
+    let list = extra_list(e, me);
+    let primitive = e.call(GET_PRIMITIVE, &args![list]).u32();
+    let holder = if e.call(GET_PARENT_CELL, &args![me]).u32() != 0 {
+        let cell = e.call(GET_PARENT_CELL, &args![me]).u32();
+        e.call(0x0045_43c0, &args![cell]).u32()
+    } else {
+        0
+    };
+    if holder == 0 {
+        return;
+    }
+    let mut locals = Locals::default();
+    let mut shape = 0u32;
+    let unused_transform = locals.alloc(e, 0x40);
+    fn_0056ded0(e, Ptr::new(unused_transform));
+    let box_vector = locals.alloc(e, 16);
+    e.call(TRIVIAL_CONSTRUCTOR, &args![box_vector]);
+    e.call(0x0056_7490, &args![me, 1.0f32]);
+    let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+    e.call(0x0044_0490, &args![node, 1.0f32]);
+    let origin = locals.alloc(e, 12);
+    e.call(0x0043_d410, &args![origin, 0.0f32, 0.0f32, 0.0f32]);
+    let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+    e.call(0x00a5_9c60, &args![node, origin]);
+    let transform = build_trigger_transform(e, me, &mut locals);
+
+    let list = extra_list(e, me);
+    let collision_data = e.call(GET_COLLISION_DATA, &args![list]).u32();
+    let filter = if collision_data != 0 {
+        ni_pointer_get(e, collision_data)
+    } else {
+        DEFAULT_COLLISION_FILTER
+    };
+    let aabb = filter != SHAPE_PHANTOM_FILTER
+        && e.call(PRIMITIVE_TYPE, &args![primitive]).u32() == 1
+        && e.call(0x004d_9ae0, &args![transform, IDENTITY_MATRIX])
+            .bool();
+    let position = transform + 0x24;
+
+    if aabb {
+        let cinfo = locals.alloc(e, 0x40);
+        e.call(0x0056_e4e0, &args![cinfo]);
+        let vector = locals.alloc(e, 16);
+        e.call(TRIVIAL_CONSTRUCTOR, &args![vector]);
+        let sum = locals.alloc(e, 12);
+        e.call(TRIVIAL_CONSTRUCTOR, &args![sum]);
+        // the box corner at position + bounds goes to cinfo + 0x30
+        let bounds = locals.alloc(e, 12);
+        let added = locals.alloc(e, 12);
+        let result = e.call(PRIMITIVE_BOUNDS, &args![primitive, bounds]).u32();
+        let result = e.call(VECTOR3_ADD, &args![result, added, position]).u32();
+        copy_words(e, result, sum, 3);
+        e.call(VECTOR3_TO_VECTOR4, &args![vector, sum]);
+        e.call(COPY_VECTOR4, &args![cinfo + 0x30, vector]);
+        // and the one at position - bounds to cinfo + 0x20
+        let minus_one = e.global::<f32>(MINUS_ONE);
+        let bounds = locals.alloc(e, 12);
+        let scaled = locals.alloc(e, 12);
+        let added = locals.alloc(e, 12);
+        let result = e.call(PRIMITIVE_BOUNDS, &args![primitive, bounds]).u32();
+        let result = e
+            .call(VECTOR3_SCALE, &args![result, scaled, minus_one])
+            .u32();
+        let result = e.call(VECTOR3_ADD, &args![result, added, position]).u32();
+        copy_words(e, result, sum, 3);
+        e.call(VECTOR3_TO_VECTOR4, &args![vector, sum]);
+        e.call(COPY_VECTOR4, &args![cinfo + 0x20, vector]);
+        e.call(STORE_BYTE, &args![cinfo + 8, 2u32]);
+        e.mem.set_u32(cinfo, TRIGGER_FILTER_BASE | filter);
+        let raw = e.call(ALLOCATE, &args![0x18u32]).u32();
+        let phantom = if raw != 0 {
+            e.call(0x0056_e550, &args![raw, cinfo]).u32()
+        } else {
+            0
+        };
+        let slot = phantom_slot(e, this);
+        e.call(NI_POINTER_ASSIGN, &args![slot, phantom]);
+        fn_0056d730(e, Ptr::new(cinfo));
+    } else {
+        if e.call(PRIMITIVE_TYPE, &args![primitive]).u32() == 1 {
+            let bounds = locals.alloc(e, 12);
+            let result = e.call(PRIMITIVE_BOUNDS, &args![primitive, bounds]).u32();
+            e.call(VECTOR3_TO_VECTOR4, &args![box_vector, result]);
+            let raw = e.call(ALLOCATE, &args![0x14u32]).u32();
+            shape = if raw != 0 {
+                e.call(0x0056_e610, &args![raw, box_vector]).u32()
+            } else {
+                0
+            };
+        }
+        if e.call(PRIMITIVE_TYPE, &args![primitive]).u32() == 2 {
+            let raw = e.call(ALLOCATE, &args![0x14u32]).u32();
+            shape = if raw != 0 {
+                let bounds = locals.alloc(e, 12);
+                let result = e.call(PRIMITIVE_BOUNDS, &args![primitive, bounds]).u32();
+                let radius = e.mem.f32(result);
+                let radius = e.call(0x004a_3e90, &args![radius]).f32();
+                e.call(0x0056_e950, &args![raw, radius, 0u32]).u32()
+            } else {
+                0
+            };
+        }
+        let cinfo = locals.alloc(e, 0x60);
+        fn_0056e090(e, Ptr::new(cinfo));
+        let hk_shape = e.call(0x0062_0b80, &args![shape]).u32();
+        e.mem.set_u32(cinfo + 4, hk_shape);
+        e.call(STORE_BYTE, &args![cinfo + 8, 2u32]);
+        e.mem.set_u32(cinfo, TRIGGER_FILTER_BASE | filter);
+        let raw = e.call(ALLOCATE, &args![0x18u32]).u32();
+        let phantom = if raw != 0 {
+            e.call(0x0056_e2d0, &args![raw, cinfo]).u32()
+        } else {
+            0
+        };
+        bhk_shape_phantom_set_transform(e, Ptr::new(phantom), Ptr::new(transform));
+        let slot = phantom_slot(e, this);
+        e.call(NI_POINTER_ASSIGN, &args![slot, phantom]);
+        e.call(0x0056_ea90, &args![cinfo]);
+    }
+
+    let raw = e.call(ALLOCATE, &args![0x14u32]).u32();
+    if raw != 0 {
+        let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+        fn_0056d580(e, Ptr::new(raw), Ptr::new(node));
+    }
+    let raw = e.call(ALLOCATE, &args![0x10u32]).u32();
+    let flags = if raw != 0 {
+        e.call(0x00c4_2f70, &args![raw]).u32()
+    } else {
+        0
+    };
+    e.call(0x0051_9230, &args![flags, 2u32, 1u32]);
+    let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+    e.call(0x00a5_bca0, &args![node, flags]);
+    let node = e.vcall(me, SLOT_GET_3D, &args![]).u32();
+    let slot = phantom_slot(e, this);
+    let phantom = ni_pointer_get(e, slot);
+    e.call(0x00c8_5c10, &args![phantom, node, 0u32]);
+    let slot = phantom_slot(e, this);
+    let phantom = ni_pointer_get(e, slot);
+    fn_0056d2c0(e, Ptr::new(holder), Ptr::new(phantom));
+    locals.release(e);
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1599,6 +2271,61 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             tes_object_refr_init_havok_for_placeable_water(Ptr<TESObjectREFR>)
         ),
         entry!(0x0056d230, fn_0056d230(Ptr, Ptr)),
+        entry!(0x0056d250, fn_0056d250(Ptr)),
+        entry!(0x0056d280, fn_0056d280(u32) -> u32),
+        entry!(0x0056d2c0, fn_0056d2c0(Ptr, Ptr) -> u8),
+        entry!(0x0056d300, fn_0056d300(Ptr, Ptr)),
+        entry!(0x0056d320, fn_0056d320(Ptr, Ptr)),
+        entry!(0x0056d340, fn_0056d340(Ptr, Ptr)),
+        entry!(0x0056d360, fn_0056d360(Ptr, u32)),
+        entry!(
+            0x0056d380,
+            bhk_rigid_body_bhk_rigid_body(Ptr, Ptr) -> Ptr
+        ),
+        entry!(0x0056d410, fn_0056d410(Ptr) -> Ptr),
+        entry!(0x0056d440, fn_0056d440(Ptr) -> Ptr),
+        entry!(0x0056d480, bhk_world_object_get_rtti(Ptr) -> u32),
+        entry!(0x0056d490, bhk_world_object_force_add(Ptr, u32)),
+        entry!(
+            0x0056d4c0,
+            bhk_world_object_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0056d4f0, bhk_entity_get_rtti(Ptr) -> u32),
+        entry!(
+            0x0056d500,
+            bhk_entity_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0056d530, bhk_rigid_body_get_rtti(Ptr) -> u32),
+        entry!(0x0056d540, bhk_rigid_body_q_cinfo_size(Ptr) -> u32),
+        entry!(
+            0x0056d550,
+            bhk_rigid_body_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(0x0056d580, fn_0056d580(Ptr, Ptr) -> Ptr),
+        entry!(0x0056d5b0, bhk_collision_object_get_rtti(Ptr) -> u32),
+        entry!(0x0056d5c0, fn_0056d5c0(Ptr, u32) -> Ptr),
+        entry!(0x0056d5f0, fn_0056d5f0(Ptr) -> Ptr),
+        entry!(0x0056d610, fn_0056d610(Ptr) -> Ptr),
+        entry!(0x0056d640, fn_0056d640(Ptr, u32) -> Ptr),
+        entry!(0x0056d6c0, fn_0056d6c0(Ptr)),
+        entry!(0x0056d6e0, fn_0056d6e0(Ptr, u32) -> Ptr),
+        entry!(0x0056d710, fn_0056d710(Ptr)),
+        entry!(0x0056d730, fn_0056d730(Ptr)),
+        entry!(0x0056d750, fn_0056d750(Ptr, u32) -> Ptr),
+        entry!(0x0056d780, fn_0056d780(Ptr)),
+        entry!(0x0056d7a0, fn_0056d7a0(Ptr)),
+        entry!(0x0056d7c0, fn_0056d7c0(Ptr)),
+        entry!(
+            0x0056d7e0,
+            tes_object_refr_init_havok_for_primitive_trigger(Ptr<TESObjectREFR>)
+        ),
+        entry!(0x0056ded0, fn_0056ded0(Ptr) -> Ptr),
+        entry!(0x0056df00, fn_0056df00(Ptr) -> Ptr),
+        entry!(0x0056df20, bhk_shape_phantom_set_transform(Ptr, Ptr)),
+        entry!(0x0056df80, ni2hk(Ptr, Ptr) -> Ptr),
+        entry!(0x0056dff0, fn_0056dff0(Ptr, Ptr) -> Ptr),
+        entry!(0x0056e050, fn_0056e050(Ptr, Ptr)),
+        entry!(0x0056e090, fn_0056e090(Ptr) -> Ptr),
     ]
 }
 #[cfg(test)]
@@ -3451,5 +4178,781 @@ mod tests {
         s.e.call_log = Some(vec![]);
         s.e.call(0x0056_c8f0, &args![s.this]);
         assert_eq!(addresses(&s.e.call_log.take().unwrap()).len(), 2);
+    }
+
+    // ---- 0056d250 .. 0056e090: the Havok glue ------------------------------
+
+    /// Maps the pages of the counters and constants this batch reads.
+    fn havok_engine() -> Engine {
+        let mut e = engine();
+        for page in [0x010c_7000, 0x0126_8000] {
+            e.map(page, 0x1000);
+        }
+        e
+    }
+
+    /// Doubles with the real bodies of the small vector helpers.
+    fn install_vector_math(e: &mut Engine) {
+        // 004a3e00: three floats to a 16-byte vector with w = 0
+        e.register(0x004a_3e00, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            e.mem.set_f32(a[0] + 12, 0.0);
+            a[0].into_ret()
+        });
+        // 004a3f10: 16-byte copy
+        e.register(0x004a_3f10, |e, a| {
+            for word in 0..4 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            Ret::default()
+        });
+        // 00413fc0: the three floats at +0x18
+        e.register(0x0041_3fc0, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[0] + 0x18 + 4 * word);
+                e.mem.set_u32(a[1] + 4 * word, value);
+            }
+            a[1].into_ret()
+        });
+        // 00439e90: result = this + b
+        e.register(0x0043_9e90, |e, a| {
+            for word in 0..3 {
+                let sum = e.mem.f32(a[0] + 4 * word) + e.mem.f32(a[2] + 4 * word);
+                e.mem.set_f32(a[1] + 4 * word, sum);
+            }
+            a[1].into_ret()
+        });
+        // 0045bb20: result = this * s
+        e.register(0x0045_bb20, |e, a| {
+            for word in 0..3 {
+                let product = e.mem.f32(a[0] + 4 * word) * f32::from_bits(a[2]);
+                e.mem.set_f32(a[1] + 4 * word, product);
+            }
+            a[1].into_ret()
+        });
+        // 00439f50: column `index` of a row-major 3x3 matrix
+        e.register(0x0043_9f50, |e, a| {
+            for row in 0..3 {
+                let value = e.mem.u32(a[0] + 4 * (a[1] + 3 * row));
+                e.mem.set_u32(a[2] + 4 * row, value);
+            }
+            Ret::default()
+        });
+        // 004b4cf0: vector `index` of a Havok rotation
+        e.register(0x004b_4cf0, |_, a| (a[0] + 16 * a[1]).into_ret());
+        // 00553fc0: three floats to a 16-byte vector with w = 0
+        e.register(0x0055_3fc0, |e, a| {
+            for word in 0..3 {
+                let value = e.mem.u32(a[1] + 4 * word);
+                e.mem.set_u32(a[0] + 4 * word, value);
+            }
+            e.mem.set_f32(a[0] + 12, 0.0);
+            a[0].into_ret()
+        });
+    }
+
+    fn floats(e: &Engine, addr: u32, count: u32) -> Vec<f32> {
+        (0..count).map(|i| e.mem.f32(addr + 4 * i)).collect()
+    }
+
+    #[test]
+    fn fn_0056d250_stores_the_constant_vector() {
+        let mut e = havok_engine();
+        for (i, v) in [0.0f32, 0.0, 0.0, 1.0].iter().enumerate() {
+            e.mem.set_f32(0x010c_71b0 + 4 * i as u32, *v);
+        }
+        let target = e.mem.alloc(16);
+        e.mem.set_u32(target, 0x7777);
+        e.call(0x0056_d250, &args![target]);
+        assert_eq!(floats(&e, target, 4), vec![0.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn fn_0056d280_allocates_through_the_memory_router() {
+        let mut e = havok_engine();
+        returns(&mut e, 0x00c8_5750, 0x5000);
+        e.register(0x0044_edb0, |e, a| {
+            assert_eq!(a[0], 0x5000);
+            let allocator = e.mem.alloc(0x20);
+            let vtable = e.mem.alloc(0x20);
+            e.mem.set_u32(vtable + 4, 0x00fe_0004);
+            e.mem.set_u32(allocator, vtable);
+            allocator.into_ret()
+        });
+        e.register(0x00fe_0004, |e, a| {
+            assert_eq!(a[1], 0x1_0030);
+            e.mem.alloc(0x40).into_ret()
+        });
+        let block = e.call(0x0056_d280, &args![0x1_0030u32]).u32();
+        assert_eq!(e.mem.u16(block + 4), 0x0030);
+    }
+
+    #[test]
+    fn fn_0056d2c0_asks_the_object_to_take_the_holder() {
+        let mut e = havok_engine();
+        returns(&mut e, 0x00fe_009c, 0x0101);
+        let object = object_with_vtable(&mut e, 0x20, &[(0x9c, 0x00fe_009c)]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d2c0, &args![0x1357u32, object]).u32(), 1);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x00fe_009c), vec![vec![object, 0x1357]]);
+        assert_eq!(e.call(0x0056_d2c0, &args![0x1357u32, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_0056d300_copies_the_vector_to_offset_0x30() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004a_3f10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d300, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x004a_3f10), vec![vec![0x1030, 0x2000]]);
+    }
+
+    #[test]
+    fn fn_0056d320_copies_the_vector_to_offset_0x40() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004a_3f10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d320, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x004a_3f10), vec![vec![0x1040, 0x2000]]);
+    }
+
+    #[test]
+    fn fn_0056d340_copies_the_vector() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004a_3f10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d340, &args![0x1000u32, 0x2000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x004a_3f10), vec![vec![0x1000, 0x2000]]);
+    }
+
+    #[test]
+    fn fn_0056d360_stores_the_value_at_offset_0xd4() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0054_07b0]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d360, &args![0x1000u32, 5u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0054_07b0), vec![vec![0x10d4, 5]]);
+    }
+
+    #[test]
+    fn bhk_rigid_body_constructor_chains_the_bases_and_counts() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004b_5120, 0x004e_e810, 0x00c8_d650]);
+        e.set_global(0x0126_81bc, 4u32);
+        e.set_global(0x0126_81fc, 8u32);
+        e.set_global(0x0126_810c, 12u32);
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d380, &args![this, 0x9000u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), 0x0103_01b4);
+        assert_eq!(calls_to(&log, 0x004b_5120), vec![vec![this]]);
+        assert_eq!(calls_to(&log, 0x004e_e810), vec![vec![this + 0x14]]);
+        assert_eq!(calls_to(&log, 0x00c8_d650), vec![vec![this, 0x9000]]);
+        assert_eq!(e.global::<u32>(0x0126_81bc), 5);
+        assert_eq!(e.global::<u32>(0x0126_81fc), 9);
+        assert_eq!(e.global::<u32>(0x0126_810c), 13);
+    }
+
+    #[test]
+    fn fn_0056d410_installs_the_entity_vtable() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004b_5120]);
+        let this = e.mem.alloc(0x20);
+        e.set_global(0x0126_81fc, 1u32);
+        assert_eq!(e.call(0x0056_d410, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0103_02bc);
+        assert_eq!(e.global::<u32>(0x0126_81fc), 2);
+    }
+
+    #[test]
+    fn fn_0056d440_installs_the_world_object_vtable() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x004b_5120]);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 0x10, 0x55);
+        e.set_global(0x0126_810c, 7u32);
+        assert_eq!(e.call(0x0056_d440, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0103_0394);
+        assert_eq!(e.mem.u32(this + 0x10), 0);
+        assert_eq!(e.global::<u32>(0x0126_810c), 8);
+    }
+
+    #[test]
+    fn the_get_rtti_methods_return_their_records() {
+        let mut e = havok_engine();
+        assert_eq!(e.call(0x0056_d480, &args![1u32]).u32(), 0x0126_8110);
+        assert_eq!(e.call(0x0056_d4f0, &args![1u32]).u32(), 0x0126_8200);
+        assert_eq!(e.call(0x0056_d530, &args![1u32]).u32(), 0x0126_81c0);
+        assert_eq!(e.call(0x0056_d5b0, &args![1u32]).u32(), 0x0120_43f8);
+    }
+
+    #[test]
+    fn bhk_world_object_force_add_calls_virtual_0x9c() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x00fe_009c]);
+        let this = object_with_vtable(&mut e, 0x20, &[(0x9c, 0x00fe_009c)]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d490, &args![this, 0x42u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x00fe_009c), vec![vec![this, 0x42]]);
+    }
+
+    /// Checks a scalar deleting destructor: it runs `body`, and frees `size`
+    /// bytes only when bit 0 of the flags is set.
+    fn check_scalar_deleting(address: u32, body: u32, size: u32) {
+        let mut e = havok_engine();
+        stub(&mut e, &[body, FREE_SIZED]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(address, &args![0x3000u32, 0u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, body), vec![vec![0x3000]]);
+        assert!(calls_to(&log, FREE_SIZED).is_empty());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(address, &args![0x3000u32, 3u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, FREE_SIZED), vec![vec![0x3000, size]]);
+    }
+
+    #[test]
+    fn bhk_world_object_destructor_frees_0x14_bytes() {
+        check_scalar_deleting(0x0056_d4c0, 0x00c8_5790, 0x14);
+    }
+
+    #[test]
+    fn bhk_entity_destructor_frees_0x14_bytes() {
+        check_scalar_deleting(0x0056_d500, 0x00c9_d620, 0x14);
+    }
+
+    #[test]
+    fn bhk_rigid_body_destructor_frees_0x1c_bytes() {
+        check_scalar_deleting(0x0056_d550, 0x00c8_e9c0, 0x1c);
+    }
+
+    #[test]
+    fn fn_0056d5c0_frees_0x14_bytes() {
+        check_scalar_deleting(0x0056_d5c0, 0x0066_d410, 0x14);
+    }
+
+    #[test]
+    fn bhk_rigid_body_q_cinfo_size_is_0xe0() {
+        let mut e = havok_engine();
+        assert_eq!(e.call(0x0056_d540, &args![1u32]).u32(), 0xe0);
+    }
+
+    #[test]
+    fn fn_0056d580_builds_the_collision_object() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x00c6_b950]);
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d580, &args![this, 0x77u32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x00c6_b950), vec![vec![this, 0x77]]);
+        assert_eq!(e.mem.u32(this), 0x0103_046c);
+    }
+
+    #[test]
+    fn fn_0056d640_builds_the_shape_base() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8ef0, 0x0053_7e90]);
+        let this = e.mem.alloc(0x20);
+        e.mem.set_u32(this + 8, 0x99);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d640, &args![this, 0x1du32]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), 0x0103_05a8);
+        assert_eq!(e.mem.u32(this + 8), 0);
+        assert_eq!(calls_to(&log, 0x0053_8ef0), vec![vec![this]]);
+        assert_eq!(calls_to(&log, 0x0053_7e90), vec![vec![this + 0xc, 0x1d]]);
+    }
+
+    #[test]
+    fn fn_0056d610_builds_the_phantom_callback_shape() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8ef0, 0x0053_7e90]);
+        let this = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d610, &args![this]).u32(), this);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(this), 0x0103_0570);
+        assert_eq!(calls_to(&log, 0x0053_7e90), vec![vec![this + 0xc, 0x1d]]);
+    }
+
+    #[test]
+    fn fn_0056d5f0_builds_the_water_callback_shape() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8ef0, 0x0053_7e90]);
+        let this = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x0056_d5f0, &args![this]).u32(), this);
+        assert_eq!(e.mem.u32(this), 0x0103_0534);
+        assert_eq!(e.mem.u32(this + 8), 0);
+    }
+
+    #[test]
+    fn fn_0056d6c0_runs_the_destructor_body() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8e10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d6c0, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8e10), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056d710_runs_the_destructor_body() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8e10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d710, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8e10), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056d7c0_runs_the_destructor_body() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8e10]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d7c0, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8e10), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056d6e0_frees_the_object_on_request() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8e10, 0x0053_8eb0]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d6e0, &args![0x3000u32, 0u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8e10), vec![vec![0x3000]]);
+        assert!(calls_to(&log, 0x0053_8eb0).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d6e0, &args![0x3000u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8eb0), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056d750_frees_the_object_on_request() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0053_8e10, 0x0053_8eb0]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_d750, &args![0x3000u32, 0u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8e10), vec![vec![0x3000]]);
+        assert!(calls_to(&log, 0x0053_8eb0).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d750, &args![0x3000u32, 1u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0053_8eb0), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056d7a0_destroys_the_member_at_0xc() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0057_c530]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d7a0, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0057_c530), vec![vec![0x300c]]);
+    }
+
+    #[test]
+    fn fn_0056d780_destroys_the_member_at_0xc() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0057_c530]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d780, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0057_c530), vec![vec![0x300c]]);
+    }
+
+    #[test]
+    fn fn_0056d730_destroys_the_member_at_0xc() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0057_c530]);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_d730, &args![0x3000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0057_c530), vec![vec![0x300c]]);
+    }
+
+    #[test]
+    fn fn_0056df00_builds_the_rotation_part() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0062_1990]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_df00, &args![0x3000u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0062_1990), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056ded0_builds_rotation_and_translation() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0062_1990]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_ded0, &args![0x3000u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0062_1990), vec![vec![0x3000]]);
+        assert_eq!(calls_to(&log, LIST_ITEM_SLOT), vec![vec![0x3030]]);
+    }
+
+    #[test]
+    fn fn_0056e090_constructs_the_creation_info() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x0056_e0b0]);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0056_e090, &args![0x3000u32]).u32(), 0x3000);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(calls_to(&log, 0x0056_e0b0), vec![vec![0x3000]]);
+    }
+
+    #[test]
+    fn fn_0056dff0_converts_the_three_columns() {
+        let mut e = havok_engine();
+        install_vector_math(&mut e);
+        let source = e.mem.alloc(0x34);
+        for (i, v) in [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0]
+            .iter()
+            .enumerate()
+        {
+            e.mem.set_f32(source + 4 * i as u32, *v);
+        }
+        let out = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x0056_dff0, &args![out, source]).u32(), out);
+        assert_eq!(floats(&e, out, 4), vec![1.0, 4.0, 7.0, 0.0]);
+        assert_eq!(floats(&e, out + 16, 4), vec![2.0, 5.0, 8.0, 0.0]);
+        assert_eq!(floats(&e, out + 32, 4), vec![3.0, 6.0, 9.0, 0.0]);
+    }
+
+    #[test]
+    fn ni2hk_converts_rotation_and_translation() {
+        let mut e = havok_engine();
+        install_vector_math(&mut e);
+        let source = e.mem.alloc(0x34);
+        for i in 0..9 {
+            e.mem.set_f32(source + 4 * i, i as f32);
+        }
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_f32(source + 0x24 + 4 * i as u32, *v);
+        }
+        let out = e.mem.alloc(0x40);
+        assert_eq!(e.call(0x0056_df80, &args![out, source]).u32(), out);
+        assert_eq!(floats(&e, out, 4), vec![0.0, 3.0, 6.0, 0.0]);
+        assert_eq!(floats(&e, out + 0x30, 4), vec![10.0, 20.0, 30.0, 0.0]);
+    }
+
+    #[test]
+    fn fn_0056e050_needs_the_havok_object() {
+        let mut e = havok_engine();
+        stub(&mut e, &[0x00a2_9680, 0x00c9_e910]);
+        returns(&mut e, 0x004a_e750, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_e050, &args![0x3000u32, 0x4000u32]);
+        assert_eq!(addresses(&e.call_log.take().unwrap()).len(), 2);
+
+        returns(&mut e, 0x004a_e750, 0x5000);
+        e.call_log = Some(vec![]);
+        e.call(0x0056_e050, &args![0x3000u32, 0x4000u32]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(
+            addresses(&log),
+            vec![
+                0x0056_e050,
+                0x004a_e750,
+                0x00a2_9680,
+                0x00c9_e910,
+                0x00a2_9680
+            ]
+        );
+        assert_eq!(calls_to(&log, 0x00c9_e910), vec![vec![0x5000, 0x4000]]);
+    }
+
+    #[test]
+    fn bhk_shape_phantom_set_transform_converts_and_applies() {
+        let mut e = havok_engine();
+        install_vector_math(&mut e);
+        stub(&mut e, &[0x0062_1990, 0x00a2_9680]);
+        returns(&mut e, 0x004a_e750, 0x5000);
+        let applied = Rc::new(RefCell::new(Vec::new()));
+        let probe = applied.clone();
+        e.register_double(0x00c9_e910, move |e, a| {
+            probe.borrow_mut().push((a[0], floats(e, a[1] + 0x30, 3)));
+            Ret::default()
+        });
+        let source = e.mem.alloc(0x34);
+        for (i, v) in [7.0f32, 8.0, 9.0].iter().enumerate() {
+            e.mem.set_f32(source + 0x24 + 4 * i as u32, *v);
+        }
+        e.call(0x0056_df20, &args![0x3000u32, source]);
+        assert_eq!(*applied.borrow(), vec![(0x5000, vec![7.0, 8.0, 9.0])]);
+    }
+
+    // ---- InitHavokForPrimitiveTrigger ---------------------------------
+
+    type Snapshot = (u32, Vec<f32>);
+
+    struct TriggerScene {
+        e: Engine,
+        this: Ptr<TESObjectREFR>,
+        node: u32,
+        loaded: u32,
+        holder: u32,
+        snapshots: Rc<RefCell<Vec<Snapshot>>>,
+        phantom_calls: Rc<RefCell<CallTrace>>,
+    }
+
+    /// A trigger reference with a primitive of `kind` (bounds 1, 2, 3), an
+    /// optional collision filter, and an orientation that is the identity
+    /// matrix when `identity`.
+    fn trigger_scene(kind: u32, filter: Option<u32>, identity: bool) -> TriggerScene {
+        let mut e = load_engine();
+        e.map(0x0126_8000, 0x1000);
+        install_vector_math(&mut e);
+        e.set_global(0x0101_2054, -1.0f32);
+        let this = load_refr(&mut e, 0x23);
+        let cell = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x40, cell);
+        let loaded = e.mem.alloc(0x40);
+        e.mem.set_u32(this.addr() + 0x64, loaded);
+        let holder = 0x1357;
+        returns(&mut e, 0x0045_43c0, holder);
+        let primitive = e.mem.alloc(0x40);
+        e.mem.set_u32(primitive + 4, kind);
+        for (i, v) in [1.0f32, 2.0, 3.0].iter().enumerate() {
+            e.mem.set_f32(primitive + 0x18 + 4 * i as u32, *v);
+        }
+        returns(&mut e, 0x0041_fbe0, primitive);
+        let data = e.mem.alloc(0x10);
+        e.mem.set_u32(data, filter.unwrap_or(0));
+        returns(&mut e, 0x0042_11a0, if filter.is_some() { data } else { 0 });
+        let node = node_object(&mut e, 0);
+        returns(&mut e, slot_double(0x1d0), node);
+        let position = e.mem.alloc(0x10);
+        for (i, v) in [10.0f32, 20.0, 30.0].iter().enumerate() {
+            e.mem.set_f32(position + 4 * i as u32, *v);
+        }
+        returns(&mut e, slot_double(0x1f4), position);
+        e.register(0x0056_fa00, |e, a| {
+            for i in 0..9 {
+                e.mem.set_f32(a[1] + 4 * i, 0.5 + i as f32);
+            }
+            a[1].into_ret()
+        });
+        e.register(0x0047_6a80, |_, _| Ret::default());
+        e.register_double(0x004d_9ae0, move |_, a| {
+            assert_eq!(a[1], 0x011a_9448);
+            u32::from(identity).into_ret()
+        });
+        e.register(0x00aa_13e0, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(0x0056_d580, |_, a| a[0].into_ret());
+        stub(
+            &mut e,
+            &[
+                0x0062_1990,
+                0x0056_7490,
+                0x00a5_9c60,
+                0x0056_e4e0,
+                0x0056_e0b0,
+                0x0056_ea90,
+                0x0057_c530,
+                0x00c6_b950,
+                0x0051_9230,
+                0x00a5_bca0,
+                0x00c8_5c10,
+                0x0054_07b0,
+                0x00a2_9680,
+                0x00c9_e910,
+            ],
+        );
+        returns(&mut e, 0x004a_e750, 0x5000);
+        returns(&mut e, 0x0062_0b80, 0x6262);
+        e.register(0x00c4_2f70, |_, a| a[0].into_ret());
+        returns_float(&mut e, 0x004a_3e90, 0.25);
+        let snapshots = Rc::new(RefCell::new(Vec::new()));
+        let phantom_calls = Rc::new(RefCell::new(Vec::new()));
+        // the creation-info consumers keep a snapshot of the record and
+        // return an object whose virtual +0x9c is a double
+        stub(&mut e, &[0x00fe_009c]);
+        for addr in [0x0056_e550u32, 0x0056_e2d0] {
+            let snapshots = snapshots.clone();
+            let calls = phantom_calls.clone();
+            e.register_double(addr, move |e, a| {
+                snapshots.borrow_mut().push((
+                    addr,
+                    vec![
+                        f32::from_bits(e.mem.u32(a[1])),
+                        f32::from_bits(e.mem.u32(a[1] + 4)),
+                        f32::from_bits(e.mem.u32(a[1] + 8)),
+                        e.mem.f32(a[1] + 0x20),
+                        e.mem.f32(a[1] + 0x24),
+                        e.mem.f32(a[1] + 0x28),
+                        e.mem.f32(a[1] + 0x30),
+                        e.mem.f32(a[1] + 0x34),
+                        e.mem.f32(a[1] + 0x38),
+                    ],
+                ));
+                calls.borrow_mut().push((addr, a.to_vec()));
+                let vtable = e.mem.alloc(0x100);
+                e.mem.set_u32(vtable + 0x9c, 0x00fe_009c);
+                e.mem.set_u32(a[0], vtable);
+                a[0].into_ret()
+            });
+        }
+        for addr in [0x0056_e610u32, 0x0056_e950] {
+            let calls = phantom_calls.clone();
+            e.register_double(addr, move |e, a| {
+                let mut words = a.to_vec();
+                if addr == 0x0056_e610 {
+                    words.extend((0..4).map(|i| e.mem.f32(a[1] + 4 * i).to_bits()));
+                }
+                calls.borrow_mut().push((addr, words));
+                a[0].into_ret()
+            });
+        }
+        TriggerScene {
+            e,
+            this,
+            node,
+            loaded,
+            holder,
+            snapshots,
+            phantom_calls,
+        }
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_needs_a_cell_holder() {
+        let mut s = trigger_scene(1, None, true);
+        returns(&mut s.e, 0x0045_43c0, 0);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x0056_7490).is_empty());
+        assert!(calls_to(&log, 0x00aa_13e0).is_empty());
+
+        s.e.mem.set_u32(s.this.addr() + 0x40, 0);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x0045_43c0).is_empty());
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_builds_an_aabb_phantom() {
+        let mut s = trigger_scene(1, None, true);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        let this = s.this.addr();
+
+        // scales reset to 1.0 and the root moved to the origin
+        assert_eq!(
+            calls_to(&log, 0x0056_7490),
+            vec![vec![this, 1.0f32.to_bits()]]
+        );
+        assert_eq!(
+            calls_to(&log, 0x0044_0490),
+            vec![vec![s.node, 1.0f32.to_bits()]]
+        );
+        assert_eq!(calls_to(&log, 0x00a5_9c60).len(), 1);
+        // the box corners: position - bounds at +0x20, position + bounds at +0x30
+        let snapshots = s.snapshots.borrow();
+        assert_eq!(snapshots.len(), 1);
+        let (addr, words) = &snapshots[0];
+        assert_eq!(*addr, 0x0056_e550);
+        assert_eq!(f32::to_bits(words[0]), 0x0005_0000 | 0x16);
+        assert_eq!(words[3..6], [9.0, 18.0, 27.0]);
+        assert_eq!(words[6..9], [11.0, 22.0, 33.0]);
+        // no shape was built
+        assert!(calls_to(&log, 0x0056_e610).is_empty());
+        assert!(calls_to(&log, 0x0056_e2d0).is_empty());
+        // the phantom is stored in the loaded data and linked
+        let phantom = s.e.mem.u32(s.loaded + 0x18);
+        assert_ne!(phantom, 0);
+        assert_eq!(calls_to(&log, 0x00c8_5c10), vec![vec![phantom, s.node, 0]]);
+        assert_eq!(calls_to(&log, 0x00fe_009c), vec![vec![phantom, s.holder]]);
+        // BSXFlags is set to 2, 1 and added to the root
+        let added = calls_to(&log, 0x00a5_bca0);
+        assert_eq!(added.len(), 1);
+        assert_eq!(calls_to(&log, 0x0051_9230), vec![vec![added[0][1], 2, 1]]);
+        // the creation info is destroyed through 0056d730
+        assert_eq!(calls_to(&log, 0x0057_c530).len(), 1);
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_uses_a_shape_phantom_for_a_rotated_box() {
+        let mut s = trigger_scene(1, None, false);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        // the box shape gets the bounds as a 16-byte vector
+        let calls = s.phantom_calls.borrow();
+        let shape_call = calls.iter().find(|(a, _)| *a == 0x0056_e610).unwrap();
+        assert_eq!(
+            shape_call.1[2..],
+            [1.0f32.to_bits(), 2.0f32.to_bits(), 3.0f32.to_bits(), 0]
+        );
+        // the phantom's creation info: filter and the Havok shape
+        let snapshots = s.snapshots.borrow();
+        assert_eq!(snapshots[0].0, 0x0056_e2d0);
+        assert_eq!(snapshots[0].1[0].to_bits(), 0x0005_0000 | 0x16);
+        assert_eq!(calls_to(&log, 0x0062_0b80), vec![vec![shape_call.1[0]]]);
+        assert!(calls_to(&log, 0x0056_e550).is_empty());
+        // the transform is applied to the new phantom and the info destroyed
+        assert_eq!(calls_to(&log, 0x00c9_e910).len(), 1);
+        assert_eq!(calls_to(&log, 0x0056_ea90).len(), 1);
+        let phantom = s.e.mem.u32(s.loaded + 0x18);
+        assert_eq!(calls_to(&log, 0x00fe_009c), vec![vec![phantom, s.holder]]);
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_filter_0x17_forces_the_shape_phantom() {
+        let mut s = trigger_scene(1, Some(0x17), true);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x004d_9ae0).is_empty());
+        assert_eq!(calls_to(&log, 0x0056_e2d0).len(), 1);
+        assert_eq!(s.snapshots.borrow()[0].1[0].to_bits(), 0x0005_0000 | 0x17);
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_builds_a_sphere_shape() {
+        let mut s = trigger_scene(2, Some(0x30), true);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        // the sphere radius is the converted first bound
+        assert_eq!(calls_to(&log, 0x004a_3e90), vec![vec![1.0f32.to_bits()]]);
+        let calls = s.phantom_calls.borrow();
+        let sphere = calls.iter().find(|(a, _)| *a == 0x0056_e950).unwrap();
+        assert_eq!(sphere.1[1..], [0.25f32.to_bits(), 0]);
+        assert!(calls_to(&log, 0x0056_e610).is_empty());
+        assert_eq!(s.snapshots.borrow()[0].1[0].to_bits(), 0x0005_0000 | 0x30);
+    }
+
+    #[test]
+    fn init_havok_for_primitive_trigger_leaves_other_primitives_without_a_shape() {
+        let mut s = trigger_scene(3, None, true);
+        s.e.call_log = Some(vec![]);
+        s.e.call(0x0056_d7e0, &args![s.this]);
+        let log = s.e.call_log.take().unwrap();
+        assert!(calls_to(&log, 0x0056_e610).is_empty());
+        assert!(calls_to(&log, 0x0056_e950).is_empty());
+        assert_eq!(calls_to(&log, 0x0062_0b80), vec![vec![0]]);
+        assert_eq!(calls_to(&log, 0x0056_e2d0).len(), 1);
     }
 }
