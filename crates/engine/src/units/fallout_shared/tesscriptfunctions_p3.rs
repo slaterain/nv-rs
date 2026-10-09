@@ -3,8 +3,8 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 40 queue entries of this range (`005c4240` to
-//! `005c6800`) are translated. The next session continues at `005c6820`
+//! Progress: the first 80 queue entries of this range (`005c4240` to
+//! `005c7430`) are translated. The next session continues at `005c7490`
 //! (the next open entry of the queue).
 //!
 //! Notes on the exe's code that the translations rely on:
@@ -394,6 +394,103 @@ const ARRAY_ELEMENT: u32 = 0x0087_7a30;
 const COPY_LOOK_FROM: u32 = 0x0060_3790;
 /// `Character::Reset3D` (Xbox PDB), `thiscall`.
 const RESET_3D: u32 = 0x008d_3fa0;
+
+// Condition functions of `fallout shared/tesconditionfunctions.cpp` that the
+// command bodies of this range call (all `cdecl`: `thisObj, parameter 1,
+// parameter 2, result`; the result is their `AL`).
+/// `Script::GetClothingValueConditionFunction` (Xbox PDB).
+const GET_CLOTHING_VALUE_CONDITION: u32 = 0x0059_d320;
+/// `Script::SameFactionConditionFunction` (Xbox PDB).
+const SAME_FACTION_CONDITION: u32 = 0x0059_d400;
+/// `Script::SameRaceConditionFunction` (Xbox PDB).
+const SAME_RACE_CONDITION: u32 = 0x0059_d540;
+/// `Script::SameSexConditionFunction` (Xbox PDB).
+const SAME_SEX_CONDITION: u32 = 0x0059_d610;
+/// `Script::GetDetectedConditionFunction` (Xbox PDB).
+const GET_DETECTED_CONDITION: u32 = 0x0059_d6e0;
+/// `Script::GetDeadConditionFunction` (Xbox PDB).
+const GET_DEAD_CONDITION: u32 = 0x0059_d840;
+/// `Script::GetItemCountConditionFunction` (Xbox PDB).
+const GET_ITEM_COUNT_CONDITION: u32 = 0x0059_d8e0;
+/// `Script::GetEquippedConditionFunction` (Xbox PDB).
+const GET_EQUIPPED_CONDITION: u32 = 0x0059_da90;
+/// `Script::GetGoldConditionFunction` (Xbox PDB).
+const GET_GOLD_CONDITION: u32 = 0x0059_dbe0;
+/// `Script::GetSleepingConditionFunction` (Xbox PDB).
+const GET_SLEEPING_CONDITION: u32 = 0x0059_dc90;
+/// `Script::GetSittingConditionFunction` (Xbox PDB).
+const GET_SITTING_CONDITION: u32 = 0x0059_dd90;
+/// `Script::GetFurnitureMarkerIDConditionFunction` (Xbox PDB).
+const GET_FURNITURE_MARKER_ID_CONDITION: u32 = 0x0059_de90;
+/// `Script::IsCurrentFurnitureRefConditionFunction` (Xbox PDB).
+const IS_CURRENT_FURNITURE_REF_CONDITION: u32 = 0x0059_df40;
+/// `Script::IsCurrentFurnitureObjConditionFunction` (Xbox PDB).
+const IS_CURRENT_FURNITURE_OBJ_CONDITION: u32 = 0x0059_dfe0;
+/// `Script::GetTalkedToPCConditionFunction` (Xbox PDB).
+const GET_TALKED_TO_PC_CONDITION: u32 = 0x0059_e0f0;
+/// `Script::GetQuestRunningConditionFunction` (Xbox PDB).
+const GET_QUEST_RUNNING_CONDITION: u32 = 0x0059_e320;
+/// `Script::GetQuestCompletedConditionFunction` (Xbox PDB).
+const GET_QUEST_COMPLETED_CONDITION: u32 = 0x0059_e390;
+/// `Script::GetStageConditionFunction` (Xbox PDB).
+const GET_STAGE_CONDITION: u32 = 0x0059_e420;
+/// `Script::GetStageDoneConditionFunction` (Xbox PDB).
+const GET_STAGE_DONE_CONDITION: u32 = 0x0059_e490;
+/// `Script::GetFactionRankDifferenceConditionFunction` (Xbox PDB).
+const GET_FACTION_RANK_DIFFERENCE_CONDITION: u32 = 0x0059_e510;
+/// `Script::GetAlarmedConditionFunction` (Xbox PDB).
+const GET_ALARMED_CONDITION: u32 = 0x0059_e650;
+/// `Script::GetIsPleasantConditionFunction` (Xbox PDB).
+const GET_IS_PLEASANT_CONDITION: u32 = 0x0059_e700;
+/// `Script::GetIsCloudyConditionFunction` (Xbox PDB).
+const GET_IS_CLOUDY_CONDITION: u32 = 0x0059_e7f0;
+/// `Script::GetIsRainingConditionFunction` (Xbox PDB).
+const GET_IS_RAINING_CONDITION: u32 = 0x0059_e8e0;
+/// `Script::GetIsSnowingConditionFunction` (Xbox PDB).
+const GET_IS_SNOWING_CONDITION: u32 = 0x0059_ea10;
+/// `Script::GetWindSpeedConditionFunction` (Xbox PDB).
+const GET_WIND_SPEED_CONDITION: u32 = 0x005a_1880;
+/// `Script::GetWeatherPercentConditionFunction` (Xbox PDB).
+const GET_WEATHER_PERCENT_CONDITION: u32 = 0x0059_eb60;
+/// `Script::GetIsCurrentWeatherConditionFunction` (Xbox PDB).
+const GET_IS_CURRENT_WEATHER_CONDITION: u32 = 0x0059_ebb0;
+
+// Actors, quests and NPC bases.
+/// `Actor::RestoreActorValue` (Xbox PDB), `thiscall` (`actor value code,
+/// float amount`).
+const RESTORE_ACTOR_VALUE: u32 = 0x0088_b740;
+/// `thiscall` on a quest (`stage` byte): the engine map names it
+/// `TESQuest::SetStageDone`; the `SetStage` command tests its `AL`.
+const QUEST_SET_STAGE: u32 = 0x0060_d510;
+/// `thiscall` on a quest (`bool`): sets or clears bit 0 of a flags byte
+/// (found through `005a8080`) and notifies through virtual slot `0x48`
+/// (`2`).
+const QUEST_SET_FLAG_0X1: u32 = 0x0060_c9c0;
+/// `thiscall` on a quest (`bool`): sets or clears bit 1 of the byte at
+/// `+0x3c`, notifies through virtual slot `0x48` (`2`) and runs follow-up
+/// work.
+const QUEST_SET_FLAG_0X2: u32 = 0x0060_ca30;
+/// `thiscall` on an NPC base: `*(this + 0x130)` (the engine map calls it
+/// `MiddleHighProcess::GetFireNode`; the linker folded identical code).
+const NPC_GET_FIELD_0X130: u32 = 0x0050_2430;
+/// `thiscall` on an NPC base (`value`): stores `*(this + 0x130)` and marks
+/// the change through virtual slot `0x48` (`0x400`).
+const NPC_SET_FIELD_0X130: u32 = 0x0060_1c70;
+/// `thiscall` on the `TESActorBaseData` part (`NPC + 0x30`): a 16-bit
+/// level value (the code that stores it uses `sLevel` at `+0xc` of the
+/// Xbox `ACTOR_BASE_DATA` layout).
+const ACTOR_BASE_DATA_GET_LEVEL: u32 = 0x0047_ded0;
+/// `thiscall` on the `TESActorBaseData` part (`NPC + 0x30`) (`u16`): stores
+/// the 16-bit value at `+0xc` and marks the change (`2`).
+const ACTOR_BASE_DATA_SET_LEVEL: u32 = 0x0047_dfe0;
+/// `TESNPC::InitValues` (Xbox PDB), `thiscall` (`0`).
+const TES_NPC_INIT_VALUES: u32 = 0x0060_3be0;
+/// RTTI type descriptor of `TESBoundObject` (`.?AVTESBoundObject@@`).
+const RTTI_TES_BOUND_OBJECT: u32 = 0x0118_3108;
+/// RTTI type descriptor of `TESNPC` (`.?AVTESNPC@@`).
+const RTTI_TES_NPC: u32 = 0x0118_3a1c;
+/// The float `999.0` that `005c6b60` restores the limb values by.
+const LIMB_RESTORE_AMOUNT: u32 = 0x0103_b2d0;
 
 // ---- Globals ----------------------------------------------------------------
 
@@ -1963,6 +2060,438 @@ pub fn fn_005c6800(e: &mut Engine, a: ScriptArgs) -> bool {
     .bool()
 }
 
+// ---- Condition command wrappers ---------------------------------------------
+
+/// A condition command with no parsed argument: the condition function gets
+/// `(thisObj, 0, 0, result)`; returns its `AL`.
+fn condition_without_arguments(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    e.call(condition, &args![a.this_obj, 0u32, 0u32, a.result])
+        .bool()
+}
+
+/// A condition command with one parsed argument (a word local initialised
+/// to 0): false when the parameters do not parse, otherwise the condition
+/// function gets `(thisObj, argument, 0, result)` and its `AL` is returned.
+fn condition_with_one_argument(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    let Some([argument]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    e.call(condition, &args![a.this_obj, argument, 0u32, a.result])
+        .bool()
+}
+
+/// A condition command run with the player as its argument: the condition
+/// function gets `(thisObj, player, 0, result)`; returns its `AL`.
+fn condition_with_player(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    let player = e.global::<u32>(PLAYER);
+    e.call(condition, &args![a.this_obj, player, 0u32, a.result])
+        .bool()
+}
+
+// Translated from 005c6820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetClothingValueConditionFunction(thisObj,
+/// 0, 0, result)`; returns its `AL`.
+pub fn fn_005c6820(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_CLOTHING_VALUE_CONDITION)
+}
+
+// Translated from 005c6840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SameFaction` (Xbox PDB): parses one argument and returns
+/// `SameFactionConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_same_faction(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, SAME_FACTION_CONDITION)
+}
+
+// Translated from 005c68a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SameRace` (Xbox PDB): parses one argument and returns
+/// `SameRaceConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_same_race(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, SAME_RACE_CONDITION)
+}
+
+// Translated from 005c6900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SameSex` (Xbox PDB): parses one argument and returns
+/// `SameSexConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_same_sex(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, SAME_SEX_CONDITION)
+}
+
+// Translated from 005c6960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `SameFaction`: `SameFactionConditionFunction(
+/// thisObj, player, 0, result)` with the player singleton as the argument;
+/// returns its `AL`.
+pub fn fn_005c6960(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_player(e, a, SAME_FACTION_CONDITION)
+}
+
+// Translated from 005c6990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `SameRace`: `SameRaceConditionFunction(thisObj,
+/// player, 0, result)`; returns its `AL`.
+pub fn fn_005c6990(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_player(e, a, SAME_RACE_CONDITION)
+}
+
+// Translated from 005c69c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The player variant of `SameSex`: `SameSexConditionFunction(thisObj,
+/// player, 0, result)`; returns its `AL`.
+pub fn fn_005c69c0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_player(e, a, SAME_SEX_CONDITION)
+}
+
+// Translated from 005c69f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDetected` (Xbox PDB): parses one argument and returns
+/// `GetDetectedConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_detected(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_DETECTED_CONDITION)
+}
+
+// Translated from 005c6a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetDeadConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c6a50(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_DEAD_CONDITION)
+}
+
+// Translated from 005c6a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetItemCount` (Xbox PDB): parses one argument and returns
+/// `GetItemCountConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_item_count(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_ITEM_COUNT_CONDITION)
+}
+
+// Translated from 005c6ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking one signed number: stores 1 through [`fn_005c6b40`] on
+/// the player when the number is greater than 0, 0 otherwise; returns true
+/// (false when the parameters do not parse).
+pub fn fn_005c6ad0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([number]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    let player = Ptr::new(e.global::<u32>(PLAYER));
+    fn_005c6b40(e, player, (number as i32 > 0) as u8);
+    true
+}
+
+// Translated from 005c6b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores a byte at `this + 0x240` (a setter used on the player; the Xbox
+/// layout of `PlayerCharacter` has a different field there, so the field is
+/// not named).
+pub fn fn_005c6b40(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr() + 0x240, value);
+}
+
+// Translated from 005c6b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command on an actor reference: when the reference is given and answers
+/// true to virtual slot `0x100`, restores actor value `0x10` by the
+/// difference of two values its object at `+0xa4` returns (slot `0x20` minus
+/// slot `0x0c`, both asked for `0x10`), then actor values `0x1d, 0x1e, 0x1b,
+/// 0x1c, 0x19, 0x1a, 0x1f` by 999.0 each (`Actor::RestoreActorValue`).
+/// Always returns true.
+pub fn fn_005c6b60(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() || !e.vcall(a.this_obj.addr(), 0x100, &args![]).bool() {
+        return true;
+    }
+    let actor = a.this_obj;
+    let owner = actor.addr() + 0xa4;
+    let first = e.vcall(owner, 0xc, &args![0x10u32]).f32();
+    let second = e.vcall(owner, 0x20, &args![0x10u32]).f32();
+    // x87: the difference is computed in extended precision and stored as a
+    // `float`.
+    let difference = (second as f64 - first as f64) as f32;
+    e.call(RESTORE_ACTOR_VALUE, &args![actor, 0x10u32, difference]);
+    for actor_value in [0x1du32, 0x1e, 0x1b, 0x1c, 0x19, 0x1a, 0x1f] {
+        let amount = e.global::<f32>(LIMB_RESTORE_AMOUNT);
+        e.call(RESTORE_ACTOR_VALUE, &args![actor, actor_value, amount]);
+    }
+    true
+}
+
+// Translated from 005c6c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a reference: when the command's reference answers true
+/// to virtual slot `0x100` and the argument is given, both base forms are
+/// cast from `TESBoundObject` to `TESNPC`; when both succeed, the argument
+/// NPC's field `+0x130` ([`NPC_GET_FIELD_0X130`]) and its actor base data
+/// level are copied to the command's NPC, whose `TESNPC::InitValues(0)` then
+/// runs. Returns true (false when the parameters do not parse).
+pub fn fn_005c6c80(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([argument]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    if a.this_obj.is_null() || !e.vcall(a.this_obj.addr(), 0x100, &args![]).bool() || argument == 0
+    {
+        return true;
+    }
+    let this_base = e.call(GET_BASE_FORM, &args![a.this_obj]).u32();
+    let this_npc = e
+        .call(
+            DYNAMIC_CAST,
+            &args![this_base, 0u32, RTTI_TES_BOUND_OBJECT, RTTI_TES_NPC, 0u32],
+        )
+        .u32();
+    let argument_base = e.call(GET_BASE_FORM, &args![argument]).u32();
+    let argument_npc = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                argument_base,
+                0u32,
+                RTTI_TES_BOUND_OBJECT,
+                RTTI_TES_NPC,
+                0u32
+            ],
+        )
+        .u32();
+    if this_npc != 0 && argument_npc != 0 {
+        let field = e.call(NPC_GET_FIELD_0X130, &args![argument_npc]).u32();
+        e.call(NPC_SET_FIELD_0X130, &args![this_npc, field]);
+        let level = e
+            .call(ACTOR_BASE_DATA_GET_LEVEL, &args![argument_npc + 0x30])
+            .u16();
+        e.call(
+            ACTOR_BASE_DATA_SET_LEVEL,
+            &args![this_npc + 0x30, level as u32],
+        );
+        e.call(TES_NPC_INIT_VALUES, &args![this_npc, 0u32]);
+    }
+    true
+}
+
+// Translated from 005c6d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetEquippedFunction` (Xbox PDB): parses one argument and returns
+/// `GetEquippedConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_equipped_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_EQUIPPED_CONDITION)
+}
+
+// Translated from 005c6df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetGoldConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c6df0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_GOLD_CONDITION)
+}
+
+// Translated from 005c6e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetSleepingConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c6e10(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_SLEEPING_CONDITION)
+}
+
+// Translated from 005c6e30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetSittingConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c6e30(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_SITTING_CONDITION)
+}
+
+// Translated from 005c6e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetFurnitureMarkerIDConditionFunction(
+/// thisObj, 0, 0, result)`; returns its `AL`.
+pub fn fn_005c6e50(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_FURNITURE_MARKER_ID_CONDITION)
+}
+
+// Translated from 005c6e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCurrentFurnitureRef` (Xbox PDB): parses one argument and
+/// returns `IsCurrentFurnitureRefConditionFunction(thisObj, argument, 0,
+/// result)`.
+pub fn script_is_current_furniture_ref(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, IS_CURRENT_FURNITURE_REF_CONDITION)
+}
+
+// Translated from 005c6ed0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsCurrentFurnitureObj` (Xbox PDB): parses one argument and
+/// returns `IsCurrentFurnitureObjConditionFunction(thisObj, argument, 0,
+/// result)`.
+pub fn script_is_current_furniture_obj(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, IS_CURRENT_FURNITURE_OBJ_CONDITION)
+}
+
+// Translated from 005c6f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetTalkedToPCConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c6f30(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_TALKED_TO_PC_CONDITION)
+}
+
+// Translated from 005c6f50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetTalkedToPCParam` (Xbox PDB): parses one argument and returns
+/// `GetTalkedToPCConditionFunction(0, argument, 0, result)`; the reference
+/// is passed as 0, not `thisObj`.
+pub fn script_get_talked_to_pc_param(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([argument]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    e.call(
+        GET_TALKED_TO_PC_CONDITION,
+        &args![0u32, argument, 0u32, a.result],
+    )
+    .bool()
+}
+
+// Translated from 005c6fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetQuestRunning` (Xbox PDB): parses one argument and returns
+/// `GetQuestRunningConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_quest_running(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_QUEST_RUNNING_CONDITION)
+}
+
+// Translated from 005c7010 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetQuestCompleted` (Xbox PDB): parses one argument and returns
+/// `GetQuestCompletedConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_quest_completed(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_QUEST_COMPLETED_CONDITION)
+}
+
+// Translated from 005c7070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStage` (Xbox PDB): parses one argument and returns
+/// `GetStageConditionFunction(thisObj, argument, 0, result)`.
+pub fn script_get_stage(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_STAGE_CONDITION)
+}
+
+// Translated from 005c70d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStageDone` (Xbox PDB): parses two arguments (both locals
+/// start at 0) and returns `GetStageDoneConditionFunction(thisObj, first,
+/// second, result)`.
+pub fn script_get_stage_done(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    e.call(
+        GET_STAGE_DONE_CONDITION,
+        &args![a.this_obj, first, second, a.result],
+    )
+    .bool()
+}
+
+// Translated from 005c7140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetStageFunction` (Xbox PDB): the result starts at 0.0; parses a
+/// quest and a stage (only the low byte of the second local is used). When
+/// the quest is given and [`QUEST_SET_STAGE`] answers true, the result is
+/// 1.0. Returns true (false when the parameters do not parse).
+pub fn script_set_stage_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    set_result(e, a, 0.0);
+    let Some([quest, stage]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    if quest != 0 && e.call(QUEST_SET_STAGE, &args![quest, stage & 0xff]).bool() {
+        set_result(e, a, 1.0);
+    }
+    true
+}
+
+// Translated from 005c71c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a quest: calls [`QUEST_SET_FLAG_0X1`] on it with true
+/// when it is given. Returns true (false when the parameters do not parse).
+pub fn fn_005c71c0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([quest]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    if quest != 0 {
+        e.call(QUEST_SET_FLAG_0X1, &args![quest, 1u32]);
+    }
+    true
+}
+
+// Translated from 005c7220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a quest: calls [`QUEST_SET_FLAG_0X1`] on it with false
+/// when it is given. Returns true (false when the parameters do not parse).
+pub fn fn_005c7220(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([quest]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    if quest != 0 {
+        e.call(QUEST_SET_FLAG_0X1, &args![quest, 0u32]);
+    }
+    true
+}
+
+// Translated from 005c7280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A command taking a quest: calls [`QUEST_SET_FLAG_0X2`] on it with true
+/// when it is given. Returns true (false when the parameters do not parse).
+pub fn fn_005c7280(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([quest]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    if quest != 0 {
+        e.call(QUEST_SET_FLAG_0X2, &args![quest, 1u32]);
+    }
+    true
+}
+
+// Translated from 005c72e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFactionRankDifference` (Xbox PDB): parses two arguments (in
+/// output order) and returns `GetFactionRankDifferenceConditionFunction(
+/// thisObj, first, second, result)`.
+pub fn script_get_faction_rank_difference(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([first, second]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    e.call(
+        GET_FACTION_RANK_DIFFERENCE_CONDITION,
+        &args![a.this_obj, first, second, a.result],
+    )
+    .bool()
+}
+
+// Translated from 005c7350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetAlarmedConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c7350(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_ALARMED_CONDITION)
+}
+
+// Translated from 005c7370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsPleasantConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c7370(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_PLEASANT_CONDITION)
+}
+
+// Translated from 005c7390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsCloudyConditionFunction(thisObj, 0, 0,
+/// result)`; returns its `AL`.
+pub fn fn_005c7390(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_CLOUDY_CONDITION)
+}
+
+// Translated from 005c73b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsRainingConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c73b0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_RAINING_CONDITION)
+}
+
+// Translated from 005c73d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetIsSnowingConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c73d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_IS_SNOWING_CONDITION)
+}
+
+// Translated from 005c73f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetWindSpeedConditionFunction(thisObj, 0,
+/// 0, result)`; returns its `AL`.
+pub fn fn_005c73f0(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_WIND_SPEED_CONDITION)
+}
+
+// Translated from 005c7410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A condition command: `Script::GetWeatherPercentConditionFunction(
+/// thisObj, 0, 0, result)`; returns its `AL`.
+pub fn fn_005c7410(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_without_arguments(e, a, GET_WEATHER_PERCENT_CONDITION)
+}
+
+// Translated from 005c7430 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCurrentWeatherFunction` (Xbox PDB): parses one argument and
+/// returns `GetIsCurrentWeatherConditionFunction(thisObj, argument, 0,
+/// result)`.
+pub fn script_get_is_current_weather_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    condition_with_one_argument(e, a, GET_IS_CURRENT_WEATHER_CONDITION)
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2018,6 +2547,70 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005c65a0, fn_005c65a0(ScriptArgs) -> bool),
         entry!(0x005c67e0, fn_005c67e0(ScriptArgs) -> bool),
         entry!(0x005c6800, fn_005c6800(ScriptArgs) -> bool),
+        entry!(0x005c6820, fn_005c6820(ScriptArgs) -> bool),
+        entry!(0x005c6840, script_same_faction(ScriptArgs) -> bool),
+        entry!(0x005c68a0, script_same_race(ScriptArgs) -> bool),
+        entry!(0x005c6900, script_same_sex(ScriptArgs) -> bool),
+        entry!(0x005c6960, fn_005c6960(ScriptArgs) -> bool),
+        entry!(0x005c6990, fn_005c6990(ScriptArgs) -> bool),
+        entry!(0x005c69c0, fn_005c69c0(ScriptArgs) -> bool),
+        entry!(0x005c69f0, script_get_detected(ScriptArgs) -> bool),
+        entry!(0x005c6a50, fn_005c6a50(ScriptArgs) -> bool),
+        entry!(0x005c6a70, script_get_item_count(ScriptArgs) -> bool),
+        entry!(0x005c6ad0, fn_005c6ad0(ScriptArgs) -> bool),
+        entry!(0x005c6b40, fn_005c6b40(Ptr, u8)),
+        entry!(0x005c6b60, fn_005c6b60(ScriptArgs) -> bool),
+        entry!(0x005c6c80, fn_005c6c80(ScriptArgs) -> bool),
+        entry!(
+            0x005c6d90,
+            script_get_equipped_function(ScriptArgs) -> bool
+        ),
+        entry!(0x005c6df0, fn_005c6df0(ScriptArgs) -> bool),
+        entry!(0x005c6e10, fn_005c6e10(ScriptArgs) -> bool),
+        entry!(0x005c6e30, fn_005c6e30(ScriptArgs) -> bool),
+        entry!(0x005c6e50, fn_005c6e50(ScriptArgs) -> bool),
+        entry!(
+            0x005c6e70,
+            script_is_current_furniture_ref(ScriptArgs) -> bool
+        ),
+        entry!(
+            0x005c6ed0,
+            script_is_current_furniture_obj(ScriptArgs) -> bool
+        ),
+        entry!(0x005c6f30, fn_005c6f30(ScriptArgs) -> bool),
+        entry!(
+            0x005c6f50,
+            script_get_talked_to_pc_param(ScriptArgs) -> bool
+        ),
+        entry!(0x005c6fb0, script_get_quest_running(ScriptArgs) -> bool),
+        entry!(
+            0x005c7010,
+            script_get_quest_completed(ScriptArgs) -> bool
+        ),
+        entry!(0x005c7070, script_get_stage(ScriptArgs) -> bool),
+        entry!(0x005c70d0, script_get_stage_done(ScriptArgs) -> bool),
+        entry!(
+            0x005c7140,
+            script_set_stage_function(ScriptArgs) -> bool
+        ),
+        entry!(0x005c71c0, fn_005c71c0(ScriptArgs) -> bool),
+        entry!(0x005c7220, fn_005c7220(ScriptArgs) -> bool),
+        entry!(0x005c7280, fn_005c7280(ScriptArgs) -> bool),
+        entry!(
+            0x005c72e0,
+            script_get_faction_rank_difference(ScriptArgs) -> bool
+        ),
+        entry!(0x005c7350, fn_005c7350(ScriptArgs) -> bool),
+        entry!(0x005c7370, fn_005c7370(ScriptArgs) -> bool),
+        entry!(0x005c7390, fn_005c7390(ScriptArgs) -> bool),
+        entry!(0x005c73b0, fn_005c73b0(ScriptArgs) -> bool),
+        entry!(0x005c73d0, fn_005c73d0(ScriptArgs) -> bool),
+        entry!(0x005c73f0, fn_005c73f0(ScriptArgs) -> bool),
+        entry!(0x005c7410, fn_005c7410(ScriptArgs) -> bool),
+        entry!(
+            0x005c7430,
+            script_get_is_current_weather_function(ScriptArgs) -> bool
+        ),
     ]
 }
 
@@ -4155,13 +4748,510 @@ mod tests {
         assert!(!e.call(0x005c_65a0, &args![a]).bool());
     }
 
+    // ---- 005c6820 .. 005c7430 ---------------------------------------------------
+
+    /// A command that parses one argument (the double stores `0x55` in the
+    /// local) and forwards it to `callee` as `(thisObj, argument, 0,
+    /// result)`.
+    fn check_one_argument_condition(entry: u32, callee: u32) {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x55]);
+        e.register(callee, |_, _| true.into_ret());
+        let mut a = script(&mut e, 0x40);
+        a.event_list = 0x66;
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(
+            calls(&e, PARSE_PARAMETERS)[0][..7],
+            [1, 2, 8, 0x40, 0, 5, 0x66]
+        );
+        assert_eq!(
+            calls(&e, callee),
+            vec![vec![0x40, 0x55, 0, a.result.addr()]]
+        );
+        // The callee's `AL` is the result.
+        e.register(callee, |_, _| false.into_ret());
+        assert!(!e.call(entry, &args![a]).bool());
+        // A parse that leaves the local alone: the local starts at 0.
+        parse_gives(&mut e, true, &[]);
+        e.register(callee, |_, _| true.into_ret());
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(calls(&e, callee)[0][1], 0);
+        // Parameters that do not parse: false, nothing called.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert!(calls(&e, callee).is_empty());
+    }
+
+    /// A command run with the player as the argument.
+    fn check_player_condition(entry: u32, callee: u32) {
+        let mut e = engine();
+        e.set_global(PLAYER, 0x77u32);
+        e.register(callee, |_, _| true.into_ret());
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(
+            calls(&e, callee),
+            vec![vec![0x40, 0x77, 0, a.result.addr()]]
+        );
+        e.register(callee, |_, _| false.into_ret());
+        assert!(!e.call(entry, &args![a]).bool());
+    }
+
+    #[test]
+    fn clothing_value_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6820, GET_CLOTHING_VALUE_CONDITION, None);
+    }
+
+    #[test]
+    fn same_faction_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6840, SAME_FACTION_CONDITION);
+    }
+
+    #[test]
+    fn same_race_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_68a0, SAME_RACE_CONDITION);
+    }
+
+    #[test]
+    fn same_sex_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6900, SAME_SEX_CONDITION);
+    }
+
+    #[test]
+    fn same_faction_with_the_player_passes_the_player() {
+        check_player_condition(0x005c_6960, SAME_FACTION_CONDITION);
+    }
+
+    #[test]
+    fn same_race_with_the_player_passes_the_player() {
+        check_player_condition(0x005c_6990, SAME_RACE_CONDITION);
+    }
+
+    #[test]
+    fn same_sex_with_the_player_passes_the_player() {
+        check_player_condition(0x005c_69c0, SAME_SEX_CONDITION);
+    }
+
+    #[test]
+    fn detected_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_69f0, GET_DETECTED_CONDITION);
+    }
+
+    #[test]
+    fn dead_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6a50, GET_DEAD_CONDITION, None);
+    }
+
+    #[test]
+    fn item_count_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6a70, GET_ITEM_COUNT_CONDITION);
+    }
+
+    #[test]
+    fn player_byte_command_stores_whether_the_number_is_positive() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x300);
+        e.set_global(PLAYER, player);
+        let a = script(&mut e, 0x40);
+        for (number, expected) in [
+            (5u32, 1u8),
+            (1, 1),
+            (0, 0),
+            (0xffff_ffff, 0),
+            (0x8000_0000, 0),
+        ] {
+            e.mem.set_u8(player + 0x240, 0xaa);
+            parse_gives(&mut e, true, &[number]);
+            assert!(e.call(0x005c_6ad0, &args![a]).bool());
+            assert_eq!(e.mem.u8(player + 0x240), expected, "number {number:#x}");
+        }
+        // Parameters that do not parse: false, the byte is not touched.
+        e.mem.set_u8(player + 0x240, 0xaa);
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(0x005c_6ad0, &args![a]).bool());
+        assert_eq!(e.mem.u8(player + 0x240), 0xaa);
+    }
+
+    #[test]
+    fn player_byte_setter_stores_one_byte() {
+        let mut e = engine();
+        let object = e.mem.alloc(0x300);
+        e.mem.set_u32(object + 0x240, 0x1122_3344);
+        e.call(0x005c_6b40, &args![object, 0x1u32]);
+        assert_eq!(e.mem.u32(object + 0x240), 0x1122_3301);
+        e.call(0x005c_6b40, &args![object, 0u32]);
+        assert_eq!(e.mem.u32(object + 0x240), 0x1122_3300);
+    }
+
+    /// Slot doubles of the actor-value owner of `fn_005c6b60`: slot `0x0c`
+    /// answers 30.25, slot `0x20` answers 100.5; both are asked for `0x10`.
+    const V_OWNER_FIRST: u32 = 0x0900_0020;
+    const V_OWNER_SECOND: u32 = 0x0900_0021;
+
+    fn restore_engine(actor_answer: u32) -> (Engine, u32) {
+        let mut e = engine();
+        let actor = object_with(&mut e, &[(0x100, actor_answer)]);
+        let owner = actor + 0xa4;
+        // The slots are called on the object embedded at +0xa4, with 0x10.
+        e.register_double(V_OWNER_FIRST, move |_, a| {
+            assert_eq!(a[..2], [owner, 0x10]);
+            30.25f32.into_ret()
+        });
+        e.register_double(V_OWNER_SECOND, move |_, a| {
+            assert_eq!(a[..2], [owner, 0x10]);
+            100.5f32.into_ret()
+        });
+        accept(&mut e, &[RESTORE_ACTOR_VALUE]);
+        e.set_global(LIMB_RESTORE_AMOUNT, 999.0f32);
+        let owner_vtable = e.mem.alloc(0x100);
+        e.mem.set_u32(owner_vtable + 0xc, V_OWNER_FIRST);
+        e.mem.set_u32(owner_vtable + 0x20, V_OWNER_SECOND);
+        e.mem.set_u32(owner, owner_vtable);
+        (e, actor)
+    }
+
+    #[test]
+    fn restore_command_restores_health_and_the_limb_values() {
+        let (mut e, actor) = restore_engine(V_TRUE);
+        let a = script(&mut e, actor);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        let log = calls(&e, RESTORE_ACTOR_VALUE);
+        assert_eq!(log.len(), 8);
+        // Health first: the owner's slot 0x20 value minus its slot 0x0c value.
+        assert_eq!(log[0], vec![actor, 0x10, (100.5f32 - 30.25).to_bits()]);
+        for (call, code) in log[1..]
+            .iter()
+            .zip([0x1d, 0x1e, 0x1b, 0x1c, 0x19, 0x1a, 0x1f])
+        {
+            assert_eq!(*call, vec![actor, code, 999.0f32.to_bits()]);
+        }
+    }
+
+    #[test]
+    fn restore_command_does_nothing_for_a_non_actor_or_no_reference() {
+        let (mut e, actor) = restore_engine(V_FALSE);
+        let a = script(&mut e, actor);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert!(calls(&e, RESTORE_ACTOR_VALUE).is_empty());
+        let a = script(&mut e, 0);
+        assert!(e.call(0x005c_6b60, &args![a]).bool());
+        assert!(calls(&e, RESTORE_ACTOR_VALUE).is_empty());
+    }
+
+    /// The engine of the NPC-copy command: the reference `0x40` is an actor
+    /// whose base form is `0x5000`, the argument `0x60` has the base form
+    /// `0x6000`; the casts give the NPCs `0x5100` and `0x6100`.
+    fn copy_engine() -> (Engine, ScriptArgs) {
+        let mut e = engine();
+        let this_obj = object_with(&mut e, &[(0x100, V_TRUE)]);
+        let argument = e.mem.alloc(0x40);
+        e.mem.set_u32(this_obj + 0x20, 0x5000);
+        e.mem.set_u32(argument + 0x20, 0x6000);
+        e.register_double(DYNAMIC_CAST, |_, a| {
+            assert_eq!(a[1..], [0, RTTI_TES_BOUND_OBJECT, RTTI_TES_NPC, 0]);
+            match a[0] {
+                0x5000 => 0x5100u32.into_ret(),
+                0x6000 => 0x6100u32.into_ret(),
+                _ => 0u32.into_ret(),
+            }
+        });
+        e.register(NPC_GET_FIELD_0X130, |_, _| 0xf1e1_d000u32.into_ret());
+        e.register(ACTOR_BASE_DATA_GET_LEVEL, |_, _| 0xdead_1234u32.into_ret());
+        accept(
+            &mut e,
+            &[
+                NPC_SET_FIELD_0X130,
+                ACTOR_BASE_DATA_SET_LEVEL,
+                TES_NPC_INIT_VALUES,
+            ],
+        );
+        parse_gives(&mut e, true, &[argument]);
+        let a = script(&mut e, this_obj);
+        (e, a)
+    }
+
+    #[test]
+    fn copy_npc_command_copies_the_field_and_the_level_then_initializes() {
+        let (mut e, a) = copy_engine();
+        start_log(&mut e);
+        assert!(e.call(0x005c_6c80, &args![a]).bool());
+        assert_eq!(calls(&e, NPC_GET_FIELD_0X130), vec![vec![0x6100]]);
+        assert_eq!(
+            calls(&e, NPC_SET_FIELD_0X130),
+            vec![vec![0x5100, 0xf1e1_d000]]
+        );
+        assert_eq!(calls(&e, ACTOR_BASE_DATA_GET_LEVEL), vec![vec![0x6130]]);
+        // Only the low 16 bits of the level go on.
+        assert_eq!(
+            calls(&e, ACTOR_BASE_DATA_SET_LEVEL),
+            vec![vec![0x5130, 0x1234]]
+        );
+        assert_eq!(calls(&e, TES_NPC_INIT_VALUES), vec![vec![0x5100, 0]]);
+    }
+
+    #[test]
+    fn copy_npc_command_needs_both_casts_an_actor_and_an_argument() {
+        // The command's reference is not an actor.
+        let (mut e, a) = copy_engine();
+        let vtable = e.mem.u32(a.this_obj.addr());
+        e.mem.set_u32(vtable + 0x100, V_FALSE);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6c80, &args![a]).bool());
+        assert!(calls(&e, GET_BASE_FORM).is_empty());
+        // No reference.
+        let mut none = a;
+        none.this_obj = Ptr::NULL;
+        assert!(e.call(0x005c_6c80, &args![none]).bool());
+        assert!(calls(&e, GET_BASE_FORM).is_empty());
+        // No argument.
+        let (mut e, a) = copy_engine();
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6c80, &args![a]).bool());
+        assert!(calls(&e, GET_BASE_FORM).is_empty());
+        // A base form that is not an NPC (the cast gives 0).
+        let (mut e, a) = copy_engine();
+        e.mem.set_u32(a.this_obj.addr() + 0x20, 0x7000);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6c80, &args![a]).bool());
+        assert_eq!(calls(&e, DYNAMIC_CAST).len(), 2);
+        assert!(calls(&e, NPC_GET_FIELD_0X130).is_empty());
+        assert!(calls(&e, TES_NPC_INIT_VALUES).is_empty());
+        // Parameters that do not parse.
+        let (mut e, a) = copy_engine();
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_6c80, &args![a]).bool());
+        assert!(calls(&e, GET_BASE_FORM).is_empty());
+    }
+
+    #[test]
+    fn equipped_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6d90, GET_EQUIPPED_CONDITION);
+    }
+
+    #[test]
+    fn gold_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6df0, GET_GOLD_CONDITION, None);
+    }
+
+    #[test]
+    fn sleeping_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6e10, GET_SLEEPING_CONDITION, None);
+    }
+
+    #[test]
+    fn sitting_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6e30, GET_SITTING_CONDITION, None);
+    }
+
+    #[test]
+    fn furniture_marker_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6e50, GET_FURNITURE_MARKER_ID_CONDITION, None);
+    }
+
+    #[test]
+    fn current_furniture_ref_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6e70, IS_CURRENT_FURNITURE_REF_CONDITION);
+    }
+
+    #[test]
+    fn current_furniture_obj_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6ed0, IS_CURRENT_FURNITURE_OBJ_CONDITION);
+    }
+
+    #[test]
+    fn talked_to_pc_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_6f30, GET_TALKED_TO_PC_CONDITION, None);
+    }
+
+    #[test]
+    fn talked_to_pc_param_command_passes_no_reference_and_the_argument() {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x55]);
+        e.register(GET_TALKED_TO_PC_CONDITION, |_, _| true.into_ret());
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(0x005c_6f50, &args![a]).bool());
+        assert_eq!(
+            calls(&e, GET_TALKED_TO_PC_CONDITION),
+            vec![vec![0, 0x55, 0, a.result.addr()]]
+        );
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(0x005c_6f50, &args![a]).bool());
+        assert!(calls(&e, GET_TALKED_TO_PC_CONDITION).is_empty());
+    }
+
+    #[test]
+    fn quest_running_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_6fb0, GET_QUEST_RUNNING_CONDITION);
+    }
+
+    #[test]
+    fn quest_completed_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7010, GET_QUEST_COMPLETED_CONDITION);
+    }
+
+    #[test]
+    fn stage_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7070, GET_STAGE_CONDITION);
+    }
+
+    /// A command parsing two arguments (`0x33` and `0x44` in the two locals).
+    fn check_two_argument_condition(entry: u32, callee: u32) {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x33, 0x44]);
+        e.register(callee, |_, _| true.into_ret());
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(
+            calls(&e, callee),
+            vec![vec![0x40, 0x33, 0x44, a.result.addr()]]
+        );
+        e.register(callee, |_, _| false.into_ret());
+        assert!(!e.call(entry, &args![a]).bool());
+        // Both locals start at 0.
+        parse_gives(&mut e, true, &[]);
+        e.register(callee, |_, _| true.into_ret());
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(calls(&e, callee)[0][1..3], [0, 0]);
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert!(calls(&e, callee).is_empty());
+    }
+
+    #[test]
+    fn stage_done_command_parses_two_arguments() {
+        check_two_argument_condition(0x005c_70d0, GET_STAGE_DONE_CONDITION);
+    }
+
+    #[test]
+    fn faction_rank_difference_command_parses_two_arguments() {
+        check_two_argument_condition(0x005c_72e0, GET_FACTION_RANK_DIFFERENCE_CONDITION);
+    }
+
+    #[test]
+    fn set_stage_command_sets_the_result_when_the_quest_accepts_the_stage() {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x4000, 0x1234_5678]);
+        e.register(QUEST_SET_STAGE, |_, _| true.into_ret());
+        let a = script(&mut e, 0x40);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7140, &args![a]).bool());
+        // Only the low byte of the stage goes on.
+        assert_eq!(calls(&e, QUEST_SET_STAGE), vec![vec![0x4000, 0x78]]);
+        assert_eq!(result_of(&e, a), 1.0);
+        // The quest refuses: the result stays 0.0.
+        e.register(QUEST_SET_STAGE, |_, _| false.into_ret());
+        assert!(e.call(0x005c_7140, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+        // No quest: nothing called.
+        parse_gives(&mut e, true, &[0, 5]);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        start_log(&mut e);
+        assert!(e.call(0x005c_7140, &args![a]).bool());
+        assert!(calls(&e, QUEST_SET_STAGE).is_empty());
+        assert_eq!(result_of(&e, a), 0.0);
+        // Parameters that do not parse: false, the result is still 0.0.
+        parse_gives(&mut e, false, &[]);
+        e.mem.set_f64(a.result.addr(), 9.0);
+        assert!(!e.call(0x005c_7140, &args![a]).bool());
+        assert_eq!(result_of(&e, a), 0.0);
+    }
+
+    /// A command taking a quest and calling `callee(quest, flag)` on it.
+    fn check_quest_flag_command(entry: u32, callee: u32, flag: u32) {
+        let mut e = engine();
+        parse_gives(&mut e, true, &[0x4000]);
+        accept(&mut e, &[callee]);
+        let a = script(&mut e, 0x40);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert_eq!(calls(&e, callee), vec![vec![0x4000, flag]]);
+        // No quest: true, nothing called.
+        parse_gives(&mut e, true, &[0]);
+        start_log(&mut e);
+        assert!(e.call(entry, &args![a]).bool());
+        assert!(calls(&e, callee).is_empty());
+        // Parameters that do not parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!e.call(entry, &args![a]).bool());
+        assert!(calls(&e, callee).is_empty());
+    }
+
+    #[test]
+    fn quest_command_sets_flag_one() {
+        check_quest_flag_command(0x005c_71c0, QUEST_SET_FLAG_0X1, 1);
+    }
+
+    #[test]
+    fn quest_command_clears_flag_one() {
+        check_quest_flag_command(0x005c_7220, QUEST_SET_FLAG_0X1, 0);
+    }
+
+    #[test]
+    fn quest_command_sets_flag_two() {
+        check_quest_flag_command(0x005c_7280, QUEST_SET_FLAG_0X2, 1);
+    }
+
+    #[test]
+    fn alarmed_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7350, GET_ALARMED_CONDITION, None);
+    }
+
+    #[test]
+    fn pleasant_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7370, GET_IS_PLEASANT_CONDITION, None);
+    }
+
+    #[test]
+    fn cloudy_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7390, GET_IS_CLOUDY_CONDITION, None);
+    }
+
+    #[test]
+    fn raining_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_73b0, GET_IS_RAINING_CONDITION, None);
+    }
+
+    #[test]
+    fn snowing_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_73d0, GET_IS_SNOWING_CONDITION, None);
+    }
+
+    #[test]
+    fn wind_speed_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_73f0, GET_WIND_SPEED_CONDITION, None);
+    }
+
+    #[test]
+    fn weather_percent_condition_command_passes_zero() {
+        check_condition_wrapper(0x005c_7410, GET_WEATHER_PERCENT_CONDITION, None);
+    }
+
+    #[test]
+    fn current_weather_command_parses_one_argument() {
+        check_one_argument_condition(0x005c_7430, GET_IS_CURRENT_WEATHER_CONDITION);
+    }
+
     #[test]
     fn every_function_of_the_part_is_registered_once() {
         let mut addresses: Vec<u32> = funcs().iter().map(|f| f.0).collect();
-        assert_eq!(addresses.len(), 40);
+        assert_eq!(addresses.len(), 80);
         addresses.sort_unstable();
         addresses.dedup();
-        assert_eq!(addresses.len(), 40);
+        assert_eq!(addresses.len(), 80);
         assert!(addresses
             .iter()
             .all(|a| (0x005c_4240..0x005c_8450).contains(a)));
