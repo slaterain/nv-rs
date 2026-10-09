@@ -841,6 +841,262 @@ const CURSOR_HORIZONTAL_SCALE: u32 = 0x0106_e960;
 const CURSOR_VERTICAL_SCALE: u32 = 0x0106_e7f8;
 const ONE_DOUBLE: u32 = 0x0101_2070;
 
+// Callees and data of `00712450` .. `00714c20`.
+/// `Tile::GetTileFromNode(node)` (Xbox PDB, `cdecl`): the tile a scene
+/// graph node belongs to, or null.
+const TILE_FROM_NODE: u32 = 0x00a0_1630;
+/// The word at `+0x18` of a scene graph object: its parent.
+const NODE_PARENT: u32 = 0x0096_11e0;
+/// `cdecl(float) -> ST0`: a float wrapper of a CRT function (`00408860`
+/// calls `00ec6cde` on a `double`); the fade code compares its result with
+/// `1.0` and `0.0001`.
+const FLOAT_WRAPPER_00408840: u32 = 0x0040_8840;
+/// `NiAVObject::GetProperty(this, type)` (Xbox PDB).
+const NODE_GET_PROPERTY: u32 = 0x00a5_9d30;
+/// Returns the constant 3: the property type the fade and pick code ask
+/// for.
+const PROPERTY_TYPE_THREE: u32 = 0x0043_8220;
+/// `(property, float)`: stores the faded value in the property.
+const PROPERTY_SET_FADE: u32 = 0x0082_1600;
+/// The number of children of a node, and the child at an index
+/// (`(node, index)`).
+const NODE_CHILD_COUNT: u32 = 0x0043_b480;
+const NODE_CHILD_AT: u32 = 0x0043_b4a0;
+/// `(node, index)`: the pointer held in the node's child array at `index`,
+/// or null past the end.
+const NODE_CHILD_POINTER: u32 = 0x0045_bc00;
+/// `9000.0` (`double`): the fade value of a tile whose children are not
+/// faded; `0.0001` (`double` of a `float`): the smallest fade that is not
+/// zero.
+const FADE_STOP_VALUE: u32 = 0x0106_f298;
+const FADE_MINIMUM: u32 = 0x0103_2980;
+/// The word at `+0x84` of the manager: `pCursorRoot`.
+const CURSOR_ROOT_GETTER: u32 = 0x004f_d3c0;
+/// `NiPick` byte setter `(pick, value)`: stores a byte at `+0x10`.
+const NI_PICK_SET_BYTE_10: u32 = 0x0063_2d20;
+/// `00408d60(holder)`: a pointer to the byte a setting holder keeps (the
+/// address of a static zero when `holder` is null).
+const SETTING_BYTE: u32 = 0x0040_8d60;
+/// The setting holders the interface code reads.
+const SETTING_HOLDER_011DB2CC: u32 = 0x011d_b2cc;
+const SETTING_HOLDER_011D8BA0: u32 = 0x011d_8ba0;
+const SETTING_HOLDER_011D8AB0: u32 = 0x011d_8ab0;
+/// The byte that enables the custom viewport rectangle, and that
+/// rectangle (four `float`s, `NiRect` `left right top bottom`, `0 1 1 0` by
+/// default).
+const VIEWPORT_RECT_ENABLED: u32 = 0x011f_9426;
+const VIEWPORT_RECT: u32 = 0x011a_d840;
+/// `NiRect<float>` constructor `(rect, left, right, top, bottom)`, returns
+/// the rectangle.
+const RECT_CONSTRUCT: u32 = 0x0041_4430;
+/// `InterfaceManager::IsInPipboyMenu` (Xbox PDB) and
+/// `InterfaceManager::IsCurrentRenderedMenuTopmost` (Xbox PDB).
+const IS_IN_PIPBOY_MENU: u32 = 0x0071_78a0;
+const IS_CURRENT_RENDERED_MENU_TOPMOST: u32 = 0x0071_7990;
+/// `Interface::GetRealScreenWidth` (Xbox PDB, `ST0`), and the `float`
+/// constant `00706e80` returns in `ST0`.
+const REAL_SCREEN_WIDTH: u32 = 0x0070_6e40;
+const SCREEN_WIDTH_CONSTANT: u32 = 0x0070_6e80;
+/// The address `+0x9c` of a property (a rectangle of four `int`s).
+const PROPERTY_RECT: u32 = 0x0050_d100;
+/// Called on a node with no arguments (works on the node's array at
+/// `+0x9c`); the result is not used.
+const NODE_SIBLING_UPDATE: u32 = 0x004a_dd70;
+/// The 16-bit word at `+0x18` of the pick result object.
+const PICK_RESULT_HIT_WORD: u32 = 0x0047_d3d0;
+/// `(node) -> bool`: calls `00456630(node, 1)`.
+const NODE_FLAG_TEST_00456610: u32 = 0x0045_6610;
+/// `112.0` (`double`): the value of the tile trait `0xfaa` of the menu tile
+/// that makes the pick position scale by the manager's `+0x4d0`.
+const PICK_SCALED_TILE_VALUE: u32 = 0x0106_ebd0;
+
+// `CreateSceneGraph`.
+/// Identity function (returns its first argument), called with `(name, 0)`.
+const PASS_THROUGH: u32 = 0x0046_4f30;
+/// `SceneGraph::SceneGraph(this, name, 0, 0)` (Xbox PDB).
+const SCENE_GRAPH_CONSTRUCT: u32 = 0x0087_8610;
+/// The renderer singleton (the word at `011f4748`).
+const RENDERER_GET: u32 = 0x0043_c4b0;
+/// `(camera, &matrix)`: sets the camera rotation from a 3x3 matrix.
+const CAMERA_SET_ROTATION: u32 = 0x0043_fa80;
+/// Width and height of the renderer (`ECX` is the renderer).
+const RENDERER_WIDTH: u32 = 0x004d_ee10;
+const RENDERER_HEIGHT: u32 = 0x004d_ee70;
+/// `NiFrustum::NiFrustum(this, ortho)` (Xbox PDB) and
+/// `NiCamera::SetViewFrustum(camera, &frustum)` (Xbox PDB).
+const FRUSTUM_CONSTRUCT: u32 = 0x00a7_1b70;
+const CAMERA_SET_FRUSTUM: u32 = 0x00a6_faf0;
+/// The `FaderManager` object (the word at `011d8804`) and
+/// `FaderManager::AddRoot(manager, graph, distance, flag)` (Xbox PDB).
+const FADER_MANAGER: u32 = 0x011d_8804;
+const FADER_ADD_ROOT: u32 = 0x0070_06c0;
+/// The constants of the frustum: the aspect divisor (`double`), the top
+/// (`float`), the far plane (`float`) and `0.5` (`double`); the width factor
+/// is `CURSOR_HORIZONTAL_SCALE`.
+const ASPECT_DIVISOR: u32 = 0x0102_1790;
+const FRUSTUM_TOP: u32 = 0x0106_f2dc;
+const FRUSTUM_FAR: u32 = 0x0102_2958;
+const HALF: u32 = 0x0101_1588;
+/// The field of view (`float`) a 3D scene graph's camera is given.
+const FOV_3D: u32 = 0x0104_ef40;
+/// `"InterfaceManager: Main Root"` and `"InterfaceManager: Cursor Root"`.
+const MAIN_ROOT_NAME: u32 = 0x0106_f2c0;
+const CURSOR_ROOT_NAME: u32 = 0x0106_f2a0;
+
+// The render pass (`007134d0`, `00713fb0`).
+/// `(process, word)` and `(process)`: push and pop of a culling
+/// process's stack of accumulators (`+0x90`, `+0xbc`, `+0x94`).
+const CULLING_PUSH: u32 = 0x00c4_f270;
+const CULLING_POP: u32 = 0x00c4_f2d0;
+/// The multithreaded rendering system (a constant address), its
+/// `SetThreadStage(stage, 0x17)` (Xbox PDB), the wait `(stage, 0x17)`
+/// and `AddAccumTask` (Xbox PDB, nine words).
+const RENDERING_SYSTEM: u32 = 0x004e_a970;
+const RENDERING_WAIT_STAGE: u32 = 0x00ba_3130;
+const RENDERING_SET_STAGE: u32 = 0x00ba_30f0;
+const RENDERING_ADD_ACCUM_TASK: u32 = 0x00ba_3390;
+/// `BSCullingProcess::BSCullingProcess(this, word)` (Xbox PDB), its
+/// destructor, and the setter `(process, accumulator)`.
+const CULLING_PROCESS_CONSTRUCT: u32 = 0x004a_0eb0;
+const CULLING_PROCESS_DESTRUCT: u32 = 0x004a_0f60;
+const CULLING_SET_ACCUMULATOR: u32 = 0x004a_0fd0;
+/// `BSShaderUtil::AccumulateScene(camera, scene, process)` (Xbox PDB,
+/// `cdecl`) and the finishing `cdecl(camera, accumulator, 0)`.
+const ACCUMULATE_SCENE: u32 = 0x00b6_bee0;
+const ACCUMULATE_FINISH: u32 = 0x00b6_c0d0;
+/// `Interface::IsolateMenuElements(a, b)` (Xbox PDB, `cdecl`) and
+/// `Interface::RestoreMenuElements` (Xbox PDB, `cdecl`).
+const ISOLATE_MENU_ELEMENTS: u32 = 0x0070_2c80;
+const RESTORE_MENU_ELEMENTS: u32 = 0x0070_2dd0;
+/// `(manager) -> bool` of the interface unit.
+const MENU_PREDICATE_007079F0: u32 = 0x0070_79f0;
+/// `(renderer, camera)`.
+const RENDERER_SET_CAMERA: u32 = 0x004e_9bb0;
+/// The locks the tile update takes: `enter(lock, 0)` and `leave(lock)`
+/// (wrappers of `EnterCriticalSection` / `RtlLeaveCriticalSection`), the two
+/// lock objects, and the queue of objects whose deletion is deferred with
+/// the emptiness test (the count word at `+8` is zero) and pop.
+const LOCK_ENTER: u32 = 0x0045_38a0;
+const LOCK_LEAVE: u32 = 0x0045_38c0;
+const TILE_LOCK: u32 = 0x011d_8c18;
+const UPDATE_LOCK: u32 = 0x011f_3330;
+const DEFERRED_QUEUE: u32 = 0x011d_8b2c;
+const COLLECTION_IS_EMPTY: u32 = 0x0076_b610;
+const DEFERRED_QUEUE_POP: u32 = 0x007b_5390;
+/// The array of tiles to update (a `BSSimpleArray`), its `Find(&item)`
+/// (`bool`), `Add(&item)`, the index search `(&item, 0, compare)`, the
+/// comparison, `RemoveAt(index, 1)`, the size (`ECX` is the array), the
+/// element address `(array, index)` and `Clear(flag)`.
+const UPDATE_ARRAY: u32 = 0x011d_8b44;
+const ARRAY_FIND: u32 = 0x0099_62f0;
+const ARRAY_ADD: u32 = 0x007c_b2e0;
+const ARRAY_FIND_INDEX: u32 = 0x0071_9b20;
+const ARRAY_COMPARE: u32 = 0x009a_3830;
+const ARRAY_REMOVE_AT: u32 = 0x009a_4320;
+const WORD_AT_8: u32 = 0x0044_ddc0;
+const ARRAY_ELEMENT: u32 = 0x0087_7a30;
+const ARRAY_CLEAR: u32 = 0x0084_54f0;
+/// The setting object `0043d4d0` is called on: a pointer to an `int`.
+const SETTING_HOLDER_011C3EA4: u32 = 0x011c_3ea4;
+/// An object with tables of handles at `+0x8c`; `(object, table, index)`
+/// waits for ever on the handle `index` of the table (`WaitForSingleObject`).
+/// The byte at `011dfa19` says whether it is in use.
+const SEMAPHORE_POOL: u32 = 0x011d_fa50;
+const SEMAPHORE_POOL_IN_USE: u32 = 0x011d_fa19;
+const SEMAPHORE_POOL_WAIT: u32 = 0x008c_7a70;
+/// The counter `00713d60` clears.
+const TILE_UPDATE_DEPTH: u32 = 0x011f_32d4;
+/// The byte set while the tiles update (`011d8908`).
+const TILES_UPDATING: u32 = 0x011d_8908;
+/// `Tile::UpdateFadeControls` (Xbox PDB), `Tile::UpdateChildren` (Xbox PDB)
+/// and the unnamed `cdecl()` that runs before the update.
+const TILE_UPDATE_FADE_CONTROLS: u32 = 0x00a0_80d0;
+const TILE_UPDATE_CHILDREN: u32 = 0x00a0_4620;
+const TILE_UPDATE_PREPARE: u32 = 0x00a0_4510;
+/// `GetCurrentThreadId` wrapper and the word at `+0x10` of the object at
+/// `011dea0c` (the owner thread's id).
+const CURRENT_THREAD_ID: u32 = 0x0040_fc90;
+const OWNER_THREAD_ID: u32 = 0x0044_edb0;
+const OWNER_OBJECT: u32 = 0x011d_ea0c;
+/// The device getter (`ECX` is the renderer; the device is a COM object,
+/// so its methods get the device again as their first word) and the
+/// renderer's state object getter.
+const DEVICE_GET: u32 = 0x004d_c020;
+const RENDERER_STATE_OBJECT: u32 = 0x004e_caf0;
+/// `cdecl()` and `cdecl(7, 0)` of the renderer state code.
+const RENDER_PASS_RESET: u32 = 0x00b6_b730;
+const RENDER_PASS_SET_MODE: u32 = 0x00b6_b890;
+/// `byte` getters of the renderer: is the pass active, is the clear
+/// enabled.
+const RENDER_PASS_ACTIVE: u32 = 0x004e_9510;
+const RENDER_CLEAR_ENABLED: u32 = 0x004d_e080;
+/// The clear colour object passed to the renderer's slot `0xac`.
+const CLEAR_COLOR: u32 = 0x011a_9bd0;
+/// `float`s of the two clear rectangles.
+const CLEAR_RECT_ONE_TOP: u32 = 0x0102_6994;
+const CLEAR_RECT_TWO_LEFT: u32 = 0x0103_40a4;
+/// `(scene) -> object`: the object `DialoguePackage::GetTargetOfConversation`
+/// (Xbox PDB name by identical-code folding) returns, here the source of
+/// the culling process's word.
+const CULLING_SOURCE_GET: u32 = 0x008d_80e0;
+/// `() -> object`: the word at `011f5b04` (`WORKER_OBJECT`), and an
+/// unnamed `cdecl()` that works on that object's queues; the render pass
+/// calls it when the object's byte at `+0x1b0` is set.
+const WORKER_GET: u32 = 0x0068_3a60;
+const WORKER_FLUSH: u32 = 0x00a8_1a80;
+
+// The semaphore wrapper (`00714900` .. `00714a00`).
+/// The object (a pointer at `011f5b04`) whose `+0x190` member wraps a
+/// semaphore handle (at `+8` of the member), and the byte `007149f0` sets.
+const WORKER_OBJECT: u32 = 0x011f_5b04;
+const WORKER_WAS_BLOCKED: u32 = 0x011f_5b08;
+/// Imported `ReleaseSemaphore` and `WaitForSingleObject` (import slots).
+const RELEASE_SEMAPHORE: u32 = 0x00fd_f1b4;
+const WAIT_FOR_SINGLE_OBJECT: u32 = 0x00fd_f1c8;
+/// `cdecl(object)` called with the wrapper after a wait that did not time
+/// out (Xbox PDB name `WaitForSingleObjectEx` by identical-code folding),
+/// and the `cdecl(object)` called before the release.
+const WAIT_RESULT_HANDLER: u32 = 0x0040_19a0;
+const BEFORE_RELEASE: u32 = 0x0040_b460;
+/// `(object, string, flag) -> bool`, asked of the renderer with the string
+/// at `KIND_NAME` before it is told to fill a strip.
+const OBJECT_IS_KIND: u32 = 0x004a_0e10;
+const KIND_NAME: u32 = 0x0106_f2e0;
+
+// The render-state calls and counters of `00714a40` .. `00714c20`.
+const RENDER_STATE_00B97DE0: u32 = 0x00b9_7de0;
+const RENDER_STATE_00B97E30: u32 = 0x00b9_7e30;
+const RENDER_STATE_00B97E80: u32 = 0x00b9_7e80;
+const RENDER_STATE_00B97ED0: u32 = 0x00b9_7ed0;
+const RENDER_STATE_00B97F20: u32 = 0x00b9_7f20;
+const RENDER_STATE_00B97FA0: u32 = 0x00b9_7fa0;
+const RENDER_STATE_00B97FF0: u32 = 0x00b9_7ff0;
+const RENDER_STATE_00B980C0: u32 = 0x00b9_80c0;
+const RENDER_STATE_00B98180: u32 = 0x00b9_8180;
+const RENDER_STATE_00B98230: u32 = 0x00b9_8230;
+const RENDER_STATE_00B984F0: u32 = 0x00b9_84f0;
+const RENDER_STATE_00B98320: u32 = 0x00b9_8320;
+const RENDER_STATE_00B98480: u32 = 0x00b9_8480;
+const RENDER_STATE_004ECED0: u32 = 0x004e_ced0;
+const RENDER_STATE_004ECB40: u32 = 0x004e_cb40;
+const RENDER_STATE_004EB510: u32 = 0x004e_b510;
+const RENDER_STATE_00714C40: u32 = 0x0071_4c40;
+const RENDER_COUNTER_011FF9D8: u32 = 0x011f_f9d8;
+const RENDER_COUNTER_011FF9DC: u32 = 0x011f_f9dc;
+const RENDER_COUNTER_011FF9E0: u32 = 0x011f_f9e0;
+const RENDER_COUNTER_011FF9E8: u32 = 0x011f_f9e8;
+const RENDER_COUNTER_011FF9EC: u32 = 0x011f_f9ec;
+const RENDER_COUNTER_011FF9F0: u32 = 0x011f_f9f0;
+const RENDER_COUNTER_011FF9F4: u32 = 0x011f_f9f4;
+const RENDER_COUNTER_011FFA00: u32 = 0x011f_fa00;
+const RENDER_COUNTER_011FFA04: u32 = 0x011f_fa04;
+const RENDER_COUNTER_011FFA08: u32 = 0x011f_fa08;
+const RENDER_COUNTER_011FFA0C: u32 = 0x011f_fa0c;
+const RENDER_COUNTER_011FFA10: u32 = 0x011f_fa10;
+const RENDER_COUNTER_011FF9E4: u32 = 0x011f_f9e4;
+const RENDER_COUNTER_011FFA20: u32 = 0x011f_fa20;
+const WORD_AT_C: u32 = 0x0084_e3a0;
+
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
         entry!(0x00709fd0, interface_manager_initialize(i32, u8)),
@@ -922,6 +1178,55 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             interface_manager_display_current_pick_ref(Ptr<InterfaceManager>)
         ),
         entry!(0x007118d0, fn_007118d0(Ptr<InterfaceManager>)),
+        entry!(
+            0x00712450,
+            interface_manager_recursive_fade(Ptr<InterfaceManager>, u32, f32, f32)
+        ),
+        entry!(0x007126c0, fn_007126c0(Ptr<InterfaceManager>, u8) -> u32),
+        entry!(0x00712e60, fn_00712e60(Ptr, u32)),
+        entry!(
+            0x00712e90,
+            interface_manager_create_scene_graph(Ptr<InterfaceManager>, u32, u32, u8) -> u32
+        ),
+        entry!(0x007133b0, fn_007133b0(Ptr, u32, f32, f32, f32)),
+        entry!(0x007133f0, fn_007133f0(Ptr<InterfaceManager>)),
+        entry!(0x007134d0, fn_007134d0(Ptr<InterfaceManager>, u32, u32)),
+        entry!(0x00713c00, fn_00713c00()),
+        entry!(0x00713c70, fn_00713c70(Ptr<InterfaceManager>)),
+        entry!(0x00713d60, fn_00713d60()),
+        entry!(0x00713d70, fn_00713d70() -> u32),
+        entry!(0x00713d80, fn_00713d80() -> u32),
+        entry!(0x00713d90, fn_00713d90() -> u8),
+        entry!(
+            0x00713da0,
+            interface_manager_add_tile_to_update_list(Ptr<InterfaceManager>, u32)
+        ),
+        entry!(0x00713de0, fn_00713de0(Ptr<InterfaceManager>, u32)),
+        entry!(0x00713e20, fn_00713e20(Ptr<InterfaceManager>)),
+        entry!(0x00713ee0, fn_00713ee0(Ptr)),
+        entry!(0x00713f00, fn_00713f00(Ptr<InterfaceManager>)),
+        entry!(0x00713fb0, fn_00713fb0(Ptr<InterfaceManager>, u32, u32)),
+        entry!(0x007148c0, fn_007148c0(Ptr, u32, u32)),
+        entry!(0x00714900, fn_00714900() -> u32),
+        entry!(0x00714930, fn_00714930(Ptr) -> u32),
+        entry!(0x00714960, fn_00714960(u32) -> u32),
+        entry!(0x007149b0, fn_007149b0(Ptr, u32) -> u32),
+        entry!(0x007149f0, fn_007149f0()),
+        entry!(0x00714a00, fn_00714a00() -> bool),
+        entry!(0x00714a40, fn_00714a40(u32)),
+        entry!(0x00714a60, fn_00714a60(u32)),
+        entry!(0x00714a80, fn_00714a80(u32)),
+        entry!(0x00714aa0, fn_00714aa0(u32)),
+        entry!(0x00714ac0, fn_00714ac0(u32)),
+        entry!(0x00714ae0, fn_00714ae0(u32)),
+        entry!(0x00714b00, fn_00714b00(u32)),
+        entry!(0x00714b20, fn_00714b20(u32)),
+        entry!(0x00714b50, fn_00714b50(u32)),
+        entry!(0x00714b80, fn_00714b80(u32)),
+        entry!(0x00714bb0, fn_00714bb0(u32)),
+        entry!(0x00714bd0, fn_00714bd0(u32)),
+        entry!(0x00714bf0, fn_00714bf0(u32)),
+        entry!(0x00714c20, fn_00714c20(u32)),
         // @@ENTRIES@@
     ]
 }
@@ -4548,6 +4853,1302 @@ fn clamp_edge(e: &mut Engine, value: f32, high: u32, low: u32) -> f32 {
     e.call(FLOAT_MAX, &args![lower, min]).f32()
 }
 
+/// The x87 test the fade code makes after `FCOMP`: true unless `value` is
+/// below `limit` (an unordered compare counts as not below).
+fn not_below(value: f64, limit: f64) -> bool {
+    value.partial_cmp(&limit) != Some(std::cmp::Ordering::Less)
+}
+
+// Translated from 00712450 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::RecursiveFade` (Xbox PDB): fades a scene graph node
+/// and its children. `fade` is the fade being applied and `base_alpha` the
+/// alpha handed down; a tile the node belongs to may replace the alpha with
+/// its own (trait `0xfa9` over 255) or, when its trait `0xfab` is set, only
+/// shows or hides itself (trait `0xfa3`) and stops. A geometry node with a
+/// property of type 3 gets the faded value; the children are visited unless
+/// the tile's trait `0xfaa` is `9000.0`.
+pub fn interface_manager_recursive_fade(
+    e: &mut Engine,
+    _this: Ptr<InterfaceManager>,
+    node: u32,
+    fade: f32,
+    base_alpha: f32,
+) {
+    with_scope_guard(e, 0xd2b, |e| {
+        if node == 0 {
+            return;
+        }
+        // Virtual slot `0xc` is the node's own `NiNode` view (null for
+        // leaves); it is asked again below for the children.
+        let mut owner = e.vcall(node, 0xc, &args![]).u32();
+        let mut tile = e.call(TILE_FROM_NODE, &args![owner]).u32();
+        while tile == 0 && owner != 0 {
+            owner = e.call(NODE_PARENT, &args![owner]).u32();
+            tile = e.call(TILE_FROM_NODE, &args![owner]).u32();
+        }
+        let children = e.vcall(node, 0xc, &args![]).u32();
+        let mut alpha = base_alpha;
+        if tile != 0 {
+            if e.call(TILE_IS_TRUE, &args![tile, 0xfabu32]).bool() {
+                let magnitude = e.call(FLOAT_WRAPPER_00408840, &args![fade]).f64();
+                let shown = not_below(magnitude, e.global::<f64>(ONE_DOUBLE));
+                tile_set_int(e, tile, 0xfa3, shown as u32);
+                return;
+            }
+            let opacity = tile_get_float(e, tile, 0xfa9);
+            alpha = (opacity / e.global::<f64>(TWO_FIFTY_FIVE)) as f32;
+        }
+        // Virtual slot `0x1c` is the node's geometry view.
+        let geometry = e.vcall(node, 0x1c, &args![]).u32();
+        if geometry != 0 {
+            let magnitude = e.call(FLOAT_WRAPPER_00408840, &args![fade]).f64();
+            let faded = if not_below(magnitude, e.global::<f64>(FADE_MINIMUM)) {
+                let product = (fade as f64 * alpha as f64) as f32;
+                let least = e.call(FLOAT_MIN, &args![product, alpha]).f32();
+                e.call(FLOAT_MAX, &args![0.0f32, least]).f32()
+            } else {
+                0.0
+            };
+            let kind = e.call(PROPERTY_TYPE_THREE, &args![]).u32();
+            let property = e.call(NODE_GET_PROPERTY, &args![geometry, kind]).u32();
+            if property != 0 {
+                e.call(PROPERTY_SET_FADE, &args![property, faded]);
+            }
+        }
+        if children != 0 {
+            if tile != 0 {
+                let stop = tile_get_float(e, tile, 0xfaa);
+                if stop == e.global::<f64>(FADE_STOP_VALUE) {
+                    return;
+                }
+            }
+            let mut index = 0u32;
+            while index < e.call(NODE_CHILD_COUNT, &args![children]).u32() {
+                let child = e.call(NODE_CHILD_AT, &args![children, index]).u32();
+                interface_manager_recursive_fade(e, _this, child, fade, alpha);
+                index += 1;
+            }
+        }
+    });
+}
+
+// Translated from 007126c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Picks the tile under the pointer by casting a ray through the scene
+/// graph (the interface scene graph, or the rendered menu's when one is
+/// shown) and walking the results: each hit object is followed up to the
+/// tile it belongs to, which must accept events, pass its pick rectangle
+/// test when it has one, answer its own hit test (virtual slot `0x14`) and
+/// have trait `0xfaf`. Unless `keep_exact_tile` is set a tile without trait
+/// `0xfaa` is replaced by the first ancestor that has it. Returns the tile
+/// (null when nothing was hit) and stores the character index of a text
+/// tile (type `0x387`) in `iCharHit` (`0xffff` otherwise). The cursor root
+/// is hidden during the pick.
+pub fn fn_007126c0(e: &mut Engine, this: Ptr<InterfaceManager>, keep_exact_tile: u8) -> u32 {
+    with_scope_guard(e, 0xd5c, |e| {
+        let cursor_root = e.call(CURSOR_ROOT_GETTER, &args![this]).u32();
+        e.call(NODE_SET_FLAG, &args![cursor_root, 1u32]);
+        let mut root = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        let menu = e.get(this, InterfaceManager::pCurrentRenderedMenu);
+        if menu != 0 {
+            e.vcall(menu, 0x1c, &args![]);
+            if e.call(MENU_FLAG_QUERY_004A4040, &args![]).bool() {
+                let top = e.call(GET_ENTER_STACK_TOP, &args![this]).u32();
+                let rendered = e.call(TILE_GET_MENU_BY_CLASS, &args![top]).u32();
+                root = e.call(TILE_IMAGE_NODE, &args![rendered]).u32();
+            }
+        }
+        e.with_stack(0x34, |e, pick| {
+            e.call(NI_PICK_CONSTRUCT, &args![pick, 0u32, 8u32]);
+            let found = pick_tile_search(e, this, keep_exact_tile != 0, root, pick);
+            e.call(NI_PICK_DESTRUCT, &args![pick]);
+            found
+        })
+    })
+}
+
+/// The body of [`fn_007126c0`] between the construction and the
+/// destruction of its `NiPick`.
+fn pick_tile_search(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    keep_exact_tile: bool,
+    root: u32,
+    pick: Ptr,
+) -> u32 {
+    e.call(NI_PICK_SET_BYTE_10, &args![pick, 0u32]);
+    e.call(NI_PICK_SET_FLAG, &args![pick, 1u32]);
+    e.call(NI_PICK_SET_ROOT, &args![pick, root]);
+    let base = this.addr();
+    e.with_stack(0xc, |e, origin| {
+        e.with_stack(0xc, |e, direction| {
+            e.call(MEMBER_CONSTRUCTOR_EMPTY, &args![origin]);
+            e.call(MEMBER_CONSTRUCTOR_EMPTY, &args![direction]);
+            // The pointer position (`+0x38`, `+0x40`) kept inside the
+            // desktop.
+            let desktop_width = e.call(GET_DESKTOP_WIDTH, &args![]).f32();
+            let x = e.mem.f32(base + 0x38);
+            let x = e.call(FLOAT_MAX, &args![0.0f32, x]).f32();
+            let mut x = e.call(FLOAT_MIN, &args![x, desktop_width]).f32();
+            let desktop_height = e.call(GET_DESKTOP_HEIGHT, &args![]).f32();
+            let y = e.mem.f32(base + 0x40);
+            let y = e.call(FLOAT_MAX, &args![0.0f32, y]).f32();
+            let mut y = e.call(FLOAT_MIN, &args![y, desktop_height]).f32();
+            let setting = e.call(SETTING_BYTE, &args![SETTING_HOLDER_011DB2CC]).u32();
+            if e.mem.u8(setting) != 0 {
+                if e.get(this, InterfaceManager::bMouseOverRenderedMenu) != 0 {
+                    x = e.get(this, InterfaceManager::field_4ac);
+                    y = e.get(this, InterfaceManager::field_4b0);
+                } else if e.call(IS_CURRENT_RENDERED_MENU_TOPMOST, &args![]).bool() {
+                    return 0;
+                }
+            }
+            if e.global::<u8>(VIEWPORT_RECT_ENABLED) != 0 {
+                e.with_stack(0x10, |e, rect| {
+                    let rect = e
+                        .call(RECT_CONSTRUCT, &args![rect, 0.0f32, 1.0f32, 1.0f32, 0.0f32])
+                        .u32();
+                    let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+                    let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+                    fn_00712e60(e, Ptr::new(camera), rect);
+                });
+            }
+            let row = e.call(FTOL, &args![y as f64]).i32();
+            let column = e.call(FTOL, &args![x as f64]).i32();
+            let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+            e.call(
+                CAMERA_BUILD_PICK_RAY,
+                &args![camera, column, row, origin, direction, 0u32],
+            );
+            let mut found = 0u32;
+            if e.call(NI_PICK_PICK_OBJECTS, &args![pick, origin, direction, 0u32])
+                .bool()
+            {
+                found = pick_tile_results(e, this, keep_exact_tile, pick, x, y);
+            }
+            // Show the cursor again and tell the rendered menu.
+            let cursor_root = e.call(CURSOR_ROOT_GETTER, &args![this]).u32();
+            e.call(NODE_SET_FLAG, &args![cursor_root, 0u32]);
+            let menu = e.get(this, InterfaceManager::pCurrentRenderedMenu);
+            if menu != 0 {
+                e.vcall(menu, 0x20, &args![]);
+            }
+            found
+        })
+    })
+}
+
+/// The walk over the pick results of [`fn_007126c0`]: returns the first
+/// tile that qualifies, or null.
+fn pick_tile_results(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    keep_exact_tile: bool,
+    pick: Ptr,
+    x: f32,
+    y: f32,
+) -> u32 {
+    let mut index = 0i32;
+    loop {
+        let results = e.call(NI_PICK_GET_RESULTS, &args![pick]).u32();
+        let count = e.call(RESULTS_COUNT, &args![results]).i32();
+        if index >= count {
+            return 0;
+        }
+        let results = e.call(NI_PICK_GET_RESULTS, &args![pick]).u32();
+        let entry = e.call(RESULTS_GET, &args![results, index]).u32();
+        index += 1;
+        // The node of the hit object, or of its parent.
+        let hit = e.call(RESULT_OBJECT, &args![entry]).u32();
+        let mut node = if hit != 0 {
+            let object = e.call(RESULT_OBJECT, &args![entry]).u32();
+            e.vcall(object, 0xc, &args![]).u32()
+        } else {
+            0
+        };
+        if node == 0 {
+            let object = e.call(RESULT_OBJECT, &args![entry]).u32();
+            if e.call(NODE_PARENT, &args![object]).u32() != 0 {
+                let object = e.call(RESULT_OBJECT, &args![entry]).u32();
+                let parent = e.call(NODE_PARENT, &args![object]).u32();
+                node = e.vcall(parent, 0xc, &args![]).u32();
+            }
+        }
+        let mut tile = 0;
+        if node != 0 {
+            tile = e.call(TILE_FROM_NODE, &args![node]).u32();
+        }
+        while tile == 0 && node != 0 {
+            node = e.call(NODE_PARENT, &args![node]).u32();
+            tile = e.call(TILE_FROM_NODE, &args![node]).u32();
+        }
+        if tile == 0 {
+            continue;
+        }
+        if !e.call(TILE_IS_ACCEPTING_EVENTS, &args![this, tile]).bool() {
+            continue;
+        }
+        if e.call(TILE_IS_TRUE, &args![tile, 0xfaeu32]).bool()
+            && e.call(TILE_IMAGE_NODE, &args![tile]).u32() != 0
+        {
+            // The tile's menu tile says whether the position is scaled.
+            let menu = e.call(TILE_GET_MENU, &args![tile]).u32();
+            let menu_tile = e.call(GET_FIELD_AT_4, &args![menu]).u32();
+            let value = tile_get_float(e, menu_tile, 0xfaa);
+            let scaled = value == e.global::<f64>(PICK_SCALED_TILE_VALUE);
+            let image = e.call(TILE_IMAGE_NODE, &args![tile]).u32();
+            e.call(NODE_SIBLING_UPDATE, &args![image]);
+            let image = e.call(TILE_IMAGE_NODE, &args![tile]).u32();
+            if e.call(NODE_CHILD_POINTER, &args![image, 0u32]).u32() != 0 {
+                let kind = e.call(PROPERTY_TYPE_THREE, &args![]).u32();
+                let image = e.call(TILE_IMAGE_NODE, &args![tile]).u32();
+                let child = e.call(NODE_CHILD_AT, &args![image, 0u32]).u32();
+                let property = e.call(NODE_GET_PROPERTY, &args![child, kind]).u32();
+                if property != 0 {
+                    let rect = e.call(PROPERTY_RECT, &args![property]).u32();
+                    // Left, top, right and bottom of the pick rectangle.
+                    let mut bounds = [
+                        e.mem.i32(rect),
+                        e.mem.i32(rect + 4),
+                        e.mem.i32(rect + 8),
+                        e.mem.i32(rect + 0xc),
+                    ];
+                    let setting = e.call(SETTING_BYTE, &args![SETTING_HOLDER_011DB2CC]).u32();
+                    if e.mem.u8(setting) != 0
+                        && e.get(this, InterfaceManager::bMouseOverRenderedMenu) != 0
+                    {
+                        let width = e.call(REAL_SCREEN_WIDTH, &args![]).f64();
+                        let reference = e.call(SCREEN_WIDTH_CONSTANT, &args![]).f64();
+                        let scale = (width / reference) as f32;
+                        for slot in [0usize, 2, 1, 3] {
+                            bounds[slot] = e
+                                .call(FTOL, &args![bounds[slot] as f64 * scale as f64])
+                                .i32();
+                        }
+                    }
+                    if bounds.iter().any(|bound| *bound != 0) {
+                        let mut across = x;
+                        if scaled {
+                            let manager = e.call(GET_MANAGER, &args![]).u32();
+                            let factor = e.mem.f32(manager + 0x4d0);
+                            across = (across as f64 * factor as f64) as f32;
+                        }
+                        let (across, down) = (across as f64, y as f64);
+                        if across < bounds[0] as f64
+                            || across >= bounds[2] as f64
+                            || down < bounds[1] as f64
+                            || down >= bounds[3] as f64
+                        {
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+        // The tile's own hit test (virtual slot `0x14`) with the pointer.
+        if !e.vcall(tile, 0x14, &args![x, y]).bool() {
+            continue;
+        }
+        if !e.call(TILE_IS_TRUE, &args![tile, 0xfafu32]).bool() {
+            continue;
+        }
+        let mut chosen = tile;
+        if !keep_exact_tile && e.call(TILE_GET_VALUE_Q, &args![tile, 0xfaau32]).u32() == 0 {
+            let mut ancestor = e.call(TILE_PARENT, &args![tile]).u32();
+            while ancestor != 0 && e.call(TILE_GET_VALUE_Q, &args![ancestor, 0xfaau32]).u32() == 0 {
+                ancestor = e.call(TILE_PARENT, &args![ancestor]).u32();
+            }
+            if ancestor != 0 {
+                chosen = ancestor;
+            }
+        }
+        // Virtual slot `0xc` is the tile type; `0x387` is the text tile.
+        let kind = e.vcall(chosen, 0xc, &args![]).u32();
+        if kind == 0x387 {
+            let word = e.call(PICK_RESULT_HIT_WORD, &args![entry]).u32() as u16;
+            e.set(this, InterfaceManager::iCharHit, word / 2);
+        } else {
+            e.set(this, InterfaceManager::iCharHit, 0xffff);
+        }
+        return chosen;
+    }
+}
+
+// Translated from 00712e60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Copies the four words at `rect` (a `NiRect<float>`: `left right top
+/// bottom`) to `+0x100` of the object (the camera's viewport).
+pub fn fn_00712e60(e: &mut Engine, this: Ptr, rect: u32) {
+    for word in 0..4 {
+        let value = e.mem.u32(rect + 4 * word);
+        e.mem.set_u32(this.addr() + 0x100 + 4 * word, value);
+    }
+}
+
+// Translated from 00712e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::CreateSceneGraph` (Xbox PDB): wraps `existing` (or a
+/// new `SceneGraph` built from `name`) for the menus. Orients and shapes
+/// its camera: the rotation rows `(0 0 1) (1 0 0) (0 1 0)`, the aspect
+/// ratio of the renderer (divided by 4/3, kept at `+0x4d0`), an orthographic
+/// frustum `1280 * aspect` wide and `960` high, and a translation that
+/// centres it. For the 2D graph (`is_3d` zero) it also creates the
+/// `InterfaceManager: Main Root` and `Cursor Root` nodes (`+0x80`, `+0x84`),
+/// attaches them and registers the graph with the `FaderManager`; for the
+/// 3D graph it sets the camera's field of view. Returns the graph.
+pub fn interface_manager_create_scene_graph(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    existing: u32,
+    name: u32,
+    is_3d: u8,
+) -> u32 {
+    with_scope_guard(e, 0xe11, |e| {
+        let mut graph = existing;
+        if graph == 0 {
+            graph = construct_new(e, NI_ALLOC, 0xc0, |e, block| {
+                let name = e.call(PASS_THROUGH, &args![name, 0u32]).u32();
+                e.call(SCENE_GRAPH_CONSTRUCT, &args![block, name, 0u32, 0u32])
+                    .ptr()
+            })
+            .addr();
+        }
+        let renderer = e.call(RENDERER_GET, &args![]).u32();
+        e.with_stack(0x24, |e, matrix| {
+            e.call(MEMBER_CONSTRUCTOR_EMPTY, &args![matrix]);
+            fn_007133b0(e, matrix, 0, 0.0, 0.0, 1.0);
+            fn_007133b0(e, matrix, 1, 1.0, 0.0, 0.0);
+            fn_007133b0(e, matrix, 2, 0.0, 1.0, 0.0);
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![graph]).u32();
+            e.call(CAMERA_SET_ROTATION, &args![camera, matrix]);
+        });
+        // The aspect ratio of the renderer against 4:3.
+        let width = e.call(RENDERER_WIDTH, &args![renderer]).u32();
+        let height = e.call(RENDERER_HEIGHT, &args![renderer]).u32();
+        let ratio = (width as f64 / height as f64) as f32;
+        let aspect = (ratio as f64 / e.global::<f64>(ASPECT_DIVISOR)) as f32;
+        e.set(this, InterfaceManager::field_4d0, aspect);
+        let (right, top) = e.with_stack(0x1c, |e, frustum| {
+            e.call(FRUSTUM_CONSTRUCT, &args![frustum, 0u32]);
+            e.mem.set_u8(frustum.addr() + 0x18, 1);
+            e.mem.set_f32(frustum.addr(), 0.0);
+            let horizontal: f64 = e.global(CURSOR_HORIZONTAL_SCALE);
+            let right = (aspect as f64 * horizontal) as f32;
+            e.mem.set_f32(frustum.addr() + 4, right);
+            let top: f32 = e.global(FRUSTUM_TOP);
+            e.mem.set_f32(frustum.addr() + 8, top);
+            e.mem.set_f32(frustum.addr() + 0xc, 0.0);
+            e.mem.set_f32(frustum.addr() + 0x10, 0.0);
+            let far: f32 = e.global(FRUSTUM_FAR);
+            e.mem.set_f32(frustum.addr() + 0x14, far);
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![graph]).u32();
+            e.call(CAMERA_SET_FRUSTUM, &args![camera, frustum]);
+            (right, top)
+        });
+        // The camera is moved so that the frustum is centred.
+        let half: f64 = e.global(HALF);
+        let across = (-(right as f64) * half) as f32;
+        let down = (-(top as f64) * half) as f32;
+        e.with_stack(0xc, |e, position| {
+            let position = e
+                .call(NI_POINT3_CONSTRUCT, &args![position, across, 0.0f32, down])
+                .u32();
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![graph]).u32();
+            e.call(NODE_SET_TRANSLATE_VECTOR, &args![camera, position]);
+        });
+        if is_3d == 0 {
+            let distance = e.get(this, InterfaceManager::fOneToOneDistance);
+            let fader = e.global::<u32>(FADER_MANAGER);
+            e.call(FADER_ADD_ROOT, &args![fader, graph, distance, 1u32]);
+            let main_root = construct_new(e, NI_ALLOC, 0xac, |e, block| {
+                e.call(NI_NODE_CONSTRUCT, &args![block, 0u32]).ptr()
+            });
+            e.set(this, InterfaceManager::pInterfaceRoot, main_root.addr());
+            attach_root(
+                e,
+                this,
+                graph,
+                InterfaceManager::pInterfaceRoot,
+                MAIN_ROOT_NAME,
+            );
+            let cursor_root = construct_new(e, NI_ALLOC, 0xac, |e, block| {
+                e.call(NI_NODE_CONSTRUCT, &args![block, 0u32]).ptr()
+            });
+            e.set(this, InterfaceManager::pCursorRoot, cursor_root.addr());
+            attach_root(
+                e,
+                this,
+                graph,
+                InterfaceManager::pCursorRoot,
+                CURSOR_ROOT_NAME,
+            );
+            let distance = e.get(this, InterfaceManager::fOneToOneDistance);
+            let fader = e.global::<u32>(FADER_MANAGER);
+            e.call(FADER_ADD_ROOT, &args![fader, graph, distance, 0u32]);
+        } else {
+            e.call(
+                SCENE_GRAPH_SET_CAMERA_FOV,
+                &args![graph, e.global::<f32>(FOV_3D), 0u32, 0u32, 0u32],
+            );
+        }
+        graph
+    })
+}
+
+/// Names the node in `root_field`, attaches it to `graph` (virtual slot
+/// `0xdc`, second argument 1) and moves it down by the one-to-one distance.
+fn attach_root(
+    e: &mut Engine,
+    this: Ptr<InterfaceManager>,
+    graph: u32,
+    root_field: Field<InterfaceManager, u32>,
+    name: u32,
+) {
+    let node = e.get(this, root_field);
+    e.with_stack(4, |e, slot| {
+        let handle = e.call(FIXED_STRING_CONSTRUCT, &args![slot, name]).u32();
+        e.call(NODE_SET_NAME, &args![node, handle]);
+        e.call(FIXED_STRING_DESTROY, &args![slot]);
+    });
+    e.vcall(graph, 0xdc, &args![node, 1u32]);
+    // The node's translation is read (and not used) before it is set.
+    e.call(NODE_TRANSLATION, &args![node]);
+    let distance = e.get(this, InterfaceManager::fOneToOneDistance);
+    e.with_stack(0xc, |e, position| {
+        let position = e
+            .call(
+                NI_POINT3_CONSTRUCT,
+                &args![position, 0.0f32, distance, 0.0f32],
+            )
+            .u32();
+        e.call(NODE_SET_TRANSLATE_VECTOR, &args![node, position]);
+    });
+}
+
+// Translated from 007133b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the three floats as row `row` (0xc bytes each) of the 3x3 matrix
+/// at `this`.
+pub fn fn_007133b0(e: &mut Engine, this: Ptr, row: u32, x: f32, y: f32, z: f32) {
+    let at = this.addr().wrapping_add(row.wrapping_mul(0xc));
+    e.mem.set_f32(at, x);
+    e.mem.set_f32(at + 4, y);
+    e.mem.set_f32(at + 8, z);
+}
+
+// Translated from 007133f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Replaces the pipboy manager (`+0x174`): deletes the old one, builds a new
+/// `FOPipboyManager` (0x170 bytes) and calls its virtual slot `0x24`.
+pub fn fn_007133f0(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let old = e.get(this, InterfaceManager::pPipboy);
+    if old != 0 {
+        delete_virtual(e, old);
+    }
+    let pipboy = construct_new(e, OPERATOR_NEW, 0x170, |e, block| {
+        e.call(PIPBOY_MANAGER_CONSTRUCT, &args![block]).ptr()
+    });
+    e.set(this, InterfaceManager::pPipboy, pipboy.addr());
+    let pipboy = e.get(this, InterfaceManager::pPipboy);
+    e.vcall(pipboy, 0x24, &args![]);
+}
+
+/// The byte a setting holder keeps (`00408d60` returns its address).
+fn setting_flag(e: &mut Engine, holder: u32) -> bool {
+    let at = e.call(SETTING_BYTE, &args![holder]).u32();
+    e.mem.u8(at) != 0
+}
+
+/// Waits for the rendering system's stage 1 (`(1, 0x17)`).
+fn wait_rendering_stage(e: &mut Engine) {
+    let system = e.call(RENDERING_SYSTEM, &args![]).u32();
+    e.call(RENDERING_WAIT_STAGE, &args![system, 1u32, 0x17u32]);
+}
+
+/// Accumulates the menu scene `scene` into the culling process, with the
+/// manager's accumulator (`+0x8c`).
+fn accumulate_menus(e: &mut Engine, this: Ptr<InterfaceManager>, scene: u32, culling: u32) {
+    let accumulator = ni_pointer_get(e, this.addr() + 0x8c);
+    e.call(CULLING_SET_ACCUMULATOR, &args![culling, accumulator]);
+    let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+    e.call(ACCUMULATE_SCENE, &args![camera, scene, culling]);
+}
+
+/// Finishes the accumulation and detaches the accumulator.
+fn finish_menus(e: &mut Engine, this: Ptr<InterfaceManager>, scene: u32, culling: u32) {
+    let accumulator = ni_pointer_get(e, this.addr() + 0x8c);
+    let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+    e.call(ACCUMULATE_FINISH, &args![camera, accumulator, 0u32]);
+    e.call(CULLING_SET_ACCUMULATOR, &args![culling, 0u32]);
+}
+
+/// Shows a menu's image node when it is hidden; returns the menu when it
+/// did (so it can be hidden again), else null.
+fn show_hidden_menu(e: &mut Engine, menu: u32) -> u32 {
+    if menu != 0 && e.call(TILE_IMAGE_NODE, &args![menu]).u32() != 0 {
+        let image = e.call(TILE_IMAGE_NODE, &args![menu]).u32();
+        if !e.call(NODE_FLAG_TEST_00456610, &args![image]).bool() {
+            let image = e.call(TILE_IMAGE_NODE, &args![menu]).u32();
+            e.call(NODE_SET_FLAG, &args![image, 1u32]);
+            return menu;
+        }
+    }
+    0
+}
+
+/// Hides the menu that [`show_hidden_menu`] showed, if its node is still
+/// flagged.
+fn hide_shown_menu(e: &mut Engine, menu: u32) {
+    if menu != 0 && e.call(TILE_IMAGE_NODE, &args![menu]).u32() != 0 {
+        let image = e.call(TILE_IMAGE_NODE, &args![menu]).u32();
+        if e.call(NODE_FLAG_TEST_00456610, &args![image]).bool() {
+            let image = e.call(TILE_IMAGE_NODE, &args![menu]).u32();
+            e.call(NODE_SET_FLAG, &args![image, 0u32]);
+        }
+    }
+}
+
+// Translated from 007134d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Accumulates the menu scene graph into the culling process `culling`
+/// (pushed on the process's stack for the duration) according to the three
+/// settings at `011d8ba0` (A), `011db2cc` (B) and `011d8ab0`. A and B both
+/// set: the scene graph is prepared (`00713c70` and the menu elements
+/// isolated, unless the click runs multithreaded, which waits for the
+/// rendering stage instead), the menus `0x421`, `0x40c` and `0x41f` are
+/// shown while it accumulates, and the renderer's viewport is reset when it
+/// is its own. Only one of them: the elements are isolated and accumulated
+/// in the one or two passes that setting needs. Neither: a plain pass.
+/// `_unused_1` is the second word the callers push.
+pub fn fn_007134d0(e: &mut Engine, this: Ptr<InterfaceManager>, culling: u32, _unused_1: u32) {
+    e.call(CULLING_PUSH, &args![culling, 1u32]);
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let multithreaded = |e: &mut Engine| e.get(this, InterfaceManager::bClickMultithreaded) != 0;
+    if setting_flag(e, SETTING_HOLDER_011D8BA0) && setting_flag(e, SETTING_HOLDER_011DB2CC) {
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        if multithreaded(e) {
+            wait_rendering_stage(e);
+        } else {
+            if !e.call(MENU_MODE_IS_NOT_ONE, &args![this]).bool()
+                && !e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool()
+            {
+                fn_00713c70(e, this);
+            }
+            if e.call(MENU_PREDICATE_007079F0, &args![this]).bool()
+                && !e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool()
+            {
+                e.call(ISOLATE_MENU_ELEMENTS, &args![0u32, 0u32]);
+            }
+        }
+        let first = e.call(TILE_GET_MENU_BY_CLASS, &args![0x421u32]).u32();
+        let second = e.call(TILE_GET_MENU_BY_CLASS, &args![0x40cu32]).u32();
+        let third = e.call(TILE_GET_MENU_BY_CLASS, &args![0x41fu32]).u32();
+        let first = show_hidden_menu(e, first);
+        let second = show_hidden_menu(e, second);
+        let third = show_hidden_menu(e, third);
+        if !multithreaded(e) {
+            accumulate_menus(e, this, scene, culling);
+            let system = e.call(RENDERING_SYSTEM, &args![]).u32();
+            e.call(RENDERING_SET_STAGE, &args![system, 0u32, 0x17u32]);
+            wait_rendering_stage(e);
+        }
+        let renderer_a = e.call(RENDERER_GET, &args![]).u32();
+        let renderer_b = e.call(RENDERER_GET, &args![]).u32();
+        let slot_c8 = e.vcall(renderer_b, 0xc8, &args![]).u32();
+        let slot_cc = e.vcall(renderer_a, 0xcc, &args![]).u32();
+        if slot_cc == slot_c8 {
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+            fn_00712e60(e, Ptr::new(camera), VIEWPORT_RECT);
+        }
+        finish_menus(e, this, scene, culling);
+        hide_shown_menu(e, first);
+        hide_shown_menu(e, second);
+        hide_shown_menu(e, third);
+        if e.call(MENU_PREDICATE_007079F0, &args![this]).bool()
+            && !e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool()
+        {
+            e.call(RESTORE_MENU_ELEMENTS, &args![]);
+        }
+        if setting_flag(e, SETTING_HOLDER_011D8AB0) {
+            e.call(ISOLATE_MENU_ELEMENTS, &args![1u32, 0u32]);
+            let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+            accumulate_menus(e, this, scene, culling);
+            finish_menus(e, this, scene, culling);
+            e.call(RESTORE_MENU_ELEMENTS, &args![]);
+        }
+    } else if !setting_flag(e, SETTING_HOLDER_011D8BA0) && !setting_flag(e, SETTING_HOLDER_011DB2CC)
+    {
+        // Neither setting: one plain pass.
+        if multithreaded(e) {
+            wait_rendering_stage(e);
+        }
+        e.call(RESTORE_MENU_ELEMENTS, &args![]);
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        if !multithreaded(e) {
+            accumulate_menus(e, this, scene, culling);
+        }
+        finish_menus(e, this, scene, culling);
+    } else if !setting_flag(e, SETTING_HOLDER_011D8BA0) {
+        // Only B: the isolated pass, then the rest.
+        if multithreaded(e) {
+            wait_rendering_stage(e);
+        }
+        e.call(ISOLATE_MENU_ELEMENTS, &args![1u32, 0u32]);
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+        e.call(RENDERER_SET_CAMERA, &args![renderer, camera]);
+        if !multithreaded(e) {
+            accumulate_menus(e, this, scene, culling);
+        }
+        finish_menus(e, this, scene, culling);
+        e.call(RESTORE_MENU_ELEMENTS, &args![]);
+        e.call(ISOLATE_MENU_ELEMENTS, &args![0u32, 0u32]);
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+        e.call(RENDERER_SET_CAMERA, &args![renderer, camera]);
+        accumulate_menus(e, this, scene, culling);
+        finish_menus(e, this, scene, culling);
+        e.call(RESTORE_MENU_ELEMENTS, &args![]);
+    } else if !setting_flag(e, SETTING_HOLDER_011DB2CC) {
+        // Only A: elements isolated with both flags; the viewport is
+        // reset when the renderer has no target of its own.
+        if multithreaded(e) {
+            wait_rendering_stage(e);
+        }
+        e.call(ISOLATE_MENU_ELEMENTS, &args![1u32, 1u32]);
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+        e.call(RENDERER_SET_CAMERA, &args![renderer, camera]);
+        if !multithreaded(e) {
+            accumulate_menus(e, this, scene, culling);
+        }
+        let current = e.call(RENDERER_GET, &args![]).u32();
+        if e.vcall(current, 0xcc, &args![]).u32() == 0 {
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+            fn_00712e60(e, Ptr::new(camera), VIEWPORT_RECT);
+        }
+        finish_menus(e, this, scene, culling);
+        e.call(RESTORE_MENU_ELEMENTS, &args![]);
+    } else if multithreaded(e) {
+        // Both settings set cannot reach here (the first branch took it).
+        wait_rendering_stage(e);
+    }
+    e.call(CULLING_POP, &args![culling]);
+}
+
+// Translated from 00713c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the tile lock (`011d8c18`), then deletes every object queued in
+/// the deferred queue (`011d8b2c`; the virtual destructor with flag 1) and
+/// releases the lock.
+pub fn fn_00713c00(e: &mut Engine) {
+    e.call(LOCK_ENTER, &args![TILE_LOCK, 0u32]);
+    while !e.call(COLLECTION_IS_EMPTY, &args![DEFERRED_QUEUE]).bool() {
+        let object = e.call(DEFERRED_QUEUE_POP, &args![DEFERRED_QUEUE]).u32();
+        if object != 0 {
+            delete_virtual(e, object);
+        }
+    }
+    e.call(LOCK_LEAVE, &args![TILE_LOCK]);
+}
+
+// Translated from 00713c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Updates the tiles: when the setting at `011c3ea4` is above 1 and the byte
+/// at `011dfa19` is set, waits on the object at `011dfa50` with `(0, 1)`;
+/// flushes the deferred deletions ([`fn_00713c00`]), runs `00a04510`, clears
+/// `+0xdc` and updates either the loading menu's children (the in-game
+/// loading menu is open and the XUI is not up) or every tile, then the fade
+/// controls. Unless the update array at `011d8b44` is empty (its count word
+/// at `+8` is zero) it takes the update lock, resets the flags of the tiles
+/// in it ([`fn_00713e20`]) and releases the lock. `011d8908` is set for the
+/// duration.
+pub fn fn_00713c70(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    let setting = e
+        .call(GET_SETTING_VALUE, &args![SETTING_HOLDER_011C3EA4])
+        .u32();
+    if e.mem.i32(setting) > 1 {
+        fn_00713d80(e);
+        if fn_00713d90(e) != 0 {
+            let pool = fn_00713d80(e);
+            e.call(SEMAPHORE_POOL_WAIT, &args![pool, 0u32, 1u32]);
+        }
+    }
+    fn_00713c00(e);
+    e.set_global(TILES_UPDATING, 1u8);
+    e.call(GET_FRAME_SCENE_NODE, &args![this]);
+    e.call(TILE_UPDATE_PREPARE, &args![]);
+    e.mem.set_u8(this.addr() + 0xdc, 0);
+    if e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool() && !e.call(XUI_IS_UP, &args![]).bool()
+    {
+        let menu = e.call(TILE_GET_MENU_BY_CLASS, &args![0x3efu32]).u32();
+        e.call(TILE_UPDATE_CHILDREN, &args![menu, 0u32]);
+    } else {
+        e.call(TILE_UPDATE_ALL, &args![0u32]);
+    }
+    e.call(TILE_UPDATE_FADE_CONTROLS, &args![]);
+    fn_00713d60(e);
+    if !e.call(COLLECTION_IS_EMPTY, &args![UPDATE_ARRAY]).bool() {
+        let lock = fn_00713d70(e);
+        e.call(LOCK_ENTER, &args![lock, 0u32]);
+        fn_00713e20(e, this);
+        let lock = fn_00713d70(e);
+        e.call(LOCK_LEAVE, &args![lock]);
+    }
+    e.set_global(TILES_UPDATING, 0u8);
+}
+
+// Translated from 00713d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the word at `011f32d4`.
+pub fn fn_00713d60(e: &mut Engine) {
+    e.set_global(TILE_UPDATE_DEPTH, 0u32);
+}
+
+// Translated from 00713d70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the address of the update lock object (`011f3330`).
+pub fn fn_00713d70(_e: &mut Engine) -> u32 {
+    UPDATE_LOCK
+}
+
+// Translated from 00713d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the address of the semaphore pool object (`011dfa50`).
+pub fn fn_00713d80(_e: &mut Engine) -> u32 {
+    SEMAPHORE_POOL
+}
+
+// Translated from 00713d90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Returns the byte at `011dfa19` (whether the semaphore pool is in use).
+pub fn fn_00713d90(e: &mut Engine) -> u8 {
+    e.global(SEMAPHORE_POOL_IN_USE)
+}
+
+// Translated from 00713da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `InterfaceManager::AddTileToUpdateList` (Xbox PDB): appends `tile` to the
+/// update array at `011d8b44` unless it is null or already in it.
+pub fn interface_manager_add_tile_to_update_list(
+    e: &mut Engine,
+    _this: Ptr<InterfaceManager>,
+    tile: u32,
+) {
+    if tile != 0 {
+        e.with_stack(4, |e, item| {
+            e.mem.set_u32(item.addr(), tile);
+            if !e.call(ARRAY_FIND, &args![UPDATE_ARRAY, item]).bool() {
+                e.call(ARRAY_ADD, &args![UPDATE_ARRAY, item]);
+            }
+        });
+    }
+}
+
+// Translated from 00713de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Removes `tile` from the update array at `011d8b44` when it is in it.
+pub fn fn_00713de0(e: &mut Engine, _this: Ptr<InterfaceManager>, tile: u32) {
+    e.with_stack(4, |e, item| {
+        e.mem.set_u32(item.addr(), tile);
+        let index = e
+            .call(
+                ARRAY_FIND_INDEX,
+                &args![UPDATE_ARRAY, item, 0u32, ARRAY_COMPARE],
+            )
+            .i32();
+        if index != -1 {
+            e.call(ARRAY_REMOVE_AT, &args![UPDATE_ARRAY, index, 1u32]);
+        }
+    });
+}
+
+// Translated from 00713e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// For every tile of the update array: updates its image node (a zeroed
+/// update data) and clears the tile's byte at `+0x34`; then, when the
+/// current thread is the owner thread, clears the array
+/// (`Clear(1)`).
+pub fn fn_00713e20(e: &mut Engine, _this: Ptr<InterfaceManager>) {
+    let mut index = 0u32;
+    while index < e.call(WORD_AT_8, &args![UPDATE_ARRAY]).u32() {
+        let slot = e.call(ARRAY_ELEMENT, &args![UPDATE_ARRAY, index]).u32();
+        let tile = e.mem.u32(slot);
+        let node = if tile != 0 {
+            e.call(TILE_IMAGE_NODE, &args![tile]).u32()
+        } else {
+            0
+        };
+        if node != 0 {
+            e.with_stack(12, |e, update_data| {
+                e.call(
+                    NI_UPDATE_DATA_CONSTRUCT,
+                    &args![update_data, 0.0f32, 0u32, 0u32],
+                );
+                e.call(NODE_UPDATE, &args![node, update_data]);
+            });
+        }
+        fn_00713ee0(e, Ptr::new(tile));
+        index += 1;
+    }
+    let current = e.call(CURRENT_THREAD_ID, &args![]).u32();
+    let owner = e.global::<u32>(OWNER_OBJECT);
+    if current == e.call(OWNER_THREAD_ID, &args![owner]).u32() {
+        e.call(ARRAY_CLEAR, &args![UPDATE_ARRAY, 1u32]);
+    }
+}
+
+// Translated from 00713ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the byte at `+0x34` of the object (a tile's update flag).
+pub fn fn_00713ee0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x34, 0);
+}
+
+// Translated from 00713f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Marks the click as multithreaded (`+0x148`), updates the tiles unless
+/// the manager's menu-mode test or the in-game loading menu says
+/// otherwise ([`fn_00713c70`]), isolates the menu elements when
+/// `007079f0` holds (and the loading menu is not open), and queues the
+/// interface scene graph's accumulation as a task of the rendering system
+/// (`AddAccumTask`), then sets the thread stage.
+pub fn fn_00713f00(e: &mut Engine, this: Ptr<InterfaceManager>) {
+    e.set(this, InterfaceManager::bClickMultithreaded, 1);
+    let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+    if !e.call(MENU_MODE_IS_NOT_ONE, &args![this]).bool()
+        && !e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool()
+    {
+        fn_00713c70(e, this);
+    }
+    if e.call(MENU_PREDICATE_007079F0, &args![this]).bool()
+        && !e.call(IS_IN_GAME_LOADING_MENU_OPEN, &args![]).bool()
+    {
+        e.call(ISOLATE_MENU_ELEMENTS, &args![0u32, 0u32]);
+    }
+    let accumulator = ni_pointer_get(e, this.addr() + 0x8c);
+    let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+    let system = e.call(RENDERING_SYSTEM, &args![]).u32();
+    e.call(
+        RENDERING_ADD_ACCUM_TASK,
+        &args![
+            system,
+            camera,
+            0u32,
+            scene,
+            0u32,
+            0u32,
+            accumulator,
+            1u32,
+            0x17u32,
+            0u32
+        ],
+    );
+    let system = e.call(RENDERING_SYSTEM, &args![]).u32();
+    e.call(RENDERING_SET_STAGE, &args![system, 0u32, 0x17u32]);
+}
+
+/// The renderer's device (`004dc020`, a COM object: its methods take the
+/// device again as their first argument word).
+fn render_device(e: &mut Engine) -> u32 {
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    e.call(DEVICE_GET, &args![renderer]).u32()
+}
+
+/// Sets the device viewport from the rectangle at [`VIEWPORT_RECT`], scaled
+/// to the size of the renderer's target (slot `0xd4` of the renderer):
+/// `x = width * left`, `width * (right - left)`, `y = height * bottom`,
+/// `height * (top - bottom)`, depth `0` to `1`.
+fn set_viewport_from_rect(e: &mut Engine) {
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let target = e.vcall(renderer, 0xd4, &args![]).u32();
+    let width = e.call(WORD_AT_8, &args![target]).u32();
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let target = e.vcall(renderer, 0xd4, &args![]).u32();
+    let height = e.call(WORD_AT_C, &args![target]).u32();
+    let rect: Vec<f64> = (0..4)
+        .map(|i| e.global::<f32>(VIEWPORT_RECT + 4 * i) as f64)
+        .collect();
+    let truncate = |value: f64| value.trunc() as i64 as i32;
+    let x = truncate(width as f64 * rect[0]);
+    let across = truncate((rect[1] - rect[0]) * width as f64);
+    let y = truncate(height as f64 * rect[3]);
+    let down = truncate((rect[2] - rect[3]) * height as f64);
+    e.with_stack(0x18, |e, viewport| {
+        let at = viewport.addr();
+        e.mem.set_i32(at, x);
+        e.mem.set_i32(at + 4, y);
+        e.mem.set_i32(at + 8, across);
+        e.mem.set_i32(at + 0xc, down);
+        e.mem.set_f32(at + 0x10, 0.0);
+        e.mem.set_f32(at + 0x14, 1.0);
+        let device = render_device(e);
+        e.vcall(device, 0xbc, &args![viewport]);
+    });
+}
+
+/// Clears the two rectangles the render pass starts with: the renderer's
+/// current clear rectangle is saved (slot `0xb4`), its colour set (slot
+/// `0xac`), two strips are filled through [`fn_007148c0`] and the saved
+/// rectangle is restored.
+fn clear_menu_strips(e: &mut Engine) {
+    e.with_stack(0x10, |e, saved| {
+        e.with_stack(0x10, |e, strip| {
+            e.call(
+                RECT_CONSTRUCT,
+                &args![saved, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+            );
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            e.vcall(renderer, 0xb4, &args![saved]);
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            e.vcall(renderer, 0xac, &args![CLEAR_COLOR]);
+            e.call(
+                RECT_CONSTRUCT,
+                &args![strip, 0.0f32, 0.0f32, 0.0f32, 0.0f32],
+            );
+            let top: f32 = e.global(CLEAR_RECT_ONE_TOP);
+            for (i, v) in [0.0f32, top, 1.0, 0.0].iter().enumerate() {
+                e.mem.set_f32(strip.addr() + 4 * i as u32, *v);
+            }
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            fn_007148c0(e, Ptr::new(renderer), strip.addr(), 1);
+            let left: f32 = e.global(CLEAR_RECT_TWO_LEFT);
+            for (i, v) in [left, 1.0f32, 1.0, 0.0].iter().enumerate() {
+                e.mem.set_f32(strip.addr() + 4 * i as u32, *v);
+            }
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            fn_007148c0(e, Ptr::new(renderer), strip.addr(), 1);
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            e.vcall(renderer, 0xac, &args![saved]);
+        });
+    });
+}
+
+/// Resets the device after the menus rendered: viewport to the render
+/// target's size (the target is the renderer's slot `0xcc` or `0xc8`), the
+/// render states and the sampler / texture bindings, then the 18
+/// render-state counters ([`fn_00714a40`] ... `00714c40`) and the renderer
+/// state object's saved values (slots `0xb0`/`0xb8`, `0x90`/`0x98`,
+/// `0x80`/`0x88`).
+fn reset_render_pass(e: &mut Engine) {
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let mut target = e.vcall(renderer, 0xcc, &args![]).u32();
+    if target == 0 {
+        let renderer = e.call(RENDERER_GET, &args![]).u32();
+        target = e.vcall(renderer, 0xc8, &args![]).u32();
+    }
+    let width = e.vcall(target, 0x8c, &args![0u32]).u32();
+    let height = e.vcall(target, 0x90, &args![0u32]).u32();
+    e.with_stack(0x1c, |e, region| {
+        let at = region.addr();
+        e.mem.set_u32(at, 0);
+        e.mem.set_u32(at + 4, 0);
+        e.mem.set_u32(at + 8, width);
+        e.mem.set_u32(at + 0xc, height);
+        e.mem.set_f32(at + 0x10, 0.0);
+        e.mem.set_f32(at + 0x14, 1.0);
+        let device = render_device(e);
+        e.vcall(device, 0xbc, &args![region]);
+        e.with_stack(4, |e, saved| {
+            e.mem.set_u32(saved.addr(), 0);
+            let device = render_device(e);
+            e.vcall(device, 0x160, &args![saved]);
+            let device = render_device(e);
+            e.vcall(device, 0xe4, &args![0x1bu32, 0u32]);
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            let state = e.call(RENDERER_STATE_OBJECT, &args![renderer]).u32();
+            e.vcall(state, 0x8c, &args![0u32, 0u32]);
+            let renderer = e.call(RENDERER_GET, &args![]).u32();
+            let state = e.call(RENDERER_STATE_OBJECT, &args![renderer]).u32();
+            e.vcall(state, 0x7c, &args![0u32, 0u32]);
+            let device = render_device(e);
+            e.vcall(device, 0x1ac, &args![0u32]);
+            let device = render_device(e);
+            e.vcall(device, 0x170, &args![0u32]);
+            let device = render_device(e);
+            let value = e.mem.u32(saved.addr());
+            e.vcall(device, 0x15c, &args![value]);
+        });
+    });
+    fn_00714a40(e, 0);
+    fn_00714a60(e, 0);
+    fn_00714a80(e, 0);
+    fn_00714aa0(e, 0);
+    fn_00714ac0(e, 0);
+    fn_00714ae0(e, 0);
+    fn_00714b00(e, 0);
+    e.call(RENDER_STATE_004ECED0, &args![0u32]);
+    e.call(RENDER_STATE_004ECB40, &args![0u32]);
+    fn_00714b20(e, 0);
+    fn_00714b50(e, 0);
+    fn_00714b80(e, 0);
+    fn_00714bb0(e, 0);
+    fn_00714bd0(e, 0);
+    e.call(RENDER_STATE_004EB510, &args![0u32]);
+    fn_00714bf0(e, 0);
+    fn_00714c20(e, 0);
+    e.call(RENDER_STATE_00714C40, &args![0u32]);
+    e.call(RENDER_PASS_RESET, &args![]);
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let state = e.call(RENDERER_STATE_OBJECT, &args![renderer]).u32();
+    for (get, set) in [(0xb0u32, 0xb8u32), (0x90, 0x98), (0x80, 0x88)] {
+        let value = e.vcall(state, get, &args![]).u32();
+        e.vcall(state, set, &args![value]);
+    }
+}
+
+// Translated from 00713fb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Renders the menus. When the render pass is active it sets the device
+/// viewport from the custom rectangle (if enabled), the pass mode `(7, 0)`,
+/// clears the menu strips (if the renderer's clear is enabled) and gives the
+/// scene graph's camera the custom viewport rectangle. Then, guarded and
+/// only when the interface scene graph exists, it builds a culling process
+/// from the scene graph, flushes the worker object when its byte at `+0x1b0`
+/// is set ([`fn_00714a00`]) and waits on it ([`fn_00714960`]), accumulates
+/// the menus ([`fn_007134d0`]; the flag computed for its second word, which
+/// it does not read, is the setting at `011db2cc` together with the mode
+/// word `2` or a pipboy / rendered menu that is topmost) and, when the pass
+/// was active, resets the device ([`reset_render_pass`]). Finally it
+/// releases the worker object's semaphore ([`fn_00714900`]). `_unused_1`
+/// and `_unused_2` are the two words the callers push.
+pub fn fn_00713fb0(e: &mut Engine, this: Ptr<InterfaceManager>, _unused_1: u32, _unused_2: u32) {
+    let renderer = e.call(RENDERER_GET, &args![]).u32();
+    let mut pass_active = false;
+    if e.call(RENDER_PASS_ACTIVE, &args![]).bool() {
+        if e.global::<u8>(VIEWPORT_RECT_ENABLED) != 0 {
+            set_viewport_from_rect(e);
+        }
+        e.call(RENDER_PASS_SET_MODE, &args![7u32, 0u32]);
+        pass_active = true;
+        if e.call(RENDER_CLEAR_ENABLED, &args![]).bool() {
+            clear_menu_strips(e);
+        }
+        if e.global::<u8>(VIEWPORT_RECT_ENABLED) != 0 {
+            let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+            let camera = e.call(SCENE_GRAPH_GET_CAMERA, &args![scene]).u32();
+            fn_00712e60(e, Ptr::new(camera), VIEWPORT_RECT);
+        }
+    }
+    with_scope_guard(e, 0x1069, |e| {
+        let scene = e.call(GET_FRAME_SCENE_NODE, &args![this]).u32();
+        if scene == 0 {
+            return;
+        }
+        let source = e.call(CULLING_SOURCE_GET, &args![scene]).u32();
+        let word = e.call(WORD_AT_8, &args![source]).u32();
+        e.with_stack(0xc8, |e, culling| {
+            e.call(CULLING_PROCESS_CONSTRUCT, &args![culling, word]);
+            e.with_stack(4, |e, holder| {
+                let node = e.call(GET_SECOND_SCENE_NODE, &args![renderer]).u32();
+                e.call(NI_POINTER_CONSTRUCT, &args![holder, node]);
+                if e.call(WORKER_GET, &args![]).u32() != 0 {
+                    if fn_00714a00(e) {
+                        e.call(WORKER_FLUSH, &args![]);
+                    }
+                    fn_00714960(e, 0xffff_ffff);
+                }
+                let topmost = setting_flag(e, SETTING_HOLDER_011DB2CC)
+                    && (e.get(this, InterfaceManager::field_4bc) == 2
+                        || ((e.call(IS_IN_PIPBOY_MENU, &args![]).bool()
+                            || e.get(this, InterfaceManager::bIsInRenderedMenu) != 0)
+                            && e.call(IS_CURRENT_RENDERED_MENU_TOPMOST, &args![]).bool()));
+                fn_007134d0(e, this, culling.addr(), topmost as u32);
+                if pass_active {
+                    reset_render_pass(e);
+                }
+                if e.call(WORKER_GET, &args![]).u32() != 0 {
+                    fn_00714900(e);
+                }
+                e.call(NI_POINTER_DESTROY, &args![holder]);
+            });
+            e.call(CULLING_PROCESS_DESTRUCT, &args![culling]);
+        });
+    });
+}
+
+// Translated from 007148c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the object answers `004a0e10(string 0106f2e0, 1)`, calls its
+/// virtual slot `0x188` with the two words.
+pub fn fn_007148c0(e: &mut Engine, this: Ptr, first: u32, second: u32) {
+    if e.call(OBJECT_IS_KIND, &args![this, KIND_NAME, 1u32]).bool() {
+        e.vcall(this.addr(), 0x188, &args![first, second]);
+    }
+}
+
+// Translated from 00714900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the worker object (`011f5b04`) exists, releases the semaphore of its
+/// wrapper at `+0x190` ([`fn_00714930`]) and returns the wrapper's first
+/// word; otherwise 0.
+pub fn fn_00714900(e: &mut Engine) -> u32 {
+    let manager = e.global::<u32>(WORKER_OBJECT);
+    if manager == 0 {
+        return 0;
+    }
+    fn_00714930(e, Ptr::new(manager + 0x190))
+}
+
+// Translated from 00714930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Runs `0040b460(this)` and releases the semaphore handle at `+8` once
+/// (`ReleaseSemaphore(handle, 1, 0)`); returns the first word of the
+/// object.
+pub fn fn_00714930(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(BEFORE_RELEASE, &args![this]);
+    let handle = e.mem.u32(this.addr() + 8);
+    e.call(RELEASE_SEMAPHORE, &args![handle, 1u32, 0u32]);
+    e.mem.u32(this.addr())
+}
+
+// Translated from 00714960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the worker object exists, waits on its wrapper with `timeout`
+/// ([`fn_007149b0`]); if the wait timed out (it returned 1) it sets the
+/// byte at `011f5b08` ([`fn_007149f0`]) and waits again without a timeout
+/// (`-1`). Always returns 0.
+pub fn fn_00714960(e: &mut Engine, timeout: u32) -> u32 {
+    let manager = e.global::<u32>(WORKER_OBJECT);
+    if manager != 0 {
+        let wrapper = Ptr::new(manager + 0x190);
+        if fn_007149b0(e, wrapper, timeout) == 1 {
+            fn_007149f0(e);
+            fn_007149b0(e, wrapper, 0xffff_ffff);
+        }
+    }
+    0
+}
+
+// Translated from 007149b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Waits on the handle at `+8` (`WaitForSingleObject(handle, timeout)`):
+/// `0x102` (timeout) gives 1; anything else gives the result of
+/// `004019a0(this)`.
+pub fn fn_007149b0(e: &mut Engine, this: Ptr, timeout: u32) -> u32 {
+    let handle = e.mem.u32(this.addr() + 8);
+    let status = e
+        .call(WAIT_FOR_SINGLE_OBJECT, &args![handle, timeout])
+        .u32();
+    if status == 0x102 {
+        1
+    } else {
+        e.call(WAIT_RESULT_HANDLER, &args![this]).u32()
+    }
+}
+
+// Translated from 007149f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte at `011f5b08`.
+pub fn fn_007149f0(e: &mut Engine) {
+    e.set_global(WORKER_WAS_BLOCKED, 1u8);
+}
+
+// Translated from 00714a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the worker object (`011f5b04`) exists and its byte at `+0x1b0` is
+/// set.
+pub fn fn_00714a00(e: &mut Engine) -> bool {
+    let manager = e.global::<u32>(WORKER_OBJECT);
+    manager != 0 && e.mem.u8(manager + 0x1b0) != 0
+}
+
+// The render-state counters: each subtracts `count` from its counter
+// global and runs one render-state call with fixed arguments.
+
+// Translated from 00714a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9d8`, then calls
+/// `00b97de0(1, 0)`.
+pub fn fn_00714a40(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9D8, count);
+    e.call(RENDER_STATE_00B97DE0, &args![1u32, 0u32]);
+}
+
+// Translated from 00714a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9dc`, then calls
+/// `BSRenderState::SetZWriteEnable` (Xbox PDB, `00b97e30`) with `(1, 0)`.
+pub fn fn_00714a60(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9DC, count);
+    e.call(RENDER_STATE_00B97E30, &args![1u32, 0u32]);
+}
+
+// Translated from 00714a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9e0`, then calls
+/// `00b97e80(3, 0)`.
+pub fn fn_00714a80(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9E0, count);
+    e.call(RENDER_STATE_00B97E80, &args![3u32, 0u32]);
+}
+
+// Translated from 00714aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9e8`, then calls
+/// `00b97ed0(0, 0)`.
+pub fn fn_00714aa0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9E8, count);
+    e.call(RENDER_STATE_00B97ED0, &args![0u32, 0u32]);
+}
+
+// Translated from 00714ac0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9ec`, then calls
+/// `00b97f20(0, 0, 0)`.
+pub fn fn_00714ac0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9EC, count);
+    e.call(RENDER_STATE_00B97F20, &args![0u32, 0u32, 0u32]);
+}
+
+// Translated from 00714ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9f0`, then calls
+/// `00b97fa0(0, 0)`.
+pub fn fn_00714ae0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9F0, count);
+    e.call(RENDER_STATE_00B97FA0, &args![0u32, 0u32]);
+}
+
+// Translated from 00714b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9f4`, then calls
+/// `00b97ff0(0, 1, 0)`.
+pub fn fn_00714b00(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9F4, count);
+    e.call(RENDER_STATE_00B97FF0, &args![0u32, 1u32, 0u32]);
+}
+
+// Translated from 00714b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa00`, then calls
+/// `00b980c0(0, 0, 0, 0)`.
+pub fn fn_00714b20(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA00, count);
+    e.call(RENDER_STATE_00B980C0, &args![0u32, 0u32, 0u32, 0u32]);
+}
+
+// Translated from 00714b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa04`, then calls
+/// `00b98180(0, 0, 0xff, 0)`.
+pub fn fn_00714b50(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA04, count);
+    e.call(RENDER_STATE_00B98180, &args![0u32, 0u32, 0xffu32, 0u32]);
+}
+
+// Translated from 00714b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa08`, then calls
+/// `00b98230(0xff, 0)`.
+pub fn fn_00714b80(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA08, count);
+    e.call(RENDER_STATE_00B98230, &args![0xffu32, 0u32]);
+}
+
+// Translated from 00714bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa0c`, then calls
+/// `00b984f0(0, 0)`.
+pub fn fn_00714bb0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA0C, count);
+    e.call(RENDER_STATE_00B984F0, &args![0u32, 0u32]);
+}
+
+// Translated from 00714bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa10`.
+pub fn fn_00714bd0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA10, count);
+}
+
+// Translated from 00714bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ff9e4`, then calls
+/// `BSRenderState::SetDepthBias` (Xbox PDB, `00b98320`) with `(0.0, 0)`.
+pub fn fn_00714bf0(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FF9E4, count);
+    e.call(RENDER_STATE_00B98320, &args![0.0f32, 0u32]);
+}
+
+// Translated from 00714c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Subtracts `count` from the counter at `011ffa20`, then calls
+/// `00b98480(0, 0)`.
+pub fn fn_00714c20(e: &mut Engine, count: u32) {
+    render_state_counter(e, RENDER_COUNTER_011FFA20, count);
+    e.call(RENDER_STATE_00B98480, &args![0u32, 0u32]);
+}
+
+/// `*counter -= count` (wrapping), the first step of every render-state
+/// counter function.
+fn render_state_counter(e: &mut Engine, counter: u32, count: u32) {
+    let value = e.global::<u32>(counter).wrapping_sub(count);
+    e.set_global(counter, value);
+}
+
 // @@FUNCS-END@@
 
 #[cfg(test)]
@@ -5006,6 +6607,109 @@ mod tests {
         CURSOR_HORIZONTAL_SCALE,
         CURSOR_VERTICAL_SCALE,
         ONE_DOUBLE,
+        TILE_FROM_NODE,
+        NODE_PARENT,
+        FLOAT_WRAPPER_00408840,
+        NODE_GET_PROPERTY,
+        PROPERTY_TYPE_THREE,
+        PROPERTY_SET_FADE,
+        NODE_CHILD_COUNT,
+        NODE_CHILD_AT,
+        NODE_CHILD_POINTER,
+        CURSOR_ROOT_GETTER,
+        NI_PICK_SET_BYTE_10,
+        SETTING_BYTE,
+        RECT_CONSTRUCT,
+        IS_IN_PIPBOY_MENU,
+        IS_CURRENT_RENDERED_MENU_TOPMOST,
+        REAL_SCREEN_WIDTH,
+        SCREEN_WIDTH_CONSTANT,
+        PROPERTY_RECT,
+        NODE_SIBLING_UPDATE,
+        PICK_RESULT_HIT_WORD,
+        NODE_FLAG_TEST_00456610,
+        PASS_THROUGH,
+        SCENE_GRAPH_CONSTRUCT,
+        RENDERER_GET,
+        CAMERA_SET_ROTATION,
+        RENDERER_WIDTH,
+        RENDERER_HEIGHT,
+        FRUSTUM_CONSTRUCT,
+        CAMERA_SET_FRUSTUM,
+        FADER_ADD_ROOT,
+        CULLING_PUSH,
+        CULLING_POP,
+        RENDERING_SYSTEM,
+        RENDERING_WAIT_STAGE,
+        RENDERING_SET_STAGE,
+        RENDERING_ADD_ACCUM_TASK,
+        CULLING_PROCESS_CONSTRUCT,
+        CULLING_PROCESS_DESTRUCT,
+        CULLING_SET_ACCUMULATOR,
+        ACCUMULATE_SCENE,
+        ACCUMULATE_FINISH,
+        ISOLATE_MENU_ELEMENTS,
+        RESTORE_MENU_ELEMENTS,
+        MENU_PREDICATE_007079F0,
+        RENDERER_SET_CAMERA,
+        LOCK_ENTER,
+        LOCK_LEAVE,
+        COLLECTION_IS_EMPTY,
+        DEFERRED_QUEUE_POP,
+        ARRAY_FIND,
+        ARRAY_ADD,
+        ARRAY_FIND_INDEX,
+        ARRAY_REMOVE_AT,
+        WORD_AT_8,
+        WORD_AT_C,
+        ARRAY_ELEMENT,
+        ARRAY_CLEAR,
+        SEMAPHORE_POOL_WAIT,
+        TILE_UPDATE_FADE_CONTROLS,
+        TILE_UPDATE_CHILDREN,
+        TILE_UPDATE_PREPARE,
+        CURRENT_THREAD_ID,
+        OWNER_THREAD_ID,
+        DEVICE_GET,
+        RENDERER_STATE_OBJECT,
+        RENDER_PASS_RESET,
+        RENDER_PASS_SET_MODE,
+        RENDER_PASS_ACTIVE,
+        RENDER_CLEAR_ENABLED,
+        CULLING_SOURCE_GET,
+        WORKER_GET,
+        WORKER_FLUSH,
+        RELEASE_SEMAPHORE,
+        WAIT_FOR_SINGLE_OBJECT,
+        WAIT_RESULT_HANDLER,
+        BEFORE_RELEASE,
+        OBJECT_IS_KIND,
+        RENDER_STATE_00B97DE0,
+        RENDER_STATE_00B97E30,
+        RENDER_STATE_00B97E80,
+        RENDER_STATE_00B97ED0,
+        RENDER_STATE_00B97F20,
+        RENDER_STATE_00B97FA0,
+        RENDER_STATE_00B97FF0,
+        RENDER_STATE_00B980C0,
+        RENDER_STATE_00B98180,
+        RENDER_STATE_00B98230,
+        RENDER_STATE_00B984F0,
+        RENDER_STATE_00B98320,
+        RENDER_STATE_00B98480,
+        RENDER_STATE_004ECED0,
+        RENDER_STATE_004ECB40,
+        RENDER_STATE_004EB510,
+        RENDER_STATE_00714C40,
+        GET_SETTING_VALUE,
+        TILE_IS_ACCEPTING_EVENTS,
+        TILE_GET_VALUE_Q,
+        TILE_IS_TRUE,
+        TILE_PARENT,
+        GET_FIELD_AT_4,
+        TILE_GET_MENU,
+        GET_MANAGER,
+        NI_PICK_DESTRUCT,
     ];
 
     /// An engine whose callees are all doubles, with the data pages the
@@ -7162,6 +8866,1481 @@ mod tests {
         e.set(m, InterfaceManager::bShowMouse, 1);
         fn_007118d0(&mut e, m);
         assert_eq!(calls(&e, NODE_SET_TRANSLATE_VECTOR).len(), 1);
+    }
+
+    // ---- 00712450 .. 00714c20 ----
+
+    /// An object whose virtual table answers `value` at each `(slot, value)`
+    /// (the slots are doubles that record their argument words).
+    fn fake_object(e: &mut Engine, slots: &[(u32, u32)]) -> u32 {
+        let table = e.mem.alloc(0x200);
+        let object = e.mem.alloc(0x20);
+        e.mem.set_u32(object, table);
+        for &(slot, value) in slots {
+            let target = object.wrapping_add(0x4000_0000).wrapping_add(slot);
+            e.mem.set_u32(table + slot, target);
+            e.register_double(target, move |_, _| Ret {
+                eax: value,
+                ..Ret::default()
+            });
+        }
+        object
+    }
+
+    /// The address a [`fake_object`] slot call is logged under.
+    fn slot_target(object: u32, slot: u32) -> u32 {
+        object.wrapping_add(0x4000_0000).wrapping_add(slot)
+    }
+
+    fn fade_world() -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = arithmetic_world();
+        let m = manager(&mut e);
+        e.mem.set_f64(ONE_DOUBLE, 1.0);
+        e.mem.set_f64(TWO_FIFTY_FIVE, 255.0);
+        e.mem.set_f64(FADE_MINIMUM, 0.0001f32 as f64);
+        e.mem.set_f64(FADE_STOP_VALUE, 9000.0);
+        returns(&mut e, PROPERTY_TYPE_THREE, 3);
+        (e, m)
+    }
+
+    #[test]
+    fn fading_a_null_node_does_nothing_but_the_guard() {
+        let (mut e, m) = fade_world();
+        interface_manager_recursive_fade(&mut e, m, 0, 1.0, 1.0);
+        assert_eq!(
+            calls(&e, SCOPE_GUARD_BEGIN)[0][1..],
+            [0xd, 1, SOURCE_FILE, 0xd2b]
+        );
+        assert_eq!(calls(&e, SCOPE_GUARD_END).len(), 1);
+        assert!(calls(&e, TILE_FROM_NODE).is_empty());
+    }
+
+    #[test]
+    fn a_geometry_node_gets_the_fade_times_the_alpha_capped_at_the_alpha() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7000)]);
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 0.5);
+        returns(&mut e, NODE_GET_PROPERTY, 0x7100);
+        interface_manager_recursive_fade(&mut e, m, node, 0.5, 0.8);
+        // min(0.5 * 0.8, 0.8) = 0.4, then max(0, 0.4).
+        assert_eq!(
+            calls(&e, PROPERTY_SET_FADE),
+            vec![vec![0x7100, ((0.5f64 * 0.8f32 as f64) as f32).to_bits()]]
+        );
+        assert_eq!(calls(&e, NODE_GET_PROPERTY), vec![vec![0x7000, 3]]);
+    }
+
+    #[test]
+    fn a_fade_below_the_minimum_gives_zero() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7000)]);
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 0.00005);
+        returns(&mut e, NODE_GET_PROPERTY, 0x7100);
+        interface_manager_recursive_fade(&mut e, m, node, 0.00005, 0.8);
+        assert_eq!(calls(&e, PROPERTY_SET_FADE), vec![vec![0x7100, 0]]);
+        assert!(calls(&e, FLOAT_MIN).is_empty());
+    }
+
+    #[test]
+    fn no_property_means_nothing_to_set() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7000)]);
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 1.0);
+        interface_manager_recursive_fade(&mut e, m, node, 1.0, 1.0);
+        assert!(calls(&e, PROPERTY_SET_FADE).is_empty());
+    }
+
+    #[test]
+    fn a_tile_with_trait_0xfab_only_shows_or_hides_itself() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0x5000), (0x1c, 0x7000)]);
+        returns(&mut e, TILE_FROM_NODE, 0x6000);
+        e.register(TILE_IS_TRUE, |_, a| Ret {
+            eax: (a[1] == 0xfab) as u32,
+            ..Ret::default()
+        });
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 1.0);
+        interface_manager_recursive_fade(&mut e, m, node, 1.0, 1.0);
+        assert_eq!(calls(&e, TILE_SET_INT), vec![vec![0x6000, 0xfa3, 1]]);
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 0.25);
+        interface_manager_recursive_fade(&mut e, m, node, 0.25, 1.0);
+        assert_eq!(calls(&e, TILE_SET_INT)[1], vec![0x6000, 0xfa3, 0]);
+        // The geometry and children are left alone.
+        assert!(calls(&e, slot_target(node, 0x1c)).is_empty());
+        assert!(calls(&e, NODE_CHILD_COUNT).is_empty());
+    }
+
+    #[test]
+    fn a_tile_replaces_the_alpha_with_its_own() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7000)]);
+        // The node's own owner is null, so its parent chain gives the tile.
+        let owner = fake_object(&mut e, &[(0xc, 0)]);
+        let _ = owner;
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 1.0);
+        returns(&mut e, NODE_GET_PROPERTY, 0x7100);
+        interface_manager_recursive_fade(&mut e, m, node, 1.0, 0.8);
+        // No tile: the alpha handed down (0.8) is used.
+        assert_eq!(
+            calls(&e, PROPERTY_SET_FADE),
+            vec![vec![0x7100, 0.8f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn the_owner_chain_is_followed_up_to_a_tile() {
+        let (mut e, m) = fade_world();
+        let node = fake_object(&mut e, &[(0xc, 0x5000), (0x1c, 0x7000)]);
+        // 0x5000 has no tile, its parent 0x5100 does.
+        e.register(TILE_FROM_NODE, |_, a| Ret {
+            eax: if a[0] == 0x5100 { 0x6000 } else { 0 },
+            ..Ret::default()
+        });
+        e.register(NODE_PARENT, |_, a| Ret {
+            eax: if a[0] == 0x5000 { 0x5100 } else { 0 },
+            ..Ret::default()
+        });
+        // Trait 0xfa9 is 127.5 (alpha 0.5); 0xfaa is 9000: no children.
+        e.register(TILE_GET_VALUE, |_, a| Ret {
+            st0: if a[1] == 0xfa9 { 127.5 } else { 9000.0 },
+            ..Ret::default()
+        });
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 1.0);
+        returns(&mut e, NODE_GET_PROPERTY, 0x7100);
+        interface_manager_recursive_fade(&mut e, m, node, 1.0, 0.8);
+        assert_eq!(
+            calls(&e, PROPERTY_SET_FADE),
+            vec![vec![0x7100, 0.5f32.to_bits()]]
+        );
+        assert!(calls(&e, NODE_CHILD_COUNT).is_empty());
+    }
+
+    #[test]
+    fn the_children_are_faded_in_turn() {
+        let (mut e, m) = fade_world();
+        let child_a = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7a00)]);
+        let child_b = fake_object(&mut e, &[(0xc, 0), (0x1c, 0x7b00)]);
+        let node = fake_object(&mut e, &[(0xc, 0x5000), (0x1c, 0)]);
+        returns(&mut e, NODE_CHILD_COUNT, 2);
+        e.register_double(NODE_CHILD_AT, move |_, a| Ret {
+            eax: if a[1] == 0 { child_a } else { child_b },
+            ..Ret::default()
+        });
+        returns_st0(&mut e, FLOAT_WRAPPER_00408840, 1.0);
+        returns(&mut e, NODE_GET_PROPERTY, 0x7100);
+        interface_manager_recursive_fade(&mut e, m, node, 1.0, 0.8);
+        assert_eq!(
+            calls(&e, NODE_GET_PROPERTY),
+            vec![vec![0x7a00, 3], vec![0x7b00, 3]]
+        );
+        assert_eq!(
+            calls(&e, NODE_CHILD_AT),
+            vec![vec![0x5000, 0], vec![0x5000, 1]]
+        );
+    }
+
+    /// A pick world: the pointer at (100, 50) on a 1920x1080 desktop, one
+    /// result whose node maps to the tile `0x6000`.
+    fn tile_pick_world() -> (Engine, Ptr<InterfaceManager>, u32) {
+        let mut e = arithmetic_world();
+        let m = manager(&mut e);
+        returns(&mut e, CURSOR_ROOT_GETTER, 0xc0de);
+        returns(&mut e, GET_FRAME_SCENE_NODE, 0x1111);
+        returns(&mut e, SCENE_GRAPH_GET_CAMERA, 0x2222);
+        returns_st0(&mut e, GET_DESKTOP_WIDTH, 1920.0);
+        returns_st0(&mut e, GET_DESKTOP_HEIGHT, 1080.0);
+        e.mem.set_f32(m.addr() + 0x38, 100.0);
+        e.mem.set_f32(m.addr() + 0x40, 50.0);
+        returns(&mut e, NI_PICK_PICK_OBJECTS, 1);
+        returns(&mut e, NI_PICK_GET_RESULTS, 0x3333);
+        returns(&mut e, RESULTS_COUNT, 1);
+        returns(&mut e, RESULTS_GET, 0x4444);
+        let hit = fake_object(&mut e, &[(0xc, 0x5000)]);
+        returns(&mut e, RESULT_OBJECT, hit);
+        returns(&mut e, TILE_FROM_NODE, 0x6000);
+        returns(&mut e, TILE_IS_ACCEPTING_EVENTS, 1);
+        let tile = fake_object(&mut e, &[(0x14, 1), (0xc, 0x200)]);
+        returns(&mut e, TILE_FROM_NODE, tile);
+        e.register(TILE_IS_TRUE, |_, a| Ret {
+            eax: (a[1] == 0xfaf) as u32,
+            ..Ret::default()
+        });
+        (e, m, tile)
+    }
+
+    #[test]
+    fn a_ray_through_the_pointer_finds_the_tile_and_hides_the_cursor_meanwhile() {
+        let (mut e, m, tile) = tile_pick_world();
+        e.set(m, InterfaceManager::iCharHit, 7);
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+        assert_eq!(calls(&e, CAMERA_BUILD_PICK_RAY)[0][..3], [0x2222, 100, 50]);
+        assert_eq!(
+            calls(&e, NODE_SET_FLAG),
+            vec![vec![0xc0de, 1], vec![0xc0de, 0]]
+        );
+        assert_eq!(calls(&e, NI_PICK_DESTRUCT).len(), 1);
+        assert_eq!(calls(&e, SCOPE_GUARD_BEGIN)[0][4], 0xd5c);
+        // Not a text tile: no character.
+        assert_eq!(e.get(m, InterfaceManager::iCharHit), 0xffff);
+        // The tile's hit test got the pointer position.
+        assert_eq!(
+            calls(&e, slot_target(tile, 0x14)),
+            vec![vec![tile, 100.0f32.to_bits(), 50.0f32.to_bits()]]
+        );
+    }
+
+    #[test]
+    fn the_pointer_is_kept_inside_the_desktop() {
+        let (mut e, m, _) = tile_pick_world();
+        e.mem.set_f32(m.addr() + 0x38, -30.0);
+        e.mem.set_f32(m.addr() + 0x40, 5000.0);
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        fn_007126c0(&mut e, m, 0);
+        assert_eq!(calls(&e, CAMERA_BUILD_PICK_RAY)[0][..3], [0x2222, 0, 1080]);
+    }
+
+    #[test]
+    fn a_text_tile_records_the_character_hit_halved() {
+        let (mut e, m, tile) = tile_pick_world();
+        let text = fake_object(&mut e, &[(0x14, 1), (0xc, 0x387)]);
+        let _ = tile;
+        returns(&mut e, TILE_FROM_NODE, text);
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        returns(&mut e, PICK_RESULT_HIT_WORD, 11);
+        assert_eq!(fn_007126c0(&mut e, m, 0), text);
+        assert_eq!(e.get(m, InterfaceManager::iCharHit), 5);
+        assert_eq!(calls(&e, PICK_RESULT_HIT_WORD), vec![vec![0x4444]]);
+    }
+
+    #[test]
+    fn a_tile_that_refuses_events_is_skipped() {
+        let (mut e, m, _) = tile_pick_world();
+        returns(&mut e, TILE_IS_ACCEPTING_EVENTS, 0);
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+        // The cursor is still shown again.
+        assert_eq!(calls(&e, NODE_SET_FLAG)[1], vec![0xc0de, 0]);
+        assert_eq!(calls(&e, TILE_IS_ACCEPTING_EVENTS)[0][0], m.addr());
+    }
+
+    #[test]
+    fn a_tile_that_fails_its_hit_test_or_lacks_trait_0xfaf_is_skipped() {
+        let (mut e, m, _) = tile_pick_world();
+        let miss = fake_object(&mut e, &[(0x14, 0), (0xc, 0x200)]);
+        returns(&mut e, TILE_FROM_NODE, miss);
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+        let (mut e, m, _) = tile_pick_world();
+        e.register(TILE_IS_TRUE, |_, _| Ret::default());
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+    }
+
+    #[test]
+    fn without_trait_0xfaa_the_first_ancestor_that_has_it_is_returned() {
+        let (mut e, m, tile) = tile_pick_world();
+        let top = fake_object(&mut e, &[(0xc, 0x200)]);
+        e.register_double(TILE_PARENT, move |_, a| Ret {
+            eax: if a[0] == tile { 0x6100 } else { top },
+            ..Ret::default()
+        });
+        e.register_double(TILE_GET_VALUE_Q, move |_, a| Ret {
+            eax: (a[0] == top) as u32,
+            ..Ret::default()
+        });
+        assert_eq!(fn_007126c0(&mut e, m, 0), top);
+        // With `keep_exact_tile` the tile itself stays.
+        assert_eq!(fn_007126c0(&mut e, m, 1), tile);
+    }
+
+    #[test]
+    fn a_pick_rectangle_limits_the_hit() {
+        let (mut e, m, tile) = tile_pick_world();
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        returns(&mut e, TILE_IS_ACCEPTING_EVENTS, 1);
+        e.register(TILE_IS_TRUE, |_, a| Ret {
+            eax: (a[1] == 0xfaf || a[1] == 0xfae) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, TILE_IMAGE_NODE, 0x8000);
+        returns(&mut e, NODE_CHILD_POINTER, 1);
+        returns(&mut e, NODE_CHILD_AT, 0x8100);
+        returns(&mut e, NODE_GET_PROPERTY, 0x8200);
+        returns(&mut e, PROPERTY_TYPE_THREE, 3);
+        let rect = e.mem.alloc(0x10);
+        for (i, v) in [10i32, 20, 200, 100].iter().enumerate() {
+            e.mem.set_i32(rect + 4 * i as u32, *v);
+        }
+        returns(&mut e, PROPERTY_RECT, rect);
+        returns_st0(&mut e, TILE_GET_VALUE, 0.0);
+        e.mem.set_f64(PICK_SCALED_TILE_VALUE, 112.0);
+        // (100, 50) is inside left 10, top 20, right 200, bottom 100.
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+        // Left of the rectangle, below it, right of it: skipped.
+        for (x, y) in [
+            (5.0f32, 50.0f32),
+            (100.0, 100.0),
+            (200.0, 50.0),
+            (100.0, 19.0),
+        ] {
+            e.mem.set_f32(m.addr() + 0x38, x);
+            e.mem.set_f32(m.addr() + 0x40, y);
+            assert_eq!(fn_007126c0(&mut e, m, 0), 0, "({x}, {y})");
+        }
+        // All zero: no limit.
+        for i in 0..4 {
+            e.mem.set_i32(rect + 4 * i, 0);
+        }
+        e.mem.set_f32(m.addr() + 0x38, 5.0);
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+        // The tile's node was updated first.
+        assert!(!calls(&e, NODE_SIBLING_UPDATE).is_empty());
+    }
+
+    #[test]
+    fn a_scaled_menu_scales_the_pointer_by_the_managers_factor() {
+        let (mut e, m, tile) = tile_pick_world();
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        e.register(TILE_IS_TRUE, |_, a| Ret {
+            eax: (a[1] == 0xfaf || a[1] == 0xfae) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, TILE_IMAGE_NODE, 0x8000);
+        returns(&mut e, NODE_CHILD_POINTER, 1);
+        returns(&mut e, NODE_GET_PROPERTY, 0x8200);
+        let rect = e.mem.alloc(0x10);
+        for (i, v) in [10i32, 20, 150, 100].iter().enumerate() {
+            e.mem.set_i32(rect + 4 * i as u32, *v);
+        }
+        returns(&mut e, PROPERTY_RECT, rect);
+        // The menu's tile value is 112.0.
+        returns_st0(&mut e, TILE_GET_VALUE, 112.0);
+        e.mem.set_f64(PICK_SCALED_TILE_VALUE, 112.0);
+        let manager_object = e.mem.alloc(0x600);
+        e.mem.set_f32(manager_object + 0x4d0, 2.0);
+        returns(&mut e, GET_MANAGER, manager_object);
+        // 100 * 2 = 200 is past the right edge 150.
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+        e.mem.set_f32(manager_object + 0x4d0, 1.0);
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+    }
+
+    #[test]
+    fn a_pointer_over_a_rendered_menu_uses_the_menus_position_and_scales_the_rectangle() {
+        let (mut e, m, tile) = tile_pick_world();
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        // The setting byte holds 1.
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, 1);
+        returns(&mut e, SETTING_BYTE, flag);
+        e.set(m, InterfaceManager::bMouseOverRenderedMenu, 1);
+        e.set(m, InterfaceManager::field_4ac, 321.0);
+        e.set(m, InterfaceManager::field_4b0, 123.0);
+        e.register(TILE_IS_TRUE, |_, a| Ret {
+            eax: (a[1] == 0xfaf || a[1] == 0xfae) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, TILE_IMAGE_NODE, 0x8000);
+        returns(&mut e, NODE_CHILD_POINTER, 1);
+        returns(&mut e, NODE_GET_PROPERTY, 0x8200);
+        let rect = e.mem.alloc(0x10);
+        for (i, v) in [100i32, 100, 400, 200].iter().enumerate() {
+            e.mem.set_i32(rect + 4 * i as u32, *v);
+        }
+        returns(&mut e, PROPERTY_RECT, rect);
+        returns_st0(&mut e, REAL_SCREEN_WIDTH, 1920.0);
+        returns_st0(&mut e, SCREEN_WIDTH_CONSTANT, 960.0);
+        e.mem.set_f64(PICK_SCALED_TILE_VALUE, 112.0);
+        // The rectangle is doubled (1920 / 960) to 200 200 800 400: the
+        // ray at (321, 123) is above its top edge 200 and the hit refused.
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+        assert_eq!(calls(&e, CAMERA_BUILD_PICK_RAY)[0][..3], [0x2222, 321, 123]);
+        e.set(m, InterfaceManager::field_4b0, 250.0);
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+    }
+
+    #[test]
+    fn a_topmost_rendered_menu_refuses_the_pick_before_the_cursor_is_restored() {
+        let (mut e, m, _) = tile_pick_world();
+        let flag = e.mem.alloc(4);
+        e.mem.set_u8(flag, 1);
+        returns(&mut e, SETTING_BYTE, flag);
+        returns(&mut e, IS_CURRENT_RENDERED_MENU_TOPMOST, 1);
+        assert_eq!(fn_007126c0(&mut e, m, 0), 0);
+        // Only the hide happened, the pick was destroyed.
+        assert_eq!(calls(&e, NODE_SET_FLAG), vec![vec![0xc0de, 1]]);
+        assert_eq!(calls(&e, NI_PICK_DESTRUCT).len(), 1);
+        assert!(calls(&e, CAMERA_BUILD_PICK_RAY).is_empty());
+        assert_eq!(calls(&e, SCOPE_GUARD_END).len(), 1);
+    }
+
+    #[test]
+    fn the_rendered_menu_is_told_and_its_scene_is_the_pick_root() {
+        let (mut e, m, tile) = tile_pick_world();
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        let menu = fake_object(&mut e, &[(0x1c, 0), (0x20, 0)]);
+        e.set(m, InterfaceManager::pCurrentRenderedMenu, menu);
+        returns(&mut e, MENU_FLAG_QUERY_004A4040, 1);
+        returns(&mut e, GET_ENTER_STACK_TOP, 0x3ef);
+        returns(&mut e, TILE_GET_MENU_BY_CLASS, 0x9100);
+        // The image node of the menu tile is the root of the pick.
+        e.register(TILE_IMAGE_NODE, |_, a| Ret {
+            eax: if a[0] == 0x9100 { 0x9200 } else { 0 },
+            ..Ret::default()
+        });
+        assert_eq!(fn_007126c0(&mut e, m, 0), tile);
+        assert_eq!(
+            calls(&e, NI_PICK_SET_ROOT),
+            vec![vec![calls(&e, NI_PICK_SET_ROOT)[0][0], 0x9200]]
+        );
+        assert_eq!(calls(&e, slot_target(menu, 0x1c)).len(), 1);
+        assert_eq!(calls(&e, slot_target(menu, 0x20)).len(), 1);
+        // Without the flag the frame scene node is the root.
+        let (mut e, m, _) = tile_pick_world();
+        let menu = fake_object(&mut e, &[(0x1c, 0), (0x20, 0)]);
+        e.set(m, InterfaceManager::pCurrentRenderedMenu, menu);
+        fn_007126c0(&mut e, m, 0);
+        assert_eq!(calls(&e, NI_PICK_SET_ROOT)[0][1], 0x1111);
+    }
+
+    #[test]
+    fn the_custom_viewport_rectangle_is_set_on_the_camera_before_the_ray() {
+        let (mut e, m, _) = tile_pick_world();
+        e.set_global(VIEWPORT_RECT_ENABLED, 1u8);
+        let camera = e.mem.alloc(0x200);
+        returns(&mut e, SCENE_GRAPH_GET_CAMERA, camera);
+        // The constructor double leaves a rectangle the camera copies.
+        let rect = e.mem.alloc(0x10);
+        for (i, v) in [0.25f32, 0.75, 0.5, 0.125].iter().enumerate() {
+            e.mem.set_f32(rect + 4 * i as u32, *v);
+        }
+        returns(&mut e, RECT_CONSTRUCT, rect);
+        returns(&mut e, TILE_GET_VALUE_Q, 1);
+        fn_007126c0(&mut e, m, 0);
+        assert_eq!(e.mem.f32(camera + 0x100), 0.25);
+        assert_eq!(e.mem.f32(camera + 0x10c), 0.125);
+        assert_eq!(
+            calls(&e, RECT_CONSTRUCT)[0][1..],
+            [0, 0x3f80_0000, 0x3f80_0000, 0]
+        );
+    }
+
+    #[test]
+    fn the_viewport_copy_moves_four_words_to_0x100() {
+        let mut e = world();
+        let source = e.mem.alloc(0x10);
+        let target = e.mem.alloc(0x200);
+        for i in 0..4 {
+            e.mem.set_u32(source + 4 * i, 0x100 + i);
+        }
+        fn_00712e60(&mut e, Ptr::new(target), source);
+        for i in 0..4 {
+            assert_eq!(e.mem.u32(target + 0x100 + 4 * i), 0x100 + i);
+        }
+        assert_eq!(e.mem.u32(target + 0xfc), 0);
+    }
+
+    #[test]
+    fn the_matrix_row_setter_writes_three_floats_at_row_times_0xc() {
+        let mut e = world();
+        let matrix = e.mem.alloc(0x24);
+        fn_007133b0(&mut e, Ptr::new(matrix), 2, 1.5, 2.5, 3.5);
+        assert_eq!(e.mem.f32(matrix + 0x18), 1.5);
+        assert_eq!(e.mem.f32(matrix + 0x1c), 2.5);
+        assert_eq!(e.mem.f32(matrix + 0x20), 3.5);
+        assert_eq!(e.mem.f32(matrix), 0.0);
+    }
+
+    /// A scene graph creation world: a 1920x1080 renderer, the camera object
+    /// `camera`, and the graph `graph` with a slot `0xdc` recorder.
+    fn scene_graph_world() -> (Engine, Ptr<InterfaceManager>, u32, u32) {
+        let mut e = arithmetic_world();
+        let m = manager(&mut e);
+        allocator(&mut e, NI_ALLOC);
+        echo(&mut e, PASS_THROUGH);
+        echo(&mut e, NI_NODE_CONSTRUCT);
+        echo(&mut e, NI_POINT3_CONSTRUCT);
+        returns(&mut e, RENDERER_GET, 0x8000);
+        returns(&mut e, RENDERER_WIDTH, 1920);
+        returns(&mut e, RENDERER_HEIGHT, 1080);
+        e.mem.set_f64(ASPECT_DIVISOR, 1.3333334);
+        e.mem.set_f64(CURSOR_HORIZONTAL_SCALE, 1280.0);
+        e.mem.set_f64(HALF, 0.5);
+        e.mem.set_f32(FRUSTUM_TOP, 960.0);
+        e.mem.set_f32(FRUSTUM_FAR, 10000.0);
+        e.mem.set_f32(FOV_3D, 35.0);
+        e.set_global(FADER_MANAGER, 0xfade);
+        e.set(m, InterfaceManager::fOneToOneDistance, 800.0);
+        let camera = e.mem.alloc(0x200);
+        returns(&mut e, SCENE_GRAPH_GET_CAMERA, camera);
+        let graph = fake_object(&mut e, &[(0xdc, 0)]);
+        (e, m, camera, graph)
+    }
+
+    #[test]
+    fn the_2d_scene_graph_gets_its_camera_roots_and_fader_registration() {
+        let (mut e, m, camera, graph) = scene_graph_world();
+        // The matrix rows and the frustum are copied when they are used.
+        let rows = Rc::new(RefCell::new(vec![]));
+        let seen = rows.clone();
+        e.register_double(CAMERA_SET_ROTATION, move |e, a| {
+            let row: Vec<f32> = (0..9).map(|i| e.mem.f32(a[1] + 4 * i)).collect();
+            seen.borrow_mut().push((a[0], row));
+            Ret::default()
+        });
+        let frustums = Rc::new(RefCell::new(vec![]));
+        let seen = frustums.clone();
+        e.register_double(CAMERA_SET_FRUSTUM, move |e, a| {
+            let words: Vec<u32> = (0..7).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            let ortho = e.mem.u8(a[1] + 0x18);
+            seen.borrow_mut().push((a[0], words, ortho));
+            Ret::default()
+        });
+        let vectors = vector_recorder(&mut e);
+        let result = interface_manager_create_scene_graph(&mut e, m, graph, 0x1234, 0);
+        assert_eq!(result, graph);
+        assert_eq!(
+            calls(&e, SCOPE_GUARD_BEGIN)[0][1..],
+            [0xd, 1, SOURCE_FILE, 0xe11]
+        );
+        // Rows (0 0 1) (1 0 0) (0 1 0) on the graph's camera.
+        assert_eq!(
+            rows.borrow().as_slice(),
+            &[(camera, vec![0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])]
+        );
+        // The aspect (1920/1080 over 4/3) is kept in the manager.
+        let aspect = ((1920.0f64 / 1080.0) as f32 as f64 / 1.3333334) as f32;
+        assert_eq!(e.get(m, InterfaceManager::field_4d0), aspect);
+        // An orthographic frustum, `aspect * 1280` wide and 960 high.
+        let right = (aspect as f64 * 1280.0) as f32;
+        let seen = frustums.borrow();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0, camera);
+        assert_eq!(
+            seen[0].1,
+            vec![
+                0,
+                right.to_bits(),
+                960.0f32.to_bits(),
+                0,
+                0,
+                10000.0f32.to_bits(),
+                seen[0].1[6]
+            ]
+        );
+        assert_eq!(seen[0].2, 1);
+        // The camera is moved by minus half of the frustum.
+        assert_eq!(
+            calls(&e, NI_POINT3_CONSTRUCT)[0][1..],
+            [
+                (((-(right as f64)) * 0.5) as f32).to_bits(),
+                0,
+                ((-960.0f64 * 0.5) as f32).to_bits()
+            ]
+        );
+        assert_eq!(vectors.borrow().len(), 3);
+        // Two roots, named and attached with flag 1, then moved down by the
+        // one-to-one distance; the fader is told before and after.
+        let main_root = e.get(m, InterfaceManager::pInterfaceRoot);
+        let cursor_root = e.get(m, InterfaceManager::pCursorRoot);
+        assert_ne!(main_root, 0);
+        assert_ne!(cursor_root, 0);
+        assert_ne!(main_root, cursor_root);
+        assert_eq!(
+            calls(&e, FIXED_STRING_CONSTRUCT)
+                .iter()
+                .map(|c| c[1])
+                .collect::<Vec<_>>(),
+            vec![MAIN_ROOT_NAME, CURSOR_ROOT_NAME]
+        );
+        assert_eq!(
+            calls(&e, slot_target(graph, 0xdc)),
+            vec![vec![graph, main_root, 1], vec![graph, cursor_root, 1]]
+        );
+        assert_eq!(
+            calls(&e, FADER_ADD_ROOT),
+            vec![
+                vec![0xfade, graph, 800.0f32.to_bits(), 1],
+                vec![0xfade, graph, 800.0f32.to_bits(), 0]
+            ]
+        );
+        assert_eq!(
+            order(&e, &[FADER_ADD_ROOT, NI_NODE_CONSTRUCT]),
+            vec![
+                FADER_ADD_ROOT,
+                NI_NODE_CONSTRUCT,
+                NI_NODE_CONSTRUCT,
+                FADER_ADD_ROOT
+            ]
+        );
+        assert!(calls(&e, SCENE_GRAPH_SET_CAMERA_FOV).is_empty());
+    }
+
+    #[test]
+    fn a_missing_graph_is_built_from_the_name_and_the_3d_one_gets_a_field_of_view() {
+        let (mut e, m, camera, _) = scene_graph_world();
+        echo(&mut e, SCENE_GRAPH_CONSTRUCT);
+        let graph = interface_manager_create_scene_graph(&mut e, m, 0, 0x1234, 1);
+        assert_ne!(graph, 0);
+        assert_eq!(calls(&e, NI_ALLOC)[0], vec![0xc0]);
+        assert_eq!(calls(&e, PASS_THROUGH), vec![vec![0x1234, 0]]);
+        assert_eq!(
+            calls(&e, SCENE_GRAPH_CONSTRUCT),
+            vec![vec![graph, 0x1234, 0, 0]]
+        );
+        // No roots and no fader registration for the 3D graph.
+        assert!(calls(&e, FADER_ADD_ROOT).is_empty());
+        assert!(calls(&e, NI_NODE_CONSTRUCT).is_empty());
+        assert_eq!(e.get(m, InterfaceManager::pInterfaceRoot), 0);
+        assert_eq!(
+            calls(&e, SCENE_GRAPH_SET_CAMERA_FOV),
+            vec![vec![graph, 35.0f32.to_bits(), 0, 0, 0]]
+        );
+        let _ = camera;
+    }
+
+    #[test]
+    fn a_failed_graph_allocation_still_runs_the_camera_code_on_null() {
+        let (mut e, m, _, _) = scene_graph_world();
+        returns(&mut e, NI_ALLOC, 0);
+        let graph = interface_manager_create_scene_graph(&mut e, m, 0, 0x1234, 1);
+        assert_eq!(graph, 0);
+        assert!(calls(&e, SCENE_GRAPH_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn the_pipboy_manager_is_replaced() {
+        let mut e = world();
+        let m = manager(&mut e);
+        allocator(&mut e, OPERATOR_NEW);
+        let old = fake_object(&mut e, &[(0, 0)]);
+        e.set(m, InterfaceManager::pPipboy, old);
+        let fresh = fake_object(&mut e, &[(0x24, 0)]);
+        returns(&mut e, PIPBOY_MANAGER_CONSTRUCT, fresh);
+        fn_007133f0(&mut e, m);
+        // The old one got its virtual destructor with flag 1.
+        assert_eq!(calls(&e, slot_target(old, 0)), vec![vec![old, 1]]);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x170]]);
+        assert_eq!(e.get(m, InterfaceManager::pPipboy), fresh);
+        assert_eq!(calls(&e, slot_target(fresh, 0x24)), vec![vec![fresh]]);
+        // Without an old one nothing is deleted.
+        e.set(m, InterfaceManager::pPipboy, 0);
+        let before = calls(&e, slot_target(old, 0)).len();
+        fn_007133f0(&mut e, m);
+        assert_eq!(calls(&e, slot_target(old, 0)).len(), before);
+    }
+
+    #[test]
+    fn the_deferred_queue_is_emptied_under_the_tile_lock() {
+        let mut e = world();
+        let first = fake_object(&mut e, &[(0, 0)]);
+        let second = fake_object(&mut e, &[(0, 0)]);
+        let queue = Rc::new(RefCell::new(vec![first, 0, second]));
+        let pending = queue.clone();
+        e.register_double(COLLECTION_IS_EMPTY, move |_, _| Ret {
+            eax: pending.borrow().is_empty() as u32,
+            ..Ret::default()
+        });
+        e.register_double(DEFERRED_QUEUE_POP, move |_, _| Ret {
+            eax: queue.borrow_mut().remove(0),
+            ..Ret::default()
+        });
+        fn_00713c00(&mut e);
+        assert_eq!(calls(&e, LOCK_ENTER), vec![vec![TILE_LOCK, 0]]);
+        assert_eq!(calls(&e, LOCK_LEAVE), vec![vec![TILE_LOCK]]);
+        assert_eq!(calls(&e, slot_target(first, 0)), vec![vec![first, 1]]);
+        assert_eq!(calls(&e, slot_target(second, 0)), vec![vec![second, 1]]);
+        assert_eq!(calls(&e, DEFERRED_QUEUE_POP), vec![vec![DEFERRED_QUEUE]; 3]);
+    }
+
+    fn tile_update_world() -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        // The setting holder answers a pointer to an int.
+        let setting = e.mem.alloc(4);
+        returns(&mut e, GET_SETTING_VALUE, setting);
+        returns(&mut e, COLLECTION_IS_EMPTY, 1);
+        (e, m)
+    }
+
+    #[test]
+    fn updating_the_tiles_updates_them_all_and_brackets_the_flag() {
+        let (mut e, m) = tile_update_world();
+        e.set_global(TILE_UPDATE_DEPTH, 9u32);
+        fn_00713c70(&mut e, m);
+        assert_eq!(e.global::<u8>(TILES_UPDATING), 0);
+        assert_eq!(e.global::<u32>(TILE_UPDATE_DEPTH), 0);
+        assert_eq!(calls(&e, TILE_UPDATE_ALL), vec![vec![0]]);
+        assert_eq!(calls(&e, TILE_UPDATE_FADE_CONTROLS).len(), 1);
+        assert_eq!(calls(&e, TILE_UPDATE_PREPARE).len(), 1);
+        // The flush happened before the prepare, and the setting 0 did not
+        // wait on the pool.
+        assert_eq!(
+            order(
+                &e,
+                &[
+                    LOCK_ENTER,
+                    TILE_UPDATE_PREPARE,
+                    TILE_UPDATE_ALL,
+                    TILE_UPDATE_FADE_CONTROLS
+                ]
+            ),
+            vec![
+                LOCK_ENTER,
+                TILE_UPDATE_PREPARE,
+                TILE_UPDATE_ALL,
+                TILE_UPDATE_FADE_CONTROLS
+            ]
+        );
+        assert!(calls(&e, SEMAPHORE_POOL_WAIT).is_empty());
+        // The update array was empty: no second lock.
+        assert_eq!(calls(&e, LOCK_ENTER).len(), 1);
+        assert_eq!(e.mem.u8(m.addr() + 0xdc), 0);
+    }
+
+    #[test]
+    fn the_flag_is_set_while_the_tiles_update() {
+        let (mut e, m) = tile_update_world();
+        let seen = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(TILE_UPDATE_PREPARE, move |e, _| {
+            log.borrow_mut().push(e.global::<u8>(TILES_UPDATING));
+            Ret::default()
+        });
+        e.mem.set_u8(m.addr() + 0xdc, 1);
+        fn_00713c70(&mut e, m);
+        assert_eq!(seen.borrow().as_slice(), &[1]);
+        assert_eq!(e.mem.u8(m.addr() + 0xdc), 0);
+    }
+
+    #[test]
+    fn a_big_setting_waits_on_the_pool_when_it_is_in_use() {
+        let (mut e, m) = tile_update_world();
+        let setting = e.call(GET_SETTING_VALUE, &args![0u32]).u32();
+        e.mem.set_i32(setting, 2);
+        e.set_global(SEMAPHORE_POOL_IN_USE, 0u8);
+        fn_00713c70(&mut e, m);
+        assert!(calls(&e, SEMAPHORE_POOL_WAIT).is_empty());
+        e.set_global(SEMAPHORE_POOL_IN_USE, 1u8);
+        fn_00713c70(&mut e, m);
+        assert_eq!(
+            calls(&e, SEMAPHORE_POOL_WAIT),
+            vec![vec![SEMAPHORE_POOL, 0, 1]]
+        );
+        // A setting of exactly 1 does not wait.
+        e.mem.set_i32(setting, 1);
+        fn_00713c70(&mut e, m);
+        assert_eq!(calls(&e, SEMAPHORE_POOL_WAIT).len(), 1);
+    }
+
+    #[test]
+    fn with_the_loading_menu_open_only_its_children_update() {
+        let (mut e, m) = tile_update_world();
+        returns(&mut e, IS_IN_GAME_LOADING_MENU_OPEN, 1);
+        returns(&mut e, TILE_GET_MENU_BY_CLASS, 0x9100);
+        fn_00713c70(&mut e, m);
+        assert_eq!(calls(&e, TILE_GET_MENU_BY_CLASS), vec![vec![0x3ef]]);
+        assert_eq!(calls(&e, TILE_UPDATE_CHILDREN), vec![vec![0x9100, 0]]);
+        assert!(calls(&e, TILE_UPDATE_ALL).is_empty());
+        // With the XUI up everything updates anyway.
+        returns(&mut e, XUI_IS_UP, 1);
+        fn_00713c70(&mut e, m);
+        assert_eq!(calls(&e, TILE_UPDATE_ALL).len(), 1);
+    }
+
+    #[test]
+    fn a_non_empty_update_array_is_processed_under_the_update_lock() {
+        let (mut e, m) = tile_update_world();
+        // Only the update array has entries; the deferred queue is empty.
+        e.register(COLLECTION_IS_EMPTY, |_, a| Ret {
+            eax: (a[0] != UPDATE_ARRAY) as u32,
+            ..Ret::default()
+        });
+        returns(&mut e, WORD_AT_8, 0);
+        fn_00713c70(&mut e, m);
+        assert_eq!(
+            calls(&e, LOCK_ENTER),
+            vec![vec![TILE_LOCK, 0], vec![UPDATE_LOCK, 0]]
+        );
+        assert_eq!(
+            calls(&e, LOCK_LEAVE),
+            vec![vec![TILE_LOCK], vec![UPDATE_LOCK]]
+        );
+    }
+
+    #[test]
+    fn the_small_getters_return_their_constants() {
+        let mut e = world();
+        assert_eq!(fn_00713d70(&mut e), 0x011f_3330);
+        assert_eq!(fn_00713d80(&mut e), 0x011d_fa50);
+        e.set_global(SEMAPHORE_POOL_IN_USE, 5u8);
+        assert_eq!(fn_00713d90(&mut e), 5);
+        e.set_global(TILE_UPDATE_DEPTH, 3u32);
+        fn_00713d60(&mut e);
+        assert_eq!(e.global::<u32>(TILE_UPDATE_DEPTH), 0);
+        let tile = e.mem.alloc(0x40);
+        e.mem.set_u8(tile + 0x34, 9);
+        fn_00713ee0(&mut e, Ptr::new(tile));
+        assert_eq!(e.mem.u8(tile + 0x34), 0);
+    }
+
+    #[test]
+    fn a_tile_is_added_to_the_update_array_once() {
+        let mut e = world();
+        let m = manager(&mut e);
+        let items = Rc::new(RefCell::new(vec![]));
+        let known = items.clone();
+        e.register_double(ARRAY_FIND, move |e, a| Ret {
+            eax: known.borrow().contains(&e.mem.u32(a[1])) as u32,
+            ..Ret::default()
+        });
+        let added = items.clone();
+        e.register_double(ARRAY_ADD, move |e, a| {
+            added.borrow_mut().push(e.mem.u32(a[1]));
+            Ret::default()
+        });
+        interface_manager_add_tile_to_update_list(&mut e, m, 0);
+        interface_manager_add_tile_to_update_list(&mut e, m, 0x6000);
+        interface_manager_add_tile_to_update_list(&mut e, m, 0x6000);
+        interface_manager_add_tile_to_update_list(&mut e, m, 0x6100);
+        assert_eq!(items.borrow().as_slice(), &[0x6000, 0x6100]);
+        // Null was not even searched for.
+        assert_eq!(calls(&e, ARRAY_FIND).len(), 3);
+        assert_eq!(calls(&e, ARRAY_FIND)[0][0], UPDATE_ARRAY);
+    }
+
+    #[test]
+    fn a_tile_is_removed_from_the_update_array_when_found() {
+        let mut e = world();
+        let m = manager(&mut e);
+        e.register_double(ARRAY_FIND_INDEX, |e, a| Ret {
+            eax: if e.mem.u32(a[1]) == 0x6000 {
+                4
+            } else {
+                u32::MAX
+            },
+            ..Ret::default()
+        });
+        fn_00713de0(&mut e, m, 0x6000);
+        fn_00713de0(&mut e, m, 0x6100);
+        assert_eq!(calls(&e, ARRAY_REMOVE_AT), vec![vec![UPDATE_ARRAY, 4, 1]]);
+        let search = calls(&e, ARRAY_FIND_INDEX);
+        assert_eq!(search[0][0], UPDATE_ARRAY);
+        assert_eq!(search[0][2..], [0, ARRAY_COMPARE]);
+    }
+
+    fn update_array_world(tiles: &[u32]) -> (Engine, Ptr<InterfaceManager>) {
+        let mut e = world();
+        let m = manager(&mut e);
+        let slots: Vec<u32> = tiles
+            .iter()
+            .map(|t| {
+                let slot = e.mem.alloc(4);
+                e.mem.set_u32(slot, *t);
+                slot
+            })
+            .collect();
+        let count = tiles.len() as u32;
+        returns(&mut e, WORD_AT_8, count);
+        e.register_double(ARRAY_ELEMENT, move |_, a| Ret {
+            eax: slots[a[1] as usize],
+            ..Ret::default()
+        });
+        e.set_global(OWNER_OBJECT, 0x5150);
+        returns(&mut e, CURRENT_THREAD_ID, 77);
+        (e, m)
+    }
+
+    #[test]
+    fn every_tile_of_the_array_is_updated_and_its_flag_cleared() {
+        let tile_a = 0x2000_5000u32;
+        let tile_b = 0x2000_5100u32;
+        let (mut e, m) = update_array_world(&[tile_a, 0, tile_b]);
+        e.map(tile_a, 0x100);
+        e.map(tile_b, 0x100);
+        e.map(0, 0x1000);
+        e.mem.set_u8(tile_a + 0x34, 1);
+        e.mem.set_u8(tile_b + 0x34, 1);
+        e.register(TILE_IMAGE_NODE, |_, a| Ret {
+            eax: a[0] + 1,
+            ..Ret::default()
+        });
+        fn_00713e20(&mut e, m);
+        // The two tiles with image nodes were updated with a zero time.
+        assert_eq!(calls(&e, NODE_UPDATE).len(), 2);
+        assert_eq!(calls(&e, NODE_UPDATE)[0][0], tile_a + 1);
+        assert_eq!(calls(&e, NODE_UPDATE)[1][0], tile_b + 1);
+        assert_eq!(
+            calls(&e, NI_UPDATE_DATA_CONSTRUCT)[0][1..],
+            [0.0f32.to_bits(), 0, 0]
+        );
+        assert_eq!(e.mem.u8(tile_a + 0x34), 0);
+        assert_eq!(e.mem.u8(tile_b + 0x34), 0);
+        assert_eq!(
+            calls(&e, TILE_IMAGE_NODE).len(),
+            2,
+            "no node for the null tile"
+        );
+    }
+
+    #[test]
+    fn the_array_is_cleared_only_by_the_owner_thread() {
+        let (mut e, m) = update_array_world(&[]);
+        returns(&mut e, OWNER_THREAD_ID, 76);
+        fn_00713e20(&mut e, m);
+        assert!(calls(&e, ARRAY_CLEAR).is_empty());
+        returns(&mut e, OWNER_THREAD_ID, 77);
+        fn_00713e20(&mut e, m);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![UPDATE_ARRAY, 1]]);
+        assert_eq!(calls(&e, OWNER_THREAD_ID)[0], vec![0x5150]);
+    }
+
+    /// Makes the three settings (`011d8ba0`, `011db2cc`, `011d8ab0`) answer
+    /// the given flags.
+    fn settings(e: &mut Engine, a: bool, b: bool, c: bool) {
+        let cells = [e.mem.alloc(4), e.mem.alloc(4), e.mem.alloc(4)];
+        for (cell, flag) in cells.iter().zip([a, b, c]) {
+            e.mem.set_u8(*cell, flag as u8);
+        }
+        e.register_double(SETTING_BYTE, move |_, args| Ret {
+            eax: match args[0] {
+                SETTING_HOLDER_011D8BA0 => cells[0],
+                SETTING_HOLDER_011DB2CC => cells[1],
+                SETTING_HOLDER_011D8AB0 => cells[2],
+                other => panic!("unexpected holder {other:x}"),
+            },
+            ..Ret::default()
+        });
+    }
+
+    /// A world for the menu accumulation: scene `0x1111`, camera `0x2222`
+    /// (an object, so its viewport can be written), accumulator `0x3333`,
+    /// the rendering system `0xe500`, the renderer with equal or different
+    /// slot `0xc8` / `0xcc` answers.
+    fn accumulate_world() -> (Engine, Ptr<InterfaceManager>, u32) {
+        let mut e = arithmetic_world();
+        let m = manager(&mut e);
+        returns(&mut e, GET_FRAME_SCENE_NODE, 0x1111);
+        let camera = e.mem.alloc(0x200);
+        returns(&mut e, SCENE_GRAPH_GET_CAMERA, camera);
+        returns(&mut e, NI_POINTER_GET, 0x3333);
+        returns(&mut e, RENDERING_SYSTEM, 0xe500);
+        // The deferred queue and the update array are empty.
+        returns(&mut e, COLLECTION_IS_EMPTY, 1);
+        let setting = e.mem.alloc(4);
+        returns(&mut e, GET_SETTING_VALUE, setting);
+        let renderer = fake_object(&mut e, &[(0xc8, 7), (0xcc, 7)]);
+        returns(&mut e, RENDERER_GET, renderer);
+        for (i, v) in [0.0f32, 1.0, 1.0, 0.0].iter().enumerate() {
+            e.mem.set_f32(VIEWPORT_RECT + 4 * i as u32, *v);
+        }
+        (e, m, camera)
+    }
+
+    /// The addresses of the accumulation steps, in the order they ran.
+    fn accumulation_steps(e: &Engine) -> Vec<u32> {
+        order(
+            e,
+            &[
+                CULLING_PUSH,
+                CULLING_POP,
+                RESTORE_MENU_ELEMENTS,
+                ISOLATE_MENU_ELEMENTS,
+                ACCUMULATE_SCENE,
+                ACCUMULATE_FINISH,
+                RENDERING_SET_STAGE,
+                RENDERING_WAIT_STAGE,
+                RENDERER_SET_CAMERA,
+            ],
+        )
+    }
+
+    #[test]
+    fn with_neither_setting_one_plain_pass_is_made() {
+        let (mut e, m, _) = accumulate_world();
+        settings(&mut e, false, false, false);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(calls(&e, CULLING_PUSH), vec![vec![0xc000, 1]]);
+        assert_eq!(
+            accumulation_steps(&e),
+            vec![
+                CULLING_PUSH,
+                RESTORE_MENU_ELEMENTS,
+                ACCUMULATE_SCENE,
+                ACCUMULATE_FINISH,
+                CULLING_POP
+            ]
+        );
+        assert_eq!(
+            calls(&e, CULLING_SET_ACCUMULATOR),
+            vec![vec![0xc000, 0x3333], vec![0xc000, 0]]
+        );
+        assert_eq!(calls(&e, ACCUMULATE_SCENE)[0][1..], [0x1111, 0xc000]);
+        assert_eq!(calls(&e, ACCUMULATE_FINISH)[0][1..], [0x3333, 0]);
+        assert_eq!(calls(&e, CULLING_POP), vec![vec![0xc000]]);
+    }
+
+    #[test]
+    fn a_multithreaded_click_waits_for_the_stage_instead_of_accumulating() {
+        let (mut e, m, _) = accumulate_world();
+        settings(&mut e, false, false, false);
+        e.set(m, InterfaceManager::bClickMultithreaded, 1);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(
+            accumulation_steps(&e),
+            vec![
+                CULLING_PUSH,
+                RENDERING_WAIT_STAGE,
+                RESTORE_MENU_ELEMENTS,
+                ACCUMULATE_FINISH,
+                CULLING_POP
+            ]
+        );
+        assert_eq!(calls(&e, RENDERING_WAIT_STAGE), vec![vec![0xe500, 1, 0x17]]);
+    }
+
+    #[test]
+    fn setting_b_alone_makes_an_isolated_pass_then_a_plain_isolated_one() {
+        let (mut e, m, camera) = accumulate_world();
+        settings(&mut e, false, true, false);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(
+            accumulation_steps(&e),
+            vec![
+                CULLING_PUSH,
+                ISOLATE_MENU_ELEMENTS,
+                RENDERER_SET_CAMERA,
+                ACCUMULATE_SCENE,
+                ACCUMULATE_FINISH,
+                RESTORE_MENU_ELEMENTS,
+                ISOLATE_MENU_ELEMENTS,
+                RENDERER_SET_CAMERA,
+                ACCUMULATE_SCENE,
+                ACCUMULATE_FINISH,
+                RESTORE_MENU_ELEMENTS,
+                CULLING_POP
+            ]
+        );
+        assert_eq!(
+            calls(&e, ISOLATE_MENU_ELEMENTS),
+            vec![vec![1, 0], vec![0, 0]]
+        );
+        let renderer = e.call(RENDERER_GET, &args![]).u32();
+        assert_eq!(
+            calls(&e, RENDERER_SET_CAMERA),
+            vec![vec![renderer, camera]; 2]
+        );
+    }
+
+    #[test]
+    fn setting_a_alone_resets_the_viewport_when_the_renderer_has_no_target() {
+        let (mut e, m, camera) = accumulate_world();
+        settings(&mut e, true, false, false);
+        let renderer = fake_object(&mut e, &[(0xc8, 7), (0xcc, 0)]);
+        returns(&mut e, RENDERER_GET, renderer);
+        e.mem.set_f32(VIEWPORT_RECT, 0.5);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(calls(&e, ISOLATE_MENU_ELEMENTS), vec![vec![1, 1]]);
+        assert_eq!(e.mem.f32(camera + 0x100), 0.5);
+        // With a target the viewport stays.
+        let renderer = fake_object(&mut e, &[(0xc8, 7), (0xcc, 9)]);
+        returns(&mut e, RENDERER_GET, renderer);
+        e.mem.set_f32(VIEWPORT_RECT, 0.25);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(e.mem.f32(camera + 0x100), 0.5);
+    }
+
+    #[test]
+    fn both_settings_show_the_menus_during_the_pass_and_hide_them_after() {
+        let (mut e, m, camera) = accumulate_world();
+        settings(&mut e, true, true, false);
+        // Menus 0x421 and 0x40c exist (image nodes 0x8001 / 0x8002, hidden);
+        // 0x41f has an image node that is already shown.
+        e.register(TILE_GET_MENU_BY_CLASS, |_, a| Ret {
+            eax: a[0] + 0x1000,
+            ..Ret::default()
+        });
+        e.register(TILE_IMAGE_NODE, |_, a| Ret {
+            eax: a[0] + 0x7000,
+            ..Ret::default()
+        });
+        let flagged = Rc::new(RefCell::new(vec![0x41f + 0x1000 + 0x7000]));
+        let tested = flagged.clone();
+        e.register_double(NODE_FLAG_TEST_00456610, move |_, a| Ret {
+            eax: tested.borrow().contains(&a[0]) as u32,
+            ..Ret::default()
+        });
+        e.register_double(NODE_SET_FLAG, move |_, a| {
+            let mut nodes = flagged.borrow_mut();
+            nodes.retain(|node| *node != a[0]);
+            if a[1] != 0 {
+                nodes.push(a[0]);
+            }
+            Ret::default()
+        });
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        let first = 0x421 + 0x1000 + 0x7000;
+        let second = 0x40c + 0x1000 + 0x7000;
+        assert_eq!(
+            calls(&e, NODE_SET_FLAG),
+            vec![
+                vec![first, 1],
+                vec![second, 1],
+                vec![first, 0],
+                vec![second, 0]
+            ]
+        );
+        assert_eq!(
+            accumulation_steps(&e),
+            vec![
+                CULLING_PUSH,
+                ACCUMULATE_SCENE,
+                RENDERING_SET_STAGE,
+                RENDERING_WAIT_STAGE,
+                ACCUMULATE_FINISH,
+                CULLING_POP
+            ]
+        );
+        assert_eq!(calls(&e, RENDERING_SET_STAGE), vec![vec![0xe500, 0, 0x17]]);
+        // The renderer's two slots agree: the camera got the viewport.
+        assert_eq!(e.mem.f32(camera + 0x104), 1.0);
+        // The third setting adds a pass.
+        settings(&mut e, true, true, true);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(calls(&e, ISOLATE_MENU_ELEMENTS), vec![vec![1, 0]]);
+        assert_eq!(calls(&e, RESTORE_MENU_ELEMENTS).len(), 1);
+    }
+
+    #[test]
+    fn both_settings_prepare_the_tiles_unless_the_click_is_multithreaded() {
+        let (mut e, m, _) = accumulate_world();
+        settings(&mut e, true, true, false);
+        returns(&mut e, COLLECTION_IS_EMPTY, 1);
+        let setting = e.mem.alloc(4);
+        returns(&mut e, GET_SETTING_VALUE, setting);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        // `00713c70` ran (it calls the tile update preparation) and the
+        // menu elements were isolated for the pass.
+        assert_eq!(calls(&e, TILE_UPDATE_PREPARE).len(), 1);
+        e.set(m, InterfaceManager::bClickMultithreaded, 1);
+        fn_007134d0(&mut e, m, 0xc000, 0);
+        assert_eq!(calls(&e, TILE_UPDATE_PREPARE).len(), 1);
+        assert_eq!(calls(&e, RENDERING_WAIT_STAGE).len(), 2);
+    }
+
+    #[test]
+    fn the_multithreaded_click_queues_the_accumulation() {
+        let (mut e, m, camera) = accumulate_world();
+        returns(&mut e, COLLECTION_IS_EMPTY, 1);
+        let setting = e.mem.alloc(4);
+        returns(&mut e, GET_SETTING_VALUE, setting);
+        fn_00713f00(&mut e, m);
+        assert_eq!(e.get(m, InterfaceManager::bClickMultithreaded), 1);
+        assert_eq!(
+            calls(&e, RENDERING_ADD_ACCUM_TASK),
+            vec![vec![0xe500, camera, 0, 0x1111, 0, 0, 0x3333, 1, 0x17, 0]]
+        );
+        assert_eq!(calls(&e, RENDERING_SET_STAGE), vec![vec![0xe500, 0, 0x17]]);
+        // The tiles were updated (the menu-mode test and the loading menu
+        // did not object); the menu elements are isolated only when the
+        // predicate holds.
+        assert_eq!(calls(&e, TILE_UPDATE_PREPARE).len(), 1);
+        assert!(calls(&e, ISOLATE_MENU_ELEMENTS).is_empty());
+        returns(&mut e, MENU_PREDICATE_007079F0, 1);
+        returns(&mut e, MENU_MODE_IS_NOT_ONE, 1);
+        fn_00713f00(&mut e, m);
+        assert_eq!(calls(&e, TILE_UPDATE_PREPARE).len(), 1);
+        assert_eq!(calls(&e, ISOLATE_MENU_ELEMENTS), vec![vec![0, 0]]);
+        returns(&mut e, IS_IN_GAME_LOADING_MENU_OPEN, 1);
+        fn_00713f00(&mut e, m);
+        assert_eq!(calls(&e, ISOLATE_MENU_ELEMENTS).len(), 1);
+    }
+
+    /// The full render world: a renderer object whose slots are recorders,
+    /// a COM-style device with recorders, and a scene graph.
+    fn render_world() -> (Engine, Ptr<InterfaceManager>, u32, u32) {
+        let (mut e, m, _) = accumulate_world();
+        settings(&mut e, false, false, false);
+        let device = fake_object(
+            &mut e,
+            &[
+                (0xbc, 0),
+                (0x160, 0),
+                (0xe4, 0),
+                (0x1ac, 0),
+                (0x170, 0),
+                (0x15c, 0),
+            ],
+        );
+        let target = fake_object(&mut e, &[(0x8c, 640), (0x90, 480)]);
+        let renderer = fake_object(
+            &mut e,
+            &[
+                (0xd4, target),
+                (0xcc, target),
+                (0xc8, 0),
+                (0xb4, 0),
+                (0xac, 0),
+                (0x188, 0),
+            ],
+        );
+        returns(&mut e, RENDERER_GET, renderer);
+        returns(&mut e, DEVICE_GET, device);
+        let state = fake_object(
+            &mut e,
+            &[
+                (0x8c, 0),
+                (0x7c, 0),
+                (0xb0, 11),
+                (0xb8, 0),
+                (0x90, 12),
+                (0x98, 0),
+                (0x80, 13),
+                (0x88, 0),
+            ],
+        );
+        returns(&mut e, RENDERER_STATE_OBJECT, state);
+        returns(&mut e, RENDER_PASS_ACTIVE, 1);
+        (e, m, device, renderer)
+    }
+
+    #[test]
+    fn an_inactive_pass_only_builds_and_runs_the_culling_process() {
+        let (mut e, m, _device, _) = render_world();
+        returns(&mut e, RENDER_PASS_ACTIVE, 0);
+        returns(&mut e, GET_SECOND_SCENE_NODE, 0x4444);
+        returns(&mut e, CULLING_SOURCE_GET, 0x5550);
+        returns(&mut e, WORD_AT_8, 0x99);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, CULLING_SOURCE_GET), vec![vec![0x1111]]);
+        let construct = calls(&e, CULLING_PROCESS_CONSTRUCT);
+        assert_eq!(construct.len(), 1);
+        assert_eq!(construct[0][1], 0x99);
+        let culling = construct[0][0];
+        assert_eq!(calls(&e, NI_POINTER_CONSTRUCT)[0][1], 0x4444);
+        assert_eq!(calls(&e, CULLING_PUSH), vec![vec![culling, 1]]);
+        assert_eq!(calls(&e, CULLING_PROCESS_DESTRUCT), vec![vec![culling]]);
+        assert_eq!(calls(&e, NI_POINTER_DESTROY).len(), 1);
+        assert_eq!(calls(&e, SCOPE_GUARD_BEGIN)[0][4], 0x1069);
+        assert!(calls(&e, RENDER_PASS_SET_MODE).is_empty());
+        assert!(calls(&e, RENDER_PASS_RESET).is_empty());
+    }
+
+    #[test]
+    fn without_a_scene_graph_the_render_stops_after_the_pass_setup() {
+        let (mut e, m, _, _) = render_world();
+        returns(&mut e, GET_FRAME_SCENE_NODE, 0);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert!(calls(&e, CULLING_PROCESS_CONSTRUCT).is_empty());
+        assert_eq!(calls(&e, SCOPE_GUARD_END).len(), 1);
+        // The setup still ran: the mode was set.
+        assert_eq!(calls(&e, RENDER_PASS_SET_MODE), vec![vec![7, 0]]);
+    }
+
+    #[test]
+    fn an_active_pass_sets_the_viewport_clears_the_strips_and_resets_the_device() {
+        let (mut e, m, device, renderer) = render_world();
+        e.set_global(VIEWPORT_RECT_ENABLED, 1u8);
+        for (i, v) in [0.25f32, 0.75, 0.5, 0.125].iter().enumerate() {
+            e.mem.set_f32(VIEWPORT_RECT + 4 * i as u32, *v);
+        }
+        returns(&mut e, WORD_AT_8, 800);
+        returns(&mut e, WORD_AT_C, 600);
+        returns(&mut e, RENDER_CLEAR_ENABLED, 1);
+        // The device's viewport calls are captured as they happen.
+        let viewports = Rc::new(RefCell::new(vec![]));
+        let seen = viewports.clone();
+        e.register_double(slot_target(device, 0xbc), move |e, a| {
+            let words: Vec<u32> = (0..6).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            seen.borrow_mut().push((a[0], words));
+            Ret::default()
+        });
+        e.mem.set_f32(CLEAR_RECT_ONE_TOP, 0.5);
+        e.mem.set_f32(CLEAR_RECT_TWO_LEFT, 0.75);
+        // Strips are filled through the renderer's kind test.
+        returns(&mut e, OBJECT_IS_KIND, 1);
+        let rect_cell = e.mem.alloc(0x10);
+        returns(&mut e, RECT_CONSTRUCT, rect_cell);
+        returns(&mut e, GET_SECOND_SCENE_NODE, 0x4444);
+        returns(&mut e, WORD_AT_8, 800);
+        fn_00713fb0(&mut e, m, 0, 0);
+        // First viewport: 800 * 0.25, 600 * 0.125, 800 * 0.5, 600 * 0.375.
+        let seen = viewports.borrow();
+        assert_eq!(seen[0].0, device);
+        assert_eq!(
+            seen[0].1,
+            vec![200, 75, 400, 225, 0.0f32.to_bits(), 1.0f32.to_bits()]
+        );
+        // The second is the render target's size (640x480), depth 0..1.
+        assert_eq!(seen[1].1[..4], [0, 0, 640, 480]);
+        assert_eq!(seen[1].1[4..], [0.0f32.to_bits(), 1.0f32.to_bits()]);
+        drop(seen);
+        assert_eq!(calls(&e, RENDER_PASS_SET_MODE), vec![vec![7, 0]]);
+        // The render states of the device.
+        assert_eq!(
+            calls(&e, slot_target(device, 0xe4)),
+            vec![vec![device, 0x1b, 0]]
+        );
+        assert_eq!(calls(&e, slot_target(device, 0x1ac)), vec![vec![device, 0]]);
+        assert_eq!(calls(&e, slot_target(device, 0x170)), vec![vec![device, 0]]);
+        assert_eq!(calls(&e, slot_target(device, 0x15c)), vec![vec![device, 0]]);
+        assert_eq!(calls(&e, slot_target(device, 0x160)).len(), 1);
+        // Both 7148c0 strips were filled (slot 0x188 of the renderer is not
+        // a fake slot, so the kind test answered with the double).
+        assert_eq!(calls(&e, OBJECT_IS_KIND).len(), 2);
+        let _ = renderer;
+        // The 18 counters ran and the state object's values were copied.
+        assert_eq!(calls(&e, RENDER_PASS_RESET).len(), 1);
+        assert_eq!(calls(&e, RENDER_STATE_00714C40), vec![vec![0]]);
+        assert_eq!(calls(&e, RENDER_STATE_004ECED0), vec![vec![0]]);
+    }
+
+    #[test]
+    fn the_topmost_flag_reaches_the_accumulation_pass() {
+        let (mut e, m, _, _) = render_world();
+        returns(&mut e, RENDER_PASS_ACTIVE, 0);
+        // Setting B on, the mode word is 2: topmost without asking.
+        settings(&mut e, false, true, false);
+        e.set(m, InterfaceManager::field_4bc, 2);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert!(calls(&e, IS_IN_PIPBOY_MENU).is_empty());
+        assert_eq!(calls(&e, IS_CURRENT_RENDERED_MENU_TOPMOST).len(), 0);
+        // Another mode word: the pipboy test and then the topmost test.
+        e.set(m, InterfaceManager::field_4bc, 0);
+        returns(&mut e, IS_IN_PIPBOY_MENU, 1);
+        returns(&mut e, IS_CURRENT_RENDERED_MENU_TOPMOST, 1);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, IS_IN_PIPBOY_MENU).len(), 1);
+        assert_eq!(calls(&e, IS_CURRENT_RENDERED_MENU_TOPMOST).len(), 1);
+        // Neither the pipboy nor the rendered menu: no topmost test.
+        returns(&mut e, IS_IN_PIPBOY_MENU, 0);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, IS_CURRENT_RENDERED_MENU_TOPMOST).len(), 1);
+        e.set(m, InterfaceManager::bIsInRenderedMenu, 1);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, IS_CURRENT_RENDERED_MENU_TOPMOST).len(), 2);
+    }
+
+    #[test]
+    fn the_task_manager_is_flushed_waited_on_and_released() {
+        let (mut e, m, _, _) = render_world();
+        returns(&mut e, RENDER_PASS_ACTIVE, 0);
+        // A worker object with the wrapper at +0x190 and a finished
+        // flag at +0x1b0.
+        let manager_object = e.mem.alloc(0x200);
+        e.set_global(WORKER_OBJECT, manager_object);
+        returns(&mut e, WORKER_GET, manager_object);
+        e.mem.set_u32(manager_object + 0x190 + 8, 0xface);
+        e.mem.set_u8(manager_object + 0x1b0, 1);
+        returns(&mut e, WAIT_FOR_SINGLE_OBJECT, 0x102);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, WORKER_FLUSH).len(), 1);
+        // The wait timed out: the blocked byte is set and it waited for
+        // ever; the semaphore is released at the end.
+        assert_eq!(
+            calls(&e, WAIT_FOR_SINGLE_OBJECT),
+            vec![vec![0xface, 0xffff_ffff], vec![0xface, 0xffff_ffff]]
+        );
+        assert_eq!(e.global::<u8>(WORKER_WAS_BLOCKED), 1);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE), vec![vec![0xface, 1, 0]]);
+        // Not finished: no flush.
+        e.mem.set_u8(manager_object + 0x1b0, 0);
+        fn_00713fb0(&mut e, m, 0, 0);
+        assert_eq!(calls(&e, WORKER_FLUSH).len(), 1);
+    }
+
+    #[test]
+    fn the_renderer_object_is_asked_to_fill_only_if_it_is_of_the_kind() {
+        let mut e = world();
+        let target = fake_object(&mut e, &[(0x188, 0)]);
+        returns(&mut e, OBJECT_IS_KIND, 0);
+        fn_007148c0(&mut e, Ptr::new(target), 5, 6);
+        assert!(calls(&e, slot_target(target, 0x188)).is_empty());
+        returns(&mut e, OBJECT_IS_KIND, 1);
+        fn_007148c0(&mut e, Ptr::new(target), 5, 6);
+        assert_eq!(
+            calls(&e, slot_target(target, 0x188)),
+            vec![vec![target, 5, 6]]
+        );
+        assert_eq!(calls(&e, OBJECT_IS_KIND)[0], vec![target, KIND_NAME, 1]);
+    }
+
+    #[test]
+    fn the_task_manager_wrapper_functions() {
+        let mut e = world();
+        // No manager: everything is a no-op.
+        assert_eq!(fn_00714900(&mut e), 0);
+        assert!(!fn_00714a00(&mut e));
+        assert_eq!(fn_00714960(&mut e, 5), 0);
+        assert!(calls(&e, WAIT_FOR_SINGLE_OBJECT).is_empty());
+        let object = e.mem.alloc(0x200);
+        e.set_global(WORKER_OBJECT, object);
+        e.mem.set_u32(object + 0x190, 0xabcd);
+        e.mem.set_u32(object + 0x190 + 8, 0xface);
+        // Release: the pre-step, the semaphore, the first word.
+        assert_eq!(fn_00714900(&mut e), 0xabcd);
+        assert_eq!(calls(&e, BEFORE_RELEASE), vec![vec![object + 0x190]]);
+        assert_eq!(calls(&e, RELEASE_SEMAPHORE), vec![vec![0xface, 1, 0]]);
+        // The finished flag.
+        assert!(!fn_00714a00(&mut e));
+        e.mem.set_u8(object + 0x1b0, 1);
+        assert!(fn_00714a00(&mut e));
+        // A wait that is not a time-out hands over to the result handler.
+        returns(&mut e, WAIT_RESULT_HANDLER, 42);
+        returns(&mut e, WAIT_FOR_SINGLE_OBJECT, 0);
+        assert_eq!(fn_007149b0(&mut e, Ptr::new(object + 0x190), 9), 42);
+        assert_eq!(calls(&e, WAIT_FOR_SINGLE_OBJECT)[0], vec![0xface, 9]);
+        assert_eq!(calls(&e, WAIT_RESULT_HANDLER), vec![vec![object + 0x190]]);
+        // A time-out is 1; the outer wait then sets the byte and waits
+        // again for ever.
+        returns(&mut e, WAIT_FOR_SINGLE_OBJECT, 0x102);
+        assert_eq!(fn_007149b0(&mut e, Ptr::new(object + 0x190), 9), 1);
+        assert_eq!(fn_00714960(&mut e, 5), 0);
+        assert_eq!(e.global::<u8>(WORKER_WAS_BLOCKED), 1);
+        let waits = calls(&e, WAIT_FOR_SINGLE_OBJECT);
+        assert_eq!(
+            waits[waits.len() - 2..],
+            [vec![0xface, 5], vec![0xface, 0xffff_ffff]]
+        );
+        // A wait that did not time out ends it.
+        e.set_global(WORKER_WAS_BLOCKED, 0u8);
+        returns(&mut e, WAIT_FOR_SINGLE_OBJECT, 0);
+        assert_eq!(fn_00714960(&mut e, 5), 0);
+        assert_eq!(e.global::<u8>(WORKER_WAS_BLOCKED), 0);
+        fn_007149f0(&mut e);
+        assert_eq!(e.global::<u8>(WORKER_WAS_BLOCKED), 1);
+    }
+
+    #[test]
+    fn each_render_state_counter_is_reduced_and_its_state_restored() {
+        type Counter = fn(&mut Engine, u32);
+        let table: [(Counter, u32, u32, &[u32]); 14] = [
+            (fn_00714a40, 0x011f_f9d8, 0x00b9_7de0, &[1, 0]),
+            (fn_00714a60, 0x011f_f9dc, 0x00b9_7e30, &[1, 0]),
+            (fn_00714a80, 0x011f_f9e0, 0x00b9_7e80, &[3, 0]),
+            (fn_00714aa0, 0x011f_f9e8, 0x00b9_7ed0, &[0, 0]),
+            (fn_00714ac0, 0x011f_f9ec, 0x00b9_7f20, &[0, 0, 0]),
+            (fn_00714ae0, 0x011f_f9f0, 0x00b9_7fa0, &[0, 0]),
+            (fn_00714b00, 0x011f_f9f4, 0x00b9_7ff0, &[0, 1, 0]),
+            (fn_00714b20, 0x011f_fa00, 0x00b9_80c0, &[0, 0, 0, 0]),
+            (fn_00714b50, 0x011f_fa04, 0x00b9_8180, &[0, 0, 0xff, 0]),
+            (fn_00714b80, 0x011f_fa08, 0x00b9_8230, &[0xff, 0]),
+            (fn_00714bb0, 0x011f_fa0c, 0x00b9_84f0, &[0, 0]),
+            (fn_00714bf0, 0x011f_f9e4, 0x00b9_8320, &[0, 0]),
+            (fn_00714c20, 0x011f_fa20, 0x00b9_8480, &[0, 0]),
+            (fn_00714bd0, 0x011f_fa10, 0, &[]),
+        ];
+        for (function, counter, state, arguments) in table {
+            let mut e = world();
+            e.set_global(counter, 10u32);
+            function(&mut e, 3);
+            assert_eq!(e.global::<u32>(counter), 7, "{counter:x}");
+            if state != 0 {
+                assert_eq!(calls(&e, state), vec![arguments.to_vec()], "{state:x}");
+            }
+            // Wrapping, as the `sub` does.
+            e.set_global(counter, 1u32);
+            function(&mut e, 2);
+            assert_eq!(e.global::<u32>(counter), 0xffff_ffff);
+        }
     }
     // @@TESTS-END@@
 }
