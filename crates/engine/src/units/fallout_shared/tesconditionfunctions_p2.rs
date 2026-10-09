@@ -3,9 +3,10 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesconditionfunctions`]; anything public there may be used here.
 //!
-//! Progress: this part holds `005a2a50` to `005a3c90` (the first session,
-//! 40 functions); the next session continues with the first function after
-//! `005a3c90` (`005a3d00`).
+//! Progress: this part holds `005a2a50` to `005a4f30` (the first session
+//! `005a2a50` to `005a3c90`, the second `005a3d00` to `005a4f30`, 40 functions
+//! each); the next session continues with the first function after
+//! `005a4f30` (`005a5020`).
 //!
 //! The main file keeps its constants and helpers private, so this part
 //! declares again the ones it needs. Every condition function has the shape
@@ -1063,6 +1064,1097 @@ pub fn fn_005a3c90(
     true
 }
 
+// ---------------------------------------------------------------------------
+// Second session: `005a3d00` to `005a4f30`.
+// ---------------------------------------------------------------------------
+
+/// A byte test of the player (`teswater.cpp`, `this` the player): when it
+/// answers no, `fn_005a3d00` reports 1.0.
+const PLAYER_TEST_4EAF60: u32 = 0x004e_af60;
+/// `TESObjectREFR` getters in `tesobjectrefr.cpp` (`this` the reference):
+/// the value behind `GetCauseofDeath`, `TESObjectREFR::GetDismembered`
+/// (Xbox PDB, one limb argument) and `TESObjectREFR::GetLastHitLimb`
+/// (Xbox PDB).
+const REF_GET_CAUSE_OF_DEATH: u32 = 0x0057_30d0;
+const REF_GET_DISMEMBERED: u32 = 0x0057_3090;
+const REF_GET_LAST_HIT_LIMB: u32 = 0x0057_3110;
+/// Virtual (vtable `+0x344`) on an actor, called with (the player, 0): an
+/// `int` that `fn_005a3e90` compares with a setting.
+const VSLOT_ACTOR_INT_344: u32 = 0x344;
+/// The static object (`0x011d0844`) whose method `0043d4d0` (`modelloader.cpp`)
+/// returns the address of an `int` setting for `fn_005a3e90`.
+const SETTING_OBJECT: u32 = 0x011d_0844;
+const SETTING_GET_INT_ADDRESS: u32 = 0x0043_d4d0;
+/// `[this + 0xc0]` of an actor is the value `GetKiller` compares with.
+const ACTOR_KILLER_OFFSET: u32 = 0xc0;
+/// `ExtraDataList::GetDismembermentExtra` (Xbox PDB), then two unnamed
+/// getters that `GetKillerObject` chains on its result.
+const EXTRA_LIST_GET_DISMEMBERMENT_EXTRA: u32 = 0x0042_e8c0;
+const DISMEMBERMENT_GET_LIST_NODE: u32 = 0x0082_5c00;
+/// `FormList`-like `GetList` (`00500940`, main file's `FORM_LIST_GET_LIST`):
+/// `this` the form, one pointer to a node pointer; the result is the node
+/// whose test `0x005f65d0` is called on.
+const NODE_TEST_5F65D0: u32 = 0x005f_65d0;
+/// The flags word of an actor (`actor.cpp`, `this` the actor).
+const ACTOR_GET_FLAGS: u32 = 0x0088_46e0;
+/// `Actor::GetAnimAction` (Xbox PDB).
+const ACTOR_GET_ANIM_ACTION: u32 = 0x008a_7570;
+/// `3.0` and `4.0` (`double`s in the exe's data); `2.0` is [`DOUBLE_TWO`].
+const DOUBLE_THREE: u32 = 0x0102_1928;
+const DOUBLE_FOUR: u32 = 0x0101_db80;
+/// `tesreactionform.cpp`: `this` the object at `param1 + 0x24`, one argument.
+const REACTION_FORM_GET_VALUE: u32 = 0x0048_c1b0;
+/// Virtual (vtable `+0x3f8`) on a reference: an object (or null) that
+/// `fn_005a4240` and `fn_005a42b0` count.
+const VSLOT_REF_COUNTED_OBJECT: u32 = 0x3f8;
+/// `combatgroupstrategy.cpp`: the count of the object in ECX.
+const OBJECT_GET_COUNT: u32 = 0x0099_0890;
+/// Virtual (vtable `+0x388`) on the actor's middle-high process: a byte.
+const VSLOT_PROCESS_BYTE_388: u32 = 0x388;
+/// The process-list singleton (`0x011e0e80`) and its byte test of a
+/// reference (`processlists.cpp`).
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+const PROCESS_LISTS_TEST_REFERENCE: u32 = 0x0097_3d50;
+/// Virtuals (vtable `+0xfc`, `+0x2d0`, `+0x2d8`) on a reference: the test
+/// behind the dialogue emotion functions (the unit's main file names slot
+/// `0xfc` `IsMobileObject`), the emotion, and a call that returns nothing
+/// used.
+const VSLOT_EMOTION: u32 = 0x2d0;
+const VSLOT_EMOTION_VALUE: u32 = 0x2d8;
+/// `TESIdleManager::GetUsedItem` (Xbox PDB): the item or null.
+const IDLE_MANAGER_GET_USED_ITEM: u32 = 0x0060_08f0;
+/// Virtual (vtable `+0x140`) on the used item: non-zero for a water object.
+const VSLOT_ITEM_WATER_TEST: u32 = 0x140;
+/// Virtual (vtable `+0x4a0`) on an actor: (perk, flag) -> rank byte.
+const VSLOT_ACTOR_PERK_RANK: u32 = 0x4a0;
+/// `Actor::GetFactionFightReaction` (Xbox PDB): `this` the actor, (other
+/// actor, pointer to an out byte).
+const ACTOR_GET_FACTION_FIGHT_REACTION: u32 = 0x008b_87a0;
+/// Virtual (vtable `+0x38c`) on the actor's process: the last idle played.
+const VSLOT_PROCESS_LAST_IDLE: u32 = 0x38c;
+/// `MiddleHighProcess::GetForceNextUpdate` (Xbox PDB).
+const MIDDLE_HIGH_GET_FORCE_NEXT_UPDATE: u32 = 0x0056_6950;
+/// `ExtraDataList::GetPlayerCrimeList` (Xbox PDB).
+const EXTRA_LIST_GET_PLAYER_CRIME_LIST: u32 = 0x0041_cf00;
+/// The crime counts of an actor other than the player (`actor.cpp`).
+const ACTOR_GET_MINOR_CRIME_COUNT: u32 = 0x008b_7e20;
+const ACTOR_GET_MAJOR_CRIME_COUNT: u32 = 0x008b_7f00;
+/// A getter of the player (`actor.cpp`, `this` the player).
+const PLAYER_GET_VALUE_89F4E0: u32 = 0x0089_f4e0;
+/// `bgsdestructibleobjectform.cpp`, cdecl, one reference: the stage.
+const GET_DESTRUCTION_STAGE: u32 = 0x0047_7430;
+/// `Actor::CalculateCombatStrength` (Xbox PDB): `this` the actor, one
+/// `float`; the strength in ST0.
+const ACTOR_CALCULATE_COMBAT_STRENGTH: u32 = 0x008a_cbe0;
+/// The `float` (`-1.0`) passed to it.
+const COMBAT_STRENGTH_ARGUMENT: u32 = 0x0101_2054;
+/// `TESActorBaseData::GetAlignmentForKarma` (Xbox PDB): cdecl, a `float`.
+const GET_ALIGNMENT_FOR_KARMA: u32 = 0x0047_e040;
+/// The actor-value owner embedded at `+0xa4` of an actor, and its virtual
+/// `+0xc` (actor value in, `float` in ST0 out).
+const ACTOR_VALUE_OWNER_OFFSET: u32 = 0xa4;
+const VSLOT_OWNER_GET_VALUE: u32 = 0xc;
+/// The actor value `GetIsAlignment` reads (Karma).
+const ACTOR_VALUE_KARMA: u32 = 0x17;
+/// Tables of string pointers: alignment names and equip type names.
+const ALIGNMENT_NAMES: u32 = 0x0118_6cf4;
+const EQUIP_TYPE_NAMES: u32 = 0x0118_69bc;
+/// `BGSEquipType::GetEquipType` (Xbox PDB): cdecl, the item.
+const GET_EQUIP_TYPE: u32 = 0x0047_9430;
+/// Virtual (vtable `+0x20c`) on the actor's process: an object (or null)
+/// that the same virtual is then called on again with the process.
+const VSLOT_PROCESS_AGGRO_OBJECT: u32 = 0x20c;
+/// `extradatalist.cpp`: a getter on the object in ECX, which
+/// `GetAggroRadiusViolated` compares with 14.
+const AGGRO_GET_STATE: u32 = 0x0041_ca90;
+const AGGRO_STATE_VIOLATED: u32 = 0x0e;
+/// `"false"` and `"true"` in the exe's strings.
+const TEXT_FALSE: u32 = 0x0102_fd24;
+const TEXT_TRUE: u32 = 0x0102_fd2c;
+
+/// `"true"` when the result is above 0.0, else `"false"` (the debug lines).
+fn trace_text(e: &mut Engine, result: Ptr) -> u32 {
+    if e.mem.f64(result.addr()) > 0.0 {
+        TEXT_TRUE
+    } else {
+        TEXT_FALSE
+    }
+}
+
+/// The debug line `format(ftol(*result))`.
+fn trace_result_as_int(e: &mut Engine, format: u32, result: Ptr) {
+    let value = e.mem.f64(result.addr());
+    let rounded = e.call(FTOL, &args![value]).u32();
+    e.call(DEBUG_PRINT, &args![format, rounded]);
+}
+
+fn set_minus_one(e: &mut Engine, result: Ptr) {
+    let minus_one: f64 = e.global(DOUBLE_MINUS_ONE);
+    set_result(e, result, minus_one);
+}
+
+// Translated from 005a3d00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: 1.0 when the byte test
+/// `004eaf60` of the player answers no, else 0.0.
+pub fn fn_005a3d00(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    if !e.call(PLAYER_TEST_4EAF60, &args![player]).bool() {
+        set_result(e, result, 1.0);
+    }
+    true
+}
+
+// Translated from 005a3d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetCauseofDeathConditionFunction` (Xbox PDB): -1.0, or for an
+/// actor the cause of death (`005730d0`). The reference is not checked for
+/// null.
+pub fn script_get_causeof_death_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_minus_one(e, result);
+    if e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+        let cause = e.call(REF_GET_CAUSE_OF_DEATH, &args![reference]).i32();
+        set_result(e, result, cause as f64);
+    }
+    if trace_enabled(e) {
+        // "Cause of death is >> %0.2f"
+        trace_result(e, 0x0103_5e4c, result);
+    }
+    true
+}
+
+// Translated from 005a3db0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsLimbGoneConditionFunction` (Xbox PDB): 1.0 when the reference
+/// is an actor and `TESObjectREFR::GetDismembered` (Xbox PDB) says the limb
+/// `param1` is gone.
+pub fn script_is_limb_gone_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.call(REF_GET_DISMEMBERED, &args![actor, param1]).bool() {
+        set_result(e, result, 1.0);
+    }
+    true
+}
+
+// Translated from 005a3e10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetKillingBlowLimbConditionFunction` (Xbox PDB): -1.0, or for an
+/// actor `TESObjectREFR::GetLastHitLimb` (Xbox PDB). The reference is not
+/// checked for null.
+pub fn script_get_killing_blow_limb_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_minus_one(e, result);
+    if e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool() {
+        let limb = e.call(REF_GET_LAST_HIT_LIMB, &args![reference]).i32();
+        set_result(e, result, limb as f64);
+    }
+    if trace_enabled(e) {
+        // "Last hit limb is >> %0.0f"
+        trace_result(e, 0x0103_5e68, result);
+    }
+    true
+}
+
+// Translated from 005a3e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: 1.0 when the actor's virtual
+/// `+0x344`, called with (the player, 0), is at least the setting whose
+/// address `0043d4d0` returns (signed comparison).
+pub fn fn_005a3e90(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let player = e.global::<u32>(PLAYER);
+        let value = e
+            .vcall(actor.addr(), VSLOT_ACTOR_INT_344, &args![player, 0u32])
+            .i32();
+        let setting = e
+            .call(SETTING_GET_INT_ADDRESS, &args![SETTING_OBJECT])
+            .u32();
+        let limit = e.mem.u32(setting) as i32;
+        if value >= limit {
+            set_result(e, result, 1.0);
+        }
+    }
+    true
+}
+
+// Translated from 005a3f00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetKillerConditionFunction` (Xbox PDB): for an actor whose
+/// virtual `+0x22c` (called with 0) answers yes, 1.0 when `param1` is the
+/// word at `+0xc0` of the actor. The debug line is only printed for actors.
+pub fn script_get_killer_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        if e.vcall(actor.addr(), VSLOT_ACTOR_TEST_22C, &args![0u32])
+            .bool()
+            && param1 == e.mem.u32(actor.addr() + ACTOR_KILLER_OFFSET)
+        {
+            set_result(e, result, 1.0);
+        }
+        if trace_enabled(e) {
+            // "IsKiller >> %0.2f"
+            trace_result(e, 0x0103_5e84, result);
+        }
+    }
+    true
+}
+
+// Translated from 005a3fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetKillerObjectConditionFunction` (Xbox PDB): for an actor with
+/// a process whose virtual `+0x22c` answers yes and a non-null `param1`:
+/// takes the actor's dismemberment extra data (through `ExtraDataList::
+/// GetDismembermentExtra`, Xbox PDB, and `00825c00`) and sets 1.0 when
+/// `00500940(param1, &node)` then `005f65d0` says yes. Unlike its
+/// neighbours it does not clear the result first, so a caller's value is
+/// left (and printed) when nothing sets it.
+pub fn script_get_killer_object_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        if process != 0
+            && e.vcall(actor.addr(), VSLOT_ACTOR_TEST_22C, &args![0u32])
+                .bool()
+            && param1 != 0
+        {
+            let list = e.call(REF_GET_EXTRA_DATA_LIST, &args![actor]).u32();
+            let extra = e
+                .call(EXTRA_LIST_GET_DISMEMBERMENT_EXTRA, &args![list])
+                .u32();
+            let node = e.call(DISMEMBERMENT_GET_LIST_NODE, &args![extra]).u32();
+            if node != 0 {
+                let found = e.with_stack(4, |e, slot| {
+                    e.mem.set_u32(slot.addr(), node);
+                    let list_node = e.call(FORM_LIST_GET_LIST, &args![param1, slot]).u32();
+                    e.call(NODE_TEST_5F65D0, &args![list_node]).bool()
+                });
+                if found {
+                    set_result(e, result, 1.0);
+                }
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "IsKillerObject >> %0.2f"
+        trace_result(e, 0x0103_5e98, result);
+    }
+    true
+}
+
+// Translated from 005a4090 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: when `param1` and `param2` are
+/// both non-null, the value `0048c1b0(param1 + 0x24, param2)`
+/// (`tesreactionform.cpp`); otherwise the result is left alone.
+pub fn fn_005a4090(e: &mut Engine, _reference: u32, param1: u32, param2: u32, result: Ptr) -> bool {
+    if param2 != 0 && param1 != 0 {
+        let value = e
+            .call(REACTION_FORM_GET_VALUE, &args![param1 + 0x24, param2])
+            .i32();
+        set_result(e, result, value as f64);
+    }
+    true
+}
+
+// Translated from 005a40d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor, the lowest of
+/// the low four bits of the actor flags word `008846e0` that is set, as
+/// 1.0 / 2.0 / 3.0 / 4.0 (bit 0 / 1 / 2 / 3); 0.0 for none.
+pub fn fn_005a40d0(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let flags = e.call(ACTOR_GET_FLAGS, &args![actor]).u32() & 0xf;
+        if flags & 1 != 0 {
+            set_result(e, result, 1.0);
+        } else if flags & 2 != 0 {
+            let two: f64 = e.global(DOUBLE_TWO);
+            set_result(e, result, two);
+        } else if flags & 4 != 0 {
+            let three: f64 = e.global(DOUBLE_THREE);
+            set_result(e, result, three);
+        } else if flags & 8 != 0 {
+            let four: f64 = e.global(DOUBLE_FOUR);
+            set_result(e, result, four);
+        }
+    }
+    true
+}
+
+// Translated from 005a4160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor, 1.0 when bit
+/// `0x10` of the flags word `008846e0` is set, else 2.0 when bit `0x20` is.
+pub fn fn_005a4160(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let flags = e.call(ACTOR_GET_FLAGS, &args![actor]).u32() & 0x30;
+        if flags & 0x10 != 0 {
+            set_result(e, result, 1.0);
+        } else if flags & 0x20 != 0 {
+            let two: f64 = e.global(DOUBLE_TWO);
+            set_result(e, result, two);
+        }
+    }
+    true
+}
+
+// Translated from 005a41c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAnimActionConditionFunction` (Xbox PDB): -1.0, or for an
+/// actor `Actor::GetAnimAction` (Xbox PDB).
+pub fn script_get_anim_action_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_minus_one(e, result);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let action = e.call(ACTOR_GET_ANIM_ACTION, &args![actor]).i32();
+        set_result(e, result, action as f64);
+    }
+    true
+}
+
+// Translated from 005a4210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: 0.0 when the reference is null
+/// or is `param1`, else 1.0.
+pub fn fn_005a4210(e: &mut Engine, reference: u32, param1: u32, _param2: u32, result: Ptr) -> bool {
+    if reference == 0 || reference == param1 {
+        set_result(e, result, 0.0);
+    } else {
+        set_result(e, result, 1.0);
+    }
+    true
+}
+
+// Translated from 005a4240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor whose virtual
+/// `+0x3f8` returns an object, the count `00990890` of that object.
+pub fn fn_005a4240(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let object = e
+            .vcall(actor.addr(), VSLOT_REF_COUNTED_OBJECT, &args![])
+            .u32();
+        if object != 0 {
+            let count = e.call(OBJECT_GET_COUNT, &args![object]).u32();
+            set_result(e, result, count as f64);
+        }
+    }
+    true
+}
+
+// Translated from 005a42b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor whose virtual
+/// `+0x3f8` returns an object, `fn_005a4320` of that object (as an
+/// unsigned number).
+pub fn fn_005a42b0(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let object = e
+            .vcall(actor.addr(), VSLOT_REF_COUNTED_OBJECT, &args![])
+            .ptr::<()>();
+        if !object.is_null() {
+            let value = fn_005a4320(e, object);
+            set_result(e, result, value as f64);
+        }
+    }
+    true
+}
+
+// Translated from 005a4320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `0044ddc0` on `this + 8` and returns its result.
+pub fn fn_005a4320(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(OBJECT_GET_FIELD_08, &args![this.addr() + 8]).u32()
+}
+
+// Translated from 005a4340 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor with a process,
+/// the byte returned by the process's virtual `+0x388`.
+pub fn fn_005a4340(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.call(ACTOR_GET_PROCESS, &args![actor]).u32() != 0 {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let value = e.vcall(process, VSLOT_PROCESS_BYTE_388, &args![]).u32() & 0xff;
+        set_result(e, result, value as f64);
+    }
+    true
+}
+
+// Translated from 005a43b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: for an actor, the byte test
+/// `00973d50` of the process lists with the actor.
+pub fn fn_005a43b0(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let value = e
+            .call(PROCESS_LISTS_TEST_REFERENCE, &args![PROCESS_LISTS, actor])
+            .u32()
+            & 0xff;
+        set_result(e, result, value as f64);
+    }
+    true
+}
+
+// Translated from 005a4410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsObjectTypeConditionFunction` (Xbox PDB): 1.0 when the form
+/// type of the reference's base form is `param1`. Neither the reference nor
+/// the base form is checked for null.
+pub fn script_get_is_object_type_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let base = e.call(REF_GET_BASE_FORM, &args![reference]).u32();
+    let form_type = e.call(FORM_GET_TYPE, &args![base]).u32();
+    if form_type == param1 {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetIsObjectType is  >> %0.2f"
+        trace_result(e, 0x0103_5eb0, result);
+    }
+    true
+}
+
+// Translated from 005a4480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDialogueEmotionConditionFunction` (Xbox PDB): 0.0, or when
+/// the reference's virtual `+0xfc` answers yes: the emotion (virtual
+/// `+0x2d0`), changed to -1.0 when the byte at `+0x86` of the reference
+/// (`fn_005a4520`) is zero. The reference is not checked for null.
+pub fn script_get_dialogue_emotion_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.vcall(reference.addr(), VSLOT_IS_MOBILE_OBJECT, &args![])
+        .bool()
+    {
+        let emotion = e.vcall(reference.addr(), VSLOT_EMOTION, &args![]).i32();
+        set_result(e, result, emotion as f64);
+        if fn_005a4520(e, reference) == 0 {
+            set_minus_one(e, result);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetEmotion >> %0.2f"
+        trace_result(e, 0x0103_5ed0, result);
+    }
+    true
+}
+
+// Translated from 005a4520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x86` of the object.
+pub fn fn_005a4520(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x86)
+}
+
+// Translated from 005a4540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDialogueEmotionValueConditionFunction` (Xbox PDB): always
+/// 0.0; when the reference's virtual `+0xfc` answers yes it also calls
+/// virtual `+0x2d8` and ignores what it returns. The reference is not
+/// checked for null.
+pub fn script_get_dialogue_emotion_value_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.vcall(reference.addr(), VSLOT_IS_MOBILE_OBJECT, &args![])
+        .bool()
+    {
+        e.vcall(reference.addr(), VSLOT_EMOTION_VALUE, &args![]);
+    }
+    if trace_enabled(e) {
+        // "GetEmotionValue >> %0.2f"
+        trace_result(e, 0x0103_5ee4, result);
+    }
+    true
+}
+
+// Translated from 005a45c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsWaterObjectConditionFunction` (Xbox PDB): 1.0 when
+/// `TESIdleManager::GetUsedItem` (Xbox PDB) returns an item whose virtual
+/// `+0x140` is non-zero.
+pub fn script_is_water_object_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let item = e.call(IDLE_MANAGER_GET_USED_ITEM, &args![]).u32();
+    if item != 0 && e.vcall(item, VSLOT_ITEM_WATER_TEST, &args![]).u32() != 0 {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "IsWaterActivator >> %0.2f"
+        trace_result(e, 0x0103_5f00, result);
+    }
+    true
+}
+
+// Translated from 005a4630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::HasPerkConditionFunction` (Xbox PDB): for an actor, 1.0 when its
+/// virtual `+0x4a0` called with (`param1`, `param2 != 0`) returns a non-zero
+/// rank byte.
+pub fn script_has_perk_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let rank = e
+            .vcall(
+                actor.addr(),
+                VSLOT_ACTOR_PERK_RANK,
+                &args![param1, (param2 != 0) as u32],
+            )
+            .u32()
+            & 0xff;
+        if trace_enabled(e) {
+            // "Perk Rank >> %d"
+            e.call(DEBUG_PRINT, &args![0x0103_5f1cu32, rank]);
+        }
+        if rank != 0 {
+            set_result(e, result, 1.0);
+        }
+    }
+    true
+}
+
+// Translated from 005a46d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetFactionRelationConditionFunction` (Xbox PDB): for an actor,
+/// `Actor::GetFactionFightReaction` (Xbox PDB) of the actor towards the
+/// actor `param1`.
+pub fn script_get_faction_relation_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let reaction = e.with_stack(1, |e, out| {
+            e.mem.set_u8(out.addr(), 0);
+            e.call(ACTOR_GET_FACTION_FIGHT_REACTION, &args![actor, param1, out])
+                .i32()
+        });
+        set_result(e, result, reaction as f64);
+        if trace_enabled(e) {
+            // "Faction Relation  >> %d" (the result truncated toward zero)
+            let truncated = e.mem.f64(result.addr()) as i64 as u32;
+            e.call(DEBUG_PRINT, &args![0x0103_5f2cu32, truncated]);
+        }
+    }
+    true
+}
+
+// Translated from 005a4780 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsLastPlayedIdleConditionFunction` (Xbox PDB): for an actor,
+/// 1.0 when the process's virtual `+0x38c` returns `param1`. The process is
+/// not checked for null. The debug line passes the `double` result to a
+/// `%d`.
+pub fn script_is_last_played_idle_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+        let idle = e.vcall(process, VSLOT_PROCESS_LAST_IDLE, &args![]).u32();
+        if idle == param1 {
+            set_result(e, result, 1.0);
+        }
+        if trace_enabled(e) {
+            // "The last idle played was  >> %d"
+            trace_result(e, 0x0103_5f44, result);
+        }
+    }
+    true
+}
+
+// Translated from 005a4820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPlayerTeammateConditionFunction` (Xbox PDB): for an actor,
+/// 1.0 when `MiddleHighProcess::GetForceNextUpdate` (Xbox PDB; the map's
+/// name for this body) answers yes.
+pub fn script_get_player_teammate_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        if e.call(MIDDLE_HIGH_GET_FORCE_NEXT_UPDATE, &args![actor])
+            .bool()
+        {
+            set_result(e, result, 1.0);
+        }
+        if trace_enabled(e) {
+            // "Player teammate  >> %d"
+            trace_result_as_int(e, 0x0103_5f64, result);
+        }
+    }
+    true
+}
+
+// Translated from 005a48a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPlayerTeammateCountConditionFunction` (Xbox PDB): the
+/// player's teammate count (`fn_005a4910`, unsigned).
+pub fn script_get_player_teammate_count_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    let count = fn_005a4910(e, Ptr::new(player));
+    set_result(e, result, count as f64);
+    if trace_enabled(e) {
+        // "Player teammate count  >> %d"
+        trace_result_as_int(e, 0x0103_5f7c, result);
+    }
+    true
+}
+
+// Translated from 005a4910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0xd68` of the player (the teammate count).
+pub fn fn_005a4910(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0xd68)
+}
+
+// Translated from 005a4930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetActorCrimePlayerEnemyConditionFunction` (Xbox PDB): for an
+/// actor whose extra data has a player crime list (`ExtraDataList::
+/// GetPlayerCrimeList`, Xbox PDB): 1.0 when that list's node test
+/// `008256d0` answers no.
+pub fn script_get_actor_crime_player_enemy_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let list = e.call(REF_GET_EXTRA_DATA_LIST, &args![actor]).u32();
+        if e.call(EXTRA_LIST_GET_PLAYER_CRIME_LIST, &args![list]).u32() != 0 {
+            let list = e.call(REF_GET_EXTRA_DATA_LIST, &args![actor]).u32();
+            let crimes = e.call(EXTRA_LIST_GET_PLAYER_CRIME_LIST, &args![list]).u32();
+            if !e.call(LIST_NODE_IS_EMPTY, &args![crimes]).bool() {
+                set_result(e, result, 1.0);
+            }
+        }
+        // "This actor is not an enemy of player because of crime" /
+        // "This actor is an enemy of player because of crime"
+        if let Some(format) = trace_choice(e, result, 0x0103_5f9c, 0x0103_5fd4) {
+            e.call(DEBUG_PRINT, &args![format]);
+        }
+    }
+    true
+}
+
+// Translated from 005a49f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetActorFactionPlayerEnemyConditionFunction` (Xbox PDB): for an
+/// actor, 1.0 when `Actor::GetFactionFightReaction` (Xbox PDB) of the actor
+/// towards the player sets its out byte.
+pub fn script_get_actor_faction_player_enemy_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let player = e.global::<u32>(PLAYER);
+        let enemy = e.with_stack(1, |e, out| {
+            e.mem.set_u8(out.addr(), 0);
+            e.call(ACTOR_GET_FACTION_FIGHT_REACTION, &args![actor, player, out]);
+            e.mem.u8(out.addr())
+        });
+        if enemy != 0 {
+            set_result(e, result, 1.0);
+        }
+        // "This actor is not an enemy of player because of  a faction crime" /
+        // "This actor's faction is an enemy of player because of crime"
+        if let Some(format) = trace_choice(e, result, 0x0103_6008, 0x0103_604c) {
+            e.call(DEBUG_PRINT, &args![format]);
+        }
+    }
+    true
+}
+
+// Translated from 005a4aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetMinorCrimeCountConditionFunction` (Xbox PDB): for an actor,
+/// the minor crime count: `fn_005a4b40` for the player, `008b7e20` for any
+/// other actor.
+pub fn script_get_minor_crime_count_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let count = if actor.addr() == e.global::<u32>(PLAYER) {
+            fn_005a4b40(e, actor)
+        } else {
+            e.call(ACTOR_GET_MINOR_CRIME_COUNT, &args![actor]).i32()
+        };
+        set_result(e, result, count as f64);
+        if trace_enabled(e) {
+            // "The number of minor crimes is %.2f"
+            trace_result(e, 0x0103_6088, result);
+        }
+    }
+    true
+}
+
+// Translated from 005a4b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x13c` of the player (its minor crime count).
+pub fn fn_005a4b40(e: &mut Engine, this: Ptr) -> i32 {
+    e.mem.u32(this.addr() + 0x13c) as i32
+}
+
+// Translated from 005a4b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetMajorCrimeCountConditionFunction` (Xbox PDB): for an actor,
+/// the major crime count: `fn_005a4c00` for the player, `008b7f00` for any
+/// other actor.
+pub fn script_get_major_crime_count_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let count = if actor.addr() == e.global::<u32>(PLAYER) {
+            fn_005a4c00(e, actor) as i32
+        } else {
+            e.call(ACTOR_GET_MAJOR_CRIME_COUNT, &args![actor]).i32()
+        };
+        set_result(e, result, count as f64);
+        if trace_enabled(e) {
+            // "The number of major crimes is %.2f"
+            trace_result(e, 0x0103_60ac, result);
+        }
+    }
+    true
+}
+
+// Translated from 005a4c00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `+0x140` of the player without its top two bits (its major
+/// crime count).
+pub fn fn_005a4c00(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x140) & 0x3fff_ffff
+}
+
+// Translated from 005a4c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name: 1.0 when `param1` is non-null
+/// and is what the player getter `0089f4e0` returns.
+pub fn fn_005a4c20(
+    e: &mut Engine,
+    _reference: u32,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if param1 != 0 {
+        let player = e.global::<u32>(PLAYER);
+        if e.call(PLAYER_GET_VALUE_89F4E0, &args![player]).u32() == param1 {
+            set_result(e, result, 1.0);
+        }
+    }
+    true
+}
+
+// Translated from 005a4c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDestructionStageConditionFunction` (Xbox PDB): -1.0, or for a
+/// non-null reference the destruction stage `00477430` (no actor test).
+pub fn script_get_destruction_stage_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_minus_one(e, result);
+    if !reference.is_null() {
+        let stage = e.call(GET_DESTRUCTION_STAGE, &args![reference]).i32();
+        set_result(e, result, stage as f64);
+    }
+    if trace_enabled(e) {
+        // "GetDestructionStage >> %.2f"
+        trace_result(e, 0x0103_60d0, result);
+    }
+    true
+}
+
+// Translated from 005a4cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetThreatRatioConditionFunction` (Xbox PDB): for an actor and a
+/// non-null `param1` (another reference): the ratio of
+/// `Actor::CalculateCombatStrength` (Xbox PDB) of the reference to that of
+/// `param1`, each called with the `float` -1.0. Otherwise 0.0, with a
+/// different debug line.
+pub fn script_get_threat_ratio_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if reference.is_null()
+        || !e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool()
+        || param1.is_null()
+    {
+        if trace_enabled(e) {
+            // The line printed when the ratio cannot be computed.
+            e.call(DEBUG_PRINT, &args![0x0103_60ecu32]);
+        }
+        return true;
+    }
+    let argument: f32 = e.global(COMBAT_STRENGTH_ARGUMENT);
+    let own = e
+        .call(ACTOR_CALCULATE_COMBAT_STRENGTH, &args![reference, argument])
+        .f64();
+    let other = e
+        .call(ACTOR_CALCULATE_COMBAT_STRENGTH, &args![param1, argument])
+        .f64();
+    set_result(e, result, own / other);
+    if trace_enabled(e) {
+        let value = e.mem.f64(result.addr());
+        let other_name = e.vcall(param1.addr(), VSLOT_FORM_GET_NAME, &args![]).u32();
+        let own_name = e
+            .vcall(reference.addr(), VSLOT_FORM_GET_NAME, &args![])
+            .u32();
+        // "GetThreatRatio: '%s' to '%s' >> %.2f"
+        e.call(
+            DEBUG_PRINT,
+            &args![0x0103_6108u32, own_name, other_name, value],
+        );
+    }
+    true
+}
+
+// Translated from 005a4dd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsAlignmentConditionFunction` (Xbox PDB): for an actor, 1.0
+/// when `TESActorBaseData::GetAlignmentForKarma` (Xbox PDB) of the Karma
+/// value (the owner at `+0xa4`, virtual `+0xc` with actor value `0x17`) is
+/// `param1`. The debug line is printed for any reference, with the name
+/// from the table at `0x01186cf4`.
+pub fn script_get_is_alignment_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let karma = e
+            .vcall(
+                actor.addr() + ACTOR_VALUE_OWNER_OFFSET,
+                VSLOT_OWNER_GET_VALUE,
+                &args![ACTOR_VALUE_KARMA],
+            )
+            .f32();
+        let alignment = e.call(GET_ALIGNMENT_FOR_KARMA, &args![karma]).u32();
+        if alignment == param1 {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        let name = e.mem.u32(ALIGNMENT_NAMES + param1.wrapping_mul(4));
+        let text = trace_text(e, result);
+        // "GetIsAlignment '%s' >> %s"
+        e.call(DEBUG_PRINT, &args![0x0103_6130u32, name, text]);
+    }
+    true
+}
+
+// Translated from 005a4ea0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsUsedItemEquipTypeConditionFunction` (Xbox PDB): 1.0 when
+/// `TESIdleManager::GetUsedItem` (Xbox PDB) returns an item whose
+/// `BGSEquipType::GetEquipType` (Xbox PDB) is `param1`. The debug line uses
+/// the name table at `0x011869bc`.
+pub fn script_get_is_used_item_equip_type_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.call(IDLE_MANAGER_GET_USED_ITEM, &args![]).u32() != 0 {
+        let item = e.call(IDLE_MANAGER_GET_USED_ITEM, &args![]).u32();
+        if e.call(GET_EQUIP_TYPE, &args![item]).u32() == param1 {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        let name = e.mem.u32(EQUIP_TYPE_NAMES + param1.wrapping_mul(4));
+        let text = trace_text(e, result);
+        // "GetIsUsedItemEquipType '%s' >> %s"
+        e.call(DEBUG_PRINT, &args![0x0103_614cu32, name, text]);
+    }
+    true
+}
+
+// Translated from 005a4f30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAggroRadiusViolatedConditionFunction` (Xbox PDB): for an
+/// actor with a process whose virtual `+0x20c` returns an object, 1.0 when
+/// the same virtual of the process, called again, gives an object whose
+/// `0041ca90` is 14.
+pub fn script_get_aggro_radius_violated_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        if e.call(ACTOR_GET_PROCESS, &args![actor]).u32() != 0 {
+            let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+            if e.vcall(process, VSLOT_PROCESS_AGGRO_OBJECT, &args![]).u32() != 0 {
+                let process = e.call(ACTOR_GET_PROCESS, &args![actor]).u32();
+                let object = e.vcall(process, VSLOT_PROCESS_AGGRO_OBJECT, &args![]).u32();
+                if e.call(AGGRO_GET_STATE, &args![object]).u32() == AGGRO_STATE_VIOLATED {
+                    set_result(e, result, 1.0);
+                }
+            }
+        }
+        if trace_enabled(e) {
+            let name = e.call(REF_GET_NAME, &args![reference]).u32();
+            // "%s does not have his aggro radius violated " /
+            // "%s has his aggro radius violated "
+            let format = if e.mem.f64(result.addr()) > 0.0 {
+                0x0103_619cu32
+            } else {
+                0x0103_6170
+            };
+            e.call(DEBUG_PRINT, &args![format, name]);
+        }
+    }
+    true
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1106,6 +2198,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a3bf0, fn_005a3bf0(u32, u32, u32, Ptr) -> bool),
         entry!(0x005a3c30, fn_005a3c30(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x005a3c90, fn_005a3c90(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3d00, fn_005a3d00(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a3d30, script_get_causeof_death_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3db0, script_is_limb_gone_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3e10, script_get_killing_blow_limb_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3e90, fn_005a3e90(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3f00, script_get_killer_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a3fa0, script_get_killer_object_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4090, fn_005a4090(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a40d0, fn_005a40d0(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4160, fn_005a4160(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a41c0, script_get_anim_action_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4210, fn_005a4210(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a4240, fn_005a4240(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a42b0, fn_005a42b0(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4320, fn_005a4320(Ptr) -> u32),
+        entry!(0x005a4340, fn_005a4340(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a43b0, fn_005a43b0(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4410, script_get_is_object_type_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4480, script_get_dialogue_emotion_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4520, fn_005a4520(Ptr) -> u8),
+        entry!(0x005a4540, script_get_dialogue_emotion_value_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a45c0, script_is_water_object_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a4630, script_has_perk_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a46d0, script_get_faction_relation_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4780, script_is_last_played_idle_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4820, script_get_player_teammate_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a48a0, script_get_player_teammate_count_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a4910, fn_005a4910(Ptr) -> u32),
+        entry!(0x005a4930, script_get_actor_crime_player_enemy_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a49f0, script_get_actor_faction_player_enemy_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4aa0, script_get_minor_crime_count_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4b40, fn_005a4b40(Ptr) -> i32),
+        entry!(0x005a4b60, script_get_major_crime_count_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4c00, fn_005a4c00(Ptr) -> u32),
+        entry!(0x005a4c20, fn_005a4c20(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a4c60, script_get_destruction_stage_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4cd0, script_get_threat_ratio_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a4dd0, script_get_is_alignment_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a4ea0, script_get_is_used_item_equip_type_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a4f30, script_get_aggro_radius_violated_condition_function(Ptr, u32, u32, Ptr) -> bool),
     ]
 }
 
@@ -1135,6 +2267,9 @@ mod tests {
             0x011c_6000,
             0x011c_a000,
             0x011d_e000,
+            0x0101_d000,
+            0x0102_1000,
+            0x0118_6000,
         ] {
             e.map(page, 0x1000);
         }
@@ -1142,6 +2277,11 @@ mod tests {
         e.set_global(DOUBLE_ZERO, 0.0f64);
         e.set_global(DOUBLE_MINUS_ONE, -1.0f64);
         e.register(DEBUG_PRINT, |_, _| Ret::default());
+        // `_ftol2`: the `double` argument truncated.
+        e.register(FTOL, |_, a| {
+            let value = f64::from_bits(a[0] as u64 | (a[1] as u64) << 32);
+            (value as i32 as u32).into_ret()
+        });
         e.register(IS_ACTOR_YES, |_, _| true.into_ret());
         e.register(IS_ACTOR_NO, |_, _| false.into_ret());
         e.register(SLOT_YES, |_, _| true.into_ret());
@@ -1933,5 +3073,751 @@ mod tests {
         assert_eq!(run(&mut e, 0x005a_3c90, a, 0, 0), (true, 0.0));
         let plain = non_actor(&mut e);
         assert_eq!(run(&mut e, 0x005a_3c90, plain, 0, 0), (true, 0.0));
+    }
+
+    // -----------------------------------------------------------------
+    // Second session: `005a3d00` to `005a4f30`.
+    // -----------------------------------------------------------------
+
+    /// Virtual functions of the second session's tests: a name each, and the
+    /// words the other slots return.
+    const NAME_OF_REF: u32 = 0x0f00_0020;
+    const NAME_OF_OTHER: u32 = 0x0f00_0021;
+    const SLOT_VALUE: u32 = 0x0f00_0022;
+
+    fn set_player(e: &mut Engine, player: u32) {
+        e.set_global(PLAYER, player);
+    }
+
+    /// The `(format, words of the result)` debug line.
+    fn line_with_result(format: u32, value: f64) -> (u32, Vec<u32>) {
+        let w = words(value);
+        (DEBUG_PRINT, vec![format, w[0], w[1]])
+    }
+
+    /// An actor with a name function, for the lines that print names.
+    fn named(e: &mut Engine, slots: &[(u32, u32)], name: u32) -> u32 {
+        stub(e, NAME_OF_REF, name);
+        let mut all = vec![
+            (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+            (VSLOT_FORM_GET_NAME, NAME_OF_REF),
+        ];
+        all.extend_from_slice(slots);
+        object(e, &all)
+    }
+
+    #[test]
+    fn a3d00_is_one_when_the_player_test_says_no() {
+        let mut e = engine();
+        set_player(&mut e, 0x7000);
+        e.register_double(PLAYER_TEST_4EAF60, |_, a| {
+            assert_eq!(a, [0x7000]);
+            false.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_3d00, 0, 0, 0), (true, 1.0));
+        stub(&mut e, PLAYER_TEST_4EAF60, 1);
+        assert_eq!(run(&mut e, 0x005a_3d00, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a3d30_cause_of_death_defaults_to_minus_one_and_does_not_check_null() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, REF_GET_CAUSE_OF_DEATH, 5);
+        assert_eq!(run(&mut e, 0x005a_3d30, a, 0, 0), (true, 5.0));
+        stub(&mut e, REF_GET_CAUSE_OF_DEATH, (-3i32) as u32);
+        assert_eq!(run(&mut e, 0x005a_3d30, a, 0, 0), (true, -3.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_3d30, plain, 0, 0), (true, -1.0));
+        // The line is printed for non-actors too.
+        let lines = printed(&mut e, 0.0, 0x005a_3d30, plain, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5e4c, -1.0)]);
+    }
+
+    #[test]
+    fn a3db0_limb_gone_passes_the_limb_to_get_dismembered() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        e.register_double(REF_GET_DISMEMBERED, move |_, args| {
+            assert_eq!(args, [a, 6]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_3db0, a, 6, 0), (true, 1.0));
+        stub(&mut e, REF_GET_DISMEMBERED, 0);
+        assert_eq!(run(&mut e, 0x005a_3db0, a, 6, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_3db0, plain, 6, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_3db0, 0, 6, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a3e10_killing_blow_limb_is_minus_one_for_non_actors() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, REF_GET_LAST_HIT_LIMB, 4);
+        assert_eq!(run(&mut e, 0x005a_3e10, a, 0, 0), (true, 4.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_3e10, plain, 0, 0), (true, -1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_3e10, a, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5e68, 4.0)]);
+    }
+
+    #[test]
+    fn a3e90_compares_the_virtual_value_with_the_setting_signed() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x10);
+        set_player(&mut e, player);
+        let setting = e.mem.alloc(4);
+        e.register_double(SETTING_GET_INT_ADDRESS, move |_, a| {
+            assert_eq!(a, [SETTING_OBJECT]);
+            setting.into_ret()
+        });
+        e.mem.set_u32(setting, 10);
+        e.register_double(SLOT_VALUE, move |_, a| {
+            assert_eq!(&a[1..], [player, 0]);
+            10u32.into_ret()
+        });
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_INT_344, SLOT_VALUE),
+            ],
+        );
+        assert_eq!(run(&mut e, 0x005a_3e90, a, 0, 0), (true, 1.0));
+        e.mem.set_u32(setting, 11);
+        assert_eq!(run(&mut e, 0x005a_3e90, a, 0, 0), (true, 0.0));
+        // Signed: -5 is below 3.
+        e.mem.set_u32(setting, 3);
+        stub(&mut e, SLOT_VALUE, (-5i32) as u32);
+        assert_eq!(run(&mut e, 0x005a_3e90, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_3e90, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a3f00_killer_compares_param1_with_the_word_at_c0() {
+        let mut e = engine();
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_TEST_22C, SLOT_YES),
+            ],
+        );
+        e.mem.set_u32(a + 0xc0, 0x4242);
+        assert_eq!(run(&mut e, 0x005a_3f00, a, 0x4242, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_3f00, a, 0x4243, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_3f00, a, 0x4242, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5e84, 1.0)]);
+        let no = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_TEST_22C, SLOT_NO),
+            ],
+        );
+        assert_eq!(run(&mut e, 0x005a_3f00, no, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_3f00, plain, 0, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_3f00, plain, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn a3fa0_killer_object_walks_the_dismemberment_extra() {
+        let mut e = engine();
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_TEST_22C, SLOT_YES),
+            ],
+        );
+        stub(&mut e, ACTOR_GET_PROCESS, 0x6600);
+        stub(&mut e, REF_GET_EXTRA_DATA_LIST, 0x6700);
+        e.register_double(EXTRA_LIST_GET_DISMEMBERMENT_EXTRA, |_, a| {
+            assert_eq!(a, [0x6700]);
+            0x6800u32.into_ret()
+        });
+        e.register_double(DISMEMBERMENT_GET_LIST_NODE, |_, a| {
+            assert_eq!(a, [0x6800]);
+            0x6900u32.into_ret()
+        });
+        e.register_double(FORM_LIST_GET_LIST, |e, a| {
+            assert_eq!(a[0], 0x5000);
+            assert_eq!(e.mem.u32(a[1]), 0x6900);
+            0x6a00u32.into_ret()
+        });
+        e.register_double(NODE_TEST_5F65D0, |_, a| {
+            assert_eq!(a, [0x6a00]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_3fa0, a, 0x5000, 0), (true, 1.0));
+        // Nothing clears the result: a caller's value stays.
+        stub(&mut e, NODE_TEST_5F65D0, 0);
+        assert_eq!(run(&mut e, 0x005a_3fa0, a, 0x5000, 0), (true, SENTINEL));
+        assert_eq!(run(&mut e, 0x005a_3fa0, a, 0, 0), (true, SENTINEL));
+        stub(&mut e, DISMEMBERMENT_GET_LIST_NODE, 0);
+        assert_eq!(run(&mut e, 0x005a_3fa0, a, 0x5000, 0), (true, SENTINEL));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_3fa0, a, 0x5000, 0), (true, SENTINEL));
+        // The line is printed for every reference.
+        let lines = printed(&mut e, 0.0, 0x005a_3fa0, 0, 0x5000, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5e98, 0.0)]);
+    }
+
+    #[test]
+    fn a4090_needs_both_params_and_leaves_the_result_otherwise() {
+        let mut e = engine();
+        e.register_double(0x0048_c1b0, |_, a| {
+            assert_eq!(a, [0x5024, 0x77]);
+            9u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_4090, 1, 0x5000, 0x77), (true, 9.0));
+        assert_eq!(run(&mut e, 0x005a_4090, 1, 0, 0x77), (true, SENTINEL));
+        assert_eq!(run(&mut e, 0x005a_4090, 1, 0x5000, 0), (true, SENTINEL));
+    }
+
+    #[test]
+    fn a40d0_reports_the_lowest_set_flag() {
+        let mut e = engine();
+        e.set_global(DOUBLE_THREE, 3.0f64);
+        e.set_global(DOUBLE_FOUR, 4.0f64);
+        let a = actor(&mut e);
+        for (flags, expected) in [
+            (0u32, 0.0),
+            (1, 1.0),
+            (0xf, 1.0),
+            (2, 2.0),
+            (6, 2.0),
+            (4, 3.0),
+            (0xc, 3.0),
+            (8, 4.0),
+            (0x10, 0.0),
+        ] {
+            stub(&mut e, ACTOR_GET_FLAGS, flags);
+            assert_eq!(
+                run(&mut e, 0x005a_40d0, a, 0, 0),
+                (true, expected),
+                "{flags:#x}"
+            );
+        }
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_40d0, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_40d0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4160_reports_bit_10_then_bit_20() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        for (flags, expected) in [
+            (0u32, 0.0),
+            (0x10, 1.0),
+            (0x30, 1.0),
+            (0x20, 2.0),
+            (0x40, 0.0),
+        ] {
+            stub(&mut e, ACTOR_GET_FLAGS, flags);
+            assert_eq!(
+                run(&mut e, 0x005a_4160, a, 0, 0),
+                (true, expected),
+                "{flags:#x}"
+            );
+        }
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4160, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a41c0_anim_action_defaults_to_minus_one() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, ACTOR_GET_ANIM_ACTION, 12);
+        assert_eq!(run(&mut e, 0x005a_41c0, a, 0, 0), (true, 12.0));
+        stub(&mut e, ACTOR_GET_ANIM_ACTION, (-1i32) as u32);
+        assert_eq!(run(&mut e, 0x005a_41c0, a, 0, 0), (true, -1.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_41c0, plain, 0, 0), (true, -1.0));
+        assert_eq!(run(&mut e, 0x005a_41c0, 0, 0, 0), (true, -1.0));
+    }
+
+    #[test]
+    fn a4210_is_zero_for_null_or_the_same_reference() {
+        let mut e = engine();
+        assert_eq!(run(&mut e, 0x005a_4210, 0, 5, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_4210, 5, 5, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_4210, 5, 6, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4210, 5, 0, 0), (true, 1.0));
+    }
+
+    #[test]
+    fn a4240_counts_the_object_of_virtual_3f8() {
+        let mut e = engine();
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_REF_COUNTED_OBJECT, SLOT_VALUE),
+            ],
+        );
+        stub(&mut e, SLOT_VALUE, 0x8000);
+        e.register_double(OBJECT_GET_COUNT, |_, a| {
+            assert_eq!(a, [0x8000]);
+            0xffff_fff0u32.into_ret()
+        });
+        // Unsigned count.
+        assert_eq!(run(&mut e, 0x005a_4240, a, 0, 0), (true, 4294967280.0));
+        stub(&mut e, SLOT_VALUE, 0);
+        assert_eq!(run(&mut e, 0x005a_4240, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4240, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a42b0_and_a4320_read_the_word_at_plus_0x10() {
+        let mut e = engine();
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_REF_COUNTED_OBJECT, SLOT_VALUE),
+            ],
+        );
+        let object_address = 0x8000;
+        stub(&mut e, SLOT_VALUE, object_address);
+        e.register_double(OBJECT_GET_FIELD_08, |_, a| {
+            assert_eq!(a, [0x8008]);
+            0x8000_0001u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_42b0, a, 0, 0), (true, 2147483649.0));
+        assert_eq!(
+            e.call(0x005a_4320, &args![object_address]).u32(),
+            0x8000_0001
+        );
+        stub(&mut e, SLOT_VALUE, 0);
+        assert_eq!(run(&mut e, 0x005a_42b0, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_42b0, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4340_returns_the_process_byte() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        let process = object(&mut e, &[(VSLOT_PROCESS_BYTE_388, SLOT_VALUE)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        // Only the low byte counts.
+        stub(&mut e, SLOT_VALUE, 0x1_0207);
+        assert_eq!(run(&mut e, 0x005a_4340, a, 0, 0), (true, 7.0));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_4340, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4340, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a43b0_asks_the_process_lists() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        e.register_double(PROCESS_LISTS_TEST_REFERENCE, move |_, args| {
+            assert_eq!(args, [PROCESS_LISTS, a]);
+            0x101u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_43b0, a, 0, 0), (true, 1.0));
+        stub(&mut e, PROCESS_LISTS_TEST_REFERENCE, 0);
+        assert_eq!(run(&mut e, 0x005a_43b0, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_43b0, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4410_compares_the_base_form_type() {
+        let mut e = engine();
+        stub(&mut e, REF_GET_BASE_FORM, 0x5000);
+        e.register_double(FORM_GET_TYPE, |_, a| {
+            assert_eq!(a, [0x5000]);
+            0x2au32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_4410, 0x1000, 0x2a, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4410, 0x1000, 0x2b, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4410, 0x1000, 0x2a, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5eb0, 1.0)]);
+    }
+
+    #[test]
+    fn a4480_and_a4520_emotion_is_minus_one_without_the_flag_byte() {
+        let mut e = engine();
+        let r = object(
+            &mut e,
+            &[
+                (VSLOT_IS_MOBILE_OBJECT, SLOT_YES),
+                (VSLOT_EMOTION, SLOT_VALUE),
+            ],
+        );
+        stub(&mut e, SLOT_VALUE, 3);
+        e.mem.set_u8(r + 0x86, 1);
+        assert_eq!(e.call(0x005a_4520, &args![r]).u32() & 0xff, 1);
+        assert_eq!(run(&mut e, 0x005a_4480, r, 0, 0), (true, 3.0));
+        e.mem.set_u8(r + 0x86, 0);
+        assert_eq!(run(&mut e, 0x005a_4480, r, 0, 0), (true, -1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4480, r, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5ed0, -1.0)]);
+        let off = object(&mut e, &[(VSLOT_IS_MOBILE_OBJECT, SLOT_NO)]);
+        assert_eq!(run(&mut e, 0x005a_4480, off, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4540_calls_virtual_2d8_and_ignores_it() {
+        let mut e = engine();
+        let r = object(
+            &mut e,
+            &[
+                (VSLOT_IS_MOBILE_OBJECT, SLOT_YES),
+                (VSLOT_EMOTION_VALUE, SLOT_VALUE),
+            ],
+        );
+        stub(&mut e, SLOT_VALUE, 99);
+        e.call_log = Some(vec![]);
+        assert_eq!(run(&mut e, 0x005a_4540, r, 0, 0), (true, 0.0));
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, SLOT_VALUE).len(), 1);
+        let off = object(&mut e, &[(VSLOT_IS_MOBILE_OBJECT, SLOT_NO)]);
+        e.call_log = Some(vec![]);
+        assert_eq!(run(&mut e, 0x005a_4540, off, 0, 0), (true, 0.0));
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, SLOT_VALUE).is_empty());
+        let lines = printed(&mut e, 0.0, 0x005a_4540, off, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5ee4, 0.0)]);
+    }
+
+    #[test]
+    fn a45c0_water_object_tests_the_used_item() {
+        let mut e = engine();
+        let item = object(&mut e, &[(VSLOT_ITEM_WATER_TEST, SLOT_VALUE)]);
+        stub(&mut e, IDLE_MANAGER_GET_USED_ITEM, item);
+        stub(&mut e, SLOT_VALUE, 5);
+        assert_eq!(run(&mut e, 0x005a_45c0, 0, 0, 0), (true, 1.0));
+        stub(&mut e, SLOT_VALUE, 0);
+        assert_eq!(run(&mut e, 0x005a_45c0, 0, 0, 0), (true, 0.0));
+        stub(&mut e, IDLE_MANAGER_GET_USED_ITEM, 0);
+        let lines = printed(&mut e, 0.0, 0x005a_45c0, 0, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5f00, 0.0)]);
+    }
+
+    #[test]
+    fn a4630_has_perk_passes_the_perk_and_the_flag() {
+        let mut e = engine();
+        e.register_double(SLOT_VALUE, |_, a| {
+            assert_eq!(&a[1..], [0x4444, 1]);
+            0x103u32.into_ret()
+        });
+        let a = object(
+            &mut e,
+            &[
+                (VSLOT_IS_ACTOR, IS_ACTOR_YES),
+                (VSLOT_ACTOR_PERK_RANK, SLOT_VALUE),
+            ],
+        );
+        assert_eq!(run(&mut e, 0x005a_4630, a, 0x4444, 0x99), (true, 1.0));
+        // The rank byte is the low byte: 0x100 is rank 0.
+        stub(&mut e, SLOT_VALUE, 0x100);
+        assert_eq!(run(&mut e, 0x005a_4630, a, 0x4444, 0), (true, 0.0));
+        stub(&mut e, SLOT_VALUE, 2);
+        let lines = printed(&mut e, 0.0, 0x005a_4630, a, 0x4444, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_5f1c, 2])]);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4630, plain, 0x4444, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a46d0_faction_relation_passes_the_other_actor_and_an_out_byte() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        e.register_double(ACTOR_GET_FACTION_FIGHT_REACTION, move |e, args| {
+            assert_eq!((args[0], args[1]), (a, 0x5000));
+            assert_eq!(e.mem.u8(args[2]), 0);
+            (-2i32 as u32).into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_46d0, a, 0x5000, 0), (true, -2.0));
+        let lines = printed(&mut e, 0.0, 0x005a_46d0, a, 0x5000, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_5f2c, (-2i32) as u32])]
+        );
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_46d0, plain, 0x5000, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4780_last_played_idle_compares_with_param1() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        let process = object(&mut e, &[(VSLOT_PROCESS_LAST_IDLE, SLOT_VALUE)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        stub(&mut e, SLOT_VALUE, 0x77);
+        assert_eq!(run(&mut e, 0x005a_4780, a, 0x77, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4780, a, 0x78, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4780, a, 0x77, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_5f44, 1.0)]);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4780, plain, 0x77, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_4780, plain, 0x77, 0).is_empty());
+    }
+
+    #[test]
+    fn a4820_player_teammate_prints_the_truncated_result() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, MIDDLE_HIGH_GET_FORCE_NEXT_UPDATE, 1);
+        assert_eq!(run(&mut e, 0x005a_4820, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4820, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_5f64, 1])]);
+        stub(&mut e, MIDDLE_HIGH_GET_FORCE_NEXT_UPDATE, 0);
+        assert_eq!(run(&mut e, 0x005a_4820, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4820, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a48a0_and_a4910_teammate_count_is_the_word_at_d68() {
+        let mut e = engine();
+        let player = e.mem.alloc(0xe00);
+        set_player(&mut e, player);
+        e.mem.set_u32(player + 0xd68, 3);
+        assert_eq!(e.call(0x005a_4910, &args![player]).u32(), 3);
+        assert_eq!(run(&mut e, 0x005a_48a0, 0, 0, 0), (true, 3.0));
+        e.mem.set_u32(player + 0xd68, 0xffff_ffff);
+        assert_eq!(run(&mut e, 0x005a_48a0, 0, 0, 0), (true, 4294967295.0));
+        e.mem.set_u32(player + 0xd68, 3);
+        trace_on(&mut e);
+        run(&mut e, 0x005a_48a0, 0, 0, 0);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, DEBUG_PRINT), vec![vec![0x0103_5f7c, 3]]);
+    }
+
+    #[test]
+    fn a4930_crime_enemy_needs_a_non_empty_crime_list() {
+        let mut e = engine();
+        let a = actor(&mut e);
+        stub(&mut e, REF_GET_EXTRA_DATA_LIST, 0x6700);
+        stub(&mut e, EXTRA_LIST_GET_PLAYER_CRIME_LIST, 0x6800);
+        e.register_double(LIST_NODE_IS_EMPTY, |_, a| {
+            assert_eq!(a, [0x6800]);
+            false.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_4930, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4930, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_5fd4])]);
+        stub(&mut e, LIST_NODE_IS_EMPTY, 1);
+        assert_eq!(run(&mut e, 0x005a_4930, a, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4930, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_5f9c])]);
+        stub(&mut e, EXTRA_LIST_GET_PLAYER_CRIME_LIST, 0);
+        assert_eq!(run(&mut e, 0x005a_4930, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4930, plain, 0, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_4930, plain, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn a49f0_faction_enemy_asks_about_the_player() {
+        let mut e = engine();
+        let player = e.mem.alloc(0x10);
+        set_player(&mut e, player);
+        let a = actor(&mut e);
+        e.register_double(ACTOR_GET_FACTION_FIGHT_REACTION, move |e, args| {
+            assert_eq!((args[0], args[1]), (a, player));
+            e.mem.set_u8(args[2], 1);
+            Ret::default()
+        });
+        assert_eq!(run(&mut e, 0x005a_49f0, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_49f0, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_604c])]);
+        stub(&mut e, ACTOR_GET_FACTION_FIGHT_REACTION, 0);
+        assert_eq!(run(&mut e, 0x005a_49f0, a, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_49f0, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6008])]);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_49f0, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4aa0_and_a4b40_minor_crimes_split_player_and_others() {
+        let mut e = engine();
+        let player = object(&mut e, &[(VSLOT_IS_ACTOR, IS_ACTOR_YES)]);
+        set_player(&mut e, player);
+        e.mem.set_u32(player + 0x13c, 7);
+        assert_eq!(e.call(0x005a_4b40, &args![player]).u32(), 7);
+        assert_eq!(run(&mut e, 0x005a_4aa0, player, 0, 0), (true, 7.0));
+        let other = actor(&mut e);
+        stub(&mut e, ACTOR_GET_MINOR_CRIME_COUNT, 2);
+        assert_eq!(run(&mut e, 0x005a_4aa0, other, 0, 0), (true, 2.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4aa0, other, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_6088, 2.0)]);
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4aa0, plain, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4b60_and_a4c00_major_crimes_mask_the_top_bits_for_the_player() {
+        let mut e = engine();
+        let player = object(&mut e, &[(VSLOT_IS_ACTOR, IS_ACTOR_YES)]);
+        set_player(&mut e, player);
+        e.mem.set_u32(player + 0x140, 0xc000_0005);
+        assert_eq!(e.call(0x005a_4c00, &args![player]).u32(), 5);
+        assert_eq!(run(&mut e, 0x005a_4b60, player, 0, 0), (true, 5.0));
+        let other = actor(&mut e);
+        stub(&mut e, ACTOR_GET_MAJOR_CRIME_COUNT, 9);
+        assert_eq!(run(&mut e, 0x005a_4b60, other, 0, 0), (true, 9.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4b60, other, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_60ac, 9.0)]);
+        assert_eq!(run(&mut e, 0x005a_4b60, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4c20_compares_the_player_value_with_param1() {
+        let mut e = engine();
+        set_player(&mut e, 0x7000);
+        e.register_double(PLAYER_GET_VALUE_89F4E0, |_, a| {
+            assert_eq!(a, [0x7000]);
+            0x33u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_4c20, 0, 0x33, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4c20, 0, 0x34, 0), (true, 0.0));
+        // A null param1 never matches, even a null value.
+        stub(&mut e, PLAYER_GET_VALUE_89F4E0, 0);
+        assert_eq!(run(&mut e, 0x005a_4c20, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4c60_destruction_stage_needs_no_actor() {
+        let mut e = engine();
+        e.register_double(GET_DESTRUCTION_STAGE, |_, a| {
+            assert_eq!(a, [0x1000]);
+            2u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_4c60, 0x1000, 0, 0), (true, 2.0));
+        assert_eq!(run(&mut e, 0x005a_4c60, 0, 0, 0), (true, -1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4c60, 0x1000, 0, 0);
+        assert_eq!(lines, vec![line_with_result(0x0103_60d0, 2.0)]);
+    }
+
+    #[test]
+    fn a4cd0_threat_ratio_divides_the_two_strengths() {
+        let mut e = engine();
+        e.set_global(COMBAT_STRENGTH_ARGUMENT, -1.0f32);
+        let a = named(&mut e, &[], 0xaaa);
+        let b = object(&mut e, &[(VSLOT_FORM_GET_NAME, NAME_OF_OTHER)]);
+        stub(&mut e, NAME_OF_OTHER, 0xbbb);
+        e.register_double(ACTOR_CALCULATE_COMBAT_STRENGTH, move |_, args| {
+            assert_eq!(f32::from_bits(args[1]), -1.0);
+            Ret {
+                st0: if args[0] == a { 6.0 } else { 4.0 },
+                ..Ret::default()
+            }
+        });
+        assert_eq!(run(&mut e, 0x005a_4cd0, a, b, 0), (true, 1.5));
+        let lines = printed(&mut e, 0.0, 0x005a_4cd0, a, b, 0);
+        let w = words(1.5);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_6108, 0xaaa, 0xbbb, w[0], w[1]])]
+        );
+        // No other reference, a non-actor or a null reference: 0.0 and the
+        // other line.
+        assert_eq!(run(&mut e, 0x005a_4cd0, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4cd0, plain, b, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4cd0, 0, b, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_60ec])]);
+    }
+
+    #[test]
+    fn a4dd0_alignment_compares_the_karma_class_and_always_prints() {
+        let mut e = engine();
+        let a = object(&mut e, &[(VSLOT_IS_ACTOR, IS_ACTOR_YES)]);
+        // The owner embedded at +0xa4 has its own vtable.
+        let owner_vtable = e.mem.alloc(0x20);
+        e.mem
+            .set_u32(owner_vtable + VSLOT_OWNER_GET_VALUE, SLOT_VALUE);
+        e.mem.set_u32(a + ACTOR_VALUE_OWNER_OFFSET, owner_vtable);
+        e.register_double(SLOT_VALUE, move |_, args| {
+            assert_eq!(args, [a + ACTOR_VALUE_OWNER_OFFSET, ACTOR_VALUE_KARMA]);
+            Ret {
+                st0: 250.5,
+                ..Ret::default()
+            }
+        });
+        e.register_double(GET_ALIGNMENT_FOR_KARMA, |_, args| {
+            assert_eq!(f32::from_bits(args[0]), 250.5);
+            3u32.into_ret()
+        });
+        e.mem.set_u32(ALIGNMENT_NAMES + 12, 0x9000);
+        assert_eq!(run(&mut e, 0x005a_4dd0, a, 3, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4dd0, a, 2, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4dd0, a, 3, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_6130, 0x9000, TEXT_TRUE])]
+        );
+        // A non-actor or null reference still prints (false).
+        e.mem.set_u32(ALIGNMENT_NAMES + 4, 0x9100);
+        let plain = non_actor(&mut e);
+        let lines = printed(&mut e, 0.0, 0x005a_4dd0, plain, 1, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_6130, 0x9100, TEXT_FALSE])]
+        );
+        assert_eq!(run(&mut e, 0x005a_4dd0, 0, 1, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn a4ea0_used_item_equip_type() {
+        let mut e = engine();
+        stub(&mut e, IDLE_MANAGER_GET_USED_ITEM, 0x5000);
+        e.register_double(GET_EQUIP_TYPE, |_, a| {
+            assert_eq!(a, [0x5000]);
+            4u32.into_ret()
+        });
+        e.mem.set_u32(EQUIP_TYPE_NAMES + 16, 0x9200);
+        assert_eq!(run(&mut e, 0x005a_4ea0, 0, 4, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_4ea0, 0, 5, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4ea0, 0, 4, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_614c, 0x9200, TEXT_TRUE])]
+        );
+        stub(&mut e, IDLE_MANAGER_GET_USED_ITEM, 0);
+        let lines = printed(&mut e, 0.0, 0x005a_4ea0, 0, 4, 0);
+        assert_eq!(
+            lines,
+            vec![(DEBUG_PRINT, vec![0x0103_614c, 0x9200, TEXT_FALSE])]
+        );
+    }
+
+    #[test]
+    fn a4f30_aggro_radius_violated_needs_the_state_14() {
+        let mut e = engine();
+        let a = named(&mut e, &[], 0xaaa);
+        let process = object(&mut e, &[(VSLOT_PROCESS_AGGRO_OBJECT, SLOT_VALUE)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        stub(&mut e, SLOT_VALUE, 0x7000);
+        stub(&mut e, AGGRO_GET_STATE, AGGRO_STATE_VIOLATED);
+        stub(&mut e, REF_GET_NAME, 0x9300);
+        assert_eq!(run(&mut e, 0x005a_4f30, a, 0, 0), (true, 1.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4f30, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_619c, 0x9300])]);
+        stub(&mut e, AGGRO_GET_STATE, 13);
+        assert_eq!(run(&mut e, 0x005a_4f30, a, 0, 0), (true, 0.0));
+        let lines = printed(&mut e, 0.0, 0x005a_4f30, a, 0, 0);
+        assert_eq!(lines, vec![(DEBUG_PRINT, vec![0x0103_6170, 0x9300])]);
+        stub(&mut e, SLOT_VALUE, 0);
+        assert_eq!(run(&mut e, 0x005a_4f30, a, 0, 0), (true, 0.0));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_4f30, a, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_4f30, plain, 0, 0), (true, 0.0));
+        assert!(printed(&mut e, 0.0, 0x005a_4f30, plain, 0, 0).is_empty());
     }
 }
