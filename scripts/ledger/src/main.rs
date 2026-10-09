@@ -619,7 +619,15 @@ fn queue(funcs: &[Func], args: &[String]) {
             .iter()
             .filter(|f| &f.unit == unit && f.addr >= lo && f.addr < hi)
         {
-            let st = if f.in_engine() { "done" } else { f.status() };
+            // Compiler and runtime code placed in a unit (static
+            // initializers) is not translation work even when cited.
+            let st = if f.in_engine() {
+                "done"
+            } else if base_status(&f.subsystem) != "open" {
+                base_status(&f.subsystem)
+            } else {
+                f.status()
+            };
             println!("{:08x}\t{}\t{}\t{}", f.addr, f.size, st, f.name);
         }
         return;
