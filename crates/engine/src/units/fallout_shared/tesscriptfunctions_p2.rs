@@ -3,9 +3,9 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::tesscriptfunctions`]; anything public there may be used here.
 //!
-//! Progress: the first 40 queue entries of this part (`005bc430` to
-//! `005be870`) are translated. The next session continues at `005be900`
-//! (the next entry of the queue after `005be870`).
+//! Progress: the first 80 queue entries of this part (`005bc430` to
+//! `005c0bf0`, in two sessions of 40) are translated. The next session
+//! continues at `005c0db0` (the next entry of the queue after `005c0bf0`).
 //!
 //! Every body is `cdecl` with the eight stack words of [`ScriptArgs`]; most
 //! hand them to `Script::ParseParameters` (`005accb0`) to read their
@@ -1555,6 +1555,1571 @@ pub fn fn_005be870(e: &mut Engine, a: ScriptArgs) -> bool {
     true
 }
 
+// ==== Second batch: `005be900` up to `005c0bf0` ===================================
+//
+// Constants first (callees outside this part by exe address, globals,
+// strings), then the helpers, then the bodies in address order.
+
+// ---- Settings (game settings and INI settings) -------------------------------
+/// `thiscall(name)` on the game setting collection ([`GAME_SETTINGS`]): the
+/// setting of that name, or 0.
+const GAME_SETTING_FIND: u32 = 0x004f_8a30;
+/// `thiscall(name)` on an INI setting collection (`fallout shared/
+/// tesscriptfunctions.cpp`): the setting of that name, or 0.
+const INI_SETTING_FIND: u32 = 0x005e_02b0;
+/// Getter of the second INI setting collection (loads global `011f35a0`);
+/// takes no argument.
+const INI_SETTINGS_FALLBACK: u32 = 0x004d_e490;
+/// `thiscall` on a setting: its type code, derived from the first letter of
+/// its name (`00c33090`). The commands handle 3, 5 and 6 (and 0 for INI
+/// settings).
+const SETTING_TYPE: u32 = 0x004f_8940;
+/// `thiscall` on a setting: its name, the word at `this + 8`.
+const SETTING_NAME: u32 = 0x0044_ddc0;
+/// `thiscall`: the word at `this + 8` (the same body as [`SETTING_NAME`]).
+const WORD_AT_0X8: u32 = 0x0044_ddc0;
+/// `thiscall` on a setting: the address of its float value (`this + 4`, or
+/// a static zero for a null `this`).
+const SETTING_FLOAT_ADDRESS: u32 = 0x0040_3e20;
+/// `thiscall` on a setting: the address of its byte value (`this + 4`, or a
+/// static zero for a null `this`).
+const SETTING_BOOL_ADDRESS: u32 = 0x0040_8d60;
+/// `thiscall` on a setting: its string value, `*(this + 4)` (0 for a null
+/// `this`).
+const SETTING_STRING_VALUE: u32 = 0x0040_3df0;
+/// `thiscall(int)` on a setting: sets its integer value.
+const SETTING_SET_INT: u32 = 0x0045_ce80;
+/// `thiscall(float)` on a setting: sets its float value.
+const SETTING_SET_FLOAT: u32 = 0x004e_d780;
+/// `thiscall(text)` on a setting: sets its string value.
+const SETTING_SET_STRING: u32 = 0x005e_0190;
+/// CRT `atol(text)`.
+const ATOL: u32 = 0x00ec_a6d3;
+/// CRT `atof(text)`: the value in `ST0`.
+const ATOF: u32 = 0x00ec_a573;
+/// `"GameSetting %s >> NOT FOUND"`
+const MSG_GAME_NOT_FOUND: u32 = 0x0103_a350;
+/// `"GameSetting %s >> UNKNOWN TYPE"`
+const MSG_GAME_UNKNOWN: u32 = 0x0103_a36c;
+/// `"GameSetting %s >> '%s'"`
+const MSG_GAME_STRING: u32 = 0x0103_a38c;
+/// `"GameSetting %s >> %.2f"`
+const MSG_GAME_FLOAT: u32 = 0x0103_a3a4;
+/// `"GameSetting %s >> %i"`
+const MSG_GAME_INT: u32 = 0x0103_a3bc;
+/// `"INISetting %s >> NOT FOUND"`
+const MSG_INI_NOT_FOUND: u32 = 0x0103_a3d4;
+/// `"INISetting %s >> UNKNOWN TYPE"`
+const MSG_INI_UNKNOWN: u32 = 0x0103_a3f0;
+/// `"INISetting %s >> '%s'"`
+const MSG_INI_STRING: u32 = 0x0103_a410;
+/// `"INISetting %s >> %.2f"`
+const MSG_INI_FLOAT: u32 = 0x0103_a428;
+/// `"INISetting %s >> %i"`
+const MSG_INI_INT: u32 = 0x0103_a440;
+
+// ---- Render options command and its helpers ----------------------------------
+/// `_strnicmp(first, second, count)` (`cdecl`): 0 when equal.
+const STRING_COMPARE_N_NO_CASE: u32 = 0x00ec_7ec0;
+/// `cdecl() -> u32`: the render flags word `011f91d8`.
+const RENDER_FLAGS_GET: u32 = 0x004b_c3e0;
+/// `cdecl(flags)`: stores the render flags word `011f91d8`.
+const RENDER_FLAGS_SET: u32 = 0x004b_c3d0;
+/// `cdecl(selector) -> int` (`fallout shared/renderer.cpp`): the word
+/// `011f91bc` for a non-zero selector, `011f91c0` for 0.
+const RENDER_SETTING: u32 = 0x004d_c060;
+/// `cdecl(index)` (`BSShader/bsshadermanager.cpp`): selects the shader table
+/// entries of that index.
+const SHADER_SET_MODE: u32 = 0x00b4_f450;
+/// `cdecl()` (`BSShader/bsshadermanager.cpp`): runs a virtual call (slot
+/// `0x120`) on each shader of the table at `011f9548`.
+const SHADER_REFRESH: u32 = 0x00b5_57d0;
+/// `cdecl(a, b)`: the smaller of two signed numbers.
+const MIN_I32: u32 = 0x004a_8f20;
+/// `cdecl(a, b)`: the larger of two signed numbers.
+const MAX_I32: u32 = 0x0064_7b70;
+/// `thiscall`, no argument (`fallout shared`, 4812 bytes), called on the
+/// word at `+8` of the `TES` singleton by the `psh` option.
+const PSH_ENABLE: u32 = 0x004b_af10;
+/// `cdecl(value)` (`fallout shared/tes.cpp`): calls `0066b0d0` on the object
+/// `011f95e8` with the value.
+const PSH_DISABLE: u32 = 0x0045_1570;
+/// `thiscall(byte)` on the object [`RENDERER_OBJECT`] (`fallout shared/
+/// renderer.cpp`).
+const RENDERER_SET_BYTE: u32 = 0x004d_e2d0;
+/// The object `005bf840` works on.
+const RENDERER_OBJECT: u32 = 0x011c_75a4;
+/// `cdecl(index) -> list`: the pointer stored at `011f91c8 + index * 4`
+/// (`fallout shared/tes.cpp`).
+const SHADOW_LIST_GET: u32 = 0x0045_0b80;
+/// `thiscall` on that list (`BSShader/shadowscenenode.cpp`): its first
+/// usable node, or 0.
+const SHADOW_LIST_FIRST: u32 = 0x00b5_afc0;
+/// `thiscall` on that list: the next usable node, or 0.
+const SHADOW_LIST_NEXT: u32 = 0x00b5_b010;
+/// `thiscall` on a node: its byte at `+0x124` (the field `005bf800` sets;
+/// the engine map names the body `MiddleHighProcess::IsCurrentWeaponGrenade`).
+const NODE_FLAG: u32 = 0x008d_8220;
+/// The render flags word (read by `004bc3e0`, written by `004bc3d0`).
+const RENDER_FLAGS: u32 = 0x011f_91d8;
+/// The word `005bf7f0` sets.
+const GLOBAL_011F91B4: u32 = 0x011f_91b4;
+/// The word the `sh` option sets (a number from 0 to 3).
+const GLOBAL_011F91B0: u32 = 0x011f_91b0;
+/// The byte `005bf8b0` reads and `005bf8c0` writes.
+const GLOBAL_011F91DC: u32 = 0x011f_91dc;
+/// The byte `005bf860` toggles.
+const GLOBAL_0118C000: u32 = 0x0118_c000;
+/// The byte the `sc` option toggles.
+const GLOBAL_011F9441: u32 = 0x011f_9441;
+/// The byte the `opt` option toggles.
+const GLOBAL_011AD80D: u32 = 0x011a_d80d;
+/// The word the `t<number>` option sets.
+const GLOBAL_011AD828: u32 = 0x011a_d828;
+/// Option names `_strnicmp` compares with: `"tex"`, `"degrade"`, `"sh"`,
+/// `"sc"`, `"psh"`, `"dsh"`, `"opt"`, `"alpha"`.
+const OPTION_TEX: u32 = 0x0103_a478;
+const OPTION_DEGRADE: u32 = 0x0103_a470;
+const OPTION_SH: u32 = 0x0103_a46c;
+const OPTION_SC: u32 = 0x0103_a468;
+const OPTION_PSH: u32 = 0x0103_a464;
+const OPTION_DSH: u32 = 0x0103_a460;
+const OPTION_OPT: u32 = 0x0103_a45c;
+const OPTION_ALPHA: u32 = 0x0103_a454;
+
+// ---- Camera, tree and decal commands --------------------------------------------
+/// `cdecl()`: the word stored at `011deb7c` (an object holding the camera).
+const CAMERA_HOLDER: u32 = 0x0045_c670;
+/// `thiscall`: the word at `this + 0xac` (the camera of the holder; the
+/// engine map names the body `BSFaceGenNiNode::GetAnimationData`).
+const WORD_AT_0XAC: u32 = 0x0066_29f0;
+/// `thiscall`: the word at `this + 0x68` (the engine map names the body
+/// `MiddleHighProcess::GetSavedAcquireObject`).
+const WORD_AT_0X68: u32 = 0x008d_8520;
+/// `thiscall`: the word at `this + 0x20` (the engine map names the body
+/// `BGSSaveFormBuffer::GetForm`).
+const WORD_AT_0X20: u32 = 0x007a_f430;
+/// `thiscall`: the word at `this + 0xc` (`fallout shared/modelloader.cpp`).
+const WORD_AT_0XC: u32 = 0x0043_b230;
+/// `thiscall`: `this + 0xdc`, the camera's view frustum (7 words).
+const CAMERA_FRUSTUM: u32 = 0x0045_bbe0;
+/// `thiscall(float)`: stores the float at `this + 0xfc` (the camera's
+/// far-to-near ratio).
+const CAMERA_SET_RATIO: u32 = 0x0050_7700;
+/// `NiCamera::SetViewFrustum` (Xbox PDB), `thiscall(frustum)`.
+const CAMERA_SET_VIEW_FRUSTUM: u32 = 0x00a6_faf0;
+/// `thiscall` (`fallout shared/modelloader.cpp`): the word at `this + 0xbc`.
+const WORD_AT_0XBC: u32 = 0x0043_fad0;
+/// `thiscall`: `this + 0x8c`, the camera's position (3 floats).
+const CAMERA_POSITION: u32 = 0x0045_bb80;
+/// `thiscall(out)`: writes the camera's direction (3 floats) into `out` and
+/// returns `out`.
+const CAMERA_DIRECTION: u32 = 0x0045_bba0;
+/// `thiscall(out)` on a vector: writes the negated vector into `out` and
+/// returns it.
+const VECTOR_NEGATE: u32 = 0x004a_0bd0;
+/// `thiscall` (`fallout shared/bgsdecalmanager.cpp`) on the 0x74-byte request
+/// `005bfe90` fills in: its constructor.
+const DECAL_REQUEST_CONSTRUCT: u32 = 0x004a_37b0;
+/// `thiscall(request, mode, flag)` (`004a3fe0`) on the world object.
+const DECAL_REQUEST_SUBMIT: u32 = 0x004a_3fe0;
+/// `cdecl() -> float` in `ST0`.
+const DECAL_FLOAT: u32 = 0x004a_4240;
+/// `thiscall` -> float in `ST0`: the smaller bound of a range.
+const RANGE_LOW: u32 = 0x004a_40a0;
+/// `thiscall` -> float in `ST0`: the larger bound of a range.
+const RANGE_HIGH: u32 = 0x004a_40c0;
+/// `RandomFloat` (Xbox PDB), `cdecl(low, high)` -> float in `ST0`.
+const RANDOM_FLOAT: u32 = 0x0047_6b70;
+/// `cdecl(float)` -> float in `ST0`: wraps `00406ce0` ([`ROUND_EXPERIENCE`]).
+const ROUND_FLOAT: u32 = 0x0040_6cc0;
+/// `Actor::GetCurrentWeapon` (Xbox PDB), `thiscall`.
+const ACTOR_GET_CURRENT_WEAPON: u32 = 0x008a_1710;
+/// `thiscall` on an actor (`fallout/ai/actor.cpp`): asks the word at `+0x68`
+/// (slot `0x6ec`), 0 without one.
+const ACTOR_FN_008BA410: u32 = 0x008b_a410;
+/// `thiscall` on an actor: its `+0x30` part's owner (`extradatalist.cpp`).
+const ACTOR_OWNER_PART: u32 = 0x0041_81e0;
+/// `MiddleHighProcess::GetFaceSkinnedNode` (Xbox PDB), `thiscall`: the word
+/// at `this + 0x24c`.
+const WEAPON_NODE: u32 = 0x008d_8ac0;
+/// `thiscall(index)` (`fallout shared/bgsimpactdataset.cpp`).
+const NODE_LOOKUP_BY_SLOT: u32 = 0x0058_e9d0;
+/// `thiscall(0)` on a weapon (`00522ba0`).
+const WEAPON_LOOKUP: u32 = 0x0052_2ba0;
+/// `thiscall(index)` (`fallout shared/bgsexplosion.cpp`).
+const EXPLOSION_LOOKUP: u32 = 0x004f_b7a0;
+/// `LowProcess::GetSecondGenericLocation` (Xbox PDB), `thiscall`.
+const SECOND_GENERIC_LOCATION: u32 = 0x0067_33e0;
+/// `thiscall` on a reference: the word at `this + 0x40`.
+const WORD_AT_0X40: u32 = 0x008d_6f30;
+/// `ActorMover::GetPreferredMoveMode` (Xbox PDB), `thiscall` on the `TES`
+/// singleton: the word at `this + 0x34`.
+const WORD_AT_0X34: u32 = 0x005f_36f0;
+/// The `RTTI` type descriptor of `MobileObject` (`.?AVMobileObject@@`).
+const RTTI_MOBILE_OBJECT: u32 = 0x0118_4920;
+/// The setting objects `005bfaf0` reads the defaults of its three numbers
+/// from.
+const SETTING_011DB200: u32 = 0x011d_b200;
+const SETTING_011DB238: u32 = 0x011d_b238;
+const SETTING_011DB25C: u32 = 0x011d_b25c;
+/// `fallout/interface/interface.cpp`: the object `00460fb0` finds for the
+/// interface manager, or 0 without one; takes no argument. `005bfaf0`
+/// stores its three numbers into it.
+const INTERFACE_OBJECT: u32 = 0x0070_5950;
+/// `cdecl()` (`fallout/interface/interface.cpp`): runs `00717e30` on the
+/// interface manager when there is one.
+const INTERFACE_ACTION: u32 = 0x0070_5a60;
+/// `thiscall(float)` on that object (`fallout shared/bgsdecalnode.cpp`).
+const INTERFACE_OBJECT_FN_004EE4B0: u32 = 0x004e_e4b0;
+/// `Interface::PrintLine` (Xbox PDB), `cdecl(BSStringT by value)`: the
+/// 8-byte string is two stack words and the function destroys it.
+const PRINT_LINE: u32 = 0x0070_3c80;
+/// `BSStringT` copy constructor (`thiscall(source)`, `004047f0`).
+const BS_STRING_COPY: u32 = 0x0040_47f0;
+/// `"Old values:   [ Local Trees: %f | LOD Trees: %f ]"`
+const MSG_OLD_VALUES: u32 = 0x0103_a4bc;
+/// `"New values:   [ Local Trees: %f | LOD Trees: %f ]"`
+const MSG_NEW_VALUES: u32 = 0x0103_a488;
+/// The tree mipmap bias: the local trees' value.
+const TREE_MIPMAP_LOCAL: u32 = 0x011f_9484;
+/// The tree mipmap bias: the LOD trees' value.
+const TREE_MIPMAP_LOD: u32 = 0x011f_9480;
+/// `float` `163840.0`: the far distance limit of `005bf9e0`.
+const FLOAT_FAR_LIMIT: u32 = 0x0103_17c4;
+/// `double` `163840.0`.
+const DOUBLE_FAR_LIMIT: u32 = 0x0103_a480;
+/// `double` `0.0`.
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+/// `float` `4.0`: the upper bound of the random number `005bfe90` rounds.
+const FLOAT_ROUND_RANGE: u32 = 0x0101_e570;
+/// `float` `1000.0`.
+const FLOAT_DECAL_1000: u32 = 0x0101_3974;
+/// `float` `90.0`.
+const FLOAT_DECAL_90: u32 = 0x0102_49d8;
+
+// ---- Files, positions and angles ----------------------------------------------------
+/// `TESDataHandler::GetListFile` (Xbox PDB), `thiscall(name)`.
+const DATA_HANDLER_GET_LIST_FILE: u32 = 0x0046_2f40;
+/// `thiscall(byte)` on the data handler (`fallout shared/tes.cpp`): stores
+/// the byte at `this + 0x61d`.
+const DATA_HANDLER_SET_BYTE: u32 = 0x0045_0b40;
+/// `TESFile::CloseTES` (Xbox PDB), `thiscall`.
+const FILE_CLOSE: u32 = 0x0047_1130;
+/// `"ERR: No Filename."`
+const MSG_NO_FILENAME: u32 = 0x0103_a4f0;
+/// `"ERR: Could not find file '%s'."`
+const MSG_FILE_NOT_FOUND: u32 = 0x0103_a504;
+/// `"Closed file '%s'."`
+const MSG_FILE_CLOSED: u32 = 0x0103_a524;
+/// `"SCRIPTS: Script '%s' (%08X) is attempting to move reference '%s' (%08X),
+/// but it cannot be moved"`
+const MSG_SCRIPT_MOVE_LOG: u32 = 0x0103_a538;
+/// `"%s cannot be moved."`
+const MSG_CANNOT_BE_MOVED: u32 = 0x0103_a598;
+/// The logging function of the scripts (`005b5e40`, `cdecl`, format first).
+const SCRIPT_LOG: u32 = 0x005b_5e40;
+/// `thiscall` on a reference (`fallout shared/tesobjectrefr.cpp`): whether it
+/// can be moved.
+const REFERENCE_CAN_BE_MOVED: u32 = 0x0057_2c80;
+/// `thiscall(form id)` on the data handler: true for ids from `0xff000000`.
+const IS_DYNAMIC_FORM_ID: u32 = 0x0046_9860;
+/// `cdecl(task, reference, axis, amount: double)` after the queue: the task
+/// queue entry point (`fallout/misc`).
+const QUEUE_TASK: u32 = 0x0087_a8b0;
+/// The setting object whose value (2 or more) sends the move and turn
+/// commands through the task queue.
+const SETTING_011C3EA4: u32 = 0x011c_3ea4;
+/// Task number of "set position" in the queue.
+const TASK_SET_POSITION: u32 = 0x1007;
+/// Task number of "set angle" in the queue.
+const TASK_SET_ANGLE: u32 = 0x1009;
+/// `GetPosConditionFunction` (Xbox PDB), `cdecl(object, axis, 0, result)`.
+const GET_POS_CONDITION: u32 = 0x0059_c0c0;
+/// `GetStartingPosConditionFunction` (Xbox PDB), same arguments.
+const GET_STARTING_POS_CONDITION: u32 = 0x0059_c230;
+/// `GetAngleConditionFunction` (Xbox PDB), same arguments.
+const GET_ANGLE_CONDITION: u32 = 0x0059_c170;
+/// `GetStartingAngleConditionFunction` (Xbox PDB), same arguments.
+const GET_STARTING_ANGLE_CONDITION: u32 = 0x0059_c2d0;
+/// `thiscall` on a reference: `this + 0x24`, its rotation (3 floats).
+const REFERENCE_ROTATION: u32 = 0x0043_0830;
+/// `double`: the radians in one degree.
+const DOUBLE_RADIANS_PER_DEGREE: u32 = 0x0102_3128;
+/// `double` `6.2831855` (`2 * pi` as a float).
+const DOUBLE_TWO_PI: u32 = 0x0101_ff48;
+/// The object whose float at `+0xc` `0084d030` returns.
+const FRAME_DATA: u32 = 0x011f_6394;
+/// `thiscall`: the float at `this + 0xc` (`ST0`).
+const FRAME_DATA_FLOAT: u32 = 0x0084_d030;
+/// `TESObjectREFR::SetAngleOnReferenceX`, `thiscall(float)`: stores the float
+/// at `this + 0x24` and calls slot `0x48(2)`.
+const REFERENCE_SET_ANGLE_X: u32 = 0x0057_5770;
+/// `TESObjectREFR::SetAngleOnReferenceY` (Xbox PDB), `thiscall(float)`.
+const REFERENCE_SET_ANGLE_Y: u32 = 0x0057_57a0;
+/// `TESObjectREFR::SetAngleOnReferenceZ`, `thiscall(float)`.
+const REFERENCE_SET_ANGLE_Z: u32 = 0x0057_57d0;
+/// `TESObjectREFR::GetOrientation` (Xbox PDB), `thiscall(out)`: writes the
+/// 9-float orientation into `out` and returns it.
+const REFERENCE_GET_ORIENTATION: u32 = 0x0056_fa00;
+/// `thiscall(matrix)` on a node: copies the 9 floats to `this + 0x34`
+/// (`fallout shared/modelloader.cpp`).
+const NODE_SET_ORIENTATION: u32 = 0x0043_fa80;
+/// `thiscall(vector)` on a node: copies the 3 floats to `this + 0x58`.
+const NODE_SET_POSITION: u32 = 0x0044_0460;
+/// `bhkNiCollisionObject::ResetSim` (Xbox PDB), `cdecl(object, flag)`.
+const COLLISION_RESET_SIM: u32 = 0x00c6_bd00;
+/// Constructor `thiscall(float, byte, byte)` of the 12-byte update data.
+const UPDATE_DATA_CONSTRUCT: u32 = 0x0043_d410;
+/// `thiscall(update data)` on a node: updates it.
+const NODE_UPDATE: u32 = 0x00a5_9c60;
+/// `thiscall(vector)` (`fallout shared/tesobjectrefr.cpp`):
+/// `TESObjectREFR::SetLocationOnReference` (Xbox PDB).
+const REFERENCE_SET_LOCATION: u32 = 0x0057_5830;
+/// `MobileObject::GetCharController` (Xbox PDB) is [`GET_CHAR_CONTROLLER`];
+/// `bhkCharacterController::SetPosition` (Xbox PDB), `thiscall(vector)`.
+const CONTROLLER_SET_POSITION: u32 = 0x0056_20e0;
+/// `thiscall` on a controller: the number `00ca9600` returns for its
+/// `this + 0x3e0` part.
+const CONTROLLER_PART_VALUE: u32 = 0x00ca_9600;
+/// Constructor of a four-float colour: `thiscall(r, g, b, a)`, returns `this`.
+const COLOR_CONSTRUCT: u32 = 0x0041_4430;
+/// The word `fn_005c02f0` returns.
+const GLOBAL_011CA830: u32 = 0x011c_a830;
+/// The colour (4 floats) `005c0300` sets.
+const GLOBAL_COLOR: u32 = 0x011f_a090;
+/// `double` `256.0`.
+const DOUBLE_256: u32 = 0x0102_31d8;
+/// The 3x3 identity matrix (9 floats).
+const IDENTITY_MATRIX: u32 = 0x011a_9448;
+/// The zero vector (3 floats).
+const ZERO_VECTOR: u32 = 0x011f_426c;
+/// `NiMatrix3::MakeXRotation` (Xbox PDB), `thiscall(angle)`.
+const MATRIX_MAKE_X_ROTATION: u32 = 0x0052_4ac0;
+/// `NiMatrix3::MakeYRotation` (Xbox PDB), `thiscall(angle)`.
+const MATRIX_MAKE_Y_ROTATION: u32 = 0x0043_f850;
+/// `thiscall(angle)` (`fallout shared/bgsdecalmanager.cpp`): the rotation
+/// about Z.
+const MATRIX_MAKE_Z_ROTATION: u32 = 0x004a_0c90;
+/// `NiMatrix3::operator*` (Xbox PDB), `thiscall(out, right)`: returns `out`.
+const MATRIX_MULTIPLY: u32 = 0x0043_f8d0;
+/// Empty constructor of the small math types: returns `this`.
+const EMPTY_CONSTRUCT: u32 = 0x0068_15c0;
+
+// ---- Helpers ------------------------------------------------------------------------------
+
+/// Whether `_strnicmp(literal, text, count)` says equal.
+fn starts_with_no_case(e: &mut Engine, literal: u32, text: u32, count: u32) -> bool {
+    e.call(STRING_COMPARE_N_NO_CASE, &args![literal, text, count])
+        .i32()
+        == 0
+}
+
+/// `Interface::PrintLine` with a copy of the `BSStringT` at `string`: the
+/// 8-byte copy is passed by value (two words), the callee destroys it.
+fn print_line(e: &mut Engine, string: u32) {
+    let copy = e.mem.alloc(8);
+    e.call(BS_STRING_COPY, &args![copy, string]);
+    let (first, second) = (e.mem.u32(copy), e.mem.u32(copy + 4));
+    e.call(PRINT_LINE, &args![first, second]);
+    e.mem.free(copy);
+}
+
+/// The object `005bf8d0` and `005bf9e0` reach through the `TES` singleton:
+/// `word(word(tes + 0x68) + 0x20)`.
+fn tes_holder(e: &mut Engine) -> u32 {
+    let tes = e.global::<u32>(TES_SINGLETON);
+    let inner = e.call(WORD_AT_0X68, &args![tes]).u32();
+    e.call(WORD_AT_0X20, &args![inner]).u32()
+}
+
+/// Copies `words` 32-bit words from `from` to `to`.
+fn copy_words(e: &mut Engine, from: u32, to: u32, words: u32) {
+    for i in 0..words {
+        let value = e.mem.u32(from + 4 * i);
+        e.mem.set_u32(to + 4 * i, value);
+    }
+}
+
+/// The constructor + update the position and angle commands finish with:
+/// builds the 12-byte update data (`0.0, 0, 0`) and updates the node.
+fn update_node(e: &mut Engine, node: u32) {
+    let data = e.mem.alloc(12);
+    e.call(UPDATE_DATA_CONSTRUCT, &args![data, 0.0f32, 0u32, 0u32]);
+    e.call(NODE_UPDATE, &args![node, data]);
+    e.mem.free(data);
+}
+
+/// Calls the setter of `REFERENCE_SET_ANGLE_X/Y/Z` for the axis letter
+/// (`'X'`, `'Y'`, `'Z'`; nothing for any other).
+fn set_reference_angle(e: &mut Engine, reference: Ptr, axis: u8, angle: f32) {
+    let setter = match axis {
+        b'X' => REFERENCE_SET_ANGLE_X,
+        b'Y' => REFERENCE_SET_ANGLE_Y,
+        b'Z' => REFERENCE_SET_ANGLE_Z,
+        _ => return,
+    };
+    e.call(setter, &args![reference, angle]);
+}
+
+/// The bodies of `GetPos`, `GetStartingPos`, `GetAngle` and
+/// `GetStartingAngle`: parse an axis letter and forward to the condition
+/// function `condition(thisObj, axis, 0, result)`.
+fn get_axis_command(e: &mut Engine, a: ScriptArgs, condition: u32) -> bool {
+    let Some([axis]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    let axis = axis as u8 as i8 as i32;
+    e.call(condition, &args![a.this_obj, axis, 0u32, a.result])
+        .bool()
+}
+
+/// The body of `SetPos` and `SetAngle`: for a reference that cannot be moved
+/// prints why (and logs the script that tried), otherwise either queues the
+/// task (when the setting `011c3ea4` is above 1) or runs `base` directly.
+fn move_command(
+    e: &mut Engine,
+    a: ScriptArgs,
+    task: u32,
+    base: fn(&mut Engine, Ptr, u8, f32),
+    axis: u8,
+    amount: f32,
+) -> bool {
+    if !a.this_obj.is_null() && !e.call(REFERENCE_CAN_BE_MOVED, &args![a.this_obj]).bool() {
+        if echo_enabled(e) {
+            let name = e.vcall(a.this_obj.addr(), 0x130, &args![]).u32();
+            console_print(e, &args![MSG_CANNOT_BE_MOVED, name]);
+        }
+        let script_id = e.call(FORM_ID, &args![a.script_obj]).u32();
+        let data_handler = e.global::<u32>(DATA_HANDLER);
+        if !e
+            .call(IS_DYNAMIC_FORM_ID, &args![data_handler, script_id])
+            .bool()
+        {
+            let reference_id = e.call(FORM_ID, &args![a.this_obj]).u32();
+            let reference_name = e.vcall(a.this_obj.addr(), 0x130, &args![]).u32();
+            let script_id = e.call(FORM_ID, &args![a.script_obj]).u32();
+            let script_name = e.vcall(a.script_obj.addr(), 0x130, &args![]).u32();
+            e.call(
+                SCRIPT_LOG,
+                &args![
+                    MSG_SCRIPT_MOVE_LOG,
+                    script_name,
+                    script_id,
+                    reference_name,
+                    reference_id
+                ],
+            );
+        }
+        return true;
+    }
+    if setting_value(e, SETTING_011C3EA4) > 1 {
+        let queue = e.call(TASK_QUEUE_INTERFACE, &args![]).u32();
+        e.call(
+            QUEUE_TASK,
+            &args![queue, task, a.this_obj, axis as i8 as i32, amount as f64],
+        );
+    } else {
+        base(e, a.this_obj, axis, amount);
+    }
+    true
+}
+
+// ---- Settings: reading and writing ------------------------------------------------
+
+// Translated from 005be900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Console command that reads a game setting: parses its name (up to 512
+/// characters), stores `0.0` in the result first (also when the parse
+/// fails), looks the setting up in the game setting collection and, for
+/// integer (3) and float (5) settings, stores the value in the result. When
+/// commands echo, prints `GameSetting <name> >> <value>` (or `NOT FOUND`,
+/// the string value for type 6, `UNKNOWN TYPE`).
+pub fn fn_005be900(e: &mut Engine, a: ScriptArgs) -> bool {
+    e.mem.set_f64(a.result.addr(), 0.0);
+    let name = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let ok = parse(e, a, &[name]);
+    if ok {
+        let collection = e.call(GAME_SETTINGS, &args![]).u32();
+        let setting = e.call(GAME_SETTING_FIND, &args![collection, name]).u32();
+        if setting == 0 {
+            if echo_enabled(e) {
+                // The extra argument is what the null setting answers.
+                let value = e.call(SETTING_STRING_VALUE, &args![setting]).u32();
+                console_print(e, &args![MSG_GAME_NOT_FOUND, name, value]);
+            }
+        } else {
+            match e.call(SETTING_TYPE, &args![setting]).u32() {
+                3 => {
+                    let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.i32(address);
+                    e.mem.set_f64(a.result.addr(), value as f64);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.u32(address);
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_INT, setting_name, value]);
+                    }
+                }
+                5 => {
+                    let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.f32(address);
+                    e.mem.set_f64(a.result.addr(), value as f64);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.f32(address);
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_FLOAT, setting_name, value as f64]);
+                    }
+                }
+                6 => {
+                    if echo_enabled(e) {
+                        let value = e.call(SETTING_STRING_VALUE, &args![setting]).u32();
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_STRING, setting_name, value]);
+                    }
+                }
+                _ => {
+                    if echo_enabled(e) {
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_UNKNOWN, setting_name]);
+                    }
+                }
+            }
+        }
+    }
+    e.mem.free(name);
+    ok
+}
+
+// Translated from 005beb00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Console command that sets a game setting: parses a name and a value
+/// (both texts of up to 512 characters), looks the setting up and stores the
+/// value by type (integer 3 through `atol`, float 5 through `atof`, string
+/// 6); echoes the new value when commands echo. A missing setting and an
+/// unknown type are always reported.
+pub fn fn_005beb00(e: &mut Engine, a: ScriptArgs) -> bool {
+    let name = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let value_text = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let ok = parse(e, a, &[name, value_text]);
+    if ok {
+        let collection = e.call(GAME_SETTINGS, &args![]).u32();
+        let setting = e.call(GAME_SETTING_FIND, &args![collection, name]).u32();
+        if setting == 0 {
+            console_print(e, &args![MSG_GAME_NOT_FOUND, name]);
+        } else {
+            match e.call(SETTING_TYPE, &args![setting]).u32() {
+                3 => {
+                    let number = e.call(ATOL, &args![value_text]).i32();
+                    e.call(SETTING_SET_INT, &args![setting, number]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.u32(address);
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_INT, setting_name, value]);
+                    }
+                }
+                5 => {
+                    let number = e.call(ATOF, &args![value_text]).f64() as f32;
+                    e.call(SETTING_SET_FLOAT, &args![setting, number]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.f32(address);
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_FLOAT, setting_name, value as f64]);
+                    }
+                }
+                6 => {
+                    e.call(SETTING_SET_STRING, &args![setting, value_text]);
+                    if echo_enabled(e) {
+                        let value = e.call(SETTING_STRING_VALUE, &args![setting]).u32();
+                        let setting_name = e.call(SETTING_NAME, &args![setting]).u32();
+                        console_print(e, &args![MSG_GAME_STRING, setting_name, value]);
+                    }
+                }
+                _ => console_print(e, &args![MSG_GAME_UNKNOWN, name]),
+            }
+        }
+    }
+    e.mem.free(value_text);
+    e.mem.free(name);
+    ok
+}
+
+/// The INI setting `name` of the two INI setting collections (the second is
+/// asked when the first has none), or 0.
+fn find_ini_setting(e: &mut Engine, name: u32) -> u32 {
+    let collection = e.call(INI_SETTINGS, &args![]).u32();
+    let mut setting = e.call(INI_SETTING_FIND, &args![collection, name]).u32();
+    if setting == 0 {
+        let fallback = e.call(INI_SETTINGS_FALLBACK, &args![]).u32();
+        setting = e.call(INI_SETTING_FIND, &args![fallback, name]).u32();
+    }
+    setting
+}
+
+// Translated from 005becf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Console command that reads an INI setting: parses its name, looks it up
+/// in the INI setting collection and then in the second one, and prints
+/// `INISetting <name> >> <value>` by type (0 boolean, 3 integer, 5 float, 6
+/// string), `UNKNOWN TYPE` or `NOT FOUND`. Prints whether or not commands
+/// echo.
+pub fn fn_005becf0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let name = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let ok = parse(e, a, &[name]);
+    if ok {
+        let setting = find_ini_setting(e, name);
+        if setting == 0 {
+            console_print(e, &args![MSG_INI_NOT_FOUND, name]);
+        } else {
+            match e.call(SETTING_TYPE, &args![setting]).u32() {
+                0 => {
+                    let address = e.call(SETTING_BOOL_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.u8(address) != 0;
+                    console_print(e, &args![MSG_INI_INT, name, value]);
+                }
+                3 => {
+                    let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.u32(address);
+                    console_print(e, &args![MSG_INI_INT, name, value]);
+                }
+                5 => {
+                    let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.f32(address);
+                    console_print(e, &args![MSG_INI_FLOAT, name, value as f64]);
+                }
+                6 => {
+                    let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                    let value = e.mem.u32(address);
+                    console_print(e, &args![MSG_INI_STRING, name, value]);
+                }
+                _ => console_print(e, &args![MSG_INI_UNKNOWN, name]),
+            }
+        }
+    }
+    e.mem.free(name);
+    ok
+}
+
+// Translated from 005bee90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Console command that sets an INI setting: parses a name and a value text,
+/// finds the setting as `005becf0` does and stores the value by type
+/// (boolean 0 and integer 3 through `atol`, float 5 through `atof`, string
+/// 6), echoing the new value when commands echo. A missing setting and an
+/// unknown type are always reported.
+pub fn fn_005bee90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let name = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let value_text = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let ok = parse(e, a, &[name, value_text]);
+    if ok {
+        let setting = find_ini_setting(e, name);
+        if setting == 0 {
+            console_print(e, &args![MSG_INI_NOT_FOUND, name]);
+        } else {
+            match e.call(SETTING_TYPE, &args![setting]).u32() {
+                0 => {
+                    let number = e.call(ATOL, &args![value_text]).i32();
+                    e.call(SETTING_SET_INT, &args![setting, number]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_BOOL_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.u8(address) != 0;
+                        console_print(e, &args![MSG_INI_INT, name, value]);
+                    }
+                }
+                3 => {
+                    let number = e.call(ATOL, &args![value_text]).i32();
+                    e.call(SETTING_SET_INT, &args![setting, number]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.u32(address);
+                        console_print(e, &args![MSG_INI_INT, name, value]);
+                    }
+                }
+                5 => {
+                    let number = e.call(ATOF, &args![value_text]).f64() as f32;
+                    e.call(SETTING_SET_FLOAT, &args![setting, number]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.f32(address);
+                        console_print(e, &args![MSG_INI_FLOAT, name, value as f64]);
+                    }
+                }
+                6 => {
+                    e.call(SETTING_SET_STRING, &args![setting, value_text]);
+                    if echo_enabled(e) {
+                        let address = e.call(SETTING_VALUE_ADDRESS, &args![setting]).u32();
+                        let value = e.mem.u32(address);
+                        console_print(e, &args![MSG_INI_STRING, name, value]);
+                    }
+                }
+                _ => console_print(e, &args![MSG_INI_UNKNOWN, name]),
+            }
+        }
+    }
+    e.mem.free(value_text);
+    e.mem.free(name);
+    ok
+}
+
+// ---- The render options command and its helpers -----------------------------------------
+
+// Translated from 005bf770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets (`on` non-zero) or clears bit `0x10` of the render flags word
+/// `011f91d8`.
+pub fn fn_005bf770(e: &mut Engine, on: u8) {
+    let flags = e.global::<u32>(RENDER_FLAGS);
+    let flags = if on != 0 { flags | 0x10 } else { flags & !0x10 };
+    e.set_global(RENDER_FLAGS, flags);
+}
+
+// Translated from 005bf7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `004dc060(0)` is at least 3 and bit `0x10` of the render flags
+/// word `011f91d8` is set.
+pub fn fn_005bf7b0(e: &mut Engine) -> bool {
+    if e.call(RENDER_SETTING, &args![0u32]).i32() < 3 {
+        return false;
+    }
+    e.global::<u32>(RENDER_FLAGS) & 0x10 != 0
+}
+
+// Translated from 005bf7f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the word `011f91b4`.
+pub fn fn_005bf7f0(e: &mut Engine, value: u32) {
+    e.set_global(GLOBAL_011F91B4, value);
+}
+
+// Translated from 005bf800 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte at `this + 0x124`.
+pub fn fn_005bf800(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x124), value);
+}
+
+// Translated from 005bf820 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word at `this + 0x128` (`00559450` on that address).
+pub fn fn_005bf820(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(STRING_TEXT, &args![this.addr().wrapping_add(0x128)])
+        .u32()
+}
+
+// Translated from 005bf840 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `004de2d0(value)` on the renderer object `011c75a4`.
+pub fn fn_005bf840(e: &mut Engine, value: u8) {
+    e.call(RENDERER_SET_BYTE, &args![RENDERER_OBJECT, value]);
+}
+
+// Translated from 005bf860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Toggles the byte `0118c000`; true.
+pub fn fn_005bf860(e: &mut Engine) -> bool {
+    let value = e.global::<u8>(GLOBAL_0118C000);
+    e.set_global(GLOBAL_0118C000, (value == 0) as u8);
+    true
+}
+
+// Translated from 005bf880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the byte `011f91dc` to 1 unless it already is 1 (then 0); true.
+pub fn fn_005bf880(e: &mut Engine) -> bool {
+    let value = fn_005bf8b0(e);
+    fn_005bf8c0(e, (value != 1) as u8);
+    true
+}
+
+// Translated from 005bf8b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte `011f91dc`.
+pub fn fn_005bf8b0(e: &mut Engine) -> u8 {
+    e.global::<u8>(GLOBAL_011F91DC)
+}
+
+// Translated from 005bf8c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte `011f91dc`.
+pub fn fn_005bf8c0(e: &mut Engine, value: u8) {
+    e.set_global(GLOBAL_011F91DC, value);
+}
+
+/// The part of the `1` and `4` options that depends on the text being a
+/// single character: marks bits `0xe` and, when `004dc060(0)` is at least 2,
+/// `0x20` of `mask`.
+fn single_character_flags(e: &mut Engine, text: u32, mask: &mut u16) {
+    if e.call(STRLEN, &args![text]).u32() == 1 {
+        *mask |= 0x0e;
+        if e.call(RENDER_SETTING, &args![0u32]).i32() >= 2 {
+            *mask |= 0x20;
+        }
+    }
+}
+
+/// The body of `005bf130` after the parameter parse: acts on the option text
+/// and finishes with the flags in `mask` (`004bc3d0`) unless the option
+/// returns early.
+fn render_option(e: &mut Engine, this_obj: Ptr, text: u32) {
+    let mut mask: u16 = 0;
+    match e.mem.u8(text) {
+        b'1' => {
+            mask = 1;
+            e.call(SHADER_SET_MODE, &args![0u32]);
+            fn_005bf7f0(e, 0);
+            single_character_flags(e, text, &mut mask);
+        }
+        b'2' => {
+            mask = 1;
+            fn_005bf7f0(e, 1);
+        }
+        b'3' => {
+            mask = 1;
+            fn_005bf7f0(e, 2);
+        }
+        b'4' => {
+            mask = 1;
+            e.call(SHADER_SET_MODE, &args![3u32]);
+            fn_005bf7f0(e, 0);
+            single_character_flags(e, text, &mut mask);
+        }
+        b'5' => {}
+        _ => {
+            if starts_with_no_case(e, OPTION_TEX, text, 3) {
+                mask = 1;
+                fn_005bf7f0(e, 4);
+            } else if starts_with_no_case(e, OPTION_DEGRADE, text, 7) {
+                mask = 1;
+                fn_005bf7f0(e, 5);
+            } else if starts_with_no_case(e, OPTION_SH, text, 2) {
+                if e.mem.u8(text + 2) == 0 {
+                    let enabled = fn_005bf7b0(e);
+                    fn_005bf770(e, !enabled as u8);
+                    mask = e.call(RENDER_FLAGS_GET, &args![]).u16();
+                    if mask & 0x80 == 0 {
+                        mask |= 0x80;
+                    } else {
+                        mask &= !0x80;
+                    }
+                } else {
+                    let mut level = e.mem.i8(text + 2) as i32 - 0x30;
+                    if level == 1 || level == 2 {
+                        level = 3;
+                    }
+                    let smaller = e.call(MIN_I32, &args![3i32, level]).i32();
+                    let level = e.call(MAX_I32, &args![0i32, smaller]).u32();
+                    e.set_global(GLOBAL_011F91B0, level);
+                    e.call(SHADER_REFRESH, &args![]);
+                    mask = e.call(RENDER_FLAGS_GET, &args![]).u16();
+                    mask |= 0x80;
+                }
+            } else if starts_with_no_case(e, OPTION_SC, text, 2) {
+                let value = e.global::<u8>(GLOBAL_011F9441);
+                e.set_global(GLOBAL_011F9441, (value == 0) as u8);
+                mask = e.call(RENDER_FLAGS_GET, &args![]).u16();
+            } else if starts_with_no_case(e, OPTION_PSH, text, 2) {
+                let flags = e.call(RENDER_FLAGS_GET, &args![]).u32();
+                if flags & 0x20 == 0 {
+                    fn_005bf840(e, 1);
+                    let tes = e.global::<u32>(TES_SINGLETON);
+                    let target = e.call(WORD_AT_0X8, &args![tes]).u32();
+                    e.call(PSH_ENABLE, &args![target]);
+                    let current = e.call(RENDER_FLAGS_GET, &args![]).u16();
+                    e.call(RENDER_FLAGS_SET, &args![(current | 0x20) as u32]);
+                } else {
+                    fn_005bf840(e, 0);
+                    e.call(PSH_DISABLE, &args![0u32]);
+                    let current = e.call(RENDER_FLAGS_GET, &args![]).u16();
+                    e.call(RENDER_FLAGS_SET, &args![(current & !0x20) as u32]);
+                }
+                return;
+            } else if e.mem.u8(text) == b't' {
+                let value = e.call(ATOL, &args![text + 1]).u32();
+                e.set_global(GLOBAL_011AD828, value);
+            } else if starts_with_no_case(e, OPTION_DSH, text, 3) {
+                if !this_obj.is_null() {
+                    let list = e.call(SHADOW_LIST_GET, &args![0u32]).u32();
+                    let mut node = e.call(SHADOW_LIST_FIRST, &args![list]).u32();
+                    while node != 0 {
+                        let node_value = fn_005bf820(e, Ptr::new(node));
+                        let object_value = e.vcall(this_obj.addr(), 0x1d0, &args![]).u32();
+                        if node_value == object_value {
+                            let flag = e.call(NODE_FLAG, &args![node]).bool();
+                            fn_005bf800(e, Ptr::new(node), !flag as u8);
+                        }
+                        node = e.call(SHADOW_LIST_NEXT, &args![list]).u32();
+                    }
+                }
+                return;
+            } else if starts_with_no_case(e, OPTION_OPT, text, 3) {
+                let value = e.global::<u8>(GLOBAL_011AD80D);
+                e.set_global(GLOBAL_011AD80D, (value == 0) as u8);
+                mask = e.call(RENDER_FLAGS_GET, &args![]).u16();
+                mask |= 0x100;
+            } else if starts_with_no_case(e, OPTION_ALPHA, text, 5) {
+                return;
+            }
+        }
+    }
+    // The characters after the first select further bits.
+    if e.mem.u8(text + 1) == b'1' {
+        mask |= 2;
+    }
+    if e.mem.u8(text + 2) == b'1' {
+        mask |= 4;
+    }
+    if e.mem.u8(text + 3) == b'1' {
+        mask |= 8;
+    }
+    if e.call(RENDER_SETTING, &args![0u32]).i32() >= 2 && e.mem.u8(text + 4) != b'0' {
+        mask |= 0x20;
+    }
+    e.call(RENDER_FLAGS_SET, &args![mask as u32]);
+}
+
+// Translated from 005bf130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The render options console command: parses a text (up to 512 characters)
+/// and acts on it. A first character `1` to `5` selects a shader mode (`1`
+/// and `4` also set the shader table through `00b4f450`), `tex`, `degrade`,
+/// `sh` (toggle, or `sh<digit>` for a level 0 to 3), `sc`, `psh`, `t<number>`,
+/// `dsh` (clears the flag of the shadow nodes of the command's reference),
+/// `opt` and `alpha` are the named options; characters 2 to 5 of the text
+/// add bits to the flags word, which is stored through `004bc3d0`
+/// (`psh`, `dsh` and `alpha` leave without). True whenever the parameters
+/// parse.
+pub fn fn_005bf130(e: &mut Engine, a: ScriptArgs) -> bool {
+    let text = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    let ok = parse(e, a, &[text]);
+    if ok {
+        render_option(e, a.this_obj, text);
+    }
+    e.mem.free(text);
+    ok
+}
+
+// ---- Small accessors and the screen-position commands ---------------------------------
+
+// Translated from 005bf8d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses two integers (default 0). When the object reached through the
+/// `TES` singleton (`word(word(word(tes + 0x68) + 0x20) + 0xc)`) exists,
+/// stores them as floats at its `+0x2c`/`+0x30` ([`fn_005bf9a0`]) and sets
+/// the byte at `+0x18` of the holder to "both zero" ([`fn_005bf9c0`]).
+pub fn fn_005bf8d0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([x, y]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    let holder = tes_holder(e);
+    let target = e.call(WORD_AT_0XC, &args![holder]).u32();
+    if target != 0 {
+        let both_zero = x == 0 && y == 0;
+        let holder = tes_holder(e);
+        fn_005bf9c0(e, Ptr::new(holder), both_zero as u8);
+        fn_005bf9a0(e, Ptr::new(target), x as i32 as f32, y as i32 as f32);
+    }
+    true
+}
+
+// Translated from 005bf9a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the floats `x` and `y` at `this + 0x2c` and `this + 0x30`.
+pub fn fn_005bf9a0(e: &mut Engine, this: Ptr, x: f32, y: f32) {
+    e.mem.set_f32(this.addr().wrapping_add(0x2c), x);
+    e.mem.set_f32(this.addr().wrapping_add(0x30), y);
+}
+
+// Translated from 005bf9c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores `value` in the byte at `this + 0x18`.
+pub fn fn_005bf9c0(e: &mut Engine, this: Ptr, value: u8) {
+    e.mem.set_u8(this.addr().wrapping_add(0x18), value);
+}
+
+// Translated from 005bf9e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses a distance (default 0.0) and sets the camera's far plane to it:
+/// a distance of 0 or less becomes `163840.0` and sets the holder's flag
+/// byte ([`fn_005bf9c0`]) to 1, a distance above `163840.0` is limited to
+/// it. When the camera exists and its far distance differs, the far
+/// distance, the far-to-near ratio (`0x507700`) and the view frustum
+/// (`NiCamera::SetViewFrustum`) are updated and the holder's flag byte is
+/// stored. True whenever the parameter parses.
+pub fn fn_005bf9e0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([bits]) = parse_into(e, a, [0]) else {
+        return false;
+    };
+    let mut distance = f32::from_bits(bits);
+    let mut at_limit = 0u8;
+    let limit = e.global::<f32>(FLOAT_FAR_LIMIT);
+    if distance as f64 <= e.global::<f64>(DOUBLE_ZERO) {
+        distance = limit;
+        at_limit = 1;
+    } else if distance as f64 > e.global::<f64>(DOUBLE_FAR_LIMIT) {
+        distance = limit;
+    }
+    let holder = e.call(CAMERA_HOLDER, &args![]).u32();
+    let camera = e.call(WORD_AT_0XAC, &args![holder]).u32();
+    if camera != 0 {
+        let source = e.call(CAMERA_FRUSTUM, &args![camera]).u32();
+        let frustum = e.mem.alloc(0x1c);
+        copy_words(e, source, frustum, 7);
+        let near = e.mem.f32(frustum + 0x10);
+        if e.mem.f32(frustum + 0x14) != distance {
+            e.mem.set_f32(frustum + 0x14, distance);
+            let ratio = (distance as f64 / near as f64) as f32;
+            e.call(CAMERA_SET_RATIO, &args![camera, ratio]);
+            e.call(CAMERA_SET_VIEW_FRUSTUM, &args![camera, frustum]);
+            let holder = tes_holder(e);
+            fn_005bf9c0(e, Ptr::new(holder), at_limit);
+        }
+        e.mem.free(frustum);
+    }
+    true
+}
+
+// Translated from 005bfaf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses three floats whose defaults are the values of the settings
+/// `011db200`, `011db238` and `011db25c` (read before the parse, and a
+/// fourth word the command does not use) and hands them to the interface
+/// object: the first through `005bfbb0`, the second through `005bfbd0`, the
+/// third through `004ee4b0`. Returns whether the parse succeeded.
+pub fn fn_005bfaf0(e: &mut Engine, a: ScriptArgs) -> bool {
+    let mut defaults = [0u32; 4];
+    for (slot, setting) in
+        defaults
+            .iter_mut()
+            .zip([SETTING_011DB200, SETTING_011DB238, SETTING_011DB25C])
+    {
+        let address = e.call(SETTING_FLOAT_ADDRESS, &args![setting]).u32();
+        *slot = e.mem.u32(address);
+    }
+    let Some([first, second, third, _unused]) = parse_into(e, a, defaults) else {
+        return false;
+    };
+    let object = e.call(INTERFACE_OBJECT, &args![]).u32();
+    fn_005bfbb0(e, Ptr::new(object), f32::from_bits(first));
+    let object = e.call(INTERFACE_OBJECT, &args![]).u32();
+    fn_005bfbd0(e, Ptr::new(object), f32::from_bits(second));
+    let object = e.call(INTERFACE_OBJECT, &args![]).u32();
+    e.call(
+        INTERFACE_OBJECT_FN_004EE4B0,
+        &args![object, f32::from_bits(third)],
+    );
+    true
+}
+
+// Translated from 005bfbb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float `value` at `this + 0x58`.
+pub fn fn_005bfbb0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr().wrapping_add(0x58), value);
+}
+
+// Translated from 005bfbd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Stores the float `value` at `this + 0x60`.
+pub fn fn_005bfbd0(e: &mut Engine, this: Ptr, value: f32) {
+    e.mem.set_f32(this.addr().wrapping_add(0x60), value);
+}
+
+// Translated from 005bfbf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetTreeMipmapBias` (Xbox PDB): parses two floats (defaults: the
+/// current values of `011f9484`, the local trees, and `011f9480`, the LOD
+/// trees), prints the old values (`Old values:   [ Local Trees: %f | LOD
+/// Trees: %f ]`), stores the new ones and prints them. The output goes
+/// through a `BSStringT` formatted by `00406f60` and printed by
+/// `Interface::PrintLine`. The compiler's exception-unwinding frame is not
+/// translated.
+pub fn script_set_tree_mipmap_bias(e: &mut Engine, a: ScriptArgs) -> bool {
+    let local = e.global::<u32>(TREE_MIPMAP_LOCAL);
+    let lod = e.global::<u32>(TREE_MIPMAP_LOD);
+    let Some([new_local, new_lod]) = parse_into(e, a, [local, lod]) else {
+        return false;
+    };
+    let old_lod = e.global::<f32>(TREE_MIPMAP_LOD);
+    let old_local = e.global::<f32>(TREE_MIPMAP_LOCAL);
+    let string = e.mem.alloc(8);
+    e.call(BS_STRING_CONSTRUCT, &args![string]);
+    e.call(
+        BS_STRING_FORMAT,
+        &args![string, MSG_OLD_VALUES, old_local as f64, old_lod as f64],
+    );
+    print_line(e, string);
+    e.set_global(TREE_MIPMAP_LOD, new_lod);
+    e.set_global(TREE_MIPMAP_LOCAL, new_local);
+    e.call(
+        BS_STRING_FORMAT,
+        &args![
+            string,
+            MSG_NEW_VALUES,
+            f32::from_bits(new_local) as f64,
+            f32::from_bits(new_lod) as f64
+        ],
+    );
+    print_line(e, string);
+    e.call(BS_STRING_DESTRUCT, &args![string]);
+    e.mem.free(string);
+    true
+}
+
+// Translated from 005bfd40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Calls `00705a60` (`fallout/interface/interface.cpp`); true.
+pub fn fn_005bfd40(e: &mut Engine) -> bool {
+    e.call(INTERFACE_ACTION, &args![]);
+    true
+}
+
+// Translated from 005bfd50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::ForceCloseFile` (Xbox PDB): parses a file name (up to 512
+/// characters) and, when commands echo, reports `ERR: No Filename.` for an
+/// empty one; otherwise looks the file up in the data handler
+/// (`TESDataHandler::GetListFile`) and closes it (`TESFile::CloseTES`)
+/// between two `0x61d` byte stores of the data handler (1, then 0), or
+/// reports that it was not found. True whenever the parameter parses.
+pub fn script_force_close_file(e: &mut Engine, a: ScriptArgs) -> bool {
+    let name = e.mem.alloc(TEXT_PARAMETER_SIZE);
+    e.mem.set_u8(name, 0);
+    let ok = parse(e, a, &[name]);
+    if ok {
+        if e.mem.i8(name) != 0 {
+            let data_handler = e.global::<u32>(DATA_HANDLER);
+            let file = e
+                .call(DATA_HANDLER_GET_LIST_FILE, &args![data_handler, name])
+                .u32();
+            if file != 0 {
+                let data_handler = e.global::<u32>(DATA_HANDLER);
+                e.call(DATA_HANDLER_SET_BYTE, &args![data_handler, 1u32]);
+                e.call(FILE_CLOSE, &args![file]);
+                let data_handler = e.global::<u32>(DATA_HANDLER);
+                e.call(DATA_HANDLER_SET_BYTE, &args![data_handler, 0u32]);
+                if echo_enabled(e) {
+                    console_print(e, &args![MSG_FILE_CLOSED, name]);
+                }
+            } else if echo_enabled(e) {
+                console_print(e, &args![MSG_FILE_NOT_FOUND, name]);
+            }
+        } else if echo_enabled(e) {
+            console_print(e, &args![MSG_NO_FILENAME]);
+        }
+    }
+    e.mem.free(name);
+    ok
+}
+
+// Translated from 005bfe90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Fills in a 0x74-byte request (`004a37b0`, `fallout shared/
+/// bgsdecalmanager.cpp`) from the camera and submits it (`004a3fe0`). The
+/// parameters are not parsed. The request starts with the camera position.
+/// Without a reference only two lookups happen (the current cell of the
+/// `TES` singleton, or the player's `+0x40` word). With a reference that has
+/// a `+0x40` word and a slot `0x1d0` object, the request gets: a location
+/// found from the player's current weapon (for an actor through its slot and
+/// the weapon's node, otherwise through the weapon's `+0x24c` part; falling
+/// back to `fn_005c02f0`'s object and index 6), flag bits 1 to 15 for an
+/// actor, `-1` at `+0x34`, a random number in `0.0..4.0` rounded into the
+/// byte at `+0x70`, a random number between the bounds of the found object
+/// at `+0x38`/`+0x3c`, `1000.0` at `+0x40`, `90.0` at `+0x58`, and the
+/// direction vector: the camera's for a reference with a `+0xbc` word or an
+/// actor (mode 2, the reference at `+0x24`), the camera's negated otherwise
+/// (mode 1, the `+0x1d0` object at `+0x28`). True.
+pub fn fn_005bfe90(e: &mut Engine, a: ScriptArgs) -> bool {
+    let holder = e.call(CAMERA_HOLDER, &args![]).u32();
+    let camera = e.call(WORD_AT_0XAC, &args![holder]).u32();
+    let request = e.mem.alloc(0x74);
+    e.call(DECAL_REQUEST_CONSTRUCT, &args![request]);
+    let position = e.call(CAMERA_POSITION, &args![camera]).u32();
+    copy_words(e, position, request, 3);
+    if a.this_obj.is_null() {
+        let tes = e.global::<u32>(TES_SINGLETON);
+        if e.call(WORD_AT_0X34, &args![tes]).u32() != 0 {
+            e.call(GET_CURRENT_CELL, &args![tes]);
+        } else {
+            let player = e.global::<u32>(PLAYER);
+            e.call(WORD_AT_0X40, &args![player]);
+        }
+    } else {
+        decal_request_for_reference(e, a.this_obj, camera, request);
+    }
+    e.mem.free(request);
+    true
+}
+
+/// The part of `005bfe90` for a reference: see there.
+fn decal_request_for_reference(e: &mut Engine, reference: Ptr, camera: u32, request: u32) {
+    let object = reference.addr();
+    let world = e.call(WORD_AT_0X40, &args![object]).u32();
+    if e.vcall(object, 0x1d0, &args![]).u32() == 0 {
+        return;
+    }
+    let held = e.vcall(object, 0x1d0, &args![]).u32();
+    let player = e.global::<u32>(PLAYER);
+    let weapon = e.call(ACTOR_GET_CURRENT_WEAPON, &args![player]).u32();
+    let mut found = if e.vcall(object, 0x100, &args![]).bool() {
+        let actor = cast_to_actor(e, reference);
+        let slot = if e.call(ACTOR_FN_008BA410, &args![actor]).bool() {
+            4
+        } else {
+            let part = e.call(ACTOR_OWNER_PART, &args![actor]).u32() + 0x30;
+            e.vcall(part, 0x58, &args![]).u32()
+        };
+        let node = if weapon != 0 {
+            e.call(WEAPON_NODE, &args![weapon]).u32()
+        } else {
+            0
+        };
+        if node != 0 {
+            e.call(NODE_LOOKUP_BY_SLOT, &args![node, slot]).u32()
+        } else {
+            0
+        }
+    } else if weapon != 0 {
+        e.call(WEAPON_LOOKUP, &args![weapon, 0u32]).u32()
+    } else {
+        0
+    };
+    let mut location = if found != 0 {
+        e.call(SECOND_GENERIC_LOCATION, &args![found]).u32()
+    } else {
+        0
+    };
+    if location == 0 {
+        let owner = fn_005c02f0(e);
+        found = e.call(EXPLOSION_LOOKUP, &args![owner, 6u32]).u32();
+        location = if found != 0 {
+            e.call(SECOND_GENERIC_LOCATION, &args![found]).u32()
+        } else {
+            0
+        };
+    }
+    e.mem.set_u32(request + 0x30, location);
+    if e.vcall(object, 0x100, &args![]).bool() {
+        let mut mask = e.mem.u32(request + 0x6c);
+        for bit in 0..0xf {
+            mask |= 1 << (bit + 1);
+        }
+        e.mem.set_u32(request + 0x6c, mask);
+    }
+    e.mem.set_u32(request + 0x34, 0xffff_ffff);
+    let value = e.call(DECAL_FLOAT, &args![]).f32();
+    e.mem.set_f32(request + 0x44, value);
+    let upper = e.global::<f32>(FLOAT_ROUND_RANGE);
+    let random = e.call(RANDOM_FLOAT, &args![0.0f32, upper]).f32();
+    let rounded = e.call(ROUND_FLOAT, &args![random]).f64();
+    let byte = e.call(FTOL, &args![rounded]).u8();
+    e.mem.set_u8(request + 0x70, byte);
+    let high = e.call(RANGE_HIGH, &args![found]).f32();
+    let low = e.call(RANGE_LOW, &args![found]).f32();
+    let random = e.call(RANDOM_FLOAT, &args![low, high]).f32();
+    e.mem.set_f32(request + 0x3c, random);
+    e.mem.set_f32(request + 0x38, random);
+    let thousand = e.global::<f32>(FLOAT_DECAL_1000);
+    e.mem.set_f32(request + 0x40, thousand);
+    let ninety = e.global::<f32>(FLOAT_DECAL_90);
+    e.mem.set_f32(request + 0x58, ninety);
+    let has_word = e.call(WORD_AT_0XBC, &args![held]).u32() != 0;
+    if has_word || e.vcall(object, 0x100, &args![]).bool() {
+        let direction = e.mem.alloc(12);
+        let result = e.call(CAMERA_DIRECTION, &args![camera, direction]).u32();
+        copy_words(e, result, request + 0xc, 3);
+        e.mem.free(direction);
+        e.mem.set_u32(request + 0x24, object);
+        e.call(DECAL_REQUEST_SUBMIT, &args![world, request, 2u32, 1u32]);
+    } else {
+        let direction = e.mem.alloc(12);
+        let negated = e.mem.alloc(12);
+        let result = e.call(CAMERA_DIRECTION, &args![camera, direction]).u32();
+        let result = e.call(VECTOR_NEGATE, &args![result, negated]).u32();
+        copy_words(e, result, request + 0xc, 3);
+        e.mem.free(negated);
+        e.mem.free(direction);
+        let linked = e.vcall(object, 0x1d0, &args![]).u32();
+        e.mem.set_u32(request + 0x28, linked);
+        e.call(DECAL_REQUEST_SUBMIT, &args![world, request, 1u32, 1u32]);
+    }
+}
+
+// Translated from 005c02f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The word `011ca830`.
+pub fn fn_005c02f0(e: &mut Engine) -> u32 {
+    e.global::<u32>(GLOBAL_011CA830)
+}
+
+// Translated from 005c0300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Parses three integers (default 0), builds the colour `(r / 256, g / 256,
+/// b / 256, 1.0)` and stores its four floats at `011fa090`. True whenever
+/// the parameters parse.
+pub fn fn_005c0300(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([red, green, blue]) = parse_into(e, a, [0, 0, 0]) else {
+        return false;
+    };
+    let scale = e.global::<f64>(DOUBLE_256);
+    let channel = |value: u32| (value as i32 as f64 / scale) as f32;
+    let color = e.mem.alloc(16);
+    let result = e
+        .call(
+            COLOR_CONSTRUCT,
+            &args![color, channel(red), channel(green), channel(blue), 1.0f32],
+        )
+        .u32();
+    copy_words(e, result, GLOBAL_COLOR, 4);
+    e.mem.free(color);
+    true
+}
+
+// Translated from 005c03d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::RotateFunction` (Xbox PDB): parses an axis letter (`X`, `Y` or
+/// `Z`) and an integer number of degrees. For a reference with a slot
+/// `0x1d0` object, adds `degrees * (pi / 180) * (the float of 0084d030 on
+/// 011f6394)` to that axis of the reference's rotation, wraps it into
+/// `0..2pi`, stores it (`SetAngleOnReference`), copies the new orientation
+/// to the object and, unless slot `0x1e4` says otherwise, updates the node.
+/// True whenever the parameters parse.
+pub fn script_rotate_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([axis, degrees]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    let axis = axis as u8;
+    if a.this_obj.is_null() {
+        return true;
+    }
+    let object = a.this_obj.addr();
+    let node = e.vcall(object, 0x1d0, &args![]).u32();
+    if node == 0 {
+        return true;
+    }
+    let mut angle = 0.0f32;
+    if matches!(axis, b'X' | b'Y' | b'Z') {
+        let rotation = e.call(REFERENCE_ROTATION, &args![a.this_obj]).u32();
+        angle = e.mem.f32(rotation + 4 * (axis - b'X') as u32);
+    }
+    let radians = degrees as i32 as f64 * e.global::<f64>(DOUBLE_RADIANS_PER_DEGREE);
+    let frame = e.call(FRAME_DATA_FLOAT, &args![FRAME_DATA]).f32();
+    angle = (frame as f64 * radians + angle as f64) as f32;
+    let two_pi = e.global::<f64>(DOUBLE_TWO_PI);
+    while angle as f64 >= two_pi {
+        angle = (angle as f64 - two_pi) as f32;
+    }
+    while (angle as f64) < e.global::<f64>(DOUBLE_ZERO) {
+        angle = (angle as f64 + two_pi) as f32;
+    }
+    set_reference_angle(e, a.this_obj, axis, angle);
+    let orientation = e.mem.alloc(0x24);
+    let result = e
+        .call(REFERENCE_GET_ORIENTATION, &args![a.this_obj, orientation])
+        .u32();
+    e.call(NODE_SET_ORIENTATION, &args![node, result]);
+    e.mem.free(orientation);
+    if e.vcall(object, 0x1e4, &args![]).u32() == 0 {
+        update_node(e, node);
+    }
+    true
+}
+
+// Translated from 005c0590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPosFunction` (Xbox PDB): parses an axis letter and forwards
+/// to `GetPosConditionFunction(thisObj, axis, 0, result)`.
+pub fn script_get_pos_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_axis_command(e, a, GET_POS_CONDITION)
+}
+
+// Translated from 005c05f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetPosFunction` (Xbox PDB): parses an axis letter and a float
+/// (default 0.0). A reference that cannot be moved (`00572c80`) is reported
+/// (see [`move_command`]); otherwise the position is set through the task
+/// queue (task `0x1007`) when the setting `011c3ea4` is above 1, or by
+/// [`script_set_pos_base`]. True whenever the parameters parse.
+pub fn script_set_pos_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([axis, amount]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    move_command(
+        e,
+        a,
+        TASK_SET_POSITION,
+        script_set_pos_base,
+        axis as u8,
+        f32::from_bits(amount),
+    )
+}
+
+// Translated from 005c0740 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetPosBase` (Xbox PDB): sets one coordinate (`X`, `Y` or `Z`)
+/// of a reference's position, taken from slot `0x1f4`: the position goes
+/// through `SetLocationOnReference`, the character controller of a
+/// `MobileObject` (unless `005c0860` says so) is moved too, and the slot
+/// `0x1d0` object gets the position, a simulation reset and a node update.
+/// Nothing for a null reference.
+pub fn script_set_pos_base(e: &mut Engine, reference: Ptr, axis: u8, value: f32) {
+    if reference.is_null() {
+        return;
+    }
+    let object = reference.addr();
+    let position = e.vcall(object, 0x1f4, &args![]).u32();
+    let vector = e.mem.alloc(12);
+    copy_words(e, position, vector, 3);
+    match axis {
+        b'X' => e.mem.set_f32(vector, value),
+        b'Y' => e.mem.set_f32(vector + 4, value),
+        b'Z' => e.mem.set_f32(vector + 8, value),
+        _ => {}
+    }
+    e.call(REFERENCE_SET_LOCATION, &args![reference, vector]);
+    let mobile = e
+        .call(
+            DYNAMIC_CAST,
+            &args![
+                reference,
+                0u32,
+                RTTI_TES_OBJECT_REFR,
+                RTTI_MOBILE_OBJECT,
+                0u32
+            ],
+        )
+        .u32();
+    if mobile != 0 {
+        let controller = e.call(GET_CHAR_CONTROLLER, &args![mobile]).u32();
+        if controller != 0 && !fn_005c0860(e, Ptr::new(controller)) {
+            e.call(CONTROLLER_SET_POSITION, &args![controller, vector]);
+        }
+    }
+    let node = e.vcall(object, 0x1d0, &args![]).u32();
+    if node != 0 {
+        e.call(NODE_SET_POSITION, &args![node, vector]);
+        e.call(COLLISION_RESET_SIM, &args![node, 1u32]);
+        update_node(e, node);
+    }
+    e.mem.free(vector);
+}
+
+// Translated from 005c0860 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether [`fn_005c0880`] answers 4.
+pub fn fn_005c0860(e: &mut Engine, this: Ptr) -> bool {
+    fn_005c0880(e, this) == 4
+}
+
+// Translated from 005c0880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00ca9600` on the part at `this + 0x3e0` (a character controller's
+/// state).
+pub fn fn_005c0880(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(
+        CONTROLLER_PART_VALUE,
+        &args![this.addr().wrapping_add(0x3e0)],
+    )
+    .u32()
+}
+
+// Translated from 005c08a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStartingPosFunction` (Xbox PDB): parses an axis letter and
+/// forwards to `GetStartingPosConditionFunction(thisObj, axis, 0, result)`.
+pub fn script_get_starting_pos_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_axis_command(e, a, GET_STARTING_POS_CONDITION)
+}
+
+// Translated from 005c0900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAngleFunction` (Xbox PDB): parses an axis letter and forwards
+/// to `GetAngleConditionFunction(thisObj, axis, 0, result)`.
+pub fn script_get_angle_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_axis_command(e, a, GET_ANGLE_CONDITION)
+}
+
+// Translated from 005c0960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetStartingAngleFunction` (Xbox PDB): parses an axis letter and
+/// forwards to `GetStartingAngleConditionFunction(thisObj, axis, 0,
+/// result)`.
+pub fn script_get_starting_angle_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    get_axis_command(e, a, GET_STARTING_ANGLE_CONDITION)
+}
+
+// Translated from 005c09c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetAngleFunction` (Xbox PDB): as [`script_set_pos_function`]
+/// for an angle in degrees (task `0x1009`, [`script_set_angle_base`]).
+pub fn script_set_angle_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    let Some([axis, amount]) = parse_into(e, a, [0, 0]) else {
+        return false;
+    };
+    move_command(
+        e,
+        a,
+        TASK_SET_ANGLE,
+        script_set_angle_base,
+        axis as u8,
+        f32::from_bits(amount),
+    )
+}
+
+// Translated from 005c0b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetAngleBase` (Xbox PDB): converts `degrees` to radians and
+/// stores them as one angle (`X`, `Y` or `Z`) of the reference, copies the
+/// orientation to its slot `0x1d0` object, resets the simulation and, unless
+/// slot `0x1e4` says otherwise, updates the node. Nothing for a null
+/// reference.
+pub fn script_set_angle_base(e: &mut Engine, reference: Ptr, axis: u8, degrees: f32) {
+    if reference.is_null() {
+        return;
+    }
+    let radians = (degrees as f64 * e.global::<f64>(DOUBLE_RADIANS_PER_DEGREE)) as f32;
+    set_reference_angle(e, reference, axis, radians);
+    let object = reference.addr();
+    let node = e.vcall(object, 0x1d0, &args![]).u32();
+    if node == 0 {
+        return;
+    }
+    let orientation = e.mem.alloc(0x24);
+    let result = e
+        .call(REFERENCE_GET_ORIENTATION, &args![reference, orientation])
+        .u32();
+    e.call(NODE_SET_ORIENTATION, &args![node, result]);
+    e.mem.free(orientation);
+    e.call(COLLISION_RESET_SIM, &args![node, 1u32]);
+    if e.vcall(object, 0x1e4, &args![]).u32() == 0 {
+        update_node(e, node);
+    }
+}
+
+// Translated from 005c0bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::SetAtStartFunction` (Xbox PDB): puts a reference back at its
+/// start. For a reference with a slot `0x1d0` object: calls slot `0x174`
+/// with the zero vector, builds the orientation as the product of the
+/// rotations about X, Y and Z by the three angles of slot `0x16c` (each new
+/// rotation multiplied by the running matrix, which starts as the identity),
+/// gives the object the position of slot `0x170` and that orientation, and
+/// unless slot `0x1e4` says otherwise updates the node. True.
+pub fn script_set_at_start_function(e: &mut Engine, a: ScriptArgs) -> bool {
+    if a.this_obj.is_null() {
+        return true;
+    }
+    let object = a.this_obj.addr();
+    let node = e.vcall(object, 0x1d0, &args![]).u32();
+    if node == 0 {
+        return true;
+    }
+    let rotation = e.mem.alloc(0x24);
+    let running = e.mem.alloc(0x24);
+    e.call(EMPTY_CONSTRUCT, &args![rotation]);
+    e.call(EMPTY_CONSTRUCT, &args![running]);
+    copy_words(e, IDENTITY_MATRIX, running, 9);
+    let zero = [
+        e.mem.u32(ZERO_VECTOR),
+        e.mem.u32(ZERO_VECTOR + 4),
+        e.mem.u32(ZERO_VECTOR + 8),
+    ];
+    e.vcall(object, 0x174, &args![zero[0], zero[1], zero[2]]);
+    for (index, make_rotation) in [
+        MATRIX_MAKE_X_ROTATION,
+        MATRIX_MAKE_Y_ROTATION,
+        MATRIX_MAKE_Z_ROTATION,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let out = e.mem.alloc(12);
+        let angles = e.vcall(object, 0x16c, &args![out]).u32();
+        let angle = e.mem.f32(angles + 4 * index as u32);
+        e.call(make_rotation, &args![rotation, angle]);
+        let product_out = e.mem.alloc(0x24);
+        let product = e
+            .call(MATRIX_MULTIPLY, &args![rotation, product_out, running])
+            .u32();
+        copy_words(e, product, running, 9);
+        e.mem.free(product_out);
+        e.mem.free(out);
+    }
+    let out = e.mem.alloc(12);
+    let position = e.vcall(object, 0x170, &args![out]).u32();
+    e.call(NODE_SET_POSITION, &args![node, position]);
+    e.mem.free(out);
+    e.call(NODE_SET_ORIENTATION, &args![node, running]);
+    if e.vcall(object, 0x1e4, &args![]).u32() == 0 {
+        update_node(e, node);
+    }
+    e.mem.free(running);
+    e.mem.free(rotation);
+    true
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -1628,6 +3193,58 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005be830, fn_005be830(ScriptArgs) -> bool),
         entry!(0x005be850, fn_005be850(ScriptArgs) -> bool),
         entry!(0x005be870, fn_005be870(ScriptArgs) -> bool),
+        entry!(0x005be900, fn_005be900(ScriptArgs) -> bool),
+        entry!(0x005beb00, fn_005beb00(ScriptArgs) -> bool),
+        entry!(0x005becf0, fn_005becf0(ScriptArgs) -> bool),
+        entry!(0x005bee90, fn_005bee90(ScriptArgs) -> bool),
+        entry!(0x005bf130, fn_005bf130(ScriptArgs) -> bool),
+        entry!(0x005bf770, fn_005bf770(u8)),
+        entry!(0x005bf7b0, fn_005bf7b0() -> bool),
+        entry!(0x005bf7f0, fn_005bf7f0(u32)),
+        entry!(0x005bf800, fn_005bf800(Ptr, u8)),
+        entry!(0x005bf820, fn_005bf820(Ptr) -> u32),
+        entry!(0x005bf840, fn_005bf840(u8)),
+        entry!(0x005bf860, fn_005bf860() -> bool),
+        entry!(0x005bf880, fn_005bf880() -> bool),
+        entry!(0x005bf8b0, fn_005bf8b0() -> u8),
+        entry!(0x005bf8c0, fn_005bf8c0(u8)),
+        entry!(0x005bf8d0, fn_005bf8d0(ScriptArgs) -> bool),
+        entry!(0x005bf9a0, fn_005bf9a0(Ptr, f32, f32)),
+        entry!(0x005bf9c0, fn_005bf9c0(Ptr, u8)),
+        entry!(0x005bf9e0, fn_005bf9e0(ScriptArgs) -> bool),
+        entry!(0x005bfaf0, fn_005bfaf0(ScriptArgs) -> bool),
+        entry!(0x005bfbb0, fn_005bfbb0(Ptr, f32)),
+        entry!(0x005bfbd0, fn_005bfbd0(Ptr, f32)),
+        entry!(
+            0x005bfbf0,
+            script_set_tree_mipmap_bias(ScriptArgs) -> bool
+        ),
+        entry!(0x005bfd40, fn_005bfd40() -> bool),
+        entry!(0x005bfd50, script_force_close_file(ScriptArgs) -> bool),
+        entry!(0x005bfe90, fn_005bfe90(ScriptArgs) -> bool),
+        entry!(0x005c02f0, fn_005c02f0() -> u32),
+        entry!(0x005c0300, fn_005c0300(ScriptArgs) -> bool),
+        entry!(0x005c03d0, script_rotate_function(ScriptArgs) -> bool),
+        entry!(0x005c0590, script_get_pos_function(ScriptArgs) -> bool),
+        entry!(0x005c05f0, script_set_pos_function(ScriptArgs) -> bool),
+        entry!(0x005c0740, script_set_pos_base(Ptr, u8, f32)),
+        entry!(0x005c0860, fn_005c0860(Ptr) -> bool),
+        entry!(0x005c0880, fn_005c0880(Ptr) -> u32),
+        entry!(
+            0x005c08a0,
+            script_get_starting_pos_function(ScriptArgs) -> bool
+        ),
+        entry!(0x005c0900, script_get_angle_function(ScriptArgs) -> bool),
+        entry!(
+            0x005c0960,
+            script_get_starting_angle_function(ScriptArgs) -> bool
+        ),
+        entry!(0x005c09c0, script_set_angle_function(ScriptArgs) -> bool),
+        entry!(0x005c0b10, script_set_angle_base(Ptr, u8, f32)),
+        entry!(
+            0x005c0bf0,
+            script_set_at_start_function(ScriptArgs) -> bool
+        ),
     ]
 }
 
@@ -3308,5 +4925,1751 @@ mod tests {
         assert!(run(&mut e, 0x005b_e870, script(plain)));
         assert!(run(&mut e, 0x005b_e870, script(0)));
         assert!(calls(&e, V_RECORD).is_empty());
+    }
+
+    // ==== Second batch: 005be900 to 005c0bf0 ===========================================
+
+    /// `engine()` with the pages of the globals and constants of the second
+    /// batch mapped and the constants the exe provides set.
+    fn engine_b() -> Engine {
+        let mut e = engine();
+        for page in [
+            0x0101_3000,
+            0x0101_e000,
+            0x0101_f000,
+            0x0102_3000,
+            0x0102_4000,
+            0x0103_1000,
+            0x0118_c000,
+            0x011a_9000,
+            0x011a_d000,
+            0x011c_a000,
+            0x011d_b000,
+            0x011f_4000,
+            0x011f_6000,
+            0x011f_9000,
+            0x011f_a000,
+        ] {
+            e.map(page, 0x1000);
+        }
+        e.set_global(DOUBLE_FAR_LIMIT, 163840.0f64);
+        e.set_global(FLOAT_FAR_LIMIT, 163840.0f32);
+        e.set_global(DOUBLE_256, 256.0f64);
+        e.set_global(
+            DOUBLE_RADIANS_PER_DEGREE,
+            f64::from_bits(0x3f91_df46_a000_0000),
+        );
+        e.set_global(DOUBLE_TWO_PI, f64::from_bits(0x4019_21fb_6000_0000));
+        e.set_global(FLOAT_ROUND_RANGE, 4.0f32);
+        e.set_global(FLOAT_DECAL_1000, 1000.0f32);
+        e.set_global(FLOAT_DECAL_90, 90.0f32);
+        e
+    }
+
+    /// The standard script words with `this_obj` and a result slot.
+    fn script_result(e: &mut Engine, this_obj: u32) -> ScriptArgs {
+        let mut a = script(this_obj);
+        a.result = Ptr::new(e.mem.alloc(8));
+        a
+    }
+
+    fn text_of(e: &Engine, address: u32) -> String {
+        String::from_utf8(e.mem.cstr(address)).unwrap()
+    }
+
+    // ---- Settings ----------------------------------------------------------------
+
+    /// Doubles for the setting accessors. A setting object keeps its type
+    /// code at +0x30 and its value at +4; its "name" is the address +0x40.
+    /// The setters store into the value.
+    fn setting_doubles(e: &mut Engine) {
+        e.register(SETTING_TYPE, |e, a| e.mem.u32(a[0] + 0x30).into_ret());
+        e.register(SETTING_NAME, |_, a| (a[0] + 0x40).into_ret());
+        e.register(SETTING_FLOAT_ADDRESS, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_BOOL_ADDRESS, |_, a| (a[0] + 4).into_ret());
+        e.register(SETTING_STRING_VALUE, |e, a| {
+            let value = if a[0] == 0 { 0 } else { e.mem.u32(a[0] + 4) };
+            value.into_ret()
+        });
+        for setter in [SETTING_SET_INT, SETTING_SET_FLOAT, SETTING_SET_STRING] {
+            e.register(setter, |e, a| {
+                e.mem.set_u32(a[0] + 4, a[1]);
+                Ret::default()
+            });
+        }
+        e.register(ATOL, |e, a| {
+            let text = text_of(e, a[0]);
+            text.trim().parse::<i32>().unwrap_or(0).into_ret()
+        });
+        e.register(ATOF, |e, a| {
+            let text = text_of(e, a[0]);
+            text.trim().parse::<f64>().unwrap_or(0.0).into_ret()
+        });
+    }
+
+    fn new_setting(e: &mut Engine, kind: u32, value: u32) -> u32 {
+        let setting = e.mem.alloc(0x50);
+        e.mem.set_u32(setting + 0x30, kind);
+        e.mem.set_u32(setting + 4, value);
+        setting
+    }
+
+    /// The game setting collection answers by the first letter of the name.
+    fn game_setting_collection(e: &mut Engine, settings: [(u8, u32); 4]) {
+        e.register(GAME_SETTINGS, |_, _| 0x0a00_0000u32.into_ret());
+        e.register_double(GAME_SETTING_FIND, move |e, a| {
+            assert_eq!(a[0], 0x0a00_0000);
+            let first = e.mem.u8(a[1]);
+            let found = settings.iter().find(|(letter, _)| *letter == first);
+            found.map_or(0, |(_, setting)| *setting).into_ret()
+        });
+    }
+
+    #[test]
+    fn body_005be900_reads_a_game_setting_into_the_result() {
+        let mut e = engine_b();
+        setting_doubles(&mut e);
+        let int_setting = new_setting(&mut e, 3, (-7i32) as u32);
+        let float_setting = new_setting(&mut e, 5, 2.5f32.to_bits());
+        let string_setting = new_setting(&mut e, 6, 0x0900_1234);
+        let other_setting = new_setting(&mut e, 1, 0);
+        game_setting_collection(
+            &mut e,
+            [
+                (b'i', int_setting),
+                (b'f', float_setting),
+                (b's', string_setting),
+                (b'o', other_setting),
+            ],
+        );
+        set_echo(&mut e, true);
+        let script = script_result(&mut e, 0);
+        let result = script.result.addr();
+        let case = |e: &mut Engine, name: &'static [u8]| {
+            parse_with(e, true, move |e, a| e.mem.set_cstr(a[7], name));
+            start_log(e);
+            e.mem.set_f64(result, 99.0);
+            assert!(run(e, 0x005b_e900, script));
+            printed(e)
+        };
+        let prints = case(&mut e, b"iName");
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_INT, int_setting + 0x40, (-7i32) as u32]]
+        );
+        assert_eq!(e.mem.f64(result), -7.0);
+        let prints = case(&mut e, b"fName");
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 2.5f64]]
+        );
+        assert_eq!(e.mem.f64(result), 2.5);
+        let prints = case(&mut e, b"sName");
+        assert_eq!(
+            prints,
+            vec![args![
+                MSG_GAME_STRING,
+                string_setting + 0x40,
+                0x0900_1234u32
+            ]]
+        );
+        assert_eq!(e.mem.f64(result), 0.0);
+        let prints = case(&mut e, b"oName");
+        assert_eq!(prints, vec![args![MSG_GAME_UNKNOWN, other_setting + 0x40]]);
+        // A missing setting: the not-found message with the null setting's
+        // string value as the unused extra argument.
+        let prints = case(&mut e, b"zName");
+        let name = calls(&e, GAME_SETTING_FIND)[0][1];
+        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name, 0u32]]);
+        // Without echo only the result is set.
+        set_echo(&mut e, false);
+        let prints = case(&mut e, b"iName");
+        assert!(prints.is_empty());
+        assert_eq!(e.mem.f64(result), -7.0);
+        // A failed parse leaves the cleared result and returns false.
+        parse_with(&mut e, false, |_, _| {});
+        e.mem.set_f64(result, 99.0);
+        assert!(!run(&mut e, 0x005b_e900, script));
+        assert_eq!(e.mem.f64(result), 0.0);
+    }
+
+    #[test]
+    fn body_005beb00_sets_a_game_setting_by_type() {
+        let mut e = engine_b();
+        setting_doubles(&mut e);
+        let int_setting = new_setting(&mut e, 3, 0);
+        let float_setting = new_setting(&mut e, 5, 0);
+        let string_setting = new_setting(&mut e, 6, 0);
+        let other_setting = new_setting(&mut e, 1, 0);
+        game_setting_collection(
+            &mut e,
+            [
+                (b'i', int_setting),
+                (b'f', float_setting),
+                (b's', string_setting),
+                (b'o', other_setting),
+            ],
+        );
+        set_echo(&mut e, true);
+        let script = script(0);
+        let case = |e: &mut Engine, name: &'static [u8], value: &'static [u8]| {
+            parse_with(e, true, move |e, a| {
+                e.mem.set_cstr(a[7], name);
+                e.mem.set_cstr(a[8], value);
+            });
+            start_log(e);
+            assert!(run(e, 0x005b_eb00, script));
+            printed(e)
+        };
+        let prints = case(&mut e, b"i1", b"12");
+        assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 12]]);
+        assert_eq!(prints, vec![args![MSG_GAME_INT, int_setting + 0x40, 12u32]]);
+        let prints = case(&mut e, b"f1", b"1.5");
+        assert_eq!(
+            calls(&e, SETTING_SET_FLOAT),
+            vec![vec![float_setting, 1.5f32.to_bits()]]
+        );
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_FLOAT, float_setting + 0x40, 1.5f64]]
+        );
+        let prints = case(&mut e, b"s1", b"text");
+        let value_text = calls(&e, SETTING_SET_STRING)[0][1];
+        assert_eq!(text_of(&e, value_text), "text");
+        assert_eq!(
+            prints,
+            vec![args![MSG_GAME_STRING, string_setting + 0x40, value_text]]
+        );
+        // Unknown type and missing setting are reported with the typed name
+        // buffer, also without echo.
+        set_echo(&mut e, false);
+        let prints = case(&mut e, b"o1", b"1");
+        let name = calls(&e, GAME_SETTING_FIND)[0][1];
+        assert_eq!(prints, vec![args![MSG_GAME_UNKNOWN, name]]);
+        let prints = case(&mut e, b"z1", b"1");
+        let name = calls(&e, GAME_SETTING_FIND)[0][1];
+        assert_eq!(prints, vec![args![MSG_GAME_NOT_FOUND, name]]);
+        // Without echo a successful change prints nothing.
+        let prints = case(&mut e, b"i1", b"5");
+        assert!(prints.is_empty());
+        assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 5]]);
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005b_eb00, script));
+    }
+
+    #[test]
+    fn body_005becf0_prints_an_ini_setting_by_type() {
+        let mut e = engine_b();
+        setting_doubles(&mut e);
+        let bool_setting = new_setting(&mut e, 0, 1);
+        let int_setting = new_setting(&mut e, 3, 9);
+        let float_setting = new_setting(&mut e, 5, 0.25f32.to_bits());
+        let string_setting = new_setting(&mut e, 6, 0x0900_4321);
+        let other_setting = new_setting(&mut e, 2, 0);
+        // `a<digit>` is found in the first collection, `b<digit>` in the
+        // second; the digit picks the setting.
+        let by_digit = [
+            bool_setting,
+            int_setting,
+            float_setting,
+            string_setting,
+            other_setting,
+        ];
+        e.register_double(INI_SETTINGS, |_, _| 0x0a00_0010u32.into_ret());
+        e.register_double(INI_SETTINGS_FALLBACK, |_, _| 0x0a00_0020u32.into_ret());
+        e.register_double(INI_SETTING_FIND, move |e, a| {
+            let (letter, digit) = (e.mem.u8(a[1]), e.mem.u8(a[1] + 1));
+            let found = match (a[0], letter) {
+                (0x0a00_0010, b'a') | (0x0a00_0020, b'b') => by_digit[(digit - b'0') as usize],
+                _ => 0,
+            };
+            found.into_ret()
+        });
+        let script = script(0);
+        let case = |e: &mut Engine, name: &'static [u8]| {
+            parse_with(e, true, move |e, a| e.mem.set_cstr(a[7], name));
+            start_log(e);
+            assert!(run(e, 0x005b_ecf0, script));
+            let name = calls(e, INI_SETTING_FIND)[0][1];
+            (printed(e), name)
+        };
+        // Prints even though commands do not echo.
+        set_echo(&mut e, false);
+        let (prints, name) = case(&mut e, b"a0");
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32]]);
+        assert_eq!(calls(&e, INI_SETTINGS_FALLBACK).len(), 0);
+        let (prints, name) = case(&mut e, b"a1");
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32]]);
+        let (prints, name) = case(&mut e, b"a2");
+        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.25f64]]);
+        let (prints, name) = case(&mut e, b"a3");
+        assert_eq!(prints, vec![args![MSG_INI_STRING, name, 0x0900_4321u32]]);
+        let (prints, name) = case(&mut e, b"a4");
+        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name]]);
+        // The second collection is asked when the first has none.
+        let (prints, name) = case(&mut e, b"b1");
+        assert_eq!(calls(&e, INI_SETTING_FIND).len(), 2);
+        assert_eq!(calls(&e, INI_SETTING_FIND)[1][0], 0x0a00_0020);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 9u32]]);
+        let (prints, name) = case(&mut e, b"c1");
+        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name]]);
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005b_ecf0, script));
+    }
+
+    #[test]
+    fn body_005bee90_sets_an_ini_setting_by_type() {
+        let mut e = engine_b();
+        setting_doubles(&mut e);
+        let bool_setting = new_setting(&mut e, 0, 0);
+        let int_setting = new_setting(&mut e, 3, 0);
+        let float_setting = new_setting(&mut e, 5, 0);
+        let string_setting = new_setting(&mut e, 6, 0);
+        let other_setting = new_setting(&mut e, 2, 0);
+        let by_digit = [
+            bool_setting,
+            int_setting,
+            float_setting,
+            string_setting,
+            other_setting,
+        ];
+        e.register_double(INI_SETTINGS, |_, _| 0x0a00_0010u32.into_ret());
+        e.register_double(INI_SETTINGS_FALLBACK, |_, _| 0x0a00_0020u32.into_ret());
+        e.register_double(INI_SETTING_FIND, move |e, a| {
+            let (letter, digit) = (e.mem.u8(a[1]), e.mem.u8(a[1] + 1));
+            let found = match (a[0], letter) {
+                (0x0a00_0010, b'a') | (0x0a00_0020, b'b') => by_digit[(digit - b'0') as usize],
+                _ => 0,
+            };
+            found.into_ret()
+        });
+        let script = script(0);
+        let case = |e: &mut Engine, name: &'static [u8], value: &'static [u8]| {
+            parse_with(e, true, move |e, a| {
+                e.mem.set_cstr(a[7], name);
+                e.mem.set_cstr(a[8], value);
+            });
+            start_log(e);
+            assert!(run(e, 0x005b_ee90, script));
+            let name = calls(e, INI_SETTING_FIND)[0][1];
+            (printed(e), name)
+        };
+        set_echo(&mut e, true);
+        // The boolean (type 0) goes through the integer setter and echoes the
+        // byte at its value as 0 or 1.
+        let (prints, name) = case(&mut e, b"a0", b"1");
+        assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![bool_setting, 1]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 1u32]]);
+        let (prints, name) = case(&mut e, b"a1", b"42");
+        assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 42]]);
+        assert_eq!(prints, vec![args![MSG_INI_INT, name, 42u32]]);
+        let (prints, name) = case(&mut e, b"a2", b"0.5");
+        assert_eq!(
+            calls(&e, SETTING_SET_FLOAT),
+            vec![vec![float_setting, 0.5f32.to_bits()]]
+        );
+        assert_eq!(prints, vec![args![MSG_INI_FLOAT, name, 0.5f64]]);
+        let (prints, name) = case(&mut e, b"b3", b"words");
+        let value_text = calls(&e, SETTING_SET_STRING)[0][1];
+        assert_eq!(text_of(&e, value_text), "words");
+        assert_eq!(calls(&e, INI_SETTING_FIND).len(), 2);
+        assert_eq!(prints, vec![args![MSG_INI_STRING, name, value_text]]);
+        // Unknown type and missing setting are always reported; no echo of
+        // successful changes.
+        set_echo(&mut e, false);
+        let (prints, name) = case(&mut e, b"a4", b"1");
+        assert_eq!(prints, vec![args![MSG_INI_UNKNOWN, name]]);
+        let (prints, name) = case(&mut e, b"c1", b"1");
+        assert_eq!(prints, vec![args![MSG_INI_NOT_FOUND, name]]);
+        let (prints, _) = case(&mut e, b"a1", b"7");
+        assert!(prints.is_empty());
+        assert_eq!(calls(&e, SETTING_SET_INT), vec![vec![int_setting, 7]]);
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005b_ee90, script));
+    }
+
+    // ---- The render options command and its helpers -------------------------
+
+    /// Doubles of the helpers of `005bf130`. The strings the options are
+    /// compared with are put into memory, `011f91c0` holds the render setting
+    /// `004dc060(0)` answers, the render flags word is `011f91d8`.
+    fn render_engine(setting: i32) -> Engine {
+        let mut e = engine_b();
+        for (address, option) in [
+            (OPTION_TEX, &b"tex"[..]),
+            (OPTION_DEGRADE, b"degrade"),
+            (OPTION_SH, b"sh"),
+            (OPTION_SC, b"sc"),
+            (OPTION_PSH, b"psh"),
+            (OPTION_DSH, b"dsh"),
+            (OPTION_OPT, b"opt"),
+            (OPTION_ALPHA, b"alpha"),
+        ] {
+            e.mem.set_cstr(address, option);
+        }
+        e.register(STRING_COMPARE_N_NO_CASE, |e, a| {
+            let n = a[2] as usize;
+            let lower = |bytes: Vec<u8>| {
+                bytes
+                    .into_iter()
+                    .take(n)
+                    .map(|c| c.to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            };
+            let (first, second) = (lower(e.mem.cstr(a[0])), lower(e.mem.cstr(a[1])));
+            (first != second).into_ret()
+        });
+        e.register(STRLEN, |e, a| (e.mem.cstr(a[0]).len() as u32).into_ret());
+        e.set_global(0x011f_91c0u32, setting);
+        e.register(RENDER_SETTING, |e, a| {
+            let address = if a[0] == 0 { 0x011f_91c0 } else { 0x011f_91bc };
+            e.mem.u32(address).into_ret()
+        });
+        e.register(RENDER_FLAGS_GET, |e, _| {
+            e.global::<u32>(RENDER_FLAGS).into_ret()
+        });
+        e.register(RENDER_FLAGS_SET, |e, a| {
+            e.set_global(RENDER_FLAGS, a[0]);
+            Ret::default()
+        });
+        e.register(MIN_I32, |_, a| (a[0] as i32).min(a[1] as i32).into_ret());
+        e.register(MAX_I32, |_, a| (a[0] as i32).max(a[1] as i32).into_ret());
+        e.register(WORD_AT_0X8, |e, a| e.mem.u32(a[0] + 8).into_ret());
+        e.register(STRING_TEXT, |e, a| e.mem.u32(a[0]).into_ret());
+        e.register(NODE_FLAG, |e, a| e.mem.u8(a[0] + 0x124).into_ret());
+        e.register(ATOL, |e, a| {
+            let text = text_of(e, a[0]);
+            text.trim().parse::<i32>().unwrap_or(0).into_ret()
+        });
+        accept(
+            &mut e,
+            &[
+                SHADER_SET_MODE,
+                SHADER_REFRESH,
+                RENDERER_SET_BYTE,
+                PSH_ENABLE,
+                PSH_DISABLE,
+            ],
+        );
+        e
+    }
+
+    /// Runs `005bf130` with the option text.
+    fn render_option_run(e: &mut Engine, this_obj: u32, option: &'static [u8]) -> bool {
+        parse_with(e, true, move |e, a| e.mem.set_cstr(a[7], option));
+        start_log(e);
+        run(e, 0x005b_f130, script(this_obj))
+    }
+
+    #[test]
+    fn body_005bf130_digit_options_select_the_mode_and_flags() {
+        let mut e = render_engine(1);
+        // `1`: mode 0 in the shader manager, 0 in 011f91b4, the single
+        // character sets bits 0xe (and not 0x20 at render setting 1).
+        assert!(render_option_run(&mut e, 0, b"1"));
+        assert_eq!(calls(&e, SHADER_SET_MODE), vec![vec![0]]);
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 0);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x0f);
+        // At render setting 2 the single character adds 0x20 (and the text
+        // after it adds nothing).
+        e.set_global(0x011f_91c0u32, 2);
+        assert!(render_option_run(&mut e, 0, b"1"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x2f);
+        // `4` selects shader mode 3.
+        assert!(render_option_run(&mut e, 0, b"4"));
+        assert_eq!(calls(&e, SHADER_SET_MODE), vec![vec![3]]);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x2f);
+        // `2` and `3` store 1 and 2 and keep the bits of the characters after
+        // them: `2110` sets bits 2 and 4; at render setting 2 the fifth
+        // character not being `0` adds 0x20.
+        assert!(render_option_run(&mut e, 0, b"21100"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 1);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x07);
+        assert!(render_option_run(&mut e, 0, b"31111"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 2);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x2f);
+        // `5` only stores the bits of the characters after it.
+        assert!(render_option_run(&mut e, 0, b"50100"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x04);
+        // Failed parse: false, nothing stored.
+        e.set_global(RENDER_FLAGS, 0x1234u32);
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005b_f130, script(0)));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x1234);
+    }
+
+    #[test]
+    fn body_005bf130_named_options() {
+        let mut e = render_engine(1);
+        assert!(render_option_run(&mut e, 0, b"tex"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 4);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 1);
+        assert!(render_option_run(&mut e, 0, b"DEGRADE"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 5);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 1);
+        // `sh` toggles: at render setting 1 `005bf7b0` is false, so bit 0x10
+        // is set, then bit 0x80 flips.
+        e.set_global(RENDER_FLAGS, 0u32);
+        assert!(render_option_run(&mut e, 0, b"sh"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x90);
+        e.set_global(RENDER_FLAGS, 0x80u32);
+        assert!(render_option_run(&mut e, 0, b"sh"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x10);
+        // `sh<digit>`: the level is limited to 0..=3 and 1 and 2 become 3.
+        e.set_global(RENDER_FLAGS, 0u32);
+        assert!(render_option_run(&mut e, 0, b"sh2"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B0), 3);
+        assert_eq!(calls(&e, SHADER_REFRESH).len(), 1);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x80);
+        assert!(render_option_run(&mut e, 0, b"sh0"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B0), 0);
+        assert!(render_option_run(&mut e, 0, b"sh9"));
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B0), 3);
+        // `sc` and `opt` toggle their bytes.
+        e.set_global(RENDER_FLAGS, 0x40u32);
+        assert!(render_option_run(&mut e, 0, b"sc"));
+        assert_eq!(e.global::<u8>(GLOBAL_011F9441), 1);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x40);
+        assert!(render_option_run(&mut e, 0, b"sc"));
+        assert_eq!(e.global::<u8>(GLOBAL_011F9441), 0);
+        assert!(render_option_run(&mut e, 0, b"opt"));
+        assert_eq!(e.global::<u8>(GLOBAL_011AD80D), 1);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x140);
+        // `t<number>` stores the number.
+        assert!(render_option_run(&mut e, 0, b"t12"));
+        assert_eq!(e.global::<u32>(GLOBAL_011AD828), 12);
+        // `alpha` and unknown texts: only the latter store the flags.
+        e.set_global(RENDER_FLAGS, 0x55u32);
+        assert!(render_option_run(&mut e, 0, b"alpha"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x55);
+        assert!(render_option_run(&mut e, 0, b"zzz"));
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0);
+    }
+
+    #[test]
+    fn body_005bf130_psh_toggles_and_dsh_flags_the_shadow_nodes() {
+        let mut e = render_engine(1);
+        let tes = e.mem.alloc(0x20);
+        let target = 0x0a00_7777;
+        e.mem.set_u32(tes + 8, target);
+        e.set_global(TES_SINGLETON, tes);
+        // `psh` with bit 0x20 clear: renderer byte 1, the call on the word at
+        // +8 of the TES singleton, bit 0x20 set; no further flags.
+        e.set_global(RENDER_FLAGS, 0x100u32);
+        assert!(render_option_run(&mut e, 0, b"psh11"));
+        assert_eq!(calls(&e, RENDERER_SET_BYTE), vec![vec![RENDERER_OBJECT, 1]]);
+        assert_eq!(calls(&e, PSH_ENABLE), vec![vec![target]]);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x120);
+        // With bit 0x20 set: byte 0, `00451570(0)`, bit cleared.
+        assert!(render_option_run(&mut e, 0, b"psh"));
+        assert_eq!(calls(&e, RENDERER_SET_BYTE), vec![vec![RENDERER_OBJECT, 0]]);
+        assert_eq!(calls(&e, PSH_DISABLE), vec![vec![0]]);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x100);
+        // `dsh` toggles the byte of the nodes whose word matches the
+        // reference's slot 0x1d0 value.
+        let reference = object_with(&mut e, &[(0x1d0, V_FLOAT)]);
+        e.register(V_FLOAT, |_, _| 0x7001u32.into_ret());
+        let nodes: Vec<u32> = (0..3).map(|_| e.mem.alloc(0x140)).collect();
+        for (node, word) in nodes.iter().zip([0x7001u32, 0x7002, 0x7001]) {
+            e.mem.set_u32(node + 0x128, word);
+        }
+        e.mem.set_u8(nodes[2] + 0x124, 1);
+        let list = 0x0a00_8888;
+        let order = nodes.clone();
+        e.register_double(SHADOW_LIST_GET, move |_, a| {
+            assert_eq!(a[0], 0);
+            list.into_ret()
+        });
+        e.register_double(SHADOW_LIST_FIRST, {
+            let first = order[0];
+            move |_, a| {
+                assert_eq!(a[0], list);
+                first.into_ret()
+            }
+        });
+        let position = Rc::new(Cell::new(0usize));
+        e.register_double(SHADOW_LIST_NEXT, move |_, _| {
+            position.set(position.get() + 1);
+            order.get(position.get()).copied().unwrap_or(0).into_ret()
+        });
+        e.set_global(RENDER_FLAGS, 0x100u32);
+        assert!(render_option_run(&mut e, reference, b"dsh"));
+        assert_eq!(e.mem.u8(nodes[0] + 0x124), 1);
+        assert_eq!(e.mem.u8(nodes[1] + 0x124), 0);
+        assert_eq!(e.mem.u8(nodes[2] + 0x124), 0);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x100);
+        // Without a reference nothing happens.
+        start_log(&mut e);
+        assert!(render_option_run(&mut e, 0, b"dsh"));
+        assert!(calls(&e, SHADOW_LIST_GET).is_empty());
+    }
+
+    #[test]
+    fn body_005bf770_sets_or_clears_bit_0x10() {
+        let mut e = engine_b();
+        e.set_global(RENDER_FLAGS, 0x0fu32);
+        e.call(0x005b_f770, &args![1u32]);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x1f);
+        e.call(0x005b_f770, &args![0u32]);
+        assert_eq!(e.global::<u32>(RENDER_FLAGS), 0x0f);
+    }
+
+    #[test]
+    fn body_005bf7b0_needs_render_setting_3_and_bit_0x10() {
+        let mut e = engine_b();
+        e.register(RENDER_SETTING, |e, _| e.mem.u32(0x011f_91c0).into_ret());
+        e.set_global(RENDER_FLAGS, 0x10u32);
+        e.set_global(0x011f_91c0u32, 3);
+        assert!(e.call(0x005b_f7b0, &args![]).bool());
+        e.set_global(RENDER_FLAGS, 0u32);
+        assert!(!e.call(0x005b_f7b0, &args![]).bool());
+        e.set_global(RENDER_FLAGS, 0x10u32);
+        e.set_global(0x011f_91c0u32, 2);
+        assert!(!e.call(0x005b_f7b0, &args![]).bool());
+    }
+
+    #[test]
+    fn body_005bf7f0_stores_the_word() {
+        let mut e = engine_b();
+        e.call(0x005b_f7f0, &args![5u32]);
+        assert_eq!(e.global::<u32>(GLOBAL_011F91B4), 5);
+    }
+
+    #[test]
+    fn body_005bf800_stores_the_byte_at_0x124() {
+        let mut e = engine_b();
+        let node = e.mem.alloc(0x140);
+        e.call(0x005b_f800, &args![node, 1u32]);
+        assert_eq!(e.mem.u8(node + 0x124), 1);
+        e.call(0x005b_f800, &args![node, 0u32]);
+        assert_eq!(e.mem.u8(node + 0x124), 0);
+    }
+
+    #[test]
+    fn body_005bf820_reads_the_word_at_0x128() {
+        let mut e = engine_b();
+        e.register(STRING_TEXT, |e, a| e.mem.u32(a[0]).into_ret());
+        let node = e.mem.alloc(0x140);
+        e.mem.set_u32(node + 0x128, 0x1234);
+        assert_eq!(e.call(0x005b_f820, &args![node]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn body_005bf840_passes_the_byte_to_the_renderer_object() {
+        let mut e = engine_b();
+        accept(&mut e, &[RENDERER_SET_BYTE]);
+        start_log(&mut e);
+        e.call(0x005b_f840, &args![1u32]);
+        assert_eq!(calls(&e, RENDERER_SET_BYTE), vec![vec![RENDERER_OBJECT, 1]]);
+    }
+
+    #[test]
+    fn body_005bf860_toggles_the_byte() {
+        let mut e = engine_b();
+        assert!(e.call(0x005b_f860, &args![]).bool());
+        assert_eq!(e.global::<u8>(GLOBAL_0118C000), 1);
+        assert!(e.call(0x005b_f860, &args![]).bool());
+        assert_eq!(e.global::<u8>(GLOBAL_0118C000), 0);
+    }
+
+    #[test]
+    fn body_005bf880_sets_the_byte_to_one_unless_it_is_one() {
+        let mut e = engine_b();
+        assert!(e.call(0x005b_f880, &args![]).bool());
+        assert_eq!(e.global::<u8>(GLOBAL_011F91DC), 1);
+        assert!(e.call(0x005b_f880, &args![]).bool());
+        assert_eq!(e.global::<u8>(GLOBAL_011F91DC), 0);
+        e.set_global(GLOBAL_011F91DC, 7u8);
+        assert!(e.call(0x005b_f880, &args![]).bool());
+        assert_eq!(e.global::<u8>(GLOBAL_011F91DC), 1);
+    }
+
+    #[test]
+    fn body_005bf8b0_and_005bf8c0_read_and_write_the_byte() {
+        let mut e = engine_b();
+        e.call(0x005b_f8c0, &args![9u32]);
+        assert_eq!(e.global::<u8>(GLOBAL_011F91DC), 9);
+        assert_eq!(e.call(0x005b_f8b0, &args![]).u8(), 9);
+    }
+
+    // ---- Screen positions -----------------------------------------------------
+
+    /// The chain `005bf8d0` and `005bf9e0` walk from the `TES` singleton:
+    /// returns `(target, holder)` with `word(word(tes + 0x68) + 0x20) =
+    /// holder` and `word(holder + 0xc) = target`.
+    fn tes_chain(e: &mut Engine) -> (u32, u32) {
+        e.register(WORD_AT_0X68, |e, a| e.mem.u32(a[0] + 0x68).into_ret());
+        e.register(WORD_AT_0X20, |e, a| e.mem.u32(a[0] + 0x20).into_ret());
+        e.register(WORD_AT_0XC, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        let tes = e.mem.alloc(0x80);
+        let band = e.mem.alloc(0x80);
+        let holder = e.mem.alloc(0x80);
+        let target = e.mem.alloc(0x80);
+        e.mem.set_u32(tes + 0x68, band);
+        e.mem.set_u32(band + 0x20, holder);
+        e.mem.set_u32(holder + 0xc, target);
+        e.set_global(TES_SINGLETON, tes);
+        (target, holder)
+    }
+
+    #[test]
+    fn body_005bf8d0_stores_the_numbers_as_floats() {
+        let mut e = engine_b();
+        let (target, holder) = tes_chain(&mut e);
+        parse_gives(&mut e, true, &[3, (-4i32) as u32]);
+        assert!(run(&mut e, 0x005b_f8d0, script(0)));
+        assert_eq!(e.mem.f32(target + 0x2c), 3.0);
+        assert_eq!(e.mem.f32(target + 0x30), -4.0);
+        assert_eq!(e.mem.u8(holder + 0x18), 0);
+        // Both zero: the holder's byte is 1.
+        parse_gives(&mut e, true, &[0, 0]);
+        assert!(run(&mut e, 0x005b_f8d0, script(0)));
+        assert_eq!(e.mem.f32(target + 0x2c), 0.0);
+        assert_eq!(e.mem.u8(holder + 0x18), 1);
+        // No target: nothing stored, still true.
+        e.mem.set_u32(holder + 0xc, 0);
+        e.mem.set_u8(holder + 0x18, 0);
+        parse_gives(&mut e, true, &[0, 0]);
+        assert!(run(&mut e, 0x005b_f8d0, script(0)));
+        assert_eq!(e.mem.u8(holder + 0x18), 0);
+        // Failed parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005b_f8d0, script(0)));
+    }
+
+    #[test]
+    fn body_005bf9a0_and_005bf9c0_store_into_the_object() {
+        let mut e = engine_b();
+        let object = e.mem.alloc(0x40);
+        e.call(0x005b_f9a0, &args![object, 1.5f32, -2.5f32]);
+        assert_eq!(e.mem.f32(object + 0x2c), 1.5);
+        assert_eq!(e.mem.f32(object + 0x30), -2.5);
+        e.call(0x005b_f9c0, &args![object, 1u32]);
+        assert_eq!(e.mem.u8(object + 0x18), 1);
+    }
+
+    /// The camera doubles of `005bf9e0`: returns `(camera, camera holder, holder)`.
+    /// The frustum has near 2.0 and far 100.0; `NiCamera::SetViewFrustum`
+    /// copies the far distance to the camera's word at +0x200.
+    fn camera_engine(e: &mut Engine) -> (u32, u32, u32) {
+        let (_target, holder) = tes_chain(e);
+        let camera_holder = e.mem.alloc(0xc0);
+        let camera = e.mem.alloc(0x200);
+        e.mem.set_u32(camera_holder + 0xac, camera);
+        e.mem.set_f32(camera + 0xdc + 0x10, 2.0);
+        e.mem.set_f32(camera + 0xdc + 0x14, 100.0);
+        e.register_double(CAMERA_HOLDER, move |_, _| camera_holder.into_ret());
+        e.register(WORD_AT_0XAC, |e, a| e.mem.u32(a[0] + 0xac).into_ret());
+        e.register(CAMERA_FRUSTUM, |_, a| (a[0] + 0xdc).into_ret());
+        e.register(CAMERA_SET_RATIO, |e, a| {
+            e.mem.set_u32(a[0] + 0xfc, a[1]);
+            Ret::default()
+        });
+        e.register(CAMERA_SET_VIEW_FRUSTUM, |e, a| {
+            let far = e.mem.u32(a[1] + 0x14);
+            e.mem.set_u32(a[0] + 0x1fc, far);
+            Ret::default()
+        });
+        (camera, camera_holder, holder)
+    }
+
+    #[test]
+    fn body_005bf9e0_sets_the_far_distance() {
+        let mut e = engine_b();
+        let (camera, camera_holder, holder) = camera_engine(&mut e);
+        parse_gives(&mut e, true, &[5000.0f32.to_bits()]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_f9e0, script(0)));
+        // The ratio far / near goes to the camera; the frustum copy is
+        // handed to SetViewFrustum with the new far distance.
+        assert_eq!(e.mem.f32(camera + 0xfc), 2500.0);
+        assert_eq!(e.mem.f32(camera + 0x1fc), 5000.0);
+        assert_eq!(calls(&e, CAMERA_SET_VIEW_FRUSTUM).len(), 1);
+        assert_eq!(e.mem.u8(holder + 0x18), 0);
+        // The same distance again changes nothing.
+        e.mem.set_f32(camera + 0xdc + 0x14, 5000.0);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_f9e0, script(0)));
+        assert!(calls(&e, CAMERA_SET_RATIO).is_empty());
+        // Zero or less becomes 163840.0 and sets the holder's byte.
+        parse_gives(&mut e, true, &[(-1.0f32).to_bits()]);
+        assert!(run(&mut e, 0x005b_f9e0, script(0)));
+        assert_eq!(e.mem.f32(camera + 0x1fc), 163840.0);
+        assert_eq!(e.mem.f32(camera + 0xfc), 81920.0);
+        assert_eq!(e.mem.u8(holder + 0x18), 1);
+        // Above the limit it is limited without the byte.
+        e.mem.set_f32(camera + 0xdc + 0x14, 1.0);
+        parse_gives(&mut e, true, &[1.0e6f32.to_bits()]);
+        assert!(run(&mut e, 0x005b_f9e0, script(0)));
+        assert_eq!(e.mem.f32(camera + 0x1fc), 163840.0);
+        assert_eq!(e.mem.u8(holder + 0x18), 0);
+        // No camera: nothing; failed parse: false.
+        e.mem.set_u32(camera_holder + 0xac, 0);
+        start_log(&mut e);
+        parse_gives(&mut e, true, &[7.0f32.to_bits()]);
+        assert!(run(&mut e, 0x005b_f9e0, script(0)));
+        assert!(calls(&e, CAMERA_SET_RATIO).is_empty());
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(&mut e, 0x005b_f9e0, script(0)));
+    }
+
+    #[test]
+    fn body_005bfaf0_hands_three_floats_to_the_interface_object() {
+        let mut e = engine_b();
+        e.register(SETTING_FLOAT_ADDRESS, |_, a| (a[0] + 4).into_ret());
+        e.set_global(SETTING_011DB200 + 4, 1.5f32);
+        e.set_global(SETTING_011DB238 + 4, 2.5f32);
+        e.set_global(SETTING_011DB25C + 4, 3.5f32);
+        let object = e.mem.alloc(0x80);
+        e.register_double(INTERFACE_OBJECT, move |_, _| object.into_ret());
+        accept(&mut e, &[INTERFACE_OBJECT_FN_004EE4B0]);
+        // The first number is parsed; the other two keep their defaults,
+        // which the outputs hold before the parse.
+        let seen = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        parse_with(&mut e, true, move |e, a| {
+            for i in 0..4 {
+                log.borrow_mut().push(e.mem.u32(a[7 + i]));
+            }
+            e.mem.set_f32(a[7], 9.0);
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_faf0, script(0)));
+        assert_eq!(
+            seen.borrow()[..3],
+            [1.5f32.to_bits(), 2.5f32.to_bits(), 3.5f32.to_bits()]
+        );
+        assert_eq!(e.mem.f32(object + 0x58), 9.0);
+        assert_eq!(e.mem.f32(object + 0x60), 2.5);
+        assert_eq!(
+            calls(&e, INTERFACE_OBJECT_FN_004EE4B0),
+            vec![vec![object, 3.5f32.to_bits()]]
+        );
+        // The three settings are read before the parse; a failed parse stops
+        // before the object is touched.
+        parse_with(&mut e, false, |_, _| {});
+        start_log(&mut e);
+        assert!(!run(&mut e, 0x005b_faf0, script(0)));
+        assert_eq!(calls(&e, SETTING_FLOAT_ADDRESS).len(), 3);
+        assert!(calls(&e, INTERFACE_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn body_005bfbb0_and_005bfbd0_store_floats() {
+        let mut e = engine_b();
+        let object = e.mem.alloc(0x80);
+        e.call(0x005b_fbb0, &args![object, 1.25f32]);
+        e.call(0x005b_fbd0, &args![object, -3.0f32]);
+        assert_eq!(e.mem.f32(object + 0x58), 1.25);
+        assert_eq!(e.mem.f32(object + 0x60), -3.0);
+    }
+
+    #[test]
+    fn script_set_tree_mipmap_bias_prints_the_old_and_new_values() {
+        let mut e = engine_b();
+        e.set_global(TREE_MIPMAP_LOCAL, 1.5f32);
+        e.set_global(TREE_MIPMAP_LOD, 2.5f32);
+        accept(
+            &mut e,
+            &[
+                BS_STRING_CONSTRUCT,
+                BS_STRING_DESTRUCT,
+                BS_STRING_FORMAT,
+                PRINT_LINE,
+            ],
+        );
+        // The copy constructor copies the 8-byte string.
+        e.register(BS_STRING_COPY, |e, a| {
+            let (first, second) = (e.mem.u32(a[1]), e.mem.u32(a[1] + 4));
+            e.mem.set_u32(a[0], first);
+            e.mem.set_u32(a[0] + 4, second);
+            Ret::default()
+        });
+        let defaults = Rc::new(RefCell::new(vec![]));
+        let log = defaults.clone();
+        parse_with(&mut e, true, move |e, a| {
+            log.borrow_mut().push(e.mem.u32(a[7]));
+            log.borrow_mut().push(e.mem.u32(a[8]));
+            e.mem.set_f32(a[7], 0.5);
+            e.mem.set_f32(a[8], 4.0);
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fbf0, script(0)));
+        // The parameters default to the local trees' then the LOD trees'
+        // value.
+        assert_eq!(*defaults.borrow(), vec![1.5f32.to_bits(), 2.5f32.to_bits()]);
+        let string = calls(&e, BS_STRING_CONSTRUCT)[0][0];
+        assert_eq!(
+            calls(&e, BS_STRING_FORMAT),
+            vec![
+                args![string, MSG_OLD_VALUES, 1.5f64, 2.5f64],
+                args![string, MSG_NEW_VALUES, 0.5f64, 4.0f64],
+            ]
+        );
+        assert_eq!(calls(&e, PRINT_LINE).len(), 2);
+        assert_eq!(calls(&e, BS_STRING_DESTRUCT), vec![vec![string]]);
+        assert_eq!(e.global::<f32>(TREE_MIPMAP_LOCAL), 0.5);
+        assert_eq!(e.global::<f32>(TREE_MIPMAP_LOD), 4.0);
+        // A failed parse changes nothing.
+        parse_with(&mut e, false, |_, _| {});
+        start_log(&mut e);
+        assert!(!run(&mut e, 0x005b_fbf0, script(0)));
+        assert!(calls(&e, BS_STRING_CONSTRUCT).is_empty());
+        assert_eq!(e.global::<f32>(TREE_MIPMAP_LOCAL), 0.5);
+    }
+
+    #[test]
+    fn body_005bfd40_calls_the_interface_action() {
+        let mut e = engine_b();
+        accept(&mut e, &[INTERFACE_ACTION]);
+        start_log(&mut e);
+        assert!(e.call(0x005b_fd40, &args![]).bool());
+        assert_eq!(calls(&e, INTERFACE_ACTION), vec![Vec::<u32>::new()]);
+    }
+
+    #[test]
+    fn script_force_close_file_closes_a_known_file() {
+        let mut e = engine_b();
+        let handler = e.mem.alloc(0x40);
+        e.set_global(DATA_HANDLER, handler);
+        let file = 0x0a00_4444;
+        e.register_double(DATA_HANDLER_GET_LIST_FILE, move |e, a| {
+            assert_eq!(a[0], handler);
+            let known = text_of(e, a[1]) == "good.esp";
+            (if known { file } else { 0 }).into_ret()
+        });
+        accept(&mut e, &[DATA_HANDLER_SET_BYTE, FILE_CLOSE]);
+        set_echo(&mut e, true);
+        parse_with(&mut e, true, |e, a| e.mem.set_cstr(a[7], b"good.esp"));
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fd50, script(0)));
+        // The file is closed between the two byte stores.
+        let order: Vec<u32> = e
+            .call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(address, _)| *address)
+            .filter(|address| [DATA_HANDLER_SET_BYTE, FILE_CLOSE].contains(address))
+            .collect();
+        assert_eq!(
+            order,
+            vec![DATA_HANDLER_SET_BYTE, FILE_CLOSE, DATA_HANDLER_SET_BYTE]
+        );
+        assert_eq!(
+            calls(&e, DATA_HANDLER_SET_BYTE),
+            vec![vec![handler, 1], vec![handler, 0]]
+        );
+        assert_eq!(calls(&e, FILE_CLOSE), vec![vec![file]]);
+        let name = calls(&e, DATA_HANDLER_GET_LIST_FILE)[0][1];
+        assert_eq!(printed(&e), vec![vec![MSG_FILE_CLOSED, name]]);
+        // Without echo nothing is printed but the file is still closed.
+        set_echo(&mut e, false);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fd50, script(0)));
+        assert_eq!(calls(&e, FILE_CLOSE).len(), 1);
+        assert!(printed(&e).is_empty());
+    }
+
+    #[test]
+    fn script_force_close_file_reports_missing_files_and_names() {
+        let mut e = engine_b();
+        e.set_global(DATA_HANDLER, 0x0a00_0100u32);
+        e.register(DATA_HANDLER_GET_LIST_FILE, |_, _| 0u32.into_ret());
+        accept(&mut e, &[DATA_HANDLER_SET_BYTE, FILE_CLOSE]);
+        set_echo(&mut e, true);
+        parse_with(&mut e, true, |e, a| e.mem.set_cstr(a[7], b"gone.esp"));
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fd50, script(0)));
+        let name = calls(&e, DATA_HANDLER_GET_LIST_FILE)[0][1];
+        assert_eq!(printed(&e), vec![vec![MSG_FILE_NOT_FOUND, name]]);
+        assert!(calls(&e, FILE_CLOSE).is_empty());
+        // An empty name never reaches the data handler.
+        parse_with(&mut e, true, |_, _| {});
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fd50, script(0)));
+        assert_eq!(printed(&e), vec![vec![MSG_NO_FILENAME]]);
+        assert!(calls(&e, DATA_HANDLER_GET_LIST_FILE).is_empty());
+        // Failed parse.
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005b_fd50, script(0)));
+    }
+
+    // ---- 005bfe90 -----------------------------------------------------------------
+
+    /// What `004a3fe0` was handed: the world, the request's words
+    /// (`0x74` bytes at the time of the call) and the two flags.
+    type Submitted = (u32, Vec<u8>, u32, u32);
+
+    /// Doubles for `005bfe90`. Returns the camera, the player and the list
+    /// of submitted requests. The camera sits at (1, 2, 3) and looks along
+    /// (4, 5, 6); the request constructor leaves bit 0x10000 in the mask.
+    fn decal_engine(e: &mut Engine) -> (u32, u32, Rc<RefCell<Vec<Submitted>>>) {
+        let camera_holder = e.mem.alloc(0xc0);
+        let camera = e.mem.alloc(0x100);
+        e.mem.set_u32(camera_holder + 0xac, camera);
+        for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+            e.mem.set_f32(camera + 0x8c + 4 * i as u32, value);
+        }
+        e.register_double(CAMERA_HOLDER, move |_, _| camera_holder.into_ret());
+        e.register(WORD_AT_0XAC, |e, a| e.mem.u32(a[0] + 0xac).into_ret());
+        e.register(CAMERA_POSITION, |_, a| (a[0] + 0x8c).into_ret());
+        e.register(DECAL_REQUEST_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0] + 0x6c, 0x1_0000);
+            Ret::default()
+        });
+        e.register(CAMERA_DIRECTION, |e, a| {
+            for (i, value) in [4.0f32, 5.0, 6.0].into_iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(VECTOR_NEGATE, |e, a| {
+            for i in 0..3 {
+                let value = e.mem.f32(a[0] + 4 * i);
+                e.mem.set_f32(a[1] + 4 * i, -value);
+            }
+            a[1].into_ret()
+        });
+        let submitted = Rc::new(RefCell::new(vec![]));
+        let log = submitted.clone();
+        e.register_double(DECAL_REQUEST_SUBMIT, move |e, a| {
+            let request = e.mem.bytes(a[1], 0x74);
+            log.borrow_mut().push((a[0], request, a[2], a[3]));
+            Ret::default()
+        });
+        let player = e.mem.alloc(0x80);
+        e.set_global(PLAYER, player);
+        let tes = e.mem.alloc(0x80);
+        e.set_global(TES_SINGLETON, tes);
+        e.register(WORD_AT_0X34, |e, a| e.mem.u32(a[0] + 0x34).into_ret());
+        e.register(WORD_AT_0X40, |e, a| e.mem.u32(a[0] + 0x40).into_ret());
+        // Floats: decal float 7.0, ranges 1.0 to 5.0, random = their mean
+        // (or the range of the call), rounding keeps the value.
+        e.register(DECAL_FLOAT, |_, _| 7.0f32.into_ret());
+        e.register(RANGE_LOW, |_, _| 1.0f32.into_ret());
+        e.register(RANGE_HIGH, |_, _| 5.0f32.into_ret());
+        e.register(RANDOM_FLOAT, |_, a| {
+            ((f32::from_bits(a[0]) + f32::from_bits(a[1])) / 2.0).into_ret()
+        });
+        e.register(ROUND_FLOAT, |_, a| f32::from_bits(a[0]).into_ret());
+        e.register(WORD_AT_0XBC, |e, a| e.mem.u32(a[0] + 0xbc).into_ret());
+        e.register(SECOND_GENERIC_LOCATION, |_, a| (a[0] + 0x1000).into_ret());
+        (camera, player, submitted)
+    }
+
+    fn word(request: &[u8], offset: usize) -> u32 {
+        u32::from_le_bytes(request[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn body_005bfe90_without_a_reference_only_looks_up_the_world() {
+        let mut e = engine_b();
+        let (_camera, player, submitted) = decal_engine(&mut e);
+        accept(&mut e, &[GET_CURRENT_CELL]);
+        let tes = e.global::<u32>(TES_SINGLETON);
+        start_log(&mut e);
+        // Without the TES word at +0x34 the player's +0x40 word is asked.
+        assert!(run(&mut e, 0x005b_fe90, script(0)));
+        assert_eq!(calls(&e, WORD_AT_0X40), vec![vec![player]]);
+        assert!(calls(&e, GET_CURRENT_CELL).is_empty());
+        // With it the current cell of the TES singleton.
+        e.mem.set_u32(tes + 0x34, 1);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005b_fe90, script(0)));
+        assert_eq!(calls(&e, GET_CURRENT_CELL), vec![vec![tes]]);
+        assert!(calls(&e, WORD_AT_0X40).is_empty());
+        assert!(submitted.borrow().is_empty());
+    }
+
+    #[test]
+    fn body_005bfe90_submits_a_negated_direction_for_a_plain_reference() {
+        let mut e = engine_b();
+        let (camera, player, submitted) = decal_engine(&mut e);
+        let linked = e.mem.alloc(0x100);
+        e.register_double(V_FLOAT, move |_, _| linked.into_ret());
+        let reference = object_with(&mut e, &[(0x100, V_FALSE), (0x1d0, V_FLOAT)]);
+        e.mem.set_u32(reference + 0x40, 0x0a00_5555);
+        e.register(ACTOR_GET_CURRENT_WEAPON, |_, a| {
+            assert_ne!(a[0], 0);
+            0x0a00_6000u32.into_ret()
+        });
+        e.register(WEAPON_LOOKUP, |_, a| {
+            assert_eq!(a, [0x0a00_6000, 0]);
+            0x0a00_7000u32.into_ret()
+        });
+        assert!(run(&mut e, 0x005b_fe90, script(reference)));
+        let submitted = submitted.borrow();
+        assert_eq!(submitted.len(), 1);
+        let (world, request, mode, flag) = &submitted[0];
+        assert_eq!((*world, *mode, *flag), (0x0a00_5555, 1, 1));
+        // Position of the camera, negated direction, the location found
+        // through the weapon, -1, the random numbers and constants.
+        let floats: Vec<f32> = [0, 4, 8, 0xc, 0x10, 0x14]
+            .iter()
+            .map(|offset| f32::from_bits(word(request, *offset)))
+            .collect();
+        assert_eq!(floats, vec![1.0, 2.0, 3.0, -4.0, -5.0, -6.0]);
+        assert_eq!(word(request, 0x30), 0x0a00_7000 + 0x1000);
+        assert_eq!(word(request, 0x34), 0xffff_ffff);
+        assert_eq!(word(request, 0x28), linked);
+        assert_eq!(f32::from_bits(word(request, 0x44)), 7.0);
+        assert_eq!(f32::from_bits(word(request, 0x38)), 3.0);
+        assert_eq!(f32::from_bits(word(request, 0x3c)), 3.0);
+        assert_eq!(f32::from_bits(word(request, 0x40)), 1000.0);
+        assert_eq!(f32::from_bits(word(request, 0x58)), 90.0);
+        // The rounded random number (0.0 to 4.0 -> 2.0) is the byte at 0x70;
+        // no actor bits in the mask.
+        assert_eq!(request[0x70], 2);
+        assert_eq!(word(request, 0x6c), 0x1_0000);
+        let _ = (camera, player);
+    }
+
+    #[test]
+    fn body_005bfe90_an_actor_gets_the_flag_bits_and_the_forward_direction() {
+        let mut e = engine_b();
+        let (_camera, _player, submitted) = decal_engine(&mut e);
+        let linked = e.mem.alloc(0x100);
+        e.register_double(V_FLOAT, move |_, _| linked.into_ret());
+        let actor = actor_with(&mut e, &[(0x1d0, V_FLOAT)]);
+        e.mem.set_u32(actor + 0x40, 0x0a00_5555);
+        e.register(ACTOR_GET_CURRENT_WEAPON, |_, _| 0x0a00_6000u32.into_ret());
+        // The actor answers false to 008ba410, so its part's slot 0x58
+        // chooses the slot (here 9).
+        e.register(ACTOR_FN_008BA410, |_, _| false.into_ret());
+        let part_owner = e.mem.alloc(0x80);
+        e.register(V_TRUE + 0x40, |_, _| 9u32.into_ret());
+        let part = vtable(&mut e, &[(0x58, V_TRUE + 0x40)]);
+        e.mem.set_u32(part_owner + 0x30, part);
+        e.register_double(ACTOR_OWNER_PART, move |_, _| part_owner.into_ret());
+        e.register(WEAPON_NODE, |_, a| {
+            assert_eq!(a[0], 0x0a00_6000);
+            0x0a00_6100u32.into_ret()
+        });
+        e.register(NODE_LOOKUP_BY_SLOT, |_, a| {
+            assert_eq!(a, [0x0a00_6100, 9]);
+            0x0a00_7000u32.into_ret()
+        });
+        assert!(run(&mut e, 0x005b_fe90, script(actor)));
+        let submitted = submitted.borrow();
+        let (_world, request, mode, flag) = &submitted[0];
+        assert_eq!((*mode, *flag), (2, 1));
+        // The camera's direction, the actor itself at +0x24, bits 1 to 15.
+        let floats: Vec<f32> = [0xc, 0x10, 0x14]
+            .iter()
+            .map(|offset| f32::from_bits(word(request, *offset)))
+            .collect();
+        assert_eq!(floats, vec![4.0, 5.0, 6.0]);
+        assert_eq!(word(request, 0x24), actor);
+        assert_eq!(word(request, 0x6c), 0x1_0000 | 0xfffe);
+        assert_eq!(word(request, 0x30), 0x0a00_7000 + 0x1000);
+    }
+
+    #[test]
+    fn body_005bfe90_falls_back_to_the_object_of_index_6() {
+        let mut e = engine_b();
+        let (_camera, _player, submitted) = decal_engine(&mut e);
+        let linked = e.mem.alloc(0x100);
+        e.register_double(V_FLOAT, move |_, _| linked.into_ret());
+        let reference = object_with(&mut e, &[(0x100, V_FALSE), (0x1d0, V_FLOAT)]);
+        // The player has no weapon: no location, so `fn_005c02f0`'s object
+        // and index 6 give the found object.
+        e.register(ACTOR_GET_CURRENT_WEAPON, |_, _| 0u32.into_ret());
+        e.set_global(GLOBAL_011CA830, 0x0a00_3030u32);
+        e.register(EXPLOSION_LOOKUP, |_, a| {
+            assert_eq!(a, [0x0a00_3030, 6]);
+            0x0a00_8000u32.into_ret()
+        });
+        assert!(run(&mut e, 0x005b_fe90, script(reference)));
+        let submitted = submitted.borrow();
+        let (_world, request, mode, _flag) = &submitted[0];
+        assert_eq!(*mode, 1);
+        assert_eq!(word(request, 0x30), 0x0a00_8000 + 0x1000);
+    }
+
+    #[test]
+    fn body_005bfe90_stops_without_a_slot_0x1d0_object() {
+        let mut e = engine_b();
+        let (_camera, _player, submitted) = decal_engine(&mut e);
+        let reference = object_with(&mut e, &[(0x1d0, V_FALSE)]);
+        assert!(run(&mut e, 0x005b_fe90, script(reference)));
+        assert!(submitted.borrow().is_empty());
+    }
+
+    #[test]
+    fn body_005c02f0_returns_the_global() {
+        let mut e = engine_b();
+        e.set_global(GLOBAL_011CA830, 0x1234u32);
+        assert_eq!(e.call(0x005c_02f0, &args![]).u32(), 0x1234);
+    }
+
+    #[test]
+    fn body_005c0300_stores_the_colour() {
+        let mut e = engine_b();
+        // The colour constructor stores its four floats and returns `this`.
+        e.register(COLOR_CONSTRUCT, |e, a| {
+            for i in 0..4 {
+                e.mem.set_u32(a[0] + 4 * i, a[1 + i as usize]);
+            }
+            a[0].into_ret()
+        });
+        parse_gives(&mut e, true, &[255, 128, (-256i32) as u32]);
+        assert!(run(&mut e, 0x005c_0300, script(0)));
+        let colour: Vec<f32> = (0..4).map(|i| e.mem.f32(GLOBAL_COLOR + 4 * i)).collect();
+        assert_eq!(colour, vec![255.0 / 256.0, 0.5, -1.0, 1.0]);
+        // A failed parse leaves the colour alone.
+        parse_gives(&mut e, false, &[]);
+        e.mem.set_f32(GLOBAL_COLOR, 7.0);
+        assert!(!run(&mut e, 0x005c_0300, script(0)));
+        assert_eq!(e.mem.f32(GLOBAL_COLOR), 7.0);
+    }
+
+    // ---- Rotation, position and angle commands -----------------------------------------------
+
+    /// Doubles of the rotation and orientation helpers. Returns the node
+    /// (the reference's slot `0x1d0` object). The setters `X`/`Y`/`Z` store
+    /// the angle in the rotation at `this + 0x24`, `+0x28`, `+0x2c`. The
+    /// reference's slot `0x1e4` answers false.
+    fn rotation_engine(e: &mut Engine) -> (u32, u32) {
+        let node = e.mem.alloc(0x80);
+        e.register_double(V_FLOAT + 20, move |_, _| node.into_ret());
+        let reference = object_with(
+            e,
+            &[(0x1d0, V_FLOAT + 20), (0x1e4, V_FALSE), (0x100, V_FALSE)],
+        );
+        e.register(REFERENCE_ROTATION, |_, a| (a[0] + 0x24).into_ret());
+        e.register(FRAME_DATA_FLOAT, |_, _| 1.0f32.into_ret());
+        e.register(REFERENCE_SET_ANGLE_X, |e, a| {
+            e.mem.set_u32(a[0] + 0x24, a[1]);
+            Ret::default()
+        });
+        e.register(REFERENCE_SET_ANGLE_Y, |e, a| {
+            e.mem.set_u32(a[0] + 0x28, a[1]);
+            Ret::default()
+        });
+        e.register(REFERENCE_SET_ANGLE_Z, |e, a| {
+            e.mem.set_u32(a[0] + 0x2c, a[1]);
+            Ret::default()
+        });
+        e.register(REFERENCE_GET_ORIENTATION, |_, a| a[1].into_ret());
+        accept(
+            e,
+            &[
+                NODE_SET_ORIENTATION,
+                UPDATE_DATA_CONSTRUCT,
+                NODE_UPDATE,
+                COLLISION_RESET_SIM,
+            ],
+        );
+        (reference, node)
+    }
+
+    #[test]
+    fn script_rotate_function_adds_and_wraps_the_angle() {
+        let mut e = engine_b();
+        let (reference, node) = rotation_engine(&mut e);
+        // 90 degrees about Z from 0.
+        parse_gives(&mut e, true, &[b'Z' as u32, 90]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        let radians = 90.0 * f64::from_bits(0x3f91_df46_a000_0000);
+        assert_eq!(e.mem.f32(reference + 0x2c), radians as f32);
+        // The new orientation goes to the node; the node is updated.
+        assert_eq!(calls(&e, NODE_SET_ORIENTATION).len(), 1);
+        assert_eq!(calls(&e, NODE_SET_ORIENTATION)[0][0], node);
+        assert_eq!(calls(&e, NODE_UPDATE).len(), 1);
+        assert!(calls(&e, COLLISION_RESET_SIM).is_empty());
+        // From 6.0, 90 degrees pass 2 pi and wrap.
+        e.mem.set_f32(reference + 0x24, 6.0);
+        parse_gives(&mut e, true, &[b'X' as u32, 90]);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        let wrapped = ((6.0f32 as f64 + radians) as f32 as f64
+            - f64::from_bits(0x4019_21fb_6000_0000)) as f32;
+        assert_eq!(e.mem.f32(reference + 0x24), wrapped);
+        // A negative angle is brought up into 0..2 pi.
+        e.mem.set_f32(reference + 0x28, 0.0);
+        parse_gives(&mut e, true, &[b'Y' as u32, (-90i32) as u32]);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        let lifted = ((-radians) as f32 as f64 + f64::from_bits(0x4019_21fb_6000_0000)) as f32;
+        assert_eq!(e.mem.f32(reference + 0x28), lifted);
+    }
+
+    #[test]
+    fn script_rotate_function_scales_by_the_frame_float_and_skips_unknown_axes() {
+        let mut e = engine_b();
+        let (reference, _node) = rotation_engine(&mut e);
+        e.register(FRAME_DATA_FLOAT, |_, a| {
+            assert_eq!(a[0], FRAME_DATA);
+            2.0f32.into_ret()
+        });
+        parse_gives(&mut e, true, &[b'Z' as u32, 10]);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        let radians = 10.0 * f64::from_bits(0x3f91_df46_a000_0000);
+        assert_eq!(e.mem.f32(reference + 0x2c), (2.0 * radians) as f32);
+        // An unknown axis sets nothing but the orientation is still copied.
+        start_log(&mut e);
+        parse_gives(&mut e, true, &[b'W' as u32, 10]);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        assert!(calls(&e, REFERENCE_SET_ANGLE_X).is_empty());
+        assert!(calls(&e, REFERENCE_ROTATION).is_empty());
+        assert_eq!(calls(&e, NODE_SET_ORIENTATION).len(), 1);
+    }
+
+    #[test]
+    fn script_rotate_function_with_slot_0x1e4_true_does_not_update_the_node() {
+        let mut e = engine_b();
+        let (reference, node) = rotation_engine(&mut e);
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1e4, V_TRUE);
+        parse_gives(&mut e, true, &[b'Y' as u32, 1]);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        assert_eq!(calls(&e, NODE_SET_ORIENTATION)[0][0], node);
+        assert!(calls(&e, NODE_UPDATE).is_empty());
+        // No reference or no node: nothing; bad parameters: false.
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_03d0, script(0)));
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1d0, V_FALSE);
+        assert!(run(&mut e, 0x005c_03d0, script(reference)));
+        assert!(calls(&e, NODE_SET_ORIENTATION).is_empty());
+        parse_with(&mut e, false, |_, _| {});
+        assert!(!run(&mut e, 0x005c_03d0, script(reference)));
+    }
+
+    /// The condition function is called with the sign-extended axis.
+    fn check_axis_command(address: u32, condition: u32) {
+        let mut e = engine_b();
+        e.register(condition, |_, a| (a[3] == 0x0a00_0abc).into_ret());
+        let mut script = script(0x0a00_1000);
+        script.result = Ptr::new(0x0a00_0abc);
+        parse_gives(&mut e, true, &[b'Y' as u32]);
+        start_log(&mut e);
+        assert!(run(&mut e, address, script));
+        assert_eq!(
+            calls(&e, condition),
+            vec![vec![0x0a00_1000, b'Y' as u32, 0, 0x0a00_0abc]]
+        );
+        // A negative character is sign-extended; the condition's answer is
+        // the command's.
+        e.register(condition, |_, _| false.into_ret());
+        parse_gives(&mut e, true, &[0xf0]);
+        start_log(&mut e);
+        assert!(!run(&mut e, address, script));
+        assert_eq!(calls(&e, condition)[0][1], 0xffff_fff0);
+        // Failed parse: false without the condition.
+        parse_gives(&mut e, false, &[]);
+        start_log(&mut e);
+        assert!(!run(&mut e, address, script));
+        assert!(calls(&e, condition).is_empty());
+    }
+
+    #[test]
+    fn script_get_pos_function_forwards_to_the_condition_function() {
+        check_axis_command(0x005c_0590, GET_POS_CONDITION);
+    }
+
+    #[test]
+    fn script_get_starting_pos_function_forwards_to_the_condition_function() {
+        check_axis_command(0x005c_08a0, GET_STARTING_POS_CONDITION);
+    }
+
+    #[test]
+    fn script_get_angle_function_forwards_to_the_condition_function() {
+        check_axis_command(0x005c_0900, GET_ANGLE_CONDITION);
+    }
+
+    #[test]
+    fn script_get_starting_angle_function_forwards_to_the_condition_function() {
+        check_axis_command(0x005c_0960, GET_STARTING_ANGLE_CONDITION);
+    }
+
+    /// Doubles for the move commands: `reference` answers
+    /// `REFERENCE_CAN_BE_MOVED` with `movable`, the setting `011c3ea4` holds
+    /// `setting`. Slot `0x130` of every object answers its own address plus 1.
+    fn move_engine(movable: bool, setting: u32) -> (Engine, u32, u32) {
+        let mut e = engine_b();
+        e.set_global(DATA_HANDLER, 0x0a00_0200u32);
+        e.set_global(SETTING_011C3EA4 + 4, setting);
+        e.register_double(REFERENCE_CAN_BE_MOVED, move |_, _| movable.into_ret());
+        e.register(FORM_ID, |e, a| e.mem.u32(a[0] + 0xc).into_ret());
+        e.register(V_FLOAT + 30, |_, a| (a[0] + 1).into_ret());
+        let reference = object_with(&mut e, &[(0x130, V_FLOAT + 30)]);
+        let script_object = object_with(&mut e, &[(0x130, V_FLOAT + 30)]);
+        e.mem.set_u32(reference + 0xc, 0x0100_0001);
+        e.mem.set_u32(script_object + 0xc, 0x0100_0002);
+        accept(&mut e, &[SCRIPT_LOG, TASK_QUEUE_INTERFACE, QUEUE_TASK]);
+        (e, reference, script_object)
+    }
+
+    fn move_script(reference: u32, script_object: u32) -> ScriptArgs {
+        let mut a = script(reference);
+        a.script_obj = Ptr::new(script_object);
+        a
+    }
+
+    #[test]
+    fn script_set_pos_function_queues_the_task_when_the_setting_is_above_one() {
+        let (mut e, reference, script_object) = move_engine(true, 2);
+        e.register(TASK_QUEUE_INTERFACE, |_, _| 0x0a00_0300u32.into_ret());
+        parse_gives(&mut e, true, &[b'Z' as u32, 1.5f32.to_bits()]);
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_05f0,
+            move_script(reference, script_object)
+        ));
+        assert_eq!(
+            calls(&e, QUEUE_TASK),
+            vec![args![
+                0x0a00_0300u32,
+                0x1007u32,
+                reference,
+                b'Z' as u32,
+                1.5f64
+            ]]
+        );
+        // The same for the angle command with the task 0x1009.
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_09c0,
+            move_script(reference, script_object)
+        ));
+        assert_eq!(calls(&e, QUEUE_TASK)[0][1], 0x1009);
+        // Failed parse.
+        parse_gives(&mut e, false, &[]);
+        assert!(!run(
+            &mut e,
+            0x005c_05f0,
+            move_script(reference, script_object)
+        ));
+    }
+
+    #[test]
+    fn script_set_pos_function_runs_the_base_when_the_setting_is_one() {
+        let (mut e, reference, script_object) = move_engine(true, 1);
+        // The base reads the position through slot 0x1f4 and stores it.
+        let position = e.mem.alloc(12);
+        e.register_double(V_FLOAT + 31, move |_, _| position.into_ret());
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1f4, V_FLOAT + 31);
+        e.mem.set_u32(table + 0x1d0, V_FALSE);
+        accept(&mut e, &[REFERENCE_SET_LOCATION]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        parse_gives(&mut e, true, &[b'Y' as u32, 4.0f32.to_bits()]);
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_05f0,
+            move_script(reference, script_object)
+        ));
+        assert!(calls(&e, QUEUE_TASK).is_empty());
+        let vector = calls(&e, REFERENCE_SET_LOCATION)[0][1];
+        assert_eq!(calls(&e, REFERENCE_SET_LOCATION)[0][0], reference);
+        assert_eq!(e.mem.f32(vector + 4), 4.0);
+    }
+
+    #[test]
+    fn script_set_pos_function_reports_a_reference_that_cannot_be_moved() {
+        let (mut e, reference, script_object) = move_engine(false, 2);
+        set_echo(&mut e, true);
+        parse_gives(&mut e, true, &[b'X' as u32, 1.0f32.to_bits()]);
+        // A static (non-runtime) form id for the script: the log line.
+        e.register(IS_DYNAMIC_FORM_ID, |_, a| (a[1] >= 0xff00_0000).into_ret());
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_05f0,
+            move_script(reference, script_object)
+        ));
+        assert_eq!(printed(&e), vec![vec![MSG_CANNOT_BE_MOVED, reference + 1]]);
+        assert_eq!(
+            calls(&e, SCRIPT_LOG),
+            vec![vec![
+                MSG_SCRIPT_MOVE_LOG,
+                script_object + 1,
+                0x0100_0002,
+                reference + 1,
+                0x0100_0001
+            ]]
+        );
+        assert!(calls(&e, QUEUE_TASK).is_empty());
+        // A dynamic form id for the script: no log line; without echo no
+        // message either.
+        e.mem.set_u32(script_object + 0xc, 0xff00_0002);
+        set_echo(&mut e, false);
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_09c0,
+            move_script(reference, script_object)
+        ));
+        assert!(printed(&e).is_empty());
+        assert!(calls(&e, SCRIPT_LOG).is_empty());
+    }
+
+    /// A reference for `005c0740`/`005c0b10`: slot 0x1f4 answers a
+    /// position (1, 2, 3), slot 0x1d0 the node, slot 0x1e4 false.
+    fn base_engine(e: &mut Engine) -> (u32, u32) {
+        let (reference, node) = rotation_engine(e);
+        let position = e.mem.alloc(12);
+        for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+            e.mem.set_f32(position + 4 * i as u32, value);
+        }
+        e.register_double(V_FLOAT + 31, move |_, _| position.into_ret());
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1f4, V_FLOAT + 31);
+        accept(e, &[REFERENCE_SET_LOCATION, NODE_SET_POSITION]);
+        e.register(DYNAMIC_CAST, |_, _| 0u32.into_ret());
+        (reference, node)
+    }
+
+    fn vector_of(e: &Engine, address: u32) -> [f32; 3] {
+        [
+            e.mem.f32(address),
+            e.mem.f32(address + 4),
+            e.mem.f32(address + 8),
+        ]
+    }
+
+    #[test]
+    fn script_set_pos_base_changes_one_coordinate() {
+        let mut e = engine_b();
+        let (reference, node) = base_engine(&mut e);
+        // The vector is copied before being passed: capture it at the call.
+        let seen = Rc::new(RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(REFERENCE_SET_LOCATION, move |e, a| {
+            log.borrow_mut().push(vector_of(e, a[1]));
+            Ret::default()
+        });
+        let log = seen.clone();
+        e.register_double(NODE_SET_POSITION, move |e, a| {
+            assert_eq!(a[0], node);
+            log.borrow_mut().push(vector_of(e, a[1]));
+            Ret::default()
+        });
+        for (axis, expected) in [
+            (b'X', [9.0, 2.0, 3.0]),
+            (b'Y', [1.0, 9.0, 3.0]),
+            (b'Z', [1.0, 2.0, 9.0]),
+            (b'W', [1.0, 2.0, 3.0]),
+        ] {
+            seen.borrow_mut().clear();
+            start_log(&mut e);
+            e.call(0x005c_0740, &args![reference, axis as u32, 9.0f32]);
+            assert_eq!(*seen.borrow(), vec![expected, expected]);
+            // The node's collision is reset and the node updated.
+            assert_eq!(calls(&e, COLLISION_RESET_SIM), vec![vec![node, 1]]);
+            assert_eq!(calls(&e, NODE_UPDATE).len(), 1);
+        }
+        // A null reference does nothing.
+        start_log(&mut e);
+        e.call(0x005c_0740, &args![0u32, b'X' as u32, 1.0f32]);
+        assert!(e.call_log.as_ref().unwrap().len() == 1);
+    }
+
+    #[test]
+    fn script_set_pos_base_moves_the_character_controller_of_a_mobile_object() {
+        let mut e = engine_b();
+        let (reference, _node) = base_engine(&mut e);
+        // The RTTI cast succeeds (the reference is a mobile object) and it
+        // has a controller.
+        e.register(DYNAMIC_CAST, |_, a| a[0].into_ret());
+        let controller = e.mem.alloc(0x400);
+        e.register_double(GET_CHAR_CONTROLLER, move |_, a| {
+            assert_ne!(a[0], 0);
+            controller.into_ret()
+        });
+        accept(&mut e, &[CONTROLLER_SET_POSITION]);
+        // `00ca9600` answers 4 for the part at +0x3e0: the position is not
+        // set; any other answer sets it.
+        e.register_double(CONTROLLER_PART_VALUE, move |_, a| {
+            assert_eq!(a[0], controller + 0x3e0);
+            4u32.into_ret()
+        });
+        start_log(&mut e);
+        e.call(0x005c_0740, &args![reference, b'X' as u32, 5.0f32]);
+        assert!(calls(&e, CONTROLLER_SET_POSITION).is_empty());
+        e.register(CONTROLLER_PART_VALUE, |_, _| 3u32.into_ret());
+        start_log(&mut e);
+        e.call(0x005c_0740, &args![reference, b'X' as u32, 5.0f32]);
+        assert_eq!(calls(&e, CONTROLLER_SET_POSITION)[0][0], controller);
+        // No controller: nothing.
+        e.register(GET_CHAR_CONTROLLER, |_, _| 0u32.into_ret());
+        start_log(&mut e);
+        e.call(0x005c_0740, &args![reference, b'X' as u32, 5.0f32]);
+        assert!(calls(&e, CONTROLLER_SET_POSITION).is_empty());
+    }
+
+    #[test]
+    fn body_005c0860_and_005c0880_ask_the_controller_part() {
+        let mut e = engine_b();
+        let controller = e.mem.alloc(0x400);
+        e.register_double(CONTROLLER_PART_VALUE, move |_, a| {
+            assert_eq!(a[0], controller + 0x3e0);
+            4u32.into_ret()
+        });
+        assert_eq!(e.call(0x005c_0880, &args![controller]).u32(), 4);
+        assert!(e.call(0x005c_0860, &args![controller]).bool());
+        e.register(CONTROLLER_PART_VALUE, |_, _| 2u32.into_ret());
+        assert_eq!(e.call(0x005c_0880, &args![controller]).u32(), 2);
+        assert!(!e.call(0x005c_0860, &args![controller]).bool());
+    }
+
+    #[test]
+    fn script_set_angle_base_converts_degrees_and_updates_the_node() {
+        let mut e = engine_b();
+        let (reference, node) = rotation_engine(&mut e);
+        let radians = (90.0f32 as f64 * f64::from_bits(0x3f91_df46_a000_0000)) as f32;
+        for (axis, offset) in [(b'X', 0x24), (b'Y', 0x28), (b'Z', 0x2c)] {
+            start_log(&mut e);
+            e.call(0x005c_0b10, &args![reference, axis as u32, 90.0f32]);
+            assert_eq!(e.mem.f32(reference + offset), radians);
+            assert_eq!(calls(&e, NODE_SET_ORIENTATION)[0][0], node);
+            assert_eq!(calls(&e, COLLISION_RESET_SIM), vec![vec![node, 1]]);
+            assert_eq!(calls(&e, NODE_UPDATE).len(), 1);
+        }
+        // Slot 0x1e4 true: no update.
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1e4, V_TRUE);
+        start_log(&mut e);
+        e.call(0x005c_0b10, &args![reference, b'X' as u32, 1.0f32]);
+        assert!(calls(&e, NODE_UPDATE).is_empty());
+        assert_eq!(calls(&e, COLLISION_RESET_SIM).len(), 1);
+        // Null reference and missing node: nothing.
+        start_log(&mut e);
+        e.call(0x005c_0b10, &args![0u32, b'X' as u32, 1.0f32]);
+        e.mem.set_u32(table + 0x1d0, V_FALSE);
+        e.call(0x005c_0b10, &args![reference, b'X' as u32, 1.0f32]);
+        assert!(calls(&e, NODE_SET_ORIENTATION).is_empty());
+        // An unknown axis sets no angle.
+        start_log(&mut e);
+        e.call(0x005c_0b10, &args![reference, b'W' as u32, 1.0f32]);
+        assert!(calls(&e, REFERENCE_SET_ANGLE_X).is_empty());
+    }
+
+    #[test]
+    fn script_set_angle_function_runs_the_base_when_the_setting_is_one() {
+        let (mut e, reference, script_object) = move_engine(true, 1);
+        let node = e.mem.alloc(0x80);
+        e.register_double(V_FLOAT + 20, move |_, _| node.into_ret());
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1d0, V_FLOAT + 20);
+        e.mem.set_u32(table + 0x1e4, V_TRUE);
+        e.register(REFERENCE_SET_ANGLE_Z, |e, a| {
+            e.mem.set_u32(a[0] + 0x2c, a[1]);
+            Ret::default()
+        });
+        e.register(REFERENCE_GET_ORIENTATION, |_, a| a[1].into_ret());
+        accept(&mut e, &[NODE_SET_ORIENTATION, COLLISION_RESET_SIM]);
+        parse_gives(&mut e, true, &[b'Z' as u32, 180.0f32.to_bits()]);
+        start_log(&mut e);
+        assert!(run(
+            &mut e,
+            0x005c_09c0,
+            move_script(reference, script_object)
+        ));
+        assert!(calls(&e, QUEUE_TASK).is_empty());
+        let radians = (180.0f64 * f64::from_bits(0x3f91_df46_a000_0000)) as f32;
+        assert_eq!(e.mem.f32(reference + 0x2c), radians);
+    }
+
+    #[test]
+    fn script_set_at_start_function_builds_the_orientation_from_three_rotations() {
+        let mut e = engine_b();
+        // Identity matrix, zero vector.
+        for i in 0..9 {
+            e.mem
+                .set_f32(IDENTITY_MATRIX + 4 * i, if i % 4 == 0 { 1.0 } else { 0.0 });
+        }
+        let node = e.mem.alloc(0x80);
+        e.register_double(V_FLOAT + 20, move |_, _| node.into_ret());
+        // Slot 0x16c answers the angles (1, 2, 3) through its out pointer;
+        // slot 0x170 the position (7, 8, 9).
+        e.register(V_FLOAT + 21, |e, a| {
+            for (i, value) in [1.0f32, 2.0, 3.0].into_iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, value);
+            }
+            a[1].into_ret()
+        });
+        e.register(V_FLOAT + 22, |e, a| {
+            for (i, value) in [7.0f32, 8.0, 9.0].into_iter().enumerate() {
+                e.mem.set_f32(a[1] + 4 * i as u32, value);
+            }
+            a[1].into_ret()
+        });
+        let reference = object_with(
+            &mut e,
+            &[
+                (0x1d0, V_FLOAT + 20),
+                (0x1e4, V_FALSE),
+                (0x16c, V_FLOAT + 21),
+                (0x170, V_FLOAT + 22),
+                (0x174, V_RECORD),
+            ],
+        );
+        e.mem.set_u32(ZERO_VECTOR, 1.0f32.to_bits());
+        // The matrix doubles: a rotation matrix is filled with the angle in
+        // its first word; the product records the order and stores the sum
+        // of the first words in the output.
+        accept(
+            &mut e,
+            &[EMPTY_CONSTRUCT, NODE_UPDATE, UPDATE_DATA_CONSTRUCT],
+        );
+        for (address, tag) in [
+            (MATRIX_MAKE_X_ROTATION, 1.0f32),
+            (MATRIX_MAKE_Y_ROTATION, 2.0),
+            (MATRIX_MAKE_Z_ROTATION, 3.0),
+        ] {
+            e.register_double(address, move |e, a| {
+                let angle = f32::from_bits(a[1]);
+                e.mem.set_f32(a[0], tag * 100.0 + angle);
+                Ret::default()
+            });
+        }
+        e.register(MATRIX_MULTIPLY, |e, a| {
+            // out = rotation word + 1000 * running word
+            let rotation = e.mem.f32(a[0]);
+            let running = e.mem.f32(a[2]);
+            e.mem.set_f32(a[1], rotation + 1000.0 * running);
+            copy_words(e, a[2] + 4, a[1] + 4, 8);
+            a[1].into_ret()
+        });
+        accept(&mut e, &[NODE_SET_POSITION]);
+        let orientation = Rc::new(RefCell::new(0.0f32));
+        let seen = orientation.clone();
+        e.register_double(NODE_SET_ORIENTATION, move |e, a| {
+            assert_eq!(a[0], node);
+            *seen.borrow_mut() = e.mem.f32(a[1]);
+            Ret::default()
+        });
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_0bf0, script(reference)));
+        // The running matrix starts as the identity (first word 1.0); each
+        // step: new = rotation + 1000 * running.
+        let first = 101.0 + 1000.0 * 1.0;
+        let second = 202.0 + 1000.0 * first;
+        let third = 303.0 + 1000.0 * second;
+        assert_eq!(*orientation.borrow(), third);
+        // Slot 0x174 got the three words of the zero vector.
+        assert_eq!(
+            calls(&e, V_RECORD),
+            vec![vec![reference, 1.0f32.to_bits(), 0, 0]]
+        );
+        assert_eq!(calls(&e, NODE_SET_POSITION)[0][0], node);
+        assert_eq!(calls(&e, NODE_UPDATE).len(), 1);
+        // Slot 0x1e4 true: no update; a reference without a node: only true.
+        let table = e.mem.u32(reference);
+        e.mem.set_u32(table + 0x1e4, V_TRUE);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_0bf0, script(reference)));
+        assert!(calls(&e, NODE_UPDATE).is_empty());
+        e.mem.set_u32(table + 0x1d0, V_FALSE);
+        start_log(&mut e);
+        assert!(run(&mut e, 0x005c_0bf0, script(reference)));
+        assert!(calls(&e, NODE_SET_POSITION).is_empty());
+        assert!(run(&mut e, 0x005c_0bf0, script(0)));
     }
 }
