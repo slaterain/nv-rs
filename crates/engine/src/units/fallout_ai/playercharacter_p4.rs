@@ -10,9 +10,9 @@
 //! `009694d0`, the audio marker lookup, the hardcore mode update and the
 //! sleep/wait test `00969fa0`.
 //!
-//! Notes for the next session: this part continues at `0096a2d0` (the
-//! `BSSimpleList` constructor, which this part only calls by address) and
-//! `0096a300`.
+//! Second session: `00967b70` (marker added) and `0096a2d0` to `0096a7b0` (the
+//! hash table, array and list constructors and destructors). The range is
+//! finished; nothing is left after `0096a7b0`.
 //!
 //! Conventions:
 //! * In the range this part touches, `PlayerCharacter` fields sit 0x10 lower on
@@ -381,10 +381,31 @@ const VECTOR_SCALE: u32 = 0x0045_bb20;
 const VECTOR_ADD: u32 = 0x0063_c8a0;
 /// `HUDMainMenu::SetRadiationLevel` (Xbox PDB), cdecl, two floats.
 const SET_RADIATION_LEVEL: u32 = 0x0077_38c0;
-/// `0096a330`: element address of the 0x68-byte entries of a `BSSimpleArray`.
-const ARRAY_ELEMENT_0X68: u32 = 0x0096_a330;
-/// `0096a390`: the array initialiser `0096a280` runs.
-const ARRAY_INITIALISE: u32 = 0x0096_a390;
+/// `operator delete` of an object (`00401030`, cdecl, one word).
+const FREE_OBJECT: u32 = 0x0040_1030;
+/// Allocates `bytes` bytes (`00aa1070`, cdecl).
+const ALLOCATE_BYTES: u32 = 0x00aa_1070;
+/// Allocates `count` words (`0096afc0`, cdecl).
+const ALLOCATE_WORDS: u32 = 0x0096_afc0;
+/// Frees a block from `00aa1070` (`00aa10f0`, cdecl; ignores 0).
+const FREE_BYTES: u32 = 0x00aa_10f0;
+/// `memset(block, value, size)` (`00403d30`, cdecl).
+const FILL_MEMORY: u32 = 0x0040_3d30;
+/// Frees all items of a hash table (`00438af0`).
+const HASH_TABLE_EMPTY: u32 = 0x0043_8af0;
+/// `006b8310(item)` on the sub-object at +0xc of `0096a540`'s object.
+const SUB_OBJECT_RELEASE: u32 = 0x006b_8310;
+/// Array initialiser `006b3eb0(size, capacity)`.
+const ARRAY_INITIALISE_SIZED: u32 = 0x006b_3eb0;
+/// `SetAtGrow` (`00470000`): index, value.
+const ARRAY_SET_AT_GROW: u32 = 0x0047_0000;
+/// Vtables installed by the constructors and destructors of this range.
+const MAP_VTABLE: u32 = 0x0108_b474;
+const HASH_TABLE_VTABLE: u32 = 0x0108_b494;
+const ITEM_CHANGE_ARRAY_VTABLE: u32 = 0x0108_b4b4;
+const AMMO_ARRAY_VTABLE: u32 = 0x0108_b4c8;
+const TABLE_ARRAY_DERIVED_VTABLE: u32 = 0x0108_b4dc;
+const CAPACITY_ARRAY_VTABLE: u32 = 0x0108_b4e4;
 
 layout! {
     /// `PlayerCharacter` (Xbox PDB source `fallout/ai/playercharacter.cpp`),
@@ -572,6 +593,7 @@ pub fn player_character_is_pipboy_active(e: &mut Engine, this: Ptr<PlayerCharact
     e.call(IS_IN_PIPBOY_MENU, &args![]).bool()
 }
 
+// Translated from 00967b70 (decompiled, FalloutNV.exe 1.4.0.525)
 /// Whether the inventory entry (`ItemChange`) passes the player's usability
 /// test (the name is not in the map). A form that answers true to its slot
 /// 0x94 (`GetQuestObject` in the Xbox PDB) is ruled out unless its type is
@@ -581,7 +603,6 @@ pub fn player_character_is_pipboy_active(e: &mut Engine, this: Ptr<PlayerCharact
 /// `0080f7d0`, 0x29 must be the current weapon's first form or in its second
 /// form list, every other type fails. The health is the health extra data's
 /// float or the form's own health.
-/// form's own health.
 pub fn fn_00967b70(e: &mut Engine, this: Ptr<PlayerCharacter>, entry: Ptr<ItemChange>) -> bool {
     let mut usable = true;
     let form = e.call(WORD_AT_8, &args![entry]).u32();
@@ -1783,7 +1804,7 @@ pub fn fn_00969fa0(e: &mut Engine, this: Ptr<PlayerCharacter>) {
 /// Constructor: runs the base initialiser `0096a390(size)` and installs the
 /// vtable `0108b474`. Returns `this`.
 pub fn fn_0096a280(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
-    e.call(ARRAY_INITIALISE, &args![this, size]);
+    fn_0096a390(e, this, size);
     e.mem.set_u32(this.addr(), VTABLE_0096A280);
     this
 }
@@ -1792,7 +1813,241 @@ pub fn fn_0096a280(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
 /// The address of element `index` of a `BSSimpleArray` of 0x68-byte
 /// elements (`0096a330`).
 pub fn fn_0096a2b0(e: &mut Engine, this: Ptr, index: u32) -> Ptr {
-    e.call(ARRAY_ELEMENT_0X68, &args![this, index]).ptr()
+    Ptr::new(fn_0096a330(e, this, index))
+}
+
+// Translated from 0096a2d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a two-word object (the `BSSimpleList` node: item and next
+/// node): clears both words. Returns `this`. (The map names it
+/// `Concurrency::details::QuickBitSet::QuickBitSet`, a folded library name.)
+pub fn fn_0096a2d0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), 0);
+    e.mem.set_u32(this.addr() + 4, 0);
+    this
+}
+
+// Translated from 0096a300 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned_int_unsigned_char>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor `0096a4b0`; when bit 0 of `flags` is set, frees
+/// the object (`00401030`). Returns `this`.
+pub fn fn_0096a300(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0096a4b0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096a330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of element `index` of an array of 0x68-byte elements whose
+/// buffer is the word at +4.
+pub fn fn_0096a330(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    index
+        .wrapping_mul(0x68)
+        .wrapping_add(e.mem.u32(this.addr() + 4))
+}
+
+// Translated from 0096a350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The 16-bit word at +4 of the object.
+pub fn fn_0096a350(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u16(this.addr() + 4) as u32
+}
+
+// Translated from 0096a370 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The address of element `index` of an array of 0x30-byte elements whose
+/// buffer is the word at +0.
+pub fn fn_0096a370(e: &mut Engine, this: Ptr, index: u32) -> u32 {
+    index
+        .wrapping_mul(0x30)
+        .wrapping_add(e.mem.u32(this.addr()))
+}
+
+// Translated from 0096a390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Initialiser of the hash table base: vtable `0108b494`, bucket count
+/// `size` at +4, item count 0 at +0xc, and a zero-filled bucket array of
+/// `size` words (`00aa1070`, `00403d30`) at +8. Returns `this`.
+pub fn fn_0096a390(e: &mut Engine, this: Ptr, size: u32) -> Ptr {
+    e.mem.set_u32(this.addr(), HASH_TABLE_VTABLE);
+    e.mem.set_u32(this.addr() + 4, size);
+    e.mem.set_u32(this.addr() + 0xc, 0);
+    let bytes = size << 2;
+    let buckets = e.call(ALLOCATE_BYTES, &args![bytes]).u32();
+    e.mem.set_u32(this.addr() + 8, buckets);
+    e.call(FILL_MEMORY, &args![buckets, 0u32, bytes]);
+    this
+}
+
+// Translated from 0096a400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Advances a hash table iterator. `position` points at the current item
+/// pointer (an item is: next in chain at +0, key at +4, value byte at +8).
+/// Stores the current item's key in `key` and value byte in `value`, then
+/// moves `position` to the next item in the chain, or else to the first item
+/// of the next non-empty bucket (the bucket of the key comes from slot 4 of
+/// the table's vtable), or to 0 at the end.
+pub fn fn_0096a400(e: &mut Engine, this: Ptr, position: Ptr, key: Ptr, value: Ptr) {
+    let item = e.mem.u32(position.addr());
+    let item_key = e.mem.u32(item + 4);
+    e.mem.set_u32(key.addr(), item_key);
+    let item_value = e.mem.u8(item + 8);
+    e.mem.set_u8(value.addr(), item_value);
+    let next = e.mem.u32(item);
+    if next != 0 {
+        e.mem.set_u32(position.addr(), next);
+        return;
+    }
+    let mut bucket = e.vcall(this.addr(), 4, &args![item_key]).u32();
+    let count = e.mem.u32(this.addr() + 4);
+    loop {
+        bucket = bucket.wrapping_add(1);
+        if bucket >= count {
+            e.mem.set_u32(position.addr(), 0);
+            return;
+        }
+        let buckets = e.mem.u32(this.addr() + 8);
+        let first = e.mem.u32(buckets + bucket * 4);
+        if first != 0 {
+            e.mem.set_u32(position.addr(), first);
+            return;
+        }
+    }
+}
+
+// Translated from 0096a4b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the map class whose vtable is `0108b474`: installs that
+/// vtable, empties the table (`00438af0`), then runs the base destructor
+/// `0096a510`. The exception unwinding frame is not translated.
+pub fn fn_0096a4b0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), MAP_VTABLE);
+    e.call(HASH_TABLE_EMPTY, &args![this]);
+    fn_0096a510(e, this);
+}
+
+// Translated from 0096a510 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the hash table base: installs vtable `0108b494`, empties the
+/// table (`00438af0`) and frees the bucket array at +8 (`00aa10f0`).
+pub fn fn_0096a510(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), HASH_TABLE_VTABLE);
+    e.call(HASH_TABLE_EMPTY, &args![this]);
+    let buckets = e.mem.u32(this.addr() + 8);
+    e.call(FREE_BYTES, &args![buckets]);
+}
+
+// Translated from 0096a540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Clears the byte at +8 and passes `item` to `006b8310` on the sub-object at
+/// +0xc (it frees `item` through `00401030`).
+pub fn fn_0096a540(e: &mut Engine, this: Ptr, item: u32) {
+    e.mem.set_u8(this.addr() + 8, 0);
+    e.call(SUB_OBJECT_RELEASE, &args![this.addr() + 0xc, item]);
+}
+
+// Translated from 0096a570 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `BSSimpleArray<ItemChange *>` (vtable `0108b4b4`): the
+/// array initialiser `006b3eb0(0, 0)`. Returns `this`.
+pub fn fn_0096a570(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), ITEM_CHANGE_ARRAY_VTABLE);
+    e.call(ARRAY_INITIALISE_SIZED, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0096a5a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray<ItemChange *>`: installs vtable
+/// `0108b4b4` and empties the array (`008454f0(1)`).
+pub fn fn_0096a5a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), ITEM_CHANGE_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0096a5c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the `BSSimpleArray<TESAmmo *>` (vtable `0108b4c8`): the
+/// array initialiser `006b3eb0(0, 0)`. Returns `this`.
+pub fn fn_0096a5c0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.mem.set_u32(this.addr(), AMMO_ARRAY_VTABLE);
+    e.call(ARRAY_INITIALISE_SIZED, &args![this, 0u32, 0u32]);
+    this
+}
+
+// Translated from 0096a5f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Destructor of the `BSSimpleArray<TESAmmo *>`: installs vtable `0108b4c8`
+/// and empties the array (`008454f0(1)`).
+pub fn fn_0096a5f0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), AMMO_ARRAY_VTABLE);
+    e.call(ARRAY_CLEAR, &args![this, 1u32]);
+}
+
+// Translated from 0096a610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SetAtGrow` (`00470000`; the map names it
+/// `NiTArray<char *,NiTMallocInterface<char *>>::SetAtGrow`) on the array
+/// object, at the 16-bit index stored at +0xa, with `value`.
+pub fn fn_0096a610(e: &mut Engine, this: Ptr, value: u32) {
+    let index = e.mem.u16(this.addr() + 0xa) as u32;
+    e.call(ARRAY_SET_AT_GROW, &args![this, index, value]);
+}
+
+// Translated from 0096a640 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: runs `0096a7b0(first, second)` and installs vtable
+/// `0108b4dc`. Returns `this`.
+pub fn fn_0096a640(e: &mut Engine, this: Ptr, first: u32, second: u32) -> Ptr {
+    fn_0096a7b0(e, this, first, second);
+    e.mem.set_u32(this.addr(), TABLE_ARRAY_DERIVED_VTABLE);
+    this
+}
+
+// Translated from 0096a670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned_int_unsigned_char>>,unsigned_int,unsigned_char>::_scalar_deleting_destructor_`
+/// (Xbox PDB): runs the hash table base destructor `0096a510`; when bit 0 of
+/// `flags` is set, frees the object (`00401030`). Returns `this`.
+pub fn fn_0096a670(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0096a510(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096a6a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<ItemChange *>::_scalar_deleting_destructor_` (Xbox PDB):
+/// runs the destructor `0096a5a0`; when bit 0 of `flags` is set, frees the
+/// object (`00401030`). Returns `this`.
+pub fn fn_0096a6a0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0096a5a0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096a6d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSSimpleArray<TESAmmo *>::_scalar_deleting_destructor_` (Xbox PDB): runs
+/// the destructor `0096a5f0`; when bit 0 of `flags` is set, frees the object
+/// (`00401030`). Returns `this`.
+pub fn fn_0096a6d0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_0096a5f0(e, this);
+    if flags & 1 != 0 {
+        e.call(FREE_OBJECT, &args![this]);
+    }
+    this
+}
+
+// Translated from 0096a7b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of a fixed-capacity array: vtable `0108b4e4`; the 16-bit
+/// capacity at +8 and the 16-bit grow size at +0xe come from the two
+/// arguments, the 16-bit words at +0xa and +0xc are cleared; the buffer at +4
+/// is `0096afc0(capacity)` when the capacity is above zero, otherwise 0.
+/// Returns `this`.
+pub fn fn_0096a7b0(e: &mut Engine, this: Ptr, capacity: u32, grow: u32) -> Ptr {
+    let capacity = capacity as u16;
+    e.mem.set_u32(this.addr(), CAPACITY_ARRAY_VTABLE);
+    e.mem.set_u16(this.addr() + 8, capacity);
+    e.mem.set_u16(this.addr() + 0xe, grow as u16);
+    e.mem.set_u16(this.addr() + 0xa, 0);
+    e.mem.set_u16(this.addr() + 0xc, 0);
+    if capacity > 0 {
+        let buffer = e.call(ALLOCATE_WORDS, &args![capacity as u32]).u32();
+        e.mem.set_u32(this.addr() + 4, buffer);
+    } else {
+        e.mem.set_u32(this.addr() + 4, 0);
+    }
+    this
 }
 
 /// This part's translated functions, by exe address.
@@ -1871,6 +2126,26 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00969fa0, fn_00969fa0(Ptr<PlayerCharacter>)),
         entry!(0x0096a280, fn_0096a280(Ptr, u32) -> Ptr),
         entry!(0x0096a2b0, fn_0096a2b0(Ptr, u32) -> Ptr),
+        entry!(0x0096a2d0, fn_0096a2d0(Ptr) -> Ptr),
+        entry!(0x0096a300, fn_0096a300(Ptr, u32) -> Ptr),
+        entry!(0x0096a330, fn_0096a330(Ptr, u32) -> u32),
+        entry!(0x0096a350, fn_0096a350(Ptr) -> u32),
+        entry!(0x0096a370, fn_0096a370(Ptr, u32) -> u32),
+        entry!(0x0096a390, fn_0096a390(Ptr, u32) -> Ptr),
+        entry!(0x0096a400, fn_0096a400(Ptr, Ptr, Ptr, Ptr)),
+        entry!(0x0096a4b0, fn_0096a4b0(Ptr)),
+        entry!(0x0096a510, fn_0096a510(Ptr)),
+        entry!(0x0096a540, fn_0096a540(Ptr, u32)),
+        entry!(0x0096a570, fn_0096a570(Ptr) -> Ptr),
+        entry!(0x0096a5a0, fn_0096a5a0(Ptr)),
+        entry!(0x0096a5c0, fn_0096a5c0(Ptr) -> Ptr),
+        entry!(0x0096a5f0, fn_0096a5f0(Ptr)),
+        entry!(0x0096a610, fn_0096a610(Ptr, u32)),
+        entry!(0x0096a640, fn_0096a640(Ptr, u32, u32) -> Ptr),
+        entry!(0x0096a670, fn_0096a670(Ptr, u32) -> Ptr),
+        entry!(0x0096a6a0, fn_0096a6a0(Ptr, u32) -> Ptr),
+        entry!(0x0096a6d0, fn_0096a6d0(Ptr, u32) -> Ptr),
+        entry!(0x0096a7b0, fn_0096a7b0(Ptr, u32, u32) -> Ptr),
     ]
 }
 
@@ -1950,7 +2225,6 @@ mod tests {
         ARRAY_APPEND,
         ARRAY_CLEAR,
         LIST_ADD,
-        LIST_NODE_CONSTRUCT,
         EXTRA_DATA_LIST_CONSTRUCT,
         EXTRA_DATA_LIST_DUPLICATE,
         EXTRA_IS_DEFAULT_FOR_CONTAINER,
@@ -2021,8 +2295,15 @@ mod tests {
         VECTOR_SCALE,
         VECTOR_ADD,
         SET_RADIATION_LEVEL,
-        ARRAY_ELEMENT_0X68,
-        ARRAY_INITIALISE,
+        FREE_OBJECT,
+        ALLOCATE_BYTES,
+        ALLOCATE_WORDS,
+        FREE_BYTES,
+        FILL_MEMORY,
+        HASH_TABLE_EMPTY,
+        SUB_OBJECT_RELEASE,
+        ARRAY_INITIALISE_SIZED,
+        ARRAY_SET_AT_GROW,
     ];
 
     fn eax(value: u32) -> Ret {
@@ -2084,9 +2365,6 @@ mod tests {
         e.register(NODE_ITEM_SLOT, |_, a| eax(a[0]));
         e.register(ARRAY_ELEMENT_SLOT, |e, a| {
             eax(e.mem.u32(a[0] + 4) + a[1] * 4)
-        });
-        e.register(ARRAY_ELEMENT_0X68, |e, a| {
-            eax(e.mem.u32(a[0] + 4) + a[1] * 0x68)
         });
         e.register(FORM_TYPE, |e, a| eax(e.mem.u8(a[0] + 4) as u32));
         e.register(ACTOR_PROCESS, |e, a| eax(e.mem.u32(a[0] + 0x68)));
@@ -3651,7 +3929,7 @@ mod tests {
         let block = e.mem.alloc(0x20);
         e.call_log = Some(vec![]);
         assert_eq!(e.call(0x0096a280, &args![block, 5u32]).u32(), block);
-        assert_eq!(calls(&e, ARRAY_INITIALISE), vec![vec![block, 5]]);
+        assert_eq!(calls(&e, ALLOCATE_BYTES), vec![vec![20]]);
         assert_eq!(e.mem.u32(block), VTABLE_0096A280);
     }
 
@@ -3662,5 +3940,195 @@ mod tests {
         let buffer = e.mem.alloc(0x68 * 3);
         e.mem.set_u32(array + 4, buffer);
         assert_eq!(e.call(0x0096a2b0, &args![array, 2u32]).u32(), buffer + 0xd0);
+    }
+
+    #[test]
+    fn the_two_word_constructor_clears_both_words() {
+        let mut e = engine();
+        let block = e.mem.alloc(8);
+        e.mem.set_u32(block, 7);
+        e.mem.set_u32(block + 4, 9);
+        assert_eq!(e.call(0x0096a2d0, &args![block]).u32(), block);
+        assert_eq!((e.mem.u32(block), e.mem.u32(block + 4)), (0, 0));
+    }
+
+    #[test]
+    fn the_deleting_destructors_free_only_when_bit_zero_is_set() {
+        for (addr, empty) in [
+            (0x0096a300, HASH_TABLE_EMPTY),
+            (0x0096a670, HASH_TABLE_EMPTY),
+            (0x0096a6a0, ARRAY_CLEAR),
+            (0x0096a6d0, ARRAY_CLEAR),
+        ] {
+            let mut e = engine();
+            let block = e.mem.alloc(0x20);
+            e.call_log = Some(vec![]);
+            assert_eq!(e.call(addr, &args![block, 0u32]).u32(), block);
+            assert!(calls(&e, FREE_OBJECT).is_empty());
+            assert!(!calls(&e, empty).is_empty());
+            assert_eq!(e.call(addr, &args![block, 1u32]).u32(), block);
+            assert_eq!(calls(&e, FREE_OBJECT), vec![vec![block]]);
+        }
+    }
+
+    #[test]
+    fn the_small_array_accessors_scale_by_the_element_size() {
+        let mut e = engine();
+        let array = e.mem.alloc(0x10);
+        e.mem.set_u32(array, 0x5000);
+        e.mem.set_u32(array + 4, 0x6000);
+        assert_eq!(e.call(0x0096a330, &args![array, 2u32]).u32(), 0x6000 + 0xd0);
+        assert_eq!(e.call(0x0096a370, &args![array, 2u32]).u32(), 0x5000 + 0x60);
+        e.mem.set_u32(array + 4, 0xffff_8001);
+        assert_eq!(e.call(0x0096a350, &args![array]).u32(), 0x8001);
+    }
+
+    #[test]
+    fn the_hash_table_initialiser_allocates_and_clears_the_buckets() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x10);
+        double(&mut e, ALLOCATE_BYTES, eax(0x7000));
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0096a390, &args![block, 8u32]).u32(), block);
+        assert_eq!(e.mem.u32(block), HASH_TABLE_VTABLE);
+        assert_eq!(e.mem.u32(block + 4), 8);
+        assert_eq!(e.mem.u32(block + 8), 0x7000);
+        assert_eq!(e.mem.u32(block + 0xc), 0);
+        assert_eq!(calls(&e, ALLOCATE_BYTES), vec![vec![32]]);
+        assert_eq!(calls(&e, FILL_MEMORY), vec![vec![0x7000, 0, 32]]);
+    }
+
+    /// A table of four buckets with a chain of two items in bucket 1 and one
+    /// item in bucket 3; the bucket function answers 3 for key 33, otherwise 1.
+    fn iterator_table(e: &mut Engine) -> (u32, [u32; 3]) {
+        let table = e.mem.alloc(0x10);
+        let buckets = e.mem.alloc(16);
+        let second = e.mem.alloc(12);
+        let first = e.mem.alloc(12);
+        let third = e.mem.alloc(12);
+        e.mem.set_u32(table + 4, 4);
+        e.mem.set_u32(table + 8, buckets);
+        e.mem.set_u32(buckets + 4, first);
+        e.mem.set_u32(buckets + 12, third);
+        e.mem.set_u32(first, second);
+        e.mem.set_u32(first + 4, 11);
+        e.mem.set_u8(first + 8, 1);
+        e.mem.set_u32(second + 4, 22);
+        e.mem.set_u8(second + 8, 2);
+        e.mem.set_u32(third + 4, 33);
+        e.mem.set_u8(third + 8, 3);
+        let bucket_of = slot(e, table, 4, eax(1));
+        e.register(bucket_of, |_, a| eax(if a[1] == 33 { 3 } else { 1 }));
+        (table, [first, second, third])
+    }
+
+    #[test]
+    fn the_hash_iterator_follows_the_chain_then_the_next_bucket_then_ends() {
+        let mut e = engine();
+        let (table, [first, second, third]) = iterator_table(&mut e);
+        let out = e.mem.alloc(12);
+        e.mem.set_u32(out, first);
+        e.call(0x0096a400, &args![table, out, out + 4, out + 8]);
+        assert_eq!(e.mem.u32(out), second);
+        assert_eq!((e.mem.u32(out + 4), e.mem.u8(out + 8)), (11, 1));
+        e.call(0x0096a400, &args![table, out, out + 4, out + 8]);
+        assert_eq!(e.mem.u32(out), third);
+        assert_eq!((e.mem.u32(out + 4), e.mem.u8(out + 8)), (22, 2));
+        e.call(0x0096a400, &args![table, out, out + 4, out + 8]);
+        assert_eq!(e.mem.u32(out), 0);
+        assert_eq!((e.mem.u32(out + 4), e.mem.u8(out + 8)), (33, 3));
+    }
+
+    #[test]
+    fn the_map_destructors_empty_the_table_and_free_the_buckets() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x10);
+        e.mem.set_u32(block + 8, 0x7000);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a4b0, &args![block]);
+        assert_eq!(e.mem.u32(block), HASH_TABLE_VTABLE);
+        assert_eq!(calls(&e, HASH_TABLE_EMPTY), vec![vec![block], vec![block]]);
+        assert_eq!(calls(&e, FREE_BYTES), vec![vec![0x7000]]);
+        e.mem.set_u32(block, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a510, &args![block]);
+        assert_eq!(e.mem.u32(block), HASH_TABLE_VTABLE);
+        assert_eq!(calls(&e, HASH_TABLE_EMPTY), vec![vec![block]]);
+        assert_eq!(calls(&e, FREE_BYTES), vec![vec![0x7000]]);
+    }
+
+    #[test]
+    fn the_sub_object_release_clears_the_byte_and_passes_the_item() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u8(block + 8, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a540, &args![block, 0x1234u32]);
+        assert_eq!(e.mem.u8(block + 8), 0);
+        assert_eq!(
+            calls(&e, SUB_OBJECT_RELEASE),
+            vec![vec![block + 0xc, 0x1234]]
+        );
+    }
+
+    #[test]
+    fn the_item_and_ammo_arrays_install_their_vtables() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0096a570, &args![block]).u32(), block);
+        assert_eq!(e.mem.u32(block), ITEM_CHANGE_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_INITIALISE_SIZED), vec![vec![block, 0, 0]]);
+        e.call(0x0096a5c0, &args![block]);
+        assert_eq!(e.mem.u32(block), AMMO_ARRAY_VTABLE);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a5a0, &args![block]);
+        assert_eq!(e.mem.u32(block), ITEM_CHANGE_ARRAY_VTABLE);
+        e.call(0x0096a5f0, &args![block]);
+        assert_eq!(e.mem.u32(block), AMMO_ARRAY_VTABLE);
+        assert_eq!(calls(&e, ARRAY_CLEAR), vec![vec![block, 1], vec![block, 1]]);
+    }
+
+    #[test]
+    fn the_set_at_grow_wrapper_uses_the_stored_index() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        e.mem.set_u16(block + 0xa, 5);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a610, &args![block, 0x99u32]);
+        assert_eq!(calls(&e, ARRAY_SET_AT_GROW), vec![vec![block, 5, 0x99]]);
+    }
+
+    #[test]
+    fn the_capacity_array_allocates_only_for_a_positive_capacity() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        double(&mut e, ALLOCATE_WORDS, eax(0x7100));
+        e.mem.set_u16(block + 0xa, 3);
+        e.mem.set_u16(block + 0xc, 3);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0096a7b0, &args![block, 6u32, 2u32]).u32(), block);
+        assert_eq!(e.mem.u32(block), CAPACITY_ARRAY_VTABLE);
+        assert_eq!(e.mem.u16(block + 8), 6);
+        assert_eq!(e.mem.u16(block + 0xe), 2);
+        assert_eq!((e.mem.u16(block + 0xa), e.mem.u16(block + 0xc)), (0, 0));
+        assert_eq!(e.mem.u32(block + 4), 0x7100);
+        assert_eq!(calls(&e, ALLOCATE_WORDS), vec![vec![6]]);
+        e.call_log = Some(vec![]);
+        e.call(0x0096a7b0, &args![block, 0u32, 2u32]);
+        assert_eq!(e.mem.u32(block + 4), 0);
+        assert!(calls(&e, ALLOCATE_WORDS).is_empty());
+    }
+
+    #[test]
+    fn the_derived_constructor_runs_the_base_then_installs_its_vtable() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x20);
+        double(&mut e, ALLOCATE_WORDS, eax(0x7100));
+        assert_eq!(e.call(0x0096a640, &args![block, 4u32, 1u32]).u32(), block);
+        assert_eq!(e.mem.u32(block), TABLE_ARRAY_DERIVED_VTABLE);
+        assert_eq!(e.mem.u16(block + 8), 4);
+        assert_eq!(e.mem.u16(block + 0xe), 1);
+        assert_eq!(e.mem.u32(block + 4), 0x7100);
     }
 }
