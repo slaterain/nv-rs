@@ -14,7 +14,12 @@
 //! the collision object lookups, the collidable accessors, `NiASin`, the
 //! scene graph walks (scabbard and editor marker removal, morpher test,
 //! tinting, collision object counts) and the bound against frustum test.
-//! The next session continues at `004b68a0`.
+//! Session 3 covers the next 40, `004b68a0` to `004b9d60`: the other scene
+//! graph walkers (`004b6980` to `004b6c70`, with their callbacks), the
+//! no lighting property recursions, the platform and language texture swap
+//! (`004b71a0` to `004b7660`), `FixedStrings::InitSDM` with its shutdown
+//! counterpart, and the methods of `NiTMap<unsigned int, VertexDist>`
+//! (constructor to `NewItem`). The next session continues at `004b9d80`.
 //!
 //! Conventions this file uses, so the next session finds them:
 //!
@@ -45,7 +50,7 @@
 
 #[allow(unused_imports)]
 use crate::prelude::*;
-use crate::types::{NiAVObject, NiPoint3};
+use crate::types::{NiAVObject, NiPoint3, NiTMap};
 
 // ---------------------------------------------------------------------
 // Constants of the exe's data read by the code (value in the exe).
@@ -232,6 +237,166 @@ const FORM_NAME_BY_INDEX: u32 = 0x0118_a2d8;
 /// The table of 12-byte entries whose first word is a name pointer,
 /// indexed by form type byte (0 to 0x78).
 const FORM_NAME_BY_TYPE: u32 = 0x0118_7004;
+
+// Callees and data of the third session (`004b68a0` to `004b9d60`).
+/// The walker callbacks of this file's other scene graph walks.
+const SELECT_CALLBACK: u32 = 0x004b_6a00;
+const HAVOK_COUNT_CALLBACK: u32 = 0x004b_6b20;
+const HAVOK_FIND_CALLBACK: u32 = 0x004b_6bc0;
+const HAVOK_INDEX_CALLBACK: u32 = 0x004b_6c70;
+/// `006fa820(this)` reads the smart pointer at `this + 0x10`;
+/// `00620b80(this)` is `0044ddc0(this)`, the word at `this + 8`. The
+/// walker callbacks that count objects with something attached use them.
+const POINTER_AT_0X10: u32 = 0x006f_a820;
+const WORD_AT_EIGHT_WRAPPER: u32 = 0x0062_0b80;
+/// `004a2c20(object)` (cdecl, bool, 0 for a null object): whether the word
+/// at `object + 0x1c` (`00441110(this)`) is between 1 and 0xc.
+const IN_KIND_RANGE: u32 = 0x004a_2c20;
+const WORD_AT_0X1C: u32 = 0x0044_1110;
+/// `004534f0(this, object)`: a function that does nothing, called on the
+/// object at `011e0e80`.
+const NOTIFIED_OBJECT: u32 = 0x011e_0e80;
+const NOTIFY: u32 = 0x0045_34f0;
+/// `0057bd60(this, reference id)`.
+const SET_REFERENCE_ID: u32 = 0x0057_bd60;
+/// `BSShaderProperty::SetFlag(this, flag, value)` (Xbox PDB) and
+/// `NiAVObject::UpdateProperties(this)` (Xbox PDB).
+const SET_SHADER_FLAG: u32 = 0x0044_1130;
+const UPDATE_PROPERTIES: u32 = 0x00a5_a040;
+/// `0043b230(this)` reads the smart pointer at `this + 0xc`, `004a8a90(this)`
+/// the one at `this + 0x30`, and `00621b20(this, value)` stores a `float` at
+/// `this + 0x10`; `011f4428` is the class key `004b70f0` filters its
+/// children with.
+const FIRST_ITEM: u32 = 0x0043_b230;
+const NEXT_ITEM: u32 = 0x004a_8a90;
+const SET_FLOAT_AT_0X10: u32 = 0x0062_1b20;
+const IS_OF_CLASS_KEY_011F4428: u32 = 0x011f_4428;
+/// `011f444c`: the class key of the texture objects the language swap looks
+/// for.
+const IS_OF_CLASS_KEY_011F444C: u32 = 0x011f_444c;
+/// The language swap: the byte at `011d8a84` (whether the platform
+/// choice applies), the word at `011d8a80` (read by `004b7210`), the string
+/// object at `011d8c4c` that `004b9930` tests, `GetCurrentTexLanguage`'s
+/// worker `00a22cb0()`, the two tables of name pointers (platforms, 4;
+/// languages, 5), `strlen` through the game's wrapper (`0044a670`), the CRT
+/// `_strlen` (`00ec6130`), `strcat_s(destination, size, source)` through
+/// the game's wrapper (`00406d50`), `memcpy_s` (`00ec7c66`) and `tolower`
+/// (`00ec67aa`).
+const PLATFORM_SWAP_ENABLED: u32 = 0x011d_8a84;
+const PLATFORM_SWAP_WORD: u32 = 0x011d_8a80;
+const PLATFORM_SWAP_STRING: u32 = 0x011d_8c4c;
+const CURRENT_LANGUAGE_WORKER: u32 = 0x00a2_2cb0;
+const PLATFORM_NAMES: u32 = 0x0118_9038;
+const LANGUAGE_NAMES: u32 = 0x0118_8f84;
+const STRING_LENGTH: u32 = 0x0044_a670;
+const CRT_STRLEN: u32 = 0x00ec_6130;
+const STRING_CONCAT: u32 = 0x0040_6d50;
+const CRT_MEMCPY_S: u32 = 0x00ec_7c66;
+const CRT_TOLOWER: u32 = 0x00ec_67aa;
+/// `NiFixedString` helpers: `0048af40(this, other)` copies a handle
+/// (`this` is a 4-byte `NiFixedString`), `004381b0(this)` is its
+/// destructor and `00438170(this, text)` its constructor from a C string
+/// (Xbox PDB name unknown). `TES::CreateTextureImage(this, path, out
+/// smart pointer, flag, flag)` (Xbox PDB, `004568c0`) is called on the TES
+/// singleton read from `011dea10` (the same global [`CELL_FINDER`] names).
+const FIXED_STRING_COPY: u32 = 0x0048_af40;
+const FIXED_STRING_DESTRUCT: u32 = 0x0043_81b0;
+const FIXED_STRING_CONSTRUCT: u32 = 0x0043_8170;
+const CREATE_TEXTURE_IMAGE: u32 = 0x0045_68c0;
+const TES_SINGLETON: u32 = 0x011d_ea10;
+/// `NiTMap<unsigned int, VertexDist>`: the vtables of the map (`010205b4`)
+/// and of its base `NiTMapBase` (`010205d4`), the base's `RemoveAll`
+/// (`00438af0`), the array free `00aa10f0(block)` (cdecl), the allocator
+/// call `004b9de0(this + 0xc)` that `NewItem` makes, and `memset`
+/// (`00403d30(block, value, count)`).
+const VERTEX_DIST_MAP_VTABLE: u32 = 0x0102_05b4;
+const MAP_BASE_VTABLE: u32 = 0x0102_05d4;
+const MAP_REMOVE_ALL: u32 = 0x0043_8af0;
+const NI_ARRAY_DELETE: u32 = 0x00aa_10f0;
+const MAP_ALLOCATE_ITEM: u32 = 0x004b_9de0;
+const MEMORY_SET: u32 = 0x0040_3d30;
+
+/// `FixedStrings` (Xbox PDB) members, in the order `InitSDM` makes them: the
+/// global that holds the `NiFixedString *` and the address of the C string
+/// it is made from. The comments are the Xbox PDB member names.
+const FIXED_STRINGS: [(u32, u32); 54] = [
+    (0x011c_61a4, 0x0101_e460), // pBip01
+    (0x011c_61a8, 0x0102_05ac), // pBip
+    (0x011c_61ac, 0x0101_f63c), // pBip01Head
+    (0x011c_61b0, 0x0102_05a0), // pBip01Neck
+    (0x011c_61b4, 0x0102_0594), // pBip01Spine
+    (0x011c_61b8, 0x0102_0584), // pBip01Spine1
+    (0x011c_61bc, 0x0102_0578), // pMagicNode
+    (0x011c_61c0, 0x0102_0564), // pSpecialIdle_Cast
+    (0x011c_61c4, 0x0102_054c), // pSpecialIdle_AreaEffect
+    (0x011c_61c8, 0x0102_0540), // pAttachSound
+    (0x011c_61cc, 0x0102_0530), // pSoundMarker
+    (0x011c_61d0, 0x0102_051c), // pSkinnedDecalNode
+    (0x011c_61d4, 0x0101_e484), // pDecalNode
+    (0x011c_61d8, 0x0102_050c), // pModelSwapNode
+    (0x011c_61dc, 0x0101_1f30), // pOpenString
+    (0x011c_61e0, 0x0101_abac), // pCloseString
+    (0x011c_61e4, 0x0102_0504), // pDVPG
+    (0x011c_61e8, 0x0102_0500), // pPrn
+    (0x011c_61ec, 0x0101_3be8), // pWeapon
+    (0x011c_61f0, 0x0102_030c), // pEditorMarker
+    (0x011c_61f4, 0x0102_04f0), // pEditorMarker0
+    (0x011c_61f8, 0x0102_04e0), // pEditorMarker1
+    (0x011c_61fc, 0x0102_04d0), // pEditorMarker2
+    (0x011c_6200, 0x0102_04c4), // pArrowQuiver
+    (0x011c_6204, 0x0102_04b4), // pMarkerSource
+    (0x011c_6208, 0x0102_04a4), // pMarkerTarget
+    (0x011c_620c, 0x0102_0498), // pAttachLight
+    (0x011c_6210, 0x0102_0490), // pSkin
+    (0x011c_6214, 0x0102_0484), // pFaceGenEars
+    (0x011c_6218, 0x0102_047c), // pUnequip
+    (0x011c_621c, 0x0102_0470), // pLaserSightsName
+    (0x011c_6220, 0x0102_0464), // pAimSightsName
+    (0x011c_6224, 0x0102_045c), // pGrass
+    (0x011c_6228, 0x0101_e47c), // pDecal
+    (0x011c_622c, 0x0102_044c), // pPermanentDecal
+    (0x011c_6230, 0x0102_0440), // pGrabLeft
+    (0x011c_6234, 0x0102_0434), // pGrabRight
+    (0x011c_6238, 0x0102_042c), // pArrow0
+    (0x011c_623c, 0x0102_0420), // pArrowBone
+    (0x011c_6240, 0x0102_0408), // pRaceHeadBiped
+    (0x011c_6244, 0x0102_03f0), // pRaceHeadSkinned
+    (0x011c_6248, 0x0102_03e4), // pHeadAnims
+    (0x011c_624c, 0x0102_03d8), // pEntryPoint
+    (0x011c_6250, 0x0102_03c4), // pBip01LUpperArm
+    (0x011c_6254, 0x0102_03b4), // pBip01LForearm
+    (0x011c_6258, 0x0102_03a0), // pBip01RUpperArm
+    (0x011c_625c, 0x0102_0394), // pBip01Yaw
+    (0x011c_6260, 0x0102_0388), // pBip01Pitch
+    (0x011c_6264, 0x0102_0378), // pBip01Looking
+    (0x011c_6268, 0x0102_0370), // pTalking
+    (0x011c_626c, 0x0102_0364), // pCamera1st
+    (0x011c_6270, 0x0102_0358), // pCamera3rd
+    (0x011c_6274, 0x0102_0330), // pHeadMeshExp
+    (0x011c_6278, 0x0102_0324), // pPinnedLimb
+];
+/// `pBip01Spine` and `pBip01Spine1`: the two `FixedStrings` the shutdown
+/// function `004b8cf0` does not free.
+const FIXED_STRING_SPINE: u32 = 0x011c_61b4;
+const FIXED_STRING_SPINE1: u32 = 0x011c_61b8;
+
+layout! {
+    /// `NiTMapItem<unsigned int, VertexDist>` (Xbox PDB), 0x14 bytes. The
+    /// `VertexDist` value (12 bytes) is kept as its three words, the
+    /// fields of the struct being unknown.
+    pub struct VertexDistMapItem: 0x14 {
+        /// `m_pkNext` (Xbox PDB).
+        0x00 m_pkNext: u32,
+        /// `m_key` (Xbox PDB).
+        0x04 m_key: u32,
+        /// First word of `m_val` (Xbox PDB).
+        0x08 m_val_word_0: u32,
+        /// Second word of `m_val`.
+        0x0C m_val_word_1: u32,
+        /// Third word of `m_val`.
+        0x10 m_val_word_2: u32,
+    }
+}
 
 layout! {
     /// `bhkSerializable` (Xbox PDB), 0x10 bytes; `bhkAction`,
@@ -2526,6 +2691,944 @@ pub fn fn_004b6810(
     })
 }
 
+// ---------------------------------------------------------------------
+// Third session: scene graph walks (continued), the language texture
+// swap, `FixedStrings` and the `NiTMap<unsigned int, VertexDist>` methods.
+// ---------------------------------------------------------------------
+
+/// Whether the walker callbacks `004b68a0` and `004b6a00` skip an object,
+/// the same tests as [`fn_004b6740`]: flag bit 0 skips an object of the
+/// class `0126817c`; flag bit 1 skips one whose `+8` word is of the class
+/// `011f9140` and one whose `+8` word has a name that does not differ from
+/// `"Arrow"`.
+fn walker_skips(e: &mut Engine, object: Ptr, context: Ptr) -> bool {
+    let flags = e.mem.u32(context.addr() + 0x18);
+    if flags & 1 != 0
+        && e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_0126817C, object])
+            .bool()
+    {
+        return true;
+    }
+    if flags & 2 != 0 {
+        let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+        if e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_011F9140, inner])
+            .bool()
+        {
+            return true;
+        }
+    }
+    if flags & 2 != 0 && e.call(WORD_AT_EIGHT, &args![object]).u32() != 0 {
+        let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+        if name_of(e, Ptr::new(inner)) != 0 {
+            let inner = e.call(WORD_AT_EIGHT, &args![object]).u32();
+            let name = name_of(e, Ptr::new(inner));
+            if e.call(STRING_COMPARE_SECOND, &args![name, ARROW_NAME])
+                .u32()
+                == 0
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Fills the first words of a walker context (`+4` a byte 1, `+8` the
+/// word `0x12`), the way every caller of the walker `00c68900` does.
+fn start_walk_context(e: &mut Engine, context: Ptr) {
+    e.mem.set_u8(context.addr() + 4, 1);
+    e.mem.set_u32(context.addr() + 8, 0x12);
+}
+
+// Translated from 004b68a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`fn_004b6810`], `cdecl(object, context)`: for
+/// each object the flags do not skip ([`walker_skips`]), when the object is
+/// the one in `context + 0x10` it stores the running count (`+0xc`) in
+/// `context + 0x14`, then adds one to the count.
+pub fn fn_004b68a0(e: &mut Engine, object: Ptr, context: Ptr) {
+    if walker_skips(e, object, context) {
+        return;
+    }
+    if object.addr() == e.mem.u32(context.addr() + 0x10) {
+        let count = e.mem.u32(context.addr() + 0xc);
+        e.mem.set_u32(context.addr() + 0x14, count);
+    }
+    let count = e.mem.u32(context.addr() + 0xc);
+    e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+}
+
+// Translated from 004b6980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the scene graph from `root` with `00c68900` and the callback
+/// [`fn_004b6a00`] over a context whose flags are the three arguments (bits
+/// 0, 1, 2) and whose `+0x14` is `index`; returns the object the callback
+/// stored at `context + 0x10` (0 when the walk had fewer objects).
+pub fn fn_004b6980(
+    e: &mut Engine,
+    root: Ptr,
+    index: u32,
+    first_flag: bool,
+    second_flag: bool,
+    third_flag: bool,
+) -> u32 {
+    e.with_stack(0x1c, |e, context| {
+        start_walk_context(e, context);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.mem.set_u32(context.addr() + 0x10, 0);
+        e.mem.set_u32(context.addr() + 0x14, index);
+        e.mem.set_u32(
+            context.addr() + 0x18,
+            walk_flags(first_flag, second_flag, third_flag),
+        );
+        e.call(WALK_SCENE_GRAPH, &args![root, context, SELECT_CALLBACK]);
+        e.mem.u32(context.addr() + 0x10)
+    })
+}
+
+// Translated from 004b6a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`fn_004b6980`], `cdecl(object, context)`: for
+/// each object the flags do not skip, when the running count (`+0xc`)
+/// equals `context + 0x14` it stores the object in `context + 0x10`, then
+/// adds one to the count.
+pub fn fn_004b6a00(e: &mut Engine, object: Ptr, context: Ptr) {
+    if walker_skips(e, object, context) {
+        return;
+    }
+    if e.mem.u32(context.addr() + 0xc) == e.mem.u32(context.addr() + 0x14) {
+        e.mem.set_u32(context.addr() + 0x10, object.addr());
+    }
+    let count = e.mem.u32(context.addr() + 0xc);
+    e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+}
+
+// Translated from 004b6ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetHavokWorldObjectCountInSceneGraph` (Xbox PDB): walks the scene graph
+/// from `root` with `00c68900` and the callback [`fn_004b6b20`] over a
+/// context whose count (`+0xc`) starts at 0, and returns the count.
+pub fn get_havok_world_object_count_in_scene_graph(e: &mut Engine, root: Ptr) -> u32 {
+    e.with_stack(0x1c, |e, context| {
+        start_walk_context(e, context);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.call(
+            WALK_SCENE_GRAPH,
+            &args![root, context, HAVOK_COUNT_CALLBACK],
+        );
+        e.mem.u32(context.addr() + 0xc)
+    })
+}
+
+/// What the three callbacks `004b6b20`, `004b6bc0` and `004b6c70` look at:
+/// the word at `+8` of the smart pointer at `object + 0x10` (0 when the
+/// object has no such pointer or the word is 0).
+fn attached_word(e: &mut Engine, object: Ptr) -> u32 {
+    let pointed = e.call(POINTER_AT_0X10, &args![object]).u32();
+    if pointed == 0 {
+        return 0;
+    }
+    e.call(WORD_AT_EIGHT_WRAPPER, &args![pointed]).u32()
+}
+
+// Translated from 004b6b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`get_havok_world_object_count_in_scene_graph`],
+/// `cdecl(object, context)`: adds one to the count (`context + 0xc`) when
+/// the object has an attached word ([`attached_word`]).
+pub fn fn_004b6b20(e: &mut Engine, object: Ptr, context: Ptr) {
+    if attached_word(e, object) != 0 {
+        let count = e.mem.u32(context.addr() + 0xc);
+        e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+    }
+}
+
+// Translated from 004b6b60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the scene graph from `root` with the callback [`fn_004b6bc0`],
+/// over a context with the count at 0, `value` at `+0x10` and `-1` at
+/// `+0x14`; returns the word at `+0x14`: the count the callback had reached
+/// when it met an object whose attached word is `value`, else `-1`.
+pub fn fn_004b6b60(e: &mut Engine, root: Ptr, value: u32) -> i32 {
+    e.with_stack(0x1c, |e, context| {
+        start_walk_context(e, context);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.mem.set_u32(context.addr() + 0x10, value);
+        e.mem.set_u32(context.addr() + 0x14, 0xffff_ffff);
+        e.call(WALK_SCENE_GRAPH, &args![root, context, HAVOK_FIND_CALLBACK]);
+        e.mem.i32(context.addr() + 0x14)
+    })
+}
+
+// Translated from 004b6bc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`fn_004b6b60`], `cdecl(object, context)`: for an
+/// object with an attached word, when the word is `context + 0x10` it
+/// stores the running count in `context + 0x14`; then adds one to the
+/// count.
+pub fn fn_004b6bc0(e: &mut Engine, object: Ptr, context: Ptr) {
+    let word = attached_word(e, object);
+    if word != 0 {
+        if word == e.mem.u32(context.addr() + 0x10) {
+            let count = e.mem.u32(context.addr() + 0xc);
+            e.mem.set_u32(context.addr() + 0x14, count);
+        }
+        let count = e.mem.u32(context.addr() + 0xc);
+        e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+    }
+}
+
+// Translated from 004b6c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the scene graph from `root` with the callback [`fn_004b6c70`],
+/// over a context with the count and the result (`+0x10`) at 0 and `index`
+/// at `+0x14`; returns the result: the attached word of the object the
+/// callback met when its count was `index`.
+pub fn fn_004b6c20(e: &mut Engine, root: Ptr, index: u32) -> u32 {
+    e.with_stack(0x1c, |e, context| {
+        start_walk_context(e, context);
+        e.mem.set_u32(context.addr() + 0xc, 0);
+        e.mem.set_u32(context.addr() + 0x10, 0);
+        e.mem.set_u32(context.addr() + 0x14, index);
+        e.call(
+            WALK_SCENE_GRAPH,
+            &args![root, context, HAVOK_INDEX_CALLBACK],
+        );
+        e.mem.u32(context.addr() + 0x10)
+    })
+}
+
+// Translated from 004b6c70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The walker callback of [`fn_004b6c20`], `cdecl(object, context)`: for an
+/// object with an attached word, when the running count (`+0xc`) equals
+/// `context + 0x14` it stores the word in `context + 0x10`, and adds one to
+/// the count. It then adds one to the count again for every object, with
+/// or without a word (as the code does, so the count runs ahead by one for
+/// each object that has a word).
+pub fn fn_004b6c70(e: &mut Engine, object: Ptr, context: Ptr) {
+    let word = attached_word(e, object);
+    if word != 0 {
+        if e.mem.u32(context.addr() + 0xc) == e.mem.u32(context.addr() + 0x14) {
+            e.mem.set_u32(context.addr() + 0x10, word);
+        }
+        let count = e.mem.u32(context.addr() + 0xc);
+        e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+    }
+    let count = e.mem.u32(context.addr() + 0xc);
+    e.mem.set_u32(context.addr() + 0xc, count.wrapping_add(1));
+}
+
+/// `property` when `004a2c20` accepts it (its kind word is between 1 and
+/// 0xc), else 0.
+fn accepted_property(e: &mut Engine, property: u32) -> u32 {
+    if e.call(IN_KIND_RANGE, &args![property]).u32() != 0 {
+        property
+    } else {
+        0
+    }
+}
+
+// Translated from 004b6ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Walks the scene graph below `object`. At an object whose virtual slot
+/// `0x1c` is non-zero it stops there: it takes the property of kind 3
+/// (`NiAVObject::GetProperty`), and when `004a2c20` accepts it calls
+/// `004534f0` (which does nothing) on the object at `011e0e80` with the
+/// property. Elsewhere it recurses into the children.
+pub fn fn_004b6ce0(e: &mut Engine, object: Ptr) {
+    if object.addr() == 0 {
+        return;
+    }
+    if e.vcall(object.addr(), 0x1c, &[]).u32() != 0 {
+        let property = e.call(GET_PROPERTY, &args![object, 3u32]).u32();
+        if property != 0 {
+            let accepted = accepted_property(e, property);
+            if accepted != 0 {
+                // The game tests whether the kind word (`00441110`) is 3
+                // here; both outcomes leave the function.
+                e.call(WORD_AT_0X1C, &args![accepted]);
+                e.call(NOTIFY, &args![NOTIFIED_OBJECT, accepted]);
+            }
+        }
+        return;
+    }
+    let children = children_of(e, object);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            fn_004b6ce0(e, Ptr::new(child));
+            index += 1;
+        }
+    }
+}
+
+// Translated from 004b6dc0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SetReferenceIDOnScenegraph` (Xbox PDB): below `object`, at the objects
+/// whose virtual slot `0x18` is non-zero, takes the property of kind 3,
+/// and when `004a2c20` accepts it calls `0057bd60(property, reference)`.
+/// Stops at such an object; elsewhere recurses into the children.
+pub fn set_reference_id_on_scenegraph(e: &mut Engine, object: Ptr, reference: u32) {
+    if object.addr() == 0 {
+        return;
+    }
+    if e.vcall(object.addr(), 0x18, &[]).u32() != 0 {
+        let property = e.call(GET_PROPERTY, &args![object, 3u32]).u32();
+        let accepted = accepted_property(e, property);
+        if accepted != 0 {
+            e.call(SET_REFERENCE_ID, &args![accepted, reference]);
+        }
+        return;
+    }
+    let children = children_of(e, object);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            set_reference_id_on_scenegraph(e, Ptr::new(child), reference);
+            index += 1;
+        }
+    }
+}
+
+// Translated from 004b6e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the smart pointer at `this + 0x13c` (`00559450`).
+pub fn fn_004b6e70(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(SMART_POINTER_GET, &args![this.addr().wrapping_add(0x13c)])
+        .u32()
+}
+
+/// A new `BSShaderNoLightingProperty` (0x80 bytes), or 0 when the
+/// allocation fails.
+fn new_no_lighting_property(e: &mut Engine) -> u32 {
+    let block = e.call(NI_OPERATOR_NEW, &args![0x80u32]).u32();
+    if block != 0 {
+        e.call(NO_LIGHTING_PROPERTY_CONSTRUCT, &args![block]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 004b6e90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `AddNoLightingPropertyRecurse` (Xbox PDB): gives every object below
+/// `object` (and `object`) whose virtual slot `0x18` is non-zero and that
+/// has no property of kind 3 a new `BSShaderNoLightingProperty`, attached
+/// with `NiAVObject::AttachProperty`. The exception frame is not
+/// translated.
+pub fn add_no_lighting_property_recurse(e: &mut Engine, object: Ptr) {
+    if e.vcall(object.addr(), 0x18, &[]).u32() != 0
+        && e.call(GET_PROPERTY, &args![object, 3u32]).u32() == 0
+    {
+        let property = new_no_lighting_property(e);
+        e.call(ATTACH_PROPERTY, &args![object, property]);
+    }
+    let children = children_of(e, object);
+    if children != 0 {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if child != 0 {
+                add_no_lighting_property_recurse(e, Ptr::new(child));
+            }
+            index += 1;
+        }
+    }
+}
+
+// Translated from 004b6f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `PrepareObjectWithNoLightingRecurse` (Xbox PDB): at the first object
+/// (from `object` down) whose virtual slot `0x18` is non-zero and that has
+/// no property of kind 3, it makes a `BSShaderNoLightingProperty`, sets its
+/// flag `0x30`, attaches it, updates the object's properties and calls
+/// `BSShaderManager::PrepareObject(object, 0, 0)`, and does not look at
+/// the children. Otherwise it recurses into the children, but only when
+/// [`fn_004b2960`] says the container has a world bound. The exception
+/// frame is not translated.
+pub fn prepare_object_with_no_lighting_recurse(e: &mut Engine, object: Ptr) {
+    if e.vcall(object.addr(), 0x18, &[]).u32() != 0
+        && e.call(GET_PROPERTY, &args![object, 3u32]).u32() == 0
+    {
+        let property = new_no_lighting_property(e);
+        e.call(SET_SHADER_FLAG, &args![property, 0x30u32, 1u32]);
+        e.call(ATTACH_PROPERTY, &args![object, property]);
+        e.call(UPDATE_PROPERTIES, &args![object]);
+        e.call(PREPARE_OBJECT, &args![object, 0u32, 0u32]);
+        return;
+    }
+    let children = children_of(e, object);
+    if children != 0 && fn_004b2960(e, Ptr::new(children)) {
+        let mut index = 0u32;
+        while index < e.call(CHILD_COUNT, &args![children]).u32() {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if child != 0 {
+                prepare_object_with_no_lighting_recurse(e, Ptr::new(child));
+            }
+            index += 1;
+        }
+    }
+}
+
+// Translated from 004b70d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the smart pointer at `this + 0x3c` (`00559450`).
+pub fn fn_004b70d0(e: &mut Engine, this: Ptr) -> u32 {
+    e.call(SMART_POINTER_GET, &args![this.addr().wrapping_add(0x3c)])
+        .u32()
+}
+
+// Translated from 004b70f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Below (and at) `object`, which is its own children container: walks the
+/// chain that starts at `0043b230(object)` and continues with `004a8a90`,
+/// storing `value` (`00621b20`) in each item, then does the same for every
+/// child that is of the class `011f4428`.
+pub fn fn_004b70f0(e: &mut Engine, object: Ptr, value: f32) {
+    if object.addr() == 0 {
+        return;
+    }
+    let mut item = e.call(FIRST_ITEM, &args![object]).u32();
+    while item != 0 {
+        e.call(SET_FLOAT_AT_0X10, &args![item, value]);
+        item = e.call(NEXT_ITEM, &args![item]).u32();
+    }
+    let mut index = 0u32;
+    while index < e.call(CHILD_COUNT, &args![object]).u32() {
+        let child = e.call(CHILD_AT, &args![object, index]).u32();
+        if child != 0
+            && e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_011F4428, child])
+                .bool()
+        {
+            fn_004b70f0(e, Ptr::new(child), value);
+        }
+        index += 1;
+    }
+}
+
+// Translated from 004b71a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// [`fn_004b71d0`] as a `bool`.
+pub fn fn_004b71a0(e: &mut Engine) -> bool {
+    fn_004b71d0(e)
+}
+
+// Translated from 004b71d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// When the byte at `011d8a84` is set: reads [`fn_004b7210`] (the value is
+/// not used) and returns [`fn_004b9930`] of the string object at
+/// `011d8c4c`; else false.
+pub fn fn_004b71d0(e: &mut Engine) -> bool {
+    if e.mem.u8(PLATFORM_SWAP_ENABLED) == 0 {
+        return false;
+    }
+    fn_004b7210(e);
+    fn_004b9930(e, Ptr::new(PLATFORM_SWAP_STRING))
+}
+
+// Translated from 004b7210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Reads the word at `011d8a80`.
+pub fn fn_004b7210(e: &mut Engine) -> u32 {
+    e.mem.u32(PLATFORM_SWAP_WORD)
+}
+
+// Translated from 004b7220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetCurrentTexLanguage` (Xbox PDB): the index of the texture language,
+/// from `00a22cb0` (which takes no arguments).
+pub fn get_current_tex_language(e: &mut Engine) -> u32 {
+    e.call(CURRENT_LANGUAGE_WORKER, &[]).u32()
+}
+
+/// The path separator (`\` or `/`) at `found + length`, if there is one.
+fn separator_after(e: &Engine, found: u32, length: u32) -> Option<u8> {
+    let c = e.mem.u8(found.wrapping_add(length));
+    (c == b'\\' || c == b'/').then_some(c)
+}
+
+/// How far `swap_platform_language_texture_path` has got: the point in the
+/// input it continues from and the length written to the output.
+struct PathSwap {
+    cursor: u32,
+    written: u32,
+}
+
+/// One of the two search loops of [`swap_platform_language_texture_path`]:
+/// looks, for each of `count` names of `table` in turn, for the first
+/// occurrence (ignoring case) that is followed by `\` or `/`. On the first
+/// name that has one, it copies the text before it to the output (when
+/// there is any), appends the name `replacement` of the table, the
+/// separator and a zero byte, moves the cursor past the name and its
+/// separator, and returns true.
+fn swap_one_name(
+    e: &mut Engine,
+    state: &mut PathSwap,
+    out: Ptr,
+    size: u32,
+    table: u32,
+    count: u32,
+    replacement: u32,
+) -> bool {
+    for index in 0..count {
+        let name = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        let mut separator = 0u8;
+        let mut found = bs_stristr(e, Ptr::new(state.cursor), Ptr::new(name));
+        while found != 0 {
+            let length = e.call(STRING_LENGTH, &args![name]).u32();
+            if let Some(c) = separator_after(e, found, length) {
+                separator = c;
+                break;
+            }
+            found = bs_stristr(e, Ptr::new(found.wrapping_add(length)), Ptr::new(name));
+        }
+        if found == 0 {
+            continue;
+        }
+        let prefix = found.wrapping_sub(state.cursor);
+        if prefix != 0 {
+            fn_004b7580(
+                e,
+                Ptr::new(out.addr().wrapping_add(state.written)),
+                size.wrapping_sub(state.written),
+                Ptr::new(state.cursor),
+                prefix,
+            );
+            state.written = state.written.wrapping_add(prefix);
+            e.mem.set_u8(out.addr().wrapping_add(state.written), 0);
+        }
+        let new_name = e.mem.u32(table.wrapping_add(replacement.wrapping_mul(4)));
+        e.call(STRING_CONCAT, &args![out, size, new_name]);
+        let new_length = e.call(CRT_STRLEN, &args![new_name]).u32();
+        state.written = state.written.wrapping_add(new_length);
+        e.mem
+            .set_u8(out.addr().wrapping_add(state.written), separator);
+        state.written = state.written.wrapping_add(1);
+        e.mem.set_u8(out.addr().wrapping_add(state.written), 0);
+        let old_length = e.call(CRT_STRLEN, &args![name]).u32();
+        state.cursor = found.wrapping_add(old_length).wrapping_add(1);
+        return true;
+    }
+    false
+}
+
+// Translated from 004b7240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SwapPlatformLanguageTexturePath` (Xbox PDB): copies the texture path
+/// `path` to `out` (`size` bytes) replacing the first directory named like
+/// one of the four platform names (table `01189038`) by the current
+/// platform's name ([`fn_004b71a0`] indexes the table) and then the first
+/// directory named like one of the five language names (table `01188f84`)
+/// by the current language's ([`get_current_tex_language`]); the rest of
+/// the path is appended unchanged. Returns whether either was replaced.
+/// False, with nothing written, when a pointer is null or `size` is 0.
+pub fn swap_platform_language_texture_path(e: &mut Engine, path: Ptr, out: Ptr, size: u32) -> bool {
+    if path.addr() == 0 || out.addr() == 0 || size == 0 {
+        return false;
+    }
+    let mut swapped = false;
+    e.mem.set_u8(out.addr(), 0);
+    let platform = u32::from(fn_004b71a0(e));
+    let language = get_current_tex_language(e);
+    let mut state = PathSwap {
+        cursor: path.addr(),
+        written: 0,
+    };
+    if swap_one_name(e, &mut state, out, size, PLATFORM_NAMES, 4, platform) {
+        swapped = true;
+    }
+    if swap_one_name(e, &mut state, out, size, LANGUAGE_NAMES, 5, language) {
+        swapped = true;
+    }
+    e.call(STRING_CONCAT, &args![out, size, state.cursor]);
+    swapped
+}
+
+// Translated from 004b7580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `memcpy_s(destination, destination size, source, count)` through the
+/// CRT function `00ec7c66`; returns its result.
+pub fn fn_004b7580(
+    e: &mut Engine,
+    destination: Ptr,
+    destination_size: u32,
+    source: Ptr,
+    count: u32,
+) -> u32 {
+    e.call(
+        CRT_MEMCPY_S,
+        &args![destination, destination_size, source, count],
+    )
+    .u32()
+}
+
+// Translated from 004b75a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `BSstristr` (Xbox PDB): the first place in `haystack` where `needle`
+/// occurs ignoring case (`tolower` of each byte as a signed `char`), or 0.
+/// An empty needle matches at the start.
+pub fn bs_stristr(e: &mut Engine, haystack: Ptr, needle: Ptr) -> u32 {
+    let haystack_length = e.call(CRT_STRLEN, &args![haystack]).u32() as i32;
+    let needle_length = e.call(CRT_STRLEN, &args![needle]).u32() as i32;
+    let mut start = 0i32;
+    while start < haystack_length.wrapping_sub(needle_length).wrapping_add(1) {
+        let mut matched = 0i32;
+        while matched < needle_length {
+            let a = e.mem.i8(haystack
+                .addr()
+                .wrapping_add(start as u32)
+                .wrapping_add(matched as u32));
+            let b = e.mem.i8(needle.addr().wrapping_add(matched as u32));
+            let lower_a = e.call(CRT_TOLOWER, &args![a as i32]).i32();
+            let lower_b = e.call(CRT_TOLOWER, &args![b as i32]).i32();
+            if lower_a != lower_b {
+                break;
+            }
+            matched += 1;
+        }
+        if matched == needle_length {
+            return haystack.addr().wrapping_add(start as u32);
+        }
+        start += 1;
+    }
+    0
+}
+
+// Translated from 004b7650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The language name pointer `index` of the table at `01188f84`.
+pub fn fn_004b7650(e: &mut Engine, index: i32) -> u32 {
+    e.mem
+        .u32(LANGUAGE_NAMES.wrapping_add((index as u32).wrapping_mul(4)))
+}
+
+// Translated from 004b7660 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SwapPlatformLanguageTextures` (Xbox PDB): below `root`, for each object
+/// that has a property of kind 3 whose kind word (`00441110`) is between 8
+/// and 0xc (a lighting property with textures: virtual slot `0xe8` gives
+/// the number of texture sets, slot `0xf4(slot, set)` the texture in each
+/// of 6 slots of each set), looks at each texture of the class `011f444c`:
+/// its name (virtual slot `0x9c`, in a `NiFixedString`) goes through
+/// [`swap_platform_language_texture_path`] and when that changed it (and
+/// the result is not empty) the new texture is loaded with
+/// `TES::CreateTextureImage` and set with slot `0xf0(slot, set, texture)`.
+/// Then recurses into the children. Returns whether any texture was
+/// replaced. The exception frame is not translated.
+pub fn swap_platform_language_textures(e: &mut Engine, root: Ptr) -> bool {
+    let mut replaced = false;
+    if root.addr() == 0 {
+        return false;
+    }
+    let property = e.call(GET_PROPERTY, &args![root, 3u32]).u32();
+    let in_range = property != 0
+        && e.call(WORD_AT_0X1C, &args![property]).i32() >= 8
+        && e.call(WORD_AT_0X1C, &args![property]).i32() <= 0xc;
+    let lighting = if in_range { property } else { 0 };
+    if lighting != 0 {
+        let sets = e.vcall(lighting, 0xe8, &[]).u32() & 0xffff;
+        for set in 0..sets {
+            for slot in 0..6u32 {
+                let texture = e.vcall(lighting, 0xf4, &args![slot, set]).u32();
+                if texture != 0
+                    && e.call(IS_OF_CLASS, &args![IS_OF_CLASS_KEY_011F444C, texture])
+                        .bool()
+                    && swap_one_texture(e, lighting, texture, slot, set)
+                {
+                    replaced = true;
+                }
+            }
+        }
+    }
+    let children = children_of(e, root);
+    if children != 0 {
+        let count = e.call(CHILD_COUNT, &args![children]).u32();
+        for index in 0..count {
+            let child = e.call(CHILD_AT, &args![children, index]).u32();
+            if swap_platform_language_textures(e, Ptr::new(child)) {
+                replaced = true;
+            }
+        }
+    }
+    replaced
+}
+
+/// The body of the texture loop of [`swap_platform_language_textures`]:
+/// swaps the path of one texture and loads and sets the new image.
+fn swap_one_texture(e: &mut Engine, lighting: u32, texture: u32, slot: u32, set: u32) -> bool {
+    // A `NiFixedString` (4 bytes), a smart pointer (4 bytes) and the 0x104
+    // byte path buffer, on the stack as in the game.
+    e.with_stack(0x10c, |e, block| {
+        let fixed = block;
+        let smart: Ptr = Ptr::new(block.addr() + 4);
+        let buffer: Ptr = Ptr::new(block.addr() + 8);
+        let name = e.vcall(texture, 0x9c, &[]).u32();
+        e.call(FIXED_STRING_COPY, &args![fixed, name]);
+        e.mem.set_u8(buffer.addr(), 0);
+        let text = e.call(NAME_TEXT, &args![fixed]).u32();
+        let changed = swap_platform_language_texture_path(e, Ptr::new(text), buffer, 0x104);
+        let mut replaced = false;
+        if changed && e.mem.i8(buffer.addr()) != 0 {
+            e.call(SMART_POINTER_CONSTRUCT, &args![smart, 0u32]);
+            let tes: u32 = e.global(TES_SINGLETON);
+            e.call(CREATE_TEXTURE_IMAGE, &args![tes, buffer, smart, 0u32, 0u32]);
+            if e.call(SMART_POINTER_GET, &args![smart]).u32() != 0 {
+                let image = e.call(SMART_POINTER_GET, &args![smart]).u32();
+                e.vcall(lighting, 0xf0, &args![slot, set, image]);
+                replaced = true;
+            }
+            e.call(SMART_POINTER_RELEASE, &args![smart]);
+        }
+        e.call(FIXED_STRING_DESTRUCT, &args![fixed]);
+        replaced
+    })
+}
+
+// Translated from 004b7920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `FixedStrings::InitSDM` (Xbox PDB): for each of the 54 `FixedStrings`
+/// members ([`FIXED_STRINGS`]) allocates a 4-byte object with `operator
+/// new` and, when that succeeds, constructs a `NiFixedString` from the C
+/// string in it; stores the object (or 0) in the member's global. The
+/// exception frame is not translated.
+pub fn fixed_strings_init_sdm(e: &mut Engine) {
+    for (global, string) in FIXED_STRINGS {
+        let block = e.call(OPERATOR_NEW, &args![4u32]).u32();
+        let made = if block != 0 {
+            e.call(FIXED_STRING_CONSTRUCT, &args![block, string]).u32()
+        } else {
+            0
+        };
+        e.set_global(global, made);
+    }
+}
+
+// Translated from 004b8cf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The shutdown counterpart of [`fixed_strings_init_sdm`]: for each of the
+/// `FixedStrings` globals that is not 0 calls [`fn_004b9900`] with flag 1
+/// (destroy and free). `pBip01Spine` and `pBip01Spine1` are not freed (the
+/// code never reads them), and no global is cleared.
+pub fn fn_004b8cf0(e: &mut Engine) {
+    for (global, _) in FIXED_STRINGS {
+        if global == FIXED_STRING_SPINE || global == FIXED_STRING_SPINE1 {
+            continue;
+        }
+        let object: u32 = e.global(global);
+        if object != 0 {
+            fn_004b9900(e, Ptr::new(object), 1);
+        }
+    }
+}
+
+// Translated from 004b9900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The scalar deleting destructor of the 4-byte `NiFixedString` objects of
+/// `FixedStrings`: runs the destructor (`004381b0`) and, when bit 0 of
+/// `flags` is set, frees the block (`operator delete`). Returns `this`.
+pub fn fn_004b9900(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(FIXED_STRING_DESTRUCT, &args![this]);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004b9930 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether the byte at `this + 4` is 0.
+pub fn fn_004b9930(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u8(this.addr().wrapping_add(4)) == 0
+}
+
+// Translated from 004b9950 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of `NiTMap<unsigned int, VertexDist>` (Xbox PDB name
+/// not in the map): the base constructor [`fn_004b99b0`] with the bucket
+/// count, then the map's own vtable (`010205b4`). Returns `this`.
+pub fn fn_004b9950(e: &mut Engine, this: Ptr<NiTMap>, hash_size: u32) -> Ptr<NiTMap> {
+    fn_004b99b0(e, this, hash_size);
+    e.mem.set_u32(this.addr(), VERTEX_DIST_MAP_VTABLE);
+    this
+}
+
+// Translated from 004b9980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned_int_VertexDist>::_scalar_deleting_destructor_` (Xbox
+/// PDB): runs the destructor [`fn_004b9cd0`] and, when bit 0 of `flags` is
+/// set, frees the block. Returns `this`.
+pub fn ni_t_map_vertex_dist_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    flags: u32,
+) -> Ptr<NiTMap> {
+    fn_004b9cd0(e, this);
+    if flags & 1 != 0 {
+        e.call(OPERATOR_DELETE, &args![this]);
+    }
+    this
+}
+
+// Translated from 004b99b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The constructor of `NiTMapBase` for this map (Xbox PDB name not in the
+/// map): installs the base vtable (`010205d4`), stores the bucket count
+/// (`+4`), a zero item count (`+0xc`) and a new bucket array of
+/// `4 * hash_size` bytes (`+8`) cleared with `memset`. Returns `this`.
+pub fn fn_004b99b0(e: &mut Engine, this: Ptr<NiTMap>, hash_size: u32) -> Ptr<NiTMap> {
+    e.mem.set_u32(this.addr(), MAP_BASE_VTABLE);
+    e.set(this, NiTMap::m_uiHashSize, hash_size);
+    e.set(this, NiTMap::m_uiCount, 0);
+    let bytes = hash_size << 2;
+    let table = e.call(NI_ARRAY_NEW, &args![bytes]).u32();
+    e.set(this, NiTMap::m_ppkHashTable, table);
+    e.call(MEMORY_SET, &args![table, 0u32, bytes]);
+    this
+}
+
+// Translated from 004b9a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `SetAt` of the map (Xbox PDB name not in the map): looks in the bucket
+/// of `key` (virtual slot 4 hashes it, slot 8 compares two keys) for the
+/// item with that key; when there is one stores the three value words in
+/// it, else takes a new item (slot `0x14`), initialises it (slot `0xc`,
+/// `(item, key, word 0, 1, 2)`), links it first in the bucket and counts
+/// it.
+pub fn fn_004b9a20(
+    e: &mut Engine,
+    this: Ptr<NiTMap>,
+    key: u32,
+    word_0: u32,
+    word_1: u32,
+    word_2: u32,
+) {
+    let bucket = e.vcall(this.addr(), 4, &args![key]).u32();
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    let mut item = e.mem.u32(table.wrapping_add(bucket.wrapping_mul(4)));
+    while item != 0 {
+        let it = Ptr::<VertexDistMapItem>::new(item);
+        let item_key = e.get(it, VertexDistMapItem::m_key);
+        if e.vcall(this.addr(), 8, &args![key, item_key]).bool() {
+            e.set(it, VertexDistMapItem::m_val_word_0, word_0);
+            e.set(it, VertexDistMapItem::m_val_word_1, word_1);
+            e.set(it, VertexDistMapItem::m_val_word_2, word_2);
+            return;
+        }
+        item = e.get(it, VertexDistMapItem::m_pkNext);
+    }
+    let new_item = e.vcall(this.addr(), 0x14, &[]).u32();
+    e.vcall(
+        this.addr(),
+        0xc,
+        &args![new_item, key, word_0, word_1, word_2],
+    );
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    let slot = table.wrapping_add(bucket.wrapping_mul(4));
+    let first = e.mem.u32(slot);
+    let new_ptr = Ptr::<VertexDistMapItem>::new(new_item);
+    e.set(new_ptr, VertexDistMapItem::m_pkNext, first);
+    e.mem.set_u32(slot, new_item);
+    let count = e.get(this, NiTMap::m_uiCount);
+    e.set(this, NiTMap::m_uiCount, count.wrapping_add(1));
+}
+
+// Translated from 004b9b20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `GetAt` of the map (Xbox PDB name not in the map): finds the item of
+/// `key` in its bucket (slot 8 compares keys), copies its three value words
+/// to `out` and returns true; false when there is none.
+pub fn fn_004b9b20(e: &mut Engine, this: Ptr<NiTMap>, key: u32, out: Ptr) -> bool {
+    let bucket = e.vcall(this.addr(), 4, &args![key]).u32();
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    let mut item = e.mem.u32(table.wrapping_add(bucket.wrapping_mul(4)));
+    while item != 0 {
+        let it = Ptr::<VertexDistMapItem>::new(item);
+        let item_key = e.get(it, VertexDistMapItem::m_key);
+        if e.vcall(this.addr(), 8, &args![key, item_key]).bool() {
+            let words = [
+                e.get(it, VertexDistMapItem::m_val_word_0),
+                e.get(it, VertexDistMapItem::m_val_word_1),
+                e.get(it, VertexDistMapItem::m_val_word_2),
+            ];
+            for (i, word) in words.into_iter().enumerate() {
+                e.mem.set_u32(out.addr().wrapping_add(4 * i as u32), word);
+            }
+            return true;
+        }
+        item = e.get(it, VertexDistMapItem::m_pkNext);
+    }
+    false
+}
+
+// Translated from 004b9ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first item of the map: the first non-empty bucket's head, or 0.
+pub fn fn_004b9ba0(e: &mut Engine, this: Ptr<NiTMap>) -> u32 {
+    let size = e.get(this, NiTMap::m_uiHashSize);
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    for index in 0..size {
+        let head = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        if head != 0 {
+            return head;
+        }
+    }
+    0
+}
+
+// Translated from 004b9bf0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The iteration step of the map: `iterator` holds an item pointer; writes
+/// that item's key to `key_out` and its three value words to `value_out`,
+/// then moves `iterator` to the next item of the bucket, else to the head
+/// of the next non-empty bucket after the key's (slot 4 hashes), else to 0.
+pub fn fn_004b9bf0(e: &mut Engine, this: Ptr<NiTMap>, iterator: Ptr, key_out: Ptr, value_out: Ptr) {
+    let item = e.mem.u32(iterator.addr());
+    let it = Ptr::<VertexDistMapItem>::new(item);
+    let key = e.get(it, VertexDistMapItem::m_key);
+    e.mem.set_u32(key_out.addr(), key);
+    let words = [
+        e.get(it, VertexDistMapItem::m_val_word_0),
+        e.get(it, VertexDistMapItem::m_val_word_1),
+        e.get(it, VertexDistMapItem::m_val_word_2),
+    ];
+    for (i, word) in words.into_iter().enumerate() {
+        e.mem
+            .set_u32(value_out.addr().wrapping_add(4 * i as u32), word);
+    }
+    let next = e.get(it, VertexDistMapItem::m_pkNext);
+    if next != 0 {
+        e.mem.set_u32(iterator.addr(), next);
+        return;
+    }
+    let bucket = e.vcall(this.addr(), 4, &args![key]).u32();
+    let mut index = bucket.wrapping_add(1);
+    while index < e.get(this, NiTMap::m_uiHashSize) {
+        let table = e.get(this, NiTMap::m_ppkHashTable);
+        let head = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        if head != 0 {
+            e.mem.set_u32(iterator.addr(), head);
+            return;
+        }
+        index = index.wrapping_add(1);
+    }
+    e.mem.set_u32(iterator.addr(), 0);
+}
+
+// Translated from 004b9ca0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<DFALL<NiTMapItem<unsigned_int_VertexDist>_>_unsigned_int_VertexDist>::SetValue`
+/// (Xbox PDB): stores the key and the three value words in `item`; `this`
+/// is not used.
+pub fn ni_t_map_base_vertex_dist_set_value(
+    e: &mut Engine,
+    _this: Ptr<NiTMap>,
+    item: Ptr<VertexDistMapItem>,
+    key: u32,
+    word_0: u32,
+    word_1: u32,
+    word_2: u32,
+) {
+    e.set(item, VertexDistMapItem::m_key, key);
+    e.set(item, VertexDistMapItem::m_val_word_0, word_0);
+    e.set(item, VertexDistMapItem::m_val_word_1, word_1);
+    e.set(item, VertexDistMapItem::m_val_word_2, word_2);
+}
+
+// Translated from 004b9cd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of `NiTMap<unsigned int, VertexDist>` (Xbox PDB name not
+/// in the map): sets the map's vtable, empties the map (`RemoveAll`,
+/// `00438af0`) and runs the base destructor [`fn_004b9d30`]. The exception
+/// frame is not translated.
+pub fn fn_004b9cd0(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), VERTEX_DIST_MAP_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_004b9d30(e, this);
+}
+
+// Translated from 004b9d30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The destructor of `NiTMapBase` for this map: sets the base vtable,
+/// empties the map and frees the bucket array (`00aa10f0`).
+pub fn fn_004b9d30(e: &mut Engine, this: Ptr<NiTMap>) {
+    e.mem.set_u32(this.addr(), MAP_BASE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTMap::m_ppkHashTable);
+    e.call(NI_ARRAY_DELETE, &args![table]);
+}
+
+// Translated from 004b9d60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<unsigned_int_VertexDist>::NewItem` (Xbox PDB): the result of
+/// `004b9de0` on the allocator at `this + 0xc`.
+pub fn ni_t_map_vertex_dist_new_item(e: &mut Engine, this: Ptr<NiTMap>) -> u32 {
+    e.call(MAP_ALLOCATE_ITEM, &args![this.addr().wrapping_add(0xc)])
+        .u32()
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2642,6 +3745,68 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         ),
         entry!(0x004b6740, fn_004b6740(Ptr, Ptr)),
         entry!(0x004b6810, fn_004b6810(Ptr, u32, bool, bool, bool) -> i32),
+        entry!(0x004b68a0, fn_004b68a0(Ptr, Ptr)),
+        entry!(0x004b6980, fn_004b6980(Ptr, u32, bool, bool, bool) -> u32),
+        entry!(0x004b6a00, fn_004b6a00(Ptr, Ptr)),
+        entry!(
+            0x004b6ae0,
+            get_havok_world_object_count_in_scene_graph(Ptr) -> u32
+        ),
+        entry!(0x004b6b20, fn_004b6b20(Ptr, Ptr)),
+        entry!(0x004b6b60, fn_004b6b60(Ptr, u32) -> i32),
+        entry!(0x004b6bc0, fn_004b6bc0(Ptr, Ptr)),
+        entry!(0x004b6c20, fn_004b6c20(Ptr, u32) -> u32),
+        entry!(0x004b6c70, fn_004b6c70(Ptr, Ptr)),
+        entry!(0x004b6ce0, fn_004b6ce0(Ptr)),
+        entry!(0x004b6dc0, set_reference_id_on_scenegraph(Ptr, u32)),
+        entry!(0x004b6e70, fn_004b6e70(Ptr) -> u32),
+        entry!(0x004b6e90, add_no_lighting_property_recurse(Ptr)),
+        entry!(0x004b6f90, prepare_object_with_no_lighting_recurse(Ptr)),
+        entry!(0x004b70d0, fn_004b70d0(Ptr) -> u32),
+        entry!(0x004b70f0, fn_004b70f0(Ptr, f32)),
+        entry!(0x004b71a0, fn_004b71a0() -> bool),
+        entry!(0x004b71d0, fn_004b71d0() -> bool),
+        entry!(0x004b7210, fn_004b7210() -> u32),
+        entry!(0x004b7220, get_current_tex_language() -> u32),
+        entry!(
+            0x004b7240,
+            swap_platform_language_texture_path(Ptr, Ptr, u32) -> bool
+        ),
+        entry!(0x004b7580, fn_004b7580(Ptr, u32, Ptr, u32) -> u32),
+        entry!(0x004b75a0, bs_stristr(Ptr, Ptr) -> u32),
+        entry!(0x004b7650, fn_004b7650(i32) -> u32),
+        entry!(0x004b7660, swap_platform_language_textures(Ptr) -> bool),
+        entry!(0x004b7920, fixed_strings_init_sdm()),
+        entry!(0x004b8cf0, fn_004b8cf0()),
+        entry!(0x004b9900, fn_004b9900(Ptr, u32) -> Ptr),
+        entry!(0x004b9930, fn_004b9930(Ptr) -> bool),
+        entry!(0x004b9950, fn_004b9950(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(
+            0x004b9980,
+            ni_t_map_vertex_dist_scalar_deleting_destructor(Ptr<NiTMap>, u32) -> Ptr<NiTMap>
+        ),
+        entry!(0x004b99b0, fn_004b99b0(Ptr<NiTMap>, u32) -> Ptr<NiTMap>),
+        entry!(0x004b9a20, fn_004b9a20(Ptr<NiTMap>, u32, u32, u32, u32)),
+        entry!(0x004b9b20, fn_004b9b20(Ptr<NiTMap>, u32, Ptr) -> bool),
+        entry!(0x004b9ba0, fn_004b9ba0(Ptr<NiTMap>) -> u32),
+        entry!(0x004b9bf0, fn_004b9bf0(Ptr<NiTMap>, Ptr, Ptr, Ptr)),
+        entry!(
+            0x004b9ca0,
+            ni_t_map_base_vertex_dist_set_value(
+                Ptr<NiTMap>,
+                Ptr<VertexDistMapItem>,
+                u32,
+                u32,
+                u32,
+                u32,
+            )
+        ),
+        entry!(0x004b9cd0, fn_004b9cd0(Ptr<NiTMap>)),
+        entry!(0x004b9d30, fn_004b9d30(Ptr<NiTMap>)),
+        entry!(
+            0x004b9d60,
+            ni_t_map_vertex_dist_new_item(Ptr<NiTMap>) -> u32
+        ),
     ]
 }
 
@@ -4175,7 +5340,8 @@ mod tests {
     /// read: `+0x10` collision object, `+0x14` value, `+0x18` parent,
     /// `+0x20` name text, `+0x24` morpher or marker controller, `+0x28` and
     /// `+0x2c` class flags, `+0x2c` extra data (in the marker test),
-    /// `+0x30` property. Virtual slot `0xc` gives the node itself when it
+    /// `+0x30` property, `+0x34` and `+0x38` the results of the virtual slots
+    /// `0x18` and `0x1c`. Virtual slot `0xc` gives the node itself when it
     /// has children (the node is its own container) and 0 otherwise; the
     /// slots `0x90`, `0xe8` and `0xf0` record their calls.
     struct Graph {
@@ -4224,6 +5390,11 @@ mod tests {
                 })
             });
         }
+        // Slots 0x18 and 0x1c (third session): the words at `+0x34` and `+0x38`.
+        slots[6] = 0x0300_5040;
+        e.register(0x0300_5040, |e, a| ret_u(e.mem.u32(a[0] + 0x34)));
+        slots[7] = 0x0300_5050;
+        e.register(0x0300_5050, |e, a| ret_u(e.mem.u32(a[0] + 0x38)));
         e.put_vtable(GRAPH_TABLE, &slots);
         Graph { children, virtuals }
     }
@@ -5366,5 +6537,1159 @@ mod tests {
         let r = e.call(0x004b_6810, &args![0x5000u32, 0x77u32, true, false, false]);
         assert_eq!(r.i32(), 5);
         assert_eq!(seen.borrow()[1].2[6], 1);
+    }
+
+    // ---- third session: more walker callbacks, language swap, maps ----
+
+    /// A walker recorder: registers a double over the walker `00c68900`
+    /// that records the root, the callback and the context's seven words,
+    /// and lets `fill` write results into the context (it gets the number
+    /// of the walk, from 1).
+    fn record_walks(
+        e: &mut Engine,
+        fill: impl Fn(&mut Engine, u32, usize) + 'static,
+    ) -> Shared<Vec<WalkCall>> {
+        let seen: Shared<Vec<WalkCall>> = Rc::default();
+        let log = seen.clone();
+        e.register_double(WALK_SCENE_GRAPH, move |e, a| {
+            let words = (0..7).map(|i| e.mem.u32(a[1] + 4 * i)).collect();
+            log.borrow_mut().push((a[0], a[2], words));
+            let n = log.borrow().len();
+            fill(e, a[1], n);
+            Ret::default()
+        });
+        seen
+    }
+
+    /// Doubles for the skip tests of `004b68a0` and `004b6a00`: the object's
+    /// `+8` word is its inner object, the class tests read the flags at
+    /// `+0x28` (class `0126817c`) and `+0x2c` (class `011f9140`) of what
+    /// they are given. Returns the engine, an object, its inner object and
+    /// a context block.
+    fn skip_engine() -> (Engine, u32, u32, u32) {
+        let mut e = engine();
+        name_doubles(&mut e);
+        e.register(WORD_AT_EIGHT, |e, a| ret_u(e.mem.u32(a[0] + 8)));
+        e.register(IS_OF_CLASS, |e, a| {
+            if a[1] == 0 {
+                return ret_u(0);
+            }
+            match a[0] {
+                IS_OF_CLASS_KEY_0126817C => ret_u(e.mem.u32(a[1] + 0x28)),
+                IS_OF_CLASS_KEY_011F9140 => ret_u(e.mem.u32(a[1] + 0x2c)),
+                other => panic!("class {other:08x}"),
+            }
+        });
+        let object = e.mem.alloc(0x60);
+        let inner = e.mem.alloc(0x60);
+        e.mem.set_u32(object + 8, inner);
+        let context = e.mem.alloc(0x20);
+        (e, object, inner, context)
+    }
+
+    #[test]
+    fn fn_004b68a0_stores_the_count_when_it_meets_the_object() {
+        let (mut e, object, inner, context) = skip_engine();
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(context + 0xc, 3);
+        e.mem.set_u32(context + 0x10, object);
+        e.mem.set_u32(context + 0x14, 0x77);
+        // Another object: counted, nothing stored.
+        e.call(0x004b_68a0, &args![p(other), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (4, 0x77)
+        );
+        // The object: the count before it is stored.
+        e.call(0x004b_68a0, &args![p(object), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (5, 4)
+        );
+        // Flag 1 and the first class: skipped, nothing changes.
+        e.mem.set_u32(context + 0x18, 1);
+        e.mem.set_u32(object + 0x28, 1);
+        e.mem.set_u32(context + 0x14, 0x77);
+        e.call(0x004b_68a0, &args![p(object), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (5, 0x77)
+        );
+        // Flag 2: skipped when the inner object is of the second class, or
+        // is named "Arrow"; counted with another name.
+        e.mem.set_u32(context + 0x18, 2);
+        e.mem.set_u32(inner + 0x2c, 1);
+        e.call(0x004b_68a0, &args![p(object), p(context)]);
+        assert_eq!(e.mem.u32(context + 0xc), 5);
+        e.mem.set_u32(inner + 0x2c, 0);
+        set_name(&mut e, inner, "Arrow");
+        e.call(0x004b_68a0, &args![p(object), p(context)]);
+        assert_eq!(e.mem.u32(context + 0xc), 5);
+        set_name(&mut e, inner, "Quiver");
+        e.call(0x004b_68a0, &args![p(object), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (6, 5)
+        );
+    }
+
+    #[test]
+    fn fn_004b6a00_stores_the_object_at_the_index() {
+        let (mut e, object, _inner, context) = skip_engine();
+        let other = e.mem.alloc(0x60);
+        e.mem.set_u32(context + 0x14, 2);
+        e.call(0x004b_6a00, &args![p(other), p(context)]);
+        e.call(0x004b_6a00, &args![p(other), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (2, 0)
+        );
+        // A skipped object is not counted, so it does not take the index.
+        e.mem.set_u32(context + 0x18, 1);
+        e.mem.set_u32(other + 0x28, 1);
+        e.call(0x004b_6a00, &args![p(other), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (2, 0)
+        );
+        e.call(0x004b_6a00, &args![p(object), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (3, object)
+        );
+    }
+
+    #[test]
+    fn fn_004b6980_returns_the_object_the_callback_stored() {
+        let mut e = engine();
+        let seen = record_walks(&mut e, |e, context, n| {
+            if n == 2 {
+                e.mem.set_u32(context + 0x10, 0xabcd);
+            }
+        });
+        assert_eq!(
+            e.call(0x004b_6980, &args![0x5000u32, 7u32, true, true, false])
+                .u32(),
+            0
+        );
+        assert_eq!(
+            seen.borrow()[0],
+            (0x5000, SELECT_CALLBACK, vec![0, 1, 0x12, 0, 0, 7, 3])
+        );
+        let r = e.call(0x004b_6980, &args![0x5000u32, 1u32, false, false, true]);
+        assert_eq!(r.u32(), 0xabcd);
+        assert_eq!(seen.borrow()[1].2[5..], [1, 4]);
+    }
+
+    #[test]
+    fn get_havok_world_object_count_in_scene_graph_returns_the_count() {
+        let mut e = engine();
+        let seen = record_walks(&mut e, |e, context, _| e.mem.set_u32(context + 0xc, 6));
+        assert_eq!(e.call(0x004b_6ae0, &args![0x5000u32]).u32(), 6);
+        let walk = seen.borrow()[0].clone();
+        assert_eq!((walk.0, walk.1), (0x5000, HAVOK_COUNT_CALLBACK));
+        assert_eq!(walk.2[1..4], [1, 0x12, 0]);
+    }
+
+    /// Doubles for the callbacks that look at the word attached to an
+    /// object: the smart pointer at `object + 0x10` is the pointed object,
+    /// whose `+8` word is the attached word.
+    fn attached_engine() -> Engine {
+        let mut e = engine();
+        e.register(POINTER_AT_0X10, |e, a| ret_u(e.mem.u32(a[0] + 0x10)));
+        e.register(WORD_AT_EIGHT_WRAPPER, |e, a| ret_u(e.mem.u32(a[0] + 8)));
+        e
+    }
+
+    /// An object with the attached word `word` (nothing attached for 0, and
+    /// no pointed object at all for `None`).
+    fn object_with_word(e: &mut Engine, word: Option<u32>) -> u32 {
+        let object = e.mem.alloc(0x20);
+        if let Some(word) = word {
+            let pointed = e.mem.alloc(0x10);
+            e.mem.set_u32(pointed + 8, word);
+            e.mem.set_u32(object + 0x10, pointed);
+        }
+        object
+    }
+
+    #[test]
+    fn fn_004b6b20_counts_the_objects_with_an_attached_word() {
+        let mut e = attached_engine();
+        let context = e.mem.alloc(0x20);
+        for (word, want) in [(None, 0), (Some(0), 0), (Some(9), 1)] {
+            let object = object_with_word(&mut e, word);
+            e.mem.set_u32(context + 0xc, 0);
+            e.call(0x004b_6b20, &args![p(object), p(context)]);
+            assert_eq!(e.mem.u32(context + 0xc), want, "{word:?}");
+        }
+    }
+
+    #[test]
+    fn fn_004b6b60_returns_the_count_at_the_word_or_minus_one() {
+        let mut e = engine();
+        let seen = record_walks(&mut e, |e, context, n| {
+            if n == 2 {
+                e.mem.set_u32(context + 0x14, 3);
+            }
+        });
+        assert_eq!(e.call(0x004b_6b60, &args![0x5000u32, 0x42u32]).i32(), -1);
+        assert_eq!(
+            seen.borrow()[0],
+            (
+                0x5000,
+                HAVOK_FIND_CALLBACK,
+                vec![0, 1, 0x12, 0, 0x42, 0xffff_ffff, 0]
+            )
+        );
+        assert_eq!(e.call(0x004b_6b60, &args![0x5000u32, 0x42u32]).i32(), 3);
+    }
+
+    #[test]
+    fn fn_004b6bc0_stores_the_count_at_the_matching_word() {
+        let mut e = attached_engine();
+        let context = e.mem.alloc(0x20);
+        e.mem.set_u32(context + 0x10, 9);
+        e.mem.set_u32(context + 0x14, 0xffff_ffff);
+        // No word: not counted. A word that differs: counted.
+        for word in [None, Some(0), Some(5)] {
+            let object = object_with_word(&mut e, word);
+            e.call(0x004b_6bc0, &args![p(object), p(context)]);
+        }
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (1, 0xffff_ffff)
+        );
+        // The word looked for: the count before it is stored.
+        let object = object_with_word(&mut e, Some(9));
+        e.call(0x004b_6bc0, &args![p(object), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x14)),
+            (2, 1)
+        );
+    }
+
+    #[test]
+    fn fn_004b6c20_returns_the_word_the_callback_stored() {
+        let mut e = engine();
+        let seen = record_walks(&mut e, |e, context, _| e.mem.set_u32(context + 0x10, 0x31));
+        assert_eq!(e.call(0x004b_6c20, &args![0x5000u32, 4u32]).u32(), 0x31);
+        assert_eq!(
+            seen.borrow()[0],
+            (0x5000, HAVOK_INDEX_CALLBACK, vec![0, 1, 0x12, 0, 0, 4, 0])
+        );
+    }
+
+    #[test]
+    fn fn_004b6c70_counts_twice_for_an_object_with_a_word() {
+        let mut e = attached_engine();
+        let context = e.mem.alloc(0x20);
+        e.mem.set_u32(context + 0x14, 2);
+        // Without a word: one step. With one: two steps, so the count
+        // jumps over the index and the word is not stored.
+        let plain = object_with_word(&mut e, None);
+        e.call(0x004b_6c70, &args![p(plain), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (1, 0)
+        );
+        let first = object_with_word(&mut e, Some(7));
+        e.call(0x004b_6c70, &args![p(first), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (3, 0)
+        );
+        // A count equal to the index takes the word.
+        e.mem.set_u32(context + 0xc, 2);
+        let second = object_with_word(&mut e, Some(8));
+        e.call(0x004b_6c70, &args![p(second), p(context)]);
+        assert_eq!(
+            (e.mem.u32(context + 0xc), e.mem.u32(context + 0x10)),
+            (4, 8)
+        );
+    }
+
+    /// Property doubles: a node's property is the word at `+0x30`; a
+    /// property is a block whose kind is the word at `+0x1c`.
+    fn property_engine() -> (Engine, Graph) {
+        let (mut e, g) = {
+            let mut e = engine();
+            let g = graph(&mut e);
+            (e, g)
+        };
+        e.register(GET_PROPERTY, |e, a| {
+            assert_eq!(a[1], 3);
+            ret_u(e.mem.u32(a[0] + 0x30))
+        });
+        e.register(IN_KIND_RANGE, |e, a| {
+            ret_u((a[0] != 0 && (1..=0xc).contains(&e.mem.u32(a[0] + 0x1c))) as u32)
+        });
+        e.register(WORD_AT_0X1C, |e, a| ret_u(e.mem.u32(a[0] + 0x1c)));
+        e.register(NOTIFY, |_, _| Ret::default());
+        e.register(SET_REFERENCE_ID, |_, _| Ret::default());
+        (e, g)
+    }
+
+    fn property_of_kind(e: &mut Engine, kind: u32) -> u32 {
+        let property = e.mem.alloc(0x30);
+        e.mem.set_u32(property + 0x1c, kind);
+        property
+    }
+
+    /// A tree for `004b6ce0` (slot `0x1c`, word `+0x38`) and `004b6dc0`
+    /// (slot `0x18`, word `+0x34`): a root with three children. `first`
+    /// has the slot set, an accepted property (kind 3) and a child that
+    /// would also qualify; `second` has the slot set and a property that
+    /// is not accepted (kind 0xd); `third` has the slot set and no
+    /// property. Returns the root and the accepted property.
+    fn slot_tree(e: &mut Engine, g: &Graph, slot_word: u32) -> (u32, u32) {
+        let accepted = property_of_kind(e, 3);
+        let rejected = property_of_kind(e, 0xd);
+        let deep = graph_node(e, g, &[]);
+        e.mem.set_u32(deep + slot_word, 1);
+        e.mem.set_u32(deep + 0x30, accepted);
+        let first = graph_node(e, g, &[deep]);
+        e.mem.set_u32(first + slot_word, 1);
+        e.mem.set_u32(first + 0x30, accepted);
+        let second = graph_node(e, g, &[]);
+        e.mem.set_u32(second + slot_word, 1);
+        e.mem.set_u32(second + 0x30, rejected);
+        let third = graph_node(e, g, &[]);
+        e.mem.set_u32(third + slot_word, 1);
+        let root = graph_node(e, g, &[first, 0, second, third]);
+        (root, accepted)
+    }
+
+    #[test]
+    fn fn_004b6ce0_notifies_for_the_first_qualifying_objects_only() {
+        let (mut e, g) = property_engine();
+        let (root, accepted) = slot_tree(&mut e, &g, 0x38);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6ce0, &args![p(root)]);
+        let log = take_log(&mut e);
+        // One call: `first`'s (its child is not visited); the rejected
+        // property and the missing one do nothing.
+        assert_eq!(
+            calls_to(&log, NOTIFY),
+            vec![args![NOTIFIED_OBJECT, accepted]]
+        );
+        assert_eq!(calls_to(&log, WORD_AT_0X1C), vec![args![accepted]]);
+        // A null object does nothing.
+        e.call(0x004b_6ce0, &args![Ptr::<()>::NULL]);
+    }
+
+    #[test]
+    fn set_reference_id_on_scenegraph_sets_it_on_the_accepted_properties() {
+        let (mut e, g) = property_engine();
+        let (root, accepted) = slot_tree(&mut e, &g, 0x34);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6dc0, &args![p(root), 0x00ff_1234u32]);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, SET_REFERENCE_ID),
+            vec![args![accepted, 0x00ff_1234u32]]
+        );
+        e.call(0x004b_6dc0, &args![Ptr::<()>::NULL, 1u32]);
+    }
+
+    #[test]
+    fn fn_004b6e70_and_fn_004b70d0_read_the_smart_pointers_at_their_offsets() {
+        let mut e = engine();
+        e.register(SMART_POINTER_GET, |_, a| ret_u(a[0] + 1));
+        assert_eq!(
+            e.call(0x004b_6e70, &args![0x1000u32]).u32(),
+            0x1000 + 0x13c + 1
+        );
+        assert_eq!(
+            e.call(0x004b_70d0, &args![0x1000u32]).u32(),
+            0x1000 + 0x3c + 1
+        );
+    }
+
+    fn lighting_engine() -> (Engine, Graph) {
+        let (mut e, g) = property_engine();
+        e.register(NI_OPERATOR_NEW, |e, a| ret_u(e.mem.alloc(a[0])));
+        e.register(NO_LIGHTING_PROPERTY_CONSTRUCT, |_, a| ret_u(a[0]));
+        e.register(ATTACH_PROPERTY, |_, _| Ret::default());
+        e.register(SET_SHADER_FLAG, |_, _| Ret::default());
+        e.register(UPDATE_PROPERTIES, |_, _| Ret::default());
+        e.register(PREPARE_OBJECT, |_, _| Ret::default());
+        e.register(BOUND_RADIUS, |e, a| ret_f(e.mem.f32(a[0] + 0xc) as f64));
+        (e, g)
+    }
+
+    #[test]
+    fn add_no_lighting_property_recurse_attaches_to_the_objects_without_one() {
+        let (mut e, g) = lighting_engine();
+        let property = property_of_kind(&mut e, 3);
+        // root: slot set, no property -> gets one. Its children: null
+        // (skipped), `plain` (slot clear, has a child that gets one) and
+        // `held` (slot set, already has a property).
+        let deep = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(deep + 0x34, 1);
+        let plain = graph_node(&mut e, &g, &[deep]);
+        let held = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(held + 0x34, 1);
+        e.mem.set_u32(held + 0x30, property);
+        let root = graph_node(&mut e, &g, &[0, plain, held]);
+        e.mem.set_u32(root + 0x34, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6e90, &args![p(root)]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, NI_OPERATOR_NEW), vec![args![0x80u32]; 2]);
+        let attached = calls_to(&log, ATTACH_PROPERTY);
+        assert_eq!(attached.len(), 2);
+        assert_eq!((attached[0][0], attached[1][0]), (root, deep));
+        assert_ne!(attached[0][1], 0);
+    }
+
+    #[test]
+    fn add_no_lighting_property_recurse_attaches_null_when_allocation_fails() {
+        let (mut e, g) = lighting_engine();
+        e.register(NI_OPERATOR_NEW, |_, _| Ret::default());
+        let root = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(root + 0x34, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6e90, &args![p(root)]);
+        let log = take_log(&mut e);
+        assert!(calls_to(&log, NO_LIGHTING_PROPERTY_CONSTRUCT).is_empty());
+        assert_eq!(calls_to(&log, ATTACH_PROPERTY), vec![args![root, 0u32]]);
+    }
+
+    #[test]
+    fn prepare_object_with_no_lighting_recurse_prepares_the_first_one_it_finds() {
+        let (mut e, g) = lighting_engine();
+        let child = graph_node(&mut e, &g, &[]);
+        let root = graph_node(&mut e, &g, &[child]);
+        e.mem.set_u32(root + 0x34, 1);
+        e.mem.set_u32(child + 0x34, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6f90, &args![p(root)]);
+        let log = take_log(&mut e);
+        let order: Vec<u32> = log.iter().map(|(a, _)| *a).collect();
+        assert_eq!(
+            order,
+            vec![
+                0x004b_6f90,
+                0x0300_5040,
+                GET_PROPERTY,
+                NI_OPERATOR_NEW,
+                NO_LIGHTING_PROPERTY_CONSTRUCT,
+                SET_SHADER_FLAG,
+                ATTACH_PROPERTY,
+                UPDATE_PROPERTIES,
+                PREPARE_OBJECT
+            ]
+        );
+        let property = calls_to(&log, ATTACH_PROPERTY)[0][1];
+        assert_eq!(
+            calls_to(&log, SET_SHADER_FLAG),
+            vec![args![property, 0x30u32, 1u32]]
+        );
+        assert_eq!(
+            calls_to(&log, PREPARE_OBJECT),
+            vec![args![root, 0u32, 0u32]]
+        );
+        assert!(calls_to(&log, CHILD_COUNT).is_empty());
+    }
+
+    #[test]
+    fn prepare_object_with_no_lighting_recurse_needs_a_world_bound_to_go_down() {
+        let (mut e, g) = lighting_engine();
+        let held = property_of_kind(&mut e, 3);
+        let leaf = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(leaf + 0x34, 1);
+        let root = graph_node(&mut e, &g, &[0, leaf]);
+        // The root's property exists, so it goes to the children, but its
+        // world bound has radius 0: stops.
+        e.mem.set_u32(root + 0x34, 1);
+        e.mem.set_u32(root + 0x30, held);
+        let bound = floats(&mut e, &[0.0, 0.0, 0.0, 0.0]);
+        e.mem.set_u32(root + 0x20, bound);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6f90, &args![p(root)]);
+        assert!(calls_to(&take_log(&mut e), PREPARE_OBJECT).is_empty());
+        // A bound with a radius: the leaf gets prepared.
+        let bound = floats(&mut e, &[0.0, 0.0, 0.0, 2.0]);
+        e.mem.set_u32(root + 0x20, bound);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6f90, &args![p(root)]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), PREPARE_OBJECT),
+            vec![args![leaf, 0u32, 0u32]]
+        );
+        // No bound at all: stops.
+        e.mem.set_u32(root + 0x20, 0);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_6f90, &args![p(root)]);
+        assert!(calls_to(&take_log(&mut e), PREPARE_OBJECT).is_empty());
+    }
+
+    #[test]
+    fn fn_004b70f0_sets_the_value_on_the_items_and_the_children_of_the_class() {
+        let mut e = engine();
+        let g = graph(&mut e);
+        // Items chain through `+0x30`; a container's first item is at `+0xc`.
+        e.register(FIRST_ITEM, |e, a| ret_u(e.mem.u32(a[0] + 0xc)));
+        e.register(NEXT_ITEM, |e, a| ret_u(e.mem.u32(a[0] + 0x30)));
+        e.register(SET_FLOAT_AT_0X10, |_, _| Ret::default());
+        e.register(IS_OF_CLASS, |e, a| {
+            assert_eq!(a[0], IS_OF_CLASS_KEY_011F4428);
+            ret_u(e.mem.u32(a[1] + 0x28))
+        });
+        let item = |e: &mut Engine, next: u32| {
+            let item = e.mem.alloc(0x40);
+            e.mem.set_u32(item + 0x30, next);
+            item
+        };
+        let b = item(&mut e, 0);
+        let a = item(&mut e, b);
+        let c = item(&mut e, 0);
+        let d = item(&mut e, 0);
+        let classed = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(classed + 0x28, 1);
+        e.mem.set_u32(classed + 0xc, c);
+        let other = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(other + 0xc, d);
+        let root = graph_node(&mut e, &g, &[0, classed, other]);
+        e.mem.set_u32(root + 0xc, a);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_70f0, &args![p(root), 2.5f32]);
+        let log = take_log(&mut e);
+        let value = 2.5f32.to_bits();
+        assert_eq!(
+            calls_to(&log, SET_FLOAT_AT_0X10),
+            vec![args![a, value], args![b, value], args![c, value]]
+        );
+        e.call(0x004b_70f0, &args![Ptr::<()>::NULL, 1.0f32]);
+    }
+
+    fn language_state_engine() -> Engine {
+        let mut e = engine();
+        e.map(0x011d_8000, 0x1000);
+        e
+    }
+
+    #[test]
+    fn fn_004b71d0_and_fn_004b71a0_need_the_enabled_byte_and_an_empty_string() {
+        let mut e = language_state_engine();
+        // Disabled.
+        assert!(!e.call(0x004b_71d0, &[]).bool());
+        assert!(!e.call(0x004b_71a0, &[]).bool());
+        // Enabled: the byte at +4 of the string object decides.
+        e.mem.set_u8(PLATFORM_SWAP_ENABLED, 1);
+        assert!(e.call(0x004b_71d0, &[]).bool());
+        assert!(e.call(0x004b_71a0, &[]).bool());
+        e.mem.set_u8(PLATFORM_SWAP_STRING + 4, b'x');
+        assert!(!e.call(0x004b_71d0, &[]).bool());
+        assert!(!e.call(0x004b_71a0, &[]).bool());
+    }
+
+    #[test]
+    fn fn_004b7210_reads_the_word() {
+        let mut e = language_state_engine();
+        e.mem.set_u32(PLATFORM_SWAP_WORD, 0x5a5a);
+        assert_eq!(e.call(0x004b_7210, &[]).u32(), 0x5a5a);
+    }
+
+    #[test]
+    fn get_current_tex_language_returns_what_the_worker_gives() {
+        let mut e = engine();
+        e.register(CURRENT_LANGUAGE_WORKER, |_, a| {
+            assert!(a.is_empty());
+            ret_u(3)
+        });
+        assert_eq!(e.call(0x004b_7220, &[]).u32(), 3);
+    }
+
+    /// The tables of the language swap (platforms `PC`, `X360`, `PS3`,
+    /// `Other`; languages `ENGLISH`, `FRENCH`, `GERMAN`, `ITALIAN`,
+    /// `SPANISH`), the current language (`GERMAN`, 2), the state page, and
+    /// doubles for the string functions and `memcpy_s`.
+    fn swap_engine() -> Engine {
+        let mut e = language_state_engine();
+        for (i, name) in ["PC", "X360", "PS3", "Other"].iter().enumerate() {
+            let t = text(&mut e, name);
+            e.mem.set_u32(PLATFORM_NAMES + 4 * i as u32, t.addr());
+        }
+        for (i, name) in ["ENGLISH", "FRENCH", "GERMAN", "ITALIAN", "SPANISH"]
+            .iter()
+            .enumerate()
+        {
+            let t = text(&mut e, name);
+            e.mem.set_u32(LANGUAGE_NAMES + 4 * i as u32, t.addr());
+        }
+        e.register(CURRENT_LANGUAGE_WORKER, |_, _| ret_u(2));
+        e.register(STRING_LENGTH, |e, a| ret_u(e.mem.cstr(a[0]).len() as u32));
+        e.register(STRING_CONCAT, |e, a| {
+            let used = e.mem.cstr(a[0]).len() as u32;
+            let source = e.mem.cstr(a[2]);
+            e.mem.set_cstr(a[0] + used, &source);
+            ret_u(0)
+        });
+        e.register(CRT_MEMCPY_S, |e, a| {
+            let bytes = e.mem.bytes(a[2], a[3]);
+            e.mem.write(a[0], &bytes);
+            ret_u(0)
+        });
+        e
+    }
+
+    fn swapped(e: &mut Engine, path: &str) -> (bool, String) {
+        let input = text(e, path);
+        let out = p(e.mem.alloc(0x100));
+        let r = e.call(0x004b_7240, &args![input, out, 0x100u32]).bool();
+        (r, String::from_utf8(e.mem.cstr(out.addr())).unwrap())
+    }
+
+    #[test]
+    fn swap_platform_language_texture_path_replaces_the_platform_and_language_directories() {
+        let mut e = swap_engine();
+        // Platform 1 (X360), language 2 (GERMAN).
+        e.mem.set_u8(PLATFORM_SWAP_ENABLED, 1);
+        assert_eq!(
+            swapped(&mut e, "data/textures/pc/english/x.dds"),
+            (true, "data/textures/X360/GERMAN/x.dds".into())
+        );
+        // Backslashes are kept as the separator found.
+        assert_eq!(swapped(&mut e, "pc\\x.dds"), (true, "X360\\x.dds".into()));
+        // Only the language: the text before it is copied.
+        assert_eq!(
+            swapped(&mut e, "a/French/b.dds"),
+            (true, "a/GERMAN/b.dds".into())
+        );
+        // Platform 0 when the swap is disabled.
+        e.mem.set_u8(PLATFORM_SWAP_ENABLED, 0);
+        assert_eq!(swapped(&mut e, "t/ps3/x.dds"), (true, "t/PC/x.dds".into()));
+    }
+
+    #[test]
+    fn swap_platform_language_texture_path_leaves_other_paths_alone() {
+        let mut e = swap_engine();
+        // A name not followed by a separator is not a directory.
+        assert_eq!(
+            swapped(&mut e, "data/pcx/file.dds"),
+            (false, "data/pcx/file.dds".into())
+        );
+        assert_eq!(swapped(&mut e, "plain.dds"), (false, "plain.dds".into()));
+        assert_eq!(swapped(&mut e, ""), (false, String::new()));
+        // Null pointers or no room: false, nothing written.
+        let input = text(&mut e, "pc/x");
+        let out = p(e.mem.alloc(0x10));
+        e.mem.set_cstr(out.addr(), b"keep");
+        assert!(!e
+            .call(0x004b_7240, &args![Ptr::<()>::NULL, out, 8u32])
+            .bool());
+        assert!(!e
+            .call(0x004b_7240, &args![input, Ptr::<()>::NULL, 8u32])
+            .bool());
+        assert!(!e.call(0x004b_7240, &args![input, out, 0u32]).bool());
+        assert_eq!(e.mem.cstr(out.addr()), b"keep");
+    }
+
+    #[test]
+    fn fn_004b7580_is_memcpy_s() {
+        let mut e = engine();
+        e.register(CRT_MEMCPY_S, |_, a| {
+            assert_eq!(a, [0x10, 0x20, 0x30, 4]);
+            ret_u(0x55)
+        });
+        assert_eq!(
+            e.call(0x004b_7580, &args![0x10u32, 0x20u32, 0x30u32, 4u32])
+                .u32(),
+            0x55
+        );
+    }
+
+    #[test]
+    fn bs_stristr_finds_the_needle_ignoring_case() {
+        let mut e = engine();
+        let hay = text(&mut e, "Data\\Textures\\PC\\x");
+        let find = |e: &mut Engine, needle: &str| {
+            let n = text(e, needle);
+            e.call(0x004b_75a0, &args![hay, n]).u32()
+        };
+        assert_eq!(find(&mut e, "textures"), hay.addr() + 5);
+        assert_eq!(find(&mut e, "pc\\"), hay.addr() + 14);
+        assert_eq!(find(&mut e, "x"), hay.addr() + 7);
+        assert_eq!(find(&mut e, "\\X"), hay.addr() + 16);
+        assert_eq!(find(&mut e, "data"), hay.addr());
+        assert_eq!(find(&mut e, "missing"), 0);
+        // An empty needle matches at the start; a longer one never.
+        assert_eq!(find(&mut e, ""), hay.addr());
+        assert_eq!(find(&mut e, "Data\\Textures\\PC\\xyz"), 0);
+    }
+
+    #[test]
+    fn fn_004b7650_indexes_the_language_table() {
+        let mut e = engine();
+        e.mem.set_u32(LANGUAGE_NAMES + 8, 0x1234);
+        assert_eq!(e.call(0x004b_7650, &args![2i32]).u32(), 0x1234);
+    }
+
+    /// A lighting property for the texture swap test: `sets` texture sets
+    /// of 6 slots, `textures` in them, and the calls to its slot `0xf0`
+    /// recorded.
+    fn lighting_property(
+        e: &mut Engine,
+        base: u32,
+        sets: u32,
+        textures: Vec<(u32, u32, u32)>,
+    ) -> (u32, Shared<Vec<Vec<u32>>>) {
+        let calls: Shared<Vec<Vec<u32>>> = Rc::default();
+        let table = base;
+        let object = e.mem.alloc(0x40);
+        e.mem.set_u32(object, table);
+        e.mem.set_u32(object + 0x1c, 9);
+        e.register_double(base + 0x10, move |_, _| ret_u(sets));
+        e.register_double(base + 0x20, move |_, a| {
+            ret_u(
+                textures
+                    .iter()
+                    .find(|(slot, set, _)| (*slot, *set) == (a[1], a[2]))
+                    .map_or(0, |t| t.2),
+            )
+        });
+        let log = calls.clone();
+        e.register_double(base + 0x30, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            Ret::default()
+        });
+        let mut slots = vec![0u32; 62];
+        slots[58] = base + 0x10;
+        slots[61] = base + 0x20;
+        slots[60] = base + 0x30;
+        e.put_vtable(table, &slots);
+        (object, calls)
+    }
+
+    /// A texture whose name (the virtual slot `0x9c` result) points at a
+    /// word holding the text; `class` is the flag the class test reads.
+    fn texture_named(e: &mut Engine, name: &str, class: bool) -> u32 {
+        let table = 0x0300_6200;
+        if !e.mem.is_mapped(table) {
+            e.put_vtable(table, &[0u32; 40]);
+            e.mem.set_u32(table + 0x9c, 0x0300_6210);
+            e.register(0x0300_6210, |e, a| ret_u(e.mem.u32(a[0] + 8)));
+        }
+        let texture = e.mem.alloc(0x20);
+        e.mem.set_u32(texture, table);
+        let holder = e.mem.alloc(8);
+        let t = text(e, name);
+        e.mem.set_u32(holder, t.addr());
+        e.mem.set_u32(texture + 8, holder);
+        e.mem.set_u32(texture + 0x10, class as u32);
+        texture
+    }
+
+    #[test]
+    fn swap_platform_language_textures_replaces_the_textures_whose_paths_change() {
+        let mut e = swap_engine();
+        let g = graph(&mut e);
+        e.mem.set_u8(PLATFORM_SWAP_ENABLED, 1);
+        e.register(GET_PROPERTY, |e, a| ret_u(e.mem.u32(a[0] + 0x30)));
+        e.register(WORD_AT_0X1C, |e, a| ret_u(e.mem.u32(a[0] + 0x1c)));
+        e.register(IS_OF_CLASS, |e, a| {
+            assert_eq!(a[0], IS_OF_CLASS_KEY_011F444C);
+            ret_u(e.mem.u32(a[1] + 0x10))
+        });
+        e.register(NAME_TEXT, |e, a| ret_u(e.mem.u32(a[0])));
+        e.register(FIXED_STRING_COPY, |e, a| {
+            let value = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], value);
+            ret_u(a[0])
+        });
+        let destroyed: Shared<u32> = Rc::default();
+        {
+            let destroyed = destroyed.clone();
+            e.register_double(FIXED_STRING_DESTRUCT, move |_, _| {
+                *destroyed.borrow_mut() += 1;
+                Ret::default()
+            });
+        }
+        e.register(SMART_POINTER_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            ret_u(a[0])
+        });
+        e.register(SMART_POINTER_GET, |e, a| ret_u(e.mem.u32(a[0])));
+        e.register(SMART_POINTER_RELEASE, |_, _| Ret::default());
+        let loaded: Shared<Vec<String>> = Rc::default();
+        {
+            let loaded = loaded.clone();
+            e.map(TES_SINGLETON & !0xfff, 0x1000);
+            e.set_global(TES_SINGLETON, 0x7e5u32);
+            e.register_double(CREATE_TEXTURE_IMAGE, move |e, a| {
+                assert_eq!(a[0], 0x7e5);
+                loaded
+                    .borrow_mut()
+                    .push(String::from_utf8(e.mem.cstr(a[1])).unwrap());
+                e.mem.set_u32(a[2], 0x7700 + loaded.borrow().len() as u32);
+                Ret::default()
+            });
+        }
+        // Slot 2 of set 0: a texture whose path changes; slot 3: not of the
+        // class; slot 4: of the class but unchanged; set 1 slot 0: changes.
+        let changes = texture_named(&mut e, "t/pc/a.dds", true);
+        let not_texture = texture_named(&mut e, "t/pc/b.dds", false);
+        let unchanged = texture_named(&mut e, "t/plain/c.dds", true);
+        let second_set = texture_named(&mut e, "u/PC/d.dds", true);
+        let (lighting, set_calls) = lighting_property(
+            &mut e,
+            0x0300_6100,
+            2,
+            vec![
+                (2, 0, changes),
+                (3, 0, not_texture),
+                (4, 0, unchanged),
+                (0, 1, second_set),
+            ],
+        );
+        let (low_kind, _) = lighting_property(&mut e, 0x0300_6400, 1, vec![(0, 0, changes)]);
+        e.mem.set_u32(low_kind + 0x1c, 7);
+        let child = graph_node(&mut e, &g, &[]);
+        e.mem.set_u32(child + 0x30, low_kind);
+        let root = graph_node(&mut e, &g, &[child]);
+        e.mem.set_u32(root + 0x30, lighting);
+        assert!(e.call(0x004b_7660, &args![p(root)]).bool());
+        assert_eq!(*loaded.borrow(), vec!["t/X360/a.dds", "u/X360/d.dds"]);
+        assert_eq!(
+            *set_calls.borrow(),
+            vec![vec![lighting, 2, 0, 0x7701], vec![lighting, 0, 1, 0x7702]]
+        );
+        // Every texture of the class had its name copy destroyed.
+        assert_eq!(*destroyed.borrow(), 3);
+        // Nothing to swap: false.
+        let root = graph_node(&mut e, &g, &[child]);
+        assert!(!e.call(0x004b_7660, &args![p(root)]).bool());
+        assert!(!e.call(0x004b_7660, &args![Ptr::<()>::NULL]).bool());
+    }
+
+    #[test]
+    fn fixed_strings_init_sdm_makes_the_54_strings() {
+        let mut e = engine();
+        let made: Shared<Vec<(u32, u32)>> = Rc::default();
+        e.register(OPERATOR_NEW, |e, a| {
+            assert_eq!(a[0], 4);
+            ret_u(e.mem.alloc(4))
+        });
+        {
+            let made = made.clone();
+            e.register_double(FIXED_STRING_CONSTRUCT, move |_, a| {
+                made.borrow_mut().push((a[0], a[1]));
+                ret_u(a[0])
+            });
+        }
+        e.call(0x004b_7920, &[]);
+        let made = made.borrow();
+        assert_eq!(made.len(), 54);
+        for ((global, string), (block, made_from)) in FIXED_STRINGS.iter().zip(made.iter()) {
+            assert_eq!(e.global::<u32>(*global), *block);
+            assert_eq!(made_from, string);
+        }
+        assert_eq!(made[0].1, 0x0101_e460);
+        assert_eq!(made[53].1, 0x0102_0324);
+        // A failing allocation leaves 0 in the global and constructs nothing.
+        let mut e = engine();
+        e.register(OPERATOR_NEW, |_, _| Ret::default());
+        e.register(FIXED_STRING_CONSTRUCT, |_, _| panic!("constructed"));
+        e.set_global(FIXED_STRINGS[0].0, 5u32);
+        e.call(0x004b_7920, &[]);
+        assert_eq!(e.global::<u32>(FIXED_STRINGS[0].0), 0);
+    }
+
+    #[test]
+    fn fn_004b8cf0_frees_the_fixed_strings_but_not_the_spine_ones() {
+        let mut e = engine();
+        let mut expected = vec![];
+        for (i, (global, _)) in FIXED_STRINGS.iter().enumerate() {
+            // Every third one is already 0.
+            if i % 3 != 2 {
+                e.set_global(*global, 0x4000 + 16 * i as u32);
+                if *global != FIXED_STRING_SPINE && *global != FIXED_STRING_SPINE1 {
+                    expected.push(args![0x4000 + 16 * i as u32]);
+                }
+            }
+        }
+        e.register(FIXED_STRING_DESTRUCT, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_8cf0, &[]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, FIXED_STRING_DESTRUCT), expected);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), expected);
+        // Nothing is cleared.
+        assert_eq!(e.global::<u32>(FIXED_STRINGS[0].0), 0x4000);
+        assert_eq!(e.global::<u32>(FIXED_STRING_SPINE), 0x4000 + 16 * 4);
+    }
+
+    #[test]
+    fn fn_004b9900_destroys_and_frees_on_bit_zero() {
+        let mut e = engine();
+        e.register(FIXED_STRING_DESTRUCT, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_9900, &args![0x2000u32, 0u32]).u32(), 0x2000);
+        let log = take_log(&mut e);
+        assert_eq!(
+            calls_to(&log, FIXED_STRING_DESTRUCT),
+            vec![args![0x2000u32]]
+        );
+        assert!(calls_to(&log, OPERATOR_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_9900, &args![0x2000u32, 3u32]);
+        let log = take_log(&mut e);
+        assert_eq!(calls_to(&log, OPERATOR_DELETE), vec![args![0x2000u32]]);
+    }
+
+    #[test]
+    fn fn_004b9930_tests_the_byte_at_four() {
+        let mut e = engine();
+        let object = e.mem.alloc(8);
+        assert!(e.call(0x004b_9930, &args![p(object)]).bool());
+        e.mem.set_u8(object + 4, 1);
+        assert!(!e.call(0x004b_9930, &args![p(object)]).bool());
+    }
+
+    #[test]
+    fn fn_004b99b0_builds_the_empty_bucket_array() {
+        let mut e = engine();
+        e.map(0x0102_0000, 0x1000);
+        e.register(NI_ARRAY_NEW, |e, a| {
+            let block = e.mem.alloc(a[0]);
+            e.mem.write(block, &vec![0xff; a[0] as usize]);
+            ret_u(block)
+        });
+        let map = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_99b0, &args![p(map), 5u32]).u32(), map);
+        let log = take_log(&mut e);
+        let table = e.mem.u32(map + 8);
+        assert_eq!(
+            (e.mem.u32(map), e.mem.u32(map + 4), e.mem.u32(map + 0xc)),
+            (MAP_BASE_VTABLE, 5, 0)
+        );
+        assert_eq!(calls_to(&log, NI_ARRAY_NEW), vec![args![20u32]]);
+        assert_eq!(calls_to(&log, MEMORY_SET), vec![args![table, 0u32, 20u32]]);
+        assert_eq!(e.mem.bytes(table, 20), vec![0; 20]);
+    }
+
+    #[test]
+    fn fn_004b9950_installs_the_map_vtable_after_the_base_constructor() {
+        let mut e = engine();
+        e.map(0x0102_0000, 0x1000);
+        e.register(NI_ARRAY_NEW, |e, a| ret_u(e.mem.alloc(a[0])));
+        let map = e.mem.alloc(0x10);
+        assert_eq!(e.call(0x004b_9950, &args![p(map), 3u32]).u32(), map);
+        assert_eq!(
+            (e.mem.u32(map), e.mem.u32(map + 4)),
+            (VERTEX_DIST_MAP_VTABLE, 3)
+        );
+    }
+
+    /// A hash map of 4 buckets with the virtual slots a test needs: the
+    /// hash (slot 4) is `key % 4`, the key comparison (slot 8) equality,
+    /// the item initialiser (slot `0xc`) the real `SetValue`, and the
+    /// allocation (slot `0x14`) a 0x14 byte block.
+    fn map_engine() -> (Engine, u32) {
+        let mut e = engine();
+        e.register(0x0300_6300, |_, a| ret_u(a[1] % 4));
+        e.register(0x0300_6310, |_, a| ret_u((a[1] == a[2]) as u32));
+        e.register(0x0300_6320, |e, _| ret_u(e.mem.alloc(0x14)));
+        e.put_vtable(
+            0x0300_6340,
+            &[0, 0x0300_6300, 0x0300_6310, 0x004b_9ca0, 0, 0x0300_6320],
+        );
+        let map = e.mem.alloc(0x10);
+        let table = e.mem.alloc(16);
+        e.mem.set_u32(map, 0x0300_6340);
+        e.mem.set_u32(map + 4, 4);
+        e.mem.set_u32(map + 8, table);
+        (e, map)
+    }
+
+    fn set_at(e: &mut Engine, map: u32, key: u32, words: [u32; 3]) {
+        e.call(
+            0x004b_9a20,
+            &args![p(map), key, words[0], words[1], words[2]],
+        );
+    }
+
+    #[test]
+    fn fn_004b9a20_inserts_new_keys_and_updates_existing_ones() {
+        let (mut e, map) = map_engine();
+        set_at(&mut e, map, 5, [1, 2, 3]);
+        assert_eq!(e.mem.u32(map + 0xc), 1);
+        let table = e.mem.u32(map + 8);
+        let first = e.mem.u32(table + 4);
+        assert_eq!(e.mem.bytes(first, 0x14)[4..].to_vec(), {
+            let mut v = vec![];
+            for w in [5u32, 1, 2, 3] {
+                v.extend_from_slice(&w.to_le_bytes());
+            }
+            v
+        });
+        assert_eq!(e.mem.u32(first), 0);
+        // The same key: updated in place.
+        set_at(&mut e, map, 5, [7, 8, 9]);
+        assert_eq!(e.mem.u32(map + 0xc), 1);
+        assert_eq!([8, 0xc, 0x10].map(|o| e.mem.u32(first + o)), [7, 8, 9]);
+        // Another key in the same bucket goes first and links to the old one.
+        set_at(&mut e, map, 9, [4, 5, 6]);
+        assert_eq!(e.mem.u32(map + 0xc), 2);
+        let second = e.mem.u32(table + 4);
+        assert_ne!(second, first);
+        assert_eq!((e.mem.u32(second), e.mem.u32(second + 4)), (first, 9));
+        // And updating the older key still finds it behind the new one.
+        set_at(&mut e, map, 5, [1, 1, 1]);
+        assert_eq!(e.mem.u32(first + 8), 1);
+        assert_eq!(e.mem.u32(map + 0xc), 2);
+    }
+
+    #[test]
+    fn fn_004b9b20_copies_the_value_words_of_the_key() {
+        let (mut e, map) = map_engine();
+        set_at(&mut e, map, 5, [1, 2, 3]);
+        set_at(&mut e, map, 9, [4, 5, 6]);
+        let out = e.mem.alloc(16);
+        e.mem.write(out, &[0xee; 16]);
+        assert!(e.call(0x004b_9b20, &args![p(map), 5u32, p(out)]).bool());
+        assert_eq!([0, 4, 8].map(|o| e.mem.u32(out + o)), [1, 2, 3]);
+        assert!(e.call(0x004b_9b20, &args![p(map), 9u32, p(out)]).bool());
+        assert_eq!([0, 4, 8].map(|o| e.mem.u32(out + o)), [4, 5, 6]);
+        // A key in an occupied bucket that is not there, and an empty bucket.
+        e.mem.set_u32(out, 0x1111);
+        assert!(!e.call(0x004b_9b20, &args![p(map), 13u32, p(out)]).bool());
+        assert!(!e.call(0x004b_9b20, &args![p(map), 2u32, p(out)]).bool());
+        assert_eq!(e.mem.u32(out), 0x1111);
+    }
+
+    #[test]
+    fn fn_004b9ba0_returns_the_head_of_the_first_used_bucket() {
+        let (mut e, map) = map_engine();
+        assert_eq!(e.call(0x004b_9ba0, &args![p(map)]).u32(), 0);
+        set_at(&mut e, map, 6, [0, 0, 0]);
+        let table = e.mem.u32(map + 8);
+        assert_eq!(
+            e.call(0x004b_9ba0, &args![p(map)]).u32(),
+            e.mem.u32(table + 8)
+        );
+        set_at(&mut e, map, 3, [0, 0, 0]);
+        assert_eq!(
+            e.call(0x004b_9ba0, &args![p(map)]).u32(),
+            e.mem.u32(table + 8)
+        );
+        set_at(&mut e, map, 1, [0, 0, 0]);
+        assert_eq!(
+            e.call(0x004b_9ba0, &args![p(map)]).u32(),
+            e.mem.u32(table + 4)
+        );
+    }
+
+    #[test]
+    fn fn_004b9bf0_walks_every_item_once() {
+        let (mut e, map) = map_engine();
+        for (key, value) in [(1u32, 10u32), (5, 50), (2, 20), (7, 70)] {
+            set_at(&mut e, map, key, [value, value + 1, value + 2]);
+        }
+        let iterator = e.mem.alloc(8);
+        let key = e.mem.alloc(8);
+        let value = e.mem.alloc(16);
+        let first = e.call(0x004b_9ba0, &args![p(map)]).u32();
+        e.mem.set_u32(iterator, first);
+        let mut seen = vec![];
+        while e.mem.u32(iterator) != 0 {
+            e.call(0x004b_9bf0, &args![p(map), p(iterator), p(key), p(value)]);
+            seen.push((e.mem.u32(key), [0, 4, 8].map(|o| e.mem.u32(value + o))));
+        }
+        // Bucket 1 holds 5 then 1 (newest first), bucket 2 holds 2, bucket 3
+        // holds 7.
+        assert_eq!(
+            seen,
+            vec![
+                (5, [50, 51, 52]),
+                (1, [10, 11, 12]),
+                (2, [20, 21, 22]),
+                (7, [70, 71, 72])
+            ]
+        );
+    }
+
+    #[test]
+    fn ni_t_map_base_vertex_dist_set_value_fills_the_item() {
+        let mut e = engine();
+        let item = e.mem.alloc(0x14);
+        e.mem.set_u32(item, 0x99);
+        e.call(
+            0x004b_9ca0,
+            &args![0x1234u32, p(item), 7u32, 1u32, 2u32, 3u32],
+        );
+        assert_eq!(
+            [0, 4, 8, 0xc, 0x10].map(|o| e.mem.u32(item + o)),
+            [0x99, 7, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn fn_004b9d30_and_fn_004b9cd0_empty_the_map_and_free_the_table() {
+        let mut e = engine();
+        e.map(0x0102_0000, 0x1000);
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(NI_ARRAY_DELETE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x5550);
+        e.call_log = Some(vec![]);
+        e.call(0x004b_9d30, &args![p(map)]);
+        let log = take_log(&mut e);
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+        assert_eq!(
+            log.iter().map(|(a, _)| *a).collect::<Vec<_>>(),
+            vec![0x004b_9d30, MAP_REMOVE_ALL, NI_ARRAY_DELETE]
+        );
+        assert_eq!(calls_to(&log, NI_ARRAY_DELETE), vec![args![0x5550u32]]);
+        // The map's own destructor empties it with its own vtable set, then
+        // runs the base one.
+        let seen_vtable: Shared<Vec<u32>> = Rc::default();
+        {
+            let seen_vtable = seen_vtable.clone();
+            e.register_double(MAP_REMOVE_ALL, move |e, a| {
+                seen_vtable.borrow_mut().push(e.mem.u32(a[0]));
+                Ret::default()
+            });
+        }
+        e.call(0x004b_9cd0, &args![p(map)]);
+        assert_eq!(
+            *seen_vtable.borrow(),
+            vec![VERTEX_DIST_MAP_VTABLE, MAP_BASE_VTABLE]
+        );
+        assert_eq!(e.mem.u32(map), MAP_BASE_VTABLE);
+    }
+
+    #[test]
+    fn ni_t_map_vertex_dist_scalar_deleting_destructor_frees_on_bit_zero() {
+        let mut e = engine();
+        e.map(0x0102_0000, 0x1000);
+        e.register(MAP_REMOVE_ALL, |_, _| Ret::default());
+        e.register(NI_ARRAY_DELETE, |_, _| Ret::default());
+        e.register(OPERATOR_DELETE, |_, _| Ret::default());
+        let map = e.mem.alloc(0x10);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x004b_9980, &args![p(map), 0u32]).u32(), map);
+        assert!(calls_to(&take_log(&mut e), OPERATOR_DELETE).is_empty());
+        e.call_log = Some(vec![]);
+        e.call(0x004b_9980, &args![p(map), 1u32]);
+        assert_eq!(
+            calls_to(&take_log(&mut e), OPERATOR_DELETE),
+            vec![args![map]]
+        );
+    }
+
+    #[test]
+    fn ni_t_map_vertex_dist_new_item_allocates_through_the_allocator_member() {
+        let mut e = engine();
+        e.register(MAP_ALLOCATE_ITEM, |_, a| ret_u(a[0] + 0x100));
+        assert_eq!(
+            e.call(0x004b_9d60, &args![0x3000u32]).u32(),
+            0x3000 + 0xc + 0x100
+        );
     }
 }
