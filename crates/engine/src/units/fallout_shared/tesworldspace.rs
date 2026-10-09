@@ -48,10 +48,47 @@
 //!   results; here the one place a float is computed (the coordinates
 //!   `min`/`max` calls) is done by the callee `0040ebd0`/`00404010`.
 //!
+//! Second session (40 functions, `00586390` to `00588b00`): the parent-value
+//! helpers (`fn_00586390`, `fn_005863d0`, the world map data and texture
+//! text), the location name of a point (`fn_00586500`, with its cache in the
+//! exe's statics), `GetGrassForLocation`, the cell key and the cell map
+//! accessors (`GetKeyForWorldCoord`, `GetCellFromWorldCoord`,
+//! `GetCellFromCellCoord`, `GetCellFromKey`, `AddCell`, `ReleaseCell`), the
+//! overlapped multibound map (`AddMultiBoundRef`), the persistent reference
+//! data (the lock, the fixed reference map at `+0x50`, the mobile list at
+//! `+0x60`, the persistent cell), the map marker lists, the ring walk over
+//! the cells around a point (`fn_005885f0`) and the per-file offset data
+//! (`fn_00588a90`, `CreateOffsetData`). The next session continues at
+//! `00588c50` (the `OFFSET_DATA` constructor).
+//!
+//! Notes for the third session:
+//! - `BSSimpleList` calls: `006815c0` returns its `this` (the address of the
+//!   node's item), `00726070` the next node, `008256d0` tests for an empty
+//!   head, `005ae3d0` is `AddHead` (takes the address of the item),
+//!   `00905330` removes an item, `00470470` clears and `004702f0(list, 1)` is
+//!   the destructor with delete. The list heads that are embedded in a
+//!   structure (the data handler's world space list at `+0x10`, the lists
+//!   `vcall` slots return at `+4`) start at that address.
+//! - The persistent reference lock is the object at `0x011ca60c`:
+//!   `004538a0(0)` enters and `004538c0` leaves.
+//! - A cell key is `(x << 16) | (y & 0xffff)` (`fn_00587410`); the cell map at
+//!   `+0x30` maps it to the cell, the fixed persistent reference map at `+0x50`
+//!   and the overlapped multibound map at `+0x68` to a `BSSimpleList` of
+//!   references. `OffsetDataMap` at `+0xB0` maps a `TESFile` (the first of a
+//!   file's master chain, `00473c70`) to its `OFFSET_DATA`.
+//! - Calls whose pushed arguments the decompiler gets wrong: in the location
+//!   name function and the grass function the pushes before
+//!   `TESObjectCELL::GetRegionList(1)` belong to
+//!   `TESRegionList::GetDerivedData(kind, point, world)`; `PUSH 0` before
+//!   `BSStringT` text getters belongs to the `Set(text, 0)` call.
+//!
 //! Not translated: the compiler's exception-unwinding frames (`FS:[0]`
 //! chains and state variables) of `Load`, `InitItem`, `Copy`,
-//! `LoadCell`, `CreateDuplicateForm`, the stack-cookie check of `Load`, and
-//! the `_alloca_probe_16` of `Load` (a stack block of the engine here).
+//! `LoadCell`, `CreateDuplicateForm`, the location name, the grass function,
+//! `AddMultiBoundRef`, `AddToPersistentRefData`, the map marker lists,
+//! `CreatePersistentCell` and `CreateOffsetData`, the stack-cookie check of
+//! `Load`, and the `_alloca_probe_16` of `Load` (a stack block of the engine
+//! here).
 
 #[allow(unused_imports)]
 use crate::prelude::*;
@@ -90,6 +127,16 @@ layout! {
         /// `sParentUseFlags` (Xbox PDB): bit `n` says the world space uses
         /// its parent's value `n`.
         0x4E sParentUseFlags: u16,
+        /// `FixedPersistentRefMap` (Xbox PDB): an
+        /// `NiTPointerMap<unsigned int, BSSimpleList<TESObjectREFR *> *>`
+        /// from a cell key to the fixed persistent references there.
+        0x50 FixedPersistentRefMap: Inline<crate::types::NiTPointerMap>,
+        /// `MobilePersistentRefList` (Xbox PDB): a
+        /// `BSSimpleList<TESObjectREFR *>` head.
+        0x60 MobilePersistentRefList: Inline<crate::types::BSSimpleList>,
+        /// `pOverlappedMultiboundMap` (Xbox PDB): an `NiTPointerMap` from a
+        /// cell key to the multibound references overlapping that cell.
+        0x68 pOverlappedMultiboundMap: Ptr,
         /// `pParentWorld` (Xbox PDB): `TESWorldSpace *` (form ID until
         /// `InitItem`).
         0x70 pParentWorld: Ptr,
@@ -113,6 +160,9 @@ layout! {
         /// `MaximumCoords` (Xbox PDB, `NiPoint2`): x.
         0xA8 MaximumCoords_x: f32,
         /// `MaximumCoords`: y.
+        /// `OffsetDataMap` (Xbox PDB): an `NiTMap<TESFile *,
+        /// TESWorldSpace::OFFSET_DATA *>`.
+        0xB0 OffsetDataMap: Inline<crate::types::NiTPointerMap>,
         0xAC MaximumCoords_y: f32,
         /// PC only: the editor ID, a `BSStringT` (the form's name getter,
         /// vtable slot `+0x130`, returns its text).
@@ -514,6 +564,184 @@ const MSG_PARENT_NAMED: u32 = 0x0103_1af0;
 const MSG_PARENT_ID: u32 = 0x0103_1aa0;
 const MSG_CELL_LOAD_FAILED: u32 = 0x0103_1ec0;
 
+// ---- Callees and data of the second session (00586390 to 00588b00) ---------
+
+/// `BSSimpleList` node functions, all `__thiscall` on a node: the node
+/// itself (`006815c0` returns its `this`, the address of the node's item
+/// word, which is what the folded constructors of small structures return
+/// as well), the next node (`00726070`, the word at `+4`), whether the list
+/// is empty (`008256d0`: item and next are both 0), `AddHead`-style add of
+/// the item whose address is passed (`005ae3d0`), remove of the item whose
+/// address is passed (`00905330`), clear (`00470470`: deletes every node
+/// after the head and empties the head), the destructor with delete flag
+/// (`004702f0`) and the constructor (`0096a2d0`: both words 0).
+const LIST_NODE_ITEM: u32 = 0x0068_15c0;
+const LIST_NEXT: u32 = 0x0072_6070;
+const LIST_IS_EMPTY: u32 = 0x0082_56d0;
+const LIST_ADD: u32 = 0x005a_e3d0;
+const LIST_REMOVE: u32 = 0x0090_5330;
+const LIST_CLEAR: u32 = 0x0047_0470;
+const LIST_DESTROY: u32 = 0x0047_02f0;
+const LIST_CONSTRUCT: u32 = 0x0096_a2d0;
+/// Size of a `BSSimpleList` head allocated on the heap.
+const LIST_SIZE: u32 = 8;
+/// `NiTMapBase::GetAt(key, &value)` (`00853130`, `false` when absent) and
+/// `RemoveAt(key)` (`00405430`), `__thiscall` on the map.
+const MAP_GET: u32 = 0x0085_3130;
+const MAP_REMOVE_AT: u32 = 0x0040_5430;
+/// The constructor of the `NiTPointerMap<unsigned int, BSSimpleList *>`
+/// (`00588fa0`, takes the bucket count; a later function of this file), its
+/// size and bucket count in `AddMultiBoundRef`.
+const LIST_MAP_SIZE: u32 = 0x10;
+const LIST_MAP_CONSTRUCT: u32 = 0x0058_8fa0;
+const MULTIBOUND_MAP_BUCKETS: u32 = 0x25;
+/// The sentinel the persistent reference lock functions work on
+/// (`0x011ca60c`): `Enter(0)` (`004538a0`) and `Leave` (`004538c0`).
+const PERSISTENT_REF_LOCK: u32 = 0x011c_a60c;
+const LOCK_ENTER: u32 = 0x0045_38a0;
+const LOCK_LEAVE: u32 = 0x0045_38c0;
+/// `_finite(double)` (`00ec7595`) and `_isnan(double)` (`00ec75b1`),
+/// `__cdecl`: non-zero for true.
+const IS_FINITE: u32 = 0x00ec_7595;
+const IS_NAN: u32 = 0x00ec_75b1;
+/// `int round(float)` (`00406d90`, `__cdecl`: `FLD`/`FISTP`, round to
+/// nearest) and `_vector_constructor_iterator_(array, size, count,
+/// constructor)` (`00401050`).
+const FLOAT_ROUND: u32 = 0x0040_6d90;
+const VECTOR_CONSTRUCTOR: u32 = 0x0040_1050;
+/// `sprintf_s(buffer, size, format, ...)` (`00406d00`, `__cdecl`).
+const SPRINTF_S: u32 = 0x0040_6d00;
+/// Tests of a form: flag `0x4000` of `+8` (`004077c0`), flag `0x400`
+/// (`005516c0`, via the flags getter `0044ddc0`), the base form of a
+/// reference (`007af430`, the word at `+0x20`), a reference's
+/// `+0x40` word (`008d6f30`) and the half-extent of a multibound
+/// reference (`00569880`), its radius (`00457990`) and whether it is a
+/// multibound marker (`00439f90`).
+const FORM_FLAG_4000: u32 = 0x0040_77c0;
+const FORM_FLAG_400: u32 = 0x0055_16c0;
+const REFERENCE_BASE_FORM: u32 = 0x007a_f430;
+const REFERENCE_WORD_40: u32 = 0x008d_6f30;
+const REFERENCE_MULTIBOUND_HALF_EXTENT: u32 = 0x0056_9880;
+const MULTIBOUND_RADIUS: u32 = 0x0045_7990;
+const IS_MULTIBOUND_REF: u32 = 0x0043_9f90;
+/// `MultiBoundMarkerData::MultiBoundIntersectsCell(reference, x, y)`
+/// (`00439940`, `__cdecl`).
+const MULTIBOUND_INTERSECTS_CELL: u32 = 0x0043_9940;
+/// Vtable slot of a reference that returns the address of its position
+/// (three floats).
+const SLOT_POSITION: u32 = 0x1f4;
+/// `TESObjectCELL`: bit 0 of the byte at `+0x24` (`00425fd0`),
+/// `GetDataX` (`00544c30`), `GetDataY` (`00544c60`), `SetWorldSpace(world)`
+/// (`0054de10`), `GetRegionList(flag)` (`00547110`),
+/// `AddReference(reference, 0)` (`00548230`), `RemoveReference(reference)`
+/// (`0054ca90`), `AssignPersistentRefsToCellsInWorld(world)` (`0054c8c0`),
+/// `SetPersistentCell(flag)` (`005516f0`), the distance from the cell's
+/// square to a point (`0054fb70`, a float in ST0), whether the cell's
+/// square contains a point (`00550200`) and the visit of the references in
+/// range of two points (`0054da20`).
+const CELL_FLAG_24_BIT_0: u32 = 0x0042_5fd0;
+const CELL_GET_DATA_X: u32 = 0x0054_4c30;
+const CELL_GET_DATA_Y: u32 = 0x0054_4c60;
+const CELL_SET_WORLD_SPACE: u32 = 0x0054_de10;
+const CELL_GET_REGION_LIST: u32 = 0x0054_7110;
+const CELL_ADD_REFERENCE: u32 = 0x0054_8230;
+const CELL_REMOVE_REFERENCE: u32 = 0x0054_ca90;
+const CELL_ASSIGN_PERSISTENT_REFS_IN_WORLD: u32 = 0x0054_c8c0;
+const CELL_SET_PERSISTENT: u32 = 0x0055_16f0;
+const CELL_DISTANCE_TO_POINT: u32 = 0x0054_fb70;
+const CELL_CONTAINS_POINT: u32 = 0x0055_0200;
+const CELL_FOR_REFERENCES_IN_RANGE: u32 = 0x0054_da20;
+/// `0054db50(cell, argument)` and the two list fillers `0054b830(cell,
+/// list)` and `0054b8c0(cell, list)` the persistent cell offers the
+/// world space's list builders.
+const CELL_PERSISTENT_ACTION: u32 = 0x0054_db50;
+const CELL_FILL_LIST_FIRST: u32 = 0x0054_b830;
+const CELL_FILL_LIST_SECOND: u32 = 0x0054_b8c0;
+/// `TESDataHandler` (the object `0x011c3f2c` points to):
+/// `GetCellFromWorldCoord(x, y, world, 0)` (`00461bc0`), the region manager
+/// (`00740940`, the word at `+0x624`), the list of world spaces
+/// (`00460140`, the address `+0x10`) and the list at `+0x1d8`
+/// (`004169d0`).
+const DATA_HANDLER_POINTER: u32 = 0x011c_3f2c;
+const DATA_HANDLER_CELL_FROM_COORD: u32 = 0x0046_1bc0;
+const DATA_HANDLER_REGION_MANAGER: u32 = 0x0074_0940;
+const DATA_HANDLER_WORLD_LIST: u32 = 0x0046_0140;
+const DATA_HANDLER_LIST_1D8: u32 = 0x0041_69d0;
+/// `TESRegionList::GetDerivedData(kind, point, world)` (`004f6800`).
+const REGION_LIST_GET_DERIVED_DATA: u32 = 0x004f_6800;
+/// Region data accessors: the word at `+0x18` of a region data list entry
+/// (`009611e0`), `TESRegionDataList::Find(kind)` (`004f35b0`), the byte at
+/// `+4` (`004f1540`) and at `+6` (`005bb4d0`) of a region data, the region
+/// data list of an entry (`00441110`, the word at `+0x1c`), the flag `0x20`
+/// of `+8` (`00440d80`), the object comparing a point to a region entry
+/// (`004f7030` builds it from a point, `004f8360` tests an entry).
+const REGION_ENTRY_WORD_18: u32 = 0x0096_11e0;
+const REGION_DATA_LIST_FIND: u32 = 0x004f_35b0;
+const REGION_DATA_BYTE_4: u32 = 0x004f_1540;
+const REGION_DATA_BYTE_6: u32 = 0x005b_b4d0;
+const REGION_ENTRY_LIST: u32 = 0x0044_1110;
+const REGION_ENTRY_FLAG_20: u32 = 0x0044_0d80;
+const REGION_POINT_BUILD: u32 = 0x004f_7030;
+const REGION_POINT_IN_ENTRY: u32 = 0x004f_8360;
+/// `BSStringT<char>`: constructor (`004037b0`), `Set(text, 0)` (`004037f0`),
+/// the text pointer (`00559450`), `GetLength` (`004048e0`) and `StrCmp(text,
+/// ignore case)` (`00408a80`); the empty text (`0x01011584`).
+const BSSTRING_CONSTRUCT: u32 = 0x0040_37b0;
+const BSSTRING_SET: u32 = 0x0040_37f0;
+const BSSTRING_TEXT: u32 = 0x0055_9450;
+const BSSTRING_LENGTH: u32 = 0x0040_48e0;
+const BSSTRING_COMPARE: u32 = 0x0040_8a80;
+const EMPTY_TEXT: u32 = 0x0101_1584;
+/// `NiPoint3::operator==` (`004390c0`, `__thiscall`, takes the address of
+/// the other point).
+const POINT_EQUAL: u32 = 0x0043_90c0;
+/// `_atexit` (`00ec658f`) and the destructor `00fcb0c0` of the cached text
+/// the location name function registers.
+const ATEXIT: u32 = 0x00ec_658f;
+const LOCATION_CACHE_ATEXIT: u32 = 0x00fc_b0c0;
+/// The statics of the location name function (`00586500`): the world
+/// space, the point (`NiPoint3`) and the text (`BSStringT`) of its last
+/// answer, and the guard bits of their initialization.
+const LOCATION_CACHE_WORLD: u32 = 0x011c_a648;
+const LOCATION_CACHE_POINT: u32 = 0x011c_a64c;
+const LOCATION_CACHE_TEXT: u32 = 0x011c_a658;
+const LOCATION_CACHE_GUARD: u32 = 0x011c_a660;
+/// The text `00586980` returns (`403df0(0x011ca130)`: the word at `+4` of
+/// the object, or 0).
+const DEFAULT_LOCATION_OBJECT: u32 = 0x011c_a130;
+const DEFAULT_LOCATION_TEXT: u32 = 0x0040_3df0;
+/// The default land height `00586480` writes (a float in the exe's data).
+const RESET_LAND_HEIGHT: u32 = 0x0103_1920;
+/// Constants of the grass and ring functions, read from the exe's data: the
+/// double 2.0, the double 0.0, the double 100.0 and the double
+/// `FLT_MAX` (`3.4028234663852886e38`).
+const DOUBLE_TWO: u32 = 0x0101_1590;
+const DOUBLE_ZERO: u32 = 0x0101_2060;
+const DOUBLE_HUNDRED: u32 = 0x0101_7a40;
+const DOUBLE_FLOAT_MAX: u32 = 0x0102_31b0;
+/// The floats `CreateOffsetData` starts the bounds with (`FLT_MAX` and
+/// `-FLT_MAX`).
+const FLOAT_MAX_VALUE: u32 = 0x0101_6970;
+const FLOAT_MIN_VALUE: u32 = 0x0101_5f5c;
+/// `NiPoint2` constructor `(x, y)` (`00452dc0`, returns the point), the
+/// `OFFSET_DATA` constructor (`00588c50`) and its size, the file's master
+/// (`00473c70`: the word the file chain follows, 0 at the end).
+const NI_POINT2_CONSTRUCT: u32 = 0x0045_2dc0;
+const OFFSET_DATA_CONSTRUCT: u32 = 0x0058_8c50;
+const OFFSET_DATA_SIZE: u32 = 0x18;
+const FILE_MASTER: u32 = 0x0047_3c70;
+/// The static check of a record type (`005548a0`, `__cdecl`) that
+/// `00588a60` falls back to.
+const RECORD_TYPE_CHECK: u32 = 0x0055_48a0;
+/// Grass entries: the mesh path format (`data/meshes/%s`, `0x01031f5c`), the
+/// float `0053ca40` returns in ST0 (it reads a setting, no `this`) and the name
+/// text of a form (`0050a550`, the empty text when there is none).
+const MESH_PATH_FORMAT: u32 = 0x0103_1f5c;
+const GRASS_SETTING_FLOAT: u32 = 0x0053_ca40;
+const FORM_NAME_TEXT: u32 = 0x0050_a550;
+/// Messages: invalid cell coordinate (two integers), cell already exists.
+const MSG_INVALID_CELL_COORD: u32 = 0x0101_87a0;
+const MSG_CELL_EXISTS: u32 = 0x0103_1f6c;
 // ---- Helpers ---------------------------------------------------------------
 
 /// `TESForm::GetFile(index)` of a form.
@@ -2076,6 +2304,1339 @@ pub fn fn_00586340(e: &mut Engine, this: Ptr<TESWorldSpace>, which: i32) -> bool
     e.get(this, TESWorldSpace::sParentUseFlags) & bit != 0
 }
 
+// ---- Second session: 00586390 to 00588b00 --------------------------------------
+
+/// The item of a `BSSimpleList` node (`*006815c0(node)`).
+fn list_item(e: &mut Engine, node: u32) -> u32 {
+    let at = e.call(LIST_NODE_ITEM, &args![node]).u32();
+    e.mem.u32(at)
+}
+
+/// The next node of a `BSSimpleList` (`00726070`).
+fn list_next(e: &mut Engine, node: u32) -> u32 {
+    e.call(LIST_NEXT, &args![node]).u32()
+}
+
+/// Whether a `BSSimpleList` node is empty (`008256d0`).
+fn list_is_empty(e: &mut Engine, node: u32) -> bool {
+    e.call(LIST_IS_EMPTY, &args![node]).bool()
+}
+
+/// Adds `item` to a list (`005ae3d0` takes the address of the item).
+fn list_add(e: &mut Engine, list: u32, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_ADD, &args![list, slot]);
+    });
+}
+
+/// Removes `item` from a list (`00905330` takes the address of the item).
+fn list_remove(e: &mut Engine, list: u32, item: u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), item);
+        e.call(LIST_REMOVE, &args![list, slot]);
+    });
+}
+
+/// Allocates and constructs an empty `BSSimpleList` head: `Allocate(8)`,
+/// then the constructor when the allocation succeeded.
+fn new_list(e: &mut Engine) -> u32 {
+    let block = e.call(MEMORY_ALLOC, &args![LIST_SIZE]).u32();
+    if block == 0 {
+        0
+    } else {
+        e.call(LIST_CONSTRUCT, &args![block]).u32()
+    }
+}
+
+/// `NiTMapBase::GetAt(key, &value)` with the value starting at 0, as every
+/// caller in this file does: `(found, value)`.
+fn map_get(e: &mut Engine, map: u32, key: u32) -> (bool, u32) {
+    e.with_stack(4, |e, slot| {
+        e.mem.set_u32(slot.addr(), 0);
+        let found = e.call(MAP_GET, &args![map, key, slot]).bool();
+        (found, e.mem.u32(slot.addr()))
+    })
+}
+
+/// `round(value) >> 12`: the cell coordinate of a world coordinate.
+fn cell_coordinate(e: &mut Engine, value: f32) -> i32 {
+    e.call(FLOAT_ROUND, &args![value]).i32() >> 12
+}
+
+/// The key of the cell a `TESObjectCELL` is at: `fn_00587410(GetDataX,
+/// GetDataY)`.
+fn cell_key(e: &mut Engine, cell: u32) -> u32 {
+    let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+    let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+    fn_00587410(e, x as i16, y as i16)
+}
+
+// Translated from 00586390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The parent world space if this world space uses the parent's value
+/// `which` (`00586340`), else 0. Without a parent: 0 as well.
+pub fn fn_00586390(e: &mut Engine, this: Ptr<TESWorldSpace>, which: i32) -> Ptr {
+    let parent = e.get(this, TESWorldSpace::pParentWorld);
+    if !parent.is_null() && !fn_00586340(e, this, which) {
+        return Ptr::new(0);
+    }
+    e.get(this, TESWorldSpace::pParentWorld)
+}
+
+// Translated from 005863d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets `pParentWorld` (Xbox PDB); without a parent no value is taken from
+/// it, so `sParentUseFlags` is cleared.
+pub fn fn_005863d0(e: &mut Engine, this: Ptr<TESWorldSpace>, parent: Ptr) {
+    e.set(this, TESWorldSpace::pParentWorld, parent);
+    if parent.is_null() {
+        e.set(this, TESWorldSpace::sParentUseFlags, 0);
+    }
+}
+
+// Translated from 00586400 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetWorldMapData` (Xbox PDB): the parent world space's
+/// `WORLD_MAP_DATA` when this one uses the parent's value 2, else its own.
+pub fn tes_world_space_get_world_map_data(e: &mut Engine, this: Ptr<TESWorldSpace>) -> Ptr {
+    let parent = fn_00586390(e, this, 2);
+    if !parent.is_null() {
+        let parent = fn_00586390(e, this, 2);
+        tes_world_space_get_world_map_data(e, parent.cast())
+    } else {
+        this.at(TESWorldSpace::WorldMapData).cast()
+    }
+}
+
+// Translated from 00586440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The text of the `TESTexture` part (`+0x24`, the world map texture path)
+/// of the parent world space when this one uses the parent's value 2, else
+/// of this one (`00408da0`, an empty text when there is none).
+pub fn fn_00586440(e: &mut Engine, this: Ptr<TESWorldSpace>) -> Ptr {
+    let parent = fn_00586390(e, this, 2);
+    let holder = if !parent.is_null() {
+        fn_00586390(e, this, 2).addr() + 0x24
+    } else {
+        this.addr() + 0x24
+    };
+    e.call(TEXTURE_NAME_TEXT, &args![holder]).ptr()
+}
+
+// Translated from 00586480 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Resets the world space's own values: no climate, water or lod water, lod
+/// water height 0, the default land height of the exe's data
+/// (`0x01031920`), water height 0, an empty world map texture name and a
+/// zeroed `WORLD_MAP_DATA`.
+pub fn fn_00586480(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    e.call(SET_CLIMATE, &args![this, 0u32]);
+    e.call(SET_WATER, &args![this, 0u32]);
+    e.call(SET_LOD_WATER, &args![this, 0u32]);
+    fn_00584150(e, this, 0.0);
+    let land_height = e.global::<f32>(RESET_LAND_HEIGHT);
+    fn_00586110(e, this, land_height);
+    fn_00586130(e, this, 0.0);
+    e.call(TEXTURE_SET_NAME, &args![this.addr() + 0x24, 0u32]);
+    e.call(MEMSET, &args![this.addr() + 0x80, 0u32, 0x10u32]);
+}
+
+// Translated from 00586500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Writes into `out` (a `BSStringT`) the name of the place at the point
+/// (`x`, `y`, `z`) of this world space: the name of the region data of the
+/// cell there (through slot `+0x28` of the region data), else the cell's own
+/// name; with no cell at the point, the best of the region data entries of
+/// the data handler's list whose world space is this one and whose area holds
+/// the point (preferring entries with the flag at `+4`, then the higher byte
+/// at `+6`); at last the world space's own name and `00586980`'s text. The
+/// last answer is cached per world space and point; the function returns
+/// whether the text differs from the cached one, which it then replaces.
+pub fn fn_00586500(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    out: Ptr,
+    x: f32,
+    y: f32,
+    z: f32,
+) -> bool {
+    let guard = e.global::<u32>(LOCATION_CACHE_GUARD);
+    if guard & 1 == 0 {
+        e.set_global(LOCATION_CACHE_GUARD, guard | 1);
+        e.call(BSSTRING_CONSTRUCT, &args![LOCATION_CACHE_TEXT]);
+        e.call(ATEXIT, &args![LOCATION_CACHE_ATEXIT]);
+    }
+    let guard = e.global::<u32>(LOCATION_CACHE_GUARD);
+    if guard & 2 == 0 {
+        e.set_global(LOCATION_CACHE_GUARD, guard | 2);
+        e.call(LOCAL_STRUCT_CONSTRUCT, &args![LOCATION_CACHE_POINT]);
+    }
+    let handler = e.global::<u32>(DATA_HANDLER_POINTER);
+    if handler == 0 {
+        return false;
+    }
+    e.with_stack(12, |e, point| {
+        e.mem.set_f32(point.addr(), x);
+        e.mem.set_f32(point.addr() + 4, y);
+        e.mem.set_f32(point.addr() + 8, z);
+        location_name(e, this, out, handler, point.addr())
+    })
+}
+
+/// The body of `00586500` once the point is on the stack at `point`.
+fn location_name(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    out: Ptr,
+    handler: u32,
+    point: u32,
+) -> bool {
+    let cached_world = e.global::<u32>(LOCATION_CACHE_WORLD);
+    if cached_world == this.addr()
+        && e.call(POINT_EQUAL, &args![LOCATION_CACHE_POINT, point])
+            .bool()
+    {
+        let text = e.call(BSSTRING_TEXT, &args![LOCATION_CACHE_TEXT]).u32();
+        e.call(BSSTRING_SET, &args![out, text, 0u32]);
+        return false;
+    }
+    if cached_world != this.addr() {
+        e.call(BSSTRING_SET, &args![LOCATION_CACHE_TEXT, EMPTY_TEXT, 0u32]);
+    }
+    e.set_global(LOCATION_CACHE_WORLD, this.addr());
+    for word in 0..3 {
+        let value = e.mem.u32(point + word * 4);
+        e.set_global(LOCATION_CACHE_POINT + word * 4, value);
+    }
+    e.call(BSSTRING_SET, &args![out, EMPTY_TEXT, 0u32]);
+    let (x, y) = (e.mem.f32(point), e.mem.f32(point + 4));
+    let cell = e
+        .call(
+            DATA_HANDLER_CELL_FROM_COORD,
+            &args![handler, x, y, this, 0u32],
+        )
+        .u32();
+    if cell != 0 {
+        let mut region_data = 0;
+        if e.call(CELL_GET_REGION_LIST, &args![cell, 1u32]).u32() != 0 {
+            let manager = e.call(DATA_HANDLER_REGION_MANAGER, &args![handler]).u32();
+            let list = e.call(CELL_GET_REGION_LIST, &args![cell, 1u32]).u32();
+            let derived = e
+                .call(
+                    REGION_LIST_GET_DERIVED_DATA,
+                    &args![list, 4u32, point, this],
+                )
+                .u32();
+            region_data = e.vcall(manager, 0x10, &args![derived]).u32();
+        }
+        if region_data != 0 {
+            e.vcall(region_data, 0x28, &args![out]);
+        } else {
+            let name = e.call(TEXTURE_NAME_TEXT, &args![cell + 0x18]).u32();
+            e.call(BSSTRING_SET, &args![out, name, 0u32]);
+        }
+    } else {
+        best_region_name(e, this, out, handler, point);
+    }
+    if e.call(BSSTRING_LENGTH, &args![out]).u32() == 0 {
+        let name = e.call(TEXTURE_NAME_TEXT, &args![this.addr() + 0x18]).u32();
+        e.call(BSSTRING_SET, &args![out, name, 0u32]);
+    }
+    if e.call(BSSTRING_LENGTH, &args![out]).u32() == 0 {
+        let text = fn_00586980(e).addr();
+        e.call(BSSTRING_SET, &args![out, text, 0u32]);
+    }
+    let cached = e.call(BSSTRING_TEXT, &args![LOCATION_CACHE_TEXT]).u32();
+    if e.call(BSSTRING_COMPARE, &args![out, cached, 1u32]).i32() != 0 {
+        let text = e.call(BSSTRING_TEXT, &args![out]).u32();
+        e.call(BSSTRING_SET, &args![LOCATION_CACHE_TEXT, text, 0u32]);
+        true
+    } else {
+        false
+    }
+}
+
+/// The loop of `00586500` for a point with no cell: goes over the list of
+/// the data handler (`+0x1d8`), keeps the entries of this world space whose
+/// region entry list holds the point, and lets the best region data write
+/// its name into `out`.
+fn best_region_name(e: &mut Engine, this: Ptr<TESWorldSpace>, out: Ptr, handler: u32, point: u32) {
+    let list = e.call(DATA_HANDLER_LIST_1D8, &args![handler]).u32();
+    let mut node = if list != 0 { list + 4 } else { 0 };
+    let mut best_flag = false;
+    let mut best_priority: i32 = -1;
+    e.with_stack(8, |e, probe| {
+        e.call(REGION_POINT_BUILD, &args![probe, point]);
+        while node != 0 {
+            let item_at = e.call(LIST_NODE_ITEM, &args![node]).u32();
+            if e.mem.u32(item_at) == 0 {
+                break;
+            }
+            let entry = list_item(e, node);
+            let mut found = false;
+            let skip = e.call(REGION_ENTRY_FLAG_20, &args![entry]).bool()
+                || e.call(REFERENCE_BASE_FORM, &args![entry]).u32() != this.addr()
+                || e.call(REGION_ENTRY_LIST, &args![entry]).u32() == 0
+                || {
+                    let entries = e.call(REGION_ENTRY_LIST, &args![entry]).u32();
+                    list_is_empty(e, entries)
+                };
+            if skip {
+                node = list_next(e, node);
+                continue;
+            }
+            let manager = e.call(DATA_HANDLER_REGION_MANAGER, &args![handler]).u32();
+            let data_list = e.call(REGION_ENTRY_WORD_18, &args![entry]).u32();
+            let find = e.call(REGION_DATA_LIST_FIND, &args![data_list, 4u32]).u32();
+            let region_data = e.vcall(manager, 0x10, &args![find]).u32();
+            if region_data == 0 {
+                node = list_next(e, node);
+                continue;
+            }
+            let mut entries = e.call(REGION_ENTRY_LIST, &args![entry]).u32();
+            while entries != 0 && list_item(e, entries) != 0 {
+                let candidate = list_item(e, entries);
+                if e.call(REGION_POINT_IN_ENTRY, &args![candidate, probe])
+                    .bool()
+                {
+                    found = true;
+                    break;
+                }
+                entries = list_next(e, entries);
+            }
+            if !found {
+                node = list_next(e, node);
+                continue;
+            }
+            let flag = e.call(REGION_DATA_BYTE_4, &args![region_data]).bool();
+            let accept = if flag && !best_flag {
+                true
+            } else if !flag && best_flag {
+                false
+            } else {
+                e.call(REGION_DATA_BYTE_6, &args![region_data]).u8() as i32 > best_priority
+            };
+            if accept {
+                best_flag = e.call(REGION_DATA_BYTE_4, &args![region_data]).bool();
+                best_priority = e.call(REGION_DATA_BYTE_6, &args![region_data]).u8() as i32;
+                e.vcall(region_data, 0x28, &args![out]);
+            }
+            node = list_next(e, node);
+        }
+    });
+}
+
+// Translated from 00586980 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The text of the exe's default location object (`0x011ca130`): the word at
+/// `+4` of it, or 0.
+pub fn fn_00586980(e: &mut Engine) -> Ptr {
+    e.call(DEFAULT_LOCATION_TEXT, &args![DEFAULT_LOCATION_OBJECT])
+        .ptr()
+}
+
+// Translated from 00586990 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetGrassForLocation` (Xbox PDB): fills `count` entries of
+/// 0x44 bytes at `out` with the grass of the area (`x1`, `y1`) to (`x2`,
+/// `y2`) of this world space. The region data of the cell in the middle
+/// gives the grass list (slot `+0x28` of the region data's list); an entry
+/// is kept when its weight at the area's centre is not 0, and every kept
+/// entry gets its mesh path (`data/meshes/%s`), form ID, parameters and, for
+/// each of nine sample points over the area, the weight there. Entries
+/// with the slot `+0xc` result non-zero come first.
+#[allow(clippy::too_many_arguments)]
+pub fn tes_world_space_get_grass_for_location(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    out: Ptr,
+    count: u32,
+) {
+    // Nine points (12 bytes each), then the centre point (12 bytes).
+    e.with_stack(0x6c + 12, |e, block| {
+        let points = block.addr();
+        let centre = block.addr() + 0x6c;
+        e.call(
+            VECTOR_CONSTRUCTOR,
+            &args![points, 0xCu32, 9u32, LOCAL_STRUCT_CONSTRUCT],
+        );
+        e.call(LOCAL_STRUCT_CONSTRUCT, &args![centre]);
+        let handler = e.global::<u32>(DATA_HANDLER_POINTER);
+        if handler == 0 || count == 0 {
+            return;
+        }
+        let two = e.global::<f64>(DOUBLE_TWO);
+        let centre_x = ((x1 as f64 + x2 as f64) / two) as f32;
+        let centre_y = ((y1 as f64 + y2 as f64) / two) as f32;
+        e.mem.set_f32(centre, centre_x);
+        e.mem.set_f32(centre + 4, centre_y);
+        e.mem.set_f32(centre + 8, 0.0);
+        let step_x = ((x2 as f64 - x1 as f64) / two) as f32;
+        let step_y = ((y2 as f64 - y1 as f64) / two) as f32;
+        let cell = e
+            .call(
+                DATA_HANDLER_CELL_FROM_COORD,
+                &args![handler, centre_x, centre_y, this, 0u32],
+            )
+            .u32();
+        if cell == 0 || e.call(CELL_GET_REGION_LIST, &args![cell, 1u32]).u32() == 0 {
+            return;
+        }
+        for i in 0..9u32 {
+            let at = points + i * 12;
+            e.mem
+                .set_f32(at, ((i % 3) as f64 * step_x as f64 + x1 as f64) as f32);
+            e.mem
+                .set_f32(at + 4, ((i / 3) as f64 * step_y as f64 + y1 as f64) as f32);
+            e.mem.set_f32(at + 8, 0.0);
+        }
+        let manager = e.call(DATA_HANDLER_REGION_MANAGER, &args![handler]).u32();
+        let region_list = e.call(CELL_GET_REGION_LIST, &args![cell, 1u32]).u32();
+        let derived = e
+            .call(
+                REGION_LIST_GET_DERIVED_DATA,
+                &args![region_list, 6u32, centre, this],
+            )
+            .u32();
+        let region_data = e.vcall(manager, 0x18, &args![derived]).u32();
+        if region_data == 0 {
+            return;
+        }
+        let list = new_list(e);
+        for first_pass in [true, false] {
+            let head = e.vcall(region_data, 0x28, &args![]).u32();
+            let mut node = if head != 0 { head + 4 } else { 0 };
+            while node != 0 {
+                let item = list_item(e, node);
+                let form = if item != 0 {
+                    e.vcall(item, 4, &args![]).u32()
+                } else {
+                    0
+                };
+                let wanted = item != 0
+                    && {
+                        let slot_c = e.vcall(item, 0xc, &args![]).u32();
+                        (slot_c != 0) == first_pass
+                    }
+                    && form != 0
+                    && e.vcall(form, 0x180, &args![]).u8() != 0
+                    && e.vcall(item, 0x18, &args![centre, this, 0u32]).f64()
+                        != e.global::<f64>(DOUBLE_ZERO);
+                if wanted {
+                    let entry = e.call(MEMORY_ALLOC, &args![8u32]).u32();
+                    e.mem.set_u32(entry, item);
+                    let weight = e.vcall(form, 0x180, &args![]).u8();
+                    let hundred = e.global::<f64>(DOUBLE_HUNDRED);
+                    e.mem.set_f32(entry + 4, (weight as f64 / hundred) as f32);
+                    list_add(e, list, entry);
+                }
+                node = list_next(e, node);
+            }
+        }
+        if list == 0 || list_is_empty(e, list) {
+            if list != 0 {
+                e.call(LIST_DESTROY, &args![list, 1u32]);
+            }
+            return;
+        }
+        grass_entries(e, this, out, count, points, list);
+    });
+}
+
+/// The second half of `GetGrassForLocation`: fills the output entries from
+/// the collected list, evaluates the weights at the nine sample points,
+/// then frees the list.
+fn grass_entries(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    out: Ptr,
+    count: u32,
+    points: u32,
+    list: u32,
+) {
+    let bytes = (count as u64 * 4).min(u32::MAX as u64) as u32;
+    let sources = e.call(MEMORY_ALLOC, &args![bytes]).u32();
+    e.call(MEMSET, &args![sources, 0u32, count.wrapping_shl(2)]);
+    let mut cursor = list;
+    for i in 0..count {
+        let slot = out.addr() + i * 0x44;
+        e.call(MEMSET, &args![slot + 0x20, 0u32, 0x24u32]);
+        let old = e.mem.u32(slot);
+        if old != 0 {
+            e.call(MEMORY_FREE, &args![old]);
+        }
+        e.mem.set_u32(slot, 0);
+        if cursor == 0 {
+            continue;
+        }
+        let mut entry = list_item(e, cursor);
+        while entry == 0 {
+            cursor = list_next(e, cursor);
+            if cursor == 0 {
+                break;
+            }
+            entry = list_item(e, cursor);
+        }
+        if entry == 0 {
+            continue;
+        }
+        let region = e.mem.u32(entry);
+        let form = e.vcall(region, 4, &args![]).u32();
+        e.mem.set_u32(sources + i * 4, region);
+        let old = e.mem.u32(slot);
+        if old != 0 {
+            e.call(MEMORY_FREE, &args![old]);
+        }
+        let path = e.call(MEMORY_ALLOC, &args![0x104u32]).u32();
+        let name = e.call(FORM_NAME_TEXT, &args![form]).u32();
+        e.call(SPRINTF_S, &args![path, 0x104u32, MESH_PATH_FORMAT, name]);
+        e.mem.set_u32(slot, path);
+        let form_id = e.call(WORD_AT_0C, &args![form]).u32();
+        e.mem.set_u32(slot + 4, form_id);
+        for (offset, vtable_slot) in [(8u32, 0x1b0u32), (0xc, 0x1b8), (0x10, 0x1c0), (0x18, 0x1c8)]
+        {
+            let value = e.vcall(form, vtable_slot, &args![]).f32();
+            e.mem.set_f32(slot + offset, value);
+        }
+        for (offset, vtable_slot) in [(0x1cu32, 0x1d0u32), (0x1d, 0x1d8), (0x1e, 0x1e0)] {
+            let value = e.vcall(form, vtable_slot, &args![]).u8();
+            e.mem.set_u8(slot + offset, value);
+        }
+        let setting = e.call(GRASS_SETTING_FLOAT, &args![]).f32();
+        e.mem.set_f32(slot + 0x14, setting);
+        cursor = list_next(e, cursor);
+    }
+    for sample in 0..9u32 {
+        for i in 0..count {
+            let region = e.mem.u32(sources + i * 4);
+            let slot = out.addr() + i * 0x44;
+            if region != 0 && e.mem.u32(slot + 4) != 0 {
+                let weight = e
+                    .vcall(region, 0x18, &args![points + sample * 12, this, 1u32])
+                    .f32();
+                e.mem.set_f32(slot + 0x20 + sample * 4, weight);
+            }
+        }
+    }
+    e.call(MEMORY_FREE, &args![sources]);
+    let mut cursor = list;
+    while cursor != 0 && list_item(e, cursor) != 0 {
+        let entry = list_item(e, cursor);
+        cursor = list_next(e, cursor);
+        e.call(MEMORY_FREE, &args![entry]);
+    }
+    e.call(LIST_CLEAR, &args![list]);
+    e.call(LIST_DESTROY, &args![list, 1u32]);
+}
+
+// Translated from 00587410 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The key of the cell at (`x`, `y`): `x` in the high 16 bits, `y` in the low
+/// 16 (`__cdecl`, both signed 16-bit).
+pub fn fn_00587410(_e: &mut Engine, x: i16, y: i16) -> u32 {
+    ((x as i32 as u32) << 16) | (y as u16 as u32)
+}
+
+// Translated from 00587440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetKeyForWorldCoord` (Xbox PDB), `__cdecl`: the key of the
+/// cell holding the point (`x`, `y`, `z` read at `coords`); `0x7fff7fff` when
+/// a coordinate is not finite or is a NaN.
+pub fn tes_world_space_get_key_for_world_coord(e: &mut Engine, coords: Ptr) -> u32 {
+    let (x, y, z) = (
+        e.mem.f32(coords.addr()),
+        e.mem.f32(coords.addr() + 4),
+        e.mem.f32(coords.addr() + 8),
+    );
+    let valid = e.call(IS_FINITE, &args![x as f64]).i32() != 0
+        && e.call(IS_FINITE, &args![y as f64]).i32() != 0
+        && e.call(IS_FINITE, &args![z as f64]).i32() != 0
+        && e.call(IS_NAN, &args![x as f64]).i32() == 0
+        && e.call(IS_NAN, &args![y as f64]).i32() == 0
+        && e.call(IS_NAN, &args![z as f64]).i32() == 0;
+    if !valid {
+        return 0x7fff_7fff;
+    }
+    let cell_x = cell_coordinate(e, x);
+    let cell_y = cell_coordinate(e, y);
+    fn_00587410(e, cell_x as i16, cell_y as i16)
+}
+
+// Translated from 00587520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Splits a cell key into its x (high 16 bits, stored at `out_x`) and y (low
+/// 16 bits, stored at `out_y`), `__cdecl`.
+pub fn fn_00587520(e: &mut Engine, key: u32, out_x: Ptr, out_y: Ptr) {
+    e.mem.set_u16(out_x.addr(), (key >> 16) as u16);
+    e.mem.set_u16(out_y.addr(), key as u16);
+}
+
+// Translated from 00587550 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetCellFromWorldCoord` (Xbox PDB): the exterior cell
+/// holding the point (`x`, `y` read at `coords`), or 0.
+pub fn tes_world_space_get_cell_from_world_coord(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    coords: Ptr,
+) -> Ptr {
+    let x = e.mem.f32(coords.addr());
+    let cell_x = cell_coordinate(e, x);
+    let y = e.mem.f32(coords.addr() + 4);
+    let cell_y = cell_coordinate(e, y);
+    tes_world_space_get_cell_from_cell_coord(e, this, cell_x, cell_y)
+}
+
+// Translated from 005875a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetCellFromCellCoord` (Xbox PDB): the exterior cell at
+/// (`x`, `y`) in the cell map, or 0. A coordinate outside -0x8000 to 0x7fff
+/// is logged and gives 0.
+pub fn tes_world_space_get_cell_from_cell_coord(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    x: i32,
+    y: i32,
+) -> Ptr {
+    if x > 0x7fff || y > 0x7fff || x < -0x8000 || y < -0x8000 {
+        e.call(LOG, &args![MSG_INVALID_CELL_COORD, -0x8000i32, 0x7fffu32]);
+        return Ptr::new(0);
+    }
+    let key = fn_00587410(e, x as i16, y as i16);
+    let map = e.get(this, TESWorldSpace::pCellMap).addr();
+    let (found, cell) = map_get(e, map, key);
+    if found {
+        Ptr::new(cell)
+    } else {
+        Ptr::new(0)
+    }
+}
+
+// Translated from 00587630 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::GetCellFromKey` (Xbox PDB): the cell stored under `key`
+/// in the cell map, or 0.
+pub fn tes_world_space_get_cell_from_key(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    key: u32,
+) -> Ptr {
+    let map = e.get(this, TESWorldSpace::pCellMap).addr();
+    let (found, cell) = map_get(e, map, key);
+    if found {
+        Ptr::new(cell)
+    } else {
+        Ptr::new(0)
+    }
+}
+
+// Translated from 00587670 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AddCell` (Xbox PDB): adds a cell to the world space and
+/// tells the cell its world space. A persistent cell (form flag `0x400`)
+/// becomes `pPersistentCell` unless there is one; any other goes into the cell
+/// map under its coordinates' key, unless that key is taken (logged). A cell
+/// with bit 0 of the byte at `+0x24` set is refused. Returns whether the
+/// cell was added.
+pub fn tes_world_space_add_cell(e: &mut Engine, this: Ptr<TESWorldSpace>, cell: Ptr) -> bool {
+    if cell.is_null() || e.call(CELL_FLAG_24_BIT_0, &args![cell]).bool() {
+        return false;
+    }
+    if e.call(FORM_FLAG_400, &args![cell]).bool() {
+        if !e.get(this, TESWorldSpace::pPersistentCell).is_null() {
+            return false;
+        }
+        e.set(this, TESWorldSpace::pPersistentCell, cell);
+    } else {
+        let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+        let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+        let key = fn_00587410(e, x as i16, y as i16);
+        let map = e.get(this, TESWorldSpace::pCellMap).addr();
+        let (found, existing) = map_get(e, map, key);
+        if found {
+            let y = e.call(CELL_GET_DATA_Y, &args![cell]).u32();
+            let x = e.call(CELL_GET_DATA_X, &args![cell]).u32();
+            let name = e.vcall(existing, SLOT_EDITOR_ID, &args![]).u32();
+            let existing_id = e.call(WORD_AT_0C, &args![existing]).u32();
+            e.call(LOG, &args![MSG_CELL_EXISTS, existing_id, name, x, y]);
+            return false;
+        }
+        e.call(MAP_SET_AT, &args![map, key, cell]);
+    }
+    e.call(CELL_SET_WORLD_SPACE, &args![cell, this]);
+    true
+}
+
+// Translated from 00587760 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::ReleaseCell` (Xbox PDB): removes the cell from the cell
+/// map if it is the one stored under its key, and clears its world space.
+pub fn tes_world_space_release_cell(e: &mut Engine, this: Ptr<TESWorldSpace>, cell: Ptr) {
+    if cell.is_null() || e.call(CELL_FLAG_24_BIT_0, &args![cell]).bool() {
+        return;
+    }
+    let key = cell_key(e, cell.addr());
+    let map = e.get(this, TESWorldSpace::pCellMap).addr();
+    let (found, stored) = map_get(e, map, key);
+    if found && stored == cell.addr() {
+        e.call(MAP_REMOVE_AT, &args![map, key]);
+        e.call(CELL_SET_WORLD_SPACE, &args![cell, 0u32]);
+    }
+}
+
+// Translated from 005877e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deletes every cell of the cell map (virtual destructor with the delete
+/// flag, slot `+0x10`), unless the world space has form flag `0x4000`, and
+/// empties the map.
+pub fn fn_005877e0(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    let map = e.get(this, TESWorldSpace::pCellMap).addr();
+    if !e.call(FORM_FLAG_4000, &args![this]).bool() {
+        let mut position = e.call(MAP_FIRST_POS, &args![map]).u32();
+        while position != 0 {
+            let (next, _key, cell) = map_get_next(e, map, position);
+            position = next;
+            if cell != 0 {
+                e.vcall(cell, 0x10, &args![1u32]);
+            }
+        }
+    }
+    e.call(MAP_REMOVE_ALL, &args![map]);
+}
+
+// Translated from 00587870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The list stored for the cell's key in the overlapped multibound map
+/// (`+0x68`), or 0 when there is no map or no entry.
+pub fn fn_00587870(e: &mut Engine, this: Ptr<TESWorldSpace>, cell: Ptr) -> Ptr {
+    let mut list = 0;
+    let map = e.get(this, TESWorldSpace::pOverlappedMultiboundMap).addr();
+    if map != 0 {
+        let key = cell_key(e, cell.addr());
+        list = map_get(e, map, key).1;
+    }
+    Ptr::new(list)
+}
+
+// Translated from 005878d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AddMultiBoundRef` (Xbox PDB): for a multibound reference
+/// (`00439f90`), adds it to the list of every cell its bounds overlap
+/// except the cell it stands in (`MultiBoundIntersectsCell`), in the
+/// overlapped multibound map (`+0x68`, created on first use). The range of
+/// cells is the reference's position plus or minus the radius of its half
+/// extent.
+pub fn tes_world_space_add_multi_bound_ref(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    reference: Ptr,
+) {
+    if reference.is_null() || !e.call(IS_MULTIBOUND_REF, &args![reference]).bool() {
+        return;
+    }
+    let extent = e
+        .call(REFERENCE_MULTIBOUND_HALF_EXTENT, &args![reference])
+        .u32();
+    let radius = e.with_stack(12, |e, copy| {
+        for word in 0..3 {
+            let value = e.mem.u32(extent + word * 4);
+            e.mem.set_u32(copy.addr() + word * 4, value);
+        }
+        e.call(MULTIBOUND_RADIUS, &args![copy]).f32()
+    });
+    let position = |e: &mut Engine, axis: u32| -> f32 {
+        let at = e.vcall(reference.addr(), SLOT_POSITION, &args![]).u32();
+        e.mem.f32(at + axis * 4)
+    };
+    let low_x = (position(e, 0) as f64 - radius as f64) as f32;
+    let low_x = cell_coordinate(e, low_x);
+    let low_y = (position(e, 1) as f64 - radius as f64) as f32;
+    let low_y = cell_coordinate(e, low_y);
+    let high_x = (position(e, 0) as f64 + radius as f64) as f32;
+    let high_x = cell_coordinate(e, high_x);
+    let high_y = (position(e, 1) as f64 + radius as f64) as f32;
+    let high_y = cell_coordinate(e, high_y);
+    let own_x = position(e, 0);
+    let own_x = cell_coordinate(e, own_x);
+    let own_y = position(e, 1);
+    let own_y = cell_coordinate(e, own_y);
+    let mut x = low_x;
+    while x <= high_x {
+        let mut y = low_y;
+        while y <= high_y {
+            if (x != own_x || y != own_y)
+                && e.call(MULTIBOUND_INTERSECTS_CELL, &args![reference, x, y])
+                    .bool()
+            {
+                if e.get(this, TESWorldSpace::pOverlappedMultiboundMap)
+                    .is_null()
+                {
+                    let block = e.call(MEMORY_ALLOC, &args![LIST_MAP_SIZE]).u32();
+                    let map = if block == 0 {
+                        0
+                    } else {
+                        e.call(LIST_MAP_CONSTRUCT, &args![block, MULTIBOUND_MAP_BUCKETS])
+                            .u32()
+                    };
+                    e.set(this, TESWorldSpace::pOverlappedMultiboundMap, Ptr::new(map));
+                }
+                let map = e.get(this, TESWorldSpace::pOverlappedMultiboundMap).addr();
+                let key = fn_00587410(e, x as i16, y as i16);
+                let (_, mut list) = map_get(e, map, key);
+                if list == 0 {
+                    list = new_list(e);
+                    e.call(MAP_SET_AT, &args![map, key, list]);
+                }
+                list_add(e, list, reference.addr());
+            }
+            y += 1;
+        }
+        x += 1;
+    }
+}
+
+// Translated from 00587bb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Deletes the overlapped multibound map (`+0x68`) with the lists it holds,
+/// and clears the pointer.
+pub fn fn_00587bb0(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    let map = e.get(this, TESWorldSpace::pOverlappedMultiboundMap).addr();
+    if map == 0 {
+        return;
+    }
+    let mut position = e.call(MAP_FIRST_POS, &args![map]).u32();
+    while position != 0 {
+        let (next, _key, list) = map_get_next(e, map, position);
+        position = next;
+        if list != 0 {
+            e.call(LIST_CLEAR, &args![list]);
+            e.call(LIST_DESTROY, &args![list, 1u32]);
+        }
+    }
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    let map = e.get(this, TESWorldSpace::pOverlappedMultiboundMap).addr();
+    if map != 0 {
+        // The scalar deleting destructor (slot 0) with the delete flag.
+        e.vcall(map, 0, &args![1u32]);
+    }
+    e.set(this, TESWorldSpace::pOverlappedMultiboundMap, Ptr::new(0));
+}
+
+// Translated from 00587c80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::IsFixedRef` (Xbox PDB), `__cdecl`: whether the reference's
+/// base form is one of the types that never move (form types 0xd, 0x15,
+/// 0x1b, 0x1c, 0x20, 0x21, 0x25 to 0x27, 0x2c and 0x2d).
+pub fn tes_world_space_is_fixed_ref(e: &mut Engine, reference: Ptr) -> bool {
+    if reference.is_null() {
+        return false;
+    }
+    let base = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    if base == 0 {
+        return false;
+    }
+    let base = e.call(REFERENCE_BASE_FORM, &args![reference]).u32();
+    matches!(
+        e.call(FORM_TYPE, &args![base]).u32(),
+        0xd | 0x15 | 0x1b | 0x1c | 0x20 | 0x21 | 0x25 | 0x26 | 0x27 | 0x2c | 0x2d
+    )
+}
+
+// Translated from 00587d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AddToPersistentRefData` (Xbox PDB): files a persistent
+/// reference (unless it has form flag `0x4000`) while holding the persistent
+/// reference lock: a fixed one in the list under its cell's key in the fixed
+/// persistent reference map (`+0x50`), any other in the mobile list (`+0x60`).
+pub fn tes_world_space_add_to_persistent_ref_data(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    reference: Ptr,
+) {
+    if reference.is_null() || e.call(FORM_FLAG_4000, &args![reference]).bool() {
+        return;
+    }
+    e.call(LOCK_ENTER, &args![PERSISTENT_REF_LOCK, 0u32]);
+    if !tes_world_space_is_fixed_ref(e, reference) {
+        let list = this.at(TESWorldSpace::MobilePersistentRefList).addr();
+        list_add(e, list, reference.addr());
+    } else {
+        let position = e.vcall(reference.addr(), SLOT_POSITION, &args![]).u32();
+        let key = tes_world_space_get_key_for_world_coord(e, Ptr::new(position));
+        let map = this.at(TESWorldSpace::FixedPersistentRefMap).addr();
+        let (_, mut list) = map_get(e, map, key);
+        if list == 0 {
+            list = new_list(e);
+            e.call(MAP_SET_AT, &args![map, key, list]);
+        }
+        list_add(e, list, reference.addr());
+    }
+    e.call(LOCK_LEAVE, &args![PERSISTENT_REF_LOCK]);
+}
+
+// Translated from 00587e40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::RemoveFromPersistentRefData` (Xbox PDB): the inverse of
+/// `AddToPersistentRefData`; a fixed reference's list is deleted with its
+/// map entry when it becomes empty.
+pub fn tes_world_space_remove_from_persistent_ref_data(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    reference: Ptr,
+) {
+    if reference.is_null() || e.call(FORM_FLAG_4000, &args![reference]).bool() {
+        return;
+    }
+    e.call(LOCK_ENTER, &args![PERSISTENT_REF_LOCK, 0u32]);
+    if !tes_world_space_is_fixed_ref(e, reference) {
+        let list = this.at(TESWorldSpace::MobilePersistentRefList).addr();
+        list_remove(e, list, reference.addr());
+    } else {
+        let position = e.vcall(reference.addr(), SLOT_POSITION, &args![]).u32();
+        let key = tes_world_space_get_key_for_world_coord(e, Ptr::new(position));
+        let map = this.at(TESWorldSpace::FixedPersistentRefMap).addr();
+        let (_, list) = map_get(e, map, key);
+        if list != 0 {
+            list_remove(e, list, reference.addr());
+            if list_is_empty(e, list) {
+                e.call(LIST_DESTROY, &args![list, 1u32]);
+                e.call(MAP_REMOVE_AT, &args![map, key]);
+            }
+        }
+    }
+    e.call(LOCK_LEAVE, &args![PERSISTENT_REF_LOCK]);
+}
+
+// Translated from 00587f40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Empties the persistent reference data under the lock: the mobile list,
+/// every list of the fixed persistent reference map (cleared and deleted)
+/// and the map itself.
+pub fn fn_00587f40(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    e.call(LOCK_ENTER, &args![PERSISTENT_REF_LOCK, 0u32]);
+    let mobile = this.at(TESWorldSpace::MobilePersistentRefList).addr();
+    e.call(LIST_CLEAR, &args![mobile]);
+    let map = this.at(TESWorldSpace::FixedPersistentRefMap).addr();
+    let mut position = e.call(MAP_FIRST_POS, &args![map]).u32();
+    while position != 0 {
+        let (next, _key, list) = map_get_next(e, map, position);
+        position = next;
+        if list != 0 {
+            e.call(LIST_CLEAR, &args![list]);
+            e.call(LIST_DESTROY, &args![list, 1u32]);
+        }
+    }
+    e.call(MAP_REMOVE_ALL, &args![map]);
+    e.call(LOCK_LEAVE, &args![PERSISTENT_REF_LOCK]);
+}
+
+// Translated from 00587ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AddPersistentRef` (Xbox PDB): adds the reference (unless it
+/// has form flag `0x4000`) to the persistent cell, making the cell first if
+/// needed.
+pub fn tes_world_space_add_persistent_ref(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    reference: Ptr,
+) {
+    if reference.is_null() || e.call(FORM_FLAG_4000, &args![reference]).bool() {
+        return;
+    }
+    let cell = tes_world_space_create_persistent_cell(e, this);
+    e.call(CELL_ADD_REFERENCE, &args![cell, reference, 0u32]);
+}
+
+// Translated from 00588030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::RemovePersistentRef` (Xbox PDB): removes the reference from
+/// the persistent cell, if there is one.
+pub fn tes_world_space_remove_persistent_ref(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    reference: Ptr,
+) {
+    if reference.is_null() {
+        return;
+    }
+    let cell = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        e.call(CELL_REMOVE_REFERENCE, &args![cell, reference]);
+    }
+}
+
+// Translated from 00588070 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::CreatePersistentCell` (Xbox PDB): the persistent cell,
+/// made (a `TESObjectCELL`, marked persistent, with its cell data) when the
+/// world space has none yet.
+pub fn tes_world_space_create_persistent_cell(e: &mut Engine, this: Ptr<TESWorldSpace>) -> Ptr {
+    if e.get(this, TESWorldSpace::pPersistentCell).is_null() {
+        let block = e.call(MEMORY_ALLOC, &args![CELL_SIZE]).u32();
+        let cell = if block == 0 {
+            0
+        } else {
+            e.call(CELL_CONSTRUCT, &args![block]).u32()
+        };
+        e.set(this, TESWorldSpace::pPersistentCell, Ptr::new(cell));
+        let cell = e.get(this, TESWorldSpace::pPersistentCell);
+        e.call(CELL_SET_PERSISTENT, &args![cell, 1u32]);
+        let cell = e.get(this, TESWorldSpace::pPersistentCell);
+        e.call(CELL_CREATE_DATA, &args![cell]);
+    }
+    e.get(this, TESWorldSpace::pPersistentCell)
+}
+
+// Translated from 00588120 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Asks the persistent cell, if there is one, to assign its persistent
+/// references to the cells of this world space
+/// (`AssignPersistentRefsToCellsInWorld`).
+pub fn fn_00588120(e: &mut Engine, this: Ptr<TESWorldSpace>) {
+    let cell = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        e.call(CELL_ASSIGN_PERSISTENT_REFS_IN_WORLD, &args![cell, this]);
+    }
+}
+
+// Translated from 00588150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::AssignPersistentRefsToCell` (Xbox PDB): under the
+/// persistent reference lock, adds to `cell` every reference filed under its
+/// key in the fixed persistent reference map, and every mobile persistent
+/// reference whose `+0x40` word is not `cell` and whose position is in the
+/// cell.
+pub fn tes_world_space_assign_persistent_refs_to_cell(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    cell: Ptr,
+) {
+    if cell.is_null() {
+        return;
+    }
+    e.call(LOCK_ENTER, &args![PERSISTENT_REF_LOCK, 0u32]);
+    let key = cell_key(e, cell.addr());
+    let map = this.at(TESWorldSpace::FixedPersistentRefMap).addr();
+    let (_, mut node) = map_get(e, map, key);
+    while node != 0 && !list_is_empty(e, node) {
+        let reference = list_item(e, node);
+        e.call(CELL_ADD_REFERENCE, &args![cell, reference, 0u32]);
+        node = list_next(e, node);
+    }
+    let mut node = this.at(TESWorldSpace::MobilePersistentRefList).addr();
+    while node != 0 && !list_is_empty(e, node) {
+        let reference = list_item(e, node);
+        if e.call(REFERENCE_WORD_40, &args![reference]).u32() != cell.addr() {
+            let position = e.vcall(reference, SLOT_POSITION, &args![]).u32();
+            if e.call(CELL_CONTAINS_POINT, &args![cell, position]).bool() {
+                e.call(CELL_ADD_REFERENCE, &args![cell, reference, 0u32]);
+            }
+        }
+        node = list_next(e, node);
+    }
+    e.call(LOCK_LEAVE, &args![PERSISTENT_REF_LOCK]);
+}
+
+// Translated from 00588270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Passes `argument` to `0054db50` on the persistent cell, if there is one.
+pub fn fn_00588270(e: &mut Engine, this: Ptr<TESWorldSpace>, argument: u32) {
+    let cell = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        e.call(CELL_PERSISTENT_ACTION, &args![cell, argument]);
+    }
+}
+
+/// `BuildMapMarkerList` and `005883c0`: the list of world spaces below
+/// `this` that fill it with `fill` (the parent's list when `all` is 0 and
+/// this world space uses the parent's value 2).
+fn build_world_list(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    all: u8,
+    recurse: fn(&mut Engine, Ptr<TESWorldSpace>, u8) -> Ptr,
+    fill: fn(&mut Engine, Ptr<TESWorldSpace>, Ptr),
+) -> Ptr {
+    if !fn_00586390(e, this, 2).is_null() && all == 0 {
+        let parent = fn_00586390(e, this, 2);
+        return recurse(e, parent.cast(), 0);
+    }
+    let list = Ptr::new(new_list(e));
+    fill(e, this, list);
+    if all == 0 {
+        let handler = e.global::<u32>(DATA_HANDLER_POINTER);
+        let mut node = e.call(DATA_HANDLER_WORLD_LIST, &args![handler]).u32();
+        while node != 0 {
+            let world = list_item(e, node);
+            if world != 0 && fn_00586390(e, Ptr::new(world), 2).addr() == this.addr() {
+                fill(e, Ptr::new(world), list);
+            }
+            node = list_next(e, node);
+        }
+    }
+    list
+}
+
+// Translated from 005882a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::BuildMapMarkerList` (Xbox PDB): a new list of the map
+/// markers of the world space (`fn_005884e0`, which asks the persistent
+/// cell) and, unless `all` is non-zero, of the world spaces that use this
+/// one's value 2. When this world space uses its parent's value 2 and `all`
+/// is 0, the parent builds the list instead.
+pub fn tes_world_space_build_map_marker_list(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    all: u8,
+) -> Ptr {
+    build_world_list(
+        e,
+        this,
+        all,
+        tes_world_space_build_map_marker_list,
+        fn_005884e0,
+    )
+}
+
+// Translated from 005883c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The same as `BuildMapMarkerList` with the other list filler
+/// (`fn_00588520`).
+pub fn fn_005883c0(e: &mut Engine, this: Ptr<TESWorldSpace>, all: u8) -> Ptr {
+    build_world_list(e, this, all, fn_005883c0, fn_00588520)
+}
+
+// Translated from 005884e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lets the persistent cell fill `list` (`0054b830`), if `list` and the
+/// cell exist.
+pub fn fn_005884e0(e: &mut Engine, this: Ptr<TESWorldSpace>, list: Ptr) {
+    if list.is_null() {
+        return;
+    }
+    let cell = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        e.call(CELL_FILL_LIST_FIRST, &args![cell, list]);
+    }
+}
+
+// Translated from 00588520 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lets the persistent cell fill `list` (`0054b8c0`), if `list` and the
+/// cell exist.
+pub fn fn_00588520(e: &mut Engine, this: Ptr<TESWorldSpace>, list: Ptr) {
+    if list.is_null() {
+        return;
+    }
+    let cell = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if cell != 0 {
+        e.call(CELL_FILL_LIST_SECOND, &args![cell, list]);
+    }
+}
+
+// Translated from 00588560 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The first cell of the cell map whose editor ID (slot `+0x130`) equals
+/// `name` (`00404dc0`), or 0.
+pub fn fn_00588560(e: &mut Engine, this: Ptr<TESWorldSpace>, name: Ptr) -> Ptr {
+    let mut found = 0;
+    if !name.is_null() {
+        let map = e.get(this, TESWorldSpace::pCellMap).addr();
+        let mut position = e.call(MAP_FIRST_POS, &args![map]).u32();
+        while position != 0 && found == 0 {
+            let (next, _key, cell) = map_get_next(e, map, position);
+            position = next;
+            if cell != 0 {
+                let editor_id = e.vcall(cell, SLOT_EDITOR_ID, &args![]).u32();
+                if e.call(EDITOR_ID_COMPARE, &args![editor_id, name]).i32() == 0 {
+                    found = cell;
+                }
+            }
+        }
+    }
+    Ptr::new(found)
+}
+
+// Translated from 005885f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Visits the references around a point with `0054da20` on the cell holding
+/// `centre` and then, ring after ring, on every cell around it that exists
+/// and is within `radius` of `centre` and within `second_radius` of
+/// `second_centre` (a radius of `FLT_MAX` is no limit), until a ring has no
+/// such cell; at last the persistent cell. Stops as soon as a visit
+/// returns false. Does nothing without `visitor`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_005885f0(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    centre: Ptr,
+    radius: f32,
+    second_centre: Ptr,
+    second_radius: f32,
+    visitor: u32,
+    context: u32,
+) {
+    if visitor == 0 {
+        return;
+    }
+    let mut cells_in_ring = 1;
+    let mut side = 0;
+    let x = e.mem.f32(centre.addr());
+    let mut cell_x = float_to_int(e, x) >> 12;
+    let y = e.mem.f32(centre.addr() + 4);
+    let mut cell_y = float_to_int(e, y) >> 12;
+    let cell = tes_world_space_get_cell_from_cell_coord(e, this, cell_x, cell_y);
+    let visit = |e: &mut Engine, cell: Ptr| -> bool {
+        e.call(
+            CELL_FOR_REFERENCES_IN_RANGE,
+            &args![
+                cell,
+                centre,
+                radius,
+                second_centre,
+                second_radius,
+                visitor,
+                context
+            ],
+        )
+        .bool()
+    };
+    if !cell.is_null() && !visit(e, cell) {
+        return;
+    }
+    // One side of the ring: `side` cells starting at (`cell_x`, `cell_y`),
+    // stepping by (`step_x`, `step_y`).
+    let ring_cell = |e: &mut Engine,
+                     cell_x: &mut i32,
+                     cell_y: &mut i32,
+                     step_x: i32,
+                     step_y: i32,
+                     side: i32,
+                     count: &mut i32|
+     -> bool {
+        for _ in 0..side {
+            let cell = tes_world_space_get_cell_from_cell_coord(e, this, *cell_x, *cell_y);
+            if !cell.is_null()
+                && within_limit(e, cell, centre, radius, second_centre, second_radius)
+            {
+                *count += 1;
+                if !visit(e, cell) {
+                    return false;
+                }
+            }
+            *cell_x += step_x;
+            *cell_y += step_y;
+        }
+        true
+    };
+    while cells_in_ring != 0 {
+        cell_x -= 1;
+        cell_y -= 1;
+        side += 2;
+        cells_in_ring = 0;
+        if !ring_cell(e, &mut cell_x, &mut cell_y, 1, 0, side, &mut cells_in_ring) {
+            return;
+        }
+        if !ring_cell(e, &mut cell_x, &mut cell_y, 0, 1, side, &mut cells_in_ring) {
+            return;
+        }
+        if !ring_cell(e, &mut cell_x, &mut cell_y, -1, 0, side, &mut cells_in_ring) {
+            return;
+        }
+        if !ring_cell(e, &mut cell_x, &mut cell_y, 0, -1, side, &mut cells_in_ring) {
+            return;
+        }
+    }
+    let persistent = e.call(GET_PERSISTENT_CELL, &args![this]).u32();
+    if persistent != 0 {
+        visit(e, Ptr::new(persistent));
+    }
+}
+
+/// `distance < limit` (false when either is a NaN).
+fn is_below(distance: f64, limit: f32) -> bool {
+    distance < limit as f64
+}
+
+/// The distance test of `005885f0` for one cell: the distance from the cell's
+/// square to `centre` must be below `radius` (unless that is `FLT_MAX`), and
+/// likewise for the second point.
+fn within_limit(
+    e: &mut Engine,
+    cell: Ptr,
+    centre: Ptr,
+    radius: f32,
+    second_centre: Ptr,
+    second_radius: f32,
+) -> bool {
+    let no_limit = e.global::<f64>(DOUBLE_FLOAT_MAX);
+    if radius as f64 != no_limit {
+        let distance = e.call(CELL_DISTANCE_TO_POINT, &args![cell, centre]).f64();
+        if !is_below(distance, radius) {
+            return false;
+        }
+    }
+    if second_radius as f64 != no_limit {
+        let distance = e
+            .call(CELL_DISTANCE_TO_POINT, &args![cell, second_centre])
+            .f64();
+        if !is_below(distance, second_radius) {
+            return false;
+        }
+    }
+    true
+}
+
+// Translated from 00588a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `00588a60` for a record type byte (the `this` is not used).
+pub fn fn_00588a40(e: &mut Engine, _this: Ptr<TESWorldSpace>, record_type: u8) -> bool {
+    fn_00588a60(e, record_type)
+}
+
+// Translated from 00588a60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True for the record types `'9'` (cell) and `'D'`, else what `005548a0`
+/// answers for the type; `__cdecl`.
+pub fn fn_00588a60(e: &mut Engine, record_type: u8) -> bool {
+    if record_type == b'9' || record_type == b'D' {
+        true
+    } else {
+        e.call(RECORD_TYPE_CHECK, &args![record_type]).bool()
+    }
+}
+
+/// Follows a file's master chain (`00473c70`) to its end.
+fn first_master_file(e: &mut Engine, file: u32) -> u32 {
+    let mut node = file;
+    while node != 0 && e.call(FILE_MASTER, &args![node]).u32() != 0 {
+        node = e.call(FILE_MASTER, &args![node]).u32();
+    }
+    node
+}
+
+// Translated from 00588a90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `OFFSET_DATA` (Xbox PDB) the world space keeps for the first file of
+/// `file`'s master chain (`OffsetDataMap`, `+0xb0`), or 0.
+pub fn fn_00588a90(e: &mut Engine, this: Ptr<TESWorldSpace>, file: Ptr) -> Ptr {
+    let node = first_master_file(e, file.addr());
+    let map = this.at(TESWorldSpace::OffsetDataMap).addr();
+    let (found, data) = map_get(e, map, node);
+    Ptr::new(if found { data } else { 0 })
+}
+
+// Translated from 00588b00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESWorldSpace::CreateOffsetData` (Xbox PDB): the `OFFSET_DATA` for the
+/// first file of `file`'s master chain, made (no table, offset 0, bounds
+/// from `FLT_MAX` down to `-FLT_MAX`) and stored in the offset data map when
+/// there is none.
+pub fn tes_world_space_create_offset_data(
+    e: &mut Engine,
+    this: Ptr<TESWorldSpace>,
+    file: Ptr,
+) -> Ptr<OffsetData> {
+    let node = first_master_file(e, file.addr());
+    let map = this.at(TESWorldSpace::OffsetDataMap).addr();
+    let (found, mut data) = map_get(e, map, node);
+    if !found || data == 0 {
+        let block = e.call(MEMORY_ALLOC, &args![OFFSET_DATA_SIZE]).u32();
+        data = if block == 0 {
+            0
+        } else {
+            e.call(OFFSET_DATA_CONSTRUCT, &args![block]).u32()
+        };
+        let data_ptr = Ptr::<OffsetData>::new(data);
+        e.set(data_ptr, OffsetData::pCellFileOffsets, Ptr::new(0));
+        e.set(data_ptr, OffsetData::iFileOffset, 0);
+        let maximum = e.global::<f32>(FLOAT_MAX_VALUE);
+        let corner = e.with_stack(8, |e, point| {
+            let at = e
+                .call(NI_POINT2_CONSTRUCT, &args![point, maximum, maximum])
+                .u32();
+            (e.mem.u32(at), e.mem.u32(at + 4))
+        });
+        e.mem.set_u32(data + 4, corner.0);
+        e.mem.set_u32(data + 8, corner.1);
+        let minimum = e.global::<f32>(FLOAT_MIN_VALUE);
+        let corner = e.with_stack(8, |e, point| {
+            let at = e
+                .call(NI_POINT2_CONSTRUCT, &args![point, minimum, minimum])
+                .u32();
+            (e.mem.u32(at), e.mem.u32(at + 4))
+        });
+        e.mem.set_u32(data + 0xc, corner.0);
+        e.mem.set_u32(data + 0x10, corner.1);
+        e.call(MAP_SET_AT, &args![map, node, data]);
+    }
+    Ptr::new(data)
+}
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2154,6 +3715,111 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00586300, fn_00586300(Ptr<TESWorldSpace>) -> bool),
         entry!(0x00586320, fn_00586320(Ptr<TESWorldSpace>) -> bool),
         entry!(0x00586340, fn_00586340(Ptr<TESWorldSpace>, i32) -> bool),
+        entry!(0x00586390, fn_00586390(Ptr<TESWorldSpace>, i32) -> Ptr),
+        entry!(0x005863d0, fn_005863d0(Ptr<TESWorldSpace>, Ptr)),
+        entry!(
+            0x00586400,
+            tes_world_space_get_world_map_data(Ptr<TESWorldSpace>) -> Ptr
+        ),
+        entry!(0x00586440, fn_00586440(Ptr<TESWorldSpace>) -> Ptr),
+        entry!(0x00586480, fn_00586480(Ptr<TESWorldSpace>)),
+        entry!(
+            0x00586500,
+            fn_00586500(Ptr<TESWorldSpace>, Ptr, f32, f32, f32) -> bool
+        ),
+        entry!(0x00586980, fn_00586980() -> Ptr),
+        entry!(
+            0x00586990,
+            tes_world_space_get_grass_for_location(
+                Ptr<TESWorldSpace>,
+                f32,
+                f32,
+                f32,
+                f32,
+                Ptr,
+                u32,
+            )
+        ),
+        entry!(0x00587410, fn_00587410(i16, i16) -> u32),
+        entry!(
+            0x00587440,
+            tes_world_space_get_key_for_world_coord(Ptr) -> u32
+        ),
+        entry!(0x00587520, fn_00587520(u32, Ptr, Ptr)),
+        entry!(
+            0x00587550,
+            tes_world_space_get_cell_from_world_coord(Ptr<TESWorldSpace>, Ptr) -> Ptr
+        ),
+        entry!(
+            0x005875a0,
+            tes_world_space_get_cell_from_cell_coord(Ptr<TESWorldSpace>, i32, i32) -> Ptr
+        ),
+        entry!(
+            0x00587630,
+            tes_world_space_get_cell_from_key(Ptr<TESWorldSpace>, u32) -> Ptr
+        ),
+        entry!(
+            0x00587670,
+            tes_world_space_add_cell(Ptr<TESWorldSpace>, Ptr) -> bool
+        ),
+        entry!(
+            0x00587760,
+            tes_world_space_release_cell(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(0x005877e0, fn_005877e0(Ptr<TESWorldSpace>)),
+        entry!(0x00587870, fn_00587870(Ptr<TESWorldSpace>, Ptr) -> Ptr),
+        entry!(
+            0x005878d0,
+            tes_world_space_add_multi_bound_ref(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(0x00587bb0, fn_00587bb0(Ptr<TESWorldSpace>)),
+        entry!(0x00587c80, tes_world_space_is_fixed_ref(Ptr) -> bool),
+        entry!(
+            0x00587d10,
+            tes_world_space_add_to_persistent_ref_data(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(
+            0x00587e40,
+            tes_world_space_remove_from_persistent_ref_data(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(0x00587f40, fn_00587f40(Ptr<TESWorldSpace>)),
+        entry!(
+            0x00587ff0,
+            tes_world_space_add_persistent_ref(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(
+            0x00588030,
+            tes_world_space_remove_persistent_ref(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(
+            0x00588070,
+            tes_world_space_create_persistent_cell(Ptr<TESWorldSpace>) -> Ptr
+        ),
+        entry!(0x00588120, fn_00588120(Ptr<TESWorldSpace>)),
+        entry!(
+            0x00588150,
+            tes_world_space_assign_persistent_refs_to_cell(Ptr<TESWorldSpace>, Ptr)
+        ),
+        entry!(0x00588270, fn_00588270(Ptr<TESWorldSpace>, u32)),
+        entry!(
+            0x005882a0,
+            tes_world_space_build_map_marker_list(Ptr<TESWorldSpace>, u8) -> Ptr
+        ),
+        entry!(0x005883c0, fn_005883c0(Ptr<TESWorldSpace>, u8) -> Ptr),
+        entry!(0x005884e0, fn_005884e0(Ptr<TESWorldSpace>, Ptr)),
+        entry!(0x00588520, fn_00588520(Ptr<TESWorldSpace>, Ptr)),
+        entry!(0x00588560, fn_00588560(Ptr<TESWorldSpace>, Ptr) -> Ptr),
+        entry!(
+            0x005885f0,
+            fn_005885f0(Ptr<TESWorldSpace>, Ptr, f32, Ptr, f32, u32, u32)
+        ),
+        entry!(0x00588a40, fn_00588a40(Ptr<TESWorldSpace>, u8) -> bool),
+        entry!(0x00588a60, fn_00588a60(u8) -> bool),
+        entry!(0x00588a90, fn_00588a90(Ptr<TESWorldSpace>, Ptr) -> Ptr),
+        entry!(
+            0x00588b00,
+            tes_world_space_create_offset_data(Ptr<TESWorldSpace>, Ptr) -> Ptr<OffsetData>
+        ),
     ]
 }
 
@@ -4878,5 +6544,1994 @@ mod tests {
         e.set(a, TESWorldSpace::fDefaultLandHeight, f32::NAN);
         e.set(b, TESWorldSpace::fDefaultLandHeight, f32::NAN);
         assert!(e.call(0x0058_5250, &args![a, b]).bool());
+    }
+
+    // ---- second session: 00586390 to 00588b00 ---------------------------------
+
+    /// What the `NiTPointerMap` stand-in holds: (map, key, value).
+    type MapTable = Rc<RefCell<Vec<(u32, u32, u32)>>>;
+
+    /// Calls recorded as (cell, list) pairs.
+    type FillLog = Rc<RefCell<Vec<(u32, u32)>>>;
+
+    /// Cells a visit double was given.
+    type VisitLog = Rc<RefCell<Vec<u32>>>;
+
+    /// Doubles for the map functions the unit calls (`GetAt`, `SetAt`,
+    /// `RemoveAt`, `RemoveAll`, `GetFirstPos`, `GetNext`); the positions are
+    /// 1-based indices into the entries of one map.
+    fn install_maps(e: &mut Engine) -> MapTable {
+        let table: MapTable = Rc::default();
+        let t = table.clone();
+        e.register_double(MAP_GET, move |e, a| {
+            let found = t
+                .borrow()
+                .iter()
+                .find(|m| m.0 == a[0] && m.1 == a[1])
+                .map(|m| m.2);
+            if let Some(value) = found {
+                e.mem.set_u32(a[2], value);
+            }
+            ret(found.is_some() as u32)
+        });
+        let t = table.clone();
+        e.register_double(MAP_SET_AT, move |_, a| {
+            let mut t = t.borrow_mut();
+            if let Some(m) = t.iter_mut().find(|m| m.0 == a[0] && m.1 == a[1]) {
+                m.2 = a[2];
+            } else {
+                t.push((a[0], a[1], a[2]));
+            }
+            Ret::default()
+        });
+        let t = table.clone();
+        e.register_double(MAP_REMOVE_AT, move |_, a| {
+            t.borrow_mut().retain(|m| !(m.0 == a[0] && m.1 == a[1]));
+            Ret::default()
+        });
+        let t = table.clone();
+        e.register_double(MAP_REMOVE_ALL, move |_, a| {
+            t.borrow_mut().retain(|m| m.0 != a[0]);
+            Ret::default()
+        });
+        let t = table.clone();
+        e.register_double(MAP_FIRST_POS, move |_, a| {
+            ret(t.borrow().iter().any(|m| m.0 == a[0]) as u32)
+        });
+        let t = table.clone();
+        e.register_double(MAP_GET_NEXT, move |e, a| {
+            let t = t.borrow();
+            let entries: Vec<_> = t.iter().filter(|m| m.0 == a[0]).collect();
+            let index = e.mem.u32(a[1]) as usize - 1;
+            e.mem.set_u32(a[2], entries[index].1);
+            e.mem.set_u32(a[3], entries[index].2);
+            let next = if index + 1 < entries.len() {
+                index as u32 + 2
+            } else {
+                0
+            };
+            e.mem.set_u32(a[1], next);
+            Ret::default()
+        });
+        table
+    }
+
+    /// What the `BSSimpleList` stand-ins were asked to do: (what, list,
+    /// item or flag).
+    type ListLog = Rc<RefCell<Vec<(&'static str, u32, u32)>>>;
+
+    /// Doubles for the list functions: node access by the real layout (item
+    /// at +0, next at +4); the changing ones only record what they were
+    /// asked.
+    fn install_lists(e: &mut Engine) -> ListLog {
+        e.register(LIST_NODE_ITEM, |_, a| ret(a[0]));
+        e.register(LIST_NEXT, |e, a| ret(e.mem.u32(a[0] + 4)));
+        e.register(LIST_IS_EMPTY, |e, a| {
+            ret((e.mem.u32(a[0]) == 0 && e.mem.u32(a[0] + 4) == 0) as u32)
+        });
+        e.register(LIST_CONSTRUCT, |_, a| ret(a[0]));
+        let log: ListLog = Rc::default();
+        let l = log.clone();
+        // `AddHead`: the new item becomes the head's item, the old head
+        // content moves into a new second node.
+        e.register_double(LIST_ADD, move |e, a| {
+            let item = e.mem.u32(a[1]);
+            l.borrow_mut().push(("add", a[0], item));
+            if item != 0 {
+                if e.mem.u32(a[0]) != 0 {
+                    let node = e.mem.alloc(8);
+                    e.mem.set_u32(node, e.mem.u32(a[0]));
+                    e.mem.set_u32(node + 4, e.mem.u32(a[0] + 4));
+                    e.mem.set_u32(a[0] + 4, node);
+                }
+                e.mem.set_u32(a[0], item);
+            }
+            Ret::default()
+        });
+        let l = log.clone();
+        e.register_double(LIST_REMOVE, move |e, a| {
+            l.borrow_mut().push(("remove", a[0], e.mem.u32(a[1])));
+            Ret::default()
+        });
+        let l = log.clone();
+        e.register_double(LIST_CLEAR, move |_, a| {
+            l.borrow_mut().push(("clear", a[0], 0));
+            Ret::default()
+        });
+        let l = log.clone();
+        e.register_double(LIST_DESTROY, move |_, a| {
+            l.borrow_mut().push(("destroy", a[0], a[1]));
+            ret(a[0])
+        });
+        log
+    }
+
+    /// Copies the first node of the list at `head` into the node at `at`, so
+    /// that a list whose head is embedded in an object starts there.
+    fn embed_list(e: &mut Engine, at: u32, head: u32) {
+        e.mem.set_u32(at, e.mem.u32(head));
+        e.mem.set_u32(at + 4, e.mem.u32(head + 4));
+    }
+
+    /// A list of `items` in game memory (nodes of item then next); returns
+    /// the head. No items: a head with item 0 and next 0.
+    fn make_list(e: &mut Engine, items: &[u32]) -> u32 {
+        let nodes: Vec<u32> = (0..items.len().max(1)).map(|_| e.mem.alloc(8)).collect();
+        for (i, node) in nodes.iter().enumerate() {
+            e.mem.set_u32(*node, items.get(i).copied().unwrap_or(0));
+            e.mem
+                .set_u32(*node + 4, nodes.get(i + 1).copied().unwrap_or(0));
+        }
+        nodes[0]
+    }
+
+    /// `_finite`, `_isnan` and the rounding `float` to `int` conversion
+    /// (round to nearest even), the way the CRT computes them.
+    fn install_float_helpers(e: &mut Engine) {
+        fn double(a: &[u32]) -> f64 {
+            f64::from_bits(a[0] as u64 | (a[1] as u64) << 32)
+        }
+        e.register(IS_FINITE, |_, a| ret(double(a).is_finite() as u32));
+        e.register(IS_NAN, |_, a| ret(double(a).is_nan() as u32));
+        e.register(FLOAT_ROUND, |_, a| {
+            ret(f32::from_bits(a[0]).round_ties_even() as i32 as u32)
+        });
+    }
+
+    fn set_double(e: &mut Engine, addr: u32, value: f64) {
+        if !e.mem.is_mapped(addr) {
+            e.map(addr & !0xfff, 0x1000);
+        }
+        e.set_global(addr, value);
+    }
+
+    /// A fake game object of `size` bytes with a vtable whose `slots`
+    /// (byte offsets) go to `targets`.
+    fn fake_object(e: &mut Engine, size: u32, targets: &[(u32, u32)]) -> u32 {
+        let object = e.mem.alloc(size);
+        give_vtable(e, object, targets);
+        object
+    }
+
+    /// A key as `fn_00587410` makes it.
+    fn key(x: i16, y: i16) -> u32 {
+        ((x as i32 as u32) << 16) | (y as u16 as u32)
+    }
+
+    // ---- parent values ----------------------------------------------------
+
+    #[test]
+    fn parent_for_gives_the_parent_only_when_the_value_is_inherited() {
+        let mut e = engine();
+        let w = world(&mut e);
+        // No parent: 0 whatever the flags say.
+        e.set(w, TESWorldSpace::sParentUseFlags, 0xffff);
+        assert_eq!(e.call(0x0058_6390, &args![w, 2u32]).u32(), 0);
+        // A parent, the value not inherited.
+        e.set(w, TESWorldSpace::pParentWorld, Ptr::new(0x4444));
+        e.set(w, TESWorldSpace::sParentUseFlags, 0b0000_0100);
+        assert_eq!(e.call(0x0058_6390, &args![w, 1u32]).u32(), 0);
+        // Inherited.
+        assert_eq!(e.call(0x0058_6390, &args![w, 2u32]).u32(), 0x4444);
+        // A number outside 0 to 5 is always inherited.
+        assert_eq!(e.call(0x0058_6390, &args![w, 9u32]).u32(), 0x4444);
+    }
+
+    #[test]
+    fn setting_the_parent_to_none_clears_the_inherited_flags() {
+        let mut e = engine();
+        let w = world(&mut e);
+        e.set(w, TESWorldSpace::sParentUseFlags, 0x3f);
+        e.call(0x0058_63d0, &args![w, 0x5000u32]);
+        assert_eq!(e.get(w, TESWorldSpace::pParentWorld).addr(), 0x5000);
+        assert_eq!(e.get(w, TESWorldSpace::sParentUseFlags), 0x3f);
+        e.call(0x0058_63d0, &args![w, 0u32]);
+        assert_eq!(e.get(w, TESWorldSpace::pParentWorld).addr(), 0);
+        assert_eq!(e.get(w, TESWorldSpace::sParentUseFlags), 0);
+    }
+
+    #[test]
+    fn world_map_data_comes_from_the_ancestor_that_owns_it() {
+        let mut e = engine();
+        let root = world(&mut e);
+        let child = world(&mut e);
+        let grandchild = world(&mut e);
+        e.set(child, TESWorldSpace::pParentWorld, root.cast());
+        e.set(child, TESWorldSpace::sParentUseFlags, 0b100);
+        e.set(grandchild, TESWorldSpace::pParentWorld, child.cast());
+        e.set(grandchild, TESWorldSpace::sParentUseFlags, 0b100);
+        assert_eq!(e.call(0x0058_6400, &args![root]).u32(), root.addr() + 0x80);
+        assert_eq!(e.call(0x0058_6400, &args![child]).u32(), root.addr() + 0x80);
+        assert_eq!(
+            e.call(0x0058_6400, &args![grandchild]).u32(),
+            root.addr() + 0x80
+        );
+        // The child stops the chain by not inheriting.
+        e.set(grandchild, TESWorldSpace::sParentUseFlags, 0);
+        assert_eq!(
+            e.call(0x0058_6400, &args![grandchild]).u32(),
+            grandchild.addr() + 0x80
+        );
+    }
+
+    #[test]
+    fn world_map_texture_text_is_asked_of_the_owner_of_the_value() {
+        let mut e = engine();
+        // The text getter answers with the address of the object it is given.
+        e.register(TEXTURE_NAME_TEXT, |_, a| ret(a[0]));
+        let parent = world(&mut e);
+        let child = world(&mut e);
+        assert_eq!(
+            e.call(0x0058_6440, &args![child]).u32(),
+            child.addr() + 0x24
+        );
+        e.set(child, TESWorldSpace::pParentWorld, parent.cast());
+        assert_eq!(
+            e.call(0x0058_6440, &args![child]).u32(),
+            child.addr() + 0x24
+        );
+        e.set(child, TESWorldSpace::sParentUseFlags, 0b100);
+        assert_eq!(
+            e.call(0x0058_6440, &args![child]).u32(),
+            parent.addr() + 0x24
+        );
+    }
+
+    #[test]
+    fn reset_clears_the_world_space_values() {
+        let mut e = engine();
+        set_word(&mut e, RESET_LAND_HEIGHT, (-2048.0f32).to_bits());
+        let w = world(&mut e);
+        e.set(w, TESWorldSpace::fLODWaterHeight, 9.0);
+        e.set(w, TESWorldSpace::fDefaultLandHeight, 9.0);
+        e.set(w, TESWorldSpace::fDefaultWaterHeight, 9.0);
+        e.mem.write(w.addr() + 0x80, &[0xff; 0x10]);
+        e.set(w, TESWorldSpace::cFlags, 0x55);
+        for setter in [SET_CLIMATE, SET_WATER, SET_LOD_WATER, TEXTURE_SET_NAME] {
+            noop(&mut e, setter);
+        }
+        logged(&mut e);
+        e.call(0x0058_6480, &args![w]);
+        assert_eq!(calls_to(&e, SET_CLIMATE), vec![vec![w.addr(), 0]]);
+        assert_eq!(calls_to(&e, SET_WATER), vec![vec![w.addr(), 0]]);
+        assert_eq!(calls_to(&e, SET_LOD_WATER), vec![vec![w.addr(), 0]]);
+        assert_eq!(
+            calls_to(&e, TEXTURE_SET_NAME),
+            vec![vec![w.addr() + 0x24, 0]]
+        );
+        assert_eq!(e.get(w, TESWorldSpace::fLODWaterHeight), 0.0);
+        assert_eq!(e.get(w, TESWorldSpace::fDefaultLandHeight), -2048.0);
+        assert_eq!(e.get(w, TESWorldSpace::fDefaultWaterHeight), 0.0);
+        assert_eq!(e.mem.bytes(w.addr() + 0x80, 0x10), vec![0; 0x10]);
+        // Nothing else is touched.
+        assert_eq!(e.get(w, TESWorldSpace::cFlags), 0x55);
+    }
+
+    #[test]
+    fn default_location_text_comes_from_the_default_object() {
+        let mut e = engine();
+        e.register(DEFAULT_LOCATION_TEXT, |_, a| ret(a[0] + 1));
+        assert_eq!(
+            e.call(0x0058_6980, &args![]).u32(),
+            DEFAULT_LOCATION_OBJECT + 1
+        );
+    }
+
+    // ---- the location name (00586500) -----------------------------------------
+
+    /// A C string in game memory.
+    fn cstring(e: &mut Engine, text: &str) -> u32 {
+        let block = e.mem.alloc(text.len() as u32 + 1);
+        e.mem.set_cstr(block, text.as_bytes());
+        block
+    }
+
+    /// The strings of the location tests: the text of each `BSStringT` object
+    /// by address.
+    type Strings = Rc<RefCell<std::collections::HashMap<u32, String>>>;
+
+    /// Doubles for `BSStringT` (set, text, length, compare) and the empty
+    /// text; `names` is what the text getter of a form part answers.
+    fn install_strings(e: &mut Engine, names: Vec<(u32, &'static str)>) -> Strings {
+        set_word(e, EMPTY_TEXT, 0);
+        let strings: Strings = Rc::default();
+        let read = |e: &Engine, address: u32| -> String {
+            String::from_utf8(e.mem.cstr(address)).unwrap()
+        };
+        let s = strings.clone();
+        e.register_double(BSSTRING_SET, move |e, a| {
+            let text = if a[1] == 0 {
+                String::new()
+            } else {
+                read(e, a[1])
+            };
+            s.borrow_mut().insert(a[0], text);
+            Ret::default()
+        });
+        let s = strings.clone();
+        e.register_double(BSSTRING_TEXT, move |e, a| {
+            let text = s.borrow().get(&a[0]).cloned().unwrap_or_default();
+            ret(cstring(e, &text))
+        });
+        let s = strings.clone();
+        e.register_double(BSSTRING_LENGTH, move |_, a| {
+            ret(s.borrow().get(&a[0]).map_or(0, |t| t.len() as u32))
+        });
+        let s = strings.clone();
+        e.register_double(BSSTRING_COMPARE, move |e, a| {
+            let mine = s.borrow().get(&a[0]).cloned().unwrap_or_default();
+            ret((!mine.eq_ignore_ascii_case(&read(e, a[1]))) as u32)
+        });
+        e.register_double(TEXTURE_NAME_TEXT, move |e, a| {
+            match names.iter().find(|n| n.0 == a[0]) {
+                Some((_, name)) => ret(cstring(e, name)),
+                None => ret(EMPTY_TEXT),
+            }
+        });
+        strings
+    }
+
+    /// The engine of the location tests: the data handler pointer, the
+    /// statics and the callees every case reaches. Returns the world space,
+    /// the data handler and an output string.
+    fn location_engine() -> (Engine, Ptr<TESWorldSpace>, u32, u32) {
+        let mut e = engine();
+        let handler = e.mem.alloc(0x700);
+        set_word(&mut e, DATA_HANDLER_POINTER, handler);
+        set_word(&mut e, LOCATION_CACHE_WORLD, 0);
+        set_word(&mut e, LOCATION_CACHE_GUARD, 0);
+        for addr in [
+            BSSTRING_CONSTRUCT,
+            LOCAL_STRUCT_CONSTRUCT,
+            REGION_POINT_BUILD,
+        ] {
+            noop(&mut e, addr);
+        }
+        e.register(POINT_EQUAL, |_, _| ret(0));
+        install_lists(&mut e);
+        let w = world(&mut e);
+        let out = e.mem.alloc(8);
+        (e, w, handler, out)
+    }
+
+    /// Calls the location name function for the point (`x`, 20, 30).
+    fn location_name(e: &mut Engine, w: Ptr<TESWorldSpace>, out: u32, x: f32) -> bool {
+        e.call(0x0058_6500, &args![w, out, x, 20.0f32, 30.0f32])
+            .bool()
+    }
+
+    /// Makes the data handler find `cell` for every point and the region
+    /// manager give `region_data` (0 for none) for the cell's region list.
+    fn location_cell(e: &mut Engine, cell: u32, region_data: u32) {
+        e.register_double(DATA_HANDLER_CELL_FROM_COORD, move |_, _| ret(cell));
+        e.register(CELL_GET_REGION_LIST, |_, _| ret(0x1000));
+        e.register(REGION_LIST_GET_DERIVED_DATA, |_, _| ret(0x2000));
+        let manager = fake_object(e, 0x40, &[(0x10, 0x7000_0010)]);
+        e.register_double(0x7000_0010, move |_, a| {
+            ret(if a[1] == 0x2000 { region_data } else { 0 })
+        });
+        e.register_double(DATA_HANDLER_REGION_MANAGER, move |_, _| ret(manager));
+    }
+
+    #[test]
+    fn location_name_does_nothing_without_a_data_handler() {
+        let (mut e, w, _, out) = location_engine();
+        set_word(&mut e, DATA_HANDLER_POINTER, 0);
+        let strings = install_strings(&mut e, vec![]);
+        assert!(!location_name(&mut e, w, out, 10.0));
+        assert!(strings.borrow().is_empty());
+        // The statics were still initialized.
+        assert_eq!(e.global::<u32>(LOCATION_CACHE_GUARD), 3);
+    }
+
+    #[test]
+    fn location_name_from_the_region_data_of_the_cell() {
+        let (mut e, w, _, out) = location_engine();
+        let strings = install_strings(&mut e, vec![]);
+        let cell = e.mem.alloc(0x100);
+        // The region data's slot +0x28 writes the name.
+        let region_data = fake_object(&mut e, 0x10, &[(0x28, 0x7000_0028)]);
+        let s = strings.clone();
+        e.register_double(0x7000_0028, move |_, a| {
+            s.borrow_mut().insert(a[1], "Mojave".to_string());
+            Ret::default()
+        });
+        location_cell(&mut e, cell, region_data);
+        logged(&mut e);
+        assert!(location_name(&mut e, w, out, 10.0));
+        assert_eq!(strings.borrow()[&out], "Mojave");
+        // The answer is cached with the world space and the point.
+        assert_eq!(e.global::<u32>(LOCATION_CACHE_WORLD), w.addr());
+        assert_eq!(e.global::<f32>(LOCATION_CACHE_POINT), 10.0);
+        assert_eq!(e.global::<f32>(LOCATION_CACHE_POINT + 4), 20.0);
+        assert_eq!(e.global::<f32>(LOCATION_CACHE_POINT + 8), 30.0);
+        assert_eq!(strings.borrow()[&LOCATION_CACHE_TEXT], "Mojave");
+        // The region data was asked with kind 4 for the point and the world.
+        let derived = calls_to(&e, REGION_LIST_GET_DERIVED_DATA);
+        assert_eq!(derived.len(), 1);
+        assert_eq!(derived[0][1], 4);
+        assert_eq!(derived[0][3], w.addr());
+        // The same place again: the cached text, and the answer is "no
+        // change".
+        e.register(POINT_EQUAL, |_, _| ret(1));
+        strings.borrow_mut().remove(&out);
+        assert!(!location_name(&mut e, w, out, 10.0));
+        assert_eq!(strings.borrow()[&out], "Mojave");
+        // Another point of the same world space is computed again; the text
+        // is the same, so no change.
+        e.register(POINT_EQUAL, |_, _| ret(0));
+        assert!(!location_name(&mut e, w, out, 11.0));
+        assert_eq!(e.global::<f32>(LOCATION_CACHE_POINT), 11.0);
+        // Another world space: the cached text is emptied first, so the same
+        // name counts as a change.
+        let other = world(&mut e);
+        assert!(location_name(&mut e, other, out, 11.0));
+        assert_eq!(e.global::<u32>(LOCATION_CACHE_WORLD), other.addr());
+    }
+
+    #[test]
+    fn location_name_uses_the_name_of_the_cell_without_region_data() {
+        let (mut e, w, _, out) = location_engine();
+        let cell = e.mem.alloc(0x100);
+        let strings = install_strings(&mut e, vec![(cell + 0x18, "Goodsprings")]);
+        location_cell(&mut e, cell, 0);
+        assert!(location_name(&mut e, w, out, 1.0));
+        assert_eq!(strings.borrow()[&out], "Goodsprings");
+    }
+
+    #[test]
+    fn location_name_falls_back_to_the_world_space_name() {
+        let (mut e, w, _, out) = location_engine();
+        let cell = e.mem.alloc(0x100);
+        let names = vec![(w.addr() + 0x18, "Mojave Wasteland")];
+        let strings = install_strings(&mut e, names);
+        location_cell(&mut e, cell, 0);
+        assert!(location_name(&mut e, w, out, 2.0));
+        assert_eq!(strings.borrow()[&out], "Mojave Wasteland");
+    }
+
+    #[test]
+    fn location_name_uses_the_default_text_when_nothing_has_a_name() {
+        let (mut e, w, _, out) = location_engine();
+        let strings = install_strings(&mut e, vec![]);
+        e.register(DATA_HANDLER_CELL_FROM_COORD, |_, _| ret(0));
+        e.register(DATA_HANDLER_LIST_1D8, |_, _| ret(0));
+        let default = cstring(&mut e, "Wasteland");
+        e.register_double(DEFAULT_LOCATION_TEXT, move |_, _| ret(default));
+        assert!(location_name(&mut e, w, out, 1.0));
+        assert_eq!(strings.borrow()[&out], "Wasteland");
+        assert_eq!(strings.borrow()[&LOCATION_CACHE_TEXT], "Wasteland");
+    }
+
+    /// A region entry for the no-cell scan: +8 flags, +0x18 the region
+    /// data, +0x1c the list of areas, +0x20 the world space.
+    fn region_entry(e: &mut Engine, world: u32, area: u32, region_data: u32, flags: u32) -> u32 {
+        let entry = e.mem.alloc(0x40);
+        e.mem.set_u32(entry + 8, flags);
+        e.mem.set_u32(entry + 0x18, region_data);
+        let areas = make_list(e, &[area]);
+        e.mem.set_u32(entry + 0x1c, areas);
+        e.mem.set_u32(entry + 0x20, world);
+        entry
+    }
+
+    /// A region data: +4 the "preferred" byte, +6 the priority; its slot
+    /// +0x28 is `0x7000_0028`.
+    fn region_data(e: &mut Engine, preferred: u8, priority: u8) -> u32 {
+        let data = fake_object(e, 0x10, &[(0x28, 0x7000_0028)]);
+        e.mem.set_u8(data + 4, preferred);
+        e.mem.set_u8(data + 6, priority);
+        data
+    }
+
+    /// Sets up the scan for a point with no cell over `entries` (region
+    /// entries), the names being what each region data writes; returns the
+    /// order in which the region data wrote their names.
+    fn scan_engine(
+        e: &mut Engine,
+        strings: &Strings,
+        handler: u32,
+        entries: &[u32],
+        names: Vec<(u32, &'static str)>,
+    ) -> Rc<RefCell<Vec<u32>>> {
+        e.register(DATA_HANDLER_CELL_FROM_COORD, |_, _| ret(0));
+        // The handler's +0x1d8 word points at the list holder; its nodes
+        // start at +4.
+        let holder = e.mem.alloc(0x10);
+        let head = make_list(e, entries);
+        embed_list(e, holder + 4, head);
+        e.mem.set_u32(handler + 0x1d8, holder);
+        e.register(DATA_HANDLER_LIST_1D8, |e, a| ret(e.mem.u32(a[0] + 0x1d8)));
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let (s, w) = (strings.clone(), written.clone());
+        e.register_double(0x7000_0028, move |_, a| {
+            let name = names.iter().find(|n| n.0 == a[0]).unwrap().1;
+            s.borrow_mut().insert(a[1], name.to_string());
+            w.borrow_mut().push(a[0]);
+            Ret::default()
+        });
+        e.register(REGION_ENTRY_FLAG_20, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x20 != 0) as u32)
+        });
+        e.register(REFERENCE_BASE_FORM, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(REGION_ENTRY_LIST, |e, a| ret(e.mem.u32(a[0] + 0x1c)));
+        e.register(REGION_ENTRY_WORD_18, |e, a| ret(e.mem.u32(a[0] + 0x18)));
+        e.register(REGION_DATA_LIST_FIND, |_, a| ret(a[0]));
+        // An area item with the low bit set contains the point.
+        e.register(REGION_POINT_IN_ENTRY, |_, a| ret(a[0] & 1));
+        e.register(REGION_DATA_BYTE_4, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(REGION_DATA_BYTE_6, |e, a| ret(e.mem.u8(a[0] + 6) as u32));
+        let manager = fake_object(e, 0x40, &[(0x10, 0x7000_0010)]);
+        e.register(0x7000_0010, |_, a| ret(a[1]));
+        e.register_double(DATA_HANDLER_REGION_MANAGER, move |_, _| ret(manager));
+        e.register(DEFAULT_LOCATION_TEXT, |_, _| ret(0));
+        written
+    }
+
+    #[test]
+    fn location_name_without_a_cell_takes_the_best_region_data() {
+        let (mut e, w, handler, out) = location_engine();
+        let strings = install_strings(&mut e, vec![]);
+        let low = region_data(&mut e, 0, 5);
+        let high = region_data(&mut e, 0, 9);
+        let preferred = region_data(&mut e, 1, 2);
+        let other_world = region_data(&mut e, 1, 200);
+        let outside = region_data(&mut e, 1, 100);
+        let hidden = region_data(&mut e, 1, 100);
+        let me = w.addr();
+        let entries = [
+            region_entry(&mut e, me, 1, low, 0),
+            region_entry(&mut e, me, 1, high, 0),
+            region_entry(&mut e, me, 1, preferred, 0),
+            region_entry(&mut e, 0x9999, 1, other_world, 0),
+            region_entry(&mut e, me, 2, outside, 0),
+            region_entry(&mut e, me, 1, hidden, 0x20),
+        ];
+        let names = vec![
+            (low, "low"),
+            (high, "high"),
+            (preferred, "preferred"),
+            (other_world, "other world"),
+            (outside, "outside"),
+            (hidden, "hidden"),
+        ];
+        let written = scan_engine(&mut e, &strings, handler, &entries, names);
+        // `low` is taken first, `high` beats it by priority, `preferred`
+        // (the flag byte) beats both. `other_world` is another world space's,
+        // `outside` does not hold the point, `hidden` has flag 0x20.
+        assert!(location_name(&mut e, w, out, 1.0));
+        assert_eq!(*written.borrow(), vec![low, high, preferred]);
+        assert_eq!(strings.borrow()[&out], "preferred");
+    }
+
+    #[test]
+    fn location_name_keeps_a_preferred_region_against_later_ones() {
+        let (mut e, w, handler, out) = location_engine();
+        let strings = install_strings(&mut e, vec![]);
+        let first = region_data(&mut e, 1, 50);
+        let weaker = region_data(&mut e, 1, 10);
+        let plain = region_data(&mut e, 0, 255);
+        let stronger = region_data(&mut e, 1, 60);
+        let me = w.addr();
+        let entries = [
+            region_entry(&mut e, me, 1, first, 0),
+            region_entry(&mut e, me, 1, weaker, 0),
+            region_entry(&mut e, me, 1, plain, 0),
+            region_entry(&mut e, me, 1, stronger, 0),
+        ];
+        let names = vec![
+            (first, "first"),
+            (weaker, "weaker"),
+            (plain, "plain"),
+            (stronger, "stronger"),
+        ];
+        let written = scan_engine(&mut e, &strings, handler, &entries, names);
+        // `weaker` and `plain` lose to `first`; `stronger` wins.
+        assert!(location_name(&mut e, w, out, 1.0));
+        assert_eq!(*written.borrow(), vec![first, stronger]);
+        assert_eq!(strings.borrow()[&out], "stronger");
+    }
+
+    // ---- the grass of an area (00586990) --------------------------------------
+
+    /// A fake object of the grass test (a region data entry or a grass form)
+    /// with the slots of both. Fields: +0x10 the object slot 4 returns, +0x14
+    /// slot 0xc, +0x18 the weight (slot 0x18), +0x1c the byte of slot 0x180,
+    /// +0x20 to +0x2c the floats of slots 0x1b0, 0x1b8, 0x1c0, 0x1c8, +0x30
+    /// to +0x32 the bytes of slots 0x1d0, 0x1d8, 0x1e0, +0x0c the form ID.
+    fn grass_object(e: &mut Engine) -> u32 {
+        fake_object(
+            e,
+            0x60,
+            &[
+                (4, 0x7100_0004),
+                (0xc, 0x7100_000c),
+                (0x18, 0x7100_0018),
+                (0x180, 0x7100_0180),
+                (0x1b0, 0x7100_01b0),
+                (0x1b8, 0x7100_01b8),
+                (0x1c0, 0x7100_01c0),
+                (0x1c8, 0x7100_01c8),
+                (0x1d0, 0x7100_01d0),
+                (0x1d8, 0x7100_01d8),
+                (0x1e0, 0x7100_01e0),
+            ],
+        )
+    }
+
+    fn install_grass_slots(e: &mut Engine) {
+        e.register(0x7100_0004, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        e.register(0x7100_000c, |e, a| ret(e.mem.u32(a[0] + 0x14)));
+        // The weight: the stored value at the centre (flag 0); the x
+        // coordinate of the sample point plus the stored value at a sample
+        // point (flag 1).
+        e.register(0x7100_0018, |e, a| {
+            let stored = e.mem.f32(a[0] + 0x18);
+            if a[3] == 1 {
+                ret_float(e.mem.f32(a[1]) + stored)
+            } else {
+                ret_float(stored)
+            }
+        });
+        e.register(0x7100_0180, |e, a| ret(e.mem.u8(a[0] + 0x1c) as u32));
+        e.register(0x7100_01b0, |e, a| ret_float(e.mem.f32(a[0] + 0x20)));
+        e.register(0x7100_01b8, |e, a| ret_float(e.mem.f32(a[0] + 0x24)));
+        e.register(0x7100_01c0, |e, a| ret_float(e.mem.f32(a[0] + 0x28)));
+        e.register(0x7100_01c8, |e, a| ret_float(e.mem.f32(a[0] + 0x2c)));
+        e.register(0x7100_01d0, |e, a| ret(e.mem.u8(a[0] + 0x30) as u32));
+        e.register(0x7100_01d8, |e, a| ret(e.mem.u8(a[0] + 0x31) as u32));
+        e.register(0x7100_01e0, |e, a| ret(e.mem.u8(a[0] + 0x32) as u32));
+    }
+
+    /// A grass form: its form ID, the byte of slot 0x180 (the weight in
+    /// percent), the four floats and three bytes of the other slots.
+    fn grass_form(
+        e: &mut Engine,
+        form_id: u32,
+        percent: u8,
+        floats: [f32; 4],
+        bytes: [u8; 3],
+    ) -> u32 {
+        let form = grass_object(e);
+        e.mem.set_u32(form + 0xc, form_id);
+        e.mem.set_u8(form + 0x1c, percent);
+        for (i, value) in floats.iter().enumerate() {
+            e.mem.set_f32(form + 0x20 + i as u32 * 4, *value);
+        }
+        for (i, value) in bytes.iter().enumerate() {
+            e.mem.set_u8(form + 0x30 + i as u32, *value);
+        }
+        form
+    }
+
+    /// A region data entry pointing at `form`, with the result of slot 0xc
+    /// and the weight at the centre.
+    fn grass_entry(e: &mut Engine, form: u32, slot_c: u32, weight: f32) -> u32 {
+        let entry = grass_object(e);
+        e.mem.set_u32(entry + 0x10, form);
+        e.mem.set_u32(entry + 0x14, slot_c);
+        e.mem.set_f32(entry + 0x18, weight);
+        entry
+    }
+
+    /// The engine of the grass tests: the data handler, a cell and region
+    /// data whose slot +0x28 gives the list at `holder + 4` (set it with
+    /// `set_grass_entries`). Returns the world space, the handler and the
+    /// holder.
+    fn grass_engine() -> (Engine, Ptr<TESWorldSpace>, u32, u32) {
+        let mut e = engine();
+        let handler = e.mem.alloc(0x700);
+        set_word(&mut e, DATA_HANDLER_POINTER, handler);
+        set_double(&mut e, DOUBLE_TWO, 2.0);
+        set_double(&mut e, DOUBLE_ZERO, 0.0);
+        set_double(&mut e, DOUBLE_HUNDRED, 100.0);
+        install_grass_slots(&mut e);
+        install_lists(&mut e);
+        e.register(LOCAL_STRUCT_CONSTRUCT, |_, a| ret(a[0]));
+        e.register(VECTOR_CONSTRUCTOR, |_, _| Ret::default());
+        e.register(DATA_HANDLER_CELL_FROM_COORD, |_, _| ret(0x5000));
+        e.register(CELL_GET_REGION_LIST, |_, _| ret(0x1000));
+        e.register(REGION_LIST_GET_DERIVED_DATA, |_, _| ret(0x2000));
+        let holder = e.mem.alloc(0x10);
+        let region_data = fake_object(&mut e, 0x10, &[(0x28, 0x7100_0028)]);
+        e.register_double(0x7100_0028, move |_, _| ret(holder));
+        let manager = fake_object(&mut e, 0x40, &[(0x18, 0x7100_1018)]);
+        e.register_double(0x7100_1018, move |_, _| ret(region_data));
+        e.register_double(DATA_HANDLER_REGION_MANAGER, move |_, _| ret(manager));
+        // The mesh path is "data/meshes/" and the form's address in hex.
+        e.register(FORM_NAME_TEXT, |_, a| ret(a[0]));
+        e.register(SPRINTF_S, |e, a| {
+            let text = format!("data/meshes/{:x}", a[3]);
+            e.mem.set_cstr(a[0], text.as_bytes());
+            ret(text.len() as u32)
+        });
+        e.register(GRASS_SETTING_FLOAT, |_, _| ret_float(0.5));
+        let w = world(&mut e);
+        (e, w, handler, holder)
+    }
+
+    fn set_grass_entries(e: &mut Engine, holder: u32, entries: &[u32]) {
+        let head = make_list(e, entries);
+        embed_list(e, holder + 4, head);
+    }
+
+    #[test]
+    fn grass_does_nothing_without_a_data_handler_or_a_count() {
+        for (handler_set, count) in [(false, 1u32), (true, 0u32)] {
+            let (mut e, w, _, _) = grass_engine();
+            let out = e.mem.alloc(0x100);
+            e.mem.set_u32(out, 0x1234);
+            if !handler_set {
+                set_word(&mut e, DATA_HANDLER_POINTER, 0);
+            }
+            logged(&mut e);
+            e.call(
+                0x0058_6990,
+                &args![w, 0.0f32, 0.0f32, 8192.0f32, 8192.0f32, out, count],
+            );
+            assert_eq!(e.mem.u32(out), 0x1234);
+            assert!(calls_to(&e, DATA_HANDLER_CELL_FROM_COORD).is_empty());
+        }
+    }
+
+    #[test]
+    fn grass_stops_without_a_cell_or_a_region_list() {
+        let (mut e, w, _, _) = grass_engine();
+        let out = e.mem.alloc(0x100);
+        e.mem.set_u32(out, 0x1234);
+        e.register(DATA_HANDLER_CELL_FROM_COORD, |_, _| ret(0));
+        logged(&mut e);
+        e.call(
+            0x0058_6990,
+            &args![w, 0.0f32, 0.0f32, 8192.0f32, 8192.0f32, out, 1u32],
+        );
+        assert_eq!(e.mem.u32(out), 0x1234);
+        assert!(calls_to(&e, REGION_LIST_GET_DERIVED_DATA).is_empty());
+        // A cell without a region list.
+        let (mut e, w, _, _) = grass_engine();
+        let out = e.mem.alloc(0x100);
+        e.mem.set_u32(out, 0x1234);
+        e.register(CELL_GET_REGION_LIST, |_, _| ret(0));
+        logged(&mut e);
+        e.call(
+            0x0058_6990,
+            &args![w, 0.0f32, 0.0f32, 8192.0f32, 8192.0f32, out, 1u32],
+        );
+        assert_eq!(e.mem.u32(out), 0x1234);
+        assert!(calls_to(&e, REGION_LIST_GET_DERIVED_DATA).is_empty());
+    }
+
+    #[test]
+    fn grass_asks_the_cell_in_the_middle_of_the_area() {
+        let (mut e, w, handler, _) = grass_engine();
+        let out = e.mem.alloc(0x100);
+        e.register(DATA_HANDLER_CELL_FROM_COORD, |_, _| ret(0));
+        logged(&mut e);
+        e.call(
+            0x0058_6990,
+            &args![w, 100.0f32, 200.0f32, 300.0f32, 600.0f32, out, 1u32],
+        );
+        assert_eq!(
+            calls_to(&e, DATA_HANDLER_CELL_FROM_COORD),
+            vec![vec![
+                handler,
+                200.0f32.to_bits(),
+                400.0f32.to_bits(),
+                w.addr(),
+                0
+            ]]
+        );
+        // The nine sample points were constructed first.
+        let made = calls_to(&e, VECTOR_CONSTRUCTOR);
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0][1..], [0xC, 9, LOCAL_STRUCT_CONSTRUCT]);
+    }
+
+    #[test]
+    fn grass_with_no_wanted_entry_leaves_the_output_alone() {
+        let (mut e, w, _, holder) = grass_engine();
+        let out = e.mem.alloc(0x100);
+        e.mem.set_u32(out, 0x1234);
+        // One entry with no weight at the centre.
+        let form = grass_form(&mut e, 1, 10, [0.0; 4], [0; 3]);
+        let entry = grass_entry(&mut e, form, 1, 0.0);
+        set_grass_entries(&mut e, holder, &[entry]);
+        e.call(
+            0x0058_6990,
+            &args![w, 0.0f32, 0.0f32, 8192.0f32, 8192.0f32, out, 1u32],
+        );
+        assert_eq!(e.mem.u32(out), 0x1234);
+    }
+
+    #[test]
+    fn grass_fills_the_entries_and_the_weights_of_the_sample_points() {
+        let (mut e, w, _, holder) = grass_engine();
+        let form_a = grass_form(&mut e, 0xAAAA, 50, [1.0, 2.0, 3.0, 4.0], [7, 8, 9]);
+        let form_b = grass_form(&mut e, 0xBBBB, 25, [5.0, 6.0, 7.0, 8.0], [1, 2, 3]);
+        let form_off = grass_form(&mut e, 0xCCCC, 0, [0.0; 4], [0; 3]);
+        let form_c = grass_form(&mut e, 0xDDDD, 10, [0.0; 4], [0; 3]);
+        let entries = [
+            grass_entry(&mut e, form_b, 0, 0.25),
+            grass_entry(&mut e, form_a, 1, 0.5),
+            grass_entry(&mut e, form_off, 1, 0.5), // slot 0x180 is 0
+            grass_entry(&mut e, form_c, 1, 0.0),   // no weight at the centre
+            grass_entry(&mut e, 0, 1, 0.5),        // no form
+        ];
+        set_grass_entries(&mut e, holder, &entries);
+        let out = e.mem.alloc(0x44 * 3);
+        // The third output entry is stale: its path is freed and cleared.
+        let stale = e.mem.alloc(8);
+        e.mem.set_u32(out + 0x44 * 2, stale);
+        e.mem.write(out + 0x44 * 2 + 0x20, &[0xff; 0x24]);
+        e.call(
+            0x0058_6990,
+            &args![w, 0.0f32, 0.0f32, 8192.0f32, 8192.0f32, out, 3u32],
+        );
+        let path = |e: &Engine, at: u32| String::from_utf8(e.mem.cstr(e.mem.u32(at))).unwrap();
+        // The list is made by adding at the head: the entry of the first
+        // pass (slot 0xc non-zero: form A) is second, the entry of the
+        // second pass (form B) first.
+        let first = out;
+        assert_eq!(path(&e, first), format!("data/meshes/{:x}", form_b));
+        assert_eq!(e.mem.u32(first + 4), 0xBBBB);
+        assert_eq!(e.mem.f32(first + 8), 5.0);
+        assert_eq!(e.mem.f32(first + 0xc), 6.0);
+        assert_eq!(e.mem.f32(first + 0x10), 7.0);
+        assert_eq!(e.mem.f32(first + 0x18), 8.0);
+        assert_eq!(e.mem.u8(first + 0x1c), 1);
+        assert_eq!(e.mem.u8(first + 0x1d), 2);
+        assert_eq!(e.mem.u8(first + 0x1e), 3);
+        assert_eq!(e.mem.f32(first + 0x14), 0.5);
+        let second = out + 0x44;
+        assert_eq!(path(&e, second), format!("data/meshes/{:x}", form_a));
+        assert_eq!(e.mem.u32(second + 4), 0xAAAA);
+        assert_eq!(e.mem.f32(second + 8), 1.0);
+        assert_eq!(e.mem.u8(second + 0x1e), 9);
+        // The weights at the nine points: x of the point plus the stored
+        // weight; the points are 0, 4096, 8192 along x.
+        for sample in 0..9u32 {
+            let x = (sample % 3) as f32 * 4096.0;
+            assert_eq!(e.mem.f32(first + 0x20 + sample * 4), x + 0.25, "{sample}");
+            assert_eq!(e.mem.f32(second + 0x20 + sample * 4), x + 0.5, "{sample}");
+        }
+        // The third entry has nothing: no path, the weights cleared.
+        let third = out + 0x44 * 2;
+        assert_eq!(e.mem.u32(third), 0);
+        assert_eq!(e.mem.bytes(third + 0x20, 0x24), vec![0; 0x24]);
+    }
+
+    #[test]
+    fn grass_weights_use_the_nine_points_of_the_area() {
+        let (mut e, w, _, holder) = grass_engine();
+        let form = grass_form(&mut e, 1, 100, [0.0; 4], [0; 3]);
+        let entry = grass_entry(&mut e, form, 1, 0.0625);
+        set_grass_entries(&mut e, holder, &[entry]);
+        let out = e.mem.alloc(0x44);
+        // The y coordinates differ: the area is 100..300 by 10..90.
+        e.call(
+            0x0058_6990,
+            &args![w, 100.0f32, 10.0f32, 300.0f32, 90.0f32, out, 1u32],
+        );
+        for sample in 0..9u32 {
+            let x = 100.0 + (sample % 3) as f32 * 100.0;
+            assert_eq!(e.mem.f32(out + 0x20 + sample * 4), x + 0.0625, "{sample}");
+        }
+    }
+
+    // ---- cell keys and lookups ------------------------------------------------
+
+    #[test]
+    fn cell_key_packs_the_coordinates() {
+        let mut e = engine();
+        assert_eq!(e.call(0x0058_7410, &args![3i16, -2i16]).u32(), 0x0003_fffe);
+        assert_eq!(e.call(0x0058_7410, &args![-1i16, 0i16]).u32(), 0xffff_0000);
+        assert_eq!(
+            e.call(0x0058_7410, &args![0x7fffi16, -0x8000i16]).u32(),
+            0x7fff_8000
+        );
+    }
+
+    #[test]
+    fn cell_key_splits_into_the_coordinates() {
+        let mut e = engine();
+        let out = e.mem.alloc(8);
+        e.call(0x0058_7520, &args![0xfffe_0007u32, out, out + 4]);
+        assert_eq!(e.mem.u16(out), 0xfffe);
+        assert_eq!(e.mem.u16(out + 4), 7);
+    }
+
+    #[test]
+    fn key_for_a_world_coordinate_rounds_and_shifts() {
+        let mut e = engine();
+        install_float_helpers(&mut e);
+        let point = e.mem.alloc(12);
+        for (x, y, expected) in [
+            (4096.0f32 * 3.0 + 1.0, -8192.0f32, key(3, -2)),
+            (0.0, 0.0, key(0, 0)),
+            (-1.0, 4095.0, key(-1, 0)),
+            (4095.6, 4096.4, key(1, 1)),
+        ] {
+            e.mem.set_f32(point, x);
+            e.mem.set_f32(point + 4, y);
+            e.mem.set_f32(point + 8, 5.0);
+            assert_eq!(
+                e.call(0x0058_7440, &args![point]).u32(),
+                expected,
+                "{x} {y}"
+            );
+        }
+    }
+
+    #[test]
+    fn key_for_a_world_coordinate_refuses_non_numbers() {
+        let mut e = engine();
+        install_float_helpers(&mut e);
+        let point = e.mem.alloc(12);
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for slot in 0..3 {
+                for i in 0..3 {
+                    e.mem.set_f32(point + i * 4, 1.0);
+                }
+                e.mem.set_f32(point + slot * 4, bad);
+                assert_eq!(e.call(0x0058_7440, &args![point]).u32(), 0x7fff_7fff);
+            }
+        }
+    }
+
+    /// A world space whose cell map holds `cells` (x, y, cell).
+    fn world_with_cells(
+        e: &mut Engine,
+        cells: &[(i16, i16, u32)],
+    ) -> (Ptr<TESWorldSpace>, MapTable) {
+        let table = install_maps(e);
+        let w = world(e);
+        let map = e.mem.alloc(0x10);
+        e.set(w, TESWorldSpace::pCellMap, Ptr::new(map));
+        for (x, y, cell) in cells {
+            table.borrow_mut().push((map, key(*x, *y), *cell));
+        }
+        (w, table)
+    }
+
+    #[test]
+    fn cell_from_cell_coord_finds_cells_in_range() {
+        let mut e = engine();
+        let (w, _) = world_with_cells(&mut e, &[(3, -2, 0xCE11), (-0x8000, 0x7fff, 0xED6E)]);
+        noop(&mut e, LOG);
+        assert_eq!(e.call(0x0058_75a0, &args![w, 3u32, -2i32]).u32(), 0xCE11);
+        assert_eq!(e.call(0x0058_75a0, &args![w, 4u32, -2i32]).u32(), 0);
+        assert_eq!(
+            e.call(0x0058_75a0, &args![w, -0x8000i32, 0x7fffi32]).u32(),
+            0xED6E
+        );
+    }
+
+    #[test]
+    fn cell_from_cell_coord_logs_and_refuses_coordinates_out_of_range() {
+        let mut e = engine();
+        let (w, _) = world_with_cells(&mut e, &[]);
+        noop(&mut e, LOG);
+        logged(&mut e);
+        for (x, y) in [(0x8000, 0), (0, 0x8000), (-0x8001, 0), (0, -0x8001)] {
+            assert_eq!(e.call(0x0058_75a0, &args![w, x, y]).u32(), 0);
+        }
+        let logs = calls_to(&e, LOG);
+        assert_eq!(logs.len(), 4);
+        assert_eq!(logs[0], vec![MSG_INVALID_CELL_COORD, 0xffff_8000, 0x7fff]);
+        // The map was not asked.
+        assert!(calls_to(&e, MAP_GET).is_empty());
+    }
+
+    #[test]
+    fn cell_from_world_coord_converts_the_point_to_cell_coordinates() {
+        let mut e = engine();
+        install_float_helpers(&mut e);
+        let (w, _) = world_with_cells(&mut e, &[(1, -1, 0xCE11)]);
+        let point = e.mem.alloc(12);
+        e.mem.set_f32(point, 5000.0);
+        e.mem.set_f32(point + 4, -100.0);
+        assert_eq!(e.call(0x0058_7550, &args![w, point]).u32(), 0xCE11);
+        e.mem.set_f32(point, 9000.0);
+        assert_eq!(e.call(0x0058_7550, &args![w, point]).u32(), 0);
+    }
+
+    #[test]
+    fn cell_from_key_reads_the_cell_map() {
+        let mut e = engine();
+        let (w, _) = world_with_cells(&mut e, &[(5, 6, 0xCE11)]);
+        assert_eq!(e.call(0x0058_7630, &args![w, key(5, 6)]).u32(), 0xCE11);
+        assert_eq!(e.call(0x0058_7630, &args![w, key(6, 5)]).u32(), 0);
+    }
+
+    // ---- adding and releasing cells ---------------------------------------------
+
+    /// A cell for the add/release tests: +0x24 flag bits, +0x8 the form
+    /// flags, +0x80 x and +0x84 y; its slot +0x130 answers `0xED17`.
+    fn fake_cell(e: &mut Engine, x: i32, y: i32, flags24: u8, form_flags: u32) -> u32 {
+        let cell = fake_object(
+            e,
+            0x100,
+            &[(SLOT_EDITOR_ID, 0x7300_0130), (0x10, 0x7300_0010)],
+        );
+        e.mem.set_u8(cell + 0x24, flags24);
+        e.mem.set_u32(cell + 8, form_flags);
+        e.mem.set_i32(cell + 0x80, x);
+        e.mem.set_i32(cell + 0x84, y);
+        cell
+    }
+
+    fn install_cell_functions(e: &mut Engine) {
+        e.register(CELL_FLAG_24_BIT_0, |e, a| {
+            ret((e.mem.u8(a[0] + 0x24) & 1) as u32)
+        });
+        e.register(FORM_FLAG_400, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x400 != 0) as u32)
+        });
+        e.register(FORM_FLAG_4000, |e, a| {
+            ret((e.mem.u32(a[0] + 8) & 0x4000 != 0) as u32)
+        });
+        e.register(CELL_GET_DATA_X, |e, a| ret(e.mem.u32(a[0] + 0x80)));
+        e.register(CELL_GET_DATA_Y, |e, a| ret(e.mem.u32(a[0] + 0x84)));
+        e.register(0x7300_0130, |_, a| ret(a[0] + 0x90));
+    }
+
+    #[test]
+    fn add_cell_puts_an_exterior_cell_in_the_map() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        let map = e.get(w, TESWorldSpace::pCellMap).addr();
+        noop(&mut e, CELL_SET_WORLD_SPACE);
+        logged(&mut e);
+        let cell = fake_cell(&mut e, 4, -5, 0, 0);
+        assert!(e.call(0x0058_7670, &args![w, cell]).bool());
+        assert_eq!(*table.borrow(), vec![(map, key(4, -5), cell)]);
+        assert_eq!(
+            calls_to(&e, CELL_SET_WORLD_SPACE),
+            vec![vec![cell, w.addr()]]
+        );
+    }
+
+    #[test]
+    fn add_cell_refuses_nothing_flagged_or_taken() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        noop(&mut e, CELL_SET_WORLD_SPACE);
+        noop(&mut e, LOG);
+        // No cell.
+        assert!(!e.call(0x0058_7670, &args![w, 0u32]).bool());
+        // A cell with bit 0 of the byte at +0x24.
+        let flagged = fake_cell(&mut e, 1, 1, 1, 0);
+        assert!(!e.call(0x0058_7670, &args![w, flagged]).bool());
+        assert!(table.borrow().is_empty());
+        // The key is taken: logged with the form ID, name and coordinates.
+        let first = fake_cell(&mut e, 7, 8, 0, 0);
+        e.mem.set_u32(first + 0xC, 0x00AB_CDEF);
+        assert!(e.call(0x0058_7670, &args![w, first]).bool());
+        let second = fake_cell(&mut e, 7, 8, 0, 0);
+        logged(&mut e);
+        assert!(!e.call(0x0058_7670, &args![w, second]).bool());
+        assert_eq!(
+            calls_to(&e, LOG),
+            vec![vec![MSG_CELL_EXISTS, 0x00AB_CDEF, first + 0x90, 7, 8]]
+        );
+        assert_eq!(table.borrow().len(), 1);
+        assert!(calls_to(&e, CELL_SET_WORLD_SPACE).is_empty());
+    }
+
+    #[test]
+    fn add_cell_makes_a_persistent_cell_the_persistent_cell_once() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        noop(&mut e, CELL_SET_WORLD_SPACE);
+        let persistent = fake_cell(&mut e, 0, 0, 0, 0x400);
+        assert!(e.call(0x0058_7670, &args![w, persistent]).bool());
+        assert_eq!(e.get(w, TESWorldSpace::pPersistentCell).addr(), persistent);
+        // It is not in the map.
+        assert!(table.borrow().is_empty());
+        let another = fake_cell(&mut e, 0, 0, 0, 0x400);
+        logged(&mut e);
+        assert!(!e.call(0x0058_7670, &args![w, another]).bool());
+        assert_eq!(e.get(w, TESWorldSpace::pPersistentCell).addr(), persistent);
+        assert!(calls_to(&e, CELL_SET_WORLD_SPACE).is_empty());
+    }
+
+    #[test]
+    fn release_cell_removes_only_the_stored_cell() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        noop(&mut e, CELL_SET_WORLD_SPACE);
+        let cell = fake_cell(&mut e, 2, 3, 0, 0);
+        let impostor = fake_cell(&mut e, 2, 3, 0, 0);
+        let map = e.get(w, TESWorldSpace::pCellMap).addr();
+        table.borrow_mut().push((map, key(2, 3), cell));
+        logged(&mut e);
+        // Not the cell stored under the key: nothing happens.
+        e.call(0x0058_7760, &args![w, impostor]);
+        assert_eq!(table.borrow().len(), 1);
+        assert!(calls_to(&e, CELL_SET_WORLD_SPACE).is_empty());
+        // Null and flagged cells: nothing.
+        e.call(0x0058_7760, &args![w, 0u32]);
+        let flagged = fake_cell(&mut e, 2, 3, 1, 0);
+        e.call(0x0058_7760, &args![w, flagged]);
+        assert_eq!(table.borrow().len(), 1);
+        // The stored one.
+        e.call(0x0058_7760, &args![w, cell]);
+        assert!(table.borrow().is_empty());
+        assert_eq!(calls_to(&e, CELL_SET_WORLD_SPACE), vec![vec![cell, 0]]);
+    }
+
+    #[test]
+    fn deleting_all_cells_calls_every_destructor_and_empties_the_map() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        let map = e.get(w, TESWorldSpace::pCellMap).addr();
+        e.register(0x7300_0010, |_, _| Ret::default());
+        let a = fake_cell(&mut e, 0, 0, 0, 0);
+        let b = fake_cell(&mut e, 1, 0, 0, 0);
+        table
+            .borrow_mut()
+            .extend([(map, 1, a), (map, 2, b), (map, 3, 0)]);
+        logged(&mut e);
+        e.call(0x0058_77e0, &args![w]);
+        let destroyed: Vec<_> = calls_to(&e, 0x7300_0010);
+        assert_eq!(destroyed, vec![vec![a, 1], vec![b, 1]]);
+        assert!(table.borrow().is_empty());
+        // With form flag 0x4000 the cells are left alone, the map is emptied.
+        table.borrow_mut().extend([(map, 1, a)]);
+        e.mem.set_u32(w.addr() + 8, 0x4000);
+        logged(&mut e);
+        e.call(0x0058_77e0, &args![w]);
+        assert!(calls_to(&e, 0x7300_0010).is_empty());
+        assert!(table.borrow().is_empty());
+    }
+
+    #[test]
+    fn overlapped_multibound_list_of_a_cell() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let table = install_maps(&mut e);
+        let w = world(&mut e);
+        let cell = fake_cell(&mut e, 4, 9, 0, 0);
+        // No map yet.
+        assert_eq!(e.call(0x0058_7870, &args![w, cell]).u32(), 0);
+        let map = e.mem.alloc(0x10);
+        e.set(w, TESWorldSpace::pOverlappedMultiboundMap, Ptr::new(map));
+        assert_eq!(e.call(0x0058_7870, &args![w, cell]).u32(), 0);
+        table.borrow_mut().push((map, key(4, 9), 0xA157));
+        assert_eq!(e.call(0x0058_7870, &args![w, cell]).u32(), 0xA157);
+    }
+
+    // ---- multibound references ----------------------------------------------------
+
+    /// A fake reference with a position (+0x40) its slot +0x1f4 returns the
+    /// address of.
+    fn fake_reference(e: &mut Engine, position: [f32; 3], form_flags: u32) -> u32 {
+        let reference = fake_object(e, 0x80, &[(SLOT_POSITION, 0x7400_01f4)]);
+        for (i, v) in position.iter().enumerate() {
+            e.mem.set_f32(reference + 0x40 + i as u32 * 4, *v);
+        }
+        e.mem.set_u32(reference + 8, form_flags);
+        reference
+    }
+
+    #[test]
+    fn multibound_ref_is_added_to_every_overlapped_cell_but_its_own() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        install_float_helpers(&mut e);
+        let table = install_maps(&mut e);
+        let lists = install_lists(&mut e);
+        e.register(0x7400_01f4, |_, a| ret(a[0] + 0x40));
+        let w = world(&mut e);
+        let reference = fake_reference(&mut e, [5000.0, 5000.0, 0.0], 0);
+        e.register(IS_MULTIBOUND_REF, |_, _| ret(1));
+        let extent = e.mem.alloc(12);
+        e.register_double(REFERENCE_MULTIBOUND_HALF_EXTENT, move |_, _| ret(extent));
+        e.register(MULTIBOUND_RADIUS, |_, _| ret_float(4096.0));
+        // The reference overlaps the cells with x != 0.
+        e.register(MULTIBOUND_INTERSECTS_CELL, |_, a| ret((a[1] != 0) as u32));
+        e.register(LIST_MAP_CONSTRUCT, |_, a| ret(a[0]));
+        logged(&mut e);
+        e.call(0x0058_78d0, &args![w, reference]);
+        // Own cell (1, 1) is never asked; the others are (x 0..2, y 0..2).
+        let asked: Vec<(i32, i32)> = calls_to(&e, MULTIBOUND_INTERSECTS_CELL)
+            .iter()
+            .map(|a| (a[1] as i32, a[2] as i32))
+            .collect();
+        assert_eq!(asked.len(), 8);
+        assert!(!asked.contains(&(1, 1)));
+        assert_eq!(asked[0], (0, 0));
+        assert_eq!(asked[7], (2, 2));
+        // The map was made once with 0x25 buckets.
+        let made = calls_to(&e, LIST_MAP_CONSTRUCT);
+        assert_eq!(made.len(), 1);
+        assert_eq!(made[0][1], MULTIBOUND_MAP_BUCKETS);
+        let map = e.get(w, TESWorldSpace::pOverlappedMultiboundMap).addr();
+        assert_eq!(map, made[0][0]);
+        // One list per overlapped cell: (1,0), (2,0), (2,1), (2,2), (1,2)
+        // and (0,..) not: x != 0 only.
+        let keys: Vec<u32> = table.borrow().iter().map(|m| m.1).collect();
+        assert_eq!(
+            keys,
+            vec![key(1, 0), key(1, 2), key(2, 0), key(2, 1), key(2, 2)]
+        );
+        // Each reference was added to its cell's list.
+        let adds: Vec<_> = lists
+            .borrow()
+            .iter()
+            .filter(|l| l.0 == "add")
+            .cloned()
+            .collect();
+        assert_eq!(adds.len(), 5);
+        assert!(adds.iter().all(|l| l.2 == reference));
+    }
+
+    #[test]
+    fn multibound_ref_ignores_references_that_are_not_multibound() {
+        let mut e = engine();
+        install_lists(&mut e);
+        let w = world(&mut e);
+        e.register(IS_MULTIBOUND_REF, |_, _| ret(0));
+        logged(&mut e);
+        e.call(0x0058_78d0, &args![w, 0x1000u32]);
+        e.call(0x0058_78d0, &args![w, 0u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2 + 1);
+        assert!(e.get(w, TESWorldSpace::pOverlappedMultiboundMap).is_null());
+    }
+
+    #[test]
+    fn multibound_data_is_deleted_with_its_lists() {
+        let mut e = engine();
+        let table = install_maps(&mut e);
+        let lists = install_lists(&mut e);
+        let w = world(&mut e);
+        // Nothing to delete without a map.
+        e.call(0x0058_7bb0, &args![w]);
+        assert!(lists.borrow().is_empty());
+        let map = fake_object(&mut e, 0x10, &[(0, 0x7500_0000)]);
+        e.register(0x7500_0000, |_, _| Ret::default());
+        e.set(w, TESWorldSpace::pOverlappedMultiboundMap, Ptr::new(map));
+        table
+            .borrow_mut()
+            .extend([(map, 1, 0xAA), (map, 2, 0), (map, 3, 0xBB)]);
+        logged(&mut e);
+        e.call(0x0058_7bb0, &args![w]);
+        assert_eq!(
+            *lists.borrow(),
+            vec![
+                ("clear", 0xAA, 0),
+                ("destroy", 0xAA, 1),
+                ("clear", 0xBB, 0),
+                ("destroy", 0xBB, 1)
+            ]
+        );
+        assert!(table.borrow().is_empty());
+        // The map itself is deleted through its destructor (slot 0, flag 1).
+        assert_eq!(calls_to(&e, 0x7500_0000), vec![vec![map, 1]]);
+        assert!(e.get(w, TESWorldSpace::pOverlappedMultiboundMap).is_null());
+    }
+
+    // ---- fixed references and persistent data -------------------------------------
+
+    #[test]
+    fn fixed_ref_depends_on_the_type_of_the_base_form() {
+        let mut e = engine();
+        e.register(REFERENCE_BASE_FORM, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(FORM_TYPE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        let reference = e.mem.alloc(0x40);
+        let base = e.mem.alloc(0x10);
+        e.mem.set_u32(reference + 0x20, base);
+        let fixed = [
+            0xd, 0x15, 0x1b, 0x1c, 0x20, 0x21, 0x25, 0x26, 0x27, 0x2c, 0x2d,
+        ];
+        for form_type in 0..0x80u8 {
+            e.mem.set_u8(base + 4, form_type);
+            assert_eq!(
+                e.call(0x0058_7c80, &args![reference]).bool(),
+                fixed.contains(&form_type),
+                "{form_type:#x}"
+            );
+        }
+        // No reference, or no base form.
+        assert!(!e.call(0x0058_7c80, &args![0u32]).bool());
+        e.mem.set_u32(reference + 0x20, 0);
+        assert!(!e.call(0x0058_7c80, &args![reference]).bool());
+    }
+
+    /// The engine of the persistent reference tests: the lock, the form
+    /// flags, base form types and the lists and maps.
+    fn persistent_engine() -> (Engine, Ptr<TESWorldSpace>, MapTable, ListLog) {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        install_float_helpers(&mut e);
+        let table = install_maps(&mut e);
+        let lists = install_lists(&mut e);
+        e.register(LOCK_ENTER, |_, _| Ret::default());
+        e.register(LOCK_LEAVE, |_, _| Ret::default());
+        e.register(REFERENCE_BASE_FORM, |e, a| ret(e.mem.u32(a[0] + 0x20)));
+        e.register(FORM_TYPE, |e, a| ret(e.mem.u8(a[0] + 4) as u32));
+        e.register(0x7400_01f4, |_, a| ret(a[0] + 0x40));
+        let w = world(&mut e);
+        (e, w, table, lists)
+    }
+
+    /// A persistent reference at `position`; fixed when `fixed`.
+    fn persistent_reference(e: &mut Engine, position: [f32; 3], fixed: bool, flags: u32) -> u32 {
+        let reference = fake_reference(e, position, flags);
+        let base = e.mem.alloc(0x10);
+        e.mem.set_u8(base + 4, if fixed { 0x20 } else { 0x30 });
+        e.mem.set_u32(reference + 0x20, base);
+        reference
+    }
+
+    #[test]
+    fn a_mobile_persistent_ref_goes_in_the_mobile_list() {
+        let (mut e, w, table, lists) = persistent_engine();
+        let reference = persistent_reference(&mut e, [0.0; 3], false, 0);
+        logged(&mut e);
+        e.call(0x0058_7d10, &args![w, reference]);
+        assert_eq!(*lists.borrow(), vec![("add", w.addr() + 0x60, reference)]);
+        assert!(table.borrow().is_empty());
+        // The lock was taken and released around the work.
+        let log = e.call_log.as_ref().unwrap();
+        let enter = log.iter().position(|c| c.0 == LOCK_ENTER).unwrap();
+        let leave = log.iter().position(|c| c.0 == LOCK_LEAVE).unwrap();
+        assert!(enter < leave);
+        assert_eq!(log[enter].1, vec![PERSISTENT_REF_LOCK, 0]);
+        assert_eq!(log[leave].1, vec![PERSISTENT_REF_LOCK]);
+    }
+
+    #[test]
+    fn a_fixed_persistent_ref_goes_in_the_list_of_its_cell() {
+        let (mut e, w, table, lists) = persistent_engine();
+        let reference = persistent_reference(&mut e, [4097.0, -1.0, 0.0], true, 0);
+        e.call(0x0058_7d10, &args![w, reference]);
+        let map = w.addr() + 0x50;
+        let cell_key = key(1, -1);
+        // A list was made and stored under the key, then the reference
+        // added to it.
+        let stored = table.borrow().clone();
+        assert_eq!(stored.len(), 1);
+        assert_eq!((stored[0].0, stored[0].1), (map, cell_key));
+        assert_eq!(*lists.borrow(), vec![("add", stored[0].2, reference)]);
+        // A second reference in the same cell reuses the list.
+        let other = persistent_reference(&mut e, [4100.0, -2.0, 0.0], true, 0);
+        e.call(0x0058_7d10, &args![w, other]);
+        assert_eq!(table.borrow().len(), 1);
+        assert_eq!(lists.borrow()[1], ("add", stored[0].2, other));
+    }
+
+    #[test]
+    fn persistent_refs_with_form_flag_0x4000_are_left_out() {
+        let (mut e, w, table, lists) = persistent_engine();
+        let reference = persistent_reference(&mut e, [0.0; 3], true, 0x4000);
+        logged(&mut e);
+        e.call(0x0058_7d10, &args![w, reference]);
+        e.call(0x0058_7e40, &args![w, reference]);
+        e.call(0x0058_7ff0, &args![w, reference]);
+        e.call(0x0058_7d10, &args![w, 0u32]);
+        assert!(table.borrow().is_empty());
+        assert!(lists.borrow().is_empty());
+        assert!(calls_to(&e, LOCK_ENTER).is_empty());
+    }
+
+    #[test]
+    fn removing_a_persistent_ref_empties_and_deletes_the_cells_list() {
+        let (mut e, w, table, lists) = persistent_engine();
+        let reference = persistent_reference(&mut e, [4097.0, -1.0, 0.0], true, 0);
+        let map = w.addr() + 0x50;
+        // A list holding two references: the map keeps it.
+        let busy = make_list(&mut e, &[0x1111, 0x2222]);
+        table.borrow_mut().push((map, key(1, -1), busy));
+        e.call(0x0058_7e40, &args![w, reference]);
+        assert_eq!(*lists.borrow(), vec![("remove", busy, reference)]);
+        assert_eq!(table.borrow().len(), 1);
+        // An empty list: deleted and the key removed.
+        lists.borrow_mut().clear();
+        let empty = make_list(&mut e, &[]);
+        table.borrow_mut()[0].2 = empty;
+        e.call(0x0058_7e40, &args![w, reference]);
+        assert_eq!(
+            *lists.borrow(),
+            vec![("remove", empty, reference), ("destroy", empty, 1)]
+        );
+        assert!(table.borrow().is_empty());
+        // No list under the key: nothing to remove.
+        lists.borrow_mut().clear();
+        e.call(0x0058_7e40, &args![w, reference]);
+        assert!(lists.borrow().is_empty());
+        // A mobile one is removed from the mobile list.
+        let mobile = persistent_reference(&mut e, [0.0; 3], false, 0);
+        e.call(0x0058_7e40, &args![w, mobile]);
+        assert_eq!(*lists.borrow(), vec![("remove", w.addr() + 0x60, mobile)]);
+    }
+
+    #[test]
+    fn clearing_the_persistent_data_empties_the_lists_and_the_map() {
+        let (mut e, w, table, lists) = persistent_engine();
+        let map = w.addr() + 0x50;
+        table
+            .borrow_mut()
+            .extend([(map, 1, 0xA1), (map, 2, 0), (map, 3, 0xA3)]);
+        logged(&mut e);
+        e.call(0x0058_7f40, &args![w]);
+        assert_eq!(
+            *lists.borrow(),
+            vec![
+                ("clear", w.addr() + 0x60, 0),
+                ("clear", 0xA1, 0),
+                ("destroy", 0xA1, 1),
+                ("clear", 0xA3, 0),
+                ("destroy", 0xA3, 1)
+            ]
+        );
+        assert!(table.borrow().is_empty());
+        assert_eq!(calls_to(&e, LOCK_ENTER).len(), 1);
+        assert_eq!(calls_to(&e, LOCK_LEAVE).len(), 1);
+    }
+
+    // ---- the persistent cell --------------------------------------------------------
+
+    #[test]
+    fn creating_the_persistent_cell_makes_it_once() {
+        let mut e = engine();
+        e.register(CELL_CONSTRUCT, |_, a| ret(a[0]));
+        noop(&mut e, CELL_SET_PERSISTENT);
+        noop(&mut e, CELL_CREATE_DATA);
+        let w = world(&mut e);
+        logged(&mut e);
+        let cell = e.call(0x0058_8070, &args![w]).u32();
+        assert_ne!(cell, 0);
+        assert_eq!(e.get(w, TESWorldSpace::pPersistentCell).addr(), cell);
+        assert_eq!(calls_to(&e, CELL_CONSTRUCT), vec![vec![cell]]);
+        assert_eq!(calls_to(&e, CELL_SET_PERSISTENT), vec![vec![cell, 1]]);
+        assert_eq!(calls_to(&e, CELL_CREATE_DATA), vec![vec![cell]]);
+        // It is a block of the cell's size.
+        assert_eq!(e.mem.block_size(cell), Some(CELL_SIZE));
+        // A second call returns the same cell without making another.
+        assert_eq!(e.call(0x0058_8070, &args![w]).u32(), cell);
+        assert_eq!(calls_to(&e, CELL_CONSTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn adding_a_persistent_ref_creates_the_cell_and_adds_to_it() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        e.register(CELL_CONSTRUCT, |_, a| ret(a[0]));
+        noop(&mut e, CELL_SET_PERSISTENT);
+        noop(&mut e, CELL_CREATE_DATA);
+        noop(&mut e, CELL_ADD_REFERENCE);
+        let w = world(&mut e);
+        let reference = fake_reference(&mut e, [0.0; 3], 0);
+        logged(&mut e);
+        e.call(0x0058_7ff0, &args![w, reference]);
+        let cell = e.get(w, TESWorldSpace::pPersistentCell).addr();
+        assert_ne!(cell, 0);
+        assert_eq!(
+            calls_to(&e, CELL_ADD_REFERENCE),
+            vec![vec![cell, reference, 0]]
+        );
+        // No reference: nothing.
+        logged(&mut e);
+        e.call(0x0058_7ff0, &args![w, 0u32]);
+        assert!(calls_to(&e, CELL_ADD_REFERENCE).is_empty());
+    }
+
+    #[test]
+    fn removing_a_persistent_ref_asks_the_persistent_cell() {
+        let mut e = engine();
+        e.register(GET_PERSISTENT_CELL, |e, a| ret(e.mem.u32(a[0] + 0x34)));
+        noop(&mut e, CELL_REMOVE_REFERENCE);
+        let w = world(&mut e);
+        logged(&mut e);
+        // No cell: nothing.
+        e.call(0x0058_8030, &args![w, 0x7777u32]);
+        assert!(calls_to(&e, CELL_REMOVE_REFERENCE).is_empty());
+        e.set(w, TESWorldSpace::pPersistentCell, Ptr::new(0xCE11));
+        e.call(0x0058_8030, &args![w, 0x7777u32]);
+        assert_eq!(
+            calls_to(&e, CELL_REMOVE_REFERENCE),
+            vec![vec![0xCE11, 0x7777]]
+        );
+        // No reference: nothing more.
+        e.call(0x0058_8030, &args![w, 0u32]);
+        assert_eq!(calls_to(&e, CELL_REMOVE_REFERENCE).len(), 1);
+    }
+
+    #[test]
+    fn the_persistent_cell_is_asked_for_the_world_space_work() {
+        let mut e = engine();
+        e.register(GET_PERSISTENT_CELL, |e, a| ret(e.mem.u32(a[0] + 0x34)));
+        noop(&mut e, CELL_ASSIGN_PERSISTENT_REFS_IN_WORLD);
+        noop(&mut e, CELL_PERSISTENT_ACTION);
+        let w = world(&mut e);
+        logged(&mut e);
+        e.call(0x0058_8120, &args![w]);
+        e.call(0x0058_8270, &args![w, 5u32]);
+        assert!(calls_to(&e, CELL_ASSIGN_PERSISTENT_REFS_IN_WORLD).is_empty());
+        assert!(calls_to(&e, CELL_PERSISTENT_ACTION).is_empty());
+        e.set(w, TESWorldSpace::pPersistentCell, Ptr::new(0xCE11));
+        e.call(0x0058_8120, &args![w]);
+        e.call(0x0058_8270, &args![w, 5u32]);
+        assert_eq!(
+            calls_to(&e, CELL_ASSIGN_PERSISTENT_REFS_IN_WORLD),
+            vec![vec![0xCE11, w.addr()]]
+        );
+        assert_eq!(calls_to(&e, CELL_PERSISTENT_ACTION), vec![vec![0xCE11, 5]]);
+    }
+
+    #[test]
+    fn assigning_persistent_refs_to_a_cell_uses_the_fixed_list_and_the_mobile_ones_inside() {
+        let (mut e, w, table, _) = persistent_engine();
+        noop(&mut e, CELL_ADD_REFERENCE);
+        let cell = fake_cell(&mut e, 3, 4, 0, 0);
+        // The fixed list of the cell: two references.
+        let fixed = make_list(&mut e, &[0xF1, 0xF2]);
+        table.borrow_mut().push((w.addr() + 0x50, key(3, 4), fixed));
+        // Mobile ones: in the cell, outside, and already in the cell.
+        let inside = fake_reference(&mut e, [1.0, 2.0, 0.0], 0);
+        let outside = fake_reference(&mut e, [9.0, 9.0, 0.0], 0);
+        let owned = fake_reference(&mut e, [1.0, 2.0, 0.0], 0);
+        for (r, parent) in [(inside, 0), (outside, 0), (owned, cell)] {
+            e.mem.set_u32(r + 0x40 + 0x20, parent);
+        }
+        e.register(REFERENCE_WORD_40, |e, a| ret(e.mem.u32(a[0] + 0x60)));
+        e.register(CELL_CONTAINS_POINT, |e, a| {
+            ret((e.mem.f32(a[1]) < 5.0) as u32)
+        });
+        let mobile = make_list(&mut e, &[inside, outside, owned]);
+        // The mobile list head lives in the world space.
+        let head = w.addr() + 0x60;
+        e.mem.set_u32(head, e.mem.u32(mobile));
+        e.mem.set_u32(head + 4, e.mem.u32(mobile + 4));
+        logged(&mut e);
+        e.call(0x0058_8150, &args![w, cell]);
+        let added: Vec<u32> = calls_to(&e, CELL_ADD_REFERENCE)
+            .iter()
+            .map(|a| a[1])
+            .collect();
+        assert_eq!(added, vec![0xF1, 0xF2, inside]);
+        assert!(calls_to(&e, CELL_ADD_REFERENCE)
+            .iter()
+            .all(|a| a[0] == cell && a[2] == 0));
+        assert_eq!(calls_to(&e, LOCK_ENTER).len(), 1);
+        assert_eq!(calls_to(&e, LOCK_LEAVE).len(), 1);
+        // No cell: nothing, not even the lock.
+        logged(&mut e);
+        e.call(0x0058_8150, &args![w, 0u32]);
+        assert!(e.call_log.as_ref().unwrap().len() == 1);
+    }
+
+    // ---- lists of world spaces --------------------------------------------------------
+
+    #[test]
+    fn the_persistent_cell_fills_the_lists() {
+        let mut e = engine();
+        e.register(GET_PERSISTENT_CELL, |e, a| ret(e.mem.u32(a[0] + 0x34)));
+        noop(&mut e, CELL_FILL_LIST_FIRST);
+        noop(&mut e, CELL_FILL_LIST_SECOND);
+        let w = world(&mut e);
+        logged(&mut e);
+        // No persistent cell: nothing is asked of it.
+        e.call(0x0058_84e0, &args![w, 0x1111u32]);
+        e.call(0x0058_8520, &args![w, 0x1111u32]);
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 4);
+        e.set(w, TESWorldSpace::pPersistentCell, Ptr::new(0xCE11));
+        // No list: nothing either.
+        e.call(0x0058_84e0, &args![w, 0u32]);
+        e.call(0x0058_8520, &args![w, 0u32]);
+        assert!(calls_to(&e, CELL_FILL_LIST_FIRST).is_empty());
+        assert!(calls_to(&e, CELL_FILL_LIST_SECOND).is_empty());
+        e.call(0x0058_84e0, &args![w, 0x1111u32]);
+        e.call(0x0058_8520, &args![w, 0x2222u32]);
+        assert_eq!(
+            calls_to(&e, CELL_FILL_LIST_FIRST),
+            vec![vec![0xCE11, 0x1111]]
+        );
+        assert_eq!(
+            calls_to(&e, CELL_FILL_LIST_SECOND),
+            vec![vec![0xCE11, 0x2222]]
+        );
+    }
+
+    /// The engine of the map marker list tests: the data handler's list of
+    /// world spaces starts at `+0x10`, every world space is its own
+    /// persistent cell and the fillers record (cell, list).
+    fn marker_engine() -> (Engine, FillLog, FillLog) {
+        let mut e = engine();
+        install_lists(&mut e);
+        let handler = e.mem.alloc(0x700);
+        set_word(&mut e, DATA_HANDLER_POINTER, handler);
+        e.register(DATA_HANDLER_WORLD_LIST, |_, a| ret(a[0] + 0x10));
+        e.register(GET_PERSISTENT_CELL, |_, a| ret(a[0]));
+        let first = Rc::new(RefCell::new(Vec::new()));
+        let f = first.clone();
+        e.register_double(CELL_FILL_LIST_FIRST, move |_, a| {
+            f.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        let second = Rc::new(RefCell::new(Vec::new()));
+        let s = second.clone();
+        e.register_double(CELL_FILL_LIST_SECOND, move |_, a| {
+            s.borrow_mut().push((a[0], a[1]));
+            Ret::default()
+        });
+        (e, first, second)
+    }
+
+    /// Makes the data handler's list of world spaces `items`.
+    fn set_world_list(e: &mut Engine, items: &[u32]) {
+        let handler = e.global::<u32>(DATA_HANDLER_POINTER);
+        let head = make_list(e, items);
+        e.mem.set_u32(handler + 0x10, e.mem.u32(head));
+        e.mem.set_u32(handler + 0x14, e.mem.u32(head + 4));
+    }
+
+    /// Four world spaces: `root`, `child` (uses the root's value 2),
+    /// `unrelated` and `grandchild` (has the root as parent but uses none of
+    /// its values).
+    fn world_family(e: &mut Engine) -> [Ptr<TESWorldSpace>; 4] {
+        let root = world(e);
+        let child = world(e);
+        let unrelated = world(e);
+        let grandchild = world(e);
+        e.set(child, TESWorldSpace::pParentWorld, root.cast());
+        e.set(child, TESWorldSpace::sParentUseFlags, 0b100);
+        e.set(grandchild, TESWorldSpace::pParentWorld, root.cast());
+        [root, child, unrelated, grandchild]
+    }
+
+    #[test]
+    fn the_map_marker_list_gathers_the_world_space_and_those_that_use_its_values() {
+        let (mut e, filled, _) = marker_engine();
+        let [root, child, unrelated, grandchild] = world_family(&mut e);
+        set_world_list(
+            &mut e,
+            &[
+                root.addr(),
+                child.addr(),
+                unrelated.addr(),
+                0,
+                grandchild.addr(),
+            ],
+        );
+        let list = e.call(0x0058_82a0, &args![root, 0u32]).u32();
+        assert_ne!(list, 0);
+        // The root and the world space that uses its value, in list order.
+        assert_eq!(
+            *filled.borrow(),
+            vec![(root.addr(), list), (child.addr(), list)]
+        );
+        // With `all` set, only the world space itself.
+        filled.borrow_mut().clear();
+        let list = e.call(0x0058_82a0, &args![root, 1u32]).u32();
+        assert_eq!(*filled.borrow(), vec![(root.addr(), list)]);
+        // A world space that uses its parent's value builds nothing itself
+        // (`all` 0): the parent builds the list.
+        filled.borrow_mut().clear();
+        let list = e.call(0x0058_82a0, &args![child, 0u32]).u32();
+        assert_eq!(
+            *filled.borrow(),
+            vec![(root.addr(), list), (child.addr(), list)]
+        );
+        // With `all` set it builds its own.
+        filled.borrow_mut().clear();
+        let list = e.call(0x0058_82a0, &args![child, 1u32]).u32();
+        assert_eq!(*filled.borrow(), vec![(child.addr(), list)]);
+        // A world space that does not inherit value 2 builds its own list
+        // and the ones of those that inherit from it.
+        filled.borrow_mut().clear();
+        let list = e.call(0x0058_82a0, &args![grandchild, 0u32]).u32();
+        assert_eq!(*filled.borrow(), vec![(grandchild.addr(), list)]);
+    }
+
+    #[test]
+    fn the_second_marker_list_builder_uses_the_other_filler() {
+        let (mut e, first, second) = marker_engine();
+        let [root, child, _, _] = world_family(&mut e);
+        set_world_list(&mut e, &[root.addr(), child.addr()]);
+        let list = e.call(0x0058_83c0, &args![root, 0u32]).u32();
+        assert_eq!(
+            *second.borrow(),
+            vec![(root.addr(), list), (child.addr(), list)]
+        );
+        assert!(first.borrow().is_empty());
+        // `all` set: a single fill.
+        second.borrow_mut().clear();
+        e.call(0x0058_83c0, &args![root, 7u32]);
+        assert_eq!(second.borrow().len(), 1);
+        // Through the parent when the value is inherited.
+        second.borrow_mut().clear();
+        let list = e.call(0x0058_83c0, &args![child, 0u32]).u32();
+        assert_eq!(
+            *second.borrow(),
+            vec![(root.addr(), list), (child.addr(), list)]
+        );
+    }
+
+    #[test]
+    fn a_cell_is_found_by_editor_id() {
+        let mut e = engine();
+        install_cell_functions(&mut e);
+        let (w, table) = world_with_cells(&mut e, &[]);
+        let map = e.get(w, TESWorldSpace::pCellMap).addr();
+        let a = fake_cell(&mut e, 0, 0, 0, 0);
+        let b = fake_cell(&mut e, 1, 0, 0, 0);
+        let c = fake_cell(&mut e, 2, 0, 0, 0);
+        table
+            .borrow_mut()
+            .extend([(map, 1, a), (map, 2, 0), (map, 3, b), (map, 4, c)]);
+        // The comparison answers 0 (equal) for the cells b and c.
+        e.register_double(EDITOR_ID_COMPARE, move |_, args| {
+            ret(if args[0] == b + 0x90 || args[0] == c + 0x90 {
+                0
+            } else {
+                1
+            })
+        });
+        // The first match wins.
+        assert_eq!(e.call(0x0058_8560, &args![w, 0x6000u32]).u32(), b);
+        // No name: nothing.
+        assert_eq!(e.call(0x0058_8560, &args![w, 0u32]).u32(), 0);
+        // No match.
+        e.register(EDITOR_ID_COMPARE, |_, _| ret(1));
+        assert_eq!(e.call(0x0058_8560, &args![w, 0x6000u32]).u32(), 0);
+    }
+
+    // ---- references in range (005885f0) ----------------------------------------------
+
+    /// The engine of the ring walk tests: the world space has cells at the
+    /// coordinates `cells` (returned in the same order), a cell's distance to
+    /// a point is 100 times its x coordinate (stored in the cell), and the
+    /// visits are recorded.
+    fn ring_engine(cells: &[(i16, i16)]) -> (Engine, Ptr<TESWorldSpace>, VisitLog, Vec<u32>) {
+        let mut e = engine();
+        install_float_helpers(&mut e);
+        noop(&mut e, LOG);
+        let entries: Vec<(i16, i16, u32)> = cells
+            .iter()
+            .map(|(x, y)| (*x, *y, e.mem.alloc(0x20)))
+            .collect();
+        for (x, _, cell) in &entries {
+            e.mem.set_i32(*cell, *x as i32);
+        }
+        let addresses = entries.iter().map(|c| c.2).collect();
+        let (w, _) = world_with_cells(&mut e, &entries);
+        set_double(&mut e, DOUBLE_FLOAT_MAX, f32::MAX as f64);
+        e.register(CELL_DISTANCE_TO_POINT, |e, a| {
+            ret_float(e.mem.i32(a[0]) as f32 * 100.0)
+        });
+        let visits = Rc::new(RefCell::new(Vec::new()));
+        let v = visits.clone();
+        e.register_double(CELL_FOR_REFERENCES_IN_RANGE, move |_, a| {
+            v.borrow_mut().push(a[0]);
+            ret(1)
+        });
+        e.register(GET_PERSISTENT_CELL, |e, a| ret(e.mem.u32(a[0] + 0x34)));
+        (e, w, visits, addresses)
+    }
+
+    fn ring_point(e: &mut Engine, x: f32, y: f32) -> u32 {
+        let point = e.mem.alloc(12);
+        e.mem.set_f32(point, x);
+        e.mem.set_f32(point + 4, y);
+        point
+    }
+
+    #[test]
+    fn the_ring_walk_does_nothing_without_a_visitor() {
+        let (mut e, w, visits, _) = ring_engine(&[(0, 0)]);
+        let point = ring_point(&mut e, 10.0, 10.0);
+        let f = f32::MAX;
+        logged(&mut e);
+        e.call(0x0058_85f0, &args![w, point, f, point, f, 0u32, 0u32]);
+        assert!(visits.borrow().is_empty());
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_ring_walk_visits_the_cell_then_the_rings_then_the_persistent_cell() {
+        let cells = [(0, 0), (1, 0), (-1, 1), (0, -1), (3, 3)];
+        let (mut e, w, visits, c) = ring_engine(&cells);
+        let persistent = e.mem.alloc(0x20);
+        e.set(w, TESWorldSpace::pPersistentCell, Ptr::new(persistent));
+        let point = ring_point(&mut e, 100.0, 100.0);
+        let f = f32::MAX;
+        logged(&mut e);
+        e.call(
+            0x0058_85f0,
+            &args![w, point, f, point, f, 0x4000u32, 0x77u32],
+        );
+        // The centre, then the cells of the first ring in the order the ring
+        // is walked (bottom row left to right, right column up, top row
+        // right to left, left column down): (0, -1), (1, 0), (-1, 1). The
+        // second ring has no cell in it, so the walk ends with the
+        // persistent cell. The cell at (3, 3) is never reached.
+        assert_eq!(*visits.borrow(), vec![c[0], c[3], c[1], c[2], persistent]);
+        // The visits get the arguments through unchanged.
+        let first = calls_to(&e, CELL_FOR_REFERENCES_IN_RANGE)[0].clone();
+        assert_eq!(
+            first[1..],
+            [point, f.to_bits(), point, f.to_bits(), 0x4000, 0x77]
+        );
+    }
+
+    #[test]
+    fn the_ring_walk_without_a_centre_cell_starts_with_the_ring() {
+        let (mut e, w, visits, c) = ring_engine(&[(1, 1)]);
+        let point = ring_point(&mut e, 100.0, 100.0);
+        let f = f32::MAX;
+        e.call(0x0058_85f0, &args![w, point, f, point, f, 1u32, 0u32]);
+        assert_eq!(*visits.borrow(), vec![c[0]]);
+    }
+
+    #[test]
+    fn the_ring_walk_stops_when_a_visit_returns_false() {
+        let (mut e, w, _, _) = ring_engine(&[(0, 0), (1, 0)]);
+        let count = Rc::new(RefCell::new(0u32));
+        let c = count.clone();
+        e.register_double(CELL_FOR_REFERENCES_IN_RANGE, move |_, _| {
+            *c.borrow_mut() += 1;
+            ret(0)
+        });
+        let point = ring_point(&mut e, 10.0, 10.0);
+        let f = f32::MAX;
+        e.call(0x0058_85f0, &args![w, point, f, point, f, 1u32, 0u32]);
+        // The centre cell refused: nothing else.
+        assert_eq!(*count.borrow(), 1);
+        // A refusal in a ring ends the walk there.
+        let (mut e, w, _, _) = ring_engine(&[(0, 0), (1, 0), (-1, 1)]);
+        let count = Rc::new(RefCell::new(0u32));
+        let c = count.clone();
+        e.register_double(CELL_FOR_REFERENCES_IN_RANGE, move |_, _| {
+            *c.borrow_mut() += 1;
+            ret((*c.borrow() < 2) as u32)
+        });
+        let point = ring_point(&mut e, 10.0, 10.0);
+        e.call(0x0058_85f0, &args![w, point, f, point, f, 1u32, 0u32]);
+        assert_eq!(*count.borrow(), 2);
+    }
+
+    #[test]
+    fn the_ring_walk_skips_cells_outside_the_radii() {
+        let (mut e, w, visits, c) = ring_engine(&[(0, 0), (1, 0), (-1, 0), (0, 1)]);
+        let point = ring_point(&mut e, 10.0, 10.0);
+        let f = f32::MAX;
+        // The distance of a cell is 100 times its column: a radius of 50
+        // keeps the columns 0 and -1 (distances 0 and -100), not column 1.
+        e.call(0x0058_85f0, &args![w, point, 50.0f32, point, f, 1u32, 0u32]);
+        assert!(visits.borrow().contains(&c[2]));
+        assert!(visits.borrow().contains(&c[3]));
+        assert!(!visits.borrow().contains(&c[1]));
+        // The second radius limits the same way.
+        visits.borrow_mut().clear();
+        e.call(0x0058_85f0, &args![w, point, f, point, 50.0f32, 1u32, 0u32]);
+        assert!(visits.borrow().contains(&c[2]));
+        assert!(!visits.borrow().contains(&c[1]));
+        // A NaN radius keeps nothing of the rings (the centre is visited).
+        visits.borrow_mut().clear();
+        e.call(
+            0x0058_85f0,
+            &args![w, point, f32::NAN, point, f, 1u32, 0u32],
+        );
+        assert_eq!(*visits.borrow(), vec![c[0]]);
+    }
+
+    // ---- record types and offset data ---------------------------------------------------
+
+    #[test]
+    fn record_types_that_can_be_in_a_world_space() {
+        let mut e = engine();
+        e.register(RECORD_TYPE_CHECK, |_, a| ret((a[0] == b'X' as u32) as u32));
+        let w = world(&mut e);
+        for (record_type, expected) in [
+            (b'9', true),
+            (b'D', true),
+            (b'X', true),
+            (b'A', false),
+            (0, false),
+        ] {
+            assert_eq!(
+                e.call(0x0058_8a60, &args![record_type as u32]).bool(),
+                expected
+            );
+            assert_eq!(
+                e.call(0x0058_8a40, &args![w, record_type as u32]).bool(),
+                expected
+            );
+        }
+        // The first two do not ask the check.
+        logged(&mut e);
+        e.call(0x0058_8a60, &args![b'9' as u32]);
+        e.call(0x0058_8a60, &args![b'D' as u32]);
+        assert_eq!(calls_to(&e, RECORD_TYPE_CHECK).len(), 0);
+    }
+
+    /// Files chained through their master (+0x10); the master getter reads it.
+    fn file_chain(e: &mut Engine, length: usize) -> Vec<u32> {
+        e.register(FILE_MASTER, |e, a| ret(e.mem.u32(a[0] + 0x10)));
+        let files: Vec<u32> = (0..length).map(|_| e.mem.alloc(0x20)).collect();
+        for pair in files.windows(2) {
+            e.mem.set_u32(pair[0] + 0x10, pair[1]);
+        }
+        files
+    }
+
+    #[test]
+    fn offset_data_is_looked_up_under_the_first_file_of_the_chain() {
+        let mut e = engine();
+        let table = install_maps(&mut e);
+        let files = file_chain(&mut e, 3);
+        let w = world(&mut e);
+        // None yet.
+        assert_eq!(e.call(0x0058_8a90, &args![w, files[0]]).u32(), 0);
+        // The offset data is stored under the last file of the chain.
+        let map = w.addr() + 0xB0;
+        table.borrow_mut().push((map, files[2], 0xDA7A));
+        assert_eq!(e.call(0x0058_8a90, &args![w, files[0]]).u32(), 0xDA7A);
+        assert_eq!(e.call(0x0058_8a90, &args![w, files[2]]).u32(), 0xDA7A);
+        assert_eq!(e.call(0x0058_8a90, &args![w, files[1]]).u32(), 0xDA7A);
+        // No file: nothing found.
+        assert_eq!(e.call(0x0058_8a90, &args![w, 0u32]).u32(), 0);
+    }
+
+    #[test]
+    fn creating_offset_data_makes_it_once_with_the_widest_bounds() {
+        let mut e = engine();
+        let table = install_maps(&mut e);
+        let files = file_chain(&mut e, 2);
+        set_word(&mut e, FLOAT_MAX_VALUE, f32::MAX.to_bits());
+        set_word(&mut e, FLOAT_MIN_VALUE, (-f32::MAX).to_bits());
+        e.register(OFFSET_DATA_CONSTRUCT, |_, a| ret(a[0]));
+        // NiPoint2(x, y): stores both and returns itself.
+        e.register(NI_POINT2_CONSTRUCT, |e, a| {
+            e.mem.set_u32(a[0], a[1]);
+            e.mem.set_u32(a[0] + 4, a[2]);
+            ret(a[0])
+        });
+        let w = world(&mut e);
+        let data = e.call(0x0058_8b00, &args![w, files[0]]).ptr::<OffsetData>();
+        assert_ne!(data.addr(), 0);
+        assert_eq!(e.mem.block_size(data.addr()), Some(OFFSET_DATA_SIZE));
+        assert!(e.get(data, OffsetData::pCellFileOffsets).is_null());
+        assert_eq!(e.get(data, OffsetData::iFileOffset), 0);
+        assert_eq!(e.get(data, OffsetData::OffsetMinCoords_x), f32::MAX);
+        assert_eq!(e.get(data, OffsetData::OffsetMinCoords_y), f32::MAX);
+        assert_eq!(e.get(data, OffsetData::OffsetMaxCoords_x), -f32::MAX);
+        assert_eq!(e.get(data, OffsetData::OffsetMaxCoords_y), -f32::MAX);
+        // Stored under the last file of the chain.
+        assert_eq!(
+            *table.borrow(),
+            vec![(w.addr() + 0xB0, files[1], data.addr())]
+        );
+        // Asking again, from either file, finds it.
+        assert_eq!(e.call(0x0058_8b00, &args![w, files[1]]).u32(), data.addr());
+        assert_eq!(e.call(0x0058_8b00, &args![w, files[0]]).u32(), data.addr());
+        assert_eq!(table.borrow().len(), 1);
     }
 }
