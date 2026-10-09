@@ -9,13 +9,15 @@
 //! Most start by writing `0.0` to `*result`, and all but a few finish with a
 //! debug line through `00703c00` when the byte at `TLS + 0x268` is set.
 //!
-//! Progress: this file holds the first 120 functions of the unit in address
+//! Progress: this file holds the first 160 functions of the unit in address
 //! order: `0059bfa0` to `0059dbe0` (the first session; it left `0059c380`
 //! out because `crates/world` already describes it), `0059c380` plus
-//! `0059dc90` to `0059f540` (the second session) and `0059f610` to
-//! `005a0f10` (the third). The next session continues with the first
-//! function after `005a0f10` (`005a0f90`, `GetCrime`); keep new shared
-//! helpers and constants in the block below, above the functions.
+//! `0059dc90` to `0059f540` (the second session), `0059f610` to
+//! `005a0f10` (the third) and `005a0f90` to `005a29d0` (the fourth). The
+//! next session continues with the first function after `005a29d0`
+//! (`005a2a50`, outside this file's address range: the range ends there);
+//! keep new shared helpers and constants in the block below, above the
+//! functions.
 //!
 //! x87 note: the game computes in extended precision and stores `double`
 //! results. The translations compute in `f64`, which can differ from the
@@ -445,6 +447,244 @@ const DOUBLE_MINUS_ONE: u32 = 0x0101_a6b0;
 const DOUBLE_MINUS_PI: u32 = 0x0101_ff58;
 const DOUBLE_PI: u32 = 0x0101_ff40;
 const DOUBLE_TWO_PI: u32 = 0x0101_ff48;
+
+// Callees and data of the functions from `005a0f90` on.
+
+/// The object at `0x011e0e80`, `this` of the `processlists.cpp` function
+/// [`PROCESS_LISTS_CRIME_TEST`].
+const PROCESS_LISTS: u32 = 0x011e_0e80;
+/// `processlists.cpp`, `this` the object at [`PROCESS_LISTS`], stack
+/// arguments (actor, placed reference, actor, crime number or -1, 0, -1),
+/// byte result (the test behind `GetCrime`).
+const PROCESS_LISTS_CRIME_TEST: u32 = 0x0097_2600;
+/// `TESClass::IsGuard` (Xbox PDB): byte, `this` the class.
+const CLASS_IS_GUARD: u32 = 0x005f_6e60;
+/// `Actor::IsTalking` (Xbox PDB): byte.
+const ACTOR_IS_TALKING: u32 = 0x008a_67f0;
+/// `TESObjectREFR::GetMobileObjectExtra` (Xbox PDB): the reference as a
+/// mobile object, or null.
+const REF_GET_MOBILE_OBJECT_EXTRA: u32 = 0x0057_8970;
+/// `MobileObject::IsTalking` (Xbox PDB): byte.
+const MOBILE_OBJECT_IS_TALKING: u32 = 0x0092_f160;
+
+/// `[this + 0x68]` (`highprocess.cpp` body, the engine map names it
+/// `MiddleHighProcess::GetSavedAcquireObject`): on the `TES` global it is
+/// `TES::pSky` (Xbox PDB `+0x68`).
+const TES_GET_SKY: u32 = 0x008d_8520;
+/// `[this + 0xcc]` of the sky, a `float` in ST0 (`tes.cpp`).
+const SKY_GET_WIND_SPEED: u32 = 0x0045_36e0;
+/// Virtual (vtable `+0x448`) on an actor: byte behind `IsTrespassing`.
+const VSLOT_ACTOR_IS_TRESPASSING: u32 = 0x448;
+/// `tesobjectcell.cpp`: `this` the cell and (actor), stack argument popped
+/// by the callee, byte result (the test behind `IsInMyOwnedCell`).
+const CELL_IS_OWNED_BY: u32 = 0x0054_6ca0;
+/// `Actor::IsContinuingPackageforPC` (Xbox PDB): byte.
+const ACTOR_IS_CONTINUING_PACKAGE_FOR_PC: u32 = 0x008a_69d0;
+
+/// Virtual (vtable `+0x1d0`) on a reference: its loaded node, or null
+/// (`0059c4c0` tests it for non-null).
+const VSLOT_REF_GET_NODE: u32 = 0x1d0;
+/// `modelloader.cpp`: returns the global at `0x01202ddc`, the name (a
+/// string handle passed by pointer) `CanHaveFlames` looks up.
+const FLAMES_EXTRA_DATA_NAME: u32 = 0x0044_8a80;
+/// `NiObjectNET::GetExtraData` (Xbox PDB): `this` the node and (name).
+const NODE_GET_EXTRA_DATA: u32 = 0x00a5_bdd0;
+/// Type descriptor `CanHaveFlames` casts the extra data with (the first
+/// argument of [`EXTRA_DATA_CAST`]).
+const FLAMES_EXTRA_DATA_TYPE: u32 = 0x0120_2de0;
+/// `bsfacegenmanager.cpp`: cdecl (type descriptor, object); null when the
+/// object is null, else the object converted by the type.
+const EXTRA_DATA_CAST: u32 = 0x0065_3270;
+/// `modelloader.cpp`: byte, `this` the converted extra data (asks
+/// `0x00448a60` with `0x10`).
+const FLAMES_EXTRA_DATA_TEST: u32 = 0x0044_8a40;
+/// Virtual (vtable `+0x0c`) on the node: its value goes to
+/// [`REF_HAS_ADDON_NODES`].
+const VSLOT_NODE_FLAMES_ARGUMENT: u32 = 0xc;
+/// `TESObjectREFR::HasAddonNodes` (Xbox PDB): cdecl, one argument, byte.
+const REF_HAS_ADDON_NODES: u32 = 0x0057_8400;
+/// `BGSOpenCloseForm::GetOpenState` (Xbox PDB): cdecl (reference), an `int`.
+const OPEN_CLOSE_GET_OPEN_STATE: u32 = 0x0047_b250;
+
+/// Form type of the packages `GetIsCurrentPackage` accepts (the form it
+/// compares with the actor's current package).
+const FORM_TYPE_PACKAGE: u32 = 0x49;
+/// `Actor::GetPackageSetAsPcurrent` (Xbox PDB).
+const ACTOR_GET_PACKAGE_SET_AS_CURRENT: u32 = 0x0088_1510;
+/// `TESPackage::GetIsCreated` (Xbox PDB): byte.
+const PACKAGE_GET_IS_CREATED: u32 = 0x0067_4d40;
+/// `ExtraDataList::GetPackageExtra` (Xbox PDB): `this` the extra data list.
+const EXTRA_DATA_LIST_GET_PACKAGE_EXTRA: u32 = 0x0041_cb10;
+
+/// Calendar day of the week (`calendar.cpp` region), `this` the
+/// [`CALENDAR`] singleton, an `int`.
+const CALENDAR_GET_DAY_OF_WEEK: u32 = 0x0086_7ef0;
+/// Byte of the player (`playercharacter.cpp`) behind `IsPlayerAMurderer`.
+const PLAYER_IS_A_MURDERER: u32 = 0x0095_3f60;
+/// `actor.cpp`: `this` the actor and (target), an `int` (the detection
+/// level; popped by the callee).
+const ACTOR_GET_DETECTION_LEVEL: u32 = 0x008a_81e0;
+
+/// `tesactorbasedata.cpp`: byte test of the faction in ECX (bit `0x08` of
+/// its flags at `+0x34`).
+const FACTION_TEST_EXPELLED: u32 = 0x0047_d720;
+/// Byte test of a reference (`+0x08` has bit `0x00800000`; `GetDestroyed`).
+const REF_TEST_DESTROYED: u32 = 0x0047_7ba0;
+/// Virtual (vtable `+0x19c`) on an actor: its `MagicTarget`, the `this` of
+/// the magic tests below (no stack argument).
+const VSLOT_ACTOR_GET_MAGIC_TARGET: u32 = 0x19c;
+/// `MagicTarget` tests: `this` the magic target and (effect), byte result
+/// (behind `HasMagicEffect`) ...
+const MAGIC_TARGET_HAS_EFFECT: u32 = 0x0082_2d80;
+/// ... `MagicTarget::IsSpellTarget` (Xbox PDB), (spell, 1), byte ...
+const MAGIC_TARGET_IS_SPELL_TARGET: u32 = 0x0082_2b90;
+/// ... and `MagicTarget::GetUsageMonitorEffectMagnitude` (Xbox PDB),
+/// (effect), a `float` in ST0.
+const MAGIC_TARGET_GET_USAGE_MONITOR_MAGNITUDE: u32 = 0x0082_2eb0;
+/// The offset of the `MagicTarget` inside an actor that `GetSpellUsageNumber`
+/// uses directly.
+const ACTOR_MAGIC_TARGET_OFFSET: u32 = 0x94;
+
+/// The object at `0x011f2250` (`this` of `VATS::GetCurrentAction`).
+const VATS: u32 = 0x011f_2250;
+/// `[this + 0x08]` (same body as [`WEAPON_DATA_GET_FORM`]): the VATS mode.
+const VATS_GET_MODE: u32 = 0x0044_ddc0;
+/// The mode value `GetVATSTargetHeight` requires.
+const VATS_MODE_TARGETING: u32 = 4;
+/// `VATS::GetCurrentAction` (Xbox PDB): the action, or null.
+const VATS_GET_CURRENT_ACTION: u32 = 0x009c_71c0;
+/// `ActionPoints::IsAttackAction` (Xbox PDB): cdecl (action type), byte.
+const ACTION_IS_ATTACK: u32 = 0x0066_dde0;
+/// Virtual (vtable `+0x180`) on an actor's base form: its body part data,
+/// or null.
+const VSLOT_BASE_FORM_BODY_PART_DATA: u32 = 0x180;
+/// `BGSBodyPartData::GetBodyPart_ov2` (Xbox PDB): `this` the data and the
+/// part number, the part or null.
+const BODY_PART_DATA_GET_BODY_PART: u32 = 0x005e_5130;
+/// `modelloader.cpp`: the node name of a body part (`this` the part).
+const BODY_PART_GET_NODE_NAME: u32 = 0x0043_b230;
+/// cdecl (node, name): the named node below the node (`0x00c4b310` with 1).
+const NODE_FIND_BY_NAME: u32 = 0x004a_ae30;
+/// `this + 0x8c` (`bipedanim.cpp`): the address of the node's world
+/// position (3 floats).
+const NODE_GET_WORLD_POSITION: u32 = 0x0045_bb80;
+/// `NiAVObject::GetWorldBound` (Xbox PDB): `[this + 0x20]`, or the default
+/// bound at `0x011f4288` when null.
+const NODE_GET_WORLD_BOUND: u32 = 0x0043_d450;
+/// Returns `this` (same body as [`LIST_NODE_ITEM_ADDRESS`]); called on a
+/// local vector and on the bound, whose first field is its center.
+const RETURN_THIS: u32 = 0x0068_15c0;
+/// `tesobjectrefr.cpp`: `this` the reference and a number; asks the
+/// reference's extra data list (`0x0041b3a0`), byte result.
+const REF_EXTRA_DATA_LIST_TEST: u32 = 0x0057_2d30;
+
+/// Virtuals of the player: `GetSandman` and `GetCannibal` (byte results).
+const VSLOT_PLAYER_SANDMAN: u32 = 0x36c;
+const VSLOT_PLAYER_CANNIBAL: u32 = 0x364;
+/// `[this + 0x10c]` of an actor (`highprocess.cpp` body, the engine map
+/// names it `MiddleHighProcess::GetLastIdlePlayed`): the number
+/// `IsInCritStage` compares with its stage.
+const ACTOR_GET_CRIT_STAGE: u32 = 0x005a_29b0;
+/// The table of stage names (`char*`) indexed by stage number.
+const CRIT_STAGE_NAMES: u32 = 0x0119_bbb0;
+/// `actor.cpp`: byte test behind `HasBeenEaten`.
+const ACTOR_HAS_BEEN_EATEN: u32 = 0x008a_8170;
+
+/// `[this + 0x18]` of a package: the index into [`PROCEDURE_TABLES`].
+const PACKAGE_GET_PROCEDURE_GROUP: u32 = 0x0096_11e0;
+/// Table of pointers (indexed by the group) to tables of `int`s (indexed by
+/// the process's procedure index) holding the procedure number.
+const PROCEDURE_TABLES: u32 = 0x011a_3ff0;
+/// Virtuals of the actor's middle-high process: the procedure index
+/// (`+0x280`) and the object `fn_005a1210` and `fn_005a1770` read (`+0x274`).
+const VSLOT_PROCESS_PROCEDURE_INDEX: u32 = 0x280;
+const VSLOT_PROCESS_PROCEDURE_OBJECT: u32 = 0x274;
+/// Package type of the combat packages the fleeing test applies to, and
+/// `CombatController::IsFleeing` (Xbox PDB name of the byte test run on the
+/// package).
+const PACKAGE_TYPE_COMBAT: u32 = 0x12;
+const COMBAT_CONTROLLER_IS_FLEEING: u32 = 0x0098_1990;
+/// The procedure number a fleeing combat package maps to.
+const PROCEDURE_FLEEING: u32 = 10;
+/// `[this + 0x84]` of the package of type `0x17`: the number
+/// `fn_005a1770` returns.
+const PACKAGE_GET_NUMBER: u32 = 0x004f_d3c0;
+/// `[this + 0x0c]` of the object of `+0x274` (same body as
+/// [`REF_GET_ITEM_ID`]).
+const PROCEDURE_OBJECT_GET_ID: u32 = 0x0084_e3a0;
+/// `[this + 0x08]` of the object of `+0x274` (same body as [`VATS_GET_MODE`]).
+const PROCEDURE_OBJECT_GET_VALUE: u32 = 0x0044_ddc0;
+/// The two package types `fn_005a1770` distinguishes.
+const PACKAGE_TYPE_WITH_PROCESS_OBJECT: u32 = 0xe;
+const PACKAGE_TYPE_WITH_NUMBER: u32 = 0x17;
+/// `fn_005a1210`'s table: for each procedure number 0 to `0x36`, the address
+/// of the `double` it yields in the exe's data, or 0 for the numbers handled
+/// in code (0 gives `0.0`, 2 gives `1.0`, `0x2a` is special, and the rest
+/// give `-1.0`).
+const PROCEDURE_VALUE_ADDRESS: [u32; 0x37] = [
+    0,
+    0x0101_5a40,
+    0,
+    0x0101_1590,
+    0x0102_40b0,
+    0x0102_0758,
+    0x0103_5718,
+    0x0103_5710,
+    0x0103_5700,
+    0x0103_5708,
+    0x0102_40b8,
+    0x0103_56f0,
+    0x0101_db80,
+    0x0102_1928,
+    0x0103_56e8,
+    0x0101_5a38,
+    0x0102_0998,
+    0x0102_fc70,
+    0x0102_e438,
+    0,
+    0x0103_4208,
+    0,
+    0x0103_56e0,
+    0x0103_5840,
+    0x0103_5838,
+    0x0103_56d8,
+    0,
+    0x0103_5830,
+    0x0103_56d0,
+    0x0103_56c8,
+    0x0101_db88,
+    0x0103_5828,
+    0x0102_f070,
+    0x0103_56c0,
+    0x0103_56b8,
+    0x0103_56b0,
+    0x0103_56a8,
+    0x0103_56a0,
+    0x0103_5820,
+    0x0103_5818,
+    0x0103_5810,
+    0x0103_57a8,
+    0,
+    0x0103_57b0,
+    0x0103_5808,
+    0,
+    0,
+    0x0103_57f0,
+    0,
+    0x0103_57f8,
+    0x0103_5800,
+    0x0103_57a0,
+    0x0101_e2c0,
+    0,
+    0x0103_56f8,
+];
+/// Procedure number with the special case, the `double` it starts from, and
+/// the two `float` tables it reads (indexed by `+0x04` of the object, and by
+/// `value + 1` for object type 3).
+const PROCEDURE_SPECIAL: u32 = 0x2a;
+const PROCEDURE_SPECIAL_DEFAULT: u32 = 0x0103_57e8;
+const PROCEDURE_SPECIAL_TABLE_BY_TYPE: u32 = 0x0103_57b8;
+const PROCEDURE_SPECIAL_TABLE_BY_VALUE: u32 = 0x0103_57c8;
 
 /// The byte at `TLS + 0x268`: the condition functions print a debug line
 /// for their result when it is set.
@@ -3959,6 +4199,1100 @@ pub fn script_is_idle_playing_condition_function(
     true
 }
 
+// Translated from 005a0f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetCrimeConditionFunction` (Xbox PDB): 1.0 when the
+/// `processlists.cpp` test answers yes for the actor (the reference) and the
+/// placed reference (the form parameter); the third parameter is a crime
+/// number, used when it is 0 to 4 and replaced by -1 otherwise.
+pub fn script_get_crime_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    form: Ptr,
+    crime: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let target = placed_reference_of(e, form);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !target.is_null() {
+        let crime_number = if (0..5).contains(&(crime as i32)) {
+            crime
+        } else {
+            0xffff_ffff
+        };
+        if e.call(
+            PROCESS_LISTS_CRIME_TEST,
+            &args![
+                PROCESS_LISTS,
+                actor,
+                target,
+                actor,
+                crime_number,
+                0u32,
+                0xffff_ffffu32
+            ],
+        )
+        .bool()
+        {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetCrime >> %0.2f"
+        trace_result(e, 0x0103_5750, result);
+    }
+    true
+}
+
+// Translated from 005a10b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsGuardConditionFunction` (Xbox PDB): 1.0 when the reference is
+/// an `NPC_` whose class says it is a guard.
+pub fn script_is_guard_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let npc = npc_base_form_of(e, reference);
+        if !npc.is_null() && e.call(NPC_GET_CLASS, &args![npc]).u32() != 0 {
+            let class = e.call(NPC_GET_CLASS, &args![npc]).ptr::<()>();
+            if e.call(CLASS_IS_GUARD, &args![class]).bool() {
+                set_result(e, result, 1.0);
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "Is Guard >> %0.2f"
+        trace_result(e, 0x0103_5764, result);
+    }
+    true
+}
+
+// Translated from 005a1150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsTalkingConditionFunction` (Xbox PDB): 1.0 when the actor is
+/// talking; a reference that is not an actor is asked as a mobile object
+/// (null when it has none).
+pub fn script_is_talking_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if actor.is_null() {
+        let mobile = e
+            .call(REF_GET_MOBILE_OBJECT_EXTRA, &args![reference])
+            .ptr::<()>();
+        if !mobile.is_null() && e.call(MOBILE_OBJECT_IS_TALKING, &args![mobile]).bool() {
+            set_result(e, result, 1.0);
+        }
+    } else if e.call(ACTOR_IS_TALKING, &args![actor]).bool() {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "Talking >> %0.2f"
+        trace_result(e, 0x0103_5778, result);
+    }
+    true
+}
+
+// Translated from 005a1210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name, debug line "Procedure": a
+/// number for the actor's current procedure. The procedure number comes from
+/// a table indexed by the current package's group and the process's
+/// procedure index (10 for a fleeing combat package), and a switch maps it to
+/// a `double` in the exe's data (-1.0 for a number without a case). Stays
+/// 0.0 without a process or package.
+pub fn fn_005a1210(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null()
+        && e.call(ACTOR_GET_PROCESS, &args![actor]).u32() != 0
+        && e.call(MOBILE_GET_CURRENT_PACKAGE, &args![actor]).u32() != 0
+    {
+        let package = e
+            .call(MOBILE_GET_CURRENT_PACKAGE, &args![actor])
+            .ptr::<()>();
+        let process = e.call(ACTOR_GET_PROCESS, &args![actor]).ptr::<()>();
+        let group = e.call(PACKAGE_GET_PROCEDURE_GROUP, &args![package]).u32();
+        let index = e
+            .vcall(process.addr(), VSLOT_PROCESS_PROCEDURE_INDEX, &args![])
+            .u32();
+        let table = e
+            .mem
+            .u32(PROCEDURE_TABLES.wrapping_add(group.wrapping_mul(4)));
+        let mut procedure = e.mem.u32(table.wrapping_add(index.wrapping_mul(4)));
+        if e.call(PACKAGE_GET_TYPE, &args![package]).u32() == PACKAGE_TYPE_COMBAT
+            && e.call(COMBAT_CONTROLLER_IS_FLEEING, &args![package]).bool()
+        {
+            procedure = PROCEDURE_FLEEING;
+        }
+        match procedure {
+            0 => set_result(e, result, 0.0),
+            2 => set_result(e, result, 1.0),
+            PROCEDURE_SPECIAL => {
+                let object = e
+                    .vcall(process.addr(), VSLOT_PROCESS_PROCEDURE_OBJECT, &args![])
+                    .ptr::<()>();
+                let start = e.global::<f64>(PROCEDURE_SPECIAL_DEFAULT);
+                set_result(e, result, start);
+                if !object.is_null() {
+                    let kind = e.mem.u32(object.addr() + 4);
+                    if kind == 3 {
+                        let value = e.call(PROCEDURE_OBJECT_GET_VALUE, &args![object]).u32();
+                        let slot = value.wrapping_add(1);
+                        if slot < 7 {
+                            let entry =
+                                e.global::<f32>(PROCEDURE_SPECIAL_TABLE_BY_VALUE + slot * 4);
+                            set_result(e, result, entry as f64);
+                        }
+                    } else if (kind as i32) >= 0 && kind < 4 {
+                        let entry = e.global::<f32>(PROCEDURE_SPECIAL_TABLE_BY_TYPE + kind * 4);
+                        set_result(e, result, entry as f64);
+                    }
+                }
+            }
+            1..=0x36 if PROCEDURE_VALUE_ADDRESS[procedure as usize] != 0 => {
+                let value = e.global::<f64>(PROCEDURE_VALUE_ADDRESS[procedure as usize]);
+                set_result(e, result, value);
+            }
+            _ => {
+                let value = e.global::<f64>(DOUBLE_MINUS_ONE);
+                set_result(e, result, value);
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "Procedure >> %0.2f"
+        trace_result(e, 0x0103_578c, result);
+    }
+    true
+}
+
+// Translated from 005a1770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name, debug line "Procedure": -1.0
+/// unless the actor's current package has type `0x0e` (the `+0x0c` of the
+/// object at virtual `+0x274` of its process) or type `0x17` (the package's
+/// own number at `+0x84`).
+pub fn fn_005a1770(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    let start = e.global::<f64>(DOUBLE_MINUS_ONE);
+    set_result(e, result, start);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let package = e
+            .call(MOBILE_GET_CURRENT_PACKAGE, &args![actor])
+            .ptr::<()>();
+        if !package.is_null() {
+            let kind = e.call(PACKAGE_GET_TYPE, &args![package]).u32();
+            if kind == PACKAGE_TYPE_WITH_PROCESS_OBJECT {
+                let process = e.call(ACTOR_GET_PROCESS, &args![actor]).ptr::<()>();
+                if !process.is_null() {
+                    let object = e
+                        .vcall(process.addr(), VSLOT_PROCESS_PROCEDURE_OBJECT, &args![])
+                        .ptr::<()>();
+                    if !object.is_null() {
+                        let id = e.call(PROCEDURE_OBJECT_GET_ID, &args![object]).i32();
+                        set_result(e, result, id as f64);
+                    }
+                }
+            } else if kind == PACKAGE_TYPE_WITH_NUMBER {
+                let number = e.call(PACKAGE_GET_NUMBER, &args![package]).i32();
+                set_result(e, result, number as f64);
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "Procedure >> %0.2f"
+        trace_result(e, 0x0103_578c, result);
+    }
+    true
+}
+
+// Translated from 005a1880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetWindSpeedConditionFunction` (Xbox PDB): the wind speed of the
+/// sky. Returns false (no debug line) when the `TES` global or its sky is
+/// null; the result is then 0.0.
+pub fn script_get_wind_speed_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let tes = e.global::<u32>(TES);
+    if tes == 0 || e.call(TES_GET_SKY, &args![tes]).u32() == 0 {
+        return false;
+    }
+    let sky = e.call(TES_GET_SKY, &args![tes]).ptr::<()>();
+    let speed = e.call(SKY_GET_WIND_SPEED, &args![sky]).f64();
+    set_result(e, result, speed);
+    if trace_enabled(e) {
+        // "GetWindSpeed >> %0.2f"
+        trace_result(e, 0x0103_5848, result);
+    }
+    true
+}
+
+// Translated from 005a1900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsTrespassingConditionFunction` (Xbox PDB): 1.0 when the actor's
+/// trespassing flag (virtual `+0x448`) is set.
+pub fn script_is_trespassing_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null()
+        && e.vcall(actor.addr(), VSLOT_ACTOR_IS_TRESPASSING, &args![])
+            .bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "Is Trespassing Value %0.2f"
+        trace_result(e, 0x0103_5860, result);
+    }
+    true
+}
+
+// Translated from 005a19a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsInMyOwnedCellConditionFunction` (Xbox PDB): 1.0 when the
+/// actor's parent cell is owned by the actor (the `tesobjectcell.cpp` test).
+pub fn script_is_in_my_owned_cell_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && e.call(REF_GET_PARENT_CELL, &args![actor]).u32() != 0 {
+        let cell = e.call(REF_GET_PARENT_CELL, &args![actor]).ptr::<()>();
+        if e.call(CELL_IS_OWNED_BY, &args![cell, actor]).bool() {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "Is in owned cell value %0.2f"
+        trace_result(e, 0x0103_587c, result);
+    }
+    true
+}
+
+// Translated from 005a1a40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsContinuingPackagePCNearConditionFunction` (Xbox PDB): the byte
+/// `Actor::IsContinuingPackageforPC` (Xbox PDB) returns, as the result.
+pub fn script_is_continuing_package_pc_near_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() {
+        let near = e
+            .call(ACTOR_IS_CONTINUING_PACKAGE_FOR_PC, &args![actor])
+            .u8();
+        set_result(e, result, near as f64);
+    }
+    if trace_enabled(e) {
+        // "is continuing package near PC value %0.2f"
+        trace_result(e, 0x0103_589c, result);
+    }
+    true
+}
+
+// Translated from 005a1ad0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::CanHaveFlamesConditionFunction` (Xbox PDB): looks up the extra
+/// data of the reference's node by the flames name, converts it and asks the
+/// `modelloader.cpp` test; 1.0 or 0.0 when the node has the extra data.
+pub fn script_can_have_flames_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let name = e.call(FLAMES_EXTRA_DATA_NAME, &args![]).u32();
+        let node = e
+            .vcall(reference.addr(), VSLOT_REF_GET_NODE, &args![])
+            .ptr::<()>();
+        let extra = e.call(NODE_GET_EXTRA_DATA, &args![node, name]).ptr::<()>();
+        if !extra.is_null() {
+            let converted = e
+                .call(EXTRA_DATA_CAST, &args![FLAMES_EXTRA_DATA_TYPE, extra])
+                .ptr::<()>();
+            let can = e.call(FLAMES_EXTRA_DATA_TEST, &args![converted]).bool();
+            set_result(e, result, if can { 1.0 } else { 0.0 });
+        }
+    }
+    if trace_enabled(e) {
+        // "CanHaveFlames >> %0.2f"
+        trace_result(e, 0x0103_58c8, result);
+    }
+    true
+}
+
+// Translated from 005a1b80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::HasFlamesConditionFunction` (Xbox PDB): 1.0 when
+/// `TESObjectREFR::HasAddonNodes` (Xbox PDB) says yes for the value of
+/// virtual `+0x0c` of the reference's node, else 0.0; stays 0.0 without a
+/// node.
+pub fn script_has_flames_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null()
+        && e.vcall(reference.addr(), VSLOT_REF_GET_NODE, &args![])
+            .u32()
+            != 0
+    {
+        let node = e
+            .vcall(reference.addr(), VSLOT_REF_GET_NODE, &args![])
+            .ptr::<()>();
+        if !node.is_null() {
+            let argument = e
+                .vcall(node.addr(), VSLOT_NODE_FLAMES_ARGUMENT, &args![])
+                .u32();
+            let has = e.call(REF_HAS_ADDON_NODES, &args![argument]).bool();
+            set_result(e, result, if has { 1.0 } else { 0.0 });
+        }
+    }
+    if trace_enabled(e) {
+        // "HasFlames >> %0.2f"
+        trace_result(e, 0x0103_58e0, result);
+    }
+    true
+}
+
+// Translated from 005a1c30 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetOpenStateConditionFunction` (Xbox PDB): the open state
+/// `BGSOpenCloseForm::GetOpenState` (Xbox PDB) gives for the reference.
+pub fn script_get_open_state_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        let state = e.call(OPEN_CLOSE_GET_OPEN_STATE, &args![reference]).i32();
+        set_result(e, result, state as f64);
+    }
+    if trace_enabled(e) {
+        // "GetOpenState >> %0.2f"
+        trace_result(e, 0x0103_58f4, result);
+    }
+    true
+}
+
+// Translated from 005a1c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetIsCurrentPackageConditionFunction` (Xbox PDB): 1.0 when the
+/// package form parameter is the package the actor was set to run; a package
+/// created at run time is compared by the one in the reference's extra data.
+pub fn script_get_is_current_package_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    package: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    let wanted = form_of_type(e, package, FORM_TYPE_PACKAGE);
+    if !actor.is_null() && !wanted.is_null() {
+        let mut current = e
+            .call(ACTOR_GET_PACKAGE_SET_AS_CURRENT, &args![actor])
+            .ptr::<()>();
+        if !current.is_null() && e.call(PACKAGE_GET_IS_CREATED, &args![current]).bool() {
+            let list = e.call(REF_GET_EXTRA_DATA_LIST, &args![actor]).ptr::<()>();
+            if e.call(EXTRA_DATA_LIST_GET_PACKAGE_EXTRA, &args![list])
+                .u32()
+                != 0
+            {
+                let list = e.call(REF_GET_EXTRA_DATA_LIST, &args![actor]).ptr::<()>();
+                current = e
+                    .call(EXTRA_DATA_LIST_GET_PACKAGE_EXTRA, &args![list])
+                    .ptr::<()>();
+            }
+        }
+        if current == wanted {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "GetIsCurrentPackage >> %0.2f"
+        trace_result(e, 0x0103_590c, result);
+    }
+    true
+}
+
+// Translated from 005a1d80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDayOfWeekConditionFunction` (Xbox PDB): the calendar's day of
+/// the week.
+pub fn script_get_day_of_week_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let day = e.call(CALENDAR_GET_DAY_OF_WEEK, &args![CALENDAR]).i32();
+    set_result(e, result, day as f64);
+    if trace_enabled(e) {
+        // "GetDayOfWeek >> %0.2f"
+        trace_result(e, 0x0103_592c, result);
+    }
+    true
+}
+
+// Translated from 005a1de0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsPCSleepingConditionFunction` (Xbox PDB): 1.0 when the byte at
+/// `+0x658` of the player is set.
+pub fn script_is_pc_sleeping_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = Ptr::new(e.global::<u32>(PLAYER));
+    let sleeping = fn_005a1e50(e, player) != 0;
+    set_result(e, result, if sleeping { 1.0 } else { 0.0 });
+    if trace_enabled(e) {
+        // "IsPlayerSleeping >> %0.2f"
+        trace_result(e, 0x0103_5944, result);
+    }
+    true
+}
+
+// Translated from 005a1e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x658` of the player (`this`), which `IsPCSleeping` tests.
+pub fn fn_005a1e50(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x658)
+}
+
+// Translated from 005a1e70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsPCAMurdererConditionFunction` (Xbox PDB): 1.0 when the
+/// player's murderer test (`playercharacter.cpp`) says yes.
+pub fn script_is_pca_murderer_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    let murderer = e.call(PLAYER_IS_A_MURDERER, &args![player]).bool();
+    set_result(e, result, if murderer { 1.0 } else { 0.0 });
+    if trace_enabled(e) {
+        // "IsPlayerAMurderer >> %0.2f"
+        trace_result(e, 0x0103_5960, result);
+    }
+    true
+}
+
+// Translated from 005a1ee0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDetectionLevelConditionFunction` (Xbox PDB): the level at
+/// which the actor (the reference) detects the target (the parameter). Does
+/// nothing for a null reference, and its debug line only appears when the
+/// level was computed.
+pub fn script_get_detection_level_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    target: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() {
+        set_result(e, result, 0.0);
+        let actor = actor_of(e, reference);
+        if !actor.is_null() && !target.is_null() {
+            let level = e
+                .call(ACTOR_GET_DETECTION_LEVEL, &args![actor, target])
+                .i32();
+            set_result(e, result, level as f64);
+            if trace_enabled(e) {
+                let value = e.mem.f64(result.addr());
+                let target_name = e.call(REF_GET_NAME, &args![target]).u32();
+                let actor_name = e.call(REF_GET_NAME, &args![actor]).u32();
+                // "%s detects %s at level %.02f"
+                e.call(
+                    DEBUG_PRINT,
+                    &args![0x0103_597cu32, actor_name, target_name, value],
+                );
+            }
+        }
+    }
+    true
+}
+
+// Translated from 005a1fa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsSwimmingConditionFunction` (Xbox PDB): 1.0 when the actor's
+/// swimming byte (`+0x14d`) is set.
+pub fn script_is_swimming_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && fn_005a2030(e, actor) != 0 {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "Is Swimming >> %0.2f"
+        trace_result(e, 0x0103_599c, result);
+    }
+    true
+}
+
+// Translated from 005a2030 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte at `+0x14d` of the actor (`this`), which `IsSwimming` tests.
+pub fn fn_005a2030(e: &mut Engine, this: Ptr) -> u8 {
+    e.mem.u8(this.addr() + 0x14d)
+}
+
+// Translated from 005a2050 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetAmountStolenSoldConditionFunction` (Xbox PDB): the `int` at
+/// `+0x6dc` of the player.
+pub fn script_get_amount_stolen_sold_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = Ptr::new(e.global::<u32>(PLAYER));
+    let amount = fn_005a20b0(e, player) as i32;
+    set_result(e, result, amount as f64);
+    if trace_enabled(e) {
+        // "Amount stolen the player sold >> %0.2f"
+        trace_result(e, 0x0103_59b4, result);
+    }
+    true
+}
+
+// Translated from 005a20b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The `int` at `+0x6dc` of the player (`this`), which `GetAmountStolenSold`
+/// reads.
+pub fn fn_005a20b0(e: &mut Engine, this: Ptr) -> u32 {
+    e.mem.u32(this.addr() + 0x6dc)
+}
+
+// Translated from 005a20d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPCExpelledConditionFunction` (Xbox PDB): 1.0 when the faction
+/// (the form parameter) has the player expelled; the debug line is one of
+/// two fixed sentences instead of the value.
+pub fn script_get_pc_expelled_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    faction: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !faction.is_null() && e.call(FACTION_TEST_EXPELLED, &args![faction]).bool() {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        if e.mem.f64(result.addr()) == 0.0 {
+            // "PC is not expelled."
+            e.call(DEBUG_PRINT, &args![0x0103_59dcu32]);
+        } else {
+            // "PC is expelled."
+            e.call(DEBUG_PRINT, &args![0x0103_59f0u32]);
+        }
+    }
+    true
+}
+
+// Translated from 005a2150 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPCFactionMurderConditionFunction` (Xbox PDB): 1.0 when the
+/// faction (the form parameter) has the "player murdered a member" flag
+/// (`0x40` of `+0x34`); the debug line is one of two fixed sentences.
+pub fn script_get_pc_faction_murder_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    faction: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !faction.is_null() && fn_005a21d0(e, faction) {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        if e.mem.f64(result.addr()) == 0.0 {
+            // "PC did not Murder a faction member."
+            e.call(DEBUG_PRINT, &args![0x0103_5a00u32]);
+        } else {
+            // "PC murdered a faction member."
+            e.call(DEBUG_PRINT, &args![0x0103_5a24u32]);
+        }
+    }
+    true
+}
+
+// Translated from 005a21d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit `0x40` of the faction's flags (`this + 0x34`) is set.
+pub fn fn_005a21d0(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x34) & 0x40 != 0
+}
+
+// Translated from 005a21f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPlayerEnemyofFactionConditionFunction` (Xbox PDB): 1.0 when
+/// the faction (the form parameter) has the "player is an enemy" flag (`0x10`
+/// of `+0x34`); the debug line is one of two fixed sentences.
+pub fn script_get_player_enemyof_faction_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    faction: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !faction.is_null() && fn_005a2270(e, faction) {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        if e.mem.f64(result.addr()) == 0.0 {
+            // "PC is not an enemy of this faction."
+            e.call(DEBUG_PRINT, &args![0x0103_5a44u32]);
+        } else {
+            // "PC Is an Enemy of the faction."
+            e.call(DEBUG_PRINT, &args![0x0103_5a68u32]);
+        }
+    }
+    true
+}
+
+// Translated from 005a2270 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit `0x10` of the faction's flags (`this + 0x34`) is set.
+pub fn fn_005a2270(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x34) & 0x10 != 0
+}
+
+// Translated from 005a2290 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetPCFactionAttackConditionFunction` (Xbox PDB): 1.0 when the
+/// faction (the form parameter) has the "player attacked a member" flag
+/// (`0x20` of `+0x34`); the debug line is one of two fixed sentences.
+pub fn script_get_pc_faction_attack_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    faction: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !faction.is_null() && fn_005a2310(e, faction) {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        if e.mem.f64(result.addr()) == 0.0 {
+            // "PC did not attack a faction member."
+            e.call(DEBUG_PRINT, &args![0x0103_5a88u32]);
+        } else {
+            // "PC attacked a faction member."
+            e.call(DEBUG_PRINT, &args![0x0103_5aacu32]);
+        }
+    }
+    true
+}
+
+// Translated from 005a2310 (decompiled, FalloutNV.exe 1.4.0.525)
+/// True when bit `0x20` of the faction's flags (`this + 0x34`) is set.
+pub fn fn_005a2310(e: &mut Engine, this: Ptr) -> bool {
+    e.mem.u32(this.addr() + 0x34) & 0x20 != 0
+}
+
+// Translated from 005a2330 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetDestroyedConditionFunction` (Xbox PDB): 1.0 when the
+/// reference's form flags have bit `0x00800000` set.
+pub fn script_get_destroyed_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if !reference.is_null() && e.call(REF_TEST_DESTROYED, &args![reference]).bool() {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "GetDestroyed >> %.0f"
+        trace_result(e, 0x0103_5acc, result);
+    }
+    true
+}
+
+// Translated from 005a2390 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::HasMagicEffectConditionFunction` (Xbox PDB): 1.0 when the
+/// actor's magic target has the effect (the form parameter).
+pub fn script_has_magic_effect_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    effect: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !effect.is_null() {
+        let magic_target = e
+            .vcall(actor.addr(), VSLOT_ACTOR_GET_MAGIC_TARGET, &args![])
+            .ptr::<()>();
+        if e.call(MAGIC_TARGET_HAS_EFFECT, &args![magic_target, effect])
+            .bool()
+        {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "Has Magic Effect >> %0.2f"
+        trace_result(e, 0x0103_5ae4, result);
+    }
+    true
+}
+
+// Translated from 005a2440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsSpellTargetConditionFunction` (Xbox PDB): 1.0 when
+/// `MagicTarget::IsSpellTarget` (Xbox PDB) says the actor's magic target is
+/// a target of the spell (the form parameter).
+pub fn script_is_spell_target_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    spell: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !spell.is_null() {
+        let magic_target = e
+            .vcall(actor.addr(), VSLOT_ACTOR_GET_MAGIC_TARGET, &args![])
+            .ptr::<()>();
+        if e.call(
+            MAGIC_TARGET_IS_SPELL_TARGET,
+            &args![magic_target, spell, 1u32],
+        )
+        .bool()
+        {
+            set_result(e, result, 1.0);
+        }
+    }
+    if trace_enabled(e) {
+        // "Is Spell Target >> %0.2f"
+        trace_result(e, 0x0103_5b00, result);
+    }
+    true
+}
+
+// Translated from 005a24f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetSpellUsageNumberConditionFunction` (Xbox PDB): the usage
+/// monitor magnitude of the effect (the form parameter) in the magic target
+/// at `actor + 0x94`.
+pub fn script_get_spell_usage_number_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    effect: Ptr,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let actor = actor_of(e, reference);
+    if !actor.is_null() && !effect.is_null() {
+        let magnitude = e
+            .call(
+                MAGIC_TARGET_GET_USAGE_MONITOR_MAGNITUDE,
+                &args![actor.addr() + ACTOR_MAGIC_TARGET_OFFSET, effect],
+            )
+            .f64();
+        set_result(e, result, magnitude);
+    }
+    if trace_enabled(e) {
+        // "GetSpellUsageNum >> %0.2f"
+        trace_result(e, 0x0103_5b1c, result);
+    }
+    true
+}
+
+// Translated from 005a2590 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSModeConditionFunction` (Xbox PDB): the VATS object's mode
+/// (`+0x08`).
+pub fn script_get_vats_mode_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let mode = e.call(VATS_GET_MODE, &args![VATS]).i32();
+    set_result(e, result, mode as f64);
+    if trace_enabled(e) {
+        // "VATS Mode >> %0.2f"
+        trace_result(e, 0x0103_5b38, result);
+    }
+    true
+}
+
+// Translated from 005a25f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetVATSTargetHeightConditionFunction` (Xbox PDB): while VATS is
+/// in mode 4 with an attack action, the height of the action's target above
+/// the player: the Z of the targeted body part's node when the target is an
+/// actor and the part exists, else the Z of the target's node bound center,
+/// else the Z of its position, minus the Z of the player's position.
+pub fn script_get_vats_target_height_condition_function(
+    e: &mut Engine,
+    _reference: u32,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.call(VATS_GET_MODE, &args![VATS]).u32() == VATS_MODE_TARGETING {
+        let action = e.call(VATS_GET_CURRENT_ACTION, &args![VATS]).ptr::<()>();
+        if !action.is_null() {
+            let action_type = e.mem.u32(action.addr());
+            if e.call(ACTION_IS_ATTACK, &args![action_type]).bool() {
+                let target = Ptr::<()>::new(e.mem.u32(action.addr() + 0xc));
+                let body_part = e.mem.u32(action.addr() + 0x10);
+                if !target.is_null() {
+                    let node = e
+                        .vcall(target.addr(), VSLOT_REF_GET_NODE, &args![])
+                        .ptr::<()>();
+                    e.with_stack(12, |e, vector| {
+                        e.call(RETURN_THIS, &args![vector]);
+                    });
+                    let mut target_z = None;
+                    if body_part != 0xffff_ffff
+                        && e.vcall(target.addr(), VSLOT_IS_ACTOR, &args![]).bool()
+                    {
+                        let base = e.call(ACTOR_GET_BASE_FORM, &args![target]).ptr::<()>();
+                        let body_part_data = e
+                            .vcall(base.addr(), VSLOT_BASE_FORM_BODY_PART_DATA, &args![])
+                            .ptr::<()>();
+                        if !body_part_data.is_null() {
+                            let part = e
+                                .call(
+                                    BODY_PART_DATA_GET_BODY_PART,
+                                    &args![body_part_data, body_part],
+                                )
+                                .ptr::<()>();
+                            if !part.is_null() {
+                                let name = e.call(BODY_PART_GET_NODE_NAME, &args![part]).u32();
+                                let target_node = e
+                                    .vcall(target.addr(), VSLOT_REF_GET_NODE, &args![])
+                                    .ptr::<()>();
+                                let part_node = e
+                                    .call(NODE_FIND_BY_NAME, &args![target_node, name])
+                                    .ptr::<()>();
+                                if !part_node.is_null() {
+                                    let position = e
+                                        .call(NODE_GET_WORLD_POSITION, &args![part_node])
+                                        .ptr::<()>();
+                                    target_z = Some(e.mem.f32(position.addr() + 8));
+                                }
+                            }
+                        }
+                    }
+                    let target_z = match target_z {
+                        Some(z) => z,
+                        None if !node.is_null() => {
+                            let bound = e.call(NODE_GET_WORLD_BOUND, &args![node]).ptr::<()>();
+                            let center = e.call(RETURN_THIS, &args![bound]).ptr::<()>();
+                            e.mem.f32(center.addr() + 8)
+                        }
+                        None => {
+                            let position = e
+                                .vcall(target.addr(), VSLOT_GET_POSITION, &args![])
+                                .ptr::<()>();
+                            e.mem.f32(position.addr() + 8)
+                        }
+                    };
+                    let player = e.global::<u32>(PLAYER);
+                    let player_position = e.vcall(player, VSLOT_GET_POSITION, &args![]).ptr::<()>();
+                    let player_z = e.mem.f32(player_position.addr() + 8);
+                    set_result(e, result, target_z as f64 - player_z as f64);
+                }
+            }
+        }
+    }
+    if trace_enabled(e) {
+        // "VATS Target Height >> %0.2f"
+        trace_result(e, 0x0103_5b4c, result);
+    }
+    true
+}
+
+// Translated from 005a27e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Condition function without Xbox PDB name and debug line: returns false
+/// (leaving the result alone) for a null reference; otherwise 1.0 when the
+/// reference's extra data list test with 8 says yes, else 0.0.
+pub fn fn_005a27e0(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    if reference.is_null() {
+        return false;
+    }
+    set_result(e, result, 0.0);
+    if e.call(REF_EXTRA_DATA_LIST_TEST, &args![reference, 8u32])
+        .bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    true
+}
+
+// Translated from 005a2810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetSandmanConditionFunction` (Xbox PDB): for the player only,
+/// the byte of the player's virtual `+0x36c`; 0.0 for any other reference.
+pub fn script_get_sandman_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    if reference.addr() == player {
+        let sandman = e.vcall(player, VSLOT_PLAYER_SANDMAN, &args![]).u8();
+        set_result(e, result, sandman as f64);
+    }
+    if trace_enabled(e) {
+        // "Player is in Sandman action >> %0.2f"
+        trace_result(e, 0x0103_5b68, result);
+    }
+    true
+}
+
+// Translated from 005a2890 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::GetCannibalConditionFunction` (Xbox PDB): for the player only,
+/// the byte of the player's virtual `+0x364`; 0.0 for any other reference.
+pub fn script_get_cannibal_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    let player = e.global::<u32>(PLAYER);
+    if reference.addr() == player {
+        let cannibal = e.vcall(player, VSLOT_PLAYER_CANNIBAL, &args![]).u8();
+        set_result(e, result, cannibal as f64);
+    }
+    if trace_enabled(e) {
+        // "Player is in Cannibal action >> %0.2f"
+        trace_result(e, 0x0103_5b90, result);
+    }
+    true
+}
+
+// Translated from 005a2910 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::IsInCritStageConditionFunction` (Xbox PDB): 1.0 when the actor's
+/// crit stage number equals the parameter. The reference is not checked for
+/// null (the virtual `IsActor` is called on it directly). The debug line says
+/// "IS" or "IS NOT" and names the stage from a table.
+pub fn script_is_in_crit_stage_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    stage: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool()
+        && e.call(ACTOR_GET_CRIT_STAGE, &args![reference]).u32() == stage
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        let verdict: u32 = if e.mem.f64(result.addr()) == 1.0 {
+            // "IS"
+            0x0103_5bd8
+        } else {
+            // "IS NOT"
+            0x0103_5bd0
+        };
+        let name = e
+            .mem
+            .u32(CRIT_STAGE_NAMES.wrapping_add(stage.wrapping_mul(4)));
+        // "Actor %s in stage %s."
+        e.call(DEBUG_PRINT, &args![0x0103_5bb8u32, verdict, name]);
+    }
+    true
+}
+
+// Translated from 005a29d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `Script::HasBeenEatenConditionFunction` (Xbox PDB): 1.0 when the
+/// `actor.cpp` test says the actor has been eaten. The reference is not
+/// checked for null (the virtual `IsActor` is called on it directly).
+pub fn script_has_been_eaten_condition_function(
+    e: &mut Engine,
+    reference: Ptr,
+    _param1: u32,
+    _param2: u32,
+    result: Ptr,
+) -> bool {
+    set_result(e, result, 0.0);
+    if e.vcall(reference.addr(), VSLOT_IS_ACTOR, &args![]).bool()
+        && e.call(ACTOR_HAS_BEEN_EATEN, &args![reference]).bool()
+    {
+        set_result(e, result, 1.0);
+    }
+    if trace_enabled(e) {
+        // "Actor has been eaten >> %0.2f"
+        trace_result(e, 0x0103_5bdc, result);
+    }
+    true
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -4082,6 +5416,46 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x005a0b60, script_get_current_ai_package_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x005a0e80, script_is_waiting_condition_function(Ptr, u32, u32, Ptr) -> bool),
         entry!(0x005a0f10, script_is_idle_playing_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a0f90, script_get_crime_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a10b0, script_is_guard_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1150, script_is_talking_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1210, fn_005a1210(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1770, fn_005a1770(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1880, script_get_wind_speed_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a1900, script_is_trespassing_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a19a0, script_is_in_my_owned_cell_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1a40, script_is_continuing_package_pc_near_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1ad0, script_can_have_flames_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1b80, script_has_flames_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1c30, script_get_open_state_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a1c90, script_get_is_current_package_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a1d80, script_get_day_of_week_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a1de0, script_is_pc_sleeping_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a1e50, fn_005a1e50(Ptr) -> u8),
+        entry!(0x005a1e70, script_is_pca_murderer_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a1ee0, script_get_detection_level_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a1fa0, script_is_swimming_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a2030, fn_005a2030(Ptr) -> u8),
+        entry!(0x005a2050, script_get_amount_stolen_sold_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a20b0, fn_005a20b0(Ptr) -> u32),
+        entry!(0x005a20d0, script_get_pc_expelled_condition_function(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a2150, script_get_pc_faction_murder_condition_function(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a21d0, fn_005a21d0(Ptr) -> bool),
+        entry!(0x005a21f0, script_get_player_enemyof_faction_condition_function(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a2270, fn_005a2270(Ptr) -> bool),
+        entry!(0x005a2290, script_get_pc_faction_attack_condition_function(u32, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a2310, fn_005a2310(Ptr) -> bool),
+        entry!(0x005a2330, script_get_destroyed_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a2390, script_has_magic_effect_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a2440, script_is_spell_target_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a24f0, script_get_spell_usage_number_condition_function(Ptr, Ptr, u32, Ptr) -> bool),
+        entry!(0x005a2590, script_get_vats_mode_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a25f0, script_get_vats_target_height_condition_function(u32, u32, u32, Ptr) -> bool),
+        entry!(0x005a27e0, fn_005a27e0(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a2810, script_get_sandman_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a2890, script_get_cannibal_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a2910, script_is_in_crit_stage_condition_function(Ptr, u32, u32, Ptr) -> bool),
+        entry!(0x005a29d0, script_has_been_eaten_condition_function(Ptr, u32, u32, Ptr) -> bool),
     ]
 }
 
@@ -7169,5 +8543,995 @@ mod tests {
         trace_on(&mut e);
         run(&mut e, 0x005a_0f10, 0, 0, 0);
         assert!(printed(&take_log(&mut e), 0x0103_5734));
+    }
+
+    // ---- functions from 005a0f90 on ----
+
+    /// Runs the condition function with the debug lines on and tells whether
+    /// the line with the given format was printed.
+    fn traces(e: &mut Engine, addr: u32, reference: u32, param1: u32, format: u32) -> bool {
+        trace_on(e);
+        run(e, addr, reference, param1, 0);
+        printed(&take_log(e), format)
+    }
+
+    #[test]
+    fn crime_asks_the_process_lists_with_a_clamped_crime_number() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let actor = actor(&mut e);
+        let placed = typed_object(&mut e, 0x3c);
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(vec![]));
+        let log = seen.clone();
+        e.register_double(PROCESS_LISTS_CRIME_TEST, move |_, a| {
+            log.borrow_mut().push(a.to_vec());
+            true.into_ret()
+        });
+        for (crime, passed) in [
+            (0, 0),
+            (3, 3),
+            (4, 4),
+            (5, u32::MAX),
+            (u32::MAX, u32::MAX),
+            (0x7fff_ffff, u32::MAX),
+        ] {
+            seen.borrow_mut().clear();
+            assert_eq!(
+                run(&mut e, 0x005a_0f90, actor, placed, crime),
+                (true, 1.0),
+                "crime {crime:#x}"
+            );
+            assert_eq!(
+                *seen.borrow(),
+                vec![vec![
+                    PROCESS_LISTS,
+                    actor,
+                    placed,
+                    actor,
+                    passed,
+                    0,
+                    u32::MAX
+                ]]
+            );
+        }
+        stub(&mut e, PROCESS_LISTS_CRIME_TEST, 0);
+        assert_eq!(run(&mut e, 0x005a_0f90, actor, placed, 1), (true, 0.0));
+        // A form that is not a placed reference, a non-actor, or no form.
+        stub(&mut e, PROCESS_LISTS_CRIME_TEST, 1);
+        let wrong = typed_object(&mut e, 0x20);
+        assert_eq!(run(&mut e, 0x005a_0f90, actor, wrong, 1), (true, 0.0));
+        let extra_type = typed_object(&mut e, 0x69);
+        assert_eq!(run(&mut e, 0x005a_0f90, actor, extra_type, 1), (true, 1.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_0f90, plain, placed, 1), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_0f90, actor, 0, 1), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_0f90, 0, 0, 0x0103_5750));
+    }
+
+    #[test]
+    fn guard_asks_the_class_of_an_npc() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let npc = typed_object(&mut e, 0x2a);
+        stub(&mut e, REF_GET_BASE_FORM, npc);
+        stub(&mut e, NPC_GET_CLASS, 0x7000);
+        e.register_double(CLASS_IS_GUARD, |_, a| {
+            assert_eq!(a, [0x7000]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_10b0, 0x2000, 0, 0), (true, 1.0));
+        stub(&mut e, CLASS_IS_GUARD, 0);
+        assert_eq!(run(&mut e, 0x005a_10b0, 0x2000, 0, 0), (true, 0.0));
+        // No class, a base form that is not an NPC_, no reference.
+        stub(&mut e, CLASS_IS_GUARD, 1);
+        stub(&mut e, NPC_GET_CLASS, 0);
+        assert_eq!(run(&mut e, 0x005a_10b0, 0x2000, 0, 0), (true, 0.0));
+        stub(&mut e, NPC_GET_CLASS, 0x7000);
+        let creature = typed_object(&mut e, 0x2b);
+        stub(&mut e, REF_GET_BASE_FORM, creature);
+        assert_eq!(run(&mut e, 0x005a_10b0, 0x2000, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_10b0, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_10b0, 0, 0, 0x0103_5764));
+    }
+
+    #[test]
+    fn talking_asks_the_actor_or_the_mobile_object() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        stub(&mut e, ACTOR_IS_TALKING, 1);
+        assert_eq!(run(&mut e, 0x005a_1150, actor, 0, 0), (true, 1.0));
+        stub(&mut e, ACTOR_IS_TALKING, 0);
+        assert_eq!(run(&mut e, 0x005a_1150, actor, 0, 0), (true, 0.0));
+        // Not an actor: the reference as a mobile object.
+        let plain = non_actor(&mut e);
+        e.register_double(REF_GET_MOBILE_OBJECT_EXTRA, move |_, a| {
+            assert_eq!(a, [plain]);
+            0x6000u32.into_ret()
+        });
+        e.register_double(MOBILE_OBJECT_IS_TALKING, |_, a| {
+            assert_eq!(a, [0x6000]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1150, plain, 0, 0), (true, 1.0));
+        stub(&mut e, MOBILE_OBJECT_IS_TALKING, 0);
+        assert_eq!(run(&mut e, 0x005a_1150, plain, 0, 0), (true, 0.0));
+        stub(&mut e, REF_GET_MOBILE_OBJECT_EXTRA, 0);
+        assert_eq!(run(&mut e, 0x005a_1150, plain, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1150, plain, 0, 0x0103_5778));
+    }
+
+    /// An engine for the two procedure functions: the actor, its process
+    /// (virtual `+0x280` answers `index`, virtual `+0x274` the object), its
+    /// package, and the procedure tables mapping (group 2, `index`) to
+    /// `procedure`.
+    fn procedure_setup(e: &mut Engine, index: u32, procedure: u32, process_object: u32) -> u32 {
+        for page in [0x011a_3000u32, 0x0119_b000] {
+            e.map(page, 0x1000);
+        }
+        e.register_double(0x0f20_0001, move |_, _| index.into_ret());
+        e.register_double(0x0f20_0002, move |_, _| process_object.into_ret());
+        let process = object(
+            e,
+            &[
+                (VSLOT_PROCESS_PROCEDURE_INDEX, 0x0f20_0001),
+                (VSLOT_PROCESS_PROCEDURE_OBJECT, 0x0f20_0002),
+            ],
+        );
+        stub(e, ACTOR_GET_PROCESS, process);
+        stub(e, MOBILE_GET_CURRENT_PACKAGE, 0x5000);
+        stub(e, PACKAGE_GET_PROCEDURE_GROUP, 2);
+        stub(e, PACKAGE_GET_TYPE, 0);
+        stub(e, COMBAT_CONTROLLER_IS_FLEEING, 0);
+        let table = e.mem.alloc(0x400);
+        e.mem.set_u32(table + index * 4, procedure);
+        e.mem.set_u32(PROCEDURE_TABLES + 8, table);
+        actor(e)
+    }
+
+    #[test]
+    fn procedure_maps_the_number_to_a_double_of_the_exe() {
+        let mut e = engine();
+        // Distinct values at every address the switch can read.
+        for (number, address) in PROCEDURE_VALUE_ADDRESS.iter().enumerate() {
+            if *address != 0 {
+                e.map(*address & !0xfff, 0x1000);
+                e.set_global(*address, 1000.0 + number as f64);
+            }
+        }
+        e.map(PROCEDURE_SPECIAL_DEFAULT & !0xfff, 0x1000);
+        e.set_global(PROCEDURE_SPECIAL_DEFAULT, 45.0f64);
+        let actor = procedure_setup(&mut e, 3, 0, 0);
+        for number in (0..=0x36u32).chain([0x37, 0x100, u32::MAX]) {
+            let table = e.mem.u32(PROCEDURE_TABLES + 8);
+            e.mem.set_u32(table + 12, number);
+            let expected = match number {
+                0 => 0.0,
+                2 => 1.0,
+                PROCEDURE_SPECIAL => 45.0,
+                n if n <= 0x36 && PROCEDURE_VALUE_ADDRESS[n as usize] != 0 => 1000.0 + n as f64,
+                _ => -1.0,
+            };
+            assert_eq!(
+                run(&mut e, 0x005a_1210, actor, 0, 0),
+                (true, expected),
+                "procedure {number:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn procedure_special_case_reads_the_float_tables() {
+        let mut e = engine();
+        for address in [
+            PROCEDURE_SPECIAL_DEFAULT,
+            PROCEDURE_SPECIAL_TABLE_BY_TYPE,
+            PROCEDURE_SPECIAL_TABLE_BY_VALUE,
+        ] {
+            e.map(address & !0xfff, 0x1000);
+        }
+        e.set_global(PROCEDURE_SPECIAL_DEFAULT, 45.0f64);
+        for i in 0..4u32 {
+            e.set_global(PROCEDURE_SPECIAL_TABLE_BY_TYPE + 4 * i, 10.5f32 + i as f32);
+        }
+        for i in 0..7u32 {
+            e.set_global(PROCEDURE_SPECIAL_TABLE_BY_VALUE + 4 * i, 20.5f32 + i as f32);
+        }
+        // The object of virtual +0x274: type at +4, value at +8.
+        let object = e.mem.alloc(0x20);
+        stub(&mut e, PROCEDURE_OBJECT_GET_VALUE, 0);
+        e.register_double(PROCEDURE_OBJECT_GET_VALUE, |e, a| {
+            e.mem.u32(a[0] + 8).into_ret()
+        });
+        let actor = procedure_setup(&mut e, 1, PROCEDURE_SPECIAL, object);
+        let cases: [(u32, u32, f64); 8] = [
+            (1, 0, 11.5),
+            (0, 0, 10.5),
+            (2, 0, 12.5),
+            (4, 0, 45.0),
+            (u32::MAX, 0, 45.0),
+            (3, u32::MAX, 20.5),
+            (3, 5, 26.5),
+            (3, 6, 45.0),
+        ];
+        for (kind, value, expected) in cases {
+            e.mem.set_u32(object + 4, kind);
+            e.mem.set_u32(object + 8, value);
+            assert_eq!(
+                run(&mut e, 0x005a_1210, actor, 0, 0),
+                (true, expected),
+                "kind {kind:#x} value {value:#x}"
+            );
+        }
+        // No object: the default stays.
+        let actor = procedure_setup(&mut e, 1, PROCEDURE_SPECIAL, 0);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 45.0));
+    }
+
+    #[test]
+    fn procedure_of_a_fleeing_combat_package_is_ten() {
+        let mut e = engine();
+        e.map(PROCEDURE_VALUE_ADDRESS[10] & !0xfff, 0x1000);
+        e.set_global(PROCEDURE_VALUE_ADDRESS[10], 77.0f64);
+        let actor = procedure_setup(&mut e, 0, 2, 0);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 1.0));
+        stub(&mut e, PACKAGE_GET_TYPE, PACKAGE_TYPE_COMBAT);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 1.0));
+        stub(&mut e, COMBAT_CONTROLLER_IS_FLEEING, 1);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 77.0));
+        // Fleeing only counts for combat packages.
+        stub(&mut e, PACKAGE_GET_TYPE, 5);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 1.0));
+        // No package, no process, not an actor.
+        stub(&mut e, MOBILE_GET_CURRENT_PACKAGE, 0);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 0.0));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_1210, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1210, plain, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1210, plain, 0, 0x0103_578c));
+    }
+
+    #[test]
+    fn procedure_number_comes_from_the_package_or_the_process_object() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        stub(&mut e, MOBILE_GET_CURRENT_PACKAGE, 0x5000);
+        stub(&mut e, PACKAGE_GET_TYPE, PACKAGE_TYPE_WITH_NUMBER);
+        e.register_double(PACKAGE_GET_NUMBER, |_, a| {
+            assert_eq!(a, [0x5000]);
+            (-6i32 as u32).into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, -6.0));
+        // Type 0x0e: the id of the process object.
+        stub(&mut e, 0x0f20_0002, 0x9100);
+        let process = object(&mut e, &[(VSLOT_PROCESS_PROCEDURE_OBJECT, 0x0f20_0002)]);
+        stub(&mut e, ACTOR_GET_PROCESS, process);
+        stub(&mut e, PROCEDURE_OBJECT_GET_ID, 0x1234);
+        stub(&mut e, PACKAGE_GET_TYPE, PACKAGE_TYPE_WITH_PROCESS_OBJECT);
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, 4660.0));
+        stub(&mut e, 0x0f20_0002, 0);
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, -1.0));
+        stub(&mut e, ACTOR_GET_PROCESS, 0);
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, -1.0));
+        // Another type, no package, not an actor: -1.
+        stub(&mut e, PACKAGE_GET_TYPE, 3);
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, -1.0));
+        stub(&mut e, MOBILE_GET_CURRENT_PACKAGE, 0);
+        assert_eq!(run(&mut e, 0x005a_1770, actor, 0, 0), (true, -1.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1770, plain, 0, 0), (true, -1.0));
+        assert!(traces(&mut e, 0x005a_1770, plain, 0, 0x0103_578c));
+    }
+
+    #[test]
+    fn wind_speed_needs_the_tes_and_its_sky() {
+        let mut e = engine();
+        e.set_global(TES, 0x9000u32);
+        e.register_double(TES_GET_SKY, |_, a| {
+            assert_eq!(a, [0x9000]);
+            0x9100u32.into_ret()
+        });
+        e.register_double(SKY_GET_WIND_SPEED, |_, a| {
+            assert_eq!(a, [0x9100]);
+            Ret {
+                st0: 3.25,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(run(&mut e, 0x005a_1880, 0, 0, 0), (true, 3.25));
+        assert!(traces(&mut e, 0x005a_1880, 0, 0, 0x0103_5848));
+        // No sky, or no TES: false, result 0, no debug line.
+        stub(&mut e, TES_GET_SKY, 0);
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1880, 0, 0, 0), (false, 0.0));
+        assert!(!printed(&take_log(&mut e), 0x0103_5848));
+        e.set_global(TES, 0u32);
+        assert_eq!(run(&mut e, 0x005a_1880, 0, 0, 0), (false, 0.0));
+    }
+
+    #[test]
+    fn trespassing_asks_the_actor() {
+        let mut e = engine();
+        stub(&mut e, 0x0f20_0010, 1);
+        let trespassing = actor_with(&mut e, &[(VSLOT_ACTOR_IS_TRESPASSING, 0x0f20_0010)]);
+        assert_eq!(run(&mut e, 0x005a_1900, trespassing, 0, 0), (true, 1.0));
+        stub(&mut e, 0x0f20_0010, 0);
+        assert_eq!(run(&mut e, 0x005a_1900, trespassing, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1900, plain, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_1900, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1900, 0, 0, 0x0103_5860));
+    }
+
+    #[test]
+    fn in_my_owned_cell_asks_the_parent_cell() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        stub(&mut e, REF_GET_PARENT_CELL, 0x8000);
+        e.register_double(CELL_IS_OWNED_BY, move |_, a| {
+            assert_eq!(a, [0x8000, actor]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_19a0, actor, 0, 0), (true, 1.0));
+        stub(&mut e, CELL_IS_OWNED_BY, 0);
+        assert_eq!(run(&mut e, 0x005a_19a0, actor, 0, 0), (true, 0.0));
+        // No parent cell: never asked.
+        stub(&mut e, CELL_IS_OWNED_BY, 1);
+        stub(&mut e, REF_GET_PARENT_CELL, 0);
+        assert_eq!(run(&mut e, 0x005a_19a0, actor, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_19a0, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_19a0, 0, 0, 0x0103_587c));
+    }
+
+    #[test]
+    fn continuing_package_near_pc_is_the_byte() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        stub(&mut e, ACTOR_IS_CONTINUING_PACKAGE_FOR_PC, 1);
+        assert_eq!(run(&mut e, 0x005a_1a40, actor, 0, 0), (true, 1.0));
+        // Only the low byte counts.
+        stub(&mut e, ACTOR_IS_CONTINUING_PACKAGE_FOR_PC, 0x1200);
+        assert_eq!(run(&mut e, 0x005a_1a40, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1a40, plain, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1a40, 0, 0, 0x0103_589c));
+    }
+
+    #[test]
+    fn can_have_flames_looks_up_the_extra_data_of_the_node() {
+        let mut e = engine();
+        stub(&mut e, FLAMES_EXTRA_DATA_NAME, 0x1234);
+        stub(&mut e, 0x0f20_0020, 0x5000);
+        let reference = object(&mut e, &[(VSLOT_REF_GET_NODE, 0x0f20_0020)]);
+        e.register_double(NODE_GET_EXTRA_DATA, |_, a| {
+            assert_eq!(a, [0x5000, 0x1234]);
+            0x5100u32.into_ret()
+        });
+        e.register_double(EXTRA_DATA_CAST, |_, a| {
+            assert_eq!(a, [FLAMES_EXTRA_DATA_TYPE, 0x5100]);
+            0x5200u32.into_ret()
+        });
+        e.register_double(FLAMES_EXTRA_DATA_TEST, |_, a| {
+            assert_eq!(a, [0x5200]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1ad0, reference, 0, 0), (true, 1.0));
+        stub(&mut e, FLAMES_EXTRA_DATA_TEST, 0);
+        assert_eq!(run(&mut e, 0x005a_1ad0, reference, 0, 0), (true, 0.0));
+        // No extra data: the test is not run and the result stays 0.
+        stub(&mut e, NODE_GET_EXTRA_DATA, 0);
+        stub(&mut e, FLAMES_EXTRA_DATA_TEST, 1);
+        assert_eq!(run(&mut e, 0x005a_1ad0, reference, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_1ad0, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1ad0, 0, 0, 0x0103_58c8));
+    }
+
+    #[test]
+    fn has_flames_asks_for_the_addon_nodes_of_the_node() {
+        let mut e = engine();
+        stub(&mut e, 0x0f20_0031, 0x77);
+        let node = object(&mut e, &[(VSLOT_NODE_FLAMES_ARGUMENT, 0x0f20_0031)]);
+        stub(&mut e, 0x0f20_0030, node);
+        let reference = object(&mut e, &[(VSLOT_REF_GET_NODE, 0x0f20_0030)]);
+        e.register_double(REF_HAS_ADDON_NODES, |_, a| {
+            assert_eq!(a, [0x77]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1b80, reference, 0, 0), (true, 1.0));
+        stub(&mut e, REF_HAS_ADDON_NODES, 0);
+        assert_eq!(run(&mut e, 0x005a_1b80, reference, 0, 0), (true, 0.0));
+        // No node, no reference: 0 and the test is not run.
+        stub(&mut e, REF_HAS_ADDON_NODES, 1);
+        stub(&mut e, 0x0f20_0030, 0);
+        assert_eq!(run(&mut e, 0x005a_1b80, reference, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_1b80, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1b80, 0, 0, 0x0103_58e0));
+    }
+
+    #[test]
+    fn open_state_is_a_signed_integer() {
+        let mut e = engine();
+        e.register_double(OPEN_CLOSE_GET_OPEN_STATE, |_, a| {
+            assert_eq!(a, [0x2000]);
+            2u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1c30, 0x2000, 0, 0), (true, 2.0));
+        stub(&mut e, OPEN_CLOSE_GET_OPEN_STATE, -1i32 as u32);
+        assert_eq!(run(&mut e, 0x005a_1c30, 0x2000, 0, 0), (true, -1.0));
+        assert_eq!(run(&mut e, 0x005a_1c30, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1c30, 0, 0, 0x0103_58f4));
+    }
+
+    #[test]
+    fn current_package_compares_with_the_package_form() {
+        let mut e = engine();
+        use_form_types(&mut e);
+        let actor = actor(&mut e);
+        let package = typed_object(&mut e, 0x49);
+        let other = typed_object(&mut e, 0x49);
+        stub(&mut e, ACTOR_GET_PACKAGE_SET_AS_CURRENT, package);
+        stub(&mut e, PACKAGE_GET_IS_CREATED, 0);
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, package, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, other, 0), (true, 0.0));
+        // A package created at run time: the one in the extra data is used.
+        stub(&mut e, PACKAGE_GET_IS_CREATED, 1);
+        stub(&mut e, REF_GET_EXTRA_DATA_LIST, 0x7000);
+        e.register_double(EXTRA_DATA_LIST_GET_PACKAGE_EXTRA, move |_, a| {
+            assert_eq!(a, [0x7000]);
+            other.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, other, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, package, 0), (true, 0.0));
+        // Extra data without a package keeps the original one.
+        stub(&mut e, EXTRA_DATA_LIST_GET_PACKAGE_EXTRA, 0);
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, package, 0), (true, 1.0));
+        // No current package never matches; wrong form type, non-actor.
+        stub(&mut e, ACTOR_GET_PACKAGE_SET_AS_CURRENT, 0);
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, package, 0), (true, 0.0));
+        let wrong = typed_object(&mut e, 0x47);
+        stub(&mut e, ACTOR_GET_PACKAGE_SET_AS_CURRENT, wrong);
+        assert_eq!(run(&mut e, 0x005a_1c90, actor, wrong, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1c90, plain, package, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1c90, plain, 0, 0x0103_590c));
+    }
+
+    #[test]
+    fn day_of_week_asks_the_calendar() {
+        let mut e = engine();
+        e.register_double(CALENDAR_GET_DAY_OF_WEEK, |_, a| {
+            assert_eq!(a, [CALENDAR]);
+            4u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1d80, 0, 0, 0), (true, 4.0));
+        assert!(traces(&mut e, 0x005a_1d80, 0, 0, 0x0103_592c));
+    }
+
+    /// A zeroed player-sized object set as the player global.
+    fn player_object(e: &mut Engine) -> u32 {
+        let player = e.mem.alloc(0x800);
+        e.set_global(PLAYER, player);
+        player
+    }
+
+    #[test]
+    fn pc_sleeping_reads_the_player_byte() {
+        let mut e = engine();
+        let player = player_object(&mut e);
+        assert_eq!(run(&mut e, 0x005a_1de0, 0, 0, 0), (true, 0.0));
+        e.mem.set_u8(player + 0x658, 1);
+        assert_eq!(run(&mut e, 0x005a_1de0, 0, 0, 0), (true, 1.0));
+        assert!(traces(&mut e, 0x005a_1de0, 0, 0, 0x0103_5944));
+    }
+
+    #[test]
+    fn player_sleeping_byte_is_at_0x658() {
+        let mut e = engine();
+        let player = player_object(&mut e);
+        e.mem.set_u8(player + 0x658, 0x5a);
+        assert_eq!(e.call(0x005a_1e50, &args![player]).u32() & 0xff, 0x5a);
+        e.mem.set_u8(player + 0x658, 0);
+        assert_eq!(e.call(0x005a_1e50, &args![player]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn pc_a_murderer_asks_the_player() {
+        let mut e = engine();
+        let player = player_object(&mut e);
+        e.register_double(PLAYER_IS_A_MURDERER, move |_, a| {
+            assert_eq!(a, [player]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1e70, 0, 0, 0), (true, 1.0));
+        stub(&mut e, PLAYER_IS_A_MURDERER, 0);
+        assert_eq!(run(&mut e, 0x005a_1e70, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1e70, 0, 0, 0x0103_5960));
+    }
+
+    #[test]
+    fn detection_level_is_an_integer_and_names_both_references() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        e.register_double(ACTOR_GET_DETECTION_LEVEL, move |_, a| {
+            assert_eq!(a, [actor, 0x3000]);
+            (-30i32 as u32).into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_1ee0, actor, 0x3000, 0), (true, -30.0));
+        // The debug line: format, actor name, target name, level.
+        e.register_double(REF_GET_NAME, |_, a| (0x8000 + a[0]).into_ret());
+        trace_on(&mut e);
+        run(&mut e, 0x005a_1ee0, actor, 0x3000, 0);
+        let log = take_log(&mut e);
+        let w = words(-30.0);
+        assert_eq!(
+            calls_to(&log, DEBUG_PRINT),
+            vec![vec![
+                0x0103_597c,
+                0x8000 + actor,
+                0x8000 + 0x3000,
+                w[0],
+                w[1]
+            ]]
+        );
+        // A non-actor, no target or no reference: 0 and no debug line.
+        let plain = non_actor(&mut e);
+        for (reference, target) in [(plain, 0x3000), (actor, 0), (0, 0x3000)] {
+            trace_on(&mut e);
+            assert_eq!(run(&mut e, 0x005a_1ee0, reference, target, 0), (true, 0.0));
+            assert!(!printed(&take_log(&mut e), 0x0103_597c));
+        }
+    }
+
+    #[test]
+    fn swimming_reads_the_actor_byte() {
+        let mut e = engine();
+        let swimmer = actor(&mut e);
+        e.mem.set_u8(swimmer + 0x14d, 1);
+        assert_eq!(run(&mut e, 0x005a_1fa0, swimmer, 0, 0), (true, 1.0));
+        e.mem.set_u8(swimmer + 0x14d, 0);
+        assert_eq!(run(&mut e, 0x005a_1fa0, swimmer, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        e.mem.set_u8(plain + 0x14d, 1);
+        assert_eq!(run(&mut e, 0x005a_1fa0, plain, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_1fa0, 0, 0, 0x0103_599c));
+    }
+
+    #[test]
+    fn swimming_byte_is_at_0x14d() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x200);
+        e.mem.set_u8(block + 0x14d, 0x33);
+        assert_eq!(e.call(0x005a_2030, &args![block]).u32() & 0xff, 0x33);
+    }
+
+    #[test]
+    fn amount_stolen_sold_reads_the_player_integer() {
+        let mut e = engine();
+        let player = player_object(&mut e);
+        e.mem.set_u32(player + 0x6dc, 250);
+        assert_eq!(run(&mut e, 0x005a_2050, 0, 0, 0), (true, 250.0));
+        e.mem.set_u32(player + 0x6dc, -5i32 as u32);
+        assert_eq!(run(&mut e, 0x005a_2050, 0, 0, 0), (true, -5.0));
+        assert!(traces(&mut e, 0x005a_2050, 0, 0, 0x0103_59b4));
+    }
+
+    #[test]
+    fn amount_stolen_field_is_at_0x6dc() {
+        let mut e = engine();
+        let block = e.mem.alloc(0x800);
+        e.mem.set_u32(block + 0x6dc, 0xdead);
+        assert_eq!(e.call(0x005a_20b0, &args![block]).u32(), 0xdead);
+    }
+
+    /// A faction-like object whose flags (`+0x34`) are `flags`.
+    fn faction_with_flags(e: &mut Engine, flags: u32) -> u32 {
+        let faction = e.mem.alloc(0x80);
+        e.mem.set_u32(faction + 0x34, flags);
+        faction
+    }
+
+    /// The text of the debug line (the only argument) a faction condition
+    /// printed, as a format address.
+    fn faction_line(e: &mut Engine, addr: u32, faction: u32) -> u32 {
+        trace_on(e);
+        run(e, addr, 0, faction, 0);
+        let log = take_log(e);
+        calls_to(&log, DEBUG_PRINT)[0][0]
+    }
+
+    #[test]
+    fn pc_expelled_tests_the_faction() {
+        let mut e = engine();
+        e.register_double(FACTION_TEST_EXPELLED, |_, a| {
+            assert_eq!(a, [0x4000]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_20d0, 0, 0x4000, 0), (true, 1.0));
+        assert_eq!(faction_line(&mut e, 0x005a_20d0, 0x4000), 0x0103_59f0);
+        stub(&mut e, FACTION_TEST_EXPELLED, 0);
+        assert_eq!(run(&mut e, 0x005a_20d0, 0, 0x4000, 0), (true, 0.0));
+        assert_eq!(faction_line(&mut e, 0x005a_20d0, 0x4000), 0x0103_59dc);
+        // No faction: 0 and the test is never run.
+        stub(&mut e, FACTION_TEST_EXPELLED, 1);
+        assert_eq!(run(&mut e, 0x005a_20d0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn pc_faction_murder_tests_flag_0x40() {
+        let mut e = engine();
+        let murder = faction_with_flags(&mut e, 0x40);
+        let other = faction_with_flags(&mut e, 0xffff_ffbf);
+        assert_eq!(run(&mut e, 0x005a_2150, 0, murder, 0), (true, 1.0));
+        assert_eq!(faction_line(&mut e, 0x005a_2150, murder), 0x0103_5a24);
+        assert_eq!(run(&mut e, 0x005a_2150, 0, other, 0), (true, 0.0));
+        assert_eq!(faction_line(&mut e, 0x005a_2150, other), 0x0103_5a00);
+        assert_eq!(run(&mut e, 0x005a_2150, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn faction_flag_0x40_helper() {
+        let mut e = engine();
+        let yes = faction_with_flags(&mut e, 0x41);
+        let no = faction_with_flags(&mut e, 0xffff_ffbf);
+        assert_eq!(e.call(0x005a_21d0, &args![yes]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x005a_21d0, &args![no]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn player_enemy_of_faction_tests_flag_0x10() {
+        let mut e = engine();
+        let enemy = faction_with_flags(&mut e, 0x10);
+        let other = faction_with_flags(&mut e, 0xffff_ffef);
+        assert_eq!(run(&mut e, 0x005a_21f0, 0, enemy, 0), (true, 1.0));
+        assert_eq!(faction_line(&mut e, 0x005a_21f0, enemy), 0x0103_5a68);
+        assert_eq!(run(&mut e, 0x005a_21f0, 0, other, 0), (true, 0.0));
+        assert_eq!(faction_line(&mut e, 0x005a_21f0, other), 0x0103_5a44);
+        assert_eq!(run(&mut e, 0x005a_21f0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn faction_flag_0x10_helper() {
+        let mut e = engine();
+        let yes = faction_with_flags(&mut e, 0x11);
+        let no = faction_with_flags(&mut e, 0xffff_ffef);
+        assert_eq!(e.call(0x005a_2270, &args![yes]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x005a_2270, &args![no]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn pc_faction_attack_tests_flag_0x20() {
+        let mut e = engine();
+        let attacked = faction_with_flags(&mut e, 0x20);
+        let other = faction_with_flags(&mut e, 0xffff_ffdf);
+        assert_eq!(run(&mut e, 0x005a_2290, 0, attacked, 0), (true, 1.0));
+        assert_eq!(faction_line(&mut e, 0x005a_2290, attacked), 0x0103_5aac);
+        assert_eq!(run(&mut e, 0x005a_2290, 0, other, 0), (true, 0.0));
+        assert_eq!(faction_line(&mut e, 0x005a_2290, other), 0x0103_5a88);
+        assert_eq!(run(&mut e, 0x005a_2290, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn faction_flag_0x20_helper() {
+        let mut e = engine();
+        let yes = faction_with_flags(&mut e, 0x21);
+        let no = faction_with_flags(&mut e, 0xffff_ffdf);
+        assert_eq!(e.call(0x005a_2310, &args![yes]).u32() & 0xff, 1);
+        assert_eq!(e.call(0x005a_2310, &args![no]).u32() & 0xff, 0);
+    }
+
+    #[test]
+    fn destroyed_asks_the_reference() {
+        let mut e = engine();
+        e.register_double(REF_TEST_DESTROYED, |_, a| {
+            assert_eq!(a, [0x2000]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_2330, 0x2000, 0, 0), (true, 1.0));
+        stub(&mut e, REF_TEST_DESTROYED, 0);
+        assert_eq!(run(&mut e, 0x005a_2330, 0x2000, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_2330, 0, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_2330, 0, 0, 0x0103_5acc));
+    }
+
+    /// An actor whose virtual `+0x19c` returns `magic_target`.
+    fn actor_with_magic_target(e: &mut Engine, magic_target: u32) -> u32 {
+        stub(e, 0x0f20_0040, magic_target);
+        actor_with(e, &[(VSLOT_ACTOR_GET_MAGIC_TARGET, 0x0f20_0040)])
+    }
+
+    #[test]
+    fn has_magic_effect_asks_the_magic_target() {
+        let mut e = engine();
+        let actor = actor_with_magic_target(&mut e, 0x6000);
+        e.register_double(MAGIC_TARGET_HAS_EFFECT, |_, a| {
+            assert_eq!(a, [0x6000, 0x4000]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_2390, actor, 0x4000, 0), (true, 1.0));
+        stub(&mut e, MAGIC_TARGET_HAS_EFFECT, 0);
+        assert_eq!(run(&mut e, 0x005a_2390, actor, 0x4000, 0), (true, 0.0));
+        // No effect form, not an actor.
+        stub(&mut e, MAGIC_TARGET_HAS_EFFECT, 1);
+        assert_eq!(run(&mut e, 0x005a_2390, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_2390, plain, 0x4000, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_2390, 0, 0, 0x0103_5ae4));
+    }
+
+    #[test]
+    fn is_spell_target_passes_a_one() {
+        let mut e = engine();
+        let actor = actor_with_magic_target(&mut e, 0x6000);
+        e.register_double(MAGIC_TARGET_IS_SPELL_TARGET, |_, a| {
+            assert_eq!(a, [0x6000, 0x4000, 1]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_2440, actor, 0x4000, 0), (true, 1.0));
+        stub(&mut e, MAGIC_TARGET_IS_SPELL_TARGET, 0);
+        assert_eq!(run(&mut e, 0x005a_2440, actor, 0x4000, 0), (true, 0.0));
+        stub(&mut e, MAGIC_TARGET_IS_SPELL_TARGET, 1);
+        assert_eq!(run(&mut e, 0x005a_2440, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_2440, plain, 0x4000, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_2440, 0, 0, 0x0103_5b00));
+    }
+
+    #[test]
+    fn spell_usage_number_uses_the_magic_target_inside_the_actor() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        e.register_double(MAGIC_TARGET_GET_USAGE_MONITOR_MAGNITUDE, move |_, a| {
+            assert_eq!(a, [actor + 0x94, 0x4000]);
+            Ret {
+                st0: 2.75,
+                ..Ret::default()
+            }
+        });
+        assert_eq!(run(&mut e, 0x005a_24f0, actor, 0x4000, 0), (true, 2.75));
+        // No effect, not an actor: 0.
+        assert_eq!(run(&mut e, 0x005a_24f0, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_24f0, plain, 0x4000, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_24f0, 0, 0, 0x0103_5b1c));
+    }
+
+    #[test]
+    fn vats_mode_is_the_vats_field() {
+        let mut e = engine();
+        e.register_double(VATS_GET_MODE, |_, a| {
+            assert_eq!(a, [VATS]);
+            3u32.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_2590, 0, 0, 0), (true, 3.0));
+        assert!(traces(&mut e, 0x005a_2590, 0, 0, 0x0103_5b38));
+    }
+
+    /// Everything `GetVATSTargetHeight` needs: mode 4, an attack action on
+    /// `target` with the body part number `body_part`, the player at height
+    /// `player_z`. Returns (action, player).
+    fn vats_setup(e: &mut Engine, target: u32, body_part: u32, player_z: f32) -> (u32, u32) {
+        e.register_double(VATS_GET_MODE, |_, _| 4u32.into_ret());
+        let action = e.mem.alloc(0x20);
+        e.mem.set_u32(action, 7);
+        e.mem.set_u32(action + 0xc, target);
+        e.mem.set_u32(action + 0x10, body_part);
+        stub(e, VATS_GET_CURRENT_ACTION, action);
+        e.register_double(ACTION_IS_ATTACK, |_, a| (a[0] == 7).into_ret());
+        e.register_double(RETURN_THIS, |_, a| a[0].into_ret());
+        let position = floats(e, [1.0, 2.0, player_z]);
+        stub(e, 0x0f20_0050, position);
+        let player = e.mem.alloc(0x800);
+        let vtable = e.mem.alloc(0x800);
+        e.mem.set_u32(vtable + VSLOT_GET_POSITION, 0x0f20_0050);
+        e.mem.set_u32(player, vtable);
+        e.set_global(PLAYER, player);
+        (action, player)
+    }
+
+    #[test]
+    fn vats_target_height_uses_the_position_without_a_node() {
+        let mut e = engine();
+        let position = floats(&mut e, [5.0, 6.0, 10.5]);
+        stub(&mut e, 0x0f20_0060, position);
+        stub(&mut e, 0x0f20_0061, 0);
+        let target = object(
+            &mut e,
+            &[
+                (VSLOT_GET_POSITION, 0x0f20_0060),
+                (VSLOT_REF_GET_NODE, 0x0f20_0061),
+            ],
+        );
+        vats_setup(&mut e, target, 0xffff_ffff, 4.0);
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 6.5));
+        assert!(traces(&mut e, 0x005a_25f0, 0, 0, 0x0103_5b4c));
+    }
+
+    #[test]
+    fn vats_target_height_uses_the_bound_center_with_a_node() {
+        let mut e = engine();
+        let center = floats(&mut e, [0.0, 0.0, 21.25]);
+        stub(&mut e, 0x0f20_0062, 0x5000);
+        let target = object(&mut e, &[(VSLOT_REF_GET_NODE, 0x0f20_0062)]);
+        vats_setup(&mut e, target, 0xffff_ffff, 1.25);
+        e.register_double(NODE_GET_WORLD_BOUND, |_, a| {
+            assert_eq!(a, [0x5000]);
+            0x5400u32.into_ret()
+        });
+        // The bound's first field is the center; RETURN_THIS gives its address.
+        e.register_double(RETURN_THIS, move |_, a| {
+            if a[0] == 0x5400 {
+                center.into_ret()
+            } else {
+                a[0].into_ret()
+            }
+        });
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 20.0));
+    }
+
+    #[test]
+    fn vats_target_height_uses_the_node_of_the_body_part() {
+        let mut e = engine();
+        let part_position = floats(&mut e, [0.0, 0.0, 30.0]);
+        stub(&mut e, 0x0f20_0063, 0x5000);
+        stub(&mut e, 0x0f20_0064, 0x5500);
+        stub(&mut e, 0x0f20_0065, 0);
+        let target = actor_with(
+            &mut e,
+            &[
+                (VSLOT_REF_GET_NODE, 0x0f20_0063),
+                (VSLOT_GET_POSITION, 0x0f20_0065),
+            ],
+        );
+        stub(&mut e, 0x0f20_0066, 0x5600);
+        let base = object(&mut e, &[(VSLOT_BASE_FORM_BODY_PART_DATA, 0x0f20_0066)]);
+        vats_setup(&mut e, target, 9, 10.0);
+        e.register_double(ACTOR_GET_BASE_FORM, move |_, a| {
+            assert_eq!(a, [target]);
+            base.into_ret()
+        });
+        e.register_double(BODY_PART_DATA_GET_BODY_PART, |_, a| {
+            assert_eq!(a, [0x5600, 9]);
+            0x5700u32.into_ret()
+        });
+        e.register_double(BODY_PART_GET_NODE_NAME, |_, a| {
+            assert_eq!(a, [0x5700]);
+            0x5800u32.into_ret()
+        });
+        e.register_double(NODE_FIND_BY_NAME, |_, a| {
+            assert_eq!(a, [0x5000, 0x5800]);
+            0x5900u32.into_ret()
+        });
+        e.register_double(NODE_GET_WORLD_POSITION, move |_, a| {
+            assert_eq!(a, [0x5900]);
+            part_position.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 20.0));
+        // A part without a node falls back to the center of the target node bound.
+        stub(&mut e, NODE_FIND_BY_NAME, 0);
+        stub(&mut e, NODE_GET_WORLD_BOUND, 0x5a00);
+        let center = floats(&mut e, [0.0, 0.0, 50.0]);
+        let zero = floats(&mut e, [0.0, 0.0, 0.0]);
+        stub(&mut e, 0x0f20_0065, zero);
+        e.register_double(RETURN_THIS, move |_, a| {
+            if a[0] == 0x5a00 {
+                center.into_ret()
+            } else {
+                a[0].into_ret()
+            }
+        });
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 40.0));
+        // No such part: same fallback.
+        stub(&mut e, BODY_PART_DATA_GET_BODY_PART, 0);
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 40.0));
+    }
+
+    #[test]
+    fn vats_target_height_needs_mode_4_and_an_attack_action() {
+        let mut e = engine();
+        let position = floats(&mut e, [0.0, 0.0, 10.0]);
+        stub(&mut e, 0x0f20_0067, position);
+        stub(&mut e, 0x0f20_0068, 0);
+        let target = object(
+            &mut e,
+            &[
+                (VSLOT_GET_POSITION, 0x0f20_0067),
+                (VSLOT_REF_GET_NODE, 0x0f20_0068),
+            ],
+        );
+        vats_setup(&mut e, target, 0xffff_ffff, 0.0);
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 10.0));
+        e.register_double(ACTION_IS_ATTACK, |_, _| false.into_ret());
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 0.0));
+        e.register_double(ACTION_IS_ATTACK, |_, _| true.into_ret());
+        stub(&mut e, VATS_GET_CURRENT_ACTION, 0);
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 0.0));
+        e.register_double(VATS_GET_MODE, |_, _| 3u32.into_ret());
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn vats_target_height_without_a_target_is_zero() {
+        let mut e = engine();
+        vats_setup(&mut e, 0, 0xffff_ffff, 0.0);
+        assert_eq!(run(&mut e, 0x005a_25f0, 0, 0, 0), (true, 0.0));
+    }
+
+    #[test]
+    fn unnamed_extra_data_test_with_eight() {
+        let mut e = engine();
+        e.register_double(REF_EXTRA_DATA_LIST_TEST, |_, a| {
+            assert_eq!(a, [0x2000, 8]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_27e0, 0x2000, 0, 0), (true, 1.0));
+        stub(&mut e, REF_EXTRA_DATA_LIST_TEST, 0);
+        assert_eq!(run(&mut e, 0x005a_27e0, 0x2000, 0, 0), (true, 0.0));
+        // A null reference: false and the result is not written.
+        trace_on(&mut e);
+        assert_eq!(run(&mut e, 0x005a_27e0, 0, 0, 0), (false, SENTINEL));
+        assert!(calls_to(&take_log(&mut e), DEBUG_PRINT).is_empty());
+    }
+
+    #[test]
+    fn sandman_and_cannibal_only_answer_for_the_player() {
+        let mut e = engine();
+        stub(&mut e, 0x0f20_0070, 1);
+        stub(&mut e, 0x0f20_0071, 0x0101);
+        let player = object(
+            &mut e,
+            &[
+                (VSLOT_PLAYER_SANDMAN, 0x0f20_0070),
+                (VSLOT_PLAYER_CANNIBAL, 0x0f20_0071),
+            ],
+        );
+        e.set_global(PLAYER, player);
+        let other = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_2810, player, 0, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_2810, other, 0, 0), (true, 0.0));
+        // Only the low byte of the answer counts.
+        assert_eq!(run(&mut e, 0x005a_2890, player, 0, 0), (true, 1.0));
+        stub(&mut e, 0x0f20_0071, 0x0100);
+        assert_eq!(run(&mut e, 0x005a_2890, player, 0, 0), (true, 0.0));
+        assert_eq!(run(&mut e, 0x005a_2890, other, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_2810, other, 0, 0x0103_5b68));
+        assert!(traces(&mut e, 0x005a_2890, other, 0, 0x0103_5b90));
+    }
+
+    #[test]
+    fn crit_stage_compares_and_names_the_stage() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        e.map(CRIT_STAGE_NAMES & !0xfff, 0x1000);
+        e.mem.set_u32(CRIT_STAGE_NAMES + 3 * 4, 0x0f30_0003);
+        stub(&mut e, ACTOR_GET_CRIT_STAGE, 3);
+        assert_eq!(run(&mut e, 0x005a_2910, actor, 3, 0), (true, 1.0));
+        assert_eq!(run(&mut e, 0x005a_2910, actor, 2, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        assert_eq!(run(&mut e, 0x005a_2910, plain, 3, 0), (true, 0.0));
+        // "Actor %s in stage %s.": IS / IS NOT and the name from the table.
+        trace_on(&mut e);
+        run(&mut e, 0x005a_2910, actor, 3, 0);
+        run(&mut e, 0x005a_2910, actor, 2, 0);
+        let log = take_log(&mut e);
+        let lines = calls_to(&log, DEBUG_PRINT);
+        assert_eq!(lines[0], vec![0x0103_5bb8, 0x0103_5bd8, 0x0f30_0003]);
+        assert_eq!(lines[1][..2], [0x0103_5bb8, 0x0103_5bd0]);
+    }
+
+    #[test]
+    fn has_been_eaten_asks_the_actor() {
+        let mut e = engine();
+        let actor = actor(&mut e);
+        e.register_double(ACTOR_HAS_BEEN_EATEN, move |_, a| {
+            assert_eq!(a, [actor]);
+            true.into_ret()
+        });
+        assert_eq!(run(&mut e, 0x005a_29d0, actor, 0, 0), (true, 1.0));
+        stub(&mut e, ACTOR_HAS_BEEN_EATEN, 0);
+        assert_eq!(run(&mut e, 0x005a_29d0, actor, 0, 0), (true, 0.0));
+        let plain = non_actor(&mut e);
+        stub(&mut e, ACTOR_HAS_BEEN_EATEN, 1);
+        assert_eq!(run(&mut e, 0x005a_29d0, plain, 0, 0), (true, 0.0));
+        assert!(traces(&mut e, 0x005a_29d0, plain, 0, 0x0103_5bdc));
     }
 }
