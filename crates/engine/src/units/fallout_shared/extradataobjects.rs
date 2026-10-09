@@ -7,9 +7,9 @@
 //! `ExtraLight`, `ExtraLock`, `ExtraFollower`, `ExtraGuardedRefData`,
 //! `ExtraTeleport`, ...), in address order, together with `REFR_LOCK`.
 //!
-//! Translated so far: the first 80 functions of the queue (`004300f0` to
-//! `00431f60`). The next session continues at `00431f90`
-//! (`ExtraCharge::Compare`).
+//! Translated so far: the first 120 functions of the queue (`004300f0` to
+//! `00432da0`). The next session continues at `00432dd0`
+//! (`ExtraRagDollData::Compare`).
 //!
 //! Notes for the next session:
 //! - The layouts of the simple one-field classes (`ExtraRank`, `ExtraCount`,
@@ -231,6 +231,87 @@ const AUDIO_BUOY_DATA_DELETE: u32 = 0x007b_3fa0;
 /// The destructor body of the `InventoryChanges` an `ExtraContainerChanges`
 /// owns (in `inventorychanges.cpp`; `this` is the object).
 const INVENTORY_CHANGES_DESTRUCT: u32 = 0x004b_f150;
+
+/// `RTTI Type Descriptor`s of the classes whose `Compare` casts `other`
+/// (second batch).
+const EXTRA_CHARGE_TYPE: u32 = 0x0118_482c;
+const EXTRA_SCRIPT_TYPE: u32 = 0x0118_4514;
+const EXTRA_WEAPON_MOD_FLAGS_TYPE: u32 = 0x0118_48d8;
+const EXTRA_MODDING_ITEM_TYPE: u32 = 0x0118_493c;
+const EXTRA_SCALE_TYPE: u32 = 0x0118_4848;
+const EXTRA_HOT_KEY_TYPE: u32 = 0x0118_4864;
+const EXTRA_SEED_TYPE: u32 = 0x0118_4c98;
+const EXTRA_PACKAGE_START_LOCATION_TYPE: u32 = 0x0118_448c;
+
+/// The vtables of the classes built by `00432000` to `00432cb0`.
+const EXTRA_SCRIPT_VTABLE: u32 = 0x0101_5914;
+const EXTRA_SCALE_VTABLE: u32 = 0x0101_5920;
+const EXTRA_HOT_KEY_VTABLE: u32 = 0x0101_592c;
+const EXTRA_REFERENCE_POINTER_VTABLE: u32 = 0x0101_5938;
+const EXTRA_TRES_PASS_PACKAGE_VTABLE: u32 = 0x0101_5944;
+const EXTRA_LEVELED_ITEM_VTABLE: u32 = 0x0101_5950;
+const EXTRA_GHOST_VTABLE: u32 = 0x0101_5bd0;
+const EXTRA_WORN_VTABLE: u32 = 0x0101_5bdc;
+const EXTRA_WORN_LEFT_VTABLE: u32 = 0x0101_5be8;
+const EXTRA_CANNOT_WEAR_VTABLE: u32 = 0x0101_5bf4;
+const EXTRA_INFO_GENERAL_TOPIC_VTABLE: u32 = 0x0101_5c00;
+const EXTRA_SEED_VTABLE: u32 = 0x0101_5c0c;
+const EXTRA_PACKAGE_START_LOCATION_VTABLE: u32 = 0x0101_5c18;
+const EXTRA_PACKAGE_VTABLE: u32 = 0x0101_5c24;
+const EXTRA_PLAYER_CRIME_LIST_VTABLE: u32 = 0x0101_5c30;
+const EXTRA_PERSISTENT_CELL_VTABLE: u32 = 0x0101_5c3c;
+const EXTRA_RAG_DOLL_DATA_VTABLE: u32 = 0x0101_5c48;
+
+/// Extra-data type bytes of the second batch.
+const TYPE_SCRIPT: u32 = 0x0d;
+const TYPE_SCALE: u32 = 0x30;
+const TYPE_GHOST: u32 = 0x1f;
+const TYPE_WORN: u32 = 0x16;
+const TYPE_WORN_LEFT: u32 = 0x17;
+const TYPE_CANNOT_WEAR: u32 = 0x3e;
+const TYPE_HOT_KEY: u32 = 0x4a;
+const TYPE_INFO_GENERAL_TOPIC: u32 = 0x4d;
+const TYPE_SEED: u32 = 0x31;
+const TYPE_PACKAGE_START_LOCATION: u32 = 0x18;
+const TYPE_REFERENCE_POINTER: u32 = 0x1c;
+const TYPE_PACKAGE: u32 = 0x19;
+const TYPE_TRES_PASS_PACKAGE: u32 = 0x1a;
+const TYPE_PLAYER_CRIME_LIST: u32 = 0x35;
+const TYPE_LEVELED_ITEM: u32 = 0x2f;
+const TYPE_PERSISTENT_CELL: u32 = 0x0c;
+const TYPE_RAG_DOLL_DATA: u32 = 0x14;
+
+/// Scalar deleting destructor of the `ScriptLocals` an `ExtraScript` owns
+/// (in `extradatalist.cpp` by address range; `this` is the object, the
+/// argument says whether to free it).
+const SCRIPT_LOCALS_DELETE: u32 = 0x0041_af70;
+/// `MenuTopic::~MenuTopic` (Xbox PDB name; it is the scalar deleting
+/// destructor: `this` is the topic, the argument says whether to free it).
+const MENU_TOPIC_DELETE: u32 = 0x0042_5ff0;
+/// The constructor of the 0x2c-byte `MenuTopic` an `ExtraInfoGeneralTopic`
+/// creates (`this` is the memory, the result is the object).
+const MENU_TOPIC_CONSTRUCT: u32 = 0x0083_da50;
+/// The constructor of the `WORLD_LOCATION` member of
+/// `ExtraPackageStartLocation` (`this` is the member).
+const WORLD_LOCATION_CONSTRUCT: u32 = 0x006d_5320;
+/// `TESPackage::SetIsCreated(created)` (Xbox PDB name; `this` is the
+/// package).
+const PACKAGE_SET_IS_CREATED: u32 = 0x0067_4d70;
+/// The global holding the `TESSaveLoadGame` object pointer (the singleton
+/// whose `DeleteForm` `ExtraTresPassPackage`'s destructor calls).
+const SAVE_LOAD_GAME: u32 = 0x011d_e45c;
+/// A 13-byte stub (`xor al, al`) the destructor of `ExtraTresPassPackage`
+/// calls on the save/load object: it always answers false.
+const SAVE_LOAD_GAME_ALWAYS_FALSE: u32 = 0x0047_c850;
+/// `TESSaveLoadGame::DeleteForm(form)` (Xbox PDB name; `this` is the
+/// save/load object).
+const SAVE_LOAD_GAME_DELETE_FORM: u32 = 0x0085_a2e0;
+/// Adds the item held at the address given to the `BSSimpleList` (`this` is
+/// the list; an unplaced body, `005ae3d0`).
+const CRIME_LIST_ADD: u32 = 0x005a_e3d0;
+/// The destructor body of the `RagDollData` an `ExtraRagDollData` owns (in
+/// `ragdolldata.cpp`; `this` is the object).
+const RAG_DOLL_DATA_DESTRUCT: u32 = 0x004d_9380;
 
 /// Constructor of the `DismemberedLimbs` array member of
 /// `ExtraDismemberedLimbs` (`this` is the array). In this unit; not yet
@@ -505,6 +586,124 @@ layout! {
     pub struct ExtraCharge: 0x10 {
         /// `fCharge` (Xbox PDB).
         0x0C fCharge: f32,
+    }
+
+    /// `ExtraScript` (Xbox PDB), 0x14 bytes.
+    pub struct ExtraScript: 0x14 {
+        /// `pScript` (Xbox PDB): `Script*`, not owned.
+        0x0C pScript: Ptr,
+        /// `pScriptVars` (Xbox PDB): `ScriptLocals*`, owned.
+        0x10 pScriptVars: Ptr,
+    }
+
+    /// `ExtraWeaponModFlags` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraWeaponModFlags: 0x10 {
+        /// `cWeaponModsActive` (Xbox PDB).
+        0x0C cWeaponModsActive: u8,
+    }
+
+    /// `ExtraModdingItem` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraModdingItem: 0x10 {
+        /// `bIsModding` (Xbox PDB; a `bool`, compared as a byte).
+        0x0C bIsModding: u8,
+    }
+
+    /// `ExtraScale` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraScale: 0x10 {
+        /// `fScale` (Xbox PDB).
+        0x0C fScale: f32,
+    }
+
+    /// `ExtraGhost` (Xbox PDB), 0x0C bytes: the base only.
+    pub struct ExtraGhost: 0x0C {}
+
+    /// `ExtraWorn` (Xbox PDB), 0x0C bytes: the base only.
+    pub struct ExtraWorn: 0x0C {}
+
+    /// `ExtraWornLeft` (Xbox PDB), 0x0C bytes: the base only.
+    pub struct ExtraWornLeft: 0x0C {}
+
+    /// `ExtraCannotWear` (Xbox PDB), 0x0C bytes: the base only.
+    pub struct ExtraCannotWear: 0x0C {}
+
+    /// `ExtraHotKey` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraHotKey: 0x10 {
+        /// `chotkey` (Xbox PDB): a `char`.
+        0x0C chotkey: i8,
+    }
+
+    /// `ExtraInfoGeneralTopic` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraInfoGeneralTopic: 0x10 {
+        /// `pInfoGen` (Xbox PDB): `MenuTopic*`, owned.
+        0x0C pInfoGen: Ptr,
+    }
+
+    /// `ExtraSeed` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraSeed: 0x10 {
+        /// `iSeed` (Xbox PDB): a byte.
+        0x0C iSeed: u8,
+    }
+
+    /// `WORLD_LOCATION` (Xbox PDB), 0x14 bytes.
+    pub struct WorldLocation: 0x14 {
+        /// `pLocationForm` (Xbox PDB): `TESForm*`.
+        0x00 pLocationForm: Ptr,
+        /// `locPt` (Xbox PDB).
+        0x04 locPt: Inline<NiPoint3>,
+        /// `fZRot` (Xbox PDB).
+        0x10 fZRot: f32,
+    }
+
+    /// `ExtraPackageStartLocation` (Xbox PDB), 0x20 bytes.
+    pub struct ExtraPackageStartLocation: 0x20 {
+        /// `worldLoc` (Xbox PDB).
+        0x0C worldLoc: Inline<WorldLocation>,
+    }
+
+    /// `ExtraReferencePointer` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraReferencePointer: 0x10 {
+        /// `pRef` (Xbox PDB): `TESObjectREFR*`.
+        0x0C pRef: Ptr,
+    }
+
+    /// `ExtraPackage` (Xbox PDB), 0x1C bytes.
+    pub struct ExtraPackage: 0x1C {
+        /// `pPack` (Xbox PDB): `TESPackage*`.
+        0x0C pPack: Ptr,
+        /// `iindex` (Xbox PDB).
+        0x10 iindex: i32,
+        /// `pTarg` (Xbox PDB): `TESObjectREFR*`.
+        0x14 pTarg: Ptr,
+        /// `bActionComplete` (Xbox PDB; a `bool`, kept as the byte passed).
+        0x18 bActionComplete: u8,
+        /// `bActivated` (Xbox PDB; a `bool`, kept as the byte passed).
+        0x19 bActivated: u8,
+        /// `bDoneOnce` (Xbox PDB; a `bool`, kept as the byte passed).
+        0x1A bDoneOnce: u8,
+    }
+
+    /// `ExtraTresPassPackage` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraTresPassPackage: 0x10 {
+        /// `pPack` (Xbox PDB): `TrespassPackage*`, owned.
+        0x0C pPack: Ptr,
+    }
+
+    /// `ExtraPlayerCrimeList` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraPlayerCrimeList: 0x10 {
+        /// `pCrime` (Xbox PDB): `BSSimpleList<Crime *>*`, owned.
+        0x0C pCrime: Ptr,
+    }
+
+    /// `ExtraPersistentCell` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraPersistentCell: 0x10 {
+        /// `pPersistentCell` (Xbox PDB): `TESObjectCELL*`.
+        0x0C pPersistentCell: Ptr,
+    }
+
+    /// `ExtraRagDollData` (Xbox PDB), 0x10 bytes.
+    pub struct ExtraRagDollData: 0x10 {
+        /// `pRagDollData` (Xbox PDB): `RagDollData*`, owned.
+        0x0C pRagDollData: Ptr,
     }
 }
 
@@ -1864,6 +2063,624 @@ pub fn fn_00431f60(e: &mut Engine, this: Ptr<ExtraCharge>, charge: f32) -> Ptr<E
     this
 }
 
+// Translated from 00431f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCharge::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraCharge`, when `BSExtraData::Compare` returns true, or when `fCharge`
+/// differs (as `float`s: a NaN differs from everything, `0.0` equals `-0.0`).
+pub fn extra_charge_compare(e: &mut Engine, this: Ptr<ExtraCharge>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraCharge>(e, this, other, EXTRA_CHARGE_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraCharge::fCharge) != e.get(cast, ExtraCharge::fCharge)
+}
+
+// Translated from 00432000 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScript::ExtraScript` (Xbox PDB): extra-data type 0x0d, storing
+/// `script` and no script variables. Returns `this`.
+pub fn extra_script_extra_script(
+    e: &mut Engine,
+    this: Ptr<ExtraScript>,
+    script: Ptr,
+) -> Ptr<ExtraScript> {
+    construct_base(e, this.cast(), TYPE_SCRIPT, EXTRA_SCRIPT_VTABLE);
+    e.set(this, ExtraScript::pScript, script);
+    e.set(this, ExtraScript::pScriptVars, Ptr::NULL);
+    this
+}
+
+// Translated from 00432040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScript`'s destructor body (the engine map has no name for it): resets
+/// the vtable, deletes the owned script variables if there are any and clears
+/// the pointer, then runs the base destructor. The exception-unwinding frame
+/// is not translated.
+pub fn fn_00432040(e: &mut Engine, this: Ptr<ExtraScript>) {
+    e.mem.set_u32(this.addr(), EXTRA_SCRIPT_VTABLE);
+    let variables = e.get(this, ExtraScript::pScriptVars);
+    if !variables.is_null() {
+        e.call(SCRIPT_LOCALS_DELETE, &args![variables, 1u32]);
+    }
+    e.set(this, ExtraScript::pScriptVars, Ptr::NULL);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 004320d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScript::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraScript`, when `BSExtraData::Compare` returns true, or when `pScript`
+/// differs.
+pub fn extra_script_compare(e: &mut Engine, this: Ptr<ExtraScript>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraScript>(e, this, other, EXTRA_SCRIPT_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraScript::pScript) != e.get(cast, ExtraScript::pScript)
+}
+
+// Translated from 00432140 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWeaponModFlags::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraWeaponModFlags`, when `BSExtraData::Compare` returns true, or when
+/// `cWeaponModsActive` differs.
+pub fn extra_weapon_mod_flags_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraWeaponModFlags>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraWeaponModFlags>(e, this, other, EXTRA_WEAPON_MOD_FLAGS_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraWeaponModFlags::cWeaponModsActive)
+        != e.get(cast, ExtraWeaponModFlags::cWeaponModsActive)
+}
+
+// Translated from 004321b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraModdingItem::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraModdingItem`, when `BSExtraData::Compare` returns true, or when
+/// `bIsModding` differs (compared as a byte).
+pub fn extra_modding_item_compare(e: &mut Engine, this: Ptr<ExtraModdingItem>, other: Ptr) -> bool {
+    let Some(cast) =
+        compare_prologue::<_, ExtraModdingItem>(e, this, other, EXTRA_MODDING_ITEM_TYPE)
+    else {
+        return true;
+    };
+    e.get(this, ExtraModdingItem::bIsModding) != e.get(cast, ExtraModdingItem::bIsModding)
+}
+
+// Translated from 00432220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScale`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015920` it stores): extra-data type 0x30, storing
+/// `scale`. Returns `this`.
+pub fn fn_00432220(e: &mut Engine, this: Ptr<ExtraScale>, scale: f32) -> Ptr<ExtraScale> {
+    construct_base(e, this.cast(), TYPE_SCALE, EXTRA_SCALE_VTABLE);
+    e.set(this, ExtraScale::fScale, scale);
+    this
+}
+
+// Translated from 00432250 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraScale::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraScale`, when `BSExtraData::Compare` returns true, or when `fScale`
+/// differs (as `float`s: a NaN differs from everything, `0.0` equals `-0.0`).
+pub fn extra_scale_compare(e: &mut Engine, this: Ptr<ExtraScale>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraScale>(e, this, other, EXTRA_SCALE_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraScale::fScale) != e.get(cast, ExtraScale::fScale)
+}
+
+// Translated from 004322c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraGhost`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015bd0` it stores): extra-data type 0x1f, no data
+/// of its own. Returns `this`.
+pub fn fn_004322c0(e: &mut Engine, this: Ptr<ExtraGhost>) -> Ptr<ExtraGhost> {
+    construct_base(e, this.cast(), TYPE_GHOST, EXTRA_GHOST_VTABLE);
+    this
+}
+
+// Translated from 004322f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWorn`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015bdc` it stores): extra-data type 0x16, no data
+/// of its own. Returns `this`.
+pub fn fn_004322f0(e: &mut Engine, this: Ptr<ExtraWorn>) -> Ptr<ExtraWorn> {
+    construct_base(e, this.cast(), TYPE_WORN, EXTRA_WORN_VTABLE);
+    this
+}
+
+// Translated from 00432320 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraWornLeft`'s constructor (the engine map has no name for it; the class
+/// is the one whose vtable `01015be8` it stores): extra-data type 0x17, no
+/// data of its own. Returns `this`.
+pub fn fn_00432320(e: &mut Engine, this: Ptr<ExtraWornLeft>) -> Ptr<ExtraWornLeft> {
+    construct_base(e, this.cast(), TYPE_WORN_LEFT, EXTRA_WORN_LEFT_VTABLE);
+    this
+}
+
+// Translated from 00432350 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraCannotWear`'s constructor (the engine map has no name for it; the
+/// class is the one whose vtable `01015bf4` it stores): extra-data type 0x3e,
+/// no data of its own. Returns `this`.
+pub fn fn_00432350(e: &mut Engine, this: Ptr<ExtraCannotWear>) -> Ptr<ExtraCannotWear> {
+    construct_base(e, this.cast(), TYPE_CANNOT_WEAR, EXTRA_CANNOT_WEAR_VTABLE);
+    this
+}
+
+// Translated from 00432380 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHotKey`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `0101592c` it stores): extra-data type 0x4a, storing
+/// the byte `hotkey`. Returns `this`.
+pub fn fn_00432380(e: &mut Engine, this: Ptr<ExtraHotKey>, hotkey: i8) -> Ptr<ExtraHotKey> {
+    construct_base(e, this.cast(), TYPE_HOT_KEY, EXTRA_HOT_KEY_VTABLE);
+    e.set(this, ExtraHotKey::chotkey, hotkey);
+    this
+}
+
+// Translated from 004323b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraInfoGeneralTopic::~ExtraInfoGeneralTopic` (Xbox PDB): resets the
+/// vtable, clears `MenuTopic::bGeneralTopic` (+0x24) of the owned topic, then
+/// runs the topic's scalar deleting destructor (with its flag set to 1) and
+/// the base destructor. The byte store comes before the null test, as
+/// compiled: with no topic the game would fault, and the memory model
+/// panics. The exception-unwinding frame is not translated.
+pub fn extra_info_general_topic_destructor(e: &mut Engine, this: Ptr<ExtraInfoGeneralTopic>) {
+    e.mem.set_u32(this.addr(), EXTRA_INFO_GENERAL_TOPIC_VTABLE);
+    let topic = e.get(this, ExtraInfoGeneralTopic::pInfoGen);
+    // MenuTopic::bGeneralTopic (Xbox PDB) +0x24
+    e.mem.set_u8(topic.addr().wrapping_add(0x24), 0);
+    if !topic.is_null() {
+        e.call(MENU_TOPIC_DELETE, &args![topic, 1u32]);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00432440 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraInfoGeneralTopic::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_info_general_topic_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraInfoGeneralTopic>,
+    flags: u32,
+) -> Ptr<ExtraInfoGeneralTopic> {
+    extra_info_general_topic_destructor(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00432470 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraInfoGeneralTopic`'s constructor taking the topic (the engine map has
+/// no name for it; Ghidra's library match calls it `CPrintDialog`): extra-data
+/// type 0x4d, storing `topic`. Returns `this`.
+pub fn fn_00432470(
+    e: &mut Engine,
+    this: Ptr<ExtraInfoGeneralTopic>,
+    topic: Ptr,
+) -> Ptr<ExtraInfoGeneralTopic> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_INFO_GENERAL_TOPIC,
+        EXTRA_INFO_GENERAL_TOPIC_VTABLE,
+    );
+    e.set(this, ExtraInfoGeneralTopic::pInfoGen, topic);
+    this
+}
+
+// Translated from 004324a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraInfoGeneralTopic`'s default constructor (the engine map has no name
+/// for it): extra-data type 0x4d and a newly allocated, constructed 0x2c-byte
+/// `MenuTopic` (null when the allocation fails). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004324a0(e: &mut Engine, this: Ptr<ExtraInfoGeneralTopic>) -> Ptr<ExtraInfoGeneralTopic> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_INFO_GENERAL_TOPIC,
+        EXTRA_INFO_GENERAL_TOPIC_VTABLE,
+    );
+    let memory = e.call(OPERATOR_NEW, &args![0x2cu32]).u32();
+    let topic: Ptr = if memory != 0 {
+        e.call(MENU_TOPIC_CONSTRUCT, &args![memory]).ptr()
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, ExtraInfoGeneralTopic::pInfoGen, topic);
+    this
+}
+
+// Translated from 00432540 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraHotKey::Compare` (Xbox PDB): true when `other` is not an
+/// `ExtraHotKey`, when `BSExtraData::Compare` returns true, or when
+/// `chotkey` differs.
+pub fn extra_hot_key_compare(e: &mut Engine, this: Ptr<ExtraHotKey>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraHotKey>(e, this, other, EXTRA_HOT_KEY_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraHotKey::chotkey) != e.get(cast, ExtraHotKey::chotkey)
+}
+
+// Translated from 004325b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSeed`'s constructor (the engine map has no name for it; the class is
+/// the one whose vtable `01015c0c` it stores): extra-data type 0x31, storing
+/// the byte `seed`. Returns `this`.
+pub fn fn_004325b0(e: &mut Engine, this: Ptr<ExtraSeed>, seed: u8) -> Ptr<ExtraSeed> {
+    construct_base(e, this.cast(), TYPE_SEED, EXTRA_SEED_VTABLE);
+    e.set(this, ExtraSeed::iSeed, seed);
+    this
+}
+
+// Translated from 004325e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraSeed::Compare` (Xbox PDB): true when `other` is not an `ExtraSeed`,
+/// when `BSExtraData::Compare` returns true, or when `iSeed` differs.
+pub fn extra_seed_compare(e: &mut Engine, this: Ptr<ExtraSeed>, other: Ptr) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraSeed>(e, this, other, EXTRA_SEED_TYPE) else {
+        return true;
+    };
+    e.get(this, ExtraSeed::iSeed) != e.get(cast, ExtraSeed::iSeed)
+}
+
+// Translated from 00432650 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPackageStartLocation`'s default constructor (the engine map has no
+/// name for it): extra-data type 0x18 and a default-constructed
+/// `WORLD_LOCATION`. Returns `this`. The exception-unwinding frame is not
+/// translated.
+pub fn fn_00432650(
+    e: &mut Engine,
+    this: Ptr<ExtraPackageStartLocation>,
+) -> Ptr<ExtraPackageStartLocation> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_PACKAGE_START_LOCATION,
+        EXTRA_PACKAGE_START_LOCATION_VTABLE,
+    );
+    let location = this.at(ExtraPackageStartLocation::worldLoc);
+    e.call(WORLD_LOCATION_CONSTRUCT, &args![location]);
+    this
+}
+
+// Translated from 004326c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPackageStartLocation`'s constructor from a place (the engine map has
+/// no name for it): the default construction, then `pLocationForm` is `form`
+/// (or `fallback_form` when `form` is null), `locPt` is a copy of the
+/// `NiPoint3` at `position` and `fZRot` is `z_rot`. Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004326c0(
+    e: &mut Engine,
+    this: Ptr<ExtraPackageStartLocation>,
+    form: Ptr,
+    fallback_form: Ptr,
+    position: Ptr<NiPoint3>,
+    z_rot: f32,
+) -> Ptr<ExtraPackageStartLocation> {
+    fn_00432650(e, this);
+    let location = this.at(ExtraPackageStartLocation::worldLoc);
+    let chosen = if form.is_null() { fallback_form } else { form };
+    e.set(location, WorldLocation::pLocationForm, chosen);
+    let point = location.at(WorldLocation::locPt);
+    let x = e.get(position, NiPoint3::x);
+    let y = e.get(position, NiPoint3::y);
+    let z = e.get(position, NiPoint3::z);
+    e.set(point, NiPoint3::x, x);
+    e.set(point, NiPoint3::y, y);
+    e.set(point, NiPoint3::z, z);
+    e.set(location, WorldLocation::fZRot, z_rot);
+    this
+}
+
+// Translated from 00432770 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPackageStartLocation::Compare` (Xbox PDB): true when `other` is not
+/// an `ExtraPackageStartLocation`, when `BSExtraData::Compare` returns true,
+/// or when the 0x14 bytes of `worldLoc` differ (`memcmp`).
+pub fn extra_package_start_location_compare(
+    e: &mut Engine,
+    this: Ptr<ExtraPackageStartLocation>,
+    other: Ptr,
+) -> bool {
+    let Some(cast) = compare_prologue::<_, ExtraPackageStartLocation>(
+        e,
+        this,
+        other,
+        EXTRA_PACKAGE_START_LOCATION_TYPE,
+    ) else {
+        return true;
+    };
+    let mine = this.at(ExtraPackageStartLocation::worldLoc);
+    let theirs = cast.at(ExtraPackageStartLocation::worldLoc);
+    e.call(MEMCMP, &args![mine, theirs, 0x14u32]).u32() != 0
+}
+
+// Translated from 004327e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraReferencePointer`'s constructor (the engine map has no name for it;
+/// Ghidra's library match calls it `CPrintDialog`): extra-data type 0x1c,
+/// storing `reference`. Returns `this`.
+pub fn fn_004327e0(
+    e: &mut Engine,
+    this: Ptr<ExtraReferencePointer>,
+    reference: Ptr,
+) -> Ptr<ExtraReferencePointer> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_REFERENCE_POINTER,
+        EXTRA_REFERENCE_POINTER_VTABLE,
+    );
+    e.set(this, ExtraReferencePointer::pRef, reference);
+    this
+}
+
+// Translated from 00432810 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPackage`'s default constructor (the engine map has no name for it):
+/// extra-data type 0x19, no package (`pPack` null), `iindex` -1, no target
+/// and the three flag bytes clear. Returns `this`.
+pub fn fn_00432810(e: &mut Engine, this: Ptr<ExtraPackage>) -> Ptr<ExtraPackage> {
+    construct_base(e, this.cast(), TYPE_PACKAGE, EXTRA_PACKAGE_VTABLE);
+    e.set(this, ExtraPackage::pPack, Ptr::NULL);
+    e.set(this, ExtraPackage::iindex, -1);
+    e.set(this, ExtraPackage::pTarg, Ptr::NULL);
+    e.set(this, ExtraPackage::bActionComplete, 0);
+    e.set(this, ExtraPackage::bActivated, 0);
+    e.set(this, ExtraPackage::bDoneOnce, 0);
+    this
+}
+
+// Translated from 00432870 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPackage`'s constructor from its six fields (the engine map has no
+/// name for it): extra-data type 0x19, storing the package, index, target and
+/// the low bytes of the three flag arguments. Returns `this`.
+#[allow(clippy::too_many_arguments)]
+pub fn fn_00432870(
+    e: &mut Engine,
+    this: Ptr<ExtraPackage>,
+    package: Ptr,
+    index: i32,
+    target: Ptr,
+    action_complete: u8,
+    activated: u8,
+    done_once: u8,
+) -> Ptr<ExtraPackage> {
+    construct_base(e, this.cast(), TYPE_PACKAGE, EXTRA_PACKAGE_VTABLE);
+    e.set(this, ExtraPackage::pPack, package);
+    e.set(this, ExtraPackage::iindex, index);
+    e.set(this, ExtraPackage::pTarg, target);
+    e.set(this, ExtraPackage::bActionComplete, action_complete);
+    e.set(this, ExtraPackage::bActivated, activated);
+    e.set(this, ExtraPackage::bDoneOnce, done_once);
+    this
+}
+
+// Translated from 004328d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTresPassPackage`'s constructor (the engine map has no name for it;
+/// Ghidra's library match calls it `CPrintDialog`): extra-data type 0x1a,
+/// storing `package`. Returns `this`.
+pub fn fn_004328d0(
+    e: &mut Engine,
+    this: Ptr<ExtraTresPassPackage>,
+    package: Ptr,
+) -> Ptr<ExtraTresPassPackage> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_TRES_PASS_PACKAGE,
+        EXTRA_TRES_PASS_PACKAGE_VTABLE,
+    );
+    e.set(this, ExtraTresPassPackage::pPack, package);
+    this
+}
+
+// Translated from 00432900 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraTresPassPackage::~ExtraTresPassPackage` (Xbox PDB): resets the
+/// vtable; when there is a package, marks it created
+/// (`TESPackage::SetIsCreated(true)`), then deletes it: through
+/// `TESSaveLoadGame::DeleteForm` when the save/load object's stub
+/// (`0047c850`) answers true, else through the form's virtual scalar deleting
+/// destructor (slot +0x10, flag 1). The stub always answers false, so the
+/// virtual destructor is what runs in the game. Then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn extra_tres_pass_package_destructor(e: &mut Engine, this: Ptr<ExtraTresPassPackage>) {
+    e.mem.set_u32(this.addr(), EXTRA_TRES_PASS_PACKAGE_VTABLE);
+    let package = e.get(this, ExtraTresPassPackage::pPack);
+    if !package.is_null() {
+        e.call(PACKAGE_SET_IS_CREATED, &args![package, 1u32]);
+        let save_load: u32 = e.global(SAVE_LOAD_GAME);
+        if e.call(SAVE_LOAD_GAME_ALWAYS_FALSE, &args![save_load])
+            .bool()
+        {
+            let package = e.get(this, ExtraTresPassPackage::pPack);
+            e.call(SAVE_LOAD_GAME_DELETE_FORM, &args![save_load, package]);
+        } else {
+            let package = e.get(this, ExtraTresPassPackage::pPack);
+            if !package.is_null() {
+                e.vcall(package.addr(), 0x10, &args![1u32]);
+            }
+        }
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+/// The start the two `ExtraPlayerCrimeList` constructors share: the base
+/// constructor, then a newly allocated, constructed 8-byte list (null when the
+/// allocation fails) stored in `pCrime`. `ACTOR_LIST_CONSTRUCT` is the
+/// constructor of an empty `BSSimpleList` of any element type.
+fn construct_player_crime_list(e: &mut Engine, this: Ptr<ExtraPlayerCrimeList>) {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_PLAYER_CRIME_LIST,
+        EXTRA_PLAYER_CRIME_LIST_VTABLE,
+    );
+    let memory = e.call(OPERATOR_NEW, &args![8u32]).u32();
+    let list: Ptr = if memory != 0 {
+        e.call(ACTOR_LIST_CONSTRUCT, &args![memory]).ptr()
+    } else {
+        Ptr::NULL
+    };
+    e.set(this, ExtraPlayerCrimeList::pCrime, list);
+}
+
+// Translated from 004329d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPlayerCrimeList`'s default constructor (the engine map has no name
+/// for it): extra-data type 0x35 and a newly allocated, constructed 8-byte
+/// crime list (null when the allocation fails). Returns `this`. The
+/// exception-unwinding frame is not translated.
+pub fn fn_004329d0(e: &mut Engine, this: Ptr<ExtraPlayerCrimeList>) -> Ptr<ExtraPlayerCrimeList> {
+    construct_player_crime_list(e, this);
+    this
+}
+
+// Translated from 00432a70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPlayerCrimeList::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_player_crime_list_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraPlayerCrimeList>,
+    flags: u32,
+) -> Ptr<ExtraPlayerCrimeList> {
+    fn_00432b50(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00432aa0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPlayerCrimeList`'s constructor taking a crime (the engine map has no
+/// name for it): the default construction, then the crime is added to the new
+/// list (`005ae3d0` takes the address of a variable holding it, and does
+/// nothing for a null crime). Returns `this`. The exception-unwinding frame is
+/// not translated.
+pub fn fn_00432aa0(
+    e: &mut Engine,
+    this: Ptr<ExtraPlayerCrimeList>,
+    crime: Ptr,
+) -> Ptr<ExtraPlayerCrimeList> {
+    construct_player_crime_list(e, this);
+    let list = e.get(this, ExtraPlayerCrimeList::pCrime);
+    e.with_stack(4, |e, argument| {
+        e.mem.set_u32(argument.addr(), crime.addr());
+        e.call(CRIME_LIST_ADD, &args![list, argument]);
+    });
+    this
+}
+
+// Translated from 00432b50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPlayerCrimeList`'s destructor body (the engine map has no name for
+/// it): resets the vtable, runs the owned list's scalar deleting destructor
+/// (flag 1) when there is one, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00432b50(e: &mut Engine, this: Ptr<ExtraPlayerCrimeList>) {
+    destroy_owner(
+        e,
+        this.cast(),
+        EXTRA_PLAYER_CRIME_LIST_VTABLE,
+        ACTOR_LIST_DELETE,
+    );
+}
+
+// Translated from 00432be0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraLeveledItem`'s constructor (the engine map has no name for it; Ghidra
+/// does not name it): extra-data type 0x2f, storing `index` and setting
+/// `bdefault`. Returns `this`.
+pub fn fn_00432be0(
+    e: &mut Engine,
+    this: Ptr<ExtraLeveledItem>,
+    index: i32,
+) -> Ptr<ExtraLeveledItem> {
+    construct_base(e, this.cast(), TYPE_LEVELED_ITEM, EXTRA_LEVELED_ITEM_VTABLE);
+    e.set(this, ExtraLeveledItem::iIndex, index);
+    e.set(this, ExtraLeveledItem::bdefault, true);
+    this
+}
+
+// Translated from 00432c20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPersistentCell`'s constructor (the engine map has no name for it):
+/// extra-data type 0x0c, storing `cell` (null stays null). Returns `this`.
+pub fn fn_00432c20(
+    e: &mut Engine,
+    this: Ptr<ExtraPersistentCell>,
+    cell: Ptr,
+) -> Ptr<ExtraPersistentCell> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_PERSISTENT_CELL,
+        EXTRA_PERSISTENT_CELL_VTABLE,
+    );
+    e.set(this, ExtraPersistentCell::pPersistentCell, cell);
+    this
+}
+
+// Translated from 00432c60 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPersistentCell`'s scalar deleting destructor (the engine map has no
+/// name for it): the destructor, then `operator delete` when `flags & 1`.
+/// Returns `this`.
+pub fn fn_00432c60(
+    e: &mut Engine,
+    this: Ptr<ExtraPersistentCell>,
+    flags: u32,
+) -> Ptr<ExtraPersistentCell> {
+    fn_00432c90(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00432c90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraPersistentCell`'s destructor body (the engine map has no name for
+/// it): resets the vtable, then runs the base destructor; the cell is not
+/// owned.
+pub fn fn_00432c90(e: &mut Engine, this: Ptr<ExtraPersistentCell>) {
+    e.mem.set_u32(this.addr(), EXTRA_PERSISTENT_CELL_VTABLE);
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00432cb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRagDollData::ExtraRagDollData` (Xbox PDB): extra-data type 0x14 and
+/// no ragdoll data. Returns `this`.
+pub fn extra_rag_doll_data_extra_rag_doll_data(
+    e: &mut Engine,
+    this: Ptr<ExtraRagDollData>,
+) -> Ptr<ExtraRagDollData> {
+    construct_base(
+        e,
+        this.cast(),
+        TYPE_RAG_DOLL_DATA,
+        EXTRA_RAG_DOLL_DATA_VTABLE,
+    );
+    e.set(this, ExtraRagDollData::pRagDollData, Ptr::NULL);
+    this
+}
+
+// Translated from 00432ce0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRagDollData::_scalar_deleting_destructor_` (Xbox PDB): the
+/// destructor, then `operator delete` when `flags & 1`. Returns `this`.
+pub fn extra_rag_doll_data_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr<ExtraRagDollData>,
+    flags: u32,
+) -> Ptr<ExtraRagDollData> {
+    fn_00432d10(e, this);
+    delete_when_asked(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00432d10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `ExtraRagDollData`'s destructor body (the engine map has no name for it):
+/// resets the vtable, runs the owned `RagDollData`'s scalar deleting
+/// destructor (flag 1) when there is one, then the base destructor. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00432d10(e: &mut Engine, this: Ptr<ExtraRagDollData>) {
+    e.mem.set_u32(this.addr(), EXTRA_RAG_DOLL_DATA_VTABLE);
+    let data = e.get(this, ExtraRagDollData::pRagDollData);
+    if !data.is_null() {
+        fn_00432da0(e, data, 1);
+    }
+    e.call(BS_EXTRA_DATA_DESTRUCT, &args![this]);
+}
+
+// Translated from 00432da0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `RagDollData`'s scalar deleting destructor (the engine map has no name for
+/// it): the destructor body (`004d9380`, in `ragdolldata.cpp`), then
+/// `operator delete` when `flags & 1`. Returns `this`.
+pub fn fn_00432da0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(RAG_DOLL_DATA_DESTRUCT, &args![this]);
+    delete_when_asked(e, this, flags);
+    this
+}
+
 /// This unit's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2145,6 +2962,159 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             0x00431f60,
             fn_00431f60(Ptr<ExtraCharge>, f32) -> Ptr<ExtraCharge>
         ),
+        entry!(
+            0x00431f90,
+            extra_charge_compare(Ptr<ExtraCharge>, Ptr) -> bool
+        ),
+        entry!(
+            0x00432000,
+            extra_script_extra_script(Ptr<ExtraScript>, Ptr) -> Ptr<ExtraScript>
+        ),
+        entry!(0x00432040, fn_00432040(Ptr<ExtraScript>)),
+        entry!(
+            0x004320d0,
+            extra_script_compare(Ptr<ExtraScript>, Ptr) -> bool
+        ),
+        entry!(
+            0x00432140,
+            extra_weapon_mod_flags_compare(Ptr<ExtraWeaponModFlags>, Ptr) -> bool
+        ),
+        entry!(
+            0x004321b0,
+            extra_modding_item_compare(Ptr<ExtraModdingItem>, Ptr) -> bool
+        ),
+        entry!(
+            0x00432220,
+            fn_00432220(Ptr<ExtraScale>, f32) -> Ptr<ExtraScale>
+        ),
+        entry!(
+            0x00432250,
+            extra_scale_compare(Ptr<ExtraScale>, Ptr) -> bool
+        ),
+        entry!(0x004322c0, fn_004322c0(Ptr<ExtraGhost>) -> Ptr<ExtraGhost>),
+        entry!(0x004322f0, fn_004322f0(Ptr<ExtraWorn>) -> Ptr<ExtraWorn>),
+        entry!(
+            0x00432320,
+            fn_00432320(Ptr<ExtraWornLeft>) -> Ptr<ExtraWornLeft>
+        ),
+        entry!(
+            0x00432350,
+            fn_00432350(Ptr<ExtraCannotWear>) -> Ptr<ExtraCannotWear>
+        ),
+        entry!(
+            0x00432380,
+            fn_00432380(Ptr<ExtraHotKey>, i8) -> Ptr<ExtraHotKey>
+        ),
+        entry!(
+            0x004323b0,
+            extra_info_general_topic_destructor(Ptr<ExtraInfoGeneralTopic>)
+        ),
+        entry!(
+            0x00432440,
+            extra_info_general_topic_scalar_deleting_destructor(
+                Ptr<ExtraInfoGeneralTopic>,
+                u32,
+            )
+                -> Ptr<ExtraInfoGeneralTopic>
+        ),
+        entry!(
+            0x00432470,
+            fn_00432470(Ptr<ExtraInfoGeneralTopic>, Ptr) -> Ptr<ExtraInfoGeneralTopic>
+        ),
+        entry!(
+            0x004324a0,
+            fn_004324a0(Ptr<ExtraInfoGeneralTopic>) -> Ptr<ExtraInfoGeneralTopic>
+        ),
+        entry!(
+            0x00432540,
+            extra_hot_key_compare(Ptr<ExtraHotKey>, Ptr) -> bool
+        ),
+        entry!(
+            0x004325b0,
+            fn_004325b0(Ptr<ExtraSeed>, u8) -> Ptr<ExtraSeed>
+        ),
+        entry!(0x004325e0, extra_seed_compare(Ptr<ExtraSeed>, Ptr) -> bool),
+        entry!(
+            0x00432650,
+            fn_00432650(Ptr<ExtraPackageStartLocation>) -> Ptr<ExtraPackageStartLocation>
+        ),
+        entry!(
+            0x004326c0,
+            fn_004326c0(
+                Ptr<ExtraPackageStartLocation>,
+                Ptr,
+                Ptr,
+                Ptr<NiPoint3>,
+                f32,
+            ) -> Ptr<ExtraPackageStartLocation>
+        ),
+        entry!(
+            0x00432770,
+            extra_package_start_location_compare(Ptr<ExtraPackageStartLocation>, Ptr) -> bool
+        ),
+        entry!(
+            0x004327e0,
+            fn_004327e0(Ptr<ExtraReferencePointer>, Ptr) -> Ptr<ExtraReferencePointer>
+        ),
+        entry!(
+            0x00432810,
+            fn_00432810(Ptr<ExtraPackage>) -> Ptr<ExtraPackage>
+        ),
+        entry!(
+            0x00432870,
+            fn_00432870(Ptr<ExtraPackage>, Ptr, i32, Ptr, u8, u8, u8) -> Ptr<ExtraPackage>
+        ),
+        entry!(
+            0x004328d0,
+            fn_004328d0(Ptr<ExtraTresPassPackage>, Ptr) -> Ptr<ExtraTresPassPackage>
+        ),
+        entry!(
+            0x00432900,
+            extra_tres_pass_package_destructor(Ptr<ExtraTresPassPackage>)
+        ),
+        entry!(
+            0x004329d0,
+            fn_004329d0(Ptr<ExtraPlayerCrimeList>) -> Ptr<ExtraPlayerCrimeList>
+        ),
+        entry!(
+            0x00432a70,
+            extra_player_crime_list_scalar_deleting_destructor(
+                Ptr<ExtraPlayerCrimeList>,
+                u32,
+            )
+                -> Ptr<ExtraPlayerCrimeList>
+        ),
+        entry!(
+            0x00432aa0,
+            fn_00432aa0(Ptr<ExtraPlayerCrimeList>, Ptr) -> Ptr<ExtraPlayerCrimeList>
+        ),
+        entry!(0x00432b50, fn_00432b50(Ptr<ExtraPlayerCrimeList>)),
+        entry!(
+            0x00432be0,
+            fn_00432be0(Ptr<ExtraLeveledItem>, i32) -> Ptr<ExtraLeveledItem>
+        ),
+        entry!(
+            0x00432c20,
+            fn_00432c20(Ptr<ExtraPersistentCell>, Ptr) -> Ptr<ExtraPersistentCell>
+        ),
+        entry!(
+            0x00432c60,
+            fn_00432c60(Ptr<ExtraPersistentCell>, u32) -> Ptr<ExtraPersistentCell>
+        ),
+        entry!(0x00432c90, fn_00432c90(Ptr<ExtraPersistentCell>)),
+        entry!(
+            0x00432cb0,
+            extra_rag_doll_data_extra_rag_doll_data(Ptr<ExtraRagDollData>) -> Ptr<ExtraRagDollData>
+        ),
+        entry!(
+            0x00432ce0,
+            extra_rag_doll_data_scalar_deleting_destructor(
+                Ptr<ExtraRagDollData>,
+                u32,
+            ) -> Ptr<ExtraRagDollData>
+        ),
+        entry!(0x00432d10, fn_00432d10(Ptr<ExtraRagDollData>)),
+        entry!(0x00432da0, fn_00432da0(Ptr, u32) -> Ptr),
     ]
 }
 
@@ -3891,5 +4861,581 @@ mod tests {
     #[test]
     fn charge_constructor_takes_the_charge() {
         check_float_constructor(0x0043_1f60, 0x28, EXTRA_CHARGE_VTABLE);
+    }
+
+    #[test]
+    fn charge_compare_checks_the_charge_as_a_float() {
+        check_float_compare(0x0043_1f90, EXTRA_CHARGE_TYPE);
+    }
+
+    /// A constructor with one byte argument: only the low byte of the word
+    /// is stored, the three bytes above it are left alone.
+    fn check_byte_constructor(addr: u32, extra_type: u8, vtable: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0xaaaa_aaaa);
+        let back = e
+            .call(addr, &args![Ptr::<()>::new(this), 0x1234_567bu32])
+            .u32();
+        assert_eq!(back, this);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.u32(this + 0xc), 0xaaaa_aa7b);
+    }
+
+    /// A constructor with no data of its own: the type, the vtable, and
+    /// nothing above +0xc.
+    fn check_base_only_constructor(addr: u32, extra_type: u8, vtable: u32) {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, 0xaaaa_aaaa);
+        start_log(&mut e);
+        let back = e.call(addr, &args![Ptr::<()>::new(this)]).u32();
+        assert_eq!(back, this);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_CONSTRUCT).len(), 1);
+        assert_eq!(extra_type_of(&e, this), extra_type);
+        assert_eq!(vtable_of(&e, this), vtable);
+        assert_eq!(e.mem.u32(this + 0xc), 0xaaaa_aaaa);
+    }
+
+    #[test]
+    fn script_constructor_stores_the_script_and_clears_the_variables() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraScript> = e.new_object();
+        e.set(this, ExtraScript::pScriptVars, Ptr::new(0xdead));
+        let back = e
+            .call(0x0043_2000, &args![this, 0x6000u32])
+            .ptr::<ExtraScript>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x0d);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_SCRIPT_VTABLE);
+        assert_eq!(e.get(this, ExtraScript::pScript).addr(), 0x6000);
+        assert!(e.get(this, ExtraScript::pScriptVars).is_null());
+    }
+
+    #[test]
+    fn script_destructor_deletes_the_variables_only_when_there_are_some() {
+        let mut e = extra_engine();
+        e.register(SCRIPT_LOCALS_DELETE, |_, _| Ret::default());
+        let this: Ptr<ExtraScript> = e.new_object();
+        e.set(this, ExtraScript::pScript, Ptr::new(0x6000));
+        e.set(this, ExtraScript::pScriptVars, Ptr::new(0x7000));
+        start_log(&mut e);
+        e.call(0x0043_2040, &args![this]);
+        assert_eq!(calls(&e, SCRIPT_LOCALS_DELETE), vec![vec![0x7000, 1]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_SCRIPT_VTABLE);
+        assert!(e.get(this, ExtraScript::pScriptVars).is_null());
+        // The script is not owned.
+        assert_eq!(e.get(this, ExtraScript::pScript).addr(), 0x6000);
+
+        let bare: Ptr<ExtraScript> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0043_2040, &args![bare]);
+        assert!(calls(&e, SCRIPT_LOCALS_DELETE).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![bare.addr()]]);
+    }
+
+    #[test]
+    fn script_compare_checks_the_script_pointer() {
+        check_value_compare(0x0043_20d0, EXTRA_SCRIPT_TYPE, 4, 0x6000, 0x6004);
+    }
+
+    #[test]
+    fn weapon_mod_flags_compare_checks_the_flag_byte() {
+        check_value_compare(0x0043_2140, EXTRA_WEAPON_MOD_FLAGS_TYPE, 1, 3, 7);
+    }
+
+    #[test]
+    fn modding_item_compare_checks_the_byte() {
+        check_value_compare(0x0043_21b0, EXTRA_MODDING_ITEM_TYPE, 1, 1, 2);
+    }
+
+    #[test]
+    fn scale_constructor_takes_the_scale() {
+        check_float_constructor(0x0043_2220, 0x30, EXTRA_SCALE_VTABLE);
+    }
+
+    #[test]
+    fn scale_compare_checks_the_scale_as_a_float() {
+        check_float_compare(0x0043_2250, EXTRA_SCALE_TYPE);
+    }
+
+    #[test]
+    fn ghost_constructor_builds_the_bare_base() {
+        check_base_only_constructor(0x0043_22c0, 0x1f, EXTRA_GHOST_VTABLE);
+    }
+
+    #[test]
+    fn worn_constructor_builds_the_bare_base() {
+        check_base_only_constructor(0x0043_22f0, 0x16, EXTRA_WORN_VTABLE);
+    }
+
+    #[test]
+    fn worn_left_constructor_builds_the_bare_base() {
+        check_base_only_constructor(0x0043_2320, 0x17, EXTRA_WORN_LEFT_VTABLE);
+    }
+
+    #[test]
+    fn cannot_wear_constructor_builds_the_bare_base() {
+        check_base_only_constructor(0x0043_2350, 0x3e, EXTRA_CANNOT_WEAR_VTABLE);
+    }
+
+    #[test]
+    fn hot_key_constructor_stores_only_the_byte() {
+        check_byte_constructor(0x0043_2380, 0x4a, EXTRA_HOT_KEY_VTABLE);
+    }
+
+    /// An `ExtraInfoGeneralTopic` owning a topic whose `bGeneralTopic` flag
+    /// (+0x24) is set.
+    fn info_general_topic(e: &mut Engine) -> (u32, u32) {
+        let this = e.mem.alloc(0x10);
+        let topic = e.mem.alloc(0x2c);
+        e.mem.set_u8(topic + 0x24, 1);
+        e.mem.set_u32(this + 0xc, topic);
+        (this, topic)
+    }
+
+    #[test]
+    fn info_general_topic_destructor_clears_the_flag_then_deletes_the_topic() {
+        let mut e = extra_engine();
+        // The flag is already clear when the topic's destructor runs.
+        e.register(MENU_TOPIC_DELETE, |e, a| {
+            assert_eq!(e.mem.u8(a[0] + 0x24), 0);
+            Ret::default()
+        });
+        let (this, topic) = info_general_topic(&mut e);
+        start_log(&mut e);
+        e.call(0x0043_23b0, &args![Ptr::<()>::new(this)]);
+        assert_eq!(calls(&e, MENU_TOPIC_DELETE), vec![vec![topic, 1]]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(vtable_of(&e, this), EXTRA_INFO_GENERAL_TOPIC_VTABLE);
+        assert_eq!(e.mem.u8(topic + 0x24), 0);
+    }
+
+    #[test]
+    fn info_general_topic_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = extra_engine();
+        e.register(MENU_TOPIC_DELETE, |_, _| Ret::default());
+        let (this, _) = info_general_topic(&mut e);
+        let back = e
+            .call(0x0043_2440, &args![Ptr::<()>::new(this), 2u32])
+            .u32();
+        assert_eq!(back, this);
+        assert!(e.mem.block_size(this).is_some());
+        assert_eq!(vtable_of(&e, this), EXTRA_INFO_GENERAL_TOPIC_VTABLE);
+        let back = e
+            .call(0x0043_2440, &args![Ptr::<()>::new(this), 3u32])
+            .u32();
+        assert_eq!(back, this);
+        assert_eq!(e.mem.block_size(this), None);
+    }
+
+    #[test]
+    fn info_general_topic_constructor_takes_the_topic() {
+        check_word_constructor(0x0043_2470, 0x4d, EXTRA_INFO_GENERAL_TOPIC_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn info_general_topic_default_constructor_builds_a_topic() {
+        let mut e = extra_engine();
+        e.register(MENU_TOPIC_CONSTRUCT, |_, a| ret(a[0]));
+        let this: Ptr<ExtraInfoGeneralTopic> = e.new_object();
+        start_log(&mut e);
+        let back = e
+            .call(0x0043_24a0, &args![this])
+            .ptr::<ExtraInfoGeneralTopic>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x4d);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_INFO_GENERAL_TOPIC_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![0x2c]]);
+        let topic = e.get(this, ExtraInfoGeneralTopic::pInfoGen);
+        assert!(e.mem.block_size(topic.addr()).unwrap() >= 0x2c);
+        assert_eq!(calls(&e, MENU_TOPIC_CONSTRUCT), vec![vec![topic.addr()]]);
+
+        // A failed allocation leaves the topic null and constructs nothing.
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        let failed: Ptr<ExtraInfoGeneralTopic> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0043_24a0, &args![failed]);
+        assert!(e.get(failed, ExtraInfoGeneralTopic::pInfoGen).is_null());
+        assert!(calls(&e, MENU_TOPIC_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn hot_key_compare_checks_the_key_byte() {
+        check_value_compare(0x0043_2540, EXTRA_HOT_KEY_TYPE, 1, 0x31, 0xb1);
+    }
+
+    #[test]
+    fn seed_constructor_stores_only_the_byte() {
+        check_byte_constructor(0x0043_25b0, 0x31, EXTRA_SEED_VTABLE);
+    }
+
+    #[test]
+    fn seed_compare_checks_the_seed_byte() {
+        check_value_compare(0x0043_25e0, EXTRA_SEED_TYPE, 1, 9, 10);
+    }
+
+    #[test]
+    fn package_start_location_default_constructor_constructs_the_location() {
+        let mut e = extra_engine();
+        e.register(WORLD_LOCATION_CONSTRUCT, |_, a| ret(a[0]));
+        let this: Ptr<ExtraPackageStartLocation> = e.new_object();
+        start_log(&mut e);
+        let back = e
+            .call(0x0043_2650, &args![this])
+            .ptr::<ExtraPackageStartLocation>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x18);
+        assert_eq!(
+            vtable_of(&e, this.addr()),
+            EXTRA_PACKAGE_START_LOCATION_VTABLE
+        );
+        assert_eq!(
+            calls(&e, WORLD_LOCATION_CONSTRUCT),
+            vec![vec![this.addr() + 0xc]]
+        );
+    }
+
+    #[test]
+    fn package_start_location_constructor_copies_the_place() {
+        let mut e = extra_engine();
+        e.register(WORLD_LOCATION_CONSTRUCT, |_, a| ret(a[0]));
+        let position: Ptr<NiPoint3> = e.new_object();
+        e.set(position, NiPoint3::x, 1.5);
+        e.set(position, NiPoint3::y, -2.0);
+        e.set(position, NiPoint3::z, 3.25);
+        for (form, fallback, expected) in [(0x4000u32, 0x5000u32, 0x4000u32), (0, 0x5000, 0x5000)] {
+            let this: Ptr<ExtraPackageStartLocation> = e.new_object();
+            start_log(&mut e);
+            let back = e
+                .call(0x0043_26c0, &args![this, form, fallback, position, 0.75f32])
+                .ptr::<ExtraPackageStartLocation>();
+            assert_eq!(back, this);
+            assert_eq!(extra_type(&e, this.addr()), 0x18);
+            assert_eq!(
+                calls(&e, WORLD_LOCATION_CONSTRUCT),
+                vec![vec![this.addr() + 0xc]]
+            );
+            let location = this.at(ExtraPackageStartLocation::worldLoc);
+            assert_eq!(
+                e.get(location, WorldLocation::pLocationForm).addr(),
+                expected
+            );
+            let point = location.at(WorldLocation::locPt);
+            assert_eq!(e.get(point, NiPoint3::x), 1.5);
+            assert_eq!(e.get(point, NiPoint3::y), -2.0);
+            assert_eq!(e.get(point, NiPoint3::z), 3.25);
+            assert_eq!(e.get(location, WorldLocation::fZRot), 0.75);
+        }
+    }
+
+    #[test]
+    fn package_start_location_compare_checks_type_base_and_the_location_bytes() {
+        check_compare_start(0x0043_2770, EXTRA_PACKAGE_START_LOCATION_TYPE, 0x20);
+        let mut e = compare_engine(true, false);
+        let this = e.mem.alloc(0x20);
+        let other = e.mem.alloc(0x20);
+        start_log(&mut e);
+        let compare = |e: &mut Engine| {
+            e.call(
+                0x0043_2770,
+                &args![Ptr::<()>::new(this), Ptr::<()>::new(other)],
+            )
+            .bool()
+        };
+        assert!(!compare(&mut e));
+        assert_eq!(calls(&e, MEMCMP), vec![vec![this + 0xc, other + 0xc, 0x14]]);
+        // The last byte of the location differs; the byte before the location
+        // is not part of it.
+        e.mem.set_u8(other + 0x1f, 1);
+        assert!(compare(&mut e));
+        e.mem.set_u8(other + 0x1f, 0);
+        e.mem.set_u8(this + 0x0b, 1);
+        assert!(!compare(&mut e));
+    }
+
+    #[test]
+    fn reference_pointer_constructor_takes_the_reference() {
+        check_word_constructor(0x0043_27e0, 0x1c, EXTRA_REFERENCE_POINTER_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn package_default_constructor_sets_the_defaults() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x20);
+        for offset in (0x0c..0x20).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        let back = e.call(0x0043_2810, &args![Ptr::<()>::new(this)]).u32();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this), 0x19);
+        assert_eq!(vtable_of(&e, this), EXTRA_PACKAGE_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x0c), 0);
+        assert_eq!(e.mem.u32(this + 0x10), 0xffff_ffff);
+        assert_eq!(e.mem.u32(this + 0x14), 0);
+        // The three flag bytes are cleared, the byte after them is not.
+        assert_eq!(e.mem.u32(this + 0x18), 0xaa00_0000);
+        assert_eq!(e.mem.u32(this + 0x1c), 0xaaaa_aaaa);
+    }
+
+    #[test]
+    fn package_constructor_takes_the_six_fields() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x20);
+        for offset in (0x0c..0x20).step_by(4) {
+            e.mem.set_u32(this + offset, 0xaaaa_aaaa);
+        }
+        let back = e
+            .call(
+                0x0043_2870,
+                &args![
+                    Ptr::<()>::new(this),
+                    0x4000u32,
+                    7i32,
+                    0x5000u32,
+                    0x0101u32,
+                    0x0200u32,
+                    0x03u32
+                ],
+            )
+            .u32();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this), 0x19);
+        assert_eq!(vtable_of(&e, this), EXTRA_PACKAGE_VTABLE);
+        assert_eq!(e.mem.u32(this + 0x0c), 0x4000);
+        assert_eq!(e.mem.u32(this + 0x10), 7);
+        assert_eq!(e.mem.u32(this + 0x14), 0x5000);
+        assert_eq!(e.mem.u8(this + 0x18), 1);
+        assert_eq!(e.mem.u8(this + 0x19), 0);
+        assert_eq!(e.mem.u8(this + 0x1a), 3);
+        assert_eq!(e.mem.u8(this + 0x1b), 0xaa);
+    }
+
+    #[test]
+    fn tres_pass_package_constructor_takes_the_package() {
+        check_word_constructor(0x0043_28d0, 0x1a, EXTRA_TRES_PASS_PACKAGE_VTABLE, 0x10);
+    }
+
+    /// An `ExtraTresPassPackage` owning a package whose virtual slot 0x10
+    /// (the scalar deleting destructor) is a registered double.
+    fn tres_pass_package(e: &mut Engine) -> (u32, u32) {
+        e.register(PACKAGE_SET_IS_CREATED, |_, _| Ret::default());
+        e.register(SAVE_LOAD_GAME_DELETE_FORM, |_, _| Ret::default());
+        e.register(0x00a0_0010, |_, a| ret(a[0]));
+        e.set_global(SAVE_LOAD_GAME, 0x5000u32);
+        let package = object_with_vtable(e, &[(0x10, 0x00a0_0010)]);
+        let this = e.mem.alloc(0x10);
+        e.mem.set_u32(this + 0xc, package);
+        (this, package)
+    }
+
+    #[test]
+    fn tres_pass_package_destructor_destroys_the_package_through_its_vtable() {
+        let mut e = extra_engine();
+        let (this, package) = tres_pass_package(&mut e);
+        e.register(SAVE_LOAD_GAME_ALWAYS_FALSE, |_, _| ret(0));
+        start_log(&mut e);
+        e.call(0x0043_2900, &args![Ptr::<()>::new(this)]);
+        assert_eq!(calls(&e, PACKAGE_SET_IS_CREATED), vec![vec![package, 1]]);
+        assert_eq!(calls(&e, SAVE_LOAD_GAME_ALWAYS_FALSE), vec![vec![0x5000]]);
+        assert_eq!(calls(&e, 0x00a0_0010), vec![vec![package, 1]]);
+        assert!(calls(&e, SAVE_LOAD_GAME_DELETE_FORM).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(vtable_of(&e, this), EXTRA_TRES_PASS_PACKAGE_VTABLE);
+    }
+
+    #[test]
+    fn tres_pass_package_destructor_uses_delete_form_when_the_stub_says_so() {
+        let mut e = extra_engine();
+        let (this, package) = tres_pass_package(&mut e);
+        e.register(SAVE_LOAD_GAME_ALWAYS_FALSE, |_, _| ret(1));
+        start_log(&mut e);
+        e.call(0x0043_2900, &args![Ptr::<()>::new(this)]);
+        assert_eq!(
+            calls(&e, SAVE_LOAD_GAME_DELETE_FORM),
+            vec![vec![0x5000, package]]
+        );
+        assert!(calls(&e, 0x00a0_0010).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+    }
+
+    #[test]
+    fn tres_pass_package_destructor_does_nothing_more_without_a_package() {
+        let mut e = extra_engine();
+        let this = e.mem.alloc(0x10);
+        start_log(&mut e);
+        e.call(0x0043_2900, &args![Ptr::<()>::new(this)]);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        // The call itself and the base destructor, nothing else.
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+        assert_eq!(vtable_of(&e, this), EXTRA_TRES_PASS_PACKAGE_VTABLE);
+    }
+
+    #[test]
+    fn player_crime_list_default_constructor_allocates_the_list() {
+        let mut e = extra_engine();
+        e.register(ACTOR_LIST_CONSTRUCT, |_, a| ret(a[0]));
+        let this: Ptr<ExtraPlayerCrimeList> = e.new_object();
+        start_log(&mut e);
+        let back = e
+            .call(0x0043_29d0, &args![this])
+            .ptr::<ExtraPlayerCrimeList>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x35);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_PLAYER_CRIME_LIST_VTABLE);
+        assert_eq!(calls(&e, OPERATOR_NEW), vec![vec![8]]);
+        let list = e.get(this, ExtraPlayerCrimeList::pCrime);
+        assert_eq!(e.mem.block_size(list.addr()), Some(8));
+        assert_eq!(calls(&e, ACTOR_LIST_CONSTRUCT), vec![vec![list.addr()]]);
+
+        // A failed allocation leaves the list null and constructs nothing.
+        e.register(OPERATOR_NEW, |_, _| ret(0));
+        let failed: Ptr<ExtraPlayerCrimeList> = e.new_object();
+        start_log(&mut e);
+        e.call(0x0043_29d0, &args![failed]);
+        assert!(e.get(failed, ExtraPlayerCrimeList::pCrime).is_null());
+        assert!(calls(&e, ACTOR_LIST_CONSTRUCT).is_empty());
+    }
+
+    #[test]
+    fn player_crime_list_constructor_adds_the_crime_by_address() {
+        let mut e = extra_engine();
+        e.register(ACTOR_LIST_CONSTRUCT, |_, a| ret(a[0]));
+        // The list gets the address of a variable holding the crime.
+        e.register(CRIME_LIST_ADD, |e, a| {
+            assert_eq!(e.mem.u32(a[1]), 0x7777);
+            Ret::default()
+        });
+        let this: Ptr<ExtraPlayerCrimeList> = e.new_object();
+        start_log(&mut e);
+        let back = e
+            .call(0x0043_2aa0, &args![this, 0x7777u32])
+            .ptr::<ExtraPlayerCrimeList>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x35);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_PLAYER_CRIME_LIST_VTABLE);
+        let list = e.get(this, ExtraPlayerCrimeList::pCrime);
+        let added = calls(&e, CRIME_LIST_ADD);
+        assert_eq!(added.len(), 1);
+        assert_eq!(added[0][0], list.addr());
+    }
+
+    #[test]
+    fn player_crime_list_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_2a70, EXTRA_PLAYER_CRIME_LIST_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn player_crime_list_destructor_deletes_the_list() {
+        check_owner_destructor(
+            0x0043_2b50,
+            EXTRA_PLAYER_CRIME_LIST_VTABLE,
+            ACTOR_LIST_DELETE,
+        );
+    }
+
+    #[test]
+    fn leveled_item_constructor_takes_the_index_and_sets_the_default_flag() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraLeveledItem> = e.new_object();
+        let back = e
+            .call(0x0043_2be0, &args![this, 5i32])
+            .ptr::<ExtraLeveledItem>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x2f);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_LEVELED_ITEM_VTABLE);
+        assert_eq!(e.get(this, ExtraLeveledItem::iIndex), 5);
+        assert_eq!(e.mem.u8(this.addr() + 0x10), 1);
+    }
+
+    #[test]
+    fn persistent_cell_constructor_takes_the_cell() {
+        check_word_constructor(0x0043_2c20, 0x0c, EXTRA_PERSISTENT_CELL_VTABLE, 0x10);
+        // A null cell stays null.
+        let mut e = extra_engine();
+        let this: Ptr<ExtraPersistentCell> = e.new_object();
+        e.mem.set_u32(this.addr() + 0xc, 0xaaaa_aaaa);
+        e.call(0x0043_2c20, &args![this, 0u32]);
+        assert!(e.get(this, ExtraPersistentCell::pPersistentCell).is_null());
+    }
+
+    #[test]
+    fn persistent_cell_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_2c60, EXTRA_PERSISTENT_CELL_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn persistent_cell_destructor_resets_the_vtable_and_owns_nothing() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraPersistentCell> = e.new_object();
+        e.set(this, ExtraPersistentCell::pPersistentCell, Ptr::new(0x6000));
+        e.mem.set_u32(this.addr(), 0x1234);
+        start_log(&mut e);
+        e.call(0x0043_2c90, &args![this]);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_PERSISTENT_CELL_VTABLE);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this.addr()]]);
+        // The call itself and the base destructor, nothing else.
+        assert_eq!(e.call_log.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn rag_doll_data_constructor_clears_the_data() {
+        let mut e = extra_engine();
+        let this: Ptr<ExtraRagDollData> = e.new_object();
+        e.set(this, ExtraRagDollData::pRagDollData, Ptr::new(0xdead));
+        let back = e.call(0x0043_2cb0, &args![this]).ptr::<ExtraRagDollData>();
+        assert_eq!(back, this);
+        assert_eq!(extra_type(&e, this.addr()), 0x14);
+        assert_eq!(vtable_of(&e, this.addr()), EXTRA_RAG_DOLL_DATA_VTABLE);
+        assert!(e.get(this, ExtraRagDollData::pRagDollData).is_null());
+    }
+
+    #[test]
+    fn rag_doll_data_scalar_deleting_destructor_frees_only_when_asked() {
+        check_scalar_deleting_destructor(0x0043_2ce0, EXTRA_RAG_DOLL_DATA_VTABLE, 0x10);
+    }
+
+    #[test]
+    fn rag_doll_data_destructor_deletes_the_owned_data_only_when_there_is_some() {
+        let mut e = extra_engine();
+        e.register(RAG_DOLL_DATA_DESTRUCT, |_, _| Ret::default());
+        let this = e.mem.alloc(0x10);
+        let data = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0xc, data);
+        start_log(&mut e);
+        e.call(0x0043_2d10, &args![Ptr::<()>::new(this)]);
+        // The data's scalar deleting destructor ran with flag 1: destructor
+        // body, then the memory is freed.
+        assert_eq!(calls(&e, RAG_DOLL_DATA_DESTRUCT), vec![vec![data]]);
+        assert_eq!(e.mem.block_size(data), None);
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![this]]);
+        assert_eq!(vtable_of(&e, this), EXTRA_RAG_DOLL_DATA_VTABLE);
+
+        let bare = e.mem.alloc(0x10);
+        start_log(&mut e);
+        e.call(0x0043_2d10, &args![Ptr::<()>::new(bare)]);
+        assert!(calls(&e, RAG_DOLL_DATA_DESTRUCT).is_empty());
+        assert_eq!(calls(&e, BS_EXTRA_DATA_DESTRUCT), vec![vec![bare]]);
+    }
+
+    #[test]
+    fn rag_doll_data_object_scalar_deleting_destructor_frees_only_when_asked() {
+        let mut e = extra_engine();
+        e.register(RAG_DOLL_DATA_DESTRUCT, |_, _| Ret::default());
+        let data = e.mem.alloc(0x40);
+        start_log(&mut e);
+        let back = e
+            .call(0x0043_2da0, &args![Ptr::<()>::new(data), 0u32])
+            .u32();
+        assert_eq!(back, data);
+        assert!(e.mem.block_size(data).is_some());
+        let back = e
+            .call(0x0043_2da0, &args![Ptr::<()>::new(data), 1u32])
+            .u32();
+        assert_eq!(back, data);
+        assert_eq!(e.mem.block_size(data), None);
+        assert_eq!(calls(&e, RAG_DOLL_DATA_DESTRUCT).len(), 2);
     }
 }
