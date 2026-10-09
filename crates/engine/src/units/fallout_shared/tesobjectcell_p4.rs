@@ -12,8 +12,9 @@
 //! `BSMapBase`/`BSScrapMap` of `TESObjectREFR *` to `bool`, the
 //! `NiTArray`/`NiTPrimitiveArray` of `TESObjectREFR *`, a pointer list, and
 //! the `NiTMapBase<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>` operations
-//! (`SetAt`, `GetNext`, the value assignment). The next session continues
-//! with `00559df0`.
+//! (`SetAt`, `GetNext`, the value assignment). The second session
+//! translated the remaining 15 (`00559df0` to `0055a220`: the rest of that
+//! queued-attach map and its allocator); the range is complete.
 //!
 //! The map classes share one layout (vtable, bucket count, bucket array,
 //! item count; [`NiTPointerMap`]) and one vtable shape (Xbox PDB): slot
@@ -94,6 +95,17 @@ const LIST_OWNER_BASE_DESTRUCT: u32 = 0x0048_3710;
 /// unit outside this part).
 const CELL_HELPER_DESTRUCT: u32 = 0x0054_22b0;
 
+/// Frees a block through the memory manager singleton (cdecl, the block).
+const DEALLOCATE_MANAGED: u32 = 0x00aa_10f0;
+/// Constructor of a smart pointer slot (`this` = the slot, the object to
+/// hold: 0 here).
+const POINTER_CONSTRUCT: u32 = 0x0063_3c90;
+/// Item allocator of the queued-attach map (the `DFALL` allocator at
+/// `map + 0xC`): constructor body `0055a270`, and the deleting destructor
+/// `0055a240` (`this` = the item, a flags word).
+const ITEM_ALLOCATOR_CONSTRUCT: u32 = 0x0055_a270;
+const ITEM_ALLOCATOR_DELETE: u32 = 0x0055_a240;
+
 /// Vtables of the map instances. `NiTMapBase` is the base class and `NiTMap`
 /// the class derived from it (Xbox PDB names).
 const NI_T_MAP_REFERENCE_NODE_VTABLE: u32 = 0x0102_f2f8;
@@ -108,6 +120,8 @@ const BS_SCRAP_MAP_VTABLE: u32 = 0x0102_f3c8;
 const BS_MAP_BASE_VTABLE: u32 = 0x0102_f3e8;
 const NI_T_MAP_REFERENCE_REFERENCE_VTABLE: u32 = 0x0102_f408;
 const NI_T_MAP_BASE_REFERENCE_REFERENCE_VTABLE: u32 = 0x0102_f428;
+const NI_T_MAP_QUEUED_ATTACH_VTABLE: u32 = 0x0102_f448;
+const NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE: u32 = 0x0102_f468;
 
 /// Byte offsets of the map vtable slots (Xbox PDB order).
 const MAP_SLOT_KEY_TO_HASH_INDEX: u32 = 0x04;
@@ -773,6 +787,183 @@ pub fn fn_00559d90(e: &mut Engine, this: Ptr) {
     );
 }
 
+// Translated from 00559df0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base destructor of the `NiTMapBase<TESObjectREFR *, TESObjectREFR *>`
+/// instance: sets the base vtable, removes every item (`00438af0`) and frees
+/// the bucket array (`00aa10f0`).
+pub fn fn_00559df0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem
+        .set_u32(this.addr(), NI_T_MAP_BASE_REFERENCE_REFERENCE_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(DEALLOCATE_MANAGED, &args![table]);
+}
+
+// Translated from 00559e20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., TESObjectREFR *, TESObjectREFR *>::scalar deleting
+/// destructor` (Xbox PDB): runs the base destructor `fn_00559df0`, then
+/// frees the map when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00559e20(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_00559df0(e, this);
+    free_if_requested(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00559e50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>` constructor: the
+/// `NiTMapBase` constructor (`fn_00559eb0`) with the bucket count, then the
+/// derived vtable. Returns `this`.
+pub fn fn_00559e50(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    fn_00559eb0(e, this, hash_size);
+    e.mem.set_u32(this.addr(), NI_T_MAP_QUEUED_ATTACH_VTABLE);
+    this
+}
+
+// Translated from 00559e80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>::scalar deleting
+/// destructor` (Xbox PDB): runs the destructor `fn_00559f90`, then frees the
+/// map when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_00559e80(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_00559f90(e, this);
+    free_if_requested(e, this.cast(), flags);
+    this
+}
+
+// Translated from 00559eb0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase` constructor of the `NiAVObject *` to
+/// `TESObjectCELL::QUEUED_ATTACH` map: like `fn_00558eb0` with that map's
+/// base vtable. Returns `this`.
+pub fn fn_00559eb0(e: &mut Engine, this: Ptr<NiTPointerMap>, hash_size: u32) -> Ptr<NiTPointerMap> {
+    construct_map_base(e, this, NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE, hash_size);
+    this
+}
+
+// Translated from 00559f20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., NiAVObject *, TESObjectCELL::QUEUED_ATTACH>::SetValue`
+/// (Xbox PDB): stores `key` in the item (`+4`) and assigns the value
+/// (`fn_00559900`) to the item's value (`+8`). The value arrives by value as
+/// three words (child, node, flag) and is destroyed by the function. The
+/// exception-unwinding frame is not translated.
+pub fn fn_00559f20(
+    e: &mut Engine,
+    _this: Ptr<NiTPointerMap>,
+    item: Ptr,
+    key: u32,
+    value_child: u32,
+    value_node: u32,
+    value_flag: u32,
+) {
+    e.mem.set_u32(item.addr() + 4, key);
+    e.with_stack(12, |e, value| {
+        e.mem.set_u32(value.addr(), value_child);
+        e.mem.set_u32(value.addr() + 4, value_node);
+        e.mem.set_u32(value.addr() + 8, value_flag);
+        fn_00559900(e, Ptr::new(item.addr() + 8), value.cast());
+        e.call(QUEUED_ATTACH_DESTRUCT, &args![value]);
+    });
+}
+
+// Translated from 00559f90 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>` destructor: sets the
+/// vtable, removes every item (`00438af0`) and runs the base destructor
+/// `fn_00559ff0`. The exception-unwinding frame is not translated.
+pub fn fn_00559f90(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem.set_u32(this.addr(), NI_T_MAP_QUEUED_ATTACH_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    fn_00559ff0(e, this);
+}
+
+// Translated from 00559ff0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Base destructor of the `NiAVObject *` to `TESObjectCELL::QUEUED_ATTACH`
+/// map: sets the base vtable, removes every item (`00438af0`) and frees the
+/// bucket array (`00aa10f0`).
+pub fn fn_00559ff0(e: &mut Engine, this: Ptr<NiTPointerMap>) {
+    e.mem
+        .set_u32(this.addr(), NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE);
+    e.call(MAP_REMOVE_ALL, &args![this]);
+    let table = e.get(this, NiTPointerMap::m_ppkHashTable);
+    e.call(DEALLOCATE_MANAGED, &args![table]);
+}
+
+// Translated from 0055a020 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>::NewItem` (Xbox PDB):
+/// allocates an item through the map's item allocator at `+0xC`
+/// (`fn_0055a160`).
+pub fn fn_0055a020(e: &mut Engine, this: Ptr<NiTPointerMap>) -> Ptr {
+    fn_0055a160(e, this.byte_add(0x0c))
+}
+
+// Translated from 0055a040 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMap<NiAVObject *, TESObjectCELL::QUEUED_ATTACH>::DeleteItem` (Xbox
+/// PDB): assigns an empty value (a default `QUEUED_ATTACH`, `fn_0055a0c0`)
+/// to the item's value at `+8`, destroys that temporary and gives the item
+/// to the item allocator (`fn_0055a1e0`). The exception-unwinding frame is
+/// not translated.
+pub fn fn_0055a040(e: &mut Engine, this: Ptr<NiTPointerMap>, item: Ptr) {
+    e.with_stack(12, |e, empty| {
+        fn_0055a0c0(e, empty.cast(), 0);
+        fn_00559900(e, Ptr::new(item.addr() + 8), empty.cast());
+        e.call(QUEUED_ATTACH_DESTRUCT, &args![empty]);
+    });
+    fn_0055a1e0(e, this.byte_add(0x0c), item);
+}
+
+// Translated from 0055a0c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `TESObjectCELL::QUEUED_ATTACH` default constructor: constructs both
+/// smart pointers empty (`00633c90` with 0) and clears the flag byte. The
+/// argument word is never read. Returns `this`. The exception-unwinding
+/// frame is not translated.
+pub fn fn_0055a0c0(e: &mut Engine, this: Ptr<QueuedAttach>, _unused_1: u32) -> Ptr<QueuedAttach> {
+    e.call(POINTER_CONSTRUCT, &args![this, 0u32]);
+    e.call(POINTER_CONSTRUCT, &args![this.byte_add(4), 0u32]);
+    e.set(this, QueuedAttach::bFirstAvail, 0);
+    this
+}
+
+// Translated from 0055a130 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `NiTMapBase<..., NiAVObject *, TESObjectCELL::QUEUED_ATTACH>::scalar
+/// deleting destructor` (Xbox PDB): runs the base destructor `fn_00559ff0`,
+/// then frees the map when bit 0 of `flags` is set. Returns `this`.
+pub fn fn_0055a130(e: &mut Engine, this: Ptr<NiTPointerMap>, flags: u32) -> Ptr<NiTPointerMap> {
+    fn_00559ff0(e, this);
+    free_if_requested(e, this.cast(), flags);
+    this
+}
+
+// Translated from 0055a160 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `DFALL<NiTMapItem<NiAVObject *, QUEUED_ATTACH> >::Allocate` (Xbox PDB):
+/// allocates 0x14 bytes (`00401000`) and constructs the allocator item in
+/// them (`fn_0055a220`); null when the allocation fails. The
+/// exception-unwinding frame is not translated.
+pub fn fn_0055a160(e: &mut Engine, _this: Ptr) -> Ptr {
+    let block = e.call(ALLOCATE, &args![0x14u32]).u32();
+    if block != 0 {
+        fn_0055a220(e, Ptr::new(block))
+    } else {
+        Ptr::new(0)
+    }
+}
+
+// Translated from 0055a1e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Gives an item back (the `Deallocate` of the `DFALL` allocator; name not
+/// confirmed): when `item` is not null, runs its deleting destructor
+/// (`0055a240`, flags 1) and returns that result, else returns 0.
+pub fn fn_0055a1e0(e: &mut Engine, _this: Ptr, item: Ptr) -> u32 {
+    if item.addr() != 0 {
+        e.call(ITEM_ALLOCATOR_DELETE, &args![item, 1u32]).u32()
+    } else {
+        0
+    }
+}
+
+// Translated from 0055a220 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor of the allocator item: runs the constructor body `0055a270`
+/// on `this`. Returns `this`.
+pub fn fn_0055a220(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(ITEM_ALLOCATOR_CONSTRUCT, &args![this]);
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -861,6 +1052,42 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
             fn_00559d20(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
         ),
         entry!(0x00559d90, fn_00559d90(Ptr)),
+        entry!(0x00559df0, fn_00559df0(Ptr<NiTPointerMap>)),
+        entry!(
+            0x00559e20,
+            fn_00559e20(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00559e50,
+            fn_00559e50(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00559e80,
+            fn_00559e80(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00559eb0,
+            fn_00559eb0(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(
+            0x00559f20,
+            fn_00559f20(Ptr<NiTPointerMap>, Ptr, u32, u32, u32, u32)
+        ),
+        entry!(0x00559f90, fn_00559f90(Ptr<NiTPointerMap>)),
+        entry!(0x00559ff0, fn_00559ff0(Ptr<NiTPointerMap>)),
+        entry!(0x0055a020, fn_0055a020(Ptr<NiTPointerMap>) -> Ptr),
+        entry!(0x0055a040, fn_0055a040(Ptr<NiTPointerMap>, Ptr)),
+        entry!(
+            0x0055a0c0,
+            fn_0055a0c0(Ptr<QueuedAttach>, u32) -> Ptr<QueuedAttach>
+        ),
+        entry!(
+            0x0055a130,
+            fn_0055a130(Ptr<NiTPointerMap>, u32) -> Ptr<NiTPointerMap>
+        ),
+        entry!(0x0055a160, fn_0055a160(Ptr) -> Ptr),
+        entry!(0x0055a1e0, fn_0055a1e0(Ptr, Ptr) -> u32),
+        entry!(0x0055a220, fn_0055a220(Ptr) -> Ptr),
     ]
 }
 
@@ -1627,5 +1854,172 @@ mod tests {
         assert_eq!(e.mem.u32(map), NI_T_MAP_REFERENCE_REFERENCE_VTABLE);
         assert_eq!(e.mem.u32(map + 4), 16);
         assert_ne!(e.mem.u32(map + 8), 0);
+    }
+
+    #[test]
+    fn queued_attach_map_scalar_deleting_destructors() {
+        scalar_deleting(0x0055_9e20, &[MAP_REMOVE_ALL, DEALLOCATE_MANAGED]);
+        scalar_deleting(
+            0x0055_9e80,
+            &[MAP_REMOVE_ALL, MAP_REMOVE_ALL, DEALLOCATE_MANAGED],
+        );
+        scalar_deleting(0x0055_a130, &[MAP_REMOVE_ALL, DEALLOCATE_MANAGED]);
+    }
+
+    #[test]
+    fn queued_attach_map_constructors() {
+        map_base_constructor(0x0055_9eb0, NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE);
+        let mut e = Engine::new();
+        e.register(ALLOCATE_MANAGED, |e, a| e.mem.alloc(a[0]).into_ret());
+        quiet(&mut e, &[FILL_BYTES]);
+        let map = e.mem.alloc(0x20);
+        assert_eq!(e.call(0x0055_9e50, &args![map, 8u32]).u32(), map);
+        assert_eq!(e.mem.u32(map), NI_T_MAP_QUEUED_ATTACH_VTABLE);
+        assert_eq!(e.mem.u32(map + 4), 8);
+        assert_ne!(e.mem.u32(map + 8), 0);
+    }
+
+    #[test]
+    fn base_destructors_free_the_bucket_array() {
+        for (address, vtable) in [
+            (0x0055_9df0u32, NI_T_MAP_BASE_REFERENCE_REFERENCE_VTABLE),
+            (0x0055_9ff0, NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE),
+        ] {
+            let mut e = Engine::new();
+            quiet(&mut e, &[MAP_REMOVE_ALL, DEALLOCATE_MANAGED]);
+            let map = e.mem.alloc(0x10);
+            e.mem.set_u32(map + 8, 0x4444);
+            e.call_log = Some(vec![]);
+            e.call(address, &args![map]);
+            let log = e.call_log.take().unwrap();
+            assert_eq!(e.mem.u32(map), vtable);
+            assert_eq!(
+                calls(&log),
+                vec![
+                    (MAP_REMOVE_ALL, vec![map]),
+                    (DEALLOCATE_MANAGED, vec![0x4444])
+                ]
+            );
+        }
+    }
+
+    #[test]
+    fn queued_attach_map_destructor_runs_the_base_destructor() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[MAP_REMOVE_ALL, DEALLOCATE_MANAGED]);
+        let map = e.mem.alloc(0x10);
+        e.mem.set_u32(map + 8, 0x4444);
+        e.call_log = Some(vec![]);
+        e.call(0x0055_9f90, &args![map]);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(map), NI_T_MAP_BASE_QUEUED_ATTACH_VTABLE);
+        assert_eq!(
+            sequence(&log),
+            vec![MAP_REMOVE_ALL, MAP_REMOVE_ALL, DEALLOCATE_MANAGED]
+        );
+    }
+
+    #[test]
+    fn set_value_stores_the_key_and_assigns_the_value() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[QUEUED_ATTACH_DESTRUCT]);
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            let word = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], word);
+            Ret::default()
+        });
+        let map = e.mem.alloc(0x10);
+        let item = e.mem.alloc(0x14);
+        e.call_log = Some(vec![]);
+        e.call(
+            0x0055_9f20,
+            &args![map, item, 0x77u32, 0x11u32, 0x22u32, 1u32],
+        );
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u32(item + 4), 0x77);
+        assert_eq!(e.mem.u32(item + 8), 0x11);
+        assert_eq!(e.mem.u32(item + 12), 0x22);
+        assert_eq!(e.mem.u8(item + 16), 1);
+        assert_eq!(calls_to(&log, QUEUED_ATTACH_DESTRUCT).len(), 1);
+    }
+
+    #[test]
+    fn allocator_functions() {
+        let mut e = Engine::new();
+        e.register(ALLOCATE, |e, a| e.mem.alloc(a[0]).into_ret());
+        e.register(ITEM_ALLOCATOR_CONSTRUCT, |_, _| Ret::default());
+        e.register(ITEM_ALLOCATOR_DELETE, |_, a| (a[1] + 100).into_ret());
+        let map = e.mem.alloc(0x20);
+        e.call_log = Some(vec![]);
+        let block = e.call(0x0055_a020, &args![map]).u32();
+        let log = e.call_log.take().unwrap();
+        assert_ne!(block, 0);
+        assert_eq!(
+            calls(&log),
+            vec![
+                (ALLOCATE, vec![0x14]),
+                (ITEM_ALLOCATOR_CONSTRUCT, vec![block])
+            ]
+        );
+        // Giving back an item runs its deleting destructor; null does not.
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0055_a1e0, &args![map, block]).u32(), 101);
+        assert_eq!(
+            calls(&e.call_log.take().unwrap()),
+            vec![(ITEM_ALLOCATOR_DELETE, vec![block, 1])]
+        );
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0055_a1e0, &args![map, 0u32]).u32(), 0);
+        assert!(calls(&e.call_log.take().unwrap()).is_empty());
+        // The item constructor returns its argument.
+        assert_eq!(e.call(0x0055_a220, &args![block]).u32(), block);
+        // A failed allocation gives null and no construction.
+        e.register(ALLOCATE, |_, _| Ret::default());
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0055_a160, &args![map]).u32(), 0);
+        assert_eq!(calls(&e.call_log.take().unwrap()).len(), 1);
+    }
+
+    #[test]
+    fn default_queued_attach_is_empty() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[POINTER_CONSTRUCT]);
+        let value = e.mem.alloc(0x0c);
+        e.mem.set_u8(value + 8, 1);
+        e.call_log = Some(vec![]);
+        assert_eq!(e.call(0x0055_a0c0, &args![value, 0u32]).u32(), value);
+        let log = e.call_log.take().unwrap();
+        assert_eq!(e.mem.u8(value + 8), 0);
+        assert_eq!(
+            calls(&log),
+            vec![
+                (POINTER_CONSTRUCT, vec![value, 0]),
+                (POINTER_CONSTRUCT, vec![value + 4, 0])
+            ]
+        );
+    }
+
+    #[test]
+    fn delete_item_empties_the_value_and_frees_the_item() {
+        let mut e = Engine::new();
+        quiet(&mut e, &[POINTER_CONSTRUCT, QUEUED_ATTACH_DESTRUCT]);
+        e.register(ITEM_ALLOCATOR_DELETE, |_, _| Ret::default());
+        e.register(NI_POINTER_ASSIGN, |e, a| {
+            let word = e.mem.u32(a[1]);
+            e.mem.set_u32(a[0], word);
+            Ret::default()
+        });
+        let map = e.mem.alloc(0x20);
+        let item = e.mem.alloc(0x14);
+        e.mem.set_u32(item + 8, 0x1234);
+        e.mem.set_u8(item + 16, 1);
+        e.call_log = Some(vec![]);
+        e.call(0x0055_a040, &args![map, item]);
+        let log = e.call_log.take().unwrap();
+        // The default value is all zero, so the assignment empties the slot.
+        assert_eq!(e.mem.u32(item + 8), 0);
+        assert_eq!(e.mem.u8(item + 16), 0);
+        assert_eq!(calls_to(&log, QUEUED_ATTACH_DESTRUCT).len(), 1);
+        assert_eq!(calls_to(&log, ITEM_ALLOCATOR_DELETE), vec![vec![item, 1]]);
     }
 }
