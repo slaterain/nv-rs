@@ -3,7 +3,7 @@
 //! (docs/ENGINE_CRATE.md). The unit's shared layouts and helpers are in
 //! [`super::modelloader`]; anything public there may be used here.
 //!
-//! State of this file: the first 80 functions, `004457d0` to `004491c0`.
+//! State of this file: the whole range, `004457d0` to `00449bd0` (120 functions).
 //! First session: `QueueCreatureParts`, `QueueAnimations` and the list
 //! helpers they use, the replacement KF list, the loading-status text, the
 //! clone thread getters, the map inserts, `LoadFile`, `LoadKF`, `FindModel`
@@ -11,8 +11,10 @@
 //! `CopyFilenameList`, `QueueFaceGenFile`, `QueueEGMFile`, `QueueTRIFile`,
 //! the loader's map forwarders, the cancel-all and clean-up loops, the
 //! add-on loading (`LoadAddonNodes`, `LoadAddons`), the timed task walk and
-//! its timer, and the task state helpers (`00447330` to `004491c0`). The next
-//! function of the range after `004491c0` is `004491f0`.
+//! its timer, and the task state helpers (`00447330` to `004491c0`). Third
+//! session: the map wrappers, name helpers and vtable setters (`004491f0` to
+//! `00449bd0`); the range is complete. The previously planned next
+//! function was `004491f0`.
 //!
 //! The game's `char *` lists passed around here are `BSSimpleList<char *>`
 //! heads: the head node holds the first item inline (item at +0, next node
@@ -2502,6 +2504,462 @@ pub fn fn_004491c0(e: &mut Engine, target: Ptr, new: u32, expected: u32) -> bool
     previous == expected
 }
 
+// --- 004491f0 .. 00449bd0: the map wrappers, the name helpers, the vtable setters ---
+
+/// Critical-section style lock of the map object (`0040fbf0`,
+/// `__thiscall(lock, 0)`) and its release (`0040fba0`), both on `this + 0x20`.
+const LOCK_ENTER: u32 = 0x0040_fbf0;
+const LOCK_LEAVE: u32 = 0x0040_fba0;
+/// Gives the object the wrapper forwards to (`00449f80`, `__thiscall(this)`:
+/// `0044d5c0` of the object at `this + 0x14` with `this`).
+const MAP_TARGET: u32 = 0x0044_9f80;
+/// `tolower(character)` (`00ec67aa`).
+const TOLOWER_CHARACTER: u32 = 0x00ec_67aa;
+/// `strcmp(first, second)` (`00ec6da0`).
+const STRING_COMPARE: u32 = 0x00ec_6da0;
+/// Source file name the memory-context guard of [`fn_004492f0`] records, and
+/// its context number and line.
+const THREAD_SAFE_STRUCTURES_SOURCE: u32 = 0x0101_71a0;
+const NAME_COPY_CONTEXT: u32 = 6;
+const NAME_COPY_SOURCE_LINE: u32 = 0x1fd;
+/// Size of the stack buffer that [`lowercase_into_buffer`] fills (the
+/// game's own: 1000 bytes, without a bounds check).
+const LOWERCASE_BUFFER_SIZE: u32 = 1000;
+
+/// Runs `body` with the object the wrapper forwards to, between the lock on
+/// `this + 0x20` being taken and released.
+fn with_locked_target<R>(e: &mut Engine, this: Ptr, body: impl FnOnce(&mut Engine, u32) -> R) -> R {
+    e.call(LOCK_ENTER, &args![this.addr() + 0x20, 0u32]);
+    let target = e.call(MAP_TARGET, &args![this]).u32();
+    let result = body(e, target);
+    e.call(LOCK_LEAVE, &args![this.addr() + 0x20]);
+    result
+}
+
+/// Writes `tolower` of each character of `source` and a terminator to
+/// `destination` (the loop the game repeats in each wrapper).
+fn lowercase_into(e: &mut Engine, source: u32, destination: u32) {
+    let (mut from, mut to) = (source, destination);
+    loop {
+        let character = e.mem.u8(from);
+        if character == 0 {
+            break;
+        }
+        // `char` is signed: the character is sign-extended for `tolower`.
+        let lowered = e
+            .call(TOLOWER_CHARACTER, &args![character as i8 as i32 as u32])
+            .u8();
+        e.mem.set_u8(to, lowered);
+        from += 1;
+        to += 1;
+    }
+    e.mem.set_u8(to, 0);
+}
+
+/// Runs `body` with the lower-cased copy of `source` in a 1000-byte buffer
+/// on the stack.
+fn lowercase_into_buffer<R>(
+    e: &mut Engine,
+    source: u32,
+    body: impl FnOnce(&mut Engine, u32) -> R,
+) -> R {
+    e.with_stack(LOWERCASE_BUFFER_SIZE, |e, buffer| {
+        lowercase_into(e, source, buffer.addr());
+        body(e, buffer.addr())
+    })
+}
+
+// Translated from 004491f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `009611e0(this)` (filed under `playercharacter.cpp` in the
+/// engine map).
+pub fn fn_004491f0(e: &mut Engine, this: Ptr) {
+    e.call(0x0096_11e0, &args![this]);
+}
+
+// Translated from 00449210 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Takes the element `index` of the array at `this + 4`, runs
+/// [`fn_00449240`] for it with `argument`, then the virtual function at
+/// offset 4 of `this`.
+pub fn fn_00449210(e: &mut Engine, this: Ptr, index: u32, argument: u32) {
+    let elements = e.mem.u32(this.addr() + 4);
+    let element = e.mem.u32(elements + index * 4);
+    fn_00449240(e, Ptr::new(element), argument);
+    e.vcall(this.addr(), 4, &args![]);
+}
+
+// Translated from 00449240 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: `0044cd40` of the forwarding target
+/// ([`MAP_TARGET`]) with `argument`.
+pub fn fn_00449240(e: &mut Engine, this: Ptr, argument: u32) {
+    with_locked_target(e, this, |e, target| {
+        e.call(0x0044_cd40, &args![target, argument]);
+    });
+}
+
+// Translated from 00449280 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: the byte answered by `0044cec0` of the
+/// forwarding target with `argument`.
+pub fn fn_00449280(e: &mut Engine, this: Ptr, argument: u32) -> u8 {
+    with_locked_target(e, this, |e, target| {
+        e.call(0x0044_cec0, &args![target, argument]).u8()
+    })
+}
+
+// Translated from 004492c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: the base constructor `00449f50(first, second, third)`, then
+/// the virtual table `01017154`; returns `this`.
+pub fn fn_004492c0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) -> Ptr {
+    e.call(0x0044_9f50, &args![this, first, second, third]);
+    e.mem.set_u32(this.addr(), 0x0101_7154);
+    this
+}
+
+// Translated from 004492f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// A lower-cased copy of the text, in a block from the allocator allocated
+/// under the memory context 6 (`ThreadSafeStructures.h` line 0x1fd). The
+/// frame's exception handler is not translated; `this` is not read.
+pub fn fn_004492f0(e: &mut Engine, _this: Ptr, text: u32) -> u32 {
+    e.with_stack(4, |e, scope| {
+        e.call(
+            MEMORY_CONTEXT_ENTER,
+            &args![
+                scope,
+                NAME_COPY_CONTEXT,
+                1u32,
+                THREAD_SAFE_STRUCTURES_SOURCE,
+                NAME_COPY_SOURCE_LINE
+            ],
+        );
+        let length = e.call(STRLEN, &args![text]).u32();
+        let copy = e.call(MEMORY_ALLOC, &args![length + 1]).u32();
+        lowercase_into(e, text, copy);
+        e.call(MEMORY_CONTEXT_LEAVE, &args![scope]);
+        copy
+    })
+}
+
+// Translated from 004493d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lower-cases the text into a 1000-byte buffer and runs [`fn_00449530`]
+/// with it and `argument`.
+pub fn fn_004493d0(e: &mut Engine, this: Ptr, text: u32, argument: u32) {
+    lowercase_into_buffer(e, text, |e, buffer| {
+        fn_00449530(e, this, buffer, argument);
+    });
+}
+
+// Translated from 00449460 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lower-cases the text into a 1000-byte buffer and runs [`fn_00449580`]
+/// with it, `argument` and `flag`.
+pub fn fn_00449460(e: &mut Engine, this: Ptr, text: u32, argument: u32, flag: u8) {
+    lowercase_into_buffer(e, text, |e, buffer| {
+        fn_00449580(e, this, buffer, argument, flag);
+    });
+}
+
+// Translated from 00449500 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `strcpy_s(*destination, 0x100, source)`; `this` is not read.
+pub fn fn_00449500(e: &mut Engine, _this: Ptr, source: u32, destination: Ptr) {
+    let buffer = e.mem.u32(destination.addr());
+    e.call(STRING_COPY, &args![buffer, 0x100u32, source]);
+}
+
+// Translated from 00449530 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: the byte answered by `006ec830` of the
+/// forwarding target with `key` and `argument`.
+pub fn fn_00449530(e: &mut Engine, this: Ptr, key: u32, argument: u32) -> u8 {
+    with_locked_target(e, this, |e, target| {
+        e.call(0x006e_c830, &args![target, key, argument]).u8()
+    })
+}
+
+// Translated from 00449580 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: the byte answered by `0044a130` of the
+/// forwarding target with `key`, `argument` and `flag`.
+pub fn fn_00449580(e: &mut Engine, this: Ptr, key: u32, argument: u32, flag: u8) -> u8 {
+    with_locked_target(e, this, |e, target| {
+        e.call(0x0044_a130, &args![target, key, argument, u32::from(flag)])
+            .u8()
+    })
+}
+
+// Translated from 004495d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: the byte answered by `00665f20` of the
+/// forwarding target with `key`.
+pub fn fn_004495d0(e: &mut Engine, this: Ptr, key: u32) -> u8 {
+    with_locked_target(e, this, |e, target| {
+        e.call(0x0066_5f20, &args![target, key]).u8()
+    })
+}
+
+// Translated from 00449610 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: the base constructor `00449fd0`, clears the dwords at +0x18
+/// and +0x1c, then `0044a0a0`; returns `this`. The frame's exception handler
+/// is not translated.
+pub fn fn_00449610(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0044_9fd0, &args![this]);
+    e.mem.set_u32(this.addr() + 0x18, 0);
+    e.mem.set_u32(this.addr() + 0x1c, 0);
+    e.call(0x0044_a0a0, &args![this]);
+    this
+}
+
+// Translated from 00449680 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Forwards to `0044a040(this)`.
+pub fn fn_00449680(e: &mut Engine, this: Ptr) {
+    e.call(0x0044_a040, &args![this]);
+}
+
+// Translated from 004496a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: the base constructor `00449fa0(first, second, third)`, then
+/// the virtual table `010171ec`; returns `this`.
+pub fn fn_004496a0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) -> Ptr {
+    e.call(0x0044_9fa0, &args![this, first, second, third]);
+    e.mem.set_u32(this.addr(), 0x0101_71ec);
+    this
+}
+
+// Translated from 004496d0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `strcmp(first, second)` is not negative; `this` is not read.
+pub fn fn_004496d0(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> bool {
+    e.call(STRING_COMPARE, &args![first, second]).u32() as i32 >= 0
+}
+
+// Translated from 00449700 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Under the lock at `this + 0x20`: the byte answered by `0044d3f0` of the
+/// forwarding target with `key` and the address of the second argument's
+/// slot (the game passes the address of its stack argument).
+pub fn fn_00449700(e: &mut Engine, this: Ptr, key: u32, argument: u32) -> u8 {
+    with_locked_target(e, this, |e, target| {
+        e.with_stack(4, |e, slot| {
+            e.mem.set_u32(slot.addr(), argument);
+            e.call(0x0044_d3f0, &args![target, key, slot]).u8()
+        })
+    })
+}
+
+// Translated from 00449750 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Hash of a name: `hash * 0x21 + tolower(character)` over the characters
+/// (a signed `char`), modulo the dword at +8 of `this` (`0044ddc0`, the
+/// bucket count); the game divides by it without a check.
+pub fn fn_00449750(e: &mut Engine, this: Ptr, text: u32) -> u32 {
+    let mut hash: u32 = 0;
+    let mut at = text;
+    loop {
+        let character = e.mem.u8(at);
+        if character == 0 {
+            break;
+        }
+        let lowered = e
+            .call(TOLOWER_CHARACTER, &args![character as i8 as i32 as u32])
+            .u32();
+        hash = hash.wrapping_mul(0x21).wrapping_add(lowered);
+        at += 1;
+    }
+    let buckets = e.call(FIELD_AT_8, &args![this]).u32();
+    hash % buckets
+}
+
+// Translated from 004497c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: the base constructor `0044a100(first, second, third)`, then
+/// the virtual table `0101723c`; returns `this`.
+pub fn fn_004497c0(e: &mut Engine, this: Ptr, first: u32, second: u32, third: u32) -> Ptr {
+    e.call(0x0044_a100, &args![this, first, second, third]);
+    e.mem.set_u32(this.addr(), 0x0101_723c);
+    this
+}
+
+// Translated from 004497f0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Lower-cases the text into a 1000-byte buffer and runs [`fn_004495d0`]
+/// with it.
+pub fn fn_004497f0(e: &mut Engine, this: Ptr, text: u32) {
+    lowercase_into_buffer(e, text, |e, buffer| {
+        fn_004495d0(e, this, buffer);
+    });
+}
+
+// Translated from 00449880 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Whether `strcmp(first, second)` is 0; `this` is not read (the engine map
+/// gives it a `CRect::operator!=` name that its body does not have).
+pub fn fn_00449880(e: &mut Engine, _this: Ptr, first: u32, second: u32) -> bool {
+    e.call(STRING_COMPARE, &args![first, second]).u32() == 0
+}
+
+// Translated from 004498b0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// The byte answered by `006ec830` of the forwarding target with `key` and
+/// `argument`, without the lock.
+pub fn fn_004498b0(e: &mut Engine, this: Ptr, key: u32, argument: u32) -> u8 {
+    let target = e.call(MAP_TARGET, &args![this]).u32();
+    e.call(0x006e_c830, &args![target, key, argument]).u8()
+}
+
+// Translated from 004498e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor: the base constructor `0044cb70`, then the virtual table
+/// `01017288`, the dword at +8 pointing at the inline byte at +0x10, which
+/// is cleared; returns `this`.
+pub fn fn_004498e0(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0044_cb70, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0101_7288);
+    e.mem.set_u32(this.addr() + 8, this.addr() + 0x10);
+    e.mem.set_u8(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 00449920 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeStringMap<Model_P>::LockFreeStringMapIterator::ClearKey`
+/// (Xbox PDB): clears the byte at +0x10.
+pub fn lock_free_string_map_iterator_clear_key(e: &mut Engine, this: Ptr) {
+    e.mem.set_u8(this.addr() + 0x10, 0);
+}
+
+// Translated from 00449940 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the virtual table `01017294`.
+pub fn fn_00449940(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_7294);
+}
+
+// Translated from 00449960 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Constructor like [`fn_004498e0`]: base constructor `0044cbb0`, virtual
+/// table `010172a0`, the dword at +8 pointing at the inline byte at +0x10,
+/// which is cleared; returns `this`.
+pub fn fn_00449960(e: &mut Engine, this: Ptr) -> Ptr {
+    e.call(0x0044_cbb0, &args![this]);
+    e.mem.set_u32(this.addr(), 0x0101_72a0);
+    e.mem.set_u32(this.addr() + 8, this.addr() + 0x10);
+    e.mem.set_u8(this.addr() + 0x10, 0);
+    this
+}
+
+// Translated from 004499a0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the virtual table `010172ac`.
+pub fn fn_004499a0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_72ac);
+}
+
+// Translated from 004499c0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the virtual table `010172b8`.
+pub fn fn_004499c0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_72b8);
+}
+
+// Translated from 004499e0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the virtual table `010172c4`.
+pub fn fn_004499e0(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_72c4);
+}
+
+// Translated from 00449a00 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Sets the virtual table `010172d0`.
+pub fn fn_00449a00(e: &mut Engine, this: Ptr) {
+    e.mem.set_u32(this.addr(), 0x0101_72d0);
+}
+
+/// Frees `this` when bit 0 of the delete flags is set.
+fn free_when_flagged(e: &mut Engine, this: Ptr, flags: u32) {
+    if flags & 1 != 0 {
+        e.call(MEMORY_FREE, &args![this]);
+    }
+}
+
+// Translated from 00449a20 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: [`fn_004490e0`], then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449a20(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_004490e0(e, this);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449a50 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: `00449c30(this)`, then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449a50(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0044_9c30, &args![this]);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449a80 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: `00449d40(this)`, then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449a80(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0044_9d40, &args![this]);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449ab0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: `00449ea0(this)`, then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449ab0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0044_9ea0, &args![this]);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449ae0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: `004431d0(this)`, then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449ae0(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0044_31d0, &args![this]);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449b10 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: [`fn_00449940`], then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449b10(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_00449940(e, this);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449b40 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: `00443220(this)`, then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449b40(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    e.call(0x0044_3220, &args![this]);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449b70 (decompiled, FalloutNV.exe 1.4.0.525)
+/// Scalar deleting destructor: [`fn_004499a0`], then frees the block when
+/// bit 0 of `flags` is set; returns `this`.
+pub fn fn_00449b70(e: &mut Engine, this: Ptr, flags: u32) -> Ptr {
+    fn_004499a0(e, this);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449ba0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeMap<TESObjectREFR_P_NiPointer<QueuedReference>_>::LockFreeMapIterator::_scalar_deleting_destructor_`
+/// (Xbox PDB): [`fn_004499c0`], then frees the block when bit 0 of `flags`
+/// is set; returns `this`.
+pub fn lock_free_map_reference_iterator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_004499c0(e, this);
+    free_when_flagged(e, this, flags);
+    this
+}
+
+// Translated from 00449bd0 (decompiled, FalloutNV.exe 1.4.0.525)
+/// `LockFreeMap<AnimIdle_P_NiPointer<QueuedAnimIdle>_>::LockFreeMapIterator::_scalar_deleting_destructor_`
+/// (Xbox PDB): [`fn_004499e0`], then frees the block when bit 0 of `flags`
+/// is set; returns `this`.
+pub fn lock_free_map_anim_idle_iterator_scalar_deleting_destructor(
+    e: &mut Engine,
+    this: Ptr,
+    flags: u32,
+) -> Ptr {
+    fn_004499e0(e, this);
+    free_when_flagged(e, this, flags);
+    this
+}
+
 /// This part's translated functions, by exe address.
 pub fn funcs() -> Vec<(u32, AbiFn)> {
     vec![
@@ -2625,6 +3083,52 @@ pub fn funcs() -> Vec<(u32, AbiFn)> {
         entry!(0x00449170, fn_00449170(Ptr)),
         entry!(0x00449190, fn_00449190(Ptr, u32, u32) -> bool),
         entry!(0x004491c0, fn_004491c0(Ptr, u32, u32) -> bool),
+        entry!(0x004491f0, fn_004491f0(Ptr)),
+        entry!(0x00449210, fn_00449210(Ptr, u32, u32)),
+        entry!(0x00449240, fn_00449240(Ptr, u32)),
+        entry!(0x00449280, fn_00449280(Ptr, u32) -> u8),
+        entry!(0x004492c0, fn_004492c0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x004492f0, fn_004492f0(Ptr, u32) -> u32),
+        entry!(0x004493d0, fn_004493d0(Ptr, u32, u32)),
+        entry!(0x00449460, fn_00449460(Ptr, u32, u32, u8)),
+        entry!(0x00449500, fn_00449500(Ptr, u32, Ptr)),
+        entry!(0x00449530, fn_00449530(Ptr, u32, u32) -> u8),
+        entry!(0x00449580, fn_00449580(Ptr, u32, u32, u8) -> u8),
+        entry!(0x004495d0, fn_004495d0(Ptr, u32) -> u8),
+        entry!(0x00449610, fn_00449610(Ptr) -> Ptr),
+        entry!(0x00449680, fn_00449680(Ptr)),
+        entry!(0x004496a0, fn_004496a0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x004496d0, fn_004496d0(Ptr, u32, u32) -> bool),
+        entry!(0x00449700, fn_00449700(Ptr, u32, u32) -> u8),
+        entry!(0x00449750, fn_00449750(Ptr, u32) -> u32),
+        entry!(0x004497c0, fn_004497c0(Ptr, u32, u32, u32) -> Ptr),
+        entry!(0x004497f0, fn_004497f0(Ptr, u32)),
+        entry!(0x00449880, fn_00449880(Ptr, u32, u32) -> bool),
+        entry!(0x004498b0, fn_004498b0(Ptr, u32, u32) -> u8),
+        entry!(0x004498e0, fn_004498e0(Ptr) -> Ptr),
+        entry!(0x00449920, lock_free_string_map_iterator_clear_key(Ptr)),
+        entry!(0x00449940, fn_00449940(Ptr)),
+        entry!(0x00449960, fn_00449960(Ptr) -> Ptr),
+        entry!(0x004499a0, fn_004499a0(Ptr)),
+        entry!(0x004499c0, fn_004499c0(Ptr)),
+        entry!(0x004499e0, fn_004499e0(Ptr)),
+        entry!(0x00449a00, fn_00449a00(Ptr)),
+        entry!(0x00449a20, fn_00449a20(Ptr, u32) -> Ptr),
+        entry!(0x00449a50, fn_00449a50(Ptr, u32) -> Ptr),
+        entry!(0x00449a80, fn_00449a80(Ptr, u32) -> Ptr),
+        entry!(0x00449ab0, fn_00449ab0(Ptr, u32) -> Ptr),
+        entry!(0x00449ae0, fn_00449ae0(Ptr, u32) -> Ptr),
+        entry!(0x00449b10, fn_00449b10(Ptr, u32) -> Ptr),
+        entry!(0x00449b40, fn_00449b40(Ptr, u32) -> Ptr),
+        entry!(0x00449b70, fn_00449b70(Ptr, u32) -> Ptr),
+        entry!(
+            0x00449ba0,
+            lock_free_map_reference_iterator_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
+        entry!(
+            0x00449bd0,
+            lock_free_map_anim_idle_iterator_scalar_deleting_destructor(Ptr, u32) -> Ptr
+        ),
     ]
 }
 
@@ -5285,5 +5789,450 @@ mod tests {
         // The exchange itself takes (target, new, expected).
         assert!(e.call(0x0044_91c0, &args![task + 0xc, 1u32, 6u32]).bool());
         assert_eq!(e.mem.u32(task + 0xc), 1);
+    }
+
+    // --- 004491f0 .. 00449bd0 ---------------------------------------------
+
+    /// A character-wise `tolower` double (C locale) that answers the
+    /// sign-extended value for characters it leaves alone.
+    fn lowering(e: &mut Engine) {
+        e.register_double(TOLOWER_CHARACTER, |_, a| {
+            let c = a[0] as i32;
+            (if (65..=90).contains(&c) { c + 32 } else { c } as u32).into_ret()
+        });
+    }
+
+    /// The addresses of the calls logged so far, in order.
+    fn call_order(e: &Engine) -> Vec<u32> {
+        e.call_log
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|(a, _)| *a)
+            .collect()
+    }
+
+    /// A wrapper object whose forwarding target ([`MAP_TARGET`]) is
+    /// `0x5000`, with the lock functions and `callee` (answering `answer`)
+    /// as test doubles.
+    fn locked_wrapper(e: &mut Engine, callee: u32, answer: u32) -> u32 {
+        quiet(e, &[LOCK_ENTER, LOCK_LEAVE]);
+        constant(e, MAP_TARGET, 0x5000);
+        constant(e, callee, answer);
+        e.mem.alloc(0x40)
+    }
+
+    #[test]
+    fn fn_004491f0_forwards_this() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0096_11e0]);
+        log(&mut e);
+        e.call(0x0044_91f0, &args![0x1234u32]);
+        assert_eq!(calls_to(&e, 0x0096_11e0), vec![vec![0x1234]]);
+    }
+
+    #[test]
+    fn fn_00449210_runs_the_element_then_the_virtual_function() {
+        let mut e = engine();
+        let callee = 0x0044_cd40;
+        let this = locked_wrapper(&mut e, callee, 0);
+        // `this` is an element of its own array: `this + 4` points at an
+        // array whose element 1 is a wrapper.
+        let element = e.mem.alloc(0x40);
+        let array = e.mem.alloc(8);
+        e.mem.set_u32(array + 4, element);
+        let table = e.mem.alloc(0x10);
+        e.mem.set_u32(this, table);
+        e.mem.set_u32(table + 4, SLOT_A);
+        e.mem.set_u32(this + 4, array);
+        quiet(&mut e, &[SLOT_A]);
+        log(&mut e);
+        e.call(0x0044_9210, &args![this, 1u32, 0x77u32]);
+        assert_eq!(
+            call_order(&e),
+            vec![
+                0x0044_9210,
+                LOCK_ENTER,
+                MAP_TARGET,
+                callee,
+                LOCK_LEAVE,
+                SLOT_A
+            ]
+        );
+        assert_eq!(calls_to(&e, LOCK_ENTER), vec![vec![element + 0x20, 0]]);
+        assert_eq!(calls_to(&e, callee), vec![vec![0x5000, 0x77]]);
+        assert_eq!(calls_to(&e, SLOT_A), vec![vec![this]]);
+    }
+
+    #[test]
+    fn fn_00449240_forwards_under_the_lock() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x0044_cd40, 0);
+        log(&mut e);
+        e.call(0x0044_9240, &args![this, 0x77u32]);
+        assert_eq!(
+            call_order(&e),
+            vec![0x0044_9240, LOCK_ENTER, MAP_TARGET, 0x0044_cd40, LOCK_LEAVE]
+        );
+        assert_eq!(calls_to(&e, LOCK_ENTER), vec![vec![this + 0x20, 0]]);
+        assert_eq!(calls_to(&e, MAP_TARGET), vec![vec![this]]);
+        assert_eq!(calls_to(&e, 0x0044_cd40), vec![vec![0x5000, 0x77]]);
+        assert_eq!(calls_to(&e, LOCK_LEAVE), vec![vec![this + 0x20]]);
+    }
+
+    #[test]
+    fn fn_00449280_answers_the_byte_under_the_lock() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x0044_cec0, 0x1_0001);
+        log(&mut e);
+        assert_eq!(e.call(0x0044_9280, &args![this, 0x77u32]).u8(), 1);
+        assert_eq!(
+            call_order(&e),
+            vec![0x0044_9280, LOCK_ENTER, MAP_TARGET, 0x0044_cec0, LOCK_LEAVE]
+        );
+        assert_eq!(calls_to(&e, 0x0044_cec0), vec![vec![0x5000, 0x77]]);
+    }
+
+    #[test]
+    fn the_constructors_call_their_base_and_set_the_table() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        for (address, base, table) in [
+            (0x0044_92c0u32, 0x0044_9f50u32, 0x0101_7154u32),
+            (0x0044_96a0, 0x0044_9fa0, 0x0101_71ec),
+            (0x0044_97c0, 0x0044_a100, 0x0101_723c),
+        ] {
+            constant(&mut e, base, 0);
+            log(&mut e);
+            assert_eq!(e.call(address, &args![this, 1u32, 2u32, 3u32]).u32(), this);
+            assert_eq!(calls_to(&e, base), vec![vec![this, 1, 2, 3]]);
+            assert_eq!(e.mem.u32(this), table);
+        }
+    }
+
+    #[test]
+    fn fn_004492f0_copies_the_name_in_lower_case() {
+        let mut e = engine();
+        lowering(&mut e);
+        let source = text(&mut e, "Meshes\\ABC");
+        log(&mut e);
+        let copy = e.call(0x0044_92f0, &args![0u32, source]).u32();
+        assert_eq!(e.mem.cstr(copy), b"meshes\\abc".to_vec());
+        assert_ne!(copy, source);
+        // The guard is entered with context 6, then left.
+        assert_eq!(
+            calls_to(&e, MEMORY_CONTEXT_ENTER)[0][1..],
+            [6, 1, 0x0101_71a0, 0x1fd]
+        );
+        assert_eq!(calls_to(&e, MEMORY_CONTEXT_LEAVE).len(), 1);
+        assert_eq!(calls_to(&e, MEMORY_ALLOC), vec![vec![11]]);
+    }
+
+    #[test]
+    fn fn_004493d0_passes_the_lower_case_copy() {
+        let mut e = engine();
+        lowering(&mut e);
+        let this = locked_wrapper(&mut e, 0x006e_c830, 0);
+        let source = text(&mut e, "AbC");
+        let seen = events();
+        let sink = seen.clone();
+        e.register_double(0x006e_c830, move |e, a| {
+            sink.borrow_mut()
+                .push(String::from_utf8(e.mem.cstr(a[1])).unwrap());
+            Ret::default()
+        });
+        e.call(0x0044_93d0, &args![this, source, 9u32]);
+        assert_eq!(*seen.borrow(), vec!["abc"]);
+    }
+
+    #[test]
+    fn fn_00449460_passes_the_lower_case_copy_and_the_flag() {
+        let mut e = engine();
+        lowering(&mut e);
+        let this = locked_wrapper(&mut e, 0x0044_a130, 0);
+        let source = text(&mut e, "XyZ");
+        let seen = events();
+        let sink = seen.clone();
+        e.register_double(0x0044_a130, move |e, a| {
+            sink.borrow_mut().push(format!(
+                "{} {} {}",
+                String::from_utf8(e.mem.cstr(a[1])).unwrap(),
+                a[2],
+                a[3]
+            ));
+            Ret::default()
+        });
+        e.call(0x0044_9460, &args![this, source, 9u32, 1u8]);
+        assert_eq!(*seen.borrow(), vec!["xyz 9 1"]);
+    }
+
+    #[test]
+    fn fn_00449500_copies_into_the_buffer_the_pointer_holds() {
+        let mut e = engine();
+        let source = text(&mut e, "hello");
+        let buffer = e.mem.alloc(0x100);
+        let holder = e.mem.alloc(4);
+        e.mem.set_u32(holder, buffer);
+        log(&mut e);
+        e.call(0x0044_9500, &args![0u32, source, holder]);
+        assert_eq!(e.mem.cstr(buffer), b"hello".to_vec());
+        assert_eq!(calls_to(&e, STRING_COPY)[0][1], 0x100);
+    }
+
+    #[test]
+    fn fn_00449530_forwards_the_key_and_argument_under_the_lock() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x006e_c830, 1);
+        log(&mut e);
+        assert_eq!(e.call(0x0044_9530, &args![this, 0x11u32, 0x22u32]).u8(), 1);
+        assert_eq!(
+            call_order(&e),
+            vec![0x0044_9530, LOCK_ENTER, MAP_TARGET, 0x006e_c830, LOCK_LEAVE]
+        );
+        assert_eq!(calls_to(&e, 0x006e_c830), vec![vec![0x5000, 0x11, 0x22]]);
+    }
+
+    #[test]
+    fn fn_00449580_forwards_the_flag_as_a_word() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x0044_a130, 0);
+        log(&mut e);
+        assert_eq!(
+            e.call(0x0044_9580, &args![this, 0x11u32, 0x22u32, 1u8])
+                .u8(),
+            0
+        );
+        assert_eq!(calls_to(&e, 0x0044_a130), vec![vec![0x5000, 0x11, 0x22, 1]]);
+        assert_eq!(calls_to(&e, LOCK_LEAVE).len(), 1);
+    }
+
+    #[test]
+    fn fn_004495d0_forwards_the_key() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x0066_5f20, 1);
+        log(&mut e);
+        assert_eq!(e.call(0x0044_95d0, &args![this, 0x11u32]).u8(), 1);
+        assert_eq!(calls_to(&e, 0x0066_5f20), vec![vec![0x5000, 0x11]]);
+        assert_eq!(calls_to(&e, LOCK_ENTER), vec![vec![this + 0x20, 0]]);
+    }
+
+    #[test]
+    fn fn_00449610_constructs_and_clears_two_fields() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0044_9fd0, 0x0044_a0a0]);
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u32(this + 0x18, 5);
+        e.mem.set_u32(this + 0x1c, 6);
+        log(&mut e);
+        assert_eq!(e.call(0x0044_9610, &args![this]).u32(), this);
+        assert_eq!(call_order(&e), vec![0x0044_9610, 0x0044_9fd0, 0x0044_a0a0]);
+        assert_eq!(e.mem.u32(this + 0x18), 0);
+        assert_eq!(e.mem.u32(this + 0x1c), 0);
+    }
+
+    #[test]
+    fn fn_00449680_forwards_this() {
+        let mut e = engine();
+        quiet(&mut e, &[0x0044_a040]);
+        log(&mut e);
+        e.call(0x0044_9680, &args![0x4321u32]);
+        assert_eq!(calls_to(&e, 0x0044_a040), vec![vec![0x4321]]);
+    }
+
+    #[test]
+    fn fn_004496d0_is_true_unless_the_first_text_is_smaller() {
+        let mut e = engine();
+        e.register_double(STRING_COMPARE, |e, a| {
+            let (x, y) = (e.mem.cstr(a[0]), e.mem.cstr(a[1]));
+            (x.cmp(&y) as i32 as u32).into_ret()
+        });
+        let (a, b) = (text(&mut e, "apple"), text(&mut e, "pear"));
+        assert!(!e.call(0x0044_96d0, &args![0u32, a, b]).bool());
+        assert!(e.call(0x0044_96d0, &args![0u32, b, a]).bool());
+        assert!(e.call(0x0044_96d0, &args![0u32, a, a]).bool());
+    }
+
+    #[test]
+    fn fn_00449700_passes_the_address_of_the_argument() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x0044_d3f0, 1);
+        let seen = events();
+        let sink = seen.clone();
+        e.register_double(0x0044_d3f0, move |e, a| {
+            sink.borrow_mut()
+                .push(format!("{:x} {:x} {:x}", a[0], a[1], e.mem.u32(a[2])));
+            1u32.into_ret()
+        });
+        log(&mut e);
+        assert_eq!(
+            e.call(0x0044_9700, &args![this, 0x11u32, 0x2222u32]).u8(),
+            1
+        );
+        assert_eq!(*seen.borrow(), vec!["5000 11 2222"]);
+        assert_eq!(
+            call_order(&e),
+            vec![0x0044_9700, LOCK_ENTER, MAP_TARGET, 0x0044_d3f0, LOCK_LEAVE]
+        );
+    }
+
+    #[test]
+    fn fn_00449750_hashes_the_lower_case_name_modulo_the_bucket_count() {
+        let mut e = engine();
+        lowering(&mut e);
+        constant(&mut e, FIELD_AT_8, 101);
+        let upper = text(&mut e, "AB");
+        let lower = text(&mut e, "ab");
+        // ('a' * 33 + 'b') % 101
+        let expected = (97 * 33 + 98) % 101;
+        assert_eq!(e.call(0x0044_9750, &args![0x10u32, upper]).u32(), expected);
+        assert_eq!(e.call(0x0044_9750, &args![0x10u32, lower]).u32(), expected);
+        // The empty name hashes to 0.
+        let empty = text(&mut e, "");
+        assert_eq!(e.call(0x0044_9750, &args![0x10u32, empty]).u32(), 0);
+    }
+
+    #[test]
+    fn fn_00449750_adds_a_high_character_sign_extended() {
+        let mut e = engine();
+        lowering(&mut e);
+        constant(&mut e, FIELD_AT_8, 1000);
+        let name = e.mem.alloc(4);
+        e.mem.set_u8(name, 0xc9);
+        e.mem.set_u8(name + 1, 0);
+        let expected = 0xffff_ffc9u32 % 1000;
+        assert_eq!(e.call(0x0044_9750, &args![0x10u32, name]).u32(), expected);
+    }
+
+    #[test]
+    fn fn_004497f0_passes_the_lower_case_copy() {
+        let mut e = engine();
+        lowering(&mut e);
+        let this = locked_wrapper(&mut e, 0x0066_5f20, 0);
+        let source = text(&mut e, "QQ");
+        let seen = events();
+        let sink = seen.clone();
+        e.register_double(0x0066_5f20, move |e, a| {
+            sink.borrow_mut()
+                .push(String::from_utf8(e.mem.cstr(a[1])).unwrap());
+            Ret::default()
+        });
+        e.call(0x0044_97f0, &args![this, source]);
+        assert_eq!(*seen.borrow(), vec!["qq"]);
+    }
+
+    #[test]
+    fn fn_00449880_is_true_for_equal_texts() {
+        let mut e = engine();
+        e.register_double(STRING_COMPARE, |e, a| {
+            u32::from(e.mem.cstr(a[0]) != e.mem.cstr(a[1])).into_ret()
+        });
+        let (a, b) = (text(&mut e, "x"), text(&mut e, "y"));
+        assert!(e.call(0x0044_9880, &args![0u32, a, a]).bool());
+        assert!(!e.call(0x0044_9880, &args![0u32, a, b]).bool());
+    }
+
+    #[test]
+    fn fn_004498b0_forwards_without_the_lock() {
+        let mut e = engine();
+        let this = locked_wrapper(&mut e, 0x006e_c830, 1);
+        log(&mut e);
+        assert_eq!(e.call(0x0044_98b0, &args![this, 0x11u32, 0x22u32]).u8(), 1);
+        assert!(calls_to(&e, LOCK_ENTER).is_empty());
+        assert_eq!(calls_to(&e, 0x006e_c830), vec![vec![0x5000, 0x11, 0x22]]);
+    }
+
+    #[test]
+    fn the_inline_flag_constructors() {
+        let mut e = engine();
+        for (address, base, table) in [
+            (0x0044_98e0u32, 0x0044_cb70u32, 0x0101_7288u32),
+            (0x0044_9960, 0x0044_cbb0, 0x0101_72a0),
+        ] {
+            quiet(&mut e, &[base]);
+            let this = e.mem.alloc(0x40);
+            e.mem.set_u8(this + 0x10, 9);
+            log(&mut e);
+            assert_eq!(e.call(address, &args![this]).u32(), this);
+            assert_eq!(calls_to(&e, base), vec![vec![this]]);
+            assert_eq!(e.mem.u32(this), table);
+            assert_eq!(e.mem.u32(this + 8), this + 0x10);
+            assert_eq!(e.mem.u8(this + 0x10), 0);
+        }
+    }
+
+    #[test]
+    fn fn_00449920_clears_the_key_byte() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        e.mem.set_u8(this + 0x10, 7);
+        e.call(0x0044_9920, &args![this]);
+        assert_eq!(e.mem.u8(this + 0x10), 0);
+    }
+
+    #[test]
+    fn the_table_setters() {
+        let mut e = engine();
+        let this = e.mem.alloc(0x40);
+        for (address, table) in [
+            (0x0044_9940u32, 0x0101_7294u32),
+            (0x0044_99a0, 0x0101_72ac),
+            (0x0044_99c0, 0x0101_72b8),
+            (0x0044_99e0, 0x0101_72c4),
+            (0x0044_9a00, 0x0101_72d0),
+        ] {
+            e.call(address, &args![this]);
+            assert_eq!(e.mem.u32(this), table);
+        }
+    }
+
+    #[test]
+    fn the_deleting_destructors_free_only_when_flagged() {
+        let mut e = engine();
+        // (address, the destructor body it runs, or None when it is a table setter)
+        let external = [
+            (0x0044_9a20u32, 0x0044_90e0u32),
+            (0x0044_9a50, 0x0044_9c30),
+            (0x0044_9a80, 0x0044_9d40),
+            (0x0044_9ab0, 0x0044_9ea0),
+            (0x0044_9ae0, 0x0044_31d0),
+            (0x0044_9b40, 0x0044_3220),
+        ];
+        // 00449a20 runs the translated 004490e0, which uses the sync object.
+        quiet(&mut e, &[SYNC_OBJECT_RELEASE]);
+        for (address, body) in external {
+            if address != 0x0044_9a20 {
+                quiet(&mut e, &[body]);
+            }
+            for (flags, freed) in [(0u32, 0usize), (1, 1), (2, 0), (3, 1)] {
+                let this = e.mem.alloc(0x40);
+                log(&mut e);
+                assert_eq!(e.call(address, &args![this, flags]).u32(), this);
+                assert_eq!(
+                    calls_to(&e, MEMORY_FREE).len(),
+                    freed,
+                    "{address:x} {flags}"
+                );
+                if address != 0x0044_9a20 {
+                    assert_eq!(calls_to(&e, body), vec![vec![this]]);
+                }
+            }
+        }
+        // The ones that set a table.
+        for (address, table) in [
+            (0x0044_9b10u32, 0x0101_7294u32),
+            (0x0044_9b70, 0x0101_72ac),
+            (0x0044_9ba0, 0x0101_72b8),
+            (0x0044_9bd0, 0x0101_72c4),
+        ] {
+            let kept = e.mem.alloc(0x40);
+            log(&mut e);
+            assert_eq!(e.call(address, &args![kept, 0u32]).u32(), kept);
+            assert_eq!(e.mem.u32(kept), table);
+            assert!(calls_to(&e, MEMORY_FREE).is_empty());
+            let this = e.mem.alloc(0x40);
+            log(&mut e);
+            e.call(address, &args![this, 1u32]);
+            assert_eq!(calls_to(&e, MEMORY_FREE), vec![vec![this]]);
+        }
     }
 }
